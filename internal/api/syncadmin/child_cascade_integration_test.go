@@ -341,6 +341,11 @@ func TestAParentSaveGivesAChildOnlyWhatARequestAskedFor(t *testing.T) {
 			`["work-items"]`, shownList, `["work-items","operational"]`},
 		{"linear: a gated target with no dataset, added", "linear", `["work-items"]`, []string{"work-items"},
 			`["work-items"]`, `["work-items","operational"]`, `["work-items","operational"]`},
+		// The base list of the request names a target the stored list does
+		// not hold: the save does not add it, no gate reads it, and it is not
+		// written to the parent or to the child.
+		{"github: a target with no dataset that only the base names", "github", `["git"]`, []string{"commits"},
+			`["git"]`, `["git","incidents"],"sync_targets_base":["git","incidents"]`, `["git"]`},
 	} {
 		parent := v.seed(testCase.provider, testCase.parentStored, testCase.rows)
 		child := v.child(parent, testCase.provider, testCase.childStored)
@@ -356,6 +361,99 @@ func TestAParentSaveGivesAChildOnlyWhatARequestAskedFor(t *testing.T) {
 		if got := v.storedList(child.config); got != testCase.wantChild {
 			t.Errorf("%s: parent save of %s (parent stored %s, rows [%s]): the child's stored list is %s, want %s",
 				testCase.name, submitted, v.stored(parent.config), v.rows(parent.integration), got, testCase.wantChild)
+		}
+	}
+}
+
+// TestASaveNeverGivesAChildAGatedTargetItsGateDidNotRead: the org has no
+// canonical-incident feature. Whatever a save of the parent answers, a child
+// never gets a gated target from it: every reader of a child gates the
+// child's whole list, so an item reaches a child only when the gate of the
+// save read it. The base list of a request is client data: a target it names
+// is not "added", so the gate of the save does not read it.
+func TestASaveNeverGivesAChildAGatedTargetItsGateDidNotRead(t *testing.T) {
+	v := startCascadeVenue(t, false)
+	accepted := 0
+	for _, testCase := range []struct {
+		name, provider, stored, body string
+		rows                         []string
+	}{
+		{"github: a gated target with no dataset, named by the base", "github", `["git"]`,
+			`{"sync_targets":["git","incidents"],"sync_targets_base":["git","incidents"]}`, []string{"commits"}},
+		{"jira: the gated target of another provider, named by the base", "jira", `["work-items"]`,
+			`{"sync_targets":["work-items","incidents"],"sync_targets_base":["work-items","incidents"]}`, []string{"work-items"}},
+		{"jira: its own gated target, row off, named by a stale base", "jira", `["work-items"]`,
+			`{"sync_targets":["work-items","operational"],"sync_targets_base":["work-items","operational"]}`, []string{"work-items"}},
+		{"gitlab: its own gated target, row off, named by a stale base", "gitlab", `["git"]`,
+			`{"sync_targets":["git","incidents"],"sync_targets_base":["git","incidents"]}`, []string{"commits"}},
+		{"gitlab: the gated target of another provider, named by the base", "gitlab", `["git"]`,
+			`{"sync_targets":["git","operational"],"sync_targets_base":["git","operational"]}`, []string{"commits"}},
+		{"linear: a gated target with no dataset, named by the base", "linear", `["work-items"]`,
+			`{"sync_targets":["work-items","operational"],"sync_targets_base":["work-items","operational"]}`, []string{"work-items"}},
+		{"linear: both gated targets, named by the base", "linear", `["work-items"]`,
+			`{"sync_targets":["work-items","operational","incidents"],"sync_targets_base":["incidents","operational","work-items"]}`, []string{"work-items"}},
+		{"github: a gated target with no dataset, no base (the save adds it)", "github", `["git"]`,
+			`{"sync_targets":["git","incidents"]}`, []string{"commits"}},
+		{"jira: its own gated target, no base (the save adds it)", "jira", `["work-items"]`,
+			`{"sync_targets":["work-items","operational"]}`, []string{"work-items"}},
+	} {
+		parent := v.seed(testCase.provider, testCase.stored, testCase.rows)
+		child := v.child(parent, testCase.provider, testCase.stored)
+		before := v.read(testCase.name+": child, before", child)
+		status, body := v.call("PATCH", "/api/v1/admin/sync-configs/"+parent.config.String(), testCase.body)
+		if status == http.StatusOK {
+			accepted++
+		} else if status != http.StatusForbidden {
+			t.Errorf("%s: the save answers %d %.160s, want 200 or 403", testCase.name, status, body)
+		}
+		if got := v.storedList(child.config); got != testCase.stored {
+			t.Errorf("%s: PATCH %s -> %d: the child's stored list is %s, want %s (parent stored %s)",
+				testCase.name, testCase.body, status, got, testCase.stored, v.stored(parent.config))
+		}
+		after := v.read(testCase.name+": child, after", child)
+		if before.SyncNow == http.StatusForbidden || before.Scheduled != schedsync.OccurrenceMinted {
+			t.Fatalf("harness: %s: the child is refused before the save: %+v", testCase.name, before)
+		}
+		if before != after {
+			t.Errorf("%s: the child answers %+v before the save and %+v after it", testCase.name, before, after)
+		}
+	}
+	if accepted == 0 {
+		t.Fatal("harness: every save was refused: no cascade ran, nothing is measured")
+	}
+}
+
+// TestAParentWhoseRowsDoNotOwnItsSelectionGivesAChildItsWholeList: a parent
+// with no integration has no dataset rows, its list is its selection and the
+// gate of its save reads all of it. Its children take the submitted list as
+// it is.
+func TestAParentWhoseRowsDoNotOwnItsSelectionGivesAChildItsWholeList(t *testing.T) {
+	v := startCascadeVenue(t, true)
+	for _, testCase := range []struct{ provider, stored, submitted string }{
+		{"jira", `["work-items"]`, `["operational","work-items"]`},
+		{"gitlab", `["git"]`, `["git","incidents","prs"]`},
+		{"github", `["git"]`, `["incidents","git"]`},
+		{"linear", `["work-items"]`, `["work-items","operational"]`},
+	} {
+		parent, child := uuid.New(), uuid.New()
+		for _, row := range []struct {
+			id     uuid.UUID
+			parent *uuid.UUID
+		}{{parent, nil}, {child, &parent}} {
+			v.sequence++
+			v.exec(`INSERT INTO sync_configurations (id, org_id, name, provider, sync_targets, sync_options, is_active, planner_managed, parent_id, created_at, updated_at)
+VALUES ($1, $2, $3, $4, $5::json, '{"schedule_cron":"0 * * * *"}'::json, true, false, $6, now(), now())`,
+				row.id, v.org, fmt.Sprintf("no integration %d", v.sequence), testCase.provider, testCase.stored, row.parent)
+		}
+		status, body := v.call("PATCH", "/api/v1/admin/sync-configs/"+parent.String(), `{"sync_targets":`+testCase.submitted+`}`)
+		if status != http.StatusOK {
+			t.Errorf("%s: the save of %s: %d %.160s", testCase.provider, testCase.submitted, status, body)
+			continue
+		}
+		for label, config := range map[string]uuid.UUID{"parent": parent, "child": child} {
+			if got := v.storedList(config); got != testCase.submitted {
+				t.Errorf("%s: the %s's stored list is %s after a save of %s, want the submitted list", testCase.provider, label, got, testCase.submitted)
+			}
 		}
 	}
 }

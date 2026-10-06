@@ -73,24 +73,29 @@ func IncidentGateTargets(provider string, hasIntegration, hasSource bool, stored
 
 // CascadedSyncTargets is the list a save of a parent configuration gives one
 // child configuration. A child's stored list is its own selection, never a
-// mirror, so a mirrored item of the parent must not reach it: the mirror
-// never leaves the parent. The result is the submitted list, in its order and
-// with its duplicates, without every item that is a mirrored item of the
-// parent (StoredTargetIsMirrored), unless this save adds the item (the
-// request asked for it) or the child already holds it (an earlier request
-// asked for it). A parent whose rows do not own its selection has no mirrored
-// item: its children get the submitted list as it is.
-func CascadedSyncTargets(provider string, parentHasIntegration, parentHasSource bool, submitted, added, childStored []string) []string {
-	asked := map[string]bool{}
-	for _, target := range added {
-		asked[target] = true
+// mirror, and every reader runs the canonical-incident gate on all of it. So
+// each item a save writes to a child is an item the gate of this save read,
+// or an item the child already holds (an earlier save's gate read it): the
+// result is the submitted list, in its order and with its duplicates, without
+// every other item.
+//
+// gateRead is the targets the save's gate read. For a parent whose rows own
+// its selection that is the targets the save adds and the dataset-less
+// targets its list keeps, so an item that is in the submitted list only as
+// the mirror of a dataset row, or only because the request's base list names
+// it, never leaves the parent. For any other parent it is the whole submitted
+// list, and the child gets the list as it is.
+func CascadedSyncTargets(submitted, gateRead, childStored []string) []string {
+	allowed := map[string]bool{}
+	for _, target := range gateRead {
+		allowed[target] = true
 	}
 	for _, target := range childStored {
-		asked[target] = true
+		allowed[target] = true
 	}
 	out := make([]string, 0, len(submitted))
 	for _, target := range submitted {
-		if asked[target] || !StoredTargetIsMirrored(provider, parentHasIntegration, parentHasSource, target) {
+		if allowed[target] {
 			out = append(out, target)
 		}
 	}

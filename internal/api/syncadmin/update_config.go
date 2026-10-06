@@ -168,6 +168,9 @@ func (h *handlers) updateSyncConfigTx(ctx context.Context, tx pgx.Tx, org string
 	rowsOwn := rowsOwnSelection(config)
 	var change selectionChange
 	var gateTargets []pyjson.Value
+	// gateRead is the targets of the submitted list the gate of this save
+	// reads; the child cascade writes no other item to a child.
+	var gateRead []string
 	switch {
 	case rowsOwn && in.syncTargetsSet:
 		if err := selectionLock(ctx, tx, org, *config.IntegrationID); err != nil {
@@ -182,9 +185,11 @@ func (h *handlers) updateSyncConfigTx(ctx context.Context, tx pgx.Tx, org string
 		if err != nil {
 			return nil, err
 		}
-		gateTargets = change.gatedTargets()
+		gateRead = change.gatedTargets()
+		gateTargets = stringValues(gateRead)
 	case in.syncTargetsSet:
-		gateTargets = stringValues(in.syncTargets)
+		gateRead = in.syncTargets
+		gateTargets = stringValues(gateRead)
 	default:
 		stored, err := pyIterate(storedTargetsValue)
 		if err != nil {
@@ -321,7 +326,7 @@ func (h *handlers) updateSyncConfigTx(ctx context.Context, tx pgx.Tx, org string
 		return nil, err
 	}
 	if config.ParentID == nil {
-		if err := h.cascadeToChildren(ctx, tx, org, config, in, change.added, options, cleared, optionsProvided, now); err != nil {
+		if err := h.cascadeToChildren(ctx, tx, org, config.ID, in, gateRead, options, cleared, optionsProvided, now); err != nil {
 			return nil, err
 		}
 	}
@@ -552,12 +557,12 @@ func updateServicesDatasetMappings(ctx context.Context, tx pgx.Tx, org string, i
 // body set or cleared; then each child's sync job is upserted.
 //
 // The targets a child takes are providersync.CascadedSyncTargets of the
-// body's list: a child's list is its own selection, so an item the parent's
-// list holds only as the mirror of a dataset row is not written to it. added
-// is the targets this save adds to the parent's list.
-func (h *handlers) cascadeToChildren(ctx context.Context, tx pgx.Tx, org string, parent *syncConfig, in syncConfigUpdate, added []string,
+// body's list: a child's list is its own selection and every reader gates
+// all of it, so a child takes only the items the gate of this save read
+// (gateRead) and the items it already holds.
+func (h *handlers) cascadeToChildren(ctx context.Context, tx pgx.Tx, org string, parentID uuid.UUID, in syncConfigUpdate, gateRead []string,
 	options *pyjson.Object, cleared map[string]bool, optionsProvided bool, now time.Time) error {
-	rows, err := tx.Query(ctx, `SELECT `+syncConfigColumns+` FROM sync_configurations WHERE parent_id = $1`, parent.ID)
+	rows, err := tx.Query(ctx, `SELECT `+syncConfigColumns+` FROM sync_configurations WHERE parent_id = $1`, parentID)
 	if err != nil {
 		return fmt.Errorf("read child configs: %w", err)
 	}
@@ -585,8 +590,7 @@ func (h *handlers) cascadeToChildren(ctx context.Context, tx pgx.Tx, org string,
 		}
 		newTargets := storedTargets
 		if in.syncTargetsSet {
-			newTargets = stringValues(providersync.CascadedSyncTargets(parent.Provider, parent.IntegrationID != nil, parent.SourceID != nil,
-				in.syncTargets, added, storedListItems(storedTargets)))
+			newTargets = stringValues(providersync.CascadedSyncTargets(in.syncTargets, gateRead, storedListItems(storedTargets)))
 		}
 		newActive := child.IsActive
 		if in.isActive != nil {

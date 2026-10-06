@@ -210,7 +210,7 @@ func TestGateReadsOnlyAddedTargetsAndPassthrough(t *testing.T) {
 	gated := func(change selectionChange) []string {
 		out := []string{}
 		for _, value := range change.gatedTargets() {
-			out = append(out, value.(string))
+			out = append(out, value)
 		}
 		return out
 	}

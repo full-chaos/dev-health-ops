@@ -176,12 +176,8 @@ func planSelectionChange(provider string, enabledKeys, storedPassthrough, submit
 // save: the ones the user adds and the passthrough targets the list keeps. A
 // gated target that is in the list only because its row is on does not
 // refuse the save; the plan-time gate on the rows stays.
-func (change selectionChange) gatedTargets() []pyjson.Value {
-	out := []pyjson.Value{}
-	for _, target := range uniqueStrings(append(append([]string{}, change.added...), change.passthrough...)) {
-		out = append(out, target)
-	}
-	return out
+func (change selectionChange) gatedTargets() []string {
+	return uniqueStrings(append(append([]string{}, change.added...), change.passthrough...))
 }
 
 func stringSet(values []string) map[string]bool {

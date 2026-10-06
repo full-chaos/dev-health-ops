@@ -514,6 +514,52 @@ func TestStrandRepairAgainstLivePostgres(t *testing.T) {
 		}
 	})
 
+	// CHAOS-8782. The last-attempt path of investment.materialize: the handler
+	// requeues a request it could not finish (state 'pending', no claim token,
+	// no lease -- asserted from the real handler in internal/jobs/workgraph's
+	// TestMaterializeCancelledRunIsRetriedNotStranded) and River then DISCARDS
+	// the job once its attempts are spent. The sweep must re-arm that request,
+	// whichever way the delivery died, or the request is stranded for good.
+	t.Run("a requeued materialize request whose job was discarded is rearmed", func(t *testing.T) {
+		for _, jobState := range []string{"discarded", "completed", "cancelled"} {
+			resetStrandTables(t, ctx, admin)
+			now := time.Now().UTC().Truncate(time.Microsecond)
+			requestID := integrationUUID(22)
+			seedWorkGraphRequest(t, ctx, admin, fixture.orgID, requestID,
+				jobcontract.KindInvestmentMaterialize, "pending", nil)
+			outboxID := deliverStrandSeed(t, ctx, fixture, now, jobcontract.KindInvestmentMaterialize,
+				"investment.materialize:"+requestID, "investment_request", requestID,
+				jobcontract.InvestmentMaterializePayload{RequestID: requestID})
+			makeJobTerminal(t, ctx, admin, riverJobFor(t, ctx, admin, outboxID), jobState, now.Add(-2*time.Hour))
+
+			result, err := repair.Step(ctx, now, 10)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if result.Rearmed != 1 {
+				t.Fatalf("job %s: Step() = %+v, want the requeued request rearmed", jobState, result)
+			}
+		}
+		// The terminal state of a spent retry budget (D4926) is 'failed'. It must
+		// stay a state NOTHING re-arms, or the budget would bound nothing.
+		resetStrandTables(t, ctx, admin)
+		now := time.Now().UTC().Truncate(time.Microsecond)
+		requestID := integrationUUID(23)
+		seedWorkGraphRequest(t, ctx, admin, fixture.orgID, requestID,
+			jobcontract.KindInvestmentMaterialize, "failed", nil)
+		outboxID := deliverStrandSeed(t, ctx, fixture, now, jobcontract.KindInvestmentMaterialize,
+			"investment.materialize:"+requestID, "investment_request", requestID,
+			jobcontract.InvestmentMaterializePayload{RequestID: requestID})
+		makeJobTerminal(t, ctx, admin, riverJobFor(t, ctx, admin, outboxID), "discarded", now.Add(-2*time.Hour))
+		result, err := repair.Step(ctx, now, 10)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if result.Rearmed != 0 {
+			t.Fatalf("Step() = %+v, want a failed materialize request left alone", result)
+		}
+	})
+
 	// A request row is bound by kind as well as id, exactly as
 	// PostgresStore.Claim keys it. Matching on id alone would let a strand in
 	// one kind rearm the delivery of another.

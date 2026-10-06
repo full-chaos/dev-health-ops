@@ -77,6 +77,25 @@ fallback path (retained but skip-gated). Confirm current status against `familie
 | `dho workers workgraph repair --request <uuid> --resolution <confirm_succeeded\|retry_safe> --expected-attempt-count <N> --review-evidence "<text>" [--output-evidence '<json>'] [--dry-run] --reason <code> --correlation-id <id>` | `repair_workgraph.go:144-228` (CHAOS-5042) | Repair a stuck `workgraph.build`/`investment.materialize` ledger row. Runs as one Postgres transaction on the operator role (CHAOS-5459); no API bridge or repair token. |
 | `dho workers sync-dispatch-outbox close-backlog [--dry-run] [--batch-size N] --reason <code> --correlation-id <id>` | `main.go:1585-1621` (CHAOS-4583) | Drain a pre-existing `sync_dispatch_outbox` backlog; the forward reconciler stage only prevents new backlog, it doesn't retroactively clean an existing one. Not org-scoped. |
 
+**`investment.materialize` states (CHAOS-8782).** The handler no longer releases `ambiguous` for this kind.
+A cancelled or timed-out run (worker drain, deadline), a network or database error and any error with no
+deterministic cause are retried: the handler hands the lease back (`pending`, no claim token, no lease) and
+River retries; if that release write fails, the 10-minute lease expiry is the fallback and a WARN names it.
+If River spends every attempt, the request stays `pending` and strand repair re-arms it. The request
+carries a retry budget of 9 claims (every claim counts, cancelled ones too; three River cycles): the 9th
+failing claim ends it `failed` with `failure_class=retry_budget_exhausted` and a `last_retryable_class`
+label on the ERROR line. Nothing re-arms a `failed` request; the hourly schedule makes the next one. An
+operator reads the ledger `failure_detail` and the ERROR line, fixes the cause, and waits for the next
+scheduled request (`dho workers workgraph repair` refuses a `failed` request: it only reopens `ambiguous`
+ones). Besides the spent budget, a deterministic cause (a deterministic LLM failure, an invalid scope, window or
+provider, an evidence encode error) ends the request `failed`; the ERROR line names a class label (`failure_class`), never provider
+text. A `failed` request blocks `membership_backfill` of the same sync run until the undelivered ceiling,
+and a later sync run makes a new request. `ambiguous` now appears only for a claimed request that does not
+match its River envelope. Requests that went `ambiguous` before this change (17 on prod, 2026-10-06) are
+not touched by the code: `dho workers workgraph repair` still re-opens one (`retry_safe` is safe for
+`investment.materialize`: re-runs skip units already categorised), and a later sync run has already made a
+new request over the same window.
+
 Related reference (not a command, background): [Job recovery lifecycle](../run/job-recovery-lifecycle.md) --
 River only rescues a stuck-`running` job after `max(RescueStuckJobsAfter=1h default, kind timeout)`; a job
 "stuck" for less than that is not yet eligible for automatic rescue.

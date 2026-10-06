@@ -523,18 +523,29 @@ type DuplicateKeyDetailRepository interface {
 type CauseClassRepository interface {
 	FailWithCauseClass(
 		ctx context.Context, claim providersync.Claim, category string, causeClass string,
-		startedAt, completedAt time.Time,
+		detail *providersync.CauseDetail, startedAt, completedAt time.Time,
 	) error
+}
+
+// causeDetail returns the bounded counts of a size refusal, or nil.
+func causeDetail(err error) *providersync.CauseDetail {
+	var bound *providerfoundation.EffectBoundError
+	if !errors.As(err, &bound) {
+		return nil
+	}
+	return &providersync.CauseDetail{
+		Limit: bound.Limit, Table: bound.Table, Rows: bound.Rows, Bytes: bound.Bytes,
+	}
 }
 
 // failWithClass persists a failure category together with its cause class,
 // falling back to the plain Fail for a repository that cannot store one.
 func (handler *Handler) failWithClass(
 	ctx context.Context, claim providersync.Claim, category, class string,
-	startedAt, completedAt time.Time,
+	detail *providersync.CauseDetail, startedAt, completedAt time.Time,
 ) error {
 	if repository, supported := handler.Repository.(CauseClassRepository); supported {
-		return repository.FailWithCauseClass(ctx, claim, category, class, startedAt, completedAt)
+		return repository.FailWithCauseClass(ctx, claim, category, class, detail, startedAt, completedAt)
 	}
 	return handler.Repository.Fail(ctx, claim, category, startedAt, completedAt)
 }
@@ -543,11 +554,15 @@ func (handler *Handler) failWithClass(
 // and counts only: no error text, path, body or provider-supplied name.
 func logTerminalFailure(
 	execution *jobruntime.Execution[jobruntime.ProviderUnitArgs],
-	claim providersync.Claim, category, class string,
+	claim providersync.Claim, category, class string, detail *providersync.CauseDetail,
 ) {
 	attributes := []any{
 		"provider", claim.Provider, "dataset", claim.Dataset,
 		"category", category, "cause_class", class,
+	}
+	if detail != nil {
+		attributes = append(attributes, "limit", detail.Limit, "table", detail.Table,
+			"rows", detail.Rows, "bytes", detail.Bytes)
 	}
 	if execution != nil {
 		attributes = append(attributes,
@@ -589,7 +604,7 @@ func (handler *Handler) failTerminal(
 			)
 		}
 	}
-	return handler.failWithClass(writeCtx, claim, category, class, startedAt, completedAt)
+	return handler.failWithClass(writeCtx, claim, category, class, causeDetail(err), startedAt, completedAt)
 }
 
 // observeCicdPartialSuccess reports a github cicd/tests unit that advanced
@@ -1032,12 +1047,12 @@ func (handler *Handler) Work(
 			// generic provider_unit_exhausted, which buries the real cause.
 			if failErr := handler.failWithClass(
 				context.WithoutCancel(ctx), session.Claim, RateLimitCategory,
-				causeClass(err, false), startedAt, completedAt,
+				causeClass(err, false), nil, startedAt, completedAt,
 			); failErr != nil {
 				return jobruntime.Retryable(jobruntime.WithSafeCauseText(failErr,
 					safeCause(retryCauseFailWriteFailed, session.Claim, execution, failErr)))
 			}
-			logTerminalFailure(execution, session.Claim, RateLimitCategory, causeClass(err, false))
+			logTerminalFailure(execution, session.Claim, RateLimitCategory, causeClass(err, false), nil)
 			handler.observeLeaseRecovery(session.Claim, jobruntime.SyncLeaseResultFailed)
 			handler.logLifecycle(ctx, execution, session.Claim, "sync_provider_unit_finished", "failed", err)
 			return jobruntime.Permanent(jobruntime.WithSafeCauseText(err,
@@ -1092,7 +1107,7 @@ func (handler *Handler) Work(
 		handler.observeDuplicateNaturalKeyCollision(session.Claim, category, err)
 		handler.observeLeaseRecovery(session.Claim, jobruntime.SyncLeaseResultFailed)
 		handler.logLifecycle(ctx, execution, session.Claim, "sync_provider_unit_finished", "failed", err)
-		logTerminalFailure(execution, session.Claim, category, class)
+		logTerminalFailure(execution, session.Claim, category, class, causeDetail(err))
 		// The deterministic category IS the answer here -- all_artifacts_unreadable,
 		// auth, not_found, pagination_incomplete, feature_disabled and the rest
 		// are each a compile-time literal at the top of this file.
@@ -1106,11 +1121,11 @@ func (handler *Handler) Work(
 		// not change the existing best-effort, always-retryable behavior.
 		failErr := handler.failWithClass(
 			context.WithoutCancel(ctx), session.Claim, exhaustedFailureCategory(session.Claim),
-			causeClass(err, false), startedAt, completedAt,
+			causeClass(err, false), causeDetail(err), startedAt, completedAt,
 		)
 		if failErr == nil {
 			logTerminalFailure(execution, session.Claim,
-				exhaustedFailureCategory(session.Claim), causeClass(err, false))
+				exhaustedFailureCategory(session.Claim), causeClass(err, false), causeDetail(err))
 			handler.observeTerminalWithCommittedRows(
 				session.Claim, result, exhaustedFailureCategory(session.Claim), err,
 			)

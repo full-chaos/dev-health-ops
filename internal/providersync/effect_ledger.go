@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -22,23 +23,9 @@ const (
 	maxEffectLedgerStateBytes = 32 << 10
 )
 
-// EffectBoundExceededError reports a destination batch above the bounded write
-// contract (maxEffectRows rows or maxEffectPayloadBytes bytes). The bound is a
-// property of the unit's result, so a retry rebuilds the same oversized batch
-// from the same provider data. It wraps ErrEffectRecoveryUnsafe so every
-// existing errors.Is match keeps working; the unit handler uses errors.As to
-// tell this deterministic refusal apart from the other recovery-unsafe sites.
-// It carries no count, name or path, so its text is static.
-type EffectBoundExceededError struct {
-	// Bound is "rows" or "payload_bytes".
-	Bound string
-}
-
-func (e *EffectBoundExceededError) Error() string {
-	return ErrEffectRecoveryUnsafe.Error() + ": batch exceeds " + e.Bound + " bound"
-}
-
-func (e *EffectBoundExceededError) Unwrap() error { return ErrEffectRecoveryUnsafe }
+// EffectBoundExceededError is the typed refusal of a result above the bounded
+// write contract (see providerfoundation.EffectBoundError).
+type EffectBoundExceededError = providerfoundation.EffectBoundError
 
 type EffectRecoveryPolicy string
 type EffectInspection string
@@ -81,7 +68,7 @@ func BuildEffectBatch(
 ) (EffectBatch, error) {
 	destination = strings.TrimSpace(destination)
 	if len(rows) > maxEffectRows {
-		return EffectBatch{}, &EffectBoundExceededError{Bound: "rows"}
+		return EffectBatch{}, &EffectBoundExceededError{Limit: "rows", Table: destination, Rows: len(rows)}
 	}
 	if destination == "" || !validEffectRecovery(recovery) {
 		return EffectBatch{}, ErrEffectRecoveryUnsafe
@@ -99,7 +86,9 @@ func BuildEffectBatch(
 		}
 		encoded := append(json.RawMessage(nil), compact.Bytes()...)
 		if total > maxEffectPayloadBytes-len(encoded) {
-			return EffectBatch{}, &EffectBoundExceededError{Bound: "payload_bytes"}
+			return EffectBatch{}, &EffectBoundExceededError{
+				Limit: "payload_bytes", Table: destination, Rows: len(rows), Bytes: total + len(encoded),
+			}
 		}
 		total += len(encoded)
 		canonical = append(canonical, encoded)

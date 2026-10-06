@@ -313,11 +313,19 @@ func TestPostgresRepositoryFailWithCauseClassStoresTheClass(t *testing.T) {
 		class      string
 		wantClass  string
 		wantHasKey bool
+		detail     *CauseDetail
+		wantDetail map[string]any
 	}{
-		{"exhausted names its class", "provider_unit_exhausted", "provider_transient", "provider_transient", true},
-		{"terminal class", "response_too_large", "response_too_large", "response_too_large", true},
-		{"raw text is never stored", "provider_unit_exhausted", "/repos/acme/api failed", CauseClassUnclassified, true},
-		{"no class from an older writer", "provider_unit_exhausted", "", "", false},
+		{"exhausted names its class", "provider_unit_exhausted", "provider_transient", "provider_transient", true, nil, nil},
+		{"terminal class", "response_too_large", "response_too_large", "response_too_large", true, nil, nil},
+		{"raw text is never stored", "provider_unit_exhausted", "/repos/acme/api failed", CauseClassUnclassified, true, nil, nil},
+		{"no class from an older writer", "provider_unit_exhausted", "", "", false, nil, nil},
+		{"size refusal detail", "result_too_large", "result_too_large", "result_too_large", true,
+			&CauseDetail{Limit: "rows", Table: "work_items", Rows: 100001, Bytes: 7},
+			map[string]any{"limit": "rows", "table": "work_items", "rows": float64(100001), "bytes": float64(7)}},
+		{"free text in a detail label is never stored", "result_too_large", "result_too_large", "result_too_large", true,
+			&CauseDetail{Limit: "rows", Table: "acme/secret table", Rows: -1, Bytes: 3},
+			map[string]any{"limit": "rows", "table": "unclassified", "rows": float64(0), "bytes": float64(3)}},
 	}
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -335,7 +343,7 @@ func TestPostgresRepositoryFailWithCauseClassStoresTheClass(t *testing.T) {
 			if testCase.class == "" {
 				err = repository.Fail(ctx, claim, testCase.category, now, failedAt)
 			} else {
-				err = repository.FailWithCauseClass(ctx, claim, testCase.category, testCase.class, now, failedAt)
+				err = repository.FailWithCauseClass(ctx, claim, testCase.category, testCase.class, testCase.detail, now, failedAt)
 			}
 			if err != nil {
 				t.Fatal(err)
@@ -348,6 +356,10 @@ func TestPostgresRepositoryFailWithCauseClassStoresTheClass(t *testing.T) {
 			var decoded map[string]any
 			if err := json.Unmarshal([]byte(rawResult), &decoded); err != nil {
 				t.Fatal(err)
+			}
+			if gotDetail := decoded["cause_detail"]; fmt.Sprint(gotDetail) != fmt.Sprint(testCase.wantDetail) &&
+				!(gotDetail == nil && testCase.wantDetail == nil) {
+				t.Fatalf("cause_detail=%v, want %v", gotDetail, testCase.wantDetail)
 			}
 			got, has := decoded["cause_class"]
 			if rawError != testCase.category || decoded["error_category"] != testCase.category ||

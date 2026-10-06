@@ -27,6 +27,7 @@ type classRepository struct {
 	*memoryUnitRepository
 	deadline       time.Time
 	causeClass     string
+	detail         *providersync.CauseDetail
 	classCalls     int
 	writeCtxErr    error
 	writeHadLimit  bool
@@ -35,7 +36,7 @@ type classRepository struct {
 
 func (repository *classRepository) FailWithCauseClass(
 	ctx context.Context, claim providersync.Claim, category, class string,
-	_ time.Time, completedAt time.Time,
+	detail *providersync.CauseDetail, _ time.Time, completedAt time.Time,
 ) error {
 	repository.mu.Lock()
 	defer repository.mu.Unlock()
@@ -51,6 +52,7 @@ func (repository *classRepository) FailWithCauseClass(
 	repository.failures++
 	repository.lastFailCategory = category
 	repository.causeClass = class
+	repository.detail = detail
 	repository.failCompletedA = completedAt
 	repository.status = "failed"
 	return nil
@@ -261,6 +263,15 @@ func TestResultAboveTheWriteContractIsTerminalOnTheFirstAttemptWithItsClass(t *t
 			repository.lastFailCategory, repository.causeClass)
 	}
 	assertOneSafeWarning(t, logs.String(), ResultTooLargeCategory)
+	want := providersync.CauseDetail{Limit: "rows", Table: "work_items", Rows: 100_001}
+	if repository.detail == nil || *repository.detail != want {
+		t.Fatalf("stored detail=%+v, want %+v", repository.detail, want)
+	}
+	for _, field := range []string{"limit=rows", "table=work_items", "rows=100001", "bytes=0"} {
+		if !strings.Contains(logs.String(), field) {
+			t.Fatalf("terminal WARN misses %s: %s", field, logs.String())
+		}
+	}
 }
 
 // The other recovery-unsafe sites are not size bounds; they keep the ordinary

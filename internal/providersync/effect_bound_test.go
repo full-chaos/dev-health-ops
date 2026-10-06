@@ -43,7 +43,9 @@ func TestBuildEffectBatchSizeBoundsReportTheTypedError(t *testing.T) {
 				t.Errorf("%s: err=%v, want the bare sentinel", testCase.name, err)
 			}
 		default:
-			if !isBound || bound.Bound != testCase.wantBound || !errors.Is(err, ErrEffectRecoveryUnsafe) {
+			if !isBound || bound.Limit != testCase.wantBound || bound.Table != "work_items" ||
+				(testCase.wantBound == "rows" && bound.Rows != maxEffectRows+1) ||
+				(testCase.wantBound == "payload_bytes" && bound.Bytes <= maxEffectPayloadBytes) || !errors.Is(err, ErrEffectRecoveryUnsafe) {
 				t.Errorf("%s: err=%v, want bound %q wrapping the sentinel", testCase.name, err, testCase.wantBound)
 			}
 			if strings.ContainsAny(err.Error(), "0123456789") {

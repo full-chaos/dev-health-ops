@@ -258,7 +258,7 @@ func TestLinearWorkItemsRouteCollectsRawLinearSurfaces(t *testing.T) {
 				{"createdAt":"2026-07-26T10:00:00Z","fromState":{"name":"Todo","type":"unstarted"},"toState":{"name":"In Progress","type":"started"},"actor":{"email":"alice@example.com","name":"Alice"}},
 				{"createdAt":"2026-07-27T11:00:00Z","fromState":{"name":"Done","type":"completed"},"toState":{"name":"In Progress","type":"started"},"actor":{"email":"bob@example.com","name":"Bob"}}
 			]},
-			"comments":{"nodes":[{"body":"hello 🌍","createdAt":"2026-07-27T12:00:00Z","user":{"email":"alice@example.com","name":"Alice"}},{"body":"","createdAt":"2026-07-27T13:00:00Z","user":null}],"pageInfo":{"hasNextPage":false,"endCursor":null}},
+			"comments":{"nodes":[{"id":"comment-hello","body":"hello 🌍","createdAt":"2026-07-27T12:00:00Z","user":{"email":"alice@example.com","name":"Alice"}},{"body":"","createdAt":"2026-07-27T13:00:00Z","user":null}],"pageInfo":{"hasNextPage":false,"endCursor":null}},
 			"attachments":{"nodes":[{"url":"https://github.com/acme/repo/pull/9","sourceType":"github"},{"url":"https://evil.example/acme/repo/pull/10","sourceType":"github"},{"url":"https://github.com/acme/repo/pull/9","sourceType":"github"}],"pageInfo":{"hasNextPage":false,"endCursor":null}},
 			"relations":{"nodes":[{"type":"blocked_by","issue":{"identifier":"ENG-42"},"relatedIssue":{"identifier":"ENG-1"}}],"pageInfo":{"hasNextPage":false,"endCursor":null}},
 			"inverseRelations":{"nodes":[{"type":"blocked_by","issue":{"identifier":"ENG-42"},"relatedIssue":{"identifier":"ENG-1"}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}
@@ -360,7 +360,7 @@ func TestLinearWorkItemsRouteFetchControlsSuppressOptionalRawFacts(t *testing.T)
 		"createdAt":"2026-07-25T09:00:00Z","updatedAt":"2026-07-28T16:30:00Z",
 		"state":{"name":"In Progress","type":"started"},
 		"labels":{"nodes":[]},"history":{"nodes":[{"createdAt":"2026-07-27T11:00:00Z","fromState":{"name":"Done","type":"completed"},"toState":{"name":"In Progress","type":"started"},"actor":null}]},
-		"comments":{"nodes":[{"body":"comment","createdAt":"2026-07-27T12:00:00Z","user":null}],"pageInfo":{"hasNextPage":false,"endCursor":null}},
+		"comments":{"nodes":[{"id":"comment-plain","body":"comment","createdAt":"2026-07-27T12:00:00Z","user":null}],"pageInfo":{"hasNextPage":false,"endCursor":null}},
 		"attachments":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}},
 		"relations":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}},
 		"inverseRelations":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}

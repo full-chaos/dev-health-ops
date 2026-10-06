@@ -1,6 +1,7 @@
 package providersync
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -725,7 +726,10 @@ func collectGitLabNotes(
 	result := make([]gitlabNotePayload, 0, len(items))
 	for _, raw := range items {
 		var payload gitlabNotePayload
-		if err := json.Unmarshal(raw, &payload); err != nil {
+		// UseNumber: a note id above 2^53 must keep its exact text (CHAOS-8790).
+		decoder := json.NewDecoder(bytes.NewReader(raw))
+		decoder.UseNumber()
+		if err := decoder.Decode(&payload); err != nil {
 			return nil, pages, providerfoundation.ErrNormalizationInvalid
 		}
 		result = append(result, payload)

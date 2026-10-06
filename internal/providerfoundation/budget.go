@@ -953,6 +953,13 @@ var metricUnitFailureReasonVocabulary = map[string]struct{}{
 	// TestPostgresRepositoryFailWithDuplicateKeyDetailPersistsStructuredKey
 	// while building the CHAOS-4557 structured-detail fix.
 	"duplicate_natural_key": {},
+	// previous_release_snapshot (CHAOS-8790): a prepared snapshot stored by
+	// the previous release, replayed by this one.
+	"previous_release_snapshot": {},
+	// CHAOS-8797: first-attempt terminal categories.
+	"response_too_large": {},
+	"result_too_large":   {},
+	"time_limit":         {},
 }
 
 // MetricUnitFailureReasonLabel bounds a unit failure category label.

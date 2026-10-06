@@ -286,3 +286,11 @@ func TestDuplicateNaturalKeyCounterRendersPerTable(t *testing.T) {
 		}
 	}
 }
+
+// CHAOS-8790: the unit-failure reason of a replayed previous-release snapshot
+// is a known label, not "other".
+func TestPreviousReleaseSnapshotIsAKnownUnitFailureReason(t *testing.T) {
+	if got := MetricUnitFailureReasonLabel("previous_release_snapshot"); got != "previous_release_snapshot" {
+		t.Fatalf("MetricUnitFailureReasonLabel = %q, want the reason itself", got)
+	}
+}

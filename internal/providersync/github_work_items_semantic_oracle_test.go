@@ -116,7 +116,7 @@ func TestGitHubWorkItemInteractionMatchesFrozenPythonProductionRow(t *testing.T)
 		"github/work-items/interaction",
 		[]oracleCase{{ID: "unicode_comment", Input: input}},
 		buildGitHubInteractionOracleRow,
-		nil,
+		workItemInteractionIDGoOnly,
 	)
 }
 

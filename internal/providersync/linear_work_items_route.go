@@ -1162,6 +1162,11 @@ func normalizeLinearInteractions(
 		if comment.Body == "" {
 			continue
 		}
+		id := interactionIDFrom(comment.ID)
+		if id == "" {
+			skipInteractionWithoutID("linear", claim.OrgID, workItemID)
+			continue
+		}
 		occurred := parseLinearTime(comment.CreatedAt)
 		if occurred == nil {
 			fallback := normalizedAt.UTC()
@@ -1178,7 +1183,7 @@ func normalizeLinearInteractions(
 			WorkItemID: workItemID, Provider: "linear", InteractionType: "comment",
 			OccurredAt: occurred.UTC(), Actor: actor,
 			BodyLength: len([]rune(comment.Body)), LastSynced: normalizedAt.UTC(),
-			OrgID: claim.OrgID,
+			OrgID: claim.OrgID, InteractionID: id,
 		})
 	}
 	return rows

@@ -561,6 +561,7 @@ func workItemInteractionTestRow(orgID string, now time.Time) githubWorkItemInter
 		WorkItemID: "gh:acme/api#42", Provider: "github",
 		InteractionType: "comment", OccurredAt: now.Add(-4 * time.Hour),
 		Actor: stringPointer("dev"), BodyLength: 128, LastSynced: now, OrgID: orgID,
+		InteractionID: "comment-42-1",
 	}
 }
 

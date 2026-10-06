@@ -134,7 +134,7 @@ func TestLinearInteractionMatchesFrozenPythonProductionRows(t *testing.T) {
 			},
 		}},
 		buildLinearInteractionOracleRow,
-		nil,
+		workItemInteractionIDGoOnly,
 	)
 }
 
@@ -225,6 +225,12 @@ func buildLinearInteractionOracleRow(t *testing.T, input map[string]any) linearW
 	var comment linearCommentPayload
 	if err := json.Unmarshal(commentRaw, &comment); err != nil {
 		t.Fatal(err)
+	}
+	if comment.ID == "" {
+		// The frozen Python input has no comment id (CHAOS-8790); the id is
+		// supplied here, Go side only, so the recorded Python answer for
+		// that input stays valid.
+		comment.ID = "oracle-comment-id"
 	}
 	rows := normalizeLinearInteractions(
 		linearOracleClaim(input), input["work_item_id"].(string), []linearCommentPayload{comment}, linearWorkItemOracleNormalizedAt,

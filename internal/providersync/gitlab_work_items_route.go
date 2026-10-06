@@ -18,12 +18,9 @@ import (
 )
 
 const (
-	gitLabWorkItemsDefaultPerPage      = 100
-	gitLabWorkItemsMaximumPerPage      = 100
-	gitLabWorkItemsDefaultMaxPages     = 10_000
-	gitLabWorkItemsDefaultNotesLimit   = 500
-	gitLabWorkItemsDefaultHistoryLimit = 100
-	gitLabWorkItemsDefaultLabelsLimit  = 300
+	gitLabWorkItemsDefaultPerPage  = 100
+	gitLabWorkItemsMaximumPerPage  = 100
+	gitLabWorkItemsDefaultMaxPages = 10_000
 )
 
 // gitLabWorkItemRawDestinations are the six raw facts emitted by the Python
@@ -366,7 +363,7 @@ func (handler GitLabWorkItemsRouteHandler) Collect(
 		if fetchComments {
 			notes, notePages, noteErr := collectGitLabNotes(
 				ctx, &counted, root+"/issues/"+strconv.Itoa(payload.IID)+"/notes",
-				perPage, nestedMaxPages, gitLabWorkItemsDefaultNotesLimit,
+				perPage, nestedMaxPages,
 			)
 			if noteErr != nil {
 				return CompleteRouteBatch{}, noteErr
@@ -421,7 +418,7 @@ func (handler GitLabWorkItemsRouteHandler) Collect(
 			if fetchComments {
 				notes, notePages, noteErr := collectGitLabNotes(
 					ctx, &counted, root+"/merge_requests/"+strconv.Itoa(payload.IID)+"/notes",
-					perPage, nestedMaxPages, gitLabWorkItemsDefaultNotesLimit,
+					perPage, nestedMaxPages,
 				)
 				if noteErr != nil {
 					return CompleteRouteBatch{}, noteErr
@@ -543,11 +540,39 @@ func collectGitLabPayloads(
 	return page.Items, page.Pages, nil
 }
 
+// collectGitLabNestedPayloads pages one nested list (notes, label events, state
+// events, links, closing merge requests, milestones) to its end. Past the page
+// bound the unit fails closed and the error names the owner item and the field
+// (the request path without its query string: a project id and an iid, never a
+// credential or a payload). Nothing is truncated: CHAOS-8770.
+func collectGitLabNestedPayloads(
+	ctx context.Context,
+	client *providerfoundation.HTTPClient,
+	path string,
+	query url.Values,
+	perPage, maxPages int,
+) ([]json.RawMessage, int, error) {
+	items, pages, err := collectGitLabPayloads(ctx, client, path, query, perPage, maxPages)
+	if !errors.Is(err, ErrPaginationCapExceeded) {
+		return items, pages, err
+	}
+	owner, field := path, path
+	if cut := strings.LastIndex(path, "/"); cut >= 0 {
+		owner, field = path[:cut], path[cut+1:]
+	}
+	slog.Error("providersync.gitlab.nested_list_bound_exceeded",
+		"owner", owner, "field", field, "pages", pages, "max_pages", maxPages)
+	return nil, pages, fmt.Errorf(
+		"%w: gitlab %s of %s still had a next page after %d pages (max %d pages)",
+		ErrPaginationCapExceeded, field, owner, pages, maxPages,
+	)
+}
+
 func collectGitLabMilestones(
 	ctx context.Context, client *providerfoundation.HTTPClient, path string,
 	perPage, maxPages int,
 ) ([]gitlabIssueMilestonePayload, int, error) {
-	items, pages, err := collectGitLabPayloads(ctx, client, path, url.Values{"state": {"all"}}, perPage, maxPages)
+	items, pages, err := collectGitLabNestedPayloads(ctx, client, path, url.Values{"state": {"all"}}, perPage, maxPages)
 	if err != nil {
 		return nil, pages, err
 	}
@@ -566,12 +591,9 @@ func collectGitLabLabelEvents(
 	ctx context.Context, client *providerfoundation.HTTPClient, path string,
 	perPage, maxPages int,
 ) ([]gitlabLabelEventPayload, int, error) {
-	items, pages, err := collectGitLabPayloads(ctx, client, path, nil, perPage, maxPages)
+	items, pages, err := collectGitLabNestedPayloads(ctx, client, path, nil, perPage, maxPages)
 	if err != nil {
 		return nil, pages, err
-	}
-	if len(items) > gitLabWorkItemsDefaultLabelsLimit {
-		items = items[:gitLabWorkItemsDefaultLabelsLimit]
 	}
 	result := make([]gitlabLabelEventPayload, 0, len(items))
 	for _, raw := range items {
@@ -588,12 +610,9 @@ func collectGitLabStateEvents(
 	ctx context.Context, client *providerfoundation.HTTPClient, path string,
 	perPage, maxPages int,
 ) ([]gitlabStateEventPayload, int, error) {
-	items, pages, err := collectGitLabPayloads(ctx, client, path, nil, perPage, maxPages)
+	items, pages, err := collectGitLabNestedPayloads(ctx, client, path, nil, perPage, maxPages)
 	if err != nil {
 		return nil, pages, err
-	}
-	if len(items) > gitLabWorkItemsDefaultHistoryLimit {
-		items = items[:gitLabWorkItemsDefaultHistoryLimit]
 	}
 	result := make([]gitlabStateEventPayload, 0, len(items))
 	for _, raw := range items {
@@ -610,7 +629,7 @@ func collectGitLabIssueLinks(
 	ctx context.Context, client *providerfoundation.HTTPClient, path string,
 	perPage, maxPages int,
 ) ([]gitlabIssueLinkPayload, int, error) {
-	items, pages, err := collectGitLabPayloads(ctx, client, path, nil, perPage, maxPages)
+	items, pages, err := collectGitLabNestedPayloads(ctx, client, path, nil, perPage, maxPages)
 	if err != nil {
 		return nil, pages, err
 	}
@@ -629,7 +648,7 @@ func collectGitLabClosingMergeRequests(
 	ctx context.Context, client *providerfoundation.HTTPClient, path string,
 	perPage, maxPages int,
 ) ([]gitlabClosingMergeRequestPayload, int, error) {
-	items, pages, err := collectGitLabPayloads(ctx, client, path, nil, perPage, maxPages)
+	items, pages, err := collectGitLabNestedPayloads(ctx, client, path, nil, perPage, maxPages)
 	if err != nil {
 		return nil, pages, err
 	}
@@ -649,14 +668,11 @@ func collectGitLabClosingMergeRequests(
 
 func collectGitLabNotes(
 	ctx context.Context, client *providerfoundation.HTTPClient, path string,
-	perPage, maxPages, limit int,
+	perPage, maxPages int,
 ) ([]gitlabNotePayload, int, error) {
-	items, pages, err := collectGitLabPayloads(ctx, client, path, nil, perPage, maxPages)
+	items, pages, err := collectGitLabNestedPayloads(ctx, client, path, nil, perPage, maxPages)
 	if err != nil {
 		return nil, pages, err
-	}
-	if len(items) > limit {
-		items = items[:limit]
 	}
 	result := make([]gitlabNotePayload, 0, len(items))
 	for _, raw := range items {

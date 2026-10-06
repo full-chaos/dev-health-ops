@@ -272,6 +272,7 @@ func (handler GitHubWorkItemsRouteHandler) Collect(
 	rows := restResult.Rows
 	evidence := restResult.Evidence
 
+	prCommentsTruncated := 0
 	if len(restResult.PullRequests) > 0 {
 		targets := make([]int, 0, len(restResult.PullRequests))
 		for _, pull := range restResult.PullRequests {
@@ -282,7 +283,7 @@ func (handler GitHubWorkItemsRouteHandler) Collect(
 			commentsLimit = options.commentsLimit
 		}
 		socialResult, socialErr := handler.Social.Fetch(
-			ctx, claim, client, targets, commentsLimit, githubWorkItemEventLimit,
+			ctx, claim, client, targets, commentsLimit, githubWorkItemEventsUnbounded,
 		)
 		usage.add(GitHubWorkItemsRequestUsage{
 			Transport: socialResult.Usage.Transport, RouteFamily: socialResult.Usage.RouteFamily,
@@ -311,6 +312,9 @@ func (handler GitHubWorkItemsRouteHandler) Collect(
 		for _, pull := range restResult.PullRequests {
 			subject := strconv.Itoa(pull.Number)
 			payload, exists := socialResult.Payloads[pull.Number]
+			if exists && payload.CommentsTruncated {
+				prCommentsTruncated++
+			}
 			if !exists && socialComplete {
 				return CompleteRouteBatch{}, usage.wrap(providerfoundation.ErrGraphQLResponse)
 			}
@@ -382,6 +386,7 @@ func (handler GitHubWorkItemsRouteHandler) Collect(
 	// audible at boot, which is where it belongs — reading the environment on
 	// this path to warn about it would reintroduce the dependency D18 removes.
 	projectState := "disabled"
+	projectLabelsTruncated := 0
 	if len(projectTargets) > 0 {
 		projectResult, projectErr := handler.Projects.Fetch(
 			ctx, claim, credential, client, normalizedAt, handler.ResolveIdentity,
@@ -398,6 +403,7 @@ func (handler GitHubWorkItemsRouteHandler) Collect(
 			return CompleteRouteBatch{}, usage.wrap(err)
 		}
 		incomplete = append(incomplete, projectResult.Incomplete...)
+		projectLabelsTruncated += projectResult.LabelsTruncated
 		// CHAOS-4193(d): the read-then-diff pass. Runs after validation (so it
 		// only ever diffs a result already proven well-formed) and before the
 		// merge, appending its rows to the SAME ProjectMemberships slice the
@@ -450,18 +456,30 @@ func (handler GitHubWorkItemsRouteHandler) Collect(
 			closingReferenceDependenciesSynced++
 		}
 	}
+	resultFields := map[string]any{
+		"work_items_synced":                     len(rows.WorkItems),
+		"projects_v2":                           projectState,
+		"closing_reference_dependencies_synced": closingReferenceDependenciesSynced,
+		githubWorkItemsIncompleteResultKey:      incomplete,
+		"observations": map[string]any{
+			"provider_usage": usage.snapshot(),
+		},
+	}
+	// CHAOS-8770: a cut made by the user's comments_limit is a named, counted
+	// limit. The keys are present only when a cut happened.
+	if restResult.CommentsTruncated > 0 {
+		resultFields["issue_comments_truncated_by_limit"] = restResult.CommentsTruncated
+	}
+	if projectLabelsTruncated > 0 {
+		resultFields["projects_v2_item_labels_truncated"] = projectLabelsTruncated
+	}
+	if prCommentsTruncated > 0 {
+		resultFields["pr_comments_truncated_by_limit"] = prCommentsTruncated
+	}
 	return CompleteRouteBatch{
 		Effects: effects,
 		Result: attachGitHubWorkItemTeamAttributionObservation(
-			attachWorkItemTeamInheritanceObservation(map[string]any{
-				"work_items_synced":                     len(rows.WorkItems),
-				"projects_v2":                           projectState,
-				"closing_reference_dependencies_synced": closingReferenceDependenciesSynced,
-				githubWorkItemsIncompleteResultKey:      incomplete,
-				"observations": map[string]any{
-					"provider_usage": usage.snapshot(),
-				},
-			}, handler.Deriver),
+			attachWorkItemTeamInheritanceObservation(resultFields, handler.Deriver),
 			handler.Deriver,
 		),
 		Watermark: watermark,

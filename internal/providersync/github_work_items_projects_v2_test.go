@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -426,7 +427,7 @@ func TestGitHubProjectV2FetcherCompletesOuterAndNestedPagination(t *testing.T) {
 		t.Fatalf("requests=%+v", doer.bodies)
 	}
 	outerQuery := doer.bodies[0]["query"].(string)
-	for _, leaf := range []string{"items(first: $first", "labels(first: 50)", "assignees(first: 10)", "fieldValues(first: 20)", "changes(first: 100"} {
+	for _, leaf := range []string{"items(first: $first", "labels(first: 100) { nodes { name } pageInfo { hasNextPage } }", "assignees(first: 10)", "fieldValues(first: 20)", "changes(first: 100"} {
 		if !strings.Contains(outerQuery, leaf) {
 			t.Errorf("query missing documented leaf bound %q", leaf)
 		}
@@ -967,4 +968,30 @@ func TestGitHubProjectV2SnapshotCompleteAcrossEveryIdentificationOutcome(t *test
 			t.Fatalf("incomplete=%+v, want none: every board item was positively identified", result.Incomplete)
 		}
 	})
+}
+
+// CHAOS-8770 (named limit): a board item whose label list has more rows than the
+// one page the items query reads is counted, never silent; a complete list is not.
+func TestGitHubProjectV2FetcherCountsBoardItemsWithMoreLabelsThanOnePage(t *testing.T) {
+	item := func(id string, number int, hasNext bool) string {
+		return `{"id":"` + id + `","content":{"__typename":"Issue","number":` + strconv.Itoa(number) +
+			`,"title":"t","state":"OPEN","createdAt":"2026-08-01T08:00:00Z","updatedAt":"2026-08-02T08:00:00Z",` +
+			`"repository":{"nameWithOwner":"acme/api"},"labels":{"nodes":[{"name":"a"}],"pageInfo":{"hasNextPage":` +
+			strconv.FormatBool(hasNext) + `}},"assignees":{"nodes":[]}},"fieldValues":{"nodes":[]},` +
+			`"changes":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}`
+	}
+	doer := &gitHubProjectV2Doer{t: t, replies: []string{
+		`{"data":{"organization":{"projectV2":{"items":{"nodes":[` + item("PVTI_1", 1, true) + `,` + item("PVTI_2", 2, false) + `,` + item("PVTI_3", 3, true) +
+			`],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}`,
+	}}
+	claim := githubWorkItemOracleClaim()
+	claim.IntegrationConfig = map[string]any{"github_projects_v2": []any{map[string]any{"org_login": "acme", "project_number": 3}}}
+	result, err := (GitHubProjectV2Fetcher{}).Fetch(
+		context.Background(), claim, providerfoundation.Credential{Provider: "github", ID: claim.CredentialID},
+		githubProjectV2TestClient(t, fakehttp.Client(doer)),
+		time.Date(2026, 8, 4, 12, 0, 0, 0, time.UTC), nil,
+	)
+	if err != nil || len(result.Rows.WorkItems) != 3 || result.LabelsTruncated != 2 {
+		t.Fatalf("workItems=%d truncated=%d err=%v", len(result.Rows.WorkItems), result.LabelsTruncated, err)
+	}
 }

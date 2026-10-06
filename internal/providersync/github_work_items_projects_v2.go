@@ -73,6 +73,9 @@ type GitHubProjectV2FetchResult struct {
 	Evidence FetchEvidence
 	Usage    GitHubProjectV2Usage
 	Targets  int
+	// LabelsTruncated counts board items whose label list had more rows than
+	// the one page the items query reads (a named limit, CHAOS-8770).
+	LabelsTruncated int
 	// MembershipSkips counts board items that produced NO membership row, by
 	// bounded reason (CHAOS-4194). It exists because the defect this ticket
 	// fixes was a SILENT drop: PR items were fetched fully hydrated and
@@ -288,6 +291,11 @@ func (GitHubProjectV2Fetcher) Fetch(
 				boardSubjects = append(boardSubjects, subject)
 			} else if item.Content.Typename != "DraftIssue" {
 				boardIncomplete = true
+			}
+			if labels := item.Content.Labels.PageInfo; labels != nil && labels.HasNextPage != nil && *labels.HasNextPage {
+				result.LabelsTruncated++
+				slog.Warn("providersync.github.projects_v2.item_labels_truncated",
+					"item", item.ID, "number", item.Content.Number, "read_labels", len(item.Content.Labels.Nodes))
 			}
 			row, transitions, emitted, err := normalizeGitHubProjectV2Item(
 				claim, item, projectScopeID, resolveIdentity, normalizedAt,
@@ -1005,9 +1013,11 @@ func mergeGitHubProjectV2Rows(repository, projects githubWorkItemRows) githubWor
 	return merged
 }
 
-// These literals intentionally preserve Python's documented leaf
-// truncations (labels 50, assignees 10, fieldValues 20). The outer items and
-// nested changes connections are fully paginated by the fetcher.
+// These literals keep Python's leaf truncations for assignees (10) and
+// fieldValues (20). Labels are asked at GitHub's page maximum (100) and a board
+// item that still has more is counted and logged (CHAOS-8770): a named limit,
+// never silent. The outer items and nested changes connections are fully
+// paginated by the fetcher.
 const gitHubProjectsV2ItemsQuery = `
 query($login: String!, $number: Int!, $after: String, $first: Int!) {
   organization(login: $login) {
@@ -1017,8 +1027,8 @@ query($login: String!, $number: Int!, $after: String, $first: Int!) {
           id createdAt updatedAt
           content {
             __typename
-            ... on Issue { id number title url state createdAt updatedAt closedAt repository { nameWithOwner } labels(first: 50) { nodes { name } } assignees(first: 10) { nodes { login email name } } author { login email name } }
-            ... on PullRequest { id number title url state createdAt updatedAt closedAt mergedAt repository { nameWithOwner } labels(first: 50) { nodes { name } } assignees(first: 10) { nodes { login email name } } author { login email name } }
+            ... on Issue { id number title url state createdAt updatedAt closedAt repository { nameWithOwner } labels(first: 100) { nodes { name } pageInfo { hasNextPage } } assignees(first: 10) { nodes { login email name } } author { login email name } }
+            ... on PullRequest { id number title url state createdAt updatedAt closedAt mergedAt repository { nameWithOwner } labels(first: 100) { nodes { name } pageInfo { hasNextPage } } assignees(first: 10) { nodes { login email name } } author { login email name } }
             ... on DraftIssue { id title createdAt updatedAt }
           }
           fieldValues(first: 20) { nodes {

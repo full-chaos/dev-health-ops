@@ -167,6 +167,92 @@ func TestResolveEvidenceQualityStats_QueryError_IsFatal(t *testing.T) {
 	}
 }
 
+// CHAOS-8104's group answer has a distinct semantic from the existing
+// evidenceQualityStats aggregate: each persisted work unit is assigned to its
+// deterministic dominant group once, then quality is averaged over all units
+// in that group. The unknown-quality group proves a NaN aggregate is withheld
+// as GraphQL null while its total stays observable.
+func TestResolveEvidenceQualityByGroup_UsesDominantPersistedGroupAndPreservesUnknownMean(t *testing.T) {
+	client := &routingFakeClient{}
+	client.on("evidence_quality_group_key", &fakeRowScanner{rows: [][]any{
+		{"feature_delivery", 0.0, uint64(2), uint64(2)},
+		{"maintenance", math.NaN(), uint64(3), uint64(0)},
+	}})
+	groupBy := model.DimensionInputTheme
+	batch := model.AnalyticsRequestInput{
+		Breakdowns:             []model.BreakdownRequestInput{bdInput(model.DimensionInputTheme, model.MeasureInputCount)},
+		UseInvestment:          boolPtr(true),
+		EvidenceQualityGroupBy: &groupBy,
+	}
+
+	got, err := resolveEvidenceQualityByGroup(context.Background(), client, "org-1", batch, true, nil)
+	if err != nil {
+		t.Fatalf("resolveEvidenceQualityByGroup: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("len(groups) = %d, want 2: %+v", len(got), got)
+	}
+	if got[0].Key != "feature_delivery" || got[0].Total != 2 || got[0].Mean == nil || *got[0].Mean != 0.0 {
+		t.Fatalf("feature_delivery group = %+v, want observed zero mean over 2 units", got[0])
+	}
+	if got[0].Label == nil || *got[0].Label != "feature_delivery" {
+		t.Errorf("feature_delivery label = %v, want the non-ID key fallback", got[0].Label)
+	}
+	if got[1].Key != "maintenance" || got[1].Total != 3 || got[1].Mean != nil {
+		t.Fatalf("maintenance group = %+v, want unknown mean and total 3", got[1])
+	}
+}
+
+func TestResolveEvidenceQualityByGroup_RejectsNonInvestmentDimensions(t *testing.T) {
+	client := &routingFakeClient{}
+	groupBy := model.DimensionInputRepo
+	batch := model.AnalyticsRequestInput{
+		Breakdowns:             []model.BreakdownRequestInput{bdInput(model.DimensionInputTheme, model.MeasureInputCount)},
+		UseInvestment:          boolPtr(true),
+		EvidenceQualityGroupBy: &groupBy,
+	}
+
+	_, err := resolveEvidenceQualityByGroup(context.Background(), client, "org-1", batch, true, nil)
+	if err == nil {
+		t.Fatal("expected REPO evidenceQualityGroupBy to be rejected")
+	}
+	var validation *ValidationError
+	if !errors.As(err, &validation) {
+		t.Fatalf("error = %T %v, want ValidationError", err, err)
+	}
+}
+
+func TestCompileEvidenceQualityByGroup_UsesOneDominantKeyPerUnit(t *testing.T) {
+	q, err := compileEvidenceQualityByGroup(
+		"org-1",
+		mustGraphQLDate("2026-01-01"),
+		mustGraphQLDate("2026-01-07"),
+		DimensionSubcategory,
+		evidenceQualityFilter{},
+	)
+	if err != nil {
+		t.Fatalf("compileEvidenceQualityByGroup: %v", err)
+	}
+	if strings.Contains(q.sql, "ARRAY JOIN") {
+		t.Fatalf("group query must select one dominant persisted group per unit, not expand every distribution entry: %s", q.sql)
+	}
+	for _, want := range []string{
+		"arrayElementOrNull(arraySort",
+		"mapKeys(work_unit_investments.subcategory_distribution_json)",
+		"mapValues(work_unit_investments.subcategory_distribution_json)",
+		"AS evidence_quality_group_key",
+		"count() AS total",
+		"countIf(evidence_quality IS NOT NULL) AS quality_known_count",
+	} {
+		if !strings.Contains(q.sql, want) {
+			t.Errorf("group query missing %q: %s", want, q.sql)
+		}
+	}
+	if got := bindingMap(q.bindings)["org_id"]; got != "org-1" {
+		t.Errorf("org_id binding = %v, want org-1", got)
+	}
+}
+
 // TestResolveEvidenceQualityStats_TeamScope_AddsUnitTeamJoinAndBinding
 // pins the team-scope branch (analytics.py:222-224): filters.scope with
 // level=TEAM sets team_scope_ids, which fetch_investment_quality_stats

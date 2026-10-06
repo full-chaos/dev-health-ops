@@ -339,7 +339,7 @@ flowchart TB
     DEP["Deployment<br/>deployments"]
 
     PR ==>|"BELONGS_TO_REPOSITORY<br/>the pull request's work_items.repo_id"| REPO
-    PR ==>|"RELATES_TO<br/>work_item_dependencies link row"| ISSUE
+    PR ==>|"RELATES_TO<br/>work_graph_issue_pr link row"| ISSUE
     ISSUE ==>|"BELONGS_TO_PROJECT<br/>project_membership_presence"| PROJ
     REPO -.->|"OWNED_BY_TEAM<br/>team_repo_ownership"| TEAM
     PROJ -.->|"OWNED_BY_TEAM<br/>team_project_ownership"| TEAM
@@ -360,9 +360,13 @@ specific to one provider.
 
 Two rules hold for every read of the tree:
 
-1. A link is an actual linked row in `work_item_dependencies` whose two ends
-   are real work items. An issue-key prefix, an unresolved external key, or an
-   issue's own repository column is never a link.
+1. The issue <> pull request link of record is the table
+   `work_graph_issue_pr`. Each row carries a `provenance` tier, ranked
+   **native > explicit_text > heuristic**. All three tiers count as links.
+   A consumer names the tier it read and never presents a lower tier as
+   native. An issue-key prefix by itself, an unresolved external key, an
+   issue's own repository column, or a team's repositories is never the
+   relation.
 2. A team is reached through ownership only (`team_repo_ownership`,
    `team_project_ownership`), never through person membership or a computed
    attribution.

@@ -2,6 +2,7 @@ package investmentexplain
 
 import (
 	"context"
+	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"testing"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/investment/categorize"
@@ -18,7 +19,7 @@ const refusedBundleKey = "synthetic-refused-bundle-value-not-a-key"
 func refusedBundleResolver() *fakeOrgResolver {
 	return &fakeOrgResolver{
 		usableProvider: "openai",
-		credentials:    llmorgsettings.Credentials{APIKey: refusedBundleKey, BaseURL: "http://169.254.169.254/latest"},
+		credentials:    llmorgsettings.Credentials{APIKey: secrets.NewHidden(refusedBundleKey), BaseURL: "http://169.254.169.254/latest"},
 		credentialsOK:  false,
 	}
 }

@@ -888,6 +888,28 @@ const registeredInvestmentBreakdownDocument = `query InvestmentBreakdown($orgId:
   }
 }`
 
+// registeredInvestmentEvidenceQualityDocument is CHAOS-8104's registered
+// document for the Investment Evidence table's served mean-by-group column.
+// Its text is the captured wire document that CHAOS-8745's browser client
+// sent, not a schema-derived reconstruction. The capture fixture and its
+// digest test keep this registration aligned with that client request.
+//
+// Registration serves this document through the catalog switch. It does not
+// add a resolver, a route handler, or an MCP class: the document selects the
+// existing analytics root, whose MCP class remains mcp:analytics.
+const registeredInvestmentEvidenceQualityDocument = `query InvestmentEvidenceQuality($orgId: String!, $batch: AnalyticsRequestInput!) {
+  analytics(orgId: $orgId, batch: $batch) {
+    evidenceQualityByGroup {
+      key
+      label
+      mean
+      total
+      __typename
+    }
+    __typename
+  }
+}`
+
 // registeredInvestmentFullDocument is CHAOS-4538's registered document
 // for the combined investment breakdowns+sankey `analytics` query --
 // same contract as registeredInvestmentBreakdownDocument above. Copied
@@ -1471,14 +1493,29 @@ const registeredCoverageBaselinesDocument = `query CoverageBaselines($orgId: Str
   }
 }`
 
-// registeredCoverageScopeBaselineDocument is the registered document for the
-// `coverageScopeBaseline` operation (CHAOS-8541, Go-only: no Python resolver
-// exists), the exact wire-form text the web client sends
-// (testdata/wire_capture/coveragescopebaseline_captured.graphql; the wire form
-// of TESTOPS_COVERAGE_SCOPE_BASELINE_QUERY, computed with the web's pinned
-// urql). The web sends no scope and reads the line baseline only.
-const registeredCoverageScopeBaselineDocument = `query CoverageScopeBaseline($orgId: String!, $endDate: Date!) {
+// registeredCoverageScopeBaselineV1Document is the unscoped text accepted
+// before CHAOS-8682. Keep it as a legacy document while older web builds roll
+// out.
+const registeredCoverageScopeBaselineV1Document = `query CoverageScopeBaseline($orgId: String!, $endDate: Date!) {
   coverageScopeBaseline(orgId: $orgId, endDate: $endDate) {
+    lineBaselinePct
+    lineDays
+    __typename
+  }
+}`
+
+// registeredCoverageScopeBaselineDocument is the scoped registered document
+// for the `coverageScopeBaseline` operation (CHAOS-8682, Go-only: no Python
+// resolver exists). It is the exact wire form of the web's
+// TESTOPS_COVERAGE_SCOPE_BASELINE_QUERY, produced with the web's pinned urql
+// and captured at testdata/wire_capture/coveragescopebaseline_captured.graphql.
+const registeredCoverageScopeBaselineDocument = `query CoverageScopeBaseline($orgId: String!, $endDate: Date!, $repoIds: [String!], $teamIds: [String!]) {
+  coverageScopeBaseline(
+    orgId: $orgId
+    endDate: $endDate
+    repoIds: $repoIds
+    teamIds: $teamIds
+  ) {
     lineBaselinePct
     lineDays
     __typename
@@ -1506,7 +1543,6 @@ const registeredTestopsJobFailuresDocument = `query TestOpsJobFailures($orgId: S
     __typename
   }
 }`
-
 // registeredTestopsRiskDocument is the registered document for the
 // `testopsRisk` operation, the exact wire-form text a real web client
 // sends (testdata/wire_capture/testopsrisk_captured.graphql).
@@ -2619,7 +2655,7 @@ const registeredCatalogValuesDocument = `query CatalogValues($orgId: String!, $d
 // repository-scope read the agent-context runtime performs: `catalog` with
 // the REPO dimension fixed in the document text. It is a separate operation
 // from registeredCatalogValuesDocument because each registered document
-// carries its own digest and routing row. Wire form captured under
+// carries its own digest. Wire form captured under
 // testdata/wire_capture/acr_repository_scopes_captured.graphql.
 const registeredAcrRepositoryScopesDocument = `query ACRRepositoryScopes($orgId: String!) {
   catalog(orgId: $orgId, dimension: REPO) {
@@ -3671,6 +3707,7 @@ func newQueryHandler(chClient featureflags.QueryClient, pgPool *pgxpool.Pool, ve
 		"workGraphArtifacts":                digestHex(registeredWorkGraphArtifactsDocument),
 		"flowMatrix":                        digestHex(registeredFlowMatrixDocument),
 		"investmentBreakdown":               digestHex(registeredInvestmentBreakdownDocument),
+		"investmentEvidenceQuality":         digestHex(registeredInvestmentEvidenceQualityDocument),
 		"investmentFull":                    digestHex(registeredInvestmentFullDocument),
 		"capacityForecast":                  digestHex(registeredCapacityForecastDocument),
 		"capacityCompletionDistribution":    digestHex(registeredCapacityCompletionDistributionDocument),
@@ -4154,15 +4191,16 @@ func newDocumentDispatchHandler(getenv getenvFunc, routeMux *routeswitch.Mux, op
 // digestByOperation. The literal below is cmd/registrydump's second parse target: keep its exact shape
 // (`"<operation>": {digestHex(<constIdent>), ...}`). Empty = every operation accepts one text.
 var legacyDigestsByOperation = map[string][]string{
-	"aiAttributedPrs":      {digestHex(registeredAiAttributedPrsV1Document)},
-	"aiImpactSummary":      {digestHex(registeredAiImpactSummaryV1Document)},
-	"aiOpportunities":      {digestHex(registeredAiOpportunitiesV1Document)},
-	"aiWorkflowDrilldown":  {digestHex(registeredAiWorkflowDrilldownV1Document)},
-	"capacityForecast":     {digestHex(registeredCapacityForecastV1Document), digestHex(registeredCapacityForecastV2Document)},
-	"home":                 {digestHex(registeredHomeV1Document)},
-	"improveOpportunities": {digestHex(registeredImproveOpportunitiesV1Document)},
-	"operatingReview":      {digestHex(registeredOperatingReviewV1Document)},
-	"reviewEdges":          {digestHex(registeredReviewEdgesV1Document)},
+	"aiAttributedPrs":       {digestHex(registeredAiAttributedPrsV1Document)},
+	"aiImpactSummary":       {digestHex(registeredAiImpactSummaryV1Document)},
+	"aiOpportunities":       {digestHex(registeredAiOpportunitiesV1Document)},
+	"aiWorkflowDrilldown":   {digestHex(registeredAiWorkflowDrilldownV1Document)},
+	"capacityForecast":      {digestHex(registeredCapacityForecastV1Document), digestHex(registeredCapacityForecastV2Document)},
+	"coverageScopeBaseline": {digestHex(registeredCoverageScopeBaselineV1Document)},
+	"home":                  {digestHex(registeredHomeV1Document)},
+	"improveOpportunities":  {digestHex(registeredImproveOpportunitiesV1Document)},
+	"operatingReview":       {digestHex(registeredOperatingReviewV1Document)},
+	"reviewEdges":           {digestHex(registeredReviewEdgesV1Document)},
 }
 
 // buildOperationByDigest is the reverse index digest -> operation over every accepted text: each operation's

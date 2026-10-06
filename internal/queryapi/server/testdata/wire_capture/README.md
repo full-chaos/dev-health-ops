@@ -1,5 +1,22 @@
 # featureFlags wire-capture fixture (CHAOS-4696)
 
+# Investment Evidence Quality wire-capture fixture (CHAOS-8104 / CHAOS-8745)
+
+`investmentevidencequality_captured.graphql` is the exact named query captured
+from CHAOS-8745's real browser client/cache exchange. It selects the served
+`analytics.evidenceQualityByGroup` values for the Investment Evidence table.
+The capture digest is
+`5e31cdbd14dde65165c635a8a3f02fb03f85fae0ef9c21eeb39808c199323c2a`.
+
+`TestRegisteredInvestmentEvidenceQualityDocument_MatchesCapturedWireFixture`
+pins both that supplied client-capture digest and query-api's registered
+document. The test prevents the catalog from accepting an unmeasured,
+reconstructed document. The query uses the existing `analytics` root and its
+existing `mcp:analytics` class; it introduces no new route or MCP class.
+
+Captured: 2026-10-05T14:43:26Z. The client capture is the source of the wire
+text; the exact route execution is covered separately by the integration test.
+
 `featureflags_captured.graphql` is the RAW `query` text captured off a
 real HTTP request, produced by this repo's own UNMODIFIED `graphqlFetch`
 (`src/lib/graphql/server.ts`) calling the real `@urql/core` client's

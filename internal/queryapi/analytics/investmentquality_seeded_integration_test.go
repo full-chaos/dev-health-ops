@@ -143,9 +143,12 @@ ORDER BY (org_id, superseded_work_unit_id);
 // meaningful values; every other NOT NULL column gets an arbitrary but
 // valid filler so the INSERT satisfies the schema.
 type seededQualityRow struct {
-	workUnitID string
-	evidence   float64
-	band       string // "" is the "unknown" band, per the query's own countIf(evidence_quality IS NULL OR evidence_quality_band = '')
+	workUnitID     string
+	evidence       float64
+	band           string // "" is the "unknown" band, per the query's own countIf(evidence_quality IS NULL OR evidence_quality_band = '')
+	themeMap       string // a fixed ClickHouse map literal for grouped-quality cases
+	subcategoryMap string // a fixed ClickHouse map literal for grouped-quality cases
+	workUnitType   string
 }
 
 func seedQualityRows(t *testing.T, ctx context.Context, conn stdclickhouse.Conn, orgID string, rows []seededQualityRow) {
@@ -158,9 +161,21 @@ func seedQualityRows(t *testing.T, ctx context.Context, conn stdclickhouse.Conn,
 		if i > 0 {
 			values += ", "
 		}
+		themeMap := r.themeMap
+		if themeMap == "" {
+			themeMap = "map()"
+		}
+		subcategoryMap := r.subcategoryMap
+		if subcategoryMap == "" {
+			subcategoryMap = "map()"
+		}
+		workUnitType := "NULL"
+		if r.workUnitType != "" {
+			workUnitType = fmt.Sprintf("'%s'", r.workUnitType)
+		}
 		values += fmt.Sprintf(
-			`('%s', toDateTime64('%s',3), toDateTime64('%s',3), NULL, NULL, 'fte_days', 1.0, map(), map(), '', %g, '%s', 'ok', '', 'v1', 'hash', 'run', toDateTime64('%s',3), NULL, NULL, '%s')`,
-			r.workUnitID, fromTS, toTS, r.evidence, r.band, computedAt, orgID,
+			`('%s', toDateTime64('%s',3), toDateTime64('%s',3), NULL, NULL, 'fte_days', 1.0, %s, %s, '', %g, '%s', 'ok', '', 'v1', 'hash', 'run', toDateTime64('%s',3), %s, NULL, '%s')`,
+			r.workUnitID, fromTS, toTS, themeMap, subcategoryMap, r.evidence, r.band, computedAt, workUnitType, orgID,
 		)
 	}
 	insert := fmt.Sprintf(
@@ -286,5 +301,135 @@ func TestResolveEvidenceQualityStats_SeededRealClickHouse_ExactAggregate(t *test
 	}
 	if math.Abs(*got.Stddev-wantStddev) > 1e-9 {
 		t.Errorf("Stddev = %v, want %v", *got.Stddev, wantStddev)
+	}
+}
+
+// TestEvidenceQualityByGroup_SeededRealClickHouse_DominantPersistedGroups
+// proves the CHAOS-8104 SQL against ClickHouse itself. Each seeded work unit
+// has persisted distributions; one is tied deliberately. Theme and
+// subcategory use the greatest stored share with a lexical-key tie break, and
+// work type uses the stored scalar. The expected totals and means are computed
+// from the same three units by hand, so this catches a map function that is
+// syntactically accepted but assigns a unit more than once or to the wrong key.
+func TestEvidenceQualityByGroup_SeededRealClickHouse_DominantPersistedGroups(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+
+	inst, err := containers.StartClickHouse(ctx)
+	if err != nil {
+		t.Fatalf("start ClickHouse test dependency: %v", err)
+	}
+	defer func() { _ = inst.Close(context.Background()) }()
+
+	opts, err := stdclickhouse.ParseDSN(inst.URI)
+	if err != nil {
+		t.Fatalf("parse ClickHouse DSN: %v", err)
+	}
+	conn, err := stdclickhouse.Open(opts)
+	if err != nil {
+		t.Fatalf("open raw ClickHouse connection: %v", err)
+	}
+	defer func() { _ = conn.Close() }()
+
+	for _, stmt := range splitSQLStatements(seededQualitySchemaDDL) {
+		if err := conn.Exec(ctx, stmt); err != nil {
+			t.Fatalf("exec DDL %q: %v", stmt, err)
+		}
+	}
+
+	const orgID = "chaos-8104-seeded-quality-group"
+	seedQualityRows(t, ctx, conn, orgID, []seededQualityRow{
+		{
+			workUnitID:     "wu-feature",
+			evidence:       0.80,
+			band:           "high",
+			themeMap:       "map('feature_delivery', 0.7, 'maintenance', 0.3)",
+			subcategoryMap: "map('feature_delivery.delivery', 0.7, 'maintenance.refactor', 0.3)",
+			workUnitType:   "pull_request",
+		},
+		{
+			workUnitID:     "wu-maintenance",
+			evidence:       0.20,
+			band:           "low",
+			themeMap:       "map('feature_delivery', 0.2, 'maintenance', 0.8)",
+			subcategoryMap: "map('feature_delivery.delivery', 0.2, 'maintenance.refactor', 0.8)",
+			workUnitType:   "issue",
+		},
+		{
+			workUnitID:     "wu-tie",
+			evidence:       0.60,
+			band:           "moderate",
+			themeMap:       "map('maintenance', 0.5, 'feature_delivery', 0.5)",
+			subcategoryMap: "map('maintenance.refactor', 0.5, 'feature_delivery.delivery', 0.5)",
+			workUnitType:   "pull_request",
+		},
+	})
+
+	client, err := dhclickhouse.NewClickHouseQueryClientWithOptions(dhclickhouse.Options{DSN: inst.URI})
+	if err != nil {
+		t.Fatalf("construct ClickHouse query client: %v", err)
+	}
+	defer func() { _ = client.Close() }()
+
+	startDate, endDate := mustGraphQLDate("2026-01-01"), mustGraphQLDate("2026-01-08")
+	for _, tc := range []struct {
+		name      string
+		dimension Dimension
+		want      map[string]struct {
+			mean  float64
+			total int
+		}
+	}{
+		{
+			name:      "theme",
+			dimension: DimensionTheme,
+			want: map[string]struct {
+				mean  float64
+				total int
+			}{"feature_delivery": {mean: 0.70, total: 2}, "maintenance": {mean: 0.20, total: 1}},
+		},
+		{
+			name:      "subcategory",
+			dimension: DimensionSubcategory,
+			want: map[string]struct {
+				mean  float64
+				total int
+			}{"feature_delivery.delivery": {mean: 0.70, total: 2}, "maintenance.refactor": {mean: 0.20, total: 1}},
+		},
+		{
+			name:      "work type",
+			dimension: DimensionWorkType,
+			want: map[string]struct {
+				mean  float64
+				total int
+			}{"pull_request": {mean: 0.70, total: 2}, "issue": {mean: 0.20, total: 1}},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			q, err := compileEvidenceQualityByGroup(orgID, startDate, endDate, tc.dimension, evidenceQualityFilter{})
+			if err != nil {
+				t.Fatalf("compileEvidenceQualityByGroup: %v", err)
+			}
+			got, err := executeEvidenceQualityByGroup(ctx, client, q)
+			if err != nil {
+				t.Fatalf("executeEvidenceQualityByGroup: %v", err)
+			}
+			if len(got) != len(tc.want) {
+				t.Fatalf("groups = %+v, want %d groups", got, len(tc.want))
+			}
+			for _, group := range got {
+				want, ok := tc.want[group.Key]
+				if !ok {
+					t.Errorf("unexpected group %+v", group)
+					continue
+				}
+				if group.Total != want.total {
+					t.Errorf("group %q total = %d, want %d", group.Key, group.Total, want.total)
+				}
+				if group.Mean == nil || math.Abs(*group.Mean-want.mean) > 1e-9 {
+					t.Errorf("group %q mean = %v, want %v", group.Key, group.Mean, want.mean)
+				}
+			}
+		})
 	}
 }

@@ -379,6 +379,7 @@ type ComplexityRoot struct {
 
 	AnalyticsResult struct {
 		Breakdowns                  func(childComplexity int) int
+		EvidenceQualityByGroup      func(childComplexity int) int
 		EvidenceQualityDistribution func(childComplexity int) int
 		EvidenceQualityStats        func(childComplexity int) int
 		FlowMatrix                  func(childComplexity int) int
@@ -635,6 +636,13 @@ type ComplexityRoot struct {
 		Text func(childComplexity int) int
 		Ts   func(childComplexity int) int
 		Type func(childComplexity int) int
+	}
+
+	EvidenceQualityGroup struct {
+		Key   func(childComplexity int) int
+		Label func(childComplexity int) int
+		Mean  func(childComplexity int) int
+		Total func(childComplexity int) int
 	}
 
 	EvidenceQualityStats struct {
@@ -3254,6 +3262,13 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 
 		return e.complexity.AnalyticsResult.Breakdowns(childComplexity), true
 
+	case "AnalyticsResult.evidenceQualityByGroup":
+		if e.complexity.AnalyticsResult.EvidenceQualityByGroup == nil {
+			break
+		}
+
+		return e.complexity.AnalyticsResult.EvidenceQualityByGroup(childComplexity), true
+
 	case "AnalyticsResult.evidenceQualityDistribution":
 		if e.complexity.AnalyticsResult.EvidenceQualityDistribution == nil {
 			break
@@ -4357,6 +4372,34 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 		}
 
 		return e.complexity.EventItem.Type(childComplexity), true
+
+	case "EvidenceQualityGroup.key":
+		if e.complexity.EvidenceQualityGroup.Key == nil {
+			break
+		}
+
+		return e.complexity.EvidenceQualityGroup.Key(childComplexity), true
+
+	case "EvidenceQualityGroup.label":
+		if e.complexity.EvidenceQualityGroup.Label == nil {
+			break
+		}
+
+		return e.complexity.EvidenceQualityGroup.Label(childComplexity), true
+
+	case "EvidenceQualityGroup.mean":
+		if e.complexity.EvidenceQualityGroup.Mean == nil {
+			break
+		}
+
+		return e.complexity.EvidenceQualityGroup.Mean(childComplexity), true
+
+	case "EvidenceQualityGroup.total":
+		if e.complexity.EvidenceQualityGroup.Total == nil {
+			break
+		}
+
+		return e.complexity.EvidenceQualityGroup.Total(childComplexity), true
 
 	case "EvidenceQualityStats.bandCounts":
 		if e.complexity.EvidenceQualityStats.BandCounts == nil {
@@ -9298,6 +9341,13 @@ input AnalyticsRequestInput {
   flowMatrix: FlowMatrixRequestInput = null
   useInvestment: Boolean = null
   filters: FilterInput = null
+  """
+  Optional grouping for persisted work-unit evidence quality. Only THEME,
+  SUBCATEGORY and WORK_TYPE are valid. The selected key is the unit's
+  deterministic dominant persisted value, so one unit contributes to one
+  group.
+  """
+  evidenceQualityGroupBy: DimensionInput = null
 }
 
 type AnalyticsResult {
@@ -9307,6 +9357,18 @@ type AnalyticsResult {
   flowMatrix: FlowMatrixResult
   evidenceQualityDistribution: JSON
   evidenceQualityStats: EvidenceQualityStats
+  evidenceQualityByGroup: [EvidenceQualityGroup!]
+}
+
+"""
+One persisted-work-unit evidence-quality aggregate. ` + "`" + `total` + "`" + ` counts every unit
+in the group. ` + "`" + `mean` + "`" + ` is null when no unit in the group has a known quality.
+"""
+type EvidenceQualityGroup {
+  key: String!
+  label: String
+  mean: Float
+  total: Int!
 }
 
 type BreakdownItem {
@@ -25474,6 +25536,57 @@ func (ec *executionContext) fieldContext_AnalyticsResult_evidenceQualityStats(_ 
 	return fc, nil
 }
 
+func (ec *executionContext) _AnalyticsResult_evidenceQualityByGroup(ctx context.Context, field graphql.CollectedField, obj *model.AnalyticsResult) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_AnalyticsResult_evidenceQualityByGroup(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.EvidenceQualityByGroup, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.([]model.EvidenceQualityGroup)
+	fc.Result = res
+	return ec.marshalOEvidenceQualityGroup2ᚕgithubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋinternalᚋqueryapiᚋgraphᚋmodelᚐEvidenceQualityGroupᚄ(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_AnalyticsResult_evidenceQualityByGroup(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "AnalyticsResult",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "key":
+				return ec.fieldContext_EvidenceQualityGroup_key(ctx, field)
+			case "label":
+				return ec.fieldContext_EvidenceQualityGroup_label(ctx, field)
+			case "mean":
+				return ec.fieldContext_EvidenceQualityGroup_mean(ctx, field)
+			case "total":
+				return ec.fieldContext_EvidenceQualityGroup_total(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type EvidenceQualityGroup", field.Name)
+		},
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _BreakdownItem_key(ctx context.Context, field graphql.CollectedField, obj *model.BreakdownItem) (ret graphql.Marshaler) {
 	fc, err := ec.fieldContext_BreakdownItem_key(ctx, field)
 	if err != nil {
@@ -32349,6 +32462,176 @@ func (ec *executionContext) fieldContext_EventItem_link(_ context.Context, field
 		IsResolver: false,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _EvidenceQualityGroup_key(ctx context.Context, field graphql.CollectedField, obj *model.EvidenceQualityGroup) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_EvidenceQualityGroup_key(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.Key, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(string)
+	fc.Result = res
+	return ec.marshalNString2string(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_EvidenceQualityGroup_key(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "EvidenceQualityGroup",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _EvidenceQualityGroup_label(ctx context.Context, field graphql.CollectedField, obj *model.EvidenceQualityGroup) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_EvidenceQualityGroup_label(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.Label, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*string)
+	fc.Result = res
+	return ec.marshalOString2ᚖstring(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_EvidenceQualityGroup_label(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "EvidenceQualityGroup",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _EvidenceQualityGroup_mean(ctx context.Context, field graphql.CollectedField, obj *model.EvidenceQualityGroup) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_EvidenceQualityGroup_mean(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.Mean, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*float64)
+	fc.Result = res
+	return ec.marshalOFloat2ᚖfloat64(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_EvidenceQualityGroup_mean(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "EvidenceQualityGroup",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Float does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _EvidenceQualityGroup_total(ctx context.Context, field graphql.CollectedField, obj *model.EvidenceQualityGroup) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_EvidenceQualityGroup_total(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.Total, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(int)
+	fc.Result = res
+	return ec.marshalNInt2int(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_EvidenceQualityGroup_total(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "EvidenceQualityGroup",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Int does not have child fields")
 		},
 	}
 	return fc, nil
@@ -45425,6 +45708,8 @@ func (ec *executionContext) fieldContext_Query_analytics(ctx context.Context, fi
 				return ec.fieldContext_AnalyticsResult_evidenceQualityDistribution(ctx, field)
 			case "evidenceQualityStats":
 				return ec.fieldContext_AnalyticsResult_evidenceQualityStats(ctx, field)
+			case "evidenceQualityByGroup":
+				return ec.fieldContext_AnalyticsResult_evidenceQualityByGroup(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type AnalyticsResult", field.Name)
 		},
@@ -62671,7 +62956,7 @@ func (ec *executionContext) unmarshalInputAnalyticsRequestInput(ctx context.Cont
 		asMap["breakdowns"] = []any{}
 	}
 
-	fieldsInOrder := [...]string{"timeseries", "breakdowns", "sankey", "flowMatrix", "useInvestment", "filters"}
+	fieldsInOrder := [...]string{"timeseries", "breakdowns", "sankey", "flowMatrix", "useInvestment", "filters", "evidenceQualityGroupBy"}
 	for _, k := range fieldsInOrder {
 		v, ok := asMap[k]
 		if !ok {
@@ -62720,6 +63005,13 @@ func (ec *executionContext) unmarshalInputAnalyticsRequestInput(ctx context.Cont
 				return it, err
 			}
 			it.Filters = data
+		case "evidenceQualityGroupBy":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("evidenceQualityGroupBy"))
+			data, err := ec.unmarshalODimensionInput2ᚖgithubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋinternalᚋqueryapiᚋgraphᚋmodelᚐDimensionInput(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.EvidenceQualityGroupBy = data
 		}
 	}
 
@@ -66471,6 +66763,8 @@ func (ec *executionContext) _AnalyticsResult(ctx context.Context, sel ast.Select
 			out.Values[i] = ec._AnalyticsResult_evidenceQualityDistribution(ctx, field, obj)
 		case "evidenceQualityStats":
 			out.Values[i] = ec._AnalyticsResult_evidenceQualityStats(ctx, field, obj)
+		case "evidenceQualityByGroup":
+			out.Values[i] = ec._AnalyticsResult_evidenceQualityByGroup(ctx, field, obj)
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}
@@ -68240,6 +68534,54 @@ func (ec *executionContext) _EventItem(ctx context.Context, sel ast.SelectionSet
 			}
 		case "link":
 			out.Values[i] = ec._EventItem_link(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.deferred, int32(len(deferred)))
+
+	for label, dfs := range deferred {
+		ec.processDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
+var evidenceQualityGroupImplementors = []string{"EvidenceQualityGroup"}
+
+func (ec *executionContext) _EvidenceQualityGroup(ctx context.Context, sel ast.SelectionSet, obj *model.EvidenceQualityGroup) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, evidenceQualityGroupImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("EvidenceQualityGroup")
+		case "key":
+			out.Values[i] = ec._EvidenceQualityGroup_key(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "label":
+			out.Values[i] = ec._EvidenceQualityGroup_label(ctx, field, obj)
+		case "mean":
+			out.Values[i] = ec._EvidenceQualityGroup_mean(ctx, field, obj)
+		case "total":
+			out.Values[i] = ec._EvidenceQualityGroup_total(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
@@ -77370,6 +77712,10 @@ func (ec *executionContext) marshalNEventItem2ᚕgithubᚗcomᚋfullᚑchaosᚋd
 	return ret
 }
 
+func (ec *executionContext) marshalNEvidenceQualityGroup2githubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋinternalᚋqueryapiᚋgraphᚋmodelᚐEvidenceQualityGroup(ctx context.Context, sel ast.SelectionSet, v model.EvidenceQualityGroup) graphql.Marshaler {
+	return ec._EvidenceQualityGroup(ctx, sel, &v)
+}
+
 func (ec *executionContext) marshalNEvidenceRef2githubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋinternalᚋqueryapiᚋgraphᚋmodelᚐEvidenceRef(ctx context.Context, sel ast.SelectionSet, v model.EvidenceRef) graphql.Marshaler {
 	return ec._EvidenceRef(ctx, sel, &v)
 }
@@ -81298,6 +81644,53 @@ func (ec *executionContext) marshalODimensionInput2ᚖgithubᚗcomᚋfullᚑchao
 		return graphql.Null
 	}
 	return v
+}
+
+func (ec *executionContext) marshalOEvidenceQualityGroup2ᚕgithubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋinternalᚋqueryapiᚋgraphᚋmodelᚐEvidenceQualityGroupᚄ(ctx context.Context, sel ast.SelectionSet, v []model.EvidenceQualityGroup) graphql.Marshaler {
+	if v == nil {
+		return graphql.Null
+	}
+	ret := make(graphql.Array, len(v))
+	var wg sync.WaitGroup
+	isLen1 := len(v) == 1
+	if !isLen1 {
+		wg.Add(len(v))
+	}
+	for i := range v {
+		i := i
+		fc := &graphql.FieldContext{
+			Index:  &i,
+			Result: &v[i],
+		}
+		ctx := graphql.WithFieldContext(ctx, fc)
+		f := func(i int) {
+			defer func() {
+				if r := recover(); r != nil {
+					ec.Error(ctx, ec.Recover(ctx, r))
+					ret = nil
+				}
+			}()
+			if !isLen1 {
+				defer wg.Done()
+			}
+			ret[i] = ec.marshalNEvidenceQualityGroup2githubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋinternalᚋqueryapiᚋgraphᚋmodelᚐEvidenceQualityGroup(ctx, sel, v[i])
+		}
+		if isLen1 {
+			f(i)
+		} else {
+			go f(i)
+		}
+
+	}
+	wg.Wait()
+
+	for _, e := range ret {
+		if e == graphql.Null {
+			return graphql.Null
+		}
+	}
+
+	return ret
 }
 
 func (ec *executionContext) marshalOEvidenceQualityStats2ᚖgithubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋinternalᚋqueryapiᚋgraphᚋmodelᚐEvidenceQualityStats(ctx context.Context, sel ast.SelectionSet, v *model.EvidenceQualityStats) graphql.Marshaler {

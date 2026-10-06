@@ -126,6 +126,7 @@ enum WorkGraphNodeTypeInput.PR other
 enum WorkGraphNodeTypeInput.RELEASE other
 enum WorkGraphNodeTypeInput.REVIEW_OUTCOME other
 input AnalyticsRequestInput.breakdowns other
+input AnalyticsRequestInput.evidenceQualityGroupBy other
 input AnalyticsRequestInput.filters other
 input AnalyticsRequestInput.flowMatrix other
 input AnalyticsRequestInput.sankey other

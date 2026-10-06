@@ -16,6 +16,10 @@ const (
 	planGateOutcomeUnknownPair              = "unknown_pair"
 	planGateOutcomeRouteNotReady            = "route_not_ready_or_not_plannable"
 	planGateOutcomeExecutedProofUnsatisfied = "executed_proof_unsatisfied"
+	// planGateOutcomeFamilyNotEnabled (CHAOS-8773): a planner-managed config
+	// of a work-item provider has no enabled work-item family row, so no
+	// work-items unit is planned at all. Recorded under dataset "work-items".
+	planGateOutcomeFamilyNotEnabled = "family_not_enabled"
 )
 
 // planGateKey identifies one (provider, dataset, outcome) series.

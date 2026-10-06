@@ -273,3 +273,100 @@ func TestPostgresRepositoryFailWithDuplicateKeyDetailPersistsStructuredKey(t *te
 		t.Fatalf("missing the standard unit-failed counter in:\n%s", output.String())
 	}
 }
+
+// A failed unit keeps its outcome label in error/result.error_category and
+// names the cause class in result.cause_class, through the real SQL. A writer
+// without a class (an older binary, a path that has none) leaves the key out;
+// a class outside the vocabulary shape is stored as "unclassified", never as
+// the raw text.
+func TestPostgresRepositoryFailWithCauseClassStoresTheClass(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		closeContext, closeCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer closeCancel()
+		if err := instance.Close(closeContext); err != nil {
+			t.Errorf("terminate PostgreSQL: %v", err)
+		}
+	}()
+	pool, err := pgxpool.New(ctx, instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	createProviderSyncFixture(t, ctx, pool)
+	seedProviderSyncFixture(t, ctx, pool)
+	metrics := providerfoundation.NewMetrics()
+	repository, err := NewPostgresRepository(pool, metrics)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, time.August, 1, 0, 0, 0, 0, time.UTC)
+
+	cases := []struct {
+		name       string
+		category   string
+		class      string
+		wantClass  string
+		wantHasKey bool
+		detail     *CauseDetail
+		wantDetail map[string]any
+	}{
+		{"exhausted names its class", "provider_unit_exhausted", "provider_transient", "provider_transient", true, nil, nil},
+		{"terminal class", "response_too_large", "response_too_large", "response_too_large", true, nil, nil},
+		{"raw text is never stored", "provider_unit_exhausted", "/repos/acme/api failed", CauseClassUnclassified, true, nil, nil},
+		{"no class from an older writer", "provider_unit_exhausted", "", "", false, nil, nil},
+		{"size refusal detail", "result_too_large", "result_too_large", "result_too_large", true,
+			&CauseDetail{Limit: "rows", Table: "work_items", Rows: 100001, Bytes: 7},
+			map[string]any{"limit": "rows", "table": "work_items", "rows": float64(100001), "bytes": float64(7)}},
+		{"free text in a detail label is never stored", "result_too_large", "result_too_large", "result_too_large", true,
+			&CauseDetail{Limit: "rows", Table: "acme/secret table", Rows: -1, Bytes: 3},
+			map[string]any{"limit": "rows", "table": "unclassified", "rows": float64(0), "bytes": float64(3)}},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			if _, err := pool.Exec(ctx, `UPDATE sync_run_units SET status='dispatching', error=NULL, result='{}'::jsonb WHERE id=$1`, firstUnitID); err != nil {
+				t.Fatal(err)
+			}
+			claim, err := repository.Claim(ctx, ClaimRequest{
+				UnitID: firstUnitID, OrgID: "org-acme", Owner: uuid.NewString(), Now: now,
+				LeaseDuration: time.Minute, AllowExpiredRecovery: true,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			failedAt := now.Add(time.Second)
+			if testCase.class == "" {
+				err = repository.Fail(ctx, claim, testCase.category, now, failedAt)
+			} else {
+				err = repository.FailWithCauseClass(ctx, claim, testCase.category, testCase.class, testCase.detail, now, failedAt)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			var rawError string
+			var rawResult string
+			if err := pool.QueryRow(ctx, `SELECT error, result::text FROM sync_run_units WHERE id=$1`, claim.ID).Scan(&rawError, &rawResult); err != nil {
+				t.Fatal(err)
+			}
+			var decoded map[string]any
+			if err := json.Unmarshal([]byte(rawResult), &decoded); err != nil {
+				t.Fatal(err)
+			}
+			if gotDetail := decoded["cause_detail"]; fmt.Sprint(gotDetail) != fmt.Sprint(testCase.wantDetail) &&
+				!(gotDetail == nil && testCase.wantDetail == nil) {
+				t.Fatalf("cause_detail=%v, want %v", gotDetail, testCase.wantDetail)
+			}
+			got, has := decoded["cause_class"]
+			if rawError != testCase.category || decoded["error_category"] != testCase.category ||
+				has != testCase.wantHasKey || (has && got != testCase.wantClass) {
+				t.Fatalf("error=%q result=%s, want category %q class %q (key present %v)",
+					rawError, rawResult, testCase.category, testCase.wantClass, testCase.wantHasKey)
+			}
+		})
+	}
+}

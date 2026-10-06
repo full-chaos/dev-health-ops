@@ -215,9 +215,9 @@ func encodePreparedRouteManifest(
 		return nil, PreparedRouteSnapshotReference{}, ErrEffectRecoveryUnsafe
 	}
 	if len(encoded) > maxPreparedRouteSnapshotBytes {
-		return nil, PreparedRouteSnapshotReference{}, fmt.Errorf(
-			"%w: %d bytes", ErrPreparedRouteSnapshotOversize, len(encoded),
-		)
+		return nil, PreparedRouteSnapshotReference{}, &EffectBoundExceededError{
+			Limit: "snapshot_bytes", Bytes: len(encoded), Also: ErrPreparedRouteSnapshotOversize,
+		}
 	}
 	digest := sha256.Sum256(encoded)
 	reference := PreparedRouteSnapshotReference{

@@ -295,8 +295,7 @@ func documentOperationName(document string) string {
 	return ""
 }
 
-// edgeSeed seeds the venue databases: the orgs, the principals, the impersonation, and a routing row to Go
-// for every registered operation, as prod runs it.
+// edgeSeed seeds the venue databases: the orgs, the principals, and the impersonation (query-api reads no routing row).
 func edgeSeed(users []edgeUser, docs []registeredEdgeDocument, schemaDigest string) func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, _ *venueoracle.Venue) map[string]map[string]any {
 	return func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, _ *venueoracle.Venue) map[string]map[string]any {
 		exec := func(sql string, args ...any) {
@@ -324,14 +323,6 @@ VALUES ($1, $2, $3, $4, now(), now(), now())`, uuid.New(), org, u.id, role)
 		exec(`INSERT INTO impersonation_sessions (id, admin_user_id, target_user_id, target_org_id, target_role, created_at, expires_at)
 VALUES ($1, $2, $3, $4, 'viewer', now(), now() + interval '1 day')`,
 			uuid.New(), users[3].id, users[1].id, edgeOrgA)
-		// Every registered operation routed to Go, as prod runs it.
-		for _, doc := range docs {
-			exec(`INSERT INTO go_api_candidate_build (schema_digest, document_digest, selected_operation, candidate_build)
-VALUES ($1, $2, $3, 'venue') ON CONFLICT DO NOTHING`, schemaDigest, doc.Digest, doc.Operation)
-			exec(`INSERT INTO go_api_routing_state
-(schema_digest, document_digest, selected_operation, current_candidate_build, owner, mode, rollout_percentage, review_evidence, recorded_by, updated_at)
-VALUES ($1, $2, $3, 'venue', 'go', 'canary', 100, 'venue', 'venue', now())`, schemaDigest, doc.Digest, doc.Operation)
-		}
 		return specs
 	}
 }

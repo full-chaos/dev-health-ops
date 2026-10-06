@@ -623,7 +623,7 @@ func TestPreflightIsReadOnly(t *testing.T) {
 }
 
 // preflightStatesSHA256 pins testdata/golden/preflight_states.json (the record verb rewrites it).
-const preflightStatesSHA256 = "d8bd78f2a9b69ebaaf5c0b9aeabc2602572b9c6e56a9e1e96550d3880ce8a1a8"
+const preflightStatesSHA256 = "e8e5005dce1f4e68f057ca3f68153f453b34840298007f8ab8bc345f58d4ec3c"
 
 // TestPreflightMatchesTheHookOverFrozenAlembicStates is the Python-built-state oracle: the states
 // are built by the REAL Python Alembic upgrade (below the baseline included), executed once and frozen

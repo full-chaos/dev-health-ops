@@ -47,7 +47,7 @@ func TestLocalProviderDefaults(t *testing.T) {
 	if provider.cfg.Model != defaultLocalModel {
 		t.Errorf("Model = %q, want %q", provider.cfg.Model, defaultLocalModel)
 	}
-	if provider.cfg.APIKey != defaultLocalAPIKey {
+	if provider.cfg.APIKey.Reveal() != defaultLocalAPIKey {
 		t.Errorf("APIKey = %q, want %q", provider.cfg.APIKey, defaultLocalAPIKey)
 	}
 }

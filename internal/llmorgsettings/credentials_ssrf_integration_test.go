@@ -48,13 +48,13 @@ func TestCredentialsRefuseABaseURLTheSSRFGuardRefuses(t *testing.T) {
 				if ok {
 					t.Fatalf("Credentials accepted a base_url the SSRF guard refuses")
 				}
-				if creds.APIKey != "" || creds.BaseURL != "" {
-					t.Fatalf("Credentials returned key material or a base_url with ok=false (api key set: %v, base_url set: %v)", creds.APIKey != "", creds.BaseURL != "")
+				if creds.APIKey.Reveal() != "" || creds.BaseURL != "" {
+					t.Fatalf("Credentials returned key material or a base_url with ok=false (api key set: %v, base_url set: %v)", creds.APIKey.Reveal() != "", creds.BaseURL != "")
 				}
 				// "auto" asks for whatever the org configured: the same refusal.
 				creds, ok, err = store.Credentials(ctx, orgID.String(), "auto")
-				if err != nil || ok || creds.APIKey != "" || creds.BaseURL != "" {
-					t.Fatalf("Credentials(auto): ok=%v err=%v api key set=%v base_url set=%v", ok, err, creds.APIKey != "", creds.BaseURL != "")
+				if err != nil || ok || creds.APIKey.Reveal() != "" || creds.BaseURL != "" {
+					t.Fatalf("Credentials(auto): ok=%v err=%v api key set=%v base_url set=%v", ok, err, creds.APIKey.Reveal() != "", creds.BaseURL != "")
 				}
 				matches, err := store.Matches(ctx, orgID.String(), provider.name)
 				if err != nil || matches {
@@ -85,7 +85,7 @@ func TestCredentialsAnswerForASafeBaseURL(t *testing.T) {
 	if err != nil || !ok {
 		t.Fatalf("Credentials: ok=%v err=%v, want ok", ok, err)
 	}
-	if creds.APIKey != syntheticKey || creds.BaseURL != "https://8.8.8.8/v1" {
+	if creds.APIKey.Reveal() != syntheticKey || creds.BaseURL != "https://8.8.8.8/v1" {
 		t.Fatalf("Credentials returned a different bundle than the stored one")
 	}
 	if matches, err := store.Matches(ctx, orgID.String(), "openai"); err != nil || !matches {

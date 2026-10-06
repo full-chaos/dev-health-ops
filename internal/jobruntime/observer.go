@@ -279,6 +279,13 @@ type DailyMetricsFinalizeSweepObserver interface {
 	ObserveDailyMetricsFinalizeSweep(outcome string, count int) error
 }
 
+// DailyMetricsRunMarkerObserver counts CHAOS-8710 ClickHouse run-marker
+// appends (state: succeeded|reopened; outcome: ok|failed). A nil observer is a
+// silent no-op: telemetry never gates the run.
+type DailyMetricsRunMarkerObserver interface {
+	ObserveDailyMetricsRunMarker(state, outcome string) error
+}
+
 // DailyMetricsBlockedRunObserver is the narrow capability
 // PostgresStore.ReconcileBlockedRuns depends on (CHAOS-5040/CHAOS-4970): a
 // daily_metrics_run holding a 'failed_permanent' partition with nothing

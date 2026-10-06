@@ -874,6 +874,13 @@ var dailyMetricsRedriveReasons = []string{"failed_permanent_reset", "dispatch_re
 // pass and only becomes eligible on a later one).
 var dailyMetricsFinalizeSweepOutcomes = []string{"detected", "finalized"}
 
+// dailyMetricsRunMarkerStates and dailyMetricsRunMarkerOutcomes are the closed
+// vocabularies of the CHAOS-8710 ClickHouse run-marker write: the state
+// appended ('succeeded' or 'reopened') and whether the append landed ('ok')
+// or failed ('failed'). A failed append leaves the day unknown to readers.
+var dailyMetricsRunMarkerStates = []string{"succeeded", "reopened"}
+var dailyMetricsRunMarkerOutcomes = []string{"ok", "failed"}
+
 // dailyMetricsBlockedRunOutcomes is the closed set of bounded outcomes a
 // CHAOS-5040 blocked-run reconcile pass can report. "marked" and "cleared"
 // are TRANSITIONS, deliberately not a level: a pass is per-organization, so a
@@ -1130,6 +1137,9 @@ type MetricsCollector struct {
 	// activity by bounded outcome. See dailyMetricsFinalizeSweepOutcomes for
 	// the vocabulary.
 	dailyMetricsFinalizeSweep map[string]uint64
+	// dailyMetricsRunMarker (CHAOS-8710) counts run-marker appends keyed
+	// "<state>/<outcome>". See dailyMetricsRunMarkerStates/Outcomes.
+	dailyMetricsRunMarker map[string]uint64
 	// dailyMetricsBlockedRun (CHAOS-5040) counts blocked-run reconcile
 	// transitions by bounded outcome. See dailyMetricsBlockedRunOutcomes.
 	dailyMetricsBlockedRun map[string]uint64
@@ -1426,6 +1436,7 @@ var _ TeamMetricsDailyRepoCountObserver = (*MetricsCollector)(nil)
 var _ WorkItemStateMissingAttributionObserver = (*MetricsCollector)(nil)
 var _ DailyMetricsRedriveObserver = (*MetricsCollector)(nil)
 var _ DailyMetricsFinalizeSweepObserver = (*MetricsCollector)(nil)
+var _ DailyMetricsRunMarkerObserver = (*MetricsCollector)(nil)
 var _ DailyMetricsBlockedRunObserver = (*MetricsCollector)(nil)
 var _ DailyMetricsFinalizeLedgerRepairObserver = (*MetricsCollector)(nil)
 var _ DailyMetricsFinalizeRedriveObserver = (*MetricsCollector)(nil)
@@ -1478,6 +1489,7 @@ func NewMetricsCollector(dimensions MetricDimensions) (*MetricsCollector, error)
 		remainingScopeRefusal:                make(map[remainingMetricsScopeRefusalLabels]uint64, len(remainingMetricsScopeRefusalFamilies)*len(remainingMetricsScopeRefusalReasons)),
 		dailyMetricsRedrive:                  make(map[string]uint64, len(dailyMetricsRedriveReasons)),
 		dailyMetricsFinalizeSweep:            make(map[string]uint64, len(dailyMetricsFinalizeSweepOutcomes)),
+		dailyMetricsRunMarker:                make(map[string]uint64, len(dailyMetricsRunMarkerStates)*len(dailyMetricsRunMarkerOutcomes)),
 		dailyMetricsBlockedRun:               make(map[string]uint64, len(dailyMetricsBlockedRunOutcomes)),
 		dailyMetricsFinalizeLedgerRepair:     make(map[string]uint64, len(dailyMetricsFinalizeLedgerRepairOutcomes)),
 		dailyMetricsFinalizeRedrive:          make(map[string]uint64, len(dailyMetricsFinalizeRedriveOutcomes)),
@@ -1584,6 +1596,11 @@ func NewMetricsCollector(dimensions MetricDimensions) (*MetricsCollector, error)
 	}
 	for _, outcome := range dailyMetricsFinalizeSweepOutcomes {
 		collector.dailyMetricsFinalizeSweep[outcome] = 0
+	}
+	for _, state := range dailyMetricsRunMarkerStates {
+		for _, outcome := range dailyMetricsRunMarkerOutcomes {
+			collector.dailyMetricsRunMarker[state+"/"+outcome] = 0
+		}
 	}
 	for _, outcome := range dailyMetricsBlockedRunOutcomes {
 		collector.dailyMetricsBlockedRun[outcome] = 0
@@ -1968,6 +1985,21 @@ func (collector *MetricsCollector) ObserveDailyMetricsFinalizeSweep(outcome stri
 	collector.mu.Lock()
 	defer collector.mu.Unlock()
 	collector.dailyMetricsFinalizeSweep[outcome] += uint64(count)
+	return nil
+}
+
+// ObserveDailyMetricsRunMarker counts one CHAOS-8710 run-marker append by
+// bounded state and outcome.
+func (collector *MetricsCollector) ObserveDailyMetricsRunMarker(state, outcome string) error {
+	if !slices.Contains(dailyMetricsRunMarkerStates, state) {
+		return errors.New("daily metrics run marker state is not registered")
+	}
+	if !slices.Contains(dailyMetricsRunMarkerOutcomes, outcome) {
+		return errors.New("daily metrics run marker outcome is not registered")
+	}
+	collector.mu.Lock()
+	defer collector.mu.Unlock()
+	collector.dailyMetricsRunMarker[state+"/"+outcome]++
 	return nil
 }
 
@@ -3324,6 +3356,7 @@ func (collector *MetricsCollector) PrometheusText() string {
 	collector.writeDailyMetricsFamilyZeroRowsWithSource(&output)
 	collector.writeDailyMetricsRedrive(&output)
 	collector.writeDailyMetricsFinalizeSweep(&output)
+	collector.writeDailyMetricsRunMarker(&output)
 	collector.writeDailyMetricsFinalizeLedgerRepair(&output)
 	collector.writeDailyMetricsFinalizeRedrive(&output)
 	collector.writeDailyMetricsPartitionRecompute(&output)
@@ -3676,6 +3709,19 @@ func (collector *MetricsCollector) writeDailyMetricsRedrive(output *strings.Buil
 	for _, reason := range dailyMetricsRedriveReasons {
 		writeUintSample(output, "dev_health_daily_metrics_redrive_partitions_total",
 			[]metricLabel{{"reason", reason}}, collector.dailyMetricsRedrive[reason])
+	}
+}
+
+// writeDailyMetricsRunMarker exposes the CHAOS-8710 run-marker append counter.
+// A nonzero failed series means days are unknown to marker readers until the
+// Postgres backfill runs.
+func (collector *MetricsCollector) writeDailyMetricsRunMarker(output *strings.Builder) {
+	const name = "dev_health_daily_metrics_run_marker_appends_total"
+	writeMetadata(output, name, "ClickHouse daily_metrics_run_marker appends by state (succeeded, reopened) and outcome (ok, failed). A failed append leaves that org-day unknown to readers until the Postgres backfill runs.", "counter")
+	for _, state := range dailyMetricsRunMarkerStates {
+		for _, outcome := range dailyMetricsRunMarkerOutcomes {
+			writeUintSample(output, name, []metricLabel{{name: "state", value: state}, {name: "outcome", value: outcome}}, collector.dailyMetricsRunMarker[state+"/"+outcome])
+		}
 	}
 }
 

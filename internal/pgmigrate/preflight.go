@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"regexp"
 
 	"github.com/jackc/pgx/v5"
 
@@ -54,6 +55,10 @@ const (
 	// ReasonSettingsMismatch: the environment the hook would run in differs from
 	// the baseline's settings, and the hook refuses before it touches the database.
 	ReasonSettingsMismatch = "settings_mismatch"
+	// ReasonClassDecisionDigest: revision 0146 is pending and its guard will refuse
+	// the walk: MCP class rows exist and DHO_CLASS_DECISION_LIVE_SCHEMA_DIGEST is
+	// unset, empty or malformed, or holds no class row (CHAOS-8755).
+	ReasonClassDecisionDigest = "class_decision_digest"
 )
 
 const (
@@ -187,6 +192,15 @@ const migratorActiveSQL = `SELECT EXISTS (
 // Preflight measures the database behind conn and classifies it. One READ ONLY
 // transaction; nothing is written and no advisory lock is taken.
 func Preflight(ctx context.Context, conn *pgx.Conn, settings Settings, baseline Baseline, chain []ChainFile, history []HistoryEntry) (PreflightReport, error) {
+	return PreflightWithWalkSettings(ctx, conn, settings, baseline, chain, history, nil)
+}
+
+// PreflightWithWalkSettings is Preflight for a hook that runs with walk (the settings
+// the upgrade verb passes to its walk). Revision 0146 refuses on data, not on schema:
+// when it is pending, the verdict also evaluates its guard over the same snapshot,
+// with the same inputs the walk gives it (withWalkDefaults), so applies_cleanly is
+// never reported for a walk the guard will roll back.
+func PreflightWithWalkSettings(ctx context.Context, conn *pgx.Conn, settings Settings, baseline Baseline, chain []ChainFile, history []HistoryEntry, walk WalkSettings) (PreflightReport, error) {
 	var report PreflightReport
 	err := readOnlyTransaction(ctx, conn, func(tx pgx.Tx) error {
 		observation, err := observe(ctx, tx)
@@ -194,12 +208,70 @@ func Preflight(ctx context.Context, conn *pgx.Conn, settings Settings, baseline 
 			return err
 		}
 		report = Classify(observation, settings, baseline, chain, KnownRevisions(history, baseline, chain))
+		if report.Verdict == VerdictAppliesCleanly && containsRevision(report.Pending, classDecisionRevision) {
+			refuses, err := classDecisionGuardRefuses(ctx, tx, withWalkDefaults(walk)[ClassDecisionLiveDigestSetting])
+			if err != nil {
+				return err
+			}
+			if refuses {
+				report.Verdict, report.Reason = VerdictNeedsManual, ReasonClassDecisionDigest
+			}
+		}
 		if err := tx.QueryRow(ctx, migratorActiveSQL, lockKey).Scan(&report.MigratorActive); err != nil {
 			return fmt.Errorf("look at the migration lock: %w", err)
 		}
 		return nil
 	})
 	return report, err
+}
+
+// classDecisionRevision is the revision whose guard refuses on data (sql/0146_add_go_api_class_decision.sql).
+const classDecisionRevision = "0146"
+
+// classDecisionDocumentDigest is the MCP class document digest revision 0146 names as a literal
+// (mcpclass.DocumentDigest(); a test pins the two equal).
+const classDecisionDocumentDigest = "9c509c3594856bed7f4896345d687c0fca3a1e298b65b440ae519938bac7ed92"
+
+// liveSchemaDigestPattern is the guard's `live_digest !~ '^sha256:[0-9a-f]{64}$'`.
+var liveSchemaDigestPattern = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
+
+// classDecisionGuardRefuses is revision 0146's guard, read-only: true when MCP class rows exist and the live digest
+// is not sha256:<64 hex> or no class row (under the class document digest) is at it. A database without
+// go_api_routing_state (an empty one, before the baseline) holds no class row.
+func classDecisionGuardRefuses(ctx context.Context, tx pgx.Tx, liveDigest string) (bool, error) {
+	var exists bool
+	if err := tx.QueryRow(ctx, "SELECT to_regclass('public.go_api_routing_state') IS NOT NULL").Scan(&exists); err != nil {
+		return false, fmt.Errorf("look for go_api_routing_state: %w", err)
+	}
+	if !exists {
+		return false, nil
+	}
+	var classRows int64
+	if err := tx.QueryRow(ctx, "SELECT count(*) FROM go_api_routing_state WHERE left(selected_operation, 4) = 'mcp:'").Scan(&classRows); err != nil {
+		return false, fmt.Errorf("count MCP class rows: %w", err)
+	}
+	if classRows == 0 {
+		return false, nil
+	}
+	if !liveSchemaDigestPattern.MatchString(liveDigest) {
+		return true, nil
+	}
+	var liveRows int64
+	if err := tx.QueryRow(ctx, `SELECT count(*) FROM go_api_routing_state
+		 WHERE left(selected_operation, 4) = 'mcp:' AND schema_digest = $1 AND document_digest = $2`,
+		liveDigest, classDecisionDocumentDigest).Scan(&liveRows); err != nil {
+		return false, fmt.Errorf("count MCP class rows at the live digest: %w", err)
+	}
+	return liveRows == 0, nil
+}
+
+func containsRevision(revisions []string, want string) bool {
+	for _, revision := range revisions {
+		if revision == want {
+			return true
+		}
+	}
+	return false
 }
 
 func preflight(ctx context.Context, resolve ResolveDSN, env cli.Env) int {
@@ -215,7 +287,8 @@ func preflight(ctx context.Context, resolve ResolveDSN, env cli.Env) int {
 			"  MIGRATION_DATABASE_URI (or _FILE, or the DEV_HEALTH_MIGRATION_PG_* component form)   elevated DSN, direct to PostgreSQL\n"+
 			"  POSTGRES_URI (or _FILE)                   used when MIGRATION_DATABASE_URI is not configured\n"+
 			"  DEV_HEALTH_ALLOW_CELERY_RIVER_CUTOVER     must be 1, as the upgrade verb requires\n"+
-			"  RIVER_DATABASE_SCHEMA                     must be the head's River schema (river)\n")
+			"  RIVER_DATABASE_SCHEMA                     must be the head's River schema (river)\n"+
+			"  DHO_CLASS_DECISION_LIVE_SCHEMA_DIGEST     the running query-api's schema_digest, as the upgrade verb reads it (revision 0146)\n")
 	}
 	if err := flags.Parse(env.Args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -254,7 +327,7 @@ func preflight(ctx context.Context, resolve ResolveDSN, env cli.Env) int {
 	}
 	defer conn.Close(context.Background())
 
-	report, err := Preflight(ctx, conn, ReadSettings(env.Lookup), baseline, chain, history)
+	report, err := PreflightWithWalkSettings(ctx, conn, ReadSettings(env.Lookup), baseline, chain, history, ClassDecisionWalkSettings(env.Lookup))
 	if err != nil {
 		return writeMeasurementError(env.Stderr, "preflight_failed", boundary.Redact(err).Error())
 	}

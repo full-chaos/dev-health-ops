@@ -37,7 +37,7 @@ import (
 // own -- deliberately, so internal/goapiproof.EnablementProofClause (one
 // predicate, parameterised only by a SQL alias) judges a row from EITHER
 // table without a second copy of the admission rule. It carries no FK to
-// go_api_candidate_build: that registry exists for go_api_routing_state to
+// go_api_candidate_build: that registry exists for go_api_proof_run to
 // reference an immutable build by, and nothing on the REST side plays that
 // role -- see alembic 0134's own module doc comment.
 //
@@ -63,30 +63,6 @@ CREATE TABLE go_api_candidate_build (
 	registered_at TIMESTAMPTZ NOT NULL DEFAULT now(),
 	CONSTRAINT pk_go_api_candidate_build
 		PRIMARY KEY (schema_digest, document_digest, selected_operation, candidate_build)
-);
-
-CREATE TABLE go_api_routing_state (
-	schema_digest TEXT NOT NULL,
-	document_digest TEXT NOT NULL,
-	selected_operation TEXT NOT NULL,
-	current_candidate_build TEXT NOT NULL,
-	owner TEXT NOT NULL,
-	mode TEXT NOT NULL DEFAULT 'python',
-	eligible_orgs JSON,
-	rollout_percentage INTEGER NOT NULL DEFAULT 0,
-	review_evidence TEXT,
-	recorded_by TEXT,
-	updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-	CONSTRAINT pk_go_api_routing_state
-		PRIMARY KEY (schema_digest, document_digest, selected_operation),
-	CONSTRAINT fk_go_api_routing_state_candidate_build
-		FOREIGN KEY (schema_digest, document_digest, selected_operation, current_candidate_build)
-		REFERENCES go_api_candidate_build (schema_digest, document_digest, selected_operation, candidate_build),
-	CONSTRAINT ck_go_api_routing_state_owner CHECK (owner IN ('python', 'go')),
-	CONSTRAINT ck_go_api_routing_state_mode
-		CHECK (mode IN ('python', 'shadow', 'canary', 'primary', 'disabled')),
-	CONSTRAINT ck_go_api_routing_state_rollout_percentage
-		CHECK (rollout_percentage >= 0 AND rollout_percentage <= 100)
 );
 
 CREATE TABLE go_api_class_decision (

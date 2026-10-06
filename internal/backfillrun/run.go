@@ -9,6 +9,15 @@
 // row and its sync_manual_triggers payload (mode backfill, the window, the
 // dataset keys the configuration's sync_targets select) in one transaction, and
 // waits a bounded time for the scheduler to materialize the run.
+//
+// Which datasets the run names (CHAOS-8816): the integration's dataset rows
+// own the selection. For a whole-integration configuration the verb names the
+// keys of the ENABLED rows, never a list computed from sync_targets: a
+// target-computed list completes a family, and the scheduler inserts an
+// enabled row for an explicitly requested key that has none, so the verb
+// would switch a dataset on for every later scheduled run. A configuration
+// pinned to one source still names the keys its own sync_targets select (its
+// list narrows the enabled rows).
 package backfillrun
 
 import (
@@ -81,9 +90,49 @@ func sourceIDsFor(config *Config, enabled []string) []string {
 	return nil
 }
 
+// rowsOwnSelection reports whether the configuration covers its whole
+// integration: the integration's dataset rows then own which datasets run.
+func rowsOwnSelection(config *Config) bool {
+	return config.IntegrationID != nil && config.SourceID == nil
+}
+
+// enabledDatasetKeys is the keys of the integration's enabled dataset rows
+// that the provider's registry holds, in DatasetKey order. A row that is off,
+// and a row whose key the provider does not support, is not named.
+func enabledDatasetKeys(ctx context.Context, tx pgx.Tx, config *Config, provider string) ([]string, error) {
+	rows, err := tx.Query(ctx, `
+SELECT dataset_key FROM public.integration_datasets
+WHERE org_id = $1 AND integration_id = $2::uuid AND is_enabled IS true`, config.OrgID, *config.IntegrationID)
+	if err != nil {
+		return nil, fmt.Errorf("list enabled datasets: %w", err)
+	}
+	enabled := map[string]bool{}
+	for rows.Next() {
+		var key string
+		if err := rows.Scan(&key); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		enabled[key] = true
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	keys := []string{}
+	for _, key := range schedsync.SupportedDatasetKeys(provider) {
+		if enabled[key] {
+			keys = append(keys, key)
+		}
+	}
+	return keys, nil
+}
+
 // Validate is the validation _cmd_backfill_run ran before it planned, in its
-// order and with its messages, then the two refusals of this seam. It returns
-// the dataset keys the sync_targets select (nil when there are no targets).
+// order and with its messages, then the refusals of this seam. It returns the
+// dataset keys the run names: for a whole-integration configuration the
+// enabled dataset rows (zero enabled rows refuses the run), else the keys the
+// configuration's sync_targets select (nil when there are no targets).
 func Validate(ctx context.Context, tx pgx.Tx, config *Config, params Params) (validated Validated, err error) {
 	var datasetKeys []string
 	if params.RequestedOrg != "" && params.RequestedOrg != config.OrgID {
@@ -92,7 +141,9 @@ func Validate(ctx context.Context, tx pgx.Tx, config *Config, params Params) (va
 	}
 	provider := strings.ToLower(strings.TrimSpace(config.Provider))
 	syncTargets := slices.Clone(config.SyncTargets)
-	if len(syncTargets) > 0 {
+	// The stored list of a whole-integration configuration is a mirror of
+	// its rows, not the selection: it is not read here.
+	if len(syncTargets) > 0 && !rowsOwnSelection(config) {
 		known := schedsync.SupportedLegacyTargets(provider)
 		var unresolved []string
 		for _, target := range syncTargets {
@@ -196,6 +247,22 @@ ORDER BY created_at ASC, id ASC LIMIT 2`, config.OrgID, *config.IntegrationID)
 	if !config.PlannerManaged && config.SourceID == nil {
 		return Validated{}, RefusedError{Message: fmt.Sprintf("backfill run: sync configuration %s (%s) is neither planner-managed "+
 			"nor pinned to one source, and the scheduler materializes only those: nothing was started", params.ConfigID, pyRepr(config.Name))}
+	}
+	if rowsOwnSelection(config) {
+		keys, err := enabledDatasetKeys(ctx, tx, config, provider)
+		if err != nil {
+			return Validated{}, err
+		}
+		// An empty key list would be written as "no selection", which the
+		// scheduler reads as every enabled dataset and which lets it add its
+		// automatic rows: a run that names nothing is not started.
+		if len(keys) == 0 {
+			return Validated{}, RefusedError{Message: fmt.Sprintf("backfill run: integration %s of sync configuration %s (%s) has no enabled dataset "+
+				"that provider %s supports, so there is nothing to backfill: nothing was started. Enable a dataset for the integration first "+
+				"(check its box in the sync settings); a backfill does not switch a dataset on.",
+				*config.IntegrationID, params.ConfigID, pyRepr(config.Name), pyRepr(provider))}
+		}
+		datasetKeys = keys
 	}
 	return Validated{DatasetKeys: datasetKeys, EnabledSources: len(enabled), SourceIDs: sourceIDsFor(config, enabled)}, nil
 }

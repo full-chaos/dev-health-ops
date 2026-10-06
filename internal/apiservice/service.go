@@ -303,9 +303,11 @@ func RegisterOperatorMetrics(registry *health.Registry, deps *Deps) error {
 	if err := registry.RegisterMetrics("legacy_ingest", deps.LegacyIngestMetrics); err != nil {
 		return err
 	}
-	// CHAOS-8221: the dataset-drift repair counter (Python's
-	// sync_target_dataset_drift_repaired_total) the PUT /sync-configs path counts.
-	if err := registry.RegisterMetrics("sync_target_dataset_drift_repaired", syncadmin.DriftRepairedMetricsSource()); err != nil {
+	// CHAOS-8816: what PATCH /sync-configs/{id} does to dataset rows (rows
+	// switched on or off; saves with a stale base list). It replaces the
+	// dataset-drift repair counter: a save no longer rewrites rows its own
+	// change does not name.
+	if err := registry.RegisterMetrics("sync_config_dataset_selection", syncadmin.SelectionMetricsSource()); err != nil {
 		return err
 	}
 	// CHAOS-8222: the manual-trigger await outcome counter and latency histogram

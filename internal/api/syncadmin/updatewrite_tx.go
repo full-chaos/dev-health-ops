@@ -2,10 +2,7 @@ package syncadmin
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"log/slog"
-	"sort"
 	"strings"
 	"time"
 
@@ -13,7 +10,6 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
-	"github.com/full-chaos/dev-health-ops/internal/providersync"
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 )
 
@@ -43,146 +39,6 @@ func pyIterate(value pyjson.Value) ([]pyjson.Value, error) {
 		return out, nil
 	}
 	return nil, fmt.Errorf("%w: %T is not iterable", errUnrenderable, value)
-}
-
-// plannerTargets is planner_dataset_keys' own reading of a target list:
-// str() of every item that is not None.
-func plannerTargets(items []pyjson.Value) []string {
-	out := make([]string, 0, len(items))
-	for _, item := range items {
-		if item != nil {
-			out = append(out, pyjson.Str(item))
-		}
-	}
-	return out
-}
-
-// reconcileDatasetRowsForSyncTargets is sync.py's
-// _reconcile_dataset_rows_for_sync_targets: the integration's shared
-// dataset rows follow the edited selection in both directions. Desired is
-// planner_dataset_keys of the new targets (a PagerDuty refusal skips the
-// whole call) plus that of every other whole-integration config of the
-// integration (source_id NULL, any activity); the controlled universe is
-// operator_controlled_dataset_keys. Desired rows are created enabled or
-// re-enabled; controlled rows outside desired that are enabled are
-// disabled, never deleted. A sibling whose targets cannot be mapped drops
-// the disable pass. Serialised per integration by a transaction-scoped
-// advisory lock taken before the sibling read.
-func reconcileDatasetRowsForSyncTargets(ctx context.Context, tx pgx.Tx, logger *slog.Logger, orgID string, integrationID uuid.UUID,
-	provider string, syncTargets []string, previousSyncTargets []pyjson.Value, configID uuid.UUID) error {
-	desiredList, err := providersync.PlannerDatasetKeys(provider, syncTargets)
-	if errors.Is(err, providersync.ErrPagerDutyTargetNotOperational) {
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	desired := map[string]bool{}
-	for _, key := range desiredList {
-		desired[key] = true
-	}
-	previouslyDesired := map[string]bool{}
-	if keys, err := providersync.PlannerDatasetKeys(provider, plannerTargets(previousSyncTargets)); err == nil {
-		for _, key := range keys {
-			previouslyDesired[key] = true
-		}
-	}
-	controlled := map[string]bool{}
-	for _, key := range providersync.OperatorControlledDatasetKeys(provider) {
-		controlled[key] = true
-	}
-	if len(desired) == 0 && len(controlled) == 0 {
-		return nil
-	}
-
-	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`,
-		fmt.Sprintf("sync-target-dataset-reconcile:%s:%s", orgID, integrationID)); err != nil {
-		return fmt.Errorf("dataset reconcile lock: %w", err)
-	}
-	rows, err := tx.Query(ctx, `SELECT provider, sync_targets::text FROM sync_configurations
-WHERE org_id = $1 AND integration_id = $2 AND source_id IS NULL AND id != $3`, orgID, integrationID, configID)
-	if err != nil {
-		return fmt.Errorf("read sibling configs: %w", err)
-	}
-	type sibling struct {
-		provider string
-		targets  *string
-	}
-	var siblings []sibling
-	for rows.Next() {
-		var row sibling
-		if err := rows.Scan(&row.provider, &row.targets); err != nil {
-			rows.Close()
-			return fmt.Errorf("read sibling config: %w", err)
-		}
-		siblings = append(siblings, row)
-	}
-	rows.Close()
-	if err := rows.Err(); err != nil {
-		return fmt.Errorf("read sibling configs: %w", err)
-	}
-	for _, row := range siblings {
-		stored, err := decodeStored(row.targets)
-		if err != nil {
-			return err
-		}
-		items, err := pyIterate(stored)
-		if err != nil {
-			return err
-		}
-		// [str(target) for target in (sibling_targets or [])]: None becomes
-		// "None" here, before planner_dataset_keys sees it.
-		targets := make([]string, len(items))
-		for index, item := range items {
-			targets[index] = pyjson.Str(item)
-		}
-		keys, err := providersync.PlannerDatasetKeys(row.provider, targets)
-		if err != nil {
-			logger.WarnContext(ctx, "sync_target_reconcile_skipped_unreadable_sibling", "org_id", orgID,
-				"integration_id", integrationID.String(), "sibling_provider", row.provider,
-				"reason", "a sibling whole-integration config's sync_targets could not be mapped to dataset keys; "+
-					"shared rows are left enabled rather than disabled on a guess")
-			controlled = map[string]bool{}
-			break
-		}
-		for _, key := range keys {
-			desired[key] = true
-		}
-	}
-
-	for _, key := range sortedKeys(desired) {
-		if _, err := tx.Exec(ctx, `INSERT INTO integration_datasets (id, org_id, integration_id, dataset_key, is_enabled, options)
-VALUES ($1, $2, $3, $4, true, '{}')
-ON CONFLICT (org_id, integration_id, dataset_key) DO UPDATE SET is_enabled = true
-WHERE integration_datasets.is_enabled IS NOT true`, uuid.New(), orgID, integrationID, key); err != nil {
-			return fmt.Errorf("enable dataset %s: %w", key, err)
-		}
-	}
-	var disabled []string
-	for _, key := range sortedKeys(controlled) {
-		if desired[key] {
-			continue
-		}
-		tag, err := tx.Exec(ctx, `UPDATE integration_datasets SET is_enabled = false
-WHERE org_id = $1 AND integration_id = $2 AND dataset_key = $3 AND is_enabled IS true`, orgID, integrationID, key)
-		if err != nil {
-			return fmt.Errorf("disable dataset %s: %w", key, err)
-		}
-		if tag.RowsAffected() > 0 {
-			disabled = append(disabled, key)
-		}
-	}
-	recordDatasetDrift(ctx, logger, orgID, integrationID, provider, disabled, previouslyDesired, desired)
-	return nil
-}
-
-func sortedKeys(set map[string]bool) []string {
-	out := make([]string, 0, len(set))
-	for key := range set {
-		out = append(out, key)
-	}
-	sort.Strings(out)
-	return out
 }
 
 // upsertScheduledJob is sync.py's _upsert_scheduled_job for the config as

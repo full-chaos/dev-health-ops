@@ -24,6 +24,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/cli"
 	"github.com/full-chaos/dev-health-ops/internal/pgmigrate"
+	schedsync "github.com/full-chaos/dev-health-ops/internal/scheduler/sync"
 	"github.com/full-chaos/dev-health-ops/internal/synchandoff"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pyoracle"
@@ -139,6 +140,14 @@ VALUES ($1::uuid, $2, $3::uuid, $4, 'repo', $5, $5, $5, '{}'::json, $6, now(), n
 				}
 			}
 		}
+		// The dataset rows of the integration (CHAOS-8816: the rows own the
+		// selection, the verb names the enabled rows). Each configuration's
+		// targets give the rows the create path would have written, enabled.
+		// The rows are derived here, not in the cfg struct: the configurations
+		// are part of the frozen Python answers' key.
+		if !c.noIntegration {
+			seedDatasetRows(t, ctx, conn, c, integration)
+		}
 		targets, _ := json.Marshal(c.targets)
 		if c.targets == nil {
 			targets = []byte("[]")
@@ -164,6 +173,85 @@ VALUES ($1::uuid, $2, $3, $4, $5::json, $6::json, $7, $8, $9::uuid, $10::uuid, $
 			t.Fatalf("seed config %s: %v", c.name, err)
 		}
 	}
+}
+
+// seedDatasetRows writes the enabled dataset rows a configuration's targets
+// select (PlannerDatasetKeys; none for targets that select nothing). The
+// first integration also gets a row that exists and is OFF and an enabled row
+// for a key GitHub has no dataset for: the verb must name neither.
+func seedDatasetRows(t *testing.T, ctx context.Context, conn *pgx.Conn, c cfg, integration int) {
+	t.Helper()
+	keys, err := schedsync.PlannerDatasetKeys(c.provider, c.targets)
+	if err != nil {
+		t.Fatalf("seed datasets of %s: %v", c.name, err)
+	}
+	insert := func(key string, enabled bool) {
+		if _, err := conn.Exec(ctx, `INSERT INTO integration_datasets (id, org_id, integration_id, dataset_key, is_enabled, options)
+VALUES (gen_random_uuid(), $1, $2::uuid, $3, $4, '{}'::json) ON CONFLICT (org_id, integration_id, dataset_key) DO NOTHING`,
+			c.org, uuidN(0x1a, integration), key, enabled); err != nil {
+			t.Fatalf("seed dataset %s of %s: %v", key, c.name, err)
+		}
+	}
+	for _, key := range keys {
+		insert(key, true)
+	}
+	if c.n == 1 {
+		insert("cicd", false)
+		insert("incidents", true)
+	}
+}
+
+// deliberateDifference is a scenario whose answer differs from the recorded
+// Python answer ON PURPOSE (owner's decision of 2026-10-06, Linear project
+// document "Sync configuration: the dataset row is the single owner"): for a
+// whole-integration configuration the verb names the integration's enabled
+// dataset rows and does not read the stored sync_targets.
+type deliberateDifference struct {
+	reason     string
+	pythonExit int    // the recorded Python exit code, still asserted
+	goExit     int    // the exit code dho must give
+	goMessage  string // text dho's stderr must carry ("" for a run that starts)
+	// keys is the dataset key list the started run must name (nil: refused).
+	keys []string
+}
+
+var deliberateDifferences = map[string]deliberateDifference{
+	"no targets selects every dataset": {
+		reason:     "the recorded Python answer wrote no dataset selection (every enabled dataset); the integration has no enabled dataset row, so dho refuses the run",
+		pythonExit: 0, goExit: cli.ExitRefused, goMessage: "has no enabled dataset",
+	},
+	"unrecognized targets": {
+		reason:     "the recorded Python answer refused the stored list; the stored list of a whole-integration configuration is a mirror and is not read, the enabled rows are named",
+		pythonExit: 1, goExit: cli.ExitOK, keys: []string{"repo-metadata", "commits", "commit-stats", "files", "blame"},
+	},
+	"a name that needs quotes in the message": {
+		reason:     "as 'unrecognized targets': the stored list is not read",
+		pythonExit: 1, goExit: cli.ExitOK, keys: []string{"repo-metadata", "commits", "commit-stats", "files", "blame"},
+	},
+	"jira incidents are the operational target": {
+		reason:     "the recorded Python answer refused the stored list; dho does not read it and refuses because the integration has no enabled dataset row",
+		pythonExit: 1, goExit: cli.ExitRefused, goMessage: "has no enabled dataset",
+	},
+}
+
+// triggerDatasetKeys is the dataset key list of every trigger row written.
+func triggerDatasetKeys(t *testing.T, uri string) [][]string {
+	t.Helper()
+	ctx := context.Background()
+	conn, err := pgx.Connect(ctx, uri)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close(ctx)
+	result, err := conn.Query(ctx, `SELECT dataset_keys FROM public.sync_manual_triggers`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keys, err := pgx.CollectRows(result, pgx.RowTo[[]string])
+	if err != nil {
+		t.Fatal(err)
+	}
+	return keys
 }
 
 // scenario is one run of the verb over the seeded configurations.
@@ -561,6 +649,7 @@ func TestBackfillRunWritesTheFrozenPythonRows(t *testing.T) {
 		t.Fatalf("golden has %d scenarios, the test defines %d", len(frozen), want)
 	}
 	uri := setup(t)
+	seenDifferences := map[string]bool{}
 	for _, s := range comparable() {
 		want, ok := frozen[s.name]
 		if !ok {
@@ -568,6 +657,28 @@ func TestBackfillRunWritesTheFrozenPythonRows(t *testing.T) {
 		}
 		reset(t, uri, s)
 		code, stdout, stderr := goRun(t, uri, s)
+		if difference, ok := deliberateDifferences[s.name]; ok {
+			// The recorded Python answer is still what the test says it is,
+			// and dho gives the stated different answer.
+			seenDifferences[s.name] = true
+			if want.Exit != difference.pythonExit {
+				t.Fatalf("%s: the recorded Python exit is %d, the stated one %d", s.name, want.Exit, difference.pythonExit)
+			}
+			if code != difference.goExit || !strings.Contains(stderr, difference.goMessage) {
+				t.Fatalf("%s: exit %d, want %d with %q (%s); stderr:\n%s", s.name, code, difference.goExit, difference.goMessage, difference.reason, stderr)
+			}
+			named := triggerDatasetKeys(t, uri)
+			if difference.keys == nil {
+				for table, lines := range rows(t, uri) {
+					if len(lines) != 0 {
+						t.Fatalf("%s: the refused run left %d rows in %s", s.name, len(lines), table)
+					}
+				}
+			} else if len(named) != 1 || fmt.Sprint(named[0]) != fmt.Sprint(difference.keys) {
+				t.Fatalf("%s: the run names %v, want exactly %v", s.name, named, difference.keys)
+			}
+			continue
+		}
 		checkRefusal(t, "go", s, code, stderr)
 		if s.message == "" && !strings.HasPrefix(stdout, "Backfill queued: occurrence_id=sha256:") {
 			t.Fatalf("%s: stdout %q", s.name, stdout)
@@ -579,6 +690,10 @@ func TestBackfillRunWritesTheFrozenPythonRows(t *testing.T) {
 		if a, b := canonicalRows(t, got.Rows), canonicalRows(t, want.Rows); a != b {
 			t.Fatalf("%s: rows differ from the frozen Python rows\ngo:     %.700s\npython: %.700s", s.name, a, b)
 		}
+	}
+	// Every stated difference was reached: a renamed scenario must not leave one behind.
+	if len(seenDifferences) != len(deliberateDifferences) {
+		t.Fatalf("%d of %d deliberate differences were checked: %v", len(seenDifferences), len(deliberateDifferences), seenDifferences)
 	}
 	// A comparison that froze nothing passes for any implementation: every scenario that must succeed
 	// froze exactly one occurrence, one backfill trigger and one marker job.

@@ -26,8 +26,12 @@ import (
 // provided records the fields the body carried (model_fields_set), null
 // included.
 type syncConfigUpdate struct {
-	syncTargets            []string
-	syncTargetsSet         bool
+	syncTargets    []string
+	syncTargetsSet bool
+	// syncTargetsBase is the list the form was shown when it was loaded
+	// (CHAOS-8816); absent and null are the same: no base.
+	syncTargetsBase        []string
+	syncTargetsBaseSet     bool
 	syncOptions            *pyjson.Object
 	isActive               *bool
 	scheduleCron, timezone *string
@@ -52,6 +56,9 @@ func decodeSyncConfigUpdate(body pybody.Body) (syncConfigUpdate, pybody.Errors) 
 		}
 	}
 	in.syncTargets, in.syncTargetsSet = problems.OptionalStringList(object, "sync_targets")
+	// Go-only field (the Python route had none): a value that is not a list
+	// of strings is refused here, before the guard and before any write.
+	in.syncTargetsBase, in.syncTargetsBaseSet = problems.OptionalStringList(object, "sync_targets_base")
 	if options, present := problems.OptionalAnyDict(object, "sync_options"); present {
 		in.syncOptions = options
 	}
@@ -152,13 +159,37 @@ func (h *handlers) updateSyncConfigTx(ctx context.Context, tx pgx.Tx, org string
 		return nil, err
 	}
 
+	// The canonical-incident gate. When the rows own the selection it reads
+	// only the targets this save adds and the dataset-less targets the list
+	// keeps; a gated target that shows because its row is on does not refuse
+	// the save. The selection lock is taken here, before the rows are read,
+	// and held to the end of the transaction.
+	rowsOwn := rowsOwnSelection(config)
+	var change selectionChange
 	var gateTargets []pyjson.Value
-	if in.syncTargetsSet {
-		for _, target := range in.syncTargets {
-			gateTargets = append(gateTargets, target)
+	switch {
+	case rowsOwn && in.syncTargetsSet:
+		if err := selectionLock(ctx, tx, org, *config.IntegrationID); err != nil {
+			return nil, err
 		}
-	} else if gateTargets, err = pyIterate(storedTargetsValue); err != nil {
-		return nil, err
+		enabled, err := enabledDatasetKeysByIntegration(ctx, tx, org, []uuid.UUID{*config.IntegrationID})
+		if err != nil {
+			return nil, err
+		}
+		change, err = planSelectionChange(config.Provider, enabled[*config.IntegrationID],
+			passthroughTargets(config.Provider, storedListItems(storedTargetsValue)), in.syncTargets, in.syncTargetsBase, in.syncTargetsBaseSet)
+		if err != nil {
+			return nil, err
+		}
+		gateTargets = change.gatedTargets()
+	case rowsOwn:
+		gateTargets = stringValues(passthroughTargets(config.Provider, storedListItems(storedTargetsValue)))
+	case in.syncTargetsSet:
+		gateTargets = stringValues(in.syncTargets)
+	default:
+		if gateTargets, err = pyIterate(storedTargetsValue); err != nil {
+			return nil, err
+		}
 	}
 	if err := h.requireCanonicalIncident(ctx, org, gateTargets); err != nil {
 		return nil, err
@@ -209,22 +240,18 @@ func (h *handlers) updateSyncConfigTx(ctx context.Context, tx pgx.Tx, org string
 	}
 
 	now := h.now().UTC()
+	// A config whose rows own its selection writes the rows of the targets
+	// this save changed and stores the list the rows then show (the mirror).
+	// Every other config stores the submitted list and writes no row.
 	newTargets := storedTargetsValue
 	if in.syncTargetsSet {
-		list := make([]pyjson.Value, len(in.syncTargets))
-		for index, target := range in.syncTargets {
-			list[index] = target
-		}
-		newTargets = list
-		if config.IntegrationID != nil && config.SourceID == nil {
-			previous, err := pyIterate(storedTargetsValue)
+		newTargets = stringValues(in.syncTargets)
+		if rowsOwn {
+			mirror, err := saveSelection(ctx, tx, h.logger, org, config, in.syncTargets, change)
 			if err != nil {
 				return nil, err
 			}
-			if err := reconcileDatasetRowsForSyncTargets(ctx, tx, h.logger, org, *config.IntegrationID, config.Provider,
-				in.syncTargets, previous, config.ID); err != nil {
-				return nil, err
-			}
+			newTargets = stringValues(mirror)
 		}
 	}
 
@@ -303,6 +330,11 @@ func (h *handlers) updateSyncConfigTx(ctx context.Context, tx pgx.Tx, org string
 		err = synccoverage.InvalidateForConfig(ctx, tx, org, config.ID.String())
 	}
 	if err != nil {
+		return nil, err
+	}
+	if err := deriveShownTargets(ctx, func(ctx context.Context, org string, ids []uuid.UUID) (map[uuid.UUID][]string, error) {
+		return enabledDatasetKeysByIntegration(ctx, tx, org, ids)
+	}, org, config); err != nil {
 		return nil, err
 	}
 	return &updatedConfig{config: config, discover: discover}, nil

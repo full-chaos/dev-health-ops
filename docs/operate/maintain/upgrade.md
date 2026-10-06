@@ -66,4 +66,7 @@ items are opt-in for a new integration.
 **How to turn work items on again**: tick "Work Items" in the targets of the
 sync configuration, or send an API `PATCH` of the configuration with
 `sync_targets` that includes `work-items`. The next scheduled run plans the
-work-items unit again.
+work-items unit again. That save switches on only the work-item datasets: a
+save changes the datasets of the targets you added or removed and leaves every
+other dataset as it is. The targets a configuration shows are read from its
+enabled datasets, so "Work Items" shows unchecked while those datasets are off.

@@ -55,6 +55,16 @@ func newUpdateVenueIDs() updateVenueIDs {
 // sync_coverage_projections (the projections' database-clock timestamps
 // compared as invalidated or not).
 //
+// Named divergence (owner's decision of 2026-10-06, the dataset row is the
+// single owner): a whole-integration config answers sync_targets from its
+// integration's enabled dataset rows. Four seeded configs ("gh no dataset",
+// "gh canonical", "jira", "jira off") have an integration with no dataset
+// row; the recorded Python answer echoed their stored list, the Go api
+// answers []. See derivedTargets. Every row of every table is still equal:
+// the requests that change targets ("github targets") add targets, which
+// writes the same rows under both rules, and a request without sync_targets
+// does not write the stored list.
+//
 // Named divergence (lead ruling on the cron domain): a refused cron's 422
 // text is compared by status only. Named ordering difference: Python runs
 // Jira discovery inside the request's transaction, before the sync job
@@ -163,6 +173,7 @@ func TestSyncConfigUpdateVenueOracle(t *testing.T) {
 		{Name: "github after", Method: "GET", Path: "/api/v1/admin/sync-configs/" + ids.cfgGH.String(), Headers: a},
 	}
 	statusOnly := map[string]bool{"cron refused": true}
+	derived := newDerivedTargets(`[]`, ids.cfgGHNoDataset, ids.cfgGHCanon, ids.cfgJira, ids.cfgJiraOff)
 	python := golden.Python(t, venue, requests)
 	receipt := venueoracle.Diff(t, base, requests, python, venueoracle.DiffOptions{
 		Golden: golden,
@@ -171,9 +182,13 @@ func TestSyncConfigUpdateVenueOracle(t *testing.T) {
 			if statusOnly[request.Name] {
 				return "<status only: named divergence>"
 			}
-			return body
+			return derived.normalize(body)
+		},
+		Inspect: func(request venueoracle.Request, goResponse venueoracle.Response) {
+			derived.inspect(t, request.Name, goResponse.Body)
 		},
 	})
+	derived.finish(t)
 	t.Logf("receipt (%d requests):\n%s", len(requests), receipt)
 
 	orgs := fmt.Sprintf("'%s','%s','%s'", ids.orgA, ids.orgB, ids.orgC)

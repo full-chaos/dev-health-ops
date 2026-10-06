@@ -180,8 +180,11 @@ func TestResponseAboveTheByteCapIsTerminalOnTheFirstAttemptWithItsClass(t *testi
 	if !errors.As(err, &tooLarge) {
 		t.Fatalf("Work()=%v, want the real cap error", err)
 	}
-	if builds.Load() != 1 || treeCalls.Load() != 1 {
-		t.Fatalf("executions=%d tree requests=%d, want exactly one of each", builds.Load(), treeCalls.Load())
+	// Two tree requests: the recursive listing, then the root directory alone
+	// (the per-directory fallback); both are above the cap, so the run ends on
+	// the cap error without a further request.
+	if builds.Load() != 1 || treeCalls.Load() != 2 {
+		t.Fatalf("executions=%d tree requests=%d, want one execution and two tree requests", builds.Load(), treeCalls.Load())
 	}
 	if repository.status != "failed" || repository.releaseCalls != 0 ||
 		repository.lastFailCategory != ResponseTooLargeCategory ||

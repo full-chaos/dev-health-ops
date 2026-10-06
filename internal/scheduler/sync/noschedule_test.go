@@ -87,6 +87,9 @@ func TestLoopUnscheduledReadFailureIsLoudAndDoesNotFailTheWindow(t *testing.T) {
 	if !strings.Contains(buffer.String(), "sync.scheduler.unscheduled_config_read_failed") {
 		t.Fatalf("read failure not logged:\n%s", buffer.String())
 	}
+	if strings.Contains(buffer.String(), "boom") {
+		t.Fatalf("read failure log carries the error text:\n%s", buffer.String())
+	}
 }
 
 func TestUnscheduledConfigsSQLSelectsExactlyWhatTheHandoffSQLSkips(t *testing.T) {

@@ -95,7 +95,9 @@ func (loop *Loop) reportUnscheduledConfigs(ctx context.Context, now time.Time) {
 	}
 	configs, err := lister.UnscheduledConfigs(ctx)
 	if err != nil {
-		loop.logger().WarnContext(ctx, "sync.scheduler.unscheduled_config_read_failed", "error", err.Error())
+		// The error text can carry SQL or connection detail; log its Go type only.
+		errorType := fmt.Sprintf("%T", err)
+		loop.logger().WarnContext(ctx, "sync.scheduler.unscheduled_config_read_failed", "error_type", errorType)
 		return
 	}
 	loop.mu.Lock()

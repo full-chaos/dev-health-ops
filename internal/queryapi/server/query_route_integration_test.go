@@ -725,6 +725,38 @@ func operatingReviewVariables() map[string]any {
 	}
 }
 
+func operatingReviewTeamVariables(teamID string, plural bool) map[string]any {
+	input := map[string]any{"weekStart": "2026-08-24"}
+	if plural {
+		input["teamIds"] = []string{teamID}
+	} else {
+		input["teamId"] = teamID
+	}
+	return map[string]any{"orgId": "org-1", "input": input}
+}
+
+func operatingReviewTeamID(t *testing.T, rec *httptest.ResponseRecorder) string {
+	t.Helper()
+	if rec.Code != http.StatusOK {
+		t.Fatalf("operatingReview: got %d, body=%s", rec.Code, rec.Body.String())
+	}
+	var response struct {
+		Data struct {
+			OperatingReview struct {
+				TeamID *string `json:"teamId"`
+			} `json:"operatingReview"`
+		} `json:"data"`
+		Errors []any `json:"errors"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode operatingReview response: %v", err)
+	}
+	if len(response.Errors) != 0 || response.Data.OperatingReview.TeamID == nil {
+		t.Fatalf("expected a one-team operatingReview without GraphQL errors, got %s", rec.Body.String())
+	}
+	return *response.Data.OperatingReview.TeamID
+}
+
 // TestOperatingReviewRoute_IsServedByTheCatalog is CHAOS-4352
 // Wave 4 Lane B's (CHAOS-4505) extension of the same reachability
 // contract to operatingReview: real Mux, real PostgresSwitch reading a
@@ -792,6 +824,31 @@ func TestOperatingReviewRoute_IsServedByTheCatalog(t *testing.T) {
 		}
 	})
 
+}
+
+func TestOperatingReviewRoute_CurrentTeamIDsPreservesLegacyOneTeam(t *testing.T) {
+	pool := startTestRegistryPostgres(t)
+
+	pub, priv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	jwksPath := writeTestJWKS(t, pub)
+	verifier, err := principal.NewVerifier(jwksPath, itTestIssuer, itTestAudience)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	handler, _, _, _, _ := newQueryHandler(&fakeOperatingReviewCHClient{}, pool, verifier, itTestSchemaDigest, os.Getenv)
+	token := signTestEnvelope(t, priv, "org-1")
+
+	legacy := postGraphQLWithVariables(t, handler, registeredOperatingReviewV2Document, token, operatingReviewTeamVariables("team-a", false))
+	current := postGraphQLWithVariables(t, handler, registeredOperatingReviewDocument, token, operatingReviewTeamVariables("team-a", true))
+	legacyTeamID := operatingReviewTeamID(t, legacy)
+	currentTeamID := operatingReviewTeamID(t, current)
+	if currentTeamID != legacyTeamID {
+		t.Fatalf("current teamIds response selected %q, want legacy teamId response %q", currentTeamID, legacyTeamID)
+	}
 }
 
 func homeVariables() map[string]any {

@@ -27,7 +27,12 @@ type linearNestedServer struct {
 	mu         sync.Mutex
 	field      string // attachments|history|comments|relations|inverseRelations|cycles
 	totalPages int
-	nested     int // requests served for the nested connection
+	nested     int  // requests served for the nested connection
+	identical  bool // every node of labels/comments carries the same fields, only the id differs
+	// overlap makes every follow-up page repeat the previous page's node (same
+	// id), the way a provider that re-serves a row at a page boundary would.
+	overlap bool
+	queries []string // every query text the route sent
 }
 
 var linearNestedQueryMarkers = map[string]string{
@@ -41,19 +46,29 @@ var linearNestedQueryMarkers = map[string]string{
 }
 
 func linearNestedNode(field string, index int) string {
+	return linearNestedNodeVariant(field, index, false)
+}
+
+// linearNestedNodeVariant with identical=true gives every label/comment the
+// same visible fields: only the provider id tells two rows apart.
+func linearNestedNodeVariant(field string, index int, identical bool) string {
+	fields := index
+	if identical {
+		fields = 0
+	}
 	switch field {
 	case "labels":
-		return fmt.Sprintf(`{"name":"label-%d"}`, index)
+		return fmt.Sprintf(`{"id":"label-id-%d","name":"label-%d"}`, index, fields)
 	case "attachments":
-		return fmt.Sprintf(`{"url":"https://github.com/acme/repo/pull/%d","sourceType":"github"}`, index+1)
+		return fmt.Sprintf(`{"id":"attachment-id-%d","url":"https://github.com/acme/repo/pull/%d","sourceType":"github"}`, index, index+1)
 	case "history":
-		return fmt.Sprintf(`{"createdAt":"2026-07-26T10:%02d:00Z","fromState":{"name":"Todo","type":"unstarted"},"toState":{"name":"In Progress","type":"started"},"actor":null}`, index%60)
+		return fmt.Sprintf(`{"id":"history-id-%d","createdAt":"2026-07-26T10:%02d:00Z","fromState":{"name":"Todo","type":"unstarted"},"toState":{"name":"In Progress","type":"started"},"actor":null}`, index, index%60)
 	case "comments":
-		return fmt.Sprintf(`{"body":"comment %d","createdAt":"2026-07-27T12:00:00Z","user":null}`, index)
+		return fmt.Sprintf(`{"id":"comment-id-%d","body":"comment %d","createdAt":"2026-07-27T12:00:00Z","user":null}`, index, fields)
 	case "relations":
-		return fmt.Sprintf(`{"type":"related","issue":{"identifier":"ENG-45"},"relatedIssue":{"identifier":"ENG-%d"}}`, 1000+index)
+		return fmt.Sprintf(`{"id":"relation-id-%d","type":"related","issue":{"identifier":"ENG-45"},"relatedIssue":{"identifier":"ENG-%d"}}`, index, 1000+index)
 	case "inverseRelations":
-		return fmt.Sprintf(`{"type":"related","issue":{"identifier":"ENG-%d"},"relatedIssue":{"identifier":"ENG-45"}}`, 1000+index)
+		return fmt.Sprintf(`{"id":"inverse-id-%d","type":"related","issue":{"identifier":"ENG-%d"},"relatedIssue":{"identifier":"ENG-45"}}`, index, 1000+index)
 	default: // cycles
 		return fmt.Sprintf(`{"id":"cycle-%d","number":%d,"name":"","startsAt":"2026-07-25T09:00:00Z","endsAt":"2026-08-01T09:00:00Z","completedAt":null,"progress":0,"team":{"id":"team-eng","key":"ENG","name":"Engineering"}}`, index, index+1)
 	}
@@ -62,7 +77,11 @@ func linearNestedNode(field string, index int) string {
 func (server *linearNestedServer) page(field string, index int) string {
 	more := index < server.totalPages-1
 	pageInfo := fmt.Sprintf(`{"hasNextPage":%t,"endCursor":%q}`, more, "c"+strconv.Itoa(index))
-	connection := fmt.Sprintf(`{"nodes":[%s],"pageInfo":%s}`, linearNestedNode(field, index), pageInfo)
+	nodes := linearNestedNodeVariant(field, index, server.identical)
+	if server.overlap && index > 0 && field != "cycles" {
+		nodes = linearNestedNodeVariant(field, index-1, server.identical) + "," + nodes
+	}
+	connection := fmt.Sprintf(`{"nodes":[%s],"pageInfo":%s}`, nodes, pageInfo)
 	if field == "cycles" {
 		return `{"data":{"cycles":` + connection + `}}`
 	}
@@ -90,7 +109,7 @@ func (server *linearNestedServer) issue() string {
 func (server *linearNestedServer) firstEmbedded() string {
 	more := server.totalPages > 1
 	return fmt.Sprintf(`{"nodes":[%s],"pageInfo":{"hasNextPage":%t,"endCursor":"c0"}}`,
-		linearNestedNode(server.field, 0), more)
+		linearNestedNodeVariant(server.field, 0, server.identical), more)
 }
 
 func (server *linearNestedServer) Do(request *http.Request) (*http.Response, error) {
@@ -107,6 +126,7 @@ func (server *linearNestedServer) Do(request *http.Request) (*http.Response, err
 	}
 	server.mu.Lock()
 	defer server.mu.Unlock()
+	server.queries = append(server.queries, body.Query)
 	var payload string
 	switch {
 	case strings.Contains(body.Query, "query LinearWorkItemsTeam("):
@@ -137,7 +157,17 @@ func (server *linearNestedServer) Do(request *http.Request) (*http.Response, err
 
 func collectWithLinearNestedServer(t *testing.T, field string, totalPages int) (CompleteRouteBatch, *linearNestedServer, error) {
 	t.Helper()
-	server := &linearNestedServer{field: field, totalPages: totalPages}
+	return collectWithLinearNestedServerVariant(t, field, totalPages, false)
+}
+
+func collectWithLinearNestedServerVariant(t *testing.T, field string, totalPages int, identical bool) (CompleteRouteBatch, *linearNestedServer, error) {
+	t.Helper()
+	return collectWithLinearNestedServerOptions(t, &linearNestedServer{field: field, totalPages: totalPages, identical: identical})
+}
+
+func collectWithLinearNestedServerOptions(t *testing.T, server *linearNestedServer) (CompleteRouteBatch, *linearNestedServer, error) {
+	t.Helper()
+	field := server.field
 	claim := nativeTestClaim("linear", "work-items")
 	claim.SourceExternalID = "ENG"
 	handler := LinearWorkItemsRouteHandler{FetchCycles: boolPointer(field == "cycles")}
@@ -220,8 +250,12 @@ func TestLinearWorkItemsNestedHardBoundNamesIssueAndField(t *testing.T) {
 		if !strings.Contains(logs.String(), "level=ERROR") || !strings.Contains(logs.String(), "field="+field) {
 			t.Fatalf("%s: no ERROR log naming the field: %s", field, logs.String())
 		}
-		// The bound counts nested requests (the issue embeds page 0).
-		want := linearNestedHardMaxPages
+		// The bound counts the embedded first page: 49 follow-up requests for an
+		// embedded field, 50 for cycles (no embedded page).
+		want := 49
+		if field == "cycles" {
+			want = 50
+		}
 		if server.nested != want {
 			t.Fatalf("%s nested requests=%d want %d", field, server.nested, want)
 		}

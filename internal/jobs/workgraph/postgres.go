@@ -86,10 +86,10 @@ WHERE id = $4::uuid AND kind = $5
   AND (state = 'pending' OR (state = 'running' AND lease_expires_at <= $3))
 RETURNING id::text, org_id::text, kind, scope::text, COALESCE(model_ref, ''),
           COALESCE(prompt_ref, ''), llm_concurrency, spend_limit_microunits,
-          correlation_id, idempotency_key`, token, now.Add(store.lease), now, requestID, string(kind)).Scan(
+          correlation_id, idempotency_key, attempt_count`, token, now.Add(store.lease), now, requestID, string(kind)).Scan(
 		&request.ID, &request.OrganizationID, &request.Kind, &scope, &request.ModelRef,
 		&request.PromptRef, &request.LLMConcurrency, &request.SpendLimitMicrounits,
-		&request.CorrelationID, &request.IdempotencyKey,
+		&request.CorrelationID, &request.IdempotencyKey, &request.AttemptCount,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		var state string

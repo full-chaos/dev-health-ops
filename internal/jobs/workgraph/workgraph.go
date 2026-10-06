@@ -101,6 +101,10 @@ type Request struct {
 	CorrelationID             string
 	IdempotencyKey            string
 	PrerequisiteCompletionKey string
+	// AttemptCount is the request row's own claim counter, as of the Claim that
+	// produced this value (it includes that claim). It survives requeues and
+	// strand-repair re-arms, so it is the only clock that spans River jobs.
+	AttemptCount int
 	// Coalesce asks the writer to supersede this producer's own PENDING
 	// requests that name the same work -- same organization, same kind, same
 	// scope -- instead of queueing alongside them.

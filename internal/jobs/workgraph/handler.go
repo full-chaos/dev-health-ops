@@ -171,6 +171,27 @@ func sanitizeDetail(value string, limit int) string {
 	return builder.String()
 }
 
+// retryLoopAlertClaims is where a request that keeps failing retryably turns
+// loud: the investment.materialize job runs max_attempts=3 times per River job
+// (contracts/jobs/v1/registry.json), so 9 claims = the third strand-repair
+// re-arm. A transient outage that clears within a few re-arms stays quiet.
+const retryLoopAlertClaims = 9
+
+// retryableClass names why a retryable failure was retryable, as a code label
+// that is safe to log (the error text is not).
+func retryableClass(err error) string {
+	switch {
+	case errors.Is(err, context.Canceled):
+		return "context_canceled"
+	case errors.Is(err, context.DeadlineExceeded):
+		return "deadline_exceeded"
+	case errors.Is(err, ErrUnavailable):
+		return "dependency_unavailable"
+	default:
+		return "unclassified"
+	}
+}
+
 func releaseFailed(store Store, ctx context.Context, claim Claim, detail string) error {
 	releaseCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer cancel()
@@ -397,6 +418,22 @@ func (h *materializeHandler) work(ctx context.Context, requestID string, organiz
 				h.logger.Warn("workgraph handler: could not release the lease after a retryable failure; the retry waits for lease expiry",
 					slog.String("request_id", requestID), slog.String("kind", string(KindMaterialize)),
 					slog.String("organization_id", *organizationID), slog.Any("error", requeueErr),
+				)
+			}
+			// Nothing bounds the loop "River attempts spent -> job discarded ->
+			// strand repair re-arms the pending request -> new job" for a
+			// request that fails every time with an unclassified error: the
+			// work-graph strand shape has no attempt predicate
+			// (joboutbox/strand_repair.go repairStrandedWorkGraphSQL). No
+			// terminal state is invented for it (D4911); instead the loop is
+			// made loud once the request has been claimed this many times,
+			// every claim after that. Class label only, never error text.
+			if claim.Request.AttemptCount >= retryLoopAlertClaims {
+				h.logger.Error("workgraph handler: request keeps failing with a retryable class; the retry loop is not bounded",
+					slog.String("request_id", requestID), slog.String("kind", string(KindMaterialize)),
+					slog.String("organization_id", *organizationID),
+					slog.Int("claim_count", claim.Request.AttemptCount),
+					slog.String("failure_class", retryableClass(err)),
 				)
 			}
 			h.logger.Warn("workgraph handler: retryable failure, request left claimable",

@@ -475,3 +475,43 @@ func TestClassificationSentinelsAreDistinctAndWrapErrUnavailable(t *testing.T) {
 		}
 	}
 }
+
+// CHAOS-8782: the retry loop has no bound, so it must be LOUD. At the stated
+// claim count the handler logs an ERROR with the claim count and a class label
+// and never the error text; below it, nothing at ERROR.
+func TestRetryLoopAlertFiresAtTheStatedClaimCountWithClassOnly(t *testing.T) {
+	for _, testCase := range []struct {
+		claims    int
+		wantAlert bool
+	}{{retryLoopAlertClaims - 1, false}, {retryLoopAlertClaims, true}, {retryLoopAlertClaims + 3, true}} {
+		claim := testMaterializeClaim(time.Second)
+		claim.Request.AttemptCount = testCase.claims
+		store := &fakeStore{claim: claim}
+		var logs strings.Builder
+		handler, err := NewMaterializeHandler(store, classifyingExecutor{err: errors.New("clickhouse said: secret detail")},
+			slog.New(slog.NewTextHandler(&logs, nil)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if workErr := handler.Work(context.Background(), materializeExecution()); workErr == nil ||
+			!strings.Contains(workErr.Error(), string(jobruntime.CategoryRetryable)) {
+			t.Fatalf("Work = %v, want retryable", workErr)
+		}
+		alerted := strings.Contains(logs.String(), "level=ERROR")
+		if alerted != testCase.wantAlert {
+			t.Fatalf("claims=%d alerted=%v want %v:\n%s", testCase.claims, alerted, testCase.wantAlert, logs.String())
+		}
+		if testCase.wantAlert {
+			var alertLine string
+			for _, line := range strings.Split(logs.String(), "\n") {
+				if strings.Contains(line, "retry loop is not bounded") {
+					alertLine = line
+				}
+			}
+			if !strings.Contains(alertLine, "claim_count=") || !strings.Contains(alertLine, "failure_class=unclassified") ||
+				strings.Contains(alertLine, "secret detail") {
+				t.Fatalf("alert line must carry claim_count and a class label and no error text: %q", alertLine)
+			}
+		}
+	}
+}

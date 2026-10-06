@@ -51,6 +51,11 @@ func TestMaterializeErrorClassesLeaveTheRightState(t *testing.T) {
 				if err != nil || claim == nil {
 					t.Fatalf("re-claim = %v, %v", claim, err)
 				}
+				// The claim counter survives the requeue: it is the clock the
+				// retry-loop alert reads.
+				if claim.Request.AttemptCount != 2 {
+					t.Fatalf("claim count after one requeue = %d, want 2", claim.Request.AttemptCount)
+				}
 			}
 		})
 	}

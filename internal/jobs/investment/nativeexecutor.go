@@ -143,12 +143,13 @@ func (executor *NativeExecutor) Execute(ctx context.Context, claim workgraph.Cla
 	if claim.Request.Kind != workgraph.KindMaterialize {
 		// A handler wired to the wrong executor is a construction bug. Fail
 		// rather than materialize under a request that meant something else.
-		return nil, fmt.Errorf("native investment executor received kind %q", claim.Request.Kind)
+		return nil, workgraph.Deterministic(workgraph.ClassKindMismatch,
+			fmt.Errorf("native investment executor received kind %q", claim.Request.Kind))
 	}
 
 	scope, err := decodeMaterializeScope(claim.Request.Scope)
 	if err != nil {
-		return nil, err
+		return nil, workgraph.Deterministic(workgraph.ClassScopeInvalid, err)
 	}
 
 	// Batch mode is NOT ported (see materialize.go's header). Python's default
@@ -159,8 +160,8 @@ func (executor *NativeExecutor) Execute(ctx context.Context, claim workgraph.Cla
 	// INVESTMENT_LLM_BATCH_MODE entirely rather than reading a new env var:
 	// an operator who sets it gets a refusal, not a silent divergence.
 	if scope.LLMBatchMode != nil && *scope.LLMBatchMode != "" && *scope.LLMBatchMode != "sync" {
-		return nil, fmt.Errorf(
-			"native investment executor supports llm_batch_mode=sync only, got %q", *scope.LLMBatchMode)
+		return nil, workgraph.Deterministic(workgraph.ClassLLMBatchUnsupport, fmt.Errorf(
+			"native investment executor supports llm_batch_mode=sync only, got %q", *scope.LLMBatchMode))
 	}
 
 	requestedProvider := "auto"
@@ -169,7 +170,8 @@ func (executor *NativeExecutor) Execute(ctx context.Context, claim workgraph.Cla
 	}
 	provider, kind, err := executor.newProvider(requestedProvider, claim.Request.ModelRef)
 	if err != nil {
-		return nil, fmt.Errorf("resolve llm provider: %w", err)
+		return nil, workgraph.Deterministic(workgraph.ClassLLMProviderInvalid,
+			fmt.Errorf("resolve llm provider: %w", err))
 	}
 	defer func() { _ = provider.Close() }()
 
@@ -181,23 +183,23 @@ func (executor *NativeExecutor) Execute(ctx context.Context, claim workgraph.Cla
 	// real categorizations with it. Refusing is the reference's behaviour and
 	// the only safe one.
 	if kind == categorize.ProviderKindNone {
-		return nil, errors.New(
-			"llm provider 'none' cannot materialize investment categorizations; " +
-				"configure a real provider or request 'mock' for tests")
+		return nil, workgraph.Deterministic(workgraph.ClassLLMProviderInvalid, errors.New(
+			"llm provider 'none' cannot materialize investment categorizations; "+
+				"configure a real provider or request 'mock' for tests"))
 	}
 	// materialize.py:1179-1188: an unscoped run against a REAL provider writes
 	// empty-org rows, which is almost always a mistake and is expensive. mock
 	// is exempt because it costs nothing and is how tests run unscoped.
 	if orgID == "" && kind != categorize.ProviderKindMock && !allowUnscoped {
-		return nil, errors.New(
-			"investment materialize requires a non-empty org for real LLM providers; " +
-				"set allow_unscoped to write empty-org rows intentionally")
+		return nil, workgraph.Deterministic(workgraph.ClassOrgRequired, errors.New(
+			"investment materialize requires a non-empty org for real LLM providers; "+
+				"set allow_unscoped to write empty-org rows intentionally"))
 	}
 
 	now := executor.now()
 	fromTS, toTS, err := materializeWindow(scope, now)
 	if err != nil {
-		return nil, err
+		return nil, workgraph.Deterministic(workgraph.ClassWindowInvalid, err)
 	}
 	// NO ORDERING REJECTION -- deliberately (codex r3 P1).
 	//
@@ -313,7 +315,8 @@ func (executor *NativeExecutor) buildEvidence(claim workgraph.Claim, stats Stats
 	}
 	encoded, err := json.Marshal(evidence)
 	if err != nil {
-		return nil, fmt.Errorf("encode execution evidence: %w", err)
+		return nil, workgraph.Deterministic(workgraph.ClassEvidenceEncode,
+			fmt.Errorf("encode execution evidence: %w", err))
 	}
 	return encoded, nil
 }

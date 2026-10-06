@@ -6,10 +6,15 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/ClickHouse/clickhouse-go/v2"
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
@@ -169,6 +174,83 @@ func sanitizeDetail(value string, limit int) string {
 		builder.WriteRune(symbol)
 	}
 	return builder.String()
+}
+
+// retryBudgetClaims is the retry budget of one request, counted in claims
+// (work_graph_execution_requests.attempt_count, +1 per Claim). Every claim
+// counts, cancelled ones too. The investment.materialize job runs max_attempts=3
+// times per River job (contracts/jobs/v1/registry.json), so 9 claims = three
+// River cycles = two strand-repair re-arms before the third cycle spends the
+// budget: a transient outage that clears within a few cycles never reaches it.
+const retryBudgetClaims = 9
+
+// FailureClassRetryBudgetExhausted is the failure_class of a request that ended
+// 'failed' because its retry budget was spent, not because of one deterministic
+// cause. The last retryable class travels beside it as a second label.
+const FailureClassRetryBudgetExhausted = "retry_budget_exhausted"
+
+// retryableClass names why a retryable failure was retryable, as a code label
+// that is safe to log (the error text is not).
+func retryableClass(err error) string {
+	switch {
+	case errors.Is(err, context.Canceled):
+		return "context_canceled"
+	case errors.Is(err, context.DeadlineExceeded):
+		return "deadline_exceeded"
+	case errors.Is(err, ErrUnavailable):
+		return "dependency_unavailable"
+	default:
+		return "unclassified"
+	}
+}
+
+var sqlStateShape = regexp.MustCompile(`^[0-9A-Z]{5}$`)
+
+// withErrorAttrs appends the loggable description of err to base: error_class,
+// the Go type of the root cause, and (when the error carries one) a ClickHouse
+// exception code or a SQLSTATE. NEVER the error text: that can hold a row value,
+// a connection string or provider output.
+func withErrorAttrs(base []any, err error) []any {
+	return append(base, errorLogAttrs(err)...)
+}
+
+func errorLogAttrs(err error) []any {
+	if err == nil {
+		return nil
+	}
+	root := err
+	for {
+		next := errors.Unwrap(root)
+		if next == nil {
+			break
+		}
+		root = next
+	}
+	attrs := []any{
+		slog.String("error_class", retryableClass(err)),
+		slog.String("error_type", fmt.Sprintf("%T", root)),
+	}
+	var exception *clickhouse.Exception
+	if errors.As(err, &exception) && exception != nil {
+		attrs = append(attrs, slog.String("ch_code", strconv.FormatInt(int64(exception.Code), 10)))
+	}
+	var pgError *pgconn.PgError
+	if errors.As(err, &pgError) && pgError != nil && sqlStateShape.MatchString(pgError.Code) {
+		attrs = append(attrs, slog.String("sqlstate", pgError.Code))
+	}
+	return attrs
+}
+
+func releaseFailed(store Store, ctx context.Context, claim Claim, detail string) error {
+	releaseCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	return store.Fail(releaseCtx, claim, detail)
+}
+
+func requeueClaim(store Store, ctx context.Context, claim Claim) error {
+	releaseCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	return store.Requeue(releaseCtx, claim)
 }
 
 func releaseAmbiguous(store Store, ctx context.Context, claim Claim, detail string) error {
@@ -351,31 +433,74 @@ func (h *materializeHandler) work(ctx context.Context, requestID string, organiz
 			return h.executor.Execute(workCtx, claim)
 		},
 		func(ctx context.Context, claim Claim, err error) error {
-			// A failure the executor could positively place as "never sent" or
-			// "the bridge declined" carries no possibility of a half-applied
-			// side effect, so there is nothing ambiguous to record. Releasing
-			// ambiguous here is what wedged CHAOS-4970's chain: 'ambiguous' is a
-			// state Claim refuses and joboutbox's strand-repair sweep excludes
-			// by construction, and no Go caller exists for the Python /repair
-			// endpoint that is the only way out of it -- so a transient DNS
-			// blip or a 401 became a permanently dead request. Leaving the lease
-			// alone instead keeps the ordinary reclaim path reachable: the next
-			// attempt parks on LeaseActiveError until the lease expires, then
-			// Claim's expired-lease branch reclaims it, all inside River's own
-			// attempt budget.
-			if errors.Is(err, ErrCompatibilityNotSent) || errors.Is(err, ErrCompatibilityRefused) {
-				return jobruntime.Retryable(err)
+			// Terminal ONLY for a deterministic cause (CHAOS-8782). A cancelled
+			// context (worker drain), a deadline, a network or database blip,
+			// a lease-renew error and any unclassified error are NOT proof the
+			// work cannot succeed: Execute is safe to re-run (every write is a
+			// ReplacingMergeTree row keyed by work unit; skip-existing spares
+			// units already categorised), so those are retried. 'ambiguous'
+			// used to be the default here and stranded the request for good
+			// (Claim refuses it, strand repair excludes it, no Go caller
+			// repairs it).
+			var deterministic *DeterministicError
+			if errors.As(err, &deterministic) {
+				// The class is a code label. The error text can carry provider
+				// output, so it is NOT logged here.
+				h.logger.Error("workgraph handler: permanent failure, deterministic cause",
+					slog.String("request_id", requestID), slog.String("kind", string(KindMaterialize)),
+					slog.String("organization_id", *organizationID), slog.String("failure_class", deterministic.Class),
+				)
+				if failErr := releaseFailed(h.store, ctx, claim, "deterministic failure: "+deterministic.Class); failErr != nil {
+					h.logger.Error("workgraph handler: could not record the failed state; the lease will expire and the request be reclaimed",
+						withErrorAttrs([]any{slog.String("request_id", requestID),
+							slog.String("failure_class", deterministic.Class)}, failErr)...)
+				}
+				return jobruntime.Permanent(err)
 			}
-			// Loud, not just recorded on the ambiguous ledger row: this is the
-			// permanent-cancel path, and the underlying error is exactly what
-			// an operator needs to see without having to correlate a ledger
-			// detail string back to a cause.
-			h.logger.Error("workgraph handler: permanent cancel after ambiguous compatibility outcome",
-				slog.String("request_id", requestID), slog.String("kind", string(KindMaterialize)),
-				slog.String("organization_id", *organizationID), slog.Any("error", err),
-			)
-			_ = releaseAmbiguous(h.store, ctx, claim, compatibilityAmbiguousDetail(err))
-			return jobruntime.Permanent(err)
+			// A single transient or cancelled outcome is never terminal, but
+			// a spent, stated budget is (CHAOS-8782, D4926). Nothing else
+			// bounds "River attempts spent -> job discarded -> strand repair
+			// re-arms the pending request -> new job" for a request that fails
+			// every time with an unclassified error: the work-graph strand
+			// shape has no attempt predicate (joboutbox/strand_repair.go
+			// repairStrandedWorkGraphSQL), and every cycle pays ClickHouse
+			// reads and model calls. The terminal state is 'failed', never
+			// 'ambiguous'; the hourly schedule is the outer retry. Class labels
+			// only, never error text.
+			if claim.Request.AttemptCount >= retryBudgetClaims {
+				h.logger.Error("workgraph handler: permanent failure, retry budget exhausted",
+					slog.String("request_id", requestID), slog.String("kind", string(KindMaterialize)),
+					slog.String("organization_id", *organizationID),
+					slog.Int("claim_count", claim.Request.AttemptCount),
+					slog.String("failure_class", FailureClassRetryBudgetExhausted),
+					slog.String("last_retryable_class", retryableClass(err)),
+				)
+				detail := "retry budget exhausted: " + retryableClass(err)
+				if failErr := releaseFailed(h.store, ctx, claim, detail); failErr != nil {
+					h.logger.Error("workgraph handler: could not record the failed state; the lease will expire and the request be reclaimed",
+						withErrorAttrs([]any{slog.String("request_id", requestID),
+							slog.String("failure_class", FailureClassRetryBudgetExhausted)}, failErr)...)
+				}
+				return jobruntime.Permanent(err)
+			}
+			// Release the lease with a DETACHED context (the job context is
+			// usually the thing that was cancelled) so another pod can claim
+			// the request within seconds. The lease is 10 minutes; without
+			// this write the retry would park on it. If the write fails, the
+			// lease expiry is the fallback, loudly.
+			if requeueErr := requeueClaim(h.store, ctx, claim); requeueErr != nil {
+				h.logger.Warn("workgraph handler: could not release the lease after a retryable failure; the retry waits for lease expiry",
+					withErrorAttrs([]any{slog.String("request_id", requestID), slog.String("kind", string(KindMaterialize)),
+						slog.String("organization_id", *organizationID)}, requeueErr)...)
+			}
+			// No raw error text on this path (CHAOS-8784 class rule): it can hold
+			// a row value or a connection string. The class label, the Go type of
+			// the root cause and a driver code are enough to act on.
+			h.logger.Warn("workgraph handler: retryable failure, request left claimable",
+				withErrorAttrs([]any{slog.String("request_id", requestID), slog.String("kind", string(KindMaterialize)),
+					slog.String("organization_id", *organizationID), slog.String("failure_class", retryableClass(err)),
+					slog.Bool("context_cancelled", ctx.Err() != nil)}, err)...)
+			return jobruntime.Retryable(err)
 		},
 	)
 }

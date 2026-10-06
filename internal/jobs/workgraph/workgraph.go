@@ -34,6 +34,43 @@ type LeaseActiveError struct {
 func (err *LeaseActiveError) Error() string { return ErrLeaseActive.Error() }
 func (err *LeaseActiveError) Unwrap() error { return ErrLeaseActive }
 
+// Failure classes of a DETERMINISTIC executor failure: one that will recur on
+// every retry with the same request and configuration. They are code labels,
+// safe to log and to store on the ledger; the wrapped error text is NOT (it can
+// carry provider output) and is never logged by the handler.
+const (
+	ClassLLMDeterministic   = "llm_deterministic"
+	ClassScopeInvalid       = "scope_invalid"
+	ClassWindowInvalid      = "window_invalid"
+	ClassLLMBatchUnsupport  = "llm_batch_mode_unsupported"
+	ClassLLMProviderInvalid = "llm_provider_invalid"
+	ClassOrgRequired        = "org_required"
+	ClassEvidenceEncode     = "evidence_encode"
+	ClassKindMismatch       = "executor_kind_mismatch"
+)
+
+// DeterministicError marks an executor failure as deterministic. It is the
+// ONLY signal that ends a request terminally (state 'failed'): every other
+// executor error is treated as retryable, because a terminal state needs a
+// deterministic cause (CHAOS-8782, lead ruling D4911).
+type DeterministicError struct {
+	Class string
+	Err   error
+}
+
+func (err *DeterministicError) Error() string {
+	return "work graph execution failed deterministically (" + err.Class + "): " + err.Err.Error()
+}
+func (err *DeterministicError) Unwrap() error { return err.Err }
+
+// Deterministic wraps err as a deterministic failure of the given class.
+func Deterministic(class string, err error) error {
+	if err == nil {
+		return nil
+	}
+	return &DeterministicError{Class: class, Err: err}
+}
+
 type Kind string
 
 const (
@@ -64,6 +101,10 @@ type Request struct {
 	CorrelationID             string
 	IdempotencyKey            string
 	PrerequisiteCompletionKey string
+	// AttemptCount is the request row's own claim counter, as of the Claim that
+	// produced this value (it includes that claim). It survives requeues and
+	// strand-repair re-arms, so it is the only clock that spans River jobs.
+	AttemptCount int
 	// Coalesce asks the writer to supersede this producer's own PENDING
 	// requests that name the same work -- same organization, same kind, same
 	// scope -- instead of queueing alongside them.
@@ -91,6 +132,11 @@ type Store interface {
 	Complete(context.Context, Claim, []byte) error
 	Fail(context.Context, Claim, string) error
 	Ambiguous(context.Context, Claim, string) error
+	// Requeue stands a claimed request back to 'pending' so the next attempt
+	// can claim it at once instead of waiting out the lease. It is fenced like
+	// every other transition (claim token + live lease) and is only for an
+	// outcome that is safe to re-run.
+	Requeue(context.Context, Claim) error
 }
 
 // NativeExecutor is intentionally narrow. It receives the loaded

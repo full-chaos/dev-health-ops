@@ -31,6 +31,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/jobs/investment/categorize"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/investment/chquery"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/investment/chwrite"
+	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph/units"
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 )
@@ -562,7 +563,8 @@ func (m *Materializer) Run(ctx context.Context, cfg Config) (Stats, error) {
 
 		auditJSON, err := marshalCategorizationAudit(outcome)
 		if err != nil {
-			return Stats{}, fmt.Errorf("encode categorization audit for %s: %w", record.WorkUnitID, err)
+			return Stats{}, workgraph.Deterministic(workgraph.ClassEvidenceEncode,
+				fmt.Errorf("encode categorization audit for %s: %w", record.WorkUnitID, err))
 		}
 		record.CategorizationErrorsJSON = auditJSON
 
@@ -601,11 +603,22 @@ func (m *Materializer) Run(ctx context.Context, cfg Config) (Stats, error) {
 			"run_id", cfg.RunID, "error", err.Error())
 	}
 
-	// WRITE. Same three tables, same order, same "skip the call when empty"
-	// shape as materialize.py:1826-1831.
-	if len(investments) > 0 {
-		if _, err := m.writer.WriteInvestments(ctx, cfg.OrgID, investments); err != nil {
-			return Stats{}, fmt.Errorf("write work_unit_investments: %w", err)
+	// WRITE. Same three tables, same "skip the call when empty" shape as
+	// materialize.py:1826-1831, in a DELIBERATELY different order: quotes, then
+	// repo effort, then the investment rows LAST (CHAOS-8782).
+	//
+	// Skip-existing (FetchExistingInvestmentKeys) keys on the work_unit_investments
+	// row alone. If that row landed first and the run then died, the re-run
+	// skipped the unit and its quotes were never written. With the investment
+	// row last, a unit is invisible to skip-existing until its quotes and effort
+	// rows exist, so a crashed run is simply redone: every table is a
+	// ReplacingMergeTree and the keys are stable, so the re-run overwrites. No
+	// reader sees these tables without an investment row (all join FROM
+	// work_unit_investments; quotes are read by the row's own run id), so the
+	// extra rows of a crashed run stay invisible until the investment row lands.
+	if len(quotes) > 0 {
+		if _, err := m.writer.WriteQuotes(ctx, cfg.OrgID, quotes); err != nil {
+			return Stats{}, fmt.Errorf("write work_unit_investment_quotes: %w", err)
 		}
 	}
 	if len(repoEfforts) > 0 {
@@ -613,9 +626,9 @@ func (m *Materializer) Run(ctx context.Context, cfg Config) (Stats, error) {
 			return Stats{}, fmt.Errorf("write work_unit_repo_effort: %w", err)
 		}
 	}
-	if len(quotes) > 0 {
-		if _, err := m.writer.WriteQuotes(ctx, cfg.OrgID, quotes); err != nil {
-			return Stats{}, fmt.Errorf("write work_unit_investment_quotes: %w", err)
+	if len(investments) > 0 {
+		if _, err := m.writer.WriteInvestments(ctx, cfg.OrgID, investments); err != nil {
+			return Stats{}, fmt.Errorf("write work_unit_investments: %w", err)
 		}
 	}
 
@@ -744,8 +757,9 @@ func (m *Materializer) categorizePending(
 	wg.Wait()
 
 	if fatalErr != nil {
-		return fmt.Errorf("investment categorization stopped on deterministic LLM failure (%s): %w",
-			categorize.FormatFailureSummary(len(outcomes), stats.LLMFailureCounts), fatalErr)
+		return workgraph.Deterministic(workgraph.ClassLLMDeterministic,
+			fmt.Errorf("investment categorization stopped on deterministic LLM failure (%s): %w",
+				categorize.FormatFailureSummary(len(outcomes), stats.LLMFailureCounts), fatalErr))
 	}
 	return nil
 }

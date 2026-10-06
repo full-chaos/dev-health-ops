@@ -438,6 +438,35 @@ func (doer gitHubProjectV2CountingDoer) Do(request *http.Request) (*http.Respons
 	return doer.delegate.Do(request)
 }
 
+const (
+	// gitHubProjectV2ItemsMaxPages is the runaway guard for the board's own
+	// `items` list. It is a TOP-LEVEL list (a board can hold tens of thousands
+	// of items), so it takes the foundation paginator's top-level maximum
+	// (providerfoundation maximumProviderPages, 10,000 pages), not the nested
+	// 100-page bound below.
+	gitHubProjectV2ItemsMaxPages = 10_000
+	// gitHubProjectV2NestedMaxPages bounds ONE item's nested list (changes,
+	// fieldValues): the first page embedded in the items query counts, so 99
+	// continuation pages follow it (CHAOS-8777).
+	gitHubProjectV2NestedMaxPages = nativeMaxPages
+)
+
+// gitHubProjectV2BoundExceeded reports a Projects v2 list that still had a next
+// page after its bound. It names the project, the item (an opaque node id) and
+// the field, logs at ERROR, and wraps ErrPaginationCapExceeded so the unit fails
+// closed and the worker records it as terminal. No payload text.
+func gitHubProjectV2BoundExceeded(target GitHubProjectV2Target, itemID, field string, pages int) error {
+	slog.Error("providersync.github.projects_v2.list_bound_exceeded",
+		"org_login", target.OrgLogin, "project_number", target.ProjectNumber,
+		"item", itemID, "field", field, "pages", pages)
+	owner := fmt.Sprintf("project %s#%d", target.OrgLogin, target.ProjectNumber)
+	if itemID != "" {
+		owner += " item " + itemID
+	}
+	return fmt.Errorf("%w: github projects v2 %s of %s still had a next page after %d pages",
+		ErrPaginationCapExceeded, field, owner, pages)
+}
+
 func fetchGitHubProjectV2Target(
 	ctx context.Context,
 	client *providerfoundation.HTTPClient,
@@ -447,7 +476,10 @@ func fetchGitHubProjectV2Target(
 	items := []gitHubProjectV2ItemPayload{}
 	outerCursor := ""
 	seenOuter := map[string]struct{}{}
-	for {
+	for outerPages := 0; ; outerPages++ {
+		if outerPages >= gitHubProjectV2ItemsMaxPages {
+			return gitHubProjectV2TargetFetchResult{}, gitHubProjectV2BoundExceeded(target, "", "items", outerPages)
+		}
 		variables := map[string]any{
 			"login": target.OrgLogin, "number": target.ProjectNumber,
 			"first": 50, "after": nil,
@@ -507,7 +539,11 @@ func fetchGitHubProjectV2Target(
 					return gitHubProjectV2TargetFetchResult{}, providerfoundation.ErrPaginationInvalid
 				}
 				seenChanges := map[string]struct{}{}
-				for {
+				// The first page is embedded in the items query and counts.
+				for changePages := 1; ; changePages++ {
+					if changePages >= gitHubProjectV2NestedMaxPages {
+						return gitHubProjectV2TargetFetchResult{}, gitHubProjectV2BoundExceeded(target, item.ID, "changes", changePages)
+					}
 					if _, repeated := seenChanges[cursor]; repeated {
 						return gitHubProjectV2TargetFetchResult{}, providerfoundation.ErrPaginationInvalid
 					}
@@ -549,6 +585,9 @@ func fetchGitHubProjectV2Target(
 					cursor = next
 				}
 			}
+			if err := completeGitHubProjectV2FieldValues(ctx, client, target, &item, evidence); err != nil {
+				return gitHubProjectV2TargetFetchResult{}, err
+			}
 			items = append(items, item)
 		}
 		if !paginationComplete {
@@ -572,6 +611,57 @@ func fetchGitHubProjectV2Target(
 		}
 		seenOuter[next] = struct{}{}
 		outerCursor = next
+	}
+}
+
+// completeGitHubProjectV2FieldValues pages one item's fieldValues to the end.
+// A page without pageInfo is the shape of a provider that reports nothing more
+// to read and is kept as it always was; only an explicit hasNextPage pages on.
+func completeGitHubProjectV2FieldValues(
+	ctx context.Context,
+	client *providerfoundation.HTTPClient,
+	target GitHubProjectV2Target,
+	item *gitHubProjectV2ItemPayload,
+	evidence *FetchEvidence,
+) error {
+	info := item.FieldValues.PageInfo
+	if info == nil || info.HasNextPage == nil || !*info.HasNextPage {
+		return nil
+	}
+	cursor := strings.TrimSpace(info.EndCursor)
+	if cursor == "" || strings.TrimSpace(item.ID) == "" {
+		return providerfoundation.ErrPaginationInvalid
+	}
+	seen := map[string]struct{}{}
+	for pages := 1; ; pages++ {
+		if pages >= gitHubProjectV2NestedMaxPages {
+			return gitHubProjectV2BoundExceeded(target, item.ID, "fieldValues", pages)
+		}
+		if _, repeated := seen[cursor]; repeated {
+			return providerfoundation.ErrPaginationInvalid
+		}
+		seen[cursor] = struct{}{}
+		var continuation gitHubProjectV2FieldValuesEnvelope
+		if err := fetchGitHubProjectV2GraphQL(ctx, client, gitHubProjectsV2FieldValuesQuery,
+			map[string]any{"itemId": item.ID, "after": cursor}, &continuation, evidence); err != nil {
+			return err
+		}
+		if continuation.Data.Node == nil {
+			return providerfoundation.ErrPaginationInvalid
+		}
+		more := continuation.Data.Node.FieldValues
+		if more.PageInfo == nil || more.PageInfo.HasNextPage == nil || more.Nodes == nil {
+			return providerfoundation.ErrPaginationInvalid
+		}
+		item.FieldValues.Nodes = append(item.FieldValues.Nodes, more.Nodes...)
+		if !*more.PageInfo.HasNextPage {
+			return nil
+		}
+		next := strings.TrimSpace(more.PageInfo.EndCursor)
+		if next == "" || next == cursor {
+			return providerfoundation.ErrPaginationInvalid
+		}
+		cursor = next
 	}
 }
 
@@ -643,6 +733,19 @@ type gitHubProjectV2ChangesEnvelope struct {
 }
 
 func (envelope *gitHubProjectV2ChangesEnvelope) graphQLErrors() []json.RawMessage {
+	return envelope.Errors
+}
+
+type gitHubProjectV2FieldValuesEnvelope struct {
+	Data struct {
+		Node *struct {
+			FieldValues gitHubProjectV2Connection[gitHubProjectV2FieldValuePayload] `json:"fieldValues"`
+		} `json:"node"`
+	} `json:"data"`
+	Errors []json.RawMessage `json:"errors"`
+}
+
+func (envelope *gitHubProjectV2FieldValuesEnvelope) graphQLErrors() []json.RawMessage {
 	return envelope.Errors
 }
 
@@ -1013,11 +1116,17 @@ func mergeGitHubProjectV2Rows(repository, projects githubWorkItemRows) githubWor
 	return merged
 }
 
-// These literals keep Python's leaf truncations for assignees (10) and
-// fieldValues (20). Labels are asked at GitHub's page maximum (100) and a board
-// item that still has more is counted and logged (CHAOS-8770): a named limit,
-// never silent. The outer items and nested changes connections are fully
-// paginated by the fetcher.
+// assignees (10) keeps Python's leaf truncation. Labels are asked at GitHub's
+// page maximum (100) and a board item that still has more is counted and logged
+// (CHAOS-8777): a named limit, never silent. The outer items, the nested
+// changes and the nested fieldValues connections are fully paginated by the
+// fetcher, nested ones under the 100-page bound.
+const gitHubProjectV2FieldValueNodeFields = `__typename
+            ... on ProjectV2ItemFieldSingleSelectValue { name field { ... on ProjectV2SingleSelectField { name } } }
+            ... on ProjectV2ItemFieldTextValue { text field { ... on ProjectV2FieldCommon { name } } }
+            ... on ProjectV2ItemFieldIterationValue { title id field { ... on ProjectV2FieldCommon { name } } }
+            ... on ProjectV2ItemFieldNumberValue { number field { ... on ProjectV2FieldCommon { name } } }`
+
 const gitHubProjectsV2ItemsQuery = `
 query($login: String!, $number: Int!, $after: String, $first: Int!) {
   organization(login: $login) {
@@ -1031,14 +1140,24 @@ query($login: String!, $number: Int!, $after: String, $first: Int!) {
             ... on PullRequest { id number title url state createdAt updatedAt closedAt mergedAt repository { nameWithOwner } labels(first: 100) { nodes { name } pageInfo { hasNextPage } } assignees(first: 10) { nodes { login email name } } author { login email name } }
             ... on DraftIssue { id title createdAt updatedAt }
           }
-          fieldValues(first: 20) { nodes {
-            __typename
-            ... on ProjectV2ItemFieldSingleSelectValue { name field { ... on ProjectV2SingleSelectField { name } } }
-            ... on ProjectV2ItemFieldTextValue { text field { ... on ProjectV2FieldCommon { name } } }
-            ... on ProjectV2ItemFieldIterationValue { title id field { ... on ProjectV2FieldCommon { name } } }
-            ... on ProjectV2ItemFieldNumberValue { number field { ... on ProjectV2FieldCommon { name } } }
-          } }
+          fieldValues(first: 100) { nodes {
+            ` + gitHubProjectV2FieldValueNodeFields + `
+          } pageInfo { hasNextPage endCursor } }
           changes(first: 100, orderBy: {field: CREATED_AT, direction: ASC}) { nodes { field { ... on ProjectV2FieldCommon { name } } previousValue { ... on ProjectV2ItemFieldSingleSelectValue { name } } newValue { ... on ProjectV2ItemFieldSingleSelectValue { name } } createdAt actor { login } } pageInfo { hasNextPage endCursor } }
+        }
+        pageInfo { hasNextPage endCursor }
+      }
+    }
+  }
+}`
+
+const gitHubProjectsV2FieldValuesQuery = `
+query($itemId: ID!, $after: String) {
+  node(id: $itemId) {
+    ... on ProjectV2Item {
+      fieldValues(first: 100, after: $after) {
+        nodes {
+          ` + gitHubProjectV2FieldValueNodeFields + `
         }
         pageInfo { hasNextPage endCursor }
       }

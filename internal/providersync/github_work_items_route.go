@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"sort"
 	"strconv"
 	"time"
@@ -104,6 +105,22 @@ var githubWorkItemsBlockingIncompleteCauses = map[string]bool{
 	"pagination_cap":     true,
 	"item_page_bound":    true,
 	"invalid_pagination": true,
+}
+
+// GitHubWorkItemsBlockingIncompleteCause is the error a blocked batch carries.
+// It is ErrGitHubWorkItemsIncomplete, and when any entry is a page-bound
+// refusal (pagination_cap, item_page_bound) it ALSO wraps
+// ErrPaginationCapExceeded: that refusal is deterministic given the provider's
+// state, so the worker's terminal classifier (providerunit
+// deterministicTerminalCategory) must record it once as pagination_incomplete
+// instead of re-running the whole fetch to the attempt limit (CHAOS-8777).
+func GitHubWorkItemsBlockingIncompleteCause(incomplete []GitHubWorkItemsIncomplete) error {
+	for _, partial := range incomplete {
+		if partial.Cause == "pagination_cap" || partial.Cause == "item_page_bound" {
+			return fmt.Errorf("%w: %w", ErrGitHubWorkItemsIncomplete, ErrPaginationCapExceeded)
+		}
+	}
+	return ErrGitHubWorkItemsIncomplete
 }
 
 // githubWorkItemsIncompleteIsOptional decides one entry. Cause is checked
@@ -434,7 +451,7 @@ func (handler GitHubWorkItemsRouteHandler) Collect(
 	for _, partial := range incomplete {
 		if !githubWorkItemsIncompleteIsOptional(partial) {
 			return CompleteRouteBatch{}, usage.wrapRoute(
-				ErrGitHubWorkItemsIncomplete, evidence, incomplete,
+				GitHubWorkItemsBlockingIncompleteCause(incomplete), evidence, incomplete,
 			)
 		}
 	}

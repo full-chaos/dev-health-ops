@@ -27,7 +27,7 @@ const (
 	// above any real item, low enough to stop a list that never ends. The
 	// production wiring (internal/workerservice/provider_sync.go, the GitLab
 	// work-items case) sets no NestedMaxPages, so this is the bound production
-	// runs with; a configured value may only lower it.
+	// runs with; a configured value is clamped to it (limits()).
 	gitLabWorkItemsNestedHardMaxPages = 100
 )
 
@@ -146,14 +146,16 @@ func (handler GitLabWorkItemsRouteHandler) limits() (int, int, int, error) {
 		maxPages = gitLabWorkItemsDefaultMaxPages
 	}
 	if nestedMaxPages == 0 {
-		nestedMaxPages = min(maxPages, gitLabWorkItemsNestedHardMaxPages)
+		nestedMaxPages = maxPages
 	}
 	if perPage < 1 || perPage > gitLabWorkItemsMaximumPerPage || maxPages < 1 ||
 		maxPages > gitLabWorkItemsDefaultMaxPages || nestedMaxPages < 1 ||
 		nestedMaxPages > gitLabWorkItemsDefaultMaxPages {
 		return 0, 0, 0, ErrInvalidConfiguration
 	}
-	return perPage, maxPages, nestedMaxPages, nil
+	// The nested ceiling is a hard one: a configured value (or the top-level
+	// MaxPages it defaults to) may only lower it.
+	return perPage, maxPages, min(nestedMaxPages, gitLabWorkItemsNestedHardMaxPages), nil
 }
 
 type gitLabWorkItemsCountingDoer struct {
@@ -560,21 +562,40 @@ func collectGitLabNestedPayloads(
 	query url.Values,
 	perPage, maxPages int,
 ) ([]json.RawMessage, int, error) {
-	items, pages, err := collectGitLabPayloads(ctx, client, path, query, perPage, maxPages)
-	if !errors.Is(err, ErrPaginationCapExceeded) {
-		return items, pages, err
+	// maxPages+1 requests are allowed on purpose: a list of exactly maxPages
+	// FULL pages cannot be told from a longer one without reading the next
+	// page (with or without an X-Next-Page header the paginator infers one
+	// more page from a full last page). That extra page may only be EMPTY; any
+	// row on it is a row past the bound and fails closed.
+	var items []json.RawMessage
+	collected, err := providerfoundation.VisitGitLabPageParamPages(ctx, client,
+		providerfoundation.GitLabPageOptions{Path: path, Query: query, PerPage: perPage, MaxPages: maxPages + 1},
+		func(visit providerfoundation.PageVisit) error {
+			if visit.Pages > maxPages && len(visit.Items) > 0 {
+				return errGitLabNestedPastBound
+			}
+			items = append(items, visit.Items...)
+			return nil
+		})
+	if err != nil && !errors.Is(err, errGitLabNestedPastBound) {
+		return nil, 0, err
+	}
+	if err == nil && !collected.PageBudgetExhausted {
+		return items, min(collected.Pages, maxPages), nil
 	}
 	owner, field := path, path
 	if cut := strings.LastIndex(path, "/"); cut >= 0 {
 		owner, field = path[:cut], path[cut+1:]
 	}
 	slog.Error("providersync.gitlab.nested_list_bound_exceeded",
-		"owner", owner, "field", field, "pages", pages, "max_pages", maxPages)
-	return nil, pages, fmt.Errorf(
+		"owner", owner, "field", field, "pages", maxPages, "max_pages", maxPages)
+	return nil, maxPages, fmt.Errorf(
 		"%w: gitlab %s of %s still had a next page after %d pages (max %d pages)",
-		ErrPaginationCapExceeded, field, owner, pages, maxPages,
+		ErrPaginationCapExceeded, field, owner, maxPages, maxPages,
 	)
 }
+
+var errGitLabNestedPastBound = errors.New("gitlab nested list has rows past the page bound")
 
 func collectGitLabMilestones(
 	ctx context.Context, client *providerfoundation.HTTPClient, path string,

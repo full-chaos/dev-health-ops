@@ -51,6 +51,14 @@ func collectGitLabLargeNestedLists(t *testing.T, notes, labelEvents, stateEvents
 // StatusMapping and IncludeMRs are filled in here.
 func collectGitLabLargeNestedListsWith(t *testing.T, notes, labelEvents, stateEvents int, handler GitLabWorkItemsRouteHandler) (CompleteRouteBatch, error) {
 	t.Helper()
+	return collectGitLabLargeNestedListsForm(t, notes, labelEvents, stateEvents, handler, false)
+}
+
+// collectGitLabLargeNestedListsForm is the same with the paginator's two wire
+// forms: nextHeader=false is the headerless fallback, true is GitLab's own
+// X-Next-Page header (empty on the last page).
+func collectGitLabLargeNestedListsForm(t *testing.T, notes, labelEvents, stateEvents int, handler GitLabWorkItemsRouteHandler, nextHeader bool) (CompleteRouteBatch, error) {
+	t.Helper()
 	root := "/api/v4/projects/123"
 	responses := gitLabWorkItemResponses()
 	delete(responses, root+"/merge_requests?page=1")
@@ -77,7 +85,7 @@ func collectGitLabLargeNestedListsWith(t *testing.T, notes, labelEvents, stateEv
 	return handler.Collect(
 		context.Background(), claim,
 		providerfoundation.Credential{Provider: "gitlab", ID: claim.CredentialID},
-		gitLabWorkItemsClient(t, fakehttp.Client(&gitLabWorkItemsDoer{responses: responses})), time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC),
+		gitLabWorkItemsClient(t, fakehttp.Client(&gitLabWorkItemsDoer{responses: responses, nextHeader: nextHeader})), time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC),
 	)
 }
 
@@ -114,22 +122,62 @@ func TestGitLabWorkItemsRouteNestedBoundNamesOwnerAndField(t *testing.T) {
 
 // Production builds the handler with NO limits set
 // (internal/workerservice/provider_sync.go: StatusMapping and Derived only), so
-// the bound that runs there is the default one. Literal numbers: a list of 100
-// pages passes (9,999 rows: the last page is short, so no 101st empty page is
-// read), 101 pages fail closed naming the owner and the field.
+// the bound that runs there is the default one. Literal numbers, in BOTH wire
+// forms (headerless fallback, and GitLab's own empty X-Next-Page on the last
+// page): exactly 100 FULL pages pass, 101 fail closed naming the owner and field.
 func TestGitLabWorkItemsRouteDefaultNestedBoundIsExactlyOneHundredPages(t *testing.T) {
-	production := GitLabWorkItemsRouteHandler{}
-	batch, err := collectGitLabLargeNestedListsWith(t, 9_999, 0, 0, production)
-	if err != nil || gitLabEffectRowCount(batch, "work_item_interactions") != 9_999 {
-		t.Fatalf("100 pages: interactions=%d err=%v", gitLabEffectRowCount(batch, "work_item_interactions"), err)
+	for _, form := range []struct {
+		name   string
+		header bool
+	}{{"headerless", false}, {"x-next-page header", true}} {
+		t.Run(form.name, func(t *testing.T) {
+			production := GitLabWorkItemsRouteHandler{}
+			batch, err := collectGitLabLargeNestedListsForm(t, 10_000, 0, 0, production, form.header)
+			if err != nil || gitLabEffectRowCount(batch, "work_item_interactions") != 10_000 {
+				t.Fatalf("100 full pages: interactions=%d err=%v", gitLabEffectRowCount(batch, "work_item_interactions"), err)
+			}
+			_, err = collectGitLabLargeNestedListsForm(t, 10_100, 0, 0, production, form.header)
+			if !errors.Is(err, ErrPaginationCapExceeded) {
+				t.Fatalf("101 full pages: err=%v want ErrPaginationCapExceeded", err)
+			}
+			for _, want := range []string{"notes of /api/v4/projects/123/issues/42", "after 100 pages", "max 100 pages"} {
+				if !strings.Contains(err.Error(), want) {
+					t.Fatalf("error %q lacks %q", err, want)
+				}
+			}
+			// 101 pages whose last one is short is also past the bound.
+			if _, err = collectGitLabLargeNestedListsForm(t, 10_001, 0, 0, production, form.header); !errors.Is(err, ErrPaginationCapExceeded) {
+				t.Fatalf("101 pages (short last): err=%v", err)
+			}
+		})
 	}
-	_, err = collectGitLabLargeNestedListsWith(t, 10_001, 0, 0, production)
+}
+
+// A configured NestedMaxPages may only LOWER the ceiling (CHAOS-8777 r1 P2): 101
+// is clamped to 100, so a list of 101 pages still fails closed.
+func TestGitLabWorkItemsRouteConfiguredNestedBoundIsClampedToTheCeiling(t *testing.T) {
+	_, err := collectGitLabLargeNestedListsWith(t, 10_100, 0, 0, GitLabWorkItemsRouteHandler{PerPage: 100, MaxPages: 10, NestedMaxPages: 101})
 	if !errors.Is(err, ErrPaginationCapExceeded) {
-		t.Fatalf("101 pages: err=%v want ErrPaginationCapExceeded", err)
+		t.Fatalf("NestedMaxPages 101 collected past the ceiling: err=%v", err)
 	}
-	for _, want := range []string{"notes of /api/v4/projects/123/issues/42", "after 100 pages", "max 100 pages"} {
-		if !strings.Contains(err.Error(), want) {
-			t.Fatalf("error %q lacks %q", err, want)
-		}
+	// A lower configured value still lowers it: 50 full pages pass, 51 fail.
+	lower := GitLabWorkItemsRouteHandler{PerPage: 100, MaxPages: 10, NestedMaxPages: 50}
+	if _, err = collectGitLabLargeNestedListsWith(t, 5_000, 0, 0, lower); err != nil {
+		t.Fatalf("50 full pages: %v", err)
+	}
+	if _, err = collectGitLabLargeNestedListsWith(t, 5_100, 0, 0, lower); !errors.Is(err, ErrPaginationCapExceeded) {
+		t.Fatalf("51 full pages: err=%v", err)
+	}
+}
+
+// With no NestedMaxPages the nested bound follows the top-level MaxPages when
+// that is lower (here 50), and never exceeds the ceiling.
+func TestGitLabWorkItemsRouteNestedBoundFollowsALowerTopLevelMaxPages(t *testing.T) {
+	handler := GitLabWorkItemsRouteHandler{PerPage: 100, MaxPages: 50}
+	if _, err := collectGitLabLargeNestedListsWith(t, 4_999, 0, 0, handler); err != nil {
+		t.Fatalf("50 pages: %v", err)
+	}
+	if _, err := collectGitLabLargeNestedListsWith(t, 5_001, 0, 0, handler); !errors.Is(err, ErrPaginationCapExceeded) {
+		t.Fatalf("51 pages: err=%v", err)
 	}
 }

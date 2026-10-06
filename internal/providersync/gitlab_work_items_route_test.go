@@ -7,6 +7,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -18,6 +19,9 @@ import (
 type gitLabWorkItemsDoer struct {
 	responses map[string][]string
 	requests  []*http.Request
+	// nextHeader makes the fake answer like GitLab does: X-Next-Page names the
+	// next page when that page holds rows, and is EMPTY on the last page.
+	nextHeader bool
 }
 
 func (doer *gitLabWorkItemsDoer) Do(request *http.Request) (*http.Response, error) {
@@ -37,8 +41,17 @@ func (doer *gitLabWorkItemsDoer) Do(request *http.Request) (*http.Response, erro
 	}
 	body := values[0]
 	doer.responses[key] = values[1:]
+	header := make(http.Header)
+	if doer.nextHeader {
+		header.Set("X-Next-Page", "")
+		if page, err := strconv.Atoi(request.URL.Query().Get("page")); err == nil {
+			if next := doer.responses[path+"?page="+strconv.Itoa(page+1)]; len(next) > 0 && next[0] != "[]" {
+				header.Set("X-Next-Page", strconv.Itoa(page+1))
+			}
+		}
+	}
 	return &http.Response{
-		StatusCode: http.StatusOK, Status: "200 OK", Header: make(http.Header),
+		StatusCode: http.StatusOK, Status: "200 OK", Header: header,
 		Body: io.NopCloser(strings.NewReader(body)), Request: request,
 	}, nil
 }

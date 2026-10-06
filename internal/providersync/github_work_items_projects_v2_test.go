@@ -431,7 +431,7 @@ func TestGitHubProjectV2FetcherCompletesOuterAndNestedPagination(t *testing.T) {
 	if got := strings.Count(outerQuery, "labels(first: 100) { nodes { name } pageInfo { hasNextPage } }"); got != 2 {
 		t.Errorf("labels(first: 100) occurrences=%d want 2 (Issue and PullRequest)", got)
 	}
-	for _, leaf := range []string{"items(first: $first", "labels(first: 100) { nodes { name } pageInfo { hasNextPage } }", "assignees(first: 10)", "fieldValues(first: 20)", "changes(first: 100"} {
+	for _, leaf := range []string{"items(first: $first", "labels(first: 100) { nodes { name } pageInfo { hasNextPage } }", "assignees(first: 10)", "fieldValues(first: 100)", "changes(first: 100"} {
 		if !strings.Contains(outerQuery, leaf) {
 			t.Errorf("query missing documented leaf bound %q", leaf)
 		}

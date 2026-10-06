@@ -670,6 +670,11 @@ func TestGitHubWorkItemsRouteFailsClosedOnBlockingSocialCauses(t *testing.T) {
 		fetcher   GitHubWorkItemPRSocialFetcher
 		reply     string
 		wantCause string
+		// wantCap: the page-bound refusal is deterministic, so the error must
+		// ALSO satisfy ErrPaginationCapExceeded (the worker's terminal
+		// classifier keys on it, CHAOS-8777 r1 P1-3). invalid_pagination is a
+		// defect of ours, not a bound, and must not.
+		wantCap bool
 	}{
 		{
 			name:      "invalid_pagination",
@@ -681,6 +686,7 @@ func TestGitHubWorkItemsRouteFailsClosedOnBlockingSocialCauses(t *testing.T) {
 			fetcher:   GitHubWorkItemPRSocialFetcher{MaxRequests: 1},
 			reply:     `{"data":{"repository":{"pr0":{"number":52,"comments":{"nodes":[],"pageInfo":{"hasNextPage":true,"endCursor":"c1"}},"timelineItems":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}`,
 			wantCause: "pagination_cap",
+			wantCap:   true,
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -710,6 +716,10 @@ func TestGitHubWorkItemsRouteFailsClosedOnBlockingSocialCauses(t *testing.T) {
 			)
 			if !errors.Is(err, ErrGitHubWorkItemsIncomplete) {
 				t.Fatalf("%s landed a batch instead of failing the unit: %v", test.wantCause, err)
+			}
+			if errors.Is(err, ErrPaginationCapExceeded) != test.wantCap {
+				t.Fatalf("%s: errors.Is(ErrPaginationCapExceeded)=%v want %v", test.wantCause,
+					errors.Is(err, ErrPaginationCapExceeded), test.wantCap)
 			}
 			if !reflect.DeepEqual(batch, CompleteRouteBatch{}) || deriver.calls != 0 {
 				t.Fatalf("blocking cause returned batch=%+v or derived %d times", batch, deriver.calls)

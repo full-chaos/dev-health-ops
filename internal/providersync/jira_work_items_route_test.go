@@ -42,7 +42,7 @@ func (doer *jiraWorkItemsDoer) Do(request *http.Request) (*http.Response, error)
 		body = `{"issues":[{"key":"OPS-101","self":"https://acme.atlassian.net/rest/api/3/issue/OPS-101","fields":{"project":{"key":"OPS","id":"10001","name":"Operations"},"summary":"Repair the delivery path","description":"Customer-visible repair","status":{"name":"Done","statusCategory":{"key":"done"}},"issuetype":{"name":"Bug"},"labels":["bug"],"priority":{"name":"Highest"},"created":"2026-07-20T08:00:00Z","updated":"2026-07-21T09:30:00Z","resolutiondate":"2026-07-21T09:00:00Z","customfield_10020":[{"id":"9001","name":"July support"}],"issuelinks":[{"type":{"outward":"blocks","inward":"is blocked by"},"outwardIssue":{"key":"OPS-102"}}]},"changelog":{"histories":[{"created":"2026-07-20T09:00:00Z","author":{"accountId":"jira-account-1"},"items":[{"field":"status","fromString":"To Do","toString":"Done"}]},{"created":"2026-07-21T10:00:00Z","author":{"accountId":"jira-account-1"},"items":[{"field":"status","fromString":"Done","toString":"To Do"}]}]}}],"isLast":true}`
 	case strings.HasPrefix(request.URL.Path, "/rest/api/3/issue/OPS-101/comment"):
 		doer.comments++
-		body = `{"comments":[{"created":"2026-07-21T11:00:00Z","author":{"accountId":"jira-commenter"},"body":"verified"}],"isLast":true}`
+		body = `{"comments":[{"id":"10001","created":"2026-07-21T11:00:00Z","author":{"accountId":"jira-commenter"},"body":"verified"}],"isLast":true}`
 	case request.URL.Path == "/rest/agile/1.0/sprint/9001":
 		body = `{"id":9001,"name":"July support","state":"closed","startDate":"2026-07-01T00:00:00Z","endDate":"2026-07-15T00:00:00Z","completeDate":"2026-07-16T00:00:00Z"}`
 	default:

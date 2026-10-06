@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"slices"
@@ -32,8 +33,41 @@ func (doer gitHubBlameCountingDoer) Do(request *http.Request) (*http.Response, e
 
 const gitHubBlameMaxFiles = 500
 
+// Per-run ceilings that keep one blame unit inside the limits of a unit: the
+// write contract (maxEffectRows / maxEffectPayloadBytes per destination) and
+// the 15-minute job deadline. A file list that needs more than one run keeps
+// going through remaining_paths on the next run.
+const (
+	gitHubBlameSoftBudget     = 12 * time.Minute
+	gitHubBlameDeadlineMargin = 2 * time.Minute
+)
+
+type gitHubBlameLimits struct {
+	maxRows         int
+	maxPayloadBytes int
+	softBudget      time.Duration
+	deadlineMargin  time.Duration
+	now             func() time.Time
+	// rowsBuilt counts rows expanded from ranges; tests assert that a refused
+	// file expands none.
+	rowsBuilt *int
+}
+
+func defaultGitHubBlameLimits() gitHubBlameLimits {
+	return gitHubBlameLimits{
+		// 10% headroom: row sizes are estimated from the first line of each range.
+		maxRows: maxEffectRows, maxPayloadBytes: maxEffectPayloadBytes / 10 * 9,
+		softBudget: gitHubBlameSoftBudget, deadlineMargin: gitHubBlameDeadlineMargin,
+		now: time.Now,
+	}
+}
+
 var (
-	ErrGitHubBlameTraversalFailed     = errors.New("github blame traversal failed")
+	ErrGitHubBlameTraversalFailed = errors.New("github blame traversal failed")
+	// ErrGitHubBlameFileListTooLarge marks a repository whose file list cannot
+	// be enumerated even by the directory walk: one directory listing is above
+	// the response cap or is itself reported truncated by GitHub.
+	ErrGitHubBlameFileListTooLarge    = errors.New("github blame file list too large")
 	ErrGitHubBlameIncomplete          = errors.New("github blame inventory incomplete")
 	ErrGitHubBlameProgressUnavailable = errors.New("github blame incremental progress unavailable")
 )
@@ -137,6 +171,15 @@ type GitHubBlameRouteHandler struct {
 	// MaxFiles is test-configurable below the production ceiling. Zero uses
 	// gitHubBlameMaxFiles; values above that ceiling fail closed.
 	MaxFiles int
+	// limits is test-configurable; nil uses defaultGitHubBlameLimits.
+	limits *gitHubBlameLimits
+}
+
+func (handler GitHubBlameRouteHandler) resolvedLimits() gitHubBlameLimits {
+	if handler.limits != nil {
+		return *handler.limits
+	}
+	return defaultGitHubBlameLimits()
 }
 
 func (handler GitHubBlameRouteHandler) Collect(
@@ -161,6 +204,7 @@ func (handler GitHubBlameRouteHandler) Collect(
 	}
 	return collectGitHubBlame(
 		ctx, claim, client, normalizedAt, handler.Coverage, maxFiles, false, "",
+		handler.resolvedLimits(),
 	)
 }
 
@@ -185,7 +229,7 @@ func (handler GitHubBlameRouteHandler) CollectRecovery(
 	}
 	return collectGitHubBlame(
 		ctx, claim, client, normalizedAt, handler.Coverage, maxFiles, false,
-		state.Generation,
+		state.Generation, handler.resolvedLimits(),
 	)
 }
 
@@ -224,6 +268,7 @@ func collectGitHubBlameFoundation(
 ) (CompleteRouteBatch, error) {
 	return collectGitHubBlame(
 		ctx, claim, client, normalizedAt, nil, gitHubBlameMaxFiles, true, "",
+		defaultGitHubBlameLimits(),
 	)
 }
 
@@ -236,10 +281,12 @@ func collectGitHubBlame(
 	maxFiles int,
 	requireCompleteInventory bool,
 	recoveryGeneration string,
+	limits gitHubBlameLimits,
 ) (CompleteRouteBatch, error) {
 	if err := validateGitHubBlameCollectInputs(ctx, claim, client, normalizedAt); err != nil {
 		return CompleteRouteBatch{}, err
 	}
+	startedAt := limits.now()
 	normalizedAt = normalizedAt.UTC().Truncate(time.Millisecond)
 	owner, repository, err := splitGitHubRepository(claim.SourceExternalID)
 	if err != nil {
@@ -269,15 +316,9 @@ func collectGitHubBlame(
 	if treeRef == "" {
 		return gitHubBlameBatch(claim, repoPayload.FullName, nil, nil, requests, 0, 0, 0)
 	}
-	var tree gitHubTreePayload
-	if err := fetchObject(ctx, client, root+"/git/trees/"+url.PathEscape(treeRef)+"?recursive=true", &tree); err != nil {
-		return CompleteRouteBatch{}, fmt.Errorf("%w: %w", ErrGitHubBlameTraversalFailed, err)
-	}
-	paths := make([]string, 0, len(tree.Tree))
-	for _, entry := range tree.Tree {
-		if entry.Type == "blob" && entry.Path != "" {
-			paths = append(paths, entry.Path)
-		}
+	paths, err := gitHubBlameInventory(ctx, client, root, treeRef, &requests)
+	if err != nil {
+		return CompleteRouteBatch{}, err
 	}
 	if requireCompleteInventory && len(paths) > maxFiles {
 		return CompleteRouteBatch{}, fmt.Errorf(
@@ -307,7 +348,8 @@ func collectGitHubBlame(
 	rows := make([]gitBlameRow, 0)
 	progressRows := make([]gitHubBlamePathProgressRow, 0, len(paths))
 	retryableFailures := 0
-	for _, filePath := range paths {
+	var usedBytes int64
+	for index, filePath := range paths {
 		if outcome := progress.InFlightOutcomes[filePath]; recoveryGeneration != "" &&
 			(outcome == gitHubBlameOutcomeEmpty || outcome == gitHubBlameOutcomeRetryableError) {
 			progressRows = append(progressRows, newGitHubBlamePathProgressRow(
@@ -317,6 +359,13 @@ func collectGitHubBlame(
 				retryableFailures++
 			}
 			continue
+		}
+		if recoveryGeneration == "" && index > 0 {
+			if class := gitHubBlameBudgetStop(ctx, limits, startedAt); class != "" {
+				remainingPaths += len(paths) - index
+				logGitHubBlameBudgetStop(class, index, len(paths)-index, len(rows), requests)
+				break
+			}
 		}
 		ranges, err := fetchGitHubBlame(ctx, client, owner, repository, treeRef, filePath)
 		if err != nil {
@@ -331,6 +380,80 @@ func collectGitHubBlame(
 			remainingPaths++
 			continue
 		}
+		// Size the file from the range bounds BEFORE materialising a row per
+		// line: a file above the bound must be refused without allocating it.
+		var fileLines, fileBytes int64
+		overBound := false
+		for _, blameRange := range ranges {
+			if blameRange.StartingLine == 0 || blameRange.EndingLine < blameRange.StartingLine {
+				return CompleteRouteBatch{}, providerfoundation.ErrNormalizationInvalid
+			}
+			first := newGitHubBlameRow(claim, repoID, filePath, blameRange.StartingLine, blameRange, normalizedAt)
+			if err := first.validate(claim); err != nil {
+				return CompleteRouteBatch{}, err
+			}
+			encoded, marshalErr := json.Marshal(first)
+			if marshalErr != nil {
+				return CompleteRouteBatch{}, providerfoundation.ErrNormalizationInvalid
+			}
+			// int64 arithmetic: a range is at most 2^32 lines and a marshalled row
+			// at most a few KiB, so neither product nor the running sum can
+			// overflow, on any platform word size.
+			lines := int64(blameRange.EndingLine) - int64(blameRange.StartingLine) + 1
+			fileLines += lines
+			fileBytes += lines * int64(len(encoded))
+			if recoveryGeneration == "" {
+				if int64(len(rows))+fileLines > int64(limits.maxRows) || usedBytes+fileBytes > int64(limits.maxPayloadBytes) {
+					overBound = true
+					break
+				}
+			} else if int64(len(rows))+fileLines > maxEffectRows || usedBytes+fileBytes > maxEffectPayloadBytes {
+				// A replayed file the write contract would refuse anyway: fail
+				// with the write step's own class before any row is allocated.
+				return CompleteRouteBatch{}, ErrEffectRecoveryUnsafe
+			}
+		}
+		// Second guard, independent of the per-range checks above: no file
+		// above the row bound ever reaches the allocation below, whatever
+		// the loop above did. Same outcome as the checks it backs up.
+		if fileLines > maxEffectRows {
+			if recoveryGeneration != "" {
+				return CompleteRouteBatch{}, ErrEffectRecoveryUnsafe
+			}
+			overBound = true
+		}
+		if overBound {
+			if len(rows) == 0 {
+				// One file alone exceeds the write contract: it stays retryable
+				// and rotates behind other paths instead of blocking the unit.
+				progressRows = append(progressRows, newGitHubBlamePathProgressRow(
+					claim, repoID, treeRef, filePath, gitHubBlameOutcomeRetryableError,
+					normalizedAt,
+				))
+				retryableFailures++
+				remainingPaths++
+				continue
+			}
+			remainingPaths += len(paths) - index
+			logGitHubBlameBudgetStop("rows", index, len(paths)-index, len(rows), requests)
+			break
+		}
+		fileRows := make([]gitBlameRow, 0, int(fileLines))
+		for _, blameRange := range ranges {
+			for lineNo := blameRange.StartingLine; lineNo <= blameRange.EndingLine; lineNo++ {
+				row := newGitHubBlameRow(claim, repoID, filePath, lineNo, blameRange, normalizedAt)
+				if limits.rowsBuilt != nil {
+					*limits.rowsBuilt++
+				}
+				if err := row.validate(claim); err != nil {
+					return CompleteRouteBatch{}, err
+				}
+				fileRows = append(fileRows, row)
+				if lineNo == ^uint32(0) {
+					break
+				}
+			}
+		}
 		outcome := gitHubBlameOutcomeEmpty
 		if len(ranges) > 0 {
 			outcome = gitHubBlameOutcomeRows
@@ -338,25 +461,96 @@ func collectGitHubBlame(
 		progressRows = append(progressRows, newGitHubBlamePathProgressRow(
 			claim, repoID, treeRef, filePath, outcome, normalizedAt,
 		))
-		for _, blameRange := range ranges {
-			if blameRange.StartingLine == 0 || blameRange.EndingLine < blameRange.StartingLine {
-				return CompleteRouteBatch{}, providerfoundation.ErrNormalizationInvalid
-			}
-			for lineNo := blameRange.StartingLine; lineNo <= blameRange.EndingLine; lineNo++ {
-				row := newGitHubBlameRow(claim, repoID, filePath, lineNo, blameRange, normalizedAt)
-				if err := row.validate(claim); err != nil {
-					return CompleteRouteBatch{}, err
-				}
-				rows = append(rows, row)
-				if lineNo == ^uint32(0) {
-					break
-				}
-			}
-		}
+		rows = append(rows, fileRows...)
+		usedBytes += fileBytes
 	}
 	return gitHubBlameBatch(
 		claim, repoPayload.FullName, rows, progressRows, requests, 1,
 		remainingPaths, retryableFailures,
+	)
+}
+
+// gitHubBlameInventory returns every blob path of treeRef. It reads the
+// recursive listing first; when that response is above the shared object cap or
+// GitHub marks it truncated, it walks the tree one directory per request with
+// the same walker the files route uses (gitHubWalkTree), so a repository too
+// large for one response still gets a complete file list. Cost of the walk: one
+// request per directory (the recursive request is already spent). A directory
+// that is itself above the cap or truncated ends the unit with
+// ErrGitHubBlameFileListTooLarge instead of a partial list.
+func gitHubBlameInventory(
+	ctx context.Context,
+	client *providerfoundation.HTTPClient,
+	root, treeRef string,
+	requests *int,
+) ([]string, error) {
+	var tree gitHubTreePayload
+	treeErr := fetchObject(ctx, client, root+"/git/trees/"+url.PathEscape(treeRef)+"?recursive=true", &tree)
+	var tooLarge *providerfoundation.ObjectTooLargeError
+	class := ""
+	switch {
+	case errors.As(treeErr, &tooLarge):
+		class = "recursive_over_cap"
+	case treeErr != nil:
+		return nil, fmt.Errorf("%w: %w", ErrGitHubBlameTraversalFailed, treeErr)
+	case tree.Truncated:
+		class = "recursive_truncated"
+	}
+	if class == "" {
+		paths := make([]string, 0, len(tree.Tree))
+		for _, entry := range tree.Tree {
+			if entry.Type == "blob" && entry.Path != "" {
+				paths = append(paths, entry.Path)
+			}
+		}
+		return paths, nil
+	}
+	before := *requests
+	paths, _, walkErr := gitHubWalkTree(ctx, client, root, treeRef, "")
+	walkRequests := *requests - before
+	if walkErr != nil {
+		walkClass := ""
+		switch {
+		case errors.As(walkErr, &tooLarge):
+			walkClass = "directory_over_cap"
+		case errors.Is(walkErr, ErrGitHubFilesSubtreeTruncated):
+			walkClass = "directory_truncated"
+		}
+		if walkClass == "" {
+			return nil, fmt.Errorf("%w: %w", ErrGitHubBlameTraversalFailed, walkErr)
+		}
+		slog.Warn(
+			"github blame file list walk failed",
+			"class", walkClass, "fallback_trigger", class, "walk_requests", walkRequests,
+		)
+		return nil, fmt.Errorf("%w: %w: %s: %w", ErrGitHubBlameTraversalFailed, ErrGitHubBlameFileListTooLarge, walkClass, walkErr)
+	}
+	slog.Warn(
+		"github blame file list fell back to directory walk",
+		"class", class, "paths", len(paths), "walk_requests", walkRequests,
+	)
+	return paths, nil
+}
+
+// gitHubBlameBudgetStop reports why no further file may be started in this
+// run: the soft time budget is spent or the job deadline is too close to leave
+// time to write the result. Empty means continue.
+func gitHubBlameBudgetStop(ctx context.Context, limits gitHubBlameLimits, startedAt time.Time) string {
+	now := limits.now()
+	if now.Sub(startedAt) >= limits.softBudget {
+		return "time"
+	}
+	if deadline, ok := ctx.Deadline(); ok && deadline.Sub(now) <= limits.deadlineMargin {
+		return "deadline"
+	}
+	return ""
+}
+
+func logGitHubBlameBudgetStop(class string, done, deferred, rows, requests int) {
+	slog.Warn(
+		"github blame unit stopped early; remaining paths continue next run",
+		"class", class, "paths_done", done, "paths_deferred", deferred,
+		"rows", rows, "requests", requests,
 	)
 }
 

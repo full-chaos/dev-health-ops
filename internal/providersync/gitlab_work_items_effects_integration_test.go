@@ -51,6 +51,7 @@ func TestGitLabWorkItemEffectsComposeAllSixteenAgainstRealClickHouse(t *testing.
 	interaction := gitlabWorkItemInteractionRow{
 		WorkItemID: item.WorkItemID, Provider: "gitlab", InteractionType: "comment", OccurredAt: now,
 		Actor: gitlabStringPtr("alice@example.com"), BodyLength: 9, LastSynced: now, OrgID: claim.OrgID,
+		InteractionID: "501",
 	}
 	sprint := gitlabSprintRow{
 		Provider: "gitlab", SprintID: "gitlab:acme/api:milestone:7", Name: gitlabStringPtr("July"),

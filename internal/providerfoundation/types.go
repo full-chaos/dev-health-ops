@@ -47,6 +47,37 @@ var (
 	ErrRecoveryUnsafe       = errors.New("provider sync effect recovery is outside the bounded contract")
 )
 
+// EffectBoundError reports a result above one of the bounded write contract's
+// limits. It wraps ErrRecoveryUnsafe so every existing errors.Is match keeps
+// working, and the unit handler uses errors.As to tell this deterministic
+// size refusal apart from the other recovery-unsafe sites. Every field is a
+// fixed label or a count: Limit and Table are never provider text.
+type EffectBoundError struct {
+	// Limit names the bound: "rows", "payload_bytes", "snapshot_bytes",
+	// "derivation_context" or "derivation_targets".
+	Limit string
+	// Table is the destination the bound was hit on, from the fixed manifest
+	// list. Empty when the bound is not per destination.
+	Table string
+	// Rows and Bytes are the counts that crossed the bound; zero when the
+	// limit is not about that unit.
+	Rows  int
+	Bytes int
+	// Also is another sentinel this error must keep matching.
+	Also error
+}
+
+func (e *EffectBoundError) Error() string {
+	return ErrRecoveryUnsafe.Error() + ": result exceeds " + e.Limit + " bound"
+}
+
+func (e *EffectBoundError) Unwrap() []error {
+	if e.Also != nil {
+		return []error{ErrRecoveryUnsafe, e.Also}
+	}
+	return []error{ErrRecoveryUnsafe}
+}
+
 // ObjectTooLargeError reports that fetchObject's shared per-object response
 // cap (nativeMaxObjectBytes) truncated a response before it could be decoded.
 // It wraps ErrNormalizationInvalid so every existing errors.Is(err,

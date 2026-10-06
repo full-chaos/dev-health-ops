@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -21,6 +22,10 @@ const (
 	maxEffectPayloadBytes     = 64 << 20
 	maxEffectLedgerStateBytes = 32 << 10
 )
+
+// EffectBoundExceededError is the typed refusal of a result above the bounded
+// write contract (see providerfoundation.EffectBoundError).
+type EffectBoundExceededError = providerfoundation.EffectBoundError
 
 type EffectRecoveryPolicy string
 type EffectInspection string
@@ -62,7 +67,10 @@ func BuildEffectBatch(
 	rows []json.RawMessage,
 ) (EffectBatch, error) {
 	destination = strings.TrimSpace(destination)
-	if destination == "" || len(rows) > maxEffectRows || !validEffectRecovery(recovery) {
+	if len(rows) > maxEffectRows {
+		return EffectBatch{}, &EffectBoundExceededError{Limit: "rows", Table: destination, Rows: len(rows)}
+	}
+	if destination == "" || !validEffectRecovery(recovery) {
 		return EffectBatch{}, ErrEffectRecoveryUnsafe
 	}
 	canonical := make([]json.RawMessage, 0, len(rows))
@@ -78,7 +86,9 @@ func BuildEffectBatch(
 		}
 		encoded := append(json.RawMessage(nil), compact.Bytes()...)
 		if total > maxEffectPayloadBytes-len(encoded) {
-			return EffectBatch{}, ErrEffectRecoveryUnsafe
+			return EffectBatch{}, &EffectBoundExceededError{
+				Limit: "payload_bytes", Table: destination, Rows: len(rows), Bytes: total + len(encoded),
+			}
 		}
 		total += len(encoded)
 		canonical = append(canonical, encoded)

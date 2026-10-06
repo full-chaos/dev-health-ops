@@ -34,9 +34,20 @@ func TestClickHouseRepositoryDiscovererUsesPythonLatestRowQueryWithTenantFence(t
 	if got, want := strings.Join(repositoryIDStrings(identifiers), ","), first.String()+","+second.String(); got != want {
 		t.Fatalf("identifiers=%s want=%s", got, want)
 	}
-	if len(connection.arguments) != 1 || connection.arguments[0] != organizationID {
-		t.Fatalf("query arguments=%v, want only tenant id", connection.arguments)
+	if len(connection.queries) != 2 {
+		t.Fatalf("queries = %d, want the repos read and one nil-repository work item probe", len(connection.queries))
 	}
+	if len(connection.argumentSets[0]) != 1 || connection.argumentSets[0][0] != organizationID {
+		t.Fatalf("repos query arguments=%v, want only tenant id", connection.argumentSets[0])
+	}
+	if len(connection.argumentSets[1]) != 2 || connection.argumentSets[1][0] != organizationID || connection.argumentSets[1][1] != uuid.Nil {
+		t.Fatalf("work item probe arguments=%v, want tenant id and the nil repository id", connection.argumentSets[1])
+	}
+	if probe := connection.queries[1]; !strings.Contains(probe, "FROM work_items") ||
+		!strings.Contains(probe, "org_id = ?") || !strings.Contains(probe, "repo_id = ?") || !strings.Contains(probe, "LIMIT 1") {
+		t.Fatalf("work item probe is not the tenant-fenced primary-key lookup:\n%s", probe)
+	}
+	connection.query = connection.queries[0]
 	for _, fragment := range []string{
 		"argMax(tuple(repo, settings, provider), last_synced)",
 		"WHERE org_id = ?",
@@ -127,6 +138,11 @@ type recordingRepositoryConnection struct {
 	query     string
 	arguments []any
 	rows      driver.Rows
+	// queries and argumentSets keep EVERY call, in order: the discoverer asks
+	// for the repos table first and for a stored nil-repository work item
+	// second (CHAOS-8821).
+	queries      []string
+	argumentSets [][]any
 }
 
 func (connection *recordingRepositoryConnection) Query(
@@ -136,6 +152,8 @@ func (connection *recordingRepositoryConnection) Query(
 ) (driver.Rows, error) {
 	connection.query = query
 	connection.arguments = arguments
+	connection.queries = append(connection.queries, query)
+	connection.argumentSets = append(connection.argumentSets, arguments)
 	return connection.rows, nil
 }
 

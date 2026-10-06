@@ -1293,7 +1293,7 @@ LIMIT ?`, orgID, GithubWorkItemDerivationContextLimit+1)
 		}
 		result = append(result, fact)
 		if len(result) > GithubWorkItemDerivationContextLimit {
-			return nil, ErrEffectRecoveryUnsafe
+			return nil, &providerfoundation.EffectBoundError{Limit: "derivation_context", Rows: len(result)}
 		}
 	}
 	return result, rows.Err()
@@ -1354,7 +1354,7 @@ LIMIT ?`, orgID, asOf, asOf, GithubWorkItemDerivationContextLimit+1)
 		fact.Priority = int(priority)
 		result = append(result, fact)
 		if len(result) > GithubWorkItemDerivationContextLimit {
-			return nil, ErrEffectRecoveryUnsafe
+			return nil, &providerfoundation.EffectBoundError{Limit: "derivation_context", Rows: len(result)}
 		}
 	}
 	return result, rows.Err()
@@ -1436,7 +1436,7 @@ LIMIT {row_limit:UInt64}`,
 		fact.Priority = int(priority)
 		result = append(result, fact)
 		if len(result) > GithubWorkItemDerivationContextLimit {
-			return nil, ErrEffectRecoveryUnsafe
+			return nil, &providerfoundation.EffectBoundError{Limit: "derivation_context", Rows: len(result)}
 		}
 	}
 	return result, rows.Err()
@@ -1529,7 +1529,7 @@ LIMIT ?`, orgID, GithubWorkItemDerivationContextLimit+1)
 		}
 		identities = append(identities, identity)
 		if len(identities) > GithubWorkItemDerivationContextLimit {
-			return nil, nil, nil, nil, ErrEffectRecoveryUnsafe
+			return nil, nil, nil, nil, &providerfoundation.EffectBoundError{Limit: "derivation_context", Rows: len(identities)}
 		}
 	}
 	if err := identityRows.Err(); err != nil {
@@ -1560,7 +1560,7 @@ LIMIT ?`, orgID, GithubWorkItemDerivationContextLimit+1)
 		adminTeams[team.TeamID] = team
 		teamCount++
 		if teamCount > GithubWorkItemDerivationContextLimit {
-			return nil, nil, nil, nil, ErrEffectRecoveryUnsafe
+			return nil, nil, nil, nil, &providerfoundation.EffectBoundError{Limit: "derivation_context", Rows: teamCount}
 		}
 	}
 	if err := teamRows.Err(); err != nil {
@@ -1705,7 +1705,7 @@ LIMIT ?`, orgID, GithubWorkItemDerivationContextLimit+1)
 					UpdatedAt:   identity.UpdatedAt,
 				})
 				if len(result) > GithubWorkItemDerivationContextLimit {
-					return nil, nil, nil, nil, ErrEffectRecoveryUnsafe
+					return nil, nil, nil, nil, &providerfoundation.EffectBoundError{Limit: "derivation_context", Rows: len(result)}
 				}
 			}
 		}
@@ -1742,7 +1742,7 @@ LIMIT ?`, orgID, GithubWorkItemDerivationContextLimit+1)
 				Facet:    facet,
 			})
 			if len(untyped) > GithubWorkItemDerivationContextLimit {
-				return nil, nil, nil, nil, ErrEffectRecoveryUnsafe
+				return nil, nil, nil, nil, &providerfoundation.EffectBoundError{Limit: "derivation_context", Rows: len(untyped)}
 			}
 		}
 	}
@@ -1778,7 +1778,7 @@ LIMIT ?`, orgID, GithubWorkItemDerivationContextLimit+1)
 					TeamID: teamID, TeamName: teamName, Facet: facet,
 				})
 				if len(providerUntyped) > GithubWorkItemDerivationContextLimit {
-					return nil, nil, nil, nil, ErrEffectRecoveryUnsafe
+					return nil, nil, nil, nil, &providerfoundation.EffectBoundError{Limit: "derivation_context", Rows: len(providerUntyped)}
 				}
 				continue
 			}
@@ -1796,7 +1796,7 @@ LIMIT ?`, orgID, GithubWorkItemDerivationContextLimit+1)
 					IsPrimary: 1, Specificity: 50, Priority: 10,
 				})
 				if len(providerTagged) > GithubWorkItemDerivationContextLimit {
-					return nil, nil, nil, nil, ErrEffectRecoveryUnsafe
+					return nil, nil, nil, nil, &providerfoundation.EffectBoundError{Limit: "derivation_context", Rows: len(providerTagged)}
 				}
 			}
 		}
@@ -1885,7 +1885,7 @@ LIMIT ?`, orgID, asOf, asOf, GithubWorkItemDerivationContextLimit+1)
 		fact.Priority = int(priority)
 		result = append(result, fact)
 		if len(result) > GithubWorkItemDerivationContextLimit {
-			return nil, ErrEffectRecoveryUnsafe
+			return nil, &providerfoundation.EffectBoundError{Limit: "derivation_context", Rows: len(result)}
 		}
 	}
 	return result, rows.Err()
@@ -1914,7 +1914,7 @@ LIMIT ?`, orgID, asOf, asOf, GithubWorkItemDerivationContextLimit+1)
 		fact.Priority = int(priority)
 		result = append(result, fact)
 		if len(result) > GithubWorkItemDerivationContextLimit {
-			return nil, ErrEffectRecoveryUnsafe
+			return nil, &providerfoundation.EffectBoundError{Limit: "derivation_context", Rows: len(result)}
 		}
 	}
 	return result, rows.Err()

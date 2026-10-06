@@ -122,7 +122,7 @@ func (adapter LinearWorkItemInteractionsClickHouseAdapter) WriteLinearWorkItemEf
 		return err
 	}
 	for _, row := range rows {
-		if row.OrgID != identity.OrgID || row.Provider != "linear" || row.InteractionType != "comment" || row.BodyLength < 0 || row.InteractionID == "" {
+		if row.OrgID != identity.OrgID || row.Provider != "linear" || row.InteractionType != "comment" || row.BodyLength < 0 {
 			return ErrInvalidConfiguration
 		}
 	}
@@ -140,7 +140,7 @@ func (adapter LinearWorkItemInteractionsClickHouseAdapter) InspectLinearWorkItem
 		return EffectConflict, err
 	}
 	for _, row := range rows {
-		if row.OrgID != identity.OrgID || row.Provider != "linear" || row.InteractionType != "comment" || row.BodyLength < 0 || row.InteractionID == "" {
+		if row.OrgID != identity.OrgID || row.Provider != "linear" || row.InteractionType != "comment" || row.BodyLength < 0 {
 			return EffectConflict, ErrInvalidConfiguration
 		}
 	}

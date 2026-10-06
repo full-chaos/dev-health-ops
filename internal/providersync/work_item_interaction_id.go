@@ -2,6 +2,7 @@ package providersync
 
 import (
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"strconv"
 	"strings"
@@ -12,6 +13,16 @@ import (
 // id. interaction_id = '' means a row written before the key carried the id
 // (a legacy row) and nothing else: a comment the provider sent WITHOUT an id
 // is skipped and counted, never written with ''.
+
+// errInteractionWithoutID is the refusal of a work_item_interactions row that
+// carries no interaction_id: a row stored by the previous release (a prepared
+// snapshot an old pod wrote and a new pod replays). It is an
+// ErrInvalidConfiguration, and says which row, so the log is not read as a
+// configuration fault.
+var errInteractionWithoutID = fmt.Errorf(
+	"%w: work_item_interactions row without interaction_id (stored by the previous release)",
+	ErrInvalidConfiguration,
+)
 
 var interactionMissingIDCounts = map[string]*atomic.Int64{
 	"github": {}, "gitlab": {}, "jira": {}, "linear": {},

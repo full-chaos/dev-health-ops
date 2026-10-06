@@ -716,7 +716,10 @@ func (adapter GitHubWorkItemInteractionsClickHouseAdapter) WriteGitHubWorkItemEf
 	for _, row := range rows {
 		// body_length is UInt32; a negative length cannot round-trip and must
 		// never reach the driver as a silent wrap.
-		if row.OrgID != identity.OrgID || row.BodyLength < 0 || row.InteractionID == "" {
+		if row.InteractionID == "" {
+			return errInteractionWithoutID
+		}
+		if row.OrgID != identity.OrgID || row.BodyLength < 0 {
 			return ErrInvalidConfiguration
 		}
 	}
@@ -752,7 +755,12 @@ func (adapter GitHubWorkItemInteractionsClickHouseAdapter) InspectGitHubWorkItem
 		return EffectConflict, err
 	}
 	for _, row := range rows {
-		if row.OrgID != identity.OrgID || row.BodyLength < 0 || row.InteractionID == "" {
+		// No interaction_id guard here, on purpose: a row stored by the previous
+		// release has none, and its landed legacy row (interaction_id = '')
+		// must read back as Exact so that a replayed old snapshot whose write
+		// already landed commits. An old-shape row that did NOT land is refused
+		// by WriteEffect, loudly.
+		if row.OrgID != identity.OrgID || row.BodyLength < 0 {
 			return EffectConflict, ErrInvalidConfiguration
 		}
 	}

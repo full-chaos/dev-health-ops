@@ -11,7 +11,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
+	postgresstore "github.com/full-chaos/dev-health-ops/internal/storage/postgres"
 	riverstore "github.com/full-chaos/dev-health-ops/internal/storage/river"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 	"github.com/google/uuid"
@@ -81,19 +83,54 @@ func (probe *softStopProbe) cancelledTime(name string) (time.Time, bool) {
 	return at, ok
 }
 
-func startSoftStopClient(
+// startSoftStopProcess builds the river process THROUGH newRiverWorkerProcess,
+// the builder a production binary uses, so the last link (family.softStop ->
+// riverWorkerClientConfig) is exercised too, and starts it the way the runtime
+// does: with the signal context.
+func startSoftStopProcess(
 	t *testing.T, ctx context.Context, pool *pgxpool.Pool, probe *softStopProbe, softStop time.Duration, queue string,
+) riverWorkerProcess {
+	t.Helper()
+	workers := river.NewWorkers()
+	if err := river.AddWorkerSafely(workers, &softStopWorker{probe: probe}); err != nil {
+		t.Fatal(err)
+	}
+	database := &postgresWorkerDatabase{pools: &postgresstore.RuntimePools{QueueControl: pool}}
+	family := workerFamily{
+		queues:   []jobruntime.QueueBudget{{Queue: queue, MaxWorkers: 2}},
+		softStop: softStop,
+	}
+	component, err := newRiverWorkerProcess(
+		config.Config{WorkerInstanceID: uuid.NewString(), RiverDatabaseSchema: "river", PreclaimReadinessTimeout: 30 * time.Second},
+		database, workers, family, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	process, ok := component.(riverWorkerProcess)
+	if !ok {
+		t.Fatalf("component = %T", component)
+	}
+	if err := process.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	return process
+}
+
+// startSoftStopControl is the defect on main: the shipped client configuration
+// with no soft stop. newRiverWorkerProcess now refuses that, so the control
+// builds the client directly.
+func startSoftStopControl(
+	t *testing.T, ctx context.Context, pool *pgxpool.Pool, probe *softStopProbe, queue string,
 ) *river.Client[pgx.Tx] {
 	t.Helper()
 	workers := river.NewWorkers()
 	if err := river.AddWorkerSafely(workers, &softStopWorker{probe: probe}); err != nil {
 		t.Fatal(err)
 	}
-	// The REAL builder of the shipped client configuration.
 	clientConfig := riverWorkerClientConfig(
 		config.Config{WorkerInstanceID: uuid.NewString(), RiverDatabaseSchema: "river"},
 		map[string]river.QueueConfig{queue: {MaxWorkers: 2}},
-		workers, slog.New(slog.NewTextHandler(io.Discard, nil)), softStop,
+		workers, slog.New(slog.NewTextHandler(io.Discard, nil)), 0,
 	)
 	client, err := river.NewClient(riverpgxv5.New(pool), clientConfig)
 	if err != nil {
@@ -178,7 +215,7 @@ func TestRiverStopSignalIsSoft(t *testing.T) {
 		probe := newSoftStopProbe(0)
 		queue := "q" + strings.ReplaceAll(uuid.NewString(), "-", "")[:12]
 		startCtx, signal := context.WithCancel(ctx)
-		client := startSoftStopClient(t, startCtx, pool, probe, 0, queue)
+		client := startSoftStopControl(t, startCtx, pool, probe, queue)
 		if _, err := client.Insert(ctx, softStopArgs{Name: "control"}, &river.InsertOpts{Queue: queue}); err != nil {
 			t.Fatal(err)
 		}
@@ -207,8 +244,8 @@ func TestRiverStopSignalIsSoft(t *testing.T) {
 		probe := newSoftStopProbe(0)
 		queue := "q" + strings.ReplaceAll(uuid.NewString(), "-", "")[:12]
 		startCtx, signal := context.WithCancel(ctx)
-		client := startSoftStopClient(t, startCtx, pool, probe, time.Minute, queue)
-		if _, err := client.Insert(ctx, softStopArgs{Name: "running"}, &river.InsertOpts{Queue: queue}); err != nil {
+		process := startSoftStopProcess(t, startCtx, pool, probe, time.Minute, queue)
+		if _, err := process.client.Insert(ctx, softStopArgs{Name: "running"}, &river.InsertOpts{Queue: queue}); err != nil {
 			t.Fatal(err)
 		}
 		waitStarted(t, probe, "running")
@@ -216,7 +253,7 @@ func TestRiverStopSignalIsSoft(t *testing.T) {
 		// Inserted AFTER the signal: a pod in minute 119 of its drain must not
 		// pick up a 2 h job.
 		time.Sleep(500 * time.Millisecond)
-		if _, err := client.Insert(ctx, softStopArgs{Name: "late"}, &river.InsertOpts{Queue: queue}); err != nil {
+		if _, err := process.client.Insert(ctx, softStopArgs{Name: "late"}, &river.InsertOpts{Queue: queue}); err != nil {
 			t.Fatal(err)
 		}
 		time.Sleep(3 * time.Second)
@@ -231,7 +268,7 @@ func TestRiverStopSignalIsSoft(t *testing.T) {
 		close(probe.release)
 		stopCtx, stop := context.WithTimeout(context.Background(), 30*time.Second)
 		defer stop()
-		if err := client.Stop(stopCtx); err != nil {
+		if err := process.Shutdown(stopCtx); err != nil {
 			t.Fatalf("Stop = %v after the running job finished", err)
 		}
 		probe.mu.Lock()
@@ -260,19 +297,19 @@ func TestRiverSoftStopSpentCancelsAndStopWaitsForTheRelease(t *testing.T) {
 		stopBudget   time.Duration
 		wantReleased bool
 	}{
-		// What the component gets after PR 2: the whole timeout = soft stop +
-		// the finalization buffer.
-		{"stop waits the whole shutdown timeout", softStop + 10*time.Second, true},
-		// What it got before (the drain budget alone): River cancels the job at
-		// the very moment Stop gives up, so the release write is cut off.
+		// What the component gets: Stop keeps the drain budget and the soft stop
+		// ends workerReleaseBuffer before it.
+		{"stop budget = soft stop + the release buffer", softStop + workerReleaseBuffer, true},
+		// The plant for the buffer (buffer 0): River cancels the job at the very
+		// moment Stop gives up, so the release write is cut off.
 		{"stop budget equal to the soft stop cuts the release off", softStop, false},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			probe := newSoftStopProbe(releaseWork)
 			queue := "q" + strings.ReplaceAll(uuid.NewString(), "-", "")[:12]
 			startCtx, signal := context.WithCancel(ctx)
-			client := startSoftStopClient(t, startCtx, pool, probe, softStop, queue)
-			if _, err := client.Insert(ctx, softStopArgs{Name: "slow"}, &river.InsertOpts{Queue: queue}); err != nil {
+			process := startSoftStopProcess(t, startCtx, pool, probe, softStop, queue)
+			if _, err := process.client.Insert(ctx, softStopArgs{Name: "slow"}, &river.InsertOpts{Queue: queue}); err != nil {
 				t.Fatal(err)
 			}
 			waitStarted(t, probe, "slow")
@@ -280,7 +317,7 @@ func TestRiverSoftStopSpentCancelsAndStopWaitsForTheRelease(t *testing.T) {
 			signal()
 			stopCtx, stop := context.WithTimeout(context.Background(), testCase.stopBudget)
 			defer stop()
-			_ = client.Stop(stopCtx)
+			_ = process.Shutdown(stopCtx)
 			probe.mu.Lock()
 			cancelledAt, wasCancelled := probe.cancelledAt["slow"]
 			_, released := probe.released["slow"]

@@ -8,12 +8,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/riverqueue/river"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/platform/health"
 	"github.com/full-chaos/dev-health-ops/internal/platform/lifecycle"
+	postgresstore "github.com/full-chaos/dev-health-ops/internal/storage/postgres"
 )
 
 // TestComposedRiverProcessGetsTheDrainBudgetAsItsSoftStop (CHAOS-8783): for
@@ -21,9 +23,9 @@ import (
 // values.prod.yaml / go-workers.yaml render them (the chart passes
 // terminationGracePeriodSeconds straight to --shutdown-timeout) -- the family
 // the REAL composition hands to the River process builder carries a soft stop
-// equal to the drain budget (shutdown timeout minus the named finalization
-// buffer), and the component is stopped with the whole shutdown timeout so a
-// job cancelled at the end of the soft stop still has the buffer to release.
+// equal to the drain budget minus workerReleaseBuffer, and the river component
+// is still stopped with the drain budget, so a job cancelled at the end of the
+// soft stop has the release buffer to write its release.
 func TestComposedRiverProcessGetsTheDrainBudgetAsItsSoftStop(t *testing.T) {
 	t.Chdir(filepath.Join("..", ".."))
 	for _, group := range []struct {
@@ -37,12 +39,16 @@ func TestComposedRiverProcessGetsTheDrainBudgetAsItsSoftStop(t *testing.T) {
 		// tooSmall is an explicit shutdown timeout below the drain contract.
 		tooSmall bool
 	}{
-		{name: "heavy", queues: []string{"investment", "metrics", "reports", "workgraph"}, shutdown: 7260 * time.Second, wantSoft: 7200 * time.Second},
+		{name: "heavy", queues: []string{"investment", "metrics", "reports", "workgraph"}, shutdown: 7260 * time.Second, wantSoft: 7170 * time.Second},
 		{name: "heavy-unset", queues: []string{"investment", "metrics", "reports", "workgraph"}, shutdown: config.DefaultShutdownTimeout, wantSoft: 7200 * time.Second, unset: true},
+		{name: "heartbeat-unset", queues: []string{"heartbeat"}, shutdown: config.DefaultShutdownTimeout, wantSoft: 30 * time.Second, unset: true},
+		// longest 30s + 60s finalization = drain 30s: nothing is left once the
+		// 30s release buffer is taken, so the soft stop would be 0 = "off".
+		{name: "heartbeat-too-small", queues: []string{"heartbeat"}, shutdown: 90 * time.Second, tooSmall: true},
 		{name: "heavy-too-small", queues: []string{"investment", "metrics", "reports", "workgraph"}, shutdown: 600 * time.Second, tooSmall: true},
-		{name: "ops", queues: []string{"coverage", "heartbeat", "retention", "webhooks"}, shutdown: 960 * time.Second, wantSoft: 900 * time.Second},
-		{name: "sync", queues: []string{"sync"}, shutdown: 960 * time.Second, wantSoft: 900 * time.Second},
-		{name: "sync-provider", queues: []string{"sync_provider"}, shutdown: 960 * time.Second, wantSoft: 900 * time.Second},
+		{name: "ops", queues: []string{"coverage", "heartbeat", "retention", "webhooks"}, shutdown: 960 * time.Second, wantSoft: 870 * time.Second},
+		{name: "sync", queues: []string{"sync"}, shutdown: 960 * time.Second, wantSoft: 870 * time.Second},
+		{name: "sync-provider", queues: []string{"sync_provider"}, shutdown: 960 * time.Second, wantSoft: 870 * time.Second},
 	} {
 		t.Run(group.name, func(t *testing.T) {
 			// The checked-in contract itself (not the demoted test fixture):
@@ -106,31 +112,54 @@ func TestComposedRiverProcessGetsTheDrainBudgetAsItsSoftStop(t *testing.T) {
 			}
 			wantShutdown := group.shutdown
 			if group.unset {
-				wantShutdown = group.wantSoft + workerFinalizationBuffer
+				wantShutdown = group.wantSoft + workerReleaseBuffer + workerFinalizationBuffer
 			}
 			if seen.softStop != group.wantSoft {
 				t.Fatalf("%s: soft stop = %s, want the drain budget %s", group.name, seen.softStop, group.wantSoft)
 			}
+			// Stop keeps the drain budget (shutdown timeout minus the finalization
+			// buffer); the soft stop ends workerReleaseBuffer BEFORE Stop gives up,
+			// so a job cancelled at its end can still write its release.
 			process, ok := components[len(components)-1].(workerProcessComponent)
-			if !ok || process.ShutdownBudget() != wantShutdown {
-				t.Fatalf("%s: river-workers stop budget = %v, want the whole shutdown timeout %s",
-					group.name, components[len(components)-1], wantShutdown)
+			if !ok || process.ShutdownBudget() != wantShutdown-workerFinalizationBuffer {
+				t.Fatalf("%s: river-workers stop budget = %v, want the drain budget %s",
+					group.name, components[len(components)-1], wantShutdown-workerFinalizationBuffer)
 			}
-			if wantShutdown-seen.softStop != workerFinalizationBuffer {
-				t.Fatalf("%s: slack after the soft stop = %s, want exactly the finalization buffer %s",
-					group.name, wantShutdown-seen.softStop, workerFinalizationBuffer)
+			if process.ShutdownBudget()-seen.softStop != workerReleaseBuffer {
+				t.Fatalf("%s: Stop budget %s minus soft stop %s = %s, want the release buffer %s",
+					group.name, process.ShutdownBudget(), seen.softStop, process.ShutdownBudget()-seen.softStop, workerReleaseBuffer)
 			}
 		})
 	}
 }
 
 // River reads a zero SoftStopTimeout as "off", which is the defect itself, so
-// the process builder refuses to be built without one.
+// the process builder refuses to be built without one. Everything else is valid
+// here (real, non-nil pools), so ONLY the soft-stop clause can refuse: removing
+// it, or turning <= into < , makes a case below build a process.
 func TestRiverWorkerProcessRefusesAMissingSoftStop(t *testing.T) {
-	database := &postgresWorkerDatabase{pools: nil}
-	family := workerFamily{queues: []jobruntime.QueueBudget{{Queue: "heartbeat", MaxWorkers: 1}}}
-	if _, err := newRiverWorkerProcess(config.Config{WorkerInstanceID: "w"}, database, river.NewWorkers(), family, slog.Default()); err == nil {
-		t.Fatal("built a river process with no soft stop")
+	pool, err := pgxpool.New(context.Background(), "postgres://u:p@127.0.0.1:1/none?connect_timeout=1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	database := &postgresWorkerDatabase{pools: &postgresstore.RuntimePools{QueueControl: pool}}
+	build := func(softStop time.Duration) error {
+		family := workerFamily{
+			queues:   []jobruntime.QueueBudget{{Queue: "heartbeat", MaxWorkers: 1}},
+			softStop: softStop,
+		}
+		_, err := newRiverWorkerProcess(config.Config{WorkerInstanceID: "w", RiverDatabaseSchema: "river"},
+			database, river.NewWorkers(), family, slog.Default())
+		return err
+	}
+	if err := build(time.Second); err != nil {
+		t.Fatalf("control: a valid soft stop was refused: %v", err)
+	}
+	for _, softStop := range []time.Duration{0, -time.Second} {
+		if err := build(softStop); err == nil {
+			t.Fatalf("built a river process with soft stop %s", softStop)
+		}
 	}
 }
 

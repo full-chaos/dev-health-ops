@@ -773,7 +773,7 @@ func TestSelectedQueuesComposeMultipleBuilderFamilies(t *testing.T) {
 	processWorkers, ok := components[3].(workerProcessComponent)
 	if !ok || len(processWorkers.components) != 1 ||
 		processWorkers.components[0].Name() != "river-worker" ||
-		processWorkers.ShutdownBudget() != 7_260*time.Second {
+		processWorkers.ShutdownBudget() != 7_200*time.Second {
 		t.Fatalf("worker process = %#v", components[3])
 	}
 }

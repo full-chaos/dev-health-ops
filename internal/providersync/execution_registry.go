@@ -576,7 +576,7 @@ func launchDarklyRouteDestinations() []string {
 }
 
 func githubPRSocialRouteDestinations() []string {
-	return []string{"git_pull_requests", "git_pull_request_reviews"}
+	return []string{"git_pull_requests", "git_pull_request_reviews", "ai_attribution"}
 }
 
 // workItemRouteDestinations is what a provider DESCRIPTOR advertises: the

@@ -10,6 +10,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 )
 
@@ -232,12 +234,24 @@ func (handler GitHubPullRequestRouteHandler) Collect(
 		return CompleteRouteBatch{}, err
 	}
 
+	repoUUID, err := uuid.Parse(repoID)
+	if err != nil || repoUUID == uuid.Nil {
+		return CompleteRouteBatch{}, providerfoundation.ErrNormalizationInvalid
+	}
 	rows := make([]pullRequestRow, 0, len(listed))
+	attributions := make([]githubAIAttributionRow, 0)
 	for _, number := range listed {
-		var detail gitHubPullDetailPayload
+		// The single-PR GET answers both the row and the AI attribution: the
+		// same bytes feed normalizeGitHubPullRequest and the detector the
+		// work-items route runs, so the prs route needs no extra request.
+		var raw json.RawMessage
 		if err := fetchObject(
-			ctx, &counted, root+"/pulls/"+strconv.Itoa(number), &detail,
+			ctx, &counted, root+"/pulls/"+strconv.Itoa(number), &raw,
 		); err != nil {
+			return CompleteRouteBatch{}, err
+		}
+		var detail gitHubPullDetailPayload
+		if err := decodeGitHubPullDetail(raw, &detail); err != nil {
 			return CompleteRouteBatch{}, err
 		}
 		row, err := normalizeGitHubPullRequest(claim, repoID, detail, normalizedAt)
@@ -245,6 +259,13 @@ func (handler GitHubPullRequestRouteHandler) Collect(
 			return CompleteRouteBatch{}, err
 		}
 		rows = append(rows, row)
+		pullAttributions, err := githubPullRequestAttributionsFromDetail(
+			claim, repoUUID, raw, normalizedAt,
+		)
+		if err != nil {
+			return CompleteRouteBatch{}, err
+		}
+		attributions = append(attributions, pullAttributions...)
 	}
 
 	effect, err := effectBatchFromValues(
@@ -253,12 +274,19 @@ func (handler GitHubPullRequestRouteHandler) Collect(
 	if err != nil {
 		return CompleteRouteBatch{}, err
 	}
+	attributionEffect, err := effectBatchFromValues(
+		"ai_attribution", EffectReadbackRequired, attributions,
+	)
+	if err != nil {
+		return CompleteRouteBatch{}, err
+	}
 	watermark := claim.BeforeAt
 	return CompleteRouteBatch{
-		Effects: []EffectBatch{effect},
+		Effects: []EffectBatch{effect, attributionEffect},
 		Result: map[string]any{
-			"prs_synced": len(rows),
-			"repo":       repoPayload.FullName,
+			"prs_synced":      len(rows),
+			"ai_attributions": len(attributions),
+			"repo":            repoPayload.FullName,
 		},
 		Watermark: watermark,
 		Evidence: FetchEvidence{
@@ -522,3 +550,32 @@ func (row pullRequestRow) validate(claim Claim) error {
 }
 
 var _ CompleteRouteHandler = GitHubPullRequestRouteHandler{}
+
+// decodeGitHubPullDetail decodes the single-PR response with the number
+// handling fetchObject applies (json.Number), so reading the bytes once and
+// decoding twice yields the same payload the previous direct decode did.
+func decodeGitHubPullDetail(raw json.RawMessage, target *gitHubPullDetailPayload) error {
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	if err := decoder.Decode(target); err != nil {
+		return providerfoundation.ErrNormalizationInvalid
+	}
+	return nil
+}
+
+// githubPullRequestAttributionsFromDetail runs the ONE pull-request AI
+// detector (detectGitHubPullRequestAttributions) over the payload the
+// work-items route decodes from the same endpoint. Both routes therefore write
+// the same ai_attribution key with the same content.
+func githubPullRequestAttributionsFromDetail(
+	claim Claim,
+	repoID uuid.UUID,
+	raw json.RawMessage,
+	normalizedAt time.Time,
+) ([]githubAIAttributionRow, error) {
+	var pull githubPullRequestWorkItemPayload
+	if json.Unmarshal(raw, &pull) != nil {
+		return nil, providerfoundation.ErrNormalizationInvalid
+	}
+	return detectGitHubPullRequestAttributions(claim, repoID, pull, normalizedAt)
+}

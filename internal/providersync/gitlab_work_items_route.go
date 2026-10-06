@@ -418,13 +418,8 @@ func (handler GitLabWorkItemsRouteHandler) Collect(
 			rows.WorkItems = append(rows.WorkItems, item)
 			rows.StatusTransitions = append(rows.StatusTransitions, transitions...)
 			rows.ReopenEvents = append(rows.ReopenEvents, reopens...)
-			attributions, attributionErr := normalizeGitLabMRAIAttributions(
-				claim, repoID, payload, normalizedAt,
-			)
-			if attributionErr != nil {
-				return CompleteRouteBatch{}, attributionErr
-			}
-			rows.AIAttributions = append(rows.AIAttributions, attributions...)
+			// Merge-request AI attribution is written by the prs unit alone (one
+			// writer per ai_attribution key); this route emits none.
 			if fetchComments {
 				notes, notePages, noteErr := collectGitLabNotes(
 					ctx, &counted, root+"/merge_requests/"+strconv.Itoa(payload.IID)+"/notes",

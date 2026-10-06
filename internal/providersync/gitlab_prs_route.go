@@ -12,6 +12,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 )
 
@@ -132,8 +134,13 @@ func (handler GitLabPullRequestRouteHandler) Collect(
 		return CompleteRouteBatch{}, err
 	}
 
+	repoUUID, err := uuid.Parse(repoID)
+	if err != nil || repoUUID == uuid.Nil {
+		return CompleteRouteBatch{}, providerfoundation.ErrNormalizationInvalid
+	}
 	rows := make([]pullRequestRow, 0)
 	reviews := make([]pullRequestReviewRow, 0)
+	attributions := make([]gitlabAIAttributionRow, 0)
 	pages := 0
 	consume := func(raw json.RawMessage) error {
 		var payload gitLabMergeRequestPayload
@@ -172,6 +179,19 @@ func (handler GitLabPullRequestRouteHandler) Collect(
 		}
 		rows = append(rows, row)
 		reviews = append(reviews, reviewFetch.Rows...)
+		// The same list item feeds the detector the work-items route runs
+		// over merge requests, so no extra request is made.
+		var workItemPayload gitlabMergeRequestWorkItemPayload
+		if json.Unmarshal(raw, &workItemPayload) != nil {
+			return providerfoundation.ErrNormalizationInvalid
+		}
+		mergeRequestAttributions, err := normalizeGitLabMRAIAttributions(
+			claim, repoUUID, workItemPayload, normalizedAt,
+		)
+		if err != nil {
+			return err
+		}
+		attributions = append(attributions, mergeRequestAttributions...)
 		return nil
 	}
 	_, listPages, capReached, err := collectGitLabPullRequestPages(
@@ -201,10 +221,17 @@ func (handler GitLabPullRequestRouteHandler) Collect(
 	if err != nil {
 		return CompleteRouteBatch{}, err
 	}
+	attributionEffect, err := effectBatchFromValues(
+		"ai_attribution", EffectReadbackRequired, attributions,
+	)
+	if err != nil {
+		return CompleteRouteBatch{}, err
+	}
 	return CompleteRouteBatch{
-		Effects: []EffectBatch{prEffect, reviewEffect},
+		Effects: []EffectBatch{prEffect, reviewEffect, attributionEffect},
 		Result: map[string]any{
 			"prs_synced":        len(rows),
+			"ai_attributions":   len(attributions),
 			"pr_reviews_synced": len(reviews),
 			"repo":              fullName,
 			"project_id":        parsedProjectID,

@@ -433,7 +433,7 @@ func normalizeGitLabMRAIAttributions(
 	normalizedAt time.Time,
 ) ([]gitlabAIAttributionRow, error) {
 	if claim.Validate() != nil || claim.Provider != "gitlab" ||
-		claim.Dataset != "work-items" || repoID == uuid.Nil || payload.IID < 1 ||
+		!isGitLabAIAttributionDataset(claim.Dataset) || repoID == uuid.Nil || payload.IID < 1 ||
 		normalizedAt.IsZero() {
 		return nil, ErrInvalidConfiguration
 	}
@@ -472,8 +472,15 @@ func normalizeGitLabMRAIAttributions(
 	return rows, nil
 }
 
+// isGitLabAIAttributionDataset names the two datasets that carry merge-request
+// attribution: work-items (merge requests as work items) and the PR-social
+// unit, whose list response holds the same detector inputs.
+func isGitLabAIAttributionDataset(dataset string) bool {
+	return dataset == "work-items" || isPRSocialDataset(dataset)
+}
+
 func validateGitLabAIAttributionRow(row gitlabAIAttributionRow, claim Claim) error {
-	if claim.Provider != "gitlab" || claim.Dataset != "work-items" ||
+	if claim.Provider != "gitlab" || !isGitLabAIAttributionDataset(claim.Dataset) ||
 		row.RecordID == uuid.Nil || row.OrgID == uuid.Nil || row.OrgID.String() != claim.OrgID ||
 		row.Provider != "gitlab" || row.SubjectType != "pull_request" || row.SubjectID == "" ||
 		row.RepoID == nil || *row.RepoID == uuid.Nil || row.Kind == "" || row.Source == "" ||

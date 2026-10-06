@@ -50,7 +50,8 @@ func (handler GitHubPullRequestSocialRouteHandler) Collect(
 	if err != nil {
 		return CompleteRouteBatch{}, err
 	}
-	if len(base.Effects) != 1 || base.Effects[0].Destination != "git_pull_requests" {
+	if len(base.Effects) != 2 || base.Effects[0].Destination != "git_pull_requests" ||
+		base.Effects[1].Destination != "ai_attribution" {
 		return CompleteRouteBatch{}, ErrInvalidConfiguration
 	}
 	rows, err := decodeEffectRows[pullRequestRow](base.Effects[0])
@@ -109,6 +110,7 @@ func (handler GitHubPullRequestSocialRouteHandler) Collect(
 	}
 	result := map[string]any{
 		"prs_synced":        len(rows),
+		"ai_attributions":   base.Result["ai_attributions"],
 		"pr_reviews_synced": len(reviews.Rows),
 		"repo":              base.Result["repo"],
 	}
@@ -116,7 +118,10 @@ func (handler GitHubPullRequestSocialRouteHandler) Collect(
 		result["pr_reviews_incomplete"] = reviews.Incomplete.Cause
 	}
 	return CompleteRouteBatch{
-		Effects: []EffectBatch{prEffect, reviewEffect}, Result: result,
+		// ai_attribution is built by the base collector from the same PR
+		// responses; it rides through unchanged so every alias of the unit
+		// carries the same three destinations.
+		Effects: []EffectBatch{prEffect, reviewEffect, base.Effects[1]}, Result: result,
 		Watermark: base.Watermark,
 		Evidence: FetchEvidence{
 			Provider: claim.Provider, Dataset: claim.Dataset,

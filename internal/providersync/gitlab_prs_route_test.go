@@ -92,8 +92,9 @@ func TestGitLabPullRequestRouteMirrorsPythonFamilyAndEarlyStop(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if len(batch.Effects) != 2 || batch.Effects[0].Destination != "git_pull_requests" ||
+			if len(batch.Effects) != 3 || batch.Effects[0].Destination != "git_pull_requests" ||
 				batch.Effects[1].Destination != "git_pull_request_reviews" ||
+				batch.Effects[2].Destination != "ai_attribution" ||
 				batch.Effects[0].Recovery != EffectReadbackRequired || batch.Effects[1].Recovery != EffectReadbackRequired {
 				t.Fatalf("effects=%+v", batch.Effects)
 			}

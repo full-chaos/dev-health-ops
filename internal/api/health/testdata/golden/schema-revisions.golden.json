@@ -1,9 +1,9 @@
 {
   "header": {
     "test": "TestSchemaRevisionsMatchFrozenPythonAlembic",
-    "python_build": "7eff91a89925ddcaa12ffa3c9d66ad095b349111",
-    "producer_digest": "98d53b9e548c3e54815c9656d01b61df9960e3233c2312e18fe5c74f72787175",
-    "recipe": "git worktree add --detach $DIR 7eff91a89925ddcaa12ffa3c9d66ad095b349111 (with its .venv: uv sync --frozen --no-install-project); then from the repository root: go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/api/health/ -test '^TestSchemaRevisionsMatchFrozenPythonAlembic$' -python-root $DIR",
+    "python_build": "f3f66c3daa5c7bec12a15fd1fe4f188debc621b9",
+    "producer_digest": "9b8ed3c7d433261a32e12acd6d4fa547f936ad37d19c833e6375ae2a3247b79a",
+    "recipe": "git worktree add --detach $DIR f3f66c3daa5c7bec12a15fd1fe4f188debc621b9 (with its .venv: uv sync --frozen --no-install-project); then from the repository root: go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/api/health/ -test '^TestSchemaRevisionsMatchFrozenPythonAlembic$' -python-root $DIR",
     "recorded_by": "goldenrecord",
     "blanked": {}
   },
@@ -26,7 +26,7 @@
       "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "status": 0,
       "headers": {},
-      "body": "{\"minimum\": \"0075\", \"revisions\": [\"0075\", \"0076\", \"0077\", \"0078\", \"0079\", \"0080\", \"0081\", \"0082\", \"0083\", \"0084\", \"0085\", \"0086\", \"0087\", \"0088\", \"0089\", \"0090\", \"0091\", \"0092\", \"0093\", \"0094\", \"0095\", \"0096\", \"0097\", \"0098\", \"0099\", \"0100\", \"0101\", \"0102\", \"0103\", \"0104\", \"0105\", \"0106\", \"0107\", \"0108\", \"0109\", \"0110\", \"0111\", \"0112\", \"0113\", \"0114\", \"0115\", \"0116\", \"0117\", \"0118\", \"0119\", \"0120\", \"0121\", \"0122\", \"0123\", \"0124\", \"0125\", \"0126\", \"0127\", \"0128\", \"0129\", \"0130\", \"0131\", \"0132\", \"0133\", \"0134\", \"0135\", \"0136\", \"0137\", \"0138\", \"0139\", \"0140\", \"0141\", \"0142\", \"0143\", \"0144\", \"0145\", \"0146\"]}\n"
+      "body": "{\"minimum\": \"0075\", \"revisions\": [\"0075\", \"0076\", \"0077\", \"0078\", \"0079\", \"0080\", \"0081\", \"0082\", \"0083\", \"0084\", \"0085\", \"0086\", \"0087\", \"0088\", \"0089\", \"0090\", \"0091\", \"0092\", \"0093\", \"0094\", \"0095\", \"0096\", \"0097\", \"0098\", \"0099\", \"0100\", \"0101\", \"0102\", \"0103\", \"0104\", \"0105\", \"0106\", \"0107\", \"0108\", \"0109\", \"0110\", \"0111\", \"0112\", \"0113\", \"0114\", \"0115\", \"0116\", \"0117\", \"0118\", \"0119\", \"0120\", \"0121\", \"0122\", \"0123\", \"0124\", \"0125\", \"0126\", \"0127\", \"0128\", \"0129\", \"0130\", \"0131\", \"0132\", \"0133\", \"0134\", \"0135\", \"0136\", \"0137\", \"0138\", \"0139\", \"0140\", \"0141\", \"0142\", \"0143\", \"0144\", \"0145\", \"0146\", \"0147\"]}\n"
     }
   ]
 }

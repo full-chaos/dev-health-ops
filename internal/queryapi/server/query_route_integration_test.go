@@ -318,8 +318,8 @@ func startTestRegistryPostgres(t *testing.T) *pgxpool.Pool {
 	}
 	t.Cleanup(pool.Close)
 
-	// The migrated schema (CHAOS-6769 ledger): the hand-written go_api_routing_state dropped the
-	// real table's NOT NULL columns and its foreign key to go_api_candidate_build.
+	// The migrated schema (CHAOS-6769 ledger): a hand-written copy of the registry tables once dropped real
+	// NOT NULL columns and foreign keys, so the tests run against the migrated one.
 	pgschema.Apply(ctx, t, pool)
 	return pool
 }
@@ -362,7 +362,7 @@ func postGraphQLWithVariables(t *testing.T, handler http.HandlerFunc, query, bea
 // (newQueryHandler: real Mux, real PostgresSwitch reading a real Postgres
 // table, real gqlgen server, real principal.Verifier), not a fake
 // handlerNamed stand-in -- proving the featureFlags route in query-api is
-// live only when go_api_routing_state says so, end to end through the
+// served by the catalog (no routing row exists or is read), end to end through the
 // actual HTTP entry point.
 func TestFeatureFlagsRoute_IsServedByTheCatalog(t *testing.T) {
 	pool := startTestRegistryPostgres(t)
@@ -435,8 +435,8 @@ func reviewEdgesVariables() map[string]any {
 // the SECOND operation this route now mounts: it exercises the same real
 // HTTP handler (newQueryHandler: real Mux, real PostgresSwitch reading a
 // real Postgres table, real gqlgen server, real principal.Verifier), this
-// time dispatching reviewEdges, proving its reachability is gated
-// independently by its OWN go_api_routing_state row.
+// time dispatching reviewEdges, proving it is served by the catalog
+// with no routing row of its own.
 func TestReviewEdgesRoute_IsServedByTheCatalog(t *testing.T) {
 	pool := startTestRegistryPostgres(t)
 
@@ -514,8 +514,8 @@ func cognitiveLoadVariables() map[string]any {
 // the THIRD operation this route now mounts: it exercises the same real
 // HTTP handler (newQueryHandler: real Mux, real PostgresSwitch reading a
 // real Postgres table, real gqlgen server, real principal.Verifier), this
-// time dispatching cognitiveLoad, proving its reachability is gated
-// independently by its OWN go_api_routing_state row.
+// time dispatching cognitiveLoad, proving it is served by the catalog
+// with no routing row of its own.
 func TestCognitiveLoadRoute_IsServedByTheCatalog(t *testing.T) {
 	pool := startTestRegistryPostgres(t)
 
@@ -585,8 +585,7 @@ func complexityTimeseriesVariables() map[string]any {
 // Wave 3's extension of the same reachability contract to a THIRD operation
 // this route now mounts: real Mux, real PostgresSwitch reading a real
 // Postgres table, real gqlgen server, real principal.Verifier -- proving
-// complexityTimeseries's reachability is gated independently by its OWN
-// go_api_routing_state row.
+// complexityTimeseries is served by the catalog with no routing row of its own.
 func TestComplexityTimeseriesRoute_IsServedByTheCatalog(t *testing.T) {
 	pool := startTestRegistryPostgres(t)
 
@@ -660,8 +659,8 @@ func hotspotsVariables() map[string]any {
 // extension of the same reachability contract to hotspots, the second
 // Wave 3 operation (after complexityTimeseries): real Mux, real
 // PostgresSwitch reading a real Postgres table, real gqlgen server, real
-// principal.Verifier -- proving hotspots's reachability is gated
-// independently by its OWN go_api_routing_state row.
+// principal.Verifier -- proving hotspots is served by the catalog
+// with no routing row of its own.
 func TestHotspotsRoute_IsServedByTheCatalog(t *testing.T) {
 	pool := startTestRegistryPostgres(t)
 
@@ -729,8 +728,8 @@ func operatingReviewVariables() map[string]any {
 // Wave 4 Lane B's (CHAOS-4505) extension of the same reachability
 // contract to operatingReview: real Mux, real PostgresSwitch reading a
 // real Postgres table, real gqlgen server, real principal.Verifier --
-// proving operatingReview's reachability is gated independently by its
-// OWN go_api_routing_state row. Unlike every other operation registered
+// proving operatingReview is served by the catalog with no routing row
+// of its own. Unlike every other operation registered
 // in this file, operatingReview's registered document carries BOTH
 // `$orgId` and `$input` variables (matching featureFlags, not
 // hotspots/cognitiveLoad/complexityTimeseries/reviewEdges) -- see
@@ -832,8 +831,8 @@ func (emptyHomeCHClient) Query(_ context.Context, _ string, _ []clickhouse.Bindi
 // dependency (FetchLatestSuccessfulSyncAt), so this test exercises that
 // real pool too, not a fake; an empty, migrated table answers
 // pgx.ErrNoRows, which FetchLatestSuccessfulSyncAt already maps to
-// (nil, nil). Proves home's reachability is gated independently by its
-// OWN go_api_routing_state row, using registeredHomeDocument's own
+// (nil, nil). Proves home is served by the catalog with no routing row of
+// its own, using registeredHomeDocument's own
 // AUTHORED text (see that const's doc comment for why it is authored
 // rather than captured from a real client file: CHAOS-6084 found zero
 // web callers of this field).

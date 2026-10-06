@@ -408,10 +408,7 @@ func buildProviderSyncHandlerWithRuntimeDependencies(
 				if err != nil {
 					return providersync.CompleteRouteExecutor{}, err
 				}
-				routeHandler = providersync.GitLabWorkItemsRouteHandler{
-					StatusMapping: workItemsRuntime.statusMapping,
-					Derived:       glDeriver,
-				}
+				routeHandler = newGitLabWorkItemsRouteHandler(workItemsRuntime.statusMapping, glDeriver)
 				sink, readback = glSink, glSink
 			case session.Claim.Provider == "jira" &&
 				session.Claim.Dataset == "work-items":
@@ -853,5 +850,20 @@ func withRequestUsage(handler *providerunit.Handler, writer *providersync.Reques
 		executor, err := build(session)
 		executor.RequestUsage = writer
 		return executor, err
+	}
+}
+
+// newGitLabWorkItemsRouteHandler builds the GitLab work-items route handler the
+// worker runs. It sets NO page limits on purpose: the route's own defaults apply,
+// and for every nested list that default is the 100-page hard ceiling
+// (providersync gitLabWorkItemsNestedHardMaxPages, CHAOS-8777). A limit set here
+// could only lower the ceiling (the route clamps it), never raise it.
+func newGitLabWorkItemsRouteHandler(
+	statusMapping *providersync.StatusMapping,
+	deriver *providersync.GitLabWorkItemDeriver,
+) providersync.GitLabWorkItemsRouteHandler {
+	return providersync.GitLabWorkItemsRouteHandler{
+		StatusMapping: statusMapping,
+		Derived:       deriver,
 	}
 }

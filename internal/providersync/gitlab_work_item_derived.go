@@ -603,7 +603,7 @@ func validGitLabAIAttributionEffect(
 	identity GitHubWorkItemEffectIdentity,
 	effect EffectBatch,
 ) bool {
-	if identity.Provider != "gitlab" || identity.Dataset != "work-items" ||
+	if identity.Provider != "gitlab" || !isGitLabAIAttributionDataset(identity.Dataset) ||
 		identity.Destination != "ai_attribution" || effect.Destination != "ai_attribution" {
 		return false
 	}

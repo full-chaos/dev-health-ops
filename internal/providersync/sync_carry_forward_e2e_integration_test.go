@@ -78,7 +78,7 @@ func TestGitHubPullRequestSocialCarriesReviewsForwardFromRouteToClickHouse(t *te
 		if err != nil {
 			t.Fatal(err)
 		}
-		if len(batch.Effects) != 2 || batch.Effects[0].Destination != "git_pull_requests" {
+		if len(batch.Effects) != 3 || batch.Effects[0].Destination != "git_pull_requests" {
 			t.Fatalf("effects=%+v", batch.Effects)
 		}
 		return batch.Effects

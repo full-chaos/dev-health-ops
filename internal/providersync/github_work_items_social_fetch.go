@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -56,6 +57,9 @@ type GitHubWorkItemPRSocialPayload struct {
 	// this into a durable pull_request_processing incompleteness entry rather
 	// than reporting a synced count that looks complete but is not.
 	ClosingIssueRefsTruncated bool
+	// CommentsTruncated is true when the user's comments_limit cut a comment
+	// list that still had rows.
+	CommentsTruncated bool
 }
 
 // GitHubWorkItemPRSocialUsage is safe provider-budget evidence. It records
@@ -222,7 +226,10 @@ func (fetcher GitHubWorkItemPRSocialFetcher) drainComments(
 	result *GitHubWorkItemPRSocialFetchResult,
 ) error {
 	cursor := pageInfo.EndCursor
-	for pageInfo.HasNextPage && len(payload.Comments) < limit {
+	for pages := 0; pageInfo.HasNextPage && len(payload.Comments) < limit; pages++ {
+		if pages >= nativeMaxPages-1 {
+			return githubWorkItemSocialBoundExceeded(repository, number, "comments", pages+1)
+		}
 		if cursor == nil || strings.TrimSpace(*cursor) == "" {
 			return errGitHubWorkItemPRSocialPaginationInvalid
 		}
@@ -246,6 +253,13 @@ func (fetcher GitHubWorkItemPRSocialFetcher) drainComments(
 		}
 		cursor = next
 	}
+	if pageInfo.HasNextPage && len(payload.Comments) >= limit {
+		// The user's comments_limit cut a list that still had rows: counted
+		// and logged, never silent. No payload text.
+		payload.CommentsTruncated = true
+		slog.Warn("providersync.github.pr_comments_truncated_by_option",
+			"repository", repository, "pull_request", number, "comments_limit", limit)
+	}
 	return nil
 }
 
@@ -259,7 +273,10 @@ func (fetcher GitHubWorkItemPRSocialFetcher) drainEvents(
 	result *GitHubWorkItemPRSocialFetchResult,
 ) error {
 	cursor := pageInfo.EndCursor
-	for pageInfo.HasNextPage && len(payload.Events) < limit {
+	for pages := 0; pageInfo.HasNextPage && len(payload.Events) < limit; pages++ {
+		if pages >= nativeMaxPages-1 {
+			return githubWorkItemSocialBoundExceeded(repository, number, "events", pages+1)
+		}
 		if cursor == nil || strings.TrimSpace(*cursor) == "" {
 			return errGitHubWorkItemPRSocialPaginationInvalid
 		}
@@ -284,6 +301,19 @@ func (fetcher GitHubWorkItemPRSocialFetcher) drainEvents(
 		cursor = next
 	}
 	return nil
+}
+
+// githubWorkItemSocialBoundExceeded reports a PR comment or event list that
+// still had a next page after the page bound. The first page is embedded in the
+// batch query and counts, so 99 continuation pages follow it and `pages` is the
+// total. The unit records the social layer as incomplete (cause item_page_bound,
+// distinct from the shared request budget's pagination_cap);
+// the log names the PR and the field.
+func githubWorkItemSocialBoundExceeded(repository string, number int, field string, pages int) error {
+	slog.Error("providersync.github.nested_list_bound_exceeded",
+		"repository", repository, "pull_request", number, "field", field, "pages", pages)
+	return fmt.Errorf("%w: %s of %s#%d after %d pages",
+		errGitHubWorkItemPRSocialItemPageBound, field, repository, number, pages)
 }
 
 func appendGitHubWorkItemPRSocialNodes(destination *[]json.RawMessage, nodes []json.RawMessage, limit int) {
@@ -314,6 +344,11 @@ func (fetcher GitHubWorkItemPRSocialFetcher) fetchPage(
 	}
 	if result.Evidence.Pages >= maxRequests {
 		result.Evidence.CapReached = true
+		// The per-fetch request budget is shared by every pull request of the
+		// unit. Its exhaustion is a different event from one item outgrowing
+		// the page bound (cause item_page_bound), so it logs under its own name.
+		slog.Error("providersync.github.pr_social_request_budget_exhausted",
+			"requests", result.Evidence.Pages, "max_requests", maxRequests)
 		return nil, errGitHubWorkItemPRSocialPaginationCap
 	}
 	body, err := json.Marshal(map[string]any{
@@ -368,6 +403,9 @@ func (fetcher GitHubWorkItemPRSocialFetcher) finishFailure(
 }
 
 func gitHubWorkItemPRSocialFailureCause(err error) string {
+	if errors.Is(err, errGitHubWorkItemPRSocialItemPageBound) {
+		return "item_page_bound"
+	}
 	if errors.Is(err, errGitHubWorkItemPRSocialPaginationCap) {
 		return "pagination_cap"
 	}
@@ -383,6 +421,7 @@ func gitHubWorkItemPRSocialFailureCause(err error) string {
 
 var (
 	errGitHubWorkItemPRSocialPaginationCap     = errors.New("github work-item PR-social request cap reached")
+	errGitHubWorkItemPRSocialItemPageBound     = errors.New("github work-item PR-social list passed the page bound")
 	errGitHubWorkItemPRSocialPaginationInvalid = errors.New("github work-item PR-social cursor is missing or stalled")
 )
 

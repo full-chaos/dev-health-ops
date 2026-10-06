@@ -86,10 +86,10 @@ WHERE id = $4::uuid AND kind = $5
   AND (state = 'pending' OR (state = 'running' AND lease_expires_at <= $3))
 RETURNING id::text, org_id::text, kind, scope::text, COALESCE(model_ref, ''),
           COALESCE(prompt_ref, ''), llm_concurrency, spend_limit_microunits,
-          correlation_id, idempotency_key`, token, now.Add(store.lease), now, requestID, string(kind)).Scan(
+          correlation_id, idempotency_key, attempt_count`, token, now.Add(store.lease), now, requestID, string(kind)).Scan(
 		&request.ID, &request.OrganizationID, &request.Kind, &scope, &request.ModelRef,
 		&request.PromptRef, &request.LLMConcurrency, &request.SpendLimitMicrounits,
-		&request.CorrelationID, &request.IdempotencyKey,
+		&request.CorrelationID, &request.IdempotencyKey, &request.AttemptCount,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		var state string
@@ -191,6 +191,30 @@ func (store *PostgresStore) Ambiguous(ctx context.Context, claim Claim, detail s
 		store.observeReleaseLost()
 	}
 	return err
+}
+
+// Requeue returns a claimed request to 'pending' with its lease cleared. The
+// ledger row stays 'executing': Claim's ledger upsert accepts exactly that
+// state and bumps attempt_count, so no ledger write is needed here. It is
+// fenced on the claim token and a live lease; a claimant that already lost its
+// lease gets ErrLeaseLost (the request is reclaimable by expiry anyway).
+func (store *PostgresStore) Requeue(ctx context.Context, claim Claim) error {
+	if !store.validClaim(claim) {
+		return ErrInvalidState
+	}
+	command, err := store.pool.Exec(ctx, `
+UPDATE public.work_graph_execution_requests
+SET state = 'pending', claim_token = NULL, lease_expires_at = NULL, updated_at = $1
+WHERE id = $2::uuid AND kind = $3 AND state = 'running'
+  AND claim_token = $4::uuid AND lease_expires_at > $1`, store.now().UTC(), claim.Request.ID,
+		string(claim.Request.Kind), claim.Token)
+	if err != nil {
+		return ErrUnavailable
+	}
+	if command.RowsAffected() != 1 {
+		return ErrLeaseLost
+	}
+	return nil
 }
 
 func (store *PostgresStore) transition(ctx context.Context, claim Claim, state string, evidence []byte, detail string) error {

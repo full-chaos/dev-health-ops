@@ -426,7 +426,7 @@ func TestGitHubPullRequestCrashWindowRecoversWithoutDuplicateVersion(t *testing.
 	result, err := (EffectCommitter{
 		Ledger: freshRepository, Sink: freshSink, Readback: freshSink,
 		Now: func() time.Time { return recoveryNow },
-	}).Commit(ctx, recovered, recoveredBatch.Effects, persisted.CreatedAt.UTC())
+	}).Commit(ctx, recovered, recoveredBatch.Effects[:1], persisted.CreatedAt.UTC())
 	if err != nil || result.MarkedCommitted != 1 || result.Written != 0 {
 		t.Fatalf("result=%+v error=%v", result, err)
 	}

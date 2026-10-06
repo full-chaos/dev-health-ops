@@ -235,7 +235,8 @@ func BuildResponse(ctx context.Context, chClient QueryClient, pgClient PGQueryCl
 
 	var recommendationRows []RecommendationRow
 	var riskRows []RiskRow
-	var errRecommendations, errRisk error
+	var attribution *SignalAttribution
+	var errRecommendations, errRisk, errAttribution error
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
@@ -245,15 +246,23 @@ func BuildResponse(ctx context.Context, chClient QueryClient, pgClient PGQueryCl
 		defer wg.Done()
 		riskRows, errRisk = fetchRiskSignals(ctx, chClient, f, startDay, endDay, orgID)
 	}()
+	if hasCurrentWorkItemMetricData(deltas) {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			attribution, errAttribution = fetchSignalAttribution(ctx, chClient, f, startDay, endDay, orgID, now)
+		}()
+	}
 	wg.Wait()
 	// CHAOS-8186: a failed signal read fails the request. It was answered as
 	// "no signals of that kind" with HTTP 200, which a caller cannot tell from
 	// a window that has none.
-	for _, err := range []error{errRecommendations, errRisk} {
+	for _, err := range []error{errRecommendations, errRisk, errAttribution} {
 		if err != nil {
 			return nil, err
 		}
 	}
+	metricSignals = AttachSignalAttribution(metricSignals, attribution)
 
 	var recommendationSignals []Signal
 	for _, row := range recommendationRows {
@@ -366,6 +375,19 @@ func BuildResponse(ctx context.Context, chClient QueryClient, pgClient PGQueryCl
 func hasCurrentMetricData(deltas []MetricDelta) bool {
 	for _, delta := range deltas {
 		if delta.HasData {
+			return true
+		}
+	}
+	return false
+}
+
+// hasCurrentWorkItemMetricData identifies whether the response serves at
+// least one metric whose contribution can carry work-item attribution. It
+// keeps the extra reader out of an all-repository response and preserves the
+// no-data response's zero additional reads.
+func hasCurrentWorkItemMetricData(deltas []MetricDelta) bool {
+	for _, delta := range deltas {
+		if delta.HasData && isWorkItemMetric(delta.Metric) {
 			return true
 		}
 	}

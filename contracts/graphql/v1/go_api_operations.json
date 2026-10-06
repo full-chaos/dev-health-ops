@@ -159,7 +159,7 @@
   },
   {
     "operation": "home",
-    "digest": "cff105a9f8c5d5f2363f3d50510db34081c84c9c652afe380975b49c15a4c6eb"
+    "digest": "f920722d8e56ae44b85ce535ab0364ab10eb6baf70da1b49cc60a1f915abe7a1"
   },
   {
     "operation": "home",
@@ -169,6 +169,11 @@
   {
     "operation": "home",
     "digest": "c02bb493d709b8c445e2ac711bdf93d6a2cdb7933d1073a20bf7dad3ffd06545",
+    "legacy": true
+  },
+  {
+    "operation": "home",
+    "digest": "cff105a9f8c5d5f2363f3d50510db34081c84c9c652afe380975b49c15a4c6eb",
     "legacy": true
   },
   {

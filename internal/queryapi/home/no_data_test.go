@@ -17,6 +17,9 @@ import (
 func TestBuildResponseEmptyCurrentWindowIsNoData(t *testing.T) {
 	base := orgGoldenHandler(t)
 	client := fakeQueryClient{t: t, handler: func(t *testing.T, query string, bindings []dhclickhouse.Binding) (dhclickhouse.RowScanner, error) {
+		if strings.Contains(query, "FROM work_item_team_attributions") {
+			t.Fatal("an empty current window must not read Home signal attribution")
+		}
 		if strings.Contains(query, "FROM work_item_metrics_daily") ||
 			strings.Contains(query, "FROM repo_metrics_daily") ||
 			strings.Contains(query, "FROM deploy_metrics_daily") ||

@@ -198,7 +198,7 @@ func TestRegisteredHomeDocument_MatchesCapturedWireFixture(t *testing.T) {
 	// this test can tell real wire bytes (with urql's __typename
 	// injection) apart from a source-copied guess -- not just that they
 	// currently happen to agree.
-	const rawSourceDigestHome = "c4b500732808fda09d1b04ab47ddb4b7dd1da2f68511c1ec70326db0b503bdac"
+	const rawSourceDigestHome = "bcba9a4e032d9664672cc828ac4cfe9406807139b13d2f66fe04b3ee3787dc09"
 	if gotDigest == rawSourceDigestHome {
 		t.Fatalf(
 			"captured wire fixture digests to the RAW SOURCE TEXT digest (%s) -- "+
@@ -235,6 +235,7 @@ func TestRegisteredCapturedDocuments_MatchCapturedWireFixtures(t *testing.T) {
 		{"testdata/wire_capture/featureflagtimeseries_captured.graphql", registeredFeatureFlagTimeseriesDocument},
 		{"testdata/wire_capture/home_v1_captured.graphql", registeredHomeV1Document},
 		{"testdata/wire_capture/home_v2_captured.graphql", registeredHomeV2Document},
+		{"testdata/wire_capture/home_v3_captured.graphql", registeredHomeV3Document},
 		{"testdata/wire_capture/saved_reports_captured.graphql", registeredSavedReportsDocument},
 		{"testdata/wire_capture/saved_report_captured.graphql", registeredSavedReportDocument},
 		{"testdata/wire_capture/report_runs_captured.graphql", registeredReportRunsDocument},

@@ -612,10 +612,21 @@ func (m *Materializer) Run(ctx context.Context, cfg Config) (Stats, error) {
 	// skipped the unit and its quotes were never written. With the investment
 	// row last, a unit is invisible to skip-existing until its quotes and effort
 	// rows exist, so a crashed run is simply redone: every table is a
-	// ReplacingMergeTree and the keys are stable, so the re-run overwrites. No
-	// reader sees these tables without an investment row (all join FROM
-	// work_unit_investments; quotes are read by the row's own run id), so the
-	// extra rows of a crashed run stay invisible until the investment row lands.
+	// ReplacingMergeTree and the keys are stable, so the re-run overwrites.
+	//
+	// WHAT THIS DOES AND DOES NOT PROTECT (CHAOS-8788, a known gap): for a unit
+	// WITHOUT an older investment row, the rows of a crashed run stay invisible
+	// (every reader joins FROM work_unit_investments; quotes are read by the
+	// row's own run id). For a unit that ALREADY has an investment row -- it is
+	// being re-categorised because its evidence, the model or force changed, or
+	// its last status was a fallback -- a crash between the writes leaves the new
+	// run's quote and effort rows BESIDE the old row. After a ClickHouse merge a
+	// quote of equal text replaces the old run's quote (the quote key has no run
+	// id), so the old row can show fewer or no quotes, and the effort reader
+	// shows the half-written run's effort. The retry rewrites the unit (it is not
+	// skipped: the new key is still absent), which heals it; a request that
+	// ends failed leaves it until the next request. Pinned by
+	// TestKnownGapCHAOS8788OldInvestmentLosesQuotesAfterCrashedRewrite.
 	if len(quotes) > 0 {
 		if _, err := m.writer.WriteQuotes(ctx, cfg.OrgID, quotes); err != nil {
 			return Stats{}, fmt.Errorf("write work_unit_investment_quotes: %w", err)

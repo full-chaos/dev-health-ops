@@ -89,12 +89,25 @@ operator reads the ledger `failure_detail` and the ERROR line, fixes the cause, 
 scheduled request (`dho workers workgraph repair` refuses a `failed` request: it only reopens `ambiguous`
 ones). Besides the spent budget, a deterministic cause (a deterministic LLM failure, an invalid scope, window or
 provider, an evidence encode error) ends the request `failed`; the ERROR line names a class label (`failure_class`), never provider
-text. A `failed` request blocks `membership_backfill` of the same sync run until the undelivered ceiling,
-and a later sync run makes a new request. `ambiguous` now appears only for a claimed request that does not
+text. A `failed` request writes no completion fence, so the `membership_backfill` of the same sync run
+(gated on it) is classified `prerequisite_failed` by the undelivered sweep
+(`internal/joboutbox/undelivered_repair.go:115-116`) and retired on its next pass, NOT held until the 72 h
+ceiling; a later sync run makes a new request. The budget is enforced at claim time too: a claim whose count is
+already above the budget (a request whose 9th claim lost its lease) is ended `failed` with
+`failure_class=retry_budget_exhausted` before any work runs. `ambiguous` now appears only for a claimed request that does not
 match its River envelope. Requests that went `ambiguous` before this change (17 on prod, 2026-10-06) are
 not touched by the code: `dho workers workgraph repair` still re-opens one (`retry_safe` is safe for
 `investment.materialize`: re-runs skip units already categorised), and a later sync run has already made a
 new request over the same window.
+
+Known gap (CHAOS-8788, not fixed here): the output writes are ordered quotes, repo effort, investment row LAST, so
+a crashed first run of a unit leaves no visible partial rows. For a unit that ALREADY has an investment row
+(re-categorised because its evidence, the model or `force` changed, or its last status was a fallback), a crash
+between the writes leaves the new run's quote and effort rows beside the old investment row until the retry
+completes (the retry rewrites the unit; it is never skipped). After a ClickHouse merge, a quote of equal text
+replaces the old run's quote (the quote key has no run id), so the old row can show fewer or no quotes, and the
+effort reader shows the half-written run's effort. The retry heals it; a request that ends `failed` leaves it until
+the next scheduled request rewrites the unit.
 
 Related reference (not a command, background): [Job recovery lifecycle](../run/job-recovery-lifecycle.md) --
 River only rescues a stuck-`running` job after `max(RescueStuckJobsAfter=1h default, kind timeout)`; a job

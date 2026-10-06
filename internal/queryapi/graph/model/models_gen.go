@@ -711,9 +711,12 @@ type ConstraintEvidence struct {
 }
 
 type Coverage struct {
-	ReposCoveredPct          float64 `json:"reposCoveredPct"`
-	PrsLinkedToIssuesPct     float64 `json:"prsLinkedToIssuesPct"`
-	IssuesWithCycleStatesPct float64 `json:"issuesWithCycleStatesPct"`
+	// Null when no repositories are available to measure.
+	ReposCoveredPct *float64 `json:"reposCoveredPct,omitempty"`
+	// Null when the current window contains no work items to link.
+	PrsLinkedToIssuesPct *float64 `json:"prsLinkedToIssuesPct,omitempty"`
+	// Null when the current window contains no work items for cycle-state coverage.
+	IssuesWithCycleStatesPct *float64 `json:"issuesWithCycleStatesPct,omitempty"`
 }
 
 type CoverageStat struct {

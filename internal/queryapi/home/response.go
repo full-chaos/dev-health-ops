@@ -24,11 +24,29 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/pytime"
 )
 
-// Coverage is the wire shape of Coverage (schemas.py:9-12).
+// Coverage is the Home freshness coverage response. A nil field means its
+// denominator had no observed records; a non-nil zero is observed zero
+// coverage and must remain distinct on the wire.
 type Coverage struct {
-	ReposCoveredPct          float64 `json:"repos_covered_pct"`
-	PRsLinkedToIssuesPct     float64 `json:"prs_linked_to_issues_pct"`
-	IssuesWithCycleStatesPct float64 `json:"issues_with_cycle_states_pct"`
+	ReposCoveredPct          *float64 `json:"repos_covered_pct"`
+	PRsLinkedToIssuesPct     *float64 `json:"prs_linked_to_issues_pct"`
+	IssuesWithCycleStatesPct *float64 `json:"issues_with_cycle_states_pct"`
+}
+
+// ObservedValues returns only coverage measurements whose denominator was
+// observed. Data confidence must not average an absent value as zero.
+func (c Coverage) ObservedValues() map[string]float64 {
+	values := make(map[string]float64, 3)
+	if c.ReposCoveredPct != nil {
+		values["repos_covered_pct"] = *c.ReposCoveredPct
+	}
+	if c.PRsLinkedToIssuesPct != nil {
+		values["prs_linked_to_issues_pct"] = *c.PRsLinkedToIssuesPct
+	}
+	if c.IssuesWithCycleStatesPct != nil {
+		values["issues_with_cycle_states_pct"] = *c.IssuesWithCycleStatesPct
+	}
+	return values
 }
 
 // Freshness is the wire shape of Freshness (schemas.py:15-19).

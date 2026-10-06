@@ -93,7 +93,7 @@ func TestHomeResultFromResponse_MapsTheOriginalThreeFields(t *testing.T) {
 		Freshness: home.Freshness{
 			LastIngestedAt: &ingested,
 			Coverage: home.Coverage{
-				ReposCoveredPct: 80, PRsLinkedToIssuesPct: 60, IssuesWithCycleStatesPct: 40,
+				ReposCoveredPct: floatPtr(80), PRsLinkedToIssuesPct: floatPtr(60), IssuesWithCycleStatesPct: floatPtr(40),
 			},
 		},
 		Deltas: []home.MetricDelta{
@@ -118,7 +118,7 @@ func TestHomeResultFromResponse_MapsTheOriginalThreeFields(t *testing.T) {
 	if got.Freshness.Coverage == nil {
 		t.Fatal("Freshness.Coverage must be populated -- home.BuildResponse always computes it")
 	}
-	if c := got.Freshness.Coverage; c.ReposCoveredPct != 80 || c.PrsLinkedToIssuesPct != 60 || c.IssuesWithCycleStatesPct != 40 {
+	if c := got.Freshness.Coverage; c.ReposCoveredPct == nil || *c.ReposCoveredPct != 80 || c.PrsLinkedToIssuesPct == nil || *c.PrsLinkedToIssuesPct != 60 || c.IssuesWithCycleStatesPct == nil || *c.IssuesWithCycleStatesPct != 40 {
 		t.Errorf("Freshness.Coverage = %+v, want the mapped Coverage", c)
 	}
 
@@ -142,6 +142,17 @@ func TestHomeResultFromResponse_MapsTheOriginalThreeFields(t *testing.T) {
 	a := got.ReworkThemeAllocation[0]
 	if a.Theme != "feature_delivery" || a.Label != "Feature Delivery" || a.Allocation != 10 || a.AllocationPct != 50 || a.PrsMerged != 3 || a.ChurnLoc != 100 {
 		t.Errorf("ReworkThemeAllocation[0] = %+v, want the mapped ReworkThemeAllocation", a)
+	}
+}
+
+func TestHomeResultFromResponse_NilCoverageLeavesStayNil(t *testing.T) {
+	got := homeResultFromResponse(&home.Response{Freshness: home.Freshness{Coverage: home.Coverage{}}})
+	if got.Freshness == nil || got.Freshness.Coverage == nil {
+		t.Fatal("Freshness.Coverage must be present")
+	}
+	coverage := got.Freshness.Coverage
+	if coverage.ReposCoveredPct != nil || coverage.PrsLinkedToIssuesPct != nil || coverage.IssuesWithCycleStatesPct != nil {
+		t.Errorf("Coverage = %+v, want three nil leaves for unavailable denominators", coverage)
 	}
 }
 
@@ -204,7 +215,7 @@ func TestHomeResultFromResponse_MapsEveryFieldAgainstTheDomainResponse(t *testin
 			LastIngestedAt:         &ingested,
 			LatestSuccessfulSyncAt: &synced,
 			Sources:                map[string]string{"github": "ok", "jira": "degraded"},
-			Coverage:               home.Coverage{ReposCoveredPct: 80, PRsLinkedToIssuesPct: 60, IssuesWithCycleStatesPct: 40},
+			Coverage:               home.Coverage{ReposCoveredPct: floatPtr(80), PRsLinkedToIssuesPct: floatPtr(60), IssuesWithCycleStatesPct: floatPtr(40)},
 		},
 		Deltas: []home.MetricDelta{
 			{Metric: "throughput", Label: "Throughput", Value: 42, Unit: "units", DeltaPct: 12.5, HasData: true, HasPriorData: true,

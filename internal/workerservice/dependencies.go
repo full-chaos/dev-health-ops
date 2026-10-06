@@ -370,6 +370,13 @@ func (database *postgresWorkerDatabase) Close() {
 // the River queue budget it actually consumes. Runtime capability is only ever
 // what a builder constructed here — never what a compiled list advertises.
 type workerFamily struct {
+	// softStop is how long the River client lets running jobs finish after the
+	// stop signal before it cancels their contexts (river.Config.SoftStopTimeout).
+	// It is set by composition, from the drain budget, just before the River
+	// process is built; zero means "unset" and newRiverWorkerProcess refuses it,
+	// because River reads a zero SoftStopTimeout as "off" -- a stop signal then
+	// cancels every in-flight job at once (CHAOS-8783).
+	softStop time.Duration
 	handlers []jobruntime.HandlerSpec
 	queues   []jobruntime.QueueBudget
 	cleanups []func() error
@@ -1253,6 +1260,12 @@ func configureWorkerDependenciesWithSources(
 		dependencies.close()
 		return nil, dependencyUnavailable("river_process_builder_missing")
 	}
+	// The soft stop is the drain budget: the shutdown timeout minus the named
+	// finalization buffer, and never below the longest selected job timeout
+	// (startup refuses a smaller shutdown timeout above). Jobs that outlive it
+	// are cancelled with workerFinalizationBuffer still left on the clock for
+	// their release writes.
+	active.softStop = dependencies.workerDrainBudget
 	workerProcess, err := sources.buildRiverProcess(
 		cfg, dependencies.database, workers, active, logger,
 	)
@@ -1287,7 +1300,13 @@ func configureWorkerDependenciesWithSources(
 		"domain_database_max_connections", dependencies.startup.Connections.Domain,
 	)
 	components = append(components, workerProcessComponent{
-		components: []lifecycle.Component{workerProcess}, budget: dependencies.workerDrainBudget, presence: presence,
+		// The river process is stopped with the WHOLE shutdown timeout, not the
+		// drain budget: River escalates to cancelling job contexts after the soft
+		// stop (= the drain budget), and Stop must still be waiting then, so the
+		// cancelled jobs can write their release (a requeue, a failed state)
+		// inside workerFinalizationBuffer instead of being cut off with the
+		// process (CHAOS-8783).
+		components: []lifecycle.Component{workerProcess}, budget: dependencies.shutdownGrace, presence: presence,
 	})
 	return components, nil
 }

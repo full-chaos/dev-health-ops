@@ -976,6 +976,30 @@ value that looks reasonable for a quick manual test or CI run (10s, 60s,
 even 420s) fails this check silently under the same opaque reason string —
 confirmed by hand while building CHAOS-4266.
 
+### A stop signal is a SOFT stop: old pods drain for up to the drain budget (CHAOS-8783)
+
+`river.Config.SoftStopTimeout` is the drain budget (`--shutdown-timeout` minus the 60 s
+`workerFinalizationBuffer`; `internal/workerservice/dependencies.go`). On SIGTERM the River client stops
+fetching, running jobs finish, and only the jobs still running after the drain budget are cancelled, with
+the last 60 s left for their release writes. Before this, River tied job contexts to the signal context and
+cancelled every running job at once (no `SoftStopTimeout` = `StopAndCancel`), so the configured
+`--shutdown-timeout` was never used. River reads a zero `SoftStopTimeout` as "off", so a worker is refused
+at build time without one, and a shutdown timeout below the drain contract is a startup error.
+
+Operator facts:
+
+- On every roll and every scale-down an old pod can stay `Terminating` for up to 7200 s (`heavy`) or 900 s
+  (`ops`, `sync`, `sync-provider`), beside the new pods. Capacity for both is needed.
+- Old code runs against the NEW schema for that time. A migration that drops or renames something old code
+  uses must ship one release after the code stopped using it.
+- A roll proof must not count a `Terminating` pod as "not on the pin".
+- `terminationGracePeriodSeconds` equals `--shutdown-timeout` (go-workers.yaml), so the 60 s buffer is all the
+  slack there is.
+- Old and new code write the same keys for the drain time. Kinds that read back a ReplacingMergeTree version
+  to decide ownership (provider-sync effects, `workItemVersionVerdict`: a NEWER row means another owner and
+  is a terminal unit failure) are not safe with two writers of one key; last-writer-wins tables
+  (`investment.materialize`, daily metrics) tolerate it, but an old writer can overwrite a newer row.
+
 ### Provisioning order for a BRAND NEW database: `provision_river_roles.sql` before `dho migrate river`, always
 
 The "coordinator/domain readiness failure" section above is written around

@@ -288,6 +288,7 @@ func newOperationalReplica(
 		database.Close()
 		t.Fatal(err)
 	}
+	family.softStop = time.Minute
 	component, err := newRiverWorkerProcess(cfg, database, workers, family, logger)
 	if err != nil {
 		database.Close()

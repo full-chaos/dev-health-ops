@@ -150,6 +150,7 @@ func runReindexerOnce(
 		map[string]river.QueueConfig{"heartbeat": {MaxWorkers: 1}},
 		workers,
 		logger,
+		time.Minute,
 	)
 	if mutate != nil {
 		mutate(clientConfig)

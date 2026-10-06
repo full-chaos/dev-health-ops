@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/providersync"
+	"github.com/full-chaos/dev-health-ops/internal/storage/postgres"
 	"github.com/full-chaos/dev-health-ops/internal/workitemcontract"
 )
 
@@ -84,7 +85,7 @@ func familyPlanInput(provider string, datasets []PlanDataset) PlannerInput {
 }
 
 func TestWorkItemFamilyStoppedSignalPerProvider(t *testing.T) {
-	for _, provider := range workItemFamilyProviders {
+	for _, provider := range []string{"github", "gitlab", "jira", "linear"} {
 		other := nonFamilyDatasets(provider)
 		t.Run(provider+"/ran before: count and WARN", func(t *testing.T) {
 			globalPlanGateTelemetry.resetForTest()
@@ -199,7 +200,7 @@ func TestWorkItemFamilyStoppedSignalRendersOnTheGateMetric(t *testing.T) {
 }
 
 func TestPlanNeedsWorkItemRanBeforeOnlyForAnEmptyFamily(t *testing.T) {
-	for _, provider := range workItemFamilyProviders {
+	for _, provider := range []string{"github", "gitlab", "jira", "linear"} {
 		other := nonFamilyDatasets(provider)
 		withFamily := append([]PlanDataset{{Key: "work-item-labels"}}, other...)
 		if !PlanNeedsWorkItemRanBefore(provider, true, other) {
@@ -218,4 +219,16 @@ func TestPlanNeedsWorkItemRanBeforeOnlyForAnEmptyFamily(t *testing.T) {
 	if PlanNeedsWorkItemRanBefore("pagerduty", true, nil) {
 		t.Error("a provider with no work-item family means no query")
 	}
+}
+
+// The ran-before probe runs on the coordinator pool; the posture manifest
+// must keep SELECT on sync_run_units for that role (SELECT is implied for
+// every RequiredTables entry).
+func TestCoordinatorPostureGrantsSelectOnSyncRunUnits(t *testing.T) {
+	for _, table := range postgres.CoordinatorPosture().RequiredTables {
+		if table.TableName == "sync_run_units" {
+			return
+		}
+	}
+	t.Fatal("coordinator posture does not require sync_run_units: the ran-before probe would fail in production")
 }

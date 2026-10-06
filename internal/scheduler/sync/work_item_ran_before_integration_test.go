@@ -191,11 +191,7 @@ func TestLoadWorkItemUnitsRanBeforeLivePostgres(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer func() { _ = tx.Rollback(ctx) }()
-		ranBefore, err := loadWorkItemUnitsRanBefore(ctx, tx, orgID, integration)
-		if err != nil {
-			t.Fatal(err)
-		}
-		return ranBefore
+		return loadWorkItemUnitsRanBefore(ctx, tx, "github", orgID, integration)
 	}
 	if ask(fixture.occurrence.OrgID, integrationID) {
 		t.Fatal("no units yet: ran before must be false")
@@ -268,5 +264,93 @@ VALUES (gen_random_uuid(),$1,$2::uuid,$3::uuid,(SELECT id FROM integration_sourc
         'github','work-items','medium','incremental','success',1,'{}',now(),now())`,
 		fixture.occurrence.OrgID, otherRun, otherIntegration); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// The probe needs SELECT on sync_run_units and nothing else: it runs under a
+// login holding exactly that. This is the coordinator role's footing, whose
+// posture declares SELECT always required on sync_run_units
+// (TestCoordinatorPostureGrantsSelectOnSyncRunUnits).
+func TestLoadWorkItemUnitsRanBeforeRunsWithSelectOnlyRole(t *testing.T) {
+	fixture := startMaterializerPostgres(t)
+	ctx := context.Background()
+	seedPriorSyncRunUnit(t, fixture, "work-items", "success", `{}`)
+	var database string
+	if err := fixture.pool.QueryRow(ctx, `SELECT current_database()`).Scan(&database); err != nil {
+		t.Fatal(err)
+	}
+	role := "ranbefore_select_only_" + strings.ReplaceAll(database, "-", "_")
+	for _, statement := range []string{
+		`CREATE ROLE ` + role + ` NOLOGIN`,
+		`GRANT SELECT ON public.sync_run_units TO ` + role,
+	} {
+		if _, err := fixture.pool.Exec(ctx, statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Cleanup(func() {
+		_, _ = fixture.pool.Exec(context.Background(), `REVOKE ALL ON public.sync_run_units FROM `+role)
+		_, _ = fixture.pool.Exec(context.Background(), `DROP ROLE IF EXISTS `+role)
+	})
+	tx, err := fixture.pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if _, err := tx.Exec(ctx, `SET LOCAL ROLE `+role); err != nil {
+		t.Fatal(err)
+	}
+	if !loadWorkItemUnitsRanBefore(ctx, tx, "github", fixture.occurrence.OrgID,
+		"00000000-0000-4000-8000-000000001002") {
+		t.Fatal("a SELECT-only role must read the ran-before fact")
+	}
+}
+
+// A failed read must not fail the plan: the coordinator transaction stays
+// usable, the answer is the quiet "no", and the log carries a category only.
+func TestLoadWorkItemUnitsRanBeforeFailureIsContainedAndLoggedByCategory(t *testing.T) {
+	fixture := startMaterializerPostgres(t)
+	ctx := context.Background()
+	seedPriorSyncRunUnit(t, fixture, "work-items", "success", `{}`)
+	var database string
+	if err := fixture.pool.QueryRow(ctx, `SELECT current_database()`).Scan(&database); err != nil {
+		t.Fatal(err)
+	}
+	role := "ranbefore_no_grant_" + strings.ReplaceAll(database, "-", "_")
+	if _, err := fixture.pool.Exec(ctx, `CREATE ROLE `+role+` NOLOGIN`); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = fixture.pool.Exec(context.Background(), `DROP ROLE IF EXISTS `+role) })
+	var logs bytes.Buffer
+	original := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	t.Cleanup(func() { slog.SetDefault(original) })
+	tx, err := fixture.pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if _, err := tx.Exec(ctx, `SET LOCAL ROLE `+role); err != nil {
+		t.Fatal(err)
+	}
+	if loadWorkItemUnitsRanBefore(ctx, tx, "github", fixture.occurrence.OrgID,
+		"00000000-0000-4000-8000-000000001002") {
+		t.Fatal("a failed read must answer false")
+	}
+	// The transaction survived the Postgres error.
+	if _, err := tx.Exec(ctx, `SELECT 1`); err != nil {
+		t.Fatalf("coordinator transaction is unusable after the failed read: %v", err)
+	}
+	out := logs.String()
+	for _, want := range []string{
+		`"msg":"sync.materializer.work_item_ran_before_unavailable"`,
+		`"error_category":"ran_before_query_failed"`, `"provider":"github"`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("log lacks %s:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, `"error":`) || strings.Contains(strings.ToLower(out), "permission denied") {
+		t.Fatalf("log must carry no error text:\n%s", out)
 	}
 }

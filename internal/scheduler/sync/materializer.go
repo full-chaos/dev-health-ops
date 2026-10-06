@@ -802,10 +802,7 @@ WHERE config.id = $1::uuid AND config.org_id = $2 AND integration.is_active`, oc
 	workItemUnitsRanBefore := false
 	scheduledParent := plannerManaged && explicitDatasetKeys == nil
 	if scheduledParent && PlanNeedsWorkItemRanBefore(provider, true, datasets) {
-		workItemUnitsRanBefore, err = loadWorkItemUnitsRanBefore(ctx, tx, orgID, integrationID)
-		if err != nil {
-			return loadedMaterializationPlan{}, err
-		}
+		workItemUnitsRanBefore = loadWorkItemUnitsRanBefore(ctx, tx, provider, orgID, integrationID)
 	}
 	watermarks, err := loadPlanWatermarks(ctx, tx, orgID, sources, datasets)
 	if err != nil {
@@ -1745,14 +1742,35 @@ SELECT EXISTS (
 )`
 
 // loadWorkItemUnitsRanBefore reads the CHAOS-8773 "ran before" fact on the
-// coordinator transaction (SELECT on sync_run_units is already granted).
-func loadWorkItemUnitsRanBefore(ctx context.Context, tx pgx.Tx, orgID, integrationID string) (bool, error) {
-	var ranBefore bool
-	if err := tx.QueryRow(ctx, workItemUnitsRanBeforeSQL, orgID, integrationID,
-		workitemcontract.FamilyDatasets()).Scan(&ranBefore); err != nil {
-		return false, fmt.Errorf("load work-item units ran before: %w", err)
+// coordinator transaction (SELECT on sync_run_units is in the coordinator
+// posture, domain_authorization.go coordinatorPosture). The fact only decides
+// whether a WARN is written, so a failed read must never fail the plan: the
+// statement runs in a savepoint, which keeps the coordinator transaction
+// usable after a Postgres error, and a failure is logged by category only
+// (no error operand) and reads as "unknown", which is the quiet answer.
+func loadWorkItemUnitsRanBefore(ctx context.Context, tx pgx.Tx, provider, orgID, integrationID string) bool {
+	unavailable := func() bool {
+		slog.Default().Warn("sync.materializer.work_item_ran_before_unavailable",
+			slog.String("provider", provider),
+			slog.String("org_id", orgID),
+			slog.String("integration_id", integrationID),
+			slog.String("error_category", "ran_before_query_failed"))
+		return false
 	}
-	return ranBefore, nil
+	savepoint, err := tx.Begin(ctx)
+	if err != nil {
+		return unavailable()
+	}
+	var ranBefore bool
+	if err := savepoint.QueryRow(ctx, workItemUnitsRanBeforeSQL, orgID, integrationID,
+		workitemcontract.FamilyDatasets()).Scan(&ranBefore); err != nil {
+		_ = savepoint.Rollback(ctx)
+		return unavailable()
+	}
+	if err := savepoint.Commit(ctx); err != nil {
+		return unavailable()
+	}
+	return ranBefore
 }
 
 // loadPlanDatasets loads the enabled datasets a plan runs against.

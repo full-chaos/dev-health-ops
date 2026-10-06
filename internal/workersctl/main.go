@@ -821,6 +821,8 @@ func dispatchMetrics(ctx context.Context, runtime *operatorRuntime, args []strin
 		return dispatchMetricsDailyRedrive(ctx, runtime, args[1:], stdout, stderr)
 	case "daily-blocked":
 		return dispatchMetricsDailyBlocked(ctx, runtime, args[1:], stdout, stderr)
+	case "daily-marker-backfill":
+		return dispatchMetricsDailyMarkerBackfill(ctx, runtime, args[1:], stdout, stderr)
 	case "daily-finalize":
 		return dispatchMetricsDailyFinalize(ctx, runtime, args[1:], stdout, stderr)
 	case "finalize-redrive":
@@ -1014,6 +1016,103 @@ func dispatchMetricsDailyBlocked(
 		"blocked_runs": len(runs),
 		"runs":         runs,
 	})
+}
+
+// finalizeRedriveWritesMarker reports whether a finalize-redrive pass can append
+// a run marker: only a real (not dry-run) reset of a succeeded run does.
+func finalizeRedriveWritesMarker(dryRun, includeSucceeded bool) bool {
+	return !dryRun && includeSucceeded
+}
+
+// attachRunMarker opens ClickHouse and gives the store the CHAOS-8710 run
+// marker writer. A verb that reopens a succeeded run needs it: the reopen
+// appends 'reopened' first and is refused when that append fails.
+func attachRunMarker(
+	ctx context.Context, runtime *operatorRuntime, store *daily.PostgresStore, stderr io.Writer,
+) (func(), int) {
+	markerStore, closeConn, err := openRunMarkerStore(ctx, runtime, stderr)
+	if err != nil {
+		return nil, writeError(stderr, "operator_backend_unavailable")
+	}
+	store.SetRunMarkerWriter(markerStore)
+	store.SetRunMarkerReader(markerStore)
+	return closeConn, 0
+}
+
+func openRunMarkerStore(
+	ctx context.Context, runtime *operatorRuntime, stderr io.Writer,
+) (*daily.ClickHouseRunMarkerStore, func(), error) {
+	if runtime.lookup == nil {
+		return nil, nil, errors.New("operator lookup unavailable")
+	}
+	dsn, err := resolveDSNRequired("CLICKHOUSE_URI", platformconfig.ClickHouseSpec, runtime.lookup)
+	if err != nil {
+		return nil, nil, err
+	}
+	logResolvedDatabase(stderr, runtime.lookup, platformconfig.ClickHouseSpec, "clickhouse", dsn)
+	conn, err := chclickhouse.Open(ctx, chclickhouse.DefaultConfig(dsn.Reveal()))
+	if err != nil {
+		return nil, nil, err
+	}
+	markerStore, err := daily.NewClickHouseRunMarkerStore(conn)
+	if err != nil {
+		_ = conn.Close()
+		return nil, nil, err
+	}
+	return markerStore, func() { _ = conn.Close() }, nil
+}
+
+// dispatchMetricsDailyMarkerBackfill handles `metrics daily-marker-backfill`
+// (CHAOS-8710): makes the ClickHouse daily_metrics_run_marker agree with
+// Postgres daily_metrics_runs for one organization and a day range. It is a
+// verb and not a migration because a ClickHouse migration cannot read
+// Postgres, and because the same pass repairs a day whose live append failed.
+// Idempotent: a second pass appends nothing. It writes ClickHouse marker rows
+// only and changes no Postgres state.
+func dispatchMetricsDailyMarkerBackfill(
+	ctx context.Context, runtime *operatorRuntime, args []string, stdout, stderr io.Writer,
+) int {
+	flags := quietFlags("metrics daily-marker-backfill")
+	org := flags.String("org", "", "organization id (uuid)")
+	from := flags.String("from", "", "first target_day, inclusive (YYYY-MM-DD, UTC)")
+	to := flags.String("to", "", "last target_day, inclusive (YYYY-MM-DD, UTC)")
+	dryRun := flags.Bool("dry-run", false, "report what a real pass would append without writing")
+	if flags.Parse(args) != nil || flags.NArg() != 0 {
+		return writeError(stderr, "invalid_request")
+	}
+	parsedOrg, err := uuid.Parse(*org)
+	if err != nil {
+		return writeError(stderr, "invalid_request")
+	}
+	// One spelling of the organization reaches the marker path.
+	canonicalOrg := parsedOrg.String()
+	fromDay, err := time.Parse("2006-01-02", *from)
+	if err != nil {
+		return writeError(stderr, "invalid_request")
+	}
+	toDay, err := time.Parse("2006-01-02", *to)
+	if err != nil {
+		return writeError(stderr, "invalid_request")
+	}
+	if runtime.pools == nil {
+		return writeError(stderr, "operator_backend_unavailable")
+	}
+	store, err := daily.NewPostgresStore(runtime.pools.Domain)
+	if err != nil {
+		return writeError(stderr, "operator_backend_unavailable")
+	}
+	markerStore, closeConn, err := openRunMarkerStore(ctx, runtime, stderr)
+	if err != nil {
+		return writeError(stderr, "operator_backend_unavailable")
+	}
+	defer closeConn()
+	store.SetRunMarkerWriter(markerStore)
+	store.SetRunMarkerReader(markerStore)
+	outcome, err := store.BackfillRunMarkers(ctx, canonicalOrg, fromDay, toDay, *dryRun)
+	if err != nil {
+		return writeServiceError(stderr, err)
+	}
+	return writeResult(stdout, stderr, map[string]any{"marker_backfill": outcome, "dry_run": *dryRun})
 }
 
 // dispatchMetricsDailyFinalize handles `metrics daily-finalize` (CHAOS-4389):
@@ -1306,6 +1405,16 @@ func dispatchMetricsFinalizeRedrive(
 		nonce := ""
 		if !*dryRun {
 			nonce = uuid.NewString()
+		}
+		// Only a reset of a succeeded run writes a marker, and that happens
+		// only with --include-succeeded, so ClickHouse is opened (and its
+		// credential read) only on that path.
+		if finalizeRedriveWritesMarker(*dryRun, *includeSucceeded) {
+			closeMarker, code := attachRunMarker(ctx, runtime, store, stderr)
+			if code != 0 {
+				return code
+			}
+			defer closeMarker()
 		}
 		outcome, err := store.RedriveFinalizeForRange(ctx, publisher, *org, fromDay, toDay, nonce, *includeSucceeded, *reviewEvidence, *dryRun)
 		if err != nil {
@@ -1641,6 +1750,13 @@ func dispatchMetricsPartitionRecompute(
 		nonce := ""
 		if !*dryRun {
 			nonce = uuid.NewString()
+		}
+		if !*dryRun {
+			closeMarker, code := attachRunMarker(ctx, runtime, store, stderr)
+			if code != 0 {
+				return code
+			}
+			defer closeMarker()
 		}
 		outcome, err := store.RedrivePartitionsForRange(ctx, publisher, *org, fromDay, toDay, nonce, *family, *reviewEvidence, *dryRun)
 		if err != nil {

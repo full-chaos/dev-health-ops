@@ -159,6 +159,10 @@ type Run struct {
 	OrganizationID string
 	Generation     string
 	Status         string
+	// FullOrg is true when the run computes every repository of the
+	// organization (no explicit repository list at creation). Only such a run
+	// may certify an org-day in the ClickHouse run marker (CHAOS-8710).
+	FullOrg bool
 	// RepositoryDiscoveryRequired is true only for the fixed daily fan-out
 	// generation while it has no durable partitions. A metrics-queue worker owns the
 	// ClickHouse read and resolves this state before it can publish a partition.

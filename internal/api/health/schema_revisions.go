@@ -84,4 +84,5 @@ var satisfyingRevisions = map[string]bool{
 	"0145": true,
 	"0146": true,
 	"0147": true,
+	"0148": true,
 }

@@ -42,6 +42,15 @@ func gitLabPagedResponses(total int, row func(index int) string) []string {
 
 func collectGitLabLargeNestedLists(t *testing.T, notes, labelEvents, stateEvents, nestedMaxPages int) (CompleteRouteBatch, error) {
 	t.Helper()
+	return collectGitLabLargeNestedListsWith(t, notes, labelEvents, stateEvents, GitLabWorkItemsRouteHandler{
+		PerPage: 100, MaxPages: 10, NestedMaxPages: nestedMaxPages,
+	})
+}
+
+// collectGitLabLargeNestedListsWith drives the route with the given limits;
+// StatusMapping and IncludeMRs are filled in here.
+func collectGitLabLargeNestedListsWith(t *testing.T, notes, labelEvents, stateEvents int, handler GitLabWorkItemsRouteHandler) (CompleteRouteBatch, error) {
+	t.Helper()
 	root := "/api/v4/projects/123"
 	responses := gitLabWorkItemResponses()
 	delete(responses, root+"/merge_requests?page=1")
@@ -63,10 +72,9 @@ func collectGitLabLargeNestedLists(t *testing.T, notes, labelEvents, stateEvents
 		return fmt.Sprintf(`{"state":"reopened","created_at":"2026-07-03T10:%02d:%02dZ","user":{"username":"bob","name":"Bob"}}`, (i/60)%60, i%60)
 	})
 	claim := nativeTestClaim("gitlab", "work-items")
-	return (GitLabWorkItemsRouteHandler{
-		StatusMapping: loadRealStatusMapping(t), PerPage: 100, MaxPages: 10, NestedMaxPages: nestedMaxPages,
-		IncludeMRs: boolPointer(false),
-	}).Collect(
+	handler.StatusMapping = loadRealStatusMapping(t)
+	handler.IncludeMRs = boolPointer(false)
+	return handler.Collect(
 		context.Background(), claim,
 		providerfoundation.Credential{Provider: "gitlab", ID: claim.CredentialID},
 		gitLabWorkItemsClient(t, fakehttp.Client(&gitLabWorkItemsDoer{responses: responses})), time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC),
@@ -98,6 +106,28 @@ func TestGitLabWorkItemsRouteNestedBoundNamesOwnerAndField(t *testing.T) {
 		t.Fatalf("err=%v want ErrPaginationCapExceeded", err)
 	}
 	for _, want := range []string{"notes of /api/v4/projects/123/issues/42", "after 3 pages", "max 3 pages"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("error %q lacks %q", err, want)
+		}
+	}
+}
+
+// Production builds the handler with NO limits set
+// (internal/workerservice/provider_sync.go: StatusMapping and Derived only), so
+// the bound that runs there is the default one. Literal numbers: a list of 100
+// pages passes (9,999 rows: the last page is short, so no 101st empty page is
+// read), 101 pages fail closed naming the owner and the field.
+func TestGitLabWorkItemsRouteDefaultNestedBoundIsExactlyOneHundredPages(t *testing.T) {
+	production := GitLabWorkItemsRouteHandler{}
+	batch, err := collectGitLabLargeNestedListsWith(t, 9_999, 0, 0, production)
+	if err != nil || gitLabEffectRowCount(batch, "work_item_interactions") != 9_999 {
+		t.Fatalf("100 pages: interactions=%d err=%v", gitLabEffectRowCount(batch, "work_item_interactions"), err)
+	}
+	_, err = collectGitLabLargeNestedListsWith(t, 10_001, 0, 0, production)
+	if !errors.Is(err, ErrPaginationCapExceeded) {
+		t.Fatalf("101 pages: err=%v want ErrPaginationCapExceeded", err)
+	}
+	for _, want := range []string{"notes of /api/v4/projects/123/issues/42", "after 100 pages", "max 100 pages"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("error %q lacks %q", err, want)
 		}

@@ -21,6 +21,14 @@ const (
 	gitLabWorkItemsDefaultPerPage  = 100
 	gitLabWorkItemsMaximumPerPage  = 100
 	gitLabWorkItemsDefaultMaxPages = 10_000
+	// gitLabWorkItemsNestedHardMaxPages is the per-item, per-list runaway guard
+	// for notes, label events, state events, links, closing merge requests and
+	// milestones (CHAOS-8777). 100 pages is 10,000 rows at 100 per page: far
+	// above any real item, low enough to stop a list that never ends. The
+	// production wiring (internal/workerservice/provider_sync.go, the GitLab
+	// work-items case) sets no NestedMaxPages, so this is the bound production
+	// runs with; a configured value may only lower it.
+	gitLabWorkItemsNestedHardMaxPages = 100
 )
 
 // gitLabWorkItemRawDestinations are the six raw facts emitted by the Python
@@ -138,7 +146,7 @@ func (handler GitLabWorkItemsRouteHandler) limits() (int, int, int, error) {
 		maxPages = gitLabWorkItemsDefaultMaxPages
 	}
 	if nestedMaxPages == 0 {
-		nestedMaxPages = maxPages
+		nestedMaxPages = min(maxPages, gitLabWorkItemsNestedHardMaxPages)
 	}
 	if perPage < 1 || perPage > gitLabWorkItemsMaximumPerPage || maxPages < 1 ||
 		maxPages > gitLabWorkItemsDefaultMaxPages || nestedMaxPages < 1 ||

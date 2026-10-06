@@ -89,6 +89,11 @@ var githubWorkItemsOptionalIncompleteComponents = map[string]bool{
 //     later run reproduces identically — the recipe's "never both capped and
 //     successful" rule, and what the REST side already does by returning
 //     ErrPaginationCapExceeded rather than typed incompleteness.
+//   - item_page_bound: one pull request's comment or event list still had a
+//     next page after the page bound (CHAOS-8777). Same consequence as
+//     pagination_cap, but a different event: the per-fetch request budget is
+//     shared by every pull request of the unit, this is one item outgrowing
+//     its own bound, and the log names the pull request and the field.
 //   - invalid_pagination: a missing or stalled cursor. That is a defect in our
 //     own traversal, not a provider condition Python has any analogue for, and
 //     it must surface as a failure rather than as a routine degradation entry.
@@ -97,6 +102,7 @@ var githubWorkItemsOptionalIncompleteComponents = map[string]bool{
 // (gitHubWorkItemPRSocialFailureCause); no Python site can emit them.
 var githubWorkItemsBlockingIncompleteCauses = map[string]bool{
 	"pagination_cap":     true,
+	"item_page_bound":    true,
 	"invalid_pagination": true,
 }
 

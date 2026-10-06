@@ -51,21 +51,21 @@ func TestGitHubWorkItemPRSocialFetcherReadsEveryEventPastTheOldCap(t *testing.T)
 }
 
 // Literal numbers: 100 pages in all (the embedded one included) pass, 101 fail
-// closed as an incomplete social layer with cause pagination_cap.
+// closed as an incomplete social layer with cause item_page_bound.
 func TestGitHubWorkItemPRSocialFetcherEventBoundIsExactlyOneHundredPages(t *testing.T) {
 	result, err := fetchGitHubSocialEvents(t, 100)
 	if err != nil || !result.Complete() || len(result.Payloads[42].Events) != 10_000 {
 		t.Fatalf("100 pages: events=%d complete=%v err=%v", len(result.Payloads[42].Events), result.Complete(), err)
 	}
 	result, err = fetchGitHubSocialEvents(t, 101)
-	if err != nil || result.Complete() || result.Incomplete == nil || result.Incomplete.Cause != "pagination_cap" {
+	if err != nil || result.Complete() || result.Incomplete == nil || result.Incomplete.Cause != "item_page_bound" {
 		t.Fatalf("101 pages: complete=%v incomplete=%+v err=%v", result.Complete(), result.Incomplete, err)
 	}
 }
 
 func TestGitHubWorkItemPRSocialFetcherEventBoundErrorNamesThePullRequestAndField(t *testing.T) {
 	err := githubWorkItemSocialBoundExceeded("Acme/API", 42, "events", 100)
-	if !errors.Is(err, errGitHubWorkItemPRSocialPaginationCap) {
+	if !errors.Is(err, errGitHubWorkItemPRSocialItemPageBound) || errors.Is(err, errGitHubWorkItemPRSocialPaginationCap) {
 		t.Fatalf("err=%v", err)
 	}
 	for _, want := range []string{"events of Acme/API#42", "after 100 pages"} {
@@ -129,7 +129,7 @@ func TestGitHubWorkItemPRSocialFetcherCommentBoundIsExactlyOneHundredPages(t *te
 		t.Fatalf("100 pages: comments=%d complete=%v err=%v", len(result.Payloads[42].Comments), result.Complete(), err)
 	}
 	result, err = fetch(101)
-	if err != nil || result.Complete() || result.Incomplete == nil || result.Incomplete.Cause != "pagination_cap" {
+	if err != nil || result.Complete() || result.Incomplete == nil || result.Incomplete.Cause != "item_page_bound" {
 		t.Fatalf("101 pages: complete=%v incomplete=%+v err=%v", result.Complete(), result.Incomplete, err)
 	}
 }
@@ -147,6 +147,33 @@ func TestGitHubWorkItemPRSocialFetcherBoundLogNamesPullRequestAndTotalPages(t *t
 	for _, want := range []string{"level=ERROR", "field=events", "pull_request=42", "pages=100"} {
 		if !strings.Contains(logs.String(), want) {
 			t.Fatalf("log lacks %q: %s", want, logs.String())
+		}
+	}
+}
+
+// The shared request budget and one item's page bound are different events: they
+// carry different causes and log under different names, and both block the unit.
+func TestGitHubWorkItemPRSocialBudgetExhaustionIsDistinctFromTheItemPageBound(t *testing.T) {
+	var logs bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+	doer := &gitHubWorkItemPRSocialFetchDoer{t: t, replies: gitHubSocialEventPages(12)}
+	result, err := (GitHubWorkItemPRSocialFetcher{MaxRequests: 3}).Fetch(
+		context.Background(), gitHubWorkItemPRSocialClaim(),
+		gitHubPullRequestClient(t, fakehttp.Client(doer), "https://api.github.com"),
+		[]int{42}, 0, githubWorkItemEventsUnbounded,
+	)
+	if err != nil || result.Incomplete == nil || result.Incomplete.Cause != "pagination_cap" {
+		t.Fatalf("incomplete=%+v err=%v", result.Incomplete, err)
+	}
+	if !strings.Contains(logs.String(), "providersync.github.pr_social_request_budget_exhausted") ||
+		strings.Contains(logs.String(), "nested_list_bound_exceeded") {
+		t.Fatalf("log=%s", logs.String())
+	}
+	for _, cause := range []string{"pagination_cap", "item_page_bound"} {
+		if githubWorkItemsIncompleteIsOptional(GitHubWorkItemsIncomplete{Component: "pr_social", Cause: cause}) {
+			t.Fatalf("cause %s must block the unit", cause)
 		}
 	}
 }

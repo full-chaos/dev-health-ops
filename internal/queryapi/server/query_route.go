@@ -1543,6 +1543,7 @@ const registeredTestopsJobFailuresDocument = `query TestOpsJobFailures($orgId: S
     __typename
   }
 }`
+
 // registeredTestopsRiskDocument is the registered document for the
 // `testopsRisk` operation, the exact wire-form text a real web client
 // sends (testdata/wire_capture/testopsrisk_captured.graphql).

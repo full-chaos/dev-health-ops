@@ -758,6 +758,28 @@ const registeredInvestmentBreakdownDocument = `query InvestmentBreakdown($orgId:
   }
 }`
 
+// registeredInvestmentEvidenceQualityDocument is CHAOS-8104's registered
+// document for the Investment Evidence table's served mean-by-group column.
+// Its text is the captured wire document that CHAOS-8745's browser client
+// sent, not a schema-derived reconstruction. The capture fixture and its
+// digest test keep this registration aligned with that client request.
+//
+// Registration serves this document through the catalog switch. It does not
+// add a resolver, a route handler, or an MCP class: the document selects the
+// existing analytics root, whose MCP class remains mcp:analytics.
+const registeredInvestmentEvidenceQualityDocument = `query InvestmentEvidenceQuality($orgId: String!, $batch: AnalyticsRequestInput!) {
+  analytics(orgId: $orgId, batch: $batch) {
+    evidenceQualityByGroup {
+      key
+      label
+      mean
+      total
+      __typename
+    }
+    __typename
+  }
+}`
+
 // registeredInvestmentFullDocument is CHAOS-4538's registered document
 // for the combined investment breakdowns+sankey `analytics` query --
 // same contract as registeredInvestmentBreakdownDocument above. Copied
@@ -3556,6 +3578,7 @@ func newQueryHandler(chClient featureflags.QueryClient, pgPool *pgxpool.Pool, ve
 		"workGraphArtifacts":                digestHex(registeredWorkGraphArtifactsDocument),
 		"flowMatrix":                        digestHex(registeredFlowMatrixDocument),
 		"investmentBreakdown":               digestHex(registeredInvestmentBreakdownDocument),
+		"investmentEvidenceQuality":         digestHex(registeredInvestmentEvidenceQualityDocument),
 		"investmentFull":                    digestHex(registeredInvestmentFullDocument),
 		"capacityForecast":                  digestHex(registeredCapacityForecastDocument),
 		"capacityCompletionDistribution":    digestHex(registeredCapacityCompletionDistributionDocument),

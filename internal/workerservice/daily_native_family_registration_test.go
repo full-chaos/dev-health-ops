@@ -1,12 +1,14 @@
 package workerservice
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"sync"
 	"testing"
@@ -110,12 +112,20 @@ func TestDailyWorkItemEngineFamiliesRegisterWithTheWorkerConfiguration(t *testin
 	}
 }
 
+// workItemEngineDailyFamilies are the only two families whose refusal is
+// scoped to the family instead of failing worker construction.
+var workItemEngineDailyFamilies = []string{
+	daily.WorkItemIssueTypeFamilyName, daily.WorkItemInvestmentFamilyName,
+}
+
 // TestDailyWorkItemEngineFamiliesRefuseWithTheEngineLoadError: an engine that
-// cannot be loaded must not leave the two families quietly off the map. Both
-// are reported refused, with the load error, so buildDailyWorker fails the
-// start and names the cause; every other family is unaffected.
+// cannot be loaded must not leave the two families quietly off the map, and
+// must not take the worker down. Both are reported refused with the load
+// error, both refusals are scoped and counted with the refused outcome, and
+// every other family is unaffected.
 func TestDailyWorkItemEngineFamiliesRefuseWithTheEngineLoadError(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	observer := &recordingNativeFamilyObserver{}
 	// The same call buildDailyWorker makes, on a configuration with no engine
 	// paths.
 	engines := dailyWorkItemEnginesFrom(config.Config{})
@@ -126,18 +136,25 @@ func TestDailyWorkItemEngineFamiliesRefuseWithTheEngineLoadError(t *testing.T) {
 		t.Fatal("dailyWorkItemEnginesFrom returned an error and an engine: a half pair")
 	}
 	native, _, _, refusals := dailyNativeFamilyRegistrations(
-		fakeDailyStoreForRegistrationTest{}, githubWorkItemsBuildExecutorConn{}, engines, nil, logger,
+		fakeDailyStoreForRegistrationTest{}, githubWorkItemsBuildExecutorConn{}, engines, observer, logger,
 	)
-	refused := map[string]error{}
+	refused := map[string]dailyFamilyRefusal{}
 	for _, refusal := range refusals {
-		refused[refusal.family] = refusal.err
+		refused[refusal.family] = refusal
 	}
-	for _, family := range []string{daily.WorkItemIssueTypeFamilyName, daily.WorkItemInvestmentFamilyName} {
+	observed := refusedOutcomesByFamily(observer)
+	for _, family := range workItemEngineDailyFamilies {
 		if _, registered := native[family]; registered {
 			t.Errorf("family %q registered with no engine", family)
 		}
-		if !errors.Is(refused[family], engines.err) {
-			t.Errorf("family %q refusal = %v, want the engine load error %v", family, refused[family], engines.err)
+		if !errors.Is(refused[family].err, engines.err) {
+			t.Errorf("family %q refusal = %v, want the engine load error %v", family, refused[family].err, engines.err)
+		}
+		if !refused[family].scoped {
+			t.Errorf("family %q refusal is not scoped: it would fail the whole daily worker", family)
+		}
+		if observed[family] != 1 {
+			t.Errorf("family %q refused outcome observed %d times, want 1: the refusal has no counter", family, observed[family])
 		}
 	}
 	if len(refusals) != 2 {
@@ -146,6 +163,111 @@ func TestDailyWorkItemEngineFamiliesRefuseWithTheEngineLoadError(t *testing.T) {
 	if _, ok := native["work_item"]; !ok {
 		t.Error("a missing engine took the work_item family down with it")
 	}
+}
+
+// TestDailyWorkItemEngineFamilyConstructorRefusalIsScopedAndCounted: the
+// second refusal branch of the two families (the engines loaded, the executor
+// constructor refused) follows the same rule as the engine load error.
+func TestDailyWorkItemEngineFamilyConstructorRefusalIsScopedAndCounted(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	observer := &recordingNativeFamilyObserver{}
+	// A nil connection makes every executor constructor refuse.
+	native, _, _, refusals := dailyNativeFamilyRegistrations(
+		fakeDailyStoreForRegistrationTest{}, nil, dailyWorkItemEnginesForRegistrationTest(t), observer, logger,
+	)
+	refused := map[string]dailyFamilyRefusal{}
+	for _, refusal := range refusals {
+		refused[refusal.family] = refusal
+	}
+	observed := refusedOutcomesByFamily(observer)
+	for _, family := range workItemEngineDailyFamilies {
+		if _, registered := native[family]; registered {
+			t.Fatalf("family %q registered with a nil connection", family)
+		}
+		refusal, ok := refused[family]
+		if !ok || refusal.err == nil {
+			t.Errorf("family %q refusal = %#v, want a refusal with the constructor error", family, refusal)
+		}
+		if !refusal.scoped {
+			t.Errorf("family %q constructor refusal is not scoped", family)
+		}
+		if observed[family] != 1 {
+			t.Errorf("family %q refused outcome observed %d times, want 1", family, observed[family])
+		}
+	}
+}
+
+// TestReportDailyFamilyRefusalsFailsFastOnlyForUnscopedFamilies pins the two
+// halves of the refusal policy on the function buildDailyWorker calls: an
+// unscoped refusal is returned (it fails worker construction), a scoped one
+// is not, and BOTH are logged at ERROR with the family and the cause.
+func TestReportDailyFamilyRefusalsFailsFastOnlyForUnscopedFamilies(t *testing.T) {
+	cause := errors.New("artifact is unavailable")
+	var output bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&output, nil))
+
+	failFast := reportDailyFamilyRefusals(logger, []dailyFamilyRefusal{
+		{family: daily.WorkItemIssueTypeFamilyName, err: cause, scoped: true},
+		{family: "cicd", err: cause},
+		{family: daily.WorkItemInvestmentFamilyName, err: cause, scoped: true},
+	})
+	if len(failFast) != 1 || failFast[0] != "cicd" {
+		t.Errorf("fail-fast families = %v, want only cicd", failFast)
+	}
+
+	type line struct {
+		Level, Msg, Family, Error, Remedy string
+	}
+	logged := map[string]line{}
+	for _, raw := range bytes.Split(bytes.TrimSpace(output.Bytes()), []byte("\n")) {
+		var entry line
+		if err := json.Unmarshal(raw, &entry); err != nil {
+			t.Fatalf("log line %q: %v", raw, err)
+		}
+		logged[entry.Family] = entry
+	}
+	for _, family := range []string{"cicd", daily.WorkItemIssueTypeFamilyName, daily.WorkItemInvestmentFamilyName} {
+		entry, ok := logged[family]
+		if !ok {
+			t.Errorf("family %q refusal was not logged: a silent refusal", family)
+			continue
+		}
+		if entry.Level != slog.LevelError.String() {
+			t.Errorf("family %q refusal logged at %q, want ERROR", family, entry.Level)
+		}
+		if entry.Error != cause.Error() {
+			t.Errorf("family %q refusal logged error %q, want the cause %q", family, entry.Error, cause)
+		}
+	}
+	for _, family := range workItemEngineDailyFamilies {
+		entry := logged[family]
+		if entry.Msg != dailyFamilyScopedRefusalLogMessage {
+			t.Errorf("family %q logged %q, want the scoped refusal message", family, entry.Msg)
+		}
+		if entry.Remedy == "" {
+			t.Errorf("family %q scoped refusal names no remedy", family)
+		}
+	}
+	if logged["cicd"].Msg == dailyFamilyScopedRefusalLogMessage {
+		t.Error("the unscoped cicd refusal was logged as a scoped one")
+	}
+
+	if got := reportDailyFamilyRefusals(logger, nil); len(got) != 0 {
+		t.Errorf("no refusals gave fail-fast families %v", got)
+	}
+}
+
+// refusedOutcomesByFamily counts the refused observations per family.
+func refusedOutcomesByFamily(observer *recordingNativeFamilyObserver) map[string]int {
+	observer.mu.Lock()
+	defer observer.mu.Unlock()
+	counts := map[string]int{}
+	for _, call := range observer.calls {
+		if call.outcome == jobruntime.DailyMetricsNativeFamilyOutcomeRefused {
+			counts[call.family]++
+		}
+	}
+	return counts
 }
 
 // CHAOS-4292 rebase-gate finding (codex, 2026-09-01, two rounds): the
@@ -396,6 +518,23 @@ func TestDailyNativeFamilyRegistrationsReturnsEveryRefusalForFailFast(t *testing
 			t.Errorf("family %q reported refused twice", refusal.family)
 		}
 		seen[refusal.family] = struct{}{}
+		// Fail fast is the rule for every family except the two work-item
+		// engine families, whose refusal is scoped to the family.
+		if want := slices.Contains(workItemEngineDailyFamilies, refusal.family); refusal.scoped != want {
+			t.Errorf("family %q refusal scoped = %t, want %t: only the two work-item "+
+				"engine families may leave a started worker without their family",
+				refusal.family, refusal.scoped, want)
+		}
+	}
+	failFast := reportDailyFamilyRefusals(logger, refusals)
+	if len(failFast) != len(refusals)-len(workItemEngineDailyFamilies) {
+		t.Errorf("fail-fast families = %d of %d refusals, want every family but the %d scoped ones: %v",
+			len(failFast), len(refusals), len(workItemEngineDailyFamilies), failFast)
+	}
+	for _, family := range workItemEngineDailyFamilies {
+		if slices.Contains(failFast, family) {
+			t.Errorf("family %q is in the fail-fast set", family)
+		}
 	}
 
 	// Every families.json family this wiring is responsible for must be

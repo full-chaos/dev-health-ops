@@ -158,7 +158,8 @@ func buildDailyWorker(
 		// 'succeeded' through it after its Postgres commit; a failed append is
 		// logged and counted and never fails the run.
 		// CHAOS-8810: loaded once for the two work-item engine families; a
-		// load error is carried into their refusals (a startup error).
+		// load error is carried into their refusals, which are scoped to
+		// the two families and do not fail the worker.
 		workItemEngines := dailyWorkItemEnginesFrom(cfg)
 		markerStore, markerErr := daily.NewClickHouseRunMarkerStore(clickhouseConnection)
 		if markerErr != nil {
@@ -258,24 +259,16 @@ func buildDailyWorker(
 				// directly and asserts on its actual return value, not on
 				// source text.
 				nativeFamilies, postBridgeFamilies, _, familyRefusals := dailyNativeFamilyRegistrations(store, clickhouseConnection, workItemEngines, observer, logger)
-				if len(familyRefusals) > 0 {
-					refusedNames := make([]string, 0, len(familyRefusals))
-					for _, refusal := range familyRefusals {
-						refusedNames = append(refusedNames, refusal.family)
-						logger.Error(
-							"native daily family executor could not be constructed; "+
-								"CHAOS-3092 deleted the Python compatibility bridge, so "+
-								"there is nothing left to compute this family -- failing "+
-								"worker construction rather than starting with a family "+
-								"that would silently never be written",
-							"family", refusal.family,
-							"error", refusal.err,
-						)
-					}
+				// CHAOS-8810: a refusal of work_item_issue_type or
+				// work_item_investment is scoped to that family (see
+				// dailyFamilyRefusal.scoped). It is logged at ERROR and
+				// counted, and the worker starts without it; every other
+				// refusal keeps the fail-fast rule above.
+				if failFastFamilies := reportDailyFamilyRefusals(logger, familyRefusals); len(failFastFamilies) > 0 {
 					_ = clickhouseConnection.Close()
 					return workerFamily{}, fmt.Errorf(
 						"%w: native daily family construction refused: %s",
-						errWorkerDependencyUnavailable, strings.Join(refusedNames, ","),
+						errWorkerDependencyUnavailable, strings.Join(failFastFamilies, ","),
 					)
 				}
 				if len(nativeFamilies) > 0 || len(postBridgeFamilies) > 0 {
@@ -892,10 +885,65 @@ func buildDailyWorker(
 // CHAOS-3092 (PR-A): with the Python compatibility bridge deleted there is
 // nothing left for such a family to fall open to, so this is a startup
 // error rather than a log line -- see dailyNativeFamilyRegistrations.
+//
+// scoped (CHAOS-8810) is the one exception to that rule, and it is set for
+// exactly two families: work_item_issue_type and work_item_investment. They
+// need two configuration artifacts on disk that no other daily family reads,
+// so a worker without them can still compute every other family correctly.
+// Failing the whole worker for them stopped every daily table, and with it
+// the metrics queue, on a fault of two. A scoped refusal follows the DORA
+// rule instead: the family is not registered (its tables are not written,
+// which is a gap and not wrong data), the refusal is logged at ERROR with
+// the family and the cause, and it is counted as a refused native family,
+// so an alert has a positive signal. No family reads the tables of these
+// two in the same partition, so their absence blocks no other family.
 type dailyFamilyRefusal struct {
 	family string
 	err    error
+	scoped bool
 }
+
+// reportDailyFamilyRefusals logs every refusal at ERROR and returns the
+// names of the families whose refusal must fail worker construction. A
+// scoped refusal is logged with its own message and is not in the result.
+// Every refusal is logged, of both classes: a family this worker does not
+// serve must never be found only by the absence of its rows.
+func reportDailyFamilyRefusals(logger *slog.Logger, refusals []dailyFamilyRefusal) []string {
+	var failFast []string
+	for _, refusal := range refusals {
+		if refusal.scoped {
+			logger.Error(
+				dailyFamilyScopedRefusalLogMessage,
+				"family", refusal.family,
+				"error", refusal.err,
+				"remedy", dailyFamilyScopedRefusalRemedy,
+			)
+			continue
+		}
+		failFast = append(failFast, refusal.family)
+		logger.Error(
+			"native daily family executor could not be constructed; "+
+				"CHAOS-3092 deleted the Python compatibility bridge, so "+
+				"there is nothing left to compute this family -- failing "+
+				"worker construction rather than starting with a family "+
+				"that would silently never be written",
+			"family", refusal.family,
+			"error", refusal.err,
+		)
+	}
+	return failFast
+}
+
+// dailyFamilyScopedRefusalLogMessage is the ERROR line of a scoped refusal.
+const dailyFamilyScopedRefusalLogMessage = "native daily family executor refused; " +
+	"the family will not be served and its tables will not be written by " +
+	"this worker. Every other daily family is unaffected."
+
+const dailyFamilyScopedRefusalRemedy = "make the work-items status mapping and " +
+	"investment config readable as regular files at " +
+	"WORKER_GITHUB_WORK_ITEMS_STATUS_MAPPING_PATH and " +
+	"WORKER_GITHUB_WORK_ITEMS_INVESTMENT_CONFIG_PATH, unset " +
+	"STATUS_MAPPING_PATH, then restart the worker"
 
 // dailyWorkItemEngines is the pair of config-driven engines the two CHAOS-8810
 // work-item daily families compute with: the status mapping (the type rule of
@@ -903,7 +951,7 @@ type dailyFamilyRefusal struct {
 // two artifacts, at the same two configured paths, that the work-items sync
 // deriver loads (workItemsRuntimeConfigFrom), so the daily job and the sync
 // cannot classify one item two ways. err is the load error, kept so that the
-// startup error of a refused family names why.
+// ERROR line of a refused family names why.
 type dailyWorkItemEngines struct {
 	typeNormalizer       workitemengine.TypeNormalizer
 	investmentClassifier workitemengine.InvestmentClassifier
@@ -954,7 +1002,9 @@ func dailyWorkItemEnginesFrom(cfg config.Config) dailyWorkItemEngines {
 // means its rows are never written by anyone, for every partition, for the
 // worker's whole process lifetime. Every refusal is returned in `refusals`
 // and buildDailyWorker turns it into a startup error naming the family and
-// its error: fail fast, never fall open. FINALIZE-scope refusals keep their
+// its error: fail fast, never fall open. The one exception (CHAOS-8810) is a
+// refusal marked scoped, which only work_item_issue_type and
+// work_item_investment return: see dailyFamilyRefusal. FINALIZE-scope refusals keep their
 // existing policy (logged here, then failed loudly per run with
 // ErrFinalizeFamilyIncomplete -- CHAOS-3092 PR-A'), since that path already
 // has no fallback and its own loud failure.
@@ -1371,26 +1421,34 @@ func dailyNativeFamilyRegistrations(
 	// families.json orders them after work_item_attribution, like the three
 	// families above. Each needs one of the two config-driven engines the
 	// sync deriver uses; an engine that could not be loaded is a refusal
-	// that carries the load error, so the startup error names the cause.
+	// that carries the load error, so the ERROR line names the cause. Every
+	// refusal of these two families is scoped (see dailyFamilyRefusal.scoped)
+	// and counted with the refused outcome every native family already uses.
+	refuseWorkItemEngineFamily := func(family string, err error) {
+		if nativeFamilyObserver, ok := observer.(jobruntime.DailyMetricsNativeFamilyObserver); ok {
+			_ = nativeFamilyObserver.ObserveDailyMetricsNativeFamily(
+				family, jobruntime.DailyMetricsNativeFamilyOutcomeRefused, 0, 0,
+			)
+		}
+		refusals = append(refusals, dailyFamilyRefusal{family: family, err: err, scoped: true})
+	}
 	if workItemEngines.err != nil {
-		refusals = append(refusals,
-			dailyFamilyRefusal{family: daily.WorkItemIssueTypeFamilyName, err: workItemEngines.err},
-			dailyFamilyRefusal{family: daily.WorkItemInvestmentFamilyName, err: workItemEngines.err},
-		)
+		refuseWorkItemEngineFamily(daily.WorkItemIssueTypeFamilyName, workItemEngines.err)
+		refuseWorkItemEngineFamily(daily.WorkItemInvestmentFamilyName, workItemEngines.err)
 	} else {
 		if issueTypeExecutor, issueTypeErr := daily.NewWorkItemIssueTypeExecutor(
 			clickhouseConnection, workItemEngines.typeNormalizer,
 		); issueTypeErr == nil {
 			native[daily.WorkItemIssueTypeFamilyName] = issueTypeExecutor
 		} else {
-			refusals = append(refusals, dailyFamilyRefusal{family: daily.WorkItemIssueTypeFamilyName, err: issueTypeErr})
+			refuseWorkItemEngineFamily(daily.WorkItemIssueTypeFamilyName, issueTypeErr)
 		}
 		if investmentExecutor, investmentErr := daily.NewWorkItemInvestmentExecutor(
 			clickhouseConnection, workItemEngines.investmentClassifier,
 		); investmentErr == nil {
 			native[daily.WorkItemInvestmentFamilyName] = investmentExecutor
 		} else {
-			refusals = append(refusals, dailyFamilyRefusal{family: daily.WorkItemInvestmentFamilyName, err: investmentErr})
+			refuseWorkItemEngineFamily(daily.WorkItemInvestmentFamilyName, investmentErr)
 		}
 	}
 	return native, postBridge, finalize, refusals

@@ -663,7 +663,11 @@ echo "==> [CHAOS-5362] confirming the native Go executors (not a Python fail-ope
 # native executor ran, not which team it attributed to). benchmarking is NOT
 # included -- it needs a complexity-scan seed step this job does not
 # perform, same exclusion reason as executed-proof's team_complexity.
-wait_for_native_family_telemetry team_wellbeing repo_user_commit cicd deploy incident
+# work_item_issue_type and work_item_investment (CHAOS-8810): the base
+# fixtures-generate call writes work_items rows of this repository, so both
+# families have source rows. A worker that starts without them (their refusal
+# is scoped to the two families) fails here.
+wait_for_native_family_telemetry team_wellbeing repo_user_commit cicd deploy incident work_item_issue_type work_item_investment
 
 echo "==> generating auth token for authenticated endpoints"
 AUTH_TOKEN="$(generate_auth_token)"

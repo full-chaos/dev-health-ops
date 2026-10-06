@@ -72,16 +72,6 @@ KNOWN_UNCOVERED = {
     # executed-proof E2E seed's anchor partition actually produces
     # work_item_team_attributions rows.
     "work_item_attribution",
-    # CHAOS-8810: the two daily families of issue_type_metrics_daily and of
-    # the investment daily tables. Pinned for the reason of the three
-    # work-item families above: the executed-proof E2E seed drives four sync
-    # targets (cicd, deployments, incidents, tests) and stores no work item,
-    # so neither family can produce a row there whatever the code does. Their
-    # executed proof is the route harness and the stored-row matrix in
-    # internal/providersync and internal/jobs/metrics/daily. Closing the gap
-    # needs a work-items seed step in the E2E loop.
-    "work_item_issue_type",
-    "work_item_investment",
     # MINE (CHAOS-4285, #2229), pinned with evidence, not by default. The
     # executed-proof E2E seed loop above (ci/run_metrics_executed_proof.sh)
     # only drives four sync targets -- cicd, deployments, incidents, tests --

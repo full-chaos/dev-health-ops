@@ -189,6 +189,10 @@
     "digest": "964b2e867a1e37c09382552eb0af394758fa10d68081a560ebc0f36c28cc3501"
   },
   {
+    "operation": "investmentEvidenceQuality",
+    "digest": "5e31cdbd14dde65165c635a8a3f02fb03f85fae0ef9c21eeb39808c199323c2a"
+  },
+  {
     "operation": "investmentFull",
     "digest": "663e516c6152c81e28780d27809fcbe5aeae8c92b07d34b19978b7d59913cb3d"
   },

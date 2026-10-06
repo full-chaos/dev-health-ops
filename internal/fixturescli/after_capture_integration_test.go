@@ -46,6 +46,12 @@ var columnsAfterTheCapture = map[string]map[string]string{
 		"relation_started_at": "102_work_item_dependency_first_seen.sql",
 		"relation_writer":     "103_work_item_relation_writer_and_read.sql",
 	},
+	// The number of distinct quotes the row's run wrote (CHAOS-8788): the
+	// materializer records it; a captured row has no value for it, so the
+	// load leaves it NULL ("not recorded" = complete).
+	"work_unit_investments": {
+		"evidence_quote_count": "106_work_unit_investment_quote_count.sql",
+	},
 }
 
 // viewFilledTable is one table that a materialized view fills.

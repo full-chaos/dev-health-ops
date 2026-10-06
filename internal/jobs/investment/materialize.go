@@ -469,6 +469,14 @@ func (m *Materializer) Run(ctx context.Context, cfg Config) (Stats, error) {
 		if err != nil {
 			return Stats{}, fmt.Errorf("fetch existing investment keys: %w", err)
 		}
+		// COMPLETENESS (CHAOS-8788, migration 106). A unit the key says is fresh is
+		// still rewritten when the quotes visible under its row's run id are not
+		// the quotes its run wrote: a later run that died before its investment
+		// row replaced them (the quote key has no run id). ONE count query for the
+		// whole request, only over the units about to be skipped. A row with no
+		// recorded count (NULL: written before the migration, or a run that did not
+		// persist snippets) is treated as complete and never checked.
+		incomplete := m.incompleteExisting(ctx, cfg.OrgID, pending, existing)
 		remaining := pending[:0:0]
 		for _, entry := range pending {
 			key := chquery.InvestmentKey{
@@ -476,12 +484,17 @@ func (m *Materializer) Run(ctx context.Context, cfg Config) (Stats, error) {
 				InputHash:  entry.result.Bundle.InputHash,
 			}
 			if _, ok := existing[key]; ok {
-				skippedExisting[entry.index] = struct{}{}
-				continue
+				if !incomplete.has(entry.result.Investment.WorkUnitID) {
+					skippedExisting[entry.index] = struct{}{}
+					continue
+				}
 			}
 			remaining = append(remaining, entry)
 		}
 		pending = remaining
+		if incompleteErr := incomplete.err; incompleteErr != nil {
+			return Stats{}, incompleteErr
+		}
 	}
 	stats.SkippedExisting = len(skippedExisting)
 
@@ -542,6 +555,16 @@ func (m *Materializer) Run(ctx context.Context, cfg Config) (Stats, error) {
 		}
 
 		record := entry.result.Investment
+		if cfg.PersistEvidenceSnippets {
+			// What this run is about to write to the quotes table, counted the way
+			// the quote key counts it: distinct (source_id, quote) of the unit.
+			distinct := make(map[[2]string]struct{}, len(outcome.EvidenceQuotes))
+			for _, quote := range outcome.EvidenceQuotes {
+				distinct[[2]string{quote.SourceID, quote.Quote}] = struct{}{}
+			}
+			count := uint32(len(distinct))
+			record.EvidenceQuoteCount = &count
+		}
 		record.SubcategoryDistribution = outcome.Subcategories
 		record.ThemeDistribution = units.RollupSubcategoriesToThemes(outcome.Subcategories)
 		record.CategorizationStatus = outcome.Status
@@ -614,24 +637,22 @@ func (m *Materializer) Run(ctx context.Context, cfg Config) (Stats, error) {
 	// rows exist, so a crashed run is simply redone: every table is a
 	// ReplacingMergeTree and the keys are stable, so the re-run overwrites.
 	//
-	// WHAT THIS DOES AND DOES NOT PROTECT (CHAOS-8788, a known gap): for a unit
-	// WITHOUT an older investment row, the rows of a crashed run stay invisible
-	// (every reader joins FROM work_unit_investments; quotes are read by the
-	// row's own run id). For a unit that ALREADY has an investment row -- it is
-	// being re-categorised because its evidence, the model or force changed, or
-	// its last status was a fallback -- a crash between the writes leaves the new
-	// run's quote and effort rows BESIDE the old row. After a ClickHouse merge a
-	// quote of equal text replaces the old run's quote (the quote key has no run
-	// id), so the old row can show fewer or no quotes, and the effort reader
-	// shows the half-written run's effort. WHEN IT HEALS: the retry of the same
-	// request rewrites the unit, and so does any later request for which the
-	// unit's skip-existing key changed (its input hash or the model version), or
-	// that sets Force again. WHEN IT DOES NOT: skip-existing keys on unit + input
-	// hash + model version and never on Force, so a FORCE-only rewrite of an
-	// unchanged unit that crashed, once its request ended failed, is SKIPPED by the
-	// next normal request and its quotes stay lost (the effort is rewritten: skipped
-	// units still get their effort rows). Pinned by
-	// TestKnownGapCHAOS8788CrashedRewriteOfAnOlderUnitThenHealing.
+	// WHAT THIS DOES AND DOES NOT PROTECT (CHAOS-8788): for a unit WITHOUT an older
+	// investment row, the rows of a crashed run stay invisible (every reader joins
+	// FROM work_unit_investments; quotes are read by the row's own run id). For a
+	// unit that ALREADY has an investment row -- re-categorised because its
+	// evidence, the model or force changed, or its last status was a fallback -- a
+	// crash between the writes leaves the new run's quote and effort rows BESIDE the
+	// old row. After a ClickHouse merge a quote of equal text replaces the old run's
+	// quote (the quote key has no run id), so the old row shows fewer or no quotes,
+	// and the effort reader shows the half-written run's effort. That window, between
+	// the crash and the next request, is unchanged. What heals it is skip-existing's
+	// COMPLETENESS check (incompleteExisting): the row records how many distinct
+	// quotes its run wrote (evidence_quote_count, migration 106) and a unit whose
+	// visible quotes differ is rewritten by the next request, even force-only with
+	// the same input hash. Rows with no recorded count (written before the migration)
+	// are treated as complete. Pinned by
+	// TestCHAOS8788CrashedRewriteOfAnOlderUnitIsHealedByTheNextRequest.
 	if len(quotes) > 0 {
 		if _, err := m.writer.WriteQuotes(ctx, cfg.OrgID, quotes); err != nil {
 			return Stats{}, fmt.Errorf("write work_unit_investment_quotes: %w", err)
@@ -668,6 +689,60 @@ func (m *Materializer) Run(ctx context.Context, cfg Config) (Stats, error) {
 		"llm", categorize.FormatFailureSummary(len(outcomes)-fallbackCount, stats.LLMFailureCounts),
 	)
 	return stats, nil
+}
+
+// incompleteUnits is the set of work unit ids whose quotes are not complete,
+// and the error of the lookup that found out (kept apart so the caller can
+// finish its bookkeeping first).
+type incompleteUnits struct {
+	units map[string]struct{}
+	err   error
+}
+
+func (set incompleteUnits) has(unit string) bool {
+	_, ok := set.units[unit]
+	return ok
+}
+
+// incompleteExisting returns the units among pending that skip-existing found a
+// fresh row for but whose visible quotes differ from the count the row's run
+// recorded. It is one chquery.FetchVisibleQuoteCounts call.
+func (m *Materializer) incompleteExisting(
+	ctx context.Context, orgID string, pending []preprocessed,
+	existing map[chquery.InvestmentKey]chquery.ExistingInvestment,
+) incompleteUnits {
+	type expectation struct {
+		run   string
+		count uint32
+	}
+	expected := map[string]expectation{}
+	wanted := make([]chquery.UnitRun, 0)
+	for _, entry := range pending {
+		unit := entry.result.Investment.WorkUnitID
+		found, ok := existing[chquery.InvestmentKey{WorkUnitID: unit, InputHash: entry.result.Bundle.InputHash}]
+		if !ok || found.QuoteCount == nil {
+			continue
+		}
+		expected[unit] = expectation{run: found.RunID, count: *found.QuoteCount}
+		wanted = append(wanted, chquery.UnitRun{WorkUnitID: unit, RunID: found.RunID})
+	}
+	result := incompleteUnits{units: map[string]struct{}{}}
+	if len(wanted) == 0 {
+		return result
+	}
+	visible, err := m.reader.FetchVisibleQuoteCounts(ctx, orgID, wanted)
+	if err != nil {
+		result.err = fmt.Errorf("fetch visible quote counts: %w", err)
+		return result
+	}
+	for unit, want := range expected {
+		if visible[unit] != want.count {
+			result.units[unit] = struct{}{}
+			m.logger.WarnContext(ctx, "investment unit is incomplete: its row's quotes are not all visible; rewriting it",
+				"work_unit_id", unit, "run_id", want.run, "recorded_quotes", want.count, "visible_quotes", visible[unit])
+		}
+	}
+	return result
 }
 
 // categorizePending runs the bounded-concurrency LLM fan-out.

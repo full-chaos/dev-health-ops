@@ -22,6 +22,9 @@ type gitLabWorkItemsDoer struct {
 	// nextHeader makes the fake answer like GitLab does: X-Next-Page names the
 	// next page when that page holds rows, and is EMPTY on the last page.
 	nextHeader bool
+	// forceNextHeader overrides X-Next-Page for one response key
+	// ("<path>?page=N"), to model a provider whose header disagrees with its body.
+	forceNextHeader map[string]string
 }
 
 func (doer *gitLabWorkItemsDoer) Do(request *http.Request) (*http.Response, error) {
@@ -49,6 +52,9 @@ func (doer *gitLabWorkItemsDoer) Do(request *http.Request) (*http.Response, erro
 				header.Set("X-Next-Page", strconv.Itoa(page+1))
 			}
 		}
+	}
+	if forced, ok := doer.forceNextHeader[key]; ok {
+		header.Set("X-Next-Page", forced)
 	}
 	return &http.Response{
 		StatusCode: http.StatusOK, Status: "200 OK", Header: header,

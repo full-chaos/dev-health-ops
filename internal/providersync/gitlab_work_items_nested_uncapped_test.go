@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -187,5 +188,61 @@ func TestGitLabWorkItemsRouteNestedBoundFollowsALowerTopLevelMaxPages(t *testing
 	}
 	if _, err := collectGitLabLargeNestedListsWith(t, 5_001, 0, 0, handler); !errors.Is(err, ErrPaginationCapExceeded) {
 		t.Fatalf("51 pages: err=%v", err)
+	}
+}
+
+// CHAOS-8777 r2 P1: an EMPTY page that still advertises a next page is an
+// ambiguous answer. The paginator stops on an empty page, so the note on page
+// 102 (or on page 6 in the short case) would be left out of a run that reports
+// success and advances the watermark. It must fail closed instead, pagination_incomplete,
+// naming the owner item and the field; no batch, no rows.
+func TestGitLabWorkItemsRouteEmptyPageAdvertisingANextPageFailsClosed(t *testing.T) {
+	notes := func(count int) []string {
+		return gitLabPagedResponses(count, func(i int) string {
+			return fmt.Sprintf(`{"system":false,"body":"note %d","created_at":"2026-07-02T12:%02d:%02dZ","author":{"username":"alice"}}`, i, (i/60)%60, i%60)
+		})
+	}
+	for _, test := range []struct {
+		name      string
+		fullPages int // full pages before the empty one
+	}{
+		{"empty confirmation page 101 with next 102", 100},
+		{"empty page 6 with next 7", 5},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			root := "/api/v4/projects/123"
+			responses := gitLabWorkItemResponses()
+			responses[root+"/merge_requests?page=1"] = []string{`[]`}
+			list := notes(test.fullPages * 100)
+			list = list[:test.fullPages] // drop the trailing "[]" the helper adds
+			path := root + "/issues/42/notes"
+			for number, body := range list {
+				responses[fmt.Sprintf("%s?page=%d", path, number+1)] = []string{body}
+			}
+			empty := test.fullPages + 1
+			responses[fmt.Sprintf("%s?page=%d", path, empty)] = []string{`[]`}
+			responses[fmt.Sprintf("%s?page=%d", path, empty+1)] = []string{`[{"system":false,"body":"the omitted note","created_at":"2026-07-02T13:00:00Z","author":{"username":"alice"}}]`}
+			doer := &gitLabWorkItemsDoer{responses: responses, nextHeader: true, forceNextHeader: map[string]string{
+				fmt.Sprintf("%s?page=%d", path, empty): strconv.Itoa(empty + 1),
+			}}
+			claim := nativeTestClaim("gitlab", "work-items")
+			handler := GitLabWorkItemsRouteHandler{StatusMapping: loadRealStatusMapping(t), IncludeMRs: boolPointer(false)}
+			batch, err := handler.Collect(
+				context.Background(), claim,
+				providerfoundation.Credential{Provider: "gitlab", ID: claim.CredentialID},
+				gitLabWorkItemsClient(t, fakehttp.Client(doer)), time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC),
+			)
+			if !errors.Is(err, ErrPaginationCapExceeded) {
+				t.Fatalf("err=%v want ErrPaginationCapExceeded", err)
+			}
+			for _, want := range []string{"notes of /api/v4/projects/123/issues/42", "empty page that still advertised a next page"} {
+				if !strings.Contains(err.Error(), want) {
+					t.Fatalf("error %q lacks %q", err, want)
+				}
+			}
+			if len(batch.Effects) != 0 || batch.Watermark != nil {
+				t.Fatalf("a failed unit carried effects=%d watermark=%v", len(batch.Effects), batch.Watermark)
+			}
+		})
 	}
 }

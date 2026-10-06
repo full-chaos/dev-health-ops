@@ -574,19 +574,31 @@ func collectGitLabNestedPayloads(
 			if visit.Pages > maxPages && len(visit.Items) > 0 {
 				return errGitLabNestedPastBound
 			}
+			// An EMPTY page that still advertises a next page is an ambiguous
+			// answer: the paginator stops on it, so rows after it would be left
+			// out of a run that looks complete. Fail closed (CHAOS-8777 r2).
+			if len(visit.Items) == 0 && visit.CursorAfter != "0" {
+				return errGitLabNestedEmptyWithNext
+			}
 			items = append(items, visit.Items...)
 			return nil
 		})
+	if errors.Is(err, errGitLabNestedEmptyWithNext) {
+		owner, field := gitLabNestedOwnerAndField(path)
+		slog.Error("providersync.gitlab.nested_list_empty_page_with_next",
+			"owner", owner, "field", field, "page", collected.Pages+1, "max_pages", maxPages)
+		return nil, collected.Pages, fmt.Errorf(
+			"%w: gitlab %s of %s ended on an empty page that still advertised a next page",
+			ErrPaginationCapExceeded, field, owner,
+		)
+	}
 	if err != nil && !errors.Is(err, errGitLabNestedPastBound) {
 		return nil, 0, err
 	}
 	if err == nil && !collected.PageBudgetExhausted {
 		return items, min(collected.Pages, maxPages), nil
 	}
-	owner, field := path, path
-	if cut := strings.LastIndex(path, "/"); cut >= 0 {
-		owner, field = path[:cut], path[cut+1:]
-	}
+	owner, field := gitLabNestedOwnerAndField(path)
 	slog.Error("providersync.gitlab.nested_list_bound_exceeded",
 		"owner", owner, "field", field, "pages", maxPages, "max_pages", maxPages)
 	return nil, maxPages, fmt.Errorf(
@@ -596,6 +608,18 @@ func collectGitLabNestedPayloads(
 }
 
 var errGitLabNestedPastBound = errors.New("gitlab nested list has rows past the page bound")
+var errGitLabNestedEmptyWithNext = errors.New("gitlab nested list page is empty but advertises a next page")
+
+// gitLabNestedOwnerAndField splits a nested list path into its owner item and
+// the field: the request path without its query string (a project id and an iid,
+// never a credential or payload text).
+func gitLabNestedOwnerAndField(path string) (owner, field string) {
+	owner, field = path, path
+	if cut := strings.LastIndex(path, "/"); cut >= 0 {
+		owner, field = path[:cut], path[cut+1:]
+	}
+	return owner, field
+}
 
 func collectGitLabMilestones(
 	ctx context.Context, client *providerfoundation.HTTPClient, path string,

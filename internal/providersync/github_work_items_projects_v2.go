@@ -292,6 +292,11 @@ func (GitHubProjectV2Fetcher) Fetch(
 			} else if item.Content.Typename != "DraftIssue" {
 				boardIncomplete = true
 			}
+			if item.Content.Labels.Nodes != nil {
+				if err := gitHubProjectV2RequirePageInfo(target, item.ID, "labels", item.Content.Labels.PageInfo); err != nil {
+					return finishGitHubProjectV2Fetch(result), err
+				}
+			}
 			if labels := item.Content.Labels.PageInfo; labels != nil && labels.HasNextPage != nil && *labels.HasNextPage {
 				result.LabelsTruncated++
 				slog.Warn("providersync.github.projects_v2.item_labels_truncated",
@@ -614,9 +619,23 @@ func fetchGitHubProjectV2Target(
 	}
 }
 
+// gitHubProjectV2RequirePageInfo fails closed on an AMBIGUOUS answer: the query
+// asked this connection for pageInfo.hasNextPage and the provider answered the
+// connection (nodes) without it, so "complete" cannot be told from "cut". It is never read as
+// complete (CHAOS-8777 r2). The error is retryable (ErrPaginationInvalid): a
+// provider glitch may clear, a real cut would be seen again and again.
+func gitHubProjectV2RequirePageInfo(target GitHubProjectV2Target, itemID, field string, info *gitHubProjectV2PageInfo) error {
+	if info != nil && info.HasNextPage != nil {
+		return nil
+	}
+	slog.Error("providersync.github.projects_v2.page_info_missing",
+		"org_login", target.OrgLogin, "project_number", target.ProjectNumber,
+		"item", itemID, "field", field)
+	return fmt.Errorf("%w: github projects v2 %s of project %s#%d item %s came back without pageInfo",
+		providerfoundation.ErrPaginationInvalid, field, target.OrgLogin, target.ProjectNumber, itemID)
+}
+
 // completeGitHubProjectV2FieldValues pages one item's fieldValues to the end.
-// A page without pageInfo is the shape of a provider that reports nothing more
-// to read and is kept as it always was; only an explicit hasNextPage pages on.
 func completeGitHubProjectV2FieldValues(
 	ctx context.Context,
 	client *providerfoundation.HTTPClient,
@@ -625,7 +644,15 @@ func completeGitHubProjectV2FieldValues(
 	evidence *FetchEvidence,
 ) error {
 	info := item.FieldValues.PageInfo
-	if info == nil || info.HasNextPage == nil || !*info.HasNextPage {
+	if item.FieldValues.Nodes == nil && info == nil {
+		// The connection is absent from the answer altogether (not an answered
+		// connection that lost its pageInfo): there is nothing to page.
+		return nil
+	}
+	if err := gitHubProjectV2RequirePageInfo(target, item.ID, "fieldValues", info); err != nil {
+		return err
+	}
+	if !*info.HasNextPage {
 		return nil
 	}
 	cursor := strings.TrimSpace(info.EndCursor)

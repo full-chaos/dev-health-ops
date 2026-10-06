@@ -63,9 +63,13 @@ func gitHubProjectV2PageInfoJSON(more bool, cursor string) string {
 }
 
 func gitHubProjectV2ItemJSON(fieldValues, changes string) string {
+	return gitHubProjectV2ItemWithLabelsJSON(`{"nodes":[],"pageInfo":`+gitHubProjectV2EndPage+`}`, fieldValues, changes)
+}
+
+func gitHubProjectV2ItemWithLabelsJSON(labels, fieldValues, changes string) string {
 	return `{"id":"PVTI_1","content":{"__typename":"Issue","number":7,"title":"Ship it","state":"OPEN",` +
 		`"createdAt":"2026-08-01T08:00:00Z","updatedAt":"2026-08-02T08:00:00Z","repository":{"nameWithOwner":"acme/api"},` +
-		`"labels":{"nodes":[]},"assignees":{"nodes":[]}},"fieldValues":` + fieldValues + `,"changes":` + changes + `}`
+		`"labels":` + labels + `,"assignees":{"nodes":[]}},"fieldValues":` + fieldValues + `,"changes":` + changes + `}`
 }
 
 func gitHubProjectV2ItemsReply(item string) string {
@@ -166,7 +170,7 @@ func changesBoard(total int) func(string, map[string]any) string {
 			index, _ := strconv.Atoi(strings.TrimPrefix(after, "c"))
 			return `{"data":{"node":{"changes":` + page(index+1) + `}}}`
 		}
-		return gitHubProjectV2ItemsReply(gitHubProjectV2ItemJSON(`{"nodes":[]}`, page(0)))
+		return gitHubProjectV2ItemsReply(gitHubProjectV2ItemJSON(`{"nodes":[],"pageInfo":`+gitHubProjectV2EndPage+`}`, page(0)))
 	}
 }
 
@@ -218,5 +222,61 @@ func TestGitHubProjectV2FetcherItemsRunawayGuardIsTheTopLevelMaximum(t *testing.
 	}
 	if doer.requests != 10_000 {
 		t.Fatalf("requests=%d want 10000", doer.requests)
+	}
+}
+
+// CHAOS-8777 r2 P1: a connection the query asked pageInfo for that CAME BACK
+// without it is an ambiguous answer, never "complete". 100 values without
+// pageInfo hid an Estimate that sat on a continuation page; labels lacking
+// pageInfo cannot be counted as truncated or not. Both fail closed (retryable
+// ErrPaginationInvalid, item and field named, no rows) instead of succeeding.
+func TestGitHubProjectV2FetcherAnsweredConnectionWithoutPageInfoFailsClosed(t *testing.T) {
+	values := make([]string, 0, 100)
+	for index := 0; index < 100; index++ {
+		values = append(values, gitHubProjectV2NumberValue("Field"+strconv.Itoa(index), index))
+	}
+	withoutPageInfo := `{"nodes":[` + strings.Join(values, ",") + `]}`
+	for _, test := range []struct {
+		name  string
+		item  string
+		field string
+	}{
+		{"fieldValues", gitHubProjectV2ItemJSON(withoutPageInfo, gitHubProjectV2NoChanges()), "fieldValues"},
+		{"fieldValues pageInfo without hasNextPage", gitHubProjectV2ItemJSON(`{"nodes":[`+values[0]+`],"pageInfo":{"endCursor":"x"}}`, gitHubProjectV2NoChanges()), "fieldValues"},
+		{"labels pageInfo without hasNextPage", gitHubProjectV2ItemWithLabelsJSON(`{"nodes":[{"name":"a"}],"pageInfo":{"endCursor":"x"}}`,
+			`{"nodes":[],"pageInfo":`+gitHubProjectV2EndPage+`}`, gitHubProjectV2NoChanges()), "labels"},
+		{"labels", gitHubProjectV2ItemWithLabelsJSON(`{"nodes":[{"name":"a"}]}`,
+			`{"nodes":[],"pageInfo":`+gitHubProjectV2EndPage+`}`, gitHubProjectV2NoChanges()), "labels"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			result, doer, err := fetchGitHubProjectV2Board(t, func(string, map[string]any) string {
+				return gitHubProjectV2ItemsReply(test.item)
+			})
+			if !errors.Is(err, providerfoundation.ErrPaginationInvalid) {
+				t.Fatalf("err=%v want ErrPaginationInvalid", err)
+			}
+			for _, want := range []string{test.field + " of project acme#3 item PVTI_1", "without pageInfo"} {
+				if !strings.Contains(err.Error(), want) {
+					t.Fatalf("error %q lacks %q", err, want)
+				}
+			}
+			if len(result.Rows.WorkItems) != 0 || doer.requests != 1 {
+				t.Fatalf("rows=%d requests=%d: a fail-closed board must not emit rows", len(result.Rows.WorkItems), doer.requests)
+			}
+		})
+	}
+}
+
+// A connection ABSENT from the answer altogether (not an answered connection
+// that lost its pageInfo) has nothing to page and is not an error.
+func TestGitHubProjectV2FetcherAbsentConnectionsAreNotAmbiguous(t *testing.T) {
+	item := `{"id":"PVTI_1","content":{"__typename":"Issue","number":7,"title":"t","state":"OPEN",` +
+		`"createdAt":"2026-08-01T08:00:00Z","updatedAt":"2026-08-02T08:00:00Z","repository":{"nameWithOwner":"acme/api"}},` +
+		`"changes":` + gitHubProjectV2NoChanges() + `}`
+	result, _, err := fetchGitHubProjectV2Board(t, func(string, map[string]any) string {
+		return gitHubProjectV2ItemsReply(item)
+	})
+	if err != nil || len(result.Rows.WorkItems) != 1 {
+		t.Fatalf("err=%v rows=%d", err, len(result.Rows.WorkItems))
 	}
 }

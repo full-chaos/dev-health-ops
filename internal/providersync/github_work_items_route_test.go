@@ -256,7 +256,7 @@ func TestGitHubWorkItemsRouteComposesRESTSocialProjectsDerivedRowsAndUsage(t *te
 		{
 			name: "unidentified item", reason: githubProjectsV2UnidentifiedItem,
 			reply: `{"data":{"organization":{"projectV2":{"items":{"nodes":[` +
-				`{"id":"PVTI_1","content":{"__typename":"SomeFutureContentType"},"fieldValues":{"nodes":[]},"changes":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}` +
+				`{"id":"PVTI_1","content":{"__typename":"SomeFutureContentType"},"fieldValues":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}},"changes":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}` +
 				`],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}`,
 		},
 		// codex adversarial review, CHAOS-4289 round 2: this item (Issue #7 in
@@ -268,7 +268,7 @@ func TestGitHubWorkItemsRouteComposesRESTSocialProjectsDerivedRowsAndUsage(t *te
 		{
 			name: "nested changes nodes missing", reason: githubProjectsV2StructuralDegraded,
 			reply: `{"data":{"organization":{"projectV2":{"items":{"nodes":[` +
-				`{"id":"PVTI_1","content":{"__typename":"Issue","number":7,"repository":{"nameWithOwner":"acme/api"}},"fieldValues":{"nodes":[]},"changes":{"pageInfo":{"hasNextPage":false,"endCursor":null}}}` +
+				`{"id":"PVTI_1","content":{"__typename":"Issue","number":7,"repository":{"nameWithOwner":"acme/api"}},"fieldValues":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}},"changes":{"pageInfo":{"hasNextPage":false,"endCursor":null}}}` +
 				`],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}`,
 		},
 	} {

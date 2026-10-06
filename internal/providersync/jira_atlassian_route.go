@@ -34,7 +34,23 @@ const (
 	// the dataset options carry no comments_limit (CHAOS-8806).
 	jiraAtlassianDefaultCommentsLimit = 500
 	jiraAtlassianWorklogPerPage       = 100
+	// jiraAtlassianDefaultCommentsRowBudget is the most interaction rows one
+	// unit collects (CHAOS-8806). It must stay well under the 100,000 rows
+	// per table the effect ledger accepts: past that bound the whole unit
+	// fails and every work-item effect is lost. The dataset option
+	// comments_row_budget may only LOWER it.
+	jiraAtlassianDefaultCommentsRowBudget = 50_000
 )
+
+// jiraAtlassianCommentsRowBudget is the per-unit interaction row budget: the
+// default, lowered (never raised) by the comments_row_budget dataset option.
+func jiraAtlassianCommentsRowBudget(claim Claim) int {
+	budget := jiraOptionInt(claim, "comments_row_budget", jiraAtlassianDefaultCommentsRowBudget)
+	if budget <= 0 || budget > jiraAtlassianDefaultCommentsRowBudget {
+		return jiraAtlassianDefaultCommentsRowBudget
+	}
+	return budget
+}
 
 // jiraAtlassianCountingDoer observes actual wire attempts, including
 // transport failures and retries the wrapped HTTPClient makes internally --
@@ -230,6 +246,8 @@ func (handler JiraAtlassianRouteHandler) Collect(
 	// number of comments.
 	fetchComments := jiraOptionBool(claim, "fetch_comments", true)
 	commentsLimit := jiraOptionInt(claim, "comments_limit", jiraAtlassianDefaultCommentsLimit)
+	commentsBudget := jiraAtlassianCommentsRowBudget(claim)
+	commentsBudgetSkipped := 0
 	fetchWorklogs := jiraOptionBool(claim, "fetch_worklogs", false)
 	useGraphQL := jiraOptionBool(claim, "atlassian_gql_enabled", false)
 	fetchBoardSprints := jiraOptionBool(claim, "fetch_board_sprints", false)
@@ -390,15 +408,27 @@ func (handler JiraAtlassianRouteHandler) Collect(
 		rows.ProjectMemberships = append(rows.ProjectMemberships, itemMemberships...)
 
 		if fetchComments {
-			comments, _, commentErr := collectJiraIssueComments(
-				ctx, client, item.WorkItemID, maxPages, perPage, commentsLimit,
-			)
-			if commentErr != nil {
-				optionalIncomplete = append(optionalIncomplete, "comments:"+item.WorkItemID)
+			// The budget is checked BEFORE the fetch, so the rows slice never
+			// grows past it: the issue limit is the smaller of comments_limit
+			// and what is left of the budget. Issues arrive ORDER BY updated
+			// DESC, so the newest issues get their comments first.
+			if remaining := commentsBudget - len(rows.Interactions); remaining <= 0 {
+				commentsBudgetSkipped++
 			} else {
-				rows.Interactions = append(rows.Interactions,
-					normalizeJiraInteractions(claim, item.WorkItemID, comments, handler.Identity, normalizedAt)...,
+				issueLimit := commentsLimit
+				if issueLimit <= 0 || issueLimit > remaining {
+					issueLimit = remaining
+				}
+				comments, _, commentErr := collectJiraIssueComments(
+					ctx, client, item.WorkItemID, maxPages, perPage, issueLimit,
 				)
+				if commentErr != nil {
+					optionalIncomplete = append(optionalIncomplete, "comments:"+item.WorkItemID)
+				} else {
+					rows.Interactions = append(rows.Interactions,
+						normalizeJiraInteractions(claim, item.WorkItemID, comments, handler.Identity, normalizedAt)...,
+					)
+				}
 			}
 		}
 		if fetchWorklogs {
@@ -561,6 +591,15 @@ func (handler JiraAtlassianRouteHandler) Collect(
 	}
 	if len(optionalIncomplete) > 0 {
 		result["incomplete"] = optionalIncomplete
+	}
+	if commentsBudgetSkipped > 0 {
+		// CHAOS-8806: NOT part of "incomplete": a held watermark would re-read the
+		// same window, reach the same budget and never move. Counts only.
+		result["incomplete_nonholding"] = []string{"comments:budget:" + strconv.Itoa(commentsBudgetSkipped)}
+		result["comments_budget_skipped_issues"] = commentsBudgetSkipped
+		slog.Warn("providersync.jira.comments_row_budget_reached",
+			"org_id", claim.OrgID, "unit_id", claim.ID, "budget", commentsBudget,
+			"interaction_rows", len(rows.Interactions), "skipped_issues", commentsBudgetSkipped)
 	}
 	rows.MembershipCreation.result("jira", result)
 	result = attachWorkItemTeamInheritanceObservation(result, handler.Derived)

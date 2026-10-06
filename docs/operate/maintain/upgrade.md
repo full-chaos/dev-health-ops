@@ -50,13 +50,17 @@ error: the configuration still syncs its other datasets and reports success.
 
 **How to see it**: the scheduler writes one `sync.plan.work_item_family_stopped`
 WARN log entry each time it plans a configuration of a work-item provider
-(GitHub, GitLab, Jira, Linear) that has no enabled work-item dataset, but whose
-integration finished work-items units before. The entry carries `provider`,
-`org_id`, `integration_id`, and `family`. Every such plan, including a
-configuration that never ran work items, also increments
+(GitHub, GitLab, Jira, Linear) that has no enabled work-item dataset, while the
+integration's newest successful work-items unit is **14 days old or newer**. The
+entry carries `provider`, `org_id`, `integration_id`, `family`,
+`last_success_age_days` (whole days since that unit), and `warn_window_days`.
+After 14 days without a successful work-items unit the WARN stops, so a
+configuration whose work items were turned off on purpose does not warn for
+ever. Every such plan, whatever its history, also increments
 `sync_plan_gate_total{provider="<provider>",dataset="work-items",outcome="family_not_enabled"}`
-on the scheduler metrics endpoint. A configuration that never ran work items
-does not write the WARN, because work items are opt-in for a new integration.
+on the scheduler metrics endpoint, and that count does not expire. A
+configuration that never ran work items does not write the WARN, because work
+items are opt-in for a new integration.
 
 **How to turn work items on again**: tick "Work Items" in the targets of the
 sync configuration, or send an API `PATCH` of the configuration with

@@ -191,6 +191,7 @@
       "native_shadow": false,
       "route_dataset": "pr-comments",
       "route_destinations": [
+        "ai_attribution",
         "git_pull_request_reviews",
         "git_pull_requests"
       ],
@@ -218,6 +219,7 @@
       "native_shadow": false,
       "route_dataset": "pr-reviews",
       "route_destinations": [
+        "ai_attribution",
         "git_pull_request_reviews",
         "git_pull_requests"
       ],
@@ -245,6 +247,7 @@
       "native_shadow": false,
       "route_dataset": "prs",
       "route_destinations": [
+        "ai_attribution",
         "git_pull_request_reviews",
         "git_pull_requests"
       ],
@@ -769,6 +772,7 @@
       "native_shadow": false,
       "route_dataset": "pr-comments",
       "route_destinations": [
+        "ai_attribution",
         "git_pull_request_reviews",
         "git_pull_requests"
       ],
@@ -795,6 +799,7 @@
       "native_shadow": false,
       "route_dataset": "pr-reviews",
       "route_destinations": [
+        "ai_attribution",
         "git_pull_request_reviews",
         "git_pull_requests"
       ],
@@ -821,6 +826,7 @@
       "native_shadow": false,
       "route_dataset": "prs",
       "route_destinations": [
+        "ai_attribution",
         "git_pull_request_reviews",
         "git_pull_requests"
       ],

@@ -158,7 +158,8 @@ func TestGitHubPullRequestRouteEmitsOneBoundedEffect(t *testing.T) {
 	if batch.Evidence.Records != 1 || batch.Evidence.CapReached {
 		t.Fatalf("evidence=%+v", batch.Evidence)
 	}
-	if len(batch.Effects) != 1 ||
+	if len(batch.Effects) != 2 ||
+		batch.Effects[1].Destination != "ai_attribution" ||
 		batch.Effects[0].Destination != "git_pull_requests" ||
 		batch.Effects[0].Recovery != EffectReadbackRequired ||
 		len(batch.Effects[0].Rows) != 1 {

@@ -137,7 +137,7 @@ func TestGitHubPullRequestReviewCompositeCrashRecoveryIsExact(t *testing.T) {
 		t.Fatalf("first commit error=%v", err)
 	}
 	persisted, err := harness.repository.LoadEffects(ctx, claim, now.Add(11*time.Second))
-	if err != nil || len(persisted.Effects) != 2 {
+	if err != nil || len(persisted.Effects) != 3 {
 		t.Fatalf("persisted=%+v error=%v", persisted, err)
 	}
 
@@ -171,7 +171,9 @@ func TestGitHubPullRequestReviewCompositeCrashRecoveryIsExact(t *testing.T) {
 		Ledger: freshRepository, Sink: freshSink, Readback: freshSink,
 		Now: func() time.Time { return recoveryNow },
 	}).Commit(ctx, recovered, rebuilt.Effects, persisted.CreatedAt)
-	if err != nil || result != (EffectCommitResult{Skipped: 1, MarkedCommitted: 1}) {
+	// Destinations commit in sorted order: ai_attribution (empty) and the review
+	// rows landed before the crash, so both are skipped; the PR row is marked.
+	if err != nil || result != (EffectCommitResult{Skipped: 2, MarkedCommitted: 1}) {
 		t.Fatalf("recovery result=%+v error=%v", result, err)
 	}
 	assertPullRequestVersionCount(t, ctx, harness, "c7198fbc-1945-3717-05d8-eb78866b4e79", 42, 1)

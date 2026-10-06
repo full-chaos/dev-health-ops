@@ -2,6 +2,7 @@ package providersync
 
 import (
 	"context"
+	"strings"
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
@@ -37,6 +38,19 @@ func (sink GitHubPullRequestSocialClickHouseEffects) WriteEffect(
 		return (GitHubPullRequestClickHouseEffects{
 			Conn: sink.Conn, Lease: sink.Lease, Provider: sink.provider(),
 		}).writePullRequestEffect(ctx, claim, effect, claim.Dataset)
+	}
+	if effect.Destination == prAIAttributionDestination {
+		identity, err := newPRAIAttributionEffectIdentity(claim, effect)
+		if err != nil {
+			return err
+		}
+		if err := sink.Lease.Assert(ctx); err != nil {
+			return err
+		}
+		if len(effect.Rows) == 0 {
+			return nil
+		}
+		return sink.aiAttributionAdapter().WriteGitHubWorkItemEffect(ctx, identity, effect)
 	}
 	if effect.Destination != "git_pull_request_reviews" {
 		return ErrInvalidConfiguration
@@ -90,6 +104,19 @@ func (sink GitHubPullRequestSocialClickHouseEffects) InspectEffect(
 		return (GitHubPullRequestClickHouseEffects{
 			Conn: sink.Conn, Lease: sink.Lease, Provider: sink.provider(),
 		}).inspectPullRequestEffect(ctx, claim, effect, claim.Dataset)
+	}
+	if effect.Destination == prAIAttributionDestination {
+		identity, err := newPRAIAttributionEffectIdentity(claim, effect)
+		if err != nil {
+			return EffectConflict, err
+		}
+		if err := sink.Lease.Assert(ctx); err != nil {
+			return EffectConflict, err
+		}
+		if len(effect.Rows) == 0 {
+			return EffectAbsent, nil
+		}
+		return sink.aiAttributionAdapter().InspectGitHubWorkItemEffect(ctx, identity, effect)
 	}
 	if effect.Destination != "git_pull_request_reviews" {
 		return EffectConflict, ErrInvalidConfiguration
@@ -183,3 +210,65 @@ type GitHubPullRequestReviewClickHouseEffects = GitHubPullRequestSocialClickHous
 
 var _ EffectSink = GitHubPullRequestSocialClickHouseEffects{}
 var _ EffectReadback = GitHubPullRequestSocialClickHouseEffects{}
+
+const prAIAttributionDestination = "ai_attribution"
+
+// aiAttributionAdapter is the same ai_attribution writer the work-items
+// routes use, bound to this sink's provider, so a pull request's rows are
+// written by one implementation whichever dataset reached it.
+func (sink GitHubPullRequestSocialClickHouseEffects) aiAttributionAdapter() GitHubWorkItemEffectAdapter {
+	if sink.provider() == "gitlab" {
+		return GitLabAIAttributionClickHouseAdapter{Conn: sink.Conn}
+	}
+	return GitHubAIAttributionClickHouseAdapter{Conn: sink.Conn}
+}
+
+// newPRAIAttributionEffectIdentity builds the fence identity the shared
+// ai_attribution adapter expects for a PR-social unit. It mirrors
+// newGitHubWorkItemEffectIdentity, whose family-dataset gate names the
+// work-items datasets and so cannot admit this unit.
+func newPRAIAttributionEffectIdentity(
+	claim Claim,
+	effect EffectBatch,
+) (GitHubWorkItemEffectIdentity, error) {
+	if claim.Validate() != nil || !isPRSocialDataset(claim.Dataset) ||
+		!validDigest(effect.ContentDigest) ||
+		effect.Recovery != EffectReadbackRequired || effect.PayloadBytes < 0 {
+		return GitHubWorkItemEffectIdentity{}, ErrInvalidConfiguration
+	}
+	rebuilt, err := BuildEffectBatch(effect.Destination, effect.Recovery, effect.Rows)
+	if err != nil || rebuilt.ContentDigest != effect.ContentDigest ||
+		rebuilt.PayloadBytes != effect.PayloadBytes {
+		return GitHubWorkItemEffectIdentity{}, ErrInvalidConfiguration
+	}
+	rows, err := decodeEffectRows[githubAIAttributionRow](effect)
+	if err != nil {
+		return GitHubWorkItemEffectIdentity{}, ErrInvalidConfiguration
+	}
+	for _, row := range rows {
+		// A row written by this unit names this unit's provider and carries a
+		// pull request or merge request subject; anything else crossed a fence.
+		if row.validateForProvider(claim) != nil {
+			return GitHubWorkItemEffectIdentity{}, ErrInvalidConfiguration
+		}
+	}
+	identity := GitHubWorkItemEffectIdentity{
+		OrgID: claim.OrgID, Provider: claim.Provider, Dataset: claim.Dataset,
+		Generation: claim.GenerationKey(), Destination: effect.Destination,
+		ContentDigest: effect.ContentDigest, RowCount: len(effect.Rows),
+	}
+	if strings.TrimSpace(identity.OrgID) == "" || strings.TrimSpace(identity.Generation) == "" {
+		return GitHubWorkItemEffectIdentity{}, ErrInvalidConfiguration
+	}
+	return identity, nil
+}
+
+// validateForProvider applies the row fence of the provider that owns the
+// claim: github rows through githubAIAttributionRow.validate, gitlab rows
+// through validateGitLabAIAttributionRow.
+func (row githubAIAttributionRow) validateForProvider(claim Claim) error {
+	if claim.Provider == "gitlab" {
+		return validateGitLabAIAttributionRow(row, claim)
+	}
+	return row.validate(claim)
+}

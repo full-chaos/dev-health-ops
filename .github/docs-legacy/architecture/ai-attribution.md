@@ -161,6 +161,42 @@ Key invariants:
 - **Sink only** — no file exports, no debug dumps
 - **Idempotent** — same `(org_id, provider, subject_type, subject_id, source)` re-inserted is safe
 
+### Writers in the Go workers (current)
+
+The Python path above is retired; the Go sync routes write `ai_attribution` through one
+adapter (`internal/providersync/github_work_items_ai_attribution_effects_clickhouse.go`)
+and one pull-request detector (`detectGitHubPullRequestAttributions` in
+`internal/providersync/github_work_items_rows.go`). Which sync dataset must be on:
+
+| Provider | Subject | Writer | Dataset that must be on |
+| -------- | ------- | ------ | ----------------------- |
+| github   | `pull_request` (bare PR number, repo-scoped) | `prs` unit and `work-items` unit | `prs` **or** `work-items` (with the `sync_prs` flag) |
+| gitlab   | `pull_request` (merge request `iid`, repo-scoped) | `prs` unit and `work-items` unit | `prs` **or** `work-items` |
+| linear   | `issue` (`source = issue_label`, `repo_id` NULL) | `work-items` unit only | `work-items` |
+| jira     | none | none: Jira has no pull-request entity and no attribution producer (`work-items` emits an evaluated-empty effect) | not applicable |
+
+Pull-request attribution does **not** need the Work Items dataset. The `prs` unit builds its rows
+from the single-pull-request response (GitHub `GET /repos/{o}/{r}/pulls/{n}`) or the merge request
+list item (GitLab) it already fetched, so it adds no request. `pr-reviews` and `pr-comments` are
+aliases of the `prs` unit: they are never planned on their own and carry the same three
+destinations (`git_pull_requests`, `git_pull_request_reviews`, `ai_attribution`).
+
+**Two writers, one row.** When both datasets are on, both routes write the same key
+`(org_id, provider, subject_type, repo_id, subject_id, source)` from the same detector over the
+same payload, so `ReplacingMergeTree(computed_at)` and the `FINAL` in the resolved view keep one
+row per key; the later `computed_at` wins and the two never disagree on content. A test per
+provider feeds the same responses to both real collectors and requires equal rows
+(`prs_ai_attribution_test.go`), and an integration test reads the result through
+`ai_attribution_resolved` and the `aiAttributionOverview` resolver
+(`prs_ai_attribution_integration_test.go`).
+
+`ai_attribution_resolved` is a plain `VIEW` over `ai_attribution FINAL`, created by migration 035
+and replaced by 043 (repo-scoped partition) and 076; no job or writer populates it.
+
+Corrections to older text: the GitHub `subject_id` is the bare PR number (not `ghpr:{repo}#{n}`;
+that prefix belongs to the `work_items` id, and the comment in migration 044 predates the writer),
+and the key includes `repo_id` (migration 044).
+
 ## Read Path
 
 ```

@@ -140,8 +140,12 @@ func currentPullRequestSocialBatch(t *testing.T, claim Claim) CompleteRouteBatch
 	if err != nil {
 		t.Fatal(err)
 	}
+	attribution, err := effectBatchFromValues("ai_attribution", EffectReadbackRequired, []map[string]string{})
+	if err != nil {
+		t.Fatal(err)
+	}
 	return CompleteRouteBatch{
-		Effects: []EffectBatch{pulls, reviews}, Result: map[string]any{"prs_synced": 1},
+		Effects: []EffectBatch{pulls, reviews, attribution}, Result: map[string]any{"prs_synced": 1},
 		Watermark: claim.BeforeAt, Evidence: FetchEvidence{Provider: claim.Provider, Dataset: claim.Dataset, Records: 1},
 	}
 }

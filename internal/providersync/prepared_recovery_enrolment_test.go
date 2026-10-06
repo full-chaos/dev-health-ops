@@ -247,8 +247,12 @@ func TestPreparedSnapshotSizeCapBoundary(t *testing.T) {
 	if err != nil {
 		t.Fatalf("a half-cap effect was refused on its own: %v", err)
 	}
+	attribution, err := effectBatchFromValues("ai_attribution", EffectReadbackRequired, []map[string]string{})
+	if err != nil {
+		t.Fatal(err)
+	}
 	pair := CompleteRouteBatch{
-		Effects: []EffectBatch{pulls, reviews}, Result: map[string]any{"synced": 2}, Watermark: prsClaim.BeforeAt,
+		Effects: []EffectBatch{pulls, reviews, attribution}, Result: map[string]any{"synced": 2}, Watermark: prsClaim.BeforeAt,
 		Evidence: FetchEvidence{Provider: "github", Dataset: "prs", Records: 2},
 	}
 	if _, _, err := encodePreparedRouteManifest(prsClaim, pair, ShadowComparison{Match: true}, now); !errors.Is(err, ErrPreparedRouteSnapshotOversize) {

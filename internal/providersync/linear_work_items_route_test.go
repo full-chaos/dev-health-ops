@@ -410,7 +410,7 @@ func TestLinearWorkItemsRouteCompletesTruncatedNativeRelations(t *testing.T) {
 	for _, effect := range batch.Effects {
 		byDestination[effect.Destination] = effect
 	}
-	if len(byDestination["work_item_dependencies"].Rows) != 1 || batch.Evidence.Requests != 3 || batch.Evidence.Pages != 3 {
+	if len(byDestination["work_item_dependencies"].Rows) != 1 || batch.Evidence.Requests != 3 || batch.Evidence.Pages != 4 {
 		t.Fatalf("effects=%+v evidence=%+v", byDestination, batch.Evidence)
 	}
 }
@@ -423,13 +423,13 @@ func TestLinearWorkItemsRoutePaginatesCommentsWithinPythonBound(t *testing.T) {
 			"id":"lin-issue-46","identifier":"ENG-46","title":"Paginated comments",
 			"createdAt":"2026-07-25T09:00:00Z","updatedAt":"2026-07-28T16:30:00Z",
 			"state":{"name":"Todo","type":"unstarted"},"labels":{"nodes":[]},
-			"comments":{"nodes":[{"body":"first","createdAt":"2026-07-27T12:00:00Z","user":null}],"pageInfo":{"hasNextPage":true,"endCursor":"comment-cursor"}},
+			"comments":{"nodes":[{"id":"comment-1","body":"first","createdAt":"2026-07-27T12:00:00Z","user":null}],"pageInfo":{"hasNextPage":true,"endCursor":"comment-cursor"}},
 			"attachments":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}},
 			"relations":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}},
 			"inverseRelations":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}
 		}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}`,
-		`{"data":{"issue":{"comments":{"nodes":[{"body":"first","createdAt":"2026-07-27T12:00:00Z","user":null}],"pageInfo":{"hasNextPage":true,"endCursor":"comment-cursor-2"}}}}}`,
-		`{"data":{"issue":{"comments":{"nodes":[{"body":"second 🌍","createdAt":"2026-07-27T13:00:00Z","user":null}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}`,
+		`{"data":{"issue":{"comments":{"nodes":[{"id":"comment-1","body":"first","createdAt":"2026-07-27T12:00:00Z","user":null}],"pageInfo":{"hasNextPage":true,"endCursor":"comment-cursor-2"}}}}}`,
+		`{"data":{"issue":{"comments":{"nodes":[{"id":"comment-2","body":"second 🌍","createdAt":"2026-07-27T13:00:00Z","user":null}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}`,
 	}}
 	claim := nativeTestClaim("linear", "work-items")
 	claim.SourceExternalID = "ENG"
@@ -445,7 +445,7 @@ func TestLinearWorkItemsRoutePaginatesCommentsWithinPythonBound(t *testing.T) {
 	for _, effect := range batch.Effects {
 		byDestination[effect.Destination] = effect
 	}
-	if len(byDestination["work_item_interactions"].Rows) != 2 || batch.Evidence.Requests != 4 || batch.Evidence.Pages != 4 {
+	if len(byDestination["work_item_interactions"].Rows) != 2 || batch.Evidence.Requests != 4 || batch.Evidence.Pages != 5 {
 		t.Fatalf("interactions=%d evidence=%+v", len(byDestination["work_item_interactions"].Rows), batch.Evidence)
 	}
 	var second linearWorkItemInteractionRow

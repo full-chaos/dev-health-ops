@@ -151,7 +151,7 @@ go run ./cmd/dev-health-migration-matrix -check -root .   # what CI runs: commit
 ### Per family
 
 <!-- BEGIN GENERATED MIGRATION STATUS V2 -->
-_Deployed revisions read from: docker inspect dev-health-go-worker-1 dev-health-go-worker-heavy-1 dev-health-go-worker-ops-1 dev-health-go-scheduler-1 dev-health-go-reconciler-1 dev-health-query-api-1._
+_Deployed revisions read from: docker inspect dev-health-go-worker-1 dev-health-go-worker-heavy-1 dev-health-go-worker-ops-1 dev-health-go-scheduler-1 dev-health-go-reconciler-1 dev-health-query-api-1; not read: the family is new in CHAOS-8810 and no deployed build holds it yet._
 
 | Family | Scope | Executes | Output parity | Deployed revision (read at) | Deployed-executed proof | Open regressions |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -175,6 +175,8 @@ _Deployed revisions read from: docker inspect dev-health-go-worker-1 dev-health-
 | `work_item` | daily | NATIVE | VERIFIED (CHAOS-4283 @ `506c99beb3ec`, internal/jobs/metrics/workitemmetrics/golden_test.go TestComputeDailyTripletMatchesPythonGolden (frozen Python golden; PASS re-run at this sha)) | **unknown** (read 2026-10-06T02:34:43Z) | **none** | -- |
 | `work_item_attribution` | daily | NATIVE | VERIFIED (CHAOS-5794 @ `cb9f5f48cece`, internal/providersync/work_item_attribution_backstop_oracle_test.go TestWorkItemAttributionBackstopMatchesFrozenPythonProduction (exercises remaining.BuildWorkItemAttributionRows, the same row-building function this family's native executor calls, against a frozen Python oracle snapshot; PASS re-run at this sha)) | **unknown** (read 2026-10-06T02:34:43Z) | **none** | -- |
 | `work_item_estimate` | daily | NATIVE | VERIFIED (CHAOS-5323 @ `506c99beb3ec`, internal/jobs/metrics/workitemmetrics/golden_test.go TestComputeEstimateCoverageMatchesPythonGolden (frozen Python golden; PASS re-run at this sha)) | **unknown** (read 2026-10-06T02:34:43Z) | **none** | -- |
+| `work_item_investment` | daily | NATIVE | UNVERIFIED | **unknown** (read 2026-10-06T02:34:43Z) | **none** | -- |
+| `work_item_issue_type` | daily | NATIVE | UNVERIFIED | **unknown** (read 2026-10-06T02:34:43Z) | **none** | -- |
 | `work_item_state` | daily | NATIVE | VERIFIED (CHAOS-4278 @ `506c99beb3ec`, internal/jobs/metrics/daily/work_item_state_native_executor_test.go TestComputeWorkItemStateDurationsGolden (ports Python's test_time_in_state_is_bucketed_to_day byte-for-byte; PASS re-run at this sha)) | **unknown** (read 2026-10-06T02:34:43Z) | **none** | -- |
 | `benchmarking` | finalize | FINALIZE | VERIFIED (CHAOS-4288 @ `506c99beb3ec`, internal/jobs/metrics/daily/benchmarking/compute_test.go TestComputeMatchesFrozenPythonGolden (frozen Python golden; PASS re-run at this sha)) | **unknown** (read 2026-10-06T02:34:43Z) | **none** | -- |
 | `compounding_risk_team` | finalize | FINALIZE | VERIFIED (CHAOS-5084 @ `506c99beb3ec`, internal/jobs/metrics/daily/compoundingrisk/team_golden_test.go TestBuildTeamRowsMatchesFrozenPythonGolden (frozen Python golden; PASS re-run at this sha)) | **unknown** (read 2026-10-06T02:34:43Z) | **none** | -- |
@@ -208,7 +210,7 @@ candidate_build)` and never carries it forward across any of the four changing. 
 says nothing about whether a new binary is the one that was measured: re-run `dho goapi prove` against the deployed build.
 
 <!-- BEGIN GENERATED GO API OPERATIONS -->
-_Rendered 2026-10-06T11:25:04Z against main merge-base `771e73872ee8183b36a4ae88e31599c68ebc1f03`; SDL digest pin `sha256:358ec58640bd6df4e202fc67e958029f67dc0f943cf1957a96c7afef458b4210`; fleet read (not read) via not read._
+_Rendered 2026-10-06T16:03:01Z against main merge-base `57396cd825e5aea22e762e78a8428ed576df413a`; SDL digest pin `sha256:358ec58640bd6df4e202fc67e958029f67dc0f943cf1957a96c7afef458b4210`; fleet read (not read) via not read._
 
 _query-api serves all **63** catalog operations: the catalog switch (`routeswitch.NewCatalogSwitch`) reads no routing row, so there is no per-operation mode, liveness or proof column to render. The only routing state is the MCP class decision per root (`go_api_class_decision`); `dho goapi routing status` reports it._
 <!-- END GENERATED GO API OPERATIONS -->
@@ -425,6 +427,8 @@ which had been unreachable dead code (never wired into `cli.py`'s argparse tree)
 | work_item | NATIVE | Go: `internal/jobs/metrics/daily/work_item_native_executor.go` -- pre_bridge, ordered after `work_item_attribution` by families.json's `after` edge; reuses `internal/jobs/metrics/workitemmetrics`'s pure compute (shared with the providersync sync-time deriver); ported `compute_work_item_metrics_daily` (compute_work_items.py), deleted entirely by CHAOS-5310/CHAOS-3092 (fully native, no remaining Python caller) | CHAOS-4283 |
 | work_item_attribution | NATIVE | Go: `internal/jobs/metrics/daily/work_item_attribution_native_executor.go` -- pre_bridge; ported `compute_work_item_team_attributions` (compute_work_items.py), the FULL daily compute (distinct from §3's native staleness-only backstop of the same table), deleted entirely by CHAOS-5321/CHAOS-3092 (fully native, no remaining Python caller). Runs before its three readers via families.json's `after` edges | CHAOS-4283 |
 | work_item_estimate | NATIVE | Go: `internal/jobs/metrics/daily/work_item_estimate_native_executor.go` -- pre_bridge, ordered after `work_item_attribution`; same shared compute; ported `compute_estimate_coverage_metrics_daily` (`compute_work_items.py`), deleted entirely by CHAOS-5323/CHAOS-3092 (fully native, no remaining Python caller; `tests/metrics/test_job_daily_skip_families.py` asserts it no longer exists) | CHAOS-4283/CHAOS-5323 |
+| work_item_investment | NATIVE | Go: `internal/jobs/metrics/daily/work_item_investment_native_executor.go` (`WorkItemInvestmentExecutor`) -- ordered after `work_item_attribution`; the compute is `internal/jobs/metrics/workitemengine` (`ComputeInvestmentDaily`), the one the work-items sync deriver calls, fed from stored rows. No Python daily family existed for these tables. | CHAOS-8810 |
+| work_item_issue_type | NATIVE | Go: `internal/jobs/metrics/daily/work_item_issue_type_native_executor.go` (`WorkItemIssueTypeExecutor`) -- ordered after `work_item_attribution`; the compute is `internal/jobs/metrics/workitemengine` (`ComputeIssueTypeMetricsDaily`), the one the work-items sync deriver calls, fed from stored rows. No Python daily family existed for this table. | CHAOS-8810 |
 | work_item_state | NATIVE | Go: `internal/jobs/metrics/daily/work_item_state_native_executor.go` -- pre_bridge, ordered after the now-native `work_item_attribution` that writes the `work_item_team_attributions` it reads; ported `compute_work_item_state_durations_daily` (compute_work_item_state_durations.py), deleted entirely by CHAOS-5321/CHAOS-3092 (fully native, no remaining Python caller) | CHAOS-4278 (Done) |
 <!-- END GENERATED DAILY METRICS MATRIX -->
 

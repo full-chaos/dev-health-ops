@@ -2,6 +2,7 @@ package workerservice
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"os"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/daily"
+	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 )
 
 // fakeDailyStoreForRegistrationTest is the daily.Store analog of
@@ -22,6 +24,129 @@ import (
 // a method called -- ClickHouse/Postgres I/O happens later, when the handler
 // executes a run, never at construction.
 type fakeDailyStoreForRegistrationTest struct{ daily.Store }
+
+// dailyWorkItemEnginesForRegistrationTest loads the two work-item engines the
+// way buildDailyWorker does: through dailyWorkItemEnginesFrom, from the two
+// real config artifacts of this repository. A hand-built pair would prove the
+// registration with an input the worker never constructs.
+func dailyWorkItemEnginesForRegistrationTest(t *testing.T) dailyWorkItemEngines {
+	t.Helper()
+	engines := dailyWorkItemEnginesFrom(validGitHubWorkItemsRuntimeConfig(t))
+	if engines.err != nil {
+		t.Fatalf("load the work-item engines from the real config artifacts: %v", engines.err)
+	}
+	if engines.typeNormalizer == nil || engines.investmentClassifier == nil {
+		t.Fatal("dailyWorkItemEnginesFrom returned no error and a missing engine")
+	}
+	return engines
+}
+
+// TestDailyWorkItemEngineFamiliesRegisterWithTheWorkerConfiguration is the
+// CHAOS-8810 wiring proof at the registry level, for exactly the two families
+// that PR adds: with a connection and the worker's own engine load, both are
+// in the map buildDailyWorker hands to SetNativeFamilies, each as its own
+// executor type. Without it the tables they write have one writer, the sync
+// unit, whose day rows are partial.
+func TestDailyWorkItemEngineFamiliesRegisterWithTheWorkerConfiguration(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	native, postBridge, finalize, refusals := dailyNativeFamilyRegistrations(
+		fakeDailyStoreForRegistrationTest{}, githubWorkItemsBuildExecutorConn{},
+		dailyWorkItemEnginesForRegistrationTest(t), nil, logger,
+	)
+	for _, refusal := range refusals {
+		if refusal.family == daily.WorkItemIssueTypeFamilyName || refusal.family == daily.WorkItemInvestmentFamilyName {
+			t.Fatalf("family %q refused with a connection and both engines: %v", refusal.family, refusal.err)
+		}
+	}
+	if _, ok := native[daily.WorkItemIssueTypeFamilyName].(*daily.WorkItemIssueTypeExecutor); !ok {
+		t.Errorf("native[%q] = %T, want *daily.WorkItemIssueTypeExecutor",
+			daily.WorkItemIssueTypeFamilyName, native[daily.WorkItemIssueTypeFamilyName])
+	}
+	if _, ok := native[daily.WorkItemInvestmentFamilyName].(*daily.WorkItemInvestmentExecutor); !ok {
+		t.Errorf("native[%q] = %T, want *daily.WorkItemInvestmentExecutor",
+			daily.WorkItemInvestmentFamilyName, native[daily.WorkItemInvestmentFamilyName])
+	}
+	for _, family := range []string{daily.WorkItemIssueTypeFamilyName, daily.WorkItemInvestmentFamilyName} {
+		if _, wrong := postBridge[family]; wrong {
+			t.Errorf("family %q is in the post-bridge map", family)
+		}
+		if _, wrong := finalize[family]; wrong {
+			t.Errorf("family %q is in the finalize map: it would run once per run, not per partition", family)
+		}
+	}
+
+	// The run order the partition handler derives from families.json must put
+	// both after work_item_attribution: they read the table it writes in the
+	// same partition.
+	names := make([]string, 0, len(native))
+	for name := range native {
+		names = append(names, name)
+	}
+	registry, err := daily.LoadRegistry()
+	if err != nil {
+		t.Fatal(err)
+	}
+	order, err := daily.FamilyRunOrder(registry, names)
+	if err != nil {
+		t.Fatal(err)
+	}
+	position := make(map[string]int, len(order))
+	for index, name := range order {
+		position[name] = index
+	}
+	attribution, ok := position["work_item_attribution"]
+	if !ok {
+		t.Fatal("work_item_attribution is not in the run order")
+	}
+	for _, family := range []string{daily.WorkItemIssueTypeFamilyName, daily.WorkItemInvestmentFamilyName} {
+		at, ok := position[family]
+		if !ok {
+			t.Errorf("family %q is not in the run order", family)
+			continue
+		}
+		if at < attribution {
+			t.Errorf("family %q runs at %d, before work_item_attribution at %d", family, at, attribution)
+		}
+	}
+}
+
+// TestDailyWorkItemEngineFamiliesRefuseWithTheEngineLoadError: an engine that
+// cannot be loaded must not leave the two families quietly off the map. Both
+// are reported refused, with the load error, so buildDailyWorker fails the
+// start and names the cause; every other family is unaffected.
+func TestDailyWorkItemEngineFamiliesRefuseWithTheEngineLoadError(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	// The same call buildDailyWorker makes, on a configuration with no engine
+	// paths.
+	engines := dailyWorkItemEnginesFrom(config.Config{})
+	if engines.err == nil {
+		t.Fatal("dailyWorkItemEnginesFrom accepted a configuration with no engine paths")
+	}
+	if engines.typeNormalizer != nil || engines.investmentClassifier != nil {
+		t.Fatal("dailyWorkItemEnginesFrom returned an error and an engine: a half pair")
+	}
+	native, _, _, refusals := dailyNativeFamilyRegistrations(
+		fakeDailyStoreForRegistrationTest{}, githubWorkItemsBuildExecutorConn{}, engines, nil, logger,
+	)
+	refused := map[string]error{}
+	for _, refusal := range refusals {
+		refused[refusal.family] = refusal.err
+	}
+	for _, family := range []string{daily.WorkItemIssueTypeFamilyName, daily.WorkItemInvestmentFamilyName} {
+		if _, registered := native[family]; registered {
+			t.Errorf("family %q registered with no engine", family)
+		}
+		if !errors.Is(refused[family], engines.err) {
+			t.Errorf("family %q refusal = %v, want the engine load error %v", family, refused[family], engines.err)
+		}
+	}
+	if len(refusals) != 2 {
+		t.Errorf("refusals = %d, want only the two engine families: %v", len(refusals), refused)
+	}
+	if _, ok := native["work_item"]; !ok {
+		t.Error("a missing engine took the work_item family down with it")
+	}
+}
 
 // CHAOS-4292 rebase-gate finding (codex, 2026-09-01, two rounds): the
 // pre-existing drift checks this metrics.daily cutover wave relied on --
@@ -68,7 +193,8 @@ type fakeDailyStoreForRegistrationTest struct{ daily.Store }
 func TestDailyNativeFamilyRegistrationsMatchesFamiliesJSONPortGo(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	native, postBridge, finalize, _ := dailyNativeFamilyRegistrations(
-		fakeDailyStoreForRegistrationTest{}, githubWorkItemsBuildExecutorConn{}, nil, logger,
+		fakeDailyStoreForRegistrationTest{}, githubWorkItemsBuildExecutorConn{},
+		dailyWorkItemEnginesForRegistrationTest(t), nil, logger,
 	)
 
 	registeredPhase := make(map[string]string, len(native)+len(postBridge))
@@ -247,7 +373,7 @@ func TestDailyNativeFamilyRegistrationsReturnsEveryRefusalForFailFast(t *testing
 
 	// nil connection fails every native executor's own `conn != nil` check.
 	native, postBridge, _, refusals := dailyNativeFamilyRegistrations(
-		fakeDailyStoreForRegistrationTest{}, nil, observer, logger,
+		fakeDailyStoreForRegistrationTest{}, nil, dailyWorkItemEnginesForRegistrationTest(t), observer, logger,
 	)
 
 	if len(refusals) == 0 {
@@ -282,6 +408,7 @@ func TestDailyNativeFamilyRegistrationsReturnsEveryRefusalForFailFast(t *testing
 		"work_item_attribution", "testops_pipeline", "testops_test",
 		"testops_coverage", "review_edges", "compounding_risk",
 		"work_item_state", "work_item", "work_item_estimate",
+		daily.WorkItemIssueTypeFamilyName, daily.WorkItemInvestmentFamilyName,
 	} {
 		if _, refused := seen[family]; !refused {
 			t.Errorf(
@@ -325,7 +452,9 @@ func TestDailyNativeFamilyRegistrationsObservesRefusalForDeletedPythonFamilies(t
 
 	// nil connection fails every native executor's own `conn != nil` check,
 	// refusing construction for the whole registry.
-	native, _, _, _ := dailyNativeFamilyRegistrations(fakeDailyStoreForRegistrationTest{}, nil, observer, logger)
+	native, _, _, _ := dailyNativeFamilyRegistrations(
+		fakeDailyStoreForRegistrationTest{}, nil, dailyWorkItemEnginesForRegistrationTest(t), observer, logger,
+	)
 
 	for _, family := range []string{"team_wellbeing", "cicd", "incident", "deploy"} {
 		if _, stillRegistered := native[family]; stillRegistered {

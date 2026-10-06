@@ -16,7 +16,9 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/daily"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/remaining"
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/workitemengine"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
+	"github.com/full-chaos/dev-health-ops/internal/providersync"
 	clickhousestore "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
 	"github.com/riverqueue/river"
 )
@@ -155,6 +157,9 @@ func buildDailyWorker(
 		// CHAOS-8710: the ClickHouse run marker. CompleteFinalize appends
 		// 'succeeded' through it after its Postgres commit; a failed append is
 		// logged and counted and never fails the run.
+		// CHAOS-8810: loaded once for the two work-item engine families; a
+		// load error is carried into their refusals (a startup error).
+		workItemEngines := dailyWorkItemEnginesFrom(cfg)
 		markerStore, markerErr := daily.NewClickHouseRunMarkerStore(clickhouseConnection)
 		if markerErr != nil {
 			_ = clickhouseConnection.Close()
@@ -252,7 +257,7 @@ func buildDailyWorker(
 				// test that matters now calls dailyNativeFamilyRegistrations
 				// directly and asserts on its actual return value, not on
 				// source text.
-				nativeFamilies, postBridgeFamilies, _, familyRefusals := dailyNativeFamilyRegistrations(store, clickhouseConnection, observer, logger)
+				nativeFamilies, postBridgeFamilies, _, familyRefusals := dailyNativeFamilyRegistrations(store, clickhouseConnection, workItemEngines, observer, logger)
 				if len(familyRefusals) > 0 {
 					refusedNames := make([]string, 0, len(familyRefusals))
 					for _, refusal := range familyRefusals {
@@ -374,7 +379,7 @@ func buildDailyWorker(
 				// go through ONE SetNativeFinalizeFamilies call -- the setter
 				// validates every name in the map together against
 				// pythonRecognisedFinalizeFamilies in a single pass.
-				_, _, finalizeFamilies, _ := dailyNativeFamilyRegistrations(store, clickhouseConnection, observer, logger)
+				_, _, finalizeFamilies, _ := dailyNativeFamilyRegistrations(store, clickhouseConnection, workItemEngines, observer, logger)
 				handler.SetNativeFinalizeFamilies(finalizeFamilies)
 				// Same fail-open discipline as the partition path: telemetry
 				// never gates, but a fail-open path with no counter cannot be
@@ -892,6 +897,38 @@ type dailyFamilyRefusal struct {
 	err    error
 }
 
+// dailyWorkItemEngines is the pair of config-driven engines the two CHAOS-8810
+// work-item daily families compute with: the status mapping (the type rule of
+// issue_type_metrics_daily) and the investment classifier. They are the SAME
+// two artifacts, at the same two configured paths, that the work-items sync
+// deriver loads (workItemsRuntimeConfigFrom), so the daily job and the sync
+// cannot classify one item two ways. err is the load error, kept so that the
+// startup error of a refused family names why.
+type dailyWorkItemEngines struct {
+	typeNormalizer       workitemengine.TypeNormalizer
+	investmentClassifier workitemengine.InvestmentClassifier
+	err                  error
+}
+
+// dailyWorkItemEnginesFrom loads both engines from the worker configuration.
+// It never returns a half pair: either both engines, or the error.
+func dailyWorkItemEnginesFrom(cfg config.Config) dailyWorkItemEngines {
+	runtimeConfig, err := workItemsRuntimeConfigFrom(cfg)
+	if err != nil {
+		return dailyWorkItemEngines{err: err}
+	}
+	classifier, err := providersync.NewInvestmentClassifier(runtimeConfig.investmentConfigPath)
+	if err != nil {
+		return dailyWorkItemEngines{err: fmt.Errorf(
+			"%w: native work-items investment config is unavailable",
+			providersync.ErrInvalidConfiguration,
+		)}
+	}
+	return dailyWorkItemEngines{
+		typeNormalizer: runtimeConfig.statusMapping, investmentClassifier: classifier,
+	}
+}
+
 // dailyNativeFamilyRegistrations builds the native and post-bridge family
 // maps buildDailyWorker registers with the partition handler. Extracted as
 // a pure function (CHAOS-4292 rebase-gate class fix) precisely so its
@@ -924,6 +961,7 @@ type dailyFamilyRefusal struct {
 func dailyNativeFamilyRegistrations(
 	store daily.Store,
 	clickhouseConnection driver.Conn,
+	workItemEngines dailyWorkItemEngines,
 	observer jobruntime.Observer,
 	logger *slog.Logger,
 ) (
@@ -1324,6 +1362,36 @@ func dailyNativeFamilyRegistrations(
 		native["work_item_estimate"] = workItemEstimateExecutor
 	} else {
 		refusals = append(refusals, dailyFamilyRefusal{family: "work_item_estimate", err: workItemEstimateErr})
+	}
+
+	// CHAOS-8810: the daily families of issue_type_metrics_daily and of the
+	// two investment daily tables. Before them the work-items sync unit was
+	// the only writer of the three tables, and it computes a day from only
+	// the items it fetched. Both read work_item_team_attributions, so
+	// families.json orders them after work_item_attribution, like the three
+	// families above. Each needs one of the two config-driven engines the
+	// sync deriver uses; an engine that could not be loaded is a refusal
+	// that carries the load error, so the startup error names the cause.
+	if workItemEngines.err != nil {
+		refusals = append(refusals,
+			dailyFamilyRefusal{family: daily.WorkItemIssueTypeFamilyName, err: workItemEngines.err},
+			dailyFamilyRefusal{family: daily.WorkItemInvestmentFamilyName, err: workItemEngines.err},
+		)
+	} else {
+		if issueTypeExecutor, issueTypeErr := daily.NewWorkItemIssueTypeExecutor(
+			clickhouseConnection, workItemEngines.typeNormalizer,
+		); issueTypeErr == nil {
+			native[daily.WorkItemIssueTypeFamilyName] = issueTypeExecutor
+		} else {
+			refusals = append(refusals, dailyFamilyRefusal{family: daily.WorkItemIssueTypeFamilyName, err: issueTypeErr})
+		}
+		if investmentExecutor, investmentErr := daily.NewWorkItemInvestmentExecutor(
+			clickhouseConnection, workItemEngines.investmentClassifier,
+		); investmentErr == nil {
+			native[daily.WorkItemInvestmentFamilyName] = investmentExecutor
+		} else {
+			refusals = append(refusals, dailyFamilyRefusal{family: daily.WorkItemInvestmentFamilyName, err: investmentErr})
+		}
 	}
 	return native, postBridge, finalize, refusals
 }

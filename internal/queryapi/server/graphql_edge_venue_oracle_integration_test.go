@@ -660,6 +660,7 @@ func edgeCompare(t *testing.T, goBase string, cs []edgeCase, python []venueoracl
 				t.Errorf("%s: D4840 Home ledger has undeclared header differences %v\n python %v\n go     %v",
 					c.request.Name, differing, python[i].Headers, goResponse.Headers)
 			}
+			captureCHAOS8509HomePair(t, key, chaos8169GraphQLHomeBody(t, python[i].Body), chaos8169GraphQLHomeBody(t, goResponse.Body))
 			assertCHAOS8169HomeNoDataLedger(t, key, chaos8169GraphQLHomeBody(t, python[i].Body), chaos8169GraphQLHomeBody(t, goResponse.Body))
 			fmt.Fprintf(&receipt, "%-58s python=%d go=%d D4840 Home ledger validated\n", c.request.Name, python[i].Status, goResponse.Status)
 			continue

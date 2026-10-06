@@ -413,6 +413,15 @@ func collectGitHubBlame(
 				return CompleteRouteBatch{}, ErrEffectRecoveryUnsafe
 			}
 		}
+		// Second guard, independent of the per-range checks above: no file
+		// above the row bound ever reaches the allocation below, whatever
+		// the loop above did. Same outcome as the checks it backs up.
+		if fileLines > maxEffectRows {
+			if recoveryGeneration != "" {
+				return CompleteRouteBatch{}, ErrEffectRecoveryUnsafe
+			}
+			overBound = true
+		}
 		if overBound {
 			if len(rows) == 0 {
 				// One file alone exceeds the write contract: it stays retryable

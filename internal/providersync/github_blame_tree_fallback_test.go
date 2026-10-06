@@ -506,7 +506,7 @@ func TestGitHubBlameRecoveryReplaysEveryInFlightPathWithoutTheRunBounds(t *testi
 // builds no row at all, and every malformed range has a defined outcome.
 func TestGitHubBlameRouteRefusesAnOversizeRangeBeforeExpandingIt(t *testing.T) {
 	blameCaptureSlog(t)
-	for _, lines := range []int{2_000_000, 4_294_967_295} {
+	for _, lines := range []int{maxEffectRows + 1} {
 		doer := &gitHubBigTreeDoer{
 			t: t, dirs: 1, filesPerDir: 3, linesPerFile: 2, bigDir: -1, truncatedDir: -1,
 			linesByPath: map[string]int{bigTreePath(0, 1): lines},
@@ -527,7 +527,7 @@ func TestGitHubBlameRouteRefusesAnOversizeRangeBeforeExpandingIt(t *testing.T) {
 	// The same file first in the unit: rotated as a retryable path, nothing built.
 	doer := &gitHubBigTreeDoer{
 		t: t, dirs: 1, filesPerDir: 1, bigDir: -1, truncatedDir: -1,
-		linesByPath: map[string]int{bigTreePath(0, 0): 4_294_967_295},
+		linesByPath: map[string]int{bigTreePath(0, 0): maxEffectRows + 1},
 	}
 	built := 0
 	limits := defaultGitHubBlameLimits()
@@ -583,27 +583,36 @@ func TestGitHubBlameRangeArithmeticHasADefinedOutcomePerShape(t *testing.T) {
 	}
 }
 
+// The write contract's row bound holds even when the run limits are looser than
+// it: the file is refused before any row is built, and the proof allocates at
+// most the bound plus one line.
+func TestGitHubBlameRouteRefusesAFileAboveTheWriteBoundWhateverTheRunLimitsAre(t *testing.T) {
+	blameCaptureSlog(t)
+	built := 0
+	limits := defaultGitHubBlameLimits()
+	limits.maxRows = 1 << 40
+	limits.maxPayloadBytes = 1 << 40
+	limits.rowsBuilt = &built
+	client := gitHubRepositoryClient(t, fakehttp.Client(gitHubFixedRangeDoer{
+		t: t, ranges: fmt.Sprintf(`[{"startingLine":1,"endingLine":%d,"commit":{"oid":"a"}}]`, maxEffectRows+1),
+	}), "https://api.github.com")
+	batch, err := (GitHubBlameRouteHandler{Coverage: staticGitHubBlameCoverage{}, limits: &limits}).Collect(
+		context.Background(), nativeTestClaim("github", "blame"), providerfoundation.Credential{}, client,
+		time.Date(2026, 7, 23, 12, 30, 0, 0, time.UTC))
+	if err != nil || built != 0 || batch.Result["retryable_path_failures"] != 1 || batch.Result["remaining_paths"] != 1 {
+		t.Fatalf("err=%v built=%d result=%v", err, built, batch.Result)
+	}
+}
+
 // A replayed file the write contract would refuse fails with the write step's
 // class before any row is allocated.
 func TestGitHubBlameRecoveryRefusesAnOversizeFileBeforeExpandingIt(t *testing.T) {
 	blameCaptureSlog(t)
 	claim := nativeTestClaim("github", "blame")
-	client := gitHubRepositoryClient(t, fakehttp.Client(gitHubFixedRangeDoer{
-		t: t, ranges: `[{"startingLine":1,"endingLine":4294967295,"commit":{"oid":"a"}}]`,
-	}), "https://api.github.com")
 	built := 0
 	limits := defaultGitHubBlameLimits()
 	limits.rowsBuilt = &built
-	_, err := collectGitHubBlame(
-		context.Background(), claim, client, time.Date(2026, 7, 23, 12, 30, 0, 0, time.UTC),
-		staticGitHubBlameCoverage{state: GitHubBlameProgressState{InFlightOutcomes: map[string]string{
-			"src/file-000.go": gitHubBlameOutcomeRows,
-		}}},
-		gitHubBlameMaxFiles, false, claim.GenerationKey(), limits,
-	)
-	if !errors.Is(err, ErrEffectRecoveryUnsafe) || built != 0 {
-		t.Fatalf("err=%v built=%d", err, built)
-	}
+	var err error
 	// Each write-contract bound alone must refuse a replayed file: rows only
 	// (100,001 short lines) and payload only (few lines, very long path).
 	longPath := "src/" + strings.Repeat("a", 3000) + ".go"
@@ -618,7 +627,7 @@ func TestGitHubBlameRecoveryRefusesAnOversizeFileBeforeExpandingIt(t *testing.T)
 			path = "src/file-000.go"
 		}
 		built = 0
-		client = gitHubRepositoryClient(t, fakehttp.Client(gitHubFixedRangeDoer{t: t, ranges: variant.ranges, path: variant.path}), "https://api.github.com")
+		client := gitHubRepositoryClient(t, fakehttp.Client(gitHubFixedRangeDoer{t: t, ranges: variant.ranges, path: variant.path}), "https://api.github.com")
 		_, err = collectGitHubBlame(
 			context.Background(), claim, client, time.Date(2026, 7, 23, 12, 30, 0, 0, time.UTC),
 			staticGitHubBlameCoverage{state: GitHubBlameProgressState{InFlightOutcomes: map[string]string{

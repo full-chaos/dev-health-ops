@@ -99,29 +99,7 @@ func resolveEvidenceQualityStats(ctx context.Context, client QueryClient, orgID 
 		return nil, nil
 	}
 
-	var scopeFilter string
-	var scopeBindings []clickhouse.Binding
-	var teamScopeIDs []string
-	var themes []string
-
-	if filters != nil {
-		if filters.Scope != nil && len(filters.Scope.Ids) > 0 {
-			switch filters.Scope.Level {
-			case model.ScopeLevelInputTeam:
-				teamScopeIDs = filters.Scope.Ids
-			case model.ScopeLevelInputRepo:
-				scopeFilter += " AND work_unit_investments.repo_id IN {scope_ids:Array(String)}"
-				scopeBindings = append(scopeBindings, clickhouse.Binding{Name: "scope_ids", Value: filters.Scope.Ids})
-			}
-		}
-		if filters.What != nil && len(filters.What.Repos) > 0 {
-			scopeFilter += " AND work_unit_investments.repo_id IN {repo_filter_ids:Array(String)}"
-			scopeBindings = append(scopeBindings, clickhouse.Binding{Name: "repo_filter_ids", Value: filters.What.Repos})
-		}
-		if filters.Why != nil && len(filters.Why.WorkCategory) > 0 {
-			themes = filters.Why.WorkCategory
-		}
-	}
+	qualityFilter := evidenceQualityFilterFromFilters(filters)
 
 	// Ports _query_investment_dicts (investment.py:175-181): EVERY
 	// investment query fires the stale-membership-scope telemetry check
@@ -134,7 +112,7 @@ func resolveEvidenceQualityStats(ctx context.Context, client QueryClient, orgID 
 	// RecordArgMaxNullTransitionGuard's doc comment.
 	RecordArgMaxNullTransitionGuard(ctx, client, orgID, queryTimeoutSecs)
 
-	q := compileInvestmentQualityStats(orgID, startDate, endDate, scopeFilter, scopeBindings, themes, teamScopeIDs)
+	q := compileInvestmentQualityStats(orgID, startDate, endDate, qualityFilter.scopeFilter, qualityFilter.scopeBindings, qualityFilter.themes, qualityFilter.teamScopeIDs)
 	row, found, err := executeInvestmentQualityStats(ctx, client, q)
 	if err != nil {
 		return nil, err
@@ -179,6 +157,185 @@ func resolveEvidenceQualityStats(ctx context.Context, client QueryClient, orgID 
 		Total:      row.Total,
 		BandCounts: bandCountsJSON,
 	}, nil
+}
+
+// evidenceQualityFilter is the deliberately narrow scope of the existing
+// evidence-quality aggregate. The group aggregate shares it exactly: a group
+// answer with a different filter would make a "mean by group" impossible to
+// reconcile with the served overall evidenceQualityStats result.
+type evidenceQualityFilter struct {
+	scopeFilter   string
+	scopeBindings []clickhouse.Binding
+	teamScopeIDs  []string
+	themes        []string
+}
+
+func evidenceQualityFilterFromFilters(filters *model.FilterInput) evidenceQualityFilter {
+	var result evidenceQualityFilter
+	if filters == nil {
+		return result
+	}
+	if filters.Scope != nil && len(filters.Scope.Ids) > 0 {
+		switch filters.Scope.Level {
+		case model.ScopeLevelInputTeam:
+			result.teamScopeIDs = filters.Scope.Ids
+		case model.ScopeLevelInputRepo:
+			result.scopeFilter += " AND work_unit_investments.repo_id IN {scope_ids:Array(String)}"
+			result.scopeBindings = append(result.scopeBindings, clickhouse.Binding{Name: "scope_ids", Value: filters.Scope.Ids})
+		}
+	}
+	if filters.What != nil && len(filters.What.Repos) > 0 {
+		result.scopeFilter += " AND work_unit_investments.repo_id IN {repo_filter_ids:Array(String)}"
+		result.scopeBindings = append(result.scopeBindings, clickhouse.Binding{Name: "repo_filter_ids", Value: filters.What.Repos})
+	}
+	if filters.Why != nil && len(filters.Why.WorkCategory) > 0 {
+		result.themes = filters.Why.WorkCategory
+	}
+	return result
+}
+
+// resolveEvidenceQualityByGroup serves CHAOS-8104's grouped counterpart to
+// evidenceQualityStats. Its input is absent by default, as is its result: the
+// existing aggregate remains unchanged for callers that do not request this
+// extra query.
+func resolveEvidenceQualityByGroup(ctx context.Context, client QueryClient, orgID string, batch model.AnalyticsRequestInput, useInvestment bool, filters *model.FilterInput) ([]model.EvidenceQualityGroup, error) {
+	if !useInvestment || batch.EvidenceQualityGroupBy == nil {
+		return nil, nil
+	}
+	dimension, err := dimensionFromInput(*batch.EvidenceQualityGroupBy)
+	if err != nil {
+		return nil, err
+	}
+	switch dimension {
+	case DimensionTheme, DimensionSubcategory, DimensionWorkType:
+	default:
+		return nil, newValidationError("evidenceQualityGroupBy", string(*batch.EvidenceQualityGroupBy), "evidenceQualityGroupBy must be THEME, SUBCATEGORY, or WORK_TYPE")
+	}
+	startDate, endDate, ok := analyticsQualityWindow(batch)
+	if !ok {
+		return nil, nil
+	}
+
+	// The same two guards run immediately before every investment read. This
+	// group query has its own statement, so it must not piggyback on the stats
+	// query's telemetry call.
+	RecordStaleInvestmentMembershipScope(ctx, client, orgID, queryTimeoutSecs)
+	RecordArgMaxNullTransitionGuard(ctx, client, orgID, queryTimeoutSecs)
+
+	q, err := compileEvidenceQualityByGroup(orgID, startDate, endDate, dimension, evidenceQualityFilterFromFilters(filters))
+	if err != nil {
+		return nil, err
+	}
+	return executeEvidenceQualityByGroup(ctx, client, q)
+}
+
+// compileEvidenceQualityByGroup reads one latest persisted investment row per
+// work unit. Theme and subcategory maps are NOT array-joined: arraySort picks
+// the greatest probability and breaks ties by key, so a unit is counted once
+// in its deterministic dominant persisted group. This is a reporting choice;
+// it does not recompute or alter the stored classifications.
+func compileEvidenceQualityByGroup(orgID string, startDate, endDate graphqldate.Date, dimension Dimension, filters evidenceQualityFilter) (compiledQuery, error) {
+	var groupKey string
+	switch dimension {
+	case DimensionTheme:
+		groupKey = "arrayElementOrNull(arraySort((key, value) -> (-value, key), mapKeys(work_unit_investments.theme_distribution_json), mapValues(work_unit_investments.theme_distribution_json)), 1)"
+	case DimensionSubcategory:
+		groupKey = "arrayElementOrNull(arraySort((key, value) -> (-value, key), mapKeys(work_unit_investments.subcategory_distribution_json), mapValues(work_unit_investments.subcategory_distribution_json)), 1)"
+	case DimensionWorkType:
+		groupKey = "ifNull(work_unit_investments.work_unit_type, '')"
+	default:
+		return compiledQuery{}, newValidationError("evidenceQualityGroupBy", string(dimension), "evidenceQualityGroupBy must be THEME, SUBCATEGORY, or WORK_TYPE")
+	}
+
+	var categoryFilter string
+	var categoryBindings []clickhouse.Binding
+	if len(filters.themes) > 0 {
+		categoryFilter = " AND (hasAny(mapKeys(CAST(theme_distribution_json AS Map(String, Float32))), {themes:Array(String)}))"
+		categoryBindings = append(categoryBindings, clickhouse.Binding{Name: "themes", Value: filters.themes})
+	}
+
+	var teamJoin, teamFilter string
+	var teamBindings []clickhouse.Binding
+	if len(filters.teamScopeIDs) > 0 {
+		unitTeamSQL := BuildUnitTeamSubquery(UnitTeamSubqueryOptions{
+			Source:         fmt.Sprintf("%s AS work_unit_investments", LatestWorkUnitInvestmentsSource()),
+			Where:          unitTeamWindowFilter("", ""),
+			InnerTeamAlias: "team_label",
+			IncludeTeamID:  true,
+		})
+		teamJoin = fmt.Sprintf("\n        LEFT JOIN (%s        ) AS unit_team ON unit_team.work_unit_id = work_unit_investments.work_unit_id\n        ", unitTeamSQL)
+		teamFilter = `
+	          AND (
+	              unit_team.team_label IN {team_scope_ids:Array(String)}
+	              OR unit_team.team_id IN {team_scope_ids:Array(String)}
+	          )`
+		teamBindings = append(teamBindings, clickhouse.Binding{Name: "team_scope_ids", Value: filters.teamScopeIDs})
+	}
+
+	sql := fmt.Sprintf(`
+SELECT
+    evidence_quality_group_key,
+    avgIf(evidence_quality, evidence_quality IS NOT NULL) AS quality_mean,
+    count() AS total,
+    countIf(evidence_quality IS NOT NULL) AS quality_known_count
+FROM (
+    SELECT
+        %s AS evidence_quality_group_key,
+        work_unit_investments.evidence_quality AS evidence_quality
+    FROM %s AS work_unit_investments%s
+    WHERE work_unit_investments.from_ts < {end_date:Date}
+      AND work_unit_investments.to_ts >= {start_date:Date}
+      AND work_unit_investments.org_id = {org_id:String}
+%s%s%s
+) AS grouped_units
+WHERE evidence_quality_group_key IS NOT NULL
+  AND evidence_quality_group_key != ''
+GROUP BY evidence_quality_group_key
+ORDER BY total DESC, evidence_quality_group_key ASC
+%s
+`, groupKey, LatestWorkUnitInvestmentsSource(), teamJoin, filters.scopeFilter, teamFilter, categoryFilter, settingsMaxExecutionTime(queryTimeoutSecs))
+
+	bindings := []clickhouse.Binding{
+		{Name: "org_id", Value: orgID},
+		{Name: "start_date", Value: dateBindingValue(startDate.Time())},
+		{Name: "end_date", Value: dateBindingValue(endDate.Time())},
+	}
+	bindings = append(bindings, filters.scopeBindings...)
+	bindings = append(bindings, teamBindings...)
+	bindings = append(bindings, categoryBindings...)
+	return compiledQuery{sql: sql, bindings: bindings}, nil
+}
+
+func executeEvidenceQualityByGroup(ctx context.Context, client QueryClient, q compiledQuery) ([]model.EvidenceQualityGroup, error) {
+	rows, err := client.Query(ctx, q.sql, q.bindings)
+	if err != nil {
+		return nil, fmt.Errorf("query: %w", err)
+	}
+	defer rows.Close()
+
+	var groups []model.EvidenceQualityGroup
+	for rows.Next() {
+		var key string
+		var mean float64
+		var total, known uint64
+		if err := rows.Scan(&key, &mean, &total, &known); err != nil {
+			return nil, fmt.Errorf("scan: %w", err)
+		}
+		var meanValue *float64
+		if known > 0 {
+			meanValue = &mean
+		}
+		groups = append(groups, model.EvidenceQualityGroup{
+			Key:   key,
+			Label: breakdownLabel(key, nil),
+			Mean:  meanValue,
+			Total: int(total),
+		})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("rows: %w", err)
+	}
+	return groups, nil
 }
 
 // unitTeamWindowFilter ports unit_team_window_filter (api/queries/

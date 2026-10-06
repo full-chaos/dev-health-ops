@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"log"
 	"net/http"
 	"net/http/httptest"
@@ -138,7 +139,7 @@ func withCapturedProviderConstruction(t *testing.T, fn func(*capturedConstructio
 func TestNewProviderForOrg_UsesOrgCredentialsWhenMatched(t *testing.T) {
 	resolver := &fakeOrgResolver{
 		credentials: llmorgsettings.Credentials{
-			APIKey:  "org-secret-key",
+			APIKey:  secrets.NewHidden("org-secret-key"),
 			BaseURL: "https://org-gateway.example.com/v1",
 		},
 		credentialsOK: true,
@@ -193,7 +194,7 @@ func TestNewProviderForOrg_UsesOrgCredentialsWhenMatched(t *testing.T) {
 func TestNewProviderForOrg_ExplicitModelOverridesOrgStoredModel(t *testing.T) {
 	resolver := &fakeOrgResolver{
 		credentials: llmorgsettings.Credentials{
-			APIKey:  "org-secret-key",
+			APIKey:  secrets.NewHidden("org-secret-key"),
 			BaseURL: "https://org-gateway.example.com/v1",
 		},
 		credentialsOK: true,
@@ -228,7 +229,7 @@ func TestNewProviderForOrg_ExplicitModelOverridesOrgStoredModel(t *testing.T) {
 func TestCompleteInvestmentMixExplanationForOrg_DefaultModelReachesConstruction(t *testing.T) {
 	resolver := &fakeOrgResolver{
 		credentials: llmorgsettings.Credentials{
-			APIKey:  "org-secret-key",
+			APIKey:  secrets.NewHidden("org-secret-key"),
 			BaseURL: "https://org-gateway.example.com/v1",
 		},
 		credentialsOK: true,
@@ -423,7 +424,7 @@ func TestResolveUnsupportedProviderKindForOrg_OrgResolvedUnsupportedKind(t *test
 func TestIsLLMAvailableForOrg_TrueWhenOrgCredentialsComplete(t *testing.T) {
 	resolver := &fakeOrgResolver{
 		usableProvider: "openai",
-		credentials:    llmorgsettings.Credentials{APIKey: "org-key"},
+		credentials:    llmorgsettings.Credentials{APIKey: secrets.NewHidden("org-key")},
 		credentialsOK:  true,
 	}
 	if !IsLLMAvailableForOrg(context.Background(), "auto", "org-1", resolver) {
@@ -459,7 +460,7 @@ func TestCompleteInvestmentMixExplanationForOrg_NeverLeaksCredentialsInErrors(t 
 	const secretBaseURL = "https://canary-secret-host.invalid/v1"
 
 	resolver := &fakeOrgResolver{
-		credentials:   llmorgsettings.Credentials{APIKey: secretAPIKey, BaseURL: secretBaseURL},
+		credentials:   llmorgsettings.Credentials{APIKey: secrets.NewHidden(secretAPIKey), BaseURL: secretBaseURL},
 		credentialsOK: true,
 		model:         "org-model",
 	}
@@ -774,7 +775,7 @@ func TestResolvedModelAlwaysMatchesConstructedProviderModel(t *testing.T) {
 			srv.reset()
 			resolver := &fakeOrgResolver{
 				credentials: llmorgsettings.Credentials{
-					APIKey:  "org-secret-key",
+					APIKey:  secrets.NewHidden("org-secret-key"),
 					BaseURL: srv.URL,
 				},
 				credentialsOK: true,

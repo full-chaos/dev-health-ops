@@ -60,6 +60,24 @@ func TestRegisteredFeatureFlagsDocument_MatchesCapturedWireFixture(t *testing.T)
 	}
 }
 
+// TestRegisteredInvestmentEvidenceQualityDocument_MatchesCapturedWireFixture
+// pins CHAOS-8745's actual browser-client request. It checks the independent
+// client-capture digest as well as the catalog document, so changing both
+// files together cannot turn a new, unmeasured wire form into a pass.
+func TestRegisteredInvestmentEvidenceQualityDocument_MatchesCapturedWireFixture(t *testing.T) {
+	const capturedWireDigest = "5e31cdbd14dde65165c635a8a3f02fb03f85fae0ef9c21eeb39808c199323c2a"
+	captured, err := os.ReadFile("testdata/wire_capture/investmentevidencequality_captured.graphql")
+	if err != nil {
+		t.Fatalf("read captured wire fixture: %v", err)
+	}
+	if got := digestHex(string(captured)); got != capturedWireDigest {
+		t.Fatalf("captured investment evidence quality document digest = %s, want actual browser wire digest %s", got, capturedWireDigest)
+	}
+	if got := digestHex(registeredInvestmentEvidenceQualityDocument); got != capturedWireDigest {
+		t.Fatalf("registered investment evidence quality document digest = %s, want captured browser wire digest %s", got, capturedWireDigest)
+	}
+}
+
 // TestRegisteredFeatureFlagEventsDocument_MatchesCapturedWireFixture is
 // CHAOS-5523's evidence-bar requirement, modelled directly on
 // TestRegisteredFeatureFlagsDocument_MatchesCapturedWireFixture above:
@@ -230,6 +248,8 @@ func TestRegisteredCapturedDocuments_MatchCapturedWireFixtures(t *testing.T) {
 		{"testdata/wire_capture/testopsjobfailures_captured.graphql", registeredTestopsJobFailuresDocument},
 		{"testdata/wire_capture/coveragebaselines_captured.graphql", registeredCoverageBaselinesDocument},
 		{"testdata/wire_capture/coveragescopebaseline_captured.graphql", registeredCoverageScopeBaselineDocument},
+		{"testdata/wire_capture/coveragescopebaseline_v1_captured.graphql", registeredCoverageScopeBaselineV1Document},
+		{"testdata/wire_capture/investmentevidencequality_captured.graphql", registeredInvestmentEvidenceQualityDocument},
 		{"testdata/wire_capture/workunitteamattributions_captured.graphql", registeredWorkUnitTeamAttributionsDocument},
 		{"testdata/wire_capture/operatingreview_captured.graphql", registeredOperatingReviewDocument},
 		{"testdata/wire_capture/operatingreview_v1_captured.graphql", registeredOperatingReviewV1Document},

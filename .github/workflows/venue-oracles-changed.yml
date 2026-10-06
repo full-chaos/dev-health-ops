@@ -90,9 +90,12 @@ jobs:
 
       - name: Run the venue oracles of the changed packages
         if: steps.select.outputs.run == 'true'
+        env:
+          DHO_CHAOS8509_CAPTURE_DIR: ${{ runner.temp }}/venue-oracle-receipt/chaos-8509
         run: |
           set -euo pipefail
           mkdir -p "${RUNNER_TEMP}/venue-oracle-receipt"
+          mkdir -p "${DHO_CHAOS8509_CAPTURE_DIR}"
           bash ci/check_go.sh venue-oracles --changed changed.txt 2>&1 | tee "${RUNNER_TEMP}/venue-oracle-receipt/receipt.log"
 
       - name: Upload the venue oracle receipt
@@ -100,5 +103,7 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: venue-oracle-receipt-changed-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/venue-oracle-receipt/receipt.log
+          path: |
+            ${{ runner.temp }}/venue-oracle-receipt/receipt.log
+            ${{ runner.temp }}/venue-oracle-receipt/chaos-8509/*.json
           if-no-files-found: ignore

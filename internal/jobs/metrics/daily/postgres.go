@@ -115,6 +115,15 @@ type PostgresStore struct {
 	finalizeSweepObserver      jobruntime.DailyMetricsFinalizeSweepObserver
 	finalizeRedriveObserver    jobruntime.DailyMetricsFinalizeRedriveObserver
 	partitionRecomputeObserver jobruntime.DailyMetricsPartitionRecomputeObserver
+	// markerWriter and markerObserver are the CHAOS-8710 ClickHouse run
+	// marker (run_marker.go). Nil writer: no marker is written.
+	markerWriter   RunMarkerWriter
+	markerReader   RunMarkerReader
+	markerObserver RunMarkerObserver
+	// syncHook is a test seam: markerSync calls it with "marker_read" after its
+	// ClickHouse read and "postgres_read" after its Postgres read, so a test
+	// can force a race deterministically.
+	syncHook func(stage string)
 }
 
 // SetRedriveObserver wires the optional operator-redrive telemetry observer
@@ -278,12 +287,17 @@ func (store *PostgresStore) StartRunTx(
 	}
 	run := newRun(request.OrganizationID, request.TargetDay, request.Generation)
 	now := store.now().UTC()
+	// CHAOS-8710: created_at is the Postgres clock, not the worker's. The run
+	// marker's "latest full-org run of the day" is picked by created_at, so every
+	// writer must stamp it from the one clock (a skewed worker would otherwise
+	// sort a newer run before an older succeeded one). updated_at stays on the
+	// worker clock: the leases compare against it.
 	command, err := tx.Exec(ctx, `
 INSERT INTO public.daily_metrics_runs
-    (id, org_id, target_day, generation, status, finalization_status, created_at, updated_at)
-VALUES ($1::uuid, $2::uuid, $3::date, $4, 'pending', 'pending', $5, $5)
+    (id, org_id, target_day, generation, status, finalization_status, created_at, updated_at, full_org)
+VALUES ($1::uuid, $2::uuid, $3::date, $4, 'pending', 'pending', clock_timestamp(), $5, $6)
 ON CONFLICT DO NOTHING`,
-		run.ID, run.OrganizationID, request.TargetDay.Format("2006-01-02"), run.Generation, now)
+		run.ID, run.OrganizationID, request.TargetDay.Format("2006-01-02"), run.Generation, now, len(partitions) == 0)
 	if err != nil {
 		return Run{}, ErrUnavailable
 	}
@@ -429,10 +443,11 @@ func (store *PostgresStore) StartScheduledFanoutRunTx(
 	}
 	run := newRun(normalized.OrganizationID, normalized.TargetDay, normalized.Generation)
 	now := store.now().UTC()
+	// CHAOS-8710: created_at is the Postgres clock (see StartRunTx).
 	command, err := tx.Exec(ctx, `
 INSERT INTO public.daily_metrics_runs
-    (id, org_id, target_day, generation, status, finalization_status, created_at, updated_at)
-VALUES ($1::uuid, $2::uuid, $3::date, $4, 'pending', 'pending', $5, $5)
+    (id, org_id, target_day, generation, status, finalization_status, created_at, updated_at, full_org)
+VALUES ($1::uuid, $2::uuid, $3::date, $4, 'pending', 'pending', clock_timestamp(), $5, true)
 ON CONFLICT DO NOTHING`,
 		run.ID, run.OrganizationID, normalized.TargetDay.Format("2006-01-02"), run.Generation, now)
 	if err != nil {
@@ -723,6 +738,31 @@ func (store *PostgresStore) ClaimDispatch(ctx context.Context, runID string) (*R
 	}
 	var run Run
 	var targetDay string
+	// CHAOS-8710: the claim runs in one transaction under the (org, day)
+	// marker lock, so its 'reopened' append cannot interleave with a backfill.
+	tx, err := store.pool.Begin(ctx)
+	if err != nil {
+		return nil, ErrUnavailable
+	}
+	defer func() {
+		rollbackCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer cancel()
+		_ = tx.Rollback(rollbackCtx)
+	}()
+	if store.markerEnabled() {
+		var lockOrg, lockDay string
+		err := tx.QueryRow(ctx, `SELECT org_id::text, target_day::text FROM public.daily_metrics_runs WHERE id = $1::uuid`, runID).
+			Scan(&lockOrg, &lockDay)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, nil
+		}
+		if err != nil {
+			return nil, ErrUnavailable
+		}
+		if err := lockMarkerDay(ctx, tx, lockOrg, lockDay); err != nil {
+			return nil, err
+		}
+	}
 	// RepositoryDiscoveryRequired is generation-agnostic: it is true exactly
 	// when the run was created with no partitions yet, whichever entry point
 	// created it (the nightly fixed schedule, or a post-sync re-drive per
@@ -730,15 +770,16 @@ func (store *PostgresStore) ClaimDispatch(ctx context.Context, runID string) (*R
 	// RepositoryIDs request) leave partitions unmaterialized for this reason;
 	// a request with explicit RepositoryIDs inserts its partitions in the same
 	// transaction that creates the run, so it is never seen as pending here.
-	err := store.pool.QueryRow(ctx, `
+	var claimedAtMs int64
+	err = tx.QueryRow(ctx, `
 UPDATE public.daily_metrics_runs
 SET status = 'running', updated_at = $1
 WHERE id = $2::uuid AND status IN ('pending', 'running')
 RETURNING id::text, org_id::text, generation, status, target_day::text,
   NOT EXISTS (
     SELECT 1 FROM public.daily_metrics_partitions WHERE run_id = daily_metrics_runs.id
-  )`, store.now().UTC(), runID).
-		Scan(&run.ID, &run.OrganizationID, &run.Generation, &run.Status, &targetDay, &run.RepositoryDiscoveryRequired)
+  ), full_org, `+pgClockMillis, store.now().UTC(), runID).
+		Scan(&run.ID, &run.OrganizationID, &run.Generation, &run.Status, &targetDay, &run.RepositoryDiscoveryRequired, &run.FullOrg, &claimedAtMs)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
@@ -747,6 +788,14 @@ RETURNING id::text, org_id::text, generation, status, target_day::text,
 	}
 	if run.TargetDay, err = time.Parse("2006-01-02", targetDay); err != nil {
 		return nil, ErrInvalidState
+	}
+	// CHAOS-8710: a full-org run in flight makes its day unknown, even when an
+	// earlier generation of the day succeeded.
+	if err := store.markInFlight(ctx, run, claimedAtMs); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, ErrUnavailable
 	}
 	return &run, nil
 }
@@ -1494,6 +1543,10 @@ WHERE run_id = $2::uuid AND status = 'open'`, now, claim.Run.ID); err != nil {
 	if err := tx.Commit(ctx); err != nil {
 		return ErrUnavailable
 	}
+	// CHAOS-8710: after the commit, never before it, and never able to fail
+	// the run. markerSync certifies the day only if committed Postgres says the
+	// day's latest full-org run is succeeded; a failure leaves the day unknown.
+	store.markerSyncAfterCommit(ctx, claim.Run)
 	return nil
 }
 

@@ -144,18 +144,11 @@ func TestQueryAPIRoleDriverObservesAMissingColumnGrant(t *testing.T) {
 // on one role is enough) and the driver must report a permission denial for the
 // path that reads that relation: a driver that passed anyway would be a test
 // that cannot fail.
-// rollbackWindowRoutingStateGrant is declared in the posture manifest and reached by no path of this build (CHAOS-8705):
-// an older build, the rollback window, still reads it. CHAOS-8706 drops the table and this exemption with it.
-const rollbackWindowRoutingStateGrant = "go_api_routing_state"
-
 func TestQueryAPIRoleDriverObservesAMissingGrant(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
 	defer cancel()
 	fixture := startQueryAPIRoleFixture(t, ctx)
 	for _, table := range postgresstore.QueryAPIPosture().RequiredTables {
-		if table.TableName == rollbackWindowRoutingStateGrant {
-			continue
-		}
 		if _, err := fixture.admin.Exec(ctx, "REVOKE SELECT ON public."+table.TableName+" FROM "+fixture.role); err != nil {
 			t.Fatalf("revoke %s: %v", table.TableName, err)
 		}

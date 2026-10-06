@@ -19,7 +19,7 @@ import (
 
 // The operator gate, exercised through the real /query handler: a signed
 // envelope is verified by the real principal.Verifier, its claims reach the
-// resolver through the real middleware, and the routing row is read from a
+// resolver through the real middleware, and the read goes to a
 // real Postgres. No claims are built by hand.
 
 func signDataHealthEnvelope(t *testing.T, priv ed25519.PrivateKey, claims principal.Claims, expires time.Time) string {

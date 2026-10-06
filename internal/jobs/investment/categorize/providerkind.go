@@ -372,7 +372,7 @@ func NewProviderFromEnvWithModel(kind ProviderKind, model string) (Provider, err
 			return nil, fmt.Errorf("LLM provider %q is not configured: set OPENAI_API_KEY", kind)
 		}
 		return NewOpenAIProvider(OpenAIProviderConfig{
-			APIKey:  apiKey,
+			APIKey:  envsecrets.NewHidden(apiKey),
 			BaseURL: firstNonEmptyEnv("LLM_BASE_URL", "OPENAI_BASE_URL"),
 			// Generic LLM_MODEL checked BEFORE the provider-specific
 			// LLM_MODEL_OPENAI (chris's ruling, CHAOS-4978, 2026-09-03
@@ -393,7 +393,7 @@ func NewProviderFromEnvWithModel(kind ProviderKind, model string) (Provider, err
 			BaseURL: firstNonEmptyEnv("LLM_BASE_URL", "LOCAL_LLM_BASE_URL"),
 			// Generic-first, same ruling as openai above.
 			Model:  resolved,
-			APIKey: firstNonEmptyEnv("LLM_API_KEY", "LOCAL_LLM_API_KEY"),
+			APIKey: envsecrets.NewHidden(firstNonEmptyEnv("LLM_API_KEY", "LOCAL_LLM_API_KEY")),
 		}), nil
 
 	case ProviderKindOllama:
@@ -407,7 +407,7 @@ func NewProviderFromEnvWithModel(kind ProviderKind, model string) (Provider, err
 		return NewOllamaProvider(OllamaProviderConfig{
 			BaseURL: firstNonEmptyEnv("LLM_BASE_URL", "OLLAMA_BASE_URL"),
 			Model:   resolved,
-			APIKey:  firstNonEmptyEnv("LLM_API_KEY", "OLLAMA_API_KEY", "LOCAL_LLM_API_KEY"),
+			APIKey:  envsecrets.NewHidden(firstNonEmptyEnv("LLM_API_KEY", "OLLAMA_API_KEY", "LOCAL_LLM_API_KEY")),
 		}), nil
 
 	// BYO LLM stubs: Python has a real client for each of these; this port
@@ -454,7 +454,7 @@ func NewProviderFromCredentials(kind ProviderKind, apiKey, baseURL, model string
 			return nil, fmt.Errorf("LLM provider %q is not configured: missing an api_key", kind)
 		}
 		return NewOpenAIProvider(OpenAIProviderConfig{
-			APIKey:  apiKey,
+			APIKey:  envsecrets.NewHidden(apiKey),
 			BaseURL: baseURL,
 			Model:   model,
 		}), nil
@@ -467,7 +467,7 @@ func NewProviderFromCredentials(kind ProviderKind, apiKey, baseURL, model string
 		return NewLocalProvider(LocalProviderConfig{
 			BaseURL: baseURL,
 			Model:   model,
-			APIKey:  apiKey,
+			APIKey:  envsecrets.NewHidden(apiKey),
 		}), nil
 
 	case ProviderKindOllama:
@@ -493,7 +493,7 @@ func NewProviderFromCredentials(kind ProviderKind, apiKey, baseURL, model string
 		return NewLocalProvider(LocalProviderConfig{
 			BaseURL: baseURL,
 			Model:   model,
-			APIKey:  apiKey,
+			APIKey:  envsecrets.NewHidden(apiKey),
 		}), nil
 
 	// BYO LLM stubs: same narrowing as NewProviderFromEnv.

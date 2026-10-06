@@ -1,0 +1,12 @@
+query InvestmentEvidenceQuality($orgId: String!, $batch: AnalyticsRequestInput!) {
+  analytics(orgId: $orgId, batch: $batch) {
+    evidenceQualityByGroup {
+      key
+      label
+      mean
+      total
+      __typename
+    }
+    __typename
+  }
+}

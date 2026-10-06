@@ -58,8 +58,8 @@ func TestGitHubProjectV2SnapshotDiffAddsIssueAndRetiresARemovedSubjectFromPresen
 	firstSyncAt := time.Date(2026, 8, 4, 12, 0, 0, 0, time.UTC)
 	firstDoer := &gitHubProjectV2Doer{t: t, replies: []string{
 		`{"data":{"organization":{"projectV2":{"items":{"nodes":[` +
-			`{"id":"PVTI_ISSUE","content":{"__typename":"Issue","number":7,"title":"Ship it","state":"OPEN","repository":{"nameWithOwner":"acme/api"},"labels":{"nodes":[]},"assignees":{"nodes":[]}},"fieldValues":{"nodes":[]},"changes":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}},` +
-			`{"id":"PVTI_PR","createdAt":"2026-08-01T08:00:00Z","content":{"__typename":"PullRequest","number":42,"title":"A PR","repository":{"nameWithOwner":"acme/api"}},"fieldValues":{"nodes":[]},"changes":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}` +
+			`{"id":"PVTI_ISSUE","content":{"__typename":"Issue","number":7,"title":"Ship it","state":"OPEN","repository":{"nameWithOwner":"acme/api"},"labels":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}},"assignees":{"nodes":[]}},"fieldValues":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}},"changes":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}},` +
+			`{"id":"PVTI_PR","createdAt":"2026-08-01T08:00:00Z","content":{"__typename":"PullRequest","number":42,"title":"A PR","repository":{"nameWithOwner":"acme/api"}},"fieldValues":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}},"changes":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}` +
 			`],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}`,
 	}}
 	firstFetch, err := (GitHubProjectV2Fetcher{}).Fetch(
@@ -120,7 +120,7 @@ WHERE org_id = ? AND subject_kind = 'work_item' AND subject_id = ?`,
 	secondSyncAt := firstSyncAt.Add(24 * time.Hour)
 	secondDoer := &gitHubProjectV2Doer{t: t, replies: []string{
 		`{"data":{"organization":{"projectV2":{"items":{"nodes":[` +
-			`{"id":"PVTI_PR","createdAt":"2026-08-01T08:00:00Z","content":{"__typename":"PullRequest","number":42,"title":"A PR","repository":{"nameWithOwner":"acme/api"}},"fieldValues":{"nodes":[]},"changes":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}` +
+			`{"id":"PVTI_PR","createdAt":"2026-08-01T08:00:00Z","content":{"__typename":"PullRequest","number":42,"title":"A PR","repository":{"nameWithOwner":"acme/api"}},"fieldValues":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}},"changes":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}` +
 			`],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}`,
 	}}
 	secondFetch, err := (GitHubProjectV2Fetcher{}).Fetch(

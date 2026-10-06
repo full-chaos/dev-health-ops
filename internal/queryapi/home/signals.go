@@ -405,6 +405,31 @@ func BuildMetricSignals(deltas []MetricDelta, f Filters, dataConfidence DataConf
 	return RankSignals(signals)
 }
 
+// AttachSignalAttribution adds one work-item-attribution distribution to the
+// Home metrics that are backed by work-item data. It deliberately leaves
+// repository metrics, recommendations, and risk signals without this
+// attribution: their team relationship comes from a different source.
+func AttachSignalAttribution(signals []Signal, attribution *SignalAttribution) []Signal {
+	if attribution == nil {
+		return signals
+	}
+	for i := range signals {
+		if isWorkItemMetric(signals[i].Metric) {
+			signals[i].Attribution = attribution
+		}
+	}
+	return signals
+}
+
+func isWorkItemMetric(metric string) bool {
+	switch metric {
+	case "cycle_time", "throughput", "wip_saturation", "blocked_work":
+		return true
+	default:
+		return false
+	}
+}
+
 // deltaMagnitude ports _rank_signals's own local _delta_magnitude
 // (services/home.py:515-521).
 func deltaMagnitude(s Signal) float64 {

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"regexp"
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/platform/workersignals"
@@ -509,7 +510,68 @@ func (repository *PostgresRepository) Fail(
 	startedAt time.Time,
 	completedAt time.Time,
 ) error {
-	return repository.failTx(ctx, claim, category, nil, startedAt, completedAt)
+	return repository.failTx(ctx, claim, category, "", nil, nil, startedAt, completedAt)
+}
+
+// CauseClassUnclassified is the stored cause class of a failure no classifier
+// recognised. It is explicit so a reader never meets an empty value.
+const CauseClassUnclassified = "unclassified"
+
+var causeClassPattern = regexp.MustCompile(`^[a-z][a-z0-9_]{0,63}$`)
+
+// ValidCauseClass reports whether value is shaped like a member of the closed
+// cause-class vocabulary: lowercase snake case, at most 64 bytes. It cannot
+// hold a path, a name or free text from a provider.
+func ValidCauseClass(value string) bool { return causeClassPattern.MatchString(value) }
+
+// CauseDetail is the bounded numeric detail of a size refusal: which limit was
+// hit, on which destination table, with which counts. Limit and Table are
+// fixed labels from the code (lowercase snake case, checked on write); the
+// rest are counts. It never carries provider text.
+type CauseDetail struct {
+	Limit string
+	Table string
+	Rows  int
+	Bytes int
+}
+
+func (detail *CauseDetail) document() map[string]any {
+	label := func(value string) string {
+		if value == "" {
+			return ""
+		}
+		if !ValidCauseClass(value) {
+			return CauseClassUnclassified
+		}
+		return value
+	}
+	atLeastZero := func(value int) int {
+		if value < 0 {
+			return 0
+		}
+		return value
+	}
+	return map[string]any{
+		"limit": label(detail.Limit), "table": label(detail.Table),
+		"rows": atLeastZero(detail.Rows), "bytes": atLeastZero(detail.Bytes),
+	}
+}
+
+// FailWithCauseClass is Fail plus the cause class of the attempt that ended
+// the unit, stored as result.cause_class. The class comes from a fixed
+// vocabulary (never error text); an invalid or empty class is stored as
+// CauseClassUnclassified so the key is always readable. Readers that predate
+// the key ignore it, and writers that predate it simply omit it.
+func (repository *PostgresRepository) FailWithCauseClass(
+	ctx context.Context,
+	claim Claim,
+	category string,
+	causeClass string,
+	detail *CauseDetail,
+	startedAt time.Time,
+	completedAt time.Time,
+) error {
+	return repository.failTx(ctx, claim, category, causeClass, detail, nil, startedAt, completedAt)
 }
 
 // FailWithDuplicateKeyDetail is Fail plus a bounded, structured record of the
@@ -539,7 +601,7 @@ func (repository *PostgresRepository) FailWithDuplicateKeyDetail(
 		keyFields[fields[index].Name] = fields[index].Value
 	}
 	detail := map[string]any{"table": table, "fields": keyFields}
-	return repository.failTx(ctx, claim, category, detail, startedAt, completedAt)
+	return repository.failTx(ctx, claim, category, category, nil, detail, startedAt, completedAt)
 }
 
 // failTx is Fail's implementation, parameterized on an optional extra
@@ -548,6 +610,8 @@ func (repository *PostgresRepository) failTx(
 	ctx context.Context,
 	claim Claim,
 	category string,
+	causeClass string,
+	causeDetail *CauseDetail,
 	naturalKeyDetail map[string]any,
 	startedAt time.Time,
 	completedAt time.Time,
@@ -563,6 +627,15 @@ func (repository *PostgresRepository) failTx(
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 	resultDoc := map[string]any{"error_category": category}
+	if causeClass != "" {
+		if !ValidCauseClass(causeClass) {
+			causeClass = CauseClassUnclassified
+		}
+		resultDoc["cause_class"] = causeClass
+	}
+	if causeDetail != nil {
+		resultDoc["cause_detail"] = causeDetail.document()
+	}
 	if naturalKeyDetail != nil {
 		resultDoc["duplicate_key"] = naturalKeyDetail
 	}

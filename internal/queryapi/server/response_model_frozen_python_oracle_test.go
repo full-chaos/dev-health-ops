@@ -20,7 +20,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/filteroptions"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/flame"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/heatmap"
-	"github.com/full-chaos/dev-health-ops/internal/queryapi/home"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/investment"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/investmentexplain"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/meta"
@@ -461,8 +460,8 @@ func responseModelOracleRoutes() map[string]responseModelOracleRoute {
 	sankeyRoute := plain((*sankey.Response)(nil))
 	return map[string]responseModelOracleRoute{
 		"GET /api/v1/meta":                                plain(meta.Response{}),
-		"GET /api/v1/home":                                plain((*home.Response)(nil)),
-		"POST /api/v1/home":                               plain((*home.Response)(nil)),
+		"GET /api/v1/home":                                plain(homeRESTResponse{}),
+		"POST /api/v1/home":                               plain(homeRESTResponse{}),
 		"GET /api/v1/explain":                             plain((*explainPythonResponse)(nil)),
 		"POST /api/v1/explain":                            plain((*explainPythonResponse)(nil)),
 		"GET /api/v1/heatmap":                             plain((*heatmap.Response)(nil)),

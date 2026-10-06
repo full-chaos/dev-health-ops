@@ -364,6 +364,9 @@ func BuildDataConfidence(coverage map[string]float64, sources map[string]string)
 func BuildMetricSignals(deltas []MetricDelta, f Filters, dataConfidence DataConfidence) []Signal {
 	signals := make([]Signal, 0, len(deltas))
 	for _, delta := range deltas {
+		if !delta.HasData {
+			continue
+		}
 		dir := signalDirection(delta.DeltaPct)
 		evidenceCount := len(delta.Spark)
 		impact := metricImpact(delta.Metric, delta.DeltaPct)
@@ -652,11 +655,17 @@ func RiskSignal(row RiskRow, f Filters, dataConfidence DataConfidence) (Signal, 
 
 // SelectConstraint ports _select_constraint (services/home.py:953-963).
 func SelectConstraint(deltas []MetricDelta) MetricDelta {
-	if len(deltas) == 0 {
+	withData := make([]MetricDelta, 0, len(deltas))
+	for _, delta := range deltas {
+		if delta.HasData {
+			withData = append(withData, delta)
+		}
+	}
+	if len(withData) == 0 {
 		return MetricDelta{Metric: "cycle_time", Label: "Cycle Time", Unit: "days"}
 	}
-	out := make([]MetricDelta, len(deltas))
-	copy(out, deltas)
+	out := make([]MetricDelta, len(withData))
+	copy(out, withData)
 	sort.SliceStable(out, func(i, j int) bool { return out[i].DeltaPct < out[j].DeltaPct })
 	return out[len(out)-1]
 }

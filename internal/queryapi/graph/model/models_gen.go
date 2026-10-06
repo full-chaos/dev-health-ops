@@ -891,12 +891,13 @@ type HomeResult struct {
 	ReworkThemeAllocation []ReworkThemeAllocation `json:"reworkThemeAllocation"`
 	Summary               []SummarySentence       `json:"summary"`
 	Tiles                 []HomeTileEntry         `json:"tiles"`
-	Constraint            *ConstraintCard         `json:"constraint"`
-	Events                []EventItem             `json:"events"`
-	HealthState           *HealthState            `json:"healthState"`
-	Signals               []HomeSignal            `json:"signals"`
-	LimitingFactor        *HomeLimitingFactor     `json:"limitingFactor"`
-	DataConfidence        *HomeDataConfidence     `json:"dataConfidence"`
+	// The present constraint when current-window data exists; null when the window has no data.
+	Constraint     *ConstraintCard     `json:"constraint,omitempty"`
+	Events         []EventItem         `json:"events"`
+	HealthState    *HealthState        `json:"healthState"`
+	Signals        []HomeSignal        `json:"signals"`
+	LimitingFactor *HomeLimitingFactor `json:"limitingFactor"`
+	DataConfidence *HomeDataConfidence `json:"dataConfidence"`
 }
 
 type HomeSignal struct {
@@ -1015,12 +1016,16 @@ type MappingCoverage struct {
 }
 
 type MetricDelta struct {
-	Metric   string       `json:"metric"`
-	Label    string       `json:"label"`
-	Value    float64      `json:"value"`
-	Unit     string       `json:"unit"`
-	DeltaPct float64      `json:"deltaPct"`
-	Spark    []SparkPoint `json:"spark"`
+	Metric   string  `json:"metric"`
+	Label    string  `json:"label"`
+	Value    float64 `json:"value"`
+	Unit     string  `json:"unit"`
+	DeltaPct float64 `json:"deltaPct"`
+	// Whether the current window has one or more stored source rows. A stored zero has this field set to true.
+	HasData bool `json:"hasData"`
+	// Whether the comparison window has one or more stored source rows.
+	HasPriorData bool         `json:"hasPriorData"`
+	Spark        []SparkPoint `json:"spark"`
 }
 
 type MetricLineage struct {

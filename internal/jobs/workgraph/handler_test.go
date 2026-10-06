@@ -476,42 +476,73 @@ func TestClassificationSentinelsAreDistinctAndWrapErrUnavailable(t *testing.T) {
 	}
 }
 
-// CHAOS-8782: the retry loop has no bound, so it must be LOUD. At the stated
-// claim count the handler logs an ERROR with the claim count and a class label
-// and never the error text; below it, nothing at ERROR.
-func TestRetryLoopAlertFiresAtTheStatedClaimCountWithClassOnly(t *testing.T) {
+// CHAOS-8782 (D4926): a single retryable outcome is never terminal, a spent
+// retry budget is. Claim 8 requeues; claim 9 (and later) fails the request,
+// logging ONE ERROR with both class labels and no error text.
+func TestRetryBudgetSpentFailsTheRequestWithBothClassLabels(t *testing.T) {
 	for _, testCase := range []struct {
 		claims    int
-		wantAlert bool
-	}{{retryLoopAlertClaims - 1, false}, {retryLoopAlertClaims, true}, {retryLoopAlertClaims + 3, true}} {
+		wantFail  bool
+		wantClass string
+	}{
+		{retryBudgetClaims - 1, false, ""},
+		{retryBudgetClaims, true, "unclassified"},
+		{retryBudgetClaims + 3, true, "unclassified"},
+		{retryBudgetClaims, true, "context_canceled"},
+	} {
 		claim := testMaterializeClaim(time.Second)
 		claim.Request.AttemptCount = testCase.claims
 		store := &fakeStore{claim: claim}
+		failure := errors.New("clickhouse said: secret detail")
+		if testCase.wantClass == "context_canceled" {
+			failure = fmt.Errorf("write: %w", context.Canceled)
+		}
 		var logs strings.Builder
-		handler, err := NewMaterializeHandler(store, classifyingExecutor{err: errors.New("clickhouse said: secret detail")},
-			slog.New(slog.NewTextHandler(&logs, nil)))
+		handler, err := NewMaterializeHandler(store, classifyingExecutor{err: failure}, slog.New(slog.NewTextHandler(&logs, nil)))
 		if err != nil {
 			t.Fatal(err)
 		}
-		if workErr := handler.Work(context.Background(), materializeExecution()); workErr == nil ||
-			!strings.Contains(workErr.Error(), string(jobruntime.CategoryRetryable)) {
-			t.Fatalf("Work = %v, want retryable", workErr)
+		workErr := handler.Work(context.Background(), materializeExecution())
+		if workErr == nil {
+			t.Fatalf("claims=%d: Work succeeded", testCase.claims)
 		}
-		alerted := strings.Contains(logs.String(), "level=ERROR")
-		if alerted != testCase.wantAlert {
-			t.Fatalf("claims=%d alerted=%v want %v:\n%s", testCase.claims, alerted, testCase.wantAlert, logs.String())
+		category := jobruntime.CategoryRetryable
+		if testCase.wantFail {
+			category = jobruntime.CategoryPermanent
 		}
-		if testCase.wantAlert {
-			var alertLine string
-			for _, line := range strings.Split(logs.String(), "\n") {
-				if strings.Contains(line, "retry loop is not bounded") {
-					alertLine = line
-				}
+		if !strings.Contains(workErr.Error(), string(category)) {
+			t.Fatalf("claims=%d: Work = %v, want %s", testCase.claims, workErr, category)
+		}
+		wantFails, wantRequeues := 0, 1
+		if testCase.wantFail {
+			wantFails, wantRequeues = 1, 0
+		}
+		if store.fails != wantFails || store.requeues != wantRequeues || store.ambiguous != 0 {
+			t.Fatalf("claims=%d: fails=%d requeues=%d ambiguous=%d", testCase.claims, store.fails, store.requeues, store.ambiguous)
+		}
+		var budgetLines []string
+		for _, line := range strings.Split(logs.String(), "\n") {
+			if strings.Contains(line, "retry budget exhausted") && strings.Contains(line, "level=ERROR") {
+				budgetLines = append(budgetLines, line)
 			}
-			if !strings.Contains(alertLine, "claim_count=") || !strings.Contains(alertLine, "failure_class=unclassified") ||
-				strings.Contains(alertLine, "secret detail") {
-				t.Fatalf("alert line must carry claim_count and a class label and no error text: %q", alertLine)
+		}
+		if !testCase.wantFail {
+			if len(budgetLines) != 0 {
+				t.Fatalf("claims=%d: budget line before the budget:\n%s", testCase.claims, logs.String())
 			}
+			continue
+		}
+		if len(budgetLines) != 1 {
+			t.Fatalf("claims=%d: budget ERROR lines = %d, want exactly 1:\n%s", testCase.claims, len(budgetLines), logs.String())
+		}
+		line := budgetLines[0]
+		for _, want := range []string{"claim_count=", "failure_class=" + FailureClassRetryBudgetExhausted, "last_retryable_class=" + testCase.wantClass} {
+			if !strings.Contains(line, want) {
+				t.Fatalf("budget line lacks %q: %s", want, line)
+			}
+		}
+		if strings.Contains(line, "secret detail") || store.lastFailDetail != "retry budget exhausted: "+testCase.wantClass {
+			t.Fatalf("budget line leaks error text or ledger detail wrong: %q / %q", line, store.lastFailDetail)
 		}
 	}
 }

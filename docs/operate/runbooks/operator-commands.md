@@ -81,8 +81,13 @@ fallback path (retained but skip-gated). Confirm current status against `familie
 A cancelled or timed-out run (worker drain, deadline), a network or database error and any error with no
 deterministic cause are retried: the handler hands the lease back (`pending`, no claim token, no lease) and
 River retries; if that release write fails, the 10-minute lease expiry is the fallback and a WARN names it.
-If River spends every attempt, the request stays `pending` and strand repair re-arms it. Only a
-deterministic cause (a deterministic LLM failure, an invalid scope, window or provider, an evidence encode
+If River spends every attempt, the request stays `pending` and strand repair re-arms it. The request
+carries a retry budget of 9 claims (every claim counts, cancelled ones too; three River cycles): the 9th
+failing claim ends it `failed` with `failure_class=retry_budget_exhausted` and a `last_retryable_class`
+label on the ERROR line. Nothing re-arms a `failed` request; the hourly schedule makes the next one. An
+operator reads the ledger `failure_detail` and the ERROR line, fixes the cause, and waits for the next
+scheduled request (`dho workers workgraph repair` refuses a `failed` request: it only reopens `ambiguous`
+ones). Only a deterministic cause (a deterministic LLM failure, an invalid scope, window or provider, an evidence encode
 error) ends the request `failed`; the ERROR line names a class label (`failure_class`), never provider
 text. A `failed` request blocks `membership_backfill` of the same sync run until the undelivered ceiling,
 and a later sync run makes a new request. `ambiguous` now appears only for a claimed request that does not

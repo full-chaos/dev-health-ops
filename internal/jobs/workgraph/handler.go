@@ -171,11 +171,18 @@ func sanitizeDetail(value string, limit int) string {
 	return builder.String()
 }
 
-// retryLoopAlertClaims is where a request that keeps failing retryably turns
-// loud: the investment.materialize job runs max_attempts=3 times per River job
-// (contracts/jobs/v1/registry.json), so 9 claims = the third strand-repair
-// re-arm. A transient outage that clears within a few re-arms stays quiet.
-const retryLoopAlertClaims = 9
+// retryBudgetClaims is the retry budget of one request, counted in claims
+// (work_graph_execution_requests.attempt_count, +1 per Claim). Every claim
+// counts, cancelled ones too. The investment.materialize job runs max_attempts=3
+// times per River job (contracts/jobs/v1/registry.json), so 9 claims = three
+// River cycles = two strand-repair re-arms before the third cycle spends the
+// budget: a transient outage that clears within a few cycles never reaches it.
+const retryBudgetClaims = 9
+
+// FailureClassRetryBudgetExhausted is the failure_class of a request that ended
+// 'failed' because its retry budget was spent, not because of one deterministic
+// cause. The last retryable class travels beside it as a second label.
+const FailureClassRetryBudgetExhausted = "retry_budget_exhausted"
 
 // retryableClass names why a retryable failure was retryable, as a code label
 // that is safe to log (the error text is not).
@@ -409,6 +416,33 @@ func (h *materializeHandler) work(ctx context.Context, requestID string, organiz
 				}
 				return jobruntime.Permanent(err)
 			}
+			// A single transient or cancelled outcome is never terminal, but
+			// a spent, stated budget is (CHAOS-8782, D4926). Nothing else
+			// bounds "River attempts spent -> job discarded -> strand repair
+			// re-arms the pending request -> new job" for a request that fails
+			// every time with an unclassified error: the work-graph strand
+			// shape has no attempt predicate (joboutbox/strand_repair.go
+			// repairStrandedWorkGraphSQL), and every cycle pays ClickHouse
+			// reads and model calls. The terminal state is 'failed', never
+			// 'ambiguous'; the hourly schedule is the outer retry. Class labels
+			// only, never error text.
+			if claim.Request.AttemptCount >= retryBudgetClaims {
+				h.logger.Error("workgraph handler: permanent failure, retry budget exhausted",
+					slog.String("request_id", requestID), slog.String("kind", string(KindMaterialize)),
+					slog.String("organization_id", *organizationID),
+					slog.Int("claim_count", claim.Request.AttemptCount),
+					slog.String("failure_class", FailureClassRetryBudgetExhausted),
+					slog.String("last_retryable_class", retryableClass(err)),
+				)
+				detail := "retry budget exhausted: " + retryableClass(err)
+				if failErr := releaseFailed(h.store, ctx, claim, detail); failErr != nil {
+					h.logger.Error("workgraph handler: could not record the failed state; the lease will expire and the request be reclaimed",
+						slog.String("request_id", requestID), slog.String("failure_class", FailureClassRetryBudgetExhausted),
+						slog.Any("error", failErr),
+					)
+				}
+				return jobruntime.Permanent(err)
+			}
 			// Release the lease with a DETACHED context (the job context is
 			// usually the thing that was cancelled) so another pod can claim
 			// the request within seconds. The lease is 10 minutes; without
@@ -418,22 +452,6 @@ func (h *materializeHandler) work(ctx context.Context, requestID string, organiz
 				h.logger.Warn("workgraph handler: could not release the lease after a retryable failure; the retry waits for lease expiry",
 					slog.String("request_id", requestID), slog.String("kind", string(KindMaterialize)),
 					slog.String("organization_id", *organizationID), slog.Any("error", requeueErr),
-				)
-			}
-			// Nothing bounds the loop "River attempts spent -> job discarded ->
-			// strand repair re-arms the pending request -> new job" for a
-			// request that fails every time with an unclassified error: the
-			// work-graph strand shape has no attempt predicate
-			// (joboutbox/strand_repair.go repairStrandedWorkGraphSQL). No
-			// terminal state is invented for it (D4911); instead the loop is
-			// made loud once the request has been claimed this many times,
-			// every claim after that. Class label only, never error text.
-			if claim.Request.AttemptCount >= retryLoopAlertClaims {
-				h.logger.Error("workgraph handler: request keeps failing with a retryable class; the retry loop is not bounded",
-					slog.String("request_id", requestID), slog.String("kind", string(KindMaterialize)),
-					slog.String("organization_id", *organizationID),
-					slog.Int("claim_count", claim.Request.AttemptCount),
-					slog.String("failure_class", retryableClass(err)),
 				)
 			}
 			h.logger.Warn("workgraph handler: retryable failure, request left claimable",

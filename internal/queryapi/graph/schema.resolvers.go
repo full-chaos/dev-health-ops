@@ -985,7 +985,7 @@ func (r *queryResolver) OperatingReview(ctx context.Context, orgID string, input
 		}
 	}
 
-	result, err := operatingreview.Resolve(spanCtx, r.ClickHouse, claims.OrgID, input.TeamID, input.WeekStart)
+	result, err := operatingreview.ResolveInput(spanCtx, r.ClickHouse, claims.OrgID, input.TeamID, input.TeamIds, input.WeekStart)
 	if err != nil {
 		finish("error")
 		return nil, fmt.Errorf("operatingReview: %w", err)

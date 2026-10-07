@@ -248,7 +248,7 @@ func ParseResponse(body []byte, expected []ExpectedQuestion) (Typed, error) {
 		return t, err
 	}
 	for _, id := range dup {
-		t.ResponseErrors = append(t.ResponseErrors, "duplicate_id:"+id)
+		t.ResponseErrors = append(t.ResponseErrors, "duplicate_id:"+boundToken(id))
 	}
 	want := map[string]ExpectedQuestion{}
 	for _, q := range expected {
@@ -262,7 +262,7 @@ func ParseResponse(body []byte, expected []ExpectedQuestion) (Typed, error) {
 	}
 	sort.Strings(unknown)
 	for _, id := range unknown {
-		t.ResponseErrors = append(t.ResponseErrors, "unknown_id:"+id)
+		t.ResponseErrors = append(t.ResponseErrors, "unknown_id:"+boundToken(id))
 	}
 	dupSet := map[string]bool{}
 	for _, id := range dup {
@@ -352,7 +352,7 @@ func parseJevAnswer(raw json.RawMessage, q ExpectedQuestion) QA {
 	}
 	typ, _ := a["type"].(string)
 	if typ != q.Kind {
-		return QA{Status: QAInvalid, Detail: "type=" + typ}
+		return QA{Status: QAInvalid, Detail: "type=" + boundToken(typ)}
 	}
 	switch q.Kind {
 	case "score":
@@ -414,8 +414,11 @@ func finishChoice(choice string, probs map[string]float64, conf *float64, option
 	}
 	shape := pre
 	if shape == "" {
+		// Sorted order: a float sum depends on its order, and a map has none.
+		// One body must give one result.
 		sum := 0.0
-		for opt, p := range probs {
+		for _, opt := range sortedOptions(probs) {
+			p := probs[opt]
 			switch {
 			case !valid[opt]:
 				shape = "extra_option"
@@ -431,4 +434,14 @@ func finishChoice(choice string, probs map[string]float64, conf *float64, option
 		}
 	}
 	return QA{Status: QAOK, Degraded: shape, Choice: &ChoiceAnswer{Choice: choice, Probs: probs, Confidence: conf}}
+}
+
+// sortedOptions returns the keys of a probability map in sorted order.
+func sortedOptions(probs map[string]float64) []string {
+	keys := make([]string, 0, len(probs))
+	for k := range probs {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
 }

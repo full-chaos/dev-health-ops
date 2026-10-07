@@ -423,7 +423,8 @@ func Interpret(r *Rubric, bundle units.TextBundle, spans []Span, typed Typed) In
 func choiceIsArgmax(c *ChoiceAnswer) bool {
 	best, ties := -1.0, 0
 	bestOpt := ""
-	for opt, p := range c.Probs {
+	for _, opt := range sortedOptions(c.Probs) {
+		p := c.Probs[opt]
 		switch {
 		case p > best+1e-12:
 			best, bestOpt, ties = p, opt, 1

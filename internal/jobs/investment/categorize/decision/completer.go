@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/investment/categorize"
@@ -114,12 +115,12 @@ type call struct {
 func (k *call) CompleteBundle(ctx context.Context, bundle units.TextBundle) (categorize.CompletionResult, error) {
 	k.calls++
 	if k.calls > 1 {
-		return categorize.CompletionResult{}, &Terminal{State: StateAdapterDefect, Details: []string{"adapter_defect:second_ask"}}
+		return categorize.CompletionResult{}, ended(&Terminal{State: StateAdapterDefect, Details: []string{"adapter_defect:second_ask"}})
 	}
 	c := k.c
 	built, err := BuildRequest(c.rubric, c.model, bundle)
 	if err != nil {
-		return categorize.CompletionResult{}, &Terminal{State: StateAdapterDefect, Details: []string{"adapter_defect:build:" + err.Error()}}
+		return categorize.CompletionResult{}, ended(&Terminal{State: StateAdapterDefect, Details: []string{"adapter_defect:build:" + err.Error()}})
 	}
 	body, _, err := c.transport.PostSystemOne(ctx, built.Body)
 	if err != nil {
@@ -127,26 +128,26 @@ func (k *call) CompleteBundle(ctx context.Context, bundle units.TextBundle) (cat
 			return categorize.CompletionResult{}, ctxErr
 		}
 		class := categorize.FailureClass(err)
-		return categorize.CompletionResult{}, &Terminal{State: StateRequestFailed,
+		return categorize.CompletionResult{}, ended(&Terminal{State: StateRequestFailed,
 			Details: []string{"request_failed:" + class}, FailureClass: class,
-			Stop: categorize.IsDeterministicFailure(err), cause: err}
+			Stop: categorize.IsDeterministicFailure(err), cause: err})
 	}
 	typed, err := ParseResponse(body, ExpectedQuestions(c.rubric, built.Spans))
 	if err != nil {
 		_, usage := usageFromBody(body)
-		return categorize.CompletionResult{}, &Terminal{State: StateRequestFailed, Details: []string{"request_failed:not_json"},
-			InputTokens: int(usage.InputTokens), OutputTokens: int(usage.OutputTokens)}
+		return categorize.CompletionResult{}, ended(&Terminal{State: StateRequestFailed, Details: []string{"request_failed:not_json"},
+			InputTokens: int(usage.InputTokens), OutputTokens: int(usage.OutputTokens)})
 	}
 	in, out := int(typed.Usage.InputTokens), int(typed.Usage.OutputTokens)
 	if !ModelAccepted(c.model, typed.ReturnedModel) {
-		return categorize.CompletionResult{}, &Terminal{State: StateRequestFailed, Details: []string{"request_failed:model_mismatch:" + typed.ReturnedModel},
-			InputTokens: in, OutputTokens: out, ModelReturned: typed.ReturnedModel}
+		return categorize.CompletionResult{}, ended(&Terminal{State: StateRequestFailed, Details: []string{"request_failed:model_mismatch:" + boundToken(typed.ReturnedModel)},
+			InputTokens: in, OutputTokens: out, ModelReturned: typed.ReturnedModel})
 	}
 	interp := Interpret(c.rubric, bundle, built.Spans, typed)
 	k.interp = &interp
 	if interp.State != StateOK {
-		return categorize.CompletionResult{}, &Terminal{State: interp.State, Details: interp.Details, Warnings: interp.Warnings,
-			InputTokens: in, OutputTokens: out, ModelReturned: typed.ReturnedModel}
+		return categorize.CompletionResult{}, ended(&Terminal{State: interp.State, Details: interp.Details, Warnings: interp.Warnings,
+			InputTokens: in, OutputTokens: out, ModelReturned: typed.ReturnedModel})
 	}
 
 	// Own check: the payload must pass the production parser and validator. A
@@ -158,17 +159,17 @@ func (k *call) CompleteBundle(ctx context.Context, bundle units.TextBundle) (cat
 	}
 	payload, parseErrs := categorize.ParseLLMJSON(string(text))
 	if len(parseErrs) > 0 {
-		return categorize.CompletionResult{}, &Terminal{State: StateAdapterDefect, Details: append([]string{"adapter_defect:self_check_parse"}, parseErrs...),
-			InputTokens: in, OutputTokens: out, ModelReturned: typed.ReturnedModel}
+		return categorize.CompletionResult{}, ended(&Terminal{State: StateAdapterDefect, Details: append([]string{"adapter_defect:self_check_parse"}, parseErrs...),
+			InputTokens: in, OutputTokens: out, ModelReturned: typed.ReturnedModel})
 	}
 	if v := categorize.ValidateLLMPayload(payload, bundle.SourceTexts, bundle.HandleMap); !v.OK {
-		return categorize.CompletionResult{}, &Terminal{State: StateAdapterDefect, Details: append([]string{"adapter_defect:self_check"}, v.Errors...),
-			InputTokens: in, OutputTokens: out, ModelReturned: typed.ReturnedModel}
+		return categorize.CompletionResult{}, ended(&Terminal{State: StateAdapterDefect, Details: append([]string{"adapter_defect:self_check"}, v.Errors...),
+			InputTokens: in, OutputTokens: out, ModelReturned: typed.ReturnedModel})
 	}
 	if c.corrupt != nil {
 		text = c.corrupt("after_own_check", text)
 	}
-	return categorize.CompletionResult{Text: string(text), InputTokens: &in, OutputTokens: &out, Model: typed.ReturnedModel}, nil
+	return categorize.CompletionResult{Text: string(text), InputTokens: &in, OutputTokens: &out, Model: boundToken(typed.ReturnedModel)}, nil
 }
 
 // Classification is the full result of one decision classification: what a
@@ -236,9 +237,9 @@ func (c *Completer) Classify(ctx context.Context, bundle units.TextBundle) (Clas
 	}
 	fail := func(t *Terminal) Classification {
 		out.State, out.Status = t.State, t.Status()
-		out.Errors = append([]string{t.Status(), "decision_" + t.State}, t.Details...)
-		out.Warnings = append(out.Warnings, t.Warnings...)
-		out.InputTokens, out.OutputTokens, out.ModelReturned, out.Stop = t.InputTokens, t.OutputTokens, t.ModelReturned, t.Stop
+		out.Errors = boundCodes(append([]string{t.Status(), "decision_" + t.State}, t.Details...))
+		out.Warnings = boundCodes(append(out.Warnings, t.Warnings...))
+		out.InputTokens, out.OutputTokens, out.ModelReturned, out.Stop = t.InputTokens, t.OutputTokens, boundToken(t.ModelReturned), t.Stop
 		return out
 	}
 	var term *Terminal
@@ -259,7 +260,76 @@ func (c *Completer) Classify(ctx context.Context, bundle units.TextBundle) (Clas
 	out.State, out.Status, out.CompleteStrict = StateOK, outcome.Status, in.CompleteStrict
 	out.Subcategories, out.EvidenceQuotes, out.Uncertainty = outcome.Subcategories, outcome.EvidenceQuotes, outcome.Uncertainty
 	out.EvidenceSpanID, out.EvidenceHandle = in.EvidenceSpanID, SpanHandle(in.EvidenceSpanID)
-	out.Warnings = append(append(out.Warnings, in.Warnings...), outcome.Warnings...)
-	out.InputTokens, out.OutputTokens, out.ModelReturned = outcome.InputTokens, outcome.OutputTokens, outcome.LLMModel
+	out.Warnings = boundCodes(append(append(out.Warnings, in.Warnings...), outcome.Warnings...))
+	out.InputTokens, out.OutputTokens, out.ModelReturned = outcome.InputTokens, outcome.OutputTokens, outcome.LLMModel // bounded by CompleteBundle
 	return out, nil
+}
+
+// Bounds of every string that can reach a classification from a response. A
+// response is peer-controlled; a code, a warning, the returned model id and a
+// terminal's error text can be logged or stored by a later stage, so none of
+// them may carry raw response text.
+const (
+	maxTokenBytes = 64
+	maxCodeBytes  = 160
+	maxCodes      = 64
+)
+
+// boundToken makes a value that a response controls (a model id, an answer
+// type, an answer id) safe to store and to log: only [A-Za-z0-9_.-], every
+// other rune becomes "?", and at most maxTokenBytes bytes (a cut value ends in
+// "~"). A short value of safe characters comes back unchanged.
+func boundToken(value string) string {
+	return bound(value, maxTokenBytes, func(r rune) bool {
+		return r == '_' || r == '.' || r == '-'
+	})
+}
+
+// boundCode does the same for a whole code or warning ("state:detail:value").
+// It also allows the separators that the adapter's and the validator's own
+// codes use.
+func boundCode(code string) string {
+	return bound(code, maxCodeBytes, func(r rune) bool {
+		return strings.ContainsRune("_.-:=+,'[] ", r)
+	})
+}
+
+func bound(value string, maxBytes int, extra func(rune) bool) string {
+	var b strings.Builder
+	for _, r := range value {
+		if b.Len() == maxBytes {
+			// More input than the cap: mark the cut in the last byte.
+			out := b.String()
+			return out[:maxBytes-1] + "~"
+		}
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', extra(r):
+			b.WriteRune(r)
+		default:
+			b.WriteByte('?')
+		}
+	}
+	return b.String()
+}
+
+// boundCodes bounds every code and the count of codes. Codes over the cap are
+// dropped and counted in a last code, never dropped in silence. It never
+// returns nil.
+func boundCodes(codes []string) []string {
+	out := make([]string, 0, min(len(codes), maxCodes))
+	for i, code := range codes {
+		if len(codes) > maxCodes && i == maxCodes-1 {
+			out = append(out, "codes_dropped:"+strconv.Itoa(len(codes)-i))
+			break
+		}
+		out = append(out, boundCode(code))
+	}
+	return out
+}
+
+// ended bounds what a terminal carries before it leaves the adapter: its
+// error text, details and warnings can be logged by any caller of the seam.
+func ended(t *Terminal) *Terminal {
+	t.Details, t.Warnings, t.ModelReturned = boundCodes(t.Details), boundCodes(t.Warnings), boundToken(t.ModelReturned)
+	return t
 }

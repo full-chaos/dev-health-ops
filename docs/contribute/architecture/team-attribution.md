@@ -635,6 +635,91 @@ not natively produce this entity. ¹ GitHub has no native Project entity (the re
 
 > **The matrix above tracks TEST coverage, not whether the data is pulled.** Functionally we ingest teams, projects, and members for *every* provider that supports them (auto-import, when the option is selected). Don't read a `partial`/`no` cell as "not consumed" — it means "not yet asserted."
 
+#### 0.4b Project identity: one project, one id (CHAOS-8851)
+
+A project is named by ONE id in the three tables that hold it. The team that owns a project reaches the
+project's work items by `(provider, project_id)`; no reader has to join on `project_key`.
+
+| provider | `projects.id` | `team_project_ownership.project_id` | `work_items.project_id` | state |
+|---|---|---|---|---|
+| jira | native project id (`10001`) | the same id | the same id | one id |
+| linear | raw project UUID | the same UUID | the same UUID | one id |
+| github | Projects V2 board id (`ghprojv2:{login}#{n}`) | none: a team owns repositories (`team_repo_ownership`) | the same board id | one id |
+| gitlab | `{org_id}:gitlab:{native id}` | the project PATH | none: a GitLab project is this schema's repository | **known gap** (CHAOS-8883): ownership and catalog meet only through `project_key` |
+
+Jira before this change: the three team-catalog writers (project-as-team, the legacy
+`jira_project_ops_team_links` carry-forward, Atlassian Teams) built the id from the project KEY
+(`{org_id}:jira:{KEY}`), while the work-items route wrote the native id. One project was two `projects`
+rows with one key, ownership pointed at the row no work item used, and a team reached none of its
+project's items by id. Now:
+
+- The project-as-team catalog reads `id` from the project search answer; Atlassian Teams takes it from the
+  last segment of the project ARI; a legacy link takes it from the same run's search answer for its key.
+- A project with no usable native id gets NO ownership row and NO `projects` row. It is counted and logged
+  (`jira_team_catalog_project_without_native_id`, `jira_team_catalog_legacy_link_without_native_id`,
+  `jira_atlassian_teams_project_link_skipped`). An id is never built from the key as a fallback, and the
+  sink refuses an open row that carries one.
+- `project_key` stays on the row as a label. Team ids do not change.
+- **One snapshot rule for ownership rows** (`providersync.PlanOwnershipSnapshot`): a fact the run still
+  finds keeps the `valid_from` it was first seen with (`valid_from` is a key column: a new stamp at each
+  sync added one more open row per fact), and every other open row of the same writer is written again
+  with `valid_to` set. Both Jira writers go through this one function; each reads only its own open rows
+  (Atlassian Teams: `source = 'native'` rows of teams whose catalog row carries a team ARI; the catalog:
+  `source = 'jira_legacy'` rows and `source = 'native'` rows with `team_id = project_key`). So the first
+  sync on this version closes the open rows on the key-built id. The catalog closes nothing when its
+  project search returned no project.
+- **Only a complete snapshot closes a row** (`providersync.OwnershipSnapshot.Complete`; the zero value is
+  not complete). A row that is missing from a part of the provider's answer is not a fact the provider
+  dropped. A run that did not read its source to the end writes what it found, keeps first-seen
+  `valid_from`, closes nothing, and says so:
+  - Project-as-team catalog: the Jira project search is read page by page (`startAt`) to the provider's
+    end-of-data signal: `isLast` when the page has it, else `total`, else a page that has entries and is
+    shorter than the page size. A page with no entries and no signal (an empty object or an error body
+    under HTTP 200) is not the end: not complete. Bound: 50 pages of 100 projects. A later page that fails, the bound, or an empty page before
+    the end = not complete (`jira_team_catalog_project_search_incomplete`). A failed read of the legacy
+    links table = not complete (`jira_team_catalog_legacy_links_read_failed`). Either one gives
+    `jira_team_catalog_ownership_snapshot_incomplete` and `OwnershipSnapshotIncomplete` in the result.
+    An organization with more than 5,000 Jira projects never closes a catalog ownership row.
+  - Archived Jira projects: the project search returns live projects only (the provider's default for
+    its `status` filter), so the walk reads the archived projects with a second search
+    (`status=archived`, the same paging and bound). The archived answer is an identity set (native id
+    and key of each project). Every open ownership row of this writer whose project is in that set, by
+    the native id OR by the id built from the key (`{org_id}:jira:{KEY}`, rows written before the one-id
+    rule), is left as it is: it is not given to the snapshot rule, and nothing is written or re-keyed
+    for an archived project (`jira_team_catalog_archived_ownership_held`). This read failing at any
+    page, the first one included, does not fail the walk: the snapshot is not complete
+    (`jira_team_catalog_archived_project_search_incomplete`) and nothing is closed. A project in
+    neither answer (deleted, or no longer visible to the credential) loses its rows on a complete run.
+  - No live ownership row closes nothing: when the live answer gives no ownership row and the writer has
+    open rows, the snapshot is not complete (`no_live_ownership` in the warning), whatever the archived
+    read holds.
+  - Atlassian Teams: `Rows.ProjectLinksComplete` is set only by a collection that read the project
+    links of every active team to the last page. Per team: when links came back and not one carries a
+    readable Jira project ARI, the team is named in `Rows.UnreadableProjectLinkTeams`, its open links
+    stay open, and the run logs `jira_atlassian_teams_project_links_unreadable` with the count.
+  - The census test also fails when a planner passes a constant for `Complete`.
+- **A closed row is not owned before a merge.** A row is closed by writing its key again with `valid_to`
+  set, so until a merge both versions are stored. The ownership reader of the repository derivation
+  (`loadTeamRepoOwnershipProjectLinks`) takes the newest version of each row key first and filters
+  `valid_to` after, the same two-level `argMax` form as the attribution cascade (`LoadProjects`).
+  Test: `TestTeamRepoOwnershipProjectLinksLeaveOutAClosedRowBeforeAMerge`.
+- Linear and GitLab still have their own insert-only writers; a
+  census test (`TestJiraOwnershipWriterCensus`) names every writer of the table and fails for a new Jira
+  writer that does not plan its rows through the shared function.
+- The key-built `projects` rows written earlier are removed by a one-time operator verb, see section 1.1.
+- Known limit: a native Jira project id is unique per Jira site. One organization with two Jira sites
+  could give two projects the same id. The work-item rows had this limit before this change.
+
+Tests: `TestTeamReachesItsJiraProjectsWorkItemsThroughOwnership` (real producers, real ClickHouse: the
+team reaches its project's work items through ownership by id; one `projects` row per project),
+`TestProjectIdentityIsOneIDAcrossCatalogOwnershipAndWorkItems` (the same rule for linear and github; the
+GitLab gap pinned as a known red), `TestAnAtlassianTeamsRunClosesTheKeyBuiltProjectLinks`,
+`TestAPartialJiraSnapshotClosesNoOwnership` (a search that stops after a page, and a legacy links table
+that cannot be read, close nothing; the complete run after them closes the lost project),
+`TestATeamWithNoReadableProjectLinkKeepsItsOpenLinks`, `TestAnArchivedJiraProjectKeepsItsOwnership`,
+`TestAnArchivedJiraProjectKeepsItsKeyBuiltOwnership` (a store with key-built rows only, a store with both
+id forms, an empty live answer).
+
 #### 0.4a Provider × entity **consumption** (functional — what `run_team_autoimport` actually pulls)
 
 | provider | teams | projects | members | repo ownership | member store written |
@@ -1253,6 +1338,17 @@ deletes them via the same synchronous `ALTER TABLE ... DELETE` pattern, and expl
 `project_id` shaped like the `{org_id}:linear:{team_key}` pseudo-identity -- that row is CHAOS-4560's
 separate, still-open concern, not this verb's.
 
+**CHAOS-8851: the same one-time shape for the Jira key-built `projects` rows.** `dho workers providersync
+retire-jira-key-projects` (`internal/providersync/jira_key_project_cleanup.go`) physically deletes the Jira
+`projects` rows whose id is `{org_id}:jira:{KEY}` (section 0.4b), for the reason given above for Linear:
+a reader of `projects` does not have to filter `is_active`, so the second row of a key must be absent.
+A row is deleted only when the same organization has a native-id row with the same `project_key`, so a
+project never loses its only row. The verb refuses with `no_native_jira_project_rows` when its scope
+holds no native-id Jira row at all: that is the state before the first Jira team-autoimport sync on this
+version. It prints counts only. It touches `projects` only; the ownership rows on the key-built id are
+closed by the sync itself (the snapshot rule, section 0.4b). Order: deploy, wait for one Jira
+team-autoimport sync, run with `--dry-run`, then run.
+
 **Deployment ordering (codex review, PR #2012 round 3):** the cleanup verb has no fence against a
 still-running writer. The go-workers Helm chart rolls with `start-first`, so an old pod running the
 prior (tombstone-writing) collector revision can still be up when the verb runs, and can write a
@@ -1566,7 +1662,7 @@ erDiagram
     teams ||--o{ team_project_ownership : "team_id (attribution source 2: project_ownership)"
     team_project_ownership }o..o{ work_items : "project_id OR project_key, direct value match -- attribution never joins through projects (metrics/compute_work_items.py:559-577)"
     teams ||--o{ work_items : "teams.project_keys array vs work_scope_id/project_key, direct resolver match (attribution source 1: issue_project) -- also never via projects"
-    work_items }o..o{ projects : "Ask Dev investigation subsystem only (_project_identity.py), NOT the attribution resolver -- provider-specific: Linear by id; Jira by project_key; GitLab by project_key (its catalog id is a separate opaque numeric space, incompatible with work_items.project_id)"
+    work_items }o..o{ projects : "Ask Dev investigation subsystem only (_project_identity.py), NOT the attribution resolver -- provider-specific: Linear and Jira by id (a Jira catalog row written before CHAOS-8851 had a key-built id and met its work items by project_key only); GitLab by project_key (its catalog id is a separate opaque numeric space, incompatible with work_items.project_id)"
 
     teams ||--o{ team_repo_ownership : "team_id (attribution source 3: repo_ownership)"
     team_repo_ownership }o..o{ repos : "repo_id is Nullable and often NULL (e.g. every GitHub provider_access row, team_autoimport_github.py:308-338); resolved at READ time by a case-insensitive (org_id, provider, repo_full_name) name join, unmatched rows dropped -- providers/teams.py:380-392"
@@ -1714,8 +1810,9 @@ durations, and co-occurrence bridges, but they are not the owning team source.
   is real and sync-written (§0.4a), but its only consumer that actually JOINS `work_items` to it is
   a **different** subsystem: Ask Dev's investigation/evidence queries
   (`api/dev/_project_identity.py`), and even there the join is provider-specific, not a uniform
-  `project_id = id` — Linear matches by raw id, Jira by `project_key`, and GitLab by `project_key`
-  too (GitLab's catalog id is a separate, opaque, prefixed numeric space that never equals
+  `project_id = id` — Linear and Jira match by raw id (section 0.4b; a Jira catalog row written before
+  CHAOS-8851 had a key-built id and met its work items by `project_key` only), and GitLab by `project_key`
+  only (GitLab's catalog id is a separate, opaque, prefixed numeric space that never equals
   `work_items.project_id`).
 - **Two different "cross-provider link" tables exist for two different consumers — do not conflate
   them.** (1) `work_item_dependencies` (already in this diagram) is what the **attribution ladder's**

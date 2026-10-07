@@ -123,14 +123,16 @@ func userEdge(_, account string) map[string]any {
 	}}}
 }
 
-func projectEdge(team, key string) map[string]any {
+// projectEdge is one team-to-project link. nativeID is the last segment of the
+// project ARI, which is where the provider carries the Jira project id.
+func projectEdge(team, key, nativeID string) map[string]any {
 	data := map[string]any{"id": "p-" + key, "name": "Project " + key}
 	if key != "" {
 		data["key"] = key
 	}
 	return map[string]any{"node": map[string]any{"columns": []any{
 		map[string]any{"key": "team", "value": ariNode(team, "TeamV2", map[string]any{"id": team, "displayName": "T"})},
-		map[string]any{"key": "project", "value": ariNode("ari:cloud:jira::project/"+key, "JiraProject", data)},
+		map[string]any{"key": "project", "value": ariNode("ari:cloud:jira::project/"+nativeID, "JiraProject", data)},
 	}}}
 }
 
@@ -164,7 +166,9 @@ func standard(req request) (int, any) {
 		}
 	case "TeamworkGraphTeamActiveProjects":
 		if req.Variables["teamId"] == teamA {
-			return 200, connection("teamworkGraph_teamActiveProjects", "", projectEdge(teamA, "PLAT"), projectEdge(teamA, ""), projectEdge(teamA, "PLAT"))
+			return 200, connection("teamworkGraph_teamActiveProjects", "", projectEdge(teamA, "PLAT", "10001"), projectEdge(teamA, "", "10002"), projectEdge(teamA, "PLAT", "10001"),
+				// A link with a key and no usable project id: no row, never an id built from the key.
+				projectEdge(teamA, "NOID", "NOID"), projectEdge(teamA, "EMPTY", ""))
 		}
 		return 200, connection("teamworkGraph_teamActiveProjects", "")
 	}
@@ -195,7 +199,7 @@ func TestCollectReadsTeamsMembersAndProjectsThroughTheRealClient(t *testing.T) {
 		t.Errorf("team A row = %+v", a)
 	}
 	if got := strings.Join(a.ProjectKeys, ","); got != "PLAT" {
-		t.Errorf("team A project keys = %q, want PLAT (deduplicated, key-less link dropped)", got)
+		t.Errorf("team A project keys = %q, want PLAT (deduplicated; the key-less link and the two links with no numeric project id dropped)", got)
 	}
 	if b.IsActive != 0 || b.Name != "Old" {
 		t.Errorf("archived team row = %+v, want inactive", b)
@@ -227,12 +231,23 @@ func TestCollectReadsTeamsMembersAndProjectsThroughTheRealClient(t *testing.T) {
 		t.Errorf("an archived team has no members: %v", members["bbbbbbbb-0000-4000-8000-000000000002"])
 	}
 
-	if len(rows.Ownership) != 1 || rows.Ownership[0].ProjectID != "org-1:jira:PLAT" || rows.Ownership[0].ProjectKey != "PLAT" ||
+	if len(rows.Ownership) != 1 || rows.Ownership[0].ProjectID != "10001" || rows.Ownership[0].ProjectKey != "PLAT" ||
 		rows.Ownership[0].Source != "native" || rows.Ownership[0].Specificity != 110 || rows.Ownership[0].Priority != 10 {
 		t.Errorf("ownership = %+v", rows.Ownership)
 	}
-	if rows.SkippedProjects != 1 {
-		t.Errorf("skipped project links = %d, want 1", rows.SkippedProjects)
+	if !rows.ProjectLinksComplete {
+		t.Error("every active team's project links were read to the last page: the links are complete")
+	}
+	withoutProjects := params(everything)
+	withoutProjects.Selections.Projects = false
+	if partial, err := Collect(context.Background(), g.client(), withoutProjects); err != nil || partial.ProjectLinksComplete {
+		t.Errorf("a collection that read no project links says they are complete (err=%v)", err)
+	}
+	if len(rows.UnreadableProjectLinkTeams) != 0 {
+		t.Errorf("unreadable teams = %v, want none: team A has one readable link, team C has no link at all", rows.UnreadableProjectLinkTeams)
+	}
+	if rows.SkippedProjects != 3 {
+		t.Errorf("skipped project links = %d, want 3 (one with no key, two with no numeric project id)", rows.SkippedProjects)
 	}
 
 	// The archived team was never asked for members or projects.
@@ -494,9 +509,9 @@ func TestAnAtlassianTeamOutranksTheProjectAsTeamOwnerInTheCascade(t *testing.T) 
 	updated := time.Date(2026, 9, 25, 3, 0, 0, 0, time.UTC)
 	const projectTeamSpecificity, projectTeamPriority = 100, 10 // providersync jira_team_catalog native ownership
 	projectTeam := teamattribution.GithubWorkItemDerivationCandidateFromFact(
-		"project_ownership", "PLAT", "Platform project", "project_ownership=org-1:jira:PLAT", 1, projectTeamSpecificity, projectTeamPriority, updated)
+		"project_ownership", "PLAT", "Platform project", "project_ownership=10001", 1, projectTeamSpecificity, projectTeamPriority, updated)
 	atlassianTeam := teamattribution.GithubWorkItemDerivationCandidateFromFact(
-		"project_ownership", "aaaaaaaa-0000-4000-8000-000000000001", "Platform", "project_ownership=org-1:jira:PLAT", 1, OwnershipSpecificity, OwnershipPriority, updated)
+		"project_ownership", "aaaaaaaa-0000-4000-8000-000000000001", "Platform", "project_ownership=10001", 1, OwnershipSpecificity, OwnershipPriority, updated)
 	for name, input := range map[string][]teamattribution.GithubWorkItemDerivationCandidate{
 		"project team first":   {projectTeam, atlassianTeam},
 		"atlassian team first": {atlassianTeam, projectTeam},
@@ -695,5 +710,111 @@ func TestIterTeamUsersTagsEveryRelationWithTheRequestedTeam(t *testing.T) {
 		if relation.TeamID == nil || *relation.TeamID != teamA {
 			t.Errorf("relation %q has team %v, want the requested team %q", relation.SubjectUserID, relation.TeamID, teamA)
 		}
+	}
+}
+
+// The project id of a team's project link is the last segment of a Jira
+// project ARI, and only that: every other value has no project identity.
+func TestJiraNativeProjectIDIsTheNumericLastSegmentOfAJiraProjectARI(t *testing.T) {
+	for _, tc := range []struct {
+		ari, want string
+		ok        bool
+	}{
+		{"ari:cloud:jira:site-1:project/10001", "10001", true},
+		{"  ari:cloud:jira::project/7  ", "7", true},
+		{"ari:cloud:townsquare:site-1:project/7", "", false}, // a project of another product
+		{"ari:cloud:jira:site-1:issue/10001", "", false},
+		{"ari:cloud:jira:site-1:project/", "", false},
+		{"ari:cloud:jira:site-1:project/PLAT", "", false},
+		{"ari:cloud:jira:site-1:project/10001/extra", "", false},
+		{"ari:cloud:jira:site-1:project/10-01", "", false},
+		{"ari:cloud:jira:site-1:project/-7", "", false},
+		{"ari:cloud:jira:site-1:project/+7", "", false},
+		// The id is the REST form of project.id: no leading zero, and a
+		// number an int64 holds.
+		{"ari:cloud:jira:site-1:project/00123", "", false},
+		{"ari:cloud:jira:site-1:project/0", "", false},
+		{"ari:cloud:jira:site-1:project/9223372036854775807", "9223372036854775807", true},
+		{"ari:cloud:jira:site-1:project/9223372036854775808", "", false},
+		{"ari:cloud:jira:site-1:project/" + strings.Repeat("9", 400), "", false},
+		// The resource after the site is the project itself: an ARI that
+		// only ends in ":project/<id>" is not a project ARI.
+		{"ari:cloud:jira:site-1:issue/5:project/7", "", false},
+		{"ari:cloud:jira:site-1:extra:project/7", "", false},
+		{"ari:cloud:jira:project/7", "", false},
+		{"ari:cloud:jira:site-1:10001", "", false},
+		{"ari:cloud:jira:site/1:project/7", "", false},
+		{"10001", "", false},
+		{"", "", false},
+	} {
+		got, ok := jiraNativeProjectID(tc.ari)
+		if got != tc.want || ok != tc.ok {
+			t.Errorf("jiraNativeProjectID(%q) = %q, %v; want %q, %v", tc.ari, got, ok, tc.want, tc.ok)
+		}
+	}
+}
+
+// TestATeamWithNoReadableProjectLinkIsNamedUnreadable pins the per-team rule:
+// links came back for the team and not one carried a readable Jira project
+// ARI, so the answer is "could not be read", never "no project".
+func TestATeamWithNoReadableProjectLinkIsNamedUnreadable(t *testing.T) {
+	serve := func(teamALinks, teamCLinks []map[string]any) func(request) (int, any) {
+		return func(req request) (int, any) {
+			if req.Operation != "TeamworkGraphTeamActiveProjects" {
+				return standard(req)
+			}
+			if req.Variables["teamId"] == teamA {
+				return 200, connection("teamworkGraph_teamActiveProjects", "", teamALinks...)
+			}
+			return 200, connection("teamworkGraph_teamActiveProjects", "", teamCLinks...)
+		}
+	}
+	const idA, idC = "aaaaaaaa-0000-4000-8000-000000000001", "cccccccc-0000-4000-8000-000000000003"
+	for _, tc := range []struct {
+		name string
+		a, c []map[string]any
+		want string
+	}{
+		{"no link of the team is readable", []map[string]any{projectEdge(teamA, "PLAT", "PLAT"), projectEdge(teamA, "DATA", "")}, nil, idA},
+		{"one readable link is enough", []map[string]any{projectEdge(teamA, "PLAT", "PLAT"), projectEdge(teamA, "DATA", "7")}, nil, ""},
+		{"a readable link without a key still shows the ARI shape is read", []map[string]any{projectEdge(teamA, "PLAT", "PLAT"), projectEdge(teamA, "", "7")}, nil, ""},
+		{"a team with no link at all has no project", nil, nil, ""},
+		{"each team is judged by itself", []map[string]any{projectEdge(teamA, "PLAT", "10001")}, []map[string]any{projectEdge(teamC, "DATA", "DATA")}, idC},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rows, err := Collect(context.Background(), newGateway(t, serve(tc.a, tc.c)).client(), params(everything))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := strings.Join(rows.UnreadableProjectLinkTeams, ","); got != tc.want {
+				t.Errorf("unreadable teams = %q, want %q", got, tc.want)
+			}
+			if !rows.ProjectLinksComplete {
+				t.Error("every read reached its end: the run as a whole is complete")
+			}
+		})
+	}
+}
+
+// A collection that was not asked for project links never says they are
+// complete, also when there is no active team to read them for.
+func TestACollectionWithoutTheProjectsSelectionNeverSaysItsLinksAreComplete(t *testing.T) {
+	onlyArchived := func(req request) (int, any) {
+		if req.Operation == "TeamSearchV2" {
+			return 200, searchPage("", teamNode(teamB, "Old", "ARCHIVED"))
+		}
+		return standard(req)
+	}
+	selection := params(everything)
+	selection.Selections.Projects = false
+	rows, err := Collect(context.Background(), newGateway(t, onlyArchived).client(), selection)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rows.ProjectLinksComplete {
+		t.Error("no project link was asked for: the links are not complete")
+	}
+	if rows, err = Collect(context.Background(), newGateway(t, onlyArchived).client(), params(everything)); err != nil || !rows.ProjectLinksComplete {
+		t.Errorf("project links asked for and no active team has any to read: complete = %v (err=%v), want complete", rows.ProjectLinksComplete, err)
 	}
 }

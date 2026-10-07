@@ -263,7 +263,7 @@ func runTeams(ctx context.Context, env cli.Env, d deps) int {
 		return writeError(env.Stderr, cli.ExitFailure, "write_failed", redact(err))
 	}
 	logger.Info("atlassian teams synced", "org_id", orgID, "teams", len(rows.Teams), "memberships", len(rows.Memberships),
-		"project_links", len(rows.Ownership), "skipped_project_links", rows.SkippedProjects,
+		"project_links", len(rows.Ownership), "skipped_project_links", rows.SkippedProjects, "unreadable_project_link_teams", len(rows.UnreadableProjectLinkTeams),
 		"expired_memberships", result.ExpiredMemberships, "expired_project_links", result.ExpiredOwnership, "deactivated_teams", result.DeactivatedTeams, "duration_ms", time.Since(started).Milliseconds())
 	if _, err := fmt.Fprintf(env.Stdout, "teams=%d memberships=%d project_links=%d expired_memberships=%d expired_project_links=%d deactivated_teams=%d\n",
 		len(rows.Teams), len(rows.Memberships), len(rows.Ownership), result.ExpiredMemberships, result.ExpiredOwnership, result.DeactivatedTeams); err != nil {

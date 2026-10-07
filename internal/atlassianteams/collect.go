@@ -18,6 +18,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -51,7 +52,11 @@ const (
 const (
 	teamARIPrefix = "team/"
 	userARIPrefix = "user/"
-	defaultPage   = 50
+	// jiraARIPrefix / jiraProjectARIResource bound a Jira project ARI:
+	// "ari:cloud:jira:<site>:project/<native id>".
+	jiraARIPrefix          = "ari:cloud:jira:"
+	jiraProjectARIResource = "project/"
+	defaultPage            = 50
 )
 
 // Client is the part of the atlassian graph client the sync reads. The
@@ -132,9 +137,20 @@ type Rows struct {
 	Memberships []MembershipRow
 	Ownership   []OwnershipRow
 	// SkippedProjects counts project links dropped because the graph node
-	// carried no Jira project key (the project id of the ownership row is
-	// built from it).
+	// carried no Jira project key, or no Jira project ARI with a native id
+	// (the project id of the ownership row).
 	SkippedProjects int
+	// ProjectLinksComplete says every project-link read behind Ownership
+	// reached the provider's last page. Only Collect sets it. Rows built any
+	// other way leave it false, and Write then closes no project link.
+	ProjectLinksComplete bool
+	// UnreadableProjectLinkTeams holds the id of every team whose read
+	// returned at least one project link and not one of them carried a Jira
+	// project ARI this collector can read. An empty answer for such a team is
+	// "the links could not be read", not "the team has no project": Write
+	// closes none of that team's links. A team with at least one readable
+	// link is not here; its other links are counted in SkippedProjects.
+	UnreadableProjectLinkTeams []string
 }
 
 // ErrConfiguration marks an input the sync cannot run without.
@@ -165,6 +181,43 @@ func accountID(nodeID string) (string, bool) {
 	}
 	nodeID = strings.TrimSpace(nodeID)
 	return nodeID, nodeID != ""
+}
+
+// jiraNativeProjectID returns the native Jira project id of a Jira project
+// ARI ("ari:cloud:jira:<site>:project/<id>"). That id is the one project
+// identity on the platform -- the Jira work-items route writes it into
+// work_items.project_id and `projects` -- so a team's project link carries it
+// and reaches the project's work items by id. Anything else has no such
+// identity and gets no link; an id is never built from the project key.
+//
+// The ARI is read whole, not by its tail: after the product prefix there is
+// one site segment and one resource, and the resource is "project/<id>". An
+// ARI that only ENDS in ":project/<id>" names something inside another
+// resource, not a project. The id is the decimal form Jira REST returns for
+// project.id: a positive int64 with no leading zero, so the text equals the
+// text the work-items route writes.
+func jiraNativeProjectID(ari string) (string, bool) {
+	rest, ok := strings.CutPrefix(strings.TrimSpace(ari), jiraARIPrefix)
+	if !ok {
+		return "", false
+	}
+	site, resource, _ := strings.Cut(rest, ":")
+	if strings.Contains(site, "/") {
+		return "", false
+	}
+	id, ok := strings.CutPrefix(resource, jiraProjectARIResource)
+	if !ok || id == "" || id[0] == '0' {
+		return "", false
+	}
+	for _, r := range id {
+		if r < '0' || r > '9' {
+			return "", false
+		}
+	}
+	if _, err := strconv.ParseInt(id, 10, 64); err != nil {
+		return "", false
+	}
+	return id, true
 }
 
 // memberID is the member id the Jira auto-import writes: "jira:" and the
@@ -229,6 +282,7 @@ func Collect(ctx context.Context, client Client, params Params) (Rows, error) {
 		return Rows{}, fmt.Errorf("search atlassian teams: %w", err)
 	}
 	var rows Rows
+	activeTeams, projectReads := 0, 0
 	seen := map[string]bool{}
 	for _, team := range teams {
 		id, err := teamID(team.ID)
@@ -281,13 +335,25 @@ func Collect(ctx context.Context, client Client, params Params) (Rows, error) {
 				})
 			}
 		}
+		projectRead := 0
+		if active {
+			activeTeams++
+		}
 		if active && params.Selections.Projects {
 			projects, err := client.IterTeamActiveProjects(siteCtx, team.ID, page)
 			if err != nil {
 				return Rows{}, fmt.Errorf("read projects of team %s: %w", id, err)
 			}
+			projectRead = 1
 			keys := map[string]bool{}
+			readable, refused := 0, 0
 			for _, project := range projects {
+				nativeProjectID, ok := jiraNativeProjectID(project.ProjectID)
+				if ok {
+					readable++
+				} else {
+					refused++
+				}
 				key := ""
 				if project.ProjectKey != nil {
 					key = strings.TrimSpace(*project.ProjectKey)
@@ -296,21 +362,35 @@ func Collect(ctx context.Context, client Client, params Params) (Rows, error) {
 					rows.SkippedProjects++
 					continue
 				}
-				if keys[key] {
+				if !ok {
+					rows.SkippedProjects++
 					continue
 				}
-				keys[key] = true
+				if keys[nativeProjectID] {
+					continue
+				}
+				keys[nativeProjectID] = true
 				rows.Ownership = append(rows.Ownership, OwnershipRow{
-					OrgID: params.OrgID, Provider: Provider, TeamID: id, ProjectID: params.OrgID + ":" + Provider + ":" + key,
+					OrgID: params.OrgID, Provider: Provider, TeamID: id, ProjectID: nativeProjectID,
 					ProjectKey: key, Source: Source, IsPrimary: 1, Specificity: OwnershipSpecificity,
 					Priority: OwnershipPriority, ValidFrom: now, UpdatedAt: now,
 				})
 				row.ProjectKeys = append(row.ProjectKeys, key)
 			}
 			sort.Strings(row.ProjectKeys)
+			if refused > 0 && readable == 0 {
+				rows.UnreadableProjectLinkTeams = append(rows.UnreadableProjectLinkTeams, id)
+			}
 		}
 		rows.Teams = append(rows.Teams, row)
+		projectReads += projectRead
 	}
+	// The team search and every per-team read above either followed the
+	// provider's cursor until it gave no next page, or returned its error out
+	// of this function (the client is strict: a GraphQL error next to partial
+	// data is an error). So the links are complete when one read finished for
+	// every active team, and that count is the signal, not an assumption.
+	rows.ProjectLinksComplete = params.Selections.Projects && projectReads == activeTeams
 	return rows, nil
 }
 

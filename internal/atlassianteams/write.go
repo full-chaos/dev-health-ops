@@ -3,6 +3,7 @@ package atlassianteams
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -46,6 +47,10 @@ type Result struct {
 	OwnershipWritten   int
 	ExpiredMemberships int
 	ExpiredOwnership   int
+	// UnreadableProjectLinkTeams counts the teams whose project links this
+	// call left as they were, because the collection could read none of the
+	// team's links (Rows.UnreadableProjectLinkTeams).
+	UnreadableProjectLinkTeams int
 	// DeactivatedTeams counts catalog rows of Atlassian teams the snapshot no
 	// longer returns (deleted upstream), rewritten inactive.
 	DeactivatedTeams int
@@ -143,7 +148,7 @@ func Write(ctx context.Context, conn driver.Conn, orgID string, rows Rows, selec
 	var ownership []OwnershipRow
 	var expiredOwnership []openOwnership
 	if selections.Projects {
-		if ownership, expiredOwnership, err = planOwnership(ctx, conn, orgID, scope, rows.Ownership); err != nil {
+		if ownership, expiredOwnership, err = planOwnership(ctx, conn, orgID, scope, rows.Ownership, now, rows.ProjectLinksComplete, rows.UnreadableProjectLinkTeams); err != nil {
 			return result, fmt.Errorf("read current team project ownership: %w", err)
 		}
 	}
@@ -169,6 +174,7 @@ func Write(ctx context.Context, conn driver.Conn, orgID string, rows Rows, selec
 		}
 		result.OwnershipWritten = len(ownership)
 		result.ExpiredOwnership = len(expiredOwnership)
+		result.UnreadableProjectLinkTeams = len(rows.UnreadableProjectLinkTeams)
 		done = append(done, "team project ownership")
 	}
 	if selections.Structure && (len(teamsToWrite) > 0 || len(deactivate) > 0) {
@@ -269,6 +275,8 @@ type openOwnership struct {
 	specificity       uint16
 	priority          int32
 	validFrom         time.Time
+	// closedAt is the valid_to the snapshot rule closes this row with.
+	closedAt time.Time
 }
 
 // planMemberships reads the open memberships of the teams in scope, gives each
@@ -322,7 +330,18 @@ func planMemberships(ctx context.Context, conn driver.Conn, orgID string, scope 
 	return out, expired, nil
 }
 
-func planOwnership(ctx context.Context, conn driver.Conn, orgID string, scope []string, fresh []OwnershipRow) ([]OwnershipRow, []openOwnership, error) {
+// planOwnership reads the open project links of the teams in scope and
+// applies the shared snapshot rule (providersync.PlanOwnershipSnapshot): a
+// fresh link keeps the valid_from it was first seen with, and every open link
+// the snapshot no longer has is returned to be closed. A team in scope with no
+// fresh link loses all of its links: scope holds the teams deleted upstream.
+//
+// complete is Rows.ProjectLinksComplete: only a collection that read every
+// team's project links to the end closes a link.
+//
+// unreadable is Rows.UnreadableProjectLinkTeams: the open links of such a
+// team are not given to the plan, so none of them is closed.
+func planOwnership(ctx context.Context, conn driver.Conn, orgID string, scope []string, fresh []OwnershipRow, now time.Time, complete bool, unreadable []string) ([]OwnershipRow, []openOwnership, error) {
 	if len(scope) == 0 {
 		return fresh, nil, nil
 	}
@@ -338,33 +357,33 @@ func planOwnership(ctx context.Context, conn driver.Conn, orgID string, scope []
 		if err := result.Scan(&row.teamID, &row.projectID, &row.projectKey, &row.source, &row.isPrimary, &row.specificity, &row.priority, &row.validFrom); err != nil {
 			return nil, nil, err
 		}
+		if slices.Contains(unreadable, row.teamID) {
+			continue
+		}
 		open = append(open, row)
 	}
 	if err := result.Err(); err != nil {
 		return nil, nil, err
 	}
-	firstSeen := map[string]time.Time{}
-	for _, row := range open {
-		key := row.teamID + "\x00" + row.projectID
-		if at, ok := firstSeen[key]; !ok || row.validFrom.Before(at) {
-			firstSeen[key] = row.validFrom
-		}
+	freshFacts := make([]providersync.OwnershipSnapshotRow, len(fresh))
+	for i, row := range fresh {
+		freshFacts[i] = providersync.OwnershipSnapshotRow{TeamID: row.TeamID, ProjectID: row.ProjectID, Source: row.Source, ValidFrom: row.ValidFrom}
 	}
-	current := map[string]bool{}
+	openFacts := make([]providersync.OwnershipSnapshotRow, len(open))
+	for i, row := range open {
+		openFacts[i] = providersync.OwnershipSnapshotRow{TeamID: row.teamID, ProjectID: row.projectID, Source: row.source, ValidFrom: row.validFrom}
+	}
+	plan := providersync.PlanOwnershipSnapshot(providersync.OwnershipSnapshot{Fresh: freshFacts, Complete: complete}, openFacts, now)
 	out := make([]OwnershipRow, len(fresh))
 	for i, row := range fresh {
-		key := row.TeamID + "\x00" + row.ProjectID
-		current[key] = true
-		if at, ok := firstSeen[key]; ok && at.Before(row.ValidFrom) {
-			row.ValidFrom = at
-		}
+		row.ValidFrom = plan.ValidFrom[i]
 		out[i] = row
 	}
 	var expired []openOwnership
-	for _, row := range open {
-		if !current[row.teamID+"\x00"+row.projectID] {
-			expired = append(expired, row)
-		}
+	for _, retraction := range plan.Retract {
+		row := open[retraction.Open]
+		row.closedAt = retraction.ClosedAt
+		expired = append(expired, row)
 	}
 	return out, expired, nil
 }
@@ -483,7 +502,7 @@ func writeOwnership(ctx context.Context, conn driver.Conn, orgID string, rows []
 		}
 	}
 	for _, row := range expired {
-		closedAt := now
+		closedAt := row.closedAt
 		if err := batch.Append(
 			orgID, Provider, row.teamID, row.projectID, row.projectKey, row.source, row.isPrimary, row.specificity,
 			row.priority, row.validFrom, &closedAt, now,

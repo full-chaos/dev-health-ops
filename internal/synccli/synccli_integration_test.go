@@ -26,7 +26,7 @@ func (oneTeam) IterTeamUsers(context.Context, string, int) ([]atlassian.Teamwork
 }
 func (oneTeam) IterTeamActiveProjects(context.Context, string, int) ([]atlassian.TeamworkProject, error) {
 	key := "PLAT"
-	return []atlassian.TeamworkProject{{ProjectKey: &key}}, nil
+	return []atlassian.TeamworkProject{{ProjectID: "ari:cloud:jira:site:project/10001", ProjectKey: &key}}, nil
 }
 
 // The verb end to end against a real ClickHouse: the DSN comes from

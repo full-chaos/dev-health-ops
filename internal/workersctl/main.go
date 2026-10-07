@@ -1441,6 +1441,8 @@ func dispatchProvidersync(ctx context.Context, runtime *operatorRuntime, args []
 		return dispatchProvidersyncRetireLinearPseudoProjects(ctx, runtime, args[1:], stdout, stderr)
 	case "retire-stale-linear-project-ownership":
 		return dispatchProvidersyncRetireStaleLinearProjectOwnership(ctx, runtime, args[1:], stdout, stderr)
+	case "retire-jira-key-projects":
+		return dispatchProvidersyncRetireJiraKeyProjects(ctx, runtime, args[1:], stdout, stderr)
 	default:
 		return writeError(stderr, "invalid_request")
 	}
@@ -1507,6 +1509,67 @@ func dispatchProvidersyncRetireLinearPseudoProjects(
 	return auditedWrite(ctx, runtime, stderr, mutation, joboperator.ActionProvidersyncCleanup, "organization", authorizeResource, run)
 }
 
+// dispatchProvidersyncRetireJiraKeyProjects handles `providersync
+// retire-jira-key-projects`: a ONE-TIME, operator-invoked cleanup that
+// physically deletes the Jira `projects` rows whose id was built from the
+// project key ({org_id}:jira:{KEY}), the second identity the Jira team
+// catalog used to give a project the work-items route identifies by its
+// native id. A row is deleted only when a native-id row of the same
+// organization and project key exists, so it is run AFTER one Jira team
+// catalog sync on the native-id writer; before that it refuses
+// (no_native_jira_project_rows). It prints counts only.
+// providersync.RetireJiraKeyProjectRows does the work; the shape (lazy
+// CLICKHOUSE_URI, --org/--dry-run, authorize first, an explicit empty --org
+// refused) is retire-stale-linear-project-ownership's.
+func dispatchProvidersyncRetireJiraKeyProjects(
+	ctx context.Context, runtime *operatorRuntime, args []string, stdout, stderr io.Writer,
+) int {
+	flags := quietFlags("providersync retire-jira-key-projects")
+	org := flags.String("org", "", "organization id (uuid) -- omit to run across every org")
+	dryRun := flags.Bool("dry-run", false, "count the key-built jira project rows that would be deleted, across every org unless --org scopes it, without deleting anything")
+	mutation := addMutationFlags(flags)
+	if flags.Parse(args) != nil || flags.NArg() != 0 || !mutation.valid(*dryRun) {
+		return writeError(stderr, "invalid_request")
+	}
+	orgFlagWasSet := false
+	flags.Visit(func(f *flag.Flag) {
+		if f.Name == "org" {
+			orgFlagWasSet = true
+		}
+	})
+	if orgFlagWasSet && *org == "" {
+		return writeError(stderr, "invalid_request")
+	}
+	scopedOrg := ""
+	if *org != "" {
+		parsedOrg, err := uuid.Parse(*org)
+		if err != nil {
+			return writeError(stderr, "invalid_request")
+		}
+		scopedOrg = parsedOrg.String()
+	}
+	if runtime.service == nil {
+		return writeError(stderr, "operator_backend_unavailable")
+	}
+	authorizeResource := scopedOrg
+	if authorizeResource == "" {
+		authorizeResource = "*"
+	}
+	if err := runtime.service.Authorize(ctx, runtime.principal, joboperator.ActionProvidersyncCleanup, "organization", authorizeResource); err != nil {
+		return writeServiceError(stderr, err)
+	}
+	run := func(ctx context.Context) int {
+		return runProvidersyncCleanup(ctx, runtime, stdout, stderr, "retire_jira_key_projects",
+			func(ctx context.Context, conn clickhousedriver.Conn) (any, error) {
+				return providersync.RetireJiraKeyProjectRows(ctx, conn, scopedOrg, *dryRun)
+			})
+	}
+	if *dryRun {
+		return run(ctx)
+	}
+	return auditedWrite(ctx, runtime, stderr, mutation, joboperator.ActionProvidersyncCleanup, "organization", authorizeResource, run)
+}
+
 // runProvidersyncCleanup opens ClickHouse and runs one providersync cleanup,
 // printing its outcome under key.
 func runProvidersyncCleanup(
@@ -1527,6 +1590,9 @@ func runProvidersyncCleanup(
 	}
 	defer func() { _ = conn.Close() }()
 	outcome, err := cleanup(ctx, conn)
+	if errors.Is(err, providersync.ErrJiraKeyProjectCleanupNoNativeRows) {
+		return writeError(stderr, "no_native_jira_project_rows")
+	}
 	if err != nil {
 		return writeServiceError(stderr, err)
 	}

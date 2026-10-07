@@ -119,6 +119,9 @@ var (
 	KeyTouchedDaysCarriedOver       = Key{"touched_days_carried_over"}
 	KeyTouchedDaysAlreadyStarted    = Key{"touched_days_already_started"}
 	KeyTouchedDaysReadTruncated     = Key{"touched_days_read_truncated"}
+	KeyTouchedDaysOverLimit         = Key{"touched_days_over_limit"}
+	KeyTouchedDaysOverLimitNewest   = Key{"touched_days_over_limit_newest"}
+	KeyTouchedDaysOverLimitOldest   = Key{"touched_days_over_limit_oldest"}
 	KeyOutcome                      = Key{"outcome"}
 	KeyErrorCode                    = Key{"error_code"}
 	KeyCount                        = Key{"count"}

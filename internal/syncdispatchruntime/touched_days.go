@@ -178,39 +178,64 @@ func (service *NativePostSyncService) takeTouchedDays(
 	for _, day := range service.touchedWriter.FullOrganizationDays(*plan) {
 		window[day.UTC().Format("2006-01-02")] = struct{}{}
 	}
-	var taken []time.Time
+	var candidates []time.Time
 	for _, day := range pending.Days {
 		if _, inWindow := window[day.UTC().Format("2006-01-02")]; inWindow {
 			take.windowPending = append(take.windowPending, day)
 			continue
 		}
-		if len(taken) < PostSyncTouchedDaysPerFanout {
-			taken = append(taken, day)
-			continue
-		}
-		take.carriedOver++
+		candidates = append(candidates, day)
 	}
-	limit := service.touchedWriter.RepositoryLimit()
-	repositories, err := service.touched.PendingRepositories(ctx, plan.OrganizationID, taken, limit+1)
-	if err != nil {
+	if err := service.chooseTouchedDayStarts(ctx, plan.OrganizationID, candidates, take); err != nil {
 		return nil, err
 	}
-	for _, day := range taken {
-		identifiers := repositories[day.UTC().Format("2006-01-02")]
-		if len(identifiers) == 0 {
-			// Another fan-out dispatched the day between the two reads.
-			continue
-		}
-		if len(identifiers) > limit {
-			// A run of every repository is refused above the cap of the daily
-			// job, and a refused run must not end the day: it stays pending,
-			// is reported, and is not started here.
-			take.overLimit = append(take.overLimit, day)
-			continue
-		}
-		take.starts = append(take.starts, touchedDayStart{day: day, repositories: identifiers})
-	}
 	return take, nil
+}
+
+// chooseTouchedDayStarts walks the pending days newest first and keeps the
+// PostSyncTouchedDaysPerFanout newest days that a run can start for.
+//
+// A day with more pending repositories than one run accepts can start no run
+// (a run of every repository is refused above the same cap), and a refused run
+// must not end the day: the day stays pending and is reported, but it never
+// holds one of the slots, so the days behind it still get their runs.
+//
+// The walk reads the repositories of one chunk of PostSyncTouchedDaysPerFanout
+// days at a time and is bounded by candidates, which the pending read bounds
+// at postSyncTouchedPendingDayReadLimit days (at most 119 reads). When every
+// scanned day is over the limit, no run starts and all of them are reported
+// once. Days the walk did not reach count as carried over.
+func (service *NativePostSyncService) chooseTouchedDayStarts(
+	ctx context.Context, organizationID string, candidates []time.Time, take *touchedDaysTake,
+) error {
+	limit := service.touchedWriter.RepositoryLimit()
+	scanned := 0
+	for scanned < len(candidates) && len(take.starts) < PostSyncTouchedDaysPerFanout {
+		end := min(scanned+PostSyncTouchedDaysPerFanout, len(candidates))
+		chunk := candidates[scanned:end]
+		repositories, err := service.touched.PendingRepositories(ctx, organizationID, chunk, limit+1)
+		if err != nil {
+			return err
+		}
+		for _, day := range chunk {
+			if len(take.starts) >= PostSyncTouchedDaysPerFanout {
+				break
+			}
+			scanned++
+			identifiers := repositories[day.UTC().Format("2006-01-02")]
+			if len(identifiers) == 0 {
+				// Another fan-out dispatched the day between the two reads.
+				continue
+			}
+			if len(identifiers) > limit {
+				take.overLimit = append(take.overLimit, day)
+				continue
+			}
+			take.starts = append(take.starts, touchedDayStart{day: day, repositories: identifiers})
+		}
+	}
+	take.carriedOver = len(candidates) - scanned
+	return nil
 }
 
 // touchedDaysPlan loads the plan of the sync run in a transaction of its own,
@@ -283,9 +308,21 @@ func (service *NativePostSyncService) finishTouchedDays(
 			service.observeTouchedDaysFailure(ctx, args, "mark", jobruntime.PostSyncTouchedDaysMarkFailed)
 		}
 	}
-	for range take.overLimit {
-		service.observeTouchedDaysFailure(ctx, args, touchedDaysPhaseOverRepositoryLimit,
-			jobruntime.PostSyncTouchedDaysOverRepositoryLimit)
+	if len(take.overLimit) > 0 {
+		// One line for each fan-out, never one for each day: the same days are
+		// found again by every later fan-out until a run can take them.
+		service.logger.Error(ctx, synclog.MsgPostSyncTouchedDaysFailed,
+			synclog.Text(synclog.KeyPhase, synclog.ParseLabel(touchedDaysPhaseOverRepositoryLimit)),
+			synclog.Org(synclog.ParseID(args.OrganizationID())),
+			synclog.Run(synclog.ParseID(args.SyncRunID())),
+			synclog.Count(synclog.KeyTouchedDaysOverLimit, len(take.overLimit)),
+			synclog.Instant(synclog.KeyTouchedDaysOverLimitNewest, take.overLimit[0].UTC()),
+			synclog.Instant(synclog.KeyTouchedDaysOverLimitOldest, take.overLimit[len(take.overLimit)-1].UTC()),
+		)
+		if service.touchedObserver != nil {
+			_ = service.touchedObserver.ObservePostSyncTouchedDays(
+				jobruntime.PostSyncTouchedDaysOverRepositoryLimit, uint64(len(take.overLimit)))
+		}
 	}
 	if take.truncated {
 		service.logger.Error(ctx, synclog.MsgPostSyncTouchedDaysFailed,

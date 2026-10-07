@@ -3,9 +3,11 @@
 package workerservice
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"reflect"
 	"sort"
 	"strings"
@@ -19,6 +21,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/daily"
 	"github.com/full-chaos/dev-health-ops/internal/syncdispatchruntime"
+	"github.com/full-chaos/dev-health-ops/internal/syncdispatchruntime/synclog"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgseed"
 )
 
@@ -622,4 +625,113 @@ func TestPostSyncFanoutLeavesADayOverTheRepositoryLimitPendingAndReportsIt(t *te
 	if got := observer.counts[jobruntime.PostSyncTouchedDaysOverRepositoryLimit]; got != 1 {
 		t.Fatalf("over_repository_limit counter = %d, want 1 (counts %v)", got, observer.counts)
 	}
+}
+
+// touchedLimitWriter lowers the repository limit of the touched-day writer to
+// limit: the smallest seam to put days over the limit with a few repositories.
+type touchedLimitWriter struct {
+	dailyPostSyncWriter
+	limit int
+}
+
+func (writer touchedLimitWriter) RepositoryLimit() int { return writer.limit }
+
+// overLimitFanout runs one fan-out with a repository limit of 1 and returns
+// its Error lines of phase over_repository_limit and its counter.
+func overLimitFanout(
+	t *testing.T, ctx context.Context, rig *touchedRig, orgID string, args syncdispatchruntime.PostSyncArgs,
+) (errorLines []string, counted uint64) {
+	t.Helper()
+	var logs bytes.Buffer
+	writer := dailyPostSyncWriter{store: rig.store, publisher: nilPartitionPublisher{}}
+	service, err := syncdispatchruntime.NewNativePostSyncService(
+		rig.pool, writer, touchedStubRemaining{}, touchedStubWorkGraph{},
+		touchedStubPublish{}, touchedStubPublish{}, synclog.New(slog.New(slog.NewJSONHandler(&logs, nil))),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.SetTouchedDays(rig.touched, touchedLimitWriter{dailyPostSyncWriter: writer, limit: 1}); err != nil {
+		t.Fatal(err)
+	}
+	observer := &touchedCountObserver{}
+	service.SetTouchedDaysObserver(observer)
+	if err := service.Fanout(ctx, args); err != nil {
+		t.Fatal(err)
+	}
+	for _, line := range strings.Split(strings.TrimSpace(logs.String()), "\n") {
+		if strings.Contains(line, `"phase":"over_repository_limit"`) {
+			errorLines = append(errorLines, line)
+		}
+	}
+	return errorLines, observer.counts[jobruntime.PostSyncTouchedDaysOverRepositoryLimit]
+}
+
+// A day over the repository limit starts no run and stays pending, but it must
+// not hold one of the 31 slots: the days behind it still get their runs in the
+// same fan-out, and the report is one Error line with the count of such days.
+func TestPostSyncFanoutOverLimitDaysNeverHoldTheSlotsOfStartableDays(t *testing.T) {
+	for _, test := range []struct {
+		name         string
+		over, normal int
+	}{
+		{"31 over-limit days newer than one normal day", 31, 1},
+		{"40 over-limit days newer than 31 normal days", 40, 31},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
+			defer cancel()
+			rig := newTouchedRig(t, ctx)
+			orgID := uuid.NewString()
+			target := time.Date(2026, 8, 20, 0, 0, 0, 0, time.UTC)
+			now := time.Now().UTC()
+			var items []touchedItem
+			var overDays, normalDays []string
+			for index := 0; index < test.over; index++ {
+				day := target.AddDate(0, 0, -(40 + index))
+				overDays = append(overDays, day.Format("2006-01-02"))
+				for repoIndex := 0; repoIndex < 2; repoIndex++ {
+					items = append(items, touchedItem{repo: uuid.New(), id: fmt.Sprintf("gh:acme/over#%d-%d", index, repoIndex), provider: "github", day: day, synced: now})
+				}
+			}
+			for index := 0; index < test.normal; index++ {
+				day := target.AddDate(0, 0, -(100 + index))
+				normalDays = append(normalDays, day.Format("2006-01-02"))
+				items = append(items, touchedItem{repo: uuid.New(), id: fmt.Sprintf("gh:acme/normal#%d", index), provider: "github", day: day, synced: now})
+			}
+			insertTouchedItems(t, ctx, rig.conn, orgID, items...)
+			args := rig.seedSync(t, ctx, orgID, "work-items", target)
+			errorLines, counted := overLimitFanout(t, ctx, rig, orgID, args)
+
+			runs := rig.runsOf(t, ctx, orgID, args)
+			for _, day := range normalDays {
+				if _, ok := runs[day]; !ok {
+					t.Fatalf("the normal day %s got no run in the first fan-out (days with a run: %v)", day, touchedRunDays(runs))
+				}
+			}
+			for _, day := range overLimitOnly(overDays, runs) {
+				t.Fatalf("the over-limit day %s got a run", day)
+			}
+			sort.Strings(overDays)
+			if got := rig.pendingDays(t, ctx, orgID); !reflect.DeepEqual(got, overDays) {
+				t.Fatalf("pending after the fan-out = %v, want the %d over-limit days", got, test.over)
+			}
+			if len(errorLines) != 1 {
+				t.Fatalf("over_repository_limit Error lines = %d, want exactly 1", len(errorLines))
+			}
+			if counted != uint64(test.over) {
+				t.Fatalf("over_repository_limit counter = %d, want %d", counted, test.over)
+			}
+		})
+	}
+}
+
+func overLimitOnly(overDays []string, runs map[string]touchedRun) []string {
+	var started []string
+	for _, day := range overDays {
+		if _, ok := runs[day]; ok {
+			started = append(started, day)
+		}
+	}
+	return started
 }

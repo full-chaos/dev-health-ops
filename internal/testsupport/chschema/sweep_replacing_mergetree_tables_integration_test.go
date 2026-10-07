@@ -204,7 +204,7 @@ func sweepReplacingMergeTreeTables(t *testing.T) []replacingMergeTreeTable {
 // (org_id, work_unit_id, categorization_input_hash, shadow_config), and
 // 110_llm_categorization_attempts.sql adds `llm_categorization_attempts`
 // (version computed_at), keyed on (org_id, run_id, work_unit_id, role,
-// attempt) -- CHAOS-8868. Both are append-only: a reader takes argMax on
+// config, kind, attempt) -- CHAOS-8868. Both are append-only: a reader takes argMax on
 // computed_at over the sorting key (the attempt table before it sums).
 func TestSweepReplacingMergeTreeTablesMatchesTheAuthoritativeCount(t *testing.T) {
 	const wantCount = 119

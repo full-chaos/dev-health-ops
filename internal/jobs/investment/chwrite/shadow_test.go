@@ -1,10 +1,8 @@
 package chwrite
 
 import (
-	"bytes"
 	"context"
 	"errors"
-	"log/slog"
 	"reflect"
 	"strings"
 	"sync"
@@ -169,10 +167,8 @@ func TestFlushAttemptsIsOneBatchWithACapAndDrains(t *testing.T) {
 	for i := 0; i < 7; i++ {
 		buffer.Add(attemptRow("u"))
 	}
-	var logs bytes.Buffer
-	logger := slog.New(slog.NewTextHandler(&logs, nil))
 
-	result := writer.FlushAttempts(t.Context(), "org-1", buffer, logger)
+	result := writer.FlushAttempts(t.Context(), "org-1", buffer)
 	if result != (AttemptFlushResult{Written: 4, Dropped: 3}) {
 		t.Fatalf("result = %+v", result)
 	}
@@ -183,11 +179,8 @@ func TestFlushAttemptsIsOneBatchWithACapAndDrains(t *testing.T) {
 	if len(conn.batches[0].rows[0]) != columns {
 		t.Fatalf("row appends %d values for %d columns", len(conn.batches[0].rows[0]), columns)
 	}
-	if !strings.Contains(logs.String(), "rows_dropped=3") {
-		t.Fatalf("the dropped count must be logged, log: %s", logs.String())
-	}
 
-	again := writer.FlushAttempts(t.Context(), "org-1", buffer, logger)
+	again := writer.FlushAttempts(t.Context(), "org-1", buffer)
 	if again != (AttemptFlushResult{}) || len(conn.batches) != 1 {
 		t.Fatalf("a second flush must write nothing, got %+v with %d batches", again, len(conn.batches))
 	}
@@ -207,13 +200,12 @@ func TestFlushAttemptsSwallowsAndCountsAWriteError(t *testing.T) {
 			buffer := NewAttemptBuffer(10)
 			buffer.Add(attemptRow("u"))
 			buffer.Add(attemptRow("v"))
-			var logs bytes.Buffer
-			result := writer.FlushAttempts(t.Context(), "org-1", buffer, slog.New(slog.NewTextHandler(&logs, nil)))
+			result := writer.FlushAttempts(t.Context(), "org-1", buffer)
 			if !result.Failed || result.TableMissing != tc.wantMissing || result.Written != 0 {
 				t.Fatalf("result = %+v", result)
 			}
-			if !strings.Contains(logs.String(), "rows_lost=2") {
-				t.Fatalf("the failed write must be logged with its row count, log: %s", logs.String())
+			if result.Err == nil || !strings.Contains(result.Err.Error(), tc.err.Error()) {
+				t.Fatalf("the cause must be in the result for the caller's log line, got %v", result.Err)
 			}
 		})
 	}
@@ -238,7 +230,7 @@ func TestFlushAttemptsHonoursACancelledContext(t *testing.T) {
 	buffer.Add(attemptRow("u"))
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
-	result := writer.FlushAttempts(ctx, "org-1", buffer, nil)
+	result := writer.FlushAttempts(ctx, "org-1", buffer)
 	if !result.Failed || result.Written != 0 || len(conn.batches) != 0 {
 		t.Fatalf("result = %+v, batches = %d", result, len(conn.batches))
 	}
@@ -247,10 +239,41 @@ func TestFlushAttemptsHonoursACancelledContext(t *testing.T) {
 func TestFlushAttemptsOfNothingWritesNothing(t *testing.T) {
 	conn := &shadowConn{}
 	writer := newShadowWriter(t, conn)
-	if got := writer.FlushAttempts(t.Context(), "org-1", nil, nil); got != (AttemptFlushResult{}) {
+	if got := writer.FlushAttempts(t.Context(), "org-1", nil); got != (AttemptFlushResult{}) {
 		t.Fatalf("nil buffer: %+v", got)
 	}
-	if got := writer.FlushAttempts(t.Context(), "org-1", NewAttemptBuffer(5), nil); got != (AttemptFlushResult{}) || len(conn.batches) != 0 {
+	if got := writer.FlushAttempts(t.Context(), "org-1", NewAttemptBuffer(5)); got != (AttemptFlushResult{}) || len(conn.batches) != 0 {
 		t.Fatalf("empty buffer: %+v, %d batches", got, len(conn.batches))
+	}
+}
+
+// A row with no ComputedAt is 1970 in ClickHouse, and the TTL removes it at the
+// next merge: the sinks refuse it, as they refuse an empty org id.
+func TestSinksRefuseARowWithNoComputedAt(t *testing.T) {
+	conn := &shadowConn{}
+	writer := newShadowWriter(t, conn)
+	good := attemptRow("a")
+	bad := attemptRow("b")
+	bad.ComputedAt = time.Time{}
+	if _, err := writer.WriteAttempts(t.Context(), "org-1", []AttemptRecord{good, bad}); !errors.Is(err, ErrInvalidState) {
+		t.Fatalf("WriteAttempts err = %v, want ErrInvalidState", err)
+	}
+	if _, err := writer.WriteShadowInvestments(t.Context(), "org-1", []ShadowRecord{{WorkUnitID: "a", ComputedAt: time.Unix(1, 0)}, {WorkUnitID: "b"}}); !errors.Is(err, ErrInvalidState) {
+		t.Fatalf("WriteShadowInvestments err = %v, want ErrInvalidState", err)
+	}
+	if len(conn.batches) != 0 {
+		t.Fatalf("a refused write must prepare no batch, got %d", len(conn.batches))
+	}
+}
+
+func TestAttemptBufferRefusesAZeroComputedAtAndCountsIt(t *testing.T) {
+	buffer := NewAttemptBuffer(10)
+	bad := attemptRow("b")
+	bad.ComputedAt = time.Time{}
+	if buffer.Add(bad) || !buffer.Add(attemptRow("a")) {
+		t.Fatal("a zero ComputedAt must be refused and a good row kept")
+	}
+	if buffer.Len() != 1 || buffer.Dropped() != 1 {
+		t.Fatalf("len %d dropped %d, want 1 and 1", buffer.Len(), buffer.Dropped())
 	}
 }

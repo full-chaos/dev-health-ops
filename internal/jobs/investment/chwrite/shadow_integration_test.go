@@ -6,8 +6,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
-	"log/slog"
 	"reflect"
 	"strings"
 	"testing"
@@ -70,7 +68,7 @@ func TestShadowTablesHaveTheDesignedShapeAndMigrationsAreRerunnable(t *testing.T
 		columns                    []string
 	}{
 		{"work_unit_investment_shadow", "org_id, work_unit_id, categorization_input_hash, shadow_config", "toIntervalDay(90)", shadowColumns},
-		{"llm_categorization_attempts", "org_id, run_id, work_unit_id, role, attempt", "toIntervalDay(400)", attemptColumns},
+		{"llm_categorization_attempts", "org_id, run_id, work_unit_id, role, config, kind, attempt", "toIntervalDay(400)", attemptColumns},
 	} {
 		var engine, sortingKey, engineFull string
 		if err := conn.QueryRow(ctx,
@@ -224,18 +222,17 @@ func TestAttemptRowsFlushAndTheReaderDedupsBeforeItSums(t *testing.T) {
 			buffer.Add(row)
 		}
 	}
-	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 
 	buffer := NewAttemptBuffer(5)
 	fill(buffer, 8)
-	result := writer.FlushAttempts(ctx, testOrgID, buffer, logger)
+	result := writer.FlushAttempts(ctx, testOrgID, buffer)
 	if result != (AttemptFlushResult{Written: 5, Dropped: 3}) {
 		t.Fatalf("result = %+v", result)
 	}
 	// The same rows again: an unmerged duplicate batch.
 	buffer = NewAttemptBuffer(5)
 	fill(buffer, 5)
-	if result := writer.FlushAttempts(ctx, testOrgID, buffer, logger); result.Written != 5 {
+	if result := writer.FlushAttempts(ctx, testOrgID, buffer); result.Written != 5 {
 		t.Fatalf("second flush = %+v", result)
 	}
 
@@ -266,7 +263,7 @@ func TestFlushAttemptsOnAMissingTableIsSwallowedAndFlagged(t *testing.T) {
 	}
 	buffer := NewAttemptBuffer(5)
 	buffer.Add(attemptRow("wu-1"))
-	result := writer.FlushAttempts(ctx, testOrgID, buffer, nil)
+	result := writer.FlushAttempts(ctx, testOrgID, buffer)
 	if !result.Failed || !result.TableMissing || result.Written != 0 {
 		t.Fatalf("result = %+v", result)
 	}
@@ -276,7 +273,80 @@ func TestFlushAttemptsOnAMissingTableIsSwallowedAndFlagged(t *testing.T) {
 	if err := conn.Exec(ctx, "DROP TABLE work_unit_investment_shadow"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := writer.WriteShadowInvestments(ctx, testOrgID, []ShadowRecord{{WorkUnitID: "a"}}); !errors.Is(err, ErrShadowTableMissing) {
+	if _, err := writer.WriteShadowInvestments(ctx, testOrgID, []ShadowRecord{{WorkUnitID: "a", ComputedAt: time.Now()}}); !errors.Is(err, ErrShadowTableMissing) {
 		t.Fatalf("WriteShadowInvestments on a missing table: %v, want ErrShadowTableMissing", err)
+	}
+}
+
+// Two attempts that differ in config or in kind are two attempts. After a forced
+// merge only an exact repeat of one row (the same batch inserted two times) may
+// collapse into one. The sorting key is the identity the merge dedups on, so a
+// key that lacks config or kind would silently delete one of the two rows.
+func TestAttemptsThatDifferByConfigOrKindDoNotCollapseAfterAMerge(t *testing.T) {
+	writer, conn, ctx := newTestWriter(t)
+	at := time.Date(2026, 10, 7, 12, 0, 0, 0, time.UTC)
+	base := attemptRow("wu-1")
+	base.ComputedAt, base.Config, base.Kind = at, "cfg-a", "first"
+	otherConfig := base
+	otherConfig.Config = "cfg-b"
+	otherKind := base
+	otherKind.Kind = "repair"
+	otherRole := base
+	otherRole.Role = RoleFallback
+	nextAttempt := base
+	nextAttempt.Attempt = 2
+
+	if n, err := writer.WriteAttempts(ctx, testOrgID, []AttemptRecord{base, otherConfig, otherKind, otherRole, nextAttempt}); err != nil || n != 5 {
+		t.Fatalf("write: %d, %v", n, err)
+	}
+	// The same batch again: an exact repeat that the merge MAY collapse.
+	if _, err := writer.WriteAttempts(ctx, testOrgID, []AttemptRecord{base, otherConfig, otherKind, otherRole, nextAttempt}); err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.Exec(ctx, "OPTIMIZE TABLE llm_categorization_attempts FINAL"); err != nil {
+		t.Fatal(err)
+	}
+	if got := scanUint64(t, ctx, conn, `SELECT count() FROM llm_categorization_attempts WHERE org_id = ?`, testOrgID); got != 5 {
+		t.Fatalf("%d rows after a forced merge, want 5: five distinct attempts (config, kind, role and attempt each differ once) written twice must leave exactly five", got)
+	}
+	for _, config := range []string{"cfg-a", "cfg-b"} {
+		if got := scanUint64(t, ctx, conn, `SELECT count() FROM llm_categorization_attempts WHERE org_id = ? AND config = ? AND kind = 'first' AND role = 'shadow' AND attempt = 1`, testOrgID, config); got != 1 {
+			t.Fatalf("config %s: %d rows for the same run, unit, role, kind and attempt, want 1", config, got)
+		}
+	}
+}
+
+// Rows of two organizations that share every key value stay apart through a
+// forced merge, in both tables, and each organization reads its own values.
+func TestShadowAndAttemptRowsOfTwoOrganizationsSurviveAForcedMerge(t *testing.T) {
+	writer, conn, ctx := newTestWriter(t)
+	const otherOrg = "44444444-4444-4444-8444-444444444444"
+	at := time.Date(2026, 10, 7, 12, 0, 0, 0, time.UTC)
+	for i, org := range []string{testOrgID, otherOrg} {
+		attempt := attemptRow("wu-1")
+		attempt.ComputedAt, attempt.Config, attempt.BilledCostUSD = at, "cfg", float64(i+1)
+		if _, err := writer.WriteAttempts(ctx, org, []AttemptRecord{attempt}); err != nil {
+			t.Fatal(err)
+		}
+		shadow := ShadowRecord{WorkUnitID: "wu-1", InputHash: "h", ShadowConfig: "cfg", State: fmt.Sprintf("state-%d", i), ComputedAt: at}
+		if _, err := writer.WriteShadowInvestments(ctx, org, []ShadowRecord{shadow}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, table := range []string{"llm_categorization_attempts", "work_unit_investment_shadow"} {
+		if err := conn.Exec(ctx, "OPTIMIZE TABLE "+table+" FINAL"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for i, org := range []string{testOrgID, otherOrg} {
+		if got := scanUint64(t, ctx, conn, `SELECT count() FROM llm_categorization_attempts WHERE org_id = ?`, org); got != 1 {
+			t.Fatalf("org %d: %d attempt rows, want 1", i, got)
+		}
+		if got := scanString(t, ctx, conn, `SELECT toString(billed_cost_usd) FROM llm_categorization_attempts WHERE org_id = ?`, org); got != fmt.Sprint(i+1) {
+			t.Fatalf("org %d reads cost %q, want its own %d", i, got, i+1)
+		}
+		if got := scanString(t, ctx, conn, `SELECT state FROM work_unit_investment_shadow WHERE org_id = ?`, org); got != fmt.Sprintf("state-%d", i) {
+			t.Fatalf("org %d reads shadow state %q, want its own", i, got)
+		}
 	}
 }

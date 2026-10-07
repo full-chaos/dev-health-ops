@@ -18,8 +18,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
-	"log/slog"
 	"strings"
 	"sync"
 	"time"
@@ -61,7 +59,9 @@ const (
 // not look like a mix.
 //
 // There is no text field for a prompt, a response or a quote either: the
-// evidence is a span id, a handle and a source id.
+// evidence is a span id, a handle and a source id. Warnings, ErrorCodes,
+// EvidenceHandle and ModelReturned are free String columns, so the caller must
+// put closed codes and ids there, never text taken from a response.
 type ShadowRecord struct {
 	WorkUnitID string
 	// InputHash is categorization_input_hash of the bundle that was asked.
@@ -116,6 +116,11 @@ func (w *Writer) WriteShadowInvestments(ctx context.Context, orgID string, recor
 	if len(records) == 0 {
 		return 0, nil
 	}
+	for i, record := range records {
+		if record.ComputedAt.IsZero() {
+			return 0, fmt.Errorf("%w: work_unit_investment_shadow row %d has no ComputedAt (a zero time is 1970 and the TTL would delete the row)", ErrInvalidState, i)
+		}
+	}
 	batch, err := w.conn.PrepareBatch(ctx, `INSERT INTO work_unit_investment_shadow (
 		org_id, work_unit_id, categorization_input_hash, shadow_config, rubric_sha256,
 		model_returned, state, categorization_status, complete_strict,
@@ -162,7 +167,13 @@ func (w *Writer) WriteShadowInvestments(ctx context.Context, orgID string, recor
 }
 
 // AttemptRecord is one llm_categorization_attempts row. Scalars only: no
-// prompt, no response and no source text.
+// prompt, no response and no source text. ModelReturned, ErrorClass, State,
+// RequestID and Config are free String columns, so the caller must put closed
+// codes and ids there, never text taken from a response.
+//
+// A row is identified by (RunID, WorkUnitID, Role, Config, Kind, Attempt): that
+// is the sorting key, and a ReplacingMergeTree merge keeps one row for each such
+// identity. Two attempts that differ in any of those six fields stay two rows.
 type AttemptRecord struct {
 	RunID        string
 	WorkUnitID   string
@@ -208,6 +219,11 @@ func (w *Writer) WriteAttempts(ctx context.Context, orgID string, records []Atte
 	}
 	if len(records) == 0 {
 		return 0, nil
+	}
+	for i, record := range records {
+		if record.ComputedAt.IsZero() {
+			return 0, fmt.Errorf("%w: llm_categorization_attempts row %d has no ComputedAt (a zero time is 1970 and the TTL would delete the row)", ErrInvalidState, i)
+		}
 	}
 	batch, err := w.conn.PrepareBatch(ctx, `INSERT INTO llm_categorization_attempts (
 		org_id, run_id, work_unit_id, role, config, rubric_sha256, provider, api_mode,
@@ -255,12 +271,13 @@ func NewAttemptBuffer(limit int) *AttemptBuffer {
 	return &AttemptBuffer{limit: limit}
 }
 
-// Add stores one row and reports whether it was stored. At the cap it counts
-// the row as dropped and returns false.
+// Add stores one row and reports whether it was stored. At the cap, or for a
+// row with no ComputedAt (a zero time is 1970 and the TTL would delete it), it
+// counts the row as dropped and returns false.
 func (b *AttemptBuffer) Add(record AttemptRecord) bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if len(b.rows) >= b.limit {
+	if record.ComputedAt.IsZero() || len(b.rows) >= b.limit {
 		b.dropped++
 		return false
 	}
@@ -275,7 +292,8 @@ func (b *AttemptBuffer) Len() int {
 	return len(b.rows)
 }
 
-// Dropped is the number of rows that the cap refused.
+// Dropped is the number of rows that the buffer refused: over the cap, or with
+// no ComputedAt.
 func (b *AttemptBuffer) Dropped() int {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -292,38 +310,35 @@ func (b *AttemptBuffer) drain() ([]AttemptRecord, int) {
 	return rows, dropped
 }
 
-// AttemptFlushResult is what FlushAttempts reports. It never carries an error:
-// a write failure of the attempt rows must not fail a run.
+// AttemptFlushResult is what FlushAttempts reports. FlushAttempts returns no
+// error: a write failure of the attempt rows must not fail a run. The caller
+// (the shadow phase) logs and counts from this value.
 type AttemptFlushResult struct {
 	// Written is the number of rows the insert took.
 	Written int
-	// Dropped is the number of rows the buffer cap refused.
+	// Dropped is the number of rows the buffer refused (over the cap, or with no
+	// ComputedAt).
 	Dropped int
 	// Failed is true when the insert failed. Those rows are lost, not retried.
 	Failed bool
 	// TableMissing is true when the insert failed because migration 110 is not
 	// applied.
 	TableMissing bool
+	// Err is the cause of a failed insert, for the caller's log line. It is data,
+	// not a return value: nil when Failed is false.
+	Err error
 }
 
 // FlushAttempts writes the buffered attempt rows as one batch and empties the
 // buffer. The write has its own AttemptWriteTimeout and honours ctx: a lost
-// lease means "stop writing", so a cancelled ctx writes nothing. A write error
-// is logged and reported in the result, never returned. A nil logger discards
-// the log lines.
-func (w *Writer) FlushAttempts(ctx context.Context, orgID string, buffer *AttemptBuffer, logger *slog.Logger) AttemptFlushResult {
-	if logger == nil {
-		logger = slog.New(slog.NewTextHandler(io.Discard, nil))
-	}
+// lease means "stop writing", so a cancelled ctx writes nothing. It logs
+// nothing and returns no error: the result carries the counts and the cause.
+func (w *Writer) FlushAttempts(ctx context.Context, orgID string, buffer *AttemptBuffer) AttemptFlushResult {
 	if buffer == nil {
 		return AttemptFlushResult{}
 	}
 	rows, dropped := buffer.drain()
 	result := AttemptFlushResult{Dropped: dropped}
-	if dropped > 0 {
-		logger.Warn("investment shadow attempt rows dropped over the buffer cap",
-			slog.Int("rows_dropped", dropped), slog.Int("rows_kept", len(rows)))
-	}
 	if len(rows) == 0 {
 		return result
 	}
@@ -333,10 +348,7 @@ func (w *Writer) FlushAttempts(ctx context.Context, orgID string, buffer *Attemp
 	if err != nil {
 		result.Failed = true
 		result.TableMissing = errors.Is(err, ErrShadowTableMissing)
-		logger.Warn("investment shadow attempt write failed",
-			slog.Int("rows_lost", len(rows)),
-			slog.Bool("table_missing", result.TableMissing),
-			slog.String("error", err.Error()))
+		result.Err = err
 		return result
 	}
 	result.Written = written

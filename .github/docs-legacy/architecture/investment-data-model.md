@@ -100,7 +100,7 @@ you sum.
 | Table | Migration | Sort key | Retention | One row for |
 | ----- | --------- | -------- | --------- | ----------- |
 | `work_unit_investment_shadow` | `109_work_unit_investment_shadow.sql` | `(org_id, work_unit_id, categorization_input_hash, shadow_config)` | 90 days | one shadow classification of a WorkUnit. `theme_distribution_json` is always the roll-up of `subcategory_distribution_json`. A failure state has empty maps. No text column. |
-| `llm_categorization_attempts` | `110_llm_categorization_attempts.sql` | `(org_id, run_id, work_unit_id, role, attempt)` | 400 days | one HTTP attempt. Scalars only: tokens, cost, latency, state, request id. `role = 'shadow'` is the only role written today. |
+| `llm_categorization_attempts` | `110_llm_categorization_attempts.sql` | `(org_id, run_id, work_unit_id, role, config, kind, attempt)` | 400 days | one HTTP attempt. Scalars only: tokens, cost, latency, state, request id. `role = 'shadow'` is the only role written today. |
 
 Shadow usage is not written to `llm_token_usage` (the org spend reader would count it as a
 cost the org paid). Both tables carry `org_id`, so org deletion purges them.

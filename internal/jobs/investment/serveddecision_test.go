@@ -146,9 +146,9 @@ func TestAServedZeroSupportRowIsTheTopRawKeyWithTheLowQualityMark(t *testing.T) 
 	if reflect.DeepEqual(outcome.Subcategories, categorize.FallbackOutcome("").Subcategories) {
 		t.Error("the mix is the neutral prior")
 	}
-	wantErrors := []string{servedLowQualityStatus(), "decision_zero_support", servedTopRawKeyCode}
-	if outcome.Status != servedLowQualityStatus() || !reflect.DeepEqual(outcome.Errors, wantErrors) {
-		t.Errorf("status %q errors %v, want %q %v", outcome.Status, outcome.Errors, servedLowQualityStatus(), wantErrors)
+	wantErrors := []string{servedLowQualityStatus, "decision_zero_support", servedTopRawKeyCode}
+	if outcome.Status != servedLowQualityStatus || !reflect.DeepEqual(outcome.Errors, wantErrors) {
+		t.Errorf("status %q errors %v, want %q %v", outcome.Status, outcome.Errors, servedLowQualityStatus, wantErrors)
 	}
 	if len(outcome.EvidenceQuotes) != 0 {
 		t.Errorf("%d quotes on a zero-support row", len(outcome.EvidenceQuotes))
@@ -184,8 +184,8 @@ func TestAServedEvidenceNoneRowIsTheLevelMixWithTheLowQualityMark(t *testing.T) 
 	if !reflect.DeepEqual(outcome.Subcategories, want) {
 		t.Errorf("mix = %v, want the level mix %v", outcome.Subcategories, want)
 	}
-	wantErrors := []string{servedLowQualityStatus(), "decision_evidence_none", servedLevelMixCode}
-	if outcome.Status != servedLowQualityStatus() || !reflect.DeepEqual(outcome.Errors, wantErrors) {
+	wantErrors := []string{servedLowQualityStatus, "decision_evidence_none", servedLevelMixCode}
+	if outcome.Status != servedLowQualityStatus || !reflect.DeepEqual(outcome.Errors, wantErrors) {
 		t.Errorf("status %q errors %v", outcome.Status, outcome.Errors)
 	}
 	if len(outcome.EvidenceQuotes) != 0 || !served.isLowQuality(entry.index) || served.keepsLastRow(entry.index) {

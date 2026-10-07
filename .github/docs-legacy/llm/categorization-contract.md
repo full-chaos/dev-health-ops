@@ -123,7 +123,7 @@ Every run records a `categorization_status`:
 |--------|---------|
 | `ok` | Validated on the first attempt |
 | `repaired` | Validated after the single repair re-prompt |
-| `invalid_llm_output` | Still invalid after repair → deterministic fallback applied |
+| `invalid_llm_output` | Still invalid after repair → deterministic fallback applied. In served decision mode (CHAOS-8874) also: a mix of the decision backend with **no validated evidence quote** (zero support: the top raw-probability category; evidence none: the support-level mix), not the fallback prior; see the note below |
 | `insufficient_evidence` | Too little text to call the LLM → fallback |
 | `no_text_sources` | No usable source text → fallback |
 | `llm_task_failed` | The async LLM task raised before an outcome was recorded → fallback |

@@ -92,6 +92,7 @@ func TestTheWorkersInvestmentExecutorServesFromTheDecisionBackendWithOnlyItsOwnS
 	for _, tc := range []struct {
 		name         string
 		env          map[string]string
+		modelRef     string
 		wantErr      bool
 		wantSends    int
 		wantDecision uint64 // served rows with the decision stamp
@@ -105,6 +106,9 @@ func TestTheWorkersInvestmentExecutorServesFromTheDecisionBackendWithOnlyItsOwnS
 		{name: "LLM_PROVIDER=typesafe", env: map[string]string{
 			"LLM_PROVIDER": "typesafe", "TYPESAFE_API_KEY": key,
 		}, wantSends: 1, wantDecision: 1},
+		{name: "LLM_PROVIDER=typesafe with a model_ref: the requested model runs and is stamped", env: map[string]string{
+			"LLM_PROVIDER": "typesafe", "TYPESAFE_API_KEY": key,
+		}, modelRef: "jev-1.14.0", wantSends: 1, wantDecision: 1},
 		{name: "LLM_PROVIDER=typesafe with the shadow switch on: one request, no shadow row", env: map[string]string{
 			"LLM_PROVIDER": "typesafe", "TYPESAFE_API_KEY": key,
 			investment.EnvShadowProvider: "typesafe", investment.EnvShadowOrgIDs: "*",
@@ -138,7 +142,9 @@ func TestTheWorkersInvestmentExecutorServesFromTheDecisionBackendWithOnlyItsOwnS
 			recorder := &systemOneRecorder{}
 			executor.SetShadowHTTPClientForTest(&http.Client{Transport: recorder})
 
-			_, err = executor.Execute(ctx, claim)
+			runClaim := claim
+			runClaim.Request.ModelRef = tc.modelRef
+			_, err = executor.Execute(ctx, runClaim)
 			if tc.wantErr {
 				var deterministic *workgraph.DeterministicError
 				if !errors.As(err, &deterministic) || deterministic.Class != workgraph.ClassLLMProviderInvalid {
@@ -158,13 +164,17 @@ func TestTheWorkersInvestmentExecutorServesFromTheDecisionBackendWithOnlyItsOwnS
 			if recorder.count() != tc.wantSends {
 				t.Fatalf("sends = %d, want %d\n%s", recorder.count(), tc.wantSends, logs.String())
 			}
-			decisionRows := count(`SELECT count() FROM work_unit_investments WHERE categorization_model_version LIKE 'provider=typesafe;api=systemone;model=jev-1.13.0;%' AND categorization_status = 'ok'`)
+			model := "jev-1.13.0"
+			if tc.modelRef != "" {
+				model = tc.modelRef
+			}
+			decisionRows := count(`SELECT count() FROM work_unit_investments WHERE categorization_model_version LIKE 'provider=typesafe;api=systemone;model=` + model + `;%' AND categorization_status = 'ok'`)
 			mockRows := count(`SELECT count() FROM work_unit_investments WHERE categorization_model_version LIKE 'provider=mock;%'`)
 			if decisionRows != tc.wantDecision || mockRows != tc.wantMock {
 				t.Fatalf("served rows: %d with the decision stamp, %d with the mock stamp; want %d and %d\n%s", decisionRows, mockRows, tc.wantDecision, tc.wantMock, logs.String())
 			}
 			servedAttempts := count(`SELECT count() FROM llm_categorization_attempts WHERE role = 'served'`)
-			usage := count(`SELECT count() FROM llm_token_usage WHERE provider = 'typesafe' AND model = 'jev-1.13.0' AND input_tokens = 1200 AND calls = 1`)
+			usage := count(`SELECT count() FROM llm_token_usage WHERE provider = 'typesafe' AND model = '` + model + `' AND input_tokens = 1200 AND calls = 1`)
 			shadowRows := count(`SELECT count() FROM work_unit_investment_shadow`)
 			if tc.wantDecision == 0 {
 				if servedAttempts != 0 || usage != 0 || strings.Contains(logs.String(), "served decision") {

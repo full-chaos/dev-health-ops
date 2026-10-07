@@ -10,8 +10,7 @@ package investment
 // the one served path. There is no setting of its own: setting the provider
 // back is the rollback. The shadow phase does not run in such a run.
 //
-// What a served decision row is, by state (servedLowQualityStatus is the one
-// place of a choice that still waits for a ruling):
+// What a served decision row is, by state (all ruled by chris, 2026-10-07):
 //
 //   - ok: the validated mix, its one cited quote, status ok.
 //   - zero_support: the top raw key at 1.0, no quote, servedLowQualityStatus,
@@ -63,9 +62,10 @@ const (
 )
 
 // servedLowQualityStatus is the status of a served zero_support or
-// evidence_none row. RULING 1 (provisional): invalid_llm_output. Such a row is
-// not reused by skip-existing, so the unit is asked again by the next run.
-func servedLowQualityStatus() string { return categorize.StatusInvalidLLMOutput }
+// evidence_none row (ruled): the existing invalid_llm_output, with its 0.3
+// cap. Such a row is not reused by skip-existing, so the unit is asked again
+// by the next run.
+const servedLowQualityStatus = categorize.StatusInvalidLLMOutput
 
 // servedClassifier is the decision completer as the served mode uses it.
 type servedClassifier interface {
@@ -291,9 +291,9 @@ func servedDetails(errorCodes []string) []string {
 // servedLowQualityOutcome is the outcome of a served row with a mix of the
 // model and no validated evidence quote.
 func servedLowQualityOutcome(mix map[string]float64, state, code string, warnings []string) categorize.CategorizationOutcome {
-	outcome := categorize.FallbackOutcome(servedLowQualityStatus())
+	outcome := categorize.FallbackOutcome(servedLowQualityStatus)
 	outcome.Subcategories = mix
-	outcome.Errors = []string{servedLowQualityStatus(), "decision_" + state, code}
+	outcome.Errors = []string{servedLowQualityStatus, "decision_" + state, code}
 	outcome.Warnings = warnings
 	return outcome
 }

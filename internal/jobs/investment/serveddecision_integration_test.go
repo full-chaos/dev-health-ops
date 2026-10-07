@@ -142,8 +142,8 @@ func TestAServedDecisionRunWritesTheContractRowsForEachState(t *testing.T) {
 		lowQuality              bool
 	}{
 		{"A1", categorize.StatusOK, "", bugfixMix, 1, false},
-		{"B1", servedLowQualityStatus(), "decision_zero_support", categorize.EnsureFullSubcategoryVector(map[string]float64{"quality.testing": 1}), 0, true},
-		{"C1", servedLowQualityStatus(), "decision_evidence_none", bugfixMix, 0, true},
+		{"B1", servedLowQualityStatus, "decision_zero_support", categorize.EnsureFullSubcategoryVector(map[string]float64{"quality.testing": 1}), 0, true},
+		{"C1", servedLowQualityStatus, "decision_evidence_none", bugfixMix, 0, true},
 		{"D1", categorize.StatusInsufficientChars, "insufficient_evidence", categorize.FallbackOutcome("").Subcategories, 0, false},
 	} {
 		row, ok := h.latestServedRow(t, want.issue)

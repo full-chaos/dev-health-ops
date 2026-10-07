@@ -309,6 +309,10 @@ func (h *handlers) listSyncConfigs(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, r, "credential_ids", err)
 		return
 	}
+	if err := deriveShownTargets(ctx, h.store.enabledDatasetKeys, org, configs...); err != nil {
+		h.fail(w, r, "enabled_datasets", err)
+		return
+	}
 	list := make([]pyjson.Value, 0, len(configs))
 	for _, config := range configs {
 		var childrenCount pyjson.Value
@@ -382,6 +386,10 @@ func (h *handlers) getSyncConfig(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, r, "credential_id", err)
 		return
 	}
+	if err := deriveShownTargets(r.Context(), h.store.enabledDatasetKeys, orgID(r), config); err != nil {
+		h.fail(w, r, "enabled_datasets", err)
+		return
+	}
 	body, err := syncConfigResponse(config, nil, credentialID)
 	if err != nil {
 		h.fail(w, r, "render_config", err)
@@ -396,8 +404,12 @@ func syncConfigResponse(config *syncConfig, childrenCount pyjson.Value, credenti
 	if err != nil {
 		return nil, err
 	}
-	targets, err := pyStringList(targetsValue)
-	if err != nil {
+	var targets []pyjson.Value
+	if config.shownTargetsSet {
+		// The dataset rows own this config's selection: the list is the one
+		// the enabled rows show, not the stored column (CHAOS-8816).
+		targets = stringValues(config.shownTargets)
+	} else if targets, err = pyStringList(targetsValue); err != nil {
 		return nil, err
 	}
 	optionsValue, err := decodeStored(config.SyncOptions)

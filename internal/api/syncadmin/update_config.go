@@ -110,6 +110,10 @@ func (h *handlers) updateSyncConfig(w http.ResponseWriter, r *http.Request) {
 		h.answerOrFail(w, r, "update_sync_config", err)
 		return
 	}
+	// The transaction is committed: only now did the rows change.
+	if result.rowsChanged != nil {
+		result.rowsChanged(ctx)
+	}
 	if result.discover {
 		h.discoverIntegrationSources(ctx, org, *result.config.IntegrationID, "jira_project_discovery_on_update",
 			"config_id", r.PathValue("config_id"))
@@ -132,6 +136,10 @@ var errConfigNotFound = errors.New("sync configuration not found")
 type updatedConfig struct {
 	config   *syncConfig
 	discover bool
+	// rowsChanged counts and logs the dataset rows the save switched. The
+	// caller runs it after the commit, never before: a save that is refused
+	// later rolls its row writes back.
+	rowsChanged func(context.Context)
 }
 
 func (h *handlers) updateSyncConfigTx(ctx context.Context, tx pgx.Tx, org string, id uuid.UUID, in syncConfigUpdate) (*updatedConfig, error) {
@@ -152,13 +160,68 @@ func (h *handlers) updateSyncConfigTx(ctx context.Context, tx pgx.Tx, org string
 		return nil, err
 	}
 
+	// The canonical-incident gate reads every target the save stores, or the
+	// stored list when the body carries none. When the rows own the selection
+	// the save stores the submitted targets that were stored before or that
+	// it adds to the list the server shows now (change.stored): a gated
+	// target that is in the submitted list only because its row is on is not
+	// stored and does not refuse the save. The selection lock is taken here,
+	// before the rows are read, and held to the end of the transaction.
+	rowsOwn := rowsOwnSelection(config)
+	var change selectionChange
+	// newStored is the list this save stores; the child cascade writes the
+	// same list to every child.
+	var newStored []string
 	var gateTargets []pyjson.Value
-	if in.syncTargetsSet {
-		for _, target := range in.syncTargets {
-			gateTargets = append(gateTargets, target)
+	switch {
+	case rowsOwn && in.syncTargetsSet:
+		if err := selectionLock(ctx, tx, org, *config.IntegrationID); err != nil {
+			return nil, err
 		}
-	} else if gateTargets, err = pyIterate(storedTargetsValue); err != nil {
-		return nil, err
+		// The configuration was read before the lock, so another save of
+		// this integration may have stored a new list since. Read it again
+		// now: every save that computes a change takes the selection lock
+		// first, so the stored list, the rows and the shown list this save
+		// computes its change from are the ones it changes. The read takes
+		// no row lock: the row of the configuration is locked by its UPDATE,
+		// after the rows of the integration, as in a save with no list.
+		// Lock order of a save: the selection lock of the integration, the
+		// rows of the integration, the row of the configuration, then the
+		// rows of its children in id order (cascadeToChildren).
+		config, err = scanSyncConfig(tx.QueryRow(ctx,
+			`SELECT `+syncConfigColumns+` FROM sync_configurations WHERE org_id = $1 AND id = $2`, org, id))
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, errConfigNotFound
+		}
+		if err != nil {
+			return nil, err
+		}
+		if !rowsOwnSelection(config) {
+			return nil, fmt.Errorf("sync configuration %s stopped being a whole-integration configuration during the save", id)
+		}
+		if storedTargetsValue, err = decodeStored(config.SyncTargets); err != nil {
+			return nil, err
+		}
+		if storedOptionsValue, err = decodeStored(config.SyncOptions); err != nil {
+			return nil, err
+		}
+		enabled, err := enabledDatasetKeysByIntegration(ctx, tx, org, []uuid.UUID{*config.IntegrationID})
+		if err != nil {
+			return nil, err
+		}
+		change, err = planSelectionChange(config.Provider, enabled[*config.IntegrationID], storedListItems(storedTargetsValue), in.syncTargets)
+		if err != nil {
+			return nil, err
+		}
+		newStored = change.stored
+		gateTargets = stringValues(newStored)
+	case in.syncTargetsSet:
+		newStored = in.syncTargets
+		gateTargets = stringValues(newStored)
+	default:
+		if gateTargets, err = pyIterate(storedTargetsValue); err != nil {
+			return nil, err
+		}
 	}
 	if err := h.requireCanonicalIncident(ctx, org, gateTargets); err != nil {
 		return nil, err
@@ -209,20 +272,14 @@ func (h *handlers) updateSyncConfigTx(ctx context.Context, tx pgx.Tx, org string
 	}
 
 	now := h.now().UTC()
+	// A config whose rows own its selection writes the rows of the targets
+	// this save changed. Every other config writes no row.
 	newTargets := storedTargetsValue
+	var rowsChanged func(context.Context)
 	if in.syncTargetsSet {
-		list := make([]pyjson.Value, len(in.syncTargets))
-		for index, target := range in.syncTargets {
-			list[index] = target
-		}
-		newTargets = list
-		if config.IntegrationID != nil && config.SourceID == nil {
-			previous, err := pyIterate(storedTargetsValue)
-			if err != nil {
-				return nil, err
-			}
-			if err := reconcileDatasetRowsForSyncTargets(ctx, tx, h.logger, org, *config.IntegrationID, config.Provider,
-				in.syncTargets, previous, config.ID); err != nil {
+		newTargets = stringValues(newStored)
+		if rowsOwn {
+			if rowsChanged, err = saveSelection(ctx, tx, h.logger, org, config, change); err != nil {
 				return nil, err
 			}
 		}
@@ -293,7 +350,7 @@ func (h *handlers) updateSyncConfigTx(ctx context.Context, tx pgx.Tx, org string
 		return nil, err
 	}
 	if config.ParentID == nil {
-		if err := h.cascadeToChildren(ctx, tx, org, config.ID, in, options, cleared, optionsProvided, now); err != nil {
+		if err := h.cascadeToChildren(ctx, tx, org, config.ID, in, newStored, options, cleared, optionsProvided, now); err != nil {
 			return nil, err
 		}
 	}
@@ -305,7 +362,12 @@ func (h *handlers) updateSyncConfigTx(ctx context.Context, tx pgx.Tx, org string
 	if err != nil {
 		return nil, err
 	}
-	return &updatedConfig{config: config, discover: discover}, nil
+	if err := deriveShownTargets(ctx, func(ctx context.Context, org string, ids []uuid.UUID) (map[uuid.UUID][]string, error) {
+		return enabledDatasetKeysByIntegration(ctx, tx, org, ids)
+	}, org, config); err != nil {
+		return nil, err
+	}
+	return &updatedConfig{config: config, discover: discover, rowsChanged: rowsChanged}, nil
 }
 
 func optionalStringValue(value *string) pyjson.Value {
@@ -517,9 +579,14 @@ func updateServicesDatasetMappings(ctx context.Context, tx pgx.Tx, org string, i
 // config whose parent is this one (by parent_id alone, as Python selects
 // them) takes the body's targets and activity, and the schedule keys the
 // body set or cleared; then each child's sync job is upserted.
-func (h *handlers) cascadeToChildren(ctx context.Context, tx pgx.Tx, org string, parentID uuid.UUID, in syncConfigUpdate,
+//
+// The targets a child takes are the list the save stored on the parent
+// (parentStored), never the submitted list: a child's list is its own
+// selection and every reader gates all of it, and the gate of this save read
+// exactly the stored list.
+func (h *handlers) cascadeToChildren(ctx context.Context, tx pgx.Tx, org string, parentID uuid.UUID, in syncConfigUpdate, parentStored []string,
 	options *pyjson.Object, cleared map[string]bool, optionsProvided bool, now time.Time) error {
-	rows, err := tx.Query(ctx, `SELECT `+syncConfigColumns+` FROM sync_configurations WHERE parent_id = $1`, parentID)
+	rows, err := tx.Query(ctx, `SELECT `+syncConfigColumns+` FROM sync_configurations WHERE parent_id = $1 ORDER BY id`, parentID)
 	if err != nil {
 		return fmt.Errorf("read child configs: %w", err)
 	}
@@ -547,11 +614,7 @@ func (h *handlers) cascadeToChildren(ctx context.Context, tx pgx.Tx, org string,
 		}
 		newTargets := storedTargets
 		if in.syncTargetsSet {
-			list := make([]pyjson.Value, len(in.syncTargets))
-			for index, target := range in.syncTargets {
-				list[index] = target
-			}
-			newTargets = list
+			newTargets = stringValues(parentStored)
 		}
 		newActive := child.IsActive
 		if in.isActive != nil {

@@ -111,6 +111,10 @@ func (h *handlers) createSyncConfig(w http.ResponseWriter, r *http.Request) {
 	if jiraConfigMaterializesZeroSources(in.provider, options) {
 		h.discoverJiraProjects(ctx, org, created, options)
 	}
+	if err := deriveShownTargets(ctx, h.store.enabledDatasetKeys, org, created.config); err != nil {
+		h.fail(w, r, "enabled_datasets", err)
+		return
+	}
 	out, err := syncConfigResponse(created.config, nil, created.credentialID)
 	if err != nil {
 		h.fail(w, r, "sync_config_response", err)

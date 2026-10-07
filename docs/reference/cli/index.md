@@ -691,6 +691,8 @@ dho backfill run \
   --before 2024-03-01
 ```
 
+**Which datasets run.** For a configuration that covers a whole integration, the backfill names the datasets that are enabled for that integration (its dataset rows), not the configuration's `sync_targets` list. A dataset that is off, or that has no row, is not backfilled and is not switched on. When the integration has no enabled dataset, the verb refuses the run (exit code 3) and writes nothing; enable a dataset in the connection's synchronization settings first. A configuration pinned to a single source still names the datasets its own `sync_targets` select, and so does a PagerDuty configuration (the platform manages the PagerDuty datasets as one set, so its list must be exactly `operational`).
+
 **Options:**
 
 | Option | Description |

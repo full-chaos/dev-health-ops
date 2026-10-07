@@ -81,7 +81,18 @@ func TestSyncConfigDeleteVenueOracle(t *testing.T) {
 		{Name: "list after", Method: "GET", Path: "/api/v1/admin/sync-configs?include_migrated=true", Headers: a},
 	}
 	python := golden.Python(t, venue, requests)
-	receipt := venueoracle.Diff(t, base, requests, python, venueoracle.DiffOptions{Golden: golden})
+	// Named divergence (see derivedTargets): the list read after the deletes
+	// answers the two whole-integration configs whose integration has no
+	// dataset row with [] where the recorded Python answer echoed ["git"].
+	derived := newDerivedTargets(`[]`, ids.cfgNoSources, ids.cfgCrossOrg)
+	receipt := venueoracle.Diff(t, base, requests, python, venueoracle.DiffOptions{
+		Golden:    golden,
+		Normalize: func(_ venueoracle.Request, body string) string { return derived.normalize(body) },
+		Inspect: func(request venueoracle.Request, goResponse venueoracle.Response) {
+			derived.inspect(t, request.Name, goResponse.Body)
+		},
+	})
+	derived.finish(t)
 	t.Logf("receipt (%d requests):\n%s", len(requests), receipt)
 
 	source, goDB := venue.AdminURI(t, venue.SourceDB), venue.AdminURI(t, venue.GoDB)

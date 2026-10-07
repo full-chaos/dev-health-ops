@@ -3,13 +3,17 @@ package categorize
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"strings"
 	"sync"
@@ -22,7 +26,7 @@ import (
 )
 
 const (
-	tsKey        = "tsk-sentinel-key-0123456789abcdef"
+	tsKey        = "tsk-sentinel?>~key-0123456789abcdef"
 	tsStateText  = "SENTINEL-STATE-TEXT-do-not-log"
 	tsAnswerText = "SENTINEL-ANSWER-TEXT-do-not-log"
 )
@@ -860,5 +864,296 @@ func TestPostSystemOneCancelAndDeadlineAreTheContextError(t *testing.T) {
 	})
 	if _, _, err := h2.client.PostSystemOne(dctx, tsBody); !errors.Is(err, context.DeadlineExceeded) || h2.calls.Load() != 1 {
 		t.Fatalf("err = %v calls=%d", err, h2.calls.Load())
+	}
+}
+
+// ---- Untrusted peer values (GWC vet of 6a40785ce119) ----
+//
+// Every string the peer controls (the request-id header, the returned model,
+// any other header, a usage number) is untrusted: bounded, restricted to a safe
+// charset, and refused whole when it equals or contains the API key (raw,
+// unpadded base64url, hex, any case) before it enters an error, a log attribute
+// or a result field. Every flow runs with two keys: a plain one, whose
+// spellings pass the charset (so only the key guard can stop them), and one
+// with characters the charset refuses.
+
+const plainKey = "tsk-sentinel-key-0123456789abcdef"
+
+var peerKeys = map[string]string{"plain": plainKey, "special": tsKey, "mixed case": "TsK-Sentinel-KEY-0123456789AbCdEf",
+	// Short enough that its hex still fits the 64-byte id bound.
+	"short": "tsk-0123456789abcdefg"}
+
+func withKey(key string) func(*TypeSafeClientConfig) {
+	return func(c *TypeSafeClientConfig) { c.APIKey = secrets.NewHidden(key) }
+}
+
+func keyEchoForms(key string) map[string]string {
+	raw := []byte(key)
+	return map[string]string{
+		"raw":            key,
+		"upper case":     strings.ToUpper(key),
+		"bearer":         "Bearer " + key,
+		"embedded":       "req_" + key + "_tail",
+		"base64url":      base64.RawURLEncoding.EncodeToString(raw),
+		"base64url pad":  base64.URLEncoding.EncodeToString(raw),
+		"base64 std":     base64.StdEncoding.EncodeToString(raw),
+		"hex":            hex.EncodeToString(raw),
+		"upper hex":      strings.ToUpper(hex.EncodeToString(raw)),
+		"percent":        url.QueryEscape(key),
+		"key fragment":   key[:20],
+		"key tail":       key[len(key)-12:],
+		"key head":       key[:12],
+		"key piece 12":   key[5:17],
+		"interleaved":    strings.Join(strings.Split(key, ""), "\""),
+		"stripped chars": "x" + key + "x",
+	}
+}
+
+func assertNoKeyForms(t *testing.T, key, where string, texts ...string) {
+	t.Helper()
+	raw := []byte(key)
+	forms := []string{key, strings.ToUpper(key), base64.StdEncoding.EncodeToString(raw), base64.RawStdEncoding.EncodeToString(raw),
+		base64.URLEncoding.EncodeToString(raw), base64.RawURLEncoding.EncodeToString(raw), hex.EncodeToString(raw),
+		strings.ToUpper(hex.EncodeToString(raw)), url.QueryEscape(key)}
+	for _, text := range texts {
+		for _, form := range forms {
+			if strings.Contains(text, form) {
+				t.Fatalf("%s: the API key (%.6s...) reached %q", where, form, truncateForTest(text))
+			}
+		}
+		if strings.Contains(text, key[:20]) {
+			t.Fatalf("%s: a 20-byte piece of the API key reached %q", where, truncateForTest(text))
+		}
+	}
+}
+
+func truncateForTest(s string) string {
+	if len(s) > 300 {
+		return s[:300] + "..."
+	}
+	return s
+}
+
+// Flow 1: the request-id header, echoed with the bearer token, on a failure and on a success.
+func TestTypeSafeKeyEchoedInTheRequestIDHeaderNeverReachesErrorLogOrResult(t *testing.T) {
+	response := realResponse(t)
+	for keyName, key := range peerKeys {
+		for echoName, echo := range keyEchoForms(key) {
+			for _, status := range []int{200, 422, 401, 529} {
+				t.Run(fmt.Sprintf("%s key/%s/%d", keyName, echoName, status), func(t *testing.T) {
+					h := newTS(t, func(w http.ResponseWriter, _ *http.Request) {
+						w.Header().Set("x-typesafe-request-id", echo)
+						w.WriteHeader(status)
+						if status == 200 {
+							_, _ = w.Write(response)
+						}
+					}, withKey(key))
+					res, err := h.client.SendBody(context.Background(), tsBody)
+					parts := []string{h.logs.String(), res.RequestID, fmt.Sprintf("%+v", res.Attempts), fmt.Sprintf("%v", res.Header)}
+					attempts := res.Attempts
+					rejectedField := false
+					if err != nil {
+						se := mustSystemOneError(t, err)
+						parts = append(parts, err.Error(), unwrapAll(err), se.RequestID, fmt.Sprintf("%+v", se.Attempts))
+						attempts, rejectedField = se.Attempts, se.RequestIDRejected
+					}
+					assertNoKeyForms(t, key, echoName, parts...)
+					if h.logs.Len() == 0 {
+						t.Fatal("nothing was logged: the test measured nothing")
+					}
+					// A refused id is marked, so a caller can count it; the three
+					// echoes that are legal ids (a piece of the key shorter than
+					// nothing else) are covered by the fragment rule.
+					last := attempts[len(attempts)-1]
+					if !last.RequestIDRejected || last.RequestID != "" || (err != nil && !rejectedField) {
+						t.Fatalf("echo %q: attempt = %+v, error flag = %v; want a refused, empty, marked id", echoName, last, rejectedField)
+					}
+				})
+			}
+		}
+	}
+}
+
+// A request id that is merely long or odd is refused, never cut or stripped
+// into a look-alike; a short key is not searched for in ordinary ids.
+func TestTypeSafeRequestIDShapeRules(t *testing.T) {
+	cases := map[string]struct {
+		id       string
+		key      string
+		wantID   string
+		rejected bool
+	}{
+		"plain id":                 {"req_01HZX-abc.9", plainKey, "req_01HZX-abc.9", false},
+		"64 bytes":                 {strings.Repeat("a", 64), plainKey, strings.Repeat("a", 64), false},
+		"65 bytes":                 {strings.Repeat("a", 65), plainKey, "", true},
+		"space":                    {"req 1", plainKey, "", true},
+		"quote and brace":          {"req_1\"}{", plainKey, "", true},
+		"newline":                  {"req_1\nX", plainKey, "", true},
+		"short key is not matched": {"req_a1b2c3_x", "a1b2c3", "req_a1b2c3_x", false},
+		"tiny key spellings":       {"req_6162_x", "ab", "req_6162_x", false},
+		"11-byte piece of a key":   {plainKey[5:16], plainKey, plainKey[5:16], false},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			h := newTS(t, func(w http.ResponseWriter, _ *http.Request) {
+				if strings.ContainsAny(tc.id, "\n") {
+					w.Header()["X-Typesafe-Request-Id"] = []string{tc.id} // bypass canonicalising checks
+				}
+				w.Header().Set("x-typesafe-request-id", tc.id)
+				w.WriteHeader(422)
+			}, withKey(tc.key))
+			_, err := h.client.SendBody(context.Background(), tsBody)
+			se := mustSystemOneError(t, err)
+			if se.RequestID != tc.wantID || se.RequestIDRejected != tc.rejected {
+				t.Fatalf("id=%q rejected=%v, want %q %v", se.RequestID, se.RequestIDRejected, tc.wantID, tc.rejected)
+			}
+		})
+	}
+}
+
+// Flow 2: the returned model. Bounded, safe charset, never the key.
+func TestTypeSafeReturnedModelIsBoundedCheckedAndNeverLogsTheKey(t *testing.T) {
+	for keyName, key := range peerKeys {
+		models := map[string]string{
+			"4 MiB":         strings.Repeat("m", 4<<20-200),
+			"65 bytes":      strings.Repeat("m", 65),
+			"control chars": "jev-1.13.0\n\"injected\":1",
+			"markup":        "jev-1.13.0<script>",
+		}
+		for name, echo := range keyEchoForms(key) {
+			models["key echo: "+name] = "jev-1.13.0-" + echo
+			models["bare key echo: "+name] = echo
+		}
+		for name, model := range models {
+			t.Run(keyName+" key/"+name, func(t *testing.T) {
+				h := newTS(t, func(w http.ResponseWriter, _ *http.Request) {
+					body, _ := json.Marshal(map[string]any{"model": model, "answers": map[string]any{}, "usage": map[string]any{"input_tokens": 3, "output_tokens": 1}})
+					_, _ = w.Write(body)
+				}, withKey(key))
+				res, err := h.client.SendBody(context.Background(), tsBody)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if res.Model != "" || !res.ModelRejected {
+					t.Fatalf("a refused model must come back empty and marked (so it is not taken for an absent one): %.60q rejected=%v", res.Model, res.ModelRejected)
+				}
+				if h.logs.Len() > 8<<10 {
+					t.Fatalf("one exchange wrote %d bytes of log; a peer value is unbounded in a log field", h.logs.Len())
+				}
+				assertNoKeyForms(t, key, name, h.logs.String(), res.Model)
+				if strings.ContainsAny(h.logs.String(), "<>") || strings.Contains(h.logs.String(), `injected`) {
+					t.Fatalf("peer text reached the log: %s", truncateForTest(h.logs.String()))
+				}
+				if !strings.Contains(h.logs.String(), "returned model refused") {
+					t.Fatalf("a refused model is not loud: %s", truncateForTest(h.logs.String()))
+				}
+			})
+		}
+	}
+	t.Run("a good model passes unchanged and is logged", func(t *testing.T) {
+		h := newTS(t, func(w http.ResponseWriter, _ *http.Request) {
+			_, _ = w.Write([]byte(`{"model":"jev-1.13.0-20261001","answers":{},"usage":{"input_tokens":3}}`))
+		})
+		res, err := h.client.SendBody(context.Background(), tsBody)
+		if err != nil || res.Model != "jev-1.13.0-20261001" || res.ModelRejected {
+			t.Fatalf("model=%q rejected=%v err=%v", res.Model, res.ModelRejected, err)
+		}
+		if !strings.Contains(h.logs.String(), `"returned_model":"jev-1.13.0-20261001"`) {
+			t.Fatalf("returned model not in the debug line: %s", h.logs.String())
+		}
+	})
+	t.Run("absent and null and empty are not rejections", func(t *testing.T) {
+		for _, body := range []string{`{"answers":{}}`, `{"model":null,"answers":{}}`, `{"model":"","answers":{}}`} {
+			h := newTS(t, func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte(body)) })
+			res, err := h.client.SendBody(context.Background(), tsBody)
+			if err != nil || res.Model != "" || res.ModelRejected {
+				t.Fatalf("%s: model=%q rejected=%v err=%v", body, res.Model, res.ModelRejected, err)
+			}
+		}
+	})
+	t.Run("a model of the wrong JSON type is rejected, not a decode failure", func(t *testing.T) {
+		h := newTS(t, func(w http.ResponseWriter, _ *http.Request) {
+			_, _ = w.Write([]byte(`{"model":{"x":1},"answers":{},"usage":{"input_tokens":3}}`))
+		})
+		res, err := h.client.SendBody(context.Background(), tsBody)
+		if err != nil || res.Model != "" || !res.ModelRejected || !res.Usage.Reported {
+			t.Fatalf("model=%q rejected=%v usage=%+v err=%v", res.Model, res.ModelRejected, res.Usage, err)
+		}
+	})
+}
+
+// Flow 3: usage numbers. A negative, absurd or non-numeric value is "not reported".
+func TestTypeSafeUsageOutOfRangeIsNotReported(t *testing.T) {
+	for name, usage := range map[string]string{
+		"negative input":  `{"input_tokens":-5,"output_tokens":1}`,
+		"huge input":      `{"input_tokens":9007199254740993,"output_tokens":1}`,
+		"above the bound": `{"input_tokens":1000000000,"output_tokens":1}`,
+		"bound plus one":  `{"input_tokens":16777217,"output_tokens":1}`,
+		"string input":    `{"input_tokens":"12","output_tokens":1}`,
+		"fractional":      `{"input_tokens":1.5,"output_tokens":1}`,
+		"overflowing":     `{"input_tokens":99999999999999999999999,"output_tokens":1}`,
+		"negative output": `{"input_tokens":5,"output_tokens":-1}`,
+		"huge output":     `{"input_tokens":5,"output_tokens":1000000000}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := newTS(t, func(w http.ResponseWriter, _ *http.Request) {
+				_, _ = w.Write([]byte(`{"model":"jev-1.13.0","answers":{},"usage":` + usage + `}`))
+			})
+			res, err := h.client.SendBody(context.Background(), tsBody)
+			if err != nil {
+				t.Fatalf("a bad usage number must not fail the exchange: %v", err)
+			}
+			if res.Usage.Reported || res.Usage.InputTokens != 0 || res.Usage.OutputTokens != 0 {
+				t.Fatalf("usage = %+v, want not reported", res.Usage)
+			}
+			if !strings.Contains(h.logs.String(), `"level":"WARN"`) || !strings.Contains(h.logs.String(), "usage out of range") || !res.Usage.Rejected {
+				t.Fatalf("an out-of-range usage is not loud or not marked: %s", h.logs.String())
+			}
+		})
+	}
+	h := newTS(t, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"model":"jev-1.13.0","answers":{},"usage":{"input_tokens":16777216,"output_tokens":0}}`))
+	})
+	if res, _ := h.client.SendBody(context.Background(), tsBody); !res.Usage.Reported || res.Usage.InputTokens != 16777216 {
+		t.Fatalf("a value at the bound must pass: %+v", res.Usage)
+	}
+}
+
+// Flow 4: other response headers. The header handed to the caller holds the
+// sanitized request id and nothing else; the status error keeps only Retry-After.
+func TestTypeSafeOtherPeerHeadersNeverFlowOut(t *testing.T) {
+	response := realResponse(t)
+	hostile := func(w http.ResponseWriter, status int) {
+		for _, name := range []string{"Server", "X-Echo", "Set-Cookie", "Www-Authenticate", "Location", "X-Request-Id", "Authorization"} {
+			w.Header().Set(name, "echo "+tsKey)
+		}
+		w.Header().Set("Retry-After", "1")
+		w.Header().Set("X-Typesafe-Request-Id", "req_ok-1")
+		w.WriteHeader(status)
+	}
+	h := newTS(t, func(w http.ResponseWriter, _ *http.Request) { hostile(w, 200); _, _ = w.Write(response) })
+	_, header, err := h.client.PostSystemOne(context.Background(), tsBody)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(header) != 1 || header.Get("X-Typesafe-Request-Id") != "req_ok-1" {
+		t.Fatalf("header handed to the caller = %v, want only the sanitized request id", header)
+	}
+	h2 := newTS(t, func(w http.ResponseWriter, _ *http.Request) { hostile(w, 429) })
+	_, _, err = h2.client.PostSystemOne(context.Background(), tsBody)
+	for cur := err; cur != nil; cur = errors.Unwrap(cur) {
+		var hs *httpStatusError
+		if errors.As(cur, &hs) {
+			for name, values := range hs.header {
+				if http.CanonicalHeaderKey(name) != "Retry-After" {
+					t.Fatalf("the error chain keeps peer header %q = %v", name, values)
+				}
+			}
+			assertNoKeyForms(t, tsKey, "status error", fmt.Sprintf("%v", hs.header), hs.body)
+		}
+	}
+	assertNoKeyForms(t, tsKey, "logs", h.logs.String(), h2.logs.String(), fmt.Sprintf("%v", err), unwrapAll(err))
+	if len(*h2.delays) != 1 || (*h2.delays)[0] != time.Second {
+		t.Fatalf("Retry-After must still be honoured: %v", *h2.delays)
 	}
 }

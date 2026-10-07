@@ -3,6 +3,8 @@ package categorize
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,6 +13,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -89,9 +92,8 @@ const (
 
 var typeSafeModelPattern = regexp.MustCompile(`^jev-[0-9]+\.[0-9]+\.[0-9]+$`)
 
-// requestIDSafe keeps a peer-supplied request id loggable: id-shaped bytes
-// only, bounded.
-var requestIDUnsafe = regexp.MustCompile(`[^A-Za-z0-9._-]`)
+// safeRequestIDPattern is the charset of a request id the client accepts.
+var safeRequestIDPattern = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
 
 // NewTypeSafeClient validates cfg and builds the client. It sends nothing.
 func NewTypeSafeClient(cfg TypeSafeClientConfig) (*TypeSafeClient, error) {
@@ -123,6 +125,104 @@ func NewTypeSafeClient(cfg TypeSafeClientConfig) (*TypeSafeClient, error) {
 		logger = slog.Default()
 	}
 	return &TypeSafeClient{cfg: cfg, client: client, logger: logger, sleep: sleepForRetry}, nil
+}
+
+// minKeyFormLen: a spelling shorter than this would match ordinary text, so it
+// is not searched for. A real key is far longer, and a short one is still
+// redacted by value by the secrets registry.
+const minKeyFormLen = 8
+
+// keySpellings are the spellings of the key that can pass the id and model
+// charsets (letters, digits, '.', '_', '-', ':') other than the raw key, which
+// the piece check in leaksKey covers: its unpadded URL-safe base64 and its hex.
+// Padded, '+' '/' and percent-encoded spellings hold bytes the charsets refuse,
+// so they never reach a comparison.
+func keySpellings(key string) []string {
+	raw := []byte(key)
+	candidates := []string{base64.RawURLEncoding.EncodeToString(raw), hex.EncodeToString(raw)}
+	forms := make([]string, 0, len(candidates))
+	for _, c := range candidates {
+		if len(c) >= minKeyFormLen {
+			forms = append(forms, strings.ToLower(c))
+		}
+	}
+	return forms
+}
+
+// minFragmentLen is the shortest piece of the raw key that is refused.
+const minFragmentLen = 12
+
+// leaksKey reports whether s carries the API key: in any searched spelling, or
+// as any piece of the raw key of minFragmentLen bytes or more, compared without
+// case. A piece is enough, because a peer that echoes half a key has still
+// leaked half a key.
+func (c *TypeSafeClient) leaksKey(s string) bool {
+	// Computed on each check and never stored: a copy of the key's spellings in
+	// the struct would be printed by any unexported-holder format verb.
+	key := c.cfg.APIKey.Reveal()
+	lower := strings.ToLower(s)
+	for _, form := range keySpellings(key) {
+		if strings.Contains(lower, form) {
+			return true
+		}
+	}
+	lowerKey := strings.ToLower(key)
+	for i := 0; i+minFragmentLen <= len(lowerKey); i++ {
+		if strings.Contains(lower, lowerKey[i:i+minFragmentLen]) {
+			return true
+		}
+	}
+	return false
+}
+
+// cleanRequestID accepts a peer-supplied request id only if it is id-shaped
+// (letters, digits, '.', '_', '-'; 1 to 64 bytes) and does not carry the key.
+// Anything else is refused whole, never stripped or cut: a stripped value is
+// still made of the peer's bytes, and a stripped echo of the key is the key.
+// rejected is true when a value was present and refused.
+func (c *TypeSafeClient) cleanRequestID(raw string) (id string, rejected bool) {
+	if raw == "" {
+		return "", false
+	}
+	if len(raw) > maxLoggedRequestIDLen || !safeRequestIDPattern.MatchString(raw) || c.leaksKey(raw) {
+		return "", true
+	}
+	return raw, false
+}
+
+// cleanModel validates the returned model. A model is compared by the caller
+// with a pinned id, so a value that is too long, holds odd bytes, holds the key
+// or is not a string is refused whole, never truncated into a look-alike.
+func (c *TypeSafeClient) cleanModel(raw json.RawMessage) (model string, rejected bool) {
+	if len(raw) == 0 || string(raw) == "null" {
+		return "", false
+	}
+	var s string
+	if err := json.Unmarshal(raw, &s); err != nil {
+		return "", true
+	}
+	if s == "" {
+		return "", false
+	}
+	if len(s) > maxPeerModelLen || !safeModelPattern.MatchString(s) || c.leaksKey(s) {
+		return "", true
+	}
+	return s, false
+}
+
+// maxReportedTokens bounds a usage number. A request is limited to 64k tokens
+// of state; a larger figure is forged or corrupt and must not reach a cost sum
+// or an unsigned column.
+const maxReportedTokens = 1 << 24
+
+// parseTokens reads a usage number: a JSON integer literal in [0, maxReportedTokens]
+// (a quoted number, a fraction or an exponent does not parse).
+func parseTokens(raw json.RawMessage) (int64, bool) {
+	n, err := strconv.ParseInt(string(raw), 10, 64)
+	if err != nil || n < 0 || n > maxReportedTokens {
+		return 0, false
+	}
+	return n, true
 }
 
 func validateTypeSafeBaseURL(raw string, allowAny bool) (string, error) {
@@ -223,6 +323,9 @@ type SystemOneUsage struct {
 	InputTokens  int64
 	OutputTokens int64
 	Reported     bool
+	// Rejected is true when a usage object was present but a number in it was
+	// out of range, not an integer, or not a number. Reported is then false.
+	Rejected bool
 }
 
 // SystemOneAttempt describes one HTTP attempt. The slice is at most
@@ -233,6 +336,9 @@ type SystemOneAttempt struct {
 	// Class is "" for the attempt that succeeded, else a SystemOneClass.
 	Class     string
 	RequestID string
+	// RequestIDRejected is true when the peer sent a request id that was
+	// refused (it held the API key); RequestID is then empty.
+	RequestIDRejected bool
 	// Latency is the request time of this attempt, not the wait before it.
 	Latency time.Duration
 	// WaitBefore is the backoff slept before this attempt (0 for the first).
@@ -249,9 +355,13 @@ type SystemOneResult struct {
 	Usage      SystemOneUsage
 	RequestID  string
 	StatusCode int
-	// Header is the header of the final 200 response.
+	// Header holds the sanitized request id of the final 200 response
+	// (X-Typesafe-Request-Id) and nothing else: no other peer header leaves the
+	// client.
 	Header   http.Header
 	Attempts []SystemOneAttempt
+	// ModelRejected marks a returned model that was present but refused.
+	ModelRejected bool
 }
 
 // AttemptCount is the number of HTTP requests sent.
@@ -303,8 +413,10 @@ type SystemOneError struct {
 	Class      SystemOneClass
 	StatusCode int
 	RequestID  string
-	Attempts   []SystemOneAttempt
-	cause      error
+	// RequestIDRejected is true when the peer's request id was refused.
+	RequestIDRejected bool
+	Attempts          []SystemOneAttempt
+	cause             error
 }
 
 func (e *SystemOneError) Error() string {
@@ -372,7 +484,7 @@ func (c *TypeSafeClient) send(ctx context.Context, body []byte, lenient bool) (S
 			return result, nil
 		}
 		err.Attempts = attempts
-		err.RequestID = att.RequestID
+		err.RequestID, err.RequestIDRejected = att.RequestID, att.RequestIDRejected
 		retrying := false
 		var delay time.Duration
 		// A canceled error wraps ctx.Err(), not an *llmError, so it is never retried.
@@ -408,12 +520,16 @@ func typeSafeRetryDelay(err *SystemOneError, attempt int) time.Duration {
 	return retryDelay(attempt)
 }
 
+// systemOneProbe holds the two top-level fields the client reads, undecoded:
+// a field of the wrong type is a rejected value, not a failed exchange.
 type systemOneProbe struct {
-	Model string `json:"model"`
-	Usage *struct {
-		InputTokens  *int64 `json:"input_tokens"`
-		OutputTokens *int64 `json:"output_tokens"`
-	} `json:"usage"`
+	Model json.RawMessage `json:"model"`
+	Usage json.RawMessage `json:"usage"`
+}
+
+type systemOneUsageProbe struct {
+	InputTokens  json.RawMessage `json:"input_tokens"`
+	OutputTokens json.RawMessage `json:"output_tokens"`
 }
 
 // once sends one attempt. On failure it returns a *SystemOneError that wraps
@@ -446,7 +562,7 @@ func (c *TypeSafeClient) once(ctx context.Context, body []byte, lenient bool) (S
 	}
 	defer resp.Body.Close()
 	att.StatusCode = resp.StatusCode
-	att.RequestID = safeRequestID(resp.Header.Get(typeSafeRequestIDHeader))
+	att.RequestID, att.RequestIDRejected = c.cleanRequestID(resp.Header.Get(typeSafeRequestIDHeader))
 
 	payload, readErr := io.ReadAll(io.LimitReader(resp.Body, maxSystemOneResponseBytes+1))
 	if readErr == nil && len(payload) > maxSystemOneResponseBytes {
@@ -459,7 +575,13 @@ func (c *TypeSafeClient) once(ctx context.Context, body []byte, lenient bool) (S
 		// The body is NOT carried: for a 422 it may quote the offending field
 		// of the request, which holds source text. Classification reads the
 		// status and headers only.
-		class, llm := c.classify(&httpStatusError{statusCode: resp.StatusCode, header: resp.Header}, resp.StatusCode, resp.Header)
+		// Only Retry-After survives into the error chain; every other peer
+		// header is dropped.
+		kept := http.Header{}
+		if v := resp.Header.Values("Retry-After"); len(v) > 0 {
+			kept["Retry-After"] = append([]string(nil), v...)
+		}
+		class, llm := c.classify(&httpStatusError{statusCode: resp.StatusCode, header: kept}, resp.StatusCode, kept)
 		att.Class = string(class)
 		return SystemOneResult{}, att, &SystemOneError{Class: class, StatusCode: resp.StatusCode, cause: llm}
 	}
@@ -479,14 +601,12 @@ func (c *TypeSafeClient) once(ctx context.Context, body []byte, lenient bool) (S
 			cause: &llmError{kind: llmErrorGeneric, message: "response is not a JSON object", provider: string(ProviderKindTypeSafe), model: c.cfg.Model,
 				cause: logging.DecodeFailure(err)}}
 	}
-	out := SystemOneResult{Body: payload, Model: probe.Model, Header: resp.Header.Clone()}
-	if probe.Usage != nil && probe.Usage.InputTokens != nil {
-		out.Usage.Reported = true
-		out.Usage.InputTokens = *probe.Usage.InputTokens
-		if probe.Usage.OutputTokens != nil {
-			out.Usage.OutputTokens = *probe.Usage.OutputTokens
-		}
+	out := SystemOneResult{Body: payload, Header: http.Header{}}
+	if att.RequestID != "" {
+		out.Header.Set(typeSafeRequestIDHeader, att.RequestID)
 	}
+	out.Model, out.ModelRejected = c.cleanModel(probe.Model)
+	out.Usage = parseUsage(probe.Usage)
 	return out, att, nil
 }
 
@@ -518,14 +638,6 @@ func (c *TypeSafeClient) classify(err error, status int, header http.Header) (Sy
 	}
 }
 
-func safeRequestID(raw string) string {
-	id := requestIDUnsafe.ReplaceAllString(raw, "")
-	if len(id) > maxLoggedRequestIDLen {
-		id = id[:maxLoggedRequestIDLen]
-	}
-	return id
-}
-
 // logFailure is the loud line of a failed attempt: status, class, request id,
 // attempt number, whether a retry follows, and the measured latency. Scalars
 // only; never the URL, a header, the request body or the response body.
@@ -536,6 +648,7 @@ func (c *TypeSafeClient) logFailure(err *SystemOneError, attempt int, retrying b
 		slog.String("class", string(err.Class)),
 		slog.Int("status", err.StatusCode),
 		slog.String("request_id", err.RequestID),
+		slog.Bool("request_id_rejected", err.RequestIDRejected),
 		slog.Int("attempt", attempt),
 		slog.Int("max_attempts", typeSafeMaxRetries+1),
 		slog.Bool("retrying", retrying),
@@ -545,7 +658,15 @@ func (c *TypeSafeClient) logFailure(err *SystemOneError, attempt int, retrying b
 }
 
 func (c *TypeSafeClient) logSuccess(r SystemOneResult) {
-	if !r.Usage.Reported {
+	switch {
+	case r.Usage.Rejected:
+		c.logger.Warn("typesafe systemone usage out of range",
+			slog.String("provider", string(ProviderKindTypeSafe)),
+			slog.String("model", c.cfg.Model),
+			slog.String("request_id", r.RequestID),
+			slog.Int("attempts", r.AttemptCount()),
+		)
+	case !r.Usage.Reported:
 		c.logger.Warn("typesafe systemone response carried no usage",
 			slog.String("provider", string(ProviderKindTypeSafe)),
 			slog.String("model", c.cfg.Model),
@@ -553,10 +674,18 @@ func (c *TypeSafeClient) logSuccess(r SystemOneResult) {
 			slog.Int("attempts", r.AttemptCount()),
 		)
 	}
+	if r.ModelRejected {
+		c.logger.Warn("typesafe systemone returned model refused",
+			slog.String("provider", string(ProviderKindTypeSafe)),
+			slog.String("model", c.cfg.Model),
+			slog.String("request_id", r.RequestID),
+		)
+	}
 	c.logger.Debug("typesafe systemone ok",
 		slog.String("provider", string(ProviderKindTypeSafe)),
 		slog.String("model", c.cfg.Model),
 		slog.String("returned_model", r.Model),
+		slog.Bool("returned_model_rejected", r.ModelRejected),
 		slog.String("request_id", r.RequestID),
 		slog.Int("attempts", r.AttemptCount()),
 		slog.Int64("input_tokens", r.Usage.InputTokens),
@@ -570,3 +699,35 @@ func (c *TypeSafeClient) logSuccess(r SystemOneResult) {
 // typesafe kind: it has no completion-text client by design.
 var errTypeSafeIsNotAProvider = fmt.Errorf(
 	"LLM provider kind %q is a decision backend, not a text completer: build it with NewTypeSafeClientFromEnv", ProviderKindTypeSafe)
+
+// maxPeerModelLen bounds the returned model id the client accepts.
+const maxPeerModelLen = 64
+
+var safeModelPattern = regexp.MustCompile(`^[A-Za-z0-9._:-]+$`)
+
+// parseUsage reads the usage object. Reported needs a valid input count; an
+// output count, when present, must be valid too. Anything else present but
+// unusable sets Rejected.
+func parseUsage(raw json.RawMessage) SystemOneUsage {
+	if len(raw) == 0 || string(raw) == "null" {
+		return SystemOneUsage{}
+	}
+	var u systemOneUsageProbe
+	if err := json.Unmarshal(raw, &u); err != nil {
+		return SystemOneUsage{Rejected: true}
+	}
+	if len(u.InputTokens) == 0 || string(u.InputTokens) == "null" {
+		return SystemOneUsage{}
+	}
+	in, ok := parseTokens(u.InputTokens)
+	if !ok {
+		return SystemOneUsage{Rejected: true}
+	}
+	var out int64
+	if len(u.OutputTokens) > 0 && string(u.OutputTokens) != "null" {
+		if out, ok = parseTokens(u.OutputTokens); !ok {
+			return SystemOneUsage{Rejected: true}
+		}
+	}
+	return SystemOneUsage{InputTokens: in, OutputTokens: out, Reported: true}
+}

@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/querybound"
 )
 
 // # Why the work-item families read a work scope, not a repository
@@ -35,13 +37,19 @@ import (
 
 const (
 	// maxWorkItemScopeFilterValues and maxWorkItemScopeFilterBytes bound the
-	// scope filter of the items query. The filter is query text. Above either
-	// bound the read drops the filter, reads the items of the day for the
-	// whole organization and keeps the rows of its scopes in Go: the same
-	// rows, at the cost of a wider read. The byte bound keeps the query far
-	// below the server's max_query_size.
+	// scope filter of the items query. The filter is query text: clickhouse-go
+	// renders the array into the statement. Above either bound the read drops
+	// the filter, reads the items of the day for the whole organization and
+	// keeps the rows of its scopes in Go: the same rows, at the cost of a
+	// wider read. The byte bound is the rendered size of the array literal and
+	// is the rule of package querybound, which keeps a statement below the
+	// server's max_query_size.
 	maxWorkItemScopeFilterValues = 2000
-	maxWorkItemScopeFilterBytes  = 128 << 10
+	maxWorkItemScopeFilterBytes  = querybound.MaxArrayBytes
+
+	// The reasons a read has no scope filter, as the log line names them.
+	workItemScopeFilterAboveValues = "values"
+	workItemScopeFilterAboveBytes  = "bytes"
 
 	// WorkItemScopeReadLogMessage is logged once for each family and
 	// partition with the counts of the read.
@@ -95,10 +103,11 @@ func (read workItemScopeRead) stateItems() []workItemStateWorkItem {
 }
 
 // workItemScopeFilter turns the scope set into the values of the superset
-// filter. filtered is false when the values are above a bound.
-func workItemScopeFilter(scopes map[workItemScopeKey]struct{}) (values []string, emptyScope, filtered bool) {
+// filter. above names the bound that the values are above
+// (workItemScopeFilterAboveValues, workItemScopeFilterAboveBytes); it is ""
+// when the filter is used. The count bound is checked first.
+func workItemScopeFilter(scopes map[workItemScopeKey]struct{}) (values []string, emptyScope bool, above string) {
 	seen := make(map[string]struct{}, len(scopes))
-	size := 0
 	for key := range scopes {
 		if key.scope == "" {
 			emptyScope = true
@@ -109,13 +118,29 @@ func workItemScopeFilter(scopes map[workItemScopeKey]struct{}) (values []string,
 		}
 		seen[key.scope] = struct{}{}
 		values = append(values, key.scope)
-		size += len(key.scope)
 	}
 	sort.Strings(values)
-	if len(values) > maxWorkItemScopeFilterValues || size > maxWorkItemScopeFilterBytes {
-		return nil, emptyScope, false
+	if len(values) > maxWorkItemScopeFilterValues {
+		return nil, emptyScope, workItemScopeFilterAboveValues
 	}
-	return values, emptyScope, true
+	if workItemScopeFilterRenderedBytes(values) > maxWorkItemScopeFilterBytes {
+		return nil, emptyScope, workItemScopeFilterAboveBytes
+	}
+	return values, emptyScope, ""
+}
+
+// workItemScopeFilterRenderedBytes is the size of the array literal that
+// clickhouse-go writes into the statement for the values: the brackets, each
+// rendered element and a two-byte separator between elements.
+func workItemScopeFilterRenderedBytes(values []string) int {
+	if len(values) == 0 {
+		return 2
+	}
+	size := 2 + 2*(len(values)-1)
+	for _, value := range values {
+		size += querybound.RenderedStringLen(value)
+	}
+	return size
 }
 
 // workItemScopeFilterSQL is the superset filter. Every non-empty work scope id
@@ -167,13 +192,22 @@ func countWorkItemOncePerProviderAndID(rows []workItemScopedRow) (kept []workIte
 			continue
 		}
 		duplicates++
-		current := kept[index]
-		if row.LastSynced.After(current.LastSynced) ||
-			(row.LastSynced.Equal(current.LastSynced) && row.RepoID.String() < current.RepoID.String()) {
+		if newerWorkItemVersion(row, kept[index]) {
 			kept[index] = row
 		}
 	}
 	return kept, duplicates
+}
+
+// newerWorkItemVersion says that candidate is the item and current is not:
+// the newer last_synced, and for two rows of one last_synced the row of the
+// lower repository id (the text form of the id is compared). The tie rule
+// makes the result independent of the order the rows are read in.
+func newerWorkItemVersion(candidate, current workItemScopedRow) bool {
+	if !candidate.LastSynced.Equal(current.LastSynced) {
+		return candidate.LastSynced.After(current.LastSynced)
+	}
+	return candidate.RepoID.String() < current.RepoID.String()
 }
 
 // loadWorkItemPartitionScopes reads the work scopes that the partition's
@@ -385,7 +419,8 @@ func loadWorkItemScopeRead(
 	if len(scopes) == 0 {
 		return read, nil
 	}
-	values, emptyScope, filtered := workItemScopeFilter(scopes)
+	values, emptyScope, above := workItemScopeFilter(scopes)
+	filtered := above == ""
 	read.Stats.FilterValues, read.Stats.Unfiltered = len(values), !filtered
 	if !filtered {
 		slog.WarnContext(ctx, WorkItemScopeReadUnfilteredLogMessage,
@@ -394,6 +429,7 @@ func loadWorkItemScopeRead(
 			"target_day", run.TargetDay,
 			"partition_id", partition.ID,
 			"scopes", len(scopes),
+			"above_bound", above,
 			"max_filter_values", maxWorkItemScopeFilterValues,
 			"max_filter_bytes", maxWorkItemScopeFilterBytes,
 		)

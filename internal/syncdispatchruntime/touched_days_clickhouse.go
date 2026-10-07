@@ -41,7 +41,7 @@ func NewClickHouseTouchedDaysStore(conn driver.Conn) (*ClickHouseTouchedDaysStor
 // item has no stored row keeps its own repository.
 const recordTouchedDaysSQL = `
 INSERT INTO daily_metrics_touched_days (org_id, day, repo_id, kind, at)
-SELECT ? AS org_id, day, repo_id, 'touched' AS kind, fromUnixTimestamp64Milli(toInt64(?), 'UTC') AS at
+SELECT ?, day, repo_id, 'touched', fromUnixTimestamp64Milli(toInt64(?), 'UTC')
 FROM (
     SELECT repo_id,
            arrayJoin(arrayMap(value -> assumeNotNull(value), arrayFilter(value -> value IS NOT NULL, [
@@ -199,6 +199,10 @@ GROUP BY day`, limitPerDay, organizationID, touchedDayStrings(days))
 // time its read of the pending days was taken. A 'touched' event newer than
 // that time stays newer, so its key stays pending.
 //
+// The SELECT of the first statement gives its constants no alias: ClickHouse
+// resolves a name to an alias before a column, so "'dispatched' AS kind"
+// would make the filter kind = 'touched' false for every row.
+//
 // fullDays are the days a run of every repository was started for: each of
 // their keys touched at or before the time is marked. keys are the exact keys
 // of the days a run of listed repositories was started for: a key of such a
@@ -212,7 +216,7 @@ func (store *ClickHouseTouchedDaysStore) MarkDispatched(
 	if len(fullDays) > 0 {
 		if err := store.conn.Exec(ctx, `
 INSERT INTO daily_metrics_touched_days (org_id, day, repo_id, kind, at)
-SELECT org_id, day, repo_id, 'dispatched' AS kind, fromUnixTimestamp64Milli(toInt64(?), 'UTC') AS at
+SELECT org_id, day, repo_id, 'dispatched', fromUnixTimestamp64Milli(toInt64(?), 'UTC')
 FROM daily_metrics_touched_days
 WHERE org_id = ? AND kind = 'touched' AND has(?, toString(day))
   AND at <= fromUnixTimestamp64Milli(toInt64(?), 'UTC')

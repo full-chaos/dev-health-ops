@@ -42,13 +42,16 @@ SELECT count(*) FROM public.scheduled_sync_occurrences WHERE sync_config_id = $1
 	return count
 }
 
-func endScheduledRun(t *testing.T, pool *pgxpool.Pool, runID, status string) {
+// endScheduledRun ends the run as the finalizer leaves the run row: terminal
+// status and completed_at. It does NOT stamp the configuration's last_sync_at,
+// so these tests hold the case where the schedule's base never moved.
+func endScheduledRun(t *testing.T, pool *pgxpool.Pool, runID, status string, endedAt time.Time) {
 	t.Helper()
 	ctx := context.Background()
 	if _, err := pool.Exec(ctx, `UPDATE public.sync_run_units SET status = 'success', updated_at = now() WHERE sync_run_id = $1::uuid`, runID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := pool.Exec(ctx, `UPDATE public.sync_runs SET status = $2, completed_at = now() WHERE id = $1::uuid`, runID, status); err != nil {
+	if _, err := pool.Exec(ctx, `UPDATE public.sync_runs SET status = $2, completed_at = $3 WHERE id = $1::uuid`, runID, status, endedAt); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -134,7 +137,7 @@ func TestScheduledSyncStartsNoSecondRunWhileOneIsOpen(t *testing.T) {
 	}
 
 	watermark := hour.Add(-10 * time.Minute)
-	endScheduledRun(t, pool, first[0], "partial_failed")
+	endScheduledRun(t, pool, first[0], "partial_failed", hour.Add(3*time.Hour+40*time.Minute))
 	if _, err := pool.Exec(ctx, `UPDATE public.sync_watermarks SET last_synced_at = $2 WHERE org_id = $1 AND dataset_key = 'commits'`, fixture.occurrence.OrgID, watermark); err != nil {
 		t.Fatal(err)
 	}

@@ -122,6 +122,7 @@ func (row fakeOpenRunsRow) Scan(dest ...any) error {
 		row.open.blocking, row.open.blockingOccurrenceID, row.open.blockingSyncRunID, row.open.blockingOpenSeconds,
 		row.open.pastBound, row.open.pastBoundOccurrenceID, row.open.pastBoundSyncRunID,
 		string(row.open.pastBoundReason), row.open.pastBoundOpenSeconds,
+		row.open.lastScheduledRunEndedAt,
 	}
 	if len(dest) != len(values) {
 		return fmt.Errorf("open runs scan wants %d columns, got %d", len(values), len(dest))
@@ -134,6 +135,8 @@ func (row fakeOpenRunsRow) Scan(dest ...any) error {
 			*target = value.(int64)
 		case *string:
 			*target = value.(string)
+		case **time.Time:
+			*target = value.(*time.Time)
 		default:
 			return fmt.Errorf("open runs scan column %d has unsupported type %T", index, target)
 		}
@@ -635,24 +638,31 @@ func TestHandoffDueRejectsAnUnknownOpenRunBoundReason(t *testing.T) {
 	}
 }
 
-func TestResumedOccurrenceInstantPrefersADueMarkerThatIsLater(t *testing.T) {
+func TestResumedOccurrenceInstantIsTheMarkerOnlyAfterASkippedInstant(t *testing.T) {
 	evaluated := at("2026-01-01T10:00:00Z")
 	observed := at("2026-01-01T13:00:05Z")
+	endedAfter := pointer(at("2026-01-01T12:40:00Z"))
+	dueMarker := pointer(at("2026-01-01T13:00:00Z"))
 	for _, tc := range []struct {
-		name   string
-		marker *time.Time
-		want   time.Time
+		name    string
+		marker  *time.Time
+		endedAt *time.Time
+		want    time.Time
 	}{
-		{name: "no marker", marker: nil, want: evaluated},
-		{name: "marker equal to the evaluated instant", marker: pointer(evaluated), want: evaluated},
-		{name: "marker earlier than the evaluated instant", marker: pointer(at("2026-01-01T09:00:00Z")), want: evaluated},
-		{name: "marker later and due: ticks were skipped", marker: pointer(at("2026-01-01T13:00:00Z")), want: at("2026-01-01T13:00:00Z")},
-		{name: "marker exactly at the observed time is due", marker: pointer(observed), want: observed},
-		{name: "marker later and not yet due", marker: pointer(at("2026-01-01T14:00:00Z")), want: evaluated},
-		{name: "marker in another zone", marker: pointer(at("2026-01-01T05:00:00-08:00")), want: at("2026-01-01T13:00:00Z")},
+		{name: "the previous run ended after the evaluated instant: ticks were skipped", marker: dueMarker, endedAt: endedAfter, want: at("2026-01-01T13:00:00Z")},
+		{name: "no ended scheduled run: every instant is minted in turn", marker: dueMarker, endedAt: nil, want: evaluated},
+		{name: "the previous run ended before the evaluated instant", marker: dueMarker, endedAt: pointer(at("2026-01-01T09:59:59Z")), want: evaluated},
+		{name: "the previous run ended exactly at the evaluated instant", marker: dueMarker, endedAt: pointer(evaluated), want: evaluated},
+		{name: "the previous run ended one second after the evaluated instant", marker: dueMarker, endedAt: pointer(at("2026-01-01T10:00:01Z")), want: at("2026-01-01T13:00:00Z")},
+		{name: "no marker", marker: nil, endedAt: endedAfter, want: evaluated},
+		{name: "marker equal to the evaluated instant", marker: pointer(evaluated), endedAt: endedAfter, want: evaluated},
+		{name: "marker earlier than the evaluated instant", marker: pointer(at("2026-01-01T09:00:00Z")), endedAt: endedAfter, want: evaluated},
+		{name: "marker exactly at the observed time is due", marker: pointer(observed), endedAt: endedAfter, want: observed},
+		{name: "marker later and not yet due", marker: pointer(at("2026-01-01T14:00:00Z")), endedAt: endedAfter, want: evaluated},
+		{name: "marker and run end in another zone", marker: pointer(at("2026-01-01T05:00:00-08:00")), endedAt: pointer(at("2026-01-01T04:40:00-08:00")), want: at("2026-01-01T13:00:00Z")},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got := resumedOccurrenceInstant(evaluated, tc.marker, observed)
+			got := resumedOccurrenceInstant(evaluated, tc.marker, tc.endedAt, observed)
 			if !got.Equal(tc.want) {
 				t.Fatalf("resumedOccurrenceInstant() = %s, want %s", got, tc.want)
 			}

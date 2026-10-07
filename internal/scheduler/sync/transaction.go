@@ -401,7 +401,7 @@ func (repository *Repository) HandoffDueResult(
 			locked.candidate.ConfigID,
 			locked.orgID,
 			locked.candidate.Job.ID,
-			resumedOccurrenceInstant(*evaluation.NextOccurrence, locked.candidate.Job.NextRunAt, observedAt),
+			resumedOccurrenceInstant(*evaluation.NextOccurrence, locked.candidate.Job.NextRunAt, open.lastScheduledRunEndedAt, observedAt),
 			observedAt,
 			nextRunAt,
 		)
@@ -461,19 +461,28 @@ func (repository *Repository) HandoffDueResult(
 
 // resumedOccurrenceInstant picks the cron instant a new occurrence stands for.
 //
-// The evaluation computes the instant after the schedule's base, and the base
-// only moves when an occurrence is minted or a run completes. A skipped tick
-// does neither: it moves the marker alone. So after skipped ticks the
-// evaluation still names the FIRST skipped instant, while the marker names the
-// newest one. The planner ends every unit window at the occurrence's instant,
-// so a run minted for the first skipped instant would stop its windows there
-// and leave the rest of the skipped time unread. The marker instant is
-// therefore the one to mint, whenever it is due and later.
+// The evaluation names the instant after the schedule's base, and a skipped
+// tick does not move the base: it moves the marker alone. The base does move
+// when a run completes, but only for the configuration the finalizer stamps
+// with last_sync_at, and only when the finalizer ran. Where it did not, the
+// evaluation after skipped ticks still names the FIRST skipped instant. The
+// planner ends every unit window at the occurrence's instant, so that run would
+// stop its windows there, every later run would follow one interval behind it,
+// and the skipped time would stay unread.
 //
-// With no skipped tick the two are equal or the marker is the earlier one, so
-// this changes nothing for a schedule that never skipped.
-func resumedOccurrenceInstant(evaluated time.Time, marker *time.Time, observedAt time.Time) time.Time {
-	if marker == nil {
+// So: when the evaluated instant passed before the previous scheduled run of
+// the configuration ended, that instant was skipped, and the occurrence stands
+// for the marker's instant, the newest one that is due. This is the rebase onto
+// a run's completion that last_sync_at gives, taken from the run row itself.
+//
+// With no ended scheduled run to compare against, or an evaluated instant after
+// that run's end, the evaluation stands: a schedule that never skipped a tick
+// keeps minting every instant in turn, late or not.
+func resumedOccurrenceInstant(evaluated time.Time, marker, previousRunEndedAt *time.Time, observedAt time.Time) time.Time {
+	if marker == nil || previousRunEndedAt == nil {
+		return evaluated
+	}
+	if !evaluated.Before(previousRunEndedAt.UTC()) {
 		return evaluated
 	}
 	instant := marker.UTC()
@@ -514,6 +523,10 @@ type openScheduledRuns struct {
 	pastBoundSyncRunID    string
 	pastBoundReason       OpenRunBoundReason
 	pastBoundOpenSeconds  int64
+	// lastScheduledRunEndedAt is when the run of the configuration's newest
+	// scheduled occurrence ended; nil when that occurrence has no run or its
+	// run is not ended.
+	lastScheduledRunEndedAt *time.Time
 }
 
 func readOpenScheduledRuns(
@@ -540,6 +553,7 @@ func readOpenScheduledRuns(
 		&open.pastBoundSyncRunID,
 		&reason,
 		&open.pastBoundOpenSeconds,
+		&open.lastScheduledRunEndedAt,
 	); err != nil {
 		return openScheduledRuns{}, err
 	}
@@ -713,6 +727,10 @@ WHERE id = $3
 //     lease. The run's own creation counts as progress, so a new run and an
 //     unmaterialized occurrence get the full interval from their creation.
 //
+// The last column is when the run of the newest scheduled occurrence ended,
+// for resumedOccurrenceInstant: one backward step on the (org_id,
+// sync_config_id, scheduled_for) index and one primary-key probe.
+//
 // Cost: two arms, each small. The unplanned arm reads the configuration's own
 // occurrence rows through an index on sync_config_id. The run arm starts from
 // the non-terminal runs, which ix_sync_runs_active_candidates holds apart from
@@ -815,6 +833,21 @@ SELECT
         SELECT open_seconds FROM judged
         WHERE past_age_cap OR past_progress
         ORDER BY opened_at, occurrence_id LIMIT 1
-    ), 0)
+    ), 0),
+    (
+        SELECT run.completed_at
+        FROM public.scheduled_sync_occurrences AS occurrence
+        LEFT JOIN public.sync_runs AS run
+            ON run.id = occurrence.sync_run_id
+        WHERE occurrence.org_id = $1
+            AND occurrence.sync_config_id = $2::uuid
+            AND NOT EXISTS (
+                SELECT 1
+                FROM public.sync_manual_triggers AS manual
+                WHERE manual.occurrence_id = occurrence.occurrence_id
+            )
+        ORDER BY occurrence.scheduled_for DESC, occurrence.occurrence_id DESC
+        LIMIT 1
+    )
 FROM judged
 `

@@ -465,7 +465,7 @@ func TestScheduledTicksSkipWhileARunIsOpenThenOneRunCoversTheGap(t *testing.T) {
 
 	// The run ends. Its commits unit moved the watermark to the first tick.
 	watermark := hour.Add(-10 * time.Minute)
-	endScheduledRun(t, pool, firstRun, "success")
+	endScheduledRun(t, pool, firstRun, "success", hour.Add(3*time.Hour+40*time.Minute))
 	if _, err := pool.Exec(ctx, `UPDATE public.sync_watermarks SET last_synced_at = $2 WHERE org_id = $1 AND dataset_key = 'commits'`, fixture.occurrence.OrgID, watermark); err != nil {
 		t.Fatal(err)
 	}
@@ -505,7 +505,20 @@ WHERE occurrence.occurrence_id = $1 AND unit.dataset_key = 'commits'`, resumed.H
 		t.Fatalf("the resumed run's commits unit ends at %v: it does not cover the three skipped ticks up to %s", before, resumeAt)
 	}
 	// The schedule is back on its cadence: the next instant is minted as itself.
-	endScheduledRun(t, pool, resumedRunID(t, pool, resumed.HandedOff[0].ID), "failed")
+	// The run the schedule compares against is the newest scheduled one.
+	endScheduledRun(t, pool, resumedRunID(t, pool, resumed.HandedOff[0].ID), "failed", resumeAt.Add(20*time.Minute))
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	open, err := readOpenScheduledRuns(ctx, tx, fixture.occurrence.OrgID, configID)
+	_ = tx.Rollback(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if open.lastScheduledRunEndedAt == nil || !open.lastScheduledRunEndedAt.Equal(resumeAt.Add(20*time.Minute)) {
+		t.Fatalf("last scheduled run ended at %v, want the newest run's end %s", open.lastScheduledRunEndedAt, resumeAt.Add(20*time.Minute))
+	}
 	next := tick(resumeAt.Add(time.Hour))
 	if next.Minted() != 1 || !next.HandedOff[0].ScheduledFor.Equal(resumeAt.Add(time.Hour)) {
 		t.Fatalf("tick after the resumed run = %#v, want one run for %s", next, resumeAt.Add(time.Hour))
@@ -694,13 +707,18 @@ WHERE occurrence.occurrence_id = $1`, trigger.OccurrenceID).Scan(&manualRunStatu
 		t.Fatalf("tick with both runs open = %#v, want a skip that names the scheduled run", skip)
 	}
 	// The scheduled run ends; the manual run stays open. The schedule resumes.
-	endScheduledRun(t, pool, scheduledRun, "success")
+	endScheduledRun(t, pool, scheduledRun, "success", hour.Add(time.Hour+40*time.Minute))
 	resumed, err := repository.HandoffDueResult(ctx, hour.Add(2*time.Hour), 4, NewOccurrenceCoordinator())
 	if err != nil {
 		t.Fatal(err)
 	}
 	if resumed.Minted() != 1 || len(resumed.SkippedOpenRun) != 0 || len(resumed.OpenRunsPastBound) != 0 {
 		t.Fatalf("tick with only the manual run open = %#v, want one scheduled run started", resumed)
+	}
+	// The open manual run is newer than the ended scheduled run. It is not the
+	// run the schedule resumes after: the skipped instant is still recognized.
+	if got := resumed.HandedOff[0].ScheduledFor; !got.Equal(hour.Add(2 * time.Hour)) {
+		t.Fatalf("resumed occurrence scheduled_for = %s, want the newest due instant %s", got, hour.Add(2*time.Hour))
 	}
 }
 

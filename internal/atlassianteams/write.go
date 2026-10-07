@@ -143,7 +143,7 @@ func Write(ctx context.Context, conn driver.Conn, orgID string, rows Rows, selec
 	var ownership []OwnershipRow
 	var expiredOwnership []openOwnership
 	if selections.Projects {
-		if ownership, expiredOwnership, err = planOwnership(ctx, conn, orgID, scope, rows.Ownership, now); err != nil {
+		if ownership, expiredOwnership, err = planOwnership(ctx, conn, orgID, scope, rows.Ownership, now, rows.ProjectLinksComplete); err != nil {
 			return result, fmt.Errorf("read current team project ownership: %w", err)
 		}
 	}
@@ -329,7 +329,10 @@ func planMemberships(ctx context.Context, conn driver.Conn, orgID string, scope 
 // fresh link keeps the valid_from it was first seen with, and every open link
 // the snapshot no longer has is returned to be closed. A team in scope with no
 // fresh link loses all of its links: scope holds the teams deleted upstream.
-func planOwnership(ctx context.Context, conn driver.Conn, orgID string, scope []string, fresh []OwnershipRow, now time.Time) ([]OwnershipRow, []openOwnership, error) {
+//
+// complete is Rows.ProjectLinksComplete: only a collection that read every
+// team's project links to the end closes a link.
+func planOwnership(ctx context.Context, conn driver.Conn, orgID string, scope []string, fresh []OwnershipRow, now time.Time, complete bool) ([]OwnershipRow, []openOwnership, error) {
 	if len(scope) == 0 {
 		return fresh, nil, nil
 	}
@@ -358,7 +361,7 @@ func planOwnership(ctx context.Context, conn driver.Conn, orgID string, scope []
 	for i, row := range open {
 		openFacts[i] = providersync.OwnershipSnapshotRow{TeamID: row.teamID, ProjectID: row.projectID, Source: row.source, ValidFrom: row.validFrom}
 	}
-	plan := providersync.PlanOwnershipSnapshot(freshFacts, openFacts, now)
+	plan := providersync.PlanOwnershipSnapshot(providersync.OwnershipSnapshot{Fresh: freshFacts, Complete: complete}, openFacts, now)
 	out := make([]OwnershipRow, len(fresh))
 	for i, row := range fresh {
 		row.ValidFrom = plan.ValidFrom[i]

@@ -33,7 +33,7 @@ func TestPlanOwnershipSnapshotKeepsFirstSeenAndRetractsTheRest(t *testing.T) {
 		fact("U", "10001", "native", first),              // 4: same project, another team
 		fact("T", "10003", "native", now.Add(time.Hour)), // 5: opened after this run's time
 	}
-	plan := PlanOwnershipSnapshot(fresh, open, now)
+	plan := PlanOwnershipSnapshot(OwnershipSnapshot{Fresh: fresh, Complete: true}, open, now)
 	if len(plan.ValidFrom) != 2 || !plan.ValidFrom[0].Equal(first) || !plan.ValidFrom[1].Equal(now) {
 		t.Fatalf("valid_from=%v, want the held fact on its first-seen stamp and the new fact on its own", plan.ValidFrom)
 	}
@@ -46,22 +46,54 @@ func TestPlanOwnershipSnapshotKeepsFirstSeenAndRetractsTheRest(t *testing.T) {
 	}
 
 	// The same data again: the held fact is written on the same key, nothing is closed.
-	again := PlanOwnershipSnapshot(fresh[:1], open[1:2], now.Add(time.Hour))
+	again := PlanOwnershipSnapshot(OwnershipSnapshot{Fresh: fresh[:1], Complete: true}, open[1:2], now.Add(time.Hour))
 	if !again.ValidFrom[0].Equal(first) || len(again.Retract) != 0 {
 		t.Fatalf("second run: %+v", again)
 	}
 
 	// A fresh row older than every open row of its fact keeps its own stamp;
 	// the open row is then a later duplicate.
-	older := PlanOwnershipSnapshot([]OwnershipSnapshotRow{fact("T", "10001", "native", first.Add(-time.Hour))}, open[1:2], now)
+	older := PlanOwnershipSnapshot(OwnershipSnapshot{Fresh: []OwnershipSnapshotRow{fact("T", "10001", "native", first.Add(-time.Hour))}, Complete: true}, open[1:2], now)
 	if !older.ValidFrom[0].Equal(first.Add(-time.Hour)) {
 		t.Fatalf("an older fresh row moved to %v", older.ValidFrom[0])
 	}
 
 	// No fresh row: every open row given is closed. The caller's read is the scope.
-	empty := PlanOwnershipSnapshot(nil, open[:2], now)
+	empty := PlanOwnershipSnapshot(OwnershipSnapshot{Complete: true}, open[:2], now)
 	if len(empty.ValidFrom) != 0 || len(empty.Retract) != 2 {
 		t.Fatalf("empty snapshot: %+v, want both open rows closed", empty)
+	}
+}
+
+// A snapshot that did not read its source to the end closes nothing: a row
+// that is missing from a part of the answer is not a fact the provider
+// dropped. The zero value is not complete, so a caller that does not state
+// completeness closes nothing either. The first-seen valid_from still
+// applies, so the write adds no row.
+func TestPlanOwnershipSnapshotClosesNothingForASnapshotThatIsNotComplete(t *testing.T) {
+	first := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+	now := first.Add(48 * time.Hour)
+	fresh := []OwnershipSnapshotRow{{TeamID: "T", ProjectID: "10001", Source: "native", ValidFrom: now}}
+	open := []OwnershipSnapshotRow{
+		{TeamID: "T", ProjectID: "10001", Source: "native", ValidFrom: first},
+		{TeamID: "T", ProjectID: "10001", Source: "native", ValidFrom: first.Add(time.Hour)}, // a later duplicate
+		{TeamID: "T", ProjectID: "20002", Source: "native", ValidFrom: first},                // not in this part of the answer
+	}
+	for name, snapshot := range map[string]OwnershipSnapshot{
+		"stated not complete":        {Fresh: fresh, Complete: false},
+		"completeness not stated":    {Fresh: fresh},
+		"no fresh row, not complete": {},
+	} {
+		plan := PlanOwnershipSnapshot(snapshot, open, now)
+		if len(plan.Retract) != 0 {
+			t.Errorf("%s: retract=%+v, want nothing closed", name, plan.Retract)
+		}
+		if len(snapshot.Fresh) == 1 && (len(plan.ValidFrom) != 1 || !plan.ValidFrom[0].Equal(first)) {
+			t.Errorf("%s: valid_from=%v, want the first-seen stamp", name, plan.ValidFrom)
+		}
+	}
+	if complete := PlanOwnershipSnapshot(OwnershipSnapshot{Fresh: fresh, Complete: true}, open, now); len(complete.Retract) != 2 {
+		t.Fatalf("the same rows as a complete snapshot: retract=%+v, want the duplicate and the lost fact closed", complete.Retract)
 	}
 }
 
@@ -73,7 +105,9 @@ func TestPlanOwnershipSnapshotKeepsFirstSeenAndRetractsTheRest(t *testing.T) {
 // constant that holds one; (2) that each of them that writes Jira rows names
 // the function of its package that plans its rows, that this function calls
 // PlanOwnershipSnapshot and that production code of the package calls it;
-// (3) the set of functions that call PlanOwnershipSnapshot. What it does not
+// (3) the set of functions that call PlanOwnershipSnapshot; (4) that each of
+// them states the snapshot's completeness in the call, from a value and not
+// from a constant, and names where that value comes from. What it does not
 // pin: a statement built from parts, a write outside Go, and the data flow
 // between the planner and the insert: that the rows a writer inserts are the
 // planned ones is pinned by behaviour, against a real ClickHouse
@@ -85,6 +119,9 @@ type ownershipWriter struct {
 	// planner is the function that plans this writer's rows through
 	// PlanOwnershipSnapshot. Every jira writer has one.
 	planner string
+	// complete says where the planner's Complete value comes from: the
+	// end-of-data signal behind it. Every planner has one.
+	complete string
 	// note says what the writer does when it has no planner.
 	note string
 }
@@ -92,9 +129,14 @@ type ownershipWriter struct {
 var ownershipWriters = map[string]ownershipWriter{
 	"internal/providersync.JiraTeamCatalogClickHouseEffects.writeOwnership": {
 		provider: "jira", planner: "internal/providersync.jiraOwnershipSnapshot",
+		complete: "its `complete` argument = JiraTeamCatalogResult.ProjectSearchComplete (the search walk in " +
+			"JiraTeamCatalogRouteHandler.CollectTeamCatalog, jira_team_catalog_route.go: true only at a page's endOfData) AND the " +
+			"legacy links read finished (jiraLegacyProjectOwnershipLinks, jira_team_catalog_effects_clickhouse.go)",
 	},
 	"internal/atlassianteams.writeOwnership": {
 		provider: "jira", planner: "internal/atlassianteams.planOwnership",
+		complete: "its `complete` argument = Rows.ProjectLinksComplete (atlassianteams.Collect, collect.go: one finished " +
+			"project-link read for every active team; each read follows the cursor to the end or fails Collect)",
 	},
 	"internal/providersync.LinearReferenceCatalogClickHouseEffects.writeOwnership": {
 		provider: "linear", note: "insert only, valid_from = the run time; a stale link is removed by the operator verb retire-stale-linear-project-ownership; not on the shared rule yet",
@@ -112,6 +154,9 @@ type ownershipCensus struct {
 	files    int
 	writers  []string
 	planners []string
+	// completeness: planner -> the source text of the Complete value it
+	// passes in its OwnershipSnapshot literal ("" when it states none).
+	completeness map[string]string
 	// calls: function -> the names of every function it calls.
 	calls map[string]map[string]bool
 }
@@ -196,7 +241,7 @@ func scanOwnershipCensus(t *testing.T, repoRoot string, roots ...string) ownersh
 			t.Fatalf("scan %s: %v", root, err)
 		}
 	}
-	census := ownershipCensus{files: len(parsed), calls: map[string]map[string]bool{}}
+	census := ownershipCensus{files: len(parsed), calls: map[string]map[string]bool{}, completeness: map[string]string{}}
 	for _, source := range parsed {
 		for _, declaration := range source.file.Decls {
 			function, ok := declaration.(*ast.FuncDecl)
@@ -206,8 +251,33 @@ func scanOwnershipCensus(t *testing.T, repoRoot string, roots ...string) ownersh
 			qualified := ownershipCensusFunctionName(source.directory, function)
 			called := map[string]bool{}
 			writes := false
+			complete := ""
 			ast.Inspect(function, func(node ast.Node) bool {
 				switch typed := node.(type) {
+				case *ast.CompositeLit:
+					name := ""
+					switch literal := typed.Type.(type) {
+					case *ast.Ident:
+						name = literal.Name
+					case *ast.SelectorExpr:
+						name = literal.Sel.Name
+					}
+					if name != "OwnershipSnapshot" {
+						break
+					}
+					for _, element := range typed.Elts {
+						pair, ok := element.(*ast.KeyValueExpr)
+						if !ok {
+							continue
+						}
+						if key, ok := pair.Key.(*ast.Ident); ok && key.Name == "Complete" {
+							if value, ok := pair.Value.(*ast.Ident); ok {
+								complete = value.Name
+							} else {
+								complete = "<expression>"
+							}
+						}
+					}
 				case *ast.BasicLit:
 					if typed.Kind == token.STRING {
 						if text, err := strconv.Unquote(typed.Value); err == nil && ownershipInsertStatement.MatchString(text) {
@@ -234,6 +304,7 @@ func scanOwnershipCensus(t *testing.T, repoRoot string, roots ...string) ownersh
 			}
 			if called[ownershipSnapshotEntryPoint] {
 				census.planners = append(census.planners, qualified)
+				census.completeness[qualified] = complete
 			}
 		}
 	}
@@ -268,6 +339,16 @@ func TestJiraOwnershipWriterCensus(t *testing.T) {
 				continue
 			}
 			wantPlanners = append(wantPlanners, writer.planner)
+			if strings.TrimSpace(writer.complete) == "" {
+				t.Errorf("%s: the planner %s does not name where its completeness comes from", name, writer.planner)
+			}
+			// The planner passes its own `complete` parameter: not a
+			// constant, not a value it makes up. Where the callers get it
+			// from is the named source, read by a person.
+			if got := census.completeness[writer.planner]; got != "complete" {
+				t.Errorf("%s: the planner %s passes Complete = %q to %s, want its `complete` parameter (a snapshot is complete "+
+					"only on an end-of-data signal, never by a constant)", name, writer.planner, got, ownershipSnapshotEntryPoint)
+			}
 			planner := writer.planner[strings.LastIndex(writer.planner, ".")+1:]
 			directory := name[:strings.Index(name, ".")]
 			if !strings.HasPrefix(writer.planner, directory+".") {

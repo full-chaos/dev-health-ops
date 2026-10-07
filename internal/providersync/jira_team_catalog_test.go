@@ -268,7 +268,7 @@ func TestJiraOwnershipSnapshotKeepsFirstSeenAndClosesWhatTheSnapshotLost(t *test
 		row("org-1:jira:OPS", "native", first), // the retired identity
 		row("10001", "jira_legacy", first),     // same project, another source: its own fact
 	}
-	kept, retracted := jiraOwnershipSnapshot(fresh, open, now)
+	kept, retracted := jiraOwnershipSnapshot(fresh, open, now, true)
 	if len(kept) != 1 || !kept[0].ValidFrom.Equal(first) || kept[0].ValidTo != nil {
 		t.Fatalf("kept=%+v, want the one fresh row on its first-seen valid_from, open", kept)
 	}
@@ -284,13 +284,19 @@ func TestJiraOwnershipSnapshotKeepsFirstSeenAndClosesWhatTheSnapshotLost(t *test
 		}
 	}
 
-	kept, retracted = jiraOwnershipSnapshot(nil, open, now)
+	// A part of the provider's answer closes nothing and still keeps the first-seen stamp.
+	kept, retracted = jiraOwnershipSnapshot(fresh, open, now, false)
+	if len(kept) != 1 || !kept[0].ValidFrom.Equal(first) || len(retracted) != 0 {
+		t.Fatalf("a snapshot that is not complete: kept=%+v retracted=%+v, want nothing closed", kept, retracted)
+	}
+
+	kept, retracted = jiraOwnershipSnapshot(nil, open, now, true)
 	if len(kept) != 0 || len(retracted) != 0 {
 		t.Fatalf("an empty snapshot closed rows: kept=%+v retracted=%+v", kept, retracted)
 	}
 
 	// A second run on the same data writes the same key again and closes nothing.
-	kept, retracted = jiraOwnershipSnapshot(fresh, []jiraTeamCatalogOwnershipRow{row("10001", "native", first)}, now.Add(time.Hour))
+	kept, retracted = jiraOwnershipSnapshot(fresh, []jiraTeamCatalogOwnershipRow{row("10001", "native", first)}, now.Add(time.Hour), true)
 	if len(kept) != 1 || !kept[0].ValidFrom.Equal(first) || len(retracted) != 0 {
 		t.Fatalf("second run: kept=%+v retracted=%+v", kept, retracted)
 	}

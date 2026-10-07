@@ -55,6 +55,23 @@ const (
 // product decision this port makes.
 type jiraTeamCatalogProjectSearchPayload struct {
 	Values []jiraTeamCatalogProjectSearchEntry `json:"values"`
+	// IsLast and Total are the provider's end-of-data signals of a page.
+	IsLast *bool `json:"isLast"`
+	Total  *int  `json:"total"`
+}
+
+// endOfData says this page is the last one. received is the number of
+// entries read so far, this page included. The provider's own signal decides:
+// isLast when the page carries it, else total. A page with neither is the
+// last one only when it is shorter than the page size that was asked for.
+func (page jiraTeamCatalogProjectSearchPayload) endOfData(received, pageSize int) bool {
+	if page.IsLast != nil {
+		return *page.IsLast
+	}
+	if page.Total != nil {
+		return received >= *page.Total
+	}
+	return len(page.Values) < pageSize
 }
 
 type jiraTeamCatalogProjectSearchEntry struct {

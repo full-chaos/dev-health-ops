@@ -22,6 +22,10 @@ const (
 	// discover_jira's single, unpaginated GET exactly -- see
 	// jiraTeamCatalogProjectSearchPayload's doc comment.
 	jiraTeamCatalogProjectSearchMaxResults = 100
+	// jiraTeamCatalogProjectSearchMaxPages bounds the project search walk
+	// (5,000 projects). A walk that stops at the bound is not a complete
+	// snapshot: it writes what it read and closes nothing.
+	jiraTeamCatalogProjectSearchMaxPages = 50
 	// jiraTeamCatalogPerPage matches JiraClient's default per_page (100) for
 	// the Agile board/sprint listing calls Python's iter_boards/
 	// iter_board_sprints make.
@@ -86,6 +90,14 @@ type JiraTeamCatalogResult struct {
 	// no ownership row: an id built from the key would be a second identity
 	// of a project the work-items route identifies by its native id.
 	ProjectsSkippedNoNativeID int `json:"projects_skipped_no_native_id,omitempty"`
+	// ProjectSearchComplete says the project search was read to the
+	// provider's end-of-data signal. When it is false (a later page failed,
+	// the page bound was hit, a page came back empty before the end) the
+	// rows are a part of the provider's projects: they are written, and no
+	// ownership row is closed on their evidence.
+	ProjectSearchComplete bool `json:"project_search_complete"`
+	// ProjectSearchPages is the number of search pages read.
+	ProjectSearchPages int `json:"project_search_pages,omitempty"`
 	// WalkSkipped (Python parity, mirrors GitLabTeamCatalogResult.WalkSkipped)
 	// is true when a non-strict walk failure -- project search, or (with
 	// Members selected) a project's lead lookup -- skipped the ENTIRE walk,
@@ -174,12 +186,40 @@ func (handler JiraTeamCatalogRouteHandler) CollectTeamCatalog(
 	// normalizes shares the same org alias config.
 	resolver := identityalias.LoadDefault()
 
-	searchPath := "/rest/api/3/project/search?" + url.Values{
-		"maxResults": {strconv.Itoa(jiraTeamCatalogProjectSearchMaxResults)},
-	}.Encode()
+	// The search is read page by page to the provider's end-of-data signal.
+	// The first page failing is the walk failing, as before. A later page
+	// failing, the page bound, or an empty page before the end leaves a PART
+	// of the projects: the walk goes on with it and reports the search as
+	// not complete, so the ownership write closes nothing.
 	var search jiraTeamCatalogProjectSearchPayload
-	if err := jiraFetchObject(ctx, client, http.MethodGet, searchPath, nil, &search); err != nil {
-		return jiraTeamCatalogWalkFailure(ctx, ref, "project_discovery_failed", requests, err)
+	searchComplete, searchPages, searchStop := false, 0, "page_bound"
+	for searchPages < jiraTeamCatalogProjectSearchMaxPages {
+		query := url.Values{"maxResults": {strconv.Itoa(jiraTeamCatalogProjectSearchMaxResults)}}
+		if len(search.Values) > 0 {
+			query.Set("startAt", strconv.Itoa(len(search.Values)))
+		}
+		var page jiraTeamCatalogProjectSearchPayload
+		if err := jiraFetchObject(ctx, client, http.MethodGet, "/rest/api/3/project/search?"+query.Encode(), nil, &page); err != nil {
+			if searchPages == 0 {
+				return jiraTeamCatalogWalkFailure(ctx, ref, "project_discovery_failed", requests, err)
+			}
+			searchStop = "page_error"
+			break
+		}
+		searchPages++
+		search.Values = append(search.Values, page.Values...)
+		if page.endOfData(len(search.Values), jiraTeamCatalogProjectSearchMaxResults) {
+			searchComplete = true
+			break
+		}
+		if len(page.Values) == 0 {
+			searchStop = "empty_page"
+			break
+		}
+	}
+	if !searchComplete {
+		slog.Default().WarnContext(ctx, "jira_team_catalog_project_search_incomplete",
+			"org_id", ref.OrgID, "reason", searchStop, "pages", searchPages, "projects", len(search.Values))
 	}
 
 	rows := JiraTeamCatalogRows{}
@@ -270,6 +310,8 @@ func (handler JiraTeamCatalogRouteHandler) CollectTeamCatalog(
 		MembersImported:           len(distinctJiraMembershipMembers(rows.Memberships)),
 		SprintsImported:           len(rows.Sprints),
 		ProjectsSkippedNoNativeID: projectsSkippedNoNativeID,
+		ProjectSearchComplete:     searchComplete,
+		ProjectSearchPages:        searchPages,
 	}
 	evidence.Requests = requests
 	return JiraTeamCatalogBatch{Rows: rows, Result: result, Evidence: evidence}, nil
@@ -573,7 +615,7 @@ func (collector JiraTeamCatalogCollector) CollectTeamCatalog(
 				nativeIDByKey[*row.ProjectKey] = row.ID
 			}
 		}
-		legacyOwnership, legacySkipped, legacyErr := jiraLegacyProjectOwnershipLinks(
+		legacyOwnership, legacySkipped, legacyComplete, legacyErr := jiraLegacyProjectOwnershipLinks(
 			ctx, collector.Sink.Conn, ref.OrgID, nativeIDByKey, normalizedAt.UTC().Truncate(time.Millisecond))
 		if legacyErr != nil {
 			return result, legacyErr
@@ -593,8 +635,17 @@ func (collector JiraTeamCatalogCollector) CollectTeamCatalog(
 		if openErr != nil {
 			return result, openErr
 		}
+		// The snapshot is complete only when every read behind it reached
+		// its end: all pages of the project search and the legacy links.
+		snapshotComplete := batch.Result.ProjectSearchComplete && legacyComplete
+		if !snapshotComplete {
+			slog.Default().WarnContext(ctx, "jira_team_catalog_ownership_snapshot_incomplete",
+				"org_id", ref.OrgID, "project_search_complete", batch.Result.ProjectSearchComplete,
+				"legacy_links_complete", legacyComplete, "open_rows_kept", len(open))
+		}
+		result.OwnershipSnapshotIncomplete = !snapshotComplete
 		var retracted []jiraTeamCatalogOwnershipRow
-		ownership, retracted = jiraOwnershipSnapshot(ownership, open, normalizedAt.UTC().Truncate(time.Millisecond))
+		ownership, retracted = jiraOwnershipSnapshot(ownership, open, normalizedAt.UTC().Truncate(time.Millisecond), snapshotComplete)
 		if len(retracted) > 0 {
 			slog.Default().InfoContext(ctx, "jira_team_catalog_ownership_retracted",
 				"org_id", ref.OrgID, "rows", len(retracted))

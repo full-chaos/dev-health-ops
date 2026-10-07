@@ -3,11 +3,13 @@ package providersync
 import (
 	"context"
 	"errors"
+	"fmt"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"io"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -335,6 +337,129 @@ func TestJiraTeamCatalogCollectWritesNoProjectIdentityWithoutANativeID(t *testin
 	}
 	if batch.Result.ProjectsSkippedNoNativeID != 3 {
 		t.Fatalf("skipped=%d, want 3", batch.Result.ProjectsSkippedNoNativeID)
+	}
+}
+
+// jiraProjectSearchPage is one page of the project search: `count` projects
+// numbered from `first`, with the end-of-data fields given.
+func jiraProjectSearchPage(first, count int, tail string) string {
+	entries := make([]string, 0, count)
+	for index := first; index < first+count; index++ {
+		entries = append(entries, fmt.Sprintf(`{"id":"%d","key":"P%d","name":"Project %d"}`, 10000+index, index, index))
+	}
+	return `{"values":[` + strings.Join(entries, ",") + `]` + tail + `}`
+}
+
+func collectJiraProjectSearch(t *testing.T, byURI map[string]jiraTeamCatalogFixtureResponse) (JiraTeamCatalogBatch, *jiraTeamCatalogFixtureDoer) {
+	t.Helper()
+	doer := &jiraTeamCatalogFixtureDoer{t: t, byURI: byURI}
+	// Projects only and not strict: no member lookup; the sprint walk has no
+	// fixture and is skipped, which is not what these tests are about.
+	client := jiraTeamCatalogTestClient(t, fakehttp.Client(jiraProjectSearchOnlyDoer{doer}))
+	batch, err := JiraTeamCatalogRouteHandler{}.CollectTeamCatalog(context.Background(),
+		TeamCatalogReference{OrgID: "org-1", SyncRunID: "run-1"}, providerfoundation.Credential{Provider: "jira"}, client,
+		TeamCatalogSelections{Projects: true}, time.Date(2026, 8, 30, 12, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	return batch, doer
+}
+
+// jiraProjectSearchOnlyDoer answers the project search from the fixtures and
+// every other request with 404.
+type jiraProjectSearchOnlyDoer struct{ search *jiraTeamCatalogFixtureDoer }
+
+func (doer jiraProjectSearchOnlyDoer) Do(request *http.Request) (*http.Response, error) {
+	if strings.HasPrefix(request.URL.Path, "/rest/api/3/project/search") {
+		return doer.search.Do(request)
+	}
+	return &http.Response{StatusCode: http.StatusNotFound, Header: http.Header{"Content-Type": []string{"application/json"}},
+		Body: io.NopCloser(strings.NewReader(`{}`)), Request: request}, nil
+}
+
+const jiraTeamCatalogProjectSearchPage2URI = "/rest/api/3/project/search?maxResults=100&startAt=100"
+
+// The project search is read to the provider's end-of-data signal. A first
+// page that is full and not the last one is a PART of the projects: the walk
+// reads the next page, and only the page that says it is the last makes the
+// search complete.
+func TestJiraTeamCatalogCollectReadsEveryPageOfTheProjectSearch(t *testing.T) {
+	t.Parallel()
+	batch, doer := collectJiraProjectSearch(t, map[string]jiraTeamCatalogFixtureResponse{
+		jiraTeamCatalogProjectSearchURI:      {body: jiraProjectSearchPage(0, 100, `,"isLast":false,"total":150`)},
+		jiraTeamCatalogProjectSearchPage2URI: {body: jiraProjectSearchPage(100, 50, `,"isLast":true,"total":150`)},
+	})
+	if len(batch.Rows.Ownership) != 150 || len(batch.Rows.Projects) != 150 || len(batch.Rows.Teams) != 150 {
+		t.Fatalf("teams=%d ownership=%d projects=%d, want 150 each (both pages)", len(batch.Rows.Teams), len(batch.Rows.Ownership), len(batch.Rows.Projects))
+	}
+	if !batch.Result.ProjectSearchComplete || batch.Result.ProjectSearchPages != 2 {
+		t.Fatalf("result=%+v, want the search complete after 2 pages", batch.Result)
+	}
+	if len(doer.requests) != 2 {
+		t.Fatalf("search requests=%v, want the two pages", doer.requests)
+	}
+}
+
+// The end-of-data signal decides, one case per form of it.
+func TestJiraTeamCatalogProjectSearchIsCompleteOnlyOnAnEndOfDataSignal(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		pages               map[string]jiraTeamCatalogFixtureResponse
+		complete            bool
+		pagesRead, projects int
+	}{
+		"a later page fails": {map[string]jiraTeamCatalogFixtureResponse{
+			jiraTeamCatalogProjectSearchURI:      {body: jiraProjectSearchPage(0, 100, `,"isLast":false,"total":150`)},
+			jiraTeamCatalogProjectSearchPage2URI: {status: http.StatusForbidden, body: `{}`},
+		}, false, 1, 100},
+		"a full page with no signal is not the end; an empty page stops the walk": {map[string]jiraTeamCatalogFixtureResponse{
+			jiraTeamCatalogProjectSearchURI:      {body: jiraProjectSearchPage(0, 100, ``)},
+			jiraTeamCatalogProjectSearchPage2URI: {body: `{"values":[],"isLast":false}`},
+		}, false, 2, 100},
+		"isLast false on a short page is not the end": {map[string]jiraTeamCatalogFixtureResponse{
+			jiraTeamCatalogProjectSearchURI:                       {body: jiraProjectSearchPage(0, 2, `,"isLast":false`)},
+			"/rest/api/3/project/search?maxResults=100&startAt=2": {status: http.StatusForbidden, body: `{}`},
+		}, false, 1, 2},
+		"total not reached is not the end": {map[string]jiraTeamCatalogFixtureResponse{
+			jiraTeamCatalogProjectSearchURI:                       {body: jiraProjectSearchPage(0, 2, `,"total":3`)},
+			"/rest/api/3/project/search?maxResults=100&startAt=2": {status: http.StatusForbidden, body: `{}`},
+		}, false, 1, 2},
+		"total reached is the end": {map[string]jiraTeamCatalogFixtureResponse{
+			jiraTeamCatalogProjectSearchURI: {body: jiraProjectSearchPage(0, 2, `,"total":2`)},
+		}, true, 1, 2},
+		"a short page with no signal is the end": {map[string]jiraTeamCatalogFixtureResponse{
+			jiraTeamCatalogProjectSearchURI: {body: jiraProjectSearchPage(0, 2, ``)},
+		}, true, 1, 2},
+		"isLast true on a full page is the end": {map[string]jiraTeamCatalogFixtureResponse{
+			jiraTeamCatalogProjectSearchURI: {body: jiraProjectSearchPage(0, 100, `,"isLast":true`)},
+		}, true, 1, 100},
+	} {
+		batch, _ := collectJiraProjectSearch(t, tc.pages)
+		if batch.Result.ProjectSearchComplete != tc.complete || batch.Result.ProjectSearchPages != tc.pagesRead || len(batch.Rows.Projects) != tc.projects {
+			t.Errorf("%s: complete=%v pages=%d projects=%d, want %v, %d, %d", name,
+				batch.Result.ProjectSearchComplete, batch.Result.ProjectSearchPages, len(batch.Rows.Projects), tc.complete, tc.pagesRead, tc.projects)
+		}
+	}
+}
+
+// The walk is bounded. A provider that never says "last" stops the walk at
+// the bound with what was read, and the search is not complete.
+func TestJiraTeamCatalogProjectSearchStopsAtThePageBoundAndIsNotComplete(t *testing.T) {
+	t.Parallel()
+	pages := map[string]jiraTeamCatalogFixtureResponse{}
+	for page := 0; page < jiraTeamCatalogProjectSearchMaxPages; page++ {
+		uri := jiraTeamCatalogProjectSearchURI
+		if page > 0 {
+			uri += "&startAt=" + strconv.Itoa(page*2)
+		}
+		pages[uri] = jiraTeamCatalogFixtureResponse{body: jiraProjectSearchPage(page*2, 2, `,"isLast":false`)}
+	}
+	// No fixture for the page after the bound: a request for it fails the test.
+	batch, doer := collectJiraProjectSearch(t, pages)
+	if batch.Result.ProjectSearchComplete || batch.Result.ProjectSearchPages != jiraTeamCatalogProjectSearchMaxPages ||
+		len(batch.Rows.Projects) != 2*jiraTeamCatalogProjectSearchMaxPages || len(doer.requests) != jiraTeamCatalogProjectSearchMaxPages {
+		t.Fatalf("complete=%v pages=%d projects=%d requests=%d, want not complete at the bound of %d pages",
+			batch.Result.ProjectSearchComplete, batch.Result.ProjectSearchPages, len(batch.Rows.Projects), len(doer.requests), jiraTeamCatalogProjectSearchMaxPages)
 	}
 }
 

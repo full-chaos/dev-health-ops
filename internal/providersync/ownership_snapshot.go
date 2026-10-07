@@ -10,6 +10,18 @@ type OwnershipSnapshotRow struct {
 	ValidFrom                 time.Time
 }
 
+// OwnershipSnapshot is what one run found, and whether that is everything.
+//
+// Complete says the run read its source to the end: the provider gave an
+// end-of-data signal for every read the rows come from. The zero value is NOT
+// complete, so a caller that does not state it closes nothing. A caller sets
+// it from the signal itself, never from a constant: a first page, a read that
+// stopped at an error and a read that stopped at a bound are not complete.
+type OwnershipSnapshot struct {
+	Fresh    []OwnershipSnapshotRow
+	Complete bool
+}
+
 // OwnershipSnapshotRetraction names one open row to close: its index in the
 // `open` argument and the valid_to to close it with.
 type OwnershipSnapshotRetraction struct {
@@ -34,9 +46,15 @@ func ownershipSnapshotKey(row OwnershipSnapshotRow) string {
 // the Jira project-as-team catalog and the Atlassian Teams writer today
 // (TestJiraOwnershipWriterCensus keeps that a named set).
 //
-// fresh is what this run found; open is what the table holds open for this
-// writer, and only for this writer: the caller's read is the scope, this
-// function closes whatever it is given and the snapshot does not hold.
+// snapshot.Fresh is what this run found; open is what the table holds open
+// for this writer, and only for this writer: the caller's read is the scope,
+// this function closes whatever it is given and a complete snapshot does not
+// hold.
+//
+// A snapshot that is not complete closes NOTHING. A row missing from a part
+// of the provider's answer is not a fact the provider dropped, and closing it
+// would remove ownership that nothing in the same run writes again. The
+// first-seen valid_from still applies: it adds no row and closes none.
 //
 // A fresh row whose (team, project, source) is already open takes the
 // EARLIEST open valid_from. valid_from is a key column, so the write replaces
@@ -47,10 +65,11 @@ func ownershipSnapshotKey(row OwnershipSnapshotRow) string {
 // key written again with valid_to set, never a delete; valid_to is never
 // before the row's valid_from.
 //
-// An empty fresh list retracts every open row. A caller for which "the
-// provider answered with nothing" is more likely an access change than a
-// real empty state must not call with it.
-func PlanOwnershipSnapshot(fresh, open []OwnershipSnapshotRow, at time.Time) OwnershipSnapshotPlan {
+// A complete snapshot with no fresh row retracts every open row. A caller for
+// which "the provider answered with nothing" is more likely an access change
+// than a real empty state must not call with it.
+func PlanOwnershipSnapshot(snapshot OwnershipSnapshot, open []OwnershipSnapshotRow, at time.Time) OwnershipSnapshotPlan {
+	fresh := snapshot.Fresh
 	plan := OwnershipSnapshotPlan{ValidFrom: make([]time.Time, len(fresh))}
 	firstSeen := map[string]time.Time{}
 	for _, row := range open {
@@ -67,6 +86,9 @@ func PlanOwnershipSnapshot(fresh, open []OwnershipSnapshotRow, at time.Time) Own
 		if seen, ok := firstSeen[key]; ok && seen.Before(row.ValidFrom) {
 			plan.ValidFrom[index] = seen
 		}
+	}
+	if !snapshot.Complete {
+		return plan
 	}
 	for index, row := range open {
 		key := ownershipSnapshotKey(row)

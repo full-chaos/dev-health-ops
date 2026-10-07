@@ -139,6 +139,10 @@ type Rows struct {
 	// carried no Jira project key, or no Jira project ARI with a native id
 	// (the project id of the ownership row).
 	SkippedProjects int
+	// ProjectLinksComplete says every project-link read behind Ownership
+	// reached the provider's last page. Only Collect sets it. Rows built any
+	// other way leave it false, and Write then closes no project link.
+	ProjectLinksComplete bool
 }
 
 // ErrConfiguration marks an input the sync cannot run without.
@@ -261,6 +265,7 @@ func Collect(ctx context.Context, client Client, params Params) (Rows, error) {
 		return Rows{}, fmt.Errorf("search atlassian teams: %w", err)
 	}
 	var rows Rows
+	activeTeams, projectReads := 0, 0
 	seen := map[string]bool{}
 	for _, team := range teams {
 		id, err := teamID(team.ID)
@@ -313,11 +318,16 @@ func Collect(ctx context.Context, client Client, params Params) (Rows, error) {
 				})
 			}
 		}
+		projectRead := 0
+		if active {
+			activeTeams++
+		}
 		if active && params.Selections.Projects {
 			projects, err := client.IterTeamActiveProjects(siteCtx, team.ID, page)
 			if err != nil {
 				return Rows{}, fmt.Errorf("read projects of team %s: %w", id, err)
 			}
+			projectRead = 1
 			keys := map[string]bool{}
 			for _, project := range projects {
 				key := ""
@@ -347,7 +357,14 @@ func Collect(ctx context.Context, client Client, params Params) (Rows, error) {
 			sort.Strings(row.ProjectKeys)
 		}
 		rows.Teams = append(rows.Teams, row)
+		projectReads += projectRead
 	}
+	// The team search and every per-team read above either followed the
+	// provider's cursor until it gave no next page, or returned its error out
+	// of this function (the client is strict: a GraphQL error next to partial
+	// data is an error). So the links are complete when one read finished for
+	// every active team, and that count is the signal, not an assumption.
+	rows.ProjectLinksComplete = params.Selections.Projects && projectReads == activeTeams
 	return rows, nil
 }
 

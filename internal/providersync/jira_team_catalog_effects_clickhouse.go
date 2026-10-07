@@ -2,6 +2,7 @@ package providersync
 
 import (
 	"context"
+	"log/slog"
 	"reflect"
 	"strings"
 	"time"
@@ -529,13 +530,15 @@ func jiraTargetDateEqual(left, right *time.Time) bool {
 // a project nothing else points to. No `projects` row is built here -- a key
 // in the map already has its row from native discovery.
 //
-// Read failures are swallowed: a missing/broken legacy table must never fail
-// an otherwise-healthy native sync.
+// A read failure does not fail the sync: a missing or broken legacy table
+// must never fail an otherwise-healthy native sync. It is reported as
+// complete = false, with no rows: the caller then has only a part of what
+// this writer owns and must close nothing.
 func jiraLegacyProjectOwnershipLinks(
 	ctx context.Context, conn driver.Conn, orgID string, nativeIDByKey map[string]string, normalizedAt time.Time,
-) (ownership []jiraTeamCatalogOwnershipRow, skipped int, err error) {
+) (ownership []jiraTeamCatalogOwnershipRow, skipped int, complete bool, err error) {
 	if conn == nil || strings.TrimSpace(orgID) == "" {
-		return nil, 0, ErrInvalidConfiguration
+		return nil, 0, false, ErrInvalidConfiguration
 	}
 	rows, err := conn.Query(ctx, `
 SELECT project_key, ops_team_id
@@ -544,14 +547,16 @@ WHERE org_id = {org_id:String}`,
 		clickhouse.Named("org_id", orgID),
 	)
 	if err != nil {
-		return nil, 0, nil
+		slog.Default().WarnContext(ctx, "jira_team_catalog_legacy_links_read_failed", "org_id", orgID, "stage", "query")
+		return nil, 0, false, nil
 	}
 	defer rows.Close()
 	ownership = make([]jiraTeamCatalogOwnershipRow, 0)
 	for rows.Next() {
 		var projectKey, opsTeamID string
 		if err := rows.Scan(&projectKey, &opsTeamID); err != nil {
-			return nil, 0, nil
+			slog.Default().WarnContext(ctx, "jira_team_catalog_legacy_links_read_failed", "org_id", orgID, "stage", "scan")
+			return nil, 0, false, nil
 		}
 		projectKey = strings.TrimSpace(projectKey)
 		opsTeamID = strings.TrimSpace(opsTeamID)
@@ -572,9 +577,10 @@ WHERE org_id = {org_id:String}`,
 		})
 	}
 	if err := rows.Err(); err != nil {
-		return nil, 0, nil
+		slog.Default().WarnContext(ctx, "jira_team_catalog_legacy_links_read_failed", "org_id", orgID, "stage", "rows")
+		return nil, 0, false, nil
 	}
-	return ownership, skipped, nil
+	return ownership, skipped, true, nil
 }
 
 // jiraOpenCatalogOwnershipQuery reads the open team_project_ownership rows
@@ -617,12 +623,16 @@ func jiraOpenCatalogOwnership(ctx context.Context, conn driver.Conn, orgID strin
 // their first-seen valid_from, and the open rows of this writer the snapshot
 // no longer holds, closed at `at`.
 //
+// complete says every read the fresh rows come from reached its end: every
+// page of the project search, and the legacy links table. Anything less
+// closes nothing.
+//
 // An empty fresh snapshot retracts nothing: a project search that returns no
 // project is far more often an access change than an organization that
 // removed every project, and closing all ownership on it would empty every
 // team answer until the next good run.
 func jiraOwnershipSnapshot(
-	fresh, open []jiraTeamCatalogOwnershipRow, at time.Time,
+	fresh, open []jiraTeamCatalogOwnershipRow, at time.Time, complete bool,
 ) (kept, retracted []jiraTeamCatalogOwnershipRow) {
 	kept = append([]jiraTeamCatalogOwnershipRow(nil), fresh...)
 	if len(fresh) == 0 {
@@ -635,7 +645,7 @@ func jiraOwnershipSnapshot(
 		}
 		return out
 	}
-	plan := PlanOwnershipSnapshot(facts(fresh), facts(open), at)
+	plan := PlanOwnershipSnapshot(OwnershipSnapshot{Fresh: facts(fresh), Complete: complete}, facts(open), at)
 	for index := range kept {
 		kept[index].ValidFrom = plan.ValidFrom[index]
 	}

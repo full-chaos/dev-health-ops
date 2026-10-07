@@ -304,7 +304,7 @@ func RegisterOperatorMetrics(registry *health.Registry, deps *Deps) error {
 		return err
 	}
 	// CHAOS-8816: what PATCH /sync-configs/{id} does to dataset rows (rows
-	// switched on or off; saves with a stale base list). It replaces the
+	// switched on or off). It replaces the
 	// dataset-drift repair counter: a save no longer rewrites rows its own
 	// change does not name.
 	if err := registry.RegisterMetrics("sync_config_dataset_selection", syncadmin.SelectionMetricsSource()); err != nil {

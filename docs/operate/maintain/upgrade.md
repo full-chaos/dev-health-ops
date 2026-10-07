@@ -68,18 +68,19 @@ sync configuration, or send an API `PATCH` of the configuration with
 `sync_targets` that includes `work-items`. The next scheduled run plans the
 work-items unit again. That save switches on only the work-item datasets: a
 save changes the datasets of the targets you added or removed and leaves every
-other dataset as it is. The targets a configuration shows are read from its
-enabled datasets, so "Work Items" shows unchecked while those datasets are off.
+other dataset as it is. A configuration shows the targets that were selected
+for it and the targets its enabled datasets add. If "Work Items" already
+shows checked while the work-item datasets are off (the datasets were switched
+off through the dataset API after the target was selected), a save does not
+switch them on: uncheck "Work Items", save, check it and save, or switch the
+datasets on through the dataset API.
 
 **How to see what a save changed**: the API metrics endpoint counts the dataset
 rows that saves of sync configurations switched, in
 `sync_config_dataset_rows_changed_total{provider="<provider>",direction="enabled"|"disabled"}`,
 and writes one `sync_config_dataset_rows_changed` INFO log entry per save that
 switched a row (`org_id`, `integration_id`, `provider`, `enabled_dataset_keys`,
-`disabled_dataset_keys`). `sync_config_save_stale_base_total{provider="<provider>"}`
-counts the saves whose `sync_targets_base` (the list the form was shown) was
-not the list the datasets showed at the save: another save, the dataset API or
-a backfill changed a dataset while the form was open, and the save kept that
-change. These two families replace `sync_target_dataset_drift_repaired_total`,
+`disabled_dataset_keys`). This family replaces
+`sync_target_dataset_drift_repaired_total`,
 which is no longer written: a save no longer rewrites datasets it did not
 change.

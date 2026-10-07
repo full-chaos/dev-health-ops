@@ -16,32 +16,38 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 )
 
-// The stored sync_configurations.sync_targets list of a whole-integration
-// config is a mirror of its dataset rows (CHAOS-8816). A reader that runs the
-// canonical-incident gate on it must take its targets from
-// providersync.IncidentGateTargets, or a target a row put in the list refuses
-// a request or a scheduled run. The two censuses below keep that true for
-// code that does not exist yet.
+// The stored sync_configurations.sync_targets list holds the targets requests
+// asked for (CHAOS-8816): every reader runs the canonical-incident gate on
+// the list as it is stored, so every writer must store only targets a gate
+// read. A save of a whole-integration config stores the submitted targets
+// that were stored before or that it adds, and gates exactly that list; the
+// save of a parent gives the same list to its children. The censuses below
+// keep the readers, the gate callers and the writers a named set for code
+// that does not exist yet.
 //
 // What they pin: (1) the set of Go functions that hold a statement reading
 // the column; (2) the set of Go functions that call one of the gate's entry
-// points, and for each one that gates the STORED list, that the function
-// calls one of the shared functions. What they do not pin: a reader that
-// selects the column through `SELECT *` or builds the statement from parts,
-// and the data flow inside a function (a function that calls the shared
-// function and then gates a different list passes).
+// points; (3) the set of Go functions that hold a statement writing the
+// column, and the set of functions that call one of those; (4) that the one
+// function that writes a list to a config the request does not name
+// (cascadeToChildren) never reads the submitted list of the request. What
+// they do not pin: a reader that selects the column through `SELECT *` or
+// builds the statement from parts, a writer whose statement does not hold the
+// column name, a write outside Go (the Alembic revisions, the fixture
+// generator), and the data flow inside a function: that the save stores what
+// its gate read is pinned by behaviour (TestTheSaveStoresWhatTheGateReads,
+// TestASaveStoresOnlyWhatWasStoredOrWhatItAdds and the tests in
+// child_cascade_integration_test.go and main_equality_integration_test.go).
 
 // storedTargetReaders is every Go function of the production tree that holds
 // a statement reading sync_configurations.sync_targets, with what it does
-// with the list. A new reader is added here on purpose, after the question
-// "does a mirrored target change its result?" has an answer.
+// with the list. A new reader is added here on purpose.
 var storedTargetReaders = map[string]string{
 	"internal/api/syncadmin.<package level>": "the api's column list (scanSyncConfig): the routes read the list from it; " +
 		"the routes that gate it are named in incidentGateCallers",
-	"internal/scheduler/sync.configuredIncidentGateTargets": "the scheduler's pre-mint gate: returns providersync.IncidentGateTargets of the list",
-	"internal/scheduler/sync.loadMaterializationPlan": "the scheduler's plan: gates providersync.IncidentGateTargets of the list; " +
-		"the list narrows the datasets of a child config only",
-	"internal/scheduler/sync.preparePagerDutyRepair": "PagerDuty only (its list is never a mirror): the list must be exactly [operational]",
+	"internal/scheduler/sync.configuredSyncTargets":   "the scheduler's pre-mint gate: gates the list as stored",
+	"internal/scheduler/sync.loadMaterializationPlan": "the scheduler's plan: gates the list as stored; the list narrows the datasets of a child config only",
+	"internal/scheduler/sync.preparePagerDutyRepair":  "PagerDuty only: the list must be exactly [operational]",
 	"internal/synchandoff.LoadConfig": "the manual trigger and the webhook sync-now request: the list narrows the datasets of a child config only " +
 		"and is copied to the trigger for a log line",
 	"internal/synccoverage.loadConfig": "sync coverage: the list scopes the datasets of a child or not-planner-managed config, " +
@@ -59,53 +65,21 @@ var incidentGateEntryPoints = map[string]bool{
 	"SyncTargetsRequireCanonicalIncident": true,
 }
 
-// sharedGateTargetFunctions is the functions that return the stored list
-// without its mirrored items.
-var sharedGateTargetFunctions = map[string]bool{
-	"IncidentGateTargets":           true, // providersync
-	"incidentGateTargets":           true, // syncadmin, over the list as the routes decode it
-	"configuredIncidentGateTargets": true, // scheduler/sync, the pre-mint read
-}
-
-type incidentGateCaller struct {
-	// storedList: the function gates the stored list of a config and must
-	// call a shared function.
-	storedList bool
-	source     string
-}
-
 // incidentGateCallers is every Go function of the production tree that calls
 // a gate entry point, with the list it gates.
-var incidentGateCallers = map[string]incidentGateCaller{
-	"internal/api/syncadmin.triggerSyncConfig":   {true, "Sync now: the stored list"},
-	"internal/api/syncadmin.backfillSyncConfig":  {true, "backfill: the stored list"},
-	"internal/api/syncadmin.replaceRepositories": {true, "PUT repositories: the stored list"},
-	"internal/api/syncadmin.updateSyncConfigTx": {true, "the save: with a list, the targets the request adds and the passthrough targets; " +
-		"with no list, the stored list"},
-	"internal/api/syncadmin.createSyncConfig":                     {false, "the create: the submitted list (a request asked for every item)"},
-	"internal/api/syncadmin.batchCreateSyncConfigs":               {false, "the batch create: the submitted list"},
-	"internal/scheduler/sync.coordinatorEligibility":              {true, "the scheduler's pre-mint gate: the stored list"},
-	"internal/scheduler/sync.loadMaterializationPlan":             {true, "the scheduler's plan: the stored list"},
-	"internal/scheduler/sync.SyncTargetsRequireCanonicalIncident": {false, "the exported entry point itself"},
-	"internal/syncdispatchruntime.datasetScopeRequiresCanonicalIncident": {false,
-		"dispatch: the legacy targets of one dataset key of a run unit or an enabled row, from the registry"},
+var incidentGateCallers = map[string]string{
+	"internal/api/syncadmin.triggerSyncConfig":   "Sync now: the stored list",
+	"internal/api/syncadmin.backfillSyncConfig":  "backfill: the stored list",
+	"internal/api/syncadmin.replaceRepositories": "PUT repositories: the stored list",
+	"internal/api/syncadmin.updateSyncConfigTx": "the save: with a list, the list the save stores (for a config whose rows own its selection the " +
+		"submitted targets that were stored or that it adds, else the submitted list); with no list, the stored list",
+	"internal/api/syncadmin.createSyncConfig":                            "the create: the submitted list (a request asked for every item)",
+	"internal/api/syncadmin.batchCreateSyncConfigs":                      "the batch create: the submitted list",
+	"internal/scheduler/sync.coordinatorEligibility":                     "the scheduler's pre-mint gate: the stored list",
+	"internal/scheduler/sync.loadMaterializationPlan":                    "the scheduler's plan: the stored list",
+	"internal/scheduler/sync.SyncTargetsRequireCanonicalIncident":        "the exported entry point itself",
+	"internal/syncdispatchruntime.datasetScopeRequiresCanonicalIncident": "dispatch: the legacy targets of one dataset key of a run unit or an enabled row, from the registry",
 }
-
-// The same list has writers, and a writer can copy it from one config to
-// another. A child config's list is its own selection, so a parent's mirrored
-// item must never be written to it: the mirror never leaves the parent. The
-// census below keeps the set of writers, and of the functions that hand a
-// list to a writer, a named set.
-//
-// What it pins: (1) the set of Go functions that hold a statement writing the
-// column; (2) the set of Go functions that call one of those writers; (3)
-// that the one writer that gives a parent's submitted list to another config
-// (cascadeToChildren) calls providersync.CascadedSyncTargets. What it does
-// not pin: a writer that builds its statement from parts that do not hold
-// the column name, a write outside Go (the Alembic revisions, the fixture
-// generator), and the data flow inside a function (a function that calls the
-// shared function and then writes a different list passes; the behaviour is
-// pinned by the tests in child_cascade_integration_test.go).
 
 // storedTargetWriters is every Go function of the production tree that holds
 // a statement writing sync_configurations.sync_targets, with the list it
@@ -119,9 +93,9 @@ var storedTargetWriters = map[string]string{
 var storedTargetWrite = regexp.MustCompile(`(?is)\binsert\s+into\s+(public\.)?sync_configurations\b.*\bsync_targets\b|\bsync_targets\s*=[^=]`)
 
 type targetWriterCaller struct {
-	// toAnotherConfig: the function writes a list taken from one config (or
-	// from a request for one config) to a different config, and must call
-	// providersync.CascadedSyncTargets.
+	// toAnotherConfig: the function writes a list to a config the request
+	// does not name. The list is the one the save stored on the config of the
+	// request, so the function must not read the request's submitted list.
 	toAnotherConfig bool
 	source          string
 }
@@ -131,10 +105,14 @@ type targetWriterCaller struct {
 var storedTargetWriterCallers = map[string]targetWriterCaller{
 	"internal/api/syncadmin.createSyncConfigTx":       {false, "the create: the submitted list, for the config the request creates"},
 	"internal/api/syncadmin.batchCreateSyncConfigsTx": {false, "the batch create: the submitted list, for the config the request creates"},
-	"internal/api/syncadmin.updateSyncConfigTx": {false, "the save: for the config of the request, the mirror when its rows own the selection, " +
-		"else the submitted list"},
-	"internal/api/syncadmin.cascadeToChildren": {true, "the save of a parent: for each child, providersync.CascadedSyncTargets of the submitted list"},
+	"internal/api/syncadmin.updateSyncConfigTx": {false, "the save: for the config of the request, the list its gate read (the submitted targets " +
+		"that were stored or that the save adds when its rows own the selection, else the submitted list)"},
+	"internal/api/syncadmin.cascadeToChildren": {true, "the save of a parent: for each child, the list the save stored on the parent"},
 }
+
+// submittedListField is the field of the decoded request body that holds the
+// submitted sync_targets list.
+const submittedListField = "syncTargets"
 
 type gateCensus struct {
 	readers []string
@@ -143,12 +121,14 @@ type gateCensus struct {
 	calls map[string]map[string]bool
 	// callers: function -> the names of every function it calls.
 	callers map[string]map[string]bool
-	files   int
+	// fields: function -> the names of every field or method it selects.
+	fields map[string]map[string]bool
+	files  int
 }
 
 func scanGateCensus(t *testing.T, repoRoot string, roots ...string) gateCensus {
 	t.Helper()
-	census := gateCensus{callers: map[string]map[string]bool{}, calls: map[string]map[string]bool{}}
+	census := gateCensus{callers: map[string]map[string]bool{}, calls: map[string]map[string]bool{}, fields: map[string]map[string]bool{}}
 	readers := map[string]bool{}
 	writers := map[string]bool{}
 	for _, root := range roots {
@@ -175,6 +155,7 @@ func scanGateCensus(t *testing.T, repoRoot string, roots ...string) gateCensus {
 				}
 				qualified := filepath.ToSlash(relative) + "." + name
 				called := map[string]bool{}
+				selected := map[string]bool{}
 				gates := false
 				ast.Inspect(declaration, func(node ast.Node) bool {
 					switch typed := node.(type) {
@@ -189,6 +170,8 @@ func scanGateCensus(t *testing.T, repoRoot string, roots ...string) gateCensus {
 								}
 							}
 						}
+					case *ast.SelectorExpr:
+						selected[typed.Sel.Name] = true
 					case *ast.CallExpr:
 						callee := ""
 						switch function := typed.Fun.(type) {
@@ -209,6 +192,7 @@ func scanGateCensus(t *testing.T, repoRoot string, roots ...string) gateCensus {
 				}
 				if name != "<package level>" {
 					census.calls[qualified] = called
+					census.fields[qualified] = selected
 				}
 			}
 			return nil
@@ -257,16 +241,15 @@ func TestEveryReaderOfTheStoredTargetListIsNamed(t *testing.T) {
 	sort.Strings(want)
 	if !reflect.DeepEqual(census.readers, want) {
 		t.Fatalf("the functions that read sync_configurations.sync_targets changed.\n got  %v\n want %v\n"+
-			"The stored list of a whole-integration config is a mirror of its dataset rows (CHAOS-8816): a new reader "+
-			"that gates it must use providersync.IncidentGateTargets, and is named here with what it does with the list.",
+			"Every reader gates the stored list as it is stored (CHAOS-8816): a new reader is named here with what it "+
+			"does with the list.",
 			census.readers, want)
 	}
 }
 
-// TestEveryIncidentGateOnTheStoredListUsesTheSharedTargets: the functions
-// that call a gate entry point are exactly the named list, and each one that
-// gates the stored list calls a shared function.
-func TestEveryIncidentGateOnTheStoredListUsesTheSharedTargets(t *testing.T) {
+// TestEveryCallerOfTheIncidentGateIsNamed: the functions that call a gate
+// entry point are exactly the named list.
+func TestEveryCallerOfTheIncidentGateIsNamed(t *testing.T) {
 	census := gateCensusOfTheTree(t)
 	got := make([]string, 0, len(census.callers))
 	for name := range census.callers {
@@ -274,46 +257,23 @@ func TestEveryIncidentGateOnTheStoredListUsesTheSharedTargets(t *testing.T) {
 	}
 	sort.Strings(got)
 	want := make([]string, 0, len(incidentGateCallers))
-	storedListCallers := 0
-	for name, caller := range incidentGateCallers {
-		if strings.TrimSpace(caller.source) == "" {
+	for name, source := range incidentGateCallers {
+		if strings.TrimSpace(source) == "" {
 			t.Errorf("gate caller %s does not say which list it gates", name)
 		}
 		want = append(want, name)
-		if caller.storedList {
-			storedListCallers++
-		}
 	}
 	sort.Strings(want)
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("the functions that run the canonical-incident gate on a target list changed.\n got  %v\n want %v\n"+
-			"A new caller is named here with the list it gates; one that gates the stored list of a config must take its "+
-			"targets from providersync.IncidentGateTargets (CHAOS-8816).", got, want)
-	}
-	if storedListCallers == 0 {
-		t.Fatal("no named caller gates the stored list: the check below measured nothing")
-	}
-	for name, caller := range incidentGateCallers {
-		if !caller.storedList {
-			continue
-		}
-		shared := false
-		for callee := range census.callers[name] {
-			if sharedGateTargetFunctions[callee] {
-				shared = true
-			}
-		}
-		if !shared {
-			t.Errorf("%s gates the stored list (%s) and calls none of the shared functions %v: a target the list names only "+
-				"because a dataset row is on would refuse it", name, caller.source, sortedKeys(sharedGateTargetFunctions))
-		}
+			"A new caller is named here with the list it gates (CHAOS-8816).", got, want)
 	}
 }
 
 // TestEveryWriterOfTheStoredTargetListIsNamed: the functions that write
 // sync_configurations.sync_targets, and the functions that hand them a list,
-// are exactly the named sets; the one that writes to another config takes
-// the list from providersync.CascadedSyncTargets.
+// are exactly the named sets; the one that writes to another config never
+// reads the submitted list of the request.
 func TestEveryWriterOfTheStoredTargetListIsNamed(t *testing.T) {
 	census := gateCensusOfTheTree(t)
 	want := make([]string, 0, len(storedTargetWriters))
@@ -331,8 +291,8 @@ func TestEveryWriterOfTheStoredTargetListIsNamed(t *testing.T) {
 	sort.Strings(want)
 	if !reflect.DeepEqual(census.writers, want) {
 		t.Fatalf("the functions that write sync_configurations.sync_targets changed.\n got  %v\n want %v\n"+
-			"A child config's list is its own selection (CHAOS-8816): a new writer must not write a parent's mirrored item "+
-			"to another config, and is named here with the list it writes.", census.writers, want)
+			"Every reader gates the stored list as it is stored (CHAOS-8816): a new writer must store only targets a gate "+
+			"read, and is named here with the list it writes.", census.writers, want)
 	}
 	got := []string{}
 	for name, called := range census.calls {
@@ -359,15 +319,16 @@ func TestEveryWriterOfTheStoredTargetListIsNamed(t *testing.T) {
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("the functions that hand a list to a writer of sync_configurations.sync_targets changed.\n got  %v\n want %v\n"+
 			"A new caller is named here with the list it hands over; one that writes a list to a config other than the one "+
-			"the request names must take it from providersync.CascadedSyncTargets (CHAOS-8816).", got, want)
+			"the request names must write the list the save stored, never the submitted list (CHAOS-8816).", got, want)
 	}
-	if toAnotherConfig == 0 {
-		t.Fatal("no named caller writes to another config: the check below measured nothing")
+	if toAnotherConfig == 0 || !census.fields["internal/api/syncadmin.updateSyncConfigTx"][submittedListField] {
+		t.Fatal("no named caller writes to another config, or the save does not read the submitted list by the field " +
+			submittedListField + ": the check below measured nothing")
 	}
 	for name, caller := range storedTargetWriterCallers {
-		if caller.toAnotherConfig && !census.calls[name]["CascadedSyncTargets"] {
-			t.Errorf("%s writes a list to another config (%s) and does not call providersync.CascadedSyncTargets: "+
-				"an item the parent's list holds only because a dataset row is on would become the child's selection", name, caller.source)
+		if caller.toAnotherConfig && census.fields[name][submittedListField] {
+			t.Errorf("%s writes a list to another config (%s) and reads the submitted list of the request: "+
+				"an item the request names only because a dataset row is on would become the child's selection", name, caller.source)
 		}
 	}
 }
@@ -390,15 +351,6 @@ func TestStoredTargetWritePatternMatchesTheStatementsItMustFind(t *testing.T) {
 			t.Errorf("%q: match %v, want %v", text, got, want)
 		}
 	}
-}
-
-func sortedKeys(set map[string]bool) []string {
-	keys := make([]string, 0, len(set))
-	for key := range set {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-	return keys
 }
 
 // TestStoredTargetReadPatternMatchesTheStatementsItMustFind keeps the reader

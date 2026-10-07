@@ -38,16 +38,16 @@ type gateReaderResult struct {
 
 // TestAMirroredTargetNeverRefusesAReaderOfTheStoredList holds every reader of
 // sync_configurations.sync_targets that runs the canonical-incident gate to
-// one rule: a target the stored list names only because a dataset row is on
-// refuses nothing. The org does NOT have the canonical-incident feature.
+// one rule: a target a config shows only because a dataset row is on refuses
+// nothing, because a save never stores it. The org does NOT have the
+// canonical-incident feature.
 //
 // Each provider gets two configs with the same rows and the same stored list.
-// One is saved with the list GET shows (the save stores the derived list, so
-// the stored list of Jira and GitLab then names the gated target); the twin
-// is never saved, so its stored list is the list a request asked for. The two
-// must answer the same at every step: before the save, after it, and after
-// the incidents row is switched off (the stored list of the saved config
-// still names the gated target then).
+// One is saved with the list GET shows (for Jira and GitLab that list names
+// the gated target, because the incidents row is on); the twin is never
+// saved. The stored lists of the two must be equal after the save, and the
+// two must answer the same at every step: before the save, after it, and
+// after the incidents row is switched off.
 //
 // GitHub and Linear have no gated target with a dataset. GitHub's "incidents"
 // is in a list only when a request put it there, so it still refuses, saved
@@ -150,8 +150,9 @@ VALUES ($1::uuid,$2,'job-'||$1::text,$3::uuid,'sync','0 * * * *','UTC',1,FALSE,n
 	for _, testCase := range []struct {
 		provider, stored string
 		rows             []string
-		// mirrored is the gated target the save writes to the stored list
-		// because the incidents row is on ("" when the provider has none).
+		// mirrored is the gated target the config shows because the incidents
+		// row is on, and that a save must never store ("" when the provider
+		// has none).
 		mirrored string
 		// explicit: the stored list names a gated target a request put
 		// there, so every reader refuses and the save itself is refused.
@@ -204,14 +205,14 @@ VALUES ($1::uuid,$2,'job-'||$1::text,$3::uuid,'sync','0 * * * *','UTC',1,FALSE,n
 		if status != wantSave {
 			t.Fatalf("%s: the save of the shown list: %d, want %d: %s", testCase.provider, status, wantSave, body)
 		}
-		// The state the test exists to reach: the stored list names the
-		// gated target only as the mirror of the row.
-		if testCase.mirrored != "" && (!slices.Contains(stored, testCase.mirrored) || slices.Contains(storedList(twin.config), testCase.mirrored)) {
-			t.Fatalf("harness: %s: stored list of the saved config %v, of the twin %v: want %q only in the saved one",
-				testCase.provider, stored, storedList(twin.config), testCase.mirrored)
+		// The state the test exists to reach: the saved list named the gated
+		// target (the row is on) and the save did not store it.
+		if testCase.mirrored != "" && !slices.Contains(shown.SyncTargets, testCase.mirrored) {
+			t.Fatalf("harness: %s: the saved list %v does not name %q: nothing is measured", testCase.provider, shown.SyncTargets, testCase.mirrored)
 		}
-		if testCase.mirrored == "" && !testCase.explicit && (slices.Contains(stored, "incidents") || slices.Contains(stored, "operational")) {
-			t.Fatalf("harness: %s: the stored list %v names a gated target", testCase.provider, stored)
+		if !slices.Equal(stored, storedList(twin.config)) {
+			t.Errorf("%s: after a save of the shown list %v the stored list is %v, the list of the config that was never saved is %v: "+
+				"the save stored an item no request asked for", testCase.provider, shown.SyncTargets, stored, storedList(twin.config))
 		}
 		compare("after a save of the shown list")
 
@@ -219,12 +220,9 @@ VALUES ($1::uuid,$2,'job-'||$1::text,$3::uuid,'sync','0 * * * *','UTC',1,FALSE,n
 			continue
 		}
 		// The incidents row goes off on a side path: the plan-time gate on
-		// the rows no longer applies and the stored list is not rewritten.
+		// the rows no longer applies.
 		for _, one := range []seeded{saved, twin} {
 			exec(`UPDATE integration_datasets SET is_enabled = false WHERE integration_id = $1 AND dataset_key = 'incidents'`, one.integration)
-		}
-		if stored := storedList(saved.config); !slices.Contains(stored, testCase.mirrored) {
-			t.Fatalf("harness: %s: the stored list %v no longer names %q", testCase.provider, stored, testCase.mirrored)
 		}
 		got := read(testCase.provider+" saved, incidents row off", saved)
 		want := read(testCase.provider+" twin, incidents row off", twin)
@@ -237,35 +235,28 @@ VALUES ($1::uuid,$2,'job-'||$1::text,$3::uuid,'sync','0 * * * *','UTC',1,FALSE,n
 	}
 
 	// The stored list of a whole-integration config names a gated target
-	// that has a dataset (an earlier save put it there while the org had the
-	// feature). The list cannot say whether a request or a row put it
-	// there, so the readers of the list do not refuse; the rows decide at
-	// plan time. With the incidents row on the plan refuses the occurrence
-	// (no dataset of the config is fetched, as for a list without the
-	// target); with the row off the other datasets are planned.
+	// that has a dataset: a request asked for it (a save stores nothing
+	// else), so every reader of the list refuses, whatever the state of the
+	// incidents row.
 	for _, testCase := range []struct {
 		provider, stored string
 		rows             []string
-		putRepositories  int
 	}{
-		{"jira", `["work-items","operational"]`, []string{"work-items", "incidents"}, http.StatusBadRequest},
-		{"gitlab", `["git","incidents"]`, []string{"commits", "incidents"}, http.StatusOK},
+		{"jira", `["work-items","operational"]`, []string{"work-items", "incidents"}},
+		{"gitlab", `["git","incidents"]`, []string{"commits", "incidents"}},
 	} {
 		one := seed(testCase.provider, testCase.stored, testCase.rows)
-		want := gateReaderResult{http.StatusAccepted, http.StatusAccepted, testCase.putRepositories, schedsync.OccurrenceMinted, "ineligible"}
-		if got := read(testCase.provider+" stored gated target, incidents row on", one); got != want {
-			t.Errorf("%s, stored list %s, incidents row on: %+v, want %+v", testCase.provider, testCase.stored, got, want)
+		if got := read(testCase.provider+" stored gated target, incidents row on", one); got != refused {
+			t.Errorf("%s, stored list %s, incidents row on: %+v, want every reader to refuse: %+v", testCase.provider, testCase.stored, got, refused)
 		}
 		exec(`UPDATE integration_datasets SET is_enabled = false WHERE integration_id = $1 AND dataset_key = 'incidents'`, one.integration)
-		want.plan = "planned"
-		if got := read(testCase.provider+" stored gated target, incidents row off", one); got != want {
-			t.Errorf("%s, stored list %s, incidents row off: %+v, want %+v", testCase.provider, testCase.stored, got, want)
+		if got := read(testCase.provider+" stored gated target, incidents row off", one); got != refused {
+			t.Errorf("%s, stored list %s, incidents row off: %+v, want every reader to refuse: %+v", testCase.provider, testCase.stored, got, refused)
 		}
 	}
 
-	// A child config (pinned to one source) and a config with no rule but
-	// its list: the list is the selection a request made, never a mirror. A
-	// gated target in it refuses every reader, though it has a dataset and
+	// A child config (pinned to one source): the list is the selection a
+	// request made. A gated target in it refuses every reader, though it has a dataset and
 	// that dataset's row is off (so only the gate on the list can refuse).
 	child := seed("gitlab", `["incidents"]`, []string{"commits"})
 	source := uuid.New()
@@ -344,11 +335,10 @@ func startGateReaderVenue(t *testing.T) (*pgxpool.Pool, string, func(method, pat
 	return pool, org, call, exec
 }
 
-// TestCreateAnswersTheListTheRowsShow: the create response of a config whose
-// rows own its selection carries the derived list, as every later read does.
-// "blame" is a target the form does not offer: the create stores it and
-// writes its row, and no read shows it.
-func TestCreateAnswersTheListTheRowsShow(t *testing.T) {
+// TestCreateAnswersTheListItStores: the create stores the submitted list and
+// its response carries it, as every later read does. "blame" is a target the
+// form does not offer: the create stores it and writes its row.
+func TestCreateAnswersTheListItStores(t *testing.T) {
 	ctx := context.Background()
 	pool, _, call, _ := startGateReaderVenue(t)
 	status, body := call("POST", "/api/v1/admin/sync-configs", `{"name":"created","provider":"github","sync_targets":["git","blame"],"sync_options":{"all_repos":true}}`)
@@ -371,10 +361,10 @@ FROM sync_configurations AS config WHERE config.id = $1::uuid`, created.ID).Scan
 		t.Fatal(err)
 	}
 	if !strings.Contains(stored, `"blame"`) || !blameOn {
-		t.Fatalf("harness: the stored list is %s and the blame row is on = %v: the derived list would not differ from the stored one", stored, blameOn)
+		t.Fatalf("the stored list is %s and the blame row is on = %v, want the submitted list stored and the row on", stored, blameOn)
 	}
-	if !slices.Equal(created.SyncTargets, []string{"git"}) {
-		t.Errorf("the create answers %v, want the list the rows show [git] (stored: %s)", created.SyncTargets, stored)
+	if !slices.Equal(created.SyncTargets, []string{"git", "blame"}) {
+		t.Errorf("the create answers %v, want the list it stored [git blame] (stored: %s)", created.SyncTargets, stored)
 	}
 	status, body = call("GET", "/api/v1/admin/sync-configs/"+created.ID, "")
 	var read struct {

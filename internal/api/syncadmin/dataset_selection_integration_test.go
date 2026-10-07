@@ -331,7 +331,8 @@ type selectionSeed struct {
 	provider string
 	on, off  []string
 	stored   string
-	// shown is the list the config must show: derived from the ON rows only.
+	// shown is the list the config must show: the stored list, then the
+	// targets only the ON rows give.
 	shown []string
 }
 
@@ -344,14 +345,14 @@ var selectionSeeds = []selectionSeed{
 		on:     []string{"repo-metadata", "commits", "commit-stats", "files", "blame", "prs", "pr-reviews", "pr-comments", "cicd", "tests", "security", "incidents"},
 		off:    []string{"work-items", "work-item-labels", "work-item-projects", "work-item-history", "work-item-comments", "deployments"},
 		stored: `["git", "prs", "work-items", "incidents"]`,
-		shown:  []string{"git", "prs", "incidents", "cicd", "tests"}},
+		shown:  []string{"git", "prs", "work-items", "incidents", "cicd", "tests"}},
 	// GitLab: a mixed git family (no blame row), a mixed prs family (the
 	// canonical row off, a member on), feature-flags on, incidents off.
 	{provider: "gitlab",
 		on:     []string{"repo-metadata", "commits", "commit-stats", "files", "pr-comments", "feature-flags", "security"},
 		off:    []string{"prs", "pr-reviews", "incidents", "cicd"},
 		stored: `["git", "cicd"]`,
-		shown:  []string{"git", "prs", "feature-flags"}},
+		shown:  []string{"git", "cicd", "prs", "feature-flags"}},
 	// Jira: the work-item family on, and an incidents row on (target
 	// "operational", which the Jira form has no checkbox for).
 	{provider: "jira",
@@ -360,11 +361,11 @@ var selectionSeeds = []selectionSeed{
 		stored: `["work-items"]`,
 		shown:  []string{"work-items", "operational"}},
 	// Linear: every row present and OFF, the stored list still names the
-	// target: the config must show nothing.
+	// target: the config shows the stored list.
 	{provider: "linear",
 		off:    []string{"work-items", "work-item-labels", "work-item-projects", "work-item-history", "work-item-comments"},
 		stored: `["work-items"]`,
-		shown:  []string{}},
+		shown:  []string{"work-items"}},
 	{provider: "launchdarkly", on: []string{"feature-flags"}, stored: `[]`, shown: []string{"feature-flags"}},
 }
 
@@ -381,9 +382,9 @@ func (v *selectionVenue) seeded(org string, seed selectionSeed) (integration, co
 func TestDatasetRowsOwnTheSyncSelection(t *testing.T) {
 	v := startSelectionVenue(t)
 
-	// GET shows the list the ENABLED rows give, plus the dataset-less targets
-	// of the stored list. A row that exists and is off shows nothing.
-	t.Run("the config shows the list its enabled rows give", func(t *testing.T) {
+	// GET shows the stored list, then the targets only the ENABLED rows give.
+	// A row that exists and is off adds nothing.
+	t.Run("the config shows its stored list and what its enabled rows add", func(t *testing.T) {
 		v.t = t
 		for _, seed := range selectionSeeds {
 			_, config := v.seeded(v.orgOn, seed)
@@ -394,7 +395,8 @@ func TestDatasetRowsOwnTheSyncSelection(t *testing.T) {
 	})
 
 	// Saving the list the config shows, with other settings changed, changes
-	// no dataset row; the stored list becomes the shown list.
+	// no dataset row and keeps the stored list as it was: a target the list
+	// shows only because a row is on is never stored.
 	t.Run("a save of the shown list with other settings changes no row", func(t *testing.T) {
 		v.t = t
 		for _, seed := range selectionSeeds {
@@ -410,9 +412,12 @@ func TestDatasetRowsOwnTheSyncSelection(t *testing.T) {
 					t.Errorf("%s: the save answers %v, want %v", seed.provider, got, seed.shown)
 				}
 			}
-			var mirror []string
-			if err := json.Unmarshal([]byte(v.stored(config)), &mirror); err != nil || !reflect.DeepEqual(mirror, seed.shown) {
-				t.Errorf("%s: the stored list is %s, want the shown list %v", seed.provider, v.stored(config), seed.shown)
+			var before2, after2 []string
+			if err := json.Unmarshal([]byte(seed.stored), &before2); err != nil {
+				t.Fatal(err)
+			}
+			if err := json.Unmarshal([]byte(v.stored(config)), &after2); err != nil || !reflect.DeepEqual(after2, before2) {
+				t.Errorf("%s: the stored list is %s, want it as it was %s", seed.provider, v.stored(config), seed.stored)
 			}
 		}
 	})
@@ -593,51 +598,59 @@ func TestDatasetRowsOwnTheSyncSelection(t *testing.T) {
 		}
 	})
 
-	// The stored column after a save is the list the rows then show plus the
-	// passthrough targets: never the submitted list where it disagrees.
-	t.Run("the stored list after a save is what the rows show", func(t *testing.T) {
+	// The stored column after a save holds only what requests asked for: the
+	// submitted targets that were stored or that the save adds, in the
+	// submitted order; never a target the list shows because a row is on.
+	t.Run("the stored list after a save is what requests asked for", func(t *testing.T) {
 		v.t = t
 		integration := v.integration(v.orgOn, "github", append(targetKeys(t, "github", "git"), "cicd"), []string{"prs"})
 		config := v.config(v.orgOn, "github", integration, `["git", "incidents"]`, false)
-		mirror := func() []string {
+		storedList := func() []string {
 			var out []string
 			if err := json.Unmarshal([]byte(v.stored(config)), &out); err != nil {
 				t.Fatal(err)
 			}
 			return out
 		}
-		// The form holds a stale list without cicd (its row is on) and sends
-		// its base: cicd stays on and the stored list names it.
-		got := v.save(v.orgOn, config, listBody([]string{"git", "incidents"}, withBase([]string{"git", "incidents"})))
-		if want := []string{"git", "incidents", "cicd"}; !reflect.DeepEqual(got, want) || !reflect.DeepEqual(mirror(), want) {
-			t.Errorf("stale form: answer %v stored %v, want %v", got, mirror(), want)
+		if got, want := v.get(v.orgOn, config), []string{"git", "incidents", "cicd"}; !reflect.DeepEqual(got, want) {
+			t.Fatalf("harness: GET shows %v, want %v", got, want)
+		}
+		// The shown list sent back: cicd (a row-only target) is not stored.
+		got := v.save(v.orgOn, config, listBody([]string{"git", "incidents", "cicd"}, ``))
+		if want := []string{"git", "incidents"}; !reflect.DeepEqual(got, []string{"git", "incidents", "cicd"}) || !reflect.DeepEqual(storedList(), want) {
+			t.Errorf("the shown list: answer %v stored %v, want stored %v", got, storedList(), want)
 		}
 		// GitHub "incidents" has no dataset: it stays until it is unchecked.
+		// cicd is sent back and stays a row-only target.
 		got = v.save(v.orgOn, config, listBody([]string{"git", "cicd"}, ``))
-		if want := []string{"git", "cicd"}; !reflect.DeepEqual(got, want) || !reflect.DeepEqual(mirror(), want) {
-			t.Errorf("incidents unchecked: answer %v stored %v, want %v", got, mirror(), want)
+		if want := []string{"git"}; !reflect.DeepEqual(got, []string{"git", "cicd"}) || !reflect.DeepEqual(storedList(), want) {
+			t.Errorf("incidents unchecked: answer %v stored %v, want stored %v", got, storedList(), want)
 		}
-		got = v.save(v.orgOn, config, listBody([]string{"incidents", "cicd", "git"}, ``))
-		if want := []string{"incidents", "cicd", "git"}; !reflect.DeepEqual(got, want) || !reflect.DeepEqual(mirror(), want) {
-			t.Errorf("incidents checked again: answer %v stored %v, want %v (the submitted order)", got, mirror(), want)
+		// The save adds incidents and prs: both are stored, in the submitted order.
+		got = v.save(v.orgOn, config, listBody([]string{"incidents", "cicd", "prs", "git"}, ``))
+		if want := []string{"incidents", "prs", "git"}; !reflect.DeepEqual(storedList(), want) || !reflect.DeepEqual(got, []string{"incidents", "prs", "git", "cicd"}) {
+			t.Errorf("incidents and prs checked: answer %v stored %v, want stored %v (the submitted order)", got, storedList(), want)
+		}
+		if states := v.states(integration); !states["prs"] || !states["cicd"] {
+			t.Errorf("incidents and prs checked: rows %v, want prs on and cicd on", states)
 		}
 		// A save with no sync_targets does not write the column, and still
-		// answers the list the rows show.
+		// answers the stored list and what the rows add.
 		v.datasetEndpoint(v.orgOn, integration, "deployments", true)
 		storedBefore := v.stored(config)
 		status, body := v.patch(v.orgOn, config, `{"initial_sync_depth":7}`)
 		if status != http.StatusOK || v.stored(config) != storedBefore {
 			t.Fatalf("a save with no sync_targets: %d, stored %s (was %s)", status, v.stored(config), storedBefore)
 		}
-		if got, want := targetsOf(t, body), []string{"incidents", "cicd", "git", "deployments"}; !reflect.DeepEqual(got, want) {
+		if got, want := targetsOf(t, body), []string{"incidents", "prs", "git", "cicd", "deployments"}; !reflect.DeepEqual(got, want) {
 			t.Errorf("a save with no sync_targets answers %v, want %v", got, want)
 		}
 	})
 
 	// Two forms hold one baseline. Form 1 unchecks prs. Form 2 changes only
-	// the schedule and sends the list it holds. With the base list, form 1's
-	// uncheck stands. With no base, form 2 re-applies its list: the stated
-	// fallback, pinned so that a change of it fails here.
+	// the schedule and sends the list it holds: form 2 re-applies its list
+	// (as on main, whose save rebuilt every row from the list). A base list in
+	// the body changes nothing. Pinned so that a change of it fails here.
 	t.Run("two saves from one baseline", func(t *testing.T) {
 		v.t = t
 		prs := targetKeys(t, "github", "prs")
@@ -663,53 +676,60 @@ func TestDatasetRowsOwnTheSyncSelection(t *testing.T) {
 			got := v.save(v.orgOn, config, listBody(formTwo, base(formTwo)+`,"initial_sync_depth":21`))
 			states := v.states(integration)
 			for _, key := range prs {
-				if states[key] != !sendBase {
-					t.Errorf("base sent=%v: after save 2 the %s row is on=%v, want %v", sendBase, key, states[key], !sendBase)
+				if !states[key] {
+					t.Errorf("base sent=%v: after save 2 the %s row is off, want on (form 2 adds prs to the list the server shows)", sendBase, key)
 				}
 			}
-			want := []string{"git"}
-			if !sendBase {
-				want = []string{"git", "prs"}
-			}
-			if !reflect.DeepEqual(got, want) {
-				t.Errorf("base sent=%v: save 2 answers %v, want %v", sendBase, got, want)
+			if want := []string{"git", "prs"}; !reflect.DeepEqual(got, want) || v.stored(config) != `["git", "prs"]` {
+				t.Errorf("base sent=%v: save 2 answers %v stored %s, want %v", sendBase, got, v.stored(config), want)
 			}
 		}
 	})
 
 	// A side path changes rows while the form is open: the dataset endpoint
-	// switches X off and Y on. A save of the form's list with its base keeps
-	// both.
-	t.Run("a side-path change while the form is open survives a save with the base", func(t *testing.T) {
+	// switches X off and Y on. A save of the form's list is read against the
+	// list the server shows NOW: a target the form holds and the server no
+	// longer shows is added (its rows go on), a target the server shows and
+	// the form does not hold is removed (its rows go off), and a row whose
+	// target is shown before and after keeps its state. A base list in the
+	// body changes nothing.
+	t.Run("a form loaded before a side-path change re-applies its list", func(t *testing.T) {
 		v.t = t
 		for _, testCase := range []struct {
 			provider, x, y string
 			on, off        []string
+			wantX, wantY   bool
 		}{
-			{"github", "cicd", "deployments", append(targetKeys(t, "github", "git"), "cicd"), []string{"deployments"}},
-			{"gitlab", "feature-flags", "incidents", append(targetKeys(t, "gitlab", "git"), "feature-flags"), nil},
-			{"jira", "incidents", "work-item-comments", []string{"work-items", "incidents"}, nil},
-			{"linear", "work-item-labels", "work-item-history", []string{"work-items", "work-item-labels"}, []string{"work-item-history"}},
+			{"github", "cicd", "deployments", append(targetKeys(t, "github", "git"), "cicd"), []string{"deployments"}, true, false},
+			{"gitlab", "feature-flags", "incidents", append(targetKeys(t, "gitlab", "git"), "feature-flags"), nil, true, false},
+			// work-item-comments is a member of the shown work-items target.
+			{"jira", "incidents", "work-item-comments", []string{"work-items", "incidents"}, nil, true, true},
+			// Both rows are members of the shown work-items target.
+			{"linear", "work-item-labels", "work-item-history", []string{"work-items", "work-item-labels"}, []string{"work-item-history"}, false, true},
 		} {
-			integration := v.integration(v.orgOn, testCase.provider, testCase.on, testCase.off)
-			config := v.config(v.orgOn, testCase.provider, integration, `[]`, false)
-			form := v.get(v.orgOn, config)
-			v.datasetEndpoint(v.orgOn, integration, testCase.x, false)
-			v.datasetEndpoint(v.orgOn, integration, testCase.y, true)
-			before := v.rows(integration)
-			v.save(v.orgOn, config, listBody(form, withBase(form)+`,"initial_sync_depth":3`))
-			if after := v.rows(integration); after != before {
-				t.Errorf("%s: the save undid a side-path change\nbefore:\n%s\nafter:\n%s", testCase.provider, before, after)
-			}
-			if states := v.states(integration); states[testCase.x] || !states[testCase.y] {
-				t.Errorf("%s: %s on=%v (want off), %s on=%v (want on)", testCase.provider, testCase.x, states[testCase.x], testCase.y, states[testCase.y])
+			for _, sendBase := range []bool{false, true} {
+				integration := v.integration(v.orgOn, testCase.provider, testCase.on, testCase.off)
+				config := v.config(v.orgOn, testCase.provider, integration, `[]`, false)
+				form := v.get(v.orgOn, config)
+				v.datasetEndpoint(v.orgOn, integration, testCase.x, false)
+				v.datasetEndpoint(v.orgOn, integration, testCase.y, true)
+				extra := `,"initial_sync_depth":3`
+				if sendBase {
+					extra += withBase(form)
+				}
+				v.save(v.orgOn, config, listBody(form, extra))
+				if states := v.states(integration); states[testCase.x] != testCase.wantX || states[testCase.y] != testCase.wantY {
+					t.Errorf("%s base sent=%v: %s on=%v (want %v), %s on=%v (want %v)", testCase.provider, sendBase,
+						testCase.x, states[testCase.x], testCase.wantX, testCase.y, states[testCase.y], testCase.wantY)
+				}
 			}
 		}
 	})
 
 	// The canonical-incident gate, for an org WITHOUT the feature: it reads
-	// only what the user adds, and the dataset-less targets the list keeps.
-	t.Run("the incident gate refuses only an added target", func(t *testing.T) {
+	// the targets the save stores (what the user adds and what was stored),
+	// never a target the list shows only because a row is on.
+	t.Run("the incident gate reads the targets the save stores", func(t *testing.T) {
 		v.t = t
 		refused := func(what string, integration, config uuid.UUID, body string) {
 			t.Helper()
@@ -731,9 +751,9 @@ func TestDatasetRowsOwnTheSyncSelection(t *testing.T) {
 		}
 		before := v.rows(jira)
 		v.save(v.orgOff, jiraConfig, listBody(shown, `,"initial_sync_depth":30`))
-		v.save(v.orgOff, jiraConfig, `{"is_active":false}`) // the stored list now names "operational": still not refused
-		if v.rows(jira) != before {
-			t.Errorf("jira: a save with the incidents row on changed rows")
+		v.save(v.orgOff, jiraConfig, `{"is_active":false}`)
+		if v.rows(jira) != before || v.stored(jiraConfig) != `["work-items"]` {
+			t.Errorf("jira: a save with the incidents row on changed rows or stored the row's target: stored %s", v.stored(jiraConfig))
 		}
 		// Jira: the user ADDS operational (the row is off): refused.
 		jiraOff := v.integration(v.orgOff, "jira", []string{"work-items"}, []string{"incidents"})
@@ -772,22 +792,20 @@ func TestDatasetRowsOwnTheSyncSelection(t *testing.T) {
 		}
 	})
 
-	// sync_targets_base: null is absent; a value that is not a list of
-	// strings is 422 and nothing is written; a base with no sync_targets
-	// writes no row.
-	t.Run("the base list is validated before any write", func(t *testing.T) {
+	// sync_targets_base has no meaning: whatever its value the save answers
+	// 200 and does what the same body without the field does.
+	t.Run("a base list in the body is ignored", func(t *testing.T) {
 		v.t = t
 		git := targetKeys(t, "github", "git")
 		integration := v.integration(v.orgOn, "github", append(append([]string{}, git...), "cicd"), []string{"prs"})
 		config := v.config(v.orgOn, "github", integration, `["git"]`, false)
-		rows, row := v.rows(integration), v.configRow(config)
-		for _, base := range []string{`"git"`, `["git",7]`, `{"git":true}`, `3`, `[null]`} {
-			status, text := v.patch(v.orgOn, config, `{"sync_targets":["git","prs"],"is_active":false,"sync_targets_base":`+base+`}`)
-			if status != http.StatusUnprocessableEntity || !strings.Contains(text, "sync_targets_base") {
-				t.Errorf("base %s: %d %s, want 422 naming sync_targets_base", base, status, text)
+		rows, stored := v.rows(integration), v.stored(config)
+		for _, base := range []string{`null`, `"git"`, `["git",7]`, `{"git":true}`, `3`, `[null]`, `[]`, `["git","prs"]`} {
+			if got := v.save(v.orgOn, config, `{"sync_targets":["git","cicd"],"sync_targets_base":`+base+`}`); !reflect.DeepEqual(got, []string{"git", "cicd"}) {
+				t.Errorf("base %s: the save of the shown list answers %v", base, got)
 			}
-			if v.rows(integration) != rows || v.configRow(config) != row {
-				t.Fatalf("base %s: the refused save wrote something", base)
+			if v.rows(integration) != rows || v.stored(config) != stored {
+				t.Fatalf("base %s: the save of the shown list changed rows or the stored list (%s)", base, v.stored(config))
 			}
 		}
 		// A base with no sync_targets: no row write.
@@ -795,12 +813,13 @@ func TestDatasetRowsOwnTheSyncSelection(t *testing.T) {
 		if v.rows(integration) != rows {
 			t.Errorf("a base with no sync_targets changed dataset rows")
 		}
-		// null is absent: the fallback rule (the shown list is the reference),
-		// so unchecking cicd switches it off and nothing else.
-		v.save(v.orgOn, config, `{"sync_targets":["git"],"sync_targets_base":null}`)
+		// A base that names what the request drops and adds does not hide the
+		// change: cicd is dropped from the shown list (row off) and prs is
+		// added to it (rows on, target stored).
+		v.save(v.orgOn, config, `{"sync_targets":["git","prs"],"sync_targets_base":["git","prs"]}`)
 		states := v.states(integration)
-		if states["cicd"] || states["prs"] || !states["commits"] {
-			t.Errorf("null base: rows %v, want cicd off, prs off, commits on", states)
+		if states["cicd"] || !states["prs"] || !states["commits"] || v.stored(config) != `["git", "prs"]` {
+			t.Errorf("a base equal to the submitted list: rows %v stored %s, want cicd off, prs on, commits on, [git prs] stored", states, v.stored(config))
 		}
 	})
 
@@ -851,8 +870,11 @@ func TestDatasetRowsOwnTheSyncSelection(t *testing.T) {
 	})
 
 	// Two whole-integration configs on one integration (the old shape): the
-	// rows are per integration, so both show one list and an uncheck in one
-	// is the setting of both, whatever the other's stored list says.
+	// rows are per integration, so an uncheck in one is the setting of both.
+	// The other config still shows the target (its stored list names it, as
+	// on main) with the rows off, and a save of the list it shows keeps the
+	// rows off: the dataset switch, or a remove and an add of the target,
+	// turns them on. (Main's save of that list switched the rows on.)
 	t.Run("sibling configs share one selection", func(t *testing.T) {
 		v.t = t
 		prs := targetKeys(t, "github", "prs")
@@ -865,13 +887,27 @@ func TestDatasetRowsOwnTheSyncSelection(t *testing.T) {
 				t.Errorf("the uncheck in config A left %s on (config B's stored list names prs)", key)
 			}
 		}
-		if got := v.get(v.orgOn, b); !reflect.DeepEqual(got, []string{"git"}) {
-			t.Errorf("config B shows %v, want [git]", got)
+		shown := v.get(v.orgOn, b)
+		if !reflect.DeepEqual(shown, []string{"git", "prs"}) {
+			t.Errorf("config B shows %v, want its stored list [git prs]", shown)
+		}
+		rows := v.rows(integration)
+		v.save(v.orgOn, b, listBody(shown, `,"initial_sync_depth":5`))
+		if v.rows(integration) != rows || v.stored(b) != `["git", "prs"]` {
+			t.Errorf("a save of the list config B shows changed rows or its stored list (%s)", v.stored(b))
+		}
+		// Remove and add: the rows go on again.
+		v.save(v.orgOn, b, `{"sync_targets":["git"]}`)
+		v.save(v.orgOn, b, `{"sync_targets":["git","prs"]}`)
+		for _, key := range prs {
+			if !v.states(integration)[key] {
+				t.Errorf("config B removed and added prs: the %s row is off", key)
+			}
 		}
 	})
 
 	// The list endpoint shows the same lists as the single read.
-	t.Run("the list endpoint shows the derived lists", func(t *testing.T) {
+	t.Run("the list endpoint shows the same lists", func(t *testing.T) {
 		v.t = t
 		org := uuid.NewString()
 		pgseed.Org(v.ctx, t, v.pool, org, "enterprise")

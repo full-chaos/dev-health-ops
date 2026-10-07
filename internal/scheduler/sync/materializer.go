@@ -706,9 +706,7 @@ WHERE config.id = $1::uuid AND config.org_id = $2 AND integration.is_active`, oc
 	if err := lockScheduledOrganization(ctx, tx, orgID); err != nil {
 		return loadedMaterializationPlan{}, err
 	}
-	// The stored list is gated without the items that mirror a dataset row;
-	// planDatasetsRequireCanonicalIncident below gates the rows themselves.
-	if syncTargetsRequireCanonicalIncident(providersync.IncidentGateTargets(provider, true, sourceID != nil, targets)) {
+	if syncTargetsRequireCanonicalIncident(targets) {
 		allowed, err := canonicalIncidentAllowedForUpdate(ctx, tx, orgID, occurrence.ScheduledFor)
 		if err != nil {
 			return loadedMaterializationPlan{}, err

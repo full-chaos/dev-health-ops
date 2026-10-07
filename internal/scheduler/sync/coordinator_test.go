@@ -56,29 +56,18 @@ func (*coordinatorTransaction) Exec(
 type eligibilityRow struct{ targets []byte }
 
 func (row eligibilityRow) Scan(dest ...any) error {
-	if len(dest) == 4 {
-		// The schedule's stored targets, with the provider and the two
-		// facts that say whether its dataset rows own the selection: here
-		// a config with no integration, whose list is gated as it is.
-		targets, isTargets := dest[0].(*[]byte)
-		provider, isProvider := dest[1].(*string)
-		hasIntegration, isIntegration := dest[2].(*bool)
-		hasSource, isSource := dest[3].(*bool)
-		if !isTargets || !isProvider || !isIntegration || !isSource {
-			return errors.New("unsupported eligibility scan destination")
-		}
-		*targets, *provider, *hasIntegration, *hasSource = row.targets, "github", false, false
-		return nil
-	}
 	if len(dest) != 1 {
 		return errors.New("unexpected eligibility scan arity")
 	}
-	target, ok := dest[0].(*string)
-	if !ok {
+	switch target := dest[0].(type) {
+	case *string:
+		// organizations lookup: a row exists.
+		*target = "00000000-0000-4000-8000-000000000001"
+	case *[]byte:
+		*target = row.targets
+	default:
 		return errors.New("unsupported eligibility scan destination")
 	}
-	// organizations lookup: a row exists.
-	*target = "00000000-0000-4000-8000-000000000001"
 	return nil
 }
 

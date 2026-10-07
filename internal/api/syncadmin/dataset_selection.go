@@ -17,39 +17,22 @@ import (
 // The dataset row is the single owner of "which datasets of an integration
 // sync" (CHAOS-8816; Linear project document "Sync configuration: the dataset
 // row is the single owner"). integration_datasets.is_enabled decides at plan
-// time. A whole-integration config's sync_targets is therefore not a store:
-// the api computes it from the enabled rows on every read, and a save changes
-// only the rows of the targets the user changed. The sync_configurations
-// column stays as a mirror, written on a save; no code may compute a row
-// from it.
+// time. The stored sync_configurations.sync_targets list holds what requests
+// asked for, as before: a save never stores a target because a row is on, and
+// no code computes a row from the stored list. What a whole-integration
+// config shows is the stored list plus the targets the enabled rows add
+// (shownTargets, the one derive function), and a save changes only the rows
+// of the targets it adds to, or drops from, that list.
 //
 // This file is NOT a port of the Python route: the recorded Python answer
 // rebuilt the rows from the submitted list on every save, in both directions.
 
-// rowsOwnSelection reports whether the config's sync_targets is derived from
+// rowsOwnSelection reports whether the config's shown list is derived from
 // its integration's dataset rows (providersync.RowsOwnSyncSelection: a
 // whole-integration config of any provider but PagerDuty). Every other
-// config keeps its stored list and a save of it writes no dataset row.
+// config shows its stored list and a save of it writes no dataset row.
 func rowsOwnSelection(config *syncConfig) bool {
 	return providersync.RowsOwnSyncSelection(config.Provider, config.IntegrationID != nil, config.SourceID != nil)
-}
-
-// incidentGateTargets is the items of the config's stored list the
-// canonical-incident gate reads (providersync.IncidentGateTargets, over the
-// list as the routes decode it): an item that mirrors a dataset row is left
-// out, every other item stays, a non-string item included, so the gate
-// answers it as before. Every route that runs the gate on the stored list
-// takes its targets from here.
-func incidentGateTargets(config *syncConfig, stored []pyjson.Value) []pyjson.Value {
-	out := make([]pyjson.Value, 0, len(stored))
-	for _, target := range stored {
-		if text, ok := target.(string); ok &&
-			providersync.StoredTargetIsMirrored(config.Provider, config.IntegrationID != nil, config.SourceID != nil, text) {
-			continue
-		}
-		out = append(out, target)
-	}
-	return out
 }
 
 // storedListItems is the string items of a stored sync_targets JSON list, in
@@ -68,116 +51,84 @@ func storedListItems(stored pyjson.Value) []string {
 	return items
 }
 
-// shownTargets is the list a whole-integration config shows: the targets
-// derived from the enabled dataset keys plus the passthrough targets. Order:
-// the targets of preferred that are in the result keep preferred's order (so
-// a list that agrees with the rows is returned as it is), then every other
-// derived target in the registry's target order, then every other
-// passthrough target.
-func shownTargets(provider string, enabledKeys, passthrough, preferred []string) []string {
-	derived := providersync.DerivedSyncTargets(provider, enabledKeys)
-	in := map[string]bool{}
-	for _, target := range derived {
-		in[target] = true
-	}
-	for _, target := range passthrough {
-		in[target] = true
-	}
-	out := make([]string, 0, len(in))
-	done := map[string]bool{}
-	for _, group := range [][]string{preferred, derived, passthrough} {
-		for _, target := range group {
-			if in[target] && !done[target] {
-				done[target] = true
-				out = append(out, target)
-			}
+// shownTargets is the list a whole-integration config shows: its stored list
+// as it is (order and duplicates kept), then every target the enabled dataset
+// keys derive that the stored list does not name, in the registry's target
+// order. With no such target the result is the stored list.
+func shownTargets(provider string, enabledKeys, stored []string) []string {
+	out := append(make([]string, 0, len(stored)), stored...)
+	inStored := stringSet(stored)
+	for _, target := range providersync.DerivedSyncTargets(provider, enabledKeys) {
+		if !inStored[target] {
+			out = append(out, target)
 		}
 	}
 	return out
 }
 
-// selectionChange is what one save does to the selection: the dataset keys
-// to switch on and off, and the passthrough targets after the save.
+// selectionChange is what one save does to the selection: the targets it
+// adds to and drops from the shown list, the dataset keys to switch on and
+// off, and the list the save stores.
 type selectionChange struct {
 	added, removed          []string
 	enableKeys, disableKeys []string
-	passthrough             []string
-	// baseDiffers: the request carried the list the form was shown and it is
-	// not the list the rows show now (another save, the dataset endpoint or
-	// a backfill changed a row while the form was open).
-	baseDiffers bool
+	// stored is the new stored list: the items of the submitted list that
+	// were stored before or that this save adds, in the submitted order. An
+	// item the submitted list names only because a dataset row is on is not
+	// in it.
+	stored []string
 }
 
 // planSelectionChange is the save rule for a whole-integration config. The
-// reference is the list the form was shown (base) when the request carries
-// it, else the list the rows show now. Only a target the submitted list adds
-// to, or drops from, the reference writes rows: a target in neither set
-// keeps its rows whatever they are. A target with no dataset moves in and
-// out of the passthrough list. A target the form never offers ("blame",
-// "security") writes no row.
-func planSelectionChange(provider string, enabledKeys, storedPassthrough, submitted, base []string, baseSet bool) (selectionChange, error) {
-	shown := shownTargets(provider, enabledKeys, storedPassthrough, nil)
-	reference := shown
-	if baseSet {
-		reference = base
-	}
-	inReference, inSubmitted := stringSet(reference), stringSet(submitted)
-	change := selectionChange{baseDiffers: baseSet && !sameStringSet(inReference, stringSet(shown))}
+// reference is the list the server shows now (the stored list plus the
+// targets the enabled rows add), read in the save's transaction; nothing the
+// request says changes it. Only a target the submitted list adds to, or drops
+// from, the reference writes rows: a target in neither set keeps its rows
+// whatever they are. A target the form never offers ("blame", "security")
+// and a target with no dataset write no row.
+func planSelectionChange(provider string, enabledKeys, stored, submitted []string) (selectionChange, error) {
+	shown := shownTargets(provider, enabledKeys, stored)
+	inShown, inSubmitted, inStored := stringSet(shown), stringSet(submitted), stringSet(stored)
+	var change selectionChange
 	for _, target := range uniqueStrings(submitted) {
-		if !inReference[target] {
+		if !inShown[target] {
 			change.added = append(change.added, target)
 		}
 	}
-	for _, target := range uniqueStrings(reference) {
+	for _, target := range uniqueStrings(shown) {
 		if !inSubmitted[target] {
 			change.removed = append(change.removed, target)
 		}
 	}
 	keysOf := func(target string) ([]string, error) {
-		if !providersync.OperatorSelectableSyncTarget(target) {
+		if !providersync.SyncTargetHasDataset(provider, target) || !providersync.OperatorSelectableSyncTarget(target) {
 			return nil, nil
 		}
 		return providersync.PlannerDatasetKeys(provider, []string{target})
 	}
-	passthrough := append([]string{}, storedPassthrough...)
 	for _, target := range change.added {
-		if !providersync.SyncTargetHasDataset(provider, target) {
-			passthrough = append(passthrough, target)
-			continue
-		}
 		keys, err := keysOf(target)
 		if err != nil {
 			return selectionChange{}, err
 		}
 		change.enableKeys = append(change.enableKeys, keys...)
 	}
-	dropped := map[string]bool{}
 	for _, target := range change.removed {
-		if !providersync.SyncTargetHasDataset(provider, target) {
-			dropped[target] = true
-			continue
-		}
 		keys, err := keysOf(target)
 		if err != nil {
 			return selectionChange{}, err
 		}
 		change.disableKeys = append(change.disableKeys, keys...)
 	}
-	for _, target := range uniqueStrings(passthrough) {
-		if !dropped[target] {
-			change.passthrough = append(change.passthrough, target)
+	change.enableKeys, change.disableKeys = uniqueStrings(change.enableKeys), uniqueStrings(change.disableKeys)
+	inAdded := stringSet(change.added)
+	change.stored = make([]string, 0, len(submitted))
+	for _, target := range submitted {
+		if inStored[target] || inAdded[target] {
+			change.stored = append(change.stored, target)
 		}
 	}
-	change.enableKeys, change.disableKeys = uniqueStrings(change.enableKeys), uniqueStrings(change.disableKeys)
 	return change, nil
-}
-
-// gatedTargets is the targets the canonical-incident gate reads for this
-// save: the ones the user adds and the passthrough targets the list keeps. A
-// gated target that is in the list only because its row is on does not
-// refuse the save; the plan-time gate on the rows stays.
-func (change selectionChange) gatedTargets() []string {
-	return uniqueStrings(append(append([]string{}, change.added...), change.passthrough...))
 }
 
 func stringSet(values []string) map[string]bool {
@@ -186,18 +137,6 @@ func stringSet(values []string) map[string]bool {
 		set[value] = true
 	}
 	return set
-}
-
-func sameStringSet(left, right map[string]bool) bool {
-	if len(left) != len(right) {
-		return false
-	}
-	for value := range left {
-		if !right[value] {
-			return false
-		}
-	}
-	return true
 }
 
 func uniqueStrings(values []string) []string {
@@ -254,10 +193,10 @@ ORDER BY integration_id, dataset_key`, orgID, integrationIDs)
 	return found, nil
 }
 
-// deriveShownTargets sets, on every config whose rows own its selection, the
-// sync_targets list its response carries: derived from the integration's
-// enabled rows plus the stored passthrough targets. One read serves all the
-// configs. Every other config keeps its stored list.
+// deriveShownTargets sets, on every config whose rows own its selection and
+// whose enabled rows add a target to its stored list, the sync_targets list
+// its response carries (shownTargets). One read serves all the configs.
+// Every other config keeps its stored list, as stored.
 func deriveShownTargets(ctx context.Context, read func(context.Context, string, []uuid.UUID) (map[uuid.UUID][]string, error),
 	orgID string, configs ...*syncConfig) error {
 	var integrationIDs []uuid.UUID
@@ -284,8 +223,11 @@ func deriveShownTargets(ctx context.Context, read func(context.Context, string, 
 			return err
 		}
 		items := storedListItems(stored)
-		config.shownTargets = shownTargets(config.Provider, enabled[*config.IntegrationID], providersync.PassthroughSyncTargets(config.Provider, items), items)
-		config.shownTargetsSet = true
+		shown := shownTargets(config.Provider, enabled[*config.IntegrationID], items)
+		config.shownTargets, config.shownTargetsSet = nil, false
+		if len(shown) > len(items) {
+			config.shownTargets, config.shownTargetsSet = shown, true
+		}
 	}
 	return nil
 }
@@ -334,40 +276,26 @@ WHERE org_id = $1 AND integration_id = $2 AND dataset_key = $3 AND is_enabled IS
 	return enabled, disabled, nil
 }
 
-// saveSelection runs the row writes of a save and returns the mirror list:
-// the list the rows show after the writes plus the passthrough targets, in
-// the submitted list's order where it names them. The caller holds the
-// selection lock.
-func saveSelection(ctx context.Context, tx pgx.Tx, logger *slog.Logger, orgID string, config *syncConfig, submitted []string,
-	change selectionChange) ([]string, error) {
+// saveSelection runs the row writes of a save and records them. The caller
+// holds the selection lock and stores change.stored.
+func saveSelection(ctx context.Context, tx pgx.Tx, logger *slog.Logger, orgID string, config *syncConfig, change selectionChange) error {
 	integrationID := *config.IntegrationID
 	enabled, disabled, err := applySelectionChange(ctx, tx, orgID, integrationID, change)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	recordSelectionChange(ctx, logger, orgID, integrationID, config.Provider, enabled, disabled, change.baseDiffers)
-	after, err := enabledDatasetKeysByIntegration(ctx, tx, orgID, []uuid.UUID{integrationID})
-	if err != nil {
-		return nil, err
-	}
-	return shownTargets(config.Provider, after[integrationID], change.passthrough, submitted), nil
+	recordSelectionChange(ctx, logger, orgID, integrationID, config.Provider, enabled, disabled)
+	return nil
 }
 
-// recordSelectionChange counts and logs what a save did to the rows, and a
-// save whose base list was not the list the rows showed. Dataset keys and
-// counts only: no target list of the request is logged.
+// recordSelectionChange counts and logs what a save did to the rows. Dataset
+// keys and counts only: no target list of the request is logged.
 func recordSelectionChange(ctx context.Context, logger *slog.Logger, orgID string, integrationID uuid.UUID, provider string,
-	enabled, disabled []string, baseDiffers bool) {
+	enabled, disabled []string) {
 	selectionMetrics.observeRows(provider, "enabled", len(enabled))
 	selectionMetrics.observeRows(provider, "disabled", len(disabled))
 	if len(enabled)+len(disabled) > 0 {
 		logger.InfoContext(ctx, "sync_config_dataset_rows_changed", "org_id", orgID, "integration_id", integrationID.String(),
 			"provider", provider, "enabled_dataset_keys", strings.Join(enabled, ","), "disabled_dataset_keys", strings.Join(disabled, ","))
-	}
-	if baseDiffers {
-		selectionMetrics.observeStaleBase(provider)
-		logger.InfoContext(ctx, "sync_config_save_stale_base", "org_id", orgID, "integration_id", integrationID.String(),
-			"provider", provider, "reason", "the list the form was shown is not the list the dataset rows show now; "+
-				"only the targets this save changed were written")
 	}
 }

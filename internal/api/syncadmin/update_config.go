@@ -17,7 +17,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/api/pybody"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
-	"github.com/full-chaos/dev-health-ops/internal/providersync"
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 	schedsync "github.com/full-chaos/dev-health-ops/internal/scheduler/sync"
 	"github.com/full-chaos/dev-health-ops/internal/synccoverage"
@@ -27,12 +26,8 @@ import (
 // provided records the fields the body carried (model_fields_set), null
 // included.
 type syncConfigUpdate struct {
-	syncTargets    []string
-	syncTargetsSet bool
-	// syncTargetsBase is the list the form was shown when it was loaded
-	// (CHAOS-8816); absent and null are the same: no base.
-	syncTargetsBase        []string
-	syncTargetsBaseSet     bool
+	syncTargets            []string
+	syncTargetsSet         bool
 	syncOptions            *pyjson.Object
 	isActive               *bool
 	scheduleCron, timezone *string
@@ -57,9 +52,6 @@ func decodeSyncConfigUpdate(body pybody.Body) (syncConfigUpdate, pybody.Errors) 
 		}
 	}
 	in.syncTargets, in.syncTargetsSet = problems.OptionalStringList(object, "sync_targets")
-	// Go-only field (the Python route had none): a value that is not a list
-	// of strings is refused here, before the guard and before any write.
-	in.syncTargetsBase, in.syncTargetsBaseSet = problems.OptionalStringList(object, "sync_targets_base")
 	if options, present := problems.OptionalAnyDict(object, "sync_options"); present {
 		in.syncOptions = options
 	}
@@ -160,17 +152,19 @@ func (h *handlers) updateSyncConfigTx(ctx context.Context, tx pgx.Tx, org string
 		return nil, err
 	}
 
-	// The canonical-incident gate. When the rows own the selection it reads
-	// only the targets this save adds and the dataset-less targets the list
-	// keeps; a gated target that shows because its row is on does not refuse
-	// the save. The selection lock is taken here, before the rows are read,
-	// and held to the end of the transaction.
+	// The canonical-incident gate reads every target the save stores, or the
+	// stored list when the body carries none. When the rows own the selection
+	// the save stores the submitted targets that were stored before or that
+	// it adds to the list the server shows now (change.stored): a gated
+	// target that is in the submitted list only because its row is on is not
+	// stored and does not refuse the save. The selection lock is taken here,
+	// before the rows are read, and held to the end of the transaction.
 	rowsOwn := rowsOwnSelection(config)
 	var change selectionChange
+	// newStored is the list this save stores; the child cascade writes the
+	// same list to every child.
+	var newStored []string
 	var gateTargets []pyjson.Value
-	// gateRead is the targets of the submitted list the gate of this save
-	// reads; the child cascade writes no other item to a child.
-	var gateRead []string
 	switch {
 	case rowsOwn && in.syncTargetsSet:
 		if err := selectionLock(ctx, tx, org, *config.IntegrationID); err != nil {
@@ -180,22 +174,19 @@ func (h *handlers) updateSyncConfigTx(ctx context.Context, tx pgx.Tx, org string
 		if err != nil {
 			return nil, err
 		}
-		change, err = planSelectionChange(config.Provider, enabled[*config.IntegrationID],
-			providersync.PassthroughSyncTargets(config.Provider, storedListItems(storedTargetsValue)), in.syncTargets, in.syncTargetsBase, in.syncTargetsBaseSet)
+		change, err = planSelectionChange(config.Provider, enabled[*config.IntegrationID], storedListItems(storedTargetsValue), in.syncTargets)
 		if err != nil {
 			return nil, err
 		}
-		gateRead = change.gatedTargets()
-		gateTargets = stringValues(gateRead)
+		newStored = change.stored
+		gateTargets = stringValues(newStored)
 	case in.syncTargetsSet:
-		gateRead = in.syncTargets
-		gateTargets = stringValues(gateRead)
+		newStored = in.syncTargets
+		gateTargets = stringValues(newStored)
 	default:
-		stored, err := pyIterate(storedTargetsValue)
-		if err != nil {
+		if gateTargets, err = pyIterate(storedTargetsValue); err != nil {
 			return nil, err
 		}
-		gateTargets = incidentGateTargets(config, stored)
 	}
 	if err := h.requireCanonicalIncident(ctx, org, gateTargets); err != nil {
 		return nil, err
@@ -247,17 +238,14 @@ func (h *handlers) updateSyncConfigTx(ctx context.Context, tx pgx.Tx, org string
 
 	now := h.now().UTC()
 	// A config whose rows own its selection writes the rows of the targets
-	// this save changed and stores the list the rows then show (the mirror).
-	// Every other config stores the submitted list and writes no row.
+	// this save changed. Every other config writes no row.
 	newTargets := storedTargetsValue
 	if in.syncTargetsSet {
-		newTargets = stringValues(in.syncTargets)
+		newTargets = stringValues(newStored)
 		if rowsOwn {
-			mirror, err := saveSelection(ctx, tx, h.logger, org, config, in.syncTargets, change)
-			if err != nil {
+			if err := saveSelection(ctx, tx, h.logger, org, config, change); err != nil {
 				return nil, err
 			}
-			newTargets = stringValues(mirror)
 		}
 	}
 
@@ -326,7 +314,7 @@ func (h *handlers) updateSyncConfigTx(ctx context.Context, tx pgx.Tx, org string
 		return nil, err
 	}
 	if config.ParentID == nil {
-		if err := h.cascadeToChildren(ctx, tx, org, config.ID, in, gateRead, options, cleared, optionsProvided, now); err != nil {
+		if err := h.cascadeToChildren(ctx, tx, org, config.ID, in, newStored, options, cleared, optionsProvided, now); err != nil {
 			return nil, err
 		}
 	}
@@ -556,11 +544,11 @@ func updateServicesDatasetMappings(ctx context.Context, tx pgx.Tx, org string, i
 // them) takes the body's targets and activity, and the schedule keys the
 // body set or cleared; then each child's sync job is upserted.
 //
-// The targets a child takes are providersync.CascadedSyncTargets of the
-// body's list: a child's list is its own selection and every reader gates
-// all of it, so a child takes only the items the gate of this save read
-// (gateRead) and the items it already holds.
-func (h *handlers) cascadeToChildren(ctx context.Context, tx pgx.Tx, org string, parentID uuid.UUID, in syncConfigUpdate, gateRead []string,
+// The targets a child takes are the list the save stored on the parent
+// (parentStored), never the submitted list: a child's list is its own
+// selection and every reader gates all of it, and the gate of this save read
+// exactly the stored list.
+func (h *handlers) cascadeToChildren(ctx context.Context, tx pgx.Tx, org string, parentID uuid.UUID, in syncConfigUpdate, parentStored []string,
 	options *pyjson.Object, cleared map[string]bool, optionsProvided bool, now time.Time) error {
 	rows, err := tx.Query(ctx, `SELECT `+syncConfigColumns+` FROM sync_configurations WHERE parent_id = $1`, parentID)
 	if err != nil {
@@ -590,7 +578,7 @@ func (h *handlers) cascadeToChildren(ctx context.Context, tx pgx.Tx, org string,
 		}
 		newTargets := storedTargets
 		if in.syncTargetsSet {
-			newTargets = stringValues(providersync.CascadedSyncTargets(in.syncTargets, gateRead, storedListItems(storedTargets)))
+			newTargets = stringValues(parentStored)
 		}
 		newActive := child.IsActive
 		if in.isActive != nil {

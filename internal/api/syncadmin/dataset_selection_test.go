@@ -31,32 +31,50 @@ func sortedStrings(values []string) []string {
 	return out
 }
 
-func mustPlan(t *testing.T, provider string, enabled, passthrough, submitted, base []string, baseSet bool) selectionChange {
+func mustPlan(t *testing.T, provider string, enabled, stored, submitted []string) selectionChange {
 	t.Helper()
-	change, err := planSelectionChange(provider, enabled, passthrough, submitted, base, baseSet)
+	change, err := planSelectionChange(provider, enabled, stored, submitted)
 	if err != nil {
 		t.Fatalf("%s: plan: %v", provider, err)
 	}
 	return change
 }
 
-// TestSavingTheShownListChangesNoRowForEveryEnabledSubset is the round trip
-// (CHAOS-8816): for every provider and EVERY subset of its dataset keys as
-// the enabled rows (the other keys are rows that exist and are off, or no
-// row: the plan reads enabled keys only), sending back the list the config
-// shows writes no row and keeps the passthrough targets. With the list as
-// its own base the same holds.
-func TestSavingTheShownListChangesNoRowForEveryEnabledSubset(t *testing.T) {
+// storedVariants is the stored lists the subset walks run over for one
+// provider: nothing, a name that is no target, and two real targets of the
+// provider (the first one twice: a stored list keeps its duplicates).
+func storedVariants(provider string) [][]string {
+	targets := []string{}
+	for _, target := range providersync.SupportedLegacyTargets(provider) {
+		if providersync.OperatorSelectableSyncTarget(target) {
+			targets = append(targets, target)
+		}
+	}
+	variants := [][]string{{}, {"no-such-target"}}
+	if len(targets) > 0 {
+		variants = append(variants, []string{targets[len(targets)-1], "no-such-target", targets[0], targets[0]})
+	}
+	return variants
+}
+
+// TestSavingTheShownListChangesNoRowAndKeepsTheStoredList is the round trip
+// (CHAOS-8816): for every provider, EVERY subset of its dataset keys as the
+// enabled rows (the other keys are rows that exist and are off, or no row:
+// the plan reads enabled keys only) and each stored list, sending back the
+// list the config shows writes no row and stores the list that was stored,
+// item for item. So a target the list shows only because a row is on is
+// never stored, and the canonical-incident gate reads what it read before.
+func TestSavingTheShownListChangesNoRowAndKeepsTheStoredList(t *testing.T) {
 	cases := 0
 	for _, provider := range rowOwnedProviders {
 		keys := registryKeys(provider)
 		if len(keys) == 0 || len(keys) > 20 {
 			t.Fatalf("%s: %d keys; the subset walk needs 1..20", provider, len(keys))
 		}
-		for _, passthrough := range [][]string{{}, {"no-such-target"}} {
+		for variant, stored := range storedVariants(provider) {
 			step := subsetWalkStep
-			if len(passthrough) > 0 {
-				// The passthrough variant samples: it does not depend on the subset.
+			if variant > 0 {
+				// The other stored lists sample the subsets.
 				step *= 16
 			}
 			for mask := 0; mask < 1<<len(keys); mask += step {
@@ -66,21 +84,24 @@ func TestSavingTheShownListChangesNoRowForEveryEnabledSubset(t *testing.T) {
 						enabled = append(enabled, key)
 					}
 				}
-				shown := shownTargets(provider, enabled, passthrough, nil)
-				// The shown list holds every passthrough target, and nothing the
-				// enabled keys do not give: a save of a list that lost one would
-				// read as "the user removed it".
-				if want := append(providersync.DerivedSyncTargets(provider, enabled), passthrough...); !reflect.DeepEqual(shown, want) {
-					t.Fatalf("%s enabled=%v passthrough=%v: shown %v, want %v", provider, enabled, passthrough, shown, want)
-				}
-				for _, baseSet := range []bool{false, true} {
-					cases++
-					change := mustPlan(t, provider, enabled, passthrough, shown, shown, baseSet)
-					if len(change.enableKeys)+len(change.disableKeys)+len(change.added)+len(change.removed) != 0 || change.baseDiffers ||
-						strings.Join(change.passthrough, ",") != strings.Join(passthrough, ",") {
-						t.Fatalf("%s enabled=%v passthrough=%v base=%v: saving the shown list %v is not a no-op: %+v",
-							provider, enabled, passthrough, baseSet, shown, change)
+				shown := shownTargets(provider, enabled, stored)
+				// The shown list is the stored list, then the targets only the
+				// enabled keys give: a save of a list that lost one would read
+				// as "the user removed it".
+				want := append([]string{}, stored...)
+				for _, target := range providersync.DerivedSyncTargets(provider, enabled) {
+					if !stringSet(stored)[target] {
+						want = append(want, target)
 					}
+				}
+				if !reflect.DeepEqual(shown, want) {
+					t.Fatalf("%s enabled=%v stored=%v: shown %v, want %v", provider, enabled, stored, shown, want)
+				}
+				cases++
+				change := mustPlan(t, provider, enabled, stored, shown)
+				if len(change.enableKeys)+len(change.disableKeys)+len(change.added)+len(change.removed) != 0 ||
+					strings.Join(change.stored, ",") != strings.Join(stored, ",") {
+					t.Fatalf("%s enabled=%v stored=%v: saving the shown list %v is not a no-op: %+v", provider, enabled, stored, shown, change)
 				}
 			}
 		}
@@ -89,6 +110,72 @@ func TestSavingTheShownListChangesNoRowForEveryEnabledSubset(t *testing.T) {
 		t.Fatal("no case ran")
 	}
 	t.Logf("%d round-trip cases", cases)
+}
+
+// TestASaveStoresOnlyWhatWasStoredOrWhatItAdds is the stored-list invariant
+// over every provider, sampled subsets of enabled keys, each stored list and
+// EVERY one-target change of the shown list (one target dropped, one target
+// added): each stored item was stored before or is added by this save, an
+// added item is not in the list the server showed, and no item the submitted
+// list names only because a row is on is stored.
+func TestASaveStoresOnlyWhatWasStoredOrWhatItAdds(t *testing.T) {
+	cases := 0
+	for _, provider := range rowOwnedProviders {
+		keys := registryKeys(provider)
+		candidates := append(providersync.SupportedLegacyTargets(provider), "no-such-target", "incidents")
+		for _, stored := range storedVariants(provider) {
+			for mask := 0; mask < 1<<len(keys); mask += subsetWalkStep * 16 {
+				enabled := []string{}
+				for index, key := range keys {
+					if mask&(1<<index) != 0 {
+						enabled = append(enabled, key)
+					}
+				}
+				shown := shownTargets(provider, enabled, stored)
+				inShown, inStored := stringSet(shown), stringSet(stored)
+				submissions := [][]string{{}}
+				for _, drop := range uniqueStrings(shown) {
+					rest := []string{}
+					for _, target := range shown {
+						if target != drop {
+							rest = append(rest, target)
+						}
+					}
+					submissions = append(submissions, rest)
+				}
+				for _, add := range candidates {
+					if !inShown[add] {
+						submissions = append(submissions, append(append([]string{}, shown...), add))
+					}
+				}
+				for _, submitted := range submissions {
+					cases++
+					change := mustPlan(t, provider, enabled, stored, submitted)
+					inAdded, inSubmitted := stringSet(change.added), stringSet(submitted)
+					for _, target := range change.added {
+						if inShown[target] || !inSubmitted[target] {
+							t.Fatalf("%s enabled=%v stored=%v submitted=%v: added %q is shown already or not submitted", provider, enabled, stored, submitted, target)
+						}
+					}
+					for _, target := range change.stored {
+						if !inSubmitted[target] || (!inStored[target] && !inAdded[target]) {
+							t.Fatalf("%s enabled=%v stored=%v submitted=%v: the save stores %q, which was not stored and is not added (stored %v)",
+								provider, enabled, stored, submitted, target, change.stored)
+						}
+					}
+					for _, target := range submitted {
+						if (inStored[target] || !inShown[target]) && !stringSet(change.stored)[target] {
+							t.Fatalf("%s enabled=%v stored=%v submitted=%v: the save does not store %q (stored %v)", provider, enabled, stored, submitted, target, change.stored)
+						}
+					}
+				}
+			}
+		}
+	}
+	if cases == 0 {
+		t.Fatal("no case ran")
+	}
+	t.Logf("%d save cases", cases)
 }
 
 // TestCheckAndUncheckWriteExactlyTheKeysOfTheTarget: for every provider and
@@ -109,21 +196,27 @@ func TestCheckAndUncheckWriteExactlyTheKeysOfTheTarget(t *testing.T) {
 				t.Fatalf("%s/%s: keys %v err %v", provider, target, want, err)
 			}
 			// Check: nothing enabled, the user checks the target.
-			check := mustPlan(t, provider, nil, nil, []string{target}, nil, false)
-			if !reflect.DeepEqual(sortedStrings(check.enableKeys), sortedStrings(want)) || len(check.disableKeys) != 0 {
-				t.Errorf("%s: check %s enables %v disables %v, want enable %v only", provider, target, check.enableKeys, check.disableKeys, want)
+			check := mustPlan(t, provider, nil, nil, []string{target})
+			if !reflect.DeepEqual(sortedStrings(check.enableKeys), sortedStrings(want)) || len(check.disableKeys) != 0 ||
+				!reflect.DeepEqual(check.stored, []string{target}) {
+				t.Errorf("%s: check %s enables %v disables %v stores %v, want enable %v only and the target stored", provider, target,
+					check.enableKeys, check.disableKeys, check.stored, want)
 			}
-			// Uncheck: everything enabled, the user unchecks the target.
-			shown := shownTargets(provider, all, nil, nil)
-			rest := []string{}
-			for _, other := range shown {
-				if other != target {
-					rest = append(rest, other)
+			// Uncheck: everything enabled, the user unchecks the target; once
+			// with the target shown by its rows only, once stored as well.
+			for _, stored := range [][]string{nil, {target}} {
+				shown := shownTargets(provider, all, stored)
+				rest := []string{}
+				for _, other := range shown {
+					if other != target {
+						rest = append(rest, other)
+					}
 				}
-			}
-			uncheck := mustPlan(t, provider, all, nil, rest, nil, false)
-			if !reflect.DeepEqual(sortedStrings(uncheck.disableKeys), sortedStrings(want)) || len(uncheck.enableKeys) != 0 {
-				t.Errorf("%s: uncheck %s disables %v enables %v, want disable %v only", provider, target, uncheck.disableKeys, uncheck.enableKeys, want)
+				uncheck := mustPlan(t, provider, all, stored, rest)
+				if !reflect.DeepEqual(sortedStrings(uncheck.disableKeys), sortedStrings(want)) || len(uncheck.enableKeys) != 0 || len(uncheck.stored) != 0 {
+					t.Errorf("%s stored=%v: uncheck %s disables %v enables %v stores %v, want disable %v only and nothing stored", provider, stored, target,
+						uncheck.disableKeys, uncheck.enableKeys, uncheck.stored, want)
+				}
 			}
 			if (provider == "github" || provider == "gitlab") && target == "git" && !strings.Contains(strings.Join(want, ","), "blame") {
 				t.Errorf("%s: git does not move blame: %v", provider, want)
@@ -135,119 +228,121 @@ func TestCheckAndUncheckWriteExactlyTheKeysOfTheTarget(t *testing.T) {
 	}
 }
 
-// TestSelectionChangeReadsTheBaseListWhenTheRequestCarriesIt is the base-list
-// protocol as a table: equal, stale, absent, a name that is no target.
-func TestSelectionChangeReadsTheBaseListWhenTheRequestCarriesIt(t *testing.T) {
+// TestSelectionChangeReadsOnlyTheListTheServerShows is the save rule as a
+// table: the reference of a save is the stored list plus what the enabled
+// rows add, and nothing else.
+func TestSelectionChangeReadsOnlyTheListTheServerShows(t *testing.T) {
 	gitOn := []string{"repo-metadata", "commits", "commit-stats", "files", "blame"}
 	prsKeys := []string{"pr-comments", "pr-reviews", "prs"}
 	for _, testCase := range []struct {
-		name                    string
-		enabled, submitted      []string
-		base                    []string
-		baseSet                 bool
-		wantEnable, wantDisable []string
-		wantDiffers             bool
+		name                       string
+		enabled, stored, submitted []string
+		wantEnable, wantDisable    []string
+		wantStored                 []string
 	}{
-		{name: "stale base: another save switched prs off; this save changed nothing",
-			enabled: gitOn, submitted: []string{"git", "prs"}, base: []string{"git", "prs"}, baseSet: true, wantDiffers: true},
-		{name: "no base: the stale form re-applies its list (the documented fallback)",
-			enabled: gitOn, submitted: []string{"git", "prs"}, wantEnable: prsKeys},
-		{name: "stale base: the dataset endpoint switched cicd on; this save changed nothing",
-			enabled: append(append([]string{}, gitOn...), "cicd"), submitted: []string{"git"}, base: []string{"git"}, baseSet: true, wantDiffers: true},
-		{name: "no base: the same request switches cicd off (the documented fallback)",
-			enabled: append(append([]string{}, gitOn...), "cicd"), submitted: []string{"git"}, wantDisable: []string{"cicd"}},
-		{name: "base equal to the rows: only the user's uncheck writes",
-			enabled: append(append([]string{}, gitOn...), prsKeys...), submitted: []string{"git"}, base: []string{"git", "prs"}, baseSet: true, wantDisable: prsKeys},
-		{name: "stale base: the user's own uncheck is still applied",
-			enabled: append(append([]string{}, gitOn...), "prs", "cicd"), submitted: []string{"git"}, base: []string{"git", "prs"}, baseSet: true,
-			wantDisable: prsKeys, wantDiffers: true},
-		{name: "base holds a name that is no target: no effect",
-			enabled: gitOn, submitted: []string{"git"}, base: []string{"git", "no-such-target"}, baseSet: true, wantDiffers: true},
-		{name: "an empty base is a base: everything submitted is added",
-			enabled: gitOn, submitted: []string{"git", "prs"}, base: []string{}, baseSet: true,
-			wantEnable: append(append([]string{}, gitOn...), prsKeys...), wantDiffers: true},
+		{name: "a form loaded before another save switched prs off re-applies its list",
+			enabled: gitOn, submitted: []string{"git", "prs"}, wantEnable: prsKeys, wantStored: []string{"prs"}},
+		{name: "a form loaded before the dataset endpoint switched cicd on switches it off",
+			enabled: append(append([]string{}, gitOn...), "cicd"), submitted: []string{"git"}, wantDisable: []string{"cicd"}, wantStored: []string{}},
+		{name: "a stored target whose rows are on is unchecked: rows off, item dropped",
+			enabled: append(append([]string{}, gitOn...), prsKeys...), stored: []string{"git", "prs"}, submitted: []string{"git"},
+			wantDisable: prsKeys, wantStored: []string{"git"}},
+		{name: "a stored target whose rows are off is unchecked: item dropped (its keys are named; the write changes only a row that is on)",
+			enabled: gitOn, stored: []string{"git", "prs"}, submitted: []string{"git"}, wantDisable: prsKeys, wantStored: []string{"git"}},
+		{name: "a stored target whose rows are off is sent back: it stays stored and its rows stay off",
+			enabled: gitOn, stored: []string{"git", "prs"}, submitted: []string{"git", "prs"}, wantStored: []string{"git", "prs"}},
+		{name: "a row-only target is sent back with a new one: only the new one is stored",
+			enabled: gitOn, submitted: []string{"prs", "git"}, wantEnable: prsKeys, wantStored: []string{"prs"}},
+		{name: "the submitted order and duplicates are kept",
+			enabled: nil, stored: []string{"git"}, submitted: []string{"prs", "git", "prs"}, wantEnable: prsKeys, wantStored: []string{"prs", "git", "prs"}},
 	} {
-		change := mustPlan(t, "github", testCase.enabled, nil, testCase.submitted, testCase.base, testCase.baseSet)
+		change := mustPlan(t, "github", testCase.enabled, testCase.stored, testCase.submitted)
 		if !reflect.DeepEqual(sortedStrings(change.enableKeys), sortedStrings(testCase.wantEnable)) ||
-			!reflect.DeepEqual(sortedStrings(change.disableKeys), sortedStrings(testCase.wantDisable)) || change.baseDiffers != testCase.wantDiffers {
-			t.Errorf("%s:\n got enable %v disable %v differs %v\nwant enable %v disable %v differs %v", testCase.name,
-				change.enableKeys, change.disableKeys, change.baseDiffers, testCase.wantEnable, testCase.wantDisable, testCase.wantDiffers)
+			!reflect.DeepEqual(sortedStrings(change.disableKeys), sortedStrings(testCase.wantDisable)) ||
+			!reflect.DeepEqual(change.stored, testCase.wantStored) {
+			t.Errorf("%s:\n got enable %v disable %v stored %v\nwant enable %v disable %v stored %v", testCase.name,
+				change.enableKeys, change.disableKeys, change.stored, testCase.wantEnable, testCase.wantDisable, testCase.wantStored)
 		}
 	}
 }
 
 // TestSelectionChangeNeverWritesARowTheFormDoesNotOffer: "security" and
-// "blame" in a submitted or base list write no row and are not kept; a
-// target with no dataset moves in and out of the passthrough list.
+// "blame" in a submitted list write no row (they are stored, as any target a
+// request asks for); a target with no dataset moves in and out of the stored
+// list and writes no row.
 func TestSelectionChangeNeverWritesARowTheFormDoesNotOffer(t *testing.T) {
 	for _, provider := range []string{"github", "gitlab"} {
-		added := mustPlan(t, provider, nil, nil, []string{"security", "blame"}, nil, false)
-		removed := mustPlan(t, provider, []string{"security", "blame"}, nil, []string{}, []string{"security", "blame"}, true)
-		for name, change := range map[string]selectionChange{"added": added, "removed": removed} {
-			if len(change.enableKeys)+len(change.disableKeys)+len(change.passthrough) != 0 {
-				t.Errorf("%s: security and blame %s: %+v, want no row write and no passthrough", provider, name, change)
-			}
+		added := mustPlan(t, provider, nil, nil, []string{"security", "blame"})
+		if len(added.enableKeys)+len(added.disableKeys) != 0 || !reflect.DeepEqual(added.stored, []string{"security", "blame"}) {
+			t.Errorf("%s: security and blame added: %+v, want no row write and both stored", provider, added)
+		}
+		removed := mustPlan(t, provider, []string{"security", "blame"}, []string{"security", "blame"}, []string{})
+		if len(removed.enableKeys)+len(removed.disableKeys)+len(removed.stored) != 0 {
+			t.Errorf("%s: security and blame removed: %+v, want no row write and nothing stored", provider, removed)
 		}
 	}
-	add := mustPlan(t, "github", []string{"commits"}, nil, []string{"git", "incidents"}, nil, false)
-	if !reflect.DeepEqual(add.passthrough, []string{"incidents"}) || len(add.enableKeys)+len(add.disableKeys) != 0 {
-		t.Errorf("github incidents added: %+v, want passthrough [incidents] and no row write", add)
+	add := mustPlan(t, "github", []string{"commits"}, nil, []string{"git", "incidents"})
+	if !reflect.DeepEqual(add.stored, []string{"incidents"}) || len(add.enableKeys)+len(add.disableKeys) != 0 {
+		t.Errorf("github incidents added: %+v, want [incidents] stored and no row write", add)
 	}
-	drop := mustPlan(t, "github", []string{"commits"}, []string{"incidents"}, []string{"git"}, nil, false)
-	if len(drop.passthrough) != 0 || len(drop.enableKeys)+len(drop.disableKeys) != 0 {
-		t.Errorf("github incidents unchecked: %+v, want no passthrough and no row write", drop)
+	drop := mustPlan(t, "github", []string{"commits"}, []string{"incidents"}, []string{"git"})
+	if len(drop.stored) != 0 || len(drop.enableKeys)+len(drop.disableKeys) != 0 {
+		t.Errorf("github incidents unchecked: %+v, want nothing stored and no row write", drop)
 	}
-	// On GitLab "incidents" is a real dataset: a row write, not passthrough.
-	gitlab := mustPlan(t, "gitlab", nil, nil, []string{"incidents"}, nil, false)
-	if !reflect.DeepEqual(gitlab.enableKeys, []string{"incidents"}) || len(gitlab.passthrough) != 0 {
-		t.Errorf("gitlab incidents added: %+v, want the incidents row enabled", gitlab)
+	// On GitLab "incidents" is a real dataset: a row write and a stored item.
+	gitlab := mustPlan(t, "gitlab", nil, nil, []string{"incidents"})
+	if !reflect.DeepEqual(gitlab.enableKeys, []string{"incidents"}) || !reflect.DeepEqual(gitlab.stored, []string{"incidents"}) {
+		t.Errorf("gitlab incidents added: %+v, want the incidents row enabled and the target stored", gitlab)
 	}
 }
 
-// TestGateReadsOnlyAddedTargetsAndPassthrough: the canonical-incident gate's
-// input. A gated target that shows because its row is on is not in it.
-func TestGateReadsOnlyAddedTargetsAndPassthrough(t *testing.T) {
-	gated := func(change selectionChange) []string {
-		out := []string{}
-		for _, value := range change.gatedTargets() {
-			out = append(out, value)
-		}
-		return out
-	}
+// TestTheSaveStoresWhatTheGateReads: the canonical-incident gate's input is
+// the list the save stores. A gated target that shows only because its row
+// is on is not in it; a gated target a request asked for is, whether this
+// save adds it or an earlier one stored it.
+func TestTheSaveStoresWhatTheGateReads(t *testing.T) {
 	jiraOn := []string{"work-items", "incidents"}
 	for _, testCase := range []struct {
-		name, provider                  string
-		enabled, passthrough, submitted []string
-		want                            []string
+		name, provider             string
+		enabled, stored, submitted []string
+		want                       []string
 	}{
 		{"jira incidents row on, the list echoed back", "jira", jiraOn, nil, []string{"work-items", "operational"}, []string{}},
 		{"gitlab incidents row on, the list echoed back", "gitlab", []string{"commits", "incidents"}, nil, []string{"git", "incidents"}, []string{}},
+		{"gitlab incidents row on and stored, the list echoed back", "gitlab", []string{"commits", "incidents"}, []string{"git", "incidents"},
+			[]string{"git", "incidents"}, []string{"git", "incidents"}},
 		{"gitlab: the user adds incidents", "gitlab", []string{"commits"}, nil, []string{"git", "incidents"}, []string{"incidents"}},
-		{"jira: the user adds operational", "jira", []string{"work-items"}, nil, []string{"work-items", "operational"}, []string{"operational"}},
-		{"github stored incidents, list unchanged", "github", []string{"commits"}, []string{"incidents"}, []string{"git", "incidents"}, []string{"incidents"}},
+		{"jira: the user adds operational", "jira", []string{"work-items"}, []string{"work-items"}, []string{"work-items", "operational"},
+			[]string{"work-items", "operational"}},
+		{"jira: operational stored, its row off, the list echoed back", "jira", []string{"work-items"}, []string{"operational"},
+			[]string{"operational", "work-items"}, []string{"operational"}},
+		{"github stored incidents, list unchanged", "github", []string{"commits"}, []string{"incidents"}, []string{"incidents", "git"}, []string{"incidents"}},
 		{"github stored incidents, unchecked", "github", []string{"commits"}, []string{"incidents"}, []string{"git"}, []string{}},
 		{"github: the user adds incidents", "github", []string{"commits"}, nil, []string{"git", "incidents"}, []string{"incidents"}},
 	} {
-		got := gated(mustPlan(t, testCase.provider, testCase.enabled, testCase.passthrough, testCase.submitted, nil, false))
+		got := mustPlan(t, testCase.provider, testCase.enabled, testCase.stored, testCase.submitted).stored
 		if !reflect.DeepEqual(got, testCase.want) {
-			t.Errorf("%s: gate reads %v, want %v", testCase.name, got, testCase.want)
+			t.Errorf("%s: the save stores and gates %v, want %v", testCase.name, got, testCase.want)
 		}
 	}
 }
 
-// TestShownTargetsKeepTheOrderOfAnAgreeingList: a list that agrees with the
-// rows is returned as it is; a target the rows add comes after it in the
-// registry's order; a target whose rows are all off is dropped.
-func TestShownTargetsKeepTheOrderOfAnAgreeingList(t *testing.T) {
+// TestShownTargetsAreTheStoredListThenWhatTheRowsAdd: the stored list is
+// shown as it is (a target whose rows are off and a repeat included); a
+// target only the rows give comes after it in the registry's order.
+func TestShownTargetsAreTheStoredListThenWhatTheRowsAdd(t *testing.T) {
 	enabled := []string{"work-items", "commits", "prs", "cicd"}
-	if got := shownTargets("github", enabled, []string{"incidents"}, []string{"work-items", "incidents", "git"}); !reflect.DeepEqual(got,
+	if got := shownTargets("github", enabled, []string{"work-items", "incidents", "git"}); !reflect.DeepEqual(got,
 		[]string{"work-items", "incidents", "git", "prs", "cicd"}) {
-		t.Errorf("preferred order: %v", got)
+		t.Errorf("stored order first: %v", got)
 	}
-	if got := shownTargets("github", []string{"commits"}, nil, []string{"prs", "git", "git"}); !reflect.DeepEqual(got, []string{"git"}) {
-		t.Errorf("a target whose rows are off is dropped, a repeat is shown once: %v", got)
+	if got := shownTargets("github", []string{"commits"}, []string{"prs", "git", "git"}); !reflect.DeepEqual(got, []string{"prs", "git", "git"}) {
+		t.Errorf("the stored list is shown as stored: %v", got)
 	}
-	if got := shownTargets("github", nil, nil, nil); got == nil || len(got) != 0 {
+	if got := shownTargets("github", []string{"commits"}, nil); !reflect.DeepEqual(got, []string{"git"}) {
+		t.Errorf("a row-only target: %v", got)
+	}
+	if got := shownTargets("github", nil, nil); got == nil || len(got) != 0 {
 		t.Errorf("nothing enabled: %#v, want an empty list (not null)", got)
 	}
 }
@@ -273,10 +368,12 @@ func TestRowsOwnSelectionOnlyForAWholeIntegrationConfigThatIsNotPagerDuty(t *tes
 	}
 }
 
-// TestDecodeSyncConfigUpdateReadsTheBaseList: absent and null are no base; a
-// list of strings is the base (an empty list too); any other value is a 422
-// problem at body.sync_targets_base, as a malformed sync_targets is.
-func TestDecodeSyncConfigUpdateReadsTheBaseList(t *testing.T) {
+// TestDecodeSyncConfigUpdateIgnoresABaseList: the body field
+// sync_targets_base has no meaning. Whatever its value, the body decodes
+// with no problem and to the same update as the body without it: what a save
+// adds is decided against the list the server shows, never a list the
+// request brings.
+func TestDecodeSyncConfigUpdateIgnoresABaseList(t *testing.T) {
 	decode := func(text string) (syncConfigUpdate, pybody.Errors) {
 		t.Helper()
 		value, err := pyjson.DecodeString(text)
@@ -285,51 +382,15 @@ func TestDecodeSyncConfigUpdateReadsTheBaseList(t *testing.T) {
 		}
 		return decodeSyncConfigUpdate(pybody.Body{Value: value})
 	}
-	for _, text := range []string{`{"sync_targets":["git"]}`, `{"sync_targets":["git"],"sync_targets_base":null}`} {
-		in, problems := decode(text)
-		if len(problems) != 0 || in.syncTargetsBaseSet || in.syncTargetsBase != nil || !in.syncTargetsSet {
-			t.Errorf("%s: base set %v %v, problems %v; want no base and no problem", text, in.syncTargetsBaseSet, in.syncTargetsBase, problems)
-		}
+	want, problems := decode(`{"sync_targets":["git"]}`)
+	if len(problems) != 0 || !want.syncTargetsSet {
+		t.Fatalf("plain body: %+v problems %v", want, problems)
 	}
-	for text, want := range map[string][]string{
-		`{"sync_targets":["git"],"sync_targets_base":["git","prs"]}`: {"git", "prs"},
-		`{"sync_targets":["git"],"sync_targets_base":[]}`:            {},
-		`{"sync_targets_base":["git"]}`:                              {"git"},
-	} {
-		in, problems := decode(text)
-		if len(problems) != 0 || !in.syncTargetsBaseSet || !reflect.DeepEqual(append([]string{}, in.syncTargetsBase...), want) {
-			t.Errorf("%s: base %v set %v problems %v; want %v", text, in.syncTargetsBase, in.syncTargetsBaseSet, problems, want)
+	for _, base := range []string{`null`, `["git","prs"]`, `[]`, `"git"`, `["git",7]`, `{"git":true}`, `3`, `[null]`} {
+		text := `{"sync_targets":["git"],"sync_targets_base":` + base + `}`
+		got, problems := decode(text)
+		if len(problems) != 0 || !reflect.DeepEqual(got, want) {
+			t.Errorf("%s: %+v problems %v; want the update of the body without the field and no problem", text, got, problems)
 		}
-	}
-	for _, text := range []string{
-		`{"sync_targets":["git"],"sync_targets_base":"git"}`,
-		`{"sync_targets":["git"],"sync_targets_base":["git",7]}`,
-		`{"sync_targets":["git"],"sync_targets_base":{"git":true}}`,
-		`{"sync_targets":["git"],"sync_targets_base":3}`,
-		`{"sync_targets":["git"],"sync_targets_base":[null]}`,
-	} {
-		_, problems := decode(text)
-		if len(problems) != 1 {
-			t.Errorf("%s: %d problems, want exactly one", text, len(problems))
-			continue
-		}
-		if loc := problems[0].Loc; len(loc) < 2 || loc[0] != "body" || loc[1] != "sync_targets_base" {
-			t.Errorf("%s: problem at %v, want body.sync_targets_base", text, loc)
-		}
-	}
-}
-
-// TestIncidentGateTargetsKeepEveryItemThatIsNotAMirroredString: the gate
-// input of the routes keeps an item that is not a string (the gate answers
-// it as it always did) and every item of a config with no integration.
-func TestIncidentGateTargetsKeepEveryItemThatIsNotAMirroredString(t *testing.T) {
-	integration := uuid.New()
-	stored := []pyjson.Value{"work-items", float64(7), "operational", nil}
-	whole := incidentGateTargets(&syncConfig{Provider: "jira", IntegrationID: &integration}, stored)
-	if want := []pyjson.Value{float64(7), nil}; !reflect.DeepEqual(whole, want) {
-		t.Errorf("whole-integration jira: %v, want %v (the two mirrored strings left out, the other items kept)", whole, want)
-	}
-	if none := incidentGateTargets(&syncConfig{Provider: "jira"}, stored); !reflect.DeepEqual(none, stored) {
-		t.Errorf("jira with no integration: %v, want every item %v", none, stored)
 	}
 }

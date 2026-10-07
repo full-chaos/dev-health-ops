@@ -144,8 +144,8 @@ func Validate(ctx context.Context, tx pgx.Tx, config *Config, params Params) (va
 	}
 	provider := strings.ToLower(strings.TrimSpace(config.Provider))
 	syncTargets := slices.Clone(config.SyncTargets)
-	// The stored list of a whole-integration configuration is a mirror of
-	// its rows, not the selection: it is not read here.
+	// The rows of a whole-integration configuration own its selection, not
+	// its stored list: the list is not read here.
 	if len(syncTargets) > 0 && !rowsOwnSelection(config) {
 		known := schedsync.SupportedLegacyTargets(provider)
 		var unresolved []string

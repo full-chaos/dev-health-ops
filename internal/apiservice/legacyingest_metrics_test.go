@@ -69,10 +69,10 @@ func TestLegacyIngestRefusalsAreScrapedFromTheOperatorRegistry(t *testing.T) {
 }
 
 // TestOperatorMetricsExposeTheSyncConfigSelectionFamilies pins the
-// registration of the sync-config dataset selection counters (CHAOS-8816):
-// drop the RegisterMetrics call and both families disappear from the api's
-// /metrics with no other test noticing. The dataset-drift repair family they
-// replace is gone with the repair itself.
+// registration of the sync-config dataset selection counter (CHAOS-8816):
+// drop the RegisterMetrics call and the family disappears from the api's
+// /metrics with no other test noticing. The dataset-drift repair family it
+// replaces is gone with the repair itself.
 func TestOperatorMetricsExposeTheSyncConfigSelectionFamilies(t *testing.T) {
 	registry := health.NewRegistry(time.Second)
 	var deps Deps
@@ -83,10 +83,8 @@ func TestOperatorMetricsExposeTheSyncConfigSelectionFamilies(t *testing.T) {
 	if err := registry.WriteMetrics(&out); err != nil {
 		t.Fatal(err)
 	}
-	for _, family := range []string{"sync_config_dataset_rows_changed_total", "sync_config_save_stale_base_total"} {
-		if !strings.Contains(out.String(), "# TYPE "+family+" counter") {
-			t.Fatalf("family %s not exposed:\n%s", family, out.String())
-		}
+	if family := "sync_config_dataset_rows_changed_total"; !strings.Contains(out.String(), "# TYPE "+family+" counter") {
+		t.Fatalf("family %s not exposed:\n%s", family, out.String())
 	}
 	if strings.Contains(out.String(), "sync_target_dataset_drift_repaired_total") {
 		t.Fatalf("the retired drift repair family is still exposed:\n%s", out.String())

@@ -400,20 +400,37 @@ func loadTeamRepoOwnershipProjectLinks(
 	// evaluated as an expression. Same documented fix as
 	// internal/jobs/metrics/remaining/dora_native_clickhouse.go's
 	// dateTime64Argument/DateTime64Argument.
+	//
+	// Two levels. The inner one takes the newest stored version of each row
+	// key, so its valid_to is the current one: a row is closed by writing
+	// the same key again with valid_to set, and until a merge both versions
+	// are stored. A valid_to filter on the stored rows would still see the
+	// open version and return a closed link. The outer level then collapses
+	// the generations of one (provider, project, team) as before. valid_to
+	// is Nullable, so it is tuple-wrapped: argMax skips a NULL value.
 	rows, err := conn.Query(ctx, `
 SELECT
-    provider,
-    project_id,
-    team_id,
-    argMax(is_primary, (updated_at, valid_from)) AS is_primary,
-    argMax(specificity, (updated_at, valid_from)) AS specificity
-FROM team_project_ownership
-WHERE org_id = {org_id:String}
-  AND project_id != ''
-  AND team_id != ''
-  AND valid_from <= {as_of:DateTime64(3, 'UTC')}
-  AND (valid_to IS NULL OR valid_to > {as_of:DateTime64(3, 'UTC')})
-GROUP BY provider, project_id, team_id`,
+    o.provider,
+    o.project_id,
+    o.team_id,
+    argMax(o.is_primary, (o.version_at, o.valid_from)) AS is_primary,
+    argMax(o.specificity, (o.version_at, o.valid_from)) AS specificity
+FROM (
+    SELECT
+        v.provider, v.project_id, v.team_id, v.source, v.valid_from,
+        (argMax(tuple(v.valid_to), v.updated_at)).1 AS valid_to,
+        argMax(v.is_primary, v.updated_at) AS is_primary,
+        argMax(v.specificity, v.updated_at) AS specificity,
+        max(v.updated_at) AS version_at
+    FROM team_project_ownership AS v
+    WHERE v.org_id = {org_id:String}
+      AND v.project_id != ''
+      AND v.team_id != ''
+    GROUP BY v.provider, v.project_id, v.team_id, v.source, v.valid_from
+) AS o
+WHERE o.valid_from <= {as_of:DateTime64(3, 'UTC')}
+  AND (o.valid_to IS NULL OR o.valid_to > {as_of:DateTime64(3, 'UTC')})
+GROUP BY o.provider, o.project_id, o.team_id`,
 		clickhouse.Named("org_id", orgID), clickhouse.Named("as_of", asOf.UTC().Format("2006-01-02 15:04:05.000")))
 	if err != nil {
 		return nil, err

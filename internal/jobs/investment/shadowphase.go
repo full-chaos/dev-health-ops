@@ -474,8 +474,14 @@ func (phase *ShadowPhase) run(ctx context.Context, store shadowStore, cfg Config
 			go func() {
 				defer workers.Done()
 				for unit := range work {
+					result := phase.classifyOne(phaseCtx, ledger, unit)
+					if result.classification.Stop {
+						// Stop here, not only in the loop that reads the result:
+						// this worker must not start its next unit in between.
+						cancel()
+					}
 					select {
-					case results <- phase.classifyOne(phaseCtx, ledger, unit):
+					case results <- result:
 					case <-abandoned:
 						return
 					}

@@ -836,6 +836,37 @@ func TestAPanicOfThePhaseItselfDoesNotReachTheRun(t *testing.T) {
 	}
 }
 
+// slowClassificationLog is a log sink that takes its time with the line of one
+// classification: the loop that reads the results is then slow, as it is on a
+// busy host.
+type slowClassificationLog struct{}
+
+func (slowClassificationLog) Write(line []byte) (int, error) {
+	if strings.Contains(string(line), "investment shadow classification") {
+		time.Sleep(200 * time.Millisecond)
+	}
+	return len(line), nil
+}
+
+// After a deterministic failure the worker that got it does not start its next
+// unit, however slow the loop that reads its result is. (Hosted CI saw a
+// second request here before the worker itself stopped the phase.)
+func TestAWorkerStartsNoUnitAfterADeterministicFailure(t *testing.T) {
+	fake := newFakeJev(t, func(int, []byte) jevReply { return jevReply{status: http.StatusUnauthorized, body: []byte(`{}`)} })
+	settings := shadowTestSettings()
+	settings.Concurrency = 1
+	logger := slog.New(slog.NewTextHandler(slowClassificationLog{}, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	phase := newTestShadowPhase(t, fake, settings, logger)
+	store := &memoryShadowStore{}
+	summary := phase.run(context.Background(), store, shadowTestConfig(), shadowTestEntries(t, "u1", "u2", "u3"))
+	if summary.StopReason != ShadowStopDeterministicFailure || summary.Attempted != 1 || len(store.records) != 1 {
+		t.Fatalf("summary = %+v, rows = %d", summary, len(store.records))
+	}
+	if fake.count() != 1 {
+		t.Fatalf("requests = %d, want 1: the worker started a unit after the failure that stops the phase", fake.count())
+	}
+}
+
 // panickingWriteStore is a store whose shadow write panics.
 type panickingWriteStore struct{ *memoryShadowStore }
 

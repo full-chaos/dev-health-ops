@@ -988,7 +988,7 @@ func TestTypeSafeRequestIDShapeRules(t *testing.T) {
 		wantID   string
 		rejected bool
 	}{
-		"plain id":               {"req_01HZX-abc.9", plainKey, "req_01HZX-abc.9", false},
+		"plain id":               {"req_plain-id.ok", plainKey, "req_plain-id.ok", false},
 		"64 bytes":               {strings.Repeat("a", 64), plainKey, strings.Repeat("a", 64), false},
 		"65 bytes":               {strings.Repeat("a", 65), plainKey, "", true},
 		"space":                  {"req 1", plainKey, "", true},

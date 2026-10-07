@@ -118,6 +118,8 @@ var exportedAPI = []string{
 	"var synclog.KeyDrainDaysAlreadyStarted synclog.Key",
 	"var synclog.KeyDrainDaysReturned synclog.Key",
 	"var synclog.KeyDrainDaysSkipped synclog.Key",
+	"var synclog.KeyDrainDaysRetried synclog.Key",
+	"var synclog.KeyDrainDaysNotMarked synclog.Key",
 	"var synclog.KeyDrainRunsInFlight synclog.Key",
 	"var synclog.KeyDrainOldestPendingDay synclog.Key",
 	"var synclog.KeyDrainNewestSkippedDay synclog.Key",

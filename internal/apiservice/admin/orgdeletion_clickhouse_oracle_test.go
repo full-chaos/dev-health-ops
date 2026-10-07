@@ -198,4 +198,12 @@ var clickHouseOrgTablesAfterThePythonFreeze = map[string]string{
 	// by org_id and written by the post-sync fan-out, so an organization's
 	// events must go when the organization is deleted.
 	"daily_metrics_touched_days": "108_daily_metrics_touched_days.sql",
+	// The shadow categorization results (CHAOS-8868). Keyed by org_id and
+	// written by the investment worker, so an organization's shadow rows must go
+	// when the organization is deleted.
+	"work_unit_investment_shadow": "109_work_unit_investment_shadow.sql",
+	// One row for each HTTP attempt of a categorization call (CHAOS-8868). Keyed
+	// by org_id and written by the investment worker, so an organization's
+	// attempt rows must go when the organization is deleted.
+	"llm_categorization_attempts": "110_llm_categorization_attempts.sql",
 }

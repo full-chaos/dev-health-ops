@@ -26,7 +26,9 @@ import (
 )
 
 const (
-	tsKey        = "tsk-sentinel?>~key-0123456789abcdef"
+	// The test keys are plain word markers, not credential-shaped: the shared sanitizer
+	// masks sk-/long-opaque shapes, which would hide a leak at the llmError layer.
+	tsKey        = "ZQXJ-spec?>~key-mark1"
 	tsStateText  = "SENTINEL-STATE-TEXT-do-not-log"
 	tsAnswerText = "SENTINEL-ANSWER-TEXT-do-not-log"
 )
@@ -207,7 +209,8 @@ func TestTypeSafeAuthFailuresStopAndAreNotRetried(t *testing.T) {
 			if class, ok := ClassifyLLMError(err); !ok || class != LLMErrorClassAuth {
 				t.Fatalf("ClassifyLLMError = %v %v, want auth", class, ok)
 			}
-			assertNoSentinels(t, err.Error(), h.logs.String())
+			assertNoSentinels(t, err.Error(), h.logs.String(), unwrapAll(err))
+			assertNoKeyForms(t, tsKey, "auth error chain", err.Error(), unwrapAll(err), h.logs.String())
 		})
 	}
 }
@@ -877,11 +880,11 @@ func TestPostSystemOneCancelAndDeadlineAreTheContextError(t *testing.T) {
 // spellings pass the charset (so only the key guard can stop them), and one
 // with characters the charset refuses.
 
-const plainKey = "tsk-sentinel-key-0123456789abcdef"
+const plainKey = "ZQXJ-plain-key-marker"
 
-var peerKeys = map[string]string{"plain": plainKey, "special": tsKey, "mixed case": "TsK-Sentinel-KEY-0123456789AbCdEf",
-	// Short enough that its hex still fits the 64-byte id bound.
-	"short": "tsk-0123456789abcdefg"}
+var peerKeys = map[string]string{"plain": plainKey, "special": tsKey, "mixed case": "ZqXj-MixEd-Case-Mark1",
+	// Its hex (40 bytes) fits the 64-byte id bound.
+	"short": "ZQXJ-0123456789abcde"}
 
 func withKey(key string) func(*TypeSafeClientConfig) {
 	return func(c *TypeSafeClientConfig) { c.APIKey = secrets.NewHidden(key) }
@@ -1155,5 +1158,65 @@ func TestTypeSafeOtherPeerHeadersNeverFlowOut(t *testing.T) {
 	assertNoKeyForms(t, tsKey, "logs", h.logs.String(), h2.logs.String(), fmt.Sprintf("%v", err), unwrapAll(err))
 	if len(*h2.delays) != 1 || (*h2.delays)[0] != time.Second {
 		t.Fatalf("Retry-After must still be honoured: %v", *h2.delays)
+	}
+}
+
+// An unknown model (404) is deterministic: every later request fails the same
+// way, so FailureClass says model_not_found and the caller stops.
+func TestTypeSafeNotFoundIsAnUnknownModelAndDeterministic(t *testing.T) {
+	h := newTS(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("x-typesafe-request-id", "req_404")
+		w.WriteHeader(404)
+		_, _ = w.Write([]byte(`{"detail":"` + tsStateText + `"}`))
+	})
+	_, _, err := h.client.PostSystemOne(context.Background(), tsBody)
+	se := mustSystemOneError(t, err)
+	if se.Class != SystemOneClassModelNotFound || !se.StopsArm() || h.calls.Load() != 1 || FailureClass(err) != "model_not_found" || !IsDeterministicFailure(err) {
+		t.Fatalf("class=%s stops=%v calls=%d failureClass=%s deterministic=%v", se.Class, se.StopsArm(), h.calls.Load(), FailureClass(err), IsDeterministicFailure(err))
+	}
+	assertNoSentinels(t, err.Error(), h.logs.String(), unwrapAll(err))
+}
+
+// A timeout that wins while the body is being read is a timeout (retried once,
+// logged as one), not a read error.
+func TestTypeSafeTimeoutDuringTheBodyReadIsATimeout(t *testing.T) {
+	h := newTS(t, func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body)
+		w.WriteHeader(200)
+		_, _ = w.Write([]byte(`{"model":`))
+		w.(http.Flusher).Flush()
+		select {
+		case <-r.Context().Done():
+		case <-time.After(5 * time.Second):
+		}
+	}, func(c *TypeSafeClientConfig) { c.Timeout = 80 * time.Millisecond })
+	_, err := h.client.SendBody(context.Background(), tsBody)
+	se := mustSystemOneError(t, err)
+	if se.Class != SystemOneClassTimeout || len(se.Attempts) != 2 || h.calls.Load() != 2 {
+		t.Fatalf("class=%s attempts=%d calls=%d", se.Class, len(se.Attempts), h.calls.Load())
+	}
+	if !strings.Contains(h.logs.String(), `"class":"timeout"`) {
+		t.Fatalf("not logged as a timeout: %s", h.logs.String())
+	}
+}
+
+// A caller's cancel or deadline during the body read ends as canceled, with the context error.
+func TestTypeSafeContextEndDuringTheBodyReadIsCanceled(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 80*time.Millisecond)
+	defer cancel()
+	h := newTS(t, func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body)
+		w.WriteHeader(200)
+		_, _ = w.Write([]byte(`{"model":`))
+		w.(http.Flusher).Flush()
+		select {
+		case <-r.Context().Done():
+		case <-time.After(5 * time.Second):
+		}
+	})
+	_, err := h.client.SendBody(ctx, tsBody)
+	se := mustSystemOneError(t, err)
+	if se.Class != SystemOneClassCanceled || !errors.Is(err, context.DeadlineExceeded) || h.calls.Load() != 1 || len(se.Attempts) != 1 {
+		t.Fatalf("class=%s err=%v calls=%d attempts=%d", se.Class, err, h.calls.Load(), len(se.Attempts))
 	}
 }

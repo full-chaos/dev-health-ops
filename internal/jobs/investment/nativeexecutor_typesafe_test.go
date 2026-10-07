@@ -11,7 +11,7 @@ import (
 // provider resolution must refuse it rather than build anything, whether it is
 // requested by the scope or by LLM_PROVIDER.
 func TestServedProviderResolutionRefusesTheTypeSafeKind(t *testing.T) {
-	t.Setenv("TYPESAFE_API_KEY", "tsk-present-but-must-not-matter")
+	t.Setenv("TYPESAFE_API_KEY", "ZQXJ-present-must-not-matter")
 	for name, setup := range map[string]func(t *testing.T) string{
 		"requested in the scope": func(*testing.T) string { return "typesafe" },
 		"set by LLM_PROVIDER": func(t *testing.T) string {

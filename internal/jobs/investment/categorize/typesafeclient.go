@@ -393,6 +393,7 @@ type SystemOneClass string
 
 const (
 	SystemOneClassAuth          SystemOneClass = "auth"            // 401, 402, 403: stop; do not retry
+	SystemOneClassModelNotFound SystemOneClass = "model_not_found" // 404: stop; do not retry
 	SystemOneClassRateLimit     SystemOneClass = "rate_limit"      // 429, retried once
 	SystemOneClassServer        SystemOneClass = "server"          // 529 and 5xx, retried once
 	SystemOneClassInvalid       SystemOneClass = "invalid_request" // 400, 422: not retried
@@ -433,8 +434,10 @@ func (e *SystemOneError) Error() string {
 func (e *SystemOneError) Unwrap() error { return e.cause }
 
 // StopsArm reports a class a caller should treat as "stop sending": a bad or
-// unpaid key will fail every following request the same way.
-func (e *SystemOneError) StopsArm() bool { return e.Class == SystemOneClassAuth }
+// unpaid key, or an unknown model, will fail every following request the same way.
+func (e *SystemOneError) StopsArm() bool {
+	return e.Class == SystemOneClassAuth || e.Class == SystemOneClassModelNotFound
+}
 
 // SystemOne renders req and sends it.
 func (c *TypeSafeClient) SystemOne(ctx context.Context, req SystemOneRequest) (SystemOneResult, error) {
@@ -586,6 +589,18 @@ func (c *TypeSafeClient) once(ctx context.Context, body []byte, lenient bool) (S
 		return SystemOneResult{}, att, &SystemOneError{Class: class, StatusCode: resp.StatusCode, cause: llm}
 	}
 	if readErr != nil {
+		if ctx.Err() != nil {
+			att.Class = string(SystemOneClassCanceled)
+			return SystemOneResult{}, att, &SystemOneError{Class: SystemOneClassCanceled, StatusCode: resp.StatusCode, cause: ctx.Err()}
+		}
+		// The client's own Timeout also covers the body read: a timeout that
+		// wins there is a timeout, not a read error.
+		if tc := logging.TransportClass(readErr); tc == "timeout" || tc == "deadline" {
+			att.Class = string(SystemOneClassTimeout)
+			return SystemOneResult{}, att, &SystemOneError{Class: SystemOneClassTimeout, StatusCode: resp.StatusCode,
+				cause: &llmError{kind: llmErrorTimeout, message: "LLM provider request timed out.", provider: string(ProviderKindTypeSafe), model: c.cfg.Model,
+					cause: logging.TransportFailure(readErr)}}
+		}
 		att.Class = string(SystemOneClassBodyReadError)
 		return SystemOneResult{}, att, &SystemOneError{Class: SystemOneClassBodyReadError, StatusCode: resp.StatusCode,
 			cause: &llmError{kind: llmErrorTransport, message: "response body could not be read", provider: string(ProviderKindTypeSafe), model: c.cfg.Model,
@@ -620,9 +635,17 @@ func (c *TypeSafeClient) classify(err error, status int, header http.Header) (Sy
 		llm.kind = llmErrorAuth
 		llm.message = "Invalid or missing LLM API key."
 	}
+	if status == http.StatusNotFound {
+		// An unknown model id: every later request fails the same way, so
+		// FailureClass reads model_not_found and IsDeterministicFailure is true.
+		llm.kind = llmErrorModelNotFound
+		llm.message = fmt.Sprintf("LLM model not found for provider %q using configured model %q.", ProviderKindTypeSafe, c.cfg.Model)
+	}
 	switch llm.kind {
 	case llmErrorAuth:
 		return SystemOneClassAuth, llm
+	case llmErrorModelNotFound:
+		return SystemOneClassModelNotFound, llm
 	case llmErrorRateLimit:
 		return SystemOneClassRateLimit, llm
 	case llmErrorServer:

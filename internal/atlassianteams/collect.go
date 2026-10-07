@@ -143,6 +143,13 @@ type Rows struct {
 	// reached the provider's last page. Only Collect sets it. Rows built any
 	// other way leave it false, and Write then closes no project link.
 	ProjectLinksComplete bool
+	// UnreadableProjectLinkTeams holds the id of every team whose read
+	// returned at least one project link and not one of them carried a Jira
+	// project ARI this collector can read. An empty answer for such a team is
+	// "the links could not be read", not "the team has no project": Write
+	// closes none of that team's links. A team with at least one readable
+	// link is not here; its other links are counted in SkippedProjects.
+	UnreadableProjectLinkTeams []string
 }
 
 // ErrConfiguration marks an input the sync cannot run without.
@@ -329,7 +336,14 @@ func Collect(ctx context.Context, client Client, params Params) (Rows, error) {
 			}
 			projectRead = 1
 			keys := map[string]bool{}
+			readable, refused := 0, 0
 			for _, project := range projects {
+				nativeProjectID, ok := jiraNativeProjectID(project.ProjectID)
+				if ok {
+					readable++
+				} else {
+					refused++
+				}
 				key := ""
 				if project.ProjectKey != nil {
 					key = strings.TrimSpace(*project.ProjectKey)
@@ -338,7 +352,6 @@ func Collect(ctx context.Context, client Client, params Params) (Rows, error) {
 					rows.SkippedProjects++
 					continue
 				}
-				nativeProjectID, ok := jiraNativeProjectID(project.ProjectID)
 				if !ok {
 					rows.SkippedProjects++
 					continue
@@ -355,6 +368,9 @@ func Collect(ctx context.Context, client Client, params Params) (Rows, error) {
 				row.ProjectKeys = append(row.ProjectKeys, key)
 			}
 			sort.Strings(row.ProjectKeys)
+			if refused > 0 && readable == 0 {
+				rows.UnreadableProjectLinkTeams = append(rows.UnreadableProjectLinkTeams, id)
+			}
 		}
 		rows.Teams = append(rows.Teams, row)
 		projectReads += projectRead

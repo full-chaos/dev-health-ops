@@ -243,6 +243,9 @@ func TestCollectReadsTeamsMembersAndProjectsThroughTheRealClient(t *testing.T) {
 	if partial, err := Collect(context.Background(), g.client(), withoutProjects); err != nil || partial.ProjectLinksComplete {
 		t.Errorf("a collection that read no project links says they are complete (err=%v)", err)
 	}
+	if len(rows.UnreadableProjectLinkTeams) != 0 {
+		t.Errorf("unreadable teams = %v, want none: team A has one readable link, team C has no link at all", rows.UnreadableProjectLinkTeams)
+	}
 	if rows.SkippedProjects != 3 {
 		t.Errorf("skipped project links = %d, want 3 (one with no key, two with no numeric project id)", rows.SkippedProjects)
 	}
@@ -733,5 +736,47 @@ func TestJiraNativeProjectIDIsTheNumericLastSegmentOfAJiraProjectARI(t *testing.
 		if got != tc.want || ok != tc.ok {
 			t.Errorf("jiraNativeProjectID(%q) = %q, %v; want %q, %v", tc.ari, got, ok, tc.want, tc.ok)
 		}
+	}
+}
+
+// TestATeamWithNoReadableProjectLinkIsNamedUnreadable pins the per-team rule:
+// links came back for the team and not one carried a readable Jira project
+// ARI, so the answer is "could not be read", never "no project".
+func TestATeamWithNoReadableProjectLinkIsNamedUnreadable(t *testing.T) {
+	serve := func(teamALinks, teamCLinks []map[string]any) func(request) (int, any) {
+		return func(req request) (int, any) {
+			if req.Operation != "TeamworkGraphTeamActiveProjects" {
+				return standard(req)
+			}
+			if req.Variables["teamId"] == teamA {
+				return 200, connection("teamworkGraph_teamActiveProjects", "", teamALinks...)
+			}
+			return 200, connection("teamworkGraph_teamActiveProjects", "", teamCLinks...)
+		}
+	}
+	const idA, idC = "aaaaaaaa-0000-4000-8000-000000000001", "cccccccc-0000-4000-8000-000000000003"
+	for _, tc := range []struct {
+		name string
+		a, c []map[string]any
+		want string
+	}{
+		{"no link of the team is readable", []map[string]any{projectEdge(teamA, "PLAT", "PLAT"), projectEdge(teamA, "DATA", "")}, nil, idA},
+		{"one readable link is enough", []map[string]any{projectEdge(teamA, "PLAT", "PLAT"), projectEdge(teamA, "DATA", "7")}, nil, ""},
+		{"a readable link without a key still shows the ARI shape is read", []map[string]any{projectEdge(teamA, "PLAT", "PLAT"), projectEdge(teamA, "", "7")}, nil, ""},
+		{"a team with no link at all has no project", nil, nil, ""},
+		{"each team is judged by itself", []map[string]any{projectEdge(teamA, "PLAT", "10001")}, []map[string]any{projectEdge(teamC, "DATA", "DATA")}, idC},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rows, err := Collect(context.Background(), newGateway(t, serve(tc.a, tc.c)).client(), params(everything))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := strings.Join(rows.UnreadableProjectLinkTeams, ","); got != tc.want {
+				t.Errorf("unreadable teams = %q, want %q", got, tc.want)
+			}
+			if !rows.ProjectLinksComplete {
+				t.Error("every read reached its end: the run as a whole is complete")
+			}
+		})
 	}
 }

@@ -267,6 +267,12 @@ func (collector jiraCombinedTeamCatalogCollector) collectAtlassianTeams(
 		slog.Default().WarnContext(ctx, "jira_atlassian_teams_project_link_skipped",
 			"org_id", ref.OrgID, "links", rows.SkippedProjects)
 	}
+	if len(rows.UnreadableProjectLinkTeams) > 0 {
+		// Not one project link of these teams carried a readable Jira
+		// project ARI: their open links stay as they are.
+		slog.Default().WarnContext(ctx, "jira_atlassian_teams_project_links_unreadable",
+			"org_id", ref.OrgID, "teams", len(rows.UnreadableProjectLinkTeams))
+	}
 	if len(rows.Teams) == 0 {
 		// An empty Atlassian Teams answer is far more often a permissions or
 		// configuration problem than a real empty organization (see the CLI

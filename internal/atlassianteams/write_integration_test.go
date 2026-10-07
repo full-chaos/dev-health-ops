@@ -397,3 +397,48 @@ func TestAnAtlassianTeamsRunClosesTheKeyBuiltProjectLinks(t *testing.T) {
 		t.Fatalf("rows after the second run = %v, want 4", got)
 	}
 }
+
+// A team whose project links could not be read keeps its open links: an
+// answer in which no link carries a readable project ARI is not "the team
+// has no project". The other team of the same run is judged by itself.
+func TestATeamWithNoReadableProjectLinkKeepsItsOpenLinks(t *testing.T) {
+	conn := openClickHouse(t)
+	ctx := context.Background()
+	const org = "org-1"
+	now := time.Date(2026, 9, 25, 3, 0, 0, 0, time.UTC)
+	const insert = `INSERT INTO team_project_ownership (org_id, provider, team_id, project_id, project_key, source, is_primary, specificity, priority, valid_from, valid_to, updated_at) VALUES `
+	exec(t, conn, insert+`('org-1', 'jira', '`+idA+`', '10001', 'PLAT', 'native', 1, 110, 10, '2026-09-10 00:00:00', NULL, '2026-09-10 00:00:00')`)
+	exec(t, conn, insert+`('org-1', 'jira', '`+idA+`', '10009', 'OPS', 'native', 1, 110, 10, '2026-09-10 00:00:00', NULL, '2026-09-10 00:00:00')`)
+	exec(t, conn, insert+`('org-1', 'jira', '`+idC+`', '20002', 'DATA', 'native', 1, 110, 10, '2026-09-10 00:00:00', NULL, '2026-09-10 00:00:00')`)
+
+	// Team A: links came back, none with a readable project ARI. Team C: no
+	// link at all (a complete answer: the team has no project).
+	g := newGateway(t, func(req request) (int, any) {
+		if req.Operation == "TeamworkGraphTeamActiveProjects" && req.Variables["teamId"] == teamA {
+			return 200, connection("teamworkGraph_teamActiveProjects", "", projectEdge(teamA, "PLAT", "PLAT"), projectEdge(teamA, "OPS", ""))
+		}
+		return standard(req)
+	})
+	p := params(everything)
+	p.Now = now
+	rows, err := Collect(ctx, g.client(), p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := Write(ctx, conn, org, rows, everything)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.ExpiredOwnership != 1 || result.UnreadableProjectLinkTeams != 1 {
+		t.Fatalf("result=%+v, want 1 link closed (team C) and 1 team named unreadable (team A)", result)
+	}
+	state := lines(t, conn, `SELECT concat(team_id, '|', project_id, '|', if(valid_to IS NULL, 'open', toString(valid_to))) FROM team_project_ownership FINAL WHERE org_id = 'org-1' AND provider = 'jira' ORDER BY team_id, project_id`)
+	want := []string{
+		idA + "|10001|open",
+		idA + "|10009|open",
+		idC + "|20002|2026-09-25 03:00:00.000",
+	}
+	if strings.Join(state, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("ownership:\n%s\nwant:\n%s", strings.Join(state, "\n"), strings.Join(want, "\n"))
+	}
+}

@@ -3,6 +3,7 @@ package atlassianteams
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -46,6 +47,10 @@ type Result struct {
 	OwnershipWritten   int
 	ExpiredMemberships int
 	ExpiredOwnership   int
+	// UnreadableProjectLinkTeams counts the teams whose project links this
+	// call left as they were, because the collection could read none of the
+	// team's links (Rows.UnreadableProjectLinkTeams).
+	UnreadableProjectLinkTeams int
 	// DeactivatedTeams counts catalog rows of Atlassian teams the snapshot no
 	// longer returns (deleted upstream), rewritten inactive.
 	DeactivatedTeams int
@@ -143,7 +148,7 @@ func Write(ctx context.Context, conn driver.Conn, orgID string, rows Rows, selec
 	var ownership []OwnershipRow
 	var expiredOwnership []openOwnership
 	if selections.Projects {
-		if ownership, expiredOwnership, err = planOwnership(ctx, conn, orgID, scope, rows.Ownership, now, rows.ProjectLinksComplete); err != nil {
+		if ownership, expiredOwnership, err = planOwnership(ctx, conn, orgID, scope, rows.Ownership, now, rows.ProjectLinksComplete, rows.UnreadableProjectLinkTeams); err != nil {
 			return result, fmt.Errorf("read current team project ownership: %w", err)
 		}
 	}
@@ -169,6 +174,7 @@ func Write(ctx context.Context, conn driver.Conn, orgID string, rows Rows, selec
 		}
 		result.OwnershipWritten = len(ownership)
 		result.ExpiredOwnership = len(expiredOwnership)
+		result.UnreadableProjectLinkTeams = len(rows.UnreadableProjectLinkTeams)
 		done = append(done, "team project ownership")
 	}
 	if selections.Structure && (len(teamsToWrite) > 0 || len(deactivate) > 0) {
@@ -332,7 +338,10 @@ func planMemberships(ctx context.Context, conn driver.Conn, orgID string, scope 
 //
 // complete is Rows.ProjectLinksComplete: only a collection that read every
 // team's project links to the end closes a link.
-func planOwnership(ctx context.Context, conn driver.Conn, orgID string, scope []string, fresh []OwnershipRow, now time.Time, complete bool) ([]OwnershipRow, []openOwnership, error) {
+//
+// unreadable is Rows.UnreadableProjectLinkTeams: the open links of such a
+// team are not given to the plan, so none of them is closed.
+func planOwnership(ctx context.Context, conn driver.Conn, orgID string, scope []string, fresh []OwnershipRow, now time.Time, complete bool, unreadable []string) ([]OwnershipRow, []openOwnership, error) {
 	if len(scope) == 0 {
 		return fresh, nil, nil
 	}
@@ -347,6 +356,9 @@ func planOwnership(ctx context.Context, conn driver.Conn, orgID string, scope []
 		var row openOwnership
 		if err := result.Scan(&row.teamID, &row.projectID, &row.projectKey, &row.source, &row.isPrimary, &row.specificity, &row.priority, &row.validFrom); err != nil {
 			return nil, nil, err
+		}
+		if slices.Contains(unreadable, row.teamID) {
+			continue
 		}
 		open = append(open, row)
 	}

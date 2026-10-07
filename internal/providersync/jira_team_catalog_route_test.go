@@ -444,6 +444,19 @@ func TestJiraTeamCatalogProjectSearchIsCompleteOnlyOnAnEndOfDataSignal(t *testin
 		"a short page with no signal is the end": {map[string]jiraTeamCatalogFixtureResponse{
 			jiraTeamCatalogProjectSearchURI: {body: jiraProjectSearchPage(0, 2, ``)},
 		}, true, 1, 2},
+		"an empty object as the first page is not the end": {map[string]jiraTeamCatalogFixtureResponse{
+			jiraTeamCatalogProjectSearchURI: {body: `{}`},
+		}, false, 1, 0},
+		"an error-shaped body under HTTP 200 is not the end": {map[string]jiraTeamCatalogFixtureResponse{
+			jiraTeamCatalogProjectSearchURI: {body: `{"errorMessages":["no"],"errors":{}}`},
+		}, false, 1, 0},
+		"an empty object after a full page is not the end": {map[string]jiraTeamCatalogFixtureResponse{
+			jiraTeamCatalogProjectSearchURI:      {body: jiraProjectSearchPage(0, 100, ``)},
+			jiraTeamCatalogProjectSearchPage2URI: {body: `{}`},
+		}, false, 2, 100},
+		"no entries with total zero is the end": {map[string]jiraTeamCatalogFixtureResponse{
+			jiraTeamCatalogProjectSearchURI: {body: `{"values":[],"total":0}`},
+		}, true, 1, 0},
 		"isLast true on a full page is the end": {map[string]jiraTeamCatalogFixtureResponse{
 			jiraTeamCatalogProjectSearchURI: {body: jiraProjectSearchPage(0, 100, `,"isLast":true`)},
 		}, true, 1, 100},
@@ -518,6 +531,9 @@ func TestJiraTeamCatalogCollectReadsArchivedProjectsToHoldOwnershipOnly(t *testi
 			jiraTeamCatalogArchivedProjectSearchURI: {body: jiraProjectSearchPage(500, 100, `,"isLast":false`)},
 			archivedPage2:                           {status: http.StatusForbidden, body: `{}`},
 		}), false, nil, 3},
+		"the archived read answers an empty object: not complete": {with(map[string]jiraTeamCatalogFixtureResponse{
+			jiraTeamCatalogArchivedProjectSearchURI: {body: `{}`},
+		}), false, []string{}, 2},
 		"an archived project with no id or a key-built id is held by nothing": {with(map[string]jiraTeamCatalogFixtureResponse{
 			jiraTeamCatalogArchivedProjectSearchURI: {body: `{"values":[{"id":"","key":"A","name":"A"},{"id":"20002","key":" ","name":"B"},{"id":"org-1:jira:C","key":"C","name":"C"},` +
 				`{"id":"20001","key":"OLD","name":"Old"},{"id":"20001","key":"OLD","name":"Old"}],"isLast":true}`},

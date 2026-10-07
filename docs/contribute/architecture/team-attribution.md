@@ -673,8 +673,9 @@ project's items by id. Now:
   dropped. A run that did not read its source to the end writes what it found, keeps first-seen
   `valid_from`, closes nothing, and says so:
   - Project-as-team catalog: the Jira project search is read page by page (`startAt`) to the provider's
-    end-of-data signal: `isLast` when the page has it, else `total`, else a page shorter than the page
-    size. Bound: 50 pages of 100 projects. A later page that fails, the bound, or an empty page before
+    end-of-data signal: `isLast` when the page has it, else `total`, else a page that has entries and is
+    shorter than the page size. A page with no entries and no signal (an empty object or an error body
+    under HTTP 200) is not the end: not complete. Bound: 50 pages of 100 projects. A later page that fails, the bound, or an empty page before
     the end = not complete (`jira_team_catalog_project_search_incomplete`). A failed read of the legacy
     links table = not complete (`jira_team_catalog_legacy_links_read_failed`). Either one gives
     `jira_team_catalog_ownership_snapshot_incomplete` and `OwnershipSnapshotIncomplete` in the result.

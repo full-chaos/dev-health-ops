@@ -63,7 +63,9 @@ type jiraTeamCatalogProjectSearchPayload struct {
 // endOfData says this page is the last one. received is the number of
 // entries read so far, this page included. The provider's own signal decides:
 // isLast when the page carries it, else total. A page with neither is the
-// last one only when it is shorter than the page size that was asked for.
+// last one only when it HAS entries and is shorter than the page size that
+// was asked for. A page with no entries and no signal is not an answer about
+// the end: an error body or an empty object under HTTP 200 reads that way.
 func (page jiraTeamCatalogProjectSearchPayload) endOfData(received, pageSize int) bool {
 	if page.IsLast != nil {
 		return *page.IsLast
@@ -71,7 +73,7 @@ func (page jiraTeamCatalogProjectSearchPayload) endOfData(received, pageSize int
 	if page.Total != nil {
 		return received >= *page.Total
 	}
-	return len(page.Values) < pageSize
+	return len(page.Values) > 0 && len(page.Values) < pageSize
 }
 
 type jiraTeamCatalogProjectSearchEntry struct {

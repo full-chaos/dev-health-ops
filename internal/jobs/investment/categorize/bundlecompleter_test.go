@@ -203,3 +203,21 @@ func TestTheServedCallAndRepairLoopIsUnchangedBesideTheSeam(t *testing.T) {
 		})
 	}
 }
+
+// nilDereferencingCompleter is a pointer completer whose method reads its
+// receiver, like every real backend.
+type nilDereferencingCompleter struct{ text string }
+
+func (c *nilDereferencingCompleter) CompleteBundle(context.Context, units.TextBundle) (CompletionResult, error) {
+	return CompletionResult{Text: c.text}, nil
+}
+
+// A nil pointer in the interface is not a nil interface: without its own test
+// it passes `completer == nil` and the first method call panics.
+func TestCategorizeBundleOnceRefusesATypedNilCompleter(t *testing.T) {
+	var completer *nilDereferencingCompleter
+	_, err := CategorizeBundleOnce(context.Background(), units.TextBundle{}, completer)
+	if !errors.Is(err, ErrNoBundleCompleter) {
+		t.Fatalf("err = %v, want ErrNoBundleCompleter", err)
+	}
+}

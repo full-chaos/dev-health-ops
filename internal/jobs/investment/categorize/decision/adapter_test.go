@@ -481,11 +481,13 @@ func TestNoErrorOrWarningHoldsSourceText(t *testing.T) {
 	}
 }
 
-// In this change nothing outside the package may import it: the served path
-// and every binary are unchanged by its existence. The ticket that adds the
-// shadow phase edits allowedImporters, in review.
-func TestNoProductionCodeImportsTheDecisionPackageYet(t *testing.T) {
-	allowedImporters := map[string]bool{}
+// The decision package is linked into production by the investment job only:
+// its shadow phase (internal/jobs/investment/shadowphase.go). Any other
+// importer -- a serving tree above all -- is a change for review. The walk must
+// read the module and see the one allowed importer, or it proves nothing.
+func TestOnlyTheInvestmentJobImportsTheDecisionPackage(t *testing.T) {
+	allowedImporters := map[string]bool{"internal/jobs/investment": true}
+	sawAllowed := false
 	const self = "github.com/full-chaos/dev-health-ops/internal/jobs/investment/categorize/decision"
 	root, err := filepath.Abs(filepath.Join("..", "..", "..", "..", ".."))
 	if err != nil {
@@ -512,8 +514,13 @@ func TestNoProductionCodeImportsTheDecisionPackageYet(t *testing.T) {
 				return nil
 			}
 			for _, imp := range parsed.Imports {
-				if strings.Trim(imp.Path.Value, `"`) == self && !allowedImporters[dir] {
-					t.Errorf("%s imports the decision package; no package may yet", filepath.ToSlash(rel))
+				if strings.Trim(imp.Path.Value, `"`) != self {
+					continue
+				}
+				if !allowedImporters[dir] {
+					t.Errorf("%s imports the decision package; only the investment job may", filepath.ToSlash(rel))
+				} else if !strings.HasSuffix(path, "_test.go") {
+					sawAllowed = true
 				}
 			}
 			return nil
@@ -522,7 +529,43 @@ func TestNoProductionCodeImportsTheDecisionPackageYet(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if files < 1000 || !sawSelf {
-		t.Fatalf("the walk read %d Go files (own package seen: %v): it did not cover the module", files, sawSelf)
+	if files < 1000 || !sawSelf || !sawAllowed {
+		t.Fatalf("the walk read %d Go files (own package seen: %v, the investment job's import seen: %v): it did not cover the module", files, sawSelf, sawAllowed)
+	}
+}
+
+// A nil *Completer must refuse, not panic: its methods read the rubric and the
+// transport of the receiver.
+func TestANilCompleterRefusesAndDoesNotPanic(t *testing.T) {
+	var completer *Completer
+	bundle := syntheticBundle(t)
+	if _, err := categorize.CategorizeBundleOnce(context.Background(), bundle, completer); !errors.Is(err, categorize.ErrNoBundleCompleter) {
+		t.Fatalf("CategorizeBundleOnce err = %v, want ErrNoBundleCompleter", err)
+	}
+	if _, err := completer.CompleteBundle(context.Background(), bundle); !errors.Is(err, categorize.ErrNoBundleCompleter) {
+		t.Fatalf("CompleteBundle err = %v, want ErrNoBundleCompleter", err)
+	}
+	if _, err := completer.Classify(context.Background(), bundle); !errors.Is(err, categorize.ErrNoBundleCompleter) {
+		t.Fatalf("Classify err = %v, want ErrNoBundleCompleter", err)
+	}
+	if _, err := (&Completer{}).Classify(context.Background(), bundle); !errors.Is(err, categorize.ErrNoBundleCompleter) {
+		t.Fatalf("zero-value Classify err = %v, want ErrNoBundleCompleter", err)
+	}
+	// Each missing part alone is refused: a rubric with no transport, a
+	// transport with no rubric.
+	built := newTestCompleter(t, staticTransport(readResponse(t, "real-ok")))
+	for name, partial := range map[string]*Completer{
+		"no transport": {rubric: built.rubric, model: built.model},
+		"no rubric":    {transport: built.transport, model: built.model},
+	} {
+		if _, err := partial.Classify(context.Background(), bundle); !errors.Is(err, categorize.ErrNoBundleCompleter) {
+			t.Fatalf("%s: Classify err = %v, want ErrNoBundleCompleter", name, err)
+		}
+		if _, err := partial.CompleteBundle(context.Background(), bundle); !errors.Is(err, categorize.ErrNoBundleCompleter) {
+			t.Fatalf("%s: CompleteBundle err = %v, want ErrNoBundleCompleter", name, err)
+		}
+	}
+	if classification, err := built.Classify(context.Background(), bundle); err != nil || classification.State != StateOK {
+		t.Fatalf("a built completer gave %q (%v)", classification.State, err)
 	}
 }

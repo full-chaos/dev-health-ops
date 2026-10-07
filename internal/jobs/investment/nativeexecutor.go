@@ -18,6 +18,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"strings"
 	"time"
 
@@ -27,6 +28,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/jobs/investment/chquery"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/investment/chwrite"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph"
+	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 )
 
 // defaultWindowDays is run_investment_materialize's `window_days: int = 30`
@@ -56,6 +58,29 @@ type NativeExecutor struct {
 	// is tolerated everywhere it is read, same discipline as
 	// remaining.MembershipExecutor.SetObserver.
 	observer RepoAttributionObserver
+	// newShadow builds the shadow phase of one run (CHAOS-8869), or returns nil
+	// when the phase is off for the org -- the default. Like newProvider it is
+	// called once for each Execute, and the phase is closed when Execute ends.
+	newShadow func(orgID string) *ShadowPhase
+	// shadowObserver receives the counts of each shadow phase. Nil is tolerated.
+	shadowObserver ShadowObserver
+	// shadowHTTPClient replaces the HTTP client of the shadow backend. Nil, the
+	// production value, selects the hardened client.
+	shadowHTTPClient *http.Client
+}
+
+// SetShadowObserver wires the optional shadow-phase telemetry. Nil is
+// tolerated everywhere it is read.
+func (executor *NativeExecutor) SetShadowObserver(observer ShadowObserver) {
+	executor.shadowObserver = observer
+}
+
+// SetShadowHTTPClientForTest replaces the HTTP client of the shadow backend, so
+// a test can observe the request of an executor that the worker built from its
+// configuration. The host rule of the client still holds. No production code
+// calls it (TestNoProductionCodeUsesAShadowTestSeam).
+func (executor *NativeExecutor) SetShadowHTTPClientForTest(client *http.Client) {
+	executor.shadowHTTPClient = client
 }
 
 // SetObserver wires optional CHAOS-5458 repo-attribution telemetry. Nil is
@@ -69,11 +94,52 @@ func NewNativeExecutor(reader *chquery.Reader, writer *chwrite.Writer, logger *s
 	if reader == nil || writer == nil || logger == nil {
 		return nil, ErrUnavailable
 	}
-	return &NativeExecutor{
+	executor := &NativeExecutor{
 		reader: reader, writer: writer, logger: logger,
 		now:         func() time.Time { return time.Now().UTC() },
 		newProvider: resolveProviderFromEnv,
-	}, nil
+	}
+	executor.newShadow = executor.shadowFromEnv
+	return executor, nil
+}
+
+// shadowFromEnv builds the shadow phase from the environment, or returns nil.
+//
+// Nil is the answer for every reason the phase cannot or must not run: no
+// INVESTMENT_SHADOW_PROVIDER (the default), an org outside the allow-list, a
+// setting that cannot be used, no TYPESAFE_API_KEY, a rubric that does not
+// have its pinned digest. None of them is an error of the run: the served
+// categorization does not depend on the shadow backend. A phase that was asked
+// for and could not be built says so in one loud line.
+//
+// With the switch off, or for an org outside the list, NO client is built.
+func (executor *NativeExecutor) shadowFromEnv(orgID string) *ShadowPhase {
+	settings, err := ShadowSettingsFromEnv(secrets.GetenvNamed)
+	if err != nil {
+		// The message names the variable and never its value.
+		executor.logger.Warn("investment shadow phase is off: a setting cannot be used",
+			slog.String("org_id", orgID), slog.String("error", err.Error()))
+		return nil
+	}
+	if !settings.EnabledFor(orgID) {
+		return nil
+	}
+	client, err := categorize.NewTypeSafeClientFromEnvWithHTTPClient("", executor.logger, executor.shadowHTTPClient)
+	if err != nil {
+		// The constructor's messages hold a rule or a length, never the key, the
+		// configured URL or the configured model.
+		executor.logger.Warn("investment shadow phase is off: the TypeSafe client cannot be built",
+			slog.String("org_id", orgID), slog.String("error", secrets.RedactRegistered(err.Error())))
+		return nil
+	}
+	phase, err := NewShadowPhase(settings, client, executor.logger)
+	if err != nil {
+		_ = client.Close()
+		executor.logger.Error("investment shadow phase is off: the decision completer cannot be built (rubric digest mismatch)",
+			slog.String("org_id", orgID), slog.String("error", err.Error()))
+		return nil
+	}
+	return phase
 }
 
 func resolveProviderFromEnv(requested, model string) (categorize.Provider, categorize.ProviderKind, error) {
@@ -237,6 +303,15 @@ func (executor *NativeExecutor) Execute(ctx context.Context, claim workgraph.Cla
 	materializer, err := NewMaterializer(executor.reader, executor.writer, provider, executor.logger)
 	if err != nil {
 		return nil, err
+	}
+	// The shadow phase is built AFTER every refusal above, so a request that is
+	// refused builds no shadow client; it is closed with the provider.
+	if executor.newShadow != nil {
+		if shadow := executor.newShadow(orgID); shadow != nil {
+			shadow.SetObserver(executor.shadowObserver)
+			defer func() { _ = shadow.Close() }()
+			materializer.SetShadow(shadow)
+		}
 	}
 
 	cfg := Config{

@@ -12,6 +12,7 @@ package categorize
 import (
 	"context"
 	"errors"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -404,6 +405,9 @@ func CategorizeBundleOnce(ctx context.Context, bundle units.TextBundle, complete
 	if completer == nil {
 		return CategorizationOutcome{}, ErrNoBundleCompleter
 	}
+	if isNilPointer(completer) {
+		return CategorizationOutcome{}, ErrNoBundleCompleter
+	}
 	completion, err := completer.CompleteBundle(ctx, bundle)
 	if err != nil {
 		return CategorizationOutcome{}, err
@@ -430,4 +434,12 @@ func CategorizeBundleOnce(ctx context.Context, bundle units.TextBundle, complete
 		OutputTokens:   tally.OutputTokens,
 		LLMModel:       tally.ResolvedModel,
 	}, nil
+}
+
+// isNilPointer reports a nil pointer held in a non-nil interface. Such a
+// completer passes `completer == nil`, and its first method call that reads the
+// receiver panics inside the caller's goroutine.
+func isNilPointer(completer BundleCompleter) bool {
+	value := reflect.ValueOf(completer)
+	return value.Kind() == reflect.Pointer && value.IsNil()
 }

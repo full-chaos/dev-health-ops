@@ -281,6 +281,15 @@ func validateTypeSafeBaseURL(raw string, allowAny bool) (string, error) {
 // are deliberately NOT read: they steer the served provider, and a shadow
 // client built beside it must not inherit the served model or key.
 func NewTypeSafeClientFromEnv(requestedModel string, logger *slog.Logger) (*TypeSafeClient, error) {
+	return NewTypeSafeClientFromEnvWithHTTPClient(requestedModel, logger, nil)
+}
+
+// NewTypeSafeClientFromEnvWithHTTPClient is NewTypeSafeClientFromEnv over a
+// supplied HTTP client (nil selects the hardened client). The host rule, the
+// model rule and the no-redirect guard on the credentialed request hold for a
+// supplied client too. It exists so a test can observe the request of a client
+// that was built from the environment; no production code passes a client.
+func NewTypeSafeClientFromEnvWithHTTPClient(requestedModel string, logger *slog.Logger, httpClient *http.Client) (*TypeSafeClient, error) {
 	apiKey := firstNonEmptyEnv("TYPESAFE_API_KEY")
 	if apiKey == "" {
 		return nil, fmt.Errorf("LLM provider %q is not configured: set TYPESAFE_API_KEY", ProviderKindTypeSafe)
@@ -290,10 +299,11 @@ func NewTypeSafeClientFromEnv(requestedModel string, logger *slog.Logger) (*Type
 		model = firstNonEmptyEnv("TYPESAFE_MODEL")
 	}
 	return NewTypeSafeClient(TypeSafeClientConfig{
-		APIKey:  secrets.NewHidden(apiKey),
-		BaseURL: firstNonEmptyEnv("TYPESAFE_BASE_URL"),
-		Model:   model,
-		Logger:  logger,
+		APIKey:     secrets.NewHidden(apiKey),
+		BaseURL:    firstNonEmptyEnv("TYPESAFE_BASE_URL"),
+		Model:      model,
+		Logger:     logger,
+		HTTPClient: httpClient,
 	})
 }
 
@@ -497,6 +507,15 @@ func (c *TypeSafeClient) PostSystemOne(ctx context.Context, body []byte) ([]byte
 		return nil, nil, err
 	}
 	return res.Body, res.Header, nil
+}
+
+// PostSystemOneDetailed is PostSystemOne with the whole result: the same
+// lenient reading of the 200 body, plus the per-attempt record (status, class,
+// request id, latency, wait), the checked usage and the checked returned model.
+// The shadow phase writes its attempt rows from it. On a failure the attempts
+// are on the *SystemOneError.
+func (c *TypeSafeClient) PostSystemOneDetailed(ctx context.Context, body []byte) (SystemOneResult, error) {
+	return c.send(ctx, body, true)
 }
 
 func (c *TypeSafeClient) send(ctx context.Context, body []byte, lenient bool) (SystemOneResult, error) {

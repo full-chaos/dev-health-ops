@@ -667,7 +667,29 @@ project's items by id. Now:
   (Atlassian Teams: `source = 'native'` rows of teams whose catalog row carries a team ARI; the catalog:
   `source = 'jira_legacy'` rows and `source = 'native'` rows with `team_id = project_key`). So the first
   sync on this version closes the open rows on the key-built id. The catalog closes nothing when its
-  project search returned no project. Linear and GitLab still have their own insert-only writers; a
+  project search returned no project.
+- **Only a complete snapshot closes a row** (`providersync.OwnershipSnapshot.Complete`; the zero value is
+  not complete). A row that is missing from a part of the provider's answer is not a fact the provider
+  dropped. A run that did not read its source to the end writes what it found, keeps first-seen
+  `valid_from`, closes nothing, and says so:
+  - Project-as-team catalog: the Jira project search is read page by page (`startAt`) to the provider's
+    end-of-data signal: `isLast` when the page has it, else `total`, else a page shorter than the page
+    size. Bound: 50 pages of 100 projects. A later page that fails, the bound, or an empty page before
+    the end = not complete (`jira_team_catalog_project_search_incomplete`). A failed read of the legacy
+    links table = not complete (`jira_team_catalog_legacy_links_read_failed`). Either one gives
+    `jira_team_catalog_ownership_snapshot_incomplete` and `OwnershipSnapshotIncomplete` in the result.
+    An organization with more than 5,000 Jira projects never closes a catalog ownership row.
+  - Atlassian Teams: `Rows.ProjectLinksComplete` is set only by a collection that read the project
+    links of every active team to the last page. Per team: when links came back and not one carries a
+    readable Jira project ARI, the team is named in `Rows.UnreadableProjectLinkTeams`, its open links
+    stay open, and the run logs `jira_atlassian_teams_project_links_unreadable` with the count.
+  - The census test also fails when a planner passes a constant for `Complete`.
+- **A closed row is not owned before a merge.** A row is closed by writing its key again with `valid_to`
+  set, so until a merge both versions are stored. The ownership reader of the repository derivation
+  (`loadTeamRepoOwnershipProjectLinks`) takes the newest version of each row key first and filters
+  `valid_to` after, the same two-level `argMax` form as the attribution cascade (`LoadProjects`).
+  Test: `TestTeamRepoOwnershipProjectLinksLeaveOutAClosedRowBeforeAMerge`.
+- Linear and GitLab still have their own insert-only writers; a
   census test (`TestJiraOwnershipWriterCensus`) names every writer of the table and fails for a new Jira
   writer that does not plan its rows through the shared function.
 - The key-built `projects` rows written earlier are removed by a one-time operator verb, see section 1.1.
@@ -677,7 +699,10 @@ project's items by id. Now:
 Tests: `TestTeamReachesItsJiraProjectsWorkItemsThroughOwnership` (real producers, real ClickHouse: the
 team reaches its project's work items through ownership by id; one `projects` row per project),
 `TestProjectIdentityIsOneIDAcrossCatalogOwnershipAndWorkItems` (the same rule for linear and github; the
-GitLab gap pinned as a known red), `TestAnAtlassianTeamsRunClosesTheKeyBuiltProjectLinks`.
+GitLab gap pinned as a known red), `TestAnAtlassianTeamsRunClosesTheKeyBuiltProjectLinks`,
+`TestAPartialJiraSnapshotClosesNoOwnership` (a search that stops after a page, and a legacy links table
+that cannot be read, close nothing; the complete run after them closes the lost project),
+`TestATeamWithNoReadableProjectLinkKeepsItsOpenLinks`.
 
 #### 0.4a Provider × entity **consumption** (functional — what `run_team_autoimport` actually pulls)
 

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/daily"
@@ -435,5 +436,121 @@ func TestTouchedDaysDrainReturnWritesOnlyTheMarkedKeysOfItsOrganization(t *testi
 	}
 	if got := rig.observer.count(jobruntime.TouchedDaysDrainDaysReturned); got != 1 {
 		t.Fatalf("days_returned_to_pending = %d, want 1 (the day with the pending key is not counted)", got)
+	}
+}
+
+// A run of every repository that failed returns every marked key of its day
+// but the keys a newer run lists: that run is their owner.
+func TestTouchedDaysDrainReturnsTheKeysOfAFailedRunOfEveryRepositoryButTheOnesANewerRunLists(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+	rig := newDrainRig(t, ctx)
+	orgID := uuid.NewString()
+	day := time.Date(2026, 7, 30, 0, 0, 0, 0, time.UTC)
+	dayKey := day.Format("2006-01-02")
+	first, second := uuid.NewString(), uuid.NewString()
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	for _, repo := range []string{first, second} {
+		touchedEvent(t, ctx, rig.touchedRig, orgID, day, repo, "touched", now.Add(-12*time.Minute))
+		touchedEvent(t, ctx, rig.touchedRig, orgID, day, repo, "dispatched", now.Add(-10*time.Minute))
+	}
+	// The run of every repository of a fan-out: no list.
+	full := rig.startRun(t, ctx, func(tx pgx.Tx) (daily.Run, error) {
+		return rig.store.StartRunTx(ctx, tx, daily.StartRunRequest{
+			OrganizationID: orgID, TargetDay: day, Generation: "post-sync:" + uuid.NewString(),
+		}, nilPartitionPublisher{})
+	})
+	if _, err := rig.pool.Exec(ctx, `
+UPDATE public.daily_metrics_runs
+SET status = 'failed', finalization_status = 'failed', finalized_at = $2, updated_at = $2, created_at = $3
+WHERE id = $1::uuid AND full_org`, full.ID, now.Add(-8*time.Minute), now.Add(-10*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	// A newer run lists the second key and has a result.
+	listedRun(t, ctx, rig.touchedRig, orgID, day, daily.TouchedDrainGenerationPrefix+"e:"+uuid.NewString(), second,
+		now.Add(-5*time.Minute), "succeeded", now.Add(-4*time.Minute))
+
+	rig.drain(t, nil, nil).DrainTouchedDays(ctx, orgID, pass("n"))
+
+	if got := newestTouchedAt(t, ctx, rig.touchedRig, orgID, day, first); got <= now.Add(-10*time.Minute).UnixMilli() {
+		t.Fatalf("the key that only the failed run of every repository lists was not returned: newest touch %d", got)
+	}
+	if got := newestTouchedAt(t, ctx, rig.touchedRig, orgID, day, second); got != now.Add(-12*time.Minute).UnixMilli() {
+		t.Fatalf("the key that a newer run with a result lists was returned: newest touch %d, want %d", got, now.Add(-12*time.Minute).UnixMilli())
+	}
+	if got := drainRunsOf(t, ctx, rig, orgID)[dayKey]; got != 2 {
+		t.Fatalf("drain runs of the day = %d, want 2 (the newer run and one run for the returned key)", got)
+	}
+}
+
+// A failed run of a pass whose mark reached the table does not end the chain:
+// only a run with a result whose keys are all pending says that the mark is
+// missing.
+func TestTouchedDaysDrainFailedRunOfAMarkedPassDoesNotEndTheChain(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+	rig := newDrainRig(t, ctx)
+	orgID := uuid.NewString()
+	newest := time.Date(2026, 7, 31, 0, 0, 0, 0, time.UTC)
+	days := seedPendingDays(t, ctx, rig.touchedRig, orgID, newest, 2)
+	drain := rig.drain(t, nil, nil)
+	drain.DrainTouchedDays(ctx, orgID, pass("n"))
+	_, endedRun := openDrainRuns(t, ctx, rig.touchedRig, orgID)
+	// The run of the newest day fails, the other one succeeds.
+	if _, err := rig.pool.Exec(ctx, `
+UPDATE public.daily_metrics_runs
+SET status = 'failed', finalization_status = 'failed', finalized_at = clock_timestamp(), updated_at = clock_timestamp()
+WHERE org_id = $1::uuid AND target_day = $2::date`, orgID, days[1]); err != nil {
+		t.Fatal(err)
+	}
+	endDrainRuns(t, ctx, rig.touchedRig, orgID, "succeeded")
+
+	drain.DrainTouchedDays(ctx, orgID, "e:"+endedRun)
+
+	if got := rig.observer.count(drainEventChainStopped); got != 0 {
+		t.Fatalf("chain_stopped_mark_missing = %d, want 0: the mark of the pass reached the table", got)
+	}
+	counts := drainRunsOf(t, ctx, rig, orgID)
+	if counts[days[1]] != 2 || counts[days[0]] != 1 {
+		t.Fatalf("drain runs by day = %v, want 2 for %s (the failed run and its restart) and 1 for %s", counts, days[1], days[0])
+	}
+}
+
+// The read of the runs without a result is bounded, and a pass that hits the
+// bound says so: no run behind the bound is left without a line.
+func TestTouchedDaysDrainReportsAFullReadOfTheRunsWithoutAResult(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+	rig := newDrainRig(t, ctx)
+	orgID := uuid.NewString()
+	// One failed drain run for each of 3661 days, each with one repository.
+	if _, err := rig.pool.Exec(ctx, `
+WITH runs AS (
+    INSERT INTO public.daily_metrics_runs
+        (id, org_id, target_day, generation, status, finalization_status, created_at, updated_at, full_org)
+    SELECT gen_random_uuid(), $1::uuid, DATE '2026-07-31' - step, 'touched-drain:e:' || gen_random_uuid()::text,
+           'failed', 'failed', clock_timestamp() - make_interval(hours => step), clock_timestamp(), false
+    FROM generate_series(1, 3661) AS step
+    RETURNING id
+)
+INSERT INTO public.daily_metrics_partitions (id, run_id, ordinal, repo_ids, status, attempt_count, created_at, updated_at)
+SELECT gen_random_uuid(), id, 0, json_build_array(gen_random_uuid()::text), 'failed', 0, clock_timestamp(), clock_timestamp()
+FROM runs`, orgID); err != nil {
+		t.Fatal(err)
+	}
+
+	rig.drain(t, nil, nil).DrainTouchedDays(ctx, orgID, pass("n"))
+
+	if got := rig.observer.count(jobruntime.TouchedDaysDrainEvent("return_read_truncated")); got != 1 {
+		t.Fatalf("return_read_truncated = %d, want 1", got)
+	}
+	var lines []string
+	for _, line := range rig.logLines("touched_days_drain.failed") {
+		if strings.Contains(line, "return_read_truncated") && strings.Contains(line, `"level":"ERROR"`) {
+			lines = append(lines, line)
+		}
+	}
+	if len(lines) != 1 {
+		t.Fatalf("Error lines of the full read = %v, want 1", lines)
 	}
 }

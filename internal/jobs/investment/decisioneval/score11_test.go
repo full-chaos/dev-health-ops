@@ -468,35 +468,73 @@ func TestGatesAndOutcome(t *testing.T) {
 		return Estimate{Lo: fp(lo), Hi: fp(hi), Value: fp((lo + hi) / 2), N: 10, Pi: 0.3}
 	}
 	none := Estimate{Why: "no labeled sample bundle in the disagreement set of this pair"}
-	// G1: lo >= -0.05 against both: pass; hi < -0.05 against one: fail; else not decided
+	// G1 against A only: lo >= -0.05 pass; hi < -0.05 fail; else not decided
 	for _, c := range []struct {
-		a, d Estimate
+		a    Estimate
 		want string
 	}{
-		{est(-0.02, 0.08), est(0.0, 0.1), GatePass},
-		{est(-0.2, -0.06), est(0, 0.1), GateFail},
-		{est(0, 0.1), est(-0.3, -0.06), GateFail},
-		{est(-0.1, 0.1), est(0, 0.1), GateUndecided},
-		{none, est(0, 0.1), GateUndecided},
+		{est(-0.02, 0.08), GatePass},
+		{est(-0.05, 0.08), GatePass},
+		{est(-0.2, -0.06), GateFail},
+		{est(-0.1, 0.1), GateUndecided},
+		{none, GateUndecided},
 	} {
-		if got := gateG1(c.a, c.d).Result; got != c.want {
-			t.Errorf("G1 %v / %v = %s, want %s", fmtInterval(c.a), fmtInterval(c.d), got, c.want)
+		if got := gateG1(c.a).Result; got != c.want {
+			t.Errorf("G1 %v = %s, want %s", fmtInterval(c.a), got, c.want)
 		}
 	}
-	// G2: hi <= +0.10 against both: pass; lo > +0.10 against one: fail
+	// G2: hi <= +0.10 pass; lo > +0.10 fail
 	for _, c := range []struct {
-		a, d Estimate
+		a    Estimate
 		want string
 	}{
-		{est(-0.2, 0.1), est(-0.1, 0.05), GatePass},
-		{est(0.11, 0.3), est(0, 0.05), GateFail},
-		{est(-0.2, 0.2), est(0, 0.05), GateUndecided},
+		{est(-0.2, 0.1), GatePass},
+		{est(0.11, 0.3), GateFail},
+		{est(0.1, 0.3), GateUndecided},
+		{est(-0.2, 0.2), GateUndecided},
 	} {
-		if got := gateG2(c.a, c.d).Result; got != c.want {
-			t.Errorf("G2 = %s, want %s", got, c.want)
+		if got := gateG2(c.a).Result; got != c.want {
+			t.Errorf("G2 %v = %s, want %s", fmtInterval(c.a), got, c.want)
 		}
 	}
-	pass := map[string]GateResult{"G1": {Result: GatePass}, "G2": {Result: GatePass}, "G3": {Result: GatePass}, "G4": {Result: GatePass}}
+	// G4: a required win. hi < 1.00 pass (hi = 1.00 is not a win); lo >= 1.00 fail
+	for _, c := range []struct {
+		r    Ratio
+		want string
+	}{
+		{ratioOf(0.5, 0.4, 0.9, 10), GatePass},
+		{ratioOf(0.9, 0.8, 1.0, 10), GateUndecided},
+		{ratioOf(1.2, 1.0, 1.4, 10), GateFail},
+		{ratioOf(1.0, 0.9, 1.1, 10), GateUndecided},
+		{Ratio{Why: "no complete_strict classification"}, GateUndecided},
+	} {
+		if got := gateWin("C1 ratio", c.r).Result; got != c.want {
+			t.Errorf("G4 %+v = %s, want %s", c.r, got, c.want)
+		}
+	}
+	// there is no 0.85 threshold and no quality waiver in v1.2: a ratio whose upper
+	// bound is 0.95 passes, and a ratio of 1.1 with a quality gain does not
+	if gateWin("C1 ratio", ratioOf(0.9, 0.85, 0.95, 5)).Result != GatePass || gateWin("C1 ratio", ratioOf(1.1, 1.05, 1.2, 5)).Result != GateFail {
+		t.Fatal("G4 of design v1.2")
+	}
+	// G5: both p50 and p95 must win; either lo >= 1 fails
+	win, lose, mid := ratioOf(0.1, 0.05, 0.3, 10), ratioOf(1.4, 1.1, 1.8, 10), ratioOf(0.8, 0.5, 1.2, 10)
+	for _, c := range []struct {
+		p50, p95 Ratio
+		want     string
+	}{
+		{win, win, GatePass},
+		{win, mid, GateUndecided},
+		{mid, win, GateUndecided},
+		{win, lose, GateFail},
+		{lose, win, GateFail},
+		{Ratio{Why: "x"}, win, GateUndecided},
+	} {
+		if got := gateG5(c.p50, c.p95).Result; got != c.want {
+			t.Errorf("G5 = %s, want %s", got, c.want)
+		}
+	}
+	pass := map[string]GateResult{"G1": {Result: GatePass}, "G2": {Result: GatePass}, "G3": {Result: GatePass}, "G4": {Result: GatePass}, "G5": {Result: GatePass}}
 	if outcomeOf(pass, InjectionVerdict{Result: "pass"}) != OutcomeAdopt {
 		t.Fatal("all gates and K pass: ADOPT")
 	}
@@ -506,13 +544,23 @@ func TestGatesAndOutcome(t *testing.T) {
 	if outcomeOf(pass, InjectionVerdict{Result: "fail"}) != OutcomeRetain {
 		t.Fatal("K fail: RETAIN")
 	}
-	one := map[string]GateResult{"G1": {Result: GatePass}, "G2": {Result: GatePass}, "G3": {Result: GateFail}, "G4": {Result: GateUndecided}}
+	for _, g := range []string{"G1", "G2", "G3", "G4", "G5"} {
+		bad := map[string]GateResult{}
+		for k, v := range pass {
+			bad[k] = v
+		}
+		bad[g] = GateResult{Result: GateFail}
+		if outcomeOf(bad, InjectionVerdict{Result: "pass"}) != OutcomeRetain {
+			t.Fatalf("a failed %s must give RETAIN", g)
+		}
+		bad[g] = GateResult{Result: GateUndecided}
+		if outcomeOf(bad, InjectionVerdict{Result: "pass"}) != OutcomeDefer {
+			t.Fatalf("an undecided %s must give DEFER", g)
+		}
+	}
+	one := map[string]GateResult{"G1": {Result: GatePass}, "G2": {Result: GatePass}, "G3": {Result: GateFail}, "G4": {Result: GateUndecided}, "G5": {Result: GatePass}}
 	if outcomeOf(one, InjectionVerdict{Result: "pass"}) != OutcomeRetain {
 		t.Fatal("one failed gate: RETAIN, even with another undecided")
-	}
-	und := map[string]GateResult{"G1": {Result: GatePass}, "G2": {Result: GateUndecided}, "G3": {Result: GatePass}, "G4": {Result: GatePass}}
-	if outcomeOf(und, InjectionVerdict{Result: "pass"}) != OutcomeDefer {
-		t.Fatal("no failure and one undecided: DEFER")
 	}
 }
 
@@ -545,23 +593,57 @@ func TestEstimatorIsScaledByPi(t *testing.T) {
 	}
 }
 
-func TestCostRatioBootstrap(t *testing.T) {
-	costC := []float64{1, 1, 1, 1, 1, 1, 1, 1}
-	strictC := []float64{1, 1, 1, 1, 1, 1, 1, 1}
-	costA := []float64{4, 4, 4, 4, 4, 4, 4, 4}
-	strictA := []float64{1, 1, 1, 1, 1, 1, 1, 1}
-	ratio, lo, hi, ok := costBootstrap(costC, strictC, costA, strictA, 300)
-	if !ok || !near(ratio, 0.25) || !near(lo, 0.25) || !near(hi, 0.25) {
-		t.Fatalf("%v %v %v %v", ratio, lo, hi, ok)
+func TestCostRatioAndLatencyBootstrap(t *testing.T) {
+	eight := func(v float64) []float64 { return []float64{v, v, v, v, v, v, v, v} }
+	r := costBootstrap(eight(1), eight(1), eight(4), eight(1), 300)
+	if r.Value == nil || !near(*r.Value, 0.25) || !near(*r.Lo, 0.25) || !near(*r.Hi, 0.25) {
+		t.Fatalf("%+v", r)
 	}
 	// a candidate with no complete_strict classification has no ratio
-	if _, _, _, ok := costBootstrap(costC, make([]float64, 8), costA, strictA, 100); ok {
-		t.Fatal("no complete_strict: the ratio is undefined")
+	if r := costBootstrap(eight(1), eight(0), eight(4), eight(1), 100); r.Value != nil || r.Why == "" {
+		t.Fatalf("no complete_strict: the ratio is undefined: %+v", r)
 	}
-	a1, b1, c1, _ := costBootstrap([]float64{1, 2, 3, 4}, []float64{1, 1, 0, 1}, []float64{2, 2, 2, 2}, []float64{1, 1, 1, 1}, 200)
-	a2, b2, c2, _ := costBootstrap([]float64{1, 2, 3, 4}, []float64{1, 1, 0, 1}, []float64{2, 2, 2, 2}, []float64{1, 1, 1, 1}, 200)
-	if a1 != a2 || b1 != b2 || c1 != c2 || math.IsNaN(b1) {
+	a := costBootstrap([]float64{1, 2, 3, 4}, []float64{1, 1, 0, 1}, []float64{2, 2, 2, 2}, []float64{1, 1, 1, 1}, 200)
+	b := costBootstrap([]float64{1, 2, 3, 4}, []float64{1, 1, 0, 1}, []float64{2, 2, 2, 2}, []float64{1, 1, 1, 1}, 200)
+	if *a.Value != *b.Value || *a.Lo != *b.Lo || *a.Hi != *b.Hi || math.IsNaN(*a.Lo) {
 		t.Fatal("the bootstrap must be deterministic")
+	}
+	// latency: the candidate is 10 times faster at every bundle: both ratios 0.1
+	var fast, slow []float64
+	for i := 1; i <= 40; i++ {
+		fast = append(fast, float64(i)*10)
+		slow = append(slow, float64(i)*100)
+	}
+	p50, p95 := latencyBootstrap(fast, slow, 300)
+	if p50.Value == nil || !near(*p50.Value, 0.1) || !near(*p95.Value, 0.1) || *p50.Hi >= 1 || *p95.Hi >= 1 {
+		t.Fatalf("%+v %+v", p50, p95)
+	}
+	if gateG5(p50, p95).Result != GatePass {
+		t.Fatal("a 10x win on both percentiles passes G5")
+	}
+	// the candidate is faster at p50 but slower at p95: not a win
+	var mixed []float64
+	for i := 1; i <= 40; i++ {
+		v := float64(i) * 10
+		if i > 36 {
+			v = float64(i) * 400
+		}
+		mixed = append(mixed, v)
+	}
+	m50, m95 := latencyBootstrap(mixed, slow, 300)
+	if *m50.Value >= 1 || *m95.Value <= 1 {
+		t.Fatalf("p50 %v p95 %v", *m50.Value, *m95.Value)
+	}
+	if gateG5(m50, m95).Result == GatePass {
+		t.Fatal("a p95 that is not a win must not pass G5")
+	}
+	// the same resamples serve both: deterministic, and an empty input is undefined
+	again50, _ := latencyBootstrap(fast, slow, 300)
+	if *again50.Lo != *p50.Lo || *again50.Hi != *p50.Hi {
+		t.Fatal("deterministic")
+	}
+	if e50, _ := latencyBootstrap(nil, nil, 10); e50.Value != nil {
+		t.Fatal("no bundle: undefined")
 	}
 }
 
@@ -587,25 +669,27 @@ func TestDecideOverTheScenario(t *testing.T) {
 		t.Fatalf("%v %v", err, d.Failures)
 	}
 	c := d.Candidates[0]
-	// vs A and D the candidate has the better support sets on a1, a3 and a4
-	if g := c.GatesConventionFree["G1"]; g.Result != GatePass {
-		t.Fatalf("G1 = %+v", g)
-	}
-	if g := c.GatesConventionFree["G2"]; g.Result != GatePass {
-		t.Fatalf("G2 = %+v", g)
+	gates := c.GatesConventionFree
+	// G1 and G2 compare with arm A only
+	if gates["G1"].Result != GatePass || gates["G2"].Result != GatePass {
+		t.Fatalf("G1 = %+v G2 = %+v", gates["G1"], gates["G2"])
 	}
 	// complete_strict is 3 of 4: the Wilson interval [0.30, 0.95] holds the threshold
 	// at its upper end: not decided, never a pass
-	if g := c.GatesConventionFree["G3"]; g.Result != GateUndecided {
-		t.Fatalf("G3 = %+v", g)
+	if gates["G3"].Result != GateUndecided {
+		t.Fatalf("G3 = %+v", gates["G3"])
 	}
-	t.Logf("G4 = %+v outcome %s", c.GatesConventionFree["G4"], c.Outcome)
-	wantOutcome := OutcomeDefer
-	if c.GatesConventionFree["G4"].Result == GateFail {
-		wantOutcome = OutcomeRetain
+	for _, g := range []string{"G1", "G2", "G3", "G4", "G5"} {
+		if gates[g].Result == "" || gates[g].Detail == "" {
+			t.Fatalf("gate %s is missing: %+v", g, gates)
+		}
 	}
-	if c.Outcome != wantOutcome {
-		t.Fatalf("outcome = %s, want %s", c.Outcome, wantOutcome)
+	if c.CostRatio.Value == nil || c.LatencyP50.Value == nil || c.LatencyP95.Value == nil {
+		t.Fatalf("the size of each win is reported next to the verdict: %+v %+v", c.CostRatio, c.LatencyP50)
+	}
+	want := outcomeOf(gates, c.Injection)
+	if c.Outcome != want || c.Outcome == OutcomeAdopt {
+		t.Fatalf("outcome = %s (want %s; G3 undecided and K n/a cannot give ADOPT)", c.Outcome, want)
 	}
 	// dQ1(jev, A): pi 0.75 x mean(1/3, 1/3, 1) = 0.4167
 	var e *Estimate
@@ -617,11 +701,18 @@ func TestDecideOverTheScenario(t *testing.T) {
 	if e == nil || e.N != 3 || !near(*e.Value, 0.75*(1.0/3+1.0/3+1)/3) {
 		t.Fatalf("dQ1 = %+v", e)
 	}
+	// arm D is reported (DG1, DG2) and in no gate
+	if len(c.DG1) != 2 || len(c.DG2) != 2 || d.DAgreement == nil {
+		t.Fatalf("DG1 %d DG2 %d agreement %v", len(c.DG1), len(c.DG2), d.DAgreement)
+	}
+	if c.Agreement.Both != 3 || c.Agreement.CZero != 1 {
+		t.Fatalf("agreement classes: %+v", c.Agreement)
+	}
 	if c.Injection.Result != "n/a" {
 		t.Fatalf("K = %+v", c.Injection)
 	}
 	md, _ := os.ReadFile(filepath.Join(cfg.ReportDir, "decision.md"))
-	if !strings.Contains(string(md), "Candidate `jev`: "+wantOutcome) || strings.Contains(string(md), "INVALID") {
+	if !strings.Contains(string(md), "Candidate `jev`: "+c.Outcome) || strings.Contains(string(md), "INVALID") || !strings.Contains(string(md), "| G5 |") || !strings.Contains(string(md), "Arm D diagnostics (no gate)") {
 		t.Fatalf("decision.md: %s", md)
 	}
 	// a labeled bundle outside the union stratum is a structural failure
@@ -631,14 +722,42 @@ func TestDecideOverTheScenario(t *testing.T) {
 	if err == nil || !hasFailure(d.Failures, "sample_gold_outside_union_stratum:"+s.fx.refactor.BundleID) {
 		t.Fatalf("err=%v failures=%v", err, d.Failures)
 	}
-	// without arm D the gates G1 and G2 cannot be decided
-	s2 := newScenario(t, nil)
-	rows = readGold(t, s2.gold)
-	g2 := filepath.Join(filepath.Dir(s2.fixture), "sample-gold.json")
-	writeGold(t, g2, rows[:1])
-	d, err = Decide(context.Background(), DecideConfig{FullOutDir: s2.env.out, FullFixturesPath: s2.fixture, SampleGoldPath: g2, ReportDir: filepath.Join(filepath.Dir(s2.fixture), "decision"),
-		Rubric: s2.env.r, Candidates: []string{ArmJev}, Resamples: 100})
-	if err == nil || !hasFailure(d.Failures, "no_arm_d_in_ledger") {
-		t.Fatalf("err=%v failures=%v", err, d.Failures)
+}
+
+// Arm D is in no gate: with and without it in the ledger the gates and the
+// outcome are the same, and its absence is not a failure.
+func TestArmDIsInNoGate(t *testing.T) {
+	run := func(withD bool) *Decision {
+		s := newScenario(t, nil)
+		if withD {
+			mustRun(t, newCfg(t, s.env, append(s.fx.gated(), s.fx.short), ArmIncumbentDefs))
+		}
+		dir := filepath.Dir(s.fixture)
+		var sample []map[string]any
+		for _, r := range readGold(t, s.gold) {
+			if r["bundle_id"] != s.fx.refactor.BundleID {
+				sample = append(sample, r)
+			}
+		}
+		sg := filepath.Join(dir, "sample-gold.json")
+		writeGold(t, sg, sample)
+		d, err := Decide(context.Background(), DecideConfig{FullOutDir: s.env.out, FullFixturesPath: s.fixture, SampleGoldPath: sg,
+			ReportDir: filepath.Join(dir, "decision"), Rubric: s.env.r, Candidates: []string{ArmJev}, Resamples: 200})
+		if err != nil {
+			t.Fatalf("withD=%v: %v %v", withD, err, d.Failures)
+		}
+		return d
+	}
+	with, without := run(true), run(false)
+	for _, g := range []string{"G1", "G2", "G3"} {
+		if with.Candidates[0].GatesConventionFree[g].Result != without.Candidates[0].GatesConventionFree[g].Result {
+			t.Fatalf("%s depends on arm D", g)
+		}
+	}
+	if without.Candidates[0].DG1 != nil || without.Candidates[0].DG2 != nil || len(with.Candidates[0].DG1) == 0 {
+		t.Fatal("DG1 and DG2 are reported when arm D exists, and only then")
+	}
+	if with.Candidates[0].Outcome != without.Candidates[0].Outcome {
+		t.Fatal("arm D cannot change an outcome")
 	}
 }

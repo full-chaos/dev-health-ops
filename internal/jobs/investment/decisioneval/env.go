@@ -35,8 +35,9 @@ const (
 	EnvDecisionsModel  = "DECISIONEVAL_DECISIONS_MODEL"
 	EnvLevelRule       = "DECISIONEVAL_LEVEL_RULE" // median | conditional-median:0.5 | conditional-median:0.67
 	EnvCustomEndpoints = "DECISIONEVAL_ALLOW_CUSTOM_ENDPOINTS"
-	EnvGold            = "DECISIONEVAL_GOLD"  // scorer
-	EnvScore           = "DECISIONEVAL_SCORE" // 1 = the scorer test may run
+	EnvGold            = "DECISIONEVAL_GOLD"     // scorer
+	EnvGoldSet         = "DECISIONEVAL_GOLD_SET" // set of the gold rows when the file has no `set` field
+	EnvScore           = "DECISIONEVAL_SCORE"    // 1 = the scorer test may run
 	EnvReportDir       = "DECISIONEVAL_REPORT_DIR"
 	EnvResamples       = "DECISIONEVAL_RESAMPLES"
 	EnvPersisted       = "DECISIONEVAL_PERSISTED"   // persisted incumbent rows (eval-incumbent-persisted.jsonl) for N1
@@ -50,6 +51,9 @@ const (
 	EnvTwinFixtures    = "DECISIONEVAL_TWIN_FIXTURES"
 	EnvTwinGold        = "DECISIONEVAL_TWIN_GOLD"
 	EnvCandidates      = "DECISIONEVAL_CANDIDATES" // jev,decisions
+	EnvT2              = "DECISIONEVAL_T2"         // 1 = the throughput report test may run (set DECISIONEVAL_SET=throughput for the batch run)
+	EnvT2Set           = "DECISIONEVAL_T2_SET"
+	EnvT2Batch         = "DECISIONEVAL_T2_BATCH" // expected batch size (default 320; 0 skips the check)
 
 	// Credentials (names only; values are read once into secrets.Hidden).
 	EnvJevEndpoint = "TYPESAFE_JEN_ENDPOINT"
@@ -173,6 +177,7 @@ func ScoreConfigFromEnv(getenv func(string) string) (ScoreConfig, error) {
 	cfg.OutDir, cfg.FixturesPath, cfg.GoldPath = getenv(EnvOut), getenv(EnvFixtures), getenv(EnvGold)
 	cfg.ReportDir, cfg.MapName = getenv(EnvReportDir), getenv(EnvMap)
 	cfg.LevelRule, cfg.IncumbentPersistedPath = getenv(EnvLevelRule), getenv(EnvPersisted)
+	cfg.GoldSet = getenv(EnvGoldSet)
 	cfg.Arms = splitList(getenv(EnvArms))
 	if cfg.Resamples, err = envInt(getenv, EnvResamples, DefaultResamples); err != nil {
 		return cfg, err
@@ -227,6 +232,21 @@ func DecideConfigFromEnv(getenv func(string) string) (DecideConfig, error) {
 	}
 	for name, v := range map[string]string{EnvOut: cfg.FullOutDir, EnvFixtures: cfg.FullFixturesPath, EnvReportDir: cfg.ReportDir,
 		EnvDevIDs: cfg.DevelopmentIDsPath, EnvHeldoutIDs: cfg.HeldoutIDsPath, EnvSampleGold: cfg.SampleGoldPath} {
+		if v == "" {
+			return cfg, fmt.Errorf("%s is not set", name)
+		}
+	}
+	return cfg, nil
+}
+
+// ThroughputConfigFromEnv builds a ThroughputConfig from the environment.
+func ThroughputConfigFromEnv(getenv func(string) string) (ThroughputConfig, error) {
+	cfg := ThroughputConfig{OutDir: getenv(EnvOut), ReportDir: getenv(EnvReportDir), Set: getenv(EnvT2Set)}
+	var err error
+	if cfg.ExpectBatch, err = envInt(getenv, EnvT2Batch, DefaultThroughputBatch); err != nil {
+		return cfg, err
+	}
+	for name, v := range map[string]string{EnvOut: cfg.OutDir, EnvReportDir: cfg.ReportDir} {
 		if v == "" {
 			return cfg, fmt.Errorf("%s is not set", name)
 		}

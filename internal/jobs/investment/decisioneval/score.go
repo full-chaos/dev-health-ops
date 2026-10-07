@@ -126,6 +126,11 @@ type ScoreConfig struct {
 	OutDir       string
 	FixturesPath string
 	GoldPath     string
+	// GoldSet names the set of the gold rows when the gold file has no `set`
+	// field (the reconciled gold files of the labeling lane have none: one file
+	// is one set). It is an explicit input: without it a gold row with no set is
+	// a failure, never a guess.
+	GoldSet string
 	// IncumbentPersistedPath is an optional file of persisted incumbent rows
 	// (eval-incumbent-persisted.jsonl: fixture_id + incumbent) for the noise
 	// floor N1. Rows inside the fixtures file are used too.
@@ -476,6 +481,9 @@ func (s *scorer) prepare(fixtures []FixtureRecord, goldList []GoldFixture) error
 		g.set = g.Set
 		if g.set == "" {
 			g.set = f.Set
+		}
+		if g.set == "" {
+			g.set = s.cfg.GoldSet
 		}
 		if g.set == "" {
 			s.fail("gold_fixture_without_set:%s", g.BundleID)

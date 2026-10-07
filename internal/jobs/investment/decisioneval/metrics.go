@@ -175,8 +175,23 @@ type Metrics struct {
 	Injection    []twinResult           `json:"injection_pairs,omitempty"`
 	InjectionK   []InjectionVerdict     `json:"injection_k,omitempty"`
 	Z2           []Z2Row                `json:"z2_gold_all_zero,omitempty"`
-	ArmOrder     []string               `json:"arm_order"`
-	GroupOrder   []string               `json:"group_order"`
+	// Agreement is the main reported measure of design 9.4a: AG1 to AG4 of each
+	// candidate (and arm D) against the fresh arm A, with the reference rows
+	// (A fresh against A persisted; a candidate against its own second run).
+	Agreement  []AgreementEntry `json:"agreement,omitempty"`
+	ArmOrder   []string         `json:"arm_order"`
+	GroupOrder []string         `json:"group_order"`
+}
+
+// AgreementEntry is one agreement table row.
+type AgreementEntry struct {
+	Group string `json:"group"`
+	// Label says what is compared: "<arm> vs incumbent", "incumbent fresh vs
+	// persisted (self-agreement)", "<arm> run 1 vs run 2".
+	Label string `json:"label"`
+	AgreementMetrics
+	// Signal is the 9.4a inspection signal (not a verdict) for a candidate row.
+	Signal string `json:"inspection_signal,omitempty"`
 }
 
 // view is one fixture seen through one pipeline: the effective outcome (the
@@ -331,6 +346,7 @@ func (s *scorer) metrics() *Metrics {
 	m.Injection = s.twins
 	m.InjectionK = injectionVerdicts(s.twins, s.arms)
 	m.Z2 = s.z2()
+	m.Agreement = s.agreement(order, members)
 	m.Failures = append([]string(nil), s.failures...)
 	sort.Strings(m.Failures)
 	m.Valid = len(m.Failures) == 0
@@ -1012,3 +1028,55 @@ func (s *scorer) z2() []Z2Row {
 }
 
 var _ = units.SortedThemes
+
+// agreement computes AG1 to AG4 for every non-stratum group.
+func (s *scorer) agreement(order []string, members map[string][]*goldRow) []AgreementEntry {
+	inc := s.rows[ArmIncumbent]
+	if inc == nil {
+		return nil
+	}
+	b := s.cfg.Resamples
+	var out []AgreementEntry
+	for _, gk := range order {
+		if strings.Contains(gk, "/stratum=") {
+			continue
+		}
+		var self AgreementMetrics
+		haveSelf := false
+		{
+			var pairs []agreementPair
+			for _, g := range members[gk] {
+				if p := persistedRow(g.BundleID, s.persist[g.BundleID]); p != nil && s.persist[g.BundleID].InputHashMatch {
+					pairs = append(pairs, agreementPair{bundle: g.BundleID, c: inc[g.BundleID], a: p})
+				}
+			}
+			if len(pairs) > 0 {
+				self, haveSelf = computeAgreement(ArmIncumbent, "persisted incumbent row", pairs, b), true
+				out = append(out, AgreementEntry{Group: gk, Label: "incumbent fresh vs persisted (self-agreement)", AgreementMetrics: self})
+			}
+		}
+		for _, arm := range s.arms {
+			if arm == ArmIncumbent {
+				continue
+			}
+			var pairs, rep []agreementPair
+			for _, g := range members[gk] {
+				pairs = append(pairs, agreementPair{bundle: g.BundleID, c: s.rows[arm][g.BundleID], a: inc[g.BundleID]})
+				if r1 := s.repeats[arm][g.BundleID]; r1 != nil && s.rows[arm][g.BundleID] != nil {
+					rep = append(rep, agreementPair{bundle: g.BundleID, c: r1, a: s.rows[arm][g.BundleID]})
+				}
+			}
+			e := AgreementEntry{Group: gk, Label: arm + " vs incumbent", AgreementMetrics: computeAgreement(arm, ArmIncumbent, pairs, b)}
+			if armIsCandidate(arm) && haveSelf {
+				if on, why := InspectionSignal(e.AgreementMetrics, self); on {
+					e.Signal = why
+				}
+			}
+			out = append(out, e)
+			if len(rep) > 0 {
+				out = append(out, AgreementEntry{Group: gk, Label: arm + " run 1 vs run 2", AgreementMetrics: computeAgreement(arm, arm+" (second run)", rep, b)})
+			}
+		}
+	}
+	return out
+}

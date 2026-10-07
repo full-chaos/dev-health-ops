@@ -119,3 +119,57 @@ func TestRealFixturesRoundTrip(t *testing.T) {
 	}
 	t.Logf("fixtures=%d gate-pass=%d below-gate=%d mean jev est tokens=%d max decisions est tokens=%d", len(fixtures), gated, below, sumTokens/max(gated, 1), maxTokens)
 }
+
+// TestRealGoldReads checks the scorer's gold reader against a real gold file
+// and the fixtures file of the same set (no ledger, no network). It runs only
+// when both paths are given. Report any failure: do not adapt the reader to it
+// silently.
+func TestRealGoldReads(t *testing.T) {
+	gold, fixtures := os.Getenv("DECISIONEVAL_REAL_GOLD"), os.Getenv("DECISIONEVAL_REAL_FIXTURES")
+	if gold == "" || fixtures == "" {
+		t.Skip("set DECISIONEVAL_REAL_GOLD and DECISIONEVAL_REAL_FIXTURES to read a real gold file")
+	}
+	fx, err := LoadFixtures(fixtures, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows, err := LoadGold(gold)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sc := &scorer{cfg: ScoreConfig{Rubric: testRubric(t), GoldSet: "real-gold-check"}, data: &LedgerData{}}
+	if err := sc.prepare(fx, rows); err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range sc.failures {
+		if f != "no_scorable_gold_fixtures" {
+			t.Errorf("gold problem: %s", f)
+		}
+	}
+	scorable, phrases, cd := 0, 0, 0
+	for _, g := range sc.gold {
+		if g.scorable {
+			scorable++
+		}
+		phrases += len(g.evidence)
+		if g.ConventionDependent {
+			cd++
+		}
+	}
+	t.Logf("gold rows=%d read=%d scorable=%d evidence phrases located=%d convention_dependent=%d", len(rows), len(sc.gold), scorable, phrases, cd)
+}
+
+func TestThroughputExperiment(t *testing.T) {
+	if !isOne(os.Getenv(EnvT2)) {
+		t.Skipf("set %s=1 to report T2 (throughput of a batch run, set %s)", EnvT2, "throughput")
+	}
+	cfg, err := ThroughputConfigFromEnv(os.Getenv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rep, err := ScoreThroughput(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("throughput: %d arm run(s), report in %s", len(rep.Arms), cfg.ReportDir)
+}

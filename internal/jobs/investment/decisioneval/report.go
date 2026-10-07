@@ -84,6 +84,7 @@ func RenderMarkdown(m *Metrics) string {
 		}
 		renderNoise(&b, am)
 	}
+	renderAgreement(&b, m)
 	renderComparisons(&b, m)
 	renderInjection(&b, m)
 	renderZ2(&b, m)
@@ -376,6 +377,22 @@ func renderZ2(b *strings.Builder, m *Metrics) {
 			}
 		}
 		b.WriteString("\n")
+	}
+	b.WriteString("\n")
+}
+
+func renderAgreement(b *strings.Builder, m *Metrics) {
+	if len(m.Agreement) == 0 {
+		return
+	}
+	b.WriteString("## Agreement with the fresh incumbent output (main reported measure, design 9.4a; not a gate, the incumbent is not gold)\n\n")
+	b.WriteString("| group | compared | both / c_zero / c_failed / a_failed | AG1 mean J | AG1 same support set | AG2 within 1 | AG3 top key | AG3 top theme | AG4 theme L1 mean | signal |\n|---|---|---|---|---|---|---|---|---|---|\n")
+	for _, e := range m.Agreement {
+		if !strings.HasSuffix(e.Group, "/real/all") && !strings.HasSuffix(e.Group, "/real/cd=false") && !strings.Contains(e.Group, "/synthetic/") {
+			continue
+		}
+		fmt.Fprintf(b, "| %s | %s | %d / %d / %d / %d | %s | %s | %s | %s | %s | %s | %s |\n", e.Group, e.Label, e.Both, e.CZero, e.CFailed, e.AFailed,
+			fnum(e.AG1Mean, 3), frate(e.AG1Same), frate(e.AG2Within), frate(e.AG3Key), frate(e.AG3Theme), fnum(e.AG4.Mean, 3), e.Signal)
 	}
 	b.WriteString("\n")
 }

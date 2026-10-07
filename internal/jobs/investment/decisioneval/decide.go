@@ -74,21 +74,42 @@ type GateResult struct {
 	Detail string `json:"detail"`
 }
 
-// CandidateDecision is the decision for one candidate arm.
+// Ratio is a ratio with its bootstrap interval.
+type Ratio struct {
+	Value *float64 `json:"value,omitempty"`
+	Lo    *float64 `json:"lo,omitempty"`
+	Hi    *float64 `json:"hi,omitempty"`
+	N     int      `json:"n_bundles"`
+	Why   string   `json:"undefined_because,omitempty"`
+}
+
+// CandidateDecision is the decision for one candidate arm (design v1.2): the
+// reference is arm A only; arm D is a diagnostic (DG1, DG2) and in no gate.
 type CandidateDecision struct {
 	Arm string `json:"arm"`
 	// GatesConventionFree uses the sample bundles with convention_dependent =
 	// false (the gating numbers); GatesAllSample uses every sample bundle.
 	GatesConventionFree map[string]GateResult `json:"gates_convention_free"`
 	GatesAllSample      map[string]GateResult `json:"gates_all_sample_bundles"`
-	Estimates           []Estimate            `json:"estimates_convention_free"`
-	EstimatesAll        []Estimate            `json:"estimates_all_sample_bundles"`
-	Injection           InjectionVerdict      `json:"injection_k"`
-	Outcome             string                `json:"outcome"`
-	GatesDiffer         bool                  `json:"gate_results_differ_between_subsets"`
-	CostRatio           Estimate              `json:"cost_ratio_vs_incumbent"`
-	Coverage            Rate                  `json:"coverage_complete_strict_candidate_only"`
-	PromptGap           string                `json:"prompt_gap_finding,omitempty"`
+	Estimates           []Estimate            `json:"estimates_vs_A_convention_free"`
+	EstimatesAll        []Estimate            `json:"estimates_vs_A_all_sample_bundles"`
+	// DG1 and DG2 (arm D): reported, in no gate.
+	DG1         []Estimate       `json:"dg1_D_vs_A_convention_free,omitempty"`
+	DG2         []Estimate       `json:"dg2_candidate_vs_D_convention_free,omitempty"`
+	DG1All      []Estimate       `json:"dg1_D_vs_A_all_sample_bundles,omitempty"`
+	DG2All      []Estimate       `json:"dg2_candidate_vs_D_all_sample_bundles,omitempty"`
+	DGReading   string           `json:"dg_reading,omitempty"`
+	Injection   InjectionVerdict `json:"injection_k"`
+	Outcome     string           `json:"outcome"`
+	GatesDiffer bool             `json:"gate_results_differ_between_subsets"`
+	// The size of each win, next to the verdict (design 9.6).
+	CostRatio     Ratio             `json:"cost_ratio_c_plus_fallback_vs_A"`
+	LatencyP50    Ratio             `json:"t1r_p50_ratio_c_plus_fallback_vs_A"`
+	LatencyP95    Ratio             `json:"t1r_p95_ratio_c_plus_fallback_vs_A"`
+	Coverage      Rate              `json:"coverage_complete_strict_candidate_only"`
+	Agreement     AgreementMetrics  `json:"ag_candidate_vs_A_candidate_only"`
+	SelfAgreement *AgreementMetrics `json:"ag_reference_A_fresh_vs_persisted,omitempty"`
+	Inspection    string            `json:"inspection_signal,omitempty"`
 }
 
 // Decision is the report of the decision run.
@@ -98,6 +119,8 @@ type Decision struct {
 	Candidates []CandidateDecision `json:"candidates"`
 	SampleSize int                 `json:"sample_gold_bundles"`
 	Recommend  string              `json:"recommendation"`
+	// DAgainstA is DG1 as agreement: arm D against arm A (diagnostic).
+	DAgreement *AgreementMetrics `json:"ag_diagnostic_D_vs_A,omitempty"`
 }
 
 // sampleGold is the light reading of a sample gold file: levels and the
@@ -169,29 +192,63 @@ func estimate(pair, metric string, pi float64, disagree map[string]bool, gold ma
 	return e
 }
 
-func gateG1(a, d Estimate) GateResult {
-	detail := fmt.Sprintf("dQ1 vs A [%s], vs D [%s]; margin -%.2f", fmtInterval(a), fmtInterval(d), MarginQ1)
-	if a.Lo == nil || d.Lo == nil {
-		return GateResult{GateUndecided, detail + "; " + firstNonEmpty(a.Why, d.Why)}
-	}
-	if *a.Hi < -MarginQ1 || *d.Hi < -MarginQ1 {
+// gateG1 is non-inferiority of quality to arm A: pass when lo(dQ1(c, A)) >= -m1,
+// fail when hi(dQ1(c, A)) < -m1.
+func gateG1(a Estimate) GateResult {
+	detail := fmt.Sprintf("dQ1 vs A [%s]; margin -%.2f", fmtInterval(a), MarginQ1)
+	switch {
+	case a.Lo == nil:
+		return GateResult{GateUndecided, detail + "; " + a.Why}
+	case *a.Hi < -MarginQ1:
 		return GateResult{GateFail, detail}
-	}
-	if *a.Lo >= -MarginQ1 && *d.Lo >= -MarginQ1 {
+	case *a.Lo >= -MarginQ1:
 		return GateResult{GatePass, detail}
 	}
 	return GateResult{GateUndecided, detail}
 }
 
-func gateG2(a, d Estimate) GateResult {
-	detail := fmt.Sprintf("dQ2 vs A [%s], vs D [%s]; margin +%.2f", fmtInterval(a), fmtInterval(d), MarginQ2)
-	if a.Lo == nil || d.Lo == nil {
-		return GateResult{GateUndecided, detail + "; " + firstNonEmpty(a.Why, d.Why)}
-	}
-	if *a.Lo > MarginQ2 || *d.Lo > MarginQ2 {
+// gateG2 is non-inferiority of false positives to arm A: pass when
+// hi(dQ2(c, A)) <= +m2, fail when lo(dQ2(c, A)) > +m2.
+func gateG2(a Estimate) GateResult {
+	detail := fmt.Sprintf("dQ2 vs A [%s]; margin +%.2f", fmtInterval(a), MarginQ2)
+	switch {
+	case a.Lo == nil:
+		return GateResult{GateUndecided, detail + "; " + a.Why}
+	case *a.Lo > MarginQ2:
 		return GateResult{GateFail, detail}
+	case *a.Hi <= MarginQ2:
+		return GateResult{GatePass, detail}
 	}
-	if *a.Hi <= MarginQ2 && *d.Hi <= MarginQ2 {
+	return GateResult{GateUndecided, detail}
+}
+
+// gateWin is a required win on a ratio (G4 cost): pass when hi < 1, fail when
+// lo >= 1.
+func gateWin(name string, r Ratio) GateResult {
+	if r.Value == nil {
+		return GateResult{GateUndecided, name + ": " + r.Why}
+	}
+	detail := fmt.Sprintf("%s %.3f [%.3f, %.3f]", name, *r.Value, *r.Lo, *r.Hi)
+	switch {
+	case *r.Lo >= 1.0:
+		return GateResult{GateFail, detail}
+	case *r.Hi < 1.0:
+		return GateResult{GatePass, detail}
+	}
+	return GateResult{GateUndecided, detail}
+}
+
+// gateG5 is the required win on latency: pass when both hi(p50 ratio) < 1 and
+// hi(p95 ratio) < 1; fail when either lo >= 1.
+func gateG5(p50, p95 Ratio) GateResult {
+	if p50.Value == nil || p95.Value == nil {
+		return GateResult{GateUndecided, "latency ratios undefined: " + firstNonEmpty(p50.Why, p95.Why)}
+	}
+	detail := fmt.Sprintf("p50 ratio %.3f [%.3f, %.3f]; p95 ratio %.3f [%.3f, %.3f]", *p50.Value, *p50.Lo, *p50.Hi, *p95.Value, *p95.Lo, *p95.Hi)
+	switch {
+	case *p50.Lo >= 1.0 || *p95.Lo >= 1.0:
+		return GateResult{GateFail, detail}
+	case *p50.Hi < 1.0 && *p95.Hi < 1.0:
 		return GateResult{GatePass, detail}
 	}
 	return GateResult{GateUndecided, detail}
@@ -211,12 +268,15 @@ func firstNonEmpty(a, b string) string {
 	return b
 }
 
+func ratioOf(value, lo, hi float64, n int) Ratio { return Ratio{Value: &value, Lo: &lo, Hi: &hi, N: n} }
+
 // costBootstrap is the interval of ratio = [sum(cost_c)/sum(strict_c)] /
-// [sum(cost_a)/sum(strict_a)], resampling bundles.
-func costBootstrap(costC, strictC, costA, strictA []float64, b int) (ratio, lo, hi float64, ok bool) {
+// [sum(cost_a)/sum(strict_a)] (C1 of the candidate + fallback pipeline against
+// arm A), resampling bundles.
+func costBootstrap(costC, strictC, costA, strictA []float64, b int) Ratio {
 	n := len(costC)
 	if n == 0 || len(costA) != n {
-		return 0, 0, 0, false
+		return Ratio{Why: "no bundle with both costs"}
 	}
 	point := func(idx func(i int) int) (float64, bool) {
 		var cc, sc, ca, sa float64
@@ -232,9 +292,9 @@ func costBootstrap(costC, strictC, costA, strictA []float64, b int) (ratio, lo, 
 		}
 		return (cc / sc) / (ca / sa), true
 	}
-	ratio, ok = point(func(i int) int { return i })
+	ratio, ok := point(func(i int) int { return i })
 	if !ok {
-		return 0, 0, 0, false
+		return Ratio{N: n, Why: "no complete_strict classification (or no baseline cost): the cost per complete_strict is undefined"}
 	}
 	s1, s2 := labelSeed("decide/cost-ratio")
 	rng := rand.New(rand.NewPCG(s1, s2))
@@ -249,10 +309,64 @@ func costBootstrap(costC, strictC, costA, strictA []float64, b int) (ratio, lo, 
 		}
 	}
 	if len(vals) == 0 {
-		return ratio, math.NaN(), math.NaN(), false
+		return Ratio{N: n, Why: "every resample is undefined"}
 	}
 	sort.Float64s(vals)
-	return ratio, vals[int(0.025*float64(len(vals)))], vals[int(math.Ceil(0.975*float64(len(vals))))-1], true
+	return ratioOf(ratio, vals[int(0.025*float64(len(vals)))], vals[int(math.Ceil(0.975*float64(len(vals))))-1], n)
+}
+
+// latencyBootstrap is T1r: the ratios p50(c + fallback) / p50(A) and
+// p95(c + fallback) / p95(A) by nearest rank, one latency for each bundle and
+// arm, 95% bootstrap over bundles. The same resampled bundles serve both arms
+// and both percentiles.
+func latencyBootstrap(latC, latA []float64, b int) (p50, p95 Ratio) {
+	n := len(latC)
+	if n == 0 || len(latA) != n {
+		why := Ratio{Why: "no bundle with both latencies"}
+		return why, why
+	}
+	at := func(idx func(i int) int, q float64) (float64, bool) {
+		c, a := make([]float64, n), make([]float64, n)
+		for i := 0; i < n; i++ {
+			j := idx(i)
+			c[i], a[i] = latC[j], latA[j]
+		}
+		pa := percentileNearestRank(a, q)
+		if pa <= 0 {
+			return 0, false
+		}
+		return percentileNearestRank(c, q) / pa, true
+	}
+	id := func(i int) int { return i }
+	r50, ok1 := at(id, 50)
+	r95, ok2 := at(id, 95)
+	if !ok1 || !ok2 {
+		why := Ratio{N: n, Why: "the latency of arm A is 0"}
+		return why, why
+	}
+	s1, s2 := labelSeed("decide/latency-ratio")
+	rng := rand.New(rand.NewPCG(s1, s2))
+	var v50, v95 []float64
+	for k := 0; k < b; k++ {
+		picks := make([]int, n)
+		for i := range picks {
+			picks[i] = rng.IntN(n)
+		}
+		f := func(i int) int { return picks[i] }
+		a50, o1 := at(f, 50)
+		a95, o2 := at(f, 95)
+		if o1 && o2 {
+			v50, v95 = append(v50, a50), append(v95, a95)
+		}
+	}
+	if len(v50) == 0 {
+		why := Ratio{N: n, Why: "every resample is undefined"}
+		return why, why
+	}
+	sort.Float64s(v50)
+	sort.Float64s(v95)
+	lo, hi := int(0.025*float64(len(v50))), int(math.Ceil(0.975*float64(len(v50))))-1
+	return ratioOf(r50, v50[lo], v50[hi], n), ratioOf(r95, v95[lo], v95[hi], n)
 }
 
 // Decide applies the estimator of 9.5 and the gates of 9.6. A missing input
@@ -310,9 +424,6 @@ func Decide(ctx context.Context, cfg DecideConfig) (*Decision, error) {
 	if inc == nil {
 		fail("no_incumbent_arm_in_ledger (arm A is the baseline of every gate)")
 	}
-	if def == nil {
-		fail("no_arm_d_in_ledger (arm D, incumbent+defs, is part of gates G1 and G2)")
-	}
 
 	// Gate K inputs: the held-out twin run.
 	var twinVerdicts []InjectionVerdict
@@ -338,60 +449,97 @@ func Decide(ctx context.Context, cfg DecideConfig) (*Decision, error) {
 		}
 	}
 
+	// Agreement of arm D with arm A (diagnostic, candidate-only rows).
+	if def != nil && inc != nil {
+		var pairs []agreementPair
+		for _, id := range pop.full {
+			pairs = append(pairs, agreementPair{bundle: id, c: def[id], a: inc[id]})
+		}
+		ag := computeAgreement(ArmIncumbentDefs, ArmIncumbent, pairs, cfg.Resamples)
+		d.DAgreement = &ag
+	}
 	for _, c := range cfg.Candidates {
 		cd := CandidateDecision{Arm: c}
 		if pop.rows[c] == nil {
 			fail("no_candidate_arm_in_ledger:%s", c)
 			continue
 		}
-		sample := dis.pair
-		build := func(convFree bool) ([]Estimate, map[string]GateResult) {
-			var ests []Estimate
-			byPair := map[string]map[string]Estimate{}
-			for _, base := range []string{ArmIncumbent, ArmIncumbentDefs} {
-				if pop.rows[base] == nil {
-					continue
-				}
-				set := sample[[2]string{c, base}]
-				pi := 0.0
-				if len(pop.sample) > 0 {
-					pi = float64(len(set)) / float64(len(pop.sample))
-				}
-				pair := c + " vs " + base
-				f1diff := func(id string, g sampleGold) (float64, bool) {
-					ec, _ := pop.effective(c, PipelineFallback, id)
-					eb, _ := pop.effective(base, PipelineFallback, id)
-					if ec == nil || eb == nil {
-						return 0, false
-					}
-					return supportF1Claim(ec.claim(), g.set) - supportF1Claim(eb.claim(), g.set), true
-				}
-				fpdiff := func(id string, g sampleGold) (float64, bool) {
-					ec, _ := pop.effective(c, PipelineFallback, id)
-					eb, _ := pop.effective(base, PipelineFallback, id)
-					if ec == nil || eb == nil || ec.claim().kind == "none" || eb.claim().kind == "none" {
-						return 0, false // left out of the false-positive mean
-					}
-					return float64(falsePositiveCount(ec.claim().set, g.set)) - float64(falsePositiveCount(eb.claim().set, g.set)), true
-				}
-				e1 := estimate(pair, "dQ1", pi, set, gold, convFree, f1diff, cfg.Resamples)
-				e2 := estimate(pair, "dQ2", pi, set, gold, convFree, fpdiff, cfg.Resamples)
-				ests = append(ests, e1, e2)
-				byPair[base] = map[string]Estimate{"dQ1": e1, "dQ2": e2}
-			}
-			gates := map[string]GateResult{}
-			if byPair[ArmIncumbent] != nil && byPair[ArmIncumbentDefs] != nil {
-				gates["G1"] = gateG1(byPair[ArmIncumbent]["dQ1"], byPair[ArmIncumbentDefs]["dQ1"])
-				gates["G2"] = gateG2(byPair[ArmIncumbent]["dQ2"], byPair[ArmIncumbentDefs]["dQ2"])
-			} else {
-				gates["G1"] = GateResult{GateUndecided, "arm A or arm D is missing"}
-				gates["G2"] = GateResult{GateUndecided, "arm A or arm D is missing"}
-			}
-			return ests, gates
+		set := dis.pair[[2]string{c, ArmIncumbent}]
+		pi := 0.0
+		if len(pop.sample) > 0 {
+			pi = float64(len(set)) / float64(len(pop.sample))
 		}
-		var gatesCF, gatesAll map[string]GateResult
-		cd.Estimates, gatesCF = build(true)
-		cd.EstimatesAll, gatesAll = build(false)
+		// quality estimates against A (gates) and the arm D diagnostics
+		f1diff := func(base string) func(id string, g sampleGold) (float64, bool) {
+			return func(id string, g sampleGold) (float64, bool) {
+				ec, _ := pop.effective(c, PipelineFallback, id)
+				eb, _ := pop.effective(base, PipelineFallback, id)
+				if ec == nil || eb == nil {
+					return 0, false
+				}
+				return supportF1Claim(ec.claim(), g.set) - supportF1Claim(eb.claim(), g.set), true
+			}
+		}
+		fpdiff := func(base string) func(id string, g sampleGold) (float64, bool) {
+			return func(id string, g sampleGold) (float64, bool) {
+				ec, _ := pop.effective(c, PipelineFallback, id)
+				eb, _ := pop.effective(base, PipelineFallback, id)
+				if ec == nil || eb == nil || ec.claim().kind == "none" || eb.claim().kind == "none" {
+					return 0, false // left out of the false-positive mean
+				}
+				return float64(falsePositiveCount(ec.claim().set, g.set)) - float64(falsePositiveCount(eb.claim().set, g.set)), true
+			}
+		}
+		estimates := func(convFree bool) (vsA []Estimate, g1, g2 GateResult) {
+			e1 := estimate(c+" vs "+ArmIncumbent, "dQ1", pi, set, gold, convFree, f1diff(ArmIncumbent), cfg.Resamples)
+			e2 := estimate(c+" vs "+ArmIncumbent, "dQ2", pi, set, gold, convFree, fpdiff(ArmIncumbent), cfg.Resamples)
+			return []Estimate{e1, e2}, gateG1(e1), gateG2(e2)
+		}
+		var g1cf, g2cf, g1all, g2all GateResult
+		cd.Estimates, g1cf, g2cf = estimates(true)
+		cd.EstimatesAll, g1all, g2all = estimates(false)
+
+		// DG1 (D against A) and DG2 (c against D): reported, in no gate.
+		if def != nil {
+			dset := dis.pair[[2]string{ArmIncumbentDefs, ArmIncumbent}]
+			dpi := 0.0
+			if len(pop.sample) > 0 {
+				dpi = float64(len(dset)) / float64(len(pop.sample))
+			}
+			dga := func(base string, id string, g sampleGold, f1 bool) (float64, bool) {
+				ed, _ := pop.effective(ArmIncumbentDefs, PipelineFallback, id)
+				eb, _ := pop.effective(base, PipelineFallback, id)
+				if ed == nil || eb == nil {
+					return 0, false
+				}
+				if f1 {
+					return supportF1Claim(ed.claim(), g.set) - supportF1Claim(eb.claim(), g.set), true
+				}
+				if ed.claim().kind == "none" || eb.claim().kind == "none" {
+					return 0, false
+				}
+				return float64(falsePositiveCount(ed.claim().set, g.set)) - float64(falsePositiveCount(eb.claim().set, g.set)), true
+			}
+			dg1 := func(convFree bool) []Estimate {
+				return []Estimate{
+					estimate("incumbent+defs vs incumbent", "dQ1", dpi, dset, gold, convFree, func(id string, g sampleGold) (float64, bool) { return dga(ArmIncumbent, id, g, true) }, cfg.Resamples),
+					estimate("incumbent+defs vs incumbent", "dQ2", dpi, dset, gold, convFree, func(id string, g sampleGold) (float64, bool) { return dga(ArmIncumbent, id, g, false) }, cfg.Resamples),
+				}
+			}
+			cset := dis.pair[[2]string{c, ArmIncumbentDefs}]
+			cpi := 0.0
+			if len(pop.sample) > 0 {
+				cpi = float64(len(cset)) / float64(len(pop.sample))
+			}
+			dg2 := func(convFree bool) []Estimate {
+				return []Estimate{
+					estimate(c+" vs "+ArmIncumbentDefs, "dQ1", cpi, cset, gold, convFree, f1diff(ArmIncumbentDefs), cfg.Resamples),
+					estimate(c+" vs "+ArmIncumbentDefs, "dQ2", cpi, cset, gold, convFree, fpdiff(ArmIncumbentDefs), cfg.Resamples),
+				}
+			}
+			cd.DG1, cd.DG1All, cd.DG2, cd.DG2All = dg1(true), dg1(false), dg2(true), dg2(false)
+			cd.DGReading = dgReading(cd.DG1, cd.DG2, cd.Estimates)
+		}
 
 		// G3: coverage on the full run, candidate-only, complete_strict, Wilson.
 		strict := 0
@@ -415,8 +563,9 @@ func Decide(ctx context.Context, cfg DecideConfig) (*Decision, error) {
 			g3.Detail = fmt.Sprintf("complete_strict %s", frate(cd.Coverage))
 		}
 
-		// G4: cost.
-		var costC, strictC, costA, strictA []float64
+		// G4 (cost) and G5 (latency) on the full run, candidate + fallback
+		// against arm A, one value for each bundle.
+		var costC, strictC, costA, strictA, latC, latA []float64
 		for _, id := range pop.full {
 			ec, fb := pop.effective(c, PipelineFallback, id)
 			ea := inc[id]
@@ -424,44 +573,34 @@ func Decide(ctx context.Context, cfg DecideConfig) (*Decision, error) {
 			if ec == nil || ea == nil || cand == nil {
 				continue
 			}
-			cc, sc := cand.cost, 0.0
+			cc, lc := cand.cost, float64(cand.latency)
+			if fb {
+				cc += ec.cost
+				lc += float64(ec.latency)
+			}
+			sc, sa := 0.0, 0.0
 			if ec.strict {
 				sc = 1
 			}
-			if fb {
-				cc += ec.cost
-			}
-			costC, strictC = append(costC, cc), append(strictC, sc)
-			sa := 0.0
 			if ea.strict {
 				sa = 1
 			}
-			costA, strictA = append(costA, ea.cost), append(strictA, sa)
+			costC, strictC, costA, strictA = append(costC, cc), append(strictC, sc), append(costA, ea.cost), append(strictA, sa)
+			latC, latA = append(latC, lc), append(latA, float64(ea.latency))
 		}
-		g4 := GateResult{GateUndecided, "the cost ratio cannot be computed (no complete_strict classification or no baseline cost)"}
-		if ratio, lo, hi, ok := costBootstrap(costC, strictC, costA, strictA, cfg.Resamples); ok {
-			v, l, h := ratio, lo, hi
-			cd.CostRatio = Estimate{Pair: c + " + fallback vs incumbent", Metric: "C1 ratio", N: len(costC), Value: &v, Lo: &l, Hi: &h}
-			// A measured quality gain over arm D pays for a higher cost.
-			gain := false
-			for _, e := range cd.Estimates {
-				if e.Pair == c+" vs "+ArmIncumbentDefs && e.Metric == "dQ1" && e.Lo != nil && *e.Lo >= 0.05 {
-					gain = true
-				}
-			}
-			detail := fmt.Sprintf("C1 ratio %.3f [%.3f, %.3f]; quality gain over D: %v", ratio, lo, hi, gain)
-			switch {
-			case hi <= 0.85 || (gain && hi <= 1.25):
-				g4 = GateResult{GatePass, detail}
-			case lo > 1.00 && !gain:
-				g4 = GateResult{GateFail, detail}
-			default:
-				g4 = GateResult{GateUndecided, detail}
-			}
+		cd.CostRatio = costBootstrap(costC, strictC, costA, strictA, cfg.Resamples)
+		cd.LatencyP50, cd.LatencyP95 = latencyBootstrap(latC, latA, cfg.Resamples)
+		g4 := gateWin("C1 ratio", cd.CostRatio)
+		g5 := gateG5(cd.LatencyP50, cd.LatencyP95)
+		cd.GatesConventionFree = map[string]GateResult{"G1": g1cf, "G2": g2cf, "G3": g3, "G4": g4, "G5": g5}
+		cd.GatesAllSample = map[string]GateResult{"G1": g1all, "G2": g2all, "G3": g3, "G4": g4, "G5": g5}
+
+		// Agreement with the fresh incumbent output (main reported measure; not a gate).
+		var pairs []agreementPair
+		for _, id := range pop.full {
+			pairs = append(pairs, agreementPair{bundle: id, c: pop.rows[c][id], a: inc[id]})
 		}
-		gatesCF["G3"], gatesAll["G3"] = g3, g3
-		gatesCF["G4"], gatesAll["G4"] = g4, g4
-		cd.GatesConventionFree, cd.GatesAllSample = gatesCF, gatesAll
+		cd.Agreement = computeAgreement(c, ArmIncumbent, pairs, cfg.Resamples)
 
 		// K.
 		cd.Injection = InjectionVerdict{Arm: c, Result: "n/a", Reason: "no held-out twin run was given"}
@@ -470,13 +609,12 @@ func Decide(ctx context.Context, cfg DecideConfig) (*Decision, error) {
 				cd.Injection = v
 			}
 		}
-		cd.Outcome = outcomeOf(gatesCF, cd.Injection)
+		cd.Outcome = outcomeOf(cd.GatesConventionFree, cd.Injection)
 		for _, k := range []string{"G1", "G2"} {
-			if gatesCF[k].Result != gatesAll[k].Result {
+			if cd.GatesConventionFree[k].Result != cd.GatesAllSample[k].Result {
 				cd.GatesDiffer = true
 			}
 		}
-		cd.PromptGap = promptGap(pop, dis, gold, cfg.Resamples, gatesCF["G1"], cd.Estimates, c)
 		d.Candidates = append(d.Candidates, cd)
 	}
 	d.Recommend = recommend(d.Candidates)
@@ -499,11 +637,11 @@ func supportF1Claim(c claim, gold map[string]bool) float64 {
 	return supportF1(c.set, gold)
 }
 
-// outcomeOf: ADOPT needs G1..G4 and K to pass; RETAIN when one fails; DEFER
+// outcomeOf: ADOPT needs G1..G5 and K to pass; RETAIN when one fails; DEFER
 // otherwise (design 9.6).
 func outcomeOf(gates map[string]GateResult, k InjectionVerdict) string {
 	failed, undecided := false, false
-	for _, g := range []string{"G1", "G2", "G3", "G4"} {
+	for _, g := range []string{"G1", "G2", "G3", "G4", "G5"} {
 		switch gates[g].Result {
 		case GateFail:
 			failed = true
@@ -529,39 +667,33 @@ func outcomeOf(gates map[string]GateResult, k InjectionVerdict) string {
 	}
 }
 
-// promptGap is the prompt-gap finding of 9.6: D against A, from the sample.
-func promptGap(pop *population, dis *disagreement, gold map[string]sampleGold, resamples int, g1 GateResult, ests []Estimate, cand string) string {
-	if pop.rows[ArmIncumbentDefs] == nil || pop.rows[ArmIncumbent] == nil {
-		return ""
-	}
-	set := dis.pair[[2]string{ArmIncumbentDefs, ArmIncumbent}]
-	pi := 0.0
-	if len(pop.sample) > 0 {
-		pi = float64(len(set)) / float64(len(pop.sample))
-	}
-	e := estimate("incumbent+defs vs incumbent", "dQ1", pi, set, gold, true, func(id string, g sampleGold) (float64, bool) {
-		ed, _ := pop.effective(ArmIncumbentDefs, PipelineOnly, id)
-		ea, _ := pop.effective(ArmIncumbent, PipelineOnly, id)
-		if ed == nil || ea == nil {
-			return 0, false
-		}
-		return supportF1Claim(ed.claim(), g.set) - supportF1Claim(ea.claim(), g.set), true
-	}, resamples)
-	if e.Lo == nil || *e.Lo <= 0 {
-		return ""
-	}
-	msg := fmt.Sprintf("definitions in the incumbent prompt improve the support set by dQ1(D, A) = %.4f [%.4f, %.4f]", *e.Value, *e.Lo, *e.Hi)
-	var vsA, vsD *Estimate
-	for i := range ests {
-		switch {
-		case ests[i].Metric == "dQ1" && ests[i].Pair == cand+" vs "+ArmIncumbent:
-			vsA = &ests[i]
-		case ests[i].Metric == "dQ1" && ests[i].Pair == cand+" vs "+ArmIncumbentDefs:
-			vsD = &ests[i]
+// dgReading is the finding of arm D (design 9.6): stated, never a verdict.
+func dgReading(dg1, dg2, vsA []Estimate) string {
+	var d1, c1A, c1D *Estimate
+	for i := range dg1 {
+		if dg1[i].Metric == "dQ1" {
+			d1 = &dg1[i]
 		}
 	}
-	if vsA != nil && vsD != nil && vsA.Lo != nil && *vsA.Lo >= -MarginQ1 && (vsD.Lo == nil || *vsD.Lo < -MarginQ1) {
-		msg += "; G1 passes against A and does not pass against D: the candidate's gain over production is a prompt gap, and the follow-on ticket is the definitions, not the backend"
+	for i := range vsA {
+		if vsA[i].Metric == "dQ1" {
+			c1A = &vsA[i]
+		}
+	}
+	for i := range dg2 {
+		if dg2[i].Metric == "dQ1" {
+			c1D = &dg2[i]
+		}
+	}
+	msg := ""
+	if d1 != nil && d1.Lo != nil && *d1.Lo > 0 {
+		msg = fmt.Sprintf("the definitions improve the incumbent: dQ1(D, A) = %.4f [%.4f, %.4f]", *d1.Value, *d1.Lo, *d1.Hi)
+	}
+	if c1A != nil && c1D != nil && c1A.Lo != nil && c1D.Lo != nil && c1D.Hi != nil && *c1A.Lo > 0 && *c1D.Hi <= 0 {
+		if msg != "" {
+			msg += "; "
+		}
+		msg += "the candidate is above A and not above D: its quality difference to production comes from the definitions, not from the backend"
 	}
 	return msg
 }
@@ -620,18 +752,43 @@ func RenderDecisionMarkdown(d *Decision) string {
 			break
 		}
 	}
-	fmt.Fprintf(&b, "Recommendation: %s. Labeled sample bundles: %d.\n\n", d.Recommend, d.SampleSize)
+	fmt.Fprintf(&b, "Recommendation: %s. Labeled sample bundles: %d. Reference arm of every gate: `incumbent` (arm A). Arm D is in no gate.\n\n", d.Recommend, d.SampleSize)
 	for _, c := range d.Candidates {
 		fmt.Fprintf(&b, "## Candidate `%s`: %s\n\n| gate | convention-free (gating) | all sample bundles |\n|---|---|---|\n", c.Arm, c.Outcome)
-		for _, g := range []string{"G1", "G2", "G3", "G4"} {
+		for _, g := range []string{"G1", "G2", "G3", "G4", "G5"} {
 			fmt.Fprintf(&b, "| %s | %s: %s | %s: %s |\n", g, c.GatesConventionFree[g].Result, c.GatesConventionFree[g].Detail, c.GatesAllSample[g].Result, c.GatesAllSample[g].Detail)
 		}
 		fmt.Fprintf(&b, "| K injection | %s | %s |\n\n", injectionLine(c.Injection), injectionLine(c.Injection))
-		if c.PromptGap != "" {
-			b.WriteString("Prompt-gap finding: " + c.PromptGap + ".\n\n")
+		fmt.Fprintf(&b, "Size of the wins: cost ratio %s; latency ratio p50 %s, p95 %s.\n\n", ratioLine(c.CostRatio), ratioLine(c.LatencyP50), ratioLine(c.LatencyP95))
+		if len(c.DG1) > 0 {
+			b.WriteString("Arm D diagnostics (no gate): ")
+			for _, e := range c.DG1 {
+				fmt.Fprintf(&b, "DG1 %s %s [%s]; ", e.Metric, e.Pair, fmtInterval(e))
+			}
+			for _, e := range c.DG2 {
+				fmt.Fprintf(&b, "DG2 %s %s [%s]; ", e.Metric, e.Pair, fmtInterval(e))
+			}
+			b.WriteString("\n\n")
 		}
+		if c.DGReading != "" {
+			b.WriteString("Arm D reading (a finding, not a verdict): " + c.DGReading + ".\n\n")
+		}
+		ag := c.Agreement
+		fmt.Fprintf(&b, "Agreement with the fresh incumbent output (not a gate): classes both %d, c_zero %d, c_failed %d, a_failed %d; AG1 mean J %s, same support set %s; AG2 within 1 %s; AG3 top key %s, top theme %s; AG4 theme L1 mean %s.\n\n",
+			ag.Both, ag.CZero, ag.CFailed, ag.AFailed, fnum(ag.AG1Mean, 3), frate(ag.AG1Same), frate(ag.AG2Within), frate(ag.AG3Key), frate(ag.AG3Theme), fnum(ag.AG4.Mean, 3))
+	}
+	if d.DAgreement != nil {
+		ag := d.DAgreement
+		fmt.Fprintf(&b, "Arm D against arm A (diagnostic): AG1 %s; AG3 top key %s.\n", fnum(ag.AG1Mean, 3), frate(ag.AG3Key))
 	}
 	return b.String()
+}
+
+func ratioLine(r Ratio) string {
+	if r.Value == nil {
+		return "n/a (" + r.Why + ")"
+	}
+	return fmt.Sprintf("%.3f [%.3f, %.3f] over %d bundles", *r.Value, *r.Lo, *r.Hi, r.N)
 }
 
 func injectionLine(v InjectionVerdict) string {

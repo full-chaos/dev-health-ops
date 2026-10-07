@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/investment/categorize"
 )
@@ -124,6 +125,7 @@ func newScenario(t *testing.T, mutate func(env *testEnv, fx testFixtures, behave
 		t.Errorf("incumbent fake: unknown prompt")
 		return []byte(`{}`)
 	})
+	env.oai.delay = 15 * time.Millisecond // the incumbent is slower than the decision backends, as on the real wire
 	fixtures := append(fx.gated(), fx.short)
 	for _, arm := range []string{ArmIncumbent, ArmJev, ArmDecisions} {
 		mustRun(t, newCfg(t, env, fixtures, arm))

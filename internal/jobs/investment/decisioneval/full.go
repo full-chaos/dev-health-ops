@@ -131,6 +131,7 @@ type FullMetrics struct {
 	Arms             map[string]*ArmFull `json:"arms"`
 	Pairs            []PairDisagreement  `json:"pairs"`
 	UnionStratum     int                 `json:"union_stratum_size"`
+	Agreement        []AgreementMetrics  `json:"agreement_vs_A,omitempty"`
 	Sample           []string            `json:"sample_bundle_ids,omitempty"`
 	SampleSeed       int                 `json:"sample_seed"`
 }
@@ -419,6 +420,18 @@ func ScoreFull(ctx context.Context, cfg FullConfig) (*FullMetrics, error) {
 		}
 		m.Arms[arm] = af
 	}
+	if inc := pop.rows[ArmIncumbent]; inc != nil {
+		for _, arm := range pop.arms {
+			if arm == ArmIncumbent {
+				continue
+			}
+			var pairs []agreementPair
+			for _, id := range pop.full {
+				pairs = append(pairs, agreementPair{bundle: id, c: pop.rows[arm][id], a: inc[id]})
+			}
+			m.Agreement = append(m.Agreement, computeAgreement(arm, ArmIncumbent, pairs, cfg.Resamples))
+		}
+	}
 	dis := pop.computeDisagreement()
 	m.UnionStratum = len(dis.union)
 	for _, c := range pop.arms {
@@ -627,6 +640,14 @@ func RenderFullMarkdown(m *FullMetrics) string {
 				g.NClassified, g.NZeroClaim, g.NNoClaim, g.C1TotalUSD, fnum(g.C1PerStrict, 6), fnum(g.C1PerAccepted, 6),
 				fnum(g.C2InputMean, 0), fnum(g.C2InputP95, 0), fnum(g.C2OutputMean, 0), fnum(g.C2OutputP95, 0), fnum(g.C2CachedMean, 0), fnum(g.T1LatencyP50, 0), fnum(g.T1LatencyP95, 0))
 		}
+	}
+	if len(m.Agreement) > 0 {
+		b.WriteString("## Agreement with the fresh incumbent output (design 9.4a; not a gate)\n\n| arm | both / c_zero / c_failed / a_failed | AG1 mean J | same support set | AG2 within 1 | AG3 top key | AG3 top theme | AG4 theme L1 mean |\n|---|---|---|---|---|---|---|---|\n")
+		for _, e := range m.Agreement {
+			fmt.Fprintf(&b, "| %s | %d / %d / %d / %d | %s | %s | %s | %s | %s | %s |\n", e.Candidate, e.Both, e.CZero, e.CFailed, e.AFailed,
+				fnum(e.AG1Mean, 3), frate(e.AG1Same), frate(e.AG2Within), frate(e.AG3Key), frate(e.AG3Theme), fnum(e.AG4.Mean, 3))
+		}
+		b.WriteString("\n")
 	}
 	if len(m.Pairs) > 0 {
 		b.WriteString("## Disagreement of claimed support sets (scored pipeline), sample population\n\n| candidate | baseline | disagree | population | pi |\n|---|---|---|---|---|\n")

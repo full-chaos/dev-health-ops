@@ -918,6 +918,7 @@ type ComplexityRoot struct {
 		HasData func(childComplexity int) int
 		Key     func(childComplexity int) int
 		Label   func(childComplexity int) int
+		Scope   func(childComplexity int) int
 		Unit    func(childComplexity int) int
 		Value   func(childComplexity int) int
 	}
@@ -5685,6 +5686,13 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 
 		return e.complexity.OperatingReviewMetric.Label(childComplexity), true
 
+	case "OperatingReviewMetric.scope":
+		if e.complexity.OperatingReviewMetric.Scope == nil {
+			break
+		}
+
+		return e.complexity.OperatingReviewMetric.Scope(childComplexity), true
+
 	case "OperatingReviewMetric.unit":
 		if e.complexity.OperatingReviewMetric.Unit == nil {
 			break
@@ -10368,6 +10376,10 @@ type OperatingReviewDelta {
 
 input OperatingReviewInput {
   teamId: String = null
+  """
+  Teams to review together (CHAOS-8516). The answer is the review of the UNION of these teams' stored rows, by the same rules as the one-team and the all-teams review: a count is a sum, a ratio is made from summed numerators and denominators, and a mean is a mean over the stored rows, never a mean of team values. One id gives the one-team review. Null or empty = ` + "`" + `` + "`" + `teamId` + "`" + `` + "`" + ` applies (or all teams). ` + "`" + `` + "`" + `teamId` + "`" + `` + "`" + ` and ` + "`" + `` + "`" + `teamIds` + "`" + `` + "`" + ` together are an error. Rows with no team are in the all-teams review only.
+  """
+  teamIds: [String!] = null
   weekStart: Date!
 }
 
@@ -10381,6 +10393,21 @@ type OperatingReviewMetric {
   True = the week holds a stored value for the metric (CHAOS-8115). False = no row of the metric's daily table in the week, only NULL values, or a read that failed: ` + "`" + `` + "`" + `value` + "`" + `` + "`" + ` is then a 0 placeholder, not a measured zero, and a client draws "No data". True with ` + "`" + `` + "`" + `value` + "`" + `` + "`" + ` 0 is a stored zero.
   """
   hasData: Boolean!
+  """
+  Whether the request's team selection narrows this metric (CHAOS-8516).
+  """
+  scope: OperatingReviewMetricScope!
+}
+
+enum OperatingReviewMetricScope {
+  """
+  The value follows the request's team selection: one team, several teams together, or all teams when none is selected.
+  """
+  TEAM
+  """
+  The value is the whole organisation's, whatever team is selected: the metric's daily tables hold no team. A client labels it "organisation", not as the selection's value.
+  """
+  ORGANIZATION
 }
 
 type OperatingReviewSection {
@@ -41116,6 +41143,50 @@ func (ec *executionContext) fieldContext_OperatingReviewMetric_hasData(_ context
 	return fc, nil
 }
 
+func (ec *executionContext) _OperatingReviewMetric_scope(ctx context.Context, field graphql.CollectedField, obj *model.OperatingReviewMetric) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_OperatingReviewMetric_scope(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.Scope, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(model.OperatingReviewMetricScope)
+	fc.Result = res
+	return ec.marshalNOperatingReviewMetricScope2githubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋinternalᚋqueryapiᚋgraphᚋmodelᚐOperatingReviewMetricScope(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_OperatingReviewMetric_scope(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "OperatingReviewMetric",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type OperatingReviewMetricScope does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _OperatingReviewSection_key(ctx context.Context, field graphql.CollectedField, obj *model.OperatingReviewSection) (ret graphql.Marshaler) {
 	fc, err := ec.fieldContext_OperatingReviewSection_key(ctx, field)
 	if err != nil {
@@ -41255,6 +41326,8 @@ func (ec *executionContext) fieldContext_OperatingReviewSection_metrics(_ contex
 				return ec.fieldContext_OperatingReviewMetric_delta(ctx, field)
 			case "hasData":
 				return ec.fieldContext_OperatingReviewMetric_hasData(ctx, field)
+			case "scope":
+				return ec.fieldContext_OperatingReviewMetric_scope(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type OperatingReviewMetric", field.Name)
 		},
@@ -64716,7 +64789,7 @@ func (ec *executionContext) unmarshalInputOperatingReviewInput(ctx context.Conte
 		asMap[k] = v
 	}
 
-	fieldsInOrder := [...]string{"teamId", "weekStart"}
+	fieldsInOrder := [...]string{"teamId", "teamIds", "weekStart"}
 	for _, k := range fieldsInOrder {
 		v, ok := asMap[k]
 		if !ok {
@@ -64730,6 +64803,13 @@ func (ec *executionContext) unmarshalInputOperatingReviewInput(ctx context.Conte
 				return it, err
 			}
 			it.TeamID = data
+		case "teamIds":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("teamIds"))
+			data, err := ec.unmarshalOString2ᚕstringᚄ(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.TeamIds = data
 		case "weekStart":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("weekStart"))
 			data, err := ec.unmarshalNDate2githubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋinternalᚋqueryapiᚋgraphqldateᚐDate(ctx, v)
@@ -71375,6 +71455,11 @@ func (ec *executionContext) _OperatingReviewMetric(ctx context.Context, sel ast.
 			}
 		case "hasData":
 			out.Values[i] = ec._OperatingReviewMetric_hasData(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "scope":
+			out.Values[i] = ec._OperatingReviewMetric_scope(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
@@ -79695,6 +79780,16 @@ func (ec *executionContext) marshalNOperatingReviewMetric2ᚕgithubᚗcomᚋfull
 	}
 
 	return ret
+}
+
+func (ec *executionContext) unmarshalNOperatingReviewMetricScope2githubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋinternalᚋqueryapiᚋgraphᚋmodelᚐOperatingReviewMetricScope(ctx context.Context, v any) (model.OperatingReviewMetricScope, error) {
+	var res model.OperatingReviewMetricScope
+	err := res.UnmarshalGQL(v)
+	return res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalNOperatingReviewMetricScope2githubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋinternalᚋqueryapiᚋgraphᚋmodelᚐOperatingReviewMetricScope(ctx context.Context, sel ast.SelectionSet, v model.OperatingReviewMetricScope) graphql.Marshaler {
+	return v
 }
 
 func (ec *executionContext) marshalNOperatingReviewSection2githubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋinternalᚋqueryapiᚋgraphᚋmodelᚐOperatingReviewSection(ctx context.Context, sel ast.SelectionSet, v model.OperatingReviewSection) graphql.Marshaler {

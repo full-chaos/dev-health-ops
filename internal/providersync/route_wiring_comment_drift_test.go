@@ -578,19 +578,19 @@ type Detached struct{}
 func TestDriftGuardCoversConstructorDocsAndDeepFields(t *testing.T) {
 	wired := symbolsConstructedByTheWorker(t)
 
-	// The worker calls NewGitLabWorkItemDeriver directly, so a doc comment on
-	// the FUNC is as load-bearing as one on the type.
-	if !wired["NewGitLabWorkItemDeriver"] {
-		t.Error("discovery does not see the constructor NewGitLabWorkItemDeriver by name")
+	// The worker calls NewGitHubWorkItemClickHouseEffects directly, so a
+	// doc comment on the FUNC is as load-bearing as one on the type.
+	if !wired["NewGitHubWorkItemClickHouseEffects"] {
+		t.Error("discovery does not see the constructor NewGitHubWorkItemClickHouseEffects by name")
 	}
 	var sawConstructorDoc bool
 	for _, decl := range packageTypeDecls(t) {
-		if decl.name == "NewGitLabWorkItemDeriver" && decl.spec == nil {
+		if decl.name == "NewGitHubWorkItemClickHouseEffects" && decl.spec == nil {
 			sawConstructorDoc = true
 		}
 	}
 	if !sawConstructorDoc {
-		t.Error("the decl walk yields no func entry for NewGitLabWorkItemDeriver -- " +
+		t.Error("the decl walk yields no func entry for NewGitHubWorkItemClickHouseEffects -- " +
 			"a stale claim on a constructor would never be checked")
 	}
 
@@ -609,13 +609,13 @@ func TestDriftGuardCoversConstructorDocsAndDeepFields(t *testing.T) {
 func TestDriftGuardSeesTheSymbolsItMustCover(t *testing.T) {
 	wired := symbolsConstructedByTheWorker(t)
 	mustSee := map[string]string{
-		"GitHubWorkItemsRouteHandler":  "assigned to routeHandler directly",
-		"GitLabWorkItemsRouteHandler":  "assigned to routeHandler directly",
-		"JiraAtlassianRouteHandler":    "assigned to routeHandler directly",
-		"GitLabWorkItemDeriver":        "reached via the NewX constructor name",
-		"JiraWorkItemDeriver":          "reached via the NewX constructor name",
-		"LinearWorkItemsRouteHandler":  "reached via the one-hop field LinearWorkItemFamilyRouteHandler.Direct",
-		"GitHubWorkItemsRESTCollector": "reached via the one-hop field GitHubWorkItemsRouteHandler.REST",
+		"GitHubWorkItemsRouteHandler":            "assigned to routeHandler directly",
+		"GitLabWorkItemsRouteHandler":            "assigned to routeHandler directly",
+		"JiraAtlassianRouteHandler":              "assigned to routeHandler directly",
+		"GitLabWorkItemFamilyClickHouseEffects":  "reached via the NewX constructor name",
+		"JiraWorkItemCompositeClickHouseEffects": "reached via the NewX constructor name",
+		"LinearWorkItemsRouteHandler":            "reached via the one-hop field LinearWorkItemFamilyRouteHandler.Direct",
+		"GitHubWorkItemsRESTCollector":           "reached via the one-hop field GitHubWorkItemsRouteHandler.REST",
 	}
 	for name, how := range mustSee {
 		if !wired[name] {
@@ -628,6 +628,18 @@ func TestDriftGuardSeesTheSymbolsItMustCover(t *testing.T) {
 	// JiraWorkItemsRouteHandler is genuinely unconstructed -- jira's live path
 	// uses JiraAtlassianRouteHandler -- and its "intentionally unregistered"
 	// comment is TRUE and must stay (CHAOS-4848).
+	// The four work-item derivers are not wired either: the work-items unit
+	// writes raw rows only and the worker constructs no deriver. Their doc
+	// comments say so, and a guard that reported them as wired would force
+	// those comments to be falsified.
+	for _, deriver := range []string{
+		"GitHubWorkItemDeriver", "GitLabWorkItemDeriver",
+		"JiraWorkItemDeriver", "LinearWorkItemDeriver",
+	} {
+		if wired[deriver] || wired["New"+deriver] {
+			t.Errorf("%s is reported as wired, but the worker constructs no work-item deriver", deriver)
+		}
+	}
 	if wired["JiraWorkItemsRouteHandler"] {
 		t.Error("JiraWorkItemsRouteHandler is reported as wired, but jira's live route is " +
 			"JiraAtlassianRouteHandler; treating it as wired would force a correct comment to be falsified")

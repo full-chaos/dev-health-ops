@@ -215,7 +215,9 @@ func TestJiraCompositeSinkOwnsDirectDerivedAndEvaluatedEmptyAI(t *testing.T) {
 	}
 }
 
-func TestJiraMetricTripletEffectsReachTheirMigratedStores(t *testing.T) {
+// The Jira sync sink refuses the three work-item metric tables before any
+// store call: the daily job is their one writer.
+func TestJiraSyncSinkRefusesTheMetricTripletEffects(t *testing.T) {
 	claim := nativeTestClaim("jira", "work-items")
 	group := githubWorkItemMetricTestGroupRow()
 	group.Provider, group.OrgID = "jira", claim.OrgID
@@ -243,11 +245,11 @@ func TestJiraMetricTripletEffectsReachTheirMigratedStores(t *testing.T) {
 		switch effect.Destination {
 		case "work_item_metrics_daily", "work_item_user_metrics_daily", "work_item_cycle_times":
 			seen++
-			if err := sink.WriteEffect(context.Background(), claim, effect); !errors.Is(err, errJiraDerivedPrepare) {
-				t.Fatalf("%s write=%v want migrated store call", effect.Destination, err)
+			if err := sink.WriteEffect(context.Background(), claim, effect); !errors.Is(err, ErrInvalidConfiguration) || errors.Is(err, errJiraDerivedPrepare) {
+				t.Fatalf("%s write=%v want a refusal before the store", effect.Destination, err)
 			}
-			if inspection, err := sink.InspectEffect(context.Background(), claim, effect); inspection != EffectConflict || !errors.Is(err, errJiraDerivedPrepare) {
-				t.Fatalf("%s readback=%v/%v want migrated store call", effect.Destination, inspection, err)
+			if inspection, err := sink.InspectEffect(context.Background(), claim, effect); inspection != EffectConflict || !errors.Is(err, ErrInvalidConfiguration) || errors.Is(err, errJiraDerivedPrepare) {
+				t.Fatalf("%s readback=%v/%v want a refusal before the store", effect.Destination, inspection, err)
 			}
 		}
 	}

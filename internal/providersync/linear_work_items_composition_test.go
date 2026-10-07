@@ -14,24 +14,18 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/teamattribution"
 )
 
+// linearFamilyDestinations is the effect set of one Linear work-items unit:
+// the eight raw tables and ai_attribution, which is read from the item labels.
+// No table the daily job computes from stored rows is in it.
 var linearFamilyDestinations = []string{
 	"ai_attribution",
-	"estimate_coverage_metrics_daily",
-	"investment_classifications_daily",
-	"investment_metrics_daily",
-	"issue_type_metrics_daily",
 	"project_membership_transitions",
 	"projects",
 	"sprints",
-	"work_item_cycle_times",
 	"work_item_dependencies",
 	"work_item_interactions",
-	"work_item_metrics_daily",
 	"work_item_reopen_events",
-	"work_item_state_durations_daily",
-	"work_item_team_attributions",
 	"work_item_transitions",
-	"work_item_user_metrics_daily",
 	"work_items",
 }
 
@@ -129,7 +123,7 @@ func TestLinearWorkItemFamilyConstructionExposesOneCompleteBoundary(t *testing.T
 	// as of CHAOS-4193 (project_membership_transitions, projects), the same
 	// as github's CHAOS-4194 addition. Sorted for comparison because
 	// linearFamilyRawDestinations appends them at the end while
-	// linearFamilyDestinations (raw+derived, alphabetized) does not.
+	// linearFamilyDestinations (alphabetized) does not.
 	gotDestinations := append([]string(nil), linearFamilyRawDestinations()...)
 	slices.Sort(gotDestinations)
 	if !slices.Equal(gotDestinations, linearFamilyDestinations) {
@@ -143,10 +137,34 @@ func TestLinearWorkItemFamilyConstructionExposesOneCompleteBoundary(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	effects := append(raw, derived...)
-	sortEffectBatches(effects)
 	claim := linearFamilyClaim()
-	for index, effect := range effects {
+	// The sink accepts the unit's own effect set and refuses each table of
+	// the daily job: a refused effect never reaches a store.
+	accepted := make([]EffectBatch, 0, len(linearFamilyDestinations))
+	refused := make([]string, 0, len(githubWorkItemDerivedDestinations))
+	for _, effect := range append(raw, derived...) {
+		if !slices.Contains(githubWorkItemDerivedDestinations, effect.Destination) {
+			accepted = append(accepted, effect)
+			continue
+		}
+		if writeErr := sink.WriteEffect(context.Background(), claim, effect); !errors.Is(writeErr, ErrInvalidConfiguration) {
+			t.Fatalf("%s: the sync sink wrote a table of the daily job: %v", effect.Destination, writeErr)
+		}
+		inspection, inspectErr := sink.InspectEffect(context.Background(), claim, effect)
+		if !errors.Is(inspectErr, ErrInvalidConfiguration) || inspection != EffectConflict {
+			t.Fatalf("%s: readback=%s error=%v want a refused conflict", effect.Destination, inspection, inspectErr)
+		}
+		refused = append(refused, effect.Destination)
+	}
+	slices.Sort(refused)
+	if !slices.Equal(refused, githubWorkItemDerivedDestinations) {
+		t.Fatalf("refused=%v want=%v", refused, githubWorkItemDerivedDestinations)
+	}
+	sortEffectBatches(accepted)
+	if len(accepted) != len(linearFamilyDestinations) {
+		t.Fatalf("accepted effects=%d want=%d", len(accepted), len(linearFamilyDestinations))
+	}
+	for index, effect := range accepted {
 		if effect.Destination != linearFamilyDestinations[index] {
 			t.Fatalf("empty effect[%d]=%q", index, effect.Destination)
 		}
@@ -160,7 +178,10 @@ func TestLinearWorkItemFamilyConstructionExposesOneCompleteBoundary(t *testing.T
 	}
 }
 
-func TestLinearWorkItemFamilyCollectsAndCommitsAllSixteenDestinations(t *testing.T) {
+// One Linear work-items unit collects and commits its raw effect set, counts
+// itself once as a unit that left the derived tables to the daily job, and
+// builds no effect for one of them.
+func TestLinearWorkItemFamilyCollectsAndCommitsRawRowsOnly(t *testing.T) {
 	claim := linearFamilyClaim()
 	doer := &linearWorkItemsDoer{responses: []string{
 		linearFamilyEmptyCyclesResponse(),
@@ -170,10 +191,13 @@ func TestLinearWorkItemFamilyCollectsAndCommitsAllSixteenDestinations(t *testing
 		Direct: linearFamilyDirectHandler(),
 	}
 	normalizedAt := time.Date(2026, 8, 3, 12, 0, 0, 987654321, time.UTC)
+	client := linearWorkItemsClient(t, fakehttp.Client(doer))
+	leftToDaily := providerfoundation.NewMetrics()
+	client.Metrics = leftToDaily
 	batch, err := handler.Collect(
 		context.Background(), claim,
 		providerfoundation.Credential{Provider: "linear", ID: claim.CredentialID},
-		linearWorkItemsClient(t, fakehttp.Client(doer)), normalizedAt,
+		client, normalizedAt,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -195,14 +219,23 @@ func TestLinearWorkItemFamilyCollectsAndCommitsAllSixteenDestinations(t *testing
 		t.Fatalf("watermark=%v want=%v", batch.Watermark, claim.BeforeAt)
 	}
 	byDestination := linearFamilyEffectsByDestination(batch.Effects)
-	if len(byDestination["work_items"].Rows) != 1 ||
-		len(byDestination["work_item_team_attributions"].Rows) == 0 {
-		t.Fatalf(
-			"raw/derived composition is incomplete: work_items=%d teams=%d",
-			len(byDestination["work_items"].Rows),
-			len(byDestination["work_item_team_attributions"].Rows),
-		)
+	if len(byDestination["work_items"].Rows) != 1 {
+		t.Fatalf("work_items rows=%d want=1", len(byDestination["work_items"].Rows))
 	}
+	for _, destination := range githubWorkItemDerivedDestinations {
+		if _, present := byDestination[destination]; present {
+			t.Fatalf("the unit built an effect for the derived table %q", destination)
+		}
+	}
+	for _, key := range []string{
+		"team_inheritance", "team_attribution_written", "derived_destinations_implemented",
+		"derived_destinations_unimplemented", "watermark_held_for_derived_gap",
+	} {
+		if _, present := batch.Result[key]; present {
+			t.Fatalf("result still carries %q: %+v", key, batch.Result)
+		}
+	}
+	assertWorkItemDerivedTablesLeftToDailyJob(t, leftToDaily, "linear", 1)
 
 	backend := newLinearSemanticEffectBackend()
 	lease := providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil })
@@ -253,43 +286,10 @@ func TestLinearWorkItemFamilyKeepsEveryEmptyDestinationExplicit(t *testing.T) {
 	}
 }
 
-func TestLinearWorkItemFamilyFailsBeforeIOAndWithholdsDerivationGap(t *testing.T) {
+func TestLinearWorkItemFamilyRejectsConstructionDefectsBeforeIO(t *testing.T) {
 	claim := linearFamilyClaim()
 	credential := providerfoundation.Credential{Provider: "linear", ID: claim.CredentialID}
 	normalizedAt := time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC)
-
-	t.Run("missing deriver is a construction failure before provider IO", func(t *testing.T) {
-		doer := &linearWorkItemsDoer{}
-		batch, err := (LinearWorkItemFamilyRouteHandler{
-			Direct: linearFamilyDirectHandler(),
-		}).Collect(
-			context.Background(), claim, credential,
-			linearWorkItemsClient(t, fakehttp.Client(doer)), normalizedAt,
-		)
-		if !errors.Is(err, ErrInvalidConfiguration) || len(doer.requests) != 0 ||
-			len(batch.Effects) != 0 || batch.Watermark != nil {
-			t.Fatalf("batch=%+v requests=%d error=%v", batch, len(doer.requests), err)
-		}
-	})
-
-	t.Run("derived failure returns no committable batch or watermark", func(t *testing.T) {
-		gap := errors.New("derived context unavailable")
-		doer := &linearWorkItemsDoer{responses: []string{
-			linearFamilyEmptyCyclesResponse(),
-			linearLifecycleIssueResponse("ENG-2", "ENG"),
-		}}
-		batch, err := (LinearWorkItemFamilyRouteHandler{
-			Direct: linearFamilyDirectHandler(),
-		}).Collect(
-			context.Background(), claim, credential,
-			linearWorkItemsClient(t, fakehttp.Client(doer)), normalizedAt,
-		)
-		if !errors.Is(err, gap) || len(doer.requests) != 2 ||
-			len(batch.Effects) != 0 || batch.Watermark != nil || batch.Result != nil ||
-			batch.Evidence != (FetchEvidence{}) {
-			t.Fatalf("batch=%+v requests=%d error=%v", batch, len(doer.requests), err)
-		}
-	})
 
 	t.Run("disabled family fetches are rejected before provider IO", func(t *testing.T) {
 		for _, disable := range []func(*LinearWorkItemsRouteHandler){
@@ -363,7 +363,15 @@ func TestLinearWorkItemFamilyEffectsFailClosedWhenEitherHalfIsIncomplete(t *test
 			},
 		},
 		{
-			name: "derived adapter", missing: []string{"investment_metrics_daily"}, effect: raw[0],
+			name: "ai attribution adapter", missing: []string{"ai_attribution"}, effect: raw[0],
+			mutate: func(sink *LinearWorkItemFamilyClickHouseEffects) {
+				sink.Derived.AIAttribution = nil
+			},
+		},
+		{
+			// An adapter of a table the daily job owns is no part of the
+			// sync sink: a sink without it is complete.
+			name: "daily job adapter is not owed", missing: []string{},
 			mutate: func(sink *LinearWorkItemFamilyClickHouseEffects) {
 				sink.Derived.InvestmentMetricsDaily = nil
 			},
@@ -381,15 +389,9 @@ func TestLinearWorkItemFamilyEffectsFailClosedWhenEitherHalfIsIncomplete(t *test
 			},
 		},
 		{
-			name: "derived lease",
-			missing: []string{
-				"ai_attribution", "estimate_coverage_metrics_daily",
-				"investment_classifications_daily", "investment_metrics_daily",
-				"issue_type_metrics_daily", "work_item_cycle_times",
-				"work_item_metrics_daily", "work_item_state_durations_daily",
-				"work_item_team_attributions", "work_item_user_metrics_daily",
-			},
-			effect: raw[0],
+			name:    "derived lease",
+			missing: []string{"ai_attribution"},
+			effect:  raw[0],
 			mutate: func(sink *LinearWorkItemFamilyClickHouseEffects) {
 				sink.Derived.Lease = nil
 			},
@@ -400,6 +402,14 @@ func TestLinearWorkItemFamilyEffectsFailClosedWhenEitherHalfIsIncomplete(t *test
 			testCase.mutate(&sink)
 			if missing := sink.MissingDestinations(); !slices.Equal(missing, testCase.missing) {
 				t.Fatalf("missing=%v", missing)
+			}
+			if len(testCase.missing) == 0 {
+				for _, effect := range raw {
+					if err := sink.WriteEffect(context.Background(), claim, effect); err != nil {
+						t.Fatalf("complete sink write %s: %v", effect.Destination, err)
+					}
+				}
+				return
 			}
 			if err := sink.WriteEffect(context.Background(), claim, testCase.effect); !errors.Is(err, ErrInvalidConfiguration) {
 				t.Fatalf("partial sink write error=%v", err)

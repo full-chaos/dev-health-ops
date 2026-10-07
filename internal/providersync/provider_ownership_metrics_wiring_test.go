@@ -2,79 +2,67 @@ package providersync
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 )
 
-// TestGitLabWorkItemFamilyConstructorEmitsOwnershipMetrics,
-// TestJiraWorkItemCompositeConstructorEmitsOwnershipMetrics, and
-// TestLinearWorkItemFamilyConstructorEmitsOwnershipMetrics are CHAOS-4320's
-// red-first pins for codex round 6's second P1 (NOT CLEAN, executed repro):
-// the real worker constructors (internal/workerservice/provider_sync.go)
-// called these three providers' family/composite constructors WITHOUT a
-// Metrics argument at all -- the rejection/ownership plumbing this ticket
-// adds was otherwise correct for all four providers, but
-// RecordTeamAttributionOwnershipChecked's nil-receiver-safe no-op silently
-// swallowed every sample for GitLab, Jira, and Linear regardless: a write
-// could succeed and still produce zero ownership_checked telemetry. Round 4
-// treated this as an accepted scope limitation ("nil Metrics means this new
-// counter is not a provider-wide instrument"); round 6 held the PR body's
-// own "all four providers... to the SAME writer" claim to account and found
-// it false for three of them.
-//
-// Each test constructs the REAL family/composite sink via its REAL
-// constructor (the only way WriteEffect's completeness check passes) with a
-// real providerfoundation.Metrics, writes an effect carrying both a granted
-// candidate and a MembershipRejections entry through the real dispatch
-// path, and asserts both counter outcomes rendered.
-func TestGitLabWorkItemFamilyConstructorEmitsOwnershipMetrics(t *testing.T) {
-	claim := nativeTestClaim("gitlab", "work-items")
-	metrics := providerfoundation.NewMetrics()
-	sink, err := NewGitLabWorkItemFamilyClickHouseEffects(
-		&ownershipReasonWriteConn{}, providerOwnershipMetricsLease(), metrics,
-	)
-	if err != nil {
-		t.Fatal(err)
+// The work-items sync sinks of GitLab, Jira and Linear refuse a
+// work_item_team_attributions effect: the daily job is the one writer of that
+// table. Each case constructs the REAL family/composite sink via its REAL
+// constructor with a real providerfoundation.Metrics and hands it an effect
+// that carries a granted candidate and a MembershipRejections entry. The
+// refusal happens before any store call, so no row is appended and no
+// ownership_checked sample is rendered for a write that did not happen.
+func TestWorkItemSyncSinksRefuseTheTeamAttributionsEffect(t *testing.T) {
+	type sinkUnderTest interface {
+		EffectSink
+		EffectReadback
 	}
-	effect := providerOwnershipMetricsEffect(t, claim)
-	if err := sink.WriteEffect(context.Background(), claim, effect); err != nil {
-		t.Fatal(err)
+	for _, testCase := range []struct {
+		provider string
+		build    func(*ownershipReasonWriteConn, *providerfoundation.Metrics) (sinkUnderTest, error)
+	}{
+		{"gitlab", func(conn *ownershipReasonWriteConn, metrics *providerfoundation.Metrics) (sinkUnderTest, error) {
+			return NewGitLabWorkItemFamilyClickHouseEffects(conn, providerOwnershipMetricsLease(), metrics)
+		}},
+		{"jira", func(conn *ownershipReasonWriteConn, metrics *providerfoundation.Metrics) (sinkUnderTest, error) {
+			return NewJiraWorkItemCompositeClickHouseEffects(conn, providerOwnershipMetricsLease(), metrics)
+		}},
+		{"linear", func(conn *ownershipReasonWriteConn, metrics *providerfoundation.Metrics) (sinkUnderTest, error) {
+			return NewLinearWorkItemFamilyClickHouseEffects(conn, providerOwnershipMetricsLease(), metrics)
+		}},
+	} {
+		t.Run(testCase.provider, func(t *testing.T) {
+			claim := nativeTestClaim(testCase.provider, "work-items")
+			metrics := providerfoundation.NewMetrics()
+			conn := &ownershipReasonWriteConn{}
+			sink, err := testCase.build(conn, metrics)
+			if err != nil {
+				t.Fatal(err)
+			}
+			effect := providerOwnershipMetricsEffect(t, claim)
+			if err := sink.WriteEffect(context.Background(), claim, effect); !errors.Is(err, ErrInvalidConfiguration) {
+				t.Fatalf("write error=%v want ErrInvalidConfiguration", err)
+			}
+			inspection, err := sink.InspectEffect(context.Background(), claim, effect)
+			if !errors.Is(err, ErrInvalidConfiguration) || inspection != EffectConflict {
+				t.Fatalf("readback=%s error=%v want a refused conflict", inspection, err)
+			}
+			if conn.batch != nil {
+				t.Fatalf("the refused effect reached the store: appended=%v", conn.batch.Appended)
+			}
+			var output strings.Builder
+			if err := metrics.WritePrometheus(&output); err != nil {
+				t.Fatal(err)
+			}
+			if strings.Contains(output.String(), "dev_health_team_attribution_ownership_checked_total{") {
+				t.Fatalf("a refused write rendered an ownership sample:\n%s", output.String())
+			}
+		})
 	}
-	assertProviderOwnershipMetricsRendered(t, metrics, "gitlab")
-}
-
-func TestJiraWorkItemCompositeConstructorEmitsOwnershipMetrics(t *testing.T) {
-	claim := nativeTestClaim("jira", "work-items")
-	metrics := providerfoundation.NewMetrics()
-	sink, err := NewJiraWorkItemCompositeClickHouseEffects(
-		&ownershipReasonWriteConn{}, providerOwnershipMetricsLease(), metrics,
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	effect := providerOwnershipMetricsEffect(t, claim)
-	if err := sink.WriteEffect(context.Background(), claim, effect); err != nil {
-		t.Fatal(err)
-	}
-	assertProviderOwnershipMetricsRendered(t, metrics, "jira")
-}
-
-func TestLinearWorkItemFamilyConstructorEmitsOwnershipMetrics(t *testing.T) {
-	claim := nativeTestClaim("linear", "work-items")
-	metrics := providerfoundation.NewMetrics()
-	sink, err := NewLinearWorkItemFamilyClickHouseEffects(
-		&ownershipReasonWriteConn{}, providerOwnershipMetricsLease(), metrics,
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	effect := providerOwnershipMetricsEffect(t, claim)
-	if err := sink.WriteEffect(context.Background(), claim, effect); err != nil {
-		t.Fatal(err)
-	}
-	assertProviderOwnershipMetricsRendered(t, metrics, "linear")
 }
 
 func providerOwnershipMetricsLease() providerfoundation.LeaseGuard {
@@ -108,19 +96,4 @@ func providerOwnershipMetricsEffect(t *testing.T, claim Claim) EffectBatch {
 	}
 	effect.MembershipRejections = marshaled
 	return effect
-}
-
-func assertProviderOwnershipMetricsRendered(t *testing.T, metrics *providerfoundation.Metrics, provider string) {
-	t.Helper()
-	var output strings.Builder
-	if err := metrics.WritePrometheus(&output); err != nil {
-		t.Fatal(err)
-	}
-	rendered := output.String()
-	if !strings.Contains(rendered, `dev_health_team_attribution_ownership_checked_total{reason="ownership_unknown"} 1`) {
-		t.Fatalf("%s: granted candidate produced no ownership_unknown sample -- Metrics is likely nil in the real constructor:\n%s", provider, rendered)
-	}
-	if !strings.Contains(rendered, `dev_health_team_attribution_ownership_checked_total{reason="repo_not_owned"} 1`) {
-		t.Fatalf("%s: rejection produced no repo_not_owned sample -- Metrics is likely nil in the real constructor:\n%s", provider, rendered)
-	}
 }

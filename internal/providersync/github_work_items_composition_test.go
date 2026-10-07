@@ -839,20 +839,20 @@ func TestGitHubWorkItemCompositionNeverFailsOpen(t *testing.T) {
 	t.Run("a deliberately corrupted sink refuses every write", func(t *testing.T) {
 		t.Parallel()
 		// The complete constructor no longer has an expected-error path. Model
-		// partial construction by removing one concrete engine adapter after
-		// construction; the composite gate must still refuse EVERY destination,
-		// not merely the missing one.
+		// partial construction by removing one concrete adapter of a table the
+		// sync unit writes after construction; the composite gate must still
+		// refuse EVERY destination, not merely the missing one.
 		sink, err := NewGitHubWorkItemClickHouseEffects(
 			stubWorkItemConn{}, githubWorkItemCompositionLease(), nil,
 		)
 		if err != nil {
 			t.Fatal(err)
 		}
-		sink.InvestmentMetricsDaily = nil
+		sink.WorkItemTransitions = nil
 		if !reflect.DeepEqual(
-			sink.MissingDestinations(), []string{githubInvestmentMetricsDestination},
+			sink.MissingDestinations(), []string{"work_item_transitions"},
 		) {
-			t.Fatalf("missing=%v want investment metrics", sink.MissingDestinations())
+			t.Fatalf("missing=%v want work_item_transitions", sink.MissingDestinations())
 		}
 		effects, buildErr := BuildGitHubWorkItemEffects(GitHubWorkItemEffectRows{})
 		if buildErr != nil {

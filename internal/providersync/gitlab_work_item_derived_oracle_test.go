@@ -3,6 +3,7 @@ package providersync
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"slices"
@@ -567,7 +568,10 @@ func TestBuildGitLabWorkItemDerivedEffectsIsCanonicalAndIncludesAI(t *testing.T)
 	}
 }
 
-func TestGitLabWorkItemDerivedIdentityAcceptsAIAndRejectsRawDestinations(t *testing.T) {
+// The identity of the GitLab sync sink beside the raw tables accepts
+// ai_attribution alone: a table the daily job computes from stored rows and a
+// raw table are both refused.
+func TestGitLabWorkItemDerivedIdentityAcceptsOnlyAIAttribution(t *testing.T) {
 	claim := nativeTestClaim("gitlab", "work-items")
 	effects, err := BuildGitLabWorkItemDerivedEffects(GitLabWorkItemDerivedEffectRows{})
 	if err != nil {
@@ -576,8 +580,18 @@ func TestGitLabWorkItemDerivedIdentityAcceptsAIAndRejectsRawDestinations(t *test
 	if _, err := newGitLabWorkItemDerivedEffectIdentity(claim, effects[0]); err != nil {
 		t.Fatalf("AI destination rejected: %v", err)
 	}
-	if _, err := newGitLabWorkItemDerivedEffectIdentity(claim, effects[1]); err != nil {
-		t.Fatalf("computed destination rejected: %v", err)
+	if effects[0].Destination != "ai_attribution" {
+		t.Fatalf("effects[0]=%q", effects[0].Destination)
+	}
+	refused := make([]string, 0, len(githubWorkItemDerivedDestinations))
+	for _, effect := range effects[1:] {
+		if _, err := newGitLabWorkItemDerivedEffectIdentity(claim, effect); !errors.Is(err, ErrInvalidConfiguration) {
+			t.Fatalf("daily-job table %q accepted by the sync sink identity: %v", effect.Destination, err)
+		}
+		refused = append(refused, effect.Destination)
+	}
+	if !slices.Equal(refused, githubWorkItemDerivedDestinations) {
+		t.Fatalf("refused=%v want=%v", refused, githubWorkItemDerivedDestinations)
 	}
 	foreign := claim
 	foreign.Provider = "github"

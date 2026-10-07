@@ -40,10 +40,10 @@ var ErrGitHubWorkItemSinkIncomplete = errors.New(
 // actually implements it:
 //
 //   - provider_sync.go DOES have the case:
-//     `provider == "github" && dataset == "work-items"` (:324) calls this
-//     constructor (:329), builds the deriver via NewGitHubWorkItemDeriver
-//     (:335), and installs GitHubWorkItemsRouteHandler with both as
-//     sink and readback (:350).
+//     `provider == "github" && dataset == "work-items"` calls this
+//     constructor and installs GitHubWorkItemsRouteHandler with the sink as
+//     sink and readback. It builds no deriver: the unit writes raw rows only
+//     and the daily job writes every table computed from them.
 //   - route_ready is TRUE for all five aliases: execution_registry.go:246
 //     sets descriptor.RouteReady unconditionally for the github work-item
 //     family, and :247-249 additionally sets Plannable for the canonical

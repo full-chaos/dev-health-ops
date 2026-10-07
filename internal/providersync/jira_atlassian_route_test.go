@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -94,6 +95,36 @@ func jiraAtlassianCompleteHandler(t *testing.T) JiraAtlassianRouteHandler {
 	}
 }
 
+// jiraAtlassianRawOnlyDestinations is the effect set of one Jira work-items
+// unit: the six canonical facts, worklogs, the two project-membership tables
+// and the evaluated-empty ai_attribution effect.
+var jiraAtlassianRawOnlyDestinations = []string{
+	"ai_attribution", "project_membership_transitions", "projects", "sprints",
+	"work_item_dependencies", "work_item_interactions", "work_item_reopen_events",
+	"work_item_transitions", "work_items", "worklogs",
+}
+
+// assertJiraAtlassianRawOnlyEffects fails unless the batch holds exactly the
+// raw effect set: an optional-fetch failure must not drop a recoverable
+// effect, and no table the daily job computes from stored rows has an effect.
+func assertJiraAtlassianRawOnlyEffects(t *testing.T, batch CompleteRouteBatch) {
+	t.Helper()
+	got := make([]string, 0, len(batch.Effects))
+	for _, effect := range batch.Effects {
+		got = append(got, effect.Destination)
+		if slices.Contains(githubWorkItemDerivedDestinations, effect.Destination) {
+			t.Fatalf("the unit built an effect for the derived table %q", effect.Destination)
+		}
+		if effect.Destination == "ai_attribution" && len(effect.Rows) != 0 {
+			t.Fatalf("jira ai_attribution rows=%d want the evaluated-empty effect", len(effect.Rows))
+		}
+	}
+	slices.Sort(got)
+	if !slices.Equal(got, jiraAtlassianRawOnlyDestinations) {
+		t.Fatalf("effect destinations=%v want=%v", got, jiraAtlassianRawOnlyDestinations)
+	}
+}
+
 func TestJiraAtlassianRouteCollectsWorklogsBoardsAndCanonicalEdges(t *testing.T) {
 	claim := jiraAtlassianClaim()
 	doer := &jiraAtlassianDoer{t: t}
@@ -108,9 +139,7 @@ func TestJiraAtlassianRouteCollectsWorklogsBoardsAndCanonicalEdges(t *testing.T)
 	if batch.Watermark == nil || !batch.Watermark.Equal(*claim.BeforeAt) {
 		t.Fatalf("watermark=%v want=%v", batch.Watermark, claim.BeforeAt)
 	}
-	if len(batch.Effects) != 19 {
-		t.Fatalf("effects=%d want=19 (six canonical facts, worklogs, two project-membership, and ten derived)", len(batch.Effects))
-	}
+	assertJiraAtlassianRawOnlyEffects(t, batch)
 	if batch.Result["worklogs_synced"] != 1 || batch.Result["sprints_synced"] != 1 || batch.Result["dependencies_synced"] != 1 || batch.Result["interactions_synced"] != 1 {
 		t.Fatalf("result=%#v", batch.Result)
 	}
@@ -592,9 +621,7 @@ func TestJiraAtlassianRouteWorklogFailureIsTypedAndWithholdsWatermark(t *testing
 	if batch.Watermark != nil {
 		t.Fatalf("optional worklog failure advanced watermark: %v", batch.Watermark)
 	}
-	if len(batch.Effects) != 19 {
-		t.Fatalf("optional worklog failure dropped recoverable effects: %d", len(batch.Effects))
-	}
+	assertJiraAtlassianRawOnlyEffects(t, batch)
 	incomplete, ok := batch.Result["incomplete"].([]string)
 	if !ok || len(incomplete) != 1 || incomplete[0] != "worklogs:jira:OPS-201" {
 		t.Fatalf("incomplete=%#v", batch.Result["incomplete"])
@@ -620,9 +647,7 @@ func TestJiraAtlassianReferenceSinkFailureLandsEffectsAndWithholdsWatermark(t *t
 	if batch.Watermark != nil {
 		t.Fatalf("reference sink failure advanced watermark: %v", batch.Watermark)
 	}
-	if len(batch.Effects) != 19 {
-		t.Fatalf("reference sink failure dropped recoverable effects: %d", len(batch.Effects))
-	}
+	assertJiraAtlassianRawOnlyEffects(t, batch)
 	incomplete, ok := batch.Result["incomplete"].([]string)
 	if !ok || len(incomplete) != 1 || incomplete[0] != "reference_sink" {
 		t.Fatalf("incomplete=%#v", batch.Result["incomplete"])
@@ -662,9 +687,7 @@ func TestJiraAtlassianGraphQLWorklogPreservesNameIdentity(t *testing.T) {
 	if !observation.GraphQLAttempted || !observation.GraphQLSucceeded || observation.RESTFallbackUsed || observation.GraphQLRequests != 1 || observation.RESTRequests != 0 {
 		t.Fatalf("GraphQL observation=%+v", observation)
 	}
-	if len(batch.Effects) != 19 {
-		t.Fatalf("effects=%d want=19", len(batch.Effects))
-	}
+	assertJiraAtlassianRawOnlyEffects(t, batch)
 	var worklog jiraWorklogRow
 	for _, effect := range batch.Effects {
 		if effect.Destination != "worklogs" || len(effect.Rows) != 1 {

@@ -105,22 +105,13 @@ func gitlabWorkItemRowsAsGitHub(rows gitlabWorkItemRows) githubWorkItemRows {
 
 // GitLabWorkItemDeriver owns the compute boundary for GitLab work items.
 //
-// WIRING: WIRED. internal/workerservice/provider_sync.go's
-// `provider == "gitlab" && dataset == "work-items"` case (:351) constructs
-// this deriver through NewGitLabWorkItemDeriver (:362) and passes it as
-// GitLabWorkItemsRouteHandler{Derived: ...}; the effect sink and readback come
-// from NewGitLabWorkItemFamilyClickHouseEffects. execution_registry.go:296-301
-// (`case provider == "gitlab" && workItemAlias`) sets RouteReady and, for the
-// canonical dataset, Plannable. Cite the case predicates and constructor names
-// above rather than the line numbers alone -- the names are what survive an
-// edit that shifts these anchors.
-//
-// SUPERSEDED: "It is intentionally unregistered: the provider route/cutover
-// SUPERSEDED: wiring remains a separate slice."
-//
-// That was accurate while the compute boundary landed ahead of its route, and
-// is now false. Kept visible rather than silently deleted because the stale
-// form made a WIRED writer read as dead code (CHAOS-4731 lost time to it).
+// WIRING: NOT WIRED. No production code constructs this deriver. The GitLab
+// work-items unit (internal/workerservice/provider_sync.go's
+// `provider == "gitlab" && dataset == "work-items"` case) writes raw rows only
+// through GitLabWorkItemsRouteHandler and
+// NewGitLabWorkItemFamilyClickHouseEffects; the daily job writes every table
+// this deriver computed. The type stays as unreferenced code until its
+// removal.
 type GitLabWorkItemDeriver struct {
 	Source               githubWorkItemDerivationContextSource
 	statusMapping        *StatusMapping

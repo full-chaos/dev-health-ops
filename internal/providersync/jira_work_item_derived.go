@@ -84,24 +84,17 @@ func jiraWorkItemRowsAsGitHub(rows jiraWorkItemRows) githubWorkItemRows {
 	}
 }
 
-// jiraWorkItemsDeriver is the injection point at the provider route boundary.
-// The interface itself is not a registry or constructor-selection seam -- that
-// part of the original comment still holds -- but it is no longer inert:
+// jiraWorkItemsDeriver was the injection point at the provider route boundary.
+// The interface is not a registry or constructor-selection seam.
 //
-// WIRING: WIRED. internal/workerservice/provider_sync.go's
-// `provider == "jira" && dataset == "work-items"` case (:375) constructs
-// JiraWorkItemDeriver through NewJiraWorkItemDeriver (:386) and injects it here
-// as JiraAtlassianRouteHandler{Derived: ...}; the effect sink and readback come
-// from NewJiraWorkItemCompositeClickHouseEffects. execution_registry.go:302-309
-// (`case provider == "jira" && workItemAlias`) sets RouteReady and, for the
-// canonical dataset, Plannable. Cite the case predicates and constructor names
-// above rather than the line numbers alone -- the names are what survive an
-// edit that shifts these anchors.
-//
-// The dropped clause was "or activation seam", which read as "nothing has
-// activated this route". Kept visible as a correction rather than deleted
-// silently: the stale form made a WIRED writer read as dead code (CHAOS-4731
-// lost time to exactly that).
+// WIRING: NOT WIRED. No production code constructs JiraWorkItemDeriver or
+// injects this interface. The Jira work-items unit
+// (internal/workerservice/provider_sync.go's
+// `provider == "jira" && dataset == "work-items"` case) writes raw rows only
+// through JiraAtlassianRouteHandler and
+// NewJiraWorkItemCompositeClickHouseEffects; the daily job writes every table
+// the deriver computed. The interface stays as unreferenced code until its
+// removal.
 type jiraWorkItemsDeriver interface {
 	Derive(context.Context, Claim, jiraWorkItemRows, time.Time) (JiraWorkItemDerivedRows, error)
 }

@@ -138,8 +138,8 @@ type JiraSprintReferenceSink func([]jiraSprintRow) error
 // WIRING: internal/workerservice/provider_sync.go's
 // `provider == "jira" && dataset == "work-items"` case constructs this handler
 // and assigns it to routeHandler, with NewJiraWorkItemCompositeClickHouseEffects
-// as sink and readback and NewJiraWorkItemDeriver as Derived. Note this is the
-// handler jira actually runs -- JiraWorkItemsRouteHandler
+// as sink and readback. The unit writes raw rows only; the daily job writes
+// every table computed from them. Note this is the handler jira actually runs -- JiraWorkItemsRouteHandler
 // (jira_work_items_route.go) is the one that is genuinely unconstructed, and
 // its own non-registration claim is TRUE and must stay. (Phrased without
 // quoting that claim verbatim on purpose: the drift guard treats an unmarked

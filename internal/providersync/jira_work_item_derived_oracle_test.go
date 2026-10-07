@@ -211,11 +211,15 @@ func jiraRowsFromGitHub(rows githubWorkItemRows) jiraWorkItemRows {
 	}
 }
 
-// TestJiraWorkItemsRouteIncludesFrozenPythonMetricEffect is baseline capability
-// proof, not a destination-count assertion. It feeds the concrete rows emitted
-// by the Jira Atlassian route into Python's checked-in job computation, then
-// compares those produced rows with the route's actual effect ledger.
-func TestJiraWorkItemsRouteIncludesFrozenPythonMetricEffect(t *testing.T) {
+// TestJiraWorkItemsRouteHoldsNoDerivedMetricEffect pins the route side of the
+// former route oracle pair. The Jira Atlassian route used to build a
+// work_item_metrics_daily effect, and this test compared it with the recorded
+// Python answer (testdata/oracle_frozen, jira_work-items_metrics-daily_route).
+// The route builds no derived effect now: the daily job computes that table
+// from stored rows. The recorded answer stays on disk unchanged; this test no
+// longer reads it. The fixture still completes an item on August 1, so a route
+// that derived metrics again would produce a row here.
+func TestJiraWorkItemsRouteHoldsNoDerivedMetricEffect(t *testing.T) {
 	claim := jiraAtlassianClaim()
 	since := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
 	before := time.Date(2026, 8, 3, 0, 0, 0, 0, time.UTC)
@@ -226,6 +230,8 @@ func TestJiraWorkItemsRouteIncludesFrozenPythonMetricEffect(t *testing.T) {
 		fakehttp.Client(&jiraAtlassianDoer{t: t}),
 		providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }),
 	)
+	leftToDaily := providerfoundation.NewMetrics()
+	client.Metrics = leftToDaily
 	batch, err := (JiraAtlassianRouteHandler{
 		StatusMapping: loadRealStatusMapping(t),
 		Identity:      jiraRouteIdentity,
@@ -233,56 +239,11 @@ func TestJiraWorkItemsRouteIncludesFrozenPythonMetricEffect(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-
-	input := map[string]any{
-		// The fixture's required changelog moves the item to Done at 09:00
-		// on August 1, and Jira lifecycle normalization uses that transition
-		// as completed_at. This day therefore produces a real completion row.
-		"Day":        "2026-08-01",
-		"ComputedAt": normalizedAt.Format(time.RFC3339Nano),
-		"OrgID":      claim.OrgID,
-		"WorkItems":  jiraEffectObjects(t, batch.Effects, "work_items"),
-		"Transitions": jiraEffectObjects(
-			t, batch.Effects, "work_item_transitions",
-		),
-		"Dependencies": jiraEffectObjects(
-			t, batch.Effects, "work_item_dependencies",
-		),
-		"Donors": []any{},
-		"Facts": map[string]any{
-			"Teams": []any{}, "Projects": []any{}, "Repos": []any{},
-			"Members": []any{}, "ManualFallbacks": []any{},
-		},
+	if len(jiraEffectObjects(t, batch.Effects, "work_items")) == 0 {
+		t.Fatal("the route stored no work item: the absence of a derived effect would prove nothing")
 	}
-	// CHAOS-5310/CHAOS-3092 (R6): compute_work_item_metrics_daily is deleted
-	// (native Go executor + providersync own work_item_metrics_daily now) --
-	// frozen under its own snapshot name, since this test's single-case
-	// fixture differs from TestJiraWorkItemMetricTripletMatchesLivePython
-	// Production's cases despite sharing the same pair id. See
-	// testdata/oracle_frozen/README.md.
-	compareRowsAgainstFrozenOracle(
-		t,
-		"jira_work-items_metrics-daily_route",
-		[]oracleCase{{ID: "atlassian_route_non_empty", Input: input}},
-		func(t *testing.T, _ map[string]any) githubWorkItemMetricsDailyOracleColumns {
-			t.Helper()
-			rows := make([]githubWorkItemMetricsDailyRow, 0)
-			for _, effect := range batch.Effects {
-				if effect.Destination != "work_item_metrics_daily" {
-					continue
-				}
-				for _, raw := range effect.Rows {
-					var row githubWorkItemMetricsDailyRow
-					if err := json.Unmarshal(raw, &row); err != nil {
-						t.Fatal(err)
-					}
-					rows = append(rows, row)
-				}
-			}
-			return newGitHubWorkItemMetricsDailyOracleColumns(len(rows)).fromRows(rows)
-		},
-		nil,
-	)
+	assertJiraAtlassianRawOnlyEffects(t, batch)
+	assertWorkItemDerivedTablesLeftToDailyJob(t, leftToDaily, "jira", 1)
 }
 
 func jiraEffectObjects(t *testing.T, effects []EffectBatch, destination string) []any {

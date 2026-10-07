@@ -29,10 +29,15 @@ var (
 	scopeReadRepoD = uuid.MustParse("00000000-0000-4000-8000-0000000000b2")
 )
 
-// scopeReadItem is one stored work item row: a github item that was completed
-// on the day, in the work scope projectID.
+// scopeReadItem is one stored work item row that was completed on the day. Its
+// provider is github when none is given. Its work scope comes from the four
+// scope columns by the rule of workItemStateWorkItem.workScopeID.
 type scopeReadItem struct {
 	org, id, projectID string
+	provider           string
+	projectKey         string
+	projectName        string
+	nativeTeamKey      string
 	repo               uuid.UUID
 	storyPoints        float64
 	lastSynced         time.Time
@@ -41,8 +46,8 @@ type scopeReadItem struct {
 func seedScopeReadItems(t *testing.T, ctx context.Context, conn driver.Conn, items ...scopeReadItem) {
 	t.Helper()
 	batch, err := conn.PrepareBatch(ctx, `INSERT INTO work_items (
-    repo_id, work_item_id, provider, type, status, project_id, created_at, completed_at,
-    story_points, org_id, last_synced)`)
+    repo_id, work_item_id, provider, type, status, project_id, project_key, project_name, native_team_key,
+    created_at, completed_at, story_points, org_id, last_synced)`)
 	if err != nil {
 		t.Fatalf("prepare work_items: %v", err)
 	}
@@ -53,8 +58,12 @@ func seedScopeReadItems(t *testing.T, ctx context.Context, conn driver.Conn, ite
 			lastSynced = scopeReadDay.Add(12 * time.Hour)
 		}
 		storyPoints := item.storyPoints
+		provider := item.provider
+		if provider == "" {
+			provider = "github"
+		}
 		if err := batch.Append(
-			item.repo, item.id, "github", "story", "done", item.projectID,
+			item.repo, item.id, provider, "story", "done", item.projectID, item.projectKey, item.projectName, item.nativeTeamKey,
 			scopeReadDay.Add(-24*time.Hour), &completedAt, &storyPoints, item.org, lastSynced,
 		); err != nil {
 			t.Fatalf("append work item %s: %v", item.id, err)
@@ -203,13 +212,18 @@ func TestWorkItemScopeReadCountsItemsOfEveryRepositoryAndNoItemOfAnotherOrganiza
 		scopeReadItem{org: scopeReadOrgA, repo: scopeReadRepoA, id: "it-1", projectID: "shared", storyPoints: 1},
 		scopeReadItem{org: scopeReadOrgA, repo: scopeReadRepoA, id: "it-2", projectID: "own-a", storyPoints: 1},
 		scopeReadItem{org: scopeReadOrgA, repo: scopeReadRepoB, id: "it-3", projectID: "shared", storyPoints: 1},
-		scopeReadItem{org: scopeReadOrgA, repo: scopeReadRepoB, id: "it-4", projectID: "own-b", storyPoints: 1},
+		// it-4 passes the filter of the query (its project name is a wanted
+		// scope id) and is an item of another scope: the scope rule drops it.
+		scopeReadItem{org: scopeReadOrgA, repo: scopeReadRepoB, id: "it-4", projectID: "own-b", projectName: "shared", storyPoints: 1},
 		scopeReadItem{org: scopeReadOrgA, repo: uuid.Nil, id: "it-5", projectID: "shared", storyPoints: 1},
 		// Organization B: the same scope id and the same item ids, newer.
 		scopeReadItem{org: scopeReadOrgB, repo: scopeReadRepoC, id: "it-1", projectID: "shared", storyPoints: 100, lastSynced: newerThanA},
 		scopeReadItem{org: scopeReadOrgB, repo: scopeReadRepoC, id: "it-2", projectID: "shared", storyPoints: 100, lastSynced: newerThanA},
 		scopeReadItem{org: scopeReadOrgB, repo: scopeReadRepoC, id: "it-3", projectID: "shared", storyPoints: 100, lastSynced: newerThanA},
 		scopeReadItem{org: scopeReadOrgB, repo: scopeReadRepoC, id: "it-9", projectID: "shared", storyPoints: 100, lastSynced: newerThanA},
+		// A row of organization B under a repository id of organization A:
+		// its scope is not a scope of A's partition.
+		scopeReadItem{org: scopeReadOrgB, repo: scopeReadRepoA, id: "it-b-under-a", projectID: "only-b", storyPoints: 100, lastSynced: newerThanA},
 	)
 	seedScopeReadAttribution(t, ctx, conn, scopeReadOrgA, scopeReadRepoA, "it-1", "team-a")
 	seedScopeReadAttribution(t, ctx, conn, scopeReadOrgA, scopeReadRepoB, "it-3", "team-b")
@@ -279,6 +293,46 @@ func TestWorkItemScopeReadCountsItemsOfEveryRepositoryAndNoItemOfAnotherOrganiza
 	}
 	if items, storyPoints := scopeReadCompleted(t, ctx, conn, scopeReadOrgB, "shared"); items != 4 || storyPoints != 400 {
 		t.Errorf("organization B, scope shared: items_completed = %d, story points = %v; want 4 and 400", items, storyPoints)
+	}
+}
+
+// A work scope id is the value of one of four columns of its item, or empty
+// when all four are empty. For each of the five forms, an item of repository A
+// and an item of repository B are in one scope, and the read of repository A
+// returns both.
+func TestWorkItemScopeReadFindsAScopeByEachOfItsColumns(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	conn := workItemAttributionLinkedIssueMigratedClickHouse(t, ctx)
+
+	forms := []scopeReadItem{
+		{id: "project-id", provider: "github", projectID: "by-project-id"},
+		{id: "project-name", provider: "gitlab", projectName: "by-project-name"},
+		{id: "native-team-key", provider: "linear", nativeTeamKey: "by-native-team-key"},
+		// A jira item takes its project key before its project id.
+		{id: "project-key", provider: "jira", projectKey: "BYKEY", projectID: "a-jira-project-id"},
+		{id: "empty", provider: "custom"},
+	}
+	var items []scopeReadItem
+	for _, form := range forms {
+		inA, inB := form, form
+		inA.org, inA.repo, inA.id = scopeReadOrgA, scopeReadRepoA, form.id+"-a"
+		inB.org, inB.repo, inB.id = scopeReadOrgA, scopeReadRepoB, form.id+"-b"
+		if form.provider == "jira" {
+			inB.projectID = "another-jira-project-id"
+		}
+		items = append(items, inA, inB)
+	}
+	seedScopeReadItems(t, ctx, conn, items...)
+
+	read := readWorkItemScope(t, ctx, conn, scopeReadOrgA, scopeReadRepoA)
+	want := workItemScopeReadStats{Scopes: 5, ItemsInPartition: 5, ItemsOutsidePartition: 5, FilterValues: 4}
+	if read.Stats != want {
+		t.Errorf("stats = %+v, want %+v", read.Stats, want)
+	}
+	if got, want := scopeReadItemIDs(read),
+		"empty-a,empty-b,native-team-key-a,native-team-key-b,project-id-a,project-id-b,project-key-a,project-key-b,project-name-a,project-name-b"; got != want {
+		t.Errorf("items = %s\nwant    %s", got, want)
 	}
 }
 

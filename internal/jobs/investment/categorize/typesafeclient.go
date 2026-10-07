@@ -110,6 +110,12 @@ var safeRequestIDPattern = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
 
 // NewTypeSafeClient validates cfg and builds the client. It sends nothing.
 func NewTypeSafeClient(cfg TypeSafeClientConfig) (*TypeSafeClient, error) {
+	// Normalize the key ONCE: the HTTP layer trims leading and trailing white
+	// space from a header value on the wire, so the bytes that are sent, the
+	// length rule and every comparison in leaksKey must all be the trimmed
+	// key. (Trimmed rather than refused, so a secret file with a trailing
+	// newline works; the white space was never part of the credential.)
+	cfg.APIKey = secrets.NewHidden(strings.TrimSpace(cfg.APIKey.Reveal()))
 	if cfg.APIKey.Reveal() == "" {
 		return nil, errors.New("typesafe client: an API key is required")
 	}

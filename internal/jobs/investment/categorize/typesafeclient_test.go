@@ -938,7 +938,7 @@ func truncateForTest(s string) string {
 	return s
 }
 
-// Flow 1: the request-id header, echoed with the bearer token, on a failure and on a success.
+// The request-id header, echoed with the bearer token, on a failure and on a success.
 func TestTypeSafeKeyEchoedInTheRequestIDHeaderNeverReachesErrorLogOrResult(t *testing.T) {
 	response := realResponse(t)
 	for keyName, key := range peerKeys {
@@ -1014,7 +1014,7 @@ func TestTypeSafeRequestIDShapeRules(t *testing.T) {
 	}
 }
 
-// Flow 2: the returned model. Bounded, safe charset, never the key.
+// The returned model. Bounded, safe charset, never the key.
 func TestTypeSafeReturnedModelIsBoundedCheckedAndNeverLogsTheKey(t *testing.T) {
 	for keyName, key := range peerKeys {
 		models := map[string]string{
@@ -1085,7 +1085,7 @@ func TestTypeSafeReturnedModelIsBoundedCheckedAndNeverLogsTheKey(t *testing.T) {
 	})
 }
 
-// Flow 3: usage numbers. A negative, absurd or non-numeric value is "not reported".
+// The usage numbers. A negative, absurd or non-numeric value is "not reported".
 func TestTypeSafeUsageOutOfRangeIsNotReported(t *testing.T) {
 	for name, usage := range map[string]string{
 		"negative input":  `{"input_tokens":-5,"output_tokens":1}`,
@@ -1122,7 +1122,7 @@ func TestTypeSafeUsageOutOfRangeIsNotReported(t *testing.T) {
 	}
 }
 
-// Flow 4: other response headers. The header handed to the caller holds the
+// Other response headers. The header handed to the caller holds the
 // sanitized request id and nothing else; the status error keeps only Retry-After.
 func TestTypeSafeOtherPeerHeadersNeverFlowOut(t *testing.T) {
 	response := realResponse(t)
@@ -1221,8 +1221,9 @@ func TestTypeSafeContextEndDuringTheBodyReadIsCanceled(t *testing.T) {
 	}
 }
 
-// B3: a key shorter than the redaction minimum cannot be protected from a peer
-// echo, so the constructor (and the env constructor) refuses it.
+// A key shorter than the redaction minimum cannot be protected from a peer
+// echo (the check compares pieces of 12 bytes or more), so the constructor and
+// the env constructor refuse it.
 func TestTypeSafeRefusesAKeyTooShortToProtect(t *testing.T) {
 	for _, n := range []int{1, 8, 11} {
 		key := strings.Repeat("k", n-1) + "Z"
@@ -1262,7 +1263,8 @@ func TestTypeSafeRefusesAKeyTooShortToProtect(t *testing.T) {
 	}
 }
 
-// N1: the status error keeps the parsed Retry-After delay, never the peer's text.
+// The status error keeps the parsed Retry-After delay, never the peer's text
+// (it is unbounded and may echo the key).
 func TestTypeSafeStatusErrorKeepsTheParsedRetryAfterNotThePeerText(t *testing.T) {
 	text := "Bearer " + tsKey + strings.Repeat("x", 1<<20)
 	h := newTS(t, func(w http.ResponseWriter, _ *http.Request) {
@@ -1308,7 +1310,8 @@ func TestTypeSafeStatusErrorKeepsTheParsedRetryAfterNotThePeerText(t *testing.T)
 	}
 }
 
-// N4: a cancel during the backoff keeps the refused-id mark of the attempt.
+// A cancel during the backoff keeps the refused-id mark of the attempt, so a
+// caller that counts refused ids does not lose one on that path.
 func TestTypeSafeCancelDuringBackoffKeepsTheRefusedIDMark(t *testing.T) {
 	h := newTS(t, func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("x-typesafe-request-id", tsKey)
@@ -1319,5 +1322,52 @@ func TestTypeSafeCancelDuringBackoffKeepsTheRefusedIDMark(t *testing.T) {
 	se := mustSystemOneError(t, err)
 	if se.Class != SystemOneClassCanceled || se.RequestID != "" || !se.RequestIDRejected {
 		t.Fatalf("class=%s id=%q rejected=%v, want canceled with a refused, empty id", se.Class, se.RequestID, se.RequestIDRejected)
+	}
+}
+
+// The key is normalized once, in the constructor. The HTTP layer trims leading
+// and trailing white space from a header value, so a key padded with white
+// space must be measured, sent and compared as the trimmed key.
+func TestTypeSafeKeyIsTrimmedOnceForLengthBearerAndRedaction(t *testing.T) {
+	// A padded key whose real bytes are under the minimum is refused, however
+	// long the padding makes it.
+	for name, key := range map[string]string{
+		"white space and 8 real bytes":    "    abcdefgh    ",
+		"tab, newline and 11 real bytes":  "\t\nabcdefghijk\n\t",
+		"only white space, 16 bytes":      strings.Repeat(" ", 16),
+		"trailing newline, 11 real bytes": "abcdefghijk\n\n\n\n",
+		"leading space, 11 real bytes":    "     abcdefghijk",
+	} {
+		t.Run("refused/"+name, func(t *testing.T) {
+			client, err := NewTypeSafeClient(TypeSafeClientConfig{APIKey: secrets.NewHidden(key)})
+			if err == nil || client != nil {
+				t.Fatalf("a %d-byte padded key with fewer than %d real bytes was accepted", len(key), minFragmentLen)
+			}
+		})
+	}
+	// A padded long key is the trimmed key everywhere: the bearer value that
+	// is sent, and every echo form that was caught for the plain key.
+	for keyName, key := range peerKeys {
+		for _, pad := range []string{" ", "\t", "\n", "  \t\n "} {
+			padded := pad + key + pad
+			t.Run(fmt.Sprintf("padded %s key/%q", keyName, pad), func(t *testing.T) {
+				var gotAuth atomic.Value
+				h := newTS(t, func(w http.ResponseWriter, r *http.Request) {
+					gotAuth.Store(r.Header.Get("Authorization"))
+					w.WriteHeader(401)
+				}, withKey(padded))
+				if _, err := h.client.SendBody(context.Background(), tsBody); err == nil {
+					t.Fatal("want an error")
+				}
+				if got, _ := gotAuth.Load().(string); got != "Bearer "+key {
+					t.Fatalf("bearer sent = %d bytes, want the trimmed key of %d bytes", len(got), len("Bearer "+key))
+				}
+				for echoName, echo := range keyEchoForms(key) {
+					if _, rejected := h.client.cleanRequestID(echo); !rejected && safeRequestIDPattern.MatchString(echo) && len(echo) <= maxLoggedRequestIDLen {
+						t.Fatalf("echo %q of the trimmed key passed the request-id check", echoName)
+					}
+				}
+			})
+		}
 	}
 }

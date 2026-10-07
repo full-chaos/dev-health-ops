@@ -47,6 +47,7 @@ DEV_HEALTH_GO_BUILD_OUTPUT=""
 DEV_HEALTH_GO_BUILD_TEMP_ROOT=""
 DEV_HEALTH_GO_INTEGRATION_SHARD_MANIFEST="${DEV_HEALTH_GO_INTEGRATION_SHARD_MANIFEST:-${ROOT}/ci/go_integration_shards.d}"
 DEV_HEALTH_GO_PROVIDER_TEST_SHARD_MANIFEST="${DEV_HEALTH_GO_PROVIDER_TEST_SHARD_MANIFEST:-${ROOT}/ci/go_providersync_test_shards.tsv}"
+DEV_HEALTH_GO_DAILY_TEST_SHARD_MANIFEST="${DEV_HEALTH_GO_DAILY_TEST_SHARD_MANIFEST:-${ROOT}/ci/go_daily_test_shards.tsv}"
 INTEGRATION_CONTAINER_HARNESS="${ROOT}/internal/testsupport/containers/harness.go"
 
 # --- Ambient-env scrub (CHAOS-3988). ------------------------------------------------
@@ -199,7 +200,8 @@ usage() {
   integration-shard TARGET SHARD [--dry-run]
          Run exactly one validated integration shard. TARGET is `packages` for
          a package-level shard or `providersync` for a top-level test shard of
-         the dominant internal/providersync package. `--dry-run` prints the
+         the dominant internal/providersync package, or `daily` for a top-level
+         test shard of internal/jobs/metrics/daily. `--dry-run` prints the
          exact selection without starting Docker-backed tests; CI never passes
          that option.
   integration
@@ -961,6 +963,18 @@ declare -a INTEGRATION_SHARD_PACKAGE_COUNTS=()
 declare -a INTEGRATION_SHARD_NON_PROVIDER_COUNTS=()
 INTEGRATION_SHARD_COUNT=0
 PROVIDER_INTEGRATION_PACKAGE_KEY="internal/providersync"
+# internal/jobs/metrics/daily is split by top-level test name the same way
+# (CHAOS-8813 follow-up): one `go test` of it took 22 of a 25 minute job.
+DAILY_INTEGRATION_PACKAGE_KEY="internal/jobs/metrics/daily"
+DAILY_TEST_SHARD_COUNT=0
+DAILY_INTEGRATION_TEST_WEIGHT=0
+DAILY_ORDINARY_TEST_WEIGHT=0
+declare -A DAILY_INTEGRATION_TEST_NAMES=()
+declare -A DAILY_TEST_CLASS=()
+declare -A DAILY_TEST_SHARD_BY_NAME=()
+declare -a DAILY_TEST_NAMES=()
+declare -a DAILY_TEST_SHARD_TOTALS=()
+declare -a DAILY_TEST_SHARD_COUNTS=()
 declare -A PROVIDER_INTEGRATION_TEST_NAMES=()
 declare -A PROVIDER_TEST_WEIGHTS=()
 declare -A PROVIDER_TEST_CLASS=()
@@ -1251,7 +1265,8 @@ plan_integration_shards() {
     INTEGRATION_SHARD_PACKAGE_COUNTS[selected_shard]=$((
       INTEGRATION_SHARD_PACKAGE_COUNTS[selected_shard] + 1
     ))
-    if [ "${key}" != "${PROVIDER_INTEGRATION_PACKAGE_KEY}" ]; then
+    if [ "${key}" != "${PROVIDER_INTEGRATION_PACKAGE_KEY}" ] \
+      && [ "${key}" != "${DAILY_INTEGRATION_PACKAGE_KEY}" ]; then
       INTEGRATION_SHARD_NON_PROVIDER_COUNTS[selected_shard]=$((
         INTEGRATION_SHARD_NON_PROVIDER_COUNTS[selected_shard] + 1
       ))
@@ -1492,10 +1507,228 @@ plan_providersync_test_shards() {
   done
 }
 
+# The daily manifest owns the number of test shards and the two relative
+# weights. The complete test-name set always comes from the current Go
+# package (go list names the active files; their top-level Test functions are
+# read from source), so a checked-in list cannot drift. Every discovered test
+# is assigned to exactly one shard by construction; tests/tooling asserts the
+# set equals `go test -list` of the package.
+load_daily_test_shard_manifest() {
+  local manifest="${DEV_HEALTH_GO_DAILY_TEST_SHARD_MANIFEST}"
+  local line_number=0 key value extra
+  local shards_seen=0 integration_weight_seen=0 ordinary_weight_seen=0
+
+  [ -f "${manifest}" ] || die "daily test shard manifest not found: ${manifest}"
+
+  DAILY_TEST_SHARD_COUNT=0
+  DAILY_INTEGRATION_TEST_WEIGHT=0
+  DAILY_ORDINARY_TEST_WEIGHT=0
+  while IFS=$'\t ' read -r key value extra; do
+    line_number=$((line_number + 1))
+    case "${key}" in
+      ""|\#*) continue ;;
+    esac
+    [ -z "${extra}" ] \
+      || die "daily test shard manifest ${manifest}:${line_number} must contain exactly two fields"
+    case "${value}" in
+      ""|*[!0-9]*)
+        die "daily test shard manifest ${manifest}:${line_number} has non-numeric value '${value}'"
+        ;;
+    esac
+    [ "${value}" -gt 0 ] \
+      || die "daily test shard manifest ${manifest}:${line_number} values must be positive"
+    case "${key}" in
+      shards)
+        [ "${shards_seen}" -eq 0 ] || die "daily test shard manifest declares 'shards' more than once"
+        shards_seen=1
+        DAILY_TEST_SHARD_COUNT="${value}"
+        ;;
+      integration-test-weight)
+        [ "${integration_weight_seen}" -eq 0 ] \
+          || die "daily test shard manifest declares 'integration-test-weight' more than once"
+        integration_weight_seen=1
+        DAILY_INTEGRATION_TEST_WEIGHT="${value}"
+        ;;
+      ordinary-test-weight)
+        [ "${ordinary_weight_seen}" -eq 0 ] \
+          || die "daily test shard manifest declares 'ordinary-test-weight' more than once"
+        ordinary_weight_seen=1
+        DAILY_ORDINARY_TEST_WEIGHT="${value}"
+        ;;
+      *)
+        die "daily test shard manifest ${manifest}:${line_number} has unknown key '${key}'"
+        ;;
+    esac
+  done < "${manifest}"
+
+  [ "${shards_seen}" -eq 1 ] || die "daily test shard manifest must declare one 'shards' row"
+  [ "${integration_weight_seen}" -eq 1 ] \
+    || die "daily test shard manifest must declare one 'integration-test-weight' row"
+  [ "${ordinary_weight_seen}" -eq 1 ] \
+    || die "daily test shard manifest must declare one 'ordinary-test-weight' row"
+  [ "${DAILY_TEST_SHARD_COUNT}" -ge 2 ] \
+    || die "daily test shard manifest must declare at least two shards"
+}
+
+discover_daily_tests() {
+  local files_output go_file source_file test_name integration_file
+  declare -A discovered_names=()
+
+  if ! files_output="$(
+    cd "${ROOT}"
+    "${GO_ENV_OFF[@]}" GOWORK=off go list -mod=readonly -tags=integration \
+      -f '{{range .TestGoFiles}}{{println .}}{{end}}{{range .XTestGoFiles}}{{println .}}{{end}}' \
+      "./${DAILY_INTEGRATION_PACKAGE_KEY}"
+  )"; then
+    die "failed to discover active daily test files with go list"
+  fi
+
+  DAILY_TEST_NAMES=()
+  DAILY_INTEGRATION_TEST_NAMES=()
+  while IFS= read -r go_file; do
+    [ -n "${go_file}" ] || continue
+    case "${go_file}" in
+      */*|..*) die "go list returned unsafe daily test filename '${go_file}'" ;;
+    esac
+    source_file="${ROOT}/${DAILY_INTEGRATION_PACKAGE_KEY}/${go_file}"
+    [ -f "${source_file}" ] || die "go list returned missing daily test file '${go_file}'"
+    integration_file=0
+    if grep -qE '^//go:build.*(^|[^[:alnum:]_])integration([^[:alnum:]_]|$)' "${source_file}"; then
+      integration_file=1
+    fi
+    while IFS= read -r test_name; do
+      [ -n "${test_name}" ] || continue
+      # TestMain is the process entry point, not a selectable test.
+      [ "${test_name}" != "TestMain" ] || continue
+      case "${test_name}" in
+        Test*[![:alnum:]_]*)
+          die "daily source discovery returned unsupported top-level test name '${test_name}'"
+          ;;
+        Test*) ;;
+        *) continue ;;
+      esac
+      [ -z "${discovered_names[${test_name}]+set}" ] \
+        || die "daily source discovery returned '${test_name}' more than once"
+      discovered_names["${test_name}"]=1
+      DAILY_TEST_NAMES+=("${test_name}")
+      if [ "${integration_file}" -eq 1 ]; then
+        DAILY_INTEGRATION_TEST_NAMES["${test_name}"]=1
+      fi
+    done < <(
+      sed -nE 's/^func[[:space:]]+(Test[A-Za-z0-9_]+)[[:space:]]*\(.*/\1/p' "${source_file}"
+    )
+  done < <(printf '%s\n' "${files_output}")
+
+  mapfile -t DAILY_TEST_NAMES < <(printf '%s\n' "${DAILY_TEST_NAMES[@]}" | LC_ALL=C sort)
+  [ "${#DAILY_TEST_NAMES[@]}" -gt 0 ] || die "daily source discovery returned zero top-level tests"
+  [ "${DAILY_TEST_SHARD_COUNT}" -le "${#DAILY_TEST_NAMES[@]}" ] \
+    || die "daily test shard manifest declares more shards than discovered tests"
+  [ "${#DAILY_INTEGRATION_TEST_NAMES[@]}" -gt 0 ] \
+    || die "daily source discovery returned zero integration-tagged top-level tests"
+
+  DAILY_TEST_CLASS=()
+  for test_name in "${DAILY_TEST_NAMES[@]}"; do
+    if [ -n "${DAILY_INTEGRATION_TEST_NAMES[${test_name}]+set}" ]; then
+      DAILY_TEST_CLASS["${test_name}"]="integration"
+    else
+      DAILY_TEST_CLASS["${test_name}"]="ordinary"
+    fi
+  done
+}
+
+plan_daily_test_shards() {
+  local test_name weight shard selected_shard selected_total
+
+  load_daily_test_shard_manifest
+  discover_daily_tests
+
+  DAILY_TEST_SHARD_BY_NAME=()
+  DAILY_TEST_SHARD_TOTALS=()
+  DAILY_TEST_SHARD_COUNTS=()
+  for ((shard = 1; shard <= DAILY_TEST_SHARD_COUNT; shard++)); do
+    DAILY_TEST_SHARD_TOTALS[shard]=0
+    DAILY_TEST_SHARD_COUNTS[shard]=0
+  done
+
+  while IFS=$'\t' read -r weight test_name; do
+    selected_shard=1
+    selected_total="${DAILY_TEST_SHARD_TOTALS[1]}"
+    for ((shard = 2; shard <= DAILY_TEST_SHARD_COUNT; shard++)); do
+      if [ "${DAILY_TEST_SHARD_TOTALS[${shard}]}" -lt "${selected_total}" ]; then
+        selected_shard="${shard}"
+        selected_total="${DAILY_TEST_SHARD_TOTALS[${shard}]}"
+      fi
+    done
+    DAILY_TEST_SHARD_BY_NAME["${test_name}"]="${selected_shard}"
+    DAILY_TEST_SHARD_TOTALS[selected_shard]=$((DAILY_TEST_SHARD_TOTALS[selected_shard] + weight))
+    DAILY_TEST_SHARD_COUNTS[selected_shard]=$((DAILY_TEST_SHARD_COUNTS[selected_shard] + 1))
+  done < <(
+    for test_name in "${DAILY_TEST_NAMES[@]}"; do
+      if [ "${DAILY_TEST_CLASS[${test_name}]}" = "integration" ]; then
+        weight="${DAILY_INTEGRATION_TEST_WEIGHT}"
+      else
+        weight="${DAILY_ORDINARY_TEST_WEIGHT}"
+      fi
+      printf '%s\t%s\n' "${weight}" "${test_name}"
+    done | LC_ALL=C sort -t $'\t' -k1,1nr -k2,2
+  )
+
+  printf 'daily test plan: %d shard(s), %d top-level test(s), %d integration-tagged\n' \
+    "${DAILY_TEST_SHARD_COUNT}" "${#DAILY_TEST_NAMES[@]}" "${#DAILY_INTEGRATION_TEST_NAMES[@]}"
+  for ((shard = 1; shard <= DAILY_TEST_SHARD_COUNT; shard++)); do
+    printf 'daily test shard %d: relative weight %d, %d test(s)\n' \
+      "${shard}" "${DAILY_TEST_SHARD_TOTALS[${shard}]}" "${DAILY_TEST_SHARD_COUNTS[${shard}]}"
+    for test_name in "${DAILY_TEST_NAMES[@]}"; do
+      if [ "${DAILY_TEST_SHARD_BY_NAME[${test_name}]:-0}" -eq "${shard}" ]; then
+        printf '  DAILY-SHARD %d %s class=%s\n' "${shard}" "${test_name}" "${DAILY_TEST_CLASS[${test_name}]}"
+      fi
+    done
+  done
+}
+
+check_daily_test_shard() {
+  local shard="$1" mode="$2"
+  local test_name separator="" test_regex='^('
+  local selected_count=0
+
+  if [ "${shard}" -lt 1 ] || [ "${shard}" -gt "${DAILY_TEST_SHARD_COUNT}" ]; then
+    die "daily test shard ${shard} is outside 1..${DAILY_TEST_SHARD_COUNT}"
+  fi
+
+  for test_name in "${DAILY_TEST_NAMES[@]}"; do
+    [ "${DAILY_TEST_SHARD_BY_NAME[${test_name}]:-0}" -eq "${shard}" ] || continue
+    printf '  DAILY-TEST-RUN %s\n' "${test_name}"
+    test_regex+="${separator}${test_name}"
+    separator="|"
+    selected_count=$((selected_count + 1))
+  done
+  test_regex+=')$'
+
+  [ "${selected_count}" -gt 0 ] || die "daily test shard ${shard} selected zero tests"
+  if [ "${selected_count}" -ne "${DAILY_TEST_SHARD_COUNTS[${shard}]}" ]; then
+    die "daily test shard ${shard} selected ${selected_count} tests but plan declared ${DAILY_TEST_SHARD_COUNTS[${shard}]}"
+  fi
+  if [ "${mode}" = "--dry-run" ]; then
+    printf 'daily test shard %s: DRY RUN selected %d top-level test(s); no tests executed\n' \
+      "${shard}" "${selected_count}"
+    return 0
+  fi
+
+  printf 'go test daily test shard %s: %d top-level test(s)\n' "${shard}" "${selected_count}"
+  (
+    cd "${ROOT}"
+    "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -trimpath -tags=integration -count=1 -timeout=30m -run "${test_regex}" "./${DAILY_INTEGRATION_PACKAGE_KEY}"
+  )
+}
+
 emit_integration_shard_matrix() {
   local matrix='{"include":[' separator="" shard
   for ((shard = 1; shard <= PROVIDER_TEST_SHARD_COUNT; shard++)); do
     matrix+="${separator}{\"target\":\"providersync\",\"shard\":${shard}}"
+    separator=","
+  done
+  for ((shard = 1; shard <= DAILY_TEST_SHARD_COUNT; shard++)); do
+    matrix+="${separator}{\"target\":\"daily\",\"shard\":${shard}}"
     separator=","
   done
   for ((shard = 1; shard <= INTEGRATION_SHARD_COUNT; shard++)); do
@@ -1513,6 +1746,7 @@ emit_integration_shard_matrix() {
 check_integration_shard_plan() {
   plan_integration_shards
   plan_providersync_test_shards
+  plan_daily_test_shards
   emit_integration_shard_matrix
 }
 
@@ -1736,6 +1970,7 @@ check_integration_package_shard() {
       key="${module_dir}/${pkg#./}"
       key="${key#./}"
       [ "${key}" != "${PROVIDER_INTEGRATION_PACKAGE_KEY}" ] || continue
+      [ "${key}" != "${DAILY_INTEGRATION_PACKAGE_KEY}" ] || continue
       [ "${INTEGRATION_SHARD_BY_KEY[${key}]:-0}" -eq "${shard}" ] || continue
       run_pkgs+=("${pkg}")
       run_keys+=("${key}")
@@ -1809,8 +2044,8 @@ check_integration_shard() {
   local target="${1:-}" shard="${2:-}" mode="${3:-}"
 
   case "${target}" in
-    packages|providersync) ;;
-    *) die "integration-shard TARGET must be 'packages' or 'providersync'" ;;
+    packages|providersync|daily) ;;
+    *) die "integration-shard TARGET must be 'packages', 'providersync' or 'daily'" ;;
   esac
   case "${shard}" in
     ""|*[!0-9]*) die "integration-shard requires a numeric shard id" ;;
@@ -1822,9 +2057,11 @@ check_integration_shard() {
 
   plan_integration_shards
   plan_providersync_test_shards
+  plan_daily_test_shards
   case "${target}" in
     packages) check_integration_package_shard "${shard}" "${mode}" ;;
     providersync) check_providersync_test_shard "${shard}" "${mode}" ;;
+    daily) check_daily_test_shard "${shard}" "${mode}" ;;
   esac
 }
 

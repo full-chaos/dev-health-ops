@@ -82,6 +82,10 @@ type TouchedDayPostSyncWriter interface {
 // then records the days that the raw rows of its sync run touched and starts
 // a daily run for each pending day. Without it the fan-out recomputes only
 // the window of the sync run.
+//
+// Design, delivery guarantees and limits:
+// .github/docs-legacy/architecture/data-pipeline.md, "Post-sync recompute of
+// the touched days".
 func (service *NativePostSyncService) SetTouchedDays(store TouchedDaysStore, writer TouchedDayPostSyncWriter) error {
 	if service == nil || store == nil || writer == nil || writer.RepositoryLimit() < 1 {
 		return ErrPostSyncUnavailable

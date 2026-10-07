@@ -258,3 +258,96 @@ func TestTouchedDaysMarkEndsOnlyWhatWasDispatched(t *testing.T) {
 		t.Fatalf("a record with no new raw row: recorded=%d pending=%v, want none", recorded, got)
 	}
 }
+
+// The mark of listed keys carries the time of the read, as the mark of whole
+// days does: a listed key that a later record touched again stays pending.
+func TestTouchedDaysMarkOfListedKeysLeavesAKeyTouchedAfterTheRead(t *testing.T) {
+	ctx, conn := newReadbackIntegrationConn(t)
+	store, err := NewClickHouseTouchedDaysStore(conn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	all := seedTouchedTestRows(t, ctx, conn)
+	if _, err := store.RecordTouched(ctx, touchedTestOrg, touchedTestSince); err != nil {
+		t.Fatal(err)
+	}
+	read, err := store.PendingDays(ctx, touchedTestOrg, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(20 * time.Millisecond)
+	if _, err := store.RecordTouched(ctx, touchedTestOrg, touchedTestSince); err != nil {
+		t.Fatal(err)
+	}
+	listed := []TouchedDayKey{
+		{Day: touchedTestDay(8, 1), RepositoryID: touchedTestRepoA.String()},
+		{Day: touchedTestDay(6, 1), RepositoryID: uuid.Nil.String()},
+	}
+	if err := store.MarkDispatched(ctx, touchedTestOrg, read.TakenAt, nil, listed); err != nil {
+		t.Fatal(err)
+	}
+	if got := pendingTouchedTestKeys(t, ctx, conn, touchedTestOrg); !reflect.DeepEqual(got, all) {
+		t.Fatalf("a listed key touched after the read was ended by the mark\n got %v\nwant %v", got, all)
+	}
+}
+
+// A transition is of the run when it was written at or after the lower bound
+// of the read, in the organization of the run: a transition written exactly
+// at the bound is recorded, one written a millisecond earlier is not, and a
+// transition of another organization is not.
+func TestTouchedDaysRecordTakesATransitionWrittenAtTheBound(t *testing.T) {
+	ctx, conn := newReadbackIntegrationConn(t)
+	store, err := NewClickHouseTouchedDaysStore(conn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const org, otherOrg = "touched-days-transition-bound", "touched-days-transition-other"
+	insertTouchedTestTransition(t, ctx, conn, org, touchedTestRepoA, "gh:acme/api#1", "github", touchedTestDay(3, 20), touchedTestSince)
+	insertTouchedTestTransition(t, ctx, conn, org, touchedTestRepoA, "gh:acme/api#2", "github", touchedTestDay(3, 21), touchedTestSince.Add(-time.Millisecond))
+	insertTouchedTestTransition(t, ctx, conn, otherOrg, touchedTestRepoA, "gh:other/api#1", "github", touchedTestDay(3, 22), touchedTestSince.Add(time.Hour))
+
+	recorded, err := store.RecordTouched(ctx, org, touchedTestSince)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{touchedTestKey(3, 20, touchedTestRepoA)}
+	if got := pendingTouchedTestKeys(t, ctx, conn, org); recorded != 1 || !reflect.DeepEqual(got, want) {
+		t.Fatalf("recorded=%d pending=%v, want the one transition written at the bound: %v", recorded, got, want)
+	}
+}
+
+// A key whose touched event carries exactly the time of the read is ended by
+// the mark of that read: the run the fan-out started computes the day after
+// the raw rows of that event were stored. Only an event newer than the read
+// keeps the key pending.
+func TestTouchedDaysMarkEndsAKeyTouchedAtTheTimeOfTheRead(t *testing.T) {
+	ctx, conn := newReadbackIntegrationConn(t)
+	store, err := NewClickHouseTouchedDaysStore(conn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const org = "touched-days-tie"
+	read, err := store.PendingDays(ctx, org, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	day := utcDay(touchedTestDay(3, 25))
+	// The times go in as milliseconds: a bound time.Time loses them.
+	for repo, at := range map[uuid.UUID]time.Time{
+		touchedTestRepoA: read.TakenAt, touchedTestRepoB: read.TakenAt.Add(time.Millisecond),
+	} {
+		if err := conn.Exec(ctx, `
+INSERT INTO daily_metrics_touched_days (org_id, day, repo_id, kind, at)
+SELECT ?, toDate(?), toUUID(?), 'touched', fromUnixTimestamp64Milli(toInt64(?), 'UTC')`,
+			org, day.Format("2006-01-02"), repo.String(), at.UnixMilli()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := store.MarkDispatched(ctx, org, read.TakenAt, []time.Time{day}, nil); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{touchedTestKey(3, 25, touchedTestRepoB)}
+	if got := pendingTouchedTestKeys(t, ctx, conn, org); !reflect.DeepEqual(got, want) {
+		t.Fatalf("pending after the mark = %v, want only the key touched after the read: %v", got, want)
+	}
+}

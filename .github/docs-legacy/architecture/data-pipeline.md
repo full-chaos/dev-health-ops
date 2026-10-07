@@ -371,6 +371,92 @@ readers select the newest compute generation per logical key. See
 [Dispatch Outbox](dispatch-outbox.md) for the full design, crash-window flow,
 and per-kind delivery semantics (CHAOS-2581).
 
+## Post-sync recompute of the touched days
+
+A sync unit writes raw rows; the daily job computes every derived daily table.
+A work-items sync whose window is one day can write raw rows that belong to
+older days (an item completed three weeks ago, a late transition). The
+post-sync fan-out therefore starts a daily run for every day that the raw rows
+of its sync run touched, not only for the window of the run.
+
+Code: `internal/syncdispatchruntime/touched_days.go` (the three steps of the
+fan-out), `touched_days_clickhouse.go` (the record), and
+`dailyPostSyncWriter.StartTouchedDayTx` in
+`internal/workerservice/sync_dispatch.go` (the run start).
+
+**The record.** The ClickHouse table `daily_metrics_touched_days` (migration
+108) holds events `(org_id, day, repo_id, kind, at)`, `kind` = `touched` or
+`dispatched`, engine `ReplacingMergeTree(at)`. A key `(org_id, day, repo_id)`
+is *pending* while its newest `touched` event is newer than its newest
+`dispatched` event. The nil UUID is the repository of the work items that have
+none. A reader always aggregates for each key (`maxIf(at, kind = ...)`); it
+never reads the rows as they are. Every `at` is the ClickHouse clock.
+
+**The steps of one fan-out** (`NativePostSyncService.Fanout`):
+
+1. *Before the Postgres transaction.* If a successful unit of the sync run
+   wrote work items, one server-side `INSERT ... SELECT` appends a `touched`
+   event for each `(day, repository)` of the rows of `work_items` and
+   `work_item_transitions` whose `last_synced` is at or after the start of the
+   sync run minus five minutes (`postSyncTouchedClockMargin`: the two times
+   come from two processes). The days of an item are the days of `created_at`,
+   `started_at`, `completed_at` and `closed_at`; the day of a transition is the
+   day of `occurred_at`, under the repository of its item. Then the fan-out
+   reads the pending days, newest first (at most 3660), with the time of the
+   read (`TakenAt`). A failure here fails the fan-out; it is never read as "no
+   day was touched".
+2. *In the transaction*, after the run of the window: the days of the window
+   need no second run. Of the other pending days the fan-out takes the 31
+   newest (`PostSyncTouchedDaysPerFanout`) and starts one daily run for each,
+   of the generation of the sync run, with the pending repositories of the day
+   as an explicit list. A day with more than 1000 pending repositories gets a
+   run of every repository. A run that exists for `(day, generation)` is left
+   as it is and the day stays pending.
+3. *After the commit*: the fan-out appends the `dispatched` events, all at
+   `TakenAt`. A key that another record touched after the read keeps a newer
+   `touched` event and stays pending.
+
+**Why the record is complete.** A `post_sync` job exists only after every unit
+of its sync run is `success` or `failed`: `NativeFinalizeSyncRunService`
+commits nothing else while one unit is in another state
+(`TestNativeFinalizeSyncRunWritesNoPostSyncWhileAUnitIsNotTerminal`). So no
+unit of the run writes a raw row after the read of step 1.
+
+**Delivery.** The record is at-least-once: each failure leaves the day pending
+or its run started. A failed record or a rolled-back transaction leaves the
+day pending for the next delivery. A failed mark after the commit, and a
+second delivery after a commit, leave the day pending for the next sync of
+the organization, which computes it once more. No path ends a key whose run
+did not commit.
+
+**Limits.**
+
+- Only a fan-out drains the pending days: 31 for each post-sync fan-out of the
+  organization. The nightly run does not drain them.
+- The record covers work items and their transitions. Other raw tables are
+  computed by the window of their sync run.
+- A day that an item *left* (its `completed_at` moved or was cleared) is not
+  recorded: the stored row no longer names that day.
+- A unit that the reconciler set to `failed` while its process still writes
+  can write a row after the read. The row is recorded by the next sync that
+  writes the item again.
+- A touched day after its runs equals a recompute of every repository when
+  no work scope spans two repository partitions. `work_item_metrics_daily`,
+  `work_item_user_metrics_daily`, `work_item_state_durations_daily` and
+  `estimate_coverage_metrics_daily` replace rows by a key that has
+  `work_scope_id` and no `repo_id`, and the daily job computes one repository
+  partition at a time: when one work scope has items in two partitions, the
+  partitions write one key and the row of the partition that ran last stays.
+  The daily job had this limit before the touched-day runs; a run of listed
+  repositories makes it visible sooner
+  (`TestDailyJobRepositoryPartitionsOfOneDayDoNotShareAKey`).
+- A pod of an older build beside the new table neither writes nor reads it.
+
+Counter: `dev_health_post_sync_touched_days_total{event}` with `keys_recorded`,
+`days_dispatched`, `days_carried_over`, `days_already_started`,
+`read_truncated`, `record_failed`, `mark_failed`. Log lines:
+`post_sync_fanout.touched_days` and the failure line with `phase`.
+
 ## Storage Schema Highlights
 
 ### ClickHouse Tables

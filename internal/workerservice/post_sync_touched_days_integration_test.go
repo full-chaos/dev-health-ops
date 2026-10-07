@@ -306,6 +306,9 @@ func TestPostSyncFanoutRecomputesEveryDayTheRawRowsTouched(t *testing.T) {
 		touchedItem{repo: uuid.Nil, id: "jira:OPS-2", provider: "jira", day: far, completed: true, synced: now},
 		touchedItem{repo: uuid.Nil, id: "linear:OPS-3", provider: "linear", day: far, completed: true, synced: now},
 		touchedItem{repo: repoB, id: "gitlab:acme/web#9", provider: "gitlab", day: far, completed: true, synced: now},
+		// A row of the target day: the window run computes it, so the fan-out
+		// starts no second run for the day and ends its key.
+		touchedItem{repo: repoA, id: "gh:acme/api#4", provider: "github", day: target, completed: true, synced: now},
 	)
 	args := rig.seedSync(t, ctx, orgID, "work-items", target)
 	service := rig.service(t, rig.touched, nil)
@@ -385,6 +388,8 @@ func TestPostSyncFanoutTakesTheNewestTouchedDaysAndCarriesTheRestOver(t *testing
 		items = append(items, touchedItem{repo: uuid.Nil, id: fmt.Sprintf("linear:OPS-%d", offset), provider: "linear", day: day, synced: now})
 	}
 	sort.Strings(days) // oldest first
+	// A row of the target day is of the window run: it takes none of the 31.
+	items = append(items, touchedItem{repo: uuid.Nil, id: "linear:OPS-target", provider: "linear", day: target, synced: now})
 	insertTouchedItems(t, ctx, rig.conn, orgID, items...)
 	service := rig.service(t, rig.touched, nil)
 	targetKey := target.Format("2006-01-02")
@@ -401,6 +406,12 @@ func TestPostSyncFanoutTakesTheNewestTouchedDaysAndCarriesTheRestOver(t *testing
 		t.Fatalf("pending after the first fan-out = %d days, want the 69 oldest", len(got))
 	}
 
+	// The second sync has no work-items unit, so its fan-out records nothing:
+	// a raw row written during it belongs to the record of the sync that
+	// wrote it, and its day gets no run here.
+	notRecorded := target.AddDate(0, 0, -300)
+	insertTouchedItems(t, ctx, rig.conn, orgID,
+		touchedItem{repo: uuid.Nil, id: "linear:OPS-late", provider: "linear", day: notRecorded, synced: now.Add(time.Hour + time.Minute)})
 	second := rig.seedSync(t, ctx, orgID, "commits", target)
 	rig.setRunStart(t, ctx, second, now.Add(time.Hour))
 	if err := service.Fanout(ctx, second); err != nil {
@@ -551,4 +562,46 @@ func TestPostSyncFanoutTouchedDaySurvivesEveryFailurePoint(t *testing.T) {
 			t.Fatalf("runs = %v, want %v", got, want)
 		}
 	})
+}
+
+// A run accepts a bounded repository list. A day with exactly that many
+// touched repositories gets a run of them; a day with one more gets a run of
+// every repository, so no repository of the day is left out. Both days end.
+func TestPostSyncFanoutStartsARunOfEveryRepositoryForADayOverTheRepositoryLimit(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
+	defer cancel()
+	rig := newTouchedRig(t, ctx)
+	orgID := uuid.NewString()
+	target := time.Date(2026, 8, 20, 0, 0, 0, 0, time.UTC)
+	atLimit, overLimit := target.AddDate(0, 0, -40), target.AddDate(0, 0, -41)
+	now := time.Now().UTC()
+	var items []touchedItem
+	for index := 0; index < daily.MaxRepositoriesPerRun+1; index++ {
+		repo := uuid.New()
+		if index < daily.MaxRepositoriesPerRun {
+			items = append(items, touchedItem{repo: repo, id: fmt.Sprintf("gh:acme/at#%d", index), provider: "github", day: atLimit, synced: now})
+		}
+		items = append(items, touchedItem{repo: repo, id: fmt.Sprintf("gh:acme/over#%d", index), provider: "github", day: overLimit, synced: now})
+	}
+	insertTouchedItems(t, ctx, rig.conn, orgID, items...)
+	args := rig.seedSync(t, ctx, orgID, "work-items", target)
+	if err := rig.service(t, rig.touched, nil).Fanout(ctx, args); err != nil {
+		t.Fatal(err)
+	}
+	runs := rig.runsOf(t, ctx, orgID, args)
+	atKey, overKey := atLimit.Format("2006-01-02"), overLimit.Format("2006-01-02")
+	if got := touchedRunDays(runs); !reflect.DeepEqual(got, []string{overKey, atKey, target.Format("2006-01-02")}) {
+		t.Fatalf("days with a run = %v", got)
+	}
+	if listed := len(strings.Split(runs[atKey].repos, ",")); runs[atKey].fullOrg || listed != daily.MaxRepositoriesPerRun {
+		t.Fatalf("the day at the limit: run of every repository = %v with %d listed repositories; want a run of its %d repositories",
+			runs[atKey].fullOrg, listed, daily.MaxRepositoriesPerRun)
+	}
+	if !runs[overKey].fullOrg {
+		t.Fatalf("the day over the limit got a run of %d listed repositories; want a run of every repository",
+			len(strings.Split(runs[overKey].repos, ",")))
+	}
+	if got := rig.pendingDays(t, ctx, orgID); len(got) != 0 {
+		t.Fatalf("pending days after the fan-out = %v, want none", got)
+	}
 }

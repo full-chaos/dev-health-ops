@@ -194,4 +194,8 @@ var clickHouseOrgTablesAfterThePythonFreeze = map[string]string{
 	// org_id and written by the daily worker, so an organization's marker rows
 	// must go when the organization is deleted.
 	"daily_metrics_run_marker": "105_daily_metrics_run_marker.sql",
+	// The record of the days that stored raw rows touched (CHAOS-8813). Keyed
+	// by org_id and written by the post-sync fan-out, so an organization's
+	// events must go when the organization is deleted.
+	"daily_metrics_touched_days": "108_daily_metrics_touched_days.sql",
 }

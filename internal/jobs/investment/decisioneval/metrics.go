@@ -1055,6 +1055,9 @@ func (s *scorer) agreement(order []string, members map[string][]*goldRow) []Agre
 				out = append(out, AgreementEntry{Group: gk, Label: "incumbent fresh vs persisted (self-agreement)", AgreementMetrics: self})
 			}
 		}
+		if rep := s.repeatPairs(ArmIncumbent, members[gk]); len(rep) > 0 {
+			out = append(out, AgreementEntry{Group: gk, Label: "incumbent run 1 vs run 2 (self-agreement, two independent passes)", AgreementMetrics: computeAgreement(ArmIncumbent, "incumbent (second pass)", rep, b)})
+		}
 		for _, arm := range s.arms {
 			if arm == ArmIncumbent {
 				continue
@@ -1076,6 +1079,18 @@ func (s *scorer) agreement(order []string, members map[string][]*goldRow) []Agre
 			if len(rep) > 0 {
 				out = append(out, AgreementEntry{Group: gk, Label: arm + " run 1 vs run 2", AgreementMetrics: computeAgreement(arm, arm+" (second run)", rep, b)})
 			}
+		}
+	}
+	return out
+}
+
+// repeatPairs pairs the first and the second run of an arm on the bundles of a group.
+func (s *scorer) repeatPairs(arm string, gold []*goldRow) []agreementPair {
+	var out []agreementPair
+	for _, g := range gold {
+		a, b := s.rows[arm][g.BundleID], s.repeats[arm][g.BundleID]
+		if a != nil && b != nil {
+			out = append(out, agreementPair{bundle: g.BundleID, c: b, a: a})
 		}
 	}
 	return out

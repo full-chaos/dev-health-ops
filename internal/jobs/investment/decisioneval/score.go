@@ -299,8 +299,13 @@ type slot struct {
 // rubric file are a failure (rubric_hash_mismatch).
 func bestRecords(data *LedgerData, r *Rubric, armSet map[string]bool, include func(bundleID string) bool, fail func(string, ...any)) map[slot]ClassificationRecord {
 	best := map[slot]ClassificationRecord{}
+	otherVersion := map[string]bool{}
 	for _, c := range data.Classifications {
-		if c.Gate != "" || c.Rubric != r.RubricVersion || c.Adapter != r.AdapterVersion {
+		// Arm A does not depend on the rubric (the production prompt is not
+		// changed by it): its records serve every rubric. Arm D and the candidates
+		// depend on it.
+		independent := c.Arm == ArmIncumbent
+		if c.Gate != "" {
 			continue
 		}
 		if len(armSet) > 0 && !armSet[c.Arm] {
@@ -309,13 +314,28 @@ func bestRecords(data *LedgerData, r *Rubric, armSet map[string]bool, include fu
 		if !include(c.BundleID) {
 			continue
 		}
-		if c.RubricSHA256 != "" && c.RubricSHA256 != r.SHA256 {
+		if !independent && (c.Rubric != r.RubricVersion || c.Adapter != r.AdapterVersion) {
+			otherVersion[c.Arm] = true
+			continue
+		}
+		if !independent && c.RubricSHA256 != "" && c.RubricSHA256 != r.SHA256 {
 			fail("rubric_hash_mismatch:%s:%s (the ledger was written with another rubric file)", c.Arm, c.BundleID)
 			continue
 		}
 		k := slot{c.Arm, c.BundleID, c.Repeat}
 		if old, ok := best[k]; !ok || c.FinishedAt.After(old.FinishedAt) {
 			best[k] = c
+		}
+	}
+	// An arm that has records only under other rubric or adapter versions must
+	// not vanish from the report: that is a loud failure.
+	have := map[string]bool{}
+	for k := range best {
+		have[k.arm] = true
+	}
+	for arm := range otherVersion {
+		if !have[arm] {
+			fail("arm_has_no_record_for_this_rubric:%s (the ledger holds records of this arm for another rubric or adapter version, not for %s / %s)", arm, r.RubricVersion, r.AdapterVersion)
 		}
 	}
 	return best

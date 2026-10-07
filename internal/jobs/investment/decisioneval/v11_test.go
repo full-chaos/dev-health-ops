@@ -451,3 +451,51 @@ func TestBothRubricFilesLoad(t *testing.T) {
 
 var _ = secrets.Hidden{}
 var _ = categorize.StatusOK
+
+// Arm A does not depend on the rubric: records of one run serve the scoring
+// under any rubric (design: the production prompt is not changed by it). The
+// candidates and arm D do depend on it.
+func TestIncumbentRecordsServeEveryRubric(t *testing.T) {
+	s := newScenario(t, nil)
+	mustRun(t, newCfg(t, s.env, append(s.fx.gated(), s.fx.short), ArmIncumbentDefs))
+	cfg := s.cfg()
+	cfg.Rubric = testRubricCompact(t)
+	m, err := Score(context.Background(), cfg)
+	// the candidates were run with v1: under v1c they have no record
+	if err == nil || !hasFailure(m.Failures, "arm_has_no_record_for_this_rubric:jev") {
+		t.Fatalf("err=%v failures=%v", err, m.Failures)
+	}
+	for _, f := range m.Failures {
+		if strings.HasPrefix(f, "missing_record:incumbent:") {
+			t.Fatalf("arm A must not depend on the rubric: %s", f)
+		}
+	}
+	if !hasFailure(m.Failures, "arm_has_no_record_for_this_rubric:incumbent+defs") {
+		t.Fatalf("arm D depends on the rubric: %v", m.Failures)
+	}
+	for _, f := range m.Failures {
+		if strings.HasPrefix(f, "arm_has_no_record_for_this_rubric:incumbent ") {
+			t.Fatalf("arm A must not depend on the rubric: %s", f)
+		}
+	}
+}
+
+func TestIncumbentSelfAgreementFromTwoPasses(t *testing.T) {
+	s := newScenario(t, nil)
+	cfg := newCfg(t, s.env, append(s.fx.gated(), s.fx.short), ArmIncumbent)
+	cfg.Repeat = 1
+	mustRun(t, cfg)
+	m, err := Score(context.Background(), s.cfg())
+	if err != nil {
+		t.Fatalf("%v %v", err, m.Failures)
+	}
+	var e *AgreementEntry
+	for i := range m.Agreement {
+		if m.Agreement[i].Group == "all/real/all" && strings.HasPrefix(m.Agreement[i].Label, "incumbent run 1 vs run 2") {
+			e = &m.Agreement[i]
+		}
+	}
+	if e == nil || e.Both != 4 || !near(*e.AG1Mean.V, 1) {
+		t.Fatalf("%+v", e)
+	}
+}

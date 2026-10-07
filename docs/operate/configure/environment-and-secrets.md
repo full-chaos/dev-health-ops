@@ -145,6 +145,17 @@ The generic `LLM_API_KEY`, `LLM_BASE_URL` and `LLM_MODEL` overrides do not apply
 to this client. Give `TYPESAFE_API_KEY` only to the worker group that runs
 `investment.materialize`.
 
+How to give it to that group only:
+
+- **Helm:** every worker group loads the shared ConfigMap and the shared
+  Secret, so a key placed there reaches all groups. Set the key, and the
+  `INVESTMENT_SHADOW_*` switch, in `goWorkers.groups[].extraEnv` of the `heavy`
+  group, with the key as a `secretKeyRef` to a separate Secret that holds only
+  that key. Nothing is rendered when `extraEnv` is not set.
+- **Docker Compose:** the root `compose.yml` passes `TYPESAFE_*` and
+  `INVESTMENT_SHADOW_*` from the host environment to `go-worker-heavy` only.
+  Unset values are empty, which means off.
+
 Workspace-to-platform fallback defaults to platform after a configured org BYO
 is evaluated; an explicit organization fail_closed choice opts out of that
 fallback. Source-tagged accounting keeps platform-managed usage and BYO usage

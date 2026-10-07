@@ -286,6 +286,15 @@ spec:
               valueFrom: {secretKeyRef: {name: {{ include "dev-health.goPgbouncerSecretName" $ }}, key: COORDINATOR_DATABASE_URI}}
             {{- end }}
             {{- end }}
+            {{- /*
+              Per-group only: goWorkers.groups[].extraEnv, rendered last so an
+              explicit entry beats the shared envFrom sources below. A value
+              that must reach one group and no other (a credential or a trial
+              switch) goes here; the shared ConfigMap/Secret reach all groups.
+            */}}
+            {{- with $group.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
           {{- /*
           CHAOS-4984: same extraEnvFrom-first, chart-config/secret-last
           ordering as the deleted Python api Deployment had, and for the same reason --

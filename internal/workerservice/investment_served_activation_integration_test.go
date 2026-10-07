@@ -24,9 +24,10 @@ import (
 )
 
 // The executor that the WORKER builds (buildNativeInvestmentExecutor), with
-// only the served decision switch changed between the rows of the table
-// (CHAOS-8874). A cited constructor is not proof: the served row itself must
-// carry the decision stamp, with only its own switch on.
+// only the provider selection changed between the rows of the table
+// (CHAOS-8874): LLM_PROVIDER=typesafe serves from the decision backend. A cited
+// constructor is not proof: the served row itself must carry the decision
+// stamp, with only that value changed.
 func TestTheWorkersInvestmentExecutorServesFromTheDecisionBackendWithOnlyItsOwnSwitch(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Minute)
 	t.Cleanup(cancel)
@@ -72,7 +73,7 @@ func TestTheWorkersInvestmentExecutorServesFromTheDecisionBackendWithOnlyItsOwnS
 		return n
 	}
 	names := []string{
-		investment.EnvServedDecisionOrgIDs,
+		"LLM_PROVIDER",
 		investment.EnvShadowProvider, investment.EnvShadowOrgIDs, investment.EnvShadowSamplePercent,
 		investment.EnvShadowConcurrency, investment.EnvShadowMaxSeconds, investment.EnvShadowMaxUSDPerRun,
 		"TYPESAFE_API_KEY", "TYPESAFE_BASE_URL", "TYPESAFE_MODEL",
@@ -80,7 +81,7 @@ func TestTheWorkersInvestmentExecutorServesFromTheDecisionBackendWithOnlyItsOwnS
 	claim := workgraph.Claim{
 		Request: workgraph.Request{
 			ID: "served-activation-request", OrganizationID: shadowActivationOrg,
-			Kind: workgraph.KindMaterialize, Scope: []byte(`{"llm_provider":"mock","force":true}`),
+			Kind: workgraph.KindMaterialize, Scope: []byte(`{"force":true}`),
 		},
 		Token: "claim-of-the-served-activation-test",
 	}
@@ -96,23 +97,20 @@ func TestTheWorkersInvestmentExecutorServesFromTheDecisionBackendWithOnlyItsOwnS
 		wantDecision uint64 // served rows with the decision stamp
 		wantMock     uint64 // served rows with the mock stamp
 	}{
-		{name: "every flag off", wantMock: 1},
-		{name: "the key alone is not a switch", env: map[string]string{"TYPESAFE_API_KEY": key}, wantMock: 1},
+		{name: "today: LLM_PROVIDER=mock", env: map[string]string{"LLM_PROVIDER": "mock"}, wantMock: 1},
+		{name: "the key alone is not a switch", env: map[string]string{"LLM_PROVIDER": "mock", "TYPESAFE_API_KEY": key}, wantMock: 1},
 		{name: "the shadow switch is not the served switch", env: map[string]string{
-			"TYPESAFE_API_KEY": key, investment.EnvShadowProvider: "typesafe", investment.EnvShadowOrgIDs: shadowActivationOrg,
+			"LLM_PROVIDER": "mock", "TYPESAFE_API_KEY": key, investment.EnvShadowProvider: "typesafe", investment.EnvShadowOrgIDs: shadowActivationOrg,
 		}, wantSends: 1, wantMock: 1},
-		{name: "another org on the served list", env: map[string]string{
-			"TYPESAFE_API_KEY": key, investment.EnvServedDecisionOrgIDs: "another-org",
-		}, wantMock: 1},
-		{name: "only the served switch on", env: map[string]string{
-			"TYPESAFE_API_KEY": key, investment.EnvServedDecisionOrgIDs: shadowActivationOrg,
+		{name: "LLM_PROVIDER=typesafe", env: map[string]string{
+			"LLM_PROVIDER": "typesafe", "TYPESAFE_API_KEY": key,
 		}, wantSends: 1, wantDecision: 1},
-		{name: "served and shadow on: one request, no shadow row", env: map[string]string{
-			"TYPESAFE_API_KEY": key, investment.EnvServedDecisionOrgIDs: shadowActivationOrg,
+		{name: "LLM_PROVIDER=typesafe with the shadow switch on: one request, no shadow row", env: map[string]string{
+			"LLM_PROVIDER": "typesafe", "TYPESAFE_API_KEY": key,
 			investment.EnvShadowProvider: "typesafe", investment.EnvShadowOrgIDs: "*",
 		}, wantSends: 1, wantDecision: 1},
-		{name: "the served switch on with no key is an error, not a generative run", env: map[string]string{
-			investment.EnvServedDecisionOrgIDs: shadowActivationOrg,
+		{name: "LLM_PROVIDER=typesafe with no key is an error, not a generative run", env: map[string]string{
+			"LLM_PROVIDER": "typesafe",
 		}, wantErr: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

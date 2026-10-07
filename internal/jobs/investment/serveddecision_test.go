@@ -240,7 +240,7 @@ func TestAServedAnswerThatCannotBeUsedIsTheInvalidOutputRow(t *testing.T) {
 }
 
 // A request that fails and can work the next time: no outcome, the unit keeps
-// its last row (ruling 2, option A), the failure has its class, and the
+// its last row (ruled: option A), the failure has its class, and the
 // attempts are rows. A failure that recurs on every request is deterministic
 // and keeps nothing: it ends the run.
 func TestAServedRequestFailureHasNoOutcomeAndSaysWhetherItRecurs(t *testing.T) {
@@ -277,7 +277,7 @@ func TestAServedRequestFailureHasNoOutcomeAndSaysWhetherItRecurs(t *testing.T) {
 			if (tc.class != "" && class != tc.class) || class == "" || deterministic != tc.deterministic {
 				t.Errorf("class %q deterministic %v, want %q %v", class, deterministic, tc.class, tc.deterministic)
 			}
-			if got, want := served.keepsLastRow(entry.index), !tc.deterministic && !servedTransportFailureWritesRow(); got != want {
+			if got, want := served.keepsLastRow(entry.index), !tc.deterministic; got != want {
 				t.Errorf("keepsLastRow = %v, want %v", got, want)
 			}
 			if served.isLowQuality(entry.index) {
@@ -431,35 +431,6 @@ func TestTheServedOutcomeBoundsEveryValueOfAClassification(t *testing.T) {
 				t.Error("a log line holds a value of the classification")
 			}
 		})
-	}
-}
-
-func TestServedDecisionSettingsNeedAnOrgOnTheList(t *testing.T) {
-	lookup := func(value string) func(string) string {
-		return func(name string) string {
-			if name == EnvServedDecisionOrgIDs {
-				return value
-			}
-			return "set-but-not-read"
-		}
-	}
-	cases := []struct {
-		list, org string
-		want      bool
-	}{
-		{"", "org-a", false},
-		{"org-a", "org-a", true},
-		{" org-b , org-a ,", "org-a", true},
-		{"org-b", "org-a", false},
-		{"org-a", "", false},
-		{"*", "org-a", true},
-		{"*", "", false},
-		{",,", "org-a", false},
-	}
-	for _, tc := range cases {
-		if got := ServedDecisionSettingsFromEnv(lookup(tc.list)).EnabledFor(tc.org); got != tc.want {
-			t.Errorf("list %q org %q: EnabledFor = %v, want %v", tc.list, tc.org, got, tc.want)
-		}
 	}
 }
 

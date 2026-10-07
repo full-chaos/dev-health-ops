@@ -1,18 +1,17 @@
 package investment
 
 // serveddecision.go is the SERVED mode of the decision backend (TypeSafe Jev)
-// in investment.materialize (CHAOS-8874, parent CHAOS-8865). For an org on the
-// list of INVESTMENT_SERVED_DECISION_ORG_IDS the categorization call of the run
-// is one decision.Completer.Classify in place of the generative
+// in investment.materialize (CHAOS-8874, parent CHAOS-8865). When the provider
+// selection of the run resolves to the decision kind (LLM_PROVIDER=typesafe,
+// or a scope that asks for it), the categorization call of the run is one
+// decision.Completer.Classify in place of the generative
 // categorize.CategorizeTextBundle; everything before it (the gates, the
 // skip-existing read) and after it (the theme roll-up, the three writes) is
-// the one served path.
+// the one served path. There is no setting of its own: setting the provider
+// back is the rollback. The shadow phase does not run in such a run.
 //
-// The switch is OFF by default: with an empty list no client is built and no
-// request is possible. Taking the org off the list is the rollback.
-//
-// What a served decision row is, by state (the two functions marked RULING are
-// the two choices that wait for a ruling; each is the one place of its choice):
+// What a served decision row is, by state (servedLowQualityStatus is the one
+// place of a choice that still waits for a ruling):
 //
 //   - ok: the validated mix, its one cited quote, status ok.
 //   - zero_support: the top raw key at 1.0, no quote, servedLowQualityStatus,
@@ -20,7 +19,9 @@ package investment
 //   - evidence_none: the mix of the levels, no quote, the same status and cap.
 //   - a refused, missing or invalid answer, a missing evidence answer, an
 //     adapter defect: the invalid_llm_output row of the generative path.
-//   - request_failed: servedTransportFailureWritesRow. A deterministic failure
+//   - request_failed that can pass later (a timeout, a rate limit, a server
+//     error): no row is written, so the unit's last row stays its latest row
+//     and the next run asks again (ruled: option A). A deterministic failure
 //     (rejected key, unknown model) ends the run, like the generative path.
 //
 // The stamp of every row is decision.Identity.Stamp, so no decision row can
@@ -44,10 +45,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph/units"
 )
 
-// EnvServedDecisionOrgIDs is the switch: a comma list of org ids, "*" for
-// every org. Empty, the default, is off.
-const EnvServedDecisionOrgIDs = "INVESTMENT_SERVED_DECISION_ORG_IDS"
-
 const (
 	// servedLowQualityCap is the evidence-quality cap of a served row that has
 	// a mix and no validated evidence quote. It is the cap of an
@@ -69,51 +66,6 @@ const (
 // evidence_none row. RULING 1 (provisional): invalid_llm_output. Such a row is
 // not reused by skip-existing, so the unit is asked again by the next run.
 func servedLowQualityStatus() string { return categorize.StatusInvalidLLMOutput }
-
-// servedTransportFailureWritesRow says what a unit gets when its request
-// failed and the failure is not deterministic. RULING 2 (provisional): false,
-// option A. No investment row is written, so the last served row of the unit
-// stays the latest one, and the next run asks again. true is option C: the
-// llm_task_failed prior row of the generative path.
-func servedTransportFailureWritesRow() bool { return false }
-
-// ServedDecisionSettings is the decoded switch.
-type ServedDecisionSettings struct {
-	// AllOrgs is the "*" entry of the list.
-	AllOrgs bool
-	// OrgIDs is the allow-list. Empty with AllOrgs false is off.
-	OrgIDs map[string]struct{}
-}
-
-// ServedDecisionSettingsFromEnv decodes the switch through lookup (production
-// passes secrets.GetenvNamed). No value of the variable is an error: an entry
-// is an org id or it matches no org.
-func ServedDecisionSettingsFromEnv(lookup func(string) string) ServedDecisionSettings {
-	settings := ServedDecisionSettings{OrgIDs: map[string]struct{}{}}
-	for _, entry := range strings.Split(lookup(EnvServedDecisionOrgIDs), ",") {
-		switch entry = strings.TrimSpace(entry); entry {
-		case "":
-		case shadowAllOrgs:
-			settings.AllOrgs = true
-		default:
-			settings.OrgIDs[entry] = struct{}{}
-		}
-	}
-	return settings
-}
-
-// EnabledFor reports whether the org is served by the decision backend. An
-// empty org is never: "*" means every organization, not a run with none.
-func (settings ServedDecisionSettings) EnabledFor(orgID string) bool {
-	if orgID == "" {
-		return false
-	}
-	if settings.AllOrgs {
-		return true
-	}
-	_, ok := settings.OrgIDs[orgID]
-	return ok
-}
 
 // servedClassifier is the decision completer as the served mode uses it.
 type servedClassifier interface {
@@ -256,7 +208,7 @@ func (served *ServedDecision) categorize(ctx context.Context, cfg Config, entry 
 			class: servedFailureClass(classification), deterministic: classification.Stop,
 			calls: classification.LLMCalls, inputTokens: classification.InputTokens, outputTokens: classification.OutputTokens,
 		}
-		if !failure.deterministic && !servedTransportFailureWritesRow() {
+		if !failure.deterministic {
 			served.mu.Lock()
 			served.keptLastRow[entry.index] = struct{}{}
 			served.mu.Unlock()
@@ -393,7 +345,7 @@ func (served *ServedDecision) logFailure(ctx context.Context, cfg Config, workUn
 		slog.String("org_id", cfg.OrgID), slog.String("run_id", cfg.RunID),
 		slog.String("work_unit_id", workUnitID), slog.String("failure_class", failure.class),
 		slog.Bool("deterministic", failure.deterministic),
-		slog.Bool("row_written", failure.deterministic || servedTransportFailureWritesRow()),
+		slog.Bool("run_stopped", failure.deterministic),
 	)
 }
 
@@ -446,6 +398,20 @@ func (served *ServedDecision) finish(ctx context.Context, writer *chwrite.Writer
 	)
 	served.logger.InfoContext(ctx, "investment served decision complete", attrs...)
 }
+
+// servedDecisionProvider is the Provider of a materializer that the decision
+// backend serves. It is never asked: Materializer.categorizeEntry calls the
+// served backend when one is set. A call is a wiring defect and fails loudly,
+// so no unit can be categorized by anything else in silence.
+type servedDecisionProvider struct{}
+
+var errServedDecisionProviderCalled = errors.New("investment: the decision backend serves this run; the generative provider must not be called")
+
+func (servedDecisionProvider) Complete(context.Context, categorize.CompletionRequest) (categorize.CompletionResult, error) {
+	return categorize.CompletionResult{}, errServedDecisionProviderCalled
+}
+func (servedDecisionProvider) Close() error  { return nil }
+func (servedDecisionProvider) Model() string { return "" }
 
 // SetServed attaches the served decision backend of this run. Nil (the
 // default) means the generative provider serves the run.

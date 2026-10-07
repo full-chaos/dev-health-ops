@@ -131,9 +131,11 @@ bundles are platform configuration, never organization BYO settings.
 ### TypeSafe decision backend
 
 The `typesafe` kind is a decision backend (TypeSafe System One, model family
-`jev`), not a text completer. It is never selected by `LLM_PROVIDER`, never by
-auto-detection, and never serves a user-visible categorization. Only code that
-builds the TypeSafe client reads these names:
+`jev`), not a text completer. It is never selected by auto-detection: a present
+`TYPESAFE_API_KEY` alone selects nothing. `LLM_PROVIDER=typesafe` selects it for
+investment categorization only (see "Investment categorization served by the
+decision backend" below). Only code that builds the TypeSafe client reads these
+names:
 
 | Variable | Meaning | Default |
 | --- | --- | --- |
@@ -149,52 +151,62 @@ How to give it to that group only:
 
 - **Helm:** every worker group loads the shared ConfigMap and the shared
   Secret, so a key placed there reaches all groups. Set the key, and the
-  `INVESTMENT_SHADOW_*` or `INVESTMENT_SERVED_DECISION_ORG_IDS` switch, in `goWorkers.groups[].extraEnv` of the `heavy`
+  `INVESTMENT_SHADOW_*` switch, in `goWorkers.groups[].extraEnv` of the `heavy`
   group, with the key as a `secretKeyRef` to a separate Secret that holds only
   that key. Nothing is rendered when `extraEnv` is not set.
 - **Docker Compose:** the root `compose.yml` and the bigboy worker overlay
   (`ci/bigboy/compose.bigboy.workers.yml`) pass `TYPESAFE_*` and
-  `INVESTMENT_SHADOW_*` and `INVESTMENT_SERVED_DECISION_ORG_IDS` from the shell or `--env-file` of the compose command to
+  `INVESTMENT_SHADOW_*` from the shell or `--env-file` of the compose command to
   `go-worker-heavy` only. Do not put them in `ops/.env`: every worker reads it.
   Unset values are empty, which means off.
 
 ### Investment categorization served by the decision backend
 
-`INVESTMENT_SERVED_DECISION_ORG_IDS` selects, for each organization, which
-backend writes the investment categorization that users see. It is **off by
-default**: with the variable empty no TypeSafe client is built for the served
-path and the configured LLM provider categorizes every organization.
+`LLM_PROVIDER=typesafe` makes the worker that runs `investment.materialize`
+write the investment categorization that users see with the TypeSafe decision
+backend. There is no other switch: with any other value, or unset, nothing
+changes. To go back, set `LLM_PROVIDER` to its earlier value.
 
-| Variable | Meaning | Default |
-| --- | --- | --- |
-| `INVESTMENT_SERVED_DECISION_ORG_IDS` | Comma-separated organization ids whose categorization is written by the TypeSafe decision backend; `*` means every organization. | empty (off) |
+```dotenv
+LLM_PROVIDER=typesafe
+TYPESAFE_API_KEY=...   # to the investment worker group only (see above)
+```
 
-For an organization on the list:
+`LLM_PROVIDER` is one value for every process that reads it, and only
+investment categorization can use the decision backend:
 
-- Each work unit with enough text gets one request to the decision backend.
-  There is no repair request and no second provider.
+- **Explanations** (the investment mix and work unit explanations of
+  query-api) treat `typesafe` as "not a text provider": with no organization
+  BYO provider they select the text provider by key, as with `LLM_PROVIDER`
+  unset (`OPENAI_API_KEY` first, with `LLM_MODEL`). Keep that key and
+  `LLM_MODEL` set, or explanations answer "no LLM provider is configured".
+- **Organizations with BYO LLM settings:** the worker does not read
+  organization LLM settings, so such an organization's categorization is also
+  written by the decision backend, while its explanations keep its BYO
+  provider.
+- **Usage:** each run records one `llm_token_usage` row under provider
+  `typesafe` and the TypeSafe model (`TYPESAFE_MODEL`, default `jev-1.13.0`),
+  so the LLM spend view shows it as its own line. Explanation usage keeps its
+  own provider.
+- **Shadow phase:** it does not run when the decision backend serves the run.
+
+What a categorization is, for each work unit with enough text (one request,
+no repair request, no second provider):
+
 - The rows carry a `categorization_model_version` that starts with
-  `provider=typesafe;api=systemone;`, so they are told apart from the rows of
-  an LLM provider. Each work unit is categorized again one time after the
-  switch, because the version is new.
+  `provider=typesafe;api=systemone;`, so each work unit is categorized again
+  one time after the switch, because the version is new.
 - A work unit for which the backend finds no clear category gets its most
-  probable category with a low `evidence_quality` (0.3 or less) and no evidence
-  quote. Such a unit is asked again by the next run.
+  probable category with a low `evidence_quality` (0.3 or less) and no
+  evidence quote. The next run asks it again.
 - A work unit whose request fails for a reason that can pass (a timeout, a
   rate limit, a server error) gets no new row in that run: its last row stays,
   and the next run asks again. A work unit that never had a row has none until
   a later run answers it.
-- A rejected key or an unknown model ends the run with an error, like the
-  same failure of an LLM provider.
-- The run's usage is recorded under provider `typesafe` and the configured
-  model, so the LLM spend view shows it as its own line.
-- The shadow phase (below) is off for that organization.
-
-The switch needs `TYPESAFE_API_KEY` (above). An organization on the list with a
-missing key, or with a `TYPESAFE_*` value that cannot be used, fails its
-`investment.materialize` run with an error: it is never categorized by the LLM
-provider in silence. To go back to the LLM provider, take the organization off
-the list.
+- A rejected key or an unknown model ends the run with an error, like the same
+  failure of an LLM provider. A missing `TYPESAFE_API_KEY`, or a `TYPESAFE_*`
+  value that cannot be used, fails the run with an error: it is never
+  categorized by another provider in silence.
 
 ### Investment shadow categorization
 

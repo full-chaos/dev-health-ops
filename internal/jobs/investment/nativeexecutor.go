@@ -67,11 +67,11 @@ type NativeExecutor struct {
 	// shadowHTTPClient replaces the HTTP client of the shadow backend. Nil, the
 	// production value, selects the hardened client.
 	shadowHTTPClient *http.Client
-	// newServed builds the served decision backend of one run (CHAOS-8874), or
-	// returns nil when the org is not on the list -- the default. An org on the
-	// list whose backend cannot be built is an error: the run must not serve
-	// that org from the generative provider in silence.
-	newServed func(orgID string) (*ServedDecision, error)
+	// newServed builds the served decision backend of one run (CHAOS-8874),
+	// called only when the provider selection resolved to the decision kind.
+	// A backend that cannot be built is an error of the run: it must never be
+	// served by the generative provider in silence.
+	newServed func(model string) (*ServedDecision, error)
 }
 
 // SetShadowObserver wires the optional shadow-phase telemetry. Nil is
@@ -109,14 +109,11 @@ func NewNativeExecutor(reader *chquery.Reader, writer *chwrite.Writer, logger *s
 	return executor, nil
 }
 
-// servedFromEnv builds the served decision backend from the environment, or
-// returns nil for an org that INVESTMENT_SERVED_DECISION_ORG_IDS does not name.
-// For such an org NO client is built.
-func (executor *NativeExecutor) servedFromEnv(orgID string) (*ServedDecision, error) {
-	if !ServedDecisionSettingsFromEnv(secrets.GetenvNamed).EnabledFor(orgID) {
-		return nil, nil
-	}
-	client, err := categorize.NewTypeSafeClientFromEnvWithHTTPClient("", executor.logger, executor.shadowHTTPClient)
+// servedFromEnv builds the served decision backend from the TypeSafe settings
+// (TYPESAFE_API_KEY, TYPESAFE_MODEL, TYPESAFE_BASE_URL). model is the request's
+// model_ref; "" selects TYPESAFE_MODEL, then the pinned default.
+func (executor *NativeExecutor) servedFromEnv(model string) (*ServedDecision, error) {
+	client, err := categorize.NewTypeSafeClientFromEnvWithHTTPClient(model, executor.logger, executor.shadowHTTPClient)
 	if err != nil {
 		// The constructor's messages hold a rule or a length, never the key, the
 		// configured URL or the configured model.
@@ -173,6 +170,11 @@ func resolveProviderFromEnv(requested, model string) (categorize.Provider, categ
 	kind, err := categorize.ResolveProviderKind(requested)
 	if err != nil {
 		return nil, "", err
+	}
+	// The decision kind is served by the decision backend (CHAOS-8874), built
+	// by Execute. Its Provider is never asked; see servedDecisionProvider.
+	if categorize.IsDecisionProviderKind(kind) {
+		return servedDecisionProvider{}, kind, nil
 	}
 	// REFUSE a kind this port has no real client for (codex r1 P1-a).
 	//
@@ -331,12 +333,16 @@ func (executor *NativeExecutor) Execute(ctx context.Context, claim workgraph.Cla
 	if err != nil {
 		return nil, err
 	}
-	// The served decision backend is built AFTER every refusal above. An org on
-	// its list is served by it, and its shadow phase is off: the same backend
-	// must not be paid two times for one unit.
+	// The served decision backend is built AFTER every refusal above, when the
+	// provider selection resolved to the decision kind. Its run has no shadow
+	// phase: the same backend must not be paid two times for one unit.
 	var served *ServedDecision
-	if executor.newServed != nil {
-		served, err = executor.newServed(orgID)
+	if categorize.IsDecisionProviderKind(kind) {
+		if executor.newServed == nil {
+			return nil, workgraph.Deterministic(workgraph.ClassLLMProviderInvalid,
+				errors.New("the decision backend is selected and this executor cannot build it"))
+		}
+		served, err = executor.newServed(claim.Request.ModelRef)
 		if err != nil {
 			return nil, workgraph.Deterministic(workgraph.ClassLLMProviderInvalid,
 				fmt.Errorf("build the served decision backend: %w", err))

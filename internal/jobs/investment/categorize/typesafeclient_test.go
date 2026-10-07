@@ -15,6 +15,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -395,7 +396,7 @@ func TestTypeSafeNeverFollowsARedirectAndTheOtherOriginSeesNothing(t *testing.T)
 		}
 		t.Run(name, func(t *testing.T) {
 			probe := redirectprobe.New(t)
-			cfg := TypeSafeClientConfig{APIKey: secrets.NewHidden("SECRET"), BaseURL: probe.Base.URL, UnsafeAllowAnyBaseURLForTest: true,
+			cfg := TypeSafeClientConfig{APIKey: secrets.NewHidden("SECRET-0123456789"), BaseURL: probe.Base.URL, UnsafeAllowAnyBaseURLForTest: true,
 				Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
 			if supplied {
 				cfg.HTTPClient = probe.Client()
@@ -978,7 +979,8 @@ func TestTypeSafeKeyEchoedInTheRequestIDHeaderNeverReachesErrorLogOrResult(t *te
 }
 
 // A request id that is merely long or odd is refused, never cut or stripped
-// into a look-alike; a short key is not searched for in ordinary ids.
+// into a look-alike. A piece of the key shorter than minFragmentLen is not
+// searched for (a named limit; see the package doc of the redaction rule).
 func TestTypeSafeRequestIDShapeRules(t *testing.T) {
 	cases := map[string]struct {
 		id       string
@@ -986,15 +988,13 @@ func TestTypeSafeRequestIDShapeRules(t *testing.T) {
 		wantID   string
 		rejected bool
 	}{
-		"plain id":                 {"req_01HZX-abc.9", plainKey, "req_01HZX-abc.9", false},
-		"64 bytes":                 {strings.Repeat("a", 64), plainKey, strings.Repeat("a", 64), false},
-		"65 bytes":                 {strings.Repeat("a", 65), plainKey, "", true},
-		"space":                    {"req 1", plainKey, "", true},
-		"quote and brace":          {"req_1\"}{", plainKey, "", true},
-		"newline":                  {"req_1\nX", plainKey, "", true},
-		"short key is not matched": {"req_a1b2c3_x", "a1b2c3", "req_a1b2c3_x", false},
-		"tiny key spellings":       {"req_6162_x", "ab", "req_6162_x", false},
-		"11-byte piece of a key":   {plainKey[5:16], plainKey, plainKey[5:16], false},
+		"plain id":               {"req_01HZX-abc.9", plainKey, "req_01HZX-abc.9", false},
+		"64 bytes":               {strings.Repeat("a", 64), plainKey, strings.Repeat("a", 64), false},
+		"65 bytes":               {strings.Repeat("a", 65), plainKey, "", true},
+		"space":                  {"req 1", plainKey, "", true},
+		"quote and brace":        {"req_1\"}{", plainKey, "", true},
+		"newline":                {"req_1\nX", plainKey, "", true},
+		"11-byte piece of a key": {plainKey[5:16], plainKey, plainKey[5:16], false},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -1218,5 +1218,106 @@ func TestTypeSafeContextEndDuringTheBodyReadIsCanceled(t *testing.T) {
 	se := mustSystemOneError(t, err)
 	if se.Class != SystemOneClassCanceled || !errors.Is(err, context.DeadlineExceeded) || h.calls.Load() != 1 || len(se.Attempts) != 1 {
 		t.Fatalf("class=%s err=%v calls=%d attempts=%d", se.Class, err, h.calls.Load(), len(se.Attempts))
+	}
+}
+
+// B3: a key shorter than the redaction minimum cannot be protected from a peer
+// echo, so the constructor (and the env constructor) refuses it.
+func TestTypeSafeRefusesAKeyTooShortToProtect(t *testing.T) {
+	for _, n := range []int{1, 8, 11} {
+		key := strings.Repeat("k", n-1) + "Z"
+		t.Run(fmt.Sprintf("%d bytes", n), func(t *testing.T) {
+			client, err := NewTypeSafeClient(TypeSafeClientConfig{APIKey: secrets.NewHidden(key)})
+			if err == nil {
+				// The failing state: the client exists, and a peer that echoes
+				// the bearer value gets it through into the error text.
+				h := newTS(t, func(w http.ResponseWriter, _ *http.Request) {
+					w.Header().Set("x-typesafe-request-id", key)
+					w.WriteHeader(401)
+				}, withKey(key))
+				_, serr := h.client.SendBody(context.Background(), tsBody)
+				t.Fatalf("a %d-byte key was accepted (client %v); echoed in the request id it reaches the error: %v", n, client != nil, strings.Contains(fmt.Sprint(serr), key))
+			}
+			if client != nil || strings.Contains(err.Error(), key) {
+				t.Fatalf("client = %v, error = %q: want no client and an error without the key", client, err)
+			}
+			t.Setenv("TYPESAFE_API_KEY", key)
+			envClient, envErr := NewTypeSafeClientFromEnv("", nil)
+			if envErr == nil || envClient != nil || strings.Contains(envErr.Error(), key) {
+				t.Fatalf("env path: client = %v, error = %v", envClient, envErr)
+			}
+		})
+	}
+	// The boundary: exactly the redaction minimum is accepted, and the same
+	// bytes echoed whole are then refused as a request id.
+	key := strings.Repeat("k", minFragmentLen-1) + "Z"
+	h := newTS(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("x-typesafe-request-id", key)
+		w.WriteHeader(401)
+	}, withKey(key))
+	_, err := h.client.SendBody(context.Background(), tsBody)
+	se := mustSystemOneError(t, err)
+	if se.RequestID != "" || !se.RequestIDRejected || strings.Contains(h.logs.String(), key) {
+		t.Fatalf("a key of the minimum length was echoed through: id=%q rejected=%v", se.RequestID, se.RequestIDRejected)
+	}
+}
+
+// N1: the status error keeps the parsed Retry-After delay, never the peer's text.
+func TestTypeSafeStatusErrorKeepsTheParsedRetryAfterNotThePeerText(t *testing.T) {
+	text := "Bearer " + tsKey + strings.Repeat("x", 1<<20)
+	h := newTS(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Retry-After", text)
+		w.WriteHeader(422)
+	})
+	_, err := h.client.SendBody(context.Background(), tsBody)
+	found := false
+	for cur := err; cur != nil; cur = errors.Unwrap(cur) {
+		var hs *httpStatusError
+		if errors.As(cur, &hs) {
+			found = true
+			if got := fmt.Sprintf("%#v", hs.header); strings.Contains(got, tsKey) || len(got) > 256 {
+				t.Fatalf("the status error keeps peer header text: %d bytes, key present = %v", len(got), strings.Contains(got, tsKey))
+			}
+		}
+	}
+	if !found {
+		t.Fatal("no status error in the chain: the test measured nothing")
+	}
+	// A usable value is kept as the parsed delay (here 2 s, and a fraction).
+	// (0.25 s is not the shared backoff's first step, so a lost value shows.)
+	for raw, want := range map[string]time.Duration{"2": 2 * time.Second, "0.25": 250 * time.Millisecond, "86400": time.Minute, "1e1": 10 * time.Second} {
+		h := newTS(t, func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Retry-After", raw)
+			w.WriteHeader(429)
+		})
+		_, err := h.client.SendBody(context.Background(), tsBody)
+		if err == nil {
+			t.Fatal("want an error")
+		}
+		if len(*h.delays) != 1 || (*h.delays)[0] != want {
+			t.Fatalf("Retry-After %q: delays = %v, want %v", raw, *h.delays, want)
+		}
+		var hs *httpStatusError
+		if !errors.As(err, &hs) {
+			t.Fatal("no status error in the chain: the test measured nothing")
+		}
+		// The kept text is the parsed delay in seconds, not the peer's spelling.
+		if got, perr := strconv.ParseFloat(hs.header.Get("Retry-After"), 64); perr != nil || time.Duration(got*float64(time.Second)) != want || (raw == "1e1" || raw == "86400") && hs.header.Get("Retry-After") == raw {
+			t.Fatalf("Retry-After %q kept as %q, want the parsed %v", raw, hs.header.Get("Retry-After"), want)
+		}
+	}
+}
+
+// N4: a cancel during the backoff keeps the refused-id mark of the attempt.
+func TestTypeSafeCancelDuringBackoffKeepsTheRefusedIDMark(t *testing.T) {
+	h := newTS(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("x-typesafe-request-id", tsKey)
+		w.WriteHeader(429)
+	})
+	h.client.sleep = func(context.Context, time.Duration) bool { return false }
+	_, err := h.client.SendBody(context.Background(), tsBody)
+	se := mustSystemOneError(t, err)
+	if se.Class != SystemOneClassCanceled || se.RequestID != "" || !se.RequestIDRejected {
+		t.Fatalf("class=%s id=%q rejected=%v, want canceled with a refused, empty id", se.Class, se.RequestID, se.RequestIDRejected)
 	}
 }

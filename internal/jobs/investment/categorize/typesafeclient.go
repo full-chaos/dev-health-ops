@@ -42,6 +42,19 @@ import (
 // the key from every printed form. What is new: the request/response wire,
 // the status-first class mapping for 402/403, the bounded response read, and
 // per-attempt latency / request-id accounting.
+//
+// Redaction of the peer's echo (a named limit). The request id, the returned
+// model and the other response fields are the peer's text. The client refuses
+// whole (never strips) a value that carries the API key: as it is, in any case,
+// inside a longer string, as its whole base64 or hex, or as any raw piece of
+// minFragmentLen (12) bytes or more. NewTypeSafeClient refuses a key shorter
+// than that, so every accepted key is checked. NOT caught, because only a peer
+// that already holds the key can build them: a raw piece of 11 bytes or less;
+// base64url or hex of one part of the key; base64url of the key after an extra
+// byte or with a prefix such as "Bearer "; base32; the key reversed; the key
+// with separators inside. A caller must also never print an unwrapped inner
+// layer of a transport error (it holds the peer's bytes): log the class or the
+// top-level text.
 type TypeSafeClient struct {
 	cfg    TypeSafeClientConfig
 	client *http.Client
@@ -100,6 +113,14 @@ func NewTypeSafeClient(cfg TypeSafeClientConfig) (*TypeSafeClient, error) {
 	if cfg.APIKey.Reveal() == "" {
 		return nil, errors.New("typesafe client: an API key is required")
 	}
+	if len(cfg.APIKey.Reveal()) < minFragmentLen {
+		// The echo check (leaksKey) compares pieces of the key of
+		// minFragmentLen bytes or more; a shorter key would pass it unmasked
+		// into errors, logs and result fields. A real TypeSafe key is far
+		// longer, so a short value is a mistake, not a key. The message holds
+		// the length bound only, never the key.
+		return nil, fmt.Errorf("typesafe client: the API key is shorter than %d bytes and cannot be protected from a peer echo", minFragmentLen)
+	}
 	if cfg.Model == "" {
 		cfg.Model = DefaultTypeSafeModel
 	}
@@ -128,8 +149,10 @@ func NewTypeSafeClient(cfg TypeSafeClientConfig) (*TypeSafeClient, error) {
 }
 
 // minKeyFormLen: a spelling shorter than this would match ordinary text, so it
-// is not searched for. A real key is far longer, and a short one is still
-// redacted by value by the secrets registry.
+// is not searched for. NewTypeSafeClient refuses a key shorter than
+// minFragmentLen, so every accepted key is checked. (The secrets registry masks
+// the process log line only, not the struct fields a caller stores, so it is no
+// substitute for the check.)
 const minKeyFormLen = 8
 
 // keySpellings are the spellings of the key that can pass the id and model
@@ -149,7 +172,8 @@ func keySpellings(key string) []string {
 	return forms
 }
 
-// minFragmentLen is the shortest piece of the raw key that is refused.
+// minFragmentLen is the shortest piece of the raw key that is refused. It is
+// also the shortest key NewTypeSafeClient accepts.
 const minFragmentLen = 12
 
 // leaksKey reports whether s carries the API key: in any searched spelling, or
@@ -501,7 +525,7 @@ func (c *TypeSafeClient) send(ctx context.Context, body []byte, lenient bool) (S
 			return SystemOneResult{}, err
 		}
 		if !c.sleep(ctx, delay) {
-			canceled := &SystemOneError{Class: SystemOneClassCanceled, RequestID: att.RequestID, Attempts: attempts, cause: ctx.Err()}
+			canceled := &SystemOneError{Class: SystemOneClassCanceled, RequestID: att.RequestID, RequestIDRejected: att.RequestIDRejected, Attempts: attempts, cause: ctx.Err()}
 			c.logFailure(canceled, attempt+1, false, 0)
 			return SystemOneResult{}, canceled
 		}
@@ -580,9 +604,11 @@ func (c *TypeSafeClient) once(ctx context.Context, body []byte, lenient bool) (S
 		// status and headers only.
 		// Only Retry-After survives into the error chain; every other peer
 		// header is dropped.
+		// It is kept as the parsed delay (seconds, capped at 60 s), never as
+		// the peer's text: that text is unbounded and may echo the key.
 		kept := http.Header{}
-		if v := resp.Header.Values("Retry-After"); len(v) > 0 {
-			kept["Retry-After"] = append([]string(nil), v...)
+		if d := retryAfterFromHeader(resp.Header); d > 0 {
+			kept.Set("Retry-After", strconv.FormatFloat(d.Seconds(), 'f', -1, 64))
 		}
 		class, llm := c.classify(&httpStatusError{statusCode: resp.StatusCode, header: kept}, resp.StatusCode, kept)
 		att.Class = string(class)

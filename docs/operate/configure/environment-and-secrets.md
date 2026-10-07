@@ -137,7 +137,7 @@ builds the TypeSafe client reads these names:
 
 | Variable | Meaning | Default |
 | --- | --- | --- |
-| `TYPESAFE_API_KEY` | Bearer token. Secret; read through the named-secret mechanism, so it is redacted in logs and errors. | none (client is not built) |
+| `TYPESAFE_API_KEY` | Bearer token. Secret; read through the named-secret mechanism, so it is redacted in logs and errors. A key shorter than 12 bytes is refused. | none (client is not built) |
 | `TYPESAFE_BASE_URL` | Must be `https://api.typesafe.ai`. Any other value is refused, so the key cannot be sent to another host. | `https://api.typesafe.ai` |
 | `TYPESAFE_MODEL` | A versioned id such as `jev-1.13.0`. The moving aliases `jev-latest` and `jev-preview` are refused. | `jev-1.13.0` |
 

@@ -362,7 +362,7 @@ func TestReplayOracleRealSet(t *testing.T) {
 		RubricSHA256 string `json:"rubric_sha256"`
 		LevelRule    string `json:"level_rule"`
 	}
-	raw, err := os.ReadFile(filepath.Join(dir, "manifest.json"))
+	raw, err := os.ReadFile(filepath.Join(dir, "replay_oracle_manifest.json"))
 	if err != nil {
 		t.Fatalf("%s is set but its manifest cannot be read: %v", replayOracleDirEnv, err)
 	}

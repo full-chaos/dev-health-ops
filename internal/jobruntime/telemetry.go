@@ -392,6 +392,66 @@ func investmentRepoAttributionSources() []InvestmentRepoAttributionSource {
 	}
 }
 
+// InvestmentShadowPhase is what one shadow categorization phase of
+// investment.materialize reports (CHAOS-8869): the phase asks a second
+// backend for the same bundles after the served writes and stores the answers
+// in shadow tables only. Every label below is a member of a closed set; there
+// is no org id, no work unit id and no free text. Mirrors the investment
+// package's own constants as plain strings, since jobruntime must not import
+// that package; investment's tests pin the two sets against each other.
+type InvestmentShadowPhase struct {
+	// Model is the requested model id. One outside
+	// investmentShadowModels is counted under investmentShadowModelOther.
+	Model string
+	// StopReason is one of InvestmentShadowStopReasons.
+	StopReason string
+	// AttemptsByState counts HTTP attempts by one of
+	// InvestmentShadowAttemptStates.
+	AttemptsByState    map[string]int
+	AttemptLatencies   []time.Duration
+	PanicsRecovered    int
+	AttemptWriteErrors int
+	AttemptRowsDropped int
+}
+
+const (
+	investmentShadowRole       = "shadow"
+	investmentShadowProvider   = "typesafe"
+	investmentShadowModelOther = "other"
+	// investmentShadowStopCancelled is the stop reason of a run whose context
+	// was cancelled inside the phase: that request is retried and one of its
+	// claims is spent, so it has a counter of its own.
+	investmentShadowStopCancelled = "cancelled"
+)
+
+// investmentShadowModels is the closed set of model label values.
+var investmentShadowModels = []string{"jev-1.13.0", investmentShadowModelOther}
+
+// InvestmentShadowStopReasons is the closed set of stop reasons of a shadow
+// phase, in render order.
+func InvestmentShadowStopReasons() []string {
+	return []string{"done", "budget", "cap", "deterministic_failure", investmentShadowStopCancelled, "table_missing", "store_error", "panic"}
+}
+
+// InvestmentShadowAttemptStates is the closed set of the state label of an
+// attempt, in render order: the nine decision states for the last attempt of
+// a classification, and "retried" for an attempt that was followed by a retry.
+func InvestmentShadowAttemptStates() []string {
+	return []string{
+		"ok", "zero_support", "question_refused", "answer_missing", "answer_invalid",
+		"evidence_none", "evidence_unanswered", "request_failed", "adapter_defect", "retried",
+	}
+}
+
+// investmentShadowLatencyBuckets fits one HTTP attempt: about 0.1 s for a
+// normal answer, up to the 60 s client timeout.
+var investmentShadowLatencyBuckets = []float64{0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60, 120}
+
+type investmentShadowAttemptLabels struct {
+	model string
+	state string
+}
+
 // IncidentValidFromGuardReason labels one operational_service_repository_mappings
 // row matched by IncidentExecutor's loader (CHAOS-4269/CHAOS-4295): whether
 // it already had a non-NULL valid_from (would have matched the OLD Python
@@ -1327,6 +1387,15 @@ type MetricsCollector struct {
 	// repository for in one run -- see InvestmentRepoAttributionSource's doc
 	// comment.
 	investmentRepoAttribution map[InvestmentRepoAttributionSource]uint64
+	// investmentShadow* (CHAOS-8869): the counters of the shadow
+	// categorization phase -- see InvestmentShadowPhase.
+	investmentShadowAttempts           map[investmentShadowAttemptLabels]uint64
+	investmentShadowAttemptLatency     *histogram
+	investmentShadowStops              map[string]uint64
+	investmentShadowCancelledRuns      uint64
+	investmentShadowPanicsRecovered    uint64
+	investmentShadowAttemptWriteErrors uint64
+	investmentShadowAttemptRowsDropped uint64
 	// incidentValidFromGuardRows (CHAOS-4269/CHAOS-4295): per-reason counter
 	// of operational_service_repository_mappings rows IncidentExecutor's
 	// loader matched, split by whether the NULL-OK valid_from guard was
@@ -1542,6 +1611,7 @@ var _ PostSyncTouchedDaysObserver = (*MetricsCollector)(nil)
 var _ TouchedDaysDrainObserver = (*MetricsCollector)(nil)
 var _ TeamRepoOwnershipDerivationObserver = (*MetricsCollector)(nil)
 var _ InvestmentRepoAttributionObserver = (*MetricsCollector)(nil)
+var _ InvestmentShadowPhaseObserver = (*MetricsCollector)(nil)
 var _ TeamCatalogObserver = (*MetricsCollector)(nil)
 var _ WorkGraphLeaseObserver = (*MetricsCollector)(nil)
 var _ RemainingMetricsLeaseObserver = (*MetricsCollector)(nil)
@@ -1619,6 +1689,9 @@ func NewMetricsCollector(dimensions MetricDimensions) (*MetricsCollector, error)
 		teamRepoOwnershipDerivationRowCount:  newHistogramWithBounds(repoCountBuckets),
 		teamRepoOwnershipResolutionArm:       make(map[TeamRepoOwnershipResolutionArm]uint64, len(teamRepoOwnershipResolutionArms())),
 		investmentRepoAttribution:            make(map[InvestmentRepoAttributionSource]uint64, len(investmentRepoAttributionSources())),
+		investmentShadowAttempts:             make(map[investmentShadowAttemptLabels]uint64),
+		investmentShadowAttemptLatency:       newHistogramWithBounds(investmentShadowLatencyBuckets),
+		investmentShadowStops:                make(map[string]uint64, len(InvestmentShadowStopReasons())),
 		incidentValidFromGuardRows:           make(map[IncidentValidFromGuardReason]uint64, len(incidentValidFromGuardReasons())),
 		teamCatalogDispatch:                  make(map[teamCatalogDispatchLabels]uint64),
 		teamCatalogRowsWritten:               make(map[teamCatalogRowsLabels]uint64),
@@ -2482,6 +2555,52 @@ func (collector *MetricsCollector) ObserveInvestmentRepoAttribution(source Inves
 	collector.mu.Lock()
 	defer collector.mu.Unlock()
 	collector.investmentRepoAttribution[source] += uint64(count)
+	return nil
+}
+
+// ObserveInvestmentShadowPhase records one shadow categorization phase
+// (CHAOS-8869). It refuses, and records nothing, when a label is outside its
+// closed set or a count is negative: a partly recorded phase would read as a
+// smaller one.
+func (collector *MetricsCollector) ObserveInvestmentShadowPhase(phase InvestmentShadowPhase) error {
+	if !slices.Contains(InvestmentShadowStopReasons(), phase.StopReason) {
+		return errors.New("investment shadow stop reason is not registered")
+	}
+	for state, count := range phase.AttemptsByState {
+		if !slices.Contains(InvestmentShadowAttemptStates(), state) {
+			return errors.New("investment shadow attempt state is not registered")
+		}
+		if count < 0 {
+			return errors.New("investment shadow attempt count cannot be negative")
+		}
+	}
+	if phase.PanicsRecovered < 0 || phase.AttemptWriteErrors < 0 || phase.AttemptRowsDropped < 0 {
+		return errors.New("investment shadow count cannot be negative")
+	}
+	for _, latency := range phase.AttemptLatencies {
+		if latency < 0 {
+			return errors.New("investment shadow attempt latency cannot be negative")
+		}
+	}
+	model := phase.Model
+	if !slices.Contains(investmentShadowModels, model) {
+		model = investmentShadowModelOther
+	}
+	collector.mu.Lock()
+	defer collector.mu.Unlock()
+	collector.investmentShadowStops[phase.StopReason]++
+	if phase.StopReason == investmentShadowStopCancelled {
+		collector.investmentShadowCancelledRuns++
+	}
+	for state, count := range phase.AttemptsByState {
+		collector.investmentShadowAttempts[investmentShadowAttemptLabels{model: model, state: state}] += uint64(count)
+	}
+	for _, latency := range phase.AttemptLatencies {
+		collector.investmentShadowAttemptLatency.observe(latency.Seconds())
+	}
+	collector.investmentShadowPanicsRecovered += uint64(phase.PanicsRecovered)
+	collector.investmentShadowAttemptWriteErrors += uint64(phase.AttemptWriteErrors)
+	collector.investmentShadowAttemptRowsDropped += uint64(phase.AttemptRowsDropped)
 	return nil
 }
 
@@ -3556,6 +3675,7 @@ func (collector *MetricsCollector) PrometheusText() string {
 	collector.writeTouchedDaysDrain(&output)
 	collector.writeTeamRepoOwnershipDerivation(&output)
 	collector.writeInvestmentRepoAttribution(&output)
+	collector.writeInvestmentShadowPhase(&output)
 	collector.writeIncidentValidFromGuard(&output)
 	collector.writeTeamCatalogDispatch(&output)
 	collector.writeTeamCatalogRowsWritten(&output)
@@ -4144,6 +4264,37 @@ func (collector *MetricsCollector) writeInvestmentRepoAttribution(output *string
 		writeUintSample(output, "dev_health_investment_repo_attribution_total",
 			[]metricLabel{{"source", string(source)}}, collector.investmentRepoAttribution[source])
 	}
+}
+
+// writeInvestmentShadowPhase renders the counters of the shadow categorization
+// phase (CHAOS-8869). Every series of every closed label set is emitted on
+// every scrape, zero included: with the phase off (the default) each one reads
+// as an explicit zero, not as a missing series.
+func (collector *MetricsCollector) writeInvestmentShadowPhase(output *strings.Builder) {
+	writeMetadata(output, "dev_health_investment_shadow_attempts_total", "HTTP attempts of the investment shadow categorization phase, by role, provider, requested model and state: the decision state for the last attempt of a classification, retried for an attempt that was followed by a retry (CHAOS-8869).", "counter")
+	for _, model := range investmentShadowModels {
+		for _, state := range InvestmentShadowAttemptStates() {
+			writeUintSample(output, "dev_health_investment_shadow_attempts_total",
+				[]metricLabel{{"role", investmentShadowRole}, {"provider", investmentShadowProvider}, {"model", model}, {"state", state}},
+				collector.investmentShadowAttempts[investmentShadowAttemptLabels{model: model, state: state}])
+		}
+	}
+	writeMetadata(output, "dev_health_investment_shadow_attempt_latency_seconds", "Request time of one HTTP attempt of the investment shadow categorization phase, by role; the wait before a retry is not in it.", "histogram")
+	writeHistogram(output, "dev_health_investment_shadow_attempt_latency_seconds",
+		[]metricLabel{{"role", investmentShadowRole}}, collector.investmentShadowAttemptLatency)
+	writeMetadata(output, "dev_health_investment_shadow_phase_stops_total", "Investment shadow categorization phases that ended, by reason: done, budget (the time budget ended first), cap (the spend cap of the run), deterministic_failure (a rejected key or an unknown model), cancelled (the run context was cancelled inside the phase), table_missing (a shadow migration is not applied), store_error, panic.", "counter")
+	for _, reason := range InvestmentShadowStopReasons() {
+		writeUintSample(output, "dev_health_investment_shadow_phase_stops_total",
+			[]metricLabel{{"reason", reason}}, collector.investmentShadowStops[reason])
+	}
+	writeMetadata(output, "dev_health_investment_shadow_phase_cancelled_runs_total", "investment.materialize runs whose context was cancelled inside the shadow phase: the request is retried and one of its claims is spent.", "counter")
+	writeUintSample(output, "dev_health_investment_shadow_phase_cancelled_runs_total", nil, collector.investmentShadowCancelledRuns)
+	writeMetadata(output, "dev_health_investment_shadow_panics_recovered_total", "Panics recovered inside the investment shadow categorization phase; each one ended one work unit as adapter_defect, or the phase.", "counter")
+	writeUintSample(output, "dev_health_investment_shadow_panics_recovered_total", nil, collector.investmentShadowPanicsRecovered)
+	writeMetadata(output, "dev_health_investment_shadow_attempt_write_errors_total", "Failed batch inserts of llm_categorization_attempts rows by the investment shadow phase; the rows of that run are lost.", "counter")
+	writeUintSample(output, "dev_health_investment_shadow_attempt_write_errors_total", nil, collector.investmentShadowAttemptWriteErrors)
+	writeMetadata(output, "dev_health_investment_shadow_attempt_rows_dropped_total", "llm_categorization_attempts rows the investment shadow phase did not write because the buffer of the run was at its row cap.", "counter")
+	writeUintSample(output, "dev_health_investment_shadow_attempt_rows_dropped_total", nil, collector.investmentShadowAttemptRowsDropped)
 }
 
 // writeIncidentValidFromGuard renders CHAOS-4269/CHAOS-4295's per-reason

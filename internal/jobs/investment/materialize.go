@@ -226,6 +226,9 @@ type Materializer struct {
 	writer   *chwrite.Writer
 	provider categorize.Provider
 	logger   *slog.Logger
+	// shadow is the optional shadow phase (shadowphase.go). Nil is the default
+	// and means no phase.
+	shadow *ShadowPhase
 }
 
 // ErrUnavailable reports a Materializer built without a collaborator it needs.
@@ -688,6 +691,11 @@ func (m *Materializer) Run(ctx context.Context, cfg Config) (Stats, error) {
 		"rejected_confidences", stats.RejectedConfidences,
 		"llm", categorize.FormatFailureSummary(len(outcomes)-fallbackCount, stats.LLMFailureCounts),
 	)
+
+	// SHADOW PHASE, AFTER EVERY SERVED WRITE (CHAOS-8869). The three output
+	// tables and the token-usage row are written; stats is final. The call has
+	// no result on purpose: see shadowphase.go.
+	m.runShadow(ctx, cfg, all)
 	return stats, nil
 }
 

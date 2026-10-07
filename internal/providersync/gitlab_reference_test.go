@@ -104,18 +104,13 @@ func (doer linksBodyDoer) Do(request *http.Request) (*http.Response, error) {
 // Through the production route: a /links entry without references.full is counted as an unsupported shape and writes no
 // dependency row.
 func TestGitLabWorkItemsRouteCountsLinksWithoutReferencesAsUnsupported(t *testing.T) {
-	classifier, err := NewInvestmentClassifier(investmentConfigPath(t, "real"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	deriver := GitLabWorkItemDeriver{Source: &githubMultiDayOracleSource{}, statusMapping: loadRealStatusMapping(t), investmentClassifier: classifier}
 	inner := &gitLabWorkItemsDoer{responses: gitLabWorkItemResponses()}
 	claim := nativeTestClaim("gitlab", "work-items")
 	claim.OrgID = "77777777-7777-4777-8777-777777777777"
 	client := gitLabWorkItemsClient(t, fakehttp.Client(linksBodyDoer{inner: inner, body: `[{"link_type":"blocks","iid":7}]`}))
 	client.Metrics = providerfoundation.NewMetrics()
 	batch, err := (GitLabWorkItemsRouteHandler{
-		StatusMapping: loadRealStatusMapping(t), Derived: deriver, PerPage: 2, MaxPages: 10, NestedMaxPages: 10,
+		StatusMapping: loadRealStatusMapping(t), PerPage: 2, MaxPages: 10, NestedMaxPages: 10,
 	}).Collect(context.Background(), claim, providerfoundation.Credential{Provider: "gitlab", ID: claim.CredentialID},
 		client, time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC))
 	if err != nil {

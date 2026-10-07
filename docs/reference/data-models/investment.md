@@ -189,10 +189,13 @@ above, and not interchangeable with it.
 `investment_classifications_daily` and `issue_type_metrics_daily` are plain (append-only)
 `MergeTree` tables. The daily metric job computes them from stored work items: the families
 `work_item_investment` and `work_item_issue_type` (`internal/jobs/metrics/daily`), with the
-compute in `internal/jobs/metrics/workitemengine`. A work-items sync unit also appends rows for
-the days of its window, computed from only the items that unit fetched; until the sync stops
-writing derived rows, those rows are partial and the next run of the daily job for that day
-supersedes them. Nothing is ever replaced in place, so a reader **must** take the newest
+compute in `internal/jobs/metrics/workitemengine`. The daily job is their one writer: a work-items
+sync unit writes raw rows only, and its sink refuses a row for these tables. After a sync, the
+post-sync fan-out starts the daily run of each day the sync touched, so between a sync and that
+run a reader sees the last daily result of the day (complete, some minutes old), or no row for a
+day that has none yet. Rows that a sync unit of an earlier version appended were computed from
+only the items that unit fetched; the next run of the daily job for that day supersedes them.
+Nothing is ever replaced in place, so a reader **must** take the newest
 `computed_at` per key (`argMax(..., computed_at)` grouped by the key, as the readers in
 `internal/queryapi` do) and must never sum the raw rows. When a completion leaves a key (the item
 was reopened, or its team or labels changed), the daily job writes a row of zeros for that key so

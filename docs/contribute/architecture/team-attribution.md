@@ -836,13 +836,17 @@ One path: `run_team_autoimport` → `team_autoimport_<provider>.populate()` → 
   correct rows with nothing in the row saying the run was blind; Python's
   degrade-and-continue at the equivalent site is catalogued as a
   silent-degradation defect (CHAOS-4150), not a precedent.
-  **Observability:** providersync carries no logger and no metrics registry, so
-  each unit's result payload records
-  `observations.team_inheritance = {stored_edges_merged, donor_rescues,
-  cross_provider_rescues}`. `cross_provider_rescues` is decided by the DONOR's
-  provider differing from the claim's — the structure, not one extractor's
-  name — and is emitted even when zero, so "nothing to rescue" stays
-  distinguishable from "this build cannot see stored edges".
+  **The sync unit no longer runs this derivation (CHAOS-8811).** A work-items
+  sync unit writes raw rows only. It writes no `work_item_team_attributions`
+  row, and each provider's sync sink refuses one. The daily family
+  `work_item_attribution` (`internal/jobs/metrics/daily`) is the one writer of
+  the table, from stored rows. The unit result payload no longer carries
+  `team_inheritance` (`{stored_edges_merged, donor_rescues,
+  cross_provider_rescues}`), nor `team_attribution_written`,
+  `derived_destinations_implemented`, `derived_destinations_unimplemented` and
+  `watermark_held_for_derived_gap`. A unit logs
+  `providersync.work_items.derived_tables_left_to_daily_job` and counts
+  `dev_health_work_item_derived_tables_left_to_daily_job_total{provider}`.
 - **Which evidence refs bridge a work unit to a team (CHAOS-2416):** the
   Investment `unit_team` resolution reads **both** the `issues` **and** the
   `prs` arrays of `work_unit_investments.structural_evidence_json`. A `prs`
@@ -1066,7 +1070,8 @@ these three families at all; `families.json`'s `python` field now reads `"DELETE
 Python was ALSO the oracle §0.6 describes ("Python is still authoritative for the precedence
 ladder's correctness... the Go port... is verified against it") for the SEPARATE ingest-time
 derivation this section does not cover (`internal/providersync`'s `resolve()`, run per-provider at
-sync time, not at daily-partition time) — that oracle relationship is gone too. Prod Celery has
+sync time, not at daily-partition time) — that oracle relationship is gone too, and since CHAOS-8811
+the work-items sync unit no longer runs that derivation: it writes raw rows only. Prod Celery has
 been stopped since 2026-08-19, so the Python callers that used to invoke `compute_work_item_team_
 attributions` (`job_daily.py`'s daily job, `job_work_items.py`'s `run_work_items_sync_job` via
 webhook/backfill Celery tasks) never execute in production regardless. The live-Python comparison

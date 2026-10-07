@@ -70,10 +70,30 @@ FROM (
 )
 GROUP BY day, repo_id`
 
+// recordTouchedWindowDaysSQL appends one 'touched' event for each day of the
+// given list and each repository that a work item written at or after the
+// given time belongs to. The days are the windows of the work-items units of
+// the run (PostSyncPlan.WorkItemWindowDays).
+const recordTouchedWindowDaysSQL = `
+INSERT INTO daily_metrics_touched_days (org_id, day, repo_id, kind, at)
+SELECT ?, arrayJoin(arrayMap(value -> toDate(value), ?)) AS day, repo_id, 'touched',
+       fromUnixTimestamp64Milli(toInt64(?), 'UTC')
+FROM (
+    SELECT DISTINCT repo_id
+    FROM work_items
+    WHERE org_id = ? AND last_synced >= fromUnixTimestamp64Milli(toInt64(?), 'UTC')
+)`
+
+// recordTouchedWindowDaysPerStatement bounds the day list of one statement:
+// the driver writes the list into the statement text.
+const recordTouchedWindowDaysPerStatement = 1000
+
 // RecordTouched appends the 'touched' events of the raw rows whose last_synced
-// is at or after since, and returns the number of keys it appended.
+// is at or after since, and one for each day of windowDays and each
+// repository of those work items. It returns the number of keys it appended.
+// A key that both parts name is one key.
 func (store *ClickHouseTouchedDaysStore) RecordTouched(
-	ctx context.Context, organizationID string, since time.Time,
+	ctx context.Context, organizationID string, since time.Time, windowDays []time.Time,
 ) (uint64, error) {
 	if store == nil || store.conn == nil || organizationID == "" || since.IsZero() {
 		return 0, ErrTouchedDaysUnavailable
@@ -90,6 +110,21 @@ func (store *ClickHouseTouchedDaysStore) RecordTouched(
 		organizationID, organizationID, sinceMillis,
 	); err != nil {
 		return 0, ErrTouchedDaysUnavailable
+	}
+	for start := 0; start < len(windowDays); start += recordTouchedWindowDaysPerStatement {
+		end := min(start+recordTouchedWindowDaysPerStatement, len(windowDays))
+		days := make([]string, 0, end-start)
+		for _, day := range windowDays[start:end] {
+			if day.IsZero() {
+				return 0, ErrTouchedDaysUnavailable
+			}
+			days = append(days, day.UTC().Format("2006-01-02"))
+		}
+		if err := store.conn.Exec(ctx, recordTouchedWindowDaysSQL,
+			organizationID, days, at.UnixMilli(), organizationID, sinceMillis,
+		); err != nil {
+			return 0, ErrTouchedDaysUnavailable
+		}
 	}
 	var recorded uint64
 	if err := store.conn.QueryRow(ctx, `

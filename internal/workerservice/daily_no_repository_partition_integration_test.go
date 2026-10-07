@@ -166,6 +166,28 @@ type nilPartitionRig struct {
 func newNilPartitionRig(t *testing.T, ctx context.Context) *nilPartitionRig {
 	t.Helper()
 	t.Chdir("../..")
+	// The two engine families (issue types, investment) need the status mapping
+	// and the investment rules: load them as the worker does, from the real
+	// config artifacts.
+	engines := dailyWorkItemEnginesFrom(validGitHubWorkItemsRuntimeConfig(t))
+	if engines.err != nil {
+		t.Fatalf("load the work-item engines: %v", engines.err)
+	}
+	rig, refusals := newNilPartitionRigWithEngines(t, ctx, engines, nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if len(refusals) != 0 {
+		t.Fatalf("family refusals: %v", refusals)
+	}
+	return rig
+}
+
+// newNilPartitionRigWithEngines builds the rig with the given work-item
+// engines, observer and logger, and returns the refusals of the family
+// registration with it: the families a worker with these engines does not
+// serve. The caller has set the working directory.
+func newNilPartitionRigWithEngines(
+	t *testing.T, ctx context.Context, engines dailyWorkItemEngines, observer jobruntime.Observer, logger *slog.Logger,
+) (*nilPartitionRig, []dailyFamilyRefusal) {
+	t.Helper()
 	postgres, err := containers.StartPostgres(ctx)
 	if err != nil {
 		t.Fatal(err)
@@ -200,18 +222,7 @@ func newNilPartitionRig(t *testing.T, ctx context.Context) *nilPartitionRig {
 		t.Fatal(err)
 	}
 	handler.SetSourceDataChecker(checker)
-	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	// The two engine families (issue types, investment) need the status mapping
-	// and the investment rules: load them as the worker does, from the real
-	// config artifacts.
-	engines := dailyWorkItemEnginesFrom(validGitHubWorkItemsRuntimeConfig(t))
-	if engines.err != nil {
-		t.Fatalf("load the work-item engines: %v", engines.err)
-	}
-	native, postBridge, _, refusals := dailyNativeFamilyRegistrations(store, conn, engines, nil, logger)
-	if len(refusals) != 0 {
-		t.Fatalf("family refusals: %v", refusals)
-	}
+	native, postBridge, _, refusals := dailyNativeFamilyRegistrations(store, conn, engines, observer, logger)
 	if err := handler.SetNativeFamilies(native); err != nil {
 		t.Fatal(err)
 	}
@@ -229,7 +240,7 @@ func newNilPartitionRig(t *testing.T, ctx context.Context) *nilPartitionRig {
 	for name := range postBridge {
 		registers[name] = struct{}{}
 	}
-	return &nilPartitionRig{pool: pool, store: store, conn: conn, handler: handler, dispatch: dispatch, recorder: recorder, registers: registers}
+	return &nilPartitionRig{pool: pool, store: store, conn: conn, handler: handler, dispatch: dispatch, recorder: recorder, registers: registers}, refusals
 }
 
 // startRun stages one run in its own transaction, the way the scheduler

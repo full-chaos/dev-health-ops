@@ -742,6 +742,7 @@ func TestJiraNativeProjectIDIsTheNumericLastSegmentOfAJiraProjectARI(t *testing.
 		{"ari:cloud:jira:site-1:issue/5:project/7", "", false},
 		{"ari:cloud:jira:site-1:extra:project/7", "", false},
 		{"ari:cloud:jira:project/7", "", false},
+		{"ari:cloud:jira:site-1:10001", "", false},
 		{"ari:cloud:jira:site/1:project/7", "", false},
 		{"10001", "", false},
 		{"", "", false},

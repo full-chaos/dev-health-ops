@@ -201,8 +201,8 @@ func jiraNativeProjectID(ari string) (string, bool) {
 	if !ok {
 		return "", false
 	}
-	site, resource, ok := strings.Cut(rest, ":")
-	if !ok || strings.Contains(site, "/") {
+	site, resource, _ := strings.Cut(rest, ":")
+	if strings.Contains(site, "/") {
 		return "", false
 	}
 	id, ok := strings.CutPrefix(resource, jiraProjectARIResource)

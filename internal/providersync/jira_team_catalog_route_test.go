@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -37,6 +38,10 @@ func (doer *jiraTeamCatalogFixtureDoer) Do(request *http.Request) (*http.Respons
 	uri := request.URL.RequestURI()
 	doer.requests = append(doer.requests, uri)
 	fixture, ok := doer.byURI[uri]
+	if !ok && uri == jiraTeamCatalogArchivedProjectSearchURI {
+		// A site with no archived project, unless the test says otherwise.
+		fixture, ok = jiraTeamCatalogFixtureResponse{body: `{"values":[],"isLast":true}`}, true
+	}
 	if !ok {
 		doer.t.Fatalf("unexpected request %q", uri)
 	}
@@ -68,6 +73,10 @@ func jiraTeamCatalogTestClient(t *testing.T, doer providerfoundation.HTTPDoer) *
 
 const jiraTeamCatalogProjectSearchURI = "/rest/api/3/project/search?maxResults=100"
 
+// jiraTeamCatalogArchivedProjectSearchURI is the second read of every walk:
+// the archived projects.
+const jiraTeamCatalogArchivedProjectSearchURI = "/rest/api/3/project/search?maxResults=100&status=archived"
+
 // TestJiraTeamCatalogCollectCountsFailedAndRetriedAttempts verifies that
 // JiraTeamCatalogEvidence.Requests has a single source -- the counting Doer
 // at the HTTP boundary -- across two distinct paths in one
@@ -90,6 +99,9 @@ func TestJiraTeamCatalogCollectCountsFailedAndRetriedAttempts(t *testing.T) {
 				return nil, errors.New("simulated transient transport failure")
 			}
 			body := `{"values":[{"id":"10001","key":"OPS","name":"Ops Project"}]}`
+			return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(body)), Request: request}, nil
+		case jiraTeamCatalogArchivedProjectSearchURI:
+			body := `{"values":[],"isLast":true}`
 			return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(body)), Request: request}, nil
 		case "/rest/api/3/project/OPS":
 			body := `{"projectTypeKey":"software"}`
@@ -134,9 +146,10 @@ func TestJiraTeamCatalogCollectCountsFailedAndRetriedAttempts(t *testing.T) {
 	if len(batch.Rows.Sprints) != 0 {
 		t.Fatalf("sprints=%+v want none (the board listing never recovered)", batch.Rows.Sprints)
 	}
-	// 2 (search, retried) + 1 (project detail) + 2 (boards, exhausted) = 5.
-	if batch.Evidence.Requests != 5 {
-		t.Fatalf("evidence=%+v want Requests=5 (every physical attempt, from one source)", batch.Evidence)
+	// 2 (search, retried) + 1 (archived search) + 1 (project detail) +
+	// 2 (boards, exhausted) = 6.
+	if batch.Evidence.Requests != 6 {
+		t.Fatalf("evidence=%+v want Requests=6 (every physical attempt, from one source)", batch.Evidence)
 	}
 }
 
@@ -395,8 +408,8 @@ func TestJiraTeamCatalogCollectReadsEveryPageOfTheProjectSearch(t *testing.T) {
 	if !batch.Result.ProjectSearchComplete || batch.Result.ProjectSearchPages != 2 {
 		t.Fatalf("result=%+v, want the search complete after 2 pages", batch.Result)
 	}
-	if len(doer.requests) != 2 {
-		t.Fatalf("search requests=%v, want the two pages", doer.requests)
+	if len(doer.requests) != 3 || doer.requests[2] != jiraTeamCatalogArchivedProjectSearchURI {
+		t.Fatalf("search requests=%v, want the two pages, then the archived read", doer.requests)
 	}
 }
 
@@ -454,12 +467,112 @@ func TestJiraTeamCatalogProjectSearchStopsAtThePageBoundAndIsNotComplete(t *test
 		}
 		pages[uri] = jiraTeamCatalogFixtureResponse{body: jiraProjectSearchPage(page*2, 2, `,"isLast":false`)}
 	}
-	// No fixture for the page after the bound: a request for it fails the test.
+	// No fixture for the page after the bound: a request for it fails the
+	// test. The one request more is the archived read.
 	batch, doer := collectJiraProjectSearch(t, pages)
 	if batch.Result.ProjectSearchComplete || batch.Result.ProjectSearchPages != jiraTeamCatalogProjectSearchMaxPages ||
-		len(batch.Rows.Projects) != 2*jiraTeamCatalogProjectSearchMaxPages || len(doer.requests) != jiraTeamCatalogProjectSearchMaxPages {
+		len(batch.Rows.Projects) != 2*jiraTeamCatalogProjectSearchMaxPages || len(doer.requests) != jiraTeamCatalogProjectSearchMaxPages+1 {
 		t.Fatalf("complete=%v pages=%d projects=%d requests=%d, want not complete at the bound of %d pages",
 			batch.Result.ProjectSearchComplete, batch.Result.ProjectSearchPages, len(batch.Rows.Projects), len(doer.requests), jiraTeamCatalogProjectSearchMaxPages)
+	}
+}
+
+// The project search returns live projects only. The walk reads the archived
+// projects with a second search (status=archived), every page of it, and
+// gives them ownership rows to HOLD only: no team, project or member row, and
+// no row among the fresh ownership rows.
+func TestJiraTeamCatalogCollectReadsArchivedProjectsToHoldOwnershipOnly(t *testing.T) {
+	t.Parallel()
+	const archivedPage2 = "/rest/api/3/project/search?maxResults=100&startAt=100&status=archived"
+	live := map[string]jiraTeamCatalogFixtureResponse{
+		jiraTeamCatalogProjectSearchURI: {body: jiraProjectSearchPage(0, 1, `,"isLast":true`)},
+	}
+	with := func(extra map[string]jiraTeamCatalogFixtureResponse) map[string]jiraTeamCatalogFixtureResponse {
+		pages := map[string]jiraTeamCatalogFixtureResponse{}
+		for uri, response := range live {
+			pages[uri] = response
+		}
+		for uri, response := range extra {
+			pages[uri] = response
+		}
+		return pages
+	}
+	for name, tc := range map[string]struct {
+		pages    map[string]jiraTeamCatalogFixtureResponse
+		complete bool
+		archived []string
+		requests int
+	}{
+		"one archived project": {with(map[string]jiraTeamCatalogFixtureResponse{
+			jiraTeamCatalogArchivedProjectSearchURI: {body: `{"values":[{"id":"20001","key":" OLD ","name":"Old"}],"isLast":true}`},
+		}), true, []string{"OLD/20001"}, 2},
+		"every page of the archived projects": {with(map[string]jiraTeamCatalogFixtureResponse{
+			jiraTeamCatalogArchivedProjectSearchURI: {body: jiraProjectSearchPage(500, 100, `,"isLast":false`)},
+			archivedPage2:                           {body: `{"values":[{"id":"20001","key":"OLD","name":"Old"}],"isLast":true}`},
+		}), true, nil, 3},
+		"the archived read fails: the walk goes on, not complete": {with(map[string]jiraTeamCatalogFixtureResponse{
+			jiraTeamCatalogArchivedProjectSearchURI: {status: http.StatusBadRequest, body: `{}`},
+		}), false, []string{}, 2},
+		"a later archived page fails: not complete": {with(map[string]jiraTeamCatalogFixtureResponse{
+			jiraTeamCatalogArchivedProjectSearchURI: {body: jiraProjectSearchPage(500, 100, `,"isLast":false`)},
+			archivedPage2:                           {status: http.StatusForbidden, body: `{}`},
+		}), false, nil, 3},
+		"an archived project with no id or a key-built id is held by nothing": {with(map[string]jiraTeamCatalogFixtureResponse{
+			jiraTeamCatalogArchivedProjectSearchURI: {body: `{"values":[{"id":"","key":"A","name":"A"},{"id":"20002","key":" ","name":"B"},{"id":"org-1:jira:C","key":"C","name":"C"},` +
+				`{"id":"20001","key":"OLD","name":"Old"},{"id":"20001","key":"OLD","name":"Old"}],"isLast":true}`},
+		}), true, []string{"OLD/20001"}, 2},
+	} {
+		batch, doer := collectJiraProjectSearch(t, tc.pages)
+		if len(batch.Rows.Teams) != 1 || len(batch.Rows.Projects) != 1 || len(batch.Rows.Ownership) != 1 || len(batch.Rows.Memberships) != 0 {
+			t.Errorf("%s: teams=%d projects=%d ownership=%d memberships=%d, want the one live project only", name,
+				len(batch.Rows.Teams), len(batch.Rows.Projects), len(batch.Rows.Ownership), len(batch.Rows.Memberships))
+		}
+		if batch.Result.ProjectSearchComplete != tc.complete || batch.Result.ProjectSearchPages != 1 || len(doer.requests) != tc.requests {
+			t.Errorf("%s: complete=%v live pages=%d requests=%v, want complete=%v, 1 live page, %d requests", name,
+				batch.Result.ProjectSearchComplete, batch.Result.ProjectSearchPages, doer.requests, tc.complete, tc.requests)
+		}
+		if tc.archived == nil {
+			if len(batch.ArchivedOwnership) < 100 {
+				t.Errorf("%s: %d archived rows, want the first page's 100 at least", name, len(batch.ArchivedOwnership))
+			}
+			if tc.complete && len(batch.ArchivedOwnership) != 101 {
+				t.Errorf("%s: %d archived rows, want both pages (101)", name, len(batch.ArchivedOwnership))
+			}
+			continue
+		}
+		got := []string{}
+		for _, row := range batch.ArchivedOwnership {
+			if row.Source != "native" || row.ProjectKey == nil || *row.ProjectKey != row.TeamID || row.ValidTo != nil {
+				t.Errorf("%s: archived row %+v, want an open project-as-team row", name, row)
+			}
+			got = append(got, row.TeamID+"/"+row.ProjectID)
+		}
+		if !slices.Equal(got, tc.archived) {
+			t.Errorf("%s: archived ownership = %v, want %v", name, got, tc.archived)
+		}
+	}
+}
+
+// An archived project's row holds an open row of the same fact and nothing
+// else: it adds no ownership the table does not have open.
+func TestJiraHeldArchivedOwnershipIsTheArchivedRowsThatAreOpen(t *testing.T) {
+	t.Parallel()
+	row := func(team, project, source string) jiraTeamCatalogOwnershipRow {
+		return jiraTeamCatalogOwnershipRow{TeamID: team, ProjectID: project, Source: source}
+	}
+	archived := []jiraTeamCatalogOwnershipRow{row("OLD", "20001", "native"), row("NEW", "20002", "native"), row("MOVED", "20003", "native")}
+	open := []jiraTeamCatalogOwnershipRow{
+		row("OLD", "20001", "native"),
+		row("NEW", "20002", "jira_legacy"), // the same team and project under another source
+		row("OTHER", "20003", "native"),    // the same project under another team
+		row("MOVED", "20004", "native"),    // the same team with another project
+	}
+	held := jiraHeldArchivedOwnership(archived, open)
+	if len(held) != 1 || held[0].TeamID != "OLD" || held[0].ProjectID != "20001" {
+		t.Fatalf("held = %+v, want the one archived row whose team, project and source are open", held)
+	}
+	if got := jiraHeldArchivedOwnership(archived, nil); len(got) != 0 {
+		t.Fatalf("held with nothing open = %+v, want none", got)
 	}
 }
 

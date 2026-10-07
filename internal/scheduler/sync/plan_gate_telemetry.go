@@ -20,6 +20,11 @@ const (
 	// of a work-item provider has no enabled work-item family row, so no
 	// work-items unit is planned at all. Recorded under dataset "work-items".
 	planGateOutcomeFamilyNotEnabled = "family_not_enabled"
+	// planGateOutcomeFeatureDisabled: an enabled dataset needs the
+	// canonical-incident feature and the organization does not have it, so no
+	// unit is planned for that dataset. Recorded once per left-out dataset,
+	// under the dataset's own key; the other datasets of the plan still run.
+	planGateOutcomeFeatureDisabled = "feature_disabled"
 )
 
 // planGateKey identifies one (provider, dataset, outcome) series.

@@ -113,6 +113,40 @@ var appendOnlyDailyKeys = map[string][]string{
 	// same way. Natural key now matches migration 027's canonical sorting
 	// key exactly: (org_id, repo_id, day, author_email, commit_hash).
 	"commit_metrics": {"org_id", "repo_id", "day", "author_email", "commit_hash"},
+	// issue_type_metrics_daily and investment_metrics_daily are plain
+	// MergeTree with two writers of one key: the sync deriver and the daily
+	// families work_item_issue_type / work_item_investment
+	// (internal/jobs/metrics/daily), which append a row per key at every
+	// run. metric_registry.json charts both tables (created_count,
+	// completed_count, active_count, lead_p50_hours; churn_loc), so a raw
+	// read sums every version of a key. The keys are the row keys the two
+	// families themselves read by.
+	"issue_type_metrics_daily": {"org_id", "repo_id", "day", "provider", "team_id", "issue_type_norm"},
+	"investment_metrics_daily": {"org_id", "repo_id", "day", "team_id", "investment_area", "project_stream"},
+}
+
+// sampleCountColumns names, per source table and metric, the column of the
+// same row that counts the samples the metric was computed from. A row whose
+// count is 0 has no value of the metric: the stored 0 is the default of a
+// column that is not nullable, not a measured 0. The daily family
+// work_item_issue_type writes such a row of zeros for a key that lost its
+// last item, and the compute writes one for a key with open items only.
+//
+// Only metrics that buildChartQuery averages belong here: a sum is not moved
+// by a row of zeros.
+var sampleCountColumns = map[string]map[string]string{
+	"issue_type_metrics_daily": {"lead_p50_hours": "completed_count"},
+}
+
+// averageExpression is buildChartQuery's mean of metric. For a metric with a
+// registered sample count the rows with no sample are left out of the mean.
+// The NULL branch (not avgIf) keeps a group with no sample NULL, which
+// executeChart drops as "no data point"; avgIf would return NaN.
+func averageExpression(table, metric string) string {
+	if count, ok := sampleCountColumns[table][metric]; ok {
+		return fmt.Sprintf("avg(if(%s > 0, %s, NULL))", count, metric)
+	}
+	return fmt.Sprintf("avg(%s)", metric)
 }
 
 // dedupFromSource returns the FROM source for table: table + " FINAL" for a

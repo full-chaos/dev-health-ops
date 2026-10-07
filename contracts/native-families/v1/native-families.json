@@ -22,6 +22,8 @@
     "work_item": "native",
     "work_item_attribution": "native",
     "work_item_estimate": "native",
+    "work_item_investment": "native",
+    "work_item_issue_type": "native",
     "work_item_state": "native"
   },
   "finalize": {

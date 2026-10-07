@@ -330,7 +330,7 @@ assert_readback() {
   CLICKHOUSE_URI="${CLICKHOUSE_URI_HTTP}" PYTHONPATH="${PYTHONPATH}" python3 "${ROOT_DIR}/ci/assert_metrics_executed_proof.py" \
     --org-id "${ORG_ID}" \
     --run-start "${RUN_START}" \
-    --families cicd deploy testops_pipeline testops_test testops_coverage dora repo_user_commit team_wellbeing team_cognitive_load compounding_risk compounding_risk_team ic_finalize \
+    --families cicd deploy testops_pipeline testops_test testops_coverage dora repo_user_commit team_wellbeing team_cognitive_load compounding_risk compounding_risk_team ic_finalize work_item_issue_type work_item_investment \
     --summary-json "${ASSERT_SUMMARY_JSON}"
 }
 
@@ -427,7 +427,14 @@ echo "==> native-family telemetry proof (CHAOS-4276): confirms rows came from th
 # finalize-scope families. The existing `compounding_risk` entry above only
 # ever asserted its REPO scope; this is that family's TEAM scope, a separate
 # executor with its own registration.
-NATIVE_TELEMETRY_FAMILIES="team_wellbeing repo_user_commit cicd deploy compounding_risk compounding_risk_team ic_finalize team_cognitive_load"
+#
+# work_item_issue_type and work_item_investment added (CHAOS-8810): the frozen
+# set `fixtures generate` loads above holds work_items rows of this
+# repository, open on every day of the window, so both families have source
+# rows on the computed day. They are also in the readback --families list
+# above: a worker that starts without the two families (their refusal is
+# scoped, the start stays green) fails this gate on both checks.
+NATIVE_TELEMETRY_FAMILIES="team_wellbeing repo_user_commit cicd deploy compounding_risk compounding_risk_team ic_finalize team_cognitive_load work_item_issue_type work_item_investment"
 # The dual-read wait/dump/race-detection mechanism (bounded by
 # NATIVE_TELEMETRY_WAIT_SECS/NATIVE_TELEMETRY_POLL_SECS, default 60/5s) is
 # shared with ci/run_live_backend_e2e.sh -- see

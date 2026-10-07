@@ -185,6 +185,19 @@ use this file for canonical WorkUnit categorization." Its `investment_area` valu
 `security`, `infrastructure`) are free-form legacy labels — **not** the fixed five-theme taxonomy
 above, and not interchangeable with it.
 
+**Who writes the legacy daily tables, and how to read them.** `investment_metrics_daily`,
+`investment_classifications_daily` and `issue_type_metrics_daily` are plain (append-only)
+`MergeTree` tables. The daily metric job computes them from stored work items: the families
+`work_item_investment` and `work_item_issue_type` (`internal/jobs/metrics/daily`), with the
+compute in `internal/jobs/metrics/workitemengine`. A work-items sync unit also appends rows for
+the days of its window, computed from only the items that unit fetched; until the sync stops
+writing derived rows, those rows are partial and the next run of the daily job for that day
+supersedes them. Nothing is ever replaced in place, so a reader **must** take the newest
+`computed_at` per key (`argMax(..., computed_at)` grouped by the key, as the readers in
+`internal/queryapi` do) and must never sum the raw rows. When a completion leaves a key (the item
+was reopened, or its team or labels changed), the daily job writes a row of zeros for that key so
+that the newest row is the true one. A day with no data gets no row.
+
 The canonical theme/subcategory distribution comes from `work_unit_investments`
 (`theme_distribution_json`/`subcategory_distribution_json`, computed once at categorization time,
 deterministic roll-up, never recomputed at read time). `latest_work_unit_investments` is **not** a

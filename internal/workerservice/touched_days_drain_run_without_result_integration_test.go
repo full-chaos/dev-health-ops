@@ -166,9 +166,12 @@ func TestTouchedDaysDrainReturnsTheKeysOfEveryRunWithoutAResult(t *testing.T) {
 		if got := rig.openDays(t, ctx, orgID); len(got) != 0 {
 			t.Fatalf("a pass started %v for a run that is open for 23 hours, want none", got)
 		}
+		// The row of the run is one minute older than the mark of its keys:
+		// the two times come from two clocks. The end of the run counts as a
+		// day after its creation, which is after the mark.
 		if _, err := rig.pool.Exec(ctx, `
 UPDATE public.daily_metrics_runs SET created_at = $3 WHERE org_id = $1::uuid AND generation = $2`,
-			orgID, generation, mark); err != nil {
+			orgID, generation, mark.Add(-time.Minute)); err != nil {
 			t.Fatal(err)
 		}
 		drain.DrainTouchedDays(ctx, orgID, pass("n"))

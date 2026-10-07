@@ -43,6 +43,26 @@ const MaxAttemptRows = 50_000
 // same bound that flushTokenUsage puts on its write.
 const AttemptWriteTimeout = 15 * time.Second
 
+// Retention of the two tables, the same as the TTL of migrations 109 and 110. A
+// row whose ComputedAt is older than this is deleted at the next merge, so the
+// sinks refuse it. A zero time and the Unix epoch are both far older, so this
+// one check covers them (time.Unix(0, 0) is not IsZero, but it is 1970).
+const (
+	ShadowRetention  = 90 * 24 * time.Hour
+	AttemptRetention = 400 * 24 * time.Hour
+)
+
+// computedAtError names the reason a ComputedAt is not writable, or returns nil.
+// The sinks never stamp a time: ComputedAt is the version of a ReplacingMergeTree
+// row, so the caller of a run chooses it, and a stamp here would change it on a
+// retry.
+func computedAtError(at time.Time, retention time.Duration) error {
+	if at.Before(time.Now().Add(-retention)) {
+		return fmt.Errorf("ComputedAt %s is older than the table retention of %d days: the TTL would delete the row at the next merge", at.UTC().Format(time.RFC3339), int(retention/(24*time.Hour)))
+	}
+	return nil
+}
+
 // Roles of an attempt row. Only RoleShadow is written in the shadow build.
 const (
 	RoleServed   = "served"
@@ -117,8 +137,8 @@ func (w *Writer) WriteShadowInvestments(ctx context.Context, orgID string, recor
 		return 0, nil
 	}
 	for i, record := range records {
-		if record.ComputedAt.IsZero() {
-			return 0, fmt.Errorf("%w: work_unit_investment_shadow row %d has no ComputedAt (a zero time is 1970 and the TTL would delete the row)", ErrInvalidState, i)
+		if err := computedAtError(record.ComputedAt, ShadowRetention); err != nil {
+			return 0, fmt.Errorf("%w: work_unit_investment_shadow row %d: %v", ErrInvalidState, i, err)
 		}
 	}
 	batch, err := w.conn.PrepareBatch(ctx, `INSERT INTO work_unit_investment_shadow (
@@ -221,8 +241,8 @@ func (w *Writer) WriteAttempts(ctx context.Context, orgID string, records []Atte
 		return 0, nil
 	}
 	for i, record := range records {
-		if record.ComputedAt.IsZero() {
-			return 0, fmt.Errorf("%w: llm_categorization_attempts row %d has no ComputedAt (a zero time is 1970 and the TTL would delete the row)", ErrInvalidState, i)
+		if err := computedAtError(record.ComputedAt, AttemptRetention); err != nil {
+			return 0, fmt.Errorf("%w: llm_categorization_attempts row %d: %v", ErrInvalidState, i, err)
 		}
 	}
 	batch, err := w.conn.PrepareBatch(ctx, `INSERT INTO llm_categorization_attempts (
@@ -277,7 +297,7 @@ func NewAttemptBuffer(limit int) *AttemptBuffer {
 func (b *AttemptBuffer) Add(record AttemptRecord) bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if record.ComputedAt.IsZero() || len(b.rows) >= b.limit {
+	if computedAtError(record.ComputedAt, AttemptRetention) != nil || len(b.rows) >= b.limit {
 		b.dropped++
 		return false
 	}
@@ -293,7 +313,7 @@ func (b *AttemptBuffer) Len() int {
 }
 
 // Dropped is the number of rows that the buffer refused: over the cap, or with
-// no ComputedAt.
+// a ComputedAt older than the table retention.
 func (b *AttemptBuffer) Dropped() int {
 	b.mu.Lock()
 	defer b.mu.Unlock()

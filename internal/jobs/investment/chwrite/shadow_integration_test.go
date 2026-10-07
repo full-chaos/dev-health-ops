@@ -127,7 +127,7 @@ func TestShadowTablesHaveTheDesignedShapeAndMigrationsAreRerunnable(t *testing.T
 // the roll-up of the mix.
 func TestShadowRowsRoundTripThroughTheDedupReader(t *testing.T) {
 	writer, conn, ctx := newTestWriter(t)
-	first := time.Date(2026, 10, 7, 12, 0, 0, 0, time.UTC)
+	first := recentTime()
 	keys := units.SortedSubcategories
 	mix := map[string]float64{keys[0]: 0.75, keys[1]: 0.25}
 
@@ -212,9 +212,19 @@ func TestShadowRowsRoundTripThroughTheDedupReader(t *testing.T) {
 
 // One flush is one insert; a repeat of the same batch does not double the cost
 // the dedup reader sums; the cap and the dropped count hold on the real table.
+// attemptDedupSubquery is the reader of llm_categorization_attempts: it groups
+// by the full sorting key, all seven columns, and takes argMax over computed_at.
+// The readers of later tickets copy it. Group by fewer columns and two distinct
+// attempts count as one; group by more and a merged duplicate counts twice. It
+// takes the org id as its one parameter.
+const attemptDedupSubquery = `SELECT org_id, run_id, work_unit_id, role, config, kind, attempt,
+		argMax(latency_ms, computed_at) AS latency, argMax(billed_cost_usd, computed_at) AS cost
+	FROM llm_categorization_attempts WHERE org_id = ?
+	GROUP BY org_id, run_id, work_unit_id, role, config, kind, attempt`
+
 func TestAttemptRowsFlushAndTheReaderDedupsBeforeItSums(t *testing.T) {
 	writer, conn, ctx := newTestWriter(t)
-	at := time.Date(2026, 10, 7, 12, 0, 0, 123_000_000, time.UTC)
+	at := recentTime().Add(123 * time.Millisecond)
 	fill := func(buffer *AttemptBuffer, n int) {
 		for i := 0; i < n; i++ {
 			row := attemptRow(fmt.Sprintf("wu-%d", i))
@@ -237,11 +247,7 @@ func TestAttemptRowsFlushAndTheReaderDedupsBeforeItSums(t *testing.T) {
 	}
 
 	var dedupRows, dedupLatencyTotal, dedupCostMilli uint64
-	if err := conn.QueryRow(ctx, `SELECT count(), sum(latency), toUInt64(sum(cost) * 1000) FROM (
-		SELECT org_id, run_id, work_unit_id, role, attempt,
-			argMax(latency_ms, computed_at) AS latency, argMax(billed_cost_usd, computed_at) AS cost
-		FROM llm_categorization_attempts WHERE org_id = ? GROUP BY org_id, run_id, work_unit_id, role, attempt)`, testOrgID,
-	).Scan(&dedupRows, &dedupLatencyTotal, &dedupCostMilli); err != nil {
+	if err := conn.QueryRow(ctx, `SELECT count(), sum(latency), toUInt64(sum(cost) * 1000) FROM (`+attemptDedupSubquery+`)`, testOrgID).Scan(&dedupRows, &dedupLatencyTotal, &dedupCostMilli); err != nil {
 		t.Fatal(err)
 	}
 	if dedupRows != 5 || dedupCostMilli != 2500 || dedupLatencyTotal != 100+101+102+103+104 {
@@ -284,7 +290,7 @@ func TestFlushAttemptsOnAMissingTableIsSwallowedAndFlagged(t *testing.T) {
 // key that lacks config or kind would silently delete one of the two rows.
 func TestAttemptsThatDifferByConfigOrKindDoNotCollapseAfterAMerge(t *testing.T) {
 	writer, conn, ctx := newTestWriter(t)
-	at := time.Date(2026, 10, 7, 12, 0, 0, 0, time.UTC)
+	at := recentTime()
 	base := attemptRow("wu-1")
 	base.ComputedAt, base.Config, base.Kind = at, "cfg-a", "first"
 	otherConfig := base
@@ -321,7 +327,7 @@ func TestAttemptsThatDifferByConfigOrKindDoNotCollapseAfterAMerge(t *testing.T) 
 func TestShadowAndAttemptRowsOfTwoOrganizationsSurviveAForcedMerge(t *testing.T) {
 	writer, conn, ctx := newTestWriter(t)
 	const otherOrg = "44444444-4444-4444-8444-444444444444"
-	at := time.Date(2026, 10, 7, 12, 0, 0, 0, time.UTC)
+	at := recentTime()
 	for i, org := range []string{testOrgID, otherOrg} {
 		attempt := attemptRow("wu-1")
 		attempt.ComputedAt, attempt.Config, attempt.BilledCostUSD = at, "cfg", float64(i+1)
@@ -348,5 +354,49 @@ func TestShadowAndAttemptRowsOfTwoOrganizationsSurviveAForcedMerge(t *testing.T)
 		if got := scanString(t, ctx, conn, `SELECT state FROM work_unit_investment_shadow WHERE org_id = ?`, org); got != fmt.Sprintf("state-%d", i) {
 			t.Fatalf("org %d reads shadow state %q, want its own", i, got)
 		}
+	}
+}
+
+// Seven attempts that differ in exactly one key column each (the base row, then
+// run, unit, role, config, kind and attempt) are written twice with no merge in
+// between. The seven-column reader sees seven groups and sums each cost once.
+// A reader that groups by the old five columns (no config, no kind) sees five.
+func TestTheSevenColumnAttemptReaderCountsSevenDistinctAttempts(t *testing.T) {
+	writer, conn, ctx := newTestWriter(t)
+	at := recentTime()
+	base := attemptRow("wu-1")
+	base.ComputedAt, base.Config, base.Kind, base.BilledCostUSD, base.LatencyMS = at, "cfg-a", "first", 1, 10
+	rows := []AttemptRecord{base}
+	for _, mutate := range []func(*AttemptRecord){
+		func(r *AttemptRecord) { r.RunID = "run-2" },
+		func(r *AttemptRecord) { r.WorkUnitID = "wu-2" },
+		func(r *AttemptRecord) { r.Role = RoleFallback },
+		func(r *AttemptRecord) { r.Config = "cfg-b" },
+		func(r *AttemptRecord) { r.Kind = "repair" },
+		func(r *AttemptRecord) { r.Attempt = 2 },
+	} {
+		row := base
+		mutate(&row)
+		rows = append(rows, row)
+	}
+	for i := 0; i < 2; i++ {
+		if n, err := writer.WriteAttempts(ctx, testOrgID, rows); err != nil || n != 7 {
+			t.Fatalf("write %d: %d, %v", i, n, err)
+		}
+	}
+	var groups, costMilli uint64
+	if err := conn.QueryRow(ctx, `SELECT count(), toUInt64(sum(cost) * 1000) FROM (`+attemptDedupSubquery+`)`, testOrgID).Scan(&groups, &costMilli); err != nil {
+		t.Fatal(err)
+	}
+	if groups != 7 || costMilli != 7000 {
+		t.Fatalf("%d groups, cost*1000 %d, want 7 and 7000: seven distinct attempts written twice", groups, costMilli)
+	}
+	var fiveColumnGroups uint64
+	if err := conn.QueryRow(ctx, `SELECT count() FROM (SELECT 1 FROM llm_categorization_attempts WHERE org_id = ?
+		GROUP BY org_id, run_id, work_unit_id, role, attempt)`, testOrgID).Scan(&fiveColumnGroups); err != nil {
+		t.Fatal(err)
+	}
+	if fiveColumnGroups >= 7 {
+		t.Fatalf("the old five-column grouping saw %d groups: this test would not catch it", fiveColumnGroups)
 	}
 }

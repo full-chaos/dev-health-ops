@@ -59,11 +59,18 @@ func newShadowWriter(t *testing.T, conn conn) *Writer {
 	return writer
 }
 
+// recentTime is a ComputedAt that is inside the retention of both tables. A
+// fixed date would age out of the TTL, and the forced merges of the integration
+// tests would then delete the rows.
+func recentTime() time.Time {
+	return time.Now().UTC().Add(-time.Hour).Truncate(time.Millisecond)
+}
+
 func attemptRow(unit string) AttemptRecord {
 	return AttemptRecord{
 		RunID: "run-1", WorkUnitID: unit, Role: RoleShadow, Provider: "typesafe", APIMode: "systemone",
 		Attempt: 1, Kind: "first", InputTokens: 10, OutputTokens: 1, LatencyMS: 116,
-		ComputedAt: time.Date(2026, 10, 7, 12, 0, 0, 0, time.UTC),
+		ComputedAt: recentTime(),
 	}
 }
 
@@ -85,8 +92,8 @@ func TestWriteShadowInvestmentsWritesOneBatchWithMatchingColumns(t *testing.T) {
 	writer := newShadowWriter(t, conn)
 	mix := map[string]float64{units.SortedSubcategories[0]: 1}
 	records := []ShadowRecord{
-		{WorkUnitID: "a", SubcategoryDistribution: mix, ComputedAt: time.Unix(1, 0)},
-		{WorkUnitID: "b", State: "evidence_none", SufficiencyLevel: -1, ComputedAt: time.Unix(2, 0)},
+		{WorkUnitID: "a", SubcategoryDistribution: mix, ComputedAt: recentTime()},
+		{WorkUnitID: "b", State: "evidence_none", SufficiencyLevel: -1, ComputedAt: recentTime()},
 	}
 	written, err := writer.WriteShadowInvestments(t.Context(), "org-1", records)
 	if err != nil || written != 2 {
@@ -258,7 +265,7 @@ func TestSinksRefuseARowWithNoComputedAt(t *testing.T) {
 	if _, err := writer.WriteAttempts(t.Context(), "org-1", []AttemptRecord{good, bad}); !errors.Is(err, ErrInvalidState) {
 		t.Fatalf("WriteAttempts err = %v, want ErrInvalidState", err)
 	}
-	if _, err := writer.WriteShadowInvestments(t.Context(), "org-1", []ShadowRecord{{WorkUnitID: "a", ComputedAt: time.Unix(1, 0)}, {WorkUnitID: "b"}}); !errors.Is(err, ErrInvalidState) {
+	if _, err := writer.WriteShadowInvestments(t.Context(), "org-1", []ShadowRecord{{WorkUnitID: "a", ComputedAt: recentTime()}, {WorkUnitID: "b"}}); !errors.Is(err, ErrInvalidState) {
 		t.Fatalf("WriteShadowInvestments err = %v, want ErrInvalidState", err)
 	}
 	if len(conn.batches) != 0 {
@@ -275,5 +282,46 @@ func TestAttemptBufferRefusesAZeroComputedAtAndCountsIt(t *testing.T) {
 	}
 	if buffer.Len() != 1 || buffer.Dropped() != 1 {
 		t.Fatalf("len %d dropped %d, want 1 and 1", buffer.Len(), buffer.Dropped())
+	}
+}
+
+// time.Unix(0, 0) is not IsZero, but it is 1970: the row is written and the TTL
+// deletes it at the next merge. A ComputedAt older than the table's retention
+// is refused, in both sinks and in the buffer. The shadow table keeps rows for
+// 90 days and the attempt table for 400 days, so 100 days old is too old for
+// the first and fine for the second.
+func TestSinksRefuseAComputedAtOlderThanTheTableRetention(t *testing.T) {
+	old := func(days int) time.Time { return time.Now().UTC().AddDate(0, 0, -days) }
+	cases := []struct {
+		name         string
+		at           time.Time
+		shadowOK, ok bool
+	}{
+		{"unix epoch", time.Unix(0, 0), false, false},
+		{"year 1900", time.Date(1900, 1, 1, 0, 0, 0, 0, time.UTC), false, false},
+		{"401 days", old(401), false, false},
+		{"100 days", old(100), false, true},
+		{"89 days", old(89), true, true},
+		{"now", time.Now(), true, true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			conn := &shadowConn{}
+			writer := newShadowWriter(t, conn)
+			attempt := attemptRow("a")
+			attempt.ComputedAt = c.at
+			_, err := writer.WriteAttempts(t.Context(), "org-1", []AttemptRecord{attempt})
+			if c.ok != (err == nil) || (err != nil && !errors.Is(err, ErrInvalidState)) {
+				t.Fatalf("WriteAttempts(%s) err = %v, want accepted=%v", c.name, err, c.ok)
+			}
+			_, err = writer.WriteShadowInvestments(t.Context(), "org-1", []ShadowRecord{{WorkUnitID: "a", ComputedAt: c.at}})
+			if c.shadowOK != (err == nil) || (err != nil && !errors.Is(err, ErrInvalidState)) {
+				t.Fatalf("WriteShadowInvestments(%s) err = %v, want accepted=%v", c.name, err, c.shadowOK)
+			}
+			buffer := NewAttemptBuffer(5)
+			if stored := buffer.Add(attempt); stored != c.ok || buffer.Dropped() != map[bool]int{true: 0, false: 1}[c.ok] {
+				t.Fatalf("Add(%s) stored=%v dropped=%d, want stored=%v", c.name, stored, buffer.Dropped(), c.ok)
+			}
+		})
 	}
 }

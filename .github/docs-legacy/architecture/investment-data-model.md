@@ -95,7 +95,10 @@ the serving trees (`internal/queryapi`, `internal/queryapiservice`, `internal/ap
 `internal/api`) names either table. The writers are in `internal/jobs/investment/chwrite/shadow.go`.
 Both are `ReplacingMergeTree(computed_at)` with `org_id` first in the sort key. Read them
 with `argMax(..., computed_at)` over the sort key, and for the attempt table dedup **before**
-you sum.
+you sum. The sinks refuse a `ComputedAt` older than the table retention (90 days for the shadow table, 400
+days for the attempt table), because the TTL would delete that row at the next merge. This covers the zero
+time and the Unix epoch. The caller of a run chooses `ComputedAt`, since it is the row version, so the sinks
+never stamp it.
 
 | Table | Migration | Sort key | Retention | One row for |
 | ----- | --------- | -------- | --------- | ----------- |

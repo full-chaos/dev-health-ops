@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"math"
 	"net/http"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -832,6 +833,57 @@ func TestAPanicOfThePhaseItselfDoesNotReachTheRun(t *testing.T) {
 	bare.runShadow(context.Background(), shadowTestConfig(), shadowTestEntries(t, "u1"))
 	if fake.count() != 0 {
 		t.Fatal("a materializer with no phase sent a request")
+	}
+}
+
+// panickingWriteStore is a store whose shadow write panics.
+type panickingWriteStore struct{ *memoryShadowStore }
+
+func (panickingWriteStore) WriteShadowInvestments(context.Context, string, []chwrite.ShadowRecord) (int, error) {
+	panic("planted panic of the shadow write")
+}
+
+// shadowRunGoroutines counts the live goroutines that the phase started.
+func shadowRunGoroutines() int {
+	buffer := make([]byte, 1<<20)
+	for {
+		n := runtime.Stack(buffer, true)
+		if n < len(buffer) {
+			return strings.Count(string(buffer[:n]), "(*ShadowPhase).run.func")
+		}
+		buffer = make([]byte, 2*len(buffer))
+	}
+}
+
+// A panic of the phase's own loop (here: of a shadow write between two
+// results) leaves no goroutine of the phase behind: the workers that wait to
+// hand in a result end, and so does the one that waits for them.
+func TestAPanicOfThePhaseLoopLeavesNoGoroutineBehind(t *testing.T) {
+	fake := newFakeJev(t, nil)
+	settings := shadowTestSettings()
+	settings.Concurrency = 4
+	phase := newTestShadowPhase(t, fake, settings, testLogger())
+	phase.writeBatch = 1
+	if before := shadowRunGoroutines(); before != 0 {
+		t.Fatalf("%d goroutines of a phase exist before the run", before)
+	}
+	var recovered any
+	func() {
+		defer func() { recovered = recover() }()
+		phase.run(context.Background(), panickingWriteStore{&memoryShadowStore{}}, shadowTestConfig(),
+			shadowTestEntries(t, "u1", "u2", "u3", "u4", "u5", "u6", "u7", "u8"))
+	}()
+	// Positive control: the loop did panic, after a classification was sent.
+	if recovered == nil || fake.count() < 1 {
+		t.Fatalf("the loop did not panic after a request: recovered = %v, requests = %d", recovered, fake.count())
+	}
+	left := shadowRunGoroutines()
+	for waited := 0; left > 0 && waited < 500; waited++ {
+		time.Sleep(10 * time.Millisecond)
+		left = shadowRunGoroutines()
+	}
+	if left != 0 {
+		t.Fatalf("%d goroutines of the phase are alive 5 s after the panic of its loop", left)
 	}
 }
 

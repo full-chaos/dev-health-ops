@@ -453,6 +453,11 @@ func (phase *ShadowPhase) run(ctx context.Context, store shadowStore, cfg Config
 	if len(pending) > 0 {
 		work := make(chan shadowUnit)
 		results := make(chan shadowResult)
+		// abandoned is closed when this function returns. After a normal end it
+		// has no reader left. After a panic of the loop below, nothing reads
+		// results any more: a worker that could only wait on its send ends here.
+		abandoned := make(chan struct{})
+		defer close(abandoned)
 		go func() {
 			defer close(work)
 			for _, unit := range pending {
@@ -469,7 +474,11 @@ func (phase *ShadowPhase) run(ctx context.Context, store shadowStore, cfg Config
 			go func() {
 				defer workers.Done()
 				for unit := range work {
-					results <- phase.classifyOne(phaseCtx, ledger, unit)
+					select {
+					case results <- phase.classifyOne(phaseCtx, ledger, unit):
+					case <-abandoned:
+						return
+					}
 				}
 			}()
 		}

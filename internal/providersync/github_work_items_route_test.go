@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
-	"github.com/full-chaos/dev-health-ops/internal/teamattribution"
 )
 
 // githubProjectV2NoopSnapshotDiffReader is the ProjectMembershipSnapshotDiff
@@ -86,41 +85,35 @@ func (policy *githubWorkItemsRouteProjectPolicy) Fetch(
 	return policy.result, policy.err
 }
 
-type githubWorkItemsRouteDeriver struct {
-	rows  map[string][]json.RawMessage
-	got   githubWorkItemRows
-	err   error
-	calls int
-}
-
-func (deriver *githubWorkItemsRouteDeriver) Derive(
-	_ context.Context,
-	_ Claim,
-	rows githubWorkItemRows,
-	_ time.Time,
-) (map[string][]json.RawMessage, []teamattribution.GithubWorkItemDerivationRejectedMembership, error) {
-	deriver.calls++
-	deriver.got = rows
-	return deriver.rows, nil, deriver.err
-}
-
-func githubWorkItemsRouteDerivedRows(t *testing.T) map[string][]json.RawMessage {
+// githubWorkItemsRouteComposedRows reads back the raw rows a route batch
+// carries, from its effects. The route has no other output for them.
+func githubWorkItemsRouteComposedRows(t *testing.T, batch CompleteRouteBatch) githubWorkItemRows {
 	t.Helper()
-	rows := make(map[string][]json.RawMessage, len(githubWorkItemDerivedDestinations))
-	for _, destination := range githubWorkItemDerivedDestinations {
-		encoded, err := json.Marshal(map[string]any{
-			"destination": destination,
-			"value":       1,
-		})
-		if err != nil {
-			t.Fatal(err)
+	var rows githubWorkItemRows
+	var err error
+	for _, effect := range batch.Effects {
+		switch effect.Destination {
+		case "work_items":
+			rows.WorkItems, err = decodeEffectRows[githubWorkItemRow](effect)
+		case "work_item_transitions":
+			rows.StatusTransitions, err = decodeEffectRows[githubWorkItemTransitionRow](effect)
+		case "work_item_dependencies":
+			rows.Dependencies, err = decodeEffectRows[githubWorkItemDependencyRow](effect)
+		case "work_item_reopen_events":
+			rows.ReopenEvents, err = decodeEffectRows[githubWorkItemReopenRow](effect)
+		case "work_item_interactions":
+			rows.Interactions, err = decodeEffectRows[githubWorkItemInteractionRow](effect)
+		case "sprints":
+			rows.Sprints, err = decodeEffectRows[githubSprintRow](effect)
 		}
-		rows[destination] = []json.RawMessage{encoded}
+		if err != nil {
+			t.Fatalf("decode %s: %v", effect.Destination, err)
+		}
 	}
 	return rows
 }
 
-func TestGitHubWorkItemsRouteComposesRESTSocialProjectsDerivedRowsAndUsage(t *testing.T) {
+func TestGitHubWorkItemsRouteComposesRESTSocialProjectsRawRowsAndUsage(t *testing.T) {
 	normalizedAt := time.Date(2026, 8, 4, 12, 0, 0, 123456000, time.UTC)
 	claim := githubWorkItemsRESTClaim()
 	claim.DatasetOptions["fetch_milestones"] = false
@@ -135,6 +128,8 @@ func TestGitHubWorkItemsRouteComposesRESTSocialProjectsDerivedRowsAndUsage(t *te
 		graphqlReplies: []string{`{"data":{"repository":{"pr0":{"number":52,"comments":{"nodes":[{"databaseId":9007199254740993,"body":"social","createdAt":"2026-07-23T00:00:00Z","author":{"login":"reviewer"}}],"pageInfo":{"hasNextPage":false,"endCursor":null}},"timelineItems":{"nodes":[{"__typename":"ClosedEvent","createdAt":"2026-07-24T00:00:00Z","actor":{"login":"closer"}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}`},
 	}
 	client := gitHubPullRequestClient(t, fakehttp.Client(doer), "https://api.github.com")
+	leftToDaily := providerfoundation.NewMetrics()
+	client.Metrics = leftToDaily
 	projectRow := githubWorkItemRow{
 		WorkItemID: "gh:Acme/API-Renamed#42", Provider: "github",
 		Title: "project wins", Type: "issue", Status: "done",
@@ -159,7 +154,6 @@ func TestGitHubWorkItemsRouteComposesRESTSocialProjectsDerivedRowsAndUsage(t *te
 		Targets:   1,
 		Snapshots: []githubProjectV2BoardSnapshot{{ProjectScopeID: "ghprojv2:acme#3"}},
 	}}
-	deriver := &githubWorkItemsRouteDeriver{rows: githubWorkItemsRouteDerivedRows(t)}
 	handler := GitHubWorkItemsRouteHandler{Projects: projects, ProjectMembershipSnapshotDiff: githubProjectV2NoopSnapshotDiffReader{}}
 
 	batch, err := handler.Collect(
@@ -176,20 +170,29 @@ func TestGitHubWorkItemsRouteComposesRESTSocialProjectsDerivedRowsAndUsage(t *te
 	if projects.calls != 1 || doer.graphqlCalls != 1 {
 		t.Fatalf("project calls=%d social GraphQL calls=%d", projects.calls, doer.graphqlCalls)
 	}
-	if len(deriver.got.WorkItems) != 2 || deriver.got.WorkItems[0].Title != "project wins" ||
-		deriver.got.WorkItems[1].WorkItemID != "ghpr:Acme/API-Renamed#52" {
-		t.Fatalf("composed work items=%+v", deriver.got.WorkItems)
+	composed := githubWorkItemsRouteComposedRows(t, batch)
+	if len(composed.WorkItems) != 2 || composed.WorkItems[0].Title != "project wins" ||
+		composed.WorkItems[1].WorkItemID != "ghpr:Acme/API-Renamed#52" {
+		t.Fatalf("composed work items=%+v", composed.WorkItems)
 	}
-	if len(deriver.got.StatusTransitions) != 3 ||
-		deriver.got.StatusTransitions[1].WorkItemID != "ghpr:Acme/API-Renamed#52" ||
-		deriver.got.StatusTransitions[1].ToStatus != "canceled" {
-		t.Fatalf("PR-social events did not become transitions: %+v", deriver.got.StatusTransitions)
+	// The effect holds its rows in canonical order, so the transitions are
+	// found by key, not by position.
+	hasTransition := func(workItemID, toStatus string) bool {
+		for _, transition := range composed.StatusTransitions {
+			if transition.WorkItemID == workItemID && transition.ToStatus == toStatus {
+				return true
+			}
+		}
+		return false
 	}
-	if got := deriver.got.StatusTransitions[len(deriver.got.StatusTransitions)-1]; got.WorkItemID != projectRow.WorkItemID || got.ToStatus != "done" {
-		t.Fatalf("Projects v2 transition was not appended last: %+v", deriver.got.StatusTransitions)
+	if len(composed.StatusTransitions) != 3 || !hasTransition("ghpr:Acme/API-Renamed#52", "canceled") {
+		t.Fatalf("PR-social events did not become transitions: %+v", composed.StatusTransitions)
 	}
-	if len(deriver.got.Interactions) != 2 || len(deriver.got.Dependencies) != 2 {
-		t.Fatalf("composed rows=%+v", deriver.got)
+	if !hasTransition(projectRow.WorkItemID, "done") {
+		t.Fatalf("Projects v2 transition is missing: %+v", composed.StatusTransitions)
+	}
+	if len(composed.Interactions) != 2 || len(composed.Dependencies) != 2 {
+		t.Fatalf("composed rows=%+v", composed)
 	}
 
 	wantDestinations := githubWorkItemRouteDestinations()
@@ -207,11 +210,19 @@ func TestGitHubWorkItemsRouteComposesRESTSocialProjectsDerivedRowsAndUsage(t *te
 	if len(workItemsEffect.Rows) != 2 {
 		t.Fatalf("work_items rows=%s", workItemsEffect.Rows)
 	}
+	// No table computed from stored rows has an effect in the batch, and the
+	// result carries none of the keys the derivation used to attach.
 	for _, destination := range githubWorkItemDerivedDestinations {
-		if rows := githubWorkItemsRouteEffect(t, batch, destination).Rows; len(rows) != 1 {
-			t.Fatalf("derived %s rows=%s", destination, rows)
+		if slices.Contains(gotDestinations, destination) {
+			t.Fatalf("the unit built an effect for the derived table %q", destination)
 		}
 	}
+	for _, key := range []string{"team_inheritance", "team_attribution_written"} {
+		if _, present := batch.Result[key]; present {
+			t.Fatalf("result still carries %q: %+v", key, batch.Result)
+		}
+	}
+	assertWorkItemDerivedTablesLeftToDailyJob(t, leftToDaily, "github", 1)
 
 	usage := githubWorkItemsRouteUsage(t, batch)
 	wantUsage := []GitHubWorkItemsRequestUsage{
@@ -340,7 +351,6 @@ func TestGitHubWorkItemsRouteRefusesAnUnwiredProjectsCollector(t *testing.T) {
 			"/repos/acme/api": {{body: `{"id":4567,"full_name":"Acme/API"}`}},
 		}},
 	}
-	deriver := &githubWorkItemsRouteDeriver{rows: githubWorkItemsRouteDerivedRows(t)}
 	batch, err := (GitHubWorkItemsRouteHandler{ProjectMembershipSnapshotDiff: githubProjectV2NoopSnapshotDiffReader{}}).Collect(
 		context.Background(), claim,
 		providerfoundation.Credential{Provider: "github", ID: claim.CredentialID},
@@ -352,8 +362,8 @@ func TestGitHubWorkItemsRouteRefusesAnUnwiredProjectsCollector(t *testing.T) {
 	if errors.Is(err, ErrGitHubWorkItemsIncomplete) {
 		t.Fatal("an unwired collector was reported as provider incompleteness")
 	}
-	if !reflect.DeepEqual(batch, CompleteRouteBatch{}) || deriver.calls != 0 {
-		t.Fatalf("misconstructed route returned batch=%+v or derived %d times", batch, deriver.calls)
+	if !reflect.DeepEqual(batch, CompleteRouteBatch{}) {
+		t.Fatalf("misconstructed route returned batch=%+v", batch)
 	}
 	if doer.graphqlCalls != 0 || len(doer.rest.requests) != 0 {
 		t.Fatalf("misconstructed route spent requests: graphql=%d rest=%d",
@@ -373,7 +383,6 @@ func TestGitHubWorkItemsRouteRefusesAnUnwiredProjectsCollectorWithoutTargets(t *
 		t:    t,
 		rest: &githubWorkItemsRESTDoer{t: t, replies: githubWorkItemsRESTFixtures()},
 	}
-	deriver := &githubWorkItemsRouteDeriver{rows: githubWorkItemsRouteDerivedRows(t)}
 	_, err := (GitHubWorkItemsRouteHandler{ProjectMembershipSnapshotDiff: githubProjectV2NoopSnapshotDiffReader{}}).Collect(
 		context.Background(), claim,
 		providerfoundation.Credential{Provider: "github", ID: claim.CredentialID},
@@ -382,8 +391,8 @@ func TestGitHubWorkItemsRouteRefusesAnUnwiredProjectsCollectorWithoutTargets(t *
 	if !errors.Is(err, ErrInvalidConfiguration) {
 		t.Fatalf("error=%v want ErrInvalidConfiguration even with no targets configured", err)
 	}
-	if deriver.calls != 0 || len(doer.rest.requests) != 0 {
-		t.Fatalf("misconstructed route ran: derived=%d rest=%d", deriver.calls, len(doer.rest.requests))
+	if len(doer.rest.requests) != 0 {
+		t.Fatalf("misconstructed route ran: rest=%d", len(doer.rest.requests))
 	}
 }
 
@@ -457,7 +466,6 @@ func TestGitHubWorkItemsRoutePreservesOptionalSocialFailureAndPhysicalUsage(t *t
 		rest:           &githubWorkItemsRESTDoer{t: t, replies: fixtures},
 		graphqlReplies: []string{`{"errors":[{"message":"unavailable"}],"data":{"repository":null}}`},
 	}
-	deriver := &githubWorkItemsRouteDeriver{rows: githubWorkItemsRouteDerivedRows(t)}
 	batch, err := (GitHubWorkItemsRouteHandler{
 		Projects: GitHubProjectV2Fetcher{}, ProjectMembershipSnapshotDiff: githubProjectV2NoopSnapshotDiffReader{},
 	}).Collect(
@@ -473,15 +481,13 @@ func TestGitHubWorkItemsRoutePreservesOptionalSocialFailureAndPhysicalUsage(t *t
 	if err != nil {
 		t.Fatalf("optional social failure zeroed the batch: %v", err)
 	}
-	if deriver.calls != 1 {
-		t.Fatalf("deriver calls=%d", deriver.calls)
-	}
-	if len(deriver.got.WorkItems) != 1 || deriver.got.WorkItems[0].WorkItemID != "ghpr:Acme/API-Renamed#52" {
-		t.Fatalf("pull request rows dropped on optional social failure: %+v", deriver.got.WorkItems)
+	composed := githubWorkItemsRouteComposedRows(t, batch)
+	if len(composed.WorkItems) != 1 || composed.WorkItems[0].WorkItemID != "ghpr:Acme/API-Renamed#52" {
+		t.Fatalf("pull request rows dropped on optional social failure: %+v", composed.WorkItems)
 	}
 	// The enrichment itself is genuinely absent, not fabricated.
-	if len(deriver.got.Interactions) != 0 {
-		t.Fatalf("interactions=%+v", deriver.got.Interactions)
+	if len(composed.Interactions) != 0 {
+		t.Fatalf("interactions=%+v", composed.Interactions)
 	}
 	workItemsEffect := githubWorkItemsRouteEffect(t, batch, "work_items")
 	if len(workItemsEffect.Rows) != 1 {
@@ -518,7 +524,6 @@ func TestGitHubWorkItemsRouteContinuesPastOptionalRESTFailuresAndLandsEffects(t 
 			"/repos/acme/api/issues/42/comments": {{status: http.StatusBadGateway, body: `{"message":"down"}`}},
 		}},
 	}
-	deriver := &githubWorkItemsRouteDeriver{rows: githubWorkItemsRouteDerivedRows(t)}
 	batch, err := (GitHubWorkItemsRouteHandler{Projects: GitHubProjectV2Fetcher{}, ProjectMembershipSnapshotDiff: githubProjectV2NoopSnapshotDiffReader{}}).Collect(
 		context.Background(), claim,
 		providerfoundation.Credential{Provider: "github", ID: claim.CredentialID},
@@ -532,12 +537,13 @@ func TestGitHubWorkItemsRouteContinuesPastOptionalRESTFailuresAndLandsEffects(t 
 	if err != nil {
 		t.Fatalf("optional REST failures zeroed the batch: %v", err)
 	}
-	if deriver.calls != 1 || len(deriver.got.WorkItems) != 1 ||
-		deriver.got.WorkItems[0].WorkItemID != "gh:Acme/API#42" {
-		t.Fatalf("issue rows dropped on optional failures: calls=%d rows=%+v", deriver.calls, deriver.got.WorkItems)
+	composed := githubWorkItemsRouteComposedRows(t, batch)
+	if len(composed.WorkItems) != 1 ||
+		composed.WorkItems[0].WorkItemID != "gh:Acme/API#42" {
+		t.Fatalf("issue rows dropped on optional failures: rows=%+v", composed.WorkItems)
 	}
-	if len(deriver.got.Sprints) != 0 || len(deriver.got.Interactions) != 0 {
-		t.Fatalf("optional rows fabricated: %+v", deriver.got)
+	if len(composed.Sprints) != 0 || len(composed.Interactions) != 0 {
+		t.Fatalf("optional rows fabricated: %+v", composed)
 	}
 	if len(githubWorkItemsRouteEffect(t, batch, "work_items").Rows) != 1 {
 		t.Fatalf("work_items effect rows=%s", githubWorkItemsRouteEffect(t, batch, "work_items").Rows)
@@ -574,7 +580,6 @@ func TestGitHubWorkItemsRouteContinuesPastUnprocessablePullRequest(t *testing.T)
 		// there fails the decode that adaptGitHubWorkItemPRSocialPayload runs.
 		graphqlReplies: []string{`{"data":{"repository":{"pr0":{"number":52,"comments":{"nodes":[{"databaseId":1,"body":"c","createdAt":{"bad":true},"author":{"login":"reviewer"}}],"pageInfo":{"hasNextPage":false,"endCursor":null}},"timelineItems":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}`},
 	}
-	deriver := &githubWorkItemsRouteDeriver{rows: githubWorkItemsRouteDerivedRows(t)}
 	batch, err := (GitHubWorkItemsRouteHandler{Projects: GitHubProjectV2Fetcher{}, ProjectMembershipSnapshotDiff: githubProjectV2NoopSnapshotDiffReader{}}).Collect(
 		context.Background(), claim,
 		providerfoundation.Credential{Provider: "github", ID: claim.CredentialID},
@@ -583,15 +588,13 @@ func TestGitHubWorkItemsRouteContinuesPastUnprocessablePullRequest(t *testing.T)
 	if err != nil {
 		t.Fatalf("an unprocessable pull request zeroed the batch: %v", err)
 	}
-	if deriver.calls != 1 {
-		t.Fatalf("deriver calls=%d", deriver.calls)
-	}
-	for _, item := range deriver.got.WorkItems {
+	composed := githubWorkItemsRouteComposedRows(t, batch)
+	for _, item := range composed.WorkItems {
 		if strings.HasPrefix(item.WorkItemID, "ghpr:") {
 			t.Fatalf("unprocessable pull request became a row: %+v", item)
 		}
 	}
-	if len(deriver.got.WorkItems) == 0 {
+	if len(composed.WorkItems) == 0 {
 		t.Fatal("issues collected before the failing pull request were discarded")
 	}
 	if incomplete := githubWorkItemsRouteIncomplete(t, batch); !reflect.DeepEqual(
@@ -636,7 +639,6 @@ func TestGitHubWorkItemsRouteFailsClosedOnMixedOptionalAndBlockingIncomplete(t *
 		rest:           &githubWorkItemsRESTDoer{t: t, replies: fixtures},
 		graphqlReplies: []string{stalled, stalled},
 	}
-	deriver := &githubWorkItemsRouteDeriver{rows: githubWorkItemsRouteDerivedRows(t)}
 	batch, err := (GitHubWorkItemsRouteHandler{Projects: GitHubProjectV2Fetcher{}, ProjectMembershipSnapshotDiff: githubProjectV2NoopSnapshotDiffReader{}}).Collect(
 		context.Background(), claim,
 		providerfoundation.Credential{Provider: "github", ID: claim.CredentialID},
@@ -645,8 +647,8 @@ func TestGitHubWorkItemsRouteFailsClosedOnMixedOptionalAndBlockingIncomplete(t *
 	if !errors.Is(err, ErrGitHubWorkItemsIncomplete) {
 		t.Fatalf("blocking entry after an optional one did not fail the unit: %v", err)
 	}
-	if !reflect.DeepEqual(batch, CompleteRouteBatch{}) || deriver.calls != 0 {
-		t.Fatalf("mixed-incomplete route returned batch=%+v or derived %d times", batch, deriver.calls)
+	if !reflect.DeepEqual(batch, CompleteRouteBatch{}) {
+		t.Fatalf("mixed-incomplete route returned batch=%+v", batch)
 	}
 	routeErr := githubWorkItemsIncompleteError(t, err)
 	if !reflect.DeepEqual(routeErr.Incomplete, []GitHubWorkItemsIncomplete{
@@ -704,7 +706,6 @@ func TestGitHubWorkItemsRouteFailsClosedOnBlockingSocialCauses(t *testing.T) {
 				rest:           &githubWorkItemsRESTDoer{t: t, replies: fixtures},
 				graphqlReplies: []string{test.reply, test.reply},
 			}
-			deriver := &githubWorkItemsRouteDeriver{rows: githubWorkItemsRouteDerivedRows(t)}
 			batch, err := (GitHubWorkItemsRouteHandler{
 				Projects: GitHubProjectV2Fetcher{}, Social: test.fetcher, ProjectMembershipSnapshotDiff: githubProjectV2NoopSnapshotDiffReader{},
 			}).Collect(
@@ -719,8 +720,8 @@ func TestGitHubWorkItemsRouteFailsClosedOnBlockingSocialCauses(t *testing.T) {
 				t.Fatalf("%s: errors.Is(ErrPaginationCapExceeded)=%v want %v", test.wantCause,
 					errors.Is(err, ErrPaginationCapExceeded), test.wantCap)
 			}
-			if !reflect.DeepEqual(batch, CompleteRouteBatch{}) || deriver.calls != 0 {
-				t.Fatalf("blocking cause returned batch=%+v or derived %d times", batch, deriver.calls)
+			if !reflect.DeepEqual(batch, CompleteRouteBatch{}) {
+				t.Fatalf("blocking cause returned batch=%+v", batch)
 			}
 			routeErr := githubWorkItemsIncompleteError(t, err)
 			if !reflect.DeepEqual(routeErr.Incomplete, []GitHubWorkItemsIncomplete{
@@ -756,7 +757,6 @@ func TestGitHubWorkItemsRouteFailsClosedOnRateLimitedSocialFetch(t *testing.T) {
 		graphqlReplies: []string{`{"message":"API rate limit exceeded"}`},
 		graphqlStatus:  []int{http.StatusForbidden},
 	}
-	deriver := &githubWorkItemsRouteDeriver{rows: githubWorkItemsRouteDerivedRows(t)}
 	batch, err := (GitHubWorkItemsRouteHandler{Projects: GitHubProjectV2Fetcher{}, ProjectMembershipSnapshotDiff: githubProjectV2NoopSnapshotDiffReader{}}).Collect(
 		context.Background(), claim,
 		providerfoundation.Credential{Provider: "github", ID: claim.CredentialID},
@@ -766,8 +766,8 @@ func TestGitHubWorkItemsRouteFailsClosedOnRateLimitedSocialFetch(t *testing.T) {
 	if !errors.As(err, &providerErr) || providerErr.Class != providerfoundation.ErrorRateLimited {
 		t.Fatalf("rate-limited social fetch did not abort the unit: error=%v", err)
 	}
-	if !reflect.DeepEqual(batch, CompleteRouteBatch{}) || deriver.calls != 0 {
-		t.Fatalf("rate-limited route returned batch=%+v or derived %d times", batch, deriver.calls)
+	if !reflect.DeepEqual(batch, CompleteRouteBatch{}) {
+		t.Fatalf("rate-limited route returned batch=%+v", batch)
 	}
 }
 
@@ -784,7 +784,6 @@ func TestGitHubWorkItemsRouteFailsClosedOnRateLimitedIssueComments(t *testing.T)
 			"/repos/acme/api/issues/42/comments": {{status: http.StatusForbidden, body: `{"message":"API rate limit exceeded"}`}},
 		}},
 	}
-	deriver := &githubWorkItemsRouteDeriver{rows: githubWorkItemsRouteDerivedRows(t)}
 	batch, err := (GitHubWorkItemsRouteHandler{Projects: GitHubProjectV2Fetcher{}, ProjectMembershipSnapshotDiff: githubProjectV2NoopSnapshotDiffReader{}}).Collect(
 		context.Background(), claim,
 		providerfoundation.Credential{Provider: "github", ID: claim.CredentialID},
@@ -794,8 +793,8 @@ func TestGitHubWorkItemsRouteFailsClosedOnRateLimitedIssueComments(t *testing.T)
 	if !errors.As(err, &providerErr) || providerErr.Class != providerfoundation.ErrorRateLimited {
 		t.Fatalf("rate-limited comment fetch did not abort the unit: error=%v", err)
 	}
-	if !reflect.DeepEqual(batch, CompleteRouteBatch{}) || deriver.calls != 0 {
-		t.Fatalf("rate-limited route returned batch=%+v or derived %d times", batch, deriver.calls)
+	if !reflect.DeepEqual(batch, CompleteRouteBatch{}) {
+		t.Fatalf("rate-limited route returned batch=%+v", batch)
 	}
 }
 
@@ -850,24 +849,6 @@ func TestGitHubWorkItemsRouteIncompletenessSurvivesDurableCompletionEncoding(t *
 		{Component: "issue_comments", SubjectID: "42", Cause: "transient"},
 	}) {
 		t.Fatalf("durable incompleteness evidence=%s", encoded)
-	}
-}
-
-func TestGitHubWorkItemsRouteFailsBeforeFetchWithoutDerivedImplementation(t *testing.T) {
-	claim := githubWorkItemsRESTClaim()
-	doer := &githubWorkItemsRouteDoer{
-		t: t, rest: &githubWorkItemsRESTDoer{t: t, replies: githubWorkItemsRESTFixtures()},
-	}
-	_, err := (GitHubWorkItemsRouteHandler{}).Collect(
-		context.Background(), claim,
-		providerfoundation.Credential{Provider: "github", ID: claim.CredentialID},
-		gitHubPullRequestClient(t, fakehttp.Client(doer), "https://api.github.com"), time.Now().UTC(),
-	)
-	if !errors.Is(err, ErrGitHubWorkItemsDerivationsUnavailable) {
-		t.Fatalf("error=%v", err)
-	}
-	if len(doer.rest.requests) != 0 || doer.graphqlCalls != 0 {
-		t.Fatalf("requests happened before completeness preflight: REST=%v GraphQL=%d", doer.rest.requests, doer.graphqlCalls)
 	}
 }
 

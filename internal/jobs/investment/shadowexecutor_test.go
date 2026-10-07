@@ -311,8 +311,8 @@ func TestNoProductionCodeUsesAShadowTestSeam(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Count(string(source), "executor.shadowHTTPClient") != 2 {
-		t.Fatalf("executor.shadowHTTPClient is used %d times in nativeexecutor.go, want 2 (the setter and the constructor call)",
+	if strings.Count(string(source), "executor.shadowHTTPClient") != 3 {
+		t.Fatalf("executor.shadowHTTPClient is used %d times in nativeexecutor.go, want 3 (the setter, and the client constructor call of the shadow phase and of the served decision backend)",
 			strings.Count(string(source), "executor.shadowHTTPClient"))
 	}
 }

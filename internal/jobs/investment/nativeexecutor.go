@@ -67,6 +67,11 @@ type NativeExecutor struct {
 	// shadowHTTPClient replaces the HTTP client of the shadow backend. Nil, the
 	// production value, selects the hardened client.
 	shadowHTTPClient *http.Client
+	// newServed builds the served decision backend of one run (CHAOS-8874), or
+	// returns nil when the org is not on the list -- the default. An org on the
+	// list whose backend cannot be built is an error: the run must not serve
+	// that org from the generative provider in silence.
+	newServed func(orgID string) (*ServedDecision, error)
 }
 
 // SetShadowObserver wires the optional shadow-phase telemetry. Nil is
@@ -100,7 +105,29 @@ func NewNativeExecutor(reader *chquery.Reader, writer *chwrite.Writer, logger *s
 		newProvider: resolveProviderFromEnv,
 	}
 	executor.newShadow = executor.shadowFromEnv
+	executor.newServed = executor.servedFromEnv
 	return executor, nil
+}
+
+// servedFromEnv builds the served decision backend from the environment, or
+// returns nil for an org that INVESTMENT_SERVED_DECISION_ORG_IDS does not name.
+// For such an org NO client is built.
+func (executor *NativeExecutor) servedFromEnv(orgID string) (*ServedDecision, error) {
+	if !ServedDecisionSettingsFromEnv(secrets.GetenvNamed).EnabledFor(orgID) {
+		return nil, nil
+	}
+	client, err := categorize.NewTypeSafeClientFromEnvWithHTTPClient("", executor.logger, executor.shadowHTTPClient)
+	if err != nil {
+		// The constructor's messages hold a rule or a length, never the key, the
+		// configured URL or the configured model.
+		return nil, errors.New(secrets.RedactRegistered(err.Error()))
+	}
+	served, err := NewServedDecision(client, executor.logger)
+	if err != nil {
+		_ = client.Close()
+		return nil, err
+	}
+	return served, nil
 }
 
 // shadowFromEnv builds the shadow phase from the environment, or returns nil.
@@ -304,9 +331,24 @@ func (executor *NativeExecutor) Execute(ctx context.Context, claim workgraph.Cla
 	if err != nil {
 		return nil, err
 	}
+	// The served decision backend is built AFTER every refusal above. An org on
+	// its list is served by it, and its shadow phase is off: the same backend
+	// must not be paid two times for one unit.
+	var served *ServedDecision
+	if executor.newServed != nil {
+		served, err = executor.newServed(orgID)
+		if err != nil {
+			return nil, workgraph.Deterministic(workgraph.ClassLLMProviderInvalid,
+				fmt.Errorf("build the served decision backend: %w", err))
+		}
+	}
+	if served != nil {
+		defer func() { _ = served.Close() }()
+		materializer.SetServed(served)
+	}
 	// The shadow phase is built AFTER every refusal above, so a request that is
 	// refused builds no shadow client; it is closed with the provider.
-	if executor.newShadow != nil {
+	if served == nil && executor.newShadow != nil {
 		if shadow := executor.newShadow(orgID); shadow != nil {
 			shadow.SetObserver(executor.shadowObserver)
 			defer func() { _ = shadow.Close() }()

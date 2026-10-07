@@ -229,6 +229,9 @@ type Materializer struct {
 	// shadow is the optional shadow phase (shadowphase.go). Nil is the default
 	// and means no phase.
 	shadow *ShadowPhase
+	// served is the optional served decision backend (serveddecision.go). Nil is
+	// the default and means the generative provider serves the run.
+	served *ServedDecision
 }
 
 // ErrUnavailable reports a Materializer built without a collaborator it needs.
@@ -453,7 +456,7 @@ func (m *Materializer) Run(ctx context.Context, cfg Config) (Stats, error) {
 	}
 	fallbackCount := len(outcomes)
 
-	modelVersion := categorize.EffectiveModelVersion(cfg.ProviderName, resolvedModelName(cfg))
+	modelVersion := m.modelVersion(cfg)
 
 	m.logOwnershipFallback(ctx, cfg, stats, ownershipAsOf)
 	m.logRepoAttribution(ctx, cfg, stats)
@@ -525,6 +528,7 @@ func (m *Materializer) Run(ctx context.Context, cfg Config) (Stats, error) {
 				m.logger.WarnContext(ctx, "llm token usage write failed on the deterministic-abort path",
 					"run_id", cfg.RunID, "error", flushErr.Error())
 			}
+			m.finishServed(ctx, cfg)
 			return Stats{}, err
 		}
 	}
@@ -550,6 +554,14 @@ func (m *Materializer) Run(ctx context.Context, cfg Config) (Stats, error) {
 		}
 
 		outcome, ok := outcomes[entry.index]
+		if !ok && m.served.keepsLastRow(entry.index) {
+			// The served decision request of this unit failed (CHAOS-8874): no
+			// investment row is written, so the unit's last row stays its latest
+			// row and the next run asks again. Its repo-effort rows are written,
+			// as for a unit skipped as unchanged: they do not depend on the model.
+			repoEfforts = append(repoEfforts, m.stampRepoEffort(entry.result.RepoEffort, cfg)...)
+			continue
+		}
 		if !ok {
 			// materialize.py:1671-1676: a pending unit with no recorded
 			// outcome means its LLM task failed non-fatally. It still gets a
@@ -583,6 +595,14 @@ func (m *Materializer) Run(ctx context.Context, cfg Config) (Stats, error) {
 		if outcome.Status == categorize.StatusInvalidLLMOutput {
 			if record.EvidenceQuality > 0.3 {
 				record.EvidenceQuality = 0.3
+			}
+			record.EvidenceQualityBand = units.EvidenceQualityBand(record.EvidenceQuality)
+		}
+		// A served decision row with a mix and no validated quote (CHAOS-8874)
+		// gets the same cap, whatever its status.
+		if m.served.isLowQuality(entry.index) {
+			if record.EvidenceQuality > servedLowQualityCap {
+				record.EvidenceQuality = servedLowQualityCap
 			}
 			record.EvidenceQualityBand = units.EvidenceQualityBand(record.EvidenceQuality)
 		}
@@ -628,6 +648,7 @@ func (m *Materializer) Run(ctx context.Context, cfg Config) (Stats, error) {
 		m.logger.WarnContext(ctx, "llm token usage write failed; continuing",
 			"run_id", cfg.RunID, "error", err.Error())
 	}
+	m.finishServed(ctx, cfg)
 
 	// WRITE. Same three tables, same "skip the call when empty" shape as
 	// materialize.py:1826-1831, in a DELIBERATELY different order: quotes, then
@@ -822,9 +843,7 @@ func (m *Materializer) categorizePending(
 		go func() {
 			defer wg.Done()
 			for entry := range work {
-				outcome, err := categorize.CategorizeTextBundle(callCtx, entry.result.Bundle, categorize.CategorizeOptions{
-					Provider: m.provider, ProviderName: cfg.ProviderName, Model: cfg.Model,
-				})
+				outcome, err := m.categorizeEntry(callCtx, cfg, entry)
 
 				mu.Lock()
 				if err != nil {
@@ -835,10 +854,18 @@ func (m *Materializer) categorizePending(
 						mu.Unlock()
 						continue
 					}
-					class := categorize.FailureClass(err)
+					class, deterministic := llmFailureOf(err)
 					stats.LLMFailureCounts[class]++
 					stats.LLMFailures++
-					if categorize.IsDeterministicFailure(err) && fatalErr == nil {
+					// A served decision request that failed after a response was
+					// still billed.
+					var failure *servedFailure
+					if errors.As(err, &failure) {
+						stats.LLMCalls += failure.calls
+						stats.LLMInputTokens += failure.inputTokens
+						stats.LLMOutputTokens += failure.outputTokens
+					}
+					if deterministic && fatalErr == nil {
 						fatalErr = err
 						cancel()
 					}
@@ -885,10 +912,11 @@ func (m *Materializer) flushTokenUsage(ctx context.Context, cfg Config, stats St
 	// A lost lease means "stop writing", and that has to include bookkeeping.
 	writeCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
+	provider, model := m.usageIdentity(cfg)
 	if _, err := m.writer.WriteTokenUsage(writeCtx, cfg.OrgID, chwrite.TokenUsageRecord{
 		RunID:        cfg.RunID,
-		Provider:     cfg.ProviderName,
-		Model:        resolvedModelName(cfg),
+		Provider:     provider,
+		Model:        model,
 		Source:       chwrite.TokenUsageSourceInvestmentMaterialize,
 		InputTokens:  stats.LLMInputTokens,
 		OutputTokens: stats.LLMOutputTokens,

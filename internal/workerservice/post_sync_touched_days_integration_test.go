@@ -278,7 +278,9 @@ func (rig *touchedRig) fullRecompute(t *testing.T, ctx context.Context, orgID st
 // A sync whose unit window is one day writes raw rows of two older days. After
 // the fan-out and the daily runs it started, the derived rows of both days
 // equal a recompute of every repository, and a day that no raw row touched
-// gets no new row version.
+// gets no new row version. On each of the two days one work scope has items in
+// a repository the sync touched and in one it did not touch: the run of the
+// touched repositories computes that scope from the items of both.
 func TestPostSyncFanoutRecomputesEveryDayTheRawRowsTouched(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Minute)
 	defer cancel()
@@ -295,6 +297,10 @@ func TestPostSyncFanoutRecomputesEveryDayTheRawRowsTouched(t *testing.T) {
 		touchedItem{repo: repoA, id: "gh:acme/api#2", provider: "github", day: far, completed: true, synced: earlier},
 		touchedItem{repo: uuid.Nil, id: "linear:OPS-1", provider: "linear", day: far, completed: true, synced: earlier},
 		touchedItem{repo: repoB, id: "gitlab:acme/web#1", provider: "gitlab", day: untouched, completed: true, synced: earlier},
+		// The github items of this test are one work scope. On the near day
+		// the sync touches repository A only, and this older item of the scope
+		// is in repository B.
+		touchedItem{repo: repoB, id: "gh:acme/web#7", provider: "github", day: near, completed: true, synced: earlier},
 	)
 	for _, day := range []time.Time{near, far, untouched} {
 		rig.fullRecompute(t, ctx, orgID, day)
@@ -310,6 +316,9 @@ func TestPostSyncFanoutRecomputesEveryDayTheRawRowsTouched(t *testing.T) {
 		touchedItem{repo: uuid.Nil, id: "jira:OPS-2", provider: "jira", day: far, completed: true, synced: now},
 		touchedItem{repo: uuid.Nil, id: "linear:OPS-3", provider: "linear", day: far, completed: true, synced: now},
 		touchedItem{repo: repoB, id: "gitlab:acme/web#9", provider: "gitlab", day: far, completed: true, synced: now},
+		// On the far day the sync touches repository B and not repository A,
+		// which holds the older item gh:acme/api#2 of the same work scope.
+		touchedItem{repo: repoB, id: "gh:acme/web#8", provider: "github", day: far, completed: true, synced: now},
 		// A row of the target day: the window run computes it, so the fan-out
 		// starts no second run for the day and ends its key.
 		touchedItem{repo: repoA, id: "gh:acme/api#4", provider: "github", day: target, completed: true, synced: now},
@@ -339,11 +348,11 @@ func TestPostSyncFanoutRecomputesEveryDayTheRawRowsTouched(t *testing.T) {
 		rig.dispatchAndRun(t, ctx, daily.Run{ID: run.id, OrganizationID: orgID})
 	}
 
-	if got := completedByProvider(t, ctx, rig.conn, orgID, far); !reflect.DeepEqual(got, map[string]uint64{"github": 1, "linear": 2, "jira": 1, "gitlab": 1}) {
-		t.Fatalf("items completed on the far day = %v", got)
+	if got := completedByProvider(t, ctx, rig.conn, orgID, far); !reflect.DeepEqual(got, map[string]uint64{"github": 2, "linear": 2, "jira": 1, "gitlab": 1}) {
+		t.Fatalf("items completed on the far day = %v: the github scope has one item in the touched repository B and one in A", got)
 	}
-	if got := completedByProvider(t, ctx, rig.conn, orgID, near); !reflect.DeepEqual(got, map[string]uint64{"github": 2}) {
-		t.Fatalf("items completed on the near day = %v", got)
+	if got := completedByProvider(t, ctx, rig.conn, orgID, near); !reflect.DeepEqual(got, map[string]uint64{"github": 3}) {
+		t.Fatalf("items completed on the near day = %v: the github scope has two items in the touched repository A and one in B", got)
 	}
 	afterFanout := map[string]map[string]string{
 		nearKey: derivedDaySnapshot(t, ctx, rig.conn, orgID, near),
@@ -637,10 +646,11 @@ type touchedLimitWriter struct {
 func (writer touchedLimitWriter) RepositoryLimit() int { return writer.limit }
 
 // overLimitFanout runs one fan-out with a repository limit of 1 and returns
-// its Error lines of phase over_repository_limit and its counter.
+// its Error lines of phase over_repository_limit, its counter of such days and
+// its counter of the days it carried over.
 func overLimitFanout(
 	t *testing.T, ctx context.Context, rig *touchedRig, orgID string, args syncdispatchruntime.PostSyncArgs,
-) (errorLines []string, counted uint64) {
+) (errorLines []string, counted, carriedOver uint64) {
 	t.Helper()
 	var logs bytes.Buffer
 	writer := dailyPostSyncWriter{store: rig.store, publisher: nilPartitionPublisher{}}
@@ -664,19 +674,24 @@ func overLimitFanout(
 			errorLines = append(errorLines, line)
 		}
 	}
-	return errorLines, observer.counts[jobruntime.PostSyncTouchedDaysOverRepositoryLimit]
+	return errorLines, observer.counts[jobruntime.PostSyncTouchedDaysOverRepositoryLimit],
+		observer.counts[jobruntime.PostSyncTouchedDaysCarriedOver]
 }
 
 // A day over the repository limit starts no run and stays pending, but it must
 // not hold one of the 31 slots: the days behind it still get their runs in the
 // same fan-out, and the report is one Error line with the count of such days.
+// The carried-over count is the count of the days the walk did not reach: an
+// over-limit day is not one of them, a startable day behind the 31st start is.
 func TestPostSyncFanoutOverLimitDaysNeverHoldTheSlotsOfStartableDays(t *testing.T) {
 	for _, test := range []struct {
 		name         string
 		over, normal int
+		carriedOver  int
 	}{
-		{"31 over-limit days newer than one normal day", 31, 1},
-		{"40 over-limit days newer than 31 normal days", 40, 31},
+		{"31 over-limit days newer than one normal day", 31, 1, 0},
+		{"40 over-limit days newer than 31 normal days", 40, 31, 0},
+		{"5 over-limit days newer than 40 normal days", 5, 40, 9},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
@@ -701,10 +716,13 @@ func TestPostSyncFanoutOverLimitDaysNeverHoldTheSlotsOfStartableDays(t *testing.
 			}
 			insertTouchedItems(t, ctx, rig.conn, orgID, items...)
 			args := rig.seedSync(t, ctx, orgID, "work-items", target)
-			errorLines, counted := overLimitFanout(t, ctx, rig, orgID, args)
+			errorLines, counted, carriedOver := overLimitFanout(t, ctx, rig, orgID, args)
 
+			// normalDays is newest first: the walk starts the newest and
+			// carries the oldest over.
+			started := normalDays[:test.normal-test.carriedOver]
 			runs := rig.runsOf(t, ctx, orgID, args)
-			for _, day := range normalDays {
+			for _, day := range started {
 				if _, ok := runs[day]; !ok {
 					t.Fatalf("the normal day %s got no run in the first fan-out (days with a run: %v)", day, touchedRunDays(runs))
 				}
@@ -712,9 +730,14 @@ func TestPostSyncFanoutOverLimitDaysNeverHoldTheSlotsOfStartableDays(t *testing.
 			for _, day := range overLimitOnly(overDays, runs) {
 				t.Fatalf("the over-limit day %s got a run", day)
 			}
-			sort.Strings(overDays)
-			if got := rig.pendingDays(t, ctx, orgID); !reflect.DeepEqual(got, overDays) {
-				t.Fatalf("pending after the fan-out = %v, want the %d over-limit days", got, test.over)
+			wantPending := append(append([]string{}, overDays...), normalDays[len(started):]...)
+			sort.Strings(wantPending)
+			if got := rig.pendingDays(t, ctx, orgID); !reflect.DeepEqual(got, wantPending) {
+				t.Fatalf("pending after the fan-out = %v, want the %d over-limit days and the %d days carried over",
+					got, test.over, test.carriedOver)
+			}
+			if carriedOver != uint64(test.carriedOver) {
+				t.Fatalf("carried_over counter = %d, want %d", carriedOver, test.carriedOver)
 			}
 			if len(errorLines) != 1 {
 				t.Fatalf("over_repository_limit Error lines = %d, want exactly 1", len(errorLines))

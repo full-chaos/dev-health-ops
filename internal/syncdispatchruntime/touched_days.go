@@ -72,7 +72,7 @@ type TouchedDayPostSyncWriter interface {
 	// them.
 	FullOrganizationDays(plan PostSyncPlan) []time.Time
 	// RepositoryLimit is the largest repository list one run accepts. A day
-	// with more touched repositories gets a run of every repository.
+	// with more touched repositories is skipped and stays pending.
 	RepositoryLimit() int
 	// StartTouchedDayTx starts the run of day for repositoryIDs (none = every
 	// repository). It returns false, and starts nothing, when a run of this

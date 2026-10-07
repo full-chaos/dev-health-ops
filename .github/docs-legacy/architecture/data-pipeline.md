@@ -470,16 +470,28 @@ did not commit.
 - A unit that the reconciler set to `failed` while its process still writes
   can write a row after the read. The row is recorded by the next sync that
   writes the item again.
-- A touched day after its runs equals a recompute of every repository when
-  no work scope has items in two repositories. `work_item_metrics_daily`,
+- A touched day after its runs equals a recompute of every repository, also
+  when one work scope has items in two repositories. `work_item_metrics_daily`,
   `work_item_user_metrics_daily`, `work_item_state_durations_daily` and
   `estimate_coverage_metrics_daily` replace rows by a key that has
-  `work_scope_id` and no `repo_id`, and the work-item families compute one
-  repository at a time: when one work scope has items in two repositories, the
-  repositories write one key and the row of the repository that ran last stays.
-  The daily job had this limit before the touched-day runs; a run of listed
-  repositories makes it visible sooner
-  (`TestDailyJobRepositoryPartitionsOfOneDayDoNotShareAKey`).
+  `work_scope_id` and no `repo_id`: a row is the row of a work scope. The
+  work-item families (`work_item`, `work_item_estimate`, `work_item_state`)
+  compute each work scope of their partition once, over the items of every
+  repository of the organization, so a run of listed repositories reads the
+  items that an unlisted repository has in a shared scope
+  (`internal/jobs/metrics/daily/work_item_scope_read.go`;
+  `TestDailyRunOfListedRepositoriesComputesASharedWorkScopeOverEveryRepository`).
+  One work item id stored under two repository ids counts once: the row with
+  the newest `last_synced` is the item, and of two rows of one `last_synced`
+  the row of the lower repository id.
+  Cost: the items read has no `repo_id` predicate. `work_items` is sorted by
+  `(org_id, repo_id, work_item_id)`, so the read uses the `org_id` part of the
+  key and reads the item rows of the organization, where a read of one
+  repository reads the rows of that repository. The scope ids go into the statement
+  as a filter of at most 2000 values and 64 KiB of rendered text
+  (`internal/jobs/metrics/querybound`); above either bound the read has no
+  scope filter, returns the same rows and logs a warning with the scope count
+  and the bound.
 - A pod of an older build beside the new table neither writes nor reads it.
 - Deploy order: ClickHouse migration 108 must be applied before the new
   coordinator runs. Without the table the whole post-sync fan-out fails loud

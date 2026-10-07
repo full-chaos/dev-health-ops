@@ -12,6 +12,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"io"
 	"log/slog"
@@ -27,11 +28,36 @@ import (
 )
 
 const (
-	jiraAtlassianMaxPages       = 1_000
-	jiraAtlassianMaxRows        = 100_000
-	jiraAtlassianPerPage        = 50
-	jiraAtlassianWorklogPerPage = 100
+	jiraAtlassianMaxPages = 1_000
+	jiraAtlassianMaxRows  = 100_000
+	jiraAtlassianPerPage  = 50
+	// jiraAtlassianDefaultCommentsLimit is the per-issue comment cap used when
+	// the dataset options carry no comments_limit (CHAOS-8806).
+	jiraAtlassianDefaultCommentsLimit = 500
+	jiraAtlassianWorklogPerPage       = 100
+	// jiraAtlassianDefaultCommentsRowBudget is the most interaction rows one
+	// unit collects (CHAOS-8806). It must stay well under the 100,000 rows
+	// per table the effect ledger accepts: past that bound the whole unit
+	// fails and every work-item effect is lost. The dataset option
+	// comments_row_budget may only LOWER it.
+	jiraAtlassianDefaultCommentsRowBudget = 50_000
+	// jiraAtlassianCommentsTimeShareDivisor sets the TIME budget of comment
+	// reads (CHAOS-8806): they run in phase 2, after every comments-off step,
+	// and stop when 1/N of the time left to the unit deadline at the start of
+	// phase 2 is used. The rest is the reserve for validation, the effect
+	// build, derive, the comparator and the ledger commit.
+	jiraAtlassianCommentsTimeShareDivisor = 2
 )
+
+// jiraAtlassianCommentsRowBudget is the per-unit interaction row budget: the
+// default, lowered (never raised) by the comments_row_budget dataset option.
+func jiraAtlassianCommentsRowBudget(claim Claim) int {
+	budget := jiraOptionInt(claim, "comments_row_budget", jiraAtlassianDefaultCommentsRowBudget)
+	if budget <= 0 || budget > jiraAtlassianDefaultCommentsRowBudget {
+		return jiraAtlassianDefaultCommentsRowBudget
+	}
+	return budget
+}
 
 // jiraAtlassianCountingDoer observes actual wire attempts, including
 // transport failures and retries the wrapped HTTPClient makes internally --
@@ -220,8 +246,15 @@ func (handler JiraAtlassianRouteHandler) Collect(
 	}, Worklogs: make([]jiraWorklogRow, 0)}
 	optionalIncomplete := make([]string, 0)
 	worklogObservations := make([]JiraWorklogFetchObservation, 0)
-	fetchComments := jiraOptionBool(claim, "fetch_comments", false)
-	commentsLimit := jiraOptionInt(claim, "comments_limit", 0)
+	// CHAOS-8806: issue comments are collected by default. An ABSENT option
+	// means ON (new and existing configurations alike); an explicit false
+	// stays off and an explicit comments_limit stays. The default per-issue
+	// cap is the same as GitHub's (500), so no issue reads an unbounded
+	// number of comments.
+	fetchComments := jiraOptionBool(claim, "fetch_comments", true)
+	commentsLimit := jiraOptionInt(claim, "comments_limit", jiraAtlassianDefaultCommentsLimit)
+	commentsBudget := jiraAtlassianCommentsRowBudget(claim)
+	commentsBudgetSkipped, commentsTimeSkipped := 0, 0
 	fetchWorklogs := jiraOptionBool(claim, "fetch_worklogs", false)
 	useGraphQL := jiraOptionBool(claim, "atlassian_gql_enabled", false)
 	fetchBoardSprints := jiraOptionBool(claim, "fetch_board_sprints", false)
@@ -381,18 +414,6 @@ func (handler JiraAtlassianRouteHandler) Collect(
 		}
 		rows.ProjectMemberships = append(rows.ProjectMemberships, itemMemberships...)
 
-		if fetchComments {
-			comments, _, commentErr := collectJiraIssueComments(
-				ctx, client, item.WorkItemID, maxPages, perPage, commentsLimit,
-			)
-			if commentErr != nil {
-				optionalIncomplete = append(optionalIncomplete, "comments:"+item.WorkItemID)
-			} else {
-				rows.Interactions = append(rows.Interactions,
-					normalizeJiraInteractions(claim, item.WorkItemID, comments, handler.Identity, normalizedAt)...,
-				)
-			}
-		}
 		if fetchWorklogs {
 			worklogClient := client
 			if handler.GraphQLClient != nil {
@@ -447,6 +468,82 @@ func (handler JiraAtlassianRouteHandler) Collect(
 			if len(fetched) > 0 && handler.ReferenceSink != nil {
 				if err := handler.ReferenceSink(fetched); err != nil {
 					optionalIncomplete = append(optionalIncomplete, "reference_sink")
+				}
+			}
+		}
+	}
+	// CHAOS-8806: PHASE 2 = comment reads. Phase 1 above is byte-for-byte the
+	// comments-off path (search, changelogs, every work-item row, worklogs,
+	// dev-status, sprints), so a unit that ends OK with comments off reaches
+	// this point with the same rows. Comment reads then use at most half of
+	// the time left to the unit deadline; the other half is the reserve for
+	// what follows (validation, effect build, derive, comparator, ledger
+	// commit): that tail is of the order of the rows written, is not
+	// measurable inside Collect, and comments add rows to it, so it keeps at
+	// least what was left at the end of phase 1 divided by the divisor. With
+	// no deadline on the context there is no time budget. Issues arrive ORDER
+	// BY updated DESC, so the newest issues get their comments first.
+	if fetchComments {
+		commentsStopAt, commentsHaveDeadline := time.Time{}, false
+		if deadline, ok := ctx.Deadline(); ok {
+			now := time.Now()
+			commentsStopAt = now.Add(deadline.Sub(now) / jiraAtlassianCommentsTimeShareDivisor)
+			commentsHaveDeadline = true
+		}
+		for _, item := range rows.WorkItems {
+			// The TIME budget is checked first: skip the read and count it.
+			// The row budget is checked BEFORE the fetch, so the rows slice
+			// never grows past it: the issue limit is the smaller of
+			// comments_limit and what is left of the budget.
+			if commentsHaveDeadline && time.Now().After(commentsStopAt) {
+				commentsTimeSkipped++
+			} else if remaining := commentsBudget - len(rows.Interactions); remaining <= 0 {
+				commentsBudgetSkipped++
+			} else {
+				issueLimit := commentsLimit
+				// A budget cut is detected EXACTLY: read one more than the
+				// slots left; an extra row means the budget cuts this issue.
+				budgetCut := false
+				if issueLimit <= 0 || issueLimit > remaining {
+					issueLimit = remaining + 1
+					budgetCut = true
+				}
+				// The read gets its own deadline at stopAt, so one slow comment
+				// fetch that starts before stopAt can never use time after it
+				// (the unit deadline is terminal and loses every work item).
+				commentCtx, cancelComments := ctx, context.CancelFunc(func() {})
+				if commentsHaveDeadline {
+					commentCtx, cancelComments = context.WithDeadline(ctx, commentsStopAt)
+				}
+				comments, _, commentErr := collectJiraIssueComments(
+					commentCtx, client, item.WorkItemID, maxPages, perPage, issueLimit,
+				)
+				innerDeadline := commentsHaveDeadline && ctx.Err() == nil &&
+					errors.Is(commentCtx.Err(), context.DeadlineExceeded)
+				cancelComments()
+				if commentErr != nil && innerDeadline {
+					// The time budget ended this read, not a provider failure:
+					// the issue's partial comments are dropped (the collector
+					// returns none on an error) and the issue is counted.
+					commentsTimeSkipped++
+				} else if commentErr != nil {
+					optionalIncomplete = append(optionalIncomplete, "comments:"+item.WorkItemID)
+					if ctx.Err() != nil {
+						// The unit context itself ended (not our stop time):
+						// no further reads; what follows fails or not on its
+						// own, exactly as a cancel in the work loop does.
+						break
+					}
+				} else if budgetCut && len(comments) > remaining {
+					// The row budget cuts this issue's comments. None of them
+					// land: a re-read replaces an issue's whole set, so
+					// none + marker is the state a later run or backfill
+					// completes, the same as a wholly skipped issue.
+					commentsBudgetSkipped++
+				} else {
+					rows.Interactions = append(rows.Interactions,
+						normalizeJiraInteractions(claim, item.WorkItemID, comments, handler.Identity, normalizedAt)...,
+					)
 				}
 			}
 		}
@@ -553,6 +650,30 @@ func (handler JiraAtlassianRouteHandler) Collect(
 	}
 	if len(optionalIncomplete) > 0 {
 		result["incomplete"] = optionalIncomplete
+	}
+	if commentsBudgetSkipped > 0 || commentsTimeSkipped > 0 {
+		// CHAOS-8806: NOT part of "incomplete": a held watermark would re-read the
+		// same window, reach the same budget and never move. Counts only.
+		markers := make([]string, 0, 2)
+		cause := ""
+		if commentsBudgetSkipped > 0 {
+			markers = append(markers, "comments:budget:"+strconv.Itoa(commentsBudgetSkipped))
+			cause = "rows"
+		}
+		if commentsTimeSkipped > 0 {
+			markers = append(markers, "comments:time:"+strconv.Itoa(commentsTimeSkipped))
+			if cause != "" {
+				cause += "+"
+			}
+			cause += "time"
+		}
+		result["incomplete_nonholding"] = markers
+		result["comments_budget_skipped_issues"] = commentsBudgetSkipped
+		result["comments_time_skipped_issues"] = commentsTimeSkipped
+		slog.Warn("providersync.jira.comments_budget_reached",
+			"org_id", claim.OrgID, "unit_id", claim.ID, "cause", cause, "row_budget", commentsBudget,
+			"interaction_rows", len(rows.Interactions), "skipped_issues_rows", commentsBudgetSkipped,
+			"skipped_issues_time", commentsTimeSkipped)
 	}
 	rows.MembershipCreation.result("jira", result)
 	result = attachWorkItemTeamInheritanceObservation(result, handler.Derived)

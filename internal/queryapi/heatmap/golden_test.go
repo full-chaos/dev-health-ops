@@ -42,8 +42,8 @@ func TestBuildResponseReviewWaitDensity(t *testing.T) {
 			}}, nil
 		case strings.Contains(query, "toDayOfWeek(created_at) = {weekday:UInt8}"):
 			return &fixtureRowScanner{rows: [][]any{
-				{"12345678-1234-5678-1234-567812345678", uint32(42), "Add retry logic", datetime(2024, 1, 10, 9, 0, 0), datetime(2024, 1, 10, 14, 0, 0)},
-				{"87654321-4321-8765-4321-876543218765", uint32(7), nil, datetime(2024, 1, 10, 9, 30, 0), datetime(2024, 1, 10, 9, 45, 0)},
+				{"12345678-1234-5678-1234-567812345678", uint32(42), "Add retry logic", datetime(2024, 1, 10, 9, 0, 0), datetime(2024, 1, 10, 14, 0, 0), "acme/billing"},
+				{"87654321-4321-8765-4321-876543218765", uint32(7), nil, datetime(2024, 1, 10, 9, 30, 0), datetime(2024, 1, 10, 9, 45, 0), nil},
 			}}, nil
 		default:
 			t.Fatalf("unexpected query for review_wait_density fixture:\n%s", query)
@@ -83,6 +83,9 @@ func TestBuildResponseReviewWaitDensity(t *testing.T) {
 	}
 	if len(evidence) != 2 || evidence[0].Number != 42 || evidence[1].Title != nil {
 		t.Fatalf("Evidence = %+v", evidence)
+	}
+	if evidence[0].RepoName == nil || *evidence[0].RepoName != "acme/billing" || evidence[1].RepoName != nil {
+		t.Fatalf("RepoName = %v / %v, want acme/billing / nil", evidence[0].RepoName, evidence[1].RepoName)
 	}
 }
 

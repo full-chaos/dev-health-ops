@@ -780,3 +780,26 @@ func TestATeamWithNoReadableProjectLinkIsNamedUnreadable(t *testing.T) {
 		})
 	}
 }
+
+// A collection that was not asked for project links never says they are
+// complete, also when there is no active team to read them for.
+func TestACollectionWithoutTheProjectsSelectionNeverSaysItsLinksAreComplete(t *testing.T) {
+	onlyArchived := func(req request) (int, any) {
+		if req.Operation == "TeamSearchV2" {
+			return 200, searchPage("", teamNode(teamB, "Old", "ARCHIVED"))
+		}
+		return standard(req)
+	}
+	selection := params(everything)
+	selection.Selections.Projects = false
+	rows, err := Collect(context.Background(), newGateway(t, onlyArchived).client(), selection)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rows.ProjectLinksComplete {
+		t.Error("no project link was asked for: the links are not complete")
+	}
+	if rows, err = Collect(context.Background(), newGateway(t, onlyArchived).client(), params(everything)); err != nil || !rows.ProjectLinksComplete {
+		t.Errorf("project links asked for and no active team has any to read: complete = %v (err=%v), want complete", rows.ProjectLinksComplete, err)
+	}
+}

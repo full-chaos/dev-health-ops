@@ -279,20 +279,41 @@ func TestSelectionChangeReadsOnlyTheListTheServerShows(t *testing.T) {
 	}
 }
 
-// TestSelectionChangeNeverWritesARowTheFormDoesNotOffer: "security" and
-// "blame" in a submitted list write no row (they are stored, as any target a
-// request asks for); a target with no dataset moves in and out of the stored
-// list and writes no row.
-func TestSelectionChangeNeverWritesARowTheFormDoesNotOffer(t *testing.T) {
-	for _, provider := range []string{"github", "gitlab"} {
-		added := mustPlan(t, provider, nil, nil, []string{"security", "blame"})
-		if len(added.enableKeys)+len(added.disableKeys) != 0 || !reflect.DeepEqual(added.stored, []string{"security", "blame"}) {
-			t.Errorf("%s: security and blame added: %+v, want no row write and both stored", provider, added)
+// TestATargetTheFormDoesNotOfferIsSwitchedOnWhenAddedAndNeverSwitchedOff:
+// "security" and "blame" in a submitted list are stored, as any target a
+// request asks for. A request that adds one switches on exactly the keys the
+// create writes for it (PlannerDatasetKeys of that target), also when the
+// target is stored and its row is off; a request that drops one writes no
+// row. A target with no dataset moves in and out of the stored list and
+// writes no row.
+func TestATargetTheFormDoesNotOfferIsSwitchedOnWhenAddedAndNeverSwitchedOff(t *testing.T) {
+	cases := 0
+	for _, provider := range rowOwnedProviders {
+		for _, target := range providersync.SupportedLegacyTargets(provider) {
+			if providersync.OperatorSelectableSyncTarget(target) {
+				continue
+			}
+			cases++
+			want, err := providersync.PlannerDatasetKeys(provider, []string{target})
+			if err != nil || len(want) == 0 {
+				t.Fatalf("%s/%s: keys %v err %v", provider, target, want, err)
+			}
+			for _, stored := range [][]string{nil, {target}} {
+				added := mustPlan(t, provider, nil, stored, []string{target})
+				if !reflect.DeepEqual(sortedStrings(added.enableKeys), sortedStrings(want)) || len(added.disableKeys) != 0 ||
+					!reflect.DeepEqual(added.stored, []string{target}) {
+					t.Errorf("%s stored=%v: %s added with its row off: enables %v disables %v stores %v, want enable %v only and the target stored",
+						provider, stored, target, added.enableKeys, added.disableKeys, added.stored, want)
+				}
+			}
+			removed := mustPlan(t, provider, want, []string{target}, []string{})
+			if len(removed.enableKeys)+len(removed.disableKeys)+len(removed.stored) != 0 {
+				t.Errorf("%s: %s removed: %+v, want no row write and nothing stored", provider, target, removed)
+			}
 		}
-		removed := mustPlan(t, provider, []string{"security", "blame"}, []string{"security", "blame"}, []string{})
-		if len(removed.enableKeys)+len(removed.disableKeys)+len(removed.stored) != 0 {
-			t.Errorf("%s: security and blame removed: %+v, want no row write and nothing stored", provider, removed)
-		}
+	}
+	if cases != 4 {
+		t.Fatalf("%d (provider, target) pairs the form does not offer, want 4: security and blame on GitHub and on GitLab", cases)
 	}
 	add := mustPlan(t, "github", []string{"commits"}, nil, []string{"git", "incidents"})
 	if !reflect.DeepEqual(add.stored, []string{"incidents"}) || len(add.enableKeys)+len(add.disableKeys) != 0 {

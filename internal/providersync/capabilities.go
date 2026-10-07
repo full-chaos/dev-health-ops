@@ -398,5 +398,7 @@ func SyncTargetHasEnabledDataset(provider, target string, enabledKeys []string) 
 }
 
 // OperatorSelectableSyncTarget reports whether the config form offers target
-// as a checkbox for some provider. A save writes dataset rows only for these.
+// as a checkbox for some provider. A save switches dataset rows off only for
+// these; a target a request adds is switched on whether the form offers it
+// or not.
 func OperatorSelectableSyncTarget(target string) bool { return operatorSelectableSyncTargets[target] }

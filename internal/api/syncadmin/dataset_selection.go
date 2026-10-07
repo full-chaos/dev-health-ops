@@ -101,8 +101,10 @@ type selectionChange struct {
 // the stored list), read in the save's transaction; nothing the
 // request says changes it. Only a target the submitted list adds to, or drops
 // from, the reference writes rows: a target in neither set keeps its rows
-// whatever they are. A target the form never offers ("blame", "security")
-// and a target with no dataset write no row.
+// whatever they are. A target with no dataset writes no row. A target the
+// form does not offer ("blame", "security") is switched on when the request
+// adds it, as the create does for the same list, and is never switched off
+// by a save: no form shows it as a box a user unchecked.
 func planSelectionChange(provider string, enabledKeys, stored, submitted []string) (selectionChange, error) {
 	shown := shownTargets(provider, enabledKeys, stored)
 	inShown, inSubmitted, inStored := stringSet(shown), stringSet(submitted), stringSet(stored)
@@ -118,7 +120,7 @@ func planSelectionChange(provider string, enabledKeys, stored, submitted []strin
 		}
 	}
 	keysOf := func(target string) ([]string, error) {
-		if !providersync.SyncTargetHasDataset(provider, target) || !providersync.OperatorSelectableSyncTarget(target) {
+		if !providersync.SyncTargetHasDataset(provider, target) {
 			return nil, nil
 		}
 		return providersync.PlannerDatasetKeys(provider, []string{target})
@@ -131,6 +133,9 @@ func planSelectionChange(provider string, enabledKeys, stored, submitted []strin
 		change.enableKeys = append(change.enableKeys, keys...)
 	}
 	for _, target := range change.removed {
+		if !providersync.OperatorSelectableSyncTarget(target) {
+			continue
+		}
 		keys, err := keysOf(target)
 		if err != nil {
 			return selectionChange{}, err

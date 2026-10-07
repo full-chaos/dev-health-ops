@@ -377,6 +377,26 @@ func SyncTargetHasDataset(provider, target string) bool {
 	return false
 }
 
+// SyncTargetHasEnabledDataset reports whether target is the legacy target of
+// at least one of enabledKeys that the provider supports: a row of the target
+// is on. It answers for every target, also one the config form does not
+// offer ("blame", "security"), which DerivedSyncTargets never names.
+func SyncTargetHasEnabledDataset(provider, target string, enabledKeys []string) bool {
+	capabilities := datasetCapabilities[pythonparity.Lower(provider)]
+	for _, key := range enabledKeys {
+		capability, ok := capabilities[key]
+		if !ok {
+			continue
+		}
+		for _, legacy := range capability.LegacyTargets {
+			if legacy == target {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // OperatorSelectableSyncTarget reports whether the config form offers target
 // as a checkbox for some provider. A save writes dataset rows only for these.
 func OperatorSelectableSyncTarget(target string) bool { return operatorSelectableSyncTargets[target] }

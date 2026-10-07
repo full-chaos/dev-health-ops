@@ -55,20 +55,21 @@ func storedListItems(stored pyjson.Value) []string {
 
 // shownTargets is the list a whole-integration config shows. A stored target
 // is shown, in the stored order and once, when the provider has no dataset
-// for it (no row can speak for it) or when the enabled dataset keys derive
-// it. Then comes every other target the enabled keys derive, in the
-// registry's target order. A stored target that has a dataset and no enabled
+// for it (no row can speak for it) or when a row of it is on. That holds for
+// a stored target the form does not offer too ("blame", "security"). Then
+// comes every other target the enabled keys derive, in the registry's target
+// order: form targets only, so a target the form does not offer is shown
+// only when it is stored. A stored target that has a dataset and no enabled
 // row is not shown: the row is off, so it does not sync.
 func shownTargets(provider string, enabledKeys, stored []string) []string {
 	derived := providersync.DerivedSyncTargets(provider, enabledKeys)
-	inDerived := stringSet(derived)
 	out := make([]string, 0, len(stored)+len(derived))
 	inOut := map[string]bool{}
 	for _, target := range stored {
 		if inOut[target] {
 			continue
 		}
-		if inDerived[target] || !providersync.SyncTargetHasDataset(provider, target) {
+		if providersync.SyncTargetHasEnabledDataset(provider, target, enabledKeys) || !providersync.SyncTargetHasDataset(provider, target) {
 			inOut[target] = true
 			out = append(out, target)
 		}

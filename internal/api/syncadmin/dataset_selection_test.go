@@ -95,6 +95,8 @@ func TestSavingTheShownListChangesNoRowAndKeepsTheStoredList(t *testing.T) {
 				derived := providersync.DerivedSyncTargets(provider, enabled)
 				want, wantStored := []string{}, []string{}
 				for _, target := range uniqueStrings(stored) {
+					// Every stored target of this walk is a form target or no
+					// target at all, so "a row of it is on" is "derived".
 					if stringSet(derived)[target] || !providersync.SyncTargetHasDataset(provider, target) {
 						want = append(want, target)
 						wantStored = append(wantStored, target)
@@ -356,6 +358,27 @@ func TestShownTargetsAreTheRowStateAndTheStoredTargetsNoRowSpeaksFor(t *testing.
 	}
 	if got := shownTargets("github", nil, []string{"git", "incidents", "no-such-target"}); !reflect.DeepEqual(got, []string{"incidents", "no-such-target"}) {
 		t.Errorf("no row on: only the stored targets with no dataset are shown: %v", got)
+	}
+	// A stored target the form does not offer follows its own row: shown when
+	// the row is on, hidden when it is off or absent, never shown unstored.
+	for _, provider := range []string{"github", "gitlab"} {
+		if got := shownTargets(provider, []string{"commits", "blame", "security"}, []string{"blame", "git", "security"}); !reflect.DeepEqual(got, []string{"blame", "git", "security"}) {
+			t.Errorf("%s: stored blame and security, rows on: %v", provider, got)
+		}
+		if got := shownTargets(provider, []string{"commits", "security"}, []string{"blame", "git", "security"}); !reflect.DeepEqual(got, []string{"git", "security"}) {
+			t.Errorf("%s: stored blame, its row off: %v", provider, got)
+		}
+		if got := shownTargets(provider, []string{"commits", "blame", "security"}, []string{"git"}); !reflect.DeepEqual(got, []string{"git"}) {
+			t.Errorf("%s: blame and security rows on, not stored: %v", provider, got)
+		}
+		// A save of the shown list keeps a stored blame whose row is on, and
+		// drops one whose row is off; neither writes a row.
+		kept := mustPlan(t, provider, []string{"commits", "blame"}, []string{"git", "blame"}, []string{"git", "blame"})
+		dropped := mustPlan(t, provider, []string{"commits"}, []string{"git", "blame"}, []string{"git"})
+		if !reflect.DeepEqual(kept.stored, []string{"git", "blame"}) || !reflect.DeepEqual(dropped.stored, []string{"git"}) ||
+			len(kept.enableKeys)+len(kept.disableKeys)+len(dropped.enableKeys)+len(dropped.disableKeys) != 0 {
+			t.Errorf("%s: a save of the shown list: row on %+v, row off %+v", provider, kept, dropped)
+		}
 	}
 	if got := shownTargets("gitlab", []string{"commits"}, []string{"git", "incidents"}); !reflect.DeepEqual(got, []string{"git"}) {
 		t.Errorf("gitlab incidents has a dataset and its row is off: %v", got)

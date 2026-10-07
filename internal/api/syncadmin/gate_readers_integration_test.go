@@ -335,12 +335,12 @@ func startGateReaderVenue(t *testing.T) (*pgxpool.Pool, string, func(method, pat
 	return pool, org, call, exec
 }
 
-// TestCreateAnswersTheListEveryLaterReadShows: the create stores the
-// submitted list and writes its rows, and its response carries the list
-// every later read shows. "blame" is a target the form does not offer: the
-// create stores it and writes its row, and no response shows it (a shown
-// list holds a target with a dataset only when the form offers it).
-func TestCreateAnswersTheListEveryLaterReadShows(t *testing.T) {
+// TestCreateAnswersTheListItStores: the create stores the submitted list and
+// writes its rows, and its response carries that list, as every later read
+// does. "blame" is a target the form does not offer: the create stores it
+// and writes its row, and the responses show it while that row is on. With
+// the row off the read does not show it.
+func TestCreateAnswersTheListItStores(t *testing.T) {
 	ctx := context.Background()
 	pool, _, call, _ := startGateReaderVenue(t)
 	status, body := call("POST", "/api/v1/admin/sync-configs", `{"name":"created","provider":"github","sync_targets":["git","blame"],"sync_options":{"all_repos":true}}`)
@@ -365,8 +365,8 @@ FROM sync_configurations AS config WHERE config.id = $1::uuid`, created.ID).Scan
 	if !strings.Contains(stored, `"blame"`) || !blameOn {
 		t.Fatalf("the stored list is %s and the blame row is on = %v, want the submitted list stored and the row on", stored, blameOn)
 	}
-	if !slices.Equal(created.SyncTargets, []string{"git"}) {
-		t.Errorf("the create answers %v, want [git]: the form target of the rows that are on (stored: %s)", created.SyncTargets, stored)
+	if !slices.Equal(created.SyncTargets, []string{"git", "blame"}) {
+		t.Errorf("the create answers %v, want the list it stored [git blame] (stored: %s)", created.SyncTargets, stored)
 	}
 	status, body = call("GET", "/api/v1/admin/sync-configs/"+created.ID, "")
 	var read struct {
@@ -377,5 +377,16 @@ FROM sync_configurations AS config WHERE config.id = $1::uuid`, created.ID).Scan
 	}
 	if !slices.Equal(read.SyncTargets, created.SyncTargets) {
 		t.Errorf("the create answers %v and the read %v: they must agree", created.SyncTargets, read.SyncTargets)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE integration_datasets AS dataset SET is_enabled = false FROM sync_configurations AS config
+WHERE config.id = $1::uuid AND dataset.integration_id = config.integration_id AND dataset.dataset_key = 'blame'`, created.ID); err != nil {
+		t.Fatal(err)
+	}
+	status, body = call("GET", "/api/v1/admin/sync-configs/"+created.ID, "")
+	if err := json.Unmarshal([]byte(body), &read); err != nil || status != http.StatusOK {
+		t.Fatalf("GET with the blame row off: %d %s %v", status, body, err)
+	}
+	if !slices.Equal(read.SyncTargets, []string{"git"}) {
+		t.Errorf("with the blame row off the read shows %v, want [git]", read.SyncTargets)
 	}
 }

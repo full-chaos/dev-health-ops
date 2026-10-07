@@ -450,6 +450,15 @@ goWorkers:
   groups:
     - name: heavy
       subcommand: worker
+      # Optional per-group env (list of env entries, rendered after the
+      # shared envFrom sources so it wins). The shared ConfigMap and Secret reach
+      # EVERY group, so a credential or a trial switch meant for one group goes
+      # here. Example, investment shadow categorization (default off):
+      #   extraEnv:
+      #     - {name: INVESTMENT_SHADOW_PROVIDER, value: typesafe}
+      #     - {name: INVESTMENT_SHADOW_ORG_IDS, value: "<org-id>"}
+      #     - name: TYPESAFE_API_KEY
+      #       valueFrom: {secretKeyRef: {name: <dedicated-secret>, key: TYPESAFE_API_KEY}}
       queues: [investment, metrics, reports, workgraph]
       queueConcurrency: {investment: 1, metrics: 2, reports: 2, workgraph: 1}
       replicas: 1

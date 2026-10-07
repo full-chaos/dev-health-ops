@@ -353,6 +353,16 @@ func TestAnAtlassianTeamsRunClosesTheKeyBuiltProjectLinks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Rows that do not say their project links are complete (built by hand,
+	// or a collection that did not read them all) close no link.
+	partial := rows
+	partial.ProjectLinksComplete = false
+	if result, err := Write(ctx, conn, org, partial, everything); err != nil || result.ExpiredOwnership != 0 {
+		t.Fatalf("a write of links that are not complete: result=%+v err=%v, want no link closed", result, err)
+	}
+	if got := lines(t, conn, `SELECT toString(count()) FROM team_project_ownership FINAL WHERE org_id = 'org-1' AND provider = 'jira' AND valid_to IS NULL`); len(got) != 1 || got[0] != "4" {
+		t.Fatalf("open rows after the write that is not complete = %v, want all 4 still open", got)
+	}
 	result, err := Write(ctx, conn, org, rows, everything)
 	if err != nil {
 		t.Fatal(err)

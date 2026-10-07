@@ -235,6 +235,14 @@ func TestCollectReadsTeamsMembersAndProjectsThroughTheRealClient(t *testing.T) {
 		rows.Ownership[0].Source != "native" || rows.Ownership[0].Specificity != 110 || rows.Ownership[0].Priority != 10 {
 		t.Errorf("ownership = %+v", rows.Ownership)
 	}
+	if !rows.ProjectLinksComplete {
+		t.Error("every active team's project links were read to the last page: the links are complete")
+	}
+	withoutProjects := params(everything)
+	withoutProjects.Selections.Projects = false
+	if partial, err := Collect(context.Background(), g.client(), withoutProjects); err != nil || partial.ProjectLinksComplete {
+		t.Errorf("a collection that read no project links says they are complete (err=%v)", err)
+	}
 	if rows.SkippedProjects != 3 {
 		t.Errorf("skipped project links = %d, want 3 (one with no key, two with no numeric project id)", rows.SkippedProjects)
 	}

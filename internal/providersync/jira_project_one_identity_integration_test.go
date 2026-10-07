@@ -241,6 +241,101 @@ func TestTeamReachesItsJiraProjectsWorkItemsThroughOwnership(t *testing.T) {
 	}
 }
 
+// The catalog closes an ownership row only on a COMPLETE snapshot. A project
+// search that stopped before the provider's last page, or a legacy links
+// table that could not be read, is a part of what this writer owns: the rows
+// it found are written and no open row is closed. The same store on a
+// complete read closes the row of the project the provider no longer has.
+func TestAPartialJiraSnapshotClosesNoOwnership(t *testing.T) {
+	ctx, conn := newWorkItemEffectsConn(t)
+	lease := providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil })
+	orgID := uuid.NewString()
+	old := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	at := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+
+	// Project ZZZ is owned by its project team. It is not on the first page.
+	if err := conn.Exec(ctx, `INSERT INTO team_project_ownership (org_id, provider, team_id, project_id, project_key, source, is_primary, specificity, priority, valid_from, updated_at) VALUES (?, 'jira', 'ZZZ', '20001', 'ZZZ', 'native', 1, 100, 10, ?, ?)`,
+		orgID, old, old); err != nil {
+		t.Fatal(err)
+	}
+	const page2 = "/rest/api/3/project/search?maxResults=100&startAt=1"
+	ops := `{"id":"10001","key":"OPS","name":"Ops Project"}`
+	sync := func(at time.Time, search map[string]jiraTeamCatalogFixtureResponse) TeamCatalogResult {
+		t.Helper()
+		byURI := map[string]jiraTeamCatalogFixtureResponse{
+			"/rest/api/3/project/OPS": {body: `{"projectTypeKey":"business"}`},
+			"/rest/api/3/project/ZZZ": {body: `{"projectTypeKey":"business"}`},
+		}
+		for uri, response := range search {
+			byURI[uri] = response
+		}
+		result, err := JiraTeamCatalogCollector{
+			Handler: JiraTeamCatalogRouteHandler{},
+			Sink:    JiraTeamCatalogClickHouseEffects{Conn: conn, Lease: lease},
+		}.CollectTeamCatalog(ctx, TeamCatalogReference{OrgID: orgID, SyncRunID: "run"},
+			providerfoundation.Credential{Provider: "jira"},
+			jiraTeamCatalogTestClient(t, fakehttp.Client(&jiraTeamCatalogFixtureDoer{t: t, byURI: byURI})),
+			TeamCatalogSelections{Projects: true}, at)
+		if err != nil {
+			t.Fatalf("team catalog sync: %v", err)
+		}
+		return result
+	}
+	open := func(team, project string) uint64 {
+		t.Helper()
+		return countRows(t, ctx, conn, openJiraOwnershipCount, orgID, team, project)
+	}
+
+	// 1. The first page is not the last one and the second page fails.
+	result := sync(at, map[string]jiraTeamCatalogFixtureResponse{
+		jiraTeamCatalogProjectSearchURI: {body: `{"values":[` + ops + `],"isLast":false,"total":2}`},
+		page2:                           {status: 403, body: `{}`},
+	})
+	if got := open("ZZZ", "20001"); got != 1 {
+		t.Fatalf("a search that stopped after its first page left %d open ownership rows for a project on a later page, want 1", got)
+	}
+	if result.OwnershipRetracted != 0 || !result.OwnershipSnapshotIncomplete || result.OwnershipWritten != 1 || open("OPS", "10001") != 1 {
+		t.Fatalf("result = %+v, want the page's one row written, nothing retracted, the snapshot reported as not complete", result)
+	}
+
+	// 2. Both pages come: both projects are written, nothing is closed, and
+	// ZZZ keeps the valid_from it was first seen with.
+	result = sync(at.Add(time.Hour), map[string]jiraTeamCatalogFixtureResponse{
+		jiraTeamCatalogProjectSearchURI: {body: `{"values":[` + ops + `],"isLast":false,"total":2}`},
+		page2:                           {body: `{"values":[{"id":"20001","key":"ZZZ","name":"Zed"}],"isLast":true,"total":2}`},
+	})
+	if result.OwnershipRetracted != 0 || result.OwnershipSnapshotIncomplete || result.OwnershipWritten != 2 || open("ZZZ", "20001") != 1 {
+		t.Fatalf("result = %+v, want both pages' rows written and nothing retracted", result)
+	}
+	if got := countRows(t, ctx, conn, `SELECT toUInt64(toUnixTimestamp64Milli(min(valid_from))) FROM team_project_ownership FINAL WHERE org_id = ? AND team_id = 'ZZZ' AND valid_to IS NULL`, orgID); int64(got) != old.UnixMilli() {
+		t.Fatalf("ZZZ valid_from = %d, want the first-seen %d", got, old.UnixMilli())
+	}
+
+	// 3. The search is complete and no longer has ZZZ, but the legacy links
+	// table cannot be read: still a part, nothing closed.
+	complete := map[string]jiraTeamCatalogFixtureResponse{
+		jiraTeamCatalogProjectSearchURI: {body: `{"values":[` + ops + `],"isLast":true,"total":1}`},
+	}
+	if err := conn.Exec(ctx, `RENAME TABLE jira_project_ops_team_links TO jira_project_ops_team_links_away`); err != nil {
+		t.Fatal(err)
+	}
+	result = sync(at.Add(2*time.Hour), complete)
+	if result.OwnershipRetracted != 0 || !result.OwnershipSnapshotIncomplete || open("ZZZ", "20001") != 1 {
+		t.Fatalf("result = %+v, open ZZZ rows = %d; want nothing closed while the legacy links cannot be read", result, open("ZZZ", "20001"))
+	}
+	if err := conn.Exec(ctx, `RENAME TABLE jira_project_ops_team_links_away TO jira_project_ops_team_links`); err != nil {
+		t.Fatal(err)
+	}
+
+	// 4. Every read reaches its end: now the provider's answer is the whole
+	// truth, and the project it no longer has loses its ownership row.
+	result = sync(at.Add(3*time.Hour), complete)
+	if result.OwnershipRetracted != 1 || result.OwnershipSnapshotIncomplete || open("ZZZ", "20001") != 0 || open("OPS", "10001") != 1 {
+		t.Fatalf("result = %+v, open ZZZ = %d, open OPS = %d; want ZZZ closed and OPS open on the complete snapshot",
+			result, open("ZZZ", "20001"), open("OPS", "10001"))
+	}
+}
+
 // The pattern Jira follows, one row per provider. A project entity has one
 // id: the catalog, the ownership row and the work item name it by the same
 // value, so ownership reaches the items by (provider, project_id).

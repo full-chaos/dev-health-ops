@@ -926,7 +926,7 @@ var excludedFields = map[string]string{
 	"member_count":    "Collect counts members from the Teamwork Graph, not this field",
 	"team_id":         "Collect already knows the team it asked about",
 	"related_user_id": "Collect reads TEAM_MEMBER relations only, which have no related user",
-	"project_id":      "Collect builds the project id from the key",
+	"project_id":      "Collect takes the project id from the last segment of the project ARI",
 	"project_name":    "Collect never stores a project name",
 }
 

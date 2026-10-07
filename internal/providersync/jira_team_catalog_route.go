@@ -22,6 +22,14 @@ const (
 	// discover_jira's single, unpaginated GET exactly -- see
 	// jiraTeamCatalogProjectSearchPayload's doc comment.
 	jiraTeamCatalogProjectSearchMaxResults = 100
+	// jiraTeamCatalogProjectSearchMaxPages bounds the project search walk
+	// (5,000 projects). A walk that stops at the bound is not a complete
+	// snapshot: it writes what it read and closes nothing.
+	jiraTeamCatalogProjectSearchMaxPages = 50
+	// jiraTeamCatalogProjectStatusArchived is the `status` filter value of
+	// the project search that returns archived projects. Without the
+	// parameter the provider returns live projects only.
+	jiraTeamCatalogProjectStatusArchived = "archived"
 	// jiraTeamCatalogPerPage matches JiraClient's default per_page (100) for
 	// the Agile board/sprint listing calls Python's iter_boards/
 	// iter_board_sprints make.
@@ -81,6 +89,19 @@ type JiraTeamCatalogResult struct {
 	TeamMembershipsImported      int `json:"team_memberships_imported"`
 	TeamProjectOwnershipImported int `json:"team_project_ownership_imported"`
 	SprintsImported              int `json:"sprints_imported"`
+	// ProjectsSkippedNoNativeID counts projects the search returned with no
+	// native id. Such a project gets its team row but no `projects` row and
+	// no ownership row: an id built from the key would be a second identity
+	// of a project the work-items route identifies by its native id.
+	ProjectsSkippedNoNativeID int `json:"projects_skipped_no_native_id,omitempty"`
+	// ProjectSearchComplete says the project search was read to the
+	// provider's end-of-data signal. When it is false (a later page failed,
+	// the page bound was hit, a page came back empty before the end) the
+	// rows are a part of the provider's projects: they are written, and no
+	// ownership row is closed on their evidence.
+	ProjectSearchComplete bool `json:"project_search_complete"`
+	// ProjectSearchPages is the number of search pages read.
+	ProjectSearchPages int `json:"project_search_pages,omitempty"`
 	// WalkSkipped (Python parity, mirrors GitLabTeamCatalogResult.WalkSkipped)
 	// is true when a non-strict walk failure -- project search, or (with
 	// Members selected) a project's lead lookup -- skipped the ENTIRE walk,
@@ -106,6 +127,17 @@ type JiraTeamCatalogBatch struct {
 	Rows     JiraTeamCatalogRows     `json:"rows"`
 	Result   JiraTeamCatalogResult   `json:"result"`
 	Evidence JiraTeamCatalogEvidence `json:"evidence"`
+	// ArchivedProjects is the identity of each ARCHIVED project the provider
+	// returned. Nothing is written for them: the write leaves every open
+	// ownership row of such a project as it is (jiraHoldArchivedOwnership).
+	ArchivedProjects []JiraArchivedProject `json:"archived_projects,omitempty"`
+}
+
+// JiraArchivedProject is one archived project as the project search names
+// it: its native id and its key, from the same search entry.
+type JiraArchivedProject struct {
+	ID  string `json:"id"`
+	Key string `json:"key"`
 }
 
 func jiraTeamCatalogWalkSkipBatch(reason string, requests int) JiraTeamCatalogBatch {
@@ -169,15 +201,35 @@ func (handler JiraTeamCatalogRouteHandler) CollectTeamCatalog(
 	// normalizes shares the same org alias config.
 	resolver := identityalias.LoadDefault()
 
-	searchPath := "/rest/api/3/project/search?" + url.Values{
-		"maxResults": {strconv.Itoa(jiraTeamCatalogProjectSearchMaxResults)},
-	}.Encode()
-	var search jiraTeamCatalogProjectSearchPayload
-	if err := jiraFetchObject(ctx, client, http.MethodGet, searchPath, nil, &search); err != nil {
-		return jiraTeamCatalogWalkFailure(ctx, ref, "project_discovery_failed", requests, err)
+	// The search is read page by page to the provider's end-of-data signal.
+	// The first page failing is the walk failing, as before. A later page
+	// failing, the page bound, or an empty page before the end leaves a PART
+	// of the projects: the walk goes on with it and reports the search as
+	// not complete, so the ownership write closes nothing.
+	search, searchComplete, searchPages, searchStop, searchErr := jiraTeamCatalogSearchProjects(ctx, client, "")
+	if searchErr != nil {
+		return jiraTeamCatalogWalkFailure(ctx, ref, "project_discovery_failed", requests, searchErr)
 	}
+	if !searchComplete {
+		slog.Default().WarnContext(ctx, "jira_team_catalog_project_search_incomplete",
+			"org_id", ref.OrgID, "reason", searchStop, "pages", searchPages, "projects", len(search.Values))
+	}
+	// The search above returns live projects only (the provider's default
+	// for `status`). An archived project still exists and still owns its
+	// work items, so it is read too, and only to keep its open ownership
+	// rows open: it gets no team, project, member or sprint row here. This
+	// read failing at any page, the first one included, does not fail the
+	// walk; it leaves the snapshot not complete, so nothing is closed.
+	archived, archivedComplete, archivedPages, archivedStop, _ := jiraTeamCatalogSearchProjects(
+		ctx, client, jiraTeamCatalogProjectStatusArchived)
+	if !archivedComplete {
+		slog.Default().WarnContext(ctx, "jira_team_catalog_archived_project_search_incomplete",
+			"org_id", ref.OrgID, "reason", archivedStop, "pages", archivedPages, "projects", len(archived.Values))
+	}
+	searchComplete = searchComplete && archivedComplete
 
 	rows := JiraTeamCatalogRows{}
+	projectsSkippedNoNativeID := 0
 	projectKeys := make([]string, 0, len(search.Values))
 	for _, entry := range search.Values {
 		team, ok := normalizeJiraTeamRow(ref.OrgID, entry, normalizedAt)
@@ -185,12 +237,31 @@ func (handler JiraTeamCatalogRouteHandler) CollectTeamCatalog(
 			continue
 		}
 		rows.Teams = append(rows.Teams, team)
-		rows.Ownership = append(rows.Ownership, normalizeJiraOwnershipRow(ref.OrgID, team.ID, team.ID, normalizedAt))
-		rows.Projects = append(rows.Projects, normalizeJiraProjectRow(ref.OrgID, team.ID, team.Name, normalizedAt))
 		projectKeys = append(projectKeys, team.ID)
+		nativeProjectID := strings.TrimSpace(entry.ID)
+		if nativeProjectID == "" || jiraProjectIDIsKeyBuilt(ref.OrgID, nativeProjectID) {
+			projectsSkippedNoNativeID++
+			continue
+		}
+		rows.Ownership = append(rows.Ownership, normalizeJiraOwnershipRow(ref.OrgID, team.ID, nativeProjectID, team.ID, normalizedAt))
+		rows.Projects = append(rows.Projects, normalizeJiraProjectRow(ref.OrgID, nativeProjectID, team.ID, team.Name, normalizedAt))
+	}
+	if projectsSkippedNoNativeID > 0 {
+		slog.Default().WarnContext(ctx, "jira_team_catalog_project_without_native_id",
+			"org_id", ref.OrgID, "projects", projectsSkippedNoNativeID)
 	}
 	rows.Projects = dedupeJiraProjectCatalogRows(rows.Projects)
 	rows.Ownership = dedupeJiraOwnershipRows(rows.Ownership)
+	var archivedProjects []JiraArchivedProject
+	archivedSeen := map[JiraArchivedProject]bool{}
+	for _, entry := range archived.Values {
+		project := JiraArchivedProject{ID: strings.TrimSpace(entry.ID), Key: jiraTeamID(entry.Key)}
+		if project.Key == "" || project.ID == "" || jiraProjectIDIsKeyBuilt(ref.OrgID, project.ID) || archivedSeen[project] {
+			continue
+		}
+		archivedSeen[project] = true
+		archivedProjects = append(archivedProjects, project)
+	}
 
 	if selections.Members {
 		for teamIndex, team := range rows.Teams {
@@ -252,11 +323,77 @@ func (handler JiraTeamCatalogRouteHandler) CollectTeamCatalog(
 	result := JiraTeamCatalogResult{
 		TeamsImported: len(rows.Teams), TeamProjectOwnershipImported: len(rows.Ownership),
 		TeamMembershipsImported: len(rows.Memberships), ProjectsImported: len(rows.Projects),
-		MembersImported: len(distinctJiraMembershipMembers(rows.Memberships)),
-		SprintsImported: len(rows.Sprints),
+		MembersImported:           len(distinctJiraMembershipMembers(rows.Memberships)),
+		SprintsImported:           len(rows.Sprints),
+		ProjectsSkippedNoNativeID: projectsSkippedNoNativeID,
+		ProjectSearchComplete:     searchComplete,
+		ProjectSearchPages:        searchPages,
 	}
 	evidence.Requests = requests
-	return JiraTeamCatalogBatch{Rows: rows, Result: result, Evidence: evidence}, nil
+	return JiraTeamCatalogBatch{Rows: rows, Result: result, Evidence: evidence, ArchivedProjects: archivedProjects}, nil
+}
+
+// jiraHoldArchivedOwnership splits the open rows of this writer: held is
+// every row whose project is an archived project, rest is the others.
+// Archiving a project in Jira does not end its ownership, so a held row is
+// left as it is: it is not given to the snapshot rule, and nothing is written
+// for it.
+//
+// A stored row names its project by the native id or, when it was written
+// before the one-id rule, by the id built from the project key. Both forms of
+// an archived project hold a row: a store that still has key-built rows keeps
+// them for its archived projects, where no sync writes the native row that
+// replaces them.
+func jiraHoldArchivedOwnership(orgID string, archived []JiraArchivedProject, open []jiraTeamCatalogOwnershipRow) (held, rest []jiraTeamCatalogOwnershipRow) {
+	isArchived := make(map[string]bool, 2*len(archived))
+	for _, project := range archived {
+		isArchived[project.ID] = true
+		isArchived[jiraKeyBuiltProjectIDPrefix(orgID)+project.Key] = true
+	}
+	for _, row := range open {
+		if isArchived[row.ProjectID] {
+			held = append(held, row)
+			continue
+		}
+		rest = append(rest, row)
+	}
+	return held, rest
+}
+
+// jiraTeamCatalogSearchProjects reads /rest/api/3/project/search page by
+// page to the provider's end-of-data signal. status is the provider's
+// `status` filter; empty asks for the provider's default, live projects.
+// err is the first page failing; a later page failing ends the read with
+// complete false and what was read so far.
+func jiraTeamCatalogSearchProjects(
+	ctx context.Context, client *providerfoundation.HTTPClient, status string,
+) (search jiraTeamCatalogProjectSearchPayload, complete bool, pages int, stop string, err error) {
+	stop = "page_bound"
+	for pages < jiraTeamCatalogProjectSearchMaxPages {
+		query := url.Values{"maxResults": {strconv.Itoa(jiraTeamCatalogProjectSearchMaxResults)}}
+		if len(search.Values) > 0 {
+			query.Set("startAt", strconv.Itoa(len(search.Values)))
+		}
+		if status != "" {
+			query.Set("status", status)
+		}
+		var page jiraTeamCatalogProjectSearchPayload
+		if fetchErr := jiraFetchObject(ctx, client, http.MethodGet, "/rest/api/3/project/search?"+query.Encode(), nil, &page); fetchErr != nil {
+			if pages == 0 {
+				return search, false, 0, "page_error", fetchErr
+			}
+			return search, false, pages, "page_error", nil
+		}
+		pages++
+		search.Values = append(search.Values, page.Values...)
+		if page.endOfData(len(search.Values), jiraTeamCatalogProjectSearchMaxResults) {
+			return search, true, pages, "", nil
+		}
+		if len(page.Values) == 0 {
+			return search, false, pages, "empty_page", nil
+		}
+	}
+	return search, false, pages, stop, nil
 }
 
 // jiraStampMembersAuthoritative marks every team row's roster authoritative
@@ -547,23 +684,65 @@ func (collector JiraTeamCatalogCollector) CollectTeamCatalog(
 	if selections.Projects {
 		projects := append([]jiraTeamCatalogProjectRow(nil), batch.Rows.Projects...)
 		ownership := append([]jiraTeamCatalogOwnershipRow(nil), batch.Rows.Ownership...)
-		legacyProjects, legacyOwnership, legacyErr := jiraLegacyProjectOwnershipLinks(ctx, collector.Sink.Conn, ref.OrgID, normalizedAt)
+		// The legacy links table holds project keys only. The native id of
+		// a key comes from this walk's own project search, never from a
+		// read of `projects`: a key the provider did not return this run has
+		// no identity to write.
+		nativeIDByKey := make(map[string]string, len(projects))
+		for _, row := range projects {
+			if row.ProjectKey != nil {
+				nativeIDByKey[*row.ProjectKey] = row.ID
+			}
+		}
+		legacyOwnership, legacySkipped, legacyComplete, legacyErr := jiraLegacyProjectOwnershipLinks(
+			ctx, collector.Sink.Conn, ref.OrgID, nativeIDByKey, normalizedAt.UTC().Truncate(time.Millisecond))
 		if legacyErr != nil {
 			return result, legacyErr
 		}
-		existing := make(map[string]bool, len(projects))
-		for _, row := range projects {
-			existing[row.ID] = true
-		}
-		for _, row := range legacyProjects {
-			if existing[row.ID] {
-				continue
-			}
-			existing[row.ID] = true
-			projects = append(projects, row)
+		if legacySkipped > 0 {
+			slog.Default().WarnContext(ctx, "jira_team_catalog_legacy_link_without_native_id",
+				"org_id", ref.OrgID, "links", legacySkipped)
 		}
 		ownership = append(ownership, legacyOwnership...)
 		ownership = dedupeJiraOwnershipRows(ownership)
+		// Snapshot rule, the same one atlassianteams.Write applies: an open
+		// row of this writer that the fresh snapshot no longer holds is
+		// closed in this write, and a row it still holds keeps the valid_from
+		// it was first seen with. valid_from is a key column, so a new stamp
+		// at each sync would add one more open row for the same fact.
+		open, openErr := jiraOpenCatalogOwnership(ctx, collector.Sink.Conn, ref.OrgID)
+		if openErr != nil {
+			return result, openErr
+		}
+		// The open rows of an archived project are left as they are: they
+		// are not part of what the snapshot rule may close.
+		held, open := jiraHoldArchivedOwnership(ref.OrgID, batch.ArchivedProjects, open)
+		if len(held) > 0 {
+			slog.Default().InfoContext(ctx, "jira_team_catalog_archived_ownership_held",
+				"org_id", ref.OrgID, "rows", len(held))
+		}
+		// An answer with no live ownership row closes nothing, whatever the
+		// archived read holds: no live project is far more often an access
+		// change than an organization that removed every project.
+		liveEmpty := len(ownership) == 0 && len(open) > 0
+		// The snapshot is complete only when every read behind it reached
+		// its end: all pages of the project search and the legacy links.
+		snapshotComplete := batch.Result.ProjectSearchComplete && legacyComplete && !liveEmpty
+		if !snapshotComplete {
+			slog.Default().WarnContext(ctx, "jira_team_catalog_ownership_snapshot_incomplete",
+				"org_id", ref.OrgID, "project_search_complete", batch.Result.ProjectSearchComplete,
+				"legacy_links_complete", legacyComplete, "no_live_ownership", liveEmpty, "open_rows_kept", len(open)+len(held))
+		}
+		result.OwnershipSnapshotIncomplete = !snapshotComplete
+		var retracted []jiraTeamCatalogOwnershipRow
+		ownership, retracted = jiraOwnershipSnapshot(ownership, open, normalizedAt.UTC().Truncate(time.Millisecond), snapshotComplete)
+		if len(retracted) > 0 {
+			slog.Default().InfoContext(ctx, "jira_team_catalog_ownership_retracted",
+				"org_id", ref.OrgID, "rows", len(retracted))
+		}
+		result.OwnershipRetracted = len(retracted)
+		freshOwnership := len(ownership)
+		ownership = append(ownership, retracted...)
 
 		ownershipEffect, effectErr := effectBatchFromValues(jiraTeamCatalogOwnershipDestination, EffectReadbackRequired, ownership)
 		if effectErr != nil {
@@ -572,7 +751,7 @@ func (collector JiraTeamCatalogCollector) CollectTeamCatalog(
 		if err := collector.Sink.WriteEffect(ctx, writeClaim, ownershipEffect); err != nil {
 			return result, err
 		}
-		result.OwnershipWritten = len(ownership)
+		result.OwnershipWritten = freshOwnership
 		projectsEffect, effectErr := effectBatchFromValues(jiraTeamCatalogProjectsDestination, EffectReadbackRequired, projects)
 		if effectErr != nil {
 			return result, effectErr

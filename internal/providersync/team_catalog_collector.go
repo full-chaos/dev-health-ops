@@ -101,6 +101,13 @@ type TeamCatalogResult struct {
 	ProjectsWritten    int
 	// OwnershipWritten is team_project_ownership rows (Linear, GitLab).
 	OwnershipWritten int
+	// OwnershipRetracted is team_project_ownership rows closed because the
+	// fresh snapshot no longer holds them (Jira catalog). They are not part
+	// of OwnershipWritten.
+	OwnershipRetracted int
+	// OwnershipSnapshotIncomplete says the run did not read its source to
+	// the end, so it closed no team_project_ownership row.
+	OwnershipSnapshotIncomplete bool
 	// ProjectsWithoutKey (CHAOS-4530, "a team key is not a project key")
 	// counts, of ProjectsWritten, how many `projects` rows this call wrote
 	// with a nil project_key. Zero for a collector that never writes

@@ -48,7 +48,7 @@ func (oneAtlassianTeam) IterTeamUsers(context.Context, string, int) ([]atlassian
 }
 func (oneAtlassianTeam) IterTeamActiveProjects(context.Context, string, int) ([]atlassian.TeamworkProject, error) {
 	key := "PLAT"
-	return []atlassian.TeamworkProject{{ProjectKey: &key}}, nil
+	return []atlassian.TeamworkProject{{ProjectID: "ari:cloud:jira:site:project/10001", ProjectKey: &key}}, nil
 }
 
 func testJiraCredential(config map[string]string) providerfoundation.Credential {

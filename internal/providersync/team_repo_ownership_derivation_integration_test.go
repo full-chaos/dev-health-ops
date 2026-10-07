@@ -6,6 +6,7 @@ import (
 	"context"
 	"reflect"
 	"sort"
+	"strings"
 	"testing"
 	"time"
 
@@ -1391,4 +1392,51 @@ WHERE org_id = ?`, orgID)
 		t.Fatalf("team_repo_ownership rows.Err: %v", err)
 	}
 	return out
+}
+
+// A closed link is not returned before a merge. A row is closed by writing
+// its key again with valid_to set; with merges stopped both versions stay
+// stored, which is the state every reader sees between a retraction and the
+// next merge. A second link of the same team stays, and a link closed in the
+// future is still valid now.
+func TestTeamRepoOwnershipProjectLinksLeaveOutAClosedRowBeforeAMerge(t *testing.T) {
+	ctx, conn := newWorkItemEffectsConn(t)
+	orgID := "closed-link-before-a-merge-org"
+	if err := conn.Exec(ctx, `SYSTEM STOP MERGES team_project_ownership`); err != nil {
+		t.Fatalf("stop merges: %v", err)
+	}
+	t.Cleanup(func() { _ = conn.Exec(context.Background(), `SYSTEM START MERGES team_project_ownership`) })
+
+	const insert = `INSERT INTO team_project_ownership (org_id, provider, team_id, project_id, project_key, source, is_primary, specificity, priority, valid_from, valid_to, updated_at) VALUES `
+	run := func(values string) {
+		t.Helper()
+		if err := conn.Exec(ctx, insert+values); err != nil {
+			t.Fatalf("insert: %v", err)
+		}
+	}
+	org := "'" + orgID + "'"
+	// Closed: the open version, then the same key with valid_to set.
+	run(`(` + org + `, 'jira', 'team-a', '10001', 'LOST', 'native', 1, 100, 10, '2026-09-01 00:00:00', NULL, '2026-09-01 00:00:00')`)
+	run(`(` + org + `, 'jira', 'team-a', '10001', 'LOST', 'native', 1, 100, 10, '2026-09-01 00:00:00', '2026-09-20 00:00:00', '2026-09-20 00:00:00')`)
+	// Open.
+	run(`(` + org + `, 'jira', 'team-a', '10002', 'KEPT', 'native', 1, 100, 10, '2026-09-01 00:00:00', NULL, '2026-09-01 00:00:00')`)
+	// Closed at a time after as-of: valid at as-of.
+	run(`(` + org + `, 'jira', 'team-a', '10003', 'LATER', 'native', 1, 100, 10, '2026-09-01 00:00:00', NULL, '2026-09-01 00:00:00')`)
+	run(`(` + org + `, 'jira', 'team-a', '10003', 'LATER', 'native', 1, 100, 10, '2026-09-01 00:00:00', '2026-12-01 00:00:00', '2026-09-20 00:00:00')`)
+
+	if stored := countRows(t, ctx, conn, `SELECT count() FROM team_project_ownership WHERE org_id = ? AND project_id = '10001'`, orgID); stored != 2 {
+		t.Fatalf("stored versions of the closed link = %d, want 2: a merge ran, so this test did not see the state it is for", stored)
+	}
+	links, err := loadTeamRepoOwnershipProjectLinks(ctx, conn, orgID, time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatalf("load project links: %v", err)
+	}
+	var got []string
+	for _, link := range links {
+		got = append(got, link.ProjectID)
+	}
+	sort.Strings(got)
+	if strings.Join(got, ",") != "10002,10003" {
+		t.Fatalf("links = %v, want 10002 and 10003: the closed link 10001 is not owned any more", got)
+	}
 }

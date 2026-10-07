@@ -15,9 +15,13 @@ func TestJiraTeamID(t *testing.T) {
 	}
 }
 
-func TestJiraProjectID(t *testing.T) {
-	if got := jiraProjectID("org-1", "OPS"); got != "org-1:jira:OPS" {
-		t.Fatalf("got %q", got)
+func TestJiraProjectIDIsKeyBuiltMatchesOnlyTheRowsOwnOrganizationPrefix(t *testing.T) {
+	for id, want := range map[string]bool{
+		"org-1:jira:OPS": true, "10001": false, "org-2:jira:OPS": false, "x-org-1:jira:OPS": false, "": false,
+	} {
+		if got := jiraProjectIDIsKeyBuilt("org-1", id); got != want {
+			t.Errorf("jiraProjectIDIsKeyBuilt(org-1, %q) = %v, want %v", id, got, want)
+		}
 	}
 }
 
@@ -112,9 +116,9 @@ func TestNormalizeJiraMembershipRow(t *testing.T) {
 
 func TestNormalizeJiraOwnershipRow(t *testing.T) {
 	now := time.Date(2026, 8, 30, 12, 0, 0, 0, time.UTC)
-	row := normalizeJiraOwnershipRow("org-1", "OPS", "OPS", now)
+	row := normalizeJiraOwnershipRow("org-1", "OPS", "10001", "OPS", now)
 	if row.OrgID != "org-1" || row.Provider != "jira" || row.TeamID != "OPS" ||
-		row.ProjectID != "org-1:jira:OPS" || row.ProjectKey == nil || *row.ProjectKey != "OPS" ||
+		row.ProjectID != "10001" || row.ProjectKey == nil || *row.ProjectKey != "OPS" ||
 		row.Source != "native" || row.IsPrimary != 1 ||
 		row.Specificity != jiraTeamCatalogNativeSpecificity || row.Priority != jiraTeamCatalogNativePriority {
 		t.Fatalf("row=%+v", row)
@@ -123,8 +127,8 @@ func TestNormalizeJiraOwnershipRow(t *testing.T) {
 
 func TestNormalizeJiraProjectRow(t *testing.T) {
 	now := time.Date(2026, 8, 30, 12, 0, 0, 0, time.UTC)
-	row := normalizeJiraProjectRow("org-1", "OPS", "Ops Project", now)
-	if row.ID != "org-1:jira:OPS" || row.OrgID != "org-1" || row.Provider != "jira" ||
+	row := normalizeJiraProjectRow("org-1", "10001", "OPS", "Ops Project", now)
+	if row.ID != "10001" || row.OrgID != "org-1" || row.Provider != "jira" ||
 		row.ProjectKey == nil || *row.ProjectKey != "OPS" || row.Name != "Ops Project" ||
 		row.IsActive != 1 || row.State != "" || row.URL != "" ||
 		len(row.TeamIDs) != 0 || len(row.TeamKeys) != 0 ||
@@ -150,7 +154,7 @@ func TestValidateJiraOwnershipRowAcceptsBothSources(t *testing.T) {
 	now := time.Date(2026, 8, 30, 12, 0, 0, 0, time.UTC)
 	claim := Claim{Unit: Unit{OrgID: "org-1", Provider: "jira"}}
 
-	native := normalizeJiraOwnershipRow("org-1", "OPS", "OPS", now)
+	native := normalizeJiraOwnershipRow("org-1", "OPS", "10001", "OPS", now)
 	if err := validateJiraOwnershipRow(claim, native); err != nil {
 		t.Fatalf("native row should validate: %v", err)
 	}
@@ -158,7 +162,7 @@ func TestValidateJiraOwnershipRowAcceptsBothSources(t *testing.T) {
 	key := "SUP"
 	legacy := jiraTeamCatalogOwnershipRow{
 		OrgID: "org-1", Provider: "jira", TeamID: "ops-team-id",
-		ProjectID: "org-1:jira:SUP", ProjectKey: &key, Source: jiraTeamCatalogLegacySource,
+		ProjectID: "10002", ProjectKey: &key, Source: jiraTeamCatalogLegacySource,
 		IsPrimary: 1, Specificity: jiraTeamCatalogLegacySpecificity, Priority: jiraTeamCatalogLegacyPriority,
 		ValidFrom: now, UpdatedAt: now,
 	}
@@ -190,15 +194,110 @@ func TestJiraRosterFromMemberships(t *testing.T) {
 
 func TestDedupeJiraProjectCatalogRowsAndOwnershipRows(t *testing.T) {
 	now := time.Date(2026, 8, 30, 12, 0, 0, 0, time.UTC)
-	project := normalizeJiraProjectRow("org-1", "OPS", "Ops Project", now)
+	project := normalizeJiraProjectRow("org-1", "10001", "OPS", "Ops Project", now)
 	deduped := dedupeJiraProjectCatalogRows([]jiraTeamCatalogProjectRow{project, project})
 	if len(deduped) != 1 {
 		t.Fatalf("projects=%+v", deduped)
 	}
 
-	ownership := normalizeJiraOwnershipRow("org-1", "OPS", "OPS", now)
+	ownership := normalizeJiraOwnershipRow("org-1", "OPS", "10001", "OPS", now)
 	dedupedOwnership := dedupeJiraOwnershipRows([]jiraTeamCatalogOwnershipRow{ownership, ownership})
 	if len(dedupedOwnership) != 1 {
 		t.Fatalf("ownership=%+v", dedupedOwnership)
+	}
+}
+
+// The catalog must never write the second project identity again: an OPEN
+// ownership row and a `projects` row whose id is built from the project key
+// are refused. A CLOSING row still carries the key-built id of the row it
+// closes, so it is accepted on its interval alone.
+func TestValidateJiraRowsRefuseAKeyBuiltProjectIDExceptOnAClosingRow(t *testing.T) {
+	now := time.Date(2026, 8, 30, 12, 0, 0, 0, time.UTC)
+	claim := Claim{Unit: Unit{OrgID: "org-1", Provider: "jira"}}
+
+	open := normalizeJiraOwnershipRow("org-1", "OPS", "org-1:jira:OPS", "OPS", now)
+	if err := validateJiraOwnershipRow(claim, open); err == nil {
+		t.Fatal("an open ownership row with a key-built project id must be refused")
+	}
+	for _, source := range []string{jiraTeamCatalogSource, jiraTeamCatalogLegacySource} {
+		closing := open
+		closing.Source = source
+		closing.Specificity, closing.Priority = 7, 7
+		closedAt := now.Add(time.Hour)
+		closing.ValidTo = &closedAt
+		if err := validateJiraOwnershipRow(claim, closing); err != nil {
+			t.Fatalf("a %s closing row must be accepted with the values of the row it closes: %v", source, err)
+		}
+	}
+	backwards := open
+	before := now.Add(-time.Hour)
+	backwards.ValidTo = &before
+	if err := validateJiraOwnershipRow(claim, backwards); err == nil {
+		t.Fatal("a closing row that ends before it starts must be refused")
+	}
+	foreign := open
+	closedAt := now.Add(time.Hour)
+	foreign.ValidTo = &closedAt
+	foreign.Source = "manual"
+	if err := validateJiraOwnershipRow(claim, foreign); err == nil {
+		t.Fatal("a closing row of a source this writer does not own must be refused")
+	}
+
+	if err := normalizeJiraProjectRow("org-1", "org-1:jira:OPS", "OPS", "Ops", now).validate(claim); err == nil {
+		t.Fatal("a projects row with a key-built id must be refused")
+	}
+	if err := normalizeJiraProjectRow("org-1", "10001", "OPS", "Ops", now).validate(claim); err != nil {
+		t.Fatalf("a projects row with the native id must validate: %v", err)
+	}
+}
+
+func TestJiraOwnershipSnapshotKeepsFirstSeenAndClosesWhatTheSnapshotLost(t *testing.T) {
+	first := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+	later := first.Add(24 * time.Hour)
+	now := first.Add(48 * time.Hour)
+	key := "OPS"
+	row := func(projectID, source string, validFrom time.Time) jiraTeamCatalogOwnershipRow {
+		return jiraTeamCatalogOwnershipRow{
+			OrgID: "org-1", Provider: "jira", TeamID: "OPS", ProjectID: projectID, ProjectKey: &key,
+			Source: source, IsPrimary: 1, Specificity: 100, Priority: 10, ValidFrom: validFrom, UpdatedAt: validFrom,
+		}
+	}
+	fresh := []jiraTeamCatalogOwnershipRow{row("10001", "native", now)}
+	open := []jiraTeamCatalogOwnershipRow{
+		row("10001", "native", later), row("10001", "native", first), // one fact, two open rows
+		row("org-1:jira:OPS", "native", first), // the retired identity
+		row("10001", "jira_legacy", first),     // same project, another source: its own fact
+	}
+	kept, retracted := jiraOwnershipSnapshot(fresh, open, now, true)
+	if len(kept) != 1 || !kept[0].ValidFrom.Equal(first) || kept[0].ValidTo != nil {
+		t.Fatalf("kept=%+v, want the one fresh row on its first-seen valid_from, open", kept)
+	}
+	if len(retracted) != 3 {
+		t.Fatalf("retracted=%+v, want the later duplicate, the key-built row and the legacy row", retracted)
+	}
+	for _, closed := range retracted {
+		if closed.ValidTo == nil || !closed.ValidTo.Equal(now) || !closed.UpdatedAt.Equal(now) {
+			t.Fatalf("closed row=%+v, want valid_to = updated_at = the run time", closed)
+		}
+		if closed.ProjectID == "10001" && closed.Source == "native" && closed.ValidFrom.Equal(first) {
+			t.Fatalf("the first-seen row of a fact the snapshot still holds was closed: %+v", closed)
+		}
+	}
+
+	// A part of the provider's answer closes nothing and still keeps the first-seen stamp.
+	kept, retracted = jiraOwnershipSnapshot(fresh, open, now, false)
+	if len(kept) != 1 || !kept[0].ValidFrom.Equal(first) || len(retracted) != 0 {
+		t.Fatalf("a snapshot that is not complete: kept=%+v retracted=%+v, want nothing closed", kept, retracted)
+	}
+
+	kept, retracted = jiraOwnershipSnapshot(nil, open, now, true)
+	if len(kept) != 0 || len(retracted) != 0 {
+		t.Fatalf("an empty snapshot closed rows: kept=%+v retracted=%+v", kept, retracted)
+	}
+
+	// A second run on the same data writes the same key again and closes nothing.
+	kept, retracted = jiraOwnershipSnapshot(fresh, []jiraTeamCatalogOwnershipRow{row("10001", "native", first)}, now.Add(time.Hour), true)
+	if len(kept) != 1 || !kept[0].ValidFrom.Equal(first) || len(retracted) != 0 {
+		t.Fatalf("second run: kept=%+v retracted=%+v", kept, retracted)
 	}
 }

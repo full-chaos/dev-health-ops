@@ -526,3 +526,22 @@ func TestNoProductionCodeImportsTheDecisionPackageYet(t *testing.T) {
 		t.Fatalf("the walk read %d Go files (own package seen: %v): it did not cover the module", files, sawSelf)
 	}
 }
+
+// A nil *Completer must refuse, not panic: its methods read the rubric and the
+// transport of the receiver.
+func TestANilCompleterRefusesAndDoesNotPanic(t *testing.T) {
+	var completer *Completer
+	bundle := syntheticBundle(t)
+	if _, err := categorize.CategorizeBundleOnce(context.Background(), bundle, completer); !errors.Is(err, categorize.ErrNoBundleCompleter) {
+		t.Fatalf("CategorizeBundleOnce err = %v, want ErrNoBundleCompleter", err)
+	}
+	if _, err := completer.CompleteBundle(context.Background(), bundle); !errors.Is(err, categorize.ErrNoBundleCompleter) {
+		t.Fatalf("CompleteBundle err = %v, want ErrNoBundleCompleter", err)
+	}
+	if _, err := completer.Classify(context.Background(), bundle); !errors.Is(err, categorize.ErrNoBundleCompleter) {
+		t.Fatalf("Classify err = %v, want ErrNoBundleCompleter", err)
+	}
+	if _, err := (&Completer{}).Classify(context.Background(), bundle); !errors.Is(err, categorize.ErrNoBundleCompleter) {
+		t.Fatalf("zero-value Classify err = %v, want ErrNoBundleCompleter", err)
+	}
+}

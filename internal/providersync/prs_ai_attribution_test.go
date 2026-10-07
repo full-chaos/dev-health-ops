@@ -390,7 +390,7 @@ func glAttributionWorkItemsRows(t *testing.T) []githubAIAttributionRow {
 	claim := prAttributionClaim("gitlab", "work-items")
 	deriver := &capturingGitLabDeriver{}
 	if _, err := (GitLabWorkItemsRouteHandler{
-		StatusMapping: loadRealStatusMapping(t), PerPage: 100, MaxPages: 10, NestedMaxPages: 10, Derived: deriver,
+		StatusMapping: loadRealStatusMapping(t), PerPage: 100, MaxPages: 10, NestedMaxPages: 10,
 	}).Collect(
 		context.Background(), claim,
 		providerfoundation.Credential{Provider: "gitlab", ID: claim.CredentialID},
@@ -503,7 +503,6 @@ func githubWorkItemsRouteAttributionRows(t *testing.T) []githubAIAttributionRow 
 	handler := GitHubWorkItemsRouteHandler{
 		Projects:                      &githubWorkItemsRouteProjectPolicy{},
 		ProjectMembershipSnapshotDiff: githubProjectV2NoopSnapshotDiffReader{},
-		Deriver:                       &githubWorkItemsRouteDeriver{rows: githubWorkItemsRouteDerivedRows(t)},
 	}
 	batch, err := handler.Collect(
 		context.Background(), claim,

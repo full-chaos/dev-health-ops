@@ -3,6 +3,7 @@ package workerservice
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"strings"
 	"testing"
@@ -119,23 +120,15 @@ func providerSyncOwnershipMetricsClaim(t *testing.T, provider string) providersy
 	}
 }
 
-// TestBuildProviderSyncHandlerWiresOwnershipMetricsIntoEveryWorkItemTeamAttributionsSink
-// is a mutation-resistant pin for the ownership-gate rejection
-// telemetry test-strength gap: the existing construction tests
-// (TestBuildProviderSyncHandlerConstructsAggregateWorkItemRoutes,
-// TestBuildProviderSyncHandlerConstructsGitHubWorkItemsWithValidatedRuntimeConfig)
-// only assert the constructed handler/sink TYPES, never that the shared
-// providerMetrics instance this worker scrapes actually reached the
-// constructed sink -- so independently passing nil instead of providerMetrics
-// at any one of the four NewXWorkItemXClickHouseEffects call sites in
-// buildProviderSyncHandlerWithRuntimeDependencies passed the full committed
-// suite for that provider. This builds the REAL handler via the REAL
-// BuildExecutor for each provider's work-items route, writes a
-// work_item_team_attributions effect (one granted candidate, one gate
-// rejection) through the REAL constructed sink, and asserts both ownership
-// outcomes rendered on the SAME providerMetrics instance the worker
-// registers for scraping.
-func TestBuildProviderSyncHandlerWiresOwnershipMetricsIntoEveryWorkItemTeamAttributionsSink(t *testing.T) {
+// TestBuildProviderSyncHandlerSinkRefusesTheTeamAttributionsTable pins the
+// one-writer rule on the REAL worker wiring: work_item_team_attributions is
+// written by the daily job from stored rows, so the sink the worker builds for
+// each provider's work-items unit must refuse an effect for it and must count
+// no ownership outcome. This builds the REAL handler via the REAL
+// BuildExecutor for each provider's work-items route and offers the sink a
+// well-formed work_item_team_attributions effect (one granted candidate, one
+// gate rejection).
+func TestBuildProviderSyncHandlerSinkRefusesTheTeamAttributionsTable(t *testing.T) {
 	t.Setenv("STATUS_MAPPING_PATH", "")
 	runtimeConfig, err := githubWorkItemsRuntimeConfigFrom(validGitHubWorkItemsRuntimeConfig(t))
 	if err != nil {
@@ -186,27 +179,19 @@ func TestBuildProviderSyncHandlerWiresOwnershipMetricsIntoEveryWorkItemTeamAttri
 			}
 			effect.MembershipRejections = []json.RawMessage{rejection}
 
-			if err := executor.Committer.Sink.WriteEffect(context.Background(), claim, effect); err != nil {
-				t.Fatalf("%s: WriteEffect: %v", provider, err)
+			err = executor.Committer.Sink.WriteEffect(context.Background(), claim, effect)
+			if !errors.Is(err, providersync.ErrInvalidConfiguration) {
+				t.Fatalf("%s: the sync sink took a work_item_team_attributions effect: error=%v", provider, err)
 			}
 			var rendered strings.Builder
 			if err := providerMetrics.WritePrometheus(&rendered); err != nil {
 				t.Fatal(err)
 			}
-			output := rendered.String()
-			if !strings.Contains(output, `dev_health_team_attribution_ownership_checked_total{reason="ownership_unknown"} 1`) {
-				t.Fatalf(
-					"%s: granted candidate produced no ownership_unknown sample -- the worker's real "+
-						"constructor call site is not passing the shared providerMetrics instance:\n%s",
-					provider, output,
-				)
-			}
-			if !strings.Contains(output, `dev_health_team_attribution_ownership_checked_total{reason="repo_not_owned"} 1`) {
-				t.Fatalf(
-					"%s: rejection produced no repo_not_owned sample -- the worker's real constructor "+
-						"call site is not passing the shared providerMetrics instance:\n%s",
-					provider, output,
-				)
+			for _, line := range strings.Split(rendered.String(), "\n") {
+				if strings.HasPrefix(line, "dev_health_team_attribution_ownership_checked_total{") &&
+					!strings.HasSuffix(line, " 0") {
+					t.Fatalf("%s: the refused effect counted an ownership outcome: %s", provider, line)
+				}
 			}
 		})
 	}

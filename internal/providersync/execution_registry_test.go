@@ -145,14 +145,20 @@ func TestWorkItemAliasesStayCanonicalOnlyAcrossIndependentFamilies(t *testing.T)
 // declared ready.
 func TestGitHubWorkItemRouteDestinationManifest(t *testing.T) {
 	t.Parallel()
+	// The raw rows of the unit and ai_attribution. No table the daily job
+	// computes from stored rows is a destination of a sync unit.
 	want := []string{
-		"ai_attribution", "estimate_coverage_metrics_daily",
-		"investment_classifications_daily", "investment_metrics_daily",
-		"issue_type_metrics_daily", "sprints", "work_item_cycle_times",
+		"ai_attribution", "sprints",
 		"work_item_dependencies", "work_item_interactions",
-		"work_item_metrics_daily", "work_item_reopen_events",
-		"work_item_state_durations_daily", "work_item_team_attributions",
-		"work_item_transitions", "work_item_user_metrics_daily", "work_items",
+		"work_item_reopen_events", "work_item_transitions", "work_items",
+	}
+	if !slices.Equal(workItemRouteDestinations(), want) {
+		t.Fatalf("shared work-item destinations=%v want=%v", workItemRouteDestinations(), want)
+	}
+	for _, destination := range githubWorkItemDerivedDestinations {
+		if slices.Contains(githubWorkItemRouteDestinations(), destination) {
+			t.Fatalf("the daily-job table %q is a github work-item route destination", destination)
+		}
 	}
 	// CHAOS-4194: github writes two surfaces no other work-item provider does,
 	// and they sit in ALPHABETICAL position because the manifest's declaration
@@ -160,7 +166,7 @@ func TestGitHubWorkItemRouteDestinationManifest(t *testing.T) {
 	// family list that gitlab, jira and linear advertise deliberately stops
 	// before these two, which is asserted directly below.
 	want = slices.Concat(
-		want[:5], []string{"project_membership_transitions", "projects"}, want[5:],
+		want[:1], []string{"project_membership_transitions", "projects"}, want[1:],
 	)
 	got := githubWorkItemRouteDestinations()
 	if !slices.Equal(got, want) {

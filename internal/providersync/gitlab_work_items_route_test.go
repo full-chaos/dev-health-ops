@@ -7,6 +7,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"io"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -93,14 +94,23 @@ func gitLabWorkItemResponses() map[string][]string {
 	}
 }
 
-func TestGitLabWorkItemsRouteNormalizesSixRawFactsAndReportsDerivedGap(t *testing.T) {
+// The GitLab work-items unit stores the six raw facts and the ai_attribution
+// effect, and no table the daily job computes from stored rows.
+//
+// The ai_attribution effect of this route is present and EMPTY, also for a
+// payload that holds a merge request with labels: merge-request AI attribution
+// is written by the prs unit alone, and this route never fills the slice.
+func TestGitLabWorkItemsRouteNormalizesSixRawFactsAndLeavesDerivedTablesToDailyJob(t *testing.T) {
 	doer := &gitLabWorkItemsDoer{responses: gitLabWorkItemResponses()}
 	claim := nativeTestClaim("gitlab", "work-items")
 	now := time.Date(2026, 8, 3, 12, 0, 0, 987654321, time.UTC)
+	client := gitLabWorkItemsClient(t, fakehttp.Client(doer))
+	leftToDaily := providerfoundation.NewMetrics()
+	client.Metrics = leftToDaily
 	batch, err := (GitLabWorkItemsRouteHandler{StatusMapping: loadRealStatusMapping(t), PerPage: 2, MaxPages: 10, NestedMaxPages: 10}).Collect(
 		context.Background(), claim,
 		providerfoundation.Credential{Provider: "gitlab", ID: claim.CredentialID},
-		gitLabWorkItemsClient(t, fakehttp.Client(doer)), now,
+		client, now,
 	)
 	if err != nil {
 		paths := make([]string, 0, len(doer.requests))
@@ -113,7 +123,34 @@ func TestGitLabWorkItemsRouteNormalizesSixRawFactsAndReportsDerivedGap(t *testin
 	for _, effect := range batch.Effects {
 		byDestination[effect.Destination] = effect
 	}
-	if len(byDestination) != 6 || len(byDestination["work_items"].Rows) != 2 ||
+	gotDestinations := make([]string, 0, len(batch.Effects))
+	for _, effect := range batch.Effects {
+		gotDestinations = append(gotDestinations, effect.Destination)
+	}
+	slices.Sort(gotDestinations)
+	if want := workItemRouteDestinations(); !slices.Equal(gotDestinations, want) {
+		t.Fatalf("destinations=%v want=%v", gotDestinations, want)
+	}
+	for _, destination := range githubWorkItemDerivedDestinations {
+		if _, present := byDestination[destination]; present {
+			t.Fatalf("the unit built an effect for the derived table %q", destination)
+		}
+	}
+	aiAttribution, present := byDestination["ai_attribution"]
+	if !present || len(aiAttribution.Rows) != 0 || aiAttribution.Recovery != EffectReadbackRequired {
+		t.Fatalf("ai_attribution effect present=%t rows=%d recovery=%s want present, empty, readback-required",
+			present, len(aiAttribution.Rows), aiAttribution.Recovery)
+	}
+	for _, key := range []string{
+		"team_inheritance", "team_attribution_written", "derived_destinations_implemented",
+		"derived_destinations_unimplemented", "watermark_held_for_derived_gap",
+	} {
+		if _, present := batch.Result[key]; present {
+			t.Fatalf("result still carries %q: %+v", key, batch.Result)
+		}
+	}
+	assertWorkItemDerivedTablesLeftToDailyJob(t, leftToDaily, "gitlab", 1)
+	if len(byDestination["work_items"].Rows) != 2 ||
 		len(byDestination["work_item_transitions"].Rows) != 3 ||
 		len(byDestination["work_item_dependencies"].Rows) != 3 ||
 		len(byDestination["work_item_reopen_events"].Rows) != 1 ||
@@ -183,13 +220,12 @@ func TestGitLabWorkItemsRouteNormalizesSixRawFactsAndReportsDerivedGap(t *testin
 		t.Fatalf("dependency=%+v", dependency)
 	}
 	summary, ok := batch.Result["gitlab_work_items"].(GitLabWorkItemsResult)
-	if !ok || summary.WorkItemsSynced != 2 || len(summary.RawDestinations) != 6 ||
-		len(summary.DerivedDestinationsUnimplemented) != 10 || !summary.WatermarkHeldForDerivedGap {
+	if !ok || summary.WorkItemsSynced != 2 || len(summary.RawDestinations) != 6 {
 		t.Fatalf("typed summary=%T/%+v", batch.Result["gitlab_work_items"], batch.Result["gitlab_work_items"])
 	}
-	if batch.Watermark != nil || batch.Result["watermark_held_for_derived_gap"] != true ||
-		len(batch.Result["derived_destinations_unimplemented"].([]string)) != 10 {
-		t.Fatalf("watermark/result=%v/%+v", batch.Watermark, batch.Result)
+	// The watermark is the end of the window whose raw rows the unit stored.
+	if claim.BeforeAt == nil || batch.Watermark == nil || !batch.Watermark.Equal(claim.BeforeAt.UTC()) {
+		t.Fatalf("watermark=%v want the claim bound %v", batch.Watermark, claim.BeforeAt)
 	}
 	for _, request := range doer.requests {
 		if strings.HasSuffix(request.URL.Path, "/issues") || strings.HasSuffix(request.URL.Path, "/merge_requests") {

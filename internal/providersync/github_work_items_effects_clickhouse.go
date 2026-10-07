@@ -10,36 +10,23 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/workitemcontract"
 )
 
-// GitHubWorkItemEffectRows is the complete Python work-item write surface.
-// Every field becomes an effect, including an empty one. Keeping conditional
+// GitHubWorkItemEffectRows is the complete write surface of a work-item sync
+// unit: raw provider rows only. Every field becomes an effect, including an
+// empty one. Keeping conditional
 // emptiness in the manifest distinguishes "this destination was evaluated and
 // produced no rows" from "the composite forgot a destination".
 type GitHubWorkItemEffectRows struct {
-	AIAttribution                  []json.RawMessage
-	EstimateCoverageMetricsDaily   []json.RawMessage
-	InvestmentClassificationsDaily []json.RawMessage
-	InvestmentMetricsDaily         []json.RawMessage
-	IssueTypeMetricsDaily          []json.RawMessage
-	Sprints                        []json.RawMessage
-	WorkItemCycleTimes             []json.RawMessage
-	WorkItemDependencies           []json.RawMessage
-	WorkItemInteractions           []json.RawMessage
-	WorkItemMetricsDaily           []json.RawMessage
-	WorkItemReopenEvents           []json.RawMessage
-	WorkItemStateDurationsDaily    []json.RawMessage
-	WorkItemTeamAttributions       []json.RawMessage
-	WorkItemTransitions            []json.RawMessage
-	WorkItemUserMetricsDaily       []json.RawMessage
-	WorkItems                      []json.RawMessage
+	AIAttribution        []json.RawMessage
+	Sprints              []json.RawMessage
+	WorkItemDependencies []json.RawMessage
+	WorkItemInteractions []json.RawMessage
+	WorkItemReopenEvents []json.RawMessage
+	WorkItemTransitions  []json.RawMessage
+	WorkItems            []json.RawMessage
 	// CHAOS-4194. Board memberships and the `projects` catalogue row that makes
 	// their destination resolvable.
 	ProjectMembershipTransitions []json.RawMessage
 	Projects                     []json.RawMessage
-	// MembershipRejections (CHAOS-4320 round 6) is NOT one of the 18 named
-	// destinations above -- it is attached ONLY to the WorkItemTeamAttributions
-	// EffectBatch's own MembershipRejections field by BuildGitHubWorkItemEffects,
-	// never marshaled as a Rows destination of its own.
-	MembershipRejections []json.RawMessage
 }
 
 // githubWorkItemEffectRowsByDestination is intentionally a projection map,
@@ -49,24 +36,15 @@ type GitHubWorkItemEffectRows struct {
 // changes a completed family into an indistinguishable partial write and breaks
 // readback/recovery.
 var githubWorkItemEffectRowsByDestination = map[string]func(GitHubWorkItemEffectRows) []json.RawMessage{
-	"ai_attribution":                   func(rows GitHubWorkItemEffectRows) []json.RawMessage { return rows.AIAttribution },
-	"estimate_coverage_metrics_daily":  func(rows GitHubWorkItemEffectRows) []json.RawMessage { return rows.EstimateCoverageMetricsDaily },
-	"investment_classifications_daily": func(rows GitHubWorkItemEffectRows) []json.RawMessage { return rows.InvestmentClassificationsDaily },
-	"investment_metrics_daily":         func(rows GitHubWorkItemEffectRows) []json.RawMessage { return rows.InvestmentMetricsDaily },
-	"issue_type_metrics_daily":         func(rows GitHubWorkItemEffectRows) []json.RawMessage { return rows.IssueTypeMetricsDaily },
-	"sprints":                          func(rows GitHubWorkItemEffectRows) []json.RawMessage { return rows.Sprints },
-	"work_item_cycle_times":            func(rows GitHubWorkItemEffectRows) []json.RawMessage { return rows.WorkItemCycleTimes },
-	"work_item_dependencies":           func(rows GitHubWorkItemEffectRows) []json.RawMessage { return rows.WorkItemDependencies },
-	"work_item_interactions":           func(rows GitHubWorkItemEffectRows) []json.RawMessage { return rows.WorkItemInteractions },
-	"work_item_metrics_daily":          func(rows GitHubWorkItemEffectRows) []json.RawMessage { return rows.WorkItemMetricsDaily },
-	"work_item_reopen_events":          func(rows GitHubWorkItemEffectRows) []json.RawMessage { return rows.WorkItemReopenEvents },
-	"work_item_state_durations_daily":  func(rows GitHubWorkItemEffectRows) []json.RawMessage { return rows.WorkItemStateDurationsDaily },
-	"work_item_team_attributions":      func(rows GitHubWorkItemEffectRows) []json.RawMessage { return rows.WorkItemTeamAttributions },
-	"work_item_transitions":            func(rows GitHubWorkItemEffectRows) []json.RawMessage { return rows.WorkItemTransitions },
-	"work_item_user_metrics_daily":     func(rows GitHubWorkItemEffectRows) []json.RawMessage { return rows.WorkItemUserMetricsDaily },
-	"project_membership_transitions":   func(rows GitHubWorkItemEffectRows) []json.RawMessage { return rows.ProjectMembershipTransitions },
-	"projects":                         func(rows GitHubWorkItemEffectRows) []json.RawMessage { return rows.Projects },
-	"work_items":                       func(rows GitHubWorkItemEffectRows) []json.RawMessage { return rows.WorkItems },
+	"ai_attribution":                 func(rows GitHubWorkItemEffectRows) []json.RawMessage { return rows.AIAttribution },
+	"sprints":                        func(rows GitHubWorkItemEffectRows) []json.RawMessage { return rows.Sprints },
+	"work_item_dependencies":         func(rows GitHubWorkItemEffectRows) []json.RawMessage { return rows.WorkItemDependencies },
+	"work_item_interactions":         func(rows GitHubWorkItemEffectRows) []json.RawMessage { return rows.WorkItemInteractions },
+	"work_item_reopen_events":        func(rows GitHubWorkItemEffectRows) []json.RawMessage { return rows.WorkItemReopenEvents },
+	"work_item_transitions":          func(rows GitHubWorkItemEffectRows) []json.RawMessage { return rows.WorkItemTransitions },
+	"project_membership_transitions": func(rows GitHubWorkItemEffectRows) []json.RawMessage { return rows.ProjectMembershipTransitions },
+	"projects":                       func(rows GitHubWorkItemEffectRows) []json.RawMessage { return rows.Projects },
+	"work_items":                     func(rows GitHubWorkItemEffectRows) []json.RawMessage { return rows.WorkItems },
 }
 
 func githubWorkItemRouteDestinations() []string {
@@ -80,7 +58,7 @@ func workItemFamilyRouteDestinations() []string {
 }
 
 // BuildGitHubWorkItemEffects constructs one deterministic, readback-fenced
-// effect for every destination owned by the Python composite unit. The order
+// effect for every destination a work-item sync unit owns. The order
 // is the canonical githubWorkItemRouteDestinations order, which also matches the
 // EffectCommitter's stable destination order.
 func BuildGitHubWorkItemEffects(rows GitHubWorkItemEffectRows) ([]EffectBatch, error) {
@@ -104,16 +82,6 @@ func BuildGitHubWorkItemEffects(rows GitHubWorkItemEffectRows) ([]EffectBatch, e
 		)
 		if err != nil {
 			return nil, err
-		}
-		// CHAOS-4320 round 6: attached AFTER BuildEffectBatch, not threaded
-		// through it -- MembershipRejections is not part of ContentDigest/
-		// PayloadBytes validation, and BuildEffectBatch's signature stays
-		// exactly what every OTHER destination and every other caller
-		// already uses. Only work_item_team_attributions ever carries a
-		// non-empty value here; every other destination's effect leaves
-		// this nil, unchanged from before this ticket.
-		if destination == githubTeamAttributionsDestination {
-			effect.MembershipRejections = rows.MembershipRejections
 		}
 		effects = append(effects, effect)
 	}
@@ -143,8 +111,13 @@ func newGitHubWorkItemEffectIdentity(
 	if claim.Validate() != nil || claim.Provider != "github" ||
 		!isWorkItemFamilyDataset(claim.Dataset) ||
 		// The GITHUB list: this identity fences the github work-item sink,
-		// which owns two surfaces beyond the shared family route.
-		!slices.Contains(githubWorkItemRouteDestinations(), effect.Destination) ||
+		// which owns two surfaces beyond the shared family route. The nine
+		// derived names are accepted here only so the adapters that stay
+		// until the dead-code removal can still be built and tested alone:
+		// no sink dispatches to them (adapterForDestination has no case), so
+		// a sync unit cannot write one.
+		(!slices.Contains(githubWorkItemRouteDestinations(), effect.Destination) &&
+			!slices.Contains(githubWorkItemDerivedDestinations, effect.Destination)) ||
 		!validDigest(effect.ContentDigest) ||
 		effect.Recovery != EffectReadbackRequired || effect.PayloadBytes < 0 {
 		return GitHubWorkItemEffectIdentity{}, ErrInvalidConfiguration
@@ -186,7 +159,7 @@ type GitHubWorkItemEffectAdapter interface {
 }
 
 // GitHubWorkItemClickHouseEffects is the active canonical composite dispatcher.
-// Named fields make the 16-table ownership visible and prevent a dynamic
+// Named fields make the table ownership visible and prevent a dynamic
 // destination registry from silently accepting or omitting a surface.
 // Concrete ClickHouse adapters are injected by the canonical GitHub work-item
 // worker constructor. Direct alias claims are rejected before this dispatcher
@@ -194,24 +167,28 @@ type GitHubWorkItemEffectAdapter interface {
 type GitHubWorkItemClickHouseEffects struct {
 	Lease providerfoundation.LeaseGuard
 
-	AIAttribution                  GitHubWorkItemEffectAdapter
+	AIAttribution                GitHubWorkItemEffectAdapter
+	Sprints                      GitHubWorkItemEffectAdapter
+	WorkItemDependencies         GitHubWorkItemEffectAdapter
+	WorkItemInteractions         GitHubWorkItemEffectAdapter
+	WorkItemReopenEvents         GitHubWorkItemEffectAdapter
+	WorkItemTransitions          GitHubWorkItemEffectAdapter
+	WorkItems                    GitHubWorkItemEffectAdapter
+	ProjectMembershipTransitions GitHubWorkItemEffectAdapter
+	Projects                     GitHubWorkItemEffectAdapter
+
+	// The nine adapters below write tables that the daily job owns. No
+	// destination dispatches to them: they stay only until the dead-code
+	// removal that follows the cut.
 	EstimateCoverageMetricsDaily   GitHubWorkItemEffectAdapter
 	InvestmentClassificationsDaily GitHubWorkItemEffectAdapter
 	InvestmentMetricsDaily         GitHubWorkItemEffectAdapter
 	IssueTypeMetricsDaily          GitHubWorkItemEffectAdapter
-	Sprints                        GitHubWorkItemEffectAdapter
 	WorkItemCycleTimes             GitHubWorkItemEffectAdapter
-	WorkItemDependencies           GitHubWorkItemEffectAdapter
-	WorkItemInteractions           GitHubWorkItemEffectAdapter
 	WorkItemMetricsDaily           GitHubWorkItemEffectAdapter
-	WorkItemReopenEvents           GitHubWorkItemEffectAdapter
 	WorkItemStateDurationsDaily    GitHubWorkItemEffectAdapter
 	WorkItemTeamAttributions       GitHubWorkItemEffectAdapter
-	WorkItemTransitions            GitHubWorkItemEffectAdapter
 	WorkItemUserMetricsDaily       GitHubWorkItemEffectAdapter
-	WorkItems                      GitHubWorkItemEffectAdapter
-	ProjectMembershipTransitions   GitHubWorkItemEffectAdapter
-	Projects                       GitHubWorkItemEffectAdapter
 }
 
 func (sink GitHubWorkItemClickHouseEffects) WriteEffect(
@@ -286,34 +263,16 @@ func (sink GitHubWorkItemClickHouseEffects) adapterForDestination(
 	switch destination {
 	case "ai_attribution":
 		return sink.AIAttribution, true
-	case "estimate_coverage_metrics_daily":
-		return sink.EstimateCoverageMetricsDaily, true
-	case "investment_classifications_daily":
-		return sink.InvestmentClassificationsDaily, true
-	case "investment_metrics_daily":
-		return sink.InvestmentMetricsDaily, true
-	case "issue_type_metrics_daily":
-		return sink.IssueTypeMetricsDaily, true
 	case "sprints":
 		return sink.Sprints, true
-	case "work_item_cycle_times":
-		return sink.WorkItemCycleTimes, true
 	case "work_item_dependencies":
 		return sink.WorkItemDependencies, true
 	case "work_item_interactions":
 		return sink.WorkItemInteractions, true
-	case "work_item_metrics_daily":
-		return sink.WorkItemMetricsDaily, true
 	case "work_item_reopen_events":
 		return sink.WorkItemReopenEvents, true
-	case "work_item_state_durations_daily":
-		return sink.WorkItemStateDurationsDaily, true
-	case "work_item_team_attributions":
-		return sink.WorkItemTeamAttributions, true
 	case "work_item_transitions":
 		return sink.WorkItemTransitions, true
-	case "work_item_user_metrics_daily":
-		return sink.WorkItemUserMetricsDaily, true
 	case "work_items":
 		return sink.WorkItems, true
 	case "project_membership_transitions":
@@ -350,7 +309,7 @@ func (sink GitHubWorkItemClickHouseEffects) MissingDestinations() []string {
 }
 
 // complete gates every write and readback. It is an ALL-DESTINATIONS gate --
-// eighteen since CHAOS-4194 -- because a partially constructed sink would land
+// every manifest destination -- because a partially constructed sink would land
 // a generation whose surfaces are silently absent, which is exactly the
 // "evaluated and produced no rows" versus "the composite forgot a destination"
 // distinction GitHubWorkItemEffectRows exists to preserve. The count is not

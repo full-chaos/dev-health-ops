@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
-	"github.com/full-chaos/dev-health-ops/internal/teamattribution"
 )
 
 var (
@@ -187,22 +186,12 @@ type githubWorkItemsProjectPolicy interface {
 	) (GitHubProjectV2FetchResult, error)
 }
 
-// githubWorkItemsDeriver owns the nine Python-derived destination projections.
-// Those implementations have not been ported yet. Requiring this seam prevents
-// the composite from claiming completeness with fabricated empty metrics.
-type githubWorkItemsDeriver interface {
-	Derive(
-		context.Context,
-		Claim,
-		githubWorkItemRows,
-		time.Time,
-	) (map[string][]json.RawMessage, []teamattribution.GithubWorkItemDerivationRejectedMembership, error)
-}
-
 // GitHubWorkItemsRouteHandler composes the already-ported REST, PR-social, and
 // semantic foundations. It deliberately owns no registration, readiness,
-// effect sink/readback, or watermark. Effect construction delegates to the
-// shared 16-destination foundation; this handler only supplies its row sets.
+// effect sink/readback, or watermark. It emits the raw rows the provider
+// returned and nothing computed from them: every derived work-item table is
+// written by the daily job from stored rows, so a unit that saw a subset of a
+// scope cannot write a partial daily row.
 type GitHubWorkItemsRouteHandler struct {
 	REST     GitHubWorkItemsRESTCollector
 	Social   GitHubWorkItemPRSocialFetcher
@@ -215,7 +204,6 @@ type GitHubWorkItemsRouteHandler struct {
 	// misconstructed for every claim, not just the ones that happen to
 	// configure a Projects v2 target.
 	ProjectMembershipSnapshotDiff githubProjectV2SnapshotDiffReader
-	Deriver                       githubWorkItemsDeriver
 	ResolveIdentity               githubIdentityResolver
 }
 
@@ -245,6 +233,9 @@ func (handler GitHubWorkItemsRouteHandler) Collect(
 		client.Lease == nil || normalizedAt.IsZero() {
 		return CompleteRouteBatch{}, ErrInvalidConfiguration
 	}
+	if _, err := workItemsUnitWindowDays(claim, normalizedAt); err != nil {
+		return CompleteRouteBatch{}, err
+	}
 	// Every destination column that receives normalizedAt is DateTime64(3), so
 	// the nanoseconds a wall-clock now() carries cannot survive a round trip.
 	// Truncating here rather than only inside REST.Collect (which truncates its
@@ -254,9 +245,6 @@ func (handler GitHubWorkItemsRouteHandler) Collect(
 	// Absent for a row that landed, and the committer rewrites it on every
 	// recovery pass forever. Same fix, same reason, as github_blame_route.go.
 	normalizedAt = normalizedAt.UTC().Truncate(time.Millisecond)
-	if handler.Deriver == nil {
-		return CompleteRouteBatch{}, ErrGitHubWorkItemsDerivationsUnavailable
-	}
 	// D18 retired the policy_pending seam. This is deliberately NOT gated on
 	// whether this particular claim happens to carry targets: a handler built
 	// without a Projects collector is misconstructed for every claim, and
@@ -462,14 +450,11 @@ func (handler GitHubWorkItemsRouteHandler) Collect(
 		}
 	}
 
-	derived, membershipRejections, err := handler.Deriver.Derive(ctx, claim, rows, normalizedAt)
+	effects, err := buildGitHubWorkItemsRouteEffects(rows)
 	if err != nil {
 		return CompleteRouteBatch{}, usage.wrap(err)
 	}
-	effects, err := buildGitHubWorkItemsRouteEffects(rows, derived, membershipRejections)
-	if err != nil {
-		return CompleteRouteBatch{}, usage.wrap(err)
-	}
+	observeWorkItemDerivedTablesLeftToDailyJob(client.Metrics, claim, len(rows.WorkItems))
 	var watermark *time.Time
 	if len(incomplete) == 0 && claim.BeforeAt != nil {
 		value := claim.BeforeAt.UTC()
@@ -506,11 +491,8 @@ func (handler GitHubWorkItemsRouteHandler) Collect(
 		resultFields["pr_comments_truncated_by_limit"] = prCommentsTruncated
 	}
 	return CompleteRouteBatch{
-		Effects: effects,
-		Result: attachGitHubWorkItemTeamAttributionObservation(
-			attachWorkItemTeamInheritanceObservation(resultFields, handler.Deriver),
-			handler.Deriver,
-		),
+		Effects:   effects,
+		Result:    resultFields,
 		Watermark: watermark,
 		Evidence:  evidence,
 	}, nil
@@ -593,26 +575,10 @@ func finishGitHubWorkItemsEvidence(evidence *FetchEvidence, rows githubWorkItemR
 	evidence.Records = countGitHubWorkItemRows(rows)
 }
 
-func buildGitHubWorkItemsRouteEffects(
-	rows githubWorkItemRows,
-	derived map[string][]json.RawMessage,
-	membershipRejections []teamattribution.GithubWorkItemDerivationRejectedMembership,
-) ([]EffectBatch, error) {
-	if len(derived) != len(githubWorkItemDerivedDestinations) {
-		return nil, ErrGitHubWorkItemsDerivationsUnavailable
-	}
-	derivedSet := make(map[string]struct{}, len(githubWorkItemDerivedDestinations))
-	for _, destination := range githubWorkItemDerivedDestinations {
-		derivedSet[destination] = struct{}{}
-		if _, exists := derived[destination]; !exists {
-			return nil, ErrGitHubWorkItemsDerivationsUnavailable
-		}
-	}
-	for destination := range derived {
-		if _, expected := derivedSet[destination]; !expected {
-			return nil, ErrGitHubWorkItemsDerivationsUnavailable
-		}
-	}
+// buildGitHubWorkItemsRouteEffects serializes the raw row sets of one unit.
+// There is no derived input: the daily job owns every table computed from
+// these rows.
+func buildGitHubWorkItemsRouteEffects(rows githubWorkItemRows) ([]EffectBatch, error) {
 	directAI, err := githubWorkItemsRawMessages(rows.AIAttributions)
 	if err != nil {
 		return nil, err
@@ -655,30 +621,16 @@ func buildGitHubWorkItemsRouteEffects(
 	if err != nil {
 		return nil, err
 	}
-	marshaledRejections, err := marshalGitHubWorkItemTeamAttributionRejections(membershipRejections)
-	if err != nil {
-		return nil, err
-	}
 	return BuildGitHubWorkItemEffects(GitHubWorkItemEffectRows{
-		AIAttribution:                  directAI,
-		MembershipRejections:           marshaledRejections,
-		EstimateCoverageMetricsDaily:   derived["estimate_coverage_metrics_daily"],
-		InvestmentClassificationsDaily: derived["investment_classifications_daily"],
-		InvestmentMetricsDaily:         derived["investment_metrics_daily"],
-		IssueTypeMetricsDaily:          derived["issue_type_metrics_daily"],
-		Sprints:                        directSprints,
-		WorkItemCycleTimes:             derived["work_item_cycle_times"],
-		WorkItemDependencies:           directDependencies,
-		WorkItemInteractions:           directInteractions,
-		WorkItemMetricsDaily:           derived["work_item_metrics_daily"],
-		WorkItemReopenEvents:           directReopens,
-		WorkItemStateDurationsDaily:    derived["work_item_state_durations_daily"],
-		WorkItemTeamAttributions:       derived["work_item_team_attributions"],
-		WorkItemTransitions:            directTransitions,
-		WorkItemUserMetricsDaily:       derived["work_item_user_metrics_daily"],
-		WorkItems:                      directItems,
-		ProjectMembershipTransitions:   directMemberships,
-		Projects:                       directProjects,
+		AIAttribution:                directAI,
+		Sprints:                      directSprints,
+		WorkItemDependencies:         directDependencies,
+		WorkItemInteractions:         directInteractions,
+		WorkItemReopenEvents:         directReopens,
+		WorkItemTransitions:          directTransitions,
+		WorkItems:                    directItems,
+		ProjectMembershipTransitions: directMemberships,
+		Projects:                     directProjects,
 	})
 }
 

@@ -85,13 +85,8 @@ func rolloutProof(t *testing.T, oldShape, interactionsLanded bool) {
 		t.Fatal("gitlab/work-items is not registered for prepared recovery")
 	}
 	realFor := func(lease providerfoundation.LeaseGuard) CompleteRouteHandler {
-		deriver, err := NewGitLabWorkItemDeriver(harness.conn, lease,
-			resolveStatusMappingConfig(t, "real"), investmentConfigPath(t, "real"))
-		if err != nil {
-			t.Fatal(err)
-		}
 		return GitLabWorkItemsRouteHandler{
-			StatusMapping: loadRealStatusMapping(t), PerPage: 2, MaxPages: 10, NestedMaxPages: 10, Derived: deriver,
+			StatusMapping: loadRealStatusMapping(t), PerPage: 2, MaxPages: 10, NestedMaxPages: 10,
 		}
 	}
 	routeFor := func(handler CompleteRouteHandler) driftRoute {

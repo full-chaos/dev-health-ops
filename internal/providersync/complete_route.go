@@ -351,6 +351,18 @@ func (executor CompleteRouteExecutor) executeRoute(
 			// an older binary, which is the entire situation. A recovery-
 			// BLOCKED effect means "this cannot be redone safely", so such a
 			// unit stops instead, with its own reason, loud rather than stuck.
+			//
+			// One stale shape is not discarded but COMPLETED: a work-items
+			// manifest whose only difference is effects for the tables the
+			// daily job now writes. See retiredWorkItemEffectsSkipper.
+			var retiredEffects *retiredWorkItemEffectsSkipper
+			if errors.Is(err, ErrPreparedSnapshotManifestMismatch) {
+				if skipper, ok := newRetiredWorkItemEffectsSkipper(
+					session.Claim, descriptor, manifest, committer,
+				); ok {
+					retiredEffects, err = skipper, nil
+				}
+			}
 			if errors.Is(err, ErrPreparedSnapshotManifestMismatch) {
 				reason := "manifest_mismatch"
 				switch {
@@ -404,26 +416,42 @@ func (executor CompleteRouteExecutor) executeRoute(
 				return err
 			}
 			if recoveredEffects != nil {
-				manifest.Batch.Result, manifest.Batch.Watermark, err =
+				// replayed is what the unit reports; storedEffects is what the
+				// ledger was prepared with. They differ only when the manifest
+				// holds retired effects, which stay in the list the committer
+				// pairs with the ledger and leave the unit's own result.
+				replayed, storedEffects := manifest.Batch, manifest.Batch.Effects
+				replayCommitter := committer
+				recovery = "snapshot_replay"
+				if retiredEffects != nil {
+					replayed = retiredEffects.currentBatch(manifest.Batch)
+					replayCommitter.Sink, replayCommitter.Readback = retiredEffects, retiredEffects
+					recovery = "snapshot_replay_retired_effects_skipped"
+				}
+				replayed.Result, replayed.Watermark, err =
 					applyGitHubWorkItemsIncompletePolicy(
 						session.Claim.Provider, session.Claim.Dataset,
-						manifest.Batch.Result, manifest.Batch.Watermark,
+						replayed.Result, replayed.Watermark,
 					)
 				if err != nil {
 					return ErrEffectLedgerConflict
 				}
-				if err := manifest.Batch.validate(descriptor); err != nil ||
+				if err := replayed.validate(descriptor); err != nil ||
 					!manifest.NormalizedAt.Equal(normalizedAt) {
 					return ErrEffectLedgerConflict
 				}
 				result.Fetch, result.Result, result.Watermark =
-					manifest.Batch.Evidence, manifest.Batch.Result, manifest.Batch.Watermark
-				result.WorklogObservations = manifest.Batch.WorklogObservations
+					replayed.Evidence, replayed.Result, replayed.Watermark
+				result.WorklogObservations = replayed.WorklogObservations
 				result.Comparison = manifest.Comparison
-				recovery = "snapshot_replay"
-				result.Effects, err = committer.CommitPrepared(
-					workContext, session.Claim, manifest.Batch.Effects, *recoveredEffects,
+				result.Effects, err = replayCommitter.CommitPrepared(
+					workContext, session.Claim, storedEffects, *recoveredEffects,
 				)
+				if retiredEffects != nil {
+					// A retired effect was settled, not written.
+					result.Effects.Written -= retiredEffects.skipped
+					retiredEffects.observe(executor.Metrics, session.Claim, result.Effects)
+				}
 				return err
 			}
 			// Fell through: the snapshot was discarded and the route replays

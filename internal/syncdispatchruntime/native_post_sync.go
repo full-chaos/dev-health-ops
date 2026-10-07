@@ -41,6 +41,11 @@ type PostSyncPlan struct {
 	// none): no unit of the run wrote a raw row before it, apart from clock
 	// skew between processes.
 	RunStartedAt time.Time
+	// WorkItemWindowDays are the UTC days of the windows of the successful
+	// work-items units of the sync run, ascending and distinct
+	// (workItemUnitsWindowDays). The fan-out records each of them as touched
+	// for every repository the run stored a work item of.
+	WorkItemWindowDays []time.Time
 }
 
 type DailyPostSyncWriter interface {
@@ -533,6 +538,7 @@ ORDER BY id`, args.SyncRunID())
 		unboundedFrom  bool
 		unboundedTo    bool
 		successfulUnit bool
+		workItemUnits  []workItemUnitWindow
 	)
 	for rows.Next() {
 		var provider, dataset string
@@ -547,6 +553,9 @@ ORDER BY id`, args.SyncRunID())
 		successfulUnit = true
 		for _, target := range capability.LegacyTargets {
 			targets[target] = struct{}{}
+			if target == "work-items" {
+				workItemUnits = append(workItemUnits, workItemUnitWindow{since: since, before: before})
+			}
 		}
 		if since == nil {
 			unboundedFrom = true
@@ -623,9 +632,17 @@ LIMIT 1`, orgID, integrationID).Scan(&autoImport); err != nil && !errors.Is(err,
 	if runStartedAt != nil {
 		startedAt = runStartedAt.UTC()
 	}
+	var workItemWindowDays []time.Time
+	if hasWorkItems && dailyRelevant {
+		workItemWindowDays, err = workItemUnitsWindowDays(workItemUnits, startedAt, now)
+		if err != nil {
+			return nil, err
+		}
+	}
 	return &PostSyncPlan{
 		WorkItems: hasWorkItems, RunStartedAt: startedAt,
-		OrganizationID: orgID, SyncRunID: args.SyncRunID(), TargetDay: targetDay,
+		WorkItemWindowDays: workItemWindowDays,
+		OrganizationID:     orgID, SyncRunID: args.SyncRunID(), TargetDay: targetDay,
 		BackfillDays: backfillDays, From: from, To: to,
 		Daily: dailyRelevant, Complexity: git && currentSingleDay, DORA: dora,
 		WorkGraph: git || hasWorkItems, Investment: git || hasWorkItems,

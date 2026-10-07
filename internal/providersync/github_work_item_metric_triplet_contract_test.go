@@ -325,10 +325,10 @@ func githubWorkItemMetricPredicateColumns(statement string) []string {
 	return columns
 }
 
-// TestGitHubWorkItemMetricTripletOwnsExactlyThreeDerivedDestinations keeps this
-// lane inside its declared boundary. The composite route requires all NINE
-// derived destinations before it will build effects, so a lane that silently
-// grew a fourth would be claiming a destination another lane still owes.
+// TestGitHubWorkItemMetricTripletOwnsExactlyThreeDerivedDestinations keeps the
+// triplet inside its declared boundary: three of the nine tables computed
+// from stored rows. The daily job is their one writer, so none of the three
+// is a destination of the work-items sync route.
 func TestGitHubWorkItemMetricTripletOwnsExactlyThreeDerivedDestinations(t *testing.T) {
 	if len(githubWorkItemMetricTripletDestinations) != 3 {
 		t.Fatalf("triplet destinations = %v", githubWorkItemMetricTripletDestinations)
@@ -337,13 +337,10 @@ func TestGitHubWorkItemMetricTripletOwnsExactlyThreeDerivedDestinations(t *testi
 		if !slices.Contains(githubWorkItemDerivedDestinations, destination) {
 			t.Fatalf("%q is not one of the route's derived destinations", destination)
 		}
-		// The GITHUB list, on a github path. Behaviour-neutral TODAY -- the
-		// metric triplet is a subset of the shared family, so Contains answers
-		// the same against either -- but the shared list is the wrong source
-		// for a github assertion, and a future github-only surface here would
-		// fail silently against it.
-		if !slices.Contains(githubWorkItemRouteDestinations(), destination) {
-			t.Fatalf("%q is not a canonical work-item route destination", destination)
+		// The GITHUB list, on a github path: the shared list is the wrong
+		// source for a github assertion.
+		if slices.Contains(githubWorkItemRouteDestinations(), destination) {
+			t.Fatalf("the daily-job table %q is a work-item route destination", destination)
 		}
 	}
 	if !slices.IsSorted(githubWorkItemMetricTripletDestinations) {

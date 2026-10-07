@@ -1,0 +1,9 @@
+{
+  "rates_version": "rates-2026-10-06",
+  "note": "USD per 1M tokens. Source: handoff prompt and docs (TS-MODELS, OA-GUIDE, OA-NANO) read 2026-10-06; refresh before the live run. Output tokens are free on Jev and Decisions. cached_input_per_mtok omitted = cached tokens priced like input.",
+  "rates": [
+    {"provider": "typesafe", "api_mode": "systemone", "model_prefix": "jev-", "input_per_mtok": 0.042, "output_per_mtok": 0},
+    {"provider": "openai", "api_mode": "decisions", "model_prefix": "gpt-6-luna", "input_per_mtok": 0.10, "output_per_mtok": 0},
+    {"provider": "openai", "api_mode": "responses", "model_prefix": "gpt-5-nano", "input_per_mtok": 0.05, "cached_input_per_mtok": 0.005, "output_per_mtok": 0.40}
+  ]
+}

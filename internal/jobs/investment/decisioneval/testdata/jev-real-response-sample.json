@@ -1,0 +1,39 @@
+{
+ "model": "jev-1.13.0",
+ "answers": {
+  "topology": {
+   "type": "choice",
+   "choice": "named_subject",
+   "confidence": 0.99,
+   "probabilities": {
+    "grouped_members": 0.0,
+    "discovered_kind": 0.0,
+    "explicit_set": 0.0,
+    "clarify": 0.0,
+    "unknown": 0.0,
+    "organization_scope": 0.0,
+    "children_of_scope": 0.0,
+    "named_subject": 1.0
+   }
+  },
+  "requested_kind": {
+   "type": "choice",
+   "choice": "repository",
+   "confidence": 0.88,
+   "probabilities": {
+    "other_kind": 0.02,
+    "project": 0.0,
+    "not_applicable": 0.07,
+    "team": 0.0,
+    "unknown": 0.0,
+    "clarify": 0.01,
+    "organization": 0.0,
+    "repository": 0.9
+   }
+  }
+ },
+ "usage": {
+  "input_tokens": 2681,
+  "output_tokens": 919
+ }
+}

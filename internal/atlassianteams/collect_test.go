@@ -729,6 +729,20 @@ func TestJiraNativeProjectIDIsTheNumericLastSegmentOfAJiraProjectARI(t *testing.
 		{"ari:cloud:jira:site-1:project/10001/extra", "", false},
 		{"ari:cloud:jira:site-1:project/10-01", "", false},
 		{"ari:cloud:jira:site-1:project/-7", "", false},
+		{"ari:cloud:jira:site-1:project/+7", "", false},
+		// The id is the REST form of project.id: no leading zero, and a
+		// number an int64 holds.
+		{"ari:cloud:jira:site-1:project/00123", "", false},
+		{"ari:cloud:jira:site-1:project/0", "", false},
+		{"ari:cloud:jira:site-1:project/9223372036854775807", "9223372036854775807", true},
+		{"ari:cloud:jira:site-1:project/9223372036854775808", "", false},
+		{"ari:cloud:jira:site-1:project/" + strings.Repeat("9", 400), "", false},
+		// The resource after the site is the project itself: an ARI that
+		// only ends in ":project/<id>" is not a project ARI.
+		{"ari:cloud:jira:site-1:issue/5:project/7", "", false},
+		{"ari:cloud:jira:site-1:extra:project/7", "", false},
+		{"ari:cloud:jira:project/7", "", false},
+		{"ari:cloud:jira:site/1:project/7", "", false},
 		{"10001", "", false},
 		{"", "", false},
 	} {

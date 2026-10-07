@@ -18,6 +18,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -51,11 +52,11 @@ const (
 const (
 	teamARIPrefix = "team/"
 	userARIPrefix = "user/"
-	// jiraARIPrefix / jiraProjectARISegment bound a Jira project ARI:
+	// jiraARIPrefix / jiraProjectARIResource bound a Jira project ARI:
 	// "ari:cloud:jira:<site>:project/<native id>".
-	jiraARIPrefix         = "ari:cloud:jira:"
-	jiraProjectARISegment = ":project/"
-	defaultPage           = 50
+	jiraARIPrefix          = "ari:cloud:jira:"
+	jiraProjectARIResource = "project/"
+	defaultPage            = 50
 )
 
 // Client is the part of the atlassian graph client the sync reads. The
@@ -183,29 +184,38 @@ func accountID(nodeID string) (string, bool) {
 }
 
 // jiraNativeProjectID returns the native Jira project id of a Jira project
-// ARI ("ari:cloud:jira:<site>:project/<id>"): its last segment. That id is
-// the one project identity on the platform -- the Jira work-items route
-// writes it into work_items.project_id and `projects` -- so a team's project
-// link carries it and reaches the project's work items by id. Anything that
-// is not a Jira project ARI with a numeric id has no such identity and gets
-// no link; an id is never built from the project key.
+// ARI ("ari:cloud:jira:<site>:project/<id>"). That id is the one project
+// identity on the platform -- the Jira work-items route writes it into
+// work_items.project_id and `projects` -- so a team's project link carries it
+// and reaches the project's work items by id. Anything else has no such
+// identity and gets no link; an id is never built from the project key.
+//
+// The ARI is read whole, not by its tail: after the product prefix there is
+// one site segment and one resource, and the resource is "project/<id>". An
+// ARI that only ENDS in ":project/<id>" names something inside another
+// resource, not a project. The id is the decimal form Jira REST returns for
+// project.id: a positive int64 with no leading zero, so the text equals the
+// text the work-items route writes.
 func jiraNativeProjectID(ari string) (string, bool) {
-	ari = strings.TrimSpace(ari)
-	if !strings.HasPrefix(ari, jiraARIPrefix) {
+	rest, ok := strings.CutPrefix(strings.TrimSpace(ari), jiraARIPrefix)
+	if !ok {
 		return "", false
 	}
-	i := strings.LastIndex(ari, jiraProjectARISegment)
-	if i < 0 {
+	site, resource, ok := strings.Cut(rest, ":")
+	if !ok || strings.Contains(site, "/") {
 		return "", false
 	}
-	id := ari[i+len(jiraProjectARISegment):]
-	if id == "" {
+	id, ok := strings.CutPrefix(resource, jiraProjectARIResource)
+	if !ok || id == "" || id[0] == '0' {
 		return "", false
 	}
 	for _, r := range id {
 		if r < '0' || r > '9' {
 			return "", false
 		}
+	}
+	if _, err := strconv.ParseInt(id, 10, 64); err != nil {
+		return "", false
 	}
 	return id, true
 }

@@ -192,8 +192,15 @@ func sweepReplacingMergeTreeTables(t *testing.T) []replacingMergeTreeTable {
 // `work_item_blocked_durations_daily` (version computed_at), keyed on
 // (org_id, day, provider, work_item_id) -- CHAOS-8489. Recounted from the
 // failing hosted run's printed list: the prior 115 plus exactly this name.
+// 116 -> 117: 108_daily_metrics_touched_days.sql adds
+// `daily_metrics_touched_days` (version at), keyed on
+// (org_id, day, repo_id, kind) -- CHAOS-8813. Recounted from the failing
+// hosted run's printed list (job go-storage-integration-shard-packages-7):
+// the prior 116 plus exactly this name. A merge keeps the newest row of each
+// kind per key, and the reader takes maxIf(at, kind) per kind, so a merge
+// cannot change what a reader sees.
 func TestSweepReplacingMergeTreeTablesMatchesTheAuthoritativeCount(t *testing.T) {
-	const wantCount = 116
+	const wantCount = 117
 
 	tables := sweepReplacingMergeTreeTables(t)
 	if len(tables) != wantCount {

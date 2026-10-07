@@ -42,6 +42,8 @@ SUM of its own four provider-test-shard jobs' reported wall times, from the
 same hosted run -- the closest hosted equivalent to "the whole package, run once" available, since CI never runs
 it as a single `go test ./internal/providersync` invocation.
 
+internal/jobs/metrics/daily is treated the same way (CHAOS-8813 follow-up): one `go test` of it took 22 of the 25 minutes of a job, so it runs only as the name-partitioned `daily` test shards of ci/go_daily_test_shards.tsv, and its weight here (2400) is a placement weight that keeps it alone in a shard whose "packages" job never runs. Raising `shards` by one keeps the number of running packages jobs unchanged.
+
 This isolation is a property of the WEIGHTS, not a guarantee: it holds only
 while this weight is at least as large as the other packages' balanced
 per-shard share once split across the remaining shards. The regression

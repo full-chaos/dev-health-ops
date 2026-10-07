@@ -8,6 +8,16 @@
 -- filter, so a shadow row would show as a cost the organization did not pay.
 -- Shadow spend is the sum of the attempt rows with role = 'shadow'.
 --
+-- The sorting key is the identity of an attempt: (org_id, run_id, work_unit_id,
+-- role, config, kind, attempt). A merge keeps ONE row for each identity, so two
+-- attempts that differ in any of these fields must stay two rows: the same unit
+-- and attempt number under two configurations, or a first send and a repair of
+-- the same number, or a served and a fallback attempt. An earlier draft of this
+-- file had no config and no kind in the key, and a merge then deleted one of two
+-- such rows (executed: write two, OPTIMIZE FINAL, count 1). A sorting key
+-- cannot be changed once a table exists, so the key was fixed here, in place:
+-- the table was not deployed anywhere when it was changed.
+--
 -- The key holds run_id, and a run id is new for each run, so rows of different
 -- runs never replace each other: the table is an append log. ReplacingMergeTree
 -- only removes the repeat of one batch, and only at merge time, which is
@@ -48,5 +58,5 @@ CREATE TABLE IF NOT EXISTS llm_categorization_attempts (
     retry_wait_ms UInt32,
     computed_at DateTime64(3)
 ) ENGINE = ReplacingMergeTree(computed_at)
-ORDER BY (org_id, run_id, work_unit_id, role, attempt)
+ORDER BY (org_id, run_id, work_unit_id, role, config, kind, attempt)
 TTL toDateTime(computed_at) + INTERVAL 400 DAY;

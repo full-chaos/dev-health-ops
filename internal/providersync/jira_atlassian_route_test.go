@@ -470,7 +470,7 @@ func TestJiraAtlassianRouteDevStatusBudgetIsSharedAcrossIssues(t *testing.T) {
 	claim := nativeTestClaim("jira", "work-items")
 	claim.SourceExternalID = "OPS"
 	claim.DatasetOptions = map[string]any{
-		"fetch_dev_status": true, "dev_status_max_requests": 2,
+		"fetch_dev_status": true, "dev_status_max_requests": 2, "fetch_comments": false,
 	}
 	client := jiraDevStatusTestClientWithRetries(t, fakehttp.Client(doer), 3)
 	batch, err := jiraAtlassianCompleteHandler(t).Collect(
@@ -533,7 +533,7 @@ func TestJiraAtlassianRouteDevStatusCleanNoOpStillDebitsSharedBudget(t *testing.
 	claim := nativeTestClaim("jira", "work-items")
 	claim.SourceExternalID = "OPS"
 	claim.DatasetOptions = map[string]any{
-		"fetch_dev_status": true, "dev_status_max_requests": 3,
+		"fetch_dev_status": true, "dev_status_max_requests": 3, "fetch_comments": false,
 	}
 	client := jiraDevStatusTestClientWithRetries(t, fakehttp.Client(doer), 3)
 	batch, err := jiraAtlassianCompleteHandler(t).Collect(
@@ -766,7 +766,7 @@ func TestJiraAtlassianRouteDevStatusOneApplicationTypeDown(t *testing.T) {
 			})
 			claim := nativeTestClaim("jira", "work-items")
 			claim.SourceExternalID = "OPS"
-			claim.DatasetOptions = map[string]any{"fetch_dev_status": true}
+			claim.DatasetOptions = map[string]any{"fetch_dev_status": true, "fetch_comments": false}
 			client := jiraDevStatusTestClientWithRetries(t, fakehttp.Client(doer), 1)
 			client.Metrics = providerfoundation.NewMetrics()
 			batch, err := jiraAtlassianCompleteHandler(t).Collect(context.Background(), claim, providerfoundation.Credential{}, client, time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC))

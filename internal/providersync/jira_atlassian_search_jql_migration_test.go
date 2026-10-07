@@ -60,6 +60,7 @@ func (doer jiraSearchJQLMigrationDoer) Do(request *http.Request) (*http.Response
 func TestJiraAtlassianRouteMigratedFromRetiredSearchEndpoint(t *testing.T) {
 	claim := nativeTestClaim("jira", "work-items")
 	claim.SourceExternalID = "SUP"
+	claim.DatasetOptions = map[string]any{"fetch_comments": false}
 	client := jiraWorkItemsTestClient(
 		t, fakehttp.Client(jiraSearchJQLMigrationDoer{t: t}),
 		providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }),

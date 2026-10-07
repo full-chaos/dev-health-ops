@@ -2,9 +2,11 @@ package syncdispatchruntime
 
 import (
 	"context"
+	"sort"
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
+	"github.com/full-chaos/dev-health-ops/internal/providersync"
 	"github.com/full-chaos/dev-health-ops/internal/syncdispatchruntime/synclog"
 	"github.com/jackc/pgx/v5"
 )
@@ -35,6 +37,68 @@ const postSyncTouchedPendingDayReadLimit = 3660
 // their days; a margin smaller than the real skew loses a day.
 const postSyncTouchedClockMargin = 5 * time.Minute
 
+// workItemUnitWindow is the window of one successful work-items unit, as
+// sync_run_units stores it.
+type workItemUnitWindow struct {
+	since, before *time.Time
+}
+
+// workItemUnitsWindowDays returns the UTC days of the windows of the
+// work-items units of one sync run, ascending and distinct.
+//
+// A unit computed nothing for these days when it ran: the daily job is the one
+// writer of the tables computed from stored work-item rows. Every day of a
+// unit's window is therefore recorded as touched, so the daily job computes
+// it. An item with no event on a day of the window can still count on that
+// day (it was open, or in a state), which the event days of the stored rows
+// do not show.
+//
+// The days of one window are providersync.WorkItemsUnitWindowDays, the
+// function the route validated the unit with: the two cannot drift. A unit
+// with no `before` ended its window on the day of its own clock, which this
+// process does not have. That clock is between the start of the run and now,
+// so the window is taken up to the day the run started and every day from
+// there to now is added.
+//
+// A window the route would refuse is an error: a successful unit passed the
+// same rule, so the stored window is not the one the unit ran with.
+func workItemUnitsWindowDays(units []workItemUnitWindow, runStartedAt, now time.Time) ([]time.Time, error) {
+	if len(units) == 0 {
+		return nil, nil
+	}
+	if runStartedAt.IsZero() || now.IsZero() {
+		return nil, ErrPostSyncUnavailable
+	}
+	distinct := make(map[time.Time]struct{})
+	add := func(since, before *time.Time, clock time.Time) error {
+		days, err := providersync.WorkItemsUnitWindowDays(since, before, clock)
+		if err != nil {
+			return ErrPostSyncUnavailable
+		}
+		for _, day := range days {
+			distinct[day] = struct{}{}
+		}
+		return nil
+	}
+	for _, unit := range units {
+		if err := add(unit.since, unit.before, runStartedAt); err != nil {
+			return nil, err
+		}
+		if unit.before != nil {
+			continue
+		}
+		for day := utcDay(runStartedAt); !day.After(utcDay(now)); day = day.AddDate(0, 0, 1) {
+			distinct[day] = struct{}{}
+		}
+	}
+	days := make([]time.Time, 0, len(distinct))
+	for day := range distinct {
+		days = append(days, day)
+	}
+	sort.Slice(days, func(left, right int) bool { return days[left].Before(days[right]) })
+	return days, nil
+}
+
 // TouchedDayKey is one (day, repository) key of the touched-day record. The
 // nil UUID is the repository of the work items that have none.
 type TouchedDayKey struct {
@@ -56,7 +120,10 @@ type TouchedDaysPending struct {
 // TouchedDaysStore is the record of the days that stored raw rows touched.
 // Every failure is an error: an implementation never answers "no day".
 type TouchedDaysStore interface {
-	RecordTouched(ctx context.Context, organizationID string, since time.Time) (uint64, error)
+	// RecordTouched records the days of the raw rows written at or after
+	// since and, for every repository a work item was written of at or after
+	// since, each of windowDays.
+	RecordTouched(ctx context.Context, organizationID string, since time.Time, windowDays []time.Time) (uint64, error)
 	PendingDays(ctx context.Context, organizationID string, limit int) (TouchedDaysPending, error)
 	PendingRepositories(ctx context.Context, organizationID string, days []time.Time, limitPerDay int) (map[string][]string, error)
 	MarkDispatched(ctx context.Context, organizationID string, at time.Time, fullDays []time.Time, keys []TouchedDayKey) error
@@ -163,6 +230,7 @@ func (service *NativePostSyncService) takeTouchedDays(
 		}
 		take.recorded, err = service.touched.RecordTouched(
 			ctx, plan.OrganizationID, plan.RunStartedAt.Add(-postSyncTouchedClockMargin),
+			plan.WorkItemWindowDays,
 		)
 		if err != nil {
 			return nil, err

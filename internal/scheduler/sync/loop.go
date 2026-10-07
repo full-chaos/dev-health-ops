@@ -147,15 +147,18 @@ type Loop struct {
 	lastOK          time.Time
 	up              bool
 
-	occurrencesCompleted     uint64
-	occurrencesRetried       uint64
-	occurrencesQuarantined   uint64
-	occurrencesMinted        uint64
-	occurrencesRepeated      uint64
-	idleDueWindows           uint64
-	skippedOrgMissing        uint64
-	skippedFeatureDisabled   uint64
-	skippedNotPlannerManaged uint64
+	occurrencesCompleted       uint64
+	occurrencesRetried         uint64
+	occurrencesQuarantined     uint64
+	occurrencesMinted          uint64
+	occurrencesRepeated        uint64
+	idleDueWindows             uint64
+	skippedOrgMissing          uint64
+	skippedFeatureDisabled     uint64
+	skippedNotPlannerManaged   uint64
+	skippedOpenRun             uint64
+	openRunPastBoundNoProgress uint64
+	openRunPastBoundAgeCap     uint64
 
 	// unscheduledConfigs is the last pass's count of active, planner-managed
 	// configs without a schedule_cron (CHAOS-8768); lastUnscheduledReport
@@ -296,6 +299,8 @@ func (loop *Loop) step(parent context.Context, now time.Time) (stepErr error) {
 		attribute.Int("dev_health.scheduler.unsupported_cron", result.UnsupportedCron),
 		attribute.Int("dev_health.scheduler.invalid_cron", result.InvalidCron),
 		attribute.Int("dev_health.scheduler.skipped", result.SkippedOrgMissing+result.SkippedFeatureDisabled+result.SkippedNotPlannerManaged),
+		attribute.Int("dev_health.scheduler.skipped_open_run", len(result.SkippedOpenRun)),
+		attribute.Int("dev_health.scheduler.open_run_past_bound", len(result.OpenRunsPastBound)),
 	)
 	if stepCtx.Err() != nil {
 		return stepCtx.Err()
@@ -316,6 +321,9 @@ func (loop *Loop) step(parent context.Context, now time.Time) (stepErr error) {
 	if err != nil {
 		return err
 	}
+	// The handoff transaction is committed: a skipped tick and a run started
+	// past a bound are facts now, whatever the reconcile stage below does.
+	loop.reportOpenRuns(parent, result)
 	// Consume in the same window that produced. A separate cadence would let
 	// the marker advance while the occurrence it handed off sat unconsumed.
 	stage = "reconcile"
@@ -340,7 +348,7 @@ func (loop *Loop) step(parent context.Context, now time.Time) (stepErr error) {
 	loop.handoffs += uint64(len(result.HandedOff))
 	loop.occurrencesMinted += uint64(result.Minted())
 	loop.occurrencesRepeated += uint64(len(result.Repeated))
-	if result.TimingEligible > 0 && result.Minted() == 0 {
+	if result.idleDue() {
 		loop.idleDueWindows++
 	}
 	loop.unsupportedCron += uint64(result.UnsupportedCron)
@@ -354,6 +362,48 @@ func (loop *Loop) step(parent context.Context, now time.Time) (stepErr error) {
 	loop.mu.Unlock()
 	loop.reportProductivity(parent, result)
 	return nil
+}
+
+// reportOpenRuns counts and names the ticks that started no run because an
+// earlier scheduled run of the configuration is open, and the runs started
+// beside an open run that is past its bound. A skip with no line and no count
+// would look exactly like a schedule that was never due.
+func (loop *Loop) reportOpenRuns(ctx context.Context, result HandoffResult) {
+	loop.mu.Lock()
+	loop.skippedOpenRun += uint64(len(result.SkippedOpenRun))
+	for _, past := range result.OpenRunsPastBound {
+		switch past.Reason {
+		case OpenRunAgeCap:
+			loop.openRunPastBoundAgeCap++
+		default:
+			loop.openRunPastBoundNoProgress++
+		}
+	}
+	loop.mu.Unlock()
+	for _, skipped := range result.SkippedOpenRun {
+		loop.logger().WarnContext(
+			ctx,
+			"sync scheduler tick skipped: an earlier scheduled run of this configuration is still open",
+			"reason", "skipped_open_run",
+			"config_id", skipped.ConfigID,
+			"open_occurrence_id", skipped.OccurrenceID,
+			"open_sync_run_id", skipped.SyncRunID,
+			"open_seconds", skipped.OpenSeconds,
+			"next_run_at", skipped.NextRunAt.UTC().Format(time.RFC3339),
+		)
+	}
+	for _, past := range result.OpenRunsPastBound {
+		loop.logger().ErrorContext(
+			ctx,
+			"sync scheduler started a run beside an open run that is past its bound",
+			"reason", string(past.Reason),
+			"config_id", past.ConfigID,
+			"open_occurrence_id", past.OccurrenceID,
+			"open_sync_run_id", past.SyncRunID,
+			"open_seconds", past.OpenSeconds,
+			"open_runs_past_bound", past.OpenRuns,
+		)
+	}
 }
 
 // reportProductivity names the windows that succeeded without producing work.
@@ -372,7 +422,7 @@ func (loop *Loop) reportProductivity(ctx context.Context, result HandoffResult) 
 			"observed_at", repeated.ObservedAt.UTC().Format(time.RFC3339),
 		)
 	}
-	if result.TimingEligible > 0 && result.Minted() == 0 {
+	if result.idleDue() {
 		loop.logger().WarnContext(
 			ctx,
 			"sync scheduler window found due candidates but minted no occurrence",
@@ -473,6 +523,8 @@ func (loop *Loop) WritePrometheus(output io.Writer) error {
 	minted, repeated, idle := loop.occurrencesMinted, loop.occurrencesRepeated, loop.idleDueWindows
 	orgMissing, featureDisabled := loop.skippedOrgMissing, loop.skippedFeatureDisabled
 	notPlannerManaged := loop.skippedNotPlannerManaged
+	skippedOpenRun := loop.skippedOpenRun
+	pastNoProgress, pastAgeCap := loop.openRunPastBoundNoProgress, loop.openRunPastBoundAgeCap
 	unscheduled := loop.unscheduledConfigs
 	loop.mu.Unlock()
 
@@ -495,6 +547,9 @@ func (loop *Loop) WritePrometheus(output io.Writer) error {
 	writeLoopCounter(&text, "sync_scheduler_skipped_org_missing_total", "Due candidates refused before minting because their organization no longer exists. Sustained growth means schedules are outliving the orgs that owned them.", orgMissing)
 	writeLoopCounter(&text, "sync_scheduler_skipped_feature_disabled_total", "Due candidates refused before minting because their sync targets require the canonical-incident feature and the organization is not entitled to it.", featureDisabled)
 	writeLoopCounter(&text, "sync_scheduler_skipped_not_planner_managed_total", "Due candidates refused before minting because planner_managed is false, marking them a fixture or legacy fan-out config that must never be scheduled (CHAOS-4174).", notPlannerManaged)
+	writeLoopCounter(&text, "sync_scheduler_skipped_open_run_total", "Due schedule ticks that started no run because an earlier scheduled run of the same configuration is still open and inside its bound. The next run covers the skipped time from the unit watermarks.", skippedOpenRun)
+	writeLoopCounter(&text, "sync_scheduler_open_run_past_bound_no_progress_total", "Scheduled runs started beside an open run of the same configuration in which no unit ended and no unit held a lease or sent a heartbeat inside the progress interval. Any growth is a run that did not end.", pastNoProgress)
+	writeLoopCounter(&text, "sync_scheduler_open_run_past_bound_age_cap_total", "Scheduled runs started beside an open run of the same configuration that is older than the hard age cap. Any growth is a run that did not end.", pastAgeCap)
 	fmt.Fprintf(&text, "# HELP sync_scheduler_configs_without_schedule Active planner-managed sync configs the scheduler never plans because sync_options.schedule_cron is empty, as of the last hourly pass; the true total, not the capped list (CHAOS-8768).\n# TYPE sync_scheduler_configs_without_schedule gauge\nsync_scheduler_configs_without_schedule %d\n", unscheduled)
 	fmt.Fprintf(&text, "# HELP sync_scheduler_consecutive_failures Consecutive failed handoff windows.\n# TYPE sync_scheduler_consecutive_failures gauge\nsync_scheduler_consecutive_failures %d\n", consecutive)
 	fmt.Fprint(&text, "# HELP sync_scheduler_up Whether the scheduler has completed a current successful handoff window.\n# TYPE sync_scheduler_up gauge\nsync_scheduler_up ")

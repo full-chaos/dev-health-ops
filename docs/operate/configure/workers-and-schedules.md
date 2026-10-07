@@ -9,6 +9,7 @@ source_of_truth:
   - contracts/sync-dispatch/v1/
   - src/dev_health_ops/alembic/versions/0096_enforce_unique_saved_report_schedule.py
   - src/dev_health_ops/alembic/versions/0097_backfill_report_schedule_next_run.py
+  - internal/scheduler/sync/transaction.go
   - current worker and synchronization settings
   - docs/contribute/architecture/go-worker-runtime.md
 applicability: current
@@ -418,6 +419,44 @@ the Go scheduler with organization entitlement, mutation, lease repair, and
 production publication all owned there.
 
 Run exactly one active production scheduler unless the deployment contract explicitly provides leader election or another duplicate-prevention mechanism. Verify that recurring work cannot overlap beyond provider, worker, and store capacity.
+
+### One scheduled sync run per configuration
+
+A scheduled tick does not start a run for a sync configuration that still has
+an open scheduled run. The scheduler reads the run rows in the same transaction
+that holds the configuration and its schedule marker locked, so two scheduler
+processes cannot both start a run for one configuration. It does not read
+`scheduled_jobs.is_running`: no current process sets that column, so it is not
+a signal of an open run.
+
+A scheduled run is open when its occurrence is not yet planned (and is still
+due to be planned), or when its run status is not `success`, `partial_failed`,
+or `failed`. Manual, backfill, and webhook runs are not scheduled runs: they
+are accepted while a scheduled run is open, and they never hold a schedule
+back.
+
+A skipped tick moves `next_run_at` to the next cron instant and starts nothing.
+Runs are incremental, so the run that starts after the open one ends plans each
+unit from its watermark and covers the skipped time in one run. Job History
+therefore shows fewer scheduled runs for a slow configuration, each covering
+the time since the previous one. A skipped tick adds no row to Job History.
+
+An open run stops holding its schedule back when it is past a bound, judged on
+the database clock:
+
+| Bound | Rule |
+| --- | --- |
+| No progress | For 2 hours no unit of the run ended (`success` or `failed`), no unit sent a heartbeat, and no unit holds a live lease. The creation of the run counts as progress, so a new run and an unplanned occurrence get 2 hours from their creation. |
+| Age cap | The run or the unplanned occurrence is older than 24 hours, whatever its progress. |
+
+The scheduler then starts the next run. It does not finalize, fail, or change
+the old run.
+
+| Signal | Meaning | Action |
+| --- | --- | --- |
+| `sync_scheduler_skipped_open_run_total` and the WARN line `sync scheduler tick skipped: an earlier scheduled run of this configuration is still open` (`reason=skipped_open_run`, `config_id`, `open_sync_run_id`, `open_seconds`) | A tick started nothing because a scheduled run is open and inside its bound. | None when the run is making progress. Sustained growth for one configuration means its runs take longer than its cron interval: look at the units that hold the run open. |
+| `sync_scheduler_open_run_past_bound_no_progress_total` and the ERROR line `sync scheduler started a run beside an open run that is past its bound` (`reason=no_progress`) | A run started although an older run of the configuration is open and showed no progress for 2 hours. | Find why the named run does not end: waiting units with no admission, or a run with every unit ended that was never finalized. |
+| `sync_scheduler_open_run_past_bound_age_cap_total` and the same ERROR line with `reason=age_cap` | A run started although an older run of the configuration is open for more than 24 hours. | The same. The line repeats at each start until the old run ends. |
 
 ### Audit saved-report schedule ownership
 

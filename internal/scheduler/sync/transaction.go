@@ -77,6 +77,63 @@ type HandoffResult struct {
 	// from one that has re-confirmed the same frozen instant every tick for
 	// hours: both increment the handoff counter identically (CHAOS-3936).
 	Repeated []Occurrence
+	// SkippedOpenRun lists the due schedules this window did NOT start because
+	// an earlier scheduled run of the same configuration is still open and
+	// inside its bound. The marker advanced; no occurrence was minted.
+	SkippedOpenRun []OpenRunSkip
+	// OpenRunsPastBound lists the due schedules this window DID start although
+	// an earlier scheduled run of the same configuration is still open: every
+	// open run was past its bound, so it no longer holds the schedule back.
+	OpenRunsPastBound []OpenRunPastBound
+}
+
+// idleDue reports a window that found a due schedule, was free to start it,
+// and still minted nothing. A tick skipped for an open run is a decision, not
+// an idle window: counting it would raise the frozen-schedule alarm every hour
+// a long run is open.
+func (result HandoffResult) idleDue() bool {
+	return result.TimingEligible-len(result.SkippedOpenRun) > 0 && result.Minted() == 0
+}
+
+// OpenRunSkip names one skipped tick and the open run that caused it.
+type OpenRunSkip struct {
+	ConfigID string
+	// OccurrenceID and SyncRunID identify the newest blocking occurrence.
+	// SyncRunID is empty while that occurrence is not yet materialized.
+	OccurrenceID string
+	SyncRunID    string
+	// OpenSeconds is how long that occurrence or run has been open, on the
+	// database clock.
+	OpenSeconds int64
+	// NextRunAt is the marker value the skip wrote.
+	NextRunAt time.Time
+}
+
+// OpenRunBoundReason is the bounded vocabulary of why an open run stopped
+// holding its schedule back. It is a metric label: never add a free-form value.
+type OpenRunBoundReason string
+
+const (
+	// OpenRunNoProgress means no unit of the run reached a terminal state and
+	// no unit held a live lease or sent a heartbeat inside openRunProgressTTL.
+	OpenRunNoProgress OpenRunBoundReason = "no_progress"
+	// OpenRunAgeCap means the run is older than openRunAgeCap, whatever its
+	// progress.
+	OpenRunAgeCap OpenRunBoundReason = "age_cap"
+)
+
+// OpenRunPastBound names one schedule that started a new run beside open runs
+// that are all past their bound.
+type OpenRunPastBound struct {
+	ConfigID string
+	// OccurrenceID and SyncRunID identify the oldest past-bound occurrence.
+	OccurrenceID string
+	SyncRunID    string
+	Reason       OpenRunBoundReason
+	OpenSeconds  int64
+	// OpenRuns is how many open scheduled runs of the configuration are past
+	// the bound.
+	OpenRuns int
 }
 
 // Minted counts the occurrences this window actually created.
@@ -314,11 +371,37 @@ func (repository *Repository) HandoffDueResult(
 		if err != nil {
 			return HandoffResult{}, fmt.Errorf("compute next schedule marker for config %s: %w", locked.candidate.ConfigID, err)
 		}
+		// One scheduled run per configuration at a time. The configuration and
+		// marker rows are locked by this transaction, and every scheduled
+		// occurrence of the configuration is minted under that lock, so this
+		// read and the insert below are one decision: two schedulers cannot
+		// both see "no open run" for the same configuration.
+		open, err := readOpenScheduledRuns(ctx, transaction, locked.orgID, locked.candidate.ConfigID)
+		if err != nil {
+			return HandoffResult{}, fmt.Errorf("read open scheduled runs for config %s: %w", locked.candidate.ConfigID, err)
+		}
+		if open.blocking > 0 {
+			// Skip the tick and keep the marker on schedule. The next run is
+			// incremental: its units start at their watermarks, so it covers
+			// the skipped time. Starting a run now would only add a second
+			// copy of every unit to the same admission queue.
+			if err := advanceScheduleMarker(ctx, transaction, locked.candidate.ConfigID, locked.candidate.Job.ID, nextRunAt, observedAt); err != nil {
+				return HandoffResult{}, err
+			}
+			result.SkippedOpenRun = append(result.SkippedOpenRun, OpenRunSkip{
+				ConfigID:     locked.candidate.ConfigID,
+				OccurrenceID: open.blockingOccurrenceID,
+				SyncRunID:    open.blockingSyncRunID,
+				OpenSeconds:  open.blockingOpenSeconds,
+				NextRunAt:    nextRunAt.UTC(),
+			})
+			continue
+		}
 		occurrence := newOccurrence(
 			locked.candidate.ConfigID,
 			locked.orgID,
 			locked.candidate.Job.ID,
-			*evaluation.NextOccurrence,
+			resumedOccurrenceInstant(*evaluation.NextOccurrence, locked.candidate.Job.NextRunAt, observedAt),
 			observedAt,
 			nextRunAt,
 		)
@@ -351,20 +434,20 @@ func (repository *Repository) HandoffDueResult(
 		if err := ctx.Err(); err != nil {
 			return HandoffResult{}, err
 		}
-		command, err := transaction.Exec(
-			ctx,
-			schedulerAdvanceMarkerSQL,
-			occurrence.NextRunAt,
-			occurrence.ObservedAt,
-			occurrence.JobID,
-		)
-		if err != nil {
-			return HandoffResult{}, fmt.Errorf("advance scheduler marker for config %s: %w", occurrence.ConfigID, err)
-		}
-		if command.RowsAffected() != 1 {
-			return HandoffResult{}, ErrScheduleMarkerLost
+		if err := advanceScheduleMarker(ctx, transaction, occurrence.ConfigID, occurrence.JobID, occurrence.NextRunAt, occurrence.ObservedAt); err != nil {
+			return HandoffResult{}, err
 		}
 		result.HandedOff = append(result.HandedOff, occurrence)
+		if open.pastBound > 0 && outcome == OccurrenceMinted {
+			result.OpenRunsPastBound = append(result.OpenRunsPastBound, OpenRunPastBound{
+				ConfigID:     occurrence.ConfigID,
+				OccurrenceID: open.pastBoundOccurrenceID,
+				SyncRunID:    open.pastBoundSyncRunID,
+				Reason:       open.pastBoundReason,
+				OpenSeconds:  open.pastBoundOpenSeconds,
+				OpenRuns:     open.pastBound,
+			})
+		}
 		if outcome == OccurrenceRepeated {
 			result.Repeated = append(result.Repeated, occurrence)
 		}
@@ -374,6 +457,101 @@ func (repository *Repository) HandoffDueResult(
 		return HandoffResult{}, fmt.Errorf("commit scheduler transaction: %w", err)
 	}
 	return result, nil
+}
+
+// resumedOccurrenceInstant picks the cron instant a new occurrence stands for.
+//
+// The evaluation computes the instant after the schedule's base, and the base
+// only moves when an occurrence is minted or a run completes. A skipped tick
+// does neither: it moves the marker alone. So after skipped ticks the
+// evaluation still names the FIRST skipped instant, while the marker names the
+// newest one. The planner ends every unit window at the occurrence's instant,
+// so a run minted for the first skipped instant would stop its windows there
+// and leave the rest of the skipped time unread. The marker instant is
+// therefore the one to mint, whenever it is due and later.
+//
+// With no skipped tick the two are equal or the marker is the earlier one, so
+// this changes nothing for a schedule that never skipped.
+func resumedOccurrenceInstant(evaluated time.Time, marker *time.Time, observedAt time.Time) time.Time {
+	if marker == nil {
+		return evaluated
+	}
+	instant := marker.UTC()
+	if instant.After(evaluated) && !instant.After(observedAt.UTC()) {
+		return instant
+	}
+	return evaluated
+}
+
+func advanceScheduleMarker(
+	ctx context.Context,
+	transaction HandoffTransaction,
+	configID, jobID string,
+	nextRunAt, observedAt time.Time,
+) error {
+	command, err := transaction.Exec(ctx, schedulerAdvanceMarkerSQL, nextRunAt.UTC(), observedAt.UTC(), jobID)
+	if err != nil {
+		return fmt.Errorf("advance scheduler marker for config %s: %w", configID, err)
+	}
+	if command.RowsAffected() != 1 {
+		return ErrScheduleMarkerLost
+	}
+	return nil
+}
+
+// openScheduledRuns is the state of one configuration's open scheduled runs at
+// the due decision.
+type openScheduledRuns struct {
+	// blocking counts open runs inside their bound. Any one of them skips the
+	// tick.
+	blocking             int
+	blockingOccurrenceID string
+	blockingSyncRunID    string
+	blockingOpenSeconds  int64
+	// pastBound counts open runs that no longer hold the schedule back.
+	pastBound             int
+	pastBoundOccurrenceID string
+	pastBoundSyncRunID    string
+	pastBoundReason       OpenRunBoundReason
+	pastBoundOpenSeconds  int64
+}
+
+func readOpenScheduledRuns(
+	ctx context.Context,
+	transaction HandoffTransaction,
+	orgID, configID string,
+) (openScheduledRuns, error) {
+	var open openScheduledRuns
+	var reason string
+	if err := transaction.QueryRow(
+		ctx,
+		schedulerOpenScheduledRunsSQL,
+		orgID,
+		configID,
+		int64(openRunProgressTTL/time.Second),
+		int64(openRunAgeCap/time.Second),
+	).Scan(
+		&open.blocking,
+		&open.blockingOccurrenceID,
+		&open.blockingSyncRunID,
+		&open.blockingOpenSeconds,
+		&open.pastBound,
+		&open.pastBoundOccurrenceID,
+		&open.pastBoundSyncRunID,
+		&reason,
+		&open.pastBoundOpenSeconds,
+	); err != nil {
+		return openScheduledRuns{}, err
+	}
+	if open.pastBound > 0 {
+		switch OpenRunBoundReason(reason) {
+		case OpenRunNoProgress, OpenRunAgeCap:
+			open.pastBoundReason = OpenRunBoundReason(reason)
+		default:
+			return openScheduledRuns{}, fmt.Errorf("%w: unknown open run bound reason %q", ErrInvalidTransactionRequest, reason)
+		}
+	}
+	return open, nil
 }
 
 func readLockedCandidates(
@@ -510,4 +688,133 @@ const schedulerAdvanceMarkerSQL = `
 UPDATE public.scheduled_jobs
 SET next_run_at = $1, updated_at = $2
 WHERE id = $3
+`
+
+// schedulerOpenScheduledRunsSQL answers "does this configuration have an open
+// scheduled run" from the run rows themselves, never from
+// scheduled_jobs.is_running: no Go process writes that marker TRUE, so it reads
+// FALSE with any number of runs open.
+//
+// OPEN is a scheduled occurrence that either has no run yet and is still due to
+// be materialized (the run row is created by the occurrence reconciler AFTER
+// this transaction, so an unmaterialized occurrence must already count), or
+// whose run is not terminal. The terminal list is the same NOT IN as
+// ix_sync_runs_active_candidates so a status added later stays "open".
+//
+// SCHEDULED excludes every occurrence with a sync_manual_triggers row: manual,
+// backfill and webhook runs are user or provider actions, they are never
+// blocked by this rule and they never block the schedule.
+//
+// PAST THE BOUND, an open run stops holding the schedule back. One clock, the
+// database's now(), judges both arms:
+//   - age_cap: opened more than $4 seconds ago, whatever it is doing;
+//   - no_progress: nothing in the last $3 seconds -- no unit reached a
+//     terminal state, no unit sent a heartbeat, and no unit holds a live
+//     lease. The run's own creation counts as progress, so a new run and an
+//     unmaterialized occurrence get the full interval from their creation.
+//
+// Cost: two arms, each small. The unplanned arm reads the configuration's own
+// occurrence rows through an index on sync_config_id. The run arm starts from
+// the non-terminal runs, which ix_sync_runs_active_candidates holds apart from
+// the finished ones (its predicate is this NOT IN, word for word), and joins
+// them to the configuration's occurrences. Units are read through
+// ix_sync_run_units_run_status for the open runs only. One predicate with an OR
+// over both arms costs the same rows but makes the planner estimate a subquery
+// per occurrence, which is enough to start JIT compilation (measured: 146 ms
+// against 2 ms). It runs once per due configuration per cron instant, because
+// a skip advances the marker like a mint does.
+// TestOpenScheduledRunsReadUsesTheConfigurationIndex measures it.
+const schedulerOpenScheduledRunsSQL = `
+WITH open_occurrence AS (
+    SELECT
+        occurrence.occurrence_id,
+        NULL::uuid AS sync_run_id,
+        occurrence.created_at AS opened_at
+    FROM public.scheduled_sync_occurrences AS occurrence
+    WHERE occurrence.org_id = $1
+        AND occurrence.sync_config_id = $2::uuid
+        AND occurrence.sync_run_id IS NULL
+        AND occurrence.reconcile_status IN ('pending', 'retry')
+        AND NOT EXISTS (
+            SELECT 1
+            FROM public.sync_manual_triggers AS manual
+            WHERE manual.occurrence_id = occurrence.occurrence_id
+        )
+    UNION ALL
+    SELECT
+        occurrence.occurrence_id,
+        run.id AS sync_run_id,
+        run.created_at AS opened_at
+    FROM public.sync_runs AS run
+    JOIN public.scheduled_sync_occurrences AS occurrence
+        ON occurrence.sync_run_id = run.id
+    WHERE run.status NOT IN ('success', 'partial_failed', 'failed')
+        AND occurrence.org_id = $1
+        AND occurrence.sync_config_id = $2::uuid
+        AND NOT EXISTS (
+            SELECT 1
+            FROM public.sync_manual_triggers AS manual
+            WHERE manual.occurrence_id = occurrence.occurrence_id
+        )
+),
+judged AS (
+    SELECT
+        open_occurrence.occurrence_id,
+        COALESCE(open_occurrence.sync_run_id::text, '') AS sync_run_id,
+        open_occurrence.opened_at,
+        GREATEST(0, EXTRACT(EPOCH FROM (now() - open_occurrence.opened_at)))::bigint AS open_seconds,
+        open_occurrence.opened_at < now() - make_interval(secs => $4::bigint) AS past_age_cap,
+        GREATEST(
+            open_occurrence.opened_at,
+            (
+                SELECT MAX(GREATEST(
+                    CASE WHEN unit.status IN ('success', 'failed') THEN unit.updated_at END,
+                    unit.last_heartbeat_at,
+                    CASE WHEN unit.lease_expires_at > now() THEN now() END
+                ))
+                FROM public.sync_run_units AS unit
+                WHERE unit.sync_run_id = open_occurrence.sync_run_id
+            )
+        ) < now() - make_interval(secs => $3::bigint) AS past_progress
+    FROM open_occurrence
+)
+SELECT
+    COUNT(*) FILTER (WHERE NOT (past_age_cap OR past_progress)),
+    COALESCE((
+        SELECT occurrence_id FROM judged
+        WHERE NOT (past_age_cap OR past_progress)
+        ORDER BY opened_at DESC, occurrence_id LIMIT 1
+    ), ''),
+    COALESCE((
+        SELECT sync_run_id FROM judged
+        WHERE NOT (past_age_cap OR past_progress)
+        ORDER BY opened_at DESC, occurrence_id LIMIT 1
+    ), ''),
+    COALESCE((
+        SELECT open_seconds FROM judged
+        WHERE NOT (past_age_cap OR past_progress)
+        ORDER BY opened_at DESC, occurrence_id LIMIT 1
+    ), 0),
+    COUNT(*) FILTER (WHERE past_age_cap OR past_progress),
+    COALESCE((
+        SELECT occurrence_id FROM judged
+        WHERE past_age_cap OR past_progress
+        ORDER BY opened_at, occurrence_id LIMIT 1
+    ), ''),
+    COALESCE((
+        SELECT sync_run_id FROM judged
+        WHERE past_age_cap OR past_progress
+        ORDER BY opened_at, occurrence_id LIMIT 1
+    ), ''),
+    COALESCE((
+        SELECT CASE WHEN past_age_cap THEN 'age_cap' ELSE 'no_progress' END FROM judged
+        WHERE past_age_cap OR past_progress
+        ORDER BY opened_at, occurrence_id LIMIT 1
+    ), ''),
+    COALESCE((
+        SELECT open_seconds FROM judged
+        WHERE past_age_cap OR past_progress
+        ORDER BY opened_at, occurrence_id LIMIT 1
+    ), 0)
+FROM judged
 `

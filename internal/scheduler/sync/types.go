@@ -36,6 +36,13 @@ const (
 
 	activeJobStatus = 0
 	staleRunningTTL = 2 * time.Hour
+	// openRunProgressTTL is how long an open scheduled run may show no progress
+	// and still hold its configuration's schedule back. It is the same interval
+	// as staleRunningTTL on purpose: one definition of "stale" for a schedule.
+	openRunProgressTTL = staleRunningTTL
+	// openRunAgeCap is the hard limit: an open scheduled run older than this
+	// stops holding the schedule back even while it still makes progress.
+	openRunAgeCap = 24 * time.Hour
 )
 
 type RunningMarkerState string

@@ -3,6 +3,7 @@ package sync
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"runtime"
@@ -625,5 +626,159 @@ func TestLoopExportsPreMintSkipCounters(t *testing.T) {
 	}
 	if err := loop.Shutdown(context.Background()); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// A skipped tick must be visible: one WARN line and one count per skip, and
+// one ERROR line and one count per run started beside an open run past its
+// bound. They are reported even when the reconcile stage after them fails,
+// because the handoff transaction that decided them is already committed.
+func TestLoopReportsSkippedOpenRunsAndRunsStartedPastTheBound(t *testing.T) {
+	for _, reconcileErr := range []error{nil, ErrMaterializerUnavailable} {
+		name := "reconcile ok"
+		if reconcileErr != nil {
+			name = "reconcile fails"
+		}
+		t.Run(name, func(t *testing.T) {
+			var logs bytes.Buffer
+			registry := health.NewRegistry(time.Second)
+			result := HandoffResult{
+				Candidates:     4,
+				TimingEligible: 4,
+				HandedOff:      []Occurrence{{ID: "sha256:a"}, {ID: "sha256:b"}},
+				SkippedOpenRun: []OpenRunSkip{
+					{ConfigID: "config-1", OccurrenceID: "sha256:open-1", SyncRunID: "run-1", OpenSeconds: 4000, NextRunAt: at("2026-08-23T13:00:00Z")},
+					{ConfigID: "config-2", OccurrenceID: "sha256:open-2", OpenSeconds: 30, NextRunAt: at("2026-08-23T13:00:00Z")},
+				},
+				OpenRunsPastBound: []OpenRunPastBound{
+					{ConfigID: "config-3", OccurrenceID: "sha256:old-3", SyncRunID: "run-3", Reason: OpenRunNoProgress, OpenSeconds: 9000, OpenRuns: 1},
+					{ConfigID: "config-4", OccurrenceID: "sha256:old-4", SyncRunID: "run-4", Reason: OpenRunAgeCap, OpenSeconds: 99000, OpenRuns: 3},
+				},
+			}
+			loop, err := newLoop(
+				loopStepFunc(func(context.Context, time.Time, int, Coordinator) (HandoffResult, error) {
+					return result, nil
+				}),
+				CoordinatorFunc(func(context.Context, HandoffTransaction, Occurrence) (HandoffOutcome, error) {
+					return OccurrenceMinted, nil
+				}),
+				LoopConfig{
+					PollInterval: minLoopPollInterval,
+					StepTimeout:  time.Second,
+					MaxBackoff:   80 * time.Millisecond,
+					Limit:        3,
+					Registry:     registry,
+					Occurrences:  &stubOccurrences{err: reconcileErr},
+					Logger:       slog.New(slog.NewJSONHandler(&logs, nil)),
+				},
+				&testLoopClock{now: at("2026-08-23T12:00:00Z")},
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			openLoopReadiness(t, registry)
+			startErr := loop.Start(context.Background())
+			if (startErr != nil) != (reconcileErr != nil) {
+				t.Fatalf("Start() err = %v with reconcile err %v", startErr, reconcileErr)
+			}
+			var metrics bytes.Buffer
+			if err := loop.WritePrometheus(&metrics); err != nil {
+				t.Fatal(err)
+			}
+			for _, want := range []string{
+				"sync_scheduler_skipped_open_run_total 2",
+				"sync_scheduler_open_run_past_bound_no_progress_total 1",
+				"sync_scheduler_open_run_past_bound_age_cap_total 1",
+				"sync_scheduler_idle_due_windows_total 0",
+			} {
+				if !strings.Contains(metrics.String(), want+"\n") {
+					t.Fatalf("metrics missing %q:\n%s", want, metrics.String())
+				}
+			}
+			if strings.Contains(metrics.String(), "{") {
+				t.Fatalf("metrics must not expose dynamic labels:\n%s", metrics.String())
+			}
+			type line struct {
+				Level           string `json:"level"`
+				Msg             string `json:"msg"`
+				Reason          string `json:"reason"`
+				ConfigID        string `json:"config_id"`
+				OpenOccurrence  string `json:"open_occurrence_id"`
+				OpenSyncRun     string `json:"open_sync_run_id"`
+				OpenSeconds     int64  `json:"open_seconds"`
+				NextRunAt       string `json:"next_run_at"`
+				OpenRunsPastBnd int    `json:"open_runs_past_bound"`
+			}
+			got := map[string]line{}
+			for _, raw := range strings.Split(strings.TrimSpace(logs.String()), "\n") {
+				var entry line
+				if err := json.Unmarshal([]byte(raw), &entry); err != nil {
+					t.Fatalf("log line %q: %v", raw, err)
+				}
+				if entry.Reason == "" {
+					continue
+				}
+				if _, twice := got[entry.ConfigID]; twice {
+					t.Fatalf("config %s was reported twice:\n%s", entry.ConfigID, logs.String())
+				}
+				got[entry.ConfigID] = entry
+			}
+			const skipMsg = "sync scheduler tick skipped: an earlier scheduled run of this configuration is still open"
+			const pastMsg = "sync scheduler started a run beside an open run that is past its bound"
+			want := map[string]line{
+				"config-1": {Level: "WARN", Msg: skipMsg, Reason: "skipped_open_run", ConfigID: "config-1", OpenOccurrence: "sha256:open-1", OpenSyncRun: "run-1", OpenSeconds: 4000, NextRunAt: "2026-08-23T13:00:00Z"},
+				"config-2": {Level: "WARN", Msg: skipMsg, Reason: "skipped_open_run", ConfigID: "config-2", OpenOccurrence: "sha256:open-2", OpenSeconds: 30, NextRunAt: "2026-08-23T13:00:00Z"},
+				"config-3": {Level: "ERROR", Msg: pastMsg, Reason: "no_progress", ConfigID: "config-3", OpenOccurrence: "sha256:old-3", OpenSyncRun: "run-3", OpenSeconds: 9000, OpenRunsPastBnd: 1},
+				"config-4": {Level: "ERROR", Msg: pastMsg, Reason: "age_cap", ConfigID: "config-4", OpenOccurrence: "sha256:old-4", OpenSyncRun: "run-4", OpenSeconds: 99000, OpenRunsPastBnd: 3},
+			}
+			if len(got) != len(want) {
+				t.Fatalf("reported %d configurations, want %d:\n%s", len(got), len(want), logs.String())
+			}
+			for config, wantLine := range want {
+				if got[config] != wantLine {
+					t.Fatalf("line for %s = %#v, want %#v", config, got[config], wantLine)
+				}
+			}
+			if strings.Contains(logs.String(), "found due candidates but minted no occurrence") {
+				t.Fatalf("a window with skipped ticks raised the idle-window alarm:\n%s", logs.String())
+			}
+			_ = loop.Shutdown(context.Background())
+		})
+	}
+}
+
+// A window whose only due schedule was skipped for an open run is not idle.
+func TestLoopDoesNotCountASkippedOpenRunAsAnIdleDueWindow(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		skipped int
+		want    string
+	}{
+		{name: "the due schedule was skipped", skipped: 1, want: "sync_scheduler_idle_due_windows_total 0"},
+		{name: "the due schedule minted nothing with no open run", skipped: 0, want: "sync_scheduler_idle_due_windows_total 1"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			result := HandoffResult{Candidates: 1, TimingEligible: 1}
+			for range tc.skipped {
+				result.SkippedOpenRun = append(result.SkippedOpenRun, OpenRunSkip{ConfigID: "config-1"})
+			}
+			loop, registry := newTestLoop(t, loopStepFunc(func(context.Context, time.Time, int, Coordinator) (HandoffResult, error) {
+				return result, nil
+			}), &testLoopClock{now: at("2026-08-23T12:00:00Z")})
+			openLoopReadiness(t, registry)
+			if err := loop.Start(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			var metrics bytes.Buffer
+			if err := loop.WritePrometheus(&metrics); err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(metrics.String(), tc.want+"\n") {
+				t.Fatalf("metrics missing %q:\n%s", tc.want, metrics.String())
+			}
+			if err := loop.Shutdown(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+		})
 	}
 }

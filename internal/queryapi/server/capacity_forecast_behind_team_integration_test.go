@@ -21,6 +21,7 @@ import (
 
 type behindTeamRow struct {
 	team      string
+	scope     string
 	dayOffset int
 	wip       int
 }
@@ -29,13 +30,28 @@ func behindTeamSeed(anchor time.Time, rows []behindTeamRow) string {
 	values := make([]string, 0, len(rows))
 	for _, row := range rows {
 		values = append(values, fmt.Sprintf(
-			"(toDate('%s'), 'jira', 'scope-x', '%s', 5, %d, toDateTime('2026-09-01 00:00:00'), 'org-mine')",
-			anchor.AddDate(0, 0, row.dayOffset).Format("2006-01-02"), row.team, row.wip,
+			"(toDate('%s'), 'jira', '%s', '%s', 5, %d, toDateTime('2026-09-01 00:00:00'), 'org-mine')",
+			anchor.AddDate(0, 0, row.dayOffset).Format("2006-01-02"), scopeOf(row), row.team, row.wip,
 		))
 	}
 	return `INSERT INTO work_item_metrics_daily
         (day, provider, work_scope_id, team_id, items_completed, wip_count_end_of_day, computed_at, org_id)
         VALUES ` + strings.Join(values, ", ")
+}
+
+func scopeOf(row behindTeamRow) string {
+	if row.scope == "" {
+		return "scope-x"
+	}
+	return row.scope
+}
+
+func scopedDailyRows(scope, team string, firstOffset, lastOffset, wip int) []behindTeamRow {
+	rows := dailyRows(team, firstOffset, lastOffset, wip)
+	for index := range rows {
+		rows[index].scope = scope
+	}
+	return rows
 }
 
 func dailyRows(team string, firstOffset, lastOffset, wip int) []behindTeamRow {
@@ -52,6 +68,7 @@ func TestCapacityForecastBacklogUsesEachSelectedTeamsNewestRow(t *testing.T) {
 		name    string
 		rows    []behindTeamRow
 		teamIDs []string
+		scope   string
 		want    int
 	}{
 		{
@@ -76,6 +93,21 @@ func TestCapacityForecastBacklogUsesEachSelectedTeamsNewestRow(t *testing.T) {
 			want:    40,
 		},
 		{
+			name: "project scope: two teams on one work scope, different newest days",
+			rows: append(scopedDailyRows("scope-x", "team-current", -29, 0, 40),
+				scopedDailyRows("scope-x", "team-behind", -29, -1, 30)...),
+			teamIDs: []string{"team-current", "team-behind"},
+			scope:   "scope-x",
+			want:    70,
+		},
+		{
+			name: "one team on two work scopes with different newest days",
+			rows: append(scopedDailyRows("scope-x", "team-current", -29, 0, 40),
+				scopedDailyRows("scope-y", "team-current", -29, -1, 30)...),
+			teamIDs: []string{"team-current"},
+			want:    70,
+		},
+		{
 			name:    "one team gives the same answer as before",
 			rows:    dailyRows("team-current", -29, 0, 40),
 			teamIDs: []string{"team-current"},
@@ -91,7 +123,7 @@ func TestCapacityForecastBacklogUsesEachSelectedTeamsNewestRow(t *testing.T) {
 			}
 			targetItems := 1
 			got, err := capacityforecast.ResolveForecast(ctx, client, "org-mine", &model.CapacityForecastInput{
-				TeamIds: tc.teamIDs, TargetItems: &targetItems, HistoryDays: 30, Simulations: 1,
+				TeamIds: tc.teamIDs, WorkScopeID: scopePtr(tc.scope), TargetItems: &targetItems, HistoryDays: 30, Simulations: 1,
 			}, anchor)
 			if err != nil {
 				t.Fatalf("ResolveForecast: %v", err)
@@ -126,4 +158,11 @@ func TestThroughputForecastBacklogUsesEachSelectedTeamsNewestRow(t *testing.T) {
 	if got.BacklogSize != 70 {
 		t.Fatalf("backlogSize: got %d, want 70 (40 + the behind team's newest 30)", got.BacklogSize)
 	}
+}
+
+func scopePtr(scope string) *string {
+	if scope == "" {
+		return nil
+	}
+	return &scope
 }

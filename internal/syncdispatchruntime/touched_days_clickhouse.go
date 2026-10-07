@@ -293,6 +293,134 @@ GROUP BY org_id, day, repo_id`,
 	return nil
 }
 
+// TouchedDaysBacklog is one read of the pending days of an organization for
+// the drain (CHAOS-8846).
+type TouchedDaysBacklog struct {
+	// TakenAt is the time of the store's own clock, read before the days.
+	TakenAt time.Time
+	// Days are the pending days, newest first.
+	Days []time.Time
+	// OldestTouchedAt is the oldest of the newest 'touched' events of the
+	// pending keys of Days: no pending key of Days has waited less than since
+	// this time. The engine keeps only the newest 'touched' event of a key, so
+	// a key that was touched again shows the later time. It is zero when Days
+	// is empty.
+	OldestTouchedAt time.Time
+	// Truncated is true when older pending days exist that the read did not
+	// return.
+	Truncated bool
+}
+
+// Backlog returns the pending days of the organization, newest first, at most
+// limit of them, with the time of the oldest waiting touch.
+func (store *ClickHouseTouchedDaysStore) Backlog(
+	ctx context.Context, organizationID string, limit int,
+) (TouchedDaysBacklog, error) {
+	if store == nil || store.conn == nil || organizationID == "" || limit < 1 {
+		return TouchedDaysBacklog{}, ErrTouchedDaysUnavailable
+	}
+	takenAt, err := store.clock(ctx)
+	if err != nil {
+		return TouchedDaysBacklog{}, err
+	}
+	rows, err := store.conn.Query(ctx, `
+SELECT day, toUnixTimestamp64Milli(min(touched_at))
+FROM (
+    SELECT day, repo_id, maxIf(at, kind = 'touched') AS touched_at
+    FROM daily_metrics_touched_days
+    WHERE org_id = ?
+    GROUP BY day, repo_id
+    HAVING touched_at > maxIf(at, kind = 'dispatched')
+)
+GROUP BY day
+ORDER BY day DESC
+LIMIT ?`, organizationID, limit+1)
+	if err != nil {
+		return TouchedDaysBacklog{}, ErrTouchedDaysUnavailable
+	}
+	defer rows.Close()
+	backlog := TouchedDaysBacklog{TakenAt: takenAt}
+	for rows.Next() {
+		var (
+			day           time.Time
+			touchedMillis int64
+		)
+		if err := rows.Scan(&day, &touchedMillis); err != nil {
+			return TouchedDaysBacklog{}, ErrTouchedDaysUnavailable
+		}
+		if len(backlog.Days) == limit {
+			backlog.Truncated = true
+			break
+		}
+		backlog.Days = append(backlog.Days, utcDay(day))
+		touchedAt := time.UnixMilli(touchedMillis).UTC()
+		if backlog.OldestTouchedAt.IsZero() || touchedAt.Before(backlog.OldestTouchedAt) {
+			backlog.OldestTouchedAt = touchedAt
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return TouchedDaysBacklog{}, ErrTouchedDaysUnavailable
+	}
+	return backlog, nil
+}
+
+// touchedKeysToReturnSQL selects the keys of one day that a run was started for
+// at or before a time and that are not pending now. Its arguments are the
+// organization, the day (2006-01-02) and the time in milliseconds.
+const touchedKeysToReturnSQL = `
+    SELECT org_id, day, repo_id,
+           maxIf(at, kind = 'touched') AS touched_at,
+           maxIf(at, kind = 'dispatched') AS dispatched_at
+    FROM daily_metrics_touched_days
+    WHERE org_id = ? AND toString(day) = ?
+    GROUP BY org_id, day, repo_id
+    HAVING dispatched_at >= touched_at
+       AND dispatched_at <= fromUnixTimestamp64Milli(toInt64(?), 'UTC')`
+
+// ReturnToPending makes every key of the day pending again that was marked as
+// dispatched at or before failedAt and that is not pending now. The drain
+// calls it for a day with a run that ended without a result at failedAt: the
+// keys were marked when the run started, and the run computed nothing. It
+// returns false when the day had no such key.
+//
+// The bound on the mark is what makes a second call for the same failure
+// append nothing: the run that is started for the returned keys marks them
+// after failedAt. It also leaves alone the keys a later run was started for.
+// A key of the day that another run computed before failedAt is returned too
+// and is computed once more.
+//
+// The 'touched' event it appends carries failedAt, or one millisecond after
+// the key's newest 'dispatched' event when that is later: the two times come
+// from two clocks, and the key must be pending after the append whatever
+// their skew. A key that is pending already gets no event, so the time a
+// pending key has waited does not move.
+//
+// The SELECT gives its constant no alias, for the reason MarkDispatched names.
+func (store *ClickHouseTouchedDaysStore) ReturnToPending(
+	ctx context.Context, organizationID string, day time.Time, failedAt time.Time,
+) (bool, error) {
+	if store == nil || store.conn == nil || organizationID == "" || day.IsZero() || failedAt.IsZero() {
+		return false, ErrTouchedDaysUnavailable
+	}
+	dayKey, failedMillis := day.UTC().Format("2006-01-02"), failedAt.UTC().UnixMilli()
+	var keys uint64
+	if err := store.conn.QueryRow(ctx, `SELECT count() FROM (`+touchedKeysToReturnSQL+`)`,
+		organizationID, dayKey, failedMillis).Scan(&keys); err != nil {
+		return false, ErrTouchedDaysUnavailable
+	}
+	if keys == 0 {
+		return false, nil
+	}
+	if err := store.conn.Exec(ctx, `
+INSERT INTO daily_metrics_touched_days (org_id, day, repo_id, kind, at)
+SELECT org_id, day, repo_id, 'touched',
+       greatest(fromUnixTimestamp64Milli(toInt64(?), 'UTC'), addMilliseconds(dispatched_at, 1))
+FROM (`+touchedKeysToReturnSQL+`)`, failedMillis, organizationID, dayKey, failedMillis); err != nil {
+		return false, ErrTouchedDaysUnavailable
+	}
+	return true, nil
+}
+
 // clock reads the ClickHouse clock at millisecond precision.
 func (store *ClickHouseTouchedDaysStore) clock(ctx context.Context) (time.Time, error) {
 	var millis int64
@@ -311,3 +439,4 @@ func touchedDayStrings(days []time.Time) []string {
 }
 
 var _ TouchedDaysStore = (*ClickHouseTouchedDaysStore)(nil)
+var _ TouchedDaysDrainStore = (*ClickHouseTouchedDaysStore)(nil)

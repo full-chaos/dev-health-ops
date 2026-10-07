@@ -53,14 +53,27 @@ func auditedWrite(
 	ctx context.Context, runtime *operatorRuntime, stderr io.Writer, flags mutationFlags,
 	action joboperator.Action, resourceType, resourceID string, write func(context.Context) int,
 ) int {
+	return auditedWriteWith(ctx, runtime, stderr, flags, action, resourceType, resourceID, true, write)
+}
+
+// auditedWriteWith is auditedWrite with a choice on whether the resource id
+// goes into this process's own log lines. A verb that took the organization
+// from stdin (CHAOS-8892) passes false: the audit row still holds the id,
+// but no log line does.
+func auditedWriteWith(
+	ctx context.Context, runtime *operatorRuntime, stderr io.Writer, flags mutationFlags,
+	action joboperator.Action, resourceType, resourceID string, logResourceID bool, write func(context.Context) int,
+) int {
 	if runtime.service == nil {
 		return writeError(stderr, "operator_backend_unavailable")
 	}
 	attrs := []slog.Attr{
 		slog.String("action", string(action)),
 		slog.String("resource_type", resourceType),
-		slog.String("resource_id", resourceID),
 		slog.String("correlation_id", *flags.correlation),
+	}
+	if logResourceID {
+		attrs = append(attrs, slog.String("resource_id", resourceID))
 	}
 	ran, code := false, 0
 	err := runtime.service.Audited(ctx, joboperator.Mutation{

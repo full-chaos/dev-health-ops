@@ -5,6 +5,7 @@
 package workersctl
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -64,7 +65,7 @@ func Command() cli.Command {
 		Summary: "operate the Go job runtime: status, jobs, metrics, routes, queues, streams, repairs",
 		Kind:    cli.Verb,
 		Run: func(ctx context.Context, env cli.Env) int {
-			return execute(ctx, env.Args, env.Lookup, env.Stdout, env.Stderr)
+			return executeWithStdin(ctx, env.Args, env.Lookup, env.Stdin, env.Stdout, env.Stderr)
 		},
 	}
 }
@@ -89,6 +90,9 @@ type operatorRuntime struct {
 	// CLICKHOUSE_URI lazily, on dispatch, rather than making every workerctl
 	// invocation require a ClickHouse connection it does not otherwise need.
 	lookup platformsecrets.LookupEnv
+	// stdin is the process stdin; nil reads as empty. Only `--org-stdin`
+	// reads it (CHAOS-8892).
+	stdin io.Reader
 }
 
 type streamProfileStatus struct {
@@ -276,6 +280,12 @@ func (runtime *operatorRuntime) close() {
 }
 
 func execute(parent context.Context, args []string, lookup platformsecrets.LookupEnv, stdout, stderr io.Writer) int {
+	return executeWithStdin(parent, args, lookup, nil, stdout, stderr)
+}
+
+// executeWithStdin is execute with the process stdin, which only the
+// --org-stdin verbs read (CHAOS-8892).
+func executeWithStdin(parent context.Context, args []string, lookup platformsecrets.LookupEnv, stdin io.Reader, stdout, stderr io.Writer) int {
 	if len(args) == 1 && args[0] == "--version" {
 		if err := version.Current(serviceName).WriteJSON(stdout); err != nil {
 			return writeError(stderr, "output_unavailable")
@@ -289,6 +299,10 @@ func execute(parent context.Context, args []string, lookup platformsecrets.Looku
 		return writeError(stderr, "invalid_request")
 	}
 
+	stdin, code := preflightOrgStdin(args, stdin, stderr)
+	if code != 0 {
+		return code
+	}
 	ctx, cancel := context.WithTimeout(parent, 30*time.Second)
 	defer cancel()
 	runtime, code := configureRuntime(ctx, lookup, stderr)
@@ -296,6 +310,7 @@ func execute(parent context.Context, args []string, lookup platformsecrets.Looku
 		return code
 	}
 	defer runtime.close()
+	runtime.stdin = stdin
 	return dispatch(ctx, runtime, args, stdout, stderr)
 }
 
@@ -883,6 +898,7 @@ func canonicalDedupedRepositoryIDs(rawIDs []string) ([]daily.RepositoryID, error
 func dispatchMetricsDailyStart(ctx context.Context, runtime *operatorRuntime, args []string, stdout, stderr io.Writer) int {
 	flags := quietFlags("metrics daily-start")
 	org := flags.String("org", "", "organization id (uuid)")
+	orgStdin := flags.Bool("org-stdin", false, orgStdinUsage)
 	day := flags.String("day", "", "first target_day, inclusive (YYYY-MM-DD, UTC)")
 	to := flags.String("to", "", "last target_day, inclusive (YYYY-MM-DD, UTC) -- defaults to --day for a single day")
 	var repoIDs stringList
@@ -891,9 +907,9 @@ func dispatchMetricsDailyStart(ctx context.Context, runtime *operatorRuntime, ar
 	if flags.Parse(args) != nil || flags.NArg() != 0 || !mutation.valid(false) {
 		return writeError(stderr, "invalid_request")
 	}
-	canonicalOrg, err := canonicalUUID(*org)
-	if err != nil {
-		return writeError(stderr, "invalid_request")
+	canonicalOrg, code := resolveOrgFlag(runtime, *org, *orgStdin, stderr)
+	if code != 0 {
+		return code
 	}
 	*org = canonicalOrg
 	fromDay, err := time.Parse("2006-01-02", *day)
@@ -959,7 +975,7 @@ func dispatchMetricsDailyStart(ctx context.Context, runtime *operatorRuntime, ar
 			"deferred_discovery": len(repositoryIDs) == 0,
 		})
 	}
-	return auditedWrite(ctx, runtime, stderr, mutation, joboperator.ActionMetricsDailyStart, "organization", *org, perform)
+	return auditedWriteWith(ctx, runtime, stderr, mutation, joboperator.ActionMetricsDailyStart, "organization", *org, !*orgStdin, perform)
 }
 
 // dispatchMetricsDailyBlocked handles `metrics daily-blocked` (CHAOS-5040):
@@ -1775,6 +1791,7 @@ func dispatchMetricsPartitionRecompute(
 ) int {
 	flags := quietFlags("metrics partition-recompute")
 	org := flags.String("org", "", "organization id (uuid)")
+	orgStdin := flags.Bool("org-stdin", false, orgStdinUsage)
 	from := flags.String("from", "", "first target_day, inclusive (YYYY-MM-DD, UTC)")
 	to := flags.String("to", "", "last target_day, inclusive (YYYY-MM-DD, UTC)")
 	family := flags.String("family", "", "metrics.daily family this recompute is repairing (supported: repo_user_commit) -- recorded for audit; every family in the partition is recomputed, not just this one (see docs)")
@@ -1784,7 +1801,13 @@ func dispatchMetricsPartitionRecompute(
 	if flags.Parse(args) != nil || flags.NArg() != 0 || !mutation.valid(*dryRun) {
 		return writeError(stderr, "invalid_request")
 	}
-	if _, err := uuid.Parse(*org); err != nil {
+	if *orgStdin {
+		stdinOrg, code := resolveOrgFlag(runtime, *org, true, stderr)
+		if code != 0 {
+			return code
+		}
+		*org = stdinOrg
+	} else if _, err := uuid.Parse(*org); err != nil {
 		return writeError(stderr, "invalid_request")
 	}
 	if !slices.Contains(daily.SupportedPartitionRecomputeFamilies, *family) {
@@ -1836,7 +1859,7 @@ func dispatchMetricsPartitionRecompute(
 	if *dryRun {
 		return dryRunPreview(ctx, runtime, stderr, joboperator.ActionMetricsPartitionRecompute, "organization", *org, perform)
 	}
-	return auditedWrite(ctx, runtime, stderr, mutation, joboperator.ActionMetricsPartitionRecompute, "organization", *org, perform)
+	return auditedWriteWith(ctx, runtime, stderr, mutation, joboperator.ActionMetricsPartitionRecompute, "organization", *org, !*orgStdin, perform)
 }
 
 // manualBackfillGeneration derives a deterministic generation for one
@@ -2992,4 +3015,127 @@ func dispatchMetricsRemainingStart(ctx context.Context, runtime *operatorRuntime
 		return code
 	}
 	return auditedWrite(ctx, runtime, stderr, mutation, joboperator.ActionMetricsRemainingStart, "organization", *org, perform)
+}
+
+// orgStdinUsage is the shared help text of the `--org-stdin` flag
+// (CHAOS-8892).
+const orgStdinUsage = "read the organization id (uuid) from ONE line of stdin instead of --org, so it is on no command line (kubectl exec -i ... < the value); exclusive with --org. Empty stdin, more than one line, a line over 128 bytes, no end of input within 10 seconds, or a malformed id is a usage error that never prints the value. The answer already_covered (daily-start) is a normal answer, not a fault"
+
+// orgStdinMaxBytes bounds the one line --org-stdin reads (a canonical uuid is
+// 36 bytes; the longest form uuid.Parse accepts is 45).
+const orgStdinMaxBytes = 128
+
+// orgStdinTimeout bounds the wait for the stdin line, so a terminal or a pipe
+// that never closes ends in a clear refusal and not a hang. A var so a test
+// can shorten it.
+var orgStdinTimeout = 10 * time.Second
+
+// parseOrgStdin reads the whole stdin (bounded) and returns the canonical id,
+// the bytes it consumed, and, on refusal, a fixed reason. It never returns the
+// value in the reason.
+func parseOrgStdin(stdin io.Reader) (canonical string, consumed []byte, reason string) {
+	if stdin == nil {
+		return "", nil, "empty"
+	}
+	type readResult struct {
+		data []byte
+		err  error
+	}
+	done := make(chan readResult, 1)
+	go func() {
+		data, err := io.ReadAll(io.LimitReader(stdin, orgStdinMaxBytes+1))
+		done <- readResult{data, err}
+	}()
+	var result readResult
+	select {
+	case result = <-done:
+	case <-time.After(orgStdinTimeout):
+		return "", nil, "timeout"
+	}
+	data := result.data
+	if result.err != nil {
+		return "", data, "read_failed"
+	}
+	if len(data) > orgStdinMaxBytes {
+		return "", data, "too_long"
+	}
+	line := bytes.TrimSuffix(data, []byte("\n"))
+	line = bytes.TrimSuffix(line, []byte("\r"))
+	if len(line) == 0 {
+		return "", data, "empty"
+	}
+	if bytes.ContainsAny(line, "\r\n") {
+		return "", data, "not_one_line"
+	}
+	canonical, err := canonicalUUID(string(line))
+	if err != nil {
+		return "", data, "malformed"
+	}
+	return canonical, data, ""
+}
+
+// orgStdinVerb reports whether args (after the optional leading "workers")
+// name a verb that takes --org-stdin and carry that flag.
+func orgStdinVerb(args []string) (hasFlag, hasOrg bool) {
+	if len(args) < 3 || args[0] != "metrics" || (args[1] != "daily-start" && args[1] != "partition-recompute") {
+		return false, false
+	}
+	for _, arg := range args[2:] {
+		switch {
+		case arg == "--":
+			return hasFlag, hasOrg
+		case arg == "--org-stdin" || arg == "-org-stdin" || arg == "--org-stdin=true" || arg == "-org-stdin=true":
+			hasFlag = true
+		case arg == "--org" || arg == "-org" || strings.HasPrefix(arg, "--org=") || strings.HasPrefix(arg, "-org="):
+			hasOrg = true
+		}
+	}
+	return hasFlag, hasOrg
+}
+
+// preflightOrgStdin reads and validates the stdin organization BEFORE any
+// runtime (and so any database) is built: a refusal must not need a database.
+// On success it returns a reader that replays the consumed bytes for the verb.
+func preflightOrgStdin(args []string, stdin io.Reader, stderr io.Writer) (io.Reader, int) {
+	hasFlag, hasOrg := orgStdinVerb(args)
+	if !hasFlag {
+		return stdin, 0
+	}
+	if hasOrg {
+		return nil, writeError(stderr, "invalid_request")
+	}
+	_, consumed, reason := parseOrgStdin(stdin)
+	if reason != "" {
+		return nil, writeOrgStdinError(stderr, reason, len(consumed))
+	}
+	return bytes.NewReader(consumed), 0
+}
+
+// resolveOrgFlag returns the canonical organization id from --org, or from
+// stdin when --org-stdin is set. It returns a non-zero exit code after
+// writing a quiet error. No error text holds the value: the stdin path names
+// a fixed reason and a byte length only.
+func resolveOrgFlag(runtime *operatorRuntime, org string, fromStdin bool, stderr io.Writer) (string, int) {
+	if !fromStdin {
+		canonical, err := canonicalUUID(org)
+		if err != nil {
+			return "", writeError(stderr, "invalid_request")
+		}
+		return canonical, 0
+	}
+	if org != "" {
+		return "", writeError(stderr, "invalid_request")
+	}
+	canonical, consumed, reason := parseOrgStdin(runtime.stdin)
+	if reason != "" {
+		return "", writeOrgStdinError(stderr, reason, len(consumed))
+	}
+	return canonical, 0
+}
+
+// writeOrgStdinError is a usage error (exit 2) that carries a fixed reason
+// and a byte length, never the stdin bytes.
+func writeOrgStdinError(stderr io.Writer, reason string, length int) int {
+	_, _ = fmt.Fprintf(stderr, "{\"error\":{\"code\":\"invalid_request\",\"detail\":\"org_stdin_%s\",\"length\":%d}}\n", reason, length)
+	return cli.ExitUsage
 }

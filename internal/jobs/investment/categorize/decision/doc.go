@@ -10,7 +10,7 @@
 // Nothing in the served path constructs or calls this package.
 //
 // What is fixed in code, on purpose (no environment override): the rubric
-// (decision-support-v1d.json, embedded and pinned by its sha256), the level
+// (decision-support-v1f.json, embedded and pinned by its sha256), the level
 // rule (presence-floor:0.4) and the weight map (support-map-v1). They are the
 // configuration that the experiment evaluated; a configuration that could
 // drift from it would be a category system an operator can change.

@@ -829,6 +829,25 @@ against. This does NOT protect the reverse direction (a manual trigger fired
 BEFORE that day's fixed-schedule occurrence) -- closing that would mean
 changing the nightly schedule's own behavior, deliberately out of scope here.
 
+**Organization from stdin (CHAOS-8892):** `--org-stdin` replaces `--org`. The
+verb reads ONE line from stdin, drops one trailing newline, and uses it as the
+organization id, so the id is on no command line. This is the route on a
+distroless worker pod, where the only way to hand over a value is the stdin of
+`kubectl exec -i`. `--org` and `--org-stdin` together, empty stdin, more than
+one line, a line over 128 bytes, no end of input within 10 seconds, or a malformed id is a usage error (exit 2) raised before any database is opened
+whose text gives a fixed reason and a byte length, never the value. With
+`--org-stdin` the verb prints no organization id on stdout, stderr or in its own
+log lines (the audit row still holds it). Without the flag nothing changes.
+
+```bash
+kubectl exec -i <worker-pod> -- dho workers metrics daily-start \
+  --org-stdin --day 2026-09-01 --reason <code> --correlation-id <id> < org-id-source
+```
+
+`already_covered` is a normal answer, not a fault: the day already has a succeeded
+run from another trigger, and nothing was started for it. It keeps its exit
+code.
+
 ```bash
 dho workers metrics daily-start \
   --org 70d529e0-3c06-4597-8480-794fd02328b6 \
@@ -1243,6 +1262,9 @@ motivating case (CHAOS-4459): the native `repo_user_commit` executor wrote
 before PR #1960 (CHAOS-4341) — every org-scoped read of those tables for a
 day computed before the fix sees zero rows, and no operator path could ever
 recompute that day once its partition read `'succeeded'`.
+
+`--org-stdin` replaces `--org` here too, with the same rules as for
+[`metrics daily-start`](#metrics-daily-start-chaos-5055).
 
 ```bash
 dho workers metrics partition-recompute \

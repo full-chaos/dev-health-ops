@@ -13,10 +13,10 @@ const (
 	// DefaultModel is the pinned, versioned model id. Never an alias.
 	DefaultModel = "jev-1.13.0"
 	// RubricVersion is the rubric_version of the embedded rubric file.
-	RubricVersion = "decision-support-v1d"
+	RubricVersion = "decision-support-v1f"
 	// RubricSHA256 is the digest of the embedded rubric file bytes. The loader
 	// compares it at construction; a mismatch is a construction error.
-	RubricSHA256 = "73ace2d4e437349155a933e826029807970d3b79e2608a5b519d48a9c6588803"
+	RubricSHA256 = "eac20c674565a7b017450e3b6a9dba7926a9f085f60ac28e35b2b7c2b990762d"
 	// AdapterVersion names the span rule, the validity rules and the state
 	// rules of this package. v3 is the first production version (the experiment
 	// ran decision-adapter-v2; the rubric file still names v2 because its bytes
@@ -62,7 +62,7 @@ func IdentityFor(model string) Identity {
 
 // Stamp is the one stamp string of a decision classification:
 //
-//	provider=typesafe;api=systemone;model=jev-1.13.0;taxonomy=investment-taxonomy-v1;prompt=decision-support-v1d@73ace2d4e437;adapter=decision-adapter-v3;map=support-map-v1;level=presence-floor:0.4
+//	provider=typesafe;api=systemone;model=jev-1.13.0;taxonomy=investment-taxonomy-v1;prompt=decision-support-v1f@eac20c674565;adapter=decision-adapter-v3;map=support-map-v1;level=presence-floor:0.4
 //
 // The rubric is the prompt, so the prompt part holds the first 12 hex digits
 // of the rubric digest: a rubric edit changes the key even when the version

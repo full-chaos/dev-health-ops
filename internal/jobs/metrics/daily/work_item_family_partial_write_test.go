@@ -338,6 +338,7 @@ func TestWorkItemScopeFamiliesWriteNothingWhenAReadFails(t *testing.T) {
 		"the items of the scopes":     "SELECT repo_id, last_synced,",
 		"the transitions":             "FROM work_item_transitions",
 		"the attributions":            "FROM work_item_team_attributions FINAL",
+		"the blocked spans":           "FROM work_item_dependencies FINAL",
 	}
 	families := map[string]func(*workItemSendFailingConn) NativeFamilyExecutor{
 		"work_item": func(conn *workItemSendFailingConn) NativeFamilyExecutor {
@@ -355,6 +356,9 @@ func TestWorkItemScopeFamiliesWriteNothingWhenAReadFails(t *testing.T) {
 			if family == "work_item_estimate" && name == "the transitions" {
 				continue // the family reads no transition
 			}
+			if family != "work_item_state" && name == "the blocked spans" {
+				continue // only the state family reads the blocked spans
+			}
 			t.Run(family+"/"+name, func(t *testing.T) {
 				conn := &workItemSendFailingConn{failQuery: text}
 				written, err := build(conn).ComputeFamily(context.Background(), run, partition)
@@ -366,5 +370,42 @@ func TestWorkItemScopeFamiliesWriteNothingWhenAReadFails(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+// The row version of a family is taken before its first read: a version taken
+// after a read could be newer than the version of a run that read newer rows.
+func TestWorkItemScopeFamiliesTakeTheVersionBeforeTheFirstRead(t *testing.T) {
+	run := Run{OrganizationID: "org-1", TargetDay: time.Date(2026, 9, 3, 0, 0, 0, 0, time.UTC)}
+	partition := Partition{ID: "partition-1", RepoIDs: []RepositoryID{RepositoryID(workItemFamilyTestRepoID.String())}}
+	for family, build := range map[string]func(*workItemSendFailingConn, func() time.Time) NativeFamilyExecutor{
+		"work_item": func(conn *workItemSendFailingConn, now func() time.Time) NativeFamilyExecutor {
+			return &WorkItemExecutor{conn: conn, nowUTC: now}
+		},
+		"work_item_estimate": func(conn *workItemSendFailingConn, now func() time.Time) NativeFamilyExecutor {
+			return &WorkItemEstimateExecutor{conn: conn, nowUTC: now}
+		},
+		"work_item_state": func(conn *workItemSendFailingConn, now func() time.Time) NativeFamilyExecutor {
+			return &WorkItemStateExecutor{conn: conn, nowUTC: now}
+		},
+	} {
+		t.Run(family, func(t *testing.T) {
+			conn := &workItemSendFailingConn{}
+			queriesAtVersion := []int{}
+			now := func() time.Time {
+				queriesAtVersion = append(queriesAtVersion, len(conn.queries))
+				return time.Now().UTC()
+			}
+			if _, err := build(conn, now).ComputeFamily(context.Background(), run, partition); err != nil {
+				t.Fatal(err)
+			}
+			if len(conn.queries) == 0 {
+				t.Fatal("the family ran no query: the check below would prove nothing")
+			}
+			if len(queriesAtVersion) != 1 || queriesAtVersion[0] != 0 {
+				t.Fatalf("queries that ran before each read of the clock = %v; want one read of the clock, before the first of %d queries",
+					queriesAtVersion, len(conn.queries))
+			}
+		})
 	}
 }

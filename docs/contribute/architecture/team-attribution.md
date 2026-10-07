@@ -653,7 +653,8 @@ Jira before this change: the three team-catalog writers (project-as-team, the le
 rows with one key, ownership pointed at the row no work item used, and a team reached none of its
 project's items by id. Now:
 
-- The project-as-team catalog reads `id` from the project search answer; Atlassian Teams takes it from the
+- The Jira team catalog reads `id` from the project search answer (it writes `projects` rows and legacy
+  links; since CHAOS-8888 it writes no team from a project, section 0.4c); Atlassian Teams takes it from the
   last segment of the project ARI of the team's connected-space link (section 0.4c); a legacy link takes it
   from the same run's search answer for its key.
 - A project with no usable native id gets NO ownership row and NO `projects` row. It is counted and logged
@@ -666,14 +667,15 @@ project's items by id. Now:
   sync added one more open row per fact), and every other open row of the same writer is written again
   with `valid_to` set. Both Jira writers go through this one function; each reads only its own open rows
   (Atlassian Teams: `source = 'native'` rows of teams whose catalog row carries a team ARI; the catalog:
-  `source = 'jira_legacy'` rows and `source = 'native'` rows with `team_id = project_key`). So the first
-  sync on this version closes the open rows on the key-built id. The catalog closes nothing when its
+  `source = 'jira_legacy'` rows only). So the first sync on this version closes the open rows on the
+  key-built id. The `source = 'native'` rows with `team_id = project_key` (the project-as-team class) are
+  not given to the snapshot rule: every catalog run retires them as a class (section 0.4c). The catalog closes nothing when its
   project search returned no project.
 - **Only a complete snapshot closes a row** (`providersync.OwnershipSnapshot.Complete`; the zero value is
   not complete). A row that is missing from a part of the provider's answer is not a fact the provider
   dropped. A run that did not read its source to the end writes what it found, keeps first-seen
   `valid_from`, closes nothing, and says so:
-  - Project-as-team catalog: the Jira project search is read page by page (`startAt`) to the provider's
+  - Jira team catalog (legacy links): the Jira project search is read page by page (`startAt`) to the provider's
     end-of-data signal: `isLast` when the page has it, else `total`, else a page that has entries and is
     shorter than the page size. A page with no entries and no signal (an empty object or an error body
     under HTTP 200) is not the end: not complete. Bound: 50 pages of 100 projects. A later page that fails, the bound, or an empty page before
@@ -787,8 +789,51 @@ The Atlassian Teams of a Jira site ARE the Jira teams. A team owns a Jira projec
   `team_project_links_skipped_no_native_id`, `team_project_links_skipped_no_project_key` and
   `team_project_links_skipped_unknown_type`, next to `team_project_ownership` (the rows written). The Info
   line `jira_atlassian_teams_project_links` gives seen / written / skipped / closed for each run.
-- **Precedence** is unchanged: source `native` at 110/10, ranked at read time above the project-as-team
-  owner of the same project (100/10). The retirement of the project-as-team rows is a separate change.
+- **Precedence.** An Atlassian team's link is source `native` at 110/10. Since CHAOS-8888 there is no
+  project-as-team owner left to rank against: the Atlassian Teams are the only Jira teams.
+- **The project-as-team rows are retired (CHAOS-8888).** Earlier catalogs made one team per Jira project
+  (`teams.id` = the project key = `native_team_key`), owning that project (`source = 'native'`, 100/10) with
+  the project lead as its member. A Jira project is not a team. The catalog now writes no team, ownership or
+  membership row from a project, and every Jira team-catalog run retires the stored ones of its organization
+  (`providersync.RetireJiraProjectAsTeamRows`, `internal/providersync/jira_project_as_team_retire.go`):
+  - **One step, unconditional, before the walk.** It reads no provider answer, so a failed, partial or
+    skipped walk, an archived project or an empty project search does not hold it back. Nothing is deleted:
+    each team row is written again with `is_active = 0`; its open ownership and membership rows, and the open
+    `team_repo_ownership` rows derived from that ownership (`source = 'inferred'`), are written again with
+    `valid_to` set and their first-seen `valid_from`. With nothing left it is one count read, so a second run
+    retires zero.
+  - **The class.** A team row with `provider = 'jira'`, a non-empty `id`, `native_team_key = id`, and a native
+    key that does not start with the team ARI prefix `ari:cloud:identity::team/`. Ownership: `provider =
+    'jira'`, `source = 'native'`, open, `team_id = project_key`, and the team is not an Atlassian team.
+    Membership: `provider = 'jira'`, `source = 'native'`, open, team in the class. Derived repository
+    ownership: `source = 'inferred'`, open, team in the class. A row with admin members or a sync policy is
+    retired too and counted (`teams_with_manual_members`, `teams_with_sync_policy`). Kept: Atlassian team
+    rows, `jira_legacy` links, admin teams (an admin import writes `provider = ''` and no native key, so an
+    admin team whose id equals a project key is not in the class and still takes items by key), the other
+    providers, other organizations, `projects` rows.
+  - **Attribution reads active teams only, one rule for every provider.** `teamattribution.LoadTeams`
+    (`internal/teamattribution/cascade.go`, `activeTeamsOnly`: the newest `is_active` per team is 1). A
+    retired, archived or never-active team of any provider takes no work item by project key, team id or
+    native team key. A Jira project that no Atlassian team is connected to is unassigned. A recompute of an
+    old day leaves the items of a now-inactive team unassigned.
+  - **Counts.** The result field `ProjectAsTeamRetired`; the metric `dev_health_team_catalog_rows_written_total`
+    with the table label `project_as_team_retired` (observed only when a run retired rows, next to the
+    `team_project_links_*` labels above); the Info line `jira_project_as_team_retired` (counts only:
+    `teams`, `ownership`, `memberships`, `repo_ownership`, `teams_with_manual_members`,
+    `teams_with_sync_policy`).
+  - **Operator verb.** `dho workers providersync retire-jira-project-as-team --org-stdin` runs the same
+    function for one organization now (section 1.1, operator cleanups).
+  - **Team discovery.** `GET /api/v1/admin/teams/discover?provider=jira` lists the active Atlassian teams the
+    catalog stored (no provider call); it never lists the Jira projects as teams, so an import of its list
+    cannot write a project-as-team row again.
+
+  Tests: `TestRetireJiraProjectAsTeamRowsClosesOnlyThatClass`,
+  `TestRetireJiraProjectAsTeamRowsClosesTheDerivedRepoOwnershipOfARetiredTeam`,
+  `TestTeamReachesItsJiraProjectsWorkItemsThroughOwnership`, `TestAPartialJiraSnapshotClosesNoOwnership`,
+  `TestAnArchivedJiraProjectKeepsItsOwnership`, `TestAnInactiveTeamTakesNoWorkItemForEveryProvider`
+  ({jira, gitlab, github, linear} × active / inactive / never active / active again × project key, team id,
+  native team key), `TestRetireJiraProjectAsTeamVerbDryRunThenRetireThenZero`,
+  `TestDiscoverJiraListsOnlyStoredActiveAtlassianTeams` (all real ClickHouse).
 
 Tests: `TestConnectedContainersReadThroughTheRealClient` (the real vendored client against a fake gateway
 that serves the measured answer shape: 11 teams, 10 links, one team with none),
@@ -1434,6 +1479,12 @@ holds no native-id Jira row at all: that is the state before the first Jira team
 version. It prints counts only. It touches `projects` only; the ownership rows on the key-built id are
 closed by the sync itself (the snapshot rule, section 0.4b). Order: deploy, wait for one Jira
 team-autoimport sync, run with `--dry-run`, then run.
+
+**CHAOS-8888: the Jira project-as-team rows.** `dho workers providersync retire-jira-project-as-team
+--org-stdin [--dry-run]` retires them for one organization now, with the function every Jira team-catalog
+run calls (section 0.4c): teams inactive, open ownership, membership and derived repository ownership closed,
+nothing deleted. The organization comes from stdin only; the verb prints counts only and no organization
+id. It is not required: the next Jira team-catalog run of the organization does the same.
 
 **Deployment ordering (codex review, PR #2012 round 3):** the cleanup verb has no fence against a
 still-running writer. The go-workers Helm chart rolls with `start-first`, so an old pod running the

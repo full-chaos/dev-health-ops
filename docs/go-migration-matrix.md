@@ -279,7 +279,7 @@ tooling and Python trigger shells over the same native path:
 | CLI verb/area | Executor | Writer call site | Ticket |
 |---|---|---|---|
 | `dho sync` (git/prs/blame/cicd/deployments/incidents/security/tests/teams) | NATIVE (worker-side; the CLI verbs run the same Go provider routes in-process, `internal/synccli`; `work-items` has no verb) | `internal/providersync/*` -- see the generated table below, all NATIVE (jira team/project/membership catalog collection moved to `JiraTeamCatalogCollector` last) | -- |
-| `dho workers providersync retire-linear-pseudo-projects` / `retire-stale-linear-project-ownership` / `retire-jira-key-projects` | NATIVE | `internal/workersctl/main.go` (`dispatchProvidersync`) | -- |
+| `dho workers providersync retire-linear-pseudo-projects` / `retire-stale-linear-project-ownership` / `retire-jira-key-projects` / `retire-jira-project-as-team` | NATIVE | `internal/workersctl/main.go` (`dispatchProvidersync`) | -- |
 | `dho workers sync-dispatch-outbox close-backlog` | NATIVE | `internal/workersctl/main.go:1605-1665` | -- |
 
 ### Provider sync, by provider x dataset (generated from `contracts/provider-matrix/v1/matrix.json`)

@@ -43,19 +43,26 @@ const (
 	// more; the blocked-run marker reports such a run.
 	touchedDrainInFlightWindow = 24 * time.Hour
 
-	// touchedDrainFailureLookback bounds the read of the runs that ended
-	// without a result. A run that is not ended counts as such after
-	// touchedDrainInFlightWindow, and a pass runs at least once a night, so
-	// the pass of the next night sees it; the third day is the margin for a
-	// scheduler that was down over one night.
-	touchedDrainFailureLookback = 72 * time.Hour
+	// touchedDrainReturnRunLimit bounds the runs without a result whose keys
+	// one pass returns. The read has no bound on the age of a run; a pass that
+	// hits this bound logs an error and counts it, and the runs behind it are
+	// reached when the keys of the returned ones were taken again. An
+	// organization has none or a few such runs; the bound is the same number
+	// as the bound of the pending days, for a backlog where every run fails.
+	touchedDrainReturnRunLimit = postSyncTouchedPendingDayReadLimit
+
+	// touchedDrainRetryAfter is how long after the newest run of a skipped
+	// day the drain starts one more run for it. A skipped day therefore costs
+	// one run in this time, and comes back without an operator when the cause
+	// of its failures is gone.
+	touchedDrainRetryAfter = 24 * time.Hour
 
 	// TouchedDrainFailedRunsBeforeSkip is the number of newest runs of a day
 	// that must all have ended without a result (failed, canceled, or not
 	// ended in touchedDrainInFlightWindow) for the drain to stop starting
-	// runs for it. The
-	// day stays pending and is reported; a run of any other trigger that
-	// succeeds makes it startable again.
+	// runs for it. The day stays pending and is reported. It is started again
+	// touchedDrainRetryAfter after its newest run, and a run of any other
+	// trigger that succeeds makes it startable at once.
 	TouchedDrainFailedRunsBeforeSkip = 3
 )
 
@@ -66,28 +73,37 @@ type TouchedDaysDrainStore interface {
 	Backlog(ctx context.Context, organizationID string, limit int) (TouchedDaysBacklog, error)
 	PendingRepositories(ctx context.Context, organizationID string, days []time.Time, limitPerDay int) (map[string][]string, error)
 	MarkDispatched(ctx context.Context, organizationID string, at time.Time, fullDays []time.Time, keys []TouchedDayKey) error
-	ReturnToPending(ctx context.Context, organizationID string, day time.Time, failedAt time.Time) (bool, error)
-}
-
-// TouchedDayFailedRun is one day with a touched-day run that ended without a
-// result, with the time of the newest such end.
-type TouchedDayFailedRun struct {
-	Day      time.Time
-	FailedAt time.Time
+	// ReturnToPending makes the listed keys pending again that are not
+	// pending, and returns the number of days it did that for.
+	ReturnToPending(ctx context.Context, organizationID string, runs []TouchedRunKeys) (int, error)
+	// RunsWithEveryKeyPending counts the runs whose listed keys are all
+	// pending.
+	RunsWithEveryKeyPending(ctx context.Context, organizationID string, runs []TouchedRunKeys) (int, error)
 }
 
 // TouchedDaysDrainRuns is the daily-run state the drain reads and writes.
 type TouchedDaysDrainRuns interface {
 	// RepositoryLimit is the largest repository list one run accepts.
 	RepositoryLimit() int
-	// FailedDays are the days with a run of a fan-out or of the drain,
-	// created at or after since, that ended without a result: failed,
-	// canceled, or not ended and created before notEndedBefore (its end is
-	// then window after its creation).
-	FailedDays(ctx context.Context, organizationID string, since, notEndedBefore time.Time, window time.Duration) ([]TouchedDayFailedRun, error)
+	// OwnedKeysOfRunsWithoutResult are the keys whose owner run ended without
+	// a result. The owner of a key is the newest run of a fan-out or of the
+	// drain that lists it; a run without a result is failed, canceled, or not
+	// ended notEndedAfter after its creation. At most limit runs, newest
+	// first; the flag says that more exist.
+	OwnedKeysOfRunsWithoutResult(ctx context.Context, organizationID string, notEndedAfter time.Duration, limit int) ([]TouchedRunKeys, bool, error)
+	// RunsWithResultOfPass are the runs with a result of the drain pass that
+	// started the run endedRunID, with the keys each lists. None when
+	// endedRunID is not a run of the drain.
+	RunsWithResultOfPass(ctx context.Context, organizationID, endedRunID string) ([]TouchedRunKeys, error)
 	// DaysWithOnlyFailedRuns are the days among days (keys 2006-01-02) whose
-	// newest threshold runs all ended without a result.
-	DaysWithOnlyFailedRuns(ctx context.Context, organizationID string, days []time.Time, threshold int, notEndedBefore time.Time) (map[string]struct{}, error)
+	// newest threshold runs all ended without a result. The value is true
+	// when the newest run of the day is older than retryAfter.
+	DaysWithOnlyFailedRuns(ctx context.Context, organizationID string, days []time.Time, threshold int, notEndedAfter, retryAfter time.Duration) (map[string]bool, error)
+	// RunsStateTx returns a value that is another one after any daily run of
+	// the organization was created. A pass reads it before its first read
+	// and again under its lock: the same value says that no run exists that
+	// the reads of the pass did not see.
+	RunsStateTx(ctx context.Context, tx pgx.Tx, organizationID string) (string, error)
 	// InFlightTx counts the drain runs of the organization that are not
 	// ended and were created at or after since.
 	InFlightTx(ctx context.Context, tx pgx.Tx, organizationID string, since time.Time) (int, error)
@@ -137,6 +153,9 @@ type touchedDrainStart struct {
 	// split is true when the day has more pending repositories than the
 	// list: the rest stays pending for a later pass.
 	split bool
+	// retry is true for a day whose newest runs all ended without a result
+	// and whose newest run is older than touchedDrainRetryAfter.
+	retry bool
 }
 
 // touchedDrainPass is what one pass did, for its report.
@@ -144,12 +163,21 @@ type touchedDrainPass struct {
 	organizationID string
 	passID         string
 	returned       int
-	backlog        TouchedDaysBacklog
-	skipped        []time.Time
-	starts         []touchedDrainStart
-	started        []touchedDrainStart
-	alreadyStarted int
-	inFlight       int
+	// returnTruncated is true when more runs without a result own keys than
+	// the pass read.
+	returnTruncated bool
+	backlog         TouchedDaysBacklog
+	skipped         []time.Time
+	starts          []touchedDrainStart
+	started         []touchedDrainStart
+	alreadyStarted  int
+	inFlight        int
+	// runsState is the state of the daily runs of the organization, read
+	// before every other read of the pass.
+	runsState string
+	// runsChanged is true when a run of the organization was created between
+	// the reads of the pass and its lock: the pass started nothing.
+	runsChanged bool
 }
 
 // DrainTouchedDays runs one pass for the organization. passID names the
@@ -166,11 +194,20 @@ func (drain *TouchedDaysDrain) DrainTouchedDays(ctx context.Context, organizatio
 	// A cheap first look, outside the lock: while runs of an earlier pass are
 	// not ended this trigger does nothing, and the end of each of those runs
 	// is a trigger of its own.
-	if inFlight, err := drain.inFlight(ctx, organizationID); err != nil {
+	inFlight, runsState, err := drain.inFlight(ctx, organizationID)
+	if err != nil {
 		drain.fail(ctx, pass, "in_flight_read")
 		return
-	} else if inFlight > 0 {
+	}
+	pass.runsState = runsState
+	if inFlight > 0 {
 		drain.observe(jobruntime.TouchedDaysDrainInFlight, 1)
+		return
+	}
+	if stopped, err := drain.markOfPassMissing(ctx, pass); err != nil {
+		drain.fail(ctx, pass, "mark_read")
+		return
+	} else if stopped {
 		return
 	}
 	if err := drain.returnFailedDays(ctx, pass); err != nil {
@@ -192,38 +229,99 @@ func (drain *TouchedDaysDrain) DrainTouchedDays(ctx context.Context, organizatio
 	drain.report(ctx, pass)
 }
 
-// inFlight counts the drain runs of the organization that are not ended, in a
-// transaction of its own.
-func (drain *TouchedDaysDrain) inFlight(ctx context.Context, organizationID string) (int, error) {
+// inFlight reads the state of the daily runs of the organization and then
+// counts its drain runs that are not ended, in a transaction of its own. The
+// state is the first read of a pass: every later read of the pass sees at
+// least the runs it stands for.
+func (drain *TouchedDaysDrain) inFlight(ctx context.Context, organizationID string) (int, string, error) {
 	tx, err := drain.pool.Begin(ctx)
 	if err != nil {
-		return 0, ErrPostSyncUnavailable
+		return 0, "", ErrPostSyncUnavailable
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
-	return drain.runs.InFlightTx(ctx, tx, organizationID, drain.now().UTC().Add(-touchedDrainInFlightWindow))
+	runsState, err := drain.runs.RunsStateTx(ctx, tx, organizationID)
+	if err != nil {
+		return 0, "", err
+	}
+	inFlight, err := drain.runs.InFlightTx(ctx, tx, organizationID, drain.now().UTC().Add(-touchedDrainInFlightWindow))
+	return inFlight, runsState, err
 }
 
-// returnFailedDays makes the keys pending again that a run of a fan-out or of
-// the drain was started for when that run ended without a result: it failed,
-// it was canceled, or it is not ended after touchedDrainInFlightWindow. The
-// keys were marked when the run started; without this step they would be
-// lost.
+// touchedDrainEndTrigger is the prefix of the passID of a pass that the end
+// of a daily run triggered. The id of that run follows it.
+const touchedDrainEndTrigger = "e:"
+
+// markOfPassMissing stops the chain when the mark of the pass before this one
+// did not reach the touched-day record.
+//
+// A chain goes on because the end of a run of one pass triggers the next
+// pass. The runs of a pass are committed before its mark, so a mark that fails
+// leaves their days pending, and the next pass would start the same newest
+// days again, for as long as the mark fails, and never reach an older day.
+// The pass therefore looks at the pass of the run whose end triggered it: a
+// run of that pass that has a result and whose every key is pending was not
+// marked. It then starts nothing, so the chain ends; the nightly pass (its
+// trigger is not the end of a drain run) and the fan-out of the next sync
+// start runs again.
+//
+// A run whose every key was touched again while it ran looks the same and
+// stops the chain too. The sync that touched them brings a fan-out of its own.
+func (drain *TouchedDaysDrain) markOfPassMissing(ctx context.Context, pass *touchedDrainPass) (bool, error) {
+	endedRunID, ok := strings.CutPrefix(pass.passID, touchedDrainEndTrigger)
+	if !ok {
+		return false, nil
+	}
+	runs, err := drain.runs.RunsWithResultOfPass(ctx, pass.organizationID, endedRunID)
+	if err != nil || len(runs) == 0 {
+		return false, err
+	}
+	unmarked, err := drain.store.RunsWithEveryKeyPending(ctx, pass.organizationID, runs)
+	if err != nil || unmarked == 0 {
+		return false, err
+	}
+	drain.logger.Error(ctx, synclog.MsgTouchedDaysDrainFailed,
+		synclog.Text(synclog.KeyPhase, synclog.ParseLabel("chain_stopped_mark_missing")),
+		synclog.Org(synclog.ParseID(pass.organizationID)),
+		drainPassAttr(pass.passID),
+		synclog.Count(synclog.KeyDrainDaysNotMarked, unmarked),
+	)
+	drain.observe(jobruntime.TouchedDaysDrainChainStopped, 1)
+	return true, nil
+}
+
+// returnFailedDays makes the keys pending again whose owner run ended without
+// a result: it failed, it was canceled, or it is not ended after
+// touchedDrainInFlightWindow. The keys were marked when the run started;
+// without this step they would be lost.
+//
+// The run state names the keys (the list of the run, and "newest run that
+// lists the key" for the owner) and the touched-day record is asked only
+// which of them are not pending. No time of one is compared with a time of the
+// other, so the two clocks can differ by any amount.
 func (drain *TouchedDaysDrain) returnFailedDays(ctx context.Context, pass *touchedDrainPass) error {
-	now := drain.now().UTC()
-	failures, err := drain.runs.FailedDays(ctx, pass.organizationID,
-		now.Add(-touchedDrainFailureLookback), now.Add(-touchedDrainInFlightWindow), touchedDrainInFlightWindow)
+	runs, truncated, err := drain.runs.OwnedKeysOfRunsWithoutResult(
+		ctx, pass.organizationID, touchedDrainInFlightWindow, touchedDrainReturnRunLimit)
 	if err != nil {
 		return err
 	}
-	for _, failure := range failures {
-		returned, err := drain.store.ReturnToPending(ctx, pass.organizationID, failure.Day, failure.FailedAt)
-		if err != nil {
-			return err
-		}
-		if returned {
-			pass.returned++
-		}
+	pass.returnTruncated = truncated
+	if truncated {
+		// Reported here and not with the pass line: a later step of the pass
+		// can fail, and the runs behind the bound must have their line then
+		// too.
+		drain.logger.Error(ctx, synclog.MsgTouchedDaysDrainFailed,
+			synclog.Text(synclog.KeyPhase, synclog.ParseLabel("return_read_truncated")),
+			synclog.Org(synclog.ParseID(pass.organizationID)), drainPassAttr(pass.passID))
+		drain.observe(jobruntime.TouchedDaysDrainReturnReadTruncated, 1)
 	}
+	if len(runs) == 0 {
+		return nil
+	}
+	returned, err := drain.store.ReturnToPending(ctx, pass.organizationID, runs)
+	if err != nil {
+		return err
+	}
+	pass.returned = returned
 	return nil
 }
 
@@ -232,8 +330,10 @@ func (drain *TouchedDaysDrain) returnFailedDays(ctx context.Context, pass *touch
 //
 // A day whose newest runs all ended without a result gets no run: it would
 // fail again, and its end would trigger the next pass, which would start it
-// again. It stays
-// pending, it is reported, and it never holds one of the slots.
+// again. It stays pending, it is reported, and it never holds one of the
+// slots. When its newest run is older than touchedDrainRetryAfter it gets one
+// run: that run is then its newest, so the passes of the same chain skip the
+// day again, whatever the end of the run.
 //
 // A day with more pending repositories than one run accepts is split: the pass
 // takes as many as one run accepts and leaves the rest pending. The next pass
@@ -253,13 +353,13 @@ func (drain *TouchedDaysDrain) take(ctx context.Context, pass *touchedDrainPass)
 	}
 	onlyFailed, err := drain.runs.DaysWithOnlyFailedRuns(
 		ctx, pass.organizationID, backlog.Days, TouchedDrainFailedRunsBeforeSkip,
-		drain.now().UTC().Add(-touchedDrainInFlightWindow))
+		touchedDrainInFlightWindow, touchedDrainRetryAfter)
 	if err != nil {
 		return err
 	}
 	candidates := make([]time.Time, 0, len(backlog.Days))
 	for _, day := range backlog.Days {
-		if _, skip := onlyFailed[day.UTC().Format("2006-01-02")]; skip {
+		if retryDue, failed := onlyFailed[day.UTC().Format("2006-01-02")]; failed && !retryDue {
 			pass.skipped = append(pass.skipped, day)
 			continue
 		}
@@ -284,6 +384,7 @@ func (drain *TouchedDaysDrain) take(ctx context.Context, pass *touchedDrainPass)
 				continue
 			}
 			start := touchedDrainStart{day: day, repositories: identifiers}
+			start.retry = onlyFailed[day.UTC().Format("2006-01-02")]
 			if len(identifiers) > limit {
 				start.repositories, start.split = identifiers[:limit], true
 			}
@@ -302,6 +403,20 @@ const touchedDrainLockNamespace = 8846
 // The advisory lock puts two passes of one organization in sequence, and the
 // count under the lock is what makes the second one start nothing: it sees the
 // committed runs of the first, which hold the same days until they are marked.
+//
+// Everything the pass decided before the lock (the keys it returned, the days
+// and repositories it chose, the days it skips or starts once more) was read
+// from a state of the runs that can be old by now: another pass or a fan-out
+// can have started a run since, and that run can have ended already, so the
+// count of the runs in flight does not show it. The pass therefore reads the
+// state of the runs again under the lock and starts nothing when it is not the
+// one of its first read. The days stay pending, and the end of the run that
+// changed the state triggers the next pass, which reads again. This is what
+// keeps a skipped day at one more run in touchedDrainRetryAfter when two
+// passes find it due at the same time.
+//
+// A fan-out does not take this lock: a run it commits after this check is not
+// seen, and costs one more recompute of its days.
 func (drain *TouchedDaysDrain) start(ctx context.Context, pass *touchedDrainPass) error {
 	tx, err := drain.pool.Begin(ctx)
 	if err != nil {
@@ -319,6 +434,14 @@ func (drain *TouchedDaysDrain) start(ctx context.Context, pass *touchedDrainPass
 	}
 	if inFlight > 0 {
 		pass.inFlight = inFlight
+		return tx.Commit(ctx)
+	}
+	runsState, err := drain.runs.RunsStateTx(ctx, tx, pass.organizationID)
+	if err != nil {
+		return err
+	}
+	if runsState != pass.runsState {
+		pass.runsChanged = true
 		return tx.Commit(ctx)
 	}
 	var started []touchedDrainStart
@@ -345,7 +468,9 @@ func (drain *TouchedDaysDrain) start(ctx context.Context, pass *touchedDrainPass
 // keys the started runs list, at the time the pending days were read.
 //
 // A failed mark is not a failure of the pass: the runs are committed and the
-// days stay pending, so a later pass computes them once more.
+// days stay pending, so a later pass computes them once more. It ends the
+// chain: the pass that the end of one of these runs triggers finds the keys
+// not marked and starts nothing (markOfPassMissing).
 func (drain *TouchedDaysDrain) mark(ctx context.Context, pass *touchedDrainPass) {
 	var keys []TouchedDayKey
 	for _, start := range pass.started {
@@ -370,8 +495,11 @@ func (drain *TouchedDaysDrain) mark(ctx context.Context, pass *touchedDrainPass)
 func (drain *TouchedDaysDrain) report(ctx context.Context, pass *touchedDrainPass) {
 	org := synclog.Org(synclog.ParseID(pass.organizationID))
 	passAttr := drainPassAttr(pass.passID)
-	split := 0
+	split, retried := 0, 0
 	for _, start := range pass.started {
+		if start.retry {
+			retried++
+		}
 		if !start.split {
 			continue
 		}
@@ -417,6 +545,8 @@ func (drain *TouchedDaysDrain) report(ctx context.Context, pass *touchedDrainPas
 		outcome = "nothing_pending"
 	case pass.inFlight > 0:
 		outcome = "in_flight"
+	case pass.runsChanged:
+		outcome = "runs_changed_since_read"
 	case len(pass.started) == 0:
 		outcome = "started_none"
 	}
@@ -436,6 +566,7 @@ func (drain *TouchedDaysDrain) report(ctx context.Context, pass *touchedDrainPas
 		synclog.Count(synclog.KeyDrainDaysAlreadyStarted, pass.alreadyStarted),
 		synclog.Count(synclog.KeyDrainDaysReturned, pass.returned),
 		synclog.Count(synclog.KeyDrainDaysSkipped, len(pass.skipped)),
+		synclog.Count(synclog.KeyDrainDaysRetried, retried),
 		synclog.Count(synclog.KeyDrainRunsInFlight, pass.inFlight),
 		synclog.Elapsed(synclog.KeyDrainOldestPendingAge, age),
 		synclog.Flag(synclog.KeyDrainReadTruncated, pass.backlog.Truncated),
@@ -452,6 +583,7 @@ func (drain *TouchedDaysDrain) report(ctx context.Context, pass *touchedDrainPas
 	drain.observe(jobruntime.TouchedDaysDrainDaysAlreadyStarted, uint64(pass.alreadyStarted))
 	drain.observe(jobruntime.TouchedDaysDrainDaysReturned, uint64(pass.returned))
 	drain.observe(jobruntime.TouchedDaysDrainDaysSkipped, uint64(len(pass.skipped)))
+	drain.observe(jobruntime.TouchedDaysDrainDaysRetried, uint64(retried))
 	if pass.inFlight > 0 {
 		drain.observe(jobruntime.TouchedDaysDrainInFlight, 1)
 	}

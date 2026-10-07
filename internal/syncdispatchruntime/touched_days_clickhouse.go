@@ -3,6 +3,7 @@ package syncdispatchruntime
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
@@ -364,61 +365,217 @@ LIMIT ?`, organizationID, limit+1)
 	return backlog, nil
 }
 
-// touchedKeysToReturnSQL selects the keys of one day that a run was started for
-// at or before a time and that are not pending now. Its arguments are the
-// organization, the day (2006-01-02) and the time in milliseconds.
-const touchedKeysToReturnSQL = `
+// TouchedRunKeys is one daily run and the keys of the touched-day record it
+// lists, as the run state (Postgres) holds them.
+type TouchedRunKeys struct {
+	RunID string
+	Day   time.Time
+	// FullOrganization is true for a run of every repository: it lists every
+	// key of its day but the ones of ExceptRepositoryIDs.
+	FullOrganization bool
+	// RepositoryIDs are the listed repositories of a run that is not a run of
+	// every repository.
+	RepositoryIDs []string
+	// ExceptRepositoryIDs are the repositories a run of every repository does
+	// not list, because a newer run lists them.
+	ExceptRepositoryIDs []string
+}
+
+// touchedReturnKeysPerStatement bounds the keys one statement of
+// ReturnToPending names.
+const touchedReturnKeysPerStatement = 10000
+
+// touchedMarkedKeysSQL selects the keys of the organization that are not
+// pending now (a run was started for them), among the given days. %s is one
+// more condition on the key. Its arguments are the organization, the days
+// (2006-01-02) and the arguments of the condition.
+const touchedMarkedKeysSQL = `
     SELECT org_id, day, repo_id,
            maxIf(at, kind = 'touched') AS touched_at,
            maxIf(at, kind = 'dispatched') AS dispatched_at
     FROM daily_metrics_touched_days
-    WHERE org_id = ? AND toString(day) = ?
+    WHERE org_id = ? AND has(?, toString(day))
     GROUP BY org_id, day, repo_id
-    HAVING dispatched_at >= touched_at
-       AND dispatched_at <= fromUnixTimestamp64Milli(toInt64(?), 'UTC')`
+    HAVING dispatched_at >= touched_at AND %s`
 
-// ReturnToPending makes every key of the day pending again that was marked as
-// dispatched at or before failedAt and that is not pending now. The drain
-// calls it for a day with a run that ended without a result at failedAt: the
-// keys were marked when the run started, and the run computed nothing. It
-// returns false when the day had no such key.
+// ReturnToPending makes the given keys pending again that are not pending
+// now, and returns the number of days it did that for. The drain calls it with
+// the keys whose owner run ended without a result: they were marked when that
+// run started, and the run computed nothing.
 //
-// The bound on the mark is what makes a second call for the same failure
-// append nothing: the run that is started for the returned keys marks them
-// after failedAt. It also leaves alone the keys a later run was started for.
-// A key of the day that another run computed before failedAt is returned too
-// and is computed once more.
+// The keys are named by the caller, from the list of the run. No time of a run
+// is an argument, so no clock of the run state is compared with a time of this
+// table. The organization is a condition of every statement: the keys of
+// another organization with the same day and repository are never written.
 //
-// The 'touched' event it appends carries failedAt, or one millisecond after
-// the key's newest 'dispatched' event when that is later: the two times come
-// from two clocks, and the key must be pending after the append whatever
-// their skew. A key that is pending already gets no event, so the time a
-// pending key has waited does not move.
+// The 'touched' event it appends carries the ClickHouse time of the append, or
+// one millisecond after the key's newest 'dispatched' event when that is
+// later: the key must be pending after the append also when its mark carries a
+// time ahead of the clock. A key that is pending already gets no event, so the
+// time a pending key has waited does not move.
+//
+// A second call for the same run appends nothing while its keys are pending.
+// When a run was started for them again, that run is their owner and the
+// caller does not name them for the first one.
 //
 // The SELECT gives its constant no alias, for the reason MarkDispatched names.
 func (store *ClickHouseTouchedDaysStore) ReturnToPending(
-	ctx context.Context, organizationID string, day time.Time, failedAt time.Time,
-) (bool, error) {
-	if store == nil || store.conn == nil || organizationID == "" || day.IsZero() || failedAt.IsZero() {
-		return false, ErrTouchedDaysUnavailable
+	ctx context.Context, organizationID string, runs []TouchedRunKeys,
+) (int, error) {
+	if store == nil || store.conn == nil || organizationID == "" {
+		return 0, ErrTouchedDaysUnavailable
 	}
-	dayKey, failedMillis := day.UTC().Format("2006-01-02"), failedAt.UTC().UnixMilli()
-	var keys uint64
-	if err := store.conn.QueryRow(ctx, `SELECT count() FROM (`+touchedKeysToReturnSQL+`)`,
-		organizationID, dayKey, failedMillis).Scan(&keys); err != nil {
-		return false, ErrTouchedDaysUnavailable
+	returned := map[string]struct{}{}
+	var (
+		days []string
+		keys []string
+	)
+	flush := func() error {
+		if len(keys) == 0 {
+			return nil
+		}
+		err := store.returnMarkedKeys(ctx, organizationID, days,
+			`has(?, concat(toString(day), '|', toString(repo_id)))`, keys, returned)
+		days, keys = nil, nil
+		return err
 	}
-	if keys == 0 {
-		return false, nil
+	for _, run := range runs {
+		if run.Day.IsZero() {
+			return 0, ErrTouchedDaysUnavailable
+		}
+		day := run.Day.UTC().Format("2006-01-02")
+		if run.FullOrganization {
+			except := run.ExceptRepositoryIDs
+			if except == nil {
+				except = []string{}
+			}
+			if err := store.returnMarkedKeys(ctx, organizationID, []string{day},
+				`NOT has(?, toString(repo_id))`, except, returned); err != nil {
+				return 0, err
+			}
+			continue
+		}
+		for _, repositoryID := range run.RepositoryIDs {
+			parsed, err := uuid.Parse(repositoryID)
+			if err != nil {
+				return 0, ErrTouchedDaysUnavailable
+			}
+			keys = append(keys, day+"|"+parsed.String())
+		}
+		days = append(days, day)
+		if len(keys) >= touchedReturnKeysPerStatement {
+			if err := flush(); err != nil {
+				return 0, err
+			}
+		}
+	}
+	if err := flush(); err != nil {
+		return 0, err
+	}
+	return len(returned), nil
+}
+
+// returnMarkedKeys appends one 'touched' event for each key of days that is
+// not pending and that condition (with its one array argument) selects, and
+// adds the days of those keys to returned.
+func (store *ClickHouseTouchedDaysStore) returnMarkedKeys(
+	ctx context.Context, organizationID string, days []string, condition string, argument []string,
+	returned map[string]struct{},
+) error {
+	marked := fmt.Sprintf(touchedMarkedKeysSQL, condition)
+	rows, err := store.conn.Query(ctx, `SELECT DISTINCT toString(day) FROM (`+marked+`)`,
+		organizationID, days, argument)
+	if err != nil {
+		return ErrTouchedDaysUnavailable
+	}
+	var found []string
+	for rows.Next() {
+		var day string
+		if err := rows.Scan(&day); err != nil {
+			_ = rows.Close()
+			return ErrTouchedDaysUnavailable
+		}
+		found = append(found, day)
+	}
+	if err := errors.Join(rows.Err(), rows.Close()); err != nil {
+		return ErrTouchedDaysUnavailable
+	}
+	if len(found) == 0 {
+		return nil
 	}
 	if err := store.conn.Exec(ctx, `
 INSERT INTO daily_metrics_touched_days (org_id, day, repo_id, kind, at)
 SELECT org_id, day, repo_id, 'touched',
-       greatest(fromUnixTimestamp64Milli(toInt64(?), 'UTC'), addMilliseconds(dispatched_at, 1))
-FROM (`+touchedKeysToReturnSQL+`)`, failedMillis, organizationID, dayKey, failedMillis); err != nil {
-		return false, ErrTouchedDaysUnavailable
+       greatest(now64(3, 'UTC'), addMilliseconds(dispatched_at, 1))
+FROM (`+marked+`)`, organizationID, days, argument); err != nil {
+		return ErrTouchedDaysUnavailable
 	}
-	return true, nil
+	for _, day := range found {
+		returned[day] = struct{}{}
+	}
+	return nil
+}
+
+// RunsWithEveryKeyPending returns how many of the given runs have every key
+// they list pending. A run that lists no key is not counted.
+//
+// The drain reads it for the runs with a result of one pass: the mark of the
+// pass ends each of their keys, so such a run says that the mark did not reach
+// the table (or that every key of the run was touched again while it ran).
+func (store *ClickHouseTouchedDaysStore) RunsWithEveryKeyPending(
+	ctx context.Context, organizationID string, runs []TouchedRunKeys,
+) (int, error) {
+	if store == nil || store.conn == nil || organizationID == "" {
+		return 0, ErrTouchedDaysUnavailable
+	}
+	listed := map[string]uint64{}
+	var keys []string
+	for _, run := range runs {
+		if run.FullOrganization || len(run.RepositoryIDs) == 0 {
+			continue
+		}
+		day := run.Day.UTC().Format("2006-01-02")
+		for _, repositoryID := range run.RepositoryIDs {
+			parsed, err := uuid.Parse(repositoryID)
+			if err != nil {
+				return 0, ErrTouchedDaysUnavailable
+			}
+			keys = append(keys, run.RunID+"|"+day+"|"+parsed.String())
+		}
+		listed[run.RunID] = uint64(len(run.RepositoryIDs))
+	}
+	if len(keys) == 0 {
+		return 0, nil
+	}
+	rows, err := store.conn.Query(ctx, `
+SELECT splitByChar('|', listed)[1] AS run, count()
+FROM (SELECT arrayJoin(?) AS listed)
+WHERE (splitByChar('|', listed)[2], splitByChar('|', listed)[3]) IN (
+    SELECT toString(day), toString(repo_id) FROM (`+pendingTouchedKeysSQL+`
+    )
+)
+GROUP BY run`, keys, organizationID)
+	if err != nil {
+		return 0, ErrTouchedDaysUnavailable
+	}
+	defer rows.Close()
+	whollyPending := 0
+	for rows.Next() {
+		var (
+			runID   string
+			pending uint64
+		)
+		if err := rows.Scan(&runID, &pending); err != nil {
+			return 0, ErrTouchedDaysUnavailable
+		}
+		if pending == listed[runID] {
+			whollyPending++
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return 0, ErrTouchedDaysUnavailable
+	}
+	return whollyPending, nil
 }
 
 // clock reads the ClickHouse clock at millisecond precision.

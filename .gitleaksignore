@@ -3,3 +3,12 @@
 # file:rule:line form so the rows still match after a squash; generic-api-key is suppressed on these two lines only.
 internal/platform/errortext/clause_corpus_test.go:generic-api-key:150
 internal/platform/errortext/clause_corpus_test.go:generic-api-key:153
+
+# CHAOS-8867: TypeSafe client test fixtures. The test file uses made-up word-marker keys (prefix ZQXJ-, no credential shape) as the
+# configured key so a test can prove the peer's echo of that exact key never reaches an error, a log or a result field. The
+# generic-api-key rule fires on the quoted marker beside a variable named key. Not credentials. The lines are the ones the scan
+# reports in the commits of the pull request and in the squashed file, in the commit-less form (matches in any commit).
+internal/jobs/investment/categorize/typesafeclient_test.go:generic-api-key:25
+internal/jobs/investment/categorize/typesafeclient_test.go:generic-api-key:880
+internal/jobs/investment/categorize/typesafeclient_test.go:generic-api-key:986
+internal/jobs/investment/categorize/typesafeclient_test.go:generic-api-key:991

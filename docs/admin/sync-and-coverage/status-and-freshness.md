@@ -41,6 +41,14 @@ Read the administrative activity and execution records together:
 
 Manual, scheduled, and backfill synchronization share the same canonical run model. The timing trigger differs; the execution truth should still identify the planned units and final outcome.
 
+A sync configuration has at most one scheduled run in progress. While that run
+is open, later scheduled ticks start nothing, and the next scheduled run covers
+the time since the previous one from each unit's watermark. Job History
+therefore lists fewer scheduled runs for a configuration whose runs take longer
+than its schedule interval; a missing hourly row is not a missed sync. A manual
+sync or a backfill can still be started while a scheduled run is open. See
+[One scheduled sync run per configuration](../../operate/configure/workers-and-schedules.md#one-scheduled-sync-run-per-configuration).
+
 ### Budget-deferred and budget-exhausted units
 
 A unit whose estimated provider cost does not fit its budget bucket is

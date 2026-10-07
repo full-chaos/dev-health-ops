@@ -36,6 +36,19 @@ const (
 
 	activeJobStatus = 0
 	staleRunningTTL = 2 * time.Hour
+	// openRunProgressTTL is how long an open scheduled run may show no progress
+	// and still hold its configuration's schedule back. It is the same interval
+	// as staleRunningTTL on purpose: one definition of "stale" for a schedule.
+	openRunProgressTTL = staleRunningTTL
+	// openRunAgeCap is the hard limit: an open scheduled run older than this
+	// stops holding the schedule back even while it still makes progress. It
+	// is longer than one day on purpose: at a daily schedule's tick the run of
+	// the day before is one day old, and a one-day cap would never hold it.
+	openRunAgeCap = 48 * time.Hour
+	// openRunResumeLookback bounds how many of a configuration's newest
+	// scheduled occurrences the resume rule reads for the latest run end. It
+	// only has to reach past the runs that can be open at one time.
+	openRunResumeLookback = 64
 )
 
 type RunningMarkerState string

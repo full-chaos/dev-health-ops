@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -147,14 +148,16 @@ func planSelectionChange(provider string, enabledKeys, stored, submitted []strin
 	if err != nil {
 		return selectionChange{}, err
 	}
-	submittedKeys, err := keysOf(submitted)
-	if err != nil {
-		return selectionChange{}, err
-	}
-	controlled, keptOn := stringSet(providersync.OperatorControlledDatasetKeys(provider)), stringSet(submittedKeys)
-	for _, key := range removedKeys {
-		if controlled[key] && !keptOn[key] {
-			change.disableKeys = append(change.disableKeys, key)
+	if len(removedKeys) > 0 {
+		submittedKeys, err := keysOf(submitted)
+		if err != nil {
+			return selectionChange{}, err
+		}
+		controlled, keptOn := operatorControlledKeys(provider), stringSet(submittedKeys)
+		for _, key := range removedKeys {
+			if controlled[key] && !keptOn[key] {
+				change.disableKeys = append(change.disableKeys, key)
+			}
 		}
 	}
 	inAdded := stringSet(change.added)
@@ -165,6 +168,19 @@ func planSelectionChange(provider string, enabledKeys, stored, submitted []strin
 		}
 	}
 	return change, nil
+}
+
+// operatorControlledKeys is providersync.OperatorControlledDatasetKeys as a
+// set, computed once per provider: the registry it reads never changes.
+var operatorControlledKeySets sync.Map
+
+func operatorControlledKeys(provider string) map[string]bool {
+	if cached, ok := operatorControlledKeySets.Load(provider); ok {
+		return cached.(map[string]bool)
+	}
+	set := stringSet(providersync.OperatorControlledDatasetKeys(provider))
+	operatorControlledKeySets.Store(provider, set)
+	return set
 }
 
 func stringSet(values []string) map[string]bool {

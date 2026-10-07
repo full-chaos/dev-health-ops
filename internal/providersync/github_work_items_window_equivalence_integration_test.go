@@ -8,9 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"path/filepath"
 	"regexp"
-	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -22,19 +20,16 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// CHAOS-8810, acceptance (a): the end-to-end proof through the production
-// GitHub route. The harness (the stateful provider double, the real route, the
-// real deriver, the real effect committer and sinks, ClickHouse from the
-// migration chain, Postgres) is the work of the lane that found the defect
-// (CHAOS-8808); this file holds the part of it that this change makes green.
-// The two other properties of that harness -- an hourly unit by itself leaves
-// the store equal to a full sync, and thirteen windows equal one unit -- need
-// the sync unit to stop writing derived rows and the post-sync fan-out to
-// cover the touched days; their tests come with those changes.
+// The end-to-end proof through the production GitHub route. The harness is
+// the stateful provider double, the real route, the real effect committer and
+// sinks, ClickHouse from the migration chain, and Postgres. The sync unit
+// stores raw rows only; the daily families are the one writer of the nine
+// tables computed from stored rows. The test here holds both halves: a unit
+// leaves those tables without a row, and the daily families of a day give an
+// hourly store and a full-sync store the same rows for that day.
 //
 // The window-equivalence fixture: one repository whose issues have their
 // creation, their state changes and their last update spread over a 90-day
@@ -250,7 +245,7 @@ type windowEquivalenceWindow struct {
 }
 
 // runWindowEquivalenceArm syncs the fixture through the production route --
-// the real collector, the real deriver, the real effect committer and sink --
+// the real collector, the real effect committer and sink --
 // once per window, into its own ClickHouse, and returns every row of every
 // destination table.
 func runWindowEquivalenceArm(
@@ -258,13 +253,6 @@ func runWindowEquivalenceArm(
 	conn driver.Conn, arm string, windows []windowEquivalenceWindow,
 ) map[string][]string {
 	t.Helper()
-	_, file, _, ok := moduleroot.Caller(0)
-	if !ok {
-		t.Fatal("cannot locate the test source")
-	}
-	root := filepath.Clean(filepath.Join(filepath.Dir(file), "..", ".."))
-	statusMappingPath := filepath.Join(root, "src/dev_health_ops/config/status_mapping.yaml")
-	investmentConfigPath := filepath.Join(root, "src/dev_health_ops/config/investment_areas.yaml")
 	doer := &windowEquivalenceDoer{t: t}
 	for index, window := range windows {
 		doer.issues = window.issues
@@ -307,10 +295,6 @@ INSERT INTO public.sync_run_units (
 		if err != nil {
 			t.Fatal(err)
 		}
-		deriver, err := NewGitHubWorkItemDeriver(conn, guard, statusMappingPath, investmentConfigPath)
-		if err != nil {
-			t.Fatal(err)
-		}
 		executor := CompleteRouteExecutor{
 			Credentials: providerfoundation.CredentialResolver{
 				Repository: projectsV2DurableCredentialRepository{},
@@ -332,7 +316,6 @@ INSERT INTO public.sync_run_units (
 				ProjectMembershipSnapshotDiff: GitHubProjectV2SnapshotDiffClickHouseReader{
 					Conn: conn,
 				},
-				Deriver: deriver,
 			},
 			Comparator: ProductionContractComparator{},
 			Committer: EffectCommitter{
@@ -368,9 +351,16 @@ INSERT INTO public.sync_run_units (
 	return tables
 }
 
-// windowEquivalenceAppendOnlyKeys names, for each destination that is a plain
-// (append-only) MergeTree and is written again by a later unit or by the daily
-// job, the key its readers take the newest computed_at of. The keys are the
+// windowEquivalenceTables is every compared table: the destinations of the
+// route (raw rows and ai_attribution) and the nine tables the daily families
+// compute from stored rows.
+func windowEquivalenceTables() []string {
+	return append(githubWorkItemRouteDestinations(), githubWorkItemDerivedDestinations...)
+}
+
+// windowEquivalenceAppendOnlyKeys names, for each compared table that is a
+// plain (append-only) MergeTree and is written again by a later run of the
+// daily job, the key its readers take the newest computed_at of. The keys are the
 // GROUP BY of the production readers: investment_metrics_daily in
 // internal/queryapi/analytics/timeseries.go (investmentMetricsDailyDedupSource),
 // internal/queryapi/home/queries_freshness.go (fetchReworkThemeAllocation) and
@@ -384,22 +374,21 @@ var windowEquivalenceAppendOnlyKeys = map[string]string{
 	"investment_classifications_daily": "org_id, day, repo_id, artifact_type, artifact_id",
 }
 
-// readWindowEquivalenceTables returns every row of every destination table as
+// readWindowEquivalenceTables returns every row of every compared table as
 // a production reader sees it: the newest version of each sorting key (FINAL)
 // where the table replaces versions; the newest computed_at of each reader key
 // where the table is append only and a reader dedupes it
 // (windowEquivalenceAppendOnlyKeys); every row otherwise.
 //
 // What a reader with NO dedupe would see in an append-only table is every
-// version at once: the full sync's row, the hourly unit's partial row and the
-// daily job's row for one key, three rows where one is true. No ops reader of
+// version at once: one row for each run of the daily job. No ops reader of
 // the three tables reads them that way (see the reader tests of
 // internal/queryapi), which is why this read does not either.
 func readWindowEquivalenceTables(t *testing.T, ctx context.Context, conn driver.Conn) map[string][]string {
 	t.Helper()
 	tables := map[string][]string{}
 	deduped := map[string]bool{}
-	for _, destination := range githubWorkItemRouteDestinations() {
+	for _, destination := range windowEquivalenceTables() {
 		var engine string
 		if err := conn.QueryRow(ctx,
 			"SELECT engine FROM system.tables WHERE database = currentDatabase() AND name = ?",
@@ -440,14 +429,14 @@ func readWindowEquivalenceTables(t *testing.T, ctx context.Context, conn driver.
 	}
 	for destination := range windowEquivalenceAppendOnlyKeys {
 		if !deduped[destination] {
-			t.Fatalf("%s is in windowEquivalenceAppendOnlyKeys and is not a destination of the route", destination)
+			t.Fatalf("%s is in windowEquivalenceAppendOnlyKeys and is not a compared table", destination)
 		}
 	}
 	return tables
 }
 
-// windowEquivalenceRunStampColumns are the columns a unit stamps with its own
-// run clock. Two arms run at different instants by construction, so these
+// windowEquivalenceRunStampColumns are the columns a unit or a daily run
+// stamps with its own run clock. Two arms run at different instants by construction, so these
 // columns differ for every row and are left out of the comparison; every other
 // column of every destination is compared. A name that matches no column of
 // any destination fails the test.
@@ -455,7 +444,7 @@ var windowEquivalenceRunStampColumns = []string{
 	"last_synced", "computed_at",
 	// work_items: the wall clock of the insert.
 	"ingested_at",
-	// work_item_team_attributions: the id of the unit that wrote the row.
+	// work_item_team_attributions: the id of the run that wrote the row.
 	"run_id",
 }
 
@@ -615,13 +604,14 @@ func runWindowEquivalenceDailyFamilies(t *testing.T, ctx context.Context, conn d
 	return runDailyWorkItemFamilies(ctx, t, conn, windowEquivalenceOrgID, day, repoIDs)
 }
 
-// TestGitHubWorkItemsDailyFamiliesRestoreTheDayAfterAnHourlyUnit runs the
-// daily metric families for the day of an hourly unit, on the store that the
-// hourly unit wrote to and on a store that holds one full sync of the same
-// provider state. After the families ran, the rows of that day in every
-// destination table must be the same in both stores, read as the production
-// readers read them (readWindowEquivalenceTables).
-func TestGitHubWorkItemsDailyFamiliesRestoreTheDayAfterAnHourlyUnit(t *testing.T) {
+// TestGitHubWorkItemsDailyFamiliesAreTheOneWriterOfTheDayAfterAnHourlyUnit
+// syncs one provider state into two stores: one by a full unit and an hourly
+// unit, one by a single full unit. After the units, the nine tables computed
+// from stored rows hold no row of the tenant in either store. After the daily
+// metric families ran for the day of the hourly unit, the rows of that day in
+// every compared table must be present and the same in both stores, read as
+// the production readers read them (readWindowEquivalenceTables).
+func TestGitHubWorkItemsDailyFamiliesAreTheOneWriterOfTheDayAfterAnHourlyUnit(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Minute)
 	defer cancel()
 	_, steadyConn := newWorkItemEffectsConn(t)
@@ -647,6 +637,20 @@ func TestGitHubWorkItemsDailyFamiliesRestoreTheDayAfterAnHourlyUnit(t *testing.T
 		[]windowEquivalenceWindow{{since: windowEquivalenceStart, before: hourOne, issues: changed}})
 	storedBefore := readWindowEquivalenceTables(t, ctx, steadyConn)
 	truthBefore := readWindowEquivalenceTables(t, ctx, truthConn)
+
+	// The sync units stored raw rows only: no table of the daily job has a
+	// row of the tenant, in either store. The raw tables are not empty, so the
+	// read is not vacuous.
+	for _, destination := range githubWorkItemDerivedDestinations {
+		if stored, truth := len(storedBefore[destination]), len(truthBefore[destination]); stored != 0 || truth != 0 {
+			t.Errorf("after the sync units %s holds %d rows in the hourly store and %d in the full-sync store; the daily job is its one writer",
+				destination, stored, truth)
+		}
+	}
+	if len(storedBefore["work_items"]) == 0 || len(truthBefore["work_items"]) == 0 {
+		t.Fatalf("the sync units stored no work item: hourly store %d, full-sync store %d",
+			len(storedBefore["work_items"]), len(truthBefore["work_items"]))
+	}
 
 	// What the sync stored for the transitions: every row has the nil repository
 	// id, so a family that selects transitions by the repository id of the
@@ -686,7 +690,8 @@ FROM work_item_transitions WHERE org_id = ?`, windowEquivalenceOrgID, windowEqui
 	}
 	stamped := map[string]bool{}
 	wrongBeforeJob, stillWrong, otherDaysWrong := []string{}, []string{}, []string{}
-	for _, destination := range githubWorkItemRouteDestinations() {
+	dayRowsAfterJob := map[string]int{}
+	for _, destination := range windowEquivalenceTables() {
 		beforeStored, _ := ofTheDay(normalizeWindowEquivalenceRows(t, destination, storedBefore[destination], stamped))
 		beforeTruth, _ := ofTheDay(normalizeWindowEquivalenceRows(t, destination, truthBefore[destination], stamped))
 		afterStored, otherStored := ofTheDay(normalizeWindowEquivalenceRows(t, destination, storedAfter[destination], stamped))
@@ -694,6 +699,7 @@ FROM work_item_transitions WHERE org_id = ?`, windowEquivalenceOrgID, windowEqui
 		wrongBeforeStored, wrongBeforeTruth := windowEquivalenceDifference(beforeStored, beforeTruth)
 		onlyStored, onlyTruth := windowEquivalenceDifference(afterStored, afterTruth)
 		jobGone, jobNew := windowEquivalenceDifference(beforeStored, afterStored)
+		dayRowsAfterJob[destination] = len(afterStored)
 		otherOnlyStored, otherOnlyTruth := windowEquivalenceDifference(otherStored, otherTruth)
 		t.Logf("TABLE %-34s the day, before_job: only_stored=%-3d only_truth=%-3d | job_on_hourly_store: replaced=%-3d new=%-3d | the day, after_job: only_stored=%-3d only_truth=%-3d | other days, after_job: only_stored=%-3d only_truth=%d",
 			destination, len(wrongBeforeStored), len(wrongBeforeTruth), len(jobGone), len(jobNew),
@@ -714,35 +720,32 @@ FROM work_item_transitions WHERE org_id = ?`, windowEquivalenceOrgID, windowEqui
 			t.Errorf("run-stamp column %q matched no column of any destination", column)
 		}
 	}
-	// The precondition: before the families ran, the hourly unit had left the
-	// day wrong in the tables this change gives a daily family (or a working
-	// one) for. A harness that no longer produces the partial rows would make
-	// the equality below true for no reason.
-	for _, destination := range []string{
-		"issue_type_metrics_daily", "investment_metrics_daily", "work_item_state_durations_daily",
-	} {
-		if !slices.Contains(wrongBeforeJob, destination) {
-			t.Errorf("before the daily families, %s of the day was already equal to a full sync: the hourly unit no longer leaves the partial rows this test is about (wrong before the job: %v)",
-				destination, wrongBeforeJob)
+	// The raw rows of the two stores are equal before the families run: both
+	// hold the same provider state. A raw table that differs would make the
+	// families compute from different facts.
+	if len(wrongBeforeJob) > 0 {
+		t.Errorf("before the daily families the stores differ in %v; the units store raw rows only and both stores hold the same provider state", wrongBeforeJob)
+	}
+	// The precondition of the equality below: the families wrote rows of the
+	// day in each of the nine tables. Two stores with no row of the day would
+	// be equal for no reason.
+	for _, destination := range githubWorkItemDerivedDestinations {
+		if dayRowsAfterJob[destination] == 0 {
+			t.Errorf("after the daily families %s has no row of the day in the hourly store (rows of the day by table: %v)",
+				destination, dayRowsAfterJob)
 		}
 	}
+	t.Logf("rows of the day in the hourly store after the daily families: %v", dayRowsAfterJob)
 	if len(stillWrong) > 0 {
-		t.Fatalf("after the daily families %d of %d destination tables still differ from a full sync for the day: %v",
-			len(stillWrong), len(githubWorkItemRouteDestinations()), stillWrong)
+		t.Fatalf("after the daily families %d of %d compared tables still differ from a full sync for the day: %v",
+			len(stillWrong), len(windowEquivalenceTables()), stillWrong)
 	}
-	// NOT repaired by the families of one day, and measured here so that it is
-	// not read as covered: issue 6 got its first status change in the hourly
-	// unit. An item with no status change has no state-duration rows; with one
-	// it has rows on every day since its creation. Those earlier days are
-	// recomputed only when the daily job runs for them, which is the job of
-	// the post-sync fan-out over the days the new data touches. No other table
-	// may differ on another day.
+	// The families of one day write that day only, and the units write no
+	// daily row: no compared table may differ on another day.
 	if len(otherDaysWrong) > 0 {
 		t.Logf("OTHER DAYS still differ from a full sync (not written by the families of one day): %v", otherDaysWrong)
 	}
 	for _, destination := range otherDaysWrong {
-		if destination != "work_item_state_durations_daily" {
-			t.Errorf("%s differs from a full sync on a day other than the target day", destination)
-		}
+		t.Errorf("%s differs from a full sync on a day other than the target day", destination)
 	}
 }

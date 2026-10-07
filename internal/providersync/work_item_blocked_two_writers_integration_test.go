@@ -5,14 +5,15 @@ package providersync
 // CHAOS-8493 on a real ClickHouse, at the migration head (this file authors
 // no DDL: newWorkItemEffectsConn applies the production migration chain).
 //
-// work_item_state_durations_daily has TWO writers and `status` is part of its
-// row key: the sync-time deriver (this package) and the work_item_state daily
-// family (internal/jobs/metrics/daily). The rule that says which hours are
-// "blocked" is one function, but each writer has its OWN read of the facts
-// the rule needs. A read that one writer does differently makes the two write
-// different rows for one item and one day, and no unit test of the rule can
-// see that. The first test here runs both writers, each through its real
-// read, on one set of stored facts and compares their rows.
+// work_item_state_durations_daily has ONE writer and `status` is part of its
+// row key: the work_item_state daily family (internal/jobs/metrics/daily).
+// The work-items sync unit (this package) stores raw rows only and its sink
+// refuses the table. The rule that says which hours are "blocked" is one
+// function, and the daily family has its own read of the facts the rule
+// needs; no unit test of the rule can see a wrong read. The first test here
+// stores a unit's raw rows through the sync adapters, shows that the day has
+// no row, then runs the daily family through its real read and holds its
+// stored rows to the expected hours.
 
 import (
 	"context"
@@ -34,8 +35,8 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/oraclecompare"
 )
 
-// stateDurationFields is the compared field set: every field of the row type
-// the sync-time deriver writes. It is derived from the TYPE, so a column
+// stateDurationFields is the compared field set: every field of the stored
+// row type. It is derived from the TYPE, so a column
 // added to the row is compared with no edit here.
 func stateDurationFields(t *testing.T) []string {
 	t.Helper()
@@ -49,11 +50,11 @@ func stateDurationFields(t *testing.T) []string {
 // stateDurationExclusions names each field that is NOT compared, with its
 // reason. Every other field of the row type is.
 var stateDurationExclusions = map[string]string{
-	"computed_at": "each writer stamps the time of its own run",
+	"computed_at": "each run stamps its own time",
 }
 
 // readStateDurations reads the stored rows of one organization and day, each
-// as field -> the column's own text. Both writers' rows are read from the
+// as field -> the column's own text. The rows of every run are read from the
 // same table by this one statement, so equal text is an equal stored value.
 // The rows are keyed by the table's row key after the day.
 func readStateDurations(ctx context.Context, t *testing.T, conn driver.Conn, org string, day time.Time) map[string]map[string]any {
@@ -99,15 +100,15 @@ ORDER BY provider, work_scope_id, team_id, status`, org, day.Format("2006-01-02"
 	return result
 }
 
-// diffStateDurations compares the rows of the sync-time deriver with the rows
-// of the daily family, field by field (oraclecompare.DiffRows). In its
-// messages "python" is the sync-time deriver and "go" is the daily family.
-func diffStateDurations(syncTime, dailyFamily map[string]map[string]any) []string {
+// diffStateDurations compares the rows of two runs of the daily family,
+// field by field (oraclecompare.DiffRows). In its messages "python" is the
+// expected run and "go" is the run under test.
+func diffStateDurations(want, got map[string]map[string]any) []string {
 	keys := map[string]struct{}{}
-	for key := range syncTime {
+	for key := range want {
 		keys[key] = struct{}{}
 	}
-	for key := range dailyFamily {
+	for key := range got {
 		keys[key] = struct{}{}
 	}
 	sorted := make([]string, 0, len(keys))
@@ -117,13 +118,13 @@ func diffStateDurations(syncTime, dailyFamily map[string]map[string]any) []strin
 	sort.Strings(sorted)
 	var messages []string
 	for _, key := range sorted {
-		left, inSync := syncTime[key]
-		right, inDaily := dailyFamily[key]
+		left, inWant := want[key]
+		right, inGot := got[key]
 		switch {
-		case !inSync:
-			messages = append(messages, fmt.Sprintf("row %s: the daily family wrote it, the sync-time deriver did not", key))
-		case !inDaily:
-			messages = append(messages, fmt.Sprintf("row %s: the sync-time deriver wrote it, the daily family did not", key))
+		case !inWant:
+			messages = append(messages, fmt.Sprintf("row %s: the run under test wrote it, the expected run did not", key))
+		case !inGot:
+			messages = append(messages, fmt.Sprintf("row %s: the expected run wrote it, the run under test did not", key))
 		default:
 			messages = append(messages, oraclecompare.DiffRows(key, left, right, nil, stateDurationExclusions)...)
 		}
@@ -132,7 +133,7 @@ func diffStateDurations(syncTime, dailyFamily map[string]map[string]any) []strin
 }
 
 // plantedReadConn is the real connection with ONE statement changed: a
-// planted defect in one read of one writer.
+// planted defect in one read of the daily family.
 type plantedReadConn struct {
 	driver.Conn
 	rewrite func(string) string
@@ -168,10 +169,10 @@ func writeLinearRawRows[Row any](
 	}
 }
 
-// TestBothWritersOfStateDurationsWriteTheSameBlockedRows seeds one
-// organization and one day, runs BOTH writers of
-// work_item_state_durations_daily through their real reads, and compares
-// their stored rows field by field.
+// TestDailyFamilyIsTheOneWriterOfBlockedStateDurations seeds one organization
+// and one day, stores a sync unit's raw rows, and holds
+// work_item_state_durations_daily to its one writer: no row after the unit,
+// the expected rows after the daily family.
 //
 // The day is 2026-08-24. The sync unit is linear and holds six items, each
 // created at 00:00 and todo -> in_progress at 06:00 (with no blocker: todo 6h
@@ -191,10 +192,12 @@ func writeLinearRawRows[Row any](
 //	       stored relation names it as extkey:OPS-6, not by its id. Blocked
 //	       24h.
 //
-// Both writers' rows are then compared. Last, a defect is planted in ONE read
-// of the sync-time deriver (the stored relations read a wrong time) and the
-// same comparison must report it.
-func TestBothWritersOfStateDurationsWriteTheSameBlockedRows(t *testing.T) {
+// The sync sink refuses a state duration effect and the table has no row of
+// the day after the unit. The daily families (team attribution, then state
+// durations) then run for the day through their real reads. Last, a defect is
+// planted in ONE read of the daily family (the stored relations read a wrong
+// time) and the comparison with the expected rows must report it.
+func TestDailyFamilyIsTheOneWriterOfBlockedStateDurations(t *testing.T) {
 	ctx, conn := newWorkItemEffectsConn(t)
 	lease := githubDerivedIntegrationLease()
 
@@ -314,39 +317,6 @@ func TestBothWritersOfStateDurationsWriteTheSameBlockedRows(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// syncTimeRows runs the sync-time deriver over the unit, with its stored
-	// facts read through queries, and returns what it derived by destination.
-	// The deriver is built by its production constructor
-	// (NewLinearWorkItemDeriver, as the worker builds it), with the real
-	// status mapping and investment configuration: its engine derives the
-	// destinations the deriver requires of every run.
-	syncTimeRows := func(queries driver.Conn) map[string][]json.RawMessage {
-		t.Helper()
-		deriver, err := NewLinearWorkItemDeriver(
-			queries, lease, resolveStatusMappingConfig(t, "real"), investmentConfigPath(t, "real"),
-		)
-		if err != nil {
-			t.Fatalf("sync-time deriver: %v", err)
-		}
-		derived, _, err := deriver.Derive(ctx, claim, unit, normalizedAt)
-		if err != nil {
-			t.Fatalf("sync-time deriver: %v", err)
-		}
-		if len(derived[githubStateDurationsDestination]) == 0 {
-			t.Fatal("the sync-time deriver derived no state duration row")
-		}
-		return derived
-	}
-	storeDerived := func(derived map[string][]json.RawMessage, destination string) {
-		t.Helper()
-		effect, err := BuildEffectBatch(destination, EffectReadbackRequired, derived[destination])
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := derivedSink.WriteEffect(ctx, claim, effect); err != nil {
-			t.Fatalf("write %s: %v", destination, err)
-		}
-	}
 	truncate := func() {
 		t.Helper()
 		if err := conn.Exec(ctx, "TRUNCATE TABLE work_item_state_durations_daily"); err != nil {
@@ -354,74 +324,112 @@ func TestBothWritersOfStateDurationsWriteTheSameBlockedRows(t *testing.T) {
 		}
 	}
 
-	// --- WRITER 1: the sync-time deriver --------------------------------
-	// It derives BEFORE the unit's rows are stored, as in production: the
-	// unit's own rows reach the rule from memory, the rest from the store.
-	derived := syncTimeRows(conn)
+	// --- THE SYNC UNIT: raw rows only ------------------------------------
 	writeItems(unit.WorkItems)
 	writeTransitions(unit.StatusTransitions)
 	writeRelations(unit.Dependencies)
-	if len(derived[githubTeamAttributionsDestination]) == 0 {
-		t.Fatal("the sync-time deriver derived no team attribution row; the daily family reads them")
+	// A state duration effect of the unit's day, with a row: the sync sink
+	// refuses it and the table stays empty for the tenant.
+	refusedRaw, err := effectRowsFromValues([]githubWorkItemStateDurationDailyRow{{
+		Day: newGitHubWorkItemDerivedDay(day), Provider: "linear", WorkScopeID: "project-platform",
+		TeamID: "OPS", TeamName: "OPS", Status: "blocked", DurationHours: 79, ItemsTouched: 5,
+		ComputedAt: normalizedAt, AvgWIP: 1, OrgID: org,
+	}})
+	if err != nil {
+		t.Fatal(err)
 	}
-	storeDerived(derived, githubTeamAttributionsDestination)
-	storeDerived(derived, githubStateDurationsDestination)
-	syncTime := readStateDurations(ctx, t, conn, org, day)
+	refusedEffect, err := BuildEffectBatch(githubStateDurationsDestination, EffectReadbackRequired, refusedRaw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertSyncSinkRefusesDailyJobTable(t, ctx, conn, derivedSink, claim, refusedEffect)
+	if afterUnit := readStateDurations(ctx, t, conn, org, day); len(afterUnit) != 0 {
+		t.Fatalf("after the sync unit the day has %d state duration rows; the daily family is the one writer", len(afterUnit))
+	}
+	for _, table := range []string{githubStateDurationsDestination, githubTeamAttributionsDestination} {
+		var stored uint64
+		if err := conn.QueryRow(ctx, "SELECT count() FROM "+table+" WHERE org_id = ?", org).Scan(&stored); err != nil {
+			t.Fatal(err)
+		}
+		if stored != 0 {
+			t.Fatalf("after the sync unit %s holds %d rows of the tenant", table, stored)
+		}
+	}
 
-	// The state the rule exists to reach, as stored by the sync-time deriver.
+	// --- THE DAILY FAMILIES ----------------------------------------------
+	// Linear items have no repository: their rows are stored under the nil
+	// repository id, which is the partition the daily family computes them in.
+	run := daily.Run{ID: "00000000-0000-4000-8000-0000000000c0", OrganizationID: org, TargetDay: day}
+	partition := daily.Partition{
+		ID: "00000000-0000-4000-8000-0000000000c1", RunID: "00000000-0000-4000-8000-0000000000c0",
+		RepoIDs: []daily.RepositoryID{"00000000-0000-0000-0000-000000000000"},
+	}
+	// The team attribution rows the state family reads are written by the
+	// daily job too, before it.
+	attribution, err := daily.NewWorkItemAttributionExecutor(conn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	attributed, err := attribution.ComputeFamily(ctx, run, partition)
+	if err != nil {
+		t.Fatalf("daily team attribution family: %v", err)
+	}
+	if attributed == 0 {
+		t.Fatal("the daily team attribution family wrote no row; the state family reads them")
+	}
+	dailyRows := func(queries driver.Conn) map[string]map[string]any {
+		t.Helper()
+		executor, err := daily.NewWorkItemStateExecutor(queries)
+		if err != nil {
+			t.Fatal(err)
+		}
+		written, err := executor.ComputeFamily(ctx, run, partition)
+		if err != nil {
+			t.Fatalf("daily family: %v", err)
+		}
+		if written == 0 {
+			t.Fatal("the daily family wrote no row")
+		}
+		return readStateDurations(ctx, t, conn, org, day)
+	}
+	dailyFamily := dailyRows(conn)
+
+	// The state the rule exists to reach, as stored by the daily family.
 	hours := map[string][2]string{}
-	for _, row := range syncTime {
+	for _, row := range dailyFamily {
 		text := func(field string) string { return row[field].(map[string]any)["v"].(string) }
 		if text("provider") != "linear" {
 			t.Fatalf("a stored row of provider %q", text("provider"))
 		}
+		if _, twice := hours[text("status")]; twice {
+			t.Fatalf("two stored rows of status %s: %v", text("status"), dailyFamily)
+		}
 		hours[text("status")] = [2]string{text("duration_hours"), text("items_touched")}
 	}
-	for status, want := range map[string][2]string{
+	wantHours := map[string][2]string{
 		"blocked":     {"79", "5"}, // 24 + 12 + 9 + 10 + 24
 		"in_progress": {"45", "3"}, // 12 + 15 + 18
 		"todo":        {"6", "1"},  // OPS-5
-	} {
+	}
+	for status, want := range wantHours {
 		if hours[status] != want {
-			t.Fatalf("sync-time deriver, status %s: hours and items = %v, want %v (all: %v)", status, hours[status], want, hours)
+			t.Fatalf("daily family, status %s: hours and items = %v, want %v (all: %v)", status, hours[status], want, hours)
 		}
 	}
+	if len(dailyFamily) < 3 {
+		t.Fatalf("too few rows: %d from the daily family", len(dailyFamily))
+	}
+	t.Logf("daily family stored %d rows; hours and items by status: %v", len(dailyFamily), hours)
 
-	// --- WRITER 2: the daily family -------------------------------------
+	// A second run of the daily family on the same stored facts stores the
+	// same rows, on every field of the row type.
 	truncate()
-	executor, err := daily.NewWorkItemStateExecutor(conn)
-	if err != nil {
-		t.Fatal(err)
+	if messages := diffStateDurations(dailyFamily, dailyRows(conn)); len(messages) != 0 {
+		t.Fatalf("two runs of the daily family on the same facts stored different rows:\n  %s", strings.Join(messages, "\n  "))
 	}
-	// Linear items have no repository: their rows are stored under the nil
-	// repository id, which is the partition the daily family computes them in.
-	written, err := executor.ComputeFamily(ctx, daily.Run{OrganizationID: org, TargetDay: day}, daily.Partition{
-		ID: "00000000-0000-4000-8000-0000000000c1", RunID: "00000000-0000-4000-8000-0000000000c0",
-		RepoIDs: []daily.RepositoryID{"00000000-0000-0000-0000-000000000000"},
-	})
-	if err != nil {
-		t.Fatalf("daily family: %v", err)
-	}
-	if written == 0 {
-		t.Fatal("the daily family wrote no row")
-	}
-	dailyFamily := readStateDurations(ctx, t, conn, org, day)
-
-	// --- THE COMPARISON --------------------------------------------------
-	if len(syncTime) < 3 || len(dailyFamily) < 3 {
-		t.Fatalf("too few rows to compare: %d from the sync-time deriver, %d from the daily family", len(syncTime), len(dailyFamily))
-	}
-	if messages := diffStateDurations(syncTime, dailyFamily); len(messages) != 0 {
-		t.Fatalf("the two writers of work_item_state_durations_daily wrote different rows (python = the sync-time deriver, go = the daily family):\n  %s",
-			strings.Join(messages, "\n  "))
-	}
-	t.Logf("compared %d rows of each writer on %d fields (not compared: %v)", len(syncTime), len(stateDurationFields(t))-len(stateDurationExclusions), stateDurationExclusions)
 
 	// --- THE PLANT: the same comparison must see a wrong read ------------
-	// The sync-time deriver reads its stored relations one day too old. The
-	// relations the unit reports again are not changed by that (the unit's
-	// own row is newer); the two it does not report are: OPS-3's and OPS-6's
-	// relation end before the day, so their 9 and 24 blocked hours go.
+	// The daily family reads its stored relations one day too old.
 	const column = "relationship_semantics_version, last_synced, relation_started_at"
 	rewrites := 0
 	planted := plantedReadConn{Conn: conn, rewrite: func(query string) string {
@@ -431,13 +439,12 @@ func TestBothWritersOfStateDurationsWriteTheSameBlockedRows(t *testing.T) {
 		rewrites++
 		return strings.Replace(query, column, "relationship_semantics_version, last_synced - INTERVAL 1 DAY, relation_started_at", 1)
 	}}
-	plantedDerived := syncTimeRows(planted)
+	truncate()
+	plantedRows := dailyRows(planted)
 	if rewrites == 0 {
 		t.Fatal("the plant changed no statement: the relation read no longer has the text it replaces")
 	}
-	truncate()
-	storeDerived(plantedDerived, githubStateDurationsDestination)
-	messages := diffStateDurations(readStateDurations(ctx, t, conn, org, day), dailyFamily)
+	messages := diffStateDurations(dailyFamily, plantedRows)
 	blockedKey := ""
 	for key := range dailyFamily {
 		if strings.HasSuffix(key, "|blocked") {
@@ -451,7 +458,7 @@ func TestBothWritersOfStateDurationsWriteTheSameBlockedRows(t *testing.T) {
 		}
 	}
 	if blockedKey == "" || !found {
-		t.Fatalf("a sync-time deriver that reads its relations a day too old is not reported on the blocked hours; the comparison said: %q", messages)
+		t.Fatalf("a daily family that reads its relations a day too old is not reported on the blocked hours; the comparison said: %q", messages)
 	}
 }
 

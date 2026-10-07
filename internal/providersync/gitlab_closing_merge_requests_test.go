@@ -176,11 +176,6 @@ func TestGitLabWorkItemsRouteClosedByFailureClassSplitsTheWatermark(t *testing.T
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
-			classifier, err := NewInvestmentClassifier(investmentConfigPath(t, "real"))
-			if err != nil {
-				t.Fatal(err)
-			}
-			deriver := GitLabWorkItemDeriver{Source: &githubMultiDayOracleSource{}, statusMapping: loadRealStatusMapping(t), investmentClassifier: classifier}
 			responses := gitLabWorkItemResponses()
 			root := "/api/v4/projects/123"
 			responses[root+"/merge_requests?page=1"] = []string{
@@ -199,7 +194,7 @@ func TestGitLabWorkItemsRouteClosedByFailureClassSplitsTheWatermark(t *testing.T
 			client := gitLabWorkItemsClient(t, fakehttp.Client(doer))
 			client.Metrics = providerfoundation.NewMetrics()
 			batch, err := (GitLabWorkItemsRouteHandler{
-				StatusMapping: loadRealStatusMapping(t), Derived: deriver, PerPage: 2, MaxPages: 10, NestedMaxPages: 10,
+				StatusMapping: loadRealStatusMapping(t), PerPage: 2, MaxPages: 10, NestedMaxPages: 10,
 			}).Collect(context.Background(), claim, providerfoundation.Credential{Provider: "gitlab", ID: claim.CredentialID},
 				client, time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC))
 			if err != nil {
@@ -277,11 +272,6 @@ func TestGitLabClosedByFailureLogCarriesNoErrorText(t *testing.T) {
 	previous := slog.Default()
 	slog.SetDefault(slog.New(slog.NewJSONHandler(&out, nil)))
 	t.Cleanup(func() { slog.SetDefault(previous) })
-	classifier, err := NewInvestmentClassifier(investmentConfigPath(t, "real"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	deriver := GitLabWorkItemDeriver{Source: &githubMultiDayOracleSource{}, statusMapping: loadRealStatusMapping(t), investmentClassifier: classifier}
 	responses := gitLabWorkItemResponses()
 	root := "/api/v4/projects/123"
 	responses[root+"/merge_requests?page=1"] = []string{
@@ -290,7 +280,7 @@ func TestGitLabClosedByFailureLogCarriesNoErrorText(t *testing.T) {
 	claim := nativeTestClaim("gitlab", "work-items")
 	claim.OrgID = "77777777-7777-4777-8777-777777777777"
 	if _, err := (GitLabWorkItemsRouteHandler{
-		StatusMapping: loadRealStatusMapping(t), Derived: deriver, PerPage: 2, MaxPages: 10, NestedMaxPages: 10,
+		StatusMapping: loadRealStatusMapping(t), PerPage: 2, MaxPages: 10, NestedMaxPages: 10,
 	}).Collect(context.Background(), claim, providerfoundation.Credential{Provider: "gitlab", ID: claim.CredentialID},
 		gitLabWorkItemsClient(t, fakehttp.Client(closedByFailingDoer{inner: &gitLabWorkItemsDoer{responses: responses}})),
 		time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC)); err != nil {

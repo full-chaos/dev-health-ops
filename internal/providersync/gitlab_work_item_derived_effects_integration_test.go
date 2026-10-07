@@ -5,9 +5,11 @@ package providersync
 import (
 	"context"
 	"errors"
+	"slices"
 	"testing"
 	"time"
 
+	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
@@ -15,8 +17,10 @@ import (
 
 // This suite deliberately uses githubDerivedIntegrationConn: it applies the
 // production ClickHouse migration chain and authors no local DDL. The GitLab
-// dispatcher is then exercised through the same ten schema-specific adapters
-// used by the provider route, with the provider identity kept as "gitlab".
+// sync sink is exercised with the provider identity kept as "gitlab". It
+// writes and reads back ai_attribution, the one effect it holds beside the raw
+// tables, and refuses each of the nine tables the daily job computes from
+// stored rows: the effects carry real rows, and no row reaches the store.
 func TestGitLabWorkItemDerivedEffectsWriteReadbackAgainstRealClickHouse(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Minute)
 	defer cancel()
@@ -110,66 +114,112 @@ func TestGitLabWorkItemDerivedEffectsWriteReadbackAgainstRealClickHouse(t *testi
 	if len(effects) != len(gitlabWorkItemDerivedDestinations) {
 		t.Fatalf("effects=%d want=%d", len(effects), len(gitlabWorkItemDerivedDestinations))
 	}
-
-	for _, effect := range effects {
-		t.Run(effect.Destination, func(t *testing.T) {
-			if inspection, inspectErr := sink.InspectEffect(ctx, claim, effect); inspectErr != nil || inspection != EffectAbsent {
-				t.Fatalf("before write: inspection=%v error=%v", inspection, inspectErr)
-			}
-			if err := sink.WriteEffect(ctx, claim, effect); err != nil {
-				t.Fatal(err)
-			}
-			if inspection, inspectErr := sink.InspectEffect(ctx, claim, effect); inspectErr != nil || inspection != EffectExact {
-				t.Fatalf("after write: inspection=%v error=%v", inspection, inspectErr)
-			}
-			if err := sink.WriteEffect(ctx, claim, effect); err != nil {
-				t.Fatalf("replay write: %v", err)
-			}
-			if inspection, inspectErr := sink.InspectEffect(ctx, claim, effect); inspectErr != nil || inspection != EffectExact {
-				t.Fatalf("replay readback: inspection=%v error=%v", inspection, inspectErr)
-			}
-
-			foreign := claim
-			foreign.OrgID = "org-other"
-			inspection, inspectErr := sink.InspectEffect(ctx, foreign, effect)
-			switch effect.Destination {
-			case "estimate_coverage_metrics_daily", "work_item_state_durations_daily", "work_item_team_attributions":
-				if inspectErr != nil || inspection != EffectAbsent {
-					t.Fatalf("foreign tenant readback: inspection=%v error=%v", inspection, inspectErr)
-				}
-				if writeErr := sink.WriteEffect(ctx, foreign, effect); !errors.Is(writeErr, ErrInvalidConfiguration) {
-					t.Fatalf("foreign tenant write error=%v want=%v", writeErr, ErrInvalidConfiguration)
-				}
-			default:
-				if inspectErr == nil || inspection == EffectExact {
-					t.Fatalf("foreign tenant was not rejected: inspection=%v error=%v", inspection, inspectErr)
-				}
-			}
-		})
-	}
-
-	// Simulate a worker dying after the durable write but before the adapter's
-	// post-write lease assertion. Recovery must find the exact row and avoid a
-	// duplicate write. Only the estimate adapter uses the expiring guard; the
-	// outer guard remains valid long enough to enter the adapter.
-	recoveryGuard := &secondAssertionLosesLease{}
-	recoverySink := sink
-	recoverySink.EstimateCoverageMetricsDaily.Lease = recoveryGuard
-	var estimateEffect EffectBatch
-	for _, effect := range effects {
-		if effect.Destination == "estimate_coverage_metrics_daily" {
-			estimateEffect = effect
-			break
+	for _, destination := range gitlabWorkItemSyncSinkDestinations {
+		if slices.Contains(githubWorkItemDerivedDestinations, destination) {
+			t.Fatalf("%s is a destination of the sync sink and a table of the daily job", destination)
 		}
 	}
-	if estimateEffect.Destination == "" {
-		t.Fatal("estimate effect missing")
+
+	refused := 0
+	for _, effect := range effects {
+		if !slices.Contains(githubWorkItemDerivedDestinations, effect.Destination) {
+			continue
+		}
+		refused++
+		t.Run("refuses "+effect.Destination, func(t *testing.T) {
+			assertSyncSinkRefusesDailyJobTable(t, ctx, conn, sink, claim, effect)
+		})
 	}
-	if err := recoverySink.WriteEffect(ctx, claim, estimateEffect); !errors.Is(err, providerfoundation.ErrLeaseLost) {
-		t.Fatalf("post-write lease loss error=%v", err)
+	if refused != len(githubWorkItemDerivedDestinations) || refused != 9 {
+		t.Fatalf("refused effects=%d want one for each of the %d tables of the daily job", refused, len(githubWorkItemDerivedDestinations))
 	}
-	if inspection, inspectErr := sink.InspectEffect(ctx, claim, estimateEffect); inspectErr != nil || inspection != EffectExact {
-		t.Fatalf("recovery readback: inspection=%v error=%v", inspection, inspectErr)
+
+	var aiEffect EffectBatch
+	for _, effect := range effects {
+		if effect.Destination == "ai_attribution" {
+			aiEffect = effect
+		}
+	}
+	if aiEffect.Destination == "" || len(aiEffect.Rows) != 1 {
+		t.Fatalf("ai_attribution effect=%q rows=%d want one row", aiEffect.Destination, len(aiEffect.Rows))
+	}
+	foreign := claim
+	foreign.OrgID = "org-other"
+
+	// The worker dies after the durable write and before the sink's post-write
+	// lease assertion. Recovery must find the exact rows and write no
+	// duplicate.
+	t.Run("ai_attribution recovers after lease loss", func(t *testing.T) {
+		if inspection, inspectErr := sink.InspectEffect(ctx, claim, aiEffect); inspectErr != nil || inspection != EffectAbsent {
+			t.Fatalf("before write: inspection=%v error=%v", inspection, inspectErr)
+		}
+		recoverySink := sink
+		recoverySink.Lease = &secondAssertionLosesLease{}
+		if err := recoverySink.WriteEffect(ctx, claim, aiEffect); !errors.Is(err, providerfoundation.ErrLeaseLost) {
+			t.Fatalf("post-write lease loss error=%v", err)
+		}
+		if inspection, inspectErr := sink.InspectEffect(ctx, claim, aiEffect); inspectErr != nil || inspection != EffectExact {
+			t.Fatalf("recovery readback: inspection=%v error=%v", inspection, inspectErr)
+		}
+	})
+
+	t.Run("ai_attribution", func(t *testing.T) {
+		if err := sink.WriteEffect(ctx, claim, aiEffect); err != nil {
+			t.Fatal(err)
+		}
+		if inspection, inspectErr := sink.InspectEffect(ctx, claim, aiEffect); inspectErr != nil || inspection != EffectExact {
+			t.Fatalf("after write: inspection=%v error=%v", inspection, inspectErr)
+		}
+		if err := sink.WriteEffect(ctx, claim, aiEffect); err != nil {
+			t.Fatalf("replay write: %v", err)
+		}
+		if inspection, inspectErr := sink.InspectEffect(ctx, claim, aiEffect); inspectErr != nil || inspection != EffectExact {
+			t.Fatalf("replay readback: inspection=%v error=%v", inspection, inspectErr)
+		}
+		if inspection, inspectErr := sink.InspectEffect(ctx, foreign, aiEffect); inspectErr == nil || inspection == EffectExact {
+			t.Fatalf("foreign tenant was not rejected: inspection=%v error=%v", inspection, inspectErr)
+		}
+	})
+}
+
+// assertSyncSinkRefusesDailyJobTable holds the contract of a work-items sync
+// sink for one of the nine tables the daily job writes: the write and the
+// readback are refused as an invalid configuration, and the table holds no row
+// of the tenant after the refused write. The effect must carry rows: a refusal
+// of an empty effect would prove nothing about the store.
+func assertSyncSinkRefusesDailyJobTable(
+	t *testing.T,
+	ctx context.Context,
+	conn driver.Conn,
+	sink interface {
+		EffectSink
+		EffectReadback
+	},
+	claim Claim,
+	effect EffectBatch,
+) {
+	t.Helper()
+	if !slices.Contains(githubWorkItemDerivedDestinations, effect.Destination) {
+		t.Fatalf("%s is not a table of the daily job", effect.Destination)
+	}
+	if len(effect.Rows) == 0 {
+		t.Fatalf("%s: the effect has no row; the refusal would not show that the store stays empty", effect.Destination)
+	}
+	if err := sink.WriteEffect(ctx, claim, effect); !errors.Is(err, ErrInvalidConfiguration) {
+		t.Fatalf("%s: the sync sink wrote a table of the daily job: error=%v", effect.Destination, err)
+	}
+	inspection, err := sink.InspectEffect(ctx, claim, effect)
+	if !errors.Is(err, ErrInvalidConfiguration) || inspection != EffectConflict {
+		t.Fatalf("%s: readback=%v error=%v want a refused conflict", effect.Destination, inspection, err)
+	}
+	var stored uint64
+	// The destination is one of the nine fixed table names checked above.
+	query := "SELECT count() FROM " + effect.Destination + " WHERE org_id = ?"
+	if err := conn.QueryRow(ctx, query, claim.OrgID).Scan(&stored); err != nil {
+		t.Fatalf("%s: count stored rows: %v", effect.Destination, err)
+	}
+	if stored != 0 {
+		t.Fatalf("%s: %d rows of the tenant are stored after the refused write", effect.Destination, stored)
 	}
 }
 

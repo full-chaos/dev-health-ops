@@ -168,7 +168,6 @@ VALUES ($1, $3, $2, 'work-items',
 				ProjectMembershipSnapshotDiff: GitHubProjectV2SnapshotDiffClickHouseReader{
 					Conn: conn,
 				},
-				Deriver: &githubWorkItemsRouteDeriver{rows: projectsV2DurableEmptyDerivedRows()},
 			}
 			executor := CompleteRouteExecutor{
 				Credentials: providerfoundation.CredentialResolver{

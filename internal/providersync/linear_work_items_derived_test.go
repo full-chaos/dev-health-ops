@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"slices"
 	"testing"
 	"time"
 
@@ -157,7 +158,9 @@ func TestLinearWorkItemDeriverRejectsMalformedRepositoryID(t *testing.T) {
 
 type linearDerivedStubConn struct{ driver.Conn }
 
-func TestNewLinearWorkItemDerivedClickHouseEffectsWiresAllTen(t *testing.T) {
+// The Linear sync sink beside the raw tables serves ai_attribution alone and
+// refuses each table the daily job computes from stored rows.
+func TestNewLinearWorkItemDerivedClickHouseEffectsServesOnlyAIAttribution(t *testing.T) {
 	lease := providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil })
 	sink, err := NewLinearWorkItemDerivedClickHouseEffects(linearDerivedStubConn{}, lease, nil)
 	if err != nil {
@@ -166,24 +169,55 @@ func TestNewLinearWorkItemDerivedClickHouseEffectsWiresAllTen(t *testing.T) {
 	if got := sink.MissingDestinations(); len(got) != 0 {
 		t.Fatalf("missing=%v", got)
 	}
-	for _, destination := range linearWorkItemDerivedEffectDestinations {
-		adapter, known := sink.adapterForDestination(destination)
-		if !known || adapter == nil {
-			t.Fatalf("destination %q not wired", destination)
-		}
+	if adapter, known := sink.adapterForDestination("ai_attribution"); !known || adapter == nil {
+		t.Fatal("ai_attribution is not wired")
 	}
 	effects, err := BuildLinearWorkItemDerivedEffects(LinearWorkItemDerivedEffectRows{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	claim := linearDerivedTestClaim()
+	refused := make([]string, 0, len(githubWorkItemDerivedDestinations))
 	for _, effect := range effects {
+		if effect.Destination != "ai_attribution" {
+			if _, known := sink.adapterForDestination(effect.Destination); known {
+				t.Fatalf("the sync sink has an adapter for the daily-job table %q", effect.Destination)
+			}
+			if err := sink.WriteEffect(context.Background(), claim, effect); !errors.Is(err, ErrInvalidConfiguration) {
+				t.Fatalf("write %s: %v want ErrInvalidConfiguration", effect.Destination, err)
+			}
+			if inspection, err := sink.InspectEffect(context.Background(), claim, effect); !errors.Is(err, ErrInvalidConfiguration) || inspection != EffectConflict {
+				t.Fatalf("inspect %s: verdict=%v err=%v want a refused conflict", effect.Destination, inspection, err)
+			}
+			refused = append(refused, effect.Destination)
+			continue
+		}
 		if err := sink.WriteEffect(context.Background(), claim, effect); err != nil {
 			t.Fatalf("write %s: %v", effect.Destination, err)
 		}
 		if inspection, err := sink.InspectEffect(context.Background(), claim, effect); err != nil || inspection != EffectAbsent {
 			t.Fatalf("inspect %s: verdict=%v err=%v want absent", effect.Destination, inspection, err)
 		}
+	}
+	slices.Sort(refused)
+	if !slices.Equal(refused, githubWorkItemDerivedDestinations) {
+		t.Fatalf("refused=%v want=%v", refused, githubWorkItemDerivedDestinations)
+	}
+}
+
+// linearDailyJobAdapterIdentity is the identity a unit-held adapter of a
+// daily-job table would receive. The sync sink identity refuses such a
+// destination, so the provider and tenant fence of that adapter is reached
+// only by a direct call.
+func linearDailyJobAdapterIdentity(t *testing.T, claim Claim, effect EffectBatch) LinearWorkItemEffectIdentity {
+	t.Helper()
+	if _, err := newLinearWorkItemDerivedEffectIdentity(claim, effect); !errors.Is(err, ErrInvalidConfiguration) {
+		t.Fatalf("the sync sink identity accepted the daily-job table %q: %v", effect.Destination, err)
+	}
+	return LinearWorkItemEffectIdentity{
+		OrgID: claim.OrgID, Provider: claim.Provider, Dataset: claim.Dataset,
+		Generation: claim.GenerationKey(), Destination: effect.Destination,
+		ContentDigest: effect.ContentDigest, RowCount: len(effect.Rows),
 	}
 }
 
@@ -201,10 +235,7 @@ func TestLinearDerivedAdapterRejectsProviderAndTenantCrossingRows(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	identity, err := newLinearWorkItemDerivedEffectIdentity(claim, effect)
-	if err != nil {
-		t.Fatal(err)
-	}
+	identity := linearDailyJobAdapterIdentity(t, claim, effect)
 	adapter := linearDerivedGitHubAdapter{
 		destination: "work_item_metrics_daily", delegate: &linearDerivedRecordingAdapter{},
 	}
@@ -221,10 +252,7 @@ func TestLinearDerivedAdapterRejectsProviderAndTenantCrossingRows(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	identity, err = newLinearWorkItemDerivedEffectIdentity(claim, effect)
-	if err != nil {
-		t.Fatal(err)
-	}
+	identity = linearDailyJobAdapterIdentity(t, claim, effect)
 	if err := adapter.WriteLinearWorkItemEffect(context.Background(), identity, effect); !errors.Is(err, ErrInvalidConfiguration) {
 		t.Fatalf("tenant crossing error=%v want ErrInvalidConfiguration", err)
 	}
@@ -245,10 +273,7 @@ func TestLinearDerivedAdapterRequiresProviderAndTenantColumns(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		identity, err := newLinearWorkItemDerivedEffectIdentity(claim, effect)
-		if err != nil {
-			t.Fatal(err)
-		}
+		identity := linearDailyJobAdapterIdentity(t, claim, effect)
 		if err := adapter.WriteLinearWorkItemEffect(context.Background(), identity, effect); !errors.Is(err, ErrInvalidConfiguration) {
 			t.Fatalf("raw=%s error=%v want ErrInvalidConfiguration", raw, err)
 		}
@@ -319,10 +344,19 @@ func TestLinearDerivedSinkRejectsIncompleteBeforeDispatch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	sink.WorkItemMetricsDaily = nil
 	effect, err := BuildEffectBatch("ai_attribution", EffectReadbackRequired, nil)
 	if err != nil {
 		t.Fatal(err)
+	}
+	// An adapter of a daily-job table is no part of the sync sink: a sink
+	// without it is complete and still writes ai_attribution.
+	sink.WorkItemMetricsDaily = nil
+	if err := sink.WriteEffect(context.Background(), linearDerivedTestClaim(), effect); err != nil {
+		t.Fatalf("a sink without a daily-job adapter refused ai_attribution: %v", err)
+	}
+	sink.AIAttribution = nil
+	if missing := sink.MissingDestinations(); !slices.Equal(missing, []string{"ai_attribution"}) {
+		t.Fatalf("missing=%v", missing)
 	}
 	if err := sink.WriteEffect(context.Background(), linearDerivedTestClaim(), effect); !errors.Is(err, ErrInvalidConfiguration) {
 		t.Fatalf("incomplete sink error=%v want ErrInvalidConfiguration", err)

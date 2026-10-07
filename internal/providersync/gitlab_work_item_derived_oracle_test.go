@@ -6,7 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
-	"strings"
+	"slices"
 	"testing"
 	"time"
 
@@ -568,7 +568,10 @@ func TestBuildGitLabWorkItemDerivedEffectsIsCanonicalAndIncludesAI(t *testing.T)
 	}
 }
 
-func TestGitLabWorkItemDerivedIdentityAcceptsAIAndRejectsRawDestinations(t *testing.T) {
+// The identity of the GitLab sync sink beside the raw tables accepts
+// ai_attribution alone: a table the daily job computes from stored rows and a
+// raw table are both refused.
+func TestGitLabWorkItemDerivedIdentityAcceptsOnlyAIAttribution(t *testing.T) {
 	claim := nativeTestClaim("gitlab", "work-items")
 	effects, err := BuildGitLabWorkItemDerivedEffects(GitLabWorkItemDerivedEffectRows{})
 	if err != nil {
@@ -577,8 +580,18 @@ func TestGitLabWorkItemDerivedIdentityAcceptsAIAndRejectsRawDestinations(t *test
 	if _, err := newGitLabWorkItemDerivedEffectIdentity(claim, effects[0]); err != nil {
 		t.Fatalf("AI destination rejected: %v", err)
 	}
-	if _, err := newGitLabWorkItemDerivedEffectIdentity(claim, effects[1]); err != nil {
-		t.Fatalf("computed destination rejected: %v", err)
+	if effects[0].Destination != "ai_attribution" {
+		t.Fatalf("effects[0]=%q", effects[0].Destination)
+	}
+	refused := make([]string, 0, len(githubWorkItemDerivedDestinations))
+	for _, effect := range effects[1:] {
+		if _, err := newGitLabWorkItemDerivedEffectIdentity(claim, effect); !errors.Is(err, ErrInvalidConfiguration) {
+			t.Fatalf("daily-job table %q accepted by the sync sink identity: %v", effect.Destination, err)
+		}
+		refused = append(refused, effect.Destination)
+	}
+	if !slices.Equal(refused, githubWorkItemDerivedDestinations) {
+		t.Fatalf("refused=%v want=%v", refused, githubWorkItemDerivedDestinations)
 	}
 	foreign := claim
 	foreign.Provider = "github"
@@ -594,17 +607,9 @@ func TestGitLabWorkItemDerivedIdentityAcceptsAIAndRejectsRawDestinations(t *test
 	}
 }
 
-func TestGitLabWorkItemsRouteComposesSixteenEffectsAndAdvancesWatermark(t *testing.T) {
-	statusMapping := loadRealStatusMapping(t)
-	classifier, err := NewInvestmentClassifier(investmentConfigPath(t, "real"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	deriver := GitLabWorkItemDeriver{
-		Source:               &githubMultiDayOracleSource{},
-		statusMapping:        statusMapping,
-		investmentClassifier: classifier,
-	}
+// The unit writes the six raw tables and ai_attribution, nothing computed
+// from stored rows, and its watermark is the end of the window it stored.
+func TestGitLabWorkItemsRouteComposesRawEffectsAndAdvancesWatermark(t *testing.T) {
 	responses := gitLabWorkItemResponses()
 	root := "/api/v4/projects/123"
 	responses[root+"/merge_requests?page=1"] = []string{
@@ -615,8 +620,8 @@ func TestGitLabWorkItemsRouteComposesSixteenEffectsAndAdvancesWatermark(t *testi
 	claim := nativeTestClaim("gitlab", "work-items")
 	claim.OrgID = "77777777-7777-4777-8777-777777777777"
 	batch, err := (GitLabWorkItemsRouteHandler{
-		StatusMapping: loadRealStatusMapping(t), Derived: deriver,
-		PerPage: 2, MaxPages: 10, NestedMaxPages: 10,
+		StatusMapping: loadRealStatusMapping(t),
+		PerPage:       2, MaxPages: 10, NestedMaxPages: 10,
 	}).Collect(
 		context.Background(), claim,
 		providerfoundation.Credential{Provider: "gitlab", ID: claim.CredentialID},
@@ -625,11 +630,16 @@ func TestGitLabWorkItemsRouteComposesSixteenEffectsAndAdvancesWatermark(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(batch.Effects) != 16 {
-		t.Fatalf("effects=%d want 16 raw+derived", len(batch.Effects))
+	if len(batch.Effects) != 7 {
+		t.Fatalf("effects=%d want the six raw tables and ai_attribution", len(batch.Effects))
 	}
 	if err := batch.validate(CompleteRouteDescriptor{Destinations: workItemRouteDestinations()}); err != nil {
-		t.Fatalf("sixteen-destination governed contract: %v", err)
+		t.Fatalf("governed destination contract: %v", err)
+	}
+	for _, effect := range batch.Effects {
+		if slices.Contains(githubWorkItemDerivedDestinations, effect.Destination) {
+			t.Fatalf("the unit built an effect for the derived table %q", effect.Destination)
+		}
 	}
 	var aiEffect *EffectBatch
 	for _, effect := range batch.Effects {
@@ -647,79 +657,16 @@ func TestGitLabWorkItemsRouteComposesSixteenEffectsAndAdvancesWatermark(t *testi
 	if !ok {
 		t.Fatalf("summary type=%T", batch.Result["gitlab_work_items"])
 	}
-	if len(summary.DerivedDestinationsUnimplemented) != 0 ||
-		len(summary.DerivedDestinationsImplemented) != 10 ||
-		summary.WatermarkHeldForDerivedGap || batch.Watermark == nil ||
-		claim.BeforeAt == nil || !batch.Watermark.Equal(*claim.BeforeAt) {
-		t.Fatalf("derived summary/watermark=%+v/%v", summary, batch.Watermark)
+	if summary.WorkItemsSynced == 0 || batch.Watermark == nil ||
+		claim.BeforeAt == nil || !batch.Watermark.Equal(claim.BeforeAt.UTC()) {
+		t.Fatalf("summary/watermark=%+v/%v", summary, batch.Watermark)
 	}
-	implemented, ok := batch.Result["derived_destinations_implemented"].([]string)
-	if !ok || len(implemented) != 10 {
-		t.Fatalf("implemented destinations=%T/%v", batch.Result["derived_destinations_implemented"], batch.Result["derived_destinations_implemented"])
-	}
-}
-
-type unavailableGitLabAIDeriver struct{}
-
-func (unavailableGitLabAIDeriver) Derive(
-	_ context.Context,
-	claim Claim,
-	_ gitlabWorkItemRows,
-	_ time.Time,
-) (GitLabWorkItemDerivedRows, error) {
-	var watermark *time.Time
-	if claim.BeforeAt != nil {
-		value := claim.BeforeAt.UTC()
-		watermark = &value
-	}
-	return GitLabWorkItemDerivedRows{Watermark: watermark, Gaps: []GitLabWorkItemDerivedGap{{
-		Destination:           "ai_attribution",
-		AuthoritativeProducer: "gitlab_mr_ai_attributions",
-		Reason:                "authoritative producer unavailable",
-	}}}, nil
-}
-
-func TestGitLabWorkItemsRouteRejectsUnavailableDerivedProducerBeforeEffects(t *testing.T) {
-	claim := nativeTestClaim("gitlab", "work-items")
-	_, err := (GitLabWorkItemsRouteHandler{
-		StatusMapping: loadRealStatusMapping(t), Derived: unavailableGitLabAIDeriver{},
-		PerPage: 2, MaxPages: 10, NestedMaxPages: 10,
-	}).Collect(
-		context.Background(), claim,
-		providerfoundation.Credential{Provider: "gitlab", ID: claim.CredentialID},
-		gitLabWorkItemsClient(t, fakehttp.Client(&gitLabWorkItemsDoer{responses: gitLabWorkItemResponses()})),
-		time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC),
-	)
-	if !errors.Is(err, ErrGitLabWorkItemDerivedProducerUnavailable) ||
-		!strings.Contains(err.Error(), "ai_attribution") {
-		t.Fatalf("unavailable producer error=%v", err)
-	}
-}
-
-type wrongWatermarkGitLabDeriver struct{}
-
-func (wrongWatermarkGitLabDeriver) Derive(
-	_ context.Context,
-	_ Claim,
-	_ gitlabWorkItemRows,
-	normalizedAt time.Time,
-) (GitLabWorkItemDerivedRows, error) {
-	wrong := normalizedAt.UTC()
-	return GitLabWorkItemDerivedRows{Watermark: &wrong, Gaps: []GitLabWorkItemDerivedGap{}}, nil
-}
-
-func TestGitLabWorkItemsRouteRejectsDerivedWatermarkOutsideClaimBound(t *testing.T) {
-	claim := nativeTestClaim("gitlab", "work-items")
-	_, err := (GitLabWorkItemsRouteHandler{
-		StatusMapping: loadRealStatusMapping(t), Derived: wrongWatermarkGitLabDeriver{},
-		PerPage: 2, MaxPages: 10, NestedMaxPages: 10,
-	}).Collect(
-		context.Background(), claim,
-		providerfoundation.Credential{Provider: "gitlab", ID: claim.CredentialID},
-		gitLabWorkItemsClient(t, fakehttp.Client(&gitLabWorkItemsDoer{responses: gitLabWorkItemResponses()})),
-		time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC),
-	)
-	if !errors.Is(err, ErrInvalidConfiguration) {
-		t.Fatalf("wrong watermark error=%v", err)
+	for _, key := range []string{
+		"derived_destinations_implemented", "derived_destinations_unimplemented",
+		"watermark_held_for_derived_gap", "team_inheritance",
+	} {
+		if _, present := batch.Result[key]; present {
+			t.Fatalf("result still carries %q: %+v", key, batch.Result)
+		}
 	}
 }

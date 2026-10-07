@@ -58,6 +58,10 @@ type jiraTeamCatalogProjectSearchPayload struct {
 }
 
 type jiraTeamCatalogProjectSearchEntry struct {
+	// ID is the project's native Jira id. It is the one project identity of
+	// this catalog: stable when the project key is renamed, and the value
+	// the work-items route writes into work_items.project_id and `projects`.
+	ID          string  `json:"id"`
 	Key         string  `json:"key"`
 	Name        string  `json:"name"`
 	Description *string `json:"description"`
@@ -203,8 +207,17 @@ func jiraTeamID(projectKey string) string {
 	return strings.TrimSpace(projectKey)
 }
 
-func jiraProjectID(orgID, projectKey string) string {
-	return orgID + ":" + jiraTeamCatalogProvider + ":" + projectKey
+// jiraKeyBuiltProjectIDPrefix is the prefix of the project id this catalog
+// used to build from the project KEY ("{org_id}:jira:{KEY}"). That form made
+// one Jira project two `projects` rows: the work-items route identifies the
+// same project by its native id. No writer builds it any more; the prefix
+// stays only so a validator can refuse it and a retraction can recognize it.
+func jiraKeyBuiltProjectIDPrefix(orgID string) string {
+	return orgID + ":" + jiraTeamCatalogProvider + ":"
+}
+
+func jiraProjectIDIsKeyBuilt(orgID, projectID string) bool {
+	return strings.HasPrefix(projectID, jiraKeyBuiltProjectIDPrefix(orgID))
 }
 
 func normalizeJiraTeamRow(
@@ -225,20 +238,24 @@ func normalizeJiraTeamRow(
 	}, true
 }
 
-func normalizeJiraOwnershipRow(orgID, teamID, projectKey string, normalizedAt time.Time) jiraTeamCatalogOwnershipRow {
+// normalizeJiraOwnershipRow takes the project's NATIVE id as project_id, the
+// same value work_items.project_id holds, so a team reaches its project's
+// work items by (provider, project_id) with no key join. project_key is a
+// label only.
+func normalizeJiraOwnershipRow(orgID, teamID, projectID, projectKey string, normalizedAt time.Time) jiraTeamCatalogOwnershipRow {
 	key := projectKey
 	return jiraTeamCatalogOwnershipRow{
 		OrgID: orgID, Provider: jiraTeamCatalogProvider, TeamID: teamID,
-		ProjectID: jiraProjectID(orgID, projectKey), ProjectKey: &key, Source: jiraTeamCatalogSource,
+		ProjectID: projectID, ProjectKey: &key, Source: jiraTeamCatalogSource,
 		IsPrimary: 1, Specificity: jiraTeamCatalogNativeSpecificity, Priority: jiraTeamCatalogNativePriority,
 		ValidFrom: normalizedAt, UpdatedAt: normalizedAt,
 	}
 }
 
-func normalizeJiraProjectRow(orgID, projectKey, name string, normalizedAt time.Time) jiraTeamCatalogProjectRow {
+func normalizeJiraProjectRow(orgID, projectID, projectKey, name string, normalizedAt time.Time) jiraTeamCatalogProjectRow {
 	key := projectKey
 	return jiraTeamCatalogProjectRow{
-		ID: jiraProjectID(orgID, projectKey), OrgID: orgID, Provider: jiraTeamCatalogProvider,
+		ID: projectID, OrgID: orgID, Provider: jiraTeamCatalogProvider,
 		ProjectKey: &key, Name: name, IsActive: 1,
 		TeamIDs: []string{}, TeamKeys: []string{},
 		UpdatedAt: normalizedAt, LastSynced: normalizedAt,
@@ -372,6 +389,21 @@ func validateJiraOwnershipRow(claim Claim, row jiraTeamCatalogOwnershipRow) erro
 		row.IsPrimary > 1 || row.ValidFrom.IsZero() || row.UpdatedAt.IsZero() {
 		return ErrInvalidConfiguration
 	}
+	if row.ValidTo != nil {
+		// A retraction closes a row that an earlier run wrote, so it carries
+		// that row's own values, whatever they were (a key-built project id
+		// included). Only the interval is checked.
+		if row.Source != jiraTeamCatalogSource && row.Source != jiraTeamCatalogLegacySource {
+			return ErrInvalidConfiguration
+		}
+		if row.ValidTo.Before(row.ValidFrom) {
+			return ErrInvalidConfiguration
+		}
+		return nil
+	}
+	if jiraProjectIDIsKeyBuilt(row.OrgID, row.ProjectID) {
+		return ErrInvalidConfiguration
+	}
 	switch row.Source {
 	case jiraTeamCatalogSource:
 		if row.Specificity != jiraTeamCatalogNativeSpecificity || row.Priority != jiraTeamCatalogNativePriority {
@@ -400,6 +432,9 @@ func validateJiraMembershipRow(claim Claim, row jiraTeamCatalogMembershipRow) er
 func (row jiraTeamCatalogProjectRow) validate(claim Claim) error {
 	if claim.Provider != jiraTeamCatalogProvider || row.Provider != jiraTeamCatalogProvider ||
 		row.OrgID != claim.OrgID || strings.TrimSpace(row.ID) == "" || row.UpdatedAt.IsZero() || row.LastSynced.IsZero() {
+		return ErrInvalidConfiguration
+	}
+	if jiraProjectIDIsKeyBuilt(row.OrgID, row.ID) {
 		return ErrInvalidConfiguration
 	}
 	return nil

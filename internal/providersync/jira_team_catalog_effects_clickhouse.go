@@ -517,64 +517,153 @@ func jiraTargetDateEqual(left, right *time.Time) bool {
 	return left.Equal(*right)
 }
 
-// jiraLegacyProjectOwnershipLinks ports team_autoimport_jira.
-// _load_jira_legacy_links + its call site verbatim: a per-org carry-forward
-// read of jira_project_ops_team_links (an admin-curated project->ops-team
-// mapping that predates native discovery), producing a Projects row ONLY
-// for a project_key not already covered by this run's native discovery, and
-// an Ownership row (source="jira_legacy") unconditionally for every linked
-// pair. Read failures are swallowed exactly like Python's own bare
-// `except Exception: return []` -- a missing/broken legacy table must never
-// fail an otherwise-healthy native sync.
+// jiraLegacyProjectOwnershipLinks is the per-org carry-forward read of
+// jira_project_ops_team_links (an admin-curated project->ops-team mapping
+// that predates native discovery): one Ownership row (source="jira_legacy")
+// for every linked pair whose project this run's own project search returned.
+//
+// The table holds project KEYS only. nativeIDByKey is this walk's
+// key -> native project id, so the row carries the same project identity the
+// native rows and the work items carry. A link whose key is not in that map
+// gets no row and is counted in skipped: an id built from the key would name
+// a project nothing else points to. No `projects` row is built here -- a key
+// in the map already has its row from native discovery.
+//
+// Read failures are swallowed: a missing/broken legacy table must never fail
+// an otherwise-healthy native sync.
 func jiraLegacyProjectOwnershipLinks(
-	ctx context.Context, conn driver.Conn, orgID string, normalizedAt time.Time,
-) ([]jiraTeamCatalogProjectRow, []jiraTeamCatalogOwnershipRow, error) {
+	ctx context.Context, conn driver.Conn, orgID string, nativeIDByKey map[string]string, normalizedAt time.Time,
+) (ownership []jiraTeamCatalogOwnershipRow, skipped int, err error) {
 	if conn == nil || strings.TrimSpace(orgID) == "" {
-		return nil, nil, ErrInvalidConfiguration
+		return nil, 0, ErrInvalidConfiguration
 	}
 	rows, err := conn.Query(ctx, `
-SELECT project_key, ops_team_id, project_name
+SELECT project_key, ops_team_id
 FROM jira_project_ops_team_links FINAL
 WHERE org_id = {org_id:String}`,
 		clickhouse.Named("org_id", orgID),
 	)
 	if err != nil {
-		// Mirrors _load_jira_legacy_links's own swallow-and-return-[] --
-		// a missing table (e.g. a fixture/test ClickHouse without this
-		// migration applied) must never fail native discovery.
-		return nil, nil, nil
+		return nil, 0, nil
 	}
 	defer rows.Close()
-	projects := make([]jiraTeamCatalogProjectRow, 0)
-	ownership := make([]jiraTeamCatalogOwnershipRow, 0)
+	ownership = make([]jiraTeamCatalogOwnershipRow, 0)
 	for rows.Next() {
-		var projectKey, opsTeamID, projectName string
-		if err := rows.Scan(&projectKey, &opsTeamID, &projectName); err != nil {
-			return nil, nil, nil
+		var projectKey, opsTeamID string
+		if err := rows.Scan(&projectKey, &opsTeamID); err != nil {
+			return nil, 0, nil
 		}
 		projectKey = strings.TrimSpace(projectKey)
 		opsTeamID = strings.TrimSpace(opsTeamID)
 		if projectKey == "" || opsTeamID == "" {
 			continue
 		}
-		name := strings.TrimSpace(projectName)
-		if name == "" {
-			name = projectKey
+		nativeProjectID := nativeIDByKey[projectKey]
+		if nativeProjectID == "" {
+			skipped++
+			continue
 		}
-		projects = append(projects, normalizeJiraProjectRow(orgID, projectKey, name, normalizedAt))
 		key := projectKey
 		ownership = append(ownership, jiraTeamCatalogOwnershipRow{
 			OrgID: orgID, Provider: jiraTeamCatalogProvider, TeamID: opsTeamID,
-			ProjectID: jiraProjectID(orgID, projectKey), ProjectKey: &key, Source: jiraTeamCatalogLegacySource,
+			ProjectID: nativeProjectID, ProjectKey: &key, Source: jiraTeamCatalogLegacySource,
 			IsPrimary: 1, Specificity: jiraTeamCatalogLegacySpecificity, Priority: jiraTeamCatalogLegacyPriority,
 			ValidFrom: normalizedAt, UpdatedAt: normalizedAt,
 		})
 	}
 	if err := rows.Err(); err != nil {
-		return nil, nil, nil
+		return nil, 0, nil
 	}
-	return projects, ownership, nil
+	return ownership, skipped, nil
 }
 
-var _ EffectSink = JiraTeamCatalogClickHouseEffects{}
-var _ EffectReadback = JiraTeamCatalogClickHouseEffects{}
+// jiraOpenCatalogOwnershipQuery reads the open team_project_ownership rows
+// THIS writer owns. Atlassian Teams writes provider 'jira', source 'native'
+// rows into the same table and retracts its own; the two are told apart by
+// shape, not by a second column: a project-as-team row always has
+// team_id = project_key (the team IS the project, identified by its key),
+// and an Atlassian team id is a lower-case uuid that is never a project key.
+// Every 'jira_legacy' row is this writer's.
+const jiraOpenCatalogOwnershipQuery = `
+SELECT team_id, project_id, project_key, toString(source), is_primary, specificity, priority, valid_from
+FROM team_project_ownership FINAL
+WHERE org_id = {org_id:String} AND provider = 'jira' AND valid_to IS NULL
+  AND (source = 'jira_legacy' OR (source = 'native' AND team_id = ifNull(project_key, '')))`
+
+func jiraOpenCatalogOwnership(ctx context.Context, conn driver.Conn, orgID string) ([]jiraTeamCatalogOwnershipRow, error) {
+	if conn == nil || strings.TrimSpace(orgID) == "" {
+		return nil, ErrInvalidConfiguration
+	}
+	result, err := conn.Query(ctx, jiraOpenCatalogOwnershipQuery, clickhouse.Named("org_id", orgID))
+	if err != nil {
+		return nil, err
+	}
+	defer result.Close()
+	var open []jiraTeamCatalogOwnershipRow
+	for result.Next() {
+		row := jiraTeamCatalogOwnershipRow{OrgID: orgID, Provider: jiraTeamCatalogProvider}
+		if err := result.Scan(&row.TeamID, &row.ProjectID, &row.ProjectKey, &row.Source, &row.IsPrimary,
+			&row.Specificity, &row.Priority, &row.ValidFrom); err != nil {
+			return nil, err
+		}
+		row.ValidFrom = row.ValidFrom.UTC()
+		open = append(open, row)
+	}
+	return open, result.Err()
+}
+
+func jiraOwnershipSnapshotKey(row jiraTeamCatalogOwnershipRow) string {
+	return row.TeamID + "\x00" + row.ProjectID + "\x00" + row.Source
+}
+
+// jiraOwnershipSnapshot applies the snapshot rule to one write.
+//
+// fresh is what this run found; open is what the table holds open for this
+// writer. A fresh row whose (team, project, source) is already open takes
+// the EARLIEST open valid_from: valid_from is a key column, so the write
+// replaces that row instead of adding one. Every other open row is returned
+// closed at `at` -- a fact the snapshot no longer holds, or a later
+// duplicate of one it does. A row is closed by writing its own key again
+// with valid_to set, never by a delete.
+//
+// An empty fresh snapshot retracts nothing: a project search that returns no
+// project is far more often an access change than an organization that
+// removed every project, and closing all ownership on it would empty every
+// team answer until the next good run.
+func jiraOwnershipSnapshot(
+	fresh, open []jiraTeamCatalogOwnershipRow, at time.Time,
+) (kept, retracted []jiraTeamCatalogOwnershipRow) {
+	kept = append([]jiraTeamCatalogOwnershipRow(nil), fresh...)
+	if len(fresh) == 0 {
+		return kept, nil
+	}
+	firstSeen := map[string]time.Time{}
+	for _, row := range open {
+		key := jiraOwnershipSnapshotKey(row)
+		if seen, ok := firstSeen[key]; !ok || row.ValidFrom.Before(seen) {
+			firstSeen[key] = row.ValidFrom
+		}
+	}
+	current := map[string]bool{}
+	for index, row := range kept {
+		key := jiraOwnershipSnapshotKey(row)
+		current[key] = true
+		if seen, ok := firstSeen[key]; ok && seen.Before(row.ValidFrom) {
+			kept[index].ValidFrom = seen
+		}
+	}
+	for _, row := range open {
+		key := jiraOwnershipSnapshotKey(row)
+		if current[key] && row.ValidFrom.Equal(firstSeen[key]) {
+			continue
+		}
+		closedAt := at
+		if closedAt.Before(row.ValidFrom) {
+			closedAt = row.ValidFrom
+		}
+		row.ValidTo = &closedAt
+		row.UpdatedAt = at
+		retracted = append(retracted, row)
+	}
+	return kept, retracted
+}

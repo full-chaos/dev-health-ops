@@ -51,7 +51,11 @@ const (
 const (
 	teamARIPrefix = "team/"
 	userARIPrefix = "user/"
-	defaultPage   = 50
+	// jiraARIPrefix / jiraProjectARISegment bound a Jira project ARI:
+	// "ari:cloud:jira:<site>:project/<native id>".
+	jiraARIPrefix         = "ari:cloud:jira:"
+	jiraProjectARISegment = ":project/"
+	defaultPage           = 50
 )
 
 // Client is the part of the atlassian graph client the sync reads. The
@@ -132,8 +136,8 @@ type Rows struct {
 	Memberships []MembershipRow
 	Ownership   []OwnershipRow
 	// SkippedProjects counts project links dropped because the graph node
-	// carried no Jira project key (the project id of the ownership row is
-	// built from it).
+	// carried no Jira project key, or no Jira project ARI with a native id
+	// (the project id of the ownership row).
 	SkippedProjects int
 }
 
@@ -165,6 +169,34 @@ func accountID(nodeID string) (string, bool) {
 	}
 	nodeID = strings.TrimSpace(nodeID)
 	return nodeID, nodeID != ""
+}
+
+// jiraNativeProjectID returns the native Jira project id of a Jira project
+// ARI ("ari:cloud:jira:<site>:project/<id>"): its last segment. That id is
+// the one project identity on the platform -- the Jira work-items route
+// writes it into work_items.project_id and `projects` -- so a team's project
+// link carries it and reaches the project's work items by id. Anything that
+// is not a Jira project ARI with a numeric id has no such identity and gets
+// no link; an id is never built from the project key.
+func jiraNativeProjectID(ari string) (string, bool) {
+	ari = strings.TrimSpace(ari)
+	if !strings.HasPrefix(ari, jiraARIPrefix) {
+		return "", false
+	}
+	i := strings.LastIndex(ari, jiraProjectARISegment)
+	if i < 0 {
+		return "", false
+	}
+	id := ari[i+len(jiraProjectARISegment):]
+	if id == "" {
+		return "", false
+	}
+	for _, r := range id {
+		if r < '0' || r > '9' {
+			return "", false
+		}
+	}
+	return id, true
 }
 
 // memberID is the member id the Jira auto-import writes: "jira:" and the
@@ -296,12 +328,17 @@ func Collect(ctx context.Context, client Client, params Params) (Rows, error) {
 					rows.SkippedProjects++
 					continue
 				}
-				if keys[key] {
+				nativeProjectID, ok := jiraNativeProjectID(project.ProjectID)
+				if !ok {
+					rows.SkippedProjects++
 					continue
 				}
-				keys[key] = true
+				if keys[nativeProjectID] {
+					continue
+				}
+				keys[nativeProjectID] = true
 				rows.Ownership = append(rows.Ownership, OwnershipRow{
-					OrgID: params.OrgID, Provider: Provider, TeamID: id, ProjectID: params.OrgID + ":" + Provider + ":" + key,
+					OrgID: params.OrgID, Provider: Provider, TeamID: id, ProjectID: nativeProjectID,
 					ProjectKey: key, Source: Source, IsPrimary: 1, Specificity: OwnershipSpecificity,
 					Priority: OwnershipPriority, ValidFrom: now, UpdatedAt: now,
 				})

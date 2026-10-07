@@ -390,7 +390,7 @@ func TestJiraTeamCatalogCollectHappyPathTeamsMembersProjects(t *testing.T) {
 	now := time.Date(2026, 8, 30, 12, 0, 0, 0, time.UTC)
 	doer := &jiraTeamCatalogFixtureDoer{t: t, byURI: map[string]jiraTeamCatalogFixtureResponse{
 		jiraTeamCatalogProjectSearchURI: {
-			body: `{"values":[{"key":"OPS","name":"Ops Project","description":"Ops team project"}]}`,
+			body: `{"values":[{"id":"10001","key":"OPS","name":"Ops Project","description":"Ops team project"}]}`,
 		},
 		// Fetched twice: once for the member/lead lookup, once for the
 		// sprint walk's project-type gate -- see jiraTeamCatalogProjectDetailPayload's
@@ -447,12 +447,12 @@ func TestJiraTeamCatalogCollectHappyPathTeamsMembersProjects(t *testing.T) {
 		t.Fatalf("ownership=%+v", batch.Rows.Ownership)
 	}
 	ownership := batch.Rows.Ownership[0]
-	if ownership.TeamID != "OPS" || ownership.ProjectID != "org-1:jira:OPS" ||
+	if ownership.TeamID != "OPS" || ownership.ProjectID != "10001" ||
 		ownership.Source != "native" || ownership.Specificity != jiraTeamCatalogNativeSpecificity ||
 		ownership.Priority != jiraTeamCatalogNativePriority {
 		t.Fatalf("ownership=%+v", ownership)
 	}
-	if len(batch.Rows.Projects) != 1 || batch.Rows.Projects[0].ID != "org-1:jira:OPS" {
+	if len(batch.Rows.Projects) != 1 || batch.Rows.Projects[0].ID != "10001" {
 		t.Fatalf("projects=%+v", batch.Rows.Projects)
 	}
 	if len(batch.Rows.Sprints) != 0 {

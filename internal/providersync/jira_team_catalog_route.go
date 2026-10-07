@@ -81,6 +81,11 @@ type JiraTeamCatalogResult struct {
 	TeamMembershipsImported      int `json:"team_memberships_imported"`
 	TeamProjectOwnershipImported int `json:"team_project_ownership_imported"`
 	SprintsImported              int `json:"sprints_imported"`
+	// ProjectsSkippedNoNativeID counts projects the search returned with no
+	// native id. Such a project gets its team row but no `projects` row and
+	// no ownership row: an id built from the key would be a second identity
+	// of a project the work-items route identifies by its native id.
+	ProjectsSkippedNoNativeID int `json:"projects_skipped_no_native_id,omitempty"`
 	// WalkSkipped (Python parity, mirrors GitLabTeamCatalogResult.WalkSkipped)
 	// is true when a non-strict walk failure -- project search, or (with
 	// Members selected) a project's lead lookup -- skipped the ENTIRE walk,
@@ -178,6 +183,7 @@ func (handler JiraTeamCatalogRouteHandler) CollectTeamCatalog(
 	}
 
 	rows := JiraTeamCatalogRows{}
+	projectsSkippedNoNativeID := 0
 	projectKeys := make([]string, 0, len(search.Values))
 	for _, entry := range search.Values {
 		team, ok := normalizeJiraTeamRow(ref.OrgID, entry, normalizedAt)
@@ -185,9 +191,18 @@ func (handler JiraTeamCatalogRouteHandler) CollectTeamCatalog(
 			continue
 		}
 		rows.Teams = append(rows.Teams, team)
-		rows.Ownership = append(rows.Ownership, normalizeJiraOwnershipRow(ref.OrgID, team.ID, team.ID, normalizedAt))
-		rows.Projects = append(rows.Projects, normalizeJiraProjectRow(ref.OrgID, team.ID, team.Name, normalizedAt))
 		projectKeys = append(projectKeys, team.ID)
+		nativeProjectID := strings.TrimSpace(entry.ID)
+		if nativeProjectID == "" || jiraProjectIDIsKeyBuilt(ref.OrgID, nativeProjectID) {
+			projectsSkippedNoNativeID++
+			continue
+		}
+		rows.Ownership = append(rows.Ownership, normalizeJiraOwnershipRow(ref.OrgID, team.ID, nativeProjectID, team.ID, normalizedAt))
+		rows.Projects = append(rows.Projects, normalizeJiraProjectRow(ref.OrgID, nativeProjectID, team.ID, team.Name, normalizedAt))
+	}
+	if projectsSkippedNoNativeID > 0 {
+		slog.Default().WarnContext(ctx, "jira_team_catalog_project_without_native_id",
+			"org_id", ref.OrgID, "projects", projectsSkippedNoNativeID)
 	}
 	rows.Projects = dedupeJiraProjectCatalogRows(rows.Projects)
 	rows.Ownership = dedupeJiraOwnershipRows(rows.Ownership)
@@ -252,8 +267,9 @@ func (handler JiraTeamCatalogRouteHandler) CollectTeamCatalog(
 	result := JiraTeamCatalogResult{
 		TeamsImported: len(rows.Teams), TeamProjectOwnershipImported: len(rows.Ownership),
 		TeamMembershipsImported: len(rows.Memberships), ProjectsImported: len(rows.Projects),
-		MembersImported: len(distinctJiraMembershipMembers(rows.Memberships)),
-		SprintsImported: len(rows.Sprints),
+		MembersImported:           len(distinctJiraMembershipMembers(rows.Memberships)),
+		SprintsImported:           len(rows.Sprints),
+		ProjectsSkippedNoNativeID: projectsSkippedNoNativeID,
 	}
 	evidence.Requests = requests
 	return JiraTeamCatalogBatch{Rows: rows, Result: result, Evidence: evidence}, nil
@@ -547,23 +563,45 @@ func (collector JiraTeamCatalogCollector) CollectTeamCatalog(
 	if selections.Projects {
 		projects := append([]jiraTeamCatalogProjectRow(nil), batch.Rows.Projects...)
 		ownership := append([]jiraTeamCatalogOwnershipRow(nil), batch.Rows.Ownership...)
-		legacyProjects, legacyOwnership, legacyErr := jiraLegacyProjectOwnershipLinks(ctx, collector.Sink.Conn, ref.OrgID, normalizedAt)
+		// The legacy links table holds project keys only. The native id of
+		// a key comes from this walk's own project search, never from a
+		// read of `projects`: a key the provider did not return this run has
+		// no identity to write.
+		nativeIDByKey := make(map[string]string, len(projects))
+		for _, row := range projects {
+			if row.ProjectKey != nil {
+				nativeIDByKey[*row.ProjectKey] = row.ID
+			}
+		}
+		legacyOwnership, legacySkipped, legacyErr := jiraLegacyProjectOwnershipLinks(
+			ctx, collector.Sink.Conn, ref.OrgID, nativeIDByKey, normalizedAt.UTC().Truncate(time.Millisecond))
 		if legacyErr != nil {
 			return result, legacyErr
 		}
-		existing := make(map[string]bool, len(projects))
-		for _, row := range projects {
-			existing[row.ID] = true
-		}
-		for _, row := range legacyProjects {
-			if existing[row.ID] {
-				continue
-			}
-			existing[row.ID] = true
-			projects = append(projects, row)
+		if legacySkipped > 0 {
+			slog.Default().WarnContext(ctx, "jira_team_catalog_legacy_link_without_native_id",
+				"org_id", ref.OrgID, "links", legacySkipped)
 		}
 		ownership = append(ownership, legacyOwnership...)
 		ownership = dedupeJiraOwnershipRows(ownership)
+		// Snapshot rule, the same one atlassianteams.Write applies: an open
+		// row of this writer that the fresh snapshot no longer holds is
+		// closed in this write, and a row it still holds keeps the valid_from
+		// it was first seen with. valid_from is a key column, so a new stamp
+		// at each sync would add one more open row for the same fact.
+		open, openErr := jiraOpenCatalogOwnership(ctx, collector.Sink.Conn, ref.OrgID)
+		if openErr != nil {
+			return result, openErr
+		}
+		var retracted []jiraTeamCatalogOwnershipRow
+		ownership, retracted = jiraOwnershipSnapshot(ownership, open, normalizedAt.UTC().Truncate(time.Millisecond))
+		if len(retracted) > 0 {
+			slog.Default().InfoContext(ctx, "jira_team_catalog_ownership_retracted",
+				"org_id", ref.OrgID, "rows", len(retracted))
+		}
+		result.OwnershipRetracted = len(retracted)
+		freshOwnership := len(ownership)
+		ownership = append(ownership, retracted...)
 
 		ownershipEffect, effectErr := effectBatchFromValues(jiraTeamCatalogOwnershipDestination, EffectReadbackRequired, ownership)
 		if effectErr != nil {
@@ -572,7 +610,7 @@ func (collector JiraTeamCatalogCollector) CollectTeamCatalog(
 		if err := collector.Sink.WriteEffect(ctx, writeClaim, ownershipEffect); err != nil {
 			return result, err
 		}
-		result.OwnershipWritten = len(ownership)
+		result.OwnershipWritten = freshOwnership
 		projectsEffect, effectErr := effectBatchFromValues(jiraTeamCatalogProjectsDestination, EffectReadbackRequired, projects)
 		if effectErr != nil {
 			return result, effectErr

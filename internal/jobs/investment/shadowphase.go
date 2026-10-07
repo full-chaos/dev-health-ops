@@ -75,6 +75,8 @@ const (
 	// in the phase keeps what was already paid for.
 	shadowWriteBatch = 500
 	// shadowWriteTimeout bounds one shadow insert and the skip-existing read.
+	// The phase can add at most its budget plus two of these to a run: the last
+	// shadow insert and the attempt insert (see flush in run).
 	shadowWriteTimeout = chwrite.AttemptWriteTimeout
 	// shadowDefectLogLimit bounds the per-unit ERROR lines of one phase.
 	shadowDefectLogLimit = 5
@@ -133,6 +135,9 @@ type ShadowPhase struct {
 	observer ShadowObserver
 	logger   *slog.Logger
 	closer   func() error
+	// writeBatch is how many shadow rows are collected before one insert. Zero
+	// selects shadowWriteBatch.
+	writeBatch int
 }
 
 // shadowConfigStamp is the ONE place the configuration stamp is built.
@@ -332,6 +337,7 @@ type shadowSummary struct {
 	OutputTokens    int64
 	BilledNanoUSD   int64
 	RowsWritten     int
+	RowsLost        int
 	AttemptRows     int
 	AttemptDropped  int
 	AttemptWriteErr bool
@@ -400,27 +406,48 @@ func (phase *ShadowPhase) run(ctx context.Context, store shadowStore, cfg Config
 
 	ledger := &shadowLedger{limit: phase.settings.MaxNanoUSD}
 	attempts := chwrite.NewAttemptBuffer(0)
-	records := make([]chwrite.ShadowRecord, 0, min(len(pending), shadowWriteBatch))
-	flush := func() {
-		if len(records) == 0 {
+	batchSize := phase.writeBatch
+	if batchSize < 1 {
+		batchSize = shadowWriteBatch
+	}
+	records := make([]chwrite.ShadowRecord, 0, min(len(pending), batchSize))
+	writesStopped := false
+	// flush writes the collected rows. The time the phase can add to a run is
+	// bounded by it: a write INSIDE the phase (last false) runs under the phase
+	// context, so it ends with the budget, and its rows are then kept for the
+	// last write. The LAST write runs under the run context with its own
+	// shadowWriteTimeout, so rows that were paid for are written after the
+	// budget ended. A write that failed for another reason ends all shadow
+	// writes of the phase. A cancelled run context writes nothing.
+	flush := func(last bool) {
+		if len(records) == 0 || writesStopped {
 			return
 		}
-		batch := records
-		records = records[:0:0]
-		// The RUN context, not the phase context: rows that were paid for are
-		// written after the budget ended. A cancelled run context writes nothing.
 		if ctx.Err() != nil {
 			return
 		}
-		writeCtx, cancelWrite := context.WithTimeout(ctx, shadowWriteTimeout)
-		written, err := store.WriteShadowInvestments(writeCtx, cfg.OrgID, batch)
+		parent := ctx
+		if !last {
+			if phaseCtx.Err() != nil {
+				return // the phase is over: the last write takes these rows
+			}
+			parent = phaseCtx
+		}
+		writeCtx, cancelWrite := context.WithTimeout(parent, shadowWriteTimeout)
+		written, err := store.WriteShadowInvestments(writeCtx, cfg.OrgID, records)
 		cancelWrite()
 		if err != nil {
+			if !last && phaseCtx.Err() != nil && ctx.Err() == nil {
+				return // the budget ended during the write: the last write takes these rows
+			}
+			summary.RowsLost += len(records)
+			records, writesStopped = nil, true
 			setStop(phase.storeStop(ctx, cfg, "shadow_write", err))
 			cancel()
 			return
 		}
 		summary.RowsWritten += written
+		records = records[:0:0]
 	}
 
 	if len(pending) > 0 {
@@ -477,12 +504,12 @@ func (phase *ShadowPhase) run(ctx context.Context, store shadowStore, cfg Config
 				setStop(ShadowStopDeterministicFailure)
 				cancel()
 			}
-			if len(records) >= shadowWriteBatch {
-				flush()
+			if len(records) >= batchSize {
+				flush(false)
 			}
 		}
 	}
-	flush()
+	flush(true)
 
 	if ctx.Err() == nil {
 		flushed := store.FlushAttempts(ctx, cfg.OrgID, attempts)
@@ -695,6 +722,7 @@ func (phase *ShadowPhase) report(ctx context.Context, cfg Config, summary shadow
 		slog.Int64("duration_ms", summary.Duration.Milliseconds()),
 		slog.Int64("budget_ms", phase.settings.Budget.Milliseconds()),
 		slog.Int("rows_written", summary.RowsWritten),
+		slog.Int("rows_lost", summary.RowsLost),
 		slog.Int("attempt_rows_written", summary.AttemptRows),
 		slog.Int("attempt_rows_dropped", summary.AttemptDropped),
 		slog.Bool("attempt_write_failed", summary.AttemptWriteErr),

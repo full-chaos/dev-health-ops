@@ -715,9 +715,15 @@ func TestAMissingShadowTableStopsThePhase(t *testing.T) {
 		fake := newFakeJev(t, nil)
 		phase := newTestShadowPhase(t, fake, shadowTestSettings(), testLogger())
 		store := &memoryShadowStore{writeErr: fmt.Errorf("send: %w", chwrite.ErrShadowTableMissing)}
-		summary := phase.run(context.Background(), store, shadowTestConfig(), shadowTestEntries(t, "u1"))
+		phase.writeBatch = 1
+		summary := phase.run(context.Background(), store, shadowTestConfig(), shadowTestEntries(t, "u1", "u2", "u3"))
 		if summary.StopReason != ShadowStopTableMissing || summary.RowsWritten != 0 {
 			t.Fatalf("summary = %+v", summary)
+		}
+		// One failed write ends the shadow writes of the phase: no second try at
+		// the end, and the rows that were not written are counted.
+		if store.writes != 1 || summary.RowsLost < 1 {
+			t.Fatalf("shadow writes = %d, rows lost = %d, want 1 write and the lost rows counted", store.writes, summary.RowsLost)
 		}
 	})
 	t.Run("on the attempt flush", func(t *testing.T) {
@@ -850,5 +856,40 @@ func TestTheTransportRefusesARequestOutsideAClassification(t *testing.T) {
 	exchange := &shadowExchange{ledger: &shadowLedger{limit: 1 << 40}}
 	if _, _, err := transport.PostSystemOne(withShadowExchange(context.Background(), exchange), []byte(`{"model":"m"}`)); err != nil || sender.sends != 1 {
 		t.Fatalf("inside a classification: err = %v, sends = %d", err, sender.sends)
+	}
+}
+
+// The time the phase adds to a run is bounded: a shadow write INSIDE the phase
+// ends with the budget (here the store never answers it), and the rows it held
+// are written by the last write, which has its own 15 s and no more.
+func TestAShadowWriteInsideThePhaseEndsWithTheBudget(t *testing.T) {
+	fake := newFakeJev(t, nil)
+	settings := shadowTestSettings()
+	settings.Concurrency = 1
+	settings.Budget = 500 * time.Millisecond
+	phase := newTestShadowPhase(t, fake, settings, testLogger())
+	phase.writeBatch = 1
+	store := &memoryShadowStore{blockWrite: 1}
+	started := time.Now()
+	summary := phase.run(context.Background(), store, shadowTestConfig(), shadowTestEntries(t, "u1", "u2", "u3"))
+	elapsed := time.Since(started)
+	if elapsed > 5*time.Second {
+		t.Fatalf("the phase took %v with a budget of 500 ms: a write inside the phase did not end with the budget", elapsed)
+	}
+	if len(store.writeDeadlines) != 2 {
+		t.Fatalf("shadow writes = %d, want 2 (one inside the phase, one at the end)", len(store.writeDeadlines))
+	}
+	if inside := store.writeDeadlines[0]; inside > 500*time.Millisecond {
+		t.Fatalf("the write inside the phase had %v left, more than the budget", inside)
+	}
+	if last := store.writeDeadlines[1]; last < 10*time.Second || last > shadowWriteTimeout {
+		t.Fatalf("the last write had %v left, want its own %v", last, shadowWriteTimeout)
+	}
+	// The row of the blocked write is not lost: the last write took it.
+	if len(store.records) < 1 || summary.RowsWritten != len(store.records) || summary.RowsLost != 0 {
+		t.Fatalf("rows = %d, summary = %+v", len(store.records), summary)
+	}
+	if store.records[0].WorkUnitID != "u1" || summary.StopReason != ShadowStopBudget {
+		t.Fatalf("rows = %+v, stop reason %q", store.records, summary.StopReason)
 	}
 }

@@ -289,7 +289,10 @@ type memoryShadowStore struct {
 	// cancelledCalls counts store calls made with a context that was already
 	// cancelled.
 	cancelledCalls int
-	delegate       *chwrite.Writer
+	// blockWrite is the number (from 1) of the shadow write that never answers.
+	blockWrite int
+	// writeDeadlines is the time each shadow write had left on its context.
+	writeDeadlines []time.Duration
 }
 
 func (store *memoryShadowStore) FetchExistingShadowKeys(ctx context.Context, _ string, _ []chquery.InvestmentKey, shadowConfig string) (map[chquery.InvestmentKey]struct{}, error) {
@@ -304,8 +307,19 @@ func (store *memoryShadowStore) FetchExistingShadowKeys(ctx context.Context, _ s
 
 func (store *memoryShadowStore) WriteShadowInvestments(ctx context.Context, _ string, records []chwrite.ShadowRecord) (int, error) {
 	store.mu.Lock()
-	defer store.mu.Unlock()
 	store.writes++
+	write := store.writes
+	deadline, _ := ctx.Deadline()
+	store.writeDeadlines = append(store.writeDeadlines, time.Until(deadline))
+	block := store.blockWrite == write
+	store.mu.Unlock()
+	if block {
+		// A ClickHouse that does not answer: the write ends when its context does.
+		<-ctx.Done()
+		return 0, ctx.Err()
+	}
+	store.mu.Lock()
+	defer store.mu.Unlock()
 	if ctx.Err() != nil {
 		store.cancelledCalls++
 	}

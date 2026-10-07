@@ -328,7 +328,8 @@ type RunPublisher interface {
 // a family's runtime failure now holds the whole partition incomplete (see
 // computeNativeFamilies and ErrPreBridgeFamilyIncomplete). Construction-time
 // refusal is handled one layer up, in internal/workerservice, where it is a
-// startup error rather than a silently unregistered family.
+// startup error rather than a silently unregistered family (two families
+// have a scoped refusal there, logged and counted: dailyFamilyRefusal).
 type NativeFamilyExecutor interface {
 	ComputeFamily(ctx context.Context, run Run, partition Partition) (rowsWritten int, err error)
 }
@@ -594,7 +595,9 @@ func (handler *PartitionHandler) SetZeroRowsObserver(observer jobruntime.DailyMe
 // nil/empty map means this handler computes NOTHING for a partition. The
 // caller (internal/workerservice/daily.go) is what guarantees the map is
 // complete: a native executor that cannot be constructed is a startup
-// error there, not a silently absent map entry.
+// error there, not a silently absent map entry. The exception is a scoped
+// refusal (dailyFamilyRefusal in that package): the family is absent from
+// the map, and the refusal is logged at ERROR and counted.
 func (handler *PartitionHandler) SetNativeFamilies(families map[string]NativeFamilyExecutor) error {
 	if handler == nil {
 		return nil

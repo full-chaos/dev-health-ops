@@ -758,7 +758,13 @@ func dailyMetricsCompatRetryDecisions() []DailyMetricsCompatRetryDecision {
 // partition, and carries the same "ic_finalize"-class consequence: a native
 // finalize failure redrives the run, so an unregistered name would make that
 // redrive loop invisible.
-var dailyMetricsNativeFamilies = []string{"team_wellbeing", "repo_user_commit", "incident", "deploy", "work_item_attribution", "work_item_state", "work_item", "work_item_estimate", "cicd", "file_hotspots", "file_risk_hotspots", "testops_risk", "testops_pipeline", "testops_test", "testops_coverage", "compounding_risk", "ai_governance", "review_edges", "benchmarking", "ai_impact", "work_graph_edges", "ai_workflow", "ic_finalize", "team_cognitive_load", "team_complexity", "compounding_risk_team"}
+//
+// "work_item_issue_type" and "work_item_investment" (CHAOS-8810) are the daily
+// families of issue_type_metrics_daily and of the two investment daily tables.
+// Since they exist the daily job is the writer that makes those tables right
+// after a partial sync unit, so a refusal that nobody counted would leave the
+// partial rows in place with no signal.
+var dailyMetricsNativeFamilies = []string{"team_wellbeing", "repo_user_commit", "incident", "deploy", "work_item_attribution", "work_item_state", "work_item", "work_item_estimate", "work_item_issue_type", "work_item_investment", "cicd", "file_hotspots", "file_risk_hotspots", "testops_risk", "testops_pipeline", "testops_test", "testops_coverage", "compounding_risk", "ai_governance", "review_edges", "benchmarking", "ai_impact", "work_graph_edges", "ai_workflow", "ic_finalize", "team_cognitive_load", "team_complexity", "compounding_risk_team"}
 
 // dailyMetricsZeroRowsWithSourceFamilies is the closed set of metrics.daily
 // families CHAOS-4263 scoped this check to (chris's ruling 2026-08-25): the

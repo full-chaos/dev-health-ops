@@ -342,6 +342,38 @@
       },
       "open_regressions": []
     },
+    "daily/work_item_investment": {
+      "parity": {
+        "status": "unverified",
+        "ticket": "CHAOS-8810",
+        "evidence": "No Python daily family existed to compare with. The compute is shared with the sync deriver (internal/jobs/metrics/workitemengine); internal/providersync/work_item_daily_families_stored_rows_integration_test.go compares the family with the deriver on stored rows of four providers."
+      },
+      "deployed": {
+        "revision": "unknown",
+        "read_at": "2026-10-06T02:34:43.774743783Z",
+        "source": "not read: the family is new in CHAOS-8810 and no deployed build holds it yet"
+      },
+      "proof": {
+        "ref": "none"
+      },
+      "open_regressions": []
+    },
+    "daily/work_item_issue_type": {
+      "parity": {
+        "status": "unverified",
+        "ticket": "CHAOS-8810",
+        "evidence": "No Python daily family existed to compare with. The compute is shared with the sync deriver (internal/jobs/metrics/workitemengine); internal/providersync/work_item_daily_families_stored_rows_integration_test.go compares the family with the deriver on stored rows of four providers."
+      },
+      "deployed": {
+        "revision": "unknown",
+        "read_at": "2026-10-06T02:34:43.774743783Z",
+        "source": "not read: the family is new in CHAOS-8810 and no deployed build holds it yet"
+      },
+      "proof": {
+        "ref": "none"
+      },
+      "open_regressions": []
+    },
     "daily/work_item_state": {
       "parity": {
         "status": "verified",

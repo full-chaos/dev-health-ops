@@ -32,7 +32,7 @@ import (
 
 type dailyPostSyncWriter struct {
 	store     *daily.PostgresStore
-	publisher *daily.PostgresPublisher
+	publisher daily.RunPublisher
 }
 
 func (writer dailyPostSyncWriter) StartRunTx(

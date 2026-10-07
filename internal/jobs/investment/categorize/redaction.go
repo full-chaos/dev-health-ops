@@ -77,3 +77,25 @@ func (p OllamaProvider) Format(state fmt.State, verb rune) {
 	secrets.FormatRedacted(state, verb, p.redacted())
 }
 func (p OllamaProvider) LogValue() slog.Value { return secrets.LogRedacted(p.redacted()) }
+
+func (c TypeSafeClientConfig) redacted() any {
+	type plain TypeSafeClientConfig
+	return plain(c)
+}
+
+func (c TypeSafeClientConfig) Format(state fmt.State, verb rune) {
+	secrets.FormatRedacted(state, verb, c.redacted())
+}
+func (c TypeSafeClientConfig) LogValue() slog.Value { return secrets.LogRedacted(c.redacted()) }
+
+func (c TypeSafeClient) redacted() any {
+	return struct {
+		Cfg    TypeSafeClientConfig
+		Client *http.Client
+	}{c.cfg, c.client}
+}
+
+func (c TypeSafeClient) Format(state fmt.State, verb rune) {
+	secrets.FormatRedacted(state, verb, c.redacted())
+}
+func (c TypeSafeClient) LogValue() slog.Value { return secrets.LogRedacted(c.redacted()) }

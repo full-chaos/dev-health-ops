@@ -16,6 +16,7 @@ var llmAPIKeyHolders = map[string][]string{
 	"internal/jobs/investment/categorize/openaiprovider.go": {"APIKey secrets.Hidden"},
 	"internal/jobs/investment/categorize/localprovider.go":  {"APIKey          secrets.Hidden"},
 	"internal/jobs/investment/categorize/ollamaprovider.go": {"APIKey          secrets.Hidden"},
+	"internal/jobs/investment/categorize/typesafeclient.go": {"APIKey secrets.Hidden"},
 	"internal/llmorgsettings/resolve.go":                    {"APIKey  secrets.Hidden"},
 	"internal/apiservice/admin/llmsettingsreadiness.go":     {"apiKey   secrets.Hidden"},
 	"internal/adminops/secretflag.go":                       {"value secrets.Hidden"},

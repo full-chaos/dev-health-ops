@@ -47,7 +47,7 @@ func TestJevEndToEndLedgerAndRawFiles(t *testing.T) {
 		a.Provider != ProviderTypeSafe || a.QuestionCount != 21 || a.SpanCount == 0 || a.Attempt != 1 || a.RetryOf != 0 || a.FallbackUsed {
 		t.Fatalf("%+v", a)
 	}
-	if a.Rubric != "decision-support-v1" || a.Map != "support-map-v1" || a.Adapter != "decision-adapter-v1" || a.Rates != "rates-2026-10-06" ||
+	if a.Rubric != "decision-support-v1" || a.Map != "support-map-v1" || a.Adapter != "decision-adapter-v2" || a.Rates != "rates-2026-10-06" ||
 		a.Span != "span-candidates-v1" || a.Eval != EvalVersion || !strings.Contains(a.ModelVersionStamp, "model=jev-1.13.0;") || a.RubricSHA256 != env.r.SHA256 {
 		t.Fatalf("versions: %+v", a.Versions)
 	}
@@ -154,45 +154,96 @@ func TestIncumbentEndToEndKeepsProductionRequest(t *testing.T) {
 	assertNoSecret(t, env.out, testJevToken, testOAIKey)
 }
 
-// incumbent+defs sends the production request plus ONE inserted block.
+// incumbent+defs sends the production request plus ONE inserted block, built
+// from the incumbent_defs data of the rubric file.
 func TestIncumbentDefsArmOnlyInsertsDefinitions(t *testing.T) {
+	for name, r := range map[string]*Rubric{"v1": testRubric(t), "v1c": testRubricCompact(t)} {
+		t.Run(name, func(t *testing.T) {
+			env := newEnv(t)
+			env.r = r
+			fx := makeFixtures(t)
+			env.oai = newFakeResponses(t, func(string) string { return incumbentPayload(t, fx.bugfix, "quality.bugfix") }, "gpt-5-nano-2025-08-07")
+			mustRun(t, newCfg(t, env, []FixtureRecord{fx.bugfix}, ArmIncumbent, ArmIncumbentDefs))
+			bodies := env.oai.bodies()
+			if len(bodies) != 2 {
+				t.Fatalf("requests = %d", len(bodies))
+			}
+			input := func(b []byte) string {
+				var v struct{ Input string }
+				_ = json.Unmarshal(b, &v)
+				return v.Input
+			}
+			plain, defs := input(bodies[0]), input(bodies[1])
+			block := DefsBlock(r)
+			if !strings.Contains(defs, block) || strings.Contains(plain, r.IncumbentDefs.Header) {
+				t.Fatal("the definitions block is missing from the defs arm or leaked into the incumbent")
+			}
+			// prompt_D = prompt_A with "\n\n" + header + lines + footer inserted before the marker
+			if strings.Replace(defs, block, "", 1) != plain {
+				t.Fatal("the defs arm differs from the incumbent by more than the inserted block")
+			}
+			if !strings.HasPrefix(block, "\n\n"+r.IncumbentDefs.Header+"\n- feature_delivery.customer: ") || !strings.HasSuffix(block, "\n"+r.IncumbentDefs.Footer) {
+				t.Fatalf("block = %.120q ... %.60q", block, block[len(block)-60:])
+			}
+			if got := strings.Count(block, "\n- "); got != 15 {
+				t.Fatalf("lines = %d", got)
+			}
+			for _, l := range r.IncumbentDefs.Lines {
+				if !strings.Contains(block, "- "+l.Key+": "+l.Text) {
+					t.Fatalf("line of %s missing", l.Key)
+				}
+			}
+			d := readLedgerT(t, env.out)
+			if got := classOf(t, d, ArmIncumbentDefs, fx.bugfix.BundleID); got.Prompt != "investment-categorization-v2;defs="+r.RubricVersion {
+				t.Fatalf("prompt stamp = %q", got.Prompt)
+			}
+			if got := classOf(t, d, ArmIncumbent, fx.bugfix.BundleID); got.Prompt != categorize.PromptVersion {
+				t.Fatalf("prompt stamp = %q", got.Prompt)
+			}
+		})
+	}
+}
+
+// The marker must occur exactly one time; otherwise the arm fails instead of
+// guessing, and the production prompt is untouched.
+func TestArmDMarkerMustOccurExactlyOnce(t *testing.T) {
+	r := testRubric(t)
+	prompt := categorize.BuildPrompt("[issue] E1\nsomething")
+	if out, err := InsertDefs(r, prompt); err != nil || strings.Count(out, r.IncumbentDefs.InsertBefore) != 1 {
+		t.Fatalf("%v", err)
+	}
+	if _, err := InsertDefs(r, "a prompt with no marker"); err == nil {
+		t.Fatal("a prompt without the marker must fail")
+	}
+	if _, err := InsertDefs(r, prompt+prompt); err == nil {
+		t.Fatal("a prompt with the marker two times must fail")
+	}
+	// end to end: a stale marker makes every arm D classification fail loudly
 	env := newEnv(t)
 	fx := makeFixtures(t)
-	env.oai = newFakeResponses(t, func(string) string { return incumbentPayload(t, fx.bugfix, "quality.bugfix") }, "gpt-5-nano-2025-08-07")
-	mustRun(t, newCfg(t, env, []FixtureRecord{fx.bugfix}, ArmIncumbent, ArmIncumbentDefs))
-	bodies := env.oai.bodies()
-	if len(bodies) != 2 {
-		t.Fatalf("requests = %d", len(bodies))
+	env.r = withEdit(t, func(m map[string]any) {
+		m["incumbent_defs"].(map[string]any)["insert_before"] = "\n\nNo such marker:\n"
+	})
+	env.oai = newFakeResponses(t, func(string) string { return incumbentPayload(t, fx.bugfix, "quality.bugfix") }, "gpt-5-nano")
+	s := mustRun(t, newCfg(t, env, []FixtureRecord{fx.bugfix}, ArmIncumbentDefs))
+	c := classOf(t, readLedgerT(t, env.out), ArmIncumbentDefs, fx.bugfix.BundleID)
+	if c.State != categorize.StatusLLMTaskFailed || c.StopArm != "defs_marker" || env.oai.count() != 0 || s.Arms[ArmIncumbentDefs].Stopped != "defs_marker" {
+		t.Fatalf("%+v calls=%d", c, env.oai.count())
 	}
-	input := func(b []byte) string {
-		var v struct{ Input string }
-		_ = json.Unmarshal(b, &v)
-		return v.Input
+}
+
+func withEdit(t *testing.T, edit func(m map[string]any)) *Rubric {
+	var m map[string]any
+	if err := json.Unmarshal(defaultRubricJSON, &m); err != nil {
+		t.Fatal(err)
 	}
-	plain, defs := input(bodies[0]), input(bodies[1])
-	block := IncumbentDefsText(env.r)
-	if !strings.Contains(defs, block) || strings.Contains(plain, "Category definitions") {
-		t.Fatal("the definitions block is missing from the defs arm or leaked into the incumbent")
+	edit(m)
+	data, _ := json.Marshal(m)
+	r, err := ParseRubric(data)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if strings.Replace(defs, "\n\n"+block, "", 1) != plain {
-		t.Fatal("the defs arm differs from the incumbent by more than the inserted block")
-	}
-	for _, k := range SortedKeys() {
-		if !strings.Contains(block, "- "+k+" (") {
-			t.Fatalf("definition of %s missing", k)
-		}
-	}
-	d := readLedgerT(t, env.out)
-	if got := classOf(t, d, ArmIncumbentDefs, fx.bugfix.BundleID); got.Prompt != "investment-categorization-v2+incumbent-defs-v1/decision-support-v1" {
-		t.Fatalf("prompt stamp = %q", got.Prompt)
-	}
-	if got := classOf(t, d, ArmIncumbent, fx.bugfix.BundleID); got.Prompt != categorize.PromptVersion {
-		t.Fatalf("prompt stamp = %q", got.Prompt)
-	}
-	// The production constant is untouched by the experiment.
-	if !strings.Contains(categorize.BuildPrompt("x"), "Source text (quotes must be exact substrings):\nx") {
-		t.Fatal("production prompt changed: the defs insertion point is stale")
-	}
+	return r
 }
 
 func TestIncumbentRepairIsOneMoreAttemptInTheLedger(t *testing.T) {
@@ -341,17 +392,29 @@ func TestModelMismatchAndNotJSON(t *testing.T) {
 			t.Fatalf("%+v", c)
 		}
 	})
-	t.Run("an accepted alias passes and is recorded", func(t *testing.T) {
+	t.Run("a dated suffix passes the prefix rule and is recorded verbatim", func(t *testing.T) {
 		env := newEnv(t)
 		b := bugfixBehaviour()
 		b.model = "gpt-6-luna-2026-09-01"
 		env.dec = newFakeDecisions(t, env.r, allBehave(b))
-		cfg := newCfg(t, env, []FixtureRecord{fx.bugfix}, ArmDecisions)
-		cfg.Decisions.AcceptedModels = []string{"gpt-6-luna-2026-09-01"}
-		mustRun(t, cfg)
+		mustRun(t, newCfg(t, env, []FixtureRecord{fx.bugfix}, ArmDecisions))
 		d := readLedgerT(t, env.out)
 		c := classOf(t, d, ArmDecisions, fx.bugfix.BundleID)
 		if c.State != StateOK || c.ModelReturned != "gpt-6-luna-2026-09-01" || c.ModelRequested != "gpt-6-luna" {
+			t.Fatalf("%+v", c)
+		}
+		if a := d.AttemptsOf(c)[0]; a.ModelReturned != "gpt-6-luna-2026-09-01" {
+			t.Fatalf("attempt model_returned = %q", a.ModelReturned)
+		}
+	})
+	t.Run("a longer id without the dash is a mismatch", func(t *testing.T) {
+		env := newEnv(t)
+		b := bugfixBehaviour()
+		b.model = "gpt-6-lunatic"
+		env.dec = newFakeDecisions(t, env.r, allBehave(b))
+		mustRun(t, newCfg(t, env, []FixtureRecord{fx.bugfix}, ArmDecisions))
+		c := classOf(t, readLedgerT(t, env.out), ArmDecisions, fx.bugfix.BundleID)
+		if c.State != StateRequestFailed || !strings.Contains(strings.Join(c.ErrorCodes, " "), "model_mismatch") {
 			t.Fatalf("%+v", c)
 		}
 	})
@@ -380,12 +443,12 @@ func TestPerQuestionFailuresOverTheWire(t *testing.T) {
 	}{
 		{"decisions refusal", ArmDecisions, behaviour{refuse: map[string]bool{q: true}}, StateQuestionRefused, "question_refused:risk.security"},
 		{"decisions missing answer", ArmDecisions, behaviour{drop: map[string]bool{q: true}}, StateAnswerMissing, "answer_missing:risk.security"},
-		{"decisions invalid probabilities", ArmDecisions, behaviour{badProbs: map[string]bool{q: true}}, StateAnswerInvalid, "answer_invalid:risk.security:prob_sum"},
+		{"decisions malformed map and no score", ArmDecisions, behaviour{badNoScore: map[string]bool{q: true}}, StateAnswerInvalid, "answer_invalid:risk.security:sum:0.5:no_usable_score"},
 		{"decisions wrong type", ArmDecisions, behaviour{wrongType: map[string]bool{q: true}}, StateAnswerInvalid, "answer_invalid:risk.security:type=choice"},
 		{"decisions duplicate name", ArmDecisions, behaviour{duplicate: map[string]bool{q: true}}, StateAnswerInvalid, "duplicate_id"},
 		{"decisions unknown name", ArmDecisions, behaviour{unknownExtra: true}, StateAnswerInvalid, "unknown_id:surprise"},
 		{"jev missing answer", ArmJev, behaviour{drop: map[string]bool{q: true}}, StateAnswerMissing, "answer_missing:risk.security"},
-		{"jev invalid probabilities", ArmJev, behaviour{badProbs: map[string]bool{q: true}}, StateAnswerInvalid, "answer_invalid:risk.security:prob_sum"},
+		{"jev malformed map and no score", ArmJev, behaviour{badNoScore: map[string]bool{q: true}}, StateAnswerInvalid, "answer_invalid:risk.security:sum:0.5:no_usable_score"},
 		{"jev wrong type", ArmJev, behaviour{wrongType: map[string]bool{q: true}}, StateAnswerInvalid, "type=refusal"},
 		{"jev duplicate key", ArmJev, behaviour{duplicate: map[string]bool{q: true}}, StateAnswerInvalid, "duplicate_id"},
 		{"jev unknown key", ArmJev, behaviour{unknownExtra: true}, StateAnswerInvalid, "unknown_id:surprise"},
@@ -394,7 +457,7 @@ func TestPerQuestionFailuresOverTheWire(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			env := newEnv(t)
 			b := bugfixBehaviour()
-			b.refuse, b.drop, b.badProbs, b.wrongType, b.duplicate, b.unknownExtra = c.b.refuse, c.b.drop, c.b.badProbs, c.b.wrongType, c.b.duplicate, c.b.unknownExtra
+			b.refuse, b.drop, b.badNoScore, b.wrongType, b.duplicate, b.unknownExtra = c.b.refuse, c.b.drop, c.b.badNoScore, c.b.wrongType, c.b.duplicate, c.b.unknownExtra
 			var fake *fakeProvider
 			if c.arm == ArmJev {
 				env.jev = newFakeJev(t, env.r, allBehave(b))
@@ -918,5 +981,20 @@ func TestNoProductionPackageImportsTheExperiment(t *testing.T) {
 	})
 	if checked < 100 {
 		t.Fatalf("only %d Go files were checked: the import guard looked at nothing", checked)
+	}
+}
+
+// A request for a below-gate bundle invalidates the full run too.
+func TestFullRunFailsWhenABelowGateBundleWasSent(t *testing.T) {
+	s := newScenario(t, nil)
+	l, err := OpenLedger(s.env.out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = l.Append(AttemptRecord{Kind: KindAttempt, Phase: PhaseCompleted, AttemptID: "x/jev/" + s.fx.short.BundleID + "/r0/a1", Arm: ArmJev, BundleID: s.fx.short.BundleID, Provider: ProviderTypeSafe})
+	l.Close()
+	m, err := ScoreFull(context.Background(), fullCfg(s, nil))
+	if err == nil || !hasFailure(m.Failures, "below_gate_bundle_was_sent:"+s.fx.short.BundleID) {
+		t.Fatalf("err=%v failures=%v", err, m.Failures)
 	}
 }

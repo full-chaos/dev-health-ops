@@ -33,13 +33,23 @@ const (
 	EnvIncumbentMaxOut = "DECISIONEVAL_INCUMBENT_MAX_OUTPUT_TOKENS"
 	EnvJevModel        = "DECISIONEVAL_JEV_MODEL"
 	EnvDecisionsModel  = "DECISIONEVAL_DECISIONS_MODEL"
-	EnvJevAccept       = "DECISIONEVAL_JEV_ACCEPT_MODELS"
-	EnvDecisionsAccept = "DECISIONEVAL_DECISIONS_ACCEPT_MODELS"
+	EnvLevelRule       = "DECISIONEVAL_LEVEL_RULE" // median | conditional-median:0.5 | conditional-median:0.67
 	EnvCustomEndpoints = "DECISIONEVAL_ALLOW_CUSTOM_ENDPOINTS"
 	EnvGold            = "DECISIONEVAL_GOLD"  // scorer
 	EnvScore           = "DECISIONEVAL_SCORE" // 1 = the scorer test may run
 	EnvReportDir       = "DECISIONEVAL_REPORT_DIR"
 	EnvResamples       = "DECISIONEVAL_RESAMPLES"
+	EnvPersisted       = "DECISIONEVAL_PERSISTED"   // persisted incumbent rows (eval-incumbent-persisted.jsonl) for N1
+	EnvFull            = "DECISIONEVAL_FULL"        // 1 = the full-run scorer test may run
+	EnvDecide          = "DECISIONEVAL_DECIDE"      // 1 = the decision test may run
+	EnvDevIDs          = "DECISIONEVAL_DEV_IDS"     // development-set ids (or the eval-development.jsonl file)
+	EnvHeldoutIDs      = "DECISIONEVAL_HELDOUT_IDS" // held-out ids (or the eval-heldout.jsonl file)
+	EnvSampleSize      = "DECISIONEVAL_SAMPLE_SIZE" // disagreement sample size (0 = no draw)
+	EnvSampleGold      = "DECISIONEVAL_SAMPLE_GOLD" // labels of the drawn sample
+	EnvTwinOut         = "DECISIONEVAL_TWIN_OUT"    // held-out run ledger dir (gate K)
+	EnvTwinFixtures    = "DECISIONEVAL_TWIN_FIXTURES"
+	EnvTwinGold        = "DECISIONEVAL_TWIN_GOLD"
+	EnvCandidates      = "DECISIONEVAL_CANDIDATES" // jev,decisions
 
 	// Credentials (names only; values are read once into secrets.Hidden).
 	EnvJevEndpoint = "TYPESAFE_JEN_ENDPOINT"
@@ -116,6 +126,7 @@ func RunConfigFromEnv(getenv func(string) string) (RunConfig, error) {
 	cfg.DryRun, cfg.Live = isOne(getenv(EnvDryRun)), isOne(getenv(EnvLive))
 	cfg.RetryOrphans = isOne(getenv(EnvRetryOrphans))
 	cfg.Set, cfg.RunID, cfg.MapName = getenv(EnvSet), getenv(EnvRunID), getenv(EnvMap)
+	cfg.LevelRule = getenv(EnvLevelRule)
 	capTS, err := envFloat(getenv, EnvCapTypeSafe)
 	if err != nil {
 		return cfg, err
@@ -142,9 +153,7 @@ func RunConfigFromEnv(getenv func(string) string) (RunConfig, error) {
 		return cfg, fmt.Errorf("%s must be %s (the key goes only to that host); set %s=1 to override", EnvOpenAIBase, defaultOpenAIBase, EnvCustomEndpoints)
 	}
 	cfg.Jev = NewJevBackend(jevEndpoint, secrets.NewHidden(getenv(EnvJevToken)), getenv(EnvJevModel))
-	cfg.Jev.AcceptedModels = splitList(getenv(EnvJevAccept))
 	cfg.Decisions = NewDecisionsBackend(base+"/decisions", secrets.NewHidden(getenv(EnvOpenAIKey)), getenv(EnvDecisionsModel))
-	cfg.Decisions.AcceptedModels = splitList(getenv(EnvDecisionsAccept))
 	maxOut, err := envInt(getenv, EnvIncumbentMaxOut, 2048)
 	if err != nil {
 		return cfg, err
@@ -163,6 +172,7 @@ func ScoreConfigFromEnv(getenv func(string) string) (ScoreConfig, error) {
 	}
 	cfg.OutDir, cfg.FixturesPath, cfg.GoldPath = getenv(EnvOut), getenv(EnvFixtures), getenv(EnvGold)
 	cfg.ReportDir, cfg.MapName = getenv(EnvReportDir), getenv(EnvMap)
+	cfg.LevelRule, cfg.IncumbentPersistedPath = getenv(EnvLevelRule), getenv(EnvPersisted)
 	cfg.Arms = splitList(getenv(EnvArms))
 	if cfg.Resamples, err = envInt(getenv, EnvResamples, DefaultResamples); err != nil {
 		return cfg, err
@@ -176,3 +186,50 @@ func ScoreConfigFromEnv(getenv func(string) string) (ScoreConfig, error) {
 }
 
 var _ = os.Getenv
+
+// FullConfigFromEnv builds a FullConfig from the environment.
+func FullConfigFromEnv(getenv func(string) string) (FullConfig, error) {
+	var cfg FullConfig
+	var err error
+	if cfg.Rubric, err = LoadRubric(getenv(EnvRubric)); err != nil {
+		return cfg, err
+	}
+	cfg.OutDir, cfg.FixturesPath, cfg.ReportDir = getenv(EnvOut), getenv(EnvFixtures), getenv(EnvReportDir)
+	cfg.DevelopmentIDsPath, cfg.HeldoutIDsPath = getenv(EnvDevIDs), getenv(EnvHeldoutIDs)
+	cfg.MapName, cfg.LevelRule, cfg.Arms = getenv(EnvMap), getenv(EnvLevelRule), splitList(getenv(EnvArms))
+	if cfg.Resamples, err = envInt(getenv, EnvResamples, DefaultResamples); err != nil {
+		return cfg, err
+	}
+	if cfg.SampleSize, err = envInt(getenv, EnvSampleSize, 0); err != nil {
+		return cfg, err
+	}
+	for name, v := range map[string]string{EnvOut: cfg.OutDir, EnvFixtures: cfg.FixturesPath, EnvReportDir: cfg.ReportDir, EnvDevIDs: cfg.DevelopmentIDsPath} {
+		if v == "" {
+			return cfg, fmt.Errorf("%s is not set", name)
+		}
+	}
+	return cfg, nil
+}
+
+// DecideConfigFromEnv builds a DecideConfig from the environment.
+func DecideConfigFromEnv(getenv func(string) string) (DecideConfig, error) {
+	var cfg DecideConfig
+	var err error
+	if cfg.Rubric, err = LoadRubric(getenv(EnvRubric)); err != nil {
+		return cfg, err
+	}
+	cfg.FullOutDir, cfg.FullFixturesPath, cfg.ReportDir = getenv(EnvOut), getenv(EnvFixtures), getenv(EnvReportDir)
+	cfg.DevelopmentIDsPath, cfg.HeldoutIDsPath, cfg.SampleGoldPath = getenv(EnvDevIDs), getenv(EnvHeldoutIDs), getenv(EnvSampleGold)
+	cfg.TwinOutDir, cfg.TwinFixturesPath, cfg.TwinGoldPath = getenv(EnvTwinOut), getenv(EnvTwinFixtures), getenv(EnvTwinGold)
+	cfg.MapName, cfg.LevelRule, cfg.Candidates = getenv(EnvMap), getenv(EnvLevelRule), splitList(getenv(EnvCandidates))
+	if cfg.Resamples, err = envInt(getenv, EnvResamples, DefaultResamples); err != nil {
+		return cfg, err
+	}
+	for name, v := range map[string]string{EnvOut: cfg.FullOutDir, EnvFixtures: cfg.FullFixturesPath, EnvReportDir: cfg.ReportDir,
+		EnvDevIDs: cfg.DevelopmentIDsPath, EnvHeldoutIDs: cfg.HeldoutIDsPath, EnvSampleGold: cfg.SampleGoldPath} {
+		if v == "" {
+			return cfg, fmt.Errorf("%s is not set", name)
+		}
+	}
+	return cfg, nil
+}

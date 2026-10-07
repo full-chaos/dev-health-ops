@@ -143,9 +143,9 @@ func (t *replayTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 }
 
 // ReplayClassification recomputes the outcome of a recorded classification from
-// the stored raw responses. No network is used. weights selects the support
-// map for a candidate arm.
-func ReplayClassification(ctx context.Context, r *Rubric, weights []float64, rec ClassificationRecord, data *LedgerData, bundle units.TextBundle) (Replayed, error) {
+// the stored raw responses. No network is used. weights and rule select the
+// support map and the level rule for a candidate arm.
+func ReplayClassification(ctx context.Context, r *Rubric, weights []float64, rule LevelRuleSpec, rec ClassificationRecord, data *LedgerData, bundle units.TextBundle) (Replayed, error) {
 	if rec.Gate != "" {
 		o := categorize.FallbackOutcome(rec.Gate)
 		return Replayed{State: rec.Gate, Status: rec.Gate, Outcome: o}, nil
@@ -159,9 +159,8 @@ func ReplayClassification(ctx context.Context, r *Rubric, weights []float64, rec
 		} else {
 			b = NewDecisionsBackend(rec.endpointOf(data), secrets.Hidden{}, rec.ModelRequested)
 		}
-		b.AcceptedModels = rec.AcceptedModels
 		sender := &ReplaySender{Dir: data.Dir, Attempts: attempts}
-		c, err := DecisionCategorize(ctx, bundle, DecisionDeps{Rubric: r, Weights: weights, Backend: b, Sender: sender})
+		c, err := DecisionCategorize(ctx, bundle, DecisionDeps{Rubric: r, Weights: weights, Rule: rule, Backend: b, Sender: sender})
 		if err != nil {
 			return Replayed{}, err
 		}

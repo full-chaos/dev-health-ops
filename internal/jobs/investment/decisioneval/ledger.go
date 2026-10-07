@@ -132,8 +132,11 @@ type ClassificationRecord struct {
 	Versions
 	ModelRequested string `json:"model_requested,omitempty"`
 	ModelReturned  string `json:"model_returned,omitempty"`
-	// AcceptedModels are the extra returned model ids the run accepted.
-	AcceptedModels []string `json:"accepted_models,omitempty"`
+	// LevelRule is the level rule of the run (candidate arms).
+	LevelRule string `json:"level_rule,omitempty"`
+	// CompleteStrict: state ok, no degraded answer, no evidence warning, no
+	// sufficiency_unanswered (candidates); status ok (incumbent arms).
+	CompleteStrict bool `json:"complete_strict"`
 
 	// Gate is set (insufficient_evidence / no_text_sources) when the production
 	// pre-LLM gate stopped the bundle: no request was sent.

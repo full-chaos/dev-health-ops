@@ -55,6 +55,15 @@ type RunConfig struct {
 	// MapName selects a weight map ("" = primary). Alternates are for the
 	// development set; scoring re-evaluates maps offline from stored answers.
 	MapName string
+	// LevelRule selects the level rule ("median", "conditional-median:0.5",
+	// "conditional-median:0.67"); empty = the rubric's selected rule, else its
+	// default.
+	LevelRule string
+	// MinAnswerValidity stops a candidate arm when its running per-answer
+	// validity (valid score answers / score answers asked) falls below it. Zero
+	// means the rubric's smoke stop (0.997) for set "smoke" and no stop for any
+	// other set.
+	MinAnswerValidity float64
 
 	Jev       Backend
 	Decisions Backend
@@ -80,6 +89,9 @@ type RunConfig struct {
 	ConsecutiveFailureStop int
 
 	Out io.Writer
+
+	// rule is the resolved level rule.
+	rule LevelRuleSpec
 }
 
 // ArmSummary counts what one arm did in a run.
@@ -94,6 +106,12 @@ type ArmSummary struct {
 	States        map[string]int `json:"states"`
 	// Stopped names why the arm stopped early ("" = it did not).
 	Stopped string `json:"stopped,omitempty"`
+	// ModelIDChanges counts classifications whose returned model id differs
+	// from the first id returned in the run (warning model_id_changed).
+	ModelIDChanges int `json:"model_id_changes,omitempty"`
+	// AnswerValidity is valid score answers / score answers asked (candidate
+	// arms) over the run.
+	AnswerValidity *float64 `json:"answer_validity,omitempty"`
 }
 
 // RunSummary is the result of Run.
@@ -168,6 +186,14 @@ func (c *RunConfig) validate() error {
 	if c.Rubric == nil {
 		return errors.New("run: rubric is not loaded")
 	}
+	c.rule = c.Rubric.SelectedRule
+	if c.LevelRule != "" {
+		rule, err := c.Rubric.ParseLevelRule(c.LevelRule)
+		if err != nil {
+			return fmt.Errorf("run: %w", err)
+		}
+		c.rule = rule
+	}
 	if c.Rates == nil {
 		return errors.New("run: rate table is not loaded")
 	}
@@ -219,9 +245,64 @@ func (c *RunConfig) armInfo(arm string) armInfo {
 }
 
 type armState struct {
-	mu      sync.Mutex
-	stopped string
-	consec  int
+	mu       sync.Mutex
+	stopped  string
+	consec   int
+	firstID  string
+	idChange int
+	asked    int
+	valid    int
+}
+
+// noteModel records a returned model id and reports whether it differs from the
+// first one returned in the run.
+func (a *armState) noteModel(id string) bool {
+	if id == "" {
+		return false
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.firstID == "" {
+		a.firstID = id
+		return false
+	}
+	if a.firstID != id {
+		a.idChange++
+		return true
+	}
+	return false
+}
+
+// noteValidity adds the score answers of one classification to the running
+// per-answer validity and stops the arm below minValidity.
+func (a *armState) noteValidity(in *Interpretation, minValidity float64) {
+	if in == nil || len(in.AnswerValidity) == 0 {
+		return
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	for id, label := range in.AnswerValidity {
+		if !strings.HasPrefix(id, "support__") && id != SufficiencyQuestionID {
+			continue
+		}
+		a.asked++
+		if label == "valid" {
+			a.valid++
+		}
+	}
+	if minValidity > 0 && a.asked > 0 && float64(a.valid)/float64(a.asked) < minValidity && a.stopped == "" {
+		a.stopped = fmt.Sprintf("answer_validity_below_%g", minValidity)
+	}
+}
+
+func (a *armState) validity() *float64 {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.asked == 0 {
+		return nil
+	}
+	v := float64(a.valid) / float64(a.asked)
+	return &v
 }
 
 func (a *armState) stop(reason string) {
@@ -279,6 +360,9 @@ func Run(ctx context.Context, cfg RunConfig) (RunSummary, error) {
 		cfg.Set = "adhoc"
 	}
 	fixtures := cfg.Fixtures
+	for i := range fixtures {
+		fixtures[i] = fixtures[i].Normalized()
+	}
 	if len(fixtures) == 0 {
 		var err error
 		if fixtures, err = LoadFixtures(cfg.FixturesPath, cfg.MaxFixtures); err != nil {
@@ -437,6 +521,18 @@ func runLive(ctx context.Context, cfg RunConfig, fixtures []FixtureRecord, bundl
 				}
 				meta.Stamp = ModelVersionStamp(info.provider, info.apiMode, info.model, meta.Versions)
 				crec, err := classify(ctx, cfg, arm, f, bundle, meta, weights, sender, incumbentClient)
+				if err == nil && crec.Gate == "" {
+					if state.noteModel(crec.ModelReturned) {
+						crec.Warnings = append(crec.Warnings, "model_id_changed")
+					}
+					if armIsCandidate(arm) {
+						minV := cfg.MinAnswerValidity
+						if minV == 0 && cfg.Set == "smoke" {
+							minV = cfg.Rubric.AnswerValidity.SmokeStopBelow
+						}
+						state.noteValidity(crec.Interpretation, minV)
+					}
+				}
 				mu.Lock()
 				defer mu.Unlock()
 				if err != nil {
@@ -466,6 +562,8 @@ func runLive(ctx context.Context, cfg RunConfig, fixtures []FixtureRecord, bundl
 		}
 		wg.Wait()
 		as.Stopped = state.reason()
+		as.ModelIDChanges = state.idChange
+		as.AnswerValidity = state.validity()
 		summary.Spend[info.provider] = budget.Spent(info.provider)
 		if firstErr != nil {
 			return summary, firstErr
@@ -507,13 +605,14 @@ func classify(ctx context.Context, cfg RunConfig, arm string, f FixtureRecord, b
 		if arm == ArmDecisions {
 			backend = cfg.Decisions
 		}
-		rec.AcceptedModels = backend.AcceptedModels
-		c, err := DecisionCategorize(ctx, bundle, DecisionDeps{Rubric: cfg.Rubric, Weights: weights, Backend: backend, Sender: sender, Collector: col})
+		rec.LevelRule = cfg.rule.Label()
+		c, err := DecisionCategorize(ctx, bundle, DecisionDeps{Rubric: cfg.Rubric, Weights: weights, Rule: cfg.rule, Backend: backend, Sender: sender, Collector: col})
 		if err != nil {
 			return rec, err
 		}
 		fillFromOutcome(&rec, c.Outcome)
 		rec.State, rec.Interpretation = c.State, c.Interp
+		rec.CompleteStrict = c.Interp != nil && c.Interp.CompleteStrict && c.State == StateOK
 		if c.Terminal != nil && c.Terminal.StopArm != "" {
 			rec.StopArm = c.Terminal.StopArm
 		}
@@ -525,6 +624,10 @@ func classify(ctx context.Context, cfg RunConfig, arm string, f FixtureRecord, b
 		switch {
 		case err != nil && ctx.Err() != nil:
 			return rec, ctx.Err()
+		case errors.Is(err, ErrDefsMarker):
+			rec.State, rec.Status = categorize.StatusLLMTaskFailed, categorize.StatusLLMTaskFailed
+			rec.ErrorCodes = []string{categorize.StatusLLMTaskFailed, "defs_marker_not_found"}
+			rec.StopArm = "defs_marker"
 		case err != nil:
 			rec.State, rec.Status = categorize.StatusLLMTaskFailed, categorize.StatusLLMTaskFailed
 			rec.ErrorCodes = []string{categorize.StatusLLMTaskFailed, categorize.FailureClass(err)}
@@ -534,6 +637,7 @@ func classify(ctx context.Context, cfg RunConfig, arm string, f FixtureRecord, b
 		default:
 			fillFromOutcome(&rec, outcome)
 			rec.State = outcome.Status
+			rec.CompleteStrict = outcome.Status == categorize.StatusOK
 		}
 	}
 	usage, cost, latency, attempts, returned := col.Totals()

@@ -169,65 +169,87 @@ func TestScorerComputesTheFormulasOfTheDesign(t *testing.T) {
 	if err != nil {
 		t.Fatalf("%v (failures %v)", err, m.Failures)
 	}
-	if !m.Valid || m.GoldFixtures != 4 || m.Sets["development"] != 3 || m.Sets["heldout"] != 1 {
+	if !m.Valid || m.GoldFixtures != 4 || m.Sets["development"] != 3 || m.Sets["heldout"] != 1 || m.LevelRule != "median" {
 		t.Fatalf("%+v", m)
 	}
-	g := m.Arms[ArmJev].Pipelines[PipelineOnly]["all"]
-	// S1: 60 cells, a2 misses debt (0 vs 1) and a3 gets upgrade 2 vs 1.
-	if g.S1.K != 58 || g.S1.N != 60 || g.S2.K != 60 {
+	g := m.Arms[ArmJev].Pipelines[PipelineOnly]["all/real/all"]
+	// Q1 support-set F1: a1 and a3 exact (1), a2 misses debt (2*1/(1+2)), a4 both empty (1).
+	if !near(*g.Q1.V, (1+2.0/3+1+1)/4) || g.Q1.N != 4 {
+		t.Fatalf("Q1 = %+v", g.Q1)
+	}
+	// Q2: no false-positive category; the zero-support fixture is a claim of no support.
+	if !near(*g.Q2.V, 0) || g.NClassified != 3 || g.NZeroClaim != 1 || g.NNoClaim != 0 {
+		t.Fatalf("Q2 = %+v classified %d zero %d none %d", g.Q2, g.NClassified, g.NZeroClaim, g.NNoClaim)
+	}
+	// Q3 precision / recall, micro: TP 5, FP 0, FN 1 (debt of a2).
+	if g.Q3.K != 5 || g.Q3.N != 5 || g.Q4.K != 5 || g.Q4.N != 6 {
+		t.Fatalf("Q3 %+v Q3 recall %+v", g.Q3, g.Q4)
+	}
+	if g.QOrder.V == nil || *g.QOrder.V >= 1 {
+		t.Fatalf("pairwise order agreement must drop below 1 (debt of a2 is missing): %+v", g.QOrder)
+	}
+	// S1, S2 over cells where the gold or the arm is positive: a1 2, a2 2, a3 2.
+	if g.S1.N != 6 || g.S1.K != 4 || g.S2.K != 6 {
 		t.Fatalf("S1 %d/%d S2 %d", g.S1.K, g.S1.N, g.S2.K)
 	}
-	// D1: a1 exact (0), a2 L1 .4, a3 L1 .2667; a4 is not scorable.
+	// Map-bound mix metrics, reported: a1 exact (0), a2 L1 .4, a3 L1 .2667; a4 is not scorable.
 	if g.NScorable != 3 || g.NNonScorable != 1 || !near(*g.MixPersisted.L1.Mean.V, (0+0.4+4.0/15)/3) {
 		t.Fatalf("scorable=%d L1=%v", g.NScorable, g.MixPersisted.L1.Mean)
 	}
-	// F1: no mass on a gold-zero key for the three scorable fixtures.
 	if !near(*g.MixPersisted.FPMass.Mean.V, 0) {
 		t.Fatalf("FPM = %v", g.MixPersisted.FPMass.Mean)
 	}
-	// S3/S4 as persisted: the zero_support fixture persists the fallback prior
-	// (5 keys), all false positives: TP=5, FP=5; recall 5 of 6 gold positives.
-	if g.S3.K != 5 || g.S3.N != 10 || g.S4.K != 5 || g.S4.N != 6 {
-		t.Fatalf("S3 %d/%d S4 %d/%d", g.S3.K, g.S3.N, g.S4.K, g.S4.N)
+	// V1: 3 of 4 accepted (zero support is not an accepted classification); complete_strict 3 of 4.
+	if g.V1Accepted.K != 3 || g.V1Accepted.N != 4 || g.V1Strict.K != 3 || g.V4[StateZeroSupport] != 1 || g.V4[StateOK] != 3 {
+		t.Fatalf("V1 %+v strict %+v V4 %v", g.V1Accepted, g.V1Strict, g.V4)
 	}
-	// V metrics: 3 of 3 scorable accepted, 1 of 1 correct abstention, no false abstention.
-	if g.V1.K != 3 || g.V1.N != 3 || g.V2.K != 1 || g.V2.N != 1 || g.V3.K != 0 || g.V4[StateZeroSupport] != 1 || g.V4[StateOK] != 3 {
-		t.Fatalf("V1 %+v V2 %+v V3 %+v V4 %v", g.V1, g.V2, g.V3, g.V4)
+	if g.V1Causes["zero_support"] != 1 || g.ZeroShare.K != 1 || g.ZeroBySuff["sufficient"] != 1 {
+		t.Fatalf("causes %v zero %+v by sufficiency %v", g.V1Causes, g.ZeroShare, g.ZeroBySuff)
 	}
-	// Cost: 4 requests at 7000 tokens x $0.042/M; 3 accepted.
-	if !near(g.C1TotalUSD, 4*7000*0.042/1e6) || !near(*g.C1PerAccepted.V, 4*7000*0.042/1e6/3) {
-		t.Fatalf("C1 %v %v", g.C1TotalUSD, g.C1PerAccepted)
+	// C1: 4 requests at 7000 tokens x $0.042/M, per complete_strict classification (3).
+	if !near(g.C1TotalUSD, 4*7000*0.042/1e6) || !near(*g.C1PerStrict.V, 4*7000*0.042/1e6/3) {
+		t.Fatalf("C1 %v %v", g.C1TotalUSD, g.C1PerStrict)
 	}
-	if g.E1.K != g.E1.N || g.E1.N == 0 {
-		t.Fatalf("E1 %+v", g.E1)
+	// E0 control row: the first span is a gold span for all three scorable fixtures.
+	if g.E0.K != 3 || g.E0.N != 3 {
+		t.Fatalf("E0 %+v", g.E0)
 	}
-	// E2: quotes of a1 (E2_1), a2 (E2_1) and a3 (E1_1 and E2_1) are all gold spans.
-	if g.E2.N != 4 || g.E2.K != 4 {
-		t.Fatalf("E2 %+v", g.E2)
+	// E1 validity, E2 relevance (a1: 1 quote, a2: 1, a3: 2; all inside gold spans), E4 none.
+	if g.E1.K != g.E1.N || g.E1.N != 4 || g.E2.K != 4 || g.E2.N != 4 || g.E4 != 0 {
+		t.Fatalf("E1 %+v E2 %+v E4 %d", g.E1, g.E2, g.E4)
 	}
-	if g.G1.K != 4 || g.G1.N != 4 {
-		t.Fatalf("G1 %+v", g.G1)
+	if g.G1s.K != 4 || g.G1s.N != 4 {
+		t.Fatalf("G1s %+v", g.G1s)
 	}
-	// per-key numbers need 3 gold-positive fixtures: n/a here
 	if g.S1ByKey["quality.bugfix"].V != nil || !strings.Contains(g.S1ByKey["quality.bugfix"].NA, "n<3") {
 		t.Fatalf("per-key: %+v", g.S1ByKey["quality.bugfix"])
 	}
-	// groups: all, both sets, strata
-	for _, key := range []string{"all", "set=development", "set=heldout", "set=development,stratum=mixed_work", "set=heldout,stratum=natural"} {
+	for _, key := range []string{"all/real/all", "all/real/cd=false", "development/real/all", "heldout/real/all", "development/real/stratum=mixed_work", "heldout/real/stratum=natural"} {
 		if m.Arms[ArmJev].Pipelines[PipelineOnly][key] == nil {
 			t.Fatalf("group %s missing: %v", key, m.GroupOrder)
 		}
 	}
-	// the incumbent cannot abstain after the gate: V2 = 0 by design, reported
-	inc := m.Arms[ArmIncumbent].Pipelines[PipelineOnly]["all"]
-	if inc.V2.V == nil || *inc.V2.V != 0 || inc.S1.V != nil {
-		t.Fatalf("incumbent V2=%+v S1=%+v", inc.V2, inc.S1)
+	// the incumbent cannot abstain after the gate: it forces a mix on the all-zero fixture (Z2)
+	var z *Z2Row
+	for i := range m.Z2 {
+		if m.Z2[i].Fixture == s.fx.zero.BundleID {
+			z = &m.Z2[i]
+		}
+	}
+	if z == nil || z.Arms[ArmJev].State != StateZeroSupport || z.Arms[ArmIncumbent].TopKey == "" {
+		t.Fatalf("Z2 = %+v", z)
+	}
+	inc := m.Arms[ArmIncumbent].Pipelines[PipelineOnly]["all/real/all"]
+	if inc.S1.V != nil || inc.NZeroClaim != 0 || inc.NClassified != 4 || !near(*inc.Q2.V, 1) {
+		// incumbent: a4 forced key -> false-positive count 1 on a4 only: mean (0+0+0+1)/4 ... see below
+		if !near(*inc.Q2.V, 0.25) {
+			t.Fatalf("incumbent S1=%+v zero=%d classified=%d Q2=%+v", inc.S1, inc.NZeroClaim, inc.NClassified, inc.Q2)
+		}
 	}
 	// no fallback needed in this scenario
-	if f := m.Arms[ArmJev].Pipelines[PipelineFallback]["all"]; f == nil || f.V5.K != 0 || !near(f.C1TotalUSD, g.C1TotalUSD) {
+	if f := m.Arms[ArmJev].Pipelines[PipelineFallback]["all/real/all"]; f == nil || f.V5.K != 0 || !near(f.C1TotalUSD, g.C1TotalUSD) {
 		t.Fatalf("fallback pipeline: %+v", f)
 	}
-	// files
 	md, err := os.ReadFile(filepath.Join(s.report, "report.md"))
 	if err != nil || strings.Contains(string(md), "INVALID") || !strings.Contains(string(md), "## Arm `jev`, pipeline `candidate_only`") {
 		t.Fatalf("report: %v", err)
@@ -237,11 +259,10 @@ func TestScorerComputesTheFormulasOfTheDesign(t *testing.T) {
 	if err := json.Unmarshal(raw, &back); err != nil || !back.Valid {
 		t.Fatalf("metrics.json: %v", err)
 	}
-	// paired comparison exists and is deterministic
 	var cmp *Comparison
 	for i := range m.Comparisons {
 		c := m.Comparisons[i]
-		if c.Arm == ArmJev && c.Pipeline == PipelineFallback && c.Group == "all" && c.Metric == "d1_l1_subcategory" {
+		if c.Arm == ArmJev && c.Pipeline == PipelineFallback && c.Group == "all/real/all" && c.Metric == "q1_support_set_f1" {
 			cmp = &c
 		}
 	}
@@ -268,29 +289,34 @@ func TestFallbackPipelineUsesTheStoredIncumbentOutcome(t *testing.T) {
 	if err != nil {
 		t.Fatalf("%v %v", err, m.Failures)
 	}
-	only := m.Arms[ArmDecisions].Pipelines[PipelineOnly]["all"]
-	fb := m.Arms[ArmDecisions].Pipelines[PipelineFallback]["all"]
-	if only.V4[StateQuestionRefused] != 1 || only.V1.K != 2 || only.V5.K != 0 {
-		t.Fatalf("candidate only: V1 %+v V4 %v V5 %+v", only.V1, only.V4, only.V5)
+	only := m.Arms[ArmDecisions].Pipelines[PipelineOnly]["all/real/all"]
+	fb := m.Arms[ArmDecisions].Pipelines[PipelineFallback]["all/real/all"]
+	// candidate only: the refusal is a failed classification, F1 0, no claimed set
+	if only.V4[StateQuestionRefused] != 1 || only.V1Accepted.K != 2 || only.V5.K != 0 || only.NNoClaim != 1 {
+		t.Fatalf("candidate only: V1 %+v V4 %v V5 %+v none %d", only.V1Accepted, only.V4, only.V5, only.NNoClaim)
+	}
+	wantOnly := (1 + 0 + 1 + 1) / 4.0 // a2 failed (0)
+	if !near(*only.Q1.V, wantOnly) {
+		t.Fatalf("Q1 candidate only = %v want %v", *only.Q1.V, wantOnly)
 	}
 	// with the fallback the refused fixture is covered by the incumbent outcome:
-	// 1 fallback of 4 gold fixtures, and all 3 scorable fixtures are accepted
-	if fb.V1.K != 3 || fb.V5.K != 1 || fb.V5.N != 4 {
-		t.Fatalf("fallback: V1 %+v V5 %+v", fb.V1, fb.V5)
+	// 1 fallback of 4 fixtures, 3 of 4 accepted. The incumbent claims {refactor}, gold {refactor, debt}.
+	if fb.V1Accepted.K != 3 || fb.V5.K != 1 || fb.V5.N != 4 || fb.NNoClaim != 0 {
+		t.Fatalf("fallback: V1 %+v V5 %+v none %d", fb.V1Accepted, fb.V5, fb.NNoClaim)
 	}
-	// the fallback cost (incumbent, 1165 in / 802 out) is added to the candidate cost
+	if !near(*fb.Q1.V, (1+2.0/3+1+1)/4) {
+		t.Fatalf("Q1 with fallback = %v", *fb.Q1.V)
+	}
 	incCost := (1165*0.05 + 802*0.40) / 1e6
 	if !near(fb.C1TotalUSD, only.C1TotalUSD+incCost) {
 		t.Fatalf("fallback cost %v, want %v + %v", fb.C1TotalUSD, only.C1TotalUSD, incCost)
 	}
-	// the incumbent mix on that fixture is a single key (refactor 1.0): L1 against
-	// the gold mix (refactor .8, debt .2) is 0.4, the same as the candidate had
-	// persisted nothing but the fallback prior before: the pipeline mix changed
-	if *fb.MixPersisted.L1.Mean.V == *only.MixPersisted.L1.Mean.V {
-		t.Fatalf("the fallback did not change the mix: %v", *fb.MixPersisted.L1.Mean.V)
+	// the refusal is split out as its own cause of coverage loss
+	if only.V1Causes["backend_refusal"] != 1 {
+		t.Fatalf("causes = %v", only.V1Causes)
 	}
-	// zero support never falls back: V5 counts only the refusal
-	if fb.V4[StateZeroSupport] != 1 {
+	// zero support never falls back
+	if fb.V4[StateZeroSupport] != 1 || fb.NZeroClaim != 1 {
 		t.Fatalf("zero support was not kept: %v", fb.V4)
 	}
 }
@@ -462,11 +488,11 @@ func TestNoiseFloorsAreNAWithoutData(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	n1 := m.Arms[ArmIncumbent].Noise.N1["all"]
+	n1 := m.Arms[ArmIncumbent].Noise.N1Q1["all/real/all"]
 	if n1.V != nil || n1.NA == "" {
 		t.Fatalf("N1 = %+v", n1)
 	}
-	n2 := m.Arms[ArmJev].Noise.N2Cells["all"]
+	n2 := m.Arms[ArmJev].Noise.N2Cells["all/real/all"]
 	if n2.V != nil || n2.NA == "" {
 		t.Fatalf("N2 = %+v", n2)
 	}
@@ -490,17 +516,24 @@ func TestNoiseFloorsFromRepeatAndPersistedRows(t *testing.T) {
 	if err != nil {
 		t.Fatalf("%v %v", err, m.Failures)
 	}
-	n2 := m.Arms[ArmJev].Noise.N2Cells["all"]
+	n2 := m.Arms[ArmJev].Noise.N2Cells["all/real/all"]
 	if n2.V == nil || *n2.V != 1 || n2.N != 60 { // identical fake answers: all 15 cells of 4 fixtures equal
 		t.Fatalf("N2 = %+v", n2)
 	}
-	n1 := m.Arms[ArmIncumbent].Noise.N1["all"]
+	if v := m.Arms[ArmJev].Noise.N2Q1["all/real/all"]; v.V == nil || *v.V != 0 {
+		t.Fatalf("N2 dQ1 = %+v", v)
+	}
+	n1 := m.Arms[ArmIncumbent].Noise.N1L1["all/real/all"]
 	if n1.V == nil || n1.N != 4 {
 		t.Fatalf("N1 = %+v", n1)
 	}
 	// a1 incumbent mix == persisted (bugfix 1.0) -> 0; the others differ by 2
 	if !near(*n1.V, (0+2+2+2)/4.0) {
 		t.Fatalf("N1 = %v", *n1.V)
+	}
+	// support-set agreement of the fresh run with the persisted row (bugfix): a1 1.0, others 0
+	if q1 := m.Arms[ArmIncumbent].Noise.N1Q1["all/real/all"]; q1.V == nil || !near(*q1.V, 0.25) {
+		t.Fatalf("N1 Q1 = %+v", q1)
 	}
 }
 
@@ -525,7 +558,7 @@ func TestReplayNeedsNoNetworkAndEqualsTheLiveRun(t *testing.T) {
 				f = x
 			}
 		}
-		rep, err := ReplayClassification(context.Background(), s.env.r, s.env.r.Weights, c, d, mustBundle(t, f))
+		rep, err := ReplayClassification(context.Background(), s.env.r, s.env.r.Weights, s.env.r.SelectedRule, c, d, mustBundle(t, f))
 		if err != nil {
 			t.Fatalf("%s/%s: %v", c.Arm, c.BundleID, err)
 		}
@@ -547,7 +580,7 @@ func TestReplayWithAnAlternateMapChangesTheMixNotTheState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	rep, err := ReplayClassification(context.Background(), s.env.r, steep, c, d, mustBundle(t, s.fx.bugfix))
+	rep, err := ReplayClassification(context.Background(), s.env.r, steep, s.env.r.SelectedRule, c, d, mustBundle(t, s.fx.bugfix))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -565,7 +598,7 @@ func TestReplayWithAnAlternateMapChangesTheMixNotTheState(t *testing.T) {
 		t.Fatalf("%s %s", m.MapUnderTest, m.GoldMap)
 	}
 	// bugfix fixture: candidate .9/.1 against gold .8/.2 gives L1 .2 (> 0 under the primary map)
-	if v := *m.Arms[ArmJev].Pipelines[PipelineOnly]["all"].MixPersisted.L1.Mean.V; near(v, (0+0.4+4.0/15)/3) {
+	if v := *m.Arms[ArmJev].Pipelines[PipelineOnly]["all/real/all"].MixPersisted.L1.Mean.V; near(v, (0+0.4+4.0/15)/3) {
 		t.Fatalf("the alternate map changed nothing: %v", v)
 	}
 }
@@ -587,7 +620,7 @@ func TestReplayOfFailureStates(t *testing.T) {
 	if len(c.AttemptIDs) != 2 || c.State != StateQuestionRefused {
 		t.Fatalf("%+v", c)
 	}
-	rep, err := ReplayClassification(context.Background(), env.r, env.r.Weights, c, d, mustBundle(t, fx.bugfix))
+	rep, err := ReplayClassification(context.Background(), env.r, env.r.Weights, env.r.SelectedRule, c, d, mustBundle(t, fx.bugfix))
 	if err != nil || rep.State != StateQuestionRefused || rep.Outcome.Status != categorize.StatusInvalidLLMOutput {
 		t.Fatalf("%v %+v", err, rep)
 	}

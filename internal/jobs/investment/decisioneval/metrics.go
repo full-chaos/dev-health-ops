@@ -12,7 +12,7 @@ import (
 )
 
 // Pipelines. A candidate arm is reported alone and with the one bounded
-// fallback to the stored incumbent outcome of the same fixture (design.md 4.3).
+// fallback to the stored incumbent outcome of the same fixture (design 4.3).
 const (
 	PipelineOnly     = "candidate_only"
 	PipelineFallback = "candidate_fallback"
@@ -25,7 +25,8 @@ type Dist struct {
 	P90    Num `json:"p90"`
 }
 
-// MixMetrics are the mix metrics of one population (D1 to D4, F1, F2).
+// MixMetrics are the map-bound mix metrics of one population (D1 to D4, F1m).
+// They are reported, not gated.
 type MixMetrics struct {
 	N            int  `json:"n"`
 	L1           Dist `json:"d1_l1_subcategory"`
@@ -33,67 +34,92 @@ type MixMetrics struct {
 	ThemeL1      Dist `json:"d3_l1_theme"`
 	ThemeJSD     Dist `json:"d3_jsd_theme"`
 	TopTheme     Rate `json:"d4_top_theme_agreement"`
-	FPMass       Dist `json:"f1_false_positive_mass"`
-	FPMassOver10 Rate `json:"f1_share_fixtures_over_0.10"`
+	FPMass       Dist `json:"f1m_false_positive_mass"`
+	FPMassOver10 Rate `json:"f1m_share_fixtures_over_0.10"`
 	MissedMass   Num  `json:"f2_missed_mass"`
 }
 
-// GroupMetrics are all metrics of one group of fixtures (a set, a stratum, all).
+// GroupMetrics are all metrics of one group of fixtures.
 type GroupMetrics struct {
 	N            int `json:"n_fixtures"`
 	NScorable    int `json:"n_scorable"`
 	NNonScorable int `json:"n_non_scorable"`
 
-	// Mix metrics: as persisted (all scorable fixtures, the headline) and
-	// accepted only.
+	// Decision metrics (map-free, design 9.4).
+	Q1          Num `json:"q1_support_set_f1"`
+	Q2          Num `json:"q2_false_positive_categories"`
+	NClassified int `json:"claims_classified"`
+	NZeroClaim  int `json:"claims_zero_support"`
+	NNoClaim    int `json:"claims_none"`
+
+	// Reported metrics.
+	Q3      Rate            `json:"q3_support_precision_micro"`
+	Q4      Rate            `json:"q3_support_recall_micro"`
+	Q3ByKey map[string]Rate `json:"q3_precision_by_key,omitempty"`
+	Q4ByKey map[string]Rate `json:"q3_recall_by_key,omitempty"`
+	QOrder  Rate            `json:"q4_pairwise_order_agreement"`
+	S1      Rate            `json:"s1_level_exact"`
+	S2      Rate            `json:"s2_level_within_1"`
+	S1ByKey map[string]Rate `json:"s1_by_key,omitempty"`
+	S2ByKey map[string]Rate `json:"s2_by_key,omitempty"`
+
+	// Map-bound mix metrics: as persisted (all scorable fixtures) and accepted
+	// only.
 	MixPersisted MixMetrics `json:"mix_as_persisted"`
 	MixAccepted  MixMetrics `json:"mix_accepted_only"`
 
-	S1       Rate            `json:"s1_level_exact"`
-	S2       Rate            `json:"s2_level_within_1"`
-	S1ByKey  map[string]Rate `json:"s1_by_key,omitempty"`
-	S2ByKey  map[string]Rate `json:"s2_by_key,omitempty"`
-	S3       Rate            `json:"s3_support_precision_micro"`
-	S4       Rate            `json:"s4_support_recall_micro"`
-	S3ByKey  map[string]Rate `json:"s3_precision_by_key,omitempty"`
-	S4ByKey  map[string]Rate `json:"s4_recall_by_key,omitempty"`
-	E1       Rate            `json:"e1_extraction_validity"`
-	E2       Rate            `json:"e2_evidence_relevance"`
-	E3       Rate            `json:"e3_evidence_relevance_by_theme"`
-	E4       Rate            `json:"e4_evidence_completeness"`
-	QuoteLen Num             `json:"quote_length_runes_mean"`
+	// B1: bimodal and degraded classifications, and Q1/Q2 without them.
+	BimodalFixtures  int `json:"b1_fixtures_with_bimodal_keys"`
+	DegradedFixtures int `json:"b1_fixtures_with_degraded_answers"`
+	Q1WithoutFlagged Num `json:"b1_q1_without_flagged"`
+	Q2WithoutFlagged Num `json:"b1_q2_without_flagged"`
 
-	V1       Rate           `json:"v1_coverage"`
-	V1Strict Rate           `json:"v1_complete_strict"`
-	V2       Rate           `json:"v2_correct_abstention"`
-	V3       Rate           `json:"v3_false_abstention"`
-	V4       map[string]int `json:"v4_states"`
-	V5       Rate           `json:"v5_fallback_rate"`
+	E0       Rate `json:"e0_control_first_span_relevance"`
+	E1       Rate `json:"e1_extraction_validity"`
+	E2       Rate `json:"e2_evidence_relevance"`
+	E4       int  `json:"e4_multi_theme_mixes_with_one_quote"`
+	QuoteLen Num  `json:"quote_length_runes_mean"`
 
-	C1TotalUSD       float64                   `json:"c1_total_cost_usd"`
-	C1PerAccepted    Num                       `json:"c1_cost_per_accepted"`
-	C1PerStrict      Num                       `json:"c1_cost_per_accepted_complete_strict"`
-	C2InputMean      Num                       `json:"c2_input_tokens_mean"`
-	C2InputP95       Num                       `json:"c2_input_tokens_p95"`
-	C2OutputMean     Num                       `json:"c2_output_tokens_mean"`
-	C2OutputP95      Num                       `json:"c2_output_tokens_p95"`
-	T1LatencyP50     Num                       `json:"t1_latency_ms_p50"`
-	T1LatencyP95     Num                       `json:"t1_latency_ms_p95"`
-	G1               Rate                      `json:"g1_sufficiency_agreement"`
-	G1Unanswered     int                       `json:"g1_sufficiency_unanswered"`
-	G1Confusion      map[string]map[string]int `json:"g1_confusion_gold_by_answer,omitempty"`
-	SplitMean        Num                       `json:"split_scores_mean_of_15"`
+	V1Accepted Rate `json:"v1_accepted"`
+	V1Strict   Rate `json:"v1_complete_strict"`
+	// V1Causes splits the classifications that are not complete_strict.
+	V1Causes   map[string]int `json:"v1_cause_split"`
+	V4         map[string]int `json:"v4_states"`
+	V4Warnings map[string]int `json:"v4_warning_classes"`
+	V5         Rate           `json:"v5_fallback_rate"`
+	ZeroShare  Rate           `json:"z1_zero_support_share"`
+	ZeroBySuff map[string]int `json:"z1_zero_support_by_sufficiency,omitempty"`
+
+	C1TotalUSD    float64 `json:"c1_total_cost_usd"`
+	C1PerStrict   Num     `json:"c1_cost_per_complete_strict"`
+	C1PerAccepted Num     `json:"c1_cost_per_accepted"`
+	C2InputMean   Num     `json:"c2_input_tokens_mean"`
+	C2InputP95    Num     `json:"c2_input_tokens_p95"`
+	C2OutputMean  Num     `json:"c2_output_tokens_mean"`
+	C2OutputP95   Num     `json:"c2_output_tokens_p95"`
+	C2CachedMean  Num     `json:"c2_cached_tokens_mean"`
+	T1LatencyP50  Num     `json:"t1_latency_ms_p50"`
+	T1LatencyP95  Num     `json:"t1_latency_ms_p95"`
+
+	G1s              Rate                      `json:"g1s_sufficiency_agreement"`
+	G1sUnanswered    int                       `json:"g1s_sufficiency_unanswered"`
+	G1sConfusion     map[string]map[string]int `json:"g1s_confusion_gold_by_answer,omitempty"`
+	SplitMean        Num                       `json:"split_scores_mean"`
 	LevelGE1Mean     Num                       `json:"candidate_level_ge1_count_mean"`
 	GoldLevelGE1Mean Num                       `json:"gold_level_ge1_count_mean"`
 }
 
 // Noise holds the noise floors N1 and N2.
 type Noise struct {
-	// N1 (incumbent arm): mean L1 between the fresh run and the persisted row.
-	N1 map[string]Num `json:"n1_incumbent_vs_persisted_l1,omitempty"`
-	// N2 (candidate arms): same-level cell share and mix L1 of two runs of the
-	// same request.
+	// N1 (incumbent arm): fresh run against the persisted row of the same input
+	// hash: support-set F1, false-positive categories and mix L1.
+	N1Q1 map[string]Num `json:"n1_support_f1_vs_persisted,omitempty"`
+	N1Q2 map[string]Num `json:"n1_fp_categories_vs_persisted,omitempty"`
+	N1L1 map[string]Num `json:"n1_mix_l1_vs_persisted,omitempty"`
+	// N2 (candidate arms): two runs of the same request.
 	N2Cells map[string]Rate `json:"n2_same_level_cells,omitempty"`
+	N2Q1    map[string]Num  `json:"n2_mean_abs_q1_difference,omitempty"`
+	N2Q2    map[string]Num  `json:"n2_mean_abs_q2_difference,omitempty"`
 	N2L1    map[string]Num  `json:"n2_mix_l1,omitempty"`
 }
 
@@ -116,6 +142,22 @@ type Comparison struct {
 	Diff Num `json:"diff"`
 }
 
+// Z2Cell is the outcome of one arm on a gold-all-zero fixture.
+type Z2Cell struct {
+	State     string  `json:"state"`
+	Status    string  `json:"status"`
+	TopKey    string  `json:"top_key,omitempty"`
+	TopWeight float64 `json:"top_weight,omitempty"`
+}
+
+// Z2Row is one gold-all-zero fixture (design 9.4 Z2).
+type Z2Row struct {
+	Fixture string            `json:"fixture"`
+	Set     string            `json:"set"`
+	Origin  string            `json:"origin"`
+	Arms    map[string]Z2Cell `json:"arms"`
+}
+
 // Metrics is the metrics JSON.
 type Metrics struct {
 	Valid        bool                   `json:"valid"`
@@ -125,84 +167,116 @@ type Metrics struct {
 	Resamples    int                    `json:"bootstrap_resamples"`
 	MapUnderTest string                 `json:"candidate_map_under_test"`
 	GoldMap      string                 `json:"gold_mix_map"`
+	LevelRule    string                 `json:"level_rule_under_test"`
 	GoldFixtures int                    `json:"gold_fixtures"`
 	Sets         map[string]int         `json:"fixtures_by_set"`
 	Arms         map[string]*ArmMetrics `json:"arms"`
 	Comparisons  []Comparison           `json:"comparisons"`
+	Injection    []twinResult           `json:"injection_pairs,omitempty"`
+	InjectionK   []InjectionVerdict     `json:"injection_k,omitempty"`
+	Z2           []Z2Row                `json:"z2_gold_all_zero,omitempty"`
 	ArmOrder     []string               `json:"arm_order"`
 	GroupOrder   []string               `json:"group_order"`
 }
 
-// view is one fixture seen through one pipeline.
+// view is one fixture seen through one pipeline: the effective outcome (the
+// arm's own row, or the stored incumbent row when the fallback applies).
 type view struct {
-	g        *goldRow
-	cand     *row // the arm's own row
-	p        map[string]float64
-	accepted bool
-	strict   bool
-	fb       bool
-	cost     float64
-	latency  int64
-	inTok    int
-	outTok   int
-	quotes   []quoteInfo
+	g    *goldRow
+	cand *row // the arm's own row
+	eff  *row // the effective outcome of the pipeline
+	fb   bool
+	cost float64
+	lat  int64
+	in   int
+	out  int
+	cch  int
+}
+
+func (v *view) accepted() bool { return v.eff.accepted }
+
+// effectiveRow applies the pipeline to one fixture: for candidate+fallback a
+// state that falls back is replaced by the stored incumbent row (cost, tokens
+// and latency are added). ok is false when a fallback is needed and the
+// incumbent row is missing.
+func effectiveRow(arm, pipeline string, cand *row, inc map[string]*row, bundle string) (eff *row, fb bool, missing bool) {
+	if pipeline == PipelineFallback && armIsCandidate(arm) && FallsBackToIncumbent(cand.rep.State) {
+		if f := inc[bundle]; f != nil {
+			return f, true, false
+		}
+		return cand, false, true
+	}
+	return cand, false, false
 }
 
 func (s *scorer) viewsFor(arm, pipeline string) []*view {
 	var out []*view
-	inc := s.rows[ArmIncumbent]
 	for _, g := range s.gold {
-		rw := s.rows[arm][g.BundleID]
-		if rw == nil {
+		cand := s.rows[arm][g.BundleID]
+		if cand == nil {
 			continue
 		}
-		v := &view{g: g, cand: rw, p: rw.p, accepted: rw.accepted, strict: rw.strict, cost: rw.cost, latency: rw.latency,
-			inTok: rw.inTok, outTok: rw.outTok, quotes: rw.quotes}
-		if pipeline == PipelineFallback && armIsCandidate(arm) && FallsBackToIncumbent(rw.rep.State) {
-			if fb := inc[g.BundleID]; fb != nil {
-				v.fb = true
-				v.p, v.accepted, v.strict = fb.p, fb.accepted, fb.strict
-				v.cost += fb.cost
-				v.latency += fb.latency
-				v.inTok += fb.inTok
-				v.outTok += fb.outTok
-				v.quotes = fb.quotes
-			} else {
-				s.fail("missing_fallback_record:%s:%s (state %s needs the stored incumbent outcome)", arm, g.BundleID, rw.rep.State)
-			}
+		eff, fb, missing := effectiveRow(arm, pipeline, cand, s.rows[ArmIncumbent], g.BundleID)
+		if missing {
+			s.fail("missing_fallback_record:%s:%s (state %s needs the stored incumbent outcome)", arm, g.BundleID, cand.rep.State)
+		}
+		v := &view{g: g, cand: cand, eff: eff, fb: fb, cost: cand.cost, lat: cand.latency, in: cand.inTok, out: cand.outTok, cch: cand.cached}
+		if fb {
+			v.cost += eff.cost
+			v.lat += eff.latency
+			v.in += eff.inTok
+			v.out += eff.outTok
+			v.cch += eff.cached
 		}
 		out = append(out, v)
 	}
 	return out
 }
 
+// group keys ------------------------------------------------------------
+
 func groupKeys(gold []*goldRow) (order []string, members map[string][]*goldRow, withCI map[string]bool) {
 	members = map[string][]*goldRow{}
-	withCI = map[string]bool{"all": true}
-	sets := map[string]bool{}
-	for _, g := range gold {
-		members["all"] = append(members["all"], g)
-		sk := "set=" + g.Set
-		members[sk] = append(members[sk], g)
-		withCI[sk] = true
-		sets[g.Set] = true
-		xk := "set=" + g.Set + ",stratum=" + g.StratumGold
-		members[xk] = append(members[xk], g)
-	}
-	order = append(order, "all")
-	var setKeys, stratKeys []string
-	for k := range members {
-		switch {
-		case k == "all":
-		case strings.Contains(k, ",stratum="):
-			stratKeys = append(stratKeys, k)
-		default:
-			setKeys = append(setKeys, k)
+	withCI = map[string]bool{}
+	add := func(key string, g *goldRow, ci bool) {
+		members[key] = append(members[key], g)
+		if ci {
+			withCI[key] = true
 		}
 	}
-	sort.Strings(setKeys)
-	sort.Strings(stratKeys)
-	return append(append(order, setKeys...), stratKeys...), members, withCI
+	for _, g := range gold {
+		for _, set := range []string{"all", g.set} {
+			add(set+"/"+g.origin+"/all", g, true)
+			if !g.ConventionDependent {
+				add(set+"/"+g.origin+"/cd=false", g, true)
+			}
+		}
+		if g.origin == "real" {
+			add(g.set+"/real/stratum="+g.stratum, g, false)
+		}
+	}
+	for k := range members {
+		order = append(order, k)
+	}
+	rank := func(k string) int {
+		switch {
+		case strings.Contains(k, "/stratum="):
+			return 3
+		case strings.HasPrefix(k, "all/"):
+			return 0
+		case strings.HasSuffix(k, "/all"):
+			return 1
+		default:
+			return 2
+		}
+	}
+	sort.Slice(order, func(i, j int) bool {
+		if rank(order[i]) != rank(order[j]) {
+			return rank(order[i]) < rank(order[j])
+		}
+		return order[i] < order[j]
+	})
+	return order, members, withCI
 }
 
 func (s *scorer) metrics() *Metrics {
@@ -210,11 +284,11 @@ func (s *scorer) metrics() *Metrics {
 	m := &Metrics{
 		Versions: map[string]string{"rubric_version": r.RubricVersion, "adapter_version": r.AdapterVersion, "map_version": r.MapVersion,
 			"span_version": r.SpanVersion, "gold_mix_version": r.GoldMixVersion, "eval_version": EvalVersion, "rubric_sha256": r.SHA256},
-		Seed: BootstrapSeed, Resamples: s.cfg.Resamples, MapUnderTest: s.mapName, GoldMap: r.WeightMapSpec.Primary.Name,
-		GoldFixtures: len(s.gold), Sets: map[string]int{}, Arms: map[string]*ArmMetrics{}, ArmOrder: s.arms,
+		Seed: BootstrapSeed, Resamples: s.cfg.Resamples, MapUnderTest: s.rp.mapName, GoldMap: r.WeightMapSpec.Primary.Name,
+		LevelRule: s.rp.rule.Label(), GoldFixtures: len(s.gold), Sets: map[string]int{}, Arms: map[string]*ArmMetrics{}, ArmOrder: s.arms,
 	}
 	for _, g := range s.gold {
-		m.Sets[g.Set]++
+		m.Sets[g.set]++
 	}
 	order, members, withCI := groupKeys(s.gold)
 	m.GroupOrder = order
@@ -250,76 +324,172 @@ func (s *scorer) metrics() *Metrics {
 				am.Pipelines[pl][gk] = s.groupMetrics(arm, gv, withCI[gk], fmt.Sprintf("%s/%s/%s", arm, pl, gk))
 			}
 		}
-		am.Noise = s.noise(arm, order, members)
+		am.Noise = s.noise(arm, order, members, withCI)
 		m.Arms[arm] = am
 	}
-	m.Comparisons = s.comparisons(order, members)
+	m.Comparisons = s.comparisons(order, members, withCI)
+	m.Injection = s.twins
+	m.InjectionK = injectionVerdicts(s.twins, s.arms)
+	m.Z2 = s.z2()
 	m.Failures = append([]string(nil), s.failures...)
 	sort.Strings(m.Failures)
 	m.Valid = len(m.Failures) == 0
 	return m
 }
 
+// per-fixture decision metrics -----------------------------------------
+
+// goldSet is G_i: the keys with gold level >= 1.
+func (g *goldRow) goldSet() map[string]bool {
+	out := map[string]bool{}
+	for k, l := range g.levels {
+		if l >= 1 {
+			out[k] = true
+		}
+	}
+	return out
+}
+
+// supportF1 is Q1 for one fixture: 2|S∩G| / (|S|+|G|), 1 when both are empty.
+func supportF1(s, g map[string]bool) float64 {
+	if len(s) == 0 && len(g) == 0 {
+		return 1
+	}
+	inter := 0
+	for k := range s {
+		if g[k] {
+			inter++
+		}
+	}
+	return 2 * float64(inter) / float64(len(s)+len(g))
+}
+
+// falsePositiveCount is Q2 for one fixture: |S \ G|.
+func falsePositiveCount(s, g map[string]bool) int {
+	n := 0
+	for k := range s {
+		if !g[k] {
+			n++
+		}
+	}
+	return n
+}
+
+// q1q2 returns the per-fixture decision metrics of a claim: q1 (0 for a failed
+// classification), q2 and whether q2 is defined.
+func q1q2(c claim, g *goldRow) (q1 float64, q2 float64, q2ok bool) {
+	if c.kind == "none" {
+		return 0, 0, false
+	}
+	gs := g.goldSet()
+	return supportF1(c.set, gs), float64(falsePositiveCount(c.set, gs)), true
+}
+
+func hasFlag(v *view, bimodal bool) bool {
+	if v.cand.rep.Interp == nil {
+		return false
+	}
+	if bimodal {
+		return len(v.cand.rep.Interp.BimodalKeys) > 0
+	}
+	return len(v.cand.rep.Interp.DegradedKeys) > 0
+}
+
+func warningClass(w string) string {
+	class, _, _ := strings.Cut(w, ":")
+	return class
+}
+
+// failureCause names why a classification is not complete_strict.
+func failureCause(r *row) string {
+	switch r.rep.State {
+	case StateOK:
+		return "ok_not_strict"
+	case StateZeroSupport:
+		return "zero_support"
+	case StateQuestionRefused:
+		return "backend_refusal"
+	case StateAnswerMissing:
+		return "answer_missing"
+	case StateAnswerInvalid:
+		return "malformed_answer"
+	case StateEvidenceNone:
+		return "evidence_none"
+	case StateEvidenceUnanswered:
+		return "evidence_unanswered"
+	case StateRequestFailed, categorize.StatusLLMTaskFailed:
+		return "transport"
+	case StateAdapterDefect:
+		return "adapter_rule"
+	default:
+		return "other:" + r.rep.State
+	}
+}
+
 func (s *scorer) groupMetrics(arm string, views []*view, ci bool, label string) *GroupMetrics {
 	b := s.cfg.Resamples
-	gm := &GroupMetrics{N: len(views), V4: map[string]int{}}
-	var scorable, accepted, persisted []*view
+	gm := &GroupMetrics{N: len(views), V1Causes: map[string]int{}, V4: map[string]int{}, V4Warnings: map[string]int{}}
+	var scorable, accepted []*view
 	for _, v := range views {
 		if v.g.scorable {
 			scorable = append(scorable, v)
-			persisted = append(persisted, v)
-			if v.accepted {
+			if v.accepted() {
 				accepted = append(accepted, v)
 			}
 		}
 	}
 	gm.NScorable = len(scorable)
 	gm.NNonScorable = len(views) - len(scorable)
-	gm.MixPersisted = s.mixMetrics(persisted, ci, b, label+"/persisted")
+	gm.MixPersisted = s.mixMetrics(scorable, ci, b, label+"/persisted")
 	gm.MixAccepted = s.mixMetrics(accepted, ci, b, label+"/accepted")
 
 	keys := SortedKeys()
-	// S1, S2: typed levels of candidate arms.
-	if armIsCandidate(arm) {
-		exact, within, cells := 0, 0, 0
-		byKeyE, byKeyW, byKeyN := map[string]int{}, map[string]int{}, map[string]int{}
-		for _, v := range views {
-			if v.cand.levels == nil {
-				continue
-			}
-			for _, k := range keys {
-				d := v.cand.levels[k] - v.g.Gold.Levels[k]
-				cells++
-				byKeyN[k]++
-				if d == 0 {
-					exact++
-					byKeyE[k]++
-				}
-				if d >= -1 && d <= 1 {
-					within++
-					byKeyW[k]++
-				}
-			}
+	// Decision metrics.
+	var q1s, q2s, q1Clean, q2Clean []float64
+	for _, v := range views {
+		c := v.eff.claim()
+		switch c.kind {
+		case "classified":
+			gm.NClassified++
+		case "zero":
+			gm.NZeroClaim++
+		default:
+			gm.NNoClaim++
 		}
-		gm.S1 = rate(exact, cells, "no fixture with 15 valid levels")
-		gm.S2 = rate(within, cells, "no fixture with 15 valid levels")
-		gm.S1ByKey, gm.S2ByKey = map[string]Rate{}, map[string]Rate{}
-		for _, k := range keys {
-			if pos := goldPositive(views, k); pos < 3 {
-				gm.S1ByKey[k] = Rate{NA: "n/a (n<3 gold-positive)"}
-				gm.S2ByKey[k] = Rate{NA: "n/a (n<3 gold-positive)"}
-				continue
+		q1, q2, ok := q1q2(c, v.g)
+		q1s = append(q1s, q1)
+		if ok {
+			q2s = append(q2s, q2)
+		}
+		if !hasFlag(v, true) && !hasFlag(v, false) {
+			q1Clean = append(q1Clean, q1)
+			if ok {
+				q2Clean = append(q2Clean, q2)
 			}
-			gm.S1ByKey[k] = rate(byKeyE[k], byKeyN[k], "no valid levels")
-			gm.S2ByKey[k] = rate(byKeyW[k], byKeyN[k], "no valid levels")
+		} else {
+			if hasFlag(v, true) {
+				gm.BimodalFixtures++
+			}
+			if hasFlag(v, false) {
+				gm.DegradedFixtures++
+			}
 		}
 	}
-	// S3, S4 from the persisted mix.
+	gm.Q1 = meanNum(q1s, ci, b, label+"/q1", "no fixture")
+	gm.Q2 = meanNum(q2s, ci, b, label+"/q2", "no claimed support set (every classification failed)")
+	gm.Q1WithoutFlagged = meanNum(q1Clean, false, b, "", "every fixture has a bimodal or degraded answer")
+	gm.Q2WithoutFlagged = meanNum(q2Clean, false, b, "", "every fixture has a bimodal or degraded answer")
+
+	// Q3: precision and recall over cells of fixtures with a claimed set.
 	tpK, fpK, fnK := map[string]int{}, map[string]int{}, map[string]int{}
 	tp, fp, fn := 0, 0, 0
 	for _, v := range views {
+		c := v.eff.claim()
+		if c.kind == "none" {
+			continue
+		}
 		for _, k := range keys {
-			pos, sup := v.g.Gold.Levels[k] >= 1, supp(v.p[k])
+			sup, pos := c.set[k], v.g.levels[k] >= 1
 			switch {
 			case sup && pos:
 				tp++
@@ -333,30 +503,96 @@ func (s *scorer) groupMetrics(arm string, views []*view, ci bool, label string) 
 			}
 		}
 	}
-	gm.S3 = rate(tp, tp+fp, "no supported cell")
-	gm.S4 = rate(tp, tp+fn, "no gold-positive cell")
-	gm.S3ByKey, gm.S4ByKey = map[string]Rate{}, map[string]Rate{}
+	gm.Q3 = rate(tp, tp+fp, "no supported cell")
+	gm.Q4 = rate(tp, tp+fn, "no gold-positive cell")
+	gm.Q3ByKey, gm.Q4ByKey = map[string]Rate{}, map[string]Rate{}
 	for _, k := range keys {
 		if goldPositive(views, k) < 3 {
-			gm.S3ByKey[k] = Rate{NA: "n/a (n<3 gold-positive)"}
-			gm.S4ByKey[k] = Rate{NA: "n/a (n<3 gold-positive)"}
+			na3 := Rate{NA: "n/a (n<3 gold-positive)"}
+			gm.Q3ByKey[k], gm.Q4ByKey[k] = na3, na3
 			continue
 		}
-		gm.S3ByKey[k] = rate(tpK[k], tpK[k]+fpK[k], "no supported cell")
-		gm.S4ByKey[k] = rate(tpK[k], tpK[k]+fnK[k], "no gold-positive cell")
+		gm.Q3ByKey[k] = rate(tpK[k], tpK[k]+fpK[k], "no supported cell")
+		gm.Q4ByKey[k] = rate(tpK[k], tpK[k]+fnK[k], "no gold-positive cell")
+	}
+	// Q4 (design): pairwise order agreement.
+	ordK, ordN := 0, 0
+	for _, v := range views {
+		if !v.eff.accepted {
+			continue
+		}
+		for _, j := range keys {
+			if v.g.levels[j] < 1 {
+				continue
+			}
+			for _, k := range keys {
+				if v.g.levels[j] > v.g.levels[k] {
+					ordN++
+					if v.eff.p[j] > v.eff.p[k] {
+						ordK++
+					}
+				}
+			}
+		}
+	}
+	gm.QOrder = rate(ordK, ordN, "no gold pair with different levels")
+
+	// S1, S2: typed levels of candidate arms, over cells where the gold or the
+	// arm is >= 1.
+	if armIsCandidate(arm) {
+		exact, within, cells := 0, 0, 0
+		byKeyE, byKeyW, byKeyN := map[string]int{}, map[string]int{}, map[string]int{}
+		for _, v := range views {
+			if v.cand.levels == nil {
+				continue
+			}
+			for _, k := range keys {
+				a, g := v.cand.levels[k], v.g.levels[k]
+				if a == 0 && g == 0 {
+					continue
+				}
+				cells++
+				byKeyN[k]++
+				if a == g {
+					exact++
+					byKeyE[k]++
+				}
+				if d := a - g; d >= -1 && d <= 1 {
+					within++
+					byKeyW[k]++
+				}
+			}
+		}
+		gm.S1 = rate(exact, cells, "no cell where the gold or the arm is positive")
+		gm.S2 = rate(within, cells, "no cell where the gold or the arm is positive")
+		gm.S1ByKey, gm.S2ByKey = map[string]Rate{}, map[string]Rate{}
+		for _, k := range keys {
+			if goldPositive(views, k) < 3 {
+				gm.S1ByKey[k] = Rate{NA: "n/a (n<3 gold-positive)"}
+				gm.S2ByKey[k] = Rate{NA: "n/a (n<3 gold-positive)"}
+				continue
+			}
+			gm.S1ByKey[k] = rate(byKeyE[k], byKeyN[k], "no cell")
+			gm.S2ByKey[k] = rate(byKeyW[k], byKeyN[k], "no cell")
+		}
 	}
 
-	// Evidence over accepted classifications.
-	validQ, totalQ, relQ, themeQ, themeRel := 0, 0, 0, 0, 0
-	complete, completeN := 0, 0
+	// Evidence over accepted classifications. E0 is the control: the fixed pick
+	// "first span of the first handle", scored by the same relevance rule.
+	validQ, totalQ, relQ, ctrlK, ctrlN := 0, 0, 0, 0, 0
+	e4 := 0
 	var qlens []float64
-	acceptedViews := 0
 	for _, v := range views {
-		if !v.accepted {
+		if len(v.g.spans) > 0 && v.g.scorable {
+			ctrlN++
+			if v.g.spanRelevant(v.g.spans[0].ID, "") {
+				ctrlK++
+			}
+		}
+		if !v.accepted() {
 			continue
 		}
-		acceptedViews++
-		for _, q := range v.quotes {
+		for _, q := range v.eff.quotes {
 			totalQ++
 			qlens = append(qlens, float64(utf8.RuneCountInString(q.Quote)))
 			if v.g.validQuote(q) {
@@ -366,162 +602,137 @@ func (s *scorer) groupMetrics(arm string, views []*view, ci bool, label string) 
 				relQ++
 			}
 		}
-		if v.g.scorable {
-			completeN++
+		if v.g.scorable && len(v.eff.quotes) == 1 {
+			themes := 0
 			Q := themeRollup(v.g.q)
-			ok := true
 			for _, t := range SortedThemeKeys() {
-				if Q[t] < 0.2 {
-					continue
-				}
-				found := false
-				for _, q := range v.quotes {
-					if v.g.quoteRelevant(q, t) {
-						found = true
-						break
-					}
-				}
-				if !found {
-					ok = false
+				if Q[t] >= 0.2 {
+					themes++
 				}
 			}
-			if ok {
-				complete++
-			}
-		}
-		if armIsCandidate(arm) && !v.fb && v.cand.rep.State == StateOK && v.cand.rep.Interp != nil {
-			themes := make([]string, 0)
-			for t := range v.cand.rep.Interp.EvidenceChoices {
-				themes = append(themes, t)
-			}
-			sort.Strings(themes)
-			for _, t := range themes {
-				c := v.cand.rep.Interp.EvidenceChoices[t]
-				if c == s.cfg.Rubric.Evidence.NoSupportOption.Value || len(v.cand.quotes) == 0 {
-					continue
-				}
-				themeQ++
-				for _, sp := range v.g.goldSpans(t) {
-					if sp.ID == c {
-						themeRel++
-						break
-					}
-				}
+			if themes >= 2 {
+				e4++
 			}
 		}
 	}
+	gm.E0 = rate(ctrlK, ctrlN, "no scorable fixture")
 	gm.E1 = rate(validQ, totalQ, "no emitted quote")
 	gm.E2 = rate(relQ, totalQ, "no emitted quote")
-	gm.E3 = rate(themeRel, themeQ, "no theme-level choice (candidate arms only)")
-	gm.E4 = rate(complete, completeN, "no accepted scorable classification")
+	gm.E4 = e4
 	gm.QuoteLen = meanNum(qlens, false, b, label+"/qlen", "no emitted quote")
 
-	// Coverage and states.
-	acc, strict, zero, fb := 0, 0, 0, 0
-	zeroNonScor, zeroScor := 0, 0
+	// Coverage, states, causes.
+	acc, strict, zero, fbn := 0, 0, 0, 0
 	for _, v := range views {
 		gm.V4[v.cand.rep.State]++
+		for _, w := range v.cand.warnings {
+			gm.V4Warnings[warningClass(w)]++
+		}
 		if v.fb {
-			fb++
+			fbn++
 		}
 		if v.cand.rep.State == StateZeroSupport {
 			zero++
-			if v.g.scorable {
-				zeroScor++
-			} else {
-				zeroNonScor++
-			}
 		}
-		if v.g.scorable && v.accepted {
+		if v.accepted() {
 			acc++
-			if v.strict {
-				strict++
-			}
+		}
+		if v.eff.strict {
+			strict++
+		} else {
+			gm.V1Causes[failureCause(v.eff)]++
 		}
 	}
-	_ = zero
-	gm.V1 = rate(acc, gm.NScorable, "no scorable fixture")
-	gm.V1Strict = rate(strict, gm.NScorable, "no scorable fixture")
-	gm.V2 = rate(zeroNonScor, gm.NNonScorable, "no non-scorable fixture")
-	gm.V3 = rate(zeroScor, gm.NScorable, "no scorable fixture")
-	gm.V5 = rate(fb, len(views), "no fixture")
+	gm.V1Accepted = rate(acc, len(views), "no fixture")
+	gm.V1Strict = rate(strict, len(views), "no fixture")
+	gm.V5 = rate(fbn, len(views), "no fixture")
+	gm.ZeroShare = rate(zero, len(views), "no fixture")
+	if armIsCandidate(arm) {
+		gm.ZeroBySuff = map[string]int{}
+		for _, v := range views {
+			if v.cand.rep.State != StateZeroSupport {
+				continue
+			}
+			label := "not answered"
+			if in := v.cand.rep.Interp; in != nil && in.SufficiencyLevel != nil {
+				label = s.cfg.Rubric.SufficiencyScale.Levels[*in.SufficiencyLevel].Label
+			}
+			gm.ZeroBySuff[label]++
+		}
+	}
 
 	// Cost, tokens, latency.
-	var ins, outs, lats []float64
+	var ins, outs, cch, lats []float64
 	acceptedAll, strictAll := 0, 0
 	for _, v := range views {
 		gm.C1TotalUSD += v.cost
-		ins = append(ins, float64(v.inTok))
-		outs = append(outs, float64(v.outTok))
-		lats = append(lats, float64(v.latency))
-		if v.accepted {
+		ins = append(ins, float64(v.in))
+		outs = append(outs, float64(v.out))
+		cch = append(cch, float64(v.cch))
+		lats = append(lats, float64(v.lat))
+		if v.accepted() {
 			acceptedAll++
-			if v.strict {
-				strictAll++
-			}
+		}
+		if v.eff.strict {
+			strictAll++
 		}
 	}
-	if acceptedAll == 0 {
-		gm.C1PerAccepted = na("no accepted classification: cost per accepted is undefined")
-	} else {
-		gm.C1PerAccepted = val(gm.C1TotalUSD/float64(acceptedAll), acceptedAll)
-	}
-	if strictAll == 0 {
-		gm.C1PerStrict = na("no accepted classification without warnings")
-	} else {
-		gm.C1PerStrict = val(gm.C1TotalUSD/float64(strictAll), strictAll)
-	}
+	gm.C1PerAccepted = perUnit(gm.C1TotalUSD, acceptedAll, "no accepted classification: cost per accepted is undefined")
+	gm.C1PerStrict = perUnit(gm.C1TotalUSD, strictAll, "no complete_strict classification: cost per complete_strict is undefined")
 	gm.C2InputMean = meanNum(ins, false, b, "", "no classification")
 	gm.C2OutputMean = meanNum(outs, false, b, "", "no classification")
-	gm.C2InputP95 = pct(ins, 95)
-	gm.C2OutputP95 = pct(outs, 95)
-	gm.T1LatencyP50 = pct(lats, 50)
-	gm.T1LatencyP95 = pct(lats, 95)
+	gm.C2CachedMean = meanNum(cch, false, b, "", "no classification")
+	gm.C2InputP95, gm.C2OutputP95 = pct(ins, 95), pct(outs, 95)
+	gm.T1LatencyP50, gm.T1LatencyP95 = pct(lats, 50), pct(lats, 95)
 
 	// Sufficiency (candidate arms) and split / support-count diagnostics.
 	if armIsCandidate(arm) {
 		agree, answered := 0, 0
-		gm.G1Confusion = map[string]map[string]int{}
+		gm.G1sConfusion = map[string]map[string]int{}
 		var splits, cnt, goldCnt []float64
 		for _, v := range views {
 			in := v.cand.rep.Interp
 			if in == nil || in.SufficiencyLevel == nil {
-				gm.G1Unanswered++
+				gm.G1sUnanswered++
 			} else {
 				answered++
 				ans := s.cfg.Rubric.SufficiencyScale.Levels[*in.SufficiencyLevel].Label
-				if ans == v.g.Gold.Sufficiency {
+				if ans == v.g.Sufficiency {
 					agree++
 				}
-				if gm.G1Confusion[v.g.Gold.Sufficiency] == nil {
-					gm.G1Confusion[v.g.Gold.Sufficiency] = map[string]int{}
+				if gm.G1sConfusion[v.g.Sufficiency] == nil {
+					gm.G1sConfusion[v.g.Sufficiency] = map[string]int{}
 				}
-				gm.G1Confusion[v.g.Gold.Sufficiency][ans]++
+				gm.G1sConfusion[v.g.Sufficiency][ans]++
 			}
-			if v.cand.levels != nil {
+			if v.cand.levels != nil && in != nil {
 				splits = append(splits, float64(in.SplitCount))
-				n := 0
+				n, gn := 0, 0
 				for _, k := range keys {
 					if v.cand.levels[k] >= 1 {
 						n++
 					}
-				}
-				cnt = append(cnt, float64(n))
-				g := 0
-				for _, k := range keys {
-					if v.g.Gold.Levels[k] >= 1 {
-						g++
+					if v.g.levels[k] >= 1 {
+						gn++
 					}
 				}
-				goldCnt = append(goldCnt, float64(g))
+				cnt = append(cnt, float64(n))
+				goldCnt = append(goldCnt, float64(gn))
 			}
 		}
-		gm.G1 = rate(agree, answered, "no sufficiency answer")
-		gm.SplitMean = meanNum(splits, false, b, "", "no valid levels")
-		gm.LevelGE1Mean = meanNum(cnt, false, b, "", "no valid levels")
-		gm.GoldLevelGE1Mean = meanNum(goldCnt, false, b, "", "no valid levels")
+		gm.G1s = rate(agree, answered, "no sufficiency answer")
+		gm.SplitMean = meanNum(splits, false, b, "", "no usable levels")
+		gm.LevelGE1Mean = meanNum(cnt, false, b, "", "no usable levels")
+		gm.GoldLevelGE1Mean = meanNum(goldCnt, false, b, "", "no usable levels")
 	}
 	return gm
+}
+
+func perUnit(total float64, n int, reason string) Num {
+	if n == 0 {
+		return na(reason)
+	}
+	return val(total/float64(n), n)
 }
 
 func pct(v []float64, p float64) Num {
@@ -534,7 +745,7 @@ func pct(v []float64, p float64) Num {
 func goldPositive(views []*view, key string) int {
 	n := 0
 	for _, v := range views {
-		if v.g.Gold.Levels[key] >= 1 {
+		if v.g.levels[key] >= 1 {
 			n++
 		}
 	}
@@ -564,17 +775,18 @@ func (s *scorer) mixMetrics(views []*view, ci bool, b int, label string) MixMetr
 		if q == nil {
 			continue
 		}
-		l1v = append(l1v, l1(v.p, q))
-		jsv = append(jsv, jsd(v.p, q))
-		P, Q := themeRollup(v.p), themeRollup(q)
+		p := v.eff.p
+		l1v = append(l1v, l1(p, q))
+		jsv = append(jsv, jsd(p, q))
+		P, Q := themeRollup(p), themeRollup(q)
 		tl1 = append(tl1, l1(P, Q))
 		tjs = append(tjs, jsd(P, Q))
 		f, miss := 0.0, 0.0
 		for _, k := range keys {
-			if v.g.Gold.Levels[k] == 0 {
-				f += v.p[k]
+			if v.g.levels[k] == 0 {
+				f += p[k]
 			}
-			if !supp(v.p[k]) {
+			if !supp(p[k]) {
 				miss += q[k]
 			}
 		}
@@ -607,38 +819,53 @@ func (s *scorer) mixMetrics(views []*view, ci bool, b int, label string) MixMetr
 	return mm
 }
 
-func (s *scorer) noise(arm string, order []string, members map[string][]*goldRow) Noise {
+// noise ------------------------------------------------------------------
+
+func (s *scorer) noise(arm string, order []string, members map[string][]*goldRow, withCI map[string]bool) Noise {
 	n := Noise{}
 	b := s.cfg.Resamples
+	notStrata := func(k string) bool { return !strings.Contains(k, "/stratum=") }
 	if arm == ArmIncumbent {
-		n.N1 = map[string]Num{}
+		n.N1Q1, n.N1Q2, n.N1L1 = map[string]Num{}, map[string]Num{}, map[string]Num{}
 		for _, gk := range order {
-			if strings.Contains(gk, ",stratum=") {
+			if !notStrata(gk) {
 				continue
 			}
-			var d []float64
+			var q1s, q2s, d []float64
 			for _, g := range members[gk] {
 				rw := s.rows[arm][g.BundleID]
-				inc := g.fixture.Incumbent
+				inc := s.persist[g.BundleID]
 				if rw == nil || !rw.accepted || inc == nil || !inc.InputHashMatch || len(inc.Subcategories) == 0 {
 					continue
 				}
 				if inc.Status != categorize.StatusOK && inc.Status != categorize.StatusRepaired {
 					continue
 				}
+				ref := map[string]bool{}
+				for k, v := range inc.Subcategories {
+					if supp(v) {
+						ref[k] = true
+					}
+				}
+				fresh := rw.claim().set
+				q1s = append(q1s, supportF1(fresh, ref))
+				q2s = append(q2s, float64(falsePositiveCount(fresh, ref)))
 				d = append(d, l1(rw.p, inc.Subcategories))
 			}
-			n.N1[gk] = meanNum(d, false, b, "", "no fixture with a persisted incumbent row of the same input hash")
+			empty := "no fixture with a persisted incumbent row of the same input hash"
+			n.N1Q1[gk] = meanNum(q1s, false, b, "", empty)
+			n.N1Q2[gk] = meanNum(q2s, false, b, "", empty)
+			n.N1L1[gk] = meanNum(d, false, b, "", empty)
 		}
 	}
 	if armIsCandidate(arm) {
-		n.N2Cells, n.N2L1 = map[string]Rate{}, map[string]Num{}
+		n.N2Cells, n.N2Q1, n.N2Q2, n.N2L1 = map[string]Rate{}, map[string]Num{}, map[string]Num{}, map[string]Num{}
 		for _, gk := range order {
-			if strings.Contains(gk, ",stratum=") {
+			if !notStrata(gk) {
 				continue
 			}
 			same, cells := 0, 0
-			var d []float64
+			var dq1, dq2, d []float64
 			for _, g := range members[gk] {
 				a, bb := s.rows[arm][g.BundleID], s.repeats[arm][g.BundleID]
 				if a == nil || bb == nil {
@@ -652,17 +879,27 @@ func (s *scorer) noise(arm string, order []string, members map[string][]*goldRow
 						}
 					}
 				}
+				qa1, qa2, ok1 := q1q2(a.claim(), g)
+				qb1, qb2, ok2 := q1q2(bb.claim(), g)
+				dq1 = append(dq1, math.Abs(qa1-qb1))
+				if ok1 && ok2 {
+					dq2 = append(dq2, math.Abs(qa2-qb2))
+				}
 				d = append(d, l1(a.p, bb.p))
 			}
-			n.N2Cells[gk] = rate(same, cells, "no repeat run of this arm (run with a repeat index 1)")
-			n.N2L1[gk] = meanNum(d, false, b, "", "no repeat run of this arm (run with a repeat index 1)")
+			empty := "no repeat run of this arm (run with a repeat index 1)"
+			n.N2Cells[gk] = rate(same, cells, empty)
+			n.N2Q1[gk] = meanNum(dq1, false, b, "", empty)
+			n.N2Q2[gk] = meanNum(dq2, false, b, "", empty)
+			n.N2L1[gk] = meanNum(d, false, b, "", empty)
 		}
 	}
 	return n
 }
 
-// comparisons are paired differences of each arm against the incumbent.
-func (s *scorer) comparisons(order []string, members map[string][]*goldRow) []Comparison {
+// comparisons are paired differences of each arm against the incumbent: the
+// map-free decision metrics first, then the map-bound ones (reported).
+func (s *scorer) comparisons(order []string, members map[string][]*goldRow, withCI map[string]bool) []Comparison {
 	var out []Comparison
 	inc := s.rows[ArmIncumbent]
 	if inc == nil {
@@ -683,33 +920,51 @@ func (s *scorer) comparisons(order []string, members map[string][]*goldRow) []Co
 				views[v.g.BundleID] = v
 			}
 			for _, gk := range order {
-				if strings.Contains(gk, ",stratum=") {
+				if strings.Contains(gk, "/stratum=") || !withCI[gk] {
 					continue
 				}
 				type metric struct {
-					name string
-					f    func(*view, *view) float64
+					name   string
+					f      func(a *view, base *row, g *goldRow) (float64, bool)
+					scoped bool // scorable fixtures only
 				}
 				metrics := []metric{
-					{"d1_l1_subcategory", func(a, c *view) float64 { return l1(a.p, a.g.q) - l1(c.p, c.g.q) }},
-					{"d3_l1_theme", func(a, c *view) float64 {
-						return l1(themeRollup(a.p), themeRollup(a.g.q)) - l1(themeRollup(c.p), themeRollup(c.g.q))
-					}},
-					{"f1_false_positive_mass", func(a, c *view) float64 { return fpMass(a) - fpMass(c) }},
+					{"q1_support_set_f1", func(a *view, base *row, g *goldRow) (float64, bool) {
+						x, _, _ := q1q2(a.eff.claim(), g)
+						y, _, _ := q1q2(base.claim(), g)
+						return x - y, true
+					}, false},
+					{"q2_false_positive_categories", func(a *view, base *row, g *goldRow) (float64, bool) {
+						_, x, ok1 := q1q2(a.eff.claim(), g)
+						_, y, ok2 := q1q2(base.claim(), g)
+						return x - y, ok1 && ok2
+					}, false},
+					{"d1_l1_subcategory", func(a *view, base *row, g *goldRow) (float64, bool) {
+						return l1(a.eff.p, g.q) - l1(base.p, g.q), true
+					}, true},
+					{"d3_l1_theme", func(a *view, base *row, g *goldRow) (float64, bool) {
+						return l1(themeRollup(a.eff.p), themeRollup(g.q)) - l1(themeRollup(base.p), themeRollup(g.q)), true
+					}, true},
+					{"f1m_false_positive_mass", func(a *view, base *row, g *goldRow) (float64, bool) {
+						return fpMass(a.eff.p, g) - fpMass(base.p, g), true
+					}, true},
+					{"l1_between_arms (bound for map-bound differences)", func(a *view, base *row, g *goldRow) (float64, bool) {
+						return l1(a.eff.p, base.p), true
+					}, true},
 				}
 				for _, mt := range metrics {
 					var d []float64
 					for _, g := range members[gk] {
-						a := views[g.BundleID]
-						rw := inc[g.BundleID]
-						if a == nil || rw == nil || !g.scorable {
+						a, base := views[g.BundleID], inc[g.BundleID]
+						if a == nil || base == nil || (mt.scoped && !g.scorable) {
 							continue
 						}
-						c := &view{g: g, p: rw.p}
-						d = append(d, mt.f(a, c))
+						if v, ok := mt.f(a, base, g); ok {
+							d = append(d, v)
+						}
 					}
 					out = append(out, Comparison{Arm: arm, Baseline: ArmIncumbent, Pipeline: pl, Group: gk, Metric: mt.name,
-						Diff: meanNum(d, true, b, fmt.Sprintf("cmp/%s/%s/%s/%s", arm, pl, gk, mt.name), "no paired scorable fixture")})
+						Diff: meanNum(d, true, b, fmt.Sprintf("cmp/%s/%s/%s/%s", arm, pl, gk, mt.name), "no paired fixture")})
 				}
 			}
 		}
@@ -717,15 +972,43 @@ func (s *scorer) comparisons(order []string, members map[string][]*goldRow) []Co
 	return out
 }
 
-func fpMass(v *view) float64 {
+func fpMass(p map[string]float64, g *goldRow) float64 {
 	f := 0.0
 	for _, k := range SortedKeys() {
-		if v.g.Gold.Levels[k] == 0 {
-			f += v.p[k]
+		if g.levels[k] == 0 {
+			f += p[k]
 		}
 	}
 	return f
 }
 
-var _ = math.NaN
-var _ units.SourceRef
+// z2 lists the gold-all-zero fixtures with the outcome of every arm.
+func (s *scorer) z2() []Z2Row {
+	var out []Z2Row
+	for _, g := range s.gold {
+		if g.scorable {
+			continue
+		}
+		row := Z2Row{Fixture: g.BundleID, Set: g.set, Origin: g.origin, Arms: map[string]Z2Cell{}}
+		for _, arm := range s.arms {
+			rw := s.rows[arm][g.BundleID]
+			if rw == nil {
+				continue
+			}
+			cell := Z2Cell{State: rw.rep.State, Status: rw.rep.Outcome.Status}
+			if rw.accepted {
+				for _, k := range SortedKeys() {
+					if rw.p[k] > cell.TopWeight {
+						cell.TopKey, cell.TopWeight = k, rw.p[k]
+					}
+				}
+			}
+			row.Arms[arm] = cell
+		}
+		out = append(out, row)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Fixture < out[j].Fixture })
+	return out
+}
+
+var _ = units.SortedThemes

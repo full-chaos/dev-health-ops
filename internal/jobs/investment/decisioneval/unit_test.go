@@ -18,7 +18,7 @@ import (
 
 func TestRubricDefaultLoads(t *testing.T) {
 	r := testRubric(t)
-	if r.RubricVersion != "decision-support-v1" || r.AdapterVersion != "decision-adapter-v1" || r.MapVersion != "support-map-v1" {
+	if r.RubricVersion != "decision-support-v1" || r.AdapterVersion != "decision-adapter-v2" || r.MapVersion != "support-map-v1" {
 		t.Fatalf("versions: %s %s %s", r.RubricVersion, r.AdapterVersion, r.MapVersion)
 	}
 	if len(r.Categories) != 15 || len(r.EvidenceQuestions) != 5 || r.Levels() != 4 || r.SHA256 == "" {
@@ -93,7 +93,7 @@ func TestCompactRubricVariantRunsWithoutCodeChange(t *testing.T) {
 		t.Fatal("version and digest must follow the file")
 	}
 	// The version reaches the uncertainty sentence (a record field of every run).
-	in := Interpret(r, r.Weights, ProviderTypeSafe, b, built.Spans, jevTyped(t, r, built, behaviour{levels: map[string]int{"quality.bugfix": 3}}))
+	in := Interpret(r, r.Weights, r.SelectedRule, ProviderTypeSafe, b, built.Spans, jevTyped(t, r, built, behaviour{levels: map[string]int{"quality.bugfix": 3}}))
 	if in.State != StateOK {
 		t.Fatalf("state = %s %v", in.State, in.Details)
 	}
@@ -108,37 +108,13 @@ func TestCompactRubricVariantRunsWithoutCodeChange(t *testing.T) {
 func jevTyped(t testing.TB, r *Rubric, built BuiltRequest, b behaviour) Typed {
 	t.Helper()
 	exp := ExpectedQuestions(r, built.Spans)
-	var parts []string
+	answers := map[string]map[string]any{}
 	for _, q := range exp {
-		if b.drop[q.ID] {
-			continue
+		if ans, ok := jevAnswerFor(b, q.ID, q.Kind, q.Levels, q.Options); ok {
+			answers[q.ID] = ans
 		}
-		var ans any
-		if q.Kind == "score" {
-			level := 2
-			if strings.HasPrefix(q.ID, "support__") {
-				level = b.level(strings.Replace(strings.TrimPrefix(q.ID, "support__"), "__", ".", 1))
-			}
-			p := probsFor(level, q.Levels)
-			if b.badProbs[q.ID] {
-				p = badProbs(p)
-			}
-			ans = jevScore(p)
-			if b.wrongType[q.ID] {
-				ans.(map[string]any)["type"] = "refusal"
-			}
-		} else {
-			choice := "E1_1"
-			if c, ok := b.evidence[strings.TrimPrefix(q.ID, "evidence__")]; ok {
-				choice = c
-			}
-			ans = jevChoice(choice, q.Options)
-		}
-		raw, _ := json.Marshal(ans)
-		parts = append(parts, `"`+q.ID+`":`+string(raw))
 	}
-	body := `{"model":"jev-1.13.0","answers":{` + strings.Join(parts, ",") + `},"usage":{"input_tokens":7000,"output_tokens":50}}`
-	typed, err := ParseJevResponse([]byte(body), exp)
+	typed, err := ParseJevResponse(jevBody(b, "jev-1.13.0", answers), exp)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -229,12 +205,11 @@ func TestSpansRefuseSourceTextThatDiffersFromSourceBlock(t *testing.T) {
 
 // ---- requests ----
 
-func exampleBundle(t testing.TB) (units.TextBundle, []Span) {
+func exampleBundle(t testing.TB, r *Rubric) (units.TextBundle, []Span) {
 	var ex struct {
 		SourceBlock string `json:"source_block"`
 		Spans       []Span `json:"spans"`
 	}
-	r := testRubric(t)
 	if err := json.Unmarshal(r.ExampleRequests, &ex); err != nil {
 		t.Fatal(err)
 	}
@@ -260,41 +235,81 @@ func decodeAny(t testing.TB, data []byte) any {
 	return v
 }
 
-// The builders must produce exactly the example bodies of the design file.
+// The builders must produce exactly the example bodies of each rubric file
+// (v1: 21 questions, five evidence questions; v1c: 17 questions, one evidence
+// question, the shared preamble sent one time).
 func TestRequestsMatchTheDesignExamples(t *testing.T) {
-	r := testRubric(t)
-	b, exSpans := exampleBundle(t)
-	var ex struct {
-		Jev       json.RawMessage `json:"jev"`
-		Decisions json.RawMessage `json:"decisions"`
+	for name, r := range map[string]*Rubric{"v1": testRubric(t), "v1c": testRubricCompact(t)} {
+		t.Run(name, func(t *testing.T) {
+			b, exSpans := exampleBundle(t, r)
+			var ex struct {
+				Jev       json.RawMessage `json:"jev"`
+				Decisions json.RawMessage `json:"decisions"`
+			}
+			if err := json.Unmarshal(r.ExampleRequests, &ex); err != nil {
+				t.Fatal(err)
+			}
+			jev, err := BuildJevRequest(r, DefaultJevModel, b)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(jev.Spans) != len(exSpans) {
+				t.Fatalf("spans %d, example %d", len(jev.Spans), len(exSpans))
+			}
+			for i, s := range jev.Spans {
+				if s.ID != exSpans[i].ID || s.Text != exSpans[i].Text {
+					t.Fatalf("span %d = %s %q, example %s %q", i, s.ID, s.Text, exSpans[i].ID, exSpans[i].Text)
+				}
+			}
+			if !reflect.DeepEqual(decodeAny(t, jev.Body), decodeAny(t, ex.Jev)) {
+				t.Fatal("the Jev request differs from the example in the rubric file")
+			}
+			dec, err := BuildDecisionsRequest(r, DefaultLunaModel, b)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(decodeAny(t, dec.Body), decodeAny(t, ex.Decisions)) {
+				t.Fatal("the Decisions request differs from the example in the rubric file")
+			}
+			want := 21
+			if name == "v1c" {
+				want = 17
+			}
+			if jev.QuestionCount() != want || dec.QuestionCount() != want || jev.EstimatedInputTokens <= 0 {
+				t.Fatalf("questions %d/%d est %d, want %d", jev.QuestionCount(), dec.QuestionCount(), jev.EstimatedInputTokens, want)
+			}
+		})
 	}
-	if err := json.Unmarshal(r.ExampleRequests, &ex); err != nil {
-		t.Fatal(err)
-	}
+}
+
+func TestSharedPreambleIsSentOneTimeAndFirst(t *testing.T) {
+	r := testRubricCompact(t)
+	b := mustBundle(t, makeFixtures(t).bugfix)
 	jev, err := BuildJevRequest(r, DefaultJevModel, b)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(jev.Spans) != len(exSpans) {
-		t.Fatalf("spans %d, example %d", len(jev.Spans), len(exSpans))
+	if !strings.HasPrefix(string(jev.Body), `{"model":"jev-1.13.0","state":{"rubric":"Scale for every support question`) {
+		t.Fatalf("rubric is not the first key of state: %.120s", jev.Body)
 	}
-	for i, s := range jev.Spans {
-		if s.ID != exSpans[i].ID || s.Text != exSpans[i].Text {
-			t.Fatalf("span %d = %s %q, example %s %q", i, s.ID, s.Text, exSpans[i].ID, exSpans[i].Text)
-		}
+	if strings.Count(string(jev.Body), "Scale for every support question") != 1 {
+		t.Fatal("the shared rules must be sent one time")
 	}
-	if !reflect.DeepEqual(decodeAny(t, jev.Body), decodeAny(t, ex.Jev)) {
-		t.Fatal("the Jev request differs from the example in the design")
+	dec, _ := BuildDecisionsRequest(r, DefaultLunaModel, b)
+	var req struct{ Input string }
+	_ = json.Unmarshal(dec.Body, &req)
+	if !strings.HasPrefix(req.Input, "RUBRIC\nScale for every support question") || !strings.Contains(req.Input, "\nEND_RUBRIC\n\nSOURCE_BLOCK\n") {
+		t.Fatalf("decisions input: %.200q", req.Input)
 	}
-	dec, err := BuildDecisionsRequest(r, DefaultLunaModel, b)
-	if err != nil {
-		t.Fatal(err)
+	v1 := testRubric(t)
+	plain, _ := BuildJevRequest(v1, DefaultJevModel, b)
+	if strings.Contains(string(plain.Body), `"rubric"`) || strings.Contains(string(plain.Body), "Scale for every support question") {
+		t.Fatal("rubric v1 has no preamble")
 	}
-	if !reflect.DeepEqual(decodeAny(t, dec.Body), decodeAny(t, ex.Decisions)) {
-		t.Fatal("the Decisions request differs from the example in the design")
-	}
-	if jev.QuestionCount() != 21 || dec.QuestionCount() != 21 || jev.EstimatedInputTokens <= 0 {
-		t.Fatalf("questions %d/%d est %d", jev.QuestionCount(), dec.QuestionCount(), jev.EstimatedInputTokens)
+	// the evidence question of v1c is single, with id evidence
+	ids := QuestionIDsFor(r)
+	if len(ids) != 17 || ids[15] != "evidence" || ids[16] != "sufficiency" {
+		t.Fatalf("ids = %v", ids[14:])
 	}
 }
 
@@ -405,7 +420,7 @@ func interpretJev(t testing.TB, b behaviour) (Interpretation, BuiltRequest) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return Interpret(r, r.Weights, ProviderTypeSafe, bundle, built.Spans, jevTyped(t, r, built, b)), built
+	return Interpret(r, r.Weights, r.SelectedRule, ProviderTypeSafe, bundle, built.Spans, jevTyped(t, r, built, b)), built
 }
 
 func TestInterpretOKMixAndQuotes(t *testing.T) {
@@ -480,7 +495,7 @@ func TestFiveFailureStatesAreDifferent(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		return Interpret(r, r.Weights, ProviderOpenAI, bundle, built.Spans, typed)
+		return Interpret(r, r.Weights, r.SelectedRule, ProviderOpenAI, bundle, built.Spans, typed)
 	}
 	cases := []struct {
 		name  string
@@ -489,7 +504,7 @@ func TestFiveFailureStatesAreDifferent(t *testing.T) {
 	}{
 		{"refusal", `{"type":"refusal","name":"` + target + `"}`, StateQuestionRefused},
 		{"missing", "", StateAnswerMissing},
-		{"invalid probabilities", `{"type":"score","name":"` + target + `","score":0,"probabilities":[{"value":0,"label":"a","probability":0.2},{"value":1,"label":"b","probability":0.1},{"value":2,"label":"c","probability":0.1},{"value":3,"label":"d","probability":0.1}],"confidence":0.5}`, StateAnswerInvalid},
+		{"malformed map and no usable score", `{"type":"score","name":"` + target + `","probabilities":[{"value":0,"label":"a","probability":0.2},{"value":1,"label":"b","probability":0.1},{"value":2,"label":"c","probability":0.1},{"value":3,"label":"d","probability":0.1}],"confidence":0.5}`, StateAnswerInvalid},
 		{"all zero (a real answer)", `{"type":"score","name":"` + target + `","score":0,"probabilities":[{"value":0,"label":"a","probability":1},{"value":1,"label":"b","probability":0},{"value":2,"label":"c","probability":0},{"value":3,"label":"d","probability":0}],"confidence":1}`, StateZeroSupport},
 	}
 	seen := map[string]bool{}
@@ -520,16 +535,16 @@ func TestFiveFailureStatesAreDifferent(t *testing.T) {
 
 func TestPrecedenceOfStates(t *testing.T) {
 	in, _ := interpretJev(t, behaviour{
-		drop:      map[string]bool{SupportQuestionID("risk.security"): true},
-		badProbs:  map[string]bool{SupportQuestionID("quality.testing"): true},
-		wrongType: map[string]bool{SupportQuestionID("quality.bugfix"): true},
+		drop:       map[string]bool{SupportQuestionID("risk.security"): true},
+		badNoScore: map[string]bool{SupportQuestionID("quality.testing"): true},
+		wrongType:  map[string]bool{SupportQuestionID("quality.bugfix"): true},
 	})
 	if in.State != StateAnswerMissing {
 		t.Fatalf("missing must win: %s", in.State)
 	}
 	// All three details are kept.
 	joined := strings.Join(in.Details, " ")
-	for _, want := range []string{"answer_missing:risk.security", "answer_invalid:quality.testing:prob_sum", "answer_invalid:quality.bugfix:type=refusal"} {
+	for _, want := range []string{"answer_missing:risk.security", "answer_invalid:quality.testing:sum:0.5:no_usable_score", "answer_invalid:quality.bugfix:type=refusal"} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("detail %q missing from %s", want, joined)
 		}
@@ -543,7 +558,7 @@ func TestDuplicateAndUnknownAnswerIdsAreInvalid(t *testing.T) {
 	exp := ExpectedQuestions(r, built.Spans)
 	base := jevTyped(t, r, built, behaviour{levels: map[string]int{"quality.bugfix": 3}})
 	base.ResponseErrors = []string{"unknown_id:surprise"}
-	in := Interpret(r, r.Weights, ProviderTypeSafe, bundle, built.Spans, base)
+	in := Interpret(r, r.Weights, r.SelectedRule, ProviderTypeSafe, bundle, built.Spans, base)
 	if in.State != StateAnswerInvalid || in.Payload != nil {
 		t.Fatalf("unknown id: %s %v", in.State, in.Details)
 	}
@@ -559,23 +574,44 @@ func TestDuplicateAndUnknownAnswerIdsAreInvalid(t *testing.T) {
 }
 
 func TestEvidenceRules(t *testing.T) {
-	t.Run("all none gives evidence_unsupported", func(t *testing.T) {
+	t.Run("none for the largest theme gives evidence_none", func(t *testing.T) {
 		in, _ := interpretJev(t, behaviour{levels: map[string]int{"quality.bugfix": 3}, evidence: map[string]string{"quality": "none"}})
-		if in.State != StateEvidenceUnsupported || in.Payload != nil {
+		if in.State != StateEvidenceNone || in.Payload != nil || in.Status != categorize.StatusInvalidLLMOutput {
 			t.Fatalf("state = %s", in.State)
 		}
 	})
-	t.Run("a bad choice for one theme only removes its quote", func(t *testing.T) {
-		in, _ := interpretJev(t, behaviour{levels: map[string]int{"quality.bugfix": 3, "feature_delivery.customer": 2}, evidence: map[string]string{"feature_delivery": "none"}})
-		if in.State != StateOK {
+	t.Run("a refused evidence answer for the largest theme gives evidence_unanswered, never ok", func(t *testing.T) {
+		in, _ := interpretJev(t, behaviour{levels: map[string]int{"quality.bugfix": 3, "feature_delivery.customer": 2},
+			refuse: map[string]bool{"evidence__quality": true}, evidence: map[string]string{"feature_delivery": "E1_1"}})
+		// a quote for the SMALL theme must not hide the refusal on the main theme
+		if in.State != StateEvidenceUnanswered || in.Payload != nil {
 			t.Fatalf("state = %s %v", in.State, in.Details)
 		}
-		var p struct {
-			Quotes []struct{ ID string } `json:"evidence_quotes"`
+	})
+	t.Run("none and unanswered are two states", func(t *testing.T) {
+		none, _ := interpretJev(t, behaviour{levels: map[string]int{"quality.bugfix": 3}, evidence: map[string]string{"quality": "none"}})
+		un, _ := interpretJev(t, behaviour{levels: map[string]int{"quality.bugfix": 3}, drop: map[string]bool{"evidence__quality": true}})
+		if none.State == un.State || none.State != StateEvidenceNone || un.State != StateEvidenceUnanswered {
+			t.Fatalf("%s %s", none.State, un.State)
 		}
-		_ = json.Unmarshal(in.Payload, &p)
-		if len(p.Quotes) != 1 {
-			t.Fatalf("quotes = %d", len(p.Quotes))
+	})
+	t.Run("a none or refusal for a smaller theme only removes its quote", func(t *testing.T) {
+		in, _ := interpretJev(t, behaviour{levels: map[string]int{"quality.bugfix": 3, "feature_delivery.customer": 2}, evidence: map[string]string{"feature_delivery": "none"}})
+		if in.State != StateOK || in.CompleteStrict {
+			t.Fatalf("state=%s strict=%v", in.State, in.CompleteStrict)
+		}
+		if !contains(in.Warnings, "evidence_none:feature_delivery") {
+			t.Fatalf("warnings = %v", in.Warnings)
+		}
+		in, _ = interpretJev(t, behaviour{levels: map[string]int{"quality.bugfix": 3, "feature_delivery.customer": 2}, refuse: map[string]bool{"evidence__feature_delivery": true}})
+		if in.State != StateOK || in.CompleteStrict || !contains(in.Warnings, "evidence_unanswered:feature_delivery") {
+			t.Fatalf("state=%s strict=%v %v", in.State, in.CompleteStrict, in.Warnings)
+		}
+	})
+	t.Run("tied largest themes: one valid span choice is enough", func(t *testing.T) {
+		in, _ := interpretJev(t, behaviour{levels: map[string]int{"quality.bugfix": 3, "risk.vulnerability": 3}, evidence: map[string]string{"quality": "none", "risk": "E1_1"}})
+		if in.State != StateOK {
+			t.Fatalf("state = %s %v", in.State, in.Details)
 		}
 	})
 	t.Run("a duplicate span is cited once", func(t *testing.T) {
@@ -594,10 +630,40 @@ func TestEvidenceRules(t *testing.T) {
 			Quotes []struct{ ID string } `json:"evidence_quotes"`
 		}
 		_ = json.Unmarshal(in.Payload, &p)
-		if len(p.Quotes) != 1 {
-			t.Fatalf("quotes = %d", len(p.Quotes))
+		if len(p.Quotes) != 1 || !in.CompleteStrict {
+			t.Fatalf("quotes = %d strict=%v", len(p.Quotes), in.CompleteStrict)
 		}
 	})
+	t.Run("single mode (v1c): none, refusal and a good choice", func(t *testing.T) {
+		r := testRubricCompact(t)
+		b := mustBundle(t, makeFixtures(t).bugfix)
+		built, err := BuildJevRequest(r, DefaultJevModel, b)
+		if err != nil {
+			t.Fatal(err)
+		}
+		run := func(be behaviour) Interpretation {
+			be.levels = map[string]int{"quality.bugfix": 3}
+			return Interpret(r, r.Weights, r.SelectedRule, ProviderTypeSafe, b, built.Spans, jevTyped(t, r, built, be))
+		}
+		if in := run(behaviour{evidence: map[string]string{"evidence": "none"}}); in.State != StateEvidenceNone {
+			t.Fatalf("none: %s", in.State)
+		}
+		if in := run(behaviour{refuse: map[string]bool{"evidence": true}}); in.State != StateEvidenceUnanswered {
+			t.Fatalf("refused: %s", in.State)
+		}
+		if in := run(behaviour{evidence: map[string]string{"evidence": "E2_1"}}); in.State != StateOK || !in.CompleteStrict {
+			t.Fatalf("good: %s %v", in.State, in.Details)
+		}
+	})
+}
+
+func contains(list []string, want string) bool {
+	for _, x := range list {
+		if x == want {
+			return true
+		}
+	}
+	return false
 }
 
 // The adapter output passes the REAL ValidateLLMPayload and every quote
@@ -611,7 +677,7 @@ func TestAdapterPayloadPassesRealValidatorAndQuotesResolve(t *testing.T) {
 		for _, th := range SortedThemeKeys() {
 			ev[th] = built.Spans[len(built.Spans)-1].ID
 		}
-		in := Interpret(r, r.Weights, ProviderTypeSafe, bundle, built.Spans, jevTyped(t, r, built,
+		in := Interpret(r, r.Weights, r.SelectedRule, ProviderTypeSafe, bundle, built.Spans, jevTyped(t, r, built,
 			behaviour{levels: map[string]int{"quality.bugfix": 3, "maintenance.refactor": 2, "risk.vulnerability": 1}, evidence: ev}))
 		if in.State != StateOK {
 			t.Fatalf("%s: %s %v", f.ID(), in.State, in.Details)
@@ -670,7 +736,7 @@ func TestParseDecisionsMatchesByNameNotPosition(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	in := Interpret(r, r.Weights, ProviderOpenAI, bundle, built.Spans, typed)
+	in := Interpret(r, r.Weights, r.SelectedRule, ProviderOpenAI, bundle, built.Spans, typed)
 	if in.State != StateOK || in.Levels["quality.bugfix"] != 3 || in.Levels["risk.security"] != 0 {
 		t.Fatalf("state=%s levels=%v", in.State, in.Levels)
 	}
@@ -842,10 +908,17 @@ func TestParsesTheRealTypeSafeResponseShape(t *testing.T) {
 	if typed.Answers["topology"].Choice.Choice != "named_subject" {
 		t.Fatalf("%+v", typed.Answers["topology"])
 	}
-	// the same answer against a different option set is invalid, never a guess
+	// the same answer against a different option set: the choice is an option, the
+	// map names options that were not asked: usable, recorded as degraded
 	bad := []ExpectedQuestion{{ID: "topology", Kind: "choice", Options: []string{"named_subject"}}}
 	typed, _ = ParseJevResponse(data, bad)
-	if typed.Answers["topology"].Status != QAInvalid {
-		t.Fatalf("%+v", typed.Answers["topology"])
+	if a := typed.Answers["topology"]; a.Status != QAOK || a.Degraded != "extra_option" {
+		t.Fatalf("%+v", a)
+	}
+	// a choice that is not an option is invalid
+	bad = []ExpectedQuestion{{ID: "topology", Kind: "choice", Options: []string{"clarify"}}}
+	typed, _ = ParseJevResponse(data, bad)
+	if a := typed.Answers["topology"]; a.Status != QAInvalid {
+		t.Fatalf("%+v", a)
 	}
 }

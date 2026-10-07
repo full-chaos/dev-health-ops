@@ -34,6 +34,15 @@ func testRubric(t testing.TB) *Rubric {
 	return r
 }
 
+func testRubricCompact(t testing.TB) *Rubric {
+	t.Helper()
+	r, err := LoadRubric("compact")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return r
+}
+
 // buildBundle builds a bundle with the REAL producer (BuildTextBundle).
 func buildBundle(t testing.TB, id string, issues []map[string]any, prs []map[string]any) units.TextBundle {
 	t.Helper()
@@ -139,15 +148,19 @@ func expScore(p []float64) float64 {
 
 // behaviour tells a fake decision server how to answer.
 type behaviour struct {
-	levels       map[string]int    // support key -> level (default 0)
-	evidence     map[string]string // theme -> span id (default "E1_1"); "none" allowed
-	refuse       map[string]bool   // question ids answered with type refusal (decisions)
-	drop         map[string]bool   // question ids left out of answers
-	badProbs     map[string]bool   // question ids with probabilities that sum to 0.5
-	wrongType    map[string]bool   // question ids answered with the wrong type
-	duplicate    map[string]bool   // question ids answered two times
-	unknownExtra bool              // add an answer with an unknown id
-	model        string            // returned model (default: requested)
+	levels       map[string]int       // support key -> level (default 0)
+	evidence     map[string]string    // theme -> span id (default "E1_1"); "none" allowed
+	refuse       map[string]bool      // question ids answered with type refusal (decisions)
+	drop         map[string]bool      // question ids left out of answers
+	badProbs     map[string]bool      // question ids with probabilities that sum to 0.5 (score kept: a degraded answer)
+	badNoScore   map[string]bool      // malformed probabilities AND no score: an invalid answer
+	shape        map[string]string    // question id -> malformed map shape: missing_level, extra_level, not_finite, out_of_range
+	bareProbs    map[string]bool      // question ids with a score and NO probability map
+	probs        map[string][]float64 // question id -> exact level probabilities
+	wrongType    map[string]bool      // question ids answered with the wrong type
+	duplicate    map[string]bool      // question ids answered two times
+	unknownExtra bool                 // add an answer with an unknown id
+	model        string               // returned model (default: requested)
 	inputTokens  int64
 	outputTokens int64
 	omitUsage    bool
@@ -280,6 +293,92 @@ func newFake(t testing.TB, respond func(body []byte) []byte) *fakeProvider {
 
 var spanLine = regexp.MustCompile(`(?m)^\[(E[0-9]+_[0-9]+)\] `)
 
+// jevAnswerFor builds the Jev answer object of one question for a behaviour.
+// ok is false when the answer is left out.
+func jevAnswerFor(b behaviour, id, kind string, levels int, options []string) (ans map[string]any, ok bool) {
+	if b.drop[id] {
+		return nil, false
+	}
+	if kind == "score" {
+		level := 2
+		if strings.HasPrefix(id, "support__") {
+			level = b.level(strings.Replace(strings.TrimPrefix(id, "support__"), "__", ".", 1))
+		}
+		p := probsFor(level, levels)
+		if cp, ok := b.probs[id]; ok {
+			p = cp
+		}
+		if b.badProbs[id] || b.badNoScore[id] {
+			p = badProbs(p)
+		}
+		ans = jevScore(p)
+		if b.wrongType[id] {
+			ans["type"] = "refusal"
+		}
+		if b.refuse[id] {
+			return map[string]any{"type": "refusal"}, true
+		}
+		if b.badNoScore[id] {
+			delete(ans, "score")
+		}
+		if b.bareProbs[id] {
+			delete(ans, "probabilities")
+		}
+		switch b.shape[id] {
+		case "missing_level":
+			delete(ans["probabilities"].(map[string]float64), fmt.Sprint(levels-1))
+		case "extra_level":
+			ans["probabilities"].(map[string]float64)["9"] = 0.0
+		case "not_finite":
+			ans["probabilities"] = map[string]any{"0": "high", "1": 0.1, "2": 0.1, "3": 0.1}
+		case "out_of_range":
+			ans["probabilities"] = map[string]any{"0": 1.5, "1": -0.25, "2": -0.25, "3": 0.0}
+		}
+		return ans, true
+	}
+	theme := strings.TrimPrefix(id, "evidence__")
+	choice := "E1_1"
+	if c, found := b.evidence[theme]; found {
+		choice = c
+	}
+	ans = jevChoice(choice, options)
+	if b.refuse[id] {
+		ans = map[string]any{"type": "refusal"}
+	}
+	if b.badProbs[id] {
+		ans["probabilities"] = map[string]float64{choice: 0.4}
+	}
+	return ans, true
+}
+
+// jevBody renders a Jev response body (duplicate keys possible).
+func jevBody(b behaviour, model string, answers map[string]map[string]any) []byte {
+	ids := make([]string, 0, len(answers))
+	for id := range answers {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	var parts []string
+	for _, id := range ids {
+		raw, _ := json.Marshal(answers[id])
+		pair := fmt.Sprintf("%q:%s", id, raw)
+		parts = append(parts, pair)
+		if b.duplicate[id] {
+			parts = append(parts, pair) // the JSON object repeats a key
+		}
+	}
+	if b.unknownExtra {
+		raw, _ := json.Marshal(jevScore(probsFor(1, 4)))
+		parts = append(parts, `"surprise":`+string(raw))
+	}
+	in, out := b.usage()
+	usage := ""
+	if !b.omitUsage {
+		usage = fmt.Sprintf(`,"usage":{"input_tokens":%d,"output_tokens":%d}`, in, out)
+	}
+	return []byte(fmt.Sprintf(`{"model":%q,"answers":{%s}%s}`, model, strings.Join(parts, ","), usage))
+}
+
 // newFakeJev answers the TypeSafe wire.
 func newFakeJev(t testing.TB, r *Rubric, behave func(blockKey string) behaviour) *fakeProvider {
 	return newFake(t, func(body []byte) []byte {
@@ -294,78 +393,36 @@ func newFakeJev(t testing.TB, r *Rubric, behave func(blockKey string) behaviour)
 			t.Errorf("fake jev: bad request: %v", err)
 		}
 		b := behave(req.State.SourceBlock)
-		answers := map[string]any{}
+		answers := map[string]map[string]any{}
 		for id, raw := range req.Questions {
-			if b.drop[id] {
-				continue
-			}
 			var q struct {
 				Type     string          `json:"type"`
 				Criteria json.RawMessage `json:"criteria"`
 			}
 			_ = json.Unmarshal(raw, &q)
+			levels := 0
+			var options []string
 			if q.Type == "score" {
 				var crit []string
 				_ = json.Unmarshal(q.Criteria, &crit)
-				n := len(crit)
-				level := 0
-				if strings.HasPrefix(id, "support__") {
-					level = b.level(strings.Replace(strings.TrimPrefix(id, "support__"), "__", ".", 1))
-				} else {
-					level = 2
-				}
-				p := probsFor(level, n)
-				if b.badProbs[id] {
-					p = badProbs(p)
-				}
-				ans := jevScore(p)
-				if b.wrongType[id] {
-					ans["type"] = "refusal"
-				}
-				answers[id] = ans
+				levels = len(crit)
 			} else {
 				var crit map[string]json.RawMessage
 				_ = json.Unmarshal(q.Criteria, &crit)
-				var options []string
 				for o := range crit {
 					options = append(options, o)
 				}
 				sort.Strings(options)
-				theme := strings.TrimPrefix(id, "evidence__")
-				choice := "E1_1"
-				if c, ok := b.evidence[theme]; ok {
-					choice = c
-				}
-				answers[id] = jevChoice(choice, options)
 			}
-		}
-		if b.unknownExtra {
-			answers["surprise"] = jevScore(probsFor(1, 4))
+			if ans, ok := jevAnswerFor(b, id, q.Type, levels, options); ok {
+				answers[id] = ans
+			}
 		}
 		model := b.model
 		if model == "" {
 			model = req.Model
 		}
-		in, out := b.usage()
-		ids := make([]string, 0, len(answers))
-		for id := range answers {
-			ids = append(ids, id)
-		}
-		sort.Strings(ids)
-		var parts []string
-		for _, id := range ids {
-			raw, _ := json.Marshal(answers[id])
-			pair := fmt.Sprintf("%q:%s", id, raw)
-			parts = append(parts, pair)
-			if b.duplicate[id] {
-				parts = append(parts, pair) // the JSON object repeats a key
-			}
-		}
-		usage := ""
-		if !b.omitUsage {
-			usage = fmt.Sprintf(`,"usage":{"input_tokens":%d,"output_tokens":%d}`, in, out)
-		}
-		return []byte(fmt.Sprintf(`{"model":%q,"answers":{%s}%s}`, model, strings.Join(parts, ","), usage))
+		return jevBody(b, model, answers)
 	})
 }
 
@@ -408,12 +465,31 @@ func newFakeDecisions(t testing.TB, r *Rubric, behave func(blockKey string) beha
 					level = b.level(strings.Replace(strings.TrimPrefix(q.Name, "support__"), "__", ".", 1))
 				}
 				p := probsFor(level, len(labels))
-				if b.badProbs[q.Name] {
+				if cp, ok := b.probs[q.Name]; ok {
+					p = cp
+				}
+				if b.badProbs[q.Name] || b.badNoScore[q.Name] {
 					p = badProbs(p)
 				}
 				ans = decisionsScore(q.Name, p, labels)
 				if b.wrongType[q.Name] {
 					ans["type"] = "choice"
+				}
+				if b.badNoScore[q.Name] {
+					delete(ans, "score")
+				}
+				if b.bareProbs[q.Name] {
+					delete(ans, "probabilities")
+				}
+				switch b.shape[q.Name] {
+				case "missing_level":
+					ans["probabilities"] = ans["probabilities"].([]map[string]any)[:3]
+				case "extra_level":
+					ans["probabilities"] = append(ans["probabilities"].([]map[string]any), map[string]any{"value": 9, "label": "x", "probability": 0.0})
+				case "not_finite":
+					ans["probabilities"].([]map[string]any)[0]["probability"] = "high"
+				case "out_of_range":
+					ans["probabilities"].([]map[string]any)[0]["probability"] = 1.5
 				}
 			} else {
 				options := make([]string, len(q.Choices))

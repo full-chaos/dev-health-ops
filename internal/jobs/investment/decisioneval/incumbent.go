@@ -11,14 +11,10 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 )
 
-// IncumbentDefsVersion versions the experiment prompt of the diagnostic arm.
-// The production prompt constant is never touched: the arm wraps the provider
-// and inserts a definitions block into the prompt the production code built.
-const IncumbentDefsVersion = "incumbent-defs-v1"
-
-// sourceTextMarker is the line of the production prompt that introduces the
-// source text (prompts.go BuildPrompt). The definitions go before it.
-const sourceTextMarker = "\n\nSource text (quotes must be exact substrings):\n"
+// ErrDefsMarker is returned by the arm D prompt wrapper when the production
+// prompt does not hold the insertion marker exactly one time. The harness fails
+// instead of guessing where to put the block.
+var ErrDefsMarker = fmt.Errorf("decisioneval: arm D: the insertion marker must occur exactly one time in the production prompt")
 
 // IncumbentConfig configures the incumbent arms. Model and parameters come from
 // config; the production provider code is used unchanged.
@@ -27,59 +23,58 @@ type IncumbentConfig struct {
 	APIKey          secrets.Hidden
 	Model           string
 	MaxOutputTokens int
-	// Defs selects the diagnostic arm incumbent+defs.
+	// Defs selects arm D (incumbent+defs).
 	Defs   bool
 	Rubric *Rubric
 }
 
-// DefaultIncumbentModel is the local resolved incumbent (ops/.env). The
-// production reference is gpt-5-nano-2025-08-07 (pin it with the config).
+// DefaultIncumbentModel is the production model (design 9.1): the requested id
+// is gpt-5-nano and the provider returns gpt-5-nano-2025-08-07.
 const DefaultIncumbentModel = "gpt-5-nano"
 
-// IncumbentDefsText renders the category definitions of the rubric as one
-// block. It is a pure function of the rubric file (definitions, inclusions,
-// exclusions); it holds no scale, no shared rules and no question text.
-func IncumbentDefsText(r *Rubric) string {
+// DefsBlock renders the arm D block from the rubric's incumbent_defs data:
+//
+//	"\n\n" + header + "\n" + join("- <key>: <text>", "\n") + "\n" + footer
+//
+// The block is inserted before insert_before (see InsertDefs).
+func DefsBlock(r *Rubric) string {
+	d := r.IncumbentDefs
 	var b strings.Builder
-	b.WriteString("Category definitions (use them to judge how strongly the evidence supports each subcategory):\n")
-	for _, k := range SortedKeys() {
-		c := r.Category(k)
-		fmt.Fprintf(&b, "- %s (%s): %s", c.Key, c.Name, c.Definition)
-		if len(c.Inclusions) > 0 {
-			b.WriteString(" Counts: " + strings.Join(c.Inclusions, "; ") + ".")
-		}
-		if len(c.Exclusions) > 0 {
-			var ex []string
-			for _, e := range c.Exclusions {
-				if e.UseInstead != "" {
-					ex = append(ex, fmt.Sprintf("%s (use %s)", e.Text, e.UseInstead))
-				} else {
-					ex = append(ex, e.Text)
-				}
-			}
-			b.WriteString(" Not this category: " + strings.Join(ex, "; ") + ".")
-		}
-		b.WriteString("\n")
+	b.WriteString("\n\n" + d.Header + "\n")
+	lines := make([]string, 0, len(d.Lines))
+	for _, l := range d.Lines {
+		line := strings.NewReplacer("<key>", l.Key, "<text>", l.Text).Replace(d.LineFormat)
+		lines = append(lines, line)
 	}
-	return strings.TrimRight(b.String(), "\n")
+	b.WriteString(strings.Join(lines, "\n"))
+	if d.Footer != "" {
+		b.WriteString("\n" + d.Footer)
+	}
+	return b.String()
 }
 
-// InsertDefs puts the block before the source text of a production prompt (or
-// at the end when the marker is absent).
-func InsertDefs(prompt, block string) string {
-	if i := strings.Index(prompt, sourceTextMarker); i >= 0 {
-		return prompt[:i] + "\n\n" + block + prompt[i:]
+// InsertDefs builds prompt_D: the first occurrence of insert_before in the
+// production prompt is replaced by the block followed by insert_before. The
+// marker must occur exactly one time.
+func InsertDefs(r *Rubric, prompt string) (string, error) {
+	marker := r.IncumbentDefs.InsertBefore
+	if marker == "" || strings.Count(prompt, marker) != 1 {
+		return "", ErrDefsMarker
 	}
-	return prompt + "\n\n" + block
+	return strings.Replace(prompt, marker, DefsBlock(r)+marker, 1), nil
 }
 
 type defsProvider struct {
-	inner categorize.Provider
-	block string
+	inner  categorize.Provider
+	rubric *Rubric
 }
 
 func (d defsProvider) Complete(ctx context.Context, req categorize.CompletionRequest) (categorize.CompletionResult, error) {
-	req.Prompt = InsertDefs(req.Prompt, d.block)
+	prompt, err := InsertDefs(d.rubric, req.Prompt)
+	if err != nil {
+		return categorize.CompletionResult{}, err
+	}
+	req.Prompt = prompt
 	return d.inner.Complete(ctx, req)
 }
 func (d defsProvider) Close() error  { return d.inner.Close() }
@@ -96,7 +91,7 @@ func IncumbentProvider(cfg IncumbentConfig, client *http.Client) categorize.Prov
 		APIKey: cfg.APIKey, BaseURL: cfg.BaseURL, Model: model, MaxOutputTokens: cfg.MaxOutputTokens, HTTPClient: client,
 	})
 	if cfg.Defs {
-		p = defsProvider{inner: p, block: IncumbentDefsText(cfg.Rubric)}
+		p = defsProvider{inner: p, rubric: cfg.Rubric}
 	}
 	return p
 }
@@ -112,10 +107,14 @@ func IncumbentCategorize(ctx context.Context, bundle units.TextBundle, cfg Incum
 	return categorize.CategorizeTextBundle(ctx, bundle, categorize.CategorizeOptions{Provider: p, ProviderName: "openai", Model: p.Model()})
 }
 
-// IncumbentPromptVersion is the prompt stamp of an incumbent arm.
+// IncumbentDefsVersion versions the arm D wiring in the stamp.
+const IncumbentDefsVersion = "incumbent-defs"
+
+// IncumbentPromptVersion is the prompt stamp of an incumbent arm. Arm D also
+// records defs=<rubric_version>.
 func IncumbentPromptVersion(defs bool, rubricVersion string) string {
 	if defs {
-		return categorize.PromptVersion + "+" + IncumbentDefsVersion + "/" + rubricVersion
+		return categorize.PromptVersion + ";defs=" + rubricVersion
 	}
 	return categorize.PromptVersion
 }

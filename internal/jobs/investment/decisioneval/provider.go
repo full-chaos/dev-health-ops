@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -25,10 +24,6 @@ type Backend struct {
 	Endpoint string
 	Model    string
 	APIKey   secrets.Hidden
-	// AcceptedModels are returned model ids accepted besides Model. Design:
-	// a returned model that differs from the pinned one is
-	// request_failed:model_mismatch.
-	AcceptedModels []string
 
 	build func(*Rubric, string, units.TextBundle) (BuiltRequest, error)
 	parse func([]byte, []ExpectedQuestion) (Typed, error)
@@ -58,9 +53,15 @@ func (b Backend) BuildRequest(r *Rubric, bundle units.TextBundle) (BuiltRequest,
 	return b.build(r, b.Model, bundle)
 }
 
-func (b Backend) modelAccepted(returned string) bool {
-	return returned != "" && (returned == b.Model || slices.Contains(b.AcceptedModels, returned))
+// ModelAccepted is the model id rule of design 1.5: the returned id equals the
+// requested id or starts with the requested id + "-" (a dated suffix, as in
+// gpt-5-nano -> gpt-5-nano-2025-08-07). Anything else is
+// request_failed:model_mismatch. The returned id is recorded verbatim.
+func ModelAccepted(requested, returned string) bool {
+	return returned != "" && requested != "" && (returned == requested || strings.HasPrefix(returned, requested+"-"))
 }
+
+func (b Backend) modelAccepted(returned string) bool { return ModelAccepted(b.Model, returned) }
 
 // ModelVersionStamp is the experiment stamp of an arm. It is never written to
 // ClickHouse.
@@ -78,6 +79,11 @@ type DecisionTerminal struct {
 	Warnings []string
 	// StopArm names a reason the whole arm must stop (auth, budget).
 	StopArm string
+	// Usage and Returned are the usage and model of the response the state was
+	// decided from. CategorizeTextBundle drops the CompletionResult when
+	// Complete returns an error, so the terminal carries them (design 1.1).
+	Usage    UsageReport
+	Returned string
 }
 
 func (t *DecisionTerminal) Error() string {
@@ -231,6 +237,8 @@ func scrubError(err error) string {
 type DecisionProvider struct {
 	Rubric  *Rubric
 	Weights []float64
+	// Rule is the level rule (median or conditional-median).
+	Rule    LevelRuleSpec
 	Backend Backend
 	Sender  Sender
 
@@ -293,25 +301,30 @@ func (p *DecisionProvider) Complete(ctx context.Context, request categorize.Comp
 	expected := ExpectedQuestions(p.Rubric, built.Spans)
 	typed, err := p.Backend.parse(res.Body, expected)
 	if err != nil {
-		return categorize.CompletionResult{}, terminal(StateRequestFailed, "request_failed:not_json")
+		_, usage := usageFromBody(res.Body)
+		return categorize.CompletionResult{}, &DecisionTerminal{State: StateRequestFailed, Details: []string{"request_failed:not_json"}, Usage: usage}
 	}
 	if !p.Backend.modelAccepted(typed.ReturnedModel) {
-		return categorize.CompletionResult{}, terminal(StateRequestFailed, "request_failed:model_mismatch:"+typed.ReturnedModel)
+		return categorize.CompletionResult{}, &DecisionTerminal{State: StateRequestFailed, Details: []string{"request_failed:model_mismatch:" + typed.ReturnedModel},
+			Usage: typed.Usage, Returned: typed.ReturnedModel}
 	}
-	interp := Interpret(p.Rubric, p.Weights, p.Backend.Provider, p.source, built.Spans, typed)
+	interp := Interpret(p.Rubric, p.Weights, p.Rule, p.Backend.Provider, p.source, built.Spans, typed)
 	p.interp = &interp
 	if interp.State != StateOK {
-		return categorize.CompletionResult{}, &DecisionTerminal{State: interp.State, Details: interp.Details, Warnings: interp.Warnings}
+		return categorize.CompletionResult{}, &DecisionTerminal{State: interp.State, Details: interp.Details, Warnings: interp.Warnings,
+			Usage: typed.Usage, Returned: typed.ReturnedModel}
 	}
 
 	// Self-check (step 6): the payload must pass the production parser and
 	// validator. A failure here is a defect of the adapter, not a model error.
 	payload, parseErrs := categorize.ParseLLMJSON(string(interp.Payload))
 	if len(parseErrs) > 0 {
-		return categorize.CompletionResult{}, terminal(StateAdapterDefect, append([]string{"adapter_defect:self_check_parse"}, parseErrs...)...)
+		return categorize.CompletionResult{}, &DecisionTerminal{State: StateAdapterDefect, Details: append([]string{"adapter_defect:self_check_parse"}, parseErrs...),
+			Usage: typed.Usage, Returned: typed.ReturnedModel}
 	}
 	if v := categorize.ValidateLLMPayload(payload, p.source.SourceTexts, p.source.HandleMap); !v.OK {
-		return categorize.CompletionResult{}, terminal(StateAdapterDefect, append([]string{"adapter_defect:self_check"}, v.Errors...)...)
+		return categorize.CompletionResult{}, &DecisionTerminal{State: StateAdapterDefect, Details: append([]string{"adapter_defect:self_check"}, v.Errors...),
+			Usage: typed.Usage, Returned: typed.ReturnedModel}
 	}
 	text := interp.Payload
 	if p.postSelfCheck != nil {
@@ -335,6 +348,9 @@ type Classification struct {
 type DecisionDeps struct {
 	Rubric  *Rubric
 	Weights []float64
+	// Rule is the level rule; the zero value selects the rubric's selected (or
+	// default) rule.
+	Rule    LevelRuleSpec
 	Backend Backend
 	Sender  Sender
 	// Collector is optional (nil in a replay); the provider writes the request
@@ -351,7 +367,11 @@ type DecisionDeps struct {
 // other logic. The pre-call gate is not applied here: the caller applies
 // GateStatus before any arm.
 func DecisionCategorize(ctx context.Context, bundle units.TextBundle, deps DecisionDeps) (Classification, error) {
-	p := &DecisionProvider{Rubric: deps.Rubric, Weights: deps.Weights, Backend: deps.Backend, Sender: deps.Sender,
+	rule := deps.Rule
+	if rule.Name == "" {
+		rule = deps.Rubric.SelectedRule
+	}
+	p := &DecisionProvider{Rubric: deps.Rubric, Weights: deps.Weights, Rule: rule, Backend: deps.Backend, Sender: deps.Sender,
 		source: bundle, col: deps.Collector, postSelfCheck: deps.postSelfCheck}
 	if deps.Collector != nil {
 		ctx = WithCollector(ctx, deps.Collector)
@@ -368,6 +388,9 @@ func DecisionCategorize(ctx context.Context, bundle units.TextBundle, deps Decis
 		outcome.Errors = append([]string{term.Status(), "decision_" + term.State}, term.Details...)
 		outcome.Warnings = term.Warnings
 		outcome.LLMCalls = p.calls
+		// The response of a terminal state was paid for: carry its tokens and
+		// model into the outcome.
+		outcome.InputTokens, outcome.OutputTokens, outcome.LLMModel = int(term.Usage.InputTokens), int(term.Usage.OutputTokens), term.Returned
 	case err != nil:
 		return c, err
 	default:

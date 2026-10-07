@@ -18,8 +18,10 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph/units"
@@ -27,6 +29,9 @@ import (
 
 //go:embed testdata/rubric-v1.json
 var defaultRubricJSON []byte
+
+//go:embed testdata/rubric-v1c.json
+var compactRubricJSON []byte
 
 // ScaleLevel is one level of a score scale.
 type ScaleLevel struct {
@@ -66,12 +71,15 @@ type Category struct {
 	Inclusions      []string        `json:"inclusions"`
 	Exclusions      []Exclusion     `json:"exclusions"`
 	SupportQuestion SupportQuestion `json:"support_question"`
+	CompactLine     string          `json:"compact_line"`
 }
 
-// EvidenceQuestion is the choice question of one theme. Only the fixed parts
-// are in the file; the options are built for each request from the spans.
+// EvidenceQuestion is a choice question. Only the fixed parts are in the file;
+// the options are built for each request from the spans. Scope "theme" is one
+// of five (rubric v1); scope "all" is the single question (rubric v1c).
 type EvidenceQuestion struct {
 	ID    string `json:"id"`
+	Scope string `json:"scope"`
 	Theme string `json:"theme"`
 	Jev   struct {
 		Type         string `json:"type"`
@@ -91,6 +99,56 @@ type SufficiencyQuestion struct {
 	Decisions json.RawMessage `json:"decisions"`
 }
 
+// SharedPreamble is the shared rules text that a rubric sends one time for the
+// whole request (v1c); null in v1.
+type SharedPreamble struct {
+	Text string `json:"text"`
+	Jev  struct {
+		StateKey string `json:"state_key"`
+	} `json:"jev"`
+	Decisions struct {
+		SectionStart string `json:"section_start"`
+		SectionEnd   string `json:"section_end"`
+	} `json:"decisions"`
+}
+
+// LevelRuleSpec is one declared level rule.
+type LevelRuleSpec struct {
+	Name string  `json:"name"`
+	Tau  float64 `json:"tau"`
+}
+
+// Label is the rule as written in a ledger record: "median" or
+// "conditional-median:0.5".
+func (l LevelRuleSpec) Label() string {
+	if l.Name == LevelMedian {
+		return LevelMedian
+	}
+	return fmt.Sprintf("%s:%g", l.Name, l.Tau)
+}
+
+// AnswerValidity holds the declared handling of malformed answers.
+type AnswerValidity struct {
+	ScoreThresholds []float64 `json:"score_thresholds"`
+	SmokeStopBelow  float64   `json:"smoke_stop_per_answer_validity_below"`
+}
+
+// DefsLine is one line of the arm D definitions block.
+type DefsLine struct {
+	Key  string `json:"key"`
+	Text string `json:"text"`
+}
+
+// IncumbentDefs is the arm D data: how the definitions block is built.
+type IncumbentDefsSpec struct {
+	Arm          string     `json:"arm"`
+	InsertBefore string     `json:"insert_before"`
+	Header       string     `json:"header"`
+	LineFormat   string     `json:"line_format"`
+	Lines        []DefsLine `json:"lines"`
+	Footer       string     `json:"footer"`
+}
+
 // WeightMap is a named level -> weight map.
 type WeightMap struct {
 	Name    string             `json:"name"`
@@ -107,10 +165,23 @@ type Rubric struct {
 	GoldMixVersion string `json:"gold_mix_version"`
 	TaxonomyVer    string `json:"taxonomy_version"`
 
-	Scale struct {
+	RubricFormat int `json:"rubric_format"`
+	Scale        struct {
 		Levels []ScaleLevel `json:"levels"`
 	} `json:"scale"`
-	WeightMapSpec struct {
+	LevelRuleSpec struct {
+		Default    string          `json:"default"`
+		Selected   json.RawMessage `json:"selected"`
+		Candidates []LevelRuleSpec `json:"candidates"`
+		Tolerance  float64         `json:"tolerance"`
+		Bimodal    struct {
+			P0Min       float64 `json:"p0_min"`
+			P2PlusP3Min float64 `json:"p2_plus_p3_min"`
+		} `json:"bimodal_flag"`
+	} `json:"level_rule"`
+	AnswerValidity AnswerValidity  `json:"answer_validity"`
+	SharedPreamble *SharedPreamble `json:"shared_preamble"`
+	WeightMapSpec  struct {
 		Primary    WeightMap   `json:"primary"`
 		Alternates []WeightMap `json:"alternates_development_set_only"`
 	} `json:"weight_map"`
@@ -118,33 +189,44 @@ type Rubric struct {
 		Levels []ScaleLevel `json:"levels"`
 	} `json:"sufficiency_scale"`
 	Evidence struct {
-		MaxSpanRunes    int `json:"max_span_runes"`
-		MaxSpans        int `json:"max_spans"`
+		Mode            string `json:"mode"`
+		MaxSpanRunes    int    `json:"max_span_runes"`
+		MaxSpans        int    `json:"max_spans"`
 		NoSupportOption struct {
 			Value       string `json:"value"`
 			Description string `json:"description"`
 			Position    string `json:"position"`
 		} `json:"no_support_option"`
 	} `json:"evidence"`
-	SharedRulesText     string              `json:"shared_rules_text"`
-	Themes              []Theme             `json:"themes"`
-	Categories          []Category          `json:"categories"`
-	EvidenceQuestions   []EvidenceQuestion  `json:"evidence_questions"`
-	SufficiencyQuestion SufficiencyQuestion `json:"sufficiency_question"`
-	ExampleRequests     json.RawMessage     `json:"example_requests"`
+	SharedRulesText     string               `json:"shared_rules_text"`
+	Themes              []Theme              `json:"themes"`
+	Categories          []Category           `json:"categories"`
+	EvidenceQuestions   []EvidenceQuestion   `json:"evidence_questions"`
+	SufficiencyQuestion *SufficiencyQuestion `json:"sufficiency_question"`
+	IncumbentDefs       IncumbentDefsSpec    `json:"incumbent_defs"`
+	ExampleRequests     json.RawMessage      `json:"example_requests"`
 
 	// SHA256 is the digest of the rubric file bytes, recorded in the ledger.
 	SHA256 string `json:"-"`
 	// Weights is the primary level -> weight map as a slice indexed by level.
 	Weights []float64 `json:"-"`
+	// SelectedRule is the level rule chosen by the file (default when none was
+	// selected). A run or a replay can override it.
+	SelectedRule LevelRuleSpec `json:"-"`
 
 	categoryByKey map[string]*Category
 }
 
-// LoadRubric reads a rubric file. An empty path loads the embedded default.
+// HasSufficiency reports whether the rubric asks the sufficiency question.
+func (r *Rubric) HasSufficiency() bool { return r.SufficiencyQuestion != nil }
+
+// LoadRubric reads a rubric file. An empty path loads the embedded default
+// (decision-support-v1); the path "compact" loads the embedded v1c.
 func LoadRubric(path string) (*Rubric, error) {
 	data := defaultRubricJSON
-	if path != "" {
+	if path == "compact" {
+		data = compactRubricJSON
+	} else if path != "" {
 		var err error
 		data, err = os.ReadFile(path)
 		if err != nil {
@@ -170,6 +252,9 @@ func ParseRubric(data []byte) (*Rubric, error) {
 }
 
 func (r *Rubric) validate() error {
+	if r.RubricFormat != 2 {
+		return fmt.Errorf("rubric: rubric_format is %d, this harness reads format 2 (design v1.1)", r.RubricFormat)
+	}
 	for name, v := range map[string]string{
 		"rubric_version": r.RubricVersion, "adapter_version": r.AdapterVersion, "map_version": r.MapVersion,
 		"span_version": r.SpanVersion,
@@ -200,7 +285,7 @@ func (r *Rubric) validate() error {
 			return fmt.Errorf("rubric: alternate map %s: %w", alt.Name, err)
 		}
 	}
-	if len(r.SufficiencyScale.Levels) < 2 {
+	if r.SufficiencyQuestion != nil && len(r.SufficiencyScale.Levels) < 2 {
 		return fmt.Errorf("rubric: sufficiency scale needs 2 or more levels")
 	}
 	if r.Evidence.MaxSpanRunes <= 0 || r.Evidence.MaxSpans <= 0 {
@@ -248,29 +333,151 @@ func (r *Rubric) validate() error {
 		return fmt.Errorf("rubric: %d categories, want %d", len(r.Categories), len(units.SortedSubcategories))
 	}
 
-	evThemes := map[string]bool{}
+	switch r.Evidence.Mode {
+	case EvidencePerTheme:
+		evThemes := map[string]bool{}
+		for _, q := range r.EvidenceQuestions {
+			if q.Scope != "theme" || q.ID != EvidenceQuestionID(q.Theme) || q.Decisions.Name != q.ID {
+				return fmt.Errorf("rubric: evidence question %q (scope %q, theme %q) has a wrong id, scope or name", q.ID, q.Scope, q.Theme)
+			}
+			if !themes[q.Theme] || evThemes[q.Theme] {
+				return fmt.Errorf("rubric: evidence question for theme %q is unknown or repeated", q.Theme)
+			}
+			evThemes[q.Theme] = true
+		}
+		if len(r.EvidenceQuestions) != len(units.SortedThemes) {
+			return fmt.Errorf("rubric: evidence mode per_theme needs %d questions, has %d", len(units.SortedThemes), len(r.EvidenceQuestions))
+		}
+	case EvidenceSingle:
+		if len(r.EvidenceQuestions) != 1 {
+			return fmt.Errorf("rubric: evidence mode single needs 1 question, has %d", len(r.EvidenceQuestions))
+		}
+		if q := r.EvidenceQuestions[0]; q.Scope != "all" || q.ID != SingleEvidenceQuestionID || q.Decisions.Name != q.ID {
+			return fmt.Errorf("rubric: the single evidence question must have scope all and id %q", SingleEvidenceQuestionID)
+		}
+	default:
+		return fmt.Errorf("rubric: evidence.mode %q is not per_theme or single", r.Evidence.Mode)
+	}
 	for _, q := range r.EvidenceQuestions {
-		if q.ID != EvidenceQuestionID(q.Theme) || q.Decisions.Name != q.ID {
-			return fmt.Errorf("rubric: evidence question %q for theme %q has a wrong id or name", q.ID, q.Theme)
-		}
-		if !themes[q.Theme] || evThemes[q.Theme] {
-			return fmt.Errorf("rubric: evidence question for theme %q is unknown or repeated", q.Theme)
-		}
 		if q.Jev.Type != "choice" || q.Decisions.Type != "choice" || q.Jev.Instructions == "" || q.Decisions.Instructions == "" {
 			return fmt.Errorf("rubric: evidence question %s is not a complete choice question", q.ID)
 		}
-		evThemes[q.Theme] = true
 	}
-	if len(r.EvidenceQuestions) != len(units.SortedThemes) {
-		return fmt.Errorf("rubric: %d evidence questions, want %d", len(r.EvidenceQuestions), len(units.SortedThemes))
+
+	if r.SufficiencyQuestion != nil {
+		if r.SufficiencyQuestion.ID != SufficiencyQuestionID {
+			return fmt.Errorf("rubric: sufficiency question id %q, want %q", r.SufficiencyQuestion.ID, SufficiencyQuestionID)
+		}
+		if err := checkScoreQuestion(r.SufficiencyQuestion.Jev, r.SufficiencyQuestion.Decisions, SufficiencyQuestionID, len(r.SufficiencyScale.Levels)); err != nil {
+			return fmt.Errorf("rubric: sufficiency question: %w", err)
+		}
 	}
-	if r.SufficiencyQuestion.ID != SufficiencyQuestionID {
-		return fmt.Errorf("rubric: sufficiency question id %q, want %q", r.SufficiencyQuestion.ID, SufficiencyQuestionID)
+
+	if r.SharedPreamble != nil {
+		p := r.SharedPreamble
+		if p.Text == "" || p.Jev.StateKey == "" || p.Decisions.SectionStart == "" || p.Decisions.SectionEnd == "" {
+			return fmt.Errorf("rubric: shared_preamble needs text, jev.state_key and decisions section markers")
+		}
+		switch p.Jev.StateKey {
+		case "source_block", "evidence_spans":
+			return fmt.Errorf("rubric: shared_preamble state key %q collides with a state key", p.Jev.StateKey)
+		}
 	}
-	if err := checkScoreQuestion(r.SufficiencyQuestion.Jev, r.SufficiencyQuestion.Decisions, SufficiencyQuestionID, len(r.SufficiencyScale.Levels)); err != nil {
-		return fmt.Errorf("rubric: sufficiency question: %w", err)
+
+	// Level rules and answer validity.
+	if len(r.LevelRuleSpec.Candidates) == 0 {
+		return fmt.Errorf("rubric: level_rule.candidates is empty")
+	}
+	for _, c := range r.LevelRuleSpec.Candidates {
+		if c.Name != LevelMedian && c.Name != LevelConditionalMedian {
+			return fmt.Errorf("rubric: unknown level rule %q", c.Name)
+		}
+		if c.Name == LevelConditionalMedian && (c.Tau <= 0 || c.Tau > 1) {
+			return fmt.Errorf("rubric: conditional-median needs tau in (0, 1], has %v", c.Tau)
+		}
+	}
+	def, err := parseLevelRule(r.LevelRuleSpec.Default, r)
+	if err != nil {
+		return fmt.Errorf("rubric: level_rule.default: %w", err)
+	}
+	r.SelectedRule = def
+	if sel := strings.TrimSpace(string(r.LevelRuleSpec.Selected)); sel != "" && sel != "null" {
+		var name string
+		if json.Unmarshal(r.LevelRuleSpec.Selected, &name) == nil {
+			if r.SelectedRule, err = parseLevelRule(name, r); err != nil {
+				return fmt.Errorf("rubric: level_rule.selected: %w", err)
+			}
+		} else {
+			var spec LevelRuleSpec
+			if err := json.Unmarshal(r.LevelRuleSpec.Selected, &spec); err != nil {
+				return fmt.Errorf("rubric: level_rule.selected: %w", err)
+			}
+			if r.SelectedRule, err = parseLevelRule(spec.Label(), r); err != nil {
+				return fmt.Errorf("rubric: level_rule.selected: %w", err)
+			}
+		}
+	}
+	if r.LevelRuleSpec.Tolerance <= 0 {
+		r.LevelRuleSpec.Tolerance = 1e-9
+	}
+	if r.LevelRuleSpec.Bimodal.P0Min <= 0 || r.LevelRuleSpec.Bimodal.P2PlusP3Min <= 0 {
+		return fmt.Errorf("rubric: level_rule.bimodal_flag thresholds are missing")
+	}
+	if len(r.AnswerValidity.ScoreThresholds) == 0 {
+		return fmt.Errorf("rubric: answer_validity.score_thresholds is empty")
+	}
+	for i := 1; i < len(r.AnswerValidity.ScoreThresholds); i++ {
+		if r.AnswerValidity.ScoreThresholds[i] <= r.AnswerValidity.ScoreThresholds[i-1] {
+			return fmt.Errorf("rubric: answer_validity.score_thresholds must increase")
+		}
+	}
+
+	// Arm D data.
+	d := r.IncumbentDefs
+	if d.InsertBefore == "" || d.Header == "" || len(d.Lines) != len(units.SortedSubcategories) {
+		return fmt.Errorf("rubric: incumbent_defs needs insert_before, header and %d lines", len(units.SortedSubcategories))
+	}
+	seen := map[string]bool{}
+	for _, l := range d.Lines {
+		if !units.IsSubcategory(l.Key) || seen[l.Key] || strings.TrimSpace(l.Text) == "" {
+			return fmt.Errorf("rubric: incumbent_defs line %q is unknown, repeated or empty", l.Key)
+		}
+		seen[l.Key] = true
 	}
 	return nil
+}
+
+// Level rule names.
+const (
+	LevelMedian            = "median"
+	LevelConditionalMedian = "conditional-median"
+	// EvidencePerTheme and EvidenceSingle are the evidence modes.
+	EvidencePerTheme = "per_theme"
+	EvidenceSingle   = "single"
+	// SingleEvidenceQuestionID is the id of the one evidence question.
+	SingleEvidenceQuestionID = "evidence"
+)
+
+// ParseLevelRule reads "median" or "conditional-median:<tau>" and checks it
+// against the rubric's declared candidates.
+func (r *Rubric) ParseLevelRule(label string) (LevelRuleSpec, error) { return parseLevelRule(label, r) }
+
+func parseLevelRule(label string, r *Rubric) (LevelRuleSpec, error) {
+	name, tauText, hasTau := strings.Cut(strings.TrimSpace(label), ":")
+	spec := LevelRuleSpec{Name: name}
+	if hasTau {
+		tau, err := strconv.ParseFloat(tauText, 64)
+		if err != nil {
+			return spec, fmt.Errorf("level rule %q: bad tau", label)
+		}
+		spec.Tau = tau
+	}
+	for _, c := range r.LevelRuleSpec.Candidates {
+		if c.Name == spec.Name && (c.Name == LevelMedian || math.Abs(c.Tau-spec.Tau) < 1e-12) {
+			return c, nil
+		}
+	}
+	return spec, fmt.Errorf("level rule %q is not one of the candidates declared in the rubric", label)
 }
 
 func weightSlice(m map[string]float64, levels int) ([]float64, error) {

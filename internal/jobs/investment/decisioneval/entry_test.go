@@ -47,6 +47,38 @@ func TestScoreExperiment(t *testing.T) {
 	t.Logf("metrics written to %s (arms %v)", cfg.ReportDir, m.ArmOrder)
 }
 
+func TestFullExperiment(t *testing.T) {
+	if !isOne(os.Getenv(EnvFull)) {
+		t.Skipf("set %s=1 to score an unlabeled full run (coverage, cost, latency, disagreement export)", EnvFull)
+	}
+	cfg, err := FullConfigFromEnv(os.Getenv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, err := ScoreFull(context.Background(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("full run: population %d, union stratum %d, sample %d, report in %s", m.FullPopulation, m.UnionStratum, len(m.Sample), cfg.ReportDir)
+}
+
+func TestDecideExperiment(t *testing.T) {
+	if !isOne(os.Getenv(EnvDecide)) {
+		t.Skipf("set %s=1 to apply the estimator and the gates of design 9.5 and 9.6", EnvDecide)
+	}
+	cfg, err := DecideConfigFromEnv(os.Getenv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d, err := Decide(context.Background(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range d.Candidates {
+		t.Logf("candidate %s: %s", c.Arm, c.Outcome)
+	}
+}
+
 // TestRealFixturesRoundTrip checks the fixture parser and both request builders
 // over a real export (no network, no provider). It runs only when
 // DECISIONEVAL_REAL_FIXTURES names a fixtures JSONL.

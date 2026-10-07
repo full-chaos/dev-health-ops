@@ -22,17 +22,27 @@ const (
 // probSumTolerance is the allowed distance of a probability sum from 1.
 const probSumTolerance = 0.01
 
-// ScoreAnswer is a validated score answer.
+// ScoreAnswer is a usable score answer: either valid (Probs is the
+// renormalised level distribution p') or degraded (a malformed map with a
+// finite score in range; Probs is nil and DegradedLevel comes from the declared
+// score thresholds).
 type ScoreAnswer struct {
-	Probs      []float64 `json:"probs"`
+	// Probs is p' = p / sum(p) for a valid map; nil when degraded.
+	Probs []float64 `json:"probs,omitempty"`
+	// RawProbs is the map as returned (levels 0..n-1), when it could be read.
+	RawProbs   []float64 `json:"raw_probs,omitempty"`
 	Score      *float64  `json:"score,omitempty"`
 	Confidence *float64  `json:"confidence,omitempty"`
+	// DegradedLevel is set only for a degraded answer.
+	DegradedLevel *int `json:"degraded_level,omitempty"`
 }
 
-// ChoiceAnswer is a validated choice answer.
+// ChoiceAnswer is a usable choice answer. A malformed probability map does not
+// change the choice (the choice is the answer, like the score of a score
+// question); it is recorded as Degraded.
 type ChoiceAnswer struct {
 	Choice     string             `json:"choice"`
-	Probs      map[string]float64 `json:"probs"`
+	Probs      map[string]float64 `json:"probs,omitempty"`
 	Confidence *float64           `json:"confidence,omitempty"`
 }
 
@@ -40,9 +50,12 @@ type ChoiceAnswer struct {
 type QA struct {
 	Status string `json:"status"`
 	// Detail names why a question is refused or invalid (never a level).
-	Detail string        `json:"detail,omitempty"`
-	Score  *ScoreAnswer  `json:"score,omitempty"`
-	Choice *ChoiceAnswer `json:"choice,omitempty"`
+	Detail string `json:"detail,omitempty"`
+	// Degraded is the shape code of a malformed probability map that was
+	// handled by the declared rule (design 3.1); empty for a valid answer.
+	Degraded string        `json:"degraded,omitempty"`
+	Score    *ScoreAnswer  `json:"score,omitempty"`
+	Choice   *ChoiceAnswer `json:"choice,omitempty"`
 }
 
 // Typed is the parsed response of a decision backend: one QA for every
@@ -71,41 +84,113 @@ type ExpectedQuestion struct {
 	ID     string
 	Kind   string // "score" or "choice"
 	Levels int    // score
+	// Thresholds are the declared score thresholds of the degraded handling.
+	Thresholds []float64
 	// Options is the option set of a choice question.
 	Options []string
 }
 
-// ExpectedQuestions lists the 21 questions of a request in request order.
+// ExpectedQuestions lists the questions of a request in request order.
 func ExpectedQuestions(r *Rubric, spans []Span) []ExpectedQuestion {
 	var out []ExpectedQuestion
+	th := r.AnswerValidity.ScoreThresholds
 	for _, k := range SortedKeys() {
-		out = append(out, ExpectedQuestion{ID: SupportQuestionID(k), Kind: "score", Levels: r.Levels()})
+		out = append(out, ExpectedQuestion{ID: SupportQuestionID(k), Kind: "score", Levels: r.Levels(), Thresholds: th})
 	}
 	options := make([]string, 0, len(spans)+1)
 	for _, s := range spans {
 		options = append(options, s.ID)
 	}
 	options = append(options, r.Evidence.NoSupportOption.Value)
-	for _, t := range SortedThemeKeys() {
-		out = append(out, ExpectedQuestion{ID: EvidenceQuestionID(t), Kind: "choice", Options: options})
+	for _, q := range r.EvidenceQuestions {
+		out = append(out, ExpectedQuestion{ID: q.ID, Kind: "choice", Options: options})
 	}
-	return append(out, ExpectedQuestion{ID: SufficiencyQuestionID, Kind: "score", Levels: len(r.SufficiencyScale.Levels)})
+	if r.HasSufficiency() {
+		out = append(out, ExpectedQuestion{ID: SufficiencyQuestionID, Kind: "score", Levels: len(r.SufficiencyScale.Levels), Thresholds: th})
+	}
+	return out
 }
 
 func finite(v float64) bool { return !math.IsNaN(v) && !math.IsInf(v, 0) }
 
-func validProbs(probs []float64) string {
-	sum := 0.0
-	for _, p := range probs {
-		if !finite(p) || p < 0 || p > 1 {
-			return "prob_range"
+// levelProbShape checks a level -> probability reading. got[l] is nil when the
+// level is absent; extra says a level outside 0..n-1 (or repeated) was given;
+// bad says a value was not a finite number. It returns "" for a valid map or the
+// shape code of the first defect: missing_level, extra_level, not_finite,
+// out_of_range, sum:<value>.
+func levelProbShape(got []*float64, extra, bad bool) string {
+	for _, g := range got {
+		if g == nil && !bad {
+			return "missing_level"
 		}
-		sum += p
 	}
-	if math.Abs(sum-1) > probSumTolerance {
-		return "prob_sum"
+	if extra {
+		return "extra_level"
+	}
+	if bad {
+		return "not_finite"
+	}
+	sum := 0.0
+	for _, g := range got {
+		if g == nil {
+			return "missing_level"
+		}
+		if !finite(*g) {
+			return "not_finite"
+		}
+		if *g < 0 || *g > 1 {
+			return "out_of_range"
+		}
+		sum += *g
+	}
+	if sum < 1-probSumTolerance-1e-12 || sum > 1+probSumTolerance+1e-12 {
+		return fmt.Sprintf("sum:%.4g", sum)
 	}
 	return ""
+}
+
+// scoreAnswerFrom turns a level reading into a QA: valid (renormalised),
+// degraded (malformed map, usable score) or invalid (malformed map, no usable
+// score).
+func scoreAnswerFrom(got []*float64, extra, bad bool, score, conf *float64, q ExpectedQuestion) QA {
+	raw := make([]float64, 0, len(got))
+	readable := true
+	for _, g := range got {
+		if g == nil || !finite(*g) {
+			readable = false
+			break
+		}
+		raw = append(raw, *g)
+	}
+	shape := levelProbShape(got, extra, bad)
+	if shape == "" {
+		sum := 0.0
+		for _, x := range raw {
+			sum += x
+		}
+		probs := make([]float64, len(raw))
+		for i, x := range raw {
+			probs[i] = x / sum
+		}
+		return QA{Status: QAOK, Score: &ScoreAnswer{Probs: probs, RawProbs: raw, Score: score, Confidence: conf}}
+	}
+	if score != nil && *score >= 0 && *score <= float64(q.Levels-1) {
+		lv := 0
+		for _, t := range q.Thresholds {
+			if *score >= t {
+				lv++
+			}
+		}
+		if lv > q.Levels-1 {
+			lv = q.Levels - 1
+		}
+		sa := &ScoreAnswer{Score: score, Confidence: conf, DegradedLevel: &lv}
+		if readable {
+			sa.RawProbs = raw
+		}
+		return QA{Status: QAOK, Degraded: shape, Score: sa}
+	}
+	return QA{Status: QAInvalid, Detail: shape + ":no_usable_score"}
 }
 
 func asFloat(v any) (float64, bool) {
@@ -269,45 +354,55 @@ func parseJevAnswer(raw json.RawMessage, q ExpectedQuestion) QA {
 	}
 	switch q.Kind {
 	case "score":
+		score, conf := optFloat(a["score"]), optFloat(a["confidence"])
 		pm, ok := a["probabilities"].(map[string]any)
 		if !ok {
-			return QA{Status: QAInvalid, Detail: "probabilities_absent"}
+			return scoreAnswerFrom(make([]*float64, q.Levels), false, false, score, conf, q)
 		}
-		probs := make([]float64, q.Levels)
-		if len(pm) != q.Levels {
-			return QA{Status: QAInvalid, Detail: "prob_levels"}
-		}
-		for l := 0; l < q.Levels; l++ {
-			v, present := pm[strconv.Itoa(l)]
-			f, isNum := asFloat(v)
-			if !present || !isNum {
-				return QA{Status: QAInvalid, Detail: "prob_value"}
+		got := make([]*float64, q.Levels)
+		extra, bad := false, false
+		for key, v := range pm {
+			l, err := strconv.Atoi(key)
+			if err != nil || l < 0 || l >= q.Levels || strconv.Itoa(l) != key {
+				extra = true
+				continue
 			}
-			probs[l] = f
+			f, isNum := v.(float64)
+			if !isNum || !finite(f) {
+				bad = true
+				one := math.NaN()
+				got[l] = &one
+				continue
+			}
+			got[l] = &f
 		}
-		if why := validProbs(probs); why != "" {
-			return QA{Status: QAInvalid, Detail: why}
-		}
-		return QA{Status: QAOK, Score: &ScoreAnswer{Probs: probs, Score: optFloat(a["score"]), Confidence: optFloat(a["confidence"])}}
+		return scoreAnswerFrom(got, extra, bad, score, conf, q)
 	default:
 		choice, _ := a["choice"].(string)
+		conf := optFloat(a["confidence"])
 		pm, ok := a["probabilities"].(map[string]any)
 		if !ok {
-			return QA{Status: QAInvalid, Detail: "probabilities_absent"}
+			return finishChoice(choice, nil, conf, q.Options, "probabilities_absent")
 		}
 		probs := map[string]float64{}
+		pre := ""
 		for opt, v := range pm {
 			f, isNum := asFloat(v)
 			if !isNum {
-				return QA{Status: QAInvalid, Detail: "prob_value"}
+				pre = "not_finite"
+				continue
 			}
 			probs[opt] = f
 		}
-		return finishChoice(choice, probs, optFloat(a["confidence"]), q.Options)
+		return finishChoice(choice, probs, conf, q.Options, pre)
 	}
 }
 
-func finishChoice(choice string, probs map[string]float64, conf *float64, options []string) QA {
+// finishChoice validates a choice answer. A choice that is not an option of the
+// request is invalid. A malformed probability map (shape code in pre or found
+// here) does not change the choice: the answer is usable and recorded as
+// degraded, never silently.
+func finishChoice(choice string, probs map[string]float64, conf *float64, options []string, pre string) QA {
 	valid := map[string]bool{}
 	for _, o := range options {
 		valid[o] = true
@@ -315,20 +410,25 @@ func finishChoice(choice string, probs map[string]float64, conf *float64, option
 	if !valid[choice] {
 		return QA{Status: QAInvalid, Detail: "choice_not_an_option"}
 	}
-	sum := 0.0
-	for opt, p := range probs {
-		if !valid[opt] {
-			return QA{Status: QAInvalid, Detail: "prob_option_unknown"}
+	shape := pre
+	if shape == "" {
+		sum := 0.0
+		for opt, p := range probs {
+			switch {
+			case !valid[opt]:
+				shape = "extra_option"
+			case p < 0 || p > 1:
+				if shape == "" {
+					shape = "out_of_range"
+				}
+			}
+			sum += p
 		}
-		if p < 0 || p > 1 {
-			return QA{Status: QAInvalid, Detail: "prob_range"}
+		if shape == "" && (sum < 1-probSumTolerance-1e-12 || sum > 1+probSumTolerance+1e-12) {
+			shape = fmt.Sprintf("sum:%.4g", sum)
 		}
-		sum += p
 	}
-	if math.Abs(sum-1) > probSumTolerance {
-		return QA{Status: QAInvalid, Detail: "prob_sum"}
-	}
-	return QA{Status: QAOK, Choice: &ChoiceAnswer{Choice: choice, Probs: probs, Confidence: conf}}
+	return QA{Status: QAOK, Degraded: shape, Choice: &ChoiceAnswer{Choice: choice, Probs: probs, Confidence: conf}}
 }
 
 // ParseDecisionsResponse parses an OpenAI Decisions body. Answers are matched
@@ -409,51 +509,64 @@ func parseDecisionsAnswer(raw json.RawMessage, q ExpectedQuestion) QA {
 		return QA{Status: QAInvalid, Detail: "type=" + typ}
 	}
 	list, ok := a["probabilities"].([]any)
-	if !ok {
-		return QA{Status: QAInvalid, Detail: "probabilities_absent"}
-	}
 	if q.Kind == "score" {
-		probs := make([]float64, q.Levels)
-		got := make([]bool, q.Levels)
+		score, conf := optFloat(a["score"]), optFloat(a["confidence"])
+		if !ok {
+			return scoreAnswerFrom(make([]*float64, q.Levels), false, false, score, conf, q)
+		}
+		got := make([]*float64, q.Levels)
+		extra, bad := false, false
 		for _, item := range list {
-			m, ok := item.(map[string]any)
-			if !ok {
-				return QA{Status: QAInvalid, Detail: "prob_value"}
+			m, isMap := item.(map[string]any)
+			if !isMap {
+				bad = true
+				continue
 			}
 			lv, ok1 := asFloat(m["value"])
-			p, ok2 := asFloat(m["probability"])
 			l := int(lv)
-			if !ok1 || !ok2 || float64(l) != lv || l < 0 || l >= q.Levels || got[l] {
-				return QA{Status: QAInvalid, Detail: "prob_levels"}
+			if !ok1 || float64(l) != lv || l < 0 || l >= q.Levels || got[l] != nil {
+				extra = true
+				continue
 			}
-			got[l], probs[l] = true, p
-		}
-		for _, g := range got {
-			if !g {
-				return QA{Status: QAInvalid, Detail: "prob_levels"}
+			p, isNum := m["probability"].(float64)
+			if !isNum || !finite(p) {
+				bad = true
+				one := math.NaN()
+				got[l] = &one
+				continue
 			}
+			got[l] = &p
 		}
-		if why := validProbs(probs); why != "" {
-			return QA{Status: QAInvalid, Detail: why}
-		}
-		return QA{Status: QAOK, Score: &ScoreAnswer{Probs: probs, Score: optFloat(a["score"]), Confidence: optFloat(a["confidence"])}}
+		return scoreAnswerFrom(got, extra, bad, score, conf, q)
+	}
+	if !ok {
+		choice, _ := a["choice"].(string)
+		return finishChoice(choice, nil, optFloat(a["confidence"]), q.Options, "probabilities_absent")
 	}
 	choice, _ := a["choice"].(string)
 	probs := map[string]float64{}
+	pre := ""
 	for _, item := range list {
-		m, ok := item.(map[string]any)
-		if !ok {
-			return QA{Status: QAInvalid, Detail: "prob_value"}
+		m, isMap := item.(map[string]any)
+		if !isMap {
+			pre = "not_finite"
+			continue
 		}
 		v, ok1 := m["value"].(string)
 		p, ok2 := asFloat(m["probability"])
-		if !ok1 || !ok2 {
-			return QA{Status: QAInvalid, Detail: "prob_value"}
+		if !ok1 {
+			pre = "extra_option"
+			continue
+		}
+		if !ok2 {
+			pre = "not_finite"
+			continue
 		}
 		if _, dup := probs[v]; dup {
-			return QA{Status: QAInvalid, Detail: "prob_option_duplicate"}
+			pre = "extra_option"
+			continue
 		}
 		probs[v] = p
 	}
-	return finishChoice(choice, probs, optFloat(a["confidence"]), q.Options)
+	return finishChoice(choice, probs, optFloat(a["confidence"]), q.Options, pre)
 }

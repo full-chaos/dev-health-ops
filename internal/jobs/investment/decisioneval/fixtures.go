@@ -36,6 +36,42 @@ type FixtureRecord struct {
 	Set             string            `json:"set"`
 	Stratum         string            `json:"stratum_selected"`
 	Incumbent       *FixtureIncumbent `json:"incumbent"`
+
+	// Fields of the evaluation set files (eval-development.jsonl, ...).
+	TextChars  int    `json:"text_chars"`
+	StratumSel string `json:"stratum"`
+	// Origin is "real" or "synthetic". Synthetic fixtures are reported apart.
+	Origin    string `json:"origin"`
+	HasLabels bool   `json:"has_labels"`
+	// Injection twins (design 9.2).
+	TwinOf          string            `json:"twin_of"`
+	TwinRole        string            `json:"twin_role"`
+	InjectionTarget []InjectionTarget `json:"injection_target"`
+}
+
+// InjectionTarget is the key an injected text tries to move.
+type InjectionTarget struct {
+	Key       string `json:"key"` // a subcategory key, or "*" for all
+	Direction string `json:"direction"`
+}
+
+// Normalized maps the field names of the evaluation set files to the export
+// names: bundle id = fixture id, text_chars = text_char_count, stratum =
+// stratum_selected.
+func (f FixtureRecord) Normalized() FixtureRecord {
+	if f.BundleID == "" {
+		f.BundleID = f.FixtureID
+	}
+	if f.FixtureID == "" {
+		f.FixtureID = f.BundleID
+	}
+	if f.TextCharCount == 0 {
+		f.TextCharCount = f.TextChars
+	}
+	if f.Stratum == "" {
+		f.Stratum = f.StratumSel
+	}
+	return f
 }
 
 // FixtureIncumbent is the persisted incumbent output carried by an export
@@ -216,6 +252,7 @@ func ReadFixtures(r io.Reader, maxFixtures int) ([]FixtureRecord, error) {
 		if err := json.Unmarshal([]byte(text), &rec); err != nil {
 			return nil, fmt.Errorf("fixtures: line %d: %w", line, err)
 		}
+		rec = rec.Normalized()
 		if rec.ID() == "" || rec.SourceBlock == "" {
 			return nil, fmt.Errorf("fixtures: line %d: fixture id or source_block is empty", line)
 		}

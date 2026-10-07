@@ -43,18 +43,21 @@ type BuiltRequest struct {
 // QuestionCount is the number of questions in the request.
 func (b BuiltRequest) QuestionCount() int { return len(b.QuestionIDs) }
 
-// QuestionIDsFor returns the ids of the 21 questions in request order: the 15
-// support questions sorted by key, the 5 evidence questions sorted by theme,
-// then sufficiency.
+// QuestionIDsFor returns the ids of the questions in request order: the 15
+// support questions sorted by key, the evidence questions in file order, then
+// sufficiency when the rubric has it.
 func QuestionIDsFor(r *Rubric) []string {
 	var ids []string
 	for _, k := range SortedKeys() {
 		ids = append(ids, SupportQuestionID(k))
 	}
-	for _, t := range SortedThemeKeys() {
-		ids = append(ids, EvidenceQuestionID(t))
+	for _, q := range r.EvidenceQuestions {
+		ids = append(ids, q.ID)
 	}
-	return append(ids, SufficiencyQuestionID)
+	if r.HasSufficiency() {
+		ids = append(ids, SufficiencyQuestionID)
+	}
+	return ids
 }
 
 // jsonString encodes s as a JSON string without HTML escaping.
@@ -74,15 +77,6 @@ func compactRaw(raw json.RawMessage) ([]byte, error) {
 		return nil, err
 	}
 	return buf.Bytes(), nil
-}
-
-func (r *Rubric) evidenceQuestion(theme string) (*EvidenceQuestion, error) {
-	for i := range r.EvidenceQuestions {
-		if r.EvidenceQuestions[i].Theme == theme {
-			return &r.EvidenceQuestions[i], nil
-		}
-	}
-	return nil, fmt.Errorf("no evidence question for theme %s", theme)
 }
 
 func prepare(r *Rubric, model string, bundle units.TextBundle) (BuiltRequest, error) {
@@ -107,7 +101,14 @@ func BuildJevRequest(r *Rubric, model string, bundle units.TextBundle) (BuiltReq
 	var b bytes.Buffer
 	b.WriteString(`{"model":`)
 	b.Write(jsonString(model))
-	b.WriteString(`,"state":{"source_block":`)
+	b.WriteString(`,"state":{`)
+	if p := r.SharedPreamble; p != nil {
+		b.Write(jsonString(p.Jev.StateKey))
+		b.WriteByte(':')
+		b.Write(jsonString(p.Text))
+		b.WriteByte(',')
+	}
+	b.WriteString(`"source_block":`)
 	b.Write(jsonString(bundle.SourceBlock))
 	b.WriteString(`,"evidence_spans":{`)
 	for i, s := range built.Spans {
@@ -137,11 +138,8 @@ func BuildJevRequest(r *Rubric, model string, bundle units.TextBundle) (BuiltReq
 		}
 		write(&first, c.SupportQuestion.ID, raw)
 	}
-	for _, t := range SortedThemeKeys() {
-		q, err := r.evidenceQuestion(t)
-		if err != nil {
-			return built, err
-		}
+	for i := range r.EvidenceQuestions {
+		q := &r.EvidenceQuestions[i]
 		var q2 bytes.Buffer
 		q2.WriteString(`{"type":"choice","instructions":`)
 		q2.Write(jsonString(q.Jev.Instructions))
@@ -156,11 +154,13 @@ func BuildJevRequest(r *Rubric, model string, bundle units.TextBundle) (BuiltReq
 		q2.WriteString(`}}`)
 		write(&first, q.ID, q2.Bytes())
 	}
-	raw, err := compactRaw(r.SufficiencyQuestion.Jev)
-	if err != nil {
-		return built, err
+	if r.HasSufficiency() {
+		raw, err := compactRaw(r.SufficiencyQuestion.Jev)
+		if err != nil {
+			return built, err
+		}
+		write(&first, r.SufficiencyQuestion.ID, raw)
 	}
-	write(&first, r.SufficiencyQuestion.ID, raw)
 	b.WriteString(`}}`)
 	built.Body = b.Bytes()
 	built.EstimatedInputTokens = utf8.RuneCount(built.Body) / 4
@@ -169,8 +169,11 @@ func BuildJevRequest(r *Rubric, model string, bundle units.TextBundle) (BuiltReq
 
 // DecisionsInput is the shared input string of the Decisions request: the
 // source block and the span lines between fixed delimiter lines.
-func DecisionsInput(sourceBlock string, spans []Span) string {
+func DecisionsInput(r *Rubric, sourceBlock string, spans []Span) string {
 	var b strings.Builder
+	if p := r.SharedPreamble; p != nil {
+		b.WriteString(p.Decisions.SectionStart + "\n" + p.Text + "\n" + p.Decisions.SectionEnd + "\n\n")
+	}
 	b.WriteString("SOURCE_BLOCK\n")
 	b.WriteString(sourceBlock)
 	b.WriteString("\nEND_SOURCE_BLOCK\n\nEVIDENCE_SPANS\n")
@@ -192,7 +195,7 @@ func BuildDecisionsRequest(r *Rubric, model string, bundle units.TextBundle) (Bu
 	b.WriteString(`{"model":`)
 	b.Write(jsonString(model))
 	b.WriteString(`,"input":`)
-	b.Write(jsonString(DecisionsInput(bundle.SourceBlock, built.Spans)))
+	b.Write(jsonString(DecisionsInput(r, bundle.SourceBlock, built.Spans)))
 	b.WriteString(`,"questions":[`)
 	first := true
 	write := func(raw []byte) {
@@ -209,11 +212,8 @@ func BuildDecisionsRequest(r *Rubric, model string, bundle units.TextBundle) (Bu
 		}
 		write(raw)
 	}
-	for _, t := range SortedThemeKeys() {
-		q, err := r.evidenceQuestion(t)
-		if err != nil {
-			return built, err
-		}
+	for i := range r.EvidenceQuestions {
+		q := &r.EvidenceQuestions[i]
 		var q2 bytes.Buffer
 		q2.WriteString(`{"type":"choice","name":`)
 		q2.Write(jsonString(q.Decisions.Name))
@@ -232,11 +232,13 @@ func BuildDecisionsRequest(r *Rubric, model string, bundle units.TextBundle) (Bu
 		q2.WriteString(`}]}`)
 		write(q2.Bytes())
 	}
-	raw, err := compactRaw(r.SufficiencyQuestion.Decisions)
-	if err != nil {
-		return built, err
+	if r.HasSufficiency() {
+		raw, err := compactRaw(r.SufficiencyQuestion.Decisions)
+		if err != nil {
+			return built, err
+		}
+		write(raw)
 	}
-	write(raw)
 	b.WriteString(`]}`)
 	built.Body = b.Bytes()
 	built.EstimatedInputTokens = utf8.RuneCount(built.Body) / 4

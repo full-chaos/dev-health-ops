@@ -18,6 +18,18 @@ services:
     build: !reset null
     entrypoint: !override ["/usr/local/bin/dho"]
     command: !override ["worker", "--queues=investment,metrics,reports,workgraph", "--queue-concurrency=investment=1,metrics=2,reports=2,workgraph=1", "--worker-group=heavy", "--shutdown-timeout=7260s", "--http-addr=:8080", "--river-schema=${RIVER_DATABASE_SCHEMA:-river}", "--domain-database-role=${RIVER_DOMAIN_DATABASE_ROLE:-devhealth_domain}", "--queue-database-role=${RIVER_QUEUE_DATABASE_ROLE:-devhealth_queue}", "--queue-database-mode=${WORKER_DATABASE_MODE:-session}", "--coordinator-database-mode=${COORDINATOR_DATABASE_MODE:-session}", "--domain-transaction-pooler=${PGBOUNCER_TRANSACTION_MODE:-true}", "--log-level=${LOG_LEVEL:-info}", "--health-check-timeout=10s"]
+    # Investment shadow categorization (default off; empty = unset): the switch and the TypeSafe key go to this group only, the one that runs
+    # investment.materialize. They come from the shell / --env-file of the compose invocation, NOT from ops/.env (the base env_file of every worker).
+    environment:
+      INVESTMENT_SHADOW_PROVIDER: ${INVESTMENT_SHADOW_PROVIDER:-}
+      INVESTMENT_SHADOW_ORG_IDS: ${INVESTMENT_SHADOW_ORG_IDS:-}
+      INVESTMENT_SHADOW_SAMPLE_PERCENT: ${INVESTMENT_SHADOW_SAMPLE_PERCENT:-}
+      INVESTMENT_SHADOW_CONCURRENCY: ${INVESTMENT_SHADOW_CONCURRENCY:-}
+      INVESTMENT_SHADOW_MAX_SECONDS: ${INVESTMENT_SHADOW_MAX_SECONDS:-}
+      INVESTMENT_SHADOW_MAX_USD_PER_RUN: ${INVESTMENT_SHADOW_MAX_USD_PER_RUN:-}
+      TYPESAFE_API_KEY: ${TYPESAFE_API_KEY:-}
+      TYPESAFE_MODEL: ${TYPESAFE_MODEL:-}
+      TYPESAFE_BASE_URL: ${TYPESAFE_BASE_URL:-}
   go-worker-ops:
     image: ${BIGBOY_OPERATOR_IMAGE:?set BIGBOY_OPERATOR_IMAGE}
     build: !reset null

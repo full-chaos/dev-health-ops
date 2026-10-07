@@ -15,9 +15,12 @@ import (
 // A post-sync fan-out starts a daily run for the PostSyncTouchedDaysPerFanout
 // newest pending days and leaves the rest. Without the drain only a later
 // fan-out takes them, so an organization with no later sync keeps them for
-// ever. A drain pass takes the OLDEST pending days, so the two paths work from
-// the two ends of the record and no day waits behind an endless supply of
-// newer ones.
+// ever. A drain pass takes the newest pending days too, in the order of the
+// fan-out, so the derived rows grow back from today in one piece and never
+// leave a hole between two filled ranges. Because a chain of passes goes on
+// until nothing is pending, the old days are reached when no new touches
+// arrive; the age of the oldest pending touch is exported for the case that
+// they keep arriving.
 //
 // A pass is triggered by the dispatch of the nightly run of the organization
 // (the floor: once a day, with or without a sync) and by the end of every
@@ -88,7 +91,7 @@ type TouchedDaysDrainRuns interface {
 }
 
 // TouchedDaysDrain starts daily runs for the pending touched days of an
-// organization, oldest first.
+// organization, newest first.
 type TouchedDaysDrain struct {
 	pool     *pgxpool.Pool
 	store    TouchedDaysDrainStore
@@ -212,7 +215,7 @@ func (drain *TouchedDaysDrain) returnFailedDays(ctx context.Context, pass *touch
 	return nil
 }
 
-// take reads the pending days, oldest first, and chooses the runs of the pass.
+// take reads the pending days, newest first, and chooses the runs of the pass.
 // It holds no Postgres transaction while it talks to ClickHouse.
 //
 // A day whose newest runs all failed gets no run: it would fail again, and its
@@ -371,8 +374,8 @@ func (drain *TouchedDaysDrain) report(ctx context.Context, pass *touchedDrainPas
 		// found again by every pass until a run of them succeeds.
 		drain.logger.Error(ctx, synclog.MsgTouchedDaysDrainSkipped, org, passAttr,
 			synclog.Count(synclog.KeyDrainDaysSkipped, len(pass.skipped)),
-			synclog.Instant(synclog.KeyDrainOldestPendingDay, pass.skipped[0].UTC()),
-			synclog.Instant(synclog.KeyDrainNewestSkippedDay, pass.skipped[len(pass.skipped)-1].UTC()),
+			synclog.Instant(synclog.KeyDrainOldestPendingDay, pass.skipped[len(pass.skipped)-1].UTC()),
+			synclog.Instant(synclog.KeyDrainNewestSkippedDay, pass.skipped[0].UTC()),
 		)
 	}
 	if pass.backlog.Truncated {
@@ -424,7 +427,10 @@ func (drain *TouchedDaysDrain) report(ctx context.Context, pass *touchedDrainPas
 		synclog.Flag(synclog.KeyDrainReadTruncated, pass.backlog.Truncated),
 	}
 	if len(pass.backlog.Days) > 0 {
-		attrs = append(attrs, synclog.Instant(synclog.KeyDrainOldestPendingDay, pass.backlog.Days[0].UTC()))
+		// The days are newest first: the last one is the oldest the read
+		// returned (with Truncated, older ones exist).
+		attrs = append(attrs, synclog.Instant(
+			synclog.KeyDrainOldestPendingDay, pass.backlog.Days[len(pass.backlog.Days)-1].UTC()))
 	}
 	drain.logger.Info(ctx, synclog.MsgTouchedDaysDrainPass, attrs...)
 	drain.observe(jobruntime.TouchedDaysDrainDaysStarted, uint64(len(pass.started)))

@@ -185,8 +185,8 @@ func TestTouchedDaysDrain(t *testing.T) {
 	target := time.Date(2026, 8, 20, 0, 0, 0, 0, time.UTC)
 	newest := target.AddDate(0, 0, -20) // outside the window of a fan-out of target
 
-	// A sync ends between two drain passes. The fan-out takes the newest
-	// pending days, the drain the oldest: every day gets exactly one run.
+	// A sync ends between two drain passes. Each of the two takes the newest
+	// days that are pending when it reads: every day gets exactly one run.
 	t.Run("a sync fan-out between two passes loses no day and no day runs twice", func(t *testing.T) {
 		rig.reset()
 		orgID := uuid.NewString()
@@ -194,14 +194,14 @@ func TestTouchedDaysDrain(t *testing.T) {
 		drain := rig.drain(t, nil, nil)
 
 		drain.DrainTouchedDays(ctx, orgID, pass("n"))
-		if got := rig.openDays(t, ctx, orgID); !reflect.DeepEqual(got, days[:31]) {
-			t.Fatalf("first pass started %d runs %v, want the 31 oldest days", len(got), got)
+		if got := rig.openDays(t, ctx, orgID); !reflect.DeepEqual(got, days[49:]) {
+			t.Fatalf("first pass started %d runs %v, want the 31 newest days", len(got), got)
 		}
 		args := rig.seedSync(t, ctx, orgID, "commits", target)
 		if err := rig.service(t, rig.touched, nil).Fanout(ctx, args); err != nil {
 			t.Fatal(err)
 		}
-		wantFanout := append(append([]string{}, days[49:]...), target.Format("2006-01-02"))
+		wantFanout := append(append([]string{}, days[18:49]...), target.Format("2006-01-02"))
 		if got := touchedRunDays(rig.runsOf(t, ctx, orgID, args)); !reflect.DeepEqual(got, wantFanout) {
 			t.Fatalf("the fan-out started %d runs %v, want the 31 newest pending days and the target day", len(got), got)
 		}
@@ -215,8 +215,8 @@ func TestTouchedDaysDrain(t *testing.T) {
 		}
 		endDrainRuns(t, ctx, rig.touchedRig, orgID, "succeeded")
 		drain.DrainTouchedDays(ctx, orgID, pass("e"))
-		if got := rig.openDays(t, ctx, orgID); !reflect.DeepEqual(got, days[31:49]) {
-			t.Fatalf("second pass started %d runs %v, want the 18 days between the two ends", len(got), got)
+		if got := rig.openDays(t, ctx, orgID); !reflect.DeepEqual(got, days[:18]) {
+			t.Fatalf("second pass started %d runs %v, want the 18 oldest days", len(got), got)
 		}
 		if got := rig.pendingDays(t, ctx, orgID); len(got) != 0 {
 			t.Fatalf("pending after the passes = %v, want none", got)
@@ -244,22 +244,20 @@ func TestTouchedDaysDrain(t *testing.T) {
 		}}
 		rig.drain(t, store, nil).DrainTouchedDays(ctx, orgID, pass("n"))
 		counts := rig.listedRunsByDay(t, ctx, orgID)
-		twice := 0
-		for _, day := range days {
-			switch counts[day] {
-			case 1:
-			case 2:
-				twice++
-			default:
-				t.Fatalf("day %s has %d runs, want 1 or 2 (all: %v)", day, counts[day], counts)
+		// Both paths took the 31 newest days = days[9:40]: each has two runs.
+		for _, day := range days[9:] {
+			if counts[day] != 2 {
+				t.Fatalf("day %s has %d runs, want the 2 runs of the two paths (all: %v)", day, counts[day], counts)
 			}
 		}
-		// The drain took days[0:31], the fan-out the 31 newest = days[9:40].
-		if twice != 22 {
-			t.Fatalf("%d days have two runs, want the 22 days both paths took", twice)
+		// The 9 older days were taken by neither and are still pending.
+		if got := rig.pendingDays(t, ctx, orgID); !reflect.DeepEqual(got, days[:9]) {
+			t.Fatalf("pending = %v, want the 9 oldest days %v: none lost, none marked without a run", got, days[:9])
 		}
-		if got := rig.pendingDays(t, ctx, orgID); len(got) != 0 {
-			t.Fatalf("pending = %v, want none", got)
+		for _, day := range days[:9] {
+			if counts[day] != 0 {
+				t.Fatalf("day %s has %d runs and is pending", day, counts[day])
+			}
 		}
 	})
 
@@ -337,8 +335,8 @@ func TestTouchedDaysDrain(t *testing.T) {
 			}()
 		}
 		group.Wait()
-		if got := rig.openDays(t, ctx, orgID); !reflect.DeepEqual(got, days[:31]) {
-			t.Fatalf("two passes started %d runs %v, want the 31 oldest days once", len(got), got)
+		if got := rig.openDays(t, ctx, orgID); !reflect.DeepEqual(got, days[9:]) {
+			t.Fatalf("two passes started %d runs %v, want the 31 newest days once", len(got), got)
 		}
 		if started, inFlight := rig.observer.count(jobruntime.TouchedDaysDrainDaysStarted), rig.observer.count(jobruntime.TouchedDaysDrainInFlight); started != 31 || inFlight != 1 {
 			t.Fatalf("days_started = %d, in_flight = %d; want 31 and 1", started, inFlight)
@@ -525,7 +523,7 @@ WHERE org_id = $1::uuid AND generation LIKE 'touched-drain:%'`, orgID, interval)
 		}
 		age("23 hours")
 		drain.DrainTouchedDays(ctx, orgID, pass("n"))
-		if got := rig.openDays(t, ctx, orgID); !reflect.DeepEqual(got, days[:31]) {
+		if got := rig.openDays(t, ctx, orgID); !reflect.DeepEqual(got, days[9:]) {
 			t.Fatalf("a pass started runs while runs of 23 hours were open: %d open, want the first 31", len(got))
 		}
 		age("25 hours")

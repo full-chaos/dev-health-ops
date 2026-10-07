@@ -444,7 +444,7 @@ did not commit.
 **Limits.**
 
 - A fan-out takes the 31 newest pending days. The rest is taken by the drain,
-  oldest first (see "Drain of the pending touched days"). An operator sees the
+  newest first too (see "Drain of the pending touched days"). An operator sees the
   carry-over of a fan-out in the Info field `touched_days_carried_over` of the
   log line `post_sync_fanout.touched_days` and in the counter event
   `days_carried_over`. An Error line (phase `read_truncated`) comes only above
@@ -501,10 +501,10 @@ CHAOS-8846) starts the daily runs of those days without a sync.
 
 **What a user sees.** After a first sync or a backfill the newest days have
 their rows in minutes (the window of the sync run and the 31 newest touched
-days). The drain then fills history from the oldest day towards today, 31 days
-for each batch, one batch after the other. History so fills from both ends and
-the middle arrives last. A day that waits has its old rows or no rows; it never
-has a row that says zero.
+days). The drain then goes on from there towards the oldest day, 31 days for
+each batch, one batch after the other. History so grows back from today in one
+piece: there is never a hole between two filled ranges. A day that waits has
+its old rows or no rows; it never has a row that says zero.
 
 **Triggers.** No timer, no job kind and no queue of its own:
 
@@ -526,7 +526,7 @@ end.
 2. The days whose newest run is a failed run of a fan-out or of the drain go
    back to pending (`ReturnToPending`). Their keys were marked when the run
    started; without this step a failed run would lose its day.
-3. ClickHouse, with no Postgres transaction open: the pending days, oldest
+3. ClickHouse, with no Postgres transaction open: the pending days, newest
    first, and the pending repositories of the first 31 that can start.
 4. One Postgres transaction under an advisory lock for the organization: the
    in-flight count again, then one run for each day, generation
@@ -534,9 +534,13 @@ end.
 5. After the commit: the `dispatched` events of exactly the keys the runs
    list, one millisecond before the read of step 3.
 
-**Order and the 31 slots.** The fan-out takes the newest pending days, the
-drain the oldest. Each path has its own 31, and neither can keep the other
-from its days: a day cannot wait behind an endless supply of newer days.
+**Order and the 31 slots.** The fan-out and the drain both take the newest
+pending days, and each has its own 31. The drain reads after the fan-out
+marked its days, so in the normal case the two take different days. Because a
+chain of passes goes on until nothing is pending, the old days are reached
+when no new touches arrive. They can wait without a bound only when syncs keep
+touching 31 or more new days faster than a batch of 31 runs ends; the gauge of
+the oldest pending age shows that case, it does not remove it.
 
 **A day over the repository limit.** A day with more than 1000 pending
 repositories is split: a pass takes 1000 of them as one run and marks only

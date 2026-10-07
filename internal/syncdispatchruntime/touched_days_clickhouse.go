@@ -263,7 +263,7 @@ GROUP BY org_id, day, repo_id`,
 type TouchedDaysBacklog struct {
 	// TakenAt is the time of the store's own clock, read before the days.
 	TakenAt time.Time
-	// Days are the pending days, oldest first.
+	// Days are the pending days, newest first.
 	Days []time.Time
 	// OldestTouchedAt is the oldest of the newest 'touched' events of the
 	// pending keys of Days: no pending key of Days has waited less than since
@@ -271,12 +271,12 @@ type TouchedDaysBacklog struct {
 	// a key that was touched again shows the later time. It is zero when Days
 	// is empty.
 	OldestTouchedAt time.Time
-	// Truncated is true when newer pending days exist that the read did not
+	// Truncated is true when older pending days exist that the read did not
 	// return.
 	Truncated bool
 }
 
-// Backlog returns the pending days of the organization, oldest first, at most
+// Backlog returns the pending days of the organization, newest first, at most
 // limit of them, with the time of the oldest waiting touch.
 func (store *ClickHouseTouchedDaysStore) Backlog(
 	ctx context.Context, organizationID string, limit int,
@@ -298,7 +298,7 @@ FROM (
     HAVING touched_at > maxIf(at, kind = 'dispatched')
 )
 GROUP BY day
-ORDER BY day ASC
+ORDER BY day DESC
 LIMIT ?`, organizationID, limit+1)
 	if err != nil {
 		return TouchedDaysBacklog{}, ErrTouchedDaysUnavailable

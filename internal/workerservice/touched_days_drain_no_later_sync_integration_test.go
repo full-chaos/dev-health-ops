@@ -104,7 +104,8 @@ func seedPendingDays(t *testing.T, ctx context.Context, rig *touchedRig, orgID s
 
 // An organization has 100 pending touched days and no later sync. The nightly
 // run and the end of each batch of runs are the only events. Every day gets a
-// run, the oldest days first, 31 for each pass, and no day stays pending.
+// run, the newest days first, 31 for each pass, and no day stays pending: with
+// no new touches the oldest days are reached too.
 func TestAnOrganizationWithPendingTouchedDaysAndNoLaterSyncGetsEveryDayARun(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
 	defer cancel()
@@ -128,13 +129,13 @@ func TestAnOrganizationWithPendingTouchedDaysAndNoLaterSyncGetsEveryDayARun(t *t
 		endDrainRuns(t, ctx, rig, orgID, "succeeded")
 		afterRunEnd(ctx, orgID, runID)
 	}
-	want := [][]string{days[:31], days[31:62], days[62:93], days[93:]}
+	want := [][]string{days[69:], days[38:69], days[7:38], days[:7]}
 	if !reflect.DeepEqual(passes, want) {
 		sizes := make([]int, 0, len(passes))
 		for _, batch := range passes {
 			sizes = append(sizes, len(batch))
 		}
-		t.Fatalf("drain passes started runs for %v days (first pass %v); want 31, 31, 31, 7 days, oldest first", sizes, firstOf(passes))
+		t.Fatalf("drain passes started runs for %v days (first pass %v); want 31, 31, 31, 7 days, newest first", sizes, firstOf(passes))
 	}
 	if got := rig.pendingDays(t, ctx, orgID); len(got) != 0 {
 		t.Fatalf("%d days are pending after the drain, want none: %v", len(got), got)

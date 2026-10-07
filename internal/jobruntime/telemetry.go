@@ -236,6 +236,15 @@ const (
 	// TouchedDaysDrainReadTruncated counts the passes whose read of the
 	// pending days hit its bound.
 	TouchedDaysDrainReadTruncated TouchedDaysDrainEvent = "read_truncated"
+	// TouchedDaysDrainDaysRetried counts the days a pass started one more run
+	// for after their newest runs all ended without a result.
+	TouchedDaysDrainDaysRetried TouchedDaysDrainEvent = "days_retried_after_failed_runs"
+	// TouchedDaysDrainChainStopped counts the passes that started nothing
+	// because the mark of the pass before them did not reach the record.
+	TouchedDaysDrainChainStopped TouchedDaysDrainEvent = "chain_stopped_mark_missing"
+	// TouchedDaysDrainReturnReadTruncated counts the passes whose read of the
+	// runs without a result hit its bound.
+	TouchedDaysDrainReturnReadTruncated TouchedDaysDrainEvent = "return_read_truncated"
 )
 
 func touchedDaysDrainEvents() []TouchedDaysDrainEvent {
@@ -244,6 +253,7 @@ func touchedDaysDrainEvents() []TouchedDaysDrainEvent {
 		TouchedDaysDrainDaysAlreadyStarted, TouchedDaysDrainDaysReturned, TouchedDaysDrainDaysSkipped,
 		TouchedDaysDrainInFlight, TouchedDaysDrainNothingPending, TouchedDaysDrainPassFailed,
 		TouchedDaysDrainMarkFailed, TouchedDaysDrainReadTruncated,
+		TouchedDaysDrainDaysRetried, TouchedDaysDrainChainStopped, TouchedDaysDrainReturnReadTruncated,
 	}
 }
 

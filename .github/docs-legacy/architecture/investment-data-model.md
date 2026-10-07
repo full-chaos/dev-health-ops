@@ -85,6 +85,29 @@ alter persisted distributions (see the
 | `computed_at` | `DateTime64(3,'UTC')` | ReplacingMergeTree version |
 | `org_id` | `String` | Tenant (added in 024) |
 
+### Shadow tables (not served, not canonical)
+
+Two append-only tables hold the results of the investment shadow trial (CHAOS-8865). **No
+reader of the product reads them**: the served readers, the skip-existing lookup and the daily
+tables never see a shadow row, and a guard test
+(`internal/jobs/investment/chwrite/shadow_reader_ban_test.go`) fails if a non-test file under
+the serving trees (`internal/queryapi`, `internal/queryapiservice`, `internal/apiservice`,
+`internal/api`) names either table. The writers are in `internal/jobs/investment/chwrite/shadow.go`.
+Both are `ReplacingMergeTree(computed_at)` with `org_id` first in the sort key. Read them
+with `argMax(..., computed_at)` over the sort key, and for the attempt table dedup **before**
+you sum. The sinks refuse a `ComputedAt` older than the table retention (90 days for the shadow table, 400
+days for the attempt table), because the TTL would delete that row at the next merge. This covers the zero
+time and the Unix epoch. The caller of a run chooses `ComputedAt`, since it is the row version, so the sinks
+never stamp it.
+
+| Table | Migration | Sort key | Retention | One row for |
+| ----- | --------- | -------- | --------- | ----------- |
+| `work_unit_investment_shadow` | `109_work_unit_investment_shadow.sql` | `(org_id, work_unit_id, categorization_input_hash, shadow_config)` | 90 days | one shadow classification of a WorkUnit. `theme_distribution_json` is always the roll-up of `subcategory_distribution_json`. A failure state has empty maps. No text column. |
+| `llm_categorization_attempts` | `110_llm_categorization_attempts.sql` | `(org_id, run_id, work_unit_id, role, config, kind, attempt)` | 400 days | one HTTP attempt. Scalars only: tokens, cost, latency, state, request id. `role = 'shadow'` is the only role written today. |
+
+Shadow usage is not written to `llm_token_usage` (the org spend reader would count it as a
+cost the org paid). Both tables carry `org_id`, so org deletion purges them.
+
 ### Legacy daily tables (not the canonical path)
 
 `007_complexity_investment_issues.sql` defines `investment_classifications_daily`,

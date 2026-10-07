@@ -1,0 +1,19 @@
+{
+  "work_unit_id": "synthetic-work-unit-1",
+  "issue_ids": ["ENG-412"],
+  "pr_ids": ["acme/exporter#77"],
+  "work_item_map": {
+    "ENG-412": {
+      "title": "Export job times out for large workspaces",
+      "description": "Customers with more than 50k rows get a 504 from the CSV export. Acme Corp raised this two times; they need it before their quarter close. The export worker also runs on a library version that is out of support.",
+      "type": "Bug",
+      "labels": ["export", "customer-escalation"]
+    }
+  },
+  "pr_map": {
+    "acme/exporter#77": {
+      "title": "fix: stream CSV export instead of buffering",
+      "body": "The export buffers the whole result set in memory today. Switch to a streamed writer and add a 30s timeout for each chunk. Upgrades the CSV library to the supported major version. Adds an integration test for 100k rows. closes ENG-412"
+    }
+  }
+}

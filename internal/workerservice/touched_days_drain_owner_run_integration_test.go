@@ -554,3 +554,130 @@ FROM runs`, orgID); err != nil {
 		t.Fatalf("Error lines of the full read = %v, want 1", lines)
 	}
 }
+
+// failDrainRunOf ends the open drain run of one day as failed.
+func failDrainRunOf(t *testing.T, ctx context.Context, rig *drainRig, orgID, day string) {
+	t.Helper()
+	if _, err := rig.pool.Exec(ctx, `
+UPDATE public.daily_metrics_runs
+SET status = 'failed', finalization_status = 'failed', finalized_at = clock_timestamp(), updated_at = clock_timestamp()
+WHERE org_id = $1::uuid AND target_day = $2::date AND generation LIKE 'touched-drain:%' AND status IN ('pending', 'running')`,
+		orgID, day); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// The keys of a failed run of a pass are pending after their return. That is
+// not a missing mark: the pass that the end of another run of the same pass
+// triggers goes on.
+func TestTouchedDaysDrainReturnedKeysOfAFailedRunAreNotAMissingMark(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+	rig := newDrainRig(t, ctx)
+	orgID := uuid.NewString()
+	newest := time.Date(2026, 7, 31, 0, 0, 0, 0, time.UTC)
+	days := seedPendingDays(t, ctx, rig.touchedRig, orgID, newest, 2)
+	// The newest day has two failed runs already: one more and it is skipped.
+	now := time.Now().UTC()
+	for run := 0; run < syncdispatchruntime.TouchedDrainFailedRunsBeforeSkip-1; run++ {
+		created := now.Add(-time.Duration(10-run) * time.Minute)
+		listedRun(t, ctx, rig.touchedRig, orgID, newest, "post-sync:"+uuid.NewString(), uuid.NewString(),
+			created, "failed", created.Add(time.Minute))
+	}
+	rig.drain(t, nil, nil).DrainTouchedDays(ctx, orgID, pass("n"))
+	_, endedRun := openDrainRuns(t, ctx, rig.touchedRig, orgID)
+	failDrainRunOf(t, ctx, rig, orgID, days[1])
+	endDrainRuns(t, ctx, rig.touchedRig, orgID, "succeeded")
+
+	// The first pass after the end returns the key of the failed run. The day
+	// is skipped now, so its key stays pending.
+	rig.drain(t, nil, nil).DrainTouchedDays(ctx, orgID, "e:"+endedRun)
+	if got := rig.pendingDays(t, ctx, orgID); !reflect.DeepEqual(got, []string{days[1]}) {
+		t.Fatalf("pending days after the return = %v, want %s", got, days[1])
+	}
+	// An older day is touched. A second delivery of the same trigger must
+	// start it: the pending key of the failed run does not end the chain.
+	olderDay := newest.AddDate(0, 0, -10)
+	touchedEvent(t, ctx, rig.touchedRig, orgID, olderDay, uuid.NewString(), "touched", time.Now().UTC())
+	older := []string{olderDay.Format("2006-01-02")}
+	rig.reset()
+	rig.drain(t, nil, nil).DrainTouchedDays(ctx, orgID, "e:"+endedRun)
+	if got := rig.observer.count(drainEventChainStopped); got != 0 {
+		t.Fatalf("chain_stopped_mark_missing = %d, want 0: the pending key belongs to a failed run", got)
+	}
+	if got := drainRunsOf(t, ctx, rig, orgID)[older[0]]; got != 1 {
+		t.Fatalf("drain runs of the older day %s = %d, want 1", older[0], got)
+	}
+}
+
+// A run with a result of which one key was touched again is a marked run: only
+// a run whose every key is pending says that the mark is missing.
+func TestTouchedDaysDrainOneKeyTouchedAgainIsNotAMissingMark(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+	rig := newDrainRig(t, ctx)
+	orgID := uuid.NewString()
+	day := time.Date(2026, 7, 30, 0, 0, 0, 0, time.UTC)
+	dayKey := day.Format("2006-01-02")
+	first, second := uuid.NewString(), uuid.NewString()
+	for _, repo := range []string{first, second} {
+		touchedEvent(t, ctx, rig.touchedRig, orgID, day, repo, "touched", time.Now().UTC().Add(-time.Hour))
+	}
+	rig.drain(t, nil, nil).DrainTouchedDays(ctx, orgID, pass("n"))
+	_, endedRun := openDrainRuns(t, ctx, rig.touchedRig, orgID)
+	endDrainRuns(t, ctx, rig.touchedRig, orgID, "succeeded")
+	if got := rig.pendingDays(t, ctx, orgID); len(got) != 0 {
+		t.Fatalf("pending days after the marked pass = %v, want none", got)
+	}
+	// One of the two keys of the run is touched again.
+	var millis int64
+	if err := rig.conn.QueryRow(ctx, `SELECT toUnixTimestamp64Milli(now64(3))`).Scan(&millis); err != nil {
+		t.Fatal(err)
+	}
+	touchedEvent(t, ctx, rig.touchedRig, orgID, day, first, "touched", time.UnixMilli(millis))
+
+	rig.reset()
+	rig.drain(t, nil, nil).DrainTouchedDays(ctx, orgID, "e:"+endedRun)
+
+	if got := rig.observer.count(drainEventChainStopped); got != 0 {
+		t.Fatalf("chain_stopped_mark_missing = %d, want 0: one key of the run is still marked", got)
+	}
+	if got := drainRunsOf(t, ctx, rig, orgID)[dayKey]; got != 2 {
+		t.Fatalf("drain runs of the day = %d, want 2 (the key touched again gets its run)", got)
+	}
+}
+
+// A newer run of every repository is the owner of every key of its day: a
+// failed run of listed repositories before it returns nothing.
+func TestTouchedDaysDrainDoesNotReturnTheKeysOfAFailedRunThatANewerRunOfEveryRepositoryOwns(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+	rig := newDrainRig(t, ctx)
+	orgID, repo := uuid.NewString(), uuid.NewString()
+	day := time.Date(2026, 7, 30, 0, 0, 0, 0, time.UTC)
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	touchedEvent(t, ctx, rig.touchedRig, orgID, day, repo, "touched", now.Add(-12*time.Minute))
+	touchedEvent(t, ctx, rig.touchedRig, orgID, day, repo, "dispatched", now.Add(-10*time.Minute))
+	listedRun(t, ctx, rig.touchedRig, orgID, day, daily.TouchedDrainGenerationPrefix+"e:"+uuid.NewString(), repo,
+		now.Add(-10*time.Minute), "failed", now.Add(-8*time.Minute))
+	full := rig.startRun(t, ctx, func(tx pgx.Tx) (daily.Run, error) {
+		return rig.store.StartRunTx(ctx, tx, daily.StartRunRequest{
+			OrganizationID: orgID, TargetDay: day, Generation: "post-sync:" + uuid.NewString(),
+		}, nilPartitionPublisher{})
+	})
+	if _, err := rig.pool.Exec(ctx, `
+UPDATE public.daily_metrics_runs
+SET status = 'succeeded', finalization_status = 'succeeded', finalized_at = $2, updated_at = $2, created_at = $3
+WHERE id = $1::uuid AND full_org`, full.ID, now.Add(-4*time.Minute), now.Add(-5*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+
+	rig.drain(t, nil, nil).DrainTouchedDays(ctx, orgID, pass("n"))
+
+	if got := newestTouchedAt(t, ctx, rig.touchedRig, orgID, day, repo); got != now.Add(-12*time.Minute).UnixMilli() {
+		t.Fatalf("the key was returned (newest touch %d): a newer run of every repository with a result owns it", got)
+	}
+	if got := rig.observer.count(jobruntime.TouchedDaysDrainDaysReturned); got != 0 {
+		t.Fatalf("days_returned_to_pending = %d, want 0", got)
+	}
+}

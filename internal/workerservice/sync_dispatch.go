@@ -78,6 +78,53 @@ func (writer dailyPostSyncWriter) StartRunTx(
 	return run.ID, completionKey, nil
 }
 
+// FullOrganizationDays are the days StartRunTx above starts a run of every
+// repository for: the target day and the window behind it.
+func (writer dailyPostSyncWriter) FullOrganizationDays(plan syncdispatchruntime.PostSyncPlan) []time.Time {
+	return append([]time.Time{plan.TargetDay.UTC()}, postSyncDailyBackfillDays(plan)...)
+}
+
+func (dailyPostSyncWriter) RepositoryLimit() int { return daily.MaxRepositoriesPerRun }
+
+// StartTouchedDayTx starts the run of one day that stored raw rows touched,
+// outside the window StartRunTx computes (CHAOS-8813). The run belongs to the
+// generation of the sync run, as the window runs do.
+//
+// A second delivery of the same fan-out can read another repository list for
+// the day (a later sync touched it too), and daily.PostgresStore.StartRunTx
+// refuses a (day, generation) whose list differs from the stored one. So a
+// run that exists is left as it is and the day is reported as not started:
+// the caller leaves it pending and a later fan-out computes it.
+func (writer dailyPostSyncWriter) StartTouchedDayTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	plan syncdispatchruntime.PostSyncPlan,
+	day time.Time,
+	repositoryIDs []string,
+) (bool, error) {
+	generation := "post-sync:" + plan.SyncRunID
+	exists, err := writer.store.RunExistsTx(ctx, tx, plan.OrganizationID, day, generation)
+	if err != nil {
+		return false, err
+	}
+	if exists {
+		return false, nil
+	}
+	repositories := make([]daily.RepositoryID, 0, len(repositoryIDs))
+	for _, repositoryID := range repositoryIDs {
+		repositories = append(repositories, daily.RepositoryID(repositoryID))
+	}
+	if _, err := writer.store.StartRunTx(ctx, tx, daily.StartRunRequest{
+		OrganizationID: plan.OrganizationID,
+		TargetDay:      day,
+		Generation:     generation,
+		RepositoryIDs:  repositories,
+	}, writer.publisher); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
 // maxPostSyncDailyBackfillDays bounds how many extra days behind a sync's
 // target day the post-sync daily dispatch will re-drive (CHAOS-4263). Each
 // extra day is a whole separate daily_metrics_runs pipeline (dispatch,
@@ -511,6 +558,21 @@ func buildSyncCoordinatorWorker(
 	if err != nil {
 		closeClickHouse()
 		return workerFamily{}, errWorkerDependencyUnavailable
+	}
+	// CHAOS-8813: the fan-out records the days that the raw rows of its sync
+	// run touched and starts a daily run for each. It is not optional: a
+	// coordinator that cannot build it does not start, because without it a
+	// day outside the window of the sync run keeps stale derived rows.
+	touchedDays, err := syncdispatchruntime.NewClickHouseTouchedDaysStore(clickhouseConnection)
+	if err == nil {
+		err = postSync.SetTouchedDays(touchedDays, dailyPostSyncWriter{store: dailyStore, publisher: dailyPublisher})
+	}
+	if err != nil {
+		closeClickHouse()
+		return workerFamily{}, errWorkerDependencyUnavailable
+	}
+	if touchedDaysObserver, ok := observer.(jobruntime.PostSyncTouchedDaysObserver); ok {
+		postSync.SetTouchedDaysObserver(touchedDaysObserver)
 	}
 	// The fanout-outcome counter reports directly, the same way the daily
 	// discovery/zero-rows observers do: generic runtime middleware has no way

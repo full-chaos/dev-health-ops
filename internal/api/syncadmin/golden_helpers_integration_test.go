@@ -5,6 +5,7 @@ package syncadmin_test
 import (
 	"fmt"
 	"path/filepath"
+	"regexp"
 	"sync"
 	"testing"
 
@@ -61,4 +62,75 @@ func newID() uuid.UUID {
 	defer idMu.Unlock()
 	idSeq++
 	return uuid.MustParse(venueoracle.StableUUID(fmt.Sprintf("%s#%d", idLabel, idSeq)))
+}
+
+// derivedTargets is the ONE named, deliberate difference of the config
+// responses from the recorded Python answer (owner's decision of 2026-10-06;
+// Linear project document "Sync configuration: the dataset row is the single
+// owner"): a whole-integration config answers sync_targets from its
+// integration's ENABLED dataset rows, where the recorded Python answer echoed
+// the stored list. It applies only to the seeded configs named here: each is
+// a whole-integration config whose integration has no enabled dataset row, so
+// the Go answer is [] and the recorded answer is the stored list. Every other
+// config's list, and every other field of these configs, is still compared.
+//
+// The Go answer is not blanked on trust: inspect requires the named config
+// to carry exactly its stated list in the raw Go response, and finish fails
+// when a named config never appeared (a difference that stopped occurring).
+type derivedTargets struct {
+	// want is config id -> the sync_targets JSON the Go api must answer.
+	want map[string]string
+	seen map[string]bool
+}
+
+// newDerivedTargets names the configs by id (a name is not unique across
+// the seeded orgs), each with the list the Go api must answer.
+func newDerivedTargets(list string, configs ...uuid.UUID) *derivedTargets {
+	d := &derivedTargets{want: map[string]string{}, seen: map[string]bool{}}
+	for _, config := range configs {
+		d.want[config.String()] = list
+	}
+	return d
+}
+
+// configTargets matches one config object's id and sync_targets as the
+// response renders them (id, name, provider, credential_id, sync_targets).
+var configTargets = regexp.MustCompile(`"id":"([^"]*)","name":"[^"]*","provider":"[^"]*","credential_id":(?:null|"[^"]*"),"sync_targets":(\[[^\]]*\])`)
+
+const derivedTargetsMark = `"<named divergence: derived from the dataset rows>"`
+
+// normalize blanks the list of the named configs, on both planes' bodies.
+func (d *derivedTargets) normalize(body string) string {
+	return configTargets.ReplaceAllStringFunc(body, func(match string) string {
+		parts := configTargets.FindStringSubmatch(match)
+		if _, ok := d.want[parts[1]]; !ok {
+			return match
+		}
+		return match[:len(match)-len(parts[2])] + derivedTargetsMark
+	})
+}
+
+// inspect checks the raw Go body: a named config carries its stated list.
+func (d *derivedTargets) inspect(t *testing.T, request string, goBody string) {
+	t.Helper()
+	for _, parts := range configTargets.FindAllStringSubmatch(goBody, -1) {
+		want, ok := d.want[parts[1]]
+		if !ok {
+			continue
+		}
+		d.seen[parts[1]] = true
+		if parts[2] != want {
+			t.Errorf("%s: config %s answers sync_targets %s, want %s (the list its enabled dataset rows give)", request, parts[1], parts[2], want)
+		}
+	}
+}
+
+// finish fails when a named config was never answered by the Go api.
+func (d *derivedTargets) finish(t *testing.T) {
+	t.Helper()
+	for id := range d.want {
+		if !d.seen[id] {
+			t.Errorf("named divergence for config %s matched no Go response: remove it or fix the id", id)
+		}
+	}
 }

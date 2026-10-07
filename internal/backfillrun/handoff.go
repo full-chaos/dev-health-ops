@@ -41,7 +41,9 @@ func Wait(ctx context.Context, pool *pgxpool.Pool, occurrenceID string, wait, po
 // Mint writes a backfill occurrence and its manual trigger in the transaction.
 func Mint(ctx context.Context, tx pgx.Tx, config *Config, params Params, validated Validated, now time.Time) (Trigger, error) {
 	since, before := params.Window.Since, params.Window.Before
-	// The verb has always written no dataset selection (NULL) for an empty key set.
+	// An empty key set is written as no dataset selection (NULL). Only a
+	// configuration pinned to one source with no sync_targets reaches this
+	// with none: Validate refuses a whole-integration run that names no key.
 	var datasetKeys []string
 	if len(validated.DatasetKeys) > 0 {
 		datasetKeys = validated.DatasetKeys

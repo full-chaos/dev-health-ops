@@ -70,6 +70,16 @@ func (f *faultReader) childrenCounts(context.Context, []uuid.UUID) (map[uuid.UUI
 func (f *faultReader) credentialIDs(context.Context, string, []uuid.UUID) (map[uuid.UUID]*uuid.UUID, error) {
 	return map[uuid.UUID]*uuid.UUID{}, f.hit("credentialIDs")
 }
+
+// enabledDatasetKeys: every asked integration has the "commits" row on, so a
+// whole-integration config shows "git".
+func (f *faultReader) enabledDatasetKeys(_ context.Context, _ string, ids []uuid.UUID) (map[uuid.UUID][]string, error) {
+	out := map[uuid.UUID][]string{}
+	for _, id := range ids {
+		out[id] = []string{"commits"}
+	}
+	return out, f.hit("enabledDatasetKeys")
+}
 func (f *faultReader) sourcesForIntegration(context.Context, string, uuid.UUID, string) ([]plannerSource, error) {
 	return nil, f.hit("sourcesForIntegration")
 }
@@ -165,8 +175,8 @@ func TestEveryStoreFailureIsA500(t *testing.T) {
 		values  map[string]string
 		methods []string
 	}{
-		{"list", func(h *handlers) http.HandlerFunc { return h.listSyncConfigs }, nil, []string{"listConfigs", "childrenCounts", "credentialIDs"}},
-		{"get", func(h *handlers) http.HandlerFunc { return h.getSyncConfig }, config, []string{"configByID", "credentialIDs"}},
+		{"list", func(h *handlers) http.HandlerFunc { return h.listSyncConfigs }, nil, []string{"listConfigs", "childrenCounts", "credentialIDs", "enabledDatasetKeys"}},
+		{"get", func(h *handlers) http.HandlerFunc { return h.getSyncConfig }, config, []string{"configByID", "credentialIDs", "enabledDatasetKeys"}},
 		{"repositories", func(h *handlers) http.HandlerFunc { return h.getRepositories }, config, []string{"configByID", "sourcesForIntegration", "childOptions"}},
 		{"jobs", func(h *handlers) http.HandlerFunc { return h.listJobs }, config, []string{
 			"configByID", "scheduledSyncJobIDs", "jobRuns", "syncRunsByID", "unitStatusCounts", "unitRanges#1", "unitRanges#2"}},

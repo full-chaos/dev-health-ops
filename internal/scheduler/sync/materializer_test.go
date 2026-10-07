@@ -32,6 +32,39 @@ func TestRequestedDatasetKeysPreservesLiveConfigRoutingSemantics(t *testing.T) {
 	}
 }
 
+// TestRequestedDatasetKeysNarrowOnlyAChildConfigForEveryProvider: at plan
+// time the dataset ROW decides and a config's sync_targets list narrows only
+// a child config pinned to one source (CHAOS-8816 keeps this unchanged). For
+// github, gitlab, jira and linear: a whole-integration config (no source)
+// names no dataset whatever its list says, so every enabled row is planned;
+// a child's list names exactly the keys of its targets.
+func TestRequestedDatasetKeysNarrowOnlyAChildConfigForEveryProvider(t *testing.T) {
+	child := "00000000-0000-4000-8000-000000000001"
+	for _, testCase := range []struct {
+		provider string
+		targets  []string
+		want     []string
+	}{
+		{"github", []string{"prs"}, []string{"prs", "pr-reviews", "pr-comments"}},
+		{"github", []string{"cicd", "tests"}, []string{"cicd", "tests"}},
+		{"gitlab", []string{"incidents", "feature-flags"}, []string{"incidents", "feature-flags"}},
+		{"jira", []string{"operational"}, []string{"incidents"}},
+		{"jira", []string{"work-items"}, []string{"work-items", "work-item-labels", "work-item-projects", "work-item-history", "work-item-comments"}},
+		{"linear", []string{"work-items"}, []string{"work-items", "work-item-labels", "work-item-projects", "work-item-history", "work-item-comments"}},
+	} {
+		if got := requestedDatasetKeys(testCase.provider, testCase.targets, nil); got != nil {
+			t.Errorf("%s %v whole-integration: dataset scope %v, want nil (every enabled row)", testCase.provider, testCase.targets, got)
+		}
+		want := map[string]bool{}
+		for _, key := range testCase.want {
+			want[key] = true
+		}
+		if got := requestedDatasetKeys(testCase.provider, testCase.targets, &child); !reflect.DeepEqual(got, want) {
+			t.Errorf("%s %v child: dataset scope %v, want %v", testCase.provider, testCase.targets, got, want)
+		}
+	}
+}
+
 // TestSourceIDCanonicalizationMatchesEveryFormatPythonAccepts is the input-
 // shape enumeration team-lead requested for the source_ids seam (codex gate
 // round 7's canonicalization fix, .codex-review-context.md's table): proves

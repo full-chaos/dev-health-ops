@@ -332,3 +332,73 @@ func OperatorControlledDatasetKeys(provider string) []string {
 	}
 	return keys
 }
+
+// DerivedSyncTargets is the sync_targets list a whole-integration config
+// shows for the integration's ENABLED dataset keys (CHAOS-8816): every
+// operator-selectable target that is the legacy target of at least one
+// enabled key the provider supports, in legacyTargetOrder. A key the provider
+// does not support is ignored; "blame" and "security" map to targets the
+// form does not offer and never show. The caller passes enabled keys only: a
+// row that exists and is off is not in the list.
+func DerivedSyncTargets(provider string, enabledKeys []string) []string {
+	providerKey := pythonparity.Lower(provider)
+	present := map[string]bool{}
+	for _, key := range enabledKeys {
+		capability, ok := datasetCapabilities[providerKey][key]
+		if !ok {
+			continue
+		}
+		for _, target := range capability.LegacyTargets {
+			if operatorSelectableSyncTargets[target] {
+				present[target] = true
+			}
+		}
+	}
+	targets := []string{}
+	for _, target := range legacyTargetOrder {
+		if present[target] {
+			targets = append(targets, target)
+		}
+	}
+	return targets
+}
+
+// SyncTargetHasDataset reports whether target is the legacy target of at
+// least one dataset of the provider. A target with no dataset (GitHub
+// "incidents") is kept in a config's list as stored: no row can show it.
+func SyncTargetHasDataset(provider, target string) bool {
+	for _, capability := range datasetCapabilities[pythonparity.Lower(provider)] {
+		for _, legacy := range capability.LegacyTargets {
+			if legacy == target {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// SyncTargetHasEnabledDataset reports whether target is the legacy target of
+// at least one of enabledKeys that the provider supports: a row of the target
+// is on. It answers for every target, also one the config form does not
+// offer ("blame", "security"), which DerivedSyncTargets never names.
+func SyncTargetHasEnabledDataset(provider, target string, enabledKeys []string) bool {
+	capabilities := datasetCapabilities[pythonparity.Lower(provider)]
+	for _, key := range enabledKeys {
+		capability, ok := capabilities[key]
+		if !ok {
+			continue
+		}
+		for _, legacy := range capability.LegacyTargets {
+			if legacy == target {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// OperatorSelectableSyncTarget reports whether the config form offers target
+// as a checkbox for some provider. A save switches dataset rows off only for
+// these; a target a request adds is switched on whether the form offers it
+// or not.
+func OperatorSelectableSyncTarget(target string) bool { return operatorSelectableSyncTargets[target] }

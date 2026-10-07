@@ -8,3 +8,14 @@ func SupportsDataset(provider, dataset string) bool {
 	_, ok := datasetSpecification(provider, dataset)
 	return ok
 }
+
+// SupportedDatasetKeys is the provider's registered dataset keys in
+// DatasetKey order (supported_datasets): the order every explicit dataset
+// key list is written in.
+func SupportedDatasetKeys(provider string) []string {
+	keys := []string{}
+	for _, entry := range providerDatasets(provider) {
+		keys = append(keys, entry.Key)
+	}
+	return keys
+}

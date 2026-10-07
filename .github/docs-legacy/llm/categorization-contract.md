@@ -128,6 +128,19 @@ Every run records a `categorization_status`:
 | `no_text_sources` | No usable source text → fallback |
 | `llm_task_failed` | The async LLM task raised before an outcome was recorded → fallback |
 
+> **Served decision mode (CHAOS-8874).** For an organization on
+> `INVESTMENT_SERVED_DECISION_ORG_IDS` the mix comes from the TypeSafe decision
+> backend (one request, no repair). Its rows use the same statuses: `ok` for a
+> validated mix with its one quote; `invalid_llm_output` also for a row whose mix
+> is the backend's own best answer with **no validated evidence quote** — the
+> top raw-probability category at 1.0 when no category passed the support floor
+> (audit code `decision_zero_support`), or the mix of the support levels when the
+> evidence answer was "none" (audit code `decision_evidence_none`). These two are
+> not the neutral prior; their `evidence_quality` is capped at 0.3 like every
+> `invalid_llm_output` row, and the next run asks the unit again. A failed
+> request that can pass later writes no row (the unit's last row stays); there
+> is no fallback to a generative provider.
+
 > The fallback is a **neutral prior** (`FALLBACK_PRIOR`), not "unknown". It preserves the
 > never-unknown guarantee but means *"insufficient validated evidence"* — pair it with a
 > low `evidence_quality` reading in any UX.

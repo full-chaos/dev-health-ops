@@ -149,14 +149,52 @@ How to give it to that group only:
 
 - **Helm:** every worker group loads the shared ConfigMap and the shared
   Secret, so a key placed there reaches all groups. Set the key, and the
-  `INVESTMENT_SHADOW_*` switch, in `goWorkers.groups[].extraEnv` of the `heavy`
+  `INVESTMENT_SHADOW_*` or `INVESTMENT_SERVED_DECISION_ORG_IDS` switch, in `goWorkers.groups[].extraEnv` of the `heavy`
   group, with the key as a `secretKeyRef` to a separate Secret that holds only
   that key. Nothing is rendered when `extraEnv` is not set.
 - **Docker Compose:** the root `compose.yml` and the bigboy worker overlay
   (`ci/bigboy/compose.bigboy.workers.yml`) pass `TYPESAFE_*` and
-  `INVESTMENT_SHADOW_*` from the shell or `--env-file` of the compose command to
+  `INVESTMENT_SHADOW_*` and `INVESTMENT_SERVED_DECISION_ORG_IDS` from the shell or `--env-file` of the compose command to
   `go-worker-heavy` only. Do not put them in `ops/.env`: every worker reads it.
   Unset values are empty, which means off.
+
+### Investment categorization served by the decision backend
+
+`INVESTMENT_SERVED_DECISION_ORG_IDS` selects, for each organization, which
+backend writes the investment categorization that users see. It is **off by
+default**: with the variable empty no TypeSafe client is built for the served
+path and the configured LLM provider categorizes every organization.
+
+| Variable | Meaning | Default |
+| --- | --- | --- |
+| `INVESTMENT_SERVED_DECISION_ORG_IDS` | Comma-separated organization ids whose categorization is written by the TypeSafe decision backend; `*` means every organization. | empty (off) |
+
+For an organization on the list:
+
+- Each work unit with enough text gets one request to the decision backend.
+  There is no repair request and no second provider.
+- The rows carry a `categorization_model_version` that starts with
+  `provider=typesafe;api=systemone;`, so they are told apart from the rows of
+  an LLM provider. Each work unit is categorized again one time after the
+  switch, because the version is new.
+- A work unit for which the backend finds no clear category gets its most
+  probable category with a low `evidence_quality` (0.3 or less) and no evidence
+  quote. Such a unit is asked again by the next run.
+- A work unit whose request fails for a reason that can pass (a timeout, a
+  rate limit, a server error) gets no new row in that run: its last row stays,
+  and the next run asks again. A work unit that never had a row has none until
+  a later run answers it.
+- A rejected key or an unknown model ends the run with an error, like the
+  same failure of an LLM provider.
+- The run's usage is recorded under provider `typesafe` and the configured
+  model, so the LLM spend view shows it as its own line.
+- The shadow phase (below) is off for that organization.
+
+The switch needs `TYPESAFE_API_KEY` (above). An organization on the list with a
+missing key, or with a `TYPESAFE_*` value that cannot be used, fails its
+`investment.materialize` run with an error: it is never categorized by the LLM
+provider in silence. To go back to the LLM provider, take the organization off
+the list.
 
 ### Investment shadow categorization
 

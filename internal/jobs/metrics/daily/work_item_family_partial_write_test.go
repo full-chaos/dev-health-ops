@@ -409,3 +409,40 @@ func TestWorkItemScopeFamiliesTakeTheVersionBeforeTheFirstRead(t *testing.T) {
 		})
 	}
 }
+
+// The estimate family computes from the items only, so it reads no
+// transition; the other two families read them.
+func TestWorkItemEstimateFamilyReadsNoTransitions(t *testing.T) {
+	run := Run{OrganizationID: "org-1", TargetDay: time.Date(2026, 9, 3, 0, 0, 0, 0, time.UTC)}
+	partition := Partition{ID: "partition-1", RepoIDs: []RepositoryID{RepositoryID(workItemFamilyTestRepoID.String())}}
+	for family, test := range map[string]struct {
+		build func(*workItemSendFailingConn) NativeFamilyExecutor
+		reads int
+	}{
+		"work_item": {func(conn *workItemSendFailingConn) NativeFamilyExecutor {
+			return &WorkItemExecutor{conn: conn, nowUTC: time.Now}
+		}, 1},
+		"work_item_estimate": {func(conn *workItemSendFailingConn) NativeFamilyExecutor {
+			return &WorkItemEstimateExecutor{conn: conn, nowUTC: time.Now}
+		}, 0},
+		"work_item_state": {func(conn *workItemSendFailingConn) NativeFamilyExecutor {
+			return &WorkItemStateExecutor{conn: conn, nowUTC: time.Now}
+		}, 1},
+	} {
+		t.Run(family, func(t *testing.T) {
+			conn := &workItemSendFailingConn{}
+			if _, err := test.build(conn).ComputeFamily(context.Background(), run, partition); err != nil {
+				t.Fatal(err)
+			}
+			reads := 0
+			for _, query := range conn.queries {
+				if strings.Contains(query, "FROM work_item_transitions") {
+					reads++
+				}
+			}
+			if reads != test.reads {
+				t.Errorf("reads of work_item_transitions = %d, want %d (queries: %d)", reads, test.reads, len(conn.queries))
+			}
+		})
+	}
+}

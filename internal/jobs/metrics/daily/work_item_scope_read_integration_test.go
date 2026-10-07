@@ -29,10 +29,14 @@ var (
 	scopeReadRepoD = uuid.MustParse("00000000-0000-4000-8000-0000000000b2")
 )
 
-// scopeReadItem is one stored work item row that was completed on the day. Its
-// provider is github when none is given. Its work scope comes from the four
-// scope columns by the rule of workItemStateWorkItem.workScopeID.
+// scopeReadItem is one stored work item row. With no status, creation time or
+// completion time given it was created the day before and completed on the
+// day. Its provider is github when none is given. Its work scope comes from
+// the four scope columns by the rule of workItemStateWorkItem.workScopeID.
 type scopeReadItem struct {
+	status             string
+	createdAt          time.Time
+	completedAt        time.Time
 	org, id, projectID string
 	provider           string
 	projectKey         string
@@ -51,8 +55,22 @@ func seedScopeReadItems(t *testing.T, ctx context.Context, conn driver.Conn, ite
 	if err != nil {
 		t.Fatalf("prepare work_items: %v", err)
 	}
-	completedAt := scopeReadDay.Add(10 * time.Hour)
 	for _, item := range items {
+		status, createdAt := "done", scopeReadDay.Add(-24*time.Hour)
+		completed := scopeReadDay.Add(10 * time.Hour)
+		completedAt := &completed
+		if item.status != "" {
+			status = item.status
+		}
+		if !item.createdAt.IsZero() {
+			createdAt = item.createdAt
+		}
+		if !item.completedAt.IsZero() {
+			completed = item.completedAt
+		}
+		if status != "done" {
+			completedAt = nil
+		}
 		lastSynced := item.lastSynced
 		if lastSynced.IsZero() {
 			lastSynced = scopeReadDay.Add(12 * time.Hour)
@@ -63,8 +81,8 @@ func seedScopeReadItems(t *testing.T, ctx context.Context, conn driver.Conn, ite
 			provider = "github"
 		}
 		if err := batch.Append(
-			item.repo, item.id, provider, "story", "done", item.projectID, item.projectKey, item.projectName, item.nativeTeamKey,
-			scopeReadDay.Add(-24*time.Hour), &completedAt, &storyPoints, item.org, lastSynced,
+			item.repo, item.id, provider, "story", status, item.projectID, item.projectKey, item.projectName, item.nativeTeamKey,
+			createdAt, completedAt, &storyPoints, item.org, lastSynced,
 		); err != nil {
 			t.Fatalf("append work item %s: %v", item.id, err)
 		}
@@ -345,6 +363,55 @@ func TestWorkItemScopeReadFindsAScopeByEachOfItsColumns(t *testing.T) {
 	if got, want := scopeReadItemIDs(read),
 		"empty-a,empty-b,native-team-key-a,native-team-key-b,project-id-a,project-id-b,project-key-a,project-key-b,project-name-a,project-name-b"; got != want {
 		t.Errorf("items = %s\nwant    %s", got, want)
+	}
+}
+
+// The read takes the items of the day by the predicate of the per-repository
+// loaders: created before the end of the day, and not done before its start.
+// A scope whose only item is outside the day is not a scope of the partition.
+// A transition at or after the end of the day is not read. The estimate
+// family computes from the stored story points of the open item.
+func TestWorkItemScopeReadTakesTheItemsAndTransitionsOfTheDay(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	conn := workItemAttributionLinkedIssueMigratedClickHouse(t, ctx)
+
+	dayEnd := scopeReadDay.Add(24 * time.Hour)
+	seedScopeReadItems(t, ctx, conn,
+		scopeReadItem{org: scopeReadOrgA, repo: scopeReadRepoA, id: "done-on-the-day", projectID: "shared", storyPoints: 3},
+		scopeReadItem{org: scopeReadOrgA, repo: scopeReadRepoA, id: "open", projectID: "shared", storyPoints: 3, status: "todo"},
+		scopeReadItem{org: scopeReadOrgA, repo: scopeReadRepoA, id: "created-at-the-day-end", projectID: "shared", storyPoints: 3,
+			status: "todo", createdAt: dayEnd},
+		scopeReadItem{org: scopeReadOrgA, repo: scopeReadRepoA, id: "done-before-the-day", projectID: "shared", storyPoints: 3,
+			completedAt: scopeReadDay.Add(-time.Hour)},
+		scopeReadItem{org: scopeReadOrgA, repo: scopeReadRepoA, id: "of-a-later-scope", projectID: "later-scope", storyPoints: 3,
+			status: "todo", createdAt: dayEnd},
+		scopeReadItem{org: scopeReadOrgA, repo: scopeReadRepoA, id: "of-an-earlier-scope", projectID: "earlier-scope", storyPoints: 3,
+			completedAt: scopeReadDay.Add(-time.Hour)},
+	)
+	seedScopeReadTransition(t, ctx, conn, scopeReadOrgA, scopeReadRepoA, "open", scopeReadDay.Add(6*time.Hour))
+	seedScopeReadTransition(t, ctx, conn, scopeReadOrgA, scopeReadRepoA, "open", dayEnd)
+
+	read := readWorkItemScope(t, ctx, conn, scopeReadOrgA, scopeReadRepoA)
+	if want := (workItemScopeReadStats{Scopes: 1, ItemsInPartition: 2, FilterValues: 1}); read.Stats != want {
+		t.Errorf("stats = %+v, want %+v", read.Stats, want)
+	}
+	if got := scopeReadItemIDs(read); got != "done-on-the-day,open" {
+		t.Errorf("items = %s, want done-on-the-day,open", got)
+	}
+	if len(read.Transitions) != 1 || !read.Transitions[0].OccurredAt.Equal(scopeReadDay.Add(6*time.Hour)) {
+		t.Errorf("transitions = %+v, want the one transition before the end of the day", read.Transitions)
+	}
+
+	runWorkItemScopeFamilies(t, ctx, conn, scopeReadOrgA, scopeReadRepoA)
+	var estimated uint64
+	if err := conn.QueryRow(ctx, `
+SELECT toUInt64(sum(estimated_count)) FROM estimate_coverage_metrics_daily FINAL
+WHERE org_id = ? AND day = ? AND work_scope_id = 'shared'`, scopeReadOrgA, scopeReadDay).Scan(&estimated); err != nil {
+		t.Fatal(err)
+	}
+	if estimated != 1 {
+		t.Errorf("open items with an estimate in the scope = %d, want 1: the open item of the day has story points", estimated)
 	}
 }
 

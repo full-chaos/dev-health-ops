@@ -54,11 +54,11 @@ type touchedFaultStore struct {
 	failMark   bool
 }
 
-func (store touchedFaultStore) RecordTouched(ctx context.Context, org string, since time.Time) (uint64, error) {
+func (store touchedFaultStore) RecordTouched(ctx context.Context, org string, since time.Time, windowDays []time.Time) (uint64, error) {
 	if store.failRecord {
 		return 0, syncdispatchruntime.ErrTouchedDaysUnavailable
 	}
-	return store.TouchedDaysStore.RecordTouched(ctx, org, since)
+	return store.TouchedDaysStore.RecordTouched(ctx, org, since, windowDays)
 }
 
 func (store touchedFaultStore) MarkDispatched(ctx context.Context, org string, at time.Time, days []time.Time, keys []syncdispatchruntime.TouchedDayKey) error {
@@ -75,7 +75,12 @@ type touchedRig struct {
 
 func newTouchedRig(t *testing.T, ctx context.Context) *touchedRig {
 	t.Helper()
-	rig := newNilPartitionRig(t, ctx)
+	return newTouchedRigOn(t, ctx, newNilPartitionRig(t, ctx))
+}
+
+// newTouchedRigOn adds the touched-day store and the post_sync route to a rig.
+func newTouchedRigOn(t *testing.T, ctx context.Context, rig *nilPartitionRig) *touchedRig {
+	t.Helper()
 	touched, err := syncdispatchruntime.NewClickHouseTouchedDaysStore(rig.conn)
 	if err != nil {
 		t.Fatal(err)
@@ -108,12 +113,20 @@ func (rig *touchedRig) service(t *testing.T, store syncdispatchruntime.TouchedDa
 // over [day, day] and returns the arguments of its post_sync job.
 func (rig *touchedRig) seedSync(t *testing.T, ctx context.Context, orgID, dataset string, day time.Time) syncdispatchruntime.PostSyncArgs {
 	t.Helper()
+	return rig.seedSyncWindow(t, ctx, orgID, dataset, day, day.Add(12*time.Hour))
+}
+
+// seedSyncWindow seeds a sync run with one successful unit of the window
+// [since, before). The window is one the work-items route accepts: the
+// fan-out records its days as touched.
+func (rig *touchedRig) seedSyncWindow(t *testing.T, ctx context.Context, orgID, dataset string, since, before time.Time) syncdispatchruntime.PostSyncArgs {
+	t.Helper()
 	runID, outboxID, integrationID := uuid.NewString(), uuid.NewString(), uuid.NewString()
 	pgseed.EnsureSyncRun(ctx, t, rig.pool, pgseed.SyncRun{ID: runID, OrgID: orgID, IntegrationID: integrationID})
 	pgseed.SyncDispatchOutbox(ctx, t, rig.pool, outboxID, runID, orgID, "post_sync", "dispatched", "river", touchedRigRouteGeneration)
 	pgseed.InsertSyncRunUnit(ctx, t, rig.pool, pgseed.SyncRunUnit{
 		ID: uuid.NewString(), RunID: runID, OrgID: orgID, IntegrationID: integrationID, SourceID: uuid.NewString(),
-		DatasetKey: dataset, Status: "success", SinceAt: &day, BeforeAt: &day,
+		DatasetKey: dataset, Status: "success", SinceAt: &since, BeforeAt: &before,
 	})
 	return syncdispatchruntime.PostSyncArgs{TransportArgs: syncdispatchruntime.TransportArgs{
 		Version: syncdispatchruntime.ContractVersionV1, OrgID: orgID, RunID: runID,
@@ -383,6 +396,64 @@ func TestPostSyncFanoutRecomputesEveryDayTheRawRowsTouched(t *testing.T) {
 	}
 }
 
+// The unit computes nothing for the days of its window, so the fan-out records
+// every day of the window as touched, for the repositories the run stored a
+// work item of. The window here is 21 days and the raw rows of the run have
+// their events on one far day: the days of the window behind the 14 days of
+// the full-organization runs get a run only from the window.
+func TestPostSyncFanoutRecordsEveryDayOfTheUnitWindow(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Minute)
+	defer cancel()
+	rig := newTouchedRig(t, ctx)
+	orgID := uuid.NewString()
+	target := time.Date(2026, 8, 20, 0, 0, 0, 0, time.UTC)
+	far := target.AddDate(0, 0, -60)
+	repoA, repoB := uuid.New(), uuid.New()
+	insertTouchedRepo(t, ctx, rig.conn, orgID, repoA, "acme/api", "github")
+	insertTouchedRepo(t, ctx, rig.conn, orgID, repoB, "acme/web", "github")
+	now := time.Now().UTC()
+	insertTouchedItems(t, ctx, rig.conn, orgID,
+		touchedItem{repo: repoA, id: "gh:acme/api#1", provider: "github", day: far, completed: true, synced: now},
+		// An item of an earlier run: its repository gets no day of the window.
+		touchedItem{repo: repoB, id: "gh:acme/web#1", provider: "github", day: far, completed: true,
+			synced: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)},
+	)
+	since := target.AddDate(0, 0, -20)
+	args := rig.seedSyncWindow(t, ctx, orgID, "work-items", since, target.Add(12*time.Hour))
+	service := rig.service(t, rig.touched, nil)
+	if err := service.Fanout(ctx, args); err != nil {
+		t.Fatal(err)
+	}
+	runs := rig.runsOf(t, ctx, orgID, args)
+	want := []string{far.Format("2006-01-02")}
+	for day := since; !day.After(target); day = day.AddDate(0, 0, 1) {
+		want = append(want, day.Format("2006-01-02"))
+	}
+	sort.Strings(want)
+	if got := touchedRunDays(runs); !reflect.DeepEqual(got, want) {
+		t.Fatalf("days with a run\n got %v\nwant the far day and the 21 days of the unit window %v", got, want)
+	}
+	behindTheFullOrganizationRuns := 0
+	for day, run := range runs {
+		if run.fullOrg {
+			continue
+		}
+		if run.repos != repoA.String() {
+			t.Fatalf("day %s: repositories of the run = %q, want the repository of the run's work item", day, run.repos)
+		}
+		if day != far.Format("2006-01-02") {
+			behindTheFullOrganizationRuns++
+		}
+	}
+	if behindTheFullOrganizationRuns != 6 {
+		t.Fatalf("window days with a run of their own = %d, want the 6 days behind the 15 full-organization days (runs: %+v)",
+			behindTheFullOrganizationRuns, runs)
+	}
+	if got := rig.pendingDays(t, ctx, orgID); len(got) != 0 {
+		t.Fatalf("pending days after the fan-out = %v, want none", got)
+	}
+}
+
 // One hundred touched days: a fan-out takes the 31 newest, the other 69 stay
 // pending, and each later fan-out of the organization takes 31 more, also a
 // fan-out of a sync that wrote no work item.
@@ -483,8 +554,10 @@ func TestPostSyncFanoutTouchedDaySurvivesEveryFailurePoint(t *testing.T) {
 		if got := rig.runsOf(t, ctx, orgID, args); len(got) != 0 {
 			t.Fatalf("runs after the rollback = %v, want none", got)
 		}
-		if got := rig.pendingDays(t, ctx, orgID); !reflect.DeepEqual(got, []string{touchedKey}) {
-			t.Fatalf("pending after the rollback = %v, want %s", got, touchedKey)
+		// The day of the row and the day of the unit window are both
+		// recorded, and no run started: both stay pending.
+		if got := rig.pendingDays(t, ctx, orgID); !reflect.DeepEqual(got, both) {
+			t.Fatalf("pending after the rollback = %v, want %v", got, both)
 		}
 		if err := healthy.Fanout(ctx, args); err != nil {
 			t.Fatal(err)
@@ -506,8 +579,8 @@ func TestPostSyncFanoutTouchedDaySurvivesEveryFailurePoint(t *testing.T) {
 		if got := touchedRunDays(rig.runsOf(t, ctx, orgID, args)); !reflect.DeepEqual(got, both) {
 			t.Fatalf("runs = %v, want %v", got, both)
 		}
-		if got := rig.pendingDays(t, ctx, orgID); !reflect.DeepEqual(got, []string{touchedKey}) {
-			t.Fatalf("pending after the failed mark = %v, want %s", got, touchedKey)
+		if got := rig.pendingDays(t, ctx, orgID); !reflect.DeepEqual(got, both) {
+			t.Fatalf("pending after the failed mark = %v, want %v", got, both)
 		}
 		next := rig.seedSync(t, ctx, orgID, "work-items", target)
 		rig.setRunStart(t, ctx, next, time.Now().UTC().Add(time.Hour))

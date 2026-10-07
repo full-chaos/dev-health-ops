@@ -360,7 +360,7 @@ func TestTouchedDaysDrain(t *testing.T) {
 				repo: repo, id: fmt.Sprintf("gh:acme/split-%d#1", index), provider: "github", day: day, completed: true, synced: now})
 		}
 		sort.Strings(repositories)
-		if _, err := rig.touched.RecordTouched(ctx, orgID, now.Add(-time.Hour)); err != nil {
+		if _, err := rig.touched.RecordTouched(ctx, orgID, now.Add(-time.Hour), nil); err != nil {
 			t.Fatal(err)
 		}
 		drain := rig.drain(t, nil, drainFaultRuns{touchedDrainRuns: rig.productionRuns(), limit: 2})
@@ -455,7 +455,7 @@ WHERE org_id = $1::uuid AND target_day = $2::date AND status IN ('pending', 'run
 		later := time.Now().UTC().Add(time.Minute)
 		insertTouchedItems(t, ctx, rig.conn, orgID,
 			touchedItem{repo: uuid.Nil, id: "linear:OPS-other", provider: "linear", day: other, synced: later})
-		if _, err := rig.touched.RecordTouched(ctx, orgID, later.Add(-time.Second)); err != nil {
+		if _, err := rig.touched.RecordTouched(ctx, orgID, later.Add(-time.Second), nil); err != nil {
 			t.Fatal(err)
 		}
 		rig.logs.Reset()

@@ -379,6 +379,40 @@ older days (an item completed three weeks ago, a late transition). The
 post-sync fan-out therefore starts a daily run for every day that the raw rows
 of its sync run touched, not only for the window of the run.
 
+**Who writes the nine work-item tables.** The work-items sync unit of github,
+gitlab, jira and linear writes none of `work_item_metrics_daily`,
+`work_item_user_metrics_daily`, `work_item_cycle_times`,
+`work_item_state_durations_daily`, `estimate_coverage_metrics_daily`,
+`work_item_team_attributions`, `issue_type_metrics_daily`,
+`investment_classifications_daily` and `investment_metrics_daily`. The daily
+job is their one writer (the families `work_item`, `work_item_state`,
+`work_item_estimate`, `work_item_attribution`, `work_item_issue_type` and
+`work_item_investment` of `internal/jobs/metrics/daily`); each provider's sync
+sink refuses an effect for one of the nine. A unit used to compute these
+tables for every day of its window from only the items it held, so a unit
+with a part of a work scope wrote a too-small number for the day. A unit logs
+`providersync.work_items.derived_tables_left_to_daily_job` and counts
+`dev_health_work_item_derived_tables_left_to_daily_job_total{provider}`.
+
+**The days of the unit window.** Because the unit computes nothing for the
+days of its window, the fan-out marks every UTC day of the window of each
+successful work-items unit as touched, for each repository the run stored a
+work item of (the *window days*). Without them an open item with no event on a
+day would get no state or WIP row for that day from a first sync. The day
+mapping is ONE function, `providersync.WorkItemsUnitWindowDays`
+(`internal/providersync/work_items_unit_window.go`): the four routes validate
+a unit window with it before any provider request, and the fan-out marks the
+days it returns (`PostSyncPlan.WorkItemWindowDays`), so the days a unit is
+validated for and the days the daily job recomputes for it cannot differ.
+`before` is exclusive; a window of more than 366 days, or a `since` day after
+the `before` day, is malformed. An hourly unit gives 1 window day (2 over
+midnight), a backfill chunk of 7 days gives 7, and the bound is 366.
+
+**What a reader sees between a sync and the recompute.** The last result of
+the daily job for the day: complete, and some minutes old. For a day that has
+no row yet (a new day, a first sync) the row is absent, not zero. A reader
+never sees a number computed from a part of the items.
+
 Code: `internal/syncdispatchruntime/touched_days.go` (the three steps of the
 fan-out), `touched_days_clickhouse.go` (the record), and
 `dailyPostSyncWriter.StartTouchedDayTx` in
@@ -401,9 +435,16 @@ never reads the rows as they are. Every `at` is the ClickHouse clock.
    sync run minus five minutes (`postSyncTouchedClockMargin`: the two times
    come from two processes). The days of an item are the days of `created_at`,
    `started_at`, `completed_at` and `closed_at`; the day of a transition is the
-   day of `occurred_at`, under the repository of its item. Then the fan-out
-   reads the pending days, newest first (at most 3660), with the time of the
-   read (`TakenAt`). A failure here fails the fan-out; it is never read as "no
+   day of `occurred_at`, under the repository of its item. A second
+   statement appends a `touched` event for each window day
+   (`PostSyncPlan.WorkItemWindowDays`) and each repository of the work items
+   written since that time. A unit with no `before` has no stored end of its
+   window: its window is taken up to the day the sync run started, and every
+   day from that day to now is added. A stored window that
+   `WorkItemsUnitWindowDays` refuses fails the fan-out
+   (`ErrPostSyncUnavailable`): a successful unit passed the same rule. Then
+   the fan-out reads the pending days, newest first (at most 3660), with the
+   time of the read (`TakenAt`). A failure here fails the fan-out; it is never read as "no
    day was touched".
 2. *In the transaction*, after the run of the window: the days of the window
    need no second run. Of the other pending days the fan-out takes the 31
@@ -443,6 +484,11 @@ did not commit.
 
 **Limits.**
 
+- A first sync or a backfill marks every day of its windows, and a fan-out
+  takes 31 of them: a backfill of one year needs about 12 fan-outs of the
+  organization, or the drain, before every day has its rows. After a
+  rolled-back fan-out or a failed mark, the window days stay pending like
+  every other touched day.
 - A fan-out takes the 31 newest pending days. The rest is taken by the drain,
   newest first too (see "Drain of the pending touched days"). An operator sees the
   carry-over of a fan-out in the Info field `touched_days_carried_over` of the

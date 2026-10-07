@@ -15,8 +15,10 @@ import (
 
 // This test deliberately builds effect batches from the typed rows that the
 // derived builders persist. It then sends those batches through the Linear
-// dispatcher into ClickHouse migrated by newWorkItemEffectsConn; no test-local
-// DDL or semantic backend stands in for the destination tables.
+// sync sink into ClickHouse migrated by newWorkItemEffectsConn; no test-local
+// DDL or semantic backend stands in for the destination tables. The sink
+// writes and reads back ai_attribution, fences it by tenant, and refuses each
+// of the nine tables the daily job computes from stored rows.
 func TestLinearDerivedClickHouseEffectsPersistReadBackAndFenceTenants(t *testing.T) {
 	ctx, conn := newWorkItemEffectsConn(t)
 	claim := nativeTestClaim("linear", "work-items")
@@ -29,44 +31,56 @@ func TestLinearDerivedClickHouseEffectsPersistReadBackAndFenceTenants(t *testing
 		t.Fatal(err)
 	}
 
-	if len(effects) != len(linearWorkItemDerivedEffectDestinations) {
+	if len(effects) != len(linearWorkItemDerivedEffectDestinations) || len(effects) != 10 {
 		t.Fatalf("effects=%d want=%d", len(effects), len(linearWorkItemDerivedEffectDestinations))
 	}
+	refused := 0
 	for _, effect := range effects {
-		if err := sink.WriteEffect(ctx, claim, effect); err != nil {
-			t.Fatalf("write %s: %v", effect.Destination, err)
+		if effect.Destination == "ai_attribution" {
+			continue
 		}
-		inspection, err := sink.InspectEffect(ctx, claim, effect)
-		if err != nil || inspection != EffectExact {
-			t.Fatalf("readback %s: inspection=%s error=%v", effect.Destination, inspection, err)
-		}
+		refused++
+		t.Run("refuses "+effect.Destination, func(t *testing.T) {
+			assertSyncSinkRefusesDailyJobTable(t, ctx, conn, sink, claim, effect)
+		})
 	}
-	if lease.calls == 0 {
-		t.Fatal("dispatcher did not assert its lease around migrated ClickHouse writes")
+	if refused != 9 {
+		t.Fatalf("refused effects=%d want one for each of the nine tables of the daily job", refused)
+	}
+	if lease.calls != 0 {
+		t.Fatalf("lease assertions=%d: a refused effect must stop before the lease and the store", lease.calls)
+	}
+
+	aiEffect, ok := effectsByDestination(effects)["ai_attribution"]
+	if !ok || len(aiEffect.Rows) != 1 {
+		t.Fatalf("fixture ai_attribution effect present=%v rows=%d want one row", ok, len(aiEffect.Rows))
+	}
+	if inspection, err := sink.InspectEffect(ctx, claim, aiEffect); err != nil || inspection != EffectAbsent {
+		t.Fatalf("before write: inspection=%s error=%v", inspection, err)
+	}
+	callsBefore := lease.calls
+	if err := sink.WriteEffect(ctx, claim, aiEffect); err != nil {
+		t.Fatalf("write ai_attribution: %v", err)
+	}
+	if lease.calls == callsBefore {
+		t.Fatal("dispatcher did not assert its lease around the migrated ClickHouse write")
+	}
+	if inspection, err := sink.InspectEffect(ctx, claim, aiEffect); err != nil || inspection != EffectExact {
+		t.Fatalf("readback ai_attribution: inspection=%s error=%v", inspection, err)
 	}
 
 	// A row at the same natural key but another tenant must not satisfy the
-	// normal claim. The wrapper accepts the foreign effect only under the
-	// foreign claim, and the real adapter's org_id predicate keeps it invisible
-	// to the original tenant.
-	teamID := "linear-team"
-	teamName := "Linear Team"
+	// normal claim. The sink accepts the foreign effect only under the foreign
+	// claim, and the adapter's org_id predicate keeps it invisible to the
+	// original tenant.
 	foreignClaim := claim
-	foreignClaim.OrgID = "org-other"
-	foreignRow := githubWorkItemStateDurationDailyRow{
-		Day: newGitHubWorkItemDerivedDay(now), Provider: "linear", WorkScopeID: "linear:team",
-		TeamID: teamID, TeamName: teamName, Status: "in_progress", DurationHours: 2,
-		ItemsTouched: 1, ComputedAt: now, AvgWIP: 0.5, OrgID: foreignClaim.OrgID,
+	foreignClaim.OrgID = "88888888-8888-4888-8888-888888888888"
+	foreignEffect, ok := effectsByDestination(linearDerivedIntegrationEffects(t, foreignClaim, now))["ai_attribution"]
+	if !ok {
+		t.Fatal("foreign fixture omitted ai_attribution")
 	}
-	foreignRaw, err := effectRowsFromValues([]githubWorkItemStateDurationDailyRow{foreignRow})
-	if err != nil {
-		t.Fatal(err)
-	}
-	foreignEffect, err := BuildEffectBatch(
-		"work_item_state_durations_daily", EffectReadbackRequired, foreignRaw,
-	)
-	if err != nil {
-		t.Fatal(err)
+	if err := sink.WriteEffect(ctx, claim, foreignEffect); !errors.Is(err, ErrInvalidConfiguration) {
+		t.Fatalf("foreign rows under the normal claim: write error=%v", err)
 	}
 	if err := sink.WriteEffect(ctx, foreignClaim, foreignEffect); err != nil {
 		t.Fatalf("write foreign tenant row: %v", err)
@@ -75,12 +89,25 @@ func TestLinearDerivedClickHouseEffectsPersistReadBackAndFenceTenants(t *testing
 	if !errors.Is(err, ErrInvalidConfiguration) || foreignInspection != EffectConflict {
 		t.Fatalf("foreign effect under normal claim: inspection=%s error=%v", foreignInspection, err)
 	}
+	if inspection, err := sink.InspectEffect(ctx, foreignClaim, foreignEffect); err != nil || inspection != EffectExact {
+		t.Fatalf("foreign tenant readback under its own claim: inspection=%s error=%v", inspection, err)
+	}
 
-	// Verify the actual readback fence with a same-key, normal-tenant effect
+	// Verify the actual readback fence with the same-key, normal-tenant effect
 	// rather than relying only on the wrapper's row/identity validation.
-	normalState := effectsByDestination(effects)["work_item_state_durations_daily"]
-	if inspection, err := sink.InspectEffect(ctx, claim, normalState); err != nil || inspection != EffectExact {
+	if inspection, err := sink.InspectEffect(ctx, claim, aiEffect); err != nil || inspection != EffectExact {
 		t.Fatalf("normal tenant row was displaced by foreign row: inspection=%s error=%v", inspection, err)
+	}
+	var perTenant []uint64
+	for _, orgID := range []string{claim.OrgID, foreignClaim.OrgID} {
+		var stored uint64
+		if err := conn.QueryRow(ctx, "SELECT count() FROM ai_attribution FINAL WHERE org_id = ?", orgID).Scan(&stored); err != nil {
+			t.Fatalf("count ai_attribution rows: %v", err)
+		}
+		perTenant = append(perTenant, stored)
+	}
+	if perTenant[0] != 1 || perTenant[1] != 1 {
+		t.Fatalf("stored ai_attribution rows per tenant=%v want one each", perTenant)
 	}
 }
 
@@ -94,7 +121,7 @@ func TestLinearDerivedClickHouseEffectsRecoverAfterLeaseLoss(t *testing.T) {
 	for _, testCase := range []struct {
 		destination string
 		failAt      int
-	}{{"ai_attribution", 2}, {"work_item_metrics_daily", 4}} {
+	}{{"ai_attribution", 2}} {
 		t.Run(testCase.destination, func(t *testing.T) {
 			target, ok := byDestination[testCase.destination]
 			if !ok {

@@ -518,10 +518,12 @@ func (adapter linearDerivedGitHubAdapter) InspectLinearWorkItemEffect(
 
 var _ LinearWorkItemEffectAdapter = linearDerivedGitHubAdapter{}
 
-// LinearWorkItemDerivedClickHouseEffects is the ten-destination derived
-// dispatcher. It is intentionally separate from the six-fact dispatcher until
-// the Linear activation layer is ready to own the complete sixteen-destination
-// unit.
+// LinearWorkItemDerivedClickHouseEffects is the ai_attribution dispatcher. It
+// is separate from the raw-fact dispatcher because it reuses the shared
+// ai_attribution adapter behind the Linear identity fence.
+// It dispatches ai_attribution only. The nine other adapter fields write
+// tables that the daily job owns; no destination reaches them, and they stay
+// only until the dead-code removal that follows the cut.
 type LinearWorkItemDerivedClickHouseEffects struct {
 	Lease                          providerfoundation.LeaseGuard
 	AIAttribution                  LinearWorkItemEffectAdapter
@@ -647,8 +649,18 @@ func newLinearWorkItemDerivedEffectIdentity(
 	return identity, nil
 }
 
+// linearWorkItemSyncSinkDestinations is the set of destinations the sync sink
+// accepts beside the raw Linear tables: ai_attribution only. The nine tables
+// computed from stored work-item rows are written by the daily job, never by
+// a sync unit, so the sink refuses them.
+var linearWorkItemSyncSinkDestinations = []string{
+	"ai_attribution",
+}
+
+// linearWorkItemDerivedDestination reports whether the sync sink accepts the
+// destination beside the raw tables.
 func linearWorkItemDerivedDestination(destination string) bool {
-	for _, candidate := range linearWorkItemDerivedEffectDestinations {
+	for _, candidate := range linearWorkItemSyncSinkDestinations {
 		if candidate == destination {
 			return true
 		}
@@ -662,32 +674,14 @@ func (sink LinearWorkItemDerivedClickHouseEffects) adapterForDestination(
 	switch destination {
 	case "ai_attribution":
 		return sink.AIAttribution, true
-	case "estimate_coverage_metrics_daily":
-		return sink.EstimateCoverageMetricsDaily, true
-	case "investment_classifications_daily":
-		return sink.InvestmentClassificationsDaily, true
-	case "investment_metrics_daily":
-		return sink.InvestmentMetricsDaily, true
-	case "issue_type_metrics_daily":
-		return sink.IssueTypeMetricsDaily, true
-	case "work_item_cycle_times":
-		return sink.WorkItemCycleTimes, true
-	case "work_item_metrics_daily":
-		return sink.WorkItemMetricsDaily, true
-	case "work_item_state_durations_daily":
-		return sink.WorkItemStateDurationsDaily, true
-	case "work_item_team_attributions":
-		return sink.WorkItemTeamAttributions, true
-	case "work_item_user_metrics_daily":
-		return sink.WorkItemUserMetricsDaily, true
 	default:
 		return nil, false
 	}
 }
 
 func (sink LinearWorkItemDerivedClickHouseEffects) MissingDestinations() []string {
-	missing := make([]string, 0, len(linearWorkItemDerivedEffectDestinations))
-	for _, destination := range linearWorkItemDerivedEffectDestinations {
+	missing := make([]string, 0, len(linearWorkItemSyncSinkDestinations))
+	for _, destination := range linearWorkItemSyncSinkDestinations {
 		adapter, known := sink.adapterForDestination(destination)
 		if !known || adapter == nil {
 			missing = append(missing, destination)

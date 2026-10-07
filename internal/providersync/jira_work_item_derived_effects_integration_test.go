@@ -15,9 +15,11 @@ import (
 
 // This suite applies the production ClickHouse migration chain through
 // githubDerivedIntegrationConn and then exercises the Jira context loader and
-// every derived adapter. It authors no local DDL. The evaluated-empty AI
-// effect is the sole no-I/O destination and must remain EffectAbsent before
-// and after its write call.
+// the Jira sync sink. It authors no local DDL. The sink holds one effect
+// beside the raw tables: the evaluated-empty AI effect, which does no I/O and
+// must remain EffectAbsent before and after its write call. The sink refuses
+// each of the nine tables the daily job computes from stored rows: the effects
+// carry real rows, and no row reaches the store.
 func TestJiraWorkItemDerivedEffectsWriteReadbackAgainstRealClickHouse(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Minute)
 	defer cancel()
@@ -111,43 +113,11 @@ func TestJiraWorkItemDerivedEffectsWriteReadbackAgainstRealClickHouse(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, effect := range effects {
-		t.Run(effect.Destination, func(t *testing.T) {
-			inspection, inspectErr := sink.InspectEffect(ctx, claim, effect)
-			if inspectErr != nil || inspection != EffectAbsent {
-				t.Fatalf("before write: inspection=%v error=%v", inspection, inspectErr)
-			}
-			if err := sink.WriteEffect(ctx, claim, effect); err != nil {
-				t.Fatal(err)
-			}
-			inspection, inspectErr = sink.InspectEffect(ctx, claim, effect)
-			want := EffectExact
-			if effect.Destination == "ai_attribution" {
-				want = EffectAbsent
-			}
-			if inspectErr != nil || inspection != want {
-				t.Fatalf("after write: inspection=%v want=%v error=%v", inspection, want, inspectErr)
-			}
-			if err := sink.WriteEffect(ctx, claim, effect); err != nil {
-				t.Fatalf("replay write: %v", err)
-			}
-		})
+	if len(effects) != 10 {
+		t.Fatalf("effects=%d want the AI effect and one for each of the nine tables of the daily job", len(effects))
 	}
-
 	foreign := claim
 	foreign.OrgID = "org-other"
-	for _, effect := range effects {
-		if effect.Destination == "ai_attribution" {
-			if inspection, err := sink.InspectEffect(ctx, foreign, effect); err != nil || inspection != EffectAbsent {
-				t.Fatalf("foreign evaluated-empty AI=%v err=%v", inspection, err)
-			}
-			continue
-		}
-		if err := sink.WriteEffect(ctx, foreign, effect); !errors.Is(err, ErrInvalidConfiguration) {
-			t.Fatalf("foreign tenant %s write=%v", effect.Destination, err)
-		}
-	}
-
 	lost, err := NewJiraWorkItemDerivedClickHouseEffects(
 		conn,
 		providerfoundation.LeaseGuardFunc(func(context.Context) error {
@@ -157,7 +127,43 @@ func TestJiraWorkItemDerivedEffectsWriteReadbackAgainstRealClickHouse(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := lost.WriteEffect(ctx, claim, effects[1]); !errors.Is(err, providerfoundation.ErrLeaseLost) {
-		t.Fatalf("lease-lost real-store write=%v", err)
+	refused, evaluatedEmpty := 0, 0
+	for _, effect := range effects {
+		if effect.Destination == "ai_attribution" {
+			evaluatedEmpty++
+			t.Run(effect.Destination, func(t *testing.T) {
+				inspection, inspectErr := sink.InspectEffect(ctx, claim, effect)
+				if inspectErr != nil || inspection != EffectAbsent {
+					t.Fatalf("before write: inspection=%v error=%v", inspection, inspectErr)
+				}
+				if err := sink.WriteEffect(ctx, claim, effect); err != nil {
+					t.Fatal(err)
+				}
+				inspection, inspectErr = sink.InspectEffect(ctx, claim, effect)
+				if inspectErr != nil || inspection != EffectAbsent {
+					t.Fatalf("after write: inspection=%v error=%v", inspection, inspectErr)
+				}
+				if err := sink.WriteEffect(ctx, claim, effect); err != nil {
+					t.Fatalf("replay write: %v", err)
+				}
+				if inspection, err := sink.InspectEffect(ctx, foreign, effect); err != nil || inspection != EffectAbsent {
+					t.Fatalf("foreign evaluated-empty AI=%v err=%v", inspection, err)
+				}
+				if err := lost.WriteEffect(ctx, claim, effect); !errors.Is(err, providerfoundation.ErrLeaseLost) {
+					t.Fatalf("lease-lost write=%v", err)
+				}
+			})
+			continue
+		}
+		refused++
+		t.Run("refuses "+effect.Destination, func(t *testing.T) {
+			assertSyncSinkRefusesDailyJobTable(t, ctx, conn, sink, claim, effect)
+			if err := sink.WriteEffect(ctx, foreign, effect); !errors.Is(err, ErrInvalidConfiguration) {
+				t.Fatalf("foreign tenant write=%v", err)
+			}
+		})
+	}
+	if evaluatedEmpty != 1 || refused != 9 {
+		t.Fatalf("AI effects=%d refused=%d want 1 and 9", evaluatedEmpty, refused)
 	}
 }

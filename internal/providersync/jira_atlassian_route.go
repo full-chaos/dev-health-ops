@@ -230,6 +230,17 @@ func (handler JiraAtlassianRouteHandler) Collect(
 		handler.GraphQLClient = &countedGraphQL
 	}
 
+	// CHAOS-8806: the comment time window starts HERE, before the issue search,
+	// so a slow search or slow changelog reads shrink the comment time and never
+	// the reserve for the work items. With no deadline on the context there is
+	// no time budget.
+	commentsStopAt, commentsHaveDeadline := time.Time{}, false
+	if deadline, ok := ctx.Deadline(); ok {
+		started := time.Now()
+		commentsStopAt = started.Add(deadline.Sub(started) / jiraAtlassianCommentsTimeShareDivisor)
+		commentsHaveDeadline = true
+	}
+
 	jql := jiraWorkItemsJQL(claim, projectKey)
 	issues, searchPages, err := collectJiraAtlassianIssues(ctx, client, jql, maxPages, maxRows, perPage)
 	if err != nil {
@@ -257,13 +268,6 @@ func (handler JiraAtlassianRouteHandler) Collect(
 	commentsLimit := jiraOptionInt(claim, "comments_limit", jiraAtlassianDefaultCommentsLimit)
 	commentsBudget := jiraAtlassianCommentsRowBudget(claim)
 	commentsBudgetSkipped, commentsTimeSkipped := 0, 0
-	// With no deadline on the context there is no time budget.
-	commentsStopAt, commentsHaveDeadline := time.Time{}, false
-	if deadline, ok := ctx.Deadline(); ok {
-		started := time.Now()
-		commentsStopAt = started.Add(deadline.Sub(started) / jiraAtlassianCommentsTimeShareDivisor)
-		commentsHaveDeadline = true
-	}
 	fetchWorklogs := jiraOptionBool(claim, "fetch_worklogs", false)
 	useGraphQL := jiraOptionBool(claim, "atlassian_gql_enabled", false)
 	fetchBoardSprints := jiraOptionBool(claim, "fetch_board_sprints", false)
@@ -436,8 +440,12 @@ func (handler JiraAtlassianRouteHandler) Collect(
 				commentsBudgetSkipped++
 			} else {
 				issueLimit := commentsLimit
+				// A budget cut is detected EXACTLY: read one more than the
+				// slots left; an extra row means the budget cuts this issue.
+				budgetCut := false
 				if issueLimit <= 0 || issueLimit > remaining {
-					issueLimit = remaining
+					issueLimit = remaining + 1
+					budgetCut = true
 				}
 				// The read gets its own deadline at stopAt, so one slow comment
 				// fetch that starts before stopAt can never use time after it
@@ -459,6 +467,12 @@ func (handler JiraAtlassianRouteHandler) Collect(
 					commentsTimeSkipped++
 				} else if commentErr != nil {
 					optionalIncomplete = append(optionalIncomplete, "comments:"+item.WorkItemID)
+				} else if budgetCut && len(comments) > remaining {
+					// The row budget cuts this issue's comments. None of them
+					// land: a re-read replaces an issue's whole set, so
+					// none + marker is the state a later run or backfill
+					// completes, the same as a wholly skipped issue.
+					commentsBudgetSkipped++
 				} else {
 					rows.Interactions = append(rows.Interactions,
 						normalizeJiraInteractions(claim, item.WorkItemID, comments, handler.Identity, normalizedAt)...,

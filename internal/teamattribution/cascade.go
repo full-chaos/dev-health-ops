@@ -1268,6 +1268,14 @@ func (derived GithubWorkItemDerivationContext) ResolveWithoutLinked(
 	return teamID, teamName, candidates
 }
 
+// activeTeamsOnly is the one rule for which teams take part in attribution: a
+// team whose newest row is inactive is not loaded, for every provider. Such a
+// team takes no work item by a project key, by its own id or by a native team
+// key, and it is not a team the catalog knows. The newest row decides, so a
+// team that was set inactive and then active again is loaded.
+const activeTeamsOnly = `HAVING argMax(is_active, (updated_at, last_synced, is_active)) = 1`
+
+// LoadTeams reads the ACTIVE teams of one organization (activeTeamsOnly).
 func (source ClickHouseFactSource) LoadTeams(
 	ctx context.Context, orgID string,
 ) ([]GithubWorkItemDerivationTeamFact, error) {
@@ -1279,6 +1287,7 @@ SELECT provider, id,
 FROM teams
 WHERE org_id = ?
 GROUP BY provider, id, org_id
+`+activeTeamsOnly+`
 ORDER BY provider, id
 LIMIT ?`, orgID, GithubWorkItemDerivationContextLimit+1)
 	if err != nil {

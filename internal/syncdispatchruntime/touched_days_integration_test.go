@@ -259,8 +259,8 @@ func TestTouchedDaysMarkEndsOnlyWhatWasDispatched(t *testing.T) {
 	}
 }
 
-// The mark of listed keys carries the time of the read, as the mark of whole
-// days does: a listed key that a later record touched again stays pending.
+// The mark of listed keys carries the time one millisecond before the read,
+// as the mark of whole days does: a listed key that a later record touched again stays pending.
 func TestTouchedDaysMarkOfListedKeysLeavesAKeyTouchedAfterTheRead(t *testing.T) {
 	ctx, conn := newReadbackIntegrationConn(t)
 	store, err := NewClickHouseTouchedDaysStore(conn)

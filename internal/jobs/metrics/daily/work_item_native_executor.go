@@ -132,19 +132,15 @@ type workItemPartitionScope struct {
 	repoIDs         []uuid.UUID
 }
 
-// wrapWorkItemPartialWrite is the codex round 3 fix (astra scale review,
-// the FOURTH instance of the class r2's F3 already found in
-// work_item_state_native_executor.go -- both WorkItemExecutor's `work_item`
-// and WorkItemEstimateExecutor's `work_item_estimate` share this exact
-// per-repo loop shape and had the identical unwrapped-return-total-err bug).
-// Shared here rather than duplicated per file since both executors use the
-// same workItemPartitionScope and the same repoID type. Mirrors
-// wrapWorkGraphEdgesPartialWrite's/wrapWorkItemStatePartialWrite's exact
-// shape: total == 0 returns the error unwrapped (a genuine refusal, nothing
-// to distinguish); total > 0 wraps ErrPartialWrite naming the repo and the
-// true row count, so daily.go's dispatcher (which only distinguishes
-// ErrPartialWrite from every other error) reports PartialWrite/N-rows
-// instead of Refused/0-rows when real rows already landed.
+// wrapWorkItemPartialWrite is the partial-write rule of the families that
+// loop the partition's repositories (work_item_issue_type and
+// work_item_investment): a later repository can fail after the rows of an
+// earlier one landed. total == 0 returns the error unwrapped (a genuine
+// refusal, nothing to distinguish); total > 0 wraps ErrPartialWrite naming
+// the repo and the true row count, so daily.go's dispatcher (which only
+// distinguishes ErrPartialWrite from every other error) reports
+// PartialWrite/N-rows instead of Refused/0-rows when real rows already
+// landed. Mirrors wrapWorkGraphEdgesPartialWrite.
 func wrapWorkItemPartialWrite(family string, total int, repoID uuid.UUID, err error) (int, error) {
 	if total == 0 {
 		return 0, err

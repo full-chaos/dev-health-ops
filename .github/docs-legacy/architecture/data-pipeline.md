@@ -559,8 +559,11 @@ repositories is split: a pass takes 1000 of them as one run and marks only
 those; the next pass, which has another generation, takes the next 1000. Each
 part is one Warn line (`touched_days_drain.day_split`) and one count of
 `days_split`. A part is a run of listed repositories, as the run of every
-touched day is: what it writes for a work scope with items in two
-repositories is the limit named above for the work-item families.
+touched day is. A work scope with items in several repositories can be in
+more than one part: each part computes the scope over the items of every
+repository of the scope (the rule of the work-item families above), so no
+part writes a row of the scope from its own repositories only, and the parts
+together equal one run of every repository. The split depends on that rule.
 
 **A run that ends without a result.** Three ends count: the status `failed`,
 the status `canceled`, and a run that is not ended 24 hours after its creation

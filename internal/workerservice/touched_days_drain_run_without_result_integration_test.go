@@ -214,3 +214,62 @@ UPDATE public.daily_metrics_runs SET created_at = $3 WHERE org_id = $1::uuid AND
 		}
 	})
 }
+
+// A day over the repository limit is taken in parts. A work scope with items
+// in several repositories is in more than one part. No part may write the row
+// of the scope from its own repositories only: after each part, and in every
+// stored version, the row holds the items of every repository of the scope,
+// and after the last part the derived rows equal a run of every repository.
+func TestTouchedDaysDrainSplitOfADayKeepsAWorkScopeOfSeveralRepositoriesWhole(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+	rig := &drainRig{touchedRig: newTouchedRig(t, ctx), observer: &drainObserver{}, logs: &bytes.Buffer{}}
+	orgID := uuid.NewString()
+	day := time.Date(2026, 7, 30, 0, 0, 0, 0, time.UTC)
+	now := time.Now().UTC()
+	const scope = "scope-shared"
+	for index := 0; index < 5; index++ {
+		repo := uuid.New()
+		insertTouchedRepo(t, ctx, rig.conn, orgID, repo, "acme/shared-"+string(rune('a'+index)), "github")
+		insertPartitionKeyItems(t, ctx, rig.conn, orgID, day, partitionKeyItem{
+			repo: repo, id: "gh:acme/shared-" + string(rune('a'+index)) + "#1", scope: scope, synced: now})
+	}
+	if _, err := rig.touched.RecordTouched(ctx, orgID, now.Add(-time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	drain := rig.drain(t, nil, drainFaultRuns{touchedDrainRuns: rig.productionRuns(), limit: 2})
+	var sizes []int
+	for part := 0; part < 5; part++ {
+		drain.DrainTouchedDays(ctx, orgID, pass("e"))
+		_, runID := openDrainRuns(t, ctx, rig.touchedRig, orgID)
+		if runID == "" {
+			break
+		}
+		run, err := rig.store.LoadRun(ctx, runID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		listed := 0
+		for _, partition := range rig.dispatchAndRun(t, ctx, run) {
+			listed += len(partition.RepoIDs)
+		}
+		sizes = append(sizes, listed)
+		endDrainRuns(t, ctx, rig.touchedRig, orgID, "succeeded")
+		got := readWorkScopeRow(t, ctx, rig.conn, orgID, scope, day)
+		if got.itemsCompleted != 5 || got.itemsCompletedInAnyVersion != 5 {
+			t.Fatalf("after part %d (%d repositories) the row of the work scope = %+v, want the 5 items of its 5 repositories in every stored version",
+				len(sizes), listed, got)
+		}
+	}
+	if !reflect.DeepEqual(sizes, []int{2, 2, 1}) {
+		t.Fatalf("parts of %v repositories, want 2, 2, 1", sizes)
+	}
+	split := derivedDaySnapshot(t, ctx, rig.conn, orgID, day)
+	rig.fullRecompute(t, ctx, orgID, day)
+	if whole := derivedDaySnapshot(t, ctx, rig.conn, orgID, day); !reflect.DeepEqual(split, whole) {
+		t.Fatalf("derived rows after the split parts differ from a run of every repository:\nsplit: %v\nwhole: %v", split, whole)
+	}
+	if strings.HasPrefix(split["work_item_metrics_daily"], "0 rows") {
+		t.Fatalf("the split parts wrote no work_item_metrics_daily row: %v", split)
+	}
+}

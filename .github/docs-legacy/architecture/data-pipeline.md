@@ -411,9 +411,15 @@ never reads the rows as they are. Every `at` is the ClickHouse clock.
    of the generation of the sync run, with the pending repositories of the day
    as an explicit list. A day with more than 1000 pending repositories gets
    no run: the daily job refuses a run above that cap, so the day stays
-   pending, an Error line (phase `over_repository_limit`) is logged and the
-   counter event `over_repository_limit` is added for each such day. The day
-   is not drained here (CHAOS-8846 covers the drain). A run that exists for `(day, generation)` is left
+   pending. Such a day never holds one of the 31 slots: the fan-out walks the
+   pending days newest first, 31 days at a time, and starts runs for the 31
+   newest days that can start. The walk is bounded by the pending read (3660
+   days, at most 119 reads of repositories); days it did not reach count as
+   carried over. Each fan-out logs ONE Error line (phase
+   `over_repository_limit`, fields `touched_days_over_limit` = the count,
+   `touched_days_over_limit_newest`, `touched_days_over_limit_oldest`) and adds
+   the count to the counter event `over_repository_limit`. The days are not
+   drained here (CHAOS-8846 covers the drain). A run that exists for `(day, generation)` is left
    as it is and the day stays pending.
 3. *After the commit*: the fan-out appends the `dispatched` events, all one
    millisecond before `TakenAt`, and ends only `touched` events at or before

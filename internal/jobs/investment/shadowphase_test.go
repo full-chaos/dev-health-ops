@@ -326,6 +326,11 @@ func TestANonOkStateIsARowWithAnEmptyMix(t *testing.T) {
 			if len(record.ErrorCodes) == 0 {
 				t.Fatal("a failure row names no error code")
 			}
+			// A zero-support row keeps the level probabilities of all 15 support
+			// keys: a later rule can be computed from the row with no new call.
+			if tc.wantState == decision.StateZeroSupport && (len(record.LevelProbabilities) != 15 || len(record.Levels) != 15 || len(record.LevelProbabilities["quality.bugfix"]) != 4) {
+				t.Fatalf("a zero-support row lost its level probabilities: %d entries, %d levels", len(record.LevelProbabilities), len(record.Levels))
+			}
 			if summary.States[tc.wantState] != 1 || summary.StopReason != ShadowStopDone {
 				t.Fatalf("summary = %+v", summary)
 			}
@@ -353,8 +358,12 @@ func TestTheConfigStampNeverHoldsAResponseField(t *testing.T) {
 	store := &memoryShadowStore{}
 	phase.run(context.Background(), store, shadowTestConfig(), shadowTestEntries(t, "u1", "u2"))
 	want := shadowConfigStamp(decision.IdentityFor(""))
-	if want != "provider=typesafe;api=systemone;model=jev-1.13.0;taxonomy=investment-taxonomy-v1;prompt=decision-support-v1d@73ace2d4e437;adapter=decision-adapter-v3;map=support-map-v1;level=presence-floor:0.4" {
-		t.Fatalf("the stamp changed: %q", want)
+	// The stamp is the adapter's own identity: the rubric id and its digest come
+	// from the decision package, never from a literal here.
+	identity := decision.IdentityFor("")
+	if want != identity.Stamp() || !strings.Contains(want, "prompt="+decision.RubricVersion+"@"+decision.RubricSHA256[:12]+";") ||
+		!strings.HasPrefix(want, "provider="+decision.ProviderName+";api="+decision.APIMode+";model="+decision.DefaultModel+";") {
+		t.Fatalf("the stamp is not the adapter's identity: %q", want)
 	}
 	models := map[string]bool{}
 	for _, record := range store.records {

@@ -407,19 +407,27 @@ func TestALinkReadThatNeverEndsStopsAtItsBound(t *testing.T) {
 // The client's own page rules, without the transport guard of the production client: a next page with no cursor and
 // a cursor that repeats are errors, and the page size never exceeds the provider's maximum.
 func TestTheConnectedContainersReadRefusesAPageItCannotFollow(t *testing.T) {
-	answers := map[string]func(request) map[string]any{
-		"a next page with no cursor": func(request) map[string]any {
+	cases := map[string]struct {
+		answer   func(request) map[string]any
+		requests int
+	}{
+		// The read stops at the page it cannot follow: it does not ask again.
+		"a next page with no cursor": {func(request) map[string]any {
 			return map[string]any{"data": map[string]any{"graphStore_teamConnectedToContainer": map[string]any{"pageInfo": map[string]any{"hasNextPage": true, "endCursor": nil}, "edges": []any{}}}}
-		},
-		"a cursor that repeats": func(request) map[string]any { return containerPage("cursor-1") },
+		}, 1},
+		// The second answer names the cursor the first one named: the read stops there.
+		"a cursor that repeats": {func(request) map[string]any { return containerPage("cursor-1") }, 2},
 	}
-	for name, answer := range answers {
+	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
-			g := newGateway(t, func(req request) (int, any) { return 200, answer(req) })
+			g := newGateway(t, func(req request) (int, any) { return 200, tc.answer(req) })
 			client := g.client()
 			client.HTTPClient = &http.Client{Timeout: 10 * time.Second}
 			if got, err := client.IterTeamConnectedContainers(context.Background(), syntheticTeam(1), 5000); err == nil {
 				t.Fatalf("the read returned %v, want an error", got)
+			}
+			if len(g.requests) != tc.requests {
+				t.Errorf("requests = %d, want %d: the read went on after the page it cannot follow", len(g.requests), tc.requests)
 			}
 			for _, req := range g.requests {
 				if first, _ := req.Variables["first"].(float64); first != graph.TeamConnectedContainersMaxPageSize {
@@ -427,5 +435,32 @@ func TestTheConnectedContainersReadRefusesAPageItCannotFollow(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// A collection that did not select the project links never says they are complete, also when no team is active (no
+// link read is owed then, so the count of ended reads alone would say "complete").
+func TestACollectionThatDidNotSelectTheProjectLinksIsNeverComplete(t *testing.T) {
+	g := newGateway(t, func(req request) (int, any) {
+		if req.Operation == "TeamSearchV2" {
+			return 200, searchPage("", teamNode(syntheticTeam(1), "Synthetic archived team", "ARCHIVED"))
+		}
+		return 500, map[string]any{"errors": []any{map[string]any{"message": "unexpected " + req.Operation}}}
+	})
+	p := params(Selections{Structure: true})
+	rows, err := Collect(context.Background(), g.client(), p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows.Teams) != 1 || rows.ProjectLinksComplete {
+		t.Fatalf("teams = %d, complete = %t, want 1 team and not complete: no project link was read", len(rows.Teams), rows.ProjectLinksComplete)
+	}
+	// The same site with the links selected: no read is owed, and that is a complete (empty) snapshot.
+	rows, err = Collect(context.Background(), g.client(), params(everything))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !rows.ProjectLinksComplete {
+		t.Fatal("a site whose only team is archived owes no link read: the selected snapshot is complete")
 	}
 }

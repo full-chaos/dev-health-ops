@@ -470,10 +470,10 @@ func Collect(ctx context.Context, client Client, params Params) (Rows, error) {
 	// when the client reached the provider's last page (it returns an error
 	// for a failed page, a GraphQL error, a page with no cursor and its page
 	// bound). So the links are complete when one read ended for every active
-	// team, and every link was of a known type: a type this collector does not
-	// know is a provider-side change, and what it would have been is not known.
-	rows.ProjectLinksComplete = params.Selections.Projects && projectReads == activeTeams &&
-		rows.ProjectLinks.FailedTeamReads == 0 && rows.ProjectLinks.SkippedUnknownType == 0
+	// team (that count is the signal, not an assumption), and every link was
+	// of a known type: a type this collector does not know is a provider-side
+	// change, and what it would have been is not known.
+	rows.ProjectLinksComplete = params.Selections.Projects && projectReads == activeTeams && rows.ProjectLinks.SkippedUnknownType == 0
 	return rows, nil
 }
 

@@ -166,6 +166,48 @@ const (
 	PostSyncFanoutOutcomeError          PostSyncFanoutOutcome = "error"
 )
 
+// PostSyncTouchedDaysEvent is the bounded label of the touched-day counter of
+// NativePostSyncService.Fanout (CHAOS-8813). Each value counts days or keys,
+// never an identifier.
+type PostSyncTouchedDaysEvent string
+
+const (
+	// PostSyncTouchedDaysKeysRecorded counts the (day, repository) keys that a
+	// fan-out recorded from the raw rows of its sync run.
+	PostSyncTouchedDaysKeysRecorded PostSyncTouchedDaysEvent = "keys_recorded"
+	// PostSyncTouchedDaysDispatched counts the touched days a fan-out started
+	// a daily run for.
+	PostSyncTouchedDaysDispatched PostSyncTouchedDaysEvent = "days_dispatched"
+	// PostSyncTouchedDaysCarriedOver counts the touched days a fan-out left
+	// for a later fan-out because of its day budget.
+	PostSyncTouchedDaysCarriedOver PostSyncTouchedDaysEvent = "days_carried_over"
+	// PostSyncTouchedDaysAlreadyStarted counts the touched days a fan-out
+	// skipped because a run of its own generation existed for the day.
+	PostSyncTouchedDaysAlreadyStarted PostSyncTouchedDaysEvent = "days_already_started"
+	// PostSyncTouchedDaysReadTruncated counts the fan-outs whose read of the
+	// touched days hit its bound: older touched days were not seen.
+	PostSyncTouchedDaysReadTruncated PostSyncTouchedDaysEvent = "read_truncated"
+	// PostSyncTouchedDaysRecordFailed counts the fan-outs that failed before
+	// their Postgres transaction because the record or the read failed.
+	PostSyncTouchedDaysRecordFailed PostSyncTouchedDaysEvent = "record_failed"
+	// PostSyncTouchedDaysMarkFailed counts the fan-outs whose started days
+	// stay recorded as touched: each is computed once more.
+	PostSyncTouchedDaysMarkFailed PostSyncTouchedDaysEvent = "mark_failed"
+	// PostSyncTouchedDaysOverRepositoryLimit counts the pending days a fan-out
+	// started no run for because the day has more pending repositories than
+	// one run accepts. The day stays pending.
+	PostSyncTouchedDaysOverRepositoryLimit PostSyncTouchedDaysEvent = "over_repository_limit"
+)
+
+func postSyncTouchedDaysEvents() []PostSyncTouchedDaysEvent {
+	return []PostSyncTouchedDaysEvent{
+		PostSyncTouchedDaysKeysRecorded, PostSyncTouchedDaysDispatched,
+		PostSyncTouchedDaysCarriedOver, PostSyncTouchedDaysAlreadyStarted,
+		PostSyncTouchedDaysReadTruncated, PostSyncTouchedDaysRecordFailed,
+		PostSyncTouchedDaysMarkFailed, PostSyncTouchedDaysOverRepositoryLimit,
+	}
+}
+
 func postSyncFanoutOutcomes() []PostSyncFanoutOutcome {
 	return []PostSyncFanoutOutcome{
 		PostSyncFanoutOutcomePublished, PostSyncFanoutOutcomeNoRepositories, PostSyncFanoutOutcomeError,
@@ -1202,6 +1244,7 @@ type MetricsCollector struct {
 	// percentiles of.
 	workItemStateMissingAttribution uint64
 	postSyncFanout                  map[PostSyncFanoutOutcome]uint64
+	postSyncTouchedDays             map[PostSyncTouchedDaysEvent]uint64
 	// teamRepoOwnershipDerivation (CHAOS-4365 item 1b): per-outcome counter for
 	// sync.team_repo_ownership_derivation's worker; teamRepoOwnershipDerivationRowCount
 	// is the paired rows-written histogram, observed only on the
@@ -1429,6 +1472,7 @@ var _ DailyMetricsNativeFamilyObserver = (*MetricsCollector)(nil)
 var _ IncidentValidFromGuardObserver = (*MetricsCollector)(nil)
 var _ DailyMetricsCompatRetryObserver = (*MetricsCollector)(nil)
 var _ PostSyncFanoutObserver = (*MetricsCollector)(nil)
+var _ PostSyncTouchedDaysObserver = (*MetricsCollector)(nil)
 var _ TeamRepoOwnershipDerivationObserver = (*MetricsCollector)(nil)
 var _ InvestmentRepoAttributionObserver = (*MetricsCollector)(nil)
 var _ TeamCatalogObserver = (*MetricsCollector)(nil)
@@ -1501,6 +1545,7 @@ func NewMetricsCollector(dimensions MetricDimensions) (*MetricsCollector, error)
 		dailyMetricsFinalizeRedrive:          make(map[string]uint64, len(dailyMetricsFinalizeRedriveOutcomes)),
 		dailyMetricsPartitionRecompute:       make(map[dailyMetricsPartitionRecomputeLabels]uint64, len(dailyMetricsPartitionRecomputeFamilies)*len(dailyMetricsPartitionRecomputeOutcomes)),
 		postSyncFanout:                       make(map[PostSyncFanoutOutcome]uint64, len(postSyncFanoutOutcomes())),
+		postSyncTouchedDays:                  make(map[PostSyncTouchedDaysEvent]uint64, len(postSyncTouchedDaysEvents())),
 		teamRepoOwnershipDerivation:          make(map[TeamRepoOwnershipDerivationOutcome]uint64, len(teamRepoOwnershipDerivationOutcomes())),
 		teamRepoOwnershipDerivationRowCount:  newHistogramWithBounds(repoCountBuckets),
 		teamRepoOwnershipResolutionArm:       make(map[TeamRepoOwnershipResolutionArm]uint64, len(teamRepoOwnershipResolutionArms())),
@@ -2244,6 +2289,18 @@ func (collector *MetricsCollector) ObservePostSyncFanout(outcome PostSyncFanoutO
 	collector.mu.Lock()
 	defer collector.mu.Unlock()
 	collector.postSyncFanout[outcome]++
+	return nil
+}
+
+// ObservePostSyncTouchedDays adds count to one touched-day counter of the
+// post-sync fan-out (CHAOS-8813).
+func (collector *MetricsCollector) ObservePostSyncTouchedDays(event PostSyncTouchedDaysEvent, count uint64) error {
+	if !slices.Contains(postSyncTouchedDaysEvents(), event) {
+		return errors.New("post-sync touched-days event is not registered")
+	}
+	collector.mu.Lock()
+	defer collector.mu.Unlock()
+	collector.postSyncTouchedDays[event] += count
 	return nil
 }
 
@@ -3372,6 +3429,7 @@ func (collector *MetricsCollector) PrometheusText() string {
 	collector.writeTeamMetricsDailyRepoCount(&output)
 	collector.writeWorkItemStateMissingAttribution(&output)
 	collector.writePostSyncFanout(&output)
+	collector.writePostSyncTouchedDays(&output)
 	collector.writeTeamRepoOwnershipDerivation(&output)
 	collector.writeInvestmentRepoAttribution(&output)
 	collector.writeIncidentValidFromGuard(&output)
@@ -3885,6 +3943,14 @@ func (collector *MetricsCollector) writePostSyncFanout(output *strings.Builder) 
 	for _, outcome := range postSyncFanoutOutcomes() {
 		writeUintSample(output, "dev_health_post_sync_fanout_total",
 			[]metricLabel{{"outcome", string(outcome)}}, collector.postSyncFanout[outcome])
+	}
+}
+
+func (collector *MetricsCollector) writePostSyncTouchedDays(output *strings.Builder) {
+	writeMetadata(output, "dev_health_post_sync_touched_days_total", "Post-sync fanout touched days: keys recorded from the raw rows of a sync, days a daily run was started for, days left for a later fan-out (CHAOS-8813).", "counter")
+	for _, event := range postSyncTouchedDaysEvents() {
+		writeUintSample(output, "dev_health_post_sync_touched_days_total",
+			[]metricLabel{{"event", string(event)}}, collector.postSyncTouchedDays[event])
 	}
 }
 

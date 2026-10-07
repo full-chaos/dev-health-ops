@@ -636,8 +636,8 @@ func TestResolve_NilClientErrors(t *testing.T) {
 
 func TestResolve_HappyPath_ComputesRealPayload(t *testing.T) {
 	// One representative row per table for the CURRENT period; the PRIOR
-	// period gets all-empty responses (10 scanners) so every delta is
-	// "value vs 0".
+	// period gets all-empty responses (10 scanners), so numeric delta fields
+	// use their 0 placeholder but cannot make a comparison claim.
 	current := []*fakeRowScanner{
 		{rows: [][]any{{day("2026-08-24"), uint64(10), uint64(8), uint32(4), 5.0, 9.0, 1.0, 2.0}}},                   // work_items
 		{rows: [][]any{{"in_review", uint64(6), 3.0, 1.5}}},                                                          // state_durations
@@ -686,8 +686,11 @@ func TestResolve_HappyPath_ComputesRealPayload(t *testing.T) {
 	if throughput.Value != 8 { // items_completed summed = 8, prior = 0
 		t.Errorf("throughput value = %v, want 8", throughput.Value)
 	}
-	if throughput.Delta.Status != "improved" {
-		t.Errorf("throughput status = %q, want improved", throughput.Delta.Status)
+	if !throughput.HasData || throughput.Delta.HasPriorData {
+		t.Errorf("throughput presence = current:%v prior:%v, want current:true prior:false", throughput.HasData, throughput.Delta.HasPriorData)
+	}
+	if throughput.Delta.Status != "" {
+		t.Errorf("throughput status = %q, want no claim without a prior week", throughput.Delta.Status)
 	}
 
 	// ai_governance_coverage must NOT be pinned to 0.0 -- proves the

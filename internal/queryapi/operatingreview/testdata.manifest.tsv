@@ -1,4 +1,4 @@
 # Every file under internal/queryapi/operatingreview/testdata: sha256, kind, path. Written by `go run ./internal/testsupport/recordedfiles/manifest`; never edit it by hand.
 # python-recorded set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
 # header-before-stamp set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
-a37c6a4fb9d17de4b26b973b41499e12f0021131a24ecb7129043233e163c039	go-generated	operating_review_golden.json
+6780a6497d5d154cde65d1bbde2c1882e9beb32a473f071932c312f33bb1f021	go-generated	operating_review_golden.json

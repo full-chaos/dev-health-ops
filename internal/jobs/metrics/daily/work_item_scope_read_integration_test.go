@@ -216,6 +216,9 @@ func TestWorkItemScopeReadCountsItemsOfEveryRepositoryAndNoItemOfAnotherOrganiza
 		// scope id) and is an item of another scope: the scope rule drops it.
 		scopeReadItem{org: scopeReadOrgA, repo: scopeReadRepoB, id: "it-4", projectID: "own-b", projectName: "shared", storyPoints: 1},
 		scopeReadItem{org: scopeReadOrgA, repo: uuid.Nil, id: "it-5", projectID: "shared", storyPoints: 1},
+		// The provider is a part of a work scope: this gitlab item has the
+		// scope id of the github scope and is not an item of it.
+		scopeReadItem{org: scopeReadOrgA, repo: scopeReadRepoB, id: "it-7", provider: "gitlab", projectID: "shared", storyPoints: 1},
 		// Organization B: the same scope id and the same item ids, newer.
 		scopeReadItem{org: scopeReadOrgB, repo: scopeReadRepoC, id: "it-1", projectID: "shared", storyPoints: 100, lastSynced: newerThanA},
 		scopeReadItem{org: scopeReadOrgB, repo: scopeReadRepoC, id: "it-2", projectID: "shared", storyPoints: 100, lastSynced: newerThanA},
@@ -243,7 +246,7 @@ func TestWorkItemScopeReadCountsItemsOfEveryRepositoryAndNoItemOfAnotherOrganiza
 		{"repository A: its own scope and the shared scope", scopeReadOrgA, []uuid.UUID{scopeReadRepoA},
 			workItemScopeReadStats{Scopes: 2, ItemsInPartition: 2, ItemsOutsidePartition: 2, FilterValues: 2}, "it-1,it-2,it-3,it-5"},
 		{"repositories A and B: only the nil repository is outside", scopeReadOrgA, []uuid.UUID{scopeReadRepoA, scopeReadRepoB},
-			workItemScopeReadStats{Scopes: 3, ItemsInPartition: 4, ItemsOutsidePartition: 1, FilterValues: 3}, "it-1,it-2,it-3,it-4,it-5"},
+			workItemScopeReadStats{Scopes: 4, ItemsInPartition: 5, ItemsOutsidePartition: 1, FilterValues: 3}, "it-1,it-2,it-3,it-4,it-5,it-7"},
 		{"the nil repository: the shared scope from both repositories", scopeReadOrgA, []uuid.UUID{uuid.Nil},
 			workItemScopeReadStats{Scopes: 1, ItemsInPartition: 1, ItemsOutsidePartition: 2, FilterValues: 1}, "it-1,it-3,it-5"},
 		{"a scope of one repository reads nothing outside it", scopeReadOrgB, []uuid.UUID{scopeReadRepoC},

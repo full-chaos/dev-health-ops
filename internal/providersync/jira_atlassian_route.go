@@ -42,12 +42,10 @@ const (
 	// comments_row_budget may only LOWER it.
 	jiraAtlassianDefaultCommentsRowBudget = 50_000
 	// jiraAtlassianCommentsTimeShareDivisor sets the TIME budget of comment
-	// reads (CHAOS-8806): they stop when the time left to the context deadline
-	// the unit carries is below 1/N of the work window (the span from the
-	// start of Collect to that deadline). Comment reads cost one serial request
-	// per issue, and a deadline is terminal for the unit, so the other half of
-	// the window is the reserve for the rest of the loop (worklogs, dev-status,
-	// the remaining issues' changelogs), the effect build and the write.
+	// reads (CHAOS-8806): they run in phase 2, after every comments-off step,
+	// and stop when 1/N of the time left to the unit deadline at the start of
+	// phase 2 is used. The rest is the reserve for validation, the effect
+	// build, derive, the comparator and the ledger commit.
 	jiraAtlassianCommentsTimeShareDivisor = 2
 )
 
@@ -228,17 +226,6 @@ func (handler JiraAtlassianRouteHandler) Collect(
 		countedGraphQL := *handler.GraphQLClient
 		countedGraphQL.Doer = jiraAtlassianCountingDoer{delegate: handler.GraphQLClient.Doer, attempts: &requests}
 		handler.GraphQLClient = &countedGraphQL
-	}
-
-	// CHAOS-8806: the comment time window starts HERE, before the issue search,
-	// so a slow search or slow changelog reads shrink the comment time and never
-	// the reserve for the work items. With no deadline on the context there is
-	// no time budget.
-	commentsStopAt, commentsHaveDeadline := time.Time{}, false
-	if deadline, ok := ctx.Deadline(); ok {
-		started := time.Now()
-		commentsStopAt = started.Add(deadline.Sub(started) / jiraAtlassianCommentsTimeShareDivisor)
-		commentsHaveDeadline = true
 	}
 
 	jql := jiraWorkItemsJQL(claim, projectKey)
@@ -427,59 +414,6 @@ func (handler JiraAtlassianRouteHandler) Collect(
 		}
 		rows.ProjectMemberships = append(rows.ProjectMemberships, itemMemberships...)
 
-		if fetchComments {
-			// The budget is checked BEFORE the fetch, so the rows slice never
-			// grows past it: the issue limit is the smaller of comments_limit
-			// and what is left of the budget. Issues arrive ORDER BY updated
-			// DESC, so the newest issues get their comments first.
-			// The TIME budget is checked first, with the same effect: skip the
-			// read, count it, keep the work item and the rest of the loop.
-			if commentsHaveDeadline && time.Now().After(commentsStopAt) {
-				commentsTimeSkipped++
-			} else if remaining := commentsBudget - len(rows.Interactions); remaining <= 0 {
-				commentsBudgetSkipped++
-			} else {
-				issueLimit := commentsLimit
-				// A budget cut is detected EXACTLY: read one more than the
-				// slots left; an extra row means the budget cuts this issue.
-				budgetCut := false
-				if issueLimit <= 0 || issueLimit > remaining {
-					issueLimit = remaining + 1
-					budgetCut = true
-				}
-				// The read gets its own deadline at stopAt, so one slow comment
-				// fetch that starts before stopAt can never use time after it
-				// (the unit deadline is terminal and loses every work item).
-				commentCtx, cancelComments := ctx, context.CancelFunc(func() {})
-				if commentsHaveDeadline {
-					commentCtx, cancelComments = context.WithDeadline(ctx, commentsStopAt)
-				}
-				comments, _, commentErr := collectJiraIssueComments(
-					commentCtx, client, item.WorkItemID, maxPages, perPage, issueLimit,
-				)
-				innerDeadline := commentsHaveDeadline && ctx.Err() == nil &&
-					errors.Is(commentCtx.Err(), context.DeadlineExceeded)
-				cancelComments()
-				if commentErr != nil && innerDeadline {
-					// The time budget ended this read, not a provider failure:
-					// the issue's partial comments are dropped (the collector
-					// returns none on an error) and the issue is counted.
-					commentsTimeSkipped++
-				} else if commentErr != nil {
-					optionalIncomplete = append(optionalIncomplete, "comments:"+item.WorkItemID)
-				} else if budgetCut && len(comments) > remaining {
-					// The row budget cuts this issue's comments. None of them
-					// land: a re-read replaces an issue's whole set, so
-					// none + marker is the state a later run or backfill
-					// completes, the same as a wholly skipped issue.
-					commentsBudgetSkipped++
-				} else {
-					rows.Interactions = append(rows.Interactions,
-						normalizeJiraInteractions(claim, item.WorkItemID, comments, handler.Identity, normalizedAt)...,
-					)
-				}
-			}
-		}
 		if fetchWorklogs {
 			worklogClient := client
 			if handler.GraphQLClient != nil {
@@ -534,6 +468,82 @@ func (handler JiraAtlassianRouteHandler) Collect(
 			if len(fetched) > 0 && handler.ReferenceSink != nil {
 				if err := handler.ReferenceSink(fetched); err != nil {
 					optionalIncomplete = append(optionalIncomplete, "reference_sink")
+				}
+			}
+		}
+	}
+	// CHAOS-8806: PHASE 2 = comment reads. Phase 1 above is byte-for-byte the
+	// comments-off path (search, changelogs, every work-item row, worklogs,
+	// dev-status, sprints), so a unit that ends OK with comments off reaches
+	// this point with the same rows. Comment reads then use at most half of
+	// the time left to the unit deadline; the other half is the reserve for
+	// what follows (validation, effect build, derive, comparator, ledger
+	// commit): that tail is of the order of the rows written, is not
+	// measurable inside Collect, and comments add rows to it, so it keeps at
+	// least what was left at the end of phase 1 divided by the divisor. With
+	// no deadline on the context there is no time budget. Issues arrive ORDER
+	// BY updated DESC, so the newest issues get their comments first.
+	if fetchComments {
+		commentsStopAt, commentsHaveDeadline := time.Time{}, false
+		if deadline, ok := ctx.Deadline(); ok {
+			now := time.Now()
+			commentsStopAt = now.Add(deadline.Sub(now) / jiraAtlassianCommentsTimeShareDivisor)
+			commentsHaveDeadline = true
+		}
+		for _, item := range rows.WorkItems {
+			// The TIME budget is checked first: skip the read and count it.
+			// The row budget is checked BEFORE the fetch, so the rows slice
+			// never grows past it: the issue limit is the smaller of
+			// comments_limit and what is left of the budget.
+			if commentsHaveDeadline && time.Now().After(commentsStopAt) {
+				commentsTimeSkipped++
+			} else if remaining := commentsBudget - len(rows.Interactions); remaining <= 0 {
+				commentsBudgetSkipped++
+			} else {
+				issueLimit := commentsLimit
+				// A budget cut is detected EXACTLY: read one more than the
+				// slots left; an extra row means the budget cuts this issue.
+				budgetCut := false
+				if issueLimit <= 0 || issueLimit > remaining {
+					issueLimit = remaining + 1
+					budgetCut = true
+				}
+				// The read gets its own deadline at stopAt, so one slow comment
+				// fetch that starts before stopAt can never use time after it
+				// (the unit deadline is terminal and loses every work item).
+				commentCtx, cancelComments := ctx, context.CancelFunc(func() {})
+				if commentsHaveDeadline {
+					commentCtx, cancelComments = context.WithDeadline(ctx, commentsStopAt)
+				}
+				comments, _, commentErr := collectJiraIssueComments(
+					commentCtx, client, item.WorkItemID, maxPages, perPage, issueLimit,
+				)
+				innerDeadline := commentsHaveDeadline && ctx.Err() == nil &&
+					errors.Is(commentCtx.Err(), context.DeadlineExceeded)
+				cancelComments()
+				if commentErr != nil && innerDeadline {
+					// The time budget ended this read, not a provider failure:
+					// the issue's partial comments are dropped (the collector
+					// returns none on an error) and the issue is counted.
+					commentsTimeSkipped++
+				} else if commentErr != nil {
+					optionalIncomplete = append(optionalIncomplete, "comments:"+item.WorkItemID)
+					if ctx.Err() != nil {
+						// The unit context itself ended (not our stop time):
+						// no further reads; what follows fails or not on its
+						// own, exactly as a cancel in the work loop does.
+						break
+					}
+				} else if budgetCut && len(comments) > remaining {
+					// The row budget cuts this issue's comments. None of them
+					// land: a re-read replaces an issue's whole set, so
+					// none + marker is the state a later run or backfill
+					// completes, the same as a wholly skipped issue.
+					commentsBudgetSkipped++
+				} else {
+					rows.Interactions = append(rows.Interactions,
+						normalizeJiraInteractions(claim, item.WorkItemID, comments, handler.Identity, normalizedAt)...,
+					)
 				}
 			}
 		}

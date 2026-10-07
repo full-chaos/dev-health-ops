@@ -385,3 +385,5 @@ func (batch *attemptCaptureBatch) Append(values ...any) error {
 	})
 	return nil
 }
+
+func newShadowTestKey() secrets.Hidden { return secrets.NewHidden(shadowTestKeyValue) }

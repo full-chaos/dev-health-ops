@@ -355,3 +355,62 @@ func TestAServedDeterministicFailureEndsTheRunLikeTheGenerativePath(t *testing.T
 		t.Error("the error holds the key")
 	}
 }
+
+// Rollback (R5): the provider set back to the generative one must bring the
+// generative rows back as the rows that readers serve, with no forced run.
+// Run 1 generative, run 2 served by the decision backend (its new stamp asks
+// every unit again), run 3 generative again and NOT forced: the latest row of
+// every gate-pass unit must carry the generative stamp. Skip-existing must not
+// reuse run 1's rows while run 2's rows are the latest (CHAOS-8873).
+func TestSettingTheProviderBackServesTheGenerativeRowsAgain(t *testing.T) {
+	h := newShadowHarness(t)
+	logs := &syncBuffer{}
+	writer, err := chwrite.NewWriter(h.conn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	generative := func(runID string, at time.Time) {
+		t.Helper()
+		m, err := NewMaterializer(h.reader, writer, categorize.MockProvider{}, debugLogger(logs))
+		if err != nil {
+			t.Fatal(err)
+		}
+		cfg := h.config(runID, at)
+		cfg.Force = false
+		if _, err := m.Run(h.ctx, cfg); err != nil {
+			t.Fatalf("%s: %v", runID, err)
+		}
+	}
+	mockStamp := categorize.EffectiveModelVersion("mock", resolvedModelName(Config{ProviderName: "mock"}))
+	decisionStamp := decision.IdentityFor("").Stamp()
+	latestStamps := func() map[string]int {
+		t.Helper()
+		stamps := map[string]int{}
+		for _, issue := range []string{"A1", "B1", "C1"} {
+			row, ok := h.latestServedRow(t, issue)
+			if !ok {
+				t.Fatalf("%s has no row", issue)
+			}
+			stamps[row.version]++
+		}
+		return stamps
+	}
+
+	generative("run-gen-1", h.within)
+	if got := latestStamps(); got[mockStamp] != shadowGatePassUnits {
+		t.Fatalf("after run 1: %v", got)
+	}
+	served := h.servedMaterializer(t, newFakeJev(t, nil), logs)
+	cfg := h.config("run-decision", h.within.Add(time.Hour))
+	cfg.Force = false
+	if _, err := served.Run(h.ctx, cfg); err != nil {
+		t.Fatalf("decision run: %v", err)
+	}
+	if got := latestStamps(); got[decisionStamp] != shadowGatePassUnits {
+		t.Fatalf("after the decision run: %v", got)
+	}
+	generative("run-gen-2", h.within.Add(2*time.Hour))
+	if got := latestStamps(); got[mockStamp] != shadowGatePassUnits {
+		t.Fatalf("after setting the provider back, the latest rows carry %v; want the generative stamp on all %d units", got, shadowGatePassUnits)
+	}
+}

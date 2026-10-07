@@ -61,35 +61,32 @@ const auditLogColumns = `a.id, a.org_id, a.user_id, a.action, a.resource_type, a
 	end,
 	a.description, a.changes, a.request_metadata, a.status, a.error_message, a.created_at`
 
+// auditResourceUUID is the audit row's resource ID as a uuid, or null. The
+// guard keeps legacy non-UUID IDs from reaching a Postgres uuid cast. Every
+// resource join uses this one expression: four of five hand-written copies
+// once matched no UUID, and their labels were always null.
+const auditResourceUUID = `CASE
+			WHEN a.resource_id ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' THEN a.resource_id::uuid
+		END`
+
 // auditLogFrom has one authoritative left join per resource type with a
 // supported display-name field. It deliberately has no fallback for an
 // unknown type: audit_logs accepts historic extension values, and guessing a
 // name from an opaque ID would misrepresent the audit record. Every resource
-// join is bound to the audit row's organization. The UUID guard keeps legacy
-// non-UUID IDs from reaching a Postgres uuid cast.
+// join is bound to the audit row's organization.
 const auditLogFrom = ` FROM audit_logs a
 	LEFT JOIN users actor ON actor.id = a.user_id
 	LEFT JOIN memberships resource_membership ON a.resource_type IN ('user', 'session')
-		AND resource_membership.user_id = CASE
-			WHEN a.resource_id ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' THEN a.resource_id::uuid
-		END AND resource_membership.org_id = a.org_id
+		AND resource_membership.user_id = ` + auditResourceUUID + ` AND resource_membership.org_id = a.org_id
 	LEFT JOIN users resource_user ON resource_user.id = resource_membership.user_id
 	LEFT JOIN organizations resource_org ON a.resource_type = 'organization'
-		AND resource_org.id = CASE
-			WHEN a.resource_id ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' THEN a.resource_id::uuid
-		END AND resource_org.id = a.org_id
+		AND resource_org.id = ` + auditResourceUUID + ` AND resource_org.id = a.org_id
 	LEFT JOIN sso_providers provider ON a.resource_type = 'sso_provider'
-		AND provider.id = CASE
-			WHEN a.resource_id ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' THEN a.resource_id::uuid
-		END AND provider.org_id = a.org_id
+		AND provider.id = ` + auditResourceUUID + ` AND provider.org_id = a.org_id
 	LEFT JOIN external_ingest_sources source ON a.resource_type = 'ingest_source'
-		AND source.id = CASE
-			WHEN a.resource_id ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' THEN a.resource_id::uuid
-		END AND source.org_id = a.org_id::text
+		AND source.id = ` + auditResourceUUID + ` AND source.org_id = a.org_id::text
 	LEFT JOIN external_ingest_tokens token ON a.resource_type = 'ingest_token'
-		AND token.id = CASE
-			WHEN a.resource_id ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' THEN a.resource_id::uuid
-		END AND token.org_id = a.org_id::text`
+		AND token.id = ` + auditResourceUUID + ` AND token.org_id = a.org_id::text`
 
 func scanAuditLog(row pgx.Row) (*auditLog, error) {
 	var log auditLog

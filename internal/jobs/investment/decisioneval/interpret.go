@@ -69,8 +69,11 @@ const SplitThreshold = 0.60
 //	                    else L = min{ l >= 1 : (p'_1 + ... + p'_l) / s >= 0.5 - tol }
 //	presence-median:    L = 0 if p'_0 >= t - tol, else the median level
 //	                    (t <= 0.5, so the median is then >= 1)
+//	presence-floor:     the same for one answer; Interpret then keeps the
+//	                    median levels of a bundle that the threshold leaves
+//	                    with no supported key
 func ApplyLevelRule(rule LevelRuleSpec, p []float64) int {
-	if rule.Name == LevelPresenceMedian && p[0] >= rule.Tau-levelTolerance {
+	if (rule.Name == LevelPresenceMedian || rule.Name == LevelPresenceFloor) && p[0] >= rule.Tau-levelTolerance {
 		return 0
 	}
 	if rule.Name == LevelConditionalMedian {
@@ -270,7 +273,13 @@ func Interpret(r *Rubric, weights []float64, rule LevelRuleSpec, provider string
 				in.Warnings = append(in.Warnings, "answer_degraded:"+SufficiencyQuestionID+":"+qa.Degraded)
 				strict = false
 			} else {
-				lv = ApplyLevelRule(rule, qa.Score.Probs)
+				// The presence threshold is a support-key rule: the sufficiency
+				// scale keeps the median under presence-floor.
+				sufRule := rule
+				if rule.Name == LevelPresenceFloor {
+					sufRule = LevelRuleSpec{Name: LevelMedian}
+				}
+				lv = ApplyLevelRule(sufRule, qa.Score.Probs)
 			}
 			in.SufficiencyLevel = &lv
 			if lv < len(r.SufficiencyScale.Levels) {
@@ -299,6 +308,25 @@ func Interpret(r *Rubric, weights []float64, rule LevelRuleSpec, provider string
 	}
 
 	// All 15 support answers are usable (valid or degraded).
+	if rule.Name == LevelPresenceFloor {
+		// Top-key floor: when the threshold leaves no supported key, keep the
+		// median levels of the bundle (degraded answers keep their level).
+		any := false
+		for _, k := range keys {
+			if in.Levels[k] > 0 {
+				any = true
+			}
+		}
+		if !any {
+			median := LevelRuleSpec{Name: LevelMedian}
+			for _, k := range keys {
+				if probs, ok := in.LevelProbs[k]; ok {
+					in.Levels[k] = ApplyLevelRule(median, probs)
+				}
+			}
+			in.Warnings = append(in.Warnings, "presence_floor_applied")
+		}
+	}
 	raw := map[string]float64{}
 	themeWeight := map[string]float64{}
 	anySupport := false

@@ -454,6 +454,9 @@ func (r *Rubric) validate() error {
 // rule (CHAOS-8712 freeze check; t = 0.5 is the median rule itself).
 var PresenceMedianThresholds = []float64{0.4, 0.3}
 
+// PresenceFloorThresholds are the declared thresholds of the presence-floor rule.
+var PresenceFloorThresholds = []float64{0.4}
+
 // Level rule names.
 const (
 	LevelMedian            = "median"
@@ -461,6 +464,11 @@ const (
 	// LevelPresenceMedian: a key is supported only if P(level 0) < t (Tau
 	// carries t); the level is then the plain median. t = 0.5 is the median rule.
 	LevelPresenceMedian = "presence-median"
+	// LevelPresenceFloor is presence-median with a top-key floor: when the
+	// threshold leaves a bundle with no supported key, the median rule's levels
+	// are kept for that bundle (CHAOS-8712 tuning lever; bundle-level, applied in
+	// Interpret). Tau carries t.
+	LevelPresenceFloor = "presence-floor"
 	// EvidencePerTheme and EvidenceSingle are the evidence modes.
 	EvidencePerTheme = "per_theme"
 	EvidenceSingle   = "single"
@@ -491,6 +499,13 @@ func parseLevelRule(label string, r *Rubric) (LevelRuleSpec, error) {
 	// file, so adding them did not change the rubric digest of the runs.
 	if spec.Name == LevelPresenceMedian {
 		for _, t := range PresenceMedianThresholds {
+			if math.Abs(t-spec.Tau) < 1e-12 {
+				return spec, nil
+			}
+		}
+	}
+	if spec.Name == LevelPresenceFloor {
+		for _, t := range PresenceFloorThresholds {
 			if math.Abs(t-spec.Tau) < 1e-12 {
 				return spec, nil
 			}

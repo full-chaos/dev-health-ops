@@ -537,3 +537,65 @@ func TestPresenceMedianRule(t *testing.T) {
 		}
 	}
 }
+
+func TestPresenceFloorKeepsTheMedianWhenTheThresholdLeavesNothing(t *testing.T) {
+	r := testRubric(t)
+	bundle := mustBundle(t, makeFixtures(t).bugfix)
+	built, err := BuildJevRequest(r, DefaultJevModel, bundle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := func(rule string, probs map[string][]float64) Interpretation {
+		spec, err := r.ParseLevelRule(rule)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return Interpret(r, r.Weights, spec, ProviderTypeSafe, bundle, built.Spans, jevTyped(t, r, built, behaviour{probs: probs}))
+	}
+	// Every key at P(0) = 0.45: the median supports each one at level 1; a
+	// threshold of 0.40 supports none.
+	edge := map[string][]float64{}
+	for _, k := range SortedKeys() {
+		edge[SupportQuestionID(k)] = []float64{0.45, 0.30, 0.15, 0.10}
+	}
+	plain := run("presence-median:0.4", edge)
+	if plain.State != StateZeroSupport {
+		t.Fatalf("presence-median:0.4 on an all-edge bundle: state %s, want zero_support", plain.State)
+	}
+	floor := run("presence-floor:0.4", edge)
+	if floor.State != StateOK {
+		t.Fatalf("presence-floor:0.4 on an all-edge bundle: state %s %v, want ok (the median levels are kept)", floor.State, floor.Details)
+	}
+	med := run("median", edge)
+	for _, k := range SortedKeys() {
+		if floor.Levels[k] != med.Levels[k] || floor.Levels[k] == 0 {
+			t.Fatalf("key %s: floor level %d, median level %d (want equal and above 0)", k, floor.Levels[k], med.Levels[k])
+		}
+	}
+	if !contains(floor.Warnings, "presence_floor_applied") {
+		t.Fatalf("floor applied without its warning: %v", floor.Warnings)
+	}
+	// One key clearly supported (P(0) = 0.2): the floor is NOT applied and the
+	// edge keys stay at level 0.
+	mixed := map[string][]float64{}
+	for k, p := range edge {
+		mixed[k] = p
+	}
+	mixed[SupportQuestionID("quality.bugfix")] = []float64{0.20, 0.10, 0.10, 0.60}
+	m := run("presence-floor:0.4", mixed)
+	if m.State != StateOK || m.Levels["quality.bugfix"] != 3 {
+		t.Fatalf("mixed bundle: state %s bugfix level %d", m.State, m.Levels["quality.bugfix"])
+	}
+	for _, k := range SortedKeys() {
+		if k != "quality.bugfix" && m.Levels[k] != 0 {
+			t.Fatalf("mixed bundle: edge key %s kept level %d, the floor must not apply", k, m.Levels[k])
+		}
+	}
+	if contains(m.Warnings, "presence_floor_applied") {
+		t.Fatal("floor warning on a bundle that kept a supported key")
+	}
+	// An undeclared threshold is refused.
+	if _, err := r.ParseLevelRule("presence-floor:0.3"); err == nil {
+		t.Fatal("undeclared presence-floor threshold accepted")
+	}
+}

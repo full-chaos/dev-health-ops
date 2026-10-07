@@ -868,16 +868,31 @@ VALUES ($1, $2, $3, $4::uuid, $5::uuid, $6, $6, $7::uuid, $8::uuid, 'completed')
 	if got := read(); got == nil || !got.Equal(olderEndsLast) {
 		t.Fatalf("last scheduled run ended at %v, want the latest end %s of an older instant's run", got, olderEndsLast)
 	}
+	// A manual run of the configuration ends after every scheduled one. It is
+	// not a scheduled run: its end is not read.
+	seedEnded(6, openRunGateOrg, configID, jobID, hour.Add(-4*time.Hour), hour.Add(-10*time.Minute))
+	if _, err := pool.Exec(ctx, `
+INSERT INTO public.sync_manual_triggers (occurrence_id, mode, triggered_by) VALUES ('ended-6', 'incremental', 'manual')`); err != nil {
+		t.Fatal(err)
+	}
+	if got := read(); got == nil || !got.Equal(olderEndsLast) {
+		t.Fatalf("last scheduled run ended at %v, want %s: the later end of a manual run does not count", got, olderEndsLast)
+	}
 	// As many occurrences as the lookback, all newer than the rows above and
 	// all ended early. Every row above is now outside the lookback: the read
 	// walks the newest occurrences, not the oldest, not one more and not all.
+	// The count is written out, so a changed constant fails here.
+	const lookback = 64
+	if openRunResumeLookback != lookback {
+		t.Fatalf("openRunResumeLookback = %d, want %d", openRunResumeLookback, lookback)
+	}
 	lookbackEnd := hour.Add(-100 * time.Hour)
-	for index := 1; index <= openRunResumeLookback; index++ {
+	for index := 1; index <= lookback; index++ {
 		seedEnded(100+index, openRunGateOrg, configID, jobID, hour.Add(-time.Duration(120-index)*time.Minute), lookbackEnd.Add(time.Duration(index)*time.Second))
 	}
-	wantEnd := lookbackEnd.Add(openRunResumeLookback * time.Second)
+	wantEnd := lookbackEnd.Add(lookback * time.Second)
 	if got := read(); got == nil || !got.Equal(wantEnd) {
-		t.Fatalf("last scheduled run ended at %v, want %s: the latest end inside the newest %d occurrences", got, wantEnd, openRunResumeLookback)
+		t.Fatalf("last scheduled run ended at %v, want %s: the latest end inside the newest %d occurrences", got, wantEnd, lookback)
 	}
 }
 

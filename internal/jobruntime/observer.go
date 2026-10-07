@@ -205,6 +205,16 @@ type PostSyncFanoutObserver interface {
 	ObservePostSyncFanout(PostSyncFanoutOutcome) error
 }
 
+// PostSyncTouchedDaysObserver is the narrow capability
+// NativePostSyncService.Fanout depends on to count what it did with the days
+// that the stored raw rows of a sync touched (CHAOS-8813). Only Fanout knows
+// how many keys it recorded, how many days it started a daily run for and how
+// many it left for a later fan-out; none of it is visible from the job's
+// result.
+type PostSyncTouchedDaysObserver interface {
+	ObservePostSyncTouchedDays(PostSyncTouchedDaysEvent, uint64) error
+}
+
 // TeamRepoOwnershipDerivationObserver is the narrow capability
 // sync.team_repo_ownership_derivation's worker (CHAOS-4365 item 1b) depends
 // on to report its own outcome -- distinct from PostSyncFanoutObserver, which

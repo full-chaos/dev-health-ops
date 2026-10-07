@@ -52,6 +52,8 @@ var (
 	MsgFinalizeSyncRunCoverageCacheInvalidated           = Msg{"finalize_sync_run.coverage_cache_invalidated"}
 	MsgFinalizeSyncRunComputeCheckpointUnitFailed        = Msg{"finalize_sync_run.compute_checkpoint_unit_failed"}
 	MsgPostSyncFanout                                    = Msg{"post_sync_fanout"}
+	MsgPostSyncTouchedDays                               = Msg{"post_sync_fanout.touched_days"}
+	MsgPostSyncTouchedDaysFailed                         = Msg{"post_sync_fanout.touched_days_failed"}
 	MsgRunSyncReferenceDiscoveryHeartbeatFailed          = Msg{"run_sync_reference_discovery.heartbeat_failed"}
 	MsgSyncRunRollupBumped                               = Msg{"sync_run.rollup_bumped"}
 	MsgDispatchSyncRunRedispatchRearmFailed              = Msg{"dispatch_sync_run.redispatch_rearm_failed"}
@@ -112,6 +114,14 @@ var (
 	KeyFailedStaleDispatchingUnits  = Key{"failed_stale_dispatching_units"}
 	KeyPhase                        = Key{"phase"}
 	KeyRepoCount                    = Key{"repo_count"}
+	KeyTouchedKeysRecorded          = Key{"touched_keys_recorded"}
+	KeyTouchedDaysDispatched        = Key{"touched_days_dispatched"}
+	KeyTouchedDaysCarriedOver       = Key{"touched_days_carried_over"}
+	KeyTouchedDaysAlreadyStarted    = Key{"touched_days_already_started"}
+	KeyTouchedDaysReadTruncated     = Key{"touched_days_read_truncated"}
+	KeyTouchedDaysOverLimit         = Key{"touched_days_over_limit"}
+	KeyTouchedDaysOverLimitNewest   = Key{"touched_days_over_limit_newest"}
+	KeyTouchedDaysOverLimitOldest   = Key{"touched_days_over_limit_oldest"}
 	KeyOutcome                      = Key{"outcome"}
 	KeyErrorCode                    = Key{"error_code"}
 	KeyCount                        = Key{"count"}

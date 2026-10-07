@@ -351,6 +351,35 @@ VALUES ($1::uuid, $2::uuid, $3, $4::jsonb, 'pending', 0, $5, $5)`,
 	return run, nil
 }
 
+// MaxRepositoriesPerRun is the largest explicit repository list StartRunTx
+// accepts. A caller with more repositories starts a run of every repository
+// (an empty list) instead.
+const MaxRepositoriesPerRun = maxDailyMetricsRepositoriesPerRun
+
+// RunExistsTx reports whether the deterministic run of (organization, day,
+// generation) exists.
+//
+// StartRunTx refuses a second request of the same (day, generation) whose
+// repository list differs from the stored one. A caller whose list can change
+// between two deliveries of the same generation (the post-sync fan-out of the
+// touched days, CHAOS-8813) asks here first and starts nothing when the run
+// exists.
+func (store *PostgresStore) RunExistsTx(
+	ctx context.Context, tx pgx.Tx, organizationID string, targetDay time.Time, generation string,
+) (bool, error) {
+	if !store.valid() || tx == nil || !validUUID(organizationID) || generation == "" ||
+		len(generation) > 64 || targetDay.IsZero() {
+		return false, ErrInvalidState
+	}
+	run := newRun(uuid.MustParse(organizationID).String(), targetDay.UTC(), generation)
+	var exists bool
+	if err := tx.QueryRow(ctx, `
+SELECT EXISTS (SELECT 1 FROM public.daily_metrics_runs WHERE id = $1::uuid)`, run.ID).Scan(&exists); err != nil {
+		return false, ErrUnavailable
+	}
+	return exists, nil
+}
+
 // HasSucceededRunForDay reports whether a SCHEDULED-FANOUT or POST-SYNC
 // daily-metrics run (never a manual one -- see below) under a DIFFERENT
 // generation than excludeGeneration has already reached a successful

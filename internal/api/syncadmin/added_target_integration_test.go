@@ -77,7 +77,8 @@ func answeredTargets(t *testing.T, body string) []string {
 // create does for the same list: the answer and GET show the target, a
 // scheduled sync fetches its dataset, no other row moves, the child gets the
 // stored list, and a save of the list GET shows keeps all of it. A save that
-// leaves such a target out drops it from the stored list and keeps its row.
+// keeps "git" and leaves such a target out drops it from the stored list and
+// moves no row.
 func TestAPatchThatAddsATargetTheFormDoesNotOfferSwitchesItsRowOn(t *testing.T) {
 	v := startCascadeVenue(t, true)
 	gitOn := []string{"repo-metadata", "commits", "commit-stats", "files"}
@@ -180,14 +181,14 @@ WHERE config.id = $1::uuid AND dataset.dataset_key = $2 AND dataset.is_enabled)`
 				}
 				check("after a save of the shown list", answeredTargets(t, body))
 
-				// A save that leaves the target out drops it from the stored list
-				// and writes no row.
+				// A save that leaves the target out drops it from the stored list.
+				// It switches the blame row off; no save switches security off.
 				status, body = v.call("PATCH", path, `{"sync_targets":["git"]}`)
 				if status != 200 {
 					t.Fatalf("%s: save without the target: %d %s", label, status, body)
 				}
 				if got := v.rows(parent.integration); got != wantRows {
-					t.Errorf("%s: a save without the target moved a row: [%s], want [%s]", label, got, wantRows)
+					t.Errorf("%s: a save that keeps git and leaves the target out moved a row: [%s], want [%s] (git names the blame key; security is never switched off)", label, got, wantRows)
 				}
 				if v.storedList(parent.config) != `["git"]` || v.shown(parent.config) != `["git"]` {
 					t.Errorf("%s: after a save without the target: stored %s, GET shows %s, want [\"git\"] for both", label,

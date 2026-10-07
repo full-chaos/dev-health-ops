@@ -279,14 +279,14 @@ func TestSelectionChangeReadsOnlyTheListTheServerShows(t *testing.T) {
 	}
 }
 
-// TestATargetTheFormDoesNotOfferIsSwitchedOnWhenAddedAndNeverSwitchedOff:
-// "security" and "blame" in a submitted list are stored, as any target a
-// request asks for. A request that adds one switches on exactly the keys the
-// create writes for it (PlannerDatasetKeys of that target), also when the
-// target is stored and its row is off; a request that drops one writes no
-// row. A target with no dataset moves in and out of the stored list and
-// writes no row.
-func TestATargetTheFormDoesNotOfferIsSwitchedOnWhenAddedAndNeverSwitchedOff(t *testing.T) {
+// TestTheRowsOfATargetTheFormDoesNotOffer: "security" and "blame" in a
+// submitted list are stored, as any target a request asks for. A request
+// that adds one switches on exactly the keys the create writes for it
+// (PlannerDatasetKeys of that target), also when the target is stored and
+// its row is off. A request that drops one switches off the keys of it that
+// an operator controls: the blame key, and no key of "security". A target
+// with no dataset moves in and out of the stored list and writes no row.
+func TestTheRowsOfATargetTheFormDoesNotOffer(t *testing.T) {
 	cases := 0
 	for _, provider := range rowOwnedProviders {
 		for _, target := range providersync.SupportedLegacyTargets(provider) {
@@ -306,9 +306,19 @@ func TestATargetTheFormDoesNotOfferIsSwitchedOnWhenAddedAndNeverSwitchedOff(t *t
 						provider, stored, target, added.enableKeys, added.disableKeys, added.stored, want)
 				}
 			}
+			wantOff := []string{}
+			controlled := stringSet(providersync.OperatorControlledDatasetKeys(provider))
+			for _, key := range want {
+				if controlled[key] {
+					wantOff = append(wantOff, key)
+				}
+			}
+			if (target == "blame") != (len(wantOff) == 1) || (target == "security") != (len(wantOff) == 0) {
+				t.Fatalf("%s: the keys of %s an operator controls are %v, want the blame key for blame and none for security", provider, target, wantOff)
+			}
 			removed := mustPlan(t, provider, want, []string{target}, []string{})
-			if len(removed.enableKeys)+len(removed.disableKeys)+len(removed.stored) != 0 {
-				t.Errorf("%s: %s removed: %+v, want no row write and nothing stored", provider, target, removed)
+			if !reflect.DeepEqual(append([]string{}, removed.disableKeys...), wantOff) || len(removed.enableKeys)+len(removed.stored) != 0 {
+				t.Errorf("%s: %s removed: %+v, want disable %v, no enable and nothing stored", provider, target, removed, wantOff)
 			}
 		}
 	}
@@ -456,6 +466,70 @@ func TestDecodeSyncConfigUpdateIgnoresABaseList(t *testing.T) {
 		got, problems := decode(text)
 		if len(problems) != 0 || !reflect.DeepEqual(got, want) {
 			t.Errorf("%s: %+v problems %v; want the update of the body without the field and no problem", text, got, problems)
+		}
+	}
+}
+
+// TestASaveNeverSwitchesOffAKeyOfATargetItSubmits: the rows after a save are
+// a set, not an order of writes. A key that belongs to any target of the
+// submitted list (kept or added) is not in the keys the save switches off,
+// for every provider, every pair of a dropped and a submitted target, and
+// every row state the pair can start from. On GitHub and GitLab "git" names
+// the blame key, so each direction is spelled out.
+func TestASaveNeverSwitchesOffAKeyOfATargetItSubmits(t *testing.T) {
+	cases := 0
+	for _, provider := range rowOwnedProviders {
+		all := registryKeys(provider)
+		targets := providersync.SupportedLegacyTargets(provider)
+		for _, dropped := range targets {
+			for _, submitted := range targets {
+				if dropped == submitted || !providersync.SyncTargetHasDataset(provider, submitted) {
+					continue
+				}
+				submittedKeys, err := providersync.PlannerDatasetKeys(provider, []string{submitted})
+				if err != nil {
+					t.Fatal(err)
+				}
+				for _, enabled := range [][]string{all, nil} {
+					for _, stored := range [][]string{{dropped}, {dropped, submitted}} {
+						cases++
+						change := mustPlan(t, provider, enabled, stored, []string{submitted})
+						off := stringSet(change.disableKeys)
+						for _, key := range submittedKeys {
+							if off[key] {
+								t.Errorf("%s enabled=%v stored=%v: a save of [%s] switches off %q, a key of %s", provider, enabled, stored, submitted, key, submitted)
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+	if cases == 0 {
+		t.Fatal("no case ran")
+	}
+	gitOn := []string{"repo-metadata", "commits", "commit-stats", "files"}
+	gitAndBlame := append(append([]string{}, gitOn...), "blame")
+	for _, provider := range []string{"github", "gitlab"} {
+		for _, testCase := range []struct {
+			name                       string
+			enabled, stored, submitted []string
+			wantEnable, wantDisable    []string
+		}{
+			{name: "blame added and git dropped in one save", enabled: gitOn, stored: []string{"git"}, submitted: []string{"blame"},
+				wantEnable: []string{"blame"}, wantDisable: gitOn},
+			{name: "blame kept, git dropped", enabled: gitAndBlame, stored: []string{"git", "blame"}, submitted: []string{"blame"}, wantDisable: gitOn},
+			{name: "blame dropped, git kept: git names the blame key", enabled: gitAndBlame, stored: []string{"git", "blame"}, submitted: []string{"git"}},
+			{name: "blame dropped, nothing kept", enabled: []string{"blame"}, stored: []string{"blame"}, submitted: []string{}, wantDisable: []string{"blame"}},
+			{name: "security dropped: no save switches it off", enabled: []string{"security"}, stored: []string{"security"}, submitted: []string{}},
+			{name: "git dropped, blame on and not submitted", enabled: gitAndBlame, stored: []string{"git"}, submitted: []string{}, wantDisable: gitAndBlame},
+		} {
+			change := mustPlan(t, provider, testCase.enabled, testCase.stored, testCase.submitted)
+			if !reflect.DeepEqual(sortedStrings(change.enableKeys), sortedStrings(testCase.wantEnable)) ||
+				!reflect.DeepEqual(sortedStrings(change.disableKeys), sortedStrings(testCase.wantDisable)) {
+				t.Errorf("%s, %s: enable %v disable %v, want enable %v disable %v", provider, testCase.name,
+					change.enableKeys, change.disableKeys, testCase.wantEnable, testCase.wantDisable)
+			}
 		}
 	}
 }

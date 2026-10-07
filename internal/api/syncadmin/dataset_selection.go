@@ -101,10 +101,18 @@ type selectionChange struct {
 // the stored list), read in the save's transaction; nothing the
 // request says changes it. Only a target the submitted list adds to, or drops
 // from, the reference writes rows: a target in neither set keeps its rows
-// whatever they are. A target with no dataset writes no row. A target the
-// form does not offer ("blame", "security") is switched on when the request
-// adds it, as the create does for the same list, and is never switched off
-// by a save: no form shows it as a box a user unchecked.
+// whatever they are. A target with no dataset writes no row.
+//
+// The rows after the save are computed from sets, never from an order of
+// writes. On: the keys of every added target, whether the form offers it or
+// not ("blame", "security"), as the create writes them for the same list.
+// Off: the keys of the dropped targets that an operator controls
+// (OperatorControlledDatasetKeys: "blame" is one, "security" is not, so no
+// save switches "security" off) and that no target of the submitted list
+// names. So a key that belongs to a target the request keeps or adds is never
+// switched off by that request: dropping "git" while "blame" is submitted
+// leaves the blame row alone, and dropping "blame" while "git" is submitted
+// does too ("git" names the blame key).
 func planSelectionChange(provider string, enabledKeys, stored, submitted []string) (selectionChange, error) {
 	shown := shownTargets(provider, enabledKeys, stored)
 	inShown, inSubmitted, inStored := stringSet(shown), stringSet(submitted), stringSet(stored)
@@ -119,30 +127,36 @@ func planSelectionChange(provider string, enabledKeys, stored, submitted []strin
 			change.removed = append(change.removed, target)
 		}
 	}
-	keysOf := func(target string) ([]string, error) {
-		if !providersync.SyncTargetHasDataset(provider, target) {
+	keysOf := func(targets []string) ([]string, error) {
+		var withDataset []string
+		for _, target := range targets {
+			if providersync.SyncTargetHasDataset(provider, target) {
+				withDataset = append(withDataset, target)
+			}
+		}
+		if len(withDataset) == 0 {
 			return nil, nil
 		}
-		return providersync.PlannerDatasetKeys(provider, []string{target})
+		return providersync.PlannerDatasetKeys(provider, withDataset)
 	}
-	for _, target := range change.added {
-		keys, err := keysOf(target)
-		if err != nil {
-			return selectionChange{}, err
-		}
-		change.enableKeys = append(change.enableKeys, keys...)
+	var err error
+	if change.enableKeys, err = keysOf(change.added); err != nil {
+		return selectionChange{}, err
 	}
-	for _, target := range change.removed {
-		if !providersync.OperatorSelectableSyncTarget(target) {
-			continue
-		}
-		keys, err := keysOf(target)
-		if err != nil {
-			return selectionChange{}, err
-		}
-		change.disableKeys = append(change.disableKeys, keys...)
+	removedKeys, err := keysOf(change.removed)
+	if err != nil {
+		return selectionChange{}, err
 	}
-	change.enableKeys, change.disableKeys = uniqueStrings(change.enableKeys), uniqueStrings(change.disableKeys)
+	submittedKeys, err := keysOf(submitted)
+	if err != nil {
+		return selectionChange{}, err
+	}
+	controlled, keptOn := stringSet(providersync.OperatorControlledDatasetKeys(provider)), stringSet(submittedKeys)
+	for _, key := range removedKeys {
+		if controlled[key] && !keptOn[key] {
+			change.disableKeys = append(change.disableKeys, key)
+		}
+	}
 	inAdded := stringSet(change.added)
 	change.stored = make([]string, 0, len(submitted))
 	for _, target := range submitted {

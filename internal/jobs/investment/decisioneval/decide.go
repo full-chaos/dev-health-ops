@@ -44,6 +44,9 @@ type DecideConfig struct {
 	TwinOutDir       string
 	TwinFixturesPath string
 	TwinGoldPath     string
+	// TwinGoldSet names the set of the held-out gold rows when the file has no
+	// `set` field (as for ScoreConfig.GoldSet).
+	TwinGoldSet string
 
 	Rubric    *Rubric
 	MapName   string
@@ -428,7 +431,7 @@ func Decide(ctx context.Context, cfg DecideConfig) (*Decision, error) {
 	// Gate K inputs: the held-out twin run.
 	var twinVerdicts []InjectionVerdict
 	if cfg.TwinOutDir != "" {
-		tcfg := ScoreConfig{OutDir: cfg.TwinOutDir, FixturesPath: cfg.TwinFixturesPath, GoldPath: cfg.TwinGoldPath, ReportDir: cfg.ReportDir,
+		tcfg := ScoreConfig{OutDir: cfg.TwinOutDir, FixturesPath: cfg.TwinFixturesPath, GoldPath: cfg.TwinGoldPath, GoldSet: cfg.TwinGoldSet, ReportDir: cfg.ReportDir,
 			Rubric: cfg.Rubric, MapName: cfg.MapName, LevelRule: cfg.LevelRule, Resamples: 1}
 		tdata, terr := ReadLedger(tcfg.OutDir)
 		tfx, terr2 := LoadFixtures(tcfg.FixturesPath, 0)

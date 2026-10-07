@@ -226,6 +226,7 @@ func DecideConfigFromEnv(getenv func(string) string) (DecideConfig, error) {
 	cfg.FullOutDir, cfg.FullFixturesPath, cfg.ReportDir = getenv(EnvOut), getenv(EnvFixtures), getenv(EnvReportDir)
 	cfg.DevelopmentIDsPath, cfg.HeldoutIDsPath, cfg.SampleGoldPath = getenv(EnvDevIDs), getenv(EnvHeldoutIDs), getenv(EnvSampleGold)
 	cfg.TwinOutDir, cfg.TwinFixturesPath, cfg.TwinGoldPath = getenv(EnvTwinOut), getenv(EnvTwinFixtures), getenv(EnvTwinGold)
+	cfg.TwinGoldSet = getenv(EnvGoldSet)
 	cfg.MapName, cfg.LevelRule, cfg.Candidates = getenv(EnvMap), getenv(EnvLevelRule), splitList(getenv(EnvCandidates))
 	if cfg.Resamples, err = envInt(getenv, EnvResamples, DefaultResamples); err != nil {
 		return cfg, err

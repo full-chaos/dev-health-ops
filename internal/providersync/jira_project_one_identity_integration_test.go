@@ -55,14 +55,17 @@ func countRows(t *testing.T, ctx context.Context, conn driver.Conn, query string
 const openJiraOwnershipCount = `SELECT count() FROM team_project_ownership FINAL WHERE org_id = ? AND provider = 'jira' AND team_id = ? AND project_id = ? AND valid_to IS NULL`
 
 // One Jira project is one project: the team catalog and the work-items route
-// name it by the same native id, so the team that owns the project reaches the
+// name it by the same native id, so a team that owns the project reaches the
 // project's work items through ownership. Both rows come from the real
 // producers -- the catalog collector against a provider answer, and the
 // work-item normalizer with the route's own `projects` row builder.
 //
-// The store starts in the state the old catalog left: an open ownership row
-// and a `projects` row on an id built from the project key. The first sync
-// closes that ownership row; the operator cleanup removes the `projects` row.
+// The store starts in the state the old catalog left: a team made out of the
+// project (a project-as-team) with its lead, open ownership rows and a
+// `projects` row on an id built from the project key. The first sync retires
+// the project-as-team with every row of it and writes none again: the project
+// is a project, and the teams that own it are the linked ops team and the
+// Atlassian team. The operator cleanup removes the key-built `projects` row.
 func TestTeamReachesItsJiraProjectsWorkItemsThroughOwnership(t *testing.T) {
 	ctx, conn := newWorkItemEffectsConn(t)
 	lease := providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil })
@@ -78,8 +81,16 @@ func TestTeamReachesItsJiraProjectsWorkItemsThroughOwnership(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	// An Atlassian Teams link shares provider and source with the catalog's
-	// rows. It is not the catalog's to close.
+	if err := conn.Exec(ctx, `INSERT INTO teams (id, team_uuid, name, members, manual_members, project_keys, repo_patterns, is_active, updated_at, org_id, provider, native_team_key) VALUES ('OPS', ?, 'Ops Project', [], [], ['OPS'], [], 1, ?, ?, 'jira', 'OPS')`,
+		uuid.New(), old, orgID); err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.Exec(ctx, `INSERT INTO team_memberships (org_id, provider, team_id, member_id, identity_facets, source, is_primary, specificity, priority, valid_from, updated_at) VALUES (?, 'jira', 'OPS', 'jira:lead-1', [], 'native', 1, 100, 10, ?, ?)`,
+		orgID, old, old); err != nil {
+		t.Fatal(err)
+	}
+	// An Atlassian Teams link shares provider and source with the
+	// project-as-team rows. It is not a row of that class: it stays.
 	if err := conn.Exec(ctx, insertOwnership, orgID, atlassianTeam, keyBuiltID, old, old); err != nil {
 		t.Fatal(err)
 	}
@@ -147,8 +158,20 @@ func TestTeamReachesItsJiraProjectsWorkItemsThroughOwnership(t *testing.T) {
 	}
 	first := sync(firstSync)
 
-	if got := ownedWorkItems(t, ctx, conn, orgID, "jira", "OPS", firstSync.Add(time.Second)); got != 1 {
-		t.Fatalf("team OPS reaches %d work items of its project through ownership, want 1", got)
+	if got := ownedWorkItems(t, ctx, conn, orgID, "jira", "OPS", firstSync.Add(time.Second)); got != 0 {
+		t.Fatalf("the retired project-as-team OPS reaches %d work items through ownership, want 0", got)
+	}
+	if got := countRows(t, ctx, conn, `SELECT count() FROM teams FINAL WHERE org_id = ? AND id = 'OPS' AND is_active = 1`, orgID); got != 0 {
+		t.Fatalf("%d active project-as-team rows after the sync, want 0", got)
+	}
+	if got := countRows(t, ctx, conn, `SELECT count() FROM teams FINAL WHERE org_id = ? AND id = 'OPS' AND is_active = 0`, orgID); got != 1 {
+		t.Fatalf("%d inactive project-as-team rows after the sync, want 1 (retired, not removed, not written again)", got)
+	}
+	if got := countRows(t, ctx, conn, `SELECT count() FROM team_project_ownership FINAL WHERE org_id = ? AND provider = 'jira' AND team_id = 'OPS' AND valid_to IS NULL`, orgID); got != 0 {
+		t.Fatalf("%d open ownership rows of the project-as-team after the sync, want 0 on any project id", got)
+	}
+	if got := countRows(t, ctx, conn, `SELECT count() FROM team_memberships FINAL WHERE org_id = ? AND provider = 'jira' AND team_id = 'OPS' AND valid_to IS NULL`, orgID); got != 0 {
+		t.Fatalf("%d open membership rows of the project-as-team after the sync, want 0", got)
 	}
 	if got := countRows(t, ctx, conn, `SELECT count() FROM projects FINAL WHERE org_id = ? AND provider = 'jira' AND project_key = 'OPS' AND id != ?`, orgID, keyBuiltID); got != 1 {
 		t.Fatalf("the two producers wrote %d project rows for one project, want 1", got)
@@ -156,8 +179,9 @@ func TestTeamReachesItsJiraProjectsWorkItemsThroughOwnership(t *testing.T) {
 	if got := countRows(t, ctx, conn, openJiraOwnershipCount, orgID, "OPS", keyBuiltID); got != 0 {
 		t.Fatalf("%d ownership rows on the key-built project id are still open after the sync, want 0", got)
 	}
-	if first.OwnershipRetracted != 3 || first.OwnershipWritten != 2 {
-		t.Fatalf("result = %+v, want 2 ownership rows written (the project team and the linked ops team) and the 3 key-built rows retracted", first)
+	if first.ProjectAsTeamRetired != 4 || first.OwnershipRetracted != 1 || first.OwnershipWritten != 1 || first.TeamsWritten != 0 || first.MembershipsWritten != 0 {
+		t.Fatalf("result = %+v, want 4 project-as-team rows retired (the team, its two ownership rows, its lead), 1 ownership row "+
+			"written (the linked ops team), its key-built row retracted, and no team or membership row written", first)
 	}
 	// The linked ops team owns the project by the same native id, so it
 	// reaches the same work item; its row on the key-built id is closed.
@@ -178,13 +202,16 @@ func TestTeamReachesItsJiraProjectsWorkItemsThroughOwnership(t *testing.T) {
 
 	// The same provider answer a day later is the same fact: no new open row.
 	second := sync(firstSync.Add(24 * time.Hour))
-	if got := countRows(t, ctx, conn, openJiraOwnershipCount, orgID, "OPS", "10001"); got != 1 {
-		t.Fatalf("%d open ownership rows after two syncs of the same data, want 1", got)
+	if got := countRows(t, ctx, conn, openJiraOwnershipCount, orgID, opsTeam, "10001"); got != 1 {
+		t.Fatalf("%d open ownership rows of the linked ops team after two syncs of the same data, want 1", got)
 	}
-	if second.OwnershipRetracted != 0 {
-		t.Fatalf("second sync retracted %d rows, want 0", second.OwnershipRetracted)
+	if got := countRows(t, ctx, conn, openJiraOwnershipCount, orgID, "OPS", "10001"); got != 0 {
+		t.Fatalf("%d open ownership rows of the project-as-team after two syncs, want 0: no sync writes one again", got)
 	}
-	if got := countRows(t, ctx, conn, `SELECT toUInt64(toUnixTimestamp64Milli(min(valid_from))) FROM team_project_ownership FINAL WHERE org_id = ? AND team_id = 'OPS' AND project_id = '10001' AND valid_to IS NULL`, orgID); int64(got) != firstSync.UnixMilli() {
+	if second.OwnershipRetracted != 0 || second.ProjectAsTeamRetired != 0 {
+		t.Fatalf("second sync = %+v, want nothing retracted and nothing retired: the class was retired by the first", second)
+	}
+	if got := countRows(t, ctx, conn, `SELECT toUInt64(toUnixTimestamp64Milli(min(valid_from))) FROM team_project_ownership FINAL WHERE org_id = ? AND team_id = ? AND project_id = '10001' AND valid_to IS NULL`, orgID, opsTeam); int64(got) != firstSync.UnixMilli() {
 		t.Fatalf("valid_from = %d, want the time the fact was first seen %d", got, firstSync.UnixMilli())
 	}
 

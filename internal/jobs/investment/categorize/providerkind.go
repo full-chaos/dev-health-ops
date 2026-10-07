@@ -239,7 +239,7 @@ func ResolveTextProviderKindForOrg(
 	ctx context.Context, requested string, orgID string, resolveOrg OrgProviderResolver,
 ) (ProviderKind, error) {
 	kind, err := ResolveProviderKindForOrg(ctx, requested, orgID, resolveOrg)
-	if err != nil || !IsDecisionProviderKind(kind) || normalizeProviderKind(requested) != providerKindAuto {
+	if !IsDecisionProviderKind(kind) || normalizeProviderKind(requested) != providerKindAuto {
 		return kind, err
 	}
 	return detectedOrMissing()

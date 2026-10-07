@@ -528,8 +528,19 @@ WHERE org_id = $1::uuid AND generation LIKE 'touched-drain:%'`, orgID, interval)
 		}
 		age("25 hours")
 		drain.DrainTouchedDays(ctx, orgID, pass("n"))
-		if got := rig.openDays(t, ctx, orgID); !reflect.DeepEqual(got, days) {
-			t.Fatalf("with open runs of 25 hours the pass left %d runs open, want the other 9 days started too", len(got))
+		// The runs that did not end in 24 hours are runs without a result:
+		// their keys are pending again, and the pass is not held back. It
+		// starts the newest days, which are the same 31; the 9 older days
+		// wait for the pass after it.
+		counts := drainRunsOf(t, ctx, rig, orgID)
+		for index, key := range days {
+			want := 2
+			if index < 9 {
+				want = 0
+			}
+			if counts[key] != want {
+				t.Fatalf("with open runs of 25 hours the day %s has %d drain runs, want %d (runs by day: %v)", key, counts[key], want, counts)
+			}
 		}
 	})
 

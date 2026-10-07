@@ -190,7 +190,7 @@ UPDATE public.daily_metrics_runs SET created_at = $3 WHERE org_id = $1::uuid AND
 
 	// A day whose runs never end must not be started again each night for
 	// ever: three such runs count as three failed runs.
-	t.Run("a day whose three newest runs never ended is skipped", func(t *testing.T) {
+	t.Run("a day whose three newest runs never ended gets one run in a day and is skipped between", func(t *testing.T) {
 		rig.reset()
 		orgID := uuid.NewString()
 		now := time.Now().UTC()
@@ -201,16 +201,30 @@ UPDATE public.daily_metrics_runs SET created_at = $3 WHERE org_id = $1::uuid AND
 			listedRun(t, ctx, rig.touchedRig, orgID, day, daily.TouchedDrainGenerationPrefix+"n:"+uuid.NewString(), first,
 				mark.Add(-time.Duration(index)*24*time.Hour), "", time.Time{})
 		}
-		before := rig.listedRunsByDay(t, ctx, orgID)
-		rig.drain(t, nil, nil).DrainTouchedDays(ctx, orgID, pass("n"))
-		if after := rig.listedRunsByDay(t, ctx, orgID); !reflect.DeepEqual(before, after) {
-			t.Fatalf("a pass started a run for a day whose runs never end: %v -> %v", before, after)
+		drain := rig.drain(t, nil, nil)
+		// The newest run is 25 hours old: the day is due for one more run.
+		drain.DrainTouchedDays(ctx, orgID, pass("n"))
+		if got := rig.listedRunsByDay(t, ctx, orgID)[dayKey]; got != 4 {
+			t.Fatalf("runs of the day after the first pass = %d, want 4 (one more run 24 hours after the newest)", got)
 		}
-		if got := rig.observer.count(jobruntime.TouchedDaysDrainDaysSkipped); got != 1 {
-			t.Fatalf("days_skipped_after_failed_runs = %d, want 1", got)
+		if got := rig.observer.count(jobruntime.TouchedDaysDrainEvent("days_retried_after_failed_runs")); got != 1 {
+			t.Fatalf("days_retried_after_failed_runs = %d, want 1", got)
 		}
-		if got := rig.pendingDays(t, ctx, orgID); !reflect.DeepEqual(got, []string{dayKey}) {
-			t.Fatalf("pending = %v, want the day %s to stay visible", got, dayKey)
+		// That run fails too. Its newest run is now seconds old: the passes
+		// behind it start nothing.
+		endDrainRuns(t, ctx, rig.touchedRig, orgID, "failed")
+		for attempt := 0; attempt < 2; attempt++ {
+			rig.reset()
+			rig.drain(t, nil, nil).DrainTouchedDays(ctx, orgID, pass("e"))
+			if got := rig.listedRunsByDay(t, ctx, orgID)[dayKey]; got != 4 {
+				t.Fatalf("a pass started a run for a day whose newest runs all ended without a result: %d runs, want 4", got)
+			}
+			if got := rig.observer.count(jobruntime.TouchedDaysDrainDaysSkipped); got != 1 {
+				t.Fatalf("days_skipped_after_failed_runs = %d, want 1", got)
+			}
+			if got := rig.pendingDays(t, ctx, orgID); !reflect.DeepEqual(got, []string{dayKey}) {
+				t.Fatalf("pending = %v, want the day %s to stay visible", got, dayKey)
+			}
 		}
 	})
 }

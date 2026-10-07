@@ -535,16 +535,20 @@ end.
 1. If drain runs of the organization are not ended (created in the last 24
    hours), the trigger does nothing. At most 31 drain runs of one organization
    are in flight.
-2. The days with a run of a fan-out or of the drain that ended without a
-   result go back to pending (`ReturnToPending`). Their keys were marked when
-   the run started; without this step such a run would lose its day.
-3. ClickHouse, with no Postgres transaction open: the pending days, newest
+2. A pass that the end of a drain run triggered looks at the pass of that
+   run. When a run of it has a result and every key it lists is pending, the
+   mark of that pass is missing: the pass starts nothing and the chain ends
+   (see "A mark that fails").
+3. The keys whose owner run ended without a result go back to pending
+   (`ReturnToPending`). They were marked when the run started; without this
+   step such a run would lose its day.
+4. ClickHouse, with no Postgres transaction open: the pending days, newest
    first, and the pending repositories of the first 31 that can start.
-4. One Postgres transaction under an advisory lock for the organization: the
+5. One Postgres transaction under an advisory lock for the organization: the
    in-flight count again, then one run for each day, generation
    `touched-drain:<trigger>:<id of the run that triggered the pass>`.
-5. After the commit: the `dispatched` events of exactly the keys the runs
-   list, one millisecond before the read of step 3.
+6. After the commit: the `dispatched` events of exactly the keys the runs
+   list, one millisecond before the read of step 4.
 
 **Order and the 31 slots.** The fan-out and the drain both take the newest
 pending days, and each has its own 31. The drain reads after the fan-out
@@ -569,21 +573,57 @@ together equal one run of every repository. The split depends on that rule.
 the status `canceled`, and a run that is not ended 24 hours after its creation
 (a blocked run, a run whose jobs were lost; a daily run has no other terminal
 status than `succeeded` and `no_repositories`, which a run of listed
-repositories never gets). The keys of such a run are pending again at the next
-pass and get a new run. Every such run of the last 72 hours is looked at, not
-only the newest run of the day: a newer run of the same day lists other keys.
-Only the keys marked at or before the end of the run are returned, so the same
-failure is never returned twice and a run started after it keeps its marks. A
-key of the day that another run computed before that end is returned too and
-is computed once more. A run that ends after its 24 hours is computed twice.
+repositories never gets). The 24 hours are measured on the Postgres clock
+against `created_at`, which Postgres stamps.
 
-When the 3 newest runs of a day all ended without a result, the
-drain starts no run for it: the day stays pending, each pass reports it in one
-Error line (`touched_days_drain.days_skipped_after_failed_runs`) and in the
-counter event `days_skipped_after_failed_runs`, and it holds no slot, so the
-other days still drain. A run of the day that succeeds, of any trigger, makes
-it startable again. The fan-out has no such rule: it takes a pending day by
-age only.
+**The owner of a key.** The run state names the keys of a run: its partitions
+(`daily_metrics_partitions.repo_ids`), written in the transaction that created
+the run, and `full_org` for a run of every repository, which lists every key of
+its day. The owner of a key is the newest run of a fan-out or of the drain
+that lists it, in the order of (`created_at`, `id`). A pass returns each key
+that is not pending and whose owner ended without a result, and the run that is
+then started for it is its new owner. So the same failure is never returned
+twice, a run started after the failed one keeps its marks, and a mark that
+reaches ClickHouse after its run failed is returned by the next pass.
+
+The return compares no time of a run with a time of the touched-day record:
+the clock of Postgres, of the worker and of ClickHouse can differ by any
+amount. The `touched` event of a returned key carries the ClickHouse time of
+the return, or one millisecond after the newest `dispatched` event of the key
+when that is later. A key that is pending already gets no event. The read has
+no bound on the age of a run: a run without a result returns its keys whenever
+a later pass looks. A run that ends after its 24 hours is computed twice.
+
+The read returns at most 3660 owner runs without a result, newest first. A
+pass that hits the bound writes an Error line (phase `return_read_truncated`)
+and counts `return_read_truncated`; the runs behind the bound are reached when
+the keys of the returned ones have a new owner. An organization in a normal
+state has none or a few such runs.
+
+**A day whose runs keep failing.** When the 3 newest runs of a day all ended
+without a result, the drain starts no run for it: the day stays pending, each
+pass reports it in one Error line
+(`touched_days_drain.days_skipped_after_failed_runs`) and in the counter event
+`days_skipped_after_failed_runs`, it keeps the gauge of the oldest pending age
+above zero (the age of a returned key counts from its return), and it holds
+no slot, so the other days still drain. 24 hours after the
+newest run of the day (Postgres clock) any pass starts one more run for it,
+inside its 31 (`days_retried_after_failed_runs`, `drain_days_retried`). That
+run is then the newest run of the day, so the passes behind it skip the day
+again whatever its end: a set of days that always fail costs one run for each
+day in 24 hours, and their chain ends. A run of the day that succeeds, of any
+trigger, makes it startable at once. The fan-out has no such rule: it takes a
+pending day by age only.
+
+**A mark that fails.** The runs of a pass are committed before their mark. A
+mark that does not reach ClickHouse (`mark_failed`, Error line phase `mark`)
+leaves the days pending with their runs started. The pass that the end of one
+of those runs triggers finds a run with a result whose every key is pending,
+writes one Error line (phase `chain_stopped_mark_missing`, with
+`drain_days_not_marked`), counts `chain_stopped_mark_missing` and starts
+nothing. The nightly pass and the fan-out of the next sync are not triggered
+by the end of a drain run, so they start runs again: while the mark fails, the
+31 newest days run once for each of them and the older days wait.
 
 **Delivery.** At-least-once, as the fan-out. A stop before the commit leaves
 every day pending. A stop between the commit and the mark leaves the days
@@ -603,12 +643,14 @@ pending day (`drain_pass` = the trigger letter, `n` for the nightly dispatch or
 `outcome`, `drain_days_started`, `drain_days_pending_left`,
 `drain_days_split`, `drain_days_already_started`,
 `drain_days_returned_to_pending`, `drain_days_skipped`,
-`drain_runs_in_flight`, `drain_oldest_pending_day`,
+`drain_days_retried`, `drain_runs_in_flight`, `drain_oldest_pending_day`,
 `drain_oldest_pending_age`); Error line `touched_days_drain.failed` with
 `phase`. Counter `dev_health_touched_days_drain_total{event}` with `passes`,
 `days_started`, `days_split`, `days_already_started`,
 `days_returned_to_pending`, `days_skipped_after_failed_runs`, `in_flight`,
-`nothing_pending`, `pass_failed`, `mark_failed`, `read_truncated`. Gauge
+`nothing_pending`, `pass_failed`, `mark_failed`, `read_truncated`,
+`days_retried_after_failed_runs`, `chain_stopped_mark_missing`,
+`return_read_truncated`. Gauge
 `dev_health_touched_days_oldest_pending_age_seconds`: the highest age of the
 oldest pending day over the organizations whose last pass in the process left
 a day pending. Each worker process exports its own value: read the highest
@@ -623,19 +665,28 @@ the age is a lower bound.
 **Limits.**
 
 - A drain run that never ends holds back the next pass for 24 hours. Then its
-  day is returned and started again; a day whose runs never end so holds back
-  the drain of its organization for three days before it is skipped. The
-  blocked-run marker reports each run.
-- A run without a result is seen for 72 hours after it was created. An
-  organization with no pass in that time (no active nightly run) keeps the
-  keys marked.
+  keys are returned and started again; a day whose runs never end so holds
+  back the drain of its organization for three days before it is skipped, and
+  for one more day at each later run of it. The blocked-run marker reports
+  each run.
+- The read of the owner runs without a result looks at every run of a fan-out
+  or of the drain of the organization that is failed, canceled or not ended:
+  the run rows have no retention. Its result is bounded (3660 runs), its scan
+  is not.
+- A key that is marked while no run row lists it (the rows of its runs were
+  deleted) has no owner and is not returned.
+- A run with a result whose every key was touched again while it ran looks
+  like a run whose mark is missing: the chain ends there too, until the
+  nightly pass or the fan-out of the sync that touched the keys.
+- The mark of a pass is one insert for each month of its days. A mark that
+  reaches some months only ends the chain as a mark that reached none.
 - The fan-out has no skip rule. A day that the drain skips stays pending, so
   each later fan-out that finds it among its 31 newest pending days starts
   one more run for it. No other day is lost by that: the drain takes what the
   fan-out leaves, and a skipped day holds no slot of the drain.
-- A mark that keeps failing while the runs succeed makes each pass start the
-  same days again (`mark_failed` counts it). Nothing bounds that but the 31
-  runs in flight.
+- While the mark keeps failing, the same 31 newest days run once for each
+  nightly pass and each fan-out, and the older days wait. The signals are
+  `mark_failed`, `chain_stopped_mark_missing` and their Error lines.
 - The line of the fan-out (`post_sync_fanout.touched_days`) has no pending-age
   fields: the fan-out does not read the whole backlog. The pass that follows
   the end of its runs reports them.

@@ -186,12 +186,11 @@ func buildDailyWorker(
 		for _, spec := range dailySpecs {
 			switch spec.Kind {
 			case jobcontract.KindDailyMetricsDispatch:
-				handler, handlerErr := daily.NewDispatcher(store, publisher, discoverer)
+				handler, handlerErr := newDrainingDailyDispatcher(store, publisher, discoverer, touchedDrain)
 				if handlerErr != nil {
 					_ = clickhouseConnection.Close()
 					return workerFamily{}, errWorkerDependencyUnavailable
 				}
-				handler.SetTouchedDaysDrainer(touchedDrain)
 				// CHAOS-5040: the fan-out is the only genuinely periodic,
 				// per-organization thing in this family, so it is where the
 				// blocked-run marker is kept current.
@@ -367,12 +366,11 @@ func buildDailyWorker(
 				}
 				registered = append(registered, adapter.Spec())
 			case jobcontract.KindDailyMetricsFinalize:
-				handler, handlerErr := daily.NewFinalizeHandler(store)
+				handler, handlerErr := newDrainingDailyFinalizeHandler(store, touchedDrain)
 				if handlerErr != nil {
 					_ = clickhouseConnection.Close()
 					return workerFamily{}, errWorkerDependencyUnavailable
 				}
-				handler.SetTouchedDaysDrainer(touchedDrain)
 				// CHAOS-4290: RUN-scoped native families. dailyNativeFamilyRegistrations
 				// is a pure function (see the partition case's comment on why the
 				// drift test calls it directly), so calling it again here is safe
@@ -1694,4 +1692,38 @@ func membershipRefusalReason(err error) string {
 	default:
 		return jobruntime.MembershipRefusedInspectFailed
 	}
+}
+
+// newDrainingDailyDispatcher builds the dispatch handler of the daily family
+// with the drain of the pending touched days set on it: the dispatch of a
+// nightly run is the floor trigger of the drain. A nil drain is an error: a
+// worker whose dispatcher triggers no pass leaves the pending days to a later
+// sync.
+func newDrainingDailyDispatcher(
+	store daily.Store, publisher daily.Publisher, discoverer daily.RepositoryDiscoverer, drain daily.TouchedDaysDrainer,
+) (*daily.Dispatcher, error) {
+	if drain == nil {
+		return nil, errWorkerDependencyUnavailable
+	}
+	handler, err := daily.NewDispatcher(store, publisher, discoverer)
+	if err != nil {
+		return nil, err
+	}
+	handler.SetTouchedDaysDrainer(drain)
+	return handler, nil
+}
+
+// newDrainingDailyFinalizeHandler builds the finalize handler of the daily
+// family with the drain set on it: the end of a daily run is the continuation
+// trigger of the drain. A nil drain is an error.
+func newDrainingDailyFinalizeHandler(store daily.Store, drain daily.TouchedDaysDrainer) (*daily.FinalizeHandler, error) {
+	if drain == nil {
+		return nil, errWorkerDependencyUnavailable
+	}
+	handler, err := daily.NewFinalizeHandler(store)
+	if err != nil {
+		return nil, err
+	}
+	handler.SetTouchedDaysDrainer(drain)
+	return handler, nil
 }

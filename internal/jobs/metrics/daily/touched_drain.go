@@ -2,6 +2,7 @@ package daily
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/google/uuid"
@@ -91,39 +92,52 @@ WHERE org_id = $1::uuid
 	return count, nil
 }
 
-// TouchedDayFailure is one day whose newest run is a failed touched-day run.
+// TouchedDayFailure is one day with a touched-day run that ended without a
+// result, and the time up to which the marks of the day are not to be trusted.
 type TouchedDayFailure struct {
 	Day      time.Time
 	FailedAt time.Time
 }
 
-// FailedTouchedDays returns the days of the organization whose NEWEST run (of
-// any generation, created at or after since) is a failed run of a post-sync
-// fan-out or of the drain. The keys of such a day were marked as dispatched
-// when the run started, and the run computed nothing that can be trusted.
+// touchedRunWithoutResultSQL is true for a run that will give its day no
+// result: it is failed or canceled, or it is not ended and was created before
+// the bound ($%d). A run that is not ended after that time is treated as one
+// that never ends (a blocked run, a run whose jobs were lost): the same bound
+// stops such a run from holding back the drain.
+const touchedRunWithoutResultSQL = `(status IN ('failed', 'canceled') OR (status IN ('pending', 'running') AND created_at < $%d))`
+
+// FailedTouchedDays returns the days of the organization that have a run of a
+// post-sync fan-out or of the drain, created at or after since, that ended
+// without a result: failed, canceled, or not ended and created before
+// notEndedBefore. The keys of such a day were marked as dispatched when the
+// run started, and the run computed nothing that can be trusted.
 //
-// A day whose newest run is of another kind, or is not failed, is not
-// returned: a later run of the day computes it from stored rows.
+// FailedAt is the newest such end of the day: the time the run failed, or
+// window after its creation for a run that is not ended. Every run of the day
+// is looked at, not only the newest: a newer run of the same day lists other
+// keys and says nothing about the keys of the failed one. What stops a second
+// return of the same failure is the record of the touched days, which returns
+// only the keys marked at or before FailedAt.
 func (store *PostgresStore) FailedTouchedDays(
-	ctx context.Context, organizationID string, since time.Time,
+	ctx context.Context, organizationID string, since, notEndedBefore time.Time, window time.Duration,
 ) ([]TouchedDayFailure, error) {
-	if !store.valid() || !validUUID(organizationID) || since.IsZero() {
+	if !store.valid() || !validUUID(organizationID) || since.IsZero() || notEndedBefore.IsZero() || window <= 0 {
 		return nil, ErrInvalidState
 	}
 	rows, err := store.pool.Query(ctx, `
-SELECT target_day, failed_at
-FROM (
-    SELECT DISTINCT ON (target_day)
-           target_day, status, generation, COALESCE(finalized_at, updated_at) AS failed_at
-    FROM public.daily_metrics_runs
-    WHERE org_id = $1::uuid AND created_at >= $2
-    ORDER BY target_day, created_at DESC, id DESC
-) AS newest
-WHERE status = 'failed' AND (generation LIKE $3 OR generation LIKE $4)
+SELECT target_day,
+       max(CASE WHEN status IN ('failed', 'canceled') THEN COALESCE(finalized_at, updated_at)
+                ELSE created_at + make_interval(secs => $6) END) AS failed_at
+FROM public.daily_metrics_runs
+WHERE org_id = $1::uuid AND created_at >= $2
+  AND (generation LIKE $3 OR generation LIKE $4)
+  AND `+fmt.Sprintf(touchedRunWithoutResultSQL, 5)+`
+GROUP BY target_day
 ORDER BY target_day`,
 		organizationID, since.UTC(),
 		escapeLikePrefix(postSyncGenerationPrefix)+"%",
 		escapeLikePrefix(TouchedDrainGenerationPrefix)+"%",
+		notEndedBefore.UTC(), window.Seconds(),
 	)
 	if err != nil {
 		return nil, ErrUnavailable
@@ -145,12 +159,13 @@ ORDER BY target_day`,
 }
 
 // DaysWithOnlyFailedRuns returns the days among days whose newest `threshold`
-// runs (of any generation) all failed. A day with fewer runs is not returned.
-// The map key is the day as 2006-01-02.
+// runs (of any generation) all ended without a result: failed, canceled, or
+// not ended and created before notEndedBefore. A day with fewer runs is not
+// returned. The map key is the day as 2006-01-02.
 func (store *PostgresStore) DaysWithOnlyFailedRuns(
-	ctx context.Context, organizationID string, days []time.Time, threshold int,
+	ctx context.Context, organizationID string, days []time.Time, threshold int, notEndedBefore time.Time,
 ) (map[string]struct{}, error) {
-	if !store.valid() || !validUUID(organizationID) || threshold < 1 {
+	if !store.valid() || !validUUID(organizationID) || threshold < 1 || notEndedBefore.IsZero() {
 		return nil, ErrInvalidState
 	}
 	failed := map[string]struct{}{}
@@ -164,15 +179,15 @@ func (store *PostgresStore) DaysWithOnlyFailedRuns(
 	rows, err := store.pool.Query(ctx, `
 SELECT target_day::text
 FROM (
-    SELECT target_day, status,
+    SELECT target_day, `+fmt.Sprintf(touchedRunWithoutResultSQL, 4)+` AS without_result,
            row_number() OVER (PARTITION BY target_day ORDER BY created_at DESC, id DESC) AS position
     FROM public.daily_metrics_runs
     WHERE org_id = $1::uuid AND target_day = ANY($2::date[])
 ) AS ranked
 WHERE position <= $3
 GROUP BY target_day
-HAVING count(*) = $3 AND bool_and(status = 'failed')`,
-		uuid.MustParse(organizationID).String(), values, threshold)
+HAVING count(*) = $3 AND bool_and(without_result)`,
+		uuid.MustParse(organizationID).String(), values, threshold, notEndedBefore.UTC())
 	if err != nil {
 		return nil, ErrUnavailable
 	}

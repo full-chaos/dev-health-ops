@@ -329,30 +329,10 @@ LIMIT ?`, organizationID, limit+1)
 	return backlog, nil
 }
 
-// ReturnToPending makes every key of the day pending again that a run was
-// started for and that is not pending now. The drain calls it for a day whose
-// newest run failed: the keys were marked when the run started, and the run
-// computed nothing.
-//
-// The 'touched' event it appends carries notBefore (the time the run failed),
-// or one millisecond after the key's newest 'dispatched' event when that is
-// later: the two times come from two clocks, and the key must be pending
-// after the append whatever their skew. A key that is pending already gets no
-// event, so a second call for the same failed run appends nothing and the time
-// a pending key has waited does not move.
-//
-// The SELECT gives its constant no alias, for the reason MarkDispatched names.
-func (store *ClickHouseTouchedDaysStore) ReturnToPending(
-	ctx context.Context, organizationID string, day time.Time, notBefore time.Time,
-) error {
-	if store == nil || store.conn == nil || organizationID == "" || day.IsZero() || notBefore.IsZero() {
-		return ErrTouchedDaysUnavailable
-	}
-	if err := store.conn.Exec(ctx, `
-INSERT INTO daily_metrics_touched_days (org_id, day, repo_id, kind, at)
-SELECT org_id, day, repo_id, 'touched',
-       greatest(fromUnixTimestamp64Milli(toInt64(?), 'UTC'), addMilliseconds(dispatched_at, 1))
-FROM (
+// touchedKeysToReturnSQL selects the keys of one day that a run was started for
+// at or before a time and that are not pending now. Its arguments are the
+// organization, the day (2006-01-02) and the time in milliseconds.
+const touchedKeysToReturnSQL = `
     SELECT org_id, day, repo_id,
            maxIf(at, kind = 'touched') AS touched_at,
            maxIf(at, kind = 'dispatched') AS dispatched_at
@@ -360,10 +340,50 @@ FROM (
     WHERE org_id = ? AND toString(day) = ?
     GROUP BY org_id, day, repo_id
     HAVING dispatched_at >= touched_at
-)`, notBefore.UTC().UnixMilli(), organizationID, day.UTC().Format("2006-01-02")); err != nil {
-		return ErrTouchedDaysUnavailable
+       AND dispatched_at <= fromUnixTimestamp64Milli(toInt64(?), 'UTC')`
+
+// ReturnToPending makes every key of the day pending again that was marked as
+// dispatched at or before failedAt and that is not pending now. The drain
+// calls it for a day with a run that ended without a result at failedAt: the
+// keys were marked when the run started, and the run computed nothing. It
+// returns false when the day had no such key.
+//
+// The bound on the mark is what makes a second call for the same failure
+// append nothing: the run that is started for the returned keys marks them
+// after failedAt. It also leaves alone the keys a later run was started for.
+// A key of the day that another run computed before failedAt is returned too
+// and is computed once more.
+//
+// The 'touched' event it appends carries failedAt, or one millisecond after
+// the key's newest 'dispatched' event when that is later: the two times come
+// from two clocks, and the key must be pending after the append whatever
+// their skew. A key that is pending already gets no event, so the time a
+// pending key has waited does not move.
+//
+// The SELECT gives its constant no alias, for the reason MarkDispatched names.
+func (store *ClickHouseTouchedDaysStore) ReturnToPending(
+	ctx context.Context, organizationID string, day time.Time, failedAt time.Time,
+) (bool, error) {
+	if store == nil || store.conn == nil || organizationID == "" || day.IsZero() || failedAt.IsZero() {
+		return false, ErrTouchedDaysUnavailable
 	}
-	return nil
+	dayKey, failedMillis := day.UTC().Format("2006-01-02"), failedAt.UTC().UnixMilli()
+	var keys uint64
+	if err := store.conn.QueryRow(ctx, `SELECT count() FROM (`+touchedKeysToReturnSQL+`)`,
+		organizationID, dayKey, failedMillis).Scan(&keys); err != nil {
+		return false, ErrTouchedDaysUnavailable
+	}
+	if keys == 0 {
+		return false, nil
+	}
+	if err := store.conn.Exec(ctx, `
+INSERT INTO daily_metrics_touched_days (org_id, day, repo_id, kind, at)
+SELECT org_id, day, repo_id, 'touched',
+       greatest(fromUnixTimestamp64Milli(toInt64(?), 'UTC'), addMilliseconds(dispatched_at, 1))
+FROM (`+touchedKeysToReturnSQL+`)`, failedMillis, organizationID, dayKey, failedMillis); err != nil {
+		return false, ErrTouchedDaysUnavailable
+	}
+	return true, nil
 }
 
 // clock reads the ClickHouse clock at millisecond precision.

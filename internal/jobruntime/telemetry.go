@@ -214,11 +214,12 @@ const (
 	// TouchedDaysDrainDaysAlreadyStarted counts the days a pass found a run
 	// of its own generation for (a second delivery of its trigger).
 	TouchedDaysDrainDaysAlreadyStarted TouchedDaysDrainEvent = "days_already_started"
-	// TouchedDaysDrainDaysReturned counts the days whose newest run failed
-	// and that a pass made pending again.
+	// TouchedDaysDrainDaysReturned counts the days with a run that ended
+	// without a result (failed, canceled or never ended) and that a pass
+	// made pending again.
 	TouchedDaysDrainDaysReturned TouchedDaysDrainEvent = "days_returned_to_pending"
 	// TouchedDaysDrainDaysSkipped counts the pending days a pass started no
-	// run for because their newest runs all failed.
+	// run for because their newest runs all ended without a result.
 	TouchedDaysDrainDaysSkipped TouchedDaysDrainEvent = "days_skipped_after_failed_runs"
 	// TouchedDaysDrainInFlight counts the triggers that started no pass
 	// because drain runs of the organization were not ended.
@@ -1294,8 +1295,12 @@ type MetricsCollector struct {
 	postSyncTouchedDays             map[PostSyncTouchedDaysEvent]uint64
 	touchedDaysDrain                map[TouchedDaysDrainEvent]uint64
 	// touchedDaysOldestPendingAge is the age each organization's last drain
-	// pass reported. An organization with nothing pending has no entry.
-	touchedDaysOldestPendingAge map[string]time.Duration
+	// pass in this process reported, with the time of the report. An
+	// organization with nothing pending has no entry.
+	touchedDaysOldestPendingAge map[string]touchedDaysPendingAge
+	// touchedDaysPendingAgeNow is the clock of the staleness bound of those
+	// entries; nil means time.Now.
+	touchedDaysPendingAgeNow func() time.Time
 	// teamRepoOwnershipDerivation (CHAOS-4365 item 1b): per-outcome counter for
 	// sync.team_repo_ownership_derivation's worker; teamRepoOwnershipDerivationRowCount
 	// is the paired rows-written histogram, observed only on the
@@ -1599,7 +1604,7 @@ func NewMetricsCollector(dimensions MetricDimensions) (*MetricsCollector, error)
 		postSyncFanout:                       make(map[PostSyncFanoutOutcome]uint64, len(postSyncFanoutOutcomes())),
 		postSyncTouchedDays:                  make(map[PostSyncTouchedDaysEvent]uint64, len(postSyncTouchedDaysEvents())),
 		touchedDaysDrain:                     make(map[TouchedDaysDrainEvent]uint64, len(touchedDaysDrainEvents())),
-		touchedDaysOldestPendingAge:          make(map[string]time.Duration),
+		touchedDaysOldestPendingAge:          make(map[string]touchedDaysPendingAge),
 		teamRepoOwnershipDerivation:          make(map[TeamRepoOwnershipDerivationOutcome]uint64, len(teamRepoOwnershipDerivationOutcomes())),
 		teamRepoOwnershipDerivationRowCount:  newHistogramWithBounds(repoCountBuckets),
 		teamRepoOwnershipResolutionArm:       make(map[TeamRepoOwnershipResolutionArm]uint64, len(teamRepoOwnershipResolutionArms())),
@@ -2370,6 +2375,29 @@ func (collector *MetricsCollector) ObserveTouchedDaysDrain(event TouchedDaysDrai
 	return nil
 }
 
+// touchedDaysPendingAge is one report of ObserveTouchedDaysOldestPendingAge.
+type touchedDaysPendingAge struct {
+	age        time.Duration
+	observedAt time.Time
+}
+
+// TouchedDaysOldestPendingAgeStaleness is how long the pending age of an
+// organization is exported after the last pass of the organization in this
+// process. Every worker process runs passes, so the pass that finds the
+// organization drained may run in another process, and this one would export
+// its last age for ever. A pass of an organization with a pending day runs at
+// least once a night in some process, so a reader that takes the highest
+// value over the processes sees an organization with a pending day at every
+// moment, and one that was drained for at most this long after its drain.
+const TouchedDaysOldestPendingAgeStaleness = 25 * time.Hour
+
+func (collector *MetricsCollector) touchedDaysPendingAgeClock() time.Time {
+	if collector.touchedDaysPendingAgeNow != nil {
+		return collector.touchedDaysPendingAgeNow()
+	}
+	return time.Now()
+}
+
 // ObserveTouchedDaysOldestPendingAge keeps the age of the oldest pending
 // touch that the last drain pass of one organization reported. An age of zero
 // or less removes the organization: it has nothing pending.
@@ -2383,7 +2411,9 @@ func (collector *MetricsCollector) ObserveTouchedDaysOldestPendingAge(organizati
 		delete(collector.touchedDaysOldestPendingAge, organizationID)
 		return nil
 	}
-	collector.touchedDaysOldestPendingAge[organizationID] = age
+	collector.touchedDaysOldestPendingAge[organizationID] = touchedDaysPendingAge{
+		age: age, observedAt: collector.touchedDaysPendingAgeClock(),
+	}
 	return nil
 }
 
@@ -4041,8 +4071,10 @@ func (collector *MetricsCollector) writePostSyncTouchedDays(output *strings.Buil
 // writeTouchedDaysDrain renders the counter of the drain passes and the gauge
 // of the oldest pending touch (CHAOS-8846). The gauge has no organization
 // label: it is the highest age over the organizations whose last pass in this
-// process left a day pending, and 0 when none did. The log line of a pass
-// names the organization.
+// process left a day pending, and 0 when none did. A report older than
+// TouchedDaysOldestPendingAgeStaleness is not exported. A reader takes the
+// highest value over the worker processes. The log line of a pass names the
+// organization and is the exact record.
 func (collector *MetricsCollector) writeTouchedDaysDrain(output *strings.Builder) {
 	writeMetadata(output, "dev_health_touched_days_drain_total", "Drain of the pending touched days: passes, days a daily run was started for, days split, returned to pending or skipped after failed runs (CHAOS-8846).", "counter")
 	for _, event := range touchedDaysDrainEvents() {
@@ -4050,10 +4082,15 @@ func (collector *MetricsCollector) writeTouchedDaysDrain(output *strings.Builder
 			[]metricLabel{{"event", string(event)}}, collector.touchedDaysDrain[event])
 	}
 	var oldest time.Duration
-	for _, age := range collector.touchedDaysOldestPendingAge {
-		oldest = max(oldest, age)
+	now := collector.touchedDaysPendingAgeClock()
+	for _, report := range collector.touchedDaysOldestPendingAge {
+		if now.Sub(report.observedAt) > TouchedDaysOldestPendingAgeStaleness {
+			// Not removed here: a scrape holds the read lock only.
+			continue
+		}
+		oldest = max(oldest, report.age)
 	}
-	writeMetadata(output, "dev_health_touched_days_oldest_pending_age_seconds", "Highest age of the oldest pending touched day over the organizations whose last drain pass left a day pending; 0 when none did (CHAOS-8846).", "gauge")
+	writeMetadata(output, "dev_health_touched_days_oldest_pending_age_seconds", "Highest age of the oldest pending touched day over the organizations whose last drain pass in this process, in the last 25 hours, left a day pending; 0 when none did. Read the highest value over the processes (CHAOS-8846).", "gauge")
 	writeFloatSample(output, "dev_health_touched_days_oldest_pending_age_seconds", nil, oldest.Seconds())
 }
 

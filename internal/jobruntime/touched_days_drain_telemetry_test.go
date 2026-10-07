@@ -58,6 +58,28 @@ func TestTouchedDaysDrainCountersAndPendingAgeGauge(t *testing.T) {
 	if want := "dev_health_touched_days_oldest_pending_age_seconds 90\n"; !strings.Contains(collector.PrometheusText(), want) {
 		t.Fatalf("the scrape lacks %q after org-b drained", want)
 	}
+	// The pass that finds an organization drained can run in another process.
+	// This process stops exporting its last report after the staleness bound.
+	clock := time.Now()
+	collector.touchedDaysPendingAgeNow = func() time.Time { return clock }
+	if err := collector.ObserveTouchedDaysOldestPendingAge("org-c", 3*time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	clock = clock.Add(TouchedDaysOldestPendingAgeStaleness)
+	if want := "dev_health_touched_days_oldest_pending_age_seconds 10800\n"; !strings.Contains(collector.PrometheusText(), want) {
+		t.Fatalf("the scrape lacks %q at the staleness bound", want)
+	}
+	clock = clock.Add(time.Second)
+	if want := "dev_health_touched_days_oldest_pending_age_seconds 0\n"; !strings.Contains(collector.PrometheusText(), want) {
+		t.Fatalf("the scrape lacks %q after the staleness bound", want)
+	}
+	collector.touchedDaysPendingAgeNow = nil
+	if err := collector.ObserveTouchedDaysOldestPendingAge("org-c", 0); err != nil {
+		t.Fatal(err)
+	}
+	if want := "dev_health_touched_days_oldest_pending_age_seconds 90\n"; !strings.Contains(collector.PrometheusText(), want) {
+		t.Fatalf("the scrape lacks %q for a report inside the staleness bound", want)
+	}
 	if err := collector.ObserveTouchedDaysOldestPendingAge("org-a", 0); err != nil {
 		t.Fatal(err)
 	}

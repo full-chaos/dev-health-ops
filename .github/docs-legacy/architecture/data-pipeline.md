@@ -523,9 +523,9 @@ end.
 1. If drain runs of the organization are not ended (created in the last 24
    hours), the trigger does nothing. At most 31 drain runs of one organization
    are in flight.
-2. The days whose newest run is a failed run of a fan-out or of the drain go
-   back to pending (`ReturnToPending`). Their keys were marked when the run
-   started; without this step a failed run would lose its day.
+2. The days with a run of a fan-out or of the drain that ended without a
+   result go back to pending (`ReturnToPending`). Their keys were marked when
+   the run started; without this step such a run would lose its day.
 3. ClickHouse, with no Postgres transaction open: the pending days, newest
    first, and the pending repositories of the first 31 that can start.
 4. One Postgres transaction under an advisory lock for the organization: the
@@ -550,8 +550,19 @@ part is one Warn line (`touched_days_drain.day_split`) and one count of
 touched day is: what it writes for a work scope with items in two
 repositories is the limit named above for the work-item families.
 
-**A run that fails.** A day whose newest run failed is pending again at the
-next pass and gets a new run. When the 3 newest runs of a day all failed, the
+**A run that ends without a result.** Three ends count: the status `failed`,
+the status `canceled`, and a run that is not ended 24 hours after its creation
+(a blocked run, a run whose jobs were lost; a daily run has no other terminal
+status than `succeeded` and `no_repositories`, which a run of listed
+repositories never gets). The keys of such a run are pending again at the next
+pass and get a new run. Every such run of the last 72 hours is looked at, not
+only the newest run of the day: a newer run of the same day lists other keys.
+Only the keys marked at or before the end of the run are returned, so the same
+failure is never returned twice and a run started after it keeps its marks. A
+key of the day that another run computed before that end is returned too and
+is computed once more. A run that ends after its 24 hours is computed twice.
+
+When the 3 newest runs of a day all ended without a result, the
 drain starts no run for it: the day stays pending, each pass reports it in one
 Error line (`touched_days_drain.days_skipped_after_failed_runs`) and in the
 counter event `days_skipped_after_failed_runs`, and it holds no slot, so the
@@ -583,19 +594,34 @@ pending day (`outcome`, `drain_days_started`, `drain_days_pending_left`,
 `nothing_pending`, `pass_failed`, `mark_failed`, `read_truncated`. Gauge
 `dev_health_touched_days_oldest_pending_age_seconds`: the highest age of the
 oldest pending day over the organizations whose last pass in the process left
-a day pending. The age is the time since the newest `touched` event of the key
+a day pending. Each worker process exports its own value: read the highest
+over the processes. A process drops its report of an organization 25 hours
+after its last pass of it, so an organization with a pending day is always
+shown (some process runs its nightly pass), and one that another process
+drained is shown for at most 25 hours more. The pass line names the
+organization and is the exact record. The age is the time since the newest `touched` event of the key
 that has waited longest: the table keeps only the newest event of a key, so
 the age is a lower bound.
 
 **Limits.**
 
-- A drain run that never ends holds back the next pass for 24 hours, then the
-  nightly trigger starts one again. The blocked-run marker reports the run.
-- A failed run is seen for 48 hours after it was created. An organization
-  with no pass in that time (no active nightly run) keeps the day marked.
-- Only a run with the status `failed` returns its day. A run that never
-  reaches a terminal status keeps its day marked; the blocked-run marker
-  reports it.
+- A drain run that never ends holds back the next pass for 24 hours. Then its
+  day is returned and started again; a day whose runs never end so holds back
+  the drain of its organization for three days before it is skipped. The
+  blocked-run marker reports each run.
+- A run without a result is seen for 72 hours after it was created. An
+  organization with no pass in that time (no active nightly run) keeps the
+  keys marked.
+- The fan-out has no skip rule. A day that the drain skips stays pending, so
+  each later fan-out that finds it among its 31 newest pending days starts
+  one more run for it. No other day is lost by that: the drain takes what the
+  fan-out leaves, and a skipped day holds no slot of the drain.
+- A mark that keeps failing while the runs succeed makes each pass start the
+  same days again (`mark_failed` counts it). Nothing bounds that but the 31
+  runs in flight.
+- The line of the fan-out (`post_sync_fanout.touched_days`) has no pending-age
+  fields: the fan-out does not read the whole backlog. The pass that follows
+  the end of its runs reports them.
 - An organization that the nightly schedule does not list as active has no
   floor trigger: its pending days wait for the end of a daily run.
 - A pod of an older build runs no pass. Its fan-out still takes 31 days.

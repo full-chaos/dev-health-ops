@@ -136,9 +136,9 @@ type touchedDrainRuns struct {
 func (touchedDrainRuns) RepositoryLimit() int { return daily.MaxRepositoriesPerRun }
 
 func (runs touchedDrainRuns) FailedDays(
-	ctx context.Context, organizationID string, since time.Time,
+	ctx context.Context, organizationID string, since, notEndedBefore time.Time, window time.Duration,
 ) ([]syncdispatchruntime.TouchedDayFailedRun, error) {
-	failures, err := runs.store.FailedTouchedDays(ctx, organizationID, since)
+	failures, err := runs.store.FailedTouchedDays(ctx, organizationID, since, notEndedBefore, window)
 	if err != nil {
 		return nil, err
 	}
@@ -150,9 +150,9 @@ func (runs touchedDrainRuns) FailedDays(
 }
 
 func (runs touchedDrainRuns) DaysWithOnlyFailedRuns(
-	ctx context.Context, organizationID string, days []time.Time, threshold int,
+	ctx context.Context, organizationID string, days []time.Time, threshold int, notEndedBefore time.Time,
 ) (map[string]struct{}, error) {
-	return runs.store.DaysWithOnlyFailedRuns(ctx, organizationID, days, threshold)
+	return runs.store.DaysWithOnlyFailedRuns(ctx, organizationID, days, threshold, notEndedBefore)
 }
 
 func (runs touchedDrainRuns) InFlightTx(

@@ -12,6 +12,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 // incidentGateConfig is one planner-managed whole-integration configuration of
@@ -483,5 +485,96 @@ func TestNativeMaterializerIncidentFeatureOffChangesNothingForProvidersWithNoGat
 				t.Fatalf("unexpected skip WARN:\n%s", strings.Join(lines, "\n"))
 			}
 		})
+	}
+}
+
+// The other datasets are ON but have nothing to run (the only source is
+// off), so the plan holds no unit after the incident dataset is left out. No
+// run is created: a run with zero units would be failed as feature_disabled
+// at dispatch on every occurrence. With the feature ON the same shape is an
+// ordinary zero-unit run, as before.
+func TestNativeMaterializerIncidentFeatureOffWithNoUnitLeftCreatesNoRun(t *testing.T) {
+	for _, tc := range incidentGateProviders {
+		t.Run(tc.provider, func(t *testing.T) {
+			plan := func(featureOn bool) (incidentGateConfig, error, *bytes.Buffer) {
+				config := startIncidentGateConfig(t, tc.provider, append([]string{"incidents"}, tc.others...), nil)
+				if _, err := config.fixture.pool.Exec(context.Background(),
+					`UPDATE integration_sources SET is_enabled=FALSE WHERE integration_id=$1::uuid`, config.integrationID); err != nil {
+					t.Fatal(err)
+				}
+				config.setIncidentFeature(t, featureOn)
+				logs := captureIncidentGateSignals(t)
+				materializer, err := NewNativeMaterializer(config.fixture.pool)
+				if err != nil {
+					t.Fatal(err)
+				}
+				_, err = materializeAndCommit(t, config.fixture, materializer, config.occurrence)
+				return config, err, logs
+			}
+			on, err, _ := plan(true)
+			if err != nil {
+				t.Fatalf("feature ON: %v", err)
+			}
+			if runs, units := on.syncRuns(t), on.mintedUnits(t); runs != 1 || len(units) != 0 {
+				t.Fatalf("feature ON: runs=%d units=%v, want one run with no unit", runs, units)
+			}
+			off, err, logs := plan(false)
+			if !errors.Is(err, ErrOccurrenceIneligible) {
+				t.Fatalf("feature OFF: materialize error = %v, want ErrOccurrenceIneligible", err)
+			}
+			if runs, units := off.syncRuns(t), off.mintedUnits(t); runs != 0 || len(units) != 0 {
+				t.Fatalf("feature OFF: runs=%d units=%v, want no run and no unit", runs, units)
+			}
+			if got := globalPlanGateTelemetry.snapshotForTest(tc.provider, "incidents", planGateOutcomeFeatureDisabled); got != 1 {
+				t.Fatalf("feature OFF: feature_disabled count = %d, want 1", got)
+			}
+			if lines := skipWarnLines(logs); len(lines) != 1 {
+				t.Fatalf("feature OFF: skip WARN lines = %d, want 1:\n%s", len(lines), logs.String())
+			}
+		})
+	}
+}
+
+// The gate itself, on a live transaction: every left-out dataset is counted
+// under its own key, and the feature rows stay locked until the plan's
+// transaction ends, so a concurrent change of the feature waits for the plan.
+func TestDropCanonicalIncidentDatasetsCountsEachDatasetAndLocksTheFeatureRows(t *testing.T) {
+	config := startIncidentGateConfig(t, "pagerduty", nil, nil)
+	config.setIncidentFeature(t, false)
+	logs := captureIncidentGateSignals(t)
+	ctx := context.Background()
+	tx, err := config.fixture.pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	kept, skipped, err := dropCanonicalIncidentDatasetsWhenFeatureOff(ctx, tx, config.occurrence.OrgID, config.integrationID,
+		"pagerduty", []PlanDataset{{Key: "incidents"}, {Key: "services"}, {Key: "users"}}, config.occurrence.ScheduledFor)
+	if !errors.Is(err, ErrOccurrenceIneligible) || len(kept) != 0 || skipped != 3 {
+		t.Fatalf("kept=%v skipped=%d err=%v, want nothing kept, 3 skipped, ErrOccurrenceIneligible", kept, skipped, err)
+	}
+	for _, dataset := range []string{"incidents", "services", "users"} {
+		if got := globalPlanGateTelemetry.snapshotForTest("pagerduty", dataset, planGateOutcomeFeatureDisabled); got != 1 {
+			t.Fatalf("feature_disabled count for %s = %d, want 1", dataset, got)
+		}
+	}
+	lines := skipWarnLines(logs)
+	if len(lines) != 1 || !strings.Contains(lines[0], `"skipped_dataset_keys":["incidents","services","users"]`) || !strings.Contains(lines[0], `"skipped_datasets":3`) {
+		t.Fatalf("skip WARN = %v, want one line naming the three datasets", lines)
+	}
+	// A second connection cannot take the feature row while the plan's
+	// transaction is open.
+	_, err = config.fixture.pool.Exec(ctx,
+		`SELECT id FROM public.feature_flags WHERE key='canonical_incident_ingestion' FOR UPDATE NOWAIT`)
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) || pgErr.Code != "55P03" {
+		t.Fatalf("second connection lock attempt: err = %v, want lock_not_available (55P03)", err)
+	}
+	if err := tx.Rollback(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := config.fixture.pool.Exec(ctx,
+		`SELECT id FROM public.feature_flags WHERE key='canonical_incident_ingestion' FOR UPDATE NOWAIT`); err != nil {
+		t.Fatalf("the feature row must be free after the plan's transaction ended: %v", err)
 	}
 }

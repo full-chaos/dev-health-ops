@@ -1,6 +1,7 @@
 package sync
 
 import (
+	"errors"
 	"slices"
 	"sort"
 	"testing"
@@ -98,6 +99,26 @@ func TestSplitCanonicalIncidentDatasetsKeepsTheOtherDatasetsInOrder(t *testing.T
 			if dataset.InitialDepthDays != &depth {
 				t.Errorf("%s %v: dataset %s lost its options", tc.provider, tc.datasets, dataset.Key)
 			}
+		}
+	}
+}
+
+// A plan that left datasets out and holds no unit is not a run; every other
+// combination is.
+func TestErrIfOnlySkippedDatasetsHadWork(t *testing.T) {
+	for _, tc := range []struct {
+		skipped, units int
+		ineligible     bool
+	}{
+		{skipped: 1, units: 0, ineligible: true},
+		{skipped: 3, units: 0, ineligible: true},
+		{skipped: 1, units: 1},
+		{skipped: 0, units: 0},
+		{skipped: 0, units: 4},
+	} {
+		err := errIfOnlySkippedDatasetsHadWork(tc.skipped, tc.units)
+		if tc.ineligible != errors.Is(err, ErrOccurrenceIneligible) || (!tc.ineligible && err != nil) {
+			t.Errorf("skipped=%d units=%d: err = %v, want ineligible=%v", tc.skipped, tc.units, err, tc.ineligible)
 		}
 	}
 }

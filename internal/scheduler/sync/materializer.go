@@ -500,6 +500,9 @@ func (materializer *NativeMaterializer) Materialize(
 			return PlanResult{}, err
 		}
 	}
+	if err := errIfOnlySkippedDatasetsHadWork(loaded.featureOffSkippedDatasets, len(units)); err != nil {
+		return PlanResult{}, err
+	}
 	if len(units) > loaded.totalUnitCap {
 		return PlanResult{}, fmt.Errorf("%w: plan has %d units over cap %d", ErrInvalidPlan, len(units), loaded.totalUnitCap)
 	}
@@ -585,6 +588,9 @@ type loadedMaterializationPlan struct {
 	terminalReason         string
 	ensureSecurityDataset  bool
 	pagerDutyRepair        *pagerDutyDomainRepair
+	// featureOffSkippedDatasets is the number of enabled datasets the plan
+	// left out because the canonical-incident feature is off.
+	featureOffSkippedDatasets int
 	// triggeredBy is CHAOS-4602's sync_runs.triggered_by stamp: "schedule"
 	// for an ordinary cron-minted occurrence (every pre-CHAOS-4602 caller
 	// keeps this value, unconditionally), or the sync_manual_triggers row's
@@ -786,7 +792,7 @@ WHERE config.id = $1::uuid AND config.org_id = $2 AND integration.is_active`, oc
 			return loadedMaterializationPlan{}, err
 		}
 	}
-	datasets, err = dropCanonicalIncidentDatasetsWhenFeatureOff(ctx, tx, orgID, integrationID, provider, datasets, occurrence.ScheduledFor)
+	datasets, featureOffSkippedDatasets, err := dropCanonicalIncidentDatasetsWhenFeatureOff(ctx, tx, orgID, integrationID, provider, datasets, occurrence.ScheduledFor)
 	if err != nil {
 		return loadedMaterializationPlan{}, err
 	}
@@ -838,6 +844,8 @@ WHERE config.id = $1::uuid AND config.org_id = $2 AND integration.is_active`, oc
 		ensureSecurityDataset:  ensureSecurityDataset,
 		pagerDutyRepair:        pagerDutyRepair,
 		triggeredBy:            triggeredBy,
+
+		featureOffSkippedDatasets: featureOffSkippedDatasets,
 	}, nil
 }
 

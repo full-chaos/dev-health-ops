@@ -55,19 +55,22 @@ func splitCanonicalIncidentDatasets(provider string, datasets []PlanDataset) (ke
 // needs the feature the occurrence has nothing to do and the answer stays
 // ErrOccurrenceIneligible, with the same count and WARN: an accepted run that
 // plans zero units and reports success would read as coverage.
+//
+// The second result is the number of datasets left out. The caller needs it
+// after unit planning: see errIfOnlySkippedDatasetsHadWork.
 func dropCanonicalIncidentDatasetsWhenFeatureOff(
 	ctx context.Context, tx pgx.Tx, orgID, integrationID, provider string, datasets []PlanDataset, now time.Time,
-) ([]PlanDataset, error) {
+) ([]PlanDataset, int, error) {
 	kept, gated := splitCanonicalIncidentDatasets(provider, datasets)
 	if len(gated) == 0 {
-		return datasets, nil
+		return datasets, 0, nil
 	}
 	allowed, reason, err := canonicalIncidentDecision(ctx, tx, orgID, now, true)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	if allowed {
-		return datasets, nil
+		return datasets, 0, nil
 	}
 	skippedKeys := make([]string, 0, len(gated))
 	for _, dataset := range gated {
@@ -85,7 +88,22 @@ func dropCanonicalIncidentDatasetsWhenFeatureOff(
 		slog.Int("planned_datasets", len(kept)),
 	)
 	if len(kept) == 0 {
-		return nil, ErrOccurrenceIneligible
+		return nil, len(gated), ErrOccurrenceIneligible
 	}
-	return kept, nil
+	return kept, len(gated), nil
+}
+
+// errIfOnlySkippedDatasetsHadWork keeps an occurrence ineligible when datasets
+// were left out because the feature is off and the remaining datasets plan no
+// unit at all (for example, every source is disabled). Such a run would hold
+// zero units, and the dispatch-time feature check, which falls back to the
+// enabled dataset rows for a run with no unit, would fail it as
+// feature_disabled on every occurrence. Nothing is fetched either way; this
+// keeps the one answer the occurrence had before, with the skip already
+// counted and written by dropCanonicalIncidentDatasetsWhenFeatureOff.
+func errIfOnlySkippedDatasetsHadWork(skippedDatasets, plannedUnits int) error {
+	if skippedDatasets > 0 && plannedUnits == 0 {
+		return ErrOccurrenceIneligible
+	}
+	return nil
 }

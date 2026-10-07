@@ -13,6 +13,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph/model"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graphqldate"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/newestrow"
 )
 
 // The reads, ported from metrics/capacity_queries.py (the two compute-path
@@ -149,21 +150,17 @@ func loadBacklog(
 	conditions, bindings := capacityScopeFilters(orgID, teamIDs, workScopeID)
 	where := strings.Join(conditions, " AND ")
 
-	// The same predicate appears twice on purpose: the outer filter selects the
-	// scope's rows, and the subquery finds the latest day WITHIN THAT SCOPE.
-	// Hoisting the subquery out would find the latest day across the whole
-	// organization and report a backlog of zero for any scope that had not
-	// reported that day.
+	// Each selected team contributes its OWN newest row (CHAOS-8498). One
+	// maximum day over the whole set dropped any team whose newest day was
+	// older than another team's. The scope predicate appears twice on purpose:
+	// the outer filter selects the scope's rows, and the subquery finds each
+	// team's newest day within that scope.
 	query := fmt.Sprintf(`
         SELECT sum(wip_count_end_of_day) AS wip_count_end_of_day
         FROM work_item_metrics_daily FINAL
         WHERE %s
-          AND day = (
-              SELECT max(day)
-              FROM work_item_metrics_daily FINAL
-              WHERE %s
-          )
-    `, where, where)
+          AND %s
+    `, where, newestrow.PerTeamPredicateFinal("work_item_metrics_daily", where))
 
 	rows, err := client.Query(ctx, query, bindings)
 	if err != nil {

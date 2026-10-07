@@ -123,7 +123,7 @@ func TestResolveForecastOneTeamKeepsTheSingleBind(t *testing.T) {
 func TestResolveForecastNoTeamIsOrgWide(t *testing.T) {
 	_, client := runWith(t, &model.CapacityForecastInput{TeamIds: []string{"", ""}})
 	for index, statement := range client.statements {
-		if strings.Contains(statement, "team_id") {
+		if strings.Contains(statement, "{team_id") {
 			t.Errorf("statement %d filters on a team for an empty selection:\n%s", index, statement)
 		}
 	}

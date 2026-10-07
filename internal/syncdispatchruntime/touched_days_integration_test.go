@@ -351,3 +351,55 @@ SELECT ?, toDate(?), toUUID(?), 'touched', fromUnixTimestamp64Milli(toInt64(?), 
 		t.Fatalf("pending after the mark = %v, want only the key touched after the read: %v", got, want)
 	}
 }
+
+// Two organizations hold the same work item id on the same days under
+// different repositories. The record of one must read only its own items and
+// transitions, and the full-day mark of one must end only its own keys. A
+// clause that drops either org filter loses the pending key of the other
+// tenant (a day that is never computed again) or invents a key for it.
+func TestTouchedDaysOneOrganizationNeverRecordsOrEndsTheKeysOfAnother(t *testing.T) {
+	ctx, conn := newReadbackIntegrationConn(t)
+	store, err := NewClickHouseTouchedDaysStore(conn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const sharedID = "gh:shared#1"
+	insertTouchedTestItems(t, ctx, conn,
+		touchedTestItem{org: touchedTestOrg, repo: touchedTestRepoA, id: sharedID, provider: "github",
+			created: touchedTestDay(8, 1), synced: touchedTestSince.Add(time.Hour)},
+		touchedTestItem{org: touchedTestOtherOrg, repo: touchedTestRepoB, id: sharedID, provider: "github",
+			created: touchedTestDay(8, 1), synced: touchedTestSince.Add(time.Hour)},
+	)
+	// The transition of organization A carries the nil repository: its key
+	// takes the repository of A's item, never the one of B's item of the same id.
+	insertTouchedTestTransition(t, ctx, conn, touchedTestOrg, uuid.Nil, sharedID, "github",
+		touchedTestDay(8, 5), touchedTestSince.Add(time.Hour))
+
+	if _, err := store.RecordTouched(ctx, touchedTestOtherOrg, touchedTestSince); err != nil {
+		t.Fatal(err)
+	}
+	wantB := []string{touchedTestKey(8, 1, touchedTestRepoB)}
+	if got := pendingTouchedTestKeys(t, ctx, conn, touchedTestOtherOrg); !reflect.DeepEqual(got, wantB) {
+		t.Fatalf("organization B pending after its own record\n got %v\nwant %v", got, wantB)
+	}
+	if _, err := store.RecordTouched(ctx, touchedTestOrg, touchedTestSince); err != nil {
+		t.Fatal(err)
+	}
+	wantA := []string{touchedTestKey(8, 1, touchedTestRepoA), touchedTestKey(8, 5, touchedTestRepoA)}
+	if got := pendingTouchedTestKeys(t, ctx, conn, touchedTestOrg); !reflect.DeepEqual(got, wantA) {
+		t.Fatalf("organization A pending: a key of B's repository leaked in through the join\n got %v\nwant %v", got, wantA)
+	}
+
+	// The full-day mark of A on a day that both organizations hold.
+	markAt := time.Now().UTC().Add(time.Minute)
+	if err := store.MarkDispatched(ctx, touchedTestOrg, markAt, []time.Time{utcDay(touchedTestDay(8, 1))}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if got := pendingTouchedTestKeys(t, ctx, conn, touchedTestOtherOrg); !reflect.DeepEqual(got, wantB) {
+		t.Fatalf("the mark of organization A ended a pending key of organization B\n got %v\nwant %v", got, wantB)
+	}
+	wantAAfter := []string{touchedTestKey(8, 5, touchedTestRepoA)}
+	if got := pendingTouchedTestKeys(t, ctx, conn, touchedTestOrg); !reflect.DeepEqual(got, wantAAfter) {
+		t.Fatalf("organization A pending after the mark of day 08-01\n got %v\nwant %v", got, wantAAfter)
+	}
+}

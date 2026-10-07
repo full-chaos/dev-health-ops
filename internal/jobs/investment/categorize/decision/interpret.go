@@ -222,7 +222,11 @@ func Interpret(r *Rubric, bundle units.TextBundle, spans []Span, typed Typed) In
 			} else {
 				exp := 0.0
 				for l, p := range sc.Probs {
-					exp += float64(l) * p
+					// The explicit conversion rounds the product before the
+					// add, so the compiler cannot fuse the two into one FMA
+					// instruction. Without it arm64 fuses and amd64 does not,
+					// and the two could differ in the last bit of exp.
+					exp += float64(float64(l) * p)
 				}
 				if math.Abs(*sc.Score-exp) > 0.05 {
 					in.Warnings = append(in.Warnings, "score_prob_mismatch:"+k)

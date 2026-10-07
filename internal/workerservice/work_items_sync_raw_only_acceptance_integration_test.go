@@ -200,7 +200,9 @@ func assertRawOnlySinkRefusesDerivedTables(
 ) {
 	t.Helper()
 	for _, table := range rawOnlyDerivedTables {
-		effect := rawOnlyEffect(t, table, []map[string]any{{"org_id": claim.OrgID}})
+		// The evaluated-empty effect: an adapter that was still dispatched
+		// would take it without a row to decode.
+		effect := rawOnlyEffect(t, table, nil)
 		if err := sink.WriteEffect(ctx, claim, effect); !errors.Is(err, providersync.ErrInvalidConfiguration) {
 			t.Fatalf("%s: the sync sink took an effect for %s (error %v); the daily job is its one writer",
 				claim.Provider, table, err)

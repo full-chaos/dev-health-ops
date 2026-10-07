@@ -1,7 +1,9 @@
 package providersync
 
 import (
+	"bytes"
 	"context"
+	"log/slog"
 	"os"
 	"slices"
 	"strconv"
@@ -167,7 +169,13 @@ func TestCompleteRouteExecutorCompletesWorkItemsManifestOfEarlierBinary(t *testi
 				t: t, inner: staticEffectReadback{inspections: testCase.readback},
 			}
 
+			var logOutput bytes.Buffer
+			previousLogger := slog.Default()
+			slog.SetDefault(slog.New(slog.NewJSONHandler(&logOutput, nil)))
+			t.Cleanup(func() { slog.SetDefault(previousLogger) })
+
 			result, err := executor.Execute(context.Background(), session, descriptor)
+			slog.SetDefault(previousLogger)
 			if err != nil {
 				t.Fatalf("the manifest of the earlier binary was not completed: %v", err)
 			}
@@ -197,6 +205,19 @@ func TestCompleteRouteExecutorCompletesWorkItemsManifestOfEarlierBinary(t *testi
 			}
 			if got := preparedRetiredEffectsSkippedCounter(t, executor.Metrics, "github"); got != testCase.wantRetiredSkipped {
 				t.Fatalf("retired effects skipped counter=%d want=%d", got, testCase.wantRetiredSkipped)
+			}
+			// The WARN line is the record of the unit: its ledger entries of
+			// the nine tables read committed with no row written.
+			warnLines := 0
+			for _, line := range strings.Split(logOutput.String(), "\n") {
+				if strings.Contains(line, `"msg":"provider_sync.prepared_snapshot_retired_effects_skipped"`) &&
+					strings.Contains(line, `"level":"WARN"`) && strings.Contains(line, `"provider":"github"`) &&
+					strings.Contains(line, `"retired_effects_skipped":`+strconv.Itoa(testCase.wantRetiredSkipped)+",") {
+					warnLines++
+				}
+			}
+			if warnLines != 1 {
+				t.Fatalf("WARN lines of the skipped retired effects=%d want 1; log:\n%s", warnLines, logOutput.String())
 			}
 			for index, effect := range ledger.state.Effects {
 				if effect.Status != GenerationBlockCommitted {

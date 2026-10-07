@@ -554,7 +554,7 @@ func (m *Materializer) Run(ctx context.Context, cfg Config) (Stats, error) {
 		}
 
 		outcome, ok := outcomes[entry.index]
-		if !ok && m.served.keepsLastRow(entry.index) {
+		if m.served.keepsLastRow(entry.index) {
 			// The served decision request of this unit failed (CHAOS-8874): no
 			// investment row is written, so the unit's last row stays its latest
 			// row and the next run asks again. Its repo-effort rows are written,

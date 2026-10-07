@@ -7,12 +7,14 @@ import (
 	"math"
 	"net/http"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/investment/categorize"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/investment/categorize/decision"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/investment/chwrite"
+	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph/units"
 )
 
@@ -406,8 +408,24 @@ func TestTheServedOutcomeBoundsEveryValueOfAClassification(t *testing.T) {
 					t.Errorf("the mix has a key outside the 15: %d bytes", len(key))
 				}
 			}
-			if tc.classification.State != decision.StateOK && outcome.Status != categorize.StatusInvalidLLMOutput {
-				t.Errorf("status = %q", outcome.Status)
+			if tc.classification.State != decision.StateOK {
+				// A key or a state outside its closed set gives the neutral prior
+				// row, never a mix built from the value, and no low-quality mark.
+				if outcome.Status != categorize.StatusInvalidLLMOutput ||
+					!reflect.DeepEqual(outcome.Subcategories, categorize.FallbackOutcome("").Subcategories) ||
+					slices.Contains(outcome.Errors, servedTopRawKeyCode) || served.isLowQuality(0) {
+					t.Errorf("status %q errors %v mix %v low quality %v", outcome.Status, outcome.Errors, outcome.Subcategories, served.isLowQuality(0))
+				}
+			}
+			// The state is held to its closed set before it is counted, written to
+			// an attempt row or put in a code.
+			for state := range served.states {
+				if !slices.Contains(shadowStates(), state) {
+					t.Errorf("a state outside the closed set was counted: %d bytes", len(state))
+				}
+			}
+			if tc.classification.State == hostile && (len(outcome.Errors) < 2 || outcome.Errors[1] != "decision_"+decision.StateAdapterDefect) {
+				t.Errorf("a state outside the closed set is not an adapter defect: %v", outcome.Errors[:min(2, len(outcome.Errors))])
 			}
 			if strings.Contains(logs.String(), "<script>") {
 				t.Error("a log line holds a value of the classification")
@@ -477,5 +495,61 @@ func TestLLMFailureOfAGenerativeErrorIsTheGenerativeClassification(t *testing.T)
 		if class != categorize.FailureClass(err) || deterministic != categorize.IsDeterministicFailure(err) {
 			t.Errorf("%v: %q %v", err, class, deterministic)
 		}
+	}
+}
+
+// servedPendingRun runs categorizePending of a materializer with the served
+// backend over the given units.
+func servedPendingRun(t *testing.T, fake *fakeJev, logs *syncBuffer, concurrency int, workUnitIDs ...string) (map[int]categorize.CategorizationOutcome, Stats, error) {
+	t.Helper()
+	m := &Materializer{logger: debugLogger(logs), served: newTestServed(t, fake, logs)}
+	outcomes := map[int]categorize.CategorizationOutcome{}
+	stats := Stats{LLMFailureCounts: map[string]int{}}
+	cfg := shadowTestConfig()
+	cfg.LLMConcurrency = concurrency
+	err := m.categorizePending(context.Background(), cfg, shadowTestEntries(t, workUnitIDs...), outcomes, &stats)
+	return outcomes, stats, err
+}
+
+// The run totals of a served decision run: the usage of every response, also of
+// a response that could not be used (it was billed), and each failure under its
+// class. These totals are the run's llm_token_usage row.
+func TestTheRunUsageOfAServedRunHoldsEveryBilledResponse(t *testing.T) {
+	logs := &syncBuffer{}
+	fake := newFakeJev(t, func(n int, _ []byte) jevReply {
+		reply := okReply()
+		if n == 2 {
+			reply.model = "another-model" // answered and billed, and not usable
+			reply.inputTokens = 1000
+		}
+		return reply
+	})
+	outcomes, stats, err := servedPendingRun(t, fake, logs, 1, "u1", "u2", "u3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(outcomes) != 2 || stats.LLMFailures != 1 || stats.LLMFailureCounts["model_mismatch"] != 1 {
+		t.Fatalf("outcomes %d failures %d counts %v", len(outcomes), stats.LLMFailures, stats.LLMFailureCounts)
+	}
+	if stats.LLMCalls != 3 || stats.LLMInputTokens != 2383+1000+2383 || stats.LLMOutputTokens != 3*368 {
+		t.Fatalf("calls %d input tokens %d output tokens %d; want 3, %d, %d", stats.LLMCalls, stats.LLMInputTokens, stats.LLMOutputTokens, 2383+1000+2383, 3*368)
+	}
+}
+
+// A failure that recurs on every request stops the served run at once, with
+// the deterministic class of the generative path; no later unit is asked.
+func TestAServedDeterministicFailureStopsTheRunAfterOneRequest(t *testing.T) {
+	logs := &syncBuffer{}
+	fake := newFakeJev(t, func(int, []byte) jevReply { return jevReply{status: http.StatusUnauthorized, body: []byte(`{}`)} })
+	outcomes, stats, err := servedPendingRun(t, fake, logs, 1, "u1", "u2", "u3")
+	var deterministic *workgraph.DeterministicError
+	if !errors.As(err, &deterministic) || deterministic.Class != workgraph.ClassLLMDeterministic {
+		t.Fatalf("err = %v, want the llm_deterministic class", err)
+	}
+	if fake.count() != 1 || len(outcomes) != 0 || stats.LLMFailures != 1 {
+		t.Fatalf("requests %d outcomes %d failures %d; want 1, 0, 1", fake.count(), len(outcomes), stats.LLMFailures)
+	}
+	if strings.Contains(err.Error(), shadowTestKeyValue) {
+		t.Error("the error holds the key")
 	}
 }

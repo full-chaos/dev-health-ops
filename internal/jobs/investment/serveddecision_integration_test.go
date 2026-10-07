@@ -347,6 +347,10 @@ func TestAServedDeterministicFailureEndsTheRunLikeTheGenerativePath(t *testing.T
 	if n := h.count(t, `SELECT count() FROM work_unit_investments`); n != 0 {
 		t.Errorf("an aborted run wrote %d investment rows", n)
 	}
+	// The request of the aborted run was made: its attempt row is written.
+	if n := h.count(t, `SELECT count() FROM llm_categorization_attempts WHERE run_id = 'run-auth' AND role = 'served' AND state = 'request_failed'`); n != 1 {
+		t.Errorf("attempt rows of the aborted run = %d, want 1", n)
+	}
 	if strings.Contains(err.Error(), shadowTestKeyValue) {
 		t.Error("the error holds the key")
 	}

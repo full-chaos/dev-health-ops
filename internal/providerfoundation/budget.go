@@ -296,6 +296,11 @@ type Metrics struct {
 	// raw rows and left every derived table to the daily job, by provider --
 	// see RecordWorkItemDerivedTablesLeftToDailyJob.
 	workItemDerivedLeftToDaily map[string]uint64
+	// preparedRetiredEffectsSkipped counts the effects of a prepared
+	// work-items manifest that a recovering unit did not write because the
+	// daily job now owns their table, by provider -- see
+	// RecordPreparedRetiredWorkItemEffectsSkipped.
+	preparedRetiredEffectsSkipped map[string]uint64
 }
 
 func NewMetrics() *Metrics {
@@ -328,6 +333,7 @@ func NewMetrics() *Metrics {
 		jiraDevStatus:                  map[string]uint64{},
 		gitlabClosingMR:                map[string]uint64{},
 		workItemDerivedLeftToDaily:     map[string]uint64{},
+		preparedRetiredEffectsSkipped:  map[string]uint64{},
 	}
 }
 
@@ -1257,6 +1263,27 @@ func (m *Metrics) RecordWorkItemDerivedTablesLeftToDailyJob(provider string) {
 	m.workItemDerivedLeftToDaily[label]++
 }
 
+// RecordPreparedRetiredWorkItemEffectsSkipped counts the effects of one
+// prepared work-items manifest that a recovering unit completed without
+// writing (CHAOS-8811). The manifest was stored by a binary whose sync unit
+// still wrote the tables computed from stored work-item rows; the daily job
+// is their one writer now, so the unit applies the raw effects of the
+// manifest and skips these. The counter moves only for units that were in
+// flight across that deploy: a rate that is anything but a brief spike after
+// it means a producer still builds such effects.
+func (m *Metrics) RecordPreparedRetiredWorkItemEffectsSkipped(provider string, effects int) {
+	if m == nil || effects <= 0 {
+		return
+	}
+	label := strings.ToLower(strings.TrimSpace(provider))
+	if _, known := metricWorkItemProviderVocabulary[label]; !known {
+		label = "other"
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.preparedRetiredEffectsSkipped[label] += uint64(effects)
+}
+
 // metricWorkItemTeamAttributionSourceVocabulary is the closed set of
 // CHAOS-4244 written-source labels for work_item_team_attributions. This is
 // deliberately a COARSER vocabulary than the ClickHouse `source` enum
@@ -1731,6 +1758,13 @@ func (m *Metrics) WritePrometheus(writer io.Writer) error {
 		writer, "dev_health_work_item_derived_tables_left_to_daily_job_total",
 		"Work-items sync units that stored raw rows and left every table computed from them (the three work-item metric tables, estimate coverage, team attribution, state durations, issue types, the two investment tables) to the daily job, by provider (CHAOS-8811).",
 		"provider", m.workItemDerivedLeftToDaily,
+	); err != nil {
+		return err
+	}
+	if err := writeLabeledCounter(
+		writer, "dev_health_work_item_prepared_retired_effects_skipped_total",
+		"Effects of a prepared work-items manifest that a recovering sync unit completed without writing, because the daily job is the one writer of their table, by provider (CHAOS-8811). Moves only for units in flight across the deploy that stopped the sync unit writing those tables.",
+		"provider", m.preparedRetiredEffectsSkipped,
 	); err != nil {
 		return err
 	}

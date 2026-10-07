@@ -34,6 +34,13 @@ import (
 // manifest through encodePreparedRouteManifest/decodePreparedRouteManifest
 // (the real production envelope, not a hand-rolled marshal), and asserts
 // both survive.
+// preparedMembershipRejectionsCarrier is the effect these tests attach
+// MembershipRejections to. The field was filled for the team-attribution
+// effect, which a sync unit no longer builds; the envelope still stores,
+// scrubs and restores the field for whichever effect carries it, and that
+// handling is what stays pinned here.
+const preparedMembershipRejectionsCarrier = "work_items"
+
 func TestPreparedRouteSnapshotRetainsMembershipRejections(t *testing.T) {
 	t.Parallel()
 	claim := githubWorkItemOracleClaim()
@@ -49,7 +56,7 @@ func TestPreparedRouteSnapshotRetainsMembershipRejections(t *testing.T) {
 		t.Fatal(err)
 	}
 	for index := range batch.Effects {
-		if batch.Effects[index].Destination == githubTeamAttributionsDestination {
+		if batch.Effects[index].Destination == preparedMembershipRejectionsCarrier {
 			batch.Effects[index].MembershipRejections = marshaledRejections
 		}
 	}
@@ -71,7 +78,7 @@ func TestPreparedRouteSnapshotRetainsMembershipRejections(t *testing.T) {
 	}
 	var recoveredRejections []json.RawMessage
 	for _, effect := range manifest.Batch.Effects {
-		if effect.Destination == githubTeamAttributionsDestination {
+		if effect.Destination == preparedMembershipRejectionsCarrier {
 			recoveredRejections = effect.MembershipRejections
 		}
 	}
@@ -436,7 +443,7 @@ func preparedGitHubWorkItemsFixture(t *testing.T, claim Claim) CompleteRouteBatc
 	effects := make([]EffectBatch, 0, len(destinations))
 	for _, destination := range destinations {
 		policy := EffectReplaySafe
-		if destination == "estimate_coverage_metrics_daily" {
+		if destination == "project_membership_transitions" {
 			policy = EffectReadbackRequired
 		}
 		row, err := json.Marshal(map[string]any{
@@ -931,7 +938,7 @@ func TestPreparedRouteSnapshotRefusesMalformedMembershipRejections(t *testing.T)
 	now := time.Date(2026, 8, 4, 12, 0, 0, 0, time.UTC)
 	batch := preparedGitHubWorkItemsFixture(t, claim)
 	for index := range batch.Effects {
-		if batch.Effects[index].Destination == githubTeamAttributionsDestination {
+		if batch.Effects[index].Destination == preparedMembershipRejectionsCarrier {
 			batch.Effects[index].MembershipRejections = []json.RawMessage{json.RawMessage(`{not-json`)}
 		}
 	}
@@ -954,7 +961,7 @@ func TestPreparedRouteSnapshotRefusesSensitiveKeyInMembershipRejections(t *testi
 	now := time.Date(2026, 8, 4, 12, 0, 0, 0, time.UTC)
 	batch := preparedGitHubWorkItemsFixture(t, claim)
 	for index := range batch.Effects {
-		if batch.Effects[index].Destination == githubTeamAttributionsDestination {
+		if batch.Effects[index].Destination == preparedMembershipRejectionsCarrier {
 			batch.Effects[index].MembershipRejections = []json.RawMessage{
 				json.RawMessage(`{"reason":"repo_not_owned","token":"must-not-persist"}`),
 			}

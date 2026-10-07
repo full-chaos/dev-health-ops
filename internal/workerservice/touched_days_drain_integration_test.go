@@ -507,6 +507,34 @@ WHERE id = $1::uuid`, run.ID); err != nil {
 		}
 	})
 
+	// A drain run that never ends must not stop the drain of its organization
+	// for ever: after 24 hours the next trigger starts a pass again.
+	t.Run("a drain run that never ends holds back the next pass for a day and no longer", func(t *testing.T) {
+		rig.reset()
+		orgID := uuid.NewString()
+		days := seedPendingDays(t, ctx, rig.touchedRig, orgID, newest, 40)
+		drain := rig.drain(t, nil, nil)
+		drain.DrainTouchedDays(ctx, orgID, pass("n"))
+		age := func(interval string) {
+			t.Helper()
+			if _, err := rig.pool.Exec(ctx, `
+UPDATE public.daily_metrics_runs SET created_at = clock_timestamp() - $2::interval
+WHERE org_id = $1::uuid AND generation LIKE 'touched-drain:%'`, orgID, interval); err != nil {
+				t.Fatal(err)
+			}
+		}
+		age("23 hours")
+		drain.DrainTouchedDays(ctx, orgID, pass("n"))
+		if got := rig.openDays(t, ctx, orgID); !reflect.DeepEqual(got, days[:31]) {
+			t.Fatalf("a pass started runs while runs of 23 hours were open: %d open, want the first 31", len(got))
+		}
+		age("25 hours")
+		drain.DrainTouchedDays(ctx, orgID, pass("n"))
+		if got := rig.openDays(t, ctx, orgID); !reflect.DeepEqual(got, days) {
+			t.Fatalf("with open runs of 25 hours the pass left %d runs open, want the other 9 days started too", len(got))
+		}
+	})
+
 	t.Run("a pass reports the days it left and the age of the oldest pending day", func(t *testing.T) {
 		rig.reset()
 		orgID := uuid.NewString()

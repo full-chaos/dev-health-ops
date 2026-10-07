@@ -232,6 +232,15 @@ func TestWorkItemScopeReadCountsItemsOfEveryRepositoryAndNoItemOfAnotherOrganiza
 	seedScopeReadAttribution(t, ctx, conn, scopeReadOrgA, scopeReadRepoB, "it-3", "team-b")
 	seedScopeReadAttribution(t, ctx, conn, scopeReadOrgB, scopeReadRepoC, "it-1", "team-x")
 	seedScopeReadAttribution(t, ctx, conn, scopeReadOrgB, scopeReadRepoC, "it-3", "team-x")
+	// A newer attribution row of organization B at the address of an item of
+	// organization A: the read of A does not take it for the latest snapshot.
+	if err := conn.Exec(ctx, `
+INSERT INTO work_item_team_attributions
+    (org_id, repo_id, work_item_id, provider, team_id, team_name, source, is_primary, confidence, evidence, computed_at)
+VALUES (?, ?, 'it-1', 'github', 'team-x', 'team-x', 'native_team', 1, 'high', 'test', ?)`,
+		scopeReadOrgB, scopeReadRepoA, scopeReadDay.Add(18*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
 	seedScopeReadTransition(t, ctx, conn, scopeReadOrgA, scopeReadRepoA, "it-1", scopeReadDay.Add(6*time.Hour))
 	seedScopeReadTransition(t, ctx, conn, scopeReadOrgB, scopeReadRepoC, "it-1", scopeReadDay.Add(7*time.Hour))
 	seedScopeReadTransition(t, ctx, conn, scopeReadOrgB, scopeReadRepoC, "it-9", scopeReadDay.Add(8*time.Hour))

@@ -12,6 +12,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
+
 	"github.com/full-chaos/dev-health-ops/internal/jobs/investment/categorize"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/investment/categorize/decision"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/investment/chquery"
@@ -508,8 +510,8 @@ func TestTheBudgetIsADeadlineThatNoSettingLiftsAboveTheClamp(t *testing.T) {
 		budget   time.Duration
 		min, max time.Duration
 	}{
-		{"600 s is clamped to 120 s", 600 * time.Second, 110 * time.Second, MaxShadowBudget},
-		{"the default", 0, 50 * time.Second, DefaultShadowBudget},
+		{"600 s is clamped to 120 s", 600 * time.Second, 110 * time.Second, 120 * time.Second},
+		{"the default", 0, 50 * time.Second, 60 * time.Second},
 		{"30 s stays 30 s", 30 * time.Second, 20 * time.Second, 30 * time.Second},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -583,7 +585,16 @@ func TestNothingIsWrittenAfterTheRunContextIsCancelled(t *testing.T) {
 	observer := &recordingShadowObserver{}
 	phase.SetObserver(observer)
 	store := &memoryShadowStore{}
+	started := time.Now()
 	summary := phase.run(runCtx, store, shadowTestConfig(), shadowTestEntries(t, "u1", "u2", "u3"))
+	// The budget of this phase is 30 s. A phase whose context is a child of the
+	// run context ends at once when the run is cancelled, and asks nobody else.
+	if elapsed := time.Since(started); elapsed > 5*time.Second {
+		t.Fatalf("the phase went on for %v after the run context was cancelled: its context is not a child of the run context", elapsed)
+	}
+	if fake.count() != 2 {
+		t.Fatalf("requests = %d, want 2: no request may start after the cancel", fake.count())
+	}
 	if summary.StopReason != ShadowStopCancelled {
 		t.Fatalf("stop reason = %q, want cancelled", summary.StopReason)
 	}
@@ -744,4 +755,59 @@ func (observer *recordingShadowObserver) ObserveShadowPhase(counts ShadowPhaseCo
 
 func envLookup(values map[string]string) func(string) string {
 	return func(name string) string { return values[name] }
+}
+
+// explodingConn is a ClickHouse connection that panics when it is used.
+type explodingConn struct{}
+
+func (explodingConn) Query(context.Context, string, ...any) (driver.Rows, error) {
+	panic("planted panic of the store with " + shadowSourceSentinel)
+}
+
+func (explodingConn) PrepareBatch(context.Context, string, ...driver.PrepareBatchOption) (driver.Batch, error) {
+	panic("planted panic of the store with " + shadowSourceSentinel)
+}
+
+// A panic of the phase itself (not of one classification) ends the phase. It
+// does not reach Materializer.Run, it is counted, and its value is not logged.
+func TestAPanicOfThePhaseItselfDoesNotReachTheRun(t *testing.T) {
+	fake := newFakeJev(t, nil)
+	logs := &syncBuffer{}
+	phase := newTestShadowPhase(t, fake, shadowTestSettings(), debugLogger(logs))
+	observer := &recordingShadowObserver{}
+	phase.SetObserver(observer)
+	reader, err := chquery.NewReader(explodingConn{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	writer, err := chwrite.NewWriter(explodingConn{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	materializer, err := NewMaterializer(reader, writer, categorize.MockProvider{}, debugLogger(logs))
+	if err != nil {
+		t.Fatal(err)
+	}
+	materializer.SetShadow(phase)
+	// Must return: a panic here would end the test binary, as it would end the
+	// worker process.
+	materializer.runShadow(context.Background(), shadowTestConfig(), shadowTestEntries(t, "u1"))
+	if countLines(logs.String(), "investment shadow phase panicked") != 1 {
+		t.Fatalf("want one ERROR line:\n%s", logs.String())
+	}
+	if strings.Contains(logs.String(), shadowSourceSentinel) || strings.Contains(logs.String(), "planted panic") {
+		t.Fatalf("the panic value reached a log line:\n%s", logs.String())
+	}
+	if len(observer.counts) != 1 || observer.counts[0].StopReason != ShadowStopPanic || observer.counts[0].PanicsRecovered != 1 {
+		t.Fatalf("metric = %+v", observer.counts)
+	}
+	// With no phase attached the call does nothing at all.
+	bare, err := NewMaterializer(reader, writer, categorize.MockProvider{}, testLogger())
+	if err != nil {
+		t.Fatal(err)
+	}
+	bare.runShadow(context.Background(), shadowTestConfig(), shadowTestEntries(t, "u1"))
+	if fake.count() != 0 {
+		t.Fatal("a materializer with no phase sent a request")
+	}
 }

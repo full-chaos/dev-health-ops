@@ -13,6 +13,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/jobs/investment/categorize"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/investment/categorize/decision"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/investment/chwrite"
+	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph/units"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 )
 
@@ -372,4 +373,104 @@ func TestTheSinkRecordsHaveNoTextField(t *testing.T) {
 			}
 		}
 	}
+}
+
+// hostileClassifier answers with a classification and a transport record that
+// no bound was applied to: it stands for an adapter and a client whose own
+// bounds are gone.
+type hostileClassifier struct{ value string }
+
+func (classifier hostileClassifier) Classify(ctx context.Context, _ units.TextBundle) (decision.Classification, error) {
+	exchange := shadowExchangeFrom(ctx)
+	exchange.attempts = []categorize.SystemOneAttempt{
+		{StatusCode: 99999, Class: classifier.value, RequestID: classifier.value, Latency: -time.Second, WaitBefore: -time.Second},
+		{StatusCode: -5, Class: classifier.value, RequestID: classifier.value, Latency: time.Hour * 100000},
+	}
+	exchange.usage = categorize.SystemOneUsage{InputTokens: 1 << 40, OutputTokens: -9, Reported: true}
+	codes := make([]string, 500)
+	for index := range codes {
+		codes[index] = classifier.value
+	}
+	return decision.Classification{
+		State: decision.StateOK, Status: classifier.value, CompleteStrict: true,
+		Levels:             map[string]int{classifier.value: 1, "quality.bugfix": 999, "fine": 2},
+		LevelProbabilities: map[string][]float64{classifier.value: {1}, "bad": {math.NaN()}, "fine": {0.5, 0.5}},
+		SufficiencyLevel:   4000,
+		Subcategories:      map[string]float64{"quality.bugfix": 1},
+		EvidenceQuotes:     []categorize.EvidenceQuote{{Quote: classifier.value, SourceType: classifier.value, SourceID: classifier.value}},
+		EvidenceSpanID:     classifier.value, EvidenceHandle: classifier.value,
+		Uncertainty: classifier.value, Warnings: codes, Errors: codes, ModelReturned: classifier.value,
+	}, nil
+}
+
+// The phase bounds every field itself. Here the classifier and the transport
+// record are hostile in every string and number at once; each column of the row
+// and of the attempt rows must still have its closed shape.
+func TestThePhaseBoundsEveryFieldWhateverTheClassifierReturns(t *testing.T) {
+	hostile := strings.Repeat(shadowHostileMarker, 400) + "\nline two \x00\"<script>"
+	fake := newFakeJev(t, nil)
+	logs := &syncBuffer{}
+	phase := newTestShadowPhase(t, fake, shadowTestSettings(), debugLogger(logs))
+	phase.classifier = hostileClassifier{value: hostile}
+	store := &memoryShadowStore{}
+	cfg := shadowTestConfig()
+	phase.run(context.Background(), store, cfg, shadowTestEntries(t, "u1"))
+	if len(store.records) != 1 || len(store.attempts) != 2 {
+		t.Fatalf("rows = %d attempts = %d", len(store.records), len(store.attempts))
+	}
+	record := store.records[0]
+	want := chwrite.ShadowRecord{
+		WorkUnitID: "u1", InputHash: record.InputHash, ShadowConfig: decision.IdentityFor("").Stamp(),
+		RubricSHA256: decision.RubricSHA256, ModelReturned: shadowUnsafe, State: decision.StateOK,
+		CategorizationStatus: categorize.StatusOK, CompleteStrict: true,
+		SubcategoryDistribution: map[string]float64{"quality.bugfix": 1},
+		Levels:                  map[string]uint8{"fine": 2},
+		LevelProbabilities:      map[string][]float32{"fine": {0.5, 0.5}},
+		SufficiencyLevel:        -1, EvidenceSpanID: shadowUnsafe, EvidenceHandle: shadowUnsafe,
+		EvidenceSourceType: "", EvidenceSourceID: shadowUnsafe,
+		ServedRunID: cfg.RunID, ComputedAt: cfg.ComputedAt,
+	}
+	for index := 0; index < 64; index++ {
+		want.Warnings = append(want.Warnings, shadowUnsafe)
+		want.ErrorCodes = append(want.ErrorCodes, shadowUnsafe)
+	}
+	if !reflect.DeepEqual(record, want) {
+		t.Fatalf("the row is not bounded:\n got  %+v\n want %+v", record, want)
+	}
+	for index, attempt := range store.attempts {
+		wantAttempt := chwrite.AttemptRecord{
+			RunID: cfg.RunID, WorkUnitID: "u1", Role: "shadow", Config: want.ShadowConfig, RubricSHA256: decision.RubricSHA256,
+			Provider: "typesafe", APIMode: "systemone", ModelRequested: decision.DefaultModel,
+			Attempt: uint8(index + 1), Kind: []string{"first", "retry"}[index], HTTPStatus: 0, ErrorClass: "other",
+			RequestID: "", RatesVersion: shadowRatesVersion, ComputedAt: cfg.ComputedAt,
+		}
+		if index == 1 {
+			wantAttempt.State, wantAttempt.ModelReturned = decision.StateOK, shadowUnsafe
+			wantAttempt.InputTokens, wantAttempt.OutputTokens = math.MaxUint32, 0
+			wantAttempt.LatencyMS = math.MaxUint32
+		}
+		if !reflect.DeepEqual(attempt, wantAttempt) {
+			t.Fatalf("attempt %d is not bounded:\n got  %+v\n want %+v", index+1, attempt, wantAttempt)
+		}
+	}
+	if strings.Contains(logs.String(), shadowHostileMarker) || strings.Contains(logs.String(), "line two") {
+		t.Fatalf("a hostile value reached a log line:\n%.600s", logs.String())
+	}
+	// A state outside the closed set is stored as a defect, with no mix.
+	phase.classifier = hostileStateClassifier{}
+	store = &memoryShadowStore{}
+	phase.run(context.Background(), store, cfg, shadowTestEntries(t, "u1"))
+	if got := store.records[0]; got.State != decision.StateAdapterDefect || got.CategorizationStatus != categorize.StatusInvalidLLMOutput ||
+		len(got.SubcategoryDistribution) != 0 || got.CompleteStrict || got.EvidenceSpanID != "" {
+		t.Fatalf("a state outside the closed set gave %+v", got)
+	}
+}
+
+type hostileStateClassifier struct{}
+
+func (hostileStateClassifier) Classify(context.Context, units.TextBundle) (decision.Classification, error) {
+	return decision.Classification{
+		State: "ok\nrepaired", CompleteStrict: true, Subcategories: map[string]float64{"quality.bugfix": 1},
+		EvidenceSpanID: "E1_1", EvidenceHandle: "E1",
+	}, nil
 }

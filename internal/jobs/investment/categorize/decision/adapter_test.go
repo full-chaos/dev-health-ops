@@ -551,4 +551,21 @@ func TestANilCompleterRefusesAndDoesNotPanic(t *testing.T) {
 	if _, err := (&Completer{}).Classify(context.Background(), bundle); !errors.Is(err, categorize.ErrNoBundleCompleter) {
 		t.Fatalf("zero-value Classify err = %v, want ErrNoBundleCompleter", err)
 	}
+	// Each missing part alone is refused: a rubric with no transport, a
+	// transport with no rubric.
+	built := newTestCompleter(t, staticTransport(readResponse(t, "real-ok")))
+	for name, partial := range map[string]*Completer{
+		"no transport": {rubric: built.rubric, model: built.model},
+		"no rubric":    {transport: built.transport, model: built.model},
+	} {
+		if _, err := partial.Classify(context.Background(), bundle); !errors.Is(err, categorize.ErrNoBundleCompleter) {
+			t.Fatalf("%s: Classify err = %v, want ErrNoBundleCompleter", name, err)
+		}
+		if _, err := partial.CompleteBundle(context.Background(), bundle); !errors.Is(err, categorize.ErrNoBundleCompleter) {
+			t.Fatalf("%s: CompleteBundle err = %v, want ErrNoBundleCompleter", name, err)
+		}
+	}
+	if classification, err := built.Classify(context.Background(), bundle); err != nil || classification.State != StateOK {
+		t.Fatalf("a built completer gave %q (%v)", classification.State, err)
+	}
 }

@@ -115,6 +115,9 @@ func findTwins(fixtures map[string]FixtureRecord, rows, repeats map[string]map[s
 		}
 		res := twinResult{Injected: id, Clean: clean.BundleID, Target: f.InjectionTarget, Arms: map[string]*twinArm{}}
 		for _, arm := range arms {
+			if arm == ArmIncumbentDefs {
+				continue // arm D is in no gate: it needs no second send
+			}
 			ta := &twinArm{}
 			res.Arms[arm] = ta
 			sends := [2][2]*row{{rows[arm][id], rows[arm][clean.BundleID]}, {repeats[arm][id], repeats[arm][clean.BundleID]}}

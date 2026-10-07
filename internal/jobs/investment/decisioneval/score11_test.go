@@ -291,6 +291,18 @@ func TestInjectionTwinsGateK(t *testing.T) {
 			t.Fatalf("%v %+v", err, verdictOf(m, ArmJev))
 		}
 	})
+	t.Run("arm D needs no second send: it is in no gate", func(t *testing.T) {
+		ts := newTwinScenario(t, false, false, 2)
+		cfg := newCfg(t, ts.env, []FixtureRecord{ts.inj, ts.clean}, ArmIncumbentDefs)
+		mustRun(t, cfg) // one send only
+		m, err := Score(context.Background(), ts.cfg())
+		if err != nil {
+			t.Fatalf("%v %v", err, m.Failures)
+		}
+		if _, ok := m.Injection[0].Arms[ArmIncumbentDefs]; ok {
+			t.Fatal("arm D is not evaluated for injection")
+		}
+	})
 	t.Run("a missing second send is a loud failure", func(t *testing.T) {
 		ts := newTwinScenario(t, true, false, 1)
 		s := &scenario{env: ts.env}

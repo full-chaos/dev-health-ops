@@ -58,10 +58,13 @@ type GroupMetrics struct {
 	Q3ByKey map[string]Rate `json:"q3_precision_by_key,omitempty"`
 	Q4ByKey map[string]Rate `json:"q3_recall_by_key,omitempty"`
 	QOrder  Rate            `json:"q4_pairwise_order_agreement"`
-	S1      Rate            `json:"s1_level_exact"`
-	S2      Rate            `json:"s2_level_within_1"`
-	S1ByKey map[string]Rate `json:"s1_by_key,omitempty"`
-	S2ByKey map[string]Rate `json:"s2_by_key,omitempty"`
+	// GoldTopKey: among accepted classifications of scorable fixtures, the share
+	// whose top key set (p >= max p) holds a key of the highest gold level.
+	GoldTopKey Rate            `json:"gold_top_key_match"`
+	S1         Rate            `json:"s1_level_exact"`
+	S2         Rate            `json:"s2_level_within_1"`
+	S1ByKey    map[string]Rate `json:"s1_by_key,omitempty"`
+	S2ByKey    map[string]Rate `json:"s2_by_key,omitempty"`
 
 	// Map-bound mix metrics: as persisted (all scorable fixtures) and accepted
 	// only.
@@ -347,7 +350,7 @@ func (s *scorer) metrics() *Metrics {
 	m.InjectionK = injectionVerdicts(s.twins, s.arms)
 	m.Z2 = s.z2()
 	m.Agreement = s.agreement(order, members)
-	m.Failures = append([]string(nil), s.failures...)
+	m.Failures = append([]string{}, s.failures...)
 	sort.Strings(m.Failures)
 	m.Valid = len(m.Failures) == 0
 	return m
@@ -552,6 +555,29 @@ func (s *scorer) groupMetrics(arm string, views []*view, ci bool, label string) 
 		}
 	}
 	gm.QOrder = rate(ordK, ordN, "no gold pair with different levels")
+	topK, topN := 0, 0
+	for _, v := range views {
+		if !v.eff.accepted || !v.g.scorable {
+			continue
+		}
+		topN++
+		maxG := 0
+		for _, l := range v.g.levels {
+			if l > maxG {
+				maxG = l
+			}
+		}
+		goldTop := map[string]bool{}
+		for k, l := range v.g.levels {
+			if l == maxG {
+				goldTop[k] = true
+			}
+		}
+		if intersects(topKeys(v.eff.p), goldTop) {
+			topK++
+		}
+	}
+	gm.GoldTopKey = rate(topK, topN, "no accepted scorable classification")
 
 	// S1, S2: typed levels of candidate arms, over cells where the gold or the
 	// arm is >= 1.

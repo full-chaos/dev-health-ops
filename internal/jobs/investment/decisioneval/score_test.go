@@ -651,3 +651,20 @@ func TestLoadGoldFormats(t *testing.T) {
 		t.Fatal("an empty gold file must fail")
 	}
 }
+
+// The gold top key: the arm's top key set holds a key of the highest gold level.
+func TestGoldTopKeyMatch(t *testing.T) {
+	s := newScenario(t, nil)
+	m, err := Score(context.Background(), s.cfg())
+	if err != nil {
+		t.Fatalf("%v %v", err, m.Failures)
+	}
+	// jev: a1 top bugfix (gold 3), a2 top refactor (gold 3), a3 top vulnerability (gold 3): 3 of 3
+	// the incumbent forces a key on every bundle: a4 has no gold level above 0 so it is not scorable
+	for _, arm := range []string{ArmJev, ArmIncumbent} {
+		g := m.Arms[arm].Pipelines[PipelineOnly]["all/real/all"]
+		if g.GoldTopKey.K != 3 || g.GoldTopKey.N != 3 {
+			t.Fatalf("%s: %+v", arm, g.GoldTopKey)
+		}
+	}
+}

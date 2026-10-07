@@ -159,6 +159,7 @@ func renderGroupTable(b *strings.Builder, m *Metrics, am *ArmMetrics, pl string)
 		{"Q3 support precision (micro)", func(g *GroupMetrics) string { return frate(g.Q3) }, false},
 		{"Q3 support recall (micro)", func(g *GroupMetrics) string { return frate(g.Q4) }, false},
 		{"Q4 pairwise order agreement", func(g *GroupMetrics) string { return frate(g.QOrder) }, false},
+		{"gold top-key match", func(g *GroupMetrics) string { return frate(g.GoldTopKey) }, false},
 		{"S1 level exact (positive cells)", func(g *GroupMetrics) string { return frate(g.S1) }, true},
 		{"S2 level within 1 (positive cells)", func(g *GroupMetrics) string { return frate(g.S2) }, true},
 		{"B1 fixtures with bimodal / degraded", func(g *GroupMetrics) string {

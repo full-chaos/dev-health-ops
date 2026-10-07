@@ -13,6 +13,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -482,11 +483,13 @@ VALUES ($1, $2, $3, $4, $5::json, '{"schedule_cron":"0 * * * *"}'::json, true, f
 // TestASaveOfTheShownListKeepsAGatedRowOn pins a known difference from the
 // save that rebuilt the rows from the submitted list. State: the
 // incidents row is on, the org has no canonical-incident feature, the stored
-// list does not name the gated target. The plan-time gate reads the rows, so
-// the whole configuration is not planned. A save of the shown list keeps the
-// row (the rows own the selection), so the plan stays ineligible until the
-// row goes off; the pre-gates accept the configuration before and after.
-// That one gated row stops the whole configuration is tracked in CHAOS-8837.
+// list does not name the gated target. The plan-time gate reads the rows and
+// leaves the incident dataset out; this configuration has no source to plan,
+// so no unit is left and the occurrence is ineligible. A save of the shown
+// list keeps the row (the rows own the selection), so the plan answers the
+// same before and after; the pre-gates accept the configuration before and
+// after. The same state with a source to plan is
+// TestASaveOfTheShownListKeepsAGatedRowOnAndThePlanLeavesOnlyThatDatasetOut.
 func TestASaveOfTheShownListKeepsAGatedRowOn(t *testing.T) {
 	v := startCascadeVenue(t, false)
 	for _, testCase := range []struct {
@@ -515,6 +518,60 @@ func TestASaveOfTheShownListKeepsAGatedRowOn(t *testing.T) {
 			}
 			if result.Plan != "ineligible" {
 				t.Errorf("%s, %s the save: the plan is %q, want ineligible (the incidents row is on and the org has no feature)", testCase.provider, label, result.Plan)
+			}
+		}
+	}
+}
+
+// TestASaveOfTheShownListKeepsAGatedRowOnAndThePlanLeavesOnlyThatDatasetOut:
+// the incidents row is on, the stored list does not name the gated target and
+// the integration has a source to plan. Without the canonical-incident
+// feature the plan writes units for every other enabled dataset and none for
+// incidents. A save of the shown list (which names the gated target, because
+// its row is on) is accepted, keeps the stored list and keeps the row on, and
+// the plan writes the same units after it. With the feature the same state
+// plans the incidents units too: the measurement can see them.
+func TestASaveOfTheShownListKeepsAGatedRowOnAndThePlanLeavesOnlyThatDatasetOut(t *testing.T) {
+	for _, feature := range []bool{false, true} {
+		v := startCascadeVenue(t, feature)
+		for _, testCase := range []struct {
+			provider, stored, sourceType, gated, other string
+			rows                                       []string
+		}{
+			{"jira", `["work-items"]`, "project", "operational", "work-items", []string{"work-items", "incidents"}},
+			{"gitlab", `["git"]`, "repository", "incidents", "commits", []string{"commits", "incidents"}},
+		} {
+			label := fmt.Sprintf("%s, feature %t", testCase.provider, feature)
+			parent := v.seed(testCase.provider, testCase.stored, testCase.rows)
+			v.sequence++
+			v.exec(`INSERT INTO integration_sources (id, org_id, integration_id, provider, source_type, external_id, name, full_name, metadata, is_enabled, discovered_at, last_seen_at)
+VALUES ($1, $2, $3, $4, $5, $6, $6, $6, json_build_object('planner_managed_sync_config_id', $7::text), true, now(), now())`,
+				uuid.New(), v.org, parent.integration, testCase.provider, testCase.sourceType, fmt.Sprintf("GATE%d", v.sequence), parent.config.String())
+			before := v.fetched(label+", before the save", parent)
+			shown := v.shown(parent.config)
+			if !strings.Contains(shown, `"`+testCase.gated+`"`) {
+				t.Fatalf("harness: %s: the configuration shows %s, without the gated target %q: nothing is measured", label, shown, testCase.gated)
+			}
+			if status, body := v.call("PATCH", "/api/v1/admin/sync-configs/"+parent.config.String(), `{"sync_targets":`+shown+`}`); status != http.StatusOK {
+				t.Fatalf("%s: the save of the shown list %s: %d %s", label, shown, status, body)
+			}
+			if got := v.stored(parent.config); got != testCase.stored {
+				t.Errorf("%s: the stored list after a save of the shown list %s is %s, want it as it was %s", label, shown, got, testCase.stored)
+			}
+			if rows := v.rows(parent.integration); !strings.Contains(rows, "incidents=true") {
+				t.Errorf("%s: the rows after a save of the shown list %s are [%s]: the save switched the incidents row off", label, shown, rows)
+			}
+			after := v.fetched(label+", after the save of the shown list", parent)
+			t.Logf("GATED %s :: before=[%s] after=[%s]", label, before, after)
+			if after != before {
+				t.Errorf("%s: the plan writes [%s] after the save of the shown list and wrote [%s] before it", label, after, before)
+			}
+			keys := strings.Split(after, ",")
+			if !slices.Contains(keys, testCase.other) {
+				t.Errorf("%s: the plan writes [%s], without the dataset %q that needs no feature", label, after, testCase.other)
+			}
+			if slices.Contains(keys, "incidents") != feature {
+				t.Errorf("%s: the plan writes [%s]: the incidents dataset is planned only with the feature", label, after)
 			}
 		}
 	}

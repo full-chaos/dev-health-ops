@@ -73,10 +73,12 @@ var incidentGateCallers = map[string]string{
 	"internal/api/syncadmin.replaceRepositories": "PUT repositories: the stored list",
 	"internal/api/syncadmin.updateSyncConfigTx": "the save: with a list, the list the save stores (for a config whose rows own its selection the " +
 		"submitted targets that were stored or that it adds, else the submitted list); with no list, the stored list",
-	"internal/api/syncadmin.createSyncConfig":                            "the create: the submitted list (a request asked for every item)",
-	"internal/api/syncadmin.batchCreateSyncConfigs":                      "the batch create: the submitted list",
-	"internal/scheduler/sync.coordinatorEligibility":                     "the scheduler's pre-mint gate: the stored list",
-	"internal/scheduler/sync.loadMaterializationPlan":                    "the scheduler's plan: the stored list",
+	"internal/api/syncadmin.createSyncConfig":         "the create: the submitted list (a request asked for every item)",
+	"internal/api/syncadmin.batchCreateSyncConfigs":   "the batch create: the submitted list",
+	"internal/scheduler/sync.coordinatorEligibility":  "the scheduler's pre-mint gate: the stored list",
+	"internal/scheduler/sync.loadMaterializationPlan": "the scheduler's plan: the stored list",
+	"internal/scheduler/sync.planDatasetRequiresCanonicalIncident": "the scheduler's plan: the legacy targets of one enabled dataset row, from the registry " +
+		"(never the stored list): with the feature off the plan leaves that dataset out and plans the rest",
 	"internal/scheduler/sync.SyncTargetsRequireCanonicalIncident":        "the exported entry point itself",
 	"internal/syncdispatchruntime.datasetScopeRequiresCanonicalIncident": "dispatch: the legacy targets of one dataset key of a run unit or an enabled row, from the registry",
 }

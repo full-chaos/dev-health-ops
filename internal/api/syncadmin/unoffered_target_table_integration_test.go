@@ -15,12 +15,12 @@ import (
 
 // unofferedMainRecord holds, for every state of the table below, the line
 // the save that rebuilt the rows from the submitted list (the code before
-// CHAOS-8816, commit 168feb0253f6) answers: recorded from an executed run of
+// CHAOS-8816, commit 072a279112f2) answers: recorded from an executed run of
 // this test's own probe on that code, never written by hand.
 // unofferedDifferences holds every line this code answers differently, with
 // its class.
 const (
-	unofferedMainRecord  = "testdata/unoffered_targets_main_168feb0253f6.txt"
+	unofferedMainRecord  = "testdata/unoffered_targets_main_072a279112f2.txt"
 	unofferedDifferences = "testdata/unoffered_targets_differences.txt"
 )
 

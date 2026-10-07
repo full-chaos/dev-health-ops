@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
@@ -159,6 +160,9 @@ type jiraBudgetDoer struct {
 	commentDelay   time.Duration
 	slowWorklog    string
 	slowWorklogFor time.Duration
+	// afterCommentCtx: a comment read blocks until its context ends, then
+	// waits this long more before it returns (it ignores the context).
+	afterCommentCtx time.Duration
 }
 
 func jiraSleep(ctx context.Context, delay time.Duration) error {
@@ -200,6 +204,11 @@ func (doer *jiraBudgetDoer) Do(request *http.Request) (*http.Response, error) {
 		key := strings.TrimSuffix(strings.TrimPrefix(path, "/rest/api/3/issue/"), "/comment")
 		if err := jiraSleep(request.Context(), doer.commentDelay); err != nil {
 			return nil, err
+		}
+		if doer.afterCommentCtx > 0 {
+			<-request.Context().Done()
+			time.Sleep(doer.afterCommentCtx)
+			return nil, request.Context().Err()
 		}
 		if key == doer.failIssue {
 			return nil, context.DeadlineExceeded
@@ -403,5 +412,82 @@ func TestJiraAtlassianCommentsExplicitZeroLimitIsStillBoundedByBudget(t *testing
 	batch := collectJiraComments(t, jiraCommentsClaim(map[string]any{"comments_limit": 0, "comments_row_budget": 7}), doer.Do)
 	if rows := len(jiraInteractionRows(t, batch)); rows != 7 {
 		t.Fatalf("rows=%d want=7", rows)
+	}
+}
+
+// Round 1 of #3851 (CHAOS-8806): a comment read that STARTS before the stop
+// time must not run past it. One read blocks until its context ends: its own
+// deadline (stopAt) ends it, the issue is counted as time-skipped, and every
+// work item still lands (before the fix the read ran to the unit deadline and
+// the next changelog read failed: error, zero effects).
+func TestJiraAtlassianCommentsOneBlockedReadEndsAtTheStopTime(t *testing.T) {
+	doer := &jiraBudgetDoer{t: t, issues: 5, perIssue: 3, commentDelay: time.Hour}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	started := time.Now()
+	batch := collectJiraCommentsCtx(t, ctx, jiraCommentsClaim(nil), doer.Do)
+	if elapsed := time.Since(started); elapsed >= time.Second {
+		t.Fatalf("unit ran into its deadline: %v", elapsed)
+	}
+	if got := jiraWorkItemEffectRows(t, batch); got != 5 {
+		t.Fatalf("work item rows=%d want=5", got)
+	}
+	markers, _ := batch.Result["incomplete_nonholding"].([]string)
+	if fmt.Sprint(markers) != "[comments:time:5]" || len(jiraInteractionRows(t, batch)) != 0 {
+		t.Fatalf("markers=%#v rows=%d", markers, len(jiraInteractionRows(t, batch)))
+	}
+	if _, held := batch.Result["incomplete"]; held || batch.Watermark == nil {
+		t.Fatalf("watermark held: %#v", batch.Result["incomplete"])
+	}
+}
+
+// Control: a provider failure while the read context is alive is a fetch error
+// (watermark held), even when it carries a deadline error of its own.
+func TestJiraAtlassianCommentsFetchErrorWithDeadlineStillHoldsWatermark(t *testing.T) {
+	doer := &jiraBudgetDoer{t: t, issues: 3, perIssue: 3, failIssue: "OPS-2"}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	batch := collectJiraCommentsCtx(t, ctx, jiraCommentsClaim(nil), doer.Do)
+	incomplete, _ := batch.Result["incomplete"].([]string)
+	if len(incomplete) != 1 || incomplete[0] != "comments:jira:OPS-2" || batch.Watermark != nil {
+		t.Fatalf("incomplete=%#v watermark=%v", batch.Result["incomplete"], batch.Watermark)
+	}
+	if _, present := batch.Result["incomplete_nonholding"]; present {
+		t.Fatalf("fetch error counted as budget: %#v", batch.Result["incomplete_nonholding"])
+	}
+}
+
+// When the UNIT deadline is already over by the time the read returns, the
+// failure is not the time budget: it stays a fetch error (marker, held).
+func TestJiraAtlassianCommentsOuterDeadlineDoneIsNotBudget(t *testing.T) {
+	doer := &jiraBudgetDoer{t: t, issues: 1, perIssue: 3, afterCommentCtx: 700 * time.Millisecond}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	client := jiraWorkItemsTestClient(t, fakehttp.Client(jiraAtlassianDoerFunc(doer.Do)), providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }))
+	batch, err := jiraAtlassianCompleteHandler(t).Collect(
+		ctx, jiraCommentsClaim(nil), providerfoundation.Credential{}, client,
+		time.Date(2026, 8, 10, 12, 0, 0, 123456000, time.UTC),
+	)
+	if err != nil {
+		return // the unit failed on its deadline: also not a budget skip
+	}
+	if _, present := batch.Result["incomplete_nonholding"]; present {
+		t.Fatalf("outer deadline counted as budget: %#v", batch.Result["incomplete_nonholding"])
+	}
+}
+
+// What an interaction row may carry from the provider (CHAOS-8806 round 1):
+// the actor is cut at 256 runes and a comment id longer than 64 bytes is
+// skipped as a missing id, so no provider string is unbounded in a row.
+func TestJiraInteractionRowBoundsProviderStrings(t *testing.T) {
+	long := strings.Repeat("a", 5000)
+	comments := []map[string]any{
+		{"id": "1", "created": "2026-08-02T10:00:00Z", "author": map[string]any{"accountId": long}, "body": "x"},
+		{"id": strings.Repeat("9", 65), "created": "2026-08-02T10:00:00Z", "body": "x"},
+		{"id": strings.Repeat("9", 64), "created": "2026-08-02T10:00:00Z", "body": "x"},
+	}
+	rows := normalizeJiraInteractions(jiraCommentsClaim(nil), "jira:OPS-1", comments, nil, time.Now())
+	if len(rows) != 2 || rows[0].Actor == nil || utf8.RuneCountInString(*rows[0].Actor) != jiraInteractionActorMaxRunes || len(rows[1].InteractionID) != 64 {
+		t.Fatalf("rows=%+v", rows)
 	}
 }

@@ -12,6 +12,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"io"
 	"log/slog"
@@ -438,10 +439,25 @@ func (handler JiraAtlassianRouteHandler) Collect(
 				if issueLimit <= 0 || issueLimit > remaining {
 					issueLimit = remaining
 				}
+				// The read gets its own deadline at stopAt, so one slow comment
+				// fetch that starts before stopAt can never use time after it
+				// (the unit deadline is terminal and loses every work item).
+				commentCtx, cancelComments := ctx, context.CancelFunc(func() {})
+				if commentsHaveDeadline {
+					commentCtx, cancelComments = context.WithDeadline(ctx, commentsStopAt)
+				}
 				comments, _, commentErr := collectJiraIssueComments(
-					ctx, client, item.WorkItemID, maxPages, perPage, issueLimit,
+					commentCtx, client, item.WorkItemID, maxPages, perPage, issueLimit,
 				)
-				if commentErr != nil {
+				innerDeadline := commentsHaveDeadline && ctx.Err() == nil &&
+					errors.Is(commentCtx.Err(), context.DeadlineExceeded)
+				cancelComments()
+				if commentErr != nil && innerDeadline {
+					// The time budget ended this read, not a provider failure:
+					// the issue's partial comments are dropped (the collector
+					// returns none on an error) and the issue is counted.
+					commentsTimeSkipped++
+				} else if commentErr != nil {
 					optionalIncomplete = append(optionalIncomplete, "comments:"+item.WorkItemID)
 				} else {
 					rows.Interactions = append(rows.Interactions,

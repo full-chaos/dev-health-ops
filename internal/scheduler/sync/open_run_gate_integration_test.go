@@ -283,6 +283,8 @@ func TestScheduledTickOpenRunGateDecisionTable(t *testing.T) {
 		{name: "a pending manual occurrence does not block", pendingAgo: "1 minute", manual: true},
 		{name: "another configuration's open run does not block", runOpenedAgo: "10 minutes", otherConfig: true},
 		{name: "an occurrence under another organization does not block", runOpenedAgo: "10 minutes", foreignOrg: true},
+		{name: "another configuration's pending occurrence does not block", pendingAgo: "1 minute", otherConfig: true},
+		{name: "a pending occurrence under another organization does not block", pendingAgo: "1 minute", foreignOrg: true},
 	}
 	type seeded struct {
 		tc       openRunCase
@@ -699,6 +701,81 @@ WHERE occurrence.occurrence_id = $1`, trigger.OccurrenceID).Scan(&manualRunStatu
 	}
 	if resumed.Minted() != 1 || len(resumed.SkippedOpenRun) != 0 || len(resumed.OpenRunsPastBound) != 0 {
 		t.Fatalf("tick with only the manual run open = %#v, want one scheduled run started", resumed)
+	}
+}
+
+// With several open runs, a skip names the newest run that holds the schedule
+// back, and a start past the bound names the oldest run that did not end and
+// counts all of them.
+func TestOpenScheduledRunsReadNamesTheNewestBlockingAndTheOldestPastBoundRun(t *testing.T) {
+	ctx, pool, _ := startOpenRunGatePostgres(t)
+	hour := time.Now().UTC().Truncate(time.Hour)
+	configID, jobID := seedOpenRunCase(ctx, t, pool, 1, openRunCase{name: "several"}, hour.Add(-30*time.Minute))
+	integrationID, _ := pgseed.EnsureSyncIntegration(ctx, t, pool, openRunGateOrg, openRunGateID(7, 0), openRunGateID(8, 0))
+	seed := func(number int, openedAgo string) string {
+		t.Helper()
+		runID, jobRunID := openRunGateID(5, number), openRunGateID(6, number)
+		if _, err := pool.Exec(ctx, `
+INSERT INTO public.sync_runs (id, org_id, integration_id, triggered_by, mode, status, total_units, completed_units, failed_units, created_at)
+VALUES ($1::uuid, $2, $3::uuid, 'schedule', 'incremental', 'dispatching', 0, 0, 0, now() - $4::interval)`,
+			runID, openRunGateOrg, integrationID, openedAgo); err != nil {
+			t.Fatal(err)
+		}
+		pgseed.JobRun(ctx, t, pool, jobRunID, jobID, 0, "")
+		if _, err := pool.Exec(ctx, `
+INSERT INTO public.scheduled_sync_occurrences
+	(occurrence_id, identity_version, org_id, sync_config_id, scheduled_job_id, scheduled_for, created_at, job_run_id, sync_run_id, reconcile_status)
+VALUES ($1, $2, $3, $4::uuid, $5::uuid, $6, now() - $7::interval, $8::uuid, $9::uuid, 'completed')`,
+			fmt.Sprintf("several-%d", number), OccurrenceIdentityVersion, openRunGateOrg, configID, jobID,
+			hour.Add(-time.Duration(number+2)*time.Hour), openedAgo, jobRunID, runID); err != nil {
+			t.Fatal(err)
+		}
+		return runID
+	}
+	read := func() openScheduledRuns {
+		t.Helper()
+		tx, err := pool.Begin(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = tx.Rollback(ctx) }()
+		open, err := readOpenScheduledRuns(ctx, tx, openRunGateOrg, configID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return open
+	}
+
+	// Seeded out of age order, so neither answer can come from insertion order.
+	oldest := seed(1, "30 hours")
+	seed(2, "3 hours")
+	seed(3, "26 hours")
+	open := read()
+	if open.blocking != 0 || open.pastBound != 3 {
+		t.Fatalf("open = %#v, want 3 runs past the bound and none blocking", open)
+	}
+	if open.pastBoundSyncRunID != oldest || open.pastBoundOccurrenceID != "several-1" || open.pastBoundReason != OpenRunAgeCap {
+		t.Fatalf("past-bound run = %s (%s, %s), want the oldest run %s with age_cap", open.pastBoundSyncRunID, open.pastBoundOccurrenceID, open.pastBoundReason, oldest)
+	}
+	if open.pastBoundOpenSeconds < 30*60*60 || open.pastBoundOpenSeconds > 31*60*60 {
+		t.Fatalf("past-bound open_seconds = %d, want about 30 hours", open.pastBoundOpenSeconds)
+	}
+
+	seed(4, "90 minutes")
+	newest := seed(5, "10 minutes")
+	seed(6, "50 minutes")
+	open = read()
+	if open.blocking != 3 || open.pastBound != 3 {
+		t.Fatalf("open = %#v, want 3 runs blocking and 3 past the bound", open)
+	}
+	if open.blockingSyncRunID != newest || open.blockingOccurrenceID != "several-5" {
+		t.Fatalf("blocking run = %s (%s), want the newest run %s", open.blockingSyncRunID, open.blockingOccurrenceID, newest)
+	}
+	if open.blockingOpenSeconds < 10*60 || open.blockingOpenSeconds > 11*60 {
+		t.Fatalf("blocking open_seconds = %d, want about 10 minutes", open.blockingOpenSeconds)
+	}
+	if open.pastBoundSyncRunID != oldest {
+		t.Fatalf("past-bound run = %s, want the oldest run %s", open.pastBoundSyncRunID, oldest)
 	}
 }
 

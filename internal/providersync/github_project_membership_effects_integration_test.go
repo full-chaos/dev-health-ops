@@ -4,7 +4,6 @@ package providersync
 
 import (
 	"context"
-	"encoding/json"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"testing"
 	"time"
@@ -85,14 +84,7 @@ func TestGitHubProjectsV2PullRequestReachesClickHouseThroughTheEffectPath(t *tes
 			len(fetched.Rows.ProjectMemberships), len(fetched.Rows.Projects))
 	}
 
-	// The derived destinations are required to be PRESENT (possibly empty) by
-	// the builder's own completeness gate, so they are supplied empty here:
-	// this test is about the two direct families, not about derivations.
-	derived := map[string][]json.RawMessage{}
-	for _, destination := range githubWorkItemDerivedDestinations {
-		derived[destination] = []json.RawMessage{}
-	}
-	effects, err := buildGitHubWorkItemsRouteEffects(fetched.Rows, derived, nil)
+	effects, err := buildGitHubWorkItemsRouteEffects(fetched.Rows)
 	if err != nil {
 		t.Fatal(err)
 	}

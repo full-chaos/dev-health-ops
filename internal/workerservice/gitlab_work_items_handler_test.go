@@ -15,7 +15,7 @@ import (
 func TestGitLabWorkItemsRouteHandlerBuiltForTheWorkerSetsNoPageLimits(t *testing.T) {
 	t.Parallel()
 	mapping := &providersync.StatusMapping{}
-	handler := newGitLabWorkItemsRouteHandler(mapping, nil)
+	handler := newGitLabWorkItemsRouteHandler(mapping)
 	if handler.PerPage != 0 || handler.MaxPages != 0 || handler.NestedMaxPages != 0 {
 		t.Fatalf("worker handler sets page limits: per_page=%d max_pages=%d nested_max_pages=%d",
 			handler.PerPage, handler.MaxPages, handler.NestedMaxPages)

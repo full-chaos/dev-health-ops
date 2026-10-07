@@ -234,7 +234,7 @@ func TestTouchedDaysDrainSplitOfADayKeepsAWorkScopeOfSeveralRepositoriesWhole(t 
 		insertPartitionKeyItems(t, ctx, rig.conn, orgID, day, partitionKeyItem{
 			repo: repo, id: "gh:acme/shared-" + string(rune('a'+index)) + "#1", scope: scope, synced: now})
 	}
-	if _, err := rig.touched.RecordTouched(ctx, orgID, now.Add(-time.Hour)); err != nil {
+	if _, err := rig.touched.RecordTouched(ctx, orgID, now.Add(-time.Hour), nil); err != nil {
 		t.Fatal(err)
 	}
 	drain := rig.drain(t, nil, drainFaultRuns{touchedDrainRuns: rig.productionRuns(), limit: 2})

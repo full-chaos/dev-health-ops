@@ -373,20 +373,11 @@ func buildProviderSyncHandlerWithRuntimeDependencies(
 				if err != nil {
 					return providersync.CompleteRouteExecutor{}, err
 				}
-				ghDeriver, err := providersync.NewGitHubWorkItemDeriver(
-					clickhouseConnection, session,
-					workItemsRuntime.statusMappingPath,
-					workItemsRuntime.investmentConfigPath,
-				)
-				if err != nil {
-					return providersync.CompleteRouteExecutor{}, err
-				}
 				routeHandler = providersync.GitHubWorkItemsRouteHandler{
 					Projects: providersync.GitHubProjectV2Fetcher{},
 					ProjectMembershipSnapshotDiff: providersync.GitHubProjectV2SnapshotDiffClickHouseReader{
 						Conn: clickhouseConnection,
 					},
-					Deriver: ghDeriver,
 				}
 				sink, readback = ghSink, ghSink
 			case session.Claim.Provider == "gitlab" &&
@@ -400,15 +391,7 @@ func buildProviderSyncHandlerWithRuntimeDependencies(
 				if err != nil {
 					return providersync.CompleteRouteExecutor{}, err
 				}
-				glDeriver, err := providersync.NewGitLabWorkItemDeriver(
-					clickhouseConnection, session,
-					workItemsRuntime.statusMappingPath,
-					workItemsRuntime.investmentConfigPath,
-				)
-				if err != nil {
-					return providersync.CompleteRouteExecutor{}, err
-				}
-				routeHandler = newGitLabWorkItemsRouteHandler(workItemsRuntime.statusMapping, glDeriver)
+				routeHandler = newGitLabWorkItemsRouteHandler(workItemsRuntime.statusMapping)
 				sink, readback = glSink, glSink
 			case session.Claim.Provider == "jira" &&
 				session.Claim.Dataset == "work-items":
@@ -421,17 +404,8 @@ func buildProviderSyncHandlerWithRuntimeDependencies(
 				if err != nil {
 					return providersync.CompleteRouteExecutor{}, err
 				}
-				jiraDeriver, err := providersync.NewJiraWorkItemDeriver(
-					clickhouseConnection, session,
-					workItemsRuntime.statusMappingPath,
-					workItemsRuntime.investmentConfigPath,
-				)
-				if err != nil {
-					return providersync.CompleteRouteExecutor{}, err
-				}
 				routeHandler = providersync.JiraAtlassianRouteHandler{
 					StatusMapping: workItemsRuntime.statusMapping,
-					Derived:       jiraDeriver,
 				}
 				sink, readback = jiraSink, jiraSink
 			case session.Claim.Provider == "linear" &&
@@ -445,19 +419,10 @@ func buildProviderSyncHandlerWithRuntimeDependencies(
 				if err != nil {
 					return providersync.CompleteRouteExecutor{}, err
 				}
-				linearDeriver, err := providersync.NewLinearWorkItemDeriver(
-					clickhouseConnection, session,
-					workItemsRuntime.statusMappingPath,
-					workItemsRuntime.investmentConfigPath,
-				)
-				if err != nil {
-					return providersync.CompleteRouteExecutor{}, err
-				}
 				routeHandler = providersync.LinearWorkItemFamilyRouteHandler{
 					Direct: providersync.LinearWorkItemsRouteHandler{
 						GlobalDiscovery: true,
 					},
-					Derived: linearDeriver,
 				}
 				sink, readback = linearSink, linearSink
 			case session.Claim.Provider == "jira" &&
@@ -860,10 +825,8 @@ func withRequestUsage(handler *providerunit.Handler, writer *providersync.Reques
 // could only lower the ceiling (the route clamps it), never raise it.
 func newGitLabWorkItemsRouteHandler(
 	statusMapping *providersync.StatusMapping,
-	deriver *providersync.GitLabWorkItemDeriver,
 ) providersync.GitLabWorkItemsRouteHandler {
 	return providersync.GitLabWorkItemsRouteHandler{
 		StatusMapping: statusMapping,
-		Derived:       deriver,
 	}
 }

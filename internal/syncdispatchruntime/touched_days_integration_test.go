@@ -4,12 +4,14 @@ package syncdispatchruntime
 
 import (
 	"context"
+	"fmt"
 	"reflect"
 	"sort"
 	"testing"
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
+	"github.com/full-chaos/dev-health-ops/internal/providersync"
 	"github.com/google/uuid"
 )
 
@@ -161,7 +163,7 @@ func TestTouchedDaysRecordHoldsEveryDayOfTheRawRowsOfTheRun(t *testing.T) {
 	}
 	want := seedTouchedTestRows(t, ctx, conn)
 
-	recorded, err := store.RecordTouched(ctx, touchedTestOrg, touchedTestSince)
+	recorded, err := store.RecordTouched(ctx, touchedTestOrg, touchedTestSince, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -186,7 +188,7 @@ func TestTouchedDaysMarkEndsOnlyWhatWasDispatched(t *testing.T) {
 		t.Fatal(err)
 	}
 	all := seedTouchedTestRows(t, ctx, conn)
-	if _, err := store.RecordTouched(ctx, touchedTestOrg, touchedTestSince); err != nil {
+	if _, err := store.RecordTouched(ctx, touchedTestOrg, touchedTestSince, nil); err != nil {
 		t.Fatal(err)
 	}
 
@@ -215,7 +217,7 @@ func TestTouchedDaysMarkEndsOnlyWhatWasDispatched(t *testing.T) {
 
 	// A second record after the read: its events are newer than first.TakenAt.
 	time.Sleep(20 * time.Millisecond)
-	if _, err := store.RecordTouched(ctx, touchedTestOrg, touchedTestSince); err != nil {
+	if _, err := store.RecordTouched(ctx, touchedTestOrg, touchedTestSince, nil); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.MarkDispatched(ctx, touchedTestOrg, first.TakenAt, first.Days, nil); err != nil {
@@ -250,7 +252,7 @@ func TestTouchedDaysMarkEndsOnlyWhatWasDispatched(t *testing.T) {
 	if err := store.MarkDispatched(ctx, touchedTestOrg, second.TakenAt, second.Days, nil); err != nil {
 		t.Fatal(err)
 	}
-	recorded, err := store.RecordTouched(ctx, touchedTestOrg, touchedTestSince.AddDate(1, 0, 0))
+	recorded, err := store.RecordTouched(ctx, touchedTestOrg, touchedTestSince.AddDate(1, 0, 0), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -268,7 +270,7 @@ func TestTouchedDaysMarkOfListedKeysLeavesAKeyTouchedAfterTheRead(t *testing.T) 
 		t.Fatal(err)
 	}
 	all := seedTouchedTestRows(t, ctx, conn)
-	if _, err := store.RecordTouched(ctx, touchedTestOrg, touchedTestSince); err != nil {
+	if _, err := store.RecordTouched(ctx, touchedTestOrg, touchedTestSince, nil); err != nil {
 		t.Fatal(err)
 	}
 	read, err := store.PendingDays(ctx, touchedTestOrg, 100)
@@ -276,7 +278,7 @@ func TestTouchedDaysMarkOfListedKeysLeavesAKeyTouchedAfterTheRead(t *testing.T) 
 		t.Fatal(err)
 	}
 	time.Sleep(20 * time.Millisecond)
-	if _, err := store.RecordTouched(ctx, touchedTestOrg, touchedTestSince); err != nil {
+	if _, err := store.RecordTouched(ctx, touchedTestOrg, touchedTestSince, nil); err != nil {
 		t.Fatal(err)
 	}
 	listed := []TouchedDayKey{
@@ -306,7 +308,7 @@ func TestTouchedDaysRecordTakesATransitionWrittenAtTheBound(t *testing.T) {
 	insertTouchedTestTransition(t, ctx, conn, org, touchedTestRepoA, "gh:acme/api#2", "github", touchedTestDay(3, 21), touchedTestSince.Add(-time.Millisecond))
 	insertTouchedTestTransition(t, ctx, conn, otherOrg, touchedTestRepoA, "gh:other/api#1", "github", touchedTestDay(3, 22), touchedTestSince.Add(time.Hour))
 
-	recorded, err := store.RecordTouched(ctx, org, touchedTestSince)
+	recorded, err := store.RecordTouched(ctx, org, touchedTestSince, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -390,14 +392,14 @@ func TestTouchedDaysOneOrganizationNeverRecordsOrEndsTheKeysOfAnother(t *testing
 	insertTouchedTestTransition(t, ctx, conn, touchedTestOrg, uuid.Nil, sharedID, "github",
 		touchedTestDay(8, 5), touchedTestSince.Add(time.Hour))
 
-	if _, err := store.RecordTouched(ctx, touchedTestOtherOrg, touchedTestSince); err != nil {
+	if _, err := store.RecordTouched(ctx, touchedTestOtherOrg, touchedTestSince, nil); err != nil {
 		t.Fatal(err)
 	}
 	wantB := []string{touchedTestKey(8, 1, touchedTestRepoB)}
 	if got := pendingTouchedTestKeys(t, ctx, conn, touchedTestOtherOrg); !reflect.DeepEqual(got, wantB) {
 		t.Fatalf("organization B pending after its own record\n got %v\nwant %v", got, wantB)
 	}
-	if _, err := store.RecordTouched(ctx, touchedTestOrg, touchedTestSince); err != nil {
+	if _, err := store.RecordTouched(ctx, touchedTestOrg, touchedTestSince, nil); err != nil {
 		t.Fatal(err)
 	}
 	wantA := []string{touchedTestKey(8, 1, touchedTestRepoA), touchedTestKey(8, 5, touchedTestRepoA)}
@@ -416,5 +418,128 @@ func TestTouchedDaysOneOrganizationNeverRecordsOrEndsTheKeysOfAnother(t *testing
 	wantAAfter := []string{touchedTestKey(8, 5, touchedTestRepoA)}
 	if got := pendingTouchedTestKeys(t, ctx, conn, touchedTestOrg); !reflect.DeepEqual(got, wantAAfter) {
 		t.Fatalf("organization A pending after the mark of day 08-01\n got %v\nwant %v", got, wantAAfter)
+	}
+}
+
+// The recorded days of a work-items unit are the days of its window (the days
+// of providersync.WorkItemsUnitWindowDays) united with the days of the events
+// of its raw rows, for every repository the run stored a work item of. The
+// daily job is the one writer of the tables computed from stored rows, so a
+// day of the window that the record misses is never computed for the unit.
+// A second record of the same run adds no pending day.
+func TestTouchedDaysRecordHoldsEveryDayOfTheUnitWindow(t *testing.T) {
+	ctx, conn := newReadbackIntegrationConn(t)
+	store, err := NewClickHouseTouchedDaysStore(conn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	inRun := touchedTestSince.Add(time.Hour)
+	beforeRun := touchedTestSince.Add(-time.Hour)
+	at := func(month time.Month, day, hour int) *time.Time {
+		value := time.Date(2026, month, day, hour, 0, 0, 0, time.UTC)
+		return &value
+	}
+	kinds := []struct {
+		name          string
+		since, before *time.Time
+		windowDays    int
+	}{
+		{"incremental", at(9, 1, 12), at(9, 1, 13), 1},
+		{"incremental over midnight", at(8, 31, 23), at(9, 1, 1), 2},
+		{"backfill", at(6, 1, 0), at(6, 8, 0), 7},
+		{"backfill at the bound", at(1, 1, 0), func() *time.Time {
+			value := time.Date(2027, 1, 2, 0, 0, 0, 0, time.UTC)
+			return &value
+		}(), 366},
+	}
+	providers := []struct {
+		name string
+		repo uuid.UUID
+	}{
+		{"github", touchedTestRepoA}, {"gitlab", touchedTestRepoA},
+		// Jira and Linear items have no repository: the nil repository.
+		{"jira", uuid.Nil}, {"linear", uuid.Nil},
+	}
+	caseNumber := 0
+	for _, provider := range providers {
+		for _, kind := range kinds {
+			caseNumber++
+			org := fmt.Sprintf("00000000-0000-4000-8000-0000000009%02d", caseNumber)
+			t.Run(provider.name+"/"+kind.name, func(t *testing.T) {
+				window, err := providersync.WorkItemsUnitWindowDays(kind.since, kind.before, inRun)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if len(window) != kind.windowDays {
+					t.Fatalf("window days = %d, want %d", len(window), kind.windowDays)
+				}
+				// One item of the run: created long before the window (an
+				// event day outside it), completed on its first day (an event
+				// day inside it). One item of an earlier run in another
+				// repository: it gets no day.
+				created := time.Date(2025, 11, 3, 9, 30, 0, 0, time.UTC)
+				completed := window[0].Add(9 * time.Hour)
+				insertTouchedTestItems(t, ctx, conn,
+					touchedTestItem{org: org, repo: provider.repo, id: provider.name + ":item-1", provider: provider.name,
+						created: created, completed: &completed, synced: inRun},
+					touchedTestItem{org: org, repo: touchedTestRepoB, id: provider.name + ":item-old", provider: provider.name,
+						created: created, synced: beforeRun},
+				)
+				days := map[string]struct{}{created.Format("2006-01-02"): {}}
+				for _, day := range window {
+					days[day.Format("2006-01-02")] = struct{}{}
+				}
+				if len(days) != kind.windowDays+1 {
+					t.Fatalf("expected days = %d, want the %d window days and the creation day", len(days), kind.windowDays)
+				}
+				want := make([]string, 0, len(days))
+				for day := range days {
+					want = append(want, day+"|"+provider.repo.String())
+				}
+				sort.Strings(want)
+
+				recorded, err := store.RecordTouched(ctx, org, touchedTestSince, window)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if recorded != uint64(len(want)) {
+					t.Fatalf("recorded keys = %d, want %d", recorded, len(want))
+				}
+				if got := pendingTouchedTestKeys(t, ctx, conn, org); !reflect.DeepEqual(got, want) {
+					t.Fatalf("pending keys\n got %v\nwant %v", got, want)
+				}
+
+				// Idempotent: the same record once more leaves each key
+				// pending once.
+				if _, err := store.RecordTouched(ctx, org, touchedTestSince, window); err != nil {
+					t.Fatal(err)
+				}
+				if got := pendingTouchedTestKeys(t, ctx, conn, org); !reflect.DeepEqual(got, want) {
+					t.Fatalf("pending keys after a second record\n got %v\nwant %v", got, want)
+				}
+				pending, err := store.PendingDays(ctx, org, postSyncTouchedPendingDayReadLimit)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if len(pending.Days) != len(days) || pending.Truncated {
+					t.Fatalf("pending days = %d truncated=%v, want %d", len(pending.Days), pending.Truncated, len(days))
+				}
+				t.Logf("marked days = %d (window %d, event days outside the window 1), repositories 1", len(pending.Days), len(window))
+
+				// Without the window the record holds the event days alone:
+				// the window days above come from the window, not the rows.
+				eventOrg := org + "-events"
+				insertTouchedTestItems(t, ctx, conn, touchedTestItem{
+					org: eventOrg, repo: provider.repo, id: provider.name + ":item-1", provider: provider.name,
+					created: created, completed: &completed, synced: inRun,
+				})
+				if _, err := store.RecordTouched(ctx, eventOrg, touchedTestSince, nil); err != nil {
+					t.Fatal(err)
+				}
+				if got := pendingTouchedTestKeys(t, ctx, conn, eventOrg); len(got) != 2 {
+					t.Fatalf("event days alone = %v, want the creation day and the completion day", got)
+				}
+			})
+		}
 	}
 }

@@ -55,9 +55,6 @@ func TestBuildGitLabWorkItemEffectsIncludesExactlySixRawDestinations(t *testing.
 			t.Fatalf("effect[%d]=%+v", index, effects[index])
 		}
 	}
-	if len(gitLabWorkItemDerivedGap) != 10 {
-		t.Fatalf("derived gap=%v", gitLabWorkItemDerivedGap)
-	}
 }
 
 func TestGitLabWorkItemEffectsFenceTenantGenerationAndLease(t *testing.T) {

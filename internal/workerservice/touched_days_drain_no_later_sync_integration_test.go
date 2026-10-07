@@ -96,7 +96,7 @@ func seedPendingDays(t *testing.T, ctx context.Context, rig *touchedRig, orgID s
 	}
 	sort.Strings(days)
 	insertTouchedItems(t, ctx, rig.conn, orgID, items...)
-	if _, err := rig.touched.RecordTouched(ctx, orgID, now.Add(-time.Hour)); err != nil {
+	if _, err := rig.touched.RecordTouched(ctx, orgID, now.Add(-time.Hour), nil); err != nil {
 		t.Fatal(err)
 	}
 	return days

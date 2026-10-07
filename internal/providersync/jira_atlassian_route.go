@@ -118,17 +118,15 @@ var jiraAtlassianRawDestinations = JiraAtlassianEffectDestinations()
 // though CompleteRouteBatch predates provider-specific result types. Worklogs
 // are a Jira-only extra and do not replace any of the canonical sixteen.
 type JiraAtlassianWorkItemsResult struct {
-	WorkItemsSynced                  int      `json:"work_items_synced"`
-	TransitionsSynced                int      `json:"transitions_synced"`
-	DependenciesSynced               int      `json:"dependencies_synced"`
-	ReopenEventsSynced               int      `json:"reopen_events_synced"`
-	InteractionsSynced               int      `json:"interactions_synced"`
-	SprintsSynced                    int      `json:"sprints_synced"`
-	WorklogsSynced                   int      `json:"worklogs_synced"`
-	RawDestinations                  []string `json:"raw_destinations"`
-	DerivedDestinationsImplemented   []string `json:"derived_destinations_implemented"`
-	DerivedDestinationsUnimplemented []string `json:"derived_destinations_unimplemented"`
-	WatermarkHeldForIncomplete       bool     `json:"watermark_held_for_incomplete"`
+	WorkItemsSynced            int      `json:"work_items_synced"`
+	TransitionsSynced          int      `json:"transitions_synced"`
+	DependenciesSynced         int      `json:"dependencies_synced"`
+	ReopenEventsSynced         int      `json:"reopen_events_synced"`
+	InteractionsSynced         int      `json:"interactions_synced"`
+	SprintsSynced              int      `json:"sprints_synced"`
+	WorklogsSynced             int      `json:"worklogs_synced"`
+	RawDestinations            []string `json:"raw_destinations"`
+	WatermarkHeldForIncomplete bool     `json:"watermark_held_for_incomplete"`
 }
 
 // JiraSprintReferenceSink is the narrow reference-cache boundary used by the
@@ -140,8 +138,8 @@ type JiraSprintReferenceSink func([]jiraSprintRow) error
 // WIRING: internal/workerservice/provider_sync.go's
 // `provider == "jira" && dataset == "work-items"` case constructs this handler
 // and assigns it to routeHandler, with NewJiraWorkItemCompositeClickHouseEffects
-// as sink and readback and NewJiraWorkItemDeriver as Derived. Note this is the
-// handler jira actually runs -- JiraWorkItemsRouteHandler
+// as sink and readback. The unit writes raw rows only; the daily job writes
+// every table computed from them. Note this is the handler jira actually runs -- JiraWorkItemsRouteHandler
 // (jira_work_items_route.go) is the one that is genuinely unconstructed, and
 // its own non-registration claim is TRUE and must stay. (Phrased without
 // quoting that claim verbatim on purpose: the drift guard treats an unmarked
@@ -174,7 +172,6 @@ type JiraAtlassianRouteHandler struct {
 	PerPage          int
 	ReferenceSprints []jiraSprintRow
 	ReferenceSink    JiraSprintReferenceSink
-	Derived          jiraWorkItemsDeriver
 }
 
 func (handler JiraAtlassianRouteHandler) limits() (int, int, int, error) {
@@ -207,6 +204,9 @@ func (handler JiraAtlassianRouteHandler) Collect(
 		claim.BeforeAt == nil || !claim.SinceAt.Before(*claim.BeforeAt) || handler.StatusMapping == nil ||
 		(handler.GraphQLClient != nil && (handler.GraphQLClient.Provider != "jira" || handler.GraphQLClient.BaseURL == nil)) {
 		return CompleteRouteBatch{}, ErrInvalidConfiguration
+	}
+	if _, err := workItemsUnitWindowDays(claim, normalizedAt); err != nil {
+		return CompleteRouteBatch{}, err
 	}
 	_ = credential // Authentication is sealed into providerfoundation.HTTPClient.
 	maxPages, maxRows, perPage, err := handler.limits()
@@ -588,56 +588,33 @@ func (handler JiraAtlassianRouteHandler) Collect(
 	if err != nil {
 		return CompleteRouteBatch{}, err
 	}
-	derivedImplemented := []string{}
-	derivedUnimplemented := append([]string(nil), jiraWorkItemDerivedDestinations...)
-	derivedRecords := 0
-	var derivedWatermark *time.Time
-	if handler.Derived != nil {
-		derived, deriveErr := handler.Derived.Derive(
-			ctx, claim, rows.jiraWorkItemRows, normalizedAt,
-		)
-		if deriveErr != nil {
-			return CompleteRouteBatch{}, deriveErr
-		}
-		if derived.Watermark == nil || !derived.Watermark.Equal(*claim.BeforeAt) {
-			return CompleteRouteBatch{}, ErrInvalidConfiguration
-		}
-		derivedEffects, effectErr := BuildJiraWorkItemDerivedEffects(derived.EffectRows())
-		if effectErr != nil {
-			return CompleteRouteBatch{}, effectErr
-		}
-		effects = append(effects, derivedEffects...)
-		derivedImplemented = derived.producedDestinations()
-		derivedUnimplemented = []string{}
-		derivedWatermark = derived.Watermark
-		derivedRecords = len(derived.EstimateCoverageMetricsDaily) +
-			len(derived.InvestmentClassificationsDaily) + len(derived.InvestmentMetricsDaily) +
-			len(derived.IssueTypeMetricsDaily) + len(derived.WorkItemCycleTimes) +
-			len(derived.WorkItemMetricsDaily) + len(derived.WorkItemStateDurationsDaily) +
-			len(derived.WorkItemTeamAttributions) + len(derived.WorkItemUserMetricsDaily)
+	// The unit stores raw rows only. ai_attribution stays as its explicit
+	// evaluated-empty effect; every table computed from stored work-item rows
+	// is left to the daily job.
+	aiAttribution, err := BuildEffectBatch("ai_attribution", EffectReadbackRequired, []json.RawMessage{})
+	if err != nil {
+		return CompleteRouteBatch{}, err
 	}
+	effects = append(effects, aiAttribution)
+	observeWorkItemDerivedTablesLeftToDailyJob(client.Metrics, claim, len(rows.WorkItems))
 	summary := JiraAtlassianWorkItemsResult{
 		WorkItemsSynced: len(rows.WorkItems), TransitionsSynced: len(rows.Transitions),
 		DependenciesSynced: len(rows.Dependencies), ReopenEventsSynced: len(rows.ReopenEvents),
 		InteractionsSynced: len(rows.Interactions), SprintsSynced: len(rows.Sprints),
-		WorklogsSynced:                   len(rows.Worklogs),
-		RawDestinations:                  append([]string(nil), jiraAtlassianRawDestinations...),
-		DerivedDestinationsImplemented:   append([]string(nil), derivedImplemented...),
-		DerivedDestinationsUnimplemented: append([]string(nil), derivedUnimplemented...),
-		WatermarkHeldForIncomplete:       len(optionalIncomplete) > 0 || derivedWatermark == nil,
+		WorklogsSynced:             len(rows.Worklogs),
+		RawDestinations:            append([]string(nil), jiraAtlassianRawDestinations...),
+		WatermarkHeldForIncomplete: len(optionalIncomplete) > 0,
 	}
 	result := map[string]any{
 		"work_items_synced": len(rows.WorkItems), "transitions_synced": len(rows.Transitions),
 		"dependencies_synced": len(rows.Dependencies), "reopen_events_synced": len(rows.ReopenEvents),
 		"interactions_synced": len(rows.Interactions), "sprints_synced": len(rows.Sprints),
 		"worklogs_synced": len(rows.Worklogs), "project_key": projectKey,
-		"project_memberships_synced":         len(rows.ProjectMemberships),
-		"unresolved_project_memberships":     unresolvedProjectMemberships,
-		"raw_destinations":                   append([]string(nil), jiraAtlassianRawDestinations...),
-		"derived_destinations_implemented":   append([]string(nil), derivedImplemented...),
-		"derived_destinations_unimplemented": append([]string(nil), derivedUnimplemented...),
-		"watermark_held_for_incomplete":      summary.WatermarkHeldForIncomplete,
-		"jira_work_items":                    summary,
+		"project_memberships_synced":     len(rows.ProjectMemberships),
+		"unresolved_project_memberships": unresolvedProjectMemberships,
+		"raw_destinations":               append([]string(nil), jiraAtlassianRawDestinations...),
+		"watermark_held_for_incomplete":  summary.WatermarkHeldForIncomplete,
+		"jira_work_items":                summary,
 		// CHAOS-4757 telemetry: PRIMARY dev-status rows synced, orgs with no
 		// GitHub-for-Jira app configured (clean no-op, not an error), and any
 		// issue skipped because dev_status_max_requests was reached this run.
@@ -676,16 +653,18 @@ func (handler JiraAtlassianRouteHandler) Collect(
 			"skipped_issues_time", commentsTimeSkipped)
 	}
 	rows.MembershipCreation.result("jira", result)
-	result = attachWorkItemTeamInheritanceObservation(result, handler.Derived)
+	// The watermark is the end of the window whose raw rows this unit stored
+	// (BeforeAt is required above). It is held while an optional fetch is
+	// incomplete.
 	var watermark *time.Time
-	if len(optionalIncomplete) == 0 && derivedWatermark != nil {
-		value := derivedWatermark.UTC()
+	if len(optionalIncomplete) == 0 {
+		value := claim.BeforeAt.UTC()
 		watermark = &value
 	}
 	return CompleteRouteBatch{
 		Effects: effects, Result: result, Watermark: watermark,
 		Evidence: FetchEvidence{Provider: claim.Provider, Dataset: claim.Dataset,
-			Requests: requests, Pages: searchPages, Records: len(rows.WorkItems) + derivedRecords},
+			Requests: requests, Pages: searchPages, Records: len(rows.WorkItems)},
 		WorklogObservations: worklogObservations,
 	}, nil
 }

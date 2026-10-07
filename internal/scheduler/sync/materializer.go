@@ -500,6 +500,9 @@ func (materializer *NativeMaterializer) Materialize(
 			return PlanResult{}, err
 		}
 	}
+	if err := errIfOnlySkippedDatasetsHadWork(loaded.featureOffSkippedDatasets, len(units)); err != nil {
+		return PlanResult{}, err
+	}
 	if len(units) > loaded.totalUnitCap {
 		return PlanResult{}, fmt.Errorf("%w: plan has %d units over cap %d", ErrInvalidPlan, len(units), loaded.totalUnitCap)
 	}
@@ -585,6 +588,9 @@ type loadedMaterializationPlan struct {
 	terminalReason         string
 	ensureSecurityDataset  bool
 	pagerDutyRepair        *pagerDutyDomainRepair
+	// featureOffSkippedDatasets is the number of enabled datasets the plan
+	// left out because the canonical-incident feature is off.
+	featureOffSkippedDatasets int
 	// triggeredBy is CHAOS-4602's sync_runs.triggered_by stamp: "schedule"
 	// for an ordinary cron-minted occurrence (every pre-CHAOS-4602 caller
 	// keeps this value, unconditionally), or the sync_manual_triggers row's
@@ -786,14 +792,9 @@ WHERE config.id = $1::uuid AND config.org_id = $2 AND integration.is_active`, oc
 			return loadedMaterializationPlan{}, err
 		}
 	}
-	if planDatasetsRequireCanonicalIncident(provider, datasets) {
-		allowed, err := canonicalIncidentAllowedForUpdate(ctx, tx, orgID, occurrence.ScheduledFor)
-		if err != nil {
-			return loadedMaterializationPlan{}, err
-		}
-		if !allowed {
-			return loadedMaterializationPlan{}, ErrOccurrenceIneligible
-		}
+	datasets, featureOffSkippedDatasets, err := dropCanonicalIncidentDatasetsWhenFeatureOff(ctx, tx, orgID, integrationID, provider, datasets, occurrence.ScheduledFor)
+	if err != nil {
+		return loadedMaterializationPlan{}, err
 	}
 	// CHAOS-8773: when a scheduled planner-managed parent has no enabled
 	// work-item family row, ask once whether this integration ever finished
@@ -843,6 +844,8 @@ WHERE config.id = $1::uuid AND config.org_id = $2 AND integration.is_active`, oc
 		ensureSecurityDataset:  ensureSecurityDataset,
 		pagerDutyRepair:        pagerDutyRepair,
 		triggeredBy:            triggeredBy,
+
+		featureOffSkippedDatasets: featureOffSkippedDatasets,
 	}, nil
 }
 
@@ -1214,21 +1217,6 @@ func parseOptionalPositiveInt(value *string) (*int, bool) {
 		return nil, false
 	}
 	return &parsed, true
-}
-
-func planDatasetsRequireCanonicalIncident(provider string, datasets []PlanDataset) bool {
-	for _, dataset := range datasets {
-		spec, ok := datasetSpecification(provider, dataset.Key)
-		if !ok {
-			continue
-		}
-		for _, target := range spec.LegacyTargets {
-			if target == "incidents" || target == "operational" {
-				return true
-			}
-		}
-	}
-	return false
 }
 
 // rowQuerier is the read surface both entitlement call sites share: the

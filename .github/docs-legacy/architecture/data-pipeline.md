@@ -432,7 +432,27 @@ did not commit.
 **Limits.**
 
 - Only a fan-out drains the pending days: 31 for each post-sync fan-out of the
-  organization. The nightly run does not drain them.
+  organization. The nightly run does not drain them. The newest days go first,
+  so an organization whose fan-outs each record 31 or more newer days never
+  takes its older pending days (CHAOS-8846). An operator sees the carry-over
+  in the Info field `touched_days_carried_over` of the log line
+  `post_sync_fanout.touched_days` and in the counter event `days_carried_over`.
+  An Error line (phase `read_truncated`) comes only above 3660 pending days.
+  No metric gives the age of the oldest pending day.
+- A late event records the days of its own timestamps only. The days between
+  the day of a late event and the day it was written are not recorded, but the
+  daily compute counts work in progress at the end of every day an item is
+  open. Executed: two items started on 08-08, one completed on 08-15 and
+  written on 08-20: the work in progress at the end of 08-15 / 08-16 / 08-18
+  is 1 / 2 / 2 after the fan-out and its runs, and 1 / 1 / 1 after a full
+  recompute. Those state metrics stay stale until a full recompute
+  (CHAOS-8855). Main is staler: it recomputes the window only.
+- Retention: migration 108 sets no TTL and no Go registry bounds the table.
+  A sync appends at most one `touched` row for each distinct (day, repository)
+  of the rows it wrote and one `dispatched` row for each key a run was started
+  for. A merge keeps the newest row of each kind for each key, so the table
+  holds at most two rows for each (organization, day, repository) ever
+  touched, in partitions by month of the day.
 - The record covers work items and their transitions. Other raw tables are
   computed by the window of their sync run.
 - A day that an item *left* (its `completed_at` moved or was cleared) is not
@@ -441,16 +461,20 @@ did not commit.
   can write a row after the read. The row is recorded by the next sync that
   writes the item again.
 - A touched day after its runs equals a recompute of every repository when
-  no work scope spans two repository partitions. `work_item_metrics_daily`,
+  no work scope has items in two repositories. `work_item_metrics_daily`,
   `work_item_user_metrics_daily`, `work_item_state_durations_daily` and
   `estimate_coverage_metrics_daily` replace rows by a key that has
-  `work_scope_id` and no `repo_id`, and the daily job computes one repository
-  partition at a time: when one work scope has items in two partitions, the
-  partitions write one key and the row of the partition that ran last stays.
+  `work_scope_id` and no `repo_id`, and the work-item families compute one
+  repository at a time: when one work scope has items in two repositories, the
+  repositories write one key and the row of the repository that ran last stays.
   The daily job had this limit before the touched-day runs; a run of listed
   repositories makes it visible sooner
   (`TestDailyJobRepositoryPartitionsOfOneDayDoNotShareAKey`).
 - A pod of an older build beside the new table neither writes nor reads it.
+- Deploy order: ClickHouse migration 108 must be applied before the new
+  coordinator runs. Without the table the whole post-sync fan-out fails loud
+  (Error log phase `record`, counter `record_failed`) and the job is delivered
+  again.
 
 Counter: `dev_health_post_sync_touched_days_total{event}` with `keys_recorded`,
 `days_dispatched`, `days_carried_over`, `days_already_started`,

@@ -578,9 +578,10 @@ end.
 
 **One pass.**
 
-1. If drain runs of the organization are not ended (created in the last 24
-   hours), the trigger does nothing. At most 31 drain runs of one organization
-   are in flight.
+1. The pass reads the state of the daily runs of the organization (their
+   number and the creation time of the newest). If drain runs of the
+   organization are not ended (created in the last 24 hours), the trigger does
+   nothing. At most 31 drain runs of one organization are in flight.
 2. A pass that the end of a drain run triggered looks at the pass of that
    run. When a run of it has a result and every key it lists is pending, the
    mark of that pass is missing: the pass starts nothing and the chain ends
@@ -591,8 +592,18 @@ end.
 4. ClickHouse, with no Postgres transaction open: the pending days, newest
    first, and the pending repositories of the first 31 that can start.
 5. One Postgres transaction under an advisory lock for the organization: the
-   in-flight count again, then one run for each day, generation
-   `touched-drain:<trigger>:<id of the run that triggered the pass>`.
+   in-flight count again, then the state of the runs again, then one run for
+   each day, generation
+   `touched-drain:<trigger>:<id of the run that triggered the pass>`. When the
+   state is not the one of step 1, a run was created since: what steps 2 to 4
+   decided (the keys returned, the days and repositories chosen, the skipped
+   days started once more) can be old, so the pass starts nothing (outcome
+   `runs_changed_since_read` in its line). The days stay pending and the end
+   of the run that changed the state triggers the next pass. Two passes that
+   find the same day at the same time therefore start one run for it, also
+   when the run of the first has ended before the second takes the lock. A
+   fan-out does not take this lock: a run it commits after the check costs
+   one more recompute of its days.
 6. After the commit: the `dispatched` events of exactly the keys the runs
    list, one millisecond before the read of step 4.
 
@@ -642,7 +653,8 @@ a later pass looks. A run that ends after its 24 hours is computed twice.
 
 The read returns at most 3660 owner runs without a result, newest first. A
 pass that hits the bound writes an Error line (phase `return_read_truncated`)
-and counts `return_read_truncated`; the runs behind the bound are reached when
+and counts `return_read_truncated` at the read, so also when a later step of
+the pass fails; the runs behind the bound are reached when
 the keys of the returned ones have a new owner. An organization in a normal
 state has none or a few such runs.
 

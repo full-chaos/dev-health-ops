@@ -169,6 +169,10 @@ func (runs touchedDrainRuns) DaysWithOnlyFailedRuns(
 	return runs.store.TouchedDaysWithOnlyFailedRuns(ctx, organizationID, days, threshold, notEndedAfter, retryAfter)
 }
 
+func (runs touchedDrainRuns) RunsStateTx(ctx context.Context, tx pgx.Tx, organizationID string) (string, error) {
+	return runs.store.DailyRunsStateTx(ctx, tx, organizationID)
+}
+
 func (runs touchedDrainRuns) InFlightTx(
 	ctx context.Context, tx pgx.Tx, organizationID string, since time.Time,
 ) (int, error) {

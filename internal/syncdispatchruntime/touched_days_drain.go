@@ -99,6 +99,11 @@ type TouchedDaysDrainRuns interface {
 	// newest threshold runs all ended without a result. The value is true
 	// when the newest run of the day is older than retryAfter.
 	DaysWithOnlyFailedRuns(ctx context.Context, organizationID string, days []time.Time, threshold int, notEndedAfter, retryAfter time.Duration) (map[string]bool, error)
+	// RunsStateTx returns a value that is another one after any daily run of
+	// the organization was created. A pass reads it before its first read
+	// and again under its lock: the same value says that no run exists that
+	// the reads of the pass did not see.
+	RunsStateTx(ctx context.Context, tx pgx.Tx, organizationID string) (string, error)
 	// InFlightTx counts the drain runs of the organization that are not
 	// ended and were created at or after since.
 	InFlightTx(ctx context.Context, tx pgx.Tx, organizationID string, since time.Time) (int, error)
@@ -167,6 +172,12 @@ type touchedDrainPass struct {
 	started         []touchedDrainStart
 	alreadyStarted  int
 	inFlight        int
+	// runsState is the state of the daily runs of the organization, read
+	// before every other read of the pass.
+	runsState string
+	// runsChanged is true when a run of the organization was created between
+	// the reads of the pass and its lock: the pass started nothing.
+	runsChanged bool
 }
 
 // DrainTouchedDays runs one pass for the organization. passID names the
@@ -183,10 +194,13 @@ func (drain *TouchedDaysDrain) DrainTouchedDays(ctx context.Context, organizatio
 	// A cheap first look, outside the lock: while runs of an earlier pass are
 	// not ended this trigger does nothing, and the end of each of those runs
 	// is a trigger of its own.
-	if inFlight, err := drain.inFlight(ctx, organizationID); err != nil {
+	inFlight, runsState, err := drain.inFlight(ctx, organizationID)
+	if err != nil {
 		drain.fail(ctx, pass, "in_flight_read")
 		return
-	} else if inFlight > 0 {
+	}
+	pass.runsState = runsState
+	if inFlight > 0 {
 		drain.observe(jobruntime.TouchedDaysDrainInFlight, 1)
 		return
 	}
@@ -215,15 +229,22 @@ func (drain *TouchedDaysDrain) DrainTouchedDays(ctx context.Context, organizatio
 	drain.report(ctx, pass)
 }
 
-// inFlight counts the drain runs of the organization that are not ended, in a
-// transaction of its own.
-func (drain *TouchedDaysDrain) inFlight(ctx context.Context, organizationID string) (int, error) {
+// inFlight reads the state of the daily runs of the organization and then
+// counts its drain runs that are not ended, in a transaction of its own. The
+// state is the first read of a pass: every later read of the pass sees at
+// least the runs it stands for.
+func (drain *TouchedDaysDrain) inFlight(ctx context.Context, organizationID string) (int, string, error) {
 	tx, err := drain.pool.Begin(ctx)
 	if err != nil {
-		return 0, ErrPostSyncUnavailable
+		return 0, "", ErrPostSyncUnavailable
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
-	return drain.runs.InFlightTx(ctx, tx, organizationID, drain.now().UTC().Add(-touchedDrainInFlightWindow))
+	runsState, err := drain.runs.RunsStateTx(ctx, tx, organizationID)
+	if err != nil {
+		return 0, "", err
+	}
+	inFlight, err := drain.runs.InFlightTx(ctx, tx, organizationID, drain.now().UTC().Add(-touchedDrainInFlightWindow))
+	return inFlight, runsState, err
 }
 
 // touchedDrainEndTrigger is the prefix of the passID of a pass that the end
@@ -284,6 +305,15 @@ func (drain *TouchedDaysDrain) returnFailedDays(ctx context.Context, pass *touch
 		return err
 	}
 	pass.returnTruncated = truncated
+	if truncated {
+		// Reported here and not with the pass line: a later step of the pass
+		// can fail, and the runs behind the bound must have their line then
+		// too.
+		drain.logger.Error(ctx, synclog.MsgTouchedDaysDrainFailed,
+			synclog.Text(synclog.KeyPhase, synclog.ParseLabel("return_read_truncated")),
+			synclog.Org(synclog.ParseID(pass.organizationID)), drainPassAttr(pass.passID))
+		drain.observe(jobruntime.TouchedDaysDrainReturnReadTruncated, 1)
+	}
 	if len(runs) == 0 {
 		return nil
 	}
@@ -373,6 +403,20 @@ const touchedDrainLockNamespace = 8846
 // The advisory lock puts two passes of one organization in sequence, and the
 // count under the lock is what makes the second one start nothing: it sees the
 // committed runs of the first, which hold the same days until they are marked.
+//
+// Everything the pass decided before the lock (the keys it returned, the days
+// and repositories it chose, the days it skips or starts once more) was read
+// from a state of the runs that can be old by now: another pass or a fan-out
+// can have started a run since, and that run can have ended already, so the
+// count of the runs in flight does not show it. The pass therefore reads the
+// state of the runs again under the lock and starts nothing when it is not the
+// one of its first read. The days stay pending, and the end of the run that
+// changed the state triggers the next pass, which reads again. This is what
+// keeps a skipped day at one more run in touchedDrainRetryAfter when two
+// passes find it due at the same time.
+//
+// A fan-out does not take this lock: a run it commits after this check is not
+// seen, and costs one more recompute of its days.
 func (drain *TouchedDaysDrain) start(ctx context.Context, pass *touchedDrainPass) error {
 	tx, err := drain.pool.Begin(ctx)
 	if err != nil {
@@ -390,6 +434,14 @@ func (drain *TouchedDaysDrain) start(ctx context.Context, pass *touchedDrainPass
 	}
 	if inFlight > 0 {
 		pass.inFlight = inFlight
+		return tx.Commit(ctx)
+	}
+	runsState, err := drain.runs.RunsStateTx(ctx, tx, pass.organizationID)
+	if err != nil {
+		return err
+	}
+	if runsState != pass.runsState {
+		pass.runsChanged = true
 		return tx.Commit(ctx)
 	}
 	var started []touchedDrainStart
@@ -468,11 +520,6 @@ func (drain *TouchedDaysDrain) report(ctx context.Context, pass *touchedDrainPas
 			synclog.Instant(synclog.KeyDrainNewestSkippedDay, pass.skipped[0].UTC()),
 		)
 	}
-	if pass.returnTruncated {
-		drain.logger.Error(ctx, synclog.MsgTouchedDaysDrainFailed,
-			synclog.Text(synclog.KeyPhase, synclog.ParseLabel("return_read_truncated")), org, passAttr)
-		drain.observe(jobruntime.TouchedDaysDrainReturnReadTruncated, 1)
-	}
 	if pass.backlog.Truncated {
 		drain.logger.Error(ctx, synclog.MsgTouchedDaysDrainFailed,
 			synclog.Text(synclog.KeyPhase, synclog.ParseLabel("read_truncated")), org, passAttr)
@@ -498,6 +545,8 @@ func (drain *TouchedDaysDrain) report(ctx context.Context, pass *touchedDrainPas
 		outcome = "nothing_pending"
 	case pass.inFlight > 0:
 		outcome = "in_flight"
+	case pass.runsChanged:
+		outcome = "runs_changed_since_read"
 	case len(pass.started) == 0:
 		outcome = "started_none"
 	}

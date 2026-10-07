@@ -110,6 +110,28 @@ WHERE org_id = $1::uuid
 	return count, nil
 }
 
+// DailyRunsStateTx returns a value that is another one after any daily run of
+// the organization was created: the number of its runs and the creation time
+// of the newest.
+//
+// The drain reads it before the reads of a pass and again under the lock of
+// the pass. The same value twice says that every run that is committed at the
+// second read was committed at the first, so what the pass decided from the
+// runs is still true.
+func (store *PostgresStore) DailyRunsStateTx(ctx context.Context, tx pgx.Tx, organizationID string) (string, error) {
+	if !store.valid() || tx == nil || !validUUID(organizationID) {
+		return "", ErrInvalidState
+	}
+	var state string
+	if err := tx.QueryRow(ctx, `
+SELECT count(*)::text || '|' || COALESCE(max(created_at)::text, '')
+FROM public.daily_metrics_runs
+WHERE org_id = $1::uuid`, organizationID).Scan(&state); err != nil {
+		return "", ErrUnavailable
+	}
+	return state, nil
+}
+
 // touchedRunWithoutResultSQL is true for a run that will give its day no
 // result: it is failed or canceled, or it is not ended the number of seconds
 // ($%d) after its creation. A run that is not ended after that time is treated

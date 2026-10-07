@@ -385,8 +385,12 @@ type workerFamily struct {
 	// cancels every in-flight job at once (CHAOS-8783).
 	softStop time.Duration
 	handlers []jobruntime.HandlerSpec
-	queues   []jobruntime.QueueBudget
-	cleanups []func() error
+	// dailyDrainTriggers are the daily handlers that buildDailyWorker
+	// registered with the drain of the pending touched days. The wiring test
+	// reads them; nothing else does.
+	dailyDrainTriggers dailyDrainTriggers
+	queues             []jobruntime.QueueBudget
+	cleanups           []func() error
 	// ownedKinds names kinds this family registers real workers for WITHOUT
 	// reporting them as handler specs -- today only the sync coordinator's
 	// four bridge-backed kinds (syncdispatchruntime.RegisterWorkers). Rescue

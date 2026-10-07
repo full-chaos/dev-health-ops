@@ -66,6 +66,7 @@ func buildDailyWorker(
 	if !queueSelected(cfg.Queues, metricsQueue) || registry == nil {
 		return workerFamily{}, nil
 	}
+	var drainTriggers dailyDrainTriggers
 	if workers == nil {
 		return workerFamily{}, errWorkerDependencyUnavailable
 	}
@@ -191,6 +192,7 @@ func buildDailyWorker(
 					_ = clickhouseConnection.Close()
 					return workerFamily{}, errWorkerDependencyUnavailable
 				}
+				drainTriggers.dispatcher = handler
 				// CHAOS-5040: the fan-out is the only genuinely periodic,
 				// per-organization thing in this family, so it is where the
 				// blocked-run marker is kept current.
@@ -371,6 +373,7 @@ func buildDailyWorker(
 					_ = clickhouseConnection.Close()
 					return workerFamily{}, errWorkerDependencyUnavailable
 				}
+				drainTriggers.finalize = handler
 				// CHAOS-4290: RUN-scoped native families. dailyNativeFamilyRegistrations
 				// is a pure function (see the partition case's comment on why the
 				// drift test calls it directly), so calling it again here is safe
@@ -888,7 +891,8 @@ func buildDailyWorker(
 		queues: selectedQueueBudgets(
 			cfg.Queues, []string{metricsQueue}, cfg.WorkerQueueConcurrency,
 		),
-		cleanups: cleanups,
+		cleanups:           cleanups,
+		dailyDrainTriggers: drainTriggers,
 	}, nil
 }
 
@@ -1692,6 +1696,14 @@ func membershipRefusalReason(err error) string {
 	default:
 		return jobruntime.MembershipRefusedInspectFailed
 	}
+}
+
+// dailyDrainTriggers are the two handlers of the daily family that trigger the
+// drain of the pending touched days, as buildDailyWorker registered them. Nil
+// when the family runs no daily handler.
+type dailyDrainTriggers struct {
+	dispatcher *daily.Dispatcher
+	finalize   *daily.FinalizeHandler
 }
 
 // newDrainingDailyDispatcher builds the dispatch handler of the daily family

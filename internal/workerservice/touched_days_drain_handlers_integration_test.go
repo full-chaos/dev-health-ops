@@ -4,48 +4,118 @@ package workerservice
 
 import (
 	"context"
+	"io"
+	"log/slog"
+	"path/filepath"
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/riverqueue/river"
+
+	"github.com/full-chaos/dev-health-ops/internal/jobcontract"
+	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/daily"
+	"github.com/full-chaos/dev-health-ops/internal/platform/config"
+	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
+	postgresstore "github.com/full-chaos/dev-health-ops/internal/storage/postgres"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 )
 
-// The two handlers that trigger the drain are built with the drain set: the
-// dispatcher (the nightly floor) and the finalize handler (the continuation).
-// buildDailyWorker builds both through these constructors, so a worker cannot
-// run a dispatcher or a finalize handler that triggers no pass.
+// The worker family that buildDailyWorker builds triggers the drain from its
+// two handlers: the dispatcher (the nightly floor) and the finalize handler
+// (the continuation). The test reads the handlers the builder registered, so a
+// builder that registers a handler without the drain fails here.
 func TestDailyHandlersOfTheWorkerTriggerTheTouchedDaysDrain(t *testing.T) {
+	t.Chdir(filepath.Join("..", ".."))
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-	defer cancel()
-	rig := newTouchedRig(t, ctx)
-	drain, err := newTouchedDaysDrain(rig.pool, rig.conn, rig.store, nilPartitionPublisher{}, nil, nil)
+	t.Cleanup(cancel)
+
+	clickhouse := startLegacyClickHouse(t, ctx)
+	t.Setenv("OPERATIONAL_ORDERING_CONTRACT", "")
+	postgres, err := containers.StartPostgres(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	discoverer, err := daily.NewClickHouseRepositoryDiscoverer(rig.conn)
+	t.Cleanup(func() { _ = postgres.Close(context.Background()) })
+	admin, err := pgxpool.New(ctx, postgres.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(admin.Close)
+	prepareMultiReplicaDatabase(t, ctx, admin)
+	domain, err := pgxpool.New(ctx, postgres.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(domain.Close)
+	queue, err := pgxpool.New(ctx, postgres.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(queue.Close)
+	database := &postgresWorkerDatabase{
+		pools: &postgresstore.RuntimePools{Domain: domain, QueueControl: queue},
+	}
+	registry, err := jobruntime.Load(filepath.Join("contracts", "jobs", "v1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.Config{
+		Service:                  "dev-health-worker",
+		Queues:                   []string{metricsQueue},
+		RiverDatabaseSchema:      "river",
+		OperationalBridgeTimeout: 20 * time.Second,
+		ClickHouseURI:            secrets.NewValue(clickhouse),
+		WorkerRemainingComplexityConfigPath: filepath.Join(
+			"src", "dev_health_ops", "config", "complexity.yaml",
+		),
+	}
+	collector, err := jobruntime.NewMetricsCollector(jobruntime.MetricDimensions{})
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	dispatcher, err := newDrainingDailyDispatcher(rig.store, nilPartitionPublisher{}, discoverer, drain)
+	family, err := buildDailyWorker(
+		cfg, database, registry, collector, slog.New(slog.NewTextHandler(io.Discard, nil)), river.NewWorkers())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := dispatcher.TouchedDaysDrainer(); got != daily.TouchedDaysDrainer(drain) {
-		t.Fatalf("drain of the dispatcher = %v, want the drain of the worker: the nightly run would trigger no pass", got)
+	t.Cleanup(func() {
+		for _, cleanup := range family.cleanups {
+			_ = cleanup()
+		}
+	})
+
+	registered := map[string]bool{}
+	for _, spec := range family.handlers {
+		registered[spec.Kind] = true
 	}
-	finalize, err := newDrainingDailyFinalizeHandler(rig.store, drain)
-	if err != nil {
-		t.Fatal(err)
+	for _, kind := range []string{jobcontract.KindDailyMetricsDispatch, jobcontract.KindDailyMetricsFinalize} {
+		if !registered[kind] {
+			t.Fatalf("the worker family did not register %s: the test measured nothing", kind)
+		}
 	}
-	if got := finalize.TouchedDaysDrainer(); got != daily.TouchedDaysDrainer(drain) {
-		t.Fatalf("drain of the finalize handler = %v, want the drain of the worker: the end of a run would trigger no pass", got)
+	triggers := family.dailyDrainTriggers
+	if triggers.dispatcher == nil || triggers.finalize == nil {
+		t.Fatalf("the worker family names no dispatcher or no finalize handler: %+v", triggers)
+	}
+	var floor, continuation daily.TouchedDaysDrainer = triggers.dispatcher.TouchedDaysDrainer(), triggers.finalize.TouchedDaysDrainer()
+	if floor == nil {
+		t.Fatal("the dispatcher of the worker has no drain: the nightly run would trigger no pass")
+	}
+	if continuation == nil {
+		t.Fatal("the finalize handler of the worker has no drain: the end of a run would trigger no pass")
+	}
+	if floor != continuation {
+		t.Fatal("the dispatcher and the finalize handler of the worker have two drains, want one")
 	}
 
-	if _, err := newDrainingDailyDispatcher(rig.store, nilPartitionPublisher{}, discoverer, nil); err == nil {
+	// The constructors the builder uses refuse a nil drain.
+	if _, err := newDrainingDailyDispatcher(nil, nil, nil, nil); err == nil {
 		t.Fatal("a dispatcher without a drain was built")
 	}
-	if _, err := newDrainingDailyFinalizeHandler(rig.store, nil); err == nil {
+	if _, err := newDrainingDailyFinalizeHandler(nil, nil); err == nil {
 		t.Fatal("a finalize handler without a drain was built")
 	}
 }

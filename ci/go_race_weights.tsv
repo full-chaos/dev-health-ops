@@ -129,6 +129,7 @@ internal/jobs	28
 internal/jobs/dimensionfold	1
 internal/jobs/investment	2
 internal/jobs/investment/categorize	4
+internal/jobs/investment/categorize/decision	3
 internal/jobs/investment/chquery	1
 internal/jobs/investment/chwrite	1
 internal/jobs/metrics/aigovernance	1

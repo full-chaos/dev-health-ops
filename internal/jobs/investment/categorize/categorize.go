@@ -367,3 +367,67 @@ func EffectiveModelVersion(provider, resolvedModel string) string {
 	return "provider=" + provider + ";model=" + resolvedModel +
 		";taxonomy=" + TaxonomyVersion + ";prompt=" + PromptVersion
 }
+
+// BundleCompleter is the bundle-level seam beside Provider. Provider.Complete
+// takes a prompt string; a typed-question backend (categorize/decision) has no
+// prompt and needs the bundle itself -- its handles and source texts -- to
+// build its span candidates and to turn a chosen span back into a quote.
+//
+// The method returns generative-schema TEXT, never an outcome, so a backend
+// cannot return a classification that did not pass ValidateLLMPayload:
+// CategorizeBundleOnce validates every backend's text with the same code the
+// served path uses. A backend ends a classification that has no usable answer
+// (a refusal, a missing answer, a failed request) by returning an error; that
+// error is passed through unchanged and can never become text for the
+// validator.
+type BundleCompleter interface {
+	CompleteBundle(ctx context.Context, bundle units.TextBundle) (CompletionResult, error)
+}
+
+// ErrNoBundleCompleter is returned when CategorizeBundleOnce is called without
+// a completer, for the reason ErrNoProvider exists: refuse, do not invent one.
+var ErrNoBundleCompleter = errors.New("categorize: no bundle completer supplied")
+
+// CategorizeBundleOnce is the one-call sibling of CategorizeTextBundle for a
+// BundleCompleter. It differs from the served path in exactly one way: it makes
+// NO repair call. A typed answer has nothing to repair, and a second ask could
+// hide a refusal or a missing answer behind a later valid one.
+//
+//  1. completer.CompleteBundle -- an error is returned unchanged.
+//  2. validateCompletionText -- the shared validation of the served path.
+//  3. valid: the successOutcome shape with status ok. Not valid: the
+//     invalid_llm_output outcome of categorizeCompletion, built after ONE call.
+//
+// CategorizeTextBundle and its call site do not use this function; the served
+// path is unchanged by its existence.
+func CategorizeBundleOnce(ctx context.Context, bundle units.TextBundle, completer BundleCompleter) (CategorizationOutcome, error) {
+	if completer == nil {
+		return CategorizationOutcome{}, ErrNoBundleCompleter
+	}
+	completion, err := completer.CompleteBundle(ctx, bundle)
+	if err != nil {
+		return CategorizationOutcome{}, err
+	}
+	tally := completionTally{
+		InputTokens:   tokenCount(completion.InputTokens),
+		OutputTokens:  tokenCount(completion.OutputTokens),
+		LLMCalls:      1,
+		ResolvedModel: completion.Model,
+	}
+	validation := validateCompletionText(completion.Text, bundle)
+	if validation.OK {
+		return successOutcome(validation, StatusOK, tally), nil
+	}
+	return CategorizationOutcome{
+		Subcategories:  fallbackDistribution(),
+		EvidenceQuotes: []EvidenceQuote{},
+		Uncertainty:    fallbackUncertainty,
+		Status:         StatusInvalidLLMOutput,
+		Errors:         validation.Errors,
+		Warnings:       validation.Warnings,
+		LLMCalls:       tally.LLMCalls,
+		InputTokens:    tally.InputTokens,
+		OutputTokens:   tally.OutputTokens,
+		LLMModel:       tally.ResolvedModel,
+	}, nil
+}

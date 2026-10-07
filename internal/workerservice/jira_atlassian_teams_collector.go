@@ -260,6 +260,13 @@ func (collector jiraCombinedTeamCatalogCollector) collectAtlassianTeams(
 	if err != nil {
 		return atlassianteams.Result{}, err
 	}
+	if rows.SkippedProjects > 0 {
+		// A link with no project key, or with a project ARI that carries no
+		// numeric id, gets no ownership row: it is counted here so a team
+		// that reaches fewer projects than the provider shows has a cause.
+		slog.Default().WarnContext(ctx, "jira_atlassian_teams_project_link_skipped",
+			"org_id", ref.OrgID, "links", rows.SkippedProjects)
+	}
 	if len(rows.Teams) == 0 {
 		// An empty Atlassian Teams answer is far more often a permissions or
 		// configuration problem than a real empty organization (see the CLI

@@ -612,19 +612,10 @@ func jiraOpenCatalogOwnership(ctx context.Context, conn driver.Conn, orgID strin
 	return open, result.Err()
 }
 
-func jiraOwnershipSnapshotKey(row jiraTeamCatalogOwnershipRow) string {
-	return row.TeamID + "\x00" + row.ProjectID + "\x00" + row.Source
-}
-
-// jiraOwnershipSnapshot applies the snapshot rule to one write.
-//
-// fresh is what this run found; open is what the table holds open for this
-// writer. A fresh row whose (team, project, source) is already open takes
-// the EARLIEST open valid_from: valid_from is a key column, so the write
-// replaces that row instead of adding one. Every other open row is returned
-// closed at `at` -- a fact the snapshot no longer holds, or a later
-// duplicate of one it does. A row is closed by writing its own key again
-// with valid_to set, never by a delete.
+// jiraOwnershipSnapshot applies the shared snapshot rule
+// (PlanOwnershipSnapshot) to one write of the Jira catalog: the fresh rows on
+// their first-seen valid_from, and the open rows of this writer the snapshot
+// no longer holds, closed at `at`.
 //
 // An empty fresh snapshot retracts nothing: a project search that returns no
 // project is far more often an access change than an organization that
@@ -637,30 +628,20 @@ func jiraOwnershipSnapshot(
 	if len(fresh) == 0 {
 		return kept, nil
 	}
-	firstSeen := map[string]time.Time{}
-	for _, row := range open {
-		key := jiraOwnershipSnapshotKey(row)
-		if seen, ok := firstSeen[key]; !ok || row.ValidFrom.Before(seen) {
-			firstSeen[key] = row.ValidFrom
+	facts := func(rows []jiraTeamCatalogOwnershipRow) []OwnershipSnapshotRow {
+		out := make([]OwnershipSnapshotRow, len(rows))
+		for index, row := range rows {
+			out[index] = OwnershipSnapshotRow{TeamID: row.TeamID, ProjectID: row.ProjectID, Source: row.Source, ValidFrom: row.ValidFrom}
 		}
+		return out
 	}
-	current := map[string]bool{}
-	for index, row := range kept {
-		key := jiraOwnershipSnapshotKey(row)
-		current[key] = true
-		if seen, ok := firstSeen[key]; ok && seen.Before(row.ValidFrom) {
-			kept[index].ValidFrom = seen
-		}
+	plan := PlanOwnershipSnapshot(facts(fresh), facts(open), at)
+	for index := range kept {
+		kept[index].ValidFrom = plan.ValidFrom[index]
 	}
-	for _, row := range open {
-		key := jiraOwnershipSnapshotKey(row)
-		if current[key] && row.ValidFrom.Equal(firstSeen[key]) {
-			continue
-		}
-		closedAt := at
-		if closedAt.Before(row.ValidFrom) {
-			closedAt = row.ValidFrom
-		}
+	for _, retraction := range plan.Retract {
+		row := open[retraction.Open]
+		closedAt := retraction.ClosedAt
 		row.ValidTo = &closedAt
 		row.UpdatedAt = at
 		retracted = append(retracted, row)

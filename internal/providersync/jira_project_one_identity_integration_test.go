@@ -87,6 +87,20 @@ func TestTeamReachesItsJiraProjectsWorkItemsThroughOwnership(t *testing.T) {
 		keyBuiltID, orgID, old, old); err != nil {
 		t.Fatal(err)
 	}
+	// The third writer: the admin-curated project -> ops-team links, which
+	// hold project keys only. OPS is a project the provider returns; GONE is
+	// one it does not. The old catalog wrote the OPS link on the key-built id.
+	const opsTeam, goneTeam = "ops-team-1", "ops-team-2"
+	for key, team := range map[string]string{"OPS": opsTeam, "GONE": goneTeam} {
+		if err := conn.Exec(ctx, `INSERT INTO jira_project_ops_team_links (org_id, project_key, ops_team_id, project_name, ops_team_name, updated_at) VALUES (?, ?, ?, ?, ?, ?)`,
+			orgID, key, team, key, team, old); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := conn.Exec(ctx, `INSERT INTO team_project_ownership (org_id, provider, team_id, project_id, project_key, source, is_primary, specificity, priority, valid_from, updated_at) VALUES (?, 'jira', ?, ?, 'OPS', ?, 1, ?, ?, ?, ?)`,
+		orgID, opsTeam, keyBuiltID, jiraTeamCatalogLegacySource, uint16(jiraTeamCatalogLegacySpecificity), int32(jiraTeamCatalogLegacyPriority), old, old); err != nil {
+		t.Fatal(err)
+	}
 
 	// The work-items route: one issue of project OPS.
 	var issue map[string]any
@@ -95,7 +109,8 @@ func TestTeamReachesItsJiraProjectsWorkItemsThroughOwnership(t *testing.T) {
 		"project":{"id":"10001","key":"OPS","name":"Ops Project"},"created":"2026-09-20T10:00:00.000+0000","updated":"2026-09-21T10:00:00.000+0000"}}`), &issue); err != nil {
 		t.Fatal(err)
 	}
-	claim := Claim{Unit: Unit{OrgID: orgID, Provider: "jira"}}
+	claim := nativeTestClaim("jira", "work-items")
+	claim.OrgID = orgID
 	item, _, err := normalizeJiraWorkItem(claim, jiraWorkItemFixtureInput{Raw: issue}, loadRealStatusMapping(t),
 		func(string, string, string) string { return "" }, firstSync)
 	if err != nil {
@@ -141,8 +156,21 @@ func TestTeamReachesItsJiraProjectsWorkItemsThroughOwnership(t *testing.T) {
 	if got := countRows(t, ctx, conn, openJiraOwnershipCount, orgID, "OPS", keyBuiltID); got != 0 {
 		t.Fatalf("%d ownership rows on the key-built project id are still open after the sync, want 0", got)
 	}
-	if first.OwnershipRetracted != 2 || first.OwnershipWritten != 1 {
-		t.Fatalf("result = %+v, want 1 ownership row written and the 2 key-built rows retracted", first)
+	if first.OwnershipRetracted != 3 || first.OwnershipWritten != 2 {
+		t.Fatalf("result = %+v, want 2 ownership rows written (the project team and the linked ops team) and the 3 key-built rows retracted", first)
+	}
+	// The linked ops team owns the project by the same native id, so it
+	// reaches the same work item; its row on the key-built id is closed.
+	if got := ownedWorkItems(t, ctx, conn, orgID, "jira", opsTeam, firstSync.Add(time.Second)); got != 1 {
+		t.Fatalf("the linked ops team reaches %d work items of project OPS through ownership, want 1", got)
+	}
+	if got := countRows(t, ctx, conn, `SELECT count() FROM team_project_ownership FINAL WHERE org_id = ? AND provider = 'jira' AND team_id = ? AND source = 'jira_legacy' AND valid_to IS NULL`, orgID, opsTeam); got != 1 {
+		t.Fatalf("the linked ops team has %d open ownership rows, want 1 (the native id; the key-built one closed)", got)
+	}
+	// A link whose project the provider did not return has no identity to
+	// write: no row under any id, never one built from the key.
+	if got := countRows(t, ctx, conn, `SELECT count() FROM team_project_ownership FINAL WHERE org_id = ? AND team_id = ?`, orgID, goneTeam); got != 0 {
+		t.Fatalf("%d ownership rows for a link whose project the provider did not return, want 0", got)
 	}
 	if got := countRows(t, ctx, conn, openJiraOwnershipCount, orgID, atlassianTeam, keyBuiltID); got != 1 {
 		t.Fatalf("the catalog sync left %d open Atlassian Teams links, want 1 (not its row to close)", got)
@@ -156,7 +184,7 @@ func TestTeamReachesItsJiraProjectsWorkItemsThroughOwnership(t *testing.T) {
 	if second.OwnershipRetracted != 0 {
 		t.Fatalf("second sync retracted %d rows, want 0", second.OwnershipRetracted)
 	}
-	if got := countRows(t, ctx, conn, `SELECT toUnixTimestamp64Milli(min(valid_from)) FROM team_project_ownership FINAL WHERE org_id = ? AND team_id = 'OPS' AND project_id = '10001' AND valid_to IS NULL`, orgID); int64(got) != firstSync.UnixMilli() {
+	if got := countRows(t, ctx, conn, `SELECT toUInt64(toUnixTimestamp64Milli(min(valid_from))) FROM team_project_ownership FINAL WHERE org_id = ? AND team_id = 'OPS' AND project_id = '10001' AND valid_to IS NULL`, orgID); int64(got) != firstSync.UnixMilli() {
 		t.Fatalf("valid_from = %d, want the time the fact was first seen %d", got, firstSync.UnixMilli())
 	}
 
@@ -165,6 +193,13 @@ func TestTeamReachesItsJiraProjectsWorkItemsThroughOwnership(t *testing.T) {
 	otherOrg := uuid.NewString()
 	if err := conn.Exec(ctx, `INSERT INTO projects (id, org_id, provider, project_key, name, is_active, updated_at, last_synced) VALUES (?, ?, 'jira', 'OPS', 'Other', 1, ?, ?)`,
 		otherOrg+":jira:OPS", otherOrg, old, old); err != nil {
+		t.Fatal(err)
+	}
+	// A row of this organization whose id holds the marker under ANOTHER
+	// prefix is not the retired form: the form is tied to the row's own org.
+	foreignShaped := "elsewhere:jira:OPS"
+	if err := conn.Exec(ctx, `INSERT INTO projects (id, org_id, provider, project_key, name, is_active, updated_at, last_synced) VALUES (?, ?, 'jira', 'OPS', 'Ops Project', 1, ?, ?)`,
+		foreignShaped, orgID, old, old); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := RetireJiraKeyProjectRows(ctx, conn, otherOrg, false); !errors.Is(err, ErrJiraKeyProjectCleanupNoNativeRows) {
@@ -194,8 +229,11 @@ func TestTeamReachesItsJiraProjectsWorkItemsThroughOwnership(t *testing.T) {
 	if got := countRows(t, ctx, conn, keyBuilt, otherOrg); got != 1 {
 		t.Fatalf("the cleanup removed the only project row of another organization (%d left)", got)
 	}
-	if got := countRows(t, ctx, conn, `SELECT count() FROM projects FINAL WHERE org_id = ? AND provider = 'jira' AND project_key = 'OPS'`, orgID); got != 1 {
-		t.Fatalf("project OPS has %d rows after the cleanup, want 1", got)
+	if got := countRows(t, ctx, conn, `SELECT count() FROM projects FINAL WHERE org_id = ? AND provider = 'jira' AND project_key = 'OPS' AND id IN ('10001', ?)`, orgID, foreignShaped); got != 2 {
+		t.Fatalf("%d of the native-id row and the row under another prefix are left after the cleanup, want both", got)
+	}
+	if got := countRows(t, ctx, conn, `SELECT count() FROM projects FINAL WHERE org_id = ? AND provider = 'jira' AND project_key = 'OPS'`, orgID); got != 2 {
+		t.Fatalf("project OPS has %d rows after the cleanup, want 2 (its one native-id row and the row this test put under another prefix)", got)
 	}
 	again, err := RetireJiraKeyProjectRows(ctx, conn, "", false)
 	if err != nil || again.EligibleRows != 0 || again.DeletedRows != 0 {

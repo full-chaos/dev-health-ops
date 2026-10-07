@@ -325,3 +325,65 @@ func TestOwnershipLastSyncedIsTheIngestTimeNotTheProviderTime(t *testing.T) {
 		t.Fatal("no closing row carries an ingest-time last_synced")
 	}
 }
+
+// A team's project link that an earlier version wrote under an id built from
+// the project key ("org:jira:KEY") names a project no work item points to.
+// The first run that writes the native project id closes that link in the
+// same write, and a later duplicate of the link it keeps; the project-as-team
+// owner of the same project, which another writer owns, is not touched.
+func TestAnAtlassianTeamsRunClosesTheKeyBuiltProjectLinks(t *testing.T) {
+	conn := openClickHouse(t)
+	ctx := context.Background()
+	const org = "org-1"
+	now := time.Date(2026, 9, 25, 3, 0, 0, 0, time.UTC)
+	const insert = `INSERT INTO team_project_ownership (org_id, provider, team_id, project_id, project_key, source, is_primary, specificity, priority, valid_from, valid_to, updated_at) VALUES `
+
+	// Team A's link under the key-built id, as the earlier version wrote it.
+	exec(t, conn, insert+`('org-1', 'jira', '`+idA+`', 'org-1:jira:PLAT', 'PLAT', 'native', 1, 110, 10, '2026-09-01 00:00:00', NULL, '2026-09-01 00:00:00')`)
+	// Team A's link under the native id, open twice: one fact, two rows.
+	exec(t, conn, insert+`('org-1', 'jira', '`+idA+`', '10001', 'PLAT', 'native', 1, 110, 10, '2026-09-10 00:00:00', NULL, '2026-09-10 00:00:00')`)
+	exec(t, conn, insert+`('org-1', 'jira', '`+idA+`', '10001', 'PLAT', 'native', 1, 110, 10, '2026-09-12 00:00:00', NULL, '2026-09-12 00:00:00')`)
+	// The project-as-team owner of the same project: not an Atlassian team.
+	exec(t, conn, insert+`('org-1', 'jira', 'PLAT', 'org-1:jira:PLAT', 'PLAT', 'native', 1, 100, 10, '2026-09-01 00:00:00', NULL, '2026-09-01 00:00:00')`)
+
+	g := newGateway(t, standard)
+	p := params(everything)
+	p.Now = now
+	rows, err := Collect(ctx, g.client(), p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := Write(ctx, conn, org, rows, everything)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.OwnershipWritten != 1 || result.ExpiredOwnership != 2 {
+		t.Fatalf("result=%+v, want 1 link written and 2 closed (the key-built link and the later duplicate)", result)
+	}
+
+	state := lines(t, conn, `SELECT concat(team_id, '|', project_id, '|', toString(valid_from), '|', if(valid_to IS NULL, 'open', toString(valid_to))) FROM team_project_ownership FINAL WHERE org_id = 'org-1' AND provider = 'jira' ORDER BY team_id, project_id, valid_from`)
+	want := []string{
+		"PLAT|org-1:jira:PLAT|2026-09-01 00:00:00.000|open",
+		idA + "|10001|2026-09-10 00:00:00.000|open",
+		idA + "|10001|2026-09-12 00:00:00.000|2026-09-25 03:00:00.000",
+		idA + "|org-1:jira:PLAT|2026-09-01 00:00:00.000|2026-09-25 03:00:00.000",
+	}
+	if strings.Join(state, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("ownership:\n%s\nwant:\n%s", strings.Join(state, "\n"), strings.Join(want, "\n"))
+	}
+
+	// The same answer again closes nothing and adds no row.
+	p.Now = now.Add(time.Hour)
+	if rows, err = Collect(ctx, g.client(), p); err != nil {
+		t.Fatal(err)
+	}
+	if result, err = Write(ctx, conn, org, rows, everything); err != nil {
+		t.Fatal(err)
+	}
+	if result.ExpiredOwnership != 0 {
+		t.Fatalf("the second run closed %d links, want 0", result.ExpiredOwnership)
+	}
+	if got := lines(t, conn, `SELECT toString(count()) FROM team_project_ownership FINAL WHERE org_id = 'org-1' AND provider = 'jira'`); len(got) != 1 || got[0] != "4" {
+		t.Fatalf("rows after the second run = %v, want 4", got)
+	}
+}

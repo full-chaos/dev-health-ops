@@ -297,6 +297,47 @@ func TestJiraTeamCatalogCollectReraisesABoardListing400UnderStrict(t *testing.T)
 }
 
 // TestJiraTeamCatalogCollectSkipsBoardDiscoveryForNonSoftwareProjectUnderStrict
+// A project the search returns with no native id (or with a value in the
+// retired key-built form) keeps its team row and gets NO project row and NO
+// ownership row: an id built from the key would name a project no work item
+// points to. The skip is counted in the result.
+func TestJiraTeamCatalogCollectWritesNoProjectIdentityWithoutANativeID(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 8, 30, 12, 0, 0, 0, time.UTC)
+	doer := &jiraTeamCatalogFixtureDoer{t: t, byURI: map[string]jiraTeamCatalogFixtureResponse{
+		jiraTeamCatalogProjectSearchURI: {
+			body: `{"values":[{"key":"NOID","name":"No id"},{"id":"  ","key":"BLANK","name":"Blank id"},` +
+				`{"id":"org-1:jira:OLD","key":"OLD","name":"Key-built id"},{"id":"10001","key":"OPS","name":"Ops Project"}]}`,
+		},
+		"/rest/api/3/project/NOID":  {body: `{"projectTypeKey":"business"}`},
+		"/rest/api/3/project/BLANK": {body: `{"projectTypeKey":"business"}`},
+		"/rest/api/3/project/OLD":   {body: `{"projectTypeKey":"business"}`},
+		"/rest/api/3/project/OPS":   {body: `{"projectTypeKey":"business"}`},
+	}}
+	batch, err := JiraTeamCatalogRouteHandler{}.CollectTeamCatalog(
+		context.Background(),
+		TeamCatalogReference{OrgID: "org-1", SyncRunID: "run-1", Strict: true},
+		providerfoundation.Credential{Provider: "jira"}, jiraTeamCatalogTestClient(t, fakehttp.Client(doer)),
+		TeamCatalogSelections{Teams: true, Projects: true},
+		now,
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(batch.Rows.Teams) != 4 {
+		t.Fatalf("teams=%+v, want all 4 projects as teams", batch.Rows.Teams)
+	}
+	if len(batch.Rows.Ownership) != 1 || batch.Rows.Ownership[0].ProjectID != "10001" || batch.Rows.Ownership[0].TeamID != "OPS" {
+		t.Fatalf("ownership=%+v, want only OPS on its native id", batch.Rows.Ownership)
+	}
+	if len(batch.Rows.Projects) != 1 || batch.Rows.Projects[0].ID != "10001" {
+		t.Fatalf("projects=%+v, want only OPS on its native id", batch.Rows.Projects)
+	}
+	if batch.Result.ProjectsSkippedNoNativeID != 3 {
+		t.Fatalf("skipped=%d, want 3", batch.Result.ProjectsSkippedNoNativeID)
+	}
+}
+
 // ports test_jira_populate_skips_board_discovery_for_a_non_software_
 // project_under_strict_reference_discovery: a service_desk
 // project's board discovery is skipped entirely (iter_boards must never

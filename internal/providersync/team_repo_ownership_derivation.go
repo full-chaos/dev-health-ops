@@ -92,12 +92,10 @@ import (
 //
 // Provider is part of the match key, mirroring
 // compute_work_items.py's project_by_id (keyed by (provider, project_id),
-// not bare project_id) exactly: team_project_ownership.project_id values
-// are namespaced per-writer (e.g. "{org_id}:jira:{key}"), but requiring an
-// exact provider match too is the same defense-in-depth the canonical
-// Python precedent already applies, rather than trusting every writer's
-// namespacing convention to hold forever (codex adversarial review,
-// 2026-08-28, confirmed finding).
+// not bare project_id) exactly: team_project_ownership.project_id is the
+// provider's own project id (a Jira numeric id, a Linear UUID), and two
+// providers can use the same value for two projects, so the provider is
+// required too (codex adversarial review, 2026-08-28, confirmed finding).
 type TeamRepoOwnershipProjectLink struct {
 	Provider    string
 	ProjectID   string

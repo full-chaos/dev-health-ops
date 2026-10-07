@@ -53,6 +53,15 @@ const jiraProjectAsTeamOwnershipPredicate = `org_id = {org_id:String} AND provid
 const jiraProjectAsTeamMembershipPredicate = `org_id = {org_id:String} AND provider = 'jira' AND source = 'native' ` +
 	`AND valid_to IS NULL AND team_id IN (` + jiraProjectAsTeamIDsSubquery + `)`
 
+// jiraProjectAsTeamRepoOwnershipPredicate is the open DERIVED repository row
+// of a project-as-team (source 'inferred': TeamRepoOwnershipDerivationService
+// derived it from the team's project ownership). `teams` holds one row for an
+// id in an organization, so the id names the project-as-team and no other
+// team. A row of another source (a person's or a provider's statement) is not
+// derived from the retired rows and stays.
+const jiraProjectAsTeamRepoOwnershipPredicate = `org_id = {org_id:String} AND source = 'inferred' ` +
+	`AND valid_to IS NULL AND team_id IN (` + jiraProjectAsTeamIDsSubquery + `)`
+
 const jiraProjectAsTeamActivePredicate = `org_id = {org_id:String} AND is_active = 1 AND ` + jiraProjectAsTeamRowPredicate
 
 const jiraProjectAsTeamCountQuery = `SELECT ` +
@@ -61,7 +70,8 @@ const jiraProjectAsTeamCountQuery = `SELECT ` +
 	`(SELECT count() FROM teams FINAL WHERE ` + jiraProjectAsTeamActivePredicate +
 	` AND id IN (SELECT team_id FROM team_sync_policies FINAL WHERE org_id = {org_id:String})), ` +
 	`(SELECT count() FROM team_project_ownership FINAL WHERE ` + jiraProjectAsTeamOwnershipPredicate + `), ` +
-	`(SELECT count() FROM team_memberships FINAL WHERE ` + jiraProjectAsTeamMembershipPredicate + `)`
+	`(SELECT count() FROM team_memberships FINAL WHERE ` + jiraProjectAsTeamMembershipPredicate + `), ` +
+	`(SELECT count() FROM team_repo_ownership FINAL WHERE ` + jiraProjectAsTeamRepoOwnershipPredicate + `)`
 
 // A retraction keeps every value of the row it closes and its sort key; only
 // valid_to and updated_at change. valid_to is never before valid_from, and
@@ -77,6 +87,11 @@ const jiraProjectAsTeamCloseOwnership = `INSERT INTO team_project_ownership ` +
 	`SELECT org_id, provider, team_id, project_id, project_key, source, is_primary, specificity, priority, valid_from, ` +
 	`greatest({at:DateTime64(3, 'UTC')}, valid_from), greatest({at:DateTime64(3, 'UTC')}, updated_at + toIntervalMillisecond(1)) ` +
 	`FROM team_project_ownership FINAL WHERE ` + jiraProjectAsTeamOwnershipPredicate
+
+const jiraProjectAsTeamCloseRepoOwnership = teamRepoOwnershipInsert + ` ` +
+	`SELECT org_id, provider, team_id, repo_id, repo_full_name, match_type, source, is_primary, specificity, priority, valid_from, ` +
+	`greatest({at:DateTime64(3, 'UTC')}, valid_from), greatest({at:DateTime64(3, 'UTC')}, updated_at + toIntervalMillisecond(1)) ` +
+	`FROM team_repo_ownership FINAL WHERE ` + jiraProjectAsTeamRepoOwnershipPredicate
 
 const jiraProjectAsTeamDeactivateTeams = `INSERT INTO teams ` +
 	`(id, team_uuid, name, description, members, manual_members, project_keys, repo_patterns, is_active, updated_at, org_id, provider, native_team_key, parent_team_id, source_id) ` +
@@ -97,25 +112,29 @@ type JiraProjectAsTeamRetireOutcome struct {
 	// OwnershipRows and MembershipRows are the open rows found.
 	OwnershipRows  uint64 `json:"ownership_rows"`
 	MembershipRows uint64 `json:"membership_rows"`
-	// The three below are what a real run wrote; 0 in a dry run.
-	TeamsRetired     uint64 `json:"teams_retired"`
-	OwnershipClosed  uint64 `json:"ownership_closed"`
-	MembershipClosed uint64 `json:"memberships_closed"`
+	// RepoOwnershipRows is the open derived repository rows found.
+	RepoOwnershipRows uint64 `json:"repo_ownership_rows"`
+	// The four below are what a real run wrote; 0 in a dry run.
+	TeamsRetired        uint64 `json:"teams_retired"`
+	OwnershipClosed     uint64 `json:"ownership_closed"`
+	MembershipClosed    uint64 `json:"memberships_closed"`
+	RepoOwnershipClosed uint64 `json:"repo_ownership_closed"`
 }
 
 // Found says the store holds something to retire.
 func (outcome JiraProjectAsTeamRetireOutcome) Found() bool {
-	return outcome.Teams > 0 || outcome.OwnershipRows > 0 || outcome.MembershipRows > 0
+	return outcome.Teams > 0 || outcome.OwnershipRows > 0 || outcome.MembershipRows > 0 || outcome.RepoOwnershipRows > 0
 }
 
 // Retired is the number of rows a real run wrote.
 func (outcome JiraProjectAsTeamRetireOutcome) Retired() uint64 {
-	return outcome.TeamsRetired + outcome.OwnershipClosed + outcome.MembershipClosed
+	return outcome.TeamsRetired + outcome.OwnershipClosed + outcome.MembershipClosed + outcome.RepoOwnershipClosed
 }
 
 // RetireJiraProjectAsTeamRows retires every project-as-team row of one
 // organization: the team rows go inactive, their open ownership and
-// membership rows are closed at `at`. It reads no provider answer and depends
+// membership rows and the repository rows derived from that ownership are
+// closed at `at`. It reads no provider answer and depends
 // on none: the class is retired as a whole, so there is no snapshot that could
 // be incomplete. A dry run counts and writes nothing. With nothing to retire
 // it is one count read and no write, so a second run reports zero.
@@ -133,7 +152,7 @@ func RetireJiraProjectAsTeamRows(
 	outcome := JiraProjectAsTeamRetireOutcome{DryRun: dryRun}
 	if err := conn.QueryRow(ctx, jiraProjectAsTeamCountQuery, org).Scan(
 		&outcome.Teams, &outcome.TeamsWithManualMembers, &outcome.TeamsWithSyncPolicy,
-		&outcome.OwnershipRows, &outcome.MembershipRows,
+		&outcome.OwnershipRows, &outcome.MembershipRows, &outcome.RepoOwnershipRows,
 	); err != nil {
 		return JiraProjectAsTeamRetireOutcome{}, err
 	}
@@ -146,6 +165,12 @@ func RetireJiraProjectAsTeamRows(
 			return outcome, err
 		}
 		outcome.MembershipClosed = outcome.MembershipRows
+	}
+	if outcome.RepoOwnershipRows > 0 {
+		if err := conn.Exec(ctx, jiraProjectAsTeamCloseRepoOwnership, org, stamp); err != nil {
+			return outcome, err
+		}
+		outcome.RepoOwnershipClosed = outcome.RepoOwnershipRows
 	}
 	if outcome.OwnershipRows > 0 {
 		if err := conn.Exec(ctx, jiraProjectAsTeamCloseOwnership, org, stamp); err != nil {

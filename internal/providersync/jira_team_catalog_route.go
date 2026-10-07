@@ -580,6 +580,7 @@ func (collector JiraTeamCatalogCollector) CollectTeamCatalog(
 	if retired.Retired() > 0 {
 		slog.Default().InfoContext(ctx, "jira_project_as_team_retired",
 			"teams", retired.TeamsRetired, "ownership", retired.OwnershipClosed, "memberships", retired.MembershipClosed,
+			"repo_ownership", retired.RepoOwnershipClosed,
 			"teams_with_manual_members", retired.TeamsWithManualMembers, "teams_with_sync_policy", retired.TeamsWithSyncPolicy)
 	}
 	batch, err := collector.Handler.CollectTeamCatalog(ctx, ref, credential, client, selections, normalizedAt)

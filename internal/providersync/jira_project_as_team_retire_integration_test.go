@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/google/uuid"
 )
@@ -196,5 +197,111 @@ func TestRetireJiraProjectAsTeamRowsRefusesAnEmptyOrganization(t *testing.T) {
 		if _, err := RetireJiraProjectAsTeamRows(ctx, conn, org, time.Now(), false); err != ErrInvalidConfiguration {
 			t.Fatalf("org %q: err = %v, want ErrInvalidConfiguration", org, err)
 		}
+	}
+}
+
+// The repositories a project-as-team owned were derived from its project
+// ownership (team_repo_ownership, source 'inferred'). The derivation closes a
+// derived row only while the organization has an open project link, so in an
+// organization whose only project links were the retired class it closes
+// none. The retire closes them itself: a retired team owns no repository.
+//
+// Both derived rows come from the real producer. The Atlassian team's row and
+// a hand-written row of another source stay.
+func TestRetireJiraProjectAsTeamRowsClosesTheDerivedRepoOwnershipOfARetiredTeam(t *testing.T) {
+	ctx, conn := newWorkItemEffectsConn(t)
+	f := retireFixture{t: t, ctx: ctx, conn: conn, orgID: uuid.NewString(), old: time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)}
+	const atlassian = "0b1f3b0a-6d0c-4f5e-9a55-1c2d3e4f5a6b"
+
+	opsRepo, platRepo := uuid.New(), uuid.New()
+	seedTeamRepoOwnershipRepos(t, ctx, conn, f.orgID, map[uuid.UUID]string{opsRepo: "acme/ops", platRepo: "acme/plat"})
+	f.team("jira", "OPS", "OPS", nil)
+	f.ownership("jira", "OPS", "10001", "OPS", "native")
+	f.team("jira", atlassian, jiraAtlassianTeamARIPrefix+atlassian, nil)
+	f.ownership("jira", atlassian, "10002", "PLAT", "native")
+	seedWorkItem(t, ctx, conn, f.orgID, "jira:OPS-1", "jira", opsRepo, "10001", f.old)
+	seedWorkItem(t, ctx, conn, f.orgID, "jira:PLAT-1", "jira", platRepo, "10002", f.old)
+
+	service := TeamRepoOwnershipDerivationService{Conn: conn}
+	if written, _, ready, _, err := service.Derive(ctx, f.orgID); err != nil || !ready || written != 2 {
+		t.Fatalf("first derivation: written=%d ready=%v err=%v, want the two derived rows", written, ready, err)
+	}
+	// A row of another source for the retired team's id: not derived, so not
+	// this step's to close.
+	if err := conn.Exec(ctx, teamRepoOwnershipInsert+` VALUES (?, 'github', 'OPS', ?, 'acme/manual', 'exact', 'manual', 0, 100, 0, ?, NULL, ?)`,
+		f.orgID, uuid.New(), f.old, f.old); err != nil {
+		t.Fatalf("insert manual repo ownership: %v", err)
+	}
+	openRepoRows := func(teamID, source string) uint64 {
+		t.Helper()
+		return countRows(t, ctx, conn, `SELECT count() FROM team_repo_ownership FINAL WHERE org_id = ? AND team_id = ? AND source = ? AND valid_to IS NULL`, f.orgID, teamID, source)
+	}
+	if openRepoRows("OPS", "inferred") != 1 || openRepoRows(atlassian, "inferred") != 1 {
+		t.Fatal("the derivation did not write one open derived row for each team: the test measures nothing")
+	}
+
+	// The derivation stamps its rows with the wall clock: the retire time is
+	// taken after it.
+	time.Sleep(5 * time.Millisecond)
+	at := time.Now().UTC().Truncate(time.Millisecond)
+	dry, err := RetireJiraProjectAsTeamRows(ctx, conn, f.orgID, at, true)
+	if err != nil || dry.RepoOwnershipRows != 1 || dry.RepoOwnershipClosed != 0 || openRepoRows("OPS", "inferred") != 1 {
+		t.Fatalf("dry run = %+v, %v; want 1 derived repo row found and none closed", dry, err)
+	}
+	real, err := RetireJiraProjectAsTeamRows(ctx, conn, f.orgID, at, false)
+	if err != nil || real.RepoOwnershipRows != 1 || real.RepoOwnershipClosed != 1 {
+		t.Fatalf("real run = %+v, %v; want 1 derived repo row closed", real, err)
+	}
+	if got := openRepoRows("OPS", "inferred"); got != 0 {
+		t.Fatalf("the retired team still has %d open derived repo rows, want 0", got)
+	}
+	if n := countRows(t, ctx, conn, `SELECT count() FROM team_repo_ownership FINAL WHERE org_id = ? AND team_id = 'OPS' AND source = 'inferred' AND repo_full_name = 'acme/ops' AND valid_to IS NOT NULL AND toUnixTimestamp64Milli(assumeNotNull(valid_to)) = ?`, f.orgID, at.UnixMilli()); n != 1 {
+		t.Fatalf("%d closed derived rows of the retired team at the retire time, want 1 (closed, not removed)", n)
+	}
+	if openRepoRows(atlassian, "inferred") != 1 || openRepoRows("OPS", "manual") != 1 {
+		t.Fatal("a repo ownership row of another class was closed")
+	}
+	// The derivation after the retire agrees: it opens no row for the retired
+	// team again and keeps the Atlassian team's.
+	if _, _, _, _, err := service.Derive(ctx, f.orgID); err != nil {
+		t.Fatalf("derivation after the retire: %v", err)
+	}
+	if openRepoRows("OPS", "inferred") != 0 || openRepoRows(atlassian, "inferred") != 1 {
+		t.Fatalf("after the next derivation: retired team %d open derived rows, Atlassian team %d; want 0 and 1",
+			openRepoRows("OPS", "inferred"), openRepoRows(atlassian, "inferred"))
+	}
+	if second, err := RetireJiraProjectAsTeamRows(ctx, conn, f.orgID, at.Add(time.Second), false); err != nil || second != (JiraProjectAsTeamRetireOutcome{}) {
+		t.Fatalf("second run = %+v, %v; want all zero", second, err)
+	}
+}
+
+// The reason the retire closes the derived repo rows itself: with no open
+// project link left in the organization, the derivation closes nothing.
+func TestTheRepoOwnershipDerivationAloneLeavesARetiredTeamsDerivedRowsOpen(t *testing.T) {
+	ctx, conn := newWorkItemEffectsConn(t)
+	f := retireFixture{t: t, ctx: ctx, conn: conn, orgID: uuid.NewString(), old: time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)}
+	repo := uuid.New()
+	seedTeamRepoOwnershipRepos(t, ctx, conn, f.orgID, map[uuid.UUID]string{repo: "acme/ops"})
+	f.team("jira", "OPS", "OPS", nil)
+	f.ownership("jira", "OPS", "10001", "OPS", "native")
+	seedWorkItem(t, ctx, conn, f.orgID, "jira:OPS-1", "jira", repo, "10001", f.old)
+	service := TeamRepoOwnershipDerivationService{Conn: conn}
+	if written, _, _, _, err := service.Derive(ctx, f.orgID); err != nil || written != 1 {
+		t.Fatalf("first derivation: written=%d err=%v, want 1", written, err)
+	}
+	// Close the project link only, as the retire did before it closed the
+	// derived rows too.
+	if err := conn.Exec(ctx, jiraProjectAsTeamCloseOwnership, clickhouse.Named("org_id", f.orgID),
+		clickhouse.Named("at", time.Now().UTC().Add(-time.Minute).Format("2006-01-02 15:04:05.000"))); err != nil {
+		t.Fatalf("close the project link: %v", err)
+	}
+	_, retracted, ready, _, err := service.Derive(ctx, f.orgID)
+	if err != nil {
+		t.Fatalf("derivation after the close: %v", err)
+	}
+	open := countRows(t, ctx, conn, `SELECT count() FROM team_repo_ownership FINAL WHERE org_id = ? AND team_id = 'OPS' AND source = 'inferred' AND valid_to IS NULL`, f.orgID)
+	if ready || retracted != 0 || open != 1 {
+		t.Fatalf("ready=%v retracted=%d open=%d: the derivation now closes these rows by itself; "+
+			"the close in RetireJiraProjectAsTeamRows may be a second writer of the same fact", ready, retracted, open)
 	}
 }

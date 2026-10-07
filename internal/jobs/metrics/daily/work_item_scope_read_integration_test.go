@@ -348,6 +348,76 @@ func TestWorkItemScopeReadFindsAScopeByEachOfItsColumns(t *testing.T) {
 	}
 }
 
+// Every query of the read names the organization at each table it reads, the
+// sub-selects included. Each case stores a row that one of those filters
+// alone keeps out of the read of organization A.
+func TestWorkItemScopeReadNamesTheOrganizationInEverySubSelect(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	conn := workItemAttributionLinkedIssueMigratedClickHouse(t, ctx)
+
+	at := scopeReadDay.Add(12 * time.Hour)
+	seedScopeReadItems(t, ctx, conn,
+		scopeReadItem{org: scopeReadOrgA, repo: scopeReadRepoA, id: "it-1", projectID: "shared", storyPoints: 1},
+		scopeReadItem{org: scopeReadOrgA, repo: scopeReadRepoB, id: "it-2", projectID: "shared", storyPoints: 1},
+		// An item of organization A in a scope that the partition of
+		// repository A does not touch.
+		scopeReadItem{org: scopeReadOrgA, repo: scopeReadRepoB, id: "elsewhere", projectID: "other", storyPoints: 1},
+		// Organization B stores the same item id in the wanted scope, and an
+		// item at an address where organization A has only an attribution row.
+		scopeReadItem{org: scopeReadOrgB, repo: scopeReadRepoC, id: "elsewhere", projectID: "shared", storyPoints: 100},
+		scopeReadItem{org: scopeReadOrgB, repo: scopeReadRepoD, id: "only-b", projectID: "shared", storyPoints: 100},
+	)
+	seedScopeReadTransition(t, ctx, conn, scopeReadOrgA, scopeReadRepoA, "it-1", scopeReadDay.Add(6*time.Hour))
+	seedScopeReadTransition(t, ctx, conn, scopeReadOrgA, scopeReadRepoB, "elsewhere", scopeReadDay.Add(7*time.Hour))
+
+	seedScopeReadAttribution(t, ctx, conn, scopeReadOrgA, scopeReadRepoA, "it-1", "team-a")
+	// it-2: the latest snapshot of organization A has no primary row. A
+	// primary row of organization B has the same address and the same time.
+	if err := conn.Exec(ctx, `
+INSERT INTO work_item_team_attributions
+    (org_id, repo_id, work_item_id, provider, team_id, team_name, source, is_primary, confidence, evidence, computed_at)
+VALUES (?, ?, 'it-2', 'github', 'team-a', 'team-a', 'assignee_membership', 0, 'low', 'test', ?),
+       (?, ?, 'it-2', 'github', 'team-x', 'team-x', 'native_team', 1, 'high', 'test', ?)`,
+		scopeReadOrgA, scopeReadRepoB, at, scopeReadOrgB, scopeReadRepoB, at); err != nil {
+		t.Fatal(err)
+	}
+	// An attribution row of organization A at the address of an item that
+	// only organization B stores.
+	seedScopeReadAttribution(t, ctx, conn, scopeReadOrgA, scopeReadRepoD, "only-b", "team-a")
+
+	read := readWorkItemScope(t, ctx, conn, scopeReadOrgA, scopeReadRepoA)
+	if got := scopeReadItemIDs(read); got != "it-1,it-2" {
+		t.Fatalf("items = %s, want it-1,it-2", got)
+	}
+
+	t.Run("transitions: the items sub-select", func(t *testing.T) {
+		if len(read.Transitions) != 1 || read.Transitions[0].WorkItemID != "it-1" {
+			t.Errorf("transitions = %+v, want the one transition of it-1: organization A has no item elsewhere in the scope", read.Transitions)
+		}
+	})
+	t.Run("attributions: the outer query", func(t *testing.T) {
+		if attribution, found := read.Attributions["it-2"]; found {
+			t.Errorf("it-2 has the attribution %+v, want none: its primary row is a row of organization B", attribution)
+		}
+		if len(read.Attributions) != 1 || read.Attributions["it-1"].TeamID != "team-a" {
+			t.Errorf("attributions = %+v, want it-1 = team-a only", read.Attributions)
+		}
+	})
+	t.Run("attributions: the items sub-select", func(t *testing.T) {
+		stored, err := loadWorkItemScopeAttributions(ctx, conn, scopeReadOrgA, []string{"shared"}, false, true)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, found := stored[workItemAttributionAddress{scopeReadRepoD, "only-b"}]; found {
+			t.Errorf("the read returned the attribution at the address of an item of organization B: %+v", stored)
+		}
+		if len(stored) != 1 || stored[workItemAttributionAddress{scopeReadRepoA, "it-1"}].TeamID != "team-a" {
+			t.Errorf("attributions = %+v, want the one row of it-1 in repository A", stored)
+		}
+	})
+}
+
 // One work item id stored under two repository ids counts once: the row with
 // the newest last_synced is the item, with the attribution of that row's
 // repository. The result does not depend on which repository the run lists.

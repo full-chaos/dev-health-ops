@@ -323,16 +323,19 @@ WHERE org_id = $1 AND integration_id = $2 AND dataset_key = $3 AND is_enabled IS
 	return enabled, disabled, nil
 }
 
-// saveSelection runs the row writes of a save and records them. The caller
-// holds the selection lock and stores change.stored.
-func saveSelection(ctx context.Context, tx pgx.Tx, logger *slog.Logger, orgID string, config *syncConfig, change selectionChange) error {
-	integrationID := *config.IntegrationID
+// saveSelection runs the row writes of a save. The caller holds the selection
+// lock and stores change.stored. It returns the function that counts and logs
+// the rows the save switched: the caller runs it after the transaction is
+// committed, because a save that is refused later rolls the rows back.
+func saveSelection(ctx context.Context, tx pgx.Tx, logger *slog.Logger, orgID string, config *syncConfig, change selectionChange) (func(context.Context), error) {
+	integrationID, provider := *config.IntegrationID, config.Provider
 	enabled, disabled, err := applySelectionChange(ctx, tx, orgID, integrationID, change)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	recordSelectionChange(ctx, logger, orgID, integrationID, config.Provider, enabled, disabled)
-	return nil
+	return func(ctx context.Context) {
+		recordSelectionChange(ctx, logger, orgID, integrationID, provider, enabled, disabled)
+	}, nil
 }
 
 // recordSelectionChange counts and logs what a save did to the rows. Dataset

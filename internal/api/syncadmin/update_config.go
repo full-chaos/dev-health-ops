@@ -110,6 +110,10 @@ func (h *handlers) updateSyncConfig(w http.ResponseWriter, r *http.Request) {
 		h.answerOrFail(w, r, "update_sync_config", err)
 		return
 	}
+	// The transaction is committed: only now did the rows change.
+	if result.rowsChanged != nil {
+		result.rowsChanged(ctx)
+	}
 	if result.discover {
 		h.discoverIntegrationSources(ctx, org, *result.config.IntegrationID, "jira_project_discovery_on_update",
 			"config_id", r.PathValue("config_id"))
@@ -132,6 +136,10 @@ var errConfigNotFound = errors.New("sync configuration not found")
 type updatedConfig struct {
 	config   *syncConfig
 	discover bool
+	// rowsChanged counts and logs the dataset rows the save switched. The
+	// caller runs it after the commit, never before: a save that is refused
+	// later rolls its row writes back.
+	rowsChanged func(context.Context)
 }
 
 func (h *handlers) updateSyncConfigTx(ctx context.Context, tx pgx.Tx, org string, id uuid.UUID, in syncConfigUpdate) (*updatedConfig, error) {
@@ -168,6 +176,33 @@ func (h *handlers) updateSyncConfigTx(ctx context.Context, tx pgx.Tx, org string
 	switch {
 	case rowsOwn && in.syncTargetsSet:
 		if err := selectionLock(ctx, tx, org, *config.IntegrationID); err != nil {
+			return nil, err
+		}
+		// The configuration was read before the lock, so another save of
+		// this integration may have stored a new list since. Read it again
+		// now: every save that computes a change takes the selection lock
+		// first, so the stored list, the rows and the shown list this save
+		// computes its change from are the ones it changes. The read takes
+		// no row lock: the row of the configuration is locked by its UPDATE,
+		// after the rows of the integration, as in a save with no list.
+		// Lock order of a save: the selection lock of the integration, the
+		// rows of the integration, the row of the configuration, then the
+		// rows of its children in id order (cascadeToChildren).
+		config, err = scanSyncConfig(tx.QueryRow(ctx,
+			`SELECT `+syncConfigColumns+` FROM sync_configurations WHERE org_id = $1 AND id = $2`, org, id))
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, errConfigNotFound
+		}
+		if err != nil {
+			return nil, err
+		}
+		if !rowsOwnSelection(config) {
+			return nil, fmt.Errorf("sync configuration %s stopped being a whole-integration configuration during the save", id)
+		}
+		if storedTargetsValue, err = decodeStored(config.SyncTargets); err != nil {
+			return nil, err
+		}
+		if storedOptionsValue, err = decodeStored(config.SyncOptions); err != nil {
 			return nil, err
 		}
 		enabled, err := enabledDatasetKeysByIntegration(ctx, tx, org, []uuid.UUID{*config.IntegrationID})
@@ -240,10 +275,11 @@ func (h *handlers) updateSyncConfigTx(ctx context.Context, tx pgx.Tx, org string
 	// A config whose rows own its selection writes the rows of the targets
 	// this save changed. Every other config writes no row.
 	newTargets := storedTargetsValue
+	var rowsChanged func(context.Context)
 	if in.syncTargetsSet {
 		newTargets = stringValues(newStored)
 		if rowsOwn {
-			if err := saveSelection(ctx, tx, h.logger, org, config, change); err != nil {
+			if rowsChanged, err = saveSelection(ctx, tx, h.logger, org, config, change); err != nil {
 				return nil, err
 			}
 		}
@@ -331,7 +367,7 @@ func (h *handlers) updateSyncConfigTx(ctx context.Context, tx pgx.Tx, org string
 	}, org, config); err != nil {
 		return nil, err
 	}
-	return &updatedConfig{config: config, discover: discover}, nil
+	return &updatedConfig{config: config, discover: discover, rowsChanged: rowsChanged}, nil
 }
 
 func optionalStringValue(value *string) pyjson.Value {
@@ -550,7 +586,7 @@ func updateServicesDatasetMappings(ctx context.Context, tx pgx.Tx, org string, i
 // exactly the stored list.
 func (h *handlers) cascadeToChildren(ctx context.Context, tx pgx.Tx, org string, parentID uuid.UUID, in syncConfigUpdate, parentStored []string,
 	options *pyjson.Object, cleared map[string]bool, optionsProvided bool, now time.Time) error {
-	rows, err := tx.Query(ctx, `SELECT `+syncConfigColumns+` FROM sync_configurations WHERE parent_id = $1`, parentID)
+	rows, err := tx.Query(ctx, `SELECT `+syncConfigColumns+` FROM sync_configurations WHERE parent_id = $1 ORDER BY id`, parentID)
 	if err != nil {
 		return fmt.Errorf("read child configs: %w", err)
 	}

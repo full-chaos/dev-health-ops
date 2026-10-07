@@ -20,9 +20,11 @@ import (
 // time. The stored sync_configurations.sync_targets list holds what requests
 // asked for, as before: a save never stores a target because a row is on, and
 // no code computes a row from the stored list. What a whole-integration
-// config shows is the stored list plus the targets the enabled rows add
-// (shownTargets, the one derive function), and a save changes only the rows
-// of the targets it adds to, or drops from, that list.
+// config shows is the state of the rows: a target that has a dataset of the
+// provider is shown when a row of it is on and is not shown when its rows are
+// off, whatever the stored list says; a target with no dataset is shown as
+// stored (shownTargets, the one derive function). A save changes only the
+// rows of the targets it adds to, or drops from, that list.
 //
 // This file is NOT a port of the Python route: the recorded Python answer
 // rebuilt the rows from the submitted list on every save, in both directions.
@@ -51,15 +53,29 @@ func storedListItems(stored pyjson.Value) []string {
 	return items
 }
 
-// shownTargets is the list a whole-integration config shows: its stored list
-// as it is (order and duplicates kept), then every target the enabled dataset
-// keys derive that the stored list does not name, in the registry's target
-// order. With no such target the result is the stored list.
+// shownTargets is the list a whole-integration config shows. A stored target
+// is shown, in the stored order and once, when the provider has no dataset
+// for it (no row can speak for it) or when the enabled dataset keys derive
+// it. Then comes every other target the enabled keys derive, in the
+// registry's target order. A stored target that has a dataset and no enabled
+// row is not shown: the row is off, so it does not sync.
 func shownTargets(provider string, enabledKeys, stored []string) []string {
-	out := append(make([]string, 0, len(stored)), stored...)
-	inStored := stringSet(stored)
-	for _, target := range providersync.DerivedSyncTargets(provider, enabledKeys) {
-		if !inStored[target] {
+	derived := providersync.DerivedSyncTargets(provider, enabledKeys)
+	inDerived := stringSet(derived)
+	out := make([]string, 0, len(stored)+len(derived))
+	inOut := map[string]bool{}
+	for _, target := range stored {
+		if inOut[target] {
+			continue
+		}
+		if inDerived[target] || !providersync.SyncTargetHasDataset(provider, target) {
+			inOut[target] = true
+			out = append(out, target)
+		}
+	}
+	for _, target := range derived {
+		if !inOut[target] {
+			inOut[target] = true
 			out = append(out, target)
 		}
 	}
@@ -80,8 +96,8 @@ type selectionChange struct {
 }
 
 // planSelectionChange is the save rule for a whole-integration config. The
-// reference is the list the server shows now (the stored list plus the
-// targets the enabled rows add), read in the save's transaction; nothing the
+// reference is the list the server shows now (shownTargets over the rows and
+// the stored list), read in the save's transaction; nothing the
 // request says changes it. Only a target the submitted list adds to, or drops
 // from, the reference writes rows: a target in neither set keeps its rows
 // whatever they are. A target the form never offers ("blame", "security")
@@ -193,10 +209,9 @@ ORDER BY integration_id, dataset_key`, orgID, integrationIDs)
 	return found, nil
 }
 
-// deriveShownTargets sets, on every config whose rows own its selection and
-// whose enabled rows add a target to its stored list, the sync_targets list
-// its response carries (shownTargets). One read serves all the configs.
-// Every other config keeps its stored list, as stored.
+// deriveShownTargets sets, on every config whose rows own its selection, the
+// sync_targets list its response carries (shownTargets). One read serves all
+// the configs. Every other config keeps its stored list, as stored.
 func deriveShownTargets(ctx context.Context, read func(context.Context, string, []uuid.UUID) (map[uuid.UUID][]string, error),
 	orgID string, configs ...*syncConfig) error {
 	var integrationIDs []uuid.UUID
@@ -222,12 +237,8 @@ func deriveShownTargets(ctx context.Context, read func(context.Context, string, 
 		if err != nil {
 			return err
 		}
-		items := storedListItems(stored)
-		shown := shownTargets(config.Provider, enabled[*config.IntegrationID], items)
-		config.shownTargets, config.shownTargetsSet = nil, false
-		if len(shown) > len(items) {
-			config.shownTargets, config.shownTargetsSet = shown, true
-		}
+		config.shownTargets = shownTargets(config.Provider, enabled[*config.IntegrationID], storedListItems(stored))
+		config.shownTargetsSet = true
 	}
 	return nil
 }

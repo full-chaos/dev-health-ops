@@ -61,9 +61,11 @@ func storedVariants(provider string) [][]string {
 // (CHAOS-8816): for every provider, EVERY subset of its dataset keys as the
 // enabled rows (the other keys are rows that exist and are off, or no row:
 // the plan reads enabled keys only) and each stored list, sending back the
-// list the config shows writes no row and stores the list that was stored,
-// item for item. So a target the list shows only because a row is on is
-// never stored, and the canonical-incident gate reads what it read before.
+// list the config shows writes no row and stores the stored items that are
+// shown, each once. So a target the list shows only because a row is on is
+// never stored, a stored target whose rows are off leaves the stored list
+// with its rows still off, and the canonical-incident gate reads no target
+// it did not read before.
 func TestSavingTheShownListChangesNoRowAndKeepsTheStoredList(t *testing.T) {
 	cases := 0
 	for _, provider := range rowOwnedProviders {
@@ -85,11 +87,20 @@ func TestSavingTheShownListChangesNoRowAndKeepsTheStoredList(t *testing.T) {
 					}
 				}
 				shown := shownTargets(provider, enabled, stored)
-				// The shown list is the stored list, then the targets only the
-				// enabled keys give: a save of a list that lost one would read
-				// as "the user removed it".
-				want := append([]string{}, stored...)
-				for _, target := range providersync.DerivedSyncTargets(provider, enabled) {
+				// The shown list is the stored items a row is on for, or that
+				// no row can speak for, then the targets only the enabled keys
+				// give: a save of a list that lost one would read as "the user
+				// removed it", and one that kept a target whose rows are off
+				// would read as "the user added it".
+				derived := providersync.DerivedSyncTargets(provider, enabled)
+				want, wantStored := []string{}, []string{}
+				for _, target := range uniqueStrings(stored) {
+					if stringSet(derived)[target] || !providersync.SyncTargetHasDataset(provider, target) {
+						want = append(want, target)
+						wantStored = append(wantStored, target)
+					}
+				}
+				for _, target := range derived {
 					if !stringSet(stored)[target] {
 						want = append(want, target)
 					}
@@ -100,7 +111,7 @@ func TestSavingTheShownListChangesNoRowAndKeepsTheStoredList(t *testing.T) {
 				cases++
 				change := mustPlan(t, provider, enabled, stored, shown)
 				if len(change.enableKeys)+len(change.disableKeys)+len(change.added)+len(change.removed) != 0 ||
-					strings.Join(change.stored, ",") != strings.Join(stored, ",") {
+					strings.Join(change.stored, ",") != strings.Join(wantStored, ",") {
 					t.Fatalf("%s enabled=%v stored=%v: saving the shown list %v is not a no-op: %+v", provider, enabled, stored, shown, change)
 				}
 			}
@@ -247,14 +258,14 @@ func TestSelectionChangeReadsOnlyTheListTheServerShows(t *testing.T) {
 		{name: "a stored target whose rows are on is unchecked: rows off, item dropped",
 			enabled: append(append([]string{}, gitOn...), prsKeys...), stored: []string{"git", "prs"}, submitted: []string{"git"},
 			wantDisable: prsKeys, wantStored: []string{"git"}},
-		{name: "a stored target whose rows are off is unchecked: item dropped (its keys are named; the write changes only a row that is on)",
-			enabled: gitOn, stored: []string{"git", "prs"}, submitted: []string{"git"}, wantDisable: prsKeys, wantStored: []string{"git"}},
-		{name: "a stored target whose rows are off is sent back: it stays stored and its rows stay off",
-			enabled: gitOn, stored: []string{"git", "prs"}, submitted: []string{"git", "prs"}, wantStored: []string{"git", "prs"}},
+		{name: "a stored target whose rows are off is not shown: a save of the shown list writes no row and drops the item",
+			enabled: gitOn, stored: []string{"git", "prs"}, submitted: []string{"git"}, wantStored: []string{"git"}},
+		{name: "a stored target whose rows are off is checked: its rows go on and it stays stored",
+			enabled: gitOn, stored: []string{"git", "prs"}, submitted: []string{"git", "prs"}, wantEnable: prsKeys, wantStored: []string{"git", "prs"}},
 		{name: "a row-only target is sent back with a new one: only the new one is stored",
 			enabled: gitOn, submitted: []string{"prs", "git"}, wantEnable: prsKeys, wantStored: []string{"prs"}},
 		{name: "the submitted order and duplicates are kept",
-			enabled: nil, stored: []string{"git"}, submitted: []string{"prs", "git", "prs"}, wantEnable: prsKeys, wantStored: []string{"prs", "git", "prs"}},
+			enabled: gitOn, stored: []string{"git"}, submitted: []string{"prs", "git", "prs"}, wantEnable: prsKeys, wantStored: []string{"prs", "git", "prs"}},
 	} {
 		change := mustPlan(t, "github", testCase.enabled, testCase.stored, testCase.submitted)
 		if !reflect.DeepEqual(sortedStrings(change.enableKeys), sortedStrings(testCase.wantEnable)) ||
@@ -314,8 +325,10 @@ func TestTheSaveStoresWhatTheGateReads(t *testing.T) {
 		{"gitlab: the user adds incidents", "gitlab", []string{"commits"}, nil, []string{"git", "incidents"}, []string{"incidents"}},
 		{"jira: the user adds operational", "jira", []string{"work-items"}, []string{"work-items"}, []string{"work-items", "operational"},
 			[]string{"work-items", "operational"}},
-		{"jira: operational stored, its row off, the list echoed back", "jira", []string{"work-items"}, []string{"operational"},
-			[]string{"operational", "work-items"}, []string{"operational"}},
+		{"jira: operational stored, its row off, the shown list echoed back", "jira", []string{"work-items"}, []string{"operational"},
+			[]string{"work-items"}, []string{}},
+		{"jira: operational stored, its row off, the user checks it", "jira", []string{"work-items"}, []string{"operational"},
+			[]string{"work-items", "operational"}, []string{"operational"}},
 		{"github stored incidents, list unchanged", "github", []string{"commits"}, []string{"incidents"}, []string{"incidents", "git"}, []string{"incidents"}},
 		{"github stored incidents, unchecked", "github", []string{"commits"}, []string{"incidents"}, []string{"git"}, []string{}},
 		{"github: the user adds incidents", "github", []string{"commits"}, nil, []string{"git", "incidents"}, []string{"incidents"}},
@@ -327,17 +340,25 @@ func TestTheSaveStoresWhatTheGateReads(t *testing.T) {
 	}
 }
 
-// TestShownTargetsAreTheStoredListThenWhatTheRowsAdd: the stored list is
-// shown as it is (a target whose rows are off and a repeat included); a
-// target only the rows give comes after it in the registry's order.
-func TestShownTargetsAreTheStoredListThenWhatTheRowsAdd(t *testing.T) {
+// TestShownTargetsAreTheRowStateAndTheStoredTargetsNoRowSpeaksFor: a target
+// with a dataset is shown when a row of it is on and not shown when its rows
+// are off, whatever the stored list says; a stored target with no dataset is
+// shown as stored; stored order first and each target once; a target only
+// the rows give comes after, in the registry's order.
+func TestShownTargetsAreTheRowStateAndTheStoredTargetsNoRowSpeaksFor(t *testing.T) {
 	enabled := []string{"work-items", "commits", "prs", "cicd"}
 	if got := shownTargets("github", enabled, []string{"work-items", "incidents", "git"}); !reflect.DeepEqual(got,
 		[]string{"work-items", "incidents", "git", "prs", "cicd"}) {
 		t.Errorf("stored order first: %v", got)
 	}
-	if got := shownTargets("github", []string{"commits"}, []string{"prs", "git", "git"}); !reflect.DeepEqual(got, []string{"prs", "git", "git"}) {
-		t.Errorf("the stored list is shown as stored: %v", got)
+	if got := shownTargets("github", []string{"commits"}, []string{"prs", "git", "git"}); !reflect.DeepEqual(got, []string{"git"}) {
+		t.Errorf("a stored target whose rows are off is not shown, a repeat is shown once: %v", got)
+	}
+	if got := shownTargets("github", nil, []string{"git", "incidents", "no-such-target"}); !reflect.DeepEqual(got, []string{"incidents", "no-such-target"}) {
+		t.Errorf("no row on: only the stored targets with no dataset are shown: %v", got)
+	}
+	if got := shownTargets("gitlab", []string{"commits"}, []string{"git", "incidents"}); !reflect.DeepEqual(got, []string{"git"}) {
+		t.Errorf("gitlab incidents has a dataset and its row is off: %v", got)
 	}
 	if got := shownTargets("github", []string{"commits"}, nil); !reflect.DeepEqual(got, []string{"git"}) {
 		t.Errorf("a row-only target: %v", got)

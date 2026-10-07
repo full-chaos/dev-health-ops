@@ -1029,22 +1029,11 @@ type aiGovernanceRawRow struct {
 //
 // THE FIX: fetch the table's REAL columns (raw counts, argMax-collapsed
 // per (day, team_id, repo_id) -- the exact grain the broken query's inner
-// subquery already used), then compute each group's four ratios in Go via
-// aiGovernanceRatio, an EXACT port of AIGovernanceCoverageDaily's
-// declaration_coverage/human_review_coverage/security_scan_coverage/
-// in_policy_coverage properties (audit/ai_governance/models.py:140-158,
-// including _ratio's edge case: 1.0 -- "fully covered" -- when the
-// denominator is <= 0, NOT 0.0). aiGovernanceCoverage below then applies
-// EXACTLY Python's own two-level averaging shape on top of those per-group
-// ratios: average each ratio ACROSS GROUPS first (mirroring the broken
-// query's outer `avg(declaration_coverage)` etc., which -- had the columns
-// existed -- would have averaged one already-argMax'd ratio per (day,
-// team_id, repo_id) group, sum-then-divide-once across the whole period is
-// NOT what that shape computes, since a period could contain differently-
-// sized groups), THEN average the four resulting numbers with the
-// `> 0` presence filter _ai_governance_coverage itself applies
-// (metrics/operating_review.py:848-857) -- same two-level "average of
-// per-group values" both levels, never a period-wide sum-then-divide.
+// subquery already used). aiGovernanceCoverage sums each numerator and
+// denominator across those rows, then computes one ratio per coverage kind.
+// This avoids giving a small group the same period weight as a large group
+// (CHAOS-8524). aiGovernanceRatio preserves the 1.0 "fully covered" default
+// when the total denominator is zero.
 //
 // EXPECTED DUAL-RUN DIVERGENCE: Python returns 0.0 for
 // ai_governance_coverage/ai_opportunity_signals in every real response
@@ -1108,30 +1097,30 @@ func aiGovernanceRatio(numerator, denominator float64) float64 {
 	return numerator / denominator
 }
 
-// aiGovernanceGroupRatios computes one of the four coverage ratios for
-// every fetched (day, team_id, repo_id) group, via aiGovernanceRatio --
-// the per-group values _ai_governance_coverage's `_avg(rows, key)` would
-// have averaged had the SQL columns it references actually existed.
-func aiGovernanceGroupRatios(rows []aiGovernanceRawRow, numerator func(aiGovernanceRawRow) float64) []*float64 {
-	out := make([]*float64, len(rows))
-	for i, r := range rows {
-		out[i] = f(aiGovernanceRatio(numerator(r), r.aiArtifacts))
-	}
-	return out
-}
-
-// aiGovernanceCoverage ports _ai_governance_coverage
-// (metrics/operating_review.py:847-857) on top of the Go-side fix
-// (fetchAIGovernance's doc comment): each of the four coverage figures is
-// first averaged ACROSS GROUPS (mirroring the broken query's own intended
-// outer `avg(...)` shape), then Python's own presence-filtered average of
-// those four numbers is applied unchanged.
+// aiGovernanceCoverage calculates each coverage kind from all returned raw
+// counts. It weights every artifact once across the selected period instead
+// of averaging the ratios for individual (day, team_id, repo_id) groups.
+// Empty rows are missing data and remain 0.0; present rows with no AI
+// artifacts remain fully covered through aiGovernanceRatio.
 func aiGovernanceCoverage(rows []aiGovernanceRawRow) float64 {
+	if len(rows) == 0 {
+		return 0.0
+	}
+
+	var total aiGovernanceRawRow
+	for _, row := range rows {
+		total.aiArtifacts += row.aiArtifacts
+		total.declaredArtifacts += row.declaredArtifacts
+		total.humanReviewedPrs += row.humanReviewedPrs
+		total.securityScannedPrs += row.securityScannedPrs
+		total.inPolicyArtifacts += row.inPolicyArtifacts
+	}
+
 	coverage := []float64{
-		avgF(aiGovernanceGroupRatios(rows, func(r aiGovernanceRawRow) float64 { return r.declaredArtifacts })),
-		avgF(aiGovernanceGroupRatios(rows, func(r aiGovernanceRawRow) float64 { return r.humanReviewedPrs })),
-		avgF(aiGovernanceGroupRatios(rows, func(r aiGovernanceRawRow) float64 { return r.securityScannedPrs })),
-		avgF(aiGovernanceGroupRatios(rows, func(r aiGovernanceRawRow) float64 { return r.inPolicyArtifacts })),
+		aiGovernanceRatio(total.declaredArtifacts, total.aiArtifacts),
+		aiGovernanceRatio(total.humanReviewedPrs, total.aiArtifacts),
+		aiGovernanceRatio(total.securityScannedPrs, total.aiArtifacts),
+		aiGovernanceRatio(total.inPolicyArtifacts, total.aiArtifacts),
 	}
 	var present []float64
 	for _, v := range coverage {
@@ -1142,11 +1131,11 @@ func aiGovernanceCoverage(rows []aiGovernanceRawRow) float64 {
 	if len(present) == 0 {
 		return 0.0
 	}
-	var total float64
+	var coverageTotal float64
 	for _, v := range present {
-		total += v
+		coverageTotal += v
 	}
-	return total / float64(len(present))
+	return coverageTotal / float64(len(present))
 }
 
 // ---------------------------------------------------------------------------

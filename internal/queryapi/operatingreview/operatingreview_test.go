@@ -444,10 +444,8 @@ func TestFetchRepoMetrics_PopulatedWindowKeepsExactValues(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// aiGovernanceRatio / aiGovernanceCoverage -- the declared Go-side fix.
-// Ports AIGovernanceCoverageDaily's _ratio (audit/ai_governance/models.py:
-// 156-158) and _ai_governance_coverage (metrics/operating_review.py:
-// 847-857) on top of it.
+// aiGovernanceRatio / aiGovernanceCoverage use the raw counts returned by
+// fetchAIGovernance. Coverage is a ratio of sums across the period.
 // ---------------------------------------------------------------------------
 
 func TestAIGovernanceRatio_ZeroOrNegativeDenominatorReturnsOne(t *testing.T) {
@@ -492,12 +490,38 @@ func TestAIGovernanceCoverage_RealRowsProducesNonZero(t *testing.T) {
 	if got <= 0.0 {
 		t.Fatalf("aiGovernanceCoverage(real rows) = %v, want > 0 (Python is pinned to exactly 0.0 -- a non-zero result is the fix taking effect)", got)
 	}
-	// declaration: avg(8/10, 1.0) = 0.9 ; human_review: avg(5/10, 1.0) = 0.75
-	// security: avg(10/10, 1.0) = 1.0 ; in_policy: avg(9/10, 1.0) = 0.95
-	// all > 0 -> present = all four -> mean = (0.9+0.75+1.0+0.95)/4 = 0.9
-	want := 0.9
+	// All period totals use the active row's denominator: 8/10, 5/10,
+	// 10/10, and 9/10. The inactive row contributes no artifacts.
+	want := 0.8
 	if diff := got - want; diff > 1e-9 || diff < -1e-9 {
 		t.Errorf("aiGovernanceCoverage = %v, want %v", got, want)
+	}
+}
+
+func TestAIGovernanceCoverage_NoAIActivityIsFullyCovered(t *testing.T) {
+	rows := []aiGovernanceRawRow{{}}
+	if got := aiGovernanceCoverage(rows); got != 1.0 {
+		t.Errorf("aiGovernanceCoverage(no AI activity) = %v, want 1.0", got)
+	}
+}
+
+func TestAIGovernanceCoverage_RatioOfSumsWeightsByArtifactCount(t *testing.T) {
+	// These are the raw uint64 counts fetchAIGovernance converts from one
+	// (day, team_id, repo_id) producer group. The two groups intentionally
+	// have unequal ai_artifacts counts: a mean of their ratios gives each
+	// group the same weight, while the coverage definition weights every
+	// artifact once across the period.
+	rows := []aiGovernanceRawRow{
+		{aiArtifacts: 100, declaredArtifacts: 80, humanReviewedPrs: 50, securityScannedPrs: 100, inPolicyArtifacts: 90},
+		{aiArtifacts: 1, declaredArtifacts: 0, humanReviewedPrs: 1, securityScannedPrs: 0, inPolicyArtifacts: 0},
+	}
+
+	got := aiGovernanceCoverage(rows)
+	// Four ratios over the producer totals are 80/101, 51/101, 100/101,
+	// and 90/101. Their coverage mean is (80 + 51 + 100 + 90)/(4 * 101).
+	const want = 321.0 / 404.0
+	if diff := got - want; diff > 1e-9 || diff < -1e-9 {
+		t.Errorf("aiGovernanceCoverage(ratio of sums) = %v, want %v", got, want)
 	}
 }
 

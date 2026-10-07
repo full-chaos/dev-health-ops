@@ -194,11 +194,15 @@ func Write(ctx context.Context, conn driver.Conn, orgID string, rows Rows, selec
 		done = append(done, "team project ownership")
 	}
 	if selections.Structure && (len(teamsToWrite) > 0 || len(deactivate) > 0) {
-		// A team whose links were not read to the end, or not all readable,
-		// keeps the project keys it had: its fresh list is not the whole list.
+		// The catalog row's project keys follow the links: a run that closes
+		// no link of a team (the snapshot is not complete, or the team's links
+		// were not readable) keeps the keys the team had next to the ones it
+		// read now.
 		keepKeysOf := map[string]bool{}
-		for _, id := range rows.FailedProjectLinkTeams {
-			keepKeysOf[id] = true
+		if selections.Projects && !rows.ProjectLinksComplete {
+			for _, team := range teamsToWrite {
+				keepKeysOf[team.ID] = true
+			}
 		}
 		for _, id := range rows.UnreadableProjectLinkTeams {
 			keepKeysOf[id] = true

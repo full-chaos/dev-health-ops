@@ -198,7 +198,7 @@ func TestARunRetractsWhatTheSnapshotNoLongerHas(t *testing.T) {
 		case "TeamworkGraphTeamUsers":
 			return 200, connection("teamworkGraph_teamUsers", "", userEdge(teamA, "bob-2"))
 		case "TeamConnectedContainers":
-			return 200, containers("")
+			return 200, containerPage("")
 		}
 		return 500, nil
 	}
@@ -308,7 +308,7 @@ func TestOwnershipLastSyncedIsTheIngestTimeNotTheProviderTime(t *testing.T) {
 	// The closing row a later run writes for a retracted link is a write too.
 	g.respond = func(req request) (int, any) {
 		if req.Operation == "TeamConnectedContainers" {
-			return 200, containers("")
+			return 200, containerPage("")
 		}
 		return standard(req)
 	}
@@ -415,7 +415,7 @@ func TestATeamWithNoReadableProjectLinkKeepsItsOpenLinks(t *testing.T) {
 	// link at all (a complete answer: the team has no project).
 	g := newGateway(t, func(req request) (int, any) {
 		if req.Operation == "TeamConnectedContainers" && req.Variables["id"] == teamA {
-			return 200, containers("", projectEdge(teamA, "PLAT", "PLAT"), projectEdge(teamA, "OPS", ""))
+			return 200, containerPage("", projectEdge(teamA, "PLAT", "PLAT"), projectEdge(teamA, "OPS", ""))
 		}
 		return standard(req)
 	})

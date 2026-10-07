@@ -147,8 +147,8 @@ func containerEdge(typename string) map[string]any {
 	return map[string]any{"id": "edge-" + typename, "node": map[string]any{"__typename": typename}}
 }
 
-// containers is one page of the team-to-container relation.
-func containers(next string, edges ...map[string]any) map[string]any {
+// containerPage is one page of the team-to-container relation.
+func containerPage(next string, edges ...map[string]any) map[string]any {
 	pageInfo := map[string]any{"hasNextPage": next != "", "endCursor": nil}
 	if next != "" {
 		pageInfo["endCursor"] = next
@@ -189,11 +189,11 @@ func standard(req request) (int, any) {
 		}
 	case "TeamConnectedContainers":
 		if req.Variables["id"] == teamA {
-			return 200, containers("", projectEdge(teamA, "PLAT", "10001"), projectEdge(teamA, "", "10002"), projectEdge(teamA, "PLAT", "10001"),
+			return 200, containerPage("", projectEdge(teamA, "PLAT", "10001"), projectEdge(teamA, "", "10002"), projectEdge(teamA, "PLAT", "10001"),
 				// A link with a key and no usable project id: no row, never an id built from the key.
 				projectEdge(teamA, "NOID", "NOID"), projectEdge(teamA, "EMPTY", ""))
 		}
-		return 200, containers("")
+		return 200, containerPage("")
 	}
 	return 500, map[string]any{"errors": []any{map[string]any{"message": "unexpected " + req.Operation}}}
 }
@@ -643,7 +643,7 @@ func TestCollectReadsMembersFromEdgesThatCarryOnlyTheUser(t *testing.T) {
 		case "TeamworkGraphTeamUsers":
 			return 200, connection("teamworkGraph_teamUsers", "", userEdge(teamA, "Alice-1"), userEdge(teamA, "bob-2"))
 		case "TeamConnectedContainers":
-			return 200, containers("")
+			return 200, containerPage("")
 		}
 		return 500, map[string]any{"errors": []any{map[string]any{"message": "unexpected " + req.Operation}}}
 	})
@@ -673,7 +673,7 @@ func TestAnEdgeWithoutAUserIsStillRefused(t *testing.T) {
 		case "TeamworkGraphTeamUsers":
 			return 200, connection("teamworkGraph_teamUsers", "", map[string]any{"node": map[string]any{"columns": []any{}}})
 		}
-		return 200, containers("")
+		return 200, containerPage("")
 	})
 	if _, err := Collect(context.Background(), g.client(), params(everything)); err == nil || !strings.Contains(err.Error(), "requires a subject user") {
 		t.Fatalf("err = %v, want the missing-user refusal", err)
@@ -694,7 +694,7 @@ func TestCollectRefusesAMemberRowWithAnEmptyUserIdLoudly(t *testing.T) {
 			}}}
 			return 200, connection("teamworkGraph_teamUsers", "", empty)
 		}
-		return 200, containers("")
+		return 200, containerPage("")
 	})
 	if _, err := Collect(context.Background(), g.client(), params(everything)); err == nil || !strings.Contains(err.Error(), "user.id is required") {
 		t.Fatalf("err = %v, want the mapper's empty-user-id refusal", err)
@@ -715,7 +715,7 @@ func TestCollectRefusesAMemberRowWhoseExplicitTeamNodeHasABlankId(t *testing.T) 
 			}}}
 			return 200, connection("teamworkGraph_teamUsers", "", blank)
 		}
-		return 200, containers("")
+		return 200, containerPage("")
 	})
 	if _, err := Collect(context.Background(), g.client(), params(everything)); err == nil || !strings.Contains(err.Error(), "team.id is required") {
 		t.Fatalf("err = %v, want the blank team id refusal", err)
@@ -800,9 +800,9 @@ func TestATeamWithNoReadableProjectLinkIsNamedUnreadable(t *testing.T) {
 				return standard(req)
 			}
 			if req.Variables["id"] == teamA {
-				return 200, containers("", teamALinks...)
+				return 200, containerPage("", teamALinks...)
 			}
-			return 200, containers("", teamCLinks...)
+			return 200, containerPage("", teamCLinks...)
 		}
 	}
 	const idA, idC = "aaaaaaaa-0000-4000-8000-000000000001", "cccccccc-0000-4000-8000-000000000003"

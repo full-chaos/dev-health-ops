@@ -1,6 +1,6 @@
 // Package synccli is the `sync` group of dho: verbs that pull an external
 // system's structure into ClickHouse. Its first verb, `sync teams`, reads the
-// organization's Atlassian Teams (structure, members, active projects) and
+// organization's Atlassian Teams (structure, members, connected projects) and
 // writes them to the ClickHouse team dimensions (internal/atlassianteams).
 //
 // `--provider jira` keeps the name Python users know. It is Atlassian Teams,
@@ -87,7 +87,7 @@ func Command() cli.Command {
 		Kind:    cli.Group,
 		Children: append([]cli.Command{{
 			Name:    "teams",
-			Summary: "sync the organization's Atlassian Teams (structure, members, active projects)",
+			Summary: "sync the organization's Atlassian Teams (structure, members, connected projects)",
 			Kind:    cli.Verb,
 			Run:     func(ctx context.Context, env cli.Env) int { return runTeams(ctx, env, defaultDeps()) },
 		}}, TargetCommands(InlineExecutor(InlineDeps{}))...),

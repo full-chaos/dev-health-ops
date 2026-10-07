@@ -7,6 +7,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/workitemmetrics"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -474,4 +475,74 @@ func (source linearFamilyDerivationSource) LoadStoredBlockingFacts(
 	context.Context, Claim, []string, []workitemmetrics.BlockingRelation,
 ) ([]workitemmetrics.BlockingRelation, []workitemmetrics.RelationEnd, error) {
 	return nil, nil, nil
+}
+
+// ai_attribution is a raw fact of the fetched items: the Linear work-items
+// unit still reads it from the item labels and writes it, on the real route
+// and through the real sink boundary. A label that is no AI label gives no
+// row, and the rows are the unit's only effect beside the raw tables.
+func TestLinearWorkItemFamilyStillWritesAIAttributionRowsFromLabels(t *testing.T) {
+	claim := linearFamilyClaim()
+	issue := strings.Replace(
+		linearLifecycleIssueResponse("ENG-1", "ENG"),
+		`"labels":{"nodes":[]}`,
+		`"labels":{"nodes":[{"name":"bug"},{"name":"Codex"},{"name":"agent-created"}]}`, 1,
+	)
+	if !strings.Contains(issue, `"name":"Codex"`) {
+		t.Fatal("the labels were not planted in the issue payload")
+	}
+	doer := &linearWorkItemsDoer{responses: []string{linearFamilyEmptyCyclesResponse(), issue}}
+	normalizedAt := time.Date(2026, 8, 3, 12, 0, 0, 987654321, time.UTC)
+	batch, err := (LinearWorkItemFamilyRouteHandler{Direct: linearFamilyDirectHandler()}).Collect(
+		context.Background(), claim,
+		providerfoundation.Credential{Provider: "linear", ID: claim.CredentialID},
+		linearWorkItemsClient(t, fakehttp.Client(doer)), normalizedAt,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	byDestination := linearFamilyEffectsByDestination(batch.Effects)
+	aiEffect, present := byDestination["ai_attribution"]
+	if !present || len(aiEffect.Rows) != 2 || aiEffect.Recovery != EffectReadbackRequired {
+		t.Fatalf("ai_attribution effect present=%t rows=%d recovery=%s want 2 rows from the two AI labels",
+			present, len(aiEffect.Rows), aiEffect.Recovery)
+	}
+	kinds := map[string]string{}
+	for _, raw := range aiEffect.Rows {
+		var row githubAIAttributionRow
+		if err := json.Unmarshal(raw, &row); err != nil {
+			t.Fatal(err)
+		}
+		if row.Provider != "linear" || row.SubjectType != "issue" || row.Source != "issue_label" ||
+			row.SubjectID == "" || row.OrgID.String() != claim.OrgID || row.RepoID != nil {
+			t.Fatalf("ai_attribution row=%+v", row)
+		}
+		label, _ := row.Evidence["label"].(string)
+		kinds[label] = row.Kind
+	}
+	if len(kinds) != 2 || kinds["Codex"] != "ai_assisted" || kinds["agent-created"] != "agent_created" {
+		t.Fatalf("kinds by label=%v", kinds)
+	}
+	for _, destination := range githubWorkItemDerivedDestinations {
+		if _, built := byDestination[destination]; built {
+			t.Fatalf("the unit built an effect for the derived table %q", destination)
+		}
+	}
+
+	backend := newLinearSemanticEffectBackend()
+	lease := providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil })
+	sink := linearFamilyEffectsFixture(backend, lease)
+	commit, err := (EffectCommitter{
+		Ledger: &memoryEffectLedger{}, Sink: sink, Readback: sink,
+		Now: func() time.Time { return normalizedAt },
+	}).Commit(context.Background(), claim, batch.Effects, normalizedAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if commit.Written != len(linearFamilyDestinations) || backend.writeCounts["ai_attribution"] != 1 {
+		t.Fatalf("commit=%+v writes=%v", commit, backend.writeCounts)
+	}
+	if inspection, err := sink.InspectEffect(context.Background(), claim, aiEffect); err != nil || inspection != EffectExact {
+		t.Fatalf("ai_attribution readback=%s error=%v want the written rows", inspection, err)
+	}
 }

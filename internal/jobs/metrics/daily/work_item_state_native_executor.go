@@ -107,7 +107,7 @@ func (executor *WorkItemStateExecutor) ComputeFamily(
 	// The version is taken before the reads (see WorkItemExecutor).
 	computedAt := executor.nowUTC()
 	read, err := loadWorkItemScopeRead(ctx, executor.conn, "work_item_state", run, partition,
-		workItemPartitionScope{day: day, start: start, end: end, repoIDs: repoIDs}, true)
+		workItemPartitionScope{day: day, start: start, end: end, repoIDs: repoIDs}, true, false)
 	if err != nil {
 		return 0, err
 	}

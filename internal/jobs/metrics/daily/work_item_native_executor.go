@@ -83,7 +83,7 @@ func (executor *WorkItemExecutor) ComputeFamily(
 	// The version is taken before the reads: the newest version is then the
 	// newest read, also when two partitions of one run share a work scope.
 	computedAt := executor.nowUTC()
-	read, err := loadWorkItemScopeRead(ctx, executor.conn, "work_item", run, partition, scope, true)
+	read, err := loadWorkItemScopeRead(ctx, executor.conn, "work_item", run, partition, scope, true, true)
 	if err != nil {
 		return 0, err
 	}

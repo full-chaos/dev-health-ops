@@ -114,7 +114,7 @@ func readWorkItemScope(t *testing.T, ctx context.Context, conn driver.Conn, org 
 	if err != nil {
 		t.Fatal(err)
 	}
-	read, err := loadWorkItemScopeRead(ctx, conn, "work_item", run, partition, scope, true)
+	read, err := loadWorkItemScopeRead(ctx, conn, "work_item", run, partition, scope, true, true)
 	if err != nil {
 		t.Fatalf("read the work scopes of %v: %v", repos, err)
 	}

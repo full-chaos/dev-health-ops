@@ -246,18 +246,32 @@ WHERE org_id = ? AND repo_id IN ?
 	return scopes, nil
 }
 
+// The columns of the items query after the ones every family reads. The
+// work_item_state family computes from the columns of workItemStateWorkItem
+// only, so its read takes typed empty values in place of the five stored
+// columns that the other two families compute from.
+const (
+	workItemScopeMetricsColumns   = `type, assignees, started_at, closed_at, story_points`
+	workItemScopeNoMetricsColumns = `'', CAST([], 'Array(String)'), CAST(NULL, 'Nullable(DateTime64(3))'),
+       CAST(NULL, 'Nullable(DateTime64(3))'), CAST(NULL, 'Nullable(Float64)')`
+)
+
 // loadWorkItemScopeItems is the one items query of a read: the organization's
 // items of the day, from every repository, that pass the superset filter. The
 // day predicate is the predicate of LoadWorkItemMetricsWorkItems.
 func loadWorkItemScopeItems(
 	ctx context.Context, conn repositoryRows, organizationID string, start, end time.Time,
-	values []string, emptyScope, filtered bool,
+	values []string, emptyScope, filtered, metricsColumns bool,
 ) ([]workItemScopedRow, error) {
+	columns := workItemScopeNoMetricsColumns
+	if metricsColumns {
+		columns = workItemScopeMetricsColumns
+	}
 	rows, err := conn.Query(ctx, `
 WITH ? AS scopes
 SELECT repo_id, last_synced,
        work_item_id, provider, status, project_key, project_id, native_team_key, project_name,
-       created_at, completed_at, type, assignees, started_at, closed_at, story_points
+       created_at, completed_at, `+columns+`
 FROM work_items FINAL
 WHERE org_id = ?
   AND created_at < ?
@@ -402,10 +416,11 @@ WHERE org_id = ? AND is_primary = 1
 
 // loadWorkItemScopeRead does every read of one family for one partition. A
 // failed query fails the read: the caller writes nothing, because a row
-// computed from a part of a scope reads as a complete answer.
+// computed from a part of a scope reads as a complete answer. withTransitions
+// and metricsColumns name what the family computes from.
 func loadWorkItemScopeRead(
 	ctx context.Context, conn repositoryRows, family string, run Run, partition Partition,
-	scope workItemPartitionScope, withTransitions bool,
+	scope workItemPartitionScope, withTransitions, metricsColumns bool,
 ) (workItemScopeRead, error) {
 	if conn == nil || strings.TrimSpace(run.OrganizationID) == "" || !scope.start.Before(scope.end) {
 		return workItemScopeRead{}, ErrInvalidState
@@ -434,7 +449,7 @@ func loadWorkItemScopeRead(
 			"max_filter_bytes", maxWorkItemScopeFilterBytes,
 		)
 	}
-	stored, err := loadWorkItemScopeItems(ctx, conn, run.OrganizationID, scope.start, scope.end, values, emptyScope, filtered)
+	stored, err := loadWorkItemScopeItems(ctx, conn, run.OrganizationID, scope.start, scope.end, values, emptyScope, filtered, metricsColumns)
 	if err != nil {
 		return workItemScopeRead{}, err
 	}

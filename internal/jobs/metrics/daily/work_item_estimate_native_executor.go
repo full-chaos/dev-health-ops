@@ -60,7 +60,7 @@ func (executor *WorkItemEstimateExecutor) ComputeFamily(
 
 	// The version is taken before the reads (see WorkItemExecutor).
 	computedAt := executor.nowUTC()
-	read, err := loadWorkItemScopeRead(ctx, executor.conn, "work_item_estimate", run, partition, scope, false)
+	read, err := loadWorkItemScopeRead(ctx, executor.conn, "work_item_estimate", run, partition, scope, false, true)
 	if err != nil {
 		return 0, err
 	}

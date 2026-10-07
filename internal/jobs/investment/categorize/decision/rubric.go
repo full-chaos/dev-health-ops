@@ -17,7 +17,7 @@ import (
 // example_requests and token_estimate are dead weight for a request, but a
 // trim changes the digest and the digest is the link to the evaluation.
 //
-//go:embed decision-support-v1d.json
+//go:embed decision-support-v1f.json
 var rubricJSON []byte
 
 // ScaleLevel is one level of a score scale.

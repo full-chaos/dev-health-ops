@@ -165,10 +165,7 @@ func replayOne(t *testing.T, c replayCase) (state string, messages []string) {
 		return "", []string{fmt.Sprintf("case %q: response: %v", c.CaseID, err)}
 	}
 	transport := &bodyTransport{body: body}
-	completer, err := NewCompleter(transport, c.ModelRequested)
-	if err != nil {
-		t.Fatal(err)
-	}
+	completer := newV1dCompleter(t, transport, c.ModelRequested)
 	got, err := completer.Classify(context.Background(), bundle)
 	if err != nil {
 		return "", []string{fmt.Sprintf("case %q: classify: %v", c.CaseID, err)}
@@ -377,8 +374,8 @@ func TestReplayOracleRealSet(t *testing.T) {
 	if got := hex.EncodeToString(sum[:]); got != manifest.CasesSHA256 {
 		t.Fatalf("cases.jsonl has sha256 %s, the manifest says %s", got, manifest.CasesSHA256)
 	}
-	if manifest.RubricSHA256 != RubricSHA256 || manifest.LevelRule != LevelRule {
-		t.Fatalf("the set was exported for rubric %s and rule %q; this package is %s and %q", manifest.RubricSHA256, manifest.LevelRule, RubricSHA256, LevelRule)
+	if manifest.RubricSHA256 != rubricV1dSHA256 || manifest.LevelRule != LevelRule {
+		t.Fatalf("the set was exported for rubric %s and rule %q; the replay is v1d %s and %q", manifest.RubricSHA256, manifest.LevelRule, rubricV1dSHA256, LevelRule)
 	}
 	cases, err := readReplayCases(filepath.Join(dir, "cases.jsonl"))
 	if err != nil {

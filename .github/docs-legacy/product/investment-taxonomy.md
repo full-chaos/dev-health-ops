@@ -42,7 +42,7 @@ dot.
 | --- | ---------------------- |
 | `feature_delivery.customer` | Work driven by a specific customer ask or commitment. |
 | `feature_delivery.roadmap` | Planned roadmap features and enhancements. |
-| `feature_delivery.enablement` | Platform/tooling that enables others to build (internal enablement, SDKs, APIs). |
+| `feature_delivery.enablement` | Platform/tooling that enables others to build (internal enablement, SDKs, APIs), and documentation of any kind (customer, marketing or developer documentation). |
 
 ### Operational / Support
 

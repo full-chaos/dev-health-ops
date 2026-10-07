@@ -1,6 +1,7 @@
 # Every file under internal/jobs/investment/categorize/decision/testdata: sha256, kind, path. Written by `go run ./internal/testsupport/recordedfiles/manifest`; never edit it by hand.
 # python-recorded set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
 # header-before-stamp set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
+73ace2d4e437349155a933e826029807970d3b79e2608a5b519d48a9c6588803	hand-written	decision-support-v1d.json
 ea7fb3a3cdec351287500ec121a2b45482019a10fd20b995c782b3c153ee1894	go-generated	replay_cases.jsonl
 605b49f844742162b73e06823dca985b9c74aa45ef2bf01ffdf882558446db68	hand-written	responses/planted-answer-invalid-duplicate-id.json
 1903b9958b222ca64c8136871d9bf6ef58be5cb552bba23ad998995d4014e60d	hand-written	responses/planted-answer-invalid-no-score.json

@@ -483,7 +483,15 @@ did not commit.
   (`internal/jobs/metrics/daily/work_item_scope_read.go`;
   `TestDailyRunOfListedRepositoriesComputesASharedWorkScopeOverEveryRepository`).
   One work item id stored under two repository ids counts once: the row with
-  the newest `last_synced` is the item.
+  the newest `last_synced` is the item, and of two rows of one `last_synced`
+  the row of the lower repository id.
+  Cost: the items read has no `repo_id` predicate, and `work_items` is sorted
+  by `(repo_id, work_item_id)`, so it reads the table without a key prefix
+  and keeps the rows of the organization. The scope ids go into the statement
+  as a filter of at most 2000 values and 64 KiB of rendered text
+  (`internal/jobs/metrics/querybound`); above either bound the read has no
+  scope filter, returns the same rows and logs a warning with the scope count
+  and the bound.
 - A pod of an older build beside the new table neither writes nor reads it.
 - Deploy order: ClickHouse migration 108 must be applied before the new
   coordinator runs. Without the table the whole post-sync fan-out fails loud

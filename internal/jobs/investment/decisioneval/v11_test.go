@@ -499,3 +499,41 @@ func TestIncumbentSelfAgreementFromTwoPasses(t *testing.T) {
 		t.Fatalf("%+v", e)
 	}
 }
+
+func TestPresenceMedianRule(t *testing.T) {
+	median := LevelRuleSpec{Name: LevelMedian}
+	p40 := LevelRuleSpec{Name: LevelPresenceMedian, Tau: 0.4}
+	p30 := LevelRuleSpec{Name: LevelPresenceMedian, Tau: 0.3}
+	p50 := LevelRuleSpec{Name: LevelPresenceMedian, Tau: 0.5}
+	cases := []struct {
+		name string
+		p    []float64
+		want [4]int // median, t=0.5, t=0.4, t=0.3
+	}{
+		{"p0 0.45 is present under the median, absent at 0.4", []float64{0.45, 0.05, 0.05, 0.45}, [4]int{1, 1, 0, 0}},
+		{"p0 0.35 is present at 0.4, absent at 0.3, level is the plain median", []float64{0.35, 0.05, 0.05, 0.55}, [4]int{3, 3, 3, 0}},
+		{"p0 exactly 0.4 is absent at t=0.4 (strict less-than)", []float64{0.4, 0.1, 0.1, 0.4}, [4]int{1, 1, 0, 0}},
+		{"tie at one half is level 0 for median and t=0.5", []float64{0.5, 0.5, 0, 0}, [4]int{0, 0, 0, 0}},
+		{"clear primary stays", []float64{0.05, 0.05, 0.1, 0.8}, [4]int{3, 3, 3, 3}},
+	}
+	for _, c := range cases {
+		got := [4]int{ApplyLevelRule(median, c.p), ApplyLevelRule(p50, c.p), ApplyLevelRule(p40, c.p), ApplyLevelRule(p30, c.p)}
+		if got != c.want {
+			t.Errorf("%s: %v -> %v, want %v", c.name, c.p, got, c.want)
+		}
+	}
+	for _, f := range []string{"testdata/rubric-v1.json", "testdata/rubric-v1c.json"} {
+		r, err := LoadRubric(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, l := range []string{"presence-median:0.4", "presence-median:0.3"} {
+			if _, err := r.ParseLevelRule(l); err != nil {
+				t.Errorf("%s: %s: %v", f, l, err)
+			}
+		}
+		if _, err := r.ParseLevelRule("presence-median:0.45"); err == nil {
+			t.Errorf("%s: undeclared presence threshold accepted", f)
+		}
+	}
+}

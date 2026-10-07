@@ -389,11 +389,14 @@ func (r *Rubric) validate() error {
 		return fmt.Errorf("rubric: level_rule.candidates is empty")
 	}
 	for _, c := range r.LevelRuleSpec.Candidates {
-		if c.Name != LevelMedian && c.Name != LevelConditionalMedian {
+		if c.Name != LevelMedian && c.Name != LevelConditionalMedian && c.Name != LevelPresenceMedian {
 			return fmt.Errorf("rubric: unknown level rule %q", c.Name)
 		}
 		if c.Name == LevelConditionalMedian && (c.Tau <= 0 || c.Tau > 1) {
 			return fmt.Errorf("rubric: conditional-median needs tau in (0, 1], has %v", c.Tau)
+		}
+		if c.Name == LevelPresenceMedian && (c.Tau <= 0 || c.Tau > 0.5) {
+			return fmt.Errorf("rubric: presence-median needs t in (0, 0.5], has %v", c.Tau)
 		}
 	}
 	def, err := parseLevelRule(r.LevelRuleSpec.Default, r)
@@ -447,10 +450,17 @@ func (r *Rubric) validate() error {
 	return nil
 }
 
+// PresenceMedianThresholds are the declared thresholds t of the presence-median
+// rule (CHAOS-8712 freeze check; t = 0.5 is the median rule itself).
+var PresenceMedianThresholds = []float64{0.4, 0.3}
+
 // Level rule names.
 const (
 	LevelMedian            = "median"
 	LevelConditionalMedian = "conditional-median"
+	// LevelPresenceMedian: a key is supported only if P(level 0) < t (Tau
+	// carries t); the level is then the plain median. t = 0.5 is the median rule.
+	LevelPresenceMedian = "presence-median"
 	// EvidencePerTheme and EvidenceSingle are the evidence modes.
 	EvidencePerTheme = "per_theme"
 	EvidenceSingle   = "single"
@@ -475,6 +485,15 @@ func parseLevelRule(label string, r *Rubric) (LevelRuleSpec, error) {
 	for _, c := range r.LevelRuleSpec.Candidates {
 		if c.Name == spec.Name && (c.Name == LevelMedian || math.Abs(c.Tau-spec.Tau) < 1e-12) {
 			return c, nil
+		}
+	}
+	// The presence-median thresholds are declared in code, not in the rubric
+	// file, so adding them did not change the rubric digest of the runs.
+	if spec.Name == LevelPresenceMedian {
+		for _, t := range PresenceMedianThresholds {
+			if math.Abs(t-spec.Tau) < 1e-12 {
+				return spec, nil
+			}
 		}
 	}
 	return spec, fmt.Errorf("level rule %q is not one of the candidates declared in the rubric", label)

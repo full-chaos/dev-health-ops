@@ -67,7 +67,12 @@ const SplitThreshold = 0.60
 //	median:             L = min{ l : p'_0 + ... + p'_l >= 0.5 - tol }
 //	conditional-median: s = 1 - p'_0; if s < tau - tol then L = 0
 //	                    else L = min{ l >= 1 : (p'_1 + ... + p'_l) / s >= 0.5 - tol }
+//	presence-median:    L = 0 if p'_0 >= t - tol, else the median level
+//	                    (t <= 0.5, so the median is then >= 1)
 func ApplyLevelRule(rule LevelRuleSpec, p []float64) int {
+	if rule.Name == LevelPresenceMedian && p[0] >= rule.Tau-levelTolerance {
+		return 0
+	}
 	if rule.Name == LevelConditionalMedian {
 		s := 1 - p[0]
 		if s < rule.Tau-levelTolerance {

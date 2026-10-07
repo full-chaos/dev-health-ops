@@ -160,7 +160,7 @@ func loadBacklog(
         FROM work_item_metrics_daily FINAL
         WHERE %s
           AND %s
-    `, where, newestrow.PerTeamPredicateFinal("work_item_metrics_daily", where))
+    `, where, newestrow.PerTeamPredicate("work_item_metrics_daily FINAL", where))
 
 	rows, err := client.Query(ctx, query, bindings)
 	if err != nil {

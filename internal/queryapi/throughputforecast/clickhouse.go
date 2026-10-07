@@ -191,7 +191,7 @@ func loadWorkItemOverlay(
                 )
                 GROUP BY day
             )
-        )
+        ) AS average_part
         CROSS JOIN (
             SELECT sum(wip_count_end_of_day) AS current_wip
             FROM (
@@ -206,7 +206,7 @@ func loadWorkItemOverlay(
                   AND %s
                 GROUP BY day, provider, work_scope_id, team_id
             )
-        )
+        ) AS current_part
     `, where, where, newestrow.PerTeamPredicate("work_item_metrics_daily", where))
 
 	rows, err := client.Query(ctx, query, bindings)

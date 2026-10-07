@@ -10,16 +10,10 @@ import "fmt"
 // (a daily run writes one batch per repository partition, and a team with no
 // event and no open work gets no row for a day). The same scope predicate is
 // spliced into the subquery so each team's newest day is found WITHIN the scope.
+// from is the table, with FINAL when the caller's reader uses it.
 // ifNull keeps a NULL team_id in the match: tuple IN never matches NULL.
-func PerTeamPredicate(table, where string) string {
+func PerTeamPredicate(from, where string) string {
 	return fmt.Sprintf(`(ifNull(provider, ''), ifNull(work_scope_id, ''), ifNull(team_id, ''), day) IN (
                 SELECT ifNull(provider, ''), ifNull(work_scope_id, ''), ifNull(team_id, ''), max(day) FROM %s WHERE %s GROUP BY ifNull(provider, ''), ifNull(work_scope_id, ''), ifNull(team_id, '')
-            )`, table, where)
-}
-
-// PerTeamPredicateFinal is PerTeamPredicate for readers that use FINAL.
-func PerTeamPredicateFinal(table, where string) string {
-	return fmt.Sprintf(`(ifNull(provider, ''), ifNull(work_scope_id, ''), ifNull(team_id, ''), day) IN (
-                SELECT ifNull(provider, ''), ifNull(work_scope_id, ''), ifNull(team_id, ''), max(day) FROM %s FINAL WHERE %s GROUP BY ifNull(provider, ''), ifNull(work_scope_id, ''), ifNull(team_id, '')
-            )`, table, where)
+            )`, from, where)
 }

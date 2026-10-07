@@ -101,7 +101,17 @@ func (t *Terminal) Status() string { return StatusForState(t.State) }
 // answers interpreted to generative-schema text, or a *Terminal. A cancelled
 // context returns the context error, never a terminal.
 func (c *Completer) CompleteBundle(ctx context.Context, bundle units.TextBundle) (categorize.CompletionResult, error) {
+	if !c.usable() {
+		return categorize.CompletionResult{}, categorize.ErrNoBundleCompleter
+	}
 	return (&call{c: c}).CompleteBundle(ctx, bundle)
+}
+
+// usable is false for a nil completer and for one that NewCompleter did not
+// build: both would dereference a nil rubric or transport in the caller's
+// goroutine.
+func (c *Completer) usable() bool {
+	return c != nil && c.rubric != nil && c.transport != nil
 }
 
 // call is one classification. It records the interpretation for Classify and
@@ -219,9 +229,13 @@ type Classification struct {
 // Classify runs one classification through categorize.CategorizeBundleOnce
 // (the shared validation, no repair) and returns it with its state. Every
 // state is a returned Classification; the error is non-nil only for a
-// cancelled context. The pre-call gate (minimum text, a text source) is the
+// cancelled context and for a completer that NewCompleter did not build
+// (categorize.ErrNoBundleCompleter). The pre-call gate (minimum text, a text source) is the
 // caller's: Classify sends whatever bundle it gets.
 func (c *Completer) Classify(ctx context.Context, bundle units.TextBundle) (Classification, error) {
+	if !c.usable() {
+		return Classification{}, categorize.ErrNoBundleCompleter
+	}
 	k := &call{c: c}
 	outcome, err := categorize.CategorizeBundleOnce(ctx, bundle, k)
 	out := Classification{

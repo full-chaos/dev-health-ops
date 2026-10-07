@@ -256,6 +256,14 @@ type InvestmentRepoAttributionObserver interface {
 	ObserveInvestmentRepoAttribution(InvestmentRepoAttributionSource, int) error
 }
 
+// InvestmentShadowPhaseObserver is the narrow capability the shadow
+// categorization phase of investment.materialize (CHAOS-8869) depends on to
+// report one phase: its attempts, their latency, why it ended, and what it
+// recovered from or dropped.
+type InvestmentShadowPhaseObserver interface {
+	ObserveInvestmentShadowPhase(InvestmentShadowPhase) error
+}
+
 // DailyMetricsZeroRowsObserver is the narrow capability the daily-metrics
 // partition handler depends on when a family's upstream source data exists
 // for a partition's repositories and day, but that family's output table has

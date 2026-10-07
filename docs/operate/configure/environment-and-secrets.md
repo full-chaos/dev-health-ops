@@ -158,6 +158,34 @@ How to give it to that group only:
   `go-worker-heavy` only. Do not put them in `ops/.env`: every worker reads it.
   Unset values are empty, which means off.
 
+### Investment shadow categorization
+
+The shadow phase is a trial switch for the worker group that runs
+`investment.materialize`. When it is on, the worker asks the TypeSafe decision
+backend to categorize the same work units a second time, after the normal
+results are written, and stores those answers in two trial tables
+(`work_unit_investment_shadow`, `llm_categorization_attempts`). No product
+view reads them, and the categorization that users see does not change. It is
+**off by default**: with `INVESTMENT_SHADOW_PROVIDER` unset no TypeSafe client
+is built and no request is sent.
+
+| Variable | Meaning | Default |
+| --- | --- | --- |
+| `INVESTMENT_SHADOW_PROVIDER` | `typesafe` turns the shadow phase on for the process. Empty means off. Any other value keeps it off and logs a warning. | empty (off) |
+| `INVESTMENT_SHADOW_ORG_IDS` | Comma-separated organization ids that are asked; `*` means every organization. Empty with the provider set means off (it fails closed). | empty (off) |
+| `INVESTMENT_SHADOW_SAMPLE_PERCENT` | 0 to 100: the share of work units that are asked. A work unit is always in the sample or always out of it. | `100` |
+| `INVESTMENT_SHADOW_CONCURRENCY` | Parallel shadow requests. Values above 32 are lowered to 32. | `4` |
+| `INVESTMENT_SHADOW_MAX_SECONDS` | Time budget of the shadow phase of one run, in whole seconds. Values above 120 are lowered to 120 in code. Units that are not reached are asked by a later run. | `60` |
+| `INVESTMENT_SHADOW_MAX_USD_PER_RUN` | Spend cap of the shadow phase of one run, in US dollars. A request is not sent when its estimated cost would pass the cap. Values above 100 are lowered to 100. | `0.50` |
+
+The phase also needs `TYPESAFE_API_KEY` (above). A setting that cannot be used,
+or a missing key, keeps the phase off and logs one warning; it never fails the
+materialize run. The phase runs inside the materialize job: it delays the end
+of that job by up to its time budget plus the time of its writes, so keep the
+budget well below the worker's stop grace period. Apply ClickHouse migrations
+109 and 110 before a worker runs with the phase on; with a table missing the
+phase stops and says so.
+
 Workspace-to-platform fallback defaults to platform after a configured org BYO
 is evaluated; an explicit organization fail_closed choice opts out of that
 fallback. Source-tagged accounting keeps platform-managed usage and BYO usage

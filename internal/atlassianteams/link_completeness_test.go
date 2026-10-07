@@ -111,6 +111,11 @@ func TestALinkAnswerWithNoListOfLinksIsAFailedRead(t *testing.T) {
 				}
 				return 0, nil, false
 			})))
+			if tc.failed && (rows.ProjectLinkFailure == nil || strings.Contains(rows.ProjectLinkFailure.Error(), syntheticTeamID(1)) ||
+				strings.Join(rows.FailedProjectLinkTeams, ",") != syntheticTeamID(1)) {
+				t.Errorf("failure = %v, failed teams = %v: the failure text goes into a log field and names no team; the id is in the list of failed teams",
+					rows.ProjectLinkFailure, rows.FailedProjectLinkTeams)
+			}
 			if failed := rows.ProjectLinks.FailedTeamReads == 1; failed != tc.failed {
 				t.Errorf("failed team reads = %d (failure %v), want failed = %t", rows.ProjectLinks.FailedTeamReads, rows.ProjectLinkFailure, tc.failed)
 			}

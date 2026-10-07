@@ -64,8 +64,8 @@ func TestAnEmptyAtlassianTeamSearchIsADegradedLegNotSilence(t *testing.T) {
 
 // The reason of a project-link leg that was not a complete snapshot, one cause at a time; a complete one has no leg.
 func TestTheProjectLinkLegNamesWhyItIsNotComplete(t *testing.T) {
-	failure := fmt.Errorf("read connected projects of team t-1: %w", errors.New("synthetic gateway refusal"))
-	bound := fmt.Errorf("read connected projects of team t-1: %w", graph.ErrTeamConnectedContainersBound)
+	failure := fmt.Errorf("read connected projects of a team: %w", errors.New("synthetic gateway refusal"))
+	bound := fmt.Errorf("read connected projects of a team: %w", graph.ErrTeamConnectedContainersBound)
 	cases := map[string]struct {
 		rows   atlassianteams.Rows
 		reason string

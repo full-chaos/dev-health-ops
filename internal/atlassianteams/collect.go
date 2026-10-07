@@ -466,12 +466,14 @@ func Collect(ctx context.Context, client Client, params Params) (Rows, error) {
 			switch {
 			case err != nil && ctx.Err() != nil:
 				// The run itself was cancelled: not a provider answer.
-				return Rows{}, fmt.Errorf("read connected projects of team %s: %w", id, err)
+				return Rows{}, fmt.Errorf("read connected projects of a team: %w", err)
 			case err != nil:
 				rows.ProjectLinks.FailedTeamReads++
 				rows.FailedProjectLinkTeams = append(rows.FailedProjectLinkTeams, id)
 				if rows.ProjectLinkFailure == nil {
-					rows.ProjectLinkFailure = fmt.Errorf("read connected projects of team %s: %w", id, err)
+					// The text goes into a log field and the run's stored result: it names no team.
+					// FailedProjectLinkTeams holds the ids.
+					rows.ProjectLinkFailure = fmt.Errorf("read connected projects of a team: %w", err)
 				}
 			default:
 				projectReads++

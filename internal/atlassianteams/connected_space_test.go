@@ -247,8 +247,10 @@ func TestAFailedLinkReadOfOneTeamDegradesOnlyTheLinkLeg(t *testing.T) {
 	if rows.ProjectLinks.FailedTeamReads != 1 || strings.Join(rows.FailedProjectLinkTeams, ",") != syntheticTeamID(7) {
 		t.Errorf("failed reads = %d, failed teams = %v, want team 7 alone", rows.ProjectLinks.FailedTeamReads, rows.FailedProjectLinkTeams)
 	}
-	if rows.ProjectLinkFailure == nil || !strings.Contains(rows.ProjectLinkFailure.Error(), syntheticTeamID(7)) {
-		t.Errorf("link failure = %v, want the error of team 7's read", rows.ProjectLinkFailure)
+	// The failure text goes into a log field and the run's stored result: it holds the read's error and no team id
+	// (the list above holds the id).
+	if rows.ProjectLinkFailure == nil || !strings.Contains(rows.ProjectLinkFailure.Error(), "500") || strings.Contains(rows.ProjectLinkFailure.Error(), syntheticTeamID(7)) {
+		t.Errorf("link failure = %v, want the error of the failed read, with no team id in it", rows.ProjectLinkFailure)
 	}
 	if len(rows.Ownership) != 9 || rows.ProjectLinks.Seen != 9 {
 		t.Errorf("ownership rows = %d, links seen = %d, want the 9 links of the teams whose read ended", len(rows.Ownership), rows.ProjectLinks.Seen)

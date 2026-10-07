@@ -655,8 +655,11 @@ The read returns at most 3660 owner runs without a result, newest first. A
 pass that hits the bound writes an Error line (phase `return_read_truncated`)
 and counts `return_read_truncated` at the read, so also when a later step of
 the pass fails; the runs behind the bound are reached when
-the keys of the returned ones have a new owner. An organization in a normal
-state has none or a few such runs.
+the keys of the returned ones have a new owner. A failed run of every
+repository leaves the read only when a newer run of every repository of a
+fan-out exists for its day; until then it counts toward the bound and costs
+one ClickHouse statement in each pass. An organization in a normal state has
+none or a few such runs.
 
 **A day whose runs keep failing.** When the 3 newest runs of a day all ended
 without a result, the drain starts no run for it: the day stays pending, each
@@ -679,9 +682,11 @@ leaves the days pending with their runs started. The pass that the end of one
 of those runs triggers finds a run with a result whose every key is pending,
 writes one Error line (phase `chain_stopped_mark_missing`, with
 `drain_days_not_marked`), counts `chain_stopped_mark_missing` and starts
-nothing. The nightly pass and the fan-out of the next sync are not triggered
-by the end of a drain run, so they start runs again: while the mark fails, the
-31 newest days run once for each of them and the older days wait.
+nothing. Only a pass that the end of a drain run triggered makes this check.
+A pass of any other trigger (the dispatch of the nightly run, the end of a run
+of a fan-out or of the nightly run) starts runs again: while the mark fails,
+the 31 newest days run once more at each such trigger that finds no drain run
+in flight, and the older days wait.
 
 **Delivery.** At-least-once, as the fan-out. A stop before the commit leaves
 every day pending. A stop between the commit and the mark leaves the days
@@ -734,16 +739,20 @@ the age is a lower bound.
 - A key that is marked while no run row lists it (the rows of its runs were
   deleted) has no owner and is not returned.
 - A run with a result whose every key was touched again while it ran looks
-  like a run whose mark is missing: the chain ends there too, until the
-  nightly pass or the fan-out of the sync that touched the keys.
+  like a run whose mark is missing: the pass after its end starts nothing.
+  A sync whose unit window is wider than the days its fan-out takes marks
+  the older window days again, so this is the usual case for the drain runs
+  of those days. The ends of the runs of that fan-out trigger passes that
+  are not checked, so the drain goes on; no day is lost.
 - The mark of a pass is one insert for each month of its days. A mark that
   reaches some months only ends the chain as a mark that reached none.
 - The fan-out has no skip rule. A day that the drain skips stays pending, so
   each later fan-out that finds it among its 31 newest pending days starts
   one more run for it. No other day is lost by that: the drain takes what the
   fan-out leaves, and a skipped day holds no slot of the drain.
-- While the mark keeps failing, the same 31 newest days run once for each
-  nightly pass and each fan-out, and the older days wait. The signals are
+- While the mark keeps failing, the same 31 newest days run once more at
+  each pass that the end of a drain run did not trigger, and the older days
+  wait. The signals are
   `mark_failed`, `chain_stopped_mark_missing` and their Error lines.
 - The line of the fan-out (`post_sync_fanout.touched_days`) has no pending-age
   fields: the fan-out does not read the whole backlog. The pass that follows

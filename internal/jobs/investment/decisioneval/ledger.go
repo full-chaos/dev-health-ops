@@ -49,7 +49,7 @@ type Versions struct {
 }
 
 // EvalVersion names the evaluation definition.
-const EvalVersion = "decision-eval-v1"
+const EvalVersion = "decision-eval-v2"
 
 // AttemptRecord is one provider HTTP attempt.
 type AttemptRecord struct {

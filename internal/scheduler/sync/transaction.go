@@ -470,13 +470,16 @@ func (repository *Repository) HandoffDueResult(
 // stop its windows there, every later run would follow one interval behind it,
 // and the skipped time would stay unread.
 //
-// So: when the evaluated instant passed before the previous scheduled run of
-// the configuration ended, that instant was skipped, and the occurrence stands
-// for the marker's instant, the newest one that is due. This is the rebase onto
-// a run's completion that last_sync_at gives, taken from the run row itself.
+// So: when the evaluated instant passed before a scheduled run of the
+// configuration ended, that instant was skipped, and the occurrence stands for
+// the marker's instant, the newest one that is due. This is the rebase onto a
+// run's completion that last_sync_at gives, taken from the run rows
+// themselves. The end compared is the latest one, whichever occurrence the run
+// belongs to: with several runs open, the one that ends last decides which
+// instants were held back.
 //
 // With no ended scheduled run to compare against, or an evaluated instant after
-// that run's end, the evaluation stands: a schedule that never skipped a tick
+// the latest end, the evaluation stands: a schedule that never skipped a tick
 // keeps minting every instant in turn, late or not.
 func resumedOccurrenceInstant(evaluated time.Time, marker, previousRunEndedAt *time.Time, observedAt time.Time) time.Time {
 	if marker == nil || previousRunEndedAt == nil {
@@ -523,9 +526,9 @@ type openScheduledRuns struct {
 	pastBoundSyncRunID    string
 	pastBoundReason       OpenRunBoundReason
 	pastBoundOpenSeconds  int64
-	// lastScheduledRunEndedAt is when the run of the configuration's newest
-	// scheduled occurrence ended; nil when that occurrence has no run or its
-	// run is not ended.
+	// lastScheduledRunEndedAt is the latest end among the runs of the
+	// configuration's newest scheduled occurrences; nil when none of them has
+	// an ended run.
 	lastScheduledRunEndedAt *time.Time
 }
 
@@ -543,6 +546,7 @@ func readOpenScheduledRuns(
 		configID,
 		int64(openRunProgressTTL/time.Second),
 		int64(openRunAgeCap/time.Second),
+		int64(openRunResumeLookback),
 	).Scan(
 		&open.blocking,
 		&open.blockingOccurrenceID,
@@ -727,9 +731,19 @@ WHERE id = $3
 //     lease. The run's own creation counts as progress, so a new run and an
 //     unmaterialized occurrence get the full interval from their creation.
 //
-// The last column is when the run of the newest scheduled occurrence ended,
-// for resumedOccurrenceInstant: one backward step on the (org_id,
-// sync_config_id, scheduled_for) index and one primary-key probe.
+// OPENED is when the occurrence row was written, in both arms. It is never
+// sync_runs.created_at: the materializer writes the occurrence's cron instant
+// there, and a run that stands for a past instant (the first run after a
+// scheduler stop, a run started beside one past its bound) would be born past
+// the bound and hold nothing back. The occurrence row carries the scheduler's
+// clock at the tick that minted it.
+//
+// The last column is the latest end among the runs of the newest
+// openRunResumeLookback scheduled occurrences, for resumedOccurrenceInstant.
+// It is not the end of the newest occurrence's run alone: with two runs open,
+// the older one can end last, and the instants it held back were skipped all
+// the same. Cost: a bounded backward walk on the (org_id, sync_config_id,
+// scheduled_for) index and one primary-key probe per row.
 //
 // Cost: two arms, each small. The unplanned arm reads the configuration's own
 // occurrence rows through an index on sync_config_id. The run arm starts from
@@ -762,7 +776,7 @@ WITH open_occurrence AS (
     SELECT
         occurrence.occurrence_id,
         run.id AS sync_run_id,
-        run.created_at AS opened_at
+        occurrence.created_at AS opened_at
     FROM public.sync_runs AS run
     JOIN public.scheduled_sync_occurrences AS occurrence
         ON occurrence.sync_run_id = run.id
@@ -835,19 +849,22 @@ SELECT
         ORDER BY opened_at, occurrence_id LIMIT 1
     ), 0),
     (
-        SELECT run.completed_at
-        FROM public.scheduled_sync_occurrences AS occurrence
-        LEFT JOIN public.sync_runs AS run
-            ON run.id = occurrence.sync_run_id
-        WHERE occurrence.org_id = $1
-            AND occurrence.sync_config_id = $2::uuid
-            AND NOT EXISTS (
-                SELECT 1
-                FROM public.sync_manual_triggers AS manual
-                WHERE manual.occurrence_id = occurrence.occurrence_id
-            )
-        ORDER BY occurrence.scheduled_for DESC, occurrence.occurrence_id DESC
-        LIMIT 1
+        SELECT MAX(run.completed_at)
+        FROM (
+            SELECT occurrence.sync_run_id
+            FROM public.scheduled_sync_occurrences AS occurrence
+            WHERE occurrence.org_id = $1
+                AND occurrence.sync_config_id = $2::uuid
+                AND NOT EXISTS (
+                    SELECT 1
+                    FROM public.sync_manual_triggers AS manual
+                    WHERE manual.occurrence_id = occurrence.occurrence_id
+                )
+            ORDER BY occurrence.scheduled_for DESC, occurrence.occurrence_id DESC
+            LIMIT $5::bigint
+        ) AS recent
+        JOIN public.sync_runs AS run
+            ON run.id = recent.sync_run_id
     )
 FROM judged
 `

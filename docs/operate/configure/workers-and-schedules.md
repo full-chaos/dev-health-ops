@@ -437,17 +437,25 @@ back.
 
 A skipped tick moves `next_run_at` to the next cron instant and starts nothing.
 Runs are incremental, so the run that starts after the open one ends plans each
-unit from its watermark and covers the skipped time in one run. Job History
+unit from its watermark and covers the skipped time in one run. That run stands
+for the newest due cron instant when a scheduled run of the configuration ended
+after the first skipped instant, whichever run it was. A run that starts beside
+an open run past a bound stands for the first skipped instant: its windows end
+there, and the run after it reads the rest. Job History
 therefore shows fewer scheduled runs for a slow configuration, each covering
 the time since the previous one. A skipped tick adds no row to Job History.
 
-An open run stops holding its schedule back when it is past a bound, judged on
-the database clock:
+An open run stops holding its schedule back when it is past a bound. Both
+bounds count from the creation of the run's occurrence row (the scheduler's
+clock at the tick that started the run) to the database clock. They do not
+count from the cron instant the run stands for: a run that starts late for a
+past instant, such as the first run after a scheduler stop, gets the full
+bound.
 
 | Bound | Rule |
 | --- | --- |
-| No progress | For 2 hours no unit of the run ended (`success` or `failed`), no unit sent a heartbeat, and no unit holds a live lease. The creation of the run counts as progress, so a new run and an unplanned occurrence get 2 hours from their creation. |
-| Age cap | The run or the unplanned occurrence is older than 24 hours, whatever its progress. |
+| No progress | For 2 hours no unit of the run ended (`success` or `failed`), no unit sent a heartbeat, and no unit holds a live lease. The creation of the occurrence counts as progress, so a new run and an unplanned occurrence get 2 hours from that creation. |
+| Age cap | The occurrence was created more than 48 hours ago, whatever the progress of its run. The cap is longer than one day so that a daily schedule also skips a tick while the run of the day before is open. |
 
 The scheduler then starts the next run. It does not finalize, fail, or change
 the old run.
@@ -456,7 +464,7 @@ the old run.
 | --- | --- | --- |
 | `sync_scheduler_skipped_open_run_total` and the WARN line `sync scheduler tick skipped: an earlier scheduled run of this configuration is still open` (`reason=skipped_open_run`, `config_id`, `open_sync_run_id`, `open_seconds`) | A tick started nothing because a scheduled run is open and inside its bound. | None when the run is making progress. Sustained growth for one configuration means its runs take longer than its cron interval: look at the units that hold the run open. |
 | `sync_scheduler_open_run_past_bound_no_progress_total` and the ERROR line `sync scheduler started a run beside an open run that is past its bound` (`reason=no_progress`) | A run started although an older run of the configuration is open and showed no progress for 2 hours. | Find why the named run does not end: waiting units with no admission, or a run with every unit ended that was never finalized. |
-| `sync_scheduler_open_run_past_bound_age_cap_total` and the same ERROR line with `reason=age_cap` | A run started although an older run of the configuration is open for more than 24 hours. | The same. The line repeats at each start until the old run ends. |
+| `sync_scheduler_open_run_past_bound_age_cap_total` and the same ERROR line with `reason=age_cap` | A run started although an older run of the configuration is open for more than 48 hours. | The same. The line repeats at each start until the old run ends. |
 
 ### Audit saved-report schedule ownership
 

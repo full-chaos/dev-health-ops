@@ -153,8 +153,10 @@ VALUES ($1, $2, $3, $4::uuid, $5::uuid, $6, now() - $7::interval, $8, $9, $10)`,
 		}
 		if _, err := pool.Exec(ctx, `
 INSERT INTO public.sync_runs (id, org_id, integration_id, triggered_by, mode, status, total_units, completed_units, failed_units, created_at)
-VALUES ($1::uuid, $2, $3::uuid, $4, 'incremental', $5, $6, 0, 0, now() - $7::interval)`,
-			runID, openRunGateOrg, integrationID, triggeredBy, status, len(tc.units), tc.runOpenedAgo); err != nil {
+VALUES ($1::uuid, $2, $3::uuid, $4, 'incremental', $5, $6, 0, 0, $7)`,
+			// As the materializer writes it: the run row carries the cron
+			// instant, and only the occurrence row carries the creation time.
+			runID, openRunGateOrg, integrationID, triggeredBy, status, len(tc.units), scheduledFor); err != nil {
 			t.Fatalf("%s: seed sync run: %v", tc.name, err)
 		}
 		pgseed.JobRun(ctx, t, pool, jobRunID, ownerJob, 0, "")
@@ -220,7 +222,7 @@ func TestScheduledTickOpenRunGateDecisionTable(t *testing.T) {
 		{name: "retrying occurrence 1 minute old blocks", pendingAgo: "1 minute", reconcileStatus: "retry", wantSkip: true},
 		{name: "pending occurrence 1h59m old blocks", pendingAgo: "1 hour 59 minutes", wantSkip: true},
 		{name: "pending occurrence 2h01m old is past the progress bound", pendingAgo: "2 hours 1 minute", wantReason: OpenRunNoProgress},
-		{name: "pending occurrence 24h01m old is past the age cap", pendingAgo: "24 hours 1 minute", wantReason: OpenRunAgeCap},
+		{name: "pending occurrence 48h01m old is past the age cap", pendingAgo: "48 hours 1 minute", wantReason: OpenRunAgeCap},
 		{name: "quarantined occurrence is not open", pendingAgo: "1 minute", reconcileStatus: "quarantined"},
 
 		// Terminal runs never block and are never reported.
@@ -268,11 +270,11 @@ func TestScheduledTickOpenRunGateDecisionTable(t *testing.T) {
 
 		// The hard cap wins over progress.
 		{
-			name: "run 23h59m old with fresh progress blocks", runOpenedAgo: "23 hours 59 minutes",
+			name: "run 47h59m old with fresh progress blocks", runOpenedAgo: "47 hours 59 minutes",
 			units: []openRunUnit{done("5 minutes")}, wantSkip: true,
 		},
 		{
-			name: "run 24h01m old with fresh progress is past the age cap", runOpenedAgo: "24 hours 1 minute",
+			name: "run 48h01m old with fresh progress is past the age cap", runOpenedAgo: "48 hours 1 minute",
 			units:      []openRunUnit{done("5 minutes"), {status: "running", updatedAgo: "1 minute", heartbeatAgo: "1 second", leaseIn: "10 minutes"}},
 			wantReason: OpenRunAgeCap,
 		},
@@ -765,9 +767,9 @@ VALUES ($1, $2, $3, $4::uuid, $5::uuid, $6, now() - $7::interval, $8::uuid, $9::
 	}
 
 	// Seeded out of age order, so neither answer can come from insertion order.
-	oldest := seed(1, "30 hours")
+	oldest := seed(1, "54 hours")
 	seed(2, "3 hours")
-	seed(3, "26 hours")
+	seed(3, "50 hours")
 	open := read()
 	if open.blocking != 0 || open.pastBound != 3 {
 		t.Fatalf("open = %#v, want 3 runs past the bound and none blocking", open)
@@ -775,8 +777,8 @@ VALUES ($1, $2, $3, $4::uuid, $5::uuid, $6, now() - $7::interval, $8::uuid, $9::
 	if open.pastBoundSyncRunID != oldest || open.pastBoundOccurrenceID != "several-1" || open.pastBoundReason != OpenRunAgeCap {
 		t.Fatalf("past-bound run = %s (%s, %s), want the oldest run %s with age_cap", open.pastBoundSyncRunID, open.pastBoundOccurrenceID, open.pastBoundReason, oldest)
 	}
-	if open.pastBoundOpenSeconds < 30*60*60 || open.pastBoundOpenSeconds > 31*60*60 {
-		t.Fatalf("past-bound open_seconds = %d, want about 30 hours", open.pastBoundOpenSeconds)
+	if open.pastBoundOpenSeconds < 54*60*60 || open.pastBoundOpenSeconds > 55*60*60 {
+		t.Fatalf("past-bound open_seconds = %d, want about 54 hours", open.pastBoundOpenSeconds)
 	}
 
 	seed(4, "90 minutes")
@@ -797,9 +799,12 @@ VALUES ($1, $2, $3, $4::uuid, $5::uuid, $6, now() - $7::interval, $8::uuid, $9::
 	}
 }
 
-// The run a schedule resumes after is the newest scheduled run of ITS
-// configuration in ITS organization: a newer ended run of another
-// configuration, or a row written under another organization, is not it.
+// The run end a schedule resumes after is the latest one among the scheduled
+// runs of ITS configuration in ITS organization: a later end of another
+// configuration's run, or of a row written under another organization, is not
+// it. Among its own runs the latest END counts, not the newest instant: the run
+// of an older instant can end last. The read looks at the newest
+// openRunResumeLookback occurrences and no further.
 func TestOpenScheduledRunsReadTakesTheLastRunEndFromItsOwnConfiguration(t *testing.T) {
 	ctx, pool, _ := startOpenRunGatePostgres(t)
 	hour := time.Now().UTC().Truncate(time.Hour)
@@ -842,6 +847,37 @@ VALUES ($1, $2, $3, $4::uuid, $5::uuid, $6, $6, $7::uuid, $8::uuid, 'completed')
 	}
 	if open.lastScheduledRunEndedAt == nil || !open.lastScheduledRunEndedAt.Equal(ownEnd) {
 		t.Fatalf("last scheduled run ended at %v, want this configuration's newest run end %s", open.lastScheduledRunEndedAt, ownEnd)
+	}
+
+	read := func() *time.Time {
+		t.Helper()
+		tx, err := pool.Begin(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = tx.Rollback(ctx) }()
+		open, err := readOpenScheduledRuns(ctx, tx, openRunGateOrg, configID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return open.lastScheduledRunEndedAt
+	}
+	// The run of an older instant ends after the run of the newest instant.
+	olderEndsLast := hour.Add(-90 * time.Minute)
+	seedEnded(5, openRunGateOrg, configID, jobID, hour.Add(-7*time.Hour), olderEndsLast)
+	if got := read(); got == nil || !got.Equal(olderEndsLast) {
+		t.Fatalf("last scheduled run ended at %v, want the latest end %s of an older instant's run", got, olderEndsLast)
+	}
+	// As many occurrences as the lookback, all newer than the rows above and
+	// all ended early. Every row above is now outside the lookback: the read
+	// walks the newest occurrences, not the oldest, not one more and not all.
+	lookbackEnd := hour.Add(-100 * time.Hour)
+	for index := 1; index <= openRunResumeLookback; index++ {
+		seedEnded(100+index, openRunGateOrg, configID, jobID, hour.Add(-time.Duration(120-index)*time.Minute), lookbackEnd.Add(time.Duration(index)*time.Second))
+	}
+	wantEnd := lookbackEnd.Add(openRunResumeLookback * time.Second)
+	if got := read(); got == nil || !got.Equal(wantEnd) {
+		t.Fatalf("last scheduled run ended at %v, want %s: the latest end inside the newest %d occurrences", got, wantEnd, openRunResumeLookback)
 	}
 }
 
@@ -935,7 +971,7 @@ CROSS JOIN generate_series(1, 20) AS n`, sourceID); err != nil {
 	}
 
 	rows, err := pool.Query(ctx, "EXPLAIN (ANALYZE, BUFFERS) "+schedulerOpenScheduledRunsSQL,
-		openRunGateOrg, configID, int64(openRunProgressTTL/time.Second), int64(openRunAgeCap/time.Second))
+		openRunGateOrg, configID, int64(openRunProgressTTL/time.Second), int64(openRunAgeCap/time.Second), int64(openRunResumeLookback))
 	if err != nil {
 		t.Fatal(err)
 	}

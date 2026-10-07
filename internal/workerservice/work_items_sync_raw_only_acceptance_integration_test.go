@@ -460,3 +460,102 @@ func TestWorkItemsSyncWritesRawRowsOnlyAndTheDailyJobGivesTheWholeDay(t *testing
 		t.Fatalf("the day's rows are not the whole day:\n  %s", strings.Join(failures, "\n  "))
 	}
 }
+
+// The reason the fan-out marks every day of a unit window. The first sync of
+// an organization is a unit with a window of 21 days. It stores:
+//
+//   - one OPEN item, started before the window, with no event inside it. The
+//     unit used to write the state and WIP rows of every day of its window;
+//     it writes none now, and no raw row has an event on a quiet day.
+//   - one old DONE item, completed sixty days before the window, with no
+//     later event.
+//
+// After the fan-out and the daily runs it started: a quiet day of the window
+// that is behind the days of the full-organization runs is marked, has a run
+// of its own, and holds its state row and its WIP number; and the old item
+// has its team attribution row.
+func TestFirstSyncMarksEveryWindowDayAndTheDailyJobFillsAQuietDayAndAnOldItem(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Minute)
+	defer cancel()
+	rig := newTouchedRig(t, ctx)
+	service := rig.service(t, rig.touched, nil)
+	target := time.Date(2026, 8, 20, 0, 0, 0, 0, time.UTC)
+	since, before := target.AddDate(0, 0, -20), target.Add(12*time.Hour)
+	quiet := since.AddDate(0, 0, 2)
+	old := since.AddDate(0, 0, -60)
+	var failures []string
+	for _, provider := range rawOnlyProviders {
+		orgID := uuid.NewString()
+		repo := uuid.New()
+		keyRepo, itemRepo := repo, &repo
+		if provider == "jira" || provider == "linear" {
+			keyRepo, itemRepo = uuid.Nil, nil
+		} else {
+			insertTouchedRepo(t, ctx, rig.conn, orgID, repo, "acme/api", provider)
+		}
+		openStarted := since.AddDate(0, 0, -8).Add(3 * time.Hour)
+		oldStarted, oldCompleted := old.Add(time.Hour), old.Add(9*time.Hour)
+		open := rawOnlyItem{id: provider + ":OPEN-1", repo: itemRepo, scope: "PLAT", created: since.AddDate(0, 0, -10), started: &openStarted}
+		done := rawOnlyItem{id: provider + ":DONE-1", repo: itemRepo, scope: "PLAT", created: old, started: &oldStarted, completed: &oldCompleted}
+
+		claim := rawOnlyClaim(t, provider, orgID, uuid.NewString(), since, before)
+		sink := rawOnlySink(t, rig.conn, provider)
+		writeRawOnlyUnit(ctx, t, sink, claim, []rawOnlyItem{open, done}, before.Add(time.Hour))
+		if counts := rawOnlyStoredVersions(ctx, t, rig.conn, orgID); rawOnlyTotal(counts) != 0 {
+			t.Fatalf("%s: derived rows after the unit and before any daily run = %v, want none", provider, counts)
+		}
+		args := rig.seedRawOnlySyncRun(t, ctx, claim, before.Add(30*time.Minute))
+		runs := rig.fanoutAndRun(t, ctx, service, orgID, args)
+
+		touched := rawOnlyTouchedKeys(ctx, t, rig.conn, orgID)
+		for day := since; !day.After(target); day = day.AddDate(0, 0, 1) {
+			if !touched[rawOnlyKey(day, keyRepo)] {
+				t.Fatalf("%s: window day %s is not marked as touched: %v", provider, day.Format("2006-01-02"), touched)
+			}
+		}
+		quietRun, ran := runs[quiet.Format("2006-01-02")]
+		if !ran || quietRun.fullOrg || quietRun.repos != keyRepo.String() {
+			t.Fatalf("%s: run of the quiet day = %+v (days %v), want a run of its own for the repository of the unit's items",
+				provider, quietRun, touchedRunDays(runs))
+		}
+
+		var stateRows uint64
+		var stateHours float64
+		if err := rig.conn.QueryRow(ctx, `
+SELECT toUInt64(count()), sum(hours) FROM (SELECT argMax(duration_hours, computed_at) AS hours
+FROM work_item_state_durations_daily
+WHERE org_id = ? AND provider = ? AND day = toDate(?) AND status = 'in_progress' GROUP BY work_scope_id, team_id, status)`,
+			orgID, provider, quiet.Format("2006-01-02")).Scan(&stateRows, &stateHours); err != nil {
+			t.Fatal(err)
+		}
+		var wip uint64
+		if err := rig.conn.QueryRow(ctx, `
+SELECT toUInt64(sum(v)) FROM (SELECT argMax(wip_count_end_of_day, computed_at) AS v FROM work_item_metrics_daily
+WHERE org_id = ? AND provider = ? AND day = toDate(?) GROUP BY work_scope_id, team_id)`,
+			orgID, provider, quiet.Format("2006-01-02")).Scan(&wip); err != nil {
+			t.Fatal(err)
+		}
+		var attributions uint64
+		var attributionSources string
+		if err := rig.conn.QueryRow(ctx, `
+SELECT toUInt64(count()), arrayStringConcat(arraySort(groupUniqArray(toString(source))), ',')
+FROM work_item_team_attributions WHERE org_id = ? AND work_item_id = ?`, orgID, done.id).Scan(&attributions, &attributionSources); err != nil {
+			t.Fatal(err)
+		}
+		t.Logf("%-6s quiet day %s: in_progress state rows=%d hours=%.1f wip_end_of_day=%d; old done item (day %s): attribution rows=%d sources=[%s]",
+			provider, quiet.Format("2006-01-02"), stateRows, stateHours, wip, old.Format("2006-01-02"), attributions, attributionSources)
+		if stateRows != 1 || stateHours != 24 {
+			failures = append(failures, fmt.Sprintf("%s: the quiet day has %d in_progress state row(s) of %.1f hours, want one row of 24 hours", provider, stateRows, stateHours))
+		}
+		if wip != 1 {
+			failures = append(failures, fmt.Sprintf("%s: WIP at the end of the quiet day = %d, want 1 (the open item)", provider, wip))
+		}
+		if attributions == 0 {
+			failures = append(failures, fmt.Sprintf("%s: the old done item has no work_item_team_attributions row after the run of its day", provider))
+		}
+	}
+	rig.assertNoFamilyFailed(t)
+	if len(failures) > 0 {
+		t.Fatalf("after a first sync and the runs its fan-out started:\n  %s", strings.Join(failures, "\n  "))
+	}
+}

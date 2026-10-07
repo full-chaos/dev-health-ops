@@ -74,11 +74,16 @@ func (executor *WorkItemEstimateExecutor) ComputeFamily(
 		projected,
 		workitemmetrics.AssertAligned(len(sorted), projected, workItemMetricsResolver(sorted, read.Attributions)),
 	)
-	// One table and one batch: the writer's own count and error are the
-	// family's.
-	return WriteEstimateCoverageMetricsDaily(
+	// One table and one batch. The writer reports its true row count on an
+	// ambiguous Send error, and that error is a partial write: the rows may
+	// be stored.
+	written, err := WriteEstimateCoverageMetricsDaily(
 		ctx, executor.conn, run.OrganizationID, scope.day, rows, computedAt,
 	)
+	if err != nil {
+		return wrapWorkItemScopePartialWrite("work_item_estimate", written, partition, err)
+	}
+	return written, nil
 }
 
 var _ NativeFamilyExecutor = (*WorkItemEstimateExecutor)(nil)

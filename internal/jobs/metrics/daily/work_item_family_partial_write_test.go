@@ -446,3 +446,52 @@ func TestWorkItemEstimateFamilyReadsNoTransitions(t *testing.T) {
 		})
 	}
 }
+
+// A Send() that fails may have landed its rows. Each write of the three
+// families that write once for a partition must then return the error as
+// ErrPartialWrite with the count of the rows that may be stored: the
+// dispatcher reads every other error as a refusal with no row.
+func TestWorkItemScopeFamiliesClassifyAFailedSendAsPartialWrite(t *testing.T) {
+	run := Run{OrganizationID: "org-42", TargetDay: time.Date(2026, 9, 3, 0, 0, 0, 0, time.UTC)}
+	partition := Partition{ID: "p1", RepoIDs: []RepositoryID{RepositoryID(workItemFamilyTestRepoID.String())}}
+	now := func() time.Time { return time.Unix(0, 0).UTC() }
+	workItem := func(conn *workItemSendFailingConn) NativeFamilyExecutor {
+		return &WorkItemExecutor{conn: conn, nowUTC: now}
+	}
+	estimate := func(conn *workItemSendFailingConn) NativeFamilyExecutor {
+		return &WorkItemEstimateExecutor{conn: conn, nowUTC: now}
+	}
+	state := func(conn *workItemSendFailingConn) NativeFamilyExecutor {
+		return &WorkItemStateExecutor{conn: conn, nowUTC: now}
+	}
+	for _, test := range []struct {
+		family  string
+		table   string
+		build   func(*workItemSendFailingConn) NativeFamilyExecutor
+		written int
+	}{
+		{"work_item", "work_item_metrics_daily", workItem, 1},
+		{"work_item", "work_item_user_metrics_daily", workItem, 2},
+		{"work_item", "work_item_cycle_times", workItem, 3},
+		{"work_item_estimate", "estimate_coverage_metrics_daily", estimate, 1},
+		{"work_item_state", "work_item_state_durations_daily", state, 2},
+		{"work_item_state", "work_item_blocked_durations_daily", state, 3},
+	} {
+		t.Run(test.family+"/"+test.table, func(t *testing.T) {
+			conn := &workItemSendFailingConn{failTable: test.table}
+			written, err := test.build(conn).ComputeFamily(context.Background(), run, partition)
+			if len(conn.targets) == 0 || conn.targets[len(conn.targets)-1] != test.table {
+				t.Fatalf("write targets = %v; want the last insert to be %s, the one whose Send() fails", conn.targets, test.table)
+			}
+			if !errors.Is(err, ErrPartialWrite) {
+				t.Fatalf("written = %d, err = %v; want ErrPartialWrite: the failed Send() may have landed rows", written, err)
+			}
+			if !strings.Contains(err.Error(), "simulated ambiguous ClickHouse Send() failure") {
+				t.Fatalf("err = %v; want the cause of the failed Send() kept in the chain", err)
+			}
+			if written != test.written {
+				t.Fatalf("written = %d, want %d (the rows of the earlier writes and of the failed one)", written, test.written)
+			}
+		})
+	}
+}

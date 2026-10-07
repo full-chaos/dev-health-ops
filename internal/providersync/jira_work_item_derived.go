@@ -31,6 +31,15 @@ var jiraWorkItemDerivedDestinations = []string{
 	"work_item_user_metrics_daily",
 }
 
+// jiraWorkItemSyncSinkDestinations is the set of destinations the sync sink
+// accepts beside the direct Jira tables: ai_attribution only, as an explicit
+// evaluated-empty effect. The nine tables computed from stored work-item rows
+// are written by the daily job, never by a sync unit, so the sink refuses
+// them.
+var jiraWorkItemSyncSinkDestinations = []string{
+	"ai_attribution",
+}
+
 type JiraEstimateCoverageMetricsDailyRow = githubEstimateCoverageMetricsDailyRow
 type JiraInvestmentClassificationDailyRow = githubInvestmentClassificationDailyRow
 type JiraInvestmentMetricsDailyRow = githubInvestmentMetricsDailyRow
@@ -498,8 +507,12 @@ func (adapter jiraDerivedGitHubAdapter) InspectGitHubWorkItemEffect(
 
 var _ JiraWorkItemEffectAdapter = jiraDerivedGitHubAdapter{}
 
-// JiraWorkItemDerivedClickHouseEffects is the provider-local ten-destination
-// dispatcher. Direct Jira facts and worklogs stay in their existing sinks.
+// JiraWorkItemDerivedClickHouseEffects is the provider-local dispatcher of the
+// evaluated-empty ai_attribution effect. Direct Jira facts and worklogs stay
+// in their existing sinks.
+// It dispatches ai_attribution only. The nine other adapter fields write
+// tables that the daily job owns; no destination reaches them, and they stay
+// only until the dead-code removal that follows the cut.
 type JiraWorkItemDerivedClickHouseEffects struct {
 	Lease                          providerfoundation.LeaseGuard
 	AIAttribution                  JiraWorkItemEffectAdapter
@@ -552,32 +565,14 @@ func (sink JiraWorkItemDerivedClickHouseEffects) adapterForDestination(
 	switch destination {
 	case "ai_attribution":
 		return sink.AIAttribution, true
-	case "estimate_coverage_metrics_daily":
-		return sink.EstimateCoverageMetricsDaily, true
-	case "investment_classifications_daily":
-		return sink.InvestmentClassificationsDaily, true
-	case "investment_metrics_daily":
-		return sink.InvestmentMetricsDaily, true
-	case "issue_type_metrics_daily":
-		return sink.IssueTypeMetricsDaily, true
-	case "work_item_cycle_times":
-		return sink.WorkItemCycleTimes, true
-	case "work_item_metrics_daily":
-		return sink.WorkItemMetricsDaily, true
-	case "work_item_state_durations_daily":
-		return sink.WorkItemStateDurationsDaily, true
-	case "work_item_team_attributions":
-		return sink.WorkItemTeamAttributions, true
-	case "work_item_user_metrics_daily":
-		return sink.WorkItemUserMetricsDaily, true
 	default:
 		return nil, false
 	}
 }
 
 func (sink JiraWorkItemDerivedClickHouseEffects) MissingDestinations() []string {
-	missing := make([]string, 0, len(jiraWorkItemDerivedDestinations))
-	for _, destination := range jiraWorkItemDerivedDestinations {
+	missing := make([]string, 0, len(jiraWorkItemSyncSinkDestinations))
+	for _, destination := range jiraWorkItemSyncSinkDestinations {
 		adapter, known := sink.adapterForDestination(destination)
 		if !known || adapter == nil {
 			missing = append(missing, destination)
@@ -592,7 +587,7 @@ func (sink JiraWorkItemDerivedClickHouseEffects) resolve(
 ) (JiraWorkItemEffectIdentity, JiraWorkItemEffectAdapter, error) {
 	if claim.Validate() != nil || claim.Provider != "jira" ||
 		!isWorkItemFamilyDataset(claim.Dataset) ||
-		!slices.Contains(jiraWorkItemDerivedDestinations, effect.Destination) ||
+		!slices.Contains(jiraWorkItemSyncSinkDestinations, effect.Destination) ||
 		effect.Recovery != EffectReadbackRequired || !validDigest(effect.ContentDigest) ||
 		effect.PayloadBytes < 0 || sink.Lease == nil || len(sink.MissingDestinations()) > 0 {
 		return JiraWorkItemEffectIdentity{}, nil, ErrInvalidConfiguration
@@ -665,8 +660,8 @@ var _ EffectSink = JiraWorkItemDerivedClickHouseEffects{}
 var _ EffectReadback = JiraWorkItemDerivedClickHouseEffects{}
 
 // JiraWorkItemCompositeClickHouseEffects is the provider-local dispatcher for
-// the complete route batch: seven direct Jira effects (the canonical six plus
-// worklogs) and ten derived effects. Activation remains outside this file.
+// the complete route batch: the direct Jira effects and the evaluated-empty
+// ai_attribution effect. Activation remains outside this file.
 type JiraWorkItemCompositeClickHouseEffects struct {
 	Direct  JiraAtlassianClickHouseEffects
 	Derived JiraWorkItemDerivedClickHouseEffects
@@ -707,7 +702,7 @@ func (sink JiraWorkItemCompositeClickHouseEffects) WriteEffect(
 	switch {
 	case slices.Contains(jiraAtlassianEffectDestinations, effect.Destination):
 		return sink.Direct.WriteEffect(ctx, claim, effect)
-	case slices.Contains(jiraWorkItemDerivedDestinations, effect.Destination):
+	case slices.Contains(jiraWorkItemSyncSinkDestinations, effect.Destination):
 		return sink.Derived.WriteEffect(ctx, claim, effect)
 	default:
 		return ErrInvalidConfiguration
@@ -722,7 +717,7 @@ func (sink JiraWorkItemCompositeClickHouseEffects) InspectEffect(
 	switch {
 	case slices.Contains(jiraAtlassianEffectDestinations, effect.Destination):
 		return sink.Direct.InspectEffect(ctx, claim, effect)
-	case slices.Contains(jiraWorkItemDerivedDestinations, effect.Destination):
+	case slices.Contains(jiraWorkItemSyncSinkDestinations, effect.Destination):
 		return sink.Derived.InspectEffect(ctx, claim, effect)
 	default:
 		return EffectConflict, ErrInvalidConfiguration

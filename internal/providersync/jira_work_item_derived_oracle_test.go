@@ -226,19 +226,9 @@ func TestJiraWorkItemsRouteIncludesFrozenPythonMetricEffect(t *testing.T) {
 		fakehttp.Client(&jiraAtlassianDoer{t: t}),
 		providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }),
 	)
-	classifier, err := NewInvestmentClassifier(investmentConfigPath(t, "real"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	deriver := JiraWorkItemDeriver{
-		Source:               &githubMultiDayOracleSource{},
-		statusMapping:        loadRealStatusMapping(t),
-		investmentClassifier: classifier,
-	}
 	batch, err := (JiraAtlassianRouteHandler{
 		StatusMapping: loadRealStatusMapping(t),
 		Identity:      jiraRouteIdentity,
-		Derived:       deriver,
 	}).Collect(context.Background(), claim, providerfoundation.Credential{}, client, normalizedAt)
 	if err != nil {
 		t.Fatal(err)

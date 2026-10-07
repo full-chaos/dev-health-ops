@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"path/filepath"
 	"regexp"
 	"slices"
 	"sort"
@@ -22,7 +21,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
-	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -250,7 +248,7 @@ type windowEquivalenceWindow struct {
 }
 
 // runWindowEquivalenceArm syncs the fixture through the production route --
-// the real collector, the real deriver, the real effect committer and sink --
+// the real collector, the real effect committer and sink --
 // once per window, into its own ClickHouse, and returns every row of every
 // destination table.
 func runWindowEquivalenceArm(
@@ -258,13 +256,6 @@ func runWindowEquivalenceArm(
 	conn driver.Conn, arm string, windows []windowEquivalenceWindow,
 ) map[string][]string {
 	t.Helper()
-	_, file, _, ok := moduleroot.Caller(0)
-	if !ok {
-		t.Fatal("cannot locate the test source")
-	}
-	root := filepath.Clean(filepath.Join(filepath.Dir(file), "..", ".."))
-	statusMappingPath := filepath.Join(root, "src/dev_health_ops/config/status_mapping.yaml")
-	investmentConfigPath := filepath.Join(root, "src/dev_health_ops/config/investment_areas.yaml")
 	doer := &windowEquivalenceDoer{t: t}
 	for index, window := range windows {
 		doer.issues = window.issues
@@ -307,10 +298,6 @@ INSERT INTO public.sync_run_units (
 		if err != nil {
 			t.Fatal(err)
 		}
-		deriver, err := NewGitHubWorkItemDeriver(conn, guard, statusMappingPath, investmentConfigPath)
-		if err != nil {
-			t.Fatal(err)
-		}
 		executor := CompleteRouteExecutor{
 			Credentials: providerfoundation.CredentialResolver{
 				Repository: projectsV2DurableCredentialRepository{},
@@ -332,7 +319,6 @@ INSERT INTO public.sync_run_units (
 				ProjectMembershipSnapshotDiff: GitHubProjectV2SnapshotDiffClickHouseReader{
 					Conn: conn,
 				},
-				Deriver: deriver,
 			},
 			Comparator: ProductionContractComparator{},
 			Committer: EffectCommitter{

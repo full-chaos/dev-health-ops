@@ -119,6 +119,7 @@ func NewGitHubWorkItemClickHouseEffects(
 		WorkItemTransitions:  GitHubWorkItemTransitionsClickHouseAdapter{Conn: conn},
 		WorkItems:            GitHubWorkItemsClickHouseAdapter{Conn: conn},
 
+		// Not dispatched: the daily job owns these tables.
 		// Metric triplet.
 		WorkItemCycleTimes: GitHubWorkItemCycleTimesClickHouseEffects{
 			Conn: conn, Lease: lease,
@@ -551,5 +552,3 @@ func githubWorkItemMissingDerivedDestinations(
 	}
 	return missing
 }
-
-var _ githubWorkItemsDeriver = GitHubWorkItemDeriver{}

@@ -45,22 +45,6 @@ var gitLabWorkItemRawDestinations = []string{
 	"sprints",
 }
 
-// gitLabWorkItemDerivedGap is the raw-only route's honest remainder of the
-// 16-destination canonical work-item family. Once the typed deriver is injected
-// at the processor boundary, all ten concrete derived destinations are emitted.
-var gitLabWorkItemDerivedGap = []string{
-	"ai_attribution",
-	"estimate_coverage_metrics_daily",
-	"investment_classifications_daily",
-	"investment_metrics_daily",
-	"issue_type_metrics_daily",
-	"work_item_cycle_times",
-	"work_item_metrics_daily",
-	"work_item_state_durations_daily",
-	"work_item_team_attributions",
-	"work_item_user_metrics_daily",
-}
-
 // GitLabWorkItemsRequestUsage retains the route's physical request count for
 // later budget evidence without coupling this provider-only slice to registry
 // or activation wiring.
@@ -72,26 +56,16 @@ type GitLabWorkItemsRequestUsage struct {
 }
 
 // GitLabWorkItemsResult is the concrete provider result carried inside the
-// framework's legacy result map. It keeps raw/derived completion and watermark
-// withholding typed even though CompleteRouteBatch predates provider-specific
-// result structs.
+// framework's legacy result map. It keeps the raw row counts typed even
+// though CompleteRouteBatch predates provider-specific result structs.
 type GitLabWorkItemsResult struct {
-	WorkItemsSynced                  int      `json:"work_items_synced"`
-	TransitionsSynced                int      `json:"transitions_synced"`
-	DependenciesSynced               int      `json:"dependencies_synced"`
-	ReopenEventsSynced               int      `json:"reopen_events_synced"`
-	InteractionsSynced               int      `json:"interactions_synced"`
-	SprintsSynced                    int      `json:"sprints_synced"`
-	RawDestinations                  []string `json:"raw_destinations"`
-	DerivedDestinationsImplemented   []string `json:"derived_destinations_implemented"`
-	DerivedDestinationsUnimplemented []string `json:"derived_destinations_unimplemented"`
-	WatermarkHeldForDerivedGap       bool     `json:"watermark_held_for_derived_gap"`
-}
-
-// gitlabWorkItemsDeriver is injected at the processor boundary. It is not a
-// registry/configuration seam: activation remains outside this provider slice.
-type gitlabWorkItemsDeriver interface {
-	Derive(context.Context, Claim, gitlabWorkItemRows, time.Time) (GitLabWorkItemDerivedRows, error)
+	WorkItemsSynced    int      `json:"work_items_synced"`
+	TransitionsSynced  int      `json:"transitions_synced"`
+	DependenciesSynced int      `json:"dependencies_synced"`
+	ReopenEventsSynced int      `json:"reopen_events_synced"`
+	InteractionsSynced int      `json:"interactions_synced"`
+	SprintsSynced      int      `json:"sprints_synced"`
+	RawDestinations    []string `json:"raw_destinations"`
 }
 
 // GitLabWorkItemsRouteHandler is the canonical provider-only route. It mirrors
@@ -102,8 +76,8 @@ type gitlabWorkItemsDeriver interface {
 // WIRING: WIRED. internal/workerservice/provider_sync.go's
 // `provider == "gitlab" && dataset == "work-items"` case constructs this
 // handler and assigns it to routeHandler, with
-// NewGitLabWorkItemFamilyClickHouseEffects as sink and readback and
-// NewGitLabWorkItemDeriver as Derived.
+// NewGitLabWorkItemFamilyClickHouseEffects as sink and readback. The unit
+// writes raw rows only; the daily job writes every table computed from them.
 //
 // WIRED IS NOT EXECUTING, and this comment claims only the former. Planning
 // admits a canonical work-items unit only when the descriptor satisfies
@@ -133,7 +107,6 @@ type GitLabWorkItemsRouteHandler struct {
 	FetchLinks      *bool
 	FetchMilestones *bool
 	IncludeMRs      *bool
-	Derived         gitlabWorkItemsDeriver
 }
 
 func gitLabWorkItemsFlag(value *bool) bool { return value == nil || *value }
@@ -440,71 +413,38 @@ func (handler GitLabWorkItemsRouteHandler) Collect(
 	if err != nil {
 		return CompleteRouteBatch{}, err
 	}
-	derivedUnimplemented := append([]string(nil), gitLabWorkItemDerivedGap...)
-	derivedImplemented := []string{}
-	derivedRecords := 0
+	// ai_attribution is a raw fact: it is read from the provider payload at
+	// normalization, not computed from stored rows, so the unit still writes
+	// it. Every table computed from stored work-item rows is left to the
+	// daily job.
+	aiAttribution, err := buildGitLabTypedDerivedEffect("ai_attribution", rows.AIAttributions)
+	if err != nil {
+		return CompleteRouteBatch{}, err
+	}
+	effects = append(effects, aiAttribution)
+	observeWorkItemDerivedTablesLeftToDailyJob(client.Metrics, claim, len(rows.WorkItems))
+	// The watermark is the end of the window whose raw rows this unit stored.
+	// It is held only while a closing-reference fetch failed transiently.
 	var watermark *time.Time
-	if handler.Derived != nil {
-		derived, deriveErr := handler.Derived.Derive(ctx, claim, rows, normalizedAt)
-		if deriveErr != nil {
-			return CompleteRouteBatch{}, deriveErr
-		}
-		if len(derived.Gaps) > 0 {
-			gaps := make([]string, 0, len(derived.Gaps))
-			for _, gap := range derived.Gaps {
-				if !gitlabWorkItemDerivedDestination(gap.Destination) ||
-					strings.TrimSpace(gap.AuthoritativeProducer) == "" ||
-					strings.TrimSpace(gap.Reason) == "" {
-					return CompleteRouteBatch{}, ErrInvalidConfiguration
-				}
-				gaps = append(gaps, gap.Destination)
-			}
-			return CompleteRouteBatch{}, fmt.Errorf(
-				"%w: %s", ErrGitLabWorkItemDerivedProducerUnavailable, strings.Join(gaps, ", "),
-			)
-		}
-		derivedEffects, effectErr := BuildGitLabWorkItemDerivedEffects(derived.EffectRows())
-		if effectErr != nil {
-			return CompleteRouteBatch{}, effectErr
-		}
-		effects = append(effects, derivedEffects...)
-		derivedImplemented = derived.producedDestinations()
-		derivedUnimplemented = []string{}
-		if len(derivedUnimplemented) == 0 && claim.BeforeAt != nil &&
-			(derived.Watermark == nil || !derived.Watermark.Equal(claim.BeforeAt.UTC())) {
-			return CompleteRouteBatch{}, ErrInvalidConfiguration
-		}
-		watermark = derived.Watermark
-		if closingTransient > 0 {
-			watermark = nil
-		}
-		derivedRecords = len(derived.AIAttributions) + len(derived.EstimateCoverageMetricsDaily) +
-			len(derived.InvestmentClassificationsDaily) + len(derived.InvestmentMetricsDaily) +
-			len(derived.IssueTypeMetricsDaily) + len(derived.WorkItemCycleTimes) +
-			len(derived.WorkItemMetricsDaily) + len(derived.WorkItemStateDurationsDaily) +
-			len(derived.WorkItemTeamAttributions) + len(derived.WorkItemUserMetricsDaily)
+	if claim.BeforeAt != nil && closingTransient == 0 {
+		value := claim.BeforeAt.UTC()
+		watermark = &value
 	}
 	summary := GitLabWorkItemsResult{
 		WorkItemsSynced: len(rows.WorkItems), TransitionsSynced: len(rows.StatusTransitions),
 		DependenciesSynced: len(rows.Dependencies), ReopenEventsSynced: len(rows.ReopenEvents),
 		InteractionsSynced: len(rows.Interactions), SprintsSynced: len(rows.Sprints),
-		RawDestinations:                  append([]string(nil), gitLabWorkItemRawDestinations...),
-		DerivedDestinationsImplemented:   append([]string(nil), derivedImplemented...),
-		DerivedDestinationsUnimplemented: derivedUnimplemented,
-		WatermarkHeldForDerivedGap:       len(derivedUnimplemented) > 0,
+		RawDestinations: append([]string(nil), gitLabWorkItemRawDestinations...),
 	}
 	result := map[string]any{
-		"work_items_synced":                  len(rows.WorkItems),
-		"transitions_synced":                 len(rows.StatusTransitions),
-		"dependencies_synced":                len(rows.Dependencies),
-		"reopen_events_synced":               len(rows.ReopenEvents),
-		"interactions_synced":                len(rows.Interactions),
-		"sprints_synced":                     len(rows.Sprints),
-		"raw_destinations":                   append([]string(nil), gitLabWorkItemRawDestinations...),
-		"derived_destinations_implemented":   derivedImplemented,
-		"derived_destinations_unimplemented": derivedUnimplemented,
-		"watermark_held_for_derived_gap":     len(derivedUnimplemented) > 0,
-		"gitlab_work_items":                  summary,
+		"work_items_synced":    len(rows.WorkItems),
+		"transitions_synced":   len(rows.StatusTransitions),
+		"dependencies_synced":  len(rows.Dependencies),
+		"reopen_events_synced": len(rows.ReopenEvents),
+		"interactions_synced":  len(rows.Interactions),
+		"sprints_synced":       len(rows.Sprints),
+		"raw_destinations":     append([]string(nil), gitLabWorkItemRawDestinations...),
+		"gitlab_work_items":    summary,
 		// CHAOS-8526: gitlab_closing_reference rows synced, and the issues whose closed_by fetch failed, split into
 		// transient (the watermark is held while any did) and terminal 404/403 (the watermark advances).
 		"closing_reference_dependencies_synced": closingSynced,
@@ -516,14 +456,13 @@ func (handler GitLabWorkItemsRouteHandler) Collect(
 	if len(closingIncomplete) > 0 {
 		result["incomplete"] = closingIncomplete
 	}
-	result = attachWorkItemTeamInheritanceObservation(result, handler.Derived)
 	return CompleteRouteBatch{
 		Effects: effects, Result: result, Watermark: watermark,
 		Evidence: FetchEvidence{
 			Provider: claim.Provider, Dataset: claim.Dataset, Requests: requests,
 			Pages: pages, Records: len(rows.WorkItems) + len(rows.StatusTransitions) +
 				len(rows.Dependencies) + len(rows.ReopenEvents) + len(rows.Interactions) +
-				len(rows.Sprints) + derivedRecords,
+				len(rows.Sprints) + len(rows.AIAttributions),
 		},
 	}, nil
 }

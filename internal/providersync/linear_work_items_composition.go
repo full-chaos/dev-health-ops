@@ -19,15 +19,16 @@ var ErrLinearWorkItemSinkIncomplete = errors.New(
 )
 
 // LinearWorkItemFamilyRouteHandler composes the existing authoritative Linear
-// collector with the existing ten-destination derivation boundary. It owns no
-// registry, alias reconciliation, activation, or worker construction.
+// collector with the ai_attribution rows read from the labels of the fetched
+// items. It writes raw rows only: every table computed from stored work-item
+// rows is left to the daily job. It owns no registry, alias reconciliation,
+// activation, or worker construction.
 //
 // Direct retains the reference team/sprint inputs used by the raw collector.
 // A caller may therefore inject a separately collected reference catalog
 // without adding its five prerequisite effects to this work-item manifest.
 type LinearWorkItemFamilyRouteHandler struct {
-	Direct  LinearWorkItemsRouteHandler
-	Derived *LinearWorkItemDeriver
+	Direct LinearWorkItemsRouteHandler
 }
 
 func (handler LinearWorkItemFamilyRouteHandler) Collect(
@@ -38,12 +39,8 @@ func (handler LinearWorkItemFamilyRouteHandler) Collect(
 	normalizedAt time.Time,
 ) (CompleteRouteBatch, error) {
 	// Construction defects are rejected before the raw collector can perform
-	// provider I/O. Production can install a deriver only through its governed
-	// config-loading constructor; package tests retain the private seams needed
-	// to prove derivation failure isolation.
-	if handler.Derived == nil || handler.Derived.Source == nil ||
-		handler.Derived.engine == nil ||
-		!linearWorkItemsFlag(handler.Direct.FetchComments) ||
+	// provider I/O.
+	if !linearWorkItemsFlag(handler.Direct.FetchComments) ||
 		!linearWorkItemsFlag(handler.Direct.FetchHistory) ||
 		!linearWorkItemsFlag(handler.Direct.FetchCycles) {
 		return CompleteRouteBatch{}, ErrInvalidConfiguration
@@ -78,17 +75,24 @@ func (handler LinearWorkItemFamilyRouteHandler) Collect(
 		Dependencies: typed.Dependencies, ReopenEvents: typed.ReopenEvents,
 		Interactions: typed.Interactions, Sprints: typed.Sprints,
 	}
-	derived, membershipRejections, err := handler.Derived.Derive(ctx, claim, rows, normalizedAt)
-	if err != nil {
-		// No raw effects or watermark escape when the governed derived family
-		// is unavailable. Collection has no persistence side effect, so the
-		// caller has nothing it can partially commit.
-		return CompleteRouteBatch{}, err
-	}
-	derivedEffects, err := buildLinearWorkItemDerivedEffectsFromMap(derived, membershipRejections)
+	// ai_attribution is a raw fact of the fetched items (their labels). No
+	// raw effects or watermark escape when it cannot be built: collection has
+	// no persistence side effect, so the caller has nothing it can partially
+	// commit.
+	aiAttributions, err := normalizeLinearWorkItemAIAttributions(claim, rows, normalizedAt)
 	if err != nil {
 		return CompleteRouteBatch{}, err
 	}
+	aiRows, err := effectRowsFromValues(aiAttributions)
+	if err != nil {
+		return CompleteRouteBatch{}, err
+	}
+	aiEffect, err := BuildEffectBatch("ai_attribution", EffectReadbackRequired, aiRows)
+	if err != nil {
+		return CompleteRouteBatch{}, err
+	}
+	derivedEffects := []EffectBatch{aiEffect}
+	observeWorkItemDerivedTablesLeftToDailyJob(client.Metrics, claim, len(rows.WorkItems))
 	effects := make([]EffectBatch, 0, len(raw.Effects)+len(derivedEffects))
 	effects = append(effects, raw.Effects...)
 	effects = append(effects, derivedEffects...)
@@ -99,7 +103,6 @@ func (handler LinearWorkItemFamilyRouteHandler) Collect(
 	}); err != nil {
 		return CompleteRouteBatch{}, err
 	}
-	raw.Result = attachWorkItemTeamInheritanceObservation(raw.Result, handler.Derived)
 	return raw, nil
 }
 

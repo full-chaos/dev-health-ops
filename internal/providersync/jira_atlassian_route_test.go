@@ -87,19 +87,10 @@ func jiraAtlassianClaim() Claim {
 
 func jiraAtlassianCompleteHandler(t *testing.T) JiraAtlassianRouteHandler {
 	t.Helper()
-	classifier, err := NewInvestmentClassifier(investmentConfigPath(t, "real"))
-	if err != nil {
-		t.Fatal(err)
-	}
 	statusMapping := loadRealStatusMapping(t)
 	return JiraAtlassianRouteHandler{
 		StatusMapping: statusMapping,
 		Identity:      jiraRouteIdentity,
-		Derived: JiraWorkItemDeriver{
-			Source:               &githubMultiDayOracleSource{},
-			statusMapping:        statusMapping,
-			investmentClassifier: classifier,
-		},
 	}
 }
 

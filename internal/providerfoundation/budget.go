@@ -292,6 +292,10 @@ type Metrics struct {
 	jiraDevStatus map[string]uint64
 	// gitlabClosingMR counts CHAOS-8526's per-issue closed_by fetches, by outcome -- see RecordGitLabClosingMRFetch.
 	gitlabClosingMR map[string]uint64
+	// workItemDerivedLeftToDaily counts the work-items sync units that stored
+	// raw rows and left every derived table to the daily job, by provider --
+	// see RecordWorkItemDerivedTablesLeftToDailyJob.
+	workItemDerivedLeftToDaily map[string]uint64
 }
 
 func NewMetrics() *Metrics {
@@ -323,6 +327,7 @@ func NewMetrics() *Metrics {
 		unitDeferred:                   map[string]uint64{},
 		jiraDevStatus:                  map[string]uint64{},
 		gitlabClosingMR:                map[string]uint64{},
+		workItemDerivedLeftToDaily:     map[string]uint64{},
 	}
 }
 
@@ -1228,6 +1233,30 @@ func (m *Metrics) RecordGitLabClosingMRFetch(outcome string) {
 	m.gitlabClosingMR[label]++
 }
 
+// metricWorkItemProviderVocabulary is the closed set of providers that have a
+// work-items sync unit.
+var metricWorkItemProviderVocabulary = map[string]struct{}{
+	"github": {}, "gitlab": {}, "jira": {}, "linear": {},
+}
+
+// RecordWorkItemDerivedTablesLeftToDailyJob counts one work-items sync unit
+// that built its effects from raw rows only (CHAOS-8811). The derived tables
+// of the days it touched are written by the daily job; a provider whose
+// counter does not move while its units complete is still on a path that
+// derives at sync time.
+func (m *Metrics) RecordWorkItemDerivedTablesLeftToDailyJob(provider string) {
+	if m == nil {
+		return
+	}
+	label := strings.ToLower(strings.TrimSpace(provider))
+	if _, known := metricWorkItemProviderVocabulary[label]; !known {
+		label = "other"
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.workItemDerivedLeftToDaily[label]++
+}
+
 // metricWorkItemTeamAttributionSourceVocabulary is the closed set of
 // CHAOS-4244 written-source labels for work_item_team_attributions. This is
 // deliberately a COARSER vocabulary than the ClickHouse `source` enum
@@ -1695,6 +1724,13 @@ func (m *Metrics) WritePrometheus(writer io.Writer) error {
 		writer, "dev_health_gitlab_closing_mr_fetch_total",
 		"GitLab per-issue closed_by (closing merge request) fetches, by outcome (CHAOS-8526). The terminal_* outcomes (404/403, page cap exceeded, undecodable answer) repeat on every run, so the watermark advances; \"transient_failed\" is a retryable failure (watermark held).",
 		"outcome", m.gitlabClosingMR,
+	); err != nil {
+		return err
+	}
+	if err := writeLabeledCounter(
+		writer, "dev_health_work_item_derived_tables_left_to_daily_job_total",
+		"Work-items sync units that stored raw rows and left every table computed from them (the three work-item metric tables, estimate coverage, team attribution, state durations, issue types, the two investment tables) to the daily job, by provider (CHAOS-8811).",
+		"provider", m.workItemDerivedLeftToDaily,
 	); err != nil {
 		return err
 	}

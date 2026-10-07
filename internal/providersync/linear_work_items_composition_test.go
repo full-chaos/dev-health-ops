@@ -167,8 +167,7 @@ func TestLinearWorkItemFamilyCollectsAndCommitsAllSixteenDestinations(t *testing
 		linearLifecycleIssueResponse("ENG-1", "ENG"),
 	}}
 	handler := LinearWorkItemFamilyRouteHandler{
-		Direct:  linearFamilyDirectHandler(),
-		Derived: linearFamilyDeriver(linearFamilyDerivationSource{}),
+		Direct: linearFamilyDirectHandler(),
 	}
 	normalizedAt := time.Date(2026, 8, 3, 12, 0, 0, 987654321, time.UTC)
 	batch, err := handler.Collect(
@@ -234,8 +233,7 @@ func TestLinearWorkItemFamilyKeepsEveryEmptyDestinationExplicit(t *testing.T) {
 		`{"data":{"issues":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}`,
 	}}
 	batch, err := (LinearWorkItemFamilyRouteHandler{
-		Direct:  linearFamilyDirectHandler(),
-		Derived: linearFamilyDeriver(linearFamilyDerivationSource{}),
+		Direct: linearFamilyDirectHandler(),
 	}).Collect(
 		context.Background(), claim,
 		providerfoundation.Credential{Provider: "linear", ID: claim.CredentialID},
@@ -281,8 +279,7 @@ func TestLinearWorkItemFamilyFailsBeforeIOAndWithholdsDerivationGap(t *testing.T
 			linearLifecycleIssueResponse("ENG-2", "ENG"),
 		}}
 		batch, err := (LinearWorkItemFamilyRouteHandler{
-			Direct:  linearFamilyDirectHandler(),
-			Derived: linearFamilyDeriver(linearFamilyDerivationSource{err: gap}),
+			Direct: linearFamilyDirectHandler(),
 		}).Collect(
 			context.Background(), claim, credential,
 			linearWorkItemsClient(t, fakehttp.Client(doer)), normalizedAt,
@@ -304,8 +301,7 @@ func TestLinearWorkItemFamilyFailsBeforeIOAndWithholdsDerivationGap(t *testing.T
 			disable(&direct)
 			doer := &linearWorkItemsDoer{}
 			batch, err := (LinearWorkItemFamilyRouteHandler{
-				Direct:  direct,
-				Derived: linearFamilyDeriver(linearFamilyDerivationSource{}),
+				Direct: direct,
 			}).Collect(
 				context.Background(), claim, credential,
 				linearWorkItemsClient(t, fakehttp.Client(doer)), normalizedAt,
@@ -326,8 +322,7 @@ func TestLinearWorkItemFamilyFailsBeforeIOAndWithholdsDerivationGap(t *testing.T
 			alias.Dataset = dataset
 			doer := &linearWorkItemsDoer{}
 			batch, err := (LinearWorkItemFamilyRouteHandler{
-				Direct:  linearFamilyDirectHandler(),
-				Derived: linearFamilyDeriver(linearFamilyDerivationSource{}),
+				Direct: linearFamilyDirectHandler(),
 			}).Collect(
 				context.Background(), alias, credential,
 				linearWorkItemsClient(t, fakehttp.Client(doer)), normalizedAt,

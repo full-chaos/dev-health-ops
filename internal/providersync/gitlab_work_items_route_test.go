@@ -183,13 +183,12 @@ func TestGitLabWorkItemsRouteNormalizesSixRawFactsAndReportsDerivedGap(t *testin
 		t.Fatalf("dependency=%+v", dependency)
 	}
 	summary, ok := batch.Result["gitlab_work_items"].(GitLabWorkItemsResult)
-	if !ok || summary.WorkItemsSynced != 2 || len(summary.RawDestinations) != 6 ||
-		len(summary.DerivedDestinationsUnimplemented) != 10 || !summary.WatermarkHeldForDerivedGap {
+	if !ok || summary.WorkItemsSynced != 2 || len(summary.RawDestinations) != 6 {
 		t.Fatalf("typed summary=%T/%+v", batch.Result["gitlab_work_items"], batch.Result["gitlab_work_items"])
 	}
-	if batch.Watermark != nil || batch.Result["watermark_held_for_derived_gap"] != true ||
-		len(batch.Result["derived_destinations_unimplemented"].([]string)) != 10 {
-		t.Fatalf("watermark/result=%v/%+v", batch.Watermark, batch.Result)
+	// The watermark is the end of the window whose raw rows the unit stored.
+	if claim.BeforeAt == nil || batch.Watermark == nil || !batch.Watermark.Equal(claim.BeforeAt.UTC()) {
+		t.Fatalf("watermark=%v want the claim bound %v", batch.Watermark, claim.BeforeAt)
 	}
 	for _, request := range doer.requests {
 		if strings.HasSuffix(request.URL.Path, "/issues") || strings.HasSuffix(request.URL.Path, "/merge_requests") {

@@ -898,7 +898,9 @@ func TestGitHubWorkItemDeriverComposesTheFullSixteenEffectManifest(t *testing.T)
 		}
 	}
 
-	effects, err := buildGitHubWorkItemsRouteEffects(rows, derived, nil)
+	// The route does not carry the derived rows: its effects are the raw
+	// rows only, and a complete sink routes every one of them.
+	effects, err := buildGitHubWorkItemsRouteEffects(rows)
 	if err != nil {
 		t.Fatal(err)
 	}

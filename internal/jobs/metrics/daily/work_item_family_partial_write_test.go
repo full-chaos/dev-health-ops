@@ -126,70 +126,77 @@ func (*oneWorkItemRow) ColumnTypes() []chdriver.ColumnType { return nil }
 func (*oneWorkItemRow) Totals(...any) error                { return errors.New("no totals") }
 func (*oneWorkItemRow) ScanStruct(any) error               { return errors.New("no rows") }
 
-// workItemSendFailingConn dispatches Query() by table substring (one real
-// work item for "work_items FINAL", empty for anything else) and
-// PrepareBatch() by table substring, failing Send() only for failTable.
+// workItemSendFailingConn dispatches Query() by the text of the four reads of
+// loadWorkItemScopeRead (one scope, one work item, one transition, no
+// attribution row) and PrepareBatch() by table substring, failing Send() only
+// for failTable. failQuery fails the first read whose text contains it.
 type workItemSendFailingConn struct {
 	stubDriverConn
 	failTable string
+	failQuery string
 	targets   []string
+	queries   []string
 }
 
+var errWorkItemSimulatedRead = errors.New("simulated ClickHouse read failure")
+
 func (conn *workItemSendFailingConn) Query(_ context.Context, query string, _ ...any) (chdriver.Rows, error) {
+	conn.queries = append(conn.queries, query)
+	if conn.failQuery != "" && strings.Contains(query, conn.failQuery) {
+		return nil, errWorkItemSimulatedRead
+	}
 	switch {
-	// LoadWorkItemMetricsWorkItems (14 columns, used by work_item/
-	// work_item_estimate) and LoadWorkItemStateWorkItems (9 columns, used
-	// by work_item_state) both query "work_items FINAL" with an almost
-	// identical WHERE clause -- distinguished here by "assignees", which
-	// only the 14-column query selects.
-	case strings.Contains(query, "work_items FINAL") && strings.Contains(query, "assignees"):
-		return &oneWorkItemRow{}, nil
+	case strings.Contains(query, "SELECT DISTINCT provider"):
+		return &oneWorkItemScopeRow{}, nil
 	case strings.Contains(query, "work_items FINAL"):
-		return &oneWorkItemStateWorkItemRow{}, nil
-	case strings.Contains(query, "work_item_transitions"):
+		return &oneWorkItemScopedRow{}, nil
+	case strings.Contains(query, "FROM work_item_transitions"):
 		return &oneWorkItemTransitionRow{}, nil
 	default:
 		return &emptyWorkItemRelatedRows{}, nil
 	}
 }
 
-// oneWorkItemStateWorkItemRow mirrors oneWorkItemRow's item ("wi-1",
-// completed inside the target day) for LoadWorkItemStateWorkItems' narrower
-// 9-column SELECT.
-type oneWorkItemStateWorkItemRow struct {
+// oneWorkItemScopeRow is the scope of oneWorkItemRow's item, as the scope
+// read of the partition returns it.
+type oneWorkItemScopeRow struct {
+	emptyWorkItemRelatedRows
 	done bool
 }
 
-func (rows *oneWorkItemStateWorkItemRow) Next() bool {
+func (rows *oneWorkItemScopeRow) Next() bool {
 	if rows.done {
 		return false
 	}
 	rows.done = true
 	return true
 }
-func (rows *oneWorkItemStateWorkItemRow) Err() error   { return nil }
-func (rows *oneWorkItemStateWorkItemRow) Close() error { return nil }
-func (rows *oneWorkItemStateWorkItemRow) Scan(dest ...any) error {
-	if len(dest) != 9 {
-		return errors.New("unexpected work_item_state work item column count")
+func (rows *oneWorkItemScopeRow) Scan(dest ...any) error {
+	if len(dest) != 5 {
+		return errors.New("unexpected work item scope column count")
 	}
-	*(dest[0].(*string)) = "wi-1"
-	*(dest[1].(*string)) = "github"
-	*(dest[2].(*string)) = "done"
+	*(dest[0].(*string)) = "github"
+	*(dest[1].(*string)) = ""
+	*(dest[2].(*string)) = "proj-1"
 	*(dest[3].(*string)) = ""
-	*(dest[4].(*string)) = "proj-1"
-	*(dest[5].(*string)) = ""
-	*(dest[6].(*string)) = "Project One"
-	*(dest[7].(*time.Time)) = time.Date(2026, 9, 3, 8, 0, 0, 0, time.UTC)
-	completedAt := time.Date(2026, 9, 3, 14, 0, 0, 0, time.UTC)
-	*(dest[8].(**time.Time)) = &completedAt
+	*(dest[4].(*string)) = "Project One"
 	return nil
 }
-func (*oneWorkItemStateWorkItemRow) HasData() bool                      { return true }
-func (*oneWorkItemStateWorkItemRow) Columns() []string                  { return nil }
-func (*oneWorkItemStateWorkItemRow) ColumnTypes() []chdriver.ColumnType { return nil }
-func (*oneWorkItemStateWorkItemRow) Totals(...any) error                { return errors.New("no totals") }
-func (*oneWorkItemStateWorkItemRow) ScanStruct(any) error               { return errors.New("no rows") }
+
+// oneWorkItemScopedRow is oneWorkItemRow's item behind its storage address
+// and its version, as the items read of the scope returns it.
+type oneWorkItemScopedRow struct {
+	oneWorkItemRow
+}
+
+func (rows *oneWorkItemScopedRow) Scan(dest ...any) error {
+	if len(dest) != 16 {
+		return errors.New("unexpected work item scope item column count")
+	}
+	*(dest[0].(*uuid.UUID)) = workItemFamilyTestRepoID
+	*(dest[1].(*time.Time)) = time.Date(2026, 9, 3, 15, 0, 0, 0, time.UTC)
+	return rows.oneWorkItemRow.Scan(dest[2:]...)
+}
 
 func (conn *workItemSendFailingConn) PrepareBatch(_ context.Context, query string, _ ...chdriver.PrepareBatchOption) (chdriver.Batch, error) {
 	table := "unknown"
@@ -318,5 +325,46 @@ func TestWorkItemStateComputeFamilyReportsBlockedItemWritesOwnCountOnSendAmbigui
 	}
 	if len(conn.targets) != 2 || conn.targets[0] != "work_item_state_durations_daily" || conn.targets[1] != "work_item_blocked_durations_daily" {
 		t.Fatalf("write targets=%v, want state aggregate then per-item blocked snapshot", conn.targets)
+	}
+}
+
+// A read that fails must fail the family before any insert: a row computed
+// from a part of a work scope would read as a complete answer.
+func TestWorkItemScopeFamiliesWriteNothingWhenAReadFails(t *testing.T) {
+	run := Run{OrganizationID: "org-1", TargetDay: time.Date(2026, 9, 3, 0, 0, 0, 0, time.UTC)}
+	partition := Partition{ID: "partition-1", RepoIDs: []RepositoryID{RepositoryID(workItemFamilyTestRepoID.String())}}
+	reads := map[string]string{
+		"the scopes of the partition": "SELECT DISTINCT provider",
+		"the items of the scopes":     "SELECT repo_id, last_synced,",
+		"the transitions":             "FROM work_item_transitions",
+		"the attributions":            "FROM work_item_team_attributions FINAL",
+	}
+	families := map[string]func(*workItemSendFailingConn) NativeFamilyExecutor{
+		"work_item": func(conn *workItemSendFailingConn) NativeFamilyExecutor {
+			return &WorkItemExecutor{conn: conn, nowUTC: time.Now}
+		},
+		"work_item_estimate": func(conn *workItemSendFailingConn) NativeFamilyExecutor {
+			return &WorkItemEstimateExecutor{conn: conn, nowUTC: time.Now}
+		},
+		"work_item_state": func(conn *workItemSendFailingConn) NativeFamilyExecutor {
+			return &WorkItemStateExecutor{conn: conn, nowUTC: time.Now}
+		},
+	}
+	for family, build := range families {
+		for name, text := range reads {
+			if family == "work_item_estimate" && name == "the transitions" {
+				continue // the family reads no transition
+			}
+			t.Run(family+"/"+name, func(t *testing.T) {
+				conn := &workItemSendFailingConn{failQuery: text}
+				written, err := build(conn).ComputeFamily(context.Background(), run, partition)
+				if !errors.Is(err, errWorkItemSimulatedRead) {
+					t.Fatalf("error = %v, want the failed read (queries: %d)", err, len(conn.queries))
+				}
+				if written != 0 || len(conn.targets) != 0 {
+					t.Fatalf("written=%d, inserts prepared=%v; want no insert after a failed read", written, conn.targets)
+				}
+			})
+		}
 	}
 }

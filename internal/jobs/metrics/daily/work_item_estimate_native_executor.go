@@ -23,13 +23,13 @@ import (
 // three tables must still be counted as computed, and vice versa. That is the
 // same discipline file_hotspots/file_risk_hotspots follow (CHAOS-4277).
 //
-// The cost is that both executors load the same repo's work items -- Python
+// The cost is that both executors load the same work items -- Python
 // does the same thing (both computes are called from job_daily.py:1550/1570
 // over one shared load, but each re-walks the full list), and the loads are
 // FINAL reads of an already-narrow table. Correctness of the family boundary
 // beats saving one query.
 //
-// Attribution, phase, and per-repo iteration are identical to WorkItemExecutor
+// Attribution, phase, and the one compute for each work scope are identical to WorkItemExecutor
 // -- see its doc comment.
 type WorkItemEstimateExecutor struct {
 	conn   driver.Conn
@@ -58,48 +58,27 @@ func (executor *WorkItemEstimateExecutor) ComputeFamily(
 		return 0, err
 	}
 
-	total := 0
-	for _, repoID := range scope.repoIDs {
-		items, err := LoadWorkItemMetricsWorkItems(
-			ctx, executor.conn, run.OrganizationID, repoID, scope.start, scope.end,
-		)
-		if err != nil {
-			return wrapWorkItemPartialWrite("work_item_estimate", total, repoID, err)
-		}
-		if len(items) == 0 {
-			continue
-		}
-		attributions, err := LoadWorkItemPrimaryTeamAttributions(
-			ctx, executor.conn, run.OrganizationID, repoID,
-		)
-		if err != nil {
-			return wrapWorkItemPartialWrite("work_item_estimate", total, repoID, err)
-		}
-
-		computedAt := executor.nowUTC()
-		sorted := sortWorkItemMetricsRows(items)
-		projected := workItemMetricsItems(sorted)
-		rows := workitemmetrics.ComputeEstimateCoverage(
-			scope.day,
-			projected,
-			workitemmetrics.AssertAligned(len(sorted), projected, workItemMetricsResolver(sorted, attributions)),
-		)
-
-		// #2276 confirmation-pass P1: WriteEstimateCoverageMetricsDaily's
-		// own batch.Send() branch already reports its TRUE row count on an
-		// ambiguous network error (the F1 sweep) -- `total` must be updated
-		// with that count BEFORE the error check, not only after a
-		// confirmed success, or the failing write's own truthful count is
-		// discarded a second time.
-		written, err := WriteEstimateCoverageMetricsDaily(
-			ctx, executor.conn, run.OrganizationID, scope.day, rows, computedAt,
-		)
-		total += written
-		if err != nil {
-			return wrapWorkItemPartialWrite("work_item_estimate", total, repoID, err)
-		}
+	// The version is taken before the reads (see WorkItemExecutor).
+	computedAt := executor.nowUTC()
+	read, err := loadWorkItemScopeRead(ctx, executor.conn, "work_item_estimate", run, partition, scope, false)
+	if err != nil {
+		return 0, err
 	}
-	return total, nil
+	if len(read.Items) == 0 {
+		return 0, nil
+	}
+	sorted := sortWorkItemMetricsRows(read.Items)
+	projected := workItemMetricsItems(sorted)
+	rows := workitemmetrics.ComputeEstimateCoverage(
+		scope.day,
+		projected,
+		workitemmetrics.AssertAligned(len(sorted), projected, workItemMetricsResolver(sorted, read.Attributions)),
+	)
+	// One table and one batch: the writer's own count and error are the
+	// family's.
+	return WriteEstimateCoverageMetricsDaily(
+		ctx, executor.conn, run.OrganizationID, scope.day, rows, computedAt,
+	)
 }
 
 var _ NativeFamilyExecutor = (*WorkItemEstimateExecutor)(nil)

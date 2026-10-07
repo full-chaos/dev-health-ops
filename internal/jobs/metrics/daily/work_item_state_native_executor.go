@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
-	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/workitemblockers"
@@ -46,15 +45,12 @@ const (
 // (CHAOS-4283, still Python-bridged) keeps writing that table on the normal
 // per-partition schedule; this executor only reads it.
 //
-// # Per-repo iteration (mirrors TeamWellbeingExecutor, CHAOS-4276)
+// # One compute for each work scope
 //
-// run_daily_metrics_job is invoked once PER repo_id by the compatibility
-// bridge's fan-out loop (worker_metrics.py:1729 `for index, repo_id in
-// enumerate(repo_ids)`), so every family it computes -- this one included --
-// is scoped to one repo's rows per call. This executor mirrors that
-// boundary explicitly: it loops the partition's repoIDs (in their own
-// deterministic order) and calls the per-repo compute once per repo, exactly
-// like computeWellbeingPerRepo.
+// work_item_state_durations_daily replaces rows by a key that has
+// work_scope_id and no repo_id, so the family computes a work scope once,
+// over the items of every repository of the organization, and writes it once
+// for the partition: see work_item_scope_read.go.
 type WorkItemStateExecutor struct {
 	conn   driver.Conn
 	nowUTC func() time.Time
@@ -108,141 +104,72 @@ func (executor *WorkItemStateExecutor) ComputeFamily(
 	start := day
 	end := start.Add(24 * time.Hour)
 
-	total := 0
-	// The blocked spans (CHAOS-8493) are organization-wide -- a blocker lives
-	// in any repository, or in none -- so they are read ONCE for the
-	// partition, by the first repository that has anything to compute, and
-	// not at all when no repository does.
-	var blocked map[string][]workitemmetrics.BlockedInterval
-	blockedLoaded := false
-	for _, repoID := range repoIDs {
-		items, err := LoadWorkItemStateWorkItems(ctx, executor.conn, run.OrganizationID, repoID, start, end)
-		if err != nil {
-			return wrapWorkItemStatePartialWrite(total, repoID, err)
-		}
-		if len(items) == 0 {
-			continue
-		}
-
-		transitions, err := LoadWorkItemStateTransitions(ctx, executor.conn, run.OrganizationID, repoID, end)
-		if err != nil {
-			return wrapWorkItemStatePartialWrite(total, repoID, err)
-		}
-		if len(transitions) == 0 {
-			// Mirrors Python's `if not item_transitions: continue` per
-			// item -- with zero transitions for the whole repo, every
-			// item is skipped, so there is nothing to load attribution
-			// rows for either.
-			continue
-		}
-
-		attributions, err := LoadWorkItemPrimaryTeamAttributions(ctx, executor.conn, run.OrganizationID, repoID)
-		if err != nil {
-			return wrapWorkItemStatePartialWrite(total, repoID, err)
-		}
-
-		if !blockedLoaded {
-			// A failed read fails the partition. Computing without it would
-			// write full-length rows for the statuses the blocked hours
-			// belong to, and those rows would read as a complete answer.
-			var ended workitemmetrics.EndedRelationStats
-			blocked, ended, err = workitemblockers.LoadBlockedIntervals(ctx, executor.conn, run.OrganizationID)
-			if err != nil {
-				return wrapWorkItemStatePartialWrite(total, repoID, err)
-			}
-			blockedLoaded = true
-			// One line per partition, no id: how many relations the end rule
-			// closed, by provider, and how many of them are the named case of
-			// a github issue on a Projects v2 board.
-			counts := ended.Counts()
-			slog.Info(workitemmetrics.EndedRelationsLogMessage,
-				"writer", "daily_family",
-				"relations", counts.Relations,
-				"ended", counts.Ended,
-				"ended_github", counts.EndedGitHub,
-				"ended_gitlab", counts.EndedGitLab,
-				"ended_jira", counts.EndedJira,
-				"ended_linear", counts.EndedLinear,
-				"ended_other", counts.EndedOther,
-				"github_board_candidates", counts.GitHubBoardCandidates,
-			)
-		}
-
-		// One honest, real-wall-clock timestamp per repo group -- see
-		// WriteTeamMetricsDailyPerRepo's doc comment for why this
-		// mirrors Python's real per-repo_id call cadence rather than
-		// stamping the whole partition with one shared value.
-		computedAt := executor.nowUTC()
-
-		rows, itemRows, missingAttribution := computeWorkItemStateDurationRowsForRepo(
-			day, start, end, items, transitions, attributions, computedAt, blocked,
-		)
-
-		// CHAOS-4278 (codex round-1 P2 finding): observe as soon as the
-		// count is known, BEFORE attempting the write -- unlike
-		// ObserveTeamMetricsDailyRepoCount (which describes properties of
-		// rows that were actually written, so it must wait for the write to
-		// durably land), missingAttribution describes something about the
-		// INPUT this repo's items carried, independent of whether the
-		// subsequent write succeeds. Observing only after a successful
-		// write would silently undercount on every WriteWorkItemState
-		// DurationsDaily failure -- exactly the gap that would make this
-		// guard counter itself unreliable during an outage, the one time a
-		// reader most needs to trust it. 0 is a valid, expected observation
-		// (see ObserveWorkItemStateMissingAttribution's doc comment). A nil
-		// observer (not yet wired) is a no-op, never a failure.
-		if executor.missingAttributionObserver != nil {
-			_ = executor.missingAttributionObserver.ObserveWorkItemStateMissingAttribution(missingAttribution)
-		}
-
-		if len(rows) == 0 {
-			continue
-		}
-		// #2276 confirmation-pass P1: WriteWorkItemStateDurationsDaily's own
-		// batch.Send() branch already reports its TRUE row count on an
-		// ambiguous network error (the F1 sweep) -- `total` must be updated
-		// with that count BEFORE the error check, not only after a
-		// confirmed success, or the failing write's own truthful count is
-		// discarded a second time.
-		written, err := WriteWorkItemStateDurationsDaily(ctx, executor.conn, run.OrganizationID, day, rows, computedAt)
-		total += written
-		if err != nil {
-			return wrapWorkItemStatePartialWrite(total, repoID, err)
-		}
-		written, err = WriteWorkItemBlockedDurationsDaily(ctx, executor.conn, run.OrganizationID, day, itemRows, computedAt)
-		total += written
-		if err != nil {
-			return wrapWorkItemStatePartialWrite(total, repoID, err)
-		}
-	}
-	return total, nil
-}
-
-// wrapWorkItemStatePartialWrite is the codex round 2 F3 fix (astra scale
-// review's post_bridge sibling, folded into CHAOS-5190 per team-lead's
-// ruling since it's adjacent to that PR's own repo_ids telemetry work): a
-// LATER repository in ComputeFamily's per-repo loop can fail (a read step or
-// the write step) AFTER an EARLIER repository's rows already landed --
-// `total` carries that count. Before this fix, `return total, err` returned
-// the raw, unwrapped error regardless of whether total was 0 or nonzero, so
-// daily.go's dispatcher (which only distinguishes ErrPartialWrite from every
-// other error) always classified this as a full Refused/0-rows outcome even
-// when real rows were already on disk -- telling an operator the OPPOSITE of
-// what a re-drive would create (duplicate rows on a plain MergeTree, not a
-// clean recompute). Mirrors wrapWorkGraphEdgesPartialWrite's exact shape:
-// `total == 0` is a genuine refusal (nothing landed, wrap nothing); `total >
-// 0` wraps ErrPartialWrite naming the repo and the true row count. The
-// PARTITION-level disposition CHAOS-5190 actually contracts on
-// (computePostBridgeNativeFamilies appends to `incomplete` either way) is
-// unaffected either way -- this only corrects the FAMILY-level telemetry
-// (CHAOS-5139's refused-vs-partial distinction) an operator reads to judge
-// re-drive risk.
-func wrapWorkItemStatePartialWrite(total int, repoID uuid.UUID, err error) (int, error) {
-	if total == 0 {
+	// The version is taken before the reads (see WorkItemExecutor).
+	computedAt := executor.nowUTC()
+	read, err := loadWorkItemScopeRead(ctx, executor.conn, "work_item_state", run, partition,
+		workItemPartitionScope{day: day, start: start, end: end, repoIDs: repoIDs}, true)
+	if err != nil {
 		return 0, err
 	}
-	return total, fmt.Errorf("%w: work_item_state failed on repo %s after %d row(s) already landed: %w",
-		ErrPartialWrite, repoID, total, err)
+	// With no item, or no transition for any item, every item is skipped
+	// (Python's `if not item_transitions: continue`), so there is nothing to
+	// read the blocked spans for.
+	if len(read.Items) == 0 || len(read.Transitions) == 0 {
+		return 0, nil
+	}
+
+	// The blocked spans (CHAOS-8493) are organization-wide -- a blocker lives
+	// in any repository, or in none. A failed read fails the partition.
+	// Computing without it would write full-length rows for the statuses the
+	// blocked hours belong to, and those rows would read as a complete answer.
+	blocked, ended, err := workitemblockers.LoadBlockedIntervals(ctx, executor.conn, run.OrganizationID)
+	if err != nil {
+		return 0, err
+	}
+	// One line per partition, no id: how many relations the end rule closed,
+	// by provider, and how many of them are the named case of a github issue
+	// on a Projects v2 board.
+	counts := ended.Counts()
+	slog.Info(workitemmetrics.EndedRelationsLogMessage,
+		"writer", "daily_family",
+		"relations", counts.Relations,
+		"ended", counts.Ended,
+		"ended_github", counts.EndedGitHub,
+		"ended_gitlab", counts.EndedGitLab,
+		"ended_jira", counts.EndedJira,
+		"ended_linear", counts.EndedLinear,
+		"ended_other", counts.EndedOther,
+		"github_board_candidates", counts.GitHubBoardCandidates,
+	)
+
+	rows, itemRows, missingAttribution := computeWorkItemStateDurationRowsForRepo(
+		day, start, end, read.stateItems(), read.Transitions, read.Attributions, computedAt, blocked,
+	)
+
+	// CHAOS-4278: observe as soon as the count is known, BEFORE the write.
+	// missingAttribution describes the INPUT, independent of whether the
+	// write succeeds; observing only after a successful write would
+	// undercount on every write failure. 0 is a valid observation. A nil
+	// observer is a no-op, never a failure.
+	if executor.missingAttributionObserver != nil {
+		_ = executor.missingAttributionObserver.ObserveWorkItemStateMissingAttribution(missingAttribution)
+	}
+	if len(rows) == 0 {
+		return 0, nil
+	}
+
+	// Each writer reports its true row count on an ambiguous Send error, so
+	// the count is added before the error check.
+	total, err := WriteWorkItemStateDurationsDaily(ctx, executor.conn, run.OrganizationID, day, rows, computedAt)
+	if err != nil {
+		return wrapWorkItemScopePartialWrite("work_item_state", total, partition, err)
+	}
+	written, err := WriteWorkItemBlockedDurationsDaily(ctx, executor.conn, run.OrganizationID, day, itemRows, computedAt)
+	total += written
+	if err != nil {
+		return wrapWorkItemScopePartialWrite("work_item_state", total, partition, err)
+	}
+	return total, nil
 }
 
 // workItemStateSegment is one (status, start, end) span in a work item's

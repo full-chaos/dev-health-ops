@@ -4,8 +4,6 @@ import (
 	"errors"
 	"testing"
 	"time"
-
-	"github.com/google/uuid"
 )
 
 func TestNewWorkItemStateExecutorRejectsNilConn(t *testing.T) {
@@ -352,23 +350,17 @@ func TestComputeWorkItemStateDurationsZeroItemsReturnsNoRows(t *testing.T) {
 }
 
 // TestWorkItemStatePartialWriteGuardPinsBothDirections is the codex round 2
-// F3 red-first proof (astra scale review, folded into CHAOS-5190 per
-// team-lead's ruling): ComputeFamily's per-repo loop used to
-// `return total, err` UNWRAPPED at every early-return site, so a LATER
-// repo's failure after an EARLIER repo's rows already landed was reported
-// exactly like a genuine refusal (Refused/0-rows) even though real rows
-// were on disk -- daily.go's dispatcher only distinguishes ErrPartialWrite
-// from everything else, so this misclassification told an operator the
-// OPPOSITE of what a re-drive would create (duplicate rows on
-// work_item_state_durations_daily until a background merge collapses them).
-// Mirrors TestWorkGraphEdgesPartialWriteGuardPinsBothDirections's shape
-// exactly: wrap only when something already landed, never when nothing did.
+// A failure after rows landed must reach the dispatcher as ErrPartialWrite
+// with the true row count: the dispatcher only distinguishes ErrPartialWrite
+// from every other error, and Refused/0-rows would tell an operator the
+// opposite of what is on disk. With nothing written the error stays an
+// ordinary refusal.
 func TestWorkItemStatePartialWriteGuardPinsBothDirections(t *testing.T) {
 	cause := errors.New("simulated ClickHouse send failure")
-	repoID := uuid.MustParse("11111111-1111-1111-1111-111111111111")
+	partition := Partition{ID: "partition-1"}
 
 	t.Run("failure AFTER a write is a partial write", func(t *testing.T) {
-		rows, err := wrapWorkItemStatePartialWrite(5, repoID, cause)
+		rows, err := wrapWorkItemScopePartialWrite("work_item_state", 5, partition, cause)
 		if !errors.Is(err, ErrPartialWrite) {
 			t.Errorf("a failure after 5 rows landed must wrap ErrPartialWrite so the dispatcher "+
 				"reports PartialWrite, not Refused; got %v", err)
@@ -384,10 +376,10 @@ func TestWorkItemStatePartialWriteGuardPinsBothDirections(t *testing.T) {
 	})
 
 	t.Run("failure BEFORE any write is an ordinary failure", func(t *testing.T) {
-		rows, err := wrapWorkItemStatePartialWrite(0, repoID, cause)
+		rows, err := wrapWorkItemScopePartialWrite("work_item_state", 0, partition, cause)
 		if errors.Is(err, ErrPartialWrite) {
-			t.Error("a failure with nothing written must NOT wrap ErrPartialWrite: this repo's " +
-				"loop iteration produced zero rows, so there is nothing to distinguish from an " +
+			t.Error("a failure with nothing written must NOT wrap ErrPartialWrite: the " +
+				"partition produced zero rows, so there is nothing to distinguish from an " +
 				"ordinary refusal")
 		}
 		if !errors.Is(err, cause) {

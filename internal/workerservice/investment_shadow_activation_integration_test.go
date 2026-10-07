@@ -168,7 +168,7 @@ func TestTheWorkersInvestmentExecutorReachesAShadowSendWithOnlyItsOwnSwitch(t *t
 			ID: "6f1a3c2e-4b5d-4e6f-8a9b-0c1d2e3f4a5b", OrganizationID: shadowActivationOrg,
 			Kind: workgraph.KindMaterialize, Scope: []byte(`{"llm_provider":"mock","force":true}`),
 		},
-		Token: "1f2e3d4c-5b6a-4798-8a9b-0c1d2e3f4a5b",
+		Token: "claim-of-the-activation-test",
 	}
 	specs := []jobruntime.HandlerSpec{{Kind: jobcontract.KindInvestmentMaterialize}}
 	cfg := config.Config{Service: "dev-health-worker", ClickHouseURI: secrets.NewValue(instance.URI)}

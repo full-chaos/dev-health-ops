@@ -273,6 +273,12 @@ func runTeams(ctx context.Context, env cli.Env, d deps) int {
 		logger.Warn("atlassian team project links incomplete: no link was closed", "org_id", orgID,
 			"failed_team_reads", links.FailedTeamReads, "unknown_type_links", links.SkippedUnknownType, "error", detail)
 	}
+	if unwritten := len(rows.UnreadableProjectLinkTeams); selections.Projects && unwritten > 0 {
+		// A Jira project link of these teams got no row (no readable project id, or no key): the provider still
+		// returns the link, so no link of these teams was closed.
+		logger.Warn("atlassian team project links not written: no link of these teams was closed", "org_id", orgID,
+			"teams", unwritten, "skipped_no_native_id", links.SkippedNoNativeID, "skipped_no_project_key", links.SkippedNoProjectKey)
+	}
 	logger.Info("atlassian teams synced", "org_id", orgID, "teams", len(rows.Teams), "memberships", len(rows.Memberships),
 		"project_links", len(rows.Ownership), "project_links_seen", links.Seen, "project_links_written", result.OwnershipWritten,
 		"skipped_project_links", links.Skipped(), "skipped_not_project", links.SkippedNonJira, "skipped_no_native_id", links.SkippedNoNativeID,

@@ -47,9 +47,9 @@ type Result struct {
 	OwnershipWritten   int
 	ExpiredMemberships int
 	ExpiredOwnership   int
-	// UnreadableProjectLinkTeams counts the teams whose project links this
-	// call left as they were, because the collection could read none of the
-	// team's links (Rows.UnreadableProjectLinkTeams).
+	// UnreadableProjectLinkTeams counts the teams of which this call closed
+	// no project link, because the provider returned a Jira project link of
+	// the team that got no row (Rows.UnreadableProjectLinkTeams).
 	UnreadableProjectLinkTeams int
 	// ProjectLinks is the collection's own link counts (Rows.ProjectLinks):
 	// links seen, skipped by reason, and team reads that failed. With
@@ -195,8 +195,8 @@ func Write(ctx context.Context, conn driver.Conn, orgID string, rows Rows, selec
 	}
 	if selections.Structure && (len(teamsToWrite) > 0 || len(deactivate) > 0) {
 		// The catalog row's project keys follow the links: a run that closes
-		// no link of a team (the snapshot is not complete, or the team's links
-		// were not readable) keeps the keys the team had next to the ones it
+		// no link of a team (the snapshot is not complete, or a link of the
+		// team got no row) keeps the keys the team had next to the ones it
 		// read now.
 		keepKeysOf := map[string]bool{}
 		if selections.Projects && !rows.ProjectLinksComplete {
@@ -368,8 +368,10 @@ func planMemberships(ctx context.Context, conn driver.Conn, orgID string, scope 
 // complete is Rows.ProjectLinksComplete: only a collection that read every
 // team's project links to the end closes a link.
 //
-// unreadable is Rows.UnreadableProjectLinkTeams: the open links of such a
-// team are not given to the plan, so none of them is closed.
+// unreadable is Rows.UnreadableProjectLinkTeams: no open link of such a team
+// is closed. Its open links still go into the plan, because the team's fresh
+// links take their first-seen valid_from from them; only the plan's closing
+// of them is dropped.
 func planOwnership(ctx context.Context, conn driver.Conn, orgID string, scope []string, fresh []OwnershipRow, now time.Time, complete bool, unreadable []string) ([]OwnershipRow, []openOwnership, error) {
 	if len(scope) == 0 {
 		return fresh, nil, nil
@@ -385,9 +387,6 @@ func planOwnership(ctx context.Context, conn driver.Conn, orgID string, scope []
 		var row openOwnership
 		if err := result.Scan(&row.teamID, &row.projectID, &row.projectKey, &row.source, &row.isPrimary, &row.specificity, &row.priority, &row.validFrom); err != nil {
 			return nil, nil, err
-		}
-		if slices.Contains(unreadable, row.teamID) {
-			continue
 		}
 		open = append(open, row)
 	}
@@ -411,6 +410,9 @@ func planOwnership(ctx context.Context, conn driver.Conn, orgID string, scope []
 	var expired []openOwnership
 	for _, retraction := range plan.Retract {
 		row := open[retraction.Open]
+		if slices.Contains(unreadable, row.teamID) {
+			continue
+		}
 		row.closedAt = retraction.ClosedAt
 		expired = append(expired, row)
 	}

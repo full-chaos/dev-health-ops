@@ -77,6 +77,13 @@ func TestTheProjectLinkLegNamesWhyItIsNotComplete(t *testing.T) {
 		"a failed read next to an unknown type": {atlassianteams.Rows{ProjectLinkFailure: failure, ProjectLinks: atlassianteams.ProjectLinkCounts{Seen: 1, SkippedUnknownType: 1, FailedTeamReads: 1}},
 			"project_link_read_failed", "synthetic gateway refusal"},
 		"no recorded cause": {atlassianteams.Rows{}, "project_link_read_failed", ""},
+		// Every read ended and one team has a Jira project link that got no row: the snapshot is complete, the leg is not clean.
+		"a link that got no row": {atlassianteams.Rows{ProjectLinksComplete: true, UnreadableProjectLinkTeams: []string{"t-1"},
+			ProjectLinks: atlassianteams.ProjectLinkCounts{Seen: 2, SkippedNoProjectKey: 1}}, "project_link_not_written", ""},
+		"a link that got no row next to an unknown type": {atlassianteams.Rows{UnreadableProjectLinkTeams: []string{"t-1"},
+			ProjectLinks: atlassianteams.ProjectLinkCounts{Seen: 2, SkippedNoNativeID: 1, SkippedUnknownType: 1}}, "project_link_unknown_type", ""},
+		"a link that got no row next to a failed read": {atlassianteams.Rows{ProjectLinkFailure: failure, UnreadableProjectLinkTeams: []string{"t-1"},
+			ProjectLinks: atlassianteams.ProjectLinkCounts{Seen: 1, SkippedNoNativeID: 1, FailedTeamReads: 1}}, "project_link_read_failed", "synthetic gateway refusal"},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {

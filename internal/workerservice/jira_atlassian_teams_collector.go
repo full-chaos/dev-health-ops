@@ -161,15 +161,18 @@ const (
 	atlassianLegLinkReadFailed      = "project_link_read_failed"
 	atlassianLegLinkPageBound       = "project_link_page_bound"
 	atlassianLegLinkUnknownType     = "project_link_unknown_type"
+	atlassianLegLinkNotWritten      = "project_link_not_written"
 	atlassianProjectLinksLeg        = "jira_atlassian_team_project_links"
 	atlassianProjectLinksDegradedAt = "jira_atlassian_teams_project_links_degraded"
 )
 
-// degradedProjectLinksLeg is the degraded leg of a project-link collection that was not a complete snapshot, nil
-// when it was complete. The team-to-container relation is experimental at the provider: a refused opt-in, a failed
-// page, the page bound and a link type this code does not know all end here, with the reason, and close no row.
+// degradedProjectLinksLeg is the degraded leg of a project-link collection in which a link the provider has may
+// be without its row, nil when every link was read and written. The team-to-container relation is experimental at
+// the provider: a refused opt-in, a failed page, the page bound and a link type this code does not know all end
+// here, with the reason, and close no row. A Jira project link that got no row (no readable id, no key) ends here
+// too: it closes no row of its team.
 func degradedProjectLinksLeg(rows atlassianteams.Rows) *providersync.DegradedLeg {
-	if rows.ProjectLinksComplete {
+	if rows.EveryProjectLinkWritten() {
 		return nil
 	}
 	leg := providersync.DegradedLeg{Dataset: "teams", Leg: atlassianProjectLinksLeg, Outcome: "failed"}
@@ -180,6 +183,8 @@ func degradedProjectLinksLeg(rows atlassianteams.Rows) *providersync.DegradedLeg
 		leg.Reason, leg.Detail = atlassianLegLinkReadFailed, syncdispatchruntime.SanitizeErrorText(failure.Error())
 	case rows.ProjectLinks.SkippedUnknownType > 0:
 		leg.Reason = atlassianLegLinkUnknownType
+	case len(rows.UnreadableProjectLinkTeams) > 0:
+		leg.Reason = atlassianLegLinkNotWritten
 	default:
 		// Not complete and no recorded cause: still never a clean run.
 		leg.Reason = atlassianLegLinkReadFailed
@@ -314,8 +319,8 @@ func (collector jiraCombinedTeamCatalogCollector) collectAtlassianTeams(
 			"unknown_type", links.SkippedUnknownType, "duplicate", links.SkippedDuplicate)
 	}
 	if len(rows.UnreadableProjectLinkTeams) > 0 {
-		// A Jira project link of these teams had no readable id or key:
-		// their open links stay as they are.
+		// A Jira project link of these teams got no row (no readable id, or
+		// no key): no link of these teams is closed by this run.
 		slog.Default().WarnContext(ctx, "jira_atlassian_teams_project_links_unreadable",
 			"org_id", ref.OrgID, "sync_run_id", ref.SyncRunID, "teams", len(rows.UnreadableProjectLinkTeams))
 	}
@@ -337,7 +342,8 @@ func (collector jiraCombinedTeamCatalogCollector) collectAtlassianTeams(
 			leg.Detail = secrets.NewBoundaryWith("", token, email.Reveal()).RedactText(leg.Detail)
 			slog.Default().WarnContext(ctx, atlassianProjectLinksDegradedAt, "org_id", ref.OrgID, "sync_run_id", ref.SyncRunID,
 				"reason", leg.Reason, "error", leg.Detail, "failed_team_reads", links.FailedTeamReads, "links_seen", links.Seen,
-				"unknown_type", links.SkippedUnknownType, "teams", len(rows.Teams))
+				"unknown_type", links.SkippedUnknownType, "no_native_id", links.SkippedNoNativeID, "no_project_key", links.SkippedNoProjectKey,
+				"teams_with_unwritten_links", len(rows.UnreadableProjectLinkTeams), "teams", len(rows.Teams))
 			degraded = append(degraded, *leg)
 		}
 	}

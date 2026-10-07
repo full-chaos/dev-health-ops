@@ -138,14 +138,19 @@ stays a separate option"). Both live in ClickHouse under `provider = 'jira'`:
 **Leg 2's ownership source (CHAOS-8887).** The rows come from the GraphQL relation
 `graphStore_teamConnectedToContainer` (opt-in `GraphStoreTeamConnectedToContainer`; EXPERIMENTAL at Atlassian;
 node = `JiraProject | ConfluenceSpace | LoomSpace`), read per active team by the vendored client's
-`IterTeamConnectedContainers` (`third_party/vendor/atlassian`, patch 0006). The relation the step read before,
+`IterTeamConnectedContainers` (`third_party/vendor/atlassian`, patches 0006 and 0007). The relation the step read before,
 `teamworkGraph_teamActiveProjects`, is the projects a team is ACTIVE on: an activity relation, not ownership, and
 it is no longer read. Only a `JiraProject` node with a native numeric project id and a key becomes a row; a
 Confluence or Loom space is counted and skipped; a name is never a link. The team search sends
 `showEmptyTeams: true`, so a team with no member is stored too. The link is many-to-many. The leg fails by itself:
 a failed link read, a refused opt-in, the page bound or an unknown link type leaves the teams and members written,
 closes no ownership row (the snapshot is not complete, `providersync.PlanOwnershipSnapshot`), and is reported as
-the degraded leg `jira_atlassian_team_project_links`. The rules, the counts and the tests are in
+the degraded leg `jira_atlassian_team_project_links`. A row is closed only when every Jira project link the
+provider returned for its team was written: a `JiraProject` link that got no row for any reason (no readable
+project ARI, two ids, no key) names its team, no row of that team is closed in that run, its writable links are
+still written, and the same leg is degraded with reason `project_link_not_written`. An answer with a missing or
+null `edges`, `nodes` or `pageInfo` (link read and team search) is a refused answer, never an empty last page; an
+explicit empty list with `pageInfo` present is a true empty state. The rules, the counts and the tests are in
 `docs/contribute/architecture/team-attribution.md` section 0.4c.
 
 **Precedence is resolved entirely at READ time**, never by gating which leg writes: `project_ownership`

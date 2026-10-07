@@ -113,12 +113,14 @@ func (c *Client) SearchTeams(ctx context.Context, organizationID string, siteID 
 		if !conn.PageInfo.HasNextPage {
 			break
 		}
+		// A page that promises a next page and names no cursor is not the last page (local modification,
+		// patch 0007): the list is refused, never returned short.
 		if !gen.TeamSearchPageInfoHasEndCursor || conn.PageInfo.EndCursor == nil {
-			break
+			return nil, errors.New("team search page promises a next page without a cursor")
 		}
 		next := strings.TrimSpace(*conn.PageInfo.EndCursor)
 		if next == "" {
-			break
+			return nil, errors.New("team search page promises a next page without a cursor")
 		}
 		if _, exists := seenCursors[next]; exists {
 			return nil, errors.New("team search pagination cursor repeated; aborting to prevent infinite loop")

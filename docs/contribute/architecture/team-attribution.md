@@ -696,9 +696,11 @@ project's items by id. Now:
     read holds.
   - Atlassian Teams: `Rows.ProjectLinksComplete` is set only by a collection that read the connected
     spaces of every active team to the last page and met no link type it does not know (section 0.4c).
-    Per team: when Jira project links came back and not one carries a readable Jira project ARI, the
-    team is named in `Rows.UnreadableProjectLinkTeams`, its open links stay open, and the run logs
-    `jira_atlassian_teams_project_links_unreadable` with the count.
+    Per team: when a Jira project link came back and got no row (no readable Jira project ARI, two ids,
+    no key), the team is named in `Rows.UnreadableProjectLinkTeams`, no open link of that team is closed
+    (its writable links are still written), the run logs `jira_atlassian_teams_project_links_unreadable`
+    with the count, and the link leg is degraded (`project_link_not_written`). One writable link beside
+    it does not change that.
   - The census test also fails when a planner passes a constant for `Complete`.
 - **A closed row is not owned before a merge.** A row is closed by writing its key again with `valid_to`
   set, so until a merge both versions are stored. The ownership reader of the repository derivation
@@ -718,7 +720,8 @@ team reaches its project's work items through ownership by id; one `projects` ro
 GitLab gap pinned as a known red), `TestAnAtlassianTeamsRunClosesTheKeyBuiltProjectLinks`,
 `TestAPartialJiraSnapshotClosesNoOwnership` (a search that stops after a page, and a legacy links table
 that cannot be read, close nothing; the complete run after them closes the lost project),
-`TestATeamWithNoReadableProjectLinkKeepsItsOpenLinks`, `TestAnArchivedJiraProjectKeepsItsOwnership`,
+`TestATeamWithNoReadableProjectLinkKeepsItsOpenLinks`, `TestALinkTheProviderStillReturnsIsNeverClosed`,
+`TestAnArchivedJiraProjectKeepsItsOwnership`,
 `TestAnArchivedJiraProjectKeepsItsKeyBuiltOwnership` (a store with key-built rows only, a store with both
 id forms, an empty live answer).
 
@@ -746,10 +749,34 @@ The Atlassian Teams of a Jira site ARE the Jira teams. A team owns a Jira projec
   type this code does not know makes the snapshot NOT complete: the links that were read are written, no row
   is closed, and each team's catalog `project_keys` keeps what it had. Zero links for a team on a complete
   read is a valid answer.
+- **A row is closed only when every Jira project link the provider returned for its team was written.**
+  One rule, per team, in one place (`teamLinkLedger` in `internal/atlassianteams/collect.go`): the
+  `JiraProject` links the provider returned for the team are counted, and so are the ones behind an
+  ownership row of this run (a second link to the same project is behind the row of the first). When the
+  two counts differ, for ANY reason (no readable project ARI, a `projectId` that disagrees with the ARI, no
+  key, or a skip reason added later), the team is named in `Rows.UnreadableProjectLinkTeams`: no row of
+  that team is closed in this run, its catalog `project_keys` keeps what it had, and the links of the team
+  that can be written are still written with their first-seen `valid_from`. The other teams of the run
+  are judged by themselves. A `ConfluenceSpace` or `LoomSpace` link is not a project link and is not in
+  this count; a link of an unknown type makes the whole snapshot not complete, as above. The older rule
+  "a team with one readable link is not unreadable" is gone: one link that got no row is enough.
+- **An answer with a missing part is a refused answer, never an empty last page.** In the link read: a
+  missing or null relation, `pageInfo`, `hasNextPage` or `edges`, and a null edge, are an error of that
+  team's read (a failed team read: nothing is closed). In the team search: a missing or null `pageInfo`,
+  `hasNextPage` or `nodes`, a null node, a node with a null `team`, and a page that promises a next page
+  with no cursor, are an error of the search (the Atlassian Teams step fails as a degraded leg: nothing is
+  written, no team is deactivated, nothing is closed). An explicit empty list with `pageInfo` present
+  (`edges: []`, `nodes: []`, `hasNextPage: false`) is a true empty state and stays valid: a team with no
+  space is a true state. The refusals are in the vendored client (patches 0006 and 0007).
 - **Separate legs.** A failed link read does not fail the team and member legs of the same run. The worker
   step reports the degraded leg `jira_atlassian_team_project_links` (reason `project_link_read_failed`,
-  `project_link_page_bound` or `project_link_unknown_type`) with the Warn line
-  `jira_atlassian_teams_project_links_degraded`; the run's outcome is `native_degraded`. A team search with
+  `project_link_page_bound`, `project_link_unknown_type` or `project_link_not_written`; the first that
+  applies, in that order) with the Warn line `jira_atlassian_teams_project_links_degraded`; the run's
+  outcome is `native_degraded`. `project_link_not_written` is the leg of a run in which every read ended
+  and a Jira project link of at least one team got no row: the snapshot is complete for the other teams,
+  and the named teams keep their rows. The reason is one of four fixed values and carries no team or
+  project value; the Warn line carries counts only (`no_native_id`, `no_project_key`,
+  `teams_with_unwritten_links`). No metric label is added: the two skip counts below already exist. A team search with
   no team is the degraded leg `jira_atlassian_teams` with reason `empty_team_search`; nothing is written and
   nothing is closed. The relation is EXPERIMENTAL at the provider, so a provider-side change shows as a
   degraded leg, never as "zero links, all closed".
@@ -771,7 +798,13 @@ that serves the measured answer shape: 11 teams, 10 links, one team with none),
 `TestALinkAnswerInAnUnknownShapeDoesNotFailTeamsAndMembers`, `TestALinkReadThatNeverEndsStopsAtItsBound`,
 `TestALostLinkIsClosedOnlyByACompleteSync` and `TestTheConnectedSpacesOfASiteBecomeOwnershipRows` (real
 ClickHouse), `TestTheWorkerStepCountsLinksAndDegradesAnIncompleteLinkLeg`,
-`TestAnEmptyAtlassianTeamSearchIsADegradedLegNotSilence`.
+`TestAnEmptyAtlassianTeamSearchIsADegradedLegNotSilence`, `TestAJiraProjectLinkThatIsNotWrittenNamesItsTeam`,
+`TestATeamWithAProjectLinkThatGotNoRowIsNamedUnreadable`, `TestALinkAnswerWithNoListOfLinksIsAFailedRead`,
+`TestATeamSearchAnswerWithAMissingPartIsAFailedSearch`, `TestTheLinkDecoderRefusesAnAnswerWithAMissingPart`,
+`TestTheTeamSearchDecoderRefusesAnAnswerWithAMissingPart`, `TestTheProjectLinkLegNamesWhyItIsNotComplete`
+and `TestALinkTheProviderStillReturnsIsNeverClosed` (real ClickHouse: a link with no key, an ARI this code
+does not read beside one it reads, two ids, no `edges`, null `edges`, a team search with no `pageInfo`;
+controls: a link that is gone and an explicit empty list are closed).
 
 #### 0.4a Provider × entity **consumption** (functional — what `run_team_autoimport` actually pulls)
 

@@ -158,11 +158,14 @@ type ProjectLinkCounts struct {
 	// SkippedUnknownType: a link whose node is of no known type, or absent.
 	SkippedUnknownType int
 	// SkippedNoNativeID: a JiraProject link with no native project id (no
-	// Jira project ARI, or a projectId that disagrees with it).
+	// Jira project ARI, or a projectId that disagrees with it). Its team is
+	// in Rows.UnreadableProjectLinkTeams.
 	SkippedNoNativeID int
-	// SkippedNoProjectKey: a JiraProject link with no project key.
+	// SkippedNoProjectKey: a JiraProject link with no project key. Its team
+	// is in Rows.UnreadableProjectLinkTeams.
 	SkippedNoProjectKey int
 	// SkippedDuplicate: a second link of the same team to the same project.
+	// It is behind the row of the first.
 	SkippedDuplicate int
 	FailedTeamReads  int
 }
@@ -193,14 +196,53 @@ type Rows struct {
 	// FailedProjectLinkTeams holds the id of every team whose link read did
 	// not reach its end.
 	FailedProjectLinkTeams []string
-	// UnreadableProjectLinkTeams holds the id of every team whose read
-	// returned at least one JiraProject link and not one of them carried a
-	// Jira project ARI this collector can read. An empty answer for such a
-	// team is "the links could not be read", not "the team has no project":
-	// Write closes none of that team's links. A team with at least one
-	// readable link is not here; its other links are counted in ProjectLinks.
+	// UnreadableProjectLinkTeams holds the id of every team whose read ended
+	// and returned at least one JiraProject link that is not behind an
+	// ownership row of this collection, for any reason (no readable project
+	// ARI, two ids, no key). The provider still returns that link, so "the
+	// row is not in this snapshot" does not mean "the link is gone": Write
+	// closes none of that team's links. The links of the team that can be
+	// written are still in Ownership, and every link is counted by its reason
+	// in ProjectLinks. A team with no link at all is not here.
 	UnreadableProjectLinkTeams []string
 }
+
+// EveryProjectLinkWritten says the link leg is whole: the snapshot is
+// complete and no team has a Jira project link that got no row. When it is
+// false the leg is degraded, and the rows say why (ProjectLinkFailure,
+// ProjectLinks, UnreadableProjectLinkTeams).
+func (r Rows) EveryProjectLinkWritten() bool {
+	return r.ProjectLinksComplete && len(r.UnreadableProjectLinkTeams) == 0
+}
+
+// linkSkip is why a JiraProject link got no ownership row.
+type linkSkip int
+
+const (
+	linkWritable linkSkip = iota
+	linkNoNativeID
+	linkNoProjectKey
+)
+
+// count adds a link that got no row to the count of its reason.
+func (c *ProjectLinkCounts) count(reason linkSkip) {
+	switch reason {
+	case linkNoNativeID:
+		c.SkippedNoNativeID++
+	case linkNoProjectKey:
+		c.SkippedNoProjectKey++
+	}
+}
+
+// teamLinkLedger is the one place that decides whether a team's links may be
+// closed by this run. inScope counts the JiraProject links the provider
+// returned for the team; written counts the ones behind an ownership row of
+// this run. A link reaches written only on the path that has the row, so a
+// link skipped for a reason that exists now or is added later leaves the two
+// counts apart, and the team's rows stay open.
+type teamLinkLedger struct{ inScope, written int }
+
+func (l teamLinkLedger) everyLinkWritten() bool { return l.inScope == l.written }
 
 // ErrConfiguration marks an input the sync cannot run without.
 var ErrConfiguration = errors.New("atlassianteams: configuration")
@@ -314,6 +356,19 @@ func connectedProjectNativeID(container graph.TeamConnectedContainer) (string, b
 	return id, true
 }
 
+// connectedProject reads the project of a JiraProject link node: its native
+// id and its key, or the reason the link gets no row.
+func connectedProject(container graph.TeamConnectedContainer) (nativeProjectID, key string, skip linkSkip) {
+	nativeProjectID, ok := connectedProjectNativeID(container)
+	if !ok {
+		return "", "", linkNoNativeID
+	}
+	if key = strings.TrimSpace(container.Key); key == "" {
+		return "", "", linkNoProjectKey
+	}
+	return nativeProjectID, key, linkWritable
+}
+
 // Collect reads the selected dimensions of every Atlassian team and returns
 // the rows to write. The team search and the member reads are all or nothing:
 // either one failing fails the run (a membership list cut short by an error
@@ -421,44 +476,41 @@ func Collect(ctx context.Context, client Client, params Params) (Rows, error) {
 			default:
 				projectReads++
 				linked := map[string]bool{}
-				readable, refused := 0, 0
+				var ledger teamLinkLedger
 				for _, container := range containers {
 					rows.ProjectLinks.Seen++
 					switch container.Typename {
 					case containerJiraProject:
 					case containerConfluenceSpace, containerLoomSpace:
+						// Not a project link: never a row, and not a link this run owes a row for.
 						rows.ProjectLinks.SkippedNonJira++
 						continue
 					default:
 						rows.ProjectLinks.SkippedUnknownType++
 						continue
 					}
-					nativeProjectID, ok := connectedProjectNativeID(container)
-					if !ok {
-						refused++
-						rows.ProjectLinks.SkippedNoNativeID++
-						continue
-					}
-					readable++
-					key := strings.TrimSpace(container.Key)
-					if key == "" {
-						rows.ProjectLinks.SkippedNoProjectKey++
+					ledger.inScope++
+					nativeProjectID, key, skip := connectedProject(container)
+					if skip != linkWritable {
+						rows.ProjectLinks.count(skip)
 						continue
 					}
 					if linked[nativeProjectID] {
+						// A second link to a project of this team: the first one's row is its row.
 						rows.ProjectLinks.SkippedDuplicate++
-						continue
+					} else {
+						linked[nativeProjectID] = true
+						rows.Ownership = append(rows.Ownership, OwnershipRow{
+							OrgID: params.OrgID, Provider: Provider, TeamID: id, ProjectID: nativeProjectID,
+							ProjectKey: key, Source: Source, IsPrimary: 1, Specificity: OwnershipSpecificity,
+							Priority: OwnershipPriority, ValidFrom: now, UpdatedAt: now,
+						})
+						row.ProjectKeys = append(row.ProjectKeys, key)
 					}
-					linked[nativeProjectID] = true
-					rows.Ownership = append(rows.Ownership, OwnershipRow{
-						OrgID: params.OrgID, Provider: Provider, TeamID: id, ProjectID: nativeProjectID,
-						ProjectKey: key, Source: Source, IsPrimary: 1, Specificity: OwnershipSpecificity,
-						Priority: OwnershipPriority, ValidFrom: now, UpdatedAt: now,
-					})
-					row.ProjectKeys = append(row.ProjectKeys, key)
+					ledger.written++
 				}
 				sort.Strings(row.ProjectKeys)
-				if refused > 0 && readable == 0 {
+				if !ledger.everyLinkWritten() {
 					rows.UnreadableProjectLinkTeams = append(rows.UnreadableProjectLinkTeams, id)
 				}
 			}
@@ -472,7 +524,9 @@ func Collect(ctx context.Context, client Client, params Params) (Rows, error) {
 	// bound). So the links are complete when one read ended for every active
 	// team (that count is the signal, not an assumption), and every link was
 	// of a known type: a type this collector does not know is a provider-side
-	// change, and what it would have been is not known.
+	// change, and what it would have been is not known. A JiraProject link
+	// that got no row does not end here: it names its team
+	// (UnreadableProjectLinkTeams), and Write closes no row of that team.
 	rows.ProjectLinksComplete = params.Selections.Projects && projectReads == activeTeams && rows.ProjectLinks.SkippedUnknownType == 0
 	return rows, nil
 }

@@ -31,11 +31,12 @@ import (
 //     in the logger lines, except the incomplete-project-links warning, whose
 //     error text is the gateway's link-read error passed through redact() (the
 //     sink boundary and the credential this run authenticated with).
+//     The links-not-written warning prints counts only.
 //   - teamscatalog.go: constant messages and redact() for every ClickHouse text.
 var classifiedPrintSites = map[string]int{
 	"batch.go":        3,
 	"local.go":        1,
-	"synccli.go":      15,
+	"synccli.go":      16,
 	"target.go":       5,
 	"teamscatalog.go": 13,
 }

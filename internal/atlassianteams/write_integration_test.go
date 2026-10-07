@@ -86,7 +86,7 @@ func TestWriteTeamsMembershipsAndOwnershipAgainstClickHouse(t *testing.T) {
 	// An Atlassian team already known, with a manual member and stale project keys.
 	exec(t, conn, `INSERT INTO teams (id, team_uuid, name, description, members, manual_members, project_keys, repo_patterns, is_active, updated_at, org_id, provider, native_team_key, parent_team_id) VALUES ('`+idA+`', generateUUIDv4(), 'Old name', NULL, [], ['jira:manual-1'], ['OLD'], [], 1, '2026-09-01 00:00:00', 'org-1', 'jira', 'x', NULL)`)
 
-	g := newGateway(t, standard)
+	g := newGateway(t, everyLinkWritable)
 	selections := everything
 	run := func(now time.Time, selections Selections) {
 		p := params(selections)
@@ -346,7 +346,7 @@ func TestAnAtlassianTeamsRunClosesTheKeyBuiltProjectLinks(t *testing.T) {
 	// The project-as-team owner of the same project: not an Atlassian team.
 	exec(t, conn, insert+`('org-1', 'jira', 'PLAT', 'org-1:jira:PLAT', 'PLAT', 'native', 1, 100, 10, '2026-09-01 00:00:00', NULL, '2026-09-01 00:00:00')`)
 
-	g := newGateway(t, standard)
+	g := newGateway(t, everyLinkWritable)
 	p := params(everything)
 	p.Now = now
 	rows, err := Collect(ctx, g.client(), p)

@@ -143,5 +143,46 @@ func DecodeTeamSearchV2(data map[string]any) (*TeamSearchConnection, error) {
 		return nil, errors.New("missing teamSearchV2")
 	}
 	conn := out.Team.Search
+	if err := checkTeamSearchShape(b); err != nil {
+		return nil, err
+	}
 	return conn, nil
+}
+
+// checkTeamSearchShape refuses a teamSearchV2 answer that does not say where its list ends or does not carry
+// the list (local modification, patch 0007). The typed decode above reads a missing pageInfo as "no next
+// page" and a missing or null nodes list as "no team"; a caller that takes the result for the whole list
+// would then drop every team the answer did not carry. Only a nodes list that is there and empty is "no team".
+func checkTeamSearchShape(body []byte) error {
+	var shape struct {
+		Team *struct {
+			Search *struct {
+				PageInfo *struct {
+					HasNextPage *bool `json:"hasNextPage"`
+				} `json:"pageInfo"`
+				Nodes *[]*struct {
+					Team *json.RawMessage `json:"team"`
+				} `json:"nodes"`
+			} `json:"teamSearchV2"`
+		} `json:"team"`
+	}
+	if err := json.Unmarshal(body, &shape); err != nil {
+		return err
+	}
+	if shape.Team == nil || shape.Team.Search == nil {
+		return errors.New("missing teamSearchV2")
+	}
+	search := shape.Team.Search
+	if search.PageInfo == nil || search.PageInfo.HasNextPage == nil {
+		return errors.New("missing teamSearchV2.pageInfo.hasNextPage")
+	}
+	if search.Nodes == nil {
+		return errors.New("missing teamSearchV2.nodes")
+	}
+	for _, node := range *search.Nodes {
+		if node == nil || node.Team == nil {
+			return errors.New("null team in teamSearchV2.nodes")
+		}
+	}
+	return nil
 }

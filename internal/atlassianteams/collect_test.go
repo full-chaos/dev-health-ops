@@ -198,6 +198,16 @@ func standard(req request) (int, any) {
 	return 500, map[string]any{"errors": []any{map[string]any{"message": "unexpected " + req.Operation}}}
 }
 
+// everyLinkWritable serves the standard answers, except that every Jira project link of team A can be written (one
+// project, linked twice). The standard answer of team A also holds links that get no row, and a team with such a
+// link has none of its rows closed: a test of what a run closes needs an answer in which every link is written.
+func everyLinkWritable(req request) (int, any) {
+	if req.Operation == "TeamConnectedContainers" && req.Variables["id"] == teamA {
+		return 200, containerPage("", projectEdge(teamA, "PLAT", "10001"), projectEdge(teamA, "PLAT", "10001"))
+	}
+	return standard(req)
+}
+
 func params(selections Selections) Params {
 	return Params{
 		OrgID: "org-1", OrganizationID: "org-atlassian", SiteID: "site-uuid", Selections: selections,
@@ -266,8 +276,8 @@ func TestCollectReadsTeamsMembersAndProjectsThroughTheRealClient(t *testing.T) {
 	if partial, err := Collect(context.Background(), g.client(), withoutProjects); err != nil || partial.ProjectLinksComplete {
 		t.Errorf("a collection that read no project links says they are complete (err=%v)", err)
 	}
-	if len(rows.UnreadableProjectLinkTeams) != 0 {
-		t.Errorf("unreadable teams = %v, want none: team A has one readable link, team C has no link at all", rows.UnreadableProjectLinkTeams)
+	if got := strings.Join(rows.UnreadableProjectLinkTeams, ","); got != "aaaaaaaa-0000-4000-8000-000000000001" {
+		t.Errorf("teams with a project link that got no row = %q, want team A alone: three of its links got no row (its one writable link is still written), team C has no link at all", got)
 	}
 	if want := (ProjectLinkCounts{Seen: 5, SkippedNoProjectKey: 1, SkippedNoNativeID: 2, SkippedDuplicate: 1}); rows.ProjectLinks != want {
 		t.Errorf("project link counts = %+v, want %+v (five links seen: one row, one with no key, two with no numeric project id, one duplicate)", rows.ProjectLinks, want)
@@ -790,10 +800,11 @@ func TestJiraNativeProjectIDIsTheNumericLastSegmentOfAJiraProjectARI(t *testing.
 	}
 }
 
-// TestATeamWithNoReadableProjectLinkIsNamedUnreadable pins the per-team rule:
-// links came back for the team and not one carried a readable Jira project
-// ARI, so the answer is "could not be read", never "no project".
-func TestATeamWithNoReadableProjectLinkIsNamedUnreadable(t *testing.T) {
+// TestATeamWithAProjectLinkThatGotNoRowIsNamedUnreadable pins the per-team
+// rule: a Jira project link came back for the team and got no row, so the
+// provider has a link this run does not hold, and the team is named. One
+// writable link beside it does not change that.
+func TestATeamWithAProjectLinkThatGotNoRowIsNamedUnreadable(t *testing.T) {
 	serve := func(teamALinks, teamCLinks []map[string]any) func(request) (int, any) {
 		return func(req request) (int, any) {
 			if req.Operation != "TeamConnectedContainers" {
@@ -812,8 +823,9 @@ func TestATeamWithNoReadableProjectLinkIsNamedUnreadable(t *testing.T) {
 		want string
 	}{
 		{"no link of the team is readable", []map[string]any{projectEdge(teamA, "PLAT", "PLAT"), projectEdge(teamA, "DATA", "")}, nil, idA},
-		{"one readable link is enough", []map[string]any{projectEdge(teamA, "PLAT", "PLAT"), projectEdge(teamA, "DATA", "7")}, nil, ""},
-		{"a readable link without a key still shows the ARI shape is read", []map[string]any{projectEdge(teamA, "PLAT", "PLAT"), projectEdge(teamA, "", "7")}, nil, ""},
+		{"one readable link beside it is not enough", []map[string]any{projectEdge(teamA, "PLAT", "PLAT"), projectEdge(teamA, "DATA", "7")}, nil, idA},
+		{"a link with a readable ARI and no key got no row too", []map[string]any{projectEdge(teamA, "PLAT", "10001"), projectEdge(teamA, "", "7")}, nil, idA},
+		{"every link of the team is written", []map[string]any{projectEdge(teamA, "PLAT", "10001"), projectEdge(teamA, "DATA", "7")}, nil, ""},
 		{"a team with no link at all has no project", nil, nil, ""},
 		{"each team is judged by itself", []map[string]any{projectEdge(teamA, "PLAT", "10001")}, []map[string]any{projectEdge(teamC, "DATA", "DATA")}, idC},
 	} {

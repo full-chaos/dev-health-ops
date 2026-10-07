@@ -58,7 +58,7 @@ type teamConnectedContainersData struct {
 			HasNextPage *bool   `json:"hasNextPage"`
 			EndCursor   *string `json:"endCursor"`
 		} `json:"pageInfo"`
-		Edges []*struct {
+		Edges *[]*struct {
 			ID   *string `json:"id"`
 			Node *struct {
 				Typename  *string         `json:"__typename"`
@@ -94,8 +94,9 @@ func scalarText(raw json.RawMessage) string {
 	return ""
 }
 
-// DecodeTeamConnectedContainers reads one page. A missing relation, a missing pageInfo, a missing hasNextPage
-// and a null edge are errors: none of them is "the team has no container".
+// DecodeTeamConnectedContainers reads one page. A missing relation, a missing pageInfo, a missing hasNextPage,
+// a missing or null edges list and a null edge are errors: none of them is "the team has no container". Only
+// an edges list that is there and empty is.
 func DecodeTeamConnectedContainers(data map[string]any) (*TeamConnectedContainersPage, error) {
 	b, err := json.Marshal(data)
 	if err != nil {
@@ -115,7 +116,10 @@ func DecodeTeamConnectedContainers(data map[string]any) (*TeamConnectedContainer
 		HasNextPage: *out.Result.PageInfo.HasNextPage,
 		EndCursor:   trimmedString(out.Result.PageInfo.EndCursor),
 	}
-	for _, edge := range out.Result.Edges {
+	if out.Result.Edges == nil {
+		return nil, errors.New("missing graphStore_teamConnectedToContainer.edges")
+	}
+	for _, edge := range *out.Result.Edges {
 		if edge == nil {
 			return nil, errors.New("null edge in graphStore_teamConnectedToContainer")
 		}

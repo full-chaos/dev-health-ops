@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"atlassian/atlassian"
+	"atlassian/atlassian/graph"
 )
 
 // CHAOS-7132: tenantContexts answers a BARE organization UUID and teamSearchV2 refuses it ("Invalid
@@ -20,7 +21,7 @@ func (r *organizationRecorder) SearchTeams(_ context.Context, organizationID, _,
 func (*organizationRecorder) IterTeamUsers(context.Context, string, int) ([]atlassian.TeamworkUserRelation, error) {
 	return nil, nil
 }
-func (*organizationRecorder) IterTeamActiveProjects(context.Context, string, int) ([]atlassian.TeamworkProject, error) {
+func (*organizationRecorder) IterTeamConnectedContainers(context.Context, string, int) ([]graph.TeamConnectedContainer, error) {
 	return nil, nil
 }
 

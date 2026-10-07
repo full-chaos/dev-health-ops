@@ -461,6 +461,7 @@ VALUES ($1, $2, (SELECT id FROM feature_flags ORDER BY key LIMIT 1), true, NULL,
 			}
 		},
 		Normalize: func(request venueoracle.Request, body string) string {
+			body = normalizeAuditLogDisplayNames(t, request, body)
 			if strings.HasPrefix(request.Name, "W ") {
 				body = redactVolatileText(body, "id", "created_at", "updated_at")
 			}

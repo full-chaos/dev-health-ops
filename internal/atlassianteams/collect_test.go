@@ -26,6 +26,7 @@ const (
 
 type request struct {
 	Operation string
+	Query     string
 	Variables map[string]any
 	Header    http.Header
 }
@@ -52,12 +53,13 @@ func newGateway(t *testing.T, respond func(request) (int, any)) *gateway {
 		body, _ := io.ReadAll(r.Body)
 		var payload struct {
 			OperationName string         `json:"operationName"`
+			Query         string         `json:"query"`
 			Variables     map[string]any `json:"variables"`
 		}
 		if err := json.Unmarshal(body, &payload); err != nil {
 			t.Errorf("bad request body: %v", err)
 		}
-		req := request{Operation: payload.OperationName, Variables: payload.Variables, Header: r.Header.Clone()}
+		req := request{Operation: payload.OperationName, Query: payload.Query, Variables: payload.Variables, Header: r.Header.Clone()}
 		g.mu.Lock()
 		g.requests = append(g.requests, req)
 		g.mu.Unlock()
@@ -90,7 +92,8 @@ func (g *gateway) count(operation, teamID string) int {
 	defer g.mu.Unlock()
 	n := 0
 	for _, req := range g.requests {
-		if req.Operation == operation && (teamID == "" || req.Variables["teamId"] == teamID) {
+		// The member read names its team in "teamId", the connected-container read in "id".
+		if req.Operation == operation && (teamID == "" || req.Variables["teamId"] == teamID || req.Variables["id"] == teamID) {
 			n++
 		}
 	}
@@ -123,17 +126,37 @@ func userEdge(_, account string) map[string]any {
 	}}}
 }
 
-// projectEdge is one team-to-project link. nativeID is the last segment of the
-// project ARI, which is where the provider carries the Jira project id.
-func projectEdge(team, key, nativeID string) map[string]any {
-	data := map[string]any{"id": "p-" + key, "name": "Project " + key}
+// projectEdge is one team-to-container link whose node is a Jira project, in the shape a read-only call of 2026-10-07
+// measured on a live site (every value here is made up): the edge carries an id and a node; the node carries
+// __typename, the project ARI in id, the key, and the native id again in projectId. The team is the request's own
+// variable and is not in the row. nativeID is the last segment of the project ARI.
+func projectEdge(_, key, nativeID string) map[string]any {
+	node := map[string]any{"__typename": "JiraProject", "id": "ari:cloud:jira:site-uuid:project/" + nativeID}
 	if key != "" {
-		data["key"] = key
+		node["key"] = key
 	}
-	return map[string]any{"node": map[string]any{"columns": []any{
-		map[string]any{"key": "team", "value": ariNode(team, "TeamV2", map[string]any{"id": team, "displayName": "T"})},
-		map[string]any{"key": "project", "value": ariNode("ari:cloud:jira::project/"+nativeID, "JiraProject", data)},
-	}}}
+	if nativeID != "" {
+		node["projectId"] = nativeID
+	}
+	return map[string]any{"id": "edge-" + key + "-" + nativeID, "node": node}
+}
+
+// containerEdge is a link whose node is another arm of the union (a Confluence or Loom space, or a type this code
+// does not know): the document selects no field under those arms, so the node is its __typename and nothing else.
+func containerEdge(typename string) map[string]any {
+	return map[string]any{"id": "edge-" + typename, "node": map[string]any{"__typename": typename}}
+}
+
+// containerPage is one page of the team-to-container relation.
+func containerPage(next string, edges ...map[string]any) map[string]any {
+	pageInfo := map[string]any{"hasNextPage": next != "", "endCursor": nil}
+	if next != "" {
+		pageInfo["endCursor"] = next
+	}
+	if edges == nil {
+		edges = []map[string]any{}
+	}
+	return map[string]any{"data": map[string]any{"graphStore_teamConnectedToContainer": map[string]any{"pageInfo": pageInfo, "edges": edges}}}
 }
 
 func connection(field, next string, edges ...map[string]any) map[string]any {
@@ -164,15 +187,25 @@ func standard(req request) (int, any) {
 		case teamC:
 			return 200, connection("teamworkGraph_teamUsers", "", userEdge(teamC, "carol-3"))
 		}
-	case "TeamworkGraphTeamActiveProjects":
-		if req.Variables["teamId"] == teamA {
-			return 200, connection("teamworkGraph_teamActiveProjects", "", projectEdge(teamA, "PLAT", "10001"), projectEdge(teamA, "", "10002"), projectEdge(teamA, "PLAT", "10001"),
+	case "TeamConnectedContainers":
+		if req.Variables["id"] == teamA {
+			return 200, containerPage("", projectEdge(teamA, "PLAT", "10001"), projectEdge(teamA, "", "10002"), projectEdge(teamA, "PLAT", "10001"),
 				// A link with a key and no usable project id: no row, never an id built from the key.
 				projectEdge(teamA, "NOID", "NOID"), projectEdge(teamA, "EMPTY", ""))
 		}
-		return 200, connection("teamworkGraph_teamActiveProjects", "")
+		return 200, containerPage("")
 	}
 	return 500, map[string]any{"errors": []any{map[string]any{"message": "unexpected " + req.Operation}}}
+}
+
+// everyLinkWritable serves the standard answers, except that every Jira project link of team A can be written (one
+// project, linked twice). The standard answer of team A also holds links that get no row, and a team with such a
+// link has none of its rows closed: a test of what a run closes needs an answer in which every link is written.
+func everyLinkWritable(req request) (int, any) {
+	if req.Operation == "TeamConnectedContainers" && req.Variables["id"] == teamA {
+		return 200, containerPage("", projectEdge(teamA, "PLAT", "10001"), projectEdge(teamA, "PLAT", "10001"))
+	}
+	return standard(req)
 }
 
 func params(selections Selections) Params {
@@ -243,15 +276,18 @@ func TestCollectReadsTeamsMembersAndProjectsThroughTheRealClient(t *testing.T) {
 	if partial, err := Collect(context.Background(), g.client(), withoutProjects); err != nil || partial.ProjectLinksComplete {
 		t.Errorf("a collection that read no project links says they are complete (err=%v)", err)
 	}
-	if len(rows.UnreadableProjectLinkTeams) != 0 {
-		t.Errorf("unreadable teams = %v, want none: team A has one readable link, team C has no link at all", rows.UnreadableProjectLinkTeams)
+	if got := strings.Join(rows.UnreadableProjectLinkTeams, ","); got != "aaaaaaaa-0000-4000-8000-000000000001" {
+		t.Errorf("teams with a project link that got no row = %q, want team A alone: three of its links got no row (its one writable link is still written), team C has no link at all", got)
 	}
-	if rows.SkippedProjects != 3 {
-		t.Errorf("skipped project links = %d, want 3 (one with no key, two with no numeric project id)", rows.SkippedProjects)
+	if want := (ProjectLinkCounts{Seen: 5, SkippedNoProjectKey: 1, SkippedNoNativeID: 2, SkippedDuplicate: 1}); rows.ProjectLinks != want {
+		t.Errorf("project link counts = %+v, want %+v (five links seen: one row, one with no key, two with no numeric project id, one duplicate)", rows.ProjectLinks, want)
+	}
+	if got := rows.ProjectLinks.Seen - rows.ProjectLinks.Skipped(); got != len(rows.Ownership) {
+		t.Errorf("links seen minus links skipped = %d, ownership rows = %d: a link is neither a row nor counted", got, len(rows.Ownership))
 	}
 
 	// The archived team was never asked for members or projects.
-	if n := g.count("TeamworkGraphTeamUsers", teamB) + g.count("TeamworkGraphTeamActiveProjects", teamB); n != 0 {
+	if n := g.count("TeamworkGraphTeamUsers", teamB) + g.count("TeamConnectedContainers", teamB); n != 0 {
 		t.Errorf("%d graph reads for the archived team", n)
 	}
 }
@@ -271,9 +307,17 @@ func TestCollectSendsTheOrganizationSiteCredentialsAndOptIns(t *testing.T) {
 			if got := strings.Join(req.Header.Values("X-ExperimentalApi"), ","); !strings.Contains(got, "teams-beta") {
 				t.Errorf("search opt-ins = %q", got)
 			}
-		case "TeamworkGraphTeamUsers", "TeamworkGraphTeamActiveProjects":
+		case "TeamworkGraphTeamUsers":
 			if got := strings.Join(req.Header.Values("X-ExperimentalApi"), ","); !strings.Contains(got, "TeamworkGraphContextAPIs") {
 				t.Errorf("%s opt-ins = %q", req.Operation, got)
+			}
+		case "TeamConnectedContainers":
+			// The relation's opt-in is a directive of the document, as the live read sent it; no header opt-in was sent.
+			if !strings.Contains(req.Query, `graphStore_teamConnectedToContainer(id: $id, first: $first, after: $after) @optIn(to: "GraphStoreTeamConnectedToContainer")`) {
+				t.Errorf("the connected-container read does not carry its opt-in: %s", req.Query)
+			}
+			if req.Variables["id"] != teamA && req.Variables["id"] != teamC {
+				t.Errorf("the connected-container read names team %v, want the team ARI in the id variable", req.Variables["id"])
 			}
 		}
 		user, pass, ok := basicAuth(req.Header)
@@ -282,7 +326,7 @@ func TestCollectSendsTheOrganizationSiteCredentialsAndOptIns(t *testing.T) {
 		}
 		seen[req.Operation] = true
 	}
-	for _, operation := range []string{"TeamSearchV2", "TeamworkGraphTeamUsers", "TeamworkGraphTeamActiveProjects"} {
+	for _, operation := range []string{"TeamSearchV2", "TeamworkGraphTeamUsers", "TeamConnectedContainers"} {
 		if !seen[operation] {
 			t.Errorf("no %s request", operation)
 		}
@@ -294,10 +338,12 @@ func TestCollectSendsTheOrganizationSiteCredentialsAndOptIns(t *testing.T) {
 // refuses the read, it does not return an empty roster.
 const liveQueryContextRefusal = "Query context must not be null and should be a valid platform site or workspace ARI. Please send the required X-Query-Context header."
 
-// requireQueryContext serves the standard answers, except that a team-members or team-projects read without the
-// platform site ARI of params()'s site is refused with the live gateway's message, as the live gateway refuses it.
+// requireQueryContext serves the standard answers, except that a team-members or connected-container read without
+// the platform site ARI of params()'s site is refused with the live gateway's message. The live gateway refuses the
+// members read that way; for the connected-container read the refusal is NOT measured (the live read sent the header
+// and was answered), so here it only proves the header is sent.
 func requireQueryContext(req request) (int, any) {
-	if (req.Operation == "TeamworkGraphTeamUsers" || req.Operation == "TeamworkGraphTeamActiveProjects") && req.Header.Get("X-Query-Context") != "ari:cloud:platform::site/site-uuid" {
+	if (req.Operation == "TeamworkGraphTeamUsers" || req.Operation == "TeamConnectedContainers") && req.Header.Get("X-Query-Context") != "ari:cloud:platform::site/site-uuid" {
 		return 200, map[string]any{"errors": []any{map[string]any{"message": liveQueryContextRefusal}}, "data": nil}
 	}
 	return standard(req)
@@ -315,7 +361,7 @@ func TestCollectSendsTheSiteQueryContextOnEveryTeamMembersAndProjectsRead(t *tes
 	reads := map[string]int{}
 	for _, req := range g.requests {
 		switch req.Operation {
-		case "TeamworkGraphTeamUsers", "TeamworkGraphTeamActiveProjects":
+		case "TeamworkGraphTeamUsers", "TeamConnectedContainers":
 			reads[req.Operation]++
 			if got := req.Header.Get("X-Query-Context"); got != "ari:cloud:platform::site/site-uuid" {
 				t.Errorf("a %s read (page after %v) carried X-Query-Context %q, want the platform site ARI", req.Operation, req.Variables["after"], got)
@@ -327,7 +373,7 @@ func TestCollectSendsTheSiteQueryContextOnEveryTeamMembersAndProjectsRead(t *tes
 			}
 		}
 	}
-	if reads["TeamworkGraphTeamUsers"] < 3 || reads["TeamworkGraphTeamActiveProjects"] < 2 {
+	if reads["TeamworkGraphTeamUsers"] < 3 || reads["TeamConnectedContainers"] < 2 {
 		t.Errorf("reads = %v: the paginated members read (team A has two pages) and the projects reads were not exercised", reads)
 	}
 }
@@ -339,7 +385,7 @@ func TestATeamReadWithoutTheQueryContextIsRefusedByTheGateway(t *testing.T) {
 	if _, err := g.client().IterTeamUsers(context.Background(), teamA, 2); err == nil || !strings.Contains(err.Error(), "X-Query-Context") {
 		t.Fatalf("a members read with no query context = %v, want the gateway's refusal naming the header", err)
 	}
-	if _, err := g.client().IterTeamActiveProjects(context.Background(), teamA, 2); err == nil || !strings.Contains(err.Error(), "X-Query-Context") {
+	if _, err := g.client().IterTeamConnectedContainers(context.Background(), teamA, 2); err == nil || !strings.Contains(err.Error(), "X-Query-Context") {
 		t.Fatalf("a projects read with no query context = %v, want the gateway's refusal naming the header", err)
 	}
 }
@@ -389,7 +435,7 @@ func TestCollectReadsOnlyTheSelectedDimensions(t *testing.T) {
 	if len(rows.Teams) != 3 || len(rows.Memberships) != 0 || len(rows.Ownership) != 0 {
 		t.Fatalf("rows = %d teams %d memberships %d ownership", len(rows.Teams), len(rows.Memberships), len(rows.Ownership))
 	}
-	if n := g.count("TeamworkGraphTeamUsers", "") + g.count("TeamworkGraphTeamActiveProjects", ""); n != 0 {
+	if n := g.count("TeamworkGraphTeamUsers", "") + g.count("TeamConnectedContainers", ""); n != 0 {
 		t.Errorf("%d graph reads for a structure-only run", n)
 	}
 }
@@ -606,8 +652,8 @@ func TestCollectReadsMembersFromEdgesThatCarryOnlyTheUser(t *testing.T) {
 			return 200, searchPage("", teamNode(teamA, "Platform", "ACTIVE"))
 		case "TeamworkGraphTeamUsers":
 			return 200, connection("teamworkGraph_teamUsers", "", userEdge(teamA, "Alice-1"), userEdge(teamA, "bob-2"))
-		case "TeamworkGraphTeamActiveProjects":
-			return 200, connection("teamworkGraph_teamActiveProjects", "")
+		case "TeamConnectedContainers":
+			return 200, containerPage("")
 		}
 		return 500, map[string]any{"errors": []any{map[string]any{"message": "unexpected " + req.Operation}}}
 	})
@@ -637,7 +683,7 @@ func TestAnEdgeWithoutAUserIsStillRefused(t *testing.T) {
 		case "TeamworkGraphTeamUsers":
 			return 200, connection("teamworkGraph_teamUsers", "", map[string]any{"node": map[string]any{"columns": []any{}}})
 		}
-		return 200, connection("teamworkGraph_teamActiveProjects", "")
+		return 200, containerPage("")
 	})
 	if _, err := Collect(context.Background(), g.client(), params(everything)); err == nil || !strings.Contains(err.Error(), "requires a subject user") {
 		t.Fatalf("err = %v, want the missing-user refusal", err)
@@ -658,7 +704,7 @@ func TestCollectRefusesAMemberRowWithAnEmptyUserIdLoudly(t *testing.T) {
 			}}}
 			return 200, connection("teamworkGraph_teamUsers", "", empty)
 		}
-		return 200, connection("teamworkGraph_teamActiveProjects", "")
+		return 200, containerPage("")
 	})
 	if _, err := Collect(context.Background(), g.client(), params(everything)); err == nil || !strings.Contains(err.Error(), "user.id is required") {
 		t.Fatalf("err = %v, want the mapper's empty-user-id refusal", err)
@@ -679,7 +725,7 @@ func TestCollectRefusesAMemberRowWhoseExplicitTeamNodeHasABlankId(t *testing.T) 
 			}}}
 			return 200, connection("teamworkGraph_teamUsers", "", blank)
 		}
-		return 200, connection("teamworkGraph_teamActiveProjects", "")
+		return 200, containerPage("")
 	})
 	if _, err := Collect(context.Background(), g.client(), params(everything)); err == nil || !strings.Contains(err.Error(), "team.id is required") {
 		t.Fatalf("err = %v, want the blank team id refusal", err)
@@ -754,19 +800,20 @@ func TestJiraNativeProjectIDIsTheNumericLastSegmentOfAJiraProjectARI(t *testing.
 	}
 }
 
-// TestATeamWithNoReadableProjectLinkIsNamedUnreadable pins the per-team rule:
-// links came back for the team and not one carried a readable Jira project
-// ARI, so the answer is "could not be read", never "no project".
-func TestATeamWithNoReadableProjectLinkIsNamedUnreadable(t *testing.T) {
+// TestATeamWithAProjectLinkThatGotNoRowIsNamedUnreadable pins the per-team
+// rule: a Jira project link came back for the team and got no row, so the
+// provider has a link this run does not hold, and the team is named. One
+// writable link beside it does not change that.
+func TestATeamWithAProjectLinkThatGotNoRowIsNamedUnreadable(t *testing.T) {
 	serve := func(teamALinks, teamCLinks []map[string]any) func(request) (int, any) {
 		return func(req request) (int, any) {
-			if req.Operation != "TeamworkGraphTeamActiveProjects" {
+			if req.Operation != "TeamConnectedContainers" {
 				return standard(req)
 			}
-			if req.Variables["teamId"] == teamA {
-				return 200, connection("teamworkGraph_teamActiveProjects", "", teamALinks...)
+			if req.Variables["id"] == teamA {
+				return 200, containerPage("", teamALinks...)
 			}
-			return 200, connection("teamworkGraph_teamActiveProjects", "", teamCLinks...)
+			return 200, containerPage("", teamCLinks...)
 		}
 	}
 	const idA, idC = "aaaaaaaa-0000-4000-8000-000000000001", "cccccccc-0000-4000-8000-000000000003"
@@ -776,8 +823,9 @@ func TestATeamWithNoReadableProjectLinkIsNamedUnreadable(t *testing.T) {
 		want string
 	}{
 		{"no link of the team is readable", []map[string]any{projectEdge(teamA, "PLAT", "PLAT"), projectEdge(teamA, "DATA", "")}, nil, idA},
-		{"one readable link is enough", []map[string]any{projectEdge(teamA, "PLAT", "PLAT"), projectEdge(teamA, "DATA", "7")}, nil, ""},
-		{"a readable link without a key still shows the ARI shape is read", []map[string]any{projectEdge(teamA, "PLAT", "PLAT"), projectEdge(teamA, "", "7")}, nil, ""},
+		{"one readable link beside it is not enough", []map[string]any{projectEdge(teamA, "PLAT", "PLAT"), projectEdge(teamA, "DATA", "7")}, nil, idA},
+		{"a link with a readable ARI and no key got no row too", []map[string]any{projectEdge(teamA, "PLAT", "10001"), projectEdge(teamA, "", "7")}, nil, idA},
+		{"every link of the team is written", []map[string]any{projectEdge(teamA, "PLAT", "10001"), projectEdge(teamA, "DATA", "7")}, nil, ""},
 		{"a team with no link at all has no project", nil, nil, ""},
 		{"each team is judged by itself", []map[string]any{projectEdge(teamA, "PLAT", "10001")}, []map[string]any{projectEdge(teamC, "DATA", "DATA")}, idC},
 	} {

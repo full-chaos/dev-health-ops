@@ -56,8 +56,8 @@ const (
 	EnvT2Batch         = "DECISIONEVAL_T2_BATCH" // expected batch size (default 320; 0 skips the check)
 
 	// Credentials (names only; values are read once into secrets.Hidden).
-	EnvJevEndpoint = "TYPESAFE_JEN_ENDPOINT"
-	EnvJevToken    = "TYPESAFE_JEN_TOKEN"
+	EnvJevEndpoint = "TYPESAFE_JEV_ENDPOINT"
+	EnvJevToken    = "TYPESAFE_API_KEY"
 	EnvOpenAIKey   = "OPENAI_API_KEY"
 	EnvOpenAIBase  = "OPENAI_BASE_URL"
 )

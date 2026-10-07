@@ -13,7 +13,8 @@ import (
 // full-organization window that one post-sync fan-out starts a daily run for,
 // newest first. Each day is a whole daily_metrics_runs pipeline, so one sync
 // of a long history must not start hundreds at once. The remainder stays
-// pending and each later fan-out of the organization takes this many more.
+// pending: each later fan-out of the organization takes this many more of the
+// newest, and the drain (touched_days_drain.go) takes the oldest.
 const PostSyncTouchedDaysPerFanout = 31
 
 // postSyncTouchedPendingDayReadLimit bounds the read of the pending days of

@@ -171,6 +171,18 @@ func buildDailyWorker(
 		if markerObserver, ok := observer.(jobruntime.DailyMetricsRunMarkerObserver); ok {
 			store.SetRunMarkerObserver(markerObserver)
 		}
+		// CHAOS-8846: the drain of the pending touched days. The dispatch of
+		// the nightly run and the end of every daily run trigger one pass. It
+		// is not optional: a worker that cannot build it does not start,
+		// because without it the days a fan-out left pending are computed
+		// only when a later sync comes.
+		touchedDrainObserver, _ := observer.(jobruntime.TouchedDaysDrainObserver)
+		touchedDrain, touchedDrainErr := newTouchedDaysDrain(
+			postgresDatabase.pools.Domain, clickhouseConnection, store, publisher, touchedDrainObserver, logger)
+		if touchedDrainErr != nil {
+			_ = clickhouseConnection.Close()
+			return workerFamily{}, errWorkerDependencyUnavailable
+		}
 		for _, spec := range dailySpecs {
 			switch spec.Kind {
 			case jobcontract.KindDailyMetricsDispatch:
@@ -179,6 +191,7 @@ func buildDailyWorker(
 					_ = clickhouseConnection.Close()
 					return workerFamily{}, errWorkerDependencyUnavailable
 				}
+				handler.SetTouchedDaysDrainer(touchedDrain)
 				// CHAOS-5040: the fan-out is the only genuinely periodic,
 				// per-organization thing in this family, so it is where the
 				// blocked-run marker is kept current.
@@ -359,6 +372,7 @@ func buildDailyWorker(
 					_ = clickhouseConnection.Close()
 					return workerFamily{}, errWorkerDependencyUnavailable
 				}
+				handler.SetTouchedDaysDrainer(touchedDrain)
 				// CHAOS-4290: RUN-scoped native families. dailyNativeFamilyRegistrations
 				// is a pure function (see the partition case's comment on why the
 				// drift test calls it directly), so calling it again here is safe

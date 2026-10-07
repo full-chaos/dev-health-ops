@@ -377,6 +377,9 @@ type Dispatcher struct {
 	// blockedObserver counts CHAOS-5040 blocked-run marker transitions.
 	// Optional: nil is a silent no-op.
 	blockedObserver jobruntime.DailyMetricsBlockedRunObserver
+	// touchedDrainer starts runs for the pending touched days when a nightly
+	// run is dispatched (CHAOS-8846). Optional: nil is no pass.
+	touchedDrainer TouchedDaysDrainer
 }
 
 func NewDispatcher(store Store, publisher Publisher, discoverer RepositoryDiscoverer) (*Dispatcher, error) {
@@ -499,6 +502,12 @@ func (handler *Dispatcher) Work(ctx context.Context, execution *jobruntime.Execu
 	// "cannot affect the job's outcome" property: reconcileBlockedRuns is
 	// fail-open and returns nothing.
 	defer handler.reconcileBlockedRuns(ctx, run.OrganizationID)
+	// The floor of the touched-day drain (CHAOS-8846): the nightly run is the
+	// one periodic event of every active organization, so a pending day is
+	// found again each night without a later sync. A defer for the same reason
+	// as the reconcile above: a failed publish of THIS run must not stop the
+	// drain of the organization.
+	defer handler.drainTouchedDaysAfterDispatch(ctx, *run)
 	if run.RepositoryDiscoveryRequired {
 		repositoryIDs, err := handler.discoverer.RepositoryIDs(ctx, run.OrganizationID)
 		if err != nil {
@@ -1339,6 +1348,9 @@ type FinalizeHandler struct {
 	// nativeFinalizeNow is injected so the duration a test observes is the one
 	// the test controls; nil means time.Now.
 	nativeFinalizeNow func() time.Time
+	// touchedDrainer starts runs for the pending touched days when a run
+	// ends (CHAOS-8846). Optional: nil is no pass.
+	touchedDrainer TouchedDaysDrainer
 }
 
 func NewFinalizeHandler(store Store) (*FinalizeHandler, error) {
@@ -1726,6 +1738,10 @@ func (handler *FinalizeHandler) Work(ctx context.Context, execution *jobruntime.
 					"organization_id", claim.Run.OrganizationID,
 					"target_day", claim.Run.TargetDay.Format("2006-01-02"),
 				)
+			} else {
+				// The run is failed for good. The pass returns its day to the
+				// pending touched days and goes on with the other days.
+				handler.drainTouchedDaysAfterEnd(ctx, claim.Run)
 			}
 			return jobruntime.Retryable(err)
 		}
@@ -1772,6 +1788,10 @@ func (handler *FinalizeHandler) Work(ctx context.Context, execution *jobruntime.
 		}
 		return jobruntime.Retryable(err)
 	}
+	// The run ended. One more pass of the touched-day drain (CHAOS-8846): the
+	// end of a run is what frees the slots of the pass before it, so a backlog
+	// drains batch after batch and stops when a pass starts no run.
+	handler.drainTouchedDaysAfterEnd(ctx, claim.Run)
 	return nil
 }
 

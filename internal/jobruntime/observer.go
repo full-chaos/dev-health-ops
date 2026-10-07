@@ -215,6 +215,15 @@ type PostSyncTouchedDaysObserver interface {
 	ObservePostSyncTouchedDays(PostSyncTouchedDaysEvent, uint64) error
 }
 
+// TouchedDaysDrainObserver is the narrow capability the drain of the pending
+// touched days depends on to count its passes and to report how long the
+// oldest pending day has waited (CHAOS-8846). Without it an organization whose
+// old days are never computed looks the same as one with nothing pending.
+type TouchedDaysDrainObserver interface {
+	ObserveTouchedDaysDrain(TouchedDaysDrainEvent, uint64) error
+	ObserveTouchedDaysOldestPendingAge(organizationID string, age time.Duration) error
+}
+
 // TeamRepoOwnershipDerivationObserver is the narrow capability
 // sync.team_repo_ownership_derivation's worker (CHAOS-4365 item 1b) depends
 // on to report its own outcome -- distinct from PostSyncFanoutObserver, which

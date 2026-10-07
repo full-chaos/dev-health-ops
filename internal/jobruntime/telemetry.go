@@ -199,6 +199,53 @@ const (
 	PostSyncTouchedDaysOverRepositoryLimit PostSyncTouchedDaysEvent = "over_repository_limit"
 )
 
+// TouchedDaysDrainEvent is the bounded label of the counter of the drain of
+// the pending touched days (CHAOS-8846).
+type TouchedDaysDrainEvent string
+
+const (
+	// TouchedDaysDrainPasses counts the passes that read the pending days.
+	TouchedDaysDrainPasses TouchedDaysDrainEvent = "passes"
+	// TouchedDaysDrainDaysStarted counts the days a pass started a run for.
+	TouchedDaysDrainDaysStarted TouchedDaysDrainEvent = "days_started"
+	// TouchedDaysDrainDaysSplit counts the days with more pending
+	// repositories than one run accepts that a pass started a part of.
+	TouchedDaysDrainDaysSplit TouchedDaysDrainEvent = "days_split"
+	// TouchedDaysDrainDaysAlreadyStarted counts the days a pass found a run
+	// of its own generation for (a second delivery of its trigger).
+	TouchedDaysDrainDaysAlreadyStarted TouchedDaysDrainEvent = "days_already_started"
+	// TouchedDaysDrainDaysReturned counts the days whose newest run failed
+	// and that a pass made pending again.
+	TouchedDaysDrainDaysReturned TouchedDaysDrainEvent = "days_returned_to_pending"
+	// TouchedDaysDrainDaysSkipped counts the pending days a pass started no
+	// run for because their newest runs all failed.
+	TouchedDaysDrainDaysSkipped TouchedDaysDrainEvent = "days_skipped_after_failed_runs"
+	// TouchedDaysDrainInFlight counts the triggers that started no pass
+	// because drain runs of the organization were not ended.
+	TouchedDaysDrainInFlight TouchedDaysDrainEvent = "in_flight"
+	// TouchedDaysDrainNothingPending counts the passes that found no pending
+	// day.
+	TouchedDaysDrainNothingPending TouchedDaysDrainEvent = "nothing_pending"
+	// TouchedDaysDrainPassFailed counts the passes that failed before their
+	// runs were committed. Their days stay pending.
+	TouchedDaysDrainPassFailed TouchedDaysDrainEvent = "pass_failed"
+	// TouchedDaysDrainMarkFailed counts the passes whose started days could
+	// not be marked. The days stay pending and are computed once more.
+	TouchedDaysDrainMarkFailed TouchedDaysDrainEvent = "mark_failed"
+	// TouchedDaysDrainReadTruncated counts the passes whose read of the
+	// pending days hit its bound.
+	TouchedDaysDrainReadTruncated TouchedDaysDrainEvent = "read_truncated"
+)
+
+func touchedDaysDrainEvents() []TouchedDaysDrainEvent {
+	return []TouchedDaysDrainEvent{
+		TouchedDaysDrainPasses, TouchedDaysDrainDaysStarted, TouchedDaysDrainDaysSplit,
+		TouchedDaysDrainDaysAlreadyStarted, TouchedDaysDrainDaysReturned, TouchedDaysDrainDaysSkipped,
+		TouchedDaysDrainInFlight, TouchedDaysDrainNothingPending, TouchedDaysDrainPassFailed,
+		TouchedDaysDrainMarkFailed, TouchedDaysDrainReadTruncated,
+	}
+}
+
 func postSyncTouchedDaysEvents() []PostSyncTouchedDaysEvent {
 	return []PostSyncTouchedDaysEvent{
 		PostSyncTouchedDaysKeysRecorded, PostSyncTouchedDaysDispatched,
@@ -1245,6 +1292,10 @@ type MetricsCollector struct {
 	workItemStateMissingAttribution uint64
 	postSyncFanout                  map[PostSyncFanoutOutcome]uint64
 	postSyncTouchedDays             map[PostSyncTouchedDaysEvent]uint64
+	touchedDaysDrain                map[TouchedDaysDrainEvent]uint64
+	// touchedDaysOldestPendingAge is the age each organization's last drain
+	// pass reported. An organization with nothing pending has no entry.
+	touchedDaysOldestPendingAge map[string]time.Duration
 	// teamRepoOwnershipDerivation (CHAOS-4365 item 1b): per-outcome counter for
 	// sync.team_repo_ownership_derivation's worker; teamRepoOwnershipDerivationRowCount
 	// is the paired rows-written histogram, observed only on the
@@ -1473,6 +1524,7 @@ var _ IncidentValidFromGuardObserver = (*MetricsCollector)(nil)
 var _ DailyMetricsCompatRetryObserver = (*MetricsCollector)(nil)
 var _ PostSyncFanoutObserver = (*MetricsCollector)(nil)
 var _ PostSyncTouchedDaysObserver = (*MetricsCollector)(nil)
+var _ TouchedDaysDrainObserver = (*MetricsCollector)(nil)
 var _ TeamRepoOwnershipDerivationObserver = (*MetricsCollector)(nil)
 var _ InvestmentRepoAttributionObserver = (*MetricsCollector)(nil)
 var _ TeamCatalogObserver = (*MetricsCollector)(nil)
@@ -1546,6 +1598,8 @@ func NewMetricsCollector(dimensions MetricDimensions) (*MetricsCollector, error)
 		dailyMetricsPartitionRecompute:       make(map[dailyMetricsPartitionRecomputeLabels]uint64, len(dailyMetricsPartitionRecomputeFamilies)*len(dailyMetricsPartitionRecomputeOutcomes)),
 		postSyncFanout:                       make(map[PostSyncFanoutOutcome]uint64, len(postSyncFanoutOutcomes())),
 		postSyncTouchedDays:                  make(map[PostSyncTouchedDaysEvent]uint64, len(postSyncTouchedDaysEvents())),
+		touchedDaysDrain:                     make(map[TouchedDaysDrainEvent]uint64, len(touchedDaysDrainEvents())),
+		touchedDaysOldestPendingAge:          make(map[string]time.Duration),
 		teamRepoOwnershipDerivation:          make(map[TeamRepoOwnershipDerivationOutcome]uint64, len(teamRepoOwnershipDerivationOutcomes())),
 		teamRepoOwnershipDerivationRowCount:  newHistogramWithBounds(repoCountBuckets),
 		teamRepoOwnershipResolutionArm:       make(map[TeamRepoOwnershipResolutionArm]uint64, len(teamRepoOwnershipResolutionArms())),
@@ -2301,6 +2355,35 @@ func (collector *MetricsCollector) ObservePostSyncTouchedDays(event PostSyncTouc
 	collector.mu.Lock()
 	defer collector.mu.Unlock()
 	collector.postSyncTouchedDays[event] += count
+	return nil
+}
+
+// ObserveTouchedDaysDrain adds count to one counter of the drain of the
+// pending touched days (CHAOS-8846).
+func (collector *MetricsCollector) ObserveTouchedDaysDrain(event TouchedDaysDrainEvent, count uint64) error {
+	if !slices.Contains(touchedDaysDrainEvents(), event) {
+		return errors.New("touched-days drain event is not registered")
+	}
+	collector.mu.Lock()
+	defer collector.mu.Unlock()
+	collector.touchedDaysDrain[event] += count
+	return nil
+}
+
+// ObserveTouchedDaysOldestPendingAge keeps the age of the oldest pending
+// touch that the last drain pass of one organization reported. An age of zero
+// or less removes the organization: it has nothing pending.
+func (collector *MetricsCollector) ObserveTouchedDaysOldestPendingAge(organizationID string, age time.Duration) error {
+	if organizationID == "" {
+		return errors.New("touched-days pending age has no organization")
+	}
+	collector.mu.Lock()
+	defer collector.mu.Unlock()
+	if age <= 0 {
+		delete(collector.touchedDaysOldestPendingAge, organizationID)
+		return nil
+	}
+	collector.touchedDaysOldestPendingAge[organizationID] = age
 	return nil
 }
 
@@ -3430,6 +3513,7 @@ func (collector *MetricsCollector) PrometheusText() string {
 	collector.writeWorkItemStateMissingAttribution(&output)
 	collector.writePostSyncFanout(&output)
 	collector.writePostSyncTouchedDays(&output)
+	collector.writeTouchedDaysDrain(&output)
 	collector.writeTeamRepoOwnershipDerivation(&output)
 	collector.writeInvestmentRepoAttribution(&output)
 	collector.writeIncidentValidFromGuard(&output)
@@ -3952,6 +4036,25 @@ func (collector *MetricsCollector) writePostSyncTouchedDays(output *strings.Buil
 		writeUintSample(output, "dev_health_post_sync_touched_days_total",
 			[]metricLabel{{"event", string(event)}}, collector.postSyncTouchedDays[event])
 	}
+}
+
+// writeTouchedDaysDrain renders the counter of the drain passes and the gauge
+// of the oldest pending touch (CHAOS-8846). The gauge has no organization
+// label: it is the highest age over the organizations whose last pass in this
+// process left a day pending, and 0 when none did. The log line of a pass
+// names the organization.
+func (collector *MetricsCollector) writeTouchedDaysDrain(output *strings.Builder) {
+	writeMetadata(output, "dev_health_touched_days_drain_total", "Drain of the pending touched days: passes, days a daily run was started for, days split, returned to pending or skipped after failed runs (CHAOS-8846).", "counter")
+	for _, event := range touchedDaysDrainEvents() {
+		writeUintSample(output, "dev_health_touched_days_drain_total",
+			[]metricLabel{{"event", string(event)}}, collector.touchedDaysDrain[event])
+	}
+	var oldest time.Duration
+	for _, age := range collector.touchedDaysOldestPendingAge {
+		oldest = max(oldest, age)
+	}
+	writeMetadata(output, "dev_health_touched_days_oldest_pending_age_seconds", "Highest age of the oldest pending touched day over the organizations whose last drain pass left a day pending; 0 when none did (CHAOS-8846).", "gauge")
+	writeFloatSample(output, "dev_health_touched_days_oldest_pending_age_seconds", nil, oldest.Seconds())
 }
 
 // writeTeamRepoOwnershipDerivation renders CHAOS-4365 item 1b's per-outcome

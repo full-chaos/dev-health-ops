@@ -1,0 +1,465 @@
+package syncdispatchruntime
+
+import (
+	"context"
+	"time"
+
+	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
+	"github.com/full-chaos/dev-health-ops/internal/syncdispatchruntime/synclog"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
+)
+
+// The drain of the pending touched days (CHAOS-8846).
+//
+// A post-sync fan-out starts a daily run for the PostSyncTouchedDaysPerFanout
+// newest pending days and leaves the rest. Without the drain only a later
+// fan-out takes them, so an organization with no later sync keeps them for
+// ever. A drain pass takes the OLDEST pending days, so the two paths work from
+// the two ends of the record and no day waits behind an endless supply of
+// newer ones.
+//
+// A pass is triggered by the dispatch of the nightly run of the organization
+// (the floor: once a day, with or without a sync) and by the end of every
+// daily run of the organization (the continuation). A chain of passes ends by
+// itself: a pass that starts no run produces no run end.
+//
+// Design, delivery guarantees and limits:
+// .github/docs-legacy/architecture/data-pipeline.md, "Drain of the pending
+// touched days".
+
+const (
+	// TouchedDaysPerDrainPass is the number of days one pass starts a run
+	// for. Each is a whole daily_metrics_runs pipeline, as in the fan-out.
+	TouchedDaysPerDrainPass = PostSyncTouchedDaysPerFanout
+
+	// touchedDrainInFlightWindow bounds how long a drain run that has not
+	// ended holds back the next pass. The nightly trigger comes once in this
+	// time, so a run that never ends delays the drain by one night and no
+	// more; the blocked-run marker reports such a run.
+	touchedDrainInFlightWindow = 24 * time.Hour
+
+	// touchedDrainFailureLookback bounds the read of failed runs. A pass runs
+	// at least once a night, so a run that failed is seen by the pass of the
+	// next night at the latest; two nights is the margin for a scheduler that
+	// was down over one.
+	touchedDrainFailureLookback = 48 * time.Hour
+
+	// TouchedDrainFailedRunsBeforeSkip is the number of newest runs of a day
+	// that must all be failed for the drain to stop starting runs for it. The
+	// day stays pending and is reported; a run of any other trigger that
+	// succeeds makes it startable again.
+	TouchedDrainFailedRunsBeforeSkip = 3
+)
+
+// TouchedDaysDrainStore is the part of the touched-day record the drain
+// reads and writes. Every failure is an error: an implementation never
+// answers "no day".
+type TouchedDaysDrainStore interface {
+	Backlog(ctx context.Context, organizationID string, limit int) (TouchedDaysBacklog, error)
+	PendingRepositories(ctx context.Context, organizationID string, days []time.Time, limitPerDay int) (map[string][]string, error)
+	MarkDispatched(ctx context.Context, organizationID string, at time.Time, fullDays []time.Time, keys []TouchedDayKey) error
+	ReturnToPending(ctx context.Context, organizationID string, day time.Time, notBefore time.Time) error
+}
+
+// TouchedDayFailedRun is one day whose newest run is a failed touched-day
+// run, with the time the run failed.
+type TouchedDayFailedRun struct {
+	Day      time.Time
+	FailedAt time.Time
+}
+
+// TouchedDaysDrainRuns is the daily-run state the drain reads and writes.
+type TouchedDaysDrainRuns interface {
+	// RepositoryLimit is the largest repository list one run accepts.
+	RepositoryLimit() int
+	// FailedDays are the days whose newest run, created at or after since,
+	// is a failed run of a fan-out or of the drain.
+	FailedDays(ctx context.Context, organizationID string, since time.Time) ([]TouchedDayFailedRun, error)
+	// DaysWithOnlyFailedRuns are the days among days (keys 2006-01-02) whose
+	// newest threshold runs all failed.
+	DaysWithOnlyFailedRuns(ctx context.Context, organizationID string, days []time.Time, threshold int) (map[string]struct{}, error)
+	// InFlightTx counts the drain runs of the organization that are not
+	// ended and were created at or after since.
+	InFlightTx(ctx context.Context, tx pgx.Tx, organizationID string, since time.Time) (int, error)
+	// StartTx starts the run of day for repositoryIDs under the generation of
+	// the pass. It returns false, and starts nothing, when the run exists.
+	StartTx(ctx context.Context, tx pgx.Tx, organizationID string, day time.Time, passID string, repositoryIDs []string) (bool, error)
+}
+
+// TouchedDaysDrain starts daily runs for the pending touched days of an
+// organization, oldest first.
+type TouchedDaysDrain struct {
+	pool     *pgxpool.Pool
+	store    TouchedDaysDrainStore
+	runs     TouchedDaysDrainRuns
+	logger   *synclog.Logger
+	observer jobruntime.TouchedDaysDrainObserver
+	now      func() time.Time
+}
+
+// NewTouchedDaysDrain builds the drain. Every collaborator but the logger is
+// required.
+func NewTouchedDaysDrain(
+	pool *pgxpool.Pool, store TouchedDaysDrainStore, runs TouchedDaysDrainRuns, logger *synclog.Logger,
+) (*TouchedDaysDrain, error) {
+	if pool == nil || store == nil || runs == nil || runs.RepositoryLimit() < 1 {
+		return nil, ErrPostSyncUnavailable
+	}
+	if logger == nil {
+		logger = synclog.Default()
+	}
+	return &TouchedDaysDrain{pool: pool, store: store, runs: runs, logger: logger, now: time.Now}, nil
+}
+
+// SetObserver wires the optional counters and the pending-age gauge. A nil
+// observer (the default) means a pass still logs its line.
+func (drain *TouchedDaysDrain) SetObserver(observer jobruntime.TouchedDaysDrainObserver) {
+	if drain != nil {
+		drain.observer = observer
+	}
+}
+
+// touchedDrainStart is one run a pass will start: a day and the pending
+// repositories it takes of it.
+type touchedDrainStart struct {
+	day          time.Time
+	repositories []string
+	// split is true when the day has more pending repositories than the
+	// list: the rest stays pending for a later pass.
+	split bool
+}
+
+// touchedDrainPass is what one pass did, for its report.
+type touchedDrainPass struct {
+	organizationID string
+	passID         string
+	returned       int
+	backlog        TouchedDaysBacklog
+	skipped        []time.Time
+	starts         []touchedDrainStart
+	started        []touchedDrainStart
+	alreadyStarted int
+	inFlight       int
+}
+
+// DrainTouchedDays runs one pass for the organization. passID names the
+// trigger (the same trigger always gives the same passID), and with it the
+// generation of the runs the pass starts.
+//
+// It returns nothing and fails nothing: every failure is one Error line and
+// one counter, and leaves each day pending or its run started.
+func (drain *TouchedDaysDrain) DrainTouchedDays(ctx context.Context, organizationID, passID string) {
+	if drain == nil || ctx == nil || organizationID == "" || passID == "" {
+		return
+	}
+	pass := &touchedDrainPass{organizationID: organizationID, passID: passID}
+	// A cheap first look, outside the lock: while runs of an earlier pass are
+	// not ended this trigger does nothing, and the end of each of those runs
+	// is a trigger of its own.
+	if inFlight, err := drain.inFlight(ctx, organizationID); err != nil {
+		drain.fail(ctx, pass, "in_flight_read")
+		return
+	} else if inFlight > 0 {
+		drain.observe(jobruntime.TouchedDaysDrainInFlight, 1)
+		return
+	}
+	if err := drain.returnFailedDays(ctx, pass); err != nil {
+		drain.fail(ctx, pass, "return_failed_days")
+		return
+	}
+	if err := drain.take(ctx, pass); err != nil {
+		drain.fail(ctx, pass, "read")
+		return
+	}
+	drain.observe(jobruntime.TouchedDaysDrainPasses, 1)
+	if len(pass.starts) > 0 {
+		if err := drain.start(ctx, pass); err != nil {
+			drain.fail(ctx, pass, "start")
+			return
+		}
+		drain.mark(ctx, pass)
+	}
+	drain.report(ctx, pass)
+}
+
+// inFlight counts the drain runs of the organization that are not ended, in a
+// transaction of its own.
+func (drain *TouchedDaysDrain) inFlight(ctx context.Context, organizationID string) (int, error) {
+	tx, err := drain.pool.Begin(ctx)
+	if err != nil {
+		return 0, ErrPostSyncUnavailable
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	return drain.runs.InFlightTx(ctx, tx, organizationID, drain.now().UTC().Add(-touchedDrainInFlightWindow))
+}
+
+// returnFailedDays makes the days pending again whose newest run is a failed
+// run of a fan-out or of the drain. The keys of such a day were marked when
+// the run started; without this step the day would be lost.
+func (drain *TouchedDaysDrain) returnFailedDays(ctx context.Context, pass *touchedDrainPass) error {
+	failures, err := drain.runs.FailedDays(
+		ctx, pass.organizationID, drain.now().UTC().Add(-touchedDrainFailureLookback))
+	if err != nil {
+		return err
+	}
+	for _, failure := range failures {
+		if err := drain.store.ReturnToPending(ctx, pass.organizationID, failure.Day, failure.FailedAt); err != nil {
+			return err
+		}
+	}
+	pass.returned = len(failures)
+	return nil
+}
+
+// take reads the pending days, oldest first, and chooses the runs of the pass.
+// It holds no Postgres transaction while it talks to ClickHouse.
+//
+// A day whose newest runs all failed gets no run: it would fail again, and its
+// end would trigger the next pass, which would start it again. It stays
+// pending, it is reported, and it never holds one of the slots.
+//
+// A day with more pending repositories than one run accepts is split: the pass
+// takes as many as one run accepts and leaves the rest pending. The next pass
+// has another generation, so it can start a run of the same day with the next
+// repositories. A part of a day is a run of listed repositories, which is what
+// the fan-out starts for every touched day: what such a run writes for a row
+// that spans repositories (a work scope) is the rule of the work-item
+// families, named in data-pipeline.md.
+func (drain *TouchedDaysDrain) take(ctx context.Context, pass *touchedDrainPass) error {
+	backlog, err := drain.store.Backlog(ctx, pass.organizationID, postSyncTouchedPendingDayReadLimit)
+	if err != nil {
+		return err
+	}
+	pass.backlog = backlog
+	if len(backlog.Days) == 0 {
+		return nil
+	}
+	onlyFailed, err := drain.runs.DaysWithOnlyFailedRuns(
+		ctx, pass.organizationID, backlog.Days, TouchedDrainFailedRunsBeforeSkip)
+	if err != nil {
+		return err
+	}
+	candidates := make([]time.Time, 0, len(backlog.Days))
+	for _, day := range backlog.Days {
+		if _, skip := onlyFailed[day.UTC().Format("2006-01-02")]; skip {
+			pass.skipped = append(pass.skipped, day)
+			continue
+		}
+		candidates = append(candidates, day)
+	}
+	limit := drain.runs.RepositoryLimit()
+	for scanned := 0; scanned < len(candidates) && len(pass.starts) < TouchedDaysPerDrainPass; {
+		end := min(scanned+TouchedDaysPerDrainPass, len(candidates))
+		chunk := candidates[scanned:end]
+		repositories, err := drain.store.PendingRepositories(ctx, pass.organizationID, chunk, limit+1)
+		if err != nil {
+			return err
+		}
+		for _, day := range chunk {
+			if len(pass.starts) >= TouchedDaysPerDrainPass {
+				break
+			}
+			scanned++
+			identifiers := repositories[day.UTC().Format("2006-01-02")]
+			if len(identifiers) == 0 {
+				// A fan-out dispatched the day between the two reads.
+				continue
+			}
+			start := touchedDrainStart{day: day, repositories: identifiers}
+			if len(identifiers) > limit {
+				start.repositories, start.split = identifiers[:limit], true
+			}
+			pass.starts = append(pass.starts, start)
+		}
+	}
+	return nil
+}
+
+// touchedDrainLockNamespace is the first key of the advisory lock of a pass.
+// The second key is a hash of the organization id.
+const touchedDrainLockNamespace = 8846
+
+// start starts the runs of the pass in one transaction.
+//
+// The advisory lock puts two passes of one organization in sequence, and the
+// count under the lock is what makes the second one start nothing: it sees the
+// committed runs of the first, which hold the same days until they are marked.
+func (drain *TouchedDaysDrain) start(ctx context.Context, pass *touchedDrainPass) error {
+	tx, err := drain.pool.Begin(ctx)
+	if err != nil {
+		return ErrPostSyncUnavailable
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1, hashtext($2))`,
+		touchedDrainLockNamespace, pass.organizationID); err != nil {
+		return ErrPostSyncUnavailable
+	}
+	inFlight, err := drain.runs.InFlightTx(
+		ctx, tx, pass.organizationID, drain.now().UTC().Add(-touchedDrainInFlightWindow))
+	if err != nil {
+		return err
+	}
+	if inFlight > 0 {
+		pass.inFlight = inFlight
+		return tx.Commit(ctx)
+	}
+	var started []touchedDrainStart
+	alreadyStarted := 0
+	for _, start := range pass.starts {
+		created, err := drain.runs.StartTx(ctx, tx, pass.organizationID, start.day, pass.passID, start.repositories)
+		if err != nil {
+			return err
+		}
+		if !created {
+			alreadyStarted++
+			continue
+		}
+		started = append(started, start)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return ErrPostSyncUnavailable
+	}
+	pass.started, pass.alreadyStarted = started, alreadyStarted
+	return nil
+}
+
+// mark runs after the transaction of the pass committed. It marks exactly the
+// keys the started runs list, at the time the pending days were read.
+//
+// A failed mark is not a failure of the pass: the runs are committed and the
+// days stay pending, so a later pass computes them once more.
+func (drain *TouchedDaysDrain) mark(ctx context.Context, pass *touchedDrainPass) {
+	var keys []TouchedDayKey
+	for _, start := range pass.started {
+		for _, repositoryID := range start.repositories {
+			keys = append(keys, TouchedDayKey{Day: start.day, RepositoryID: repositoryID})
+		}
+	}
+	if len(keys) == 0 {
+		return
+	}
+	if err := drain.store.MarkDispatched(ctx, pass.organizationID, pass.backlog.TakenAt, nil, keys); err != nil {
+		drain.logger.Error(ctx, synclog.MsgTouchedDaysDrainFailed,
+			synclog.Text(synclog.KeyPhase, synclog.ParseLabel("mark")),
+			synclog.Org(synclog.ParseID(pass.organizationID)),
+			synclog.Text(synclog.KeyDrainPass, synclog.ParseLabel(pass.passID)),
+		)
+		drain.observe(jobruntime.TouchedDaysDrainMarkFailed, 1)
+	}
+}
+
+// report logs and counts one pass that read the pending days.
+func (drain *TouchedDaysDrain) report(ctx context.Context, pass *touchedDrainPass) {
+	org := synclog.Org(synclog.ParseID(pass.organizationID))
+	passAttr := synclog.Text(synclog.KeyDrainPass, synclog.ParseLabel(pass.passID))
+	split := 0
+	for _, start := range pass.started {
+		if !start.split {
+			continue
+		}
+		split++
+		// One line for each split day: its numbers are whole only after the
+		// passes that take the rest of its repositories.
+		drain.logger.Warn(ctx, synclog.MsgTouchedDaysDrainSplit, org, passAttr,
+			synclog.Instant(synclog.KeyDrainOldestPendingDay, start.day.UTC()),
+			synclog.Count(synclog.KeyRepoCount, len(start.repositories)),
+		)
+	}
+	if len(pass.skipped) > 0 {
+		// One line for each pass, never one for each day: the same days are
+		// found again by every pass until a run of them succeeds.
+		drain.logger.Error(ctx, synclog.MsgTouchedDaysDrainSkipped, org, passAttr,
+			synclog.Count(synclog.KeyDrainDaysSkipped, len(pass.skipped)),
+			synclog.Instant(synclog.KeyDrainOldestPendingDay, pass.skipped[0].UTC()),
+			synclog.Instant(synclog.KeyDrainNewestSkippedDay, pass.skipped[len(pass.skipped)-1].UTC()),
+		)
+	}
+	if pass.backlog.Truncated {
+		drain.logger.Error(ctx, synclog.MsgTouchedDaysDrainFailed,
+			synclog.Text(synclog.KeyPhase, synclog.ParseLabel("read_truncated")), org, passAttr)
+		drain.observe(jobruntime.TouchedDaysDrainReadTruncated, 1)
+	}
+	// A day is left pending when the pass did not take every pending key of
+	// it. The count is of the days the read returned: with Truncated it is a
+	// lower bound.
+	whole := 0
+	for _, start := range pass.started {
+		if !start.split {
+			whole++
+		}
+	}
+	pendingLeft := len(pass.backlog.Days) - whole
+	var age time.Duration
+	if pendingLeft > 0 && !pass.backlog.OldestTouchedAt.IsZero() {
+		age = max(pass.backlog.TakenAt.Sub(pass.backlog.OldestTouchedAt), time.Millisecond)
+	}
+	outcome := "started"
+	switch {
+	case len(pass.backlog.Days) == 0:
+		outcome = "nothing_pending"
+	case pass.inFlight > 0:
+		outcome = "in_flight"
+	case len(pass.started) == 0:
+		outcome = "started_none"
+	}
+	if outcome == "nothing_pending" && pass.returned == 0 {
+		// The usual pass of an organization with no backlog: counted, not
+		// logged, because every end of a daily run triggers one.
+		drain.observe(jobruntime.TouchedDaysDrainNothingPending, 1)
+		drain.observeAge(pass.organizationID, 0)
+		return
+	}
+	attrs := []synclog.Attr{
+		org, passAttr,
+		synclog.Text(synclog.KeyOutcome, synclog.ParseLabel(outcome)),
+		synclog.Count(synclog.KeyDrainDaysStarted, len(pass.started)),
+		synclog.Count(synclog.KeyDrainDaysPendingLeft, pendingLeft),
+		synclog.Count(synclog.KeyDrainDaysSplit, split),
+		synclog.Count(synclog.KeyDrainDaysAlreadyStarted, pass.alreadyStarted),
+		synclog.Count(synclog.KeyDrainDaysReturned, pass.returned),
+		synclog.Count(synclog.KeyDrainDaysSkipped, len(pass.skipped)),
+		synclog.Count(synclog.KeyDrainRunsInFlight, pass.inFlight),
+		synclog.Elapsed(synclog.KeyDrainOldestPendingAge, age),
+		synclog.Flag(synclog.KeyDrainReadTruncated, pass.backlog.Truncated),
+	}
+	if len(pass.backlog.Days) > 0 {
+		attrs = append(attrs, synclog.Instant(synclog.KeyDrainOldestPendingDay, pass.backlog.Days[0].UTC()))
+	}
+	drain.logger.Info(ctx, synclog.MsgTouchedDaysDrainPass, attrs...)
+	drain.observe(jobruntime.TouchedDaysDrainDaysStarted, uint64(len(pass.started)))
+	drain.observe(jobruntime.TouchedDaysDrainDaysSplit, uint64(split))
+	drain.observe(jobruntime.TouchedDaysDrainDaysAlreadyStarted, uint64(pass.alreadyStarted))
+	drain.observe(jobruntime.TouchedDaysDrainDaysReturned, uint64(pass.returned))
+	drain.observe(jobruntime.TouchedDaysDrainDaysSkipped, uint64(len(pass.skipped)))
+	if pass.inFlight > 0 {
+		drain.observe(jobruntime.TouchedDaysDrainInFlight, 1)
+	}
+	if len(pass.backlog.Days) == 0 {
+		drain.observe(jobruntime.TouchedDaysDrainNothingPending, 1)
+	}
+	drain.observeAge(pass.organizationID, age)
+}
+
+// fail logs and counts one pass that failed before its runs were committed.
+// phase is a fixed word of this file, never an error text.
+func (drain *TouchedDaysDrain) fail(ctx context.Context, pass *touchedDrainPass, phase string) {
+	drain.logger.Error(ctx, synclog.MsgTouchedDaysDrainFailed,
+		synclog.Text(synclog.KeyPhase, synclog.ParseLabel(phase)),
+		synclog.Org(synclog.ParseID(pass.organizationID)),
+		synclog.Text(synclog.KeyDrainPass, synclog.ParseLabel(pass.passID)),
+	)
+	drain.observe(jobruntime.TouchedDaysDrainPassFailed, 1)
+}
+
+func (drain *TouchedDaysDrain) observe(event jobruntime.TouchedDaysDrainEvent, count uint64) {
+	if drain.observer != nil {
+		_ = drain.observer.ObserveTouchedDaysDrain(event, count)
+	}
+}
+
+func (drain *TouchedDaysDrain) observeAge(organizationID string, age time.Duration) {
+	if drain.observer != nil {
+		_ = drain.observer.ObserveTouchedDaysOldestPendingAge(organizationID, age)
+	}
+}

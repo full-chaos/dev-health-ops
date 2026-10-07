@@ -99,8 +99,7 @@ func (result GitHubWorkItemsRESTResult) NoOptionalDegradation() bool {
 // `REST GitHubWorkItemsRESTCollector` on GitHubWorkItemsRouteHandler, which
 // internal/workerservice/provider_sync.go's
 // `provider == "github" && dataset == "work-items"` case constructs and assigns
-// to routeHandler alongside NewGitHubWorkItemClickHouseEffects and
-// NewGitHubWorkItemDeriver.
+// to routeHandler alongside NewGitHubWorkItemClickHouseEffects.
 //
 // WIRED IS NOT EXECUTING, and this comment claims only the former. Planning
 // admits a canonical work-items unit only when the descriptor satisfies

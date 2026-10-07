@@ -430,7 +430,7 @@ func TestProjectionKeepsMembershipRejections(t *testing.T) {
 	batch := preparedGitHubWorkItemsFixture(t, claim)
 	rejection := json.RawMessage(`{"work_item_id":"acme/api#1","provider":"github","source":"assignee_membership","reason":"repo_not_owned"}`)
 	for index := range batch.Effects {
-		if batch.Effects[index].Destination == githubTeamAttributionsDestination {
+		if batch.Effects[index].Destination == preparedMembershipRejectionsCarrier {
 			batch.Effects[index].MembershipRejections = []json.RawMessage{rejection}
 		}
 	}

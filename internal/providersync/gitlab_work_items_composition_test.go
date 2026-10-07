@@ -3,6 +3,7 @@ package providersync
 import (
 	"context"
 	"errors"
+	"slices"
 	"testing"
 	"time"
 
@@ -10,7 +11,11 @@ import (
 	"github.com/google/uuid"
 )
 
-func TestGitLabWorkItemFamilyEffectsComposeAllSixteenDestinations(t *testing.T) {
+// The sync unit of GitLab composes the six raw tables and ai_attribution, and
+// its sink refuses each of the nine tables the daily job computes from stored
+// rows: a prepared effect for one of them is a configuration error on write
+// and a conflict on readback, never a store call.
+func TestGitLabWorkItemFamilyEffectsComposeRawAndAIAttributionOnly(t *testing.T) {
 	lease := providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil })
 	sink, err := NewGitLabWorkItemFamilyClickHouseEffects(inertGitHubDerivedConn{}, lease, nil)
 	if err != nil {
@@ -27,15 +32,26 @@ func TestGitLabWorkItemFamilyEffectsComposeAllSixteenDestinations(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	effects := append(raw, derived...)
 	canonical := workItemRouteDestinations()
-	if len(effects) != len(canonical) || len(effects) != 16 {
-		t.Fatalf("effects=%d canonical=%d", len(effects), len(canonical))
+	if len(canonical) != 7 {
+		t.Fatalf("canonical=%v want the six raw tables and ai_attribution", canonical)
 	}
-	seen := make(map[string]struct{}, len(effects))
+	seen := make(map[string]struct{}, len(canonical))
+	refused := make(map[string]struct{}, len(githubWorkItemDerivedDestinations))
 	claim := nativeTestClaim("gitlab", "work-items")
 	claim.OrgID = "77777777-7777-4777-8777-777777777777"
-	for _, effect := range effects {
+	for _, effect := range append(raw, derived...) {
+		if slices.Contains(githubWorkItemDerivedDestinations, effect.Destination) {
+			if writeErr := sink.WriteEffect(context.Background(), claim, effect); !errors.Is(writeErr, ErrInvalidConfiguration) {
+				t.Fatalf("%s: the sync sink wrote a table of the daily job: %v", effect.Destination, writeErr)
+			}
+			inspection, inspectErr := sink.InspectEffect(context.Background(), claim, effect)
+			if !errors.Is(inspectErr, ErrInvalidConfiguration) || inspection != EffectConflict {
+				t.Fatalf("%s: readback=%s error=%v want a refused conflict", effect.Destination, inspection, inspectErr)
+			}
+			refused[effect.Destination] = struct{}{}
+			continue
+		}
 		if _, duplicate := seen[effect.Destination]; duplicate {
 			t.Fatalf("duplicate destination %q", effect.Destination)
 		}
@@ -48,9 +64,17 @@ func TestGitLabWorkItemFamilyEffectsComposeAllSixteenDestinations(t *testing.T) 
 			t.Fatalf("%s empty write: %v", effect.Destination, writeErr)
 		}
 	}
+	if len(seen) != len(canonical) {
+		t.Fatalf("accepted=%v canonical=%v", seen, canonical)
+	}
 	for _, destination := range canonical {
 		if _, present := seen[destination]; !present {
 			t.Fatalf("canonical destination %q was not composed", destination)
+		}
+	}
+	for _, destination := range githubWorkItemDerivedDestinations {
+		if _, present := refused[destination]; !present {
+			t.Fatalf("the refusal of %q was not observed", destination)
 		}
 	}
 }

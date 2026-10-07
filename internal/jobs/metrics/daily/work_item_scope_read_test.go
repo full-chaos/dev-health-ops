@@ -40,6 +40,28 @@ func TestWorkItemScopeFilterIsDroppedAboveTheValueBound(t *testing.T) {
 	}
 }
 
+// The value bound is 2000, the number the pipeline document gives. The
+// numbers are written out here: a test that takes them from the constant
+// passes for any value of it.
+func TestWorkItemScopeFilterValueBoundIsTwoThousand(t *testing.T) {
+	short := func(index int) string { return fmt.Sprintf("s%04d", index) }
+
+	values, emptyScope, above := workItemScopeFilter(workItemScopeSet(2000, short))
+	if above != "" || len(values) != 2000 || emptyScope {
+		t.Fatalf("2000 scopes: values = %d, emptyScope = %v, above = %q; want a filter of 2000 values",
+			len(values), emptyScope, above)
+	}
+	if size := workItemScopeFilterRenderedBytes(values); size > maxWorkItemScopeFilterBytes {
+		t.Fatalf("the case is above the byte bound too (%d bytes): it does not isolate the value bound", size)
+	}
+
+	values, _, above = workItemScopeFilter(workItemScopeSet(2001, short))
+	if above != workItemScopeFilterAboveValues || values != nil {
+		t.Fatalf("2001 scopes: values = %d, above = %q; want no filter and %q",
+			len(values), above, workItemScopeFilterAboveValues)
+	}
+}
+
 // The byte bound is the rendered size of the array literal: a set whose
 // literal is exactly the bound is filtered, one byte more is not, and the
 // reason names the bytes. The values need an escape, so a raw byte count would

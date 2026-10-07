@@ -681,12 +681,17 @@ project's items by id. Now:
     An organization with more than 5,000 Jira projects never closes a catalog ownership row.
   - Archived Jira projects: the project search returns live projects only (the provider's default for
     its `status` filter), so the walk reads the archived projects with a second search
-    (`status=archived`, the same paging and bound). An archived project keeps the open ownership rows it
-    has (its project-as-team row and its legacy links, first-seen `valid_from`); it gets no team,
-    project or member row, and an archived project with no open row gets none. This read failing at any
+    (`status=archived`, the same paging and bound). The archived answer is an identity set (native id
+    and key of each project). Every open ownership row of this writer whose project is in that set, by
+    the native id OR by the id built from the key (`{org_id}:jira:{KEY}`, rows written before the one-id
+    rule), is left as it is: it is not given to the snapshot rule, and nothing is written or re-keyed
+    for an archived project (`jira_team_catalog_archived_ownership_held`). This read failing at any
     page, the first one included, does not fail the walk: the snapshot is not complete
     (`jira_team_catalog_archived_project_search_incomplete`) and nothing is closed. A project in
     neither answer (deleted, or no longer visible to the credential) loses its rows on a complete run.
+  - No live ownership row closes nothing: when the live answer gives no ownership row and the writer has
+    open rows, the snapshot is not complete (`no_live_ownership` in the warning), whatever the archived
+    read holds.
   - Atlassian Teams: `Rows.ProjectLinksComplete` is set only by a collection that read the project
     links of every active team to the last page. Per team: when links came back and not one carries a
     readable Jira project ARI, the team is named in `Rows.UnreadableProjectLinkTeams`, its open links
@@ -710,7 +715,9 @@ team reaches its project's work items through ownership by id; one `projects` ro
 GitLab gap pinned as a known red), `TestAnAtlassianTeamsRunClosesTheKeyBuiltProjectLinks`,
 `TestAPartialJiraSnapshotClosesNoOwnership` (a search that stops after a page, and a legacy links table
 that cannot be read, close nothing; the complete run after them closes the lost project),
-`TestATeamWithNoReadableProjectLinkKeepsItsOpenLinks`, `TestAnArchivedJiraProjectKeepsItsOwnership`.
+`TestATeamWithNoReadableProjectLinkKeepsItsOpenLinks`, `TestAnArchivedJiraProjectKeepsItsOwnership`,
+`TestAnArchivedJiraProjectKeepsItsKeyBuiltOwnership` (a store with key-built rows only, a store with both
+id forms, an empty live answer).
 
 #### 0.4a Provider × entity **consumption** (functional — what `run_team_autoimport` actually pulls)
 

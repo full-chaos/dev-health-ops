@@ -424,6 +424,124 @@ func TestAnArchivedJiraProjectKeepsItsOwnership(t *testing.T) {
 	}
 }
 
+// A store written before the one-id rule names a project by the id built from
+// its key. The first sync after the change closes those rows for LIVE
+// projects and writes the native ones. For an ARCHIVED project no native row
+// is written, so its key-built rows are left open as they are; in a store
+// that has both forms for it, both stay. And an answer with no live project
+// closes nothing, whatever the archived read holds.
+func TestAnArchivedJiraProjectKeepsItsKeyBuiltOwnership(t *testing.T) {
+	ctx, conn := newWorkItemEffectsConn(t)
+	lease := providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil })
+	old := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	at := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	const insert = `INSERT INTO team_project_ownership (org_id, provider, team_id, project_id, project_key, source, is_primary, specificity, priority, valid_from, updated_at) VALUES (?, 'jira', ?, ?, ?, ?, 1, ?, ?, ?, ?)`
+	seed := func(orgID, team, project, key, source string) {
+		t.Helper()
+		specificity, priority := 100, 10
+		if source == "jira_legacy" {
+			specificity, priority = 90, 20
+		}
+		if err := conn.Exec(ctx, insert, orgID, team, project, key, source, specificity, priority, old, old); err != nil {
+			t.Fatal(err)
+		}
+	}
+	sync := func(orgID string, at time.Time, live, archived string) TeamCatalogResult {
+		t.Helper()
+		result, err := JiraTeamCatalogCollector{
+			Handler: JiraTeamCatalogRouteHandler{},
+			Sink:    JiraTeamCatalogClickHouseEffects{Conn: conn, Lease: lease},
+		}.CollectTeamCatalog(ctx, TeamCatalogReference{OrgID: orgID, SyncRunID: "run"},
+			providerfoundation.Credential{Provider: "jira"},
+			jiraTeamCatalogTestClient(t, fakehttp.Client(&jiraTeamCatalogFixtureDoer{t: t, byURI: map[string]jiraTeamCatalogFixtureResponse{
+				"/rest/api/3/project/YAK":                                   {body: `{"projectTypeKey":"business"}`},
+				jiraTeamCatalogProjectSearchURI:                             {body: live},
+				"/rest/api/3/project/search?maxResults=100&status=archived": {body: archived},
+			}})),
+			TeamCatalogSelections{Projects: true}, at)
+		if err != nil {
+			t.Fatalf("team catalog sync: %v", err)
+		}
+		return result
+	}
+	const openOf = `SELECT count() FROM team_project_ownership FINAL WHERE org_id = ? AND provider = 'jira' AND team_id = ? AND project_id = ? AND valid_to IS NULL`
+	const yak = `{"values":[{"id":"20001","key":"YAK","name":"Yak"}],"isLast":true,"total":1}`
+	const oldArchived = `{"values":[{"id":"20002","key":"OLD","name":"Old"}],"isLast":true,"total":1}`
+	const none = `{"values":[],"isLast":true,"total":0}`
+	prodShaped := func(orgID string) {
+		t.Helper()
+		seed(orgID, "YAK", orgID+":jira:YAK", "YAK", "native")
+		seed(orgID, "OLD", orgID+":jira:OLD", "OLD", "native")
+		seed(orgID, "ops-team-1", orgID+":jira:OLD", "OLD", "jira_legacy")
+		if err := conn.Exec(ctx, `INSERT INTO jira_project_ops_team_links (org_id, project_key, ops_team_id, project_name, ops_team_name, updated_at) VALUES (?, ?, ?, ?, ?, ?)`,
+			orgID, "OLD", "ops-team-1", "Old", "Ops Team", old); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	t.Run("key-built rows only", func(t *testing.T) {
+		orgID := uuid.NewString()
+		prodShaped(orgID)
+		open := func(team, project string) uint64 {
+			t.Helper()
+			return countRows(t, ctx, conn, openOf, orgID, team, project)
+		}
+		for run := 1; run <= 2; run++ {
+			result := sync(orgID, at.Add(time.Duration(run)*time.Hour), yak, oldArchived)
+			if result.OwnershipSnapshotIncomplete || open("YAK", orgID+":jira:YAK") != 0 || open("YAK", "20001") != 1 {
+				t.Fatalf("run %d: result = %+v, open key-built YAK = %d, open native YAK = %d; want the live project moved to its native id",
+					run, result, open("YAK", orgID+":jira:YAK"), open("YAK", "20001"))
+			}
+			if open("OLD", orgID+":jira:OLD") != 1 || open("ops-team-1", orgID+":jira:OLD") != 1 {
+				t.Fatalf("run %d: open key-built rows of the archived project: project-as-team %d, legacy %d; want both left open",
+					run, open("OLD", orgID+":jira:OLD"), open("ops-team-1", orgID+":jira:OLD"))
+			}
+			if got := countRows(t, ctx, conn, `SELECT count() FROM team_project_ownership FINAL WHERE org_id = ? AND project_id = '20002'`, orgID); got != 0 {
+				t.Fatalf("run %d: %d rows written on the native id of the archived project, want none", run, got)
+			}
+			if want := map[int]int{1: 1, 2: 0}[run]; result.OwnershipRetracted != want {
+				t.Fatalf("run %d: retracted = %d, want %d (the key-built row of the live project, once)", run, result.OwnershipRetracted, want)
+			}
+		}
+		if got := countRows(t, ctx, conn, `SELECT toUInt64(toUnixTimestamp64Milli(min(valid_from))) FROM team_project_ownership FINAL WHERE org_id = ? AND team_id = 'OLD' AND valid_to IS NULL`, orgID); int64(got) != old.UnixMilli() {
+			t.Fatalf("valid_from of the held row = %d, want the stored %d", got, old.UnixMilli())
+		}
+	})
+
+	t.Run("both id forms for the archived project", func(t *testing.T) {
+		orgID := uuid.NewString()
+		prodShaped(orgID)
+		seed(orgID, "OLD", "20002", "OLD", "native")
+		seed(orgID, "ops-team-1", "20002", "OLD", "jira_legacy")
+		result := sync(orgID, at.Add(time.Hour), yak, oldArchived)
+		for _, row := range [][2]string{{"OLD", orgID + ":jira:OLD"}, {"ops-team-1", orgID + ":jira:OLD"}, {"OLD", "20002"}, {"ops-team-1", "20002"}} {
+			if got := countRows(t, ctx, conn, openOf, orgID, row[0], row[1]); got != 1 {
+				t.Fatalf("open rows of %v = %d, want 1; result = %+v", row, got, result)
+			}
+		}
+		if result.OwnershipRetracted != 1 || result.OwnershipSnapshotIncomplete {
+			t.Fatalf("result = %+v, want only the key-built row of the live project closed", result)
+		}
+	})
+
+	t.Run("no live project closes nothing", func(t *testing.T) {
+		orgID := uuid.NewString()
+		prodShaped(orgID)
+		seed(orgID, "OLD", "20002", "OLD", "native")
+		seed(orgID, "YAK", "20001", "YAK", "native")
+		result := sync(orgID, at.Add(time.Hour), none, oldArchived)
+		closed := countRows(t, ctx, conn, `SELECT count() FROM team_project_ownership FINAL WHERE org_id = ? AND valid_to IS NOT NULL`, orgID)
+		if closed != 0 || result.OwnershipRetracted != 0 || !result.OwnershipSnapshotIncomplete {
+			t.Fatalf("result = %+v, closed rows = %d; want nothing closed and the snapshot reported as not complete when the live answer is empty", result, closed)
+		}
+		// An organization with no project and no open row has nothing to
+		// keep: its empty answer is complete.
+		if empty := sync(uuid.NewString(), at.Add(time.Hour), none, none); empty.OwnershipSnapshotIncomplete || empty.OwnershipRetracted != 0 {
+			t.Fatalf("result = %+v, want a complete snapshot for an organization with no project and no open row", empty)
+		}
+	})
+}
+
 // The pattern Jira follows, one row per provider. A project entity has one
 // id: the catalog, the ownership row and the work item name it by the same
 // value, so ownership reaches the items by (provider, project_id).

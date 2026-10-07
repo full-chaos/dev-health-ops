@@ -127,11 +127,17 @@ type JiraTeamCatalogBatch struct {
 	Rows     JiraTeamCatalogRows     `json:"rows"`
 	Result   JiraTeamCatalogResult   `json:"result"`
 	Evidence JiraTeamCatalogEvidence `json:"evidence"`
-	// ArchivedOwnership is the project-as-team ownership row of each
-	// ARCHIVED project the provider returned. These rows are not written as
-	// they are: the write keeps an open row of the same fact open with them
-	// (jiraHeldArchivedOwnership) and adds none.
-	ArchivedOwnership []jiraTeamCatalogOwnershipRow `json:"archived_ownership,omitempty"`
+	// ArchivedProjects is the identity of each ARCHIVED project the provider
+	// returned. Nothing is written for them: the write leaves every open
+	// ownership row of such a project as it is (jiraHoldArchivedOwnership).
+	ArchivedProjects []JiraArchivedProject `json:"archived_projects,omitempty"`
+}
+
+// JiraArchivedProject is one archived project as the project search names
+// it: its native id and its key, from the same search entry.
+type JiraArchivedProject struct {
+	ID  string `json:"id"`
+	Key string `json:"key"`
 }
 
 func jiraTeamCatalogWalkSkipBatch(reason string, requests int) JiraTeamCatalogBatch {
@@ -246,15 +252,16 @@ func (handler JiraTeamCatalogRouteHandler) CollectTeamCatalog(
 	}
 	rows.Projects = dedupeJiraProjectCatalogRows(rows.Projects)
 	rows.Ownership = dedupeJiraOwnershipRows(rows.Ownership)
-	var archivedOwnership []jiraTeamCatalogOwnershipRow
+	var archivedProjects []JiraArchivedProject
+	archivedSeen := map[JiraArchivedProject]bool{}
 	for _, entry := range archived.Values {
-		teamID, nativeProjectID := jiraTeamID(entry.Key), strings.TrimSpace(entry.ID)
-		if teamID == "" || nativeProjectID == "" || jiraProjectIDIsKeyBuilt(ref.OrgID, nativeProjectID) {
+		project := JiraArchivedProject{ID: strings.TrimSpace(entry.ID), Key: jiraTeamID(entry.Key)}
+		if project.Key == "" || project.ID == "" || jiraProjectIDIsKeyBuilt(ref.OrgID, project.ID) || archivedSeen[project] {
 			continue
 		}
-		archivedOwnership = append(archivedOwnership, normalizeJiraOwnershipRow(ref.OrgID, teamID, nativeProjectID, teamID, normalizedAt))
+		archivedSeen[project] = true
+		archivedProjects = append(archivedProjects, project)
 	}
-	archivedOwnership = dedupeJiraOwnershipRows(archivedOwnership)
 
 	if selections.Members {
 		for teamIndex, team := range rows.Teams {
@@ -323,26 +330,34 @@ func (handler JiraTeamCatalogRouteHandler) CollectTeamCatalog(
 		ProjectSearchPages:        searchPages,
 	}
 	evidence.Requests = requests
-	return JiraTeamCatalogBatch{Rows: rows, Result: result, Evidence: evidence, ArchivedOwnership: archivedOwnership}, nil
+	return JiraTeamCatalogBatch{Rows: rows, Result: result, Evidence: evidence, ArchivedProjects: archivedProjects}, nil
 }
 
-// jiraHeldArchivedOwnership returns the archived-project rows whose fact
-// (team, project, source) is open in the table. Added to the fresh snapshot
-// they keep that row open: archiving a project in Jira does not end its
-// ownership. An archived project with no open row gets none: it has no team
-// row in this catalog to own it.
-func jiraHeldArchivedOwnership(archived, open []jiraTeamCatalogOwnershipRow) []jiraTeamCatalogOwnershipRow {
-	isOpen := make(map[string]bool, len(open))
+// jiraHoldArchivedOwnership splits the open rows of this writer: held is
+// every row whose project is an archived project, rest is the others.
+// Archiving a project in Jira does not end its ownership, so a held row is
+// left as it is: it is not given to the snapshot rule, and nothing is written
+// for it.
+//
+// A stored row names its project by the native id or, when it was written
+// before the one-id rule, by the id built from the project key. Both forms of
+// an archived project hold a row: a store that still has key-built rows keeps
+// them for its archived projects, where no sync writes the native row that
+// replaces them.
+func jiraHoldArchivedOwnership(orgID string, archived []JiraArchivedProject, open []jiraTeamCatalogOwnershipRow) (held, rest []jiraTeamCatalogOwnershipRow) {
+	isArchived := make(map[string]bool, 2*len(archived))
+	for _, project := range archived {
+		isArchived[project.ID] = true
+		isArchived[jiraKeyBuiltProjectIDPrefix(orgID)+project.Key] = true
+	}
 	for _, row := range open {
-		isOpen[row.TeamID+"\x00"+row.ProjectID+"\x00"+row.Source] = true
-	}
-	var held []jiraTeamCatalogOwnershipRow
-	for _, row := range archived {
-		if isOpen[row.TeamID+"\x00"+row.ProjectID+"\x00"+row.Source] {
+		if isArchived[row.ProjectID] {
 			held = append(held, row)
+			continue
 		}
+		rest = append(rest, row)
 	}
-	return held
+	return held, rest
 }
 
 // jiraTeamCatalogSearchProjects reads /rest/api/3/project/search page by
@@ -673,14 +688,7 @@ func (collector JiraTeamCatalogCollector) CollectTeamCatalog(
 		// a key comes from this walk's own project search, never from a
 		// read of `projects`: a key the provider did not return this run has
 		// no identity to write.
-		//
-		// An archived project keeps its identity, so a legacy link to it
-		// still has a native id and is not dropped from the snapshot. A live
-		// project of the same key is written after it and wins.
-		nativeIDByKey := make(map[string]string, len(projects)+len(batch.ArchivedOwnership))
-		for _, row := range batch.ArchivedOwnership {
-			nativeIDByKey[row.TeamID] = row.ProjectID
-		}
+		nativeIDByKey := make(map[string]string, len(projects))
 		for _, row := range projects {
 			if row.ProjectKey != nil {
 				nativeIDByKey[*row.ProjectKey] = row.ID
@@ -706,14 +714,24 @@ func (collector JiraTeamCatalogCollector) CollectTeamCatalog(
 		if openErr != nil {
 			return result, openErr
 		}
-		ownership = dedupeJiraOwnershipRows(append(ownership, jiraHeldArchivedOwnership(batch.ArchivedOwnership, open)...))
+		// The open rows of an archived project are left as they are: they
+		// are not part of what the snapshot rule may close.
+		held, open := jiraHoldArchivedOwnership(ref.OrgID, batch.ArchivedProjects, open)
+		if len(held) > 0 {
+			slog.Default().InfoContext(ctx, "jira_team_catalog_archived_ownership_held",
+				"org_id", ref.OrgID, "rows", len(held))
+		}
+		// An answer with no live ownership row closes nothing, whatever the
+		// archived read holds: no live project is far more often an access
+		// change than an organization that removed every project.
+		liveEmpty := len(ownership) == 0 && len(open) > 0
 		// The snapshot is complete only when every read behind it reached
 		// its end: all pages of the project search and the legacy links.
-		snapshotComplete := batch.Result.ProjectSearchComplete && legacyComplete
+		snapshotComplete := batch.Result.ProjectSearchComplete && legacyComplete && !liveEmpty
 		if !snapshotComplete {
 			slog.Default().WarnContext(ctx, "jira_team_catalog_ownership_snapshot_incomplete",
 				"org_id", ref.OrgID, "project_search_complete", batch.Result.ProjectSearchComplete,
-				"legacy_links_complete", legacyComplete, "open_rows_kept", len(open))
+				"legacy_links_complete", legacyComplete, "no_live_ownership", liveEmpty, "open_rows_kept", len(open)+len(held))
 		}
 		result.OwnershipSnapshotIncomplete = !snapshotComplete
 		var retracted []jiraTeamCatalogOwnershipRow

@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strconv"
 	"strings"
@@ -532,48 +533,54 @@ func TestJiraTeamCatalogCollectReadsArchivedProjectsToHoldOwnershipOnly(t *testi
 				batch.Result.ProjectSearchComplete, batch.Result.ProjectSearchPages, doer.requests, tc.complete, tc.requests)
 		}
 		if tc.archived == nil {
-			if len(batch.ArchivedOwnership) < 100 {
-				t.Errorf("%s: %d archived rows, want the first page's 100 at least", name, len(batch.ArchivedOwnership))
+			if len(batch.ArchivedProjects) < 100 {
+				t.Errorf("%s: %d archived projects, want the first page's 100 at least", name, len(batch.ArchivedProjects))
 			}
-			if tc.complete && len(batch.ArchivedOwnership) != 101 {
-				t.Errorf("%s: %d archived rows, want both pages (101)", name, len(batch.ArchivedOwnership))
+			if tc.complete && len(batch.ArchivedProjects) != 101 {
+				t.Errorf("%s: %d archived projects, want both pages (101)", name, len(batch.ArchivedProjects))
 			}
 			continue
 		}
 		got := []string{}
-		for _, row := range batch.ArchivedOwnership {
-			if row.Source != "native" || row.ProjectKey == nil || *row.ProjectKey != row.TeamID || row.ValidTo != nil {
-				t.Errorf("%s: archived row %+v, want an open project-as-team row", name, row)
-			}
-			got = append(got, row.TeamID+"/"+row.ProjectID)
+		for _, project := range batch.ArchivedProjects {
+			got = append(got, project.Key+"/"+project.ID)
 		}
 		if !slices.Equal(got, tc.archived) {
-			t.Errorf("%s: archived ownership = %v, want %v", name, got, tc.archived)
+			t.Errorf("%s: archived projects = %v, want %v", name, got, tc.archived)
 		}
 	}
 }
 
-// An archived project's row holds an open row of the same fact and nothing
-// else: it adds no ownership the table does not have open.
-func TestJiraHeldArchivedOwnershipIsTheArchivedRowsThatAreOpen(t *testing.T) {
+// An open row is held when its project is an archived project, named by the
+// native id or by the id built from the project key. Team and source do not
+// decide: every open row of this writer for that project is held. A held row
+// is taken out of what the snapshot rule may close.
+func TestJiraHoldArchivedOwnershipHoldsBothIDFormsOfAnArchivedProject(t *testing.T) {
 	t.Parallel()
 	row := func(team, project, source string) jiraTeamCatalogOwnershipRow {
 		return jiraTeamCatalogOwnershipRow{TeamID: team, ProjectID: project, Source: source}
 	}
-	archived := []jiraTeamCatalogOwnershipRow{row("OLD", "20001", "native"), row("NEW", "20002", "native"), row("MOVED", "20003", "native"), row("LINK", "20005", "jira_legacy")}
+	archived := []JiraArchivedProject{{ID: "20001", Key: "OLD"}, {ID: "20002", Key: "GONE"}}
 	open := []jiraTeamCatalogOwnershipRow{
-		row("OLD", "20001", "native"),
-		row("NEW", "20002", "jira_legacy"), // the same team and project under another source
-		row("OTHER", "20003", "native"),    // the same project under another team
-		row("MOVED", "20004", "native"),    // the same team with another project
-		row("LINK", "20005", "native"),     // open under the catalog's source, archived under another
+		row("OLD", "20001", "native"),               // native id
+		row("OLD", "org-1:jira:OLD", "native"),      // key-built id
+		row("ops", "org-1:jira:OLD", "jira_legacy"), // key-built id, another team and source
+		row("ops", "20002", "jira_legacy"),          // native id of the second archived project
+		row("LIVE", "10001", "native"),              // a live project
+		row("LIVE", "org-1:jira:LIVE", "native"),    // a live project, key-built
+		row("OLD", "org-2:jira:OLD", "native"),      // the key-built id of another organization
+		row("OLD", "OLD", "native"),                 // the bare key is no id form
+		row("OLD", "org-1:jira:20001", "native"),    // the native id is not a key
+		row("GONE", "org-1:jira:gone", "native"),    // the key is compared as stored
+		row("X", "org-1:jira:OLDER", "native"),      // a key that only starts like an archived one
+		row("X", "200011", "native"),                // an id that only starts like an archived one
 	}
-	held := jiraHeldArchivedOwnership(archived, open)
-	if len(held) != 1 || held[0].TeamID != "OLD" || held[0].ProjectID != "20001" {
-		t.Fatalf("held = %+v, want the one archived row whose team, project and source are open", held)
+	held, rest := jiraHoldArchivedOwnership("org-1", archived, open)
+	if !reflect.DeepEqual(held, open[:4]) || !reflect.DeepEqual(rest, open[4:]) {
+		t.Fatalf("held = %+v\nrest = %+v\nwant the first four rows held and the others left to the snapshot rule", held, rest)
 	}
-	if got := jiraHeldArchivedOwnership(archived, nil); len(got) != 0 {
-		t.Fatalf("held with nothing open = %+v, want none", got)
+	if held, rest := jiraHoldArchivedOwnership("org-1", nil, open); len(held) != 0 || len(rest) != len(open) {
+		t.Fatalf("no archived project: held %d, rest %d; want none held", len(held), len(rest))
 	}
 }
 

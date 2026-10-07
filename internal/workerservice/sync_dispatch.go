@@ -3,6 +3,7 @@ package workerservice
 import (
 	"context"
 	"encoding/json"
+	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/full-chaos/dev-health-ops/internal/httpguard"
 	envsecrets "github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"log/slog"
@@ -94,7 +95,7 @@ func (dailyPostSyncWriter) RepositoryLimit() int { return daily.MaxRepositoriesP
 // the day (a later sync touched it too), and daily.PostgresStore.StartRunTx
 // refuses a (day, generation) whose list differs from the stored one. So a
 // run that exists is left as it is and the day is reported as not started:
-// the caller leaves it pending and a later fan-out computes it.
+// the caller leaves it pending and a later fan-out or drain pass computes it.
 func (writer dailyPostSyncWriter) StartTouchedDayTx(
 	ctx context.Context,
 	tx pgx.Tx,
@@ -120,6 +121,76 @@ func (writer dailyPostSyncWriter) StartTouchedDayTx(
 		Generation:     generation,
 		RepositoryIDs:  repositories,
 	}, writer.publisher); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// touchedDrainRuns is the daily-run state of the drain of the pending touched
+// days (CHAOS-8846), over the production daily store.
+type touchedDrainRuns struct {
+	store     *daily.PostgresStore
+	publisher daily.RunPublisher
+}
+
+func (touchedDrainRuns) RepositoryLimit() int { return daily.MaxRepositoriesPerRun }
+
+func (runs touchedDrainRuns) FailedDays(
+	ctx context.Context, organizationID string, since, notEndedBefore time.Time, window time.Duration,
+) ([]syncdispatchruntime.TouchedDayFailedRun, error) {
+	failures, err := runs.store.FailedTouchedDays(ctx, organizationID, since, notEndedBefore, window)
+	if err != nil {
+		return nil, err
+	}
+	days := make([]syncdispatchruntime.TouchedDayFailedRun, 0, len(failures))
+	for _, failure := range failures {
+		days = append(days, syncdispatchruntime.TouchedDayFailedRun{Day: failure.Day, FailedAt: failure.FailedAt})
+	}
+	return days, nil
+}
+
+func (runs touchedDrainRuns) DaysWithOnlyFailedRuns(
+	ctx context.Context, organizationID string, days []time.Time, threshold int, notEndedBefore time.Time,
+) (map[string]struct{}, error) {
+	return runs.store.DaysWithOnlyFailedRuns(ctx, organizationID, days, threshold, notEndedBefore)
+}
+
+func (runs touchedDrainRuns) InFlightTx(
+	ctx context.Context, tx pgx.Tx, organizationID string, since time.Time,
+) (int, error) {
+	return runs.store.TouchedDrainRunsInFlightTx(ctx, tx, organizationID, since)
+}
+
+// StartTx starts the run of one pending day for the listed repositories. The
+// generation is the pass: a second delivery of the trigger of the pass finds
+// the run and starts nothing, and the next pass has another generation, so it
+// can start a run of the same day with another list.
+func (runs touchedDrainRuns) StartTx(
+	ctx context.Context, tx pgx.Tx, organizationID string, day time.Time, passID string, repositoryIDs []string,
+) (bool, error) {
+	if len(repositoryIDs) == 0 {
+		// A drain run without a list would be a run of every repository under
+		// a generation that deferred discovery refuses.
+		return false, syncdispatchruntime.ErrPostSyncUnavailable
+	}
+	generation := daily.TouchedDrainGenerationPrefix + passID
+	exists, err := runs.store.RunExistsTx(ctx, tx, organizationID, day, generation)
+	if err != nil {
+		return false, err
+	}
+	if exists {
+		return false, nil
+	}
+	repositories := make([]daily.RepositoryID, 0, len(repositoryIDs))
+	for _, repositoryID := range repositoryIDs {
+		repositories = append(repositories, daily.RepositoryID(repositoryID))
+	}
+	if _, err := runs.store.StartRunTx(ctx, tx, daily.StartRunRequest{
+		OrganizationID: organizationID,
+		TargetDay:      day,
+		Generation:     generation,
+		RepositoryIDs:  repositories,
+	}, runs.publisher); err != nil {
 		return false, err
 	}
 	return true, nil
@@ -894,4 +965,31 @@ func buildFinalizeSyncRunService(
 		return nil, err
 	}
 	return service, nil
+}
+
+// newTouchedDaysDrain builds the drain of the pending touched days
+// (CHAOS-8846) for the daily worker family, over the family's own ClickHouse
+// connection and daily store.
+func newTouchedDaysDrain(
+	pool *pgxpool.Pool,
+	clickhouseConnection driver.Conn,
+	store *daily.PostgresStore,
+	publisher daily.RunPublisher,
+	observer jobruntime.TouchedDaysDrainObserver,
+	logger *slog.Logger,
+) (*syncdispatchruntime.TouchedDaysDrain, error) {
+	if store == nil || publisher == nil {
+		return nil, syncdispatchruntime.ErrPostSyncUnavailable
+	}
+	touchedDays, err := syncdispatchruntime.NewClickHouseTouchedDaysStore(clickhouseConnection)
+	if err != nil {
+		return nil, err
+	}
+	drain, err := syncdispatchruntime.NewTouchedDaysDrain(
+		pool, touchedDays, touchedDrainRuns{store: store, publisher: publisher}, synclog.New(logger))
+	if err != nil {
+		return nil, err
+	}
+	drain.SetObserver(observer)
+	return drain, nil
 }

@@ -418,8 +418,9 @@ never reads the rows as they are. Every `at` is the ClickHouse clock.
    carried over. Each fan-out logs ONE Error line (phase
    `over_repository_limit`, fields `touched_days_over_limit` = the count,
    `touched_days_over_limit_newest`, `touched_days_over_limit_oldest`) and adds
-   the count to the counter event `over_repository_limit`. The days are not
-   drained here (CHAOS-8846 covers the drain). A run that exists for `(day, generation)` is left
+   the count to the counter event `over_repository_limit`. The fan-out starts no
+   run for them; the drain takes them in parts (see "Drain of the pending
+   touched days"). A run that exists for `(day, generation)` is left
    as it is and the day stays pending.
 3. *After the commit*: the fan-out appends the `dispatched` events, all one
    millisecond before `TakenAt`, and ends only `touched` events at or before
@@ -436,20 +437,18 @@ unit of the run writes a raw row after the read of step 1.
 **Delivery.** The record is at-least-once: each failure leaves the day pending
 or its run started. A failed record or a rolled-back transaction leaves the
 day pending for the next delivery. A failed mark after the commit, and a
-second delivery after a commit, leave the day pending for the next sync of
-the organization, which computes it once more. No path ends a key whose run
+second delivery after a commit, leave the day pending for the next fan-out
+or drain pass of the organization, which computes it once more. No path ends a key whose run
 did not commit.
 
 **Limits.**
 
-- Only a fan-out drains the pending days: 31 for each post-sync fan-out of the
-  organization. The nightly run does not drain them. The newest days go first,
-  so an organization whose fan-outs each record 31 or more newer days never
-  takes its older pending days (CHAOS-8846). An operator sees the carry-over
-  in the Info field `touched_days_carried_over` of the log line
-  `post_sync_fanout.touched_days` and in the counter event `days_carried_over`.
-  An Error line (phase `read_truncated`) comes only above 3660 pending days.
-  No metric gives the age of the oldest pending day.
+- A fan-out takes the 31 newest pending days. The rest is taken by the drain,
+  newest first too (see "Drain of the pending touched days"). An operator sees the
+  carry-over of a fan-out in the Info field `touched_days_carried_over` of the
+  log line `post_sync_fanout.touched_days` and in the counter event
+  `days_carried_over`. An Error line (phase `read_truncated`) comes only above
+  3660 pending days.
 - A late event records the days of its own timestamps only. The days between
   the day of a late event and the day it was written are not recorded, but the
   daily compute counts work in progress at the end of every day an item is
@@ -503,6 +502,146 @@ Counter: `dev_health_post_sync_touched_days_total{event}` with `keys_recorded`,
 `days_dispatched`, `days_carried_over`, `days_already_started`,
 `read_truncated`, `record_failed`, `mark_failed`. Log lines:
 `post_sync_fanout.touched_days` and the failure line with `phase`.
+
+## Drain of the pending touched days
+
+A fan-out leaves every pending day behind its 31 newest. Without a drain only
+a later fan-out takes them, so an organization with no later sync would keep
+them for ever, and a first sync or a long backfill would fill only its newest
+days. The drain (`TouchedDaysDrain`, `internal/syncdispatchruntime/touched_days_drain.go`,
+CHAOS-8846) starts the daily runs of those days without a sync.
+
+**What a user sees.** After a first sync or a backfill the newest days have
+their rows in minutes (the window of the sync run and the 31 newest touched
+days). The drain then goes on from there towards the oldest day, 31 days for
+each batch, one batch after the other. History so grows back from today in one
+piece: there is never a hole between two filled ranges. A day that waits has
+its old rows or no rows; it never has a row that says zero.
+
+**Triggers.** No timer, no job kind and no queue of its own:
+
+- *Floor*: the dispatch of the nightly run of an organization
+  (`daily_metrics_fanout`, 01:00 UTC, `Dispatcher.Work`). Once a day for every
+  active organization, with or without a sync.
+- *Continuation*: the end of every daily run of the organization
+  (`FinalizeHandler.Work`, after the run succeeded or failed for good). The end
+  of the last run of a batch starts the next batch.
+
+A chain of passes ends by itself: a pass that starts no run produces no run
+end.
+
+**One pass.**
+
+1. If drain runs of the organization are not ended (created in the last 24
+   hours), the trigger does nothing. At most 31 drain runs of one organization
+   are in flight.
+2. The days with a run of a fan-out or of the drain that ended without a
+   result go back to pending (`ReturnToPending`). Their keys were marked when
+   the run started; without this step such a run would lose its day.
+3. ClickHouse, with no Postgres transaction open: the pending days, newest
+   first, and the pending repositories of the first 31 that can start.
+4. One Postgres transaction under an advisory lock for the organization: the
+   in-flight count again, then one run for each day, generation
+   `touched-drain:<trigger>:<id of the run that triggered the pass>`.
+5. After the commit: the `dispatched` events of exactly the keys the runs
+   list, one millisecond before the read of step 3.
+
+**Order and the 31 slots.** The fan-out and the drain both take the newest
+pending days, and each has its own 31. The drain reads after the fan-out
+marked its days, so in the normal case the two take different days. Because a
+chain of passes goes on until nothing is pending, the old days are reached
+when no new touches arrive. They can wait without a bound only when syncs keep
+touching 31 or more new days faster than a batch of 31 runs ends; the gauge of
+the oldest pending age shows that case, it does not remove it.
+
+**A day over the repository limit.** A day with more than 1000 pending
+repositories is split: a pass takes 1000 of them as one run and marks only
+those; the next pass, which has another generation, takes the next 1000. Each
+part is one Warn line (`touched_days_drain.day_split`) and one count of
+`days_split`. A part is a run of listed repositories, as the run of every
+touched day is. A work scope with items in several repositories can be in
+more than one part: each part computes the scope over the items of every
+repository of the scope (the rule of the work-item families above), so no
+part writes a row of the scope from its own repositories only, and the parts
+together equal one run of every repository. The split depends on that rule.
+
+**A run that ends without a result.** Three ends count: the status `failed`,
+the status `canceled`, and a run that is not ended 24 hours after its creation
+(a blocked run, a run whose jobs were lost; a daily run has no other terminal
+status than `succeeded` and `no_repositories`, which a run of listed
+repositories never gets). The keys of such a run are pending again at the next
+pass and get a new run. Every such run of the last 72 hours is looked at, not
+only the newest run of the day: a newer run of the same day lists other keys.
+Only the keys marked at or before the end of the run are returned, so the same
+failure is never returned twice and a run started after it keeps its marks. A
+key of the day that another run computed before that end is returned too and
+is computed once more. A run that ends after its 24 hours is computed twice.
+
+When the 3 newest runs of a day all ended without a result, the
+drain starts no run for it: the day stays pending, each pass reports it in one
+Error line (`touched_days_drain.days_skipped_after_failed_runs`) and in the
+counter event `days_skipped_after_failed_runs`, and it holds no slot, so the
+other days still drain. A run of the day that succeeds, of any trigger, makes
+it startable again. The fan-out has no such rule: it takes a pending day by
+age only.
+
+**Delivery.** At-least-once, as the fan-out. A stop before the commit leaves
+every day pending. A stop between the commit and the mark leaves the days
+pending with their runs started: a second delivery of the same trigger builds
+the same run ids and starts nothing, and a later pass computes the days once
+more. Two passes at the same time are put in sequence by the lock, and the
+second starts nothing. A fan-out that reads the record between the commit and
+the mark of a pass starts a second run for the days both took: the day is
+computed twice, never lost.
+
+**Size.** 366 pending days of one organization: the fan-out starts its window
+(at most 15 days) and 31 days; the drain starts the other 320 in 11 passes.
+
+**Telemetry.** Log line `touched_days_drain.pass` for each pass that found a
+pending day (`drain_pass` = the trigger letter, `n` for the nightly dispatch or
+`e` for the end of a run, and the id of that run with `_` for `-`;
+`outcome`, `drain_days_started`, `drain_days_pending_left`,
+`drain_days_split`, `drain_days_already_started`,
+`drain_days_returned_to_pending`, `drain_days_skipped`,
+`drain_runs_in_flight`, `drain_oldest_pending_day`,
+`drain_oldest_pending_age`); Error line `touched_days_drain.failed` with
+`phase`. Counter `dev_health_touched_days_drain_total{event}` with `passes`,
+`days_started`, `days_split`, `days_already_started`,
+`days_returned_to_pending`, `days_skipped_after_failed_runs`, `in_flight`,
+`nothing_pending`, `pass_failed`, `mark_failed`, `read_truncated`. Gauge
+`dev_health_touched_days_oldest_pending_age_seconds`: the highest age of the
+oldest pending day over the organizations whose last pass in the process left
+a day pending. Each worker process exports its own value: read the highest
+over the processes. A process drops its report of an organization 25 hours
+after its last pass of it, so an organization with a pending day is always
+shown (some process runs its nightly pass), and one that another process
+drained is shown for at most 25 hours more. The pass line names the
+organization and is the exact record. The age is the time since the newest `touched` event of the key
+that has waited longest: the table keeps only the newest event of a key, so
+the age is a lower bound.
+
+**Limits.**
+
+- A drain run that never ends holds back the next pass for 24 hours. Then its
+  day is returned and started again; a day whose runs never end so holds back
+  the drain of its organization for three days before it is skipped. The
+  blocked-run marker reports each run.
+- A run without a result is seen for 72 hours after it was created. An
+  organization with no pass in that time (no active nightly run) keeps the
+  keys marked.
+- The fan-out has no skip rule. A day that the drain skips stays pending, so
+  each later fan-out that finds it among its 31 newest pending days starts
+  one more run for it. No other day is lost by that: the drain takes what the
+  fan-out leaves, and a skipped day holds no slot of the drain.
+- A mark that keeps failing while the runs succeed makes each pass start the
+  same days again (`mark_failed` counts it). Nothing bounds that but the 31
+  runs in flight.
+- The line of the fan-out (`post_sync_fanout.touched_days`) has no pending-age
+  fields: the fan-out does not read the whole backlog. The pass that follows
+  the end of its runs reports them.
+- An organization that the nightly schedule does not list as active has no
+  floor trigger: its pending days wait for the end of a daily run.
+- A pod of an older build runs no pass. Its fan-out still takes 31 days.
 
 ## Storage Schema Highlights
 

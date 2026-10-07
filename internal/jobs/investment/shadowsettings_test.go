@@ -82,7 +82,10 @@ func TestShadowSettingsClamps(t *testing.T) {
 		{"seconds 121 -> 120", EnvShadowMaxSeconds, "121", func(s ShadowSettings) bool { return s.Budget == 120*time.Second }},
 		{"seconds 120 stays", EnvShadowMaxSeconds, "120", func(s ShadowSettings) bool { return s.Budget == 120*time.Second }},
 		{"seconds 119 stays", EnvShadowMaxSeconds, "119", func(s ShadowSettings) bool { return s.Budget == 119*time.Second }},
-		{"a huge number of seconds cannot wrap", EnvShadowMaxSeconds, "9223372036", func(s ShadowSettings) bool { return s.Budget == 120*time.Second }},
+		// 9223372037 s is one second more than a time.Duration can hold: a
+		// multiplication before the clamp would wrap to a negative budget.
+		{"a number of seconds over the Duration range cannot wrap", EnvShadowMaxSeconds, "9223372037", func(s ShadowSettings) bool { return s.Budget == 120*time.Second }},
+		{"a huge number of seconds cannot wrap", EnvShadowMaxSeconds, "99999999999999", func(s ShadowSettings) bool { return s.Budget == 120*time.Second }},
 		{"concurrency 99 -> 32", EnvShadowConcurrency, "99", func(s ShadowSettings) bool { return s.Concurrency == 32 }},
 		{"concurrency 32 stays", EnvShadowConcurrency, "32", func(s ShadowSettings) bool { return s.Concurrency == 32 }},
 		{"usd 1e9 -> 100", EnvShadowMaxUSDPerRun, "1000000000", func(s ShadowSettings) bool { return s.MaxNanoUSD == 100_000_000_000 }},
@@ -127,6 +130,27 @@ func TestAShadowSettingThatCannotBeUsedIsRefusedByName(t *testing.T) {
 		}
 		if settings.Provider != "" || settings.EnabledFor("org-a") {
 			t.Errorf("%s=%q: the refused settings are on", tc.variable, tc.value)
+		}
+	}
+}
+
+// EnabledFor, clause by clause, on a struct that no parser filled: the provider
+// and the org list are each needed.
+func TestEnabledForNeedsAProviderAndAnAllowedOrg(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		settings ShadowSettings
+		org      string
+		want     bool
+	}{
+		{"provider and all orgs", ShadowSettings{Provider: "typesafe", AllOrgs: true}, "org-a", true},
+		{"all orgs and no provider", ShadowSettings{AllOrgs: true}, "org-a", false},
+		{"a listed org and no provider", ShadowSettings{OrgIDs: map[string]struct{}{"org-a": {}}}, "org-a", false},
+		{"provider and no org list", ShadowSettings{Provider: "typesafe"}, "org-a", false},
+		{"provider and another org", ShadowSettings{Provider: "typesafe", OrgIDs: map[string]struct{}{"org-b": {}}}, "org-a", false},
+	} {
+		if got := tc.settings.EnabledFor(tc.org); got != tc.want {
+			t.Errorf("%s: enabled = %v, want %v", tc.name, got, tc.want)
 		}
 	}
 }

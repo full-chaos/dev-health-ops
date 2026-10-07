@@ -254,8 +254,16 @@ func TestTheSampleIsStableForAUnitAndFollowsThePercentage(t *testing.T) {
 	if in < 850 || in > 1150 {
 		t.Fatalf("%d of 2000 units in a 50 percent sample", in)
 	}
-	if (ShadowSettings{SamplePercent: 0}).inSample("unit-1") || !(ShadowSettings{SamplePercent: 100}).inSample("unit-1") {
-		t.Fatal("0 percent must select nothing and 100 percent everything")
+	// The two ends are exact for every unit, not for one sample unit: at 0
+	// nobody is asked (an off-by-one would ask about 1 in 100), at 100 everybody.
+	for index := 0; index < 2000; index++ {
+		unit := fmt.Sprintf("unit-%d", index)
+		if (ShadowSettings{SamplePercent: 0}).inSample(unit) {
+			t.Fatalf("%s is in a sample of 0 percent", unit)
+		}
+		if !(ShadowSettings{SamplePercent: 100}).inSample(unit) {
+			t.Fatalf("%s is out of a sample of 100 percent", unit)
+		}
 	}
 }
 
@@ -809,5 +817,38 @@ func TestAPanicOfThePhaseItselfDoesNotReachTheRun(t *testing.T) {
 	bare.runShadow(context.Background(), shadowTestConfig(), shadowTestEntries(t, "u1"))
 	if fake.count() != 0 {
 		t.Fatal("a materializer with no phase sent a request")
+	}
+}
+
+// countingSender is a TypeSafe sender that only counts.
+type countingSender struct{ sends int }
+
+func (sender *countingSender) PostSystemOneDetailed(context.Context, []byte) (categorize.SystemOneResult, error) {
+	sender.sends++
+	return categorize.SystemOneResult{Body: []byte(`{}`)}, nil
+}
+func (sender *countingSender) Model() string { return decision.DefaultModel }
+func (sender *countingSender) Close() error  { return nil }
+
+// The transport of the phase sends only inside a classification of a phase: a
+// call with no spend ledger in its context is refused, so nothing can use the
+// completer to send a request that no cap and no attempt row sees.
+func TestTheTransportRefusesARequestOutsideAClassification(t *testing.T) {
+	sender := &countingSender{}
+	transport := shadowTransport{sender: sender}
+	for name, ctx := range map[string]context.Context{
+		"no exchange":                context.Background(),
+		"an exchange with no ledger": withShadowExchange(context.Background(), &shadowExchange{}),
+	} {
+		if _, _, err := transport.PostSystemOne(ctx, []byte(`{"model":"m"}`)); err != errShadowNoExchange {
+			t.Errorf("%s: err = %v, want the refusal", name, err)
+		}
+	}
+	if sender.sends != 0 {
+		t.Fatalf("%d request(s) were sent outside a classification", sender.sends)
+	}
+	exchange := &shadowExchange{ledger: &shadowLedger{limit: 1 << 40}}
+	if _, _, err := transport.PostSystemOne(withShadowExchange(context.Background(), exchange), []byte(`{"model":"m"}`)); err != nil || sender.sends != 1 {
+		t.Fatalf("inside a classification: err = %v, sends = %d", err, sender.sends)
 	}
 }

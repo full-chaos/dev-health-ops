@@ -443,6 +443,26 @@ func InvestmentShadowAttemptStates() []string {
 	}
 }
 
+// InvestmentShadowMetricNames is every metric name of the shadow phase, in
+// render order. writeInvestmentShadowPhase renders exactly these.
+func InvestmentShadowMetricNames() []string {
+	return []string{
+		investmentShadowAttemptsMetric, investmentShadowAttemptLatencyMetric, investmentShadowStopsMetric,
+		investmentShadowCancelledRunsMetric, investmentShadowPanicsMetric,
+		investmentShadowAttemptWriteErrorsMetric, investmentShadowAttemptRowsDroppedMetric,
+	}
+}
+
+const (
+	investmentShadowAttemptsMetric           = "dev_health_investment_shadow_attempts_total"
+	investmentShadowAttemptLatencyMetric     = "dev_health_investment_shadow_attempt_latency_seconds"
+	investmentShadowStopsMetric              = "dev_health_investment_shadow_phase_stops_total"
+	investmentShadowCancelledRunsMetric      = "dev_health_investment_shadow_phase_cancelled_runs_total"
+	investmentShadowPanicsMetric             = "dev_health_investment_shadow_panics_recovered_total"
+	investmentShadowAttemptWriteErrorsMetric = "dev_health_investment_shadow_attempt_write_errors_total"
+	investmentShadowAttemptRowsDroppedMetric = "dev_health_investment_shadow_attempt_rows_dropped_total"
+)
+
 // investmentShadowLatencyBuckets fits one HTTP attempt: about 0.1 s for a
 // normal answer, up to the 60 s client timeout.
 var investmentShadowLatencyBuckets = []float64{0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60, 120}
@@ -4271,30 +4291,30 @@ func (collector *MetricsCollector) writeInvestmentRepoAttribution(output *string
 // every scrape, zero included: with the phase off (the default) each one reads
 // as an explicit zero, not as a missing series.
 func (collector *MetricsCollector) writeInvestmentShadowPhase(output *strings.Builder) {
-	writeMetadata(output, "dev_health_investment_shadow_attempts_total", "HTTP attempts of the investment shadow categorization phase, by role, provider, requested model and state: the decision state for the last attempt of a classification, retried for an attempt that was followed by a retry (CHAOS-8869).", "counter")
+	writeMetadata(output, investmentShadowAttemptsMetric, "HTTP attempts of the investment shadow categorization phase, by role, provider, requested model and state: the decision state for the last attempt of a classification, retried for an attempt that was followed by a retry (CHAOS-8869).", "counter")
 	for _, model := range investmentShadowModels {
 		for _, state := range InvestmentShadowAttemptStates() {
-			writeUintSample(output, "dev_health_investment_shadow_attempts_total",
+			writeUintSample(output, investmentShadowAttemptsMetric,
 				[]metricLabel{{"role", investmentShadowRole}, {"provider", investmentShadowProvider}, {"model", model}, {"state", state}},
 				collector.investmentShadowAttempts[investmentShadowAttemptLabels{model: model, state: state}])
 		}
 	}
-	writeMetadata(output, "dev_health_investment_shadow_attempt_latency_seconds", "Request time of one HTTP attempt of the investment shadow categorization phase, by role; the wait before a retry is not in it.", "histogram")
-	writeHistogram(output, "dev_health_investment_shadow_attempt_latency_seconds",
+	writeMetadata(output, investmentShadowAttemptLatencyMetric, "Request time of one HTTP attempt of the investment shadow categorization phase, by role; the wait before a retry is not in it.", "histogram")
+	writeHistogram(output, investmentShadowAttemptLatencyMetric,
 		[]metricLabel{{"role", investmentShadowRole}}, collector.investmentShadowAttemptLatency)
-	writeMetadata(output, "dev_health_investment_shadow_phase_stops_total", "Investment shadow categorization phases that ended, by reason: done, budget (the time budget ended first), cap (the spend cap of the run), deterministic_failure (a rejected key or an unknown model), cancelled (the run context was cancelled inside the phase), table_missing (a shadow migration is not applied), store_error, panic.", "counter")
+	writeMetadata(output, investmentShadowStopsMetric, "Investment shadow categorization phases that ended, by reason: done, budget (the time budget ended first), cap (the spend cap of the run), deterministic_failure (a rejected key or an unknown model), cancelled (the run context was cancelled inside the phase), table_missing (a shadow migration is not applied), store_error, panic.", "counter")
 	for _, reason := range InvestmentShadowStopReasons() {
-		writeUintSample(output, "dev_health_investment_shadow_phase_stops_total",
+		writeUintSample(output, investmentShadowStopsMetric,
 			[]metricLabel{{"reason", reason}}, collector.investmentShadowStops[reason])
 	}
-	writeMetadata(output, "dev_health_investment_shadow_phase_cancelled_runs_total", "investment.materialize runs whose context was cancelled inside the shadow phase: the request is retried and one of its claims is spent.", "counter")
-	writeUintSample(output, "dev_health_investment_shadow_phase_cancelled_runs_total", nil, collector.investmentShadowCancelledRuns)
-	writeMetadata(output, "dev_health_investment_shadow_panics_recovered_total", "Panics recovered inside the investment shadow categorization phase; each one ended one work unit as adapter_defect, or the phase.", "counter")
-	writeUintSample(output, "dev_health_investment_shadow_panics_recovered_total", nil, collector.investmentShadowPanicsRecovered)
-	writeMetadata(output, "dev_health_investment_shadow_attempt_write_errors_total", "Failed batch inserts of llm_categorization_attempts rows by the investment shadow phase; the rows of that run are lost.", "counter")
-	writeUintSample(output, "dev_health_investment_shadow_attempt_write_errors_total", nil, collector.investmentShadowAttemptWriteErrors)
-	writeMetadata(output, "dev_health_investment_shadow_attempt_rows_dropped_total", "llm_categorization_attempts rows the investment shadow phase did not write because the buffer of the run was at its row cap.", "counter")
-	writeUintSample(output, "dev_health_investment_shadow_attempt_rows_dropped_total", nil, collector.investmentShadowAttemptRowsDropped)
+	writeMetadata(output, investmentShadowCancelledRunsMetric, "investment.materialize runs whose context was cancelled inside the shadow phase: the request is retried and one of its claims is spent.", "counter")
+	writeUintSample(output, investmentShadowCancelledRunsMetric, nil, collector.investmentShadowCancelledRuns)
+	writeMetadata(output, investmentShadowPanicsMetric, "Panics recovered inside the investment shadow categorization phase; each one ended one work unit as adapter_defect, or the phase.", "counter")
+	writeUintSample(output, investmentShadowPanicsMetric, nil, collector.investmentShadowPanicsRecovered)
+	writeMetadata(output, investmentShadowAttemptWriteErrorsMetric, "Failed batch inserts of llm_categorization_attempts rows by the investment shadow phase; the rows of that run are lost.", "counter")
+	writeUintSample(output, investmentShadowAttemptWriteErrorsMetric, nil, collector.investmentShadowAttemptWriteErrors)
+	writeMetadata(output, investmentShadowAttemptRowsDroppedMetric, "llm_categorization_attempts rows the investment shadow phase did not write because the buffer of the run was at its row cap.", "counter")
+	writeUintSample(output, investmentShadowAttemptRowsDroppedMetric, nil, collector.investmentShadowAttemptRowsDropped)
 }
 
 // writeIncidentValidFromGuard renders CHAOS-4269/CHAOS-4295's per-reason

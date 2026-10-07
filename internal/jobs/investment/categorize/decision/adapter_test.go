@@ -45,7 +45,7 @@ func newTestCompleter(t *testing.T, transport Transport) *Completer {
 func TestTheEmbeddedRubricHasThePinnedDigestAndVersions(t *testing.T) {
 	sum := sha256.Sum256(rubricJSON)
 	if got := hex.EncodeToString(sum[:]); got != RubricSHA256 {
-		t.Fatalf("decision-support-v1d.json has sha256 %s, RubricSHA256 is %s: a rubric edit needs a new file, a new constant and a new rubric_version in one change", got, RubricSHA256)
+		t.Fatalf("decision-support-v1f.json has sha256 %s, RubricSHA256 is %s: a rubric edit needs a new file, a new constant and a new rubric_version in one change", got, RubricSHA256)
 	}
 	r, err := LoadRubric()
 	if err != nil {
@@ -75,7 +75,7 @@ func TestAChangedRubricByteIsRefusedAtConstruction(t *testing.T) {
 // another map, span rule or taxonomy) must not load under the old stamp.
 func TestARubricThatNamesOtherVersionsIsRefused(t *testing.T) {
 	for _, c := range []struct{ name, from, to string }{
-		{"rubric_version", `"rubric_version": "decision-support-v1d"`, `"rubric_version": "decision-support-v1x"`},
+		{"rubric_version", `"rubric_version": "decision-support-v1f"`, `"rubric_version": "decision-support-v1x"`},
 		{"map_version", `"map_version": "support-map-v1"`, `"map_version": "support-map-v9"`},
 		{"weight_map.primary.name", `"name": "support-map-v1"`, `"name": "support-map-v9"`},
 		{"span_version", `"span_version": "span-candidates-v1"`, `"span_version": "span-candidates-v9"`},
@@ -100,7 +100,7 @@ func TestARubricThatNamesOtherVersionsIsRefused(t *testing.T) {
 
 func TestTheStampIsTheDesignedString(t *testing.T) {
 	want := "provider=typesafe;api=systemone;model=jev-1.13.0;taxonomy=investment-taxonomy-v1;" +
-		"prompt=decision-support-v1d@73ace2d4e437;adapter=decision-adapter-v3;map=support-map-v1;level=presence-floor:0.4"
+		"prompt=decision-support-v1f@eac20c674565;adapter=decision-adapter-v3;map=support-map-v1;level=presence-floor:0.4"
 	if got := IdentityFor("").Stamp(); got != want {
 		t.Fatalf("stamp\n got %s\nwant %s", got, want)
 	}

@@ -195,9 +195,10 @@ GROUP BY day`, limitPerDay, organizationID, touchedDayStrings(days))
 	return repositories, nil
 }
 
-// MarkDispatched appends the 'dispatched' events of one fan-out, all at the
-// time its read of the pending days was taken. A 'touched' event newer than
-// that time stays newer, so its key stays pending.
+// MarkDispatched appends the 'dispatched' events of one fan-out, all one
+// millisecond before the time its read of the pending days was taken. A
+// 'touched' event at or after the time of the read stays newer, so its key
+// stays pending.
 //
 // The SELECT of the first statement gives its constants no alias: ClickHouse
 // resolves a name to an alias before a column, so "'dispatched' AS kind"
@@ -213,6 +214,14 @@ func (store *ClickHouseTouchedDaysStore) MarkDispatched(
 	if store == nil || store.conn == nil || organizationID == "" || at.IsZero() {
 		return ErrTouchedDaysUnavailable
 	}
+	// A 'touched' event written after the read has a time at or after the
+	// time of the read (ClickHouse clock), and a key is pending only when its
+	// newest 'touched' is strictly newer than its newest 'dispatched'. The
+	// mark therefore stamps 'dispatched' one millisecond before the read and
+	// ends only events at or before that: an event of the same millisecond as
+	// the read, which this fan-out may not have seen, stays pending. The cost
+	// is one more recompute of a key touched in that millisecond.
+	at = at.Add(-time.Millisecond)
 	if len(fullDays) > 0 {
 		if err := store.conn.Exec(ctx, `
 INSERT INTO daily_metrics_touched_days (org_id, day, repo_id, kind, at)

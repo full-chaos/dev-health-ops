@@ -123,6 +123,9 @@ type touchedDaysTake struct {
 	windowPending []time.Time
 	carriedOver   int
 	truncated     bool
+	// overLimit are the days with more pending repositories than one run
+	// accepts. No run is started for them and they stay pending.
+	overLimit []time.Time
 }
 
 // touchedDaysResult is what the fan-out transaction did with a take.
@@ -199,7 +202,11 @@ func (service *NativePostSyncService) takeTouchedDays(
 			continue
 		}
 		if len(identifiers) > limit {
-			identifiers = nil
+			// A run of every repository is refused above the cap of the daily
+			// job, and a refused run must not end the day: it stays pending,
+			// is reported, and is not started here.
+			take.overLimit = append(take.overLimit, day)
+			continue
 		}
 		take.starts = append(take.starts, touchedDayStart{day: day, repositories: identifiers})
 	}
@@ -276,6 +283,10 @@ func (service *NativePostSyncService) finishTouchedDays(
 			service.observeTouchedDaysFailure(ctx, args, "mark", jobruntime.PostSyncTouchedDaysMarkFailed)
 		}
 	}
+	for range take.overLimit {
+		service.observeTouchedDaysFailure(ctx, args, touchedDaysPhaseOverRepositoryLimit,
+			jobruntime.PostSyncTouchedDaysOverRepositoryLimit)
+	}
 	if take.truncated {
 		service.logger.Error(ctx, synclog.MsgPostSyncTouchedDaysFailed,
 			synclog.Text(synclog.KeyPhase, synclog.ParseLabel("read_truncated")),
@@ -303,6 +314,10 @@ func (service *NativePostSyncService) finishTouchedDays(
 		_ = service.touchedObserver.ObservePostSyncTouchedDays(jobruntime.PostSyncTouchedDaysReadTruncated, 1)
 	}
 }
+
+// touchedDaysPhaseOverRepositoryLimit is the phase word of the report of a day
+// that has more pending repositories than one run accepts.
+const touchedDaysPhaseOverRepositoryLimit = "over_repository_limit"
 
 // observeTouchedDaysFailure logs and counts one failed step of the touched-day
 // record. phase is a fixed word of this file, never an error text.

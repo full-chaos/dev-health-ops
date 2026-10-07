@@ -193,6 +193,10 @@ const (
 	// PostSyncTouchedDaysMarkFailed counts the fan-outs whose started days
 	// stay recorded as touched: each is computed once more.
 	PostSyncTouchedDaysMarkFailed PostSyncTouchedDaysEvent = "mark_failed"
+	// PostSyncTouchedDaysOverRepositoryLimit counts the pending days a fan-out
+	// started no run for because the day has more pending repositories than
+	// one run accepts. The day stays pending.
+	PostSyncTouchedDaysOverRepositoryLimit PostSyncTouchedDaysEvent = "over_repository_limit"
 )
 
 func postSyncTouchedDaysEvents() []PostSyncTouchedDaysEvent {
@@ -200,7 +204,7 @@ func postSyncTouchedDaysEvents() []PostSyncTouchedDaysEvent {
 		PostSyncTouchedDaysKeysRecorded, PostSyncTouchedDaysDispatched,
 		PostSyncTouchedDaysCarriedOver, PostSyncTouchedDaysAlreadyStarted,
 		PostSyncTouchedDaysReadTruncated, PostSyncTouchedDaysRecordFailed,
-		PostSyncTouchedDaysMarkFailed,
+		PostSyncTouchedDaysMarkFailed, PostSyncTouchedDaysOverRepositoryLimit,
 	}
 }
 

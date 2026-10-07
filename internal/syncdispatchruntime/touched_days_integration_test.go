@@ -316,11 +316,13 @@ func TestTouchedDaysRecordTakesATransitionWrittenAtTheBound(t *testing.T) {
 	}
 }
 
-// A key whose touched event carries exactly the time of the read is ended by
-// the mark of that read: the run the fan-out started computes the day after
-// the raw rows of that event were stored. Only an event newer than the read
-// keeps the key pending.
-func TestTouchedDaysMarkEndsAKeyTouchedAtTheTimeOfTheRead(t *testing.T) {
+// A 'touched' event written after the read can carry the same millisecond as
+// the read, and the table cannot order the two. The fan-out did not see such an
+// event, so its mark never ends it: the key stays pending for the next
+// fan-out (one more recompute is allowed, a lost day is not). Only an event
+// before the millisecond of the read is ended. The rule holds for the full-day
+// mark and for the mark of listed keys.
+func TestTouchedDaysMarkLeavesAKeyTouchedAtTheMillisecondOfTheRead(t *testing.T) {
 	ctx, conn := newReadbackIntegrationConn(t)
 	store, err := NewClickHouseTouchedDaysStore(conn)
 	if err != nil {
@@ -331,11 +333,11 @@ func TestTouchedDaysMarkEndsAKeyTouchedAtTheTimeOfTheRead(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	day := utcDay(touchedTestDay(3, 25))
-	// The times go in as milliseconds: a bound time.Time loses them.
-	for repo, at := range map[uuid.UUID]time.Time{
-		touchedTestRepoA: read.TakenAt, touchedTestRepoB: read.TakenAt.Add(time.Millisecond),
-	} {
+	fullDay, listedDay := utcDay(touchedTestDay(3, 25)), utcDay(touchedTestDay(3, 26))
+	repoBefore := uuid.MustParse("00000000-0000-4000-8000-00000000c003")
+	touch := func(day time.Time, repo uuid.UUID, at time.Time) {
+		t.Helper()
+		// The times go in as milliseconds: a bound time.Time loses them.
 		if err := conn.Exec(ctx, `
 INSERT INTO daily_metrics_touched_days (org_id, day, repo_id, kind, at)
 SELECT ?, toDate(?), toUUID(?), 'touched', fromUnixTimestamp64Milli(toInt64(?), 'UTC')`,
@@ -343,12 +345,25 @@ SELECT ?, toDate(?), toUUID(?), 'touched', fromUnixTimestamp64Milli(toInt64(?), 
 			t.Fatal(err)
 		}
 	}
-	if err := store.MarkDispatched(ctx, org, read.TakenAt, []time.Time{day}, nil); err != nil {
+	touch(fullDay, touchedTestRepoA, read.TakenAt)
+	touch(fullDay, touchedTestRepoB, read.TakenAt.Add(time.Millisecond))
+	touch(fullDay, repoBefore, read.TakenAt.Add(-time.Millisecond))
+	touch(listedDay, touchedTestRepoA, read.TakenAt)
+	touch(listedDay, repoBefore, read.TakenAt.Add(-time.Millisecond))
+	keys := []TouchedDayKey{
+		{Day: listedDay, RepositoryID: touchedTestRepoA.String()},
+		{Day: listedDay, RepositoryID: repoBefore.String()},
+	}
+	if err := store.MarkDispatched(ctx, org, read.TakenAt, []time.Time{fullDay}, keys); err != nil {
 		t.Fatal(err)
 	}
-	want := []string{touchedTestKey(3, 25, touchedTestRepoB)}
+	want := []string{
+		touchedTestKey(3, 25, touchedTestRepoA), touchedTestKey(3, 25, touchedTestRepoB),
+		touchedTestKey(3, 26, touchedTestRepoA),
+	}
+	sort.Strings(want)
 	if got := pendingTouchedTestKeys(t, ctx, conn, org); !reflect.DeepEqual(got, want) {
-		t.Fatalf("pending after the mark = %v, want only the key touched after the read: %v", got, want)
+		t.Fatalf("pending after the mark\n got %v\nwant %v (an event at or after the millisecond of the read stays pending)", got, want)
 	}
 }
 

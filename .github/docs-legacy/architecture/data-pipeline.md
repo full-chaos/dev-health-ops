@@ -409,11 +409,16 @@ never reads the rows as they are. Every `at` is the ClickHouse clock.
    need no second run. Of the other pending days the fan-out takes the 31
    newest (`PostSyncTouchedDaysPerFanout`) and starts one daily run for each,
    of the generation of the sync run, with the pending repositories of the day
-   as an explicit list. A day with more than 1000 pending repositories gets a
-   run of every repository. A run that exists for `(day, generation)` is left
+   as an explicit list. A day with more than 1000 pending repositories gets
+   no run: the daily job refuses a run above that cap, so the day stays
+   pending, an Error line (phase `over_repository_limit`) is logged and the
+   counter event `over_repository_limit` is added for each such day. The day
+   is not drained here (CHAOS-8846 covers the drain). A run that exists for `(day, generation)` is left
    as it is and the day stays pending.
-3. *After the commit*: the fan-out appends the `dispatched` events, all at
-   `TakenAt`. A key that another record touched after the read keeps a newer
+3. *After the commit*: the fan-out appends the `dispatched` events, all one
+   millisecond before `TakenAt`, and ends only `touched` events at or before
+   that time. An event of the millisecond of the read may be one this fan-out
+   did not read, so it stays pending (one more recompute, never a lost day). A key that another record touched after the read keeps a newer
    `touched` event and stays pending.
 
 **Why the record is complete.** A `post_sync` job exists only after every unit

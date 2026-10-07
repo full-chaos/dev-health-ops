@@ -16,6 +16,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
+	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/daily"
 	"github.com/full-chaos/dev-health-ops/internal/syncdispatchruntime"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgseed"
@@ -564,10 +565,25 @@ func TestPostSyncFanoutTouchedDaySurvivesEveryFailurePoint(t *testing.T) {
 	})
 }
 
+// touchedCountObserver collects the touched-day counters of one fan-out.
+type touchedCountObserver struct {
+	counts map[jobruntime.PostSyncTouchedDaysEvent]uint64
+}
+
+func (observer *touchedCountObserver) ObservePostSyncTouchedDays(event jobruntime.PostSyncTouchedDaysEvent, count uint64) error {
+	if observer.counts == nil {
+		observer.counts = map[jobruntime.PostSyncTouchedDaysEvent]uint64{}
+	}
+	observer.counts[event] += count
+	return nil
+}
+
 // A run accepts a bounded repository list. A day with exactly that many
-// touched repositories gets a run of them; a day with one more gets a run of
-// every repository, so no repository of the day is left out. Both days end.
-func TestPostSyncFanoutStartsARunOfEveryRepositoryForADayOverTheRepositoryLimit(t *testing.T) {
+// touched repositories gets a run of them. A day with one more has no run
+// that the daily job accepts (a run of every repository is refused above the
+// same cap), so the fan-out starts none, leaves the day pending and reports
+// it: marking it dispatched would lose the day without a word.
+func TestPostSyncFanoutLeavesADayOverTheRepositoryLimitPendingAndReportsIt(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
 	defer cancel()
 	rig := newTouchedRig(t, ctx)
@@ -585,23 +601,25 @@ func TestPostSyncFanoutStartsARunOfEveryRepositoryForADayOverTheRepositoryLimit(
 	}
 	insertTouchedItems(t, ctx, rig.conn, orgID, items...)
 	args := rig.seedSync(t, ctx, orgID, "work-items", target)
-	if err := rig.service(t, rig.touched, nil).Fanout(ctx, args); err != nil {
+	observer := &touchedCountObserver{}
+	service := rig.service(t, rig.touched, nil)
+	service.SetTouchedDaysObserver(observer)
+	if err := service.Fanout(ctx, args); err != nil {
 		t.Fatal(err)
 	}
 	runs := rig.runsOf(t, ctx, orgID, args)
 	atKey, overKey := atLimit.Format("2006-01-02"), overLimit.Format("2006-01-02")
-	if got := touchedRunDays(runs); !reflect.DeepEqual(got, []string{overKey, atKey, target.Format("2006-01-02")}) {
-		t.Fatalf("days with a run = %v", got)
+	if got := touchedRunDays(runs); !reflect.DeepEqual(got, []string{atKey, target.Format("2006-01-02")}) {
+		t.Fatalf("days with a run = %v, want the day at the limit and the target day only", got)
 	}
 	if listed := len(strings.Split(runs[atKey].repos, ",")); runs[atKey].fullOrg || listed != daily.MaxRepositoriesPerRun {
 		t.Fatalf("the day at the limit: run of every repository = %v with %d listed repositories; want a run of its %d repositories",
 			runs[atKey].fullOrg, listed, daily.MaxRepositoriesPerRun)
 	}
-	if !runs[overKey].fullOrg {
-		t.Fatalf("the day over the limit got a run of %d listed repositories; want a run of every repository",
-			len(strings.Split(runs[overKey].repos, ",")))
+	if got := rig.pendingDays(t, ctx, orgID); !reflect.DeepEqual(got, []string{overKey}) {
+		t.Fatalf("pending days after the fan-out = %v, want only the day over the limit %s", got, overKey)
 	}
-	if got := rig.pendingDays(t, ctx, orgID); len(got) != 0 {
-		t.Fatalf("pending days after the fan-out = %v, want none", got)
+	if got := observer.counts[jobruntime.PostSyncTouchedDaysOverRepositoryLimit]; got != 1 {
+		t.Fatalf("over_repository_limit counter = %d, want 1 (counts %v)", got, observer.counts)
 	}
 }

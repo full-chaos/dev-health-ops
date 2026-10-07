@@ -381,6 +381,16 @@ Two rules hold for every read of the tree:
    `team_project_ownership`), never through person membership or a computed
    attribution.
 
+3. A project has one id. The catalog row (`projects.id`), the ownership row
+   (`team_project_ownership.project_id`) and the issue (`work_items.project_id`)
+   name the same project by the same value, so ownership reaches a project's
+   issues by `(provider, project_id)` with no join on the project key. The id
+   is the provider's own stable id, never a value built from the project key:
+   a key can be renamed, and a key-built id names a project no issue points
+   to. The id each provider writes, and the one provider that does not hold
+   the rule yet, are listed in
+   [Work-item team attribution](team-attribution.md), section 0.4b.
+
 How each provider captures the pull request ↔ issue link is described in
 [Work-item team attribution](team-attribution.md), section 2.
 

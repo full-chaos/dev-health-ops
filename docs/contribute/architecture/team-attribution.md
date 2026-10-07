@@ -635,6 +635,50 @@ not natively produce this entity. ¹ GitHub has no native Project entity (the re
 
 > **The matrix above tracks TEST coverage, not whether the data is pulled.** Functionally we ingest teams, projects, and members for *every* provider that supports them (auto-import, when the option is selected). Don't read a `partial`/`no` cell as "not consumed" — it means "not yet asserted."
 
+#### 0.4b Project identity: one project, one id (CHAOS-8851)
+
+A project is named by ONE id in the three tables that hold it. The team that owns a project reaches the
+project's work items by `(provider, project_id)`; no reader has to join on `project_key`.
+
+| provider | `projects.id` | `team_project_ownership.project_id` | `work_items.project_id` | state |
+|---|---|---|---|---|
+| jira | native project id (`10001`) | the same id | the same id | one id |
+| linear | raw project UUID | the same UUID | the same UUID | one id |
+| github | Projects V2 board id (`ghprojv2:{login}#{n}`) | none: a team owns repositories (`team_repo_ownership`) | the same board id | one id |
+| gitlab | `{org_id}:gitlab:{native id}` | the project PATH | none: a GitLab project is this schema's repository | **known gap** (CHAOS-8883): ownership and catalog meet only through `project_key` |
+
+Jira before this change: the three team-catalog writers (project-as-team, the legacy
+`jira_project_ops_team_links` carry-forward, Atlassian Teams) built the id from the project KEY
+(`{org_id}:jira:{KEY}`), while the work-items route wrote the native id. One project was two `projects`
+rows with one key, ownership pointed at the row no work item used, and a team reached none of its
+project's items by id. Now:
+
+- The project-as-team catalog reads `id` from the project search answer; Atlassian Teams takes it from the
+  last segment of the project ARI; a legacy link takes it from the same run's search answer for its key.
+- A project with no usable native id gets NO ownership row and NO `projects` row. It is counted and logged
+  (`jira_team_catalog_project_without_native_id`, `jira_team_catalog_legacy_link_without_native_id`,
+  `jira_atlassian_teams_project_link_skipped`). An id is never built from the key as a fallback, and the
+  sink refuses an open row that carries one.
+- `project_key` stays on the row as a label. Team ids do not change.
+- **One snapshot rule for ownership rows** (`providersync.PlanOwnershipSnapshot`): a fact the run still
+  finds keeps the `valid_from` it was first seen with (`valid_from` is a key column: a new stamp at each
+  sync added one more open row per fact), and every other open row of the same writer is written again
+  with `valid_to` set. Both Jira writers go through this one function; each reads only its own open rows
+  (Atlassian Teams: `source = 'native'` rows of teams whose catalog row carries a team ARI; the catalog:
+  `source = 'jira_legacy'` rows and `source = 'native'` rows with `team_id = project_key`). So the first
+  sync on this version closes the open rows on the key-built id. The catalog closes nothing when its
+  project search returned no project. Linear and GitLab still have their own insert-only writers; a
+  census test (`TestJiraOwnershipWriterCensus`) names every writer of the table and fails for a new Jira
+  writer that does not plan its rows through the shared function.
+- The key-built `projects` rows written earlier are removed by a one-time operator verb, see section 1.1.
+- Known limit: a native Jira project id is unique per Jira site. One organization with two Jira sites
+  could give two projects the same id. The work-item rows had this limit before this change.
+
+Tests: `TestTeamReachesItsJiraProjectsWorkItemsThroughOwnership` (real producers, real ClickHouse: the
+team reaches its project's work items through ownership by id; one `projects` row per project),
+`TestProjectIdentityIsOneIDAcrossCatalogOwnershipAndWorkItems` (the same rule for linear and github; the
+GitLab gap pinned as a known red), `TestAnAtlassianTeamsRunClosesTheKeyBuiltProjectLinks`.
+
 #### 0.4a Provider × entity **consumption** (functional — what `run_team_autoimport` actually pulls)
 
 | provider | teams | projects | members | repo ownership | member store written |
@@ -1253,6 +1297,17 @@ deletes them via the same synchronous `ALTER TABLE ... DELETE` pattern, and expl
 `project_id` shaped like the `{org_id}:linear:{team_key}` pseudo-identity -- that row is CHAOS-4560's
 separate, still-open concern, not this verb's.
 
+**CHAOS-8851: the same one-time shape for the Jira key-built `projects` rows.** `dho workers providersync
+retire-jira-key-projects` (`internal/providersync/jira_key_project_cleanup.go`) physically deletes the Jira
+`projects` rows whose id is `{org_id}:jira:{KEY}` (section 0.4b), for the reason given above for Linear:
+a reader of `projects` does not have to filter `is_active`, so the second row of a key must be absent.
+A row is deleted only when the same organization has a native-id row with the same `project_key`, so a
+project never loses its only row. The verb refuses with `no_native_jira_project_rows` when its scope
+holds no native-id Jira row at all: that is the state before the first Jira team-autoimport sync on this
+version. It prints counts only. It touches `projects` only; the ownership rows on the key-built id are
+closed by the sync itself (the snapshot rule, section 0.4b). Order: deploy, wait for one Jira
+team-autoimport sync, run with `--dry-run`, then run.
+
 **Deployment ordering (codex review, PR #2012 round 3):** the cleanup verb has no fence against a
 still-running writer. The go-workers Helm chart rolls with `start-first`, so an old pod running the
 prior (tombstone-writing) collector revision can still be up when the verb runs, and can write a
@@ -1566,7 +1621,7 @@ erDiagram
     teams ||--o{ team_project_ownership : "team_id (attribution source 2: project_ownership)"
     team_project_ownership }o..o{ work_items : "project_id OR project_key, direct value match -- attribution never joins through projects (metrics/compute_work_items.py:559-577)"
     teams ||--o{ work_items : "teams.project_keys array vs work_scope_id/project_key, direct resolver match (attribution source 1: issue_project) -- also never via projects"
-    work_items }o..o{ projects : "Ask Dev investigation subsystem only (_project_identity.py), NOT the attribution resolver -- provider-specific: Linear by id; Jira by project_key; GitLab by project_key (its catalog id is a separate opaque numeric space, incompatible with work_items.project_id)"
+    work_items }o..o{ projects : "Ask Dev investigation subsystem only (_project_identity.py), NOT the attribution resolver -- provider-specific: Linear and Jira by id (a Jira catalog row written before CHAOS-8851 had a key-built id and met its work items by project_key only); GitLab by project_key (its catalog id is a separate opaque numeric space, incompatible with work_items.project_id)"
 
     teams ||--o{ team_repo_ownership : "team_id (attribution source 3: repo_ownership)"
     team_repo_ownership }o..o{ repos : "repo_id is Nullable and often NULL (e.g. every GitHub provider_access row, team_autoimport_github.py:308-338); resolved at READ time by a case-insensitive (org_id, provider, repo_full_name) name join, unmatched rows dropped -- providers/teams.py:380-392"
@@ -1714,8 +1769,9 @@ durations, and co-occurrence bridges, but they are not the owning team source.
   is real and sync-written (§0.4a), but its only consumer that actually JOINS `work_items` to it is
   a **different** subsystem: Ask Dev's investigation/evidence queries
   (`api/dev/_project_identity.py`), and even there the join is provider-specific, not a uniform
-  `project_id = id` — Linear matches by raw id, Jira by `project_key`, and GitLab by `project_key`
-  too (GitLab's catalog id is a separate, opaque, prefixed numeric space that never equals
+  `project_id = id` — Linear and Jira match by raw id (section 0.4b; a Jira catalog row written before
+  CHAOS-8851 had a key-built id and met its work items by `project_key` only), and GitLab by `project_key`
+  only (GitLab's catalog id is a separate, opaque, prefixed numeric space that never equals
   `work_items.project_id`).
 - **Two different "cross-provider link" tables exist for two different consumers — do not conflate
   them.** (1) `work_item_dependencies` (already in this diagram) is what the **attribution ladder's**

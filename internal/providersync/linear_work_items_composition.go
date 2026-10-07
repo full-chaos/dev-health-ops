@@ -45,6 +45,9 @@ func (handler LinearWorkItemFamilyRouteHandler) Collect(
 		!linearWorkItemsFlag(handler.Direct.FetchCycles) {
 		return CompleteRouteBatch{}, ErrInvalidConfiguration
 	}
+	if _, err := workItemsUnitWindowDays(claim, normalizedAt); err != nil {
+		return CompleteRouteBatch{}, err
+	}
 	normalizedAt = normalizedAt.UTC().Truncate(time.Millisecond)
 	raw, err := handler.Direct.Collect(
 		ctx, claim, credential, client, normalizedAt,

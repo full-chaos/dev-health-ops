@@ -157,6 +157,9 @@ func (handler GitLabWorkItemsRouteHandler) Collect(
 		handler.StatusMapping == nil {
 		return CompleteRouteBatch{}, ErrInvalidConfiguration
 	}
+	if _, err := workItemsUnitWindowDays(claim, normalizedAt); err != nil {
+		return CompleteRouteBatch{}, err
+	}
 	perPage, maxPages, nestedMaxPages, err := handler.limits()
 	if err != nil {
 		return CompleteRouteBatch{}, err

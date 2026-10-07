@@ -233,6 +233,9 @@ func (handler GitHubWorkItemsRouteHandler) Collect(
 		client.Lease == nil || normalizedAt.IsZero() {
 		return CompleteRouteBatch{}, ErrInvalidConfiguration
 	}
+	if _, err := workItemsUnitWindowDays(claim, normalizedAt); err != nil {
+		return CompleteRouteBatch{}, err
+	}
 	// Every destination column that receives normalizedAt is DateTime64(3), so
 	// the nanoseconds a wall-clock now() carries cannot survive a round trip.
 	// Truncating here rather than only inside REST.Collect (which truncates its

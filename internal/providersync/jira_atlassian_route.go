@@ -205,6 +205,9 @@ func (handler JiraAtlassianRouteHandler) Collect(
 		(handler.GraphQLClient != nil && (handler.GraphQLClient.Provider != "jira" || handler.GraphQLClient.BaseURL == nil)) {
 		return CompleteRouteBatch{}, ErrInvalidConfiguration
 	}
+	if _, err := workItemsUnitWindowDays(claim, normalizedAt); err != nil {
+		return CompleteRouteBatch{}, err
+	}
 	_ = credential // Authentication is sealed into providerfoundation.HTTPClient.
 	maxPages, maxRows, perPage, err := handler.limits()
 	if err != nil {

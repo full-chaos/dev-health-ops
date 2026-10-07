@@ -1,6 +1,7 @@
 package providersync
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -18,12 +19,17 @@ import (
 )
 
 const (
-	gitLabWorkItemsDefaultPerPage      = 100
-	gitLabWorkItemsMaximumPerPage      = 100
-	gitLabWorkItemsDefaultMaxPages     = 10_000
-	gitLabWorkItemsDefaultNotesLimit   = 500
-	gitLabWorkItemsDefaultHistoryLimit = 100
-	gitLabWorkItemsDefaultLabelsLimit  = 300
+	gitLabWorkItemsDefaultPerPage  = 100
+	gitLabWorkItemsMaximumPerPage  = 100
+	gitLabWorkItemsDefaultMaxPages = 10_000
+	// gitLabWorkItemsNestedHardMaxPages is the per-item, per-list runaway guard
+	// for notes, label events, state events, links, closing merge requests and
+	// milestones (CHAOS-8777). 100 pages is 10,000 rows at 100 per page: far
+	// above any real item, low enough to stop a list that never ends. The
+	// production wiring (internal/workerservice/provider_sync.go, the GitLab
+	// work-items case) sets no NestedMaxPages, so this is the bound production
+	// runs with; a configured value is clamped to it (limits()).
+	gitLabWorkItemsNestedHardMaxPages = 100
 )
 
 // gitLabWorkItemRawDestinations are the six raw facts emitted by the Python
@@ -39,22 +45,6 @@ var gitLabWorkItemRawDestinations = []string{
 	"sprints",
 }
 
-// gitLabWorkItemDerivedGap is the raw-only route's honest remainder of the
-// 16-destination canonical work-item family. Once the typed deriver is injected
-// at the processor boundary, all ten concrete derived destinations are emitted.
-var gitLabWorkItemDerivedGap = []string{
-	"ai_attribution",
-	"estimate_coverage_metrics_daily",
-	"investment_classifications_daily",
-	"investment_metrics_daily",
-	"issue_type_metrics_daily",
-	"work_item_cycle_times",
-	"work_item_metrics_daily",
-	"work_item_state_durations_daily",
-	"work_item_team_attributions",
-	"work_item_user_metrics_daily",
-}
-
 // GitLabWorkItemsRequestUsage retains the route's physical request count for
 // later budget evidence without coupling this provider-only slice to registry
 // or activation wiring.
@@ -66,26 +56,16 @@ type GitLabWorkItemsRequestUsage struct {
 }
 
 // GitLabWorkItemsResult is the concrete provider result carried inside the
-// framework's legacy result map. It keeps raw/derived completion and watermark
-// withholding typed even though CompleteRouteBatch predates provider-specific
-// result structs.
+// framework's legacy result map. It keeps the raw row counts typed even
+// though CompleteRouteBatch predates provider-specific result structs.
 type GitLabWorkItemsResult struct {
-	WorkItemsSynced                  int      `json:"work_items_synced"`
-	TransitionsSynced                int      `json:"transitions_synced"`
-	DependenciesSynced               int      `json:"dependencies_synced"`
-	ReopenEventsSynced               int      `json:"reopen_events_synced"`
-	InteractionsSynced               int      `json:"interactions_synced"`
-	SprintsSynced                    int      `json:"sprints_synced"`
-	RawDestinations                  []string `json:"raw_destinations"`
-	DerivedDestinationsImplemented   []string `json:"derived_destinations_implemented"`
-	DerivedDestinationsUnimplemented []string `json:"derived_destinations_unimplemented"`
-	WatermarkHeldForDerivedGap       bool     `json:"watermark_held_for_derived_gap"`
-}
-
-// gitlabWorkItemsDeriver is injected at the processor boundary. It is not a
-// registry/configuration seam: activation remains outside this provider slice.
-type gitlabWorkItemsDeriver interface {
-	Derive(context.Context, Claim, gitlabWorkItemRows, time.Time) (GitLabWorkItemDerivedRows, error)
+	WorkItemsSynced    int      `json:"work_items_synced"`
+	TransitionsSynced  int      `json:"transitions_synced"`
+	DependenciesSynced int      `json:"dependencies_synced"`
+	ReopenEventsSynced int      `json:"reopen_events_synced"`
+	InteractionsSynced int      `json:"interactions_synced"`
+	SprintsSynced      int      `json:"sprints_synced"`
+	RawDestinations    []string `json:"raw_destinations"`
 }
 
 // GitLabWorkItemsRouteHandler is the canonical provider-only route. It mirrors
@@ -96,8 +76,8 @@ type gitlabWorkItemsDeriver interface {
 // WIRING: WIRED. internal/workerservice/provider_sync.go's
 // `provider == "gitlab" && dataset == "work-items"` case constructs this
 // handler and assigns it to routeHandler, with
-// NewGitLabWorkItemFamilyClickHouseEffects as sink and readback and
-// NewGitLabWorkItemDeriver as Derived.
+// NewGitLabWorkItemFamilyClickHouseEffects as sink and readback. The unit
+// writes raw rows only; the daily job writes every table computed from them.
 //
 // WIRED IS NOT EXECUTING, and this comment claims only the former. Planning
 // admits a canonical work-items unit only when the descriptor satisfies
@@ -127,7 +107,6 @@ type GitLabWorkItemsRouteHandler struct {
 	FetchLinks      *bool
 	FetchMilestones *bool
 	IncludeMRs      *bool
-	Derived         gitlabWorkItemsDeriver
 }
 
 func gitLabWorkItemsFlag(value *bool) bool { return value == nil || *value }
@@ -148,7 +127,9 @@ func (handler GitLabWorkItemsRouteHandler) limits() (int, int, int, error) {
 		nestedMaxPages > gitLabWorkItemsDefaultMaxPages {
 		return 0, 0, 0, ErrInvalidConfiguration
 	}
-	return perPage, maxPages, nestedMaxPages, nil
+	// The nested ceiling is a hard one: a configured value (or the top-level
+	// MaxPages it defaults to) may only lower it.
+	return perPage, maxPages, min(nestedMaxPages, gitLabWorkItemsNestedHardMaxPages), nil
 }
 
 type gitLabWorkItemsCountingDoer struct {
@@ -175,6 +156,9 @@ func (handler GitLabWorkItemsRouteHandler) Collect(
 		client.Lease == nil || normalizedAt.IsZero() || claim.BeforeAt == nil ||
 		handler.StatusMapping == nil {
 		return CompleteRouteBatch{}, ErrInvalidConfiguration
+	}
+	if _, err := workItemsUnitWindowDays(claim, normalizedAt); err != nil {
+		return CompleteRouteBatch{}, err
 	}
 	perPage, maxPages, nestedMaxPages, err := handler.limits()
 	if err != nil {
@@ -366,7 +350,7 @@ func (handler GitLabWorkItemsRouteHandler) Collect(
 		if fetchComments {
 			notes, notePages, noteErr := collectGitLabNotes(
 				ctx, &counted, root+"/issues/"+strconv.Itoa(payload.IID)+"/notes",
-				perPage, nestedMaxPages, gitLabWorkItemsDefaultNotesLimit,
+				perPage, nestedMaxPages,
 			)
 			if noteErr != nil {
 				return CompleteRouteBatch{}, noteErr
@@ -411,17 +395,12 @@ func (handler GitLabWorkItemsRouteHandler) Collect(
 			rows.WorkItems = append(rows.WorkItems, item)
 			rows.StatusTransitions = append(rows.StatusTransitions, transitions...)
 			rows.ReopenEvents = append(rows.ReopenEvents, reopens...)
-			attributions, attributionErr := normalizeGitLabMRAIAttributions(
-				claim, repoID, payload, normalizedAt,
-			)
-			if attributionErr != nil {
-				return CompleteRouteBatch{}, attributionErr
-			}
-			rows.AIAttributions = append(rows.AIAttributions, attributions...)
+			// Merge-request AI attribution is written by the prs unit alone (one
+			// writer per ai_attribution key); this route emits none.
 			if fetchComments {
 				notes, notePages, noteErr := collectGitLabNotes(
 					ctx, &counted, root+"/merge_requests/"+strconv.Itoa(payload.IID)+"/notes",
-					perPage, nestedMaxPages, gitLabWorkItemsDefaultNotesLimit,
+					perPage, nestedMaxPages,
 				)
 				if noteErr != nil {
 					return CompleteRouteBatch{}, noteErr
@@ -437,71 +416,38 @@ func (handler GitLabWorkItemsRouteHandler) Collect(
 	if err != nil {
 		return CompleteRouteBatch{}, err
 	}
-	derivedUnimplemented := append([]string(nil), gitLabWorkItemDerivedGap...)
-	derivedImplemented := []string{}
-	derivedRecords := 0
+	// ai_attribution is a raw fact: it is read from the provider payload at
+	// normalization, not computed from stored rows, so the unit still writes
+	// it. Every table computed from stored work-item rows is left to the
+	// daily job.
+	aiAttribution, err := buildGitLabTypedDerivedEffect("ai_attribution", rows.AIAttributions)
+	if err != nil {
+		return CompleteRouteBatch{}, err
+	}
+	effects = append(effects, aiAttribution)
+	observeWorkItemDerivedTablesLeftToDailyJob(client.Metrics, claim, len(rows.WorkItems))
+	// The watermark is the end of the window whose raw rows this unit stored.
+	// It is held only while a closing-reference fetch failed transiently.
 	var watermark *time.Time
-	if handler.Derived != nil {
-		derived, deriveErr := handler.Derived.Derive(ctx, claim, rows, normalizedAt)
-		if deriveErr != nil {
-			return CompleteRouteBatch{}, deriveErr
-		}
-		if len(derived.Gaps) > 0 {
-			gaps := make([]string, 0, len(derived.Gaps))
-			for _, gap := range derived.Gaps {
-				if !gitlabWorkItemDerivedDestination(gap.Destination) ||
-					strings.TrimSpace(gap.AuthoritativeProducer) == "" ||
-					strings.TrimSpace(gap.Reason) == "" {
-					return CompleteRouteBatch{}, ErrInvalidConfiguration
-				}
-				gaps = append(gaps, gap.Destination)
-			}
-			return CompleteRouteBatch{}, fmt.Errorf(
-				"%w: %s", ErrGitLabWorkItemDerivedProducerUnavailable, strings.Join(gaps, ", "),
-			)
-		}
-		derivedEffects, effectErr := BuildGitLabWorkItemDerivedEffects(derived.EffectRows())
-		if effectErr != nil {
-			return CompleteRouteBatch{}, effectErr
-		}
-		effects = append(effects, derivedEffects...)
-		derivedImplemented = derived.producedDestinations()
-		derivedUnimplemented = []string{}
-		if len(derivedUnimplemented) == 0 && claim.BeforeAt != nil &&
-			(derived.Watermark == nil || !derived.Watermark.Equal(claim.BeforeAt.UTC())) {
-			return CompleteRouteBatch{}, ErrInvalidConfiguration
-		}
-		watermark = derived.Watermark
-		if closingTransient > 0 {
-			watermark = nil
-		}
-		derivedRecords = len(derived.AIAttributions) + len(derived.EstimateCoverageMetricsDaily) +
-			len(derived.InvestmentClassificationsDaily) + len(derived.InvestmentMetricsDaily) +
-			len(derived.IssueTypeMetricsDaily) + len(derived.WorkItemCycleTimes) +
-			len(derived.WorkItemMetricsDaily) + len(derived.WorkItemStateDurationsDaily) +
-			len(derived.WorkItemTeamAttributions) + len(derived.WorkItemUserMetricsDaily)
+	if claim.BeforeAt != nil && closingTransient == 0 {
+		value := claim.BeforeAt.UTC()
+		watermark = &value
 	}
 	summary := GitLabWorkItemsResult{
 		WorkItemsSynced: len(rows.WorkItems), TransitionsSynced: len(rows.StatusTransitions),
 		DependenciesSynced: len(rows.Dependencies), ReopenEventsSynced: len(rows.ReopenEvents),
 		InteractionsSynced: len(rows.Interactions), SprintsSynced: len(rows.Sprints),
-		RawDestinations:                  append([]string(nil), gitLabWorkItemRawDestinations...),
-		DerivedDestinationsImplemented:   append([]string(nil), derivedImplemented...),
-		DerivedDestinationsUnimplemented: derivedUnimplemented,
-		WatermarkHeldForDerivedGap:       len(derivedUnimplemented) > 0,
+		RawDestinations: append([]string(nil), gitLabWorkItemRawDestinations...),
 	}
 	result := map[string]any{
-		"work_items_synced":                  len(rows.WorkItems),
-		"transitions_synced":                 len(rows.StatusTransitions),
-		"dependencies_synced":                len(rows.Dependencies),
-		"reopen_events_synced":               len(rows.ReopenEvents),
-		"interactions_synced":                len(rows.Interactions),
-		"sprints_synced":                     len(rows.Sprints),
-		"raw_destinations":                   append([]string(nil), gitLabWorkItemRawDestinations...),
-		"derived_destinations_implemented":   derivedImplemented,
-		"derived_destinations_unimplemented": derivedUnimplemented,
-		"watermark_held_for_derived_gap":     len(derivedUnimplemented) > 0,
-		"gitlab_work_items":                  summary,
+		"work_items_synced":    len(rows.WorkItems),
+		"transitions_synced":   len(rows.StatusTransitions),
+		"dependencies_synced":  len(rows.Dependencies),
+		"reopen_events_synced": len(rows.ReopenEvents),
+		"interactions_synced":  len(rows.Interactions),
+		"sprints_synced":       len(rows.Sprints),
+		"raw_destinations":     append([]string(nil), gitLabWorkItemRawDestinations...),
+		"gitlab_work_items":    summary,
 		// CHAOS-8526: gitlab_closing_reference rows synced, and the issues whose closed_by fetch failed, split into
 		// transient (the watermark is held while any did) and terminal 404/403 (the watermark advances).
 		"closing_reference_dependencies_synced": closingSynced,
@@ -513,14 +459,13 @@ func (handler GitLabWorkItemsRouteHandler) Collect(
 	if len(closingIncomplete) > 0 {
 		result["incomplete"] = closingIncomplete
 	}
-	result = attachWorkItemTeamInheritanceObservation(result, handler.Derived)
 	return CompleteRouteBatch{
 		Effects: effects, Result: result, Watermark: watermark,
 		Evidence: FetchEvidence{
 			Provider: claim.Provider, Dataset: claim.Dataset, Requests: requests,
 			Pages: pages, Records: len(rows.WorkItems) + len(rows.StatusTransitions) +
 				len(rows.Dependencies) + len(rows.ReopenEvents) + len(rows.Interactions) +
-				len(rows.Sprints) + derivedRecords,
+				len(rows.Sprints) + len(rows.AIAttributions),
 		},
 	}, nil
 }
@@ -543,11 +488,82 @@ func collectGitLabPayloads(
 	return page.Items, page.Pages, nil
 }
 
+// collectGitLabNestedPayloads pages one nested list (notes, label events, state
+// events, links, closing merge requests, milestones) to its end. Past the page
+// bound the unit fails closed and the error names the owner item and the field
+// (the request path without its query string: a project id and an iid, never a
+// credential or a payload). Nothing is truncated: CHAOS-8770.
+func collectGitLabNestedPayloads(
+	ctx context.Context,
+	client *providerfoundation.HTTPClient,
+	path string,
+	query url.Values,
+	perPage, maxPages int,
+) ([]json.RawMessage, int, error) {
+	// maxPages+1 requests are allowed on purpose: a list of exactly maxPages
+	// FULL pages cannot be told from a longer one without reading the next
+	// page (with or without an X-Next-Page header the paginator infers one
+	// more page from a full last page). That extra page may only be EMPTY; any
+	// row on it is a row past the bound and fails closed.
+	var items []json.RawMessage
+	collected, err := providerfoundation.VisitGitLabPageParamPages(ctx, client,
+		providerfoundation.GitLabPageOptions{Path: path, Query: query, PerPage: perPage, MaxPages: maxPages + 1},
+		func(visit providerfoundation.PageVisit) error {
+			if visit.Pages > maxPages && len(visit.Items) > 0 {
+				return errGitLabNestedPastBound
+			}
+			// An EMPTY page that still advertises a next page is an ambiguous
+			// answer: the paginator stops on it, so rows after it would be left
+			// out of a run that looks complete. Fail closed (CHAOS-8777 r2).
+			if len(visit.Items) == 0 && visit.CursorAfter != "0" {
+				return errGitLabNestedEmptyWithNext
+			}
+			items = append(items, visit.Items...)
+			return nil
+		})
+	if errors.Is(err, errGitLabNestedEmptyWithNext) {
+		owner, field := gitLabNestedOwnerAndField(path)
+		slog.Error("providersync.gitlab.nested_list_empty_page_with_next",
+			"owner", owner, "field", field, "page", collected.Pages+1, "max_pages", maxPages)
+		return nil, collected.Pages, fmt.Errorf(
+			"%w: gitlab %s of %s ended on an empty page that still advertised a next page",
+			ErrPaginationCapExceeded, field, owner,
+		)
+	}
+	if err != nil && !errors.Is(err, errGitLabNestedPastBound) {
+		return nil, 0, err
+	}
+	if err == nil && !collected.PageBudgetExhausted {
+		return items, min(collected.Pages, maxPages), nil
+	}
+	owner, field := gitLabNestedOwnerAndField(path)
+	slog.Error("providersync.gitlab.nested_list_bound_exceeded",
+		"owner", owner, "field", field, "pages", maxPages, "max_pages", maxPages)
+	return nil, maxPages, fmt.Errorf(
+		"%w: gitlab %s of %s still had a next page after %d pages (max %d pages)",
+		ErrPaginationCapExceeded, field, owner, maxPages, maxPages,
+	)
+}
+
+var errGitLabNestedPastBound = errors.New("gitlab nested list has rows past the page bound")
+var errGitLabNestedEmptyWithNext = errors.New("gitlab nested list page is empty but advertises a next page")
+
+// gitLabNestedOwnerAndField splits a nested list path into its owner item and
+// the field: the request path without its query string (a project id and an iid,
+// never a credential or payload text).
+func gitLabNestedOwnerAndField(path string) (owner, field string) {
+	owner, field = path, path
+	if cut := strings.LastIndex(path, "/"); cut >= 0 {
+		owner, field = path[:cut], path[cut+1:]
+	}
+	return owner, field
+}
+
 func collectGitLabMilestones(
 	ctx context.Context, client *providerfoundation.HTTPClient, path string,
 	perPage, maxPages int,
 ) ([]gitlabIssueMilestonePayload, int, error) {
-	items, pages, err := collectGitLabPayloads(ctx, client, path, url.Values{"state": {"all"}}, perPage, maxPages)
+	items, pages, err := collectGitLabNestedPayloads(ctx, client, path, url.Values{"state": {"all"}}, perPage, maxPages)
 	if err != nil {
 		return nil, pages, err
 	}
@@ -566,12 +582,9 @@ func collectGitLabLabelEvents(
 	ctx context.Context, client *providerfoundation.HTTPClient, path string,
 	perPage, maxPages int,
 ) ([]gitlabLabelEventPayload, int, error) {
-	items, pages, err := collectGitLabPayloads(ctx, client, path, nil, perPage, maxPages)
+	items, pages, err := collectGitLabNestedPayloads(ctx, client, path, nil, perPage, maxPages)
 	if err != nil {
 		return nil, pages, err
-	}
-	if len(items) > gitLabWorkItemsDefaultLabelsLimit {
-		items = items[:gitLabWorkItemsDefaultLabelsLimit]
 	}
 	result := make([]gitlabLabelEventPayload, 0, len(items))
 	for _, raw := range items {
@@ -588,12 +601,9 @@ func collectGitLabStateEvents(
 	ctx context.Context, client *providerfoundation.HTTPClient, path string,
 	perPage, maxPages int,
 ) ([]gitlabStateEventPayload, int, error) {
-	items, pages, err := collectGitLabPayloads(ctx, client, path, nil, perPage, maxPages)
+	items, pages, err := collectGitLabNestedPayloads(ctx, client, path, nil, perPage, maxPages)
 	if err != nil {
 		return nil, pages, err
-	}
-	if len(items) > gitLabWorkItemsDefaultHistoryLimit {
-		items = items[:gitLabWorkItemsDefaultHistoryLimit]
 	}
 	result := make([]gitlabStateEventPayload, 0, len(items))
 	for _, raw := range items {
@@ -610,7 +620,7 @@ func collectGitLabIssueLinks(
 	ctx context.Context, client *providerfoundation.HTTPClient, path string,
 	perPage, maxPages int,
 ) ([]gitlabIssueLinkPayload, int, error) {
-	items, pages, err := collectGitLabPayloads(ctx, client, path, nil, perPage, maxPages)
+	items, pages, err := collectGitLabNestedPayloads(ctx, client, path, nil, perPage, maxPages)
 	if err != nil {
 		return nil, pages, err
 	}
@@ -629,7 +639,7 @@ func collectGitLabClosingMergeRequests(
 	ctx context.Context, client *providerfoundation.HTTPClient, path string,
 	perPage, maxPages int,
 ) ([]gitlabClosingMergeRequestPayload, int, error) {
-	items, pages, err := collectGitLabPayloads(ctx, client, path, nil, perPage, maxPages)
+	items, pages, err := collectGitLabNestedPayloads(ctx, client, path, nil, perPage, maxPages)
 	if err != nil {
 		return nil, pages, err
 	}
@@ -649,19 +659,19 @@ func collectGitLabClosingMergeRequests(
 
 func collectGitLabNotes(
 	ctx context.Context, client *providerfoundation.HTTPClient, path string,
-	perPage, maxPages, limit int,
+	perPage, maxPages int,
 ) ([]gitlabNotePayload, int, error) {
-	items, pages, err := collectGitLabPayloads(ctx, client, path, nil, perPage, maxPages)
+	items, pages, err := collectGitLabNestedPayloads(ctx, client, path, nil, perPage, maxPages)
 	if err != nil {
 		return nil, pages, err
-	}
-	if len(items) > limit {
-		items = items[:limit]
 	}
 	result := make([]gitlabNotePayload, 0, len(items))
 	for _, raw := range items {
 		var payload gitlabNotePayload
-		if err := json.Unmarshal(raw, &payload); err != nil {
+		// UseNumber: a note id above 2^53 must keep its exact text (CHAOS-8790).
+		decoder := json.NewDecoder(bytes.NewReader(raw))
+		decoder.UseNumber()
+		if err := decoder.Decode(&payload); err != nil {
 			return nil, pages, providerfoundation.ErrNormalizationInvalid
 		}
 		result = append(result, payload)

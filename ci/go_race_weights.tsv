@@ -129,6 +129,7 @@ internal/jobs	28
 internal/jobs/dimensionfold	1
 internal/jobs/investment	2
 internal/jobs/investment/categorize	4
+internal/jobs/investment/categorize/decision	3
 internal/jobs/investment/chquery	1
 internal/jobs/investment/chwrite	1
 internal/jobs/metrics/aigovernance	1
@@ -156,6 +157,7 @@ internal/jobs/metrics/remaining/stepcause	68
 internal/jobs/metrics/testops	1
 internal/jobs/metrics/workgraphedges	1
 internal/jobs/metrics/workitemblockers	1
+internal/jobs/metrics/workitemengine	1
 internal/jobs/metrics/workitemmetrics	1
 internal/jobs/operational	4
 internal/jobs/pagerduty	1
@@ -248,6 +250,7 @@ internal/queryapi/investment	1
 internal/queryapi/investmentexplain	9
 internal/queryapi/investmentflow	67
 internal/queryapi/meta	1
+internal/queryapi/newestrow	1
 internal/queryapi/operatingreview	1
 internal/queryapi/opportunities	1
 internal/queryapi/people	1

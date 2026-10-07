@@ -18,6 +18,7 @@ type reader interface {
 	configByID(ctx context.Context, orgID string, id uuid.UUID) (*syncConfig, error)
 	childrenCounts(ctx context.Context, parentIDs []uuid.UUID) (map[uuid.UUID]int64, error)
 	credentialIDs(ctx context.Context, orgID string, integrationIDs []uuid.UUID) (map[uuid.UUID]*uuid.UUID, error)
+	enabledDatasetKeys(ctx context.Context, orgID string, integrationIDs []uuid.UUID) (map[uuid.UUID][]string, error)
 	sourcesForIntegration(ctx context.Context, orgID string, integrationID uuid.UUID, provider string) ([]plannerSource, error)
 	childOptions(ctx context.Context, orgID string, parentID uuid.UUID) ([]*string, error)
 	scheduledSyncJobIDs(ctx context.Context, orgID string, configID uuid.UUID) ([]uuid.UUID, error)
@@ -63,6 +64,11 @@ type syncConfig struct {
 	LastSyncError   *string
 	CreatedAt       time.Time
 	UpdatedAt       time.Time
+	// shownTargets is the sync_targets list the response carries when the
+	// integration's dataset rows own the selection (deriveShownTargets set
+	// it); else the response carries the stored list.
+	shownTargets    []string
+	shownTargetsSet bool
 }
 
 const syncConfigColumns = `id, name, provider, sync_targets::text, sync_options::text, is_active,
@@ -158,6 +164,12 @@ func (s store) credentialIDs(ctx context.Context, orgID string, integrationIDs [
 		found[id] = credentialID
 	}
 	return found, rows.Err()
+}
+
+// enabledDatasetKeys is the enabled dataset keys of the org's integrations,
+// one read for all of them.
+func (s store) enabledDatasetKeys(ctx context.Context, orgID string, integrationIDs []uuid.UUID) (map[uuid.UUID][]string, error) {
+	return enabledDatasetKeysByIntegration(ctx, s.pool, orgID, integrationIDs)
 }
 
 // plannerSource is one integration_sources row read for the repository

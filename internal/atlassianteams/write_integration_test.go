@@ -81,12 +81,12 @@ func TestWriteTeamsMembershipsAndOwnershipAgainstClickHouse(t *testing.T) {
 
 	// The project-as-team rows the Jira catalog wrote earlier: this sync must not touch them.
 	exec(t, conn, `INSERT INTO teams (id, team_uuid, name, description, members, manual_members, project_keys, repo_patterns, is_active, updated_at, org_id, provider, native_team_key, parent_team_id) VALUES ('PLAT', generateUUIDv4(), 'Platform project', NULL, [], [], ['PLAT'], [], 1, '2026-09-01 00:00:00', 'org-1', 'jira', 'PLAT', NULL)`)
-	exec(t, conn, `INSERT INTO team_project_ownership (org_id, provider, team_id, project_id, project_key, source, is_primary, specificity, priority, valid_from, valid_to, updated_at) VALUES ('org-1', 'jira', 'PLAT', 'org-1:jira:PLAT', 'PLAT', 'native', 1, 100, 10, '2026-09-01 00:00:00', NULL, '2026-09-01 00:00:00')`)
+	exec(t, conn, `INSERT INTO team_project_ownership (org_id, provider, team_id, project_id, project_key, source, is_primary, specificity, priority, valid_from, valid_to, updated_at) VALUES ('org-1', 'jira', 'PLAT', '10001', 'PLAT', 'native', 1, 100, 10, '2026-09-01 00:00:00', NULL, '2026-09-01 00:00:00')`)
 	exec(t, conn, `INSERT INTO team_memberships (org_id, provider, team_id, member_id, raw_provider_user_id, raw_email, identity_facets, source, is_primary, specificity, priority, valid_from, valid_to, updated_at) VALUES ('org-1', 'jira', 'PLAT', 'jira:lead-9', 'jira:accountid:lead-9', NULL, ['jira:accountid:lead-9'], 'native', 1, 100, 10, '2026-09-01 00:00:00', NULL, '2026-09-01 00:00:00')`)
 	// An Atlassian team already known, with a manual member and stale project keys.
 	exec(t, conn, `INSERT INTO teams (id, team_uuid, name, description, members, manual_members, project_keys, repo_patterns, is_active, updated_at, org_id, provider, native_team_key, parent_team_id) VALUES ('`+idA+`', generateUUIDv4(), 'Old name', NULL, [], ['jira:manual-1'], ['OLD'], [], 1, '2026-09-01 00:00:00', 'org-1', 'jira', 'x', NULL)`)
 
-	g := newGateway(t, standard)
+	g := newGateway(t, everyLinkWritable)
 	selections := everything
 	run := func(now time.Time, selections Selections) {
 		p := params(selections)
@@ -125,8 +125,8 @@ func TestWriteTeamsMembershipsAndOwnershipAgainstClickHouse(t *testing.T) {
 
 	ownership := lines(t, conn, `SELECT concat(team_id, '|', project_id, '|', ifNull(project_key, ''), '|', source, '|', toString(specificity), '|', toString(priority)) FROM team_project_ownership FINAL WHERE org_id = 'org-1' AND provider = 'jira' ORDER BY team_id`)
 	wantOwnership := []string{
-		"PLAT|org-1:jira:PLAT|PLAT|native|100|10",
-		idA + "|org-1:jira:PLAT|PLAT|native|110|10",
+		"PLAT|10001|PLAT|native|100|10",
+		idA + "|10001|PLAT|native|110|10",
 	}
 	if strings.Join(ownership, "\n") != strings.Join(wantOwnership, "\n") {
 		t.Fatalf("ownership:\n%s\nwant:\n%s", strings.Join(ownership, "\n"), strings.Join(wantOwnership, "\n"))
@@ -165,7 +165,7 @@ func TestARunRetractsWhatTheSnapshotNoLongerHas(t *testing.T) {
 	first := time.Date(2026, 9, 25, 3, 0, 0, 0, time.UTC)
 
 	exec(t, conn, `INSERT INTO team_memberships (org_id, provider, team_id, member_id, raw_provider_user_id, raw_email, identity_facets, source, is_primary, specificity, priority, valid_from, valid_to, updated_at) VALUES ('org-1', 'jira', 'PLAT', 'jira:lead-9', 'jira:accountid:lead-9', NULL, ['jira:accountid:lead-9'], 'native', 1, 100, 10, '2026-09-01 00:00:00', NULL, '2026-09-01 00:00:00')`)
-	exec(t, conn, `INSERT INTO team_project_ownership (org_id, provider, team_id, project_id, project_key, source, is_primary, specificity, priority, valid_from, valid_to, updated_at) VALUES ('org-1', 'jira', 'PLAT', 'org-1:jira:PLAT', 'PLAT', 'native', 1, 100, 10, '2026-09-01 00:00:00', NULL, '2026-09-01 00:00:00')`)
+	exec(t, conn, `INSERT INTO team_project_ownership (org_id, provider, team_id, project_id, project_key, source, is_primary, specificity, priority, valid_from, valid_to, updated_at) VALUES ('org-1', 'jira', 'PLAT', '10001', 'PLAT', 'native', 1, 100, 10, '2026-09-01 00:00:00', NULL, '2026-09-01 00:00:00')`)
 
 	g := newGateway(t, standard)
 	run := func(now time.Time, respond func(request) (int, any)) Result {
@@ -197,8 +197,8 @@ func TestARunRetractsWhatTheSnapshotNoLongerHas(t *testing.T) {
 			return 200, searchPage("", teamNode(teamA, "Platform", "ACTIVE"), teamNode(teamB, "Old", "ARCHIVED"))
 		case "TeamworkGraphTeamUsers":
 			return 200, connection("teamworkGraph_teamUsers", "", userEdge(teamA, "bob-2"))
-		case "TeamworkGraphTeamActiveProjects":
-			return 200, connection("teamworkGraph_teamActiveProjects", "")
+		case "TeamConnectedContainers":
+			return 200, containerPage("")
 		}
 		return 500, nil
 	}
@@ -307,8 +307,8 @@ func TestOwnershipLastSyncedIsTheIngestTimeNotTheProviderTime(t *testing.T) {
 
 	// The closing row a later run writes for a retracted link is a write too.
 	g.respond = func(req request) (int, any) {
-		if req.Operation == "TeamworkGraphTeamActiveProjects" {
-			return 200, connection("teamworkGraph_teamActiveProjects", "")
+		if req.Operation == "TeamConnectedContainers" {
+			return 200, containerPage("")
 		}
 		return standard(req)
 	}
@@ -323,5 +323,122 @@ func TestOwnershipLastSyncedIsTheIngestTimeNotTheProviderTime(t *testing.T) {
 	closed := lines(t, conn, `SELECT toString(count()) FROM team_project_ownership WHERE org_id = 'org-1' AND provider = 'jira' AND valid_to IS NOT NULL AND last_synced > toDateTime64('2021-01-01 00:00:00', 3, 'UTC')`)
 	if closed[0] == "0" {
 		t.Fatal("no closing row carries an ingest-time last_synced")
+	}
+}
+
+// A team's project link that an earlier version wrote under an id built from
+// the project key ("org:jira:KEY") names a project no work item points to.
+// The first run that writes the native project id closes that link in the
+// same write, and a later duplicate of the link it keeps; the project-as-team
+// owner of the same project, which another writer owns, is not touched.
+func TestAnAtlassianTeamsRunClosesTheKeyBuiltProjectLinks(t *testing.T) {
+	conn := openClickHouse(t)
+	ctx := context.Background()
+	const org = "org-1"
+	now := time.Date(2026, 9, 25, 3, 0, 0, 0, time.UTC)
+	const insert = `INSERT INTO team_project_ownership (org_id, provider, team_id, project_id, project_key, source, is_primary, specificity, priority, valid_from, valid_to, updated_at) VALUES `
+
+	// Team A's link under the key-built id, as the earlier version wrote it.
+	exec(t, conn, insert+`('org-1', 'jira', '`+idA+`', 'org-1:jira:PLAT', 'PLAT', 'native', 1, 110, 10, '2026-09-01 00:00:00', NULL, '2026-09-01 00:00:00')`)
+	// Team A's link under the native id, open twice: one fact, two rows.
+	exec(t, conn, insert+`('org-1', 'jira', '`+idA+`', '10001', 'PLAT', 'native', 1, 110, 10, '2026-09-10 00:00:00', NULL, '2026-09-10 00:00:00')`)
+	exec(t, conn, insert+`('org-1', 'jira', '`+idA+`', '10001', 'PLAT', 'native', 1, 110, 10, '2026-09-12 00:00:00', NULL, '2026-09-12 00:00:00')`)
+	// The project-as-team owner of the same project: not an Atlassian team.
+	exec(t, conn, insert+`('org-1', 'jira', 'PLAT', 'org-1:jira:PLAT', 'PLAT', 'native', 1, 100, 10, '2026-09-01 00:00:00', NULL, '2026-09-01 00:00:00')`)
+
+	g := newGateway(t, everyLinkWritable)
+	p := params(everything)
+	p.Now = now
+	rows, err := Collect(ctx, g.client(), p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Rows that do not say their project links are complete (built by hand,
+	// or a collection that did not read them all) close no link.
+	partial := rows
+	partial.ProjectLinksComplete = false
+	if result, err := Write(ctx, conn, org, partial, everything); err != nil || result.ExpiredOwnership != 0 {
+		t.Fatalf("a write of links that are not complete: result=%+v err=%v, want no link closed", result, err)
+	}
+	if got := lines(t, conn, `SELECT toString(count()) FROM team_project_ownership FINAL WHERE org_id = 'org-1' AND provider = 'jira' AND valid_to IS NULL`); len(got) != 1 || got[0] != "4" {
+		t.Fatalf("open rows after the write that is not complete = %v, want all 4 still open", got)
+	}
+	result, err := Write(ctx, conn, org, rows, everything)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.OwnershipWritten != 1 || result.ExpiredOwnership != 2 {
+		t.Fatalf("result=%+v, want 1 link written and 2 closed (the key-built link and the later duplicate)", result)
+	}
+
+	state := lines(t, conn, `SELECT concat(team_id, '|', project_id, '|', toString(valid_from), '|', if(valid_to IS NULL, 'open', toString(valid_to))) FROM team_project_ownership FINAL WHERE org_id = 'org-1' AND provider = 'jira' ORDER BY team_id, project_id, valid_from`)
+	want := []string{
+		"PLAT|org-1:jira:PLAT|2026-09-01 00:00:00.000|open",
+		idA + "|10001|2026-09-10 00:00:00.000|open",
+		idA + "|10001|2026-09-12 00:00:00.000|2026-09-25 03:00:00.000",
+		idA + "|org-1:jira:PLAT|2026-09-01 00:00:00.000|2026-09-25 03:00:00.000",
+	}
+	if strings.Join(state, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("ownership:\n%s\nwant:\n%s", strings.Join(state, "\n"), strings.Join(want, "\n"))
+	}
+
+	// The same answer again closes nothing and adds no row.
+	p.Now = now.Add(time.Hour)
+	if rows, err = Collect(ctx, g.client(), p); err != nil {
+		t.Fatal(err)
+	}
+	if result, err = Write(ctx, conn, org, rows, everything); err != nil {
+		t.Fatal(err)
+	}
+	if result.ExpiredOwnership != 0 {
+		t.Fatalf("the second run closed %d links, want 0", result.ExpiredOwnership)
+	}
+	if got := lines(t, conn, `SELECT toString(count()) FROM team_project_ownership FINAL WHERE org_id = 'org-1' AND provider = 'jira'`); len(got) != 1 || got[0] != "4" {
+		t.Fatalf("rows after the second run = %v, want 4", got)
+	}
+}
+
+// A team whose project links could not be read keeps its open links: an
+// answer in which no link carries a readable project ARI is not "the team
+// has no project". The other team of the same run is judged by itself.
+func TestATeamWithNoReadableProjectLinkKeepsItsOpenLinks(t *testing.T) {
+	conn := openClickHouse(t)
+	ctx := context.Background()
+	const org = "org-1"
+	now := time.Date(2026, 9, 25, 3, 0, 0, 0, time.UTC)
+	const insert = `INSERT INTO team_project_ownership (org_id, provider, team_id, project_id, project_key, source, is_primary, specificity, priority, valid_from, valid_to, updated_at) VALUES `
+	exec(t, conn, insert+`('org-1', 'jira', '`+idA+`', '10001', 'PLAT', 'native', 1, 110, 10, '2026-09-10 00:00:00', NULL, '2026-09-10 00:00:00')`)
+	exec(t, conn, insert+`('org-1', 'jira', '`+idA+`', '10009', 'OPS', 'native', 1, 110, 10, '2026-09-10 00:00:00', NULL, '2026-09-10 00:00:00')`)
+	exec(t, conn, insert+`('org-1', 'jira', '`+idC+`', '20002', 'DATA', 'native', 1, 110, 10, '2026-09-10 00:00:00', NULL, '2026-09-10 00:00:00')`)
+
+	// Team A: links came back, none with a readable project ARI. Team C: no
+	// link at all (a complete answer: the team has no project).
+	g := newGateway(t, func(req request) (int, any) {
+		if req.Operation == "TeamConnectedContainers" && req.Variables["id"] == teamA {
+			return 200, containerPage("", projectEdge(teamA, "PLAT", "PLAT"), projectEdge(teamA, "OPS", ""))
+		}
+		return standard(req)
+	})
+	p := params(everything)
+	p.Now = now
+	rows, err := Collect(ctx, g.client(), p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := Write(ctx, conn, org, rows, everything)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.ExpiredOwnership != 1 || result.UnreadableProjectLinkTeams != 1 {
+		t.Fatalf("result=%+v, want 1 link closed (team C) and 1 team named unreadable (team A)", result)
+	}
+	state := lines(t, conn, `SELECT concat(team_id, '|', project_id, '|', if(valid_to IS NULL, 'open', toString(valid_to))) FROM team_project_ownership FINAL WHERE org_id = 'org-1' AND provider = 'jira' ORDER BY team_id, project_id`)
+	want := []string{
+		idA + "|10001|open",
+		idA + "|10009|open",
+		idC + "|20002|2026-09-25 03:00:00.000",
+	}
+	if strings.Join(state, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("ownership:\n%s\nwant:\n%s", strings.Join(state, "\n"), strings.Join(want, "\n"))
 	}
 }

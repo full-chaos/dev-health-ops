@@ -39,6 +39,7 @@ package home
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"testing"
 	"time"
 
@@ -162,6 +163,27 @@ func TestHomeReaders_SeededRealClickHouse(t *testing.T) {
 		`INSERT INTO work_item_cycle_times (work_item_id, provider, day, work_scope_id, type, status, created_at, cycle_time_hours, computed_at, org_id) VALUES
 		 ('wi-cycle-2', 'jira', '%s', 'scope-1', 'bug', 'closed', toDateTime('%s'), 3.0, toDateTime('%s'), '%s')`,
 		day1, tNew, tNew, seededOrgID))
+	// The signal-attribution reader joins cycle times to work_items for
+	// repository scope. wi-cycle-2 belongs to team-1's owned repository;
+	// wi-cycle-3 belongs to an unowned repository and is its control row.
+	// The two sources on wi-cycle-2 have different computed_at values: only
+	// the newer linked_issue/medium attribution may survive the reader's
+	// latest-primary selection.
+	seededExec(ctx, t, conn, fmt.Sprintf(
+		`INSERT INTO work_items (repo_id, work_item_id, provider, title, status, status_raw, created_at, updated_at, last_synced, org_id) VALUES
+		 ('%s', 'wi-cycle-2', 'jira', 'owned current item', 'closed', 'closed', toDateTime64('%s',3), toDateTime64('%s',3), toDateTime64('%s',3), '%s'),
+		 ('%s', 'wi-cycle-3', 'jira', 'unowned current item', 'closed', 'closed', toDateTime64('%s',3), toDateTime64('%s',3), toDateTime64('%s',3), '%s')`,
+		repoID, tNew, tNew, tNew, seededOrgID, repoID2, tNew, tNew, tNew, seededOrgID))
+	seededExec(ctx, t, conn, fmt.Sprintf(
+		`INSERT INTO work_item_cycle_times (work_item_id, provider, day, work_scope_id, type, status, created_at, cycle_time_hours, computed_at, org_id) VALUES
+		 ('wi-cycle-3', 'jira', '%s', 'scope-2', 'bug', 'closed', toDateTime('%s'), 4.0, toDateTime('%s'), '%s')`,
+		day1, tNew, tNew, seededOrgID))
+	seededExec(ctx, t, conn, fmt.Sprintf(
+		`INSERT INTO work_item_team_attributions (org_id, repo_id, work_item_id, provider, team_id, team_name, source, is_primary, confidence, evidence, computed_at) VALUES
+		 ('%s', toUUID('%s'), 'wi-cycle-2', 'jira', 'team-1', 'Team One', 'native_team', 1, 'high', 'old direct team', toDateTime64('%s',3)),
+		 ('%s', toUUID('%s'), 'wi-cycle-2', 'jira', 'team-1', 'Team One', 'linked_issue', 1, 'medium', 'new linked issue', toDateTime64('%s',3)),
+		 ('%s', toUUID('%s'), 'wi-cycle-3', 'jira', NULL, NULL, 'unassigned', 1, 'none', 'no ownership evidence', toDateTime64('%s',3))`,
+		seededOrgID, repoID, tOld, seededOrgID, repoID, tNew, seededOrgID, repoID2, tNew))
 
 	// --- repo_metrics_daily: two versions, same (org_id, repo_id, day).
 	// Old carries an inflated churn value that must NOT survive dedup.
@@ -299,8 +321,62 @@ func TestHomeReaders_SeededRealClickHouse(t *testing.T) {
 		// 1/1 = 100% too under THIS metric. The prs_linked pct is the one
 		// that discriminates the two possible readings by CARDINALITY when
 		// combined with total below.
-		if got["prs_linked_to_issues_pct"] != 100.0 {
-			t.Errorf("prs_linked_to_issues_pct = %v, want 100 (only wi-cycle-2 visible: 1 linked / 1 total)", got["prs_linked_to_issues_pct"])
+		if got.PRsLinkedToIssuesPct == nil || *got.PRsLinkedToIssuesPct != 100.0 {
+			t.Errorf("prs_linked_to_issues_pct = %v, want 100 (only wi-cycle-2 visible: 1 linked / 1 total)", got.PRsLinkedToIssuesPct)
+		}
+	})
+
+	t.Run("fetchSignalAttribution_latestPrimaryAndOwnedRepoScope", func(t *testing.T) {
+		asOf := time.Date(2026, 1, 2, 11, 0, 0, 0, time.UTC)
+		orgAttribution, err := fetchSignalAttribution(ctx, client, Filters{}, startDay, endDay, seededOrgID, asOf)
+		if err != nil {
+			t.Fatalf("fetchSignalAttribution org: %v", err)
+		}
+		if orgAttribution == nil || orgAttribution.Items != 2 {
+			t.Fatalf("org signal attribution = %+v, want two attributed current work items", orgAttribution)
+		}
+		wantSources := []SignalAttributionSourceCount{
+			{Source: "linked_issue", Items: 1, Share: 0.5},
+			{Source: "unassigned", Items: 1, Share: 0.5},
+		}
+		wantConfidence := []SignalAttributionConfidenceCount{
+			{Confidence: "medium", Items: 1, Share: 0.5},
+			{Confidence: "none", Items: 1, Share: 0.5},
+		}
+		if !reflect.DeepEqual(orgAttribution.Sources, wantSources) || !reflect.DeepEqual(orgAttribution.Confidence, wantConfidence) {
+			t.Fatalf("org signal attribution = %+v, want sources=%+v confidence=%+v; the stale native_team/high row must not survive", orgAttribution, wantSources, wantConfidence)
+		}
+
+		teamAttribution, err := fetchSignalAttribution(ctx, client, Filters{Scope: ScopeFilter{Level: "team", IDs: []string{"team-1"}}}, startDay, endDay, seededOrgID, asOf)
+		if err != nil {
+			t.Fatalf("fetchSignalAttribution team: %v", err)
+		}
+		if teamAttribution == nil || teamAttribution.Items != 1 || len(teamAttribution.Sources) != 1 || teamAttribution.Sources[0].Source != "linked_issue" || len(teamAttribution.Confidence) != 1 || teamAttribution.Confidence[0].Confidence != "medium" {
+			t.Fatalf("team signal attribution = %+v, want only team-1's owned linked-issue item; unowned UNASSIGNED/NONE must stay out", teamAttribution)
+		}
+	})
+
+	t.Run("fetchScopeDataConfidence_usesOwnedRepositoriesAndWindowMetrics", func(t *testing.T) {
+		got, err := fetchScopeDataConfidence(
+			ctx,
+			client,
+			Filters{Scope: ScopeFilter{Level: "team", IDs: []string{"team-1"}}},
+			startDay,
+			endDay,
+			seededOrgID,
+			time.Date(2026, 1, 2, 11, 0, 0, 0, time.UTC),
+		)
+		if err != nil {
+			t.Fatalf("fetchScopeDataConfidence: %v", err)
+		}
+		if got.Level != "high" {
+			t.Errorf("level = %q, want high for the one owned repository with window metrics", got.Level)
+		}
+		if got.CoveragePct == nil || *got.CoveragePct != 100 {
+			t.Errorf("coverage = %v, want 100 for the one owned repository", got.CoveragePct)
+		}
+		if got.LastIngestedAt == nil || time.Time(*got.LastIngestedAt).UTC().Format("2006-01-02 15:04:05") != tNew {
+			t.Errorf("last ingested = %v, want %s", got.LastIngestedAt, tNew)
 		}
 	})
 
@@ -325,8 +401,18 @@ func TestHomeReaders_SeededRealClickHouse(t *testing.T) {
 		if err != nil {
 			t.Fatalf("fetchMetricValue: %v", err)
 		}
-		if got != 1000 {
-			t.Errorf("sum(total_loc_touched) = %v, want 1000 (deduped: the stale 999999 row must not be summed)", got)
+		if got.Value != 1000 || !got.HasData {
+			t.Errorf("sum(total_loc_touched) = %+v, want value 1000 with data (deduped: the stale 999999 row must not be summed)", got)
+		}
+	})
+
+	t.Run("fetchMetricValue_emptyWindowHasNoData", func(t *testing.T) {
+		got, err := fetchMetricValue(ctx, client, "repo_metrics_daily", "total_loc_touched", startDay.AddDate(10, 0, 0), endDay.AddDate(10, 0, 0), "", nil, "sum", seededOrgID)
+		if err != nil {
+			t.Fatalf("fetchMetricValue: %v", err)
+		}
+		if got.Value != 0 || got.HasData {
+			t.Errorf("empty metric value = %+v, want value 0 with hasData false", got)
 		}
 	})
 
@@ -341,7 +427,7 @@ func TestHomeReaders_SeededRealClickHouse(t *testing.T) {
 	})
 
 	t.Run("fetchBlockedHours_argMaxDedupChangesTheAnswer", func(t *testing.T) {
-		total, rows, err := fetchBlockedHours(ctx, client, startDay, endDay, "", nil, seededOrgID)
+		total, rows, hasData, err := fetchBlockedHours(ctx, client, startDay, endDay, "", nil, seededOrgID)
 		if err != nil {
 			t.Fatalf("fetchBlockedHours: %v", err)
 		}
@@ -350,6 +436,9 @@ func TestHomeReaders_SeededRealClickHouse(t *testing.T) {
 		}
 		if len(rows) != 1 {
 			t.Fatalf("fetchBlockedHours rows = %+v, want exactly one day", rows)
+		}
+		if !hasData {
+			t.Fatal("fetchBlockedHours hasData = false, want true for the stored blocked row")
 		}
 	})
 
@@ -420,8 +509,8 @@ func TestHomeReaders_SeededRealClickHouse(t *testing.T) {
 		if err != nil {
 			t.Fatalf("fetchMetricValue with team scope: %v", err)
 		}
-		if got != 1000 {
-			t.Errorf("fetchMetricValue with team-1's scope = %v, want 1000 (team-1 owns repoID and nothing else; repoID2 carries no ownership row and must not be counted)", got)
+		if got.Value != 1000 || !got.HasData {
+			t.Errorf("fetchMetricValue with team-1's scope = %+v, want value 1000 with data (team-1 owns repoID and nothing else; repoID2 carries no ownership row and must not be counted)", got)
 		}
 	})
 

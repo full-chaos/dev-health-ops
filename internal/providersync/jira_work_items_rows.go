@@ -218,7 +218,7 @@ func validateJiraReopen(row jiraWorkItemReopenRow, claim Claim) error {
 
 func validateJiraInteraction(row jiraWorkItemInteractionRow, claim Claim) error {
 	if row.WorkItemID == "" || row.Provider != "jira" || row.InteractionType != "comment" ||
-		row.OccurredAt.IsZero() || row.BodyLength < 0 || row.LastSynced.IsZero() ||
+		row.OccurredAt.IsZero() || row.BodyLength < 0 || row.LastSynced.IsZero() || row.InteractionID == "" ||
 		row.OrgID == "" || row.OrgID != claim.OrgID {
 		return providerfoundation.ErrInvalidScope
 	}
@@ -509,6 +509,21 @@ func jiraReopenEvents(
 	return rows
 }
 
+// Bounds on the provider-supplied strings of an interaction row (CHAOS-8806):
+// an Atlassian account id is at most 128 characters and an email at most 254;
+// 256 runes holds either, and a numeric comment id is far below 64 bytes.
+const (
+	jiraInteractionActorMaxRunes = 256
+	jiraInteractionIDMaxBytes    = 64
+)
+
+func truncateRunes(value string, limit int) string {
+	if utf8RuneCount(value) <= limit {
+		return value
+	}
+	return string([]rune(value)[:limit])
+}
+
 func normalizeJiraInteractions(
 	claim Claim,
 	workItemID string,
@@ -518,6 +533,13 @@ func normalizeJiraInteractions(
 ) []jiraWorkItemInteractionRow {
 	rows := make([]jiraWorkItemInteractionRow, 0, len(comments))
 	for _, comment := range comments {
+		id := interactionIDFrom(comment["id"])
+		if id == "" || len(id) > jiraInteractionIDMaxBytes {
+			// A comment id is numeric text of a few digits; a longer value is
+			// not one (and an unbounded provider string must not reach the row).
+			skipInteractionWithoutID("jira", claim.OrgID, workItemID)
+			continue
+		}
 		occurredAt := jiraTime(comment["created"])
 		if occurredAt == nil {
 			continue
@@ -526,6 +548,7 @@ func normalizeJiraInteractions(
 		if author := comment["author"]; author != nil {
 			resolved := jiraResolveMapUser(author, resolveIdentity)
 			if resolved != "" && resolved != "unknown" {
+				resolved = truncateRunes(resolved, jiraInteractionActorMaxRunes)
 				actor = &resolved
 			}
 		}
@@ -537,7 +560,7 @@ func normalizeJiraInteractions(
 		rows = append(rows, jiraWorkItemInteractionRow{
 			WorkItemID: workItemID, Provider: "jira", InteractionType: "comment",
 			OccurredAt: *occurredAt, Actor: actor, BodyLength: bodyLength,
-			LastSynced: normalizedAt.UTC(), OrgID: claim.OrgID,
+			LastSynced: normalizedAt.UTC(), OrgID: claim.OrgID, InteractionID: id,
 		})
 	}
 	return rows

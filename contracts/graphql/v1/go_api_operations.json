@@ -115,6 +115,15 @@
     "digest": "141ed14fc636739e1184716167148d7d17c35180a09a83dc9ef2b04bfb1dd638"
   },
   {
+    "operation": "coverageScopeBaseline",
+    "digest": "071c15a21f584816f94d86c48268b41638e2a66f1e6e8fd96b9047f48fa0a7ca"
+  },
+  {
+    "operation": "coverageScopeBaseline",
+    "digest": "2badf6b15232c05fb72f06c74a5da54a6037ba0a69e400aaba346dee5633dc5f",
+    "legacy": true
+  },
+  {
     "operation": "createSavedReport",
     "digest": "2834bc84c1a065ef44dff96e02f6e5d2ca55608053f96a52366eac429aafc0f0",
     "kind": "mutation"
@@ -150,7 +159,22 @@
   },
   {
     "operation": "home",
-    "digest": "9776798e809030868e3a7fc8643b06d122573f03a3c48a7710d86b1842b33554"
+    "digest": "f920722d8e56ae44b85ce535ab0364ab10eb6baf70da1b49cc60a1f915abe7a1"
+  },
+  {
+    "operation": "home",
+    "digest": "9776798e809030868e3a7fc8643b06d122573f03a3c48a7710d86b1842b33554",
+    "legacy": true
+  },
+  {
+    "operation": "home",
+    "digest": "c02bb493d709b8c445e2ac711bdf93d6a2cdb7933d1073a20bf7dad3ffd06545",
+    "legacy": true
+  },
+  {
+    "operation": "home",
+    "digest": "cff105a9f8c5d5f2363f3d50510db34081c84c9c652afe380975b49c15a4c6eb",
+    "legacy": true
   },
   {
     "operation": "hotspots",
@@ -170,6 +194,10 @@
     "digest": "964b2e867a1e37c09382552eb0af394758fa10d68081a560ebc0f36c28cc3501"
   },
   {
+    "operation": "investmentEvidenceQuality",
+    "digest": "5e31cdbd14dde65165c635a8a3f02fb03f85fae0ef9c21eeb39808c199323c2a"
+  },
+  {
     "operation": "investmentFull",
     "digest": "663e516c6152c81e28780d27809fcbe5aeae8c92b07d34b19978b7d59913cb3d"
   },
@@ -183,11 +211,16 @@
   },
   {
     "operation": "operatingReview",
-    "digest": "d26e965931987ac4bdf607f43f542e2bd3f49f91561400287014a161371726e9"
+    "digest": "fef895a373f536846afdb3bb93ef12dd03d8af8d23f3663b290c350e622ed8c3"
   },
   {
     "operation": "operatingReview",
     "digest": "c376a5dc191fd8d8759578ccd9dffaffadcd621bdc0625fe62c4c08619f3363e",
+    "legacy": true
+  },
+  {
+    "operation": "operatingReview",
+    "digest": "d26e965931987ac4bdf607f43f542e2bd3f49f91561400287014a161371726e9",
     "legacy": true
   },
   {

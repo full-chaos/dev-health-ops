@@ -9,17 +9,13 @@ package graph
 // FilterInput -> home.Filters mapping, and the home.Response ->
 // model.HomeResult mapping.
 //
-// TestHomeResultFromResponse_MapsEveryFieldAgainstTheRESTShape is the
-// CHAOS-7070 oracle: it builds ONE home.Response covering every field,
-// marshals it both the REST way (home_route.go's writeHomeResponse
-// marshals *home.Response directly -- json.Marshal here reproduces that
-// exact wire shape) and the GraphQL way (homeResultFromResponse then
-// json.Marshal, the same encoding gqlgen uses to serve a query), and
-// diffs the two field-by-field. The two declared shape differences (the
-// two Python dicts, tiles and freshness.sources, become ordered lists on
-// the GraphQL side -- schema.graphql's own doc comments) are asserted
-// separately rather than by the generic path diff, which only compares
-// leaves with the same shape on both sides.
+// TestHomeResultFromResponse_MapsEveryFieldAgainstTheDomainResponse is the
+// CHAOS-7070 oracle. It compares a complete Home domain response with its
+// GraphQL translation. REST has a separate frozen-Python adapter because it
+// cannot represent GraphQL's no-data flags or nullable constraint. The two
+// domain-to-GraphQL shape differences (tiles and freshness.sources change
+// from ordered maps to lists) are asserted separately rather than by the
+// generic path diff, which compares leaves with the same shape.
 
 import (
 	"encoding/json"
@@ -89,7 +85,7 @@ func TestHomeFiltersFromGraphQL_ScopeWithoutLevelDefaultsToOrg(t *testing.T) {
 // TestHomeResultFromResponse_MapsTheOriginalThreeFields pins the three
 // sub-fields the GraphQL HomeResult type exposed before CHAOS-7070 grew
 // it to the full payload -- see
-// TestHomeResultFromResponse_MapsEveryFieldAgainstTheRESTShape below for
+// TestHomeResultFromResponse_MapsEveryFieldAgainstTheDomainResponse below for
 // the full-payload oracle.
 func TestHomeResultFromResponse_MapsTheOriginalThreeFields(t *testing.T) {
 	ingested := pytime.NaiveDateTime(time.Date(2024, 1, 8, 12, 0, 0, 0, time.UTC))
@@ -97,12 +93,12 @@ func TestHomeResultFromResponse_MapsTheOriginalThreeFields(t *testing.T) {
 		Freshness: home.Freshness{
 			LastIngestedAt: &ingested,
 			Coverage: home.Coverage{
-				ReposCoveredPct: 80, PRsLinkedToIssuesPct: 60, IssuesWithCycleStatesPct: 40,
+				ReposCoveredPct: floatPtr(80), PRsLinkedToIssuesPct: floatPtr(60), IssuesWithCycleStatesPct: floatPtr(40),
 			},
 		},
 		Deltas: []home.MetricDelta{
 			{
-				Metric: "throughput", Label: "Throughput", Value: 42, Unit: "units", DeltaPct: 12.5,
+				Metric: "throughput", Label: "Throughput", Value: 42, Unit: "units", DeltaPct: 12.5, HasData: true,
 				Spark: []home.SparkPoint{{TS: pytime.NaiveDateTime(time.Date(2024, 1, 7, 0, 0, 0, 0, time.UTC)), Value: 40}},
 			},
 		},
@@ -122,7 +118,7 @@ func TestHomeResultFromResponse_MapsTheOriginalThreeFields(t *testing.T) {
 	if got.Freshness.Coverage == nil {
 		t.Fatal("Freshness.Coverage must be populated -- home.BuildResponse always computes it")
 	}
-	if c := got.Freshness.Coverage; c.ReposCoveredPct != 80 || c.PrsLinkedToIssuesPct != 60 || c.IssuesWithCycleStatesPct != 40 {
+	if c := got.Freshness.Coverage; c.ReposCoveredPct == nil || *c.ReposCoveredPct != 80 || c.PrsLinkedToIssuesPct == nil || *c.PrsLinkedToIssuesPct != 60 || c.IssuesWithCycleStatesPct == nil || *c.IssuesWithCycleStatesPct != 40 {
 		t.Errorf("Freshness.Coverage = %+v, want the mapped Coverage", c)
 	}
 
@@ -132,6 +128,9 @@ func TestHomeResultFromResponse_MapsTheOriginalThreeFields(t *testing.T) {
 	d := got.Deltas[0]
 	if d.Metric != "throughput" || d.Label != "Throughput" || d.Value != 42 || d.Unit != "units" || d.DeltaPct != 12.5 {
 		t.Errorf("Deltas[0] = %+v, want the mapped MetricDelta", d)
+	}
+	if !d.HasData || d.HasPriorData {
+		t.Errorf("Deltas[0] data flags = current:%t prior:%t, want current:true prior:false", d.HasData, d.HasPriorData)
 	}
 	if len(d.Spark) != 1 || d.Spark[0].Value != 40 || d.Spark[0].Ts != "2024-01-07T00:00:00" {
 		t.Errorf("Deltas[0].Spark = %+v, want one point at 2024-01-07T00:00:00 value 40", d.Spark)
@@ -143,6 +142,55 @@ func TestHomeResultFromResponse_MapsTheOriginalThreeFields(t *testing.T) {
 	a := got.ReworkThemeAllocation[0]
 	if a.Theme != "feature_delivery" || a.Label != "Feature Delivery" || a.Allocation != 10 || a.AllocationPct != 50 || a.PrsMerged != 3 || a.ChurnLoc != 100 {
 		t.Errorf("ReworkThemeAllocation[0] = %+v, want the mapped ReworkThemeAllocation", a)
+	}
+}
+
+func TestHomeResultFromResponse_NilCoverageLeavesStayNil(t *testing.T) {
+	got := homeResultFromResponse(&home.Response{Freshness: home.Freshness{Coverage: home.Coverage{}}})
+	if got.Freshness == nil || got.Freshness.Coverage == nil {
+		t.Fatal("Freshness.Coverage must be present")
+	}
+	coverage := got.Freshness.Coverage
+	if coverage.ReposCoveredPct != nil || coverage.PrsLinkedToIssuesPct != nil || coverage.IssuesWithCycleStatesPct != nil {
+		t.Errorf("Coverage = %+v, want three nil leaves for unavailable denominators", coverage)
+	}
+}
+
+func TestHomeResultFromResponse_MapsSignalAttributionDistribution(t *testing.T) {
+	resp := &home.Response{Signals: []home.Signal{{
+		ID: "metric:throughput",
+		Attribution: &home.SignalAttribution{
+			Items: 3,
+			Sources: []home.SignalAttributionSourceCount{
+				{Source: "native_team", Items: 2, Share: 2.0 / 3.0},
+				{Source: "unexpected_future_source", Items: 1, Share: 1.0 / 3.0},
+			},
+			Confidence: []home.SignalAttributionConfidenceCount{
+				{Confidence: "high", Items: 2, Share: 2.0 / 3.0},
+				{Confidence: "unexpected_future_confidence", Items: 1, Share: 1.0 / 3.0},
+			},
+		},
+	}}}
+
+	got := homeResultFromResponse(resp)
+	if len(got.Signals) != 1 || got.Signals[0].Attribution == nil {
+		t.Fatalf("Signals = %+v, want one mapped attribution", got.Signals)
+	}
+	attribution := got.Signals[0].Attribution
+	if attribution.Items != 3 || len(attribution.Sources) != 2 || len(attribution.Confidence) != 2 {
+		t.Fatalf("Attribution = %+v, want two source and two confidence buckets for three items", attribution)
+	}
+	if got := attribution.Sources[0]; got.Source != model.TeamAttributionSourceNativeTeam || got.Items != 2 || got.Share != 2.0/3.0 {
+		t.Errorf("Sources[0] = %+v, want native-team 2/3", got)
+	}
+	if got := attribution.Sources[1]; got.Source != model.TeamAttributionSourceUnassigned || got.Items != 1 || got.Share != 1.0/3.0 {
+		t.Errorf("Sources[1] = %+v, want the established unrecognized-source fallback", got)
+	}
+	if got := attribution.Confidence[0]; got.Confidence != model.TeamAttributionConfidenceHigh || got.Items != 2 || got.Share != 2.0/3.0 {
+		t.Errorf("Confidence[0] = %+v, want high 2/3", got)
+	}
+	if got := attribution.Confidence[1]; got.Confidence != model.TeamAttributionConfidenceNone || got.Items != 1 || got.Share != 1.0/3.0 {
+		t.Errorf("Confidence[1] = %+v, want the established unrecognized-confidence fallback", got)
 	}
 }
 
@@ -161,11 +209,35 @@ func TestHomeResultFromResponse_NilLastIngestedAtStaysNil(t *testing.T) {
 	if got.ReworkThemeAllocation == nil {
 		t.Error("ReworkThemeAllocation must be an empty slice, not nil, for the same reason")
 	}
+	if got.Constraint != nil {
+		t.Errorf("Constraint = %+v, want nil when the response has no constraint", got.Constraint)
+	}
 }
 
-// TestHomeResultFromResponse_MapsEveryFieldAgainstTheRESTShape is the
+func TestHomeResultFromResponse_NoDataKeepsAbsentConstraintAndDataFlags(t *testing.T) {
+	resp := &home.Response{
+		Deltas: []home.MetricDelta{
+			{Metric: "cycle_time", HasData: false, HasPriorData: true},
+		},
+		Constraint:  nil,
+		HealthState: home.HealthState{Status: "no_data"},
+	}
+
+	got := homeResultFromResponse(resp)
+	if got.Constraint != nil {
+		t.Fatalf("Constraint = %+v, want nil for no_data", got.Constraint)
+	}
+	if got.HealthState == nil || got.HealthState.Status != "no_data" {
+		t.Fatalf("HealthState = %+v, want no_data", got.HealthState)
+	}
+	if len(got.Deltas) != 1 || got.Deltas[0].HasData || !got.Deltas[0].HasPriorData {
+		t.Fatalf("Deltas = %+v, want current=false prior=true", got.Deltas)
+	}
+}
+
+// TestHomeResultFromResponse_MapsEveryFieldAgainstTheDomainResponse is the
 // CHAOS-7070 differential oracle -- see the file header comment.
-func TestHomeResultFromResponse_MapsEveryFieldAgainstTheRESTShape(t *testing.T) {
+func TestHomeResultFromResponse_MapsEveryFieldAgainstTheDomainResponse(t *testing.T) {
 	ingested := pytime.NaiveDateTime(time.Date(2024, 1, 8, 12, 0, 0, 0, time.UTC))
 	synced := home.MicroDateTime(time.Date(2024, 1, 8, 12, 30, 0, 123000, time.UTC))
 	asOf := pytime.NaiveDateTime(time.Date(2024, 1, 8, 0, 0, 0, 0, time.UTC))
@@ -181,10 +253,10 @@ func TestHomeResultFromResponse_MapsEveryFieldAgainstTheRESTShape(t *testing.T) 
 			LastIngestedAt:         &ingested,
 			LatestSuccessfulSyncAt: &synced,
 			Sources:                map[string]string{"github": "ok", "jira": "degraded"},
-			Coverage:               home.Coverage{ReposCoveredPct: 80, PRsLinkedToIssuesPct: 60, IssuesWithCycleStatesPct: 40},
+			Coverage:               home.Coverage{ReposCoveredPct: floatPtr(80), PRsLinkedToIssuesPct: floatPtr(60), IssuesWithCycleStatesPct: floatPtr(40)},
 		},
 		Deltas: []home.MetricDelta{
-			{Metric: "throughput", Label: "Throughput", Value: 42, Unit: "units", DeltaPct: 12.5,
+			{Metric: "throughput", Label: "Throughput", Value: 42, Unit: "units", DeltaPct: 12.5, HasData: true, HasPriorData: true,
 				Spark: []home.SparkPoint{{TS: pytime.NaiveDateTime(time.Date(2024, 1, 7, 0, 0, 0, 0, time.UTC)), Value: 40}}},
 		},
 		ReworkThemeAllocation: []home.ReworkThemeAllocation{
@@ -194,7 +266,7 @@ func TestHomeResultFromResponse_MapsEveryFieldAgainstTheRESTShape(t *testing.T) 
 			{ID: "s1", Text: "Throughput is up.", EvidenceLink: "/evidence/s1"},
 		},
 		Tiles: tiles,
-		Constraint: home.ConstraintCard{
+		Constraint: &home.ConstraintCard{
 			Title: "Reviewer capacity", Claim: "Reviews are the bottleneck.",
 			Evidence:    []home.ConstraintEvidence{{Label: "Review latency", Link: "/evidence/c1"}},
 			Experiments: []string{"add-reviewer"},
@@ -223,15 +295,18 @@ func TestHomeResultFromResponse_MapsEveryFieldAgainstTheRESTShape(t *testing.T) 
 			Level: "high", CoveragePct: floatPtr(72.5),
 			ConnectedSources: []string{"github", "jira"}, MissingSources: []string{"linear"}, Caveats: []string{"partial window"},
 		},
+		ScopeDataConfidence: home.ScopeDataConfidence{
+			Level: "medium", CoveragePct: floatPtr(50), LastIngestedAt: &ingested, Caveats: []string{"scope partial"},
+		},
 	}
 
-	restJSON, err := json.Marshal(resp)
+	domainJSON, err := json.Marshal(resp)
 	if err != nil {
-		t.Fatalf("marshal REST shape: %v", err)
+		t.Fatalf("marshal domain response: %v", err)
 	}
-	var rest map[string]any
-	if err := json.Unmarshal(restJSON, &rest); err != nil {
-		t.Fatalf("unmarshal REST shape: %v", err)
+	var domain map[string]any
+	if err := json.Unmarshal(domainJSON, &domain); err != nil {
+		t.Fatalf("unmarshal domain response: %v", err)
 	}
 
 	got := homeResultFromResponse(resp)
@@ -244,7 +319,7 @@ func TestHomeResultFromResponse_MapsEveryFieldAgainstTheRESTShape(t *testing.T) 
 		t.Fatalf("unmarshal GraphQL shape: %v", err)
 	}
 
-	// Leaf paths with the same shape on both sides -- REST's snake_case
+	// Leaf paths with the same shape on both sides -- the domain's snake_case
 	// against GraphQL's camelCase equivalent, per the mapping table sent
 	// to gwc-web-graphql for CHAOS-7064.
 	// This list must cover every leaf field: a hand-picked subset (that missed
@@ -253,7 +328,7 @@ func TestHomeResultFromResponse_MapsEveryFieldAgainstTheRESTShape(t *testing.T) 
 	// HomeSignal.Title mapping pass unnoticed. It is every leaf field either fixture object
 	// (home.Response's top-level Freshness/Summary/Constraint/Events/
 	// HealthState/Signals/LimitingFactor/DataConfidence) declares,
-	// checked against home/response.go's own json tags on the REST
+	// checked against home/response.go's own json tags on the domain
 	// side. freshness.sources and tiles are intentionally absent here --
 	// they are the two declared dict->list shape differences, asserted
 	// separately below by the code that already existed for them.
@@ -263,6 +338,13 @@ func TestHomeResultFromResponse_MapsEveryFieldAgainstTheRESTShape(t *testing.T) 
 		{"freshness.coverage.repos_covered_pct", "freshness.coverage.reposCoveredPct"},
 		{"freshness.coverage.prs_linked_to_issues_pct", "freshness.coverage.prsLinkedToIssuesPct"},
 		{"freshness.coverage.issues_with_cycle_states_pct", "freshness.coverage.issuesWithCycleStatesPct"},
+		{"deltas.0.metric", "deltas.0.metric"},
+		{"deltas.0.label", "deltas.0.label"},
+		{"deltas.0.value", "deltas.0.value"},
+		{"deltas.0.unit", "deltas.0.unit"},
+		{"deltas.0.delta_pct", "deltas.0.deltaPct"},
+		{"deltas.0.has_data", "deltas.0.hasData"},
+		{"deltas.0.has_prior_data", "deltas.0.hasPriorData"},
 		{"summary.0.id", "summary.0.id"},
 		{"summary.0.text", "summary.0.text"},
 		{"summary.0.evidence_link", "summary.0.evidenceLink"},
@@ -312,23 +394,27 @@ func TestHomeResultFromResponse_MapsEveryFieldAgainstTheRESTShape(t *testing.T) 
 		{"data_confidence.connected_sources.0", "dataConfidence.connectedSources.0"},
 		{"data_confidence.missing_sources.0", "dataConfidence.missingSources.0"},
 		{"data_confidence.caveats.0", "dataConfidence.caveats.0"},
+		{"scope_data_confidence.level", "scopeDataConfidence.level"},
+		{"scope_data_confidence.coverage_pct", "scopeDataConfidence.coveragePct"},
+		{"scope_data_confidence.last_ingested_at", "scopeDataConfidence.lastIngestedAt"},
+		{"scope_data_confidence.caveats.0", "scopeDataConfidence.caveats.0"},
 	}
 	for _, pair := range leafPaths {
-		restVal, restOK := jsonPathValue(t, rest, pair[0])
+		restVal, restOK := jsonPathValue(t, domain, pair[0])
 		gqlVal, gqlOK := jsonPathValue(t, gql, pair[1])
 		if restOK != gqlOK {
-			t.Errorf("path %s (REST) / %s (GraphQL): presence mismatch, REST ok=%v GraphQL ok=%v", pair[0], pair[1], restOK, gqlOK)
+			t.Errorf("path %s (domain) / %s (GraphQL): presence mismatch, domain ok=%v GraphQL ok=%v", pair[0], pair[1], restOK, gqlOK)
 			continue
 		}
 		if restOK && restVal != gqlVal {
-			t.Errorf("path %s (REST) = %v, path %s (GraphQL) = %v: want equal", pair[0], restVal, pair[1], gqlVal)
+			t.Errorf("path %s (domain) = %v, path %s (GraphQL) = %v: want equal", pair[0], restVal, pair[1], gqlVal)
 		}
 	}
 
 	// The two declared shape differences: dict -> ordered list.
-	restSources, _ := jsonPathValue(t, rest, "freshness.sources")
+	restSources, _ := jsonPathValue(t, domain, "freshness.sources")
 	if m, ok := restSources.(map[string]any); !ok || len(m) != 2 {
-		t.Fatalf("REST freshness.sources = %v, want a 2-entry object", restSources)
+		t.Fatalf("domain freshness.sources = %v, want a 2-entry object", restSources)
 	}
 	if len(got.Freshness.Sources) != 2 {
 		t.Fatalf("GraphQL freshness.sources = %+v, want 2 entries", got.Freshness.Sources)
@@ -341,9 +427,9 @@ func TestHomeResultFromResponse_MapsEveryFieldAgainstTheRESTShape(t *testing.T) 
 		t.Errorf("GraphQL freshness.sources = %+v, want github=ok jira=degraded", got.Freshness.Sources)
 	}
 
-	restTiles, _ := jsonPathValue(t, rest, "tiles")
+	restTiles, _ := jsonPathValue(t, domain, "tiles")
 	if m, ok := restTiles.(map[string]any); !ok || len(m) != 2 {
-		t.Fatalf("REST tiles = %v, want a 2-entry object", restTiles)
+		t.Fatalf("domain tiles = %v, want a 2-entry object", restTiles)
 	}
 	if len(got.Tiles) != 2 {
 		t.Fatalf("GraphQL tiles = %+v, want 2 entries", got.Tiles)

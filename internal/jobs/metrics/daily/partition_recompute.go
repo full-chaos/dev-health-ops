@@ -2,6 +2,7 @@ package daily
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"time"
 
@@ -308,11 +309,18 @@ func (store *PostgresStore) redriveOnePartitionsForRange(
 		_ = tx.Rollback(rollbackCtx)
 	}()
 
+	// CHAOS-8710: the (org, day) marker lock first, the run row lock second.
+	if !dryRun {
+		if err := store.lockMarkerDayForRun(ctx, tx, runID); err != nil {
+			return false, err
+		}
+	}
+
 	var run Run
 	var targetDay, status, priorGeneration string
 	var hasPartitions, allPartitionsSucceeded bool
 	err = tx.QueryRow(ctx, `
-SELECT run.id::text, run.org_id::text, run.generation, run.status, run.target_day::text,
+SELECT run.id::text, run.org_id::text, run.generation, run.status, run.target_day::text, run.full_org,
   EXISTS (
       SELECT 1 FROM public.daily_metrics_partitions AS partition
       WHERE partition.run_id = run.id
@@ -324,7 +332,7 @@ SELECT run.id::text, run.org_id::text, run.generation, run.status, run.target_da
 FROM public.daily_metrics_runs AS run
 WHERE run.id = $1::uuid
 FOR UPDATE OF run`, runID).Scan(
-		&run.ID, &run.OrganizationID, &priorGeneration, &status, &targetDay,
+		&run.ID, &run.OrganizationID, &priorGeneration, &status, &targetDay, &run.FullOrg,
 		&hasPartitions, &allPartitionsSucceeded,
 	)
 	if err == pgx.ErrNoRows {
@@ -388,20 +396,28 @@ VALUES ($1::uuid, $2::uuid, $3::uuid, $4::date, $5, $6, $7, 'partition-recompute
 	}
 
 	now := store.now().UTC()
-	command, err := tx.Exec(ctx, `
+	// CHAOS-8710: the reset reads the Postgres clock once (reopenedAtMs); the
+	// 'reopened' marker below carries that value as its version, so every
+	// marker version of a day comes from one clock. A marker that cannot be
+	// written refuses the reopen: the tx rolls back and nothing changes.
+	var reopenedAtMs int64
+	err = tx.QueryRow(ctx, `
 UPDATE public.daily_metrics_runs
 SET status = 'running', generation = $3,
     finalization_status = 'pending', finalization_claim_token = NULL,
     finalization_lease_expires_at = NULL, finalized_at = NULL, updated_at = $1
-WHERE id = $2::uuid AND status = 'succeeded'`,
-		now, runID, newGeneration)
-	if err != nil {
-		return false, ErrUnavailable
-	}
-	if command.RowsAffected() != 1 {
+WHERE id = $2::uuid AND status = 'succeeded'
+RETURNING `+pgClockMillis, now, runID, newGeneration).Scan(&reopenedAtMs)
+	if errors.Is(err, pgx.ErrNoRows) {
 		// Re-verify raced us between the row lock above and this write --
 		// skip rather than force it.
 		return false, nil
+	}
+	if err != nil {
+		return false, ErrUnavailable
+	}
+	if err := store.markReopened(ctx, run, targetDay, reopenedAtMs); err != nil {
+		return false, err
 	}
 
 	partitionRows, err := tx.Query(ctx, `

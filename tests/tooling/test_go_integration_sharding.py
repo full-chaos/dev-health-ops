@@ -31,6 +31,10 @@ def _manifest_text() -> str:
 
 PROVIDER_MANIFEST = ROOT / "ci" / "go_providersync_test_shards.tsv"
 PROVIDER_PACKAGE = "internal/providersync"
+DAILY_MANIFEST = ROOT / "ci" / "go_daily_test_shards.tsv"
+DAILY_PACKAGE = "internal/jobs/metrics/daily"
+# Packages run as name-partitioned test shards, never in the `packages` target.
+SPLIT_PACKAGES = {PROVIDER_PACKAGE, DAILY_PACKAGE}
 CONTAINER_HARNESS = ROOT / "internal" / "testsupport" / "containers" / "harness.go"
 TEST_GO_CACHE = Path(tempfile.gettempdir()) / "chaos3141-go-sharding-test-cache"
 # Hosted job 93890967576 measured 49.596s for a cold planner invocation. This
@@ -280,6 +284,13 @@ def _provider_shard_count() -> int:
     raise AssertionError("the provider manifest declares no shard count")
 
 
+def _daily_shard_count() -> int:
+    for line in DAILY_MANIFEST.read_text(encoding="utf-8").splitlines():
+        if line.startswith("shards\t"):
+            return int(line.split("\t")[1])
+    raise AssertionError("the daily manifest declares no shard count")
+
+
 def _check_shard_plan(
     stdout: str,
     github_output: str,
@@ -337,6 +348,7 @@ def _check_shard_plan(
                 f"{manifest_weights[package]}s"
             )
     assert PROVIDER_PACKAGE in flattened
+    assert DAILY_PACKAGE in flattened
 
     totals = {}
     for line in stdout.splitlines():
@@ -384,13 +396,18 @@ def _check_shard_plan(
     runs_packages = {
         shard
         for shard, rows in assignments.items()
-        if any(package != PROVIDER_PACKAGE for package in rows)
+        if any(package not in SPLIT_PACKAGES for package in rows)
     }
     assert packages_entries == runs_packages, (
         f"the matrix runs packages shards {sorted(packages_entries)}; shards holding a "
-        f"package other than {PROVIDER_PACKAGE} are {sorted(runs_packages)}"
+        f"package other than {sorted(SPLIT_PACKAGES)} are {sorted(runs_packages)}"
     )
-    assert len(entries) == provider_shards + len(packages_entries)
+    assert {shard for target, shard in entries if target == "daily"} == set(
+        range(1, _daily_shard_count() + 1)
+    ), "the daily shards are not exactly 1..N"
+    assert len(entries) == provider_shards + _daily_shard_count() + len(
+        packages_entries
+    )
     return assignments
 
 
@@ -537,8 +554,8 @@ def test_the_plan_checker_fails_each_planted_defect(
             by_shard.setdefault(int(row.group("shard")), {})[row.group("package")] = (
                 int(row.group("weight"))
             )
-    provider_shard = next(s for s, rows in by_shard.items() if PROVIDER_PACKAGE in rows)
-    shard_a, shard_b = [s for s in sorted(by_shard) if s != provider_shard][:2]
+    split_shards = {s for s, rows in by_shard.items() if SPLIT_PACKAGES & set(rows)}
+    shard_a, shard_b = [s for s in sorted(by_shard) if s not in split_shards][:2]
     lightest_name, lightest_weight = min(
         by_shard[shard_a].items(), key=lambda kv: kv[1]
     )
@@ -614,7 +631,7 @@ def test_the_plan_checker_fails_each_planted_defect(
         (
             (int(m.group("weight")), i, m)
             for i, m in rows
-            if m is not None and m.group("package") != PROVIDER_PACKAGE
+            if m is not None and m.group("package") not in SPLIT_PACKAGES
         ),
         key=lambda item: item[0],
     )
@@ -626,12 +643,12 @@ def test_the_plan_checker_fails_each_planted_defect(
     }
     source = int(moved.group("shard"))
     others = sorted((t for t in totals if t != source), key=lambda t: -totals[t])
-    provider_shard = next(
+    split_shards = {
         int(m.group("shard"))
         for _, m in rows
-        if m is not None and m.group("package") == PROVIDER_PACKAGE
-    )
-    target = next(t for t in others if t != provider_shard)
+        if m is not None and m.group("package") in SPLIT_PACKAGES
+    }
+    target = next(t for t in others if t not in split_shards)
     unbalanced = list(lines)
     unbalanced[index] = f"  SHARD {target} {moved.group('package')} weight={weight}s"
     for position, line in enumerate(unbalanced):
@@ -670,7 +687,7 @@ def test_each_shard_dry_run_executes_only_its_manifest_assignment(
     selected_packages: list[str] = []
     ran = 0
     for shard, rows in sorted(assignments.items()):
-        want = set(rows) - {PROVIDER_PACKAGE}
+        want = set(rows) - SPLIT_PACKAGES
         if not want:
             continue  # the planner runs no packages job for a providersync-only shard
         result = _run_check_go("integration-shard", "packages", str(shard), "--dry-run")
@@ -690,7 +707,7 @@ def test_each_shard_dry_run_executes_only_its_manifest_assignment(
     assert ran >= 2, "fewer than two packages shards ran: the loop measured nothing"
 
     assert len(selected_packages) == len(set(selected_packages))
-    assert set(selected_packages) == _expected_packages() - {PROVIDER_PACKAGE}
+    assert set(selected_packages) == _expected_packages() - SPLIT_PACKAGES
 
     selected_tests: list[str] = []
     for shard in range(1, _provider_shard_count() + 1):
@@ -708,6 +725,55 @@ def test_each_shard_dry_run_executes_only_its_manifest_assignment(
     expected_tests = _providersync_top_level_tests()
     assert len(selected_tests) == len(set(selected_tests))
     assert set(selected_tests) == expected_tests
+
+
+def _daily_go_test_list() -> set[str]:
+    """Every test the compiled daily package registers, from `go test -list`."""
+    env = os.environ.copy()
+    env["GOTOOLCHAIN"] = "go1.27.0"
+    env["GOWORK"] = "off"
+    env["GOCACHE"] = str(TEST_GO_CACHE)
+    result = subprocess.run(
+        [
+            "go",
+            "test",
+            "-mod=readonly",
+            "-tags=integration",
+            "-list",
+            ".*",
+            f"./{DAILY_PACKAGE}",
+        ],
+        cwd=ROOT,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=900,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    return {line for line in result.stdout.splitlines() if line.startswith("Test")}
+
+
+def test_every_daily_test_runs_in_exactly_one_daily_shard() -> None:
+    selected: list[str] = []
+    for shard in range(1, _daily_shard_count() + 1):
+        result = _run_check_go("integration-shard", "daily", str(shard), "--dry-run")
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert f"daily test shard {shard}: DRY RUN" in result.stdout
+        chosen = [
+            line.removeprefix("  DAILY-TEST-RUN ")
+            for line in result.stdout.splitlines()
+            if line.startswith("  DAILY-TEST-RUN ")
+        ]
+        assert chosen, f"daily shard {shard} selected no tests"
+        selected.extend(chosen)
+    assert len(selected) == len(set(selected)), "a daily test is in two shards"
+    # TestMain is the process entry point; `go test -list` never reports it.
+    listed = _daily_go_test_list()
+    assert set(selected) == listed, (
+        f"in no shard: {sorted(listed - set(selected))[:5]}; "
+        f"in a shard but not compiled: {sorted(set(selected) - listed)[:5]}"
+    )
 
 
 def test_manifest_drift_and_duplicate_packages_fail_loudly(tmp_path: Path) -> None:

@@ -101,6 +101,28 @@ type TeamCatalogResult struct {
 	ProjectsWritten    int
 	// OwnershipWritten is team_project_ownership rows (Linear, GitLab).
 	OwnershipWritten int
+	// OwnershipRetracted is team_project_ownership rows closed because the
+	// fresh snapshot no longer holds them (Jira catalog). They are not part
+	// of OwnershipWritten.
+	OwnershipRetracted int
+	// OwnershipSnapshotIncomplete says the run did not read its source to
+	// the end, so it closed no team_project_ownership row.
+	OwnershipSnapshotIncomplete bool
+	// ProjectLinksSeen and the four skip counts say what became of the
+	// provider's team-to-project link rows in a collector that reads such
+	// rows (the Atlassian Teams step of Jira): every link of a read that
+	// reached its end is seen, and is either an ownership row
+	// (OwnershipWritten counts the rows persisted) or skipped for one of
+	// these reasons. NotProject: the link's target is a container that is not
+	// a project (a Confluence or Loom space). NoNativeID / NoProjectKey: a
+	// project link without the id or the key the ownership row needs.
+	// UnknownType: a target of a type the collector does not know (a
+	// provider-side change; the snapshot is then not complete).
+	ProjectLinksSeen               int
+	ProjectLinksSkippedNotProject  int
+	ProjectLinksSkippedNoNativeID  int
+	ProjectLinksSkippedNoKey       int
+	ProjectLinksSkippedUnknownType int
 	// ProjectsWithoutKey (CHAOS-4530, "a team key is not a project key")
 	// counts, of ProjectsWritten, how many `projects` rows this call wrote
 	// with a nil project_key. Zero for a collector that never writes

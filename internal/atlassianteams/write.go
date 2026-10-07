@@ -3,6 +3,7 @@ package atlassianteams
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -46,6 +47,20 @@ type Result struct {
 	OwnershipWritten   int
 	ExpiredMemberships int
 	ExpiredOwnership   int
+	// UnreadableProjectLinkTeams counts the teams of which this call closed
+	// no project link, because the provider returned a Jira project link of
+	// the team that got no row (Rows.UnreadableProjectLinkTeams).
+	UnreadableProjectLinkTeams int
+	// ProjectLinks is the collection's own link counts (Rows.ProjectLinks):
+	// links seen, skipped by reason, and team reads that failed. With
+	// OwnershipWritten it says what became of every link the provider
+	// returned. Set whenever the project links were selected, also when no
+	// row was written.
+	ProjectLinks ProjectLinkCounts
+	// ProjectLinksIncomplete says the project links were selected and the
+	// collection was not a complete snapshot (Rows.ProjectLinksComplete is
+	// false): this call closed no project link.
+	ProjectLinksIncomplete bool
 	// DeactivatedTeams counts catalog rows of Atlassian teams the snapshot no
 	// longer returns (deleted upstream), rewritten inactive.
 	DeactivatedTeams int
@@ -75,13 +90,15 @@ const (
 // Retraction: the members and project links an Atlassian team held before and
 // the snapshot omits (a person who left, a project it stopped working on, an
 // archived or deleted team) are closed with a replacement row (valid_to = now,
-// the same sort key), because the attribution loaders read valid_to. Only rows
+// the same sort key), because the attribution loaders read valid_to. A project
+// link is closed only by a complete collection (Rows.ProjectLinksComplete,
+// through providersync.PlanOwnershipSnapshot). Only rows
 // of Atlassian teams (their catalog row carries the team ARI) with source
 // native are touched; the project-as-team rows never are. Members and links
 // that stay keep their original valid_from, so a re-run replaces a row instead
 // of adding one. Teams are written only when the structure was selected; an
 // existing team's manual members are carried over, and its project keys when
-// the project links were not read this run.
+// the project links were not read this run, or not read for that team.
 func Write(ctx context.Context, conn driver.Conn, orgID string, rows Rows, selections Selections) (Result, error) {
 	var result Result
 	if conn == nil || orgID == "" {
@@ -143,9 +160,14 @@ func Write(ctx context.Context, conn driver.Conn, orgID string, rows Rows, selec
 	var ownership []OwnershipRow
 	var expiredOwnership []openOwnership
 	if selections.Projects {
-		if ownership, expiredOwnership, err = planOwnership(ctx, conn, orgID, scope, rows.Ownership); err != nil {
+		if ownership, expiredOwnership, err = planOwnership(ctx, conn, orgID, scope, rows.Ownership, now, rows.ProjectLinksComplete, rows.UnreadableProjectLinkTeams); err != nil {
 			return result, fmt.Errorf("read current team project ownership: %w", err)
 		}
+	}
+	if selections.Projects {
+		result.ProjectLinks = rows.ProjectLinks
+		result.ProjectLinksIncomplete = !rows.ProjectLinksComplete
+		result.UnreadableProjectLinkTeams = len(rows.UnreadableProjectLinkTeams)
 	}
 	var done []string
 	fail := func(stage string, err error) (Result, error) {
@@ -172,7 +194,20 @@ func Write(ctx context.Context, conn driver.Conn, orgID string, rows Rows, selec
 		done = append(done, "team project ownership")
 	}
 	if selections.Structure && (len(teamsToWrite) > 0 || len(deactivate) > 0) {
-		if err := writeTeams(ctx, conn, orgID, teamsToWrite, deactivate, now, !selections.Projects); err != nil {
+		// The catalog row's project keys follow the links: a run that closes
+		// no link of a team (the snapshot is not complete, or a link of the
+		// team got no row) keeps the keys the team had next to the ones it
+		// read now.
+		keepKeysOf := map[string]bool{}
+		if selections.Projects && !rows.ProjectLinksComplete {
+			for _, team := range teamsToWrite {
+				keepKeysOf[team.ID] = true
+			}
+		}
+		for _, id := range rows.UnreadableProjectLinkTeams {
+			keepKeysOf[id] = true
+		}
+		if err := writeTeams(ctx, conn, orgID, teamsToWrite, deactivate, now, !selections.Projects, keepKeysOf); err != nil {
 			return fail("write teams", err)
 		}
 		result.TeamsWritten = len(teamsToWrite)
@@ -269,6 +304,8 @@ type openOwnership struct {
 	specificity       uint16
 	priority          int32
 	validFrom         time.Time
+	// closedAt is the valid_to the snapshot rule closes this row with.
+	closedAt time.Time
 }
 
 // planMemberships reads the open memberships of the teams in scope, gives each
@@ -322,7 +359,20 @@ func planMemberships(ctx context.Context, conn driver.Conn, orgID string, scope 
 	return out, expired, nil
 }
 
-func planOwnership(ctx context.Context, conn driver.Conn, orgID string, scope []string, fresh []OwnershipRow) ([]OwnershipRow, []openOwnership, error) {
+// planOwnership reads the open project links of the teams in scope and
+// applies the shared snapshot rule (providersync.PlanOwnershipSnapshot): a
+// fresh link keeps the valid_from it was first seen with, and every open link
+// the snapshot no longer has is returned to be closed. A team in scope with no
+// fresh link loses all of its links: scope holds the teams deleted upstream.
+//
+// complete is Rows.ProjectLinksComplete: only a collection that read every
+// team's project links to the end closes a link.
+//
+// unreadable is Rows.UnreadableProjectLinkTeams: no open link of such a team
+// is closed. Its open links still go into the plan, because the team's fresh
+// links take their first-seen valid_from from them; only the plan's closing
+// of them is dropped.
+func planOwnership(ctx context.Context, conn driver.Conn, orgID string, scope []string, fresh []OwnershipRow, now time.Time, complete bool, unreadable []string) ([]OwnershipRow, []openOwnership, error) {
 	if len(scope) == 0 {
 		return fresh, nil, nil
 	}
@@ -343,33 +393,36 @@ func planOwnership(ctx context.Context, conn driver.Conn, orgID string, scope []
 	if err := result.Err(); err != nil {
 		return nil, nil, err
 	}
-	firstSeen := map[string]time.Time{}
-	for _, row := range open {
-		key := row.teamID + "\x00" + row.projectID
-		if at, ok := firstSeen[key]; !ok || row.validFrom.Before(at) {
-			firstSeen[key] = row.validFrom
-		}
+	freshFacts := make([]providersync.OwnershipSnapshotRow, len(fresh))
+	for i, row := range fresh {
+		freshFacts[i] = providersync.OwnershipSnapshotRow{TeamID: row.TeamID, ProjectID: row.ProjectID, Source: row.Source, ValidFrom: row.ValidFrom}
 	}
-	current := map[string]bool{}
+	openFacts := make([]providersync.OwnershipSnapshotRow, len(open))
+	for i, row := range open {
+		openFacts[i] = providersync.OwnershipSnapshotRow{TeamID: row.teamID, ProjectID: row.projectID, Source: row.source, ValidFrom: row.validFrom}
+	}
+	plan := providersync.PlanOwnershipSnapshot(providersync.OwnershipSnapshot{Fresh: freshFacts, Complete: complete}, openFacts, now)
 	out := make([]OwnershipRow, len(fresh))
 	for i, row := range fresh {
-		key := row.TeamID + "\x00" + row.ProjectID
-		current[key] = true
-		if at, ok := firstSeen[key]; ok && at.Before(row.ValidFrom) {
-			row.ValidFrom = at
-		}
+		row.ValidFrom = plan.ValidFrom[i]
 		out[i] = row
 	}
 	var expired []openOwnership
-	for _, row := range open {
-		if !current[row.teamID+"\x00"+row.projectID] {
-			expired = append(expired, row)
+	for _, retraction := range plan.Retract {
+		row := open[retraction.Open]
+		if slices.Contains(unreadable, row.teamID) {
+			continue
 		}
+		row.closedAt = retraction.ClosedAt
+		expired = append(expired, row)
 	}
 	return out, expired, nil
 }
 
-func writeTeams(ctx context.Context, conn driver.Conn, orgID string, teams []TeamRow, deactivate []inactiveTeam, now time.Time, keepProjectKeys bool) error {
+// writeTeams writes the catalog rows. keepProjectKeys keeps every team's
+// stored project keys (the links were not selected); keepKeysOf names the
+// teams that keep their stored keys next to the ones this run read.
+func writeTeams(ctx context.Context, conn driver.Conn, orgID string, teams []TeamRow, deactivate []inactiveTeam, now time.Time, keepProjectKeys bool, keepKeysOf map[string]bool) error {
 	ids := make([]string, len(teams))
 	for i, team := range teams {
 		ids[i] = team.ID
@@ -379,7 +432,7 @@ func writeTeams(ctx context.Context, conn driver.Conn, orgID string, teams []Tea
 		return err
 	}
 	var existingKeys map[string][]string
-	if keepProjectKeys {
+	if keepProjectKeys || len(keepKeysOf) > 0 {
 		if existingKeys, err = readProjectKeys(ctx, conn, orgID, ids); err != nil {
 			return err
 		}
@@ -395,8 +448,13 @@ func writeTeams(ctx context.Context, conn driver.Conn, orgID string, teams []Tea
 			manualMembers = []string{}
 		}
 		keys := team.ProjectKeys
-		if keepProjectKeys {
+		switch {
+		case keepProjectKeys:
 			keys = existingKeys[team.ID]
+		case keepKeysOf[team.ID]:
+			keys = append(append([]string{}, existingKeys[team.ID]...), team.ProjectKeys...)
+			slices.Sort(keys)
+			keys = slices.Compact(keys)
 		}
 		if keys == nil {
 			keys = []string{}
@@ -483,7 +541,7 @@ func writeOwnership(ctx context.Context, conn driver.Conn, orgID string, rows []
 		}
 	}
 	for _, row := range expired {
-		closedAt := now
+		closedAt := row.closedAt
 		if err := batch.Append(
 			orgID, Provider, row.teamID, row.projectID, row.projectKey, row.source, row.isPrimary, row.specificity,
 			row.priority, row.validFrom, &closedAt, now,

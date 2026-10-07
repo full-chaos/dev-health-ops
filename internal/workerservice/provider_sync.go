@@ -373,20 +373,11 @@ func buildProviderSyncHandlerWithRuntimeDependencies(
 				if err != nil {
 					return providersync.CompleteRouteExecutor{}, err
 				}
-				ghDeriver, err := providersync.NewGitHubWorkItemDeriver(
-					clickhouseConnection, session,
-					workItemsRuntime.statusMappingPath,
-					workItemsRuntime.investmentConfigPath,
-				)
-				if err != nil {
-					return providersync.CompleteRouteExecutor{}, err
-				}
 				routeHandler = providersync.GitHubWorkItemsRouteHandler{
 					Projects: providersync.GitHubProjectV2Fetcher{},
 					ProjectMembershipSnapshotDiff: providersync.GitHubProjectV2SnapshotDiffClickHouseReader{
 						Conn: clickhouseConnection,
 					},
-					Deriver: ghDeriver,
 				}
 				sink, readback = ghSink, ghSink
 			case session.Claim.Provider == "gitlab" &&
@@ -400,18 +391,7 @@ func buildProviderSyncHandlerWithRuntimeDependencies(
 				if err != nil {
 					return providersync.CompleteRouteExecutor{}, err
 				}
-				glDeriver, err := providersync.NewGitLabWorkItemDeriver(
-					clickhouseConnection, session,
-					workItemsRuntime.statusMappingPath,
-					workItemsRuntime.investmentConfigPath,
-				)
-				if err != nil {
-					return providersync.CompleteRouteExecutor{}, err
-				}
-				routeHandler = providersync.GitLabWorkItemsRouteHandler{
-					StatusMapping: workItemsRuntime.statusMapping,
-					Derived:       glDeriver,
-				}
+				routeHandler = newGitLabWorkItemsRouteHandler(workItemsRuntime.statusMapping)
 				sink, readback = glSink, glSink
 			case session.Claim.Provider == "jira" &&
 				session.Claim.Dataset == "work-items":
@@ -424,17 +404,8 @@ func buildProviderSyncHandlerWithRuntimeDependencies(
 				if err != nil {
 					return providersync.CompleteRouteExecutor{}, err
 				}
-				jiraDeriver, err := providersync.NewJiraWorkItemDeriver(
-					clickhouseConnection, session,
-					workItemsRuntime.statusMappingPath,
-					workItemsRuntime.investmentConfigPath,
-				)
-				if err != nil {
-					return providersync.CompleteRouteExecutor{}, err
-				}
 				routeHandler = providersync.JiraAtlassianRouteHandler{
 					StatusMapping: workItemsRuntime.statusMapping,
-					Derived:       jiraDeriver,
 				}
 				sink, readback = jiraSink, jiraSink
 			case session.Claim.Provider == "linear" &&
@@ -448,19 +419,10 @@ func buildProviderSyncHandlerWithRuntimeDependencies(
 				if err != nil {
 					return providersync.CompleteRouteExecutor{}, err
 				}
-				linearDeriver, err := providersync.NewLinearWorkItemDeriver(
-					clickhouseConnection, session,
-					workItemsRuntime.statusMappingPath,
-					workItemsRuntime.investmentConfigPath,
-				)
-				if err != nil {
-					return providersync.CompleteRouteExecutor{}, err
-				}
 				routeHandler = providersync.LinearWorkItemFamilyRouteHandler{
 					Direct: providersync.LinearWorkItemsRouteHandler{
 						GlobalDiscovery: true,
 					},
-					Derived: linearDeriver,
 				}
 				sink, readback = linearSink, linearSink
 			case session.Claim.Provider == "jira" &&
@@ -853,5 +815,18 @@ func withRequestUsage(handler *providerunit.Handler, writer *providersync.Reques
 		executor, err := build(session)
 		executor.RequestUsage = writer
 		return executor, err
+	}
+}
+
+// newGitLabWorkItemsRouteHandler builds the GitLab work-items route handler the
+// worker runs. It sets NO page limits on purpose: the route's own defaults apply,
+// and for every nested list that default is the 100-page hard ceiling
+// (providersync gitLabWorkItemsNestedHardMaxPages, CHAOS-8777). A limit set here
+// could only lower the ceiling (the route clamps it), never raise it.
+func newGitLabWorkItemsRouteHandler(
+	statusMapping *providersync.StatusMapping,
+) providersync.GitLabWorkItemsRouteHandler {
+	return providersync.GitLabWorkItemsRouteHandler{
+		StatusMapping: statusMapping,
 	}
 }

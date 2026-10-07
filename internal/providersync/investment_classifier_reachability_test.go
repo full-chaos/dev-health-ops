@@ -27,14 +27,14 @@ const investmentWorkItemArtifactLiteralType = "InvestmentArtifact"
 
 // investmentGoCallSitePremise is what the production Go source says about the
 // artifact the work-item call site builds. Both fields are REFLECTED from the
-// real Go source (github_work_item_engine_destinations.go) via go/ast, never
+// real Go source (internal/jobs/metrics/workitemengine/compute.go) via go/ast, never
 // transcribed.
 //
 // CHAOS-5351: this used to reflect PYTHON (job_work_items.py's now-deleted
 // compute_work_item_engine_destinations_daily, via
 // testdata/python_investment_call_site.py's dict-literal reflection). Python
 // is deleted; Go's own InvestmentArtifact{...} composite literal in
-// buildGitHubInvestmentDestinationsDaily is the production call site now, so
+// workitemengine.ComputeInvestmentDaily is the production call site now, so
 // the premise must derive from IT.
 type investmentGoCallSitePremise struct {
 	// ArtifactKeys are the lower-cased field names set in the InvestmentArtifact{}
@@ -282,7 +282,7 @@ func investmentExprReadsFrom(expr ast.Expr, name string) bool {
 func investmentReflectGoCallSite(t *testing.T) investmentGoCallSitePremise {
 	t.Helper()
 	root := investmentRepoRoot(t)
-	path := filepath.Join(root, "internal/providersync/github_work_item_engine_destinations.go")
+	path := filepath.Join(root, "internal/jobs/metrics/workitemengine/compute.go")
 	src, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("read %s: %v", path, err)
@@ -344,7 +344,7 @@ func f(items []item) {
 
 // TestInvestmentGoCallSiteReflectorFailsWhenLiteralMissing is the tripwire's
 // own tripwire: if a refactor ever moves the InvestmentArtifact{...} literal
-// out of github_work_item_engine_destinations.go (or duplicates it, or turns
+// out of workitemengine/compute.go (or duplicates it, or turns
 // it positional), investmentParseGoCallSitePremise must return an error, not
 // silently report an empty or partial premise that would make every
 // assertion below it vacuously true. Driven directly against synthetic
@@ -405,9 +405,9 @@ func f(items []item) {
 // tripwire below stands on, and the reason it is a separate test is that it
 // must fail with its OWN name when the premise moves.
 //
-// Both facts come from production Go (github_work_item_engine_destinations.go):
+// Both facts come from production Go (workitemengine/compute.go):
 //
-//   - buildGitHubInvestmentDestinationsDaily's InvestmentArtifact{...} literal
+//   - ComputeInvestmentDaily's InvestmentArtifact{...} literal
 //     sets exactly Labels, Component, Title and Provider -- so Paths is
 //     absent, which is what kills the three path_prefix rules;
 //   - Component is always `&emptyComponent` (a local, never `item.Component`),

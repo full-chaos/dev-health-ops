@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-go/clickhouse"
+
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/newestrow"
 )
 
 // QueryClient is the read-only ClickHouse query boundary this package needs --
@@ -164,14 +166,34 @@ func loadWorkItemOverlay(
 		Name: "start_date", Value: startDate(today, historyWeeks),
 	})
 
+	where := strings.Join(conditions, " AND ")
+	// current_wip is the sum of each team's OWN newest row in the window
+	// (CHAOS-8498); one maximum day over the team set dropped a team whose
+	// newest day was older. average_wip keeps the per-day sums.
 	query := fmt.Sprintf(`
-        SELECT
-            avg(wip_count_end_of_day) AS average_wip,
-            argMax(wip_count_end_of_day, day) AS current_wip
+        SELECT average_wip, current_wip
         FROM (
-            SELECT
-                day,
-                sum(wip_count_end_of_day) AS wip_count_end_of_day
+            SELECT avg(wip_count_end_of_day) AS average_wip
+            FROM (
+                SELECT
+                    day,
+                    sum(wip_count_end_of_day) AS wip_count_end_of_day
+                FROM (
+                    SELECT
+                        day,
+                        provider,
+                        work_scope_id,
+                        team_id,
+                        argMax(wip_count_end_of_day, computed_at) AS wip_count_end_of_day
+                    FROM work_item_metrics_daily
+                    WHERE %s
+                    GROUP BY day, provider, work_scope_id, team_id
+                )
+                GROUP BY day
+            )
+        ) AS average_part
+        CROSS JOIN (
+            SELECT sum(wip_count_end_of_day) AS current_wip
             FROM (
                 SELECT
                     day,
@@ -181,11 +203,11 @@ func loadWorkItemOverlay(
                     argMax(wip_count_end_of_day, computed_at) AS wip_count_end_of_day
                 FROM work_item_metrics_daily
                 WHERE %s
+                  AND %s
                 GROUP BY day, provider, work_scope_id, team_id
             )
-            GROUP BY day
-        )
-    `, strings.Join(conditions, " AND "))
+        ) AS current_part
+    `, where, where, newestrow.PerTeamPredicate("work_item_metrics_daily", where))
 
 	rows, err := client.Query(ctx, query, bindings)
 	if err != nil {
@@ -247,14 +269,12 @@ func loadStaleWIP(
                 (argMax(tuple(wip_age_p50_hours), computed_at)).1 AS wip_age_p50_hours,
                 (argMax(tuple(wip_age_p90_hours), computed_at)).1 AS wip_age_p90_hours
             FROM work_item_metrics_daily
-            WHERE day = (
-                SELECT max(day) FROM work_item_metrics_daily WHERE %s
-            )
+            WHERE %s
             AND %s
             GROUP BY provider, work_scope_id, team_id
         )
         WHERE wip_age_p50_hours IS NOT NULL OR wip_age_p90_hours IS NOT NULL
-    `, where, where)
+    `, newestrow.PerTeamPredicate("work_item_metrics_daily", where), where)
 
 	rows, err := client.Query(ctx, query, bindings)
 	if err != nil {
@@ -320,13 +340,11 @@ func loadEstimateCoverage(
                 argMax(unestimated_count, computed_at) AS unestimated_count,
                 argMax(backlog_size, computed_at) AS backlog_size
             FROM estimate_coverage_metrics_daily
-            WHERE day = (
-                SELECT max(day) FROM estimate_coverage_metrics_daily WHERE %s
-            )
+            WHERE %s
             AND %s
             GROUP BY provider, work_scope_id, team_id
         )
-    `, where, where)
+    `, newestrow.PerTeamPredicate("estimate_coverage_metrics_daily", where), where)
 
 	rows, err := client.Query(ctx, query, bindings)
 	if err != nil {
@@ -459,13 +477,11 @@ func loadBacklog(
                 provider,
                 argMax(wip_count_end_of_day, computed_at) AS wip_count_end_of_day
             FROM work_item_metrics_daily
-            WHERE day = (
-                SELECT max(day) FROM work_item_metrics_daily WHERE %s
-            )
+            WHERE %s
             AND %s
             GROUP BY team_id, work_scope_id, provider
         )
-    `, where, where)
+    `, newestrow.PerTeamPredicate("work_item_metrics_daily", where), where)
 
 	rows, err := client.Query(ctx, query, bindings)
 	if err != nil {

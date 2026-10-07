@@ -160,6 +160,27 @@ type PlannerInput struct {
 	// exactly as it did before CHAOS-4060. The production caller
 	// (NativeMaterializer) always supplies a real, non-nil snapshot.
 	ExecutedProof *providersync.ExecutedProofEvidence
+	// PlannerManagedParent is true only for a planner-managed parent config
+	// planned by a scheduled occurrence with no explicit dataset selector
+	// (CHAOS-8773). Only then does "no enabled work-item family row" mean the
+	// operator or a migration turned work items off, so only then does
+	// BuildScheduledPlan report it. A manual selector that names other
+	// datasets, or a source-scoped child config, never reports.
+	PlannerManagedParent bool
+	// LastWorkItemSuccessAt is the materializer's answer to "when did this
+	// integration last finish a work-items unit with status success"
+	// (CHAOS-8773); nil means never. The planner is pure and cannot read it;
+	// the materializer loads it only when the work-item family list is empty.
+	// It decides between a count only (opted out, never ran, or stopped long
+	// ago) and a count plus WARN (stopped within workItemFamilyStoppedWarnWindow).
+	LastWorkItemSuccessAt *time.Time
+	// WorkItemClockAt is the DATABASE clock read in the same statement as
+	// LastWorkItemSuccessAt. The WARN window is measured against it, never
+	// against Now: Now is the occurrence's scheduled time, and a delayed or
+	// retried occurrence is replayed oldest first, so an age taken from Now
+	// goes negative and warns for a success that is long past the window.
+	// Zero when LastWorkItemSuccessAt is nil or the read failed.
+	WorkItemClockAt time.Time
 }
 
 // PlannedUnit is the complete secret-free unit row prior to persistence.
@@ -258,8 +279,13 @@ func BuildScheduledPlan(input PlannerInput) ([]PlannedUnit, error) {
 		before = input.Before.UTC()
 	}
 	units := make([]PlannedUnit, 0, len(input.Sources)*len(input.Datasets))
+	reportedStoppedFamily := make(map[string]bool, 1)
 	for _, source := range input.Sources {
 		provider := strings.ToLower(source.Provider)
+		if input.PlannerManagedParent && !reportedStoppedFamily[provider] {
+			reportedStoppedFamily[provider] = true
+			reportWorkItemFamilyNotEnabled(input, provider)
+		}
 		prsEnabled := false
 		familyDatasets := workitemcontract.FamilyDatasets()
 		family := make([]PlanDataset, 0, len(familyDatasets))
@@ -367,6 +393,89 @@ func BuildScheduledPlan(input PlannerInput) ([]PlannedUnit, error) {
 		}
 	}
 	return units, nil
+}
+
+// workItemFamilyProviders are the four providers whose work items ride the
+// atomic work-item family. A work-item family row is opt-in for each of them.
+var workItemFamilyProviders = []string{"github", "gitlab", "jira", "linear"}
+
+// planHasWorkItemFamilyDataset reports whether the enabled dataset list holds
+// at least one work-item family row the planner would collapse for provider.
+// It is the single definition shared by the planner and the materializer, so
+// the "ran before" query runs exactly when the planner reports.
+func planHasWorkItemFamilyDataset(provider string, datasets []PlanDataset) bool {
+	for _, dataset := range datasets {
+		if !workitemcontract.IsFamilyDataset(dataset.Key) {
+			continue
+		}
+		if _, ok := datasetSpecification(provider, dataset.Key); ok {
+			return true
+		}
+	}
+	return false
+}
+
+// PlanNeedsWorkItemLastSuccess reports whether the materializer must load the
+// LastWorkItemSuccessAt fact for this plan: a scheduled planner-managed
+// parent of a work-item provider whose enabled dataset list holds no family
+// row.
+func PlanNeedsWorkItemLastSuccess(provider string, plannerManaged bool, datasets []PlanDataset) bool {
+	return plannerManaged && slices.Contains(workItemFamilyProviders, provider) &&
+		!planHasWorkItemFamilyDataset(provider, datasets)
+}
+
+// reportWorkItemFamilyNotEnabled is the CHAOS-8773 signal. A parent config
+// with no enabled work-item family row plans no work-items unit, and before
+// this it did so with no log, no row and no metric: alembic 0108 turned such
+// rows off on real deployments and work items stopped for weeks unseen.
+// Every such plan counts on sync_plan_gate_total (outcome family_not_enabled).
+// A WARN is added only when the integration finished a work-items unit
+// within workItemFamilyStoppedWarnWindow, because work items are opt-in and a
+// config that never ran them, or stopped long ago, is not a fault. The log
+// call carries no error operand.
+func reportWorkItemFamilyNotEnabled(input PlannerInput, provider string) {
+	if !slices.Contains(workItemFamilyProviders, provider) ||
+		planHasWorkItemFamilyDataset(provider, input.Datasets) {
+		return
+	}
+	globalPlanGateTelemetry.observe(provider, canonicalWorkItemsDataset, planGateOutcomeFamilyNotEnabled)
+	ageDays, recent := workItemFamilyStoppedAgeDays(input.WorkItemClockAt, input.LastWorkItemSuccessAt)
+	if !recent {
+		return
+	}
+	slog.Default().Warn("sync.plan.work_item_family_stopped",
+		slog.String("provider", provider),
+		slog.String("org_id", input.OrgID),
+		slog.String("integration_id", input.IntegrationID),
+		slog.String("family", canonicalWorkItemsDataset),
+		slog.Int("last_success_age_days", ageDays),
+		slog.Int("warn_window_days", int(workItemFamilyStoppedWarnWindow/(24*time.Hour))))
+}
+
+// workItemFamilyStoppedWarnWindow bounds the WARN to recent history. A
+// config whose operator turned work items off on purpose long ago still
+// counts on sync_plan_gate_total every plan, but stops writing a WARN once
+// its newest successful work-items unit is older than this. The WARN is not
+// gated on sync_targets: the incident was a config whose target was absent
+// while the operator believed work items were on.
+const workItemFamilyStoppedWarnWindow = 14 * 24 * time.Hour
+
+// workItemFamilyStoppedAgeDays returns the whole-day age of the newest
+// successful work-items unit at now (the database clock) and whether it is inside the WARN window
+// (a unit exactly the window old still warns). A nil last success (never ran)
+// is outside it, and a last success after now (clock skew) is age zero.
+func workItemFamilyStoppedAgeDays(now time.Time, lastSuccess *time.Time) (int, bool) {
+	if lastSuccess == nil {
+		return 0, false
+	}
+	age := now.Sub(*lastSuccess)
+	if age < 0 {
+		age = 0
+	}
+	if age > workItemFamilyStoppedWarnWindow {
+		return 0, false
+	}
+	return int(age / (24 * time.Hour)), true
 }
 
 // buildWorkItemFamilyUnit collapses the atomic work-item family (all

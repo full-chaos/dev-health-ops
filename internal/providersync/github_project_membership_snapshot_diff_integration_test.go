@@ -4,7 +4,6 @@ package providersync
 
 import (
 	"context"
-	"encoding/json"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"testing"
 	"time"
@@ -49,17 +48,13 @@ func TestGitHubProjectV2SnapshotDiffAddsIssueAndRetiresARemovedSubjectFromPresen
 	if err != nil {
 		t.Fatal(err)
 	}
-	derived := map[string][]json.RawMessage{}
-	for _, destination := range githubWorkItemDerivedDestinations {
-		derived[destination] = []json.RawMessage{}
-	}
 
 	// Sync 1: the board carries an issue (#7) and a pull request (#42).
 	firstSyncAt := time.Date(2026, 8, 4, 12, 0, 0, 0, time.UTC)
 	firstDoer := &gitHubProjectV2Doer{t: t, replies: []string{
 		`{"data":{"organization":{"projectV2":{"items":{"nodes":[` +
-			`{"id":"PVTI_ISSUE","content":{"__typename":"Issue","number":7,"title":"Ship it","state":"OPEN","repository":{"nameWithOwner":"acme/api"},"labels":{"nodes":[]},"assignees":{"nodes":[]}},"fieldValues":{"nodes":[]},"changes":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}},` +
-			`{"id":"PVTI_PR","createdAt":"2026-08-01T08:00:00Z","content":{"__typename":"PullRequest","number":42,"title":"A PR","repository":{"nameWithOwner":"acme/api"}},"fieldValues":{"nodes":[]},"changes":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}` +
+			`{"id":"PVTI_ISSUE","content":{"__typename":"Issue","number":7,"title":"Ship it","state":"OPEN","repository":{"nameWithOwner":"acme/api"},"labels":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}},"assignees":{"nodes":[]}},"fieldValues":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}},"changes":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}},` +
+			`{"id":"PVTI_PR","createdAt":"2026-08-01T08:00:00Z","content":{"__typename":"PullRequest","number":42,"title":"A PR","repository":{"nameWithOwner":"acme/api"}},"fieldValues":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}},"changes":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}` +
 			`],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}`,
 	}}
 	firstFetch, err := (GitHubProjectV2Fetcher{}).Fetch(
@@ -85,7 +80,7 @@ func TestGitHubProjectV2SnapshotDiffAddsIssueAndRetiresARemovedSubjectFromPresen
 	if len(firstFetch.Rows.ProjectMemberships) != 2 {
 		t.Fatalf("sync 1 memberships=%+v, want the PR add plus the issue add", firstFetch.Rows.ProjectMemberships)
 	}
-	firstEffects, err := buildGitHubWorkItemsRouteEffects(firstFetch.Rows, derived, nil)
+	firstEffects, err := buildGitHubWorkItemsRouteEffects(firstFetch.Rows)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -120,7 +115,7 @@ WHERE org_id = ? AND subject_kind = 'work_item' AND subject_id = ?`,
 	secondSyncAt := firstSyncAt.Add(24 * time.Hour)
 	secondDoer := &gitHubProjectV2Doer{t: t, replies: []string{
 		`{"data":{"organization":{"projectV2":{"items":{"nodes":[` +
-			`{"id":"PVTI_PR","createdAt":"2026-08-01T08:00:00Z","content":{"__typename":"PullRequest","number":42,"title":"A PR","repository":{"nameWithOwner":"acme/api"}},"fieldValues":{"nodes":[]},"changes":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}` +
+			`{"id":"PVTI_PR","createdAt":"2026-08-01T08:00:00Z","content":{"__typename":"PullRequest","number":42,"title":"A PR","repository":{"nameWithOwner":"acme/api"}},"fieldValues":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}},"changes":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}` +
 			`],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}`,
 	}}
 	secondFetch, err := (GitHubProjectV2Fetcher{}).Fetch(
@@ -142,7 +137,7 @@ WHERE org_id = ? AND subject_kind = 'work_item' AND subject_id = ?`,
 		t.Fatalf("sync 2 diff=%+v, want exactly one work_item removal naming the issue", secondDiff)
 	}
 	secondFetch.Rows.ProjectMemberships = append(secondFetch.Rows.ProjectMemberships, secondDiff...)
-	secondEffects, err := buildGitHubWorkItemsRouteEffects(secondFetch.Rows, derived, nil)
+	secondEffects, err := buildGitHubWorkItemsRouteEffects(secondFetch.Rows)
 	if err != nil {
 		t.Fatal(err)
 	}

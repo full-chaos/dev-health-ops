@@ -3,10 +3,10 @@ package providersync
 import (
 	"context"
 	"encoding/json"
-	"math"
-	"sort"
+	"errors"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/workitemengine"
 	"github.com/full-chaos/dev-health-ops/internal/teamattribution"
 	"github.com/google/uuid"
 )
@@ -16,7 +16,7 @@ const (
 	githubInvestmentClassificationsDestination    = "investment_classifications_daily"
 	githubInvestmentMetricsDestination            = "investment_metrics_daily"
 	githubWorkItemEngineDestinationStampPrecision = time.Second
-	githubWorkItemEngineArtifactType              = "work_item"
+	githubWorkItemEngineArtifactType              = workitemengine.ArtifactType
 )
 
 // githubIssueTypeMetricsDailyRow mirrors IssueTypeMetricsRecord. repo_id is
@@ -211,39 +211,37 @@ func (engine *GitHubWorkItemEngineDeriver) deriveRowsForProvider(
 	}, nil
 }
 
-type githubNullableUUIDKey struct {
-	value uuid.UUID
-	valid bool
-}
-
-func newGitHubNullableUUIDKey(value *uuid.UUID) githubNullableUUIDKey {
-	if value == nil || *value == uuid.Nil {
-		return githubNullableUUIDKey{}
+// githubWorkItemEngineItems projects the unit's rows onto the fields the shared
+// compute reads. The slice keeps the order of rows.WorkItems, so an index of
+// one is an index of the other.
+func githubWorkItemEngineItems(rows githubWorkItemRows) []workitemengine.Item {
+	items := make([]workitemengine.Item, 0, len(rows.WorkItems))
+	for _, item := range rows.WorkItems {
+		items = append(items, workitemengine.Item{
+			WorkItemID: item.WorkItemID, Provider: item.Provider, Type: item.Type,
+			Title: item.Title, Labels: item.Labels, RepoID: item.RepoID,
+			CreatedAt: item.CreatedAt, StartedAt: item.StartedAt,
+			CompletedAt: item.CompletedAt, StoryPoints: item.StoryPoints,
+		})
 	}
-	return githubNullableUUIDKey{value: *value, valid: true}
+	return items
 }
 
-func (key githubNullableUUIDKey) pointer() *uuid.UUID {
-	if !key.valid {
-		return nil
+// githubWorkItemEngineTeamResolver answers from the live attribution cascade
+// over the facts this unit loaded.
+func githubWorkItemEngineTeamResolver(
+	rows githubWorkItemRows,
+	derived teamattribution.GithubWorkItemDerivationContext,
+) workitemengine.TeamResolver {
+	return func(index int) *string {
+		teamID, _, _ := derived.Resolve(githubWorkItemDerivationSubjectFromRow(rows.WorkItems[index]))
+		return teamID
 	}
-	value := key.value
-	return &value
 }
 
-type githubIssueTypeMetricsKey struct {
-	repoID                          githubNullableUUIDKey
-	provider, teamID, issueTypeNorm string
-}
-
-type githubIssueTypeMetricsBucket struct {
-	created, completed, active int
-	cycleHours                 []float64
-}
-
-// buildGitHubIssueTypeMetricsDaily mirrors the issue-type path in the production
-// Python work-item engine helper. In particular, the bucket is opened before any
-// time check, so a future-only item still materializes an all-zero row (D16).
+// buildGitHubIssueTypeMetricsDaily is the sync deriver's adapter over
+// workitemengine.ComputeIssueTypeMetricsDaily: the arithmetic lives there, the
+// stamp (day, computed_at, org_id) is added here.
 func buildGitHubIssueTypeMetricsDaily(
 	claim Claim,
 	rows githubWorkItemRows,
@@ -251,65 +249,24 @@ func buildGitHubIssueTypeMetricsDaily(
 	derived teamattribution.GithubWorkItemDerivationContext,
 	statusMapping *StatusMapping,
 ) []githubIssueTypeMetricsDailyRow {
-	buckets := make(map[githubIssueTypeMetricsKey]*githubIssueTypeMetricsBucket)
-	order := make([]githubIssueTypeMetricsKey, 0, len(rows.WorkItems))
-	for _, item := range rows.WorkItems {
-		teamID, _, _ := derived.Resolve(githubWorkItemDerivationSubjectFromRow(item))
-		key := githubIssueTypeMetricsKey{
-			repoID:        newGitHubNullableUUIDKey(item.RepoID),
-			provider:      item.Provider,
-			teamID:        normalizeGitHubWorkItemDerivedTeamID(teamID),
-			issueTypeNorm: statusMapping.NormalizeType(item.Provider, item.Type, item.Labels),
-		}
-		bucket := buckets[key]
-		if bucket == nil {
-			bucket = &githubIssueTypeMetricsBucket{}
-			buckets[key] = bucket
-			order = append(order, key)
-		}
-		created := item.CreatedAt.UTC()
-		if !created.Before(dayUTC) && created.Before(end) {
-			bucket.created++
-		}
-		if item.CompletedAt != nil {
-			completed := item.CompletedAt.UTC()
-			if !completed.Before(dayUTC) && completed.Before(end) {
-				bucket.completed++
-				if item.StartedAt != nil {
-					cycle := completed.Sub(item.StartedAt.UTC()).Hours()
-					if cycle >= 0 {
-						bucket.cycleHours = append(bucket.cycleHours, cycle)
-					}
-				}
-			}
-		}
-		if created.Before(end) &&
-			(item.CompletedAt == nil || !item.CompletedAt.UTC().Before(dayUTC)) {
-			bucket.active++
-		}
-	}
-
-	result := make([]githubIssueTypeMetricsDailyRow, 0, len(order))
-	for _, key := range order {
-		bucket := buckets[key]
-		sort.Float64s(bucket.cycleHours)
-		var p50, p90 float64
-		if len(bucket.cycleHours) > 0 {
-			p50 = bucket.cycleHours[len(bucket.cycleHours)/2]
-			p90 = bucket.cycleHours[int(float64(len(bucket.cycleHours))*0.9)]
-		}
+	computed := workitemengine.ComputeIssueTypeMetricsDaily(
+		githubWorkItemEngineItems(rows), dayUTC, end,
+		githubWorkItemEngineTeamResolver(rows, derived), statusMapping,
+	)
+	result := make([]githubIssueTypeMetricsDailyRow, 0, len(computed))
+	for _, row := range computed {
 		result = append(result, githubIssueTypeMetricsDailyRow{
-			RepoID:         key.repoID.pointer(),
+			RepoID:         row.RepoID,
 			Day:            newGitHubWorkItemDerivedDay(dayUTC),
-			Provider:       key.provider,
-			TeamID:         key.teamID,
-			IssueTypeNorm:  key.issueTypeNorm,
-			CreatedCount:   bucket.created,
-			CompletedCount: bucket.completed,
-			ActiveCount:    bucket.active,
-			CycleP50Hours:  p50,
-			CycleP90Hours:  p90,
-			LeadP50Hours:   0,
+			Provider:       row.Provider,
+			TeamID:         row.TeamID,
+			IssueTypeNorm:  row.IssueTypeNorm,
+			CreatedCount:   row.CreatedCount,
+			CompletedCount: row.CompletedCount,
+			ActiveCount:    row.ActiveCount,
+			CycleP50Hours:  row.CycleP50Hours,
+			CycleP90Hours:  row.CycleP90Hours,
+			LeadP50Hours:   row.LeadP50Hours,
 			ComputedAt:     computedAt,
 			OrgID:          claim.OrgID,
 		})
@@ -317,46 +274,8 @@ func buildGitHubIssueTypeMetricsDaily(
 	return result
 }
 
-type githubInvestmentMetricKey struct {
-	repoID               githubNullableUUIDKey
-	teamID, area, stream string
-	areaValid            bool
-}
-
-type githubInvestmentMetricBucket struct {
-	deliveryUnits, completed, churn int
-	cycleHours                      []float64
-}
-
-func newGitHubInvestmentMetricKey(
-	repoID *uuid.UUID,
-	teamID string,
-	classification InvestmentClassification,
-) githubInvestmentMetricKey {
-	key := githubInvestmentMetricKey{
-		repoID: newGitHubNullableUUIDKey(repoID), teamID: teamID,
-	}
-	if classification.InvestmentArea != nil {
-		key.area = *classification.InvestmentArea
-		key.areaValid = true
-	}
-	if classification.ProjectStream != nil {
-		key.stream = *classification.ProjectStream
-	}
-	return key
-}
-
-func (key githubInvestmentMetricKey) areaPointer() *string {
-	if !key.areaValid {
-		return nil
-	}
-	value := key.area
-	return &value
-}
-
-// buildGitHubInvestmentDestinationsDaily mirrors the investment path in the
-// production Python work-item engine helper. Classifications cover active items;
-// aggregate metrics are the completed-in-day subset of those same active items.
+// buildGitHubInvestmentDestinationsDaily is the sync deriver's adapter over
+// workitemengine.ComputeInvestmentDaily.
 func buildGitHubInvestmentDestinationsDaily(
 	claim Claim,
 	rows githubWorkItemRows,
@@ -364,97 +283,45 @@ func buildGitHubInvestmentDestinationsDaily(
 	derived teamattribution.GithubWorkItemDerivationContext,
 	classifier *InvestmentClassifier,
 ) ([]githubInvestmentClassificationDailyRow, []githubInvestmentMetricsDailyRow, error) {
-	classifications := make([]githubInvestmentClassificationDailyRow, 0, len(rows.WorkItems))
-	buckets := make(map[githubInvestmentMetricKey]*githubInvestmentMetricBucket)
-	order := make([]githubInvestmentMetricKey, 0, len(rows.WorkItems))
-	emptyComponent := ""
-	for _, item := range rows.WorkItems {
-		created := item.CreatedAt.UTC()
-		if !created.Before(end) ||
-			(item.CompletedAt != nil && item.CompletedAt.UTC().Before(dayUTC)) {
-			continue
+	computedClassifications, computedMetrics, err := workitemengine.ComputeInvestmentDaily(
+		githubWorkItemEngineItems(rows), dayUTC, end,
+		githubWorkItemEngineTeamResolver(rows, derived), classifier,
+	)
+	if err != nil {
+		if errors.Is(err, workitemengine.ErrUnrepresentableDeliveryUnits) {
+			return nil, nil, ErrInvalidConfiguration
 		}
-		classification, err := classifier.Classify(InvestmentArtifact{
-			Labels: item.Labels, Component: &emptyComponent,
-			Title: item.Title, Provider: item.Provider,
-		})
-		if err != nil {
-			return nil, nil, err
-		}
-		stream := ""
-		if classification.ProjectStream != nil {
-			stream = *classification.ProjectStream
-		}
+		return nil, nil, err
+	}
+	classifications := make([]githubInvestmentClassificationDailyRow, 0, len(computedClassifications))
+	for _, row := range computedClassifications {
 		classifications = append(classifications, githubInvestmentClassificationDailyRow{
-			RepoID:         newGitHubNullableUUIDKey(item.RepoID).pointer(),
+			RepoID:         row.RepoID,
 			Day:            newGitHubWorkItemDerivedDay(dayUTC),
-			ArtifactType:   githubWorkItemEngineArtifactType,
-			ArtifactID:     item.WorkItemID,
-			Provider:       item.Provider,
-			InvestmentArea: classification.InvestmentArea,
-			ProjectStream:  stream,
-			Confidence:     classification.Confidence,
-			RuleID:         classification.RuleID,
+			ArtifactType:   row.ArtifactType,
+			ArtifactID:     row.ArtifactID,
+			Provider:       row.Provider,
+			InvestmentArea: row.InvestmentArea,
+			ProjectStream:  row.ProjectStream,
+			Confidence:     row.Confidence,
+			RuleID:         row.RuleID,
 			ComputedAt:     computedAt,
 			OrgID:          claim.OrgID,
 		})
-
-		if item.CompletedAt == nil {
-			continue
-		}
-		completed := item.CompletedAt.UTC()
-		if completed.Before(dayUTC) || !completed.Before(end) {
-			continue
-		}
-		teamID, _, _ := derived.Resolve(githubWorkItemDerivationSubjectFromRow(item))
-		team := normalizeGitHubWorkItemDerivedTeamID(teamID)
-		if team == githubWorkItemUnassignedTeamID {
-			team = ""
-		}
-		key := newGitHubInvestmentMetricKey(item.RepoID, team, classification)
-		bucket := buckets[key]
-		if bucket == nil {
-			bucket = &githubInvestmentMetricBucket{}
-			buckets[key] = bucket
-			order = append(order, key)
-		}
-		bucket.completed++
-		points := 1.0
-		if item.StoryPoints != nil && *item.StoryPoints != 0 {
-			points = *item.StoryPoints
-		}
-		if math.IsNaN(points) || math.IsInf(points, 0) ||
-			points >= float64(math.MaxInt64) || points < float64(math.MinInt64) {
-			return nil, nil, ErrInvalidConfiguration
-		}
-		bucket.deliveryUnits += int(math.Trunc(points))
-		if item.StartedAt != nil {
-			cycle := completed.Sub(item.StartedAt.UTC()).Hours()
-			if cycle >= 0 {
-				bucket.cycleHours = append(bucket.cycleHours, cycle)
-			}
-		}
 	}
-
-	metrics := make([]githubInvestmentMetricsDailyRow, 0, len(order))
-	for _, key := range order {
-		bucket := buckets[key]
-		sort.Float64s(bucket.cycleHours)
-		var p50 float64
-		if len(bucket.cycleHours) > 0 {
-			p50 = bucket.cycleHours[len(bucket.cycleHours)/2]
-		}
+	metrics := make([]githubInvestmentMetricsDailyRow, 0, len(computedMetrics))
+	for _, row := range computedMetrics {
 		metrics = append(metrics, githubInvestmentMetricsDailyRow{
-			RepoID:             key.repoID.pointer(),
+			RepoID:             row.RepoID,
 			Day:                newGitHubWorkItemDerivedDay(dayUTC),
-			TeamID:             key.teamID,
-			InvestmentArea:     key.areaPointer(),
-			ProjectStream:      key.stream,
-			DeliveryUnits:      bucket.deliveryUnits,
-			WorkItemsCompleted: bucket.completed,
-			PRsMerged:          0,
-			ChurnLOC:           bucket.churn,
-			CycleP50Hours:      p50,
+			TeamID:             row.TeamID,
+			InvestmentArea:     row.InvestmentArea,
+			ProjectStream:      row.ProjectStream,
+			DeliveryUnits:      row.DeliveryUnits,
+			WorkItemsCompleted: row.WorkItemsCompleted,
+			PRsMerged:          row.PRsMerged,
+			ChurnLOC:           row.ChurnLOC,
+			CycleP50Hours:      row.CycleP50Hours,
 			ComputedAt:         computedAt,
 			OrgID:              claim.OrgID,
 		})

@@ -629,6 +629,11 @@ func (dispatcher *nativeTeamAutoimportDispatcher) TeamAutoImport(
 			{"teams_staged_for_review", result.TeamsStagedForReview},
 			{"team_memberships_staged_for_review", result.MembershipsStagedForReview},
 			{"team_drift_changes_superseded", result.DriftChangesSuperseded},
+			{"team_project_links_seen", result.ProjectLinksSeen},
+			{"team_project_links_skipped_not_project", result.ProjectLinksSkippedNotProject},
+			{"team_project_links_skipped_no_native_id", result.ProjectLinksSkippedNoNativeID},
+			{"team_project_links_skipped_no_project_key", result.ProjectLinksSkippedNoKey},
+			{"team_project_links_skipped_unknown_type", result.ProjectLinksSkippedUnknownType},
 		} {
 			_ = dispatcher.observer.ObserveTeamCatalogRowsWritten(provider, jobruntime.TeamCatalogTable(row.table), row.count)
 		}

@@ -33,6 +33,14 @@ var gitlabWorkItemDerivedDestinations = []string{
 	"work_item_user_metrics_daily",
 }
 
+// gitlabWorkItemSyncSinkDestinations is the set of destinations the sync
+// sink accepts beside the six raw tables: ai_attribution only. The nine
+// tables computed from stored work-item rows are written by the daily job,
+// never by a sync unit, so the sink refuses them.
+var gitlabWorkItemSyncSinkDestinations = []string{
+	"ai_attribution",
+}
+
 type gitlabEstimateCoverageMetricsDailyRow = githubEstimateCoverageMetricsDailyRow
 type gitlabWorkItemTeamAttributionRow = githubWorkItemTeamAttributionRow
 type gitlabWorkItemStateDurationDailyRow = githubWorkItemStateDurationDailyRow
@@ -97,22 +105,13 @@ func gitlabWorkItemRowsAsGitHub(rows gitlabWorkItemRows) githubWorkItemRows {
 
 // GitLabWorkItemDeriver owns the compute boundary for GitLab work items.
 //
-// WIRING: WIRED. internal/workerservice/provider_sync.go's
-// `provider == "gitlab" && dataset == "work-items"` case (:351) constructs
-// this deriver through NewGitLabWorkItemDeriver (:362) and passes it as
-// GitLabWorkItemsRouteHandler{Derived: ...}; the effect sink and readback come
-// from NewGitLabWorkItemFamilyClickHouseEffects. execution_registry.go:296-301
-// (`case provider == "gitlab" && workItemAlias`) sets RouteReady and, for the
-// canonical dataset, Plannable. Cite the case predicates and constructor names
-// above rather than the line numbers alone -- the names are what survive an
-// edit that shifts these anchors.
-//
-// SUPERSEDED: "It is intentionally unregistered: the provider route/cutover
-// SUPERSEDED: wiring remains a separate slice."
-//
-// That was accurate while the compute boundary landed ahead of its route, and
-// is now false. Kept visible rather than silently deleted because the stale
-// form made a WIRED writer read as dead code (CHAOS-4731 lost time to it).
+// WIRING: NOT WIRED. No production code constructs this deriver. The GitLab
+// work-items unit (internal/workerservice/provider_sync.go's
+// `provider == "gitlab" && dataset == "work-items"` case) writes raw rows only
+// through GitLabWorkItemsRouteHandler and
+// NewGitLabWorkItemFamilyClickHouseEffects; the daily job writes every table
+// this deriver computed. The type stays as unreferenced code until its
+// removal.
 type GitLabWorkItemDeriver struct {
 	Source               githubWorkItemDerivationContextSource
 	statusMapping        *StatusMapping
@@ -374,8 +373,10 @@ func newGitLabWorkItemDerivedEffectIdentity(
 	return identity, nil
 }
 
+// gitlabWorkItemDerivedDestination reports whether the sync sink accepts the
+// destination beside the raw tables.
 func gitlabWorkItemDerivedDestination(destination string) bool {
-	for _, candidate := range gitlabWorkItemDerivedDestinations {
+	for _, candidate := range gitlabWorkItemSyncSinkDestinations {
 		if candidate == destination {
 			return true
 		}
@@ -393,10 +394,13 @@ func gitlabDerivedGitHubIdentity(
 	}
 }
 
-// GitLabWorkItemDerivedClickHouseEffects is the ten-destination provider
-// sink. Its fields are concrete adapter types and its dispatcher is an
-// explicit switch, so a destination cannot be accepted without a corresponding
+// GitLabWorkItemDerivedClickHouseEffects is the ai_attribution provider sink.
+// Its field is a concrete adapter type and its dispatcher is an explicit
+// switch, so a destination cannot be accepted without a corresponding
 // schema-specific write/readback implementation.
+// It dispatches ai_attribution only. The nine other adapter fields write
+// tables that the daily job owns; no destination reaches them, and they stay
+// only until the dead-code removal that follows the cut.
 type GitLabWorkItemDerivedClickHouseEffects struct {
 	Lease                          providerfoundation.LeaseGuard
 	AIAttribution                  GitLabAIAttributionClickHouseAdapter
@@ -445,22 +449,13 @@ func NewGitLabWorkItemDerivedClickHouseEffects(
 }
 
 func (sink GitLabWorkItemDerivedClickHouseEffects) MissingDestinations() []string {
-	missing := make([]string, 0, len(gitlabWorkItemDerivedDestinations))
+	missing := make([]string, 0, len(gitlabWorkItemSyncSinkDestinations))
 	checks := []struct {
 		name  string
 		conn  driver.Conn
 		lease providerfoundation.LeaseGuard
 	}{
 		{"ai_attribution", sink.AIAttribution.Conn, sink.Lease},
-		{"estimate_coverage_metrics_daily", sink.EstimateCoverageMetricsDaily.Conn, sink.EstimateCoverageMetricsDaily.Lease},
-		{"investment_classifications_daily", sink.InvestmentClassificationsDaily.Conn, sink.InvestmentClassificationsDaily.Lease},
-		{"investment_metrics_daily", sink.InvestmentMetricsDaily.Conn, sink.InvestmentMetricsDaily.Lease},
-		{"issue_type_metrics_daily", sink.IssueTypeMetricsDaily.Conn, sink.IssueTypeMetricsDaily.Lease},
-		{"work_item_cycle_times", sink.WorkItemCycleTimes.Conn, sink.WorkItemCycleTimes.Lease},
-		{"work_item_metrics_daily", sink.WorkItemMetricsDaily.Conn, sink.WorkItemMetricsDaily.Lease},
-		{"work_item_state_durations_daily", sink.WorkItemStateDurationsDaily.Conn, sink.WorkItemStateDurationsDaily.Lease},
-		{"work_item_team_attributions", sink.WorkItemTeamAttributions.Conn, sink.WorkItemTeamAttributions.Lease},
-		{"work_item_user_metrics_daily", sink.WorkItemUserMetricsDaily.Conn, sink.WorkItemUserMetricsDaily.Lease},
 	}
 	for _, check := range checks {
 		if check.conn == nil || check.lease == nil {
@@ -486,24 +481,6 @@ func (sink GitLabWorkItemDerivedClickHouseEffects) WriteEffect(
 	switch effect.Destination {
 	case "ai_attribution":
 		err = sink.AIAttribution.WriteGitHubWorkItemEffect(ctx, gitHubIdentity, effect)
-	case "estimate_coverage_metrics_daily":
-		err = sink.EstimateCoverageMetricsDaily.WriteGitHubWorkItemEffect(ctx, gitHubIdentity, effect)
-	case "investment_classifications_daily":
-		err = sink.InvestmentClassificationsDaily.WriteGitHubWorkItemEffect(ctx, gitHubIdentity, effect)
-	case "investment_metrics_daily":
-		err = sink.InvestmentMetricsDaily.WriteGitHubWorkItemEffect(ctx, gitHubIdentity, effect)
-	case "issue_type_metrics_daily":
-		err = sink.IssueTypeMetricsDaily.WriteGitHubWorkItemEffect(ctx, gitHubIdentity, effect)
-	case "work_item_cycle_times":
-		err = sink.WorkItemCycleTimes.WriteGitHubWorkItemEffect(ctx, gitHubIdentity, effect)
-	case "work_item_metrics_daily":
-		err = sink.WorkItemMetricsDaily.WriteGitHubWorkItemEffect(ctx, gitHubIdentity, effect)
-	case "work_item_state_durations_daily":
-		err = sink.WorkItemStateDurationsDaily.WriteGitHubWorkItemEffect(ctx, gitHubIdentity, effect)
-	case "work_item_team_attributions":
-		err = sink.WorkItemTeamAttributions.WriteGitHubWorkItemEffect(ctx, gitHubIdentity, effect)
-	case "work_item_user_metrics_daily":
-		err = sink.WorkItemUserMetricsDaily.WriteGitHubWorkItemEffect(ctx, gitHubIdentity, effect)
 	default:
 		return ErrInvalidConfiguration
 	}
@@ -530,24 +507,6 @@ func (sink GitLabWorkItemDerivedClickHouseEffects) InspectEffect(
 	switch effect.Destination {
 	case "ai_attribution":
 		inspection, err = sink.AIAttribution.InspectGitHubWorkItemEffect(ctx, gitHubIdentity, effect)
-	case "estimate_coverage_metrics_daily":
-		inspection, err = sink.EstimateCoverageMetricsDaily.InspectGitHubWorkItemEffect(ctx, gitHubIdentity, effect)
-	case "investment_classifications_daily":
-		inspection, err = sink.InvestmentClassificationsDaily.InspectGitHubWorkItemEffect(ctx, gitHubIdentity, effect)
-	case "investment_metrics_daily":
-		inspection, err = sink.InvestmentMetricsDaily.InspectGitHubWorkItemEffect(ctx, gitHubIdentity, effect)
-	case "issue_type_metrics_daily":
-		inspection, err = sink.IssueTypeMetricsDaily.InspectGitHubWorkItemEffect(ctx, gitHubIdentity, effect)
-	case "work_item_cycle_times":
-		inspection, err = sink.WorkItemCycleTimes.InspectGitHubWorkItemEffect(ctx, gitHubIdentity, effect)
-	case "work_item_metrics_daily":
-		inspection, err = sink.WorkItemMetricsDaily.InspectGitHubWorkItemEffect(ctx, gitHubIdentity, effect)
-	case "work_item_state_durations_daily":
-		inspection, err = sink.WorkItemStateDurationsDaily.InspectGitHubWorkItemEffect(ctx, gitHubIdentity, effect)
-	case "work_item_team_attributions":
-		inspection, err = sink.WorkItemTeamAttributions.InspectGitHubWorkItemEffect(ctx, gitHubIdentity, effect)
-	case "work_item_user_metrics_daily":
-		inspection, err = sink.WorkItemUserMetricsDaily.InspectGitHubWorkItemEffect(ctx, gitHubIdentity, effect)
 	default:
 		return EffectConflict, ErrInvalidConfiguration
 	}
@@ -603,7 +562,7 @@ func validGitLabAIAttributionEffect(
 	identity GitHubWorkItemEffectIdentity,
 	effect EffectBatch,
 ) bool {
-	if identity.Provider != "gitlab" || identity.Dataset != "work-items" ||
+	if identity.Provider != "gitlab" || !isGitLabAIAttributionDataset(identity.Dataset) ||
 		identity.Destination != "ai_attribution" || effect.Destination != "ai_attribution" {
 		return false
 	}

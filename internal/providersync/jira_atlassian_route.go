@@ -12,6 +12,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"io"
 	"log/slog"
@@ -27,11 +28,36 @@ import (
 )
 
 const (
-	jiraAtlassianMaxPages       = 1_000
-	jiraAtlassianMaxRows        = 100_000
-	jiraAtlassianPerPage        = 50
-	jiraAtlassianWorklogPerPage = 100
+	jiraAtlassianMaxPages = 1_000
+	jiraAtlassianMaxRows  = 100_000
+	jiraAtlassianPerPage  = 50
+	// jiraAtlassianDefaultCommentsLimit is the per-issue comment cap used when
+	// the dataset options carry no comments_limit (CHAOS-8806).
+	jiraAtlassianDefaultCommentsLimit = 500
+	jiraAtlassianWorklogPerPage       = 100
+	// jiraAtlassianDefaultCommentsRowBudget is the most interaction rows one
+	// unit collects (CHAOS-8806). It must stay well under the 100,000 rows
+	// per table the effect ledger accepts: past that bound the whole unit
+	// fails and every work-item effect is lost. The dataset option
+	// comments_row_budget may only LOWER it.
+	jiraAtlassianDefaultCommentsRowBudget = 50_000
+	// jiraAtlassianCommentsTimeShareDivisor sets the TIME budget of comment
+	// reads (CHAOS-8806): they run in phase 2, after every comments-off step,
+	// and stop when 1/N of the time left to the unit deadline at the start of
+	// phase 2 is used. The rest is the reserve for validation, the effect
+	// build, derive, the comparator and the ledger commit.
+	jiraAtlassianCommentsTimeShareDivisor = 2
 )
+
+// jiraAtlassianCommentsRowBudget is the per-unit interaction row budget: the
+// default, lowered (never raised) by the comments_row_budget dataset option.
+func jiraAtlassianCommentsRowBudget(claim Claim) int {
+	budget := jiraOptionInt(claim, "comments_row_budget", jiraAtlassianDefaultCommentsRowBudget)
+	if budget <= 0 || budget > jiraAtlassianDefaultCommentsRowBudget {
+		return jiraAtlassianDefaultCommentsRowBudget
+	}
+	return budget
+}
 
 // jiraAtlassianCountingDoer observes actual wire attempts, including
 // transport failures and retries the wrapped HTTPClient makes internally --
@@ -92,17 +118,15 @@ var jiraAtlassianRawDestinations = JiraAtlassianEffectDestinations()
 // though CompleteRouteBatch predates provider-specific result types. Worklogs
 // are a Jira-only extra and do not replace any of the canonical sixteen.
 type JiraAtlassianWorkItemsResult struct {
-	WorkItemsSynced                  int      `json:"work_items_synced"`
-	TransitionsSynced                int      `json:"transitions_synced"`
-	DependenciesSynced               int      `json:"dependencies_synced"`
-	ReopenEventsSynced               int      `json:"reopen_events_synced"`
-	InteractionsSynced               int      `json:"interactions_synced"`
-	SprintsSynced                    int      `json:"sprints_synced"`
-	WorklogsSynced                   int      `json:"worklogs_synced"`
-	RawDestinations                  []string `json:"raw_destinations"`
-	DerivedDestinationsImplemented   []string `json:"derived_destinations_implemented"`
-	DerivedDestinationsUnimplemented []string `json:"derived_destinations_unimplemented"`
-	WatermarkHeldForIncomplete       bool     `json:"watermark_held_for_incomplete"`
+	WorkItemsSynced            int      `json:"work_items_synced"`
+	TransitionsSynced          int      `json:"transitions_synced"`
+	DependenciesSynced         int      `json:"dependencies_synced"`
+	ReopenEventsSynced         int      `json:"reopen_events_synced"`
+	InteractionsSynced         int      `json:"interactions_synced"`
+	SprintsSynced              int      `json:"sprints_synced"`
+	WorklogsSynced             int      `json:"worklogs_synced"`
+	RawDestinations            []string `json:"raw_destinations"`
+	WatermarkHeldForIncomplete bool     `json:"watermark_held_for_incomplete"`
 }
 
 // JiraSprintReferenceSink is the narrow reference-cache boundary used by the
@@ -114,8 +138,8 @@ type JiraSprintReferenceSink func([]jiraSprintRow) error
 // WIRING: internal/workerservice/provider_sync.go's
 // `provider == "jira" && dataset == "work-items"` case constructs this handler
 // and assigns it to routeHandler, with NewJiraWorkItemCompositeClickHouseEffects
-// as sink and readback and NewJiraWorkItemDeriver as Derived. Note this is the
-// handler jira actually runs -- JiraWorkItemsRouteHandler
+// as sink and readback. The unit writes raw rows only; the daily job writes
+// every table computed from them. Note this is the handler jira actually runs -- JiraWorkItemsRouteHandler
 // (jira_work_items_route.go) is the one that is genuinely unconstructed, and
 // its own non-registration claim is TRUE and must stay. (Phrased without
 // quoting that claim verbatim on purpose: the drift guard treats an unmarked
@@ -148,7 +172,6 @@ type JiraAtlassianRouteHandler struct {
 	PerPage          int
 	ReferenceSprints []jiraSprintRow
 	ReferenceSink    JiraSprintReferenceSink
-	Derived          jiraWorkItemsDeriver
 }
 
 func (handler JiraAtlassianRouteHandler) limits() (int, int, int, error) {
@@ -181,6 +204,9 @@ func (handler JiraAtlassianRouteHandler) Collect(
 		claim.BeforeAt == nil || !claim.SinceAt.Before(*claim.BeforeAt) || handler.StatusMapping == nil ||
 		(handler.GraphQLClient != nil && (handler.GraphQLClient.Provider != "jira" || handler.GraphQLClient.BaseURL == nil)) {
 		return CompleteRouteBatch{}, ErrInvalidConfiguration
+	}
+	if _, err := workItemsUnitWindowDays(claim, normalizedAt); err != nil {
+		return CompleteRouteBatch{}, err
 	}
 	_ = credential // Authentication is sealed into providerfoundation.HTTPClient.
 	maxPages, maxRows, perPage, err := handler.limits()
@@ -220,8 +246,15 @@ func (handler JiraAtlassianRouteHandler) Collect(
 	}, Worklogs: make([]jiraWorklogRow, 0)}
 	optionalIncomplete := make([]string, 0)
 	worklogObservations := make([]JiraWorklogFetchObservation, 0)
-	fetchComments := jiraOptionBool(claim, "fetch_comments", false)
-	commentsLimit := jiraOptionInt(claim, "comments_limit", 0)
+	// CHAOS-8806: issue comments are collected by default. An ABSENT option
+	// means ON (new and existing configurations alike); an explicit false
+	// stays off and an explicit comments_limit stays. The default per-issue
+	// cap is the same as GitHub's (500), so no issue reads an unbounded
+	// number of comments.
+	fetchComments := jiraOptionBool(claim, "fetch_comments", true)
+	commentsLimit := jiraOptionInt(claim, "comments_limit", jiraAtlassianDefaultCommentsLimit)
+	commentsBudget := jiraAtlassianCommentsRowBudget(claim)
+	commentsBudgetSkipped, commentsTimeSkipped := 0, 0
 	fetchWorklogs := jiraOptionBool(claim, "fetch_worklogs", false)
 	useGraphQL := jiraOptionBool(claim, "atlassian_gql_enabled", false)
 	fetchBoardSprints := jiraOptionBool(claim, "fetch_board_sprints", false)
@@ -381,18 +414,6 @@ func (handler JiraAtlassianRouteHandler) Collect(
 		}
 		rows.ProjectMemberships = append(rows.ProjectMemberships, itemMemberships...)
 
-		if fetchComments {
-			comments, _, commentErr := collectJiraIssueComments(
-				ctx, client, item.WorkItemID, maxPages, perPage, commentsLimit,
-			)
-			if commentErr != nil {
-				optionalIncomplete = append(optionalIncomplete, "comments:"+item.WorkItemID)
-			} else {
-				rows.Interactions = append(rows.Interactions,
-					normalizeJiraInteractions(claim, item.WorkItemID, comments, handler.Identity, normalizedAt)...,
-				)
-			}
-		}
 		if fetchWorklogs {
 			worklogClient := client
 			if handler.GraphQLClient != nil {
@@ -451,6 +472,82 @@ func (handler JiraAtlassianRouteHandler) Collect(
 			}
 		}
 	}
+	// CHAOS-8806: PHASE 2 = comment reads. Phase 1 above is byte-for-byte the
+	// comments-off path (search, changelogs, every work-item row, worklogs,
+	// dev-status, sprints), so a unit that ends OK with comments off reaches
+	// this point with the same rows. Comment reads then use at most half of
+	// the time left to the unit deadline; the other half is the reserve for
+	// what follows (validation, effect build, derive, comparator, ledger
+	// commit): that tail is of the order of the rows written, is not
+	// measurable inside Collect, and comments add rows to it, so it keeps at
+	// least what was left at the end of phase 1 divided by the divisor. With
+	// no deadline on the context there is no time budget. Issues arrive ORDER
+	// BY updated DESC, so the newest issues get their comments first.
+	if fetchComments {
+		commentsStopAt, commentsHaveDeadline := time.Time{}, false
+		if deadline, ok := ctx.Deadline(); ok {
+			now := time.Now()
+			commentsStopAt = now.Add(deadline.Sub(now) / jiraAtlassianCommentsTimeShareDivisor)
+			commentsHaveDeadline = true
+		}
+		for _, item := range rows.WorkItems {
+			// The TIME budget is checked first: skip the read and count it.
+			// The row budget is checked BEFORE the fetch, so the rows slice
+			// never grows past it: the issue limit is the smaller of
+			// comments_limit and what is left of the budget.
+			if commentsHaveDeadline && time.Now().After(commentsStopAt) {
+				commentsTimeSkipped++
+			} else if remaining := commentsBudget - len(rows.Interactions); remaining <= 0 {
+				commentsBudgetSkipped++
+			} else {
+				issueLimit := commentsLimit
+				// A budget cut is detected EXACTLY: read one more than the
+				// slots left; an extra row means the budget cuts this issue.
+				budgetCut := false
+				if issueLimit <= 0 || issueLimit > remaining {
+					issueLimit = remaining + 1
+					budgetCut = true
+				}
+				// The read gets its own deadline at stopAt, so one slow comment
+				// fetch that starts before stopAt can never use time after it
+				// (the unit deadline is terminal and loses every work item).
+				commentCtx, cancelComments := ctx, context.CancelFunc(func() {})
+				if commentsHaveDeadline {
+					commentCtx, cancelComments = context.WithDeadline(ctx, commentsStopAt)
+				}
+				comments, _, commentErr := collectJiraIssueComments(
+					commentCtx, client, item.WorkItemID, maxPages, perPage, issueLimit,
+				)
+				innerDeadline := commentsHaveDeadline && ctx.Err() == nil &&
+					errors.Is(commentCtx.Err(), context.DeadlineExceeded)
+				cancelComments()
+				if commentErr != nil && innerDeadline {
+					// The time budget ended this read, not a provider failure:
+					// the issue's partial comments are dropped (the collector
+					// returns none on an error) and the issue is counted.
+					commentsTimeSkipped++
+				} else if commentErr != nil {
+					optionalIncomplete = append(optionalIncomplete, "comments:"+item.WorkItemID)
+					if ctx.Err() != nil {
+						// The unit context itself ended (not our stop time):
+						// no further reads; what follows fails or not on its
+						// own, exactly as a cancel in the work loop does.
+						break
+					}
+				} else if budgetCut && len(comments) > remaining {
+					// The row budget cuts this issue's comments. None of them
+					// land: a re-read replaces an issue's whole set, so
+					// none + marker is the state a later run or backfill
+					// completes, the same as a wholly skipped issue.
+					commentsBudgetSkipped++
+				} else {
+					rows.Interactions = append(rows.Interactions,
+						normalizeJiraInteractions(claim, item.WorkItemID, comments, handler.Identity, normalizedAt)...,
+					)
+				}
+			}
+		}
+	}
 	for _, row := range rows.Transitions {
 		if err := validateJiraTransition(row, claim); err != nil {
 			return CompleteRouteBatch{}, err
@@ -491,56 +588,33 @@ func (handler JiraAtlassianRouteHandler) Collect(
 	if err != nil {
 		return CompleteRouteBatch{}, err
 	}
-	derivedImplemented := []string{}
-	derivedUnimplemented := append([]string(nil), jiraWorkItemDerivedDestinations...)
-	derivedRecords := 0
-	var derivedWatermark *time.Time
-	if handler.Derived != nil {
-		derived, deriveErr := handler.Derived.Derive(
-			ctx, claim, rows.jiraWorkItemRows, normalizedAt,
-		)
-		if deriveErr != nil {
-			return CompleteRouteBatch{}, deriveErr
-		}
-		if derived.Watermark == nil || !derived.Watermark.Equal(*claim.BeforeAt) {
-			return CompleteRouteBatch{}, ErrInvalidConfiguration
-		}
-		derivedEffects, effectErr := BuildJiraWorkItemDerivedEffects(derived.EffectRows())
-		if effectErr != nil {
-			return CompleteRouteBatch{}, effectErr
-		}
-		effects = append(effects, derivedEffects...)
-		derivedImplemented = derived.producedDestinations()
-		derivedUnimplemented = []string{}
-		derivedWatermark = derived.Watermark
-		derivedRecords = len(derived.EstimateCoverageMetricsDaily) +
-			len(derived.InvestmentClassificationsDaily) + len(derived.InvestmentMetricsDaily) +
-			len(derived.IssueTypeMetricsDaily) + len(derived.WorkItemCycleTimes) +
-			len(derived.WorkItemMetricsDaily) + len(derived.WorkItemStateDurationsDaily) +
-			len(derived.WorkItemTeamAttributions) + len(derived.WorkItemUserMetricsDaily)
+	// The unit stores raw rows only. ai_attribution stays as its explicit
+	// evaluated-empty effect; every table computed from stored work-item rows
+	// is left to the daily job.
+	aiAttribution, err := BuildEffectBatch("ai_attribution", EffectReadbackRequired, []json.RawMessage{})
+	if err != nil {
+		return CompleteRouteBatch{}, err
 	}
+	effects = append(effects, aiAttribution)
+	observeWorkItemDerivedTablesLeftToDailyJob(client.Metrics, claim, len(rows.WorkItems))
 	summary := JiraAtlassianWorkItemsResult{
 		WorkItemsSynced: len(rows.WorkItems), TransitionsSynced: len(rows.Transitions),
 		DependenciesSynced: len(rows.Dependencies), ReopenEventsSynced: len(rows.ReopenEvents),
 		InteractionsSynced: len(rows.Interactions), SprintsSynced: len(rows.Sprints),
-		WorklogsSynced:                   len(rows.Worklogs),
-		RawDestinations:                  append([]string(nil), jiraAtlassianRawDestinations...),
-		DerivedDestinationsImplemented:   append([]string(nil), derivedImplemented...),
-		DerivedDestinationsUnimplemented: append([]string(nil), derivedUnimplemented...),
-		WatermarkHeldForIncomplete:       len(optionalIncomplete) > 0 || derivedWatermark == nil,
+		WorklogsSynced:             len(rows.Worklogs),
+		RawDestinations:            append([]string(nil), jiraAtlassianRawDestinations...),
+		WatermarkHeldForIncomplete: len(optionalIncomplete) > 0,
 	}
 	result := map[string]any{
 		"work_items_synced": len(rows.WorkItems), "transitions_synced": len(rows.Transitions),
 		"dependencies_synced": len(rows.Dependencies), "reopen_events_synced": len(rows.ReopenEvents),
 		"interactions_synced": len(rows.Interactions), "sprints_synced": len(rows.Sprints),
 		"worklogs_synced": len(rows.Worklogs), "project_key": projectKey,
-		"project_memberships_synced":         len(rows.ProjectMemberships),
-		"unresolved_project_memberships":     unresolvedProjectMemberships,
-		"raw_destinations":                   append([]string(nil), jiraAtlassianRawDestinations...),
-		"derived_destinations_implemented":   append([]string(nil), derivedImplemented...),
-		"derived_destinations_unimplemented": append([]string(nil), derivedUnimplemented...),
-		"watermark_held_for_incomplete":      summary.WatermarkHeldForIncomplete,
-		"jira_work_items":                    summary,
+		"project_memberships_synced":     len(rows.ProjectMemberships),
+		"unresolved_project_memberships": unresolvedProjectMemberships,
+		"raw_destinations":               append([]string(nil), jiraAtlassianRawDestinations...),
+		"watermark_held_for_incomplete":  summary.WatermarkHeldForIncomplete,
+		"jira_work_items":                summary,
 		// CHAOS-4757 telemetry: PRIMARY dev-status rows synced, orgs with no
 		// GitHub-for-Jira app configured (clean no-op, not an error), and any
 		// issue skipped because dev_status_max_requests was reached this run.
@@ -554,17 +628,43 @@ func (handler JiraAtlassianRouteHandler) Collect(
 	if len(optionalIncomplete) > 0 {
 		result["incomplete"] = optionalIncomplete
 	}
+	if commentsBudgetSkipped > 0 || commentsTimeSkipped > 0 {
+		// CHAOS-8806: NOT part of "incomplete": a held watermark would re-read the
+		// same window, reach the same budget and never move. Counts only.
+		markers := make([]string, 0, 2)
+		cause := ""
+		if commentsBudgetSkipped > 0 {
+			markers = append(markers, "comments:budget:"+strconv.Itoa(commentsBudgetSkipped))
+			cause = "rows"
+		}
+		if commentsTimeSkipped > 0 {
+			markers = append(markers, "comments:time:"+strconv.Itoa(commentsTimeSkipped))
+			if cause != "" {
+				cause += "+"
+			}
+			cause += "time"
+		}
+		result["incomplete_nonholding"] = markers
+		result["comments_budget_skipped_issues"] = commentsBudgetSkipped
+		result["comments_time_skipped_issues"] = commentsTimeSkipped
+		slog.Warn("providersync.jira.comments_budget_reached",
+			"org_id", claim.OrgID, "unit_id", claim.ID, "cause", cause, "row_budget", commentsBudget,
+			"interaction_rows", len(rows.Interactions), "skipped_issues_rows", commentsBudgetSkipped,
+			"skipped_issues_time", commentsTimeSkipped)
+	}
 	rows.MembershipCreation.result("jira", result)
-	result = attachWorkItemTeamInheritanceObservation(result, handler.Derived)
+	// The watermark is the end of the window whose raw rows this unit stored
+	// (BeforeAt is required above). It is held while an optional fetch is
+	// incomplete.
 	var watermark *time.Time
-	if len(optionalIncomplete) == 0 && derivedWatermark != nil {
-		value := derivedWatermark.UTC()
+	if len(optionalIncomplete) == 0 {
+		value := claim.BeforeAt.UTC()
 		watermark = &value
 	}
 	return CompleteRouteBatch{
 		Effects: effects, Result: result, Watermark: watermark,
 		Evidence: FetchEvidence{Provider: claim.Provider, Dataset: claim.Dataset,
-			Requests: requests, Pages: searchPages, Records: len(rows.WorkItems) + derivedRecords},
+			Requests: requests, Pages: searchPages, Records: len(rows.WorkItems)},
 		WorklogObservations: worklogObservations,
 	}, nil
 }

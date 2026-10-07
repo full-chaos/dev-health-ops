@@ -112,6 +112,15 @@ func storedZeroWeekScanners() []*fakeRowScanner {
 
 func resolveWeeks(t *testing.T, current, prior []*fakeRowScanner, errs []error) map[string]model.OperatingReviewMetric {
 	t.Helper()
+	return metricsByKey(t, resolveReviewWeeks(t, current, prior, errs))
+}
+
+// resolveReviewWeeks reaches the production Resolve builder with the same
+// ten-current-then-ten-prior read schedule used by the GraphQL resolver.
+// Tests that inspect review-level statements and recommendations use this
+// rather than constructing a review or section directly.
+func resolveReviewWeeks(t *testing.T, current, prior []*fakeRowScanner, errs []error) *model.OperatingReview {
+	t.Helper()
 	client := &fakeClient{responses: append(append([]*fakeRowScanner{}, current...), prior...), errs: errs}
 	review, err := Resolve(context.Background(), client, "org-1", nil, graphqldate.New(day("2026-08-24")))
 	if err != nil {
@@ -120,7 +129,7 @@ func resolveWeeks(t *testing.T, current, prior []*fakeRowScanner, errs []error) 
 	if client.calls != 20 {
 		t.Fatalf("Resolve made %d reads, want 20", client.calls)
 	}
-	return metricsByKey(t, review)
+	return review
 }
 
 // The pair the ticket exists for: a stored zero and a missing week give the
@@ -180,6 +189,51 @@ func TestHasData_TheTwoWeeksAreIndependent(t *testing.T) {
 	}
 	if got := withData(onlyPrior, true); len(got) != len(allMetricKeys) {
 		t.Errorf("prior week stored: hasPriorData true for %d metrics, want %d", len(got), len(allMetricKeys))
+	}
+}
+
+// TestMissingWeekSuppressesComparativeClaims reproduces CHAOS-8525 through
+// Resolve, the production Operating Review builder. A missing current or
+// prior week still serializes its numeric zero placeholder for wire
+// compatibility, but it cannot support a status, section sentence, or
+// recommendation. Stored zeroes in BOTH weeks remain comparable.
+func TestMissingWeekSuppressesComparativeClaims(t *testing.T) {
+	for _, tc := range []struct {
+		name           string
+		current, prior []*fakeRowScanner
+	}{
+		{name: "missing current", current: emptyWeekScanners(), prior: storedZeroWeekScanners()},
+		{name: "missing prior", current: storedZeroWeekScanners(), prior: emptyWeekScanners()},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			review := resolveReviewWeeks(t, tc.current, tc.prior, nil)
+			for key, metric := range metricsByKey(t, review) {
+				if metric.HasData && metric.Delta.HasPriorData {
+					t.Fatalf("%s unexpectedly has data in both weeks", key)
+				}
+				if metric.Delta.Status != "" {
+					t.Errorf("%s status = %q, want no claim when a comparison week is missing", key, metric.Delta.Status)
+				}
+			}
+			for _, section := range review.Sections {
+				if len(section.Changed) != 0 || len(section.Improved) != 0 || len(section.Worsened) != 0 {
+					t.Errorf("%s sentences = changed:%q improved:%q worsened:%q, want none", section.Key, section.Changed, section.Improved, section.Worsened)
+				}
+			}
+			if len(review.Recommendations) != 0 {
+				t.Errorf("recommendations = %q, want none", review.Recommendations)
+			}
+		})
+	}
+
+	stored := resolveReviewWeeks(t, storedZeroWeekScanners(), storedZeroWeekScanners(), nil)
+	for key, metric := range metricsByKey(t, stored) {
+		if !metric.HasData || !metric.Delta.HasPriorData {
+			t.Fatalf("%s must retain both stored-zero data flags", key)
+		}
+		if metric.Delta.Status == "" {
+			t.Errorf("%s status is empty for two stored zeroes", key)
+		}
 	}
 }
 

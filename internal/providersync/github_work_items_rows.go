@@ -128,6 +128,9 @@ type githubWorkItemInteractionRow struct {
 	BodyLength      int       `json:"body_length"`
 	LastSynced      time.Time `json:"last_synced"`
 	OrgID           string    `json:"org_id"`
+	// InteractionID is the provider's comment id (CHAOS-8790): the last part of
+	// the sink key. Non-empty on every new row.
+	InteractionID string `json:"interaction_id,omitempty"`
 }
 
 type githubSprintRow struct {
@@ -717,9 +720,13 @@ func normalizeGitHubWorkItemComments(
 		if decoder.Decode(&comment) != nil {
 			return nil, providerfoundation.ErrNormalizationInvalid
 		}
-		id := stringValue(comment.ID)
+		id := interactionIDFrom(comment.ID)
+		if id == "" {
+			skipInteractionWithoutID("github", claim.OrgID, workItemID)
+			continue
+		}
 		occurredAt := parseGitHubWorkItemTime(comment.CreatedAt)
-		if id == "" || id == "0" || occurredAt == nil {
+		if occurredAt == nil {
 			continue
 		}
 		var actor *string
@@ -733,7 +740,7 @@ func normalizeGitHubWorkItemComments(
 			WorkItemID: workItemID, Provider: "github", InteractionType: "comment",
 			OccurredAt: occurredAt.UTC(), Actor: actor,
 			BodyLength: utf8.RuneCountInString(comment.Body),
-			LastSynced: normalizedAt.UTC(), OrgID: claim.OrgID,
+			LastSynced: normalizedAt.UTC(), OrgID: claim.OrgID, InteractionID: id,
 		}
 		if err := row.validate(claim); err != nil {
 			return nil, err
@@ -1354,7 +1361,7 @@ func (row githubWorkItemReopenRow) validate(claim Claim) error {
 func (row githubWorkItemInteractionRow) validate(claim Claim) error {
 	if row.WorkItemID == "" || row.Provider != "github" ||
 		row.InteractionType != "comment" || row.OccurredAt.IsZero() ||
-		row.BodyLength < 0 || row.LastSynced.IsZero() ||
+		row.BodyLength < 0 || row.LastSynced.IsZero() || row.InteractionID == "" ||
 		row.OrgID == "" || row.OrgID != claim.OrgID {
 		return providerfoundation.ErrInvalidScope
 	}

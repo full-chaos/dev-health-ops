@@ -4,7 +4,6 @@ package providersync
 
 import (
 	"context"
-	"encoding/json"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"testing"
 	"time"
@@ -68,7 +67,7 @@ func TestGitHubProjectsV2PullRequestReachesClickHouseThroughTheEffectPath(t *tes
 	}}
 	normalizedAt := time.Date(2026, 8, 4, 12, 0, 0, 0, time.UTC)
 	doer := &gitHubProjectV2Doer{t: t, replies: []string{
-		`{"data":{"organization":{"projectV2":{"items":{"nodes":[{"id":"PVTI_PR","createdAt":"2026-08-01T08:00:00Z","content":{"__typename":"PullRequest","number":42,"title":"A PR","repository":{"nameWithOwner":"acme/api"}},"fieldValues":{"nodes":[]},"changes":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}`,
+		`{"data":{"organization":{"projectV2":{"items":{"nodes":[{"id":"PVTI_PR","createdAt":"2026-08-01T08:00:00Z","content":{"__typename":"PullRequest","number":42,"title":"A PR","repository":{"nameWithOwner":"acme/api"}},"fieldValues":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}},"changes":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}`,
 	}}
 	fetched, err := (GitHubProjectV2Fetcher{}).Fetch(
 		ctx, claim, providerfoundation.Credential{Provider: "github", ID: claim.CredentialID},
@@ -85,14 +84,7 @@ func TestGitHubProjectsV2PullRequestReachesClickHouseThroughTheEffectPath(t *tes
 			len(fetched.Rows.ProjectMemberships), len(fetched.Rows.Projects))
 	}
 
-	// The derived destinations are required to be PRESENT (possibly empty) by
-	// the builder's own completeness gate, so they are supplied empty here:
-	// this test is about the two direct families, not about derivations.
-	derived := map[string][]json.RawMessage{}
-	for _, destination := range githubWorkItemDerivedDestinations {
-		derived[destination] = []json.RawMessage{}
-	}
-	effects, err := buildGitHubWorkItemsRouteEffects(fetched.Rows, derived, nil)
+	effects, err := buildGitHubWorkItemsRouteEffects(fetched.Rows)
 	if err != nil {
 		t.Fatal(err)
 	}

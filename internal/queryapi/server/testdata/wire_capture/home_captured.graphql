@@ -22,6 +22,8 @@ query Home($orgId: String!, $filters: FilterInput, $window: HomeWindowInput) {
       value
       unit
       deltaPct
+      hasData
+      hasPriorData
       spark {
         ts
         value
@@ -100,6 +102,22 @@ query Home($orgId: String!, $filters: FilterInput, $window: HomeWindowInput) {
         displayName
         __typename
       }
+      attribution {
+        items
+        sources {
+          source
+          items
+          share
+          __typename
+        }
+        confidence {
+          confidence
+          items
+          share
+          __typename
+        }
+        __typename
+      }
       __typename
     }
     limitingFactor {
@@ -115,6 +133,13 @@ query Home($orgId: String!, $filters: FilterInput, $window: HomeWindowInput) {
       coveragePct
       connectedSources
       missingSources
+      caveats
+      __typename
+    }
+    scopeDataConfidence {
+      level
+      coveragePct
+      lastIngestedAt
       caveats
       __typename
     }

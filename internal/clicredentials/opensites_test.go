@@ -34,7 +34,7 @@ var classifiedOpenSites = map[string]struct {
 	"operationalbackfill/command.go":              {1, "verb `dho backfill operational`: through secrets.Boundary (verbs_integration_test.go)"},
 	"synccli/synccli.go":                          {1, "verb `dho sync teams` (Atlassian): redact() on every returned text and the process logger wrapped for the run (synccli TestSyncTeamsLogsNeitherClickHouseLoginNorPassword)"},
 	"synccli/inline.go":                           {1, "verbs `dho sync <target>`: the store open is redacted through secrets.Boundary and runTarget redacts every other error (synccli credential_redaction_test.go)"},
-	"workersctl/main.go":                          {1, "verb `dho workers ...`: prints a constant message, never the error text"},
+	"workersctl/main.go":                          {2, "verb `dho workers ...` (providersync cleanup, run marker): prints a constant message, never the error text"},
 	"apiservice/admin/orgdeletion.go":             {1, "API handler: a constant warning, never the error text"},
 	"apiservice/deps.go":                          {1, "daemon (api): the error is logged at startup; the open redacts its own error (storage/clickhouse factory)"},
 	"queryapi/server/investment_explain_route.go": {1, "daemon (query-api): logged at runtime; the open redacts its own error"},

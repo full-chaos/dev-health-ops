@@ -11,11 +11,12 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
+	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 )
 
 // OpenAIProviderConfig configures OpenAIProvider.
 type OpenAIProviderConfig struct {
-	APIKey string
+	APIKey secrets.Hidden `json:"-"`
 	// BaseURL defaults to https://api.openai.com/v1 -- overridable for a
 	// self-hosted gateway or for tests.
 	BaseURL string
@@ -230,7 +231,7 @@ func (p *OpenAIProvider) executeResponsesRequest(ctx context.Context, body openA
 		return openAICompletionText{}, "", fmt.Errorf("build request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+p.cfg.APIKey)
+	req.Header.Set("Authorization", "Bearer "+p.cfg.APIKey.Reveal())
 
 	resp, err := httpguard.NoRedirects(p.client).Do(req) // the API key rides this request
 	if err != nil {

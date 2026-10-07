@@ -104,6 +104,7 @@ type gitlabStateEventPayload struct {
 }
 
 type gitlabNotePayload struct {
+	ID        any                        `json:"id"`
 	System    bool                       `json:"system"`
 	Body      string                     `json:"body"`
 	CreatedAt *string                    `json:"created_at"`
@@ -433,7 +434,7 @@ func normalizeGitLabMRAIAttributions(
 	normalizedAt time.Time,
 ) ([]gitlabAIAttributionRow, error) {
 	if claim.Validate() != nil || claim.Provider != "gitlab" ||
-		claim.Dataset != "work-items" || repoID == uuid.Nil || payload.IID < 1 ||
+		!isGitLabAIAttributionDataset(claim.Dataset) || repoID == uuid.Nil || payload.IID < 1 ||
 		normalizedAt.IsZero() {
 		return nil, ErrInvalidConfiguration
 	}
@@ -472,8 +473,15 @@ func normalizeGitLabMRAIAttributions(
 	return rows, nil
 }
 
+// isGitLabAIAttributionDataset names the two datasets that carry merge-request
+// attribution: work-items (merge requests as work items) and the PR-social
+// unit, whose list response holds the same detector inputs.
+func isGitLabAIAttributionDataset(dataset string) bool {
+	return dataset == "work-items" || isPRSocialDataset(dataset)
+}
+
 func validateGitLabAIAttributionRow(row gitlabAIAttributionRow, claim Claim) error {
-	if claim.Provider != "gitlab" || claim.Dataset != "work-items" ||
+	if claim.Provider != "gitlab" || !isGitLabAIAttributionDataset(claim.Dataset) ||
 		row.RecordID == uuid.Nil || row.OrgID == uuid.Nil || row.OrgID.String() != claim.OrgID ||
 		row.Provider != "gitlab" || row.SubjectType != "pull_request" || row.SubjectID == "" ||
 		row.RepoID == nil || *row.RepoID == uuid.Nil || row.Kind == "" || row.Source == "" ||
@@ -595,6 +603,11 @@ func normalizeGitLabNotes(
 		if note.System {
 			continue
 		}
+		id := interactionIDFrom(note.ID)
+		if id == "" {
+			skipInteractionWithoutID("gitlab", claim.OrgID, workItemID)
+			continue
+		}
 		occurred := parseGitLabWorkItemTime(note.CreatedAt)
 		if occurred == nil {
 			continue
@@ -609,7 +622,7 @@ func normalizeGitLabNotes(
 		row := gitlabWorkItemInteractionRow{
 			WorkItemID: workItemID, Provider: "gitlab", InteractionType: "comment",
 			OccurredAt: occurred.UTC(), Actor: actor, BodyLength: utf8.RuneCountInString(note.Body),
-			LastSynced: normalizedAt.UTC(), OrgID: claim.OrgID,
+			LastSynced: normalizedAt.UTC(), OrgID: claim.OrgID, InteractionID: id,
 		}
 		if validateGitLabInteractionRow(row, claim) == nil {
 			rows = append(rows, row)
@@ -883,7 +896,7 @@ func validateGitLabReopenRow(row gitlabWorkItemReopenRow, claim Claim) error {
 func validateGitLabInteractionRow(row gitlabWorkItemInteractionRow, claim Claim) error {
 	if row.WorkItemID == "" || row.Provider != "gitlab" || row.InteractionType != "comment" ||
 		row.OccurredAt.IsZero() || row.BodyLength < 0 || row.LastSynced.IsZero() ||
-		row.OrgID == "" || row.OrgID != claim.OrgID {
+		row.InteractionID == "" || row.OrgID == "" || row.OrgID != claim.OrgID {
 		return providerfoundation.ErrInvalidScope
 	}
 	return nil

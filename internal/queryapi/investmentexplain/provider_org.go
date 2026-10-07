@@ -228,7 +228,7 @@ func newProviderForOrg(
 			return nil, err
 		}
 		if ok {
-			return newProviderFromCredentials(kind, creds.APIKey, creds.BaseURL, model)
+			return newProviderFromCredentials(kind, creds.APIKey.Reveal(), creds.BaseURL, model)
 		}
 		// Not usable via org BYO. team-lead ruling (codex round 1, P2 --
 		// SSRF-fallback telemetry, the one finding this package's own

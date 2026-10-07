@@ -28,12 +28,15 @@ import (
 //   - synccli.go: `dho sync teams`: ResolveDSN errors (redacted by the config
 //     package), stored-credential errors (redacted by pgstorage.Boundary), and
 //     redact() through the sink boundary for every ClickHouse text; counts only
-//     in the logger lines.
+//     in the logger lines, except the incomplete-project-links warning, whose
+//     error text is the gateway's link-read error passed through redact() (the
+//     sink boundary and the credential this run authenticated with).
+//     The links-not-written warning prints counts only.
 //   - teamscatalog.go: constant messages and redact() for every ClickHouse text.
 var classifiedPrintSites = map[string]int{
 	"batch.go":        3,
 	"local.go":        1,
-	"synccli.go":      14,
+	"synccli.go":      16,
 	"target.go":       5,
 	"teamscatalog.go": 13,
 }

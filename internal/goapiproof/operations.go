@@ -805,6 +805,17 @@ var operationSpecs = map[string]OperationSpec{
 			"data.analytics.breakdowns.items.value":      "on the investment path MeasureCount compiles to SUM(subcategory_kv.2), a FLOAT sum (validate.go:245-246). Derived from CHAOS-5451's rule rather than an observed divergence, and this table's payload always sets useInvestment=true; on the non-investment path the same measure is an exact integer sum",
 		}},
 	},
+	// CHAOS-8104's dedicated browser document selects only the persisted
+	// quality means grouped by the supplied investment dimension. Keep its
+	// input distinct from investmentBreakdown: the operation would otherwise
+	// return an empty group list and a proof would measure no group path.
+	"investmentEvidenceQuality": {
+		ResponseRoot: "analytics",
+		Variables:    investmentEvidenceQualityVariables,
+		Parity: Options{FloatTierB: map[string]string{
+			"data.analytics.evidenceQualityByGroup.mean": "avgIf(evidence_quality) over each persisted group -- ClickHouse float aggregate, order-nondeterministic (investmentquality.go:278, CHAOS-5451)",
+		}},
+	},
 	// sankey.coverage.teamCoverage/.repoCoverage: CORRECTED, not new --
 	// this table used to say these were count()/countIf() integers on the
 	// committed WORK_TYPE payload and would only become float sums if a
@@ -1165,6 +1176,28 @@ var operationSpecs = map[string]OperationSpec{
 			},
 		},
 	},
+	// coverageBaselines (CHAOS-8111) is Go-only from its first day: no Python
+	// resolver ever existed. Its two floats are ClickHouse avg() values of the
+	// stored daily percentages; with no baseline answer to compare with, no
+	// Tier-B leaf is declared. The request is the web's: the day after the
+	// window's last day, and no scope.
+	"coverageBaselines": {
+		ResponseRoot: "coverageBaselines",
+		Variables: func(orgID string, w Window) map[string]any {
+			return map[string]any{"orgId": orgID, "endDate": w.UntilDate}
+		},
+	},
+	// coverageScopeBaseline (CHAOS-8541) is Go-only from its first day, as
+	// coverageBaselines is. Its one float is a ClickHouse avg() of avg() values
+	// of the stored daily percentages; with no baseline answer to compare with,
+	// no Tier-B leaf is declared. The request is the web's: the day after the
+	// window's last day, and no scope.
+	"coverageScopeBaseline": {
+		ResponseRoot: "coverageScopeBaseline",
+		Variables: func(orgID string, w Window) map[string]any {
+			return map[string]any{"orgId": orgID, "endDate": w.UntilDate}
+		},
+	},
 	// testopsJobFailures (CHAOS-8513) is Go-only from its first day: no Python
 	// resolver ever existed, so there is no baseline answer to compare it with.
 	// Its one float, failureRate, is failedRuns / runs: two integer counts of
@@ -1177,17 +1210,6 @@ var operationSpecs = map[string]OperationSpec{
 			return map[string]any{"orgId": orgID, "input": map[string]any{
 				"sinceDate": testopsJobFailuresSince(w.UntilDate), "untilDate": w.UntilDate, "limit": 20,
 			}}
-		},
-	},
-	// coverageBaselines (CHAOS-8111) is Go-only from its first day: no Python
-	// resolver ever existed. Its two floats are ClickHouse avg() values of the
-	// stored daily percentages; with no baseline answer to compare with, no
-	// Tier-B leaf is declared. The request is the web's: the day after the
-	// window's last day, and no scope.
-	"coverageBaselines": {
-		ResponseRoot: "coverageBaselines",
-		Variables: func(orgID string, w Window) map[string]any {
-			return map[string]any{"orgId": orgID, "endDate": w.UntilDate}
 		},
 	},
 	"throughputForecast": {
@@ -1409,6 +1431,21 @@ func investmentVariables(orgID string, w Window) map[string]any {
 			"topN":      10,
 		}},
 		"useInvestment": true,
+	}}
+}
+
+// investmentEvidenceQualityVariables builds the real web consumer's
+// investment batch. The document selects evidenceQualityByGroup, so an
+// explicit allowed grouping is required; leaving it absent returns no groups.
+func investmentEvidenceQualityVariables(orgID string, w Window) map[string]any {
+	return map[string]any{"orgId": orgID, "batch": map[string]any{
+		"breakdowns": []any{map[string]any{
+			"dimension": "THEME", "measure": "COUNT",
+			"dateRange": map[string]any{"startDate": w.SinceDate, "endDate": w.UntilDate},
+			"topN":      1,
+		}},
+		"evidenceQualityGroupBy": "THEME",
+		"useInvestment":          true,
 	}}
 }
 

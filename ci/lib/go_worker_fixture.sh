@@ -311,6 +311,14 @@ start_worker_stack() {
     # skip, same as a missing ClickHouse schema). Reads the caller-set ROOT_DIR
     # global, same as every other path in this file.
     export WORKER_REMAINING_COMPLEXITY_CONFIG_PATH="${ROOT_DIR}/src/dev_health_ops/config/complexity.yaml"
+    # CHAOS-8810: the same reason for the two work-items artifacts. Their
+    # config.go defaults (/app/config/status_mapping.yaml and
+    # /app/config/investment_areas.yaml) exist only in the image. Without
+    # them the daily families work_item_issue_type and work_item_investment
+    # refuse (the worker still starts: the refusal is scoped to the two
+    # families), and no caller of this fixture would compute their tables.
+    export WORKER_GITHUB_WORK_ITEMS_STATUS_MAPPING_PATH="${ROOT_DIR}/src/dev_health_ops/config/status_mapping.yaml"
+    export WORKER_GITHUB_WORK_ITEMS_INVESTMENT_CONFIG_PATH="${ROOT_DIR}/src/dev_health_ops/config/investment_areas.yaml"
     # --shutdown-timeout is 7260s BY CONTRACT -- do not "optimise" it down.
     # CHAOS-5025 tried 120s and then 30s on the theory that 2h1m was an
     # unbounded-teardown time bomb. It is not, and the worker REFUSES to

@@ -35,7 +35,7 @@
       "operation": "operatingReview",
       "two_plane_ops_sha": "12a6fa86fb59f2c6fe3aeec0ca44d040fc9e216f",
       "guards": [
-        {"file": "internal/queryapi/operatingreview/operatingreview_golden_test.go", "test": "TestOperatingReviewMatchesTheFrozenGolden"},
+        {"file": "internal/queryapi/operatingreview/operatingreview_golden_test.go", "test": "TestOperatingReviewMatchesTheGoGeneratedSnapshot"},
         {"file": "internal/queryapi/operatingreview/operatingreview_test.go", "test": "TestSumAvgMaxMin_SkipNilLikePythonNone"},
         {"file": "tests/api/graphql/test_go_served_resolver_python_deletion_structural_guard.py", "test": "test_deleted_modules_do_not_exist"}
       ]

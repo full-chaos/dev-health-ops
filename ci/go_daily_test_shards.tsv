@@ -1,0 +1,13 @@
+# Top-level-test shards of internal/jobs/metrics/daily for integration CI.
+#
+# One `go test` of this package took 1334s of the 25-minute job limit on the
+# hosted runner (main 168feb0253f6, after CHAOS-8810 added many real-ClickHouse
+# tests; more are coming), leaving one second of margin on one run and a
+# cancelled job on another. ci/check_go.sh therefore runs the package ONLY as
+# these name-partitioned shards (the same mechanism as
+# go_providersync_test_shards.tsv) and never in the `packages` target.
+# Every discovered top-level test lands in exactly one shard.
+# Weights are relative classes (integration-tagged vs ordinary), not seconds.
+shards	4
+integration-test-weight	100
+ordinary-test-weight	1

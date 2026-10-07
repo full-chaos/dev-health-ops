@@ -126,6 +126,13 @@ func TestJiraDirectAdapterProjectionsMatchFrozenPythonSink(t *testing.T) {
 					t.Fatalf("columns after the Python freeze: %v", problems)
 				}
 			}
+			if testCase.destination == "work_item_interactions" {
+				var problems []string
+				goColumns, goRows, problems = withoutInteractionColumnsAfterThePythonFreeze(goColumns, goRows)
+				if len(problems) > 0 {
+					t.Fatalf("columns after the Python freeze: %v", problems)
+				}
+			}
 			if strings.Join(goColumns, ",") != strings.Join(result.ColumnNames, ",") {
 				t.Fatalf("column list diverges: python=%v go=%v", result.ColumnNames, goColumns)
 			}

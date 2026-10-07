@@ -389,6 +389,13 @@ input AnalyticsRequestInput {
   flowMatrix: FlowMatrixRequestInput = null
   useInvestment: Boolean = null
   filters: FilterInput = null
+  """
+  Optional grouping for persisted work-unit evidence quality. Only THEME,
+  SUBCATEGORY and WORK_TYPE are valid. The selected key is the unit's
+  deterministic dominant persisted value, so one unit contributes to one
+  group.
+  """
+  evidenceQualityGroupBy: DimensionInput = null
 }
 
 type AnalyticsResult {
@@ -398,6 +405,18 @@ type AnalyticsResult {
   flowMatrix: FlowMatrixResult
   evidenceQualityDistribution: JSON
   evidenceQualityStats: EvidenceQualityStats
+  evidenceQualityByGroup: [EvidenceQualityGroup!]
+}
+
+"""
+One persisted-work-unit evidence-quality aggregate. `total` counts every unit
+in the group. `mean` is null when no unit in the group has a known quality.
+"""
+type EvidenceQualityGroup {
+  key: String!
+  label: String
+  mean: Float
+  total: Int!
 }
 
 type BreakdownItem {
@@ -411,6 +430,11 @@ input BreakdownRequestInput {
   measure: MeasureInput!
   dateRange: DateRangeInput!
   topN: Int! = 10
+  """
+  Optional exact dimension keys. When present, returns these keys without the
+  independent topN cut so related breakdown measures can be joined safely.
+  """
+  keys: [String!] = null
 }
 
 type BreakdownResult {
@@ -754,9 +778,12 @@ type ConnectorStatus {
 }
 
 type Coverage {
-  reposCoveredPct: Float!
-  prsLinkedToIssuesPct: Float!
-  issuesWithCycleStatesPct: Float!
+  """Null when no repositories are available to measure."""
+  reposCoveredPct: Float
+  """Null when the current window contains no work items to link."""
+  prsLinkedToIssuesPct: Float
+  """Null when the current window contains no work items for cycle-state coverage."""
+  issuesWithCycleStatesPct: Float
 }
 
 type CoverageStat {
@@ -968,6 +995,32 @@ type HomeSignal {
   category: String!
   """Null when the signal is not scoped to one entity (e.g. an org-wide signal)."""
   scopeEntity: ScopeEntityRef
+  """Current primary work-item attribution evidence for work-item metrics; null when this window has no attributable work items."""
+  attribution: SignalAttribution
+}
+
+"""Source and confidence distribution for the work items behind one Home signal."""
+type SignalAttribution {
+  """Number of attributed work items behind these distributions."""
+  items: Int!
+  sources: [SignalAttributionSourceCount!]!
+  confidence: [SignalAttributionConfidenceCount!]!
+}
+
+"""One source bucket of a Home signal's work-item attribution distribution."""
+type SignalAttributionSourceCount {
+  source: TeamAttributionSource!
+  items: Int!
+  """Fraction of SignalAttribution.items in this bucket."""
+  share: Float!
+}
+
+"""One confidence bucket of a Home signal's work-item attribution distribution."""
+type SignalAttributionConfidenceCount {
+  confidence: TeamAttributionConfidence!
+  items: Int!
+  """Fraction of SignalAttribution.items in this bucket."""
+  share: Float!
 }
 
 type HomeLimitingFactor {
@@ -984,6 +1037,16 @@ type HomeDataConfidence {
   coveragePct: Float
   connectedSources: [String!]!
   missingSources: [String!]!
+  caveats: [String!]!
+}
+
+"""Coverage and metric-ingestion quality for the repositories selected by this Home request."""
+type HomeScopeDataConfidence {
+  level: String!
+  """Null when the selected scope has no repositories."""
+  coveragePct: Float
+  """Most recent in-window repository-metric ingestion, or null when the scope has none."""
+  lastIngestedAt: String
   caveats: [String!]!
 }
 
@@ -1013,12 +1076,15 @@ type HomeResult {
   reworkThemeAllocation: [ReworkThemeAllocation!]!
   summary: [SummarySentence!]!
   tiles: [HomeTileEntry!]!
-  constraint: ConstraintCard!
+  "The present constraint when current-window data exists; null when the window has no data."
+  constraint: ConstraintCard
   events: [EventItem!]!
   healthState: HealthState!
   signals: [HomeSignal!]!
   limitingFactor: HomeLimitingFactor!
   dataConfidence: HomeDataConfidence!
+  """Coverage and ingestion quality for the selected repository scope; distinct from org-wide dataConfidence."""
+  scopeDataConfidence: HomeScopeDataConfidence!
 }
 
 type SummarySentence {
@@ -1157,6 +1223,10 @@ type MetricDelta {
   value: Float!
   unit: String!
   deltaPct: Float!
+  "Whether the current window has one or more stored source rows. A stored zero has this field set to true."
+  hasData: Boolean!
+  "Whether the comparison window has one or more stored source rows."
+  hasPriorData: Boolean!
   spark: [SparkPoint!]!
 }
 
@@ -1214,6 +1284,10 @@ type OperatingReviewDelta {
 
 input OperatingReviewInput {
   teamId: String = null
+  """
+  Teams to review together (CHAOS-8516). The answer is the review of the UNION of these teams' stored rows, by the same rules as the one-team and the all-teams review: a count is a sum, a ratio is made from summed numerators and denominators, and a mean is a mean over the stored rows, never a mean of team values. One id gives the one-team review. Null or empty = ``teamId`` applies (or all teams). ``teamId`` and ``teamIds`` together are an error. Rows with no team are in the all-teams review only.
+  """
+  teamIds: [String!] = null
   weekStart: Date!
 }
 
@@ -1227,6 +1301,21 @@ type OperatingReviewMetric {
   True = the week holds a stored value for the metric (CHAOS-8115). False = no row of the metric's daily table in the week, only NULL values, or a read that failed: ``value`` is then a 0 placeholder, not a measured zero, and a client draws "No data". True with ``value`` 0 is a stored zero.
   """
   hasData: Boolean!
+  """
+  Whether the request's team selection narrows this metric (CHAOS-8516).
+  """
+  scope: OperatingReviewMetricScope!
+}
+
+enum OperatingReviewMetricScope {
+  """
+  The value follows the request's team selection: one team, several teams together, or all teams when none is selected.
+  """
+  TEAM
+  """
+  The value is the whole organisation's, whatever team is selected: the metric's daily tables hold no team. A client labels it "organisation", not as the selection's value.
+  """
+  ORGANIZATION
 }
 
 type OperatingReviewSection {
@@ -1496,6 +1585,11 @@ type Query {
   coverageBaselines(orgId: String!, endDate: Date!, repoIds: [String!] = null, teamIds: [String!] = null): [RepoCoverageBaseline!]!
 
   """
+  The coverage baseline of a whole scope (CHAOS-8541): the mean, over the 30 days before ``endDate`` (``endDate`` itself is not included), of the scope's coverage of each day. The scope's coverage of a day is the mean of its repositories' coverage of that day (a repository with no value that day is left out): the value the coverage trend serves for a day. The same window and the same 7-day minimum as ``coverageBaselines``. Not a set target, and not the mean of the repository baselines. Scope: ``repoIds`` and the repositories that ``teamIds`` own; neither = the whole org.
+  """
+  coverageScopeBaseline(orgId: String!, endDate: Date!, repoIds: [String!] = null, teamIds: [String!] = null): ScopeCoverageBaseline!
+
+  """
   Cyclomatic complexity trend by repo or file. Reads from append-only ``repo_complexity_daily`` / ``file_complexity_snapshots`` tables — no recomputation, pure surface of persisted data.
   """
   complexityTimeseries(input: ComplexityTimeseriesInput!): ComplexityTimeseriesResult!
@@ -1755,6 +1849,19 @@ type SavedReportType {
   createdAt: DateTime!
   updatedAt: DateTime!
   createdBy: String
+}
+
+type ScopeCoverageBaseline {
+  """
+  Mean, in percent (0 to 100), of the scope's line coverage of each day that holds a value, over the 30 days. Null = fewer than 7 such days (``lineDays``): then there is no baseline. Never 0 for "none", never the current value.
+  """
+  lineBaselinePct: Float
+  """Days of the 30 on which at least one repository of the scope holds a line coverage value."""
+  lineDays: Int!
+  """Mean branch coverage, in percent; the same rules as ``lineBaselinePct``."""
+  branchBaselinePct: Float
+  """Days of the 30 on which at least one repository of the scope holds a branch coverage value."""
+  branchDays: Int!
 }
 
 input ScopeFilterInput {

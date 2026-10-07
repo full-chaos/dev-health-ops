@@ -4,6 +4,8 @@ package providersync
 
 import (
 	"context"
+	"errors"
+	"slices"
 	"testing"
 	"time"
 
@@ -13,11 +15,12 @@ import (
 
 // This test uses the shared migration-backed ClickHouse fixture. It authors no
 // DDL: every table and column is supplied by the real ClickHouse migration
-// chain, and all sixteen adapters used by the route are exercised through the
-// provider-owned composite dispatcher. The ten derived effects are empty here
-// because their non-empty schema projections are covered by the companion
-// derived integration suite.
-func TestGitLabWorkItemEffectsComposeAllSixteenAgainstRealClickHouse(t *testing.T) {
+// chain. The seven effects of the work-items unit (six raw tables and
+// ai_attribution) go through the provider-owned composite dispatcher and are
+// read back. The dispatcher refuses each of the nine tables the daily job
+// writes; their refusal with rows, and the proof that no row is stored, is in
+// the companion derived integration suite.
+func TestGitLabWorkItemEffectsComposeRawSevenAndRefuseDailyJobTablesAgainstRealClickHouse(t *testing.T) {
 	ctx, conn := newWorkItemEffectsConn(t)
 	claim := nativeTestClaim("gitlab", "work-items")
 	claim.OrgID = "77777777-7777-4777-8777-777777777777"
@@ -51,6 +54,7 @@ func TestGitLabWorkItemEffectsComposeAllSixteenAgainstRealClickHouse(t *testing.
 	interaction := gitlabWorkItemInteractionRow{
 		WorkItemID: item.WorkItemID, Provider: "gitlab", InteractionType: "comment", OccurredAt: now,
 		Actor: gitlabStringPtr("alice@example.com"), BodyLength: 9, LastSynced: now, OrgID: claim.OrgID,
+		InteractionID: "501",
 	}
 	sprint := gitlabSprintRow{
 		Provider: "gitlab", SprintID: "gitlab:acme/api:milestone:7", Name: gitlabStringPtr("July"),
@@ -69,9 +73,26 @@ func TestGitLabWorkItemEffectsComposeAllSixteenAgainstRealClickHouse(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	effects = append(effects, derived...)
-	if len(effects) != 16 {
-		t.Fatalf("composed effects=%d want=16", len(effects))
+	var refusedEffects []EffectBatch
+	for _, effect := range derived {
+		if slices.Contains(githubWorkItemDerivedDestinations, effect.Destination) {
+			refusedEffects = append(refusedEffects, effect)
+			continue
+		}
+		effects = append(effects, effect)
+	}
+	if len(effects) != 7 || len(refusedEffects) != 9 {
+		t.Fatalf("composed effects=%d refused=%d want 7 and 9", len(effects), len(refusedEffects))
+	}
+	composed := make([]string, 0, len(effects))
+	for _, effect := range effects {
+		composed = append(composed, effect.Destination)
+	}
+	slices.Sort(composed)
+	wantComposed := workItemRouteDestinations()
+	slices.Sort(wantComposed)
+	if !slices.Equal(composed, wantComposed) {
+		t.Fatalf("composed destinations=%v want the route destinations %v", composed, wantComposed)
 	}
 	sink, err := NewGitLabWorkItemFamilyClickHouseEffects(
 		conn, providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }), nil,
@@ -79,6 +100,7 @@ func TestGitLabWorkItemEffectsComposeAllSixteenAgainstRealClickHouse(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
+	stored := 0
 	for _, effect := range effects {
 		if err := sink.WriteEffect(ctx, claim, effect); err != nil {
 			t.Fatalf("write %s: %v", effect.Destination, err)
@@ -90,10 +112,26 @@ func TestGitLabWorkItemEffectsComposeAllSixteenAgainstRealClickHouse(t *testing.
 		wantInspection := EffectExact
 		if len(effect.Rows) == 0 {
 			wantInspection = EffectAbsent
+		} else {
+			stored++
 		}
 		if err != nil || inspection != wantInspection {
 			t.Fatalf("inspect %s: %s %v", effect.Destination, inspection, err)
 		}
+	}
+	if stored != 6 {
+		t.Fatalf("effects stored and read back exact=%d want the six raw tables", stored)
+	}
+	for _, effect := range refusedEffects {
+		t.Run("refuses "+effect.Destination, func(t *testing.T) {
+			if err := sink.WriteEffect(ctx, claim, effect); !errors.Is(err, ErrInvalidConfiguration) {
+				t.Fatalf("the sync sink accepted a table of the daily job: error=%v", err)
+			}
+			inspection, err := sink.InspectEffect(ctx, claim, effect)
+			if !errors.Is(err, ErrInvalidConfiguration) || inspection != EffectConflict {
+				t.Fatalf("readback=%v error=%v want a refused conflict", inspection, err)
+			}
+		})
 	}
 	foreign := claim
 	foreign.OrgID = "org-other"

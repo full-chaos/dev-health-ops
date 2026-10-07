@@ -86,8 +86,8 @@ func fetchGitHubProjectV2ForLogging(t *testing.T, reply string) GitHubProjectV2F
 func TestGitHubProjectV2ReportsMembershipSkipsInAStructuredLog(t *testing.T) {
 	records := captureMembershipLogs(t)
 	result := fetchGitHubProjectV2ForLogging(t, `{"data":{"organization":{"projectV2":{"items":{"nodes":[`+
-		`{"id":"PVTI_1","content":{"__typename":"DraftIssue","title":"Ship it","createdAt":"2026-08-01T08:00:00Z","updatedAt":"2026-08-02T08:00:00Z"},"fieldValues":{"nodes":[]},"changes":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}},`+
-		`{"id":"PVTI_2","content":{"__typename":"PullRequest","number":8,"title":"unidentifiable"},"fieldValues":{"nodes":[]},"changes":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}`+
+		`{"id":"PVTI_1","content":{"__typename":"DraftIssue","title":"Ship it","createdAt":"2026-08-01T08:00:00Z","updatedAt":"2026-08-02T08:00:00Z"},"fieldValues":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}},"changes":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}},`+
+		`{"id":"PVTI_2","content":{"__typename":"PullRequest","number":8,"title":"unidentifiable"},"fieldValues":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}},"changes":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}`+
 		`],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}`)
 	if result.MembershipSkips["draft_issue_has_no_subject"] != 1 ||
 		result.MembershipSkips["pull_request_incomplete"] != 1 {
@@ -156,7 +156,7 @@ func TestGitHubProjectV2ReportsMembershipSkipsInAStructuredLog(t *testing.T) {
 func TestGitHubProjectV2LogsNothingWhenEveryItemIsEmitted(t *testing.T) {
 	records := captureMembershipLogs(t)
 	result := fetchGitHubProjectV2ForLogging(t, `{"data":{"organization":{"projectV2":{"items":{"nodes":[`+
-		`{"id":"PVTI_PR","createdAt":"2026-08-01T08:00:00Z","content":{"__typename":"PullRequest","number":42,"title":"A PR","repository":{"nameWithOwner":"acme/api"}},"fieldValues":{"nodes":[]},"changes":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}`+
+		`{"id":"PVTI_PR","createdAt":"2026-08-01T08:00:00Z","content":{"__typename":"PullRequest","number":42,"title":"A PR","repository":{"nameWithOwner":"acme/api"}},"fieldValues":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}},"changes":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}`+
 		`],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}`)
 	if len(result.MembershipSkips) != 0 {
 		t.Fatalf("premise failed, something was skipped: %+v", result.MembershipSkips)
@@ -177,7 +177,7 @@ func TestGitHubProjectV2LogsNothingWhenEveryItemIsEmitted(t *testing.T) {
 func TestGitHubProjectV2LogsDraftIssuesAtInfo(t *testing.T) {
 	records := captureMembershipLogs(t)
 	fetchGitHubProjectV2ForLogging(t, `{"data":{"organization":{"projectV2":{"items":{"nodes":[`+
-		`{"id":"PVTI_1","content":{"__typename":"DraftIssue","title":"Ship it","createdAt":"2026-08-01T08:00:00Z","updatedAt":"2026-08-02T08:00:00Z"},"fieldValues":{"nodes":[]},"changes":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}`+
+		`{"id":"PVTI_1","content":{"__typename":"DraftIssue","title":"Ship it","createdAt":"2026-08-01T08:00:00Z","updatedAt":"2026-08-02T08:00:00Z"},"fieldValues":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}},"changes":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}`+
 		`],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}`)
 	if len(*records) != 1 {
 		t.Fatalf("draft issues produced %d log records, want 1", len(*records))

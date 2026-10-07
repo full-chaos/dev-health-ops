@@ -82,6 +82,16 @@ ClickHouse writes must preserve:
 
 A missing provider transition or absent bounded-page result is unknown, not automatically a tombstone.
 
+### Work item comments: `work_item_interactions`
+
+The sorting key is `(org_id, work_item_id, occurred_at, interaction_type, interaction_id)`. `interaction_id` is the provider's own comment id (Jira, GitHub, GitLab and Linear all write it), so two comments of one work item in the same millisecond are two rows. A comment the provider sends without an id is skipped and counted (`providersync.interaction.comment_missing_id`, a class label and no body); it is never written with an empty id.
+
+An empty `interaction_id` marks a **legacy row**, written before the key carried the id, and nothing else. The legacy row of a comment and the keyed row of the same comment have different keys and are never merged. So a reader never counts comments from the table: it reads the view `work_item_interactions_current`, which is the documented reader contract. The view applies `FINAL`, and hides a legacy row once any keyed row exists in its slot `(org_id, work_item_id, occurred_at, interaction_type)`. A legacy row with no keyed row in its slot stays visible, and `is_legacy_id` marks it. A slot that held several comments and was only partly re-fetched shows only the re-fetched ones: the rest is missing, not invented.
+
+The old collapse lost comments for good: the second of two same-millisecond comments was never stored. Only fetching that comment from the provider again, with the new writer, brings it back, as a keyed row. This change fetches nothing by itself and makes no promise that any sync mode finds old comments: which comments a sync fetches depends on its window, and a window that does not reach the comment's work item does not fetch it. Repairing old data is an operator task, one backfill per integration over the window to repair, run after the migration and the release are on every pod. It is tracked apart from this change, with its own proof.
+
+Migration `107_work_item_interactions_comment_id.sql` is one `ALTER` and the view. The column is added with no `DEFAULT` (ClickHouse refuses a column with a default expression in the sorting key) and the key is extended in the same statement. It must be applied before a pod that writes `interaction_id` runs; an old pod's insert (no `interaction_id` in its column list) still works and writes a legacy row. A prepared snapshot stored by the previous release has interaction rows without an id: a new pod that replays one refuses it with `ErrPreviousReleaseSnapshot`, and the unit fails on its first attempt as `previous_release_snapshot` (no retry); the scope's next run is a new unit with a new snapshot. If the old pod had already written those rows (as legacy rows), the replay reads them back as exact and the unit succeeds.
+
 ## Project membership: provider event to graph edge
 
 A work item's project used to be a plain overwrite column on `work_items`. That
@@ -339,7 +349,7 @@ flowchart TB
     DEP["Deployment<br/>deployments"]
 
     PR ==>|"BELONGS_TO_REPOSITORY<br/>the pull request's work_items.repo_id"| REPO
-    PR ==>|"RELATES_TO<br/>work_item_dependencies link row"| ISSUE
+    PR ==>|"RELATES_TO<br/>work_graph_issue_pr link row"| ISSUE
     ISSUE ==>|"BELONGS_TO_PROJECT<br/>project_membership_presence"| PROJ
     REPO -.->|"OWNED_BY_TEAM<br/>team_repo_ownership"| TEAM
     PROJ -.->|"OWNED_BY_TEAM<br/>team_project_ownership"| TEAM
@@ -360,12 +370,26 @@ specific to one provider.
 
 Two rules hold for every read of the tree:
 
-1. A link is an actual linked row in `work_item_dependencies` whose two ends
-   are real work items. An issue-key prefix, an unresolved external key, or an
-   issue's own repository column is never a link.
+1. The issue <> pull request link of record is the table
+   `work_graph_issue_pr`. Each row carries a `provenance` tier, ranked
+   **native > explicit_text > heuristic**. All three tiers count as links.
+   A consumer names the tier it read and never presents a lower tier as
+   native. An issue-key prefix by itself, an unresolved external key, an
+   issue's own repository column, or a team's repositories is never the
+   relation.
 2. A team is reached through ownership only (`team_repo_ownership`,
    `team_project_ownership`), never through person membership or a computed
    attribution.
+
+3. A project has one id. The catalog row (`projects.id`), the ownership row
+   (`team_project_ownership.project_id`) and the issue (`work_items.project_id`)
+   name the same project by the same value, so ownership reaches a project's
+   issues by `(provider, project_id)` with no join on the project key. The id
+   is the provider's own stable id, never a value built from the project key:
+   a key can be renamed, and a key-built id names a project no issue points
+   to. The id each provider writes, and the one provider that does not hold
+   the rule yet, are listed in
+   [Work-item team attribution](team-attribution.md), section 0.4b.
 
 How each provider captures the pull request ↔ issue link is described in
 [Work-item team attribution](team-attribution.md), section 2.

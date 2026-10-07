@@ -25,6 +25,12 @@ const (
 	ProviderKindOllama    ProviderKind = "ollama"
 	ProviderKindMock      ProviderKind = "mock"
 	ProviderKindNone      ProviderKind = "none"
+	// ProviderKindTypeSafe names the TypeSafe System One (Jev) decision
+	// backend (typesafeclient.go). It is in the closed set of names but NOT
+	// in goImplementedProviderKinds and NOT in auto-detection: it returns
+	// typed answers, not completion text, so it is no Provider and can never
+	// be the served provider. It is built by NewTypeSafeClientFromEnv.
+	ProviderKindTypeSafe ProviderKind = "typesafe"
 
 	// There is deliberately no ProviderKindLMStudio: chris's ruling
 	// (CHAOS-4978, 2026-09-03 13:14) dropped the native LM Studio provider
@@ -372,7 +378,7 @@ func NewProviderFromEnvWithModel(kind ProviderKind, model string) (Provider, err
 			return nil, fmt.Errorf("LLM provider %q is not configured: set OPENAI_API_KEY", kind)
 		}
 		return NewOpenAIProvider(OpenAIProviderConfig{
-			APIKey:  apiKey,
+			APIKey:  envsecrets.NewHidden(apiKey),
 			BaseURL: firstNonEmptyEnv("LLM_BASE_URL", "OPENAI_BASE_URL"),
 			// Generic LLM_MODEL checked BEFORE the provider-specific
 			// LLM_MODEL_OPENAI (chris's ruling, CHAOS-4978, 2026-09-03
@@ -393,7 +399,7 @@ func NewProviderFromEnvWithModel(kind ProviderKind, model string) (Provider, err
 			BaseURL: firstNonEmptyEnv("LLM_BASE_URL", "LOCAL_LLM_BASE_URL"),
 			// Generic-first, same ruling as openai above.
 			Model:  resolved,
-			APIKey: firstNonEmptyEnv("LLM_API_KEY", "LOCAL_LLM_API_KEY"),
+			APIKey: envsecrets.NewHidden(firstNonEmptyEnv("LLM_API_KEY", "LOCAL_LLM_API_KEY")),
 		}), nil
 
 	case ProviderKindOllama:
@@ -407,13 +413,16 @@ func NewProviderFromEnvWithModel(kind ProviderKind, model string) (Provider, err
 		return NewOllamaProvider(OllamaProviderConfig{
 			BaseURL: firstNonEmptyEnv("LLM_BASE_URL", "OLLAMA_BASE_URL"),
 			Model:   resolved,
-			APIKey:  firstNonEmptyEnv("LLM_API_KEY", "OLLAMA_API_KEY", "LOCAL_LLM_API_KEY"),
+			APIKey:  envsecrets.NewHidden(firstNonEmptyEnv("LLM_API_KEY", "OLLAMA_API_KEY", "LOCAL_LLM_API_KEY")),
 		}), nil
 
 	// BYO LLM stubs: Python has a real client for each of these; this port
 	// does not yet.
 	case ProviderKindAnthropic, ProviderKindGemini, ProviderKindQwen:
 		return unimplementedProvider{kind: kind}, nil
+
+	case ProviderKindTypeSafe:
+		return nil, errTypeSafeIsNotAProvider
 
 	default:
 		return nil, fmt.Errorf("unknown LLM provider kind %q", kind)
@@ -454,7 +463,7 @@ func NewProviderFromCredentials(kind ProviderKind, apiKey, baseURL, model string
 			return nil, fmt.Errorf("LLM provider %q is not configured: missing an api_key", kind)
 		}
 		return NewOpenAIProvider(OpenAIProviderConfig{
-			APIKey:  apiKey,
+			APIKey:  envsecrets.NewHidden(apiKey),
 			BaseURL: baseURL,
 			Model:   model,
 		}), nil
@@ -467,7 +476,7 @@ func NewProviderFromCredentials(kind ProviderKind, apiKey, baseURL, model string
 		return NewLocalProvider(LocalProviderConfig{
 			BaseURL: baseURL,
 			Model:   model,
-			APIKey:  apiKey,
+			APIKey:  envsecrets.NewHidden(apiKey),
 		}), nil
 
 	case ProviderKindOllama:
@@ -493,12 +502,15 @@ func NewProviderFromCredentials(kind ProviderKind, apiKey, baseURL, model string
 		return NewLocalProvider(LocalProviderConfig{
 			BaseURL: baseURL,
 			Model:   model,
-			APIKey:  apiKey,
+			APIKey:  envsecrets.NewHidden(apiKey),
 		}), nil
 
 	// BYO LLM stubs: same narrowing as NewProviderFromEnv.
 	case ProviderKindAnthropic, ProviderKindGemini, ProviderKindQwen:
 		return unimplementedProvider{kind: kind}, nil
+
+	case ProviderKindTypeSafe:
+		return nil, errTypeSafeIsNotAProvider
 
 	default:
 		return nil, fmt.Errorf("unknown LLM provider kind %q", kind)

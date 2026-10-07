@@ -6,6 +6,7 @@ import (
 	"errors"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/workitemmetrics"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
+	"slices"
 	"testing"
 	"time"
 
@@ -214,7 +215,9 @@ func TestJiraCompositeSinkOwnsDirectDerivedAndEvaluatedEmptyAI(t *testing.T) {
 	}
 }
 
-func TestJiraMetricTripletEffectsReachTheirMigratedStores(t *testing.T) {
+// The Jira sync sink refuses the three work-item metric tables before any
+// store call: the daily job is their one writer.
+func TestJiraSyncSinkRefusesTheMetricTripletEffects(t *testing.T) {
 	claim := nativeTestClaim("jira", "work-items")
 	group := githubWorkItemMetricTestGroupRow()
 	group.Provider, group.OrgID = "jira", claim.OrgID
@@ -242,11 +245,11 @@ func TestJiraMetricTripletEffectsReachTheirMigratedStores(t *testing.T) {
 		switch effect.Destination {
 		case "work_item_metrics_daily", "work_item_user_metrics_daily", "work_item_cycle_times":
 			seen++
-			if err := sink.WriteEffect(context.Background(), claim, effect); !errors.Is(err, errJiraDerivedPrepare) {
-				t.Fatalf("%s write=%v want migrated store call", effect.Destination, err)
+			if err := sink.WriteEffect(context.Background(), claim, effect); !errors.Is(err, ErrInvalidConfiguration) || errors.Is(err, errJiraDerivedPrepare) {
+				t.Fatalf("%s write=%v want a refusal before the store", effect.Destination, err)
 			}
-			if inspection, err := sink.InspectEffect(context.Background(), claim, effect); inspection != EffectConflict || !errors.Is(err, errJiraDerivedPrepare) {
-				t.Fatalf("%s readback=%v/%v want migrated store call", effect.Destination, inspection, err)
+			if inspection, err := sink.InspectEffect(context.Background(), claim, effect); inspection != EffectConflict || !errors.Is(err, ErrInvalidConfiguration) || errors.Is(err, errJiraDerivedPrepare) {
+				t.Fatalf("%s readback=%v/%v want a refusal before the store", effect.Destination, inspection, err)
 			}
 		}
 	}
@@ -418,7 +421,9 @@ func TestJiraClickHouseDerivationSourceUsesTenantScopedLoadersAndLease(t *testin
 	}
 }
 
-func TestJiraAtlassianRawOnlyRouteHoldsWatermarkForDerivedGap(t *testing.T) {
+// The Jira unit stores raw rows only and takes its watermark from the window
+// it stored; no derived table has an effect in its batch.
+func TestJiraAtlassianRouteStoresRawRowsAndAdvancesWatermark(t *testing.T) {
 	claim := jiraAtlassianClaim()
 	client := jiraWorkItemsTestClient(
 		t,
@@ -434,18 +439,31 @@ func TestJiraAtlassianRawOnlyRouteHoldsWatermarkForDerivedGap(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if batch.Watermark != nil || len(batch.Effects) != len(jiraAtlassianRawDestinations) {
-		t.Fatalf("raw-only route watermark/effects=%v/%d", batch.Watermark, len(batch.Effects))
+	// The watermark is the end of the window whose raw rows the unit stored;
+	// the one effect beside the raw tables is the evaluated-empty ai_attribution.
+	if batch.Watermark == nil || !batch.Watermark.Equal(claim.BeforeAt.UTC()) ||
+		len(batch.Effects) != len(jiraAtlassianRawDestinations)+1 {
+		t.Fatalf("route watermark/effects=%v/%d", batch.Watermark, len(batch.Effects))
+	}
+	for _, effect := range batch.Effects {
+		if slices.Contains(githubWorkItemDerivedDestinations, effect.Destination) {
+			t.Fatalf("the unit built an effect for the derived table %q", effect.Destination)
+		}
 	}
 	summary, ok := batch.Result["jira_work_items"].(JiraAtlassianWorkItemsResult)
-	if !ok || len(summary.DerivedDestinationsImplemented) != 0 ||
-		len(summary.DerivedDestinationsUnimplemented) != len(jiraWorkItemDerivedDestinations) ||
-		!summary.WatermarkHeldForIncomplete {
-		t.Fatalf("raw-only typed result=%#v", batch.Result["jira_work_items"])
+	if !ok || summary.WatermarkHeldForIncomplete {
+		t.Fatalf("typed result=%#v", batch.Result["jira_work_items"])
+	}
+	for _, key := range []string{
+		"derived_destinations_implemented", "derived_destinations_unimplemented", "team_inheritance",
+	} {
+		if _, present := batch.Result[key]; present {
+			t.Fatalf("result still carries %q: %+v", key, batch.Result)
+		}
 	}
 }
 
-func TestJiraCanonicalAliasesComposeSixteenDestinationsPlusWorklogs(t *testing.T) {
+func TestJiraCanonicalAliasesComposeTheFamilyDestinationsPlusWorklogs(t *testing.T) {
 	for _, dataset := range workitemcontract.FamilyDatasets() {
 		dataset := dataset
 		t.Run(dataset, func(t *testing.T) {
@@ -491,9 +509,7 @@ func TestJiraCanonicalAliasesComposeSixteenDestinationsPlusWorklogs(t *testing.T
 				t.Fatalf("destination set=%v", seen)
 			}
 			summary, ok := batch.Result["jira_work_items"].(JiraAtlassianWorkItemsResult)
-			if !ok || len(summary.DerivedDestinationsImplemented) != 10 ||
-				len(summary.DerivedDestinationsUnimplemented) != 0 ||
-				summary.WatermarkHeldForIncomplete {
+			if !ok || summary.WatermarkHeldForIncomplete {
 				t.Fatalf("typed completion result=%#v", batch.Result["jira_work_items"])
 			}
 		})

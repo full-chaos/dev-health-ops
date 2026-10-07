@@ -166,6 +166,106 @@ const (
 	PostSyncFanoutOutcomeError          PostSyncFanoutOutcome = "error"
 )
 
+// PostSyncTouchedDaysEvent is the bounded label of the touched-day counter of
+// NativePostSyncService.Fanout (CHAOS-8813). Each value counts days or keys,
+// never an identifier.
+type PostSyncTouchedDaysEvent string
+
+const (
+	// PostSyncTouchedDaysKeysRecorded counts the (day, repository) keys that a
+	// fan-out recorded from the raw rows of its sync run.
+	PostSyncTouchedDaysKeysRecorded PostSyncTouchedDaysEvent = "keys_recorded"
+	// PostSyncTouchedDaysDispatched counts the touched days a fan-out started
+	// a daily run for.
+	PostSyncTouchedDaysDispatched PostSyncTouchedDaysEvent = "days_dispatched"
+	// PostSyncTouchedDaysCarriedOver counts the touched days a fan-out left
+	// for a later fan-out because of its day budget.
+	PostSyncTouchedDaysCarriedOver PostSyncTouchedDaysEvent = "days_carried_over"
+	// PostSyncTouchedDaysAlreadyStarted counts the touched days a fan-out
+	// skipped because a run of its own generation existed for the day.
+	PostSyncTouchedDaysAlreadyStarted PostSyncTouchedDaysEvent = "days_already_started"
+	// PostSyncTouchedDaysReadTruncated counts the fan-outs whose read of the
+	// touched days hit its bound: older touched days were not seen.
+	PostSyncTouchedDaysReadTruncated PostSyncTouchedDaysEvent = "read_truncated"
+	// PostSyncTouchedDaysRecordFailed counts the fan-outs that failed before
+	// their Postgres transaction because the record or the read failed.
+	PostSyncTouchedDaysRecordFailed PostSyncTouchedDaysEvent = "record_failed"
+	// PostSyncTouchedDaysMarkFailed counts the fan-outs whose started days
+	// stay recorded as touched: each is computed once more.
+	PostSyncTouchedDaysMarkFailed PostSyncTouchedDaysEvent = "mark_failed"
+	// PostSyncTouchedDaysOverRepositoryLimit counts the pending days a fan-out
+	// started no run for because the day has more pending repositories than
+	// one run accepts. The day stays pending.
+	PostSyncTouchedDaysOverRepositoryLimit PostSyncTouchedDaysEvent = "over_repository_limit"
+)
+
+// TouchedDaysDrainEvent is the bounded label of the counter of the drain of
+// the pending touched days (CHAOS-8846).
+type TouchedDaysDrainEvent string
+
+const (
+	// TouchedDaysDrainPasses counts the passes that read the pending days.
+	TouchedDaysDrainPasses TouchedDaysDrainEvent = "passes"
+	// TouchedDaysDrainDaysStarted counts the days a pass started a run for.
+	TouchedDaysDrainDaysStarted TouchedDaysDrainEvent = "days_started"
+	// TouchedDaysDrainDaysSplit counts the days with more pending
+	// repositories than one run accepts that a pass started a part of.
+	TouchedDaysDrainDaysSplit TouchedDaysDrainEvent = "days_split"
+	// TouchedDaysDrainDaysAlreadyStarted counts the days a pass found a run
+	// of its own generation for (a second delivery of its trigger).
+	TouchedDaysDrainDaysAlreadyStarted TouchedDaysDrainEvent = "days_already_started"
+	// TouchedDaysDrainDaysReturned counts the days with a run that ended
+	// without a result (failed, canceled or never ended) and that a pass
+	// made pending again.
+	TouchedDaysDrainDaysReturned TouchedDaysDrainEvent = "days_returned_to_pending"
+	// TouchedDaysDrainDaysSkipped counts the pending days a pass started no
+	// run for because their newest runs all ended without a result.
+	TouchedDaysDrainDaysSkipped TouchedDaysDrainEvent = "days_skipped_after_failed_runs"
+	// TouchedDaysDrainInFlight counts the triggers that started no pass
+	// because drain runs of the organization were not ended.
+	TouchedDaysDrainInFlight TouchedDaysDrainEvent = "in_flight"
+	// TouchedDaysDrainNothingPending counts the passes that found no pending
+	// day.
+	TouchedDaysDrainNothingPending TouchedDaysDrainEvent = "nothing_pending"
+	// TouchedDaysDrainPassFailed counts the passes that failed before their
+	// runs were committed. Their days stay pending.
+	TouchedDaysDrainPassFailed TouchedDaysDrainEvent = "pass_failed"
+	// TouchedDaysDrainMarkFailed counts the passes whose started days could
+	// not be marked. The days stay pending and are computed once more.
+	TouchedDaysDrainMarkFailed TouchedDaysDrainEvent = "mark_failed"
+	// TouchedDaysDrainReadTruncated counts the passes whose read of the
+	// pending days hit its bound.
+	TouchedDaysDrainReadTruncated TouchedDaysDrainEvent = "read_truncated"
+	// TouchedDaysDrainDaysRetried counts the days a pass started one more run
+	// for after their newest runs all ended without a result.
+	TouchedDaysDrainDaysRetried TouchedDaysDrainEvent = "days_retried_after_failed_runs"
+	// TouchedDaysDrainChainStopped counts the passes that started nothing
+	// because the mark of the pass before them did not reach the record.
+	TouchedDaysDrainChainStopped TouchedDaysDrainEvent = "chain_stopped_mark_missing"
+	// TouchedDaysDrainReturnReadTruncated counts the passes whose read of the
+	// runs without a result hit its bound.
+	TouchedDaysDrainReturnReadTruncated TouchedDaysDrainEvent = "return_read_truncated"
+)
+
+func touchedDaysDrainEvents() []TouchedDaysDrainEvent {
+	return []TouchedDaysDrainEvent{
+		TouchedDaysDrainPasses, TouchedDaysDrainDaysStarted, TouchedDaysDrainDaysSplit,
+		TouchedDaysDrainDaysAlreadyStarted, TouchedDaysDrainDaysReturned, TouchedDaysDrainDaysSkipped,
+		TouchedDaysDrainInFlight, TouchedDaysDrainNothingPending, TouchedDaysDrainPassFailed,
+		TouchedDaysDrainMarkFailed, TouchedDaysDrainReadTruncated,
+		TouchedDaysDrainDaysRetried, TouchedDaysDrainChainStopped, TouchedDaysDrainReturnReadTruncated,
+	}
+}
+
+func postSyncTouchedDaysEvents() []PostSyncTouchedDaysEvent {
+	return []PostSyncTouchedDaysEvent{
+		PostSyncTouchedDaysKeysRecorded, PostSyncTouchedDaysDispatched,
+		PostSyncTouchedDaysCarriedOver, PostSyncTouchedDaysAlreadyStarted,
+		PostSyncTouchedDaysReadTruncated, PostSyncTouchedDaysRecordFailed,
+		PostSyncTouchedDaysMarkFailed, PostSyncTouchedDaysOverRepositoryLimit,
+	}
+}
+
 func postSyncFanoutOutcomes() []PostSyncFanoutOutcome {
 	return []PostSyncFanoutOutcome{
 		PostSyncFanoutOutcomePublished, PostSyncFanoutOutcomeNoRepositories, PostSyncFanoutOutcomeError,
@@ -290,6 +390,86 @@ func investmentRepoAttributionSources() []InvestmentRepoAttributionSource {
 		InvestmentRepoAttributionSourceTeam,
 		InvestmentRepoAttributionSourceUnassigned,
 	}
+}
+
+// InvestmentShadowPhase is what one shadow categorization phase of
+// investment.materialize reports (CHAOS-8869): the phase asks a second
+// backend for the same bundles after the served writes and stores the answers
+// in shadow tables only. Every label below is a member of a closed set; there
+// is no org id, no work unit id and no free text. Mirrors the investment
+// package's own constants as plain strings, since jobruntime must not import
+// that package; investment's tests pin the two sets against each other.
+type InvestmentShadowPhase struct {
+	// Model is the requested model id. One outside
+	// investmentShadowModels is counted under investmentShadowModelOther.
+	Model string
+	// StopReason is one of InvestmentShadowStopReasons.
+	StopReason string
+	// AttemptsByState counts HTTP attempts by one of
+	// InvestmentShadowAttemptStates.
+	AttemptsByState    map[string]int
+	AttemptLatencies   []time.Duration
+	PanicsRecovered    int
+	AttemptWriteErrors int
+	AttemptRowsDropped int
+}
+
+const (
+	investmentShadowRole       = "shadow"
+	investmentShadowProvider   = "typesafe"
+	investmentShadowModelOther = "other"
+	// investmentShadowStopCancelled is the stop reason of a run whose context
+	// was cancelled inside the phase: that request is retried and one of its
+	// claims is spent, so it has a counter of its own.
+	investmentShadowStopCancelled = "cancelled"
+)
+
+// investmentShadowModels is the closed set of model label values.
+var investmentShadowModels = []string{"jev-1.13.0", investmentShadowModelOther}
+
+// InvestmentShadowStopReasons is the closed set of stop reasons of a shadow
+// phase, in render order.
+func InvestmentShadowStopReasons() []string {
+	return []string{"done", "budget", "cap", "deterministic_failure", investmentShadowStopCancelled, "table_missing", "store_error", "panic"}
+}
+
+// InvestmentShadowAttemptStates is the closed set of the state label of an
+// attempt, in render order: the nine decision states for the last attempt of
+// a classification, and "retried" for an attempt that was followed by a retry.
+func InvestmentShadowAttemptStates() []string {
+	return []string{
+		"ok", "zero_support", "question_refused", "answer_missing", "answer_invalid",
+		"evidence_none", "evidence_unanswered", "request_failed", "adapter_defect", "retried",
+	}
+}
+
+// InvestmentShadowMetricNames is every metric name of the shadow phase, in
+// render order. writeInvestmentShadowPhase renders exactly these.
+func InvestmentShadowMetricNames() []string {
+	return []string{
+		investmentShadowAttemptsMetric, investmentShadowAttemptLatencyMetric, investmentShadowStopsMetric,
+		investmentShadowCancelledRunsMetric, investmentShadowPanicsMetric,
+		investmentShadowAttemptWriteErrorsMetric, investmentShadowAttemptRowsDroppedMetric,
+	}
+}
+
+const (
+	investmentShadowAttemptsMetric           = "dev_health_investment_shadow_attempts_total"
+	investmentShadowAttemptLatencyMetric     = "dev_health_investment_shadow_attempt_latency_seconds"
+	investmentShadowStopsMetric              = "dev_health_investment_shadow_phase_stops_total"
+	investmentShadowCancelledRunsMetric      = "dev_health_investment_shadow_phase_cancelled_runs_total"
+	investmentShadowPanicsMetric             = "dev_health_investment_shadow_panics_recovered_total"
+	investmentShadowAttemptWriteErrorsMetric = "dev_health_investment_shadow_attempt_write_errors_total"
+	investmentShadowAttemptRowsDroppedMetric = "dev_health_investment_shadow_attempt_rows_dropped_total"
+)
+
+// investmentShadowLatencyBuckets fits one HTTP attempt: about 0.1 s for a
+// normal answer, up to the 60 s client timeout.
+var investmentShadowLatencyBuckets = []float64{0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60, 120}
+
+type investmentShadowAttemptLabels struct {
+	model string
+	state string
 }
 
 // IncidentValidFromGuardReason labels one operational_service_repository_mappings
@@ -464,6 +644,16 @@ const (
 	// ClickHouse readback to notice it, and gives a signal for when a future
 	// genuine per-project key source should close it.
 	TeamCatalogTableProjectsWithoutKey TeamCatalogTable = "projects_without_key"
+	// The five team_project_links_* counts are not destination tables: they
+	// say what became of the provider's team-to-project link rows
+	// (providersync.TeamCatalogResult.ProjectLinksSeen and its skip counts).
+	// A run whose "seen" is zero while the provider shows links, or whose
+	// skip counts move, is visible here without a store readback.
+	TeamCatalogTableProjectLinksSeen               TeamCatalogTable = "team_project_links_seen"
+	TeamCatalogTableProjectLinksSkippedNotProject  TeamCatalogTable = "team_project_links_skipped_not_project"
+	TeamCatalogTableProjectLinksSkippedNoNativeID  TeamCatalogTable = "team_project_links_skipped_no_native_id"
+	TeamCatalogTableProjectLinksSkippedNoKey       TeamCatalogTable = "team_project_links_skipped_no_project_key"
+	TeamCatalogTableProjectLinksSkippedUnknownType TeamCatalogTable = "team_project_links_skipped_unknown_type"
 )
 
 func teamCatalogTables() []TeamCatalogTable {
@@ -473,6 +663,9 @@ func teamCatalogTables() []TeamCatalogTable {
 		TeamCatalogTableSprints, TeamCatalogTableTeamsSkippedPolicy, TeamCatalogTableMembershipsSkippedManualConflict,
 		TeamCatalogTableTeamsStagedForReview, TeamCatalogTableMembershipsStagedForReview, TeamCatalogTableDriftChangesSuperseded,
 		TeamCatalogTableProjectsWithoutKey,
+		TeamCatalogTableProjectLinksSeen, TeamCatalogTableProjectLinksSkippedNotProject,
+		TeamCatalogTableProjectLinksSkippedNoNativeID, TeamCatalogTableProjectLinksSkippedNoKey,
+		TeamCatalogTableProjectLinksSkippedUnknownType,
 	}
 }
 
@@ -758,7 +951,13 @@ func dailyMetricsCompatRetryDecisions() []DailyMetricsCompatRetryDecision {
 // partition, and carries the same "ic_finalize"-class consequence: a native
 // finalize failure redrives the run, so an unregistered name would make that
 // redrive loop invisible.
-var dailyMetricsNativeFamilies = []string{"team_wellbeing", "repo_user_commit", "incident", "deploy", "work_item_attribution", "work_item_state", "work_item", "work_item_estimate", "cicd", "file_hotspots", "file_risk_hotspots", "testops_risk", "testops_pipeline", "testops_test", "testops_coverage", "compounding_risk", "ai_governance", "review_edges", "benchmarking", "ai_impact", "work_graph_edges", "ai_workflow", "ic_finalize", "team_cognitive_load", "team_complexity", "compounding_risk_team"}
+//
+// "work_item_issue_type" and "work_item_investment" (CHAOS-8810) are the daily
+// families of issue_type_metrics_daily and of the two investment daily tables.
+// Since they exist the daily job is the writer that makes those tables right
+// after a partial sync unit, so a refusal that nobody counted would leave the
+// partial rows in place with no signal.
+var dailyMetricsNativeFamilies = []string{"team_wellbeing", "repo_user_commit", "incident", "deploy", "work_item_attribution", "work_item_state", "work_item", "work_item_estimate", "work_item_issue_type", "work_item_investment", "cicd", "file_hotspots", "file_risk_hotspots", "testops_risk", "testops_pipeline", "testops_test", "testops_coverage", "compounding_risk", "ai_governance", "review_edges", "benchmarking", "ai_impact", "work_graph_edges", "ai_workflow", "ic_finalize", "team_cognitive_load", "team_complexity", "compounding_risk_team"}
 
 // dailyMetricsZeroRowsWithSourceFamilies is the closed set of metrics.daily
 // families CHAOS-4263 scoped this check to (chris's ruling 2026-08-25): the
@@ -873,6 +1072,13 @@ var dailyMetricsRedriveReasons = []string{"failed_permanent_reset", "dispatch_re
 // detected -- a run whose finalize lease is still live is left alone this
 // pass and only becomes eligible on a later one).
 var dailyMetricsFinalizeSweepOutcomes = []string{"detected", "finalized"}
+
+// dailyMetricsRunMarkerStates and dailyMetricsRunMarkerOutcomes are the closed
+// vocabularies of the CHAOS-8710 ClickHouse run-marker write: the state
+// appended ('succeeded' or 'reopened') and whether the append landed ('ok')
+// or failed ('failed'). A failed append leaves the day unknown to readers.
+var dailyMetricsRunMarkerStates = []string{"succeeded", "reopened"}
+var dailyMetricsRunMarkerOutcomes = []string{"ok", "failed"}
 
 // dailyMetricsBlockedRunOutcomes is the closed set of bounded outcomes a
 // CHAOS-5040 blocked-run reconcile pass can report. "marked" and "cleared"
@@ -1130,6 +1336,9 @@ type MetricsCollector struct {
 	// activity by bounded outcome. See dailyMetricsFinalizeSweepOutcomes for
 	// the vocabulary.
 	dailyMetricsFinalizeSweep map[string]uint64
+	// dailyMetricsRunMarker (CHAOS-8710) counts run-marker appends keyed
+	// "<state>/<outcome>". See dailyMetricsRunMarkerStates/Outcomes.
+	dailyMetricsRunMarker map[string]uint64
 	// dailyMetricsBlockedRun (CHAOS-5040) counts blocked-run reconcile
 	// transitions by bounded outcome. See dailyMetricsBlockedRunOutcomes.
 	dailyMetricsBlockedRun map[string]uint64
@@ -1186,6 +1395,15 @@ type MetricsCollector struct {
 	// percentiles of.
 	workItemStateMissingAttribution uint64
 	postSyncFanout                  map[PostSyncFanoutOutcome]uint64
+	postSyncTouchedDays             map[PostSyncTouchedDaysEvent]uint64
+	touchedDaysDrain                map[TouchedDaysDrainEvent]uint64
+	// touchedDaysOldestPendingAge is the age each organization's last drain
+	// pass in this process reported, with the time of the report. An
+	// organization with nothing pending has no entry.
+	touchedDaysOldestPendingAge map[string]touchedDaysPendingAge
+	// touchedDaysPendingAgeNow is the clock of the staleness bound of those
+	// entries; nil means time.Now.
+	touchedDaysPendingAgeNow func() time.Time
 	// teamRepoOwnershipDerivation (CHAOS-4365 item 1b): per-outcome counter for
 	// sync.team_repo_ownership_derivation's worker; teamRepoOwnershipDerivationRowCount
 	// is the paired rows-written histogram, observed only on the
@@ -1202,6 +1420,15 @@ type MetricsCollector struct {
 	// repository for in one run -- see InvestmentRepoAttributionSource's doc
 	// comment.
 	investmentRepoAttribution map[InvestmentRepoAttributionSource]uint64
+	// investmentShadow* (CHAOS-8869): the counters of the shadow
+	// categorization phase -- see InvestmentShadowPhase.
+	investmentShadowAttempts           map[investmentShadowAttemptLabels]uint64
+	investmentShadowAttemptLatency     *histogram
+	investmentShadowStops              map[string]uint64
+	investmentShadowCancelledRuns      uint64
+	investmentShadowPanicsRecovered    uint64
+	investmentShadowAttemptWriteErrors uint64
+	investmentShadowAttemptRowsDropped uint64
 	// incidentValidFromGuardRows (CHAOS-4269/CHAOS-4295): per-reason counter
 	// of operational_service_repository_mappings rows IncidentExecutor's
 	// loader matched, split by whether the NULL-OK valid_from guard was
@@ -1413,8 +1640,11 @@ var _ DailyMetricsNativeFamilyObserver = (*MetricsCollector)(nil)
 var _ IncidentValidFromGuardObserver = (*MetricsCollector)(nil)
 var _ DailyMetricsCompatRetryObserver = (*MetricsCollector)(nil)
 var _ PostSyncFanoutObserver = (*MetricsCollector)(nil)
+var _ PostSyncTouchedDaysObserver = (*MetricsCollector)(nil)
+var _ TouchedDaysDrainObserver = (*MetricsCollector)(nil)
 var _ TeamRepoOwnershipDerivationObserver = (*MetricsCollector)(nil)
 var _ InvestmentRepoAttributionObserver = (*MetricsCollector)(nil)
+var _ InvestmentShadowPhaseObserver = (*MetricsCollector)(nil)
 var _ TeamCatalogObserver = (*MetricsCollector)(nil)
 var _ WorkGraphLeaseObserver = (*MetricsCollector)(nil)
 var _ RemainingMetricsLeaseObserver = (*MetricsCollector)(nil)
@@ -1426,6 +1656,7 @@ var _ TeamMetricsDailyRepoCountObserver = (*MetricsCollector)(nil)
 var _ WorkItemStateMissingAttributionObserver = (*MetricsCollector)(nil)
 var _ DailyMetricsRedriveObserver = (*MetricsCollector)(nil)
 var _ DailyMetricsFinalizeSweepObserver = (*MetricsCollector)(nil)
+var _ DailyMetricsRunMarkerObserver = (*MetricsCollector)(nil)
 var _ DailyMetricsBlockedRunObserver = (*MetricsCollector)(nil)
 var _ DailyMetricsFinalizeLedgerRepairObserver = (*MetricsCollector)(nil)
 var _ DailyMetricsFinalizeRedriveObserver = (*MetricsCollector)(nil)
@@ -1478,15 +1709,22 @@ func NewMetricsCollector(dimensions MetricDimensions) (*MetricsCollector, error)
 		remainingScopeRefusal:                make(map[remainingMetricsScopeRefusalLabels]uint64, len(remainingMetricsScopeRefusalFamilies)*len(remainingMetricsScopeRefusalReasons)),
 		dailyMetricsRedrive:                  make(map[string]uint64, len(dailyMetricsRedriveReasons)),
 		dailyMetricsFinalizeSweep:            make(map[string]uint64, len(dailyMetricsFinalizeSweepOutcomes)),
+		dailyMetricsRunMarker:                make(map[string]uint64, len(dailyMetricsRunMarkerStates)*len(dailyMetricsRunMarkerOutcomes)),
 		dailyMetricsBlockedRun:               make(map[string]uint64, len(dailyMetricsBlockedRunOutcomes)),
 		dailyMetricsFinalizeLedgerRepair:     make(map[string]uint64, len(dailyMetricsFinalizeLedgerRepairOutcomes)),
 		dailyMetricsFinalizeRedrive:          make(map[string]uint64, len(dailyMetricsFinalizeRedriveOutcomes)),
 		dailyMetricsPartitionRecompute:       make(map[dailyMetricsPartitionRecomputeLabels]uint64, len(dailyMetricsPartitionRecomputeFamilies)*len(dailyMetricsPartitionRecomputeOutcomes)),
 		postSyncFanout:                       make(map[PostSyncFanoutOutcome]uint64, len(postSyncFanoutOutcomes())),
+		postSyncTouchedDays:                  make(map[PostSyncTouchedDaysEvent]uint64, len(postSyncTouchedDaysEvents())),
+		touchedDaysDrain:                     make(map[TouchedDaysDrainEvent]uint64, len(touchedDaysDrainEvents())),
+		touchedDaysOldestPendingAge:          make(map[string]touchedDaysPendingAge),
 		teamRepoOwnershipDerivation:          make(map[TeamRepoOwnershipDerivationOutcome]uint64, len(teamRepoOwnershipDerivationOutcomes())),
 		teamRepoOwnershipDerivationRowCount:  newHistogramWithBounds(repoCountBuckets),
 		teamRepoOwnershipResolutionArm:       make(map[TeamRepoOwnershipResolutionArm]uint64, len(teamRepoOwnershipResolutionArms())),
 		investmentRepoAttribution:            make(map[InvestmentRepoAttributionSource]uint64, len(investmentRepoAttributionSources())),
+		investmentShadowAttempts:             make(map[investmentShadowAttemptLabels]uint64),
+		investmentShadowAttemptLatency:       newHistogramWithBounds(investmentShadowLatencyBuckets),
+		investmentShadowStops:                make(map[string]uint64, len(InvestmentShadowStopReasons())),
 		incidentValidFromGuardRows:           make(map[IncidentValidFromGuardReason]uint64, len(incidentValidFromGuardReasons())),
 		teamCatalogDispatch:                  make(map[teamCatalogDispatchLabels]uint64),
 		teamCatalogRowsWritten:               make(map[teamCatalogRowsLabels]uint64),
@@ -1584,6 +1822,11 @@ func NewMetricsCollector(dimensions MetricDimensions) (*MetricsCollector, error)
 	}
 	for _, outcome := range dailyMetricsFinalizeSweepOutcomes {
 		collector.dailyMetricsFinalizeSweep[outcome] = 0
+	}
+	for _, state := range dailyMetricsRunMarkerStates {
+		for _, outcome := range dailyMetricsRunMarkerOutcomes {
+			collector.dailyMetricsRunMarker[state+"/"+outcome] = 0
+		}
 	}
 	for _, outcome := range dailyMetricsBlockedRunOutcomes {
 		collector.dailyMetricsBlockedRun[outcome] = 0
@@ -1971,6 +2214,21 @@ func (collector *MetricsCollector) ObserveDailyMetricsFinalizeSweep(outcome stri
 	return nil
 }
 
+// ObserveDailyMetricsRunMarker counts one CHAOS-8710 run-marker append by
+// bounded state and outcome.
+func (collector *MetricsCollector) ObserveDailyMetricsRunMarker(state, outcome string) error {
+	if !slices.Contains(dailyMetricsRunMarkerStates, state) {
+		return errors.New("daily metrics run marker state is not registered")
+	}
+	if !slices.Contains(dailyMetricsRunMarkerOutcomes, outcome) {
+		return errors.New("daily metrics run marker outcome is not registered")
+	}
+	collector.mu.Lock()
+	defer collector.mu.Unlock()
+	collector.dailyMetricsRunMarker[state+"/"+outcome]++
+	return nil
+}
+
 // ObserveDailyMetricsBlockedRun records count runs for one bounded outcome
 // during a CHAOS-5040 blocked-run reconcile pass. count must be >= 0,
 // matching ObserveDailyMetricsFinalizeSweep's discipline: a pass that
@@ -2209,6 +2467,72 @@ func (collector *MetricsCollector) ObservePostSyncFanout(outcome PostSyncFanoutO
 	return nil
 }
 
+// ObservePostSyncTouchedDays adds count to one touched-day counter of the
+// post-sync fan-out (CHAOS-8813).
+func (collector *MetricsCollector) ObservePostSyncTouchedDays(event PostSyncTouchedDaysEvent, count uint64) error {
+	if !slices.Contains(postSyncTouchedDaysEvents(), event) {
+		return errors.New("post-sync touched-days event is not registered")
+	}
+	collector.mu.Lock()
+	defer collector.mu.Unlock()
+	collector.postSyncTouchedDays[event] += count
+	return nil
+}
+
+// ObserveTouchedDaysDrain adds count to one counter of the drain of the
+// pending touched days (CHAOS-8846).
+func (collector *MetricsCollector) ObserveTouchedDaysDrain(event TouchedDaysDrainEvent, count uint64) error {
+	if !slices.Contains(touchedDaysDrainEvents(), event) {
+		return errors.New("touched-days drain event is not registered")
+	}
+	collector.mu.Lock()
+	defer collector.mu.Unlock()
+	collector.touchedDaysDrain[event] += count
+	return nil
+}
+
+// touchedDaysPendingAge is one report of ObserveTouchedDaysOldestPendingAge.
+type touchedDaysPendingAge struct {
+	age        time.Duration
+	observedAt time.Time
+}
+
+// TouchedDaysOldestPendingAgeStaleness is how long the pending age of an
+// organization is exported after the last pass of the organization in this
+// process. Every worker process runs passes, so the pass that finds the
+// organization drained may run in another process, and this one would export
+// its last age for ever. A pass of an organization with a pending day runs at
+// least once a night in some process, so a reader that takes the highest
+// value over the processes sees an organization with a pending day at every
+// moment, and one that was drained for at most this long after its drain.
+const TouchedDaysOldestPendingAgeStaleness = 25 * time.Hour
+
+func (collector *MetricsCollector) touchedDaysPendingAgeClock() time.Time {
+	if collector.touchedDaysPendingAgeNow != nil {
+		return collector.touchedDaysPendingAgeNow()
+	}
+	return time.Now()
+}
+
+// ObserveTouchedDaysOldestPendingAge keeps the age of the oldest pending
+// touch that the last drain pass of one organization reported. An age of zero
+// or less removes the organization: it has nothing pending.
+func (collector *MetricsCollector) ObserveTouchedDaysOldestPendingAge(organizationID string, age time.Duration) error {
+	if organizationID == "" {
+		return errors.New("touched-days pending age has no organization")
+	}
+	collector.mu.Lock()
+	defer collector.mu.Unlock()
+	if age <= 0 {
+		delete(collector.touchedDaysOldestPendingAge, organizationID)
+		return nil
+	}
+	collector.touchedDaysOldestPendingAge[organizationID] = touchedDaysPendingAge{
+		age: age, observedAt: collector.touchedDaysPendingAgeClock(),
+	}
+	return nil
+}
+
 // ObserveTeamRepoOwnershipDerivation records the outcome of one
 // sync.team_repo_ownership_derivation worker run (CHAOS-4365 item 1b).
 // rowCount is only observed into the paired histogram on the rows_written
@@ -2264,6 +2588,52 @@ func (collector *MetricsCollector) ObserveInvestmentRepoAttribution(source Inves
 	collector.mu.Lock()
 	defer collector.mu.Unlock()
 	collector.investmentRepoAttribution[source] += uint64(count)
+	return nil
+}
+
+// ObserveInvestmentShadowPhase records one shadow categorization phase
+// (CHAOS-8869). It refuses, and records nothing, when a label is outside its
+// closed set or a count is negative: a partly recorded phase would read as a
+// smaller one.
+func (collector *MetricsCollector) ObserveInvestmentShadowPhase(phase InvestmentShadowPhase) error {
+	if !slices.Contains(InvestmentShadowStopReasons(), phase.StopReason) {
+		return errors.New("investment shadow stop reason is not registered")
+	}
+	for state, count := range phase.AttemptsByState {
+		if !slices.Contains(InvestmentShadowAttemptStates(), state) {
+			return errors.New("investment shadow attempt state is not registered")
+		}
+		if count < 0 {
+			return errors.New("investment shadow attempt count cannot be negative")
+		}
+	}
+	if phase.PanicsRecovered < 0 || phase.AttemptWriteErrors < 0 || phase.AttemptRowsDropped < 0 {
+		return errors.New("investment shadow count cannot be negative")
+	}
+	for _, latency := range phase.AttemptLatencies {
+		if latency < 0 {
+			return errors.New("investment shadow attempt latency cannot be negative")
+		}
+	}
+	model := phase.Model
+	if !slices.Contains(investmentShadowModels, model) {
+		model = investmentShadowModelOther
+	}
+	collector.mu.Lock()
+	defer collector.mu.Unlock()
+	collector.investmentShadowStops[phase.StopReason]++
+	if phase.StopReason == investmentShadowStopCancelled {
+		collector.investmentShadowCancelledRuns++
+	}
+	for state, count := range phase.AttemptsByState {
+		collector.investmentShadowAttempts[investmentShadowAttemptLabels{model: model, state: state}] += uint64(count)
+	}
+	for _, latency := range phase.AttemptLatencies {
+		collector.investmentShadowAttemptLatency.observe(latency.Seconds())
+	}
+	collector.investmentShadowPanicsRecovered += uint64(phase.PanicsRecovered)
+	collector.investmentShadowAttemptWriteErrors += uint64(phase.AttemptWriteErrors)
+	collector.investmentShadowAttemptRowsDropped += uint64(phase.AttemptRowsDropped)
 	return nil
 }
 
@@ -3324,6 +3694,7 @@ func (collector *MetricsCollector) PrometheusText() string {
 	collector.writeDailyMetricsFamilyZeroRowsWithSource(&output)
 	collector.writeDailyMetricsRedrive(&output)
 	collector.writeDailyMetricsFinalizeSweep(&output)
+	collector.writeDailyMetricsRunMarker(&output)
 	collector.writeDailyMetricsFinalizeLedgerRepair(&output)
 	collector.writeDailyMetricsFinalizeRedrive(&output)
 	collector.writeDailyMetricsPartitionRecompute(&output)
@@ -3333,8 +3704,11 @@ func (collector *MetricsCollector) PrometheusText() string {
 	collector.writeTeamMetricsDailyRepoCount(&output)
 	collector.writeWorkItemStateMissingAttribution(&output)
 	collector.writePostSyncFanout(&output)
+	collector.writePostSyncTouchedDays(&output)
+	collector.writeTouchedDaysDrain(&output)
 	collector.writeTeamRepoOwnershipDerivation(&output)
 	collector.writeInvestmentRepoAttribution(&output)
+	collector.writeInvestmentShadowPhase(&output)
 	collector.writeIncidentValidFromGuard(&output)
 	collector.writeTeamCatalogDispatch(&output)
 	collector.writeTeamCatalogRowsWritten(&output)
@@ -3679,6 +4053,19 @@ func (collector *MetricsCollector) writeDailyMetricsRedrive(output *strings.Buil
 	}
 }
 
+// writeDailyMetricsRunMarker exposes the CHAOS-8710 run-marker append counter.
+// A nonzero failed series means days are unknown to marker readers until the
+// Postgres backfill runs.
+func (collector *MetricsCollector) writeDailyMetricsRunMarker(output *strings.Builder) {
+	const name = "dev_health_daily_metrics_run_marker_appends_total"
+	writeMetadata(output, name, "ClickHouse daily_metrics_run_marker appends by state (succeeded, reopened) and outcome (ok, failed). A failed append leaves that org-day unknown to readers until the Postgres backfill runs.", "counter")
+	for _, state := range dailyMetricsRunMarkerStates {
+		for _, outcome := range dailyMetricsRunMarkerOutcomes {
+			writeUintSample(output, name, []metricLabel{{name: "state", value: state}, {name: "outcome", value: outcome}}, collector.dailyMetricsRunMarker[state+"/"+outcome])
+		}
+	}
+}
+
 // writeDailyMetricsFinalizeSweep exposes the CHAOS-4389 stranded-finalize
 // sweep counters as two distinct series (rather than one metric split by
 // label) so "how many runs are stuck" and "how many did we actually move"
@@ -3836,6 +4223,40 @@ func (collector *MetricsCollector) writePostSyncFanout(output *strings.Builder) 
 	}
 }
 
+func (collector *MetricsCollector) writePostSyncTouchedDays(output *strings.Builder) {
+	writeMetadata(output, "dev_health_post_sync_touched_days_total", "Post-sync fanout touched days: keys recorded from the raw rows of a sync, days a daily run was started for, days left for a later fan-out (CHAOS-8813).", "counter")
+	for _, event := range postSyncTouchedDaysEvents() {
+		writeUintSample(output, "dev_health_post_sync_touched_days_total",
+			[]metricLabel{{"event", string(event)}}, collector.postSyncTouchedDays[event])
+	}
+}
+
+// writeTouchedDaysDrain renders the counter of the drain passes and the gauge
+// of the oldest pending touch (CHAOS-8846). The gauge has no organization
+// label: it is the highest age over the organizations whose last pass in this
+// process left a day pending, and 0 when none did. A report older than
+// TouchedDaysOldestPendingAgeStaleness is not exported. A reader takes the
+// highest value over the worker processes. The log line of a pass names the
+// organization and is the exact record.
+func (collector *MetricsCollector) writeTouchedDaysDrain(output *strings.Builder) {
+	writeMetadata(output, "dev_health_touched_days_drain_total", "Drain of the pending touched days: passes, days a daily run was started for, days split, returned to pending or skipped after failed runs (CHAOS-8846).", "counter")
+	for _, event := range touchedDaysDrainEvents() {
+		writeUintSample(output, "dev_health_touched_days_drain_total",
+			[]metricLabel{{"event", string(event)}}, collector.touchedDaysDrain[event])
+	}
+	var oldest time.Duration
+	now := collector.touchedDaysPendingAgeClock()
+	for _, report := range collector.touchedDaysOldestPendingAge {
+		if now.Sub(report.observedAt) > TouchedDaysOldestPendingAgeStaleness {
+			// Not removed here: a scrape holds the read lock only.
+			continue
+		}
+		oldest = max(oldest, report.age)
+	}
+	writeMetadata(output, "dev_health_touched_days_oldest_pending_age_seconds", "Highest age of the oldest pending touched day over the organizations whose last drain pass in this process, in the last 25 hours, left a day pending; 0 when none did. Read the highest value over the processes (CHAOS-8846).", "gauge")
+	writeFloatSample(output, "dev_health_touched_days_oldest_pending_age_seconds", nil, oldest.Seconds())
+}
+
 // writeTeamRepoOwnershipDerivation renders CHAOS-4365 item 1b's per-outcome
 // counter and paired rows-written histogram. This call site was missing
 // entirely until now: ObserveTeamRepoOwnershipDerivation incremented
@@ -3876,6 +4297,37 @@ func (collector *MetricsCollector) writeInvestmentRepoAttribution(output *string
 		writeUintSample(output, "dev_health_investment_repo_attribution_total",
 			[]metricLabel{{"source", string(source)}}, collector.investmentRepoAttribution[source])
 	}
+}
+
+// writeInvestmentShadowPhase renders the counters of the shadow categorization
+// phase (CHAOS-8869). Every series of every closed label set is emitted on
+// every scrape, zero included: with the phase off (the default) each one reads
+// as an explicit zero, not as a missing series.
+func (collector *MetricsCollector) writeInvestmentShadowPhase(output *strings.Builder) {
+	writeMetadata(output, investmentShadowAttemptsMetric, "HTTP attempts of the investment shadow categorization phase, by role, provider, requested model and state: the decision state for the last attempt of a classification, retried for an attempt that was followed by a retry (CHAOS-8869).", "counter")
+	for _, model := range investmentShadowModels {
+		for _, state := range InvestmentShadowAttemptStates() {
+			writeUintSample(output, investmentShadowAttemptsMetric,
+				[]metricLabel{{"role", investmentShadowRole}, {"provider", investmentShadowProvider}, {"model", model}, {"state", state}},
+				collector.investmentShadowAttempts[investmentShadowAttemptLabels{model: model, state: state}])
+		}
+	}
+	writeMetadata(output, investmentShadowAttemptLatencyMetric, "Request time of one HTTP attempt of the investment shadow categorization phase, by role; the wait before a retry is not in it.", "histogram")
+	writeHistogram(output, investmentShadowAttemptLatencyMetric,
+		[]metricLabel{{"role", investmentShadowRole}}, collector.investmentShadowAttemptLatency)
+	writeMetadata(output, investmentShadowStopsMetric, "Investment shadow categorization phases that ended, by reason: done, budget (the time budget ended first), cap (the spend cap of the run), deterministic_failure (a rejected key or an unknown model), cancelled (the run context was cancelled inside the phase), table_missing (a shadow migration is not applied), store_error, panic.", "counter")
+	for _, reason := range InvestmentShadowStopReasons() {
+		writeUintSample(output, investmentShadowStopsMetric,
+			[]metricLabel{{"reason", reason}}, collector.investmentShadowStops[reason])
+	}
+	writeMetadata(output, investmentShadowCancelledRunsMetric, "investment.materialize runs whose context was cancelled inside the shadow phase: the request is retried and one of its claims is spent.", "counter")
+	writeUintSample(output, investmentShadowCancelledRunsMetric, nil, collector.investmentShadowCancelledRuns)
+	writeMetadata(output, investmentShadowPanicsMetric, "Panics recovered inside the investment shadow categorization phase; each one ended one work unit as adapter_defect, or the phase.", "counter")
+	writeUintSample(output, investmentShadowPanicsMetric, nil, collector.investmentShadowPanicsRecovered)
+	writeMetadata(output, investmentShadowAttemptWriteErrorsMetric, "Failed batch inserts of llm_categorization_attempts rows by the investment shadow phase; the rows of that run are lost.", "counter")
+	writeUintSample(output, investmentShadowAttemptWriteErrorsMetric, nil, collector.investmentShadowAttemptWriteErrors)
+	writeMetadata(output, investmentShadowAttemptRowsDroppedMetric, "llm_categorization_attempts rows the investment shadow phase did not write because the buffer of the run was at its row cap.", "counter")
+	writeUintSample(output, investmentShadowAttemptRowsDroppedMetric, nil, collector.investmentShadowAttemptRowsDropped)
 }
 
 // writeIncidentValidFromGuard renders CHAOS-4269/CHAOS-4295's per-reason

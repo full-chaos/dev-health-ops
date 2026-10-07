@@ -985,7 +985,7 @@ func (r *queryResolver) OperatingReview(ctx context.Context, orgID string, input
 		}
 	}
 
-	result, err := operatingreview.Resolve(spanCtx, r.ClickHouse, claims.OrgID, input.TeamID, input.WeekStart)
+	result, err := operatingreview.ResolveInput(spanCtx, r.ClickHouse, claims.OrgID, input.TeamID, input.TeamIds, input.WeekStart)
 	if err != nil {
 		finish("error")
 		return nil, fmt.Errorf("operatingReview: %w", err)
@@ -1110,6 +1110,20 @@ func (r *queryResolver) CoverageBaselines(ctx context.Context, orgID string, end
 	result, err := coveragebaselines.Resolve(ctx, r.ClickHouse, orgID, endDate, coveragebaselines.Scope{RepoIDs: repoIds, TeamIDs: teamIds})
 	if err != nil {
 		return nil, fmt.Errorf("coverageBaselines: %w", err)
+	}
+	return result, nil
+}
+
+// CoverageScopeBaseline is the resolver for the coverageScopeBaseline field
+// (CHAOS-8541, Go-only). The org is the authorized one: a mismatched orgId is
+// refused before any read (requireOwnOrg), as for coverageBaselines.
+func (r *queryResolver) CoverageScopeBaseline(ctx context.Context, orgID string, endDate graphqldate.Date, repoIds []string, teamIds []string) (*model.ScopeCoverageBaseline, error) {
+	if err := requireOwnOrg(ctx, orgID); err != nil {
+		return nil, err
+	}
+	result, err := coveragebaselines.ResolveScope(ctx, r.ClickHouse, orgID, endDate, coveragebaselines.Scope{RepoIDs: repoIds, TeamIDs: teamIds})
+	if err != nil {
+		return nil, fmt.Errorf("coverageScopeBaseline: %w", err)
 	}
 	return result, nil
 }

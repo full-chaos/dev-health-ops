@@ -41,6 +41,13 @@ import (
 const (
 	defaultContractRoot      = "contracts/jobs/v1"
 	workerFinalizationBuffer = 60 * time.Second
+	// workerReleaseBuffer is the time a job cancelled at the end of the soft
+	// stop has to write its release (a requeue, a failed state; each bounded at
+	// 5 s) before Stop gives up on the river component. The soft stop is the
+	// drain budget minus this, so River cancels job contexts while Stop is still
+	// waiting. It sits INSIDE the drain budget: the 60 s finalization buffer
+	// stays for the other components and the process exit (CHAOS-8783).
+	workerReleaseBuffer = 30 * time.Second
 
 	// reasonShutdownTimeoutBelowDrainBudget is the bounded reason code for a
 	// --shutdown-timeout below the drain-budget floor. Named so the producer,
@@ -370,9 +377,20 @@ func (database *postgresWorkerDatabase) Close() {
 // the River queue budget it actually consumes. Runtime capability is only ever
 // what a builder constructed here — never what a compiled list advertises.
 type workerFamily struct {
+	// softStop is how long the River client lets running jobs finish after the
+	// stop signal before it cancels their contexts (river.Config.SoftStopTimeout).
+	// It is set by composition, from the drain budget, just before the River
+	// process is built; zero means "unset" and newRiverWorkerProcess refuses it,
+	// because River reads a zero SoftStopTimeout as "off" -- a stop signal then
+	// cancels every in-flight job at once (CHAOS-8783).
+	softStop time.Duration
 	handlers []jobruntime.HandlerSpec
-	queues   []jobruntime.QueueBudget
-	cleanups []func() error
+	// dailyDrainTriggers are the daily handlers that buildDailyWorker
+	// registered with the drain of the pending touched days. The wiring test
+	// reads them; nothing else does.
+	dailyDrainTriggers dailyDrainTriggers
+	queues             []jobruntime.QueueBudget
+	cleanups           []func() error
 	// ownedKinds names kinds this family registers real workers for WITHOUT
 	// reporting them as handler specs -- today only the sync coordinator's
 	// four bridge-backed kinds (syncdispatchruntime.RegisterWorkers). Rescue
@@ -488,6 +506,7 @@ type workerDependencies struct {
 	reportedUnsupportedContracts string
 	shutdownGrace                time.Duration
 	workerDrainBudget            time.Duration
+	workerSoftStop               time.Duration
 	// longestQueueTimeout and requiredShutdownGrace are the two numbers that
 	// decide the drain-budget contract. They are recorded even when the contract
 	// PASSES, because buildWorkerDependencies has no logger (it is assigned by
@@ -756,7 +775,11 @@ func (preclaimReadinessComponent) Shutdown(context.Context) error { return nil }
 type workerProcessComponent struct {
 	components []lifecycle.Component
 	budget     time.Duration
-	presence   workerPresenceLifecycle
+	// grace is the shutdown timeout the composition settled on (the configured
+	// one, or the one derived from the selected queues when the flag is unset).
+	// The lifecycle runtime is built from it (platform/shell.RuntimeShutdownTimeout).
+	grace    time.Duration
+	presence workerPresenceLifecycle
 }
 
 type workerPresenceLifecycle interface {
@@ -768,6 +791,11 @@ type workerPresenceLifecycle interface {
 
 func (workerProcessComponent) Name() string                            { return "river-workers" }
 func (component workerProcessComponent) ShutdownBudget() time.Duration { return component.budget }
+
+// RequiredShutdownTimeout implements lifecycle.ShutdownTimeoutSource.
+func (component workerProcessComponent) RequiredShutdownTimeout() time.Duration {
+	return component.grace
+}
 func (component workerProcessComponent) Errors() <-chan error {
 	if component.presence == nil {
 		return nil
@@ -1253,6 +1281,11 @@ func configureWorkerDependenciesWithSources(
 		dependencies.close()
 		return nil, dependencyUnavailable("river_process_builder_missing")
 	}
+	// The soft stop is the drain budget minus workerReleaseBuffer, and startup
+	// refuses a shutdown timeout that leaves it <= 0. Jobs still running after
+	// it are cancelled while Stop (given the drain budget) is still waiting, so
+	// their release writes land.
+	active.softStop = dependencies.workerSoftStop
 	workerProcess, err := sources.buildRiverProcess(
 		cfg, dependencies.database, workers, active, logger,
 	)
@@ -1287,7 +1320,7 @@ func configureWorkerDependenciesWithSources(
 		"domain_database_max_connections", dependencies.startup.Connections.Domain,
 	)
 	components = append(components, workerProcessComponent{
-		components: []lifecycle.Component{workerProcess}, budget: dependencies.workerDrainBudget, presence: presence,
+		components: []lifecycle.Component{workerProcess}, budget: dependencies.workerDrainBudget, grace: dependencies.shutdownGrace, presence: presence,
 	})
 	return components, nil
 }
@@ -1729,10 +1762,21 @@ func buildWorkerDependencies(
 	// one that happens to equal the default -- still fails closed, so the
 	// contract check keeps its teeth.
 	if !cfg.ShutdownTimeoutExplicit && dependencies.shutdownGrace <= config.DefaultShutdownTimeout {
-		dependencies.shutdownGrace = requiredGrace
+		// The release buffer on top keeps a derived soft stop positive for the
+		// shortest selection (CHAOS-8783); the requirement itself is unchanged.
+		dependencies.shutdownGrace = requiredGrace + workerReleaseBuffer
 	}
 	dependencies.workerDrainBudget = dependencies.shutdownGrace - workerFinalizationBuffer
 	if dependencies.workerDrainBudget < longestTimeout {
+		dependencies.startupErr = dependencyUnavailable(reasonShutdownTimeoutBelowDrainBudget)
+		return dependencies
+	}
+	// River reads a SoftStopTimeout <= 0 as "off", which is the defect CHAOS-8783
+	// removes (a stop signal then cancels every job at once). A shutdown timeout
+	// too small to leave a positive soft stop is a startup error, not a silent
+	// fallback to that.
+	dependencies.workerSoftStop = dependencies.workerDrainBudget - workerReleaseBuffer
+	if dependencies.workerSoftStop <= 0 {
 		dependencies.startupErr = dependencyUnavailable(reasonShutdownTimeoutBelowDrainBudget)
 		return dependencies
 	}

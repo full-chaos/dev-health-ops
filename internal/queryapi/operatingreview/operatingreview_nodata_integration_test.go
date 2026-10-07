@@ -35,7 +35,13 @@ func TestRealClickHouse_HasDataSeparatesStoredZerosFromNoRows(t *testing.T) {
 	}
 	seen := 0
 	for _, section := range review.Sections {
+		if len(section.Changed) != 0 || len(section.Improved) != 0 || len(section.Worsened) != 0 {
+			t.Errorf("%s sentences = changed:%q improved:%q worsened:%q, want none when the prior week has no rows", section.Key, section.Changed, section.Improved, section.Worsened)
+		}
 		for _, m := range section.Metrics {
+			if m.Delta.Status != "" {
+				t.Errorf("%s status = %q, want no claim when the prior week has no rows", m.Key, m.Delta.Status)
+			}
 			switch m.Key {
 			case "deployments_count", "incidents_count":
 				seen++
@@ -57,5 +63,8 @@ func TestRealClickHouse_HasDataSeparatesStoredZerosFromNoRows(t *testing.T) {
 	}
 	if seen != 8 {
 		t.Fatalf("checked %d metrics, want 8", seen)
+	}
+	if len(review.Recommendations) != 0 {
+		t.Errorf("recommendations = %q, want none when the prior week has no rows", review.Recommendations)
 	}
 }

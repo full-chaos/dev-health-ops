@@ -97,6 +97,7 @@ func TestMicroDateTimeMarshalsFixedSixDigitFraction(t *testing.T) {
 // read on both planes) for events[].ts.
 func TestHomeResponseWireDateTimeLeavesMatchPythonBytes(t *testing.T) {
 	lastIngested := pytime.NaiveDateTime(time.Date(2024, 1, 8, 10, 0, 4, 0, time.UTC))
+	scopeIngested := pytime.NaiveDateTime(time.Date(2024, 1, 8, 10, 0, 5, 0, time.UTC))
 	synced := MicroDateTime(time.Date(2024, 1, 8, 10, 17, 50, 66950000, time.UTC))
 	eventTS := MicroDateTime(time.Date(2024, 1, 8, 10, 53, 32, 901785000, time.UTC))
 
@@ -110,12 +111,13 @@ func TestHomeResponseWireDateTimeLeavesMatchPythonBytes(t *testing.T) {
 		ReworkThemeAllocation: []ReworkThemeAllocation{},
 		Summary:               []SummarySentence{},
 		Tiles:                 pyjson.NewOrderedMap[Tile](),
-		Constraint:            ConstraintCard{Evidence: []ConstraintEvidence{}, Experiments: []string{}},
+		Constraint:            &ConstraintCard{Evidence: []ConstraintEvidence{}, Experiments: []string{}},
 		Events:                []EventItem{{TS: eventTS, Type: "spike", Text: "t", Link: "l"}},
 		HealthState:           HealthState{AsOf: &lastIngested},
 		Signals:               []Signal{},
 		LimitingFactor:        LimitingFactor{},
 		DataConfidence:        DataConfidence{},
+		ScopeDataConfidence:   ScopeDataConfidence{LastIngestedAt: &scopeIngested},
 	}
 
 	b, err := json.Marshal(resp)
@@ -128,6 +130,7 @@ func TestHomeResponseWireDateTimeLeavesMatchPythonBytes(t *testing.T) {
 		`"last_ingested_at":"2024-01-08T10:00:04"`,
 		`"latest_successful_sync_at":"2024-01-08T10:17:50.066950Z"`,
 		`"as_of":"2024-01-08T10:00:04"`,
+		`"scope_data_confidence":{"level":"","coverage_pct":null,"last_ingested_at":"2024-01-08T10:00:05"`,
 	}
 	for _, want := range wantSubstrings {
 		if !strings.Contains(got, want) {

@@ -472,7 +472,7 @@ func buildChartQuery(spec ChartSpec, definition metricDefinition) (string, []any
 		definition.hasDimension("day") {
 		xExpression, xType, temporal = "toDate(day)", "Date", true
 	}
-	yExpression := fmt.Sprintf("avg(%s)", spec.Metric)
+	yExpression := averageExpression(definition.SourceTable, spec.Metric)
 	if strings.HasSuffix(spec.Metric, "_count") || definition.Unit == "count" {
 		yExpression = fmt.Sprintf("sum(%s)", spec.Metric)
 	}

@@ -16,6 +16,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"atlassian/atlassian"
+	"atlassian/atlassian/graph"
 
 	"github.com/full-chaos/dev-health-ops/internal/atlassianteams"
 	"github.com/full-chaos/dev-health-ops/internal/cli"
@@ -57,7 +58,7 @@ func (c failingClient) SearchTeams(context.Context, string, string, string, int)
 func (failingClient) IterTeamUsers(context.Context, string, int) ([]atlassian.TeamworkUserRelation, error) {
 	return nil, nil
 }
-func (failingClient) IterTeamActiveProjects(context.Context, string, int) ([]atlassian.TeamworkProject, error) {
+func (failingClient) IterTeamConnectedContainers(context.Context, string, int) ([]graph.TeamConnectedContainer, error) {
 	return nil, nil
 }
 
@@ -270,7 +271,7 @@ func (emptyClient) SearchTeams(context.Context, string, string, string, int) ([]
 func (emptyClient) IterTeamUsers(context.Context, string, int) ([]atlassian.TeamworkUserRelation, error) {
 	return nil, nil
 }
-func (emptyClient) IterTeamActiveProjects(context.Context, string, int) ([]atlassian.TeamworkProject, error) {
+func (emptyClient) IterTeamConnectedContainers(context.Context, string, int) ([]graph.TeamConnectedContainer, error) {
 	return nil, nil
 }
 

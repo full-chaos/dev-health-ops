@@ -1,0 +1,153 @@
+{
+ "work_unit_id": "synthetic-work-unit-large",
+ "issue_ids": [
+  "ENG-500",
+  "ENG-501",
+  "ENG-502",
+  "ENG-503",
+  "ENG-504",
+  "ENG-505"
+ ],
+ "pr_ids": [
+  "acme/exporter#90",
+  "acme/exporter#91",
+  "acme/exporter#92",
+  "acme/exporter#93",
+  "acme/exporter#94",
+  "acme/exporter#95"
+ ],
+ "commit_ids": [
+  "c00",
+  "c01",
+  "c02",
+  "c03",
+  "c04",
+  "c05",
+  "c06",
+  "c07",
+  "c08",
+  "c09",
+  "c10",
+  "c11"
+ ],
+ "work_item_map": {
+  "ENG-500": {
+   "title": "Issue 0: a < b && c > d in the export path export0 timeout1 worker2 cache3 rollout4 library5 fixture6 module7 policy8 customer9 export0 timeout1 worker2 cache3 rollout4 library5 fixture6 module7 policy8 customer9 export0 timeout1 worker2 cache3 rollout4 library5 fixture6 module7 policy8 customer9",
+   "description": "latency0 canary1 patch2 coverage3 cleanup4 token5 invoice6 stream7 retry8 schema9 latency0 canary1 patch2 coverage3 cleanup4 token5 invoice6 stream7 retry8 schema9 latency0 canary1 patch2 coverage3 cleanup4 token5 invoice6 stream7 retry8 schema9 latency0 canary1 patch2 coverage3 cleanup4 token5 invoice6 stream7 retry8 schema9 latency0 canary1 patch2 coverage3 cleanup4",
+   "type": "Task",
+   "labels": [
+    "refactor0 audit1 secret2",
+    "export0 timeout1 worker2"
+   ]
+  },
+  "ENG-501": {
+   "title": "Issue 1: a < b && c > d in the export path schema1 latency2 canary3 patch4 coverage5 cleanup6 token7 invoice8 stream9 retry0 schema1 latency2 canary3 patch4 coverage5 cleanup6 token7 invoice8 stream9 retry0 schema1 latency2 canary3 patch4 coverage5 cleanup6 token7 invoice8 stream9 retry0",
+   "description": "test1 refactor2 audit3 secret4 report5 buffer6 queue7 index8 alert9 upgrade0 test1 refactor2 audit3 secret4 report5 buffer6 queue7 index8 alert9 upgrade0 test1 refactor2 audit3 secret4 report5 buffer6 queue7 index8 alert9 upgrade0 test1 refactor2 audit3 secret4 report5 buffer6 queue7 index8 alert9 upgrade0 test1 refactor2 audit3 secret4 report5",
+   "type": "Task",
+   "labels": [
+    "customer1 export2 timeout3",
+    "schema1 latency2 canary3"
+   ]
+  },
+  "ENG-502": {
+   "title": "Issue 2: a < b && c > d in the export path upgrade2 test3 refactor4 audit5 secret6 report7 buffer8 queue9 index0 alert1 upgrade2 test3 refactor4 audit5 secret6 report7 buffer8 queue9 index0 alert1 upgrade2 test3 refactor4 audit5 secret6 report7 buffer8 queue9 index0 alert1",
+   "description": "policy2 customer3 export4 timeout5 worker6 cache7 rollout8 library9 fixture0 module1 policy2 customer3 export4 timeout5 worker6 cache7 rollout8 library9 fixture0 module1 policy2 customer3 export4 timeout5 worker6 cache7 rollout8 library9 fixture0 module1 policy2 customer3 export4 timeout5 worker6 cache7 rollout8 library9 fixture0 module1 policy2 customer3 export4 timeout5 worker6",
+   "type": "Task",
+   "labels": [
+    "retry2 schema3 latency4",
+    "upgrade2 test3 refactor4"
+   ]
+  },
+  "ENG-503": {
+   "title": "Issue 3: a < b && c > d in the export path module3 policy4 customer5 export6 timeout7 worker8 cache9 rollout0 library1 fixture2 module3 policy4 customer5 export6 timeout7 worker8 cache9 rollout0 library1 fixture2 module3 policy4 customer5 export6 timeout7 worker8 cache9 rollout0 library1 fixture2",
+   "description": "stream3 retry4 schema5 latency6 canary7 patch8 coverage9 cleanup0 token1 invoice2 stream3 retry4 schema5 latency6 canary7 patch8 coverage9 cleanup0 token1 invoice2 stream3 retry4 schema5 latency6 canary7 patch8 coverage9 cleanup0 token1 invoice2 stream3 retry4 schema5 latency6 canary7 patch8 coverage9 cleanup0 token1 invoice2 stream3 retry4 schema5 latency6 canary7",
+   "type": "Task",
+   "labels": [
+    "alert3 upgrade4 test5",
+    "module3 policy4 customer5"
+   ]
+  },
+  "ENG-504": {
+   "title": "Issue 4: a < b && c > d in the export path invoice4 stream5 retry6 schema7 latency8 canary9 patch0 coverage1 cleanup2 token3 invoice4 stream5 retry6 schema7 latency8 canary9 patch0 coverage1 cleanup2 token3 invoice4 stream5 retry6 schema7 latency8 canary9 patch0 coverage1 cleanup2 token3",
+   "description": "index4 alert5 upgrade6 test7 refactor8 audit9 secret0 report1 buffer2 queue3 index4 alert5 upgrade6 test7 refactor8 audit9 secret0 report1 buffer2 queue3 index4 alert5 upgrade6 test7 refactor8 audit9 secret0 report1 buffer2 queue3 index4 alert5 upgrade6 test7 refactor8 audit9 secret0 report1 buffer2 queue3 index4 alert5 upgrade6 test7 refactor8",
+   "type": "Task",
+   "labels": [
+    "fixture4 module5 policy6",
+    "invoice4 stream5 retry6"
+   ]
+  },
+  "ENG-505": {
+   "title": "Issue 5: a < b && c > d in the export path queue5 index6 alert7 upgrade8 test9 refactor0 audit1 secret2 report3 buffer4 queue5 index6 alert7 upgrade8 test9 refactor0 audit1 secret2 report3 buffer4 queue5 index6 alert7 upgrade8 test9 refactor0 audit1 secret2 report3 buffer4",
+   "description": "library5 fixture6 module7 policy8 customer9 export0 timeout1 worker2 cache3 rollout4 library5 fixture6 module7 policy8 customer9 export0 timeout1 worker2 cache3 rollout4 library5 fixture6 module7 policy8 customer9 export0 timeout1 worker2 cache3 rollout4 library5 fixture6 module7 policy8 customer9 export0 timeout1 worker2 cache3 rollout4 library5 fixture6 module7 policy8 customer9",
+   "type": "Task",
+   "labels": [
+    "token5 invoice6 stream7",
+    "queue5 index6 alert7"
+   ]
+  }
+ },
+ "pr_map": {
+  "acme/exporter#90": {
+   "title": "chore: step 0 <no-op> & cleanup latency0 canary1 patch2 coverage3 cleanup4 token5 invoice6 stream7 retry8 schema9 latency0 canary1 patch2 coverage3 cleanup4 token5 invoice6 stream7 retry8 schema9 latency0 canary1 patch2 coverage3 cleanup4",
+   "body": "refactor0 audit1 secret2 report3 buffer4 queue5 index6 alert7 upgrade8 test9 refactor0 audit1 secret2 report3 buffer4 queue5 index6 alert7 upgrade8 test9 refactor0 audit1 secret2 report3 buffer4 queue5 index6 alert7 upgrade8 test9 refactor0 audit1 secret2 report3 buffer4 queue5 index6 alert7 upgrade8 test9 refactor0 audit1 secret2 report3 buffer4"
+  },
+  "acme/exporter#91": {
+   "title": "chore: step 1 <no-op> & cleanup test1 refactor2 audit3 secret4 report5 buffer6 queue7 index8 alert9 upgrade0 test1 refactor2 audit3 secret4 report5 buffer6 queue7 index8 alert9 upgrade0 test1 refactor2 audit3 secret4 report5",
+   "body": "customer1 export2 timeout3 worker4 cache5 rollout6 library7 fixture8 module9 policy0 customer1 export2 timeout3 worker4 cache5 rollout6 library7 fixture8 module9 policy0 customer1 export2 timeout3 worker4 cache5 rollout6 library7 fixture8 module9 policy0 customer1 export2 timeout3 worker4 cache5 rollout6 library7 fixture8 module9 policy0 customer1 export2 timeout3 worker4 cache5"
+  },
+  "acme/exporter#92": {
+   "title": "chore: step 2 <no-op> & cleanup policy2 customer3 export4 timeout5 worker6 cache7 rollout8 library9 fixture0 module1 policy2 customer3 export4 timeout5 worker6 cache7 rollout8 library9 fixture0 module1 policy2 customer3 export4 timeout5 worker6",
+   "body": "retry2 schema3 latency4 canary5 patch6 coverage7 cleanup8 token9 invoice0 stream1 retry2 schema3 latency4 canary5 patch6 coverage7 cleanup8 token9 invoice0 stream1 retry2 schema3 latency4 canary5 patch6 coverage7 cleanup8 token9 invoice0 stream1 retry2 schema3 latency4 canary5 patch6 coverage7 cleanup8 token9 invoice0 stream1 retry2 schema3 latency4 canary5 patch6"
+  },
+  "acme/exporter#93": {
+   "title": "chore: step 3 <no-op> & cleanup stream3 retry4 schema5 latency6 canary7 patch8 coverage9 cleanup0 token1 invoice2 stream3 retry4 schema5 latency6 canary7 patch8 coverage9 cleanup0 token1 invoice2 stream3 retry4 schema5 latency6 canary7",
+   "body": "alert3 upgrade4 test5 refactor6 audit7 secret8 report9 buffer0 queue1 index2 alert3 upgrade4 test5 refactor6 audit7 secret8 report9 buffer0 queue1 index2 alert3 upgrade4 test5 refactor6 audit7 secret8 report9 buffer0 queue1 index2 alert3 upgrade4 test5 refactor6 audit7 secret8 report9 buffer0 queue1 index2 alert3 upgrade4 test5 refactor6 audit7"
+  },
+  "acme/exporter#94": {
+   "title": "chore: step 4 <no-op> & cleanup index4 alert5 upgrade6 test7 refactor8 audit9 secret0 report1 buffer2 queue3 index4 alert5 upgrade6 test7 refactor8 audit9 secret0 report1 buffer2 queue3 index4 alert5 upgrade6 test7 refactor8",
+   "body": "fixture4 module5 policy6 customer7 export8 timeout9 worker0 cache1 rollout2 library3 fixture4 module5 policy6 customer7 export8 timeout9 worker0 cache1 rollout2 library3 fixture4 module5 policy6 customer7 export8 timeout9 worker0 cache1 rollout2 library3 fixture4 module5 policy6 customer7 export8 timeout9 worker0 cache1 rollout2 library3 fixture4 module5 policy6 customer7 export8"
+  },
+  "acme/exporter#95": {
+   "title": "chore: step 5 <no-op> & cleanup library5 fixture6 module7 policy8 customer9 export0 timeout1 worker2 cache3 rollout4 library5 fixture6 module7 policy8 customer9 export0 timeout1 worker2 cache3 rollout4 library5 fixture6 module7 policy8 customer9",
+   "body": "token5 invoice6 stream7 retry8 schema9 latency0 canary1 patch2 coverage3 cleanup4 token5 invoice6 stream7 retry8 schema9 latency0 canary1 patch2 coverage3 cleanup4 token5 invoice6 stream7 retry8 schema9 latency0 canary1 patch2 coverage3 cleanup4 token5 invoice6 stream7 retry8 schema9 latency0 canary1 patch2 coverage3 cleanup4 token5 invoice6 stream7 retry8 schema9"
+  }
+ },
+ "commit_map": {
+  "c00": {
+   "message": "commit 0: export0 timeout1 worker2 cache3 rollout4 library5 fixture6 module7 policy8 customer9 export0 timeout1\n\nbody line"
+  },
+  "c01": {
+   "message": "commit 1: schema1 latency2 canary3 patch4 coverage5 cleanup6 token7 invoice8 stream9 retry0 schema1 latency2\n\nbody line"
+  },
+  "c02": {
+   "message": "commit 2: upgrade2 test3 refactor4 audit5 secret6 report7 buffer8 queue9 index0 alert1 upgrade2 test3\n\nbody line"
+  },
+  "c03": {
+   "message": "commit 3: module3 policy4 customer5 export6 timeout7 worker8 cache9 rollout0 library1 fixture2 module3 policy4\n\nbody line"
+  },
+  "c04": {
+   "message": "commit 4: invoice4 stream5 retry6 schema7 latency8 canary9 patch0 coverage1 cleanup2 token3 invoice4 stream5\n\nbody line"
+  },
+  "c05": {
+   "message": "commit 5: queue5 index6 alert7 upgrade8 test9 refactor0 audit1 secret2 report3 buffer4 queue5 index6\n\nbody line"
+  },
+  "c06": {
+   "message": "commit 6: rollout6 library7 fixture8 module9 policy0 customer1 export2 timeout3 worker4 cache5 rollout6 library7\n\nbody line"
+  },
+  "c07": {
+   "message": "commit 7: coverage7 cleanup8 token9 invoice0 stream1 retry2 schema3 latency4 canary5 patch6 coverage7 cleanup8\n\nbody line"
+  },
+  "c08": {
+   "message": "commit 8: secret8 report9 buffer0 queue1 index2 alert3 upgrade4 test5 refactor6 audit7 secret8 report9\n\nbody line"
+  },
+  "c09": {
+   "message": "commit 9: timeout9 worker0 cache1 rollout2 library3 fixture4 module5 policy6 customer7 export8 timeout9 worker0\n\nbody line"
+  },
+  "c10": {
+   "message": "commit 10: latency0 canary1 patch2 coverage3 cleanup4 token5 invoice6 stream7 retry8 schema9 latency0 canary1\n\nbody line"
+  },
+  "c11": {
+   "message": "commit 11: test1 refactor2 audit3 secret4 report5 buffer6 queue7 index8 alert9 upgrade0 test1 refactor2\n\nbody line"
+  }
+ }
+}

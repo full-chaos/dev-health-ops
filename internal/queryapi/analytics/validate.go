@@ -205,6 +205,29 @@ func dbColumn(dim Dimension, useInvestment bool) (string, error) {
 	return "", fmt.Errorf("analytics: dbColumn: unhandled dimension %q", dim)
 }
 
+// cycleTimeHoursOverRowsWithACompletion is the non-investment cycle time: the
+// mean of cycle_p50_hours over the rows that have a completed item.
+//
+// A row of investment_metrics_daily with work_items_completed = 0 has no
+// cycle time: its cycle_p50_hours is 0 because the column is not nullable,
+// not because a cycle of 0 hours was measured. Such rows exist (the daily
+// family writes a row of zeros for a key that lost its completion), and a
+// plain AVG counts each one as a measured 0 and pulls the mean down. Missing
+// is not zero, so the row is left out of the mean.
+//
+// The NULL branch, and not avgIf, is deliberate: avgIf over a group with no
+// row that qualifies is NaN on a Float64 column, which no JSON encoder
+// writes; the mean of no value over a Nullable column is NULL, which every
+// caller scans into *float64 and serves as null (category 2 of the note
+// on dbExpression, on purpose). A group with no completed item has no cycle time; it
+// does not have a cycle time of 0.
+//
+// work_items_completed is the only sample count the row carries. It counts
+// the completed items, not the items with a measured cycle: a row whose
+// completed items all have no start time still has cycle_p50_hours = 0 and
+// still counts.
+const cycleTimeHoursOverRowsWithACompletion = "AVG(if(work_items_completed > 0, cycle_p50_hours, NULL))"
+
 // dbExpression ports Measure.db_expression (sql/validate.py:101-171)
 // exactly -- three overlapping mappings (investment-path base, the
 // testops mapping, the feature-flag mapping) merged the same way Python's
@@ -262,7 +285,7 @@ func dbExpression(measure Measure, useInvestment, useRepoAllocation bool) (strin
 		// category 3 -- safe ONLY via NULLIF, see dbExpression's doc comment.
 		return "SUM(pr_rework_ratio * prs_merged) / NULLIF(SUM(prs_merged), 0)", nil
 	case MeasureCycleTimeHours:
-		return "AVG(cycle_p50_hours)", nil // safe: cycle_p50_hours is non-nullable Float64 (category 1)
+		return cycleTimeHoursOverRowsWithACompletion, nil
 	case MeasureThroughput:
 		return "SUM(work_items_completed)", nil
 	case MeasurePipelineSuccessRate:

@@ -60,6 +60,24 @@ func TestRegisteredFeatureFlagsDocument_MatchesCapturedWireFixture(t *testing.T)
 	}
 }
 
+// TestRegisteredInvestmentEvidenceQualityDocument_MatchesCapturedWireFixture
+// pins CHAOS-8745's actual browser-client request. It checks the independent
+// client-capture digest as well as the catalog document, so changing both
+// files together cannot turn a new, unmeasured wire form into a pass.
+func TestRegisteredInvestmentEvidenceQualityDocument_MatchesCapturedWireFixture(t *testing.T) {
+	const capturedWireDigest = "5e31cdbd14dde65165c635a8a3f02fb03f85fae0ef9c21eeb39808c199323c2a"
+	captured, err := os.ReadFile("testdata/wire_capture/investmentevidencequality_captured.graphql")
+	if err != nil {
+		t.Fatalf("read captured wire fixture: %v", err)
+	}
+	if got := digestHex(string(captured)); got != capturedWireDigest {
+		t.Fatalf("captured investment evidence quality document digest = %s, want actual browser wire digest %s", got, capturedWireDigest)
+	}
+	if got := digestHex(registeredInvestmentEvidenceQualityDocument); got != capturedWireDigest {
+		t.Fatalf("registered investment evidence quality document digest = %s, want captured browser wire digest %s", got, capturedWireDigest)
+	}
+}
+
 // TestRegisteredFeatureFlagEventsDocument_MatchesCapturedWireFixture is
 // CHAOS-5523's evidence-bar requirement, modelled directly on
 // TestRegisteredFeatureFlagsDocument_MatchesCapturedWireFixture above:
@@ -180,7 +198,7 @@ func TestRegisteredHomeDocument_MatchesCapturedWireFixture(t *testing.T) {
 	// this test can tell real wire bytes (with urql's __typename
 	// injection) apart from a source-copied guess -- not just that they
 	// currently happen to agree.
-	const rawSourceDigestHome = "d4bb71ec7a9f667b5801fb23487bc3479628a11695eafa0e85507ae43c12a04b"
+	const rawSourceDigestHome = "bcba9a4e032d9664672cc828ac4cfe9406807139b13d2f66fe04b3ee3787dc09"
 	if gotDigest == rawSourceDigestHome {
 		t.Fatalf(
 			"captured wire fixture digests to the RAW SOURCE TEXT digest (%s) -- "+
@@ -215,6 +233,9 @@ func TestRegisteredCapturedDocuments_MatchCapturedWireFixtures(t *testing.T) {
 		{"testdata/wire_capture/testopstest_captured.graphql", registeredTestOpsTestDocument},
 		{"testdata/wire_capture/testopscoverage_captured.graphql", registeredTestOpsCoverageDocument},
 		{"testdata/wire_capture/featureflagtimeseries_captured.graphql", registeredFeatureFlagTimeseriesDocument},
+		{"testdata/wire_capture/home_v1_captured.graphql", registeredHomeV1Document},
+		{"testdata/wire_capture/home_v2_captured.graphql", registeredHomeV2Document},
+		{"testdata/wire_capture/home_v3_captured.graphql", registeredHomeV3Document},
 		{"testdata/wire_capture/saved_reports_captured.graphql", registeredSavedReportsDocument},
 		{"testdata/wire_capture/saved_report_captured.graphql", registeredSavedReportDocument},
 		{"testdata/wire_capture/report_runs_captured.graphql", registeredReportRunsDocument},
@@ -227,9 +248,13 @@ func TestRegisteredCapturedDocuments_MatchCapturedWireFixtures(t *testing.T) {
 		{"testdata/wire_capture/testopsrisk_captured.graphql", registeredTestopsRiskDocument},
 		{"testdata/wire_capture/testopsjobfailures_captured.graphql", registeredTestopsJobFailuresDocument},
 		{"testdata/wire_capture/coveragebaselines_captured.graphql", registeredCoverageBaselinesDocument},
+		{"testdata/wire_capture/coveragescopebaseline_captured.graphql", registeredCoverageScopeBaselineDocument},
+		{"testdata/wire_capture/coveragescopebaseline_v1_captured.graphql", registeredCoverageScopeBaselineV1Document},
+		{"testdata/wire_capture/investmentevidencequality_captured.graphql", registeredInvestmentEvidenceQualityDocument},
 		{"testdata/wire_capture/workunitteamattributions_captured.graphql", registeredWorkUnitTeamAttributionsDocument},
 		{"testdata/wire_capture/operatingreview_captured.graphql", registeredOperatingReviewDocument},
 		{"testdata/wire_capture/operatingreview_v1_captured.graphql", registeredOperatingReviewV1Document},
+		{"testdata/wire_capture/operatingreview_v2_captured.graphql", registeredOperatingReviewV2Document},
 		{"testdata/wire_capture/reviewedges_captured.graphql", registeredReviewEdgesDocument},
 		{"testdata/wire_capture/reviewedges_v1_captured.graphql", registeredReviewEdgesV1Document},
 	} {

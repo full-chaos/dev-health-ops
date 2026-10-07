@@ -7,6 +7,8 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"io"
 	"net/http"
+	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -18,6 +20,12 @@ import (
 type gitLabWorkItemsDoer struct {
 	responses map[string][]string
 	requests  []*http.Request
+	// nextHeader makes the fake answer like GitLab does: X-Next-Page names the
+	// next page when that page holds rows, and is EMPTY on the last page.
+	nextHeader bool
+	// forceNextHeader overrides X-Next-Page for one response key
+	// ("<path>?page=N"), to model a provider whose header disagrees with its body.
+	forceNextHeader map[string]string
 }
 
 func (doer *gitLabWorkItemsDoer) Do(request *http.Request) (*http.Response, error) {
@@ -37,8 +45,20 @@ func (doer *gitLabWorkItemsDoer) Do(request *http.Request) (*http.Response, erro
 	}
 	body := values[0]
 	doer.responses[key] = values[1:]
+	header := make(http.Header)
+	if doer.nextHeader {
+		header.Set("X-Next-Page", "")
+		if page, err := strconv.Atoi(request.URL.Query().Get("page")); err == nil {
+			if next := doer.responses[path+"?page="+strconv.Itoa(page+1)]; len(next) > 0 && next[0] != "[]" {
+				header.Set("X-Next-Page", strconv.Itoa(page+1))
+			}
+		}
+	}
+	if forced, ok := doer.forceNextHeader[key]; ok {
+		header.Set("X-Next-Page", forced)
+	}
 	return &http.Response{
-		StatusCode: http.StatusOK, Status: "200 OK", Header: make(http.Header),
+		StatusCode: http.StatusOK, Status: "200 OK", Header: header,
 		Body: io.NopCloser(strings.NewReader(body)), Request: request,
 	}, nil
 }
@@ -67,21 +87,30 @@ func gitLabWorkItemResponses() map[string][]string {
 		root + "/issues/42/resource_state_events?page=1":        {`[{"state":"reopened","created_at":"2026-07-03T10:00:00Z","user":{"username":"bob","name":"Bob"}}]`, `[]`},
 		root + "/issues/42/links?page=1":                        {`[{"link_type":"blocks","iid":7,"references":{"full":"acme/api#7"}}]`, `[]`},
 		root + "/issues/42/closed_by?page=1":                    {`[{"iid":9,"references":{"full":"acme/api!9"}}]`, `[]`},
-		root + "/issues/42/notes?page=1":                        {`[{"system":true,"body":"label changed","created_at":"2026-07-02T11:00:00Z"},{"system":false,"body":"hello 🌍","created_at":"2026-07-02T12:00:00Z","author":{"username":"alice"}}]`, `[]`},
+		root + "/issues/42/notes?page=1":                        {`[{"system":true,"body":"label changed","created_at":"2026-07-02T11:00:00Z"},{"id":501,"system":false,"body":"hello 🌍","created_at":"2026-07-02T12:00:00Z","author":{"username":"alice"}}]`, `[]`},
 		root + "/merge_requests?page=1":                         {`[{"iid":9,"title":"Ship the API","description":"","state":"opened","created_at":"2026-07-04T09:00:00Z","updated_at":"2026-07-04T10:00:00Z","closed_at":null,"merged_at":null,"labels":["priority::low"],"assignees":[],"author":{"username":"alice"},"web_url":"https://gitlab.example/acme/api/-/merge_requests/9","milestone":null}]`, `[]`},
 		root + "/merge_requests/9/resource_state_events?page=1": {`[{"state":"opened","created_at":"2026-07-04T09:00:00Z","user":{"username":"alice"}},{"state":"merged","created_at":"2026-07-05T09:00:00Z","user":{"username":"bob"}}]`, `[]`},
-		root + "/merge_requests/9/notes?page=1":                 {`[{"system":false,"body":"ship it","created_at":"2026-07-04T12:00:00Z","author":{"username":"bob"}}]`, `[]`},
+		root + "/merge_requests/9/notes?page=1":                 {`[{"id":502,"system":false,"body":"ship it","created_at":"2026-07-04T12:00:00Z","author":{"username":"bob"}}]`, `[]`},
 	}
 }
 
-func TestGitLabWorkItemsRouteNormalizesSixRawFactsAndReportsDerivedGap(t *testing.T) {
+// The GitLab work-items unit stores the six raw facts and the ai_attribution
+// effect, and no table the daily job computes from stored rows.
+//
+// The ai_attribution effect of this route is present and EMPTY, also for a
+// payload that holds a merge request with labels: merge-request AI attribution
+// is written by the prs unit alone, and this route never fills the slice.
+func TestGitLabWorkItemsRouteNormalizesSixRawFactsAndLeavesDerivedTablesToDailyJob(t *testing.T) {
 	doer := &gitLabWorkItemsDoer{responses: gitLabWorkItemResponses()}
 	claim := nativeTestClaim("gitlab", "work-items")
 	now := time.Date(2026, 8, 3, 12, 0, 0, 987654321, time.UTC)
+	client := gitLabWorkItemsClient(t, fakehttp.Client(doer))
+	leftToDaily := providerfoundation.NewMetrics()
+	client.Metrics = leftToDaily
 	batch, err := (GitLabWorkItemsRouteHandler{StatusMapping: loadRealStatusMapping(t), PerPage: 2, MaxPages: 10, NestedMaxPages: 10}).Collect(
 		context.Background(), claim,
 		providerfoundation.Credential{Provider: "gitlab", ID: claim.CredentialID},
-		gitLabWorkItemsClient(t, fakehttp.Client(doer)), now,
+		client, now,
 	)
 	if err != nil {
 		paths := make([]string, 0, len(doer.requests))
@@ -94,7 +123,34 @@ func TestGitLabWorkItemsRouteNormalizesSixRawFactsAndReportsDerivedGap(t *testin
 	for _, effect := range batch.Effects {
 		byDestination[effect.Destination] = effect
 	}
-	if len(byDestination) != 6 || len(byDestination["work_items"].Rows) != 2 ||
+	gotDestinations := make([]string, 0, len(batch.Effects))
+	for _, effect := range batch.Effects {
+		gotDestinations = append(gotDestinations, effect.Destination)
+	}
+	slices.Sort(gotDestinations)
+	if want := workItemRouteDestinations(); !slices.Equal(gotDestinations, want) {
+		t.Fatalf("destinations=%v want=%v", gotDestinations, want)
+	}
+	for _, destination := range githubWorkItemDerivedDestinations {
+		if _, present := byDestination[destination]; present {
+			t.Fatalf("the unit built an effect for the derived table %q", destination)
+		}
+	}
+	aiAttribution, present := byDestination["ai_attribution"]
+	if !present || len(aiAttribution.Rows) != 0 || aiAttribution.Recovery != EffectReadbackRequired {
+		t.Fatalf("ai_attribution effect present=%t rows=%d recovery=%s want present, empty, readback-required",
+			present, len(aiAttribution.Rows), aiAttribution.Recovery)
+	}
+	for _, key := range []string{
+		"team_inheritance", "team_attribution_written", "derived_destinations_implemented",
+		"derived_destinations_unimplemented", "watermark_held_for_derived_gap",
+	} {
+		if _, present := batch.Result[key]; present {
+			t.Fatalf("result still carries %q: %+v", key, batch.Result)
+		}
+	}
+	assertWorkItemDerivedTablesLeftToDailyJob(t, leftToDaily, "gitlab", 1)
+	if len(byDestination["work_items"].Rows) != 2 ||
 		len(byDestination["work_item_transitions"].Rows) != 3 ||
 		len(byDestination["work_item_dependencies"].Rows) != 3 ||
 		len(byDestination["work_item_reopen_events"].Rows) != 1 ||
@@ -164,13 +220,12 @@ func TestGitLabWorkItemsRouteNormalizesSixRawFactsAndReportsDerivedGap(t *testin
 		t.Fatalf("dependency=%+v", dependency)
 	}
 	summary, ok := batch.Result["gitlab_work_items"].(GitLabWorkItemsResult)
-	if !ok || summary.WorkItemsSynced != 2 || len(summary.RawDestinations) != 6 ||
-		len(summary.DerivedDestinationsUnimplemented) != 10 || !summary.WatermarkHeldForDerivedGap {
+	if !ok || summary.WorkItemsSynced != 2 || len(summary.RawDestinations) != 6 {
 		t.Fatalf("typed summary=%T/%+v", batch.Result["gitlab_work_items"], batch.Result["gitlab_work_items"])
 	}
-	if batch.Watermark != nil || batch.Result["watermark_held_for_derived_gap"] != true ||
-		len(batch.Result["derived_destinations_unimplemented"].([]string)) != 10 {
-		t.Fatalf("watermark/result=%v/%+v", batch.Watermark, batch.Result)
+	// The watermark is the end of the window whose raw rows the unit stored.
+	if claim.BeforeAt == nil || batch.Watermark == nil || !batch.Watermark.Equal(claim.BeforeAt.UTC()) {
+		t.Fatalf("watermark=%v want the claim bound %v", batch.Watermark, claim.BeforeAt)
 	}
 	for _, request := range doer.requests {
 		if strings.HasSuffix(request.URL.Path, "/issues") || strings.HasSuffix(request.URL.Path, "/merge_requests") {

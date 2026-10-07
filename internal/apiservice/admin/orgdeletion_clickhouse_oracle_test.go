@@ -190,4 +190,20 @@ var clickHouseOrgTablesAfterThePythonFreeze = map[string]string{
 	// It is keyed by org_id and the daily worker writes it directly, so an
 	// organization's evidence rows must go when the organization is deleted.
 	"work_item_blocked_durations_daily": "104_work_item_blocked_durations.sql",
+	// The ClickHouse record of the daily run state (CHAOS-8710). Keyed by
+	// org_id and written by the daily worker, so an organization's marker rows
+	// must go when the organization is deleted.
+	"daily_metrics_run_marker": "105_daily_metrics_run_marker.sql",
+	// The record of the days that stored raw rows touched (CHAOS-8813). Keyed
+	// by org_id and written by the post-sync fan-out, so an organization's
+	// events must go when the organization is deleted.
+	"daily_metrics_touched_days": "108_daily_metrics_touched_days.sql",
+	// The shadow categorization results (CHAOS-8868). Keyed by org_id and
+	// written by the investment worker, so an organization's shadow rows must go
+	// when the organization is deleted.
+	"work_unit_investment_shadow": "109_work_unit_investment_shadow.sql",
+	// One row for each HTTP attempt of a categorization call (CHAOS-8868). Keyed
+	// by org_id and written by the investment worker, so an organization's
+	// attempt rows must go when the organization is deleted.
+	"llm_categorization_attempts": "110_llm_categorization_attempts.sql",
 }

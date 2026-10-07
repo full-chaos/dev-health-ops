@@ -142,8 +142,8 @@ func TestTeamCatalogAutoimportDispatcherRoutesNativeProviderDirectly(t *testing.
 	}) {
 		t.Fatalf("observer dispatches=%+v", observer.dispatches)
 	}
-	if len(observer.rows) != 13 {
-		t.Fatalf("observer rows=%+v, want one call per destination table (CHAOS-4444 added 3: teams_staged_for_review, team_memberships_staged_for_review, team_drift_changes_superseded; CHAOS-4530 added 1: projects_without_key)", observer.rows)
+	if len(observer.rows) != 18 {
+		t.Fatalf("observer rows=%+v, want one call per destination table (CHAOS-4444 added 3: teams_staged_for_review, team_memberships_staged_for_review, team_drift_changes_superseded; CHAOS-4530 added 1: projects_without_key) and one per team-to-project link count (5: team_project_links_seen and the four skip reasons)", observer.rows)
 	}
 	foundRepoOwnershipRow := false
 	for _, row := range observer.rows {

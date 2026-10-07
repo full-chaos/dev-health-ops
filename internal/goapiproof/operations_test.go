@@ -39,9 +39,9 @@ var registeredOperations = []string{
 	"capacityForecast", "capacityCompletionDistribution", "capacityForecasts", "cognitiveLoad", "compoundingRisk", "complexityTimeseries",
 	"featureFlagEvents", "featureFlags", "flowMatrix", "home", "hotspots",
 	"releaseImpact",
-	"investmentBreakdown", "investmentFull", "operatingReview", "pr",
+	"investmentBreakdown", "investmentEvidenceQuality", "investmentFull", "operatingReview", "pr",
 	"createSavedReport", "updateSavedReport", "deleteSavedReport", "cloneSavedReport", "triggerReport",
-	"reportRuns", "reviewEdges", "savedReport", "savedReports", "securityAlerts", "securityOverview", "testopsRisk", "testopsJobFailures", "coverageBaselines", "throughputForecast", "testOpsCoverage", "testOpsPipeline", "testOpsTest", "featureFlagTimeseries",
+	"reportRuns", "reviewEdges", "savedReport", "savedReports", "securityAlerts", "securityOverview", "testopsRisk", "testopsJobFailures", "coverageBaselines", "coverageScopeBaseline", "throughputForecast", "testOpsCoverage", "testOpsPipeline", "testOpsTest", "featureFlagTimeseries",
 	"workGraphArtifacts", "workGraphEdges", "workGraphFlow",
 	"workUnitTeamAttributions",
 	"workItemTeamAttributions",
@@ -370,14 +370,14 @@ func TestEverySpecDeclaresItsResponseRoot(t *testing.T) {
 			sharedRoots++
 		}
 	}
-	// flowMatrix, investmentBreakdown and investmentFull all select
+	// flowMatrix, investmentBreakdown, investmentEvidenceQuality and investmentFull all select
 	// `analytics`; catalogValues and acrRepositoryScopes both select
 	// `catalog`; releaseImpact selects `workGraphEdges`; capacityCompletionDistribution selects `capacityForecast`. If this ever reads 0, either the documents changed or
 	// someone "tidied" ResponseRoot into a copy of the operation name --
 	// and the parity-path checks above would silently start passing for
 	// paths that can never match.
-	if sharedRoots != 15 {
-		t.Fatalf("expected 15 operations whose response root differs from their name, got %d", sharedRoots)
+	if sharedRoots != 16 {
+		t.Fatalf("expected 16 operations whose response root differs from their name, got %d", sharedRoots)
 	}
 }
 

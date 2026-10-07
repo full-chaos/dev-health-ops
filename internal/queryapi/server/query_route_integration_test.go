@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -318,8 +319,8 @@ func startTestRegistryPostgres(t *testing.T) *pgxpool.Pool {
 	}
 	t.Cleanup(pool.Close)
 
-	// The migrated schema (CHAOS-6769 ledger): the hand-written go_api_routing_state dropped the
-	// real table's NOT NULL columns and its foreign key to go_api_candidate_build.
+	// The migrated schema (CHAOS-6769 ledger): a hand-written copy of the registry tables once dropped real
+	// NOT NULL columns and foreign keys, so the tests run against the migrated one.
 	pgschema.Apply(ctx, t, pool)
 	return pool
 }
@@ -362,7 +363,7 @@ func postGraphQLWithVariables(t *testing.T, handler http.HandlerFunc, query, bea
 // (newQueryHandler: real Mux, real PostgresSwitch reading a real Postgres
 // table, real gqlgen server, real principal.Verifier), not a fake
 // handlerNamed stand-in -- proving the featureFlags route in query-api is
-// live only when go_api_routing_state says so, end to end through the
+// served by the catalog (no routing row exists or is read), end to end through the
 // actual HTTP entry point.
 func TestFeatureFlagsRoute_IsServedByTheCatalog(t *testing.T) {
 	pool := startTestRegistryPostgres(t)
@@ -435,8 +436,8 @@ func reviewEdgesVariables() map[string]any {
 // the SECOND operation this route now mounts: it exercises the same real
 // HTTP handler (newQueryHandler: real Mux, real PostgresSwitch reading a
 // real Postgres table, real gqlgen server, real principal.Verifier), this
-// time dispatching reviewEdges, proving its reachability is gated
-// independently by its OWN go_api_routing_state row.
+// time dispatching reviewEdges, proving it is served by the catalog
+// with no routing row of its own.
 func TestReviewEdgesRoute_IsServedByTheCatalog(t *testing.T) {
 	pool := startTestRegistryPostgres(t)
 
@@ -514,8 +515,8 @@ func cognitiveLoadVariables() map[string]any {
 // the THIRD operation this route now mounts: it exercises the same real
 // HTTP handler (newQueryHandler: real Mux, real PostgresSwitch reading a
 // real Postgres table, real gqlgen server, real principal.Verifier), this
-// time dispatching cognitiveLoad, proving its reachability is gated
-// independently by its OWN go_api_routing_state row.
+// time dispatching cognitiveLoad, proving it is served by the catalog
+// with no routing row of its own.
 func TestCognitiveLoadRoute_IsServedByTheCatalog(t *testing.T) {
 	pool := startTestRegistryPostgres(t)
 
@@ -585,8 +586,7 @@ func complexityTimeseriesVariables() map[string]any {
 // Wave 3's extension of the same reachability contract to a THIRD operation
 // this route now mounts: real Mux, real PostgresSwitch reading a real
 // Postgres table, real gqlgen server, real principal.Verifier -- proving
-// complexityTimeseries's reachability is gated independently by its OWN
-// go_api_routing_state row.
+// complexityTimeseries is served by the catalog with no routing row of its own.
 func TestComplexityTimeseriesRoute_IsServedByTheCatalog(t *testing.T) {
 	pool := startTestRegistryPostgres(t)
 
@@ -660,8 +660,8 @@ func hotspotsVariables() map[string]any {
 // extension of the same reachability contract to hotspots, the second
 // Wave 3 operation (after complexityTimeseries): real Mux, real
 // PostgresSwitch reading a real Postgres table, real gqlgen server, real
-// principal.Verifier -- proving hotspots's reachability is gated
-// independently by its OWN go_api_routing_state row.
+// principal.Verifier -- proving hotspots is served by the catalog
+// with no routing row of its own.
 func TestHotspotsRoute_IsServedByTheCatalog(t *testing.T) {
 	pool := startTestRegistryPostgres(t)
 
@@ -725,12 +725,44 @@ func operatingReviewVariables() map[string]any {
 	}
 }
 
+func operatingReviewTeamVariables(teamID string, plural bool) map[string]any {
+	input := map[string]any{"weekStart": "2026-08-24"}
+	if plural {
+		input["teamIds"] = []string{teamID}
+	} else {
+		input["teamId"] = teamID
+	}
+	return map[string]any{"orgId": "org-1", "input": input}
+}
+
+func operatingReviewTeamID(t *testing.T, rec *httptest.ResponseRecorder) string {
+	t.Helper()
+	if rec.Code != http.StatusOK {
+		t.Fatalf("operatingReview: got %d, body=%s", rec.Code, rec.Body.String())
+	}
+	var response struct {
+		Data struct {
+			OperatingReview struct {
+				TeamID *string `json:"teamId"`
+			} `json:"operatingReview"`
+		} `json:"data"`
+		Errors []any `json:"errors"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode operatingReview response: %v", err)
+	}
+	if len(response.Errors) != 0 || response.Data.OperatingReview.TeamID == nil {
+		t.Fatalf("expected a one-team operatingReview without GraphQL errors, got %s", rec.Body.String())
+	}
+	return *response.Data.OperatingReview.TeamID
+}
+
 // TestOperatingReviewRoute_IsServedByTheCatalog is CHAOS-4352
 // Wave 4 Lane B's (CHAOS-4505) extension of the same reachability
 // contract to operatingReview: real Mux, real PostgresSwitch reading a
 // real Postgres table, real gqlgen server, real principal.Verifier --
-// proving operatingReview's reachability is gated independently by its
-// OWN go_api_routing_state row. Unlike every other operation registered
+// proving operatingReview is served by the catalog with no routing row
+// of its own. Unlike every other operation registered
 // in this file, operatingReview's registered document carries BOTH
 // `$orgId` and `$input` variables (matching featureFlags, not
 // hotspots/cognitiveLoad/complexityTimeseries/reviewEdges) -- see
@@ -794,6 +826,31 @@ func TestOperatingReviewRoute_IsServedByTheCatalog(t *testing.T) {
 
 }
 
+func TestOperatingReviewRoute_CurrentTeamIDsPreservesLegacyOneTeam(t *testing.T) {
+	pool := startTestRegistryPostgres(t)
+
+	pub, priv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	jwksPath := writeTestJWKS(t, pub)
+	verifier, err := principal.NewVerifier(jwksPath, itTestIssuer, itTestAudience)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	handler, _, _, _, _ := newQueryHandler(&fakeOperatingReviewCHClient{}, pool, verifier, itTestSchemaDigest, os.Getenv)
+	token := signTestEnvelope(t, priv, "org-1")
+
+	legacy := postGraphQLWithVariables(t, handler, registeredOperatingReviewV2Document, token, operatingReviewTeamVariables("team-a", false))
+	current := postGraphQLWithVariables(t, handler, registeredOperatingReviewDocument, token, operatingReviewTeamVariables("team-a", true))
+	legacyTeamID := operatingReviewTeamID(t, legacy)
+	currentTeamID := operatingReviewTeamID(t, current)
+	if currentTeamID != legacyTeamID {
+		t.Fatalf("current teamIds response selected %q, want legacy teamId response %q", currentTeamID, legacyTeamID)
+	}
+}
+
 func homeVariables() map[string]any {
 	return map[string]any{"orgId": "org-1", "window": map[string]any{"rangeDays": 90}}
 }
@@ -832,8 +889,8 @@ func (emptyHomeCHClient) Query(_ context.Context, _ string, _ []clickhouse.Bindi
 // dependency (FetchLatestSuccessfulSyncAt), so this test exercises that
 // real pool too, not a fake; an empty, migrated table answers
 // pgx.ErrNoRows, which FetchLatestSuccessfulSyncAt already maps to
-// (nil, nil). Proves home's reachability is gated independently by its
-// OWN go_api_routing_state row, using registeredHomeDocument's own
+// (nil, nil). Proves home is served by the catalog with no routing row of
+// its own, using registeredHomeDocument's own
 // AUTHORED text (see that const's doc comment for why it is authored
 // rather than captured from a real client file: CHAOS-6084 found zero
 // web callers of this field).
@@ -944,6 +1001,29 @@ func TestBuildQueryRoute_FailsFastOnWrongClickHouseProtocol(t *testing.T) {
 // proof (Python-side stage-2 test, not yet written for this operation).
 type fakeFlowMatrixCHClient struct {
 	mu sync.Mutex
+}
+
+// fakeInvestmentEvidenceQualityCHClient drives the existing analytics
+// resolver through the real HTTP route. The group-query rows distinguish an
+// observed zero from an unknown mean; the stats row exists because Resolve
+// executes that existing aggregate for every investment request.
+type fakeInvestmentEvidenceQualityCHClient struct{}
+
+func (fakeInvestmentEvidenceQualityCHClient) Query(_ context.Context, statement string, _ []clickhouse.Binding) (clickhouse.RowScanner, error) {
+	switch {
+	case strings.Contains(statement, "evidence_quality_group_key"):
+		return &fakeRows{rows: [][]any{
+			{"feature_delivery", 0.0, uint64(2), uint64(2)},
+			{"maintenance", math.NaN(), uint64(1), uint64(0)},
+		}}, nil
+	case strings.Contains(statement, "quality_known_count"):
+		return &fakeRows{rows: [][]any{{
+			uint64(3), uint64(2), 0.0, 0.0,
+			uint64(0), uint64(0), uint64(0), uint64(0), uint64(1),
+		}}}, nil
+	default:
+		return &fakeRows{}, nil
+	}
 }
 
 func (c *fakeFlowMatrixCHClient) Query(_ context.Context, statement string, _ []clickhouse.Binding) (clickhouse.RowScanner, error) {
@@ -1065,6 +1145,78 @@ func TestFlowMatrixRoute_IsServedByTheCatalog(t *testing.T) {
 		}
 	})
 
+}
+
+func investmentEvidenceQualityVariables() map[string]any {
+	return map[string]any{
+		"orgId": "org-1",
+		"batch": map[string]any{
+			"useInvestment":          true,
+			"evidenceQualityGroupBy": "THEME",
+			"breakdowns": []any{map[string]any{
+				"dimension": "THEME",
+				"measure":   "COUNT",
+				"dateRange": map[string]any{
+					"startDate": "2026-04-01",
+					"endDate":   "2026-04-30",
+				},
+				"topN": 1,
+			}},
+		},
+	}
+}
+
+// TestInvestmentEvidenceQualityRoute_IsServedByTheCatalogAndPreservesNullZero
+// sends CHAOS-8745's captured document through the real document dispatcher,
+// gqlgen selection, authentication, and analytics resolver. It proves that
+// the selected group field is served, an observed zero remains zero, and a
+// group with no persisted quality has a null mean rather than a NaN.
+func TestInvestmentEvidenceQualityRoute_IsServedByTheCatalogAndPreservesNullZero(t *testing.T) {
+	pool := startTestRegistryPostgres(t)
+
+	pub, priv, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	verifier, err := principal.NewVerifier(writeTestJWKS(t, pub), itTestIssuer, itTestAudience)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler, _, _, _, _ := newQueryHandler(fakeInvestmentEvidenceQualityCHClient{}, pool, verifier, itTestSchemaDigest, os.Getenv)
+
+	rec := postGraphQLWithVariables(t, handler, registeredInvestmentEvidenceQualityDocument, signTestEnvelope(t, priv, "org-1"), investmentEvidenceQualityVariables())
+	if rec.Code != http.StatusOK {
+		t.Fatalf("catalog request status = %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+	var response struct {
+		Data struct {
+			Analytics struct {
+				EvidenceQualityByGroup []struct {
+					Key   string   `json:"key"`
+					Label *string  `json:"label"`
+					Mean  *float64 `json:"mean"`
+					Total int      `json:"total"`
+				} `json:"evidenceQualityByGroup"`
+			} `json:"analytics"`
+		} `json:"data"`
+		Errors any `json:"errors"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode GraphQL response: %v; body=%s", err, rec.Body.String())
+	}
+	if response.Errors != nil {
+		t.Fatalf("catalog request returned GraphQL errors: %s", rec.Body.String())
+	}
+	groups := response.Data.Analytics.EvidenceQualityByGroup
+	if len(groups) != 2 {
+		t.Fatalf("served evidenceQualityByGroup = %#v, want two groups", groups)
+	}
+	if first := groups[0]; first.Key != "feature_delivery" || first.Label == nil || *first.Label != "feature_delivery" || first.Mean == nil || *first.Mean != 0.0 || first.Total != 2 {
+		t.Fatalf("first served group = %#v, want feature_delivery observed mean 0 over total 2", first)
+	}
+	if second := groups[1]; second.Key != "maintenance" || second.Label == nil || *second.Label != "maintenance" || second.Mean != nil || second.Total != 1 {
+		t.Fatalf("second served group = %#v, want maintenance null mean over total 1", second)
+	}
 }
 
 // TestQueryRouteClickHouseClient_ToleratesRealResultVolume is the

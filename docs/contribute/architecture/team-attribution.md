@@ -635,6 +635,177 @@ not natively produce this entity. ¹ GitHub has no native Project entity (the re
 
 > **The matrix above tracks TEST coverage, not whether the data is pulled.** Functionally we ingest teams, projects, and members for *every* provider that supports them (auto-import, when the option is selected). Don't read a `partial`/`no` cell as "not consumed" — it means "not yet asserted."
 
+#### 0.4b Project identity: one project, one id (CHAOS-8851)
+
+A project is named by ONE id in the three tables that hold it. The team that owns a project reaches the
+project's work items by `(provider, project_id)`; no reader has to join on `project_key`.
+
+| provider | `projects.id` | `team_project_ownership.project_id` | `work_items.project_id` | state |
+|---|---|---|---|---|
+| jira | native project id (`10001`) | the same id | the same id | one id |
+| linear | raw project UUID | the same UUID | the same UUID | one id |
+| github | Projects V2 board id (`ghprojv2:{login}#{n}`) | none: a team owns repositories (`team_repo_ownership`) | the same board id | one id |
+| gitlab | `{org_id}:gitlab:{native id}` | the project PATH | none: a GitLab project is this schema's repository | **known gap** (CHAOS-8883): ownership and catalog meet only through `project_key` |
+
+Jira before this change: the three team-catalog writers (project-as-team, the legacy
+`jira_project_ops_team_links` carry-forward, Atlassian Teams) built the id from the project KEY
+(`{org_id}:jira:{KEY}`), while the work-items route wrote the native id. One project was two `projects`
+rows with one key, ownership pointed at the row no work item used, and a team reached none of its
+project's items by id. Now:
+
+- The project-as-team catalog reads `id` from the project search answer; Atlassian Teams takes it from the
+  last segment of the project ARI of the team's connected-space link (section 0.4c); a legacy link takes it
+  from the same run's search answer for its key.
+- A project with no usable native id gets NO ownership row and NO `projects` row. It is counted and logged
+  (`jira_team_catalog_project_without_native_id`, `jira_team_catalog_legacy_link_without_native_id`,
+  `jira_atlassian_teams_project_link_skipped`). An id is never built from the key as a fallback, and the
+  sink refuses an open row that carries one.
+- `project_key` stays on the row as a label. Team ids do not change.
+- **One snapshot rule for ownership rows** (`providersync.PlanOwnershipSnapshot`): a fact the run still
+  finds keeps the `valid_from` it was first seen with (`valid_from` is a key column: a new stamp at each
+  sync added one more open row per fact), and every other open row of the same writer is written again
+  with `valid_to` set. Both Jira writers go through this one function; each reads only its own open rows
+  (Atlassian Teams: `source = 'native'` rows of teams whose catalog row carries a team ARI; the catalog:
+  `source = 'jira_legacy'` rows and `source = 'native'` rows with `team_id = project_key`). So the first
+  sync on this version closes the open rows on the key-built id. The catalog closes nothing when its
+  project search returned no project.
+- **Only a complete snapshot closes a row** (`providersync.OwnershipSnapshot.Complete`; the zero value is
+  not complete). A row that is missing from a part of the provider's answer is not a fact the provider
+  dropped. A run that did not read its source to the end writes what it found, keeps first-seen
+  `valid_from`, closes nothing, and says so:
+  - Project-as-team catalog: the Jira project search is read page by page (`startAt`) to the provider's
+    end-of-data signal: `isLast` when the page has it, else `total`, else a page that has entries and is
+    shorter than the page size. A page with no entries and no signal (an empty object or an error body
+    under HTTP 200) is not the end: not complete. Bound: 50 pages of 100 projects. A later page that fails, the bound, or an empty page before
+    the end = not complete (`jira_team_catalog_project_search_incomplete`). A failed read of the legacy
+    links table = not complete (`jira_team_catalog_legacy_links_read_failed`). Either one gives
+    `jira_team_catalog_ownership_snapshot_incomplete` and `OwnershipSnapshotIncomplete` in the result.
+    An organization with more than 5,000 Jira projects never closes a catalog ownership row.
+  - Archived Jira projects: the project search returns live projects only (the provider's default for
+    its `status` filter), so the walk reads the archived projects with a second search
+    (`status=archived`, the same paging and bound). The archived answer is an identity set (native id
+    and key of each project). Every open ownership row of this writer whose project is in that set, by
+    the native id OR by the id built from the key (`{org_id}:jira:{KEY}`, rows written before the one-id
+    rule), is left as it is: it is not given to the snapshot rule, and nothing is written or re-keyed
+    for an archived project (`jira_team_catalog_archived_ownership_held`). This read failing at any
+    page, the first one included, does not fail the walk: the snapshot is not complete
+    (`jira_team_catalog_archived_project_search_incomplete`) and nothing is closed. A project in
+    neither answer (deleted, or no longer visible to the credential) loses its rows on a complete run.
+  - No live ownership row closes nothing: when the live answer gives no ownership row and the writer has
+    open rows, the snapshot is not complete (`no_live_ownership` in the warning), whatever the archived
+    read holds.
+  - Atlassian Teams: `Rows.ProjectLinksComplete` is set only by a collection that read the connected
+    spaces of every active team to the last page and met no link type it does not know (section 0.4c).
+    Per team: when a Jira project link came back and got no row (no readable Jira project ARI, two ids,
+    no key), the team is named in `Rows.UnreadableProjectLinkTeams`, no open link of that team is closed
+    (its writable links are still written), the run logs `jira_atlassian_teams_project_links_unreadable`
+    with the count, and the link leg is degraded (`project_link_not_written`). One writable link beside
+    it does not change that.
+  - The census test also fails when a planner passes a constant for `Complete`.
+- **A closed row is not owned before a merge.** A row is closed by writing its key again with `valid_to`
+  set, so until a merge both versions are stored. The ownership reader of the repository derivation
+  (`loadTeamRepoOwnershipProjectLinks`) takes the newest version of each row key first and filters
+  `valid_to` after, the same two-level `argMax` form as the attribution cascade (`LoadProjects`).
+  Test: `TestTeamRepoOwnershipProjectLinksLeaveOutAClosedRowBeforeAMerge`.
+- Linear and GitLab still have their own insert-only writers; a
+  census test (`TestJiraOwnershipWriterCensus`) names every writer of the table and fails for a new Jira
+  writer that does not plan its rows through the shared function.
+- The key-built `projects` rows written earlier are removed by a one-time operator verb, see section 1.1.
+- Known limit: a native Jira project id is unique per Jira site. One organization with two Jira sites
+  could give two projects the same id. The work-item rows had this limit before this change.
+
+Tests: `TestTeamReachesItsJiraProjectsWorkItemsThroughOwnership` (real producers, real ClickHouse: the
+team reaches its project's work items through ownership by id; one `projects` row per project),
+`TestProjectIdentityIsOneIDAcrossCatalogOwnershipAndWorkItems` (the same rule for linear and github; the
+GitLab gap pinned as a known red), `TestAnAtlassianTeamsRunClosesTheKeyBuiltProjectLinks`,
+`TestAPartialJiraSnapshotClosesNoOwnership` (a search that stops after a page, and a legacy links table
+that cannot be read, close nothing; the complete run after them closes the lost project),
+`TestATeamWithNoReadableProjectLinkKeepsItsOpenLinks`, `TestALinkTheProviderStillReturnsIsNeverClosed`,
+`TestAnArchivedJiraProjectKeepsItsOwnership`,
+`TestAnArchivedJiraProjectKeepsItsKeyBuiltOwnership` (a store with key-built rows only, a store with both
+id forms, an empty live answer).
+
+#### 0.4c Jira teams × projects: the Atlassian team's connected space (CHAOS-8887)
+
+The Atlassian Teams of a Jira site ARE the Jira teams. A team owns a Jira project (the product calls it a
+"space") only when the provider returns a link row that carries the team id and the project id.
+
+- **Source.** The GraphQL relation `graphStore_teamConnectedToContainer` (one read per active team, opt-in
+  `GraphStoreTeamConnectedToContainer`, `X-Query-Context` = the platform site ARI). Its node is a union
+  `JiraProject | ConfluenceSpace | LoomSpace`. `teamworkGraph_teamActiveProjects` (the projects a team is
+  ACTIVE on) is an activity relation and is NOT an ownership source: nothing reads it for ownership.
+- **Many-to-many.** One team can hold several projects and one project several teams. Every link is one
+  `team_project_ownership` row (`source = 'native'`, specificity 110, priority 10). A team with no link owns
+  nothing. A project with no connected team is unassigned.
+- **No name matching.** A row is written only from a `JiraProject` node. The project id is the native numeric
+  id of the node's project ARI (section 0.4b); the node's `projectId` must agree with it when present. A team
+  name, a project name or a key by itself is never a link.
+- **Teams with no member.** The team search sends `showEmptyTeams: true`: the provider leaves a team with no
+  member out of the search otherwise, and such a team can hold a project.
+- **Complete or nothing closes.** The link rows go through the shared snapshot rule
+  (`providersync.PlanOwnershipSnapshot`). The snapshot is complete only when the team search ended, every
+  active team's link read reached the provider's last page, and every link was of a known type. A failed
+  page, a refused opt-in (HTTP 200 with a GraphQL error), the page bound (200 pages for one team) or a link
+  type this code does not know makes the snapshot NOT complete: the links that were read are written, no row
+  is closed, and each team's catalog `project_keys` keeps what it had. Zero links for a team on a complete
+  read is a valid answer.
+- **A row is closed only when every Jira project link the provider returned for its team was written.**
+  One rule, per team, in one place (`teamLinkLedger` in `internal/atlassianteams/collect.go`): the
+  `JiraProject` links the provider returned for the team are counted, and so are the ones behind an
+  ownership row of this run (a second link to the same project is behind the row of the first). When the
+  two counts differ, for ANY reason (no readable project ARI, a `projectId` that disagrees with the ARI, no
+  key, or a skip reason added later), the team is named in `Rows.UnreadableProjectLinkTeams`: no row of
+  that team is closed in this run, its catalog `project_keys` keeps what it had, and the links of the team
+  that can be written are still written with their first-seen `valid_from`. The other teams of the run
+  are judged by themselves. A `ConfluenceSpace` or `LoomSpace` link is not a project link and is not in
+  this count; a link of an unknown type makes the whole snapshot not complete, as above. The older rule
+  "a team with one readable link is not unreadable" is gone: one link that got no row is enough.
+- **An answer with a missing part is a refused answer, never an empty last page.** In the link read: a
+  missing or null relation, `pageInfo`, `hasNextPage` or `edges`, and a null edge, are an error of that
+  team's read (a failed team read: nothing is closed). In the team search: a missing or null `pageInfo`,
+  `hasNextPage` or `nodes`, a null node, a node with a null `team`, and a page that promises a next page
+  with no cursor, are an error of the search (the Atlassian Teams step fails as a degraded leg: nothing is
+  written, no team is deactivated, nothing is closed). An explicit empty list with `pageInfo` present
+  (`edges: []`, `nodes: []`, `hasNextPage: false`) is a true empty state and stays valid: a team with no
+  space is a true state. The refusals are in the vendored client (patches 0006 and 0007).
+- **Separate legs.** A failed link read does not fail the team and member legs of the same run. The worker
+  step reports the degraded leg `jira_atlassian_team_project_links` (reason `project_link_read_failed`,
+  `project_link_page_bound`, `project_link_unknown_type` or `project_link_not_written`; the first that
+  applies, in that order) with the Warn line `jira_atlassian_teams_project_links_degraded`; the run's
+  outcome is `native_degraded`. `project_link_not_written` is the leg of a run in which every read ended
+  and a Jira project link of at least one team got no row: the snapshot is complete for the other teams,
+  and the named teams keep their rows. The reason is one of four fixed values and carries no team or
+  project value; the Warn line carries counts only (`no_native_id`, `no_project_key`,
+  `teams_with_unwritten_links`). No metric label is added: the two skip counts below already exist. A team search with
+  no team is the degraded leg `jira_atlassian_teams` with reason `empty_team_search`; nothing is written and
+  nothing is closed. The relation is EXPERIMENTAL at the provider, so a provider-side change shows as a
+  degraded leg, never as "zero links, all closed".
+- **Counts.** Every link of a read that ended is seen, and is either an ownership row or skipped for a
+  counted reason. The step result, the discovery ledger (`rows_written`) and the metric
+  `dev_health_team_catalog_rows_written_total` carry `team_project_links_seen`,
+  `team_project_links_skipped_not_project` (a Confluence or Loom space),
+  `team_project_links_skipped_no_native_id`, `team_project_links_skipped_no_project_key` and
+  `team_project_links_skipped_unknown_type`, next to `team_project_ownership` (the rows written). The Info
+  line `jira_atlassian_teams_project_links` gives seen / written / skipped / closed for each run.
+- **Precedence** is unchanged: source `native` at 110/10, ranked at read time above the project-as-team
+  owner of the same project (100/10). The retirement of the project-as-team rows is a separate change.
+
+Tests: `TestConnectedContainersReadThroughTheRealClient` (the real vendored client against a fake gateway
+that serves the measured answer shape: 11 teams, 10 links, one team with none),
+`TestTheTeamSearchAsksForEmptyTeams`, `TestATeamToProjectLinkIsManyToMany`,
+`TestConnectedContainersFollowEveryPage`, `TestAFailedLinkReadOfOneTeamDegradesOnlyTheLinkLeg`,
+`TestARefusedOptInIsAFailedReadNotZeroLinks`, `TestEveryLinkTypeIsWrittenSkippedOrMakesTheSnapshotIncomplete`,
+`TestALinkAnswerInAnUnknownShapeDoesNotFailTeamsAndMembers`, `TestALinkReadThatNeverEndsStopsAtItsBound`,
+`TestALostLinkIsClosedOnlyByACompleteSync` and `TestTheConnectedSpacesOfASiteBecomeOwnershipRows` (real
+ClickHouse), `TestTheWorkerStepCountsLinksAndDegradesAnIncompleteLinkLeg`,
+`TestAnEmptyAtlassianTeamSearchIsADegradedLegNotSilence`, `TestAJiraProjectLinkThatIsNotWrittenNamesItsTeam`,
+`TestATeamWithAProjectLinkThatGotNoRowIsNamedUnreadable`, `TestALinkAnswerWithNoListOfLinksIsAFailedRead`,
+`TestATeamSearchAnswerWithAMissingPartIsAFailedSearch`, `TestTheLinkDecoderRefusesAnAnswerWithAMissingPart`,
+`TestTheTeamSearchDecoderRefusesAnAnswerWithAMissingPart`, `TestTheProjectLinkLegNamesWhyItIsNotComplete`
+and `TestALinkTheProviderStillReturnsIsNeverClosed` (real ClickHouse: a link with no key, an ARI this code
+does not read beside one it reads, two ids, no `edges`, null `edges`, a team search with no `pageInfo`;
+controls: a link that is gone and an explicit empty list are closed).
+
 #### 0.4a Provider × entity **consumption** (functional — what `run_team_autoimport` actually pulls)
 
 | provider | teams | projects | members | repo ownership | member store written |
@@ -836,13 +1007,17 @@ One path: `run_team_autoimport` → `team_autoimport_<provider>.populate()` → 
   correct rows with nothing in the row saying the run was blind; Python's
   degrade-and-continue at the equivalent site is catalogued as a
   silent-degradation defect (CHAOS-4150), not a precedent.
-  **Observability:** providersync carries no logger and no metrics registry, so
-  each unit's result payload records
-  `observations.team_inheritance = {stored_edges_merged, donor_rescues,
-  cross_provider_rescues}`. `cross_provider_rescues` is decided by the DONOR's
-  provider differing from the claim's — the structure, not one extractor's
-  name — and is emitted even when zero, so "nothing to rescue" stays
-  distinguishable from "this build cannot see stored edges".
+  **The sync unit no longer runs this derivation (CHAOS-8811).** A work-items
+  sync unit writes raw rows only. It writes no `work_item_team_attributions`
+  row, and each provider's sync sink refuses one. The daily family
+  `work_item_attribution` (`internal/jobs/metrics/daily`) is the one writer of
+  the table, from stored rows. The unit result payload no longer carries
+  `team_inheritance` (`{stored_edges_merged, donor_rescues,
+  cross_provider_rescues}`), nor `team_attribution_written`,
+  `derived_destinations_implemented`, `derived_destinations_unimplemented` and
+  `watermark_held_for_derived_gap`. A unit logs
+  `providersync.work_items.derived_tables_left_to_daily_job` and counts
+  `dev_health_work_item_derived_tables_left_to_daily_job_total{provider}`.
 - **Which evidence refs bridge a work unit to a team (CHAOS-2416):** the
   Investment `unit_team` resolution reads **both** the `issues` **and** the
   `prs` arrays of `work_unit_investments.structural_evidence_json`. A `prs`
@@ -1066,7 +1241,8 @@ these three families at all; `families.json`'s `python` field now reads `"DELETE
 Python was ALSO the oracle §0.6 describes ("Python is still authoritative for the precedence
 ladder's correctness... the Go port... is verified against it") for the SEPARATE ingest-time
 derivation this section does not cover (`internal/providersync`'s `resolve()`, run per-provider at
-sync time, not at daily-partition time) — that oracle relationship is gone too. Prod Celery has
+sync time, not at daily-partition time) — that oracle relationship is gone too, and since CHAOS-8811
+the work-items sync unit no longer runs that derivation: it writes raw rows only. Prod Celery has
 been stopped since 2026-08-19, so the Python callers that used to invoke `compute_work_item_team_
 attributions` (`job_daily.py`'s daily job, `job_work_items.py`'s `run_work_items_sync_job` via
 webhook/backfill Celery tasks) never execute in production regardless. The live-Python comparison
@@ -1247,6 +1423,17 @@ retire-stale-linear-project-ownership` (`internal/providersync/linear_stale_proj
 deletes them via the same synchronous `ALTER TABLE ... DELETE` pattern, and explicitly excludes any
 `project_id` shaped like the `{org_id}:linear:{team_key}` pseudo-identity -- that row is CHAOS-4560's
 separate, still-open concern, not this verb's.
+
+**CHAOS-8851: the same one-time shape for the Jira key-built `projects` rows.** `dho workers providersync
+retire-jira-key-projects` (`internal/providersync/jira_key_project_cleanup.go`) physically deletes the Jira
+`projects` rows whose id is `{org_id}:jira:{KEY}` (section 0.4b), for the reason given above for Linear:
+a reader of `projects` does not have to filter `is_active`, so the second row of a key must be absent.
+A row is deleted only when the same organization has a native-id row with the same `project_key`, so a
+project never loses its only row. The verb refuses with `no_native_jira_project_rows` when its scope
+holds no native-id Jira row at all: that is the state before the first Jira team-autoimport sync on this
+version. It prints counts only. It touches `projects` only; the ownership rows on the key-built id are
+closed by the sync itself (the snapshot rule, section 0.4b). Order: deploy, wait for one Jira
+team-autoimport sync, run with `--dry-run`, then run.
 
 **Deployment ordering (codex review, PR #2012 round 3):** the cleanup verb has no fence against a
 still-running writer. The go-workers Helm chart rolls with `start-first`, so an old pod running the
@@ -1561,7 +1748,7 @@ erDiagram
     teams ||--o{ team_project_ownership : "team_id (attribution source 2: project_ownership)"
     team_project_ownership }o..o{ work_items : "project_id OR project_key, direct value match -- attribution never joins through projects (metrics/compute_work_items.py:559-577)"
     teams ||--o{ work_items : "teams.project_keys array vs work_scope_id/project_key, direct resolver match (attribution source 1: issue_project) -- also never via projects"
-    work_items }o..o{ projects : "Ask Dev investigation subsystem only (_project_identity.py), NOT the attribution resolver -- provider-specific: Linear by id; Jira by project_key; GitLab by project_key (its catalog id is a separate opaque numeric space, incompatible with work_items.project_id)"
+    work_items }o..o{ projects : "Ask Dev investigation subsystem only (_project_identity.py), NOT the attribution resolver -- provider-specific: Linear and Jira by id (a Jira catalog row written before CHAOS-8851 had a key-built id and met its work items by project_key only); GitLab by project_key (its catalog id is a separate opaque numeric space, incompatible with work_items.project_id)"
 
     teams ||--o{ team_repo_ownership : "team_id (attribution source 3: repo_ownership)"
     team_repo_ownership }o..o{ repos : "repo_id is Nullable and often NULL (e.g. every GitHub provider_access row, team_autoimport_github.py:308-338); resolved at READ time by a case-insensitive (org_id, provider, repo_full_name) name join, unmatched rows dropped -- providers/teams.py:380-392"
@@ -1709,8 +1896,9 @@ durations, and co-occurrence bridges, but they are not the owning team source.
   is real and sync-written (§0.4a), but its only consumer that actually JOINS `work_items` to it is
   a **different** subsystem: Ask Dev's investigation/evidence queries
   (`api/dev/_project_identity.py`), and even there the join is provider-specific, not a uniform
-  `project_id = id` — Linear matches by raw id, Jira by `project_key`, and GitLab by `project_key`
-  too (GitLab's catalog id is a separate, opaque, prefixed numeric space that never equals
+  `project_id = id` — Linear and Jira match by raw id (section 0.4b; a Jira catalog row written before
+  CHAOS-8851 had a key-built id and met its work items by `project_key` only), and GitLab by `project_key`
+  only (GitLab's catalog id is a separate, opaque, prefixed numeric space that never equals
   `work_items.project_id`).
 - **Two different "cross-provider link" tables exist for two different consumers — do not conflate
   them.** (1) `work_item_dependencies` (already in this diagram) is what the **attribution ladder's**
@@ -1721,6 +1909,8 @@ durations, and co-occurrence bridges, but they are not the owning team source.
   `014_work_graph.sql`) feeding `work_unit_investments.structural_evidence_json`'s `prs` array
   (§0.4 CHAOS-2416 bullet) — it is not read by the team-attribution resolver at all. Both answer
   "which table carries the cross-provider link," for different readers.
+  For the entity tree, `work_graph_issue_pr` is the issue <> pull request link of record; its
+  `provenance` tier ranks native > explicit_text > heuristic, and a consumer names the tier.
 - **`git_pull_requests` is not a work item and carries no `work_item_id`.** It is the raw
   git-log-sourced PR fact table (`000_raw_tables.sql`, tenant-scoped by `org_id` since migration
   `027`) used for git-side PR metrics (review load, cycle time from the git side) — with no

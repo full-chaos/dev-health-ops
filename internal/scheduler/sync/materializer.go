@@ -20,6 +20,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	"github.com/full-chaos/dev-health-ops/internal/providersync"
 	"github.com/full-chaos/dev-health-ops/internal/syncbudget"
+	"github.com/full-chaos/dev-health-ops/internal/workitemcontract"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -499,6 +500,9 @@ func (materializer *NativeMaterializer) Materialize(
 			return PlanResult{}, err
 		}
 	}
+	if err := errIfOnlySkippedDatasetsHadWork(loaded.featureOffSkippedDatasets, len(units)); err != nil {
+		return PlanResult{}, err
+	}
 	if len(units) > loaded.totalUnitCap {
 		return PlanResult{}, fmt.Errorf("%w: plan has %d units over cap %d", ErrInvalidPlan, len(units), loaded.totalUnitCap)
 	}
@@ -584,6 +588,9 @@ type loadedMaterializationPlan struct {
 	terminalReason         string
 	ensureSecurityDataset  bool
 	pagerDutyRepair        *pagerDutyDomainRepair
+	// featureOffSkippedDatasets is the number of enabled datasets the plan
+	// left out because the canonical-incident feature is off.
+	featureOffSkippedDatasets int
 	// triggeredBy is CHAOS-4602's sync_runs.triggered_by stamp: "schedule"
 	// for an ordinary cron-minted occurrence (every pre-CHAOS-4602 caller
 	// keeps this value, unconditionally), or the sync_manual_triggers row's
@@ -785,14 +792,19 @@ WHERE config.id = $1::uuid AND config.org_id = $2 AND integration.is_active`, oc
 			return loadedMaterializationPlan{}, err
 		}
 	}
-	if planDatasetsRequireCanonicalIncident(provider, datasets) {
-		allowed, err := canonicalIncidentAllowedForUpdate(ctx, tx, orgID, occurrence.ScheduledFor)
-		if err != nil {
-			return loadedMaterializationPlan{}, err
-		}
-		if !allowed {
-			return loadedMaterializationPlan{}, ErrOccurrenceIneligible
-		}
+	datasets, featureOffSkippedDatasets, err := dropCanonicalIncidentDatasetsWhenFeatureOff(ctx, tx, orgID, integrationID, provider, datasets, occurrence.ScheduledFor)
+	if err != nil {
+		return loadedMaterializationPlan{}, err
+	}
+	// CHAOS-8773: when a scheduled planner-managed parent has no enabled
+	// work-item family row, ask once whether this integration ever finished
+	// a work-items unit, so the planner can tell "stopped" from "never opted
+	// in". Skipped for every plan that has a family row.
+	var lastWorkItemSuccessAt *time.Time
+	var workItemClockAt time.Time
+	scheduledParent := plannerManaged && explicitDatasetKeys == nil
+	if scheduledParent && PlanNeedsWorkItemLastSuccess(provider, true, datasets) {
+		lastWorkItemSuccessAt, workItemClockAt = loadWorkItemLastSuccessAt(ctx, tx, provider, orgID, integrationID)
 	}
 	watermarks, err := loadPlanWatermarks(ctx, tx, orgID, sources, datasets)
 	if err != nil {
@@ -822,6 +834,9 @@ WHERE config.id = $1::uuid AND config.org_id = $2 AND integration.is_active`, oc
 			Now: occurrence.ScheduledFor.UTC(), Before: before, Since: since,
 			IntegrationDepthDays: depth, TierBackfillDaysCap: tierCap,
 			WatermarkOverlap: watermarkOverlap, Sources: sources, Datasets: datasets, Watermarks: watermarks,
+			PlannerManagedParent:  scheduledParent,
+			LastWorkItemSuccessAt: lastWorkItemSuccessAt,
+			WorkItemClockAt:       workItemClockAt,
 		},
 		provider:               provider,
 		configuredCredentialID: credentialID,
@@ -829,6 +844,8 @@ WHERE config.id = $1::uuid AND config.org_id = $2 AND integration.is_active`, oc
 		ensureSecurityDataset:  ensureSecurityDataset,
 		pagerDutyRepair:        pagerDutyRepair,
 		triggeredBy:            triggeredBy,
+
+		featureOffSkippedDatasets: featureOffSkippedDatasets,
 	}, nil
 }
 
@@ -1200,21 +1217,6 @@ func parseOptionalPositiveInt(value *string) (*int, bool) {
 		return nil, false
 	}
 	return &parsed, true
-}
-
-func planDatasetsRequireCanonicalIncident(provider string, datasets []PlanDataset) bool {
-	for _, dataset := range datasets {
-		spec, ok := datasetSpecification(provider, dataset.Key)
-		if !ok {
-			continue
-		}
-		for _, target := range spec.LegacyTargets {
-			if target == "incidents" || target == "operational" {
-				return true
-			}
-		}
-	}
-	return false
 }
 
 // rowQuerier is the read surface both entitlement call sites share: the
@@ -1713,6 +1715,57 @@ func syncTargetsRequireCanonicalIncident(targets []string) bool {
 		}
 	}
 	return false
+}
+
+// workItemLastSuccessSQL returns the time of the newest successful unit of
+// the work-item family for one integration, or NULL when there is none, and
+// the database clock in the same statement (the recency window is measured on
+// that clock, never the worker clock or the occurrence's scheduled time). The
+// (org_id, integration_id) equality pair is the leading prefix of
+// ix_sync_run_units_coverage_scan (alembic 0076: org_id, integration_id,
+// source_id, dataset_key, before_at), so the read is bounded by this one
+// integration's unit rows. It runs only for a plan with no enabled work-item
+// family row, never for a healthy plan.
+const workItemLastSuccessSQL = `
+SELECT max(updated_at), clock_timestamp() FROM public.sync_run_units
+WHERE org_id = $1 AND integration_id = $2::uuid
+  AND dataset_key = ANY($3::text[]) AND status = 'success'`
+
+// loadWorkItemLastSuccessAt reads the CHAOS-8773 recency fact on the
+// coordinator transaction (SELECT on sync_run_units is in the coordinator
+// posture, domain_authorization.go coordinatorPosture). The fact only decides
+// whether a WARN is written, so a failed read must never fail the plan: the
+// statement runs in a savepoint, which keeps the coordinator transaction
+// usable after a Postgres error, and a failure is logged by category only
+// (no error operand) and reads as "unknown" (nil), which is the quiet answer.
+func loadWorkItemLastSuccessAt(ctx context.Context, tx pgx.Tx, provider, orgID, integrationID string) (*time.Time, time.Time) {
+	unavailable := func() (*time.Time, time.Time) {
+		slog.Default().Warn("sync.materializer.work_item_ran_before_unavailable",
+			slog.String("provider", provider),
+			slog.String("org_id", orgID),
+			slog.String("integration_id", integrationID),
+			slog.String("error_category", "ran_before_query_failed"))
+		return nil, time.Time{}
+	}
+	savepoint, err := tx.Begin(ctx)
+	if err != nil {
+		return unavailable()
+	}
+	var lastSuccess *time.Time
+	var databaseClock time.Time
+	if err := savepoint.QueryRow(ctx, workItemLastSuccessSQL, orgID, integrationID,
+		workitemcontract.FamilyDatasets()).Scan(&lastSuccess, &databaseClock); err != nil {
+		_ = savepoint.Rollback(ctx)
+		return unavailable()
+	}
+	if err := savepoint.Commit(ctx); err != nil {
+		return unavailable()
+	}
+	if lastSuccess != nil {
+		utc := lastSuccess.UTC()
+		lastSuccess = &utc
+	}
+	return lastSuccess, databaseClock.UTC()
 }
 
 // loadPlanDatasets loads the enabled datasets a plan runs against.

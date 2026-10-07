@@ -124,3 +124,70 @@ func TestDedupFromSourceEveryAppendOnlyTableAndEveryReplacingTable(t *testing.T)
 		})
 	}
 }
+
+// TestBuildChartQueryReadsTheWorkItemDailyTablesByNewestRow holds the two
+// tables the daily families work_item_issue_type and work_item_investment
+// append to: every chart metric of metric_registry.json that reads one of
+// them reads the newest row of each key, never the raw table.
+func TestBuildChartQueryReadsTheWorkItemDailyTablesByNewestRow(t *testing.T) {
+	t.Parallel()
+	wantSource := map[string]string{
+		"issue_type_metrics_daily": "(SELECT * FROM issue_type_metrics_daily ORDER BY computed_at DESC LIMIT 1 BY org_id, repo_id, day, provider, team_id, issue_type_norm) AS issue_type_metrics_daily",
+		"investment_metrics_daily": "(SELECT * FROM investment_metrics_daily ORDER BY computed_at DESC LIMIT 1 BY org_id, repo_id, day, team_id, investment_area, project_stream) AS investment_metrics_daily",
+	}
+	charted := map[string]int{}
+	for name, definition := range supportedMetrics {
+		want, ok := wantSource[definition.SourceTable]
+		if !ok {
+			continue
+		}
+		charted[definition.SourceTable]++
+		query, _, err := buildChartQuery(ChartSpec{
+			ChartID: "chart-1", PlanID: "plan-1", ChartType: "line", Metric: name, GroupBy: "day",
+			TimeRangeStart: "2026-01-01", TimeRangeEnd: "2026-01-07", OrganizationID: "org-1",
+		}, definition)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		normalized := strings.Join(strings.Fields(query), " ")
+		if !strings.Contains(normalized, "FROM "+want+" WHERE") {
+			t.Errorf("%s does not read the newest row of each %s key:\n%s", name, definition.SourceTable, query)
+		}
+	}
+	for table := range wantSource {
+		if charted[table] == 0 {
+			t.Errorf("fixture drift: no chart metric reads %s any more", table)
+		}
+	}
+}
+
+// TestBuildChartQueryAveragesLeadTimeOverRowsWithACompletedItem holds the
+// mean of lead_p50_hours: a row with completed_count = 0 has no lead time and
+// is not part of the mean. A count metric of the same table stays a plain sum.
+func TestBuildChartQueryAveragesLeadTimeOverRowsWithACompletedItem(t *testing.T) {
+	t.Parallel()
+	build := func(metric string) string {
+		t.Helper()
+		definition, ok := supportedMetrics[metric]
+		if !ok || definition.SourceTable != "issue_type_metrics_daily" {
+			t.Fatalf("fixture drift: %s no longer maps to issue_type_metrics_daily (got %+v)", metric, definition)
+		}
+		query, _, err := buildChartQuery(ChartSpec{
+			ChartID: "chart-1", PlanID: "plan-1", ChartType: "line", Metric: metric, GroupBy: "day",
+			TimeRangeStart: "2026-01-01", TimeRangeEnd: "2026-01-07", OrganizationID: "org-1",
+		}, definition)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return strings.Join(strings.Fields(query), " ")
+	}
+	if query := build("lead_p50_hours"); !strings.Contains(query, "avg(if(completed_count > 0, lead_p50_hours, NULL)) AS y") {
+		t.Fatalf("lead_p50_hours is not averaged over the rows with a completed item:\n%s", query)
+	}
+	if query := build("completed_count"); !strings.Contains(query, "sum(completed_count) AS y") {
+		t.Fatalf("completed_count is not a plain sum:\n%s", query)
+	}
+	if got := averageExpression("cicd_metrics_daily", "success_rate"); got != "avg(success_rate)" {
+		t.Fatalf("a metric with no registered sample count = %q, want a plain avg", got)
+	}
+}

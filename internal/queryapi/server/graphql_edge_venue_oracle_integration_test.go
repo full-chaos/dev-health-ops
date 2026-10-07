@@ -295,8 +295,7 @@ func documentOperationName(document string) string {
 	return ""
 }
 
-// edgeSeed seeds the venue databases: the orgs, the principals, the impersonation, and a routing row to Go
-// for every registered operation, as prod runs it.
+// edgeSeed seeds the venue databases: the orgs, the principals, and the impersonation (query-api reads no routing row).
 func edgeSeed(users []edgeUser, docs []registeredEdgeDocument, schemaDigest string) func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, _ *venueoracle.Venue) map[string]map[string]any {
 	return func(t *testing.T, ctx context.Context, admin *pgxpool.Pool, _ *venueoracle.Venue) map[string]map[string]any {
 		exec := func(sql string, args ...any) {
@@ -324,14 +323,6 @@ VALUES ($1, $2, $3, $4, now(), now(), now())`, uuid.New(), org, u.id, role)
 		exec(`INSERT INTO impersonation_sessions (id, admin_user_id, target_user_id, target_org_id, target_role, created_at, expires_at)
 VALUES ($1, $2, $3, $4, 'viewer', now(), now() + interval '1 day')`,
 			uuid.New(), users[3].id, users[1].id, edgeOrgA)
-		// Every registered operation routed to Go, as prod runs it.
-		for _, doc := range docs {
-			exec(`INSERT INTO go_api_candidate_build (schema_digest, document_digest, selected_operation, candidate_build)
-VALUES ($1, $2, $3, 'venue') ON CONFLICT DO NOTHING`, schemaDigest, doc.Digest, doc.Operation)
-			exec(`INSERT INTO go_api_routing_state
-(schema_digest, document_digest, selected_operation, current_candidate_build, owner, mode, rollout_percentage, review_evidence, recorded_by, updated_at)
-VALUES ($1, $2, $3, 'venue', 'go', 'canary', 100, 'venue', 'venue', now())`, schemaDigest, doc.Digest, doc.Operation)
-		}
 		return specs
 	}
 }
@@ -648,6 +639,32 @@ func edgeCompare(t *testing.T, goBase string, cs []edgeCase, python []venueoracl
 	var parityPython []venueoracle.Response
 	var receipt strings.Builder
 	for i, c := range cs {
+		if key, ok := chaos8169GraphQLEdgeHomeLedgerKey(c.request.Name); ok {
+			goResponse := venueoracle.Do(t, goBase, c.request)
+			if golden != nil {
+				golden.Consumed(t, python[i])
+			}
+			statusEqual := python[i].Status == goResponse.Status
+			if !statusEqual {
+				t.Errorf("%s: D4840 Home ledger needs equal status; python=%d go=%d", c.request.Name, python[i].Status, goResponse.Status)
+			}
+			differing := headersThatDiffer(c.request, python[i], goResponse)
+			headersEqual := len(differing) == 0
+			if !headersEqual {
+				t.Errorf("%s: D4840 Home ledger has undeclared header differences %v\n python %v\n go     %v",
+					c.request.Name, differing, python[i].Headers, goResponse.Headers)
+			}
+			if chaos8509HomeCaptureAllowed(statusEqual, headersEqual) {
+				captureCHAOS8509HomePair(t, key, chaos8169GraphQLHomeBody(t, python[i].Body), chaos8169GraphQLHomeBody(t, goResponse.Body))
+			}
+			policy, ok := chaos8509HomeCapturePolicies[key]
+			if !ok {
+				t.Fatalf("CHAOS-8509 has no GraphQL Home policy for %s", c.request.Name)
+			}
+			assertCHAOS8509HomeCapturePolicy(t, key, policy, chaos8169GraphQLHomeBody(t, python[i].Body), chaos8169GraphQLHomeBody(t, goResponse.Body))
+			fmt.Fprintf(&receipt, "%-58s python=%d go=%d D4840 Home ledger validated\n", c.request.Name, python[i].Status, goResponse.Status)
+			continue
+		}
 		if c.declared == "" {
 			parity = append(parity, c.request)
 			parityPython = append(parityPython, python[i])

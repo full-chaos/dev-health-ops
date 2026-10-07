@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -46,7 +47,7 @@ func (doer *jiraAtlassianDoer) Do(request *http.Request) (*http.Response, error)
 	case strings.HasPrefix(request.URL.Path, "/rest/api/3/issue/OPS-201/changelog"):
 		body = `{"values":[{"created":"2026-08-01T09:00:00Z","author":{"accountId":"account-1"},"items":[{"field":"status","fromString":"To Do","toString":"Done"}]}],"total":1,"isLast":true}`
 	case strings.HasPrefix(request.URL.Path, "/rest/api/3/issue/OPS-201/comment"):
-		body = `{"comments":[{"created":"2026-08-02T10:00:00Z","author":{"accountId":"commenter"},"body":"verified"}],"isLast":true}`
+		body = `{"comments":[{"id":"10002","created":"2026-08-02T10:00:00Z","author":{"accountId":"commenter"},"body":"verified"}],"isLast":true}`
 	case strings.HasPrefix(request.URL.Path, "/rest/api/3/issue/OPS-201/worklog"):
 		body = `{"startAt":0,"maxResults":100,"total":1,"worklogs":[{"id":"wl-201","author":{"accountId":"worker","displayName":"Worker"},"started":"2026-08-01T10:00:00.123456Z","timeSpentSeconds":2700,"created":"2026-08-01T10:01:00.123456Z","updated":"2026-08-01T10:02:00.123456Z"}]}`
 	case request.URL.Path == "/rest/agile/1.0/board":
@@ -87,19 +88,40 @@ func jiraAtlassianClaim() Claim {
 
 func jiraAtlassianCompleteHandler(t *testing.T) JiraAtlassianRouteHandler {
 	t.Helper()
-	classifier, err := NewInvestmentClassifier(investmentConfigPath(t, "real"))
-	if err != nil {
-		t.Fatal(err)
-	}
 	statusMapping := loadRealStatusMapping(t)
 	return JiraAtlassianRouteHandler{
 		StatusMapping: statusMapping,
 		Identity:      jiraRouteIdentity,
-		Derived: JiraWorkItemDeriver{
-			Source:               &githubMultiDayOracleSource{},
-			statusMapping:        statusMapping,
-			investmentClassifier: classifier,
-		},
+	}
+}
+
+// jiraAtlassianRawOnlyDestinations is the effect set of one Jira work-items
+// unit: the six canonical facts, worklogs, the two project-membership tables
+// and the evaluated-empty ai_attribution effect.
+var jiraAtlassianRawOnlyDestinations = []string{
+	"ai_attribution", "project_membership_transitions", "projects", "sprints",
+	"work_item_dependencies", "work_item_interactions", "work_item_reopen_events",
+	"work_item_transitions", "work_items", "worklogs",
+}
+
+// assertJiraAtlassianRawOnlyEffects fails unless the batch holds exactly the
+// raw effect set: an optional-fetch failure must not drop a recoverable
+// effect, and no table the daily job computes from stored rows has an effect.
+func assertJiraAtlassianRawOnlyEffects(t *testing.T, batch CompleteRouteBatch) {
+	t.Helper()
+	got := make([]string, 0, len(batch.Effects))
+	for _, effect := range batch.Effects {
+		got = append(got, effect.Destination)
+		if slices.Contains(githubWorkItemDerivedDestinations, effect.Destination) {
+			t.Fatalf("the unit built an effect for the derived table %q", effect.Destination)
+		}
+		if effect.Destination == "ai_attribution" && len(effect.Rows) != 0 {
+			t.Fatalf("jira ai_attribution rows=%d want the evaluated-empty effect", len(effect.Rows))
+		}
+	}
+	slices.Sort(got)
+	if !slices.Equal(got, jiraAtlassianRawOnlyDestinations) {
+		t.Fatalf("effect destinations=%v want=%v", got, jiraAtlassianRawOnlyDestinations)
 	}
 }
 
@@ -117,9 +139,7 @@ func TestJiraAtlassianRouteCollectsWorklogsBoardsAndCanonicalEdges(t *testing.T)
 	if batch.Watermark == nil || !batch.Watermark.Equal(*claim.BeforeAt) {
 		t.Fatalf("watermark=%v want=%v", batch.Watermark, claim.BeforeAt)
 	}
-	if len(batch.Effects) != 19 {
-		t.Fatalf("effects=%d want=19 (six canonical facts, worklogs, two project-membership, and ten derived)", len(batch.Effects))
-	}
+	assertJiraAtlassianRawOnlyEffects(t, batch)
 	if batch.Result["worklogs_synced"] != 1 || batch.Result["sprints_synced"] != 1 || batch.Result["dependencies_synced"] != 1 || batch.Result["interactions_synced"] != 1 {
 		t.Fatalf("result=%#v", batch.Result)
 	}
@@ -470,7 +490,7 @@ func TestJiraAtlassianRouteDevStatusBudgetIsSharedAcrossIssues(t *testing.T) {
 	claim := nativeTestClaim("jira", "work-items")
 	claim.SourceExternalID = "OPS"
 	claim.DatasetOptions = map[string]any{
-		"fetch_dev_status": true, "dev_status_max_requests": 2,
+		"fetch_dev_status": true, "dev_status_max_requests": 2, "fetch_comments": false,
 	}
 	client := jiraDevStatusTestClientWithRetries(t, fakehttp.Client(doer), 3)
 	batch, err := jiraAtlassianCompleteHandler(t).Collect(
@@ -533,7 +553,7 @@ func TestJiraAtlassianRouteDevStatusCleanNoOpStillDebitsSharedBudget(t *testing.
 	claim := nativeTestClaim("jira", "work-items")
 	claim.SourceExternalID = "OPS"
 	claim.DatasetOptions = map[string]any{
-		"fetch_dev_status": true, "dev_status_max_requests": 3,
+		"fetch_dev_status": true, "dev_status_max_requests": 3, "fetch_comments": false,
 	}
 	client := jiraDevStatusTestClientWithRetries(t, fakehttp.Client(doer), 3)
 	batch, err := jiraAtlassianCompleteHandler(t).Collect(
@@ -601,9 +621,7 @@ func TestJiraAtlassianRouteWorklogFailureIsTypedAndWithholdsWatermark(t *testing
 	if batch.Watermark != nil {
 		t.Fatalf("optional worklog failure advanced watermark: %v", batch.Watermark)
 	}
-	if len(batch.Effects) != 19 {
-		t.Fatalf("optional worklog failure dropped recoverable effects: %d", len(batch.Effects))
-	}
+	assertJiraAtlassianRawOnlyEffects(t, batch)
 	incomplete, ok := batch.Result["incomplete"].([]string)
 	if !ok || len(incomplete) != 1 || incomplete[0] != "worklogs:jira:OPS-201" {
 		t.Fatalf("incomplete=%#v", batch.Result["incomplete"])
@@ -629,9 +647,7 @@ func TestJiraAtlassianReferenceSinkFailureLandsEffectsAndWithholdsWatermark(t *t
 	if batch.Watermark != nil {
 		t.Fatalf("reference sink failure advanced watermark: %v", batch.Watermark)
 	}
-	if len(batch.Effects) != 19 {
-		t.Fatalf("reference sink failure dropped recoverable effects: %d", len(batch.Effects))
-	}
+	assertJiraAtlassianRawOnlyEffects(t, batch)
 	incomplete, ok := batch.Result["incomplete"].([]string)
 	if !ok || len(incomplete) != 1 || incomplete[0] != "reference_sink" {
 		t.Fatalf("incomplete=%#v", batch.Result["incomplete"])
@@ -671,9 +687,7 @@ func TestJiraAtlassianGraphQLWorklogPreservesNameIdentity(t *testing.T) {
 	if !observation.GraphQLAttempted || !observation.GraphQLSucceeded || observation.RESTFallbackUsed || observation.GraphQLRequests != 1 || observation.RESTRequests != 0 {
 		t.Fatalf("GraphQL observation=%+v", observation)
 	}
-	if len(batch.Effects) != 19 {
-		t.Fatalf("effects=%d want=19", len(batch.Effects))
-	}
+	assertJiraAtlassianRawOnlyEffects(t, batch)
 	var worklog jiraWorklogRow
 	for _, effect := range batch.Effects {
 		if effect.Destination != "worklogs" || len(effect.Rows) != 1 {
@@ -766,7 +780,7 @@ func TestJiraAtlassianRouteDevStatusOneApplicationTypeDown(t *testing.T) {
 			})
 			claim := nativeTestClaim("jira", "work-items")
 			claim.SourceExternalID = "OPS"
-			claim.DatasetOptions = map[string]any{"fetch_dev_status": true}
+			claim.DatasetOptions = map[string]any{"fetch_dev_status": true, "fetch_comments": false}
 			client := jiraDevStatusTestClientWithRetries(t, fakehttp.Client(doer), 1)
 			client.Metrics = providerfoundation.NewMetrics()
 			batch, err := jiraAtlassianCompleteHandler(t).Collect(context.Background(), claim, providerfoundation.Credential{}, client, time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC))

@@ -5,6 +5,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -54,9 +56,21 @@ query LinearReferenceCatalogProjects($first: Int!, $after: String, $includeArchi
       status { id name type }
       trashed progress startDate targetDate createdAt updatedAt archivedAt url
       lead { id name email }
-      teams { nodes { id key } }
+      teams(first: 50) { nodes { id key } pageInfo { hasNextPage endCursor } }
     }
     pageInfo { hasNextPage endCursor }
+  }
+}`
+
+// linearReferenceCatalogProjectTeamsQuery continues a project's teams
+// connection past the first page embedded in the projects query (CHAOS-8770).
+const linearReferenceCatalogProjectTeamsQuery = `
+query LinearReferenceCatalogProjectTeams($projectId: String!, $first: Int!, $after: String) {
+  project(id: $projectId) {
+    teams(first: $first, after: $after) {
+      nodes { id key }
+      pageInfo { hasNextPage endCursor }
+    }
   }
 }`
 
@@ -251,10 +265,7 @@ func (handler LinearReferenceCatalogRouteHandler) CollectReferenceCatalog(
 			memberNodes := append([]linearReferenceCatalogMemberPayload(nil), payload.Members.Nodes...)
 			membersComplete := !payload.Members.PageInfo.HasNextPage
 			if payload.Members.PageInfo.HasNextPage {
-				extra, memberPages, memberCap, memberErr := collectLinearReferenceConnection(
-					ctx, client, linearReferenceCatalogMembersQuery, linearReferenceConnectionTeamMembers,
-					linearReferenceConnectionVariables{TeamID: payload.ID}, linearReferenceCatalogMemberPageSize, maxPages,
-				)
+				extra, memberPages, memberCap, memberErr := collectLinearReferenceTeamMembers(ctx, client, payload, maxPages)
 				evidence.Pages += memberPages
 				if memberErr != nil || memberCap {
 					return linearReferenceCatalogFailureBatch(evidence, "members", evidence.Pages, evidence.Records, memberErr, memberCap)
@@ -386,6 +397,21 @@ func (handler LinearReferenceCatalogRouteHandler) CollectReferenceCatalog(
 					return linearReferenceCatalogFailureBatch(evidence, "projects", evidence.Pages, evidence.Records, err, false)
 				}
 				break projectNodes
+			}
+			if payload.Teams.PageInfo.HasNextPage {
+				teams, teamsErr := collectLinearReferenceProjectTeams(ctx, client, payload)
+				evidence.Pages += teams.pages
+				if teamsErr != nil {
+					// Strict: the failure batch clears the flag. Non-strict keeps the
+					// other rows but the projects list is incomplete (below).
+					if ref.Strict {
+						return linearReferenceCatalogFailureBatch(evidence, "projects", evidence.Pages, evidence.Records, teamsErr, errors.Is(teamsErr, ErrPaginationCapExceeded))
+					}
+					evidence.ProjectsComplete = false
+					break projectNodes
+				}
+				payload.Teams.Nodes = append(payload.Teams.Nodes, teams.nodes...)
+				payload.Teams.PageInfo = linearPageInfoPayload{}
 			}
 			// CHAOS-4431 codex review P2: each native project is versioned at
 			// the moment THIS node was observed, not at walk start, so two
@@ -523,6 +549,16 @@ func linearReferenceCatalogFailureBatch(
 	collectErr error,
 	capReached bool,
 ) (LinearReferenceCatalogBatch, error) {
+	// A failure never reports the failed surface complete, wherever in the walk
+	// the flag was set (CHAOS-8781).
+	switch surface {
+	case "teams":
+		evidence.TeamsComplete = false
+	case "members":
+		evidence.MembersComplete = false
+	case "projects":
+		evidence.ProjectsComplete = false
+	}
 	code := LinearReferenceCatalogInvalidResponse
 	if capReached || errors.Is(collectErr, ErrPaginationCapExceeded) {
 		code = LinearReferenceCatalogPaginationCap
@@ -552,9 +588,10 @@ func linearReferenceCatalogError(code LinearReferenceCatalogFailureCode, cause e
 type linearReferenceConnectionPath string
 
 const (
-	linearReferenceConnectionTeams       linearReferenceConnectionPath = "teams"
-	linearReferenceConnectionTeamMembers linearReferenceConnectionPath = "team.members"
-	linearReferenceConnectionProjects    linearReferenceConnectionPath = "projects"
+	linearReferenceConnectionTeams        linearReferenceConnectionPath = "teams"
+	linearReferenceConnectionTeamMembers  linearReferenceConnectionPath = "team.members"
+	linearReferenceConnectionProjects     linearReferenceConnectionPath = "projects"
+	linearReferenceConnectionProjectTeams linearReferenceConnectionPath = "project.teams"
 )
 
 type linearReferencePageInfo struct {
@@ -575,6 +612,9 @@ func collectLinearReferenceConnection(
 	}
 	items := make([]json.RawMessage, 0)
 	cursor := ""
+	if variables.After != nil {
+		cursor = strings.TrimSpace(*variables.After)
+	}
 	seen := make([]string, 0)
 	for pages := 0; ; {
 		if pages >= maxPages {
@@ -646,6 +686,7 @@ type linearReferenceConnectionVariables struct {
 	First           int     `json:"first"`
 	After           *string `json:"after"`
 	TeamID          string  `json:"teamId,omitempty"`
+	ProjectID       string  `json:"projectId,omitempty"`
 	IncludeArchived bool    `json:"includeArchived,omitempty"`
 }
 
@@ -667,10 +708,15 @@ type linearReferenceCatalogTeamMemberConnection struct {
 	Members *linearReferenceConnectionPage `json:"members"`
 }
 
+type linearReferenceCatalogProjectTeamConnection struct {
+	Teams *linearReferenceConnectionPage `json:"teams"`
+}
+
 type linearReferenceCatalogGraphQLData struct {
-	Teams    *linearReferenceConnectionPage              `json:"teams"`
-	Team     *linearReferenceCatalogTeamMemberConnection `json:"team"`
-	Projects *linearReferenceConnectionPage              `json:"projects"`
+	Project  *linearReferenceCatalogProjectTeamConnection `json:"project"`
+	Teams    *linearReferenceConnectionPage               `json:"teams"`
+	Team     *linearReferenceCatalogTeamMemberConnection  `json:"team"`
+	Projects *linearReferenceConnectionPage               `json:"projects"`
 }
 
 func linearReferenceConnection(
@@ -692,6 +738,11 @@ func linearReferenceConnection(
 			return nil, false
 		}
 		return payload.Team.Members, payload.Team.Members != nil
+	case linearReferenceConnectionProjectTeams:
+		if payload.Project == nil {
+			return nil, false
+		}
+		return payload.Project.Teams, payload.Project.Teams != nil
 	case linearReferenceConnectionProjects:
 		return payload.Projects, payload.Projects != nil
 	default:
@@ -820,4 +871,92 @@ func dedupeLinearReferenceOwnership(rows []linearReferenceOwnershipRow) []linear
 		}
 	}
 	return result
+}
+
+type linearReferenceProjectTeamsResult struct {
+	nodes []linearReferenceProjectTeamPayload
+	pages int
+}
+
+// collectLinearReferenceProjectTeams pages one project's teams to the end. The
+// first page is embedded in the projects query and counts against the same hard
+// bound as every nested Linear connection. Past it the call fails closed with
+// the project and the field named, never with a payload or a credential.
+func collectLinearReferenceProjectTeams(
+	ctx context.Context,
+	client *providerfoundation.HTTPClient,
+	project linearReferenceProjectPayload,
+) (linearReferenceProjectTeamsResult, error) {
+	result := linearReferenceProjectTeamsResult{}
+	cursor := strings.TrimSpace(project.Teams.PageInfo.EndCursor)
+	if cursor == "" {
+		// The embedded page WAS read: the failure evidence counts it.
+		result.pages = 1
+		return result, providerfoundation.ErrPaginationInvalid
+	}
+	raw, pages, capped, err := collectLinearReferenceConnection(
+		ctx, client, linearReferenceCatalogProjectTeamsQuery, linearReferenceConnectionProjectTeams,
+		linearReferenceConnectionVariables{ProjectID: project.ID, After: &cursor},
+		50, linearNestedHardMaxPages-1,
+	)
+	// The first page is embedded in the projects query: it is a page of this
+	// connection too, so the evidence counts it (CHAOS-8781).
+	result.pages = pages + 1
+	if capped {
+		slog.Error("providersync.linear.nested_connection_bound_exceeded",
+			"owner", "project "+project.ID, "field", "teams", "pages", pages+1,
+			"items", len(raw)+len(project.Teams.Nodes), "max_pages", linearNestedHardMaxPages)
+		return result, fmt.Errorf(
+			"%w: linear teams of project %s still had a next page after %d pages (max %d pages)",
+			ErrPaginationCapExceeded, project.ID, pages+1, linearNestedHardMaxPages,
+		)
+	}
+	if err != nil {
+		return result, err
+	}
+	for _, item := range raw {
+		var team linearReferenceProjectTeamPayload
+		if err := json.Unmarshal(item, &team); err != nil {
+			return result, providerfoundation.ErrNormalizationInvalid
+		}
+		result.nodes = append(result.nodes, team)
+	}
+	return result, nil
+}
+
+// collectLinearReferenceTeamMembers continues a team's members connection from
+// the endCursor of the page embedded in the teams query (it does not start over)
+// and holds it to the same hard bound as every nested Linear connection: the
+// embedded page counts, so the connection holds linearNestedHardMaxPages pages
+// in total. A configured maxPages may only lower it. Past the bound the error
+// names the team and the field, and carries no payload text (CHAOS-8781).
+// The returned page count includes the embedded page.
+func collectLinearReferenceTeamMembers(
+	ctx context.Context,
+	client *providerfoundation.HTTPClient,
+	team linearReferenceCatalogTeamPayload,
+	maxPages int,
+) ([]json.RawMessage, int, bool, error) {
+	cursor := strings.TrimSpace(team.Members.PageInfo.EndCursor)
+	if cursor == "" {
+		// The embedded page WAS read: the failure evidence counts it.
+		return nil, 1, false, providerfoundation.ErrPaginationInvalid
+	}
+	followUps := min(maxPages, linearNestedHardMaxPages-1)
+	raw, pages, capped, err := collectLinearReferenceConnection(
+		ctx, client, linearReferenceCatalogMembersQuery, linearReferenceConnectionTeamMembers,
+		linearReferenceConnectionVariables{TeamID: team.ID, After: &cursor},
+		linearReferenceCatalogMemberPageSize, followUps,
+	)
+	pages++ // the embedded first page
+	if capped {
+		slog.Error("providersync.linear.nested_connection_bound_exceeded",
+			"owner", "team "+team.ID, "field", "members", "pages", pages,
+			"items", len(raw)+len(team.Members.Nodes), "max_pages", followUps+1)
+		return raw, pages, true, fmt.Errorf(
+			"%w: linear members of team %s still had a next page after %d pages (max %d pages)",
+			ErrPaginationCapExceeded, team.ID, pages, followUps+1,
+		)
+	}
+	return raw, pages, false, err
 }

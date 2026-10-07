@@ -51,7 +51,7 @@ func (s Store) now() time.Time {
 // separate so a caller that only needs the flag decision -- none exist
 // yet, but the split mirrors Python's own two-step shape and keeps this
 // function unit-testable without a feature_flags fixture).
-func (s Store) loadRawSettings(ctx context.Context, orgID string) (map[string]string, error) {
+func (s Store) loadRawSettings(ctx context.Context, orgID string) (orgSettings, error) {
 	if s.Pool == nil {
 		return nil, fmt.Errorf("llmorgsettings: Store.Pool is nil")
 	}
@@ -112,7 +112,7 @@ WHERE org_id = $1 AND category = $2`, orgID, settingsCategoryLLM)
 // _apply_byo_llm_flag_gate's `raise LLMAuthError` -- a genuine licensing-
 // store fault must never silently reroute a tenant's BYO traffic to the
 // platform LLM.
-func (s Store) loadGatedSettings(ctx context.Context, orgID string) (map[string]string, error) {
+func (s Store) loadGatedSettings(ctx context.Context, orgID string) (orgSettings, error) {
 	settings, err := s.loadRawSettings(ctx, orgID)
 	if err != nil {
 		return nil, err

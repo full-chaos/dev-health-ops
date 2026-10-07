@@ -21,12 +21,12 @@ import (
 // models carry LastSynced in Python and therefore compare it at the same
 // deterministic unit timestamp Go writes into its effect rows.
 type jiraBatchOracleRow struct {
-	WorkItems    []jiraWorkItemOraclePrepRow  `json:"work_items"`
-	Transitions  []jiraBatchTransitionRow     `json:"transitions"`
-	Dependencies []jiraBatchDependencyRow     `json:"dependencies"`
-	ReopenEvents []jiraWorkItemReopenRow      `json:"reopen_events"`
-	Interactions []jiraWorkItemInteractionRow `json:"interactions"`
-	Sprints      []jiraSprintRow              `json:"sprints"`
+	WorkItems    []jiraWorkItemOraclePrepRow `json:"work_items"`
+	Transitions  []jiraBatchTransitionRow    `json:"transitions"`
+	Dependencies []jiraBatchDependencyRow    `json:"dependencies"`
+	ReopenEvents []jiraWorkItemReopenRow     `json:"reopen_events"`
+	Interactions []jiraBatchInteractionRow   `json:"interactions"`
+	Sprints      []jiraSprintRow             `json:"sprints"`
 }
 
 // jiraBatchDependencyRow is the frozen Python dependency row: the Go row
@@ -55,6 +55,21 @@ func jiraBatchSemanticDependency(t *testing.T, row jiraWorkItemDependencyRow) ji
 		RelationshipSemanticsVersion: row.RelationshipSemanticsVersion,
 		LastSynced:                   row.LastSynced, OrgID: row.OrgID, SourceID: row.SourceID,
 	}
+}
+
+// jiraBatchInteractionRow is jiraWorkItemInteractionRow without interaction_id:
+// this oracle speaks for the frozen Python producer, which has no comment id
+// (CHAOS-8790). The Go-only id is checked by the per-provider same-millisecond
+// tests, not here. The id is supplied to the Go side by the doer below.
+type jiraBatchInteractionRow struct {
+	WorkItemID      string    `json:"work_item_id"`
+	Provider        string    `json:"provider"`
+	InteractionType string    `json:"interaction_type"`
+	OccurredAt      time.Time `json:"occurred_at"`
+	Actor           *string   `json:"actor"`
+	BodyLength      int       `json:"body_length"`
+	LastSynced      time.Time `json:"last_synced"`
+	OrgID           string    `json:"org_id"`
 }
 
 type jiraBatchTransitionRow struct {
@@ -112,6 +127,14 @@ func buildJiraProducerBatchOracleRow(
 	if rawComments, ok := input["comments"].(map[string]any); ok {
 		for key, raw := range rawComments {
 			comments[key] = jiraBatchMaps(t, raw)
+			for index, comment := range comments[key] {
+				if _, hasID := comment["id"]; !hasID {
+					// The frozen Python input has no comment id (CHAOS-8790);
+					// the id is supplied here, Go side only, so the recorded
+					// Python answer for that input stays valid.
+					comment["id"] = fmt.Sprintf("oracle-%s-%d", key, index)
+				}
+			}
 		}
 	}
 	sprintPayloads := make(map[string]map[string]any)
@@ -136,7 +159,7 @@ func buildJiraProducerBatchOracleRow(
 	if err != nil {
 		t.Fatalf("Jira route oracle collect: %v", err)
 	}
-	result := jiraBatchOracleRow{WorkItems: make([]jiraWorkItemOraclePrepRow, 0), Transitions: make([]jiraBatchTransitionRow, 0), Dependencies: make([]jiraBatchDependencyRow, 0), ReopenEvents: make([]jiraWorkItemReopenRow, 0), Interactions: make([]jiraWorkItemInteractionRow, 0), Sprints: make([]jiraSprintRow, 0)}
+	result := jiraBatchOracleRow{WorkItems: make([]jiraWorkItemOraclePrepRow, 0), Transitions: make([]jiraBatchTransitionRow, 0), Dependencies: make([]jiraBatchDependencyRow, 0), ReopenEvents: make([]jiraWorkItemReopenRow, 0), Interactions: make([]jiraBatchInteractionRow, 0), Sprints: make([]jiraSprintRow, 0)}
 	for _, effect := range batch.Effects {
 		for _, raw := range effect.Rows {
 			switch effect.Destination {
@@ -169,7 +192,11 @@ func buildJiraProducerBatchOracleRow(
 				if err := json.Unmarshal(raw, &row); err != nil {
 					t.Fatal(err)
 				}
-				result.Interactions = append(result.Interactions, row)
+				result.Interactions = append(result.Interactions, jiraBatchInteractionRow{
+					WorkItemID: row.WorkItemID, Provider: row.Provider, InteractionType: row.InteractionType,
+					OccurredAt: row.OccurredAt, Actor: row.Actor, BodyLength: row.BodyLength,
+					LastSynced: row.LastSynced, OrgID: row.OrgID,
+				})
 			case "sprints":
 				var row jiraSprintRow
 				if err := json.Unmarshal(raw, &row); err != nil {

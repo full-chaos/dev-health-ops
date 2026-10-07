@@ -40,10 +40,10 @@ var ErrGitHubWorkItemSinkIncomplete = errors.New(
 // actually implements it:
 //
 //   - provider_sync.go DOES have the case:
-//     `provider == "github" && dataset == "work-items"` (:324) calls this
-//     constructor (:329), builds the deriver via NewGitHubWorkItemDeriver
-//     (:335), and installs GitHubWorkItemsRouteHandler with both as
-//     sink and readback (:350).
+//     `provider == "github" && dataset == "work-items"` calls this
+//     constructor and installs GitHubWorkItemsRouteHandler with the sink as
+//     sink and readback. It builds no deriver: the unit writes raw rows only
+//     and the daily job writes every table computed from them.
 //   - route_ready is TRUE for all five aliases: execution_registry.go:246
 //     sets descriptor.RouteReady unconditionally for the github work-item
 //     family, and :247-249 additionally sets Plannable for the canonical
@@ -119,6 +119,7 @@ func NewGitHubWorkItemClickHouseEffects(
 		WorkItemTransitions:  GitHubWorkItemTransitionsClickHouseAdapter{Conn: conn},
 		WorkItems:            GitHubWorkItemsClickHouseAdapter{Conn: conn},
 
+		// Not dispatched: the daily job owns these tables.
 		// Metric triplet.
 		WorkItemCycleTimes: GitHubWorkItemCycleTimesClickHouseEffects{
 			Conn: conn, Lease: lease,
@@ -323,38 +324,7 @@ const githubWorkItemDerivedMaxBackfillDays = 366
 //
 // Days ascend, matching the order Python appends rows in.
 func githubWorkItemDerivedDays(claim Claim, normalizedAt time.Time) ([]time.Time, error) {
-	if normalizedAt.IsZero() {
-		return nil, ErrInvalidConfiguration
-	}
-	endDay := githubWorkItemDerivedUTCDate(normalizedAt)
-	if claim.BeforeAt != nil {
-		if claim.BeforeAt.IsZero() {
-			return nil, ErrInvalidConfiguration
-		}
-		endDay = githubWorkItemDerivedUTCDate(claim.BeforeAt.Add(-time.Nanosecond))
-	}
-	startDay := endDay
-	if claim.SinceAt != nil {
-		if claim.SinceAt.IsZero() {
-			return nil, ErrInvalidConfiguration
-		}
-		startDay = githubWorkItemDerivedUTCDate(*claim.SinceAt)
-	}
-	if startDay.After(endDay) {
-		// cli.py:110 exits on --since after --before. A unit whose window is
-		// inverted is malformed, not an empty-but-valid range: deriving zero
-		// days would land an all-empty derived manifest that readback then
-		// treats as a successful no-op.
-		return nil, ErrInvalidConfiguration
-	}
-	days := make([]time.Time, 0, githubWorkItemDerivedMaxBackfillDays)
-	for day := startDay; !day.After(endDay); day = day.AddDate(0, 0, 1) {
-		if len(days) == githubWorkItemDerivedMaxBackfillDays {
-			return nil, ErrInvalidConfiguration
-		}
-		days = append(days, day)
-	}
-	return days, nil
+	return WorkItemsUnitWindowDays(claim.SinceAt, claim.BeforeAt, normalizedAt)
 }
 
 func githubWorkItemDerivedUTCDate(value time.Time) time.Time {
@@ -551,5 +521,3 @@ func githubWorkItemMissingDerivedDestinations(
 	}
 	return missing
 }
-
-var _ githubWorkItemsDeriver = GitHubWorkItemDeriver{}

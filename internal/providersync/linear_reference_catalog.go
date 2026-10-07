@@ -34,7 +34,8 @@ type linearReferenceProjectTeamPayload struct {
 }
 
 type linearReferenceProjectTeamsPayload struct {
-	Nodes []linearReferenceProjectTeamPayload `json:"nodes"`
+	Nodes    []linearReferenceProjectTeamPayload `json:"nodes"`
+	PageInfo linearPageInfoPayload               `json:"pageInfo"`
 }
 
 type linearReferenceProjectPayload struct {

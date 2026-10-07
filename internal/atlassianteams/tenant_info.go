@@ -91,7 +91,7 @@ const tenantContextsQuery = `query TenantContexts($cloudIds: [ID!]!) {
 // OrganizationResolver is the raw-GraphQL-execution capability
 // ResolveOrganizationID needs from the AGG gateway client -- deliberately not
 // the Teams-specific Client interface Collect uses (SearchTeams/
-// IterTeamUsers/IterTeamActiveProjects), so a caller that only wants to
+// IterTeamUsers/IterTeamConnectedContainers), so a caller that only wants to
 // resolve an organization id (and a test that only wants to fake that) never
 // has to also satisfy Collect's larger surface. *graph.Client (production)
 // satisfies both interfaces from one instance.

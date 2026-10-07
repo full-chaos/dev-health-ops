@@ -213,7 +213,9 @@ func loadWorkItemDerivationContextForProvider(
 	)
 	donorIDs, donorKeys := githubWorkItemDerivationDonorTargets(dependencies)
 	if len(donorIDs)+len(donorKeys) > teamattribution.GithubWorkItemDerivationContextLimit {
-		return teamattribution.GithubWorkItemDerivationContext{}, ErrEffectRecoveryUnsafe
+		return teamattribution.GithubWorkItemDerivationContext{}, &EffectBoundExceededError{
+			Limit: "derivation_targets", Rows: len(donorIDs) + len(donorKeys),
+		}
 	}
 	facts, err := source.Load(ctx, claim, teamattribution.GithubWorkItemDerivationLoadRequest{
 		AsOf: asOf, DonorWorkItemIDs: donorIDs, DonorIssueKeys: donorKeys,
@@ -544,7 +546,7 @@ LIMIT ?`, orgID, sourceWorkItemIDs, relationshipTypes,
 		}
 		result = append(result, row)
 		if len(result) > teamattribution.GithubWorkItemDerivationContextLimit {
-			return nil, ErrEffectRecoveryUnsafe
+			return nil, &EffectBoundExceededError{Limit: "derivation_context", Rows: len(result)}
 		}
 	}
 	if err := rows.Err(); err != nil {
@@ -585,7 +587,7 @@ LIMIT ?`, orgID, request.DonorWorkItemIDs, request.DonorIssueKeys, maximum+1)
 		}
 		result = append(result, subject)
 		if len(result) > maximum {
-			return nil, ErrEffectRecoveryUnsafe
+			return nil, &EffectBoundExceededError{Limit: "derivation_context", Rows: len(result)}
 		}
 	}
 	return result, rows.Err()

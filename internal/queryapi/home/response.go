@@ -24,11 +24,29 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/pytime"
 )
 
-// Coverage is the wire shape of Coverage (schemas.py:9-12).
+// Coverage is the Home freshness coverage response. A nil field means its
+// denominator had no observed records; a non-nil zero is observed zero
+// coverage and must remain distinct on the wire.
 type Coverage struct {
-	ReposCoveredPct          float64 `json:"repos_covered_pct"`
-	PRsLinkedToIssuesPct     float64 `json:"prs_linked_to_issues_pct"`
-	IssuesWithCycleStatesPct float64 `json:"issues_with_cycle_states_pct"`
+	ReposCoveredPct          *float64 `json:"repos_covered_pct"`
+	PRsLinkedToIssuesPct     *float64 `json:"prs_linked_to_issues_pct"`
+	IssuesWithCycleStatesPct *float64 `json:"issues_with_cycle_states_pct"`
+}
+
+// ObservedValues returns only coverage measurements whose denominator was
+// observed. Data confidence must not average an absent value as zero.
+func (c Coverage) ObservedValues() map[string]float64 {
+	values := make(map[string]float64, 3)
+	if c.ReposCoveredPct != nil {
+		values["repos_covered_pct"] = *c.ReposCoveredPct
+	}
+	if c.PRsLinkedToIssuesPct != nil {
+		values["prs_linked_to_issues_pct"] = *c.PRsLinkedToIssuesPct
+	}
+	if c.IssuesWithCycleStatesPct != nil {
+		values["issues_with_cycle_states_pct"] = *c.IssuesWithCycleStatesPct
+	}
+	return values
 }
 
 // Freshness is the wire shape of Freshness (schemas.py:15-19).
@@ -45,14 +63,18 @@ type SparkPoint struct {
 	Value float64              `json:"value"`
 }
 
-// MetricDelta is the wire shape of MetricDelta (schemas.py:27-33).
+// MetricDelta is the Home domain shape. Its two presence flags are exposed by
+// GraphQL only; server.homeRESTResponse omits them for the frozen Python REST
+// contract, whose Pydantic MetricDelta does not declare either field.
 type MetricDelta struct {
-	Metric   string       `json:"metric"`
-	Label    string       `json:"label"`
-	Value    float64      `json:"value"`
-	Unit     string       `json:"unit"`
-	DeltaPct float64      `json:"delta_pct"`
-	Spark    []SparkPoint `json:"spark"`
+	Metric       string       `json:"metric"`
+	Label        string       `json:"label"`
+	Value        float64      `json:"value"`
+	Unit         string       `json:"unit"`
+	DeltaPct     float64      `json:"delta_pct"`
+	HasData      bool         `json:"has_data"`
+	HasPriorData bool         `json:"has_prior_data"`
+	Spark        []SparkPoint `json:"spark"`
 }
 
 // ReworkThemeAllocation is the wire shape of ReworkThemeAllocation
@@ -128,6 +150,38 @@ type Signal struct {
 	EvidenceRef       *string         `json:"evidence_ref"`
 	Category          string          `json:"category"`
 	ScopeEntity       *ScopeEntityRef `json:"scope_entity"`
+	// Attribution is the distribution of current primary work-item
+	// attribution evidence behind a work-item metric. It is nil when this
+	// window has no attributable work items. It is never attached to
+	// repository, recommendation, or risk signals.
+	Attribution *SignalAttribution `json:"-"`
+}
+
+// SignalAttribution summarizes the current primary attribution evidence for
+// the work items that contribute to one Home work-item metric. The same item
+// count is the denominator for each served source and confidence share.
+type SignalAttribution struct {
+	Items      int                                `json:"items"`
+	Sources    []SignalAttributionSourceCount     `json:"sources"`
+	Confidence []SignalAttributionConfidenceCount `json:"confidence"`
+}
+
+// SignalAttributionSourceCount is one source bucket in SignalAttribution.
+// Source is the stored, lowercase work-item attribution source; GraphQL maps
+// it through the existing TeamAttributionSource contract.
+type SignalAttributionSourceCount struct {
+	Source string  `json:"source"`
+	Items  int     `json:"items"`
+	Share  float64 `json:"share"`
+}
+
+// SignalAttributionConfidenceCount is one confidence bucket in
+// SignalAttribution. Confidence is the stored, lowercase confidence value;
+// GraphQL maps it through TeamAttributionConfidence.
+type SignalAttributionConfidenceCount struct {
+	Confidence string  `json:"confidence"`
+	Items      int     `json:"items"`
+	Share      float64 `json:"share"`
 }
 
 // LimitingFactor is the wire shape of HomeLimitingFactor
@@ -162,19 +216,33 @@ type DataConfidence struct {
 	Caveats          []string `json:"caveats"`
 }
 
-// Response is the wire shape of HomeResponse (schemas.py:127-138).
+// ScopeDataConfidence reports coverage and ingestion for the repositories
+// selected by this Home request. It is deliberately separate from
+// DataConfidence: the latter remains the organization-wide source-freshness
+// assessment, while this value answers whether the selected repository scope
+// has metrics for this response window.
+type ScopeDataConfidence struct {
+	Level          string                `json:"level"`
+	CoveragePct    *float64              `json:"coverage_pct"`
+	LastIngestedAt *pytime.NaiveDateTime `json:"last_ingested_at"`
+	Caveats        []string              `json:"caveats"`
+}
+
+// Response is Home's domain output. The GraphQL resolver translates it in
+// full; server.homeRESTResponse adapts it to the frozen Python HomeResponse.
 type Response struct {
 	Freshness             Freshness               `json:"freshness"`
 	Deltas                []MetricDelta           `json:"deltas"`
 	ReworkThemeAllocation []ReworkThemeAllocation `json:"rework_theme_allocation"`
 	Summary               []SummarySentence       `json:"summary"`
 	Tiles                 pyjson.OrderedMap[Tile] `json:"tiles"`
-	Constraint            ConstraintCard          `json:"constraint"`
+	Constraint            *ConstraintCard         `json:"constraint"`
 	Events                []EventItem             `json:"events"`
 	HealthState           HealthState             `json:"health_state"`
 	Signals               []Signal                `json:"signals"`
 	LimitingFactor        LimitingFactor          `json:"limiting_factor"`
 	DataConfidence        DataConfidence          `json:"data_confidence"`
+	ScopeDataConfidence   ScopeDataConfidence     `json:"scope_data_confidence"`
 }
 
 // Tile is one entry of HomeResponse.tiles (services/home.py:1187-1208) --

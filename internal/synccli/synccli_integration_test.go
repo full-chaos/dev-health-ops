@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"atlassian/atlassian"
+	"atlassian/atlassian/graph"
 
 	"github.com/full-chaos/dev-health-ops/internal/atlassianteams"
 	"github.com/full-chaos/dev-health-ops/internal/cli"
@@ -24,9 +25,8 @@ func (oneTeam) SearchTeams(context.Context, string, string, string, int) ([]atla
 func (oneTeam) IterTeamUsers(context.Context, string, int) ([]atlassian.TeamworkUserRelation, error) {
 	return []atlassian.TeamworkUserRelation{{SubjectUserID: "ari:cloud:identity::user/acct-1", RelationType: "TEAM_MEMBER"}}, nil
 }
-func (oneTeam) IterTeamActiveProjects(context.Context, string, int) ([]atlassian.TeamworkProject, error) {
-	key := "PLAT"
-	return []atlassian.TeamworkProject{{ProjectKey: &key}}, nil
+func (oneTeam) IterTeamConnectedContainers(context.Context, string, int) ([]graph.TeamConnectedContainer, error) {
+	return []graph.TeamConnectedContainer{{Typename: "JiraProject", ID: "ari:cloud:jira:site:project/10001", Key: "PLAT", ProjectID: "10001"}}, nil
 }
 
 // The verb end to end against a real ClickHouse: the DSN comes from

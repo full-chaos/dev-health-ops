@@ -18,6 +18,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"strings"
 	"time"
 
@@ -27,6 +28,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/jobs/investment/chquery"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/investment/chwrite"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph"
+	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 )
 
 // defaultWindowDays is run_investment_materialize's `window_days: int = 30`
@@ -56,6 +58,29 @@ type NativeExecutor struct {
 	// is tolerated everywhere it is read, same discipline as
 	// remaining.MembershipExecutor.SetObserver.
 	observer RepoAttributionObserver
+	// newShadow builds the shadow phase of one run (CHAOS-8869), or returns nil
+	// when the phase is off for the org -- the default. Like newProvider it is
+	// called once for each Execute, and the phase is closed when Execute ends.
+	newShadow func(orgID string) *ShadowPhase
+	// shadowObserver receives the counts of each shadow phase. Nil is tolerated.
+	shadowObserver ShadowObserver
+	// shadowHTTPClient replaces the HTTP client of the shadow backend. Nil, the
+	// production value, selects the hardened client.
+	shadowHTTPClient *http.Client
+}
+
+// SetShadowObserver wires the optional shadow-phase telemetry. Nil is
+// tolerated everywhere it is read.
+func (executor *NativeExecutor) SetShadowObserver(observer ShadowObserver) {
+	executor.shadowObserver = observer
+}
+
+// SetShadowHTTPClientForTest replaces the HTTP client of the shadow backend, so
+// a test can observe the request of an executor that the worker built from its
+// configuration. The host rule of the client still holds. No production code
+// calls it (TestNoProductionCodeUsesAShadowTestSeam).
+func (executor *NativeExecutor) SetShadowHTTPClientForTest(client *http.Client) {
+	executor.shadowHTTPClient = client
 }
 
 // SetObserver wires optional CHAOS-5458 repo-attribution telemetry. Nil is
@@ -69,11 +94,52 @@ func NewNativeExecutor(reader *chquery.Reader, writer *chwrite.Writer, logger *s
 	if reader == nil || writer == nil || logger == nil {
 		return nil, ErrUnavailable
 	}
-	return &NativeExecutor{
+	executor := &NativeExecutor{
 		reader: reader, writer: writer, logger: logger,
 		now:         func() time.Time { return time.Now().UTC() },
 		newProvider: resolveProviderFromEnv,
-	}, nil
+	}
+	executor.newShadow = executor.shadowFromEnv
+	return executor, nil
+}
+
+// shadowFromEnv builds the shadow phase from the environment, or returns nil.
+//
+// Nil is the answer for every reason the phase cannot or must not run: no
+// INVESTMENT_SHADOW_PROVIDER (the default), an org outside the allow-list, a
+// setting that cannot be used, no TYPESAFE_API_KEY, a rubric that does not
+// have its pinned digest. None of them is an error of the run: the served
+// categorization does not depend on the shadow backend. A phase that was asked
+// for and could not be built says so in one loud line.
+//
+// With the switch off, or for an org outside the list, NO client is built.
+func (executor *NativeExecutor) shadowFromEnv(orgID string) *ShadowPhase {
+	settings, err := ShadowSettingsFromEnv(secrets.GetenvNamed)
+	if err != nil {
+		// The message names the variable and never its value.
+		executor.logger.Warn("investment shadow phase is off: a setting cannot be used",
+			slog.String("org_id", orgID), slog.String("error", err.Error()))
+		return nil
+	}
+	if !settings.EnabledFor(orgID) {
+		return nil
+	}
+	client, err := categorize.NewTypeSafeClientFromEnvWithHTTPClient("", executor.logger, executor.shadowHTTPClient)
+	if err != nil {
+		// The constructor's messages hold a rule or a length, never the key, the
+		// configured URL or the configured model.
+		executor.logger.Warn("investment shadow phase is off: the TypeSafe client cannot be built",
+			slog.String("org_id", orgID), slog.String("error", secrets.RedactRegistered(err.Error())))
+		return nil
+	}
+	phase, err := NewShadowPhase(settings, client, executor.logger)
+	if err != nil {
+		_ = client.Close()
+		executor.logger.Error("investment shadow phase is off: the decision completer cannot be built (rubric digest mismatch)",
+			slog.String("org_id", orgID), slog.String("error", err.Error()))
+		return nil
+	}
+	return phase
 }
 
 func resolveProviderFromEnv(requested, model string) (categorize.Provider, categorize.ProviderKind, error) {
@@ -143,12 +209,13 @@ func (executor *NativeExecutor) Execute(ctx context.Context, claim workgraph.Cla
 	if claim.Request.Kind != workgraph.KindMaterialize {
 		// A handler wired to the wrong executor is a construction bug. Fail
 		// rather than materialize under a request that meant something else.
-		return nil, fmt.Errorf("native investment executor received kind %q", claim.Request.Kind)
+		return nil, workgraph.Deterministic(workgraph.ClassKindMismatch,
+			fmt.Errorf("native investment executor received kind %q", claim.Request.Kind))
 	}
 
 	scope, err := decodeMaterializeScope(claim.Request.Scope)
 	if err != nil {
-		return nil, err
+		return nil, workgraph.Deterministic(workgraph.ClassScopeInvalid, err)
 	}
 
 	// Batch mode is NOT ported (see materialize.go's header). Python's default
@@ -159,8 +226,8 @@ func (executor *NativeExecutor) Execute(ctx context.Context, claim workgraph.Cla
 	// INVESTMENT_LLM_BATCH_MODE entirely rather than reading a new env var:
 	// an operator who sets it gets a refusal, not a silent divergence.
 	if scope.LLMBatchMode != nil && *scope.LLMBatchMode != "" && *scope.LLMBatchMode != "sync" {
-		return nil, fmt.Errorf(
-			"native investment executor supports llm_batch_mode=sync only, got %q", *scope.LLMBatchMode)
+		return nil, workgraph.Deterministic(workgraph.ClassLLMBatchUnsupport, fmt.Errorf(
+			"native investment executor supports llm_batch_mode=sync only, got %q", *scope.LLMBatchMode))
 	}
 
 	requestedProvider := "auto"
@@ -169,7 +236,8 @@ func (executor *NativeExecutor) Execute(ctx context.Context, claim workgraph.Cla
 	}
 	provider, kind, err := executor.newProvider(requestedProvider, claim.Request.ModelRef)
 	if err != nil {
-		return nil, fmt.Errorf("resolve llm provider: %w", err)
+		return nil, workgraph.Deterministic(workgraph.ClassLLMProviderInvalid,
+			fmt.Errorf("resolve llm provider: %w", err))
 	}
 	defer func() { _ = provider.Close() }()
 
@@ -181,23 +249,23 @@ func (executor *NativeExecutor) Execute(ctx context.Context, claim workgraph.Cla
 	// real categorizations with it. Refusing is the reference's behaviour and
 	// the only safe one.
 	if kind == categorize.ProviderKindNone {
-		return nil, errors.New(
-			"llm provider 'none' cannot materialize investment categorizations; " +
-				"configure a real provider or request 'mock' for tests")
+		return nil, workgraph.Deterministic(workgraph.ClassLLMProviderInvalid, errors.New(
+			"llm provider 'none' cannot materialize investment categorizations; "+
+				"configure a real provider or request 'mock' for tests"))
 	}
 	// materialize.py:1179-1188: an unscoped run against a REAL provider writes
 	// empty-org rows, which is almost always a mistake and is expensive. mock
 	// is exempt because it costs nothing and is how tests run unscoped.
 	if orgID == "" && kind != categorize.ProviderKindMock && !allowUnscoped {
-		return nil, errors.New(
-			"investment materialize requires a non-empty org for real LLM providers; " +
-				"set allow_unscoped to write empty-org rows intentionally")
+		return nil, workgraph.Deterministic(workgraph.ClassOrgRequired, errors.New(
+			"investment materialize requires a non-empty org for real LLM providers; "+
+				"set allow_unscoped to write empty-org rows intentionally"))
 	}
 
 	now := executor.now()
 	fromTS, toTS, err := materializeWindow(scope, now)
 	if err != nil {
-		return nil, err
+		return nil, workgraph.Deterministic(workgraph.ClassWindowInvalid, err)
 	}
 	// NO ORDERING REJECTION -- deliberately (codex r3 P1).
 	//
@@ -235,6 +303,15 @@ func (executor *NativeExecutor) Execute(ctx context.Context, claim workgraph.Cla
 	materializer, err := NewMaterializer(executor.reader, executor.writer, provider, executor.logger)
 	if err != nil {
 		return nil, err
+	}
+	// The shadow phase is built AFTER every refusal above, so a request that is
+	// refused builds no shadow client; it is closed with the provider.
+	if executor.newShadow != nil {
+		if shadow := executor.newShadow(orgID); shadow != nil {
+			shadow.SetObserver(executor.shadowObserver)
+			defer func() { _ = shadow.Close() }()
+			materializer.SetShadow(shadow)
+		}
 	}
 
 	cfg := Config{
@@ -313,7 +390,8 @@ func (executor *NativeExecutor) buildEvidence(claim workgraph.Claim, stats Stats
 	}
 	encoded, err := json.Marshal(evidence)
 	if err != nil {
-		return nil, fmt.Errorf("encode execution evidence: %w", err)
+		return nil, workgraph.Deterministic(workgraph.ClassEvidenceEncode,
+			fmt.Errorf("encode execution evidence: %w", err))
 	}
 	return encoded, nil
 }

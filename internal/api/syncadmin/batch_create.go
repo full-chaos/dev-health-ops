@@ -102,6 +102,10 @@ func (h *handlers) batchCreateSyncConfigs(w http.ResponseWriter, r *http.Request
 		h.answerOrFail(w, r, "batch_create_sync_configs", err)
 		return
 	}
+	if err := deriveShownTargets(ctx, h.store.enabledDatasetKeys, org, created.config); err != nil {
+		h.fail(w, r, "enabled_datasets", err)
+		return
+	}
 	parent, err := syncConfigResponse(created.config, int64(0), created.credentialID)
 	if err != nil {
 		h.fail(w, r, "sync_config_response", err)

@@ -119,6 +119,10 @@ var orgDeleteTablesAfterThePythonFreeze = map[string]string{
 	"work_item_dependency_first_seen":   "102_work_item_dependency_first_seen.sql",    // CHAOS-8574
 	"work_item_relations_read":          "103_work_item_relation_writer_and_read.sql", // CHAOS-8578
 	"work_item_blocked_durations_daily": "104_work_item_blocked_durations.sql",        // CHAOS-8489
+	"daily_metrics_run_marker":          "105_daily_metrics_run_marker.sql",           // CHAOS-8710
+	"daily_metrics_touched_days":        "108_daily_metrics_touched_days.sql",         // CHAOS-8813
+	"work_unit_investment_shadow":       "109_work_unit_investment_shadow.sql",        // CHAOS-8868
+	"llm_categorization_attempts":       "110_llm_categorization_attempts.sql",        // CHAOS-8868
 }
 
 // planClickHouseTables returns the table -> row count map of a delete

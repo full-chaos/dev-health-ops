@@ -185,6 +185,22 @@ use this file for canonical WorkUnit categorization." Its `investment_area` valu
 `security`, `infrastructure`) are free-form legacy labels — **not** the fixed five-theme taxonomy
 above, and not interchangeable with it.
 
+**Who writes the legacy daily tables, and how to read them.** `investment_metrics_daily`,
+`investment_classifications_daily` and `issue_type_metrics_daily` are plain (append-only)
+`MergeTree` tables. The daily metric job computes them from stored work items: the families
+`work_item_investment` and `work_item_issue_type` (`internal/jobs/metrics/daily`), with the
+compute in `internal/jobs/metrics/workitemengine`. The daily job is their one writer: a work-items
+sync unit writes raw rows only, and its sink refuses a row for these tables. After a sync, the
+post-sync fan-out starts the daily run of each day the sync touched, so between a sync and that
+run a reader sees the last daily result of the day (complete, some minutes old), or no row for a
+day that has none yet. Rows that a sync unit of an earlier version appended were computed from
+only the items that unit fetched; the next run of the daily job for that day supersedes them.
+Nothing is ever replaced in place, so a reader **must** take the newest
+`computed_at` per key (`argMax(..., computed_at)` grouped by the key, as the readers in
+`internal/queryapi` do) and must never sum the raw rows. When a completion leaves a key (the item
+was reopened, or its team or labels changed), the daily job writes a row of zeros for that key so
+that the newest row is the true one. A day with no data gets no row.
+
 The canonical theme/subcategory distribution comes from `work_unit_investments`
 (`theme_distribution_json`/`subcategory_distribution_json`, computed once at categorization time,
 deterministic roll-up, never recomputed at read time). `latest_work_unit_investments` is **not** a
@@ -197,6 +213,18 @@ persisted table — it is a query-time CTE (`LATEST_WORK_UNIT_INVESTMENTS_CTE`,
 (CHAOS-2600). `fetch_investment_team_edges` is the reference caller of this join shape; there is no
 `fetch_investment_breakdown(include_team_id=...)` parameter — that phrasing describes the pattern,
 not a real function signature.
+
+**`work_unit_investments.evidence_quote_count` (migration 106, `Nullable(UInt32)`)** is the number of distinct
+`(source_id, quote)` the row's run wrote to `work_unit_investment_quotes`. It is written by the materializer
+(`internal/jobs/investment`) for every row of a run that persists evidence snippets, and read only by the
+materializer's skip-existing check: a unit whose row is otherwise fresh (same unit, input hash and model version) is
+rewritten when the quotes visible under the row's `categorization_run_id` are not that many. The quote key has no run
+id, so a later run's equal-text quote replaces the older run's after a ClickHouse merge; if that run dies before it
+writes its investment row, the row the readers show would keep fewer or no quotes for good without this check.
+`NULL` means "not recorded" (rows written before migration 106, or a run that did not persist snippets) and counts as
+complete. No reader selects it, no read model joins it, and the recorded Python answers compare other columns only
+(`internal/jobs/investment/materialize_frozen_python_golden_test.go` pins the outcome, rollup and gate decisions, not a
+whole row). See the operator runbook note "Quotes of a crashed rewrite".
 
 **Consumers outside this repo must read the canonical join, never `investment_metrics_daily`.**
 CHAOS-4398 found that `dev-health-acr`'s `FactInvestment` producer (CHAOS-4363/#308) reads

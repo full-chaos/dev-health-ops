@@ -205,6 +205,25 @@ type PostSyncFanoutObserver interface {
 	ObservePostSyncFanout(PostSyncFanoutOutcome) error
 }
 
+// PostSyncTouchedDaysObserver is the narrow capability
+// NativePostSyncService.Fanout depends on to count what it did with the days
+// that the stored raw rows of a sync touched (CHAOS-8813). Only Fanout knows
+// how many keys it recorded, how many days it started a daily run for and how
+// many it left for a later fan-out; none of it is visible from the job's
+// result.
+type PostSyncTouchedDaysObserver interface {
+	ObservePostSyncTouchedDays(PostSyncTouchedDaysEvent, uint64) error
+}
+
+// TouchedDaysDrainObserver is the narrow capability the drain of the pending
+// touched days depends on to count its passes and to report how long the
+// oldest pending day has waited (CHAOS-8846). Without it an organization whose
+// old days are never computed looks the same as one with nothing pending.
+type TouchedDaysDrainObserver interface {
+	ObserveTouchedDaysDrain(TouchedDaysDrainEvent, uint64) error
+	ObserveTouchedDaysOldestPendingAge(organizationID string, age time.Duration) error
+}
+
 // TeamRepoOwnershipDerivationObserver is the narrow capability
 // sync.team_repo_ownership_derivation's worker (CHAOS-4365 item 1b) depends
 // on to report its own outcome -- distinct from PostSyncFanoutObserver, which
@@ -235,6 +254,14 @@ type TeamRepoOwnershipDerivationObserver interface {
 // each series stays present regardless of which sources actually fired.
 type InvestmentRepoAttributionObserver interface {
 	ObserveInvestmentRepoAttribution(InvestmentRepoAttributionSource, int) error
+}
+
+// InvestmentShadowPhaseObserver is the narrow capability the shadow
+// categorization phase of investment.materialize (CHAOS-8869) depends on to
+// report one phase: its attempts, their latency, why it ended, and what it
+// recovered from or dropped.
+type InvestmentShadowPhaseObserver interface {
+	ObserveInvestmentShadowPhase(InvestmentShadowPhase) error
 }
 
 // DailyMetricsZeroRowsObserver is the narrow capability the daily-metrics
@@ -277,6 +304,13 @@ type DailyMetricsRedriveObserver interface {
 // durable state.
 type DailyMetricsFinalizeSweepObserver interface {
 	ObserveDailyMetricsFinalizeSweep(outcome string, count int) error
+}
+
+// DailyMetricsRunMarkerObserver counts CHAOS-8710 ClickHouse run-marker
+// appends (state: succeeded|reopened; outcome: ok|failed). A nil observer is a
+// silent no-op: telemetry never gates the run.
+type DailyMetricsRunMarkerObserver interface {
+	ObserveDailyMetricsRunMarker(state, outcome string) error
 }
 
 // DailyMetricsBlockedRunObserver is the narrow capability

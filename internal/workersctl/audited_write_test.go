@@ -54,6 +54,7 @@ func directWriteVerbs() map[string]directWriteVerb {
 		"external-recompute replay":                          {argv: []string{"external-recompute", "replay", "--review-evidence", "testing"}, dryRun: true},
 		"providersync retire-linear-pseudo-projects":         {argv: []string{"providersync", "retire-linear-pseudo-projects", "--org", org}, dryRun: true},
 		"providersync retire-stale-linear-project-ownership": {argv: []string{"providersync", "retire-stale-linear-project-ownership", "--org", org}, dryRun: true},
+		"providersync retire-jira-key-projects":              {argv: []string{"providersync", "retire-jira-key-projects", "--org", org}, dryRun: true},
 		"sync-dispatch-outbox close-backlog":                 {argv: []string{"sync-dispatch-outbox", "close-backlog"}, dryRun: true},
 	}
 }

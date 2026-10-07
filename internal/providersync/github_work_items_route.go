@@ -4,12 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"sort"
 	"strconv"
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
-	"github.com/full-chaos/dev-health-ops/internal/teamattribution"
 )
 
 var (
@@ -89,6 +89,11 @@ var githubWorkItemsOptionalIncompleteComponents = map[string]bool{
 //     later run reproduces identically — the recipe's "never both capped and
 //     successful" rule, and what the REST side already does by returning
 //     ErrPaginationCapExceeded rather than typed incompleteness.
+//   - item_page_bound: one pull request's comment or event list still had a
+//     next page after the page bound (CHAOS-8777). Same consequence as
+//     pagination_cap, but a different event: the per-fetch request budget is
+//     shared by every pull request of the unit, this is one item outgrowing
+//     its own bound, and the log names the pull request and the field.
 //   - invalid_pagination: a missing or stalled cursor. That is a defect in our
 //     own traversal, not a provider condition Python has any analogue for, and
 //     it must surface as a failure rather than as a routine degradation entry.
@@ -97,7 +102,24 @@ var githubWorkItemsOptionalIncompleteComponents = map[string]bool{
 // (gitHubWorkItemPRSocialFailureCause); no Python site can emit them.
 var githubWorkItemsBlockingIncompleteCauses = map[string]bool{
 	"pagination_cap":     true,
+	"item_page_bound":    true,
 	"invalid_pagination": true,
+}
+
+// GitHubWorkItemsBlockingIncompleteCause is the error a blocked batch carries.
+// It is ErrGitHubWorkItemsIncomplete, and when any entry is a page-bound
+// refusal (pagination_cap, item_page_bound) it ALSO wraps
+// ErrPaginationCapExceeded: that refusal is deterministic given the provider's
+// state, so the worker's terminal classifier (providerunit
+// deterministicTerminalCategory) must record it once as pagination_incomplete
+// instead of re-running the whole fetch to the attempt limit (CHAOS-8777).
+func GitHubWorkItemsBlockingIncompleteCause(incomplete []GitHubWorkItemsIncomplete) error {
+	for _, partial := range incomplete {
+		if partial.Cause == "pagination_cap" || partial.Cause == "item_page_bound" {
+			return fmt.Errorf("%w: %w", ErrGitHubWorkItemsIncomplete, ErrPaginationCapExceeded)
+		}
+	}
+	return ErrGitHubWorkItemsIncomplete
 }
 
 // githubWorkItemsIncompleteIsOptional decides one entry. Cause is checked
@@ -164,22 +186,12 @@ type githubWorkItemsProjectPolicy interface {
 	) (GitHubProjectV2FetchResult, error)
 }
 
-// githubWorkItemsDeriver owns the nine Python-derived destination projections.
-// Those implementations have not been ported yet. Requiring this seam prevents
-// the composite from claiming completeness with fabricated empty metrics.
-type githubWorkItemsDeriver interface {
-	Derive(
-		context.Context,
-		Claim,
-		githubWorkItemRows,
-		time.Time,
-	) (map[string][]json.RawMessage, []teamattribution.GithubWorkItemDerivationRejectedMembership, error)
-}
-
 // GitHubWorkItemsRouteHandler composes the already-ported REST, PR-social, and
 // semantic foundations. It deliberately owns no registration, readiness,
-// effect sink/readback, or watermark. Effect construction delegates to the
-// shared 16-destination foundation; this handler only supplies its row sets.
+// effect sink/readback, or watermark. It emits the raw rows the provider
+// returned and nothing computed from them: every derived work-item table is
+// written by the daily job from stored rows, so a unit that saw a subset of a
+// scope cannot write a partial daily row.
 type GitHubWorkItemsRouteHandler struct {
 	REST     GitHubWorkItemsRESTCollector
 	Social   GitHubWorkItemPRSocialFetcher
@@ -192,7 +204,6 @@ type GitHubWorkItemsRouteHandler struct {
 	// misconstructed for every claim, not just the ones that happen to
 	// configure a Projects v2 target.
 	ProjectMembershipSnapshotDiff githubProjectV2SnapshotDiffReader
-	Deriver                       githubWorkItemsDeriver
 	ResolveIdentity               githubIdentityResolver
 }
 
@@ -222,6 +233,9 @@ func (handler GitHubWorkItemsRouteHandler) Collect(
 		client.Lease == nil || normalizedAt.IsZero() {
 		return CompleteRouteBatch{}, ErrInvalidConfiguration
 	}
+	if _, err := workItemsUnitWindowDays(claim, normalizedAt); err != nil {
+		return CompleteRouteBatch{}, err
+	}
 	// Every destination column that receives normalizedAt is DateTime64(3), so
 	// the nanoseconds a wall-clock now() carries cannot survive a round trip.
 	// Truncating here rather than only inside REST.Collect (which truncates its
@@ -231,9 +245,6 @@ func (handler GitHubWorkItemsRouteHandler) Collect(
 	// Absent for a row that landed, and the committer rewrites it on every
 	// recovery pass forever. Same fix, same reason, as github_blame_route.go.
 	normalizedAt = normalizedAt.UTC().Truncate(time.Millisecond)
-	if handler.Deriver == nil {
-		return CompleteRouteBatch{}, ErrGitHubWorkItemsDerivationsUnavailable
-	}
 	// D18 retired the policy_pending seam. This is deliberately NOT gated on
 	// whether this particular claim happens to carry targets: a handler built
 	// without a Projects collector is misconstructed for every claim, and
@@ -272,6 +283,7 @@ func (handler GitHubWorkItemsRouteHandler) Collect(
 	rows := restResult.Rows
 	evidence := restResult.Evidence
 
+	prCommentsTruncated := 0
 	if len(restResult.PullRequests) > 0 {
 		targets := make([]int, 0, len(restResult.PullRequests))
 		for _, pull := range restResult.PullRequests {
@@ -282,7 +294,7 @@ func (handler GitHubWorkItemsRouteHandler) Collect(
 			commentsLimit = options.commentsLimit
 		}
 		socialResult, socialErr := handler.Social.Fetch(
-			ctx, claim, client, targets, commentsLimit, githubWorkItemEventLimit,
+			ctx, claim, client, targets, commentsLimit, githubWorkItemEventsUnbounded,
 		)
 		usage.add(GitHubWorkItemsRequestUsage{
 			Transport: socialResult.Usage.Transport, RouteFamily: socialResult.Usage.RouteFamily,
@@ -311,6 +323,9 @@ func (handler GitHubWorkItemsRouteHandler) Collect(
 		for _, pull := range restResult.PullRequests {
 			subject := strconv.Itoa(pull.Number)
 			payload, exists := socialResult.Payloads[pull.Number]
+			if exists && payload.CommentsTruncated {
+				prCommentsTruncated++
+			}
 			if !exists && socialComplete {
 				return CompleteRouteBatch{}, usage.wrap(providerfoundation.ErrGraphQLResponse)
 			}
@@ -350,6 +365,12 @@ func (handler GitHubWorkItemsRouteHandler) Collect(
 				})
 				break
 			}
+			// Pull-request AI attribution is written by the prs unit alone: one
+			// writer per ai_attribution key keeps effect recovery exact (the
+			// adapter's version verdict reads a newer row as another owner).
+			// The bundle still carries the rows so the shared detector stays
+			// covered by its own oracle; the route does not emit them.
+			bundle.AIAttributions = []githubAIAttributionRow{}
 			appendGitHubWorkItemRows(&rows, bundle)
 			// codex round 2b (P2, CHAOS-4757): closingIssuesReferences is
 			// evidence-bearing (team-attribution edges), not cosmetic like
@@ -382,6 +403,7 @@ func (handler GitHubWorkItemsRouteHandler) Collect(
 	// audible at boot, which is where it belongs — reading the environment on
 	// this path to warn about it would reintroduce the dependency D18 removes.
 	projectState := "disabled"
+	projectLabelsTruncated := 0
 	if len(projectTargets) > 0 {
 		projectResult, projectErr := handler.Projects.Fetch(
 			ctx, claim, credential, client, normalizedAt, handler.ResolveIdentity,
@@ -398,6 +420,7 @@ func (handler GitHubWorkItemsRouteHandler) Collect(
 			return CompleteRouteBatch{}, usage.wrap(err)
 		}
 		incomplete = append(incomplete, projectResult.Incomplete...)
+		projectLabelsTruncated += projectResult.LabelsTruncated
 		// CHAOS-4193(d): the read-then-diff pass. Runs after validation (so it
 		// only ever diffs a result already proven well-formed) and before the
 		// merge, appending its rows to the SAME ProjectMemberships slice the
@@ -422,19 +445,16 @@ func (handler GitHubWorkItemsRouteHandler) Collect(
 	for _, partial := range incomplete {
 		if !githubWorkItemsIncompleteIsOptional(partial) {
 			return CompleteRouteBatch{}, usage.wrapRoute(
-				ErrGitHubWorkItemsIncomplete, evidence, incomplete,
+				GitHubWorkItemsBlockingIncompleteCause(incomplete), evidence, incomplete,
 			)
 		}
 	}
 
-	derived, membershipRejections, err := handler.Deriver.Derive(ctx, claim, rows, normalizedAt)
+	effects, err := buildGitHubWorkItemsRouteEffects(rows)
 	if err != nil {
 		return CompleteRouteBatch{}, usage.wrap(err)
 	}
-	effects, err := buildGitHubWorkItemsRouteEffects(rows, derived, membershipRejections)
-	if err != nil {
-		return CompleteRouteBatch{}, usage.wrap(err)
-	}
+	observeWorkItemDerivedTablesLeftToDailyJob(client.Metrics, claim, len(rows.WorkItems))
 	var watermark *time.Time
 	if len(incomplete) == 0 && claim.BeforeAt != nil {
 		value := claim.BeforeAt.UTC()
@@ -450,20 +470,29 @@ func (handler GitHubWorkItemsRouteHandler) Collect(
 			closingReferenceDependenciesSynced++
 		}
 	}
+	resultFields := map[string]any{
+		"work_items_synced":                     len(rows.WorkItems),
+		"projects_v2":                           projectState,
+		"closing_reference_dependencies_synced": closingReferenceDependenciesSynced,
+		githubWorkItemsIncompleteResultKey:      incomplete,
+		"observations": map[string]any{
+			"provider_usage": usage.snapshot(),
+		},
+	}
+	// CHAOS-8770: a cut made by the user's comments_limit is a named, counted
+	// limit. The keys are present only when a cut happened.
+	if restResult.CommentsTruncated > 0 {
+		resultFields["issue_comments_truncated_by_limit"] = restResult.CommentsTruncated
+	}
+	if projectLabelsTruncated > 0 {
+		resultFields["projects_v2_item_labels_truncated"] = projectLabelsTruncated
+	}
+	if prCommentsTruncated > 0 {
+		resultFields["pr_comments_truncated_by_limit"] = prCommentsTruncated
+	}
 	return CompleteRouteBatch{
-		Effects: effects,
-		Result: attachGitHubWorkItemTeamAttributionObservation(
-			attachWorkItemTeamInheritanceObservation(map[string]any{
-				"work_items_synced":                     len(rows.WorkItems),
-				"projects_v2":                           projectState,
-				"closing_reference_dependencies_synced": closingReferenceDependenciesSynced,
-				githubWorkItemsIncompleteResultKey:      incomplete,
-				"observations": map[string]any{
-					"provider_usage": usage.snapshot(),
-				},
-			}, handler.Deriver),
-			handler.Deriver,
-		),
+		Effects:   effects,
+		Result:    resultFields,
 		Watermark: watermark,
 		Evidence:  evidence,
 	}, nil
@@ -546,26 +575,10 @@ func finishGitHubWorkItemsEvidence(evidence *FetchEvidence, rows githubWorkItemR
 	evidence.Records = countGitHubWorkItemRows(rows)
 }
 
-func buildGitHubWorkItemsRouteEffects(
-	rows githubWorkItemRows,
-	derived map[string][]json.RawMessage,
-	membershipRejections []teamattribution.GithubWorkItemDerivationRejectedMembership,
-) ([]EffectBatch, error) {
-	if len(derived) != len(githubWorkItemDerivedDestinations) {
-		return nil, ErrGitHubWorkItemsDerivationsUnavailable
-	}
-	derivedSet := make(map[string]struct{}, len(githubWorkItemDerivedDestinations))
-	for _, destination := range githubWorkItemDerivedDestinations {
-		derivedSet[destination] = struct{}{}
-		if _, exists := derived[destination]; !exists {
-			return nil, ErrGitHubWorkItemsDerivationsUnavailable
-		}
-	}
-	for destination := range derived {
-		if _, expected := derivedSet[destination]; !expected {
-			return nil, ErrGitHubWorkItemsDerivationsUnavailable
-		}
-	}
+// buildGitHubWorkItemsRouteEffects serializes the raw row sets of one unit.
+// There is no derived input: the daily job owns every table computed from
+// these rows.
+func buildGitHubWorkItemsRouteEffects(rows githubWorkItemRows) ([]EffectBatch, error) {
 	directAI, err := githubWorkItemsRawMessages(rows.AIAttributions)
 	if err != nil {
 		return nil, err
@@ -608,30 +621,16 @@ func buildGitHubWorkItemsRouteEffects(
 	if err != nil {
 		return nil, err
 	}
-	marshaledRejections, err := marshalGitHubWorkItemTeamAttributionRejections(membershipRejections)
-	if err != nil {
-		return nil, err
-	}
 	return BuildGitHubWorkItemEffects(GitHubWorkItemEffectRows{
-		AIAttribution:                  directAI,
-		MembershipRejections:           marshaledRejections,
-		EstimateCoverageMetricsDaily:   derived["estimate_coverage_metrics_daily"],
-		InvestmentClassificationsDaily: derived["investment_classifications_daily"],
-		InvestmentMetricsDaily:         derived["investment_metrics_daily"],
-		IssueTypeMetricsDaily:          derived["issue_type_metrics_daily"],
-		Sprints:                        directSprints,
-		WorkItemCycleTimes:             derived["work_item_cycle_times"],
-		WorkItemDependencies:           directDependencies,
-		WorkItemInteractions:           directInteractions,
-		WorkItemMetricsDaily:           derived["work_item_metrics_daily"],
-		WorkItemReopenEvents:           directReopens,
-		WorkItemStateDurationsDaily:    derived["work_item_state_durations_daily"],
-		WorkItemTeamAttributions:       derived["work_item_team_attributions"],
-		WorkItemTransitions:            directTransitions,
-		WorkItemUserMetricsDaily:       derived["work_item_user_metrics_daily"],
-		WorkItems:                      directItems,
-		ProjectMembershipTransitions:   directMemberships,
-		Projects:                       directProjects,
+		AIAttribution:                directAI,
+		Sprints:                      directSprints,
+		WorkItemDependencies:         directDependencies,
+		WorkItemInteractions:         directInteractions,
+		WorkItemReopenEvents:         directReopens,
+		WorkItemTransitions:          directTransitions,
+		WorkItems:                    directItems,
+		ProjectMembershipTransitions: directMemberships,
+		Projects:                     directProjects,
 	})
 }
 

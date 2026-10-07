@@ -46,15 +46,12 @@ import (
 // codex round-1 P1 established it. Running pre_bridge would read a stale (or,
 // for a brand-new item, absent) snapshot.
 //
-// # Per-repo iteration
+// # One compute for each work scope
 //
-// run_daily_metrics_job is invoked once PER repo_id by the compatibility
-// bridge's fan-out loop (worker_metrics.py:1729), so Python computes this
-// family over one repo's rows per call. This executor mirrors that boundary
-// explicitly rather than aggregating the partition's repos together -- the
-// grouping key (provider, work_scope_id, team_id) does not include repo_id, so
-// aggregating would silently MERGE two repos' groups into one row where Python
-// emits two.
+// The grouping key (provider, work_scope_id, team_id) has no repo_id, and the
+// tables replace rows by that key. The family therefore computes a work scope
+// once, over the items of every repository of the organization, and writes it
+// once for the partition: see work_item_scope_read.go.
 type WorkItemExecutor struct {
 	conn   driver.Conn
 	nowUTC func() time.Time
@@ -83,105 +80,85 @@ func (executor *WorkItemExecutor) ComputeFamily(
 		return 0, err
 	}
 
-	total := 0
-	for _, repoID := range scope.repoIDs {
-		items, err := LoadWorkItemMetricsWorkItems(
-			ctx, executor.conn, run.OrganizationID, repoID, scope.start, scope.end,
-		)
-		if err != nil {
-			return wrapWorkItemPartialWrite("work_item", total, repoID, err)
-		}
-		if len(items) == 0 {
-			// Python guards the whole work-item block with `if work_items:`
-			// (job_daily.py:1549), so a repo with no items produces no rows for
-			// any of the three tables.
-			continue
-		}
-		transitions, err := LoadWorkItemStateTransitions(
-			ctx, executor.conn, run.OrganizationID, repoID, scope.end,
-		)
-		if err != nil {
-			return wrapWorkItemPartialWrite("work_item", total, repoID, err)
-		}
-		attributions, err := LoadWorkItemPrimaryTeamAttributions(
-			ctx, executor.conn, run.OrganizationID, repoID,
-		)
-		if err != nil {
-			return wrapWorkItemPartialWrite("work_item", total, repoID, err)
-		}
+	// The version is taken before the reads: the newest version is then the
+	// newest read, also when two partitions of one run share a work scope.
+	computedAt := executor.nowUTC()
+	read, err := loadWorkItemScopeRead(ctx, executor.conn, "work_item", run, partition, scope, true, true)
+	if err != nil {
+		return 0, err
+	}
+	if len(read.Items) == 0 {
+		return 0, nil
+	}
 
-		// One honest, real-wall-clock timestamp per repo group -- the same
-		// cadence Python's per-repo_id bridge calls produce, and the convention
-		// WriteTeamMetricsDailyPerRepo and WorkItemStateExecutor already set.
-		computedAt := executor.nowUTC()
+	sorted := sortWorkItemMetricsRows(read.Items)
+	projected := workItemMetricsItems(sorted)
+	triplet := workitemmetrics.ComputeDailyTriplet(
+		scope.day,
+		projected,
+		workItemMetricsTransitions(read.Transitions),
+		workitemmetrics.AssertAligned(len(sorted), projected, workItemMetricsResolver(sorted, read.Attributions)),
+	)
 
-		sorted := sortWorkItemMetricsRows(items)
-		projected := workItemMetricsItems(sorted)
-		triplet := workitemmetrics.ComputeDailyTriplet(
-			scope.day,
-			projected,
-			workItemMetricsTransitions(transitions),
-			workitemmetrics.AssertAligned(len(sorted), projected, workItemMetricsResolver(sorted, attributions)),
-		)
-
-		// #2276 confirmation-pass P1: each Write* call's own batch.Send()
-		// branch already reports its TRUE row count on an ambiguous network
-		// error (the F1 sweep) -- `total` must be updated with that count
-		// BEFORE the error check, not only after a confirmed success, or
-		// the failing write's own truthful count is discarded a second
-		// time. Mirrors work_graph_edges_native_executor.go's established
-		// idiom (`written += writtenX` before the error check, every time).
-		written, err := WriteWorkItemMetricsDaily(
-			ctx, executor.conn, run.OrganizationID, scope.day, triplet.MetricsDaily, computedAt,
-		)
-		total += written
-		if err != nil {
-			return wrapWorkItemPartialWrite("work_item", total, repoID, err)
-		}
-		written, err = WriteWorkItemUserMetricsDaily(
-			ctx, executor.conn, run.OrganizationID, scope.day, triplet.UserMetricsDaily, computedAt,
-		)
-		total += written
-		if err != nil {
-			return wrapWorkItemPartialWrite("work_item", total, repoID, err)
-		}
-		written, err = WriteWorkItemCycleTimes(
-			ctx, executor.conn, run.OrganizationID, triplet.CycleTimes, computedAt,
-		)
-		total += written
-		if err != nil {
-			return wrapWorkItemPartialWrite("work_item", total, repoID, err)
-		}
+	// Each Write* call reports its true row count on an ambiguous Send error,
+	// so the count is added before the error check.
+	total, err := WriteWorkItemMetricsDaily(
+		ctx, executor.conn, run.OrganizationID, scope.day, triplet.MetricsDaily, computedAt,
+	)
+	if err != nil {
+		return wrapWorkItemScopePartialWrite("work_item", total, partition, err)
+	}
+	written, err := WriteWorkItemUserMetricsDaily(
+		ctx, executor.conn, run.OrganizationID, scope.day, triplet.UserMetricsDaily, computedAt,
+	)
+	total += written
+	if err != nil {
+		return wrapWorkItemScopePartialWrite("work_item", total, partition, err)
+	}
+	written, err = WriteWorkItemCycleTimes(
+		ctx, executor.conn, run.OrganizationID, triplet.CycleTimes, computedAt,
+	)
+	total += written
+	if err != nil {
+		return wrapWorkItemScopePartialWrite("work_item", total, partition, err)
 	}
 	return total, nil
 }
 
-// workItemPartitionScope is the (day, window, repoIDs) triple both work-item
+// workItemPartitionScope is the (day, window, repoIDs) triple the work-item
 // executors derive identically from a run/partition pair.
 type workItemPartitionScope struct {
 	day, start, end time.Time
 	repoIDs         []uuid.UUID
 }
 
-// wrapWorkItemPartialWrite is the codex round 3 fix (astra scale review,
-// the FOURTH instance of the class r2's F3 already found in
-// work_item_state_native_executor.go -- both WorkItemExecutor's `work_item`
-// and WorkItemEstimateExecutor's `work_item_estimate` share this exact
-// per-repo loop shape and had the identical unwrapped-return-total-err bug).
-// Shared here rather than duplicated per file since both executors use the
-// same workItemPartitionScope and the same repoID type. Mirrors
-// wrapWorkGraphEdgesPartialWrite's/wrapWorkItemStatePartialWrite's exact
-// shape: total == 0 returns the error unwrapped (a genuine refusal, nothing
-// to distinguish); total > 0 wraps ErrPartialWrite naming the repo and the
-// true row count, so daily.go's dispatcher (which only distinguishes
-// ErrPartialWrite from every other error) reports PartialWrite/N-rows
-// instead of Refused/0-rows when real rows already landed.
+// wrapWorkItemPartialWrite is the partial-write rule of the families that
+// loop the partition's repositories (work_item_issue_type and
+// work_item_investment): a later repository can fail after the rows of an
+// earlier one landed. total == 0 returns the error unwrapped (a genuine
+// refusal, nothing to distinguish); total > 0 wraps ErrPartialWrite naming
+// the repo and the true row count, so daily.go's dispatcher (which only
+// distinguishes ErrPartialWrite from every other error) reports
+// PartialWrite/N-rows instead of Refused/0-rows when real rows already
+// landed. Mirrors wrapWorkGraphEdgesPartialWrite.
 func wrapWorkItemPartialWrite(family string, total int, repoID uuid.UUID, err error) (int, error) {
 	if total == 0 {
 		return 0, err
 	}
 	return total, fmt.Errorf("%w: %s failed on repo %s after %d row(s) already landed: %w",
 		ErrPartialWrite, family, repoID, total, err)
+}
+
+// wrapWorkItemScopePartialWrite is wrapWorkItemPartialWrite for the families
+// that write once for a partition: a failure after rows landed is
+// ErrPartialWrite with the true row count, and with no row landed the error is
+// returned unwrapped (a genuine refusal).
+func wrapWorkItemScopePartialWrite(family string, total int, partition Partition, err error) (int, error) {
+	if total == 0 {
+		return 0, err
+	}
+	return total, fmt.Errorf("%w: %s failed on partition %s after %d row(s) already landed: %w",
+		ErrPartialWrite, family, partition.ID, total, err)
 }
 
 func newWorkItemPartitionScope(run Run, partition Partition, family string) (workItemPartitionScope, error) {

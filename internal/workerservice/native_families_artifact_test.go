@@ -79,6 +79,8 @@ var knownFamilyNameConstants = map[string]string{
 	"TeamComplexityFamilyName":      daily.TeamComplexityFamilyName,
 	"BenchmarkingFamilyName":        daily.BenchmarkingFamilyName,
 	"CompoundingRiskTeamFamilyName": daily.CompoundingRiskTeamFamilyName,
+	"WorkItemIssueTypeFamilyName":   daily.WorkItemIssueTypeFamilyName,
+	"WorkItemInvestmentFamilyName":  daily.WorkItemInvestmentFamilyName,
 }
 
 const nativeFamiliesGeneratedFrom = "internal/workerservice/daily.go + workgraph.go (static AST parse, internal/workerservice/native_families_artifact_test.go)"
@@ -505,6 +507,10 @@ func TestNativeFamiliesArtifactMatchesKnownSplit(t *testing.T) {
 		// `after` edges order the writer ahead of its readers within the
 		// phase, which is what made post_bridge unnecessary.
 		"work_item_attribution", "work_item_state", "work_item", "work_item_estimate",
+		// CHAOS-8810: the daily families of issue_type_metrics_daily and of the
+		// two investment daily tables; readers of work_item_team_attributions
+		// like the three above, ordered after its writer by families.json.
+		"work_item_issue_type", "work_item_investment",
 		// CHAOS-4284: the three TestOps families this PR ports. They were added
 		// to the artifact but NOT to this list, which was a one-way SUBSET check
 		// with no cardinality assertion on this branch -- so it certified a split

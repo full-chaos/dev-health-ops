@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -204,16 +203,14 @@ func preparedPaddedBatch(t *testing.T, claim Claim, destinations []string, targe
 	return build(pad)
 }
 
-// oversizeBytes reads the encoded size ErrPreparedRouteSnapshotOversize
-// reports ("...: <n> bytes").
+// oversizeBytes reads the encoded size the typed bound error reports.
 func oversizeBytes(t *testing.T, err error) int {
 	t.Helper()
-	message := strings.TrimSuffix(err.Error(), " bytes")
-	size, parseErr := strconv.Atoi(message[strings.LastIndex(message, " ")+1:])
-	if parseErr != nil {
+	var bound *EffectBoundExceededError
+	if !errors.As(err, &bound) || bound.Limit != "snapshot_bytes" || bound.Bytes < 1 {
 		t.Fatalf("oversize error without a size: %v", err)
 	}
-	return size
+	return bound.Bytes
 }
 
 func TestPreparedSnapshotSizeCapBoundary(t *testing.T) {
@@ -235,6 +232,9 @@ func TestPreparedSnapshotSizeCapBoundary(t *testing.T) {
 	if !errors.Is(err, ErrPreparedRouteSnapshotOversize) || !errors.Is(err, ErrEffectRecoveryUnsafe) {
 		t.Fatalf("cap+1 err=%v, want ErrPreparedRouteSnapshotOversize (an ErrEffectRecoveryUnsafe)", err)
 	}
+	if got := oversizeBytes(t, err); got != maxPreparedRouteSnapshotBytes+1 {
+		t.Fatalf("typed snapshot bound reports %d bytes, want %d", got, maxPreparedRouteSnapshotBytes+1)
+	}
 
 	// Two effects that each fit the per-effect cap but not one snapshot.
 	prsClaim, _ := preparedWorkItemsSession(t, now, "github", "prs")
@@ -247,8 +247,12 @@ func TestPreparedSnapshotSizeCapBoundary(t *testing.T) {
 	if err != nil {
 		t.Fatalf("a half-cap effect was refused on its own: %v", err)
 	}
+	attribution, err := effectBatchFromValues("ai_attribution", EffectReadbackRequired, []map[string]string{})
+	if err != nil {
+		t.Fatal(err)
+	}
 	pair := CompleteRouteBatch{
-		Effects: []EffectBatch{pulls, reviews}, Result: map[string]any{"synced": 2}, Watermark: prsClaim.BeforeAt,
+		Effects: []EffectBatch{pulls, reviews, attribution}, Result: map[string]any{"synced": 2}, Watermark: prsClaim.BeforeAt,
 		Evidence: FetchEvidence{Provider: "github", Dataset: "prs", Records: 2},
 	}
 	if _, _, err := encodePreparedRouteManifest(prsClaim, pair, ShadowComparison{Match: true}, now); !errors.Is(err, ErrPreparedRouteSnapshotOversize) {

@@ -78,6 +78,14 @@ const readsPinnedNow = "2026-09-24T12:34:56.123456+00:00"
 // list()/dict()/int() accept or refuse, planner and legacy repository
 // selections, planner job runs with and without a linked sync run, backfill
 // jobs with every sync_run marker shape) and the auth and query domains.
+//
+// Named divergence (see derivedTargets; owner's decision of 2026-10-06): the
+// list and the single read answer a whole-integration config's sync_targets
+// from its integration's enabled dataset rows. The three seeded
+// whole-integration configs ("planner", "no-sources", "cross-org") have an
+// integration with no dataset row: the recorded Python answer echoed their
+// stored list, the Go api answers []. Every other config and field is
+// compared byte for byte.
 func TestSyncAdminReadsVenueOracle(t *testing.T) {
 	resetIDs(t)
 	golden := venueoracle.OpenGolden(t, goldenSpec(t.Name()))
@@ -125,6 +133,7 @@ func TestSyncAdminReadsVenueOracle(t *testing.T) {
 	requests := syncAdminRequests(venue, ids)
 	python := golden.Python(t, venue, requests)
 	inspectDiagnostics := inspectBackfillDiagnostics(t)
+	derived := newDerivedTargets(`[]`, ids.cfgPlanner, ids.cfgNoSources, ids.cfgCrossOrg)
 	receipt := venueoracle.Diff(t, base, requests, python, venueoracle.DiffOptions{
 		Golden: golden,
 		// lag_seconds is now minus the watermark at request time, and the
@@ -134,13 +143,14 @@ func TestSyncAdminReadsVenueOracle(t *testing.T) {
 		// pinned exactly by the live model oracle at a fixed now.
 		Normalize: func(request venueoracle.Request, body string) string {
 			if !strings.HasSuffix(strings.SplitN(request.Path, "?", 2)[0], "/units") {
-				return body
+				return derived.normalize(body)
 			}
 			return lagSeconds.ReplaceAllString(body, `"lag_seconds":"<volatile>"`)
 		},
 		// The seed must reach every freshness state it was built for, or a
 		// SAME on the rich run could be two empty lists agreeing.
 		Inspect: func(request venueoracle.Request, goResponse venueoracle.Response) {
+			derived.inspect(t, request.Name, goResponse.Body)
 			inspectDiagnostics(request, goResponse)
 			if request.Name != "run units rich " {
 				return
@@ -159,6 +169,7 @@ func TestSyncAdminReadsVenueOracle(t *testing.T) {
 		},
 	})
 	t.Logf("receipt (%d requests):\n%s", len(requests), receipt)
+	derived.finish(t)
 	golden.Finish(t)
 }
 

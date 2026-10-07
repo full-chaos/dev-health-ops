@@ -168,7 +168,6 @@ VALUES ($1, $3, $2, 'work-items',
 				ProjectMembershipSnapshotDiff: GitHubProjectV2SnapshotDiffClickHouseReader{
 					Conn: conn,
 				},
-				Deriver: &githubWorkItemsRouteDeriver{rows: projectsV2DurableEmptyDerivedRows()},
 			}
 			executor := CompleteRouteExecutor{
 				Credentials: providerfoundation.CredentialResolver{
@@ -332,7 +331,7 @@ WHERE org_id = ? AND event_id = ?`, claim.OrgID, expectedRemoval.EventID,
 	}
 }
 
-const githubProjectsV2DurablePRResponse = `{"data":{"organization":{"projectV2":{"items":{"nodes":[{"id":"PVTI_PR","createdAt":"2026-08-01T08:00:00Z","content":{"__typename":"PullRequest","number":42,"title":"A PR","repository":{"nameWithOwner":"acme/api"}},"fieldValues":{"nodes":[]},"changes":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}`
+const githubProjectsV2DurablePRResponse = `{"data":{"organization":{"projectV2":{"items":{"nodes":[{"id":"PVTI_PR","createdAt":"2026-08-01T08:00:00Z","content":{"__typename":"PullRequest","number":42,"title":"A PR","repository":{"nameWithOwner":"acme/api"}},"fieldValues":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}},"changes":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}`
 
 func projectsV2DurableDoer(t *testing.T, graphqlReply string) *githubWorkItemsRouteDoer {
 	t.Helper()

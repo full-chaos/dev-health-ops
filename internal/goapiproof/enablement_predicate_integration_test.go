@@ -104,7 +104,7 @@ func TestEnablementPredicateMatchesTheSharedAdmissionTable(t *testing.T) {
 		run := run
 		t.Run(run.name, func(t *testing.T) {
 			if _, err := pool.Exec(ctx,
-				`TRUNCATE go_api_proof_run, go_api_routing_state, go_api_candidate_build`); err != nil {
+				`TRUNCATE go_api_proof_run, go_api_candidate_build`); err != nil {
 				t.Fatalf("truncate between cases: %v", err)
 			}
 			seedAdmissionRow(ctx, t, pool, run.rowKey, run.receipt)
@@ -470,7 +470,7 @@ func TestTheMigrationMatrixClauseMatchesTheSharedAdmissionTable(t *testing.T) {
 		run := run
 		t.Run(run.name, func(t *testing.T) {
 			if _, err := pool.Exec(ctx,
-				`TRUNCATE go_api_proof_run, go_api_routing_state, go_api_candidate_build`); err != nil {
+				`TRUNCATE go_api_proof_run, go_api_candidate_build`); err != nil {
 				t.Fatalf("truncate between cases: %v", err)
 			}
 			seedAdmissionRow(ctx, t, pool, run.rowKey, run.receipt)
@@ -1070,7 +1070,7 @@ func TestAShapeDifferenceUnderACitationNeverBecomesProof(t *testing.T) {
 	build := "b18e56fa79cfe20ce0f75df148144b832d92be36"
 	for _, cell := range cells {
 		proves := cell.outside == 0
-		if _, err := pool.Exec(ctx, `TRUNCATE go_api_proof_run, go_api_routing_state, go_api_candidate_build`); err != nil {
+		if _, err := pool.Exec(ctx, `TRUNCATE go_api_proof_run, go_api_candidate_build`); err != nil {
 			t.Fatalf("truncate: %v", err)
 		}
 		edge := &fakeEdge{goBody: cell.candidate, pythonBody: python, goBuild: build}
@@ -1124,7 +1124,7 @@ func TestTheMatrixClauseJudgesAReceiptByItsOwnForm(t *testing.T) {
 		run := run
 		t.Run(run.name, func(t *testing.T) {
 			if _, err := pool.Exec(ctx,
-				`TRUNCATE go_api_proof_run, go_api_routing_state, go_api_candidate_build`); err != nil {
+				`TRUNCATE go_api_proof_run, go_api_candidate_build`); err != nil {
 				t.Fatalf("truncate between cases: %v", err)
 			}
 			seedAdmissionRow(ctx, t, pool, run.rowKey, run.receipt)

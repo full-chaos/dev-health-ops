@@ -33,6 +33,19 @@ type PostSyncPlan struct {
 	// work_item_dependencies/work_graph_issue_pr -- same gate as WorkGraph
 	// (git || hasWorkItems), since that is exactly this producer's input set.
 	TeamRepoOwnershipDerivation bool
+	// WorkItems is true when a successful unit of the sync run wrote work-item
+	// rows. Only then does the fan-out record the days those rows touched
+	// (CHAOS-8813).
+	WorkItems bool
+	// RunStartedAt is sync_runs.started_at (created_at for a run that has
+	// none): no unit of the run wrote a raw row before it, apart from clock
+	// skew between processes.
+	RunStartedAt time.Time
+	// WorkItemWindowDays are the UTC days of the windows of the successful
+	// work-items units of the sync run, ascending and distinct
+	// (workItemUnitsWindowDays). The fan-out records each of them as touched
+	// for every repository the run stored a work item of.
+	WorkItemWindowDays []time.Time
 }
 
 type DailyPostSyncWriter interface {
@@ -74,6 +87,9 @@ type NativePostSyncService struct {
 	logger                              *synclog.Logger
 	fanoutObserver                      jobruntime.PostSyncFanoutObserver
 	teamRepoOwnershipDerivationObserver jobruntime.TeamRepoOwnershipDerivationObserver
+	touched                             TouchedDaysStore
+	touchedWriter                       TouchedDayPostSyncWriter
+	touchedObserver                     jobruntime.PostSyncTouchedDaysObserver
 	now                                 func() time.Time
 }
 
@@ -128,6 +144,22 @@ func (service *NativePostSyncService) Fanout(ctx context.Context, args PostSyncA
 	if service == nil || service.pool == nil || ctx == nil || args.valid() != nil {
 		return ErrPostSyncUnavailable
 	}
+	now := service.now().UTC()
+	// The touched-day record is read and written before the transaction, so
+	// no Postgres transaction is open while ClickHouse works. A failure here
+	// fails the fan-out (the job is delivered again): it is never read as "no
+	// day was touched".
+	var (
+		touchedTake   *touchedDaysTake
+		touchedResult touchedDaysResult
+	)
+	if service.touched != nil {
+		touchedTake, err = service.takeTouchedDays(ctx, args, now)
+		if err != nil {
+			service.observeTouchedDaysFailure(ctx, args, "record", jobruntime.PostSyncTouchedDaysRecordFailed)
+			return err
+		}
+	}
 	tx, err := service.pool.Begin(ctx)
 	if err != nil {
 		return ErrPostSyncUnavailable
@@ -180,7 +212,7 @@ func (service *NativePostSyncService) Fanout(ctx context.Context, args PostSyncA
 		service.observeFanout(outcome, args, dispatchID)
 	}()
 
-	plan, err := loadPostSyncPlan(ctx, tx, args, service.now().UTC())
+	plan, err := loadPostSyncPlan(ctx, tx, args, now)
 	if err != nil {
 		observe = true
 		return err
@@ -212,6 +244,11 @@ func (service *NativePostSyncService) Fanout(ctx context.Context, args PostSyncA
 			return err
 		}
 		outcome = jobruntime.PostSyncFanoutOutcomePublished
+		if touchedTake != nil {
+			if err = service.startTouchedDaysTx(ctx, tx, *plan, touchedTake, &touchedResult); err != nil {
+				return err
+			}
+		}
 	} else {
 		outcome = jobruntime.PostSyncFanoutOutcomeNoRepositories
 	}
@@ -253,6 +290,9 @@ func (service *NativePostSyncService) Fanout(ctx context.Context, args PostSyncA
 		return err
 	}
 	committed = true
+	if touchedTake != nil {
+		service.finishTouchedDays(ctx, args, touchedTake, touchedResult)
+	}
 	return nil
 }
 
@@ -469,11 +509,12 @@ func loadPostSyncPlan(
 	now time.Time,
 ) (*PostSyncPlan, error) {
 	var orgID, integrationID string
+	var runStartedAt *time.Time
 	err := tx.QueryRow(ctx, `
-SELECT org_id, integration_id::text
+SELECT org_id, integration_id::text, COALESCE(started_at, created_at)
 FROM public.sync_runs
 WHERE id = $1::uuid AND org_id = $2
-FOR SHARE`, args.SyncRunID(), args.OrganizationID()).Scan(&orgID, &integrationID)
+FOR SHARE`, args.SyncRunID(), args.OrganizationID()).Scan(&orgID, &integrationID, &runStartedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
@@ -497,6 +538,7 @@ ORDER BY id`, args.SyncRunID())
 		unboundedFrom  bool
 		unboundedTo    bool
 		successfulUnit bool
+		workItemUnits  []workItemUnitWindow
 	)
 	for rows.Next() {
 		var provider, dataset string
@@ -511,6 +553,9 @@ ORDER BY id`, args.SyncRunID())
 		successfulUnit = true
 		for _, target := range capability.LegacyTargets {
 			targets[target] = struct{}{}
+			if target == "work-items" {
+				workItemUnits = append(workItemUnits, workItemUnitWindow{since: since, before: before})
+			}
 		}
 		if since == nil {
 			unboundedFrom = true
@@ -583,8 +628,21 @@ LIMIT 1`, orgID, integrationID).Scan(&autoImport); err != nil && !errors.Is(err,
 	}
 	currentSingleDay := (from == nil && to == nil) ||
 		(from != nil && to != nil && sameUTCDate(*from, *to) && sameUTCDate(*to, now))
+	var startedAt time.Time
+	if runStartedAt != nil {
+		startedAt = runStartedAt.UTC()
+	}
+	var workItemWindowDays []time.Time
+	if hasWorkItems && dailyRelevant {
+		workItemWindowDays, err = workItemUnitsWindowDays(workItemUnits, startedAt, now)
+		if err != nil {
+			return nil, err
+		}
+	}
 	return &PostSyncPlan{
-		OrganizationID: orgID, SyncRunID: args.SyncRunID(), TargetDay: targetDay,
+		WorkItems: hasWorkItems, RunStartedAt: startedAt,
+		WorkItemWindowDays: workItemWindowDays,
+		OrganizationID:     orgID, SyncRunID: args.SyncRunID(), TargetDay: targetDay,
 		BackfillDays: backfillDays, From: from, To: to,
 		Daily: dailyRelevant, Complexity: git && currentSingleDay, DORA: dora,
 		WorkGraph: git || hasWorkItems, Investment: git || hasWorkItems,

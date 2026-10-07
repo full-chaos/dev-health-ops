@@ -21,6 +21,7 @@ type BreakdownRequest struct {
 	StartDate graphqldate.Date
 	EndDate   graphqldate.Date
 	TopN      int
+	Keys      []string
 }
 
 // BreakdownRequestFromInput converts the GraphQL input, validating
@@ -41,12 +42,16 @@ func BreakdownRequestFromInput(input model.BreakdownRequestInput) (BreakdownRequ
 	if err := validateTopN(input.TopN); err != nil {
 		return BreakdownRequest{}, err
 	}
+	if err := validateBreakdownKeys(input.Keys); err != nil {
+		return BreakdownRequest{}, err
+	}
 	return BreakdownRequest{
 		Dimension: dim,
 		Measure:   measure,
 		StartDate: input.DateRange.StartDate,
 		EndDate:   input.DateRange.EndDate,
 		TopN:      input.TopN,
+		Keys:      input.Keys,
 	}, nil
 }
 
@@ -60,6 +65,16 @@ func validateTopN(topN int) error {
 	}
 	if topN > maxTopN {
 		return newValidationError("top_n", topN, "top_n of %d exceeds limit of %d", topN, maxTopN)
+	}
+	return nil
+}
+
+// validateBreakdownKeys keeps the exact-key branch within the same bounded
+// request cost as topN. A nil slice means the caller did not ask for exact
+// keys; an empty non-nil slice is a deliberate exact empty answer.
+func validateBreakdownKeys(keys []string) error {
+	if len(keys) > maxTopN {
+		return newValidationError("keys", len(keys), "keys of %d exceeds limit of %d", len(keys), maxTopN)
 	}
 	return nil
 }
@@ -103,6 +118,13 @@ func CompileBreakdown(req BreakdownRequest, orgID string, timeoutSeconds int, us
 	// layer later with `float(row["value"])`, so values are unchanged.
 	measureExpr = "toFloat64(" + measureExpr + ")"
 
+	keyFilter := ""
+	limitClause := "LIMIT {top_n:UInt32}"
+	if req.Keys != nil {
+		keyFilter = fmt.Sprintf("\n  AND %s IN {breakdown_keys:Array(String)}", dimCol)
+		limitClause = ""
+	}
+
 	sql := fmt.Sprintf(`
 SELECT
     %s AS dimension_value,
@@ -111,18 +133,22 @@ FROM %s
 %s
 WHERE %s
   AND %s.org_id = {org_id:String}
-%s
+%s%s
 GROUP BY dimension_value
 ORDER BY value DESC, dimension_value ASC
-LIMIT {top_n:UInt32}
 %s
-`, dimCol, measureExpr, source, extraClauses, dateFilter, alias, fc.sql, settingsMaxExecutionTime(timeoutSeconds))
+%s
+`, dimCol, measureExpr, source, extraClauses, dateFilter, alias, fc.sql, keyFilter, limitClause, settingsMaxExecutionTime(timeoutSeconds))
 
 	bindings := []clickhouse.Binding{
 		{Name: "org_id", Value: orgID},
 		{Name: "start_date", Value: dateBindingValue(req.StartDate.Time())},
 		{Name: "end_date", Value: dateBindingValue(req.EndDate.Time())},
-		{Name: "top_n", Value: req.TopN},
+	}
+	if req.Keys == nil {
+		bindings = append(bindings, clickhouse.Binding{Name: "top_n", Value: req.TopN})
+	} else {
+		bindings = append(bindings, clickhouse.Binding{Name: "breakdown_keys", Value: req.Keys})
 	}
 	bindings = append(bindings, fc.bindings...)
 

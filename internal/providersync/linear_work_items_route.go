@@ -3,6 +3,7 @@ package providersync
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -31,16 +32,18 @@ func (doer linearWorkItemsCountingDoer) Do(request *http.Request) (*http.Respons
 }
 
 const (
-	linearWorkItemsDefaultPerPage = 50
-	linearWorkItemsMaxPerPage     = 100
-	linearWorkItemsDefaultPages   = 100
-	// LinearClient's bulk issue query asks for 50 comments.  The Python
-	// provider's explicit comment helper has a bounded 100-comment contract;
-	// keep the native route on that same boundary instead of silently dropping
-	// a second page or issuing an unbounded nested crawl.
-	linearWorkItemsCommentsPerPage  = 50
-	linearWorkItemsCommentsMaxPages = 2
-	linearWorkItemsHistoryPerPage   = 50
+	linearWorkItemsDefaultPerPage  = 50
+	linearWorkItemsMaxPerPage      = 100
+	linearWorkItemsDefaultPages    = 100
+	linearWorkItemsCommentsPerPage = 50
+	linearWorkItemsHistoryPerPage  = 50
+	// linearNestedHardMaxPages is the per-issue (cycles: per-team), per-field
+	// runaway guard for a nested connection that is paged to its own end
+	// (CHAOS-8767). 50 pages is 5000 rows at 100/page (2500 at 50/page): far
+	// above any real Linear issue, low enough to stop a cursor that never
+	// ends. Past it the unit fails loudly naming the issue and field; nothing
+	// is truncated.
+	linearNestedHardMaxPages = 50
 )
 
 // linearWorkItemsQuery deliberately follows the fields selected by
@@ -54,7 +57,7 @@ query LinearWorkItems($first: Int!, $after: String, $filter: IssueFilter) {
       state { name type }
       assignee { name email }
       creator { name email }
-      labels { nodes { name } }
+      labels(first: 50) { nodes { id name } pageInfo { hasNextPage endCursor } }
       parent { identifier }
       project { id name }
       cycle { id number name }
@@ -73,6 +76,7 @@ query LinearWorkItems($first: Int!, $after: String, $filter: IssueFilter) {
       }
       comments(first: 50) {
         nodes {
+          id
           body
           createdAt
           user { name email }
@@ -80,11 +84,12 @@ query LinearWorkItems($first: Int!, $after: String, $filter: IssueFilter) {
         pageInfo { hasNextPage endCursor }
       }
       attachments(first: 50) {
-        nodes { url sourceType }
+        nodes { id url sourceType }
         pageInfo { hasNextPage endCursor }
       }
       relations(first: 50) {
         nodes {
+          id
           type
           createdAt
           issue { identifier }
@@ -94,6 +99,7 @@ query LinearWorkItems($first: Int!, $after: String, $filter: IssueFilter) {
       }
       inverseRelations(first: 50) {
         nodes {
+          id
           type
           createdAt
           issue { identifier }
@@ -125,11 +131,21 @@ query LinearWorkItemsCycles($first: Int!, $after: String, $filter: CycleFilter) 
   }
 }`
 
+const linearWorkItemsLabelsQuery = `
+query LinearWorkItemsLabels($first: Int!, $after: String, $issueId: String!) {
+  issue(id: $issueId) {
+    labels(first: $first, after: $after) {
+      nodes { id name }
+      pageInfo { hasNextPage endCursor }
+    }
+  }
+}`
+
 const linearWorkItemsAttachmentsQuery = `
 query LinearWorkItemsAttachments($first: Int!, $after: String, $issueId: String!) {
   issue(id: $issueId) {
     attachments(first: $first, after: $after) {
-      nodes { url sourceType }
+      nodes { id url sourceType }
       pageInfo { hasNextPage endCursor }
     }
   }
@@ -139,7 +155,7 @@ const linearWorkItemsRelationsQuery = `
 query LinearWorkItemsRelations($first: Int!, $after: String, $issueId: String!) {
   issue(id: $issueId) {
     relations(first: $first, after: $after) {
-      nodes { type createdAt issue { identifier } relatedIssue { identifier } }
+      nodes { id type createdAt issue { identifier } relatedIssue { identifier } }
       pageInfo { hasNextPage endCursor }
     }
   }
@@ -150,6 +166,7 @@ query LinearWorkItemsComments($first: Int!, $after: String, $issueId: String!) {
   issue(id: $issueId) {
     comments(first: $first, after: $after) {
       nodes {
+        id
         body
         createdAt
         user { name email }
@@ -181,7 +198,7 @@ const linearWorkItemsInverseRelationsQuery = `
 query LinearWorkItemsInverseRelations($first: Int!, $after: String, $issueId: String!) {
   issue(id: $issueId) {
     inverseRelations(first: $first, after: $after) {
-      nodes { type createdAt issue { identifier } relatedIssue { identifier } }
+      nodes { id type createdAt issue { identifier } relatedIssue { identifier } }
       pageInfo { hasNextPage endCursor }
     }
   }
@@ -227,10 +244,14 @@ type linearIdentityPayload struct {
 	Email string `json:"email"`
 }
 
+type linearLabelPayload struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
 type linearLabelsPayload struct {
-	Nodes []struct {
-		Name string `json:"name"`
-	} `json:"nodes"`
+	Nodes    []linearLabelPayload  `json:"nodes"`
+	PageInfo linearPageInfoPayload `json:"pageInfo"`
 }
 
 type linearParentPayload struct {
@@ -280,6 +301,7 @@ type linearPageInfoPayload struct {
 }
 
 type linearCommentPayload struct {
+	ID        string                 `json:"id"`
 	Body      string                 `json:"body"`
 	CreatedAt string                 `json:"createdAt"`
 	User      *linearIdentityPayload `json:"user"`
@@ -291,6 +313,7 @@ type linearCommentsPayload struct {
 }
 
 type linearAttachmentPayload struct {
+	ID         string `json:"id"`
 	URL        string `json:"url"`
 	SourceType string `json:"sourceType"`
 }
@@ -305,6 +328,7 @@ type linearRelationIssuePayload struct {
 }
 
 type linearRelationPayload struct {
+	ID   string `json:"id"`
 	Type string `json:"type"`
 	// CreatedAt is when the relation was made at linear: the relation's
 	// start (CHAOS-8578).
@@ -478,32 +502,62 @@ func linearConnectionCursor(pageInfo linearPageInfoPayload) (string, error) {
 	return cursor, nil
 }
 
-func appendLinearUnique[T any](existing []T, extra ...[]T) []T {
+// appendLinearUniqueByID appends the rows of extra whose id is not already
+// present. Identity is the provider's own id, never a digest of the selected
+// fields: two distinct rows may carry identical fields (CHAOS-8770). A row
+// without an id cannot be identified, so it is always kept.
+func appendLinearUniqueByID[T any](id func(T) string, existing []T, extra ...[]T) []T {
 	seen := make(map[string]struct{}, len(existing))
-	key := func(value T) string {
-		encoded, err := json.Marshal(value)
-		if err != nil {
-			return ""
-		}
-		return string(encoded)
-	}
 	for _, value := range existing {
-		seen[key(value)] = struct{}{}
+		if key := id(value); key != "" {
+			seen[key] = struct{}{}
+		}
 	}
 	for _, values := range extra {
 		for _, value := range values {
-			valueKey := key(value)
-			if _, duplicate := seen[valueKey]; duplicate {
-				continue
+			if key := id(value); key != "" {
+				if _, duplicate := seen[key]; duplicate {
+					continue
+				}
+				seen[key] = struct{}{}
 			}
-			seen[valueKey] = struct{}{}
 			existing = append(existing, value)
 		}
 	}
 	return existing
 }
 
-func linearNestedPageLimit() int { return 5 } // 5 * 100 == Python's 500-row bound
+func linearLabelID(row linearLabelPayload) string           { return row.ID }
+func linearAttachmentID(row linearAttachmentPayload) string { return row.ID }
+func linearHistoryID(row linearHistoryEntry) string         { return row.ID }
+func linearCommentID(row linearCommentPayload) string       { return row.ID }
+func linearRelationID(row linearRelationPayload) string     { return row.ID }
+
+// linearNestedBudget is the page budget of one nested connection. A follow-up
+// that starts after a cursor continues a connection whose first page was
+// embedded in the issue query: that page counts against the hard bound too, so
+// the connection holds linearNestedHardMaxPages pages in total, not one more.
+func linearNestedBudget(after string) (maxPages, embeddedPages int) {
+	if strings.TrimSpace(after) != "" {
+		return linearNestedHardMaxPages - 1, 1
+	}
+	return linearNestedHardMaxPages, 0
+}
+
+func linearNestedPageLimit() int { return linearNestedHardMaxPages }
+
+// linearNestedBoundExceeded reports a nested connection that still had a next
+// page after the hard bound. It names the owner and field, logs at ERROR, and
+// wraps ErrPaginationCapExceeded so the unit fails permanently and loudly.
+func linearNestedBoundExceeded(owner, field string, pages, items int) error {
+	slog.Error("providersync.linear.nested_connection_bound_exceeded",
+		"owner", owner, "field", field, "pages", pages, "items", items,
+		"max_pages", linearNestedHardMaxPages)
+	return fmt.Errorf(
+		"%w: linear %s of %s still had a next page after %d pages (%d items, max %d pages)",
+		ErrPaginationCapExceeded, field, owner, pages, items, linearNestedHardMaxPages,
+	)
+}
 
 func linearReferenceTeamPayload(
 	rows []LinearReferenceTeam,
@@ -711,7 +765,7 @@ func collectLinearCycles(
 		return nil, 0, err
 	}
 	if page.PageBudgetExhausted {
-		return nil, page.Pages, ErrPaginationCapExceeded
+		return nil, page.Pages, linearNestedBoundExceeded("team "+teamID, "cycles", page.Pages, len(page.Items))
 	}
 	cycles := make([]linearCyclePayload, 0, len(page.Items))
 	for _, raw := range page.Items {
@@ -724,18 +778,55 @@ func collectLinearCycles(
 	return cycles, page.Pages, nil
 }
 
+func collectLinearIssueLabels(
+	ctx context.Context,
+	client *providerfoundation.HTTPClient,
+	issueID string,
+	after string,
+	embeddedItems int,
+) ([]linearLabelPayload, int, error) {
+	maxPages, embeddedPages := linearNestedBudget(after)
+	page, err := providerfoundation.CollectLinearGraphQLPages(
+		ctx, client, providerfoundation.LinearPageOptions{
+			Query:          linearWorkItemsLabelsQuery,
+			Variables:      map[string]any{"issueId": issueID},
+			ConnectionPath: []string{"issue", "labels"},
+			PerPage:        50,
+			MaxPages:       maxPages,
+			InitialCursor:  after,
+		},
+	)
+	if err != nil {
+		return nil, 0, err
+	}
+	if page.PageBudgetExhausted {
+		return nil, embeddedPages + page.Pages, linearNestedBoundExceeded("issue "+issueID, "labels", embeddedPages+page.Pages, len(page.Items)+embeddedItems)
+	}
+	items := make([]linearLabelPayload, 0, len(page.Items)+embeddedItems)
+	for _, raw := range page.Items {
+		var item linearLabelPayload
+		if err := json.Unmarshal(raw, &item); err != nil {
+			return nil, embeddedPages + page.Pages, providerfoundation.ErrNormalizationInvalid
+		}
+		items = append(items, item)
+	}
+	return items, embeddedPages + page.Pages, nil
+}
+
 func collectLinearIssueAttachments(
 	ctx context.Context,
 	client *providerfoundation.HTTPClient,
 	issueID string,
 	after string,
+	embeddedItems int,
 ) ([]linearAttachmentPayload, int, error) {
+	maxPages, embeddedPages := linearNestedBudget(after)
 	page, err := providerfoundation.CollectLinearGraphQLPages(
 		ctx, client, providerfoundation.LinearPageOptions{
 			Query:          linearWorkItemsAttachmentsQuery,
 			Variables:      map[string]any{"issueId": issueID},
 			ConnectionPath: []string{"issue", "attachments"},
-			PerPage:        100, MaxPages: linearNestedPageLimit(),
+			PerPage:        100, MaxPages: maxPages,
 			InitialCursor: after,
 		},
 	)
@@ -743,17 +834,17 @@ func collectLinearIssueAttachments(
 		return nil, 0, err
 	}
 	if page.PageBudgetExhausted {
-		return nil, page.Pages, ErrPaginationCapExceeded
+		return nil, embeddedPages + page.Pages, linearNestedBoundExceeded("issue "+issueID, "attachments", embeddedPages+page.Pages, len(page.Items)+embeddedItems)
 	}
-	items := make([]linearAttachmentPayload, 0, len(page.Items))
+	items := make([]linearAttachmentPayload, 0, len(page.Items)+embeddedItems)
 	for _, raw := range page.Items {
 		var item linearAttachmentPayload
 		if err := json.Unmarshal(raw, &item); err != nil {
-			return nil, page.Pages, providerfoundation.ErrNormalizationInvalid
+			return nil, embeddedPages + page.Pages, providerfoundation.ErrNormalizationInvalid
 		}
 		items = append(items, item)
 	}
-	return items, page.Pages, nil
+	return items, embeddedPages + page.Pages, nil
 }
 
 func collectLinearIssueHistory(
@@ -761,14 +852,16 @@ func collectLinearIssueHistory(
 	client *providerfoundation.HTTPClient,
 	issueID string,
 	after string,
+	embeddedItems int,
 ) ([]linearHistoryEntry, int, error) {
+	maxPages, embeddedPages := linearNestedBudget(after)
 	page, err := providerfoundation.CollectLinearGraphQLPages(
 		ctx, client, providerfoundation.LinearPageOptions{
 			Query:          linearWorkItemsHistoryQuery,
 			Variables:      map[string]any{"issueId": issueID},
 			ConnectionPath: []string{"issue", "history"},
 			PerPage:        linearWorkItemsHistoryPerPage,
-			MaxPages:       linearNestedPageLimit(),
+			MaxPages:       maxPages,
 			InitialCursor:  after,
 		},
 	)
@@ -776,17 +869,17 @@ func collectLinearIssueHistory(
 		return nil, 0, err
 	}
 	if page.PageBudgetExhausted {
-		return nil, page.Pages, ErrPaginationCapExceeded
+		return nil, embeddedPages + page.Pages, linearNestedBoundExceeded("issue "+issueID, "history", embeddedPages+page.Pages, len(page.Items)+embeddedItems)
 	}
-	items := make([]linearHistoryEntry, 0, len(page.Items))
+	items := make([]linearHistoryEntry, 0, len(page.Items)+embeddedItems)
 	for _, raw := range page.Items {
 		var item linearHistoryEntry
 		if err := json.Unmarshal(raw, &item); err != nil {
-			return nil, page.Pages, providerfoundation.ErrNormalizationInvalid
+			return nil, embeddedPages + page.Pages, providerfoundation.ErrNormalizationInvalid
 		}
 		items = append(items, item)
 	}
-	return items, page.Pages, nil
+	return items, embeddedPages + page.Pages, nil
 }
 
 func collectLinearIssueComments(
@@ -794,14 +887,16 @@ func collectLinearIssueComments(
 	client *providerfoundation.HTTPClient,
 	issueID string,
 	after string,
+	embeddedItems int,
 ) ([]linearCommentPayload, int, error) {
+	maxPages, embeddedPages := linearNestedBudget(after)
 	page, err := providerfoundation.CollectLinearGraphQLPages(
 		ctx, client, providerfoundation.LinearPageOptions{
 			Query:          linearWorkItemsCommentsQuery,
 			Variables:      map[string]any{"issueId": issueID},
 			ConnectionPath: []string{"issue", "comments"},
 			PerPage:        linearWorkItemsCommentsPerPage,
-			MaxPages:       linearWorkItemsCommentsMaxPages,
+			MaxPages:       maxPages,
 			InitialCursor:  after,
 		},
 	)
@@ -809,17 +904,17 @@ func collectLinearIssueComments(
 		return nil, 0, err
 	}
 	if page.PageBudgetExhausted {
-		return nil, page.Pages, ErrPaginationCapExceeded
+		return nil, embeddedPages + page.Pages, linearNestedBoundExceeded("issue "+issueID, "comments", embeddedPages+page.Pages, len(page.Items)+embeddedItems)
 	}
-	comments := make([]linearCommentPayload, 0, len(page.Items))
+	comments := make([]linearCommentPayload, 0, len(page.Items)+embeddedItems)
 	for _, raw := range page.Items {
 		var comment linearCommentPayload
 		if err := json.Unmarshal(raw, &comment); err != nil {
-			return nil, page.Pages, providerfoundation.ErrNormalizationInvalid
+			return nil, embeddedPages + page.Pages, providerfoundation.ErrNormalizationInvalid
 		}
 		comments = append(comments, comment)
 	}
-	return comments, page.Pages, nil
+	return comments, embeddedPages + page.Pages, nil
 }
 
 func collectLinearIssueRelations(
@@ -828,6 +923,7 @@ func collectLinearIssueRelations(
 	issueID string,
 	inverse bool,
 	after string,
+	embeddedItems int,
 ) ([]linearRelationPayload, int, error) {
 	query := linearWorkItemsRelationsQuery
 	connection := "relations"
@@ -835,12 +931,13 @@ func collectLinearIssueRelations(
 		query = linearWorkItemsInverseRelationsQuery
 		connection = "inverseRelations"
 	}
+	maxPages, embeddedPages := linearNestedBudget(after)
 	page, err := providerfoundation.CollectLinearGraphQLPages(
 		ctx, client, providerfoundation.LinearPageOptions{
 			Query:          query,
 			Variables:      map[string]any{"issueId": issueID},
 			ConnectionPath: []string{"issue", connection},
-			PerPage:        100, MaxPages: linearNestedPageLimit(),
+			PerPage:        100, MaxPages: maxPages,
 			InitialCursor: after,
 		},
 	)
@@ -848,17 +945,17 @@ func collectLinearIssueRelations(
 		return nil, 0, err
 	}
 	if page.PageBudgetExhausted {
-		return nil, page.Pages, ErrPaginationCapExceeded
+		return nil, embeddedPages + page.Pages, linearNestedBoundExceeded("issue "+issueID, connection, embeddedPages+page.Pages, len(page.Items)+embeddedItems)
 	}
-	items := make([]linearRelationPayload, 0, len(page.Items))
+	items := make([]linearRelationPayload, 0, len(page.Items)+embeddedItems)
 	for _, raw := range page.Items {
 		var item linearRelationPayload
 		if err := json.Unmarshal(raw, &item); err != nil {
-			return nil, page.Pages, providerfoundation.ErrNormalizationInvalid
+			return nil, embeddedPages + page.Pages, providerfoundation.ErrNormalizationInvalid
 		}
 		items = append(items, item)
 	}
-	return items, page.Pages, nil
+	return items, embeddedPages + page.Pages, nil
 }
 
 func normalizeLinearSprint(
@@ -1065,6 +1162,11 @@ func normalizeLinearInteractions(
 		if comment.Body == "" {
 			continue
 		}
+		id := interactionIDFrom(comment.ID)
+		if id == "" {
+			skipInteractionWithoutID("linear", claim.OrgID, workItemID)
+			continue
+		}
 		occurred := parseLinearTime(comment.CreatedAt)
 		if occurred == nil {
 			fallback := normalizedAt.UTC()
@@ -1081,7 +1183,7 @@ func normalizeLinearInteractions(
 			WorkItemID: workItemID, Provider: "linear", InteractionType: "comment",
 			OccurredAt: occurred.UTC(), Actor: actor,
 			BodyLength: len([]rune(comment.Body)), LastSynced: normalizedAt.UTC(),
-			OrgID: claim.OrgID,
+			OrgID: claim.OrgID, InteractionID: id,
 		})
 	}
 	return rows
@@ -1246,19 +1348,34 @@ func (handler LinearWorkItemsRouteHandler) Collect(
 			if payload.ID == "" {
 				return CompleteRouteBatch{}, providerfoundation.ErrNormalizationInvalid
 			}
+			if payload.Labels.PageInfo.HasNextPage {
+				cursor, cursorErr := linearConnectionCursor(payload.Labels.PageInfo)
+				if cursorErr != nil {
+					return CompleteRouteBatch{}, cursorErr
+				}
+				labels, labelPages, labelErr := collectLinearIssueLabels(
+					ctx, client, payload.ID, cursor, len(payload.Labels.Nodes),
+				)
+				pagesSeen += labelPages
+				if labelErr != nil {
+					return CompleteRouteBatch{}, labelErr
+				}
+				payload.Labels.Nodes = appendLinearUniqueByID(linearLabelID, payload.Labels.Nodes, labels)
+				payload.Labels.PageInfo = linearPageInfoPayload{}
+			}
 			if payload.Attachments.PageInfo.HasNextPage {
 				cursor, cursorErr := linearConnectionCursor(payload.Attachments.PageInfo)
 				if cursorErr != nil {
 					return CompleteRouteBatch{}, cursorErr
 				}
 				attachments, attachmentPages, attachmentErr := collectLinearIssueAttachments(
-					ctx, client, payload.ID, cursor,
+					ctx, client, payload.ID, cursor, len(payload.Attachments.Nodes),
 				)
 				pagesSeen += attachmentPages
 				if attachmentErr != nil {
 					return CompleteRouteBatch{}, attachmentErr
 				}
-				payload.Attachments.Nodes = appendLinearUnique(payload.Attachments.Nodes, attachments)
+				payload.Attachments.Nodes = appendLinearUniqueByID(linearAttachmentID, payload.Attachments.Nodes, attachments)
 				payload.Attachments.PageInfo = linearPageInfoPayload{}
 			}
 			if fetchHistory && payload.History.PageInfo.HasNextPage {
@@ -1267,13 +1384,13 @@ func (handler LinearWorkItemsRouteHandler) Collect(
 					return CompleteRouteBatch{}, cursorErr
 				}
 				history, historyPages, historyErr := collectLinearIssueHistory(
-					ctx, client, payload.ID, cursor,
+					ctx, client, payload.ID, cursor, len(payload.History.Nodes),
 				)
 				pagesSeen += historyPages
 				if historyErr != nil {
 					return CompleteRouteBatch{}, historyErr
 				}
-				payload.History.Nodes = appendLinearUnique(payload.History.Nodes, history)
+				payload.History.Nodes = appendLinearUniqueByID(linearHistoryID, payload.History.Nodes, history)
 				payload.History.PageInfo = linearPageInfoPayload{}
 			}
 			if fetchComments && payload.Comments.PageInfo.HasNextPage {
@@ -1282,13 +1399,13 @@ func (handler LinearWorkItemsRouteHandler) Collect(
 					return CompleteRouteBatch{}, cursorErr
 				}
 				comments, commentPages, commentErr := collectLinearIssueComments(
-					ctx, client, payload.ID, cursor,
+					ctx, client, payload.ID, cursor, len(payload.Comments.Nodes),
 				)
 				pagesSeen += commentPages
 				if commentErr != nil {
 					return CompleteRouteBatch{}, commentErr
 				}
-				payload.Comments.Nodes = appendLinearUnique(payload.Comments.Nodes, comments)
+				payload.Comments.Nodes = appendLinearUniqueByID(linearCommentID, payload.Comments.Nodes, comments)
 				payload.Comments.PageInfo = linearPageInfoPayload{}
 			}
 			if payload.Relations.PageInfo.HasNextPage {
@@ -1297,13 +1414,13 @@ func (handler LinearWorkItemsRouteHandler) Collect(
 					return CompleteRouteBatch{}, cursorErr
 				}
 				relations, relationPages, relationErr := collectLinearIssueRelations(
-					ctx, client, payload.ID, false, cursor,
+					ctx, client, payload.ID, false, cursor, len(payload.Relations.Nodes),
 				)
 				pagesSeen += relationPages
 				if relationErr != nil {
 					return CompleteRouteBatch{}, relationErr
 				}
-				payload.Relations.Nodes = appendLinearUnique(payload.Relations.Nodes, relations)
+				payload.Relations.Nodes = appendLinearUniqueByID(linearRelationID, payload.Relations.Nodes, relations)
 				payload.Relations.PageInfo = linearPageInfoPayload{}
 			}
 			if payload.InverseRelations.PageInfo.HasNextPage {
@@ -1312,13 +1429,13 @@ func (handler LinearWorkItemsRouteHandler) Collect(
 					return CompleteRouteBatch{}, cursorErr
 				}
 				relations, relationPages, relationErr := collectLinearIssueRelations(
-					ctx, client, payload.ID, true, cursor,
+					ctx, client, payload.ID, true, cursor, len(payload.InverseRelations.Nodes),
 				)
 				pagesSeen += relationPages
 				if relationErr != nil {
 					return CompleteRouteBatch{}, relationErr
 				}
-				payload.InverseRelations.Nodes = appendLinearUnique(payload.InverseRelations.Nodes, relations)
+				payload.InverseRelations.Nodes = appendLinearUniqueByID(linearRelationID, payload.InverseRelations.Nodes, relations)
 				payload.InverseRelations.PageInfo = linearPageInfoPayload{}
 			}
 			if !fetchHistory {

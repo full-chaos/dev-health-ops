@@ -368,15 +368,21 @@ type AnalyticsRequestInput struct {
 	FlowMatrix    *FlowMatrixRequestInput  `json:"flowMatrix,omitempty"`
 	UseInvestment *bool                    `json:"useInvestment,omitempty"`
 	Filters       *FilterInput             `json:"filters,omitempty"`
+	// Optional grouping for persisted work-unit evidence quality. Only THEME,
+	// SUBCATEGORY and WORK_TYPE are valid. The selected key is the unit's
+	// deterministic dominant persisted value, so one unit contributes to one
+	// group.
+	EvidenceQualityGroupBy *DimensionInput `json:"evidenceQualityGroupBy,omitempty"`
 }
 
 type AnalyticsResult struct {
-	Timeseries                  []TimeseriesResult    `json:"timeseries"`
-	Breakdowns                  []BreakdownResult     `json:"breakdowns"`
-	Sankey                      *SankeyResult         `json:"sankey,omitempty"`
-	FlowMatrix                  *FlowMatrixResult     `json:"flowMatrix,omitempty"`
-	EvidenceQualityDistribution graphqljson.JSON      `json:"evidenceQualityDistribution,omitempty"`
-	EvidenceQualityStats        *EvidenceQualityStats `json:"evidenceQualityStats,omitempty"`
+	Timeseries                  []TimeseriesResult     `json:"timeseries"`
+	Breakdowns                  []BreakdownResult      `json:"breakdowns"`
+	Sankey                      *SankeyResult          `json:"sankey,omitempty"`
+	FlowMatrix                  *FlowMatrixResult      `json:"flowMatrix,omitempty"`
+	EvidenceQualityDistribution graphqljson.JSON       `json:"evidenceQualityDistribution,omitempty"`
+	EvidenceQualityStats        *EvidenceQualityStats  `json:"evidenceQualityStats,omitempty"`
+	EvidenceQualityByGroup      []EvidenceQualityGroup `json:"evidenceQualityByGroup,omitempty"`
 }
 
 type BreakdownRequestInput struct {
@@ -384,6 +390,9 @@ type BreakdownRequestInput struct {
 	Measure   MeasureInput    `json:"measure"`
 	DateRange *DateRangeInput `json:"dateRange"`
 	TopN      int             `json:"topN"`
+	// Optional exact dimension keys. When present, returns these keys without the
+	// independent topN cut so related breakdown measures can be joined safely.
+	Keys []string `json:"keys,omitempty"`
 }
 
 type BreakdownResult struct {
@@ -702,9 +711,12 @@ type ConstraintEvidence struct {
 }
 
 type Coverage struct {
-	ReposCoveredPct          float64 `json:"reposCoveredPct"`
-	PrsLinkedToIssuesPct     float64 `json:"prsLinkedToIssuesPct"`
-	IssuesWithCycleStatesPct float64 `json:"issuesWithCycleStatesPct"`
+	// Null when no repositories are available to measure.
+	ReposCoveredPct *float64 `json:"reposCoveredPct,omitempty"`
+	// Null when the current window contains no work items to link.
+	PrsLinkedToIssuesPct *float64 `json:"prsLinkedToIssuesPct,omitempty"`
+	// Null when the current window contains no work items for cycle-state coverage.
+	IssuesWithCycleStatesPct *float64 `json:"issuesWithCycleStatesPct,omitempty"`
 }
 
 type CoverageStat struct {
@@ -734,6 +746,15 @@ type EventItem struct {
 	Type string `json:"type"`
 	Text string `json:"text"`
 	Link string `json:"link"`
+}
+
+// One persisted-work-unit evidence-quality aggregate. `total` counts every unit
+// in the group. `mean` is null when no unit in the group has a known quality.
+type EvidenceQualityGroup struct {
+	Key   string   `json:"key"`
+	Label *string  `json:"label,omitempty"`
+	Mean  *float64 `json:"mean,omitempty"`
+	Total int      `json:"total"`
 }
 
 type EvidenceQualityStats struct {
@@ -873,12 +894,25 @@ type HomeResult struct {
 	ReworkThemeAllocation []ReworkThemeAllocation `json:"reworkThemeAllocation"`
 	Summary               []SummarySentence       `json:"summary"`
 	Tiles                 []HomeTileEntry         `json:"tiles"`
-	Constraint            *ConstraintCard         `json:"constraint"`
-	Events                []EventItem             `json:"events"`
-	HealthState           *HealthState            `json:"healthState"`
-	Signals               []HomeSignal            `json:"signals"`
-	LimitingFactor        *HomeLimitingFactor     `json:"limitingFactor"`
-	DataConfidence        *HomeDataConfidence     `json:"dataConfidence"`
+	// The present constraint when current-window data exists; null when the window has no data.
+	Constraint     *ConstraintCard     `json:"constraint,omitempty"`
+	Events         []EventItem         `json:"events"`
+	HealthState    *HealthState        `json:"healthState"`
+	Signals        []HomeSignal        `json:"signals"`
+	LimitingFactor *HomeLimitingFactor `json:"limitingFactor"`
+	DataConfidence *HomeDataConfidence `json:"dataConfidence"`
+	// Coverage and ingestion quality for the selected repository scope; distinct from org-wide dataConfidence.
+	ScopeDataConfidence *HomeScopeDataConfidence `json:"scopeDataConfidence"`
+}
+
+// Coverage and metric-ingestion quality for the repositories selected by this Home request.
+type HomeScopeDataConfidence struct {
+	Level string `json:"level"`
+	// Null when the selected scope has no repositories.
+	CoveragePct *float64 `json:"coveragePct,omitempty"`
+	// Most recent in-window repository-metric ingestion, or null when the scope has none.
+	LastIngestedAt *string  `json:"lastIngestedAt,omitempty"`
+	Caveats        []string `json:"caveats"`
 }
 
 type HomeSignal struct {
@@ -901,6 +935,8 @@ type HomeSignal struct {
 	Category    string  `json:"category"`
 	// Null when the signal is not scoped to one entity (e.g. an org-wide signal).
 	ScopeEntity *ScopeEntityRef `json:"scopeEntity,omitempty"`
+	// Current primary work-item attribution evidence for work-item metrics; null when this window has no attributable work items.
+	Attribution *SignalAttribution `json:"attribution,omitempty"`
 }
 
 type HomeTile struct {
@@ -997,12 +1033,16 @@ type MappingCoverage struct {
 }
 
 type MetricDelta struct {
-	Metric   string       `json:"metric"`
-	Label    string       `json:"label"`
-	Value    float64      `json:"value"`
-	Unit     string       `json:"unit"`
-	DeltaPct float64      `json:"deltaPct"`
-	Spark    []SparkPoint `json:"spark"`
+	Metric   string  `json:"metric"`
+	Label    string  `json:"label"`
+	Value    float64 `json:"value"`
+	Unit     string  `json:"unit"`
+	DeltaPct float64 `json:"deltaPct"`
+	// Whether the current window has one or more stored source rows. A stored zero has this field set to true.
+	HasData bool `json:"hasData"`
+	// Whether the comparison window has one or more stored source rows.
+	HasPriorData bool         `json:"hasPriorData"`
+	Spark        []SparkPoint `json:"spark"`
 }
 
 type MetricLineage struct {
@@ -1042,7 +1082,9 @@ type OperatingReviewDelta struct {
 }
 
 type OperatingReviewInput struct {
-	TeamID    *string          `json:"teamId,omitempty"`
+	TeamID *string `json:"teamId,omitempty"`
+	// Teams to review together (CHAOS-8516). The answer is the review of the UNION of these teams' stored rows, by the same rules as the one-team and the all-teams review: a count is a sum, a ratio is made from summed numerators and denominators, and a mean is a mean over the stored rows, never a mean of team values. One id gives the one-team review. Null or empty = ``teamId`` applies (or all teams). ``teamId`` and ``teamIds`` together are an error. Rows with no team are in the all-teams review only.
+	TeamIds   []string         `json:"teamIds,omitempty"`
 	WeekStart graphqldate.Date `json:"weekStart"`
 }
 
@@ -1054,6 +1096,8 @@ type OperatingReviewMetric struct {
 	Delta *OperatingReviewDelta `json:"delta"`
 	// True = the week holds a stored value for the metric (CHAOS-8115). False = no row of the metric's daily table in the week, only NULL values, or a read that failed: ``value`` is then a 0 placeholder, not a measured zero, and a client draws "No data". True with ``value`` 0 is a stored zero.
 	HasData bool `json:"hasData"`
+	// Whether the request's team selection narrows this metric (CHAOS-8516).
+	Scope OperatingReviewMetricScope `json:"scope"`
 }
 
 type OperatingReviewSection struct {
@@ -1371,6 +1415,17 @@ type SavedReportType struct {
 	CreatedBy        *string          `json:"createdBy,omitempty"`
 }
 
+type ScopeCoverageBaseline struct {
+	// Mean, in percent (0 to 100), of the scope's line coverage of each day that holds a value, over the 30 days. Null = fewer than 7 such days (``lineDays``): then there is no baseline. Never 0 for "none", never the current value.
+	LineBaselinePct *float64 `json:"lineBaselinePct,omitempty"`
+	// Days of the 30 on which at least one repository of the scope holds a line coverage value.
+	LineDays int `json:"lineDays"`
+	// Mean branch coverage, in percent; the same rules as ``lineBaselinePct``.
+	BranchBaselinePct *float64 `json:"branchBaselinePct,omitempty"`
+	// Days of the 30 on which at least one repository of the scope holds a branch coverage value.
+	BranchDays int `json:"branchDays"`
+}
+
 type ScopeEntityRef struct {
 	ID          string `json:"id"`
 	DisplayName string `json:"displayName"`
@@ -1444,6 +1499,30 @@ type SecurityPaginationInput struct {
 type SeverityBucket struct {
 	Severity string `json:"severity"`
 	Count    int    `json:"count"`
+}
+
+// Source and confidence distribution for the work items behind one Home signal.
+type SignalAttribution struct {
+	// Number of attributed work items behind these distributions.
+	Items      int                                `json:"items"`
+	Sources    []SignalAttributionSourceCount     `json:"sources"`
+	Confidence []SignalAttributionConfidenceCount `json:"confidence"`
+}
+
+// One confidence bucket of a Home signal's work-item attribution distribution.
+type SignalAttributionConfidenceCount struct {
+	Confidence TeamAttributionConfidence `json:"confidence"`
+	Items      int                       `json:"items"`
+	// Fraction of SignalAttribution.items in this bucket.
+	Share float64 `json:"share"`
+}
+
+// One source bucket of a Home signal's work-item attribution distribution.
+type SignalAttributionSourceCount struct {
+	Source TeamAttributionSource `json:"source"`
+	Items  int                   `json:"items"`
+	// Fraction of SignalAttribution.items in this bucket.
+	Share float64 `json:"share"`
 }
 
 type SparkPoint struct {
@@ -2326,6 +2405,49 @@ func (e *MeasureInput) UnmarshalGQL(v any) error {
 }
 
 func (e MeasureInput) MarshalGQL(w io.Writer) {
+	fmt.Fprint(w, strconv.Quote(e.String()))
+}
+
+type OperatingReviewMetricScope string
+
+const (
+	// The value follows the request's team selection: one team, several teams together, or all teams when none is selected.
+	OperatingReviewMetricScopeTeam OperatingReviewMetricScope = "TEAM"
+	// The value is the whole organisation's, whatever team is selected: the metric's daily tables hold no team. A client labels it "organisation", not as the selection's value.
+	OperatingReviewMetricScopeOrganization OperatingReviewMetricScope = "ORGANIZATION"
+)
+
+var AllOperatingReviewMetricScope = []OperatingReviewMetricScope{
+	OperatingReviewMetricScopeTeam,
+	OperatingReviewMetricScopeOrganization,
+}
+
+func (e OperatingReviewMetricScope) IsValid() bool {
+	switch e {
+	case OperatingReviewMetricScopeTeam, OperatingReviewMetricScopeOrganization:
+		return true
+	}
+	return false
+}
+
+func (e OperatingReviewMetricScope) String() string {
+	return string(e)
+}
+
+func (e *OperatingReviewMetricScope) UnmarshalGQL(v any) error {
+	str, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("enums must be strings")
+	}
+
+	*e = OperatingReviewMetricScope(str)
+	if !e.IsValid() {
+		return fmt.Errorf("%s is not a valid OperatingReviewMetricScope", str)
+	}
+	return nil
+}
+
+func (e OperatingReviewMetricScope) MarshalGQL(w io.Writer) {
 	fmt.Fprint(w, strconv.Quote(e.String()))
 }
 

@@ -4,6 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/ClickHouse/clickhouse-go/v2"
+	"github.com/jackc/pgx/v5/pgconn"
+	"log/slog"
 	"net"
 	"net/http"
 	"strings"
@@ -163,20 +166,21 @@ func TestBuildRejectsTenantEnvelopeMismatchBeforeClaim(t *testing.T) {
 	}
 }
 
-// TestMaterializeCompatibilityFailureIsAmbiguousNotRetried is the
-// Materialize-side counterpart of the old (pre-CHAOS-4924) Build test of the
-// same shape: Materialize still bridges, so a generic, unclassified bridge
-// failure still has no positive "never sent"/"declined" placement and still
-// releases Ambiguous -- unchanged by the Build cutover.
-func TestMaterializeCompatibilityFailureIsAmbiguousNotRetried(t *testing.T) {
+// TestMaterializeUnclassifiedFailureIsRetriedNotAmbiguous (CHAOS-8782): an
+// executor error with no deterministic cause is retried and the request is
+// requeued -- it is never released 'ambiguous' and never failed.
+func TestMaterializeUnclassifiedFailureIsRetriedNotAmbiguous(t *testing.T) {
 	store := &fakeStore{claim: testMaterializeClaim(time.Second)}
 	handler, err := NewMaterializeHandler(store, failingExecutor{}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	err = handler.Work(context.Background(), materializeExecution())
-	if err == nil || !strings.Contains(err.Error(), string(jobruntime.CategoryPermanent)) || store.ambiguous != 1 || store.completions != 0 {
-		t.Fatalf("error=%v ambiguous=%d completions=%d", err, store.ambiguous, store.completions)
+	if err == nil || !strings.Contains(err.Error(), string(jobruntime.CategoryRetryable)) {
+		t.Fatalf("error=%v, want retryable", err)
+	}
+	if store.ambiguous != 0 || store.fails != 0 || store.requeues != 1 || store.completions != 0 {
+		t.Fatalf("ambiguous=%d fails=%d requeues=%d completions=%d", store.ambiguous, store.fails, store.requeues, store.completions)
 	}
 }
 
@@ -213,6 +217,15 @@ type fakeStore struct {
 	claim                                            *Claim
 	claimErr                                         error
 	claims, renewals, completions, ambiguous, loseAt int
+	// fails/requeues count the CHAOS-8782 releases; requeueErr scripts a failed
+	// requeue write (the lease-expiry fallback path).
+	fails, requeues int
+	requeueErr      error
+	lastFailDetail  string
+	// Release contexts as the store saw them: a release write that inherits a
+	// cancelled job context is a write that never lands (CHAOS-8782 F2).
+	releaseCtxErrs     []error
+	releaseCtxDeadline []bool
 	// lastEvidence is what Complete received, so a test can assert what the
 	// step fragments merged into rather than only that a completion happened.
 	lastEvidence []byte
@@ -239,8 +252,24 @@ func (s *fakeStore) Complete(_ context.Context, _ Claim, evidence []byte) error 
 	s.lastEvidence = evidence
 	return nil
 }
-func (*fakeStore) Fail(context.Context, Claim, string) error { return nil }
-func (s *fakeStore) Ambiguous(_ context.Context, _ Claim, detail string) error {
+func (s *fakeStore) noteReleaseContext(ctx context.Context) {
+	_, hasDeadline := ctx.Deadline()
+	s.releaseCtxErrs = append(s.releaseCtxErrs, ctx.Err())
+	s.releaseCtxDeadline = append(s.releaseCtxDeadline, hasDeadline)
+}
+func (s *fakeStore) Fail(ctx context.Context, _ Claim, detail string) error {
+	s.noteReleaseContext(ctx)
+	s.fails++
+	s.lastFailDetail = detail
+	return nil
+}
+func (s *fakeStore) Requeue(ctx context.Context, _ Claim) error {
+	s.noteReleaseContext(ctx)
+	s.requeues++
+	return s.requeueErr
+}
+func (s *fakeStore) Ambiguous(ctx context.Context, _ Claim, detail string) error {
+	s.noteReleaseContext(ctx)
 	s.ambiguous++
 	s.lastAmbiguousDetail = detail
 	return nil
@@ -353,11 +382,11 @@ func TestHandlerRetriesNotSentAndRefusedWithoutReleasingAmbiguous(t *testing.T) 
 	}
 }
 
-func TestHandlerReleasesUnknownAmbiguousWithTheClassifiedDetail(t *testing.T) {
-	executeErr := fmt.Errorf("%w: status=%d bridge exploded", ErrCompatibilityUnknown, http.StatusInternalServerError)
-	// Materialize, not Build: see TestHandlerRetriesNotSentAndRefusedWithoutReleasingAmbiguous.
+func TestHandlerFailsDeterministicWithTheClassLabelOnly(t *testing.T) {
+	executeErr := Deterministic(ClassLLMDeterministic, errors.New("provider said: key sk-ABC is wrong"))
 	store := &fakeStore{claim: testMaterializeClaim(time.Second)}
-	handler, err := NewMaterializeHandler(store, classifyingExecutor{err: executeErr}, nil)
+	var logs strings.Builder
+	handler, err := NewMaterializeHandler(store, classifyingExecutor{err: executeErr}, slog.New(slog.NewTextHandler(&logs, nil)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -365,23 +394,32 @@ func TestHandlerReleasesUnknownAmbiguousWithTheClassifiedDetail(t *testing.T) {
 	if workErr == nil || !strings.Contains(workErr.Error(), string(jobruntime.CategoryPermanent)) {
 		t.Fatalf("Work = %v, want category %s", workErr, jobruntime.CategoryPermanent)
 	}
-	if store.ambiguous != 1 {
-		t.Fatalf("ambiguous releases = %d, want 1", store.ambiguous)
+	if store.fails != 1 || store.ambiguous != 0 || store.requeues != 0 {
+		t.Fatalf("fails=%d ambiguous=%d requeues=%d", store.fails, store.ambiguous, store.requeues)
 	}
-	// The fixed literal is exactly what made 22 ledger rows indistinguishable
-	// from each other. The detail that reaches the store must now name the
-	// classification, the status, and the executor's own text.
-	detail := store.lastAmbiguousDetail
-	if detail == "compatibility execution outcome is unknown" {
-		t.Fatalf("ledger detail is still the fixed literal: %q", detail)
+	if store.lastFailDetail != "deterministic failure: "+ClassLLMDeterministic {
+		t.Fatalf("ledger detail = %q", store.lastFailDetail)
 	}
-	for _, want := range []string{"outcome is unknown", "status=500", "bridge exploded"} {
-		if !strings.Contains(detail, want) {
-			t.Fatalf("ledger detail %q is missing %q", detail, want)
-		}
+	if strings.Contains(logs.String(), "provider said") || !strings.Contains(logs.String(), "failure_class="+ClassLLMDeterministic) || !strings.Contains(logs.String(), "level=ERROR") {
+		t.Fatalf("log must carry the class label and an ERROR level, never provider text:\n%s", logs.String())
 	}
-	if length := utf8.RuneCountInString(detail); length == 0 || length > maxAmbiguousDetailBytes {
-		t.Fatalf("ledger detail length = %d, want 1..%d", length, maxAmbiguousDetailBytes)
+}
+
+// A failed requeue write must not hide the failure: the handler still returns
+// Retryable (the lease expiry is the fallback) and logs a WARN.
+func TestHandlerRequeueFailureFallsBackToLeaseExpiryLoudly(t *testing.T) {
+	store := &fakeStore{claim: testMaterializeClaim(time.Second), requeueErr: ErrUnavailable}
+	var logs strings.Builder
+	handler, err := NewMaterializeHandler(store, failingExecutor{}, slog.New(slog.NewTextHandler(&logs, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	workErr := handler.Work(context.Background(), materializeExecution())
+	if workErr == nil || !strings.Contains(workErr.Error(), string(jobruntime.CategoryRetryable)) {
+		t.Fatalf("Work = %v, want retryable", workErr)
+	}
+	if store.ambiguous != 0 || !strings.Contains(logs.String(), "waits for lease expiry") || !strings.Contains(logs.String(), "level=WARN") {
+		t.Fatalf("ambiguous=%d logs:\n%s", store.ambiguous, logs.String())
 	}
 }
 
@@ -450,4 +488,196 @@ func TestClassificationSentinelsAreDistinctAndWrapErrUnavailable(t *testing.T) {
 			}
 		}
 	}
+}
+
+// CHAOS-8782 (D4926): a single retryable outcome is never terminal, a spent
+// retry budget is. Claim 8 requeues; claim 9 (and later) fails the request,
+// logging ONE ERROR with both class labels and no error text.
+func TestRetryBudgetSpentFailsTheRequestWithBothClassLabels(t *testing.T) {
+	for _, testCase := range []struct {
+		claims    int
+		wantFail  bool
+		wantClass string
+	}{
+		{retryBudgetClaims - 1, false, ""},
+		{retryBudgetClaims, true, "unclassified"},
+		// A claim ABOVE the budget (the previous claim lost its lease, so its failure
+		// was never classified) ends failed at claim time, before any work runs.
+		{retryBudgetClaims + 1, true, "claim_time"},
+		{retryBudgetClaims + 3, true, "claim_time"},
+		{retryBudgetClaims, true, "context_canceled"},
+	} {
+		claim := testMaterializeClaim(time.Second)
+		claim.Request.AttemptCount = testCase.claims
+		store := &fakeStore{claim: claim}
+		failure := errors.New("clickhouse said: secret detail")
+		if testCase.wantClass == "context_canceled" {
+			failure = fmt.Errorf("write: %w", context.Canceled)
+		}
+		var logs strings.Builder
+		executor := &countingExecutor{err: failure}
+		handler, err := NewMaterializeHandler(store, executor, slog.New(slog.NewTextHandler(&logs, nil)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		workErr := handler.Work(context.Background(), materializeExecution())
+		if workErr == nil {
+			t.Fatalf("claims=%d: Work succeeded", testCase.claims)
+		}
+		if testCase.wantClass == "claim_time" && executor.calls != 0 {
+			t.Fatalf("claims=%d: the executor ran %d time(s) for a claim above the budget", testCase.claims, executor.calls)
+		}
+		category := jobruntime.CategoryRetryable
+		if testCase.wantFail {
+			category = jobruntime.CategoryPermanent
+		}
+		if !strings.Contains(workErr.Error(), string(category)) {
+			t.Fatalf("claims=%d: Work = %v, want %s", testCase.claims, workErr, category)
+		}
+		wantFails, wantRequeues := 0, 1
+		if testCase.wantFail {
+			wantFails, wantRequeues = 1, 0
+		}
+		if store.fails != wantFails || store.requeues != wantRequeues || store.ambiguous != 0 {
+			t.Fatalf("claims=%d: fails=%d requeues=%d ambiguous=%d", testCase.claims, store.fails, store.requeues, store.ambiguous)
+		}
+		var budgetLines []string
+		for _, line := range strings.Split(logs.String(), "\n") {
+			if strings.Contains(line, "retry budget exhausted") && strings.Contains(line, "level=ERROR") {
+				budgetLines = append(budgetLines, line)
+			}
+		}
+		if !testCase.wantFail {
+			if len(budgetLines) != 0 {
+				t.Fatalf("claims=%d: budget line before the budget:\n%s", testCase.claims, logs.String())
+			}
+			continue
+		}
+		if len(budgetLines) != 1 {
+			t.Fatalf("claims=%d: budget ERROR lines = %d, want exactly 1:\n%s", testCase.claims, len(budgetLines), logs.String())
+		}
+		line := budgetLines[0]
+		for _, want := range []string{"claim_count=", "failure_class=" + FailureClassRetryBudgetExhausted, "last_retryable_class=" + testCase.wantClass} {
+			if !strings.Contains(line, want) {
+				t.Fatalf("budget line lacks %q: %s", want, line)
+			}
+		}
+		if strings.Contains(line, "secret detail") || store.lastFailDetail != "retry budget exhausted: "+testCase.wantClass {
+			t.Fatalf("budget line leaks error text or ledger detail wrong: %q / %q", line, store.lastFailDetail)
+		}
+	}
+}
+
+// CHAOS-8782 F1: no raw error text on the retry path. The error text can hold a
+// row value or a connection string; the log carries the class label, the Go
+// type of the root cause and a driver code.
+func TestRetryPathLogsClassTypeAndCodeNeverErrorText(t *testing.T) {
+	const sentinel = "SENTINEL-ROW-VALUE-7c1e"
+	for _, testCase := range []struct {
+		name     string
+		err      error
+		wantAttr []string
+	}{
+		{"postgres", fmt.Errorf("write batch: %w", &pgconn.PgError{Code: "40001", Message: sentinel}),
+			[]string{"failure_class=unclassified", "error_type=*pgconn.PgError", "sqlstate=40001"}},
+		{"clickhouse", fmt.Errorf("read: %w", &clickhouse.Exception{Code: 159, Message: sentinel}),
+			[]string{"failure_class=unclassified", "error_type=*proto.Exception", "ch_code=159"}},
+		{"plain", errors.New("dial " + sentinel), []string{"failure_class=unclassified", "error_type=*errors.errorString"}},
+		{"cancelled", fmt.Errorf("%s: %w", sentinel, context.Canceled), []string{"failure_class=context_canceled"}},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			store := &fakeStore{claim: testMaterializeClaim(time.Second), requeueErr: fmt.Errorf("%w: "+sentinel, ErrUnavailable)}
+			var logs strings.Builder
+			handler, err := NewMaterializeHandler(store, classifyingExecutor{err: testCase.err},
+				slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if workErr := handler.Work(context.Background(), materializeExecution()); workErr == nil ||
+				!strings.Contains(workErr.Error(), string(jobruntime.CategoryRetryable)) {
+				t.Fatalf("Work = %v, want retryable", workErr)
+			}
+			if strings.Contains(logs.String(), sentinel) {
+				t.Fatalf("a log line carries raw error text:\n%s", logs.String())
+			}
+			for _, want := range testCase.wantAttr {
+				if !strings.Contains(logs.String(), want) {
+					t.Fatalf("log lacks %q:\n%s", want, logs.String())
+				}
+			}
+			// The failed requeue line (store error = ErrUnavailable + sentinel) too.
+			if !strings.Contains(logs.String(), "waits for lease expiry") || !strings.Contains(logs.String(), "error_class=dependency_unavailable") {
+				t.Fatalf("requeue-failure line missing or without a type:\n%s", logs.String())
+			}
+		})
+	}
+}
+
+// CHAOS-8782 F2: every release write uses a context DETACHED from the job
+// context (the job context is what a drain cancels) and bounded by a timeout.
+func TestReleaseWritesAreDetachedFromACancelledJobContext(t *testing.T) {
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	claim := *testMaterializeClaim(time.Second)
+	store := &fakeStore{claim: &claim}
+	if err := releaseFailed(store, cancelled, claim, "x"); err != nil {
+		t.Fatal(err)
+	}
+	if err := requeueClaim(store, cancelled, claim); err != nil {
+		t.Fatal(err)
+	}
+	if err := releaseAmbiguous(store, cancelled, claim, "x"); err != nil {
+		t.Fatal(err)
+	}
+	if len(store.releaseCtxErrs) != 3 {
+		t.Fatalf("release writes seen = %d, want 3", len(store.releaseCtxErrs))
+	}
+	for index, ctxErr := range store.releaseCtxErrs {
+		if ctxErr != nil || !store.releaseCtxDeadline[index] {
+			t.Fatalf("release write %d saw ctx err %v, deadline %v: it must be detached and bounded", index, ctxErr, store.releaseCtxDeadline[index])
+		}
+	}
+}
+
+// The literals operators and runbooks rely on are pinned: the budget, the class
+// and label texts, the ledger detail prefixes.
+func TestOperatorFacingLiteralsArePinned(t *testing.T) {
+	if retryBudgetClaims != 9 {
+		t.Fatalf("retryBudgetClaims = %d: the runbook and the PR name 9 claims (three River cycles)", retryBudgetClaims)
+	}
+	for got, want := range map[string]string{
+		FailureClassRetryBudgetExhausted: "retry_budget_exhausted",
+		ClassLLMDeterministic:            "llm_deterministic",
+		ClassScopeInvalid:                "scope_invalid",
+		ClassWindowInvalid:               "window_invalid",
+		ClassLLMBatchUnsupport:           "llm_batch_mode_unsupported",
+		ClassLLMProviderInvalid:          "llm_provider_invalid",
+		ClassOrgRequired:                 "org_required",
+		ClassEvidenceEncode:              "evidence_encode",
+		ClassKindMismatch:                "executor_kind_mismatch",
+	} {
+		if got != want {
+			t.Fatalf("class label %q, want %q", got, want)
+		}
+	}
+	for err, want := range map[error]string{
+		context.Canceled:         "context_canceled",
+		context.DeadlineExceeded: "deadline_exceeded",
+		ErrUnavailable:           "dependency_unavailable",
+		errors.New("x"):          "unclassified",
+	} {
+		if got := retryableClass(err); got != want {
+			t.Fatalf("retryableClass(%v) = %q, want %q", err, got, want)
+		}
+	}
+}
+
+type countingExecutor struct {
+	err   error
+	calls int
+}
+
+func (executor *countingExecutor) Execute(context.Context, Claim) ([]byte, error) {
+	executor.calls++
+	return nil, executor.err
 }

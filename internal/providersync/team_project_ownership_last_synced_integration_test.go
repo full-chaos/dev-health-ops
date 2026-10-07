@@ -22,7 +22,7 @@ func TestTeamProjectOwnershipWritersStampIngestTimeAgainstMigratedSchema(t *test
 	writers := map[string]func() error{
 		"jira": func() error {
 			return JiraTeamCatalogClickHouseEffects{Conn: conn, Lease: lease}.writeOwnership(ctx,
-				[]jiraTeamCatalogOwnershipRow{normalizeJiraOwnershipRow("org-stamp", "PLAT", projectKey, provider)})
+				[]jiraTeamCatalogOwnershipRow{normalizeJiraOwnershipRow("org-stamp", "PLAT", "10001", projectKey, provider)})
 		},
 		"gitlab": func() error {
 			return GitLabTeamCatalogClickHouseEffects{Conn: conn, Lease: lease}.writeOwnership(ctx,
@@ -74,7 +74,7 @@ func TestTeamProjectOwnershipLastSyncedIsTakenAfterADelayedLeaseCheck(t *testing
 	writers := map[string]func() error{
 		"jira": func() error {
 			return JiraTeamCatalogClickHouseEffects{Conn: conn, Lease: lease}.writeOwnership(ctx,
-				[]jiraTeamCatalogOwnershipRow{normalizeJiraOwnershipRow("org-delay", "PLAT", projectKey, provider)})
+				[]jiraTeamCatalogOwnershipRow{normalizeJiraOwnershipRow("org-delay", "PLAT", "10001", projectKey, provider)})
 		},
 		"gitlab": func() error {
 			return GitLabTeamCatalogClickHouseEffects{Conn: conn, Lease: lease}.writeOwnership(ctx,

@@ -458,7 +458,7 @@ WHERE org_id = $1 AND sync_run_unit_id = $2 AND generation = $3`,
 		}
 		return
 	}
-	if execErr != nil || executed.Effects.Written != 2 || snapshotRows != 1 || snapshotDigest == reference.ContentDigest ||
+	if execErr != nil || executed.Effects.Written != 3 || snapshotRows != 1 || snapshotDigest == reference.ContentDigest ||
 		pullRequestRows(7) != 0 || pullRequestRows(42) != 1 {
 		t.Fatalf("%s: err=%v effects=%+v snapshot_rows=%d replaced=%v pr7=%d pr42=%d, want the superseded document discarded, the route re-collected and nothing of pull request 7 left behind",
 			cell, execErr, executed.Effects, snapshotRows, snapshotDigest != reference.ContentDigest, pullRequestRows(7), pullRequestRows(42))

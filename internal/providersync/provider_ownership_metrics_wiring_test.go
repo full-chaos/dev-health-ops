@@ -2,162 +2,68 @@ package providersync
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
-	"github.com/full-chaos/dev-health-ops/internal/teamattribution"
-	"github.com/google/uuid"
 )
 
-// TestGitHubWorkItemDeriverCarriesRealRejectionsIntoRouteEffects is CHAOS-4320's
-// mutation-resistant pin for codex round 6's first P3 (test-strength, not a
-// live defect): every rejection test in this package attaches
-// EffectBatch.MembershipRejections BY HAND, never through the real
-// deriver-to-route-effects pipeline -- so independently setting
-// effect.MembershipRejections = nil at each production attach point, or
-// dropping buildGitHubWorkItemTeamAttributions's second return value,
-// passed the full committed suite. This test goes through the REAL
-// GitHubWorkItemDeriver.Derive (real resolver, real facts producing a real
-// gate rejection) and the REAL buildGitHubWorkItemsRouteEffects, and asserts
-// the resulting work_item_team_attributions EffectBatch carries the
-// rejection that was actually computed.
-func TestGitHubWorkItemDeriverCarriesRealRejectionsIntoRouteEffects(t *testing.T) {
-	claim := githubWorkItemOracleClaim()
-	since := time.Date(2026, 8, 4, 0, 0, 0, 0, time.UTC)
-	before := time.Date(2026, 8, 5, 0, 0, 0, 0, time.UTC)
-	claim.SinceAt, claim.BeforeAt = &since, &before
-	repoID := "c7198fbc-1945-3717-05d8-eb78866b4e79"
-	source := &fakeGitHubWorkItemDerivationContextSource{
-		facts: teamattribution.GithubWorkItemDerivationFacts{
-			Repos: []teamattribution.GithubWorkItemDerivationRepoFact{{
-				Provider: "github", TeamID: "owner", TeamName: "Owner",
-				RepoID: &repoID, RepoFullName: "acme/api", IsPrimary: 1,
-				Specificity: 70, UpdatedAt: since,
-			}},
-			Members: []teamattribution.GithubWorkItemDerivationMemberFact{{
-				Provider: "github", TeamID: "nonowner", TeamName: "Nonowner",
-				MemberID: "alice", RawProviderUserID: stringPointer("alice"),
-				IdentityFacets: []string{"alice"}, IsPrimary: 1, Specificity: 60,
-				UpdatedAt: since,
-			}},
-		},
+// The work-items sync sinks of GitLab, Jira and Linear refuse a
+// work_item_team_attributions effect: the daily job is the one writer of that
+// table. Each case constructs the REAL family/composite sink via its REAL
+// constructor with a real providerfoundation.Metrics and hands it an effect
+// that carries a granted candidate and a MembershipRejections entry. The
+// refusal happens before any store call, so no row is appended and no
+// ownership_checked sample is rendered for a write that did not happen.
+func TestWorkItemSyncSinksRefuseTheTeamAttributionsEffect(t *testing.T) {
+	type sinkUnderTest interface {
+		EffectSink
+		EffectReadback
 	}
-	deriver := GitHubWorkItemDeriver{
-		Source: source, engine: githubWorkItemStubEngine{},
-		observations: newWorkItemDerivationObservations(),
+	for _, testCase := range []struct {
+		provider string
+		build    func(*ownershipReasonWriteConn, *providerfoundation.Metrics) (sinkUnderTest, error)
+	}{
+		{"gitlab", func(conn *ownershipReasonWriteConn, metrics *providerfoundation.Metrics) (sinkUnderTest, error) {
+			return NewGitLabWorkItemFamilyClickHouseEffects(conn, providerOwnershipMetricsLease(), metrics)
+		}},
+		{"jira", func(conn *ownershipReasonWriteConn, metrics *providerfoundation.Metrics) (sinkUnderTest, error) {
+			return NewJiraWorkItemCompositeClickHouseEffects(conn, providerOwnershipMetricsLease(), metrics)
+		}},
+		{"linear", func(conn *ownershipReasonWriteConn, metrics *providerfoundation.Metrics) (sinkUnderTest, error) {
+			return NewLinearWorkItemFamilyClickHouseEffects(conn, providerOwnershipMetricsLease(), metrics)
+		}},
+	} {
+		t.Run(testCase.provider, func(t *testing.T) {
+			claim := nativeTestClaim(testCase.provider, "work-items")
+			metrics := providerfoundation.NewMetrics()
+			conn := &ownershipReasonWriteConn{}
+			sink, err := testCase.build(conn, metrics)
+			if err != nil {
+				t.Fatal(err)
+			}
+			effect := providerOwnershipMetricsEffect(t, claim)
+			if err := sink.WriteEffect(context.Background(), claim, effect); !errors.Is(err, ErrInvalidConfiguration) {
+				t.Fatalf("write error=%v want ErrInvalidConfiguration", err)
+			}
+			inspection, err := sink.InspectEffect(context.Background(), claim, effect)
+			if !errors.Is(err, ErrInvalidConfiguration) || inspection != EffectConflict {
+				t.Fatalf("readback=%s error=%v want a refused conflict", inspection, err)
+			}
+			if conn.batch != nil {
+				t.Fatalf("the refused effect reached the store: appended=%v", conn.batch.Appended)
+			}
+			var output strings.Builder
+			if err := metrics.WritePrometheus(&output); err != nil {
+				t.Fatal(err)
+			}
+			if strings.Contains(output.String(), "dev_health_team_attribution_ownership_checked_total{") {
+				t.Fatalf("a refused write rendered an ownership sample:\n%s", output.String())
+			}
+		})
 	}
-	repoUUID := uuid.MustParse(repoID)
-	rows := githubWorkItemRows{WorkItems: []githubWorkItemRow{{
-		WorkItemID: "acme/api#1", Provider: "github", Title: "t", Type: "issue",
-		Status: "todo", ProjectID: stringPointer("acme/api"), RepoID: &repoUUID,
-		Assignees: []string{"alice"},
-		CreatedAt: since, UpdatedAt: since, OrgID: claim.OrgID,
-	}}}
-	derived, rejections, err := deriver.Derive(context.Background(), claim, rows, since.Add(time.Hour))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(rejections) != 1 {
-		t.Fatalf("rejections = %+v, want exactly 1 (the non-owning assignee)", rejections)
-	}
-	effects, err := buildGitHubWorkItemsRouteEffects(rows, derived, rejections)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var teamAttributionEffect *EffectBatch
-	for index := range effects {
-		if effects[index].Destination == githubTeamAttributionsDestination {
-			teamAttributionEffect = &effects[index]
-		}
-	}
-	if teamAttributionEffect == nil {
-		t.Fatal("no work_item_team_attributions effect in the built route effects")
-	}
-	if len(teamAttributionEffect.MembershipRejections) != 1 {
-		t.Fatalf(
-			"work_item_team_attributions effect.MembershipRejections = %d entries, want 1 -- "+
-				"the real rejection computed by Derive did not reach the built route effect",
-			len(teamAttributionEffect.MembershipRejections),
-		)
-	}
-	decoded, err := decodeGitHubWorkItemTeamAttributionRejections(teamAttributionEffect.MembershipRejections)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if decoded[0].Reason != "repo_not_owned" {
-		t.Fatalf("decoded rejection reason = %q, want repo_not_owned", decoded[0].Reason)
-	}
-}
-
-// TestGitLabWorkItemFamilyConstructorEmitsOwnershipMetrics,
-// TestJiraWorkItemCompositeConstructorEmitsOwnershipMetrics, and
-// TestLinearWorkItemFamilyConstructorEmitsOwnershipMetrics are CHAOS-4320's
-// red-first pins for codex round 6's second P1 (NOT CLEAN, executed repro):
-// the real worker constructors (internal/workerservice/provider_sync.go)
-// called these three providers' family/composite constructors WITHOUT a
-// Metrics argument at all -- the rejection/ownership plumbing this ticket
-// adds was otherwise correct for all four providers, but
-// RecordTeamAttributionOwnershipChecked's nil-receiver-safe no-op silently
-// swallowed every sample for GitLab, Jira, and Linear regardless: a write
-// could succeed and still produce zero ownership_checked telemetry. Round 4
-// treated this as an accepted scope limitation ("nil Metrics means this new
-// counter is not a provider-wide instrument"); round 6 held the PR body's
-// own "all four providers... to the SAME writer" claim to account and found
-// it false for three of them.
-//
-// Each test constructs the REAL family/composite sink via its REAL
-// constructor (the only way WriteEffect's completeness check passes) with a
-// real providerfoundation.Metrics, writes an effect carrying both a granted
-// candidate and a MembershipRejections entry through the real dispatch
-// path, and asserts both counter outcomes rendered.
-func TestGitLabWorkItemFamilyConstructorEmitsOwnershipMetrics(t *testing.T) {
-	claim := nativeTestClaim("gitlab", "work-items")
-	metrics := providerfoundation.NewMetrics()
-	sink, err := NewGitLabWorkItemFamilyClickHouseEffects(
-		&ownershipReasonWriteConn{}, providerOwnershipMetricsLease(), metrics,
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	effect := providerOwnershipMetricsEffect(t, claim)
-	if err := sink.WriteEffect(context.Background(), claim, effect); err != nil {
-		t.Fatal(err)
-	}
-	assertProviderOwnershipMetricsRendered(t, metrics, "gitlab")
-}
-
-func TestJiraWorkItemCompositeConstructorEmitsOwnershipMetrics(t *testing.T) {
-	claim := nativeTestClaim("jira", "work-items")
-	metrics := providerfoundation.NewMetrics()
-	sink, err := NewJiraWorkItemCompositeClickHouseEffects(
-		&ownershipReasonWriteConn{}, providerOwnershipMetricsLease(), metrics,
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	effect := providerOwnershipMetricsEffect(t, claim)
-	if err := sink.WriteEffect(context.Background(), claim, effect); err != nil {
-		t.Fatal(err)
-	}
-	assertProviderOwnershipMetricsRendered(t, metrics, "jira")
-}
-
-func TestLinearWorkItemFamilyConstructorEmitsOwnershipMetrics(t *testing.T) {
-	claim := nativeTestClaim("linear", "work-items")
-	metrics := providerfoundation.NewMetrics()
-	sink, err := NewLinearWorkItemFamilyClickHouseEffects(
-		&ownershipReasonWriteConn{}, providerOwnershipMetricsLease(), metrics,
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	effect := providerOwnershipMetricsEffect(t, claim)
-	if err := sink.WriteEffect(context.Background(), claim, effect); err != nil {
-		t.Fatal(err)
-	}
-	assertProviderOwnershipMetricsRendered(t, metrics, "linear")
 }
 
 func providerOwnershipMetricsLease() providerfoundation.LeaseGuard {
@@ -193,17 +99,95 @@ func providerOwnershipMetricsEffect(t *testing.T, claim Claim) EffectBatch {
 	return effect
 }
 
-func assertProviderOwnershipMetricsRendered(t *testing.T, metrics *providerfoundation.Metrics, provider string) {
-	t.Helper()
-	var output strings.Builder
-	if err := metrics.WritePrometheus(&output); err != nil {
+// The nine tables computed from stored work-item rows have one writer, the
+// daily job. The work-items sync sink of each of the four providers refuses a
+// write and a readback for every one of them, and nothing reaches the store.
+// The effect is the evaluated-empty one, which an adapter that was still
+// dispatched would accept without a row to decode.
+func TestWorkItemSyncSinksRefuseEveryDailyJobTable(t *testing.T) {
+	dailyJobTables := []string{
+		"estimate_coverage_metrics_daily", "investment_classifications_daily", "investment_metrics_daily",
+		"issue_type_metrics_daily", "work_item_cycle_times", "work_item_metrics_daily",
+		"work_item_state_durations_daily", "work_item_team_attributions", "work_item_user_metrics_daily",
+	}
+	type sinkUnderTest interface {
+		EffectSink
+		EffectReadback
+	}
+	for _, testCase := range []struct {
+		provider string
+		build    func(*ownershipReasonWriteConn) (sinkUnderTest, error)
+	}{
+		{"github", func(conn *ownershipReasonWriteConn) (sinkUnderTest, error) {
+			return NewGitHubWorkItemClickHouseEffects(conn, providerOwnershipMetricsLease(), nil)
+		}},
+		{"gitlab", func(conn *ownershipReasonWriteConn) (sinkUnderTest, error) {
+			return NewGitLabWorkItemFamilyClickHouseEffects(conn, providerOwnershipMetricsLease(), nil)
+		}},
+		{"jira", func(conn *ownershipReasonWriteConn) (sinkUnderTest, error) {
+			return NewJiraWorkItemCompositeClickHouseEffects(conn, providerOwnershipMetricsLease(), nil)
+		}},
+		{"linear", func(conn *ownershipReasonWriteConn) (sinkUnderTest, error) {
+			return NewLinearWorkItemFamilyClickHouseEffects(conn, providerOwnershipMetricsLease(), nil)
+		}},
+	} {
+		for _, table := range dailyJobTables {
+			t.Run(testCase.provider+"/"+table, func(t *testing.T) {
+				claim := nativeTestClaim(testCase.provider, "work-items")
+				conn := &ownershipReasonWriteConn{}
+				sink, err := testCase.build(conn)
+				if err != nil {
+					t.Fatal(err)
+				}
+				effect, err := BuildEffectBatch(table, EffectReadbackRequired, []json.RawMessage{})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := sink.WriteEffect(context.Background(), claim, effect); !errors.Is(err, ErrInvalidConfiguration) {
+					t.Fatalf("write error=%v want ErrInvalidConfiguration", err)
+				}
+				inspection, err := sink.InspectEffect(context.Background(), claim, effect)
+				if !errors.Is(err, ErrInvalidConfiguration) || inspection != EffectConflict {
+					t.Fatalf("readback=%s error=%v want a refused conflict", inspection, err)
+				}
+				if conn.batch != nil {
+					t.Fatalf("the refused effect reached the store: appended=%v", conn.batch.Appended)
+				}
+			})
+		}
+	}
+}
+
+// The jira and linear sync sinks hold a second sink behind their destination
+// list, with a dispatch of its own. That dispatch maps ai_attribution only:
+// none of the nine tables of the daily job has an adapter there, so the list
+// is not the one guard of the refusal.
+func TestJiraAndLinearDerivedSinksDispatchOnlyAIAttribution(t *testing.T) {
+	dailyJobTables := []string{
+		"estimate_coverage_metrics_daily", "investment_classifications_daily", "investment_metrics_daily",
+		"issue_type_metrics_daily", "work_item_cycle_times", "work_item_metrics_daily",
+		"work_item_state_durations_daily", "work_item_team_attributions", "work_item_user_metrics_daily",
+	}
+	jira, err := NewJiraWorkItemDerivedClickHouseEffects(&ownershipReasonWriteConn{}, providerOwnershipMetricsLease(), nil)
+	if err != nil {
 		t.Fatal(err)
 	}
-	rendered := output.String()
-	if !strings.Contains(rendered, `dev_health_team_attribution_ownership_checked_total{reason="ownership_unknown"} 1`) {
-		t.Fatalf("%s: granted candidate produced no ownership_unknown sample -- Metrics is likely nil in the real constructor:\n%s", provider, rendered)
+	linear, err := NewLinearWorkItemDerivedClickHouseEffects(&ownershipReasonWriteConn{}, providerOwnershipMetricsLease(), nil)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if !strings.Contains(rendered, `dev_health_team_attribution_ownership_checked_total{reason="repo_not_owned"} 1`) {
-		t.Fatalf("%s: rejection produced no repo_not_owned sample -- Metrics is likely nil in the real constructor:\n%s", provider, rendered)
+	if adapter, known := jira.adapterForDestination("ai_attribution"); !known || adapter == nil {
+		t.Fatal("jira: ai_attribution is not dispatched")
+	}
+	if adapter, known := linear.adapterForDestination("ai_attribution"); !known || adapter == nil {
+		t.Fatal("linear: ai_attribution is not dispatched")
+	}
+	for _, table := range dailyJobTables {
+		if _, known := jira.adapterForDestination(table); known {
+			t.Errorf("jira: the sync sink dispatches the daily-job table %q", table)
+		}
+		if _, known := linear.adapterForDestination(table); known {
+			t.Errorf("linear: the sync sink dispatches the daily-job table %q", table)
+		}
 	}
 }

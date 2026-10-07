@@ -4,6 +4,7 @@ import (
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 
 	"atlassian/atlassian"
+	"atlassian/atlassian/graph"
 
 	"bytes"
 	"context"
@@ -173,7 +174,7 @@ func (c echoingClient) SearchTeams(context.Context, string, string, string, int)
 func (echoingClient) IterTeamUsers(context.Context, string, int) ([]atlassian.TeamworkUserRelation, error) {
 	return nil, nil
 }
-func (echoingClient) IterTeamActiveProjects(context.Context, string, int) ([]atlassian.TeamworkProject, error) {
+func (echoingClient) IterTeamConnectedContainers(context.Context, string, int) ([]graph.TeamConnectedContainer, error) {
 	return nil, nil
 }
 

@@ -169,6 +169,9 @@ The system supports multiple LLM backends. Set `LLM_PROVIDER` or let auto-detect
 | **LM Studio** | `LLM_PROVIDER=lmstudio` | `LMSTUDIO_BASE_URL` | `local-model` |
 | **Qwen Local** | `LLM_PROVIDER=qwen-local` | `OLLAMA_BASE_URL` | `qwen2.5:7b` |
 | **Mock** | `LLM_PROVIDER=mock` | (none) | deterministic mock |
+| **TypeSafe (decision backend)** | not selectable: no `LLM_PROVIDER` value and no auto-detection; built only by `NewTypeSafeClientFromEnv` | `TYPESAFE_API_KEY` (+ `TYPESAFE_BASE_URL`, fixed to `https://api.typesafe.ai`; `TYPESAFE_MODEL`) | `jev-1.13.0` |
+
+> **TypeSafe is not a completion provider.** `POST /v1/systemone` takes `{model, state, questions}` and returns typed answers (level probabilities, usage), not text, so it has no `CompletionRequest`, no JSON schema and no repair call. Kind `typesafe` is in the closed set of names, is **not** in the set of kinds the served path can construct, and is **not** in auto-detection (a present `TYPESAFE_API_KEY` never makes it the served provider). The generic `LLM_*` overrides do not reach it. Transport rules shared with the OpenAI client: no redirects, no ambient proxy, 60 s timeout, one retry on 429, 529, 5xx and timeout with the shared backoff (a `Retry-After` is honoured up to 60 s), 401/402/403 are not retried and stop the caller, no request or response text in any log or error text. Model must be a pinned `jev-X.Y.Z` id.
 
 ### Auto-Detection Order
 

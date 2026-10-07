@@ -128,6 +128,23 @@ OLLAMA_API_KEY=optional-cloud-key
 supported. Omit the key for an unauthenticated local host. These environment
 bundles are platform configuration, never organization BYO settings.
 
+### TypeSafe decision backend
+
+The `typesafe` kind is a decision backend (TypeSafe System One, model family
+`jev`), not a text completer. It is never selected by `LLM_PROVIDER`, never by
+auto-detection, and never serves a user-visible categorization. Only code that
+builds the TypeSafe client reads these names:
+
+| Variable | Meaning | Default |
+| --- | --- | --- |
+| `TYPESAFE_API_KEY` | Bearer token. Secret; read through the named-secret mechanism, so it is redacted in logs and errors. | none (client is not built) |
+| `TYPESAFE_BASE_URL` | Must be `https://api.typesafe.ai`. Any other value is refused, so the key cannot be sent to another host. | `https://api.typesafe.ai` |
+| `TYPESAFE_MODEL` | A versioned id such as `jev-1.13.0`. The moving aliases `jev-latest` and `jev-preview` are refused. | `jev-1.13.0` |
+
+The generic `LLM_API_KEY`, `LLM_BASE_URL` and `LLM_MODEL` overrides do not apply
+to this client. Give `TYPESAFE_API_KEY` only to the worker group that runs
+`investment.materialize`.
+
 Workspace-to-platform fallback defaults to platform after a configured org BYO
 is evaluated; an explicit organization fail_closed choice opts out of that
 fallback. Source-tagged accounting keeps platform-managed usage and BYO usage

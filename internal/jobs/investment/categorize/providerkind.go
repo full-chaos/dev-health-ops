@@ -25,6 +25,12 @@ const (
 	ProviderKindOllama    ProviderKind = "ollama"
 	ProviderKindMock      ProviderKind = "mock"
 	ProviderKindNone      ProviderKind = "none"
+	// ProviderKindTypeSafe names the TypeSafe System One (Jev) decision
+	// backend (typesafeclient.go). It is in the closed set of names but NOT
+	// in goImplementedProviderKinds and NOT in auto-detection: it returns
+	// typed answers, not completion text, so it is no Provider and can never
+	// be the served provider. It is built by NewTypeSafeClientFromEnv.
+	ProviderKindTypeSafe ProviderKind = "typesafe"
 
 	// There is deliberately no ProviderKindLMStudio: chris's ruling
 	// (CHAOS-4978, 2026-09-03 13:14) dropped the native LM Studio provider
@@ -415,6 +421,9 @@ func NewProviderFromEnvWithModel(kind ProviderKind, model string) (Provider, err
 	case ProviderKindAnthropic, ProviderKindGemini, ProviderKindQwen:
 		return unimplementedProvider{kind: kind}, nil
 
+	case ProviderKindTypeSafe:
+		return nil, errTypeSafeIsNotAProvider
+
 	default:
 		return nil, fmt.Errorf("unknown LLM provider kind %q", kind)
 	}
@@ -499,6 +508,9 @@ func NewProviderFromCredentials(kind ProviderKind, apiKey, baseURL, model string
 	// BYO LLM stubs: same narrowing as NewProviderFromEnv.
 	case ProviderKindAnthropic, ProviderKindGemini, ProviderKindQwen:
 		return unimplementedProvider{kind: kind}, nil
+
+	case ProviderKindTypeSafe:
+		return nil, errTypeSafeIsNotAProvider
 
 	default:
 		return nil, fmt.Errorf("unknown LLM provider kind %q", kind)

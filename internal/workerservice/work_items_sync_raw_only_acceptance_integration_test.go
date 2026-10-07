@@ -18,10 +18,13 @@ package workerservice
 // registered families (the rig of the touched-day tests).
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sort"
 	"strings"
 	"testing"
@@ -30,7 +33,9 @@ import (
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/google/uuid"
 
+	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/daily"
+	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	"github.com/full-chaos/dev-health-ops/internal/providersync"
 	"github.com/full-chaos/dev-health-ops/internal/syncdispatchruntime"
@@ -557,5 +562,136 @@ FROM work_item_team_attributions WHERE org_id = ? AND work_item_id = ?`, orgID, 
 	rig.assertNoFamilyFailed(t)
 	if len(failures) > 0 {
 		t.Fatalf("after a first sync and the runs its fan-out started:\n  %s", strings.Join(failures, "\n  "))
+	}
+}
+
+// A worker whose issue-type and investment engines do not load (the two config
+// artifacts are not readable) serves neither of the two families. The sync
+// unit used to write their three tables; it writes none now. So for a worker
+// in that state the three tables get no row at all, from the sync or from the
+// daily job: a gap that is loud, not a number from a part of the items.
+//
+// For github, gitlab, jira and linear, after a unit and the daily runs its
+// fan-out started: the three tables hold no row, the other daily work-item
+// tables hold the whole day, and no served family failed. The refusal is one
+// ERROR line for each family and one count of the refused outcome for each
+// family.
+func TestARefusedEngineFamilyLeavesItsTablesEmptyAfterASyncAndIsLoggedAndCounted(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+	defer cancel()
+	t.Chdir("../..")
+	// The same call buildDailyWorker makes, on a configuration with no engine
+	// paths.
+	engines := dailyWorkItemEnginesFrom(config.Config{})
+	if engines.err == nil {
+		t.Fatal("the engines loaded from a configuration with no engine paths")
+	}
+	collector, err := jobruntime.NewMetricsCollector(jobruntime.MetricDimensions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var logOutput bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&logOutput, nil))
+	base, refusals := newNilPartitionRigWithEngines(t, ctx, engines, collector, logger)
+	if failFast := reportDailyFamilyRefusals(logger, refusals); len(failFast) != 0 {
+		t.Fatalf("refusals that fail the worker: %v, want none", failFast)
+	}
+	engineFamilies := []string{daily.WorkItemIssueTypeFamilyName, daily.WorkItemInvestmentFamilyName}
+	servedFamilies := []string{"work_item", "work_item_attribution", "work_item_estimate", "work_item_state"}
+	for _, family := range engineFamilies {
+		if _, registered := base.registers[family]; registered {
+			t.Fatalf("family %q is registered with no engine", family)
+		}
+	}
+	for _, family := range servedFamilies {
+		if _, registered := base.registers[family]; !registered {
+			t.Fatalf("family %q is not registered: a missing engine took it down", family)
+		}
+	}
+	rig := newTouchedRigOn(t, ctx, base)
+	service := rig.service(t, rig.touched, nil)
+
+	day := time.Date(2026, 8, 4, 0, 0, 0, 0, time.UTC)
+	nextDay := day.AddDate(0, 0, 1)
+	engineTables := []string{"issue_type_metrics_daily", "investment_classifications_daily", "investment_metrics_daily"}
+	var failures []string
+	for _, provider := range rawOnlyProviders {
+		orgID := uuid.NewString()
+		repo := uuid.New()
+		itemRepo := &repo
+		if provider == "jira" || provider == "linear" {
+			itemRepo = nil
+		} else {
+			insertTouchedRepo(t, ctx, rig.conn, orgID, repo, "acme/api", provider)
+		}
+		started, completed := day.Add(time.Hour), day.Add(9*time.Hour)
+		items := []rawOnlyItem{
+			{id: provider + ":A-1", repo: itemRepo, scope: "PLAT", created: day.AddDate(0, 0, -3), started: &started, completed: &completed},
+			{id: provider + ":A-2", repo: itemRepo, scope: "PLAT", created: day.AddDate(0, 0, -3), started: &started, completed: &completed},
+		}
+		claim := rawOnlyClaim(t, provider, orgID, uuid.NewString(), day, nextDay)
+		sink := rawOnlySink(t, rig.conn, provider)
+		writeRawOnlyUnit(ctx, t, sink, claim, items, nextDay.Add(2*time.Hour))
+		assertRawOnlySinkRefusesDerivedTables(ctx, t, sink, claim)
+		rig.fanoutAndRun(t, ctx, service, orgID, rig.seedRawOnlySyncRun(t, ctx, claim, nextDay.Add(119*time.Minute)))
+
+		counts := rawOnlyStoredVersions(ctx, t, rig.conn, orgID)
+		values := rawOnlyDayValues(ctx, t, rig.conn, orgID, provider, day)
+		t.Logf("%-6s engine tables: issue_type=%d investment_classifications=%d investment_metrics=%d; served: %s",
+			provider, counts["issue_type_metrics_daily"], counts["investment_classifications_daily"],
+			counts["investment_metrics_daily"], rawOnlyValuesLine(values))
+		for _, table := range engineTables {
+			if counts[table] != 0 {
+				failures = append(failures, fmt.Sprintf("%s: %s holds %d row(s) with its family refused", provider, table, counts[table]))
+			}
+		}
+		for _, table := range []string{
+			"work_item_metrics_daily", "work_item_user_metrics_daily",
+			"work_item_state_durations_daily", "work_item_cycle_times",
+		} {
+			if values[table] != 2 {
+				failures = append(failures, fmt.Sprintf("%s: %s = %d with the engine families refused, want the whole day (2)", provider, table, values[table]))
+			}
+		}
+	}
+	rig.assertNoFamilyFailed(t)
+
+	exposition := collector.PrometheusText()
+	refusedSample := func(family string, count int) string {
+		return fmt.Sprintf(`worker_daily_metrics_native_family_outcome_total{family=%q,outcome="refused"} %d`, family, count)
+	}
+	logged := map[string]int{}
+	scanner := bufio.NewScanner(&logOutput)
+	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	for scanner.Scan() {
+		var line struct {
+			Level  string `json:"level"`
+			Msg    string `json:"msg"`
+			Family string `json:"family"`
+			Error  string `json:"error"`
+			Remedy string `json:"remedy"`
+		}
+		if err := json.Unmarshal(scanner.Bytes(), &line); err != nil {
+			continue
+		}
+		if line.Msg == dailyFamilyScopedRefusalLogMessage && line.Level == "ERROR" && line.Error != "" && line.Remedy != "" {
+			logged[line.Family]++
+		}
+	}
+	for _, family := range engineFamilies {
+		if want := refusedSample(family, 1); !strings.Contains(exposition, want) {
+			failures = append(failures, fmt.Sprintf("family %q: want the sample %s; its samples:\n%s", family, want, familySamples(exposition, family)))
+		}
+		if logged[family] != 1 {
+			failures = append(failures, fmt.Sprintf("family %q: %d ERROR line(s) of the scoped refusal with the cause and the remedy, want 1", family, logged[family]))
+		}
+	}
+	for _, family := range servedFamilies {
+		if want := refusedSample(family, 0); !strings.Contains(exposition, want) {
+			failures = append(failures, fmt.Sprintf("served family %q: want the sample %s; its samples:\n%s", family, want, familySamples(exposition, family)))
+		}
+	}
+	if len(failures) > 0 {
+		t.Fatalf("a worker with the two engine families refused:\n  %s", strings.Join(failures, "\n  "))
 	}
 }

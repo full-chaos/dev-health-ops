@@ -75,7 +75,12 @@ type touchedRig struct {
 
 func newTouchedRig(t *testing.T, ctx context.Context) *touchedRig {
 	t.Helper()
-	rig := newNilPartitionRig(t, ctx)
+	return newTouchedRigOn(t, ctx, newNilPartitionRig(t, ctx))
+}
+
+// newTouchedRigOn adds the touched-day store and the post_sync route to a rig.
+func newTouchedRigOn(t *testing.T, ctx context.Context, rig *nilPartitionRig) *touchedRig {
+	t.Helper()
 	touched, err := syncdispatchruntime.NewClickHouseTouchedDaysStore(rig.conn)
 	if err != nil {
 		t.Fatal(err)

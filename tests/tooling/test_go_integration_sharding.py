@@ -405,7 +405,9 @@ def _check_shard_plan(
     assert {shard for target, shard in entries if target == "daily"} == set(
         range(1, _daily_shard_count() + 1)
     ), "the daily shards are not exactly 1..N"
-    assert len(entries) == provider_shards + _daily_shard_count() + len(packages_entries)
+    assert len(entries) == provider_shards + _daily_shard_count() + len(
+        packages_entries
+    )
     return assignments
 
 
@@ -552,9 +554,7 @@ def test_the_plan_checker_fails_each_planted_defect(
             by_shard.setdefault(int(row.group("shard")), {})[row.group("package")] = (
                 int(row.group("weight"))
             )
-    split_shards = {
-        s for s, rows in by_shard.items() if SPLIT_PACKAGES & set(rows)
-    }
+    split_shards = {s for s, rows in by_shard.items() if SPLIT_PACKAGES & set(rows)}
     shard_a, shard_b = [s for s in sorted(by_shard) if s not in split_shards][:2]
     lightest_name, lightest_weight = min(
         by_shard[shard_a].items(), key=lambda kv: kv[1]
@@ -734,7 +734,15 @@ def _daily_go_test_list() -> set[str]:
     env["GOWORK"] = "off"
     env["GOCACHE"] = str(TEST_GO_CACHE)
     result = subprocess.run(
-        ["go", "test", "-mod=readonly", "-tags=integration", "-list", ".*", f"./{DAILY_PACKAGE}"],
+        [
+            "go",
+            "test",
+            "-mod=readonly",
+            "-tags=integration",
+            "-list",
+            ".*",
+            f"./{DAILY_PACKAGE}",
+        ],
         cwd=ROOT,
         env=env,
         check=False,

@@ -199,8 +199,15 @@ func sweepReplacingMergeTreeTables(t *testing.T) []replacingMergeTreeTable {
 // the prior 116 plus exactly this name. A merge keeps the newest row of each
 // kind per key, and the reader takes maxIf(at, kind) per kind, so a merge
 // cannot change what a reader sees.
+// 117 -> 119: 109_work_unit_investment_shadow.sql adds
+// `work_unit_investment_shadow` (version computed_at), keyed on
+// (org_id, work_unit_id, categorization_input_hash, shadow_config), and
+// 110_llm_categorization_attempts.sql adds `llm_categorization_attempts`
+// (version computed_at), keyed on (org_id, run_id, work_unit_id, role,
+// config, kind, attempt) -- CHAOS-8868. Both are append-only: a reader takes argMax on
+// computed_at over the sorting key (the attempt table before it sums).
 func TestSweepReplacingMergeTreeTablesMatchesTheAuthoritativeCount(t *testing.T) {
-	const wantCount = 117
+	const wantCount = 119
 
 	tables := sweepReplacingMergeTreeTables(t)
 	if len(tables) != wantCount {

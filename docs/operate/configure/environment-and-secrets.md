@@ -152,8 +152,10 @@ How to give it to that group only:
   `INVESTMENT_SHADOW_*` switch, in `goWorkers.groups[].extraEnv` of the `heavy`
   group, with the key as a `secretKeyRef` to a separate Secret that holds only
   that key. Nothing is rendered when `extraEnv` is not set.
-- **Docker Compose:** the root `compose.yml` passes `TYPESAFE_*` and
-  `INVESTMENT_SHADOW_*` from the host environment to `go-worker-heavy` only.
+- **Docker Compose:** the root `compose.yml` and the bigboy worker overlay
+  (`ci/bigboy/compose.bigboy.workers.yml`) pass `TYPESAFE_*` and
+  `INVESTMENT_SHADOW_*` from the shell or `--env-file` of the compose command to
+  `go-worker-heavy` only. Do not put them in `ops/.env`: every worker reads it.
   Unset values are empty, which means off.
 
 Workspace-to-platform fallback defaults to platform after a configured org BYO

@@ -298,3 +298,39 @@ func TestTheBigboyHeavyWorkerKeepsTheBaseHeavyCommand(t *testing.T) {
 		}
 	}
 }
+
+// The TypeSafe key and the investment shadow switch are set on the heavy worker (the group that runs
+// investment.materialize) and on no other service, in the base file and in the bigboy overlay. Every worker
+// reads ops/.env, so the names must also stay out of the shared env files of the services.
+func TestTheShadowSwitchAndTheTypeSafeKeyReachOnlyTheHeavyWorker(t *testing.T) {
+	for _, path := range []string{filepath.Join(opsRoot(t), "compose.yml"), filepath.Join(toolsDir(t), "compose.bigboy.workers.yml")} {
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read %s: %v", path, err)
+		}
+		var doc struct {
+			Services map[string]struct {
+				Environment map[string]any `yaml:"environment"`
+			} `yaml:"services"`
+		}
+		if err := yaml.Unmarshal(raw, &doc); err != nil {
+			t.Fatalf("parse %s: %v", path, err)
+		}
+		heavy := false
+		for name, service := range doc.Services {
+			for key := range service.Environment {
+				if !strings.HasPrefix(key, "TYPESAFE_") && !strings.HasPrefix(key, "INVESTMENT_SHADOW_") {
+					continue
+				}
+				if name != "go-worker-heavy" {
+					t.Errorf("%s: service %s carries %s; only go-worker-heavy may", filepath.Base(path), name, key)
+				} else {
+					heavy = true
+				}
+			}
+		}
+		if !heavy {
+			t.Errorf("%s: go-worker-heavy carries no TYPESAFE_/INVESTMENT_SHADOW_ name; the derivation is empty", filepath.Base(path))
+		}
+	}
+}

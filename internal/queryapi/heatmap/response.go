@@ -36,9 +36,11 @@ type Legend struct {
 // (services/heatmap.py:287-300). created_at/first_review_at carry the
 // declared DateTime defect -- see package doc comment.
 type ReviewWaitEvidenceItem struct {
-	RepoID        string    `json:"repo_id"`
-	Number        uint32    `json:"number"`
-	Title         *string   `json:"title"`
+	RepoID string  `json:"repo_id"`
+	Number uint32  `json:"number"`
+	Title  *string `json:"title"`
+	// RepoName is the repository's stored name (repos.repo); null when empty, never the id.
+	RepoName      *string   `json:"repo_name"`
 	CreatedAt     time.Time `json:"created_at"`
 	FirstReviewAt time.Time `json:"first_review_at"`
 }

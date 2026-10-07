@@ -560,12 +560,13 @@ func TestJiraHeldArchivedOwnershipIsTheArchivedRowsThatAreOpen(t *testing.T) {
 	row := func(team, project, source string) jiraTeamCatalogOwnershipRow {
 		return jiraTeamCatalogOwnershipRow{TeamID: team, ProjectID: project, Source: source}
 	}
-	archived := []jiraTeamCatalogOwnershipRow{row("OLD", "20001", "native"), row("NEW", "20002", "native"), row("MOVED", "20003", "native")}
+	archived := []jiraTeamCatalogOwnershipRow{row("OLD", "20001", "native"), row("NEW", "20002", "native"), row("MOVED", "20003", "native"), row("LINK", "20005", "jira_legacy")}
 	open := []jiraTeamCatalogOwnershipRow{
 		row("OLD", "20001", "native"),
 		row("NEW", "20002", "jira_legacy"), // the same team and project under another source
 		row("OTHER", "20003", "native"),    // the same project under another team
 		row("MOVED", "20004", "native"),    // the same team with another project
+		row("LINK", "20005", "native"),     // open under the catalog's source, archived under another
 	}
 	held := jiraHeldArchivedOwnership(archived, open)
 	if len(held) != 1 || held[0].TeamID != "OLD" || held[0].ProjectID != "20001" {

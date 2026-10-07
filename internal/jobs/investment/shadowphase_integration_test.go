@@ -295,15 +295,30 @@ func TestTheShadowSkipExistingPredicateClauseByClause(t *testing.T) {
 		row("failed", "h", stamp, "request_failed", now),
 		row("evidence-none", "h", stamp, "evidence_none", now),
 		row("defect", "h", stamp, "adapter_defect", now),
+		// The NEWER row of two units whose state changed (the older rows follow).
+		row("ok-then-failed", "h", stamp, "request_failed", now),
+		row("failed-then-zero", "h", stamp, "zero_support", now),
+	}
+	// The two rows of one key must stay two rows for this test: a
+	// ReplacingMergeTree keeps only the newest row of a key inside one insert,
+	// and a merge does the same later. So merges are stopped and the older rows
+	// go in with their own insert; the count below proves both rows are there.
+	if err := h.conn.Exec(h.ctx, `SYSTEM STOP MERGES work_unit_investment_shadow`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := writer.WriteShadowInvestments(h.ctx, org, []chwrite.ShadowRecord{
 		// An older ok row under a newer failure: the latest state decides.
 		row("ok-then-failed", "h", stamp, "ok", now.Add(-time.Hour)),
-		row("ok-then-failed", "h", stamp, "request_failed", now),
 		// An older failure under a newer terminal row.
 		row("failed-then-zero", "h", stamp, "request_failed", now.Add(-time.Hour)),
-		row("failed-then-zero", "h", stamp, "zero_support", now),
+	}); err != nil {
+		t.Fatal(err)
 	}
 	if _, err := writer.WriteShadowInvestments(h.ctx, org, seed); err != nil {
 		t.Fatal(err)
+	}
+	if n := h.count(t, `SELECT count() FROM work_unit_investment_shadow WHERE org_id = ? AND work_unit_id IN ('ok-then-failed', 'failed-then-zero')`, org); n != 4 {
+		t.Fatalf("the two units with a changed state have %d rows, want 4: the latest-state clause would not be measured", n)
 	}
 	// The same key in another organization must not answer for this one.
 	if _, err := writer.WriteShadowInvestments(h.ctx, "another-org", []chwrite.ShadowRecord{row("other-org", "h", stamp, "ok", now)}); err != nil {

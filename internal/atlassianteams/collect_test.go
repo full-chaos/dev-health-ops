@@ -701,3 +701,27 @@ func TestIterTeamUsersTagsEveryRelationWithTheRequestedTeam(t *testing.T) {
 		}
 	}
 }
+
+// The project id of a team's project link is the last segment of a Jira
+// project ARI, and only that: every other value has no project identity.
+func TestJiraNativeProjectIDIsTheNumericLastSegmentOfAJiraProjectARI(t *testing.T) {
+	for _, tc := range []struct {
+		ari, want string
+		ok        bool
+	}{
+		{"ari:cloud:jira:site-1:project/10001", "10001", true},
+		{"  ari:cloud:jira::project/7  ", "7", true},
+		{"ari:cloud:townsquare:site-1:project/7", "", false}, // a project of another product
+		{"ari:cloud:jira:site-1:issue/10001", "", false},
+		{"ari:cloud:jira:site-1:project/", "", false},
+		{"ari:cloud:jira:site-1:project/PLAT", "", false},
+		{"ari:cloud:jira:site-1:project/10001/extra", "", false},
+		{"10001", "", false},
+		{"", "", false},
+	} {
+		got, ok := jiraNativeProjectID(tc.ari)
+		if got != tc.want || ok != tc.ok {
+			t.Errorf("jiraNativeProjectID(%q) = %q, %v; want %q, %v", tc.ari, got, ok, tc.want, tc.ok)
+		}
+	}
+}

@@ -797,6 +797,54 @@ VALUES ($1, $2, $3, $4::uuid, $5::uuid, $6, now() - $7::interval, $8::uuid, $9::
 	}
 }
 
+// The run a schedule resumes after is the newest scheduled run of ITS
+// configuration in ITS organization: a newer ended run of another
+// configuration, or a row written under another organization, is not it.
+func TestOpenScheduledRunsReadTakesTheLastRunEndFromItsOwnConfiguration(t *testing.T) {
+	ctx, pool, _ := startOpenRunGatePostgres(t)
+	hour := time.Now().UTC().Truncate(time.Hour)
+	configID, jobID := seedOpenRunCase(ctx, t, pool, 1, openRunCase{name: "own"}, hour.Add(-30*time.Minute))
+	otherConfigID, otherJobID := seedOpenRunCase(ctx, t, pool, 2, openRunCase{name: "other"}, hour.Add(-30*time.Minute))
+	integrationID, _ := pgseed.EnsureSyncIntegration(ctx, t, pool, openRunGateOrg, openRunGateID(7, 0), openRunGateID(8, 0))
+	seedEnded := func(number int, org, config, job string, scheduledFor, endedAt time.Time) {
+		t.Helper()
+		runID, jobRunID := openRunGateID(5, number), openRunGateID(6, number)
+		if _, err := pool.Exec(ctx, `
+INSERT INTO public.sync_runs (id, org_id, integration_id, triggered_by, mode, status, total_units, completed_units, failed_units, created_at, completed_at)
+VALUES ($1::uuid, $2, $3::uuid, 'schedule', 'incremental', 'success', 0, 0, 0, $4, $5)`,
+			runID, openRunGateOrg, integrationID, scheduledFor, endedAt); err != nil {
+			t.Fatal(err)
+		}
+		pgseed.JobRun(ctx, t, pool, jobRunID, job, 0, "")
+		if _, err := pool.Exec(ctx, `
+INSERT INTO public.scheduled_sync_occurrences
+	(occurrence_id, identity_version, org_id, sync_config_id, scheduled_job_id, scheduled_for, created_at, job_run_id, sync_run_id, reconcile_status)
+VALUES ($1, $2, $3, $4::uuid, $5::uuid, $6, $6, $7::uuid, $8::uuid, 'completed')`,
+			fmt.Sprintf("ended-%d", number), OccurrenceIdentityVersion, org, config, job, scheduledFor, jobRunID, runID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ownEnd := hour.Add(-4*time.Hour + 20*time.Minute)
+	seedEnded(1, openRunGateOrg, configID, jobID, hour.Add(-6*time.Hour), hour.Add(-6*time.Hour+10*time.Minute))
+	seedEnded(2, openRunGateOrg, configID, jobID, hour.Add(-5*time.Hour), ownEnd)
+	// Newer than both, and not this configuration's or not this organization's.
+	seedEnded(3, openRunGateOrg, otherConfigID, otherJobID, hour.Add(-3*time.Hour), hour.Add(-3*time.Hour+10*time.Minute))
+	seedEnded(4, "org-open-run-gate-foreign", configID, jobID, hour.Add(-2*time.Hour), hour.Add(-2*time.Hour+10*time.Minute))
+
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	open, err := readOpenScheduledRuns(ctx, tx, openRunGateOrg, configID)
+	_ = tx.Rollback(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if open.lastScheduledRunEndedAt == nil || !open.lastScheduledRunEndedAt.Equal(ownEnd) {
+		t.Fatalf("last scheduled run ended at %v, want this configuration's newest run end %s", open.lastScheduledRunEndedAt, ownEnd)
+	}
+}
+
 var openRunPlanExecutionTime = regexp.MustCompile(`Execution Time: ([0-9.]+) ms`)
 
 // The open run read runs once per due configuration per cron instant. This

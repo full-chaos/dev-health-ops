@@ -643,9 +643,9 @@ func TestLoopReportsSkippedOpenRunsAndRunsStartedPastTheBound(t *testing.T) {
 			var logs bytes.Buffer
 			registry := health.NewRegistry(time.Second)
 			result := HandoffResult{
-				Candidates:     4,
-				TimingEligible: 4,
-				HandedOff:      []Occurrence{{ID: "sha256:a"}, {ID: "sha256:b"}},
+				Candidates:     5,
+				TimingEligible: 5,
+				HandedOff:      []Occurrence{{ID: "sha256:a"}, {ID: "sha256:b"}, {ID: "sha256:c"}},
 				SkippedOpenRun: []OpenRunSkip{
 					{ConfigID: "config-1", OccurrenceID: "sha256:open-1", SyncRunID: "run-1", OpenSeconds: 4000, NextRunAt: at("2026-08-23T13:00:00Z")},
 					{ConfigID: "config-2", OccurrenceID: "sha256:open-2", OpenSeconds: 30, NextRunAt: at("2026-08-23T13:00:00Z")},
@@ -653,6 +653,7 @@ func TestLoopReportsSkippedOpenRunsAndRunsStartedPastTheBound(t *testing.T) {
 				OpenRunsPastBound: []OpenRunPastBound{
 					{ConfigID: "config-3", OccurrenceID: "sha256:old-3", SyncRunID: "run-3", Reason: OpenRunNoProgress, OpenSeconds: 9000, OpenRuns: 1},
 					{ConfigID: "config-4", OccurrenceID: "sha256:old-4", SyncRunID: "run-4", Reason: OpenRunAgeCap, OpenSeconds: 99000, OpenRuns: 3},
+					{ConfigID: "config-5", OccurrenceID: "sha256:old-5", SyncRunID: "run-5", Reason: OpenRunAgeCap, OpenSeconds: 190000, OpenRuns: 1},
 				},
 			}
 			loop, err := newLoop(
@@ -688,7 +689,7 @@ func TestLoopReportsSkippedOpenRunsAndRunsStartedPastTheBound(t *testing.T) {
 			for _, want := range []string{
 				"sync_scheduler_skipped_open_run_total 2",
 				"sync_scheduler_open_run_past_bound_no_progress_total 1",
-				"sync_scheduler_open_run_past_bound_age_cap_total 1",
+				"sync_scheduler_open_run_past_bound_age_cap_total 2",
 				"sync_scheduler_idle_due_windows_total 0",
 			} {
 				if !strings.Contains(metrics.String(), want+"\n") {
@@ -730,6 +731,7 @@ func TestLoopReportsSkippedOpenRunsAndRunsStartedPastTheBound(t *testing.T) {
 				"config-2": {Level: "WARN", Msg: skipMsg, Reason: "skipped_open_run", ConfigID: "config-2", OpenOccurrence: "sha256:open-2", OpenSeconds: 30, NextRunAt: "2026-08-23T13:00:00Z"},
 				"config-3": {Level: "ERROR", Msg: pastMsg, Reason: "no_progress", ConfigID: "config-3", OpenOccurrence: "sha256:old-3", OpenSyncRun: "run-3", OpenSeconds: 9000, OpenRunsPastBnd: 1},
 				"config-4": {Level: "ERROR", Msg: pastMsg, Reason: "age_cap", ConfigID: "config-4", OpenOccurrence: "sha256:old-4", OpenSyncRun: "run-4", OpenSeconds: 99000, OpenRunsPastBnd: 3},
+				"config-5": {Level: "ERROR", Msg: pastMsg, Reason: "age_cap", ConfigID: "config-5", OpenOccurrence: "sha256:old-5", OpenSyncRun: "run-5", OpenSeconds: 190000, OpenRunsPastBnd: 1},
 			}
 			if len(got) != len(want) {
 				t.Fatalf("reported %d configurations, want %d:\n%s", len(got), len(want), logs.String())

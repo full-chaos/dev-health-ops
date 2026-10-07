@@ -2,6 +2,7 @@ package syncdispatchruntime
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
@@ -359,7 +360,7 @@ func (drain *TouchedDaysDrain) mark(ctx context.Context, pass *touchedDrainPass)
 		drain.logger.Error(ctx, synclog.MsgTouchedDaysDrainFailed,
 			synclog.Text(synclog.KeyPhase, synclog.ParseLabel("mark")),
 			synclog.Org(synclog.ParseID(pass.organizationID)),
-			synclog.Text(synclog.KeyDrainPass, synclog.ParseLabel(pass.passID)),
+			drainPassAttr(pass.passID),
 		)
 		drain.observe(jobruntime.TouchedDaysDrainMarkFailed, 1)
 	}
@@ -368,7 +369,7 @@ func (drain *TouchedDaysDrain) mark(ctx context.Context, pass *touchedDrainPass)
 // report logs and counts one pass that read the pending days.
 func (drain *TouchedDaysDrain) report(ctx context.Context, pass *touchedDrainPass) {
 	org := synclog.Org(synclog.ParseID(pass.organizationID))
-	passAttr := synclog.Text(synclog.KeyDrainPass, synclog.ParseLabel(pass.passID))
+	passAttr := drainPassAttr(pass.passID)
 	split := 0
 	for _, start := range pass.started {
 		if !start.split {
@@ -460,13 +461,20 @@ func (drain *TouchedDaysDrain) report(ctx context.Context, pass *touchedDrainPas
 	drain.observeAge(pass.organizationID, age)
 }
 
+// drainPassAttr is the pass of a line: the trigger letter and the id of the run
+// that triggered it. A label of a log line has no "-", so the id is written
+// with "_" in its place; without that every line would say "invalid".
+func drainPassAttr(passID string) synclog.Attr {
+	return synclog.Text(synclog.KeyDrainPass, synclog.ParseLabel(strings.ReplaceAll(passID, "-", "_")))
+}
+
 // fail logs and counts one pass that failed before its runs were committed.
 // phase is a fixed word of this file, never an error text.
 func (drain *TouchedDaysDrain) fail(ctx context.Context, pass *touchedDrainPass, phase string) {
 	drain.logger.Error(ctx, synclog.MsgTouchedDaysDrainFailed,
 		synclog.Text(synclog.KeyPhase, synclog.ParseLabel(phase)),
 		synclog.Org(synclog.ParseID(pass.organizationID)),
-		synclog.Text(synclog.KeyDrainPass, synclog.ParseLabel(pass.passID)),
+		drainPassAttr(pass.passID),
 	)
 	drain.observe(jobruntime.TouchedDaysDrainPassFailed, 1)
 }

@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -108,9 +109,16 @@ func TestTouchedDaysDrainReturnsTheKeysOfEveryRunWithoutAResult(t *testing.T) {
 		}
 		drain := rig.drain(t, nil, nil)
 
-		drain.DrainTouchedDays(ctx, orgID, pass("e"))
+		passID := pass("e")
+		drain.DrainTouchedDays(ctx, orgID, passID)
 		if got := rig.openDays(t, ctx, orgID); !reflect.DeepEqual(got, []string{dayKey}) {
 			t.Fatalf("the pass after the failed run started %v, want a run of %s for the keys of the failed run", got, dayKey)
+		}
+		// The line of the pass names its trigger: the id of the run that
+		// ended, readable by a search of the logs.
+		wantPass := `"drain_pass":"` + strings.ReplaceAll(passID, "-", "_") + `"`
+		if got := rig.logLines("touched_days_drain.pass"); len(got) != 1 || !strings.Contains(got[0], wantPass) {
+			t.Fatalf("pass lines = %v, want one line with %s", got, wantPass)
 		}
 		if got := rig.observer.count(jobruntime.TouchedDaysDrainDaysReturned); got != 1 {
 			t.Fatalf("days_returned_to_pending = %d, want 1", got)

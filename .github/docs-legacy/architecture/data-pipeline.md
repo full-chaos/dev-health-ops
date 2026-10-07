@@ -583,7 +583,9 @@ computed twice, never lost.
 (at most 15 days) and 31 days; the drain starts the other 320 in 11 passes.
 
 **Telemetry.** Log line `touched_days_drain.pass` for each pass that found a
-pending day (`outcome`, `drain_days_started`, `drain_days_pending_left`,
+pending day (`drain_pass` = the trigger letter, `n` for the nightly dispatch or
+`e` for the end of a run, and the id of that run with `_` for `-`;
+`outcome`, `drain_days_started`, `drain_days_pending_left`,
 `drain_days_split`, `drain_days_already_started`,
 `drain_days_returned_to_pending`, `drain_days_skipped`,
 `drain_runs_in_flight`, `drain_oldest_pending_day`,

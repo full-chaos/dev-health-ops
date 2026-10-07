@@ -37,6 +37,10 @@ For each supported feature, generate or verify:
 
 When disabled, the system blocks new canonical incident webhook enqueue, processing, and writes. Status, inspection, disconnect, credential deletion, binding revocation, and secret cleanup remain available so operators can recover safely.
 
+A disabled decision stops incident data only. When a sync configuration has an incident dataset turned on beside other datasets, for example Jira or GitLab incidents beside work items or commits, a scheduled sync, "Sync now", and a backfill plan the other datasets and leave the incident dataset out: no unit is created for it and nothing is fetched for it. The sync run then lists only the datasets that ran; it does not show a separate "skipped" entry for the incident dataset, so incident data stays at its last synced state. The scheduler writes one warning per plan, `sync.plan.incident_datasets_skipped_feature_disabled`, with the dataset keys, and increments `sync_plan_gate_total{provider="<provider>",dataset="<dataset>",outcome="feature_disabled"}` on the scheduler metrics endpoint for each dataset it left out.
+
+When every dataset of the configuration needs the feature, which is always the case for PagerDuty, there is nothing left to plan and no sync run is created; the same warning and count are written. A request that names an incident target explicitly while the feature is disabled is still refused with HTTP 403.
+
 Provider availability still applies:
 
 - PagerDuty REST and verified Webhooks V3 are current supported sources when configured.

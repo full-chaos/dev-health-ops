@@ -786,14 +786,9 @@ WHERE config.id = $1::uuid AND config.org_id = $2 AND integration.is_active`, oc
 			return loadedMaterializationPlan{}, err
 		}
 	}
-	if planDatasetsRequireCanonicalIncident(provider, datasets) {
-		allowed, err := canonicalIncidentAllowedForUpdate(ctx, tx, orgID, occurrence.ScheduledFor)
-		if err != nil {
-			return loadedMaterializationPlan{}, err
-		}
-		if !allowed {
-			return loadedMaterializationPlan{}, ErrOccurrenceIneligible
-		}
+	datasets, err = dropCanonicalIncidentDatasetsWhenFeatureOff(ctx, tx, orgID, integrationID, provider, datasets, occurrence.ScheduledFor)
+	if err != nil {
+		return loadedMaterializationPlan{}, err
 	}
 	// CHAOS-8773: when a scheduled planner-managed parent has no enabled
 	// work-item family row, ask once whether this integration ever finished
@@ -1214,21 +1209,6 @@ func parseOptionalPositiveInt(value *string) (*int, bool) {
 		return nil, false
 	}
 	return &parsed, true
-}
-
-func planDatasetsRequireCanonicalIncident(provider string, datasets []PlanDataset) bool {
-	for _, dataset := range datasets {
-		spec, ok := datasetSpecification(provider, dataset.Key)
-		if !ok {
-			continue
-		}
-		for _, target := range spec.LegacyTargets {
-			if target == "incidents" || target == "operational" {
-				return true
-			}
-		}
-	}
-	return false
 }
 
 // rowQuerier is the read surface both entitlement call sites share: the

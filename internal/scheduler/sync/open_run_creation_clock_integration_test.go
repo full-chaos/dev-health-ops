@@ -152,15 +152,16 @@ func TestRunStartedPastTheAgeCapHoldsTheNextTick(t *testing.T) {
 }
 
 // The scheduler was down for three hours. The first window after the stop
-// starts one run. Its units wait for admission. Seventy simulated minutes
-// later the next tick must skip: the run is inside the two hour interval that
-// starts at its creation.
+// starts one run. Its units wait for admission. At the next cron instant the
+// tick must skip: the run is inside the two hour interval that starts at its
+// creation. The first window is thirty minutes before the instant, so the run
+// is at most ninety minutes old at any minute of the real hour.
 func TestRunStartedAfterASchedulerStopHoldsTheNextTick(t *testing.T) {
 	hour := currentHour()
 	missed := hour.Add(-3 * time.Hour)
 	rig := newOpenRunRig(t, missed.Add(-30*time.Minute))
 
-	one := rig.window(hour.Add(-70 * time.Minute))
+	one := rig.window(hour.Add(-30 * time.Minute))
 	if one.Minted() != 1 {
 		t.Fatalf("first window minted %d, want 1", one.Minted())
 	}
@@ -170,7 +171,7 @@ func TestRunStartedAfterASchedulerStopHoldsTheNextTick(t *testing.T) {
 	two := rig.window(hour.Add(time.Second))
 	rig.dump("after the next tick")
 	if len(two.SkippedOpenRun) != 1 || two.Minted() != 0 {
-		t.Fatalf("the run was created 70 minutes ago and is open, but the next tick: skipped=%d minted=%d past_bound=%#v; want one skip",
+		t.Fatalf("the run was created less than two hours ago and is open, but the next tick: skipped=%d minted=%d past_bound=%#v; want one skip",
 			len(two.SkippedOpenRun), two.Minted(), two.OpenRunsPastBound)
 	}
 }

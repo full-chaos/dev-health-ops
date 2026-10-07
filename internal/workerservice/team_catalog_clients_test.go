@@ -418,3 +418,38 @@ func TestTeamCatalogAutoimportDispatcherFailsClosedWhenUnconstructed(t *testing.
 		t.Fatalf("zero-value dispatcher error=%v want=%v", err, syncdispatchruntime.ErrInvalidBridge)
 	}
 }
+
+// The post-sync path counts the project-as-team rows a Jira run retired under
+// their own label, also when the collection after the retire fails. A run
+// that retired none makes no observation of that label (the 18 calls of
+// TestTeamCatalogAutoimportDispatcherRoutesNativeProviderDirectly hold none).
+func TestTeamCatalogAutoimportDispatcherObservesRetiredProjectAsTeamRowsOnlyWhenARunRetiredSome(t *testing.T) {
+	for name, collectErr := range map[string]error{"the collection succeeds": nil, "the collection fails after the retire": errors.New("walk failed")} {
+		native := &linearCollectorSpy{result: providersync.TeamCatalogResult{ProjectAsTeamRetired: 4}, err: collectErr}
+		observer := &fakeTeamCatalogObserver{}
+		dispatcher := &nativeTeamAutoimportDispatcher{
+			resolveProvider: func(context.Context, string, string) (string, error) { return "jira", nil },
+			native:          map[string]providersync.TeamCatalogCollector{"jira": native},
+			clients:         fakeAutoimportClientResolver{},
+			selections:      fakeAutoimportSelectionsResolver{selections: providersync.TeamCatalogSelections{Teams: true}},
+			observer:        observer,
+		}
+		if err := dispatcher.TeamAutoImport(context.Background(), syncdispatchruntime.DomainReference{
+			OrganizationID: testOrg, SyncRunID: testRun,
+		}); err != nil {
+			t.Fatalf("%s: TeamAutoImport: %v", name, err)
+		}
+		retired := 0
+		for _, row := range observer.rows {
+			if row.table == jobruntime.TeamCatalogTableProjectAsTeamRetired {
+				retired++
+				if row.provider != "jira" || row.count != 4 {
+					t.Fatalf("%s: row = %+v, want provider jira and count 4", name, row)
+				}
+			}
+		}
+		if retired != 1 {
+			t.Fatalf("%s: %d observations of the retired rows, want 1 (rows=%+v)", name, retired, observer.rows)
+		}
+	}
+}

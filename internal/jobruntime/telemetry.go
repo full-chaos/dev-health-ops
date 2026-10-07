@@ -654,6 +654,13 @@ const (
 	TeamCatalogTableProjectLinksSkippedNoNativeID  TeamCatalogTable = "team_project_links_skipped_no_native_id"
 	TeamCatalogTableProjectLinksSkippedNoKey       TeamCatalogTable = "team_project_links_skipped_no_project_key"
 	TeamCatalogTableProjectLinksSkippedUnknownType TeamCatalogTable = "team_project_links_skipped_unknown_type"
+	// TeamCatalogTableProjectAsTeamRetired is not a destination table: it
+	// counts the rows a Jira run retired of the project-as-team class
+	// (providersync.TeamCatalogResult.ProjectAsTeamRetired: team rows set
+	// inactive, ownership and membership rows closed). It is observed only by
+	// a run that retired a row, so the series is absent until a store held
+	// such rows and still after the one run that retires them.
+	TeamCatalogTableProjectAsTeamRetired TeamCatalogTable = "project_as_team_retired"
 )
 
 func teamCatalogTables() []TeamCatalogTable {
@@ -666,6 +673,7 @@ func teamCatalogTables() []TeamCatalogTable {
 		TeamCatalogTableProjectLinksSeen, TeamCatalogTableProjectLinksSkippedNotProject,
 		TeamCatalogTableProjectLinksSkippedNoNativeID, TeamCatalogTableProjectLinksSkippedNoKey,
 		TeamCatalogTableProjectLinksSkippedUnknownType,
+		TeamCatalogTableProjectAsTeamRetired,
 	}
 }
 

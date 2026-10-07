@@ -571,6 +571,12 @@ func (dispatcher *nativeTeamAutoimportDispatcher) TeamAutoImport(
 		OrgID: orgID, SyncRunID: runID, IntegrationID: integrationID,
 		SyncOptions: syncOptions, Strict: false, SourceExternalIDs: sourceExternalIDs,
 	}, credential, client, selections, dispatcher.nowUTC())
+	// Observed before every return below: the retire is its own step and
+	// stands when the walk after it fails or is skipped. Never observed with
+	// zero.
+	if dispatcher.observer != nil && result.ProjectAsTeamRetired > 0 {
+		_ = dispatcher.observer.ObserveTeamCatalogRowsWritten(provider, jobruntime.TeamCatalogTableProjectAsTeamRetired, result.ProjectAsTeamRetired)
+	}
 	if collectErr != nil {
 		// The failure is still visible via the dedicated nonfatal outcome,
 		// not silently dropped; the log line carries the cause (CHAOS-7132).

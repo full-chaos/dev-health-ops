@@ -114,9 +114,41 @@ func TestRetireJiraProjectAsTeamRowsClosesOnlyThatClass(t *testing.T) {
 	other.team("jira", "OPS", "OPS", nil)
 	other.ownership("jira", "OPS", "10001", "OPS", "native")
 	other.membership("jira", "OPS", "jira:lead-1")
+	// Rows one clause away from the class, each kept by exactly that clause:
+	// a jira team with an empty id and no native key (id != ''); a legacy link
+	// whose team id is its project key (source); a native link with an empty
+	// team id and key (team_id != ''); a github and a manual membership on a
+	// retired team (provider, source); a membership of an admin team "QA"
+	// whose id is a project-as-team only in another organization (the org
+	// scope of the class ids).
+	f.team("jira", "", "", nil)
+	f.ownership("jira", "LEGKEY", "10010", "LEGKEY", "jira_legacy")
+	f.ownership("jira", "", "10011", "", "native")
+	for _, row := range []struct{ provider, source, member string }{{"github", "native", "github:member"}, {"jira", "manual", "jira:manual-1"}} {
+		if err := conn.Exec(ctx, `INSERT INTO team_memberships (org_id, provider, team_id, member_id, identity_facets, source, is_primary, specificity, priority, valid_from, updated_at) VALUES (?, ?, 'SEC', ?, [], ?, 1, 100, 10, ?, ?)`,
+			f.orgID, row.provider, row.member, row.source, f.old, f.old); err != nil {
+			t.Fatalf("insert %s/%s membership: %v", row.provider, row.source, err)
+		}
+	}
+	f.team("", "QA", "", nil)
+	f.membership("jira", "QA", "jira:qa-1")
+	other.team("jira", "QA", "QA", nil)
+	openOn := func(table, provider, teamID, source string) uint64 {
+		t.Helper()
+		return countRows(t, ctx, conn, `SELECT count() FROM `+table+` FINAL WHERE org_id = ? AND provider = ? AND team_id = ? AND toString(source) = ? AND valid_to IS NULL`, f.orgID, provider, teamID, source)
+	}
 
 	stays := func(stage string) {
 		t.Helper()
+		if !f.activeTeam("jira", "") {
+			t.Fatalf("%s: the jira team with an empty id is not active any more", stage)
+		}
+		if openOn("team_project_ownership", "jira", "LEGKEY", "jira_legacy") != 1 || openOn("team_project_ownership", "jira", "", "native") != 1 {
+			t.Fatalf("%s: a legacy link or an empty-team link was closed", stage)
+		}
+		if openOn("team_memberships", "github", "SEC", "native") != 1 || openOn("team_memberships", "jira", "SEC", "manual") != 1 || openOn("team_memberships", "jira", "QA", "native") != 1 {
+			t.Fatalf("%s: a membership of another provider, another source or another organization's class was closed", stage)
+		}
 		for _, id := range []string{atlassian, "KEYLIKE", ari + "same", "ADMINMADE"} {
 			if !f.activeTeam("jira", id) {
 				t.Fatalf("%s: jira team %q is not active any more", stage, id)
@@ -161,7 +193,7 @@ func TestRetireJiraProjectAsTeamRowsClosesOnlyThatClass(t *testing.T) {
 		t.Fatalf("real run = %+v, want %+v", real, want)
 	}
 	for _, id := range []string{"OPS", "SEC"} {
-		if f.activeTeam("jira", id) || f.openOwnership("jira", id) != 0 || f.openMembership("jira", id) != 0 {
+		if f.activeTeam("jira", id) || f.openOwnership("jira", id) != 0 || openOn("team_memberships", "jira", id, "native") != 0 {
 			t.Fatalf("project-as-team %s is not retired", id)
 		}
 		// Retired, not removed: the team row and its rows are still there,
@@ -232,6 +264,13 @@ func TestRetireJiraProjectAsTeamRowsClosesTheDerivedRepoOwnershipOfARetiredTeam(
 		f.orgID, uuid.New(), f.old, f.old); err != nil {
 		t.Fatalf("insert manual repo ownership: %v", err)
 	}
+	// A derived row of a team "OPS" in another organization: not this
+	// organization's to close.
+	otherOrg := uuid.NewString()
+	if err := conn.Exec(ctx, teamRepoOwnershipInsert+` VALUES (?, 'github', 'OPS', ?, 'acme/other', 'exact', 'inferred', 0, 100, 0, ?, NULL, ?)`,
+		otherOrg, uuid.New(), f.old, f.old); err != nil {
+		t.Fatalf("insert other-org repo ownership: %v", err)
+	}
 	openRepoRows := func(teamID, source string) uint64 {
 		t.Helper()
 		return countRows(t, ctx, conn, `SELECT count() FROM team_repo_ownership FINAL WHERE org_id = ? AND team_id = ? AND source = ? AND valid_to IS NULL`, f.orgID, teamID, source)
@@ -260,6 +299,9 @@ func TestRetireJiraProjectAsTeamRowsClosesTheDerivedRepoOwnershipOfARetiredTeam(
 	}
 	if openRepoRows(atlassian, "inferred") != 1 || openRepoRows("OPS", "manual") != 1 {
 		t.Fatal("a repo ownership row of another class was closed")
+	}
+	if n := countRows(t, ctx, conn, `SELECT count() FROM team_repo_ownership FINAL WHERE org_id = ? AND team_id = 'OPS' AND valid_to IS NULL`, otherOrg); n != 1 {
+		t.Fatalf("another organization's derived row of a team OPS: %d open, want 1", n)
 	}
 	// The derivation after the retire agrees: it opens no row for the retired
 	// team again and keeps the Atlassian team's.

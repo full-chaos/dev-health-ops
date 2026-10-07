@@ -157,3 +157,37 @@ func TestWorkItemSyncSinksRefuseEveryDailyJobTable(t *testing.T) {
 		}
 	}
 }
+
+// The jira and linear sync sinks hold a second sink behind their destination
+// list, with a dispatch of its own. That dispatch maps ai_attribution only:
+// none of the nine tables of the daily job has an adapter there, so the list
+// is not the one guard of the refusal.
+func TestJiraAndLinearDerivedSinksDispatchOnlyAIAttribution(t *testing.T) {
+	dailyJobTables := []string{
+		"estimate_coverage_metrics_daily", "investment_classifications_daily", "investment_metrics_daily",
+		"issue_type_metrics_daily", "work_item_cycle_times", "work_item_metrics_daily",
+		"work_item_state_durations_daily", "work_item_team_attributions", "work_item_user_metrics_daily",
+	}
+	jira, err := NewJiraWorkItemDerivedClickHouseEffects(&ownershipReasonWriteConn{}, providerOwnershipMetricsLease(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	linear, err := NewLinearWorkItemDerivedClickHouseEffects(&ownershipReasonWriteConn{}, providerOwnershipMetricsLease(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if adapter, known := jira.adapterForDestination("ai_attribution"); !known || adapter == nil {
+		t.Fatal("jira: ai_attribution is not dispatched")
+	}
+	if adapter, known := linear.adapterForDestination("ai_attribution"); !known || adapter == nil {
+		t.Fatal("linear: ai_attribution is not dispatched")
+	}
+	for _, table := range dailyJobTables {
+		if _, known := jira.adapterForDestination(table); known {
+			t.Errorf("jira: the sync sink dispatches the daily-job table %q", table)
+		}
+		if _, known := linear.adapterForDestination(table); known {
+			t.Errorf("linear: the sync sink dispatches the daily-job table %q", table)
+		}
+	}
+}

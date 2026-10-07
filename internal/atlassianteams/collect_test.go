@@ -123,14 +123,16 @@ func userEdge(_, account string) map[string]any {
 	}}}
 }
 
-func projectEdge(team, key string) map[string]any {
+// projectEdge is one team-to-project link. nativeID is the last segment of the
+// project ARI, which is where the provider carries the Jira project id.
+func projectEdge(team, key, nativeID string) map[string]any {
 	data := map[string]any{"id": "p-" + key, "name": "Project " + key}
 	if key != "" {
 		data["key"] = key
 	}
 	return map[string]any{"node": map[string]any{"columns": []any{
 		map[string]any{"key": "team", "value": ariNode(team, "TeamV2", map[string]any{"id": team, "displayName": "T"})},
-		map[string]any{"key": "project", "value": ariNode("ari:cloud:jira::project/"+key, "JiraProject", data)},
+		map[string]any{"key": "project", "value": ariNode("ari:cloud:jira::project/"+nativeID, "JiraProject", data)},
 	}}}
 }
 
@@ -164,7 +166,9 @@ func standard(req request) (int, any) {
 		}
 	case "TeamworkGraphTeamActiveProjects":
 		if req.Variables["teamId"] == teamA {
-			return 200, connection("teamworkGraph_teamActiveProjects", "", projectEdge(teamA, "PLAT"), projectEdge(teamA, ""), projectEdge(teamA, "PLAT"))
+			return 200, connection("teamworkGraph_teamActiveProjects", "", projectEdge(teamA, "PLAT", "10001"), projectEdge(teamA, "", "10002"), projectEdge(teamA, "PLAT", "10001"),
+				// A link with a key and no usable project id: no row, never an id built from the key.
+				projectEdge(teamA, "NOID", "NOID"), projectEdge(teamA, "EMPTY", ""))
 		}
 		return 200, connection("teamworkGraph_teamActiveProjects", "")
 	}
@@ -195,7 +199,7 @@ func TestCollectReadsTeamsMembersAndProjectsThroughTheRealClient(t *testing.T) {
 		t.Errorf("team A row = %+v", a)
 	}
 	if got := strings.Join(a.ProjectKeys, ","); got != "PLAT" {
-		t.Errorf("team A project keys = %q, want PLAT (deduplicated, key-less link dropped)", got)
+		t.Errorf("team A project keys = %q, want PLAT (deduplicated; the key-less link and the two links with no numeric project id dropped)", got)
 	}
 	if b.IsActive != 0 || b.Name != "Old" {
 		t.Errorf("archived team row = %+v, want inactive", b)
@@ -227,12 +231,12 @@ func TestCollectReadsTeamsMembersAndProjectsThroughTheRealClient(t *testing.T) {
 		t.Errorf("an archived team has no members: %v", members["bbbbbbbb-0000-4000-8000-000000000002"])
 	}
 
-	if len(rows.Ownership) != 1 || rows.Ownership[0].ProjectID != "org-1:jira:PLAT" || rows.Ownership[0].ProjectKey != "PLAT" ||
+	if len(rows.Ownership) != 1 || rows.Ownership[0].ProjectID != "10001" || rows.Ownership[0].ProjectKey != "PLAT" ||
 		rows.Ownership[0].Source != "native" || rows.Ownership[0].Specificity != 110 || rows.Ownership[0].Priority != 10 {
 		t.Errorf("ownership = %+v", rows.Ownership)
 	}
-	if rows.SkippedProjects != 1 {
-		t.Errorf("skipped project links = %d, want 1", rows.SkippedProjects)
+	if rows.SkippedProjects != 3 {
+		t.Errorf("skipped project links = %d, want 3 (one with no key, two with no numeric project id)", rows.SkippedProjects)
 	}
 
 	// The archived team was never asked for members or projects.
@@ -494,9 +498,9 @@ func TestAnAtlassianTeamOutranksTheProjectAsTeamOwnerInTheCascade(t *testing.T) 
 	updated := time.Date(2026, 9, 25, 3, 0, 0, 0, time.UTC)
 	const projectTeamSpecificity, projectTeamPriority = 100, 10 // providersync jira_team_catalog native ownership
 	projectTeam := teamattribution.GithubWorkItemDerivationCandidateFromFact(
-		"project_ownership", "PLAT", "Platform project", "project_ownership=org-1:jira:PLAT", 1, projectTeamSpecificity, projectTeamPriority, updated)
+		"project_ownership", "PLAT", "Platform project", "project_ownership=10001", 1, projectTeamSpecificity, projectTeamPriority, updated)
 	atlassianTeam := teamattribution.GithubWorkItemDerivationCandidateFromFact(
-		"project_ownership", "aaaaaaaa-0000-4000-8000-000000000001", "Platform", "project_ownership=org-1:jira:PLAT", 1, OwnershipSpecificity, OwnershipPriority, updated)
+		"project_ownership", "aaaaaaaa-0000-4000-8000-000000000001", "Platform", "project_ownership=10001", 1, OwnershipSpecificity, OwnershipPriority, updated)
 	for name, input := range map[string][]teamattribution.GithubWorkItemDerivationCandidate{
 		"project team first":   {projectTeam, atlassianTeam},
 		"atlassian team first": {atlassianTeam, projectTeam},

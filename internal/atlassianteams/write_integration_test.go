@@ -81,7 +81,7 @@ func TestWriteTeamsMembershipsAndOwnershipAgainstClickHouse(t *testing.T) {
 
 	// The project-as-team rows the Jira catalog wrote earlier: this sync must not touch them.
 	exec(t, conn, `INSERT INTO teams (id, team_uuid, name, description, members, manual_members, project_keys, repo_patterns, is_active, updated_at, org_id, provider, native_team_key, parent_team_id) VALUES ('PLAT', generateUUIDv4(), 'Platform project', NULL, [], [], ['PLAT'], [], 1, '2026-09-01 00:00:00', 'org-1', 'jira', 'PLAT', NULL)`)
-	exec(t, conn, `INSERT INTO team_project_ownership (org_id, provider, team_id, project_id, project_key, source, is_primary, specificity, priority, valid_from, valid_to, updated_at) VALUES ('org-1', 'jira', 'PLAT', 'org-1:jira:PLAT', 'PLAT', 'native', 1, 100, 10, '2026-09-01 00:00:00', NULL, '2026-09-01 00:00:00')`)
+	exec(t, conn, `INSERT INTO team_project_ownership (org_id, provider, team_id, project_id, project_key, source, is_primary, specificity, priority, valid_from, valid_to, updated_at) VALUES ('org-1', 'jira', 'PLAT', '10001', 'PLAT', 'native', 1, 100, 10, '2026-09-01 00:00:00', NULL, '2026-09-01 00:00:00')`)
 	exec(t, conn, `INSERT INTO team_memberships (org_id, provider, team_id, member_id, raw_provider_user_id, raw_email, identity_facets, source, is_primary, specificity, priority, valid_from, valid_to, updated_at) VALUES ('org-1', 'jira', 'PLAT', 'jira:lead-9', 'jira:accountid:lead-9', NULL, ['jira:accountid:lead-9'], 'native', 1, 100, 10, '2026-09-01 00:00:00', NULL, '2026-09-01 00:00:00')`)
 	// An Atlassian team already known, with a manual member and stale project keys.
 	exec(t, conn, `INSERT INTO teams (id, team_uuid, name, description, members, manual_members, project_keys, repo_patterns, is_active, updated_at, org_id, provider, native_team_key, parent_team_id) VALUES ('`+idA+`', generateUUIDv4(), 'Old name', NULL, [], ['jira:manual-1'], ['OLD'], [], 1, '2026-09-01 00:00:00', 'org-1', 'jira', 'x', NULL)`)
@@ -125,8 +125,8 @@ func TestWriteTeamsMembershipsAndOwnershipAgainstClickHouse(t *testing.T) {
 
 	ownership := lines(t, conn, `SELECT concat(team_id, '|', project_id, '|', ifNull(project_key, ''), '|', source, '|', toString(specificity), '|', toString(priority)) FROM team_project_ownership FINAL WHERE org_id = 'org-1' AND provider = 'jira' ORDER BY team_id`)
 	wantOwnership := []string{
-		"PLAT|org-1:jira:PLAT|PLAT|native|100|10",
-		idA + "|org-1:jira:PLAT|PLAT|native|110|10",
+		"PLAT|10001|PLAT|native|100|10",
+		idA + "|10001|PLAT|native|110|10",
 	}
 	if strings.Join(ownership, "\n") != strings.Join(wantOwnership, "\n") {
 		t.Fatalf("ownership:\n%s\nwant:\n%s", strings.Join(ownership, "\n"), strings.Join(wantOwnership, "\n"))
@@ -165,7 +165,7 @@ func TestARunRetractsWhatTheSnapshotNoLongerHas(t *testing.T) {
 	first := time.Date(2026, 9, 25, 3, 0, 0, 0, time.UTC)
 
 	exec(t, conn, `INSERT INTO team_memberships (org_id, provider, team_id, member_id, raw_provider_user_id, raw_email, identity_facets, source, is_primary, specificity, priority, valid_from, valid_to, updated_at) VALUES ('org-1', 'jira', 'PLAT', 'jira:lead-9', 'jira:accountid:lead-9', NULL, ['jira:accountid:lead-9'], 'native', 1, 100, 10, '2026-09-01 00:00:00', NULL, '2026-09-01 00:00:00')`)
-	exec(t, conn, `INSERT INTO team_project_ownership (org_id, provider, team_id, project_id, project_key, source, is_primary, specificity, priority, valid_from, valid_to, updated_at) VALUES ('org-1', 'jira', 'PLAT', 'org-1:jira:PLAT', 'PLAT', 'native', 1, 100, 10, '2026-09-01 00:00:00', NULL, '2026-09-01 00:00:00')`)
+	exec(t, conn, `INSERT INTO team_project_ownership (org_id, provider, team_id, project_id, project_key, source, is_primary, specificity, priority, valid_from, valid_to, updated_at) VALUES ('org-1', 'jira', 'PLAT', '10001', 'PLAT', 'native', 1, 100, 10, '2026-09-01 00:00:00', NULL, '2026-09-01 00:00:00')`)
 
 	g := newGateway(t, standard)
 	run := func(now time.Time, respond func(request) (int, any)) Result {

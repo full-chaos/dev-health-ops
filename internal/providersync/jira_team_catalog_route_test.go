@@ -87,7 +87,7 @@ func TestJiraTeamCatalogCollectCountsFailedAndRetriedAttempts(t *testing.T) {
 			if searchAttempts == 1 {
 				return nil, errors.New("simulated transient transport failure")
 			}
-			body := `{"values":[{"key":"OPS","name":"Ops Project"}]}`
+			body := `{"values":[{"id":"10001","key":"OPS","name":"Ops Project"}]}`
 			return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(body)), Request: request}, nil
 		case "/rest/api/3/project/OPS":
 			body := `{"projectTypeKey":"software"}`
@@ -148,7 +148,7 @@ func TestJiraTeamCatalogCollectSkipsOneBoardsSprint400UnderStrict(t *testing.T) 
 	t.Parallel()
 	now := time.Date(2026, 8, 30, 12, 0, 0, 0, time.UTC)
 	doer := &jiraTeamCatalogFixtureDoer{t: t, byURI: map[string]jiraTeamCatalogFixtureResponse{
-		jiraTeamCatalogProjectSearchURI: {body: `{"values":[{"key":"OPS","name":"Ops Project"}]}`},
+		jiraTeamCatalogProjectSearchURI: {body: `{"values":[{"id":"10001","key":"OPS","name":"Ops Project"}]}`},
 		"/rest/api/3/project/OPS":       {body: `{"projectTypeKey":"software"}`},
 		"/rest/agile/1.0/board?maxResults=100&projectKeyOrId=OPS&startAt=0": {
 			body: `{"values":[{"id":81},{"id":82}],"isLast":true}`,
@@ -194,7 +194,7 @@ func TestJiraTeamCatalogCollectResolvesSprintsWhenNothingSelectedUnderStrict(t *
 	t.Parallel()
 	now := time.Date(2026, 8, 30, 12, 0, 0, 0, time.UTC)
 	doer := &jiraTeamCatalogFixtureDoer{t: t, byURI: map[string]jiraTeamCatalogFixtureResponse{
-		jiraTeamCatalogProjectSearchURI: {body: `{"values":[{"key":"OPS","name":"Ops Project"}]}`},
+		jiraTeamCatalogProjectSearchURI: {body: `{"values":[{"id":"10001","key":"OPS","name":"Ops Project"}]}`},
 		"/rest/api/3/project/OPS":       {body: `{"projectTypeKey":"software"}`},
 		"/rest/agile/1.0/board?maxResults=100&projectKeyOrId=OPS&startAt=0": {
 			body: `{"values":[{"id":82}],"isLast":true}`,
@@ -239,7 +239,7 @@ func TestJiraTeamCatalogCollectReraisesA403SprintListingFailureUnderStrict(t *te
 	t.Parallel()
 	now := time.Date(2026, 8, 30, 12, 0, 0, 0, time.UTC)
 	doer := &jiraTeamCatalogFixtureDoer{t: t, byURI: map[string]jiraTeamCatalogFixtureResponse{
-		jiraTeamCatalogProjectSearchURI: {body: `{"values":[{"key":"OPS","name":"Ops Project"}]}`},
+		jiraTeamCatalogProjectSearchURI: {body: `{"values":[{"id":"10001","key":"OPS","name":"Ops Project"}]}`},
 		"/rest/api/3/project/OPS":       {body: `{"projectTypeKey":"software"}`},
 		"/rest/agile/1.0/board?maxResults=100&projectKeyOrId=OPS&startAt=0": {
 			body: `{"values":[{"id":81}],"isLast":true}`,
@@ -273,7 +273,7 @@ func TestJiraTeamCatalogCollectReraisesABoardListing400UnderStrict(t *testing.T)
 	t.Parallel()
 	now := time.Date(2026, 8, 30, 12, 0, 0, 0, time.UTC)
 	doer := &jiraTeamCatalogFixtureDoer{t: t, byURI: map[string]jiraTeamCatalogFixtureResponse{
-		jiraTeamCatalogProjectSearchURI: {body: `{"values":[{"key":"OPS","name":"Ops Project"}]}`},
+		jiraTeamCatalogProjectSearchURI: {body: `{"values":[{"id":"10001","key":"OPS","name":"Ops Project"}]}`},
 		"/rest/api/3/project/OPS":       {body: `{"projectTypeKey":"software"}`},
 		"/rest/agile/1.0/board?maxResults=100&projectKeyOrId=OPS&startAt=0": {
 			status: http.StatusBadRequest,
@@ -307,7 +307,7 @@ func TestJiraTeamCatalogCollectSkipsBoardDiscoveryForNonSoftwareProjectUnderStri
 	now := time.Date(2026, 8, 30, 12, 0, 0, 0, time.UTC)
 	doer := &jiraTeamCatalogFixtureDoer{t: t, byURI: map[string]jiraTeamCatalogFixtureResponse{
 		jiraTeamCatalogProjectSearchURI: {
-			body: `{"values":[{"key":"SUP","name":"Support"},{"key":"OPS","name":"Ops Project"}]}`,
+			body: `{"values":[{"id":"10002","key":"SUP","name":"Support"},{"id":"10001","key":"OPS","name":"Ops Project"}]}`,
 		},
 		"/rest/api/3/project/SUP": {body: `{"projectTypeKey":"service_desk"}`},
 		"/rest/api/3/project/OPS": {body: `{"projectTypeKey":"software"}`},
@@ -361,7 +361,7 @@ func TestJiraTeamCatalogCollectRaisesOnUnrecognizedProjectTypeUnderStrict(t *tes
 	t.Parallel()
 	now := time.Date(2026, 8, 30, 12, 0, 0, 0, time.UTC)
 	doer := &jiraTeamCatalogFixtureDoer{t: t, byURI: map[string]jiraTeamCatalogFixtureResponse{
-		jiraTeamCatalogProjectSearchURI: {body: `{"values":[{"key":"OPS","name":"Ops Project"}]}`},
+		jiraTeamCatalogProjectSearchURI: {body: `{"values":[{"id":"10001","key":"OPS","name":"Ops Project"}]}`},
 		"/rest/api/3/project/OPS":       {body: `{"projectTypeKey":"some_future_jira_template"}`},
 		// Deliberately no board-listing fixture -- it must never be called.
 	}}
@@ -599,7 +599,7 @@ identities:
 	now := time.Date(2026, 8, 30, 12, 0, 0, 0, time.UTC)
 	doer := &jiraTeamCatalogFixtureDoer{t: t, byURI: map[string]jiraTeamCatalogFixtureResponse{
 		jiraTeamCatalogProjectSearchURI: {
-			body: `{"values":[{"key":"OPS","name":"Ops Project"}]}`,
+			body: `{"values":[{"id":"10001","key":"OPS","name":"Ops Project"}]}`,
 		},
 		"/rest/api/3/project/OPS": {
 			body: `{"projectTypeKey":"software","lead":{"accountId":"account-1","emailAddress":"ops@example.com","displayName":"Ops Lead"}}`,

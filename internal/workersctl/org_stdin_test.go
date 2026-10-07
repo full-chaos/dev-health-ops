@@ -3,6 +3,7 @@ package workersctl
 import (
 	"bytes"
 	"context"
+	"io"
 	"log/slog"
 	"strings"
 	"testing"
@@ -145,5 +146,53 @@ func TestOrgStdinDryRunPrintsNoOrg(t *testing.T) {
 	code, stdout, stderr := runOrgStdinVerb(runtime, orgStdinVerbs()["partition-recompute"], "--org-stdin", "--dry-run")
 	if code == 2 || strings.Contains(stdout+stderr, orgStdinTestOrg) {
 		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+}
+
+// A stdin that never closes (a terminal, a pipe nobody writes) ends in a
+// clear refusal after orgStdinTimeout and not in a hang.
+func TestOrgStdinNeverClosingPipeTimesOut(t *testing.T) {
+	previous := orgStdinTimeout
+	orgStdinTimeout = 50 * time.Millisecond
+	defer func() { orgStdinTimeout = previous }()
+	reader, writer := io.Pipe()
+	defer writer.Close()
+	for verb, base := range orgStdinVerbs() {
+		finished := make(chan struct{})
+		var code int
+		var stderr string
+		go func() {
+			defer close(finished)
+			code, _, stderr = runOrgStdinVerb(&operatorRuntime{stdin: reader}, base, "--org-stdin")
+		}()
+		select {
+		case <-finished:
+		case <-time.After(5 * time.Second):
+			t.Fatalf("%s: hung on a stdin that never closes", verb)
+		}
+		if code != 2 || !strings.Contains(stderr, "org_stdin_timeout") {
+			t.Fatalf("%s: code=%d stderr=%q", verb, code, stderr)
+		}
+	}
+}
+
+// The refusal comes BEFORE any runtime is built: with no database settings at
+// all, a bad stdin is still a usage error and not a configuration error.
+func TestExecuteRefusesBadOrgStdinBeforeBuildingARuntime(t *testing.T) {
+	empty := func(string) (string, bool) { return "", false }
+	for verb, base := range orgStdinVerbs() {
+		args := append(append([]string{}, base...), auditFlags("--org-stdin")...)
+		for name, stdin := range map[string]string{"empty": "", "two lines": orgStdinTestOrg + "\n" + orgStdinTestOrg + "\n"} {
+			var stdout, stderr bytes.Buffer
+			code := executeWithStdin(context.Background(), append([]string{"metrics"}, args...), empty, strings.NewReader(stdin), &stdout, &stderr)
+			if code != 2 || !strings.Contains(stderr.String(), "org_stdin_") || strings.Contains(stderr.String(), orgStdinTestOrg) {
+				t.Fatalf("%s/%s: code=%d stderr=%q", verb, name, code, stderr.String())
+			}
+		}
+		var stdout, stderr bytes.Buffer
+		code := executeWithStdin(context.Background(), append([]string{"metrics"}, args...), empty, strings.NewReader(orgStdinTestOrg+"\n"), &stdout, &stderr)
+		if code != 1 || !strings.Contains(stderr.String(), "configuration_error") || strings.Contains(stderr.String(), orgStdinTestOrg) {
+			t.Fatalf("%s: valid id: code=%d stderr=%q, want to pass validation and stop at configuration", verb, code, stderr.String())
+		}
 	}
 }

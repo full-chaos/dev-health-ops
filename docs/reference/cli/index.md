@@ -834,7 +834,7 @@ verb reads ONE line from stdin, drops one trailing newline, and uses it as the
 organization id, so the id is on no command line. This is the route on a
 distroless worker pod, where the only way to hand over a value is the stdin of
 `kubectl exec -i`. `--org` and `--org-stdin` together, empty stdin, more than
-one line, a line over 128 bytes, or a malformed id is a usage error (exit 2)
+one line, a line over 128 bytes, no end of input within 10 seconds, or a malformed id is a usage error (exit 2) raised before any database is opened
 whose text gives a fixed reason and a byte length, never the value. With
 `--org-stdin` the verb prints no organization id on stdout, stderr or in its own
 log lines (the audit row still holds it). Without the flag nothing changes.

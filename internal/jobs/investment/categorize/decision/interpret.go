@@ -116,12 +116,16 @@ type Interpretation struct {
 	// LevelProbs is the renormalised distribution p' of every valid answer.
 	LevelProbs map[string][]float64 `json:"level_probabilities,omitempty"`
 	// RawLevelProbs is the distribution as returned.
-	RawLevelProbs   map[string][]float64 `json:"raw_level_probabilities,omitempty"`
-	Scores          map[string]float64   `json:"scores,omitempty"`
-	Confidences     map[string]float64   `json:"confidences,omitempty"`
-	BimodalKeys     []string             `json:"bimodal_keys,omitempty"`
-	DegradedKeys    []string             `json:"degraded_keys,omitempty"`
-	EvidenceChoices map[string]string    `json:"evidence_choices,omitempty"`
+	RawLevelProbs map[string][]float64 `json:"raw_level_probabilities,omitempty"`
+	// TopRawKey is the support key with the highest raw presence, 1 - P(level 0)
+	// of the map AS RETURNED, among the keys with a valid answer; the first key
+	// in alphabetical order wins a tie. "" when no key has a valid answer.
+	TopRawKey       string             `json:"top_raw_key,omitempty"`
+	Scores          map[string]float64 `json:"scores,omitempty"`
+	Confidences     map[string]float64 `json:"confidences,omitempty"`
+	BimodalKeys     []string           `json:"bimodal_keys,omitempty"`
+	DegradedKeys    []string           `json:"degraded_keys,omitempty"`
+	EvidenceChoices map[string]string  `json:"evidence_choices,omitempty"`
 	// EvidenceSpanID is the cited span of an ok classification ("" otherwise).
 	EvidenceSpanID string `json:"evidence_span_id,omitempty"`
 	// AnswerValidity is, for each asked question id: valid, degraded:<shape>,
@@ -179,6 +183,7 @@ func Interpret(r *Rubric, bundle units.TextBundle, spans []Span, typed Typed) In
 	var missing, refused, invalid []string
 	keys := SortedKeys()
 	strict := true
+	lowestRawP0 := math.Inf(1)
 	for _, k := range keys {
 		id := SupportQuestionID(k)
 		qa := get(id)
@@ -210,6 +215,13 @@ func Interpret(r *Rubric, bundle units.TextBundle, spans []Span, typed Typed) In
 			}
 			in.LevelProbs[k] = sc.Probs
 			in.Levels[k] = PresenceLevel(sc.Probs)
+			// The highest 1 - P(level 0) is the lowest P(level 0): compared as
+			// returned, with no arithmetic, so every architecture picks the same
+			// key. keys is in alphabetical order and the compare is strict, so
+			// the first key wins a tie.
+			if len(sc.RawProbs) > 0 && sc.RawProbs[0] < lowestRawP0 {
+				lowestRawP0, in.TopRawKey = sc.RawProbs[0], k
+			}
 			if maxProb(sc.Probs) < SplitThreshold {
 				in.SplitCount++
 			}

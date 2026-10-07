@@ -201,6 +201,12 @@ type Classification struct {
 	LevelProbabilities map[string][]float64 `json:"level_probabilities"`
 	// SufficiencyLevel is 0..n-1, or -1 when the question had no usable answer.
 	SufficiencyLevel int `json:"sufficiency_level"`
+	// TopRawKey is the support key with the highest raw presence (see
+	// Interpretation.TopRawKey): one of the 15 canonical keys, or "" when no
+	// support answer was valid. It is what a served zero_support row is built
+	// from; LevelProbabilities cannot give it, because each answer is
+	// renormalised by its own sum.
+	TopRawKey string `json:"top_raw_key"`
 	// Subcategories is the validated, normalised 15-key mix of an ok
 	// classification. It is EMPTY for every other state: a failure has no mix,
 	// and no fallback prior is put here to look like one.
@@ -244,7 +250,7 @@ func (c *Completer) Classify(ctx context.Context, bundle units.TextBundle) (Clas
 		Warnings: []string{}, Errors: []string{}, LLMCalls: k.calls,
 	}
 	if in := k.interp; in != nil {
-		out.Levels, out.LevelProbabilities = in.Levels, in.LevelProbs
+		out.Levels, out.LevelProbabilities, out.TopRawKey = in.Levels, in.LevelProbs, in.TopRawKey
 		if in.SufficiencyLevel != nil {
 			out.SufficiencyLevel = *in.SufficiencyLevel
 		}
@@ -277,6 +283,32 @@ func (c *Completer) Classify(ctx context.Context, bundle units.TextBundle) (Clas
 	out.Warnings = boundCodes(append(append(out.Warnings, in.Warnings...), outcome.Warnings...))
 	out.InputTokens, out.OutputTokens, out.ModelReturned = outcome.InputTokens, outcome.OutputTokens, outcome.LLMModel // bounded by CompleteBundle
 	return out, nil
+}
+
+// LevelMix is the normalised 15-key mix of a set of levels under the rubric's
+// weight map: what Interpret puts in the payload of an ok classification, for a
+// classification that has levels and no validated payload (evidence_none). ok
+// is false when the levels do not cover the 15 keys, hold a level outside the
+// map, or support no key.
+func (c *Completer) LevelMix(levels map[string]int) (mix map[string]float64, ok bool) {
+	if !c.usable() {
+		return nil, false
+	}
+	weights := c.rubric.Weights
+	raw := map[string]float64{}
+	supported := false
+	for _, k := range SortedKeys() {
+		level, present := levels[k]
+		if !present || level < 0 || level >= len(weights) {
+			return nil, false
+		}
+		raw[k] = weights[level]
+		supported = supported || level > 0
+	}
+	if !supported {
+		return nil, false
+	}
+	return categorize.EnsureFullSubcategoryVector(raw), true
 }
 
 // Bounds of every string that can reach a classification from a response. A

@@ -12,7 +12,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/full-chaos/dev-health-ops/internal/identityalias"
 	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 )
@@ -197,10 +196,6 @@ func (handler JiraTeamCatalogRouteHandler) CollectTeamCatalog(
 	counted := *client
 	counted.Doer = jiraTeamCatalogCountingDoer{delegate: client.Doer, attempts: &requests}
 	client = &counted
-	// Loaded once per walk: every project lead this run
-	// normalizes shares the same org alias config.
-	resolver := identityalias.LoadDefault()
-
 	// The search is read page by page to the provider's end-of-data signal.
 	// The first page failing is the walk failing, as before. A later page
 	// failing, the page bound, or an empty page before the end leaves a PART
@@ -231,20 +226,23 @@ func (handler JiraTeamCatalogRouteHandler) CollectTeamCatalog(
 	rows := JiraTeamCatalogRows{}
 	projectsSkippedNoNativeID := 0
 	projectKeys := make([]string, 0, len(search.Values))
+	// A project is a project entity and nothing else: no team row, no
+	// ownership row and no membership row is built from it. A project's team
+	// comes from the Atlassian team connected to it (internal/atlassianteams);
+	// a project with no such team has none.
 	for _, entry := range search.Values {
-		team, ok := normalizeJiraTeamRow(ref.OrgID, entry, normalizedAt)
-		if !ok {
+		key := jiraTeamID(entry.Key)
+		name := strings.TrimSpace(entry.Name)
+		if key == "" || name == "" {
 			continue
 		}
-		rows.Teams = append(rows.Teams, team)
-		projectKeys = append(projectKeys, team.ID)
+		projectKeys = append(projectKeys, key)
 		nativeProjectID := strings.TrimSpace(entry.ID)
 		if nativeProjectID == "" || jiraProjectIDIsKeyBuilt(ref.OrgID, nativeProjectID) {
 			projectsSkippedNoNativeID++
 			continue
 		}
-		rows.Ownership = append(rows.Ownership, normalizeJiraOwnershipRow(ref.OrgID, team.ID, nativeProjectID, team.ID, normalizedAt))
-		rows.Projects = append(rows.Projects, normalizeJiraProjectRow(ref.OrgID, nativeProjectID, team.ID, team.Name, normalizedAt))
+		rows.Projects = append(rows.Projects, normalizeJiraProjectRow(ref.OrgID, nativeProjectID, key, name, normalizedAt))
 	}
 	if projectsSkippedNoNativeID > 0 {
 		slog.Default().WarnContext(ctx, "jira_team_catalog_project_without_native_id",
@@ -261,26 +259,6 @@ func (handler JiraTeamCatalogRouteHandler) CollectTeamCatalog(
 		}
 		archivedSeen[project] = true
 		archivedProjects = append(archivedProjects, project)
-	}
-
-	if selections.Members {
-		for teamIndex, team := range rows.Teams {
-			var detail jiraTeamCatalogProjectDetailPayload
-			detailPath := "/rest/api/3/project/" + url.PathEscape(team.ID)
-			if err := jiraFetchObject(ctx, client, http.MethodGet, detailPath, nil, &detail); err != nil {
-				return jiraTeamCatalogWalkFailure(ctx, ref, "project_lead_lookup_failed", requests, err)
-			}
-			if detail.Lead == nil {
-				continue
-			}
-			membership, ok := normalizeJiraMembershipRow(ref.OrgID, team.ID, *detail.Lead, resolver, normalizedAt)
-			if !ok {
-				continue
-			}
-			rows.Memberships = append(rows.Memberships, membership)
-			rows.Teams[teamIndex].Members = append([]string(nil), membership.IdentityFacets...)
-		}
-		rows.Teams = jiraStampMembersAuthoritative(rows.Teams)
 	}
 
 	sprints, sprintErr := handler.collectSprints(ctx, client, claim, projectKeys, normalizedAt)
@@ -591,15 +569,28 @@ func (collector JiraTeamCatalogCollector) CollectTeamCatalog(
 	if collector.Sink.Conn == nil || collector.Sink.Lease == nil {
 		return TeamCatalogResult{}, ErrInvalidConfiguration
 	}
+	// The project-as-team rows an earlier catalog wrote are retired here, at
+	// every run and before the walk: the step reads no provider answer, so a
+	// failed or skipped walk does not hold it back. With nothing left to
+	// retire it is one count read.
+	retired, retireErr := RetireJiraProjectAsTeamRows(ctx, collector.Sink.Conn, ref.OrgID, normalizedAt, false)
+	if retireErr != nil {
+		return TeamCatalogResult{}, retireErr
+	}
+	if retired.Retired() > 0 {
+		slog.Default().InfoContext(ctx, "jira_project_as_team_retired",
+			"teams", retired.TeamsRetired, "ownership", retired.OwnershipClosed, "memberships", retired.MembershipClosed,
+			"teams_with_manual_members", retired.TeamsWithManualMembers, "teams_with_sync_policy", retired.TeamsWithSyncPolicy)
+	}
 	batch, err := collector.Handler.CollectTeamCatalog(ctx, ref, credential, client, selections, normalizedAt)
 	if err != nil {
-		return TeamCatalogResult{}, err
+		return TeamCatalogResult{ProjectAsTeamRetired: int(retired.Retired())}, err
 	}
 	if batch.Result.WalkSkipped {
-		return TeamCatalogResult{Skipped: true, SkipReason: batch.Result.WalkSkipReason}, nil
+		return TeamCatalogResult{Skipped: true, SkipReason: batch.Result.WalkSkipReason, ProjectAsTeamRetired: int(retired.Retired())}, nil
 	}
 	writeClaim := Claim{Unit: Unit{OrgID: ref.OrgID, Provider: jiraTeamCatalogProvider}}
-	result := TeamCatalogResult{}
+	result := TeamCatalogResult{ProjectAsTeamRetired: int(retired.Retired())}
 
 	var keptMemberships []jiraTeamCatalogMembershipRow
 	var membershipsSkippedManualConflict, membershipsStagedForReview, driftChangesSuperseded int

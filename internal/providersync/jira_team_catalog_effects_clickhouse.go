@@ -584,17 +584,15 @@ WHERE org_id = {org_id:String}`,
 }
 
 // jiraOpenCatalogOwnershipQuery reads the open team_project_ownership rows
-// THIS writer owns. Atlassian Teams writes provider 'jira', source 'native'
-// rows into the same table and retracts its own; the two are told apart by
-// shape, not by a second column: a project-as-team row always has
-// team_id = project_key (the team IS the project, identified by its key),
-// and an Atlassian team id is a lower-case uuid that is never a project key.
-// Every 'jira_legacy' row is this writer's.
+// THIS writer owns: the 'jira_legacy' rows. Source 'native' rows of provider
+// 'jira' are the Atlassian Teams writer's (internal/atlassianteams), which
+// retracts its own; the project-as-team rows of that source are no longer
+// written and are closed by RetireJiraProjectAsTeamRows.
 const jiraOpenCatalogOwnershipQuery = `
 SELECT team_id, project_id, project_key, toString(source), is_primary, specificity, priority, valid_from
 FROM team_project_ownership FINAL
 WHERE org_id = {org_id:String} AND provider = 'jira' AND valid_to IS NULL
-  AND (source = 'jira_legacy' OR (source = 'native' AND team_id = ifNull(project_key, '')))`
+  AND source = 'jira_legacy'`
 
 func jiraOpenCatalogOwnership(ctx context.Context, conn driver.Conn, orgID string) ([]jiraTeamCatalogOwnershipRow, error) {
 	if conn == nil || strings.TrimSpace(orgID) == "" {

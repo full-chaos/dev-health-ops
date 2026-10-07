@@ -1,6 +1,6 @@
 // Package synccli is the `sync` group of dho: verbs that pull an external
 // system's structure into ClickHouse. Its first verb, `sync teams`, reads the
-// organization's Atlassian Teams (structure, members, active projects) and
+// organization's Atlassian Teams (structure, members, connected projects) and
 // writes them to the ClickHouse team dimensions (internal/atlassianteams).
 //
 // `--provider jira` keeps the name Python users know. It is Atlassian Teams,
@@ -87,7 +87,7 @@ func Command() cli.Command {
 		Kind:    cli.Group,
 		Children: append([]cli.Command{{
 			Name:    "teams",
-			Summary: "sync the organization's Atlassian Teams (structure, members, active projects)",
+			Summary: "sync the organization's Atlassian Teams (structure, members, connected projects)",
 			Kind:    cli.Verb,
 			Run:     func(ctx context.Context, env cli.Env) int { return runTeams(ctx, env, defaultDeps()) },
 		}}, TargetCommands(InlineExecutor(InlineDeps{}))...),
@@ -262,8 +262,29 @@ func runTeams(ctx context.Context, env cli.Env, d deps) int {
 	if err != nil {
 		return writeError(env.Stderr, cli.ExitFailure, "write_failed", redact(err))
 	}
+	links := rows.ProjectLinks
+	if selections.Projects && !rows.ProjectLinksComplete {
+		// The project links were not a complete snapshot (a team's link read failed, or a link type this
+		// version does not know): the links read were written and no link was closed.
+		detail := ""
+		if rows.ProjectLinkFailure != nil {
+			detail = redact(rows.ProjectLinkFailure)
+		}
+		logger.Warn("atlassian team project links incomplete: no link was closed", "org_id", orgID,
+			"failed_team_reads", links.FailedTeamReads, "unknown_type_links", links.SkippedUnknownType, "error", detail)
+	}
+	if unwritten := len(rows.UnreadableProjectLinkTeams); selections.Projects && unwritten > 0 {
+		// A Jira project link of these teams got no row (no readable project id, or no key): the provider still
+		// returns the link, so no link of these teams was closed.
+		logger.Warn("atlassian team project links not written: no link of these teams was closed", "org_id", orgID,
+			"teams", unwritten, "skipped_no_native_id", links.SkippedNoNativeID, "skipped_no_project_key", links.SkippedNoProjectKey)
+	}
 	logger.Info("atlassian teams synced", "org_id", orgID, "teams", len(rows.Teams), "memberships", len(rows.Memberships),
-		"project_links", len(rows.Ownership), "skipped_project_links", rows.SkippedProjects, "unreadable_project_link_teams", len(rows.UnreadableProjectLinkTeams),
+		"project_links", len(rows.Ownership), "project_links_seen", links.Seen, "project_links_written", result.OwnershipWritten,
+		"skipped_project_links", links.Skipped(), "skipped_not_project", links.SkippedNonJira, "skipped_no_native_id", links.SkippedNoNativeID,
+		"skipped_no_project_key", links.SkippedNoProjectKey, "skipped_unknown_type", links.SkippedUnknownType,
+		"failed_project_link_team_reads", links.FailedTeamReads, "project_links_complete", rows.ProjectLinksComplete,
+		"unreadable_project_link_teams", len(rows.UnreadableProjectLinkTeams),
 		"expired_memberships", result.ExpiredMemberships, "expired_project_links", result.ExpiredOwnership, "deactivated_teams", result.DeactivatedTeams, "duration_ms", time.Since(started).Milliseconds())
 	if _, err := fmt.Fprintf(env.Stdout, "teams=%d memberships=%d project_links=%d expired_memberships=%d expired_project_links=%d deactivated_teams=%d\n",
 		len(rows.Teams), len(rows.Memberships), len(rows.Ownership), result.ExpiredMemberships, result.ExpiredOwnership, result.DeactivatedTeams); err != nil {

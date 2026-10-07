@@ -240,8 +240,8 @@ func TestCheckAndUncheckWriteExactlyTheKeysOfTheTarget(t *testing.T) {
 }
 
 // TestSelectionChangeReadsOnlyTheListTheServerShows is the save rule as a
-// table: the reference of a save is the stored list plus what the enabled
-// rows add, and nothing else.
+// table: the reference of a save is the list the server shows (the row
+// state, and the stored targets no row speaks for), and nothing else.
 func TestSelectionChangeReadsOnlyTheListTheServerShows(t *testing.T) {
 	gitOn := []string{"repo-metadata", "commits", "commit-stats", "files", "blame"}
 	prsKeys := []string{"pr-comments", "pr-reviews", "prs"}

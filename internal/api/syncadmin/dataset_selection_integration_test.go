@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -331,8 +332,8 @@ type selectionSeed struct {
 	provider string
 	on, off  []string
 	stored   string
-	// shown is the list the config must show: the stored list, then the
-	// targets only the ON rows give.
+	// shown is the list the config must show: the stored targets a row is ON
+	// for (or that have no dataset), then the targets only the ON rows give.
 	shown []string
 }
 
@@ -345,14 +346,14 @@ var selectionSeeds = []selectionSeed{
 		on:     []string{"repo-metadata", "commits", "commit-stats", "files", "blame", "prs", "pr-reviews", "pr-comments", "cicd", "tests", "security", "incidents"},
 		off:    []string{"work-items", "work-item-labels", "work-item-projects", "work-item-history", "work-item-comments", "deployments"},
 		stored: `["git", "prs", "work-items", "incidents"]`,
-		shown:  []string{"git", "prs", "work-items", "incidents", "cicd", "tests"}},
+		shown:  []string{"git", "prs", "incidents", "cicd", "tests"}},
 	// GitLab: a mixed git family (no blame row), a mixed prs family (the
 	// canonical row off, a member on), feature-flags on, incidents off.
 	{provider: "gitlab",
 		on:     []string{"repo-metadata", "commits", "commit-stats", "files", "pr-comments", "feature-flags", "security"},
 		off:    []string{"prs", "pr-reviews", "incidents", "cicd"},
 		stored: `["git", "cicd"]`,
-		shown:  []string{"git", "cicd", "prs", "feature-flags"}},
+		shown:  []string{"git", "prs", "feature-flags"}},
 	// Jira: the work-item family on, and an incidents row on (target
 	// "operational", which the Jira form has no checkbox for).
 	{provider: "jira",
@@ -361,11 +362,11 @@ var selectionSeeds = []selectionSeed{
 		stored: `["work-items"]`,
 		shown:  []string{"work-items", "operational"}},
 	// Linear: every row present and OFF, the stored list still names the
-	// target: the config shows the stored list.
+	// target: the config shows nothing.
 	{provider: "linear",
 		off:    []string{"work-items", "work-item-labels", "work-item-projects", "work-item-history", "work-item-comments"},
 		stored: `["work-items"]`,
-		shown:  []string{"work-items"}},
+		shown:  []string{}},
 	{provider: "launchdarkly", on: []string{"feature-flags"}, stored: `[]`, shown: []string{"feature-flags"}},
 }
 
@@ -382,9 +383,10 @@ func (v *selectionVenue) seeded(org string, seed selectionSeed) (integration, co
 func TestDatasetRowsOwnTheSyncSelection(t *testing.T) {
 	v := startSelectionVenue(t)
 
-	// GET shows the stored list, then the targets only the ENABLED rows give.
-	// A row that exists and is off adds nothing.
-	t.Run("the config shows its stored list and what its enabled rows add", func(t *testing.T) {
+	// GET shows the state of the rows: the stored targets an ENABLED row
+	// speaks for (or that have no dataset), then the targets only the enabled
+	// rows give. A stored target whose rows are all off is not shown.
+	t.Run("the config shows the state of its rows", func(t *testing.T) {
 		v.t = t
 		for _, seed := range selectionSeeds {
 			_, config := v.seeded(v.orgOn, seed)
@@ -395,8 +397,9 @@ func TestDatasetRowsOwnTheSyncSelection(t *testing.T) {
 	})
 
 	// Saving the list the config shows, with other settings changed, changes
-	// no dataset row and keeps the stored list as it was: a target the list
-	// shows only because a row is on is never stored.
+	// no dataset row. A target the list shows only because a row is on is
+	// never stored, and a stored target the list does not show (its rows are
+	// off) leaves the stored list: the rest of the stored list stays.
 	t.Run("a save of the shown list with other settings changes no row", func(t *testing.T) {
 		v.t = t
 		for _, seed := range selectionSeeds {
@@ -416,8 +419,14 @@ func TestDatasetRowsOwnTheSyncSelection(t *testing.T) {
 			if err := json.Unmarshal([]byte(seed.stored), &before2); err != nil {
 				t.Fatal(err)
 			}
-			if err := json.Unmarshal([]byte(v.stored(config)), &after2); err != nil || !reflect.DeepEqual(after2, before2) {
-				t.Errorf("%s: the stored list is %s, want it as it was %s", seed.provider, v.stored(config), seed.stored)
+			want := []string{}
+			for _, target := range before2 {
+				if slices.Contains(seed.shown, target) {
+					want = append(want, target)
+				}
+			}
+			if err := json.Unmarshal([]byte(v.stored(config)), &after2); err != nil || !reflect.DeepEqual(after2, want) {
+				t.Errorf("%s: the stored list is %s, want the items of %s that the config shows: %v", seed.provider, v.stored(config), seed.stored, want)
 			}
 		}
 	})
@@ -635,7 +644,7 @@ func TestDatasetRowsOwnTheSyncSelection(t *testing.T) {
 			t.Errorf("incidents and prs checked: rows %v, want prs on and cicd on", states)
 		}
 		// A save with no sync_targets does not write the column, and still
-		// answers the stored list and what the rows add.
+		// answers the list the rows show.
 		v.datasetEndpoint(v.orgOn, integration, "deployments", true)
 		storedBefore := v.stored(config)
 		status, body := v.patch(v.orgOn, config, `{"initial_sync_depth":7}`)
@@ -871,10 +880,11 @@ func TestDatasetRowsOwnTheSyncSelection(t *testing.T) {
 
 	// Two whole-integration configs on one integration (the old shape): the
 	// rows are per integration, so an uncheck in one is the setting of both.
-	// The other config still shows the target (its stored list names it, as
-	// on main) with the rows off, and a save of the list it shows keeps the
-	// rows off: the dataset switch, or a remove and an add of the target,
-	// turns them on. (Main's save of that list switched the rows on.)
+	// The other config does not show the target any more (the rows are off),
+	// though its stored list still names it, and a save of the list it shows
+	// keeps the rows off and drops the target from its stored list. A check
+	// of the target turns the rows on. (Main showed the stored list, and its
+	// save of that list switched the rows on.)
 	t.Run("sibling configs share one selection", func(t *testing.T) {
 		v.t = t
 		prs := targetKeys(t, "github", "prs")
@@ -888,20 +898,20 @@ func TestDatasetRowsOwnTheSyncSelection(t *testing.T) {
 			}
 		}
 		shown := v.get(v.orgOn, b)
-		if !reflect.DeepEqual(shown, []string{"git", "prs"}) {
-			t.Errorf("config B shows %v, want its stored list [git prs]", shown)
+		if !reflect.DeepEqual(shown, []string{"git"}) || v.stored(b) != `["git", "prs"]` {
+			t.Errorf("config B shows %v with the stored list %s, want [git] shown (the prs rows are off) and the stored list not changed by a read", shown, v.stored(b))
 		}
 		rows := v.rows(integration)
 		v.save(v.orgOn, b, listBody(shown, `,"initial_sync_depth":5`))
-		if v.rows(integration) != rows || v.stored(b) != `["git", "prs"]` {
-			t.Errorf("a save of the list config B shows changed rows or its stored list (%s)", v.stored(b))
+		var storedB []string
+		if err := json.Unmarshal([]byte(v.stored(b)), &storedB); err != nil || v.rows(integration) != rows || !reflect.DeepEqual(storedB, []string{"git"}) {
+			t.Errorf("a save of the list config B shows: rows changed = %v, stored list %s; want no row write and [git] stored", v.rows(integration) != rows, v.stored(b))
 		}
-		// Remove and add: the rows go on again.
-		v.save(v.orgOn, b, `{"sync_targets":["git"]}`)
+		// A check of the target: the rows go on again.
 		v.save(v.orgOn, b, `{"sync_targets":["git","prs"]}`)
 		for _, key := range prs {
 			if !v.states(integration)[key] {
-				t.Errorf("config B removed and added prs: the %s row is off", key)
+				t.Errorf("config B checked prs: the %s row is off", key)
 			}
 		}
 	})

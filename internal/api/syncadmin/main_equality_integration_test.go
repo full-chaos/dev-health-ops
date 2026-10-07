@@ -51,7 +51,9 @@ var equalityCases = []equalityCase{
 		want: `before=403/403/403/403/refused_feature_disabled/ineligible save=403 stored=["work-items","operational"] after=403/403/403/403/refused_feature_disabled/ineligible | child before=202/202/400/200/minted/planned stored=["work-items"] after=202/202/400/200/minted/planned`},
 	{name: "jira: the list names the gated target, row off", provider: "jira", stored: `["work-items","operational"]`,
 		on: []string{"work-items"}, off: []string{"incidents"}, childStored: `["work-items","operational"]`,
-		want: `before=403/403/403/403/refused_feature_disabled/ineligible save=403 stored=["work-items","operational"] after=403/403/403/403/refused_feature_disabled/ineligible | child before=403/403/403/403/refused_feature_disabled/ineligible stored=["work-items","operational"] after=403/403/403/403/refused_feature_disabled/ineligible`},
+		want: `before=403/403/403/403/refused_feature_disabled/ineligible save=403 stored=["work-items","operational"] after=403/403/403/403/refused_feature_disabled/ineligible | child before=403/403/403/403/refused_feature_disabled/ineligible stored=["work-items","operational"] after=403/403/403/403/refused_feature_disabled/ineligible`,
+		here: `before=403/403/403/403/refused_feature_disabled/ineligible save=200 stored=["work-items"] after=202/202/400/200/minted/planned | child before=403/403/403/403/refused_feature_disabled/ineligible stored=["work-items"] after=202/202/400/200/minted/planned`,
+		why:  "no row of the named target is on, so GET does not show it and the save of the shown list drops it from the stored list (and from the child) and writes no row; the other save sent the target back and was refused by the feature gate"},
 	{name: "gitlab: plain, the child is out of step", provider: "gitlab", stored: `["git"]`, on: []string{"commits"}, childStored: `["git","prs"]`,
 		want: `before=202/202/200/200/minted/planned save=200 stored=["git"] after=202/202/200/200/minted/planned | child before=202/202/200/200/minted/planned stored=["git"] after=202/202/200/200/minted/planned`},
 	{name: "gitlab: incidents row on, the list does not name the target", provider: "gitlab", stored: `["git"]`,
@@ -64,21 +66,27 @@ var equalityCases = []equalityCase{
 		want: `before=403/403/403/403/refused_feature_disabled/ineligible save=403 stored=["git","incidents"] after=403/403/403/403/refused_feature_disabled/ineligible | child before=403/403/403/403/refused_feature_disabled/ineligible stored=["git","incidents"] after=403/403/403/403/refused_feature_disabled/ineligible`},
 	{name: "gitlab: the list names the gated target, row off", provider: "gitlab", stored: `["git","incidents"]`,
 		on: []string{"commits"}, off: []string{"incidents"}, childStored: `["git"]`,
-		want: `before=403/403/403/403/refused_feature_disabled/ineligible save=403 stored=["git","incidents"] after=403/403/403/403/refused_feature_disabled/ineligible | child before=202/202/200/200/minted/planned stored=["git"] after=202/202/200/200/minted/planned`},
+		want: `before=403/403/403/403/refused_feature_disabled/ineligible save=403 stored=["git","incidents"] after=403/403/403/403/refused_feature_disabled/ineligible | child before=202/202/200/200/minted/planned stored=["git"] after=202/202/200/200/minted/planned`,
+		here: `before=403/403/403/403/refused_feature_disabled/ineligible save=200 stored=["git"] after=202/202/200/200/minted/planned | child before=202/202/200/200/minted/planned stored=["git"] after=202/202/200/200/minted/planned`,
+		why:  "no row of the named target is on, so GET does not show it and the save of the shown list drops it from the stored list (and from the child) and writes no row; the other save sent the target back and was refused by the feature gate"},
 	{name: "github: a row is on that the list does not name", provider: "github", stored: `["git"]`, on: []string{"commits", "cicd"}, childStored: `["git"]`,
 		want: `before=202/202/200/200/minted/planned save=200 stored=["git"] after=202/202/200/200/minted/planned | child before=202/202/200/200/minted/planned stored=["git"] after=202/202/200/200/minted/planned`},
 	{name: "github: the list names the gated target", provider: "github", stored: `["git","incidents"]`, on: []string{"commits"}, childStored: `["git"]`,
 		want: `before=403/403/403/403/refused_feature_disabled/ineligible save=403 stored=["git","incidents"] after=403/403/403/403/refused_feature_disabled/ineligible | child before=202/202/200/200/minted/planned stored=["git"] after=202/202/200/200/minted/planned`},
 	{name: "github: the list names a target whose rows are off", provider: "github", stored: `["git","prs"]`,
 		on: []string{"commits"}, off: []string{"prs", "pr-reviews", "pr-comments"}, childStored: `["prs"]`,
-		want: `before=202/202/200/200/minted/planned save=200 stored=["git","prs"] after=202/202/200/200/minted/planned | child before=202/202/200/200/minted/planned stored=["git","prs"] after=202/202/200/200/minted/planned`},
+		want: `before=202/202/200/200/minted/planned save=200 stored=["git","prs"] after=202/202/200/200/minted/planned | child before=202/202/200/200/minted/planned stored=["git","prs"] after=202/202/200/200/minted/planned`,
+		here: `before=202/202/200/200/minted/planned save=200 stored=["git"] after=202/202/200/200/minted/planned | child before=202/202/200/200/minted/planned stored=["git"] after=202/202/200/200/minted/planned`,
+		why:  "no row of the named target is on, so GET does not show it and the save of the shown list drops it from the stored list (and from the child) and writes no row; the other save sent the target back and switched its rows on"},
 	{name: "linear: plain", provider: "linear", stored: `["work-items"]`, on: []string{"work-items"}, childStored: `["work-items"]`,
 		want: `before=202/202/400/200/minted/planned save=200 stored=["work-items"] after=202/202/400/200/minted/planned | child before=202/202/400/200/minted/planned stored=["work-items"] after=202/202/400/200/minted/planned`},
 	{name: "linear: the list names a gated target", provider: "linear", stored: `["work-items","incidents"]`, on: []string{"work-items"}, childStored: `["work-items"]`,
 		want: `before=403/403/403/403/refused_feature_disabled/ineligible save=403 stored=["work-items","incidents"] after=403/403/403/403/refused_feature_disabled/ineligible | child before=202/202/400/200/minted/planned stored=["work-items"] after=202/202/400/200/minted/planned`},
 	{name: "linear: the list names a target whose rows are off", provider: "linear", stored: `["work-items"]`,
 		off: []string{"work-items", "work-item-labels"}, childStored: `[]`,
-		want: `before=202/202/400/200/minted/planned save=200 stored=["work-items"] after=202/202/400/200/minted/planned | child before=202/202/400/200/minted/planned stored=["work-items"] after=202/202/400/200/minted/planned`},
+		want: `before=202/202/400/200/minted/planned save=200 stored=["work-items"] after=202/202/400/200/minted/planned | child before=202/202/400/200/minted/planned stored=["work-items"] after=202/202/400/200/minted/planned`,
+		here: `before=202/202/400/200/minted/planned save=200 stored=[] after=202/202/400/200/minted/planned | child before=202/202/400/200/minted/planned stored=[] after=202/202/400/200/minted/planned`,
+		why:  "no row of the named target is on, so GET does not show it and the save of the shown list drops it from the stored list (and from the child) and writes no row; the other save sent the target back and switched its rows on"},
 	{name: "pagerduty control: the operational list", provider: "pagerduty", stored: `["operational"]`,
 		on: []string{"incidents", "services"}, childStored: `["operational"]`,
 		want: `before=403/403/403/403/refused_feature_disabled/ineligible save=403 stored=["operational"] after=403/403/403/403/refused_feature_disabled/ineligible | child before=403/403/403/403/refused_feature_disabled/ineligible stored=["operational"] after=403/403/403/403/refused_feature_disabled/ineligible`},
@@ -99,10 +107,11 @@ var equalityCases = []equalityCase{
 // once with each base list a client can send), and reads all of it again,
 // with the stored list of the parent and of the child.
 //
-// What it pins: the answers and the stored lists are the recorded ones, so a
-// save of the shown list never changes what a reader of the stored list
-// answers, a base list changes nothing, and the child holds the parent's
-// stored list. Not compared: the dataset rows themselves (the rows own the
+// What it pins: outside the six named states the answers and the stored lists
+// are the recorded ones, so a save of the shown list never changes what a
+// reader of the stored list answers; a base list changes nothing; the child
+// holds the parent's stored list. In every state, the named ones included,
+// the readers before the save answer the recorded line. Not compared: the dataset rows themselves (the rows own the
 // selection: that is the change) and the list GET shows.
 func TestEveryReaderAndEveryStoredListEqualsTheSaveThatRebuiltTheRows(t *testing.T) {
 	v := startCascadeVenue(t, false)
@@ -154,45 +163,55 @@ VALUES ($1::uuid,$2,'job-'||$1::text,$3::uuid,'sync','0 * * * *','UTC',1,FALSE,n
 			}
 		}
 	}
-	if known != 2*3 {
-		t.Errorf("%d runs answer a line other than the recorded one, want the two named states only (3 runs each)", known)
+	if known != 6*3 {
+		t.Errorf("%d runs answer a line other than the recorded one, want the six named states only (3 runs each): the two with an incidents row on that the list does not name, and the four where the list names a target with a dataset and no row of it is on", known)
 	}
 }
 
-// TestASaveOfTheShownListKeepsARowThatIsOffOff pins the second known
-// difference from the save that rebuilt the rows: the stored list names a
-// target with a dataset and the rows of that target are off (the dataset
-// switch turned them off). GET shows the target (the list is shown as
-// stored). A save of the shown list writes no row, so the rows stay off; the
-// other save switched them on. The stored list and every reader of it are
-// the same either way (the equality table holds this state too). The dataset
-// switch, or a remove and an add of the target, turns the rows on.
-func TestASaveOfTheShownListKeepsARowThatIsOffOff(t *testing.T) {
+// TestASaveOfTheShownListDropsAStoredTargetWhoseRowsAreOffOrAbsent pins the
+// second known difference from the save that rebuilt the rows: the stored
+// list names a target that has a dataset of the provider, and no row of that
+// target is on (the rows are off, or the integration has no row for it at
+// all: a missing row reads as a row that is off). GET does not show the
+// target. A save of the shown list writes no row and drops the target from
+// the stored list; the other save switched the rows on (or made them). Before
+// any save the readers of the stored list still read the target (the
+// equality table holds these states). A check of the target in the form, or
+// the dataset switch, turns the rows on.
+func TestASaveOfTheShownListDropsAStoredTargetWhoseRowsAreOffOrAbsent(t *testing.T) {
 	v := startCascadeVenue(t, false)
 	for _, testCase := range []struct {
-		provider, stored, target string
-		on, off                  []string
+		provider, stored, target, wantStored string
+		on, off                              []string
 	}{
-		{"github", `["git","prs"]`, "prs", []string{"commits"}, []string{"prs", "pr-reviews", "pr-comments"}},
-		{"gitlab", `["git","cicd"]`, "cicd", []string{"commits"}, []string{"cicd"}},
-		{"jira", `["work-items"]`, "work-items", nil, []string{"work-items", "work-item-labels"}},
-		{"linear", `["work-items"]`, "work-items", nil, []string{"work-items", "work-item-labels"}},
+		{"github", `["git","prs"]`, "prs", `["git"]`, []string{"commits"}, []string{"prs", "pr-reviews", "pr-comments"}},
+		{"github", `["git","prs"]`, "prs", `["git"]`, []string{"commits"}, nil},
+		{"gitlab", `["git","cicd"]`, "cicd", `["git"]`, []string{"commits"}, []string{"cicd"}},
+		{"gitlab", `["git","cicd"]`, "cicd", `["git"]`, []string{"commits"}, nil},
+		{"jira", `["work-items"]`, "work-items", `[]`, nil, []string{"work-items", "work-item-labels"}},
+		{"jira", `["work-items"]`, "work-items", `[]`, nil, nil},
+		{"linear", `["work-items"]`, "work-items", `[]`, nil, []string{"work-items", "work-item-labels"}},
+		{"linear", `["work-items"]`, "work-items", `[]`, nil, nil},
 	} {
+		label := fmt.Sprintf("%s (rows of %q off: %v)", testCase.provider, testCase.target, testCase.off)
 		parent := v.seed(testCase.provider, testCase.stored, testCase.on)
 		for _, key := range testCase.off {
 			v.exec(`INSERT INTO integration_datasets (id, org_id, integration_id, dataset_key, is_enabled, options) VALUES ($1, $2, $3, $4, false, '{}'::json)`,
 				uuid.New(), v.org, parent.integration, key)
 		}
 		rows, shown := v.rows(parent.integration), v.shown(parent.config)
-		if !strings.Contains(shown, `"`+testCase.target+`"`) {
-			t.Errorf("%s: GET shows %s, want the stored target %q in it", testCase.provider, shown, testCase.target)
+		if strings.Contains(shown, `"`+testCase.target+`"`) {
+			t.Errorf("%s: GET shows %s, want no %q in it: no row of the target is on", label, shown, testCase.target)
+		}
+		if got := v.storedList(parent.config); got != testCase.stored {
+			t.Errorf("%s: a GET changed the stored list to %s, want %s", label, got, testCase.stored)
 		}
 		if status, body := v.call("PATCH", "/api/v1/admin/sync-configs/"+parent.config.String(), `{"sync_targets":`+shown+`}`); status != 200 {
-			t.Fatalf("%s: the save of the shown list %s: %d %s", testCase.provider, shown, status, body)
+			t.Fatalf("%s: the save of the shown list %s: %d %s", label, shown, status, body)
 		}
-		if after := v.rows(parent.integration); after != rows || v.storedList(parent.config) != testCase.stored {
-			t.Errorf("%s: a save of the shown list %s: rows [%s] (were [%s]), stored %s (was %s): want both as they were",
-				testCase.provider, shown, after, rows, v.storedList(parent.config), testCase.stored)
+		if after := v.rows(parent.integration); after != rows || v.storedList(parent.config) != testCase.wantStored {
+			t.Errorf("%s: a save of the shown list %s: rows [%s] (were [%s]), stored %s: want the rows as they were and stored %s",
+				label, shown, after, rows, v.storedList(parent.config), testCase.wantStored)
 		}
 	}
 }

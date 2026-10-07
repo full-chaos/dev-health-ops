@@ -68,12 +68,12 @@ sync configuration, or send an API `PATCH` of the configuration with
 `sync_targets` that includes `work-items`. The next scheduled run plans the
 work-items unit again. That save switches on only the work-item datasets: a
 save changes the datasets of the targets you added or removed and leaves every
-other dataset as it is. A configuration shows the targets that were selected
-for it and the targets its enabled datasets add. If "Work Items" already
-shows checked while the work-item datasets are off (the datasets were switched
-off through the dataset API after the target was selected), a save does not
-switch them on: uncheck "Work Items", save, check it and save, or switch the
-datasets on through the dataset API.
+other dataset as it is. A configuration shows the targets that have an
+enabled dataset. A target whose datasets are all off, or that has no dataset
+row, shows unchecked, also when an earlier save selected it: check it and
+save, or switch the datasets on through the dataset API. A save that leaves
+it unchecked keeps the datasets off and removes the target from the saved
+list.
 
 **How to see what a save changed**: the API metrics endpoint counts the dataset
 rows that saves of sync configurations switched, in

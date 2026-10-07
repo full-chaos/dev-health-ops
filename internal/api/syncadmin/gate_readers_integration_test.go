@@ -335,10 +335,12 @@ func startGateReaderVenue(t *testing.T) (*pgxpool.Pool, string, func(method, pat
 	return pool, org, call, exec
 }
 
-// TestCreateAnswersTheListItStores: the create stores the submitted list and
-// its response carries it, as every later read does. "blame" is a target the
-// form does not offer: the create stores it and writes its row.
-func TestCreateAnswersTheListItStores(t *testing.T) {
+// TestCreateAnswersTheListEveryLaterReadShows: the create stores the
+// submitted list and writes its rows, and its response carries the list
+// every later read shows. "blame" is a target the form does not offer: the
+// create stores it and writes its row, and no response shows it (a shown
+// list holds a target with a dataset only when the form offers it).
+func TestCreateAnswersTheListEveryLaterReadShows(t *testing.T) {
 	ctx := context.Background()
 	pool, _, call, _ := startGateReaderVenue(t)
 	status, body := call("POST", "/api/v1/admin/sync-configs", `{"name":"created","provider":"github","sync_targets":["git","blame"],"sync_options":{"all_repos":true}}`)
@@ -363,8 +365,8 @@ FROM sync_configurations AS config WHERE config.id = $1::uuid`, created.ID).Scan
 	if !strings.Contains(stored, `"blame"`) || !blameOn {
 		t.Fatalf("the stored list is %s and the blame row is on = %v, want the submitted list stored and the row on", stored, blameOn)
 	}
-	if !slices.Equal(created.SyncTargets, []string{"git", "blame"}) {
-		t.Errorf("the create answers %v, want the list it stored [git blame] (stored: %s)", created.SyncTargets, stored)
+	if !slices.Equal(created.SyncTargets, []string{"git"}) {
+		t.Errorf("the create answers %v, want [git]: the form target of the rows that are on (stored: %s)", created.SyncTargets, stored)
 	}
 	status, body = call("GET", "/api/v1/admin/sync-configs/"+created.ID, "")
 	var read struct {

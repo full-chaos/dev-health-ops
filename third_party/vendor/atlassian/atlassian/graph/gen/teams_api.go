@@ -52,7 +52,8 @@ const TeamSearchV2Query = `query TeamSearchV2(
       siteId: $siteId,
       filter: { query: $query },
       first: $first,
-      after: $after
+      after: $after,
+      showEmptyTeams: true
     ) @optIn(to: "Team-search-v2") {
       pageInfo { hasNextPage endCursor }
       nodes {

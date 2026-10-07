@@ -121,7 +121,7 @@ func (collector jiraCombinedTeamCatalogCollector) CollectTeamCatalog(
 		slog.Default().WarnContext(ctx, "jira_atlassian_teams_walk_skipped", "org_id", ref.OrgID, "sync_run_id", ref.SyncRunID, "reason", "no_base_url")
 		return result, nil
 	}
-	atlassianResult, err := collector.collectAtlassianTeams(ctx, ref, credential, client, selections, normalizedAt)
+	atlassianResult, degraded, err := collector.collectAtlassianTeams(ctx, ref, credential, client, selections, normalizedAt)
 	if err != nil {
 		// The Atlassian Teams leg is ADDITIVE and independent (D2778): its failure must neither fail
 		// reference discovery (strict) nor undo the project-as-team write above. It is never silent
@@ -141,7 +141,50 @@ func (collector jiraCombinedTeamCatalogCollector) CollectTeamCatalog(
 	result.OwnershipWritten += atlassianResult.OwnershipWritten
 	result.MembersWritten += atlassianResult.MembersWritten
 	result.TeamKeys = append(result.TeamKeys, atlassianResult.TeamKeys...)
+	result.OwnershipRetracted += atlassianResult.ExpiredOwnership
+	result.OwnershipSnapshotIncomplete = result.OwnershipSnapshotIncomplete || atlassianResult.ProjectLinksIncomplete
+	links := atlassianResult.ProjectLinks
+	result.ProjectLinksSeen += links.Seen
+	result.ProjectLinksSkippedNotProject += links.SkippedNonJira
+	result.ProjectLinksSkippedNoNativeID += links.SkippedNoNativeID
+	result.ProjectLinksSkippedNoKey += links.SkippedNoProjectKey
+	result.ProjectLinksSkippedUnknownType += links.SkippedUnknownType
+	// A leg that degraded inside an otherwise written collection (the project links, or an empty team search):
+	// the run is never a clean success.
+	result.DegradedLegs = append(result.DegradedLegs, degraded...)
 	return result, nil
+}
+
+// The fixed reasons of a degraded Atlassian Teams sub-leg.
+const (
+	atlassianLegEmptyTeamSearch     = "empty_team_search"
+	atlassianLegLinkReadFailed      = "project_link_read_failed"
+	atlassianLegLinkPageBound       = "project_link_page_bound"
+	atlassianLegLinkUnknownType     = "project_link_unknown_type"
+	atlassianProjectLinksLeg        = "jira_atlassian_team_project_links"
+	atlassianProjectLinksDegradedAt = "jira_atlassian_teams_project_links_degraded"
+)
+
+// degradedProjectLinksLeg is the degraded leg of a project-link collection that was not a complete snapshot, nil
+// when it was complete. The team-to-container relation is experimental at the provider: a refused opt-in, a failed
+// page, the page bound and a link type this code does not know all end here, with the reason, and close no row.
+func degradedProjectLinksLeg(rows atlassianteams.Rows) *providersync.DegradedLeg {
+	if rows.ProjectLinksComplete {
+		return nil
+	}
+	leg := providersync.DegradedLeg{Dataset: "teams", Leg: atlassianProjectLinksLeg, Outcome: "failed"}
+	switch failure := rows.ProjectLinkFailure; {
+	case failure != nil && errors.Is(failure, graph.ErrTeamConnectedContainersBound):
+		leg.Reason, leg.Detail = atlassianLegLinkPageBound, syncdispatchruntime.SanitizeErrorText(failure.Error())
+	case failure != nil:
+		leg.Reason, leg.Detail = atlassianLegLinkReadFailed, syncdispatchruntime.SanitizeErrorText(failure.Error())
+	case rows.ProjectLinks.SkippedUnknownType > 0:
+		leg.Reason = atlassianLegLinkUnknownType
+	default:
+		// Not complete and no recorded cause: still never a clean run.
+		leg.Reason = atlassianLegLinkReadFailed
+	}
+	return &leg
 }
 
 // newDegradedAtlassianLeg records a failed Atlassian Teams leg. Detail is err.Error(): for a provider
@@ -202,13 +245,13 @@ func (collector jiraCombinedTeamCatalogCollector) collectAtlassianTeams(
 	client *providerfoundation.HTTPClient,
 	selections providersync.TeamCatalogSelections,
 	normalizedAt time.Time,
-) (result atlassianteams.Result, err error) {
+) (result atlassianteams.Result, degraded []providersync.DegradedLeg, err error) {
 	if collector.Conn == nil {
-		return atlassianteams.Result{}, providersync.ErrInvalidConfiguration
+		return atlassianteams.Result{}, nil, providersync.ErrInvalidConfiguration
 	}
 	tenant, err := normalizeAtlassianTenantURL(client.BaseURL.String())
 	if err != nil {
-		return atlassianteams.Result{}, err
+		return atlassianteams.Result{}, nil, err
 	}
 	cloudID := strings.TrimSpace(credential.Config["atlassian_cloud_id"])
 	doer := collector.Doer
@@ -218,7 +261,7 @@ func (collector jiraCombinedTeamCatalogCollector) collectAtlassianTeams(
 	if cloudID == "" {
 		cloudID, err = atlassianteams.ResolveCloudID(ctx, doer, tenant)
 		if err != nil {
-			return atlassianteams.Result{}, err
+			return atlassianteams.Result{}, nil, err
 		}
 	}
 	email, _ := credential.Secret("email")
@@ -230,7 +273,7 @@ func (collector jiraCombinedTeamCatalogCollector) collectAtlassianTeams(
 		}
 	}
 	if !email.Configured() || token == "" {
-		return atlassianteams.Result{}, providersync.ErrInvalidConfiguration
+		return atlassianteams.Result{}, nil, providersync.ErrInvalidConfiguration
 	}
 	// From here on any error can carry what the gateway echoes back: strip the credential at the source.
 	defer func() { err = redactLegError(err, token, email.Reveal()) }()
@@ -245,7 +288,7 @@ func (collector jiraCombinedTeamCatalogCollector) collectAtlassianTeams(
 	if organizationID == "" {
 		organizationID, err = atlassianteams.ResolveOrganizationID(ctx, collector.newOrganizationResolver(gatewayURL, auth), cloudID)
 		if err != nil {
-			return atlassianteams.Result{}, err
+			return atlassianteams.Result{}, nil, err
 		}
 	}
 	gatewayClient := collector.newClient(gatewayURL, auth)
@@ -258,32 +301,56 @@ func (collector jiraCombinedTeamCatalogCollector) collectAtlassianTeams(
 		Now:        normalizedAt,
 	})
 	if err != nil {
-		return atlassianteams.Result{}, err
+		return atlassianteams.Result{}, nil, err
 	}
-	if rows.SkippedProjects > 0 {
-		// A link with no project key, or with a project ARI that carries no
-		// numeric id, gets no ownership row: it is counted here so a team
-		// that reaches fewer projects than the provider shows has a cause.
+	links := rows.ProjectLinks
+	if links.Skipped() > 0 {
+		// A link that got no ownership row is counted by its reason, so a
+		// team that reaches fewer projects than the provider shows has a
+		// cause.
 		slog.Default().WarnContext(ctx, "jira_atlassian_teams_project_link_skipped",
-			"org_id", ref.OrgID, "links", rows.SkippedProjects)
+			"org_id", ref.OrgID, "sync_run_id", ref.SyncRunID, "links", links.Skipped(), "links_seen", links.Seen,
+			"not_project", links.SkippedNonJira, "no_native_id", links.SkippedNoNativeID, "no_project_key", links.SkippedNoProjectKey,
+			"unknown_type", links.SkippedUnknownType, "duplicate", links.SkippedDuplicate)
 	}
 	if len(rows.UnreadableProjectLinkTeams) > 0 {
-		// Not one project link of these teams carried a readable Jira
-		// project ARI: their open links stay as they are.
+		// A Jira project link of these teams had no readable id or key:
+		// their open links stay as they are.
 		slog.Default().WarnContext(ctx, "jira_atlassian_teams_project_links_unreadable",
-			"org_id", ref.OrgID, "teams", len(rows.UnreadableProjectLinkTeams))
+			"org_id", ref.OrgID, "sync_run_id", ref.SyncRunID, "teams", len(rows.UnreadableProjectLinkTeams))
 	}
 	if len(rows.Teams) == 0 {
 		// An empty Atlassian Teams answer is far more often a permissions or
 		// configuration problem than a real empty organization (see the CLI
-		// verb's identical refusal); the automatic path is silent-by-default
-		// (no --allow-empty escape hatch here), so it simply writes nothing
-		// rather than retracting the project-as-team fallback's members and
-		// links -- Write's own retraction logic only ever acts on the
-		// Atlassian-ARI-keyed rows it owns, never on project-as-team rows.
-		return atlassianteams.Result{}, nil
+		// verb's identical refusal). Nothing is written, so nothing is
+		// retracted, and the run says so: a Warn line and a degraded leg,
+		// never a clean success with no line.
+		slog.Default().WarnContext(ctx, "jira_atlassian_teams_walk_skipped", "org_id", ref.OrgID, "sync_run_id", ref.SyncRunID,
+			"strict", ref.Strict, "reason", atlassianLegEmptyTeamSearch)
+		return atlassianteams.Result{}, []providersync.DegradedLeg{{
+			Dataset: "teams", Leg: "jira_atlassian_teams", Outcome: "failed", Reason: atlassianLegEmptyTeamSearch,
+		}}, nil
 	}
-	return atlassianteams.Write(ctx, collector.Conn, ref.OrgID, rows, atlassianSelections)
+	if atlassianSelections.Projects {
+		if leg := degradedProjectLinksLeg(rows); leg != nil {
+			// The redaction of the deferred func covers the returned error only: the detail is cleaned here.
+			leg.Detail = secrets.NewBoundaryWith("", token, email.Reveal()).RedactText(leg.Detail)
+			slog.Default().WarnContext(ctx, atlassianProjectLinksDegradedAt, "org_id", ref.OrgID, "sync_run_id", ref.SyncRunID,
+				"reason", leg.Reason, "error", leg.Detail, "failed_team_reads", links.FailedTeamReads, "links_seen", links.Seen,
+				"unknown_type", links.SkippedUnknownType, "teams", len(rows.Teams))
+			degraded = append(degraded, *leg)
+		}
+	}
+	result, err = atlassianteams.Write(ctx, collector.Conn, ref.OrgID, rows, atlassianSelections)
+	if err != nil {
+		return result, nil, err
+	}
+	if atlassianSelections.Projects {
+		slog.Default().InfoContext(ctx, "jira_atlassian_teams_project_links", "org_id", ref.OrgID, "sync_run_id", ref.SyncRunID,
+			"links_seen", links.Seen, "links_written", result.OwnershipWritten, "links_skipped", links.Skipped(),
+			"links_closed", result.ExpiredOwnership, "failed_team_reads", links.FailedTeamReads, "complete", rows.ProjectLinksComplete)
+	}
+	return result, degraded, nil
 }
 
 // normalizeAtlassianTenantURL forces https and strips to scheme+host,

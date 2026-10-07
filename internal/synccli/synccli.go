@@ -262,8 +262,23 @@ func runTeams(ctx context.Context, env cli.Env, d deps) int {
 	if err != nil {
 		return writeError(env.Stderr, cli.ExitFailure, "write_failed", redact(err))
 	}
+	links := rows.ProjectLinks
+	if selections.Projects && !rows.ProjectLinksComplete {
+		// The project links were not a complete snapshot (a team's link read failed, or a link type this
+		// version does not know): the links read were written and no link was closed.
+		detail := ""
+		if rows.ProjectLinkFailure != nil {
+			detail = redact(rows.ProjectLinkFailure)
+		}
+		logger.Warn("atlassian team project links incomplete: no link was closed", "org_id", orgID,
+			"failed_team_reads", links.FailedTeamReads, "unknown_type_links", links.SkippedUnknownType, "error", detail)
+	}
 	logger.Info("atlassian teams synced", "org_id", orgID, "teams", len(rows.Teams), "memberships", len(rows.Memberships),
-		"project_links", len(rows.Ownership), "skipped_project_links", rows.SkippedProjects, "unreadable_project_link_teams", len(rows.UnreadableProjectLinkTeams),
+		"project_links", len(rows.Ownership), "project_links_seen", links.Seen, "project_links_written", result.OwnershipWritten,
+		"skipped_project_links", links.Skipped(), "skipped_not_project", links.SkippedNonJira, "skipped_no_native_id", links.SkippedNoNativeID,
+		"skipped_no_project_key", links.SkippedNoProjectKey, "skipped_unknown_type", links.SkippedUnknownType,
+		"failed_project_link_team_reads", links.FailedTeamReads, "project_links_complete", rows.ProjectLinksComplete,
+		"unreadable_project_link_teams", len(rows.UnreadableProjectLinkTeams),
 		"expired_memberships", result.ExpiredMemberships, "expired_project_links", result.ExpiredOwnership, "deactivated_teams", result.DeactivatedTeams, "duration_ms", time.Since(started).Milliseconds())
 	if _, err := fmt.Fprintf(env.Stdout, "teams=%d memberships=%d project_links=%d expired_memberships=%d expired_project_links=%d deactivated_teams=%d\n",
 		len(rows.Teams), len(rows.Memberships), len(rows.Ownership), result.ExpiredMemberships, result.ExpiredOwnership, result.DeactivatedTeams); err != nil {

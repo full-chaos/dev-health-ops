@@ -1,10 +1,14 @@
 // Package atlassianteams syncs Atlassian Teams (the organization's real teams,
 // not Jira projects) into the ClickHouse team dimensions: the team catalog
 // (teams), who is on each team (team_memberships) and which Jira projects a
-// team actively works on (team_project_ownership). The data comes from the
-// full-chaos/atlassian client (vendored under third_party/atlassian): the
-// teamSearchV2 search for the teams, and the Teamwork Graph for each team's
-// users and active projects.
+// team owns (team_project_ownership). The data comes from the
+// full-chaos/atlassian client (vendored under third_party/vendor/atlassian):
+// the teamSearchV2 search for the teams, the Teamwork Graph for each team's
+// users, and the team-to-container relation
+// (graphStore_teamConnectedToContainer) for the Jira projects ("spaces") a
+// team is connected to. That relation is the ONE ownership source of this
+// package: a team owns a project only when the provider returns a link row
+// that carries the team id and the project id. A name is never a link.
 //
 // Nothing in the Python api ever read Atlassian Teams: its `sync teams
 // --provider jira` and the worker's Jira auto-import both treat a Jira PROJECT
@@ -65,7 +69,9 @@ const (
 type Client interface {
 	SearchTeams(ctx context.Context, organizationID, siteID, query string, pageSize int) ([]atlassian.AtlassianTeam, error)
 	IterTeamUsers(ctx context.Context, teamID string, pageSize int) ([]atlassian.TeamworkUserRelation, error)
-	IterTeamActiveProjects(ctx context.Context, teamID string, pageSize int) ([]atlassian.TeamworkProject, error)
+	// IterTeamConnectedContainers returns every container connected to a
+	// team, or an error when the provider's last page was not reached.
+	IterTeamConnectedContainers(ctx context.Context, teamID string, pageSize int) ([]graph.TeamConnectedContainer, error)
 }
 
 // Selections says which of the three dimensions a run reads and writes.
@@ -131,25 +137,68 @@ type OwnershipRow struct {
 	UpdatedAt   time.Time
 }
 
+// The union arms of the team-to-container relation this collector knows.
+// A node of any other type is a provider-side change: it is counted, and the
+// snapshot is not complete.
+const (
+	containerJiraProject     = "JiraProject"
+	containerConfluenceSpace = "ConfluenceSpace"
+	containerLoomSpace       = "LoomSpace"
+)
+
+// ProjectLinkCounts counts the team-to-container links of one collection.
+// Seen is every link of every team read that reached its end; it equals the
+// ownership rows collected plus the five skip counts. FailedTeamReads counts
+// the teams whose link read did not reach its end (their links are not in
+// Seen).
+type ProjectLinkCounts struct {
+	Seen int
+	// SkippedNonJira: a ConfluenceSpace or LoomSpace link. Valid, never written.
+	SkippedNonJira int
+	// SkippedUnknownType: a link whose node is of no known type, or absent.
+	SkippedUnknownType int
+	// SkippedNoNativeID: a JiraProject link with no native project id (no
+	// Jira project ARI, or a projectId that disagrees with it).
+	SkippedNoNativeID int
+	// SkippedNoProjectKey: a JiraProject link with no project key.
+	SkippedNoProjectKey int
+	// SkippedDuplicate: a second link of the same team to the same project.
+	SkippedDuplicate int
+	FailedTeamReads  int
+}
+
+// Skipped is the links seen and not collected as an ownership row.
+func (c ProjectLinkCounts) Skipped() int {
+	return c.SkippedNonJira + c.SkippedUnknownType + c.SkippedNoNativeID + c.SkippedNoProjectKey + c.SkippedDuplicate
+}
+
 // Rows is what one collection produced.
 type Rows struct {
 	Teams       []TeamRow
 	Memberships []MembershipRow
 	Ownership   []OwnershipRow
-	// SkippedProjects counts project links dropped because the graph node
-	// carried no Jira project key, or no Jira project ARI with a native id
-	// (the project id of the ownership row).
-	SkippedProjects int
-	// ProjectLinksComplete says every project-link read behind Ownership
-	// reached the provider's last page. Only Collect sets it. Rows built any
-	// other way leave it false, and Write then closes no project link.
+	// ProjectLinks counts the links behind Ownership.
+	ProjectLinks ProjectLinkCounts
+	// ProjectLinksComplete says the team search ended and every active team's
+	// link read reached the provider's last page with only known link types.
+	// Only Collect sets it. Rows built any other way leave it false, and Write
+	// then closes no project link.
 	ProjectLinksComplete bool
+	// ProjectLinkFailure is the first error of a team's link read, nil when
+	// every read ended. A failed link read does not fail the collection: the
+	// teams and the members are still returned, and so are the links of the
+	// teams whose read ended. Nothing is closed (ProjectLinksComplete is
+	// false).
+	ProjectLinkFailure error
+	// FailedProjectLinkTeams holds the id of every team whose link read did
+	// not reach its end.
+	FailedProjectLinkTeams []string
 	// UnreadableProjectLinkTeams holds the id of every team whose read
-	// returned at least one project link and not one of them carried a Jira
-	// project ARI this collector can read. An empty answer for such a team is
-	// "the links could not be read", not "the team has no project": Write
-	// closes none of that team's links. A team with at least one readable
-	// link is not here; its other links are counted in SkippedProjects.
+	// returned at least one JiraProject link and not one of them carried a
+	// Jira project ARI this collector can read. An empty answer for such a
+	// team is "the links could not be read", not "the team has no project":
+	// Write closes none of that team's links. A team with at least one
+	// readable link is not here; its other links are counted in ProjectLinks.
 	UnreadableProjectLinkTeams []string
 }
 
@@ -250,9 +299,28 @@ func organizationARI(id string) string {
 	return "ari:cloud:platform::org/" + id
 }
 
+// connectedProjectNativeID is the native Jira project id of a JiraProject
+// link node: the id of its project ARI (jiraNativeProjectID). The node's own
+// projectId field must agree with it when the provider sends one; two ids for
+// one project are no id.
+func connectedProjectNativeID(container graph.TeamConnectedContainer) (string, bool) {
+	id, ok := jiraNativeProjectID(container.ID)
+	if !ok {
+		return "", false
+	}
+	if projectID := strings.TrimSpace(container.ProjectID); projectID != "" && projectID != id {
+		return "", false
+	}
+	return id, true
+}
+
 // Collect reads the selected dimensions of every Atlassian team and returns
-// the rows to write. It is all or nothing: any read that fails fails the run
-// (a membership list cut short by an error would read as members who left).
+// the rows to write. The team search and the member reads are all or nothing:
+// either one failing fails the run (a membership list cut short by an error
+// would read as members who left). The project-link reads are a separate
+// leg: a team's link read that fails is recorded in the rows
+// (ProjectLinkFailure, FailedProjectLinkTeams), the snapshot is not complete,
+// and the teams and members are still returned.
 func Collect(ctx context.Context, client Client, params Params) (Rows, error) {
 	if client == nil || strings.TrimSpace(params.OrgID) == "" || strings.TrimSpace(params.OrganizationID) == "" || strings.TrimSpace(params.SiteID) == "" {
 		return Rows{}, ErrConfiguration
@@ -270,11 +338,11 @@ func Collect(ctx context.Context, client Client, params Params) (Rows, error) {
 		resolver = identityalias.LoadDefault()
 	}
 
-	// The Teamwork Graph team reads (members, active projects) must name the site they query (CHAOS-7132: the
-	// live gateway refuses both without X-Query-Context; read-only probes on 2026-10-02 had the platform site
-	// ARI, the Jira site ARI and the organization ARI each accepted by the members read, and the platform site
-	// ARI accepted by the projects read, no header refused by either). The search and tenant reads answered
-	// without it and are not marked.
+	// The per-team reads (members, connected containers) name the site they query (CHAOS-7132: the live gateway
+	// refuses the members read without X-Query-Context; read-only probes on 2026-10-02 had the platform site ARI,
+	// the Jira site ARI and the organization ARI each accepted by it). The connected-container read answered
+	// with the platform site ARI (a read-only call of 2026-10-07); without the header it was not measured. The
+	// search and tenant reads answered without it and are not marked.
 	siteCtx := graph.WithQueryContext(ctx, siteQueryContext(params.SiteID))
 
 	teams, err := client.SearchTeams(ctx, organizationARI(params.OrganizationID), params.SiteID, "", page)
@@ -335,62 +403,77 @@ func Collect(ctx context.Context, client Client, params Params) (Rows, error) {
 				})
 			}
 		}
-		projectRead := 0
 		if active {
 			activeTeams++
 		}
 		if active && params.Selections.Projects {
-			projects, err := client.IterTeamActiveProjects(siteCtx, team.ID, page)
-			if err != nil {
-				return Rows{}, fmt.Errorf("read projects of team %s: %w", id, err)
-			}
-			projectRead = 1
-			keys := map[string]bool{}
-			readable, refused := 0, 0
-			for _, project := range projects {
-				nativeProjectID, ok := jiraNativeProjectID(project.ProjectID)
-				if ok {
+			containers, err := client.IterTeamConnectedContainers(siteCtx, team.ID, page)
+			switch {
+			case err != nil && ctx.Err() != nil:
+				// The run itself was cancelled: not a provider answer.
+				return Rows{}, fmt.Errorf("read connected projects of team %s: %w", id, err)
+			case err != nil:
+				rows.ProjectLinks.FailedTeamReads++
+				rows.FailedProjectLinkTeams = append(rows.FailedProjectLinkTeams, id)
+				if rows.ProjectLinkFailure == nil {
+					rows.ProjectLinkFailure = fmt.Errorf("read connected projects of team %s: %w", id, err)
+				}
+			default:
+				projectReads++
+				linked := map[string]bool{}
+				readable, refused := 0, 0
+				for _, container := range containers {
+					rows.ProjectLinks.Seen++
+					switch container.Typename {
+					case containerJiraProject:
+					case containerConfluenceSpace, containerLoomSpace:
+						rows.ProjectLinks.SkippedNonJira++
+						continue
+					default:
+						rows.ProjectLinks.SkippedUnknownType++
+						continue
+					}
+					nativeProjectID, ok := connectedProjectNativeID(container)
+					if !ok {
+						refused++
+						rows.ProjectLinks.SkippedNoNativeID++
+						continue
+					}
 					readable++
-				} else {
-					refused++
+					key := strings.TrimSpace(container.Key)
+					if key == "" {
+						rows.ProjectLinks.SkippedNoProjectKey++
+						continue
+					}
+					if linked[nativeProjectID] {
+						rows.ProjectLinks.SkippedDuplicate++
+						continue
+					}
+					linked[nativeProjectID] = true
+					rows.Ownership = append(rows.Ownership, OwnershipRow{
+						OrgID: params.OrgID, Provider: Provider, TeamID: id, ProjectID: nativeProjectID,
+						ProjectKey: key, Source: Source, IsPrimary: 1, Specificity: OwnershipSpecificity,
+						Priority: OwnershipPriority, ValidFrom: now, UpdatedAt: now,
+					})
+					row.ProjectKeys = append(row.ProjectKeys, key)
 				}
-				key := ""
-				if project.ProjectKey != nil {
-					key = strings.TrimSpace(*project.ProjectKey)
+				sort.Strings(row.ProjectKeys)
+				if refused > 0 && readable == 0 {
+					rows.UnreadableProjectLinkTeams = append(rows.UnreadableProjectLinkTeams, id)
 				}
-				if key == "" {
-					rows.SkippedProjects++
-					continue
-				}
-				if !ok {
-					rows.SkippedProjects++
-					continue
-				}
-				if keys[nativeProjectID] {
-					continue
-				}
-				keys[nativeProjectID] = true
-				rows.Ownership = append(rows.Ownership, OwnershipRow{
-					OrgID: params.OrgID, Provider: Provider, TeamID: id, ProjectID: nativeProjectID,
-					ProjectKey: key, Source: Source, IsPrimary: 1, Specificity: OwnershipSpecificity,
-					Priority: OwnershipPriority, ValidFrom: now, UpdatedAt: now,
-				})
-				row.ProjectKeys = append(row.ProjectKeys, key)
-			}
-			sort.Strings(row.ProjectKeys)
-			if refused > 0 && readable == 0 {
-				rows.UnreadableProjectLinkTeams = append(rows.UnreadableProjectLinkTeams, id)
 			}
 		}
 		rows.Teams = append(rows.Teams, row)
-		projectReads += projectRead
 	}
-	// The team search and every per-team read above either followed the
-	// provider's cursor until it gave no next page, or returned its error out
-	// of this function (the client is strict: a GraphQL error next to partial
-	// data is an error). So the links are complete when one read finished for
-	// every active team, and that count is the signal, not an assumption.
-	rows.ProjectLinksComplete = params.Selections.Projects && projectReads == activeTeams
+	// The team search followed the provider's cursor to its end or returned
+	// its error out of this function. A link read counts in projectReads only
+	// when the client reached the provider's last page (it returns an error
+	// for a failed page, a GraphQL error, a page with no cursor and its page
+	// bound). So the links are complete when one read ended for every active
+	// team, and every link was of a known type: a type this collector does not
+	// know is a provider-side change, and what it would have been is not known.
+	rows.ProjectLinksComplete = params.Selections.Projects && projectReads == activeTeams &&
+		rows.ProjectLinks.FailedTeamReads == 0 && rows.ProjectLinks.SkippedUnknownType == 0
 	return rows, nil
 }
 

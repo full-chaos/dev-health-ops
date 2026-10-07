@@ -564,6 +564,16 @@ const (
 	// ClickHouse readback to notice it, and gives a signal for when a future
 	// genuine per-project key source should close it.
 	TeamCatalogTableProjectsWithoutKey TeamCatalogTable = "projects_without_key"
+	// The five team_project_links_* counts are not destination tables: they
+	// say what became of the provider's team-to-project link rows
+	// (providersync.TeamCatalogResult.ProjectLinksSeen and its skip counts).
+	// A run whose "seen" is zero while the provider shows links, or whose
+	// skip counts move, is visible here without a store readback.
+	TeamCatalogTableProjectLinksSeen               TeamCatalogTable = "team_project_links_seen"
+	TeamCatalogTableProjectLinksSkippedNotProject  TeamCatalogTable = "team_project_links_skipped_not_project"
+	TeamCatalogTableProjectLinksSkippedNoNativeID  TeamCatalogTable = "team_project_links_skipped_no_native_id"
+	TeamCatalogTableProjectLinksSkippedNoKey       TeamCatalogTable = "team_project_links_skipped_no_project_key"
+	TeamCatalogTableProjectLinksSkippedUnknownType TeamCatalogTable = "team_project_links_skipped_unknown_type"
 )
 
 func teamCatalogTables() []TeamCatalogTable {
@@ -573,6 +583,9 @@ func teamCatalogTables() []TeamCatalogTable {
 		TeamCatalogTableSprints, TeamCatalogTableTeamsSkippedPolicy, TeamCatalogTableMembershipsSkippedManualConflict,
 		TeamCatalogTableTeamsStagedForReview, TeamCatalogTableMembershipsStagedForReview, TeamCatalogTableDriftChangesSuperseded,
 		TeamCatalogTableProjectsWithoutKey,
+		TeamCatalogTableProjectLinksSeen, TeamCatalogTableProjectLinksSkippedNotProject,
+		TeamCatalogTableProjectLinksSkippedNoNativeID, TeamCatalogTableProjectLinksSkippedNoKey,
+		TeamCatalogTableProjectLinksSkippedUnknownType,
 	}
 }
 

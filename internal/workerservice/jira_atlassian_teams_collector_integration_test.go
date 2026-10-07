@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"atlassian/atlassian"
+	"atlassian/atlassian/graph"
 
 	"github.com/full-chaos/dev-health-ops/internal/atlassianteams"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
@@ -46,9 +47,8 @@ func (oneAtlassianTeam) SearchTeams(context.Context, string, string, string, int
 func (oneAtlassianTeam) IterTeamUsers(context.Context, string, int) ([]atlassian.TeamworkUserRelation, error) {
 	return []atlassian.TeamworkUserRelation{{SubjectUserID: "ari:cloud:identity::user/acct-1", RelationType: "TEAM_MEMBER"}}, nil
 }
-func (oneAtlassianTeam) IterTeamActiveProjects(context.Context, string, int) ([]atlassian.TeamworkProject, error) {
-	key := "PLAT"
-	return []atlassian.TeamworkProject{{ProjectID: "ari:cloud:jira:site:project/10001", ProjectKey: &key}}, nil
+func (oneAtlassianTeam) IterTeamConnectedContainers(context.Context, string, int) ([]graph.TeamConnectedContainer, error) {
+	return []graph.TeamConnectedContainer{{Typename: "JiraProject", ID: "ari:cloud:jira:site:project/10001", Key: "PLAT", ProjectID: "10001"}}, nil
 }
 
 func testJiraCredential(config map[string]string) providerfoundation.Credential {

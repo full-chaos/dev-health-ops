@@ -114,24 +114,36 @@ WHERE org_id = ? AND repo_id = ?
 	return items, nil
 }
 
-// LoadWorkItemStateTransitions ports the transition half of load_work_items,
-// including its SEMANTIC dedup contract
-// (WORK_ITEM_TRANSITIONS_DEDUPED = semantic_deduped_subquery("work_item_transitions",
-// WORK_ITEM_TRANSITION_SEMANTIC_COLUMNS), sinks/clickhouse/idempotency.py:60-63).
+// LoadWorkItemStateTransitions reads the transitions of ONE repository's work
+// items, selected by the work item ids of that repository's stored items.
+//
+// # Why by work item id, and not by repo_id
+//
+// work_item_transitions has a repo_id column, and this loader used to filter on
+// it. The sync routes write transition rows with NO repository id (the row
+// type has no such field: internal/providersync/github_work_items_rows.go,
+// githubWorkItemTransitionRow), so the column holds the nil UUID for every
+// provider. For a repository-scoped provider (GitHub, GitLab) the filter
+// `repo_id = <the repository>` therefore matched nothing: the work_item_state
+// family skipped the repository and wrote no rows, and the work_item family
+// computed its cycle and started numbers from zero transitions. A transition
+// belongs to its work item, and the work item names its repository, so the
+// items are the relation of record. The `provider` column is not used either:
+// the sink never fills it.
+//
+// # Dedup contract
+//
 // `work_item_transitions` is ReplacingMergeTree(last_synced) ORDER BY
 // (repo_id, work_item_id, occurred_at) -- that ORDER BY key does NOT include
 // from_status/to_status/actor, so a plain FINAL would silently collapse two
 // genuinely DIFFERENT transitions that happen to share one occurred_at down
-// to whichever has the larger last_synced, losing a real transition. The
-// Python semantic-dedup subquery instead GROUPs BY every semantic column
-// (org_id, repo_id, work_item_id, occurred_at, provider, from_status,
-// to_status, from_status_raw, to_status_raw, actor) and keeps
-// max(last_synced) -- collapsing only re-synced COPIES of the identical
-// event, never two distinct same-instant transitions. This query reproduces
-// that GROUP BY exactly (only the columns this family reads are selected;
-// from_status_raw/to_status_raw/actor still participate in the GROUP BY so
-// the semantic identity matches Python's, even though their values are
-// never read here).
+// to whichever has the larger last_synced, losing a real transition. This
+// query GROUPs BY every semantic column of the event (org_id, work_item_id,
+// occurred_at, from_status, to_status, from_status_raw, to_status_raw, actor)
+// -- collapsing only re-synced COPIES of the identical event, never two
+// distinct same-instant transitions. repo_id and provider are NOT part of the
+// identity: neither is filled by the sync sink, and a copy of one event that
+// differs only in one of them is still the same event.
 func LoadWorkItemStateTransitions(
 	ctx context.Context, conn repositoryRows, organizationID string, repoID uuid.UUID, end time.Time,
 ) ([]workItemStateTransition, error) {
@@ -142,15 +154,17 @@ func LoadWorkItemStateTransitions(
 SELECT work_item_id, occurred_at, from_status, to_status
 FROM (
 	SELECT
-		org_id, repo_id, work_item_id, occurred_at, provider,
+		org_id, work_item_id, occurred_at,
 		from_status, to_status, from_status_raw, to_status_raw, actor,
 		max(last_synced) AS last_synced
 	FROM work_item_transitions
-	GROUP BY org_id, repo_id, work_item_id, occurred_at, provider,
+	WHERE org_id = ? AND occurred_at < ?
+	  AND work_item_id IN (
+		SELECT work_item_id FROM work_items WHERE org_id = ? AND repo_id = ?)
+	GROUP BY org_id, work_item_id, occurred_at,
 		from_status, to_status, from_status_raw, to_status_raw, actor
-)
-WHERE org_id = ? AND repo_id = ? AND occurred_at < ?`,
-		organizationID, repoID.String(), end.UTC(),
+)`,
+		organizationID, end.UTC(), organizationID, repoID.String(),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("load work_item_state transitions: %w", err)

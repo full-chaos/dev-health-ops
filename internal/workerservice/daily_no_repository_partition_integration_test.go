@@ -201,7 +201,14 @@ func newNilPartitionRig(t *testing.T, ctx context.Context) *nilPartitionRig {
 	}
 	handler.SetSourceDataChecker(checker)
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	native, postBridge, _, refusals := dailyNativeFamilyRegistrations(store, conn, nil, logger)
+	// The two engine families (issue types, investment) need the status mapping
+	// and the investment rules: load them as the worker does, from the real
+	// config artifacts.
+	engines := dailyWorkItemEnginesFrom(validGitHubWorkItemsRuntimeConfig(t))
+	if engines.err != nil {
+		t.Fatalf("load the work-item engines: %v", engines.err)
+	}
+	native, postBridge, _, refusals := dailyNativeFamilyRegistrations(store, conn, engines, nil, logger)
 	if len(refusals) != 0 {
 		t.Fatalf("family refusals: %v", refusals)
 	}
@@ -421,9 +428,32 @@ func TestDailyJobEveryFamilyOnAPartitionOfOnlyTheNilRepository(t *testing.T) {
 		t.Fatalf("items completed by provider = %v, want linear 1, jira 1, github 0 (github is not on this partition)", got)
 	}
 
+	// The two engine families computed the same two items from the stored rows.
+	// Their tables hold "no repository" as NULL.
+	var issueTypeCompleted, investmentCompleted uint64
+	if err := rig.conn.QueryRow(ctx, `
+SELECT toUInt64(sum(completed)) FROM (
+  SELECT argMax(completed_count, computed_at) AS completed
+  FROM issue_type_metrics_daily WHERE org_id = ? AND day = ? AND repo_id IS NULL
+  GROUP BY provider, team_id, issue_type_norm)`, orgID, day).Scan(&issueTypeCompleted); err != nil {
+		t.Fatalf("read issue_type_metrics_daily: %v", err)
+	}
+	if err := rig.conn.QueryRow(ctx, `
+SELECT toUInt64(sum(completed)) FROM (
+  SELECT argMax(work_items_completed, computed_at) AS completed
+  FROM investment_metrics_daily WHERE org_id = ? AND day = ? AND repo_id IS NULL
+  GROUP BY team_id, investment_area, project_stream)`, orgID, day).Scan(&investmentCompleted); err != nil {
+		t.Fatalf("read investment_metrics_daily: %v", err)
+	}
+	if issueTypeCompleted != 2 || investmentCompleted != 2 {
+		t.Fatalf("items completed on the no-repository partition: issue_type_metrics_daily %d, investment_metrics_daily %d, want 2 and 2 (linear 1, jira 1)",
+			issueTypeCompleted, investmentCompleted)
+	}
+
 	// Every other family writes nothing under the nil repository id.
 	workItemFamilies := map[string]bool{
 		"work_item": true, "work_item_estimate": true, "work_item_attribution": true, "work_item_state": true,
+		daily.WorkItemIssueTypeFamilyName: true, daily.WorkItemInvestmentFamilyName: true,
 	}
 	raw, err := readFamiliesJSON()
 	if err != nil {

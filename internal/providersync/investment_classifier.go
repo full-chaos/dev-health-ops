@@ -8,6 +8,8 @@ import (
 	"strings"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/workitemengine"
 )
 
 // Go port of the legacy rule-based investment classifier
@@ -182,12 +184,7 @@ func investmentUnrepresentable(format string, args ...any) error {
 // enforce annotations, so None reaches the call site regardless. A plain Go
 // string would have to invent "product"/"general"/"legacy_rule" there, which is
 // a silent value divergence in the fail-open direction.
-type InvestmentClassification struct {
-	InvestmentArea *string `json:"investment_area"`
-	ProjectStream  *string `json:"project_stream"`
-	Confidence     float64 `json:"confidence"`
-	RuleID         *string `json:"rule_id"`
-}
+type InvestmentClassification = workitemengine.InvestmentClassification
 
 // investmentRule is one entry of the config's `rules:` list, held as raw nodes.
 // Nothing about a rule is interpreted at load time except its priority, because
@@ -216,27 +213,7 @@ type investmentRule struct {
 // paths and component. Dropping them would make the Go signature quietly
 // narrower than the contract it ports, and the docstring's claim that `title`
 // and `epic` participate would then have no visible counter-evidence.
-type InvestmentArtifact struct {
-	Labels []string
-	// Paths is what the matcher's path_prefix arm reads. The work-item call
-	// site never populates it, which is precisely why every path_prefix rule is
-	// dead on that path; it stays here because the field is what makes that
-	// deadness a property of the CALLER rather than of this engine.
-	Paths []string
-	// Component is a POINTER because Python reads it with
-	// `artifact.get("component")` -- no default -- so an absent key yields None,
-	// which is a different value from "" for both the `in` membership test AND
-	// the bare-string containment path (`None in "analytics"` raises where
-	// `"" in "analytics"` is True). The work-item call site always supplies the
-	// key, and always as "" (WorkItem has no `component` attribute, so
-	// `getattr(item, "component", "")` cannot return anything else), so nil is
-	// unreachable from production -- but the contract this ports can express it
-	// and so must this.
-	Component *string
-	// Read by neither engine. See the type comment.
-	Title    string
-	Provider string
-}
+type InvestmentArtifact = workitemengine.InvestmentArtifact
 
 // InvestmentClassifier holds the priority-ordered rules.
 type InvestmentClassifier struct {

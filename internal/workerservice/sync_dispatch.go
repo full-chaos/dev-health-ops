@@ -135,24 +135,42 @@ type touchedDrainRuns struct {
 
 func (touchedDrainRuns) RepositoryLimit() int { return daily.MaxRepositoriesPerRun }
 
-func (runs touchedDrainRuns) FailedDays(
-	ctx context.Context, organizationID string, since, notEndedBefore time.Time, window time.Duration,
-) ([]syncdispatchruntime.TouchedDayFailedRun, error) {
-	failures, err := runs.store.FailedTouchedDays(ctx, organizationID, since, notEndedBefore, window)
+func (runs touchedDrainRuns) OwnedKeysOfRunsWithoutResult(
+	ctx context.Context, organizationID string, notEndedAfter time.Duration, limit int,
+) ([]syncdispatchruntime.TouchedRunKeys, bool, error) {
+	owned, truncated, err := runs.store.OwnedKeysOfTouchedRunsWithoutResult(ctx, organizationID, notEndedAfter, limit)
+	if err != nil {
+		return nil, false, err
+	}
+	return touchedRunKeys(owned), truncated, nil
+}
+
+func (runs touchedDrainRuns) RunsWithResultOfPass(
+	ctx context.Context, organizationID, endedRunID string,
+) ([]syncdispatchruntime.TouchedRunKeys, error) {
+	listed, err := runs.store.TouchedDrainRunsWithResultOfPass(ctx, organizationID, endedRunID)
 	if err != nil {
 		return nil, err
 	}
-	days := make([]syncdispatchruntime.TouchedDayFailedRun, 0, len(failures))
-	for _, failure := range failures {
-		days = append(days, syncdispatchruntime.TouchedDayFailedRun{Day: failure.Day, FailedAt: failure.FailedAt})
+	return touchedRunKeys(listed), nil
+}
+
+func touchedRunKeys(runs []daily.TouchedRunKeys) []syncdispatchruntime.TouchedRunKeys {
+	keys := make([]syncdispatchruntime.TouchedRunKeys, 0, len(runs))
+	for _, run := range runs {
+		keys = append(keys, syncdispatchruntime.TouchedRunKeys(run))
 	}
-	return days, nil
+	return keys
 }
 
 func (runs touchedDrainRuns) DaysWithOnlyFailedRuns(
-	ctx context.Context, organizationID string, days []time.Time, threshold int, notEndedBefore time.Time,
-) (map[string]struct{}, error) {
-	return runs.store.DaysWithOnlyFailedRuns(ctx, organizationID, days, threshold, notEndedBefore)
+	ctx context.Context, organizationID string, days []time.Time, threshold int, notEndedAfter, retryAfter time.Duration,
+) (map[string]bool, error) {
+	return runs.store.TouchedDaysWithOnlyFailedRuns(ctx, organizationID, days, threshold, notEndedAfter, retryAfter)
+}
+
+func (runs touchedDrainRuns) RunsStateTx(ctx context.Context, tx pgx.Tx, organizationID string) (string, error) {
+	return runs.store.DailyRunsStateTx(ctx, tx, organizationID)
 }
 
 func (runs touchedDrainRuns) InFlightTx(

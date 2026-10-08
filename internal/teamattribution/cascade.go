@@ -386,6 +386,13 @@ func NewGitHubWorkItemDerivationContext(
 		}
 	}
 	for _, team := range facts.Teams {
+		// First ACTIVE team by id on a key: an inactive team (a retired
+		// project-as-team row has id = the project key) must not shadow the
+		// active team that holds the same key. dropInactiveTeamCandidates
+		// stays the safety net.
+		if team.Inactive {
+			continue
+		}
 		for _, rawKey := range append(append([]string(nil), team.ProjectKeys...), team.TeamID) {
 			key := strings.TrimSpace(rawKey)
 			if key == "" {

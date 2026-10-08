@@ -251,3 +251,68 @@ func TestAnInactiveNullCarryingTeamStaysKnownAndTakesNothingThroughMembership(t 
 		}
 	}
 }
+
+// A retired project-as-team row has id = the project key ("SEC"); a real
+// Atlassian team has an ARI id and holds the same key. By byte order "S" < "a",
+// so the inactive team is first by id on that key. The key must go to the
+// ACTIVE team: the first-by-id map is built from active teams only. The same
+// holds for every provider, and for a native team key that two teams hold.
+func TestAnInactiveTeamFirstByIDDoesNotShadowTheActiveTeamOnTheSameKey(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+	instance, err := containers.StartClickHouse(ctx)
+	if err != nil {
+		t.Fatalf("start ClickHouse: %v", err)
+	}
+	t.Cleanup(func() {
+		closeCtx, closeCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer closeCancel()
+		_ = instance.Close(closeCtx)
+	})
+	chschema.Apply(ctx, t, instance)
+	conn, err := clickhousestore.Open(ctx, clickhousestore.DefaultConfig(instance.URI))
+	if err != nil {
+		t.Fatalf("open ClickHouse: %v", err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+	const org = "org-shadow"
+	first := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	// The key maps are not scoped by provider: one key per provider.
+	keyOf := func(provider string) string { return "SEC-" + provider }
+	activeID := func(provider string) string { return "ari:cloud:identity::team/" + provider }
+	for _, provider := range retractionProviders {
+		// The retired pseudo-team: id = key, newest row inactive.
+		key := keyOf(provider)
+		pseudo, real := uuid.New(), uuid.New()
+		for version, isActive := range []uint8{1, 0} {
+			at := first.Add(time.Duration(version) * time.Hour)
+			if err := conn.Exec(ctx, `INSERT INTO teams (id, team_uuid, name, members, manual_members, project_keys, repo_patterns, is_active, updated_at, last_synced, org_id, provider, native_team_key) VALUES (?, ?, ?, [], [], ?, [], ?, ?, ?, ?, ?, ?)`,
+				key, pseudo, "Project "+key, []string{key}, isActive, at, at, org, provider, key); err != nil {
+				t.Fatalf("insert pseudo team: %v", err)
+			}
+		}
+		if err := conn.Exec(ctx, `INSERT INTO teams (id, team_uuid, name, members, manual_members, project_keys, repo_patterns, is_active, updated_at, last_synced, org_id, provider, native_team_key) VALUES (?, ?, ?, [], [], ?, [], 1, ?, ?, ?, ?, ?)`,
+			activeID(provider), real, "Real "+provider, []string{key}, first, first, org, provider, activeID(provider)); err != nil {
+			t.Fatalf("insert active team: %v", err)
+		}
+	}
+	facts, err := ClickHouseFactSource{Conn: conn}.LoadTeams(ctx, org)
+	if err != nil {
+		t.Fatalf("LoadTeams: %v", err)
+	}
+	derived := NewGitHubWorkItemDerivationContext(GithubWorkItemDerivationFacts{Teams: facts})
+	for _, provider := range retractionProviders {
+		key := keyOf(provider)
+		projectKey, nativeKey := key, key
+		for name, subject := range map[string]GithubWorkItemDerivationSubject{
+			"by the project key":     {WorkItemID: provider + ":1", Provider: provider, Type: "issue", ProjectKey: &projectKey},
+			"by the native team key": {WorkItemID: provider + ":2", Provider: provider, Type: "issue", NativeTeamKey: &nativeKey},
+		} {
+			gotTeam, _, candidates := derived.Resolve(subject)
+			if gotTeam == nil || *gotTeam != activeID(provider) {
+				t.Errorf("%s %s: resolved team = %q, want %s: the inactive team %q must not shadow it (candidates %+v)",
+					provider, name, GithubWorkItemDerivationStringValue(gotTeam), activeID(provider), key, candidates)
+			}
+		}
+	}
+}

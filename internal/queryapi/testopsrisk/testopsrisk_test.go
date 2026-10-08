@@ -153,7 +153,7 @@ func TestResolve_MatchesPythonCells(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			cl := &fakeClient{daily: daily(c)}
 			for _, q := range c.Quad {
-				cl.quadrant = append(cl.quadrant, []any{q.Label, q.Success, q.Pass})
+				cl.quadrant = append(cl.quadrant, []any{q.Label, nil, q.Success, q.Pass})
 			}
 			got, err := Resolve(context.Background(), cl, "org-1", model.TestOpsRiskInput{StartDate: date("2026-01-01"), EndDate: date("2026-01-31")})
 			if err != nil {
@@ -220,11 +220,11 @@ func TestResolve_ScopesEveryStatement(t *testing.T) {
 		t.Fatalf("%d statements", len(cl.statements))
 	}
 	// Each table read in the daily statement and the quadrant statement is org-scoped;
-	// the quadrant's repos join carries the org on its join key.
+	// the quadrant's repos subquery filters the org before it groups.
 	if strings.Count(cl.statements[0], "WHERE org_id = {org_id:String}") != 3 {
 		t.Error("the daily statement must scope all three tables")
 	}
-	if !strings.Contains(cl.statements[1], "WHERE org_id = {org_id:String}") || !strings.Contains(cl.statements[1], "repos.org_id = {org_id:String}") {
+	if !strings.Contains(cl.statements[1], "WHERE org_id = {org_id:String}") || !strings.Contains(cl.statements[1], "FROM repos\n    WHERE org_id = {org_id:String}\n    GROUP BY id") {
 		t.Error("the quadrant statement must scope the release table and its repos join")
 	}
 	for i, b := range cl.bindings {
@@ -282,5 +282,45 @@ func TestResolve_SkipsRowsWithoutADay(t *testing.T) {
 	}
 	if len(got.Timeseries) != 1 || got.Timeseries[0].Date.String() != "2026-01-05" || got.QualityDragHours != nil {
 		t.Fatalf("%#v", got)
+	}
+}
+
+// CHAOS-8954: a quadrant point carries the repository's catalogue name next to
+// its id, and nil (never the id) when the repository has none.
+func TestResolve_QuadrantPointsCarryTheRepoName(t *testing.T) {
+	cl := &fakeClient{quadrant: [][]any{
+		{"acme/web", "acme/web", 0.9, 0.8},
+		{"33333333-3333-3333-3333-333333333333", nil, 0.5, 0.4},
+	}}
+	got, err := Resolve(context.Background(), cl, "org-1", model.TestOpsRiskInput{StartDate: date("2026-01-01"), EndDate: date("2026-01-31")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.QuadrantData) != 2 {
+		t.Fatalf("quadrant %#v", got.QuadrantData)
+	}
+	if n := got.QuadrantData[0].Name; n == nil || *n != "acme/web" {
+		t.Errorf("named point: name %v", n)
+	}
+	if n := got.QuadrantData[1].Name; n != nil {
+		t.Errorf("unnamed point: name %q, want nil", *n)
+	}
+}
+
+func TestQuadrantStatement_NamesOnlyFromTheOrgScopedCatalogue(t *testing.T) {
+	if !strings.Contains(quadrantQuery, "nullIf(repos.repo, '') AS repo_name") || !strings.Contains(quadrantQuery, "FROM repos\n    WHERE org_id = {org_id:String}\n    GROUP BY id") {
+		t.Fatal("the quadrant name must come from the org-scoped repos join and be null when empty")
+	}
+}
+
+func TestResolve_WhitespaceQuadrantNameIsNil(t *testing.T) {
+	ws := " \t"
+	cl := &fakeClient{quadrant: [][]any{{"acme/web", &ws, 0.9, 0.8}}}
+	got, err := Resolve(context.Background(), cl, "org-1", model.TestOpsRiskInput{StartDate: date("2026-01-01"), EndDate: date("2026-01-31")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.QuadrantData) != 1 || got.QuadrantData[0].Name != nil {
+		t.Fatalf("quadrant %#v, want a nil name", got.QuadrantData)
 	}
 }

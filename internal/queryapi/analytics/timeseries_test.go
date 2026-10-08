@@ -74,13 +74,13 @@ func TestCompileTimeseries_Investment_CompilesInlinedSource(t *testing.T) {
 	// CHAOS-4547 tuple-wrap fix: work_unit_type/work_unit_name/repo_id/
 	// provider are Nullable per DDL and must be wrapped.
 	for _, col := range []string{"work_unit_type", "work_unit_name", "repo_id", "provider"} {
-		wrapped := "(argMax(tuple(" + col + "), computed_at)).1"
+		wrapped := "(argMax(tuple(" + col + "), (work_unit_investments.computed_at, toUInt64OrZero(splitByChar('_', work_unit_investments._part)[3]), work_unit_investments._part_offset))).1"
 		if !strings.Contains(q.sql, wrapped) {
 			t.Errorf("expected CHAOS-4547 tuple-wrap fix for %s, got: %s", col, q.sql)
 		}
 	}
 	// Non-nullable columns stay plain argMax -- no unnecessary wrap.
-	if !strings.Contains(q.sql, "argMax(effort_value, computed_at) AS effort_value") {
+	if !strings.Contains(q.sql, "argMax(effort_value, (work_unit_investments.computed_at, toUInt64OrZero(splitByChar('_', work_unit_investments._part)[3]), work_unit_investments._part_offset)) AS effort_value") {
 		t.Errorf("expected plain argMax for non-nullable effort_value, got: %s", q.sql)
 	}
 	if strings.Contains(q.sql, "tuple(effort_value)") {

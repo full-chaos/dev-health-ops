@@ -22,7 +22,7 @@ import (
 // json.dumps(..., indent=2, sort_keys=True)). A failure prints "Error: ..." on
 // stdout and exits 1.
 func runOrgsDelete(ctx context.Context, env cli.Env) int {
-	flags := newFlags(env, "dho admin orgs delete")
+	flags := newAccountFlags(env, "dho admin orgs delete")
 	var orgID, analyticsDB optString
 	flags.Var(&orgID, "org-id", "organization id (required)")
 	flags.Var(&analyticsDB, "analytics-db", "ClickHouse URI (default: CLICKHOUSE_URI or CLICKHOUSE_URI_FILE)")
@@ -38,7 +38,7 @@ func runOrgsDelete(ctx context.Context, env cli.Env) int {
 	if !ok {
 		return cli.ExitFailure
 	}
-	op, closePool, code := operator(ctx, env)
+	op, closePool, code := accountOperator(ctx, env)
 	defer closePool()
 	if code != 0 {
 		return code
@@ -109,7 +109,7 @@ func deleteConfigFrom(env cli.Env, analyticsDB string) (admin.DeleteOrgConfig, f
 	}
 	deleteConfig.Decryptor = decryptor
 	deleteConfig.PagerDuty = providerfoundation.PagerDutyRevokeConfig{ClientID: clientID.Reveal(), ClientSecret: clientSecret.Reveal(), RedirectURI: redirect}
-	database := redactor(env)
+	database := accountRedactor(env)
 	redact := func(err error) error {
 		return database(fmt.Errorf("%s", secrets.RedactValues(err.Error(), secretValues...)))
 	}

@@ -2303,8 +2303,9 @@ func GithubWorkItemDerivationStringValue(value *string) string {
 // Candidates of inactive teams are dropped from both layers BEFORE the gate
 // counts teams (an inactive team takes no work item): a person in inactive T1
 // and active T2 resolves to T2, and an admin layer with only inactive teams
-// falls through to the provider layer. Python had no inactive teams, so only
-// the reasons for inactive teams differ.
+// falls through to the provider layer. Python never filtered inactive teams; Go
+// drops them before the gate counts. For inactive-team cases, both the winner
+// and the reason can differ from the Python answer.
 //
 // Returns `(candidates, reason)`: `candidates` is the resolved list to use
 // for the caller's source when exactly one team resolved (`reason` is

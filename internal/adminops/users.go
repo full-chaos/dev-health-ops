@@ -15,6 +15,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/apiservice/admin"
 	"github.com/full-chaos/dev-health-ops/internal/cli"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
+	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	pgstorage "github.com/full-chaos/dev-health-ops/internal/storage/postgres"
 )
 
@@ -104,13 +105,28 @@ const dbEnvHelp = "\nEnvironment:\n" +
 	"  MIGRATION_DATABASE_URI (or _FILE, or the DEV_HEALTH_MIGRATION_PG_* component form)   the database\n" +
 	"  POSTGRES_URI (or _FILE)   used when MIGRATION_DATABASE_URI is not configured\n"
 
+const accountDBEnvHelp = "\nEnvironment (the first one configured is the database):\n" +
+	"  MIGRATION_DATABASE_URI (or _FILE, or the DEV_HEALTH_MIGRATION_PG_* component form)\n" +
+	"  API_DATABASE_URI (or _FILE, or the DEV_HEALTH_PG_API_* component form)   the api role; set in the go-api pod: run this verb there\n" +
+	"  POSTGRES_URI (or _FILE)   in a worker pod this is the domain role, which cannot write users\n"
+
 func newFlags(env cli.Env, name string) *flag.FlagSet {
+	return flagsWithHelp(env, name, dbEnvHelp)
+}
+
+// newAccountFlags is newFlags for the users and orgs verbs, which resolve
+// accountDSN.
+func newAccountFlags(env cli.Env, name string) *flag.FlagSet {
+	return flagsWithHelp(env, name, accountDBEnvHelp)
+}
+
+func flagsWithHelp(env cli.Env, name, help string) *flag.FlagSet {
 	flags := flag.NewFlagSet(name, flag.ContinueOnError)
 	flags.SetOutput(env.Stderr)
 	defaultUsage := flags.Usage
 	flags.Usage = func() {
 		defaultUsage()
-		fmt.Fprint(env.Stderr, dbEnvHelp)
+		fmt.Fprint(env.Stderr, help)
 	}
 	return flags
 }
@@ -130,10 +146,34 @@ func parseArgs(flags *flag.FlagSet, env cli.Env) (code int, ok bool) {
 	return 0, true
 }
 
-// operator opens the pool and returns the Operator; the returned close func is
-// always safe to call.
+// dsnResolver resolves a verb's database; ok false means it printed why.
+type dsnResolver func(lookup secrets.LookupEnv, stderr io.Writer) (secrets.Value, bool)
+
+func migrationDSN(lookup secrets.LookupEnv, stderr io.Writer) (secrets.Value, bool) {
+	dsn, _, ok := config.ResolveMigrationDatabase(lookup, stderr, true)
+	return dsn, ok
+}
+
+// accountDSN is the users and orgs verbs' database: MIGRATION_DATABASE_URI, then
+// API_DATABASE_URI, then POSTGRES_URI (config.ResolveAdminDatabase).
+func accountDSN(lookup secrets.LookupEnv, stderr io.Writer) (secrets.Value, bool) {
+	dsn, _, ok := config.ResolveAdminDatabase(lookup, stderr)
+	return dsn, ok
+}
+
+// operator opens the pool over migrationDSN and returns the Operator; the
+// returned close func is always safe to call.
 func operator(ctx context.Context, env cli.Env) (admin.Operator, func(), int) {
-	dsn, _, ok := config.ResolveMigrationDatabase(env.Lookup, env.Stderr, true)
+	return operatorFor(ctx, env, migrationDSN)
+}
+
+// accountOperator is operator over accountDSN.
+func accountOperator(ctx context.Context, env cli.Env) (admin.Operator, func(), int) {
+	return operatorFor(ctx, env, accountDSN)
+}
+
+func operatorFor(ctx context.Context, env cli.Env, resolve dsnResolver) (admin.Operator, func(), int) {
+	dsn, ok := resolve(env.Lookup, env.Stderr)
 	if !ok {
 		return admin.Operator{}, func() {}, cli.ExitFailure
 	}
@@ -156,8 +196,20 @@ func report(env cli.Env, boundary func(error) error, err error) int {
 	return writeError(env.Stderr, "admin_failed", boundary(err).Error())
 }
 
+// redactor resolves the same DSN operator dialed (POSTGRES_URI fallback
+// included): a narrower resolution than operator's turns every failure of a
+// pod without MIGRATION_DATABASE_URI into the bare text "redacted".
 func redactor(env cli.Env) func(error) error {
-	dsn, _, ok := config.ResolveMigrationDatabase(env.Lookup, io.Discard, false)
+	return redactorFor(env, migrationDSN)
+}
+
+// accountRedactor is redactor over accountDSN, the DSN accountOperator dialed.
+func accountRedactor(env cli.Env) func(error) error {
+	return redactorFor(env, accountDSN)
+}
+
+func redactorFor(env cli.Env, resolve dsnResolver) func(error) error {
+	dsn, ok := resolve(env.Lookup, io.Discard)
 	if !ok {
 		return func(err error) error { return errors.New("redacted") }
 	}
@@ -166,7 +218,7 @@ func redactor(env cli.Env) func(error) error {
 }
 
 func runUsersCreate(ctx context.Context, env cli.Env) int {
-	flags := newFlags(env, "dho admin users create")
+	flags := newAccountFlags(env, "dho admin users create")
 	var email, password, username, fullName optString
 	flags.Var(&email, "email", "user email address (required)")
 	flags.Var(&password, "password", "user password, at least 8 characters (one of --password, --password-stdin is required; --password shows in the process list)")
@@ -184,7 +236,7 @@ func runUsersCreate(ctx context.Context, env cli.Env) int {
 		fmt.Fprintln(env.Stderr, "argument error: --email and --password (or --password-stdin) are required")
 		return cli.ExitUsage
 	}
-	op, closePool, code := operator(ctx, env)
+	op, closePool, code := accountOperator(ctx, env)
 	defer closePool()
 	if code != 0 {
 		return code
@@ -192,7 +244,7 @@ func runUsersCreate(ctx context.Context, env cli.Env) int {
 	user, err := op.CreateUser(ctx, admin.CreateUserInput{Email: email.value, Password: password.value,
 		Username: username.ptr(), FullName: fullName.ptr(), Superuser: *superuser})
 	if err != nil {
-		return report(env, redactor(env), err)
+		return report(env, accountRedactor(env), err)
 	}
 	fmt.Fprintf(env.Stdout, "Created user: %s (id: %s)\n", user.Email, user.ID)
 	if *superuser {
@@ -272,20 +324,20 @@ func yesNo(value bool) string {
 }
 
 func runUsersList(ctx context.Context, env cli.Env) int {
-	flags := newFlags(env, "dho admin users list")
+	flags := newAccountFlags(env, "dho admin users list")
 	limit := flags.Int("limit", 100, "max users to list")
 	includeInactive := flags.Bool("include-inactive", false, "include inactive users")
 	if code, ok := parseArgs(flags, env); !ok {
 		return code
 	}
-	op, closePool, code := operator(ctx, env)
+	op, closePool, code := accountOperator(ctx, env)
 	defer closePool()
 	if code != 0 {
 		return code
 	}
 	users, err := op.ListUsers(ctx, *limit, *includeInactive)
 	if err != nil {
-		return report(env, redactor(env), err)
+		return report(env, accountRedactor(env), err)
 	}
 	if len(users) == 0 {
 		fmt.Fprintln(env.Stdout, "No users found.")
@@ -305,7 +357,7 @@ func runUsersList(ctx context.Context, env cli.Env) int {
 }
 
 func runUsersUpdate(ctx context.Context, env cli.Env) int {
-	flags := newFlags(env, "dho admin users update")
+	flags := newAccountFlags(env, "dho admin users update")
 	var id, email, username, newEmail, newUsername, fullName, password, org, role, removeFromOrg optString
 	flags.Var(&id, "id", "user id to update (identifier)")
 	flags.Var(&email, "email", "email of the user to update (identifier)")
@@ -335,7 +387,7 @@ func runUsersUpdate(ctx context.Context, env cli.Env) int {
 			return cli.ExitUsage
 		}
 	}
-	op, closePool, code := operator(ctx, env)
+	op, closePool, code := accountOperator(ctx, env)
 	defer closePool()
 	if code != 0 {
 		return code
@@ -347,7 +399,7 @@ func runUsersUpdate(ctx context.Context, env cli.Env) int {
 		MembershipOrg: org.ptr(), Role: role.ptr(), RemoveFromOrg: removeFromOrg.ptr(),
 	})
 	if err != nil {
-		return report(env, redactor(env), err)
+		return report(env, accountRedactor(env), err)
 	}
 	fmt.Fprintf(env.Stdout, "Updated user: %s (id: %s)\n", result.Email, result.ID)
 	for _, change := range result.Changes {
@@ -357,7 +409,7 @@ func runUsersUpdate(ctx context.Context, env cli.Env) int {
 }
 
 func runOrgsCreate(ctx context.Context, env cli.Env) int {
-	flags := newFlags(env, "dho admin orgs create")
+	flags := newAccountFlags(env, "dho admin orgs create")
 	var name, slug, description, ownerEmail optString
 	flags.Var(&name, "name", "organization name (required)")
 	flags.Var(&slug, "slug", "URL-safe slug (generated when omitted)")
@@ -371,7 +423,7 @@ func runOrgsCreate(ctx context.Context, env cli.Env) int {
 		fmt.Fprintln(env.Stderr, "argument error: --name is required")
 		return cli.ExitUsage
 	}
-	op, closePool, code := operator(ctx, env)
+	op, closePool, code := accountOperator(ctx, env)
 	defer closePool()
 	if code != 0 {
 		return code
@@ -379,7 +431,7 @@ func runOrgsCreate(ctx context.Context, env cli.Env) int {
 	result, err := op.CreateOrg(ctx, admin.CreateOrgInput{Name: name.value, Slug: slug.ptr(), Description: description.ptr(),
 		Tier: *tier, OwnerEmail: ownerEmail.ptr()})
 	if err != nil {
-		return report(env, redactor(env), err)
+		return report(env, accountRedactor(env), err)
 	}
 	fmt.Fprintf(env.Stdout, "Created organization: %s (slug: %s, id: %s)\n", result.Org.Name, result.Org.Slug, result.Org.ID)
 	if result.OwnerEmail != "" {
@@ -389,20 +441,20 @@ func runOrgsCreate(ctx context.Context, env cli.Env) int {
 }
 
 func runOrgsList(ctx context.Context, env cli.Env) int {
-	flags := newFlags(env, "dho admin orgs list")
+	flags := newAccountFlags(env, "dho admin orgs list")
 	limit := flags.Int("limit", 100, "max organizations to list")
 	includeInactive := flags.Bool("include-inactive", false, "include inactive organizations")
 	if code, ok := parseArgs(flags, env); !ok {
 		return code
 	}
-	op, closePool, code := operator(ctx, env)
+	op, closePool, code := accountOperator(ctx, env)
 	defer closePool()
 	if code != 0 {
 		return code
 	}
 	orgs, err := op.ListOrgs(ctx, *limit, *includeInactive)
 	if err != nil {
-		return report(env, redactor(env), err)
+		return report(env, accountRedactor(env), err)
 	}
 	if len(orgs) == 0 {
 		fmt.Fprintln(env.Stdout, "No organizations found.")

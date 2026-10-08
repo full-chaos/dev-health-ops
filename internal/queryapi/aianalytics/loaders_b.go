@@ -6,6 +6,9 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-go/clickhouse"
+
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/scopelabel"
+	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse/latestrow"
 )
 
 // overlapRow is one per-bucket overlap aggregate of AI-attributed pull
@@ -404,10 +407,18 @@ type repoCatalogue struct {
 
 // repoName is the repository's catalogue full name, or nil.
 func (c repoCatalogue) repoName(repoID string) *string {
-	if n, ok := c.repoNames[repoID]; ok && n != "" {
+	if n, ok := scopelabel.CleanName(c.repoNames[repoID]); ok {
 		return &n
 	}
 	return nil
+}
+
+// repoNameOf is repoName for a nullable repository id.
+func repoNameOf(c repoCatalogue, repoID *string) *string {
+	if repoID == nil {
+		return nil
+	}
+	return c.repoName(*repoID)
 }
 
 // teamName is the catalogue name of the team with this id, or nil.
@@ -415,7 +426,7 @@ func (c repoCatalogue) teamName(teamID *string) *string {
 	if teamID == nil {
 		return nil
 	}
-	if n, ok := c.teamNames[*teamID]; ok && n != "" {
+	if n, ok := scopelabel.CleanName(c.teamNames[*teamID]); ok {
 		return &n
 	}
 	return nil
@@ -473,10 +484,11 @@ func loadRepoCatalogue(ctx context.Context, client QueryClient, orgID string, re
 // queryRepoNames returns each found repository's catalogue full name; an empty
 // name stays empty so callers choose their own fallback.
 func queryRepoNames(ctx context.Context, client QueryClient, orgID string, ids []string) (map[string]string, error) {
-	rs, err := client.Query(ctx, `SELECT toString(id) AS repo_id, coalesce(repo, '') AS full_name
+	rs, err := client.Query(ctx, fmt.Sprintf(`SELECT toString(id) AS repo_id, coalesce(%s, '') AS full_name
 FROM repos
 WHERE org_id = {org_id:String}
-  AND toString(id) IN {repo_ids:Array(String)}`, []clickhouse.Binding{
+  AND toString(id) IN {repo_ids:Array(String)}
+GROUP BY id`, latestrow.ArgMaxKeepNullBy("repo", "last_synced")), []clickhouse.Binding{
 		{Name: "org_id", Value: orgID}, {Name: "repo_ids", Value: ids},
 	})
 	if err != nil {

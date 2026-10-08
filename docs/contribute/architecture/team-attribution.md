@@ -181,8 +181,9 @@ A GitHub PR closing Linear `CHAOS-2400` borrows that issue's `CHAOS` team.
 >    attributes to T2 (not `ambiguous_*_membership`); a person of inactive teams
 >    only is `no_membership`; an admin layer whose teams are all inactive has
 >    no candidate and falls through to the provider layer; two ACTIVE teams stay
->    ambiguous. Python had no inactive teams, so only the reasons for inactive
->    teams differ from it. Asserted by `TestMembershipGateCountsOnlyActiveTeams`,
+>    ambiguous. Python never filtered inactive teams; Go drops them before the
+>    gate counts. For inactive-team cases, both the winner and the reason can
+>    differ from the Python answer. Asserted by `TestMembershipGateCountsOnlyActiveTeams`,
 >    `TestAnInactiveOnlyAdminLayerFallsThroughToTheProviderLayer` and
 >    `TestAMemberOfAnInactiveAndAnActiveTeamResolvesToTheActiveTeam`.
 >
@@ -1253,6 +1254,29 @@ Tests: `TestOfPrefixesEveryProviderOnce`, `TestCheckRefusesABareOrEmptyProviderT
 | jira   | ✓ `discover_jira` | ✓ `associations.project_keys` | ✓ `discover_members_jira_bulk` | — | edges **+ roster** |
 | github | ✓ `discover_github` | n/a (repo = scope) | ✓ `discover_members_github` | ✓ `team_repo_ownership` | edges **+ roster** (this CS) |
 | gitlab | ✓ `discover_gitlab` | ✓ (GitLab project paths) | ✓ `discover_members_gitlab` | — | edges **+ roster** (this CS) |
+
+**GitHub `provider_access` repo ownership is a snapshot, not an append (CHAOS-8944).** Each GitHub team catalog run
+(`GitHubTeamCatalogClickHouseEffects.SnapshotTeamRepoOwnership`, `internal/providersync/github_team_catalog_effects_clickhouse.go`)
+writes the grants `GET /orgs/{org}/teams/{slug}/repos` returned and closes (writes the same sort key again with
+`valid_to` set) every open `team_repo_ownership` row that GitHub no longer returns. It goes through the one snapshot
+rule, `PlanOwnershipSnapshot` (a repo full name stands in for the project id). Scope of a close, all of it required:
+
+- org = the run's org, `provider = 'github'`, `source = 'provider_access'`, and the run's GitHub org: only rows whose
+  `repo_full_name` starts with `<github org>/` (the prefix `Collect` builds) are read or closed, because a team id
+  `gh:<slug>` holds no GitHub org and one tenant can sync several GitHub orgs with the same slug. A row of another org,
+  another GitHub org, another source (`inferred`, `manual`, `native`) or another provider is never read and never closed.
+- only the teams whose repo listing reached its end in this run (`githubTeamCatalogRows.RepoListedTeamIDs`). A team whose
+  listing failed fails the whole run (nothing is written, nothing is closed). A run that listed no team, and a run that
+  did not select teams (members-only), closes nothing: "the measurement did not happen" is never read as "GitHub returned
+  nothing". A team that is listed with an empty repo list is a real, complete answer, and its rows close.
+- a failed read of the open rows fails the run before the ownership write. It does not fail the run before every write: the
+  catalog collector writes the team rows (and the other rows it selected) earlier in the same run, and only the
+  `team_repo_ownership` write waits for the read.
+- a grant that is still returned keeps the `valid_from` of its earliest open row, so a repeat run replaces the row instead
+  of adding one, and an older open duplicate of the same grant is closed.
+
+GitLab writes `team_project_ownership` (`source = 'provider_access'`), not `team_repo_ownership`; it has no repo-ownership
+rows to close.
 
 One path: `run_team_autoimport` → `team_autoimport_<provider>.populate()` → `discover_*` → ClickHouse. (`LinearClient.iter_projects` is vestigial dead code, never a path.)
 

@@ -477,7 +477,7 @@ It reads `CLICKHOUSE_URI` and, without `--org`, the first `--orgs` rows of `orga
 
 ## Admin Commands
 
-User and organization management commands. These use PostgreSQL: the database is `MIGRATION_DATABASE_URI`, else `POSTGRES_URI`.
+User and organization management commands. The `admin users` and `admin orgs` verbs use the first PostgreSQL database that is set: `MIGRATION_DATABASE_URI`, then `API_DATABASE_URI`, then `POSTGRES_URI`. On Kubernetes, run them in the go-api pod (`kubectl exec -i deploy/<release>-go-api -- dho admin users create ...`): it has `API_DATABASE_URI`, the role the admin API writes users and organizations with. A worker pod has only `POSTGRES_URI`, the domain role, which cannot write users. The other `admin` verbs use `MIGRATION_DATABASE_URI`, else `POSTGRES_URI`.
 
 > **Important:** Users must belong to an organization to log in. Always create an organization after creating a user.
 

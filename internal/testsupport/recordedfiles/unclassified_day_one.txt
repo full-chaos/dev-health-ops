@@ -641,7 +641,6 @@ internal/queryapi/aggflame/testdata/throughput_both_empty.json
 internal/queryapi/aggflame/testdata/throughput_typed.json
 internal/queryapi/aianalytics/testdata/README.md
 internal/queryapi/analytics/testdata/build_unit_team_subquery_pre_export.sql
-internal/queryapi/analytics/testdata/latest_work_unit_investments_source_pre_export.sql
 internal/queryapi/analytics/testdata/latest_work_unit_repo_effort_source_pre_export.sql
 internal/queryapi/drilldown/testdata/get_default_org_scope.json
 internal/queryapi/drilldown/testdata/get_repo_scope_explicit_dates.json

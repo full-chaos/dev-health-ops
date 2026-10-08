@@ -81,7 +81,7 @@ func TestCompileSankey_Investment_CompilesInlinedSource(t *testing.T) {
 		if strings.Contains(q.sql, "\nWITH ") || strings.HasPrefix(trimmed, "WITH") {
 			t.Errorf("%s: investment-path SQL must never contain a top-level WITH clause, got: %s", name, q.sql)
 		}
-		if !strings.Contains(q.sql, "(argMax(tuple(repo_id), computed_at)).1") {
+		if !strings.Contains(q.sql, "(argMax(tuple(repo_id), (work_unit_investments.computed_at, toUInt64OrZero(splitByChar('_', work_unit_investments._part)[3]), work_unit_investments._part_offset))).1") {
 			t.Errorf("%s: expected CHAOS-4547 tuple-wrap fix for repo_id, got: %s", name, q.sql)
 		}
 		if !strings.Contains(q.sql, "LEFT JOIN repos AS r FINAL ON toString(r.id) = toString(repo_id) AND r.org_id = {org_id:String}") {

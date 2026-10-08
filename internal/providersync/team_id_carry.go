@@ -109,7 +109,8 @@ type TeamIDCarryOutcome struct {
 	Teams      uint64 `json:"teams"`
 	AdminTeams uint64 `json:"admin_teams"`
 	// AdminTeamsNotCarried is the active admin teams with a bare id that no
-	// single provider's observation names: the admin chose the id.
+	// single provider's observation names (the admin chose the id), or that
+	// a Jira project-as-team row of the same id holds.
 	AdminTeamsNotCarried uint64 `json:"admin_teams_not_carried"`
 	// AmbiguousTeams is the bare ids that more than one team holds (two
 	// providers, or a provider and a Jira project-as-team row). Each
@@ -128,6 +129,9 @@ type TeamIDCarryOutcome struct {
 	Observations         uint64 `json:"observations"`
 	SyncPolicies         uint64 `json:"sync_policies"`
 	DriftChanges         uint64 `json:"drift_changes"`
+	// IdentityDriftChanges is the pending identity membership changes of a
+	// moved team that were superseded.
+	IdentityDriftChanges uint64 `json:"identity_drift_changes"`
 	Identities           uint64 `json:"identities"`
 	Fallbacks            uint64 `json:"fallbacks"`
 	// RowsWritten is the rows a real run wrote; 0 in a dry run.
@@ -147,7 +151,10 @@ var errTeamIDCarryUnkeyed = errors.New("team id carry: planned id without a prov
 // at `at`. Every read runs before the first write, so a failed read writes
 // nothing. A dry run reads and counts and writes nothing. With nothing to
 // carry it is one count read and no write, so a second run reports zero.
-// Every writer of a prefixed team id calls it before its first write.
+// Every write path of a prefixed team id runs it first: a team catalog
+// sync through CarryFirstTeamCatalogCollector, before the collector; the
+// stream sink, the admin import and the Atlassian teams CLI verb at their
+// entry, through CarryTeamIDsBeforeWrite.
 //
 // The team rows and then the observations are written last: after a
 // failure part way the old team is still found active, so a re-run moves
@@ -250,7 +257,7 @@ func (run *teamIDCarryRun) plan() error {
 			return err
 		}
 	}
-	for _, step := range []func() error{run.planPolicies, run.planDrift, run.planIdentities, run.planFallbacks} {
+	for _, step := range []func() error{run.planPolicies, run.planDrift, run.planIdentityDrift, run.planIdentities, run.planFallbacks} {
 		if err := step(); err != nil {
 			return err
 		}
@@ -325,7 +332,10 @@ func (run *teamIDCarryRun) planTeams(teams, observations []chRow) []chRow {
 		case len(carried) == 0 && admin == nil:
 			continue
 		case len(carried) == 0:
-			if len(observedBy[id]) != 1 {
+			// An admin edit of a Jira project-as-team row is that row, and
+			// RetireJiraProjectAsTeamRows owns it: it does not become a
+			// Jira team.
+			if blocked || len(observedBy[id]) != 1 {
 				run.outcome.AdminTeamsNotCarried++
 				continue
 			}
@@ -662,6 +672,40 @@ func (run *teamIDCarryRun) planDrift() error {
 	return nil
 }
 
+// planIdentityDrift supersedes a pending identity membership change of a
+// team that moves. The review only resolves a pending change of a team it
+// observes, and it observes the prefixed id, so a change of the bare id
+// would stay pending, and an approval would write a membership of the
+// inactive bare team. It is not written again under the new id: its change
+// id holds the membership row with its updated_at, so no later review can
+// match a copy; the next review of the provider stages the conflict again
+// under the prefixed id if it is still there (in a catalog sync, the same
+// run, as the carry runs before the collector).
+func (run *teamIDCarryRun) planIdentityDrift() error {
+	oldIDs, _ := run.linkIDs()
+	if len(oldIDs) == 0 {
+		return nil
+	}
+	changes, err := run.read(`SELECT `+teamIDCarryDriftColumns+` FROM team_drift_changes FINAL WHERE org_id = {org_id:String} `+
+		`AND entity_type = '`+identityDriftEntityType+`' AND change_type = '`+identityDriftMembershipChangedT+`' `+
+		`AND status = '`+teamDriftStatusPending+`' AND entity_id IN {ids:Array(String)}`, run.org, clickhouse.Named("ids", oldIDs))
+	if err != nil {
+		return fmt.Errorf("team id carry: read identity team_drift_changes: %w", err)
+	}
+	var out []chRow
+	for _, row := range changes {
+		if _, ok := run.linkTarget(row.str("provider"), row.str("entity_id")); !ok {
+			continue
+		}
+		out = append(out, row.with("status", teamDriftStatusSuperseded).with("updated_at", teamIDCarryBump(run.at, row.time("updated_at"), time.Microsecond)))
+	}
+	run.outcome.IdentityDriftChanges = uint64(len(out))
+	if len(out) > 0 {
+		run.writes = append(run.writes, teamIDCarryWrite{table: "team_drift_changes", columns: teamIDCarryDriftColumns, rows: out})
+	}
+	return nil
+}
+
 // planIdentities rewrites the old ids in identities.team_ids.
 func (run *teamIDCarryRun) planIdentities() error {
 	oldIDs, _ := run.primaryIDs()
@@ -902,9 +946,9 @@ func (row chRow) with(column string, value any) chRow {
 	return chRow{index: row.index, vals: values}
 }
 
-// CarryTeamIDsBeforeWrite is the call every writer of a prefixed team id
-// makes before its first write: it runs CarryTeamIDs for the organization
-// now and logs what moved. An error stops the writer before it writes.
+// CarryTeamIDsBeforeWrite runs CarryTeamIDs for the organization now and
+// logs what moved; a write path calls it before it reads or writes a team
+// id (see CarryTeamIDs). An error stops the path before it writes.
 func CarryTeamIDsBeforeWrite(ctx context.Context, conn TeamIDCarryConn, orgID, writer string) error {
 	outcome, err := CarryTeamIDs(ctx, conn, orgID, time.Now().UTC(), false)
 	if err != nil {
@@ -916,7 +960,7 @@ func CarryTeamIDsBeforeWrite(ctx context.Context, conn TeamIDCarryConn, orgID, w
 			"ambiguous_teams", outcome.AmbiguousTeams, "teams_already_keyed", outcome.TeamsAlreadyKeyed,
 			"memberships", outcome.Memberships, "project_ownership", outcome.ProjectOwnership, "repo_ownership", outcome.RepoOwnership,
 			"link_rows_already_keyed", outcome.LinkRowsAlreadyKeyed, "observations", outcome.Observations,
-			"sync_policies", outcome.SyncPolicies, "drift_changes", outcome.DriftChanges, "identities", outcome.Identities,
+			"sync_policies", outcome.SyncPolicies, "drift_changes", outcome.DriftChanges, "identity_drift_changes", outcome.IdentityDriftChanges, "identities", outcome.Identities,
 			"fallbacks", outcome.Fallbacks, "rows_written", outcome.RowsWritten)
 	}
 	return nil

@@ -38,12 +38,6 @@ func (sink LinearReferenceCatalogClickHouseEffects) WriteEffect(ctx context.Cont
 		return err
 	}
 	switch effect.Destination {
-	case linearReferenceCatalogTeamsDestination, linearReferenceCatalogMembershipsDestination, linearReferenceCatalogOwnershipDestination:
-		if err := CarryTeamIDsBeforeWrite(ctx, sink.Conn, claim.Unit.OrgID, "linear"); err != nil {
-			return err
-		}
-	}
-	switch effect.Destination {
 	case linearReferenceCatalogTeamsDestination:
 		rows, err := decodeEffectRows[linearReferenceTeamRow](effect)
 		if err != nil {

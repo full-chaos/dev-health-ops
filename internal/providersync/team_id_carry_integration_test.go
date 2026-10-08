@@ -14,7 +14,6 @@ import (
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/google/uuid"
 
-	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	"github.com/full-chaos/dev-health-ops/internal/teamid"
 )
 
@@ -419,36 +418,6 @@ func TestCarryTeamIDsFailedReadWritesNothing(t *testing.T) {
 	}
 }
 
-// The Linear write carries the bare team before it writes: the admin's
-// manual members reach the prefixed row (the writer keeps the manual
-// members of the id it writes) and the bare row goes inactive.
-func TestTheLinearTeamWriteCarriesTheBareTeamFirst(t *testing.T) {
-	ctx, conn := newWorkItemEffectsConn(t)
-	claim := nativeTestClaim("linear", "work-items")
-	claim.OrgID = uuid.NewString()
-	f := carryFixture{t: t, ctx: ctx, conn: conn, orgID: claim.OrgID}
-	f.team("linear", "ENG", carryPtr("ENG"), nil, 1, carryOld, []string{"admin@example.com"}, nil)
-	sink := LinearReferenceCatalogClickHouseEffects{Conn: conn, Lease: providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil })}
-	key := "ENG"
-	effect, err := effectBatchFromValues(linearReferenceCatalogTeamsDestination, EffectReadbackRequired, []linearReferenceTeamRow{{
-		ID: "linear:ENG", TeamUUID: uuid.NewSHA1(uuid.NameSpaceURL, []byte("team:linear:ENG")).String(), Name: "Engineering",
-		Members: []string{}, ProjectKeys: []string{}, RepoPatterns: []string{}, IsActive: 1, UpdatedAt: carryAt,
-		OrgID: claim.OrgID, Provider: "linear", NativeTeamKey: &key,
-	}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := sink.WriteEffect(ctx, claim, effect); err != nil {
-		t.Fatalf("write: %v", err)
-	}
-	if got := f.str(`SELECT concat(toString(is_active), '|', arrayStringConcat(manual_members, ',')) FROM teams FINAL WHERE org_id = ? AND id = 'linear:ENG'`); got != "1|admin@example.com" {
-		t.Errorf("linear:ENG = %q, want active with the admin's manual member", got)
-	}
-	if got := f.str(carryActiveBareTeams); got != "" {
-		t.Errorf("active bare ids after the write = %q", got)
-	}
-}
-
 // The SQL bare-id condition and teamid.HasKey agree on every id shape.
 func TestTheBareIDConditionMatchesHasKey(t *testing.T) {
 	ctx, conn := newWorkItemEffectsConn(t)
@@ -462,5 +431,136 @@ func TestTheBareIDConditionMatchesHasKey(t *testing.T) {
 		if (bare == 1) != want {
 			t.Errorf("bare(%q) = %d, want %v", id, bare, want)
 		}
+	}
+}
+
+// An observation that holds a bare id is moved even when no team row of
+// that id is left bare.
+func TestCarryTeamIDsMovesAnObservationWithoutABareTeam(t *testing.T) {
+	ctx, conn := newWorkItemEffectsConn(t)
+	f := carryFixture{t: t, ctx: ctx, conn: conn, orgID: uuid.NewString()}
+	f.team("linear", "linear:ENG", carryPtr("ENG"), nil, 1, carryOld, nil, nil)
+	f.observation("linear", "ENG", "ENG")
+
+	outcome, err := CarryTeamIDs(ctx, conn, f.orgID, carryAt, false)
+	if err != nil || outcome.Teams != 0 || outcome.Observations != 1 {
+		t.Fatalf("carry = %+v, %v; want the observation only", outcome, err)
+	}
+	if got := f.str(`SELECT team_id FROM team_provider_observations FINAL WHERE org_id = ? AND provider = 'linear' AND native_team_key = 'ENG'`); got != "linear:ENG" {
+		t.Errorf("observation team_id = %q, want linear:ENG", got)
+	}
+}
+
+// Only a pending change of the old id is superseded: a decided one keeps
+// its decision.
+func TestCarryTeamIDsKeepsTheDecisionOfAnOldDecidedChange(t *testing.T) {
+	ctx, conn := newWorkItemEffectsConn(t)
+	f := carryFixture{t: t, ctx: ctx, conn: conn, orgID: uuid.NewString()}
+	f.team("linear", "ENG", carryPtr("ENG"), nil, 1, carryOld, nil, nil)
+	dismissed := f.drift("ENG", "description", "dismissed")
+
+	if _, err := CarryTeamIDs(ctx, conn, f.orgID, carryAt, false); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.str(`SELECT status FROM team_drift_changes FINAL WHERE org_id = ? AND change_id = ?`, dismissed); got != "dismissed" {
+		t.Errorf("old dismissed change status = %q, want dismissed", got)
+	}
+}
+
+// An identity that names both the bare and the prefixed id names the
+// prefixed id once.
+func TestCarryTeamIDsNamesATeamOnceInAnIdentity(t *testing.T) {
+	ctx, conn := newWorkItemEffectsConn(t)
+	f := carryFixture{t: t, ctx: ctx, conn: conn, orgID: uuid.NewString()}
+	f.team("linear", "ENG", carryPtr("ENG"), nil, 1, carryOld, nil, nil)
+	f.exec(`INSERT INTO identities (org_id, canonical_id, identity_uuid, display_name, email, provider_identities, team_ids, is_active, updated_at) VALUES (?, 'person-1', generateUUIDv4(), 'P', NULL, '{}', ['ENG', 'linear:ENG'], 1, ?)`, f.orgID, carryOld)
+
+	if _, err := CarryTeamIDs(ctx, conn, f.orgID, carryAt, false); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.str(`SELECT toString(team_ids) FROM identities FINAL WHERE org_id = ? AND canonical_id = 'person-1'`); got != "['linear:ENG']" {
+		t.Errorf("team_ids = %s, want ['linear:ENG']", got)
+	}
+}
+
+// An observation's parent moves with the parent team.
+func TestCarryTeamIDsMovesTheParentOfAnObservation(t *testing.T) {
+	ctx, conn := newWorkItemEffectsConn(t)
+	f := carryFixture{t: t, ctx: ctx, conn: conn, orgID: uuid.NewString()}
+	f.team("linear", "ENG", carryPtr("ENG"), nil, 1, carryOld, nil, nil)
+	f.team("linear", "SUB", carryPtr("SUB"), carryPtr("ENG"), 1, carryOld, nil, nil)
+	f.exec(`INSERT INTO team_provider_observations (org_id, provider, native_team_key, team_id, name, members_json, project_keys_json, repo_patterns_json, is_active, parent_team_id, discovered_at, updated_at) VALUES (?, 'linear', 'SUB', 'SUB', 'obs', '[]', '[]', '[]', 1, 'ENG', ?, ?)`,
+		f.orgID, carryOld, carryOld)
+
+	if _, err := CarryTeamIDs(ctx, conn, f.orgID, carryAt, false); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.str(`SELECT concat(team_id, '|', ifNull(parent_team_id, '')) FROM team_provider_observations FINAL WHERE org_id = ? AND native_team_key = 'SUB'`); got != "linear:SUB|linear:ENG" {
+		t.Errorf("observation = %q, want linear:SUB|linear:ENG", got)
+	}
+}
+
+// An open link whose validity starts after the carry is closed at its own
+// start, never before it.
+func TestCarryTeamIDsClosesAFutureLinkAtItsStart(t *testing.T) {
+	ctx, conn := newWorkItemEffectsConn(t)
+	f := carryFixture{t: t, ctx: ctx, conn: conn, orgID: uuid.NewString()}
+	f.team("linear", "ENG", carryPtr("ENG"), nil, 1, carryOld, nil, nil)
+	future := carryAt.Add(48 * time.Hour)
+	f.membership("linear", "ENG", "m1", future, nil)
+
+	if _, err := CarryTeamIDs(ctx, conn, f.orgID, carryAt, false); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.str(`SELECT toString(valid_to) FROM team_memberships FINAL WHERE org_id = ? AND team_id = 'ENG' AND member_id = 'm1'`); got != "2026-10-10 12:00:00.000" {
+		t.Errorf("old link valid_to = %s, want its own valid_from 2026-10-10 12:00:00.000", got)
+	}
+}
+
+// An admin edit of a Jira project-as-team row is that row: the carry does
+// not make it a Jira team (RetireJiraProjectAsTeamRows owns it).
+func TestCarryTeamIDsLeavesAnAdminEditOfAProjectAsTeamRow(t *testing.T) {
+	ctx, conn := newWorkItemEffectsConn(t)
+	f := carryFixture{t: t, ctx: ctx, conn: conn, orgID: uuid.NewString()}
+	f.team("jira", "PROJ", carryPtr("PROJ"), nil, 1, carryOld, nil, nil)
+	f.team("", "PROJ", nil, nil, 1, carryOld.Add(time.Hour), []string{"admin-edit"}, nil)
+	f.observation("jira", "PROJ", "PROJ")
+
+	outcome, err := CarryTeamIDs(ctx, conn, f.orgID, carryAt, false)
+	if err != nil || outcome.Teams != 0 || outcome.AdminTeams != 0 || outcome.AdminTeamsNotCarried != 1 {
+		t.Fatalf("carry = %+v, %v; want the admin edit not carried", outcome, err)
+	}
+	if got := f.count(`SELECT count() FROM teams FINAL WHERE org_id = ? AND id = 'jira:PROJ'`); got != 0 {
+		t.Errorf("jira:PROJ team rows = %d, want 0", got)
+	}
+	later, err := CarryTeamIDs(ctx, conn, f.orgID, carryAt.Add(time.Hour), true)
+	if err != nil || later.Found() || later.RowsWritten != 0 {
+		t.Errorf("later dry run = %+v, %v; want nothing left", later, err)
+	}
+}
+
+// A pending identity membership change of a moved team is superseded (the
+// review observes only the prefixed id, so it would stay pending and its
+// approval would write to the inactive bare team); a decided one stays.
+func TestCarryTeamIDsSupersedesAPendingIdentityChangeOfAMovedTeam(t *testing.T) {
+	ctx, conn := newWorkItemEffectsConn(t)
+	f := carryFixture{t: t, ctx: ctx, conn: conn, orgID: uuid.NewString()}
+	f.team("linear", "ENG", carryPtr("ENG"), nil, 1, carryOld, nil, nil)
+	f.team("linear", "linear:KEPT", carryPtr("KEPT"), nil, 1, carryOld, nil, nil)
+	identity := func(changeID, teamID, status string) {
+		f.exec(`INSERT INTO team_drift_changes (org_id, change_id, entity_type, entity_id, provider, native_team_key, change_type, field, old_value_json, new_value_json, status, first_seen_at, last_seen_at, updated_at) VALUES (?, ?, 'identity', ?, 'linear', ?, 'membership_changed', 'team_memberships', '{}', ?, ?, ?, ?, ?)`,
+			f.orgID, changeID, teamID, teamID, `{"provider":"linear","team_id":"`+teamID+`","member_id":"m1"}`, status, carryFirst, carryOld, carryOld)
+	}
+	identity("c-pending", "ENG", "pending")
+	identity("c-dismissed", "ENG", "dismissed")
+	identity("c-other", "linear:KEPT", "pending")
+
+	outcome, err := CarryTeamIDs(ctx, conn, f.orgID, carryAt, false)
+	if err != nil || outcome.IdentityDriftChanges != 1 {
+		t.Fatalf("carry = %+v, %v; want one identity change superseded", outcome, err)
+	}
+	got := f.str(`SELECT arrayStringConcat(arraySort(groupArray(concat(change_id, '=', status))), ',') FROM team_drift_changes FINAL WHERE org_id = ? AND entity_type = 'identity'`)
+	if got != "c-dismissed=dismissed,c-other=pending,c-pending=superseded" {
+		t.Errorf("identity changes = %s", got)
 	}
 }

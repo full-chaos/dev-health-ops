@@ -89,10 +89,20 @@ type catalogRequest struct {
 }
 
 // buildCatalogCollector resolves the provider's credential, HTTP client and
-// TeamCatalogCollector -- everything that differs between providers. The
-// caller (runCatalogTeams) owns the refusals shared by every provider
+// TeamCatalogCollector -- everything that differs between providers -- and
+// puts the collector behind the team id carry
+// (providersync.CarryFirstTeamCatalogCollector). The caller
+// (runCatalogTeams) owns the refusals shared by every provider
 // (owner/token/ClickHouse) and the shared collection/reporting flow.
 func buildCatalogCollector(env cli.Env, d deps, request catalogRequest, owner, token string, conn driver.Conn) (providersync.TeamCatalogCollector, providerfoundation.Credential, *providerfoundation.HTTPClient, int) {
+	collector, credential, client, exitCode := buildProviderCatalogCollector(env, d, request, owner, token, conn)
+	if collector == nil {
+		return nil, credential, client, exitCode
+	}
+	return providersync.CarryFirstTeamCatalogCollector{Conn: conn, Writer: "team_catalog_cli:" + request.provider, Collector: collector}, credential, client, exitCode
+}
+
+func buildProviderCatalogCollector(env cli.Env, d deps, request catalogRequest, owner, token string, conn driver.Conn) (providersync.TeamCatalogCollector, providerfoundation.Credential, *providerfoundation.HTTPClient, int) {
 	doer := d.doer
 	if doer == nil {
 		doer = productionDoer()

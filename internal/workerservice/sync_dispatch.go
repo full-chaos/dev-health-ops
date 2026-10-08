@@ -717,66 +717,7 @@ func buildSyncCoordinatorWorker(
 		closeClickHouse()
 		return workerFamily{}, errWorkerDependencyUnavailable
 	}
-	nativeTeamCatalogCollectors := map[string]providersync.TeamCatalogCollector{
-		"linear": providersync.LinearTeamCatalogCollector{
-			Sink: providersync.LinearReferenceCatalogClickHouseEffects{
-				Conn: clickhouseConnection, Lease: teamCatalogLease{},
-			},
-		},
-		// CHAOS-4434: GitHub teams/team_memberships, Go-native. No Projects
-		// surface exists for GitHub at all (auto_import_capabilities("github").
-		// projects is permanently False in Python); the collector reads
-		// selections.Projects but never produces a Projects/Ownership row.
-		// Telemetry is generic (jobruntime.TeamCatalogObserver, wired below via
-		// teamCatalogObserver) -- no per-provider Observer field needed here.
-		"github": providersync.GitHubTeamCatalogCollector{
-			// ResolveEmail: true mirrors PyGithub's lazy NamedUser.email
-			// completion (team_membership.py's discover_members_github) --
-			// without it, every membership facet set collapses to just
-			// "github:<login>" and an email-based assignee can no longer
-			// match team attribution (codex round 1, P2).
-			Client: providersync.GitHubTeamCatalogRouteHandler{ResolveEmail: true},
-			Sink:   providersync.GitHubTeamCatalogClickHouseEffects{Conn: clickhouseConnection},
-		},
-		// CHAOS-4432: GitLab teams/team_project_ownership/team_memberships +
-		// native projects catalog (CHAOS-3380), Go-native. GroupPathResolver
-		// is nil for now -- GitLab is the only provider whose group scoping
-		// isn't carried on the credential itself; it resolves from this run's
-		// sync_options once TeamCatalogReference.SyncOptions lands (CHAOS-4431
-		// follow-up), tracked separately.
-		"gitlab": providersync.GitLabTeamCatalogCollector{
-			Handler: providersync.GitLabTeamCatalogRouteHandler{},
-			Sink: providersync.GitLabTeamCatalogClickHouseEffects{
-				Conn: clickhouseConnection, Lease: teamCatalogLease{},
-			},
-		},
-		// Jira teams/team_project_ownership/team_memberships/sprints +
-		// native projects catalog, Go-native: a Jira project IS the team
-		// unit (no separate team concept), its lead is the only discovered
-		// member, and board/sprint reference discovery mirrors Linear's
-		// cycles. This closes out the native-collector provider set --
-		// every provider team_provider_capabilities() lists now has one, so
-		// the Python bridge's TeamAutoImport is unreachable for all of them.
-		// CHAOS-7002/D2770: jira's entry composes the project-as-team catalog
-		// above with a real Atlassian Teams collection (internal/
-		// atlassianteams), additive alongside it whenever team import is
-		// selected at all -- atlassian_organization_id resolves live via the
-		// AGG gateway when the credential's config doesn't override it
-		// (D2817/CHAOS-7020) -- see jira_atlassian_teams_collector.go's doc
-		// comment. Before this, the real collector was reachable only from
-		// the standalone `dho sync teams --provider jira` CLI verb, never
-		// from an automatic sync.
-		"jira": jiraCombinedTeamCatalogCollector{
-			ProjectAsTeam: providersync.JiraTeamCatalogCollector{
-				Handler: providersync.JiraTeamCatalogRouteHandler{},
-				Sink: providersync.JiraTeamCatalogClickHouseEffects{
-					Conn: clickhouseConnection, Lease: teamCatalogLease{},
-				},
-			},
-			Conn: clickhouseConnection,
-			Doer: httpguard.NewClient(45 * time.Second),
-		},
-	}
+	nativeTeamCatalogCollectors := newNativeTeamCatalogCollectors(clickhouseConnection)
 	teamCatalogClients := teamCatalogClientResolver{
 		pool: postgresDatabase.pools.Domain,
 		credentials: providerfoundation.CredentialResolver{
@@ -1010,4 +951,71 @@ func newTouchedDaysDrain(
 	}
 	drain.SetObserver(observer)
 	return drain, nil
+}
+
+// newNativeTeamCatalogCollectors is the worker's registry of team catalog
+// collectors, one per provider. Every collector runs behind the team id
+// carry (providersync.CarryFirstTeamCatalogCollector), so the carry runs
+// before any collector of the organization reads or writes a team id.
+func newNativeTeamCatalogCollectors(clickhouseConnection driver.Conn) map[string]providersync.TeamCatalogCollector {
+	return providersync.CarryFirstTeamCatalogCollectors(clickhouseConnection, map[string]providersync.TeamCatalogCollector{
+		"linear": providersync.LinearTeamCatalogCollector{
+			Sink: providersync.LinearReferenceCatalogClickHouseEffects{
+				Conn: clickhouseConnection, Lease: teamCatalogLease{},
+			},
+		},
+		// CHAOS-4434: GitHub teams/team_memberships, Go-native. No Projects
+		// surface exists for GitHub at all (auto_import_capabilities("github").
+		// projects is permanently False in Python); the collector reads
+		// selections.Projects but never produces a Projects/Ownership row.
+		// Telemetry is generic (jobruntime.TeamCatalogObserver, wired below via
+		// teamCatalogObserver) -- no per-provider Observer field needed here.
+		"github": providersync.GitHubTeamCatalogCollector{
+			// ResolveEmail: true mirrors PyGithub's lazy NamedUser.email
+			// completion (team_membership.py's discover_members_github) --
+			// without it, every membership facet set collapses to just
+			// "github:<login>" and an email-based assignee can no longer
+			// match team attribution (codex round 1, P2).
+			Client: providersync.GitHubTeamCatalogRouteHandler{ResolveEmail: true},
+			Sink:   providersync.GitHubTeamCatalogClickHouseEffects{Conn: clickhouseConnection},
+		},
+		// CHAOS-4432: GitLab teams/team_project_ownership/team_memberships +
+		// native projects catalog (CHAOS-3380), Go-native. GroupPathResolver
+		// is nil for now -- GitLab is the only provider whose group scoping
+		// isn't carried on the credential itself; it resolves from this run's
+		// sync_options once TeamCatalogReference.SyncOptions lands (CHAOS-4431
+		// follow-up), tracked separately.
+		"gitlab": providersync.GitLabTeamCatalogCollector{
+			Handler: providersync.GitLabTeamCatalogRouteHandler{},
+			Sink: providersync.GitLabTeamCatalogClickHouseEffects{
+				Conn: clickhouseConnection, Lease: teamCatalogLease{},
+			},
+		},
+		// Jira teams/team_project_ownership/team_memberships/sprints +
+		// native projects catalog, Go-native: a Jira project IS the team
+		// unit (no separate team concept), its lead is the only discovered
+		// member, and board/sprint reference discovery mirrors Linear's
+		// cycles. This closes out the native-collector provider set --
+		// every provider team_provider_capabilities() lists now has one, so
+		// the Python bridge's TeamAutoImport is unreachable for all of them.
+		// CHAOS-7002/D2770: jira's entry composes the project-as-team catalog
+		// above with a real Atlassian Teams collection (internal/
+		// atlassianteams), additive alongside it whenever team import is
+		// selected at all -- atlassian_organization_id resolves live via the
+		// AGG gateway when the credential's config doesn't override it
+		// (D2817/CHAOS-7020) -- see jira_atlassian_teams_collector.go's doc
+		// comment. Before this, the real collector was reachable only from
+		// the standalone `dho sync teams --provider jira` CLI verb, never
+		// from an automatic sync.
+		"jira": jiraCombinedTeamCatalogCollector{
+			ProjectAsTeam: providersync.JiraTeamCatalogCollector{
+				Handler: providersync.JiraTeamCatalogRouteHandler{},
+				Sink: providersync.JiraTeamCatalogClickHouseEffects{
+					Conn: clickhouseConnection, Lease: teamCatalogLease{},
+				},
+			},
+			Conn: clickhouseConnection,
+			Doer: httpguard.NewClient(45 * time.Second),
+		},
+	})
 }

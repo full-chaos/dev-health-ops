@@ -904,7 +904,8 @@ project (section 0.1): a native team key gives one team.
   the then branch of `if <team> != ""` / `if len(<team>) > 0` (a team variable, or the result of a package
   function that returns a team filter), or the function's query always groups by team and reads no primary
   source; a primary source in a query that groups or filters by team needs that bound team branch (it is
-  then the organization path). The two work-unit votes are an allowlist with a reason; a stale entry fails.
+  then the organization path). The two work-unit votes are an allowlist with a reason; a stale entry fails. A primary source const whose
+  own query groups or filters by team fails too.
   "Groups by team" is read from the SQL text: a `GROUP BY` and a joined team column (`t.team_id`) or
   `toString(team_id)`, outside the newest-`computed_at` fence. A new reader must take one of the two forms. The census reads SQL text in Go files; it does
   not see an `is_primary` alias read later in the query or a Go `bool` scan of the column.
@@ -935,6 +936,16 @@ project (section 0.1): a native team key gives one team.
   change. A rollup-based team view shows a co-owned item under its primary team only, until the rollup rows
   carry the team set with one organization-counted row per set. Linked-issue inheritance (section 2) also
   passes the primary team only.
+- **Known limit: investment and work-unit views follow one team per work unit.** A co-owner team sees the
+  item in the item views (the issues drilldown, the aggregated flame, the team quadrant, the flow-matrix
+  TEAM and REPO activity). The investment views (breakdown, catalog, sankey, grouped sankey, time series, the
+  flow matrix with investment, sankey coverage, investment quality, the investment flow) and the GraphQL
+  work-unit team list (`workUnitTeamAttributions`) take a work unit's team from the work-unit vote over the
+  items' primary rows (`BuildUnitTeamSubquery`, `resolveWorkUnitTeamAttributions`): one team per work unit,
+  also when the view is scoped to a team or grouped by team. So a co-owner team's investment view and work-unit
+  list do not show a work unit whose items its team co-owns, until the team-set rollup contract (the same
+  follow-up as the daily rollups). The census holds every reader of the vote's team to a named list
+  (`workUnitVoteConsumers`); a new reader must be classified there, and a stale entry fails.
 - **Known limit: a key held by teams of two providers.** `projectKeyTeams` is not provider-scoped, and this
   change does not change how the primary is chosen: the first ACTIVE holder of the key by (provider, id), of
   any provider, takes the `issue_project` primary row, as before. When that first holder is of another provider

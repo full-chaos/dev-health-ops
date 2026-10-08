@@ -133,6 +133,7 @@ func TestWorkItemTeamAttributionIsPrimaryPredicateCensus(t *testing.T) {
 	}
 	teamScopedSources, readerViolations := teamGroupedReaderViolations(t, root, readerDirs)
 	violations = append(violations, readerViolations...)
+	violations = append(violations, workUnitVoteConsumerViolations(t, root)...)
 	for _, violation := range violations {
 		t.Error(violation)
 	}
@@ -189,8 +190,109 @@ var (
 // teamGroupedReaderAllowlist: readers that read the primary row only although
 // their query groups or filters by a team. Each must still be found.
 var teamGroupedReaderAllowlist = map[string]string{
-	"internal/queryapi/workgraph\x00resolveWorkUnitTeamAttributions": "work-unit team vote: one team per work unit from the items' primary rows (a work unit is not an item; the vote is unchanged)",
-	"internal/queryapi/analytics\x00BuildUnitTeamSubquery":           "work-unit team vote of the investment views: one team per work unit from the items' primary rows",
+	"internal/queryapi/workgraph\x00resolveWorkUnitTeamAttributions": workUnitVoteReason,
+	"internal/queryapi/analytics\x00BuildUnitTeamSubquery":           workUnitVoteReason,
+}
+
+// workUnitVoteReason: investment and work-unit views follow one team per work
+// unit (the vote over the items' primary rows) until the team-set rollup
+// contract; a co-owner team sees the item in item views only.
+const workUnitVoteReason = "investment / work-unit view: one team per work unit from the work-unit vote over primary rows, until the team-set rollup contract; a co-owner team sees the item in item views (drilldown, flame, quadrant, flow-matrix activity) only"
+
+// workUnitVoteConsumers: every function that reads the vote's team (calls
+// BuildUnitTeamSubquery, or names its team columns ut.team_* /
+// unit_team.team_*) to scope, group or label a view. The set must match
+// exactly: a new consumer is classified here, a stale entry fails.
+var workUnitVoteConsumers = map[string]string{
+	"internal/queryapi/analytics\x00translateFilters":                             workUnitVoteReason,
+	"internal/queryapi/analytics\x00dbColumn":                                     workUnitVoteReason,
+	"internal/queryapi/analytics\x00investmentContextFor":                         workUnitVoteReason,
+	"internal/queryapi/analytics\x00compileEvidenceQualityByGroup":                workUnitVoteReason,
+	"internal/queryapi/analytics\x00compileInvestmentQualityStats":                workUnitVoteReason,
+	"internal/queryapi/analytics\x00compileSankeyCoverage":                        workUnitVoteReason,
+	"internal/queryapi/analytics\x00compileFlowMatrixInvestmentTeamRepoDimension": workUnitVoteReason,
+	"internal/queryapi/investmentflow\x00fetchInvestmentTeamEdges":                workUnitVoteReason,
+	"internal/queryapi/investmentflow\x00fetchInvestmentRepoTeamEdges":            workUnitVoteReason,
+	"internal/queryapi/investmentflow\x00fetchInvestmentTeamCategoryRepoEdges":    workUnitVoteReason,
+	"internal/queryapi/investmentflow\x00fetchInvestmentTeamSubcategoryRepoEdges": workUnitVoteReason,
+	"internal/queryapi/investmentflow\x00fetchInvestmentUnassignedCounts":         workUnitVoteReason,
+}
+
+var workUnitVoteTeamColumn = regexp.MustCompile(`\b(?:ut|unit_team)\.team_(?:id|label)\b`)
+
+// workUnitVoteConsumerViolations finds every production function that reads
+// the work-unit vote's team and holds the set to workUnitVoteConsumers.
+func workUnitVoteConsumerViolations(t *testing.T, root string) []string {
+	t.Helper()
+	found := map[string]string{}
+	err := filepath.WalkDir(filepath.Join(root, "internal"), func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.IsDir() {
+			if entry.Name() == "testdata" || strings.HasPrefix(entry.Name(), ".") {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		content, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		if !strings.Contains(string(content), "BuildUnitTeamSubquery") && !workUnitVoteTeamColumn.Match(content) {
+			return nil
+		}
+		fileSet := token.NewFileSet()
+		file, err := parser.ParseFile(fileSet, path, content, 0)
+		if err != nil {
+			return err
+		}
+		relDir, _ := filepath.Rel(root, filepath.Dir(path))
+		relDir = filepath.ToSlash(relDir)
+		for _, decl := range file.Decls {
+			function, ok := decl.(*ast.FuncDecl)
+			if !ok || function.Body == nil || function.Name.Name == "BuildUnitTeamSubquery" {
+				continue
+			}
+			consumer := false
+			ast.Inspect(function.Body, func(node ast.Node) bool {
+				switch value := node.(type) {
+				case *ast.CallExpr:
+					switch callee := value.Fun.(type) {
+					case *ast.Ident:
+						consumer = consumer || callee.Name == "BuildUnitTeamSubquery"
+					case *ast.SelectorExpr:
+						consumer = consumer || callee.Sel.Name == "BuildUnitTeamSubquery"
+					}
+				case *ast.BasicLit:
+					consumer = consumer || (value.Kind == token.STRING && workUnitVoteTeamColumn.MatchString(value.Value))
+				}
+				return true
+			})
+			if consumer {
+				found[relDir+"\x00"+function.Name.Name] = filepath.Base(path) + ":" + strconv.Itoa(fileSet.Position(function.Pos()).Line)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var violations []string
+	for key, where := range found {
+		if _, ok := workUnitVoteConsumers[key]; !ok {
+			violations = append(violations, strings.ReplaceAll(key, "\x00", "/")+" ("+where+"): reads the work-unit vote's team; classify it in workUnitVoteConsumers")
+		}
+	}
+	for key, reason := range workUnitVoteConsumers {
+		if _, ok := found[key]; !ok {
+			violations = append(violations, "stale work-unit vote consumer ("+reason+"): "+strings.ReplaceAll(key, "\x00", ": "))
+		}
+	}
+	return violations
 }
 
 // teamGroupedReaderViolations holds every reader of the attribution rows to
@@ -395,6 +497,13 @@ func (census *attributionPackageCensus) check() []attributionFinding {
 		})
 	}
 	for name, expr := range census.consts {
+		if census.sources[name] == sourcePrimary {
+			if grouped, filtered := teamGrouping(ownLiteralText(expr)); grouped || filtered {
+				file, line := census.where(census.position[name])
+				findings = append(findings, attributionFinding{file: file, line: line, name: name, allowable: true,
+					reason: "a primary source (`is_primary = 1`) whose own query groups or filters by team: a co-owner team does not get the item"})
+			}
+		}
 		if census.sources[name] != sourceNone || referencedByConst[name] {
 			continue
 		}

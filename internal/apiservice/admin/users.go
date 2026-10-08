@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"golang.org/x/crypto/bcrypt"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/audit"
@@ -203,10 +204,17 @@ func (h *handlers) getUser(w http.ResponseWriter, r *http.Request) {
 	policy.WriteModel(w, http.StatusOK, userResponseObject(target), nil)
 }
 
-// createUser is users.py's create_user: unauthenticated by design in the
-// Python route (no Depends(require_admin) on this one -- account
-// self-registration rides this same admin endpoint).
+// createUserRoles are the roles an add may give: "owner" moves only through
+// transfer-ownership.
+var createUserRoles = map[string]bool{"admin": true, "member": true, "viewer": true}
+
+// createUser is users.py's create_user plus the org membership the Python
+// route never wrote (CHAOS-8969): an org-scoped create (X-Org-Id, else a
+// non-superuser's own org claim) writes the user and its membership in one
+// transaction, because the org Users list reads users JOIN memberships. A
+// superuser with no org scope creates a platform user with no membership.
 func (h *handlers) createUser(w http.ResponseWriter, r *http.Request) {
+	caller := policy.UserFrom(r.Context())
 	ctx := r.Context()
 	body := bodyFromContext(ctx)
 	var errs pybody.Errors
@@ -214,6 +222,7 @@ func (h *handlers) createUser(w http.ResponseWriter, r *http.Request) {
 	var email, password, username, fullName, authProvider, authProviderID string
 	var isVerified, isSuperuser bool
 	var fullNamePresent, authProviderPresent, authProviderIDPresent bool
+	role, rolePresent := "member", false
 	if ok {
 		email, _ = errs.RequiredString(object, "email", 1, 0)
 		password, _ = errs.OptionalString(object, "password", 8, 128)
@@ -228,11 +237,29 @@ func (h *handlers) createUser(w http.ResponseWriter, r *http.Request) {
 		authProviderID, authProviderIDPresent = errs.OptionalString(object, "auth_provider_id", 0, 0)
 		isVerified, _ = errs.DefaultedBool(object, "is_verified")
 		isSuperuser, _ = errs.DefaultedBool(object, "is_superuser")
+		var roleValue string
+		if roleValue, rolePresent = errs.OptionalString(object, "role", 0, 0); rolePresent {
+			role = roleValue
+		}
 	}
 	if len(errs) > 0 {
 		policy.WriteJSON(w, http.StatusUnprocessableEntity, pybody.Detail(errs), nil)
 		return
 	}
+
+	orgID, scoped := h.createUserOrg(ctx, w, r, caller)
+	if !scoped {
+		return
+	}
+	if orgID == uuid.Nil && rolePresent {
+		policy.WriteDetail(w, http.StatusBadRequest, "A role needs an organization: send X-Org-Id", nil)
+		return
+	}
+	if orgID != uuid.Nil && !createUserRoles[role] {
+		policy.WriteDetail(w, http.StatusBadRequest, "Invalid role: "+role+" (use admin, member or viewer)", nil)
+		return
+	}
+
 	in := userCreateInput{Email: &email, IsVerified: isVerified, IsSuperuser: isSuperuser}
 	if username != "" {
 		in.Username = &username
@@ -267,7 +294,7 @@ func (h *handlers) createUser(w http.ResponseWriter, r *http.Request) {
 			}
 			in.PasswordHash = &hashed
 		}
-		created, err := g.store.insertUser(ctx, in)
+		created, err := h.insertUserWithMembership(ctx, r, g.tx, g.store, in, orgID, role, caller.ID)
 		switch {
 		case err == errEmailExists:
 			policy.WriteDetail(w, http.StatusBadRequest, "User with email "+email+" already exists", nil)
@@ -282,6 +309,62 @@ func (h *handlers) createUser(w http.ResponseWriter, r *http.Request) {
 		}
 		return func() { policy.WriteModel(w, http.StatusCreated, userResponseObject(created), nil) }
 	})
+}
+
+// createUserOrg is the organization an add joins the new user to: X-Org-Id
+// when sent, else a non-superuser's org claim; uuid.Nil is a superuser's
+// platform create. ok is false when a response was already written.
+func (h *handlers) createUserOrg(ctx context.Context, w http.ResponseWriter, r *http.Request, caller *policy.User) (uuid.UUID, bool) {
+	raw := r.Header.Get("X-Org-Id")
+	if raw == "" {
+		if caller.IsSuperuser {
+			return uuid.Nil, true
+		}
+		claim, ok := orgIDForNonSuperuser(w, caller)
+		if !ok {
+			return uuid.Nil, false
+		}
+		raw = claim
+	}
+	orgID, err := uuid.Parse(raw)
+	if err != nil {
+		policy.WriteDetail(w, http.StatusBadRequest, "Invalid organization id", nil)
+		return uuid.Nil, false
+	}
+	if !h.ensureOrgAdminAccess(ctx, w, caller, orgID) {
+		return uuid.Nil, false
+	}
+	return orgID, true
+}
+
+// insertUserWithMembership writes, in the caller's transaction, the user and,
+// when orgID is set, its membership and the admin audit row: the transaction
+// commits all of them or none. A platform create (orgID nil) writes no audit
+// row: audit_logs.org_id is NOT NULL.
+func (h *handlers) insertUserWithMembership(ctx context.Context, r *http.Request, tx pgx.Tx, store pgStore, in userCreateInput, orgID uuid.UUID, role string, actor uuid.UUID) (*fullUser, error) {
+	created, err := store.insertUser(ctx, in)
+	if err != nil || orgID == uuid.Nil {
+		return created, err
+	}
+	if _, err := store.insertMembershipTx(ctx, tx, orgID, created.ID, role, &actor); err != nil {
+		return nil, err
+	}
+	changes := pyjson.NewObject()
+	changes.Set("email", created.Email)
+	changes.Set("role", role)
+	encodedChanges, err := pyjson.Marshal(changes)
+	if err != nil {
+		return nil, err
+	}
+	description := "User created and added to organization"
+	if _, err := h.audit.Write(ctx, tx, requestAuditEntry(r, audit.Entry{
+		OrgID: orgID, UserID: &actor, Action: audit.ActionCreate,
+		ResourceType: audit.ResourceUser, ResourceID: created.ID.String(),
+		Description: &description, Changes: encodedChanges,
+	})); err != nil {
+		return nil, err
+	}
+	return created, nil
 }
 
 // updateUser is users.py's update_user.

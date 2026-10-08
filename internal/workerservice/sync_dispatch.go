@@ -975,7 +975,7 @@ func newNativeTeamCatalogCollectors(clickhouseConnection driver.Conn) map[string
 			// completion (team_membership.py's discover_members_github) --
 			// without it, every membership facet set collapses to just
 			// "github:<login>" and an email-based assignee can no longer
-			// match team attribution (codex round 1, P2).
+			// match team attribution.
 			Client: providersync.GitHubTeamCatalogRouteHandler{ResolveEmail: true},
 			Sink:   providersync.GitHubTeamCatalogClickHouseEffects{Conn: clickhouseConnection},
 		},

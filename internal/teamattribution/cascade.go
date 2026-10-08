@@ -71,10 +71,14 @@ type GithubWorkItemDerivationCandidate struct {
 	// several providers, so the team is bound where the candidate is made
 	// (bindCandidateTeam, or the key holder itself); the team name and the
 	// active-team rule read this identity, never the id alone. TeamProvider is
-	// "" for an admin team and for an id that no catalog row has. Not
+	// "" for an admin team and for an id that no catalog row has.
+	// TeamNeutral marks a provider-neutral record that no active team of the
+	// item's provider and no active admin team holds: it names the bare id,
+	// and the active-team rule reads the id alone (inactiveTeamIDs). Not
 	// persisted.
 	TeamProvider string `json:"-"`
 	TeamResolved bool   `json:"-"`
+	TeamNeutral  bool   `json:"-"`
 }
 
 type GithubWorkItemDerivationSubject struct {
@@ -304,9 +308,12 @@ type GithubWorkItemDerivationContext struct {
 	// null-carrying behave as for any team), and resolve() drops every
 	// candidate that names one -- ONE filter, after all paths have produced
 	// their candidates (dropInactiveTeamCandidates), by the candidate's bound
-	// team. catalogTeamsByID gives the teams of one id, from which
-	// bindCandidateTeam binds the one the item means.
+	// team. inactiveTeamIDs: the ids that an inactive team of any provider
+	// has; a TeamNeutral candidate is dropped by its id alone. catalogTeamsByID
+	// gives the teams of one id, from which bindCandidateTeam binds the one the
+	// item means.
 	inactiveTeams    map[string]struct{}
+	inactiveTeamIDs  map[string]struct{}
 	catalogTeamsByID map[string][]GithubWorkItemDerivationTeamFact
 }
 
@@ -379,6 +386,7 @@ func NewGitHubWorkItemDerivationContext(
 		teamsWithOwnership:           map[string]struct{}{},
 		teamsKnownFromCatalog:        map[string]struct{}{},
 		inactiveTeams:                map[string]struct{}{},
+		inactiveTeamIDs:              map[string]struct{}{},
 		catalogTeamsByID:             map[string][]GithubWorkItemDerivationTeamFact{},
 	}
 	// CHAOS-5649 (R179 rule 2): populate the null-carrying-team sets from
@@ -400,6 +408,7 @@ func NewGitHubWorkItemDerivationContext(
 			result.catalogTeamsByID[teamID] = append(result.catalogTeamsByID[teamID], team)
 			if team.Inactive {
 				result.inactiveTeams[AttributionMapKey(team.Provider, teamID)] = struct{}{}
+				result.inactiveTeamIDs[teamID] = struct{}{}
 			}
 			if len(team.ProjectKeys) > 0 {
 				result.teamsWithOwnership[teamID] = struct{}{}
@@ -626,9 +635,8 @@ const (
 	// bindProviderNeutral: a provider-neutral admin record
 	// (manual_fallback). Its row stores a bare team id, and it applies to
 	// items of every provider: when no team of the item's provider and no
-	// admin team with the id is active, it binds to an active team of another
-	// provider with the id; it is dropped only when every team with the id is
-	// inactive.
+	// admin team with the id is active, it stays TeamNeutral, with its own
+	// id and name, and is dropped when any team with the id is inactive.
 	bindProviderNeutral
 )
 
@@ -639,11 +647,11 @@ const (
 // the inactive admin team), and dropInactiveTeamCandidates drops it. When the
 // catalog has the id only for teams of other providers, a fact binds to the
 // first active one of them (else to an inactive one, dropped). A
-// provider-neutral record (bindProviderNeutral) binds to an active team of
-// another provider whenever no team of the item's provider and no admin team
-// with the id is active. An id that no catalog
-// row has is kept as named: the team is unknown, not inactive. A bound team
-// gives the candidate its name.
+// provider-neutral record (bindProviderNeutral) with no active team of the
+// item's provider and no active admin team binds to no team: it stays
+// TeamNeutral with its own name. An id that no catalog row has is kept as
+// named: the team is unknown, not inactive. A bound team gives the candidate
+// its name.
 func (derived GithubWorkItemDerivationContext) bindCandidateTeam(
 	candidate GithubWorkItemDerivationCandidate, provider string, binding teamBinding,
 ) GithubWorkItemDerivationCandidate {
@@ -663,31 +671,21 @@ func (derived GithubWorkItemDerivationContext) bindCandidateTeam(
 		}
 	}
 	picked := teamsForItemProvider(active, provider)
-	nameFromTeam := true
 	if len(picked) == 0 {
-		switch binding {
-		case bindProviderNeutral:
-			picked = rows
-			if len(active) > 0 {
-				// Only teams of other providers are active with the id:
-				// the rule names one of them, as on main. With several,
-				// the rule's own name stays, as on main.
-				picked, nameFromTeam = active, len(active) == 1
-			}
-		default:
-			picked = teamsForItemProvider(rows, provider)
-			if len(picked) == 0 {
-				picked = append(active, rows...)
-			}
+		if binding == bindProviderNeutral {
+			candidate.TeamResolved, candidate.TeamNeutral = true, true
+			return candidate
+		}
+		picked = teamsForItemProvider(rows, provider)
+		if len(picked) == 0 {
+			picked = append(active, rows...)
 		}
 	}
 	team := picked[0]
 	candidate.TeamProvider = strings.TrimSpace(team.Provider)
 	candidate.TeamResolved = true
-	if nameFromTeam {
-		candidate.TeamName = GithubWorkItemDerivationStringPointer(GithubWorkItemDerivationFirstNonEmpty(
-			team.TeamName, GithubWorkItemDerivationStringValue(candidate.TeamName), teamID))
-	}
+	candidate.TeamName = GithubWorkItemDerivationStringPointer(GithubWorkItemDerivationFirstNonEmpty(
+		team.TeamName, GithubWorkItemDerivationStringValue(candidate.TeamName), teamID))
 	return candidate
 }
 
@@ -1550,7 +1548,8 @@ const teamNewestRowInactive = `argMax(is_active, (updated_at, last_synced, is_ac
 // new path cannot forget it. Inactive teams stay in teamsKnownFromCatalog.
 // It reads the bound team (provider, id) of the candidate: an inactive team of
 // another provider with the same id does not drop the item's own active team.
-// A candidate with a team that is not bound is dropped too.
+// A TeamNeutral candidate is dropped when any team with its id is inactive. A
+// candidate with a team that is not bound is dropped too.
 func (derived GithubWorkItemDerivationContext) dropInactiveTeamCandidates(
 	bySource map[string][]GithubWorkItemDerivationCandidate,
 ) {
@@ -1561,7 +1560,11 @@ func (derived GithubWorkItemDerivationContext) dropInactiveTeamCandidates(
 				if !candidate.TeamResolved {
 					continue
 				}
-				if _, inactive := derived.inactiveTeams[AttributionMapKey(candidate.TeamProvider, *candidate.TeamID)]; inactive {
+				if candidate.TeamNeutral {
+					if _, inactive := derived.inactiveTeamIDs[strings.TrimSpace(*candidate.TeamID)]; inactive {
+						continue
+					}
+				} else if _, inactive := derived.inactiveTeams[AttributionMapKey(candidate.TeamProvider, *candidate.TeamID)]; inactive {
 					continue
 				}
 			}

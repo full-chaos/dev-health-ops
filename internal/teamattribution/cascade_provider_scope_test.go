@@ -551,12 +551,13 @@ func TestAnInactiveAdminTeamIsDroppedWhenNoTeamOfTheItemsProviderHasItsID(t *tes
 // A manual fallback is provider-neutral: it applies to items of every
 // provider, and its row stores a bare team id. The id is bound for the item:
 // the active team of the item's provider with that id, else the active admin
-// team with that id, else an active team of another provider with that id (as
-// on main); it is dropped only when every team with the id is inactive. The
-// bound team gives the row its name; with several active teams of other
-// providers the rule's own name stays, as on main. An inactive team never takes the item: an inactive admin
-// team ENG with the same id as the item provider's active team ENG neither
-// names the row nor keeps it alive when it is the only team ENG.
+// team with that id; the bound team gives the row its name. Else the row stays
+// as the rule names it, and is dropped when any team with the id is inactive
+// (every such catalog is enumerated against main's rule in
+// TestAManualFallbackThatNoActiveOwnOrAdminTeamHoldsIsServedAsOnMain). An
+// inactive team never takes the item: an inactive admin team ENG with the same
+// id as the item provider's active team ENG neither names the row nor keeps it
+// alive when it is the only team ENG.
 func TestAManualFallbackIsBoundToAnActiveTeamOfTheItemsProvider(t *testing.T) {
 	key := "ENG"
 	rule := GithubWorkItemDerivationManualFallback{ScopeType: "issue_key_prefix", ScopeID: key, TeamID: "ENG", TeamName: "Inactive admin ENG", Priority: 5}
@@ -591,6 +592,15 @@ func TestAManualFallbackIsBoundToAnActiveTeamOfTheItemsProvider(t *testing.T) {
 				t.Errorf("primary = %q/%s, want unassigned", team, source)
 			}
 		})
+		t.Run(provider+"/inactive own team and active admin team share the id", func(t *testing.T) {
+			team, name, source, _ := resolveWith(
+				GithubWorkItemDerivationTeamFact{Provider: provider, TeamID: "ENG", Inactive: true},
+				GithubWorkItemDerivationTeamFact{Provider: "", TeamID: "ENG", TeamName: "Admin ENG"},
+			)
+			if team != "ENG" || name != "Admin ENG" || source != "manual_fallback" {
+				t.Errorf("primary = %q %q/%s, want the active admin team ENG", team, name, source)
+			}
+		})
 		t.Run(provider+"/active admin team has the id", func(t *testing.T) {
 			team, name, source, _ := resolveWith(GithubWorkItemDerivationTeamFact{Provider: "", TeamID: "ENG", TeamName: "Admin ENG"})
 			if team != "ENG" || name != "Admin ENG" || source != "manual_fallback" {
@@ -600,8 +610,8 @@ func TestAManualFallbackIsBoundToAnActiveTeamOfTheItemsProvider(t *testing.T) {
 		for _, other := range otherProviders(provider) {
 			t.Run(provider+"/only an active team of "+other+" has the id", func(t *testing.T) {
 				team, name, source, _ := resolveWith(GithubWorkItemDerivationTeamFact{Provider: other, TeamID: "ENG", TeamName: "Eng " + other})
-				if team != "ENG" || name != "Eng "+other || source != "manual_fallback" {
-					t.Errorf("primary = %q %q/%s, want the %s team ENG (the team as on main; the name of the bound team)", team, name, source, other)
+				if team != "ENG" || name != "Inactive admin ENG" || source != "manual_fallback" {
+					t.Errorf("primary = %q %q/%s, want ENG with the rule's own name, as on main: a team of %s never names the row", team, name, source, other)
 				}
 			})
 			t.Run(provider+"/only an inactive team of "+other+" has the id", func(t *testing.T) {
@@ -610,15 +620,31 @@ func TestAManualFallbackIsBoundToAnActiveTeamOfTheItemsProvider(t *testing.T) {
 					t.Errorf("primary = %q/%s, want unassigned", team, source)
 				}
 			})
-			t.Run(provider+"/inactive own team and an active team of "+other, func(t *testing.T) {
-				team, name, source, _ := resolveWith(
-					GithubWorkItemDerivationTeamFact{Provider: provider, TeamID: "ENG", Inactive: true},
-					GithubWorkItemDerivationTeamFact{Provider: other, TeamID: "ENG", TeamName: "Eng " + other},
-				)
-				if team != "ENG" || name != "Eng "+other || source != "manual_fallback" {
-					t.Errorf("primary = %q %q/%s, want the active %s team ENG", team, name, source, other)
+			for _, inactive := range []string{provider, ""} {
+				t.Run(fmt.Sprintf("%s/inactive %q team and an active team of %s", provider, inactive, other), func(t *testing.T) {
+					team, _, source, _ := resolveWith(
+						GithubWorkItemDerivationTeamFact{Provider: inactive, TeamID: "ENG", Inactive: true},
+						GithubWorkItemDerivationTeamFact{Provider: other, TeamID: "ENG", TeamName: "Eng " + other},
+					)
+					if team != "" || source != "unassigned" {
+						t.Errorf("primary = %q/%s, want unassigned, as on main: a team with the id is inactive", team, source)
+					}
+				})
+			}
+			for _, second := range otherProviders(provider) {
+				if second == other {
+					continue
 				}
-			})
+				t.Run(provider+"/inactive team of "+other+" and an active team of "+second, func(t *testing.T) {
+					team, _, source, _ := resolveWith(
+						GithubWorkItemDerivationTeamFact{Provider: other, TeamID: "ENG", Inactive: true},
+						GithubWorkItemDerivationTeamFact{Provider: second, TeamID: "ENG", TeamName: "Eng " + second},
+					)
+					if team != "" || source != "unassigned" {
+						t.Errorf("primary = %q/%s, want unassigned, as on main: a team with the id is inactive", team, source)
+					}
+				})
+			}
 		}
 		t.Run(provider+"/several active teams of other providers have the id", func(t *testing.T) {
 			var teams []GithubWorkItemDerivationTeamFact

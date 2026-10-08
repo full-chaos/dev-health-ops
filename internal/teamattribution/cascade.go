@@ -243,8 +243,9 @@ type ClickHouseFactSource struct {
 
 type GithubWorkItemDerivationContext struct {
 	// projectKeyTeams: every ACTIVE team that holds a key, in catalog order
-	// (provider, id). A project of several teams is attributed to all of them
-	// (see AttributionCoOwner); a native team key takes the first.
+	// (provider, id), of any provider. A project of several teams of the
+	// item's provider is attributed to all of them (see AttributionCoOwner and
+	// IssueProjectCandidates); a native team key takes the first.
 	projectKeyTeams map[string][]GithubWorkItemDerivationTeamFact
 	projectByID     map[string][]GithubWorkItemDerivationCandidate
 	projectByKey    map[string][]GithubWorkItemDerivationCandidate
@@ -1012,6 +1013,23 @@ const (
 	AttributionCoOwner    = 2
 )
 
+// AttributionRowPreference orders rows of one item that share a sort key
+// (repo, item, team, source) and one version: the primary row, then a
+// co-owner row, then a provenance row. Every write-time dedupe of these rows
+// breaks an equal-version tie with it: the table is a ReplacingMergeTree that
+// keeps one row per key, and a team that holds the project through two facts
+// gets one 2 row and one 0 row under the same key.
+func AttributionRowPreference(isPrimary int) int {
+	switch isPrimary {
+	case AttributionPrimary:
+		return 2
+	case AttributionCoOwner:
+		return 1
+	default:
+		return 0
+	}
+}
+
 // projectCoOwners returns, for a primary that came from the item's project
 // (issue_project, project_ownership), the candidates of the same source that
 // name another team at the same rank (IsPrimary, Specificity, Priority): one
@@ -1061,8 +1079,12 @@ func (derived GithubWorkItemDerivationContext) NativeTeamCandidate(
 	}
 }
 
-// IssueProjectCandidates gives one issue_project candidate per active team
-// that holds the item's project key (the first key that any team holds).
+// IssueProjectCandidates gives an issue_project candidate for the first active
+// team that holds the item's project key (the first key that any team holds),
+// and one for each other holder of the item's provider. A key string held by
+// a team of another provider does not make that team an owner of the item's
+// project, so it never adds a co-owner. Only the first holder, chosen as
+// before, can be of another provider.
 func (derived GithubWorkItemDerivationContext) IssueProjectCandidates(
 	subject GithubWorkItemDerivationSubject,
 ) []GithubWorkItemDerivationCandidate {
@@ -1080,8 +1102,12 @@ func (derived GithubWorkItemDerivationContext) IssueProjectCandidates(
 		if len(teams) == 0 {
 			continue
 		}
+		provider := strings.TrimSpace(subject.Provider)
 		result := make([]GithubWorkItemDerivationCandidate, 0, len(teams))
-		for _, team := range teams {
+		for index, team := range teams {
+			if index > 0 && (strings.TrimSpace(teams[0].Provider) != provider || strings.TrimSpace(team.Provider) != provider) {
+				continue
+			}
 			result = append(result, GithubWorkItemDerivationCandidate{
 				Source: "issue_project", TeamID: GithubWorkItemDerivationStringPointer(team.TeamID), TeamName: GithubWorkItemDerivationStringPointer(GithubWorkItemDerivationFirstNonEmpty(team.TeamName, team.TeamID)),
 				Confidence: "high", Evidence: "issue_project_key=" + key,

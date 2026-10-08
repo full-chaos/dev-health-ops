@@ -2,6 +2,7 @@ package teamattribution
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -198,5 +199,80 @@ func TestRepositoryAndNativeTeamHaveNoCoOwners(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// A key string held by a team of another provider does not make that team an
+// owner of the item's project: it never takes a co-owner row. The facts come
+// in catalog order (provider, id), as the loader reads them. When the first
+// holder is of the item's provider, the primary is that team and the other
+// holders of the item's provider are co-owners. When the first holder is of
+// another provider, it stays the primary exactly as before this change (that
+// choice is not changed here) and no team takes a co-owner row.
+func TestAKeyOfAnotherProvidersTeamMakesNoCoOwner(t *testing.T) {
+	for _, provider := range coOwnerProviders {
+		t.Run(provider, func(t *testing.T) {
+			other := "linear"
+			if provider == "linear" {
+				other = "jira"
+			}
+			key := "SHARED"
+			teams := []GithubWorkItemDerivationTeamFact{
+				{Provider: provider, TeamID: "team-a", ProjectKeys: []string{key}},
+				{Provider: provider, TeamID: "team-b", ProjectKeys: []string{key}},
+				{Provider: other, TeamID: "team-z-other", ProjectKeys: []string{key}},
+			}
+			sort.SliceStable(teams, func(left, right int) bool {
+				if teams[left].Provider != teams[right].Provider {
+					return teams[left].Provider < teams[right].Provider
+				}
+				return teams[left].TeamID < teams[right].TeamID
+			})
+			derived := NewGitHubWorkItemDerivationContext(GithubWorkItemDerivationFacts{
+				Teams: teams,
+				Projects: []GithubWorkItemDerivationProjectFact{
+					{Provider: other, TeamID: "team-z-other", ProjectID: "p1", ProjectKey: &key, IsPrimary: 1, Specificity: 110, Priority: 10},
+				},
+			})
+			projectID := "p1"
+			teamID, _, candidates := derived.Resolve(GithubWorkItemDerivationSubject{
+				WorkItemID: provider + ":SHARED-1", Provider: provider, ProjectKey: &key, ProjectID: &projectID, OrgID: "org",
+			})
+			byTeam := rowsByTeam(candidates)
+			for _, row := range byTeam["team-z-other"] {
+				if row.isPrimary == AttributionCoOwner {
+					t.Errorf("team of %s holds a co-owner row of a %s item: %+v", other, provider, row)
+				}
+			}
+			first := teams[0].TeamID
+			if got := GithubWorkItemDerivationStringValue(teamID); got != first {
+				t.Fatalf("Resolve team = %q, want the first holder %q (the primary choice is unchanged)", got, first)
+			}
+			wantB := "map[]"
+			if teams[0].Provider == provider {
+				wantB = "map[issue_project=2:1]"
+			}
+			if got := marks(byTeam["team-b"]); fmt.Sprint(got) != wantB {
+				t.Errorf("team-b marks = %v, want %s", got, wantB)
+			}
+			coOwners := 0
+			for _, candidate := range candidates {
+				if candidate.IsPrimary == AttributionCoOwner {
+					coOwners++
+				}
+			}
+			if teams[0].Provider != provider && coOwners != 0 {
+				t.Errorf("first holder of another provider: %d co-owner rows, want 0", coOwners)
+			}
+		})
+	}
+}
+
+func TestAttributionRowPreferenceOrdersPrimaryCoOwnerProvenance(t *testing.T) {
+	primary := AttributionRowPreference(AttributionPrimary)
+	coOwner := AttributionRowPreference(AttributionCoOwner)
+	provenance := AttributionRowPreference(AttributionNotPrimary)
+	if !(primary > coOwner && coOwner > provenance) {
+		t.Fatalf("preference primary=%d co-owner=%d provenance=%d, want primary > co-owner > provenance", primary, coOwner, provenance)
 	}
 }

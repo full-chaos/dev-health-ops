@@ -119,3 +119,60 @@ func TestThroughputOfAProjectOfTwoTeamsCountsInEachTeamAndOnceInTheOrg(t *testin
 		})
 	}
 }
+
+// Team B was a co-owner (2) in an older attribution run and then left the
+// project; the newer run wrote only team A. B's old row stays stored until a
+// merge, so only the newest computed_at fence of the team-scoped throughput
+// keeps the items out of team B's flame. Both readers, every provider.
+func TestAStaleCoOwnerRowIsNotInTheTeamFlame(t *testing.T) {
+	ctx := context.Background()
+	admin, client := crossorg.Start(ctx, t)
+	org := crossorg.Default().OrgA
+	day := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
+	repoID := uuid.New()
+	first, second := day.Add(2*time.Hour), day.Add(26*time.Hour)
+	for item, provider := range coOwnerItems {
+		crossorg.Exec(ctx, t, admin, `
+INSERT INTO work_item_cycle_times
+    (work_item_id, provider, day, work_scope_id, type, status, created_at, started_at, completed_at, cycle_time_hours, lead_time_hours, computed_at, org_id)
+VALUES (?, ?, ?, 'KEY', 'story', 'done', ?, ?, ?, 5, 6, ?, ?)`,
+			item, provider, day, day, day, day.Add(time.Hour), first, org)
+		attribution := func(team string, isPrimary uint8, computed time.Time) {
+			crossorg.Exec(ctx, t, admin, `
+INSERT INTO work_item_team_attributions
+    (org_id, repo_id, work_item_id, provider, team_id, team_name, source, is_primary, confidence, evidence, computed_at)
+VALUES (?, ?, ?, ?, ?, ?, 'issue_project', ?, 'high', 'issue_project_key=KEY', ?)`,
+				org, repoID, item, provider, team, "Team "+team, isPrimary, computed)
+		}
+		attribution("team-a", 1, first)
+		attribution("team-b", 2, first)
+		attribution("team-a", 1, second)
+	}
+	start, end := day, day.Add(48*time.Hour)
+	readers := map[string]func(team string) ([]throughputRow, error){
+		"throughput": func(team string) ([]throughputRow, error) {
+			return fetchThroughput(ctx, client, org, start, end, team, 50)
+		},
+		"throughput_by_type": func(team string) ([]throughputRow, error) {
+			return fetchThroughputByType(ctx, client, org, start, end, team, 50)
+		},
+	}
+	for name, read := range readers {
+		t.Run(name, func(t *testing.T) {
+			rows, err := read("team-b")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := throughputByTeam(t, rows); len(got) != 0 {
+				t.Errorf("team-b flame after team-b left = %v, want empty", got)
+			}
+			rows, err = read("team-a")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := throughputByTeam(t, rows); len(got) != 1 {
+				t.Errorf("team-a flame = %v, want one row of every item", got)
+			}
+		})
+	}
+}

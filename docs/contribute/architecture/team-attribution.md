@@ -863,8 +863,12 @@ team that owns the project, not of the first team by id. The item's own native t
 project (section 0.1): a native team key gives one team.
 
 - **Where it is decided.** One shared seam in `internal/teamattribution/cascade.go`, the same for every
-  provider: a project key maps to every ACTIVE team that holds it (`projectKeyTeams`, catalog order), so
-  `IssueProjectCandidates` gives one `issue_project` candidate per team. When the winning source of an item is
+  provider: a project key maps to every ACTIVE team that holds it (`projectKeyTeams`, catalog order
+  (provider, id)). `IssueProjectCandidates` gives an `issue_project` candidate for the first holder, chosen as
+  before this change, and one for each other holder whose provider is the item's provider. A key string held
+  by a team of another provider does not make that team an owner of the item's project (a team reaches an item
+  only through ownership of its project), so it never takes a co-owner row. `project_ownership` facts are
+  looked up by the item's provider. When the winning source of an item is
   `issue_project` or `project_ownership`, every other team of that source at the SAME rank as the winner
   (`is_primary`, `specificity`, `priority` of the ownership fact) is a co-owner (`projectCoOwners`). A lower
   rank, an empty team id, `repo_ownership`, a membership source and `native_team` give no co-owner. An
@@ -885,13 +889,30 @@ project (section 0.1): a native team key gives one team.
   (`internal/queryapi/aggflame/clickhouse.go`). GraphQL `isPrimary` is `true` for `1` only.
 - **The census.** `TestWorkItemTeamAttributionIsPrimaryPredicateCensus` reads every production Go file that
   names this table and fails on any `is_primary` form other than `= 1` and `IN (1, 2)`: `!= 0`, `> 0`, a bare
-  truthy flag, an aggregate over it, or Go code that reads a scanned flag as not-zero. A new reader must take
-  one of the two forms.
+  truthy flag, an aggregate over it, or Go code that reads a scanned flag as not-zero. `IN (1, 2)` is accepted
+  only in a package-level const whose every use sits in an `if` statement that also applies a team filter
+  (a `team_id = {..}` / `team_id IN {..}` literal, or a variable set from a function of the same file that
+  returns one). A new reader must take one of the two forms. The census reads SQL text in Go files; it does
+  not see an `is_primary` alias read later in the query or a Go `bool` scan of the column.
+- **The write dedupe.** Each producer collapses rows that share the sort key `(repo, item, team, source)` before
+  the insert (`workItemAttributionSortingKeyDedupe` in `internal/jobs/metrics/remaining`,
+  `githubWorkItemDerivedSortingKeyDedupe` in `internal/providersync`, also for the readback expectation). The
+  newest `computed_at` wins; at one version both break the tie with ONE shared function,
+  `teamattribution.AttributionRowPreference`: `1`, then `2`, then `0`. A team that owns the project through
+  two ownership facts at the top rank gets one `2` row and one `0` row under one key; the preference keeps
+  the `2` row.
 - **A team that moves between 1 and 2.** The table is `ReplacingMergeTree(computed_at)` ordered by
   `(org_id, repo_id, work_item_id, ifNull(team_id, ''), source)`; `is_primary` is not in the key. A team whose
-  row goes from `1` to `2` (a new team ranks first) keeps the same key, the newer `computed_at` replaces the
-  row, and every reader also fences the item to its newest `computed_at`. Before a merge both versions are
-  stored; `FINAL` and the fence read the new one.
+  row goes from `1` to `2` (a new team ranks first) keeps the same key, and the newer `computed_at` replaces the
+  row. The readers in this repository also fence the item to its newest `computed_at`; the context-fabric
+  readers read `FINAL` with `is_primary = 1` and rely on that key replacement only (a `2` row never reaches
+  them). Before a merge both versions are stored; `FINAL` and the fence read the new one.
+- **A team that leaves the project.** Its old co-owner row keeps its own key `(…, team, source)`, so no newer
+  row replaces it and it stays stored. The next attribution run of the item (the daily run, or the remaining
+  backstop that re-attributes the scope on a `team_project_ownership` change and the organization on a
+  `teams` change) writes the item's rows with a newer `computed_at` and without that team. The team-scoped
+  readers fence the item to its newest `computed_at`, so from that run on the old row is not read. Until that
+  run the team still shows the item; the organization total is not changed at any time (the old row is a `2`).
 - **Known limit: the daily rollups show the item under one team.** The rollup tables
   (`work_item_metrics_daily`, `work_item_state_durations_daily`, `work_item_cycle_times`,
   `issue_type_metrics_daily`, `investment_metrics_daily`, `work_item_user_metrics_daily`) are sums keyed by one
@@ -900,14 +921,23 @@ project (section 0.1): a native team key gives one team.
   change. A rollup-based team view shows a co-owned item under its primary team only, until the rollup rows
   carry the team set with one organization-counted row per set. Linked-issue inheritance (section 2) also
   passes the primary team only.
-- **Known limit: a key held by teams of two providers.** `projectKeyTeams` is not provider-scoped. When teams
-  of two providers hold one key, the primary row is the lowest team id (the rank tie-break); before this
-  change it was the first team by (provider, id).
+- **Known limit: a key held by teams of two providers.** `projectKeyTeams` is not provider-scoped, and this
+  change does not change how the primary is chosen: the first ACTIVE holder of the key by (provider, id), of
+  any provider, takes the `issue_project` primary row, as before. When that first holder is of another provider
+  than the item, it stays the primary and the item has no `issue_project` co-owner (the other holders of the
+  item's provider take no `issue_project` row; their `project_ownership` rows stay provenance).
 
 Tests: `TestAProjectOfSeveralTeamsAttributesTheItemToEveryActiveTeam` and
-`TestOnlyOwnersAtThePrimaryRankAreCoOwners` and `TestRepositoryAndNativeTeamHaveNoCoOwners` (the cascade, every
-provider); `TestAnItemOfAProjectOfSeveralTeamsIsWrittenForEveryActiveTeam` (real loaders, real writer, real
+`TestOnlyOwnersAtThePrimaryRankAreCoOwners` and `TestRepositoryAndNativeTeamHaveNoCoOwners` and
+`TestAKeyOfAnotherProvidersTeamMakesNoCoOwner` (the cascade, every provider);
+`TestAnItemOfAProjectOfSeveralTeamsIsWrittenForEveryActiveTeam` (real loaders, real writer, real
 ClickHouse, every provider; a team that moves from 1 to 2 with merges stopped);
+`TestACoOwnerWithTwoOwnershipFactsIsStoredAsACoOwner`, `TestAKeyOfAnotherProvidersTeamIsNeverStoredAsACoOwner`
+and `TestATeamThatLeavesTheProjectHasNoCoOwnerRowAfterTheNextRun` (the same real path);
+`TestTheAttributionWriteDedupeKeepsACoOwnerRowOverAProvenanceRow` and
+`TestTheWriteDedupeKeepsACoOwnerRowOverAProvenanceRowOfTheSameKey` (both write dedupes, both batch orders);
+`TestAStaleCoOwnerRowIsNotInTheTeamView` and `TestAStaleCoOwnerRowIsNotInTheTeamFlame` (the fence of the two
+team-scoped readers);
 `TestAnIssueOfAProjectOfTwoTeamsIsInEachTeamsViewAndOnceInTheOrgView` and
 `TestThroughputOfAProjectOfTwoTeamsCountsInEachTeamAndOnceInTheOrg` (team A, team B, team(s), inactive team C,
 organization once and equal to the store without co-owner rows);

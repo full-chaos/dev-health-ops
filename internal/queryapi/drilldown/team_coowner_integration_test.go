@@ -142,3 +142,54 @@ func TestAnIssueOfAProjectOfTwoTeamsIsInEachTeamsViewAndOnceInTheOrgView(t *test
 		t.Errorf("team(s) view a+b = %v, want %v", pairs, want)
 	}
 }
+
+// Team B was a co-owner (2) in an older attribution run and then left the
+// project; the newer run wrote only team A. B's old row keeps its own key
+// (team-b, issue_project) and stays stored until a merge, so only the newest
+// computed_at fence of the team-scoped read keeps the item out of team B's
+// view. Every provider.
+func TestAStaleCoOwnerRowIsNotInTheTeamView(t *testing.T) {
+	ctx := context.Background()
+	admin, client := crossorg.Start(ctx, t)
+	org := crossorg.Default().OrgA
+	day := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
+	repoID := uuid.New()
+	first, second := day.Add(2*time.Hour), day.Add(26*time.Hour)
+	for item, provider := range coOwnerItems {
+		crossorg.Exec(ctx, t, admin, `
+INSERT INTO work_item_cycle_times
+    (work_item_id, provider, day, work_scope_id, type, status, created_at, started_at, completed_at, cycle_time_hours, lead_time_hours, computed_at, org_id)
+VALUES (?, ?, ?, 'KEY', 'story', 'done', ?, ?, ?, 5, 6, ?, ?)`,
+			item, provider, day, day, day, day.Add(time.Hour), first, org)
+		attribution := func(team string, isPrimary uint8, computed time.Time) {
+			crossorg.Exec(ctx, t, admin, `
+INSERT INTO work_item_team_attributions
+    (org_id, repo_id, work_item_id, provider, team_id, team_name, source, is_primary, confidence, evidence, computed_at)
+VALUES (?, ?, ?, ?, ?, ?, 'issue_project', ?, 'high', 'issue_project_key=KEY', ?)`,
+				org, repoID, item, provider, team, "Team "+team, isPrimary, computed)
+		}
+		attribution("team-a", 1, first)
+		attribution("team-b", 2, first)
+		attribution("team-a", 1, second)
+	}
+	reader, err := NewReader(client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	view := func(team string) *IssuesResponse {
+		t.Helper()
+		response, err := BuildIssuesResponse(ctx, reader, org, IssueParams{
+			StartDay: day, EndDay: day.Add(48 * time.Hour), ScopeLevel: "team", ScopeIDs: []string{team}, Limit: 50,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return response
+	}
+	if got := view("team-b"); len(got.Items) != 0 {
+		t.Errorf("team-b view after team-b left = %+v, want empty", got.Items)
+	}
+	if got := view("team-a"); len(got.Items) != len(coOwnerItems) {
+		t.Errorf("team-a view = %d items, want %d", len(got.Items), len(coOwnerItems))
+	}
+}

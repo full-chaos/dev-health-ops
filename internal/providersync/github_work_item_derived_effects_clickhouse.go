@@ -215,17 +215,18 @@ func githubWorkItemDerivedSeconds(value time.Time) time.Time {
 // differently -- collapse to one stored row, `found` is 1, the team_name
 // mismatch reads as Conflict, and recovery is wedged permanently.
 //
-// `preferred` breaks an equal-version tie in favor of the PRIMARY row before
-// falling back to last-wins (CHAOS-4244 codex round-3, HIGH: a reporter or
-// assignee matched via two membership facets naming the SAME team produces
+// `preference` breaks an equal-version tie in favor of the higher value
+// (for attribution rows teamattribution.AttributionRowPreference: primary,
+// then co-owner, then provenance) before falling back to last-wins
+// (CHAOS-4244: a reporter or assignee matched via two membership facets naming the SAME team produces
 // two rows sharing this exact sorting key -- team_id/source, not evidence or
 // is_primary -- and a naive last-wins tie-break can discard the resolver's
 // only is_primary=1 row, leaving the item with no primary attribution at all
-// even though it genuinely resolved one). When primary-ness ALSO ties (both
-// or neither row is primary), last-wins still decides, unchanged from
-// before -- the case TestGitHubTeamAttributionCollisionIsRealAndCollapses pins.
+// even though it genuinely resolved one). When the preference ALSO ties,
+// last-wins still decides, unchanged from before -- the case
+// TestGitHubTeamAttributionCollisionIsRealAndCollapses pins.
 func githubWorkItemDerivedSortingKeyDedupe[T any](
-	rows []T, key func(T) string, version func(T) time.Time, preferred func(T) bool,
+	rows []T, key func(T) string, version func(T) time.Time, preference func(T) int,
 ) []T {
 	winner := make(map[string]int, len(rows))
 	for index, row := range rows {
@@ -240,9 +241,9 @@ func githubWorkItemDerivedSortingKeyDedupe[T any](
 			// existing is strictly newer; keep it.
 		case version(existing).Before(version(row)):
 			winner[key(row)] = index
-		case preferred(row) || !preferred(existing):
-			// Equal version: the incoming row wins if it is primary, or if
-			// neither/both are primary (last-wins, unchanged tie-break).
+		case preference(row) >= preference(existing):
+			// Equal version: the incoming row wins if it is preferred, or on
+			// an equal preference (last-wins, unchanged tie-break).
 			winner[key(row)] = index
 		}
 	}
@@ -301,11 +302,11 @@ func githubTeamAttributionSortingKey(row githubWorkItemTeamAttributionRow) strin
 	}, "\x00")
 }
 
-// githubTeamAttributionIsPrimary is the equal-version dedup tie-break
-// preference (CHAOS-4244 codex round-3, HIGH): a colliding row must never
-// discard the resolver's only is_primary=1 row.
-func githubTeamAttributionIsPrimary(row githubWorkItemTeamAttributionRow) bool {
-	return row.IsPrimary == 1
+// githubTeamAttributionPreference is the equal-version dedup tie-break: a
+// colliding row must never discard the resolver's only primary row, nor a
+// team's co-owner row.
+func githubTeamAttributionPreference(row githubWorkItemTeamAttributionRow) int {
+	return teamattribution.AttributionRowPreference(row.IsPrimary)
 }
 
 func (sink GitHubEstimateCoverageClickHouseEffects) WriteGitHubWorkItemEffect(
@@ -466,14 +467,14 @@ func (sink GitHubWorkItemTeamAttributionsClickHouseEffects) WriteGitHubWorkItemE
 	}
 	rejections = githubWorkItemDerivedSortingKeyDedupe(
 		rejections, githubTeamAttributionRejectionSortingKey,
-		githubWorkItemDerivedZeroTime, githubWorkItemDerivedAlwaysFalse,
+		githubWorkItemDerivedZeroTime, githubWorkItemDerivedNoPreference,
 	)
 	// Collisions are GENUINELY REACHABLE here, unlike the two map-derived
 	// destinations: the resolver emits one candidate per ownership fact, so two
 	// facts naming the same team differently produce two rows with an identical
 	// sorting key that differ only in team_name.
 	rows = githubWorkItemDerivedSortingKeyDedupe(
-		rows, githubTeamAttributionSortingKey, githubTeamAttributionVersion, githubTeamAttributionIsPrimary,
+		rows, githubTeamAttributionSortingKey, githubTeamAttributionVersion, githubTeamAttributionPreference,
 	)
 	// writer/run_id name the path and the run behind every row. This table has
 	// three producers -- this sync-time deriver plus the daily
@@ -622,8 +623,8 @@ func githubTeamAttributionRejectionSortingKey(row githubWorkItemTeamAttributionR
 	}, "\x00")
 }
 
-// githubWorkItemDerivedZeroTime and githubWorkItemDerivedAlwaysFalse feed
-// githubWorkItemDerivedSortingKeyDedupe's version/preferred parameters for a
+// githubWorkItemDerivedZeroTime and githubWorkItemDerivedNoPreference feed
+// githubWorkItemDerivedSortingKeyDedupe's version/preference parameters for a
 // rejection row, which carries neither a version column nor an is_primary
 // concept (it is a fact -- "this exact resolution was rejected" -- not
 // versioned content). With version always equal, the dedupe's own tie-break
@@ -631,7 +632,7 @@ func githubTeamAttributionRejectionSortingKey(row githubWorkItemTeamAttributionR
 // sufficient: any occurrence of an identical rejection identity carries the
 // same reason.
 func githubWorkItemDerivedZeroTime[T any](T) time.Time { return time.Time{} }
-func githubWorkItemDerivedAlwaysFalse[T any](T) bool   { return false }
+func githubWorkItemDerivedNoPreference[T any](T) int   { return 0 }
 
 // recordGitHubWorkItemTeamAttributionOwnershipChecked is the shared skip-
 // don't-guess guard (codex round 3, P1) for both membershipRows (a survived
@@ -720,7 +721,7 @@ func (sink GitHubWorkItemTeamAttributionsClickHouseEffects) InspectGitHubWorkIte
 	// The expectation must name the row the WRITE will actually leave behind,
 	// or the readback compares against a row storage discarded.
 	rows = githubWorkItemDerivedSortingKeyDedupe(
-		rows, githubTeamAttributionSortingKey, githubTeamAttributionVersion, githubTeamAttributionIsPrimary,
+		rows, githubTeamAttributionSortingKey, githubTeamAttributionVersion, githubTeamAttributionPreference,
 	)
 	return inspectGitHubWorkItemDerivedRows(rows, func(row githubWorkItemTeamAttributionRow) (EffectInspection, error) {
 		return sink.inspect(ctx, identity, row)

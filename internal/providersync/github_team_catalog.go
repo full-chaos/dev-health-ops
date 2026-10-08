@@ -182,6 +182,11 @@ type githubTeamCatalogRows struct {
 	// comment for why an unobserved scope must never have its stale pending
 	// changes resolved.
 	ObservedMembershipTeamIDs []string
+	// RepoListedTeamIDs lists every team (by "gh:" id) whose
+	// GET /orgs/{org}/teams/{slug}/repos listing reached its end this call.
+	// It is the scope of the provider_access close: a team that is not here
+	// (listing failed, or repos were not selected) never has a row closed.
+	RepoListedTeamIDs []string
 }
 
 // githubTeamID mirrors team_autoimport_github.py's _team_id: "gh:" + the

@@ -65,7 +65,7 @@ func optionalDict(value pyjson.Value) (pyjson.Value, error) {
 }
 
 // auditJSON is BillingAuditLogResponse.model_validate(entry).
-func auditJSON(entry auditEntry) (*pyjson.Object, error) {
+func (h handlers) auditJSON(ctx context.Context, q querier, entry auditEntry) (*pyjson.Object, error) {
 	local, err := optionalDict(entry.LocalState)
 	if err != nil {
 		return nil, err
@@ -87,6 +87,7 @@ func auditJSON(entry auditEntry) (*pyjson.Object, error) {
 	out.Set("stripe_state", stripe)
 	out.Set("reconciliation_status", nullableString(entry.ReconciliationState))
 	out.Set("created_at", pydanticTime(entry.CreatedAt))
+	h.withOrgName(ctx, q, out)
 	return out, nil
 }
 
@@ -177,7 +178,7 @@ func (h handlers) listAudit(w http.ResponseWriter, r *http.Request) {
 		}
 		items := make([]pyjson.Value, 0, len(entries))
 		for _, entry := range entries {
-			item, err := auditJSON(entry)
+			item, err := h.auditJSON(ctx, tx, entry)
 			if err != nil {
 				return reply{}, err
 			}
@@ -225,7 +226,7 @@ func (h handlers) getAudit(w http.ResponseWriter, r *http.Request) {
 		if entry == nil {
 			return auditNotFound, nil
 		}
-		body, err := auditJSON(*entry)
+		body, err := h.auditJSON(r.Context(), tx, *entry)
 		if err != nil {
 			return reply{}, err
 		}
@@ -335,7 +336,7 @@ func (h handlers) resolveAudit(w http.ResponseWriter, r *http.Request) {
 		if entry == nil {
 			return auditNotFound, nil
 		}
-		out, err := auditJSON(*entry)
+		out, err := h.auditJSON(ctx, tx, *entry)
 		if err != nil {
 			return reply{}, err
 		}

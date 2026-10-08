@@ -251,8 +251,10 @@ func TestRetireJiraProjectAsTeamRowsClosesTheDerivedRepoOwnershipOfARetiredTeam(
 	f.ownership("jira", "OPS", "10001", "OPS", "native")
 	f.team("jira", atlassian, jiraAtlassianTeamARIPrefix+atlassian, nil)
 	f.ownership("jira", atlassian, "10002", "PLAT", "native")
-	seedWorkItem(t, ctx, conn, f.orgID, "jira:OPS-1", "jira", opsRepo, "10001", f.old)
-	seedWorkItem(t, ctx, conn, f.orgID, "jira:PLAT-1", "jira", platRepo, "10002", f.old)
+	seedWorkItem(t, ctx, conn, f.orgID, "jira:OPS-1", "jira", uuid.Nil, "10001", f.old)
+	seedWorkGraphIssuePR(t, ctx, conn, f.orgID, opsRepo, "jira:OPS-1", 901, f.old)
+	seedWorkItem(t, ctx, conn, f.orgID, "jira:PLAT-1", "jira", uuid.Nil, "10002", f.old)
+	seedWorkGraphIssuePR(t, ctx, conn, f.orgID, platRepo, "jira:PLAT-1", 902, f.old)
 
 	service := TeamRepoOwnershipDerivationService{Conn: conn}
 	if written, _, ready, _, err := service.Derive(ctx, f.orgID); err != nil || !ready || written != 2 {
@@ -326,7 +328,8 @@ func TestTheRepoOwnershipDerivationAloneLeavesARetiredTeamsDerivedRowsOpen(t *te
 	seedTeamRepoOwnershipRepos(t, ctx, conn, f.orgID, map[uuid.UUID]string{repo: "acme/ops"})
 	f.team("jira", "OPS", "OPS", nil)
 	f.ownership("jira", "OPS", "10001", "OPS", "native")
-	seedWorkItem(t, ctx, conn, f.orgID, "jira:OPS-1", "jira", repo, "10001", f.old)
+	seedWorkItem(t, ctx, conn, f.orgID, "jira:OPS-1", "jira", uuid.Nil, "10001", f.old)
+	seedWorkGraphIssuePR(t, ctx, conn, f.orgID, repo, "jira:OPS-1", 903, f.old)
 	service := TeamRepoOwnershipDerivationService{Conn: conn}
 	if written, _, _, _, err := service.Derive(ctx, f.orgID); err != nil || written != 1 {
 		t.Fatalf("first derivation: written=%d err=%v, want 1", written, err)

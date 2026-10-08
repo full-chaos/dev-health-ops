@@ -138,31 +138,11 @@ func (p *OpenAIProvider) Complete(ctx context.Context, request CompletionRequest
 	// the request's own floor (set by CategorizationRequest/
 	// InvestmentMixExplanationRequest) never LOWERS the provider's
 	// configured minimum, only raises it.
-	maxTokens := max(p.cfg.MaxOutputTokens, request.MaxOutputTokens)
-
-	textFormat := openAITextFormat{Type: "json_object"}
-	if request.JSONSchema != nil {
-		textFormat = openAITextFormat{
-			Type:   "json_schema",
-			Name:   request.ResponseFormatName,
-			Strict: true,
-			Schema: request.JSONSchema,
-		}
-	}
+	maxTokens := p.initialMaxOutputTokens(request)
 
 	var lastErr *llmError
 	for attempt := 0; attempt <= openAIMaxRetries; attempt++ {
-		body := openAIResponsesRequest{
-			Model:        p.cfg.Model,
-			Instructions: request.SystemMessage,
-			Input:        request.Prompt,
-			Text: openAIResponseText{
-				Format:    textFormat,
-				Verbosity: "low",
-			},
-			Reasoning:       openAIReasoning{Effort: "low"},
-			MaxOutputTokens: maxTokens,
-		}
+		body := p.responsesBody(request, maxTokens)
 
 		result, incompleteReason, err := p.executeResponsesRequest(withLLMAttempt(ctx, attempt+1), body)
 		if err != nil {
@@ -208,6 +188,37 @@ func (p *OpenAIProvider) Complete(ctx context.Context, request CompletionRequest
 	return CompletionResult{Model: p.cfg.Model}, nil
 }
 
+// initialMaxOutputTokens is the first attempt's max_output_tokens.
+func (p *OpenAIProvider) initialMaxOutputTokens(request CompletionRequest) int {
+	return max(p.cfg.MaxOutputTokens, request.MaxOutputTokens)
+}
+
+// responsesBody is the one Responses API request body of this provider: the
+// synchronous call and every Batch API line are built here, so the two cannot
+// drift.
+func (p *OpenAIProvider) responsesBody(request CompletionRequest, maxTokens int) openAIResponsesRequest {
+	textFormat := openAITextFormat{Type: "json_object"}
+	if request.JSONSchema != nil {
+		textFormat = openAITextFormat{
+			Type:   "json_schema",
+			Name:   request.ResponseFormatName,
+			Strict: true,
+			Schema: request.JSONSchema,
+		}
+	}
+	return openAIResponsesRequest{
+		Model:        p.cfg.Model,
+		Instructions: request.SystemMessage,
+		Input:        request.Prompt,
+		Text: openAIResponseText{
+			Format:    textFormat,
+			Verbosity: "low",
+		},
+		Reasoning:       openAIReasoning{Effort: "low"},
+		MaxOutputTokens: maxTokens,
+	}
+}
+
 type openAICompletionText struct {
 	text              string
 	inputTokens       *int
@@ -247,10 +258,22 @@ func (p *OpenAIProvider) executeResponsesRequest(ctx context.Context, body openA
 		return openAICompletionText{}, "", &httpStatusError{statusCode: resp.StatusCode, header: resp.Header, body: string(responseBody)}
 	}
 
-	var decoded openAIResponsesResponse
-	if err := json.Unmarshal(responseBody, &decoded); err != nil {
+	out, reason, err := parseResponsesBody(responseBody)
+	if err != nil {
 		markInvalidAnswer(resp)
 		return openAICompletionText{}, "", logging.DecodeFailure(err)
+	}
+	return out, reason, nil
+}
+
+// parseResponsesBody is the one parser of a Responses API response body: the
+// synchronous call and every Batch API output line go through it. It prefers
+// output_text and falls back to concatenating every output_text/text content
+// chunk in output[].content[] when it is empty.
+func parseResponsesBody(responseBody []byte) (openAICompletionText, string, error) {
+	var decoded openAIResponsesResponse
+	if err := json.Unmarshal(responseBody, &decoded); err != nil {
+		return openAICompletionText{}, "", err
 	}
 
 	content := decoded.OutputText

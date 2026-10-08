@@ -1535,6 +1535,22 @@ type SignalAttributionSourceCount struct {
 	Share float64 `json:"share"`
 }
 
+// Org-level source health (CHAOS-8906): one row per sync configuration of the caller's organization that is active or carries a failure newer than its last successful sync; every integration with an active configuration shows at least one row. A member read, not an operator view: provider, scope, the last successful sync time, and the last failure as a time and a closed stage code. Never an error message.
+type SourceHealth struct {
+	Provider string `json:"provider"`
+	Scope    string `json:"scope"`
+	// The last successful sync. Null when the source has never synced successfully (never synced, or its only attempts failed).
+	LastSyncAt *time.Time `json:"lastSyncAt,omitempty"`
+	// Set when the latest sync of the source failed; null when it did not.
+	LastFailure *SourceHealthFailure `json:"lastFailure,omitempty"`
+}
+
+type SourceHealthFailure struct {
+	OccurredAt time.Time `json:"occurredAt"`
+	// A closed stage code; ``other`` when the stage is not one the platform names.
+	Stage string `json:"stage"`
+}
+
 type SparkPoint struct {
 	Ts    string  `json:"ts"`
 	Value float64 `json:"value"`

@@ -1122,6 +1122,7 @@ type ComplexityRoot struct {
 		SavedReports                      func(childComplexity int, orgID string, limit int, offset int) int
 		SecurityAlerts                    func(childComplexity int, orgID string, filters *model.SecurityAlertFilterInput, pagination *model.SecurityPaginationInput) int
 		SecurityOverview                  func(childComplexity int, orgID string, filters *model.SecurityAlertFilterInput) int
+		SourceHealth                      func(childComplexity int, orgID string) int
 		TestopsJobFailures                func(childComplexity int, orgID string, input model.TestOpsJobFailuresInput) int
 		TestopsRisk                       func(childComplexity int, orgID string, input model.TestOpsRiskInput) int
 		ThroughputForecast                func(childComplexity int, orgID string, input model.ThroughputForecastInput) int
@@ -1353,6 +1354,18 @@ type ComplexityRoot struct {
 		Items  func(childComplexity int) int
 		Share  func(childComplexity int) int
 		Source func(childComplexity int) int
+	}
+
+	SourceHealth struct {
+		LastFailure func(childComplexity int) int
+		LastSyncAt  func(childComplexity int) int
+		Provider    func(childComplexity int) int
+		Scope       func(childComplexity int) int
+	}
+
+	SourceHealthFailure struct {
+		OccurredAt func(childComplexity int) int
+		Stage      func(childComplexity int) int
 	}
 
 	SparkPoint struct {
@@ -1611,6 +1624,7 @@ type QueryResolver interface {
 	ThroughputForecast(ctx context.Context, orgID string, input model.ThroughputForecastInput) (*model.ThroughputForecast, error)
 	OperatingReview(ctx context.Context, orgID string, input model.OperatingReviewInput) (*model.OperatingReview, error)
 	DataHealth(ctx context.Context, team string) (*model.DataHealth, error)
+	SourceHealth(ctx context.Context, orgID string) ([]model.SourceHealth, error)
 	BusFactor(ctx context.Context, orgID string, scope *model.BusFactorScopeInput) (*model.BusFactor, error)
 	CompoundingRisk(ctx context.Context, orgID string, filter *model.CompoundingRiskFilterInput) (*model.CompoundingRiskResult, error)
 	TestopsRisk(ctx context.Context, orgID string, input model.TestOpsRiskInput) (*model.TestOpsRiskResult, error)
@@ -6930,6 +6944,18 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 
 		return e.complexity.Query.SecurityOverview(childComplexity, args["orgId"].(string), args["filters"].(*model.SecurityAlertFilterInput)), true
 
+	case "Query.sourceHealth":
+		if e.complexity.Query.SourceHealth == nil {
+			break
+		}
+
+		args, err := ec.field_Query_sourceHealth_args(context.TODO(), rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.complexity.Query.SourceHealth(childComplexity, args["orgId"].(string)), true
+
 	case "Query.testopsJobFailures":
 		if e.complexity.Query.TestopsJobFailures == nil {
 			break
@@ -8019,6 +8045,48 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 		}
 
 		return e.complexity.SignalAttributionSourceCount.Source(childComplexity), true
+
+	case "SourceHealth.lastFailure":
+		if e.complexity.SourceHealth.LastFailure == nil {
+			break
+		}
+
+		return e.complexity.SourceHealth.LastFailure(childComplexity), true
+
+	case "SourceHealth.lastSyncAt":
+		if e.complexity.SourceHealth.LastSyncAt == nil {
+			break
+		}
+
+		return e.complexity.SourceHealth.LastSyncAt(childComplexity), true
+
+	case "SourceHealth.provider":
+		if e.complexity.SourceHealth.Provider == nil {
+			break
+		}
+
+		return e.complexity.SourceHealth.Provider(childComplexity), true
+
+	case "SourceHealth.scope":
+		if e.complexity.SourceHealth.Scope == nil {
+			break
+		}
+
+		return e.complexity.SourceHealth.Scope(childComplexity), true
+
+	case "SourceHealthFailure.occurredAt":
+		if e.complexity.SourceHealthFailure.OccurredAt == nil {
+			break
+		}
+
+		return e.complexity.SourceHealthFailure.OccurredAt(childComplexity), true
+
+	case "SourceHealthFailure.stage":
+		if e.complexity.SourceHealthFailure.Stage == nil {
+			break
+		}
+
+		return e.complexity.SourceHealthFailure.Stage(childComplexity), true
 
 	case "SparkPoint.ts":
 		if e.complexity.SparkPoint.Ts == nil {
@@ -9946,6 +10014,24 @@ input CreateSavedReportInput {
   scheduleTimezone: String! = "UTC"
 }
 
+"""
+Org-level source health (CHAOS-8906): one row per sync configuration of the caller's organization that is active or carries a failure newer than its last successful sync; every integration with an active configuration shows at least one row. A member read, not an operator view: provider, scope, the last successful sync time, and the last failure as a time and a closed stage code. Never an error message.
+"""
+type SourceHealth {
+  provider: String!
+  scope: String!
+  """The last successful sync. Null when the source has never synced successfully (never synced, or its only attempts failed)."""
+  lastSyncAt: DateTime
+  """Set when the latest sync of the source failed; null when it did not."""
+  lastFailure: SourceHealthFailure
+}
+
+type SourceHealthFailure {
+  occurredAt: DateTime!
+  """A closed stage code; ` + "`" + `` + "`" + `other` + "`" + `` + "`" + ` when the stage is not one the platform names."""
+  stage: String!
+}
+
 type DataHealth {
   connectors: [ConnectorStatus!]!
   identityMapping: IdentityMappingHealth!
@@ -10715,6 +10801,11 @@ type Query {
 
   """Operator data-health and trust surface"""
   dataHealth(team: ID!): DataHealth!
+
+  """
+  Source health of the caller's organization (CHAOS-8906): per sync configuration that is active or carries a failure newer than its last successful sync, provider (a platform provider, else ` + "`" + `` + "`" + `other` + "`" + `` + "`" + `), scope, last successful sync time, and the last failure as a time and a stage code. Served to every member of the organization; no error text.
+  """
+  sourceHealth(orgId: String!): [SourceHealth!]!
 
   """Repository ownership concentration and bus-factor summary."""
   busFactor(orgId: String!, scope: BusFactorScopeInput = null): BusFactor!
@@ -14402,6 +14493,34 @@ func (ec *executionContext) field_Query_securityOverview_argsFilters(
 	}
 
 	var zeroVal *model.SecurityAlertFilterInput
+	return zeroVal, nil
+}
+
+func (ec *executionContext) field_Query_sourceHealth_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := ec.field_Query_sourceHealth_argsOrgID(ctx, rawArgs)
+	if err != nil {
+		return nil, err
+	}
+	args["orgId"] = arg0
+	return args, nil
+}
+func (ec *executionContext) field_Query_sourceHealth_argsOrgID(
+	ctx context.Context,
+	rawArgs map[string]any,
+) (string, error) {
+	if _, ok := rawArgs["orgId"]; !ok {
+		var zeroVal string
+		return zeroVal, nil
+	}
+
+	ctx = graphql.WithPathContext(ctx, graphql.NewPathWithField("orgId"))
+	if tmp, ok := rawArgs["orgId"]; ok {
+		return ec.unmarshalNString2string(ctx, tmp)
+	}
+
+	var zeroVal string
 	return zeroVal, nil
 }
 
@@ -47893,6 +48012,71 @@ func (ec *executionContext) fieldContext_Query_dataHealth(ctx context.Context, f
 	return fc, nil
 }
 
+func (ec *executionContext) _Query_sourceHealth(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_Query_sourceHealth(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return ec.resolvers.Query().SourceHealth(rctx, fc.Args["orgId"].(string))
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.([]model.SourceHealth)
+	fc.Result = res
+	return ec.marshalNSourceHealth2ᚕgithubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋinternalᚋqueryapiᚋgraphᚋmodelᚐSourceHealthᚄ(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_Query_sourceHealth(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Query",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "provider":
+				return ec.fieldContext_SourceHealth_provider(ctx, field)
+			case "scope":
+				return ec.fieldContext_SourceHealth_scope(ctx, field)
+			case "lastSyncAt":
+				return ec.fieldContext_SourceHealth_lastSyncAt(ctx, field)
+			case "lastFailure":
+				return ec.fieldContext_SourceHealth_lastFailure(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type SourceHealth", field.Name)
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Query_sourceHealth_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _Query_busFactor(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
 	fc, err := ec.fieldContext_Query_busFactor(ctx, field)
 	if err != nil {
@@ -55902,6 +56086,270 @@ func (ec *executionContext) fieldContext_SignalAttributionSourceCount_share(_ co
 		IsResolver: false,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 			return nil, errors.New("field of type Float does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _SourceHealth_provider(ctx context.Context, field graphql.CollectedField, obj *model.SourceHealth) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_SourceHealth_provider(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.Provider, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(string)
+	fc.Result = res
+	return ec.marshalNString2string(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_SourceHealth_provider(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "SourceHealth",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _SourceHealth_scope(ctx context.Context, field graphql.CollectedField, obj *model.SourceHealth) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_SourceHealth_scope(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.Scope, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(string)
+	fc.Result = res
+	return ec.marshalNString2string(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_SourceHealth_scope(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "SourceHealth",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _SourceHealth_lastSyncAt(ctx context.Context, field graphql.CollectedField, obj *model.SourceHealth) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_SourceHealth_lastSyncAt(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.LastSyncAt, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*time.Time)
+	fc.Result = res
+	return ec.marshalODateTime2ᚖtimeᚐTime(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_SourceHealth_lastSyncAt(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "SourceHealth",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type DateTime does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _SourceHealth_lastFailure(ctx context.Context, field graphql.CollectedField, obj *model.SourceHealth) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_SourceHealth_lastFailure(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.LastFailure, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*model.SourceHealthFailure)
+	fc.Result = res
+	return ec.marshalOSourceHealthFailure2ᚖgithubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋinternalᚋqueryapiᚋgraphᚋmodelᚐSourceHealthFailure(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_SourceHealth_lastFailure(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "SourceHealth",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "occurredAt":
+				return ec.fieldContext_SourceHealthFailure_occurredAt(ctx, field)
+			case "stage":
+				return ec.fieldContext_SourceHealthFailure_stage(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type SourceHealthFailure", field.Name)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _SourceHealthFailure_occurredAt(ctx context.Context, field graphql.CollectedField, obj *model.SourceHealthFailure) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_SourceHealthFailure_occurredAt(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.OccurredAt, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(time.Time)
+	fc.Result = res
+	return ec.marshalNDateTime2timeᚐTime(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_SourceHealthFailure_occurredAt(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "SourceHealthFailure",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type DateTime does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _SourceHealthFailure_stage(ctx context.Context, field graphql.CollectedField, obj *model.SourceHealthFailure) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_SourceHealthFailure_stage(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.Stage, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(string)
+	fc.Result = res
+	return ec.marshalNString2string(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_SourceHealthFailure_stage(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "SourceHealthFailure",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
 		},
 	}
 	return fc, nil
@@ -73363,6 +73811,28 @@ func (ec *executionContext) _Query(ctx context.Context, sel ast.SelectionSet) gr
 			}
 
 			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return rrm(innerCtx) })
+		case "sourceHealth":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._Query_sourceHealth(ctx, field)
+				if res == graphql.Null {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
+			}
+
+			rrm := func(ctx context.Context) graphql.Marshaler {
+				return ec.OperationContext.RootResolverMiddleware(ctx,
+					func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return rrm(innerCtx) })
 		case "busFactor":
 			field := field
 
@@ -75363,6 +75833,98 @@ func (ec *executionContext) _SignalAttributionSourceCount(ctx context.Context, s
 			}
 		case "share":
 			out.Values[i] = ec._SignalAttributionSourceCount_share(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.deferred, int32(len(deferred)))
+
+	for label, dfs := range deferred {
+		ec.processDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
+var sourceHealthImplementors = []string{"SourceHealth"}
+
+func (ec *executionContext) _SourceHealth(ctx context.Context, sel ast.SelectionSet, obj *model.SourceHealth) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, sourceHealthImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("SourceHealth")
+		case "provider":
+			out.Values[i] = ec._SourceHealth_provider(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "scope":
+			out.Values[i] = ec._SourceHealth_scope(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "lastSyncAt":
+			out.Values[i] = ec._SourceHealth_lastSyncAt(ctx, field, obj)
+		case "lastFailure":
+			out.Values[i] = ec._SourceHealth_lastFailure(ctx, field, obj)
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.deferred, int32(len(deferred)))
+
+	for label, dfs := range deferred {
+		ec.processDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
+var sourceHealthFailureImplementors = []string{"SourceHealthFailure"}
+
+func (ec *executionContext) _SourceHealthFailure(ctx context.Context, sel ast.SelectionSet, obj *model.SourceHealthFailure) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, sourceHealthFailureImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("SourceHealthFailure")
+		case "occurredAt":
+			out.Values[i] = ec._SourceHealthFailure_occurredAt(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "stage":
+			out.Values[i] = ec._SourceHealthFailure_stage(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
@@ -81681,6 +82243,54 @@ func (ec *executionContext) marshalNSignalAttributionSourceCount2ᚕgithubᚗcom
 	return ret
 }
 
+func (ec *executionContext) marshalNSourceHealth2githubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋinternalᚋqueryapiᚋgraphᚋmodelᚐSourceHealth(ctx context.Context, sel ast.SelectionSet, v model.SourceHealth) graphql.Marshaler {
+	return ec._SourceHealth(ctx, sel, &v)
+}
+
+func (ec *executionContext) marshalNSourceHealth2ᚕgithubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋinternalᚋqueryapiᚋgraphᚋmodelᚐSourceHealthᚄ(ctx context.Context, sel ast.SelectionSet, v []model.SourceHealth) graphql.Marshaler {
+	ret := make(graphql.Array, len(v))
+	var wg sync.WaitGroup
+	isLen1 := len(v) == 1
+	if !isLen1 {
+		wg.Add(len(v))
+	}
+	for i := range v {
+		i := i
+		fc := &graphql.FieldContext{
+			Index:  &i,
+			Result: &v[i],
+		}
+		ctx := graphql.WithFieldContext(ctx, fc)
+		f := func(i int) {
+			defer func() {
+				if r := recover(); r != nil {
+					ec.Error(ctx, ec.Recover(ctx, r))
+					ret = nil
+				}
+			}()
+			if !isLen1 {
+				defer wg.Done()
+			}
+			ret[i] = ec.marshalNSourceHealth2githubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋinternalᚋqueryapiᚋgraphᚋmodelᚐSourceHealth(ctx, sel, v[i])
+		}
+		if isLen1 {
+			f(i)
+		} else {
+			go f(i)
+		}
+
+	}
+	wg.Wait()
+
+	for _, e := range ret {
+		if e == graphql.Null {
+			return graphql.Null
+		}
+	}
+
+	return ret
+}
+
 func (ec *executionContext) marshalNSparkPoint2githubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋinternalᚋqueryapiᚋgraphᚋmodelᚐSparkPoint(ctx context.Context, sel ast.SelectionSet, v model.SparkPoint) graphql.Marshaler {
 	return ec._SparkPoint(ctx, sel, &v)
 }
@@ -83780,6 +84390,13 @@ func (ec *executionContext) marshalOSignalAttribution2ᚖgithubᚗcomᚋfullᚑc
 		return graphql.Null
 	}
 	return ec._SignalAttribution(ctx, sel, v)
+}
+
+func (ec *executionContext) marshalOSourceHealthFailure2ᚖgithubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋinternalᚋqueryapiᚋgraphᚋmodelᚐSourceHealthFailure(ctx context.Context, sel ast.SelectionSet, v *model.SourceHealthFailure) graphql.Marshaler {
+	if v == nil {
+		return graphql.Null
+	}
+	return ec._SourceHealthFailure(ctx, sel, v)
 }
 
 func (ec *executionContext) unmarshalOString2ᚕstringᚄ(ctx context.Context, v any) ([]string, error) {

@@ -683,7 +683,7 @@ func TestMCPCapsArePinned(t *testing.T) {
 func TestMCPAllowlistIsExactlyTheReviewedSet(t *testing.T) {
 	want := []string{
 		"analytics", "capacityForecast", "capacityForecasts", "catalog", "cognitiveLoad",
-		"complexityTimeseries", "compoundingRisk", "hotspots", "securityAlerts", "securityOverview",
+		"complexityTimeseries", "compoundingRisk", "hotspots", "securityAlerts", "securityOverview", "sourceHealth",
 		"throughputForecast", "workGraphArtifacts", "workGraphEdges", "workGraphFlow",
 	}
 	var got []string

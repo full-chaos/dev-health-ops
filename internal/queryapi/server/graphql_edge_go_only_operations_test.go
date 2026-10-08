@@ -37,6 +37,10 @@ var edgeGoOnlyFromBirth = map[string]edgeGoOnlyDocument{
 		document: registeredInvestmentEvidenceQualityDocument,
 		root:     "analytics",
 	},
+	"sourceHealth": {
+		document: registeredSourceHealthDocument,
+		root:     "sourceHealth",
+	},
 	"testopsJobFailures": {
 		document: registeredTestopsJobFailuresDocument,
 		root:     "testopsJobFailures",

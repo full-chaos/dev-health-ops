@@ -27,6 +27,7 @@ arg Query.securityAlerts.orgId other
 arg Query.securityAlerts.pagination other
 arg Query.securityOverview.filters other
 arg Query.securityOverview.orgId other
+arg Query.sourceHealth.orgId other
 arg Query.throughputForecast.input other
 arg Query.throughputForecast.orgId other
 arg Query.workGraphArtifacts.filters other

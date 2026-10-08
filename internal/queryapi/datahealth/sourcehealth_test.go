@@ -142,9 +142,45 @@ func TestSourceHealthRowStates(t *testing.T) {
 		{"run error of no run is not a failure", connectorRow{lastSyncAt: &old, lastSyncSuccess: &tr}, false, true, true, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got := r.sourceHealthRow(tc.row, tc.hasSyncError, tc.hasRunError, nil, nil)
+			got := r.sourceHealthRow(tc.row, tc.hasSyncError, tc.hasRunError, nil, nil, nil)
 			if (got.LastSyncAt != nil) != tc.wantTime || (got.LastFailure != nil) != tc.wantFailure {
 				t.Fatalf("time=%v failure=%v, want time=%v failure=%v", got.LastSyncAt, got.LastFailure, tc.wantTime, tc.wantFailure)
+			}
+		})
+	}
+}
+
+func TestSourceHealthStageReadsTheConfigStatsLast(t *testing.T) {
+	free, named := "token=SECRET-PROBE", "pagerduty_sync_disabled"
+	if got := sourceHealthStage(nil, nil, &named); got != named {
+		t.Fatalf("stage = %q, want the stats category", got)
+	}
+	if got := sourceHealthStage(&free, nil, &named); got != named {
+		t.Fatalf("stage = %q, want the stats category after a free-text stage", got)
+	}
+	if got := sourceHealthStage(nil, nil, &free); got != SourceHealthStageOther {
+		t.Fatalf("stage = %q, want other", got)
+	}
+}
+
+func TestSourceHealthScopeIsClosed(t *testing.T) {
+	for _, tc := range []struct {
+		name, provider, targets, want string
+	}{
+		{"no targets", "github", `[]`, SourceHealthScopeAll},
+		{"null", "github", `null`, SourceHealthScopeAll},
+		{"empty column", "github", ``, SourceHealthScopeAll},
+		{"named datasets in the fixed order", "github", `["prs","git"]`, "git, prs"},
+		{"free text is dropped", "github", `["prs","acme/secret-repo"]`, "prs"},
+		{"free text only", "github", `["acme/secret-repo"]`, SourceHealthScopeOther},
+		{"non-string entries", "github", `[1,{"a":"b"}]`, SourceHealthScopeOther},
+		{"not an array", "github", `{"git":true}`, SourceHealthScopeAll},
+		{"provider case", "GitHub", `["git"]`, "git"},
+		{"target the provider has no dataset for", "pagerduty", `["git"]`, SourceHealthScopeOther},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := sourceHealthScope(tc.provider, []byte(tc.targets)); got != tc.want {
+				t.Fatalf("scope = %q, want %q", got, tc.want)
 			}
 		})
 	}

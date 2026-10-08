@@ -624,8 +624,11 @@ const (
 	// only mean one of them.
 	bindProviderFact teamBinding = iota
 	// bindProviderNeutral: a provider-neutral admin record
-	// (manual_fallback). It applies to items of every provider, but the team
-	// it names is never a team of another provider than the item's.
+	// (manual_fallback). Its row stores a bare team id, and it applies to
+	// items of every provider: when no team of the item's provider and no
+	// admin team with the id is active, it binds to an active team of another
+	// provider with the id; it is dropped only when every team with the id is
+	// inactive.
 	bindProviderNeutral
 )
 
@@ -635,8 +638,10 @@ const (
 // neither is active, the id means the inactive team of the item's provider (or
 // the inactive admin team), and dropInactiveTeamCandidates drops it. When the
 // catalog has the id only for teams of other providers, a fact binds to the
-// first active one of them (else to an inactive one, dropped), and a
-// provider-neutral record stays unbound and is dropped. An id that no catalog
+// first active one of them (else to an inactive one, dropped). A
+// provider-neutral record (bindProviderNeutral) binds to an active team of
+// another provider whenever no team of the item's provider and no admin team
+// with the id is active. An id that no catalog
 // row has is kept as named: the team is unknown, not inactive. A bound team
 // gives the candidate its name.
 func (derived GithubWorkItemDerivationContext) bindCandidateTeam(
@@ -658,20 +663,31 @@ func (derived GithubWorkItemDerivationContext) bindCandidateTeam(
 		}
 	}
 	picked := teamsForItemProvider(active, provider)
+	nameFromTeam := true
 	if len(picked) == 0 {
-		picked = teamsForItemProvider(rows, provider)
-	}
-	if len(picked) == 0 {
-		if binding == bindProviderNeutral {
-			return candidate
+		switch binding {
+		case bindProviderNeutral:
+			picked = rows
+			if len(active) > 0 {
+				// Only teams of other providers are active with the id:
+				// the rule names one of them, as on main. With several,
+				// the rule's own name stays, as on main.
+				picked, nameFromTeam = active, len(active) == 1
+			}
+		default:
+			picked = teamsForItemProvider(rows, provider)
+			if len(picked) == 0 {
+				picked = append(active, rows...)
+			}
 		}
-		picked = append(active, rows...)
 	}
 	team := picked[0]
 	candidate.TeamProvider = strings.TrimSpace(team.Provider)
 	candidate.TeamResolved = true
-	candidate.TeamName = GithubWorkItemDerivationStringPointer(GithubWorkItemDerivationFirstNonEmpty(
-		team.TeamName, GithubWorkItemDerivationStringValue(candidate.TeamName), teamID))
+	if nameFromTeam {
+		candidate.TeamName = GithubWorkItemDerivationStringPointer(GithubWorkItemDerivationFirstNonEmpty(
+			team.TeamName, GithubWorkItemDerivationStringValue(candidate.TeamName), teamID))
+	}
 	return candidate
 }
 
@@ -927,8 +943,8 @@ func (derived GithubWorkItemDerivationContext) resolve(
 	)
 
 	// The provider-neutral rosters (untyped membership) are bound here, for
-	// the item. manual_fallback is bound where it is made, and an unbound
-	// manual candidate stays unbound, so it is dropped.
+	// the item. manual_fallback is bound where it is made, with its own
+	// order.
 	for source, candidates := range bySource {
 		if source == "manual_fallback" {
 			continue
@@ -1534,8 +1550,7 @@ const teamNewestRowInactive = `argMax(is_active, (updated_at, last_synced, is_ac
 // new path cannot forget it. Inactive teams stay in teamsKnownFromCatalog.
 // It reads the bound team (provider, id) of the candidate: an inactive team of
 // another provider with the same id does not drop the item's own active team.
-// A candidate with a team that is not bound (a provider-neutral record whose
-// id names only teams of other providers) is dropped too.
+// A candidate with a team that is not bound is dropped too.
 func (derived GithubWorkItemDerivationContext) dropInactiveTeamCandidates(
 	bySource map[string][]GithubWorkItemDerivationCandidate,
 ) {

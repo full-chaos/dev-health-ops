@@ -19,6 +19,8 @@ const (
 	qtOrgB   = "org-b"
 	qtRepo   = "11111111-2222-4333-8444-555555555555"
 	qtPRRef  = qtRepo + "#pr482"
+	qtPRBlnk = qtRepo + "#pr483"
+	qtPRUUID = qtRepo + "#pr484"
 	qtUUID   = "0b8f6a52-3c1d-4e7a-9d2e-5f4a1c7b8e90"
 	qtIssue1 = "github:acme/api#1"
 	qtIssue2 = "jira:OPS-2"
@@ -85,6 +87,8 @@ func (c *quoteTitleStore) Query(_ context.Context, query string, bindings []dhcl
 			{"wu-1", "quote three", "issue", qtIssue3, "run-1"},
 			{"wu-1", "quote pr", "pr", qtPRRef, "run-1"},
 			{"wu-1", "quote commit", "commit", "abc123", "run-1"},
+			{"wu-1", "quote pr blank", "pr", qtPRBlnk, "run-1"},
+			{"wu-1", "quote pr uuid", "pr", qtPRUUID, "run-1"},
 		}}, nil
 	case strings.Contains(query, "FROM work_items"):
 		if c.titleErr != nil {
@@ -149,8 +153,8 @@ func quoteEvidence(t *testing.T, store *quoteTitleStore, org string) map[string]
 	for _, entry := range units[0].Evidence.Textual {
 		out[entry["id"].(string)] = entry
 	}
-	if len(out) != 5 {
-		t.Fatalf("textual quotes = %d, want 5", len(out))
+	if len(out) != 7 {
+		t.Fatalf("textual quotes = %d, want 7", len(out))
 	}
 	return out
 }
@@ -162,7 +166,11 @@ func TestEvidenceQuotesServeTheSourceTitleAndNullWhenAbsent(t *testing.T) {
 			qtIssue2: "   ",
 			qtIssue3: qtUUID,
 		}},
-		prTitles: map[string]map[string]string{qtOrgA: {qtRepo + "#482": "Stream the CSV export"}},
+		prTitles: map[string]map[string]string{qtOrgA: {
+			qtRepo + "#482": "Stream the CSV export",
+			qtRepo + "#483": "  ",
+			qtRepo + "#484": qtUUID,
+		}},
 	}
 	quotes := quoteEvidence(t, store, qtOrgA)
 	want := map[string]any{
@@ -170,6 +178,8 @@ func TestEvidenceQuotesServeTheSourceTitleAndNullWhenAbsent(t *testing.T) {
 		qtIssue2: nil,
 		qtIssue3: nil,
 		qtPRRef:  "Stream the CSV export",
+		qtPRBlnk: nil,
+		qtPRUUID: nil,
 		"abc123": nil,
 	}
 	for id, entry := range quotes {

@@ -81,6 +81,10 @@ const (
 	servedOutcomeRateLimited    = "rate_limited"
 	servedOutcomeRejected       = "rejected"
 	servedOutcomeTransportOther = "transport_other"
+	// servedOutcomeCancelled: the run context ended (a lost lease, a soft-stop
+	// expiry, the run's own deterministic stop) before the unit had an answer.
+	// The unit has no row from this run.
+	servedOutcomeCancelled = "cancelled"
 )
 
 // servedOutcomes is the closed set, in the collector's render order.
@@ -88,7 +92,7 @@ func servedOutcomes() []string {
 	return []string{
 		servedOutcomeOK, servedOutcomeZeroSupport, servedOutcomeEvidenceNone, servedOutcomeInvalidAnswer,
 		servedOutcomeAdapterDefect, servedOutcomeTimeout, servedOutcomeRefused, servedOutcomeServerError,
-		servedOutcomeRateLimited, servedOutcomeRejected, servedOutcomeTransportOther,
+		servedOutcomeRateLimited, servedOutcomeRejected, servedOutcomeTransportOther, servedOutcomeCancelled,
 	}
 }
 
@@ -156,16 +160,34 @@ type ServedObserver interface {
 	ObserveServedRun(model string, outcomes map[string]int)
 }
 
-// CollectorServedObserver adapts the metrics collector to ServedObserver.
+// CollectorServedObserver adapts the metrics collector to ServedObserver. A run
+// the collector refuses is lost from the metric, so it says so in one WARN
+// line: the reason is a closed code, never a label value.
 type CollectorServedObserver struct {
 	Collector *jobruntime.MetricsCollector
+	Logger    *slog.Logger
 }
 
 func (observer CollectorServedObserver) ObserveServedRun(model string, outcomes map[string]int) {
 	if observer.Collector == nil {
 		return
 	}
-	_ = observer.Collector.ObserveInvestmentServedRun(jobruntime.InvestmentServedRun{Model: model, Outcomes: outcomes})
+	err := observer.Collector.ObserveInvestmentServedRun(jobruntime.InvestmentServedRun{Model: model, Outcomes: outcomes})
+	if err == nil {
+		return
+	}
+	logger := observer.Logger
+	if logger == nil {
+		logger = slog.Default()
+	}
+	reason := "other"
+	switch {
+	case errors.Is(err, jobruntime.ErrInvestmentServedOutcomeNotRegistered):
+		reason = "outcome_not_registered"
+	case errors.Is(err, jobruntime.ErrInvestmentServedCountNegative):
+		reason = "negative_count"
+	}
+	logger.Warn("investment served outcome counts were not recorded", slog.String("reason", reason))
 }
 
 // servedClassifier is the decision completer as the served mode uses it.
@@ -274,7 +296,11 @@ func (served *ServedDecision) categorize(ctx context.Context, cfg Config, entry 
 	result := served.classifyOne(ctx, unit)
 	if result.err != nil {
 		// A cancelled or expired context (the only error Classify returns for a
-		// completer that NewCompleter built).
+		// completer that NewCompleter built). The unit still has its one outcome
+		// count: a run with no count must not read as a healthy one.
+		served.mu.Lock()
+		served.outcomes[servedOutcomeCancelled]++
+		served.mu.Unlock()
 		return categorize.CategorizationOutcome{}, result.err
 	}
 	classification := result.classification

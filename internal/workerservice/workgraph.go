@@ -437,7 +437,7 @@ func buildNativeInvestmentExecutor(
 	if collector := metricsCollectorFromObserver(observer); collector != nil {
 		executor.SetObserver(investment.CollectorRepoAttributionObserver{Collector: collector})
 		executor.SetShadowObserver(investment.CollectorShadowObserver{Collector: collector})
-		executor.SetServedObserver(investment.CollectorServedObserver{Collector: collector})
+		executor.SetServedObserver(investment.CollectorServedObserver{Collector: collector, Logger: logger})
 	}
 	return executor, nil
 }

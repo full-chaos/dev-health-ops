@@ -489,14 +489,22 @@ type InvestmentServedRun struct {
 
 // InvestmentServedOutcomes is the closed set of outcomes of one served
 // decision classification, in render order: the three states that write a
-// row from the model's answer, an unusable answer, an adapter defect, and a
-// failed request by class (the unit then keeps its last row).
+// row from the model's answer, an unusable answer, an adapter defect, a
+// failed request by class (the unit then keeps its last row), and a unit whose
+// run context ended before it had an answer (cancelled). Every unit the served
+// backend is asked for is in exactly one of them.
 func InvestmentServedOutcomes() []string {
 	return []string{
 		"ok", "zero_support", "evidence_none", "invalid_answer", "adapter_defect",
-		"timeout", "refused", "server_error", "rate_limited", "rejected", "transport_other",
+		"timeout", "refused", "server_error", "rate_limited", "rejected", "transport_other", "cancelled",
 	}
 }
+
+// Errors of ObserveInvestmentServedRun: a caller logs which one, never the run.
+var (
+	ErrInvestmentServedOutcomeNotRegistered = errors.New("investment served outcome is not registered")
+	ErrInvestmentServedCountNegative        = errors.New("investment served outcome count cannot be negative")
+)
 
 // InvestmentServedMetricNames is every metric name of the served decision
 // mode, in render order. writeInvestmentServedRun renders exactly these.
@@ -2687,10 +2695,10 @@ func (collector *MetricsCollector) ObserveInvestmentShadowPhase(phase Investment
 func (collector *MetricsCollector) ObserveInvestmentServedRun(run InvestmentServedRun) error {
 	for outcome, count := range run.Outcomes {
 		if !slices.Contains(InvestmentServedOutcomes(), outcome) {
-			return errors.New("investment served outcome is not registered")
+			return ErrInvestmentServedOutcomeNotRegistered
 		}
 		if count < 0 {
-			return errors.New("investment served outcome count cannot be negative")
+			return ErrInvestmentServedCountNegative
 		}
 	}
 	model := run.Model
@@ -4403,7 +4411,7 @@ func (collector *MetricsCollector) writeInvestmentShadowPhase(output *strings.Bu
 // mode, every series pre-seeded at zero: with LLM_PROVIDER not typesafe (the
 // default) every series reads 0.
 func (collector *MetricsCollector) writeInvestmentServedRun(output *strings.Builder) {
-	writeMetadata(output, investmentServedOutcomesMetric, "Classifications of the served decision mode of investment.materialize (LLM_PROVIDER=typesafe), by provider, requested model and outcome: ok, zero_support and evidence_none write a row from the model's answer; invalid_answer and adapter_defect write the invalid_llm_output prior row; timeout, refused, server_error, rate_limited, rejected and transport_other are failed requests, and the unit keeps its last row (rejected ends the run) (CHAOS-8914).", "counter")
+	writeMetadata(output, investmentServedOutcomesMetric, "Classifications of the served decision mode of investment.materialize (LLM_PROVIDER=typesafe), by provider, requested model and outcome: ok, zero_support and evidence_none write a row from the model's answer; invalid_answer and adapter_defect write the invalid_llm_output prior row; timeout, refused, server_error, rate_limited, rejected and transport_other are failed requests, and the unit keeps its last row (rejected ends the run); cancelled: the run context ended before the unit had an answer (CHAOS-8914).", "counter")
 	for _, model := range investmentShadowModels {
 		for _, outcome := range InvestmentServedOutcomes() {
 			writeUintSample(output, investmentServedOutcomesMetric,

@@ -3,16 +3,20 @@
 package investment
 
 import (
+	"context"
 	"errors"
 	"math"
 	"net/http"
 	"reflect"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/investment/categorize"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/investment/categorize/decision"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/investment/chwrite"
@@ -412,5 +416,148 @@ func TestSettingTheProviderBackServesTheGenerativeRowsAgain(t *testing.T) {
 	generative("run-gen-2", h.within.Add(2*time.Hour))
 	if got := latestStamps(); got[mockStamp] != shadowGatePassUnits {
 		t.Fatalf("after setting the provider back, the latest rows carry %v; want the generative stamp on all %d units", got, shadowGatePassUnits)
+	}
+}
+
+// exitClassifier is the served classifier of the exit tests: it answers by the
+// unit, counts every call, and can end the run context.
+type exitClassifier struct {
+	mu        sync.Mutex
+	calls     int
+	stopUnit  string // this unit fails as a rejected key (the run stops)
+	blockAll  bool   // every unit waits for the run context to end
+	cancelRun context.CancelFunc
+	cancelAt  int // after this many answered calls, cancel the run context
+}
+
+func (c *exitClassifier) Classify(ctx context.Context, bundle units.TextBundle) (decision.Classification, error) {
+	c.mu.Lock()
+	c.calls++
+	call := c.calls
+	c.mu.Unlock()
+	if c.blockAll {
+		<-ctx.Done()
+		return decision.Classification{}, ctx.Err()
+	}
+	if err := ctx.Err(); err != nil {
+		return decision.Classification{}, err
+	}
+	if c.stopUnit != "" && strings.Contains(bundle.SourceBlock, c.stopUnit) {
+		return decision.Classification{State: decision.StateRequestFailed, Status: categorize.StatusLLMTaskFailed,
+			SufficiencyLevel: -1, Errors: []string{"llm_task_failed", "decision_request_failed", "request_failed:auth"}, Stop: true, LLMCalls: 1}, nil
+	}
+	if c.cancelRun != nil && call == c.cancelAt {
+		defer c.cancelRun()
+	}
+	mix := categorize.EnsureFullSubcategoryVector(map[string]float64{"quality.bugfix": 1})
+	quote := ""
+	for _, text := range bundle.SourceTexts["issue"] {
+		quote = text[:40]
+		break
+	}
+	var source string
+	for id := range bundle.SourceTexts["issue"] {
+		source = id
+		break
+	}
+	return decision.Classification{State: decision.StateOK, Status: categorize.StatusOK, SufficiencyLevel: 3,
+		Subcategories: mix, EvidenceQuotes: []categorize.EvidenceQuote{{Quote: quote, SourceType: "issue", SourceID: source}},
+		Warnings: []string{}, Errors: []string{}, LLMCalls: 1, ModelReturned: decision.DefaultModel}, nil
+}
+
+func (c *exitClassifier) LevelMix(map[string]int) (map[string]float64, bool) { return nil, false }
+
+func (c *exitClassifier) count() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.calls
+}
+
+func servedOutcomeSum(t *testing.T, collector *jobruntime.MetricsCollector) (sum int, byOutcome map[string]int) {
+	t.Helper()
+	byOutcome = map[string]int{}
+	for _, line := range strings.Split(collector.PrometheusText(), "\n") {
+		if !strings.HasPrefix(line, "dev_health_investment_served_outcomes_total{") {
+			continue
+		}
+		fields := strings.Fields(line)
+		value, err := strconv.Atoi(fields[len(fields)-1])
+		if err != nil {
+			t.Fatalf("%s: %v", line, err)
+		}
+		if value > 0 {
+			outcome := line[strings.Index(line, `outcome="`)+len(`outcome="`):]
+			byOutcome[outcome[:strings.Index(outcome, `"`)]] += value
+		}
+		sum += value
+	}
+	return sum, byOutcome
+}
+
+// CHAOS-8914: every unit the served backend is asked for is in exactly ONE
+// outcome count, on every exit of a run: the normal end, a deterministic stop
+// (the units in flight end cancelled), a run context that ends during the
+// categorization, and a return of the run AFTER the categorization (here: the
+// run context ends just after the last answer, so the served writes fail).
+// The metric is the readback of the production switch: a run with no count
+// must not read as a healthy one.
+func TestEveryUnitAskedOfTheServedBackendIsInOneOutcomeCountOnEveryExit(t *testing.T) {
+	h := newShadowHarness(t)
+	for _, tc := range []struct {
+		name       string
+		classifier func(cancel context.CancelFunc) *exitClassifier
+		wantErr    bool
+		want       map[string]int
+	}{
+		{"normal end", func(context.CancelFunc) *exitClassifier { return &exitClassifier{} }, false,
+			map[string]int{"ok": shadowGatePassUnits}},
+		{"deterministic stop", func(context.CancelFunc) *exitClassifier { return &exitClassifier{stopUnit: "A1"} }, true, nil},
+		{"run context ends during the categorization", func(cancel context.CancelFunc) *exitClassifier {
+			go func() { time.Sleep(300 * time.Millisecond); cancel() }()
+			return &exitClassifier{blockAll: true}
+		}, true, nil},
+		{"a return after the categorization", func(cancel context.CancelFunc) *exitClassifier {
+			return &exitClassifier{cancelRun: cancel, cancelAt: shadowGatePassUnits}
+		}, true, map[string]int{"ok": shadowGatePassUnits}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h.truncate(t, append([]string{"llm_categorization_attempts"}, servedTables...)...)
+			collector, err := jobruntime.NewMetricsCollector(jobruntime.MetricDimensions{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			logs := &syncBuffer{}
+			runCtx, cancel := context.WithCancel(h.ctx)
+			defer cancel()
+			classifier := tc.classifier(cancel)
+			m := h.servedMaterializer(t, newFakeJev(t, nil), logs)
+			m.served.classifier = classifier
+			m.served.SetObserver(CollectorServedObserver{Collector: collector, Logger: debugLogger(logs)})
+			_, runErr := m.Run(runCtx, h.config("run-exit", h.within))
+			if (runErr != nil) != tc.wantErr {
+				t.Fatalf("run err = %v, want an error: %v", runErr, tc.wantErr)
+			}
+			sum, byOutcome := servedOutcomeSum(t, collector)
+			if classifier.count() == 0 || sum != classifier.count() {
+				t.Fatalf("outcome counts %v (sum %d), units asked %d: every unit asked must be in one count", byOutcome, sum, classifier.count())
+			}
+			if tc.want != nil && !reflect.DeepEqual(byOutcome, tc.want) {
+				t.Fatalf("outcome counts %v, want %v", byOutcome, tc.want)
+			}
+			if tc.name == "deterministic stop" {
+				// The stopping unit has no HTTP attempt in this fake, so its class
+				// is transport_other; what matters here is the stop and the count.
+				var deterministic *workgraph.DeterministicError
+				if !errors.As(runErr, &deterministic) || deterministic.Class != workgraph.ClassLLMDeterministic || byOutcome["ok"] != 0 {
+					t.Fatalf("run err %v, outcome counts %v", runErr, byOutcome)
+				}
+			}
+			if strings.HasPrefix(tc.name, "run context ends") && byOutcome["cancelled"] != sum {
+				t.Fatalf("outcome counts %v, want every unit cancelled", byOutcome)
+			}
+			if !strings.Contains(logs.String(), `investment served decision complete`) {
+				t.Fatal("no run line")
+			}
+		})
 	}
 }

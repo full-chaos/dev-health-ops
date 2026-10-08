@@ -201,3 +201,35 @@ func TestAShadowAttemptOfARefusedConnectionIsClassedRefused(t *testing.T) {
 		}
 	}
 }
+
+// A run the collector refuses is lost from the metric: the observer says so in
+// one WARN line with a closed reason code, never the label value.
+func TestARefusedServedObservationIsLoud(t *testing.T) {
+	for _, tc := range []struct {
+		outcomes map[string]int
+		reason   string
+	}{
+		{map[string]int{"ok": 1, "llm_error": 1}, "reason=outcome_not_registered"},
+		{map[string]int{"ok": 1, "timeout": -1}, "reason=negative_count"},
+	} {
+		collector, err := jobruntime.NewMetricsCollector(jobruntime.MetricDimensions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		logs := &syncBuffer{}
+		CollectorServedObserver{Collector: collector, Logger: debugLogger(logs)}.ObserveServedRun("jev-1.13.0", tc.outcomes)
+		text := logs.String()
+		if !strings.Contains(text, "investment served outcome counts were not recorded") || !strings.Contains(text, tc.reason) {
+			t.Fatalf("no WARN line with %s:\n%s", tc.reason, text)
+		}
+		if strings.Contains(text, "llm_error") {
+			t.Fatal("the WARN line holds a label value")
+		}
+	}
+	logs := &syncBuffer{}
+	collector, _ := jobruntime.NewMetricsCollector(jobruntime.MetricDimensions{})
+	CollectorServedObserver{Collector: collector, Logger: debugLogger(logs)}.ObserveServedRun("jev-1.13.0", map[string]int{"ok": 2})
+	if strings.Contains(logs.String(), "not recorded") {
+		t.Fatal("an accepted run logged a WARN line")
+	}
+}

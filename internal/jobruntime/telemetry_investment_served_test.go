@@ -37,7 +37,7 @@ func TestInvestmentServedMetricNamesAndLabelSetsAreTheDeclaredOnes(t *testing.T)
 	if got := strings.Join(InvestmentServedMetricNames(), ","); got != "dev_health_investment_served_outcomes_total" {
 		t.Fatalf("metric names = %s", got)
 	}
-	if got := strings.Join(InvestmentServedOutcomes(), ","); got != "ok,zero_support,evidence_none,invalid_answer,adapter_defect,timeout,refused,server_error,rate_limited,rejected,transport_other" {
+	if got := strings.Join(InvestmentServedOutcomes(), ","); got != "ok,zero_support,evidence_none,invalid_answer,adapter_defect,timeout,refused,server_error,rate_limited,rejected,transport_other,cancelled" {
 		t.Fatalf("outcomes = %s", got)
 	}
 	collector, err := NewMetricsCollector(MetricDimensions{})

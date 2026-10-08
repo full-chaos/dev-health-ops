@@ -506,7 +506,13 @@ func (m *Materializer) Run(ctx context.Context, cfg Config) (Stats, error) {
 
 	// CATEGORIZE.
 	if len(pending) > 0 {
-		if err := m.categorizePending(ctx, cfg, pending, outcomes, &stats); err != nil {
+		err := m.categorizePending(ctx, cfg, pending, outcomes, &stats)
+		// The served decision backend reports its run AT ONCE, on every exit
+		// of the categorization (CHAOS-8914): every unit it was asked for is in
+		// one outcome count, and no later return of this function can drop the
+		// counts or the attempt rows.
+		m.finishServed(ctx, cfg)
+		if err != nil {
 			// FLUSH TOKEN USAGE BEFORE ABORTING (codex r1 P2-a).
 			//
 			// A deterministic failure aborts the run, but the calls made
@@ -528,7 +534,6 @@ func (m *Materializer) Run(ctx context.Context, cfg Config) (Stats, error) {
 				m.logger.WarnContext(ctx, "llm token usage write failed on the deterministic-abort path",
 					"run_id", cfg.RunID, "error", flushErr.Error())
 			}
-			m.finishServed(ctx, cfg)
 			return Stats{}, err
 		}
 	}
@@ -648,7 +653,6 @@ func (m *Materializer) Run(ctx context.Context, cfg Config) (Stats, error) {
 		m.logger.WarnContext(ctx, "llm token usage write failed; continuing",
 			"run_id", cfg.RunID, "error", err.Error())
 	}
-	m.finishServed(ctx, cfg)
 
 	// WRITE. Same three tables, same "skip the call when empty" shape as
 	// materialize.py:1826-1831, in a DELIBERATELY different order: quotes, then

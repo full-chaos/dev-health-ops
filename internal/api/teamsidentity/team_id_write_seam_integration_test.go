@@ -315,11 +315,14 @@ func TestTheStoreRefusesABareTeamIDWrite(t *testing.T) {
 	}
 }
 
-// An identity that leaves a team it names by a stored bare id (a bare id
-// two providers' teams hold) is written; the bare team is not.
+// An identity that leaves a team it names by a stored bare id is written;
+// the bare team is not written again, so an inactive one stays inactive.
 func TestAnIdentityLeavingAStoredBareTeamSkipsIt(t *testing.T) {
 	s, ctx := writeSeamStore(t)
 	writeSeamSeed(t, s, ctx, "linear", "linear:ENG")
+	if err := s.Conn.Exec(ctx, `INSERT INTO teams (id, team_uuid, name, members, manual_members, project_keys, repo_patterns, is_active, updated_at, org_id, provider, native_team_key) VALUES ('ENG', generateUUIDv4(), 'Eng', [], ['m1@example.com'], [], [], 0, '2026-09-02 00:00:00', 'org-1', 'linear', 'ENG')`); err != nil {
+		t.Fatal(err)
+	}
 	if err := s.Conn.Exec(ctx, `INSERT INTO identities (org_id, canonical_id, identity_uuid, provider_identities, team_ids, is_active, updated_at) VALUES ('org-1', 'm1', generateUUIDv4(), '{}', ['ENG'], 1, '2026-09-01 00:00:00')`); err != nil {
 		t.Fatal(err)
 	}

@@ -682,45 +682,48 @@ WHERE org_id = ?
 }
 
 // diffTeamRepoOwnershipRetractions returns every activeRows entry whose
-// (team_id, repo_full_name) pair is absent from the newly-derived set,
-// except the open row of a team in a tie on that repo: a full tie names no
-// owner, so a tied team's existing open row stays. A row of a team that is
-// not in the tie is retracted -- pure, no I/O, exhaustively unit-testable. Resolves each derived row's
-// repo_full_name via the SAME repos snapshot writeTeamRepoOwnershipRows
-// uses, so a derived row that writeTeamRepoOwnershipRows would itself skip
-// (unresolvable repo_id) never wrongly protects an active row from
-// retraction.
+// (provider, repo_full_name, team_id) identity is absent from the
+// newly-derived set, except the open row of a team in a tie on that repo: a
+// full tie names no owner, so a tied team's existing open row stays. A row
+// of a team that is not in the tie is retracted. The identity is the one the
+// table keys on, so a same-named repo of another provider is a different
+// repo and neither a derived row nor a tie on one protects the other.
+// Pure, no I/O. Resolves each derived row's repo through the SAME repos
+// snapshot writeTeamRepoOwnershipRows uses, so a derived row that
+// writeTeamRepoOwnershipRows would itself skip (unresolvable repo_id) never
+// wrongly protects an active row from retraction.
 func diffTeamRepoOwnershipRetractions(
 	activeRows []teamRepoOwnershipActiveRow,
 	derived []DerivedTeamRepoOwnershipRow,
 	ties []TeamRepoOwnershipTie,
 	repos map[uuid.UUID]teamRepoOwnershipRepoInfo,
 ) []teamRepoOwnershipActiveRow {
-	type pair struct{ teamID, repoFullName string }
-	repoFullName := func(id string) string {
+	type claim struct{ provider, repoFullName, teamID string }
+	resolve := func(id string) (teamRepoOwnershipRepoInfo, bool) {
 		repoID, err := uuid.Parse(id)
 		if err != nil || repoID == uuid.Nil {
-			return ""
+			return teamRepoOwnershipRepoInfo{}, false
 		}
-		return repos[repoID].FullName
+		info, ok := repos[repoID]
+		return info, ok && info.FullName != ""
 	}
-	desired := make(map[pair]bool, len(derived))
+	desired := make(map[claim]bool, len(derived))
 	for _, row := range derived {
-		if name := repoFullName(row.RepoID); name != "" {
-			desired[pair{teamID: row.TeamID, repoFullName: name}] = true
+		if info, ok := resolve(row.RepoID); ok {
+			desired[claim{provider: info.Provider, repoFullName: info.FullName, teamID: row.TeamID}] = true
 		}
 	}
-	tied := make(map[pair]bool)
+	tied := make(map[claim]bool)
 	for _, tie := range ties {
-		if name := repoFullName(tie.RepoID); name != "" {
+		if info, ok := resolve(tie.RepoID); ok {
 			for _, teamID := range tie.TeamIDs {
-				tied[pair{teamID: teamID, repoFullName: name}] = true
+				tied[claim{provider: info.Provider, repoFullName: info.FullName, teamID: teamID}] = true
 			}
 		}
 	}
 	var toRetract []teamRepoOwnershipActiveRow
 	for _, row := range activeRows {
-		key := pair{teamID: row.TeamID, repoFullName: row.RepoFullName}
+		key := claim{provider: row.Provider, repoFullName: row.RepoFullName, teamID: row.TeamID}
 		if desired[key] || tied[key] {
 			continue
 		}

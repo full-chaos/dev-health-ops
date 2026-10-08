@@ -388,3 +388,69 @@ func TestRankedOwnerReadsLinksWrittenByTheIssuePRLinkWriter(t *testing.T) {
 		})
 	}
 }
+
+// seedSameNamedGitLabRepo adds a GitLab repo with the org repo's full name and
+// an open inferred row of teamID on it that no link supports.
+func (org *rankedOwnerOrg) seedSameNamedGitLabRepo(teamID string) uuid.UUID {
+	org.t.Helper()
+	gitlabRepo := uuid.New()
+	batch, err := org.conn.PrepareBatch(org.ctx, `INSERT INTO repos (id, repo, org_id, provider, last_synced)`)
+	if err != nil {
+		org.t.Fatalf("prepare repos batch: %v", err)
+	}
+	if err := batch.Append(gitlabRepo, org.repo, org.orgID, "gitlab", time.Now().UTC()); err != nil {
+		org.t.Fatalf("append gitlab repo: %v", err)
+	}
+	if err := batch.Send(); err != nil {
+		org.t.Fatalf("send gitlab repo: %v", err)
+	}
+	if err := org.conn.Exec(org.ctx, `INSERT INTO team_repo_ownership (org_id, provider, team_id, repo_id, repo_full_name, match_type, source, is_primary, specificity, priority, valid_from, valid_to, updated_at) VALUES (?, 'gitlab', ?, ?, ?, 'exact', 'inferred', 0, 100, 10, ?, NULL, ?)`,
+		org.orgID, teamID, gitlabRepo, org.repo, org.at, org.at); err != nil {
+		org.t.Fatalf("seed the unsupported gitlab row: %v", err)
+	}
+	return gitlabRepo
+}
+
+func (org *rankedOwnerOrg) openGitLabRows(teamID string) uint64 {
+	org.t.Helper()
+	return countRows(org.t, org.ctx, org.conn, `SELECT count() FROM team_repo_ownership FINAL WHERE org_id = ? AND provider = 'gitlab' AND team_id = ? AND source = 'inferred' AND valid_to IS NULL`, org.orgID, teamID)
+}
+
+// TestRankedOwnerClaimsOfASameNamedRepoOfAnotherProviderAreNotProtected: two
+// repos of one organization share a full name on different providers. Neither
+// a tie on the GitHub repo nor a derived row on it may keep an unsupported
+// open row of the same team on the GitLab repo open.
+func TestRankedOwnerClaimsOfASameNamedRepoOfAnotherProviderAreNotProtected(t *testing.T) {
+	ctx, conn := newWorkItemEffectsConn(t)
+
+	t.Run("a tie on the github repo", func(t *testing.T) {
+		org := newRankedOwnerOrg(t, ctx, conn, "ranked-samename-tie")
+		org.ownProject("github", "team-a")
+		org.link("github", "team-a", "explicit_text", 1)
+		org.ownProject("jira", "team-b")
+		org.link("jira", "team-b", "explicit_text", 1)
+		org.seedSameNamedGitLabRepo("team-a")
+		written, retracted, stats := org.derive()
+		if written != 0 || retracted != 1 || len(stats.Ties) != 1 {
+			t.Fatalf("Derive: written=%d retracted=%d ties=%+v, want 0, 1 and one tie", written, retracted, stats.Ties)
+		}
+		if open := org.openGitLabRows("team-a"); open != 0 {
+			t.Fatalf("open gitlab rows of team-a = %d, want 0", open)
+		}
+	})
+
+	t.Run("a derived row on the github repo", func(t *testing.T) {
+		org := newRankedOwnerOrg(t, ctx, conn, "ranked-samename-desired")
+		org.ownProject("github", "team-a")
+		org.link("github", "team-a", "native", 1)
+		org.seedSameNamedGitLabRepo("team-a")
+		written, retracted, _ := org.derive()
+		if written != 1 || retracted != 1 {
+			t.Fatalf("Derive: written=%d retracted=%d, want 1 and 1", written, retracted)
+		}
+		org.assertOpenOwners("team-a")
+		if open := org.openGitLabRows("team-a"); open != 0 {
+			t.Fatalf("open gitlab rows of team-a = %d, want 0", open)
+		}
+	})
+}

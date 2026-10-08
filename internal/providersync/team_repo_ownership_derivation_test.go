@@ -1230,9 +1230,9 @@ func TestRetractionDiffKeepsOnlyTheTiedTeamsRowsOfATiedRepo(t *testing.T) {
 		rankedRepo: {FullName: "acme/ranked", Provider: "gitlab"},
 	}
 	active := []teamRepoOwnershipActiveRow{
-		{TeamID: "team-a", RepoID: tiedRepo, RepoFullName: "acme/tied"},
-		{TeamID: "team-old", RepoID: tiedRepo, RepoFullName: "acme/tied"},
-		{TeamID: "team-a", RepoID: rankedRepo, RepoFullName: "acme/ranked"},
+		{Provider: "github", TeamID: "team-a", RepoID: tiedRepo, RepoFullName: "acme/tied"},
+		{Provider: "github", TeamID: "team-old", RepoID: tiedRepo, RepoFullName: "acme/tied"},
+		{Provider: "gitlab", TeamID: "team-a", RepoID: rankedRepo, RepoFullName: "acme/ranked"},
 	}
 	derived := []DerivedTeamRepoOwnershipRow{{TeamID: "team-new", RepoID: rankedRepo.String()}}
 	ties := []TeamRepoOwnershipTie{{RepoID: tiedRepo.String(), TeamIDs: []string{"team-a", "team-b"}}}
@@ -1246,6 +1246,37 @@ func TestRetractionDiffKeepsOnlyTheTiedTeamsRowsOfATiedRepo(t *testing.T) {
 	want := map[string]bool{"team-old acme/tied": true, "team-a acme/ranked": true}
 	if !reflect.DeepEqual(retracted, want) {
 		t.Fatalf("retracted %v, want %v (team-a keeps acme/tied only: it is in that tie, not in a tie on acme/ranked)", retracted, want)
+	}
+}
+
+// TestRetractionDiffKeysEveryClaimByProviderAndRepoName: two repos of one
+// organization can share a full name on different providers. A tie on one
+// and a derived row on one protect only that repo's open rows; the open row
+// of the same team on the other repo stays retractable.
+func TestRetractionDiffKeysEveryClaimByProviderAndRepoName(t *testing.T) {
+	githubRepo, gitlabRepo := uuid.New(), uuid.New()
+	repos := map[uuid.UUID]teamRepoOwnershipRepoInfo{
+		githubRepo: {FullName: "acme/shared", Provider: "github"},
+		gitlabRepo: {FullName: "acme/shared", Provider: "gitlab"},
+	}
+	active := []teamRepoOwnershipActiveRow{
+		{Provider: "github", TeamID: "team-a", RepoID: githubRepo, RepoFullName: "acme/shared"},
+		{Provider: "gitlab", TeamID: "team-a", RepoID: gitlabRepo, RepoFullName: "acme/shared"},
+	}
+	for _, tc := range []struct {
+		name    string
+		derived []DerivedTeamRepoOwnershipRow
+		ties    []TeamRepoOwnershipTie
+	}{
+		{"a tie on the github repo", nil, []TeamRepoOwnershipTie{{RepoID: githubRepo.String(), TeamIDs: []string{"team-a", "team-b"}}}},
+		{"a derived row on the github repo", []DerivedTeamRepoOwnershipRow{{TeamID: "team-a", RepoID: githubRepo.String()}}, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := diffTeamRepoOwnershipRetractions(active, tc.derived, tc.ties, repos)
+			if len(got) != 1 || got[0].Provider != "gitlab" || got[0].RepoID != gitlabRepo {
+				t.Fatalf("retracted %+v, want only team-a's open row on the gitlab repo", got)
+			}
+		})
 	}
 }
 

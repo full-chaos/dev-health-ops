@@ -272,3 +272,36 @@ func TestAStoredURLWithUserInfoIsNeverServed(t *testing.T) {
 		t.Fatalf("the body holds the user info: %s", body)
 	}
 }
+
+// CHAOS-8903: source is the sorted, joined distinct providers of the repositories behind a
+// metric stored per repository; "unknown" and empty providers are no provider; a metric stored
+// per team serves null and reads no provider.
+func TestSourceIsTheStoredProvidersBehindARepositoryMetric(t *testing.T) {
+	for _, testCase := range []struct {
+		name      string
+		metric    string
+		providers [][]any
+		want      *string
+	}{
+		{"two providers sorted and joined", "churn", [][]any{{"repo-b", "gitlab"}, {"repo-a", "github"}}, ptr("github, gitlab")},
+		{"one provider once", "churn", [][]any{{"repo-a", "github"}, {"repo-b", "github"}}, ptr("github")},
+		{"unknown and empty are no provider", "churn", [][]any{{"repo-a", "unknown"}, {"repo-b", ""}}, nil},
+		{"a metric stored per team", "throughput", [][]any{{"repo-a", "github"}}, nil},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			dispatch := &explainQueryDispatch{
+				contributorRows: [][]any{{"repo-a", 0.25}, {"repo-b", 0.5}},
+				providerRows:    testCase.providers,
+			}
+			got, err := explainFor(t, dispatch, testCase.metric, "org")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if (got.Source == nil) != (testCase.want == nil) || (got.Source != nil && *got.Source != *testCase.want) {
+				t.Fatalf("source = %v, want %v", got.Source, testCase.want)
+			}
+		})
+	}
+}
+
+func ptr(s string) *string { return &s }

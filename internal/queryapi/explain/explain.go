@@ -136,6 +136,10 @@ type Response struct {
 	// when the scope is one repository; null otherwise and when none is
 	// stored.
 	SourceURL *string `json:"source_url"`
+	// Source (CHAOS-8903, Go-only) is the stored provider of the repositories behind a metric
+	// stored per repository (or of the scope's one repository): distinct providers sorted and
+	// joined by ", ". null for a metric stored per team and when no provider is stored.
+	Source *string `json:"source"`
 	// HasData / HasPriorData (CHAOS-8491): the current / comparison window holds a stored
 	// value. When false, the matching value (or the delta's base) is a placeholder 0.
 	HasData      bool `json:"has_data"`

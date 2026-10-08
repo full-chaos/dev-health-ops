@@ -137,6 +137,9 @@ type explainQueryDispatch struct {
 	sourceURLRows [][]any
 	sourceURLIDs  [][]string
 
+	// providerRows answers fetchRepoProviders (CHAOS-8903): id, the stored provider.
+	providerRows [][]any
+
 	// resolveRepoIDMiss answers a resolveRepoID read with no row (a
 	// reference that resolves to no repository).
 	resolveRepoIDMiss bool
@@ -144,6 +147,8 @@ type explainQueryDispatch struct {
 
 func (d *explainQueryDispatch) handle(t *testing.T, query string, bindings []dhclickhouse.Binding) (dhclickhouse.RowScanner, error) {
 	switch {
+	case strings.Contains(query, "AS provider"):
+		return &fixtureRowScanner{rows: d.providerRows}, nil
 	case strings.Contains(query, "AS source_url"):
 		ids, _ := bindingValue(bindings, "repo_ids")
 		asked, _ := ids.([]string)

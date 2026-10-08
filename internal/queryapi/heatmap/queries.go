@@ -99,7 +99,8 @@ func fetchReviewWaitEvidence(ctx context.Context, client QueryClient, startTS, e
             git_pull_requests.title AS title,
             git_pull_requests.created_at AS created_at,
             git_pull_requests.first_review_at AS first_review_at,
-            nullIf(repos.repo, '') AS repo_name
+            nullIf(repos.repo, '') AS repo_name,
+            nullIf(nullIf(repos.provider, ''), 'unknown') AS source
         FROM git_pull_requests FINAL
         INNER JOIN repos FINAL ON repos.id = git_pull_requests.repo_id AND repos.org_id = {org_id:String}
         WHERE git_pull_requests.org_id = {org_id:String}
@@ -131,7 +132,7 @@ func fetchReviewWaitEvidence(ctx context.Context, client QueryClient, startTS, e
 	out := make([]ReviewWaitEvidenceItem, 0)
 	for rows.Next() {
 		var item ReviewWaitEvidenceItem
-		if err := rows.Scan(&item.RepoID, &item.Number, &item.Title, &item.CreatedAt, &item.FirstReviewAt, &item.RepoName); err != nil {
+		if err := rows.Scan(&item.RepoID, &item.Number, &item.Title, &item.CreatedAt, &item.FirstReviewAt, &item.RepoName, &item.Source); err != nil {
 			return nil, fmt.Errorf("heatmap: scan review wait evidence row: %w", err)
 		}
 		out = append(out, item)

@@ -109,6 +109,37 @@ type responseModelOracleRoute struct {
 	data func(value any) (string, error)
 }
 
+// filterOptionsPythonResponse is the shape the frozen FastAPI model of
+// /api/v1/filters/options has. filteroptions.Response has one more field since
+// CHAOS-8748 (team_names), which the Python model never had; the frozen program
+// is not recorded again, so the oracle still checks THAT shape.
+type filterOptionsPythonResponse struct {
+	Teams        []string `json:"teams"`
+	Repos        []string `json:"repos"`
+	Services     []string `json:"services"`
+	Developers   []string `json:"developers"`
+	WorkCategory []string `json:"work_category"`
+	IssueType    []string `json:"issue_type"`
+	FlowStage    []string `json:"flow_stage"`
+}
+
+func TestFilterOptionsResponseIsThePythonResponsePlusTeamNames(t *testing.T) {
+	type field struct{ name, goType, tag string }
+	fieldsOf := func(typ reflect.Type) []field {
+		out := make([]field, 0, typ.NumField())
+		for index := range typ.NumField() {
+			f := typ.Field(index)
+			out = append(out, field{f.Name, f.Type.String(), string(f.Tag)})
+		}
+		return out
+	}
+	want := append(fieldsOf(reflect.TypeOf(filterOptionsPythonResponse{})),
+		field{"TeamNames", "map[string]string", `json:"team_names,omitempty"`})
+	if got := fieldsOf(reflect.TypeOf(filteroptions.Response{})); !reflect.DeepEqual(got, want) {
+		t.Errorf("filteroptions.Response fields =\n %v\nwant the Python fields then team_names:\n %v", got, want)
+	}
+}
+
 // opportunitiesPythonCard and opportunitiesPythonResponse are the shape the
 // frozen FastAPI model of /api/v1/opportunities has: the five fields the
 // Python reference served. The Go response (opportunities.Card) has four more
@@ -533,7 +564,7 @@ func responseModelOracleRoutes() map[string]responseModelOracleRoute {
 		"POST /api/v1/investment/flow/repo-team": sankeyRoute,
 		"GET /api/v1/sankey":                     sankeyRoute,
 		"POST /api/v1/sankey":                    sankeyRoute,
-		"GET /api/v1/filters/options":            plain(filteroptions.Response{}),
+		"GET /api/v1/filters/options":            plain(filterOptionsPythonResponse{}),
 	}
 }
 

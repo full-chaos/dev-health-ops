@@ -1147,7 +1147,9 @@ the path before it writes:
   (`newNativeTeamCatalogCollectors`, `internal/workerservice/sync_dispatch.go`; Linear, GitHub, GitLab, and Jira =
   the project-as-team leg then the Atlassian Teams leg) that both the reference discovery and the post-sync
   team auto-import run, and the `dho sync teams` catalog verb (`buildCatalogCollector`,
-  `internal/synccli/teamscatalog.go`). A collector reads sync policies, manual memberships, fallbacks and drift
+  `internal/synccli/teamscatalog.go`). Both worker dispatch sites (reference discovery and post-sync team auto-import)
+  refuse an unwrapped collector entry with `providersync.ErrTeamCatalogCollectorNotCarried` before they call it, so a
+  collector type registered outside the registry function fails loud and does not run. A collector reads sync policies, manual memberships, fallbacks and drift
   rows by the prefixed id in its guards, and closes and opens links by it, before its first team write; a carry
   inside a writer would run after those reads and lose the bare rows' policy, members and first-seen dates.
 - **Writes outside a collector**, at their entry: the external ingest sink when a batch holds `team.v1` or

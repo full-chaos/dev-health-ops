@@ -261,7 +261,7 @@ func githubDerivedOracleCases() []oracleCase {
 				"Facts": map[string]any{
 					"Projects": []any{}, "Repos": []any{}, "ManualFallbacks": []any{},
 					"Teams": []any{map[string]any{
-						"TeamID": "platform", "TeamName": "Platform",
+						"Provider": "github", "TeamID": "platform", "TeamName": "Platform",
 						"ProjectKeys": []any{"PLAT"},
 					}},
 					"Members": []any{map[string]any{
@@ -302,7 +302,7 @@ func githubDerivedOracleCases() []oracleCase {
 					"Projects": []any{}, "Repos": []any{}, "Members": []any{},
 					"ManualFallbacks": []any{},
 					"Teams": []any{map[string]any{
-						"TeamID": "platform", "TeamName": "Platform",
+						"Provider": "github", "TeamID": "platform", "TeamName": "Platform",
 						"ProjectKeys": []any{"PLAT"},
 					}},
 				},

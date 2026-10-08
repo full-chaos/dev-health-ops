@@ -80,6 +80,11 @@ provenance, jump to that node, and verify no higher-precedence stage matched.
 other team at the winner's rank, read by team-scoped views only. The values, the readers and the known limits are in
 `docs/contribute/architecture/team-attribution.md` section 0.4d.
 
+**CHAOS-8924.** A key string is not a link across providers: `native_team` and `issue_project` take only ACTIVE teams
+whose `provider` equals the item's `provider` (a team with an empty `provider` holds no provider's key). When no team of
+the item's provider holds the key, the tier gives no candidate and the cascade goes on to its next source. Details and
+the effect on per-team totals: `docs/contribute/architecture/team-attribution.md` section 0.4e.
+
 ```mermaid
 flowchart TD
     Start(["Work item"]) --> COLLECT["Evaluate EVERY applicable source → persist a candidate row per match (provenance).<br/>The linked_issue candidate requires a real work_item_dependencies donor row resolving to a team;<br/>a bare issue-key prefix produces NO linked_issue candidate (it may match a manual_fallback instead)."]

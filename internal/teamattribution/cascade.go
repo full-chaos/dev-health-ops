@@ -243,9 +243,9 @@ type ClickHouseFactSource struct {
 
 type GithubWorkItemDerivationContext struct {
 	// projectKeyTeams: every ACTIVE team that holds a key, in catalog order
-	// (provider, id), of any provider. A project of several teams of the
-	// item's provider is attributed to all of them (see AttributionCoOwner and
-	// IssueProjectCandidates); a native team key takes the first.
+	// (provider, id), of any provider. Readers go through keyHoldersOfProvider:
+	// a native team key takes the first holder of the item's provider, and
+	// IssueProjectCandidates takes every holder of the item's provider.
 	projectKeyTeams map[string][]GithubWorkItemDerivationTeamFact
 	projectByID     map[string][]GithubWorkItemDerivationCandidate
 	projectByKey    map[string][]GithubWorkItemDerivationCandidate
@@ -403,7 +403,7 @@ func NewGitHubWorkItemDerivationContext(
 			}
 			held := false
 			for _, holder := range result.projectKeyTeams[key] {
-				if holder.TeamID == team.TeamID {
+				if holder.TeamID == team.TeamID && strings.TrimSpace(holder.Provider) == strings.TrimSpace(team.Provider) {
 					held = true
 					break
 				}
@@ -1067,7 +1067,7 @@ func (derived GithubWorkItemDerivationContext) NativeTeamCandidate(
 	if subject.NativeTeamKey == nil {
 		return nil
 	}
-	teams := derived.projectKeyTeams[strings.TrimSpace(*subject.NativeTeamKey)]
+	teams := derived.keyHoldersOfProvider(*subject.NativeTeamKey, subject.Provider)
 	if len(teams) == 0 {
 		return nil
 	}
@@ -1079,12 +1079,35 @@ func (derived GithubWorkItemDerivationContext) NativeTeamCandidate(
 	}
 }
 
-// IssueProjectCandidates gives an issue_project candidate for the first active
-// team that holds the item's project key (the first key that any team holds),
-// and one for each other holder of the item's provider. A key string held by
-// a team of another provider does not make that team an owner of the item's
-// project, so it never adds a co-owner. Only the first holder, chosen as
-// before, can be of another provider.
+// keyHoldersOfProvider returns the active teams of one provider that hold a
+// key, in catalog order. A key string is not a link across providers: a team
+// of another provider, or a team with no provider, that holds the same key is
+// not a holder for an item of this provider, and an item with no provider has
+// no holder.
+func (derived GithubWorkItemDerivationContext) keyHoldersOfProvider(
+	key, provider string,
+) []GithubWorkItemDerivationTeamFact {
+	provider = strings.TrimSpace(provider)
+	if provider == "" {
+		return nil
+	}
+	var result []GithubWorkItemDerivationTeamFact
+	for _, team := range derived.projectKeyTeams[strings.TrimSpace(key)] {
+		if strings.TrimSpace(team.Provider) == provider {
+			result = append(result, team)
+		}
+	}
+	return result
+}
+
+// IssueProjectCandidates gives one issue_project candidate for each active
+// team of the item's provider that holds the item's project key, in catalog
+// order, for the first key that such a team holds. The first is the primary
+// and the others are co-owners. A key string is not a link across providers:
+// a team of another provider, or a team with no provider, that holds the same
+// key is not an owner of the item's project and gives no candidate. When no
+// team of the item's provider holds a key, the tier gives nothing and the
+// cascade goes on to its next source.
 func (derived GithubWorkItemDerivationContext) IssueProjectCandidates(
 	subject GithubWorkItemDerivationSubject,
 ) []GithubWorkItemDerivationCandidate {
@@ -1098,23 +1121,17 @@ func (derived GithubWorkItemDerivationContext) IssueProjectCandidates(
 		// the trim belongs on the lookup alone. Trimming the evidence too
 		// would swap one divergence for another; both halves are pinned by the
 		// issue_project_scope_needs_trimming oracle case.
-		teams := derived.projectKeyTeams[strings.TrimSpace(key)]
-		if len(teams) == 0 {
-			continue
-		}
-		provider := strings.TrimSpace(subject.Provider)
-		result := make([]GithubWorkItemDerivationCandidate, 0, len(teams))
-		for index, team := range teams {
-			if index > 0 && (strings.TrimSpace(teams[0].Provider) != provider || strings.TrimSpace(team.Provider) != provider) {
-				continue
-			}
+		var result []GithubWorkItemDerivationCandidate
+		for _, team := range derived.keyHoldersOfProvider(key, subject.Provider) {
 			result = append(result, GithubWorkItemDerivationCandidate{
 				Source: "issue_project", TeamID: GithubWorkItemDerivationStringPointer(team.TeamID), TeamName: GithubWorkItemDerivationStringPointer(GithubWorkItemDerivationFirstNonEmpty(team.TeamName, team.TeamID)),
 				Confidence: "high", Evidence: "issue_project_key=" + key,
 				IsPrimary: 1, Specificity: 50, UpdatedAt: NormalizedDerivationTime(time.Time{}),
 			})
 		}
-		return result
+		if len(result) > 0 {
+			return result
+		}
 	}
 	return nil
 }

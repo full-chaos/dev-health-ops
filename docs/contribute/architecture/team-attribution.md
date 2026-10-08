@@ -408,8 +408,8 @@ means the ClickHouse `teams` dimension is empty.
 
 | # | `source` | Resolves from (ClickHouse) | Confidence | Beats | Never overrides | Evidence keys |
 |--:|---|---|---|---|---|---|
-| 0 | `native_team` | `WorkItem.native_team_key` → `teams` | high | all below | — (top) | `native_team_key` |
-| 1 | `issue_project` | native issue project → owning team | high | 2–8 | 0 | `project_id, owner_team` |
+| 0 | `native_team` | `WorkItem.native_team_key` → `teams` of the item's provider (section 0.4e) | high | all below | — (top) | `native_team_key` |
+| 1 | `issue_project` | native issue project key → `teams` of the item's provider that hold it (section 0.4e) | high | 2–8 | 0 | `project_id, owner_team` |
 | 2 | `project_ownership` | `team_project_ownership` | high | 3–8 | 0–1 | `project_id, provider` |
 | 3 | `repo_ownership` | `team_repo_ownership` | medium | 4–8 | 0–2 | `repo_full_name` |
 | 4 | `assignee_membership` | CHAOS-4321 two-layer: `identities`/`teams` (admin override, single-team) else `team_memberships` (provider fallback, single-team) | high (admin) / medium (provider) | 5–8 | 0–3 | `canonical_id, identity` (evidence text: `assignee_membership=<id>`) |
@@ -864,10 +864,10 @@ project (section 0.1): a native team key gives one team.
 
 - **Where it is decided.** One shared seam in `internal/teamattribution/cascade.go`, the same for every
   provider: a project key maps to every ACTIVE team that holds it (`projectKeyTeams`, catalog order
-  (provider, id)). `IssueProjectCandidates` gives an `issue_project` candidate for the first holder, chosen as
-  before this change, and one for each other holder whose provider is the item's provider. A key string held
-  by a team of another provider does not make that team an owner of the item's project (a team reaches an item
-  only through ownership of its project), so it never takes a co-owner row. `project_ownership` facts are
+  (provider, id)). `IssueProjectCandidates` gives an `issue_project` candidate for each holder of the item's
+  provider (section 0.4e): the first is the primary, the others are co-owners. A key string held by a team of
+  another provider does not make that team an owner of the item's project (a team reaches an item only through
+  ownership of its project), so it takes no row. `project_ownership` facts are
   looked up by the item's provider. When the winning source of an item is
   `issue_project` or `project_ownership`, every other team of that source at the SAME rank as the winner
   (`is_primary`, `specificity`, `priority` of the ownership fact) is a co-owner (`projectCoOwners`). A lower
@@ -946,15 +946,9 @@ project (section 0.1): a native team key gives one team.
   list do not show a work unit whose items its team co-owns, until the team-set rollup contract (the same
   follow-up as the daily rollups). The census holds every reader of the vote's team to a named list
   (`workUnitVoteConsumers`); a new reader must be classified there, and a stale entry fails.
-- **Known limit: a key held by teams of two providers.** `projectKeyTeams` is not provider-scoped, and this
-  change does not change how the primary is chosen: the first ACTIVE holder of the key by (provider, id), of
-  any provider, takes the `issue_project` primary row, as before. When that first holder is of another provider
-  than the item, it stays the primary and the item has no `issue_project` co-owner (the other holders of the
-  item's provider take no `issue_project` row; their `project_ownership` rows stay provenance).
-
 Tests: `TestAProjectOfSeveralTeamsAttributesTheItemToEveryActiveTeam` and
 `TestOnlyOwnersAtThePrimaryRankAreCoOwners` and `TestRepositoryAndNativeTeamHaveNoCoOwners` and
-`TestAKeyOfAnotherProvidersTeamMakesNoCoOwner` (the cascade, every provider);
+the section 0.4e tests (the cascade, every provider);
 `TestAnItemOfAProjectOfSeveralTeamsIsWrittenForEveryActiveTeam` (real loaders, real writer, real
 ClickHouse, every provider; a team that moves from 1 to 2 with merges stopped);
 `TestACoOwnerWithTwoOwnershipFactsIsStoredAsACoOwner`, `TestAKeyOfAnotherProvidersTeamIsNeverStoredAsACoOwner`
@@ -970,6 +964,46 @@ real producer, every provider);
 `TestThroughputOfAProjectOfTwoTeamsCountsInEachTeamAndOnceInTheOrg` (team A, team B, team(s), inactive team C,
 organization once and equal to the store without co-owner rows);
 `TestTheDailyAttributionReadersIgnoreACoOwnerRow`; `TestWorkItemTeamAttributionCoOwnerRowIsNotPrimary`.
+
+#### 0.4e A key string is not a link across providers (CHAOS-8924)
+
+`native_team` and `issue_project` resolve a key string (the item's native team key; its scope and project keys)
+to the teams that hold it, as their id or in `project_keys`. A team reaches an item only through ownership of
+the item's project, and a key string held by a team of another provider is not that ownership. So both tiers
+read the holders of a key through ONE shared function, `keyHoldersOfProvider` in
+`internal/teamattribution/cascade.go`, the same for every provider:
+
+- A holder is an ACTIVE team whose `provider` equals the item's `provider` (both trimmed, as
+  `AttributionMapKey` compares them). A team of another provider is not a holder. A team with an empty
+  `provider` (an admin-created team; `ClickHouseTeamAdminService` writes `provider = ""`) is not a holder of
+  any provider's key, and an item with an empty `provider` has no holder.
+- `native_team`: the first holder of the item's provider in catalog order (provider, id). When no team of the
+  item's provider holds the native team key, there is no `native_team` candidate.
+- `issue_project`: the item looks up its scope key, then its project key; the first of these keys that a team
+  of the item's provider holds decides. Each holder of the item's provider of that key gives a candidate: the
+  first is the primary, the others are co-owners (section 0.4d). When no team of the item's provider holds
+  either key, the tier gives no candidate and the cascade goes on to its next source (`project_ownership`,
+  then the sources below it), as it does when no team holds the key at all.
+- Teams are (provider, id): a team of another provider with the same id that holds the same key does not hide
+  the item's own team from the key.
+
+**Effect on stored rows.** Before this change, the first active holder of a key by (provider, id), of any
+provider, took the row. An item whose key a team of another provider (or a team with an empty provider) also
+held could therefore have that team as its primary (`is_primary = 1`). From the first attribution run after
+this change, such an item has its primary on a team of its own provider, or, when no team of its provider
+holds the key, on the next source. Each item still has exactly one primary row, so organization totals do
+not change. Per-team totals move: the daily rollups keyed by the primary team (`work_item_metrics_daily`,
+`work_item_state_durations_daily`, `work_item_cycle_times`, `issue_type_metrics_daily`,
+`investment_metrics_daily`, `work_item_user_metrics_daily`), the primary-team views and the one-team-per-work-unit
+votes move such items from the other provider's team (or the empty-provider team) to the team of the item's
+provider, to a `project_ownership` or lower source, or to `unassigned`.
+
+Tests: `TestIssueProjectPrimaryIsATeamOfTheItemsProvider`,
+`TestAKeyHeldOnlyByOtherProvidersGivesNoIssueProjectRow`, `TestIssueProjectProviderMatchIsExactAndNeverEmpty`,
+`TestTheFirstKeyHeldByATeamOfTheItemsProviderDecides`, `TestATeamIDOfAnotherProviderDoesNotHideTheItemsTeam`,
+`TestNativeTeamIsATeamOfTheItemsProvider` (the cascade, every provider against every other provider and the
+empty provider); `TestProjectAndNativeKeysAttributeOnlyToTeamsOfTheItemsProvider` (real loaders, real cascade,
+real writer, real ClickHouse, every provider).
 
 #### 0.4a Provider × entity **consumption** (functional — what `run_team_autoimport` actually pulls)
 

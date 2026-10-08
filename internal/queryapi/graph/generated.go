@@ -51,17 +51,20 @@ type DirectiveRoot struct {
 
 type ComplexityRoot struct {
 	AIAttributionEvidenceRow struct {
-		Actor       func(childComplexity int) int
-		Confidence  func(childComplexity int) int
-		Evidence    func(childComplexity int) int
-		Kind        func(childComplexity int) int
-		ObservedAt  func(childComplexity int) int
-		Provider    func(childComplexity int) int
-		RepoID      func(childComplexity int) int
-		Source      func(childComplexity int) int
-		SubjectID   func(childComplexity int) int
-		SubjectType func(childComplexity int) int
-		TeamID      func(childComplexity int) int
+		Actor        func(childComplexity int) int
+		Confidence   func(childComplexity int) int
+		Evidence     func(childComplexity int) int
+		Kind         func(childComplexity int) int
+		ObservedAt   func(childComplexity int) int
+		Provider     func(childComplexity int) int
+		RepoID       func(childComplexity int) int
+		RepoName     func(childComplexity int) int
+		Source       func(childComplexity int) int
+		SubjectID    func(childComplexity int) int
+		SubjectTitle func(childComplexity int) int
+		SubjectType  func(childComplexity int) int
+		TeamID       func(childComplexity int) int
+		TeamName     func(childComplexity int) int
 	}
 
 	AIAttributionMixRow struct {
@@ -144,14 +147,18 @@ type ComplexityRoot struct {
 	}
 
 	AIGovernanceViolationRow struct {
-		Evidence    func(childComplexity int) int
-		ObservedAt  func(childComplexity int) int
-		RepoID      func(childComplexity int) int
-		RuleID      func(childComplexity int) int
-		Severity    func(childComplexity int) int
-		SubjectID   func(childComplexity int) int
-		SubjectType func(childComplexity int) int
-		TeamID      func(childComplexity int) int
+		Evidence     func(childComplexity int) int
+		ObservedAt   func(childComplexity int) int
+		RepoID       func(childComplexity int) int
+		RepoName     func(childComplexity int) int
+		RuleID       func(childComplexity int) int
+		RuleName     func(childComplexity int) int
+		Severity     func(childComplexity int) int
+		SubjectID    func(childComplexity int) int
+		SubjectTitle func(childComplexity int) int
+		SubjectType  func(childComplexity int) int
+		TeamID       func(childComplexity int) int
+		TeamName     func(childComplexity int) int
 	}
 
 	AIHotspotOverlapRow struct {
@@ -372,9 +379,10 @@ type ComplexityRoot struct {
 	}
 
 	AliasSuggestion struct {
-		Confidence           func(childComplexity int) int
-		SuggestedCanonicalID func(childComplexity int) int
-		UnmappedIdentity     func(childComplexity int) int
+		Confidence             func(childComplexity int) int
+		SuggestedCanonicalID   func(childComplexity int) int
+		SuggestedCanonicalName func(childComplexity int) int
+		UnmappedIdentity       func(childComplexity int) int
 	}
 
 	AnalyticsResult struct {
@@ -837,6 +845,7 @@ type ComplexityRoot struct {
 	}
 
 	ImproveOpportunity struct {
+		EntityDisplayName  func(childComplexity int) int
 		EntityID           func(childComplexity int) int
 		EntityType         func(childComplexity int) int
 		EvidenceRefs       func(childComplexity int) int
@@ -1401,6 +1410,7 @@ type ComplexityRoot struct {
 
 	TestOpsRiskQuadrantPoint struct {
 		ID                  func(childComplexity int) int
+		Name                func(childComplexity int) int
 		PipelineSuccessRate func(childComplexity int) int
 		TestPassRate        func(childComplexity int) int
 	}
@@ -1717,6 +1727,13 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 
 		return e.complexity.AIAttributionEvidenceRow.RepoID(childComplexity), true
 
+	case "AIAttributionEvidenceRow.repoName":
+		if e.complexity.AIAttributionEvidenceRow.RepoName == nil {
+			break
+		}
+
+		return e.complexity.AIAttributionEvidenceRow.RepoName(childComplexity), true
+
 	case "AIAttributionEvidenceRow.source":
 		if e.complexity.AIAttributionEvidenceRow.Source == nil {
 			break
@@ -1731,6 +1748,13 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 
 		return e.complexity.AIAttributionEvidenceRow.SubjectID(childComplexity), true
 
+	case "AIAttributionEvidenceRow.subjectTitle":
+		if e.complexity.AIAttributionEvidenceRow.SubjectTitle == nil {
+			break
+		}
+
+		return e.complexity.AIAttributionEvidenceRow.SubjectTitle(childComplexity), true
+
 	case "AIAttributionEvidenceRow.subjectType":
 		if e.complexity.AIAttributionEvidenceRow.SubjectType == nil {
 			break
@@ -1744,6 +1768,13 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 		}
 
 		return e.complexity.AIAttributionEvidenceRow.TeamID(childComplexity), true
+
+	case "AIAttributionEvidenceRow.teamName":
+		if e.complexity.AIAttributionEvidenceRow.TeamName == nil {
+			break
+		}
+
+		return e.complexity.AIAttributionEvidenceRow.TeamName(childComplexity), true
 
 	case "AIAttributionMixRow.count":
 		if e.complexity.AIAttributionMixRow.Count == nil {
@@ -2151,12 +2182,26 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 
 		return e.complexity.AIGovernanceViolationRow.RepoID(childComplexity), true
 
+	case "AIGovernanceViolationRow.repoName":
+		if e.complexity.AIGovernanceViolationRow.RepoName == nil {
+			break
+		}
+
+		return e.complexity.AIGovernanceViolationRow.RepoName(childComplexity), true
+
 	case "AIGovernanceViolationRow.ruleId":
 		if e.complexity.AIGovernanceViolationRow.RuleID == nil {
 			break
 		}
 
 		return e.complexity.AIGovernanceViolationRow.RuleID(childComplexity), true
+
+	case "AIGovernanceViolationRow.ruleName":
+		if e.complexity.AIGovernanceViolationRow.RuleName == nil {
+			break
+		}
+
+		return e.complexity.AIGovernanceViolationRow.RuleName(childComplexity), true
 
 	case "AIGovernanceViolationRow.severity":
 		if e.complexity.AIGovernanceViolationRow.Severity == nil {
@@ -2172,6 +2217,13 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 
 		return e.complexity.AIGovernanceViolationRow.SubjectID(childComplexity), true
 
+	case "AIGovernanceViolationRow.subjectTitle":
+		if e.complexity.AIGovernanceViolationRow.SubjectTitle == nil {
+			break
+		}
+
+		return e.complexity.AIGovernanceViolationRow.SubjectTitle(childComplexity), true
+
 	case "AIGovernanceViolationRow.subjectType":
 		if e.complexity.AIGovernanceViolationRow.SubjectType == nil {
 			break
@@ -2185,6 +2237,13 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 		}
 
 		return e.complexity.AIGovernanceViolationRow.TeamID(childComplexity), true
+
+	case "AIGovernanceViolationRow.teamName":
+		if e.complexity.AIGovernanceViolationRow.TeamName == nil {
+			break
+		}
+
+		return e.complexity.AIGovernanceViolationRow.TeamName(childComplexity), true
 
 	case "AIHotspotOverlapRow.avgHotspotRiskScore":
 		if e.complexity.AIHotspotOverlapRow.AvgHotspotRiskScore == nil {
@@ -3298,6 +3357,13 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 		}
 
 		return e.complexity.AliasSuggestion.SuggestedCanonicalID(childComplexity), true
+
+	case "AliasSuggestion.suggestedCanonicalName":
+		if e.complexity.AliasSuggestion.SuggestedCanonicalName == nil {
+			break
+		}
+
+		return e.complexity.AliasSuggestion.SuggestedCanonicalName(childComplexity), true
 
 	case "AliasSuggestion.unmappedIdentity":
 		if e.complexity.AliasSuggestion.UnmappedIdentity == nil {
@@ -5305,6 +5371,13 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 		}
 
 		return e.complexity.ImproveOpportunitiesResult.TotalCount(childComplexity), true
+
+	case "ImproveOpportunity.entityDisplayName":
+		if e.complexity.ImproveOpportunity.EntityDisplayName == nil {
+			break
+		}
+
+		return e.complexity.ImproveOpportunity.EntityDisplayName(childComplexity), true
 
 	case "ImproveOpportunity.entityId":
 		if e.complexity.ImproveOpportunity.EntityID == nil {
@@ -8207,6 +8280,13 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 
 		return e.complexity.TestOpsRiskQuadrantPoint.ID(childComplexity), true
 
+	case "TestOpsRiskQuadrantPoint.name":
+		if e.complexity.TestOpsRiskQuadrantPoint.Name == nil {
+			break
+		}
+
+		return e.complexity.TestOpsRiskQuadrantPoint.Name(childComplexity), true
+
 	case "TestOpsRiskQuadrantPoint.pipelineSuccessRate":
 		if e.complexity.TestOpsRiskQuadrantPoint.PipelineSuccessRate == nil {
 			break
@@ -9229,6 +9309,18 @@ type AIAttributionEvidenceRow {
   evidence: String!
   observedAt: DateTime!
   teamId: String
+  """
+  Full name of the repository ` + "`" + `repoId` + "`" + ` names, from the repository catalogue of the caller's organization. Null when the repository has no stored name; never the id.
+  """
+  repoName: String
+  """
+  Name of the team ` + "`" + `teamId` + "`" + ` names, from the team catalogue of the caller's organization. Null when there is no team or it has no stored name; never the id.
+  """
+  teamName: String
+  """
+  Title of the pull request the row's subject names (subjectType ` + "`" + `pull_request` + "`" + `), from the stored pull request. Null for any other subject type or when no title is stored; never the id.
+  """
+  subjectTitle: String
 }
 
 type AIAttributionMixRow {
@@ -9330,6 +9422,22 @@ type AIGovernanceViolationRow {
   repoId: String
   observedAt: DateTime!
   evidence: String!
+  """
+  Full name of the repository ` + "`" + `repoId` + "`" + ` names, from the repository catalogue of the caller's organization. Null when the repository has no stored name; never the id.
+  """
+  repoName: String
+  """
+  Name of the team ` + "`" + `teamId` + "`" + ` names, from the team catalogue of the caller's organization. Null when there is no team or it has no stored name; never the id.
+  """
+  teamName: String
+  """
+  Title of the pull request the row's subject names (subjectType ` + "`" + `pull_request` + "`" + `), from the stored pull request. Null for any other subject type or when no title is stored; never the id.
+  """
+  subjectTitle: String
+  """
+  Fixed display name of the policy rule ` + "`" + `ruleId` + "`" + ` names (a code-owned set of rules). Null for a rule id outside that set; never the id.
+  """
+  ruleName: String
 }
 
 type AIHotspotOverlapRow {
@@ -9590,6 +9698,10 @@ type AiAttributedPrsResult {
 type AliasSuggestion {
   unmappedIdentity: UnmappedIdentity!
   suggestedCanonicalId: String!
+  """
+  Display name of the suggested canonical identity, else its email. Null when neither is stored; never the id.
+  """
+  suggestedCanonicalName: String
   confidence: Float!
 }
 
@@ -10401,6 +10513,10 @@ type ImproveOpportunity {
   Which side of the threshold fires the rule: ABOVE (value > threshold) or BELOW (value < threshold).
   """
   thresholdDirection: ThresholdDirection!
+  """
+  Name of the entity ` + "`" + `entityId` + "`" + ` names: the repository full name for entityType ` + "`" + `repo` + "`" + `, the team name for ` + "`" + `team` + "`" + `, from the catalogues of the caller's organization. Null when no name is stored; never the id.
+  """
+  entityDisplayName: String
 }
 
 enum ImproveOpportunityKind {
@@ -11308,6 +11424,10 @@ input TestOpsRiskInput {
 
 type TestOpsRiskQuadrantPoint {
   id: String!
+  """
+  Full name of the repository the point stands for. Null when the repository has no stored name; never the id.
+  """
+  name: String
   pipelineSuccessRate: Float
   testPassRate: Float
 }
@@ -15573,6 +15693,129 @@ func (ec *executionContext) fieldContext_AIAttributionEvidenceRow_teamId(_ conte
 	return fc, nil
 }
 
+func (ec *executionContext) _AIAttributionEvidenceRow_repoName(ctx context.Context, field graphql.CollectedField, obj *model.AIAttributionEvidenceRow) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_AIAttributionEvidenceRow_repoName(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.RepoName, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*string)
+	fc.Result = res
+	return ec.marshalOString2ᚖstring(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_AIAttributionEvidenceRow_repoName(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "AIAttributionEvidenceRow",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _AIAttributionEvidenceRow_teamName(ctx context.Context, field graphql.CollectedField, obj *model.AIAttributionEvidenceRow) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_AIAttributionEvidenceRow_teamName(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.TeamName, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*string)
+	fc.Result = res
+	return ec.marshalOString2ᚖstring(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_AIAttributionEvidenceRow_teamName(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "AIAttributionEvidenceRow",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _AIAttributionEvidenceRow_subjectTitle(ctx context.Context, field graphql.CollectedField, obj *model.AIAttributionEvidenceRow) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_AIAttributionEvidenceRow_subjectTitle(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.SubjectTitle, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*string)
+	fc.Result = res
+	return ec.marshalOString2ᚖstring(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_AIAttributionEvidenceRow_subjectTitle(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "AIAttributionEvidenceRow",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _AIAttributionMixRow_kind(ctx context.Context, field graphql.CollectedField, obj *model.AIAttributionMixRow) (ret graphql.Marshaler) {
 	fc, err := ec.fieldContext_AIAttributionMixRow_kind(ctx, field)
 	if err != nil {
@@ -15994,6 +16237,12 @@ func (ec *executionContext) fieldContext_AIAttributionOverviewResult_rows(_ cont
 				return ec.fieldContext_AIAttributionEvidenceRow_observedAt(ctx, field)
 			case "teamId":
 				return ec.fieldContext_AIAttributionEvidenceRow_teamId(ctx, field)
+			case "repoName":
+				return ec.fieldContext_AIAttributionEvidenceRow_repoName(ctx, field)
+			case "teamName":
+				return ec.fieldContext_AIAttributionEvidenceRow_teamName(ctx, field)
+			case "subjectTitle":
+				return ec.fieldContext_AIAttributionEvidenceRow_subjectTitle(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type AIAttributionEvidenceRow", field.Name)
 		},
@@ -18027,6 +18276,14 @@ func (ec *executionContext) fieldContext_AIGovernanceSummary_recentViolations(_ 
 				return ec.fieldContext_AIGovernanceViolationRow_observedAt(ctx, field)
 			case "evidence":
 				return ec.fieldContext_AIGovernanceViolationRow_evidence(ctx, field)
+			case "repoName":
+				return ec.fieldContext_AIGovernanceViolationRow_repoName(ctx, field)
+			case "teamName":
+				return ec.fieldContext_AIGovernanceViolationRow_teamName(ctx, field)
+			case "subjectTitle":
+				return ec.fieldContext_AIGovernanceViolationRow_subjectTitle(ctx, field)
+			case "ruleName":
+				return ec.fieldContext_AIGovernanceViolationRow_ruleName(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type AIGovernanceViolationRow", field.Name)
 		},
@@ -18412,6 +18669,170 @@ func (ec *executionContext) _AIGovernanceViolationRow_evidence(ctx context.Conte
 }
 
 func (ec *executionContext) fieldContext_AIGovernanceViolationRow_evidence(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "AIGovernanceViolationRow",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _AIGovernanceViolationRow_repoName(ctx context.Context, field graphql.CollectedField, obj *model.AIGovernanceViolationRow) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_AIGovernanceViolationRow_repoName(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.RepoName, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*string)
+	fc.Result = res
+	return ec.marshalOString2ᚖstring(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_AIGovernanceViolationRow_repoName(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "AIGovernanceViolationRow",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _AIGovernanceViolationRow_teamName(ctx context.Context, field graphql.CollectedField, obj *model.AIGovernanceViolationRow) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_AIGovernanceViolationRow_teamName(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.TeamName, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*string)
+	fc.Result = res
+	return ec.marshalOString2ᚖstring(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_AIGovernanceViolationRow_teamName(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "AIGovernanceViolationRow",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _AIGovernanceViolationRow_subjectTitle(ctx context.Context, field graphql.CollectedField, obj *model.AIGovernanceViolationRow) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_AIGovernanceViolationRow_subjectTitle(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.SubjectTitle, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*string)
+	fc.Result = res
+	return ec.marshalOString2ᚖstring(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_AIGovernanceViolationRow_subjectTitle(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "AIGovernanceViolationRow",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _AIGovernanceViolationRow_ruleName(ctx context.Context, field graphql.CollectedField, obj *model.AIGovernanceViolationRow) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_AIGovernanceViolationRow_ruleName(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.RuleName, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*string)
+	fc.Result = res
+	return ec.marshalOString2ᚖstring(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_AIGovernanceViolationRow_ruleName(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	fc = &graphql.FieldContext{
 		Object:     "AIGovernanceViolationRow",
 		Field:      field,
@@ -25569,6 +25990,47 @@ func (ec *executionContext) _AliasSuggestion_suggestedCanonicalId(ctx context.Co
 }
 
 func (ec *executionContext) fieldContext_AliasSuggestion_suggestedCanonicalId(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "AliasSuggestion",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _AliasSuggestion_suggestedCanonicalName(ctx context.Context, field graphql.CollectedField, obj *model.AliasSuggestion) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_AliasSuggestion_suggestedCanonicalName(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.SuggestedCanonicalName, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*string)
+	fc.Result = res
+	return ec.marshalOString2ᚖstring(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_AliasSuggestion_suggestedCanonicalName(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	fc = &graphql.FieldContext{
 		Object:     "AliasSuggestion",
 		Field:      field,
@@ -38439,6 +38901,8 @@ func (ec *executionContext) fieldContext_IdentityMappingHealth_suggestedAliases(
 				return ec.fieldContext_AliasSuggestion_unmappedIdentity(ctx, field)
 			case "suggestedCanonicalId":
 				return ec.fieldContext_AliasSuggestion_suggestedCanonicalId(ctx, field)
+			case "suggestedCanonicalName":
+				return ec.fieldContext_AliasSuggestion_suggestedCanonicalName(ctx, field)
 			case "confidence":
 				return ec.fieldContext_AliasSuggestion_confidence(ctx, field)
 			}
@@ -38559,6 +39023,8 @@ func (ec *executionContext) fieldContext_ImproveOpportunitiesResult_opportunitie
 				return ec.fieldContext_ImproveOpportunity_unit(ctx, field)
 			case "thresholdDirection":
 				return ec.fieldContext_ImproveOpportunity_thresholdDirection(ctx, field)
+			case "entityDisplayName":
+				return ec.fieldContext_ImproveOpportunity_entityDisplayName(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type ImproveOpportunity", field.Name)
 		},
@@ -39265,6 +39731,47 @@ func (ec *executionContext) fieldContext_ImproveOpportunity_thresholdDirection(_
 		IsResolver: false,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 			return nil, errors.New("field of type ThresholdDirection does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _ImproveOpportunity_entityDisplayName(ctx context.Context, field graphql.CollectedField, obj *model.ImproveOpportunity) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_ImproveOpportunity_entityDisplayName(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.EntityDisplayName, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*string)
+	fc.Result = res
+	return ec.marshalOString2ᚖstring(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_ImproveOpportunity_entityDisplayName(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ImproveOpportunity",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
 		},
 	}
 	return fc, nil
@@ -57108,6 +57615,47 @@ func (ec *executionContext) fieldContext_TestOpsRiskQuadrantPoint_id(_ context.C
 	return fc, nil
 }
 
+func (ec *executionContext) _TestOpsRiskQuadrantPoint_name(ctx context.Context, field graphql.CollectedField, obj *model.TestOpsRiskQuadrantPoint) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_TestOpsRiskQuadrantPoint_name(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.Name, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*string)
+	fc.Result = res
+	return ec.marshalOString2ᚖstring(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_TestOpsRiskQuadrantPoint_name(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "TestOpsRiskQuadrantPoint",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _TestOpsRiskQuadrantPoint_pipelineSuccessRate(ctx context.Context, field graphql.CollectedField, obj *model.TestOpsRiskQuadrantPoint) (ret graphql.Marshaler) {
 	fc, err := ec.fieldContext_TestOpsRiskQuadrantPoint_pipelineSuccessRate(ctx, field)
 	if err != nil {
@@ -57498,6 +58046,8 @@ func (ec *executionContext) fieldContext_TestOpsRiskResult_quadrantData(_ contex
 			switch field.Name {
 			case "id":
 				return ec.fieldContext_TestOpsRiskQuadrantPoint_id(ctx, field)
+			case "name":
+				return ec.fieldContext_TestOpsRiskQuadrantPoint_name(ctx, field)
 			case "pipelineSuccessRate":
 				return ec.fieldContext_TestOpsRiskQuadrantPoint_pipelineSuccessRate(ctx, field)
 			case "testPassRate":
@@ -66511,6 +67061,12 @@ func (ec *executionContext) _AIAttributionEvidenceRow(ctx context.Context, sel a
 			}
 		case "teamId":
 			out.Values[i] = ec._AIAttributionEvidenceRow_teamId(ctx, field, obj)
+		case "repoName":
+			out.Values[i] = ec._AIAttributionEvidenceRow_repoName(ctx, field, obj)
+		case "teamName":
+			out.Values[i] = ec._AIAttributionEvidenceRow_teamName(ctx, field, obj)
+		case "subjectTitle":
+			out.Values[i] = ec._AIAttributionEvidenceRow_subjectTitle(ctx, field, obj)
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}
@@ -67081,6 +67637,14 @@ func (ec *executionContext) _AIGovernanceViolationRow(ctx context.Context, sel a
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
+		case "repoName":
+			out.Values[i] = ec._AIGovernanceViolationRow_repoName(ctx, field, obj)
+		case "teamName":
+			out.Values[i] = ec._AIGovernanceViolationRow_teamName(ctx, field, obj)
+		case "subjectTitle":
+			out.Values[i] = ec._AIGovernanceViolationRow_subjectTitle(ctx, field, obj)
+		case "ruleName":
+			out.Values[i] = ec._AIGovernanceViolationRow_ruleName(ctx, field, obj)
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}
@@ -68437,6 +69001,8 @@ func (ec *executionContext) _AliasSuggestion(ctx context.Context, sel ast.Select
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
+		case "suggestedCanonicalName":
+			out.Values[i] = ec._AliasSuggestion_suggestedCanonicalName(ctx, field, obj)
 		case "confidence":
 			out.Values[i] = ec._AliasSuggestion_confidence(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
@@ -71728,6 +72294,8 @@ func (ec *executionContext) _ImproveOpportunity(ctx context.Context, sel ast.Sel
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
+		case "entityDisplayName":
+			out.Values[i] = ec._ImproveOpportunity_entityDisplayName(ctx, field, obj)
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}
@@ -76208,6 +76776,8 @@ func (ec *executionContext) _TestOpsRiskQuadrantPoint(ctx context.Context, sel a
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
+		case "name":
+			out.Values[i] = ec._TestOpsRiskQuadrantPoint_name(ctx, field, obj)
 		case "pipelineSuccessRate":
 			out.Values[i] = ec._TestOpsRiskQuadrantPoint_pipelineSuccessRate(ctx, field, obj)
 		case "testPassRate":

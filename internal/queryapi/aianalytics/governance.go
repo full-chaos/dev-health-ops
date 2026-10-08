@@ -144,11 +144,13 @@ func loadViolations(ctx context.Context, client QueryClient, orgID string, dr mo
 			RuleID: rule, Severity: severity, SubjectType: subjectType, SubjectID: subjectID,
 			TeamID: optionalText(team), RepoID: optionalText(repo),
 			ObservedAt: observed.UTC(), Evidence: evidence,
+			RuleName: policyRuleName(rule),
 		})
 	}
 	if err := rs.Err(); err != nil {
 		return nil, fmt.Errorf("aianalytics: violations rows: %w", err)
 	}
+	nameViolations(ctx, client, orgID, out)
 	return out, nil
 }
 
@@ -183,4 +185,32 @@ func GovernanceSummary(ctx context.Context, client QueryClient, orgID string, dr
 		Coverage: coverage, RecentViolations: violations,
 		DataAvailable: len(coverage) > 0 || len(violations) > 0,
 	}, nil
+}
+
+// nameViolations fills the repository, team and pull request names of a page
+// of violation rows. The team name comes from the row's own team id; a name
+// that cannot be read stays nil and the row is still served.
+func nameViolations(ctx context.Context, client QueryClient, orgID string, rows []model.AIGovernanceViolationRow) {
+	if len(rows) == 0 {
+		return
+	}
+	distinct := distinctRepoIDs(len(rows), func(i int) *string { return rows[i].RepoID })
+	catalogue := loadRepoCatalogue(ctx, client, orgID, distinct, "aiGovernanceSummary")
+	if len(distinct) == 0 {
+		// The team names need the teams read only.
+		catalogue = loadTeamNamesOnly(ctx, client, orgID, "aiGovernanceSummary")
+	}
+	var keys []prKey
+	for _, r := range rows {
+		if k, ok := prSubjectKey(r.SubjectType, r.SubjectID, r.RepoID); ok {
+			keys = append(keys, k)
+		}
+	}
+	titles := loadPRTitles(ctx, client, orgID, keys, "aiGovernanceSummary")
+	for i := range rows {
+		r := &rows[i]
+		r.RepoName = repoNameOf(catalogue, r.RepoID)
+		r.TeamName = catalogue.teamName(r.TeamID)
+		r.SubjectTitle = subjectTitle(titles, r.SubjectType, r.SubjectID, r.RepoID)
+	}
 }

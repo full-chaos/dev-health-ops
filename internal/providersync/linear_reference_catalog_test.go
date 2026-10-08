@@ -703,7 +703,7 @@ func TestLinearReferenceCatalogTeamKeyOwnershipRowMatchesItsOneReader(t *testing
 	if teamKeyRow == nil {
 		t.Fatalf("no ownership row matches the reader's reconstructed identity %q -- CHAOS-4458(b)'s linear_team_key arm would silently find nothing; rows=%+v", wantProjectID, batch.Rows.Ownership)
 	}
-	if teamKeyRow.TeamID != "QA" || teamKeyRow.Source != "native" {
+	if teamKeyRow.TeamID != "linear:QA" || teamKeyRow.Source != "native" {
 		t.Fatalf("team-key-shaped ownership row shape changed: %+v", teamKeyRow)
 	}
 }

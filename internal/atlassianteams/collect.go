@@ -32,6 +32,7 @@ import (
 	"atlassian/atlassian/graph"
 
 	"github.com/full-chaos/dev-health-ops/internal/identityalias"
+	"github.com/full-chaos/dev-health-ops/internal/teamid"
 )
 
 // Provider is the provider identity every row is written under: the same as
@@ -247,8 +248,8 @@ func (l teamLinkLedger) everyLinkWritten() bool { return l.inScope == l.written 
 // ErrConfiguration marks an input the sync cannot run without.
 var ErrConfiguration = errors.New("atlassianteams: configuration")
 
-// teamID is the team id of a row: the uuid of the team's ARI
-// (ari:cloud:identity::team/<uuid>), lower-cased.
+// teamID is the team id of a row: "jira:" and the uuid of the team's ARI
+// (ari:cloud:identity::team/<uuid>), lower-cased (see teamid.Of).
 func teamID(ari string) (string, error) {
 	ari = strings.TrimSpace(ari)
 	i := strings.LastIndex(ari, teamARIPrefix)
@@ -259,7 +260,7 @@ func teamID(ari string) (string, error) {
 	if id == "" {
 		return "", fmt.Errorf("team id %q has no uuid", ari)
 	}
-	return id, nil
+	return teamid.Of(Provider, id), nil
 }
 
 // accountID is the Atlassian account id of a Teamwork Graph user node id

@@ -107,3 +107,41 @@ func normalizeMigrationDSN(value secrets.Value) secrets.Value {
 	}
 	return value
 }
+
+// ResolveAdminDatabase is the DSN of the `dho admin users|orgs` verbs, the first
+// one configured of: MIGRATION_DATABASE_URI, API_DATABASE_URI (the role the admin
+// HTTP routes write users and organizations with, set in the go-api pod), then
+// POSTGRES_URI. A worker pod's POSTGRES_URI is the domain role, which cannot
+// write users, so API_DATABASE_URI must win over it.
+func ResolveAdminDatabase(lookup secrets.LookupEnv, stderr io.Writer) (secrets.Value, string, bool) {
+	value, configured, err := ResolveDSN(lookup, "MIGRATION_DATABASE_URI", MigrationDatabaseSpec)
+	if err != nil {
+		WriteConfigError(stderr, err)
+		return secrets.Value{}, "", false
+	}
+	if configured {
+		return normalizeMigrationDSN(value), "MIGRATION_DATABASE_URI", true
+	}
+	api, _, err := ResolveDSN(lookup, "API_DATABASE_URI", APIDatabaseSpec)
+	if err != nil {
+		WriteConfigError(stderr, err)
+		return secrets.Value{}, "", false
+	}
+	if strings.TrimSpace(api.Reveal()) != "" {
+		return normalizeMigrationDSN(api), "API_DATABASE_URI", true
+	}
+	postgres, _, err := secrets.ResolveDSNSetting("POSTGRES_URI", lookup)
+	if err != nil {
+		WriteConfigError(stderr, err)
+		return secrets.Value{}, "", false
+	}
+	if strings.TrimSpace(postgres.Reveal()) == "" {
+		fmt.Fprintln(stderr, NoAdminDatabaseMessage)
+		return secrets.Value{}, "", false
+	}
+	return normalizeMigrationDSN(postgres), "POSTGRES_URI", true
+}
+
+// NoAdminDatabaseMessage is ResolveAdminDatabase's refusal when no DSN is set.
+const NoAdminDatabaseMessage = "neither MIGRATION_DATABASE_URI, API_DATABASE_URI nor POSTGRES_URI is set; " +
+	"run the admin users and orgs verbs in the go-api pod, which has API_DATABASE_URI"

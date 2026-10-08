@@ -164,6 +164,7 @@ func TestSyncTeamsLogsNeitherClickHouseLoginNorPassword(t *testing.T) {
 		"catalog": func() (map[string]string, deps, []string) {
 			env := map[string]string{"CLICKHOUSE_URI": plantedEnv()["CLICKHOUSE_URI"]}
 			d := stubDeps(&recorded{}, failingClient{}, nil)
+			d.openStore = func(context.Context, string) (driver.Conn, error) { return nothingToCarryConn{}, nil }
 			d.doer = fakehttp.Client(loggingDoer{})
 			return env, d, []string{"--provider", "github", "--org", "org-1", "--owner", "acme", "--auth", "ghp-test"}
 		},

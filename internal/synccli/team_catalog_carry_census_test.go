@@ -83,3 +83,34 @@ func TestTheAtlassianTeamsVerbCarriesBeforeItWrites(t *testing.T) {
 		t.Fatalf("exit %d, reads %d, batches %d, stdout %q, stderr %s", code, conn.queries, conn.batches, stdout, stderr)
 	}
 }
+
+// nothingToCarryConn answers the carry's count read with zero, so a verb
+// test reaches its collector; every other call is refused.
+type nothingToCarryConn struct{ driver.Conn }
+
+func (nothingToCarryConn) Query(context.Context, string, ...any) (driver.Rows, error) {
+	return &zeroCountRows{}, nil
+}
+
+func (nothingToCarryConn) Close() error { return nil }
+
+type zeroCountRows struct {
+	driver.Rows
+	read bool
+}
+
+func (rows *zeroCountRows) Next() bool {
+	next := !rows.read
+	rows.read = true
+	return next
+}
+
+func (rows *zeroCountRows) Scan(dest ...any) error {
+	for _, target := range dest {
+		*target.(*uint64) = 0
+	}
+	return nil
+}
+
+func (rows *zeroCountRows) Err() error   { return nil }
+func (rows *zeroCountRows) Close() error { return nil }

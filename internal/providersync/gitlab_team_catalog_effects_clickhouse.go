@@ -335,7 +335,7 @@ func (sink GitLabTeamCatalogClickHouseEffects) openProviderAccessOwnership(
 	ctx context.Context, orgID string, teamIDs []string,
 ) ([]gitlabTeamCatalogOwnershipRow, error) {
 	result, err := sink.Conn.Query(ctx, `
-SELECT team_id, project_id, project_key, is_primary, specificity, priority, valid_from
+SELECT team_id, project_id, project_key, toString(source), is_primary, specificity, priority, valid_from
 FROM team_project_ownership FINAL
 WHERE org_id = ? AND provider = ? AND source = ? AND team_id IN ?
   AND (valid_to IS NULL OR valid_to > now64(3, 'UTC'))`,
@@ -346,8 +346,8 @@ WHERE org_id = ? AND provider = ? AND source = ? AND team_id IN ?
 	defer result.Close()
 	var open []gitlabTeamCatalogOwnershipRow
 	for result.Next() {
-		row := gitlabTeamCatalogOwnershipRow{OrgID: orgID, Provider: gitlabTeamCatalogProvider, Source: gitlabTeamCatalogSource}
-		if err := result.Scan(&row.TeamID, &row.ProjectID, &row.ProjectKey, &row.IsPrimary,
+		row := gitlabTeamCatalogOwnershipRow{OrgID: orgID, Provider: gitlabTeamCatalogProvider}
+		if err := result.Scan(&row.TeamID, &row.ProjectID, &row.ProjectKey, &row.Source, &row.IsPrimary,
 			&row.Specificity, &row.Priority, &row.ValidFrom); err != nil {
 			return nil, err
 		}

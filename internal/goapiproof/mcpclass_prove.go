@@ -71,6 +71,9 @@ type MCPClassProvenance struct {
 	Stochastic []string `json:"shapes_stochastic,omitempty"`
 	// Excluded names every shape left out and why, "operation[:variant]=reason".
 	Excluded []string `json:"shapes_excluded,omitempty"`
+	// BornInGo names the counted shapes whose operation has no Python counterpart and no document receipt (ledger born_in_go): each was measured
+	// MCP pipeline against the Go document route, the only comparison that exists for it.
+	BornInGo []string `json:"shapes_born_in_go,omitempty"`
 	// Failed names every shape that blocked the match.
 	Failed []string `json:"shapes_failed,omitempty"`
 }
@@ -82,6 +85,7 @@ type MCPClassVerdict struct {
 	Executed  int
 	Matched   int
 	Excluded  []string
+	BornInGo  []string
 	Failed    []string
 	// Stochastic names the shapes proven under the stochastic leaf class; Citations are the distinct class citations
 	// the root receipt carries as its baseline_defect.
@@ -251,7 +255,13 @@ func (r *Runner) MCPClassReceipts(outcomes []Outcome, rootSources map[string][]s
 		// An unbacked document operation's shape is excluded only when it MATCHED or is proven under the stochastic leaf class (both would count): a
 		// divergence between the MCP pipeline and the document route blocks the root
 		// whether or not the document operation itself is receipt-backed.
-		if state == "executed" && r.Config.DocRouteReference && !docBacked[outcome.Operation] && (sealedMatches(sealed) || sealedStochasticCitation(sealed) != "") {
+		bornGo := r.Config.DocRouteReference && !docBacked[outcome.Operation] && r.GoServed.BornInGo(outcome.Operation)
+		// With no document receipt behind it, a born-in-Go shape counts only if the match compared something: two empty answers agree on
+		// nothing, and a measurement that did not happen must not become a receipt.
+		if bornGo && sealed.comparedLeaves == 0 {
+			bornGo = false
+		}
+		if state == "executed" && r.Config.DocRouteReference && !docBacked[outcome.Operation] && !bornGo && (sealedMatches(sealed) || sealedStochasticCitation(sealed) != "") {
 			state, reason = "excluded", "doc_operation_not_receipt_backed"
 		}
 		// A shape refused for measuring nothing (both answers empty: the org holds no data
@@ -264,6 +274,9 @@ func (r *Runner) MCPClassReceipts(outcomes []Outcome, rootSources map[string][]s
 		case "executed":
 			b.verdict.Executed++
 			b.sealed = append(b.sealed, sealed)
+			if bornGo {
+				b.verdict.BornInGo = append(b.verdict.BornInGo, label)
+			}
 			if sealedMatches(sealed) {
 				b.verdict.Matched++
 			} else if citation := sealedStochasticCitation(sealed); citation != "" {
@@ -337,7 +350,7 @@ func (r *Runner) MCPClassReceipts(outcomes []Outcome, rootSources map[string][]s
 			MeasurementRoute: RouteProof,
 			EdgeBuildBinding: binding,
 			EdgeMode:         r.edgeMode(),
-			MCPClass:         &MCPClassProvenance{Root: v.Root, Reference: reference, Executed: v.Executed, Matched: v.Matched, Stochastic: v.Stochastic, Excluded: v.Excluded, Failed: v.Failed},
+			MCPClass:         &MCPClassProvenance{Root: v.Root, Reference: reference, Executed: v.Executed, Matched: v.Matched, Stochastic: v.Stochastic, Excluded: v.Excluded, BornInGo: v.BornInGo, Failed: v.Failed},
 		})
 		if err != nil {
 			return nil, nil, fmt.Errorf("goapiproof: encode the class receipt's provenance: %w", err)

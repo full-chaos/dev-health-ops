@@ -75,10 +75,27 @@ func Of(provider, id string) string {
 	return prefix + strings.TrimPrefix(id, prefix)
 }
 
-// Native returns the provider's own key of a team id: the id without the
-// provider's prefix. An id without the prefix is returned unchanged.
-func Native(provider, id string) string {
-	return strings.TrimPrefix(id, Prefix(provider))
+// NativeKey reports whether a team id belongs to the provider and returns
+// the provider's own key of it. An id with the provider's prefix gives the
+// trimmed key after the prefix. An id with no known prefix is a bare id of
+// the provider, written before ids carried a prefix: its key is the id. An
+// id with another provider's prefix is not the provider's, so ok is false: a
+// caller must never take another provider's key as its own native key. An
+// empty id or key, or a provider without a prefix, also gives false.
+func NativeKey(provider, id string) (key string, ok bool) {
+	prefix := Prefix(provider)
+	id = canonical(strings.TrimSpace(id))
+	if prefix == "" || id == "" {
+		return "", false
+	}
+	if rest, own := strings.CutPrefix(id, prefix); own {
+		rest = strings.TrimSpace(rest)
+		return rest, rest != ""
+	}
+	if HasKey(id) || isBareKey(id) {
+		return "", false
+	}
+	return id, true
 }
 
 // Check refuses a team id that a provider writer must not write: an id
@@ -99,7 +116,7 @@ func Check(provider, id string) error {
 // prefix, or that is only another known provider's prefix. An id that
 // carries another known provider's prefix and a key is accepted.
 func CheckPushed(system, id string) error {
-	if isBareKey(Native(system, strings.TrimSpace(id))) {
+	if isBareKey(strings.TrimPrefix(strings.TrimSpace(id), Prefix(system))) {
 		return fmt.Errorf("%w: %s team id %q has a provider prefix and nothing after it", ErrBareTeamID, strings.TrimSpace(system), id)
 	}
 	if HasKey(id) {

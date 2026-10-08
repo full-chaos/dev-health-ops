@@ -341,14 +341,16 @@ func externalRecordValues(
 		// the pushed id without the system's prefix. The attribution cascade
 		// matches a work item's native team key against it, and the Jira
 		// project-as-team retire treats a team whose id equals its native key
-		// as a retired project.
+		// as a retired project. An id that holds another provider's key has
+		// no native key of this system: NULL, also when a nativeTeamKey is
+		// pushed, so the row never answers for this system's key.
 		nativeTeamKey := externalNullableString(payload, "nativeTeamKey")
-		if nativeTeamKey == nil {
-			// An id that holds another provider's key has no native key of
-			// this system: NULL, never the id itself.
-			if native := teamid.Native(system, teamID); native != teamID {
-				nativeTeamKey = native
-			}
+		native, own := teamid.NativeKey(system, teamID)
+		switch {
+		case !own:
+			nativeTeamKey = nil
+		case nativeTeamKey == nil:
+			nativeTeamKey = native
 		}
 		var parentTeamID any
 		if parent := strings.TrimSpace(stringField(payload, "parentTeamId")); parent != "" {

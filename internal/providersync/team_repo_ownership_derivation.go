@@ -144,16 +144,19 @@ type TeamRepoOwnershipKnownTeam struct {
 
 // knownLinearTeamIDsByKey maps the native key of each known Linear team to
 // its team id. A row with no native_team_key is keyed by its id without the
-// prefix. When two teams hold one key, the provider-prefixed id wins.
+// prefix. A row whose id holds another provider's key is not a Linear team
+// and takes no key. When two teams hold one key, the provider-prefixed id
+// wins.
 func knownLinearTeamIDsByKey(knownTeams []TeamRepoOwnershipKnownTeam) map[string]string {
 	byKey := make(map[string]string, len(knownTeams))
 	for _, team := range knownTeams {
-		if team.Provider != "linear" || team.ID == "" {
+		native, own := teamid.NativeKey("linear", team.ID)
+		if team.Provider != "linear" || !own {
 			continue
 		}
 		key := strings.TrimSpace(team.NativeTeamKey)
 		if key == "" {
-			key = teamid.Native("linear", team.ID)
+			key = native
 		}
 		if held, ok := byKey[key]; ok && teamid.Check("linear", held) == nil {
 			continue

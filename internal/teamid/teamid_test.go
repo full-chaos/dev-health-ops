@@ -86,19 +86,60 @@ func TestCheckRefusesABareOrEmptyProviderTeamID(t *testing.T) {
 	}
 }
 
-func TestNativeStripsOnlyTheProvidersOwnPrefix(t *testing.T) {
-	cases := []struct{ provider, id, want string }{
-		{"linear", "linear:ENG", "ENG"},
-		{"linear", "ENG", "ENG"},
-		{"jira", "jira:abc", "abc"},
-		{"github", "gh:platform", "platform"},
-		{"linear", "gh:platform", "gh:platform"},
-		{"", "linear:ENG", "linear:ENG"},
-	}
-	for _, c := range cases {
-		if got := Native(c.provider, c.id); got != c.want {
-			t.Errorf("Native(%q, %q) = %q, want %q", c.provider, c.id, got, c.want)
+// providerMatrix is every native provider with the prefix its team ids carry.
+var providerMatrix = []struct{ provider, prefix string }{
+	{"jira", "jira:"}, {"gitlab", "gl:"}, {"github", "gh:"}, {"linear", "linear:"},
+}
+
+func TestNativeKeyGivesTheKeyOfTheProvidersOwnID(t *testing.T) {
+	for _, p := range providerMatrix {
+		for _, id := range []string{p.prefix + "ENG", " " + p.prefix + " ENG "} {
+			if key, ok := NativeKey(p.provider, id); !ok || key != "ENG" {
+				t.Errorf("NativeKey(%q, %q) = (%q, %v), want (ENG, true)", p.provider, id, key, ok)
+			}
 		}
+		if key, ok := NativeKey(p.provider, "ENG"); !ok || key != "ENG" {
+			t.Errorf("NativeKey(%q, bare ENG) = (%q, %v), want (ENG, true)", p.provider, key, ok)
+		}
+	}
+	if key, ok := NativeKey("atlassian", Of("atlassian", "atlassian:u-1")); !ok || key != "u-1" {
+		t.Errorf("NativeKey(atlassian, pushed atlassian id) = (%q, %v), want (u-1, true)", key, ok)
+	}
+	if key, ok := NativeKey("jira", "atlassian:u-1"); !ok || key != "u-1" {
+		t.Errorf("NativeKey(jira, atlassian:u-1) = (%q, %v), want (u-1, true)", key, ok)
+	}
+	if key, ok := NativeKey("custom", "custom:x"); !ok || key != "x" {
+		t.Errorf("NativeKey(custom, custom:x) = (%q, %v), want (x, true)", key, ok)
+	}
+}
+
+func TestNativeKeyRefusesAnotherProvidersID(t *testing.T) {
+	for _, p := range providerMatrix {
+		for _, other := range providerMatrix {
+			if other.provider == p.provider {
+				continue
+			}
+			if key, ok := NativeKey(p.provider, other.prefix+"ENG"); ok || key != "" {
+				t.Errorf("NativeKey(%q, %q) = (%q, %v), want refused", p.provider, other.prefix+"ENG", key, ok)
+			}
+			if _, ok := NativeKey(p.provider, other.prefix); ok {
+				t.Errorf("NativeKey(%q, %q) accepted a bare foreign prefix", p.provider, other.prefix)
+			}
+		}
+		if _, ok := NativeKey(p.provider, "custom:x"); ok {
+			t.Errorf("NativeKey(%q, custom:x) accepted a pushed custom id", p.provider)
+		}
+		for _, id := range []string{"", "  ", p.prefix, p.prefix + "  "} {
+			if _, ok := NativeKey(p.provider, id); ok {
+				t.Errorf("NativeKey(%q, %q) accepted an id with no key", p.provider, id)
+			}
+		}
+	}
+	if _, ok := NativeKey("", "linear:ENG"); ok {
+		t.Error("NativeKey with no provider accepted an id")
+	}
+	if _, ok := NativeKey("", "ENG"); ok {
+		t.Error("NativeKey with no provider accepted a bare id")
 	}
 }
 
@@ -117,11 +158,5 @@ func TestCheckPushedAcceptsAnyKnownKeyAndRefusesAnEmptyOne(t *testing.T) {
 		if err := CheckPushed(c.system, c.id); !errors.Is(err, ErrBareTeamID) {
 			t.Errorf("CheckPushed(%q, %q) = %v, want ErrBareTeamID", c.system, c.id, err)
 		}
-	}
-}
-
-func TestNativeOfAPushedAtlassianIDIsTheBareUUID(t *testing.T) {
-	if got := Native("atlassian", Of("atlassian", "atlassian:u-1")); got != "u-1" {
-		t.Fatalf("got %q, want u-1", got)
 	}
 }

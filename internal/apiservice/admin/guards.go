@@ -70,14 +70,9 @@ func orgIDForNonSuperuser(w http.ResponseWriter, user *policy.User) (string, boo
 // a superuser asks for is_superuser true, or writes to a user (profile,
 // password, deletion, membership) who is a superuser. Without it an org
 // admin could make an account a platform superuser, or take over one whose
-// superuser holds a membership in the admin's org. Every admin write route
-// that targets a user calls it before its first write. targetIsSuperuser is
-// nil when the request has no existing target; a failed read of it is a 500.
+// superuser holds a membership in the admin's org. targetIsSuperuser is nil
+// when the request has no existing target; a failed read of it is a 500.
 func (h *handlers) refuseSuperuserWrite(ctx context.Context, w http.ResponseWriter, user *policy.User, requested *bool, targetIsSuperuser func() (bool, error), route string) bool {
-	if user != nil && user.IsSuperuser {
-		return false
-	}
-	grant := requested != nil && *requested
 	target := false
 	if targetIsSuperuser != nil {
 		var err error
@@ -87,6 +82,10 @@ func (h *handlers) refuseSuperuserWrite(ctx context.Context, w http.ResponseWrit
 			return true
 		}
 	}
+	if user != nil && user.IsSuperuser {
+		return false
+	}
+	grant := requested != nil && *requested
 	if !grant && !target {
 		return false
 	}
@@ -100,19 +99,69 @@ func (h *handlers) refuseSuperuserWrite(ctx context.Context, w http.ResponseWrit
 	return true
 }
 
-// storedSuperuser reads whether user id is a superuser; no such user is not.
-func (h *handlers) storedSuperuser(ctx context.Context, id uuid.UUID) func() (bool, error) {
-	return func() (bool, error) {
-		target, err := h.store.userByID(ctx, id)
-		if err != nil || target == nil {
-			return false, err
-		}
-		return target.IsSuperuser, nil
-	}
+// superuserTx is the one transaction of an admin write that targets a user.
+// The superuser check and the write run in it, so a grant cannot commit
+// between them.
+type superuserTx struct {
+	h         *handlers
+	ctx       context.Context
+	w         http.ResponseWriter
+	user      *policy.User
+	requested *bool
+	route     string
+	tx        pgx.Tx
+	store     pgStore
 }
 
-func knownSuperuser(isSuperuser bool) func() (bool, error) {
-	return func() (bool, error) { return isSuperuser, nil }
+// refuse locks each target's users row (FOR UPDATE, in this transaction) and
+// decides on the locked value with refuseSuperuserWrite. A concurrent grant
+// on a target waits for this transaction; one that committed first is seen.
+func (g *superuserTx) refuse(targetIDs ...uuid.UUID) bool {
+	var target func() (bool, error)
+	if len(targetIDs) > 0 {
+		target = func() (bool, error) {
+			found := false
+			for _, id := range targetIDs {
+				var isSuperuser bool
+				err := g.tx.QueryRow(g.ctx, `SELECT is_superuser FROM users WHERE id = $1 FOR UPDATE`, id).Scan(&isSuperuser)
+				if errors.Is(err, pgx.ErrNoRows) {
+					continue
+				}
+				if err != nil {
+					return false, err
+				}
+				found = found || isSuperuser
+			}
+			return found, nil
+		}
+	}
+	return g.h.refuseSuperuserWrite(g.ctx, g.w, g.user, g.requested, target, g.route)
+}
+
+// superuserGuardedWrite is the seam for every admin write that targets a
+// user. write runs in one transaction and calls g.refuse before its first
+// write there. It returns the success response, or nil after it wrote an
+// error response; only a non-nil return commits, and the response is
+// written after the commit.
+func (h *handlers) superuserGuardedWrite(ctx context.Context, w http.ResponseWriter, user *policy.User, requested *bool, route string, write func(g *superuserTx) func()) {
+	tx, err := h.store.Pool.Begin(ctx)
+	if err != nil {
+		h.logger.ErrorContext(ctx, "admin: superuser-guarded write begin tx failed", "route", route, "error", err)
+		policy.WriteInternal(w)
+		return
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	respond := write(&superuserTx{h: h, ctx: ctx, w: w, user: user, requested: requested, route: route,
+		tx: tx, store: pgStore{Pool: tx, Now: h.store.Now}})
+	if respond == nil {
+		return
+	}
+	if err := tx.Commit(ctx); err != nil {
+		h.logger.ErrorContext(ctx, "admin: superuser-guarded write commit failed", "route", route, "error", err)
+		policy.WriteInternal(w)
+		return
+	}
+	respond()
 }
 
 // parseOptionalOrgID parses _get_org_id_for_non_superuser's result, which

@@ -446,20 +446,22 @@ func (h *handlers) addMember(w http.ResponseWriter, r *http.Request) {
 		}
 		invitedByID = &id
 	}
-	if h.refuseSuperuserWrite(ctx, w, user, nil, h.storedSuperuser(ctx, targetUserID), "add_member") {
-		return
-	}
-	created, err := h.store.insertMembership(ctx, orgID, targetUserID, role, invitedByID)
-	if err == errMembershipExists {
-		policy.WriteDetail(w, http.StatusBadRequest, "User is already a member of this organization", nil)
-		return
-	}
-	if err != nil {
-		h.logger.ErrorContext(ctx, "admin: add member failed", "error", err)
-		policy.WriteInternal(w)
-		return
-	}
-	policy.WriteModel(w, http.StatusCreated, membershipResponseObject(created), nil)
+	h.superuserGuardedWrite(ctx, w, user, nil, "add_member", func(g *superuserTx) func() {
+		if g.refuse(targetUserID) {
+			return nil
+		}
+		created, err := g.store.insertMembership(ctx, orgID, targetUserID, role, invitedByID)
+		if err == errMembershipExists {
+			policy.WriteDetail(w, http.StatusBadRequest, "User is already a member of this organization", nil)
+			return nil
+		}
+		if err != nil {
+			h.logger.ErrorContext(ctx, "admin: add member failed", "error", err)
+			policy.WriteInternal(w)
+			return nil
+		}
+		return func() { policy.WriteModel(w, http.StatusCreated, membershipResponseObject(created), nil) }
+	})
 }
 
 // updateMemberRole is orgs.py's update_member_role.
@@ -490,24 +492,26 @@ func (h *handlers) updateMemberRole(w http.ResponseWriter, r *http.Request) {
 		policy.WriteJSON(w, http.StatusUnprocessableEntity, pybody.Detail(errs), nil)
 		return
 	}
-	if h.refuseSuperuserWrite(ctx, w, user, nil, h.storedSuperuser(ctx, targetUserID), "update_member_role") {
-		return
-	}
-	updated, err := h.store.updateMembershipRole(ctx, orgID, targetUserID, role)
-	if err == errInvalidRole {
-		policy.WriteDetail(w, http.StatusBadRequest, "Invalid role: "+role, nil)
-		return
-	}
-	if err != nil {
-		h.logger.ErrorContext(ctx, "admin: update member role failed", "error", err)
-		policy.WriteInternal(w)
-		return
-	}
-	if updated == nil {
-		policy.WriteDetail(w, http.StatusNotFound, "Membership not found", nil)
-		return
-	}
-	policy.WriteModel(w, http.StatusOK, membershipResponseObject(updated), nil)
+	h.superuserGuardedWrite(ctx, w, user, nil, "update_member_role", func(g *superuserTx) func() {
+		if g.refuse(targetUserID) {
+			return nil
+		}
+		updated, err := g.store.updateMembershipRole(ctx, orgID, targetUserID, role)
+		if err == errInvalidRole {
+			policy.WriteDetail(w, http.StatusBadRequest, "Invalid role: "+role, nil)
+			return nil
+		}
+		if err != nil {
+			h.logger.ErrorContext(ctx, "admin: update member role failed", "error", err)
+			policy.WriteInternal(w)
+			return nil
+		}
+		if updated == nil {
+			policy.WriteDetail(w, http.StatusNotFound, "Membership not found", nil)
+			return nil
+		}
+		return func() { policy.WriteModel(w, http.StatusOK, membershipResponseObject(updated), nil) }
+	})
 }
 
 // removeMember is orgs.py's remove_member.
@@ -527,26 +531,30 @@ func (h *handlers) removeMember(w http.ResponseWriter, r *http.Request) {
 		policy.WriteInternal(w)
 		return
 	}
-	if h.refuseSuperuserWrite(ctx, w, user, nil, h.storedSuperuser(ctx, targetUserID), "remove_member") {
-		return
-	}
-	deleted, err := h.store.removeMembership(ctx, orgID, targetUserID)
-	if err == errLastOwner {
-		policy.WriteDetail(w, http.StatusBadRequest, "Cannot remove the last owner of an organization", nil)
-		return
-	}
-	if err != nil {
-		h.logger.ErrorContext(ctx, "admin: remove member failed", "error", err)
-		policy.WriteInternal(w)
-		return
-	}
-	if !deleted {
-		policy.WriteDetail(w, http.StatusNotFound, "Membership not found", nil)
-		return
-	}
-	out := pyjson.NewObject()
-	out.Set("deleted", true)
-	policy.WriteModel(w, http.StatusOK, out, nil)
+	h.superuserGuardedWrite(ctx, w, user, nil, "remove_member", func(g *superuserTx) func() {
+		if g.refuse(targetUserID) {
+			return nil
+		}
+		deleted, err := g.store.removeMembership(ctx, orgID, targetUserID)
+		if err == errLastOwner {
+			policy.WriteDetail(w, http.StatusBadRequest, "Cannot remove the last owner of an organization", nil)
+			return nil
+		}
+		if err != nil {
+			h.logger.ErrorContext(ctx, "admin: remove member failed", "error", err)
+			policy.WriteInternal(w)
+			return nil
+		}
+		if !deleted {
+			policy.WriteDetail(w, http.StatusNotFound, "Membership not found", nil)
+			return nil
+		}
+		return func() {
+			out := pyjson.NewObject()
+			out.Set("deleted", true)
+			policy.WriteModel(w, http.StatusOK, out, nil)
+		}
+	})
 }
 
 // transferOwnership is orgs.py's transfer_ownership, INTENTIONALLY
@@ -586,50 +594,41 @@ func (h *handlers) transferOwnership(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if h.refuseSuperuserWrite(ctx, w, user, nil, h.storedSuperuser(ctx, toUserID), "transfer_ownership") {
-		return
-	}
-	tx, txErr := h.store.Pool.Begin(ctx)
-	if txErr != nil {
-		h.logger.ErrorContext(ctx, "admin: transfer ownership begin tx failed", "error", txErr)
-		policy.WriteInternal(w)
-		return
-	}
-	defer func() { _ = tx.Rollback(ctx) }()
-
-	fromUserID, err := h.store.currentOwner(ctx, tx, orgID)
-	if err == errNotAnOwner {
-		policy.WriteDetail(w, http.StatusBadRequest, "Source user is not an owner", nil)
-		return
-	}
-	if err != nil {
-		h.logger.ErrorContext(ctx, "admin: resolve current owner failed", "error", err)
-		policy.WriteInternal(w)
-		return
-	}
-	if h.refuseSuperuserWrite(ctx, w, user, nil, h.storedSuperuser(ctx, fromUserID), "transfer_ownership") {
-		return
-	}
-	if err := h.store.transferOwnership(ctx, tx, orgID, fromUserID, toUserID); err != nil {
-		switch err {
-		case errNotAnOwner:
-			policy.WriteDetail(w, http.StatusBadRequest, "Source user is not an owner", nil)
-		case errTargetNotMember:
-			policy.WriteDetail(w, http.StatusBadRequest, "Target user is not a member", nil)
-		default:
-			h.logger.ErrorContext(ctx, "admin: transfer ownership failed", "error", err)
-			policy.WriteInternal(w)
+	h.superuserGuardedWrite(ctx, w, user, nil, "transfer_ownership", func(g *superuserTx) func() {
+		if g.refuse(toUserID) {
+			return nil
 		}
-		return
-	}
-	if err := tx.Commit(ctx); err != nil {
-		h.logger.ErrorContext(ctx, "admin: transfer ownership commit failed", "error", err)
-		policy.WriteInternal(w)
-		return
-	}
-	out := pyjson.NewObject()
-	out.Set("success", true)
-	policy.WriteJSON(w, http.StatusOK, out, nil)
+		fromUserID, err := h.store.currentOwner(ctx, g.tx, orgID)
+		if err == errNotAnOwner {
+			policy.WriteDetail(w, http.StatusBadRequest, "Source user is not an owner", nil)
+			return nil
+		}
+		if err != nil {
+			h.logger.ErrorContext(ctx, "admin: resolve current owner failed", "error", err)
+			policy.WriteInternal(w)
+			return nil
+		}
+		if g.refuse(fromUserID) {
+			return nil
+		}
+		if err := h.store.transferOwnership(ctx, g.tx, orgID, fromUserID, toUserID); err != nil {
+			switch err {
+			case errNotAnOwner:
+				policy.WriteDetail(w, http.StatusBadRequest, "Source user is not an owner", nil)
+			case errTargetNotMember:
+				policy.WriteDetail(w, http.StatusBadRequest, "Target user is not a member", nil)
+			default:
+				h.logger.ErrorContext(ctx, "admin: transfer ownership failed", "error", err)
+				policy.WriteInternal(w)
+			}
+			return nil
+		}
+		return func() {
+			out := pyjson.NewObject()
+			out.Set("success", true)
+			policy.WriteJSON(w, http.StatusOK, out, nil)
+		}
+	})
 }
 
 func randomHex4() string {

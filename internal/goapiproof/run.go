@@ -297,6 +297,9 @@ type Outcome struct {
 	// own verdict. The exported bool stays for the report, where it is
 	// what a human reads; this is what the code trusts.
 	admitted bool
+	// comparedLeaves is how many non-null leaves the candidate answer carried when it was admitted. A match of two empty answers compares
+	// none; the class proof of a born-in-Go operation (no document receipt behind it) reads this and counts nothing then.
+	comparedLeaves int
 	// terminalState is the SEALED verdict, and the one every receipt
 	// carries. Testing showed that sealing `admitted` alone was half the job:
 	// after a real run, assigning the exported TerminalState turned an
@@ -395,6 +398,7 @@ type sealedOutcome struct {
 	terminalState   string
 	executed        bool
 	admitted        bool
+	comparedLeaves  int
 	// provenUnder is the comparator's own verdict on HOW the measurement was proven (ProvenUnderStochasticLeafClass,
 	// ProvenUnderGoOnly, ...), sealed with the rest: the MCP class proof reads it instead of parsing a citation string.
 	provenUnder string
@@ -1154,6 +1158,7 @@ func (r *Runner) proveRequest(ctx context.Context, operation string, variantName
 	}
 	outcome.Admitted = true
 	outcome.admitted = true
+	outcome.comparedLeaves = countNonNullLeaves(candidateSnapshot.Data)
 	// Recorded from the admission, never re-derived from the route: the
 	// receipt must state the binding that was actually checked.
 	outcome.EdgeBuildBinding = admission.EdgeBuildBinding
@@ -1402,6 +1407,7 @@ func (r *Runner) seal(outcome Outcome, variables map[string]any) sealedOutcome {
 		terminalState:                    outcome.terminalState,
 		executed:                         outcome.Executed,
 		admitted:                         outcome.admitted,
+		comparedLeaves:                   outcome.comparedLeaves,
 		provenUnder:                      outcome.ProvenUnder,
 		baselineRef:                      observationRef(outcome.Baseline),
 		candidateRef:                     observationRef(outcome.Candidate),

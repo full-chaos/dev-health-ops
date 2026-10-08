@@ -181,8 +181,9 @@ A GitHub PR closing Linear `CHAOS-2400` borrows that issue's `CHAOS` team.
 >    attributes to T2 (not `ambiguous_*_membership`); a person of inactive teams
 >    only is `no_membership`; an admin layer whose teams are all inactive has
 >    no candidate and falls through to the provider layer; two ACTIVE teams stay
->    ambiguous. Python had no inactive teams, so only the reasons for inactive
->    teams differ from it. Asserted by `TestMembershipGateCountsOnlyActiveTeams`,
+>    ambiguous. Python never filtered inactive teams; Go drops them before the
+>    gate counts. For inactive-team cases, both the winner and the reason can
+>    differ from the Python answer. Asserted by `TestMembershipGateCountsOnlyActiveTeams`,
 >    `TestAnInactiveOnlyAdminLayerFallsThroughToTheProviderLayer` and
 >    `TestAMemberOfAnInactiveAndAnActiveTeamResolvesToTheActiveTeam`.
 >
@@ -1113,7 +1114,9 @@ rule, `PlanOwnershipSnapshot` (a repo full name stands in for the project id). S
   listing failed fails the whole run (nothing is written, nothing is closed). A run that listed no team, and a run that
   did not select teams (members-only), closes nothing: "the measurement did not happen" is never read as "GitHub returned
   nothing". A team that is listed with an empty repo list is a real, complete answer, and its rows close.
-- a failed read of the open rows fails the run before any write.
+- a failed read of the open rows fails the run before the ownership write. It does not fail the run before every write: the
+  catalog collector writes the team rows (and the other rows it selected) earlier in the same run, and only the
+  `team_repo_ownership` write waits for the read.
 - a grant that is still returned keeps the `valid_from` of its earliest open row, so a repeat run replaces the row instead
   of adding one, and an older open duplicate of the same grant is closed.
 

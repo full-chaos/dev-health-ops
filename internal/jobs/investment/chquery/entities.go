@@ -9,6 +9,7 @@ import (
 
 	"github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
+	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse/latestrow"
 )
 
 // workItemsDeduped mirrors Python's WORK_ITEMS_DEDUPED
@@ -690,18 +691,18 @@ func (reader *Reader) FetchExistingInvestmentKeys(
 	// version, the hash and the status are all tested on that latest row, never
 	// in the WHERE: a filter before the argMax would let an older row of a
 	// config the unit was rolled back FROM still count as "existing".
-	query := `
+	query := fmt.Sprintf(`
         SELECT work_unit_id, latest_hash, latest_run_id, latest_quote_count
         FROM (
             SELECT
                 work_unit_id,
-                argMax(categorization_input_hash, computed_at) AS latest_hash,
-                argMax(categorization_model_version, computed_at) AS latest_version,
-                argMax(categorization_status, computed_at) AS latest_status,
-                argMax(categorization_run_id, computed_at) AS latest_run_id,
+                %s AS latest_hash,
+                %s AS latest_version,
+                %s AS latest_status,
+                %s AS latest_run_id,
                 -- tuple() keeps a NULL: a bare argMax skips rows whose value is NULL and
                 -- would return an OLDER row's count for the unit's latest row.
-                (argMax(tuple(evidence_quote_count), computed_at)).1 AS latest_quote_count
+                %s AS latest_quote_count
             FROM work_unit_investments
             WHERE org_id = {org_id:String}
               AND work_unit_id IN {work_unit_ids:Array(String)}
@@ -710,7 +711,10 @@ func (reader *Reader) FetchExistingInvestmentKeys(
         WHERE latest_status IN {valid_statuses:Array(String)}
           AND latest_version = {model_version:String}
           AND latest_hash IN {input_hashes:Array(String)}
-    `
+    `,
+		latestrow.ArgMax("categorization_input_hash"), latestrow.ArgMax("categorization_model_version"),
+		latestrow.ArgMax("categorization_status"), latestrow.ArgMax("categorization_run_id"),
+		latestrow.ArgMaxKeepNull("evidence_quote_count"))
 	rows, err := reader.conn.Query(ctx, query,
 		clickhouse.Named("org_id", organizationID),
 		clickhouse.Named("work_unit_ids", workUnitIDs),

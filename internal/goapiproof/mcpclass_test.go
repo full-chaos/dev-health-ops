@@ -103,7 +103,7 @@ func TestClassifyMCPOutcome(t *testing.T) {
 func sealedMatch(operation, variant string) sealedOutcome {
 	return sealedOutcome{operation: operation, variant: variant, schemaDigest: "s", candidateBuild: "b", orgID: "org",
 		route: RouteProof, edgeBinding: EdgeBuildPresent, terminalState: TerminalStateMatch, executed: true, admitted: true,
-		baselineRef: "b-ref", candidateRef: "c-ref"}
+		baselineRef: "b-ref", candidateRef: "c-ref", comparedLeaves: 1}
 }
 
 func classRunner(sealed []sealedOutcome) *Runner {

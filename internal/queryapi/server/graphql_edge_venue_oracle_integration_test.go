@@ -703,12 +703,16 @@ func edgeCompare(t *testing.T, goBase string, cs []edgeCase, python []venueoracl
 	receipt.WriteString(venueoracle.Diff(t, goBase, parity, parityPython, venueoracle.DiffOptions{
 		Normalize: func(request venueoracle.Request, body string) string {
 			body = coverageDivergenceNormalize(request, body)
+			body = noDataStatusNormalize(request, body)
 			if base != nil {
 				body = base(request, body)
 			}
 			return body
 		},
 		Inspect: func(request venueoracle.Request, goResponse venueoracle.Response) {
+			if ok, why := noDataStatusInspect(request, goResponse.Body); !ok {
+				t.Errorf("%s: %s", request.Name, why)
+			}
 			if isThroughputForecastRequest(request) && !strings.Contains(goResponse.Body, goZeroCoverage) {
 				t.Errorf("%s: query-api must answer the all-zero estimateCoverage object (D4373/D4376), got: %s",
 					request.Name, truncateOracleBody(goResponse.Body))

@@ -1113,7 +1113,9 @@ rule, `PlanOwnershipSnapshot` (a repo full name stands in for the project id). S
   listing failed fails the whole run (nothing is written, nothing is closed). A run that listed no team, and a run that
   did not select teams (members-only), closes nothing: "the measurement did not happen" is never read as "GitHub returned
   nothing". A team that is listed with an empty repo list is a real, complete answer, and its rows close.
-- a failed read of the open rows fails the run before any write.
+- a failed read of the open rows fails the run before the ownership write. It does not fail the run before every write: the
+  catalog collector writes the team rows (and the other rows it selected) earlier in the same run, and only the
+  `team_repo_ownership` write waits for the read.
 - a grant that is still returned keeps the `valid_from` of its earliest open row, so a repeat run replaces the row instead
   of adding one, and an older open duplicate of the same grant is closed.
 

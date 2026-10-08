@@ -53,17 +53,21 @@ type sourceHealthConfig struct {
 	runResult string
 	runError  string
 	runAt     string
-	// olderRun, when set, is a second run created before the newest one.
-	olderRun *sourceHealthOlderRun
+	// runCreated is its creation time ("" = runAt minus five minutes).
+	runCreated string
+	// extraRuns are more runs of the same job (seeded only with a run).
+	extraRuns []sourceHealthRun
 	// foreignRun attaches a newer failed run and a newer successful run of
 	// ANOTHER org's job.
 	foreignRun bool
 }
 
-type sourceHealthOlderRun struct {
-	status int
-	at     string
-	result string
+// sourceHealthRun is one more run; created, started and completed are
+// timestamps ("" = NULL; created "" = completed minus five minutes).
+type sourceHealthRun struct {
+	status                      int
+	created, started, completed string
+	result                      string
 }
 
 func seedSourceHealth(t *testing.T, pool *pgxpool.Pool, configs []sourceHealthConfig) {
@@ -107,15 +111,16 @@ func seedSourceHealth(t *testing.T, pool *pgxpool.Pool, configs []sourceHealthCo
 				runAt = "2026-03-01T00:05:00Z"
 			}
 			if _, err := pool.Exec(ctx, `INSERT INTO job_runs (id, job_id, status, started_at, completed_at, result, error, created_at)
-				VALUES ($1,$2,$3,$6::timestamptz - interval '5 minutes',$6::timestamptz,$4::json,$5,$6::timestamptz - interval '5 minutes')`,
-				runID, jobID, c.runStatus, nullable(c.runResult), nullable(c.runError), runAt); err != nil {
+				VALUES ($1,$2,$3,COALESCE($7::timestamptz, $6::timestamptz - interval '5 minutes'),$6::timestamptz,$4::json,$5,COALESCE($7::timestamptz, $6::timestamptz - interval '5 minutes'))`,
+				runID, jobID, c.runStatus, nullable(c.runResult), nullable(c.runError), runAt, nullable(c.runCreated)); err != nil {
 				t.Fatalf("seed run %s: %v", c.name, err)
 			}
-			if o := c.olderRun; o != nil {
+			for k, run := range c.extraRuns {
 				if _, err := pool.Exec(ctx, `INSERT INTO job_runs (id, job_id, status, started_at, completed_at, result, created_at)
-					VALUES ($1,$2,$3,$5::timestamptz - interval '5 minutes',$5::timestamptz,$4::json,$5::timestamptz - interval '5 minutes')`,
-					"cccccccc-0000-0000-0001-0000000000"+n, jobID, o.status, nullable(o.result), o.at); err != nil {
-					t.Fatalf("seed older run %s: %v", c.name, err)
+					VALUES ($1,$2,$3,$4::timestamptz,$5::timestamptz,$6::json,COALESCE($7::timestamptz, $5::timestamptz - interval '5 minutes'))`,
+					fmt.Sprintf("cccccccc-0000-0000-%04d-0000000000%s", k+1, n), jobID, run.status, nullable(run.started), nullable(run.completed),
+					nullable(run.result), nullable(run.created)); err != nil {
+					t.Fatalf("seed extra run %s: %v", c.name, err)
 				}
 			}
 		}
@@ -165,23 +170,23 @@ func sourceHealthFixture() []sourceHealthConfig {
 		{id: id(8), org: "org-1", name: "deactivated-by-failure", provider: "pagerduty", active: false, targets: `["operational"]`, lastSyncAt: "2026-03-02T00:00:00Z", lastSyncSuccess: "false", lastSyncError: sourceHealthSecret,
 			stats: `{"error_category":"pagerduty_sync_disabled"}`, runStatus: -1},
 		// deactivated, each failure signal alone: listed.
-		{id: id(9), org: "org-1", name: "inactive-flag-only", provider: "zendesk", active: false, lastSyncAt: "2026-03-02T00:00:00Z", lastSyncSuccess: "false", runStatus: -1},
-		{id: id(13), org: "org-1", name: "inactive-error-only", provider: "datadog", active: false, lastSyncError: sourceHealthSecret, runStatus: -1},
+		{id: id(9), org: "org-1", name: "inactive-flag-only", provider: "pagerduty", active: false, lastSyncAt: "2026-03-02T00:00:00Z", lastSyncSuccess: "false", runStatus: -1},
+		{id: id(13), org: "org-1", name: "inactive-error-only", provider: "jira", active: false, lastSyncError: sourceHealthSecret, runStatus: -1},
 		// configs of one integration: the canonical one (oldest top-level) is
 		// listed as never synced. A child config older than it does not take
 		// its place. A non-canonical config with no stamp and no run is not
 		// listed (it would read "never synced" when the integration synced);
 		// each own signal alone (time, flag, error, run) lists one.
-		{id: id(10), org: "org-1", name: "canonical", provider: "bitbucket", active: true, integration: integ(1), createdAt: "2026-01-01T00:00:00Z", runStatus: -1},
-		{id: id(14), org: "org-1", name: "older-child", provider: "bitbucket", active: true, integration: integ(1), createdAt: "2025-12-01T00:00:00Z", parentID: id(10), runStatus: -1},
-		{id: id(11), org: "org-1", name: "non-canonical-silent", provider: "bitbucket", active: true, integration: integ(1), createdAt: "2026-01-02T00:00:00Z", runStatus: -1},
-		{id: id(12), org: "org-1", name: "non-canonical-stamped", provider: "bitbucket", active: true, integration: integ(1), createdAt: "2026-01-03T00:00:00Z", lastSyncAt: "2026-02-03T00:00:00Z", lastSyncSuccess: "true", runStatus: -1},
-		{id: id(15), org: "org-1", name: "nc-time-only", provider: "bitbucket", active: true, integration: integ(1), createdAt: "2026-01-04T00:00:00Z", lastSyncAt: "2026-02-04T00:00:00Z", runStatus: -1},
-		{id: id(16), org: "org-1", name: "nc-flag-only", provider: "bitbucket", active: true, integration: integ(1), createdAt: "2026-01-05T00:00:00Z", lastSyncSuccess: "true", runStatus: -1},
-		{id: id(17), org: "org-1", name: "nc-error-only", provider: "bitbucket", active: true, integration: integ(1), createdAt: "2026-01-06T00:00:00Z", lastSyncError: sourceHealthSecret, runStatus: -1},
+		{id: id(10), org: "org-1", name: "canonical", provider: "launchdarkly", active: true, integration: integ(1), createdAt: "2026-01-01T00:00:00Z", runStatus: -1},
+		{id: id(14), org: "org-1", name: "older-child", provider: "launchdarkly", active: true, integration: integ(1), createdAt: "2025-12-01T00:00:00Z", parentID: id(10), runStatus: -1},
+		{id: id(11), org: "org-1", name: "non-canonical-silent", provider: "launchdarkly", active: true, integration: integ(1), createdAt: "2026-01-02T00:00:00Z", runStatus: -1},
+		{id: id(12), org: "org-1", name: "non-canonical-stamped", provider: "launchdarkly", active: true, integration: integ(1), createdAt: "2026-01-03T00:00:00Z", lastSyncAt: "2026-02-03T00:00:00Z", lastSyncSuccess: "true", runStatus: -1},
+		{id: id(15), org: "org-1", name: "nc-time-only", provider: "launchdarkly", active: true, integration: integ(1), createdAt: "2026-01-04T00:00:00Z", lastSyncAt: "2026-02-04T00:00:00Z", runStatus: -1},
+		{id: id(16), org: "org-1", name: "nc-flag-only", provider: "launchdarkly", active: true, integration: integ(1), createdAt: "2026-01-05T00:00:00Z", lastSyncSuccess: "true", runStatus: -1},
+		{id: id(17), org: "org-1", name: "nc-error-only", provider: "launchdarkly", active: true, integration: integ(1), createdAt: "2026-01-06T00:00:00Z", lastSyncError: sourceHealthSecret, runStatus: -1},
 		// Runs of another org's job on the config are no signal of its own.
-		{id: id(19), org: "org-1", name: "nc-foreign-run-only", provider: "bitbucket", active: true, integration: integ(1), createdAt: "2026-01-08T00:00:00Z", runStatus: -1, foreignRun: true},
-		{id: id(18), org: "org-1", name: "nc-run-only", provider: "bitbucket", active: true, integration: integ(1), createdAt: "2026-01-07T00:00:00Z", runStatus: 2, runResult: `{"rows":1}`},
+		{id: id(19), org: "org-1", name: "nc-foreign-run-only", provider: "launchdarkly", active: true, integration: integ(1), createdAt: "2026-01-08T00:00:00Z", runStatus: -1, foreignRun: true},
+		{id: id(18), org: "org-1", name: "nc-run-only", provider: "launchdarkly", active: true, integration: integ(1), createdAt: "2026-01-07T00:00:00Z", runStatus: 2, runResult: `{"rows":1}`},
 		// an integration with an active config is never absent. B: the canonical
 		// config is inactive and healthy, the others are active and silent: the
 		// oldest active one is listed (scope "git"), not the newer one.
@@ -206,20 +211,22 @@ func sourceHealthFixture() []sourceHealthConfig {
 		{id: id(42), org: "org-1", name: "b1-child-ran", provider: "jira", active: true, integration: integ(6), createdAt: "2026-01-02T00:00:00Z", parentID: id(41), runStatus: 2, runResult: `{"rows":1}`, runAt: "2026-03-05T00:05:00Z"},
 		// An inactive config with no config-level failure whose newest run
 		// failed is a failed source: listed with the run's failure.
-		{id: id(43), org: "org-1", name: "b2-inactive-run-failed", provider: "datadog", active: false, runStatus: 3, runResult: `{"error_category":"provider_rate_limited"}`},
+		{id: id(43), org: "org-1", name: "b2-inactive-run-failed", provider: "jira", active: false, runStatus: 3, runResult: `{"error_category":"provider_rate_limited"}`},
 		// F: the canonical config is the oldest by creation time, not the lowest id.
 		{id: id(48), org: "org-1", name: "f-canonical-old", provider: "gitlab", active: true, integration: integ(7), createdAt: "2026-01-01T00:00:00Z", targets: `["git"]`, runStatus: -1},
 		{id: id(47), org: "org-1", name: "f-newer-lower-id", provider: "gitlab", active: true, integration: integ(7), createdAt: "2026-01-05T00:00:00Z", targets: `["prs"]`, runStatus: -1},
 		// Two runs of one outcome: the newest one is read.
 		{id: id(45), org: "org-1", name: "two-ok-runs", provider: "linear", active: true, runStatus: 2, runResult: `{"rows":1}`,
-			olderRun: &sourceHealthOlderRun{status: 2, at: "2026-02-10T00:05:00Z", result: `{"rows":1}`}},
+			extraRuns: []sourceHealthRun{{status: 2, completed: "2026-02-10T00:05:00Z", result: `{"rows":1}`}}},
 		{id: id(46), org: "org-1", name: "two-failed-runs", provider: "linear", active: true, runStatus: 3, runResult: `{"stage":"worker_lost","error_category":"provider_rate_limited"}`,
-			olderRun: &sourceHealthOlderRun{status: 3, at: "2026-02-10T00:05:00Z", result: `{"error_category":"timeout"}`}},
+			extraRuns: []sourceHealthRun{{status: 3, completed: "2026-02-10T00:05:00Z", result: `{"error_category":"timeout"}`}}},
 		// not served: an inactive config whose failure is older than a later
 		// success, an inactive one with no failure, and another org's.
-		{id: id(44), org: "org-1", name: "inactive-failure-superseded", provider: "zendesk", active: false, runStatus: 2, runResult: `{"rows":1}`,
-			olderRun: &sourceHealthOlderRun{status: 3, at: "2026-02-10T00:05:00Z", result: `{"error_category":"provider_rate_limited"}`}},
+		{id: id(44), org: "org-1", name: "inactive-failure-superseded", provider: "pagerduty", active: false, runStatus: 2, runResult: `{"rows":1}`,
+			extraRuns: []sourceHealthRun{{status: 3, completed: "2026-02-10T00:05:00Z", result: `{"error_category":"provider_rate_limited"}`}}},
 		{id: id(20), org: "org-1", name: "inactive", provider: "github", active: false, runStatus: -1},
+		// A stored provider that is not one the platform syncs is served as "other".
+		{id: id(49), org: "org-1", name: "url-provider", provider: "https://internal.example/probe?token=SECRET-PROBE", active: true, runStatus: -1},
 		{id: id(21), org: "org-other", name: "foreign", provider: "opsgenie", active: true, lastSyncError: sourceHealthSecret, runStatus: -1},
 	}
 }
@@ -255,11 +262,12 @@ func assertSourceHealthServed(t *testing.T, body string) {
 	listed := []string{"never", "canonical", "non-canonical-stamped", "nc-time-only", "nc-flag-only", "nc-error-only", "nc-run-only", "stale", "failed",
 		"clause-sync-error", "clause-flag", "clause-run-failed", "clause-run-cancelled", "clause-run-error", "deactivated-by-failure",
 		"inactive-flag-only", "inactive-error-only", "d-top-active", "b-silent-oldest", "c-child-active", "e-stamped",
-		"b1-canonical", "b1-child-ran", "b2-inactive-run-failed", "two-ok-runs", "two-failed-runs", "f-canonical-old"}
-	providerOf, idOf := map[string]string{}, map[string]string{}
+		"b1-canonical", "b1-child-ran", "b2-inactive-run-failed", "two-ok-runs", "two-failed-runs", "f-canonical-old", "url-provider"}
+	providerOf, idOf, served := map[string]string{}, map[string]string{}, map[string]string{}
 	for _, c := range sourceHealthFixture() {
-		providerOf[c.name], idOf[c.name] = c.provider, c.id
+		providerOf[c.name], idOf[c.name], served[c.name] = c.provider, c.id, c.provider
 	}
+	served["url-provider"] = "other"
 	sort.SliceStable(listed, func(i, j int) bool {
 		if providerOf[listed[i]] != providerOf[listed[j]] {
 			return providerOf[listed[i]] < providerOf[listed[j]]
@@ -271,24 +279,21 @@ func assertSourceHealthServed(t *testing.T, body string) {
 	}
 	byName := map[string]sourceHealthRow{}
 	for i, name := range listed {
-		if rows[i].Provider != providerOf[name] {
-			t.Fatalf("row %d is provider %q, want %q (%s): %s", i, rows[i].Provider, providerOf[name], name, body)
+		if rows[i].Provider != served[name] {
+			t.Fatalf("row %d is provider %q, want %q (%s): %s", i, rows[i].Provider, served[name], name, body)
 		}
 		byName[name] = rows[i]
 	}
-	for _, foreign := range []string{"opsgenie"} {
-		if strings.Contains(body, foreign) {
-			t.Fatalf("a row that is not org-1's is served (%s): %s", foreign, body)
-		}
-	}
-	// "inactive" (github, no failure) and "non-canonical-silent" (bitbucket) are not listed:
-	// github appears for "never" only, bitbucket for "canonical" and "non-canonical-stamped" only.
+	// Configs that are not listed: "inactive" (github), "non-canonical-silent",
+	// "nc-foreign-run-only" and "older-child" (launchdarkly),
+	// "inactive-failure-superseded" (pagerduty), and org-other's config.
 	counts := map[string]int{}
 	for _, r := range rows {
 		counts[r.Provider]++
 	}
-	if counts["github"] != 2 || counts["bitbucket"] != 6 || counts["zendesk"] != 1 {
-		t.Fatalf("github=%d bitbucket=%d zendesk=%d, want 2, 6 and 1 (an inactive config without a current failure, a silent non-canonical config and an older child are not listed): %s", counts["github"], counts["bitbucket"], counts["zendesk"], body)
+	if counts["github"] != 2 || counts["launchdarkly"] != 6 || counts["pagerduty"] != 2 || counts["other"] != 1 {
+		t.Fatalf("github=%d launchdarkly=%d pagerduty=%d other=%d, want 2, 6, 2 and 1 (an inactive config without a current failure, a silent non-canonical config, an older child and another org's config are not listed): %s",
+			counts["github"], counts["launchdarkly"], counts["pagerduty"], counts["other"], body)
 	}
 
 	if b1 := byName["b1-child-ran"]; b1.LastSyncAt == nil || !strings.HasPrefix(*b1.LastSyncAt, "2026-03-05T00:05:00") || b1.LastFailure != nil {
@@ -396,15 +401,16 @@ func TestSourceHealthRoute_ServedToAViewerOverTheSignedEnvelope(t *testing.T) {
 		assertSourceHealthServed(t, res.body)
 	}
 
-	// org-other sees its own config and nothing of org-1.
+	// org-other sees its own config (a provider the platform does not sync:
+	// "other") and nothing of org-1.
 	own := post("viewer", "org-other", "org-other")
-	if !strings.Contains(own.body, "opsgenie") || strings.Contains(own.body, "github") || strings.Contains(own.body, "jira") {
+	if ownRows := decodeSourceHealth(t, own.body); len(ownRows) != 1 || ownRows[0].Provider != "other" || strings.Contains(own.body, "opsgenie") {
 		t.Fatalf("org-other must see only its own source: %s", own.body)
 	}
 
 	// An orgId that is not the caller's org is refused before any read.
 	cross := post("viewer", "org-1", "org-other")
-	if !strings.Contains(cross.body, "Access denied") || strings.Contains(cross.body, "opsgenie") {
+	if !strings.Contains(cross.body, "Access denied") || strings.Contains(cross.body, "sourceHealth\":[") {
 		t.Fatalf("cross-org ask must be refused: %s", cross.body)
 	}
 	empty := post("viewer", "", "org-1")
@@ -494,7 +500,7 @@ func TestSourceHealthRoute_ServedOverMCPWithoutAnOperatorClaim(t *testing.T) {
 	assertSourceHealthServed(t, rec.Body.String())
 
 	rec = mcpDo(listener, http.MethodPost, mcpHeaders("org-1", "viewer", "false", "false"), mcpBody(t, sourceHealthQuery, map[string]any{"orgId": "org-other"}))
-	if reason, _ := mcpReason(t, rec); reason != mcpReasonOrgMismatch || strings.Contains(rec.Body.String(), "opsgenie") {
+	if reason, _ := mcpReason(t, rec); reason != mcpReasonOrgMismatch || strings.Contains(rec.Body.String(), `"sourceHealth":[`) {
 		t.Fatalf("a different orgId over MCP must be refused as an org mismatch: %d %s", rec.Code, rec.Body.String())
 	}
 
@@ -551,5 +557,71 @@ func TestSourceHealthRoute_InactiveConfigWhoseRunFailedIsListed(t *testing.T) {
 	if len(rows) != 1 || rows[0].LastSyncAt != nil || rows[0].LastFailure == nil ||
 		rows[0].LastFailure.Stage != "provider_rate_limited" || !strings.HasPrefix(rows[0].LastFailure.OccurredAt, "2026-03-01T00:05:00") {
 		t.Fatalf("rows = %+v, want one row with the run's failure", rows)
+	}
+}
+
+// The newest successful run is the one that completed last, also when an
+// older-created run completed after a newer-created one.
+func TestSourceHealthRoute_NewestSuccessIsTheLastCompleted(t *testing.T) {
+	rows := serveSourceHealthAsViewer(t, []sourceHealthConfig{
+		{id: "aaaaaaaa-0000-0000-0000-000000000073", org: "org-1", name: "overlapping-successes", provider: "github", active: true,
+			runStatus: 2, runResult: `{"rows":1}`, runAt: "2026-03-04T00:00:00Z", runCreated: "2026-03-03T00:00:00Z",
+			extraRuns: []sourceHealthRun{{status: 2, created: "2026-03-01T00:00:00Z", started: "2026-03-01T00:00:00Z", completed: "2026-03-05T00:00:00Z", result: `{"rows":1}`}}},
+	})
+	if len(rows) != 1 || rows[0].LastSyncAt == nil || !strings.HasPrefix(*rows[0].LastSyncAt, "2026-03-05T00:00:00") || rows[0].LastFailure != nil {
+		t.Fatalf("rows = %+v, want lastSyncAt 2026-03-05 (the last completed success)", rows)
+	}
+}
+
+// The newest failed run is the one that failed last: an inactive config whose
+// last failure is newer than its last success stays listed with it.
+func TestSourceHealthRoute_NewestFailureIsTheLastFailed(t *testing.T) {
+	rows := serveSourceHealthAsViewer(t, []sourceHealthConfig{
+		{id: "aaaaaaaa-0000-0000-0000-000000000074", org: "org-1", name: "overlapping-failures", provider: "github", active: false,
+			runStatus: 2, runResult: `{"rows":1}`, runAt: "2026-03-04T00:00:00Z",
+			extraRuns: []sourceHealthRun{
+				{status: 3, created: "2026-03-01T00:00:00Z", started: "2026-03-01T00:00:00Z", completed: "2026-03-05T00:00:00Z", result: `{"error_category":"worker_lost"}`},
+				{status: 3, created: "2026-03-03T00:00:00Z", started: "2026-03-03T00:00:00Z", completed: "2026-03-03T00:00:00Z", result: `{"error_category":"timeout"}`},
+			}},
+	})
+	if len(rows) != 1 || rows[0].LastSyncAt == nil || !strings.HasPrefix(*rows[0].LastSyncAt, "2026-03-04T00:00:00") ||
+		rows[0].LastFailure == nil || rows[0].LastFailure.Stage != "worker_lost" || !strings.HasPrefix(rows[0].LastFailure.OccurredAt, "2026-03-05T00:00:00") {
+		t.Fatalf("rows = %+v, want the inactive config listed with the 2026-03-05 worker_lost failure", rows)
+	}
+}
+
+// A run's time is its completion, else its start, else its creation; the
+// newest run is chosen by that same time.
+func TestSourceHealthRoute_RunTimeFallsBackToStartThenCreation(t *testing.T) {
+	rows := serveSourceHealthAsViewer(t, []sourceHealthConfig{
+		{id: "aaaaaaaa-0000-0000-0000-000000000075", org: "org-1", name: "started-only", provider: "github", active: true, runStatus: 3, runAt: "2026-02-01T00:00:00Z", runResult: `{"error_category":"timeout"}`,
+			extraRuns: []sourceHealthRun{
+				{status: 3, created: "2026-03-01T00:00:00Z", started: "2026-03-07T00:00:00Z", result: `{"error_category":"worker_lost"}`},
+				{status: 3, created: "2026-03-02T00:00:00Z", started: "2026-03-02T00:00:00Z", completed: "2026-03-06T00:00:00Z", result: `{"error_category":"timeout"}`},
+			}},
+		{id: "aaaaaaaa-0000-0000-0000-000000000076", org: "org-1", name: "created-only", provider: "gitlab", active: true, runStatus: 3, runAt: "2026-02-01T00:00:00Z", runResult: `{"error_category":"timeout"}`,
+			extraRuns: []sourceHealthRun{
+				{status: 3, created: "2026-03-08T00:00:00Z", result: `{"error_category":"worker_lost"}`},
+				{status: 3, created: "2026-03-01T00:00:00Z", started: "2026-03-02T00:00:00Z", completed: "2026-03-07T00:00:00Z", result: `{"error_category":"timeout"}`},
+			}},
+	})
+	if len(rows) != 2 {
+		t.Fatalf("rows = %+v, want two", rows)
+	}
+	for i, want := range []string{"2026-03-07T00:00:00", "2026-03-08T00:00:00"} {
+		if f := rows[i].LastFailure; f == nil || f.Stage != "worker_lost" || !strings.HasPrefix(f.OccurredAt, want) {
+			t.Fatalf("row %d = %+v, want the worker_lost failure at %s", i, rows[i], want)
+		}
+	}
+}
+
+// A stored provider that is not one the platform syncs is never served.
+func TestSourceHealthRoute_ProviderIsClosed(t *testing.T) {
+	rows := serveSourceHealthAsViewer(t, []sourceHealthConfig{
+		{id: "aaaaaaaa-0000-0000-0000-000000000077", org: "org-1", name: "url-provider", provider: "https://internal.example/probe?token=source-health-probe", active: true, runStatus: -1},
+		{id: "aaaaaaaa-0000-0000-0000-000000000078", org: "org-1", name: "cased-provider", provider: "GitHub", active: true, runStatus: -1},
+	})
+	if len(rows) != 2 || rows[0].Provider != "github" || rows[1].Provider != "other" {
+		t.Fatalf("rows = %+v, want providers github and other", rows)
 	}
 }

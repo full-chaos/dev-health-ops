@@ -28,7 +28,8 @@ var ErrSourceHealthUnavailable = errors.New("source health unavailable")
 // error exists is a boolean, and the stage and categories are single values
 // the Go side checks against sourceHealthStages. The run signals are the
 // newest successful run and the newest failed run of the configuration's own
-// jobs in the same org.
+// jobs in the same org, each picked and served by the same time,
+// sourceHealthRunTimeSQL.
 var sourceHealthSQL = fmt.Sprintf(`
 SELECT c.id::text, c.integration_id::text, c.parent_id IS NOT NULL, c.created_at, c.is_active IS TRUE,
        c.provider, c.sync_targets, c.last_sync_at, c.last_sync_success,
@@ -38,28 +39,31 @@ SELECT c.id::text, c.integration_id::text, c.parent_id IS NOT NULL, c.created_at
            JOIN scheduled_jobs sj ON sj.id = jr.job_id AND sj.org_id = c.org_id
            WHERE sj.sync_config_id = c.id
        ),
-       ok.completed_at, ok.started_at, ok.created_at,
-       bad.completed_at, bad.started_at, bad.created_at, bad.stage, bad.category
+       ok.at, bad.at, bad.stage, bad.category
 FROM sync_configurations c
 LEFT JOIN LATERAL (
-    SELECT jr.completed_at, jr.started_at, jr.created_at
+    SELECT %[4]s
     FROM job_runs jr
     JOIN scheduled_jobs sj ON sj.id = jr.job_id AND sj.org_id = c.org_id
     WHERE sj.sync_config_id = c.id AND jr.status = %[1]d AND COALESCE(jr.error, '') = ''
-    ORDER BY jr.created_at DESC
+    ORDER BY %[4]s DESC, jr.id DESC
     LIMIT 1
-) ok ON TRUE
+) ok(at) ON TRUE
 LEFT JOIN LATERAL (
-    SELECT jr.completed_at, jr.started_at, jr.created_at,
-           jr.result->>'stage', jr.result->>'error_category'
+    SELECT %[4]s, jr.result->>'stage', jr.result->>'error_category'
     FROM job_runs jr
     JOIN scheduled_jobs sj ON sj.id = jr.job_id AND sj.org_id = c.org_id
     WHERE sj.sync_config_id = c.id AND (jr.status IN (%[2]d, %[3]d) OR COALESCE(jr.error, '') <> '')
-    ORDER BY jr.created_at DESC
+    ORDER BY %[4]s DESC, jr.id DESC
     LIMIT 1
-) bad(completed_at, started_at, created_at, stage, category) ON TRUE
+) bad(at, stage, category) ON TRUE
 WHERE c.org_id = $1
-ORDER BY c.provider, c.id`, jobRunSuccess, jobRunFailed, jobRunCancelled)
+ORDER BY c.provider, c.id`, jobRunSuccess, jobRunFailed, jobRunCancelled, sourceHealthRunTimeSQL)
+
+// sourceHealthRunTimeSQL is the time of a run: when it completed, else when it
+// started, else when it was created. The newest run is the one with the newest
+// such time, so overlapping runs cannot hide a newer success or failure.
+const sourceHealthRunTimeSQL = `COALESCE(jr.completed_at, jr.started_at, jr.created_at)`
 
 // sourceSignals is everything stored about one sync configuration that bears
 // on its health.
@@ -85,20 +89,8 @@ type sourceSignals struct {
 }
 
 type runSignal struct {
-	completed, started *time.Time
-	created            time.Time
-	stage, category    *string
-}
-
-func (s runSignal) at() time.Time {
-	switch {
-	case s.completed != nil:
-		return *s.completed
-	case s.started != nil:
-		return *s.started
-	default:
-		return s.created
-	}
+	at              time.Time // sourceHealthRunTimeSQL
+	stage, category *string
 }
 
 // stampFailed: the writer sets the error text exactly when the sync failed.
@@ -204,14 +196,15 @@ type failureSignal struct {
 }
 
 func deriveSourceRow(c sourceSignals, now time.Time) model.SourceHealth {
-	row := model.SourceHealth{Provider: c.provider, Scope: sourceHealthScope(c.provider, c.syncTargets)}
+	provider := sourceHealthProvider(c.provider)
+	row := model.SourceHealth{Provider: provider, Scope: sourceHealthScope(provider, c.syncTargets)}
 
 	var success *time.Time
 	if c.lastSyncAt != nil && !c.stampFailed() {
 		success = c.lastSyncAt
 	}
 	if c.okRun != nil {
-		if at := c.okRun.at(); success == nil || at.After(*success) {
+		if at := c.okRun.at; success == nil || at.After(*success) {
 			success = &at
 		}
 	}
@@ -220,7 +213,7 @@ func deriveSourceRow(c sourceSignals, now time.Time) model.SourceHealth {
 	// A run carries its own stage, so on equal times it is read first.
 	var failures []failureSignal
 	if c.failedRun != nil {
-		failures = append(failures, failureSignal{at: c.failedRun.at(), codes: []*string{c.failedRun.stage, c.failedRun.category}})
+		failures = append(failures, failureSignal{at: c.failedRun.at, codes: []*string{c.failedRun.stage, c.failedRun.category}})
 	}
 	if c.stampFailed() {
 		at := now
@@ -270,17 +263,15 @@ func (r *Reader) SourceHealth(ctx context.Context, orgID string) ([]model.Source
 	configs := []sourceSignals{}
 	for rows.Next() {
 		var (
-			c                       sourceSignals
-			integrationID           *string
-			okEnd, okStart, okMade  *time.Time
-			badEnd, badStart, badAt *time.Time
-			badStage, badCategory   *string
+			c                     sourceSignals
+			integrationID         *string
+			okAt, badAt           *time.Time
+			badStage, badCategory *string
 		)
 		if err := rows.Scan(&c.id, &integrationID, &c.isChild, &c.createdAt, &c.active,
 			&c.provider, &c.syncTargets, &c.lastSyncAt, &c.lastSyncSuccess,
 			&c.hasSyncError, &c.updatedAt, &c.statsCategory, &c.hasRun,
-			&okEnd, &okStart, &okMade,
-			&badEnd, &badStart, &badAt, &badStage, &badCategory); err != nil {
+			&okAt, &badAt, &badStage, &badCategory); err != nil {
 			slog.ErrorContext(ctx, "query-api: source health scan failed",
 				"operation", "sourceHealth", "cause", pgErrorClass(err), "error", err)
 			return nil, ErrSourceHealthUnavailable
@@ -288,11 +279,11 @@ func (r *Reader) SourceHealth(ctx context.Context, orgID string) ([]model.Source
 		if integrationID != nil {
 			c.integrationID = *integrationID
 		}
-		if okMade != nil {
-			c.okRun = &runSignal{completed: okEnd, started: okStart, created: *okMade}
+		if okAt != nil {
+			c.okRun = &runSignal{at: *okAt}
 		}
 		if badAt != nil {
-			c.failedRun = &runSignal{completed: badEnd, started: badStart, created: *badAt, stage: badStage, category: badCategory}
+			c.failedRun = &runSignal{at: *badAt, stage: badStage, category: badCategory}
 		}
 		configs = append(configs, c)
 	}
@@ -316,6 +307,20 @@ func sourceHealthStage(candidates ...*string) string {
 		}
 	}
 	return SourceHealthStageOther
+}
+
+// SourceHealthProviderOther is the provider of a configuration whose stored
+// provider is not one the platform syncs.
+const SourceHealthProviderOther = "other"
+
+// sourceHealthProvider is a closed provider: a provider of the platform's
+// provider registry (providersync.Capabilities), never the stored text.
+func sourceHealthProvider(stored string) string {
+	provider := strings.ToLower(strings.TrimSpace(stored))
+	if len(providersync.Capabilities(provider)) == 0 {
+		return SourceHealthProviderOther
+	}
+	return provider
 }
 
 // Scopes that name no dataset: a configuration with no sync targets syncs every

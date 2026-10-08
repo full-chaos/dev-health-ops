@@ -10803,7 +10803,7 @@ type Query {
   dataHealth(team: ID!): DataHealth!
 
   """
-  Source health of the caller's organization (CHAOS-8906): per active sync configuration, provider, scope, last successful sync time, and the last failure as a time and a stage code. Served to every member of the organization; no error text.
+  Source health of the caller's organization (CHAOS-8906): per sync configuration that is active or carries a failure newer than its last successful sync, provider (a platform provider, else ` + "`" + `` + "`" + `other` + "`" + `` + "`" + `), scope, last successful sync time, and the last failure as a time and a stage code. Served to every member of the organization; no error text.
   """
   sourceHealth(orgId: String!): [SourceHealth!]!
 

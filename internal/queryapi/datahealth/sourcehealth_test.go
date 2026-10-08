@@ -208,9 +208,9 @@ func TestDeriveSourceHealthMatrix(t *testing.T) {
 			at := runAt[tc.order]
 			switch tc.run {
 			case "ok":
-				subject.hasRun, subject.okRun = true, &runSignal{completed: &at, created: at.Add(-5 * time.Minute)}
+				subject.hasRun, subject.okRun = true, &runSignal{at: at}
 			case "failed":
-				subject.hasRun, subject.failedRun = true, &runSignal{completed: &at, created: at.Add(-5 * time.Minute), category: &runCategory}
+				subject.hasRun, subject.failedRun = true, &runSignal{at: at, category: &runCategory}
 			}
 			configs = append(configs, subject)
 
@@ -268,8 +268,7 @@ func TestDeriveSourceHealthSignalsAlone(t *testing.T) {
 		{"error only, no time, no updated_at: now", sourceSignals{hasSyncError: true}, true, false, true, now},
 		{"error with a time: the stamp is a failure", sourceSignals{lastSyncAt: &at, hasSyncError: true}, true, false, true, at},
 		{"a run of any status only", sourceSignals{hasRun: true}, true, false, false, time.Time{}},
-		{"failed run without completion: started", sourceSignals{hasRun: true, failedRun: &runSignal{started: &at, created: early}}, true, false, true, at},
-		{"failed run without times: created", sourceSignals{hasRun: true, failedRun: &runSignal{created: at}}, true, false, true, at},
+		{"a failed run only", sourceSignals{hasRun: true, failedRun: &runSignal{at: at}}, true, false, true, at},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			subject := tc.subject
@@ -294,6 +293,69 @@ func TestDeriveSourceHealthSignalsAlone(t *testing.T) {
 				t.Fatalf("occurredAt = %v, want %v", got.row.LastFailure.OccurredAt, tc.failureAt)
 			}
 		})
+	}
+}
+
+// A successful run and a failed run of one configuration, with no stamp: the
+// newer one decides. An inactive configuration is listed exactly when its
+// failure is the newer one.
+func TestDeriveSourceHealthRunPairs(t *testing.T) {
+	early := time.Date(2026, 3, 4, 0, 0, 0, 0, time.UTC)
+	late := time.Date(2026, 3, 5, 0, 0, 0, 0, time.UTC)
+	code := "worker_lost"
+	for _, tc := range []struct {
+		name               string
+		active             bool
+		okAt, failAt       time.Time
+		listed, hasFailure bool
+	}{
+		{"active, failure newer", true, early, late, true, true},
+		{"active, success newer", true, late, early, true, false},
+		{"inactive, failure newer", false, early, late, true, true},
+		{"inactive, success newer", false, late, early, false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := sourceSignals{id: "x", active: tc.active, hasRun: true,
+				okRun: &runSignal{at: tc.okAt}, failedRun: &runSignal{at: tc.failAt, category: &code}}
+			got := deriveSourceHealth([]sourceSignals{c}, late)
+			if (len(got) == 1) != tc.listed {
+				t.Fatalf("rows = %+v, want listed=%v", got, tc.listed)
+			}
+			if !tc.listed {
+				return
+			}
+			row := got[0].row
+			if row.LastSyncAt == nil || !row.LastSyncAt.Equal(tc.okAt) || (row.LastFailure != nil) != tc.hasFailure {
+				t.Fatalf("row = %+v, want lastSyncAt %v and failure=%v", row, tc.okAt, tc.hasFailure)
+			}
+			if tc.hasFailure && (!row.LastFailure.OccurredAt.Equal(tc.failAt) || row.LastFailure.Stage != code) {
+				t.Fatalf("failure = %+v, want %v %s", row.LastFailure, tc.failAt, code)
+			}
+		})
+	}
+}
+
+// The served provider is a provider of the platform's registry or "other",
+// never the stored text.
+func TestSourceHealthProviderIsClosed(t *testing.T) {
+	for _, tc := range []struct{ stored, want string }{
+		{"github", "github"},
+		{"GitLab", "gitlab"},
+		{" jira ", "jira"},
+		{"linear", "linear"},
+		{"launchdarkly", "launchdarkly"},
+		{"pagerduty", "pagerduty"},
+		{"https://internal.example/probe?token=SECRET-PROBE", SourceHealthProviderOther},
+		{"bitbucket", SourceHealthProviderOther},
+		{"", SourceHealthProviderOther},
+	} {
+		if got := sourceHealthProvider(tc.stored); got != tc.want {
+			t.Fatalf("provider(%q) = %q, want %q", tc.stored, got, tc.want)
+		}
+	}
+	rows := deriveSourceHealth([]sourceSignals{{id: "x", active: true, provider: "https://internal.example/probe?token=SECRET-PROBE"}}, time.Now())
+	if len(rows) != 1 || rows[0].row.Provider != SourceHealthProviderOther || rows[0].row.Scope != SourceHealthScopeAll {
+		t.Fatalf("rows = %+v, want one row with provider other", rows)
 	}
 }
 
@@ -390,7 +452,7 @@ func TestDeriveSourceHealthStageOrder(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			runAt := tc.runAt
 			c := sourceSignals{id: "x", active: true, lastSyncAt: &at, lastSyncSuccess: &fa, statsCategory: &statsCode,
-				hasRun: true, failedRun: &runSignal{completed: &runAt, created: runAt, stage: tc.runCodes[0], category: tc.runCodes[1]}}
+				hasRun: true, failedRun: &runSignal{at: runAt, stage: tc.runCodes[0], category: tc.runCodes[1]}}
 			got := deriveSourceHealth([]sourceSignals{c}, at)
 			if len(got) != 1 || got[0].row.LastFailure == nil || got[0].row.LastFailure.Stage != tc.want || !got[0].row.LastFailure.OccurredAt.Equal(tc.wantAt) {
 				t.Fatalf("rows = %+v, want stage %q at %v", got, tc.want, tc.wantAt)
@@ -402,7 +464,7 @@ func TestDeriveSourceHealthStageOrder(t *testing.T) {
 	ok := true
 	newer := at.Add(time.Hour)
 	c := sourceSignals{id: "x", active: true, lastSyncAt: &newer, lastSyncSuccess: &ok, statsCategory: &statsCode,
-		hasRun: true, failedRun: &runSignal{completed: &at, created: at, category: &runCode}}
+		hasRun: true, failedRun: &runSignal{at: at, category: &runCode}}
 	if got := deriveSourceHealth([]sourceSignals{c}, at); len(got) != 1 || got[0].row.LastFailure != nil {
 		t.Fatalf("rows = %+v, want no failure", got)
 	}

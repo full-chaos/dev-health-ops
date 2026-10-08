@@ -778,7 +778,10 @@ func billingNormalizer(seeded map[string]bool, start time.Time) func(string) str
 }
 
 // sortRecordKeys rewrites every object under a "plan" or "price" key with
-// its keys sorted; a body that is not JSON is returned as is.
+// its keys sorted; a body that is not JSON is returned as is. The Go-only
+// org_name key (CHAOS-8956: the row's organisation name, which the Python
+// reference never served) is dropped from both planes' bodies; the billing
+// unit tests pin it.
 func sortRecordKeys(body string) string {
 	value, err := pyjson.DecodeString(body)
 	if err != nil {
@@ -799,6 +802,9 @@ func sortRecordKeys(body string) string {
 			}
 			out := pyjson.NewObject()
 			for _, key := range keys {
+				if key == "org_name" {
+					continue
+				}
 				item, _ := v.Get(key)
 				out.Set(key, walk(item, key == "plan" || key == "price"))
 			}

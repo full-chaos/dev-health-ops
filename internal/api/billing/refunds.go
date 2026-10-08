@@ -335,6 +335,7 @@ func (h handlers) reserveRefund(ctx context.Context, tx pgx.Tx, request refundRe
 			if err != nil {
 				return pendingRefund{}, nil, err
 			}
+			h.withOrgName(ctx, tx, out)
 			return early(ok(out))
 		case found:
 			// Still pending: the first request's Stripe outcome is not
@@ -480,6 +481,7 @@ func (h handlers) completeRefund(ctx context.Context, tx pgx.Tx, pending pending
 	if err != nil {
 		return reply{}, err
 	}
+	h.withOrgName(ctx, tx, out)
 	return ok(out), nil
 }
 
@@ -606,6 +608,9 @@ func (h handlers) listRefunds(w http.ResponseWriter, r *http.Request) {
 		if err := rows.Err(); err != nil {
 			return reply{}, err
 		}
+		for _, item := range items {
+			h.withOrgName(ctx, tx, item.(*pyjson.Object))
+		}
 		var total int64
 		if err := tx.QueryRow(ctx, `SELECT count(s.id) FROM refunds s `+where, orgID).Scan(&total); err != nil {
 			return reply{}, err
@@ -632,11 +637,11 @@ func (h handlers) getRefund(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.serve(w, r, "get refund", func(tx pgx.Tx) (reply, error) {
-		return refundReply(r.Context(), tx, id, orgID)
+		return h.refundReply(r.Context(), tx, id, orgID)
 	})
 }
 
-func refundReply(ctx context.Context, q querier, id uuid.UUID, org *uuid.UUID) (reply, error) {
+func (h handlers) refundReply(ctx context.Context, q querier, id uuid.UUID, org *uuid.UUID) (reply, error) {
 	sql, args := orgFilter(`WHERE s.id = $1`, []any{id}, org)
 	refund, err := scanRefundJSON(q.QueryRow(ctx, `SELECT `+refundColumns+` FROM refunds s `+sql, args...))
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -645,5 +650,6 @@ func refundReply(ctx context.Context, q querier, id uuid.UUID, org *uuid.UUID) (
 	if err != nil {
 		return reply{}, err
 	}
+	h.withOrgName(ctx, q, refund)
 	return ok(refund), nil
 }

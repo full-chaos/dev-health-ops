@@ -25,11 +25,14 @@ import (
 // Two signal paths, both required (team-lead ruling 2026-08-28, "design
 // check (a)" and "(b)"):
 //
-//  1. Own-project_id path: a work item that itself carries BOTH a repo_id
-//     (it's a GitHub/GitLab-shaped repo-bearing item -- a PR or an issue
-//     synced with repo context) AND a project_id (it's a member of a
-//     tracked project) resolves directly: project_id -> team via
-//     team_project_ownership, stamped on the item's own repo_id.
+//  1. Own-project_id path: a pull request or merge request work item
+//     (work_items.type "pr" or "merge_request") that itself carries BOTH a
+//     repo_id AND a project_id (it's a member of a tracked project) resolves
+//     directly: project_id -> team via team_project_ownership, stamped on the
+//     item's own repo_id. An ISSUE's own repo_id is never a candidate (the
+//     entity tree: Repository <> Pull request <> Issue <> Project): a GitHub
+//     or GitLab issue reaches a repo only through its linked pull request
+//     rows in work_graph_issue_pr, with that link's tier.
 //  2. Dependency-donor walk: a repo-bearing item with NO project_id of its
 //     own (e.g. a bare GitHub PR, which GitHub's own model has no concept
 //     of "project membership" for) but a work_item_dependencies edge to a
@@ -180,12 +183,24 @@ type TeamRepoOwnershipKnownTeam struct {
 // issue.team.key this field already carries -- so the reconstruct-then-look-
 // up step was pure indirection onto a value already in hand, and required a
 // team_project_ownership row that this reader no longer needs to exist.
+//
+// Type is work_items.type: only a "pr" or "merge_request" item's own RepoID
+// is an ownership candidate (teamRepoOwnershipChangeRequestTypes).
 type TeamRepoOwnershipWorkItem struct {
 	WorkItemID    string
 	Provider      string
+	Type          string
 	RepoID        string
 	ProjectID     string
 	NativeTeamKey string
+}
+
+// teamRepoOwnershipChangeRequestTypes are the work_items.type values of a
+// pull request (GitHub "pr") and a merge request (GitLab "merge_request"):
+// the only work items whose own repo_id relates them to a repo.
+var teamRepoOwnershipChangeRequestTypes = map[string]bool{
+	"pr":            true,
+	"merge_request": true,
 }
 
 // TeamRepoOwnershipDependencyEdge is one already-synced
@@ -351,9 +366,10 @@ const (
 )
 
 // teamRepoOwnershipIssuePRLinkTier maps a work_graph_issue_pr.provenance
-// value to its tier. A work item's own repo_id and a work_item_dependencies
-// donor edge are provider-recorded facts: the issue<->PR link builder stamps
-// the same dependency row "native", so those candidates count as native.
+// value to its tier. A pull request's or merge request's own repo_id, and
+// its work_item_dependencies donor edge, are provider-recorded facts: the
+// issue<->PR link builder stamps the same dependency row "native", so those
+// candidates count as native.
 func teamRepoOwnershipIssuePRLinkTier(provenance string) int {
 	switch provenance {
 	case "native":
@@ -479,9 +495,10 @@ func deriveTeamRepoOwnership(
 		}
 	}
 
-	// Path 1 + 2: every repo-bearing work item.
+	// Path 1 + 2: every pull request and merge request with a repo_id. An
+	// issue's own repo_id is not a relation; issues count through issuePRLinks.
 	for _, item := range workItems {
-		if item.RepoID == "" {
+		if item.RepoID == "" || !teamRepoOwnershipChangeRequestTypes[item.Type] {
 			continue
 		}
 		if teamID, arm := donorTeamID(item.WorkItemID); teamID != "" {

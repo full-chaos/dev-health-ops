@@ -227,3 +227,38 @@ func TestRankedOwnerSingleTeamIsUnchangedAgainstMigratedSchema(t *testing.T) {
 		})
 	}
 }
+
+// TestRankedOwnerAnIssuesOwnRepoIsNotACandidateAgainstMigratedSchema: the
+// loader reads work_items.type. A GitHub or GitLab issue with a repo_id in an
+// owned project and no linked PR names no owner; a pull request or merge
+// request of the same shape does.
+func TestRankedOwnerAnIssuesOwnRepoIsNotACandidateAgainstMigratedSchema(t *testing.T) {
+	ctx, conn := newWorkItemEffectsConn(t)
+	for _, tc := range []struct {
+		name, provider, itemType, workItemID string
+		wantOwner                            bool
+	}{
+		{"github_issue", "github", "issue", "gh:acme/repo#1", false},
+		{"github_pr", "github", "pr", "ghpr:acme/repo#2", true},
+		{"gitlab_issue", "gitlab", "issue", "gitlab:acme/repo#3", false},
+		{"gitlab_mr", "gitlab", "merge_request", "gitlab:acme/repo!4", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			org := newRankedOwnerOrg(t, ctx, conn, "ranked-issue-"+tc.name)
+			org.ownProject(tc.provider, "team-a")
+			seedWorkItemOfType(t, ctx, conn, org.orgID, tc.workItemID, tc.provider, tc.itemType, org.repoID, tc.provider+"-proj-team-a", org.at)
+			written, retracted, _ := org.derive()
+			if tc.wantOwner {
+				if written != 1 || retracted != 0 {
+					t.Fatalf("Derive: written=%d retracted=%d, want 1 and 0", written, retracted)
+				}
+				org.assertOpenOwners("team-a")
+				return
+			}
+			if written != 0 || retracted != 0 {
+				t.Fatalf("Derive: written=%d retracted=%d, want 0 and 0 (an issue's own repo_id is not a relation)", written, retracted)
+			}
+			org.assertOpenOwners()
+		})
+	}
+}

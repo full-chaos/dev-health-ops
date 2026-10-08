@@ -498,7 +498,7 @@ func loadTeamRepoOwnershipWorkItems(
 	// team key (issue.team.key) that DOES match. Empty string (ClickHouse's
 	// column default, migration 050) for every non-Linear provider.
 	rows, err := conn.Query(ctx, `
-SELECT work_item_id, provider, repo_id, project_id, native_team_key
+SELECT work_item_id, provider, type, repo_id, project_id, native_team_key
 FROM work_items FINAL
 WHERE org_id = ?`,
 		orgID)
@@ -510,7 +510,7 @@ WHERE org_id = ?`,
 	for rows.Next() {
 		var item TeamRepoOwnershipWorkItem
 		var repoID uuid.UUID
-		if err := rows.Scan(&item.WorkItemID, &item.Provider, &repoID, &item.ProjectID, &item.NativeTeamKey); err != nil {
+		if err := rows.Scan(&item.WorkItemID, &item.Provider, &item.Type, &repoID, &item.ProjectID, &item.NativeTeamKey); err != nil {
 			return nil, err
 		}
 		if repoID != uuid.Nil {

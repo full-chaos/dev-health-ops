@@ -304,6 +304,8 @@ func FailureClass(err error) string {
 		return "context_length"
 	case llmErrorOutput:
 		return "output_error"
+	case llmErrorBatchTimeout:
+		return "batch_timeout"
 	default:
 		return "llm_error"
 	}

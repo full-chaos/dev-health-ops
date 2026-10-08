@@ -27,6 +27,10 @@ const (
 	llmErrorTimeout
 	llmErrorTransport
 	llmErrorOutput
+	// llmErrorBatchTimeout is a provider batch that did not finish within the
+	// run's timeout. It is its own kind, and class, so a timeout that won is
+	// visible in the run's failure counts and not folded into llm_error.
+	llmErrorBatchTimeout
 )
 
 // llmError is llm/errors.py's LLMError base class.

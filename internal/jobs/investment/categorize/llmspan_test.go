@@ -40,8 +40,8 @@ func TestLLMSpanNameAttributeKeysAndClassesAreTheCensus(t *testing.T) {
 	if llmSpanName != "dev_health.llm.request" {
 		t.Fatalf("span name = %q", llmSpanName)
 	}
-	keys := []string{llmAttrProvider, llmAttrModel, llmAttrRole, llmAttrAttempt, llmAttrStatus, llmAttrClass}
-	want := []string{"error.class", "http.response.status_code", "llm.attempt", "llm.model", "llm.provider", "llm.role"}
+	keys := []string{llmAttrProvider, llmAttrModel, llmAttrRole, llmAttrAttempt, llmAttrStatus, llmAttrClass, llmAttrBatchOp}
+	want := []string{"error.class", "http.response.status_code", "llm.attempt", "llm.batch.operation", "llm.model", "llm.provider", "llm.role"}
 	sort.Strings(keys)
 	if strings.Join(keys, ",") != strings.Join(want, ",") {
 		t.Fatalf("attribute keys = %v, want %v", keys, want)

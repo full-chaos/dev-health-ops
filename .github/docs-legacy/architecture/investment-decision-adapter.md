@@ -383,7 +383,7 @@ served mode; `TYPESAFE_API_KEY` reaches the heavy group only.
 | --- | --- | --- |
 | Metric | `dev_health_investment_served_outcomes_total` | `model`, `outcome` (closed set of 12: `ok`, `zero_support`, `evidence_none`, `invalid_answer`, `adapter_defect`, `timeout`, `refused`, `server_error`, `rate_limited`, `rejected`, `transport_other`, `cancelled`) |
 | Metrics (shadow) | `dev_health_investment_shadow_attempts_total`, `..._attempt_latency_seconds`, `..._phase_stops_total`, `..._phase_cancelled_runs_total`, `..._panics_recovered_total`, `..._attempt_write_errors_total`, `..._attempt_rows_dropped_total` | closed sets in `jobruntime/telemetry.go` |
-| Span | `dev_health.llm.request` | One span for each HTTP attempt of every LLM provider (shared `tracedLLMDo`). Attributes: `llm.provider`, `llm.model`, `llm.role` (`served` / `shadow`, when set), `llm.attempt`, `http.response.status_code`, `error.class` |
+| Span | `dev_health.llm.request` | One span for each HTTP attempt of every LLM provider (shared `tracedLLMDo`). Attributes: `llm.provider`, `llm.model`, `llm.role` (`served` / `shadow`, when set), `llm.attempt`, `llm.batch.operation` (`upload` / `create` / `retrieve` / `content` / `cancel`, on a provider Batch API call only), `http.response.status_code`, `error.class` |
 | Log | `investment served decision complete`, `investment shadow phase complete` | scalar fields only |
 
 `error.class` values: `timeout`, `refused`, `server`, `rate_limit`, `auth`,

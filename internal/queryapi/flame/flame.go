@@ -460,6 +460,7 @@ func buildIssueFlameResponse(entityID string, issue issueRow) (*Response, error)
 	// flame.py builds the entity dict in this order.
 	entity := pyjson.OrderedMapOf(
 		pyjson.KeyValue[any]{Key: "work_item_id", Value: issue.WorkItemID},
+		pyjson.KeyValue[any]{Key: "title", Value: nullableString(issue.Title)},
 		pyjson.KeyValue[any]{Key: "provider", Value: nullableString(issue.Provider)},
 		pyjson.KeyValue[any]{Key: "type", Value: nullableString(issue.Type)},
 		pyjson.KeyValue[any]{Key: "status", Value: nullableString(issue.Status)},
@@ -486,6 +487,16 @@ func deploymentStatusIsRunning(status *string) bool {
 	default:
 		return false
 	}
+}
+
+// deploymentName serves the deployment's release_ref as its display name. A
+// blank release_ref gives null (the web shows "Unresolved"); the deployment id
+// is never used as a name.
+func deploymentName(releaseRef string) any {
+	if strings.TrimSpace(releaseRef) == "" {
+		return nil
+	}
+	return releaseRef
 }
 
 // buildDeploymentFlameResponse ports _build_deployment_flame_response
@@ -540,6 +551,7 @@ func buildDeploymentFlameResponse(repoID, deploymentID string, deployment deploy
 		pyjson.KeyValue[any]{Key: "deployment_id", Value: deploymentID},
 		pyjson.KeyValue[any]{Key: "status", Value: nullableString(deployment.Status)},
 		pyjson.KeyValue[any]{Key: "environment", Value: nullableString(deployment.Environment)},
+		pyjson.KeyValue[any]{Key: "name", Value: deploymentName(deployment.ReleaseRef)},
 	)
 	return &Response{Entity: entity, Timeline: timeline, Frames: frames}, nil
 }
@@ -578,6 +590,9 @@ func BuildResponse(ctx context.Context, client QueryClient, orgID string, params
 		}
 		if issue == nil {
 			return nil, notFound("Issue not found")
+		}
+		if issue.Title, err = fetchIssueTitle(ctx, client, params.EntityID, orgID); err != nil {
+			return nil, err
 		}
 		return buildIssueFlameResponse(params.EntityID, *issue)
 

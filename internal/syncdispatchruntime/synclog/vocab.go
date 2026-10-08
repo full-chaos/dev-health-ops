@@ -63,6 +63,7 @@ var (
 	MsgDispatchSyncRunRedispatchRearmFailed              = Msg{"dispatch_sync_run.redispatch_rearm_failed"}
 	MsgDispatchSyncRunRedispatchRearmed                  = Msg{"dispatch_sync_run.redispatch_rearmed"}
 	MsgTeamRepoOwnershipDerivation                       = Msg{"team_repo_ownership_derivation"}
+	MsgTeamRepoOwnershipOwnerTieUnresolved               = Msg{"team_repo_ownership_derivation.owner_tie_unresolved"}
 )
 
 // Keys.
@@ -149,6 +150,8 @@ var (
 	KeyRowsRetracted                = Key{"rows_retracted"}
 	KeyFactsDerived                 = Key{"facts_derived"}
 	KeyFactsUnchanged               = Key{"facts_unchanged"}
+	KeyOwnerTies                    = Key{"owner_ties"}
+	KeyRepoIDs                      = Key{"repo_ids"}
 	KeySyncRunId                    = Key{"sync_run_id"}
 	KeyUnitId                       = Key{"unit_id"}
 	KeyDecision                     = Key{"decision"}

@@ -1,4 +1,5 @@
 # Every file under internal/jobs/investment/categorize/testdata: sha256, kind, path. Written by `go run ./internal/testsupport/recordedfiles/manifest`; never edit it by hand.
 # python-recorded set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
 # header-before-stamp set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
+-	header	golden/batch.golden.json
 f2fe8abb42d359ad7e5a3453b276370df471a9d40021f486cead2d1ba4408a47	provider-recorded	typesafe-systemone-real-response.json

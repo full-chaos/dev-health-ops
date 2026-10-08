@@ -61,6 +61,7 @@ var dhoAPIAdminOrgEndpointSpecs = map[string]RESTEndpointSpec{
 			IDBindings:          []RESTIDBinding{{Producer: dhoAPIOrgIDProducer, PathParam: "org_id"}},
 			WantCandidateStatus: 200, WantBaselineStatus: 200,
 			BodyMode: RESTBodyModeJSON,
+			Parity:   adminMembersParity,
 		}},
 	},
 	"REST:GET:/api/v1/admin/credentials": adminGET("/api/v1/admin/credentials", "list", 200, nil),
@@ -73,4 +74,12 @@ func init() {
 		restEndpointSpecs[operation] = spec
 	}
 	restRunOrder = append(restRunOrder, dhoAPIAdminOrgRunOrder...)
+}
+
+// adminMembersParity declares the two Go-only keys of a member list item.
+var adminMembersParity = Options{
+	GoOnlyKeys: map[string]GoOnlyKey{
+		"data.user_name":  {Ticket: "CHAOS-8946", Reason: "Go-only: the member's user full name beside user_id; the Python reference never served it."},
+		"data.user_email": {Ticket: "CHAOS-8946", Reason: "Go-only: the member's user e-mail beside user_id; the Python reference never served it."},
+	},
 }

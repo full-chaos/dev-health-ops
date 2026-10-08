@@ -82,3 +82,19 @@ func TestAdminUsersProducedIDReadsTheRootArrayAndMembersBindsTheOperatorOrg(t *t
 		t.Fatalf("resolved credential path = %q (unresolved %v)", path, unresolved)
 	}
 }
+
+func TestAdminMembersParityAdmitsOnlyTheDeclaredGoOnlyNames(t *testing.T) {
+	baseline := snapshotFromJSON(t, `{"data":[{"id":"m","user_id":"u","role":"member"}]}`)
+	for _, body := range []string{
+		`{"data":[{"id":"m","user_id":"u","role":"member","user_name":"Ari","user_email":"a@example.com"}]}`,
+		`{"data":[{"id":"m","user_id":"u","role":"member","user_name":null,"user_email":null}]}`,
+	} {
+		if result := Compare(baseline, snapshotFromJSON(t, body), adminMembersParity); !result.IsMatch() {
+			t.Fatalf("declared names must match for %s, got %s %v", body, result.TerminalState, findingPaths(result))
+		}
+	}
+	other := snapshotFromJSON(t, `{"data":[{"id":"m","user_id":"u","role":"member","user_nickname":"x"}]}`)
+	if result := Compare(baseline, other, adminMembersParity); result.TerminalState != TerminalStateMismatch {
+		t.Fatalf("an undeclared extra key must mismatch, got %s", result.TerminalState)
+	}
+}

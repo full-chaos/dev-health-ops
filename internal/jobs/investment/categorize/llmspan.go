@@ -27,6 +27,7 @@ const (
 	llmAttrAttempt  = "llm.attempt"
 	llmAttrStatus   = "http.response.status_code"
 	llmAttrClass    = "error.class"
+	llmAttrBatchOp  = "llm.batch.operation"
 
 	llmSpanMaxModelLen = 128
 )
@@ -66,6 +67,7 @@ var llmSpanClasses = []llmSpanClass{
 type (
 	llmRoleKey    struct{}
 	llmAttemptKey struct{}
+	llmBatchOpKey struct{}
 )
 
 // WithLLMRole marks the requests made under ctx as served or shadow.
@@ -76,6 +78,12 @@ func WithLLMRole(ctx context.Context, role LLMRole) context.Context {
 // withLLMAttempt sets the 1-based attempt number of the request about to be sent.
 func withLLMAttempt(ctx context.Context, attempt int) context.Context {
 	return context.WithValue(ctx, llmAttemptKey{}, attempt)
+}
+
+// withLLMBatchOperation names the Batch API call about to be sent (upload,
+// create, retrieve, content, cancel). Absent, the attribute is left off.
+func withLLMBatchOperation(ctx context.Context, operation string) context.Context {
+	return context.WithValue(ctx, llmBatchOpKey{}, operation)
 }
 
 // classifyLLMSpan maps one finished exchange to a class. "" means success.
@@ -128,6 +136,9 @@ func tracedLLMDo(client *http.Client, req *http.Request, provider ProviderKind, 
 	}
 	if attempt, ok := ctx.Value(llmAttemptKey{}).(int); ok && attempt > 0 {
 		attrs = append(attrs, attribute.Int(llmAttrAttempt, attempt))
+	}
+	if operation, ok := ctx.Value(llmBatchOpKey{}).(string); ok && operation != "" {
+		attrs = append(attrs, attribute.String(llmAttrBatchOp, operation))
 	}
 	spanCtx, span := otel.Tracer(llmSpanTracer).Start(ctx, llmSpanName, oteltrace.WithAttributes(attrs...))
 

@@ -256,16 +256,9 @@ func (executor *NativeExecutor) Execute(ctx context.Context, claim workgraph.Cla
 		return nil, workgraph.Deterministic(workgraph.ClassScopeInvalid, err)
 	}
 
-	// Batch mode is NOT ported (see materialize.go's header). Python's default
-	// is "sync" (materialize.py:820), so this refuses nothing that runs today
-	// -- but it refuses LOUDLY rather than silently downgrading a
-	// provider_batch request to serial calls, which would change cost and
-	// latency invisibly. Note this also means the Go plane ignores
-	// INVESTMENT_LLM_BATCH_MODE entirely rather than reading a new env var:
-	// an operator who sets it gets a refusal, not a silent divergence.
-	if scope.LLMBatchMode != nil && *scope.LLMBatchMode != "" && *scope.LLMBatchMode != "sync" {
-		return nil, workgraph.Deterministic(workgraph.ClassLLMBatchUnsupport, fmt.Errorf(
-			"native investment executor supports llm_batch_mode=sync only, got %q", *scope.LLMBatchMode))
+	batch, err := resolveBatchSettings(scope, executor.logger)
+	if err != nil {
+		return nil, workgraph.Deterministic(workgraph.ClassScopeInvalid, err)
 	}
 
 	requestedProvider := "auto"
@@ -278,6 +271,14 @@ func (executor *NativeExecutor) Execute(ctx context.Context, claim workgraph.Cla
 			fmt.Errorf("resolve llm provider: %w", err))
 	}
 	defer func() { _ = provider.Close() }()
+	// materialize.py raised for provider_batch on a provider with no Batch
+	// API; here it is refused before any read. auto uses the synchronous path.
+	if batch.mode == LLMBatchModeProvider {
+		if _, ok := categorize.AsBatchProvider(provider); !ok || categorize.IsDecisionProviderKind(kind) {
+			return nil, workgraph.Deterministic(workgraph.ClassLLMBatchUnsupport, fmt.Errorf(
+				"llm_batch_mode=provider_batch: llm provider %q has no batch api", kind))
+		}
+	}
 
 	orgID := claim.Request.OrganizationID
 	allowUnscoped := scope.AllowUnscoped != nil && *scope.AllowUnscoped
@@ -389,6 +390,10 @@ func (executor *NativeExecutor) Execute(ctx context.Context, claim workgraph.Cla
 		// work_graph_tasks.py:243 hardcodes persist_evidence_snippets=True on
 		// the worker path -- it is not a scope key and not configurable here.
 		PersistEvidenceSnippets: true,
+		LLMBatchMode:            batch.mode,
+		LLMBatchMinItems:        batch.minItems,
+		LLMBatchPollInterval:    batch.poll,
+		LLMBatchTimeout:         batch.timeout,
 		// A FRESH run id per run, matching Python (codex r2 P1).
 		//
 		// Python generates uuid.uuid4().hex at materialize.py:1292 because the

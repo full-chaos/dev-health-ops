@@ -279,7 +279,9 @@ Resolution is **staged by precedence**. The resolver evaluates the applicable so
 **all** matching ones as candidates; the *winner* (`is_primary`) is the highest-precedence source
 present. "Wins" means *primary selection* — it does not mean lower-precedence sources go
 unevaluated or unrecorded. **To debug:** read `team_attribution_source` (the winner) from
-provenance, jump to that node, and verify no higher-precedence stage matched.
+provenance, jump to that node, and verify no higher-precedence stage matched. An item of a
+project with several owning teams has one primary row (`is_primary = 1`) and a co-owner row
+(`is_primary = 2`) for each other active team of the project at the winner's rank (section 0.4d).
 
 ```mermaid
 flowchart TD
@@ -852,6 +854,64 @@ ClickHouse), `TestTheWorkerStepCountsLinksAndDegradesAnIncompleteLinkLeg`,
 and `TestALinkTheProviderStillReturnsIsNeverClosed` (real ClickHouse: a link with no key, an ARI this code
 does not read beside one it reads, two ids, no `edges`, null `edges`, a team search with no `pageInfo`;
 controls: a link that is gone and an explicit empty list are closed).
+
+#### 0.4d A project of several teams: every active team takes the item (CHAOS-8905)
+
+A project (a Jira space connected to several Atlassian teams, a Linear or GitLab project with several owning
+teams, any provider) can belong to more than one team. An item of such a project is the work of EACH active
+team that owns the project, not of the first team by id. The item's own native team still wins over its
+project (section 0.1): a native team key gives one team.
+
+- **Where it is decided.** One shared seam in `internal/teamattribution/cascade.go`, the same for every
+  provider: a project key maps to every ACTIVE team that holds it (`projectKeyTeams`, catalog order), so
+  `IssueProjectCandidates` gives one `issue_project` candidate per team. When the winning source of an item is
+  `issue_project` or `project_ownership`, every other team of that source at the SAME rank as the winner
+  (`is_primary`, `specificity`, `priority` of the ownership fact) is a co-owner (`projectCoOwners`). A lower
+  rank, an empty team id, `repo_ownership`, a membership source and `native_team` give no co-owner. An
+  inactive team takes no row (section 0.4c).
+- **The values of `work_item_team_attributions.is_primary`** (`AttributionNotPrimary`, `AttributionPrimary`,
+  `AttributionCoOwner`; the column is `UInt8`, no migration):
+
+  | value | meaning | who reads it |
+  |---|---|---|
+  | `0` | a candidate the cascade found and did not choose (provenance only) | the provenance list |
+  | `1` | the ONE primary row of the item: the winner by rank, the same team as before this change | every organization-level reader, the daily rollups, every read without a team filter (`is_primary = 1`) |
+  | `2` | a co-owner: another active team that owns the item's project at the winner's rank, with its own source and evidence | team-scoped reads only (`is_primary IN (1, 2)` AND a team filter) |
+
+  An item has exactly one `1` row, so an organization total counts it once. A team view (a filter on one team)
+  and a team(s) view (a filter on several teams) read `IN (1, 2)` and show the item under each of their teams
+  that owns it. Team-scoped readers today: the issues drilldown with a team scope
+  (`internal/queryapi/drilldown/issues.go`) and the aggregated-flame throughput with a team
+  (`internal/queryapi/aggflame/clickhouse.go`). GraphQL `isPrimary` is `true` for `1` only.
+- **The census.** `TestWorkItemTeamAttributionIsPrimaryPredicateCensus` reads every production Go file that
+  names this table and fails on any `is_primary` form other than `= 1` and `IN (1, 2)`: `!= 0`, `> 0`, a bare
+  truthy flag, an aggregate over it, or Go code that reads a scanned flag as not-zero. A new reader must take
+  one of the two forms.
+- **A team that moves between 1 and 2.** The table is `ReplacingMergeTree(computed_at)` ordered by
+  `(org_id, repo_id, work_item_id, ifNull(team_id, ''), source)`; `is_primary` is not in the key. A team whose
+  row goes from `1` to `2` (a new team ranks first) keeps the same key, the newer `computed_at` replaces the
+  row, and every reader also fences the item to its newest `computed_at`. Before a merge both versions are
+  stored; `FINAL` and the fence read the new one.
+- **Known limit: the daily rollups show the item under one team.** The rollup tables
+  (`work_item_metrics_daily`, `work_item_state_durations_daily`, `work_item_cycle_times`,
+  `issue_type_metrics_daily`, `investment_metrics_daily`, `work_item_user_metrics_daily`) are sums keyed by one
+  `team_id`. Their writers keep the primary team (`Resolve()` and the `is_primary = 1` loaders
+  `LoadWorkItemPrimaryTeamAttributions` / `loadWorkItemScopeAttributions`), so organization totals do not
+  change. A rollup-based team view shows a co-owned item under its primary team only, until the rollup rows
+  carry the team set with one organization-counted row per set. Linked-issue inheritance (section 2) also
+  passes the primary team only.
+- **Known limit: a key held by teams of two providers.** `projectKeyTeams` is not provider-scoped. When teams
+  of two providers hold one key, the primary row is the lowest team id (the rank tie-break); before this
+  change it was the first team by (provider, id).
+
+Tests: `TestAProjectOfSeveralTeamsAttributesTheItemToEveryActiveTeam` and
+`TestOnlyOwnersAtThePrimaryRankAreCoOwners` and `TestRepositoryAndNativeTeamHaveNoCoOwners` (the cascade, every
+provider); `TestAnItemOfAProjectOfSeveralTeamsIsWrittenForEveryActiveTeam` (real loaders, real writer, real
+ClickHouse, every provider; a team that moves from 1 to 2 with merges stopped);
+`TestAnIssueOfAProjectOfTwoTeamsIsInEachTeamsViewAndOnceInTheOrgView` and
+`TestThroughputOfAProjectOfTwoTeamsCountsInEachTeamAndOnceInTheOrg` (team A, team B, team(s), inactive team C,
+organization once and equal to the store without co-owner rows);
+`TestTheDailyAttributionReadersIgnoreACoOwnerRow`; `TestWorkItemTeamAttributionCoOwnerRowIsNotPrimary`.
 
 #### 0.4a Provider × entity **consumption** (functional — what `run_team_autoimport` actually pulls)
 

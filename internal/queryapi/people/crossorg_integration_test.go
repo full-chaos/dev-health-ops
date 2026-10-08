@@ -90,3 +90,72 @@ func TestPeopleReadersReturnOnlyTheCallingOrgsRowsForASharedRepoID(t *testing.T)
 		})
 	}
 }
+
+// CHAOS-8955: the served repository name belongs to the calling org even when
+// another org stores the same repo_id.
+func TestPersonDrilldownRepoNameIsTheCallingOrgsForASharedRepoID(t *testing.T) {
+	ctx := context.Background()
+	reader, f, personID := seedCrossOrgPeople(ctx, t)
+	for org, want := range map[string]string{f.OrgA: f.RepoName, f.OrgB: f.RepoNameB} {
+		resp, err := BuildDrilldownPRsResponse(ctx, reader, org, DrilldownPRsParams{
+			PersonID: personID, RangeDays: 30, Limit: 50, Now: crossOrgNow,
+		})
+		if err != nil {
+			t.Fatalf("BuildDrilldownPRsResponse(%s): %v", org, err)
+		}
+		if len(resp.Items) != 1 {
+			t.Fatalf("org %s: %d items, want 1", org, len(resp.Items))
+		}
+		if got := resp.Items[0].RepoName; got == nil || *got != want {
+			t.Errorf("org %s: RepoName = %v, want %q", org, got, want)
+		}
+	}
+}
+
+// CHAOS-8955: the served work item title belongs to the calling org even when
+// another org stores the same work_item_id.
+func TestWorkItemTitleIsTheCallingOrgsForASharedWorkItemID(t *testing.T) {
+	ctx := context.Background()
+	admin, client := crossorg.Start(ctx, t)
+	f := crossorg.Default()
+	for org, title := range map[string]string{f.OrgA: "org-a title", f.OrgB: "org-b title"} {
+		crossorg.Exec(ctx, t, admin, `
+            INSERT INTO work_items (repo_id, work_item_id, provider, title, status, created_at, updated_at, last_synced, org_id)
+            VALUES (?, 'shared-wi', 'github', ?, 'done', now64(3), now64(3), now64(3), ?)`,
+			f.RepoID, title, org)
+	}
+	got, err := fetchWorkItemTitles(ctx, client, f.OrgA, []string{"shared-wi", "absent-wi"})
+	if err != nil {
+		t.Fatalf("fetchWorkItemTitles: %v", err)
+	}
+	if len(got) != 1 || got["shared-wi"] != "org-a title" {
+		t.Fatalf("titles = %v, want only shared-wi = org-a title", got)
+	}
+}
+
+// CHAOS-8955: the repositories of an issue are those of its linked pull
+// requests in the calling org only, even when another org links the same
+// work item to the same repo_id.
+func TestIssueLinkedRepoNamesAreTheCallingOrgsForASharedKey(t *testing.T) {
+	ctx := context.Background()
+	admin, client := crossorg.Start(ctx, t)
+	f := crossorg.Default()
+	crossorg.SeedRepos(ctx, t, admin, f)
+	for _, org := range []string{f.OrgA, f.OrgB} {
+		crossorg.Exec(ctx, t, admin, `
+            INSERT INTO work_graph_issue_pr (org_id, repo_id, work_item_id, pr_number, confidence, provenance, evidence, last_synced)
+            VALUES (?, ?, 'shared-wi', 1, 1.0, 'native', 'test', now64(3))`,
+			org, f.RepoID)
+	}
+	crossorg.Exec(ctx, t, admin, `
+            INSERT INTO work_graph_issue_pr (org_id, repo_id, work_item_id, pr_number, confidence, provenance, evidence, last_synced)
+            VALUES (?, ?, 'org-b-only-wi', 2, 1.0, 'native', 'test', now64(3))`,
+		f.OrgB, f.RepoID)
+	got, err := fetchLinkedRepoNames(ctx, client, f.OrgA, []string{"shared-wi", "unlinked-wi", "org-b-only-wi"})
+	if err != nil {
+		t.Fatalf("fetchLinkedRepoNames: %v", err)
+	}
+	if len(got) != 1 || len(got["shared-wi"]) != 1 || got["shared-wi"][0] != f.RepoName {
+		t.Fatalf("linked repo names = %v, want only shared-wi = [%s]", got, f.RepoName)
+	}
+}

@@ -80,6 +80,7 @@ import (
 	"regexp"
 
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/scopelabel"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph/units"
 )
@@ -107,6 +108,13 @@ type Response struct {
 	// Go-only: the Python reference never served it. A team with no name is
 	// absent; the key is omitted when no team has one.
 	TeamNames map[string]string `json:"team_names,omitempty"`
+	// RepoNames maps a repository id of the org to its stored name, and
+	// DeveloperNames maps a developer email of Developers to the stored display
+	// name of that identity (CHAOS-8955). Go-only; an entry without a stored name
+	// is absent and the key is omitted when empty. Both are lookup maps, not
+	// ordered lists.
+	RepoNames      map[string]string `json:"repo_names,omitempty"`
+	DeveloperNames map[string]string `json:"developer_names,omitempty"`
 }
 
 // emailValueRe ports filters.py's _EMAIL_VALUE_RE verbatim -- Go's RE2
@@ -159,6 +167,27 @@ const teamNamesQuery = `
           AND org_id = {org_id:String}
           AND trim(name) != ''
         ORDER BY id
+    `
+
+// repoNamesQuery reads the stored name of each repository of the org.
+const repoNamesQuery = `
+        SELECT toString(id) AS repo_id, trim(repo) AS repo_name
+        FROM repos FINAL
+        WHERE org_id = {org_id:String}
+          AND trim(repo) != ''
+        ORDER BY id
+    `
+
+// developerNamesQuery reads the display name of each active identity of the org
+// that has an email.
+const developerNamesQuery = `
+        SELECT trim(email) AS developer_email, trim(display_name) AS developer_name
+        FROM identities FINAL
+        WHERE org_id = {org_id:String}
+          AND is_active = 1
+          AND trim(ifNull(email, '')) != ''
+          AND trim(ifNull(display_name, '')) != ''
+        ORDER BY canonical_id
     `
 
 // reposQuery ports repo_coro (api/queries/filters.py:60-63), with the
@@ -281,6 +310,18 @@ func BuildResponse(ctx context.Context, client QueryClient, orgID string) (Respo
 			developers = append(developers, value)
 		}
 	}
+	repoNames, err := namePairs(ctx, client, repoNamesQuery, "repo names", bindings, nil)
+	if err != nil {
+		return Response{}, err
+	}
+	listed := make(map[string]struct{}, len(developers))
+	for _, email := range developers {
+		listed[email] = struct{}{}
+	}
+	developerNames, err := namePairs(ctx, client, developerNamesQuery, "developer names", bindings, listed)
+	if err != nil {
+		return Response{}, err
+	}
 
 	return Response{
 		Teams:        teams,
@@ -291,6 +332,9 @@ func BuildResponse(ctx context.Context, client QueryClient, orgID string) (Respo
 		IssueType:    issueTypes,
 		FlowStage:    flowStages,
 		TeamNames:    teamNames,
+
+		RepoNames:      repoNames,
+		DeveloperNames: developerNames,
 	}, nil
 }
 
@@ -308,7 +352,8 @@ func namedTeams(ctx context.Context, client QueryClient, bindings []dhclickhouse
 		if err := rows.Scan(&id, &name); err != nil {
 			return nil, fmt.Errorf("filteroptions: team names scan: %w", err)
 		}
-		if id == "" || name == "" {
+		name, ok := scopelabel.CleanName(name)
+		if id == "" || !ok {
 			continue
 		}
 		if out == nil {
@@ -318,6 +363,44 @@ func namedTeams(ctx context.Context, client QueryClient, bindings []dhclickhouse
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("filteroptions: team names: %w", err)
+	}
+	return out, nil
+}
+
+// namePairs runs a two-column (key, name) query and returns the pairs as a map,
+// nil when none. A non-nil keep restricts the keys to that set. The first name
+// read for a key wins.
+func namePairs(ctx context.Context, client QueryClient, query, what string, bindings []dhclickhouse.Binding, keep map[string]struct{}) (map[string]string, error) {
+	rows, err := client.Query(ctx, query, bindings)
+	if err != nil {
+		return nil, fmt.Errorf("filteroptions: %s query: %w", what, err)
+	}
+	defer rows.Close()
+
+	var out map[string]string
+	for rows.Next() {
+		var key, name string
+		if err := rows.Scan(&key, &name); err != nil {
+			return nil, fmt.Errorf("filteroptions: %s scan: %w", what, err)
+		}
+		name, ok := scopelabel.CleanName(name)
+		if key == "" || !ok {
+			continue
+		}
+		if keep != nil {
+			if _, ok := keep[key]; !ok {
+				continue
+			}
+		}
+		if out == nil {
+			out = map[string]string{}
+		}
+		if _, seen := out[key]; !seen {
+			out[key] = name
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("filteroptions: %s: %w", what, err)
 	}
 	return out, nil
 }

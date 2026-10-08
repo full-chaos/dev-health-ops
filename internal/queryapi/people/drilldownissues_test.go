@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -241,6 +242,9 @@ func TestDrilldownIssuesGolden(t *testing.T) {
 		if v, _ := bindingValue(bindings, "org_id"); v != "org-1" {
 			t.Fatalf("org_id binding = %v, want org-1", v)
 		}
+		if strings.Contains(query, "FROM work_items FINAL") || strings.Contains(query, "FROM work_graph_issue_pr FINAL") {
+			return &pairRowScanner{}, nil
+		}
 		return &issuesRowScanner{rows: [][]any{
 			{"wi-1", "github", "done", "team-a", 12.5, 20.25, dt(2024, 6, 1, 10, 0, 0), dt(2024, 6, 3, 10, 0, 0)},
 			{"wi-2", "jira", "in_progress", nil, nil, nil, nil, nil},
@@ -267,5 +271,227 @@ func TestDrilldownIssuesGolden(t *testing.T) {
 	}
 	if string(gotJSON) != string(wantJSON) {
 		t.Fatalf("response mismatch\n got:  %s\nwant: %s", gotJSON, wantJSON)
+	}
+}
+
+// pairRowScanner replays fixed (key, name) rows.
+type pairRowScanner struct {
+	rows  [][2]string
+	index int
+}
+
+func (s *pairRowScanner) Next() bool {
+	if s.index >= len(s.rows) {
+		return false
+	}
+	s.index++
+	return true
+}
+
+func (s *pairRowScanner) Scan(dest ...any) error {
+	*dest[0].(*string), *dest[1].(*string) = s.rows[s.index-1][0], s.rows[s.index-1][1]
+	return nil
+}
+
+func (s *pairRowScanner) Err() error   { return nil }
+func (s *pairRowScanner) Close() error { return nil }
+
+// TestDrilldownIssuesServeTheStoredTitle: a stored title is served, an absent
+// one is null, and the title read is bound to the requesting org.
+func TestDrilldownIssuesServeTheStoredTitle(t *testing.T) {
+	t.Setenv("IDENTITY_MAPPING_PATH", t.TempDir()+"/missing.yaml")
+	var titleOrg any
+	client := personIdentityDispatchClient{identity: "alice@example.com", t: t, handler: func(t *testing.T, query string, bindings []dhclickhouse.Binding) (dhclickhouse.RowScanner, error) {
+		if strings.Contains(query, "FROM work_graph_issue_pr FINAL") {
+			return &pairRowScanner{}, nil
+		}
+		if strings.Contains(query, "FROM work_items FINAL") {
+			titleOrg, _ = bindingValue(bindings, "org_id")
+			return &pairRowScanner{rows: [][2]string{{"wi-1", "Fix login"}}}, nil
+		}
+		return &issuesRowScanner{rows: [][]any{
+			{"wi-1", "github", "done", nil, nil, nil, nil, nil},
+			{"wi-2", "jira", "done", nil, nil, nil, nil, nil},
+		}}, nil
+	}}
+	reader, err := NewReader(client)
+	if err != nil {
+		t.Fatalf("NewReader: %v", err)
+	}
+	got, err := BuildDrilldownIssuesResponse(context.Background(), reader, "org-1", DrilldownIssuesParams{
+		PersonID: "anyone", RangeDays: 14, Limit: 50, Now: dt(2024, 6, 15, 0, 0, 0),
+	})
+	if err != nil {
+		t.Fatalf("BuildDrilldownIssuesResponse: %v", err)
+	}
+	if titleOrg != "org-1" {
+		t.Fatalf("title read org_id = %v, want org-1", titleOrg)
+	}
+	if got.Items[0].Title == nil || *got.Items[0].Title != "Fix login" {
+		t.Fatalf("Items[0].Title = %v, want Fix login", got.Items[0].Title)
+	}
+	if got.Items[1].Title != nil {
+		t.Fatalf("Items[1].Title = %v, want nil", *got.Items[1].Title)
+	}
+}
+
+// TestDrilldownIssuesFailOnATitleReadError: a failed title read is an error,
+// never an unnamed success.
+func TestDrilldownIssuesFailOnATitleReadError(t *testing.T) {
+	t.Setenv("IDENTITY_MAPPING_PATH", t.TempDir()+"/missing.yaml")
+	client := personIdentityDispatchClient{identity: "alice@example.com", t: t, handler: func(t *testing.T, query string, bindings []dhclickhouse.Binding) (dhclickhouse.RowScanner, error) {
+		if strings.Contains(query, "FROM work_graph_issue_pr FINAL") {
+			return &pairRowScanner{}, nil
+		}
+		if strings.Contains(query, "FROM work_items FINAL") {
+			return nil, errors.New("boom")
+		}
+		return &issuesRowScanner{rows: [][]any{{"wi-1", "github", "done", nil, nil, nil, nil, nil}}}, nil
+	}}
+	reader, err := NewReader(client)
+	if err != nil {
+		t.Fatalf("NewReader: %v", err)
+	}
+	if _, err := BuildDrilldownIssuesResponse(context.Background(), reader, "org-1", DrilldownIssuesParams{
+		PersonID: "anyone", RangeDays: 14, Limit: 50, Now: dt(2024, 6, 15, 0, 0, 0),
+	}); err == nil {
+		t.Fatal("want an error when the title read fails")
+	}
+}
+
+// TestDrilldownIssuesServeTheLinkedRepoNames: one linked repo -> [name]; two
+// -> both (a repeated name once); none -> null; the read is bound to the org.
+func TestDrilldownIssuesServeTheLinkedRepoNames(t *testing.T) {
+	t.Setenv("IDENTITY_MAPPING_PATH", t.TempDir()+"/missing.yaml")
+	var linkOrg any
+	client := personIdentityDispatchClient{identity: "alice@example.com", t: t, handler: func(t *testing.T, query string, bindings []dhclickhouse.Binding) (dhclickhouse.RowScanner, error) {
+		if strings.Contains(query, "FROM work_items FINAL") {
+			return &pairRowScanner{}, nil
+		}
+		if strings.Contains(query, "FROM work_graph_issue_pr FINAL") {
+			linkOrg, _ = bindingValue(bindings, "org_id")
+			return &pairRowScanner{rows: [][2]string{{"wi-1", "acme/api"}, {"wi-2", "acme/api"}, {"wi-2", "acme/api"}, {"wi-2", "acme/web"}}}, nil
+		}
+		return &issuesRowScanner{rows: [][]any{
+			{"wi-1", "github", "done", nil, nil, nil, nil, nil},
+			{"wi-2", "github", "done", nil, nil, nil, nil, nil},
+			{"wi-3", "jira", "done", nil, nil, nil, nil, nil},
+		}}, nil
+	}}
+	reader, err := NewReader(client)
+	if err != nil {
+		t.Fatalf("NewReader: %v", err)
+	}
+	got, err := BuildDrilldownIssuesResponse(context.Background(), reader, "org-1", DrilldownIssuesParams{
+		PersonID: "anyone", RangeDays: 14, Limit: 50, Now: dt(2024, 6, 15, 0, 0, 0),
+	})
+	if err != nil {
+		t.Fatalf("BuildDrilldownIssuesResponse: %v", err)
+	}
+	if linkOrg != "org-1" {
+		t.Fatalf("link read org_id = %v, want org-1", linkOrg)
+	}
+	if !reflect.DeepEqual(got.Items[0].RepoNames, []string{"acme/api"}) ||
+		!reflect.DeepEqual(got.Items[1].RepoNames, []string{"acme/api", "acme/web"}) ||
+		got.Items[2].RepoNames != nil {
+		t.Fatalf("RepoNames = %v / %v / %v", got.Items[0].RepoNames, got.Items[1].RepoNames, got.Items[2].RepoNames)
+	}
+	body, _ := json.Marshal(got.Items[2])
+	if !strings.Contains(string(body), `"repo_names":null`) {
+		t.Fatalf("an unlinked issue must serve repo_names null: %s", body)
+	}
+}
+
+// TestDrilldownIssuesFailOnALinkedRepoReadError: a failed link read is an error.
+func TestDrilldownIssuesFailOnALinkedRepoReadError(t *testing.T) {
+	t.Setenv("IDENTITY_MAPPING_PATH", t.TempDir()+"/missing.yaml")
+	client := personIdentityDispatchClient{identity: "alice@example.com", t: t, handler: func(t *testing.T, query string, bindings []dhclickhouse.Binding) (dhclickhouse.RowScanner, error) {
+		if strings.Contains(query, "FROM work_items FINAL") {
+			return &pairRowScanner{}, nil
+		}
+		if strings.Contains(query, "FROM work_graph_issue_pr FINAL") {
+			return nil, errors.New("boom")
+		}
+		return &issuesRowScanner{rows: [][]any{{"wi-1", "github", "done", nil, nil, nil, nil, nil}}}, nil
+	}}
+	reader, err := NewReader(client)
+	if err != nil {
+		t.Fatalf("NewReader: %v", err)
+	}
+	if _, err := BuildDrilldownIssuesResponse(context.Background(), reader, "org-1", DrilldownIssuesParams{
+		PersonID: "anyone", RangeDays: 14, Limit: 50, Now: dt(2024, 6, 15, 0, 0, 0),
+	}); err == nil {
+		t.Fatal("want an error when the link read fails")
+	}
+}
+
+// TestLinkedRepoNamesQueryNeverReadsTheIssuesOwnRepo pins the entity tree: the
+// repositories come from work_graph_issue_pr, never from work_items.
+func TestLinkedRepoNamesQueryNeverReadsTheIssuesOwnRepo(t *testing.T) {
+	if strings.Contains(linkedRepoNamesQuery, "work_items") {
+		t.Fatalf("linkedRepoNamesQuery must not read work_items:\n%s", linkedRepoNamesQuery)
+	}
+	if strings.Count(linkedRepoNamesQuery, "org_id = {org_id:String}") != 2 {
+		t.Fatalf("both reads must bind the org:\n%s", linkedRepoNamesQuery)
+	}
+}
+
+// TestDrilldownIssuesFailOnALinkedRepoIterateError: an error that surfaces
+// only after the link rows were read is still an error.
+func TestDrilldownIssuesFailOnALinkedRepoIterateError(t *testing.T) {
+	t.Setenv("IDENTITY_MAPPING_PATH", t.TempDir()+"/missing.yaml")
+	client := personIdentityDispatchClient{identity: "alice@example.com", t: t, handler: func(t *testing.T, query string, bindings []dhclickhouse.Binding) (dhclickhouse.RowScanner, error) {
+		if strings.Contains(query, "FROM work_items FINAL") {
+			return &pairRowScanner{}, nil
+		}
+		if strings.Contains(query, "FROM work_graph_issue_pr FINAL") {
+			return &errAfterRowsScanner{pairRowScanner: pairRowScanner{rows: [][2]string{{"wi-1", "acme/api"}}}, err: errors.New("boom")}, nil
+		}
+		return &issuesRowScanner{rows: [][]any{{"wi-1", "github", "done", nil, nil, nil, nil, nil}}}, nil
+	}}
+	reader, err := NewReader(client)
+	if err != nil {
+		t.Fatalf("NewReader: %v", err)
+	}
+	if _, err := BuildDrilldownIssuesResponse(context.Background(), reader, "org-1", DrilldownIssuesParams{
+		PersonID: "anyone", RangeDays: 14, Limit: 50, Now: dt(2024, 6, 15, 0, 0, 0),
+	}); err == nil {
+		t.Fatal("want an error when the link rows fail while iterating")
+	}
+}
+
+// TestDrilldownIssuesDropABareUUIDLinkedRepoName: a linked repository whose
+// stored name is a bare UUID is dropped; a real name stays; an issue left with
+// no name serves repo_names null.
+func TestDrilldownIssuesDropABareUUIDLinkedRepoName(t *testing.T) {
+	t.Setenv("IDENTITY_MAPPING_PATH", t.TempDir()+"/missing.yaml")
+	client := personIdentityDispatchClient{identity: "alice@example.com", t: t, handler: func(t *testing.T, query string, bindings []dhclickhouse.Binding) (dhclickhouse.RowScanner, error) {
+		if strings.Contains(query, "FROM work_items FINAL") {
+			return &pairRowScanner{}, nil
+		}
+		if strings.Contains(query, "FROM work_graph_issue_pr FINAL") {
+			return &pairRowScanner{rows: [][2]string{
+				{"wi-1", "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"},
+				{"wi-2", "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"},
+				{"wi-2", "acme/web"},
+			}}, nil
+		}
+		return &issuesRowScanner{rows: [][]any{
+			{"wi-1", "github", "done", nil, nil, nil, nil, nil},
+			{"wi-2", "github", "done", nil, nil, nil, nil, nil},
+		}}, nil
+	}}
+	reader, err := NewReader(client)
+	if err != nil {
+		t.Fatalf("NewReader: %v", err)
+	}
+	got, err := BuildDrilldownIssuesResponse(context.Background(), reader, "org-1", DrilldownIssuesParams{
+		PersonID: "anyone", RangeDays: 14, Limit: 50, Now: dt(2024, 6, 15, 0, 0, 0),
+	})
+	if err != nil {
+		t.Fatalf("BuildDrilldownIssuesResponse: %v", err)
+	}
+	if got.Items[0].RepoNames != nil || !reflect.DeepEqual(got.Items[1].RepoNames, []string{"acme/web"}) {
+		t.Fatalf("RepoNames = %v / %v", got.Items[0].RepoNames, got.Items[1].RepoNames)
 	}
 }

@@ -316,3 +316,83 @@ func TestAnInactiveTeamFirstByIDDoesNotShadowTheActiveTeamOnTheSameKey(t *testin
 		}
 	}
 }
+
+// Teams are (provider, id) for the active-team rule, through the real loader.
+// A retired Jira project-as-team row has id = the project key ("ENG") and a
+// Linear team id is its team key ("ENG"): one id, two teams. For every pair of
+// providers and both roles (the item's own team active and the other
+// provider's team inactive, and the reverse), the inactive team of one
+// provider does not drop the active team of the other, and the inactive team
+// of the item's own provider drops it. The teams sorting key is (org_id, id),
+// so a merge keeps one of the two rows; merges are stopped so that both teams
+// stay physical, as a loader sees them between merges.
+func TestAnInactiveTeamDropsOnlyTheTeamOfItsOwnProviderWithTheSameID(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+	instance, err := containers.StartClickHouse(ctx)
+	if err != nil {
+		t.Fatalf("start ClickHouse: %v", err)
+	}
+	t.Cleanup(func() {
+		closeCtx, closeCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer closeCancel()
+		_ = instance.Close(closeCtx)
+	})
+	chschema.Apply(ctx, t, instance)
+	conn, err := clickhousestore.Open(ctx, clickhousestore.DefaultConfig(instance.URI))
+	if err != nil {
+		t.Fatalf("open ClickHouse: %v", err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+	if err := conn.Exec(ctx, "SYSTEM STOP MERGES teams"); err != nil {
+		t.Fatalf("stop merges on teams: %v", err)
+	}
+	first := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	for _, provider := range retractionProviders {
+		for _, other := range retractionProviders {
+			if other == provider {
+				continue
+			}
+			org := "org-same-id-" + provider + "-" + other
+			// The item's provider is active; the other provider's team of the
+			// same id was set inactive by a newer row.
+			for _, row := range []struct {
+				provider string
+				states   []uint8
+			}{{provider, []uint8{1}}, {other, []uint8{1, 0}}} {
+				teamUUID := uuid.New()
+				for version, isActive := range row.states {
+					at := first.Add(time.Duration(version) * time.Hour)
+					if err := conn.Exec(ctx, `INSERT INTO teams (id, team_uuid, name, members, manual_members, project_keys, repo_patterns, is_active, updated_at, last_synced, org_id, provider, native_team_key) VALUES (?, ?, ?, [], [], ?, [], ?, ?, ?, ?, ?, ?)`,
+						"ENG", teamUUID, "Eng "+row.provider, []string{"ENG"}, isActive, at, at, org, row.provider, "ENG"); err != nil {
+						t.Fatalf("insert team %s/ENG: %v", row.provider, err)
+					}
+				}
+			}
+			facts, err := ClickHouseFactSource{Conn: conn}.LoadTeams(ctx, org)
+			if err != nil {
+				t.Fatalf("LoadTeams: %v", err)
+			}
+			if len(facts) != 2 {
+				t.Fatalf("LoadTeams = %+v, want the two teams %s/ENG and %s/ENG", facts, provider, other)
+			}
+			derived := NewGitHubWorkItemDerivationContext(GithubWorkItemDerivationFacts{Teams: facts})
+			key := "ENG"
+			for _, item := range []struct {
+				provider string
+				want     string
+			}{{provider, "ENG"}, {other, ""}} {
+				for name, subject := range map[string]GithubWorkItemDerivationSubject{
+					"by the project key":     {WorkItemID: item.provider + ":ENG-1", Provider: item.provider, Type: "issue", ProjectKey: &key},
+					"by the native team key": {WorkItemID: item.provider + ":ENG-2", Provider: item.provider, Type: "issue", NativeTeamKey: &key},
+				} {
+					gotTeam, _, candidates := derived.Resolve(subject)
+					if got := GithubWorkItemDerivationStringValue(gotTeam); got != item.want {
+						t.Errorf("active %s, inactive %s: %s item %s: resolved team = %q, want %q (candidates %+v)",
+							provider, other, item.provider, name, got, item.want, candidates)
+					}
+				}
+			}
+		}
+	}
+}

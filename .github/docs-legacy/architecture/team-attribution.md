@@ -80,10 +80,11 @@ provenance, jump to that node, and verify no higher-precedence stage matched.
 other team at the winner's rank, read by team-scoped views only. The values, the readers and the known limits are in
 `docs/contribute/architecture/team-attribution.md` section 0.4d.
 
-**CHAOS-8924.** A key string is not a link across providers: `native_team` and `issue_project` take only ACTIVE teams
-whose `provider` equals the item's `provider` (a team with an empty `provider` holds no provider's key). When no team of
-the item's provider holds the key, the tier gives no candidate and the cascade goes on to its next source. Details and
-the effect on per-team totals: `docs/contribute/architecture/team-attribution.md` section 0.4e.
+**CHAOS-8924.** A key string is not a link across providers: `native_team` and `issue_project` take the ACTIVE teams
+whose `provider` equals the item's `provider`; when none holds the key, the ACTIVE admin teams (empty `provider`) that
+hold it; a team of another provider never. When the key has no holder, the tier gives no candidate and the cascade goes
+on to its next source. The active-team rule also reads teams as (provider, id). Details and the effect on per-team
+totals: `docs/contribute/architecture/team-attribution.md` section 0.4e.
 
 ```mermaid
 flowchart TD

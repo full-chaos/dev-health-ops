@@ -408,8 +408,8 @@ means the ClickHouse `teams` dimension is empty.
 
 | # | `source` | Resolves from (ClickHouse) | Confidence | Beats | Never overrides | Evidence keys |
 |--:|---|---|---|---|---|---|
-| 0 | `native_team` | `WorkItem.native_team_key` → `teams` of the item's provider (section 0.4e) | high | all below | — (top) | `native_team_key` |
-| 1 | `issue_project` | native issue project key → `teams` of the item's provider that hold it (section 0.4e) | high | 2–8 | 0 | `project_id, owner_team` |
+| 0 | `native_team` | `WorkItem.native_team_key` → `teams` of the item's provider, else admin teams (section 0.4e) | high | all below | — (top) | `native_team_key` |
+| 1 | `issue_project` | native issue project key → `teams` of the item's provider that hold it, else admin teams (section 0.4e) | high | 2–8 | 0 | `project_id, owner_team` |
 | 2 | `project_ownership` | `team_project_ownership` | high | 3–8 | 0–1 | `project_id, provider` |
 | 3 | `repo_ownership` | `team_repo_ownership` | medium | 4–8 | 0–2 | `repo_full_name` |
 | 4 | `assignee_membership` | CHAOS-4321 two-layer: `identities`/`teams` (admin override, single-team) else `team_memberships` (provider fallback, single-team) | high (admin) / medium (provider) | 5–8 | 0–3 | `canonical_id, identity` (evidence text: `assignee_membership=<id>`) |
@@ -817,7 +817,13 @@ The Atlassian Teams of a Jira site ARE the Jira teams. A team owns a Jira projec
     (`internal/teamattribution/cascade.go`) flags a team whose newest `is_active` is 0 as inactive. The team
     stays known to the cascade (the null-carrying rule treats it as any team), and
     `dropInactiveTeamCandidates` drops every candidate that names it, once, after all paths have produced
-    theirs. A retired, archived or never-active team of any provider takes no work item by project key, team
+    theirs. Teams are (provider, id) here too: a candidate names a team id, and the team it means for the item
+    is picked as a key holder is (section 0.4e: the team of the item's provider with that id, else the admin
+    team with that id, else the teams of other providers with that id). An inactive team of another provider
+    with the same id (a retired Jira project-as-team row `ENG` and a Linear team `ENG`) does not drop the
+    item's own active team. Storage limit: the `teams` sorting key is (org_id, id), without `provider`, so a
+    merge keeps one row of two teams that share an id in one organization; the loader sees both only between
+    merges. A retired, archived or never-active team of any provider takes no work item by project key, team
     id, native team key, ownership, membership, linked issue or manual fallback. A Jira project that no Atlassian team is connected to is unassigned. A recompute of an
     old day leaves the items of a now-inactive team unassigned.
   - **Counts.** The result field `ProjectAsTeamRetired`; the metric `dev_health_team_catalog_rows_written_total`
@@ -864,8 +870,8 @@ project (section 0.1): a native team key gives one team.
 
 - **Where it is decided.** One shared seam in `internal/teamattribution/cascade.go`, the same for every
   provider: a project key maps to every ACTIVE team that holds it (`projectKeyTeams`, catalog order
-  (provider, id)). `IssueProjectCandidates` gives an `issue_project` candidate for each holder of the item's
-  provider (section 0.4e): the first is the primary, the others are co-owners. A key string held by a team of
+  (provider, id)). `IssueProjectCandidates` gives an `issue_project` candidate for each holder of the key for
+  the item (section 0.4e): the first is the primary, the others are co-owners. A key string held by a team of
   another provider does not make that team an owner of the item's project (a team reaches an item only through
   ownership of its project), so it takes no row. `project_ownership` facts are
   looked up by the item's provider. When the winning source of an item is
@@ -971,21 +977,29 @@ organization once and equal to the store without co-owner rows);
 to the teams that hold it, as their id or in `project_keys`. A team reaches an item only through ownership of
 the item's project, and a key string held by a team of another provider is not that ownership. So both tiers
 read the holders of a key through ONE shared function, `keyHoldersOfProvider` in
-`internal/teamattribution/cascade.go`, the same for every provider:
+`internal/teamattribution/cascade.go` (it applies `teamsForItemProvider`), the same for every provider:
 
-- A holder is an ACTIVE team whose `provider` equals the item's `provider` (both trimmed, as
-  `AttributionMapKey` compares them). A team of another provider is not a holder. A team with an empty
-  `provider` (an admin-created team; `ClickHouseTeamAdminService` writes `provider = ""`) is not a holder of
-  any provider's key, and an item with an empty `provider` has no holder.
-- `native_team`: the first holder of the item's provider in catalog order (provider, id). When no team of the
-  item's provider holds the native team key, there is no `native_team` candidate.
-- `issue_project`: the item looks up its scope key, then its project key; the first of these keys that a team
-  of the item's provider holds decides. Each holder of the item's provider of that key gives a candidate: the
-  first is the primary, the others are co-owners (section 0.4d). When no team of the item's provider holds
-  either key, the tier gives no candidate and the cascade goes on to its next source (`project_ownership`,
-  then the sources below it), as it does when no team holds the key at all.
+- The holders of a key for an item are the ACTIVE teams that hold it whose `provider` equals the item's
+  `provider` (both trimmed, as `AttributionMapKey` compares them). When no such team holds the key, the holders
+  are the ACTIVE admin teams that hold it: teams with an empty `provider`. Admin create
+  (`teamsidentity.Store.CreateOrUpdateTeam`) and admin import (`teamsidentity.Store.projectTeam`, which copies
+  the discovered provider team's `associations.project_keys`, section 0.4a) write `provider = ""`. A team of
+  another provider is never a holder. An item with an empty `provider` takes the admin teams only.
+- The admin fallback is per key, and it is a key tier: an admin holder takes `issue_project` (rank 1) or
+  `native_team` (rank 0), so it outranks a `project_ownership` fact of a team of the item's provider when no
+  team of the item's provider holds the key. This is as on main, where the first holder of any provider took
+  the row.
+- `native_team`: the first holder in catalog order (provider, id). When the key has no holder, there is no
+  `native_team` candidate.
+- `issue_project`: the item looks up its scope key, then its project key; the first of these keys that has a
+  holder decides (an admin holder of the scope key decides before a team of the item's provider that holds
+  only the project key). Each holder of that key gives a candidate: the first is the primary, the others are
+  co-owners (section 0.4d). When neither key has a holder, the tier gives no candidate and the cascade goes on
+  to its next source (`project_ownership`, then the sources below it), as it does when no team holds the key
+  at all.
 - Teams are (provider, id): a team of another provider with the same id that holds the same key does not hide
-  the item's own team from the key.
+  the item's own team from the key, and an inactive team of another provider with the same id does not drop
+  it (`dropInactiveTeamCandidates` picks the team a candidate id means with the same `teamsForItemProvider`).
 
 **Every tier that reads a key string.** The cascade tiers that pick a TEAM by a key string held in `teams`
 (its id or `project_keys`) are exactly `native_team` and `issue_project`; both read `keyHoldersOfProvider` and
@@ -1002,22 +1016,31 @@ nothing else reads `projectKeyTeams`. The other key lookups of the cascade are n
   the rule's provider to be empty or the item's).
 
 **Effect on stored rows.** Before this change, the first active holder of a key by (provider, id), of any
-provider, took the row. An item whose key a team of another provider (or a team with an empty provider) also
-held could therefore have that team as its primary (`is_primary = 1`). From the first attribution run after
-this change, such an item has its primary on a team of its own provider, or, when no team of its provider
-holds the key, on the next source. Each item still has exactly one primary row, so organization totals do
+provider, took the row. An item whose key a team of another provider (or an admin team) also held could
+therefore have that team as its primary (`is_primary = 1`). From the first attribution run after this change,
+such an item has its primary on a team of its own provider; when no team of its provider holds the key, on an
+admin team that holds it; else on the next source. An item of a team whose id an inactive team of another
+provider shares is attributed to its team again (before, it was dropped). Each item still has exactly one primary row, so organization totals do
 not change. Per-team totals move: the daily rollups keyed by the primary team (`work_item_metrics_daily`,
 `work_item_state_durations_daily`, `work_item_cycle_times`, `issue_type_metrics_daily`,
 `investment_metrics_daily`, `work_item_user_metrics_daily`), the primary-team views and the one-team-per-work-unit
-votes move such items from the other provider's team (or the empty-provider team) to the team of the item's
-provider, to a `project_ownership` or lower source, or to `unassigned`.
+votes move such items from the other provider's team (or an admin team that a team of the item's provider
+outranks) to the team of the item's provider, to an admin team, to a `project_ownership` or lower source, or
+to `unassigned`.
 
 Tests: `TestIssueProjectPrimaryIsATeamOfTheItemsProvider`,
-`TestAKeyHeldOnlyByOtherProvidersGivesNoKeyTierRow`, `TestIssueProjectProviderMatchIsExactAndNeverEmpty`,
-`TestTheFirstKeyHeldByATeamOfTheItemsProviderDecides`, `TestATeamIDOfAnotherProviderDoesNotHideTheItemsTeam`,
-`TestNativeTeamIsATeamOfTheItemsProvider` (the cascade, every provider against every other provider and the
-empty provider); `TestProjectAndNativeKeysAttributeOnlyToTeamsOfTheItemsProvider` (real loaders, real cascade,
-real writer, real ClickHouse, every provider).
+`TestAKeyHeldOnlyByOtherProvidersGivesNoKeyTierRow`,
+`TestAnAdminTeamHoldsTheKeyOnlyWhenNoTeamOfTheItemsProviderDoes`,
+`TestTheProviderMatchIsTrimmedAndAnItemWithNoProviderTakesAnAdminTeam`,
+`TestTheFirstKeyHeldByATeamOfTheItemsProviderDecides`, `TestAnAdminHolderOfTheFirstKeyDecides`,
+`TestATeamIDOfAnotherProviderDoesNotHideTheItemsTeam`, `TestNativeTeamIsATeamOfTheItemsProvider`,
+`TestAnInactiveTeamOfAnotherProviderWithTheSameIDDoesNotDropTheItemsTeam`,
+`TestAnIDOfOnlyOtherProvidersFollowsTheirActiveFlag` (the cascade, every provider against every other provider
+and the empty provider); `TestProjectAndNativeKeysAttributeOnlyToTeamsOfTheItemsProvider` (real loaders, real
+cascade, real writer, real ClickHouse, every provider, the admin cases included);
+`TestAnInactiveTeamDropsOnlyTheTeamOfItsOwnProviderWithTheSameID` (real loader, every pair of providers);
+`TestProviderTaggedTeamTwinsMatchTheFrozenAnswersForEveryProvider` (the frozen answers, written for admin teams,
+also hold for a team of the item's provider).
 
 #### 0.4a Provider × entity **consumption** (functional — what `run_team_autoimport` actually pulls)
 

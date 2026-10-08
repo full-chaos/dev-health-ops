@@ -243,9 +243,10 @@ type ClickHouseFactSource struct {
 
 type GithubWorkItemDerivationContext struct {
 	// projectKeyTeams: every ACTIVE team that holds a key, in catalog order
-	// (provider, id), of any provider. Readers go through keyHoldersOfProvider:
-	// a native team key takes the first holder of the item's provider, and
-	// IssueProjectCandidates takes every holder of the item's provider.
+	// (provider, id), of any provider. Readers go through keyHoldersOfProvider
+	// (the teams of the item's provider, else the teams with no provider): a
+	// native team key takes the first holder, and IssueProjectCandidates takes
+	// every holder.
 	projectKeyTeams map[string][]GithubWorkItemDerivationTeamFact
 	projectByID     map[string][]GithubWorkItemDerivationCandidate
 	projectByKey    map[string][]GithubWorkItemDerivationCandidate
@@ -288,11 +289,15 @@ type GithubWorkItemDerivationContext struct {
 	// happen to look identical from ONE repo's ownership row alone.
 	teamsWithOwnership    map[string]struct{}
 	teamsKnownFromCatalog map[string]struct{}
-	// inactiveTeams: team ids whose newest catalog row is inactive. They are in
-	// teamsKnownFromCatalog (so R74 / null-carrying behave as for any team),
-	// and resolve() drops every candidate that names one -- ONE filter, after
-	// all paths have produced their candidates (dropInactiveTeamCandidates).
-	inactiveTeams map[string]struct{}
+	// inactiveTeams: teams, by AttributionMapKey(provider, id), whose newest
+	// catalog row is inactive. They are in teamsKnownFromCatalog (so R74 /
+	// null-carrying behave as for any team), and resolve() drops every
+	// candidate that names one -- ONE filter, after all paths have produced
+	// their candidates (dropInactiveTeamCandidates). A candidate names a team
+	// id only; catalogTeamsByID gives the teams of that id, and
+	// teamsForItemProvider picks the one the item means.
+	inactiveTeams    map[string]struct{}
+	catalogTeamsByID map[string][]GithubWorkItemDerivationTeamFact
 }
 
 // GithubWorkItemDerivationEdgeKey is the identity a fresh edge is authoritative
@@ -364,6 +369,7 @@ func NewGitHubWorkItemDerivationContext(
 		teamsWithOwnership:           map[string]struct{}{},
 		teamsKnownFromCatalog:        map[string]struct{}{},
 		inactiveTeams:                map[string]struct{}{},
+		catalogTeamsByID:             map[string][]GithubWorkItemDerivationTeamFact{},
 	}
 	// CHAOS-5649 (R179 rule 2): populate the null-carrying-team sets from
 	// the raw ownership facts directly -- see teamsWithOwnership's doc
@@ -381,8 +387,9 @@ func NewGitHubWorkItemDerivationContext(
 	for _, team := range facts.Teams {
 		if teamID := strings.TrimSpace(team.TeamID); teamID != "" {
 			result.teamsKnownFromCatalog[teamID] = struct{}{}
+			result.catalogTeamsByID[teamID] = append(result.catalogTeamsByID[teamID], team)
 			if team.Inactive {
-				result.inactiveTeams[teamID] = struct{}{}
+				result.inactiveTeams[AttributionMapKey(team.Provider, teamID)] = struct{}{}
 			}
 			if len(team.ProjectKeys) > 0 {
 				result.teamsWithOwnership[teamID] = struct{}{}
@@ -834,7 +841,7 @@ func (derived GithubWorkItemDerivationContext) resolve(
 		bySource["manual_fallback"], derived.ManualCandidates(subject)...,
 	)
 
-	derived.dropInactiveTeamCandidates(bySource)
+	derived.dropInactiveTeamCandidates(bySource, subject.Provider)
 
 	order := []string{
 		"native_team", "issue_project", "project_ownership", "repo_ownership",
@@ -1079,35 +1086,46 @@ func (derived GithubWorkItemDerivationContext) NativeTeamCandidate(
 	}
 }
 
-// keyHoldersOfProvider returns the active teams of one provider that hold a
-// key, in catalog order. A key string is not a link across providers: a team
-// of another provider, or a team with no provider, that holds the same key is
-// not a holder for an item of this provider, and an item with no provider has
-// no holder.
+// keyHoldersOfProvider returns the active teams that hold a key for an item
+// of one provider, in catalog order (see teamsForItemProvider).
 func (derived GithubWorkItemDerivationContext) keyHoldersOfProvider(
 	key, provider string,
 ) []GithubWorkItemDerivationTeamFact {
-	provider = strings.TrimSpace(provider)
-	if provider == "" {
-		return nil
-	}
-	var result []GithubWorkItemDerivationTeamFact
-	for _, team := range derived.projectKeyTeams[strings.TrimSpace(key)] {
-		if strings.TrimSpace(team.Provider) == provider {
-			result = append(result, team)
-		}
-	}
-	return result
+	return teamsForItemProvider(derived.projectKeyTeams[strings.TrimSpace(key)], provider)
 }
 
-// IssueProjectCandidates gives one issue_project candidate for each active
-// team of the item's provider that holds the item's project key, in catalog
-// order, for the first key that such a team holds. The first is the primary
-// and the others are co-owners. A key string is not a link across providers:
-// a team of another provider, or a team with no provider, that holds the same
-// key is not an owner of the item's project and gives no candidate. When no
-// team of the item's provider holds a key, the tier gives nothing and the
-// cascade goes on to its next source.
+// teamsForItemProvider picks, from teams that share a key or an id, the teams
+// that an item of one provider takes, in their order: the teams of the item's
+// provider; when there is none, the teams with no provider (the admin teams:
+// admin create and admin import write provider ""). A team of another
+// provider is never taken: a key string or a team id is not a link across
+// providers. Providers compare trimmed, as AttributionMapKey does.
+func teamsForItemProvider(
+	teams []GithubWorkItemDerivationTeamFact, provider string,
+) []GithubWorkItemDerivationTeamFact {
+	provider = strings.TrimSpace(provider)
+	var own, providerless []GithubWorkItemDerivationTeamFact
+	for _, team := range teams {
+		switch strings.TrimSpace(team.Provider) {
+		case provider:
+			own = append(own, team)
+		case "":
+			providerless = append(providerless, team)
+		}
+	}
+	if len(own) > 0 {
+		return own
+	}
+	return providerless
+}
+
+// IssueProjectCandidates gives one issue_project candidate for each holder of
+// the item's project key (keyHoldersOfProvider: the active teams of the item's
+// provider, else the active teams with no provider), in catalog order, for the
+// first key that has a holder. The first is the primary and the others are
+// co-owners. A team of another provider that holds the same key gives no
+// candidate. When a key has no holder, the lookup goes on to the next key, and
+// after the last key the cascade goes on to its next source.
 func (derived GithubWorkItemDerivationContext) IssueProjectCandidates(
 	subject GithubWorkItemDerivationSubject,
 ) []GithubWorkItemDerivationCandidate {
@@ -1416,8 +1434,10 @@ const teamNewestRowInactive = `argMax(is_active, (updated_at, last_synced, is_ac
 // linked issue, manual fallback), and the cascade goes on as if that path had
 // no candidate. It is applied once, to the candidates of every source, so a
 // new path cannot forget it. Inactive teams stay in teamsKnownFromCatalog.
+// Teams are (provider, id): an inactive team of another provider with the same
+// id does not drop the item's own active team.
 func (derived GithubWorkItemDerivationContext) dropInactiveTeamCandidates(
-	bySource map[string][]GithubWorkItemDerivationCandidate,
+	bySource map[string][]GithubWorkItemDerivationCandidate, provider string,
 ) {
 	if len(derived.inactiveTeams) == 0 {
 		return
@@ -1425,15 +1445,30 @@ func (derived GithubWorkItemDerivationContext) dropInactiveTeamCandidates(
 	for source, candidates := range bySource {
 		kept := candidates[:0:0]
 		for _, candidate := range candidates {
-			if candidate.TeamID != nil {
-				if _, inactive := derived.inactiveTeams[strings.TrimSpace(*candidate.TeamID)]; inactive {
-					continue
-				}
+			if candidate.TeamID != nil && derived.teamIsInactiveForItem(strings.TrimSpace(*candidate.TeamID), provider) {
+				continue
 			}
 			kept = append(kept, candidate)
 		}
 		bySource[source] = kept
 	}
+}
+
+// teamIsInactiveForItem: the team that a candidate's id names for an item of
+// one provider is inactive. The id names the teams teamsForItemProvider picks;
+// when it picks none (only teams of other providers have the id), it names
+// those teams, as the candidate can only mean one of them.
+func (derived GithubWorkItemDerivationContext) teamIsInactiveForItem(teamID, provider string) bool {
+	teams := teamsForItemProvider(derived.catalogTeamsByID[teamID], provider)
+	if len(teams) == 0 {
+		teams = derived.catalogTeamsByID[teamID]
+	}
+	for _, team := range teams {
+		if _, inactive := derived.inactiveTeams[AttributionMapKey(team.Provider, teamID)]; inactive {
+			return true
+		}
+	}
+	return false
 }
 
 // LoadTeams reads the teams of one organization, the inactive ones flagged

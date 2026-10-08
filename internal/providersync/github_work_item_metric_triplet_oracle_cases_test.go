@@ -374,8 +374,8 @@ func githubWorkItemMetricTripletOracleCases() []oracleCase {
 				}),
 			},
 			"Facts": map[string]any{"Teams": []any{
-				map[string]any{"Provider": "github", "TeamID": "team-a", "TeamName": "Team A", "ProjectKeys": []any{"TEAMA"}},
-				map[string]any{"Provider": "github", "TeamID": "team-b", "TeamName": "Team B", "ProjectKeys": []any{"TEAMB"}},
+				map[string]any{"TeamID": "team-a", "TeamName": "Team A", "ProjectKeys": []any{"TEAMA"}},
+				map[string]any{"TeamID": "team-b", "TeamName": "Team B", "ProjectKeys": []any{"TEAMB"}},
 			}},
 		}),
 		// The status a transition leaves the item in AT or BEFORE started_at

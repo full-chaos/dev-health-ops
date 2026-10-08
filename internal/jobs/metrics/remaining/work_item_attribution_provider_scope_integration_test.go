@@ -20,15 +20,20 @@ import (
 //     provider (all of them sort first in the catalog) and by two teams of
 //     the item's provider: the first team of the item's provider is the one
 //     issue_project primary row, the second its co-owner, the others no row;
-//   - a key held only by teams of other providers and a team with no
-//     provider: no issue_project row; the item's project ownership by a team
-//     of its provider is the primary;
+//   - a key held only by teams of other providers: no issue_project row; the
+//     item's project ownership by a team of its provider is the primary;
+//   - a key held by teams of other providers and by an admin team (provider
+//     "", as admin create and admin import write it), and owned by a team of
+//     the item's provider: the admin team is the issue_project primary, and
+//     the project ownership is a lower tier;
 //   - a native team key held by a team of another provider that sorts first
 //     and by a team of the item's provider: the native_team primary is the
 //     team of the item's provider;
+//   - a native team key held by teams of other providers and an admin team:
+//     the admin team is the native_team primary;
 //   - a native team key (and project key) held only by teams of other
-//     providers and a team with no provider: no native_team and no
-//     issue_project row; the project ownership is the primary.
+//     providers: no native_team and no issue_project row; the project
+//     ownership is the primary.
 func TestProjectAndNativeKeysAttributeOnlyToTeamsOfTheItemsProvider(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
 	defer cancel()
@@ -73,14 +78,16 @@ func TestProjectAndNativeKeysAttributeOnlyToTeamsOfTheItemsProvider(t *testing.T
 	for _, provider := range coOwnerProviders {
 		upper := strings.ToUpper(provider)
 		mixed, only, native := "MIX"+upper, "ONLY"+upper, "NAT"+upper
-		insertTeam("", "0-admin-"+provider, []string{mixed, only, native})
+		admin, adminNative := "ADM"+upper, "ADMNAT"+upper
+		insertTeam("", "0-admin-"+provider, []string{mixed, native, admin, adminNative})
 		for _, other := range others(provider) {
-			insertTeam(other, "0-"+other+"-holds-"+provider, []string{mixed, only, native})
+			insertTeam(other, "0-"+other+"-holds-"+provider, []string{mixed, only, native, admin, adminNative})
 		}
 		insertTeam(provider, "m-team-a-"+provider, []string{mixed})
 		insertTeam(provider, "m-team-b-"+provider, []string{mixed})
 		insertTeam(provider, "own-"+provider, nil)
 		insertOwnership(provider, "own-"+provider, only)
+		insertOwnership(provider, "own-"+provider, admin)
 		insertTeam(provider, "nat-"+provider, []string{native})
 
 		mixedKey, onlyKey, nativeKey := mixed, only, native
@@ -89,6 +96,10 @@ func TestProjectAndNativeKeysAttributeOnlyToTeamsOfTheItemsProvider(t *testing.T
 		addSubject(teamattribution.GithubWorkItemDerivationSubject{WorkItemID: provider + ":" + only + "-1", Provider: provider, ProjectKey: &onlyKey, ProjectID: &onlyProjectID})
 		addSubject(teamattribution.GithubWorkItemDerivationSubject{WorkItemID: provider + ":" + native + "-1", Provider: provider, NativeTeamKey: &nativeKey})
 		addSubject(teamattribution.GithubWorkItemDerivationSubject{WorkItemID: provider + ":" + only + "-2", Provider: provider, NativeTeamKey: &onlyKey, ProjectKey: &onlyKey, ProjectID: &onlyProjectID})
+		adminKey, adminNativeKey := admin, adminNative
+		adminProjectID := "proj-" + strings.ToLower(admin)
+		addSubject(teamattribution.GithubWorkItemDerivationSubject{WorkItemID: provider + ":" + admin + "-1", Provider: provider, ProjectKey: &adminKey, ProjectID: &adminProjectID})
+		addSubject(teamattribution.GithubWorkItemDerivationSubject{WorkItemID: provider + ":" + adminNative + "-1", Provider: provider, NativeTeamKey: &adminNativeKey})
 	}
 
 	computedAt := time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC)
@@ -105,7 +116,7 @@ func TestProjectAndNativeKeysAttributeOnlyToTeamsOfTheItemsProvider(t *testing.T
 	}
 
 	ownTeam := func(provider, teamID string) bool {
-		return strings.HasSuffix(teamID, "-"+provider) && !strings.HasPrefix(teamID, "0-")
+		return teamID == "0-admin-"+provider || strings.HasSuffix(teamID, "-"+provider) && !strings.HasPrefix(teamID, "0-")
 	}
 	for _, provider := range coOwnerProviders {
 		upper := strings.ToUpper(provider)
@@ -143,5 +154,10 @@ func TestProjectAndNativeKeysAttributeOnlyToTeamsOfTheItemsProvider(t *testing.T
 				t.Errorf("%s: %s row of %s, want none", provider, row.source, row.teamID)
 			}
 		}
+		check(provider+":ADM"+upper+"-1", "issue_project", "0-admin-"+provider, "")
+		if got := strings.Join(teamsWith(latestAttributions(t, ctx, conn, orgID, provider+":ADM"+upper+"-1"), "project_ownership", 0), ","); got != "own-"+provider {
+			t.Errorf("%s: project_ownership lower-tier teams = %q, want own-%s", provider, got, provider)
+		}
+		check(provider+":ADMNAT"+upper+"-1", "native_team", "0-admin-"+provider, "")
 	}
 }

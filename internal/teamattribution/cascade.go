@@ -104,6 +104,10 @@ type GithubWorkItemDerivationTeamFact struct {
 	TeamName    string
 	ProjectKeys []string
 	UpdatedAt   time.Time
+	// Inactive: the newest row of this team has is_active = 0. The team stays
+	// KNOWN to the cascade (null-carrying rules behave as for any team) but it
+	// is never the result of a resolution (see inactiveTeams).
+	Inactive bool
 }
 
 type GithubWorkItemDerivationProjectFact struct {
@@ -280,6 +284,11 @@ type GithubWorkItemDerivationContext struct {
 	// happen to look identical from ONE repo's ownership row alone.
 	teamsWithOwnership    map[string]struct{}
 	teamsKnownFromCatalog map[string]struct{}
+	// inactiveTeams: team ids whose newest catalog row is inactive. They are in
+	// teamsKnownFromCatalog (so R74 / null-carrying behave as for any team),
+	// and resolve() drops every candidate that names one -- ONE filter, after
+	// all paths have produced their candidates (dropInactiveTeamCandidates).
+	inactiveTeams map[string]struct{}
 }
 
 // GithubWorkItemDerivationEdgeKey is the identity a fresh edge is authoritative
@@ -350,6 +359,7 @@ func NewGitHubWorkItemDerivationContext(
 		LinkedIssue:                  map[string][2]string{},
 		teamsWithOwnership:           map[string]struct{}{},
 		teamsKnownFromCatalog:        map[string]struct{}{},
+		inactiveTeams:                map[string]struct{}{},
 	}
 	// CHAOS-5649 (R179 rule 2): populate the null-carrying-team sets from
 	// the raw ownership facts directly -- see teamsWithOwnership's doc
@@ -367,6 +377,9 @@ func NewGitHubWorkItemDerivationContext(
 	for _, team := range facts.Teams {
 		if teamID := strings.TrimSpace(team.TeamID); teamID != "" {
 			result.teamsKnownFromCatalog[teamID] = struct{}{}
+			if team.Inactive {
+				result.inactiveTeams[teamID] = struct{}{}
+			}
 			if len(team.ProjectKeys) > 0 {
 				result.teamsWithOwnership[teamID] = struct{}{}
 			}
@@ -803,6 +816,8 @@ func (derived GithubWorkItemDerivationContext) resolve(
 	bySource["manual_fallback"] = append(
 		bySource["manual_fallback"], derived.ManualCandidates(subject)...,
 	)
+
+	derived.dropInactiveTeamCandidates(bySource)
 
 	order := []string{
 		"native_team", "issue_project", "project_ownership", "repo_ownership",
@@ -1268,14 +1283,38 @@ func (derived GithubWorkItemDerivationContext) ResolveWithoutLinked(
 	return teamID, teamName, candidates
 }
 
-// activeTeamsOnly is the one rule for which teams take part in attribution: a
-// team whose newest row is inactive is not loaded, for every provider. Such a
-// team takes no work item by a project key, by its own id or by a native team
-// key, and it is not a team the catalog knows. The newest row decides, so a
-// team that was set inactive and then active again is loaded.
-const activeTeamsOnly = `HAVING argMax(is_active, (updated_at, last_synced, is_active)) = 1`
+// teamNewestRowInactive: the newest row decides, so a team that was set
+// inactive and then active again is active.
+const teamNewestRowInactive = `argMax(is_active, (updated_at, last_synced, is_active)) = 0`
 
-// LoadTeams reads the ACTIVE teams of one organization (activeTeamsOnly).
+// dropInactiveTeamCandidates is the one rule for which teams take part in
+// attribution: a candidate that names an inactive team is dropped, whatever
+// path produced it (project key, native team key, ownership, membership,
+// linked issue, manual fallback), and the cascade goes on as if that path had
+// no candidate. It is applied once, to the candidates of every source, so a
+// new path cannot forget it. Inactive teams stay in teamsKnownFromCatalog.
+func (derived GithubWorkItemDerivationContext) dropInactiveTeamCandidates(
+	bySource map[string][]GithubWorkItemDerivationCandidate,
+) {
+	if len(derived.inactiveTeams) == 0 {
+		return
+	}
+	for source, candidates := range bySource {
+		kept := candidates[:0:0]
+		for _, candidate := range candidates {
+			if candidate.TeamID != nil {
+				if _, inactive := derived.inactiveTeams[strings.TrimSpace(*candidate.TeamID)]; inactive {
+					continue
+				}
+			}
+			kept = append(kept, candidate)
+		}
+		bySource[source] = kept
+	}
+}
+
+// LoadTeams reads the teams of one organization, the inactive ones flagged
+// (Inactive), so the cascade knows them but never resolves to them.
 func (source ClickHouseFactSource) LoadTeams(
 	ctx context.Context, orgID string,
 ) ([]GithubWorkItemDerivationTeamFact, error) {
@@ -1283,11 +1322,11 @@ func (source ClickHouseFactSource) LoadTeams(
 SELECT provider, id,
        argMax(name, (updated_at, last_synced, name)),
        argMax(project_keys, (updated_at, last_synced, toJSONString(project_keys))),
-       max(updated_at)
+       max(updated_at),
+       `+teamNewestRowInactive+`
 FROM teams
 WHERE org_id = ?
 GROUP BY provider, id, org_id
-`+activeTeamsOnly+`
 ORDER BY provider, id
 LIMIT ?`, orgID, GithubWorkItemDerivationContextLimit+1)
 	if err != nil {
@@ -1297,7 +1336,7 @@ LIMIT ?`, orgID, GithubWorkItemDerivationContextLimit+1)
 	result := []GithubWorkItemDerivationTeamFact{}
 	for rows.Next() {
 		var fact GithubWorkItemDerivationTeamFact
-		if err := rows.Scan(&fact.Provider, &fact.TeamID, &fact.TeamName, &fact.ProjectKeys, &fact.UpdatedAt); err != nil {
+		if err := rows.Scan(&fact.Provider, &fact.TeamID, &fact.TeamName, &fact.ProjectKeys, &fact.UpdatedAt, &fact.Inactive); err != nil {
 			return nil, err
 		}
 		result = append(result, fact)

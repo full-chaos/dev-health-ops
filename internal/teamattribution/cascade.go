@@ -24,6 +24,7 @@ import (
 	"github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
+	"github.com/full-chaos/dev-health-ops/internal/teamid"
 )
 
 // ErrEffectRecoveryUnsafe is providerfoundation's sentinel, aliased under this
@@ -427,7 +428,13 @@ func NewGitHubWorkItemDerivationContext(
 		if team.Inactive {
 			continue
 		}
-		for _, rawKey := range append(append([]string(nil), team.ProjectKeys...), team.TeamID, team.NativeTeamKey) {
+		keys := append(append([]string(nil), team.ProjectKeys...), team.TeamID)
+		// A team id that holds another provider's key has no native key of
+		// the team's provider, so its native_team_key indexes nothing.
+		if _, own := teamid.NativeKey(team.Provider, team.TeamID); own {
+			keys = append(keys, team.NativeTeamKey)
+		}
+		for _, rawKey := range keys {
 			key := strings.TrimSpace(rawKey)
 			if key == "" {
 				continue

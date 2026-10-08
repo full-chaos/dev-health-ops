@@ -67,6 +67,11 @@ func TestDiscoverJiraListsOnlyStoredActiveAtlassianTeams(t *testing.T) {
 		{ID: "ENG", Name: "Engineering", ProjectKeys: []string{"ENG"}, IsActive: true, OrgID: orgID, Provider: "jira", NativeTeamKey: native("ENG")},
 		// An admin team whose id equals a project key: provider "" and no native key.
 		{ID: "OPS", Name: "Operations", IsActive: true, OrgID: orgID, Provider: ""},
+		// Active jira rows with a team ARI whose ids hold another provider's
+		// key: not Jira teams.
+		{ID: "gh:1c1c1c1c-github", Name: "GitHub-keyed", IsActive: true, OrgID: orgID, Provider: "jira", NativeTeamKey: ari("1c1c1c1c-github")},
+		{ID: "gl:2d2d2d2d-gitlab", Name: "GitLab-keyed", IsActive: true, OrgID: orgID, Provider: "jira", NativeTeamKey: ari("2d2d2d2d-gitlab")},
+		{ID: "linear:3e3e3e3e-linear", Name: "Linear-keyed", IsActive: true, OrgID: orgID, Provider: "jira", NativeTeamKey: ari("3e3e3e3e-linear")},
 		// Another organization's Atlassian team.
 		{ID: "jira:5e5e5e5e-other", Name: "Other", IsActive: true, OrgID: "org-2", Provider: "jira", NativeTeamKey: ari("5e5e5e5e-other")},
 	}

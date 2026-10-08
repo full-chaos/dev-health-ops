@@ -1106,7 +1106,7 @@ system prefix) keeps it, whatever system writes it, and gets no second one. A cu
 | GitLab team catalog | `gitlab` | `gl:<full_path>` | the full path |
 | Linear reference catalog (team row, memberships, project ownership) | `linear` | `linear:<team key>` | the team key |
 | Atlassian Teams (`dho sync teams --provider jira`, the automatic Jira team import) | `jira` | `jira:<team uuid>` | the team ARI |
-| External ingest `team.v1` | the source system | `gh:`/`gl:` for github/gitlab, `jira:` for jira and atlassian (the pushed team is the native Atlassian team), `<system>:` for every other system, then the pushed `id`; an id that carries a known key stays | the pushed `nativeTeamKey`, else the pushed `id` without its prefix (`teamid.Native`) |
+| External ingest `team.v1` | the source system | `gh:`/`gl:` for github/gitlab, `jira:` for jira and atlassian (the pushed team is the native Atlassian team), `<system>:` for every other system, then the pushed `id`; an id that carries a known key stays | the pushed `nativeTeamKey`, else the pushed `id` without its prefix (`teamid.NativeKey`); NULL when the id holds another provider's key |
 | Jira ops-team links (`jira_legacy` rows of `team_project_ownership`) | `jira` | `jira:<ops team id>` | n/a |
 | Admin import (`POST /teams/import`) | `""` | `teamid.Of(provider_type, provider_team_id)`: the same id as the provider's catalog | (observation: `provider_team_id`) |
 | Admin create | `""` | the id the admin gives (unchanged) | NULL |
@@ -1119,14 +1119,23 @@ system prefix) keeps it, whatever system writes it, and gets no second one. A cu
 - A `team.v1` default `native_team_key` is the id WITHOUT its prefix: the Jira project-as-team retire treats a
   Jira team whose `native_team_key` equals its `id` as a retired project, so a pushed `jira:platform` must not
   store `jira:platform` there. An id that holds ANOTHER provider's key (for example `linear:ENG` pushed by
-  `jira`) stores NULL. A pushed id that is only a known prefix (`jira:`, `atlassian:`, `gh:`) is refused (`TestAPushedJiraTeamSurvivesTheJiraProjectAsTeamRetire`).
+  `jira`) stores NULL, also when the record pushes a `nativeTeamKey`. A pushed id that is only a known prefix (`jira:`, `atlassian:`, `gh:`) is refused (`TestAPushedJiraTeamSurvivesTheJiraProjectAsTeamRetire`).
 - The `jira_legacy` ops-team links are written as `jira:<ops team id>`. The first complete snapshot after the
   deploy closes the unprefixed link and writes the prefixed one (the carry moves the first-seen `valid_from`).
 - Jira team discovery (`GET /teams/discover?provider=jira`) returns `provider_team_id` without the prefix, as
   before; the import adds it again.
-- **Write-time refusal.** The Linear effect validators (team, membership and ownership rows), the Atlassian
-  `Write` (before any read or write) and the `team.v1` writer refuse a provider team id without its prefix
-  (`teamid.Check`).
+- **Write-time refusal.** The Linear effect validators (team, membership and ownership rows) and the Atlassian
+  `Write` (before any read or write) refuse a provider team id without its prefix (`teamid.Check`). The
+  `team.v1` writer first prefixes a pushed id with its system (`teamid.Of`), so a bare id such as `ENG` from
+  `linear` is written as `linear:ENG`; it then refuses only an id that is empty or is only a known prefix
+  (`teamid.CheckPushed`).
+- **One owner test for a native key.** `teamid.NativeKey(provider, id)` is the one function that tells
+  whether a team id belongs to a provider and gives its native key: the key after the provider's own prefix,
+  or the id itself for a bare id written before the prefix. An id with ANOTHER provider's key is refused. Every
+  reader and writer that takes a native key from a team id uses it: the `team.v1` writer (NULL
+  `native_team_key` for a foreign id), the cascade key index (a foreign id's `native_team_key` indexes
+  nothing), the repository-ownership derivation (a `linear` row with a foreign id is not a Linear team), and
+  Jira team discovery (a `jira` row with a foreign id is not listed).
 - **Readers of a native key.** The cascade loads `native_team_key` (`LoadTeams`) and indexes it with the id and
   the `project_keys`, so a work item's native team key (`native_team`) and scope key (`issue_project`) reach
   the team by its native key, not by its id (section 0.4e). The repository-ownership derivation

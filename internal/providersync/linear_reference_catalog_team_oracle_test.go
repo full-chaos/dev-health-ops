@@ -95,11 +95,12 @@ func buildLinearReferenceTeamCatalogOracleRow(t *testing.T, input map[string]any
 	if err != nil {
 		t.Fatal(err)
 	}
-	if team.ID != "linear:"+teamid.Native("linear", team.ID) || teamid.Native("linear", team.ID) != input["team_id"].(string) {
+	nativeKey, own := teamid.NativeKey("linear", team.ID)
+	if !own || team.ID != "linear:"+nativeKey || nativeKey != input["team_id"].(string) {
 		t.Fatalf("Go team id %q is not linear:<key> for key %q", team.ID, input["team_id"])
 	}
 	return linearReferenceTeamProducerRow{
-		ID: teamid.Native("linear", team.ID), GoTeamID: team.ID, TeamUUID: team.TeamUUID, Name: team.Name, Description: team.Description, Members: team.Members,
+		ID: nativeKey, GoTeamID: team.ID, TeamUUID: team.TeamUUID, Name: team.Name, Description: team.Description, Members: team.Members,
 		ProjectKeys: projectKeys, RepoPatterns: team.RepoPatterns, IsActive: team.IsActive == 1,
 		UpdatedAt: team.UpdatedAt, OrgID: team.OrgID, Provider: team.Provider,
 		NativeTeamKey: *team.NativeTeamKey, ParentTeamID: team.ParentTeamID,

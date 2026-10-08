@@ -60,9 +60,9 @@ func TestTeamV1WritesTheSystemPrefixedTeamID(t *testing.T) {
 				t.Fatalf("provider = %v, want %q", values[12], c.system)
 			}
 			// An id that holds another provider's key has no native key of this system.
-			var wantNative any = teamid.Native(c.system, c.want)
-			if wantNative == c.want {
-				wantNative = nil
+			var wantNative any
+			if key, own := teamid.NativeKey(c.system, c.want); own {
+				wantNative = key
 			}
 			if values[13] != wantNative {
 				t.Fatalf("native_team_key = %v, want %v (the id without the system prefix, NULL when the id holds another provider's key)", values[13], wantNative)
@@ -129,5 +129,45 @@ func TestIdentityV1KeepsAKnownKeyAndLeavesBlanksAlone(t *testing.T) {
 	}
 	if got := values[6]; !reflect.DeepEqual(got, []string{"gh:x", "custom:squad", "  ", ""}) {
 		t.Fatalf("team ids = %#v, want [gh:x custom:squad \"  \" \"\"]", got)
+	}
+}
+
+// A pushed team id that holds another provider's key stores a NULL
+// native_team_key, also when the record pushes a nativeTeamKey; an id of the
+// system keeps the pushed nativeTeamKey.
+func TestTeamV1StoresNoNativeKeyForAForeignPrefixedID(t *testing.T) {
+	matrix := []struct{ system, prefix string }{
+		{"jira", "jira:"}, {"gitlab", "gl:"}, {"github", "gh:"}, {"linear", "linear:"},
+	}
+	for _, s := range matrix {
+		for _, other := range matrix {
+			for _, pushed := range []any{nil, "ENG"} {
+				payload := map[string]any{"id": other.prefix + "ENG", "name": "Team", "updatedAt": "2026-10-08T11:00:00Z"}
+				if pushed != nil {
+					payload["nativeTeamKey"] = pushed
+				}
+				values, err := teamV1Values(t, s.system, payload, &ExternalRecomputeScope{})
+				if err != nil {
+					t.Fatal(err)
+				}
+				var want any = "ENG"
+				if other.system != s.system {
+					want = nil
+				}
+				if values[0] != other.prefix+"ENG" || values[13] != want {
+					t.Errorf("system %s, id %s, nativeTeamKey %v: id %v, native_team_key %v; want native_team_key %v",
+						s.system, other.prefix+"ENG", pushed, values[0], values[13], want)
+				}
+			}
+		}
+		values, err := teamV1Values(t, s.system, map[string]any{
+			"id": s.prefix + "ENG", "nativeTeamKey": "own-key", "name": "Team", "updatedAt": "2026-10-08T11:00:00Z",
+		}, &ExternalRecomputeScope{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if values[13] != "own-key" {
+			t.Errorf("system %s: native_team_key %v, want the pushed own-key", s.system, values[13])
+		}
 	}
 }

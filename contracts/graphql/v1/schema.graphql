@@ -1133,8 +1133,20 @@ input HotspotsInput {
   limit: Int = null
 }
 
+"""
+Each repository's single highest-risk file in the requested window and scope: the driver, linked to that file's evidence. riskScore is the served file score (an unbounded z-sum), not a repository score; no repository-level score or hotspot count exists. A repository with no hotspot file row is absent.
+"""
+type RepoHotspot {
+  repoId: String!
+  repoName: String!
+  topFilePath: String!
+  topRiskScore: Float!
+  evidenceUrl: String
+}
+
 type HotspotsResult {
   rows: [HotspotRow!]!
+  repos: [RepoHotspot!]!
 }
 
 input HowFilterInput {

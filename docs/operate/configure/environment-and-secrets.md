@@ -189,6 +189,20 @@ investment categorization can use the decision backend:
   so the LLM spend view shows it as its own line. Explanation usage keeps its
   own provider.
 - **Shadow phase:** it does not run when the decision backend serves the run.
+- **Where to look:** the worker metric
+  `dev_health_investment_served_outcomes_total{provider, model, outcome}`
+  counts every classification of the served mode. `ok`, `zero_support` and
+  `evidence_none` write a row from the backend's answer; `invalid_answer` and
+  `adapter_defect` write the `invalid_llm_output` prior row; `timeout`,
+  `refused` (the connection was refused, nothing was sent), `server_error`,
+  `rate_limited`, `rejected` (a rejected key or an unknown model: the run ends)
+  and `transport_other` are failed requests, and those units keep their last
+  row. Every series is reported, at 0 when the mode is off. As a reference, in
+  the first shadow run on real data `zero_support` and `evidence_none` together
+  were about 1.3% of the classifications (41 of 3,214), and no request failed;
+  a share far above that, or a rising count of failed requests, needs a look.
+  The run log line `investment served decision complete` holds the same counts
+  for one run.
 
 What a categorization is, for each work unit with enough text (one request,
 no repair request, no second provider):

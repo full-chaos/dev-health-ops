@@ -1,0 +1,18 @@
+query Hotspots($input: HotspotsInput!) {
+  hotspots(input: $input) {
+    rows {
+      filePath
+      repoId
+      repoName
+      churnLoc30d
+      churnCommits30d
+      cyclomaticTotal
+      cyclomaticAvg
+      blameConcentration
+      riskScore
+      evidenceUrl
+      __typename
+    }
+    __typename
+  }
+}

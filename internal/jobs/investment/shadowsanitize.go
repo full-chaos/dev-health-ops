@@ -62,6 +62,7 @@ var shadowErrorClasses = map[string]struct{}{
 	string(categorize.SystemOneClassInvalid):       {},
 	string(categorize.SystemOneClassTimeout):       {},
 	string(categorize.SystemOneClassTransport):     {},
+	string(categorize.SystemOneClassRefused):       {},
 	string(categorize.SystemOneClassUnexpected):    {},
 	string(categorize.SystemOneClassTooLarge):      {},
 	string(categorize.SystemOneClassDecode):        {},

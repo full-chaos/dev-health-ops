@@ -213,6 +213,23 @@ type hotspotRow struct {
 // (CHAOS-5447). Reducing the key to `computed_at` fails both; swapping it
 // to `(computed_at, day)` fails only the second.
 func fetchHotspotRows(ctx context.Context, client QueryClient, orgID, sinceDay, untilDay string, repoIDs []string, limit int) ([]hotspotRow, error) {
+	return queryHotspotRows(ctx, client, orgID, sinceDay, untilDay, repoIDs, fmt.Sprintf("\nORDER BY risk_score DESC NULLS LAST, repo_id, file_path\nLIMIT %d", limit))
+}
+
+// MaxRepoTopRows caps the per-repository top-file read at the same bound as
+// the repo_ids filter.
+const MaxRepoTopRows = MaxRepoIDsBound
+
+// fetchRepoTopRows returns each repository's single highest-risk file. It
+// shares queryHotspotRows's argMax/window/org/repo scope with fetchHotspotRows
+// and differs only in the tail: the same ordering, then LIMIT 1 BY repo_id.
+// It is NOT bound by the row limit, so a repository whose files all rank
+// below the row cut still gets its own top file.
+func fetchRepoTopRows(ctx context.Context, client QueryClient, orgID, sinceDay, untilDay string, repoIDs []string) ([]hotspotRow, error) {
+	return queryHotspotRows(ctx, client, orgID, sinceDay, untilDay, repoIDs, fmt.Sprintf("\nORDER BY risk_score DESC NULLS LAST, repo_id, file_path\nLIMIT 1 BY repo_id\nLIMIT %d", MaxRepoTopRows))
+}
+
+func queryHotspotRows(ctx context.Context, client QueryClient, orgID, sinceDay, untilDay string, repoIDs []string, tail string) ([]hotspotRow, error) {
 	query := `
         SELECT
             repo_id,
@@ -254,7 +271,7 @@ func fetchHotspotRows(ctx context.Context, client QueryClient, orgID, sinceDay, 
 	}
 
 	query += "\n            GROUP BY repo_id, file_path\n        )"
-	query += fmt.Sprintf("\nORDER BY risk_score DESC NULLS LAST, repo_id, file_path\nLIMIT %d", limit)
+	query += tail
 
 	rows, err := client.Query(ctx, query, bindings)
 	if err != nil {
@@ -361,15 +378,19 @@ func Resolve(ctx context.Context, client QueryClient, orgID string, sinceUtc, un
 		return nil, err
 	}
 
+	repoLabel := func(repoID string) string {
+		if name, ok := labels[repoID]; ok {
+			return name
+		}
+		return repoID
+	}
+
 	// Non-nil even with zero rows: the schema declares
 	// rows: [HotspotRow!]! (non-null list), same "initialize explicitly"
 	// convention featureflags.Resolve/reviewedges.Resolve document.
 	rowsOut := []model.HotspotRow{}
 	for _, r := range rawRows {
-		repoName, ok := labels[r.repoID]
-		if !ok {
-			repoName = r.repoID
-		}
+		repoName := repoLabel(r.repoID)
 		row := model.HotspotRow{
 			FilePath:           r.filePath,
 			RepoID:             r.repoID,
@@ -394,7 +415,50 @@ func Resolve(ctx context.Context, client QueryClient, orgID string, sinceUtc, un
 		rowsOut = append(rowsOut, row)
 	}
 
-	return &model.HotspotsResult{Rows: rowsOut}, nil
+	// Non-nil list too. Zero file rows means zero repositories with hotspot
+	// data, so the per-repository read is skipped; a repository absent here
+	// has no value (never a zero).
+	reposOut := []model.RepoHotspot{}
+	if len(rawRows) > 0 {
+		topRows, err := fetchRepoTopRows(ctx, client, orgID, sinceDay, untilDay, repoIDs)
+		if err != nil {
+			return nil, err
+		}
+		looked := make(map[string]struct{}, len(seenRepoIDs))
+		for _, id := range seenRepoIDs {
+			looked[id] = struct{}{}
+		}
+		var missing []string
+		for _, r := range topRows {
+			if _, ok := looked[r.repoID]; !ok {
+				missing = append(missing, r.repoID)
+			}
+		}
+		if len(missing) > 0 {
+			extra, err := loadRepoLabels(ctx, client, orgID, distinctRepoIDs(missing))
+			if err != nil {
+				return nil, err
+			}
+			for id, name := range extra {
+				labels[id] = name
+			}
+		}
+		for _, r := range topRows {
+			repo := model.RepoHotspot{
+				RepoID:       r.repoID,
+				RepoName:     repoLabel(r.repoID),
+				TopFilePath:  r.filePath,
+				TopRiskScore: r.riskScore,
+			}
+			if r.filePath != "" {
+				u := evidenceURL(r.filePath)
+				repo.EvidenceURL = &u
+			}
+			reposOut = append(reposOut, repo)
+		}
+	}
+
+	return &model.HotspotsResult{Rows: rowsOut, Repos: reposOut}, nil
 }
 
 // evidenceURL ports Python's `f"/code?file={quote(file_path)}"` exactly.

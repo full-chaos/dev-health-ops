@@ -64,6 +64,9 @@ type NativeExecutor struct {
 	newShadow func(orgID string) *ShadowPhase
 	// shadowObserver receives the counts of each shadow phase. Nil is tolerated.
 	shadowObserver ShadowObserver
+	// servedObserver receives the outcome counts of each served decision run.
+	// Nil is tolerated.
+	servedObserver ServedObserver
 	// shadowHTTPClient replaces the HTTP client of the shadow backend. Nil, the
 	// production value, selects the hardened client.
 	shadowHTTPClient *http.Client
@@ -78,6 +81,12 @@ type NativeExecutor struct {
 // tolerated everywhere it is read.
 func (executor *NativeExecutor) SetShadowObserver(observer ShadowObserver) {
 	executor.shadowObserver = observer
+}
+
+// SetServedObserver wires the optional served-decision telemetry. Nil is
+// tolerated everywhere it is read.
+func (executor *NativeExecutor) SetServedObserver(observer ServedObserver) {
+	executor.servedObserver = observer
 }
 
 // SetShadowHTTPClientForTest replaces the HTTP client of the shadow backend, so
@@ -349,6 +358,7 @@ func (executor *NativeExecutor) Execute(ctx context.Context, claim workgraph.Cla
 		}
 	}
 	if served != nil {
+		served.SetObserver(executor.servedObserver)
 		defer func() { _ = served.Close() }()
 		materializer.SetServed(served)
 	}

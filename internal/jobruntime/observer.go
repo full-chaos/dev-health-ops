@@ -264,6 +264,13 @@ type InvestmentShadowPhaseObserver interface {
 	ObserveInvestmentShadowPhase(InvestmentShadowPhase) error
 }
 
+// InvestmentServedRunObserver is the narrow capability the served decision
+// mode of investment.materialize (CHAOS-8914) depends on to report the
+// outcomes of one run.
+type InvestmentServedRunObserver interface {
+	ObserveInvestmentServedRun(InvestmentServedRun) error
+}
+
 // DailyMetricsZeroRowsObserver is the narrow capability the daily-metrics
 // partition handler depends on when a family's upstream source data exists
 // for a partition's repositories and day, but that family's output table has

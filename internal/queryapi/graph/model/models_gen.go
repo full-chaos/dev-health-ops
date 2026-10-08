@@ -982,7 +982,8 @@ type HotspotsInput struct {
 }
 
 type HotspotsResult struct {
-	Rows []HotspotRow `json:"rows"`
+	Rows  []HotspotRow  `json:"rows"`
+	Repos []RepoHotspot `json:"repos"`
 }
 
 type HowFilterInput struct {
@@ -1309,6 +1310,15 @@ type RepoCoverageBaseline struct {
 	BranchBaselinePct *float64 `json:"branchBaselinePct,omitempty"`
 	// Days of the 30 that hold a branch coverage value.
 	BranchDays int `json:"branchDays"`
+}
+
+// Each repository's single highest-risk file in the requested window and scope: the driver, linked to that file's evidence. riskScore is the served file score (an unbounded z-sum), not a repository score; no repository-level score or hotspot count exists. A repository with no hotspot file row is absent.
+type RepoHotspot struct {
+	RepoID       string  `json:"repoId"`
+	RepoName     string  `json:"repoName"`
+	TopFilePath  string  `json:"topFilePath"`
+	TopRiskScore float64 `json:"topRiskScore"`
+	EvidenceURL  *string `json:"evidenceUrl,omitempty"`
 }
 
 type ReportRunConnection struct {

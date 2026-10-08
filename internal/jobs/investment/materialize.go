@@ -505,32 +505,39 @@ func (m *Materializer) Run(ctx context.Context, cfg Config) (Stats, error) {
 	stats.SkippedExisting = len(skippedExisting)
 
 	// CATEGORIZE.
+	var categorizeErr error
 	if len(pending) > 0 {
-		if err := m.categorizePending(ctx, cfg, pending, outcomes, &stats); err != nil {
-			// FLUSH TOKEN USAGE BEFORE ABORTING (codex r1 P2-a).
-			//
-			// A deterministic failure aborts the run, but the calls made
-			// before it were really billed. Python flushes usage and only
-			// THEN re-raises (materialize.py:1583-1600); returning straight
-			// out here would skip the single WriteTokenUsage below and lose
-			// every token this run already spent -- silently, since the run
-			// fails and nobody reconciles a failed run's cost.
-			//
-			// Errors from the flush are deliberately swallowed: the run is
-			// already failing on a more important error, and replacing that
-			// cause with a bookkeeping error would hide why it aborted.
-			// LOGGED, not discarded (codex r3 P3). The flush error must not
-			// REPLACE the provider failure that is aborting the run -- that
-			// would hide why it aborted -- but discarding it silently loses the
-			// only signal that a billed run's accounting row went missing.
-			// Python emits a debug traceback here (llm_token_usage.py:53-54).
-			if flushErr := m.flushTokenUsage(ctx, cfg, stats); flushErr != nil {
-				m.logger.WarnContext(ctx, "llm token usage write failed on the deterministic-abort path",
-					"run_id", cfg.RunID, "error", flushErr.Error())
-			}
-			m.finishServed(ctx, cfg)
-			return Stats{}, err
+		categorizeErr = m.categorizePending(ctx, cfg, pending, outcomes, &stats)
+	}
+	// The served decision backend reports its run AT ONCE, on every exit of
+	// the categorization and also when no unit was asked (CHAOS-8914): every
+	// unit it was asked for is in one outcome count, a steady-state run still
+	// reports, and no later return of this function can drop the counts or the
+	// attempt rows.
+	m.finishServed(ctx, cfg)
+	if categorizeErr != nil {
+		// FLUSH TOKEN USAGE BEFORE ABORTING (codex r1 P2-a).
+		//
+		// A deterministic failure aborts the run, but the calls made
+		// before it were really billed. Python flushes usage and only
+		// THEN re-raises (materialize.py:1583-1600); returning straight
+		// out here would skip the single WriteTokenUsage below and lose
+		// every token this run already spent -- silently, since the run
+		// fails and nobody reconciles a failed run's cost.
+		//
+		// Errors from the flush are deliberately swallowed: the run is
+		// already failing on a more important error, and replacing that
+		// cause with a bookkeeping error would hide why it aborted.
+		// LOGGED, not discarded (codex r3 P3). The flush error must not
+		// REPLACE the provider failure that is aborting the run -- that
+		// would hide why it aborted -- but discarding it silently loses the
+		// only signal that a billed run's accounting row went missing.
+		// Python emits a debug traceback here (llm_token_usage.py:53-54).
+		if flushErr := m.flushTokenUsage(ctx, cfg, stats); flushErr != nil {
+			m.logger.WarnContext(ctx, "llm token usage write failed on the deterministic-abort path",
+				"run_id", cfg.RunID, "error", flushErr.Error())
 		}
+		return Stats{}, categorizeErr
 	}
 
 	// POST-PROCESS: turn outcomes into rows.
@@ -648,7 +655,6 @@ func (m *Materializer) Run(ctx context.Context, cfg Config) (Stats, error) {
 		m.logger.WarnContext(ctx, "llm token usage write failed; continuing",
 			"run_id", cfg.RunID, "error", err.Error())
 	}
-	m.finishServed(ctx, cfg)
 
 	// WRITE. Same three tables, same "skip the call when empty" shape as
 	// materialize.py:1826-1831, in a DELIBERATELY different order: quotes, then

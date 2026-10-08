@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -176,6 +177,23 @@ func TestTheWorkersInvestmentExecutorServesFromTheDecisionBackendWithOnlyItsOwnS
 			servedAttempts := count(`SELECT count() FROM llm_categorization_attempts WHERE role = 'served'`)
 			usage := count(`SELECT count() FROM llm_token_usage WHERE provider = 'typesafe' AND model = '` + model + `' AND input_tokens = 1200 AND calls = 1`)
 			shadowRows := count(`SELECT count() FROM work_unit_investment_shadow`)
+			// The served outcome counter (CHAOS-8914) of the collector the
+			// worker wired: every series at 0 with the switch off, one ok with
+			// it on.
+			okSeries := `dev_health_investment_served_outcomes_total{provider="typesafe",model="` + model + `",outcome="ok"} `
+			if model != "jev-1.13.0" {
+				okSeries = `dev_health_investment_served_outcomes_total{provider="typesafe",model="other",outcome="ok"} `
+			}
+			rendered := collector.PrometheusText()
+			if want := okSeries + fmt.Sprint(tc.wantDecision) + "\n"; !strings.Contains(rendered, want) {
+				t.Fatalf("the served ok series is not %d", tc.wantDecision)
+			}
+			for _, line := range strings.Split(rendered, "\n") {
+				if strings.HasPrefix(line, "dev_health_investment_served_outcomes_total{") && !strings.HasSuffix(line, " 0") &&
+					!(tc.wantDecision == 1 && strings.HasPrefix(line, okSeries)) {
+					t.Fatalf("a served series moved: %s", line)
+				}
+			}
 			if tc.wantDecision == 0 {
 				if servedAttempts != 0 || usage != 0 || strings.Contains(logs.String(), "served decision") {
 					t.Fatalf("an off switch left a trace: %d attempt rows, %d usage rows\n%s", servedAttempts, usage, logs.String())

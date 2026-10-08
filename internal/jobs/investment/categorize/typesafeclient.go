@@ -17,7 +17,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/full-chaos/dev-health-ops/internal/httpguard"
 	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 )
@@ -525,7 +524,7 @@ func (c *TypeSafeClient) send(ctx context.Context, body []byte, lenient bool) (S
 	var attempts []SystemOneAttempt
 	var wait time.Duration
 	for attempt := 0; attempt <= typeSafeMaxRetries; attempt++ {
-		result, att, err := c.once(ctx, body, lenient)
+		result, att, err := c.once(withLLMAttempt(ctx, attempt+1), body, lenient)
 		att.WaitBefore = wait
 		attempts = append(attempts, att)
 		if err == nil {
@@ -596,7 +595,7 @@ func (c *TypeSafeClient) once(ctx context.Context, body []byte, lenient bool) (S
 	req.Header.Set("Authorization", "Bearer "+c.cfg.APIKey.Reveal())
 
 	started := time.Now()
-	resp, err := httpguard.NoRedirects(c.client).Do(req) // the API key rides this request
+	resp, err := tracedLLMDo(c.client, req, ProviderKindTypeSafe, c.cfg.Model)
 	att.Latency = time.Since(started)
 	if err != nil {
 		if ctx.Err() != nil {
@@ -618,6 +617,7 @@ func (c *TypeSafeClient) once(ctx context.Context, body []byte, lenient bool) (S
 
 	payload, readErr := io.ReadAll(io.LimitReader(resp.Body, maxSystemOneResponseBytes+1))
 	if readErr == nil && len(payload) > maxSystemOneResponseBytes {
+		markInvalidAnswer(resp)
 		att.Class = string(SystemOneClassTooLarge)
 		return SystemOneResult{}, att, &SystemOneError{Class: SystemOneClassTooLarge, StatusCode: resp.StatusCode,
 			cause: &llmError{kind: llmErrorGeneric, message: "response exceeded the size bound", provider: string(ProviderKindTypeSafe), model: c.cfg.Model}}
@@ -662,6 +662,7 @@ func (c *TypeSafeClient) once(ctx context.Context, body []byte, lenient bool) (S
 	if err := json.Unmarshal(payload, &probe); err != nil && lenient {
 		probe = systemOneProbe{} // nothing in a body that is not JSON is trusted
 	} else if err != nil {
+		markInvalidAnswer(resp)
 		att.Class = string(SystemOneClassDecode)
 		return SystemOneResult{}, att, &SystemOneError{Class: SystemOneClassDecode, StatusCode: resp.StatusCode,
 			cause: &llmError{kind: llmErrorGeneric, message: "response is not a JSON object", provider: string(ProviderKindTypeSafe), model: c.cfg.Model,

@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/full-chaos/dev-health-ops/internal/httpguard"
 	"io"
 	"net/http"
 	"strings"
@@ -178,7 +177,7 @@ func (p *OllamaProvider) Complete(ctx context.Context, request CompletionRequest
 			},
 		}
 
-		content, promptEvalCount, evalCount, err := p.executeChatRequest(ctx, body)
+		content, promptEvalCount, evalCount, err := p.executeChatRequest(withLLMAttempt(ctx, attempt+1), body)
 		if err != nil {
 			if statusCodeOf(err) == http.StatusBadRequest && format != nil && attempt < ollamaMaxRetries {
 				// Mirrors local.py/LocalProvider's 400-on-structured-output
@@ -236,7 +235,7 @@ func (p *OllamaProvider) executeChatRequest(ctx context.Context, body ollamaChat
 		req.Header.Set("Authorization", "Bearer "+p.cfg.APIKey.Reveal())
 	}
 
-	resp, err := httpguard.NoRedirects(p.client).Do(req) // the API key rides this request
+	resp, err := tracedLLMDo(p.client, req, ProviderKindOllama, p.cfg.Model)
 	if err != nil {
 		return "", nil, nil, &httpTransportError{cause: logging.TransportFailure(err)}
 	}
@@ -253,6 +252,7 @@ func (p *OllamaProvider) executeChatRequest(ctx context.Context, body ollamaChat
 
 	var decoded ollamaChatResponse
 	if err := json.Unmarshal(responseBody, &decoded); err != nil {
+		markInvalidAnswer(resp)
 		return "", nil, nil, logging.DecodeFailure(err)
 	}
 	if decoded.Error != "" {
@@ -269,6 +269,7 @@ func (p *OllamaProvider) executeChatRequest(ctx context.Context, body ollamaChat
 	// exists specifically for this signal, so treat it as authoritative
 	// rather than assuming `stream:false` alone guarantees completion.
 	if !decoded.Done {
+		markInvalidAnswer(resp)
 		return "", nil, nil, &llmError{
 			kind:     llmErrorOutput,
 			message:  "ollama response incomplete (done=false)",

@@ -116,11 +116,11 @@ func TestWorkItemTeamAttributionIsPrimaryPredicateCensus(t *testing.T) {
 			t.Errorf("stale exclusion (%s): %q matches no line", reason, strings.ReplaceAll(key, "\x00", ": "))
 		}
 	}
-	// A census that reads nothing proves nothing.
-	if filesRead < 10 || allowedSites < 14 {
-		t.Fatalf("census read %d files and %d allowed predicate sites: the walk did not reach the readers", filesRead, allowedSites)
-	}
 	for _, violation := range violations {
 		t.Error(violation)
+	}
+	// A census that reads nothing proves nothing.
+	if filesRead < 10 || allowedSites < 14 {
+		t.Errorf("census read %d files and %d allowed predicate sites: the walk did not reach the readers", filesRead, allowedSites)
 	}
 }

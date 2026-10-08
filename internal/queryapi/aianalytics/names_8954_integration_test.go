@@ -77,3 +77,27 @@ func TestRealClickHouse_NamesReadLatestRow(t *testing.T) {
 		t.Fatalf("teamName (names-only read) = %q, want nil", *n)
 	}
 }
+
+func TestRealClickHouse_LoadRepoNamesReadsLatestRow(t *testing.T) {
+	ctx, conn, client := startStore(t)
+	exec(t, ctx, conn, `SYSTEM STOP MERGES repos`)
+	for _, r := range []struct{ id, name, at string }{
+		{nameRepo2, "", "2026-08-02"}, {nameRepo2, "acme/stale", "2026-08-01"},
+		{nameRepo3, "acme/stale3", "2026-08-01"}, {nameRepo3, "", "2026-08-02"},
+	} {
+		exec(t, ctx, conn, `INSERT INTO repos (id, repo, provider, org_id, created_at, last_synced)
+            SELECT '%s', '%s', 'github', '%s', now64(3), toDateTime64('%s 00:00:00', 3, 'UTC')`, r.id, r.name, org1, r.at)
+	}
+	got, err := loadRepoNames(ctx, client, org1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("repos = %v, want one row per id", got)
+	}
+	for _, r := range got {
+		if r.fullName != "" {
+			t.Fatalf("repo %s name %q, want the latest (empty) row", r.id, r.fullName)
+		}
+	}
+}

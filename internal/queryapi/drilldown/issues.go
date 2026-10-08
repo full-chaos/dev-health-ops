@@ -55,11 +55,15 @@ type IssueParams struct {
 // completed_at, matching the shape of the `pr` field family's own
 // declaration, lives in internal/goapiproof/restcorpus.go's
 // drilldownIssuesParity.
+//
+// team_name is Go-only (CHAOS-8749): the attribution row already carries the
+// team's display name, null when the row has none.
 type IssueItem struct {
 	WorkItemID     string     `json:"work_item_id"`
 	Provider       string     `json:"provider"`
 	Status         string     `json:"status"`
 	TeamID         *string    `json:"team_id"`
+	TeamName       *string    `json:"team_name"`
 	CycleTimeHours *float64   `json:"cycle_time_hours"`
 	LeadTimeHours  *float64   `json:"lead_time_hours"`
 	StartedAt      *time.Time `json:"started_at"`
@@ -208,6 +212,7 @@ SELECT
     wct.provider AS provider,
     wct.status AS status,
     nullIf(t.team_id, '') AS team_id,
+    nullIf(t.team_name, '') AS team_name,
     wct.cycle_time_hours AS cycle_time_hours,
     wct.lead_time_hours AS lead_time_hours,
     wct.started_at AS started_at,
@@ -265,7 +270,8 @@ const blockedIssueWindowSource = `(
     SELECT
         provider,
         work_item_id,
-        argMax(team_id, day) AS team_id
+        argMax(team_id, day) AS team_id,
+        argMax(team_name, day) AS team_name
     FROM %s AS b
     WHERE 1 = 1%s
     GROUP BY provider, work_item_id
@@ -294,6 +300,7 @@ SELECT
     b.work_item_id AS work_item_id,
     b.provider AS provider,
     nullIf(b.team_id, '') AS team_id,
+    nullIf(b.team_name, '') AS team_name,
     count() OVER () AS total_count
 FROM %s AS b
 ORDER BY b.work_item_id ASC, b.provider ASC
@@ -340,7 +347,7 @@ func BuildIssuesResponse(ctx context.Context, reader *Reader, orgID string, para
 	for rows.Next() {
 		var item IssueItem
 		if err := rows.Scan(
-			&item.WorkItemID, &item.Provider, &item.Status, &item.TeamID,
+			&item.WorkItemID, &item.Provider, &item.Status, &item.TeamID, &item.TeamName,
 			&item.CycleTimeHours, &item.LeadTimeHours,
 			&item.StartedAt, &item.CompletedAt,
 		); err != nil {
@@ -378,7 +385,7 @@ func buildBlockedIssuesResponse(ctx context.Context, reader *Reader, orgID strin
 			item     IssueItem
 			rowCount uint64
 		)
-		if err := rows.Scan(&item.WorkItemID, &item.Provider, &item.TeamID, &rowCount); err != nil {
+		if err := rows.Scan(&item.WorkItemID, &item.Provider, &item.TeamID, &item.TeamName, &rowCount); err != nil {
 			return nil, fmt.Errorf("scan blocked issue row: %w", err)
 		}
 		if len(items) > 0 && rowCount != count {

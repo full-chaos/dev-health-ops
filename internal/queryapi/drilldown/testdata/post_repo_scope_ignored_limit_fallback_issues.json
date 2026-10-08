@@ -5,6 +5,7 @@
       "provider": "gitlab",
       "status": "done",
       "team_id": "team-z",
+      "team_name": "Team Z",
       "cycle_time_hours": 2.0,
       "lead_time_hours": 3.5,
       "started_at": "2024-03-01T00:00:00Z",

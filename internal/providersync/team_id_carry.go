@@ -557,7 +557,12 @@ func (run *teamIDCarryRun) planLink(link teamIDCarryLink) error {
 			out = append(out, row.with("team_id", newID).with("valid_from", validFrom).with("updated_at", updated))
 			moved++
 		}
-		closedAt := run.at
+		// Closed at the carry's second, not its millisecond: a reader that
+		// keeps a row while valid_to > now() (ClickHouse now() has second
+		// precision) would otherwise see the old row active for up to a
+		// second, and a collector's guard that runs right after the carry
+		// would stage the moved manual member as a conflict.
+		closedAt := run.at.Truncate(time.Second)
 		if validFrom := row.time("valid_from"); validFrom.After(closedAt) {
 			closedAt = validFrom
 		}

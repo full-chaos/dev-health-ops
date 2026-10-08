@@ -1172,7 +1172,8 @@ or builds a team catalog collector or writes Atlassian team ids, and fails on a 
     `is_active = 0`.
   - `team_memberships`, `team_project_ownership`, `team_repo_ownership`: each OPEN row is written again under
     the new id with the FIRST `valid_from` the old id ever had for that link (closed rows included), and the
-    old row is closed at the carry time. A row whose provider has its own bare team of that id that does not
+    old row is closed at the carry time, truncated to the second (a reader that keeps a row while
+    `valid_to > now()`, second precision, sees it closed at once; a later `valid_from` closes it there). A row whose provider has its own bare team of that id that does not
     move (an inactive team, a Jira project-as-team row) stays. When the prefixed twin is already open, the
     old row is closed and no second open row is written.
   - `team_provider_observations`: every observation with a bare team id is written again with
@@ -1204,7 +1205,8 @@ first `valid_from` kept; keyed ids and another organization untouched; a second 
 `TestTeamIDCarryGuardRefusesAnUnkeyedID`, `TestCarryTeamIDsMovesAnObservationWithoutABareTeam`,
 `TestCarryTeamIDsKeepsTheDecisionOfAnOldDecidedChange`, `TestCarryTeamIDsNamesATeamOnceInAnIdentity`,
 `TestCarryTeamIDsMovesTheParentOfAnObservation`, `TestCarryTeamIDsClosesAFutureLinkAtItsStart`,
-`TestCarryTeamIDsLeavesAnAdminEditOfAProjectAsTeamRow`, `TestCarryTeamIDsSupersedesAPendingIdentityChangeOfAMovedTeam`.
+`TestCarryTeamIDsLeavesAnAdminEditOfAProjectAsTeamRow`, `TestCarryTeamIDsSupersedesAPendingIdentityChangeOfAMovedTeam`,
+`TestCarryTeamIDsClosesALinkForAReaderOfNow`.
 The seam: `TestTheCarryRunsBeforeTheCollectorAndAFailureStopsIt`, `TestEveryTeamIDWriteSiteRunsBehindTheCarryCensus`;
 through the real collectors, `TestTheLinearCatalogReadsTheBareTeamsPolicyAndManualMembersAfterTheCarry`,
 `TestTheLinearCatalogKeepsOneTeamForAnAdminTeamItNames`, `TestTheJiraProjectAsTeamCatalogKeepsTheFirstSeenOfALink`;

@@ -564,3 +564,22 @@ func TestCarryTeamIDsSupersedesAPendingIdentityChangeOfAMovedTeam(t *testing.T) 
 		t.Errorf("identity changes = %s", got)
 	}
 }
+
+// A moved link is closed for a reader that compares valid_to with
+// ClickHouse now() (second precision) as soon as the carry returns.
+func TestCarryTeamIDsClosesALinkForAReaderOfNow(t *testing.T) {
+	ctx, conn := newWorkItemEffectsConn(t)
+	f := carryFixture{t: t, ctx: ctx, conn: conn, orgID: uuid.NewString()}
+	f.team("linear", "ENG", carryPtr("ENG"), nil, 1, carryOld, nil, nil)
+	f.exec(`INSERT INTO team_memberships (org_id, provider, team_id, member_id, identity_facets, source, is_primary, specificity, priority, valid_from, valid_to, updated_at) VALUES (?, 'linear', 'ENG', 'm1', [], 'manual', 1, 100, 10, ?, NULL, ?)`, f.orgID, carryOld, carryOld)
+	// Start well inside a second, so the read below runs in the carry's second.
+	for ns := time.Now().Nanosecond(); ns < 100_000_000 || ns > 500_000_000; ns = time.Now().Nanosecond() {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if err := CarryTeamIDsBeforeWrite(ctx, conn, f.orgID, "test"); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.str(`SELECT arrayStringConcat(arraySort(groupArray(team_id)), ',') FROM team_memberships FINAL WHERE org_id = ? AND member_id = 'm1' AND source = 'manual' AND (valid_to IS NULL OR valid_to > now())`); got != "linear:ENG" {
+		t.Errorf("active manual memberships of m1 = %q, want only linear:ENG", got)
+	}
+}

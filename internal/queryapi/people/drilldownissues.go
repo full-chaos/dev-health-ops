@@ -85,7 +85,12 @@ type IssueRow struct {
 	// (CHAOS-8955, Go-only); null when none is stored. No repository name is
 	// served here: an issue reaches a repository only through its linked pull
 	// requests (work_graph_issue_pr), never through its own repo_id.
-	Title          *string    `json:"title"`
+	Title *string `json:"title"`
+	// RepoNames are the distinct names of the repositories of the pull requests
+	// linked to the work item in work_graph_issue_pr (any provenance tier), in
+	// ascending order; null when no linked pull request has a named repository.
+	// It is never read from the work item's own repository column.
+	RepoNames      []string   `json:"repo_names"`
 	Provider       string     `json:"provider"`
 	Status         string     `json:"status"`
 	TeamID         *string    `json:"team_id"`
@@ -211,6 +216,60 @@ func fetchWorkItemTitles(ctx context.Context, client QueryClient, orgID string, 
 	return out, nil
 }
 
+// linkedRepoNamesQuery reads the repositories of the pull requests linked to
+// each work item. Both reads are bound to the requesting org in their own WHERE.
+const linkedRepoNamesQuery = `
+SELECT l.work_item_id AS work_item_id, r.repo AS repo_name
+FROM (
+    SELECT DISTINCT work_item_id, repo_id
+    FROM work_graph_issue_pr FINAL
+    WHERE org_id = {org_id:String}
+      AND work_item_id IN {ids:Array(String)}
+) AS l
+INNER JOIN (
+    SELECT id, trim(repo) AS repo
+    FROM repos FINAL
+    WHERE org_id = {org_id:String}
+      AND trim(repo) != ''
+) AS r ON r.id = l.repo_id
+ORDER BY work_item_id ASC, repo_name ASC
+%s
+`
+
+// fetchLinkedRepoNames returns {work_item_id: distinct repo names}. A failed
+// read is an error.
+func fetchLinkedRepoNames(ctx context.Context, client QueryClient, orgID string, ids []string) (map[string][]string, error) {
+	out := map[string][]string{}
+	if len(ids) == 0 {
+		return out, nil
+	}
+	rows, err := client.Query(ctx, fmt.Sprintf(linkedRepoNamesQuery, settingsMaxExecutionTime()), []dhclickhouse.Binding{
+		{Name: "org_id", Value: orgID},
+		{Name: "ids", Value: ids},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("people: linked repo names query: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id, name string
+		if err := rows.Scan(&id, &name); err != nil {
+			return nil, fmt.Errorf("people: scan linked repo name: %w", err)
+		}
+		if id == "" {
+			continue
+		}
+		if list := out[id]; len(list) > 0 && list[len(list)-1] == name {
+			continue
+		}
+		out[id] = append(out[id], name)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("people: iterate linked repo names: %w", err)
+	}
+	return out, nil
+}
+
 // BuildDrilldownIssuesResponse is the Go port of
 // build_person_drilldown_issues_response (services/people.py:793-844): see
 // BuildDrilldownPRsResponse's own doc comment for the identity-resolution/
@@ -248,7 +307,14 @@ func BuildDrilldownIssuesResponse(ctx context.Context, reader *Reader, orgID str
 	if err != nil {
 		return nil, err
 	}
+	linked, err := fetchLinkedRepoNames(ctx, reader.client, orgID, itemIDs)
+	if err != nil {
+		return nil, err
+	}
 	for i := range rows {
+		if names, ok := linked[rows[i].WorkItemID]; ok {
+			rows[i].RepoNames = names
+		}
 		if title, ok := titles[rows[i].WorkItemID]; ok {
 			named := title
 			rows[i].Title = &named

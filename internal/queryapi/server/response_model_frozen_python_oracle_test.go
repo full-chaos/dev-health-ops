@@ -518,7 +518,7 @@ func TestWithoutExplainGoOnlyFieldsLeavesThePythonShapeOrFails(t *testing.T) {
 // personPRsPythonResponse and personIssuesPythonResponse are the shape the
 // frozen FastAPI models of the person drilldown have. people.PullRequestRow has
 // one more field since CHAOS-8955 (repo_name) and people.IssueRow one more
-// (title), which the Python models never had; the frozen program is not
+// (title, repo_names), which the Python models never had; the frozen program is not
 // recorded again, so the oracle still checks THAT shape.
 type personPRsPythonRow struct {
 	RepoID             string     `json:"repo_id"`
@@ -574,8 +574,9 @@ func TestPersonDrilldownRowsArePythonRowsPlusTheDeclaredNameFields(t *testing.T)
 		t.Errorf("people.PullRequestRow fields =\n %v\nwant the Python fields with repo_name after repo_id:\n %v", got, wantPR)
 	}
 	wantIssue := insertAfter(fieldsOf(reflect.TypeOf(personIssuesPythonRow{})), 1, field{"Title", "*string", `json:"title"`})
+	wantIssue = insertAfter(wantIssue, 2, field{"RepoNames", "[]string", `json:"repo_names"`})
 	if got := fieldsOf(reflect.TypeOf(people.IssueRow{})); !reflect.DeepEqual(got, wantIssue) {
-		t.Errorf("people.IssueRow fields =\n %v\nwant the Python fields with title after work_item_id:\n %v", got, wantIssue)
+		t.Errorf("people.IssueRow fields =\n %v\nwant the Python fields with title, repo_names after work_item_id:\n %v", got, wantIssue)
 	}
 
 	repo, title := "acme/api", "Fix login"
@@ -583,11 +584,11 @@ func TestPersonDrilldownRowsArePythonRowsPlusTheDeclaredNameFields(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	issueBody, err := json.Marshal(people.DrilldownIssuesResponse{Items: []people.IssueRow{{Title: &title}}})
+	issueBody, err := json.Marshal(people.DrilldownIssuesResponse{Items: []people.IssueRow{{Title: &title, RepoNames: []string{"acme/api"}}}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(prBody), `"repo_name":"acme/api"`) || !strings.Contains(string(issueBody), `"title":"Fix login"`) {
+	if !strings.Contains(string(prBody), `"repo_name":"acme/api"`) || !strings.Contains(string(issueBody), `"title":"Fix login"`) || !strings.Contains(string(issueBody), `"repo_names":["acme/api"]`) {
 		t.Errorf("the production bodies lack the name fields: %s %s", prBody, issueBody)
 	}
 }

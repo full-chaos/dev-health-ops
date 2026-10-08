@@ -107,11 +107,12 @@ name is `null` (or an absent map key), never the id.
 | `GET /api/v1/filters/options` | `developer_names` (email of `developers` -> name) | `identities FINAL`, active rows with an email and a display name |
 | `GET /api/v1/people/{person_id}/drilldown/prs` | `items[].repo_name` | `repos FINAL` through the shared `scopelabel` lookup |
 | `GET /api/v1/people/{person_id}/drilldown/issues` | `items[].title` | `work_items FINAL`, newest `last_synced` row |
+| `GET /api/v1/people/{person_id}/drilldown/issues` | `items[].repo_names` (distinct, ascending; `null` when none) | repos of the issue's linked pull requests: `work_graph_issue_pr` (any provenance tier) joined to `repos FINAL`, both org-bound |
 
 Already served, no change: `explain` `contributors[].display_name` / `drivers[].display_name` (team and
 repository, `scopelabel`) and the person metric `breakdowns.by_repo[].label` (the repository name
-itself). Issue rows carry no `repo_name`: an issue reaches a repository only through its linked pull
-requests (`work_graph_issue_pr`), never through its own repo column. The name maps are lookups, not
+itself). An issue's repositories (`repo_names`) come only from its linked pull requests
+(`work_graph_issue_pr`), never from the work item's own repo column or an issue-key prefix. The name maps are lookups, not
 ranked lists; a developer name appears on the roster that already listed the email.
 
 ## Files

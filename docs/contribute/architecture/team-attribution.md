@@ -436,8 +436,8 @@ means the ClickHouse `teams` dimension is empty.
 > producer design (CHAOS-4365 lane): edge-walk `work_items` -- either the item's **own** `project_id`,
 > or, when that has no ownership row, a **donor's** `project_id` reached by walking
 > `work_item_dependencies` (§2, tracker-to-tracker, provider-agnostic) -- into `team_project_ownership`
-> to resolve a team, then stamp that team onto the **original** item's own `repo_id` (already a
-> `work_items` column; no join to `repos` needed to get it). The provider column is iterated
+> to resolve a team, then stamp that team onto the **original** pull request's / merge request's own `repo_id` (already a
+> `work_items` column; no join to `repos` needed to get it; an issue's own `repo_id` is never read). The provider column is iterated
 > generically -- no provider branches. Rows land with **`source = 'inferred'`, at lower
 > `specificity` than a direct producer row**, so a GitHub-team-owned repo's own row (`source =
 > 'provider_access'`, §0.4a) still wins the `is_primary` tie-break for that repo. `inferred` is

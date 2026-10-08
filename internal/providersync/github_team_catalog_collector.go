@@ -34,6 +34,21 @@ import (
 type GitHubTeamCatalogCollector struct {
 	Client GitHubTeamCatalogRouteHandler
 	Sink   GitHubTeamCatalogClickHouseEffects
+	// ScopeCensus lists the org's other active GitHub integrations. Without
+	// it no provider_access row is closed (decideOwnershipClose).
+	ScopeCensus OwnershipScopeCensus
+}
+
+// githubSiblingScopeKey is the GitHub org another integration lists, from its
+// credential's plain config. An org held only in the encrypted fields, or in
+// sync_options (which the encrypted fields outrank), is not known here.
+func githubSiblingScopeKey(sibling OwnershipSiblingIntegration) (string, bool) {
+	for _, key := range githubOrgNameConfigKeys {
+		if value := strings.TrimSpace(sibling.CredentialConfig[key]); value != "" {
+			return value, true
+		}
+	}
+	return "", false
 }
 
 // githubOrgNameConfigKeys mirrors team_autoimport_github.py's _github_org
@@ -319,16 +334,21 @@ func (adapter GitHubTeamCatalogCollector) CollectTeamCatalog(
 	// sync_policy guard above too -- that guard is scoped to the `teams`
 	// table only, matching Linear's own applyTeamSyncPolicyGuard doc comment.
 	if selections.Teams && (len(rows.RepoOwnership) > 0 || len(rows.RepoListedTeamIDs) > 0) {
+		decision := decideOwnershipClose(ctx, adapter.ScopeCensus, ownershipCloseRequest{
+			ref: ref, provider: githubTeamCatalogProvider, scopeKey: orgName,
+			listed: rows.RepoListedTeamIDs, unproven: rows.RepoUnprovenTeamIDs, siblingScopeKey: githubSiblingScopeKey,
+		})
 		written, closed, err := adapter.Sink.SnapshotTeamRepoOwnership(
-			ctx, ref.OrgID, orgName, rows.RepoOwnership, rows.RepoListedTeamIDs, normalizedAt,
+			ctx, ref.OrgID, orgName, rows.RepoOwnership, decision.read, decision.closable, normalizedAt,
 		)
 		if err != nil {
 			return result, err
 		}
 		result.RepoOwnershipWritten = written
+		result.DegradedLegs = append(result.DegradedLegs, decision.legs...)
 		slog.Default().InfoContext(ctx, "github_team_catalog_repo_ownership_snapshot",
 			"org_id", ref.OrgID, "teams_listed", len(rows.RepoListedTeamIDs),
-			"rows_written", written, "rows_closed", closed)
+			"teams_closable", len(decision.closable), "rows_written", written, "rows_closed", closed)
 	}
 	if selections.Members {
 		result.MembershipsSkippedManualConflict = membershipsSkippedManualConflict

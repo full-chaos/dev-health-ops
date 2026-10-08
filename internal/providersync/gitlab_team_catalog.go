@@ -169,6 +169,10 @@ type GitLabTeamCatalogRows struct {
 	// a team outside it keeps its open rows. A failed or capped listing never
 	// reaches the collector's write (walk skipped, error, or ErrPaginationCapExceeded).
 	OwnershipListedTeamIDs []string `json:"-"`
+	// OwnershipUnprovenTeamIDs is the part of OwnershipListedTeamIDs whose
+	// /projects listing stopped without GitLab's end-of-list signal
+	// (ownershipListingProvesEnd): decideOwnershipClose keeps their rows open.
+	OwnershipUnprovenTeamIDs []string `json:"-"`
 }
 
 const (

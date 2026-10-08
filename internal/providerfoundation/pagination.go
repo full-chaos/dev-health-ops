@@ -47,6 +47,11 @@ type PageCollection struct {
 	// ItemCapReached: MaxItems was reached, so the boundary was positively
 	// observed and everything beyond it is known to be beyond the cap.
 	ItemCapReached bool
+	// EndUnconfirmed: the walk stopped, but the provider never gave its
+	// explicit end-of-list signal (a malformed or absent continuation header,
+	// or an end inferred from the page size). The items are what was read;
+	// they are not proven to be the whole list.
+	EndUnconfirmed bool
 }
 
 // PageVisit is the bounded page callback used by resumable provider routes.
@@ -265,6 +270,9 @@ func CollectGitHubLinkPages(
 		if options.StopAt == nil && options.StopAfter == nil && options.Keep == nil && options.MaxItems == 0 {
 			result.Items = append(result.Items, items...)
 			next = githubNextLink(response.Header.Get("Link"))
+			if next == "" {
+				result.EndUnconfirmed = !githubEndConfirmed(response.Header.Values("Link"), len(items), options.Query)
+			}
 			continue
 		}
 		crossedBoundary := false
@@ -289,6 +297,9 @@ func CollectGitHubLinkPages(
 			return result, nil
 		}
 		next = githubNextLink(response.Header.Get("Link"))
+		if next == "" {
+			result.EndUnconfirmed = !githubEndConfirmed(response.Header.Values("Link"), len(items), options.Query)
+		}
 	}
 	return result, nil
 }
@@ -306,7 +317,9 @@ type GitLabPageOptions struct {
 // CollectGitLabPageParamPages mirrors Python's page/per_page paginator. A
 // non-empty X-Next-Page is authoritative; an absent or empty header falls back
 // to the full-page item-count heuristic. Malformed next-page values stop
-// safely, matching the existing Python implementation.
+// safely, matching the existing Python implementation. Every stop that is not
+// GitLab's own end signal (the X-Next-Page header present and empty) sets
+// EndUnconfirmed.
 func CollectGitLabPageParamPages(
 	ctx context.Context,
 	client *HTTPClient,
@@ -342,6 +355,7 @@ func CollectGitLabPageParamPages(
 			return PageCollection{}, decodeErr
 		}
 		result.Pages++
+		result.EndUnconfirmed = !gitLabEndConfirmed(response.Header)
 		if len(items) == 0 {
 			return result, nil
 		}
@@ -813,6 +827,46 @@ func launchDarklyNextHref(payload map[string]json.RawMessage) (string, error) {
 		return "", ErrPaginationInvalid
 	}
 	return strings.TrimSpace(values["next"].Href), nil
+}
+
+// gitLabEndConfirmed reports GitLab's explicit end of an offset listing: the
+// X-Next-Page header is sent and empty.
+func gitLabEndConfirmed(header http.Header) bool {
+	values := header.Values("X-Next-Page")
+	return len(values) > 0 && strings.TrimSpace(values[0]) == ""
+}
+
+// githubEndConfirmed reports whether a page without rel="next" is GitHub's
+// explicit end of the list. A Link header with an entry that does not parse,
+// or a rel="next" without a URL, is not an end; nor is a page as full as the
+// requested per_page that carries no Link header at all (GitHub omits the
+// header only for a single-page list).
+func githubEndConfirmed(links []string, items int, query url.Values) bool {
+	header := strings.TrimSpace(strings.Join(links, ","))
+	if header == "" {
+		perPage, err := strconv.Atoi(strings.TrimSpace(query.Get("per_page")))
+		return err != nil || perPage < 1 || items < perPage
+	}
+	for _, part := range splitLinkHeader(header) {
+		open, close := strings.IndexByte(part, '<'), strings.IndexByte(part, '>')
+		if open != 0 || close <= open {
+			return false
+		}
+		rel := false
+		for _, attribute := range strings.Split(part[close+1:], ";") {
+			key, value, found := strings.Cut(strings.TrimSpace(attribute), "=")
+			if found && strings.EqualFold(key, "rel") {
+				rel = true
+				if strings.Trim(value, `"`) == "next" && strings.TrimSpace(part[open+1:close]) == "" {
+					return false
+				}
+			}
+		}
+		if !rel {
+			return false
+		}
+	}
+	return true
 }
 
 func githubNextLink(header string) string {

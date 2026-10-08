@@ -735,8 +735,9 @@ func buildSyncCoordinatorWorker(
 			// without it, every membership facet set collapses to just
 			// "github:<login>" and an email-based assignee can no longer
 			// match team attribution (codex round 1, P2).
-			Client: providersync.GitHubTeamCatalogRouteHandler{ResolveEmail: true},
-			Sink:   providersync.GitHubTeamCatalogClickHouseEffects{Conn: clickhouseConnection},
+			Client:      providersync.GitHubTeamCatalogRouteHandler{ResolveEmail: true},
+			Sink:        providersync.GitHubTeamCatalogClickHouseEffects{Conn: clickhouseConnection},
+			ScopeCensus: teamCatalogScopeCensus{pool: postgresDatabase.pools.Domain},
 		},
 		// CHAOS-4432: GitLab teams/team_project_ownership/team_memberships +
 		// native projects catalog (CHAOS-3380), Go-native. GroupPathResolver
@@ -749,6 +750,7 @@ func buildSyncCoordinatorWorker(
 			Sink: providersync.GitLabTeamCatalogClickHouseEffects{
 				Conn: clickhouseConnection, Lease: teamCatalogLease{},
 			},
+			ScopeCensus: teamCatalogScopeCensus{pool: postgresDatabase.pools.Domain},
 		},
 		// Jira teams/team_project_ownership/team_memberships/sprints +
 		// native projects catalog, Go-native: a Jira project IS the team

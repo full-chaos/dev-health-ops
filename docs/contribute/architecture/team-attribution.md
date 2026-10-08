@@ -1111,7 +1111,8 @@ rule, `PlanOwnershipSnapshot` (a repo full name stands in for the project id). S
   `repo_full_name` starts with `<github org>/` (the prefix `Collect` builds) are read or closed, because a team id
   `gh:<slug>` holds no GitHub org and one tenant can sync several GitHub orgs with the same slug. A row of another org,
   another GitHub org, another source (`inferred`, `manual`, `native`) or another provider is never read and never closed.
-- only the teams whose repo listing reached its end in this run (`githubTeamCatalogRows.RepoListedTeamIDs`). A team whose
+- only the teams whose repo listing reached a confirmed end in this run (`githubTeamCatalogRows.RepoListedTeamIDs`, less
+  the close gate's exclusions below). A team whose
   listing failed fails the whole run (nothing is written, nothing is closed). A run that listed no team, and a run that
   did not select teams (members-only), closes nothing: "the measurement did not happen" is never read as "GitHub returned
   nothing". A team that is listed with an empty repo list is a real, complete answer, and its rows close.
@@ -1132,8 +1133,9 @@ is the project id); only the open-row read and the listed-team set are GitLab's.
 - org = the run's org, `provider = 'gitlab'`, `source = 'provider_access'`. A row of another org, another source
   (`manual`) or another provider (jira, linear, github) is never read and never closed, even with the same team id and
   project id.
-- only the teams whose group `/projects` listing was read in this run (`GitLabTeamCatalogRows.OwnershipListedTeamIDs`:
-  the root group and every subgroup of the walk). A group that GitLab no longer lists (a deleted subgroup) is not listed,
+- only the teams whose group `/projects` listing was read to a confirmed end in this run
+  (`GitLabTeamCatalogRows.OwnershipListedTeamIDs`: the root group and every subgroup of the walk, less the close gate's
+  exclusions below). A group that GitLab no longer lists (a deleted subgroup) is not listed,
   so its rows stay open: closing a deleted group is out of scope, as for GitHub. A group listed with no project is a
   real, complete answer, and its rows close. A project held by a group and by its subgroup is closed only where the
   listing dropped it.
@@ -1147,8 +1149,38 @@ is the project id); only the open-row read and the listed-team set are GitLab's.
   row is not read as open, so a repeat run keeps its `valid_to` and a re-grant opens it again.
 
 Tests (real ClickHouse, seeded through the real writers and the collector): `TestGitLabTeamCatalogClosesProviderAccessRowsGitLabNoLongerReturns`
-(11 subtests, in `gitlab_team_catalog_ownership_snapshot_integration_test.go`); the census `TestJiraOwnershipWriterCensus`
+(in `gitlab_team_catalog_ownership_snapshot_integration_test.go`); the census `TestJiraOwnershipWriterCensus`
 names `SnapshotOwnership` and its planner `gitlabOwnershipSnapshot`.
+
+**The close gate, GitHub and GitLab alike (CHAOS-8952).** Every `provider_access` close goes through ONE gate,
+`decideOwnershipClose` (`internal/providersync/ownership_close_gate.go`), before the snapshot is planned. A close runs only
+when both of these hold; otherwise that scope closes nothing (its grants are still written, on their first-seen
+`valid_from`), and the skip is loud: one WARN line `ownership_close_skipped` (org, provider, reasons, counts), a
+`DegradedLeg` (`leg = ownership_close`, `outcome = skipped`) on the run's result, which the post-sync dispatcher stores in
+`sync_runs.result.degraded` and counts as `native_failed_nonfatal` on `dev_health_team_catalog_dispatch_total`.
+
+- **The listing is proven complete** (`ownershipListingProvesEnd`): the provider sent its own end-of-list signal and no bound
+  stopped the walk. GitLab's end is an `X-Next-Page` header that is sent and empty; a malformed or non-positive
+  `X-Next-Page`, or no header at all (an end inferred from a short page), leaves that group's listing unproven
+  (`PageCollection.EndUnconfirmed`, `internal/providerfoundation/pagination.go`). GitHub's end is a page without
+  `rel="next"` whose `Link` header parses; a `Link` entry without `<...>` or without `rel`, a `rel="next"` without a URL,
+  or a page as full as `per_page` with no `Link` at all leaves that team's listing unproven. A page error, a non-2xx page
+  and a page cap still fail or skip the run as above. Reason `listing_incomplete`; only the unproven teams keep their rows.
+- **No other listing source could own the rows.** The rows carry no integration key, so when another ACTIVE integration of
+  the same provider in the same org could list the same scope key (GitLab group path, GitHub org login, compared without
+  case), the run closes nothing (reason `scope_shared`). The census is `teamCatalogScopeCensus`
+  (`internal/workerservice/team_catalog_clients.go`): the org's other active integrations of the provider, each with its
+  credential's plain config and its root `sync_options` (the integration's own `config` when it has no root row). A
+  sibling whose scope key is not known from that (a GitHub org held only in the encrypted credential fields, or a GitLab
+  integration with no group path configured) counts as sharing the scope. A failed census read (`scope_census_failed`), no
+  census, or a run with no integration id (`scope_census_unavailable`: the `dho sync teams` CLI verb) closes nothing.
+
+Tests: `TestDecideOwnershipCloseClosesOnlyProvenListingsOfAnUnsharedScope` and `TestSiblingScopeKeysUseEachCollectorsOwnPrecedence`
+(the gate), `TestGitLabPaginationEndUnconfirmedUnlessXNextPageIsSentEmpty` and
+`TestGitHubLinkPaginationEndUnconfirmedOnMalformedLinkOrFullPageWithoutLink` (the end signal), the provider subtests of
+`TestGitLabTeamCatalogClosesProviderAccessRowsGitLabNoLongerReturns` and
+`TestGitHubTeamCatalogClosesProviderAccessRowsGitHubNoLongerReturns` (real ClickHouse), and
+`TestTeamCatalogScopeCensusListsTheOrgsOtherActiveIntegrationsOfOneProvider` (real Postgres, the migrated schema).
 
 One path: `run_team_autoimport` → `team_autoimport_<provider>.populate()` → `discover_*` → ClickHouse. (`LinearClient.iter_projects` is vestigial dead code, never a path.)
 

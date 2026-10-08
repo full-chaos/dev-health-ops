@@ -88,6 +88,11 @@ type gitlabSnapshotServer struct {
 	projects    map[string][]string // group full path -> project paths
 	failGroup   string              // group whose /projects answers 500
 	fullPageFor string              // group whose /projects never ends (page cap)
+	// nextPage, when set for a group, replaces GitLab's end signal (an empty
+	// X-Next-Page) on that group's first /projects page: "absent" sends no
+	// header, any other value is sent as is. page2 is what page 2 returns.
+	nextPage map[string]string
+	page2    map[string][]string
 }
 
 func newGitLabSnapshotServer(t *testing.T) *gitlabSnapshotServer {
@@ -134,11 +139,27 @@ func newGitLabSnapshotServer(t *testing.T) *gitlabSnapshotServer {
 				for index := 0; index < 100; index++ {
 					out = append(out, projectPayload(fmt.Sprintf("%s/filler-%d", groupPath, index)))
 				}
-			} else {
-				for _, project := range fake.projects[groupPath] {
+				writeGitLabTeamCatalogJSON(t, w, out)
+				return
+			}
+			listed := fake.projects[groupPath]
+			if page := r.URL.Query().Get("page"); page != "" && page != "1" {
+				listed = fake.page2[groupPath]
+			} else if next, ok := fake.nextPage[groupPath]; ok {
+				if next != "absent" {
+					w.Header().Set("X-Next-Page", next)
+				}
+				for _, project := range listed {
 					out = append(out, projectPayload(project))
 				}
+				writeGitLabTeamCatalogJSON(t, w, out)
+				return
 			}
+			for _, project := range listed {
+				out = append(out, projectPayload(project))
+			}
+			// GitLab's end of an offset listing: X-Next-Page sent and empty.
+			w.Header()["X-Next-Page"] = []string{""}
 			writeGitLabTeamCatalogJSON(t, w, out)
 		case strings.HasSuffix(path, "/members"):
 			writeGitLabTeamCatalogJSON(t, w, []map[string]any{})
@@ -161,12 +182,28 @@ func gitlabSnapshotRun(
 	selections TeamCatalogSelections, strict bool, at time.Time,
 ) (TeamCatalogResult, error) {
 	t.Helper()
+	return gitlabSnapshotRunAs(ctx, t, conn, orgID, fake, selections, strict, at, "integration-a", staticScopeCensus{})
+}
+
+// gitlabSnapshotRunAs runs one collection as the given integration, with the
+// given census of the org's other active GitLab integrations.
+func gitlabSnapshotRunAs(
+	ctx context.Context, t *testing.T, conn driver.Conn, orgID string, fake *gitlabSnapshotServer,
+	selections TeamCatalogSelections, strict bool, at time.Time, integrationID string, census OwnershipScopeCensus,
+) (TeamCatalogResult, error) {
+	t.Helper()
 	collector := GitLabTeamCatalogCollector{Sink: GitLabTeamCatalogClickHouseEffects{
 		Conn: conn, Lease: providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }),
-	}}
+	}, ScopeCensus: census}
 	credential := providerfoundation.Credential{Provider: "gitlab", Config: map[string]string{"group_path": "org"}}
-	ref := TeamCatalogReference{OrgID: orgID, SyncRunID: "run", Strict: strict}
+	ref := TeamCatalogReference{OrgID: orgID, SyncRunID: "run", IntegrationID: integrationID, Strict: strict}
 	return collector.CollectTeamCatalog(ctx, ref, credential, gitlabTeamCatalogTestClient(t, fake.URL), selections, at)
+}
+
+func (fake *gitlabSnapshotServer) setPaging(nextPage map[string]string, page2 map[string][]string) {
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	fake.nextPage, fake.page2 = nextPage, page2
 }
 
 func TestGitLabTeamCatalogClosesProviderAccessRowsGitLabNoLongerReturns(t *testing.T) {
@@ -431,6 +468,129 @@ func TestGitLabTeamCatalogClosesProviderAccessRowsGitLabNoLongerReturns(t *testi
 			t.Fatalf("kept valid_from = %v, want the earliest %v", open[0].ValidFrom, t0)
 		}
 	})
+
+	late := gitlabOwnershipFact{TeamID: "gl:org", Project: "org/late", Source: "provider_access"}
+	for _, test := range []struct{ name, nextPage string }{
+		{"a malformed X-Next-Page", "not-a-page"},
+		{"a non-positive X-Next-Page", "0"},
+		{"no X-Next-Page at all (an end inferred from a short page)", "absent"},
+	} {
+		t.Run(test.name+" leaves the listing unproven: nothing closes and the run says so", func(t *testing.T) {
+			org, fake := "gl-snap-unproven-"+strings.ReplaceAll(test.nextPage, "-", ""), newGitLabSnapshotServer(t)
+			fake.set("", "", nil, map[string][]string{"org": {"org/root-svc", "org/late"}})
+			if _, err := gitlabSnapshotRun(ctx, t, conn, org, fake, projectsOnly, false, t0); err != nil {
+				t.Fatal(err)
+			}
+			// Page 1 stops short of org/late, which GitLab still lists on page 2.
+			fake.set("", "", nil, map[string][]string{"org": {"org/root-svc"}})
+			fake.setPaging(map[string]string{"org": test.nextPage}, map[string][]string{"org": {"org/late"}})
+			result, err := gitlabSnapshotRun(ctx, t, conn, org, fake, projectsOnly, false, t0.Add(time.Hour))
+			if err != nil {
+				t.Fatal(err)
+			}
+			requireGitLabFacts(t, "after the unproven listing", openGitLabOwnership(ctx, t, conn, org, "gitlab"), rootSvc, late)
+			if got := closeLegReasons(result.DegradedLegs); len(got) != 1 || got[0] != OwnershipCloseSkippedListingIncomplete {
+				t.Fatalf("degraded close legs = %v, want [%s]", got, OwnershipCloseSkippedListingIncomplete)
+			}
+		})
+	}
+
+	t.Run("an unproven subgroup listing keeps only that subgroup's rows open; the proven root still closes", func(t *testing.T) {
+		org, fake := "gl-snap-partly-proven", newGitLabSnapshotServer(t)
+		seedTree(fake)
+		if _, err := gitlabSnapshotRun(ctx, t, conn, org, fake, projectsOnly, false, t0); err != nil {
+			t.Fatal(err)
+		}
+		fake.set("", "", []string{"org/team-a"}, map[string][]string{"org": {"org/root-svc"}, "org/team-a": {"org/team-a/api"}})
+		fake.setPaging(map[string]string{"org/team-a": "not-a-page"}, map[string][]string{"org/team-a": {"org/team-a/web"}})
+		result, err := gitlabSnapshotRun(ctx, t, conn, org, fake, projectsOnly, false, t0.Add(time.Hour))
+		if err != nil {
+			t.Fatal(err)
+		}
+		requireGitLabFacts(t, "after the partly proven run", openGitLabOwnership(ctx, t, conn, org, "gitlab"), rootSvc, teamAApi, teamAWeb)
+		if got := closeLegReasons(result.DegradedLegs); len(got) != 1 || got[0] != OwnershipCloseSkippedListingIncomplete {
+			t.Fatalf("degraded close legs = %v, want [%s]", got, OwnershipCloseSkippedListingIncomplete)
+		}
+	})
+
+	t.Run("two active integrations of the org on the same group path never close each other's rows", func(t *testing.T) {
+		org := "gl-snap-two-integrations"
+		a, b := newGitLabSnapshotServer(t), newGitLabSnapshotServer(t)
+		a.set("", "", nil, map[string][]string{"org": {"org/kept"}})
+		b.set("", "", nil, map[string][]string{"org": {}})
+		// Each census names the other integration on the same group path, as the
+		// org's integrations table would.
+		censusOfA := staticScopeCensus{siblings: []OwnershipSiblingIntegration{{IntegrationID: "integration-b", SyncOptions: map[string]any{"group_path": "org"}}}}
+		censusOfB := staticScopeCensus{siblings: []OwnershipSiblingIntegration{{IntegrationID: "integration-a", SyncOptions: map[string]any{"group_path": "org"}}}}
+		if _, err := gitlabSnapshotRunAs(ctx, t, conn, org, a, projectsOnly, false, t0, "integration-a", censusOfA); err != nil {
+			t.Fatal(err)
+		}
+		result, err := gitlabSnapshotRunAs(ctx, t, conn, org, b, projectsOnly, false, t0.Add(time.Hour), "integration-b", censusOfB)
+		if err != nil {
+			t.Fatal(err)
+		}
+		kept := gitlabOwnershipFact{TeamID: "gl:org", Project: "org/kept", Source: "provider_access"}
+		requireGitLabFacts(t, "after integration B listed nothing", openGitLabOwnership(ctx, t, conn, org, "gitlab"), kept)
+		if got := closeLegReasons(result.DegradedLegs); len(got) != 1 || got[0] != OwnershipCloseSkippedScopeShared {
+			t.Fatalf("degraded close legs = %v, want [%s]", got, OwnershipCloseSkippedScopeShared)
+		}
+		// A's own repeat run keeps its first valid_from: no new row per run.
+		if _, err := gitlabSnapshotRunAs(ctx, t, conn, org, a, projectsOnly, false, t0.Add(2*time.Hour), "integration-a", censusOfA); err != nil {
+			t.Fatal(err)
+		}
+		open := openGitLabOwnership(ctx, t, conn, org, "gitlab")
+		requireGitLabFacts(t, "after A again", open, kept)
+		if !open[0].ValidFrom.Equal(t0) {
+			t.Fatalf("valid_from = %v, want the first-seen %v", open[0].ValidFrom, t0)
+		}
+	})
+
+	t.Run("an active integration on another group path does not stop the close", func(t *testing.T) {
+		org, fake := "gl-snap-other-path", newGitLabSnapshotServer(t)
+		seedTree(fake)
+		census := staticScopeCensus{siblings: []OwnershipSiblingIntegration{{IntegrationID: "integration-b", SyncOptions: map[string]any{"group_path": "other-org"}}}}
+		if _, err := gitlabSnapshotRunAs(ctx, t, conn, org, fake, projectsOnly, false, t0, "integration-a", census); err != nil {
+			t.Fatal(err)
+		}
+		fake.set("", "", []string{"org/team-a"}, map[string][]string{"org": {"org/root-svc"}, "org/team-a": {"org/team-a/api", "org/team-a/web"}})
+		result, err := gitlabSnapshotRunAs(ctx, t, conn, org, fake, projectsOnly, false, t0.Add(time.Hour), "integration-a", census)
+		if err != nil {
+			t.Fatal(err)
+		}
+		requireGitLabFacts(t, "after drop", openGitLabOwnership(ctx, t, conn, org, "gitlab"), rootSvc, teamAApi, teamAWeb)
+		if len(result.DegradedLegs) != 0 {
+			t.Fatalf("degraded legs = %+v, want none", result.DegradedLegs)
+		}
+	})
+
+	for _, test := range []struct {
+		name, integrationID, reason string
+		census                      OwnershipScopeCensus
+	}{
+		{"a sibling whose group path is not known", "integration-a", OwnershipCloseSkippedScopeShared,
+			staticScopeCensus{siblings: []OwnershipSiblingIntegration{{IntegrationID: "integration-b"}}}},
+		{"a failed census read", "integration-a", OwnershipCloseSkippedCensusFailed,
+			staticScopeCensus{err: errors.New("integrations read failed")}},
+		{"no census", "integration-a", OwnershipCloseSkippedCensusUnavailable, nil},
+		{"a run without an integration", "", OwnershipCloseSkippedCensusUnavailable, staticScopeCensus{}},
+	} {
+		t.Run(test.name+" closes nothing and the run says so", func(t *testing.T) {
+			org, fake := "gl-snap-census-"+strings.ReplaceAll(test.reason, "_", "")+test.integrationID, newGitLabSnapshotServer(t)
+			seedTree(fake)
+			if _, err := gitlabSnapshotRun(ctx, t, conn, org, fake, projectsOnly, false, t0); err != nil {
+				t.Fatal(err)
+			}
+			fake.set("", "", []string{"org/team-a"}, map[string][]string{"org": {}, "org/team-a": {}})
+			result, err := gitlabSnapshotRunAs(ctx, t, conn, org, fake, projectsOnly, false, t0.Add(time.Hour), test.integrationID, test.census)
+			if err != nil {
+				t.Fatal(err)
+			}
+			requireGitLabFacts(t, "after the empty listing", openGitLabOwnership(ctx, t, conn, org, "gitlab"), rootSvc, rootOld, teamAApi, teamAWeb)
+			if got := closeLegReasons(result.DegradedLegs); len(got) != 1 || got[0] != test.reason {
+				t.Fatalf("degraded close legs = %v, want [%s]", got, test.reason)
+			}
+		})
+	}
 }
 
 // openOwnershipReadFailingConn fails only the read of open

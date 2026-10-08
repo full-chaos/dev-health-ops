@@ -164,16 +164,16 @@ var ownershipWriters = map[string]ownershipWriter{
 var repoOwnershipPlanners = map[string]ownershipWriter{
 	"internal/providersync.GitHubTeamCatalogClickHouseEffects.SnapshotTeamRepoOwnership": {
 		provider: "github", planner: "internal/providersync.githubRepoOwnershipSnapshot",
-		complete: "SnapshotTeamRepoOwnership passes len(listedTeamIDs) > 0: githubTeamCatalogRows.RepoListedTeamIDs, which " +
-			"GitHubTeamCatalogRouteHandler.Collect fills only after a team's repo listing reached its end (a failed or " +
-			"capped listing fails Collect, github_team_catalog_route.go)",
+		complete: "SnapshotTeamRepoOwnership passes len(closableTeamIDs) > 0: decideOwnershipClose's closable set, the " +
+			"teams of githubTeamCatalogRows.RepoListedTeamIDs whose listing proved its end (ownershipListingProvesEnd) " +
+			"in a scope no other active GitHub integration of the org could list (ownership_close_gate.go)",
 	},
 	"internal/providersync.GitLabTeamCatalogClickHouseEffects.SnapshotOwnership": {
 		provider: "gitlab", planner: "internal/providersync.gitlabOwnershipSnapshot",
-		complete: "SnapshotOwnership passes len(listedTeamIDs) > 0: GitLabTeamCatalogRows.OwnershipListedTeamIDs, which " +
-			"GitLabTeamCatalogRouteHandler.CollectTeamCatalog fills only for a group whose /projects listing was read " +
-			"(a failed listing skips the walk or fails it; a capped one fails the collector with ErrPaginationCapExceeded, " +
-			"gitlab_team_catalog_route.go)",
+		complete: "SnapshotOwnership passes len(closableTeamIDs) > 0: decideOwnershipClose's closable set, the " +
+			"teams of GitLabTeamCatalogRows.OwnershipListedTeamIDs whose /projects listing proved its end " +
+			"(ownershipListingProvesEnd) in a group path no other active GitLab integration of the org could list " +
+			"(ownership_close_gate.go)",
 	},
 }
 

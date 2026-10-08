@@ -79,10 +79,22 @@ func githubSnapshotRun(
 ) (TeamCatalogResult, error) {
 	t.Helper()
 	doer := &githubTeamCatalogFixtureDoer{t: t, byPath: paths, statuses: statuses}
-	adapter := GitHubTeamCatalogCollector{Sink: GitHubTeamCatalogClickHouseEffects{Conn: conn}}
+	return githubSnapshotRunAs(ctx, t, conn, orgID, doer, selections, at, "integration-a", staticScopeCensus{})
+}
+
+// githubSnapshotRunAs runs one collection of org "acme" as the given
+// integration, with the given census of the org's other active GitHub
+// integrations.
+func githubSnapshotRunAs(
+	ctx context.Context, t *testing.T, conn driver.Conn, orgID string, doer *githubTeamCatalogFixtureDoer,
+	selections TeamCatalogSelections, at time.Time, integrationID string, census OwnershipScopeCensus,
+) (TeamCatalogResult, error) {
+	t.Helper()
+	adapter := GitHubTeamCatalogCollector{Sink: GitHubTeamCatalogClickHouseEffects{Conn: conn}, ScopeCensus: census}
 	credential := providerfoundation.Credential{Provider: "github", Config: map[string]string{"org": "acme"}}
 	client := githubTeamCatalogAdapterClient(t, doer)
-	return adapter.CollectTeamCatalog(ctx, TeamCatalogReference{OrgID: orgID, SyncRunID: "run"}, credential, client, selections, at)
+	return adapter.CollectTeamCatalog(ctx, TeamCatalogReference{OrgID: orgID, SyncRunID: "run", IntegrationID: integrationID},
+		credential, client, selections, at)
 }
 
 func TestGitHubTeamCatalogClosesProviderAccessRowsGitHubNoLongerReturns(t *testing.T) {
@@ -199,9 +211,13 @@ func TestGitHubTeamCatalogClosesProviderAccessRowsGitHubNoLongerReturns(t *testi
 		run := func(githubOrg string, paths map[string]string, at time.Time) {
 			t.Helper()
 			doer := &githubTeamCatalogFixtureDoer{t: t, byPath: paths}
-			adapter := GitHubTeamCatalogCollector{Sink: GitHubTeamCatalogClickHouseEffects{Conn: conn}}
+			// Each run is its own integration; each lists the other on its own GitHub org.
+			other := map[string]string{"acme": "acme-labs", "acme-labs": "acme"}[githubOrg]
+			adapter := GitHubTeamCatalogCollector{Sink: GitHubTeamCatalogClickHouseEffects{Conn: conn}, ScopeCensus: staticScopeCensus{
+				siblings: []OwnershipSiblingIntegration{{IntegrationID: "integration-" + other, CredentialConfig: map[string]string{"org": other}}},
+			}}
 			credential := providerfoundation.Credential{Provider: "github", Config: map[string]string{"org": githubOrg}}
-			if _, err := adapter.CollectTeamCatalog(ctx, TeamCatalogReference{OrgID: org, SyncRunID: "run"},
+			if _, err := adapter.CollectTeamCatalog(ctx, TeamCatalogReference{OrgID: org, SyncRunID: "run", IntegrationID: "integration-" + githubOrg},
 				credential, githubTeamCatalogAdapterClient(t, doer), teamsOnly, at); err != nil {
 				t.Fatal(err)
 			}
@@ -423,6 +439,80 @@ func TestGitHubTeamCatalogClosesProviderAccessRowsGitHubNoLongerReturns(t *testi
 		}
 		if open != 1 {
 			t.Fatalf("open rows for one held grant = %d, want 1", open)
+		}
+	})
+
+	for _, test := range []struct{ name, link string }{
+		{"a Link without angle brackets", `https://api.github.com/orgs/acme/teams/platform/repos?page=2; rel="next"`},
+		{"a Link entry without rel", `<https://api.github.com/orgs/acme/teams/platform/repos?page=2>`},
+	} {
+		t.Run(test.name+" leaves the listing unproven: nothing closes and the run says so", func(t *testing.T) {
+			org := "snap-unproven-" + strings.ReplaceAll(strings.ToLower(strings.Fields(test.name)[len(strings.Fields(test.name))-1]), " ", "")
+			teams := `[{"slug":"platform","name":"Platform"}]`
+			if _, err := githubSnapshotRun(ctx, t, conn, org, map[string]string{
+				"/orgs/acme/teams": teams, "/orgs/acme/teams/platform/repos": `[{"name":"api"},{"name":"late"}]`,
+			}, nil, teamsOnly, t0); err != nil {
+				t.Fatal(err)
+			}
+			doer := &githubTeamCatalogFixtureDoer{t: t, byPath: map[string]string{
+				"/orgs/acme/teams": teams, "/orgs/acme/teams/platform/repos": `[{"name":"api"}]`,
+				"/orgs/acme/teams/platform/repos?page=2": `[{"name":"late"}]`,
+			}, links: map[string]string{"/orgs/acme/teams/platform/repos": test.link}}
+			result, err := githubSnapshotRunAs(ctx, t, conn, org, doer, teamsOnly, t0.Add(time.Hour), "integration-a", staticScopeCensus{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			requireRepoFacts(t, "after the unproven listing", openRepoOwnership(ctx, t, conn, org, "github"), platform,
+				repoOwnershipFact{TeamID: "gh:platform", Repo: "acme/late", Source: "provider_access"})
+			if got := closeLegReasons(result.DegradedLegs); len(got) != 1 || got[0] != OwnershipCloseSkippedListingIncomplete {
+				t.Fatalf("degraded close legs = %v, want [%s]", got, OwnershipCloseSkippedListingIncomplete)
+			}
+		})
+	}
+
+	t.Run("two active integrations of the org on the same GitHub org never close each other's rows", func(t *testing.T) {
+		org := "snap-two-integrations"
+		teams := `[{"slug":"platform","name":"Platform"}]`
+		censusOfA := staticScopeCensus{siblings: []OwnershipSiblingIntegration{{IntegrationID: "integration-b", CredentialConfig: map[string]string{"org": "ACME"}}}}
+		censusOfB := staticScopeCensus{siblings: []OwnershipSiblingIntegration{{IntegrationID: "integration-a", CredentialConfig: map[string]string{"owner": "acme"}}}}
+		listsAPI := &githubTeamCatalogFixtureDoer{t: t, byPath: map[string]string{"/orgs/acme/teams": teams, "/orgs/acme/teams/platform/repos": `[{"name":"api"}]`}}
+		if _, err := githubSnapshotRunAs(ctx, t, conn, org, listsAPI, teamsOnly, t0, "integration-a", censusOfA); err != nil {
+			t.Fatal(err)
+		}
+		listsNothing := &githubTeamCatalogFixtureDoer{t: t, byPath: map[string]string{"/orgs/acme/teams": teams, "/orgs/acme/teams/platform/repos": `[]`}}
+		result, err := githubSnapshotRunAs(ctx, t, conn, org, listsNothing, teamsOnly, t0.Add(time.Hour), "integration-b", censusOfB)
+		if err != nil {
+			t.Fatal(err)
+		}
+		requireRepoFacts(t, "after integration B listed nothing", openRepoOwnership(ctx, t, conn, org, "github"), platform)
+		if got := closeLegReasons(result.DegradedLegs); len(got) != 1 || got[0] != OwnershipCloseSkippedScopeShared {
+			t.Fatalf("degraded close legs = %v, want [%s]", got, OwnershipCloseSkippedScopeShared)
+		}
+	})
+
+	t.Run("an integration whose GitHub org is not known stops the close; no census stops it too", func(t *testing.T) {
+		for _, test := range []struct {
+			org, reason string
+			census      OwnershipScopeCensus
+		}{
+			{"snap-sibling-unknown", OwnershipCloseSkippedScopeShared, staticScopeCensus{siblings: []OwnershipSiblingIntegration{{IntegrationID: "integration-b"}}}},
+			{"snap-no-census", OwnershipCloseSkippedCensusUnavailable, nil},
+			{"snap-census-failed", OwnershipCloseSkippedCensusFailed, staticScopeCensus{err: errors.New("integrations read failed")}},
+		} {
+			if _, err := githubSnapshotRun(ctx, t, conn, test.org, twoTeams, nil, teamsOnly, t0); err != nil {
+				t.Fatal(err)
+			}
+			empty := &githubTeamCatalogFixtureDoer{t: t, byPath: map[string]string{
+				"/orgs/acme/teams": twoTeams["/orgs/acme/teams"], "/orgs/acme/teams/platform/repos": `[]`, "/orgs/acme/teams/ops/repos": `[]`,
+			}}
+			result, err := githubSnapshotRunAs(ctx, t, conn, test.org, empty, teamsOnly, t0.Add(time.Hour), "integration-a", test.census)
+			if err != nil {
+				t.Fatal(err)
+			}
+			requireRepoFacts(t, test.org, openRepoOwnership(ctx, t, conn, test.org, "github"), platform, platformWeb, ops)
+			if got := closeLegReasons(result.DegradedLegs); len(got) != 1 || got[0] != test.reason {
+				t.Fatalf("%s: degraded close legs = %v, want [%s]", test.org, got, test.reason)
+			}
 		}
 	})
 }

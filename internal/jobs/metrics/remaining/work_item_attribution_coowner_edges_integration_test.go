@@ -4,7 +4,6 @@ package remaining
 
 import (
 	"context"
-	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -115,12 +114,10 @@ func TestACoOwnerWithTwoOwnershipFactsIsStoredAsACoOwner(t *testing.T) {
 }
 
 // A team of another provider that holds the same key string is not an owner
-// of the item's project: it is never stored as a co-owner. The teams are read
-// in catalog order (provider, id). When the first holder is of the item's
-// provider, it is the primary and the other holder of the item's provider is
-// a co-owner; when the first holder is of another provider (a Linear item
-// whose key a Jira team also holds), it stays the primary as before this
-// change and no team is stored as a co-owner.
+// of the item's project: it is never stored as a primary or a co-owner, also
+// when it sorts first in the catalog order (provider, id) (a Linear item whose
+// key a Jira team also holds). The first holder of the item's provider is the
+// primary and the other holder of the item's provider is a co-owner.
 func TestAKeyOfAnotherProvidersTeamIsNeverStoredAsACoOwner(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
 	defer cancel()
@@ -128,7 +125,6 @@ func TestAKeyOfAnotherProvidersTeamIsNeverStoredAsACoOwner(t *testing.T) {
 	opened := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	type holder struct{ provider, teamID string }
 	var subjects []teamattribution.GithubWorkItemDerivationSubject
-	holders := map[string][]holder{}
 	for _, provider := range coOwnerProviders {
 		other := "linear"
 		if provider == "linear" {
@@ -138,35 +134,22 @@ func TestAKeyOfAnotherProvidersTeamIsNeverStoredAsACoOwner(t *testing.T) {
 		for _, h := range []holder{{provider, "x-team-a-" + provider}, {provider, "x-team-b-" + provider}, {other, "x-team-z-" + other + "-for-" + provider}} {
 			s.team(h.provider, h.teamID, []string{key}, opened)
 			s.owns(h.provider, h.teamID, "xp-"+h.provider+"-"+provider, key, opened, nil, opened)
-			holders[provider] = append(holders[provider], h)
 		}
-		sort.Slice(holders[provider], func(left, right int) bool {
-			a, b := holders[provider][left], holders[provider][right]
-			if a.provider != b.provider {
-				return a.provider < b.provider
-			}
-			return a.teamID < b.teamID
-		})
 		subjects = append(subjects, s.subject(provider, key, "xp-"+provider+"-"+provider))
 	}
 	s.write(time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC), subjects...)
 	for _, subject := range subjects {
 		provider := subject.Provider
 		stored := latestAttributions(t, ctx, s.conn, s.orgID, subject.WorkItemID)
-		first := holders[provider][0]
-		if got := teamsWith(stored, "issue_project", 1); strings.Join(got, ",") != first.teamID {
-			t.Errorf("%s: primary teams = %v, want the first holder [%s] (unchanged)", provider, got, first.teamID)
+		if got := teamsWith(stored, "issue_project", 1); strings.Join(got, ",") != "x-team-a-"+provider {
+			t.Errorf("%s: primary teams = %v, want [x-team-a-%s] (stored: %+v)", provider, got, provider, stored)
 		}
-		wantCoOwners := ""
-		if first.provider == provider {
-			wantCoOwners = "x-team-b-" + provider
-		}
-		if got := strings.Join(teamsWith(stored, "issue_project", 2), ","); got != wantCoOwners {
-			t.Errorf("%s: co-owner teams = %q, want %q (stored: %+v)", provider, got, wantCoOwners, stored)
+		if got := strings.Join(teamsWith(stored, "issue_project", 2), ","); got != "x-team-b-"+provider {
+			t.Errorf("%s: co-owner teams = %q, want x-team-b-%s (stored: %+v)", provider, got, provider, stored)
 		}
 		for _, row := range stored {
-			if row.isPrimary == 2 && !strings.HasPrefix(row.teamID, "x-team-a-"+provider) && !strings.HasPrefix(row.teamID, "x-team-b-"+provider) {
-				t.Errorf("%s: team of another provider stored as a co-owner: %+v", provider, row)
+			if row.isPrimary != 0 && !strings.HasPrefix(row.teamID, "x-team-a-"+provider) && !strings.HasPrefix(row.teamID, "x-team-b-"+provider) {
+				t.Errorf("%s: team of another provider stored as a primary or a co-owner: %+v", provider, row)
 			}
 		}
 	}

@@ -547,20 +547,23 @@ func TestCarryTeamIDsSupersedesAPendingIdentityChangeOfAMovedTeam(t *testing.T) 
 	f := carryFixture{t: t, ctx: ctx, conn: conn, orgID: uuid.NewString()}
 	f.team("linear", "ENG", carryPtr("ENG"), nil, 1, carryOld, nil, nil)
 	f.team("linear", "linear:KEPT", carryPtr("KEPT"), nil, 1, carryOld, nil, nil)
-	identity := func(changeID, teamID, status string) {
-		f.exec(`INSERT INTO team_drift_changes (org_id, change_id, entity_type, entity_id, provider, native_team_key, change_type, field, old_value_json, new_value_json, status, first_seen_at, last_seen_at, updated_at) VALUES (?, ?, 'identity', ?, 'linear', ?, 'membership_changed', 'team_memberships', '{}', ?, ?, ?, ?, ?)`,
-			f.orgID, changeID, teamID, teamID, `{"provider":"linear","team_id":"`+teamID+`","member_id":"m1"}`, status, carryFirst, carryOld, carryOld)
+	// A Jira project-as-team row of the same id does not move.
+	f.team("jira", "ENG", carryPtr("ENG"), nil, 1, carryOld, nil, nil)
+	identity := func(changeID, provider, teamID, status string) {
+		f.exec(`INSERT INTO team_drift_changes (org_id, change_id, entity_type, entity_id, provider, native_team_key, change_type, field, old_value_json, new_value_json, status, first_seen_at, last_seen_at, updated_at) VALUES (?, ?, 'identity', ?, ?, ?, 'membership_changed', 'team_memberships', '{}', ?, ?, ?, ?, ?)`,
+			f.orgID, changeID, teamID, provider, teamID, `{"provider":"`+provider+`","team_id":"`+teamID+`","member_id":"m1"}`, status, carryFirst, carryOld, carryOld)
 	}
-	identity("c-pending", "ENG", "pending")
-	identity("c-dismissed", "ENG", "dismissed")
-	identity("c-other", "linear:KEPT", "pending")
+	identity("c-pending", "linear", "ENG", "pending")
+	identity("c-dismissed", "linear", "ENG", "dismissed")
+	identity("c-other", "linear", "linear:KEPT", "pending")
+	identity("c-jira", "jira", "ENG", "pending")
 
 	outcome, err := CarryTeamIDs(ctx, conn, f.orgID, carryAt, false)
 	if err != nil || outcome.IdentityDriftChanges != 1 {
 		t.Fatalf("carry = %+v, %v; want one identity change superseded", outcome, err)
 	}
 	got := f.str(`SELECT arrayStringConcat(arraySort(groupArray(concat(change_id, '=', status))), ',') FROM team_drift_changes FINAL WHERE org_id = ? AND entity_type = 'identity'`)
-	if got != "c-dismissed=dismissed,c-other=pending,c-pending=superseded" {
+	if got != "c-dismissed=dismissed,c-jira=pending,c-other=pending,c-pending=superseded" {
 		t.Errorf("identity changes = %s", got)
 	}
 }

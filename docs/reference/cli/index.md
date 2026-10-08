@@ -1543,11 +1543,12 @@ deployed Go revision from the rollback tag set.
 A provider team id carries its provider's prefix (`linear:<key>`,
 `jira:<uuid>`, `<system>:<id>` for a pushed team; see the team attribution
 architecture, section 0.4f). Rows written before that rule hold the bare id.
-Every writer of a prefixed team id (the Linear team catalog, the Atlassian
-Teams write, the external ingest `team.v1`/`identity.v1` sink, the admin team
-import) moves its organization's bare ids before it writes. This verb does
-the same now, for one organization, with the same function
-(`providersync.CarryTeamIDs`).
+Every write path of a prefixed team id moves its organization's bare ids
+before it reads or writes one: a team catalog sync before its collector
+starts (every provider, worker and `dho sync teams`), and the external
+ingest `team.v1`/`identity.v1` sink, the admin team import and the Atlassian
+Teams verb at their entry. This verb does the same now, for one
+organization, with the same function (`providersync.CarryTeamIDs`).
 
 Nothing is deleted:
 
@@ -1571,7 +1572,7 @@ is no `--org`, with the stdin rules of
 organization id. It prints counts only, under `carry_team_ids`: `teams`,
 `admin_teams`, `admin_teams_not_carried`, `ambiguous_teams`,
 `teams_already_keyed`, `memberships`, `project_ownership`, `repo_ownership`,
-`link_rows_already_keyed`, `observations`, `sync_policies`, `drift_changes`,
+`link_rows_already_keyed`, `observations`, `sync_policies`, `drift_changes`, `identity_drift_changes`,
 `identities`, `fallbacks`, and `rows_written` (0 with `--dry-run`). A second
 run reports zero.
 

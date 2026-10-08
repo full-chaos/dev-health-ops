@@ -1121,16 +1121,30 @@ system prefix) keeps it, whatever system writes it, and gets no second one. A cu
   (`resolveWorkItemTeamID`) maps a Linear item's `native_team_key` to the id of the known Linear team with that
   native key; when two teams hold one key, the prefixed id wins.
 - **Old rows.** Rows written before this change hold bare ids. The carry (below, CHAOS-8940) moves them to the
-  prefixed form. Every prefixed writer calls it before its first write, and the two changes reach a deploy
-  together, so no prefixed row is written beside an active bare row of the same team.
+  prefixed form. It runs before every write path of a prefixed team id reads or writes one (the seam below),
+  and the two changes reach a deploy together, so no prefixed row is written beside an active bare row of the
+  same team.
 
 **The carry (CHAOS-8940).** `providersync.CarryTeamIDs` (`internal/providersync/team_id_carry.go`) moves one
 organization's bare team ids to the prefixed form. `providersync.CarryTeamIDsBeforeWrite` calls it with the
-time of the call. These writers call it before their first write: the Linear effect writer (team, membership and
-ownership rows), the Atlassian `Write` (after its refusal check, before any read), the external ingest sink when a
-batch holds `team.v1` or `identity.v1` records, and the admin import (`POST /teams/import`). An error stops
-the writer before it writes. The operator verb `dho workers providersync carry-team-ids` runs the same
-function (section 1.1).
+time of the call. It runs at ONE seam per write path, before the path reads or writes a team id; an error stops
+the path before it writes:
+
+- **Team catalog sync.** `providersync.CarryFirstTeamCatalogCollector` (`team_id_carry_seam.go`) runs it before
+  the collector it wraps starts. Every registered collector is wrapped: the worker registry
+  (`newNativeTeamCatalogCollectors`, `internal/workerservice/sync_dispatch.go`; Linear, GitHub, GitLab, and Jira =
+  the project-as-team leg then the Atlassian Teams leg) that both the reference discovery and the post-sync
+  team auto-import run, and the `dho sync teams` catalog verb (`buildCatalogCollector`,
+  `internal/synccli/teamscatalog.go`). A collector reads sync policies, manual memberships, fallbacks and drift
+  rows by the prefixed id in its guards, and closes and opens links by it, before its first team write; a carry
+  inside a writer would run after those reads and lose the bare rows' policy, members and first-seen dates.
+- **Writes outside a collector**, at their entry: the external ingest sink when a batch holds `team.v1` or
+  `identity.v1` records, the admin import (`POST /teams/import`), and the Atlassian Teams verb
+  (`dho sync teams --provider jira`) before `atlassianteams.Write`.
+
+`TestEveryTeamIDWriteSiteRunsBehindTheCarryCensus` (`internal/providersync`) lists every production line that runs
+or builds a team catalog collector or writes Atlassian team ids, and fails on a new one. The operator verb
+`dho workers providersync carry-team-ids` runs the same function (section 1.1).
 
 - **Source.** The raw `teams` rows, not `FINAL`: the newest row of each (provider, id) whose id is not empty
   and holds no known key (`teamid.HasKey`), and whose newest row is active. `teams` holds one row per id after
@@ -1141,7 +1155,9 @@ function (section 1.1).
     `RetireJiraProjectAsTeamRows` retires it (section 0.4c).
   - An admin team (provider `""`) moves only when exactly one provider's observation names its id (it came
     from that provider's import); it keeps provider `""` and its `native_team_key`. An admin team with no such
-    observation is the admin's choice and stays (counted as `admin_teams_not_carried`).
+    observation is the admin's choice and stays (counted as `admin_teams_not_carried`). An admin edit of a Jira
+    project-as-team row (the same id) stays too (also counted there): it is that row, not a Jira team, and
+    `RetireJiraProjectAsTeamRows` owns it.
   - An admin edit of a provider team (the same id, provider `""`) moves with that team; the newer of the two
     rows gives the new row's values.
   - An id that two providers' teams hold (or a provider's team and an active Jira project-as-team row) is
@@ -1164,7 +1180,11 @@ function (section 1.1).
   - `team_sync_policies`: copied to the new id unless the new id has one. The old row stays.
   - `team_drift_changes`: every field change of the old id is written again under the new id with the change
     id the drift review computes for it, keeping its status (a dismissed change stays dismissed); a pending
-    change of the old id is superseded.
+    change of the old id is superseded. A pending identity membership change (`entity_type = 'identity'`) of a
+    team that moves is superseded and not written again: the review resolves only the changes of the teams it
+    observes (the prefixed id), and its change id holds the membership row with its `updated_at`, so no later
+    review could match a copy. The next review of that provider stages the conflict again under the new id if
+    it is still there; in a catalog sync that is the same run, as the carry runs before the collector.
   - `identities.team_ids` and `manual_attribution_fallbacks.team_id`: the old id is replaced.
   - The team rows and then the observations are written last, so after a failure part way the old team is
     still found and a re-run moves what is left.
@@ -1181,10 +1201,17 @@ first `valid_from` kept; keyed ids and another organization untouched; a second 
 `TestCarryTeamIDsMovesDriftChangesWithTheirDecision`, `TestCarryTeamIDsKeepsRowsAKeyedWriterWrote`,
 `TestCarryTeamIDsSplitsAnIDTwoProvidersHold`, `TestCarryTeamIDsDryRunWritesNothing`,
 `TestCarryTeamIDsFailedReadWritesNothing`, `TestTheBareIDConditionMatchesHasKey`,
-`TestTeamIDCarryGuardRefusesAnUnkeyedID`; one test per writer that the carry runs first:
-`TestTheLinearTeamWriteCarriesTheBareTeamFirst`, `TestAtlassianWriteCarriesTheBareTeamFirst`,
-`TestATeamV1PushCarriesTheBareTeamFirst` and `TestTeamIDCarryRunsBeforeAnIdentityOnlyPush`,
-`TestAdminImportCarriesTheBareTeamFirst`.
+`TestTeamIDCarryGuardRefusesAnUnkeyedID`, `TestCarryTeamIDsMovesAnObservationWithoutABareTeam`,
+`TestCarryTeamIDsKeepsTheDecisionOfAnOldDecidedChange`, `TestCarryTeamIDsNamesATeamOnceInAnIdentity`,
+`TestCarryTeamIDsMovesTheParentOfAnObservation`, `TestCarryTeamIDsClosesAFutureLinkAtItsStart`,
+`TestCarryTeamIDsLeavesAnAdminEditOfAProjectAsTeamRow`, `TestCarryTeamIDsSupersedesAPendingIdentityChangeOfAMovedTeam`.
+The seam: `TestTheCarryRunsBeforeTheCollectorAndAFailureStopsIt`, `TestEveryTeamIDWriteSiteRunsBehindTheCarryCensus`;
+through the real collectors, `TestTheLinearCatalogReadsTheBareTeamsPolicyAndManualMembersAfterTheCarry`,
+`TestTheLinearCatalogKeepsOneTeamForAnAdminTeamItNames`, `TestTheJiraProjectAsTeamCatalogKeepsTheFirstSeenOfALink`;
+every registered collector (`TestEveryRegisteredTeamCatalogCollectorCarriesFirstCensus`, `internal/workerservice`;
+`TestEveryCLITeamCatalogCollectorCarriesFirstCensus` and `TestTheAtlassianTeamsVerbCarriesBeforeItWrites`,
+`internal/synccli`); the entries outside a collector: `TestATeamV1PushCarriesTheBareTeamFirst` and
+`TestTeamIDCarryRunsBeforeAnIdentityOnlyPush`, `TestAdminImportCarriesTheBareTeamFirst`.
 
 Tests: `TestOfPrefixesEveryProviderOnce`, `TestCheckRefusesABareOrEmptyProviderTeamID` (`internal/teamid`);
 `TestEveryLinearTeamIDWriteSiteWritesAPrefixedID` (the route, one row class per write site);
@@ -1829,8 +1856,8 @@ nothing deleted. The organization comes from stdin only; the verb prints counts 
 id. It is not required: the next Jira team-catalog run of the organization does the same.
 
 **CHAOS-8940: bare team ids.** `dho workers providersync carry-team-ids --org-stdin [--dry-run]` moves the
-bare team ids of one organization to the provider-prefixed form now, with the function every prefixed team-id
-writer calls before it writes (section 0.4f, "The carry"). The old team rows go inactive, their open links are
+bare team ids of one organization to the provider-prefixed form now, with the function that runs before every
+write path of a prefixed team id (section 0.4f, "The carry"). The old team rows go inactive, their open links are
 closed, nothing is deleted. The organization comes from stdin only; the verb prints counts only. A second run
 reports zero. Computed attribution and metric rows are not rewritten: the full-history recompute (CHAOS-8941)
 runs after the carry.

@@ -491,6 +491,55 @@
         {"file": "internal/queryapi/graph/workitemteamattributions_org_guard_test.go", "test": "TestWorkItemTeamAttributions_OrgIDMismatchIsRefused"},
         {"file": "tests/api/graphql/test_go_served_resolver_python_deletion_structural_guard.py", "test": "test_deleted_symbols_are_not_redefined"}
       ]
+    },
+    {
+      "operation": "capacityCompletionDistribution",
+      "unproven_reason": "a named document over capacityForecast whose Python plane is deleted, so no two-plane run can be taken now; the go-edge proof refused it as go_edge_operation_not_in_the_go_served_ledger (bigboy, ops build 5c9a3d328546, record _records/bbsrch2/, CHAOS-8957)",
+      "enable_limit": "no production proof path exists for an operation with no routing row and no Python baseline: the proof route does not mount on production and the edge dispatches only routed rows; the Go-served evidence is the guard tests named below",
+      "guards": [
+        {"file": "internal/queryapi/server/capacity_completion_distribution_test.go", "test": "TestCapacityCompletionDistributionDocument_ServesTheCapacityForecastShapePerTeam"}
+      ]
+    },
+    {
+      "operation": "coverageBaselines",
+      "unproven_reason": "Go-only from its first day, no Python resolver ever existed; the go-edge proof refused it as go_edge_operation_not_in_the_go_served_ledger (bigboy, ops build 5c9a3d328546, record _records/bbsrch2/, CHAOS-8957)",
+      "enable_limit": "no production proof path exists for an operation with no routing row and no Python baseline: the proof route does not mount on production and the edge dispatches only routed rows; the Go-served evidence is the guard tests named below",
+      "guards": [
+        {"file": "internal/queryapi/graph/coverage_baseline_scope_args_test.go", "test": "TestCoverageBaselineFields_PassTheScopeArgumentsToTheRead"}
+      ]
+    },
+    {
+      "operation": "coverageScopeBaseline",
+      "unproven_reason": "Go-only from its first day (CHAOS-8541), no Python resolver ever existed; the go-edge proof refused it as go_edge_operation_not_in_the_go_served_ledger (bigboy, ops build 5c9a3d328546, record _records/bbsrch2/, CHAOS-8957)",
+      "enable_limit": "no production proof path exists for an operation with no routing row and no Python baseline: the proof route does not mount on production and the edge dispatches only routed rows; the Go-served evidence is the guard tests named below",
+      "guards": [
+        {"file": "internal/queryapi/server/query_route_coverage_scope_baseline_scope_test.go", "test": "TestCoverageScopeBaselineBothTextsResolveToOneOperation"}
+      ]
+    },
+    {
+      "operation": "investmentEvidenceQuality",
+      "unproven_reason": "Go-only from its first day (CHAOS-8104), no Python resolver ever existed; the go-edge proof refused it as go_edge_operation_not_in_the_go_served_ledger (bigboy, ops build 5c9a3d328546, record _records/bbsrch2/, CHAOS-8957)",
+      "enable_limit": "no production proof path exists for an operation with no routing row and no Python baseline: the proof route does not mount on production and the edge dispatches only routed rows; the Go-served evidence is the guard tests named below",
+      "guards": [
+        {"file": "internal/queryapi/server/query_route_integration_test.go", "test": "TestInvestmentEvidenceQualityRoute_IsServedByTheCatalogAndPreservesNullZero"}
+      ]
+    },
+    {
+      "operation": "sourceHealth",
+      "unproven_reason": "Go-only from its first day (CHAOS-8906), no Python resolver ever existed; the go-edge proof refused it as go_edge_operation_not_in_the_go_served_ledger (bigboy, ops build 5c9a3d328546, record _records/bbsrch2/, CHAOS-8957)",
+      "enable_limit": "no production proof path exists for an operation with no routing row and no Python baseline: the proof route does not mount on production and the edge dispatches only routed rows; the Go-served evidence is the guard tests named below",
+      "guards": [
+        {"file": "internal/queryapi/datahealth/sourcehealth_test.go", "test": "TestSourceHealthReadsOnlyTheGivenOrg"},
+        {"file": "internal/queryapi/server/source_health_route_integration_test.go", "test": "TestSourceHealthRoute_ServedToAViewerOverTheSignedEnvelope"}
+      ]
+    },
+    {
+      "operation": "testopsJobFailures",
+      "unproven_reason": "Go-only from its first day (CHAOS-8513), no Python resolver ever existed; the go-edge proof refused it as go_edge_operation_not_in_the_go_served_ledger (bigboy, ops build 5c9a3d328546, record _records/bbsrch2/, CHAOS-8957)",
+      "enable_limit": "no production proof path exists for an operation with no routing row and no Python baseline: the proof route does not mount on production and the edge dispatches only routed rows; the Go-served evidence is the guard tests named below",
+      "guards": [
+        {"file": "internal/goapiproof/testopsjobfailures_corpus_test.go", "test": "TestTestopsJobFailuresRequestIsAWindowTheOperationServes"}
+      ]
     }
   ]
 }

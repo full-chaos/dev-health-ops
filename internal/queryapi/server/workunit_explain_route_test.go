@@ -742,3 +742,24 @@ func TestWorkUnitExplainOpenAIUnconfiguredStaysRefused(t *testing.T) {
 		t.Errorf("body mismatch\n got=%s\nwant=%s", got, want)
 	}
 }
+
+// CHAOS-8874: LLM_PROVIDER=typesafe selects the decision backend for
+// investment categorization, and it is not a text provider. With no generative
+// key configured, the explanation route answers exactly what it answers with
+// LLM_PROVIDER unset: the "auto resolves to nothing" body, byte for byte.
+func TestWorkUnitExplainWithTheDecisionProviderAndNoGenerativeKeyAnswersAsWithNone(t *testing.T) {
+	clearLLMProviderEnv(t)
+	t.Setenv("LLM_PROVIDER", "typesafe")
+	t.Setenv("TYPESAFE_API_KEY", "ZQXJ-present-must-not-matter")
+
+	rec := httptest.NewRecorder()
+	newTestWorkUnitExplainHandler(t).ServeHTTP(rec, newWorkUnitExplainRequest(t, "wu-ABC-123", ""))
+
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d, want %d\nbody=%s", rec.Code, http.StatusUnprocessableEntity, rec.Body.String())
+	}
+	want := readWorkUnitExplainFixture(t, "testdata/work_unit_explain/provider_unconfigured_auto.json")
+	if got := bytes.TrimRight(rec.Body.Bytes(), "\n"); !bytes.Equal(got, bytes.TrimRight(want, "\n")) {
+		t.Errorf("body mismatch\n got=%s\nwant=%s", got, want)
+	}
+}

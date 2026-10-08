@@ -17,7 +17,6 @@ import (
 	"testing"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
-	"github.com/full-chaos/dev-health-ops/internal/jobs/investment/categorize"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/investment/categorize/decision"
 )
 
@@ -178,38 +177,6 @@ func TestAShadowPhaseThatCannotBeBuiltIsOffAndSaysWhy(t *testing.T) {
 	}
 }
 
-// typesafe is a decision backend. It is in the closed set of kinds and it can
-// never be the SERVED provider: not by LLM_PROVIDER, not by the scope, not by
-// auto-detection of its key -- also when every shadow switch is on.
-func TestTypeSafeCanNeverBeTheServedProvider(t *testing.T) {
-	clearShadowEnv(t)
-	t.Setenv(EnvShadowProvider, "typesafe")
-	t.Setenv(EnvShadowOrgIDs, "*")
-	t.Setenv("TYPESAFE_API_KEY", shadowTestKeyValue)
-	for _, name := range []string{"LLM_PROVIDER", "LLM_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GEMINI_API_KEY", "LOCAL_LLM_BASE_URL", "DASHSCOPE_API_KEY", "QWEN_API_KEY", "OLLAMA_MODEL", "OLLAMA_BASE_URL", "LMSTUDIO_BASE_URL"} {
-		t.Setenv(name, "")
-	}
-	if categorize.IsProviderKindImplemented(categorize.ProviderKindTypeSafe) || slices.Contains(categorize.ImplementedProviderKinds(), categorize.ProviderKindTypeSafe) {
-		t.Fatal("typesafe is in the set of kinds the served path can construct")
-	}
-	if _, err := categorize.ResolveProviderKind("typesafe"); err != nil {
-		t.Fatalf("typesafe left the closed set of kinds: %v", err)
-	}
-	for _, requested := range []string{"typesafe", "TypeSafe", " typesafe "} {
-		if provider, kind, err := resolveProviderFromEnv(requested, ""); err == nil || provider != nil {
-			t.Fatalf("served resolution of %q built %v (%q)", requested, provider, kind)
-		}
-	}
-	// Auto-detection with only the TypeSafe key present must not pick it.
-	if provider, kind, err := resolveProviderFromEnv("auto", ""); err == nil && kind == categorize.ProviderKindTypeSafe {
-		t.Fatalf("auto-detection made typesafe the served provider: %v", provider)
-	}
-	t.Setenv("LLM_PROVIDER", "typesafe")
-	if provider, _, err := resolveProviderFromEnv("auto", ""); err == nil || provider != nil {
-		t.Fatalf("LLM_PROVIDER=typesafe built a served provider: %v", provider)
-	}
-}
-
 // The label sets of the collector are the phase's own sets, and the model of
 // the evaluated configuration has its own series.
 func TestTheMetricLabelSetsAreThePhasesOwnSets(t *testing.T) {
@@ -311,8 +278,8 @@ func TestNoProductionCodeUsesAShadowTestSeam(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Count(string(source), "executor.shadowHTTPClient") != 2 {
-		t.Fatalf("executor.shadowHTTPClient is used %d times in nativeexecutor.go, want 2 (the setter and the constructor call)",
+	if strings.Count(string(source), "executor.shadowHTTPClient") != 3 {
+		t.Fatalf("executor.shadowHTTPClient is used %d times in nativeexecutor.go, want 3 (the setter, and the client constructor call of the shadow phase and of the served decision backend)",
 			strings.Count(string(source), "executor.shadowHTTPClient"))
 	}
 }

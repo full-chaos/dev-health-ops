@@ -91,7 +91,7 @@ func ResolveModelName(kind categorize.ProviderKind, model string) (resolved stri
 // propagated error -- mirroring is_llm_available's own try/except
 // LLMAuthError: return False.
 func IsLLMAvailable(requested string, _ string) bool {
-	kind, err := categorize.ResolveProviderKind(requested)
+	kind, err := categorize.ResolveTextProviderKind(requested)
 	if err != nil {
 		return false
 	}
@@ -201,7 +201,7 @@ var goUnsupportedButPythonKnownProviderKinds = map[categorize.ProviderKind]struc
 // answer. A resolution error (nothing configured at all) is NOT this
 // case -- that is the ordinary llm_unavailable path, unchanged.
 func ResolveUnsupportedProviderKind(requestedProvider string) (categorize.ProviderKind, bool) {
-	kind, err := categorize.ResolveProviderKind(requestedProvider)
+	kind, err := categorize.ResolveTextProviderKind(requestedProvider)
 	if err != nil {
 		return "", false
 	}
@@ -225,7 +225,7 @@ func ResolveUnsupportedProviderKind(requestedProvider string) (categorize.Provid
 // _persist_investment_mix_token_usage's provider=resolved_llm_provider,
 // model=completion.model or llm_model).
 func CompleteInvestmentMixExplanation(ctx context.Context, requestedProvider, requestedModel, fullPrompt string) (result categorize.CompletionResult, resolvedProvider string, resolvedModel string, err error) {
-	kind, err := categorize.ResolveProviderKind(requestedProvider)
+	kind, err := categorize.ResolveTextProviderKind(requestedProvider)
 	if err != nil {
 		return categorize.CompletionResult{}, "", "", err
 	}

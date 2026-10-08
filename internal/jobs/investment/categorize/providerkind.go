@@ -28,8 +28,11 @@ const (
 	// ProviderKindTypeSafe names the TypeSafe System One (Jev) decision
 	// backend (typesafeclient.go). It is in the closed set of names but NOT
 	// in goImplementedProviderKinds and NOT in auto-detection: it returns
-	// typed answers, not completion text, so it is no Provider and can never
-	// be the served provider. It is built by NewTypeSafeClientFromEnv.
+	// typed answers, not completion text, so it is no Provider. Selected for
+	// investment categorization (LLM_PROVIDER=typesafe), the investment
+	// worker serves from the decision adapter instead of a Provider
+	// (CHAOS-8874); every text path resolves through ResolveTextProviderKind*
+	// and never gets it. It is built by NewTypeSafeClientFromEnv.
 	ProviderKindTypeSafe ProviderKind = "typesafe"
 
 	// There is deliberately no ProviderKindLMStudio: chris's ruling
@@ -196,6 +199,12 @@ func ResolveProviderKindForOrg(
 		return envKind, nil
 	}
 
+	return detectedOrMissing()
+}
+
+// detectedOrMissing is the last step of the resolution: auto-detection by key,
+// or the error of a process with no provider at all.
+func detectedOrMissing() (ProviderKind, error) {
 	if detected, ok := detectConfiguredProviderKind(); ok {
 		return detected, nil
 	}
@@ -204,6 +213,41 @@ func ResolveProviderKindForOrg(
 			"ANTHROPIC_API_KEY, GEMINI_API_KEY, QWEN_API_KEY/DASHSCOPE_API_KEY, " +
 			"LOCAL_LLM_BASE_URL, OLLAMA_BASE_URL, or OLLAMA_MODEL",
 	)
+}
+
+// decisionProviderKinds is the closed set of kinds that write no text: a
+// decision backend answers typed questions and cannot complete a prompt.
+var decisionProviderKinds = map[ProviderKind]struct{}{
+	ProviderKindTypeSafe: {},
+}
+
+// IsDecisionProviderKind reports a kind that writes no text. It is the one
+// check of that fact; no caller compares the kind name itself.
+func IsDecisionProviderKind(kind ProviderKind) bool {
+	_, ok := decisionProviderKinds[kind]
+	return ok
+}
+
+// ResolveTextProviderKindForOrg is ResolveProviderKindForOrg for a caller that
+// needs TEXT (an explanation). LLM_PROVIDER can name a decision backend for
+// investment categorization (CHAOS-8874); for an "auto" request that platform
+// default is not a text provider, so the resolution goes on to auto-detection
+// by key, exactly as with LLM_PROVIDER unset. An org BYO provider is never a
+// decision kind, and an explicit request is returned as it is (its provider
+// construction refuses a decision kind).
+func ResolveTextProviderKindForOrg(
+	ctx context.Context, requested string, orgID string, resolveOrg OrgProviderResolver,
+) (ProviderKind, error) {
+	kind, err := ResolveProviderKindForOrg(ctx, requested, orgID, resolveOrg)
+	if !IsDecisionProviderKind(kind) || normalizeProviderKind(requested) != providerKindAuto {
+		return kind, err
+	}
+	return detectedOrMissing()
+}
+
+// ResolveTextProviderKind is ResolveTextProviderKindForOrg with no org.
+func ResolveTextProviderKind(requested string) (ProviderKind, error) {
+	return ResolveTextProviderKindForOrg(context.Background(), requested, "", nil)
 }
 
 // goImplementedProviderKinds are the kinds NewProviderFromEnv can actually

@@ -12,6 +12,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/aiimpact"
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph/model"
+	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse/latestrow"
 )
 
 // QueryClient is the narrow ClickHouse boundary this package needs.
@@ -125,9 +126,10 @@ func teamRepoIDs(ctx context.Context, client QueryClient, orgID, teamID, operati
 }
 
 func loadTeams(ctx context.Context, client QueryClient, orgID string) ([]aiimpact.Team, error) {
-	rs, err := client.Query(ctx, `SELECT toString(id) AS id, coalesce(name, '') AS name, repo_patterns
+	rs, err := client.Query(ctx, fmt.Sprintf(`SELECT toString(id) AS id, coalesce(%s, '') AS name, argMax(repo_patterns, updated_at) AS repo_patterns
 FROM teams
-WHERE org_id = {org_id:String}`, []clickhouse.Binding{{Name: "org_id", Value: orgID}})
+WHERE org_id = {org_id:String}
+GROUP BY id`, latestrow.ArgMaxKeepNullBy("name", "updated_at")), []clickhouse.Binding{{Name: "org_id", Value: orgID}})
 	if err != nil {
 		return nil, fmt.Errorf("teams query: %w", err)
 	}
@@ -149,9 +151,10 @@ WHERE org_id = {org_id:String}`, []clickhouse.Binding{{Name: "org_id", Value: or
 type repoName struct{ id, fullName string }
 
 func loadRepoNames(ctx context.Context, client QueryClient, orgID string) ([]repoName, error) {
-	rs, err := client.Query(ctx, `SELECT toString(id) AS repo_id, coalesce(repo, '') AS full_name
+	rs, err := client.Query(ctx, fmt.Sprintf(`SELECT toString(id) AS repo_id, coalesce(%s, '') AS full_name
 FROM repos
-WHERE org_id = {org_id:String}`, []clickhouse.Binding{{Name: "org_id", Value: orgID}})
+WHERE org_id = {org_id:String}
+GROUP BY id`, latestrow.ArgMaxKeepNullBy("repo", "last_synced")), []clickhouse.Binding{{Name: "org_id", Value: orgID}})
 	if err != nil {
 		return nil, fmt.Errorf("repos query: %w", err)
 	}

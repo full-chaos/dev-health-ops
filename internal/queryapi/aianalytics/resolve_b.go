@@ -337,7 +337,8 @@ func AttributionOverview(ctx context.Context, client QueryClient, orgID string, 
 		page = raw[:pageSize]
 	}
 	distinct := distinctRepoIDs(len(page), func(i int) *string { return page[i].RepoID })
-	teamMap := repoTeamMap(ctx, client, orgID, distinct, "aiAttributionOverview")
+	catalogue := loadRepoCatalogue(ctx, client, orgID, distinct, "aiAttributionOverview")
+	teamMap := catalogue.teamByRepo
 	if len(teamMap) > 0 {
 		for i := range page {
 			if page[i].RepoID != nil {
@@ -356,6 +357,13 @@ func AttributionOverview(ctx context.Context, client QueryClient, orgID string, 
 		}
 		page = kept
 	}
+	var prKeys []prKey
+	for _, r := range page {
+		if k, ok := prSubjectKey(r.SubjectType, r.SubjectID, r.RepoID); ok {
+			prKeys = append(prKeys, k)
+		}
+	}
+	titles := loadPRTitles(ctx, client, orgID, prKeys, "aiAttributionOverview")
 	rows := make([]model.AIAttributionEvidenceRow, 0, len(page))
 	for _, r := range page {
 		var team *string
@@ -371,6 +379,8 @@ func AttributionOverview(ctx context.Context, client QueryClient, orgID string, 
 			Provider: r.Provider, Kind: bucketOrUnknown(r.Kind), Source: r.Source,
 			Confidence: float64(r.Confidence), Actor: r.Actor, Evidence: evidence,
 			ObservedAt: r.ObservedAt.UTC(), TeamID: team,
+			RepoName: repoNameOf(catalogue, r.RepoID), TeamName: catalogue.teamName(team),
+			SubjectTitle: subjectTitle(titles, r.SubjectType, r.SubjectID, r.RepoID),
 		})
 	}
 	return &model.AIAttributionOverviewResult{

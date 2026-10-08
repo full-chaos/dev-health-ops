@@ -681,6 +681,10 @@ func answerB(t *testing.T, c oracleBCase) (map[string]any, *fixtureClientB) {
 		// The two Go-only row fields (CHAOS-7773) are not part of the recorded Python answer.
 		stripGoOnlyAttributedPrRowFields(answer)
 	}
+	if c.Fn == "resolve_ai_attribution_overview" {
+		// The Go-only row name fields (CHAOS-8954) are not part of the recorded Python answer.
+		stripGoOnlyAttributionRowFields(answer)
+	}
 	return answer, client
 }
 

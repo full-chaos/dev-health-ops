@@ -17,6 +17,8 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph/model"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graphqldate"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/scopelabel"
+	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse/latestrow"
 )
 
 // QueryClient is the narrow ClickHouse boundary this package needs.
@@ -122,8 +124,9 @@ SETTINGS join_use_nulls = 1`
 // NULL, not 0. The Nullable value is wrapped in a tuple because argMax skips
 // NULL values, which would let an older row's factor stand in for the latest
 // row's missing one.
-const quadrantQuery = `SELECT
+var quadrantQuery = fmt.Sprintf(`SELECT
     coalesce(nullIf(repos.repo, ''), toString(latest.repo_id)) AS repo_label,
+    nullIf(repos.repo, '') AS repo_name,
     latest.pipeline_success_rate,
     latest.test_pass_rate
 FROM (
@@ -144,11 +147,15 @@ FROM (
       AND day <= {end:Date}
     GROUP BY repo_id
 ) AS latest
-LEFT JOIN repos
-  ON repos.org_id = {org_id:String}
- AND repos.id = latest.repo_id
+LEFT JOIN (
+    SELECT id, %s AS repo
+    FROM repos
+    WHERE org_id = {org_id:String}
+    GROUP BY id
+) AS repos
+  ON repos.id = latest.repo_id
 ORDER BY latest.confidence_score ASC
-LIMIT 50`
+LIMIT 50`, latestrow.ArgMaxKeepNullBy("repo", "last_synced"))
 
 func readDaily(ctx context.Context, client QueryClient, bindings []clickhouse.Binding) ([]dailyRow, error) {
 	rs, err := client.Query(ctx, dailyQuery, bindings)
@@ -185,11 +192,18 @@ func readQuadrant(ctx context.Context, client QueryClient, bindings []clickhouse
 	out := []model.TestOpsRiskQuadrantPoint{}
 	for rs.Next() {
 		var label string
+		var rawName *string
 		var success, pass *float64
-		if err := rs.Scan(&label, &success, &pass); err != nil {
+		if err := rs.Scan(&label, &rawName, &success, &pass); err != nil {
 			return nil, fmt.Errorf("testopsrisk: quadrant scan: %w", err)
 		}
-		out = append(out, model.TestOpsRiskQuadrantPoint{ID: label, PipelineSuccessRate: success, TestPassRate: pass})
+		var name *string
+		if rawName != nil {
+			if clean, ok := scopelabel.CleanName(*rawName); ok {
+				name = &clean
+			}
+		}
+		out = append(out, model.TestOpsRiskQuadrantPoint{ID: label, Name: name, PipelineSuccessRate: success, TestPassRate: pass})
 	}
 	if err := rs.Err(); err != nil {
 		return nil, fmt.Errorf("testopsrisk: quadrant rows: %w", err)

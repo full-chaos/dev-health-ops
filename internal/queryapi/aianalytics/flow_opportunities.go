@@ -363,8 +363,40 @@ func FlowOpportunities(ctx context.Context, client QueryClient, orgID string, in
 		if len(opps) > bounded {
 			opps = opps[:bounded]
 		}
+		nameFlowOpportunities(ctx, client, orgID, opps)
 	}
 	return &model.ImproveOpportunitiesResult{
 		OrgID: orgID, Opportunities: opps, DetectorReady: true, TotalCount: len(opps),
 	}, nil
+}
+
+// nameFlowOpportunities fills EntityDisplayName for the returned page: the
+// repository full name for a repo entity, the team name for a team entity. A
+// name is never needed to decide what is returned, and an entity with no
+// stored name keeps nil.
+func nameFlowOpportunities(ctx context.Context, client QueryClient, orgID string, opps []model.ImproveOpportunity) {
+	if len(opps) == 0 {
+		return
+	}
+	var repoIDs []string
+	seen := map[string]bool{}
+	for _, o := range opps {
+		if o.EntityType == "repo" && !seen[o.EntityID] {
+			seen[o.EntityID] = true
+			repoIDs = append(repoIDs, o.EntityID)
+		}
+	}
+	catalogue := loadRepoCatalogue(ctx, client, orgID, repoIDs, "improveOpportunities")
+	if len(repoIDs) == 0 {
+		catalogue = loadTeamNamesOnly(ctx, client, orgID, "improveOpportunities")
+	}
+	for i := range opps {
+		id := opps[i].EntityID
+		switch opps[i].EntityType {
+		case "repo":
+			opps[i].EntityDisplayName = catalogue.repoName(id)
+		case "team":
+			opps[i].EntityDisplayName = catalogue.teamName(&id)
+		}
+	}
 }

@@ -32,3 +32,12 @@ func ArgMax(column string) string {
 func ArgMaxKeepNull(column string) string {
 	return "(argMax(tuple(" + column + "), " + OrderKey + ")).1"
 }
+
+// ArgMaxKeepNullBy returns the latest value of a Nullable column of a table
+// other than work_unit_investments, ordered by version. The tuple keeps a NULL
+// of the newest row (a bare argMax skips it and serves an older value); the
+// value itself is the tiebreak for equal versions, so the answer never depends
+// on part or row order.
+func ArgMaxKeepNullBy(column, version string) string {
+	return "(argMax(tuple(" + column + "), tuple(" + version + ", ifNull(toString(" + column + "), ''))).1)"
+}

@@ -474,8 +474,9 @@ func checkClassExclusions(ctx context.Context, db Querier, request EnableRequest
 }
 
 // ledgerHoldsUnprovenLimit reports whether the ledger has an entry for operation with a written UnprovenReason (a named limit: no two-plane run
-// ever proved it).
+// ever proved it). A born-in-Go operation is not one: it is counted by a real matched measurement or it blocks, and
+// -allow-excluded gives it nothing.
 func ledgerHoldsUnprovenLimit(ledger *GoServedLedger, operation string) bool {
 	entry, ok := ledger.Entry(operation)
-	return ok && strings.TrimSpace(entry.UnprovenReason) != ""
+	return ok && !entry.BornInGo && strings.TrimSpace(entry.UnprovenReason) != ""
 }

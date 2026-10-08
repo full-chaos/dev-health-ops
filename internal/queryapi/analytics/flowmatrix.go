@@ -14,8 +14,8 @@ import (
 
 // primaryWorkItemTeamAttributionSource ports investment.py's
 // PRIMARY_WORK_ITEM_TEAM_ATTRIBUTION_SOURCE (ops/src/dev_health_ops/api/
-// queries/investment.py:271-285) verbatim -- the single source every
-// Investment Sankey/coverage/flow-matrix TEAM join must read from
+// queries/investment.py:271-285) verbatim -- the source of the one team per
+// item that the work-unit team vote (investment.go) reads
 // (work_item_team_attributions FINAL, is_primary = 1, latest snapshot by
 // computed_at per work_item_id). Self-contained (no other investment.py
 // CTE dependency), which is why the TEAM/REPO/WORK_TYPE flow-matrix path
@@ -29,6 +29,27 @@ const primaryWorkItemTeamAttributionSource = `(
     FROM work_item_team_attributions FINAL
     WHERE org_id = {org_id:String}
       AND is_primary = 1
+      AND (work_item_id, computed_at) IN (
+          SELECT work_item_id, max(computed_at)
+          FROM work_item_team_attributions
+          WHERE org_id = {org_id:String}
+          GROUP BY work_item_id
+      )
+)`
+
+// teamScopedWorkItemTeamAttributionSource is the same read for the TEAM and
+// REPO flow-matrix dimensions, which give each team its own node or join
+// through the team: it also takes the co-owner rows (is_primary = 2,
+// teamattribution.AttributionCoOwner), so an item of a project with several
+// owning teams is each of those teams' activity.
+const teamScopedWorkItemTeamAttributionSource = `(
+    SELECT
+        work_item_id,
+        team_id,
+        team_name
+    FROM work_item_team_attributions FINAL
+    WHERE org_id = {org_id:String}
+      AND is_primary IN (1, 2)
       AND (work_item_id, computed_at) IN (
           SELECT work_item_id, max(computed_at)
           FROM work_item_team_attributions
@@ -597,7 +618,7 @@ const flowMatrixTeamActivitySelect = `
         wct.org_id,
         t.team_id AS team_id
     FROM work_item_cycle_times AS wct FINAL
-    INNER JOIN ` + primaryWorkItemTeamAttributionSource + ` AS t
+    INNER JOIN ` + teamScopedWorkItemTeamAttributionSource + ` AS t
       ON t.work_item_id = wct.work_item_id
     WHERE wct.day >= {start_date:Date} AND wct.day <= {end_date:Date}
       AND wct.org_id = {org_id:String}
@@ -680,7 +701,7 @@ const flowMatrixRepoEnrichedSelect = `
         wi.repo_id AS repo_id,
         wi.type AS work_item_type
     FROM work_item_cycle_times AS wct FINAL
-    INNER JOIN ` + primaryWorkItemTeamAttributionSource + ` AS t
+    INNER JOIN ` + teamScopedWorkItemTeamAttributionSource + ` AS t
       ON t.work_item_id = wct.work_item_id
     INNER JOIN work_items AS wi FINAL ON wct.work_item_id = wi.work_item_id
     WHERE wct.org_id = {org_id:String}

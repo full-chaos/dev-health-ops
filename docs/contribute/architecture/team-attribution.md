@@ -879,20 +879,34 @@ project (section 0.1): a native team key gives one team.
   | value | meaning | who reads it |
   |---|---|---|
   | `0` | a candidate the cascade found and did not choose (provenance only) | the provenance list |
-  | `1` | the ONE primary row of the item: the winner by rank, the same team as before this change | every organization-level reader, the daily rollups, every read without a team filter (`is_primary = 1`) |
-  | `2` | a co-owner: another active team that owns the item's project at the winner's rank, with its own source and evidence | team-scoped reads only (`is_primary IN (1, 2)` AND a team filter) |
+  | `1` | the ONE primary row of the item: the winner by rank, the same team as before this change | every organization-level reader, the daily rollups and their inputs, the one-team-per-work-unit votes (`is_primary = 1`) |
+  | `2` | a co-owner: another active team that owns the item's project at the winner's rank, with its own source and evidence | team-scoped and team-grouped reads only (`is_primary IN (1, 2)` with a team filter, or a query that gives each team its own row, point or node) |
 
   An item has exactly one `1` row, so an organization total counts it once. A team view (a filter on one team)
   and a team(s) view (a filter on several teams) read `IN (1, 2)` and show the item under each of their teams
-  that owns it. Team-scoped readers today: the issues drilldown with a team scope
-  (`internal/queryapi/drilldown/issues.go`) and the aggregated-flame throughput with a team
-  (`internal/queryapi/aggflame/clickhouse.go`). GraphQL `isPrimary` is `true` for `1` only.
+  that owns it. A team-grouped view (one row, point or node per team, not summed into an organization total)
+  also reads `IN (1, 2)`. Team-scoped and team-grouped readers today: the issues drilldown with a team scope
+  (`internal/queryapi/drilldown/issues.go`), the aggregated-flame throughput with a team
+  (`internal/queryapi/aggflame/clickhouse.go`), the team cycle/throughput quadrant
+  (`internal/queryapi/quadrant/quadrant.go`, one point per team) and the TEAM and REPO flow-matrix dimensions
+  (`internal/queryapi/analytics/flowmatrix.go`: a node per team; repository pairs joined through the team).
+  Readers that stay on `= 1` although they name a team: the organization flame (a breakdown of the
+  organization total by primary team), the daily rollup inputs and the investment team-repository donors
+  (one team per item, section "Known limit" below), and the one-team-per-work-unit votes
+  (`internal/queryapi/workgraph/teamattribution.go`, the investment views' `BuildUnitTeamSubquery`, the
+  investment explanation's majority team). GraphQL `isPrimary` is `true` for `1` only.
 - **The census.** `TestWorkItemTeamAttributionIsPrimaryPredicateCensus` reads every production Go file that
   names this table and fails on any `is_primary` form other than `= 1` and `IN (1, 2)`: `!= 0`, `> 0`, a bare
   truthy flag, an aggregate over it, or Go code that reads a scanned flag as not-zero. `IN (1, 2)` is accepted
-  only in a package-level const whose every use sits in an `if` statement that also applies a team filter
-  (a `team_id = {..}` / `team_id IN {..}` literal, or a variable set from a function of the same file that
-  returns one). A new reader must take one of the two forms. The census reads SQL text in Go files; it does
+  only in a package-level const. Per package (`go/ast`), the census then follows every use of a source: a
+  template const that reaches a source is checked as one query (a team-scoped source needs a team grouping
+  or a team filter; a primary source with either fails); in a function, a team-scoped source is named in
+  the then branch of `if <team> != ""` / `if len(<team>) > 0` (a team variable, or the result of a package
+  function that returns a team filter), or the function's query always groups by team and reads no primary
+  source; a primary source in a query that groups or filters by team needs that bound team branch (it is
+  then the organization path). The two work-unit votes are an allowlist with a reason; a stale entry fails.
+  "Groups by team" is read from the SQL text: a `GROUP BY` and a joined team column (`t.team_id`) or
+  `toString(team_id)`, outside the newest-`computed_at` fence. A new reader must take one of the two forms. The census reads SQL text in Go files; it does
   not see an `is_primary` alias read later in the query or a Go `bool` scan of the column.
 - **The write dedupe.** Each producer collapses rows that share the sort key `(repo, item, team, source)` before
   the insert (`workItemAttributionSortingKeyDedupe` in `internal/jobs/metrics/remaining`,
@@ -938,6 +952,9 @@ and `TestATeamThatLeavesTheProjectHasNoCoOwnerRowAfterTheNextRun` (the same real
 `TestTheWriteDedupeKeepsACoOwnerRowOverAProvenanceRowOfTheSameKey` (both write dedupes, both batch orders);
 `TestAStaleCoOwnerRowIsNotInTheTeamView` and `TestAStaleCoOwnerRowIsNotInTheTeamFlame` (the fence of the two
 team-scoped readers);
+`TestTheTeamQuadrantCountsAnItemOfAProjectOfTwoTeamsForEachTeam` and
+`TestTheTeamFlowMatrixCountsAnItemOfAProjectOfTwoTeamsInEachTeamNode` (the team-grouped readers, rows from the
+real producer, every provider);
 `TestAnIssueOfAProjectOfTwoTeamsIsInEachTeamsViewAndOnceInTheOrgView` and
 `TestThroughputOfAProjectOfTwoTeamsCountsInEachTeamAndOnceInTheOrg` (team A, team B, team(s), inactive team C,
 organization once and equal to the store without co-owner rows);

@@ -2,8 +2,9 @@
 // (api/main.py's GET+POST /api/v1/drilldown/* pair routes, backed by
 // api/queries/drilldown.py). It starts with prs.go (fetch_pull_requests,
 // /api/v1/drilldown/prs); issues.go (fetch_issues,
-// /api/v1/drilldown/issues) is a sibling addition, not yet ported --
-// hence the family name rather than a prs-only package name.
+// /api/v1/drilldown/issues) is a sibling in the same package and both
+// routes are served by Go -- hence the family name rather than a prs-only
+// package name.
 //
 // CLIENT CONVENTION: a package-local QueryClient interface over
 // github.com/full-chaos/dev-health-go/clickhouse's Binding/RowScanner,

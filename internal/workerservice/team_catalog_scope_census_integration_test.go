@@ -71,10 +71,18 @@ VALUES ($1, $2, $3, $4, $5, $6::json, $7, $8, $8)`, id, orgID, provider, credent
 	integration(inactive, org, "gitlab", "", `{"group_path":"org"}`, false)
 	integration(otherKind, org, "github", "", `{"owner":"org"}`, true)
 	integration(otherOrg, "org-elsewhere", "gitlab", "", `{"group_path":"org"}`, true)
-	exec(`INSERT INTO sync_configurations (id, org_id, name, provider, integration_id, sync_targets, sync_options, is_active,
+	var rootID string
+	if err := pool.QueryRow(ctx, `INSERT INTO sync_configurations (id, org_id, name, provider, integration_id, sync_targets, sync_options, is_active,
 	planner_managed, created_at, updated_at)
-VALUES (gen_random_uuid(), $1, 'root', 'gitlab', $2, '[]', '{"group_path":"org","auto_import_projects":true}'::json, true, true, $3, $3)`,
-		org, withOptions, at)
+VALUES (gen_random_uuid(), $1, 'root', 'gitlab', $2, '[]', '{"group_path":"org","auto_import_projects":true}'::json, true, true, $3, $3)
+RETURNING id::text`, org, withOptions, at).Scan(&rootID); err != nil {
+		t.Fatal(err)
+	}
+	// A child row, older than the root, names another path: only the root row counts.
+	exec(`INSERT INTO sync_configurations (id, org_id, name, provider, integration_id, parent_id, sync_targets, sync_options, is_active,
+	planner_managed, created_at, updated_at)
+VALUES (gen_random_uuid(), $1, 'child', 'gitlab', $2, $3::uuid, '[]', '{"group_path":"child/path"}'::json, true, true, $4, $4)`,
+		org, withOptions, rootID, at.Add(-time.Hour))
 
 	census := teamCatalogScopeCensus{pool: pool}
 	siblings, err := census.ActiveSiblingIntegrations(ctx, org, "gitlab", self)
@@ -101,5 +109,10 @@ VALUES (gen_random_uuid(), $1, 'root', 'gitlab', $2, '[]', '{"group_path":"org",
 	exec(`UPDATE integrations SET config = '[]'::json WHERE id = $1`, withFallback)
 	if siblings, err := census.ActiveSiblingIntegrations(ctx, org, "gitlab", self); err == nil {
 		t.Fatalf("a sibling config that does not decode read as %#v, want an error", siblings)
+	}
+	exec(`UPDATE integrations SET config = '{}'::json WHERE id = $1`, withFallback)
+	exec(`UPDATE integration_credentials SET config = '[]'::json WHERE id = $1`, credentialB)
+	if siblings, err := census.ActiveSiblingIntegrations(ctx, org, "gitlab", self); err == nil {
+		t.Fatalf("a sibling credential config that does not decode read as %#v, want an error", siblings)
 	}
 }

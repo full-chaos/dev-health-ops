@@ -288,7 +288,11 @@ func (h handlers) createOrUpdateTeam(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	write := TeamWrite{TeamID: teamID, Name: name, RepoPatterns: &repoPatterns, ProjectKeys: &projectKeys}
+	keyed, ok := h.keyTeamIDs(w, r, "admin_team", []string{teamID})
+	if !ok {
+		return
+	}
+	write := TeamWrite{TeamID: keyed[0], Name: name, RepoPatterns: &repoPatterns, ProjectKeys: &projectKeys}
 	if hasDescription {
 		write.Description = &description
 	}
@@ -547,6 +551,11 @@ func (h handlers) updateTeam(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	keyed, ok := h.keyTeamIDs(w, r, "admin_team", []string{teamID})
+	if !ok {
+		return
+	}
+	teamID = keyed[0]
 	existing, err := h.store.GetTeam(r.Context(), orgIDOf(r.Context()), teamID)
 	if err != nil {
 		h.internal(w, r, "get team", err)
@@ -661,6 +670,10 @@ func (h handlers) createOrUpdateIdentity(w http.ResponseWriter, r *http.Request)
 
 	ctx := r.Context()
 	orgID := orgIDOf(ctx)
+	teamIDs, ok = h.keyTeamIDs(w, r, "admin_identity", teamIDs)
+	if !ok {
+		return
+	}
 
 	// Atomic validate-then-write: every team_id must already exist, 404
 	// before any mutation, so the write is all-or-nothing.
@@ -739,9 +752,15 @@ func (h handlers) createOrUpdateIdentity(w http.ResponseWriter, r *http.Request)
 		}
 	}
 
-	// Teams the identity left entirely: drop ALL of its old facets.
+	// Teams the identity left entirely: drop ALL of its old facets. A
+	// stored id without a provider prefix (a bare id two providers' teams
+	// hold, which the carry leaves) is never written again; it is skipped.
 	for teamID := range oldTeamIDs {
 		if !newTeamIDs[teamID] {
+			if checkKeyedTeamID(teamID) != nil {
+				h.logger.WarnContext(ctx, "team_id_write_skipped", slog.String("writer", "admin_identity"), slog.String("reason", "stored_bare_team_id"))
+				continue
+			}
 			if _, err := h.store.RemoveMembers(ctx, orgID, teamID, oldFacets); err != nil {
 				h.internal(w, r, "remove members from left team", err)
 				return

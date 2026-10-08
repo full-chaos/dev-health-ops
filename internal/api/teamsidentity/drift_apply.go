@@ -392,6 +392,12 @@ func (s Store) insertTeamMembership(ctx context.Context, orgID string, row *pyjs
 	if rowOrg == "" {
 		rowOrg = orgID
 	}
+	// An open row is a team id written; closing a stored row is not.
+	if validTo == nil {
+		if err := checkKeyedTeamID(strOrEmpty(objectValue(row, "team_id"))); err != nil {
+			return err
+		}
+	}
 	batch, err := s.Conn.PrepareBatch(ctx, teamMembershipsInsert)
 	if err != nil {
 		return err
@@ -461,6 +467,12 @@ func (s Store) insertManualFallback(ctx context.Context, orgID string, row *pyjs
 	rowOrg := strOrEmpty(objectValue(row, "org_id"))
 	if rowOrg == "" {
 		rowOrg = orgID
+	}
+	// An open row is a team id written; closing a stored row is not.
+	if validTo == nil {
+		if err := checkKeyedTeamID(strOrEmpty(objectValue(row, "team_id"))); err != nil {
+			return err
+		}
 	}
 	batch, err := s.Conn.PrepareBatch(ctx, manualFallbacksInsert)
 	if err != nil {

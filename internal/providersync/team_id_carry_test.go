@@ -22,6 +22,8 @@ func TestTeamIDCarryGuardRefusesAnUnkeyedID(t *testing.T) {
 		{"teams", row("ENG", 1, nil, ""), true},
 		{"teams", row("ENG", 0, nil, ""), false},
 		{"teams", row("linear:ENG", 1, nil, ""), false},
+		{"teams", row("linear:gh:", 1, nil, ""), true},
+		{"team_provider_observations", row("linear: jira: ", 0, nil, ""), true},
 		{"team_memberships", row("ENG", 0, nil, ""), true},
 		{"team_memberships", row("ENG", 0, &closed, ""), false},
 		{"team_repo_ownership", row("ENG", 0, nil, ""), true},

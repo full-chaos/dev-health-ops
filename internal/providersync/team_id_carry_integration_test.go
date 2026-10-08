@@ -418,16 +418,17 @@ func TestCarryTeamIDsFailedReadWritesNothing(t *testing.T) {
 	}
 }
 
-// The SQL bare-id condition and teamid.HasKey agree on every id shape.
+// The SQL bare-id condition agrees with teamid.HasKey and teamid.Malformed
+// on every id shape.
 func TestTheBareIDConditionMatchesHasKey(t *testing.T) {
 	ctx, conn := newWorkItemEffectsConn(t)
 	for _, id := range []string{"ENG", "linear:ENG", "linear:", "gh:x", "gh:", "gl:a/b", "jira:" + carryAtlassianID, carryAtlassianID,
-		"custom:x", "custom:", "pagerduty:p", "ms-teams:t", "atlassian:x", "a:b", " linear:ENG ", "linear: ", "", "  ", "LINEAR:ENG"} {
+		"custom:x", "custom:", "pagerduty:p", "ms-teams:t", "atlassian:x", "atlassian:", " gh: ", "a:b", " linear:ENG ", "linear: ", "", "  ", "LINEAR:ENG"} {
 		var bare uint8
 		if err := conn.QueryRow(ctx, `SELECT `+teamIDCarryBare("{id:String}"), clickhouse.Named("id", id)).Scan(&bare); err != nil {
 			t.Fatalf("%q: %v", id, err)
 		}
-		want := strings.TrimSpace(id) != "" && !teamid.HasKey(id)
+		want := strings.TrimSpace(id) != "" && !teamid.HasKey(id) && !teamid.Malformed(id)
 		if (bare == 1) != want {
 			t.Errorf("bare(%q) = %d, want %v", id, bare, want)
 		}
@@ -584,5 +585,34 @@ func TestCarryTeamIDsClosesALinkForAReaderOfNow(t *testing.T) {
 	}
 	if got := f.str(`SELECT arrayStringConcat(arraySort(groupArray(team_id)), ',') FROM team_memberships FINAL WHERE org_id = ? AND member_id = 'm1' AND source = 'manual' AND (valid_to IS NULL OR valid_to > now())`); got != "linear:ENG" {
 		t.Errorf("active manual memberships of m1 = %q, want only linear:ENG", got)
+	}
+}
+
+// A team id that is only a provider prefix is not a team of any provider:
+// the carry leaves it, counts it, and still moves the other bare ids.
+func TestCarryTeamIDsSkipsAPrefixOnlyID(t *testing.T) {
+	ctx, conn := newWorkItemEffectsConn(t)
+	for _, malformed := range []string{"gh:", "linear:", " jira: ", "atlassian:"} {
+		t.Run(strings.TrimSpace(malformed), func(t *testing.T) {
+			f := carryFixture{t: t, ctx: ctx, conn: conn, orgID: uuid.NewString()}
+			f.team("linear", malformed, carryPtr(malformed), nil, 1, carryOld, nil, nil)
+			f.observation("linear", malformed, malformed)
+			f.team("linear", "ENG", carryPtr("ENG"), nil, 1, carryOld, nil, nil)
+
+			outcome, err := CarryTeamIDs(ctx, conn, f.orgID, carryAt, false)
+			if err != nil || outcome.Teams != 1 || outcome.MalformedTeamIDs != 2 {
+				t.Fatalf("carry = %+v, %v; want ENG moved and the team and the observation of %q counted as malformed", outcome, err, malformed)
+			}
+			if got := f.str(`SELECT arrayStringConcat(groupArray(id), ',') FROM (SELECT id FROM teams FINAL WHERE org_id = ? AND is_active = 1 ORDER BY id)`); got != malformed+",linear:ENG" {
+				t.Errorf("active = %q, want %q", got, malformed+",linear:ENG")
+			}
+			if got := f.str(`SELECT arrayStringConcat(groupArray(team_id), ',') FROM team_provider_observations FINAL WHERE org_id = ?`); got != malformed {
+				t.Errorf("observations = %q, want %q", got, malformed)
+			}
+			again, err := CarryTeamIDs(ctx, conn, f.orgID, carryAt.Add(time.Hour), false)
+			if err != nil || again.Teams != 0 || again.Observations != 0 || again.RowsWritten != 0 || again.MalformedTeamIDs != 2 {
+				t.Errorf("second carry = %+v, %v; want no write and the malformed ids counted again", again, err)
+			}
+		})
 	}
 }

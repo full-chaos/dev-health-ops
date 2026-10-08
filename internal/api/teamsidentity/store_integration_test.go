@@ -142,20 +142,20 @@ func TestTeamCRUDRoundTrip(t *testing.T) {
 
 	desc := "first description"
 	created, err := store.CreateOrUpdateTeam(ctx, orgID, TeamWrite{
-		TeamID: "team-a", Name: "Team A", Description: &desc,
+		TeamID: "custom:team-a", Name: "Team A", Description: &desc,
 		RepoPatterns: &[]string{"repo-*"}, ProjectKeys: &[]string{"PROJ"},
 	})
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
-	if created.TeamID != "team-a" || created.Name != "Team A" || created.Description == nil || *created.Description != desc {
+	if created.TeamID != "custom:team-a" || created.Name != "Team A" || created.Description == nil || *created.Description != desc {
 		t.Fatalf("created team mismatch: %+v", created)
 	}
 	if len(created.RepoPatterns) != 1 || created.RepoPatterns[0] != "repo-*" {
 		t.Fatalf("repo_patterns not stored: %+v", created.RepoPatterns)
 	}
 
-	got, err := store.GetTeam(ctx, orgID, "team-a")
+	got, err := store.GetTeam(ctx, orgID, "custom:team-a")
 	if err != nil {
 		t.Fatalf("get: %v", err)
 	}
@@ -174,7 +174,7 @@ func TestTeamCRUDRoundTrip(t *testing.T) {
 	// PATCH-shaped update: omit repo_patterns/project_keys (nil pointer) so
 	// the existing values are carried forward, only name changes.
 	updated, err := store.CreateOrUpdateTeam(ctx, orgID, TeamWrite{
-		TeamID: "team-a", Name: "Team A Renamed", Description: got.Description,
+		TeamID: "custom:team-a", Name: "Team A Renamed", Description: got.Description,
 		RepoPatterns: &got.RepoPatterns, ProjectKeys: &got.ProjectKeys,
 	})
 	if err != nil {
@@ -191,7 +191,7 @@ func TestTeamCRUDRoundTrip(t *testing.T) {
 	}
 
 	// CHAOS-4321: AddMembers unions into both members and manual_members.
-	afterAdd, err := store.AddMembers(ctx, orgID, "team-a", []string{"alice@example.com"})
+	afterAdd, err := store.AddMembers(ctx, orgID, "custom:team-a", []string{"alice@example.com"})
 	if err != nil {
 		t.Fatalf("add members: %v", err)
 	}
@@ -213,7 +213,7 @@ func TestTeamCRUDRoundTrip(t *testing.T) {
 	// exactly {alice@example.com} afterward, not wiped by the update this
 	// field is not part of.
 	afterOmittedUpdate, err := store.CreateOrUpdateTeam(ctx, orgID, TeamWrite{
-		TeamID: "team-a", Name: "Team A Renamed Again", Description: got.Description,
+		TeamID: "custom:team-a", Name: "Team A Renamed Again", Description: got.Description,
 		RepoPatterns: &got.RepoPatterns, ProjectKeys: &got.ProjectKeys,
 	})
 	if err != nil {
@@ -226,7 +226,7 @@ func TestTeamCRUDRoundTrip(t *testing.T) {
 		t.Fatalf("manual_members cleared by an update that omitted the field: %+v", afterOmittedUpdate)
 	}
 
-	afterRemove, err := store.RemoveMembers(ctx, orgID, "team-a", map[string]bool{"alice@example.com": true})
+	afterRemove, err := store.RemoveMembers(ctx, orgID, "custom:team-a", map[string]bool{"alice@example.com": true})
 	if err != nil {
 		t.Fatalf("remove members: %v", err)
 	}
@@ -234,21 +234,21 @@ func TestTeamCRUDRoundTrip(t *testing.T) {
 		t.Fatalf("members not removed: %+v", afterRemove)
 	}
 
-	deleted, err := store.DeleteTeam(ctx, orgID, "team-a")
+	deleted, err := store.DeleteTeam(ctx, orgID, "custom:team-a")
 	if err != nil {
 		t.Fatalf("delete: %v", err)
 	}
 	if !deleted {
 		t.Fatal("delete returned false for an existing team")
 	}
-	afterDelete, err := store.GetTeam(ctx, orgID, "team-a")
+	afterDelete, err := store.GetTeam(ctx, orgID, "custom:team-a")
 	if err != nil {
 		t.Fatalf("get after delete: %v", err)
 	}
 	if afterDelete != nil {
 		t.Fatalf("team still visible after DELETE: %+v", afterDelete)
 	}
-	deletedAgain, err := store.DeleteTeam(ctx, orgID, "team-a")
+	deletedAgain, err := store.DeleteTeam(ctx, orgID, "custom:team-a")
 	if err != nil {
 		t.Fatalf("delete again: %v", err)
 	}

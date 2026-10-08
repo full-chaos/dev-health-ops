@@ -54,7 +54,7 @@ func (s *productSink) Query(_ context.Context, query string, args ...any) (drive
 	// every team.v1 and identity.v1 write; this store holds no bare id.
 	if strings.Contains(query, "argMax(is_active, (updated_at, last_synced))") {
 		s.carryCountCalls++
-		return &productRows{rows: [][]any{{uint64(0), uint64(0)}}}, nil
+		return &productRows{rows: [][]any{{uint64(0), uint64(0), uint64(0)}}}, nil
 	}
 	s.queryCalls++
 	s.lastQuery = query

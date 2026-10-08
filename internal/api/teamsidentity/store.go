@@ -345,6 +345,9 @@ type teamInsertRow struct {
 // source).
 func (s Store) insertTeamRow(ctx context.Context, row teamInsertRow) error {
 	const insertSQL = "INSERT INTO teams (id, team_uuid, name, description, members, manual_members, project_keys, repo_patterns, is_active, updated_at, last_synced, org_id, provider, native_team_key, parent_team_id, source_id)"
+	if err := checkKeyedTeamID(row.ID); err != nil {
+		return err
+	}
 	batch, err := s.Conn.PrepareBatch(ctx, insertSQL)
 	if err != nil {
 		return fmt.Errorf("prepare team insert: %w", err)

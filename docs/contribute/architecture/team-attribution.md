@@ -1170,6 +1170,35 @@ the path before it writes:
 or builds a team catalog collector or writes Atlassian team ids, and fails on a new one. The operator verb
 `dho workers providersync carry-team-ids` runs the same function (section 1.1).
 
+**The write seam (CHAOS-8940).** A writer that takes a team id from outside, not from a provider's own key, writes
+only what `providersync.KeyTeamIDsForWrite` (`internal/providersync/team_id_write_seam.go`) returns. It runs the
+carry first, then keeps a prefixed id in its canonical form and resolves a bare id to the ONE active prefixed team
+of the organization that holds it (`teamid.Candidates`: every known prefix plus the id). It refuses, before any
+write but the carry:
+
+- a malformed id (`teamid.Malformed`: empty, only a prefix such as `gh:` or `atlassian:`, or a prefix followed by
+  only another one such as `linear:gh:`): HTTP 422;
+- a bare id that no active prefixed team holds: HTTP 422 (use a prefixed id, for an admin's own team `custom:<id>`);
+- a bare id that more than one active prefixed team holds: HTTP 409.
+
+So a bare id never reaches a write, and a bare id of a carried team lands on the prefixed team, not on the
+inactive bare row (which a write would make active again). The admin writers (`internal/api/teamsidentity`) all
+call it through `keyTeamIDs` before their first read or write of a team: team create (`POST /teams`) and update
+(`PATCH /teams/{team_id}`), identity create or update (`team_ids`), the two member confirmations
+(`/teams/{team_id}/confirm-members`, `/confirm-inferred-members`), the import (`POST /teams/import`, over
+`teamid.Of(provider_type, provider_team_id)`), and a drift decision (`/teams/{team_id}/approve-changes`,
+`/dismiss-changes`). The store refuses a bare or malformed id at its own writes too (`insertTeamRow`, and an OPEN
+`team_memberships` or manual fallback row; closing a stored row is allowed). An identity that leaves a team it
+names by a stored bare id (an ambiguous id the carry leaves) skips that team and logs `team_id_write_skipped`.
+A refusal logs `team_id_write_refused` with the writer and the reason, never the id. The writers that build an
+id from a provider's own key do not take an outside id and stay on `teamid.Of`: the native catalogs and the
+Atlassian Teams write behind the carry, and the external sink (`team.v1` and `identity.v1` ids go through
+`teamid.CheckPushed`, so a prefix-only `identity.v1` team id is refused as a `team.v1` id is). No team id writer
+is on Postgres. `TestEveryTeamIDWriterGoesThroughTheWriteSeamCensus` (`internal/api/teamsidentity`) lists every
+production line that writes a team-keyed table with its route, and every function of the admin package that
+writes a team id; it fails on a new writer, on an admin writer that does not run the seam before its first
+write, and on a store write that does not refuse a bare id before its batch.
+
 - **Source.** The raw `teams` rows, not `FINAL`: the newest row of each (provider, id) whose id is not empty
   and holds no known key (`teamid.HasKey`), and whose newest row is active. `teams` holds one row per id after
   a merge, so only the raw rows tell two providers' rows of one id apart.
@@ -1189,6 +1218,10 @@ or builds a team catalog collector or writes Atlassian team ids, and fails on a 
     provider (sync policy, drift changes, `identities.team_ids`, manual fallbacks) stay.
   - An id that already holds a key is never rewritten (chris D5427). When the new id already has a row (a
     prefixed writer wrote it), that row is kept and only the old row goes inactive.
+  - An id that is only a provider prefix (`gh:`, `linear: `, `atlassian:`) is no team of any provider:
+    `teamid.Of` would give it a second prefix (`linear:gh:`). The carry leaves it, counts it as
+    `malformed_team_ids` (the team rows and observations of such an id) and logs `team_ids_malformed_skipped`
+    with the count on every run; the guard refuses a planned malformed id.
 - **Writes.** Append-only: no `DELETE` and no `ALTER UPDATE`. Every read runs before the first write, so a
   failed read fails the carry with nothing written.
   - `teams`: the new row (the old row's values; `team_uuid` = the writer's rule for the new id;
@@ -1230,14 +1263,22 @@ first `valid_from` kept; keyed ids and another organization untouched; a second 
 `TestCarryTeamIDsKeepsTheDecisionOfAnOldDecidedChange`, `TestCarryTeamIDsNamesATeamOnceInAnIdentity`,
 `TestCarryTeamIDsMovesTheParentOfAnObservation`, `TestCarryTeamIDsClosesAFutureLinkAtItsStart`,
 `TestCarryTeamIDsLeavesAnAdminEditOfAProjectAsTeamRow`, `TestCarryTeamIDsSupersedesAPendingIdentityChangeOfAMovedTeam`,
-`TestCarryTeamIDsClosesALinkForAReaderOfNow`.
+`TestCarryTeamIDsClosesALinkForAReaderOfNow`, `TestCarryTeamIDsSkipsAPrefixOnlyID`.
 The seam: `TestTheCarryRunsBeforeTheCollectorAndAFailureStopsIt`, `TestEveryTeamIDWriteSiteRunsBehindTheCarryCensus`;
 through the real collectors, `TestTheLinearCatalogReadsTheBareTeamsPolicyAndManualMembersAfterTheCarry`,
 `TestTheLinearCatalogKeepsOneTeamForAnAdminTeamItNames`, `TestTheJiraProjectAsTeamCatalogKeepsTheFirstSeenOfALink`;
 every registered collector (`TestEveryRegisteredTeamCatalogCollectorCarriesFirstCensus`, `internal/workerservice`;
 `TestEveryCLITeamCatalogCollectorCarriesFirstCensus` and `TestTheAtlassianTeamsVerbCarriesBeforeItWrites`,
 `internal/synccli`); the entries outside a collector: `TestATeamV1PushCarriesTheBareTeamFirst` and
-`TestTeamIDCarryRunsBeforeAnIdentityOnlyPush`, `TestAdminImportCarriesTheBareTeamFirst`.
+`TestTeamIDCarryRunsBeforeAnIdentityOnlyPush`, `TestAdminImportCarriesTheBareTeamFirst`. The write seam
+(`internal/api/teamsidentity`): `TestAnIdentityAssignOfACarriedBareTeamIDWritesTheKeyedTeam` (jira, github, gitlab,
+linear), `TestAnAdminTeamCreateCarriesTheBareTeamFirst`, `TestAnAdminTeamWriteOfABareIDWritesTheKeyedTeam`,
+`TestAnAdminTeamWriteRefusesAnAmbiguousOrMalformedID`, `TestAnAdminTeamWriteRefusesABareIDNoProviderTeamHolds`,
+`TestTheMemberAndDecisionWritersKeyTheirPathTeamID`, `TestTheAdminImportRefusesAPrefixOnlyTeamID`,
+`TestTheStoreRefusesABareTeamIDWrite`, `TestAnIdentityLeavingAStoredBareTeamSkipsIt`,
+`TestEveryTeamIDWriterGoesThroughTheWriteSeamCensus`; `TestIdentityV1RefusesAPrefixOnlyTeamID`
+(`internal/streamhandlers`); `TestMalformedNamesNoTeamOfAnyProvider`, `TestCandidatesAreEveryPrefixOfABareID`
+(`internal/teamid`).
 
 Tests: `TestOfPrefixesEveryProviderOnce`, `TestCheckRefusesABareOrEmptyProviderTeamID` (`internal/teamid`);
 `TestEveryLinearTeamIDWriteSiteWritesAPrefixedID` (the route, one row class per write site);

@@ -400,10 +400,14 @@ func externalRecordValues(
 		if err != nil {
 			return nil, err
 		}
+		teamIDs, err := externalTeamIDs(system, stringArrayField(payload, "teamIds"))
+		if err != nil {
+			return nil, err
+		}
 		return []any{
 			orgID, canonicalID, uuid.NewSHA1(uuid.NameSpaceURL, []byte("identity:"+orgID+":"+canonicalID)),
 			externalNullableString(payload, "displayName"), externalNullableString(payload, "email"),
-			providerIdentities, externalTeamIDs(system, stringArrayField(payload, "teamIds")),
+			providerIdentities, teamIDs,
 			externalBoolUint(payload, "isActive", true), updatedAt, source.SourceID,
 		}, nil
 	case "work_item.v1":
@@ -1322,15 +1326,21 @@ func externalTeamID(system string, payload map[string]any, key string) string {
 }
 
 // externalTeamIDs maps the team ids an identity.v1 record names to the ids
-// the system's team.v1 records write.
-func externalTeamIDs(system string, ids []string) []string {
+// the system's team.v1 records write, and refuses the ids a team.v1 record
+// is refused for (teamid.CheckPushed): a prefix-only id would get a second
+// prefix.
+func externalTeamIDs(system string, ids []string) ([]string, error) {
 	out := make([]string, 0, len(ids))
 	for _, id := range ids {
 		if strings.TrimSpace(id) == "" {
 			out = append(out, id)
 			continue
 		}
-		out = append(out, teamid.Of(system, id))
+		keyed := teamid.Of(system, id)
+		if err := teamid.CheckPushed(system, keyed); err != nil {
+			return nil, err
+		}
+		out = append(out, keyed)
 	}
-	return out
+	return out, nil
 }

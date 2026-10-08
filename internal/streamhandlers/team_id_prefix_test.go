@@ -171,3 +171,19 @@ func TestTeamV1StoresNoNativeKeyForAForeignPrefixedID(t *testing.T) {
 		}
 	}
 }
+
+// An identity.v1 team id that is only a provider prefix is refused, as a
+// team.v1 id of that shape is: it would get a second prefix.
+func TestIdentityV1RefusesAPrefixOnlyTeamID(t *testing.T) {
+	for _, id := range []string{"gh:", " linear: ", "atlassian:", "custom:"} {
+		_, err := externalRecordValues(externalSinkBatch{
+			Pointer: externalPointer{OrgID: "org-1", SourceSystem: "custom", SourceInstance: "instance"},
+		}, externalSinkRecord{Kind: "identity.v1", ExternalID: "u", Payload: map[string]any{
+			"canonicalId": "ada@example.test", "updatedAt": "2026-10-08T11:00:00Z",
+			"teamIds": []any{"squad", id},
+		}}, time.Date(2026, 10, 8, 12, 0, 0, 0, time.UTC), &ExternalRecomputeScope{}, nil)
+		if !errors.Is(err, teamid.ErrBareTeamID) {
+			t.Errorf("teamIds %q: err = %v, want the id refused", id, err)
+		}
+	}
+}

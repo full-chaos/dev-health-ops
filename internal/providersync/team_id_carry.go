@@ -31,14 +31,26 @@ import (
 var teamIDCarryAdminTeamNamespace = uuid.MustParse("6ba7b811-9dad-11d1-80b4-00c04fd430c8")
 
 // teamIDCarryBare is a SQL condition: the column holds a non-empty id with
-// no known provider key, the SQL form of !teamid.HasKey.
+// no known provider key that is not only a provider prefix, the SQL form of
+// !teamid.HasKey && !teamid.Malformed.
 func teamIDCarryBare(column string) string {
 	trimmed := "trimBoth(" + column + ")"
 	clauses := make([]string, 0, len(teamid.KnownKeys()))
 	for _, key := range teamid.KnownKeys() {
 		clauses = append(clauses, fmt.Sprintf("(startsWith(%s, '%s') AND trimBoth(substring(%s, %d)) != '')", trimmed, key, trimmed, len(key)+1))
 	}
-	return trimmed + " != '' AND NOT (" + strings.Join(clauses, " OR ") + ")"
+	return trimmed + " != '' AND NOT (" + strings.Join(clauses, " OR ") + ") AND NOT " + teamIDCarryPrefixOnly(column)
+}
+
+// teamIDCarryPrefixOnly is a SQL condition: the column holds only a
+// provider prefix (teamid.PrefixOnlyForms). Such an id is no team of any
+// provider; teamid.Of would give it a second prefix, so the carry leaves it.
+func teamIDCarryPrefixOnly(column string) string {
+	forms := make([]string, 0, len(teamid.PrefixOnlyForms()))
+	for _, form := range teamid.PrefixOnlyForms() {
+		forms = append(forms, "'"+form+"'")
+	}
+	return "trimBoth(" + column + ") IN (" + strings.Join(forms, ", ") + ")"
 }
 
 // teamIDCarryObservedIDs is the bare team ids that exactly one provider's
@@ -63,7 +75,10 @@ var teamIDCarryCountQuery = `SELECT ` +
 	`WHERE active = 1 ` +
 	`AND NOT (provider = 'jira' AND native_key = id AND NOT startsWith(native_key, '` + jiraAtlassianTeamARIPrefix + `')) ` +
 	`AND (provider != '' OR id IN (` + teamIDCarryObservedIDs + `))), ` +
-	`(SELECT count() FROM team_provider_observations FINAL WHERE org_id = {org_id:String} AND provider != '' AND ` + teamIDCarryBare("team_id") + `)`
+	`(SELECT count() FROM team_provider_observations FINAL WHERE org_id = {org_id:String} AND provider != '' AND ` + teamIDCarryBare("team_id") + `), ` +
+	`(SELECT count() FROM (SELECT provider, id, argMax(is_active, (updated_at, last_synced)) AS active ` +
+	`FROM teams WHERE org_id = {org_id:String} AND ` + teamIDCarryPrefixOnly("id") + ` GROUP BY provider, id) WHERE active = 1) + ` +
+	`(SELECT count() FROM team_provider_observations FINAL WHERE org_id = {org_id:String} AND provider != '' AND ` + teamIDCarryPrefixOnly("team_id") + `)`
 
 var teamIDCarryTeamsQuery = `SELECT id, team_uuid, name, description, members, manual_members, updated_at, last_synced, ` +
 	`org_id, provider, native_team_key, parent_team_id, project_keys, repo_patterns, is_active, source_id ` +
@@ -134,6 +149,9 @@ type TeamIDCarryOutcome struct {
 	IdentityDriftChanges uint64 `json:"identity_drift_changes"`
 	Identities           uint64 `json:"identities"`
 	Fallbacks            uint64 `json:"fallbacks"`
+	// MalformedTeamIDs is the active team ids and the observations that hold
+	// only a provider prefix: no team of any provider, left as they are.
+	MalformedTeamIDs uint64 `json:"malformed_team_ids"`
 	// RowsWritten is the rows a real run wrote; 0 in a dry run.
 	RowsWritten uint64 `json:"rows_written"`
 }
@@ -167,9 +185,13 @@ func CarryTeamIDs(ctx context.Context, conn TeamIDCarryConn, orgID string, at ti
 	at = at.UTC().Truncate(time.Millisecond)
 	org := clickhouse.Named("org_id", orgID)
 	outcome := TeamIDCarryOutcome{DryRun: dryRun}
-	teamGroups, observations, err := teamIDCarryCount(ctx, conn, org)
+	teamGroups, observations, malformed, err := teamIDCarryCount(ctx, conn, org)
 	if err != nil {
 		return TeamIDCarryOutcome{}, fmt.Errorf("team id carry: count: %w", err)
+	}
+	outcome.MalformedTeamIDs = malformed
+	if malformed > 0 {
+		slog.Default().WarnContext(ctx, "team_ids_malformed_skipped", "malformed_team_ids", malformed)
 	}
 	if teamGroups == 0 && observations == 0 {
 		return outcome, nil
@@ -194,23 +216,23 @@ type TeamIDCarryConn interface {
 }
 
 // teamIDCarryCount reads the count query; a missing row is a failed read.
-func teamIDCarryCount(ctx context.Context, conn TeamIDCarryConn, org driver.NamedValue) (uint64, uint64, error) {
+func teamIDCarryCount(ctx context.Context, conn TeamIDCarryConn, org driver.NamedValue) (uint64, uint64, uint64, error) {
 	rows, err := conn.Query(ctx, teamIDCarryCountQuery, org)
 	if err != nil {
-		return 0, 0, err
+		return 0, 0, 0, err
 	}
 	defer rows.Close()
 	if !rows.Next() {
 		if err := rows.Err(); err != nil {
-			return 0, 0, err
+			return 0, 0, 0, err
 		}
-		return 0, 0, errors.New("no count row")
+		return 0, 0, 0, errors.New("no count row")
 	}
-	var teamGroups, observations uint64
-	if err := rows.Scan(&teamGroups, &observations); err != nil {
-		return 0, 0, err
+	var teamGroups, observations, malformed uint64
+	if err := rows.Scan(&teamGroups, &observations, &malformed); err != nil {
+		return 0, 0, 0, err
 	}
-	return teamGroups, observations, rows.Err()
+	return teamGroups, observations, malformed, rows.Err()
 }
 
 type teamIDCarryWrite struct {
@@ -787,7 +809,7 @@ func (run *teamIDCarryRun) planObservations(observations []chRow) teamIDCarryWri
 }
 
 // teamIDCarryGuard refuses a planned row that would write a team id with no
-// provider key: an active team row, an open link row, a policy, a drift
+// provider key, or a malformed one (teamid.Malformed): an active team row, an open link row, a policy, a drift
 // change or an observation of the new id.
 func teamIDCarryGuard(write teamIDCarryWrite) error {
 	for _, row := range write.rows {
@@ -809,7 +831,7 @@ func teamIDCarryGuard(write teamIDCarryWrite) error {
 			}
 		}
 		for _, value := range ids {
-			if !teamid.HasKey(value) {
+			if !teamid.HasKey(value) || teamid.Malformed(value) {
 				return fmt.Errorf("%w: %s", errTeamIDCarryUnkeyed, write.table)
 			}
 		}

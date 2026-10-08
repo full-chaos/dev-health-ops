@@ -78,7 +78,7 @@ func TestDiscoverJiraListsOnlyStoredActiveAtlassianTeams(t *testing.T) {
 	for _, row := range seed {
 		row.TeamUUID = teamUUID(row.OrgID, row.ID)
 		row.UpdatedAt = now
-		if err := store.insertTeamRow(ctx, row); err != nil {
+		if err := seedTeamRow(ctx, store, row); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -133,4 +133,23 @@ func TestDiscoverJiraListsOnlyStoredActiveAtlassianTeams(t *testing.T) {
 			}
 		}
 	}
+}
+
+// seedTeamRow writes a team row as a store holds it, a bare legacy id
+// included: insertTeamRow refuses a bare id.
+func seedTeamRow(ctx context.Context, store Store, row teamInsertRow) error {
+	isActive := uint8(0)
+	if row.IsActive {
+		isActive = 1
+	}
+	return store.Conn.Exec(ctx, `INSERT INTO teams (id, team_uuid, name, description, members, manual_members, project_keys, repo_patterns, is_active, updated_at, last_synced, org_id, provider, native_team_key, parent_team_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		row.ID, row.TeamUUID, row.Name, row.Description, nonNil(row.Members), nonNil(row.ManualMembers), nonNil(row.ProjectKeys), nonNil(row.RepoPatterns),
+		isActive, row.UpdatedAt, row.UpdatedAt, row.OrgID, row.Provider, row.NativeTeamKey, row.ParentTeamID)
+}
+
+func nonNil(values []string) []string {
+	if values == nil {
+		return []string{}
+	}
+	return values
 }

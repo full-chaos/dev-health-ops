@@ -16,6 +16,10 @@ import (
 // prefix, or a team id that cannot have one.
 var ErrBareTeamID = errors.New("teamid: provider team id without its provider prefix")
 
+// ErrMalformedTeamID marks a team id that is empty or only a provider
+// prefix: it is no team of any provider.
+var ErrMalformedTeamID = errors.New("teamid: team id is empty or a provider prefix with nothing after it")
+
 // Prefix is the id prefix of one provider: "gh:" for github and "gl:" for
 // gitlab (their established forms), "<provider>:" for every other provider,
 // a custom external system included. An empty provider has no prefix.
@@ -55,6 +59,43 @@ func HasKey(id string) bool {
 		}
 	}
 	return false
+}
+
+// Malformed reports whether an id is no team of any provider: empty, only
+// a provider prefix ("gh:", "linear: ", "atlassian:"), or a provider prefix
+// followed by only another one ("linear:gh:", what a second prefix on "gh:"
+// gives).
+func Malformed(id string) bool {
+	id = canonical(strings.TrimSpace(id))
+	if id == "" || isBareKey(id) {
+		return true
+	}
+	for _, k := range knownKeys {
+		if rest, ok := strings.CutPrefix(id, k); ok {
+			return isBareKey(canonical(strings.TrimSpace(rest)))
+		}
+	}
+	return false
+}
+
+// PrefixOnlyForms returns the trimmed ids that are only a provider prefix:
+// every known prefix and the "atlassian:" alias.
+func PrefixOnlyForms() []string {
+	return append(KnownKeys(), "atlassian:")
+}
+
+// Candidates returns the prefixed ids a bare id can have: every known
+// prefix plus the trimmed id. A keyed, empty or prefix-only id has none.
+func Candidates(id string) []string {
+	id = canonical(strings.TrimSpace(id))
+	if HasKey(id) || Malformed(id) {
+		return nil
+	}
+	out := make([]string, 0, len(knownKeys))
+	for _, k := range knownKeys {
+		out = append(out, k+id)
+	}
+	return out
 }
 
 // canonical folds the "atlassian:" alias into "jira:".

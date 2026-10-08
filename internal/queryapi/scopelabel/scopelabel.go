@@ -54,6 +54,17 @@ func CleanName(raw string) (string, bool) {
 	return name, true
 }
 
+// CleanNameFor is CleanName for a name that belongs to the item ownID: it also
+// drops a name equal to ownID (trimmed, case-insensitive), because an id
+// stored in the title column is still an id.
+func CleanNameFor(raw, ownID string) (string, bool) {
+	name, ok := CleanName(raw)
+	if !ok || strings.EqualFold(name, strings.TrimSpace(ownID)) {
+		return "", false
+	}
+	return name, true
+}
+
 // UniqueSortedNonEmpty returns the distinct non-empty ids in ascending order.
 func UniqueSortedNonEmpty(ids []string) []string {
 	seen := make(map[string]struct{}, len(ids))

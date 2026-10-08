@@ -6,6 +6,8 @@ package investment
 // and the results go to work_unit_investment_shadow and
 // llm_categorization_attempts only. No reader of the product reads either table.
 //
+// Architecture: .github/docs-legacy/architecture/investment-decision-adapter.md.
+//
 // What the phase can and cannot do to the served run:
 //
 //   - It starts after the last served write and returns nothing, so no shadow

@@ -167,7 +167,7 @@ type opportunitiesPythonResponse struct {
 
 // issuesPythonItem and issuesPythonResponse are the shape the frozen FastAPI
 // model of the issue drilldown has. drilldown.IssueItem has one more field
-// since CHAOS-8749 (team_name), which the Python model never had; the frozen
+// since CHAOS-8749 (team_name) and CHAOS-8959 (title, blocked-only items), which the Python model never had; the frozen
 // program was recorded for the Python shape and is not recorded again, so the
 // oracle still checks THAT shape. The Go-only Count field is emitted only for
 // the filters.how.blocked=true contract (CHAOS-8106). The declaration test
@@ -200,6 +200,7 @@ func TestIssuesResponseIsThePythonResponsePlusTheDeclaredGoOnlyFields(t *testing
 
 	want := fieldsOf(reflect.TypeOf(issuesPythonItem{}))
 	want = append(want[:4], append([]field{{"TeamName", "*string", `json:"team_name"`}}, want[4:]...)...)
+	want = append(want, field{"Title", "*drilldown.ItemTitle", `json:"title,omitempty"`})
 	if got := fieldsOf(reflect.TypeOf(drilldown.IssueItem{})); !reflect.DeepEqual(got, want) {
 		t.Errorf("drilldown.IssueItem fields =\n %v\nwant the Python fields with team_name after team_id:\n %v", got, want)
 	}

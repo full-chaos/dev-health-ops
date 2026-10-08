@@ -468,3 +468,10 @@ func TestBatchLineWithABodyThatIsNotAResponsesBodySaysWhy(t *testing.T) {
 		t.Fatalf("result %+v", results[0])
 	}
 }
+
+func TestBatchLineDecodeErrorCarriesNoProviderContent(t *testing.T) {
+	_, err := parseOpenAIBatchLines([]byte(`{"custom_id": Qsecretvalue}`))
+	if err == nil || strings.Contains(err.Error(), "Q") || strings.Contains(err.Error(), "secretvalue") {
+		t.Fatalf("err = %v", err)
+	}
+}

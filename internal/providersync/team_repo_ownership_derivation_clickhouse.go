@@ -525,7 +525,8 @@ func loadTeamRepoOwnershipKnownTeams(
 	ctx context.Context, conn driver.Conn, orgID string,
 ) ([]TeamRepoOwnershipKnownTeam, error) {
 	rows, err := conn.Query(ctx, `
-SELECT provider, id, argMax(is_active, (updated_at, last_synced, is_active)) AS is_active
+SELECT provider, id, argMax(is_active, (updated_at, last_synced, is_active)) AS is_active,
+       ifNull((argMax(tuple(native_team_key), (updated_at, last_synced, ifNull(native_team_key, '')))).1, '') AS native_team_key
 FROM teams
 WHERE org_id = ? AND provider = 'linear'
 GROUP BY provider, id`,
@@ -536,13 +537,13 @@ GROUP BY provider, id`,
 	defer rows.Close()
 	var out []TeamRepoOwnershipKnownTeam
 	for rows.Next() {
-		var provider, id string
+		var provider, id, nativeTeamKey string
 		var isActive uint8
-		if err := rows.Scan(&provider, &id, &isActive); err != nil {
+		if err := rows.Scan(&provider, &id, &isActive, &nativeTeamKey); err != nil {
 			return nil, err
 		}
 		if isActive != 0 {
-			out = append(out, TeamRepoOwnershipKnownTeam{Provider: provider, ID: id})
+			out = append(out, TeamRepoOwnershipKnownTeam{Provider: provider, ID: id, NativeTeamKey: nativeTeamKey})
 		}
 	}
 	return out, rows.Err()

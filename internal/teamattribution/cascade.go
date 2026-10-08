@@ -116,7 +116,12 @@ type GithubWorkItemDerivationTeamFact struct {
 	TeamID      string
 	TeamName    string
 	ProjectKeys []string
-	UpdatedAt   time.Time
+	// NativeTeamKey is the provider's own key of the team (teams.
+	// native_team_key). A provider team id carries a provider prefix
+	// (teamid.Of), so a work item's native team key matches this key, not
+	// the id.
+	NativeTeamKey string
+	UpdatedAt     time.Time
 	// Inactive: the newest row of this team has is_active = 0. The team stays
 	// KNOWN to the cascade (null-carrying rules behave as for any team) but it
 	// is never the result of a resolution (see inactiveTeams).
@@ -422,7 +427,7 @@ func NewGitHubWorkItemDerivationContext(
 		if team.Inactive {
 			continue
 		}
-		for _, rawKey := range append(append([]string(nil), team.ProjectKeys...), team.TeamID) {
+		for _, rawKey := range append(append([]string(nil), team.ProjectKeys...), team.TeamID, team.NativeTeamKey) {
 			key := strings.TrimSpace(rawKey)
 			if key == "" {
 				continue
@@ -1583,6 +1588,7 @@ func (source ClickHouseFactSource) LoadTeams(
 SELECT provider, id,
        argMax(name, (updated_at, last_synced, name)),
        argMax(project_keys, (updated_at, last_synced, toJSONString(project_keys))),
+       ifNull((argMax(tuple(native_team_key), (updated_at, last_synced, ifNull(native_team_key, '')))).1, ''),
        max(updated_at),
        `+teamNewestRowInactive+`
 FROM teams
@@ -1597,7 +1603,7 @@ LIMIT ?`, orgID, GithubWorkItemDerivationContextLimit+1)
 	result := []GithubWorkItemDerivationTeamFact{}
 	for rows.Next() {
 		var fact GithubWorkItemDerivationTeamFact
-		if err := rows.Scan(&fact.Provider, &fact.TeamID, &fact.TeamName, &fact.ProjectKeys, &fact.UpdatedAt, &fact.Inactive); err != nil {
+		if err := rows.Scan(&fact.Provider, &fact.TeamID, &fact.TeamName, &fact.ProjectKeys, &fact.NativeTeamKey, &fact.UpdatedAt, &fact.Inactive); err != nil {
 			return nil, err
 		}
 		result = append(result, fact)

@@ -13,6 +13,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
+	"github.com/full-chaos/dev-health-ops/internal/teamid"
 )
 
 // Team-drift policy constants, transcribed from
@@ -224,22 +225,13 @@ func pythonRepr(value pyjson.Value) string {
 	return pythonStr(value)
 }
 
-// importedTeamID mirrors import_teams' own team_id derivation
-// (clickhouse_team_admin.py:397-407): "gh:"/"gl:"/"ms-teams:" prefixes
-// for those three providers, the bare provider_team_id for every other
-// provider (jira, linear -- their provider_team_id IS already the team_id
-// shape those routes use elsewhere).
+// importedTeamID is the team id an import writes: the provider_team_id
+// with its provider's prefix, the same id the provider's own catalog writes
+// (teamid.Of). The legacy Python import (clickhouse_team_admin.py:397-407)
+// left jira and linear ids bare; CHAOS-8939 makes every provider id
+// prefixed, so an imported team merges into the catalog team of the same id.
 func importedTeamID(providerType, providerTeamID string) string {
-	switch providerType {
-	case "github":
-		return "gh:" + providerTeamID
-	case "gitlab":
-		return "gl:" + providerTeamID
-	case "ms-teams":
-		return "ms-teams:" + providerTeamID
-	default:
-		return providerTeamID
-	}
+	return teamid.Of(providerType, providerTeamID)
 }
 
 // changeIDForTeamField mirrors change_id_for_team_field

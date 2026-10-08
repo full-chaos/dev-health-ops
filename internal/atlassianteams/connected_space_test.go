@@ -31,7 +31,7 @@ func syntheticTeam(n int) string {
 }
 
 func syntheticTeamID(n int) string {
-	return fmt.Sprintf("00000000-0000-4000-8000-%012d", n)
+	return fmt.Sprintf("jira:00000000-0000-4000-8000-%012d", n)
 }
 
 // measuredSite has the distribution the live read measured: 11 teams; 9 with one member and one Jira project, one

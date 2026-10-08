@@ -828,9 +828,9 @@ The Atlassian Teams of a Jira site ARE the Jira teams. A team owns a Jira projec
     0.4e). An id that no catalog row has stays as named (unknown, not inactive). An inactive team of
     another provider with the same id (a retired Jira project-as-team row `ENG` and a Linear team `ENG`) does
     not drop the item's own active team, and an inactive admin team `ENG` never takes an item through a rule
-    that names `ENG` while the item's provider has an active team `ENG`. Storage limit: the `teams` sorting key is (org_id, id), without `provider`, so a
-    merge keeps one row of two teams that share an id in one organization; the loader sees both only between
-    merges. A retired, archived or never-active team of any provider takes no work item by project key, team
+    that names `ENG` while the item's provider has an active team `ENG`. The `teams` sorting key is (org_id, id), without `provider`; provider team ids are
+    unique by construction because each carries its provider's prefix (section 0.4f). An admin team that
+    shares a provider team's id is that team, by design. A retired, archived or never-active team of any provider takes no work item by project key, team
     id, native team key, ownership, membership, linked issue or manual fallback. A Jira project that no Atlassian team is connected to is unassigned. A recompute of an
     old day leaves the items of a now-inactive team unassigned.
   - **Counts.** The result field `ProjectAsTeamRetired`; the metric `dev_health_team_catalog_rows_written_total`
@@ -981,7 +981,7 @@ organization once and equal to the store without co-owner rows);
 #### 0.4e A key string is not a link across providers (CHAOS-8924)
 
 `native_team` and `issue_project` resolve a key string (the item's native team key; its scope and project keys)
-to the teams that hold it, as their id or in `project_keys`. A team reaches an item only through ownership of
+to the teams that hold it, as their id, their `native_team_key` (section 0.4f) or in `project_keys`. A team reaches an item only through ownership of
 the item's project, and a key string held by a team of another provider is not that ownership. So both tiers
 read the holders of a key through ONE shared function, `keyHoldersOfProvider` in
 `internal/teamattribution/cascade.go` (it applies `teamsForItemProvider`), the same for every provider:
@@ -1065,6 +1065,50 @@ cascade, real writer, real ClickHouse, every provider, the admin cases included)
 `TestAnInactiveTeamDropsOnlyTheTeamOfItsOwnProviderWithTheSameID` (real loader, every pair of providers);
 `TestProviderTaggedTeamTwinsMatchTheFrozenAnswersForEveryProvider` (the frozen answers, written for admin teams,
 also hold for a team of the item's provider).
+
+#### 0.4f Team ids carry a provider prefix (CHAOS-8939)
+
+A team is its id, and the id is unique in an organization because it carries its provider's prefix. The
+`teams` sorting key is (org_id, id), without `provider`, and every reader that uses `FINAL`, `GROUP BY id` or
+a bare `team_id` key treats one id as one team; so two providers must never write the same id. ONE function
+builds every provider team id: `teamid.Of(provider, key)` in `internal/teamid`. It is idempotent: an id that
+already carries the prefix gets no second one.
+
+| Writer | `provider` | `id` | `native_team_key` |
+|---|---|---|---|
+| GitHub team catalog | `github` | `gh:<slug>` | the slug |
+| GitLab team catalog | `gitlab` | `gl:<full_path>` | the full path |
+| Linear reference catalog (team row, memberships, project ownership) | `linear` | `linear:<team key>` | the team key |
+| Atlassian Teams (`dho sync teams --provider jira`, the automatic Jira team import) | `jira` | `jira:<team uuid>` | the team ARI |
+| External ingest `team.v1` | the source system | `gh:`/`gl:` for github/gitlab, `<system>:` for every other system, then the pushed `id` | the pushed `nativeTeamKey`, else the pushed `id` |
+| Admin import (`POST /teams/import`) | `""` | `teamid.Of(provider_type, provider_team_id)`: the same id as the provider's catalog | (observation: `provider_team_id`) |
+| Admin create | `""` | the id the admin gives (unchanged) | NULL |
+
+- `team.v1` also prefixes `parentTeamId`, and `identity.v1` prefixes its `teamIds`, with the record's system.
+- The Linear team-key ownership row keeps `project_key` = the team key and `project_id` =
+  `<org>:linear:<team key>`; only its `team_id` is the prefixed id. A Linear project whose owning team node has
+  no key gives no ownership row (the result counts it as `ownership_teams_without_key`): the team's Linear
+  uuid never named a stored team.
+- Jira team discovery (`GET /teams/discover?provider=jira`) returns `provider_team_id` without the prefix, as
+  before; the import adds it again.
+- **Write-time refusal.** The Linear effect validators (team, membership and ownership rows), the Atlassian
+  `Write` (before any read or write) and the `team.v1` writer refuse a provider team id without its prefix
+  (`teamid.Check`).
+- **Readers of a native key.** The cascade loads `native_team_key` (`LoadTeams`) and indexes it with the id and
+  the `project_keys`, so a work item's native team key (`native_team`) and scope key (`issue_project`) reach
+  the team by its native key, not by its id (section 0.4e). The repository-ownership derivation
+  (`resolveWorkItemTeamID`) maps a Linear item's `native_team_key` to the id of the known Linear team with that
+  native key; when two teams hold one key, the prefixed id wins.
+- **Old rows.** Rows written before this change keep their bare ids until the carry of CHAOS-8940 rewrites
+  them; the two changes reach a deploy together. A full Atlassian Teams run deactivates a bare-id Jira team
+  row and closes its open memberships and project links, because the snapshot no longer returns that id.
+
+Tests: `TestOfPrefixesEveryProviderOnce`, `TestCheckRefusesABareOrEmptyProviderTeamID` (`internal/teamid`);
+`TestEveryLinearTeamIDWriteSiteWritesAPrefixedID` (the route, one row class per write site);
+`TestTheLinearEffectsRefuseABareTeamID`; `TestAtlassianWriteRefusesABareTeamID`;
+`TestTeamV1WritesTheSystemPrefixedTeamID`; `TestImportedTeamIDPrefixesEveryProvider`;
+`TestNativeTeamResolvesThroughTheNativeTeamKey` (the cascade); `TestLinearTeamKeyArmResolvesToThePrefixedTeamID`
+(the ownership derivation).
 
 #### 0.4a Provider × entity **consumption** (functional — what `run_team_autoimport` actually pulls)
 
@@ -1784,6 +1828,10 @@ carries a `NativeTeamKey` that is a member of `knownTeams`): `Derive` now skips 
 guard (treats it as ready despite `len(projectLinks) == 0`) ONLY when that helper reports a genuine
 Linear-native signal is present — the one case the guard's removal was meant to unblock. This requires
 loading `knownTeams` BEFORE this guard runs, not after (its call site moved earlier in `Derive`).
+
+**Superseded by CHAOS-8939 (section 0.4f):** a Linear team id is now `linear:<key>`, so
+`resolveWorkItemTeamID` maps `NativeTeamKey` to the known team with that `native_team_key` and returns that
+team's id. The paragraph below is the record of the earlier design.
 
 **Codex review, round 3 (final; P2 raised, verified NOT applicable to this codebase): native keys are
 not resolved to a separately-looked-up canonical team id.** `resolveWorkItemTeamID` validates

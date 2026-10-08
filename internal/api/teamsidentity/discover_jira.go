@@ -10,6 +10,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
+	"github.com/full-chaos/dev-health-ops/internal/teamid"
 )
 
 // atlassianTeamARIPrefix starts the native_team_key of every Atlassian team
@@ -62,7 +63,7 @@ func discoverJira(ctx context.Context, conn driver.Conn, orgID string, credentia
 			return nil, fmt.Errorf("scan stored atlassian team: %w", err)
 		}
 		if name == "" {
-			name = id
+			name = teamid.Native("jira", id)
 		}
 		if projectKeys == nil {
 			projectKeys = []string{}
@@ -73,7 +74,7 @@ func discoverJira(ctx context.Context, conn driver.Conn, orgID string, credentia
 		associations.Set("provider_org", providerOrg)
 		teams = append(teams, discoveredTeam{
 			ProviderType:   "jira",
-			ProviderTeamID: id,
+			ProviderTeamID: teamid.Native("jira", id),
 			Name:           name,
 			Description:    description,
 			MemberCount:    &memberCount,

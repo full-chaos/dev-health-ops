@@ -306,11 +306,11 @@ func linearTeamsRules() map[string]linearTeamsRule {
 		"project_keys":   {same: true, why: "CHAOS-4530: a team key is not a project key; neither plane populates it for Linear"},
 		"parent_team_id": same, "source_id": same, "repo_patterns": {same: true, why: "no repository ownership concept for Linear"},
 		"id": {check: func(sc *linearScenario, team fakeLinearTeam, py, gr map[string]string) string {
-			if py["id"] != "linear:"+team.Key || gr["id"] != team.Key {
-				return fmt.Sprintf("id: python %q (want linear:%s), go %q (want %s)", py["id"], team.Key, gr["id"], team.Key)
+			if py["id"] != "linear:"+team.Key || gr["id"] != "linear:"+team.Key {
+				return fmt.Sprintf("id: python %q, go %q, want both linear:%s", py["id"], gr["id"], team.Key)
 			}
 			return ""
-		}, why: "legacy: 'linear:<key>'; catalog: the bare team key (both consistently ordered, so index-matched comparison still holds)"},
+		}, why: "both 'linear:<key>': CHAOS-8939 gave the catalog the provider prefix the legacy writer already had"},
 		"name": {check: func(sc *linearScenario, team fakeLinearTeam, py, gr map[string]string) string {
 			want := team.Name
 			if strings.TrimSpace(want) == "" {
@@ -386,12 +386,12 @@ func linearTeamsRules() map[string]linearTeamsRule {
 			return ""
 		}, why: "legacy: email-or-name identities; catalog: provider-scoped identity facets (email-or-id, lower-cased)"},
 		"team_uuid": {check: func(sc *linearScenario, team fakeLinearTeam, py, gr map[string]string) string {
-			wantGo := uuid.NewSHA1(uuid.NameSpaceURL, []byte("team:"+team.Key)).String()
+			wantGo := uuid.NewSHA1(uuid.NameSpaceURL, []byte("team:linear:"+team.Key)).String()
 			if py["team_uuid"] != "<uuid4>" { // the golden stores python's random uuid4 as its kind
 				return fmt.Sprintf("team_uuid: python's is a random uuid4 (stored as <uuid4>), got %q", py["team_uuid"])
 			}
 			if gr["team_uuid"] != wantGo {
-				return fmt.Sprintf("team_uuid: go's is uuid5(URL, \"team:<key>\") = %s, got %s", wantGo, gr["team_uuid"])
+				return fmt.Sprintf("team_uuid: go's is uuid5(URL, \"team:linear:<key>\") = %s, got %s", wantGo, gr["team_uuid"])
 			}
 			return ""
 		}, why: "legacy: a random uuid4 per run; catalog: uuid5 of the bare team key, stable across runs"},

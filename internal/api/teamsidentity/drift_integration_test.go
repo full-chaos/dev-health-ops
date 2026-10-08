@@ -38,11 +38,11 @@ func TestProjectTeamAutoApplyImportsThenMerges(t *testing.T) {
 	if err != nil {
 		t.Fatalf("projectTeam (first): %v", err)
 	}
-	if first.Action != "imported" || first.TeamID != "ENG" {
-		t.Fatalf("first = %+v, want action=imported team_id=ENG", first)
+	if first.Action != "imported" || first.TeamID != "jira:ENG" {
+		t.Fatalf("first = %+v, want action=imported team_id=jira:ENG", first)
 	}
 
-	stored, err := store.GetTeam(ctx, orgID, "ENG")
+	stored, err := store.GetTeam(ctx, orgID, "jira:ENG")
 	if err != nil {
 		t.Fatalf("GetTeam: %v", err)
 	}
@@ -63,7 +63,7 @@ func TestProjectTeamAutoApplyImportsThenMerges(t *testing.T) {
 	// real provider/native_team_key -- only the observation row (asserted
 	// separately) carries those, so an admin-imported team can never be
 	// silently reclaimed by a later real provider sync matching on them.
-	rows, err := store.Conn.Query(ctx, `SELECT provider, native_team_key FROM teams FINAL WHERE org_id = {org_id:String} AND id = 'ENG'`, clickhouse.Named("org_id", orgID))
+	rows, err := store.Conn.Query(ctx, `SELECT provider, native_team_key FROM teams FINAL WHERE org_id = {org_id:String} AND id = 'jira:ENG'`, clickhouse.Named("org_id", orgID))
 	if err != nil {
 		t.Fatalf("query teams row: %v", err)
 	}
@@ -94,7 +94,7 @@ func TestProjectTeamAutoApplyImportsThenMerges(t *testing.T) {
 		t.Fatalf("second.Action = %q, want merged", second.Action)
 	}
 
-	restored, err := store.GetTeam(ctx, orgID, "ENG")
+	restored, err := store.GetTeam(ctx, orgID, "jira:ENG")
 	if err != nil {
 		t.Fatalf("GetTeam (after merge): %v", err)
 	}
@@ -120,7 +120,7 @@ func TestProjectTeamSkipOnConflictOnlyRecordsAnObservation(t *testing.T) {
 	if _, err := store.projectTeam(ctx, orgID, discoveredJiraTeam("ENG", "Engineering"), "skip"); err != nil {
 		t.Fatalf("projectTeam (first): %v", err)
 	}
-	before, err := store.GetTeam(ctx, orgID, "ENG")
+	before, err := store.GetTeam(ctx, orgID, "jira:ENG")
 	if err != nil || before == nil {
 		t.Fatalf("GetTeam (before skip): %v, %+v", err, before)
 	}
@@ -133,7 +133,7 @@ func TestProjectTeamSkipOnConflictOnlyRecordsAnObservation(t *testing.T) {
 		t.Fatalf("Action = %q, want skipped", result.Action)
 	}
 
-	after, err := store.GetTeam(ctx, orgID, "ENG")
+	after, err := store.GetTeam(ctx, orgID, "jira:ENG")
 	if err != nil || after == nil {
 		t.Fatalf("GetTeam (after skip): %v, %+v", err, after)
 	}

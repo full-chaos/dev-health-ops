@@ -228,7 +228,7 @@ func TestCollectReadsTeamsMembersAndProjectsThroughTheRealClient(t *testing.T) {
 		t.Fatalf("teams = %d, want 3 (active, archived, second page)", len(rows.Teams))
 	}
 	a, b, c := rows.Teams[0], rows.Teams[1], rows.Teams[2]
-	if a.ID != "aaaaaaaa-0000-4000-8000-000000000001" || a.NativeTeamKey != teamA || a.Name != "Platform" || a.IsActive != 1 || a.Provider != "jira" || a.OrgID != "org-1" {
+	if a.ID != "jira:aaaaaaaa-0000-4000-8000-000000000001" || a.NativeTeamKey != teamA || a.Name != "Platform" || a.IsActive != 1 || a.Provider != "jira" || a.OrgID != "org-1" {
 		t.Errorf("team A row = %+v", a)
 	}
 	if got := strings.Join(a.ProjectKeys, ","); got != "PLAT" {
@@ -237,7 +237,7 @@ func TestCollectReadsTeamsMembersAndProjectsThroughTheRealClient(t *testing.T) {
 	if b.IsActive != 0 || b.Name != "Old" {
 		t.Errorf("archived team row = %+v, want inactive", b)
 	}
-	if c.ID != "cccccccc-0000-4000-8000-000000000003" {
+	if c.ID != "jira:cccccccc-0000-4000-8000-000000000003" {
 		t.Errorf("second-page team = %+v", c)
 	}
 	if a.TeamUUID.String() == "" || a.TeamUUID == b.TeamUUID {
@@ -254,14 +254,14 @@ func TestCollectReadsTeamsMembersAndProjectsThroughTheRealClient(t *testing.T) {
 			t.Errorf("membership identity %+v", m)
 		}
 	}
-	if got := strings.Join(members["aaaaaaaa-0000-4000-8000-000000000001"], ","); got != "jira:alice-1,jira:bob-2" {
+	if got := strings.Join(members["jira:aaaaaaaa-0000-4000-8000-000000000001"], ","); got != "jira:alice-1,jira:bob-2" {
 		t.Errorf("team A members = %q, want jira:alice-1,jira:bob-2 (lower-cased, deduplicated, both pages)", got)
 	}
-	if got := strings.Join(members["cccccccc-0000-4000-8000-000000000003"], ","); got != "jira:carol-3" {
+	if got := strings.Join(members["jira:cccccccc-0000-4000-8000-000000000003"], ","); got != "jira:carol-3" {
 		t.Errorf("team C members = %q", got)
 	}
-	if len(members["bbbbbbbb-0000-4000-8000-000000000002"]) != 0 {
-		t.Errorf("an archived team has no members: %v", members["bbbbbbbb-0000-4000-8000-000000000002"])
+	if len(members["jira:bbbbbbbb-0000-4000-8000-000000000002"]) != 0 {
+		t.Errorf("an archived team has no members: %v", members["jira:bbbbbbbb-0000-4000-8000-000000000002"])
 	}
 
 	if len(rows.Ownership) != 1 || rows.Ownership[0].ProjectID != "10001" || rows.Ownership[0].ProjectKey != "PLAT" ||
@@ -276,7 +276,7 @@ func TestCollectReadsTeamsMembersAndProjectsThroughTheRealClient(t *testing.T) {
 	if partial, err := Collect(context.Background(), g.client(), withoutProjects); err != nil || partial.ProjectLinksComplete {
 		t.Errorf("a collection that read no project links says they are complete (err=%v)", err)
 	}
-	if got := strings.Join(rows.UnreadableProjectLinkTeams, ","); got != "aaaaaaaa-0000-4000-8000-000000000001" {
+	if got := strings.Join(rows.UnreadableProjectLinkTeams, ","); got != "jira:aaaaaaaa-0000-4000-8000-000000000001" {
 		t.Errorf("teams with a project link that got no row = %q, want team A alone: three of its links got no row (its one writable link is still written), team C has no link at all", got)
 	}
 	if want := (ProjectLinkCounts{Seen: 5, SkippedNoProjectKey: 1, SkippedNoNativeID: 2, SkippedDuplicate: 1}); rows.ProjectLinks != want {
@@ -449,7 +449,7 @@ func TestCollectIsAllOrNothing(t *testing.T) {
 	}
 	g := newGateway(t, failing)
 	rows, err := Collect(context.Background(), g.client(), params(everything))
-	if err == nil || !strings.Contains(err.Error(), "read members of team cccccccc-0000-4000-8000-000000000003") {
+	if err == nil || !strings.Contains(err.Error(), "read members of team jira:cccccccc-0000-4000-8000-000000000003") {
 		t.Fatalf("err = %v, want the failing team named", err)
 	}
 	if len(rows.Teams)+len(rows.Memberships)+len(rows.Ownership) != 0 {
@@ -521,8 +521,8 @@ func TestCollectNeedsItsInputs(t *testing.T) {
 
 func TestIdentifiers(t *testing.T) {
 	for in, want := range map[string]string{
-		"ari:cloud:identity::team/ABC-1": "abc-1",
-		" ari:cloud:identity::team/abc ": "abc",
+		"ari:cloud:identity::team/ABC-1": "jira:abc-1",
+		" ari:cloud:identity::team/abc ": "jira:abc",
 	} {
 		if got, err := teamID(in); err != nil || got != want {
 			t.Errorf("teamID(%q) = %q, %v", in, got, err)
@@ -557,13 +557,13 @@ func TestAnAtlassianTeamOutranksTheProjectAsTeamOwnerInTheCascade(t *testing.T) 
 	projectTeam := teamattribution.GithubWorkItemDerivationCandidateFromFact(
 		"project_ownership", "PLAT", "Platform project", "project_ownership=10001", 1, projectTeamSpecificity, projectTeamPriority, updated)
 	atlassianTeam := teamattribution.GithubWorkItemDerivationCandidateFromFact(
-		"project_ownership", "aaaaaaaa-0000-4000-8000-000000000001", "Platform", "project_ownership=10001", 1, OwnershipSpecificity, OwnershipPriority, updated)
+		"project_ownership", "jira:aaaaaaaa-0000-4000-8000-000000000001", "Platform", "project_ownership=10001", 1, OwnershipSpecificity, OwnershipPriority, updated)
 	for name, input := range map[string][]teamattribution.GithubWorkItemDerivationCandidate{
 		"project team first":   {projectTeam, atlassianTeam},
 		"atlassian team first": {atlassianTeam, projectTeam},
 	} {
 		ranked := teamattribution.RankDerivationCandidates(append([]teamattribution.GithubWorkItemDerivationCandidate(nil), input...))
-		if got := teamattribution.GithubWorkItemDerivationStringValue(ranked[0].TeamID); got != "aaaaaaaa-0000-4000-8000-000000000001" {
+		if got := teamattribution.GithubWorkItemDerivationStringValue(ranked[0].TeamID); got != "jira:aaaaaaaa-0000-4000-8000-000000000001" {
 			t.Errorf("%s: primary owner = %q, want the Atlassian team", name, got)
 		}
 	}
@@ -585,7 +585,7 @@ func TestCollectRefusesGraphQLErrorsNextToPartialData(t *testing.T) {
 	}
 	g := newGateway(t, partial)
 	rows, err := Collect(context.Background(), g.client(), params(everything))
-	if err == nil || !strings.Contains(err.Error(), "read members of team aaaaaaaa-0000-4000-8000-000000000001") {
+	if err == nil || !strings.Contains(err.Error(), "read members of team jira:aaaaaaaa-0000-4000-8000-000000000001") {
 		t.Fatalf("err = %v, want the partial answer refused", err)
 	}
 	if len(rows.Teams)+len(rows.Memberships)+len(rows.Ownership) != 0 {
@@ -664,7 +664,7 @@ func TestCollectReadsMembersFromEdgesThatCarryOnlyTheUser(t *testing.T) {
 	var got []string
 	for _, m := range rows.Memberships {
 		// the collector writes its own team id here; the mapper's team id is pinned by team_member_mapper_test.go
-		if m.TeamID != "aaaaaaaa-0000-4000-8000-000000000001" {
+		if m.TeamID != "jira:aaaaaaaa-0000-4000-8000-000000000001" {
 			t.Errorf("member %q attached to team %q, want the requested team A", m.MemberID, m.TeamID)
 		}
 		got = append(got, m.MemberID)
@@ -816,7 +816,7 @@ func TestATeamWithAProjectLinkThatGotNoRowIsNamedUnreadable(t *testing.T) {
 			return 200, containerPage("", teamCLinks...)
 		}
 	}
-	const idA, idC = "aaaaaaaa-0000-4000-8000-000000000001", "cccccccc-0000-4000-8000-000000000003"
+	const idA, idC = "jira:aaaaaaaa-0000-4000-8000-000000000001", "jira:cccccccc-0000-4000-8000-000000000003"
 	for _, tc := range []struct {
 		name string
 		a, c []map[string]any

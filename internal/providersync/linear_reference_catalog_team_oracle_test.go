@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/identityalias"
+	"github.com/full-chaos/dev-health-ops/internal/teamid"
 )
 
 type linearReferenceTeamProducerRow struct {
@@ -22,6 +23,9 @@ type linearReferenceTeamProducerRow struct {
 	Provider      string    `json:"provider"`
 	NativeTeamKey string    `json:"native_team_key"`
 	ParentTeamID  *string   `json:"parent_team_id"`
+	// GoTeamID is the team id the Go writer stores (see the goOnlyFields
+	// reason below).
+	GoTeamID string `json:"go_team_id_chaos_8939"`
 }
 
 func TestLinearReferenceTeamCatalogMatchesFrozenPythonProducer(t *testing.T) {
@@ -58,6 +62,9 @@ func TestLinearReferenceTeamCatalogMatchesFrozenPythonProducer(t *testing.T) {
 		buildLinearReferenceTeamCatalogOracleRow,
 		map[string]string{
 			"team_uuid": "ClickHouse derives this UUID while Python's dict sink row leaves it to the sink default",
+			"go_team_id_chaos_8939": "CHAOS-8939 (intentional divergence): the Go writer stores linear:<key> as the " +
+				"team id, the frozen Python producer stored the bare key. The compared id is the Go id without its " +
+				"prefix, and the row builder fails unless the Go id is exactly linear:<that key>.",
 		},
 	)
 }
@@ -88,8 +95,11 @@ func buildLinearReferenceTeamCatalogOracleRow(t *testing.T, input map[string]any
 	if err != nil {
 		t.Fatal(err)
 	}
+	if team.ID != "linear:"+teamid.Native("linear", team.ID) || teamid.Native("linear", team.ID) != input["team_id"].(string) {
+		t.Fatalf("Go team id %q is not linear:<key> for key %q", team.ID, input["team_id"])
+	}
 	return linearReferenceTeamProducerRow{
-		ID: team.ID, TeamUUID: team.TeamUUID, Name: team.Name, Description: team.Description, Members: team.Members,
+		ID: teamid.Native("linear", team.ID), GoTeamID: team.ID, TeamUUID: team.TeamUUID, Name: team.Name, Description: team.Description, Members: team.Members,
 		ProjectKeys: projectKeys, RepoPatterns: team.RepoPatterns, IsActive: team.IsActive == 1,
 		UpdatedAt: team.UpdatedAt, OrgID: team.OrgID, Provider: team.Provider,
 		NativeTeamKey: *team.NativeTeamKey, ParentTeamID: team.ParentTeamID,

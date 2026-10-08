@@ -130,7 +130,7 @@ func TestLinearReferenceCatalogEffectsPreservesManualMembersAcrossWrites(t *test
 	now := time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)
 
 	teamKey := "ENG"
-	teamID := "ENG"
+	teamID := "linear:ENG"
 	teamUUID := uuid.NewSHA1(uuid.NameSpaceURL, []byte("team:"+teamID)).String()
 	firstWrite, err := effectBatchFromValues(linearReferenceCatalogTeamsDestination, EffectReadbackRequired, []linearReferenceTeamRow{{
 		ID: teamID, TeamUUID: teamUUID, Name: "Engineering", Members: []string{"linear:alice@example.com"},
@@ -230,7 +230,7 @@ func linearReferenceCatalogIntegrationRows(claim Claim, now time.Time) LinearRef
 	projectTargetDate := linearReferenceDate("2026-09-30")
 	return LinearReferenceCatalogRows{
 		Teams: []linearReferenceTeamRow{{
-			ID: "ENG", TeamUUID: uuid.NewSHA1(uuid.NameSpaceURL, []byte("team:ENG")).String(),
+			ID: "linear:ENG", TeamUUID: uuid.NewSHA1(uuid.NameSpaceURL, []byte("team:linear:ENG")).String(),
 			Name: "Engineering", Members: []string{"linear:alice@example.com", "alice@example.com"}, ProjectKeys: []string{teamKey},
 			RepoPatterns: []string{}, IsActive: 1, UpdatedAt: now, OrgID: claim.OrgID,
 			Provider: "linear", NativeTeamKey: &teamKey,
@@ -240,7 +240,7 @@ func linearReferenceCatalogIntegrationRows(claim Claim, now time.Time) LinearRef
 			ProviderIdentities: `{"linear": ["alice@example.com"]}`, IsActive: 1, UpdatedAt: now,
 		}},
 		Memberships: []linearReferenceMembershipRow{{
-			OrgID: claim.OrgID, Provider: "linear", TeamID: "ENG", MemberID: memberID,
+			OrgID: claim.OrgID, Provider: "linear", TeamID: "linear:ENG", MemberID: memberID,
 			RawProviderUserID: linearReferenceStringPtr("alice@example.com"), RawEmail: linearReferenceStringPtr("alice@example.com"),
 			IdentityFacets: []string{"linear:alice@example.com", "alice@example.com"}, Source: "native", IsPrimary: 1, Specificity: 100,
 			Priority: 10, ValidFrom: now, UpdatedAt: now,
@@ -253,7 +253,7 @@ func linearReferenceCatalogIntegrationRows(claim Claim, now time.Time) LinearRef
 			LeadEmail: linearReferenceStringPtr("alice@example.com"), UpdatedAt: now, LastSynced: now,
 		}},
 		Ownership: []linearReferenceOwnershipRow{{
-			OrgID: claim.OrgID, Provider: "linear", TeamID: "ENG", ProjectID: "project-1",
+			OrgID: claim.OrgID, Provider: "linear", TeamID: "linear:ENG", ProjectID: "project-1",
 			ProjectKey: &projectKey, Source: "native", IsPrimary: 1, Specificity: 100,
 			Priority: 10, ValidFrom: now, UpdatedAt: now,
 		}},

@@ -14,6 +14,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/identityalias"
 	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
+	"github.com/full-chaos/dev-health-ops/internal/teamid"
 )
 
 const (
@@ -113,6 +114,10 @@ type LinearReferenceCatalogResult struct {
 	// ProjectsWithoutKey is CHAOS-4530 telemetry: how many of Projects were
 	// written with a nil ProjectKey. See TeamCatalogResult.ProjectsWithoutKey.
 	ProjectsWithoutKey int `json:"projects_without_key"`
+	// OwnershipTeamsWithoutKey counts the project-to-team links that were
+	// not written because the owning team node had no key: a team id is
+	// "linear:<key>", and the team's Linear uuid never named a stored team.
+	OwnershipTeamsWithoutKey int `json:"ownership_teams_without_key"`
 }
 
 type LinearReferenceCatalogBatch struct {
@@ -210,6 +215,7 @@ func (handler LinearReferenceCatalogRouteHandler) CollectReferenceCatalog(
 	// shares the same org alias config.
 	resolver := identityalias.LoadDefault()
 	evidence := LinearReferenceCatalogEvidence{Provider: "linear", Dataset: "reference-catalog"}
+	ownershipTeamsWithoutKey := 0
 	// Requests has ONE source: real wire attempts observed at the HTTP
 	// boundary, including failed/retried ones. The defer stamps it onto
 	// whatever batch this call returns through, success or any of the
@@ -427,13 +433,11 @@ func (handler LinearReferenceCatalogRouteHandler) CollectReferenceCatalog(
 			}
 			rows.Projects = append(rows.Projects, project)
 			for _, team := range payload.Teams.Nodes {
-				teamID := strings.TrimSpace(team.Key)
-				if teamID == "" {
-					teamID = strings.TrimSpace(team.ID)
-				}
-				if teamID == "" {
+				if strings.TrimSpace(team.Key) == "" {
+					ownershipTeamsWithoutKey++
 					continue
 				}
+				teamID := teamid.Of("linear", team.Key)
 				// CHAOS-4530: ProjectKey stays nil for a REAL project's
 				// ownership row. team.Key here is the OWNING TEAM's key,
 				// never a per-project key -- Linear has no such concept the
@@ -503,7 +507,12 @@ func (handler LinearReferenceCatalogRouteHandler) CollectReferenceCatalog(
 	// for it any more), it is a team-ownership signal keyed by the
 	// reconstructed identity its one reader (linearTeamKeyProjectID) expects.
 	for _, team := range rows.Teams {
-		projectKey := team.ID
+		// project_key and project_id keep the NATIVE team key; only TeamID
+		// is the provider-prefixed team id.
+		projectKey := ""
+		if team.NativeTeamKey != nil {
+			projectKey = *team.NativeTeamKey
+		}
 		projectID := claim.OrgID + ":linear:" + projectKey
 		projectKeyPtr := optionalLinearString(projectKey)
 		teamID := team.ID
@@ -533,7 +542,7 @@ func (handler LinearReferenceCatalogRouteHandler) CollectReferenceCatalog(
 	result := LinearReferenceCatalogResult{
 		Teams: len(rows.Teams), Members: len(rows.Members), Memberships: len(rows.Memberships),
 		Projects: len(rows.Projects), Ownership: len(rows.Ownership), Sprints: len(rows.Sprints), Complete: true,
-		ProjectsWithoutKey: projectsWithoutKey,
+		ProjectsWithoutKey: projectsWithoutKey, OwnershipTeamsWithoutKey: ownershipTeamsWithoutKey,
 	}
 	evidence.Records = result.Teams + result.Members + result.Memberships + result.Projects + result.Ownership + result.Sprints
 	// No claim, no lease window: this walk has no watermark concept (it was

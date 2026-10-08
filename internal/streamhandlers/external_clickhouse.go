@@ -20,6 +20,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 	"github.com/full-chaos/dev-health-ops/internal/storedversion"
 	"github.com/full-chaos/dev-health-ops/internal/streamrunner"
+	"github.com/full-chaos/dev-health-ops/internal/teamid"
 	"github.com/google/uuid"
 )
 
@@ -87,7 +88,7 @@ func (s *ClickHouseExternalBatchSink) Write(ctx context.Context, source external
 		if kind == "team.v1" {
 			teamIDs := make([]string, 0, len(grouped[kind]))
 			for _, record := range grouped[kind] {
-				teamIDs = append(teamIDs, stringField(record.Payload, "id"))
+				teamIDs = append(teamIDs, externalTeamID(source.Pointer.SourceSystem, record.Payload, "id"))
 			}
 			existingManualMembers, err = s.preserveExistingManualMembers(ctx, source.Pointer.OrgID, teamIDs)
 			if err != nil {
@@ -331,7 +332,22 @@ func externalRecordValues(
 			submittedAt, now, source.SourceID, orgID,
 		}, nil
 	case "team.v1":
-		teamID := stringField(payload, "id")
+		teamID := externalTeamID(system, payload, "id")
+		if err := teamid.Check(system, teamID); err != nil {
+			return nil, err
+		}
+		// A team id carries the system's prefix, so the system's own key of
+		// the team is kept in native_team_key: the pushed nativeTeamKey, else
+		// the pushed id. The attribution cascade matches a work item's
+		// native team key against it.
+		nativeTeamKey := externalNullableString(payload, "nativeTeamKey")
+		if nativeTeamKey == nil {
+			nativeTeamKey = strings.TrimSpace(stringField(payload, "id"))
+		}
+		var parentTeamID any
+		if parent := strings.TrimSpace(stringField(payload, "parentTeamId")); parent != "" {
+			parentTeamID = teamid.Of(system, parent)
+		}
 		updatedAt, err := externalTime(payload, "updatedAt")
 		if err != nil {
 			return nil, err
@@ -355,7 +371,7 @@ func externalRecordValues(
 			manualMembers,
 			stringArrayField(payload, "projectKeys"), stringArrayField(payload, "repoPatterns"),
 			externalBoolUint(payload, "isActive", true), updatedAt, now, orgID, system,
-			externalNullableString(payload, "nativeTeamKey"), externalNullableString(payload, "parentTeamId"), source.SourceID,
+			nativeTeamKey, parentTeamID, source.SourceID,
 		}, nil
 	case "identity.v1":
 		canonicalID := stringField(payload, "canonicalId")
@@ -371,7 +387,7 @@ func externalRecordValues(
 		return []any{
 			orgID, canonicalID, uuid.NewSHA1(uuid.NameSpaceURL, []byte("identity:"+orgID+":"+canonicalID)),
 			externalNullableString(payload, "displayName"), externalNullableString(payload, "email"),
-			providerIdentities, stringArrayField(payload, "teamIds"),
+			providerIdentities, externalTeamIDs(system, stringArrayField(payload, "teamIds")),
 			externalBoolUint(payload, "isActive", true), updatedAt, source.SourceID,
 		}, nil
 	case "work_item.v1":
@@ -1280,4 +1296,25 @@ func trackExternalTime(scope *ExternalRecomputeScope, value time.Time) {
 func sortedExternalStrings(values []string) []string {
 	slices.Sort(values)
 	return slices.Compact(values)
+}
+
+// externalTeamID is the team id of a pushed team id: the source system's
+// prefix and the pushed id (teamid.Of), the same rule as every native team
+// catalog. An id that already carries the prefix keeps it once.
+func externalTeamID(system string, payload map[string]any, key string) string {
+	return teamid.Of(system, stringField(payload, key))
+}
+
+// externalTeamIDs maps the team ids an identity.v1 record names to the ids
+// the system's team.v1 records write.
+func externalTeamIDs(system string, ids []string) []string {
+	out := make([]string, 0, len(ids))
+	for _, id := range ids {
+		if strings.TrimSpace(id) == "" {
+			out = append(out, id)
+			continue
+		}
+		out = append(out, teamid.Of(system, id))
+	}
+	return out
 }

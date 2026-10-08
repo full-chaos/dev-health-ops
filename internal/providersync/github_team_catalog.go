@@ -7,6 +7,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/identityalias"
+	"github.com/full-chaos/dev-health-ops/internal/teamid"
 )
 
 // github_team_catalog.go ports src/dev_health_ops/workers/team_autoimport_github.py
@@ -184,10 +185,10 @@ type githubTeamCatalogRows struct {
 	ObservedMembershipTeamIDs []string
 }
 
-// githubTeamID mirrors team_autoimport_github.py's _team_id: "gh:" + the
-// GitHub team slug, idempotent against an already-prefixed input.
+// githubTeamID is the team id of a GitHub team slug ("gh:<slug>", see
+// teamid.Of).
 func githubTeamID(slug string) string {
-	return "gh:" + strings.TrimPrefix(strings.TrimSpace(slug), "gh:")
+	return teamid.Of(githubTeamCatalogProvider, slug)
 }
 
 // githubTeamUUID mirrors ClickHouseStore.insert_teams's deterministic

@@ -846,32 +846,21 @@ func TestLinearTeamKeyResolvesViaPRInheritanceIssueLink(t *testing.T) {
 	}
 }
 
-// TestLinearReferenceCatalogTeamRowIDMatchesNativeTeamKey is the red-first
-// proof for TeamRepoOwnershipKnownTeam's doc comment (codex review, round 3,
-// P2 raised, verified NOT applicable to this codebase as things stand
-// today): resolveWorkItemTeamID validates a Linear work item's
-// native_team_key by checking `teams.id` (TeamRepoOwnershipKnownTeam.ID),
-// then returns NativeTeamKey itself as the resolved team_id -- never a
-// separately-looked-up `teams.id`. This is only safe because the live Go
-// writer stamps both columns from the exact same value, always. If a future
-// change to `normalizeLinearReferenceTeam` (linear_reference_catalog.go)
-// ever let `id` and `native_team_key` diverge for a Linear team, this
-// validation would silently start rejecting (or, worse, misattributing)
-// real teams -- this test exists so that divergence fails HERE, loudly, not
-// silently in production. Uses the existing chaos4530CollectReferenceCatalog
-// test harness (linear_reference_catalog_test.go) rather than duplicating
-// its mock GraphQL setup.
-func TestLinearReferenceCatalogTeamRowIDMatchesNativeTeamKey(t *testing.T) {
+// TestLinearReferenceCatalogTeamRowIDIsThePrefixedNativeTeamKey pins the
+// link the linear_team_key arm depends on: a Linear team row's id is
+// "linear:" + its native_team_key (CHAOS-8939), so the arm maps a work
+// item's native key to that id through the known team's native_team_key.
+func TestLinearReferenceCatalogTeamRowIDIsThePrefixedNativeTeamKey(t *testing.T) {
 	batch := chaos4530CollectReferenceCatalog(t, true)
 	if len(batch.Rows.Teams) == 0 {
 		t.Fatal("expected at least one team row from the test harness")
 	}
 	for _, team := range batch.Rows.Teams {
 		if team.NativeTeamKey == nil {
-			t.Fatalf("team %q: NativeTeamKey is nil, expected it set to the team's own id", team.ID)
+			t.Fatalf("team %q: NativeTeamKey is nil, expected the team's key", team.ID)
 		}
-		if team.ID != *team.NativeTeamKey {
-			t.Fatalf("team %q: id and native_team_key diverged (native_team_key=%q) -- TeamRepoOwnershipKnownTeam's validation-by-id is no longer equivalent to validating by native_team_key; see its doc comment", team.ID, *team.NativeTeamKey)
+		if team.ID != "linear:"+*team.NativeTeamKey {
+			t.Fatalf("team %q: id is not linear:<native_team_key> (native_team_key=%q)", team.ID, *team.NativeTeamKey)
 		}
 	}
 }

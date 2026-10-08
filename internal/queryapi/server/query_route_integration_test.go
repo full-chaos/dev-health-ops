@@ -210,9 +210,10 @@ func (c *fakeComplexityTimeseriesCHClient) Query(_ context.Context, _ string, _ 
 }
 
 // fakeHotspotsCHClient is a minimal hotspots.QueryClient double for the
-// CHAOS-4369 Wave 3 reachability test below. Resolve issues two queries
-// in order (the hotspot fetch, then a repo-label lookup for the repo IDs
-// it saw) -- this fake scripts one row for each call in that order,
+// CHAOS-4369 Wave 3 reachability test below. Resolve issues three queries
+// in order (the hotspot fetch, a repo-label lookup for the repo IDs it saw,
+// then the per-repository top-file read, CHAOS-8488, which has the hotspot
+// row shape) -- this fake scripts one row for each call in that order,
 // enough to prove the HTTP-level reachability contract this test exists
 // for. It is NOT a substitute for the real-ClickHouse dual-run proof
 // (Python-side stage-2 test,
@@ -221,13 +222,13 @@ type fakeHotspotsCHClient struct{ calls int }
 
 func (c *fakeHotspotsCHClient) Query(_ context.Context, _ string, _ []clickhouse.Binding) (clickhouse.RowScanner, error) {
 	c.calls++
-	if c.calls%2 == 1 {
+	if c.calls%3 == 2 {
 		return &fakeRows{rows: [][]any{
-			{"repo-a", "src/main.go", uint64(500), uint32(20), uint32(30), 4.5, 0.75, 92.3},
+			{"repo-a", "org/repo-a"},
 		}}, nil
 	}
 	return &fakeRows{rows: [][]any{
-		{"repo-a", "org/repo-a"},
+		{"repo-a", "src/main.go", uint64(500), uint32(20), uint32(30), 4.5, 0.75, 92.3},
 	}}, nil
 }
 
@@ -695,6 +696,9 @@ func TestHotspotsRoute_IsServedByTheCatalog(t *testing.T) {
 		}
 		if strings.Contains(rec.Body.String(), `"errors"`) || !strings.Contains(rec.Body.String(), "org/repo-a") {
 			t.Fatalf("expected response to contain the fake row's repo label with no errors, got %s", rec.Body.String())
+		}
+		if !strings.Contains(rec.Body.String(), `"topFilePath":"src/main.go"`) || !strings.Contains(rec.Body.String(), `"topRiskScore":92.3`) {
+			t.Fatalf("expected the repos selection to carry the top file and its score, got %s", rec.Body.String())
 		}
 	})
 

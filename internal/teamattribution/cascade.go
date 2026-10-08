@@ -1556,22 +1556,50 @@ func (derived GithubWorkItemDerivationContext) dropInactiveTeamCandidates(
 	for source, candidates := range bySource {
 		kept := candidates[:0:0]
 		for _, candidate := range candidates {
-			if candidate.TeamID != nil {
-				if !candidate.TeamResolved {
-					continue
-				}
-				if candidate.TeamNeutral {
-					if _, inactive := derived.inactiveTeamIDs[strings.TrimSpace(*candidate.TeamID)]; inactive {
-						continue
-					}
-				} else if _, inactive := derived.inactiveTeams[AttributionMapKey(candidate.TeamProvider, *candidate.TeamID)]; inactive {
-					continue
-				}
+			if derived.candidateNamesInactiveTeam(candidate) {
+				continue
 			}
 			kept = append(kept, candidate)
 		}
 		bySource[source] = kept
 	}
+}
+
+// candidateNamesInactiveTeam is the single test of "this candidate's team is
+// inactive": dropInactiveTeamCandidates and the ResolveMembership gate both
+// use it, so a team that takes no work item is never counted as a member team
+// either.
+func (derived GithubWorkItemDerivationContext) candidateNamesInactiveTeam(
+	candidate GithubWorkItemDerivationCandidate,
+) bool {
+	if candidate.TeamID == nil {
+		return false
+	}
+	if !candidate.TeamResolved {
+		return true
+	}
+	if candidate.TeamNeutral {
+		_, inactive := derived.inactiveTeamIDs[strings.TrimSpace(*candidate.TeamID)]
+		return inactive
+	}
+	_, inactive := derived.inactiveTeams[AttributionMapKey(candidate.TeamProvider, *candidate.TeamID)]
+	return inactive
+}
+
+// activeMembershipCandidates binds the candidates to their team for an item of
+// the given provider (the untyped rosters are bound only later, per item) and
+// keeps those of active teams.
+func (derived GithubWorkItemDerivationContext) activeMembershipCandidates(
+	provider string, candidates []GithubWorkItemDerivationCandidate,
+) []GithubWorkItemDerivationCandidate {
+	var kept []GithubWorkItemDerivationCandidate
+	for _, candidate := range candidates {
+		candidate = derived.bindCandidateTeam(candidate, provider, bindProviderFact)
+		if !derived.candidateNamesInactiveTeam(candidate) {
+			kept = append(kept, candidate)
+		}
+	}
+	return kept
 }
 
 // LoadTeams reads the teams of one organization, the inactive ones flagged
@@ -2259,6 +2287,12 @@ func GithubWorkItemDerivationStringValue(value *string) string {
 // respectively) is consulted ONLY when layer 1 has ZERO candidates for this
 // identity. Both layers apply the SAME exactly-one-team gate.
 //
+// Candidates of inactive teams are dropped from both layers BEFORE the gate
+// counts teams (an inactive team takes no work item): a person in inactive T1
+// and active T2 resolves to T2, and an admin layer with only inactive teams
+// falls through to the provider layer. Python had no inactive teams, so only
+// the reasons for inactive teams differ.
+//
 // Returns `(candidates, reason)`: `candidates` is the resolved list to use
 // for the caller's source when exactly one team resolved (`reason` is
 // `""`); otherwise `candidates` is nil and `reason` is one of
@@ -2278,6 +2312,7 @@ func (derived GithubWorkItemDerivationContext) ResolveMembership(
 		derived.memberByID[AttributionMapKey(provider, key)]...,
 	)
 	adminCandidates = append(adminCandidates, derived.memberByUntypedFacet[key]...)
+	adminCandidates = derived.activeMembershipCandidates(provider, adminCandidates)
 	adminTeams := map[string]struct{}{}
 	for _, candidate := range adminCandidates {
 		adminTeams[GithubWorkItemDerivationStringValue(candidate.TeamID)] = struct{}{}
@@ -2294,6 +2329,7 @@ func (derived GithubWorkItemDerivationContext) ResolveMembership(
 		derived.providerMemberByID[AttributionMapKey(provider, key)]...,
 	)
 	providerCandidates = append(providerCandidates, derived.providerMemberByUntypedFacet[key]...)
+	providerCandidates = derived.activeMembershipCandidates(provider, providerCandidates)
 	providerTeams := map[string]struct{}{}
 	for _, candidate := range providerCandidates {
 		providerTeams[GithubWorkItemDerivationStringValue(candidate.TeamID)] = struct{}{}

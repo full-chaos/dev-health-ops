@@ -152,6 +152,24 @@ func sourceHealthFixture() []sourceHealthConfig {
 		{id: id(16), org: "org-1", name: "nc-flag-only", provider: "bitbucket", active: true, integration: integ(1), createdAt: "2026-01-05T00:00:00Z", lastSyncSuccess: "true", runStatus: -1},
 		{id: id(17), org: "org-1", name: "nc-error-only", provider: "bitbucket", active: true, integration: integ(1), createdAt: "2026-01-06T00:00:00Z", lastSyncError: sourceHealthSecret, runStatus: -1},
 		{id: id(18), org: "org-1", name: "nc-run-only", provider: "bitbucket", active: true, integration: integ(1), createdAt: "2026-01-07T00:00:00Z", runStatus: 2, runResult: `{"rows":1}`},
+		// an integration with an active config is never absent. B: the canonical
+		// config is inactive and healthy, the others are active and silent: the
+		// oldest active one is listed (scope "git"), not the newer one.
+		{id: id(30), org: "org-1", name: "b-canonical-inactive", provider: "gitlab", active: false, integration: integ(2), createdAt: "2026-01-01T00:00:00Z", lastSyncAt: "2026-02-01T00:00:00Z", lastSyncSuccess: "true", runStatus: -1},
+		{id: id(31), org: "org-1", name: "b-silent-oldest", provider: "gitlab", active: true, integration: integ(2), createdAt: "2026-01-02T00:00:00Z", targets: `["git"]`, runStatus: -1},
+		{id: id(32), org: "org-1", name: "b-silent-newer", provider: "gitlab", active: true, integration: integ(2), createdAt: "2026-01-03T00:00:00Z", targets: `["prs"]`, runStatus: -1},
+		// C: an inactive parent and an active child only: the child is listed.
+		{id: id(33), org: "org-1", name: "c-parent-inactive", provider: "github", active: false, integration: integ(3), createdAt: "2026-01-01T00:00:00Z", lastSyncAt: "2026-02-01T00:00:00Z", lastSyncSuccess: "true", runStatus: -1},
+		{id: id(34), org: "org-1", name: "c-child-active", provider: "github", active: true, integration: integ(3), createdAt: "2026-01-02T00:00:00Z", parentID: id(33), targets: `["git"]`, runStatus: -1},
+		// D: an active top-level config is listed before an older active child.
+		{id: id(35), org: "org-1", name: "d-canonical-inactive", provider: "gitlab", active: false, integration: integ(4), createdAt: "2026-01-01T00:00:00Z", lastSyncAt: "2026-02-01T00:00:00Z", lastSyncSuccess: "true", runStatus: -1},
+		{id: id(36), org: "org-1", name: "d-child-active", provider: "gitlab", active: true, integration: integ(4), createdAt: "2026-01-10T00:00:00Z", parentID: id(35), targets: `["git"]`, runStatus: -1},
+		{id: id(37), org: "org-1", name: "d-top-active", provider: "gitlab", active: true, integration: integ(4), createdAt: "2026-01-20T00:00:00Z", targets: `["prs"]`, runStatus: -1},
+		// E: the integration has a listed config (stamped, non-canonical), so an
+		// older silent active config of it is not added by the fallback.
+		{id: id(38), org: "org-1", name: "e-canonical-inactive", provider: "gitlab", active: false, integration: integ(5), createdAt: "2026-01-01T00:00:00Z", lastSyncAt: "2026-02-01T00:00:00Z", lastSyncSuccess: "true", runStatus: -1},
+		{id: id(39), org: "org-1", name: "e-silent-older", provider: "gitlab", active: true, integration: integ(5), createdAt: "2026-01-02T00:00:00Z", runStatus: -1},
+		{id: id(40), org: "org-1", name: "e-stamped", provider: "gitlab", active: true, integration: integ(5), createdAt: "2026-01-03T00:00:00Z", lastSyncAt: "2026-02-05T00:00:00Z", lastSyncSuccess: "true", runStatus: -1},
 		// not served: inactive with no failure, and another org's.
 		{id: id(20), org: "org-1", name: "inactive", provider: "github", active: false, runStatus: -1},
 		{id: id(21), org: "org-other", name: "foreign", provider: "opsgenie", active: true, lastSyncError: sourceHealthSecret, runStatus: -1},
@@ -188,12 +206,17 @@ func assertSourceHealthServed(t *testing.T, body string) {
 	// The rows of org-1 that are listed, in the order the field answers: provider, then id.
 	listed := []string{"never", "canonical", "non-canonical-stamped", "nc-time-only", "nc-flag-only", "nc-error-only", "nc-run-only", "stale", "failed",
 		"clause-sync-error", "clause-flag", "clause-run-failed", "clause-run-cancelled", "clause-run-error", "deactivated-by-failure",
-		"inactive-flag-only", "inactive-error-only"}
-	providerOf := map[string]string{}
+		"inactive-flag-only", "inactive-error-only", "d-top-active", "b-silent-oldest", "c-child-active", "e-stamped"}
+	providerOf, idOf := map[string]string{}, map[string]string{}
 	for _, c := range sourceHealthFixture() {
-		providerOf[c.name] = c.provider
+		providerOf[c.name], idOf[c.name] = c.provider, c.id
 	}
-	sort.SliceStable(listed, func(i, j int) bool { return providerOf[listed[i]] < providerOf[listed[j]] })
+	sort.SliceStable(listed, func(i, j int) bool {
+		if providerOf[listed[i]] != providerOf[listed[j]] {
+			return providerOf[listed[i]] < providerOf[listed[j]]
+		}
+		return idOf[listed[i]] < idOf[listed[j]]
+	})
 	if len(rows) != len(listed) {
 		t.Fatalf("rows = %d, want the %d listed configs of org-1 only: %s", len(rows), len(listed), body)
 	}
@@ -215,10 +238,18 @@ func assertSourceHealthServed(t *testing.T, body string) {
 	for _, r := range rows {
 		counts[r.Provider]++
 	}
-	if counts["github"] != 1 || counts["bitbucket"] != 6 {
-		t.Fatalf("github=%d bitbucket=%d, want 1 and 6 (an inactive config without failure, a silent non-canonical config and an older child are not listed): %s", counts["github"], counts["bitbucket"], body)
+	if counts["github"] != 2 || counts["bitbucket"] != 6 {
+		t.Fatalf("github=%d bitbucket=%d, want 2 and 6 (an inactive config without failure, a silent non-canonical config and an older child are not listed): %s", counts["github"], counts["bitbucket"], body)
 	}
 
+	for name, scope := range map[string]string{"b-silent-oldest": "git", "c-child-active": "git", "d-top-active": "prs"} {
+		if got := byName[name].Scope; got != scope || byName[name].LastFailure != nil || byName[name].LastSyncAt != nil {
+			t.Fatalf("%s: row %+v, want the one listed config of its integration (scope %q, never synced)", name, byName[name], scope)
+		}
+	}
+	if e := byName["e-stamped"]; e.LastSyncAt == nil || !strings.HasPrefix(*e.LastSyncAt, "2026-02-05T00:00:00") {
+		t.Fatalf("e-stamped: %+v", e)
+	}
 	never := byName["never"]
 	if never.LastSyncAt != nil || never.LastFailure != nil || never.Scope != "git" {
 		t.Fatalf("never synced must have no time and no failure: %+v", never)

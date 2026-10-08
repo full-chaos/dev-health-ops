@@ -174,7 +174,10 @@ func TestSourceHealthScopeIsClosed(t *testing.T) {
 		{"free text is dropped", "github", `["prs","acme/secret-repo"]`, "prs"},
 		{"free text only", "github", `["acme/secret-repo"]`, SourceHealthScopeOther},
 		{"non-string entries", "github", `[1,{"a":"b"}]`, SourceHealthScopeOther},
-		{"not an array", "github", `{"git":true}`, SourceHealthScopeAll},
+		{"object", "github", `{"git":true}`, SourceHealthScopeOther},
+		{"string", "github", `"git"`, SourceHealthScopeOther},
+		{"number", "github", `5`, SourceHealthScopeOther},
+		{"malformed", "github", `[`, SourceHealthScopeOther},
 		{"provider case", "GitHub", `["git"]`, "git"},
 		{"target the provider has no dataset for", "pagerduty", `["git"]`, SourceHealthScopeOther},
 	} {

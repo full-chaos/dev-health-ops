@@ -24,7 +24,7 @@ var ErrSourceHealthUnavailable = errors.New("source health unavailable")
 // whether an error exists is a boolean, and the stage and category are single
 // values the Go side checks against sourceHealthStages.
 //
-// Which configurations are listed:
+// Which configurations are listed (column "listed"):
 //   - an active one, or an inactive one that carries a failure (a source that a
 //     failure deactivated must not vanish from the answer);
 //   - and only one that can speak for itself: the canonical configuration of
@@ -32,37 +32,58 @@ var ErrSourceHealthUnavailable = errors.New("source health unavailable")
 //     configuration), or one that carries its own stamp or its own run. A
 //     non-canonical configuration with neither would read "never synced" when
 //     its integration synced.
+//
+// An integration with an active configuration is never absent: when none of its
+// configurations is listed, its oldest active configuration (a top-level one
+// before a child) is listed anyway.
 const sourceHealthSQL = `
-SELECT c.provider, c.sync_targets, c.last_sync_at, c.last_sync_success,
-       COALESCE(c.last_sync_error, '') <> '' AS has_sync_error, c.updated_at,
-       c.last_sync_stats->>'error_category' AS stats_category,
-       r.status, r.started_at, r.completed_at, r.stage, r.category,
-       COALESCE(r.has_error, FALSE)
-FROM sync_configurations c
-LEFT JOIN LATERAL (
-    SELECT jr.status, jr.started_at, jr.completed_at,
-           jr.result->>'stage' AS stage, jr.result->>'error_category' AS category,
-           COALESCE(jr.error, '') <> '' AS has_error
-    FROM job_runs jr
-    JOIN scheduled_jobs sj ON sj.id = jr.job_id AND sj.org_id = c.org_id
-    WHERE sj.sync_config_id = c.id
-    ORDER BY jr.created_at DESC
-    LIMIT 1
-) r ON TRUE
-WHERE c.org_id = $1
-  AND (c.is_active IS TRUE OR c.last_sync_success IS FALSE OR COALESCE(c.last_sync_error, '') <> '')
-  AND (
-        c.integration_id IS NULL
-        OR c.id = (
-            SELECT c2.id FROM sync_configurations c2
-            WHERE c2.org_id = c.org_id AND c2.integration_id = c.integration_id AND c2.parent_id IS NULL
-            ORDER BY c2.created_at ASC, c2.id ASC LIMIT 1)
-        OR c.last_sync_at IS NOT NULL
-        OR c.last_sync_success IS NOT NULL
-        OR COALESCE(c.last_sync_error, '') <> ''
-        OR r.status IS NOT NULL
-  )
-ORDER BY c.provider, c.id`
+WITH base AS (
+    SELECT c.id, c.integration_id, c.is_active, c.parent_id, c.created_at,
+           c.provider, c.sync_targets, c.last_sync_at, c.last_sync_success,
+           COALESCE(c.last_sync_error, '') <> '' AS has_sync_error, c.updated_at,
+           c.last_sync_stats->>'error_category' AS stats_category,
+           r.status, r.started_at, r.completed_at, r.stage, r.category,
+           COALESCE(r.has_error, FALSE) AS has_run_error,
+           (
+             (c.is_active IS TRUE OR c.last_sync_success IS FALSE OR COALESCE(c.last_sync_error, '') <> '')
+             AND (
+                   c.integration_id IS NULL
+                   OR c.id = (
+                       SELECT c2.id FROM sync_configurations c2
+                       WHERE c2.org_id = c.org_id AND c2.integration_id = c.integration_id AND c2.parent_id IS NULL
+                       ORDER BY c2.created_at ASC, c2.id ASC LIMIT 1)
+                   OR c.last_sync_at IS NOT NULL
+                   OR c.last_sync_success IS NOT NULL
+                   OR COALESCE(c.last_sync_error, '') <> ''
+                   OR r.status IS NOT NULL
+             )
+           ) AS listed
+    FROM sync_configurations c
+    LEFT JOIN LATERAL (
+        SELECT jr.status, jr.started_at, jr.completed_at,
+               jr.result->>'stage' AS stage, jr.result->>'error_category' AS category,
+               COALESCE(jr.error, '') <> '' AS has_error
+        FROM job_runs jr
+        JOIN scheduled_jobs sj ON sj.id = jr.job_id AND sj.org_id = c.org_id
+        WHERE sj.sync_config_id = c.id
+        ORDER BY jr.created_at DESC
+        LIMIT 1
+    ) r ON TRUE
+    WHERE c.org_id = $1
+)
+SELECT b.provider, b.sync_targets, b.last_sync_at, b.last_sync_success, b.has_sync_error, b.updated_at,
+       b.stats_category, b.status, b.started_at, b.completed_at, b.stage, b.category, b.has_run_error
+FROM base b
+WHERE b.listed
+   OR (
+        b.is_active IS TRUE
+        AND NOT EXISTS (SELECT 1 FROM base b2 WHERE b2.integration_id = b.integration_id AND b2.listed)
+        AND b.id = (
+            SELECT b3.id FROM base b3
+            WHERE b3.integration_id = b.integration_id AND b3.is_active IS TRUE
+            ORDER BY (b3.parent_id IS NOT NULL), b3.created_at ASC, b3.id ASC LIMIT 1)
+   )
+ORDER BY b.provider, b.id`
 
 // SourceHealth serves the member-level source health of one authorized org: one
 // row per active sync configuration. lastSyncAt is the last SUCCESSFUL sync
@@ -163,9 +184,17 @@ const (
 // prs, work-items, ...) the configuration selects, in the platform's fixed
 // order, never the configuration's name nor any stored target text.
 func sourceHealthScope(provider string, syncTargets []byte) string {
-	var stored []any
+	// No value, or a JSON null, names no target. Anything that is not a list
+	// is unknown, never "every dataset".
+	var decoded any
 	if len(syncTargets) > 0 {
-		_ = json.Unmarshal(syncTargets, &stored)
+		if err := json.Unmarshal(syncTargets, &decoded); err != nil {
+			return SourceHealthScopeOther
+		}
+	}
+	stored, isList := decoded.([]any)
+	if decoded != nil && !isList {
+		return SourceHealthScopeOther
 	}
 	if len(stored) == 0 {
 		return SourceHealthScopeAll

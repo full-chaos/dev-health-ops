@@ -544,6 +544,13 @@ type Options struct {
 	// applied to a nested field of the same name.
 	EnvelopeKeys map[string]bool
 
+	// GoOnlyKeys declares keys the Go answer carries and the recorded Python answer never had,
+	// by dotted, index-free path (the form FloatTierB uses). Only a key present on the candidate
+	// and ABSENT from the baseline is excused, at exactly the declared path: no wildcard, no
+	// subtree, and a key the candidate lacks is still a finding. Every entry names its ticket
+	// and one line of reason (validateGoOnlyKeys). The recorded answer is never edited.
+	GoOnlyKeys map[string]GoOnlyKey
+
 	// RequireWatermark marks the operation as watermark-bearing: a
 	// MISSING watermark on either side is then `unsupported`, not a
 	// silent comparison without one -- parity rule 4.
@@ -945,6 +952,29 @@ type BaselineDefect struct {
 	// behaviour every other declared defect still uses. A defect never
 	// sets more than one shape field.
 	BaselineCopySumShape *BaselineCopySumShape
+}
+
+// GoOnlyKey is the written reason a Go answer carries a key the recorded answer never had.
+type GoOnlyKey struct {
+	Ticket string
+	Reason string
+}
+
+// validateGoOnlyKeys refuses a declaration without a ticket or a reason, a wildcard path, or a
+// ticket that claims the go-only receipt citation.
+func validateGoOnlyKeys(keys map[string]GoOnlyKey) error {
+	for path, key := range keys {
+		if strings.TrimSpace(path) == "" || strings.Contains(path, "*") {
+			return fmt.Errorf("goapiproof: go-only key %q must name one dotted path, no wildcard", path)
+		}
+		if strings.TrimSpace(key.Ticket) == "" || strings.TrimSpace(key.Reason) == "" {
+			return fmt.Errorf("goapiproof: go-only key %q needs a ticket and a reason", path)
+		}
+		if HasGoOnlyPrefix(key.Ticket) {
+			return fmt.Errorf("goapiproof: go-only key %q: ticket %q carries the go-only receipt prefix", path, key.Ticket)
+		}
+	}
+	return nil
 }
 
 // validateBaselineDefects refuses a declaration that claims the
@@ -2365,6 +2395,11 @@ func compareDict(baseline, candidate map[string]any, path string, opts Options, 
 		if inBaseline != inCandidate {
 			if envelopeKeys[key] {
 				continue
+			}
+			if !inBaseline {
+				if _, declared := opts.GoOnlyKeys[tieredPath(childPath)]; declared {
+					continue
+				}
 			}
 			detail := "present in baseline, absent in candidate"
 			if !inBaseline {

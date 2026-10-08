@@ -1004,6 +1004,9 @@ func (r *Runner) proveRequest(ctx context.Context, operation string, variantName
 	if err := validateBaselineDefects(parity.BaselineDefects); err != nil {
 		return refuse(RefusalInvalidBaselineDefect, err.Error())
 	}
+	if err := validateGoOnlyKeys(parity.GoOnlyKeys); err != nil {
+		return refuse(RefusalInvalidBaselineDefect, err.Error())
+	}
 
 	document, ok := r.Documents[operation]
 	if !ok {

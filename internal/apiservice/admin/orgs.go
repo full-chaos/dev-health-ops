@@ -446,6 +446,9 @@ func (h *handlers) addMember(w http.ResponseWriter, r *http.Request) {
 		}
 		invitedByID = &id
 	}
+	if h.refuseSuperuserWrite(ctx, w, user, nil, h.storedSuperuser(ctx, targetUserID), "add_member") {
+		return
+	}
 	created, err := h.store.insertMembership(ctx, orgID, targetUserID, role, invitedByID)
 	if err == errMembershipExists {
 		policy.WriteDetail(w, http.StatusBadRequest, "User is already a member of this organization", nil)
@@ -487,6 +490,9 @@ func (h *handlers) updateMemberRole(w http.ResponseWriter, r *http.Request) {
 		policy.WriteJSON(w, http.StatusUnprocessableEntity, pybody.Detail(errs), nil)
 		return
 	}
+	if h.refuseSuperuserWrite(ctx, w, user, nil, h.storedSuperuser(ctx, targetUserID), "update_member_role") {
+		return
+	}
 	updated, err := h.store.updateMembershipRole(ctx, orgID, targetUserID, role)
 	if err == errInvalidRole {
 		policy.WriteDetail(w, http.StatusBadRequest, "Invalid role: "+role, nil)
@@ -519,6 +525,9 @@ func (h *handlers) removeMember(w http.ResponseWriter, r *http.Request) {
 	targetUserID, parseErr := uuid.Parse(r.PathValue("user_id"))
 	if parseErr != nil {
 		policy.WriteInternal(w)
+		return
+	}
+	if h.refuseSuperuserWrite(ctx, w, user, nil, h.storedSuperuser(ctx, targetUserID), "remove_member") {
 		return
 	}
 	deleted, err := h.store.removeMembership(ctx, orgID, targetUserID)
@@ -577,6 +586,9 @@ func (h *handlers) transferOwnership(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if h.refuseSuperuserWrite(ctx, w, user, nil, h.storedSuperuser(ctx, toUserID), "transfer_ownership") {
+		return
+	}
 	tx, txErr := h.store.Pool.Begin(ctx)
 	if txErr != nil {
 		h.logger.ErrorContext(ctx, "admin: transfer ownership begin tx failed", "error", txErr)
@@ -593,6 +605,9 @@ func (h *handlers) transferOwnership(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		h.logger.ErrorContext(ctx, "admin: resolve current owner failed", "error", err)
 		policy.WriteInternal(w)
+		return
+	}
+	if h.refuseSuperuserWrite(ctx, w, user, nil, h.storedSuperuser(ctx, fromUserID), "transfer_ownership") {
 		return
 	}
 	if err := h.store.transferOwnership(ctx, tx, orgID, fromUserID, toUserID); err != nil {

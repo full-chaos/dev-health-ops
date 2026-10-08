@@ -233,6 +233,9 @@ func (h *handlers) createUser(w http.ResponseWriter, r *http.Request) {
 		policy.WriteJSON(w, http.StatusUnprocessableEntity, pybody.Detail(errs), nil)
 		return
 	}
+	if h.refuseSuperuserWrite(ctx, w, policy.UserFrom(ctx), &isSuperuser, nil, "create_user") {
+		return
+	}
 
 	in := userCreateInput{Email: &email, IsVerified: isVerified, IsSuperuser: isSuperuser}
 	if username != "" {
@@ -344,6 +347,9 @@ func (h *handlers) updateUser(w http.ResponseWriter, r *http.Request) {
 		policy.WriteJSON(w, http.StatusUnprocessableEntity, pybody.Detail(errs), nil)
 		return
 	}
+	if h.refuseSuperuserWrite(ctx, w, user, patch.IsSuperuser, knownSuperuser(existing.IsSuperuser), "update_user") {
+		return
+	}
 
 	updated, err := h.store.updateUser(ctx, targetID, patch)
 	switch {
@@ -415,6 +421,9 @@ func (h *handlers) setUserPassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !h.ensureUserInScope(ctx, w, user, orgID, targetID) {
+		return
+	}
+	if h.refuseSuperuserWrite(ctx, w, user, nil, knownSuperuser(target.IsSuperuser), "set_user_password") {
 		return
 	}
 
@@ -545,6 +554,9 @@ func (h *handlers) deleteUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !h.ensureUserInScope(ctx, w, user, orgID, targetID) {
+		return
+	}
+	if h.refuseSuperuserWrite(ctx, w, user, nil, knownSuperuser(existing.IsSuperuser), "delete_user") {
 		return
 	}
 	deleted, err := h.store.deleteUser(ctx, targetID)

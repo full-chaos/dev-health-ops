@@ -59,6 +59,7 @@ These errors are temporary and may resolve on retry. The system logs a warning a
 - `server_error` (HTTP 5xx)
 - `output_error` (empty or invalid JSON)
 - `context_length` (specific to a single large prompt)
+- `batch_timeout` (a provider batch of investment materialization did not finish within `INVESTMENT_LLM_BATCH_TIMEOUT_SECONDS`)
 
 ## Retry-After Clamping
 

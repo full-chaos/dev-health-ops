@@ -9,9 +9,9 @@ package investment
 // packages with no caller between them; this file is that caller.
 //
 // WHAT IS DELIBERATELY NOT PORTED HERE (each tracked, none silently dropped):
-//   - Provider BATCH mode (_categorize_with_provider_batch, materialize.py:1553-1559).
-//     The sync path is what production runs; batch is an opt-in that no scope
-//     this executor receives sets. Porting it needs batch_store.py too.
+//   - batch_store.py's audit rows (Postgres investment_batch_jobs/items) of
+//     provider batch mode (batchmode.go): nothing read them, and no batch is
+//     resumed from them; the batch log line carries the provider job id.
 //   - llm_telemetry*.py metric emission. units/telemetrylabels.go has the label
 //     helpers; the emit sites are not ported. Counters, not correctness.
 //   - Org-scoped BYO provider/credential resolution (CHAOS-5006). The caller
@@ -95,6 +95,13 @@ type Config struct {
 	PersistEvidenceSnippets bool
 	// MaxComponentNodes nil resolves through units.ResolveMaxComponentNodes.
 	MaxComponentNodes *int
+	// LLMBatchMode is sync (the default when empty), auto or provider_batch
+	// (batchmode.go). LLMBatchMinItems, LLMBatchPollInterval and
+	// LLMBatchTimeout zero mean Python's defaults: 25, 30 s, 3000 s.
+	LLMBatchMode         string
+	LLMBatchMinItems     int
+	LLMBatchPollInterval time.Duration
+	LLMBatchTimeout      time.Duration
 	// RunID and ComputedAt are the run-level stamps every written row carries.
 	// Both are supplied rather than generated here so the executor can put the
 	// request id in the evidence and so a test can pin the clock.
@@ -813,32 +820,127 @@ func (m *Materializer) categorizePending(
 	// RISK-NOTES rather than silently dropped.
 	callCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
+	account := &categorizeAccount{outcomes: outcomes, stats: stats, cancel: cancel}
 
-	var (
-		mu       sync.Mutex
-		fatalErr error
-		wg       sync.WaitGroup
-	)
+	// Provider batch mode (batchmode.go) answers the units from one provider
+	// batch; every unit result, failure or outcome, goes through the same
+	// account as a synchronous call's.
+	if m.categorizeBatch(callCtx, cfg, pending, limit, account) {
+		return account.err()
+	}
+	m.forEachPending(callCtx, limit, pending, account, func(ctx context.Context, entry preprocessed) (categorize.CategorizationOutcome, error) {
+		return m.categorizeEntry(ctx, cfg, entry)
+	})
+	return account.err()
+}
 
-	// A FIXED WORKER POOL, not a goroutine per component (codex r3 P2).
-	//
-	// The previous shape launched one goroutine per pending component and used a
-	// buffered channel as a token bucket. That bounds concurrent PROVIDER CALLS
-	// but not goroutines: with a blocked provider, 250k evidence-bearing
-	// components meant 250k goroutines, 249,999 of them parked on the channel,
-	// able to exhaust worker memory before post-processing ever ran. The comment
-	// called it "bounded" because the thing it bounded was the visible one.
-	//
-	// Here `limit` goroutines drain a channel instead, so both the call
-	// concurrency AND the goroutine count are bounded by the same number, and
-	// the memory cost is independent of corpus size.
+// categorizeAccount is where every unit's result lands, on the synchronous
+// and the batch path alike, so a failure counts and aborts the same way on
+// both.
+type categorizeAccount struct {
+	mu       sync.Mutex
+	outcomes map[int]categorize.CategorizationOutcome
+	stats    *Stats
+	fatalErr error
+	cancel   context.CancelFunc
+}
+
+// billedFailure is a failed request the provider still billed (a batch line
+// with usage and no completion): its tokens are counted like a call's.
+type billedFailure struct {
+	err          error
+	inputTokens  int
+	outputTokens int
+}
+
+func (failure *billedFailure) Error() string { return failure.err.Error() }
+func (failure *billedFailure) Unwrap() error { return failure.err }
+
+func (account *categorizeAccount) record(index int, outcome categorize.CategorizationOutcome, err error) {
+	account.mu.Lock()
+	defer account.mu.Unlock()
+	if err != nil {
+		// A cancellation caused by our OWN abort is not a new
+		// failure; counting it would report every in-flight unit as
+		// having failed independently.
+		if account.fatalErr != nil && errors.Is(err, context.Canceled) {
+			return
+		}
+		class, deterministic := llmFailureOf(err)
+		account.stats.LLMFailureCounts[class]++
+		account.stats.LLMFailures++
+		// A served decision request that failed after a response was
+		// still billed.
+		var failure *servedFailure
+		if errors.As(err, &failure) {
+			account.stats.LLMCalls += failure.calls
+			account.stats.LLMInputTokens += failure.inputTokens
+			account.stats.LLMOutputTokens += failure.outputTokens
+		}
+		var billed *billedFailure
+		if errors.As(err, &billed) {
+			account.stats.LLMCalls++
+			account.stats.LLMInputTokens += billed.inputTokens
+			account.stats.LLMOutputTokens += billed.outputTokens
+		}
+		if deterministic && account.fatalErr == nil {
+			account.fatalErr = err
+			account.cancel()
+		}
+		return
+	}
+	account.outcomes[index] = outcome
+	account.stats.LLMCalls += outcome.LLMCalls
+	account.stats.LLMInputTokens += outcome.InputTokens
+	account.stats.LLMOutputTokens += outcome.OutputTokens
+}
+
+// addBilledTokens counts tokens a provider billed outside any unit's result
+// (the completed lines of a batch that was cancelled or ended).
+func (account *categorizeAccount) addBilledTokens(calls, inputTokens, outputTokens int) {
+	account.mu.Lock()
+	defer account.mu.Unlock()
+	account.stats.LLMCalls += calls
+	account.stats.LLMInputTokens += inputTokens
+	account.stats.LLMOutputTokens += outputTokens
+}
+
+func (account *categorizeAccount) err() error {
+	account.mu.Lock()
+	defer account.mu.Unlock()
+	if account.fatalErr != nil {
+		return workgraph.Deterministic(workgraph.ClassLLMDeterministic,
+			fmt.Errorf("investment categorization stopped on deterministic LLM failure (%s): %w",
+				categorize.FormatFailureSummary(len(account.outcomes), account.stats.LLMFailureCounts), account.fatalErr))
+	}
+	return nil
+}
+
+// forEachPending runs categorizeOne for every pending unit on a FIXED WORKER
+// POOL, not a goroutine per component (codex r3 P2).
+//
+// The previous shape launched one goroutine per pending component and used a
+// buffered channel as a token bucket. That bounds concurrent PROVIDER CALLS
+// but not goroutines: with a blocked provider, 250k evidence-bearing
+// components meant 250k goroutines, 249,999 of them parked on the channel,
+// able to exhaust worker memory before post-processing ever ran. The comment
+// called it "bounded" because the thing it bounded was the visible one.
+//
+// Here `limit` goroutines drain a channel instead, so both the call
+// concurrency AND the goroutine count are bounded by the same number, and
+// the memory cost is independent of corpus size.
+func (m *Materializer) forEachPending(
+	ctx context.Context, limit int, pending []preprocessed, account *categorizeAccount,
+	categorizeOne func(context.Context, preprocessed) (categorize.CategorizationOutcome, error),
+) {
+	var wg sync.WaitGroup
 	work := make(chan preprocessed)
 	go func() {
 		defer close(work)
 		for _, entry := range pending {
 			select {
 			case work <- entry:
-			case <-callCtx.Done():
+			case <-ctx.Done():
 				return
 			}
 		}
@@ -849,51 +951,12 @@ func (m *Materializer) categorizePending(
 		go func() {
 			defer wg.Done()
 			for entry := range work {
-				outcome, err := m.categorizeEntry(callCtx, cfg, entry)
-
-				mu.Lock()
-				if err != nil {
-					// A cancellation caused by our OWN abort is not a new
-					// failure; counting it would report every in-flight unit as
-					// having failed independently.
-					if fatalErr != nil && errors.Is(err, context.Canceled) {
-						mu.Unlock()
-						continue
-					}
-					class, deterministic := llmFailureOf(err)
-					stats.LLMFailureCounts[class]++
-					stats.LLMFailures++
-					// A served decision request that failed after a response was
-					// still billed.
-					var failure *servedFailure
-					if errors.As(err, &failure) {
-						stats.LLMCalls += failure.calls
-						stats.LLMInputTokens += failure.inputTokens
-						stats.LLMOutputTokens += failure.outputTokens
-					}
-					if deterministic && fatalErr == nil {
-						fatalErr = err
-						cancel()
-					}
-					mu.Unlock()
-					continue
-				}
-				outcomes[entry.index] = outcome
-				stats.LLMCalls += outcome.LLMCalls
-				stats.LLMInputTokens += outcome.InputTokens
-				stats.LLMOutputTokens += outcome.OutputTokens
-				mu.Unlock()
+				outcome, err := categorizeOne(ctx, entry)
+				account.record(entry.index, outcome, err)
 			}
 		}()
 	}
 	wg.Wait()
-
-	if fatalErr != nil {
-		return workgraph.Deterministic(workgraph.ClassLLMDeterministic,
-			fmt.Errorf("investment categorization stopped on deterministic LLM failure (%s): %w",
-				categorize.FormatFailureSummary(len(outcomes), stats.LLMFailureCounts), fatalErr))
-	}
-	return nil
 }
 
 // flushTokenUsage writes the run's llm_token_usage row.

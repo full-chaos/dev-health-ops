@@ -585,38 +585,42 @@ func (h handlers) listRefunds(w http.ResponseWriter, r *http.Request) {
 		page.offset = offset.Int64()
 	}
 	h.serve(w, r, "list refunds", func(tx pgx.Tx) (reply, error) {
-		ctx := r.Context()
-		if page.offset < 0 {
-			return reply{}, errOverflow
-		}
-		const where = `WHERE ($1::uuid IS NULL OR s.org_id = $1)`
-		rows, err := tx.Query(ctx, `SELECT `+refundColumns+` FROM refunds s `+where+` ORDER BY s.created_at DESC LIMIT $2 OFFSET $3`,
-			orgID, page.limit, page.offset)
-		if err != nil {
-			return reply{}, err
-		}
-		items := []pyjson.Value{}
-		for rows.Next() {
-			item, err := scanRefundJSON(rows)
-			if err != nil {
-				rows.Close()
-				return reply{}, err
-			}
-			items = append(items, item)
-		}
-		rows.Close()
-		if err := rows.Err(); err != nil {
-			return reply{}, err
-		}
-		for _, item := range items {
-			h.withOrgName(ctx, tx, item.(*pyjson.Object))
-		}
-		var total int64
-		if err := tx.QueryRow(ctx, `SELECT count(s.id) FROM refunds s `+where, orgID).Scan(&total); err != nil {
-			return reply{}, err
-		}
-		return ok(pageJSON(items, total, page)), nil
+		return h.refundListReply(r.Context(), tx, orgID, page)
 	})
+}
+
+// refundListReply is the page of refunds (all orgs, or one when orgID is set), each with its org name.
+func (h handlers) refundListReply(ctx context.Context, tx pgx.Tx, orgID *uuid.UUID, page pageQuery) (reply, error) {
+	if page.offset < 0 {
+		return reply{}, errOverflow
+	}
+	const where = `WHERE ($1::uuid IS NULL OR s.org_id = $1)`
+	rows, err := tx.Query(ctx, `SELECT `+refundColumns+` FROM refunds s `+where+` ORDER BY s.created_at DESC LIMIT $2 OFFSET $3`,
+		orgID, page.limit, page.offset)
+	if err != nil {
+		return reply{}, err
+	}
+	items := []pyjson.Value{}
+	for rows.Next() {
+		item, err := scanRefundJSON(rows)
+		if err != nil {
+			rows.Close()
+			return reply{}, err
+		}
+		items = append(items, item)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return reply{}, err
+	}
+	for _, item := range items {
+		h.withOrgName(ctx, tx, item.(*pyjson.Object))
+	}
+	var total int64
+	if err := tx.QueryRow(ctx, `SELECT count(s.id) FROM refunds s `+where, orgID).Scan(&total); err != nil {
+		return reply{}, err
+	}
+	return ok(pageJSON(items, total, page)), nil
 }
 
 // getRefund is get_refund.

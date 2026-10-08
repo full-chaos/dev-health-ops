@@ -51,32 +51,7 @@ func (b *lockedBuffer) String() string {
 // superuser are served as before.
 func TestOnlySuperusersGrantOrWriteToSuperusers(t *testing.T) {
 	ctx := context.Background()
-	instance, err := containers.StartPostgres(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = instance.Close(context.Background()) })
-	conn, err := pgx.Connect(ctx, instance.URI)
-	if err != nil {
-		t.Fatal(err)
-	}
-	baseline, err := pgmigrate.LoadBaseline()
-	if err != nil {
-		t.Fatal(err)
-	}
-	chain, err := pgmigrate.LoadChain()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := pgmigrate.Upgrade(ctx, conn, baseline, chain); err != nil {
-		t.Fatalf("upgrade: %v", err)
-	}
-	_ = conn.Close(ctx)
-	pool, err := pgxpool.New(ctx, instance.URI)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(pool.Close)
+	pool, _ := migratedPostgres(t, ctx)
 
 	exec := func(query string, args ...any) {
 		t.Helper()
@@ -381,5 +356,146 @@ FROM users u WHERE u.id = $1`, users[name]).Scan(&out)
 		if logged := refusals() - before; (logged == 1) != s.refused || logged > 1 {
 			t.Errorf("%s: %d refusal log lines, want refused=%v", s.name, logged, s.refused)
 		}
+	}
+}
+
+// migratedPostgres is a scratch database with the full migration chain.
+func migratedPostgres(t *testing.T, ctx context.Context) (*pgxpool.Pool, *containers.Instance) {
+	t.Helper()
+	instance, err := containers.StartPostgres(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = instance.Close(context.Background()) })
+	conn, err := pgx.Connect(ctx, instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	baseline, err := pgmigrate.LoadBaseline()
+	if err != nil {
+		t.Fatal(err)
+	}
+	chain, err := pgmigrate.LoadChain()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pgmigrate.Upgrade(ctx, conn, baseline, chain); err != nil {
+		t.Fatalf("upgrade: %v", err)
+	}
+	_ = conn.Close(ctx)
+	pool, err := pgxpool.New(ctx, instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	return pool, instance
+}
+
+// TestAFailedSuperuserTargetReadRefusesTheMembershipWrite gives the admin
+// routes a database login that can write memberships but cannot read users,
+// so the superuser read of a membership write's target fails. The write must
+// be refused with a 500, never served as if the target were not a superuser.
+func TestAFailedSuperuserTargetReadRefusesTheMembershipWrite(t *testing.T) {
+	ctx := context.Background()
+	pool, instance := migratedPostgres(t, ctx)
+	orgID, adminID, targetID := uuid.New(), uuid.New(), uuid.New()
+	for _, statement := range []struct {
+		query string
+		args  []any
+	}{
+		{`INSERT INTO organizations (id, slug, name, tier, managed_by, is_active, created_at, updated_at)
+VALUES ($1, 'su-read-org', 'su-read-org', 'community', 'stripe', true, now(), now())`, []any{orgID}},
+		{`INSERT INTO users (id, email, is_active, is_verified, is_superuser, token_version, created_at, updated_at)
+VALUES ($1, 'su-read-admin@example.com', true, true, false, 0, now(), now()), ($2, 'su-read-target@example.com', true, true, false, 0, now(), now())`, []any{adminID, targetID}},
+		{`INSERT INTO memberships (id, org_id, user_id, role, joined_at, created_at, updated_at)
+VALUES ($1, $2, $3, 'admin', now(), now(), now())`, []any{uuid.New(), orgID, adminID}},
+	} {
+		if _, err := pool.Exec(ctx, statement.query, statement.args...); err != nil {
+			t.Fatalf("seed: %v", err)
+		}
+	}
+
+	role, err := containers.RoleName("su_noread", instance)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const rolePassword = "su-noread-login"
+	if _, err := pool.Exec(ctx, fmt.Sprintf(`CREATE ROLE %s LOGIN PASSWORD '%s'`, role, rolePassword)); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), "DROP OWNED BY "+role)
+		_, _ = pool.Exec(context.Background(), "DROP ROLE IF EXISTS "+role)
+	})
+	if _, err := pool.Exec(ctx, "GRANT SELECT, INSERT, UPDATE, DELETE ON memberships, organizations TO "+role); err != nil {
+		t.Fatal(err)
+	}
+	config, err := pgxpool.ParseConfig(instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	config.ConnConfig.User, config.ConnConfig.Password = role, rolePassword
+	noUsers, err := pgxpool.NewWithConfig(ctx, config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(noUsers.Close)
+	var one int
+	if err := noUsers.QueryRow(ctx, `SELECT 1 FROM users LIMIT 1`).Scan(&one); err == nil {
+		t.Fatal("the restricted login can read users, so the target read cannot fail")
+	}
+
+	const jwtKey = "superuser-grant-test-signing-key-32-bytes-long!!"
+	verifier, err := edgetoken.New(jwtKey, "dev-health-ops", "dev-health-api")
+	if err != nil {
+		t.Fatal(err)
+	}
+	signer, err := edgetoken.NewSigner(jwtKey, "dev-health-ops", "dev-health-api")
+	if err != nil {
+		t.Fatal(err)
+	}
+	logs := &lockedBuffer{}
+	logger := slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	auth, err := policy.NewAuthenticator(verifier, policy.PGStore{Pool: pool}, logger)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mux := http.NewServeMux()
+	for _, route := range admin.Routes(admin.Deps{Pool: noUsers, Guard: policy.NewGuard(auth, logger), Logger: logger}) {
+		if strings.HasPrefix(route.Pattern, "/api/v1/admin/orgs/{org_id}/") {
+			mux.Handle(route.Method+" "+route.Pattern, route.Handler)
+		}
+	}
+	server := httptest.NewServer(mux)
+	t.Cleanup(server.Close)
+	token, err := signer.Access(edgetoken.AccessClaims{UserID: adminID.String(), Email: "su-read-admin@example.com",
+		OrgID: orgID.String(), Role: "admin"}, time.Now(), uuid.NewString())
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, server.URL+"/api/v1/admin/orgs/"+orgID.String()+"/members",
+		strings.NewReader(fmt.Sprintf(`{"user_id":%q,"role":"member"}`, targetID)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("Authorization", "Bearer "+token)
+	request.Header.Set("Content-Type", "application/json")
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = response.Body.Close()
+	if response.StatusCode != http.StatusInternalServerError {
+		t.Errorf("status %d, want 500", response.StatusCode)
+	}
+	var memberships int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM memberships WHERE user_id = $1`, targetID).Scan(&memberships); err != nil {
+		t.Fatal(err)
+	}
+	if memberships != 0 {
+		t.Errorf("%d memberships written for the target, want 0", memberships)
+	}
+	if !strings.Contains(logs.String(), "admin: superuser target check failed") {
+		t.Error("no log line for the failed target read")
 	}
 }

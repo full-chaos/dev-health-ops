@@ -1035,7 +1035,8 @@ Tests: `TestIssueProjectPrimaryIsATeamOfTheItemsProvider`,
 `TestTheFirstKeyHeldByATeamOfTheItemsProviderDecides`, `TestAnAdminHolderOfTheFirstKeyDecides`,
 `TestATeamIDOfAnotherProviderDoesNotHideTheItemsTeam`, `TestNativeTeamIsATeamOfTheItemsProvider`,
 `TestAnInactiveTeamOfAnotherProviderWithTheSameIDDoesNotDropTheItemsTeam`,
-`TestAnIDOfOnlyOtherProvidersFollowsTheirActiveFlag` (the cascade, every provider against every other provider
+`TestAnIDOfOnlyOtherProvidersFollowsTheirActiveFlag`,
+`TestAnInactiveAdminTeamIsDroppedWhenNoTeamOfTheItemsProviderHasItsID` (the cascade, every provider against every other provider
 and the empty provider); `TestProjectAndNativeKeysAttributeOnlyToTeamsOfTheItemsProvider` (real loaders, real
 cascade, real writer, real ClickHouse, every provider, the admin cases included);
 `TestAnInactiveTeamDropsOnlyTheTeamOfItsOwnProviderWithTheSameID` (real loader, every pair of providers);

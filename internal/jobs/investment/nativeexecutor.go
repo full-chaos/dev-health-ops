@@ -67,6 +67,11 @@ type NativeExecutor struct {
 	// shadowHTTPClient replaces the HTTP client of the shadow backend. Nil, the
 	// production value, selects the hardened client.
 	shadowHTTPClient *http.Client
+	// newServed builds the served decision backend of one run (CHAOS-8874),
+	// called only when the provider selection resolved to the decision kind.
+	// A backend that cannot be built is an error of the run: it must never be
+	// served by the generative provider in silence.
+	newServed func(model string) (*ServedDecision, error)
 }
 
 // SetShadowObserver wires the optional shadow-phase telemetry. Nil is
@@ -100,7 +105,26 @@ func NewNativeExecutor(reader *chquery.Reader, writer *chwrite.Writer, logger *s
 		newProvider: resolveProviderFromEnv,
 	}
 	executor.newShadow = executor.shadowFromEnv
+	executor.newServed = executor.servedFromEnv
 	return executor, nil
+}
+
+// servedFromEnv builds the served decision backend from the TypeSafe settings
+// (TYPESAFE_API_KEY, TYPESAFE_MODEL, TYPESAFE_BASE_URL). model is the request's
+// model_ref; "" selects TYPESAFE_MODEL, then the pinned default.
+func (executor *NativeExecutor) servedFromEnv(model string) (*ServedDecision, error) {
+	client, err := categorize.NewTypeSafeClientFromEnvWithHTTPClient(model, executor.logger, executor.shadowHTTPClient)
+	if err != nil {
+		// The constructor's messages hold a rule or a length, never the key, the
+		// configured URL or the configured model.
+		return nil, errors.New(secrets.RedactRegistered(err.Error()))
+	}
+	served, err := NewServedDecision(client, executor.logger)
+	if err != nil {
+		_ = client.Close()
+		return nil, err
+	}
+	return served, nil
 }
 
 // shadowFromEnv builds the shadow phase from the environment, or returns nil.
@@ -146,6 +170,11 @@ func resolveProviderFromEnv(requested, model string) (categorize.Provider, categ
 	kind, err := categorize.ResolveProviderKind(requested)
 	if err != nil {
 		return nil, "", err
+	}
+	// The decision kind is served by the decision backend (CHAOS-8874), built
+	// by Execute. Its Provider is never asked; see servedDecisionProvider.
+	if categorize.IsDecisionProviderKind(kind) {
+		return servedDecisionProvider{}, kind, nil
 	}
 	// REFUSE a kind this port has no real client for (codex r1 P1-a).
 	//
@@ -304,9 +333,28 @@ func (executor *NativeExecutor) Execute(ctx context.Context, claim workgraph.Cla
 	if err != nil {
 		return nil, err
 	}
+	// The served decision backend is built AFTER every refusal above, when the
+	// provider selection resolved to the decision kind. Its run has no shadow
+	// phase: the same backend must not be paid two times for one unit.
+	var served *ServedDecision
+	if categorize.IsDecisionProviderKind(kind) {
+		if executor.newServed == nil {
+			return nil, workgraph.Deterministic(workgraph.ClassLLMProviderInvalid,
+				errors.New("the decision backend is selected and this executor cannot build it"))
+		}
+		served, err = executor.newServed(claim.Request.ModelRef)
+		if err != nil {
+			return nil, workgraph.Deterministic(workgraph.ClassLLMProviderInvalid,
+				fmt.Errorf("build the served decision backend: %w", err))
+		}
+	}
+	if served != nil {
+		defer func() { _ = served.Close() }()
+		materializer.SetServed(served)
+	}
 	// The shadow phase is built AFTER every refusal above, so a request that is
 	// refused builds no shadow client; it is closed with the provider.
-	if executor.newShadow != nil {
+	if served == nil && executor.newShadow != nil {
 		if shadow := executor.newShadow(orgID); shadow != nil {
 			shadow.SetObserver(executor.shadowObserver)
 			defer func() { _ = shadow.Close() }()

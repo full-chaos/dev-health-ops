@@ -617,11 +617,35 @@ func (phase *ShadowPhase) shadowRecord(cfg Config, result shadowResult) chwrite.
 // and the cost.
 func (phase *ShadowPhase) addAttempts(cfg Config, result shadowResult, record chwrite.ShadowRecord, buffer *chwrite.AttemptBuffer, summary *shadowSummary) {
 	exchange := result.exchange
+	rows := attemptRecords(cfg, chwrite.RoleShadow, phase.identity, phase.config, result.unit.workUnitID, exchange, record.State, record.ModelReturned)
+	for index, row := range rows {
+		label := ShadowAttemptRetried
+		if index == len(rows)-1 {
+			label = record.State
+			summary.InputTokens += int64(row.InputTokens)
+			summary.OutputTokens += int64(row.OutputTokens)
+		}
+		buffer.Add(row)
+		summary.Attempts++
+		summary.attemptLabels[label]++
+		summary.latencies = append(summary.latencies, exchange.attempts[index].Latency)
+	}
+}
+
+// attemptRecords is the attempt rows of one classification, for the shadow
+// phase and for the served decision mode (role): one row for each HTTP attempt.
+// state and modelReturned are already bounded by the caller. The last row
+// carries the state, the usage and the cost.
+func attemptRecords(
+	cfg Config, role string, identity decision.Identity, config, workUnitID string,
+	exchange *shadowExchange, state, modelReturned string,
+) []chwrite.AttemptRecord {
+	rows := make([]chwrite.AttemptRecord, 0, len(exchange.attempts))
 	for index, attempt := range exchange.attempts {
 		row := chwrite.AttemptRecord{
-			RunID: cfg.RunID, WorkUnitID: result.unit.workUnitID, Role: chwrite.RoleShadow,
-			Config: phase.config, RubricSHA256: phase.identity.RubricSHA256,
-			Provider: phase.identity.Provider, APIMode: phase.identity.API, ModelRequested: phase.identity.Model,
+			RunID: cfg.RunID, WorkUnitID: workUnitID, Role: role,
+			Config: config, RubricSHA256: identity.RubricSHA256,
+			Provider: identity.Provider, APIMode: identity.API, ModelRequested: identity.Model,
 			Attempt: shadowAttemptNumber(index), Kind: shadowAttemptKindFirst,
 			HTTPStatus: shadowHTTPStatus(attempt.StatusCode), ErrorClass: shadowErrorClass(attempt.Class),
 			RequestID: shadowRequestID(attempt.RequestID), RatesVersion: shadowRatesVersion,
@@ -631,22 +655,16 @@ func (phase *ShadowPhase) addAttempts(cfg Config, result shadowResult, record ch
 		if index > 0 {
 			row.Kind = shadowAttemptKindRetry
 		}
-		label := ShadowAttemptRetried
 		if index == len(exchange.attempts)-1 {
-			label = record.State
-			row.State, row.ModelReturned = record.State, record.ModelReturned
+			row.State, row.ModelReturned = state, modelReturned
 			if exchange.usage.Reported {
 				row.InputTokens, row.OutputTokens = shadowTokens(exchange.usage.InputTokens), shadowTokens(exchange.usage.OutputTokens)
 				row.BilledCostUSD = float64(exchange.billed) / 1e9
-				summary.InputTokens += int64(row.InputTokens)
-				summary.OutputTokens += int64(row.OutputTokens)
 			}
 		}
-		buffer.Add(row)
-		summary.Attempts++
-		summary.attemptLabels[label]++
-		summary.latencies = append(summary.latencies, attempt.Latency)
+		rows = append(rows, row)
 	}
+	return rows
 }
 
 // storeStop logs a store failure and returns the stop reason it maps to. The

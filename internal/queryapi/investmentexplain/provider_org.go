@@ -57,7 +57,7 @@ func orgResolverFunc(orgSettings llmorgsettings.Resolver) categorize.OrgProvider
 func ResolveProviderKindForOrg(
 	ctx context.Context, requested, orgID string, orgSettings llmorgsettings.Resolver,
 ) (categorize.ProviderKind, error) {
-	return categorize.ResolveProviderKindForOrg(ctx, requested, orgID, orgResolverFunc(orgSettings))
+	return categorize.ResolveTextProviderKindForOrg(ctx, requested, orgID, orgResolverFunc(orgSettings))
 }
 
 // availabilityFromIsLLMAvailable adapts the org-unaware IsLLMAvailable to
@@ -74,7 +74,7 @@ func availabilityFromIsLLMAvailable(_ context.Context, requestedProvider, orgID 
 // reserved but discarded in the original function -- see that function's
 // own doc comment).
 func IsLLMAvailableForOrg(ctx context.Context, requested, orgID string, orgSettings llmorgsettings.Resolver) bool {
-	kind, err := categorize.ResolveProviderKindForOrg(ctx, requested, orgID, orgResolverFunc(orgSettings))
+	kind, err := categorize.ResolveTextProviderKindForOrg(ctx, requested, orgID, orgResolverFunc(orgSettings))
 	if err != nil {
 		return false
 	}
@@ -124,7 +124,7 @@ func ProviderValueError(
 func ResolveUnsupportedProviderKindForOrg(
 	ctx context.Context, requestedProvider, orgID string, orgSettings llmorgsettings.Resolver,
 ) (categorize.ProviderKind, bool) {
-	kind, err := categorize.ResolveProviderKindForOrg(ctx, requestedProvider, orgID, orgResolverFunc(orgSettings))
+	kind, err := categorize.ResolveTextProviderKindForOrg(ctx, requestedProvider, orgID, orgResolverFunc(orgSettings))
 	if err != nil {
 		return "", false
 	}
@@ -322,7 +322,7 @@ func CompleteInvestmentMixExplanationForOrg(
 	ctx context.Context, requestedProvider, requestedModel, orgID string,
 	orgSettings llmorgsettings.Resolver, fullPrompt string,
 ) (result categorize.CompletionResult, resolvedProvider string, resolvedModel string, err error) {
-	kind, err := categorize.ResolveProviderKindForOrg(ctx, requestedProvider, orgID, orgResolverFunc(orgSettings))
+	kind, err := categorize.ResolveTextProviderKindForOrg(ctx, requestedProvider, orgID, orgResolverFunc(orgSettings))
 	if err != nil {
 		return categorize.CompletionResult{}, "", "", err
 	}
@@ -374,7 +374,7 @@ func CompleteWorkUnitExplanationForOrg(
 	ctx context.Context, requestedProvider, requestedModel, orgID string,
 	orgSettings llmorgsettings.Resolver, fullPrompt string,
 ) (result categorize.CompletionResult, resolvedProvider string, resolvedModel string, err error) {
-	kind, err := categorize.ResolveProviderKindForOrg(ctx, requestedProvider, orgID, orgResolverFunc(orgSettings))
+	kind, err := categorize.ResolveTextProviderKindForOrg(ctx, requestedProvider, orgID, orgResolverFunc(orgSettings))
 	if err != nil {
 		return categorize.CompletionResult{}, "", "", err
 	}

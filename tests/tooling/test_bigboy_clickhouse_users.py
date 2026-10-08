@@ -91,7 +91,15 @@ def _remove_scratches():
 
 def _scratch(*, mode: int = 0o700) -> Path:
     """A private TMPDIR for the check, outside /tmp (the check refuses /tmp, so pytest's tmp_path cannot be it)."""
-    base = "/dev/shm" if os.access("/dev/shm", os.W_OK) else str(ROOT / "tests")
+    configured = os.environ.get("TMPDIR", "")
+    real = os.path.realpath(configured) if configured else ""
+    off_tmp = real and not (
+        real in ("/tmp", "/var/tmp") or real.startswith(("/tmp/", "/var/tmp/"))
+    )
+    if off_tmp and os.access(real, os.W_OK):
+        base = real
+    else:
+        base = "/dev/shm" if os.access("/dev/shm", os.W_OK) else str(ROOT / "tests")
     path = tempfile.mkdtemp(prefix="dho-check-scratch-", dir=base)
     os.chmod(path, mode)
     _SCRATCHES.append(path)
@@ -379,8 +387,8 @@ def test_a_tmpdir_in_or_resolving_into_tmp_or_not_private_is_refused(
     tmp_path: Path,
 ) -> None:
     file = _users_file(tmp_path)
-    under_tmp = Path(tempfile.mkdtemp(prefix="dho-sub-", dir="/tmp"))
-    os.chmod(under_tmp, 0o700)
+    # Named, never created: the fixtures write nothing under the system temp dir.
+    under_tmp = Path("/tmp") / f"dho-sub-{tmp_path.name}"
     link = tmp_path / "link-to-tmp"
     link.symlink_to("/tmp")
     shm_open = _scratch(mode=0o500)  # not 0700 (owner-only, read-only)
@@ -388,27 +396,24 @@ def test_a_tmpdir_in_or_resolving_into_tmp_or_not_private_is_refused(
     (holder / "lnk").symlink_to(
         under_tmp
     )  # a symlink OUTSIDE /tmp that resolves into /tmp (0700, ours)
-    try:
-        spellings = [
-            "/tmp//", "//tmp", "/tmp/.", "/tmp", "/var/tmp", str(under_tmp),
-            str(under_tmp) + "/../" + under_tmp.name, str(link),
-            str(holder / "lnk"),
-            # a `..` path from outside /tmp that lands in /tmp (only realpath catches it)
-            str(holder) + "/" + "../" * len(holder.parts[1:]) + "tmp/" + under_tmp.name,
-            "/" + str(under_tmp), str(link) + "/",
-            str(tmp_path / "absent"), "", str(shm_open),
-        ]  # fmt: skip
-        for tmpdir in spellings:
-            proc = _check(tmp_path, file, tmpdir=tmpdir)
-            assert proc.returncode == 1 and "TMPDIR" in proc.stderr, (
-                tmpdir,
-                proc.stderr,
-            )
-            assert not (tmp_path / "docker-args.log").exists(), tmpdir
-        env_unset = _check(tmp_path, file, tmpdir="")  # TMPDIR set empty
-        assert env_unset.returncode == 1
-    finally:
-        shutil.rmtree(under_tmp, ignore_errors=True)
+    spellings = [
+        "/tmp//", "//tmp", "/tmp/.", "/tmp", "/var/tmp", str(under_tmp),
+        str(under_tmp) + "/../" + under_tmp.name, str(link),
+        str(holder / "lnk"),
+        # a `..` path from outside /tmp that lands in /tmp (only realpath catches it)
+        str(holder) + "/" + "../" * len(holder.parts[1:]) + "tmp/" + under_tmp.name,
+        "/" + str(under_tmp), str(link) + "/",
+        str(tmp_path / "absent"), "", str(shm_open),
+    ]  # fmt: skip
+    for tmpdir in spellings:
+        proc = _check(tmp_path, file, tmpdir=tmpdir)
+        assert proc.returncode == 1 and "TMPDIR" in proc.stderr, (
+            tmpdir,
+            proc.stderr,
+        )
+        assert not (tmp_path / "docker-args.log").exists(), tmpdir
+    env_unset = _check(tmp_path, file, tmpdir="")  # TMPDIR set empty
+    assert env_unset.returncode == 1
 
 
 def test_the_cut_hands_the_credentials_path_to_the_check_and_the_password_to_no_child(
@@ -475,6 +480,7 @@ def _cut_with_a_fake_check(
             "BIGBOY_ROOT": str(root),
             "BIGBOY_TOOLS_DIR": str(tools),
             "DOCKER_STUB_ARGS_LOG": str(args_log),
+            "TMPDIR": str(tmp_path),
             **_var_trap(tmp_path),
         },
     )

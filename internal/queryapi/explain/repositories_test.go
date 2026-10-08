@@ -286,7 +286,6 @@ func TestSourceIsTheStoredProvidersBehindARepositoryMetric(t *testing.T) {
 		{"two providers sorted and joined", "churn", [][]any{{"repo-b", "gitlab"}, {"repo-a", "github"}}, ptr("github, gitlab")},
 		{"one provider once", "churn", [][]any{{"repo-a", "github"}, {"repo-b", "github"}}, ptr("github")},
 		{"unknown and empty are no provider", "churn", [][]any{{"repo-a", "unknown"}, {"repo-b", ""}}, nil},
-		{"a metric stored per team", "throughput", [][]any{{"repo-a", "github"}}, nil},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			dispatch := &explainQueryDispatch{
@@ -305,3 +304,32 @@ func TestSourceIsTheStoredProvidersBehindARepositoryMetric(t *testing.T) {
 }
 
 func ptr(s string) *string { return &s }
+
+// CHAOS-8910: a metric stored per team takes the distinct providers of the work items behind it.
+func TestSourceOfATeamMetricIsTheWorkItemProviders(t *testing.T) {
+	for _, testCase := range []struct {
+		name string
+		rows [][]any
+		want *string
+	}{
+		{"two providers sorted and joined", [][]any{{"jira"}, {"github"}, {"jira"}}, ptr("github, jira")},
+		{"unknown and empty are no provider", [][]any{{"unknown"}, {""}}, nil},
+		{"no rows", nil, nil},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			dispatch := &explainQueryDispatch{
+				contributorRows:      [][]any{{"team-a", 3.0}},
+				workItemProviderRows: testCase.rows,
+				// A repository table must never be read for a team metric.
+				providerRows: [][]any{{"repo-a", "gitlab"}},
+			}
+			got, err := explainFor(t, dispatch, "throughput", "org")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if (got.Source == nil) != (testCase.want == nil) || (got.Source != nil && *got.Source != *testCase.want) {
+				t.Fatalf("source = %v, want %v", got.Source, testCase.want)
+			}
+		})
+	}
+}

@@ -379,8 +379,8 @@ func TestBuildExplainResponseBlockedWorkAppliesStatusFilterEverywhere(t *testing
 	}); err != nil {
 		t.Fatalf("BuildExplainResponse: %v", err)
 	}
-	if len(client.queries) != 4 {
-		t.Fatalf("expected 4 queries (value current, value previous, drivers, contributors), got %d:\n%v", len(client.queries), client.queries)
+	if len(client.queries) != 5 {
+		t.Fatalf("expected 5 queries (value current, value previous, drivers, contributors, work-item providers), got %d:\n%v", len(client.queries), client.queries)
 	}
 	for _, query := range client.queries {
 		if !strings.Contains(query, "status = 'blocked'") {

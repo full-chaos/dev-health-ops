@@ -257,6 +257,16 @@ func BuildExplainResponse(ctx context.Context, reader *Reader, orgID string, par
 		}
 	}
 
+	// A metric stored per team has no repository behind it: its source is the provider of the
+	// work items in the metric's own table, window and scope.
+	if config.GroupBy == "team_id" {
+		workItemProviders, err := reader.fetchWorkItemProviders(ctx, config.Table, params.StartDay, params.EndDay, scopeFilterSQL, scopeBindings, orgID)
+		if err != nil {
+			return nil, err
+		}
+		source = joinProviderNames(workItemProviders)
+	}
+
 	return &Response{
 		Metric:       params.Metric,
 		Label:        config.Label,

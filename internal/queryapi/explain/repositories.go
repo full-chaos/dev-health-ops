@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"sort"
 	"strings"
+	"time"
 
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 )
@@ -117,6 +118,68 @@ WHERE org_id = {org_id:String}
 		return nil, fmt.Errorf("iterate repository provider rows: %w", err)
 	}
 	return out, nil
+}
+
+// fetchWorkItemProviders reads the distinct providers stored in the work-item
+// table behind a metric stored per team, for the request window, scope and
+// organization (the same filter as the metric's own value read). Both
+// work-item metric tables carry a provider column. The empty string and the
+// placeholder "unknown" are no provider. A failed read is an error.
+func (reader *Reader) fetchWorkItemProviders(ctx context.Context, table string, startDay, endDay time.Time, scopeFilterSQL string, scopeBindings []dhclickhouse.Binding, orgID string) ([]string, error) {
+	if reader == nil || reader.client == nil {
+		return nil, ErrUnavailable
+	}
+	query := fmt.Sprintf(`
+SELECT DISTINCT provider
+FROM %s
+WHERE day >= {start_day:Date} AND day < {end_day:Date}
+%s
+  AND org_id = {org_id:String}
+%s
+`, table, scopeFilterSQL, settingsMaxExecutionTime())
+	bindings := append([]dhclickhouse.Binding{
+		{Name: "start_day", Value: dateBindingValue(startDay)},
+		{Name: "end_day", Value: dateBindingValue(endDay)},
+		{Name: "org_id", Value: orgID},
+	}, scopeBindings...)
+	rows, err := reader.client.Query(ctx, query, bindings)
+	if err != nil {
+		return nil, fmt.Errorf("fetch work item providers: %w", err)
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var provider string
+		if err := rows.Scan(&provider); err != nil {
+			return nil, fmt.Errorf("scan work item provider row: %w", err)
+		}
+		provider = strings.TrimSpace(provider)
+		if provider != "" && !strings.EqualFold(provider, "unknown") {
+			out = append(out, provider)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate work item provider rows: %w", err)
+	}
+	return out, nil
+}
+
+// joinProviderNames is the sorted, de-duplicated, ", "-joined provider list; nil when empty.
+func joinProviderNames(providers []string) *string {
+	seen := map[string]struct{}{}
+	var names []string
+	for _, provider := range providers {
+		if _, dup := seen[provider]; !dup {
+			seen[provider] = struct{}{}
+			names = append(names, provider)
+		}
+	}
+	if len(names) == 0 {
+		return nil
+	}
+	sort.Strings(names)
+	joined := strings.Join(names, ", ")
+	return &joined
 }
 
 // joinProviders is the served source of an item: the distinct providers of

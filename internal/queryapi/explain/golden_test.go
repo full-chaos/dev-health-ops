@@ -139,6 +139,8 @@ type explainQueryDispatch struct {
 
 	// providerRows answers fetchRepoProviders (CHAOS-8903): id, the stored provider.
 	providerRows [][]any
+	// workItemProviderRows answers fetchWorkItemProviders (CHAOS-8910): one provider per row.
+	workItemProviderRows [][]any
 
 	// resolveRepoIDMiss answers a resolveRepoID read with no row (a
 	// reference that resolves to no repository).
@@ -147,6 +149,8 @@ type explainQueryDispatch struct {
 
 func (d *explainQueryDispatch) handle(t *testing.T, query string, bindings []dhclickhouse.Binding) (dhclickhouse.RowScanner, error) {
 	switch {
+	case strings.Contains(query, "SELECT DISTINCT provider"):
+		return &fixtureRowScanner{rows: d.workItemProviderRows}, nil
 	case strings.Contains(query, "AS provider"):
 		return &fixtureRowScanner{rows: d.providerRows}, nil
 	case strings.Contains(query, "AS source_url"):

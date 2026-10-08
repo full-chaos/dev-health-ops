@@ -3,6 +3,7 @@ package flame
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
@@ -39,6 +40,7 @@ type reviewRow struct {
 // join).
 type issueRow struct {
 	WorkItemID  string
+	Title       *string
 	Provider    *string
 	Type        *string
 	Status      *string
@@ -257,4 +259,41 @@ func fetchDeployment(ctx context.Context, client QueryClient, repoID, deployment
 		return nil, fmt.Errorf("flame: fetch_deployment scan: %w", err)
 	}
 	return &row, rows.Err()
+}
+
+// fetchIssueTitleQuery reads the work item's title from the canonical
+// work_items table. The cycle-time snapshot carries no title. org_id binds the
+// read to the caller's organisation, so another organisation's title for the
+// same work_item_id is never served.
+const fetchIssueTitleQuery = `
+        SELECT title
+        FROM work_items FINAL
+        WHERE work_item_id = {work_item_id:String}
+          AND org_id = {org_id:String}
+        ORDER BY last_synced DESC
+        LIMIT 1
+    `
+
+// fetchIssueTitle returns nil when the work item has no stored title: the
+// response then carries a null title and the web shows "Unresolved".
+func fetchIssueTitle(ctx context.Context, client QueryClient, workItemID, orgID string) (*string, error) {
+	rows, err := client.Query(ctx, fetchIssueTitleQuery, []dhclickhouse.Binding{
+		{Name: "work_item_id", Value: workItemID},
+		{Name: "org_id", Value: orgID},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("flame: fetch_issue_title query: %w", err)
+	}
+	defer rows.Close()
+	if !rows.Next() {
+		return nil, rows.Err()
+	}
+	var title string
+	if err := rows.Scan(&title); err != nil {
+		return nil, fmt.Errorf("flame: fetch_issue_title scan: %w", err)
+	}
+	if strings.TrimSpace(title) == "" {
+		return nil, rows.Err()
+	}
+	return &title, rows.Err()
 }

@@ -460,6 +460,7 @@ func buildIssueFlameResponse(entityID string, issue issueRow) (*Response, error)
 	// flame.py builds the entity dict in this order.
 	entity := pyjson.OrderedMapOf(
 		pyjson.KeyValue[any]{Key: "work_item_id", Value: issue.WorkItemID},
+		pyjson.KeyValue[any]{Key: "title", Value: nullableString(issue.Title)},
 		pyjson.KeyValue[any]{Key: "provider", Value: nullableString(issue.Provider)},
 		pyjson.KeyValue[any]{Key: "type", Value: nullableString(issue.Type)},
 		pyjson.KeyValue[any]{Key: "status", Value: nullableString(issue.Status)},
@@ -578,6 +579,9 @@ func BuildResponse(ctx context.Context, client QueryClient, orgID string, params
 		}
 		if issue == nil {
 			return nil, notFound("Issue not found")
+		}
+		if issue.Title, err = fetchIssueTitle(ctx, client, params.EntityID, orgID); err != nil {
+			return nil, err
 		}
 		return buildIssueFlameResponse(params.EntityID, *issue)
 

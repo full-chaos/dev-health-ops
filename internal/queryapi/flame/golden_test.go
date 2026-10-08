@@ -111,6 +111,18 @@ func mustMarshal(t *testing.T, v any) string {
 	return string(b)
 }
 
+// withoutServedTitle removes the issue entity's title (a name the Go API
+// serves and the recorded Python response never had) so the recorded goldens
+// stay byte-identical. A null title is the only value these fixtures produce.
+func withoutServedTitle(t *testing.T, body string) string {
+	t.Helper()
+	const key = `"title":null,`
+	if strings.Count(body, key) != 1 {
+		t.Fatalf("issue entity must carry exactly one null title here: %s", body)
+	}
+	return strings.Replace(body, key, "", 1)
+}
+
 const repoID = "11111111-1111-1111-1111-111111111111"
 
 // TestGoldenPRWithRework replays testdata/pr_with_rework.json: a merged PR
@@ -176,6 +188,9 @@ func TestGoldenPRNoReview(t *testing.T) {
 // started_at > created_at produces a Backlog waiting frame.
 func TestGoldenIssueWithBacklogWait(t *testing.T) {
 	client := fakeQueryClient{t: t, handler: func(t *testing.T, query string, bindings []dhclickhouse.Binding) (dhclickhouse.RowScanner, error) {
+		if strings.Contains(query, "FROM work_items FINAL") {
+			return &fixtureRowScanner{}, nil
+		}
 		if !strings.Contains(query, "FROM work_item_cycle_times FINAL") {
 			t.Fatalf("unexpected query for issue_with_backlog_wait fixture:\n%s", query)
 		}
@@ -190,7 +205,7 @@ func TestGoldenIssueWithBacklogWait(t *testing.T) {
 		t.Fatalf("BuildResponse: %v", err)
 	}
 	want := loadGolden(t, "issue_with_backlog_wait.json")
-	if gotJSON, wantJSON := mustMarshal(t, got), mustMarshal(t, want); gotJSON != wantJSON {
+	if gotJSON, wantJSON := withoutServedTitle(t, mustMarshal(t, got)), mustMarshal(t, want); gotJSON != wantJSON {
 		t.Fatalf("response mismatch\n got:  %s\nwant: %s", gotJSON, wantJSON)
 	}
 }
@@ -199,6 +214,9 @@ func TestGoldenIssueWithBacklogWait(t *testing.T) {
 // started_at == created_at, no wait frame.
 func TestGoldenIssueNoBacklogWait(t *testing.T) {
 	client := fakeQueryClient{t: t, handler: func(t *testing.T, query string, bindings []dhclickhouse.Binding) (dhclickhouse.RowScanner, error) {
+		if strings.Contains(query, "FROM work_items FINAL") {
+			return &fixtureRowScanner{}, nil
+		}
 		if !strings.Contains(query, "FROM work_item_cycle_times FINAL") {
 			t.Fatalf("unexpected query for issue_no_backlog_wait fixture:\n%s", query)
 		}
@@ -213,7 +231,7 @@ func TestGoldenIssueNoBacklogWait(t *testing.T) {
 		t.Fatalf("BuildResponse: %v", err)
 	}
 	want := loadGolden(t, "issue_no_backlog_wait.json")
-	if gotJSON, wantJSON := mustMarshal(t, got), mustMarshal(t, want); gotJSON != wantJSON {
+	if gotJSON, wantJSON := withoutServedTitle(t, mustMarshal(t, got)), mustMarshal(t, want); gotJSON != wantJSON {
 		t.Fatalf("response mismatch\n got:  %s\nwant: %s", gotJSON, wantJSON)
 	}
 }
@@ -414,11 +432,14 @@ func TestBuildResponseIssueTimelineUsesNowFallback(t *testing.T) {
 // value, buildIssueFlameResponse has no field to read it from --
 // issueRow itself declares no TeamID/WorkScopeID member -- so the
 // response entity is exactly the four keys _build_issue_flame_response
-// (services/flame.py:268-273) actually sets, never more. This is a
+// (services/flame.py:268-273) set plus the served title, never more. This is a
 // structural guarantee (the type has no such field to leak), and this
 // test pins the OBSERVABLE half of that guarantee: the wire shape.
 func TestIssueEntityNeverCarriesTeamAttributionFields(t *testing.T) {
 	client := fakeQueryClient{t: t, handler: func(t *testing.T, query string, bindings []dhclickhouse.Binding) (dhclickhouse.RowScanner, error) {
+		if strings.Contains(query, "FROM work_items FINAL") {
+			return &fixtureRowScanner{}, nil
+		}
 		if !strings.Contains(query, "FROM work_item_cycle_times FINAL") {
 			t.Fatalf("unexpected query: %s", query)
 		}
@@ -432,7 +453,7 @@ func TestIssueEntityNeverCarriesTeamAttributionFields(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildResponse: %v", err)
 	}
-	wantKeys := map[string]bool{"work_item_id": true, "provider": true, "type": true, "status": true}
+	wantKeys := map[string]bool{"work_item_id": true, "title": true, "provider": true, "type": true, "status": true}
 	if got.Entity.Len() != len(wantKeys) {
 		t.Fatalf("entity has %d keys, want %d: %+v", got.Entity.Len(), len(wantKeys), got.Entity.Keys())
 	}

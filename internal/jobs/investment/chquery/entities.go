@@ -685,12 +685,18 @@ func (reader *Reader) FetchExistingInvestmentKeys(
 	// The two extra columns (CHAOS-8788) come from the SAME latest row as the
 	// status, in the SAME single query: the skip decision needs the row's run id
 	// and its recorded quote count, not another round trip per unit.
+	// The table key is (org_id, work_unit_id): a unit has ONE served row, the
+	// latest by computed_at, whatever its model version or input hash. So the
+	// version, the hash and the status are all tested on that latest row, never
+	// in the WHERE: a filter before the argMax would let an older row of a
+	// config the unit was rolled back FROM still count as "existing".
 	query := `
-        SELECT work_unit_id, categorization_input_hash, latest_run_id, latest_quote_count
+        SELECT work_unit_id, latest_hash, latest_run_id, latest_quote_count
         FROM (
             SELECT
                 work_unit_id,
-                categorization_input_hash,
+                argMax(categorization_input_hash, computed_at) AS latest_hash,
+                argMax(categorization_model_version, computed_at) AS latest_version,
                 argMax(categorization_status, computed_at) AS latest_status,
                 argMax(categorization_run_id, computed_at) AS latest_run_id,
                 -- tuple() keeps a NULL: a bare argMax skips rows whose value is NULL and
@@ -699,11 +705,11 @@ func (reader *Reader) FetchExistingInvestmentKeys(
             FROM work_unit_investments
             WHERE org_id = {org_id:String}
               AND work_unit_id IN {work_unit_ids:Array(String)}
-              AND categorization_input_hash IN {input_hashes:Array(String)}
-              AND categorization_model_version = {model_version:String}
-            GROUP BY work_unit_id, categorization_input_hash
+            GROUP BY work_unit_id
         )
         WHERE latest_status IN {valid_statuses:Array(String)}
+          AND latest_version = {model_version:String}
+          AND latest_hash IN {input_hashes:Array(String)}
     `
 	rows, err := reader.conn.Query(ctx, query,
 		clickhouse.Named("org_id", organizationID),

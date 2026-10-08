@@ -51,7 +51,7 @@ func TestLLMSpanNameAttributeKeysAndClassesAreTheCensus(t *testing.T) {
 		classes = append(classes, string(c))
 	}
 	sort.Strings(classes)
-	wantClasses := "auth,canceled,invalid_answer,other,rate_limit,refused,server,timeout"
+	wantClasses := "auth,canceled,invalid_answer,invalid_request,model_not_found,other,rate_limit,refused,server,timeout"
 	if strings.Join(classes, ",") != wantClasses {
 		t.Fatalf("classes = %v, want %s", classes, wantClasses)
 	}
@@ -70,7 +70,11 @@ func TestLLMSpanOnePerAttemptWithClassStatusAndAttributes(t *testing.T) {
 		{"server retried once", 503, `{}`, "server", 2, 503},
 		{"auth not retried", 401, `{}`, "auth", 1, 401},
 		{"payment is auth", 402, `{}`, "auth", 1, 402},
-		{"other 4xx", 422, `{}`, "other", 1, 422},
+		{"forbidden is auth", 403, `{}`, "auth", 1, 403},
+		{"unknown model", 404, `{}`, "model_not_found", 1, 404},
+		{"bad request", 400, `{}`, "invalid_request", 1, 400},
+		{"unprocessable", 422, `{}`, "invalid_request", 1, 422},
+		{"other 4xx", 409, `{}`, "other", 1, 409},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -367,4 +371,23 @@ func TestLLMSpanLeavesTheRequestsAndTheResultUnchanged(t *testing.T) {
 	if string(offRes.Body) != string(onRes.Body) || offRes.StatusCode != onRes.StatusCode || offRes.RequestID != onRes.RequestID {
 		t.Fatal("results differ")
 	}
+}
+
+// A body that breaks on an error response keeps the class of its status.
+func TestLLMSpanBodyReadFailureKeepsTheStatusClass(t *testing.T) {
+	recorder := recordSpans(t)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Length", "100")
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte("short"))
+	}))
+	defer srv.Close()
+	req, _ := http.NewRequest(http.MethodPost, srv.URL, nil)
+	resp, err := tracedLLMDo(srv.Client(), req, ProviderKindLocal, "m")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	assertAllClass(t, llmSpans(recorder), 1, "model_not_found")
 }

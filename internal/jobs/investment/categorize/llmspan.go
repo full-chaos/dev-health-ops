@@ -41,7 +41,8 @@ const (
 )
 
 // llmSpanClass is the closed set of error.class values. The words timeout,
-// rate_limit, server and auth are the SystemOneClass words.
+// rate_limit, server, auth, model_not_found and invalid_request are the
+// SystemOneClass words.
 type llmSpanClass string
 
 const (
@@ -50,6 +51,8 @@ const (
 	llmSpanClassServer        llmSpanClass = "server"
 	llmSpanClassRateLimit     llmSpanClass = "rate_limit"
 	llmSpanClassAuth          llmSpanClass = "auth"
+	llmSpanClassModelNotFound llmSpanClass = "model_not_found"
+	llmSpanClassInvalid       llmSpanClass = "invalid_request"
 	llmSpanClassInvalidAnswer llmSpanClass = "invalid_answer"
 	llmSpanClassCanceled      llmSpanClass = "canceled"
 	llmSpanClassOther         llmSpanClass = "other"
@@ -57,7 +60,7 @@ const (
 
 var llmSpanClasses = []llmSpanClass{
 	llmSpanClassTimeout, llmSpanClassRefused, llmSpanClassServer, llmSpanClassRateLimit,
-	llmSpanClassAuth, llmSpanClassInvalidAnswer, llmSpanClassCanceled, llmSpanClassOther,
+	llmSpanClassAuth, llmSpanClassModelNotFound, llmSpanClassInvalid, llmSpanClassInvalidAnswer, llmSpanClassCanceled, llmSpanClassOther,
 }
 
 type (
@@ -98,6 +101,10 @@ func classifyLLMSpan(status int, transportErr error, ctxErr error) llmSpanClass 
 		return llmSpanClassRateLimit
 	case status == http.StatusUnauthorized, status == http.StatusPaymentRequired, status == http.StatusForbidden:
 		return llmSpanClassAuth
+	case status == http.StatusNotFound:
+		return llmSpanClassModelNotFound
+	case status == http.StatusBadRequest, status == http.StatusUnprocessableEntity:
+		return llmSpanClassInvalid
 	case status >= 500:
 		return llmSpanClassServer
 	}
@@ -166,7 +173,7 @@ func (b *llmSpanBody) Close() error {
 	err := b.ReadCloser.Close()
 	b.once.Do(func() {
 		class := classifyLLMSpan(b.status, nil, nil)
-		if b.readErr != nil {
+		if class == "" && b.readErr != nil {
 			class = classifyLLMSpan(b.status, b.readErr, b.ctx.Err())
 		}
 		if class == "" && b.invalid {

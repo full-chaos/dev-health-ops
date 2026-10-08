@@ -72,7 +72,17 @@ func goTestFuncDeclared(t *testing.T, path, name string) bool {
 // pythonFieldDeletedOutright are ledger operations with no Strawberry field left
 // in schema.py at all: `home` (CHAOS-7070) was removed from the Python schema
 // rather than left raising, so the ledger-vs-schema.py check skips it.
-var pythonFieldDeletedOutright = map[string]bool{"home": true}
+var pythonFieldDeletedOutright = map[string]bool{
+	"home": true,
+	// Go-only from their first day (or a document over a ledger root): no
+	// Strawberry field ever raised the deletion error for them.
+	"capacityCompletionDistribution": true,
+	"coverageBaselines":              true,
+	"coverageScopeBaseline":          true,
+	"investmentEvidenceQuality":      true,
+	"sourceHealth":                   true,
+	"testopsJobFailures":             true,
+}
 
 // pythonSchemaFacts is what the ledger is held to: the root fields whose
 // Strawberry body raises the deletion error, and that error's message template.
@@ -481,6 +491,38 @@ func TestSavedReportOperationsCarryTheIsolatedTwoPlaneRun(t *testing.T) {
 		}
 		if !strings.Contains(citation, "two_plane="+build) || strings.Contains(citation, unprovenCitationField) {
 			t.Errorf("%s: citation %q is not the two-plane form", operation, citation)
+		}
+	}
+}
+
+// notGoServedByDesign are the proof-spec operations that need no ledger entry:
+// mutations, which the go-edge proof refuses as document_is_not_a_query.
+var notGoServedByDesign = map[string]bool{
+	"cloneSavedReport":  true,
+	"createSavedReport": true,
+	"deleteSavedReport": true,
+	"triggerReport":     true,
+	"updateSavedReport": true,
+}
+
+// Every proof-spec operation is in the go-served ledger or named above as a
+// mutation. A new served root that is in neither is refused by the go-edge
+// proof (go_edge_operation_not_in_the_go_served_ledger), which blocks its
+// class receipt and its enablement (CHAOS-8957: sourceHealth).
+func TestEveryProofSpecOperationIsInTheLedgerOrAMutation(t *testing.T) {
+	ledger := defaultLedgerForTest(t)
+	for _, operation := range KnownOperations() {
+		_, listed := ledger.Entry(operation)
+		switch {
+		case listed && notGoServedByDesign[operation]:
+			t.Errorf("%s is a mutation exemption and also in the ledger: drop the exemption", operation)
+		case !listed && !notGoServedByDesign[operation]:
+			t.Errorf("%s has a proof spec but no go-served ledger entry: add it to goserved_ledger.json (or name it a mutation here)", operation)
+		}
+	}
+	for operation := range notGoServedByDesign {
+		if _, err := SpecFor(operation); err != nil {
+			t.Errorf("exemption %s has no proof spec: %v", operation, err)
 		}
 	}
 }

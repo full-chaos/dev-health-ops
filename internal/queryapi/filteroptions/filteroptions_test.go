@@ -437,3 +437,21 @@ func TestBuildResponseDropsABareUUIDName(t *testing.T) {
 		t.Fatalf("DeveloperNames = %v, want %v", resp.DeveloperNames, want)
 	}
 }
+
+// TestBuildResponseDropsABareUUIDTeamName: a stored team name that is a bare
+// UUID is dropped; a real name stays.
+func TestBuildResponseDropsABareUUIDTeamName(t *testing.T) {
+	client := byQueryClient{
+		teamNames: [][2]string{
+			{"team-a", "cccccccc-cccc-cccc-cccc-cccccccccccc"},
+			{"team-b", "Platform"},
+		},
+	}
+	resp, err := BuildResponse(context.Background(), client, "org-1")
+	if err != nil {
+		t.Fatalf("BuildResponse: %v", err)
+	}
+	if want := map[string]string{"team-b": "Platform"}; !reflect.DeepEqual(resp.TeamNames, want) {
+		t.Fatalf("TeamNames = %v, want %v", resp.TeamNames, want)
+	}
+}

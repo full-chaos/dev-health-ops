@@ -352,7 +352,8 @@ func namedTeams(ctx context.Context, client QueryClient, bindings []dhclickhouse
 		if err := rows.Scan(&id, &name); err != nil {
 			return nil, fmt.Errorf("filteroptions: team names scan: %w", err)
 		}
-		if id == "" || name == "" {
+		name, ok := scopelabel.CleanName(name)
+		if id == "" || !ok {
 			continue
 		}
 		if out == nil {

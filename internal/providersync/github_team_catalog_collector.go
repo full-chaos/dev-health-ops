@@ -34,21 +34,9 @@ import (
 type GitHubTeamCatalogCollector struct {
 	Client GitHubTeamCatalogRouteHandler
 	Sink   GitHubTeamCatalogClickHouseEffects
-	// ScopeCensus lists the org's other active GitHub integrations. Without
+	// ScopeCensus counts the org's other active GitHub integrations. Without
 	// it no provider_access row is closed (decideOwnershipClose).
 	ScopeCensus OwnershipScopeCensus
-}
-
-// githubSiblingScopeKey is the GitHub org another integration lists, from its
-// credential's plain config. An org held only in the encrypted fields, or in
-// sync_options (which the encrypted fields outrank), is not known here.
-func githubSiblingScopeKey(sibling OwnershipSiblingIntegration) (string, bool) {
-	for _, key := range githubOrgNameConfigKeys {
-		if value := strings.TrimSpace(sibling.CredentialConfig[key]); value != "" {
-			return value, true
-		}
-	}
-	return "", false
 }
 
 // githubOrgNameConfigKeys mirrors team_autoimport_github.py's _github_org
@@ -335,8 +323,8 @@ func (adapter GitHubTeamCatalogCollector) CollectTeamCatalog(
 	// table only, matching Linear's own applyTeamSyncPolicyGuard doc comment.
 	if selections.Teams && (len(rows.RepoOwnership) > 0 || len(rows.RepoListedTeamIDs) > 0) {
 		decision := decideOwnershipClose(ctx, adapter.ScopeCensus, ownershipCloseRequest{
-			ref: ref, provider: githubTeamCatalogProvider, scopeKey: orgName,
-			listed: rows.RepoListedTeamIDs, unproven: rows.RepoUnprovenTeamIDs, siblingScopeKey: githubSiblingScopeKey,
+			ref: ref, provider: githubTeamCatalogProvider,
+			listed: rows.RepoListedTeamIDs, unproven: rows.RepoUnprovenTeamIDs,
 		})
 		written, closed, err := adapter.Sink.SnapshotTeamRepoOwnership(
 			ctx, ref.OrgID, orgName, rows.RepoOwnership, decision.read, decision.closable, normalizedAt,

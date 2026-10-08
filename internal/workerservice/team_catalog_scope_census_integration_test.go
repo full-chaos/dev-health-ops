@@ -4,24 +4,20 @@ package workerservice
 
 import (
 	"context"
-	"reflect"
 	"testing"
 	"time"
 
-	"github.com/full-chaos/dev-health-ops/internal/providersync"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// TestTeamCatalogScopeCensusListsTheOrgsOtherActiveIntegrationsOfOneProvider
-// pins the read the ownership close gate trusts: every other ACTIVE
-// integration of the same provider in the same org, with its credential's
-// plain config and its root sync_options (or the integration's own config
-// when it has no root row). An inactive integration, another provider, another
-// org and the run's own integration are not listed; a row that does not
-// decode fails the read.
-func TestTeamCatalogScopeCensusListsTheOrgsOtherActiveIntegrationsOfOneProvider(t *testing.T) {
+// TestTeamCatalogScopeCensusCountsTheOrgsOtherActiveIntegrationsOfOneProvider
+// pins the read the ownership close gate trusts: the count of every other
+// ACTIVE integration of the same provider (any case, any surrounding space) in
+// the same org. An inactive integration, another provider, another org and the
+// run's own integration are not counted; a failed read is an error, never zero.
+func TestTeamCatalogScopeCensusCountsTheOrgsOtherActiveIntegrationsOfOneProvider(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	instance, err := containers.StartPostgres(ctx)
@@ -37,82 +33,50 @@ func TestTeamCatalogScopeCensusListsTheOrgsOtherActiveIntegrationsOfOneProvider(
 	pgschema.Apply(ctx, t, pool)
 
 	const (
-		org          = "org-scope-census"
-		self         = "00000000-0000-4000-8000-0000000000a1"
-		withOptions  = "00000000-0000-4000-8000-0000000000a2"
-		withFallback = "00000000-0000-4000-8000-0000000000a3"
-		inactive     = "00000000-0000-4000-8000-0000000000a4"
-		otherKind    = "00000000-0000-4000-8000-0000000000a5"
-		otherOrg     = "00000000-0000-4000-8000-0000000000a6"
-		credentialB  = "00000000-0000-4000-8000-0000000000b2"
+		org       = "org-scope-census"
+		self      = "00000000-0000-4000-8000-0000000000a1"
+		mixedCase = "00000000-0000-4000-8000-0000000000a2"
+		spaced    = "00000000-0000-4000-8000-0000000000a3"
+		inactive  = "00000000-0000-4000-8000-0000000000a4"
+		otherKind = "00000000-0000-4000-8000-0000000000a5"
+		otherOrg  = "00000000-0000-4000-8000-0000000000a6"
 	)
 	at := time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)
-	exec := func(statement string, args ...any) {
+	integration := func(id, orgID, provider string, active bool) {
 		t.Helper()
-		if _, err := pool.Exec(ctx, statement, args...); err != nil {
+		if _, err := pool.Exec(ctx, `INSERT INTO integrations (id, org_id, provider, name, config, is_active, created_at, updated_at)
+VALUES ($1, $2, $3, $4, '{}'::json, $5, $6, $6)`, id, orgID, provider, "int-"+id[len(id)-2:], active, at); err != nil {
 			t.Fatal(err)
 		}
 	}
-	exec(`INSERT INTO integration_credentials (id, org_id, provider, name, is_active, credentials_encrypted, config, created_at, updated_at)
-VALUES ($1, $2, 'gitlab', 'cred-b', true, 'ciphertext', '{"gitlab_url":"https://gitlab.internal","group_path":"org","port":443}'::json, $3, $3)`,
-		credentialB, org, at)
-	integration := func(id, orgID, provider, credentialID, config string, active bool) {
-		t.Helper()
-		var credential any
-		if credentialID != "" {
-			credential = credentialID
-		}
-		exec(`INSERT INTO integrations (id, org_id, provider, credential_id, name, config, is_active, created_at, updated_at)
-VALUES ($1, $2, $3, $4, $5, $6::json, $7, $8, $8)`, id, orgID, provider, credential, "int-"+id[len(id)-2:], config, active, at)
-	}
-	integration(self, org, "gitlab", "", `{}`, true)
-	integration(withOptions, org, "GitLab", credentialB, `{"group_path":"ignored-when-a-root-row-exists"}`, true)
-	integration(withFallback, org, "gitlab", "", `{"group_path":"legacy/group"}`, true)
-	integration(inactive, org, "gitlab", "", `{"group_path":"org"}`, false)
-	integration(otherKind, org, "github", "", `{"owner":"org"}`, true)
-	integration(otherOrg, "org-elsewhere", "gitlab", "", `{"group_path":"org"}`, true)
-	var rootID string
-	if err := pool.QueryRow(ctx, `INSERT INTO sync_configurations (id, org_id, name, provider, integration_id, sync_targets, sync_options, is_active,
-	planner_managed, created_at, updated_at)
-VALUES (gen_random_uuid(), $1, 'root', 'gitlab', $2, '[]', '{"group_path":"org","auto_import_projects":true}'::json, true, true, $3, $3)
-RETURNING id::text`, org, withOptions, at).Scan(&rootID); err != nil {
-		t.Fatal(err)
-	}
-	// A child row, older than the root, names another path: only the root row counts.
-	exec(`INSERT INTO sync_configurations (id, org_id, name, provider, integration_id, parent_id, sync_targets, sync_options, is_active,
-	planner_managed, created_at, updated_at)
-VALUES (gen_random_uuid(), $1, 'child', 'gitlab', $2, $3::uuid, '[]', '{"group_path":"child/path"}'::json, true, true, $4, $4)`,
-		org, withOptions, rootID, at.Add(-time.Hour))
+	integration(self, org, "gitlab", true)
+	integration(mixedCase, org, "GitLab", true)
+	integration(spaced, org, " gitlab ", true)
+	integration(inactive, org, "gitlab", false)
+	integration(otherKind, org, "github", true)
+	integration(otherOrg, "org-elsewhere", "gitlab", true)
 
 	census := teamCatalogScopeCensus{pool: pool}
-	siblings, err := census.ActiveSiblingIntegrations(ctx, org, "gitlab", self)
-	if err != nil {
-		t.Fatalf("ActiveSiblingIntegrations: %v", err)
+	for _, test := range []struct {
+		name, provider, integrationID string
+		want                          int
+	}{
+		{"gitlab, from the run's own integration", "gitlab", self, 2},
+		{"gitlab, the provider named in another case", " GitLab ", self, 2},
+		{"gitlab, from a sibling: the run's own row is the one left out", "gitlab", mixedCase, 2},
+		{"github: the org's only github integration", "github", otherKind, 0},
+	} {
+		got, err := census.CountActiveSiblingIntegrations(ctx, org, test.provider, test.integrationID)
+		if err != nil || got != test.want {
+			t.Errorf("%s: count = %d, err = %v; want %d", test.name, got, err, test.want)
+		}
 	}
-	want := []providersync.OwnershipSiblingIntegration{
-		{IntegrationID: withOptions,
-			CredentialConfig: map[string]string{"gitlab_url": "https://gitlab.internal", "group_path": "org"},
-			SyncOptions:      map[string]any{"group_path": "org", "auto_import_projects": true}},
-		{IntegrationID: withFallback, CredentialConfig: map[string]string{},
-			SyncOptions: map[string]any{"group_path": "legacy/group"}},
+	if got, err := census.CountActiveSiblingIntegrations(ctx, org, "gitlab", "not-a-uuid"); err == nil {
+		t.Fatalf("a read that fails counted %d, want an error", got)
 	}
-	if !reflect.DeepEqual(siblings, want) {
-		t.Fatalf("siblings =\n%#v\nwant\n%#v", siblings, want)
-	}
-
-	// The org's only other integration of a provider: none for github.
-	if siblings, err := census.ActiveSiblingIntegrations(ctx, org, "github", otherKind); err != nil || len(siblings) != 0 {
-		t.Fatalf("github siblings = %#v, err = %v; want none", siblings, err)
-	}
-
-	// A config that is valid JSON but not an object fails the whole read.
-	exec(`UPDATE integrations SET config = '[]'::json WHERE id = $1`, withFallback)
-	if siblings, err := census.ActiveSiblingIntegrations(ctx, org, "gitlab", self); err == nil {
-		t.Fatalf("a sibling config that does not decode read as %#v, want an error", siblings)
-	}
-	exec(`UPDATE integrations SET config = '{}'::json WHERE id = $1`, withFallback)
-	exec(`UPDATE integration_credentials SET config = '[]'::json WHERE id = $1`, credentialB)
-	if siblings, err := census.ActiveSiblingIntegrations(ctx, org, "gitlab", self); err == nil {
-		t.Fatalf("a sibling credential config that does not decode read as %#v, want an error", siblings)
+	for _, missing := range [][3]string{{"", "gitlab", self}, {org, "", self}, {org, "gitlab", ""}} {
+		if got, err := census.CountActiveSiblingIntegrations(ctx, missing[0], missing[1], missing[2]); err == nil {
+			t.Fatalf("census(%q) counted %d, want an error", missing, got)
+		}
 	}
 }

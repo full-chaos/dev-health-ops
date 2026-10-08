@@ -733,66 +733,25 @@ WHERE id = $1::uuid AND org_id = $2`, runID, orgID, string(payload))
 }
 
 // teamCatalogScopeCensus implements providersync.OwnershipScopeCensus: the
-// org's other ACTIVE integrations of one provider, each with its credential's
-// plain config and its root sync_options (the integration's own config when
-// it has no root sync_configurations row, the same fallback ResolveSelections
-// uses). A row that does not decode fails the whole read.
+// count of the org's other ACTIVE integrations of one provider.
 type teamCatalogScopeCensus struct {
 	pool *pgxpool.Pool
 }
 
-func (census teamCatalogScopeCensus) ActiveSiblingIntegrations(
+func (census teamCatalogScopeCensus) CountActiveSiblingIntegrations(
 	ctx context.Context, orgID, provider, integrationID string,
-) ([]providersync.OwnershipSiblingIntegration, error) {
+) (int, error) {
 	if census.pool == nil || orgID == "" || provider == "" || integrationID == "" {
-		return nil, providersync.ErrInvalidConfiguration
+		return 0, providersync.ErrInvalidConfiguration
 	}
-	rows, err := census.pool.Query(ctx, `
-SELECT integrations.id::text,
-       COALESCE(integration_credentials.config::text, '{}'),
-       COALESCE((SELECT sync_configurations.sync_options::text
-                 FROM public.sync_configurations
-                 WHERE sync_configurations.org_id = integrations.org_id
-                   AND sync_configurations.integration_id = integrations.id
-                   AND sync_configurations.parent_id IS NULL
-                 ORDER BY sync_configurations.created_at, sync_configurations.id
-                 LIMIT 1),
-                COALESCE(integrations.config::text, '{}'))
+	var siblings int
+	if err := census.pool.QueryRow(ctx, `
+SELECT count(*)
 FROM public.integrations
-LEFT JOIN public.integration_credentials ON integration_credentials.id = integrations.credential_id
 WHERE integrations.org_id = $1 AND lower(trim(integrations.provider)) = $2
-  AND integrations.is_active AND integrations.id <> $3::uuid
-ORDER BY integrations.id`, orgID, strings.ToLower(strings.TrimSpace(provider)), integrationID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var siblings []providersync.OwnershipSiblingIntegration
-	for rows.Next() {
-		var id, credentialJSON, optionsJSON string
-		if err := rows.Scan(&id, &credentialJSON, &optionsJSON); err != nil {
-			return nil, err
-		}
-		var credentialConfig map[string]any
-		if err := json.Unmarshal([]byte(credentialJSON), &credentialConfig); err != nil {
-			return nil, fmt.Errorf("decode credential config of integration %s: %w", id, err)
-		}
-		var syncOptions map[string]any
-		if err := json.Unmarshal([]byte(optionsJSON), &syncOptions); err != nil {
-			return nil, fmt.Errorf("decode sync options of integration %s: %w", id, err)
-		}
-		plain := make(map[string]string, len(credentialConfig))
-		for key, value := range credentialConfig {
-			if text, ok := value.(string); ok {
-				plain[key] = text
-			}
-		}
-		siblings = append(siblings, providersync.OwnershipSiblingIntegration{
-			IntegrationID: id, CredentialConfig: plain, SyncOptions: syncOptions,
-		})
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
+  AND integrations.is_active AND integrations.id <> $3::uuid`,
+		orgID, strings.ToLower(strings.TrimSpace(provider)), integrationID).Scan(&siblings); err != nil {
+		return 0, err
 	}
 	return siblings, nil
 }

@@ -10,15 +10,15 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 )
 
-// staticScopeCensus answers ActiveSiblingIntegrations with fixed siblings or
-// a fixed error, and counts its calls.
+// staticScopeCensus answers CountActiveSiblingIntegrations with a fixed count
+// or a fixed error, and counts its calls.
 type staticScopeCensus struct {
-	siblings []OwnershipSiblingIntegration
+	siblings int
 	err      error
 	calls    *int
 }
 
-func (census staticScopeCensus) ActiveSiblingIntegrations(context.Context, string, string, string) ([]OwnershipSiblingIntegration, error) {
+func (census staticScopeCensus) CountActiveSiblingIntegrations(context.Context, string, string, string) (int, error) {
 	if census.calls != nil {
 		*census.calls++
 	}
@@ -42,10 +42,10 @@ func TestOwnershipListingProvesEndNeedsTheEndSignalAndNoBound(t *testing.T) {
 		pages providerfoundation.PageCollection
 		want  bool
 	}{
-		{"the provider's end signal", providerfoundation.PageCollection{Pages: 1}, true},
-		{"an unconfirmed end", providerfoundation.PageCollection{Pages: 1, EndUnconfirmed: true}, false},
-		{"the page budget ran out", providerfoundation.PageCollection{Pages: 1, PageBudgetExhausted: true}, false},
-		{"the item cap was reached", providerfoundation.PageCollection{Pages: 1, ItemCapReached: true}, false},
+		{"the provider's end signal", providerfoundation.PageCollection{Pages: 1, EndProven: true}, true},
+		{"a stop without the end signal", providerfoundation.PageCollection{Pages: 1}, false},
+		{"the page budget ran out", providerfoundation.PageCollection{Pages: 1, EndProven: true, PageBudgetExhausted: true}, false},
+		{"the item cap was reached", providerfoundation.PageCollection{Pages: 1, EndProven: true, ItemCapReached: true}, false},
 	} {
 		if got := ownershipListingProvesEnd(test.pages); got != test.want {
 			t.Errorf("%s: ownershipListingProvesEnd = %v, want %v", test.name, got, test.want)
@@ -56,7 +56,6 @@ func TestOwnershipListingProvesEndNeedsTheEndSignalAndNoBound(t *testing.T) {
 func TestDecideOwnershipCloseClosesOnlyProvenListingsOfAnUnsharedScope(t *testing.T) {
 	ctx := context.Background()
 	ref := TeamCatalogReference{OrgID: "org", IntegrationID: "integration-a"}
-	gitlabKey := gitlabSiblingScopeKey
 	for _, test := range []struct {
 		name         string
 		census       OwnershipScopeCensus
@@ -76,15 +75,12 @@ func TestDecideOwnershipCloseClosesOnlyProvenListingsOfAnUnsharedScope(t *testin
 		{name: "every listing unproven: nothing closes and the census is not read",
 			census: staticScopeCensus{}, ref: ref, listed: []string{"gl:a"}, unproven: []string{"gl:a"},
 			wantReasons: []string{OwnershipCloseSkippedListingIncomplete}},
-		{name: "a sibling on the same group path, in another case: nothing closes",
-			census: staticScopeCensus{siblings: []OwnershipSiblingIntegration{{IntegrationID: "b", SyncOptions: map[string]any{"group_path": "ORG"}}}},
+		{name: "one other active integration of the provider: nothing closes",
+			census: staticScopeCensus{siblings: 1},
 			ref:    ref, listed: []string{"gl:a"}, wantReasons: []string{OwnershipCloseSkippedScopeShared}, wantCalls: 1},
-		{name: "a sibling whose group path is not known: nothing closes",
-			census: staticScopeCensus{siblings: []OwnershipSiblingIntegration{{IntegrationID: "b"}}},
-			ref:    ref, listed: []string{"gl:a"}, wantReasons: []string{OwnershipCloseSkippedScopeShared}, wantCalls: 1},
-		{name: "a sibling on another group path does not stop the close",
-			census: staticScopeCensus{siblings: []OwnershipSiblingIntegration{{IntegrationID: "b", SyncOptions: map[string]any{"group_path": "other"}}}},
-			ref:    ref, listed: []string{"gl:a"}, wantClosable: []string{"gl:a"}, wantCalls: 1},
+		{name: "several other active integrations of the provider: nothing closes",
+			census: staticScopeCensus{siblings: 3},
+			ref:    ref, listed: []string{"gl:a", "gl:b"}, wantReasons: []string{OwnershipCloseSkippedScopeShared}, wantCalls: 1},
 		{name: "a failed census read: nothing closes",
 			census: staticScopeCensus{err: errors.New("census read failed")},
 			ref:    ref, listed: []string{"gl:a"}, wantReasons: []string{OwnershipCloseSkippedCensusFailed}, wantCalls: 1},
@@ -94,7 +90,7 @@ func TestDecideOwnershipCloseClosesOnlyProvenListingsOfAnUnsharedScope(t *testin
 			census: staticScopeCensus{}, ref: TeamCatalogReference{OrgID: "org"}, listed: []string{"gl:a"},
 			wantReasons: []string{OwnershipCloseSkippedCensusUnavailable}},
 		{name: "an unproven listing and a shared scope: both are said",
-			census: staticScopeCensus{siblings: []OwnershipSiblingIntegration{{IntegrationID: "b", CredentialConfig: map[string]string{"group_path": "org"}}}},
+			census: staticScopeCensus{siblings: 1},
 			ref:    ref, listed: []string{"gl:a", "gl:b"}, unproven: []string{"gl:a"},
 			wantReasons: []string{OwnershipCloseSkippedListingIncomplete, OwnershipCloseSkippedScopeShared}, wantCalls: 1},
 		{name: "nothing listed: nothing to decide", census: staticScopeCensus{}, ref: ref},
@@ -107,8 +103,8 @@ func TestDecideOwnershipCloseClosesOnlyProvenListingsOfAnUnsharedScope(t *testin
 				census = static
 			}
 			decision := decideOwnershipClose(ctx, census, ownershipCloseRequest{
-				ref: test.ref, provider: "gitlab", scopeKey: "org",
-				listed: test.listed, unproven: test.unproven, siblingScopeKey: gitlabKey,
+				ref: test.ref, provider: "gitlab",
+				listed: test.listed, unproven: test.unproven,
 			})
 			if !reflect.DeepEqual(decision.read, test.listed) {
 				t.Errorf("read = %v, want every listed team %v", decision.read, test.listed)
@@ -123,35 +119,6 @@ func TestDecideOwnershipCloseClosesOnlyProvenListingsOfAnUnsharedScope(t *testin
 				t.Errorf("census calls = %d, want %d", calls, test.wantCalls)
 			}
 		})
-	}
-}
-
-func TestSiblingScopeKeysUseEachCollectorsOwnPrecedence(t *testing.T) {
-	for _, test := range []struct {
-		name      string
-		key       func(OwnershipSiblingIntegration) (string, bool)
-		sibling   OwnershipSiblingIntegration
-		want      string
-		wantKnown bool
-	}{
-		{"gitlab: credential config outranks sync_options", gitlabSiblingScopeKey, OwnershipSiblingIntegration{
-			CredentialConfig: map[string]string{"group": "from-credential"}, SyncOptions: map[string]any{"group_path": "from-options"},
-		}, "from-credential", true},
-		{"gitlab: group_path outranks group and owner in sync_options", gitlabSiblingScopeKey, OwnershipSiblingIntegration{
-			SyncOptions: map[string]any{"owner": "o", "group": "g", "group_path": "gp"},
-		}, "gp", true},
-		{"gitlab: nothing configured is not known", gitlabSiblingScopeKey, OwnershipSiblingIntegration{}, "", false},
-		{"github: the credential's plain config names the org", githubSiblingScopeKey, OwnershipSiblingIntegration{
-			CredentialConfig: map[string]string{"owner": "acme"},
-		}, "acme", true},
-		{"github: an org only in sync_options is not known (the encrypted fields outrank it)", githubSiblingScopeKey, OwnershipSiblingIntegration{
-			SyncOptions: map[string]any{"org": "acme"},
-		}, "", false},
-	} {
-		got, known := test.key(test.sibling)
-		if got != test.want || known != test.wantKnown {
-			t.Errorf("%s: got (%q, %v), want (%q, %v)", test.name, got, known, test.want, test.wantKnown)
-		}
 	}
 }
 

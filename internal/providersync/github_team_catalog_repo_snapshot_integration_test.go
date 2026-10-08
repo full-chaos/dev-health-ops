@@ -198,7 +198,7 @@ func TestGitHubTeamCatalogClosesProviderAccessRowsGitHubNoLongerReturns(t *testi
 		requireRepoFacts(t, "after GitHub returned no repo", openRepoOwnership(ctx, t, conn, org, "github"))
 	})
 
-	t.Run("two GitHub orgs of one tenant (one name the prefix of the other) with the same team slug keep both grants", func(t *testing.T) {
+	t.Run("two GitHub orgs of one tenant (one name the prefix of the other) with the same team slug keep both grants and close neither", func(t *testing.T) {
 		org := "snap-two-github-orgs"
 		acme := map[string]string{
 			"/orgs/acme/teams":                `[{"slug":"platform","name":"Platform"}]`,
@@ -211,11 +211,8 @@ func TestGitHubTeamCatalogClosesProviderAccessRowsGitHubNoLongerReturns(t *testi
 		run := func(githubOrg string, paths map[string]string, at time.Time) {
 			t.Helper()
 			doer := &githubTeamCatalogFixtureDoer{t: t, byPath: paths}
-			// Each run is its own integration; each lists the other on its own GitHub org.
-			other := map[string]string{"acme": "acme-labs", "acme-labs": "acme"}[githubOrg]
-			adapter := GitHubTeamCatalogCollector{Sink: GitHubTeamCatalogClickHouseEffects{Conn: conn}, ScopeCensus: staticScopeCensus{
-				siblings: []OwnershipSiblingIntegration{{IntegrationID: "integration-" + other, CredentialConfig: map[string]string{"org": other}}},
-			}}
+			// Each run is its own integration; the census counts the other one.
+			adapter := GitHubTeamCatalogCollector{Sink: GitHubTeamCatalogClickHouseEffects{Conn: conn}, ScopeCensus: staticScopeCensus{siblings: 1}}
 			credential := providerfoundation.Credential{Provider: "github", Config: map[string]string{"org": githubOrg}}
 			if _, err := adapter.CollectTeamCatalog(ctx, TeamCatalogReference{OrgID: org, SyncRunID: "run", IntegrationID: "integration-" + githubOrg},
 				credential, githubTeamCatalogAdapterClient(t, doer), teamsOnly, at); err != nil {
@@ -227,10 +224,11 @@ func TestGitHubTeamCatalogClosesProviderAccessRowsGitHubNoLongerReturns(t *testi
 		acmeAPI := repoOwnershipFact{TeamID: "gh:platform", Repo: "acme/api", Source: "provider_access"}
 		labsSvc := repoOwnershipFact{TeamID: "gh:platform", Repo: "acme-labs/svc", Source: "provider_access"}
 		requireRepoFacts(t, "after acme then acme-labs", openRepoOwnership(ctx, t, conn, org, "github"), acmeAPI, labsSvc)
-		// A repo dropped in one GitHub org closes only that org's row.
+		// Another active GitHub integration in the org stops every close, even on
+		// another GitHub org: scopes are not compared.
 		acme["/orgs/acme/teams/platform/repos"] = `[]`
 		run("acme", acme, t0.Add(2*time.Hour))
-		requireRepoFacts(t, "after acme drops api", openRepoOwnership(ctx, t, conn, org, "github"), labsSvc)
+		requireRepoFacts(t, "after acme drops api", openRepoOwnership(ctx, t, conn, org, "github"), acmeAPI, labsSvc)
 	})
 
 	t.Run("a closed row is not read as open: a repeat run keeps its valid_to and a re-grant opens it again", func(t *testing.T) {
@@ -473,8 +471,7 @@ func TestGitHubTeamCatalogClosesProviderAccessRowsGitHubNoLongerReturns(t *testi
 	t.Run("two active integrations of the org on the same GitHub org never close each other's rows", func(t *testing.T) {
 		org := "snap-two-integrations"
 		teams := `[{"slug":"platform","name":"Platform"}]`
-		censusOfA := staticScopeCensus{siblings: []OwnershipSiblingIntegration{{IntegrationID: "integration-b", CredentialConfig: map[string]string{"org": "ACME"}}}}
-		censusOfB := staticScopeCensus{siblings: []OwnershipSiblingIntegration{{IntegrationID: "integration-a", CredentialConfig: map[string]string{"owner": "acme"}}}}
+		censusOfA, censusOfB := staticScopeCensus{siblings: 1}, staticScopeCensus{siblings: 1}
 		listsAPI := &githubTeamCatalogFixtureDoer{t: t, byPath: map[string]string{"/orgs/acme/teams": teams, "/orgs/acme/teams/platform/repos": `[{"name":"api"}]`}}
 		if _, err := githubSnapshotRunAs(ctx, t, conn, org, listsAPI, teamsOnly, t0, "integration-a", censusOfA); err != nil {
 			t.Fatal(err)
@@ -490,12 +487,12 @@ func TestGitHubTeamCatalogClosesProviderAccessRowsGitHubNoLongerReturns(t *testi
 		}
 	})
 
-	t.Run("an integration whose GitHub org is not known stops the close; no census stops it too", func(t *testing.T) {
+	t.Run("another active GitHub integration stops the close; no census or a failed census stops it too", func(t *testing.T) {
 		for _, test := range []struct {
 			org, reason string
 			census      OwnershipScopeCensus
 		}{
-			{"snap-sibling-unknown", OwnershipCloseSkippedScopeShared, staticScopeCensus{siblings: []OwnershipSiblingIntegration{{IntegrationID: "integration-b"}}}},
+			{"snap-sibling", OwnershipCloseSkippedScopeShared, staticScopeCensus{siblings: 1}},
 			{"snap-no-census", OwnershipCloseSkippedCensusUnavailable, nil},
 			{"snap-census-failed", OwnershipCloseSkippedCensusFailed, staticScopeCensus{err: errors.New("integrations read failed")}},
 		} {

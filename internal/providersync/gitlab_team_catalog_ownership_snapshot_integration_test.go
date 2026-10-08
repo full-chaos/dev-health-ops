@@ -518,10 +518,8 @@ func TestGitLabTeamCatalogClosesProviderAccessRowsGitLabNoLongerReturns(t *testi
 		a, b := newGitLabSnapshotServer(t), newGitLabSnapshotServer(t)
 		a.set("", "", nil, map[string][]string{"org": {"org/kept"}})
 		b.set("", "", nil, map[string][]string{"org": {}})
-		// Each census names the other integration on the same group path, as the
-		// org's integrations table would.
-		censusOfA := staticScopeCensus{siblings: []OwnershipSiblingIntegration{{IntegrationID: "integration-b", SyncOptions: map[string]any{"group_path": "org"}}}}
-		censusOfB := staticScopeCensus{siblings: []OwnershipSiblingIntegration{{IntegrationID: "integration-a", SyncOptions: map[string]any{"group_path": "org"}}}}
+		// Each census counts the other integration, as the org's integrations table would.
+		censusOfA, censusOfB := staticScopeCensus{siblings: 1}, staticScopeCensus{siblings: 1}
 		if _, err := gitlabSnapshotRunAs(ctx, t, conn, org, a, projectsOnly, false, t0, "integration-a", censusOfA); err != nil {
 			t.Fatal(err)
 		}
@@ -545,10 +543,10 @@ func TestGitLabTeamCatalogClosesProviderAccessRowsGitLabNoLongerReturns(t *testi
 		}
 	})
 
-	t.Run("an active integration on another group path does not stop the close", func(t *testing.T) {
+	t.Run("an active integration on another group path stops the close too: scopes are not compared", func(t *testing.T) {
 		org, fake := "gl-snap-other-path", newGitLabSnapshotServer(t)
 		seedTree(fake)
-		census := staticScopeCensus{siblings: []OwnershipSiblingIntegration{{IntegrationID: "integration-b", SyncOptions: map[string]any{"group_path": "other-org"}}}}
+		census := staticScopeCensus{siblings: 1}
 		if _, err := gitlabSnapshotRunAs(ctx, t, conn, org, fake, projectsOnly, false, t0, "integration-a", census); err != nil {
 			t.Fatal(err)
 		}
@@ -557,9 +555,9 @@ func TestGitLabTeamCatalogClosesProviderAccessRowsGitLabNoLongerReturns(t *testi
 		if err != nil {
 			t.Fatal(err)
 		}
-		requireGitLabFacts(t, "after drop", openGitLabOwnership(ctx, t, conn, org, "gitlab"), rootSvc, teamAApi, teamAWeb)
-		if len(result.DegradedLegs) != 0 {
-			t.Fatalf("degraded legs = %+v, want none", result.DegradedLegs)
+		requireGitLabFacts(t, "after drop", openGitLabOwnership(ctx, t, conn, org, "gitlab"), rootSvc, rootOld, teamAApi, teamAWeb)
+		if got := closeLegReasons(result.DegradedLegs); len(got) != 1 || got[0] != OwnershipCloseSkippedScopeShared {
+			t.Fatalf("degraded close legs = %v, want [%s]", got, OwnershipCloseSkippedScopeShared)
 		}
 	})
 
@@ -567,8 +565,7 @@ func TestGitLabTeamCatalogClosesProviderAccessRowsGitLabNoLongerReturns(t *testi
 		name, integrationID, reason string
 		census                      OwnershipScopeCensus
 	}{
-		{"a sibling whose group path is not known", "integration-a", OwnershipCloseSkippedScopeShared,
-			staticScopeCensus{siblings: []OwnershipSiblingIntegration{{IntegrationID: "integration-b"}}}},
+		{"another active integration", "integration-a", OwnershipCloseSkippedScopeShared, staticScopeCensus{siblings: 1}},
 		{"a failed census read", "integration-a", OwnershipCloseSkippedCensusFailed,
 			staticScopeCensus{err: errors.New("integrations read failed")}},
 		{"no census", "integration-a", OwnershipCloseSkippedCensusUnavailable, nil},

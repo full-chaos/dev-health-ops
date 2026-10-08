@@ -1223,28 +1223,39 @@ when both of these hold; otherwise that scope closes nothing (its grants are sti
 `DegradedLeg` (`leg = ownership_close`, `outcome = skipped`) on the run's result, which the post-sync dispatcher stores in
 `sync_runs.result.degraded` and counts as `native_failed_nonfatal` on `dev_health_team_catalog_dispatch_total`.
 
-- **The listing is proven complete** (`ownershipListingProvesEnd`): the provider sent its own end-of-list signal and no bound
-  stopped the walk. GitLab's end is an `X-Next-Page` header that is sent and empty; a malformed or non-positive
-  `X-Next-Page`, or no header at all (an end inferred from a short page), leaves that group's listing unproven
-  (`PageCollection.EndUnconfirmed`, `internal/providerfoundation/pagination.go`). GitHub's end is a page without
-  `rel="next"` whose `Link` header parses; a `Link` entry that does not start with `<URL>`, has an empty URL or has no
-  `rel`, or a page as full as `per_page` with no `Link` at all, leaves that team's listing unproven. A page error, a
-  non-2xx page and a page cap still fail or skip the run as above. Reason `listing_incomplete`; only the unproven teams keep their rows.
-- **No other listing source could own the rows.** The rows carry no integration key, so when another ACTIVE integration of
-  the same provider in the same org could list the same scope key (GitLab group path, GitHub org login, compared without
-  case), the run closes nothing (reason `scope_shared`). The census is `teamCatalogScopeCensus`
-  (`internal/workerservice/team_catalog_clients.go`): the org's other active integrations of the provider, each with its
-  credential's plain config and its root `sync_options` (the integration's own `config` when it has no root row). A
-  sibling whose scope key is not known from that (a GitHub org held only in the encrypted credential fields, or a GitLab
-  integration with no group path configured) counts as sharing the scope. A failed census read (`scope_census_failed`), no
-  census, or a run with no integration id (`scope_census_unavailable`: the `dho sync teams` CLI verb) closes nothing.
+- **The listing is proven complete** (`ownershipListingProvesEnd`): the walker stopped on the provider's own end-of-list
+  signal and no bound stopped the walk (`PageCollection.EndProven`, `internal/providerfoundation/pagination.go`). ONE
+  reading of the continuation headers per walker decides both "follow the next page" and "the end is proven", so the two
+  can never disagree: `githubPageStep` / `linkHeaderNext` for GitHub, `gitLabPageStep` for GitLab. GitHub: the `Link`
+  header is read over every field line, with `rel` tokens space-split and compared without case (`rel="next last"`,
+  `rel=NEXT` and a `rel="next"` in a second `Link` line are all followed). The end is proven only when no entry is
+  `rel="next"` and every entry is `<URL>` with a non-empty URL and a `rel`; with no `Link` at all, only on a page shorter
+  than `per_page`. GitLab: the end is proven only when `X-Next-Page` is sent once and empty and no well-formed `Link`
+  announces a next page; a malformed or non-positive `X-Next-Page`, no header (an end inferred from a short page) or a
+  `Link` with `rel="next"` leaves that group's listing unproven. A caller bound (`StopAt`, `StopAfter`, `MaxItems`) never
+  proves an end. Every page must decode as a JSON array: a 200 body `null` or an object is an error
+  (`decodePage`), never a page with zero items. A page error, a non-2xx page and a page cap still fail or skip the run as
+  above. Reason `listing_incomplete`; only the unproven teams keep their rows.
+- **No other integration of the provider in the org.** The rows carry no integration key, and two integrations'
+  configured scopes cannot be compared safely (a subgroup of the other's group, a numeric group id, a trailing `/`, an
+  escaped path, another case), so when the org has ANY other ACTIVE integration of the same provider, the run closes
+  nothing (reason `scope_shared`), whatever scope that integration names. A per-integration key on the rows is CHAOS-8990.
+  The census is `teamCatalogScopeCensus.CountActiveSiblingIntegrations` (`internal/workerservice/team_catalog_clients.go`):
+  the count of the org's other active integrations whose provider matches without case or surrounding space. A failed
+  census read (`scope_census_failed`), no census, or a run with no integration id (`scope_census_unavailable`: the
+  `dho sync teams` CLI verb, whose collectors carry no census) closes nothing; the CLI shows only the WARN line.
 
-Tests: `TestDecideOwnershipCloseClosesOnlyProvenListingsOfAnUnsharedScope` and `TestSiblingScopeKeysUseEachCollectorsOwnPrecedence`
-(the gate), `TestGitLabPaginationEndUnconfirmedUnlessXNextPageIsSentEmpty` and
-`TestGitHubLinkPaginationEndUnconfirmedOnMalformedLinkOrFullPageWithoutLink` (the end signal), the provider subtests of
-`TestGitLabTeamCatalogClosesProviderAccessRowsGitLabNoLongerReturns` and
-`TestGitHubTeamCatalogClosesProviderAccessRowsGitHubNoLongerReturns` (real ClickHouse), and
-`TestTeamCatalogScopeCensusListsTheOrgsOtherActiveIntegrationsOfOneProvider` (real Postgres, the migrated schema).
+Tests: `TestDecideOwnershipCloseClosesOnlyProvenListingsOfAnUnsharedScope` (the gate),
+`TestGitLabPaginationEndProvenOnlyWhenXNextPageIsSentEmpty`,
+`TestGitHubLinkPaginationEndProvenOnlyWhenTheWalkersLinkReadingFindsNoNext` and
+`TestGitHubLinkPaginationEndNotProvenWhenACallerBoundStopsTheWalk` (the end signal and the page decode), the provider
+subtests of `TestGitLabTeamCatalogClosesProviderAccessRowsGitLabNoLongerReturns` and
+`TestGitHubTeamCatalogClosesProviderAccessRowsGitHubNoLongerReturns`, `TestGitHubOwnershipCloseFollowsEveryLinkFormItReadsAsNext`,
+`TestOwnershipCloseNeverReadsANullOrObjectPageAsAnEmptyListing` and
+`TestGitLabOwnershipCloseNeedsNoLinkNextBesideAnEmptyXNextPage` (real ClickHouse),
+`TestTeamCatalogScopeCensusCountsTheOrgsOtherActiveIntegrationsOfOneProvider` (real Postgres, the migrated schema), and
+`TestOwnershipCloseSkipsForAnyOtherActiveIntegrationEndToEnd` (real Postgres census into both collectors and real
+ClickHouse).
 
 One path: `run_team_autoimport` → `team_autoimport_<provider>.populate()` → `discover_*` → ClickHouse. (`LinearClient.iter_projects` is vestigial dead code, never a path.)
 

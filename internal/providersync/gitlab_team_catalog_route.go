@@ -557,22 +557,9 @@ func distinctGitLabMembershipMembers(rows []gitlabTeamCatalogMembershipRow) map[
 type GitLabTeamCatalogCollector struct {
 	Handler GitLabTeamCatalogRouteHandler
 	Sink    GitLabTeamCatalogClickHouseEffects
-	// ScopeCensus lists the org's other active GitLab integrations. Without
+	// ScopeCensus counts the org's other active GitLab integrations. Without
 	// it no provider_access row is closed (decideOwnershipClose).
 	ScopeCensus OwnershipScopeCensus
-}
-
-// gitlabSiblingScopeKey is the group path another integration lists, with the
-// collector's own precedence (gitlabTeamCatalogGroupPath): credential config,
-// then sync_options.
-func gitlabSiblingScopeKey(sibling OwnershipSiblingIntegration) (string, bool) {
-	for _, key := range gitlabTeamCatalogGroupPathKeys {
-		if value := strings.TrimSpace(sibling.CredentialConfig[key]); value != "" {
-			return value, true
-		}
-	}
-	value := gitlabTeamCatalogFirstString(sibling.SyncOptions, gitlabTeamCatalogGroupPathKeys)
-	return value, value != ""
 }
 
 func (collector GitLabTeamCatalogCollector) CollectTeamCatalog(
@@ -760,9 +747,8 @@ func (collector GitLabTeamCatalogCollector) CollectTeamCatalog(
 	if selections.Projects {
 		if batch.Effects.Ownership != nil {
 			decision := decideOwnershipClose(ctx, collector.ScopeCensus, ownershipCloseRequest{
-				ref: ref, provider: gitlabTeamCatalogProvider, scopeKey: gitlabTeamCatalogGroupPath(credential, ref),
+				ref: ref, provider: gitlabTeamCatalogProvider,
 				listed: batch.Rows.OwnershipListedTeamIDs, unproven: batch.Rows.OwnershipUnprovenTeamIDs,
-				siblingScopeKey: gitlabSiblingScopeKey,
 			})
 			ownershipRows, closed, snapshotErr := collector.Sink.SnapshotOwnership(
 				ctx, ref.OrgID, batch.Rows.Ownership, decision.read, decision.closable, normalizedAt)

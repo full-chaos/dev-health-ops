@@ -241,6 +241,9 @@ func TestDrilldownIssuesGolden(t *testing.T) {
 		if v, _ := bindingValue(bindings, "org_id"); v != "org-1" {
 			t.Fatalf("org_id binding = %v, want org-1", v)
 		}
+		if strings.Contains(query, "FROM work_items FINAL") {
+			return &pairRowScanner{}, nil
+		}
 		return &issuesRowScanner{rows: [][]any{
 			{"wi-1", "github", "done", "team-a", 12.5, 20.25, dt(2024, 6, 1, 10, 0, 0), dt(2024, 6, 3, 10, 0, 0)},
 			{"wi-2", "jira", "in_progress", nil, nil, nil, nil, nil},
@@ -267,5 +270,84 @@ func TestDrilldownIssuesGolden(t *testing.T) {
 	}
 	if string(gotJSON) != string(wantJSON) {
 		t.Fatalf("response mismatch\n got:  %s\nwant: %s", gotJSON, wantJSON)
+	}
+}
+
+// pairRowScanner replays fixed (key, name) rows.
+type pairRowScanner struct {
+	rows  [][2]string
+	index int
+}
+
+func (s *pairRowScanner) Next() bool {
+	if s.index >= len(s.rows) {
+		return false
+	}
+	s.index++
+	return true
+}
+
+func (s *pairRowScanner) Scan(dest ...any) error {
+	*dest[0].(*string), *dest[1].(*string) = s.rows[s.index-1][0], s.rows[s.index-1][1]
+	return nil
+}
+
+func (s *pairRowScanner) Err() error   { return nil }
+func (s *pairRowScanner) Close() error { return nil }
+
+// TestDrilldownIssuesServeTheStoredTitle: a stored title is served, an absent
+// one is null, and the title read is bound to the requesting org.
+func TestDrilldownIssuesServeTheStoredTitle(t *testing.T) {
+	t.Setenv("IDENTITY_MAPPING_PATH", t.TempDir()+"/missing.yaml")
+	var titleOrg any
+	client := personIdentityDispatchClient{identity: "alice@example.com", t: t, handler: func(t *testing.T, query string, bindings []dhclickhouse.Binding) (dhclickhouse.RowScanner, error) {
+		if strings.Contains(query, "FROM work_items FINAL") {
+			titleOrg, _ = bindingValue(bindings, "org_id")
+			return &pairRowScanner{rows: [][2]string{{"wi-1", "Fix login"}}}, nil
+		}
+		return &issuesRowScanner{rows: [][]any{
+			{"wi-1", "github", "done", nil, nil, nil, nil, nil},
+			{"wi-2", "jira", "done", nil, nil, nil, nil, nil},
+		}}, nil
+	}}
+	reader, err := NewReader(client)
+	if err != nil {
+		t.Fatalf("NewReader: %v", err)
+	}
+	got, err := BuildDrilldownIssuesResponse(context.Background(), reader, "org-1", DrilldownIssuesParams{
+		PersonID: "anyone", RangeDays: 14, Limit: 50, Now: dt(2024, 6, 15, 0, 0, 0),
+	})
+	if err != nil {
+		t.Fatalf("BuildDrilldownIssuesResponse: %v", err)
+	}
+	if titleOrg != "org-1" {
+		t.Fatalf("title read org_id = %v, want org-1", titleOrg)
+	}
+	if got.Items[0].Title == nil || *got.Items[0].Title != "Fix login" {
+		t.Fatalf("Items[0].Title = %v, want Fix login", got.Items[0].Title)
+	}
+	if got.Items[1].Title != nil {
+		t.Fatalf("Items[1].Title = %v, want nil", *got.Items[1].Title)
+	}
+}
+
+// TestDrilldownIssuesFailOnATitleReadError: a failed title read is an error,
+// never an unnamed success.
+func TestDrilldownIssuesFailOnATitleReadError(t *testing.T) {
+	t.Setenv("IDENTITY_MAPPING_PATH", t.TempDir()+"/missing.yaml")
+	client := personIdentityDispatchClient{identity: "alice@example.com", t: t, handler: func(t *testing.T, query string, bindings []dhclickhouse.Binding) (dhclickhouse.RowScanner, error) {
+		if strings.Contains(query, "FROM work_items FINAL") {
+			return nil, errors.New("boom")
+		}
+		return &issuesRowScanner{rows: [][]any{{"wi-1", "github", "done", nil, nil, nil, nil, nil}}}, nil
+	}}
+	reader, err := NewReader(client)
+	if err != nil {
+		t.Fatalf("NewReader: %v", err)
+	}
+	if _, err := BuildDrilldownIssuesResponse(context.Background(), reader, "org-1", DrilldownIssuesParams{
+		PersonID: "anyone", RangeDays: 14, Limit: 50, Now: dt(2024, 6, 15, 0, 0, 0),
+	}); err == nil {
+		t.Fatal("want an error when the title read fails")
 	}
 }

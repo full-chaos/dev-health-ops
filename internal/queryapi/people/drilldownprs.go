@@ -34,6 +34,8 @@ import (
 	"time"
 
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
+
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/scopelabel"
 )
 
 // maxDrilldownLimit ports _MAX_DRILLDOWN_LIMIT (services/people.py:67).
@@ -88,7 +90,10 @@ type DrilldownPRsParams struct {
 // Python's naive-isoformat wire form is the declared baseline defect; Go's
 // RFC 3339 form is canonical.
 type PullRequestRow struct {
-	RepoID             string     `json:"repo_id"`
+	RepoID string `json:"repo_id"`
+	// RepoName is the stored name of RepoID in the requesting org (CHAOS-8955,
+	// Go-only); null when the repository has no stored name.
+	RepoName           *string    `json:"repo_name"`
 	Number             uint32     `json:"number"`
 	Title              *string    `json:"title"`
 	Author             *string    `json:"author"`
@@ -233,6 +238,22 @@ func BuildDrilldownPRsResponse(ctx context.Context, reader *Reader, orgID string
 	rows, err := fetchPersonPullRequests(ctx, reader.client, identities, startDay, endDay, limit, params.Cursor, orgID)
 	if err != nil {
 		return nil, err
+	}
+
+	repoIDs := make([]string, 0, len(rows))
+	for _, row := range rows {
+		repoIDs = append(repoIDs, row.RepoID)
+	}
+	repoNames := scopelabel.Resolve(ctx, reader.client, orgID, "repo", repoIDs, scopelabel.Options{
+		Final:  true,
+		Suffix: settingsMaxExecutionTime(),
+		Log:    "people",
+	})
+	for i := range rows {
+		if name, ok := repoNames[rows[i].RepoID]; ok {
+			named := name
+			rows[i].RepoName = &named
+		}
 	}
 
 	var nextCursor *time.Time

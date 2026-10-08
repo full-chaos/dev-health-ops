@@ -80,7 +80,12 @@ type DrilldownIssuesParams struct {
 // route. Python's naive-isoformat wire form is the declared baseline
 // defect; Go's RFC 3339 form is canonical.
 type IssueRow struct {
-	WorkItemID     string     `json:"work_item_id"`
+	WorkItemID string `json:"work_item_id"`
+	// Title is the stored title of the work item in the requesting org
+	// (CHAOS-8955, Go-only); null when none is stored. No repository name is
+	// served here: an issue reaches a repository only through its linked pull
+	// requests (work_graph_issue_pr), never through its own repo_id.
+	Title          *string    `json:"title"`
 	Provider       string     `json:"provider"`
 	Status         string     `json:"status"`
 	TeamID         *string    `json:"team_id"`
@@ -165,6 +170,47 @@ func fetchPersonIssues(ctx context.Context, client QueryClient, identities []str
 	return items, nil
 }
 
+// workItemTitlesQuery reads the newest stored title of each work item id,
+// bounded to the requesting org in the same WHERE as the FINAL source.
+const workItemTitlesQuery = `
+SELECT work_item_id, trim(title) AS title
+FROM work_items FINAL
+WHERE org_id = {org_id:String}
+  AND work_item_id IN {ids:Array(String)}
+  AND trim(title) != ''
+ORDER BY last_synced ASC, work_item_id ASC
+%s
+`
+
+// fetchWorkItemTitles returns {work_item_id: title}. A failed read is an error.
+func fetchWorkItemTitles(ctx context.Context, client QueryClient, orgID string, ids []string) (map[string]string, error) {
+	out := map[string]string{}
+	if len(ids) == 0 {
+		return out, nil
+	}
+	rows, err := client.Query(ctx, fmt.Sprintf(workItemTitlesQuery, settingsMaxExecutionTime()), []dhclickhouse.Binding{
+		{Name: "org_id", Value: orgID},
+		{Name: "ids", Value: ids},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("people: work item titles query: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id, title string
+		if err := rows.Scan(&id, &title); err != nil {
+			return nil, fmt.Errorf("people: scan work item title: %w", err)
+		}
+		if id != "" && title != "" {
+			out[id] = title
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("people: iterate work item titles: %w", err)
+	}
+	return out, nil
+}
+
 // BuildDrilldownIssuesResponse is the Go port of
 // build_person_drilldown_issues_response (services/people.py:793-844): see
 // BuildDrilldownPRsResponse's own doc comment for the identity-resolution/
@@ -192,6 +238,21 @@ func BuildDrilldownIssuesResponse(ctx context.Context, reader *Reader, orgID str
 	rows, err := fetchPersonIssues(ctx, reader.client, identities, startDay, endDay, limit, params.Cursor, orgID)
 	if err != nil {
 		return nil, err
+	}
+
+	itemIDs := make([]string, 0, len(rows))
+	for _, row := range rows {
+		itemIDs = append(itemIDs, row.WorkItemID)
+	}
+	titles, err := fetchWorkItemTitles(ctx, reader.client, orgID, itemIDs)
+	if err != nil {
+		return nil, err
+	}
+	for i := range rows {
+		if title, ok := titles[rows[i].WorkItemID]; ok {
+			named := title
+			rows[i].Title = &named
+		}
 	}
 
 	var nextCursor *time.Time

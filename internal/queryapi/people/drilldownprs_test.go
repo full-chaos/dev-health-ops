@@ -337,6 +337,9 @@ func TestDrilldownPRsGolden(t *testing.T) {
 		if v, _ := bindingValue(bindings, "org_id"); v != "org-1" {
 			t.Fatalf("org_id binding = %v, want org-1", v)
 		}
+		if strings.Contains(query, "AS display_name") {
+			return &pairRowScanner{}, nil
+		}
 		return &prsRowScanner{rows: [][]any{
 			{
 				"11111111-1111-1111-1111-111111111111", uint32(42), "Add feature", "Alice Smith", "alice@example.com",
@@ -373,5 +376,43 @@ func TestDrilldownPRsGolden(t *testing.T) {
 	}
 	if string(gotJSON) != string(wantJSON) {
 		t.Fatalf("response mismatch\n got:  %s\nwant: %s", gotJSON, wantJSON)
+	}
+}
+
+// TestDrilldownPRsServeTheStoredRepoName: a stored repository name is served,
+// an absent one is null, and the name read is bound to the requesting org.
+func TestDrilldownPRsServeTheStoredRepoName(t *testing.T) {
+	t.Setenv("IDENTITY_MAPPING_PATH", t.TempDir()+"/missing.yaml")
+	const named = "11111111-1111-1111-1111-111111111111"
+	const unnamed = "22222222-2222-2222-2222-222222222222"
+	var nameOrg any
+	client := personIdentityDispatchClient{identity: "alice@example.com", t: t, handler: func(t *testing.T, query string, bindings []dhclickhouse.Binding) (dhclickhouse.RowScanner, error) {
+		if strings.Contains(query, "AS display_name") {
+			nameOrg, _ = bindingValue(bindings, "org_id")
+			return &pairRowScanner{rows: [][2]string{{named, "acme/api"}}}, nil
+		}
+		return &prsRowScanner{rows: [][]any{
+			{named, uint32(1), "A", "Alice", "alice@example.com", dt(2024, 6, 10, 12, 0, 0), nil, nil, nil},
+			{unnamed, uint32(2), "B", "Alice", "alice@example.com", dt(2024, 6, 9, 12, 0, 0), nil, nil, nil},
+		}}, nil
+	}}
+	reader, err := NewReader(client)
+	if err != nil {
+		t.Fatalf("NewReader: %v", err)
+	}
+	got, err := BuildDrilldownPRsResponse(context.Background(), reader, "org-1", DrilldownPRsParams{
+		PersonID: "anyone", RangeDays: 14, Limit: 50, Now: dt(2024, 6, 15, 0, 0, 0),
+	})
+	if err != nil {
+		t.Fatalf("BuildDrilldownPRsResponse: %v", err)
+	}
+	if nameOrg != "org-1" {
+		t.Fatalf("name read org_id = %v, want org-1", nameOrg)
+	}
+	if got.Items[0].RepoName == nil || *got.Items[0].RepoName != "acme/api" {
+		t.Fatalf("Items[0].RepoName = %v, want acme/api", got.Items[0].RepoName)
+	}
+	if got.Items[1].RepoName != nil {
+		t.Fatalf("Items[1].RepoName = %v, want nil", *got.Items[1].RepoName)
 	}
 }

@@ -10,6 +10,7 @@ import (
 	"github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
+	"github.com/full-chaos/dev-health-ops/internal/teamid"
 	"github.com/google/uuid"
 )
 
@@ -570,7 +571,7 @@ WHERE org_id = {org_id:String}`,
 		}
 		key := projectKey
 		ownership = append(ownership, jiraTeamCatalogOwnershipRow{
-			OrgID: orgID, Provider: jiraTeamCatalogProvider, TeamID: opsTeamID,
+			OrgID: orgID, Provider: jiraTeamCatalogProvider, TeamID: teamid.Of(jiraTeamCatalogProvider, opsTeamID),
 			ProjectID: nativeProjectID, ProjectKey: &key, Source: jiraTeamCatalogLegacySource,
 			IsPrimary: 1, Specificity: jiraTeamCatalogLegacySpecificity, Priority: jiraTeamCatalogLegacyPriority,
 			ValidFrom: normalizedAt, UpdatedAt: normalizedAt,

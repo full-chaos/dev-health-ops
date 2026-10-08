@@ -573,3 +573,42 @@ func TestResolveReadsAllSectionsAndCarriesTheTeam(t *testing.T) {
 		t.Fatal("a failed connector read fails the whole field")
 	}
 }
+
+// CHAOS-8954: a suggested alias carries the display name of its canonical
+// identity, else its email, and nil (never the canonical id) when it has neither.
+func TestAliasSuggestions_CarryTheCanonicalName(t *testing.T) {
+	obs := func(email string) unmapped {
+		e := email
+		return unmapped{provider: "github", email: &e, count: 1}
+	}
+	mapped := []mappedIdentity{
+		{canonicalID: "id-named", email: "ann@x.io", displayName: "Ann Lee"},
+		{canonicalID: "id-email", email: "bob@x.io"},
+		{canonicalID: "bob2"},
+	}
+	got := aliasSuggestions([]unmapped{obs("ann@elsewhere.io"), obs("bob@elsewhere.io"), obs("bob2@elsewhere.io")}, mapped)
+	if len(got) != 3 {
+		t.Fatalf("suggestions = %d, want 3", len(got))
+	}
+	if got[2].SuggestedCanonicalID != "bob2" || got[2].SuggestedCanonicalName != nil {
+		t.Errorf("an identity with neither name nor email must have no name: %v", got[2].SuggestedCanonicalName)
+	}
+	if got[0].SuggestedCanonicalName == nil || *got[0].SuggestedCanonicalName != "Ann Lee" {
+		t.Errorf("named identity: %v", got[0].SuggestedCanonicalName)
+	}
+	if got[1].SuggestedCanonicalName == nil || *got[1].SuggestedCanonicalName != "bob@x.io" {
+		t.Errorf("email-only identity: %v", got[1].SuggestedCanonicalName)
+	}
+	if n := canonicalName(mappedIdentity{canonicalID: "bare-id"}); n != nil {
+		t.Errorf("an identity with neither name nor email must have no name, got %q", *n)
+	}
+}
+
+func TestCanonicalName_WhitespaceIsNoName(t *testing.T) {
+	if n := canonicalName(mappedIdentity{displayName: " \t", email: "  "}); n != nil {
+		t.Errorf("whitespace name and email must give nil, got %q", *n)
+	}
+	if n := canonicalName(mappedIdentity{displayName: " \t", email: "bob@x.io"}); n == nil || *n != "bob@x.io" {
+		t.Errorf("whitespace display name must fall back to the email, got %v", n)
+	}
+}

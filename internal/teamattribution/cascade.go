@@ -24,6 +24,7 @@ import (
 	"github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
+	"github.com/full-chaos/dev-health-ops/internal/teamid"
 )
 
 // ErrEffectRecoveryUnsafe is providerfoundation's sentinel, aliased under this
@@ -116,7 +117,12 @@ type GithubWorkItemDerivationTeamFact struct {
 	TeamID      string
 	TeamName    string
 	ProjectKeys []string
-	UpdatedAt   time.Time
+	// NativeTeamKey is the provider's own key of the team (teams.
+	// native_team_key). A provider team id carries a provider prefix
+	// (teamid.Of), so a work item's native team key matches this key, not
+	// the id.
+	NativeTeamKey string
+	UpdatedAt     time.Time
 	// Inactive: the newest row of this team has is_active = 0. The team stays
 	// KNOWN to the cascade (null-carrying rules behave as for any team) but it
 	// is never the result of a resolution (see inactiveTeams).
@@ -422,7 +428,13 @@ func NewGitHubWorkItemDerivationContext(
 		if team.Inactive {
 			continue
 		}
-		for _, rawKey := range append(append([]string(nil), team.ProjectKeys...), team.TeamID) {
+		keys := append(append([]string(nil), team.ProjectKeys...), team.TeamID)
+		// A team id that holds another provider's key has no native key of
+		// the team's provider, so its native_team_key indexes nothing.
+		if _, own := teamid.NativeKey(team.Provider, team.TeamID); own {
+			keys = append(keys, team.NativeTeamKey)
+		}
+		for _, rawKey := range keys {
 			key := strings.TrimSpace(rawKey)
 			if key == "" {
 				continue
@@ -1611,6 +1623,7 @@ func (source ClickHouseFactSource) LoadTeams(
 SELECT provider, id,
        argMax(name, (updated_at, last_synced, name)),
        argMax(project_keys, (updated_at, last_synced, toJSONString(project_keys))),
+       ifNull((argMax(tuple(native_team_key), (updated_at, last_synced, ifNull(native_team_key, '')))).1, ''),
        max(updated_at),
        `+teamNewestRowInactive+`
 FROM teams
@@ -1625,7 +1638,7 @@ LIMIT ?`, orgID, GithubWorkItemDerivationContextLimit+1)
 	result := []GithubWorkItemDerivationTeamFact{}
 	for rows.Next() {
 		var fact GithubWorkItemDerivationTeamFact
-		if err := rows.Scan(&fact.Provider, &fact.TeamID, &fact.TeamName, &fact.ProjectKeys, &fact.UpdatedAt, &fact.Inactive); err != nil {
+		if err := rows.Scan(&fact.Provider, &fact.TeamID, &fact.TeamName, &fact.ProjectKeys, &fact.NativeTeamKey, &fact.UpdatedAt, &fact.Inactive); err != nil {
 			return nil, err
 		}
 		result = append(result, fact)
@@ -2290,8 +2303,9 @@ func GithubWorkItemDerivationStringValue(value *string) string {
 // Candidates of inactive teams are dropped from both layers BEFORE the gate
 // counts teams (an inactive team takes no work item): a person in inactive T1
 // and active T2 resolves to T2, and an admin layer with only inactive teams
-// falls through to the provider layer. Python had no inactive teams, so only
-// the reasons for inactive teams differ.
+// falls through to the provider layer. Python never filtered inactive teams; Go
+// drops them before the gate counts. For inactive-team cases, both the winner
+// and the reason can differ from the Python answer.
 //
 // Returns `(candidates, reason)`: `candidates` is the resolved list to use
 // for the caller's source when exactly one team resolved (`reason` is

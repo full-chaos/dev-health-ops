@@ -211,7 +211,7 @@ type workUnitEvidenceWire struct {
 // evidenceKeyOrder is the key order work_units.py builds each fixed-shape
 // evidence dict in, by its "type".
 var evidenceKeyOrder = map[string][]string{
-	"evidence_quote": {"type", "quote", "source", "id"},
+	"evidence_quote": {"type", "quote", "source", "id", "source_title"},
 	"time_range":     {"type", "start", "end", "span_days"},
 	"repo_scope":     {"type", "repo_ids"},
 	"team_scope":     {"type", "team_ids", "team_names"},

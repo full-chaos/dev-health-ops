@@ -18,6 +18,18 @@ type AIAttributionEvidenceRow {
   evidence: String!
   observedAt: DateTime!
   teamId: String
+  """
+  Full name of the repository `repoId` names, from the repository catalogue of the caller's organization. Null when the repository has no stored name; never the id.
+  """
+  repoName: String
+  """
+  Name of the team `teamId` names, from the team catalogue of the caller's organization. Null when there is no team or it has no stored name; never the id.
+  """
+  teamName: String
+  """
+  Title of the pull request the row's subject names (subjectType `pull_request`), from the stored pull request. Null for any other subject type or when no title is stored; never the id.
+  """
+  subjectTitle: String
 }
 
 type AIAttributionMixRow {
@@ -119,6 +131,22 @@ type AIGovernanceViolationRow {
   repoId: String
   observedAt: DateTime!
   evidence: String!
+  """
+  Full name of the repository `repoId` names, from the repository catalogue of the caller's organization. Null when the repository has no stored name; never the id.
+  """
+  repoName: String
+  """
+  Name of the team `teamId` names, from the team catalogue of the caller's organization. Null when there is no team or it has no stored name; never the id.
+  """
+  teamName: String
+  """
+  Title of the pull request the row's subject names (subjectType `pull_request`), from the stored pull request. Null for any other subject type or when no title is stored; never the id.
+  """
+  subjectTitle: String
+  """
+  Fixed display name of the policy rule `ruleId` names (a code-owned set of rules). Null for a rule id outside that set; never the id.
+  """
+  ruleName: String
 }
 
 type AIHotspotOverlapRow {
@@ -379,6 +407,10 @@ type AiAttributedPrsResult {
 type AliasSuggestion {
   unmappedIdentity: UnmappedIdentity!
   suggestedCanonicalId: String!
+  """
+  Display name of the suggested canonical identity, else its email. Null when neither is stored; never the id.
+  """
+  suggestedCanonicalName: String
   confidence: Float!
 }
 
@@ -1190,6 +1222,10 @@ type ImproveOpportunity {
   Which side of the threshold fires the rule: ABOVE (value > threshold) or BELOW (value < threshold).
   """
   thresholdDirection: ThresholdDirection!
+  """
+  Name of the entity `entityId` names: the repository full name for entityType `repo`, the team name for `team`, from the catalogues of the caller's organization. Null when no name is stored; never the id.
+  """
+  entityDisplayName: String
 }
 
 enum ImproveOpportunityKind {
@@ -2097,6 +2133,10 @@ input TestOpsRiskInput {
 
 type TestOpsRiskQuadrantPoint {
   id: String!
+  """
+  Full name of the repository the point stands for. Null when the repository has no stored name; never the id.
+  """
+  name: String
   pipelineSuccessRate: Float
   testPassRate: Float
 }

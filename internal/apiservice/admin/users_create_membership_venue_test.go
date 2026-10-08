@@ -193,6 +193,16 @@ WHERE u.email = 'added-admin@example.com' AND a.org_id = $1`, orgID).Scan(&userI
 		}
 	})
 
+	t.Run("the org path keeps the privileged-field refusal", func(t *testing.T) {
+		response := create("admin", orgID.String(), `{"email":"org-path-privileged@example.com","role":"admin","is_superuser":true}`)
+		if response.Status != http.StatusForbidden {
+			t.Fatalf("status = %d, want 403: %s", response.Status, response.Body)
+		}
+		if n := userCount("org-path-privileged@example.com"); n != 0 {
+			t.Fatalf("left %d user rows, want 0", n)
+		}
+	})
+
 	t.Run("a member (not admin) of the X-Org-Id org cannot add", func(t *testing.T) {
 		response := create("admin", memberOrgID.String(), `{"email":"member-org-add@example.com"}`)
 		if response.Status != http.StatusForbidden {

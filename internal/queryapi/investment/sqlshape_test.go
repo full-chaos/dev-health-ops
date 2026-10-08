@@ -42,7 +42,7 @@ func (emptyRowScanner) Close() error      { return nil }
 // defect this test exists to catch before it reaches a live ClickHouse.
 func TestQueriesComposeFromTheSharedLatestWorkUnitInvestmentsSource(t *testing.T) {
 	const (
-		dedupMarker        = "(argMax(tuple(work_unit_type), computed_at)).1 AS work_unit_type"
+		dedupMarker        = "(argMax(tuple(work_unit_type), (work_unit_investments.computed_at, toUInt64OrZero(splitByChar('_', work_unit_investments._part)[3]), work_unit_investments._part_offset))).1 AS work_unit_type"
 		supersessionMarker = "work_unit_supersessions"
 	)
 

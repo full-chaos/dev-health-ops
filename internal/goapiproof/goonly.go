@@ -106,8 +106,15 @@ type GoServedEntry struct {
 	// one). It may sit beside a two-plane sha. With UnprovenReason it is the
 	// only thing that lets `enable` write a row for an operation that has no
 	// store proof: see EnableLimitReason.
-	EnableLimit string          `json:"enable_limit,omitempty"`
-	Guards      []GoServedGuard `json:"guards"`
+	EnableLimit string `json:"enable_limit,omitempty"`
+	// BornInGo marks an operation that never had a Python counterpart (its
+	// resolver or document was written for the Go plane). The only comparison
+	// possible for it is the MCP pipeline against the Go document route, so
+	// the MCP class proof counts a MATCHED doc-route shape of it although no
+	// document receipt can exist (an unproven entry is never receipted). It
+	// needs UnprovenReason (so it never sits beside a two-plane sha).
+	BornInGo bool            `json:"born_in_go,omitempty"`
+	Guards   []GoServedGuard `json:"guards"`
 }
 
 // GoServedLedger is the machine-readable list of deleted-Python operations.
@@ -163,6 +170,9 @@ func ParseGoServedLedger(raw []byte) (*GoServedLedger, error) {
 			}
 		case !hexSHA40.MatchString(entry.TwoPlaneOpsSHA):
 			return nil, fmt.Errorf("goapiproof: go-served ledger %s: two_plane_ops_sha must be 40 lowercase hex characters", entry.Operation)
+		}
+		if entry.BornInGo && entry.UnprovenReason == "" {
+			return nil, fmt.Errorf("goapiproof: go-served ledger %s: born_in_go needs an unproven_reason", entry.Operation)
 		}
 		if entry.EnableLimit != "" && len(strings.TrimSpace(entry.EnableLimit)) < minUnprovenReasonLength {
 			return nil, fmt.Errorf("goapiproof: go-served ledger %s: enable_limit must say why and cite the record", entry.Operation)
@@ -222,6 +232,13 @@ func (l *GoServedLedger) EnableLimitReason(operation string) (string, bool) {
 		return entry.UnprovenReason, true
 	}
 	return "", false
+}
+
+// BornInGo reports whether the ledger marks operation as never having had a
+// Python counterpart.
+func (l *GoServedLedger) BornInGo(operation string) bool {
+	entry, ok := l.Entry(operation)
+	return ok && entry.BornInGo
 }
 
 // Operations lists the ledger's operations, sorted.

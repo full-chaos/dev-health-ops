@@ -400,6 +400,17 @@ func TestVenueOracleQueryAPIDictOrder(t *testing.T) {
 			}
 			goWritten = stripped
 		}
+		if tc.Kind == "work_units" && recorder.Code == http.StatusOK {
+			// Each evidence quote ends with the Go-only source_title of
+			// CHAOS-8959 (null here: the seeded source has no stored
+			// title), which the frozen Python model never had. The seeded
+			// quote must carry it, so the strip checks the key is served.
+			const goOnlyTitle = `,"source_title":null`
+			if !strings.Contains(goWritten, goOnlyTitle) {
+				t.Fatalf("%s: the seeded quote carries no source_title key: %s", tc.Name, goWritten)
+			}
+			goWritten = strings.ReplaceAll(goWritten, goOnlyTitle, "")
+		}
 		goBody := golden.Project(t, venueoracle.Response{Status: recorder.Code, Body: goWritten}).Body
 		pythonBody := golden.Project(t, venueoracle.Response{Status: answer.Status, Body: answer.Body}).Body
 		if tc.Kind == "people_summary" && recorder.Code == http.StatusOK && answer.Status == http.StatusOK {

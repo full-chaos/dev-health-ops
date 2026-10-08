@@ -130,7 +130,7 @@ run retires the project-as-team rows a store still holds, in one step, unconditi
 membership rows and the repository ownership derived from them (`team_repo_ownership`, `source = 'inferred'`) get
 `valid_to`, first-seen `valid_from` is kept, nothing is deleted. Rows with admin members or a sync policy are retired
 too and counted; `jira_legacy` links, Atlassian team rows and admin teams (`provider = ''`) stay. Attribution reads
-ACTIVE teams only, one rule for every provider (`teamattribution.LoadTeams`, `activeTeamsOnly`), so a retired team
+ACTIVE teams only, one rule for every provider and every path (`teamattribution.LoadTeams` flags inactive teams, `dropInactiveTeamCandidates` drops their candidates), so a retired team
 takes no work item and a project with no connected Atlassian team is unassigned. The operator verb
 `dho workers providersync retire-jira-project-as-team --org-stdin` runs the same retire for one organization now.
 The table and the precedence text below are the record of the two-leg design before CHAOS-8888. The current rules

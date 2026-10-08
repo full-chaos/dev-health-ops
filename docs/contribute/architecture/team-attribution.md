@@ -812,9 +812,11 @@ The Atlassian Teams of a Jira site ARE the Jira teams. A team owns a Jira projec
     admin team whose id equals a project key is not in the class and still takes items by key), the other
     providers, other organizations, `projects` rows.
   - **Attribution reads active teams only, one rule for every provider.** `teamattribution.LoadTeams`
-    (`internal/teamattribution/cascade.go`, `activeTeamsOnly`: the newest `is_active` per team is 1). A
-    retired, archived or never-active team of any provider takes no work item by project key, team id or
-    native team key. A Jira project that no Atlassian team is connected to is unassigned. A recompute of an
+    (`internal/teamattribution/cascade.go`) flags a team whose newest `is_active` is 0 as inactive. The team
+    stays known to the cascade (the null-carrying rule treats it as any team), and
+    `dropInactiveTeamCandidates` drops every candidate that names it, once, after all paths have produced
+    theirs. A retired, archived or never-active team of any provider takes no work item by project key, team
+    id, native team key, ownership, membership, linked issue or manual fallback. A Jira project that no Atlassian team is connected to is unassigned. A recompute of an
     old day leaves the items of a now-inactive team unassigned.
   - **Counts.** The result field `ProjectAsTeamRetired`; the metric `dev_health_team_catalog_rows_written_total`
     with the table label `project_as_team_retired` (observed only when a run retired rows, next to the

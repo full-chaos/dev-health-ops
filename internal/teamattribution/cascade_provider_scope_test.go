@@ -480,12 +480,29 @@ func TestAnInactiveTeamOfAnotherProviderWithTheSameIDDoesNotDropTheItemsTeam(t *
 }
 
 // A candidate id that names only teams of other providers (an ownership or
-// membership fact can name such a team) is dropped when one of them is
-// inactive, as before: the id can only mean those teams.
+// membership fact can name such a team) binds to the first ACTIVE one of them
+// and is dropped when none is active: the id can only mean those teams.
 func TestAnIDOfOnlyOtherProvidersFollowsTheirActiveFlag(t *testing.T) {
 	for _, provider := range coOwnerProviders {
 		for _, other := range otherProviders(provider) {
 			for _, inactive := range []bool{false, true} {
+				t.Run(fmt.Sprintf("%s/team of %s inactive=%v and an active team of a later provider", provider, other, inactive), func(t *testing.T) {
+					later := "zz-" + other
+					projectID := "PROJ"
+					derived := NewGitHubWorkItemDerivationContext(GithubWorkItemDerivationFacts{
+						Teams: catalogOrder([]GithubWorkItemDerivationTeamFact{
+							{Provider: other, TeamID: "far-team", Inactive: inactive},
+							{Provider: later, TeamID: "far-team", TeamName: "Far " + later},
+						}),
+						Projects: []GithubWorkItemDerivationProjectFact{
+							{Provider: provider, TeamID: "far-team", ProjectID: projectID, IsPrimary: 1, Specificity: 110, Priority: 10},
+						},
+					})
+					teamID, _, candidates := derived.Resolve(GithubWorkItemDerivationSubject{WorkItemID: provider + ":P-1", Provider: provider, ProjectID: &projectID, OrgID: "org"})
+					if GithubWorkItemDerivationStringValue(teamID) != "far-team" {
+						t.Errorf("Resolve team = %q, want far-team: an active team has the id (candidates %+v)", GithubWorkItemDerivationStringValue(teamID), candidates)
+					}
+				})
 				t.Run(fmt.Sprintf("%s/team of %s inactive=%v", provider, other, inactive), func(t *testing.T) {
 					projectID := "PROJ"
 					derived := NewGitHubWorkItemDerivationContext(GithubWorkItemDerivationFacts{
@@ -592,5 +609,47 @@ func TestAManualFallbackIsBoundToAnActiveTeamOfTheItemsProvider(t *testing.T) {
 				t.Errorf("primary = %q %q/%s, want ENG as the rule names it", team, name, source)
 			}
 		})
+	}
+}
+
+// A linked_issue candidate carries the donor's bound team: the PR of one
+// provider inherits the team of an issue of another provider, and that team is
+// the donor provider's team. An inactive team of the PR's provider, or an
+// inactive admin team, with the same id does not drop it. Every pair of
+// providers.
+func TestALinkedIssueKeepsTheDonorsTeamIdentity(t *testing.T) {
+	for _, donorProvider := range []string{"jira", "linear"} {
+		for _, itemProvider := range coOwnerProviders {
+			if itemProvider == donorProvider {
+				continue
+			}
+			for _, inactive := range []string{"", itemProvider} {
+				t.Run(fmt.Sprintf("%s item, %s donor, inactive %q ENG", itemProvider, donorProvider, inactive), func(t *testing.T) {
+					donorProject := "PROJ"
+					derived := NewGitHubWorkItemDerivationContext(GithubWorkItemDerivationFacts{
+						Teams: catalogOrder([]GithubWorkItemDerivationTeamFact{
+							{Provider: donorProvider, TeamID: "ENG", TeamName: "Eng " + donorProvider},
+							{Provider: inactive, TeamID: "ENG", TeamName: "Retired ENG", Inactive: true},
+						}),
+						Projects: []GithubWorkItemDerivationProjectFact{
+							{Provider: donorProvider, TeamID: "ENG", ProjectID: donorProject, IsPrimary: 1, Specificity: 80, Priority: 10},
+						},
+					})
+					donor := GithubWorkItemDerivationSubject{WorkItemID: donorProvider + ":ENG-42", Provider: donorProvider, ProjectID: &donorProject, OrgID: "org"}
+					dependent := GithubWorkItemDerivationSubject{WorkItemID: itemProvider + ":item-7", Provider: itemProvider, OrgID: "org"}
+					linked, _, _ := derived.BuildLinkedIssueIndex(itemProvider,
+						map[string]GithubWorkItemDerivationSubject{donor.WorkItemID: donor, dependent.WorkItemID: dependent},
+						[]GithubWorkItemDerivationDependencyEdge{{SourceWorkItemID: dependent.WorkItemID, TargetWorkItemID: donor.WorkItemID, RelationshipType: "relates_to"}},
+						nil)
+					derived.LinkedIssue = linked
+					teamID, teamName, candidates := derived.Resolve(dependent)
+					_, source, _ := primaryRow(candidates)
+					if GithubWorkItemDerivationStringValue(teamID) != "ENG" || GithubWorkItemDerivationStringValue(teamName) != "Eng "+donorProvider || source != "linked_issue" {
+						t.Errorf("primary = %q %q/%s, want ENG of %s via linked_issue (candidates %+v)",
+							GithubWorkItemDerivationStringValue(teamID), GithubWorkItemDerivationStringValue(teamName), source, donorProvider, candidates)
+					}
+				})
+			}
+		}
 	}
 }

@@ -9,6 +9,7 @@ internal/apiservice/admin	TestLLMSettingsReadinessRouteSuccessPath	run
 internal/apiservice/admin	TestLLMSettingsRoutesVenueOracle	run
 internal/apiservice/admin	TestLLMSettingsRoutesWithoutEncryptionKeyVenueOracle	run
 internal/apiservice/admin	TestLLMSettingsStatusRouteVenueOracle	run
+internal/apiservice/admin	TestMemberListServesUserNamesVenueOracle	run
 internal/apiservice/admin	TestOrgCRUDMatchesThePythonAPI	run
 internal/apiservice/admin	TestOrgDeletionMatchesThePythonAPI	run
 internal/apiservice/admin	TestOrgDeletionPurgesEveryDiscoveredClickHouseTable	run

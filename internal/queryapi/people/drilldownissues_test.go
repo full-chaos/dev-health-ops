@@ -435,3 +435,27 @@ func TestLinkedRepoNamesQueryNeverReadsTheIssuesOwnRepo(t *testing.T) {
 		t.Fatalf("both reads must bind the org:\n%s", linkedRepoNamesQuery)
 	}
 }
+
+// TestDrilldownIssuesFailOnALinkedRepoIterateError: an error that surfaces
+// only after the link rows were read is still an error.
+func TestDrilldownIssuesFailOnALinkedRepoIterateError(t *testing.T) {
+	t.Setenv("IDENTITY_MAPPING_PATH", t.TempDir()+"/missing.yaml")
+	client := personIdentityDispatchClient{identity: "alice@example.com", t: t, handler: func(t *testing.T, query string, bindings []dhclickhouse.Binding) (dhclickhouse.RowScanner, error) {
+		if strings.Contains(query, "FROM work_items FINAL") {
+			return &pairRowScanner{}, nil
+		}
+		if strings.Contains(query, "FROM work_graph_issue_pr FINAL") {
+			return &errAfterRowsScanner{pairRowScanner: pairRowScanner{rows: [][2]string{{"wi-1", "acme/api"}}}, err: errors.New("boom")}, nil
+		}
+		return &issuesRowScanner{rows: [][]any{{"wi-1", "github", "done", nil, nil, nil, nil, nil}}}, nil
+	}}
+	reader, err := NewReader(client)
+	if err != nil {
+		t.Fatalf("NewReader: %v", err)
+	}
+	if _, err := BuildDrilldownIssuesResponse(context.Background(), reader, "org-1", DrilldownIssuesParams{
+		PersonID: "anyone", RangeDays: 14, Limit: 50, Now: dt(2024, 6, 15, 0, 0, 0),
+	}); err == nil {
+		t.Fatal("want an error when the link rows fail while iterating")
+	}
+}

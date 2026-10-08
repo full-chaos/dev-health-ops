@@ -244,11 +244,14 @@ func BuildDrilldownPRsResponse(ctx context.Context, reader *Reader, orgID string
 	for _, row := range rows {
 		repoIDs = append(repoIDs, row.RepoID)
 	}
-	repoNames := scopelabel.Resolve(ctx, reader.client, orgID, "repo", repoIDs, scopelabel.Options{
+	repoNames, err := scopelabel.ResolveStrict(ctx, reader.client, orgID, "repo", repoIDs, scopelabel.Options{
 		Final:  true,
 		Suffix: settingsMaxExecutionTime(),
 		Log:    "people",
 	})
+	if err != nil {
+		return nil, fmt.Errorf("people: resolve repo names: %w", err)
+	}
 	for i := range rows {
 		if name, ok := repoNames[rows[i].RepoID]; ok {
 			named := name

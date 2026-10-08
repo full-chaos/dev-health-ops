@@ -807,8 +807,16 @@ The Atlassian Teams of a Jira site ARE the Jira teams. A team owns a Jira projec
   - **The class.** A team row with `provider = 'jira'`, a non-empty `id`, `native_team_key = id`, and a native
     key that does not start with the team ARI prefix `ari:cloud:identity::team/`. Ownership: `provider =
     'jira'`, `source = 'native'`, open, `team_id = project_key`, and the team is not an Atlassian team.
-    Membership: `provider = 'jira'`, `source = 'native'`, open, team in the class. Derived repository
-    ownership: `source = 'inferred'`, open, team in the class. A row with admin members or a sync policy is
+    Membership: `provider = 'jira'`, `source = 'native'`, open, team id in the class. Derived repository
+    ownership: `source = 'inferred'`, open, team id in the class. A team id is in the class when its current
+    team row has the shape above, **or** when a `source = 'native'` Jira ownership row with `team_id =
+    project_key` (open or closed, not an Atlassian team) names it. The second test is what closes the lead and
+    the derived repository rows of a team whose row was written again after the catalog wrote it: an admin
+    edit (`provider = ''`) or a team of another provider with the same key (`teams` holds one row per id).
+    The membership is matched through the Jira provider, so another provider's membership of the same id
+    stays; a derived repository row of an id whose current team row belongs to another provider (not `''`,
+    not `'jira'`) stays, because that row's provider is the repository's and cannot say whose it is. The
+    admin's team row itself stays active: only its Jira rows retire. A row with admin members or a sync policy is
     retired too and counted (`teams_with_manual_members`, `teams_with_sync_policy`). Kept: Atlassian team
     rows, `jira_legacy` links, admin teams (an admin import writes `provider = ''` and no native key, so an
     admin team whose id equals a project key is not in the class and still takes items by key), the other

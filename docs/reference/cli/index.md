@@ -1561,13 +1561,18 @@ Nothing is deleted:
 - the open `team_repo_ownership` rows derived from that ownership
   (`source = 'inferred'`) are closed the same way: the retired team owns no
   repository any more, so team authorization through it ends;
+- the same rows are closed for a team whose row was written again after the
+  catalog wrote it (an admin edit, or a team of another provider with the same
+  key): the Jira project link of that id (`source = 'native'`,
+  `team_id = project_key`) decides, and the team row itself stays;
 - a row with admin members (`manual_members`) or a sync policy is retired too,
   and counted.
 
 Not touched: Atlassian team rows (their `native_team_key` is the team ARI),
 `jira_legacy` links, admin teams (an admin import writes `provider = ''` and
-no native key, so an admin team whose id is a project key is not in this
-class), the teams of the other providers, other organizations, and the
+no native key, so an admin team whose id is a project key is not made
+inactive; only its Jira lead, Jira project link and derived repository rows
+are closed when it has a Jira project link of that shape), the teams of the other providers, other organizations, and the
 `projects` rows.
 
 The organization comes from stdin only: `--org-stdin` is required and there

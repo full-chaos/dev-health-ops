@@ -37,30 +37,51 @@ const jiraProjectAsTeamIDsSubquery = `SELECT id FROM teams FINAL WHERE org_id = 
 const jiraAtlassianTeamIDsSubquery = `SELECT id FROM teams FINAL WHERE org_id = {org_id:String} AND provider = 'jira' ` +
 	`AND startsWith(ifNull(native_team_key, ''), '` + jiraAtlassianTeamARIPrefix + `')`
 
-// jiraProjectAsTeamOwnershipPredicate is the open ownership row of a
-// project-as-team: provider 'jira', source 'native', and a team_id equal to
-// the row's own project_key (the team WAS the project). An Atlassian team's
-// row has the team id there and the project key in project_key; a team that
-// the catalog knows as an Atlassian team is left out by id as well. A
-// 'jira_legacy' row is another class and stays.
-const jiraProjectAsTeamOwnershipPredicate = `org_id = {org_id:String} AND provider = 'jira' AND source = 'native' ` +
-	`AND valid_to IS NULL AND team_id != '' AND team_id = ifNull(project_key, '') ` +
+// jiraProjectAsTeamOwnershipShape is the shape of a project-as-team ownership
+// row: provider 'jira', source 'native', and a team_id equal to the row's own
+// project_key (the team WAS the project). An Atlassian team's row has the team
+// id there and the project key in project_key; a team that the catalog knows
+// as an Atlassian team is left out by id as well. A 'jira_legacy' row is
+// another class and stays. It has no valid_to clause: the same shape selects
+// the rows to close (with valid_to IS NULL added) and the team ids whose
+// memberships and derived repository rows go with them, so a re-run after a
+// part way failure still finds those.
+const jiraProjectAsTeamOwnershipShape = `org_id = {org_id:String} AND provider = 'jira' AND source = 'native' ` +
+	`AND team_id != '' AND team_id = ifNull(project_key, '') ` +
 	`AND team_id NOT IN (` + jiraAtlassianTeamIDsSubquery + `)`
+
+const jiraProjectAsTeamOwnershipPredicate = jiraProjectAsTeamOwnershipShape + ` AND valid_to IS NULL`
+
+// jiraProjectAsTeamShapeIDsSubquery is the team ids the retired ownership rows
+// name, open or closed. The team row of such an id may have been written again
+// since (an admin edit leaves the provider empty; a Linear team of the same key
+// replaces the row, teams holds one row per id), so the row alone cannot say
+// whether the id was a project-as-team.
+const jiraProjectAsTeamShapeIDsSubquery = `SELECT team_id FROM team_project_ownership FINAL WHERE ` + jiraProjectAsTeamOwnershipShape
+
+// jiraProjectAsTeamIDsPredicate holds a team id that is a project-as-team: the
+// current team row has the shape, or an ownership row of the shape names it.
+const jiraProjectAsTeamIDsPredicate = `(team_id IN (` + jiraProjectAsTeamIDsSubquery + `) ` +
+	`OR team_id IN (` + jiraProjectAsTeamShapeIDsSubquery + `))`
 
 // jiraProjectAsTeamMembershipPredicate is the open membership row of a
 // project-as-team (the project lead): provider 'jira', source 'native', and a
-// team that is a project-as-team row.
+// team id that is a project-as-team. The provider clause keeps a membership of
+// another provider's team with the same id.
 const jiraProjectAsTeamMembershipPredicate = `org_id = {org_id:String} AND provider = 'jira' AND source = 'native' ` +
-	`AND valid_to IS NULL AND team_id IN (` + jiraProjectAsTeamIDsSubquery + `)`
+	`AND valid_to IS NULL AND ` + jiraProjectAsTeamIDsPredicate
 
 // jiraProjectAsTeamRepoOwnershipPredicate is the open DERIVED repository row
 // of a project-as-team (source 'inferred': TeamRepoOwnershipDerivationService
-// derived it from the team's project ownership). `teams` holds one row for an
-// id in an organization, so the id names the project-as-team and no other
-// team. A row of another source (a person's or a provider's statement) is not
-// derived from the retired rows and stays.
+// derived it from the team's project ownership; its provider is the
+// repository's, so it cannot name the team's). `teams` holds one row for an
+// id in an organization: when that row is another provider's team (not the
+// admin's, whose provider is empty), the id names that team and its derived rows stay. A
+// row of another source (a person's or a provider's statement) is not derived
+// from the retired rows and stays.
 const jiraProjectAsTeamRepoOwnershipPredicate = `org_id = {org_id:String} AND source = 'inferred' ` +
-	`AND valid_to IS NULL AND team_id IN (` + jiraProjectAsTeamIDsSubquery + `)`
+	`AND valid_to IS NULL AND ` + jiraProjectAsTeamIDsPredicate + ` ` +
+	`AND team_id NOT IN (SELECT id FROM teams FINAL WHERE org_id = {org_id:String} AND provider NOT IN ('', 'jira'))`
 
 const jiraProjectAsTeamActivePredicate = `org_id = {org_id:String} AND is_active = 1 AND ` + jiraProjectAsTeamRowPredicate
 

@@ -260,7 +260,7 @@ func TestEvidenceQuotesDropATitleEqualToTheirOwnID(t *testing.T) {
 			qtIssue3: "Fix login redirect",
 		}},
 		prTitles: map[string]map[string]string{qtOrgA: {
-			qtRepo + "#482": " " + strings.ToUpper(qtRepo) + "#482 ",
+			qtRepo + "#482": " " + strings.ToUpper(qtPRRef) + " ",
 			qtRepo + "#483": "Fix " + qtRepo + "#483",
 		}},
 	}

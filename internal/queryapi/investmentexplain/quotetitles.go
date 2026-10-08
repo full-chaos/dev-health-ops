@@ -63,7 +63,9 @@ func (reader *Reader) quoteSourceTitles(ctx context.Context, orgID string, quote
 	}
 	for key, title := range prTitles {
 		for _, source := range prKeys[key] {
-			titles[source] = title
+			if clean, ok := scopelabel.CleanNameFor(title, source.SourceID); ok {
+				titles[source] = clean
+			}
 		}
 	}
 	return titles
@@ -108,7 +110,7 @@ WHERE pr.org_id = {org_id:String}
 			if title == nil {
 				continue
 			}
-			if clean, ok := scopelabel.CleanNameFor(*title, repoID+"#"+number); ok {
+			if clean, ok := scopelabel.CleanName(*title); ok {
 				if _, err := strconv.ParseUint(number, 10, 64); err == nil {
 					titles[repoID+"#"+number] = clean
 				}

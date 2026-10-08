@@ -319,6 +319,7 @@ func (handler GitLabTeamCatalogRouteHandler) CollectTeamCatalog(
 
 		if selections.Projects {
 			teamID := gitlabTeamID(group.FullPath)
+			rows.OwnershipListedTeamIDs = append(rows.OwnershipListedTeamIDs, teamID)
 			specificity := uint16(gitlabTeamCatalogBaseSpecificity + gitlabTeamDepth(teamID, parentByTeam)*gitlabTeamCatalogChildSpecificityStep)
 			for _, path := range projectKeys {
 				key := teamID + "\x00" + path
@@ -737,9 +738,21 @@ func (collector GitLabTeamCatalogCollector) CollectTeamCatalog(
 	}
 	if selections.Projects {
 		if batch.Effects.Ownership != nil {
-			if err := collector.Sink.WriteEffect(ctx, writeClaim, *batch.Effects.Ownership); err != nil {
+			ownershipRows, closed, snapshotErr := collector.Sink.SnapshotOwnership(
+				ctx, ref.OrgID, batch.Rows.Ownership, batch.Rows.OwnershipListedTeamIDs, normalizedAt)
+			if snapshotErr != nil {
+				return result, snapshotErr
+			}
+			ownershipEffect, effectErr := effectBatchFromValues(gitlabTeamCatalogOwnershipDestination, EffectReadbackRequired, ownershipRows)
+			if effectErr != nil {
+				return result, effectErr
+			}
+			if err := collector.Sink.WriteEffect(ctx, writeClaim, ownershipEffect); err != nil {
 				return result, err
 			}
+			slog.Default().InfoContext(ctx, "gitlab_team_catalog_ownership_snapshot",
+				"org_id", ref.OrgID, "teams_listed", len(batch.Rows.OwnershipListedTeamIDs),
+				"grants_written", len(batch.Rows.Ownership), "rows_closed", closed)
 			result.OwnershipWritten = batch.Result.TeamProjectOwnershipImported
 		}
 		if batch.Effects.Projects != nil {

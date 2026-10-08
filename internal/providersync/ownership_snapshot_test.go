@@ -152,7 +152,8 @@ var ownershipWriters = map[string]ownershipWriter{
 		provider: "linear", note: "insert only, valid_from = the run time; a stale link is removed by the operator verb retire-stale-linear-project-ownership; not on the shared rule yet",
 	},
 	"internal/providersync.GitLabTeamCatalogClickHouseEffects.writeOwnership": {
-		provider: "gitlab", note: "insert only, valid_from = the run time, no retraction; not on the shared rule yet",
+		provider: "gitlab", note: "plain insert of the rows GitLabTeamCatalogCollector.CollectTeamCatalog plans through " +
+			"GitLabTeamCatalogClickHouseEffects.SnapshotOwnership (gitlabOwnershipSnapshot, pinned in repoOwnershipPlanners)",
 	},
 }
 
@@ -166,6 +167,13 @@ var repoOwnershipPlanners = map[string]ownershipWriter{
 		complete: "SnapshotTeamRepoOwnership passes len(listedTeamIDs) > 0: githubTeamCatalogRows.RepoListedTeamIDs, which " +
 			"GitHubTeamCatalogRouteHandler.Collect fills only after a team's repo listing reached its end (a failed or " +
 			"capped listing fails Collect, github_team_catalog_route.go)",
+	},
+	"internal/providersync.GitLabTeamCatalogClickHouseEffects.SnapshotOwnership": {
+		provider: "gitlab", planner: "internal/providersync.gitlabOwnershipSnapshot",
+		complete: "SnapshotOwnership passes len(listedTeamIDs) > 0: GitLabTeamCatalogRows.OwnershipListedTeamIDs, which " +
+			"GitLabTeamCatalogRouteHandler.CollectTeamCatalog fills only for a group whose /projects listing was read " +
+			"(a failed listing skips the walk or fails it; a capped one fails the collector with ErrPaginationCapExceeded, " +
+			"gitlab_team_catalog_route.go)",
 	},
 }
 
@@ -404,7 +412,7 @@ func TestJiraOwnershipWriterCensus(t *testing.T) {
 		if got := census.completeness[writer.planner]; got != "complete" {
 			t.Errorf("%s: the planner %s passes Complete = %q to %s, want its `complete` parameter", name, writer.planner, got, ownershipSnapshotEntryPoint)
 		}
-		if !census.calls[name]["githubRepoOwnershipSnapshot"] {
+		if !census.calls[name][writer.planner[strings.LastIndex(writer.planner, ".")+1:]] {
 			t.Errorf("%s does not call its planner %s", name, writer.planner)
 		}
 	}

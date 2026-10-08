@@ -328,6 +328,92 @@ func (sink GitLabTeamCatalogClickHouseEffects) writeTeams(ctx context.Context, c
 	return batch.Send()
 }
 
+// openProviderAccessOwnership reads the open provider_access rows of the
+// listed teams. A failed read is an error, never an empty answer: the caller
+// must not plan a close, or re-stamp valid_from, from a read that did not happen.
+func (sink GitLabTeamCatalogClickHouseEffects) openProviderAccessOwnership(
+	ctx context.Context, orgID string, teamIDs []string,
+) ([]gitlabTeamCatalogOwnershipRow, error) {
+	result, err := sink.Conn.Query(ctx, `
+SELECT team_id, project_id, project_key, is_primary, specificity, priority, valid_from
+FROM team_project_ownership FINAL
+WHERE org_id = ? AND provider = ? AND source = ? AND team_id IN ?
+  AND (valid_to IS NULL OR valid_to > now64(3, 'UTC'))`,
+		orgID, gitlabTeamCatalogProvider, gitlabTeamCatalogSource, teamIDs)
+	if err != nil {
+		return nil, err
+	}
+	defer result.Close()
+	var open []gitlabTeamCatalogOwnershipRow
+	for result.Next() {
+		row := gitlabTeamCatalogOwnershipRow{OrgID: orgID, Provider: gitlabTeamCatalogProvider, Source: gitlabTeamCatalogSource}
+		if err := result.Scan(&row.TeamID, &row.ProjectID, &row.ProjectKey, &row.IsPrimary,
+			&row.Specificity, &row.Priority, &row.ValidFrom); err != nil {
+			return nil, err
+		}
+		row.ValidFrom = row.ValidFrom.UTC()
+		open = append(open, row)
+	}
+	if err := result.Err(); err != nil {
+		return nil, err
+	}
+	return open, nil
+}
+
+// SnapshotOwnership returns the rows of one ownership write: this run's
+// grants on their first-seen valid_from, and the open provider_access rows of
+// the LISTED teams that GitLab no longer returns, closed at `at`, through the
+// shared PlanOwnershipSnapshot rule. listedTeamIDs is the set of teams whose
+// project listing reached its end; a team outside it, and a run that listed no
+// team, closes nothing. Rows of another org, provider or source are never read
+// and never closed. A failed read of the open rows is an error before any write.
+// It returns the rows to write and how many of them close a row.
+func (sink GitLabTeamCatalogClickHouseEffects) SnapshotOwnership(
+	ctx context.Context, orgID string, fresh []gitlabTeamCatalogOwnershipRow, listedTeamIDs []string, at time.Time,
+) ([]gitlabTeamCatalogOwnershipRow, int, error) {
+	if sink.Conn == nil || strings.TrimSpace(orgID) == "" || at.IsZero() {
+		return nil, 0, ErrInvalidConfiguration
+	}
+	if len(listedTeamIDs) == 0 {
+		return fresh, 0, nil
+	}
+	open, err := sink.openProviderAccessOwnership(ctx, orgID, listedTeamIDs)
+	if err != nil {
+		return nil, 0, err
+	}
+	rows, closed := gitlabOwnershipSnapshot(fresh, open, at, len(listedTeamIDs) > 0)
+	return rows, closed, nil
+}
+
+// gitlabOwnershipSnapshot applies the shared snapshot rule
+// (PlanOwnershipSnapshot) to one run. complete says every project listing the
+// fresh rows come from reached its end; anything less closes nothing.
+func gitlabOwnershipSnapshot(
+	fresh, open []gitlabTeamCatalogOwnershipRow, at time.Time, complete bool,
+) ([]gitlabTeamCatalogOwnershipRow, int) {
+	facts := func(rows []gitlabTeamCatalogOwnershipRow) []OwnershipSnapshotRow {
+		out := make([]OwnershipSnapshotRow, len(rows))
+		for index, row := range rows {
+			out[index] = OwnershipSnapshotRow{TeamID: row.TeamID, ProjectID: row.ProjectID, Source: row.Source, ValidFrom: row.ValidFrom}
+		}
+		return out
+	}
+	plan := PlanOwnershipSnapshot(OwnershipSnapshot{Fresh: facts(fresh), Complete: complete}, facts(open), at)
+	rows := make([]gitlabTeamCatalogOwnershipRow, 0, len(fresh)+len(plan.Retract))
+	for index, row := range fresh {
+		row.ValidFrom = plan.ValidFrom[index]
+		rows = append(rows, row)
+	}
+	for _, retraction := range plan.Retract {
+		row := open[retraction.Open]
+		closedAt := retraction.ClosedAt
+		row.ValidTo = &closedAt
+		row.UpdatedAt = at
+		rows = append(rows, row)
+	}
+	return rows, len(plan.Retract)
+}
+
 func (sink GitLabTeamCatalogClickHouseEffects) writeOwnership(ctx context.Context, rows []gitlabTeamCatalogOwnershipRow) error {
 	if len(rows) == 0 {
 		return nil

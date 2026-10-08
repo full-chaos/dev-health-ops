@@ -32,8 +32,10 @@ const (
 	aliasConfidence       = 0.82
 )
 
-// Job run statuses that count as a failed run (JobRunStatus FAILED, CANCELLED).
+// Job run statuses (JobRunStatus): SUCCESS, and the two that count as a failed
+// run, FAILED and CANCELLED.
 const (
+	jobRunSuccess   = 2
 	jobRunFailed    = 3
 	jobRunCancelled = 4
 )

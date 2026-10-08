@@ -1535,7 +1535,7 @@ type SignalAttributionSourceCount struct {
 	Share float64 `json:"share"`
 }
 
-// Org-level source health: one row per active sync configuration of the caller's organization (CHAOS-8906). A member read, not an operator view: provider, scope, the last successful sync time, and the last failure as a time and a closed stage code. Never an error message.
+// Org-level source health (CHAOS-8906): one row per sync configuration of the caller's organization that is active or carries a failure newer than its last successful sync; every integration with an active configuration shows at least one row. A member read, not an operator view: provider, scope, the last successful sync time, and the last failure as a time and a closed stage code. Never an error message.
 type SourceHealth struct {
 	Provider string `json:"provider"`
 	Scope    string `json:"scope"`

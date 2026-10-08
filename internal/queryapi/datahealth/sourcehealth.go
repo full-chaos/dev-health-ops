@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
+	"sort"
 	"strings"
 	"time"
 
@@ -20,75 +22,237 @@ const SourceHealthStageOther = "other"
 // unreadable source is never an empty list: an empty list reads as "no sources".
 var ErrSourceHealthUnavailable = errors.New("source health unavailable")
 
-// sourceHealthSQL reads the same rows as connectorsSQL but selects no free text:
-// whether an error exists is a boolean, and the stage and category are single
-// values the Go side checks against sourceHealthStages.
-//
-// Which configurations are listed (column "listed"):
-//   - an active one, or an inactive one that carries a failure (a source that a
-//     failure deactivated must not vanish from the answer);
-//   - and only one that can speak for itself: the canonical configuration of
-//     its integration (the one the sync finish stamps: oldest top-level
-//     configuration), or one that carries its own stamp or its own run. A
-//     non-canonical configuration with neither would read "never synced" when
-//     its integration synced.
-//
-// An integration with an active configuration is never absent: when none of its
-// configurations is listed, its oldest active configuration (a top-level one
-// before a child) is listed anyway.
-const sourceHealthSQL = `
-WITH base AS (
-    SELECT c.id, c.integration_id, c.is_active, c.parent_id, c.created_at,
-           c.provider, c.sync_targets, c.last_sync_at, c.last_sync_success,
-           COALESCE(c.last_sync_error, '') <> '' AS has_sync_error, c.updated_at,
-           c.last_sync_stats->>'error_category' AS stats_category,
-           r.status, r.started_at, r.completed_at, r.stage, r.category,
-           COALESCE(r.has_error, FALSE) AS has_run_error,
-           (
-             (c.is_active IS TRUE OR c.last_sync_success IS FALSE OR COALESCE(c.last_sync_error, '') <> '')
-             AND (
-                   c.integration_id IS NULL
-                   OR c.id = (
-                       SELECT c2.id FROM sync_configurations c2
-                       WHERE c2.org_id = c.org_id AND c2.integration_id = c.integration_id AND c2.parent_id IS NULL
-                       ORDER BY c2.created_at ASC, c2.id ASC LIMIT 1)
-                   OR c.last_sync_at IS NOT NULL
-                   OR c.last_sync_success IS NOT NULL
-                   OR COALESCE(c.last_sync_error, '') <> ''
-                   OR r.status IS NOT NULL
-             )
-           ) AS listed
-    FROM sync_configurations c
-    LEFT JOIN LATERAL (
-        SELECT jr.status, jr.started_at, jr.completed_at,
-               jr.result->>'stage' AS stage, jr.result->>'error_category' AS category,
-               COALESCE(jr.error, '') <> '' AS has_error
-        FROM job_runs jr
-        JOIN scheduled_jobs sj ON sj.id = jr.job_id AND sj.org_id = c.org_id
-        WHERE sj.sync_config_id = c.id
-        ORDER BY jr.created_at DESC
-        LIMIT 1
-    ) r ON TRUE
-    WHERE c.org_id = $1
-)
-SELECT b.provider, b.sync_targets, b.last_sync_at, b.last_sync_success, b.has_sync_error, b.updated_at,
-       b.stats_category, b.status, b.started_at, b.completed_at, b.stage, b.category, b.has_run_error
-FROM base b
-WHERE b.listed
-   OR (
-        b.is_active IS TRUE
-        AND NOT EXISTS (SELECT 1 FROM base b2 WHERE b2.integration_id = b.integration_id AND b2.listed)
-        AND b.id = (
-            SELECT b3.id FROM base b3
-            WHERE b3.integration_id = b.integration_id AND b3.is_active IS TRUE
-            ORDER BY (b3.parent_id IS NOT NULL), b3.created_at ASC, b3.id ASC LIMIT 1)
-   )
-ORDER BY b.provider, b.id`
+// sourceHealthSQL fetches every signal stored about each sync configuration
+// of the org and decides nothing: deriveSourceHealth alone turns the signals
+// into the listed rows and their values. It selects no free text: whether an
+// error exists is a boolean, and the stage and categories are single values
+// the Go side checks against sourceHealthStages. The run signals are the
+// newest successful run and the newest failed run of the configuration's own
+// jobs in the same org.
+var sourceHealthSQL = fmt.Sprintf(`
+SELECT c.id::text, c.integration_id::text, c.parent_id IS NOT NULL, c.created_at, c.is_active IS TRUE,
+       c.provider, c.sync_targets, c.last_sync_at, c.last_sync_success,
+       COALESCE(c.last_sync_error, '') <> '', c.updated_at, c.last_sync_stats->>'error_category',
+       EXISTS (
+           SELECT 1 FROM job_runs jr
+           JOIN scheduled_jobs sj ON sj.id = jr.job_id AND sj.org_id = c.org_id
+           WHERE sj.sync_config_id = c.id
+       ),
+       ok.completed_at, ok.started_at, ok.created_at,
+       bad.completed_at, bad.started_at, bad.created_at, bad.stage, bad.category
+FROM sync_configurations c
+LEFT JOIN LATERAL (
+    SELECT jr.completed_at, jr.started_at, jr.created_at
+    FROM job_runs jr
+    JOIN scheduled_jobs sj ON sj.id = jr.job_id AND sj.org_id = c.org_id
+    WHERE sj.sync_config_id = c.id AND jr.status = %[1]d AND COALESCE(jr.error, '') = ''
+    ORDER BY jr.created_at DESC
+    LIMIT 1
+) ok ON TRUE
+LEFT JOIN LATERAL (
+    SELECT jr.completed_at, jr.started_at, jr.created_at,
+           jr.result->>'stage', jr.result->>'error_category'
+    FROM job_runs jr
+    JOIN scheduled_jobs sj ON sj.id = jr.job_id AND sj.org_id = c.org_id
+    WHERE sj.sync_config_id = c.id AND (jr.status IN (%[2]d, %[3]d) OR COALESCE(jr.error, '') <> '')
+    ORDER BY jr.created_at DESC
+    LIMIT 1
+) bad(completed_at, started_at, created_at, stage, category) ON TRUE
+WHERE c.org_id = $1
+ORDER BY c.provider, c.id`, jobRunSuccess, jobRunFailed, jobRunCancelled)
 
-// SourceHealth serves the member-level source health of one authorized org: one
-// row per active sync configuration. lastSyncAt is the last SUCCESSFUL sync
-// (null after a failed one), lastFailure is set when the latest sync failed.
-// A source that never synced has neither; that is not the same as a healthy one.
+// sourceSignals is everything stored about one sync configuration that bears
+// on its health.
+type sourceSignals struct {
+	id            string
+	integrationID string // "" = no integration
+	isChild       bool
+	createdAt     *time.Time
+	active        bool
+	provider      string
+	syncTargets   []byte
+
+	// The config stamp, written by the sync finish on the canonical config.
+	lastSyncAt      *time.Time
+	lastSyncSuccess *bool
+	hasSyncError    bool
+	updatedAt       *time.Time
+	statsCategory   *string
+
+	hasRun    bool       // any run of the configuration's own jobs
+	okRun     *runSignal // newest run that succeeded without an error
+	failedRun *runSignal // newest run that failed, was cancelled or carries an error
+}
+
+type runSignal struct {
+	completed, started *time.Time
+	created            time.Time
+	stage, category    *string
+}
+
+func (s runSignal) at() time.Time {
+	switch {
+	case s.completed != nil:
+		return *s.completed
+	case s.started != nil:
+		return *s.started
+	default:
+		return s.created
+	}
+}
+
+// stampFailed: the writer sets the error text exactly when the sync failed.
+func (c sourceSignals) stampFailed() bool {
+	return (c.lastSyncSuccess != nil && !*c.lastSyncSuccess) || c.hasSyncError
+}
+
+func (c sourceSignals) hasOwnSignal() bool {
+	return c.lastSyncAt != nil || c.lastSyncSuccess != nil || c.hasSyncError || c.hasRun
+}
+
+type listedSource struct {
+	id  string
+	row model.SourceHealth
+}
+
+// deriveSourceHealth is the one place that decides which configurations are
+// listed and what each row says, from the signals of every source:
+//
+//   - lastSyncAt is the newest success of any source: a stamp that did not fail
+//     (a missing success flag counts as success), or a successful run.
+//   - lastFailure is the newest failure of any source (a failed stamp, a failed
+//     run), only when it is newer than lastSyncAt.
+//   - A configuration is listed when it is active or has a lastFailure, and it
+//     can speak for itself: no integration, the canonical configuration of its
+//     integration (oldest top-level one, the one the sync finish stamps), or a
+//     signal of its own. A silent non-canonical configuration would read
+//     "never synced" when its integration synced.
+//   - An integration with an active configuration is never absent: when none of
+//     its configurations is listed, its oldest active one (top-level before
+//     child) is listed.
+//
+// The order of configs is kept.
+func deriveSourceHealth(configs []sourceSignals, now time.Time) []listedSource {
+	canonical := map[string]int{}
+	for i, c := range configs {
+		if c.integrationID == "" || c.isChild {
+			continue
+		}
+		if j, seen := canonical[c.integrationID]; !seen || createdBefore(c, configs[j]) {
+			canonical[c.integrationID] = i
+		}
+	}
+
+	rows := make([]model.SourceHealth, len(configs))
+	listed := make([]bool, len(configs))
+	integrationListed := map[string]bool{}
+	for i, c := range configs {
+		rows[i] = deriveSourceRow(c, now)
+		j, hasCanonical := canonical[c.integrationID]
+		speaks := c.integrationID == "" || (hasCanonical && j == i) || c.hasOwnSignal()
+		listed[i] = (c.active || rows[i].LastFailure != nil) && speaks
+		if listed[i] && c.integrationID != "" {
+			integrationListed[c.integrationID] = true
+		}
+	}
+
+	fallback := map[string]int{}
+	for i, c := range configs {
+		if !c.active || c.integrationID == "" || integrationListed[c.integrationID] {
+			continue
+		}
+		if j, seen := fallback[c.integrationID]; !seen || fallbackBefore(c, configs[j]) {
+			fallback[c.integrationID] = i
+		}
+	}
+	for _, i := range fallback {
+		listed[i] = true
+	}
+
+	out := []listedSource{}
+	for i, c := range configs {
+		if listed[i] {
+			out = append(out, listedSource{id: c.id, row: rows[i]})
+		}
+	}
+	return out
+}
+
+// createdBefore orders as the sync finish picks the canonical configuration:
+// created_at, then id; a missing created_at sorts last.
+func createdBefore(a, b sourceSignals) bool {
+	switch {
+	case a.createdAt != nil && b.createdAt != nil && !a.createdAt.Equal(*b.createdAt):
+		return a.createdAt.Before(*b.createdAt)
+	case (a.createdAt == nil) != (b.createdAt == nil):
+		return a.createdAt != nil
+	default:
+		return a.id < b.id
+	}
+}
+
+func fallbackBefore(a, b sourceSignals) bool {
+	if a.isChild != b.isChild {
+		return !a.isChild
+	}
+	return createdBefore(a, b)
+}
+
+type failureSignal struct {
+	at    time.Time
+	codes []*string
+}
+
+func deriveSourceRow(c sourceSignals, now time.Time) model.SourceHealth {
+	row := model.SourceHealth{Provider: c.provider, Scope: sourceHealthScope(c.provider, c.syncTargets)}
+
+	var success *time.Time
+	if c.lastSyncAt != nil && !c.stampFailed() {
+		success = c.lastSyncAt
+	}
+	if c.okRun != nil {
+		if at := c.okRun.at(); success == nil || at.After(*success) {
+			success = &at
+		}
+	}
+	row.LastSyncAt = utc(success)
+
+	// A run carries its own stage, so on equal times it is read first.
+	var failures []failureSignal
+	if c.failedRun != nil {
+		failures = append(failures, failureSignal{at: c.failedRun.at(), codes: []*string{c.failedRun.stage, c.failedRun.category}})
+	}
+	if c.stampFailed() {
+		at := now
+		switch {
+		case c.lastSyncAt != nil:
+			at = *c.lastSyncAt
+		case c.updatedAt != nil:
+			at = *c.updatedAt
+		}
+		failures = append(failures, failureSignal{at: at, codes: []*string{c.statsCategory}})
+	}
+	var current []failureSignal
+	for _, f := range failures {
+		if success == nil || f.at.After(*success) {
+			current = append(current, f)
+		}
+	}
+	if len(current) == 0 {
+		return row
+	}
+	sort.SliceStable(current, func(i, j int) bool { return current[i].at.After(current[j].at) })
+	var codes []*string
+	for _, f := range current {
+		codes = append(codes, f.codes...)
+	}
+	row.LastFailure = &model.SourceHealthFailure{OccurredAt: current[0].at.UTC(), Stage: sourceHealthStage(codes...)}
+	return row
+}
+
+// SourceHealth serves the member-level source health of one authorized org:
+// the rows deriveSourceHealth lists. A source that never synced has neither a
+// time nor a failure; that is not the same as a healthy one.
 func (r *Reader) SourceHealth(ctx context.Context, orgID string) ([]model.SourceHealth, error) {
 	if r.Postgres == nil {
 		slog.ErrorContext(ctx, "query-api: source health unavailable, no postgres reader",
@@ -103,65 +267,46 @@ func (r *Reader) SourceHealth(ctx context.Context, orgID string) ([]model.Source
 	}
 	defer rows.Close()
 
-	out := []model.SourceHealth{}
+	configs := []sourceSignals{}
 	for rows.Next() {
 		var (
-			c                connectorRow
-			hasSyncError     bool
-			statsCategory    *string
-			stage            *string
-			category         *string
-			hasRunError      bool
-			runStatus        *int32
-			runStart, runEnd *time.Time
+			c                       sourceSignals
+			integrationID           *string
+			okEnd, okStart, okMade  *time.Time
+			badEnd, badStart, badAt *time.Time
+			badStage, badCategory   *string
 		)
-		if err := rows.Scan(&c.provider, &c.syncTargets, &c.lastSyncAt, &c.lastSyncSuccess,
-			&hasSyncError, &c.updatedAt, &statsCategory, &runStatus, &runStart, &runEnd, &stage, &category, &hasRunError); err != nil {
+		if err := rows.Scan(&c.id, &integrationID, &c.isChild, &c.createdAt, &c.active,
+			&c.provider, &c.syncTargets, &c.lastSyncAt, &c.lastSyncSuccess,
+			&c.hasSyncError, &c.updatedAt, &c.statsCategory, &c.hasRun,
+			&okEnd, &okStart, &okMade,
+			&badEnd, &badStart, &badAt, &badStage, &badCategory); err != nil {
 			slog.ErrorContext(ctx, "query-api: source health scan failed",
 				"operation", "sourceHealth", "cause", pgErrorClass(err), "error", err)
 			return nil, ErrSourceHealthUnavailable
 		}
-		c.hasRun = runStatus != nil
-		c.runStatus, c.runStarted, c.runComplete = runStatus, runStart, runEnd
-		out = append(out, r.sourceHealthRow(c, hasSyncError, hasRunError, stage, category, statsCategory))
+		if integrationID != nil {
+			c.integrationID = *integrationID
+		}
+		if okMade != nil {
+			c.okRun = &runSignal{completed: okEnd, started: okStart, created: *okMade}
+		}
+		if badAt != nil {
+			c.failedRun = &runSignal{completed: badEnd, started: badStart, created: *badAt, stage: badStage, category: badCategory}
+		}
+		configs = append(configs, c)
 	}
 	if err := rows.Err(); err != nil {
 		slog.ErrorContext(ctx, "query-api: source health read failed",
 			"operation", "sourceHealth", "cause", pgErrorClass(err), "error", err)
 		return nil, ErrSourceHealthUnavailable
 	}
+
+	out := []model.SourceHealth{}
+	for _, source := range deriveSourceHealth(configs, r.now()) {
+		out = append(out, source.row)
+	}
 	return out, nil
-}
-
-func (r *Reader) sourceHealthRow(c connectorRow, hasSyncError, hasRunError bool, stage, category, statsCategory *string) model.SourceHealth {
-	row := model.SourceHealth{Provider: c.provider, Scope: sourceHealthScope(c.provider, c.syncTargets)}
-	// last_sync_at is stamped on every finished sync, failed ones too; only a
-	// sync that did not fail is a successful sync.
-	if c.lastSyncAt != nil && (c.lastSyncSuccess == nil || *c.lastSyncSuccess) {
-		row.LastSyncAt = utc(c.lastSyncAt)
-	}
-
-	failedRun := c.hasRun && c.runStatus != nil && (*c.runStatus == jobRunFailed || *c.runStatus == jobRunCancelled)
-	lastSyncFailed := c.lastSyncSuccess != nil && !*c.lastSyncSuccess
-	if !hasSyncError && !(c.hasRun && hasRunError) && !lastSyncFailed && !failedRun {
-		return row
-	}
-
-	var occurred time.Time
-	switch {
-	case c.hasRun && c.runComplete != nil:
-		occurred = *c.runComplete
-	case c.hasRun && c.runStarted != nil:
-		occurred = *c.runStarted
-	case c.lastSyncAt != nil:
-		occurred = *c.lastSyncAt
-	case c.updatedAt != nil:
-		occurred = *c.updatedAt
-	default:
-		occurred = r.now()
-	}
-	row.LastFailure = &model.SourceHealthFailure{OccurredAt: occurred.UTC(), Stage: sourceHealthStage(stage, category, statsCategory)}
-	return row
 }
 
 func sourceHealthStage(candidates ...*string) string {

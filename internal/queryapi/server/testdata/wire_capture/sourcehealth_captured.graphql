@@ -1,0 +1,13 @@
+query SourceHealth($orgId: String!) {
+  sourceHealth(orgId: $orgId) {
+    provider
+    scope
+    lastSyncAt
+    lastFailure {
+      occurredAt
+      stage
+      __typename
+    }
+    __typename
+  }
+}

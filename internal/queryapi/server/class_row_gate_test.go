@@ -27,6 +27,7 @@ import (
 // classOperationDocuments is the registered document of each operation whose response root is a class root. TestClassGateTableCoversEveryClassOperation
 // fails when the derived set holds an operation this table lacks, so a new class operation cannot be added without its row here.
 var classOperationDocuments = map[string]string{
+	"sourceHealth":                   registeredSourceHealthDocument,
 	"acrRepositoryScopes":            registeredAcrRepositoryScopesDocument,
 	"capacityCompletionDistribution": registeredCapacityCompletionDistributionDocument,
 	"capacityForecast":               registeredCapacityForecastDocument,

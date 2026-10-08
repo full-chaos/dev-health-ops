@@ -54,6 +54,7 @@ var rootFields = map[string]bool{
 	"hotspots":             true,
 	"securityAlerts":       true,
 	"securityOverview":     true,
+	"sourceHealth":         true,
 	"throughputForecast":   true,
 	"workGraphArtifacts":   true,
 	"workGraphEdges":       true,

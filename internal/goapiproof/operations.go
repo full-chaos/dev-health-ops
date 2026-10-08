@@ -1192,6 +1192,15 @@ var operationSpecs = map[string]OperationSpec{
 	// of the stored daily percentages; with no baseline answer to compare with,
 	// no Tier-B leaf is declared. The request is the web's: the day after the
 	// window's last day, and no scope.
+	// sourceHealth (CHAOS-8906) is Go-only from its first day: no Python
+	// resolver ever existed. It declares no Tier-B leaf: it holds times and
+	// codes, no computed float.
+	"sourceHealth": {
+		ResponseRoot: "sourceHealth",
+		Variables: func(orgID string, _ Window) map[string]any {
+			return map[string]any{"orgId": orgID}
+		},
+	},
 	"coverageScopeBaseline": {
 		ResponseRoot: "coverageScopeBaseline",
 		Variables: func(orgID string, w Window) map[string]any {

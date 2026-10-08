@@ -1042,6 +1042,22 @@ func (r *queryResolver) DataHealth(ctx context.Context, team string) (*model.Dat
 	return result, nil
 }
 
+// SourceHealth is the resolver for the sourceHealth field (CHAOS-8906). It
+// serves every member of the org, with no operator gate: the org is the
+// authorized one, re-checked on every request (requireOwnOrg), and the read
+// carries no error text.
+func (r *queryResolver) SourceHealth(ctx context.Context, orgID string) ([]model.SourceHealth, error) {
+	if err := requireOwnOrg(ctx, orgID); err != nil {
+		return nil, err
+	}
+	reader := &datahealth.Reader{Postgres: r.Postgres}
+	result, err := reader.SourceHealth(ctx, orgID)
+	if err != nil {
+		return nil, fmt.Errorf("sourceHealth: %w", err)
+	}
+	return result, nil
+}
+
 // BusFactor is the resolver for the busFactor field. It reads only the
 // caller's own org: the orgId argument must equal the org of the request
 // identity, otherwise the request is denied. A team scope resolves through

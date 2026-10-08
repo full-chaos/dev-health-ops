@@ -803,6 +803,24 @@ input CreateSavedReportInput {
   scheduleTimezone: String! = "UTC"
 }
 
+"""
+Org-level source health: one row per active sync configuration of the caller's organization (CHAOS-8906). A member read, not an operator view: provider, scope, the last successful sync time, and the last failure as a time and a closed stage code. Never an error message.
+"""
+type SourceHealth {
+  provider: String!
+  scope: String!
+  """The last successful sync. Null when the source has never synced successfully (never synced, or its only attempts failed)."""
+  lastSyncAt: DateTime
+  """Set when the latest sync of the source failed; null when it did not."""
+  lastFailure: SourceHealthFailure
+}
+
+type SourceHealthFailure {
+  occurredAt: DateTime!
+  """A closed stage code; ``other`` when the stage is not one the platform names."""
+  stage: String!
+}
+
 type DataHealth {
   connectors: [ConnectorStatus!]!
   identityMapping: IdentityMappingHealth!
@@ -1560,6 +1578,11 @@ type Query {
 
   """Operator data-health and trust surface"""
   dataHealth(team: ID!): DataHealth!
+
+  """
+  Source health of the caller's organization (CHAOS-8906): per active sync configuration, provider, scope, last successful sync time, and the last failure as a time and a stage code. Served to every member of the organization; no error text.
+  """
+  sourceHealth(orgId: String!): [SourceHealth!]!
 
   """Repository ownership concentration and bus-factor summary."""
   busFactor(orgId: String!, scope: BusFactorScopeInput = null): BusFactor!

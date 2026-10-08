@@ -273,6 +273,10 @@
     "digest": "3b76c20e6950094356311d84f4288a7ce9e1e936c60c2b867b6e083f2d709884"
   },
   {
+    "operation": "sourceHealth",
+    "digest": "f9196883f03de7e9689294590f40c0216374a8301ed8712830ec4b9836034fc0"
+  },
+  {
     "operation": "testOpsCoverage",
     "digest": "404b55a3066388c00846a9330032aafdaff6f3441cca5258217ade4fb845ecac"
   },

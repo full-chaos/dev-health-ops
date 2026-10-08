@@ -1857,6 +1857,25 @@ const registeredCoverageScopeBaselineDocument = `query CoverageScopeBaseline($or
   }
 }`
 
+// registeredSourceHealthDocument is the registered document for the
+// `sourceHealth` operation (CHAOS-8906, Go-only: no Python resolver exists):
+// the member-level source health of the caller's organization. It carries no
+// error text. testdata/wire_capture/sourcehealth_captured.graphql is its wire
+// form.
+const registeredSourceHealthDocument = `query SourceHealth($orgId: String!) {
+  sourceHealth(orgId: $orgId) {
+    provider
+    scope
+    lastSyncAt
+    lastFailure {
+      occurredAt
+      stage
+      __typename
+    }
+    __typename
+  }
+}`
+
 // registeredTestopsJobFailuresDocument is the registered document for the
 // `testopsJobFailures` operation (CHAOS-8513, Go-only: no Python resolver
 // exists), the exact wire-form text the web client sends
@@ -4090,6 +4109,7 @@ func newQueryHandler(chClient featureflags.QueryClient, pgPool *pgxpool.Pool, ve
 		"testopsJobFailures":                digestHex(registeredTestopsJobFailuresDocument),
 		"coverageBaselines":                 digestHex(registeredCoverageBaselinesDocument),
 		"coverageScopeBaseline":             digestHex(registeredCoverageScopeBaselineDocument),
+		"sourceHealth":                      digestHex(registeredSourceHealthDocument),
 		"workItemTeamAttributions":          digestHex(registeredWorkItemTeamAttributionsDocument),
 		"recommendations":                   digestHex(registeredRecommendationsDocument),
 	}

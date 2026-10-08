@@ -77,6 +77,7 @@ func TestGraphQLEdgeFrozenVenueOracle(t *testing.T) {
 		Golden: golden, Root: golden.PythonRoot(t, root), JWTKey: edgeOracleJWTKey,
 		Seed: edgeSeed(users, docs, schemaDigest),
 	})
+	operatingReviewFixtureHasNoRows(t, ctx, venue.AdminClickHouseURI(t, venue.GoClickHouseDB))
 	settings, goBase, pythonEnv, leaveRoot := startEdgePlane(t, ctx, venue, root)
 	suite := edgeOracleCases(t, docs, users, venue, func(key string, user edgeUser, expired bool) string {
 		return edgeFixedToken(t, key, user, expired)

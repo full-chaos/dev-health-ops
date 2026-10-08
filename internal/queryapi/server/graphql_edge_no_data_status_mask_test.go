@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"strings"
 	"testing"
 
@@ -14,7 +15,10 @@ import (
 //
 // The mask is ONE field wide and only on an all-zero delta: the status of that delta is blanked to
 // the same placeholder on both sides (noDataStatusNormalize), so every other field of the answer is
-// still compared by Diff, and the raw Go answer is asserted to carry no "unchanged" on an all-zero
+// still compared by Diff, the mask applies ONLY under a precondition the oracle checks at run time
+// (operatingReviewFixtureHasNoRows: the metric tables the review reads hold no row, so both weeks are
+// missing, the case #3873 clears at operatingreview.go:1466-68: a week with no stored row, never a
+// stored 0), and the raw Go answer is asserted to carry no "unchanged" on an all-zero
 // delta (noDataStatusInspect), so a regression back to "unchanged" fails instead of being blanked.
 const (
 	zeroDeltaPrefix   = `"delta":{"value":0,"priorValue":0,"absolute":0,"percent":0,"status":`
@@ -23,12 +27,36 @@ const (
 	declaredNoData    = zeroDeltaPrefix + `"<declared CHAOS-8525: no-data week>"`
 )
 
+// operatingReviewTables are the ClickHouse tables the operating review reads (operatingreview.go).
+var operatingReviewTables = []string{
+	"ai_governance_coverage_daily", "ai_impact_metrics_daily", "deploy_metrics_daily", "file_hotspot_daily",
+	"incident_metrics_daily", "investment_metrics_daily", "repo_complexity_daily", "repo_metrics_daily",
+	"work_item_metrics_daily", "work_item_state_durations_daily",
+}
+
+// operatingReviewTablesEmpty is set by operatingReviewFixtureHasNoRows. The mask applies only when it is true.
+var operatingReviewTablesEmpty bool
+
+// operatingReviewFixtureHasNoRows reads the row count of every table the review reads, in the Go copy of
+// the venue. Any row is a loud failure (not a skip) and leaves the mask off.
+func operatingReviewFixtureHasNoRows(t *testing.T, ctx context.Context, uri string) {
+	t.Helper()
+	empty := true
+	for _, table := range operatingReviewTables {
+		if count := venueoracle.CHRows(t, ctx, uri, "SELECT count() FROM "+table); count != "0" {
+			t.Errorf("%s holds %s row(s): the no-data mask of the operatingReview oracle (CHAOS-8525) requires the fixture to hold none", table, count)
+			empty = false
+		}
+	}
+	operatingReviewTablesEmpty = empty
+}
+
 func isOperatingReviewRequest(request venueoracle.Request) bool {
 	return strings.HasSuffix(request.Name, " operatingReview")
 }
 
-func noDataStatusNormalize(request venueoracle.Request, body string) string {
-	if !isOperatingReviewRequest(request) {
+func noDataStatusNormalize(request venueoracle.Request, body string, tablesEmpty bool) string {
+	if !tablesEmpty || !isOperatingReviewRequest(request) {
 		return body
 	}
 	return strings.ReplaceAll(strings.ReplaceAll(body, pythonNoDataState, declaredNoData), goNoDataState, declaredNoData)
@@ -49,21 +77,21 @@ func TestNoDataStatusMaskIsOneFieldWide(t *testing.T) {
 	}
 	python := wrap(pythonNoDataState + `}`)
 	goBody := wrap(goNoDataState + `}`)
-	if noDataStatusNormalize(request, python) != noDataStatusNormalize(request, goBody) {
+	if noDataStatusNormalize(request, python, true) != noDataStatusNormalize(request, goBody, true) {
 		t.Fatal("the declared pair does not normalize equal")
 	}
 	// A non-zero delta keeps its status: a different status there still differs.
 	moved := `"delta":{"value":2,"priorValue":1,"absolute":1,"percent":100,"status":`
-	if noDataStatusNormalize(request, wrap(moved+`"worsened"}`)) == noDataStatusNormalize(request, wrap(moved+`"unchanged"}`)) {
+	if noDataStatusNormalize(request, wrap(moved+`"worsened"}`), true) == noDataStatusNormalize(request, wrap(moved+`"unchanged"}`), true) {
 		t.Fatal("a non-zero delta's status is masked: the mask is wider than the all-zero delta")
 	}
 	// Another status on an all-zero delta is not blanked into the declared value.
-	if noDataStatusNormalize(request, wrap(zeroDeltaPrefix+`"improved"}`)) == noDataStatusNormalize(request, goBody) {
+	if noDataStatusNormalize(request, wrap(zeroDeltaPrefix+`"improved"}`), true) == noDataStatusNormalize(request, goBody, true) {
 		t.Fatal("another status on an all-zero delta was blanked to the declared value")
 	}
 	// Another operation is left alone.
 	other := venueoracle.Request{Name: "POST home"}
-	if noDataStatusNormalize(other, python) != python {
+	if noDataStatusNormalize(other, python, true) != python {
 		t.Fatal("an answer of another operation was changed")
 	}
 	if ok, _ := noDataStatusInspect(request, python); ok {
@@ -71,5 +99,26 @@ func TestNoDataStatusMaskIsOneFieldWide(t *testing.T) {
 	}
 	if ok, why := noDataStatusInspect(request, goBody); !ok {
 		t.Fatalf("the intended Go answer fails the inspection: %s", why)
+	}
+}
+
+// The planted defect: a 0-vs-0 week WITH stored rows for which Go clears the status (the defect
+// #3873 must not have: a stored zero keeps its status, operatingreview.go:1466-68). The earlier
+// mask, which keyed on the all-zero delta alone, equalized it with the recorded "unchanged" and
+// hid it; the mask under its precondition (a venue with stored rows: tables not empty) does not.
+func TestNoDataStatusMaskDoesNotHideAZeroWeekWithStoredRows(t *testing.T) {
+	request := venueoracle.Request{Name: "GET operatingReview"}
+	wrap := func(delta string) string {
+		return `{"data":{"operatingReview":{"metrics":[{"key":"k","value":0,` + delta + `}]}}}`
+	}
+	python := wrap(pythonNoDataState + `}`)
+	goClearedOnStoredZero := wrap(goNoDataState + `}`)
+
+	const tablesEmpty, tablesHoldRows = true, false
+	if noDataStatusNormalize(request, python, tablesEmpty) != noDataStatusNormalize(request, goClearedOnStoredZero, tablesEmpty) {
+		t.Fatal("the earlier mask (precondition assumed true) would have hidden the planted defect: this guard no longer shows that")
+	}
+	if noDataStatusNormalize(request, python, tablesHoldRows) == noDataStatusNormalize(request, goClearedOnStoredZero, tablesHoldRows) {
+		t.Fatal("with stored rows in the fixture the cleared status of a stored 0-vs-0 week is hidden")
 	}
 }

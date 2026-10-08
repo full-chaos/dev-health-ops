@@ -703,7 +703,7 @@ func edgeCompare(t *testing.T, goBase string, cs []edgeCase, python []venueoracl
 	receipt.WriteString(venueoracle.Diff(t, goBase, parity, parityPython, venueoracle.DiffOptions{
 		Normalize: func(request venueoracle.Request, body string) string {
 			body = coverageDivergenceNormalize(request, body)
-			body = noDataStatusNormalize(request, body)
+			body = noDataStatusNormalize(request, body, operatingReviewTablesEmpty)
 			if base != nil {
 				body = base(request, body)
 			}

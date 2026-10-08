@@ -65,3 +65,11 @@ func TestDeploymentFlameNameNeverCrossesTheOrgBoundary(t *testing.T) {
 		t.Fatal("org-1 read a deployment of org-2")
 	}
 }
+
+func TestFetchDeploymentQueryReadsReleaseRefInsideTheCallersOrg(t *testing.T) {
+	for _, want := range []string{"release_ref", "FROM deployments FINAL\n        WHERE org_id = {org_id:String}"} {
+		if !strings.Contains(fetchDeploymentQuery, want) {
+			t.Fatalf("deployment query missing %q:\n%s", want, fetchDeploymentQuery)
+		}
+	}
+}

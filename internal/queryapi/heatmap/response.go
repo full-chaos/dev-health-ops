@@ -40,7 +40,9 @@ type ReviewWaitEvidenceItem struct {
 	Number uint32  `json:"number"`
 	Title  *string `json:"title"`
 	// RepoName is the repository's stored name (repos.repo); null when empty, never the id.
-	RepoName      *string   `json:"repo_name"`
+	RepoName *string `json:"repo_name"`
+	// Source is the repository's stored provider (repos.provider); null when empty or "unknown".
+	Source        *string   `json:"source"`
 	CreatedAt     time.Time `json:"created_at"`
 	FirstReviewAt time.Time `json:"first_review_at"`
 }

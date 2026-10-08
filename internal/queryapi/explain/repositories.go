@@ -4,7 +4,9 @@ import (
 	"context"
 	"fmt"
 	"net/url"
+	"sort"
 	"strings"
+	"time"
 
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 )
@@ -72,6 +74,133 @@ WHERE org_id = {org_id:String}
 		return nil, fmt.Errorf("iterate repository source url rows: %w", err)
 	}
 	return out, nil
+}
+
+// fetchRepoProviders reads the stored provider of each repository id of one
+// organization (repos.provider: github, gitlab, ...). An id with no row, an
+// empty provider or the migration's placeholder "unknown" is absent from the
+// map: no provider is never served as a name. A failed read is an error.
+func (reader *Reader) fetchRepoProviders(ctx context.Context, orgID string, repoIDs []string) (map[string]string, error) {
+	ids := uniqueSortedNonEmpty(repoIDs)
+	out := make(map[string]string, len(ids))
+	if len(ids) == 0 {
+		return out, nil
+	}
+	if reader == nil || reader.client == nil {
+		return nil, ErrUnavailable
+	}
+	query := fmt.Sprintf(`
+SELECT toString(id) AS id, ifNull(provider, '') AS provider
+FROM repos FINAL
+WHERE org_id = {org_id:String}
+  AND toString(id) IN {repo_ids:Array(String)}
+%s
+`, settingsMaxExecutionTime())
+	rows, err := reader.client.Query(ctx, query, []dhclickhouse.Binding{
+		{Name: "org_id", Value: orgID},
+		{Name: "repo_ids", Value: ids},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("fetch repository providers: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id, provider string
+		if err := rows.Scan(&id, &provider); err != nil {
+			return nil, fmt.Errorf("scan repository provider row: %w", err)
+		}
+		provider = strings.TrimSpace(provider)
+		if provider != "" && !strings.EqualFold(provider, "unknown") {
+			out[id] = provider
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate repository provider rows: %w", err)
+	}
+	return out, nil
+}
+
+// fetchWorkItemProviders reads the distinct providers stored in the work-item
+// table behind a metric stored per team, for the request window, scope and
+// organization (the same filter as the metric's own value read). Both
+// work-item metric tables carry a provider column. The empty string and the
+// placeholder "unknown" are no provider. A failed read is an error.
+func (reader *Reader) fetchWorkItemProviders(ctx context.Context, table string, startDay, endDay time.Time, scopeFilterSQL string, scopeBindings []dhclickhouse.Binding, orgID string) ([]string, error) {
+	if reader == nil || reader.client == nil {
+		return nil, ErrUnavailable
+	}
+	query := fmt.Sprintf(`
+SELECT DISTINCT provider
+FROM %s
+WHERE day >= {start_day:Date} AND day < {end_day:Date}
+%s
+  AND org_id = {org_id:String}
+%s
+`, table, scopeFilterSQL, settingsMaxExecutionTime())
+	bindings := append([]dhclickhouse.Binding{
+		{Name: "start_day", Value: dateBindingValue(startDay)},
+		{Name: "end_day", Value: dateBindingValue(endDay)},
+		{Name: "org_id", Value: orgID},
+	}, scopeBindings...)
+	rows, err := reader.client.Query(ctx, query, bindings)
+	if err != nil {
+		return nil, fmt.Errorf("fetch work item providers: %w", err)
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var provider string
+		if err := rows.Scan(&provider); err != nil {
+			return nil, fmt.Errorf("scan work item provider row: %w", err)
+		}
+		provider = strings.TrimSpace(provider)
+		if provider != "" && !strings.EqualFold(provider, "unknown") {
+			out = append(out, provider)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate work item provider rows: %w", err)
+	}
+	return out, nil
+}
+
+// joinProviderNames is the sorted, de-duplicated, ", "-joined provider list; nil when empty.
+func joinProviderNames(providers []string) *string {
+	seen := map[string]struct{}{}
+	var names []string
+	for _, provider := range providers {
+		if _, dup := seen[provider]; !dup {
+			seen[provider] = struct{}{}
+			names = append(names, provider)
+		}
+	}
+	if len(names) == 0 {
+		return nil
+	}
+	sort.Strings(names)
+	joined := strings.Join(names, ", ")
+	return &joined
+}
+
+// joinProviders is the served source of an item: the distinct providers of
+// the given repositories, sorted and joined by ", "; nil when none is stored.
+func joinProviders(repoIDs []string, providers map[string]string) *string {
+	seen := map[string]struct{}{}
+	var names []string
+	for _, id := range repoIDs {
+		if provider, ok := providers[id]; ok {
+			if _, dup := seen[provider]; !dup {
+				seen[provider] = struct{}{}
+				names = append(names, provider)
+			}
+		}
+	}
+	if len(names) == 0 {
+		return nil
+	}
+	sort.Strings(names)
+	joined := strings.Join(names, ", ")
+	return &joined
 }
 
 // servableSourceURL returns a stored URL only when it is an absolute http or

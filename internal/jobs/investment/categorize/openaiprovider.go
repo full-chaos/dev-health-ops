@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/full-chaos/dev-health-ops/internal/httpguard"
 	"io"
 	"net/http"
 	"time"
@@ -165,7 +164,7 @@ func (p *OpenAIProvider) Complete(ctx context.Context, request CompletionRequest
 			MaxOutputTokens: maxTokens,
 		}
 
-		result, incompleteReason, err := p.executeResponsesRequest(ctx, body)
+		result, incompleteReason, err := p.executeResponsesRequest(withLLMAttempt(ctx, attempt+1), body)
 		if err != nil {
 			classified := classifyProviderError(err, statusCodeOf(err), headerOf(err), "openai", p.cfg.Model)
 			lastErr = classified
@@ -233,7 +232,7 @@ func (p *OpenAIProvider) executeResponsesRequest(ctx context.Context, body openA
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+p.cfg.APIKey.Reveal())
 
-	resp, err := httpguard.NoRedirects(p.client).Do(req) // the API key rides this request
+	resp, err := tracedLLMDo(p.client, req, ProviderKindOpenAI, p.cfg.Model)
 	if err != nil {
 		return openAICompletionText{}, "", &httpTransportError{cause: logging.TransportFailure(err)}
 	}
@@ -250,6 +249,7 @@ func (p *OpenAIProvider) executeResponsesRequest(ctx context.Context, body openA
 
 	var decoded openAIResponsesResponse
 	if err := json.Unmarshal(responseBody, &decoded); err != nil {
+		markInvalidAnswer(resp)
 		return openAICompletionText{}, "", logging.DecodeFailure(err)
 	}
 

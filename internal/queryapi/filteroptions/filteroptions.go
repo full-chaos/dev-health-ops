@@ -80,6 +80,7 @@ import (
 	"regexp"
 
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/scopelabel"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph/units"
 )
@@ -381,7 +382,8 @@ func namePairs(ctx context.Context, client QueryClient, query, what string, bind
 		if err := rows.Scan(&key, &name); err != nil {
 			return nil, fmt.Errorf("filteroptions: %s scan: %w", what, err)
 		}
-		if key == "" || name == "" {
+		name, ok := scopelabel.CleanName(name)
+		if key == "" || !ok {
 			continue
 		}
 		if keep != nil {

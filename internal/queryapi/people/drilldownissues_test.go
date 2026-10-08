@@ -459,3 +459,39 @@ func TestDrilldownIssuesFailOnALinkedRepoIterateError(t *testing.T) {
 		t.Fatal("want an error when the link rows fail while iterating")
 	}
 }
+
+// TestDrilldownIssuesDropABareUUIDLinkedRepoName: a linked repository whose
+// stored name is a bare UUID is dropped; a real name stays; an issue left with
+// no name serves repo_names null.
+func TestDrilldownIssuesDropABareUUIDLinkedRepoName(t *testing.T) {
+	t.Setenv("IDENTITY_MAPPING_PATH", t.TempDir()+"/missing.yaml")
+	client := personIdentityDispatchClient{identity: "alice@example.com", t: t, handler: func(t *testing.T, query string, bindings []dhclickhouse.Binding) (dhclickhouse.RowScanner, error) {
+		if strings.Contains(query, "FROM work_items FINAL") {
+			return &pairRowScanner{}, nil
+		}
+		if strings.Contains(query, "FROM work_graph_issue_pr FINAL") {
+			return &pairRowScanner{rows: [][2]string{
+				{"wi-1", "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"},
+				{"wi-2", "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"},
+				{"wi-2", "acme/web"},
+			}}, nil
+		}
+		return &issuesRowScanner{rows: [][]any{
+			{"wi-1", "github", "done", nil, nil, nil, nil, nil},
+			{"wi-2", "github", "done", nil, nil, nil, nil, nil},
+		}}, nil
+	}}
+	reader, err := NewReader(client)
+	if err != nil {
+		t.Fatalf("NewReader: %v", err)
+	}
+	got, err := BuildDrilldownIssuesResponse(context.Background(), reader, "org-1", DrilldownIssuesParams{
+		PersonID: "anyone", RangeDays: 14, Limit: 50, Now: dt(2024, 6, 15, 0, 0, 0),
+	})
+	if err != nil {
+		t.Fatalf("BuildDrilldownIssuesResponse: %v", err)
+	}
+	if got.Items[0].RepoNames != nil || !reflect.DeepEqual(got.Items[1].RepoNames, []string{"acme/web"}) {
+		t.Fatalf("RepoNames = %v / %v", got.Items[0].RepoNames, got.Items[1].RepoNames)
+	}
+}

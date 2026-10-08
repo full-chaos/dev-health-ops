@@ -44,6 +44,16 @@ func LooksLikeUUID(value string) bool {
 	return bareUUIDRe.MatchString(v)
 }
 
+// CleanName is the one name-or-nothing rule: the trimmed name, and false when
+// it is empty or a bare UUID (an id is never a label).
+func CleanName(raw string) (string, bool) {
+	name := strings.TrimSpace(raw)
+	if name == "" || LooksLikeUUID(name) {
+		return "", false
+	}
+	return name, true
+}
+
 // UniqueSortedNonEmpty returns the distinct non-empty ids in ascending order.
 func UniqueSortedNonEmpty(ids []string) []string {
 	seen := make(map[string]struct{}, len(ids))
@@ -126,11 +136,11 @@ WHERE org_id = {org_id:String}
 		if err := rows.Scan(&scopeID, &displayName); err != nil {
 			return nil, fmt.Errorf("scan: %w", err)
 		}
-		displayName = strings.TrimSpace(displayName)
-		if scopeID == "" || displayName == "" || LooksLikeUUID(displayName) {
+		name, ok := CleanName(displayName)
+		if scopeID == "" || !ok {
 			continue
 		}
-		resolved[scopeID] = displayName
+		resolved[scopeID] = name
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate: %w", err)

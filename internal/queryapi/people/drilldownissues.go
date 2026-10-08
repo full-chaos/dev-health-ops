@@ -32,6 +32,7 @@ import (
 	"time"
 
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/scopelabel"
 )
 
 // primaryWorkItemTeamAttributionSourceForPerson inlines api/queries/
@@ -256,7 +257,8 @@ func fetchLinkedRepoNames(ctx context.Context, client QueryClient, orgID string,
 		if err := rows.Scan(&id, &name); err != nil {
 			return nil, fmt.Errorf("people: scan linked repo name: %w", err)
 		}
-		if id == "" {
+		name, ok := scopelabel.CleanName(name)
+		if id == "" || !ok {
 			continue
 		}
 		if list := out[id]; len(list) > 0 && list[len(list)-1] == name {

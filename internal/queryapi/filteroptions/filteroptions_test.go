@@ -411,3 +411,29 @@ func TestNameQueriesBindTheOrgInsideTheFinalRead(t *testing.T) {
 		}
 	}
 }
+
+// TestBuildResponseDropsABareUUIDName: a stored repository or developer name
+// that is a bare UUID is dropped (an id is never a label); a real name stays.
+func TestBuildResponseDropsABareUUIDName(t *testing.T) {
+	client := byQueryClient{
+		developers: []string{"dev@example.com", "second@example.com"},
+		repoNames: [][2]string{
+			{"11111111-1111-1111-1111-111111111111", "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"},
+			{"22222222-2222-2222-2222-222222222222", "acme/web"},
+		},
+		devNames: [][2]string{
+			{"dev@example.com", "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"},
+			{"second@example.com", "Dev Two"},
+		},
+	}
+	resp, err := BuildResponse(context.Background(), client, "org-1")
+	if err != nil {
+		t.Fatalf("BuildResponse: %v", err)
+	}
+	if want := map[string]string{"22222222-2222-2222-2222-222222222222": "acme/web"}; !reflect.DeepEqual(resp.RepoNames, want) {
+		t.Fatalf("RepoNames = %v, want %v", resp.RepoNames, want)
+	}
+	if want := map[string]string{"second@example.com": "Dev Two"}; !reflect.DeepEqual(resp.DeveloperNames, want) {
+		t.Fatalf("DeveloperNames = %v, want %v", resp.DeveloperNames, want)
+	}
+}

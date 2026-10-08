@@ -472,3 +472,31 @@ func TestDrilldownPRsFailOnARepoNameReadError(t *testing.T) {
 		})
 	}
 }
+
+// TestDrilldownPRsDropABareUUIDRepoName: a stored repository name that is a
+// bare UUID serves repo_name null.
+func TestDrilldownPRsDropABareUUIDRepoName(t *testing.T) {
+	t.Setenv("IDENTITY_MAPPING_PATH", t.TempDir()+"/missing.yaml")
+	const id = "11111111-1111-1111-1111-111111111111"
+	client := personIdentityDispatchClient{identity: "alice@example.com", t: t, handler: func(t *testing.T, query string, bindings []dhclickhouse.Binding) (dhclickhouse.RowScanner, error) {
+		if strings.Contains(query, "AS display_name") {
+			return &pairRowScanner{rows: [][2]string{{id, "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"}}}, nil
+		}
+		return &prsRowScanner{rows: [][]any{
+			{id, uint32(1), "A", "Alice", "alice@example.com", dt(2024, 6, 10, 12, 0, 0), nil, nil, nil},
+		}}, nil
+	}}
+	reader, err := NewReader(client)
+	if err != nil {
+		t.Fatalf("NewReader: %v", err)
+	}
+	got, err := BuildDrilldownPRsResponse(context.Background(), reader, "org-1", DrilldownPRsParams{
+		PersonID: "anyone", RangeDays: 14, Limit: 50, Now: dt(2024, 6, 15, 0, 0, 0),
+	})
+	if err != nil {
+		t.Fatalf("BuildDrilldownPRsResponse: %v", err)
+	}
+	if got.Items[0].RepoName != nil {
+		t.Fatalf("RepoName = %q, want nil", *got.Items[0].RepoName)
+	}
+}

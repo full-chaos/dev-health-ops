@@ -273,7 +273,7 @@ func (p *OpenAIProvider) batchExchange(req *http.Request, out any) error {
 	defer resp.Body.Close()
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return &httpTransportError{cause: err}
+		return &httpTransportError{cause: logging.TransportFailure(err)}
 	}
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
 		return &httpStatusError{statusCode: resp.StatusCode, header: resp.Header, body: string(body)}

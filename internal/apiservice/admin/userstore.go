@@ -156,7 +156,9 @@ type userCreateInput struct {
 // bcrypt.GenerateFromPassword before calling this).
 func (s pgStore) insertUser(ctx context.Context, in userCreateInput) (*fullUser, error) {
 	if in.Email != nil {
-		if existing, err := s.userByEmail(ctx, *in.Email); err != nil {
+		// Look up the value the INSERT stores (lowered and stripped): a raw
+		// lookup misses " Dup@x " and the unique index then answers with a 500.
+		if existing, err := s.userByEmail(ctx, pythonparity.Strip(pythonparity.Lower(*in.Email))); err != nil {
 			return nil, err
 		} else if existing != nil {
 			return nil, errEmailExists

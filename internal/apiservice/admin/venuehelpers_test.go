@@ -397,9 +397,18 @@ func repoRoot(t *testing.T) string {
 // it closes, so this call is then replaced by a direct comparison.
 func compareAuditJSONWithSpacingGap(t *testing.T, ctx context.Context, golden *venueoracle.Golden, venue *venueoracle.Venue, where string, columns ...string) {
 	t.Helper()
+	compareAuditJSONWithSpacingGapGoFiltered(t, ctx, golden, venue, where, "", columns...)
+}
+
+// compareAuditJSONWithSpacingGapGoFiltered is compareAuditJSONWithSpacingGap
+// with goOnly appended to the WHERE of both planes' queries but not to the
+// golden label, so a declared Go-only row kind is excluded without re-keying
+// the frozen Python rows.
+func compareAuditJSONWithSpacingGapGoFiltered(t *testing.T, ctx context.Context, golden *venueoracle.Golden, venue *venueoracle.Venue, where, goOnly string, columns ...string) {
+	t.Helper()
 	for _, column := range columns {
 		query := fmt.Sprintf(`SELECT coalesce(string_agg(coalesce(%s::text, '<null>'), E'\x1e' ORDER BY created_at), '')
-FROM audit_logs WHERE %s`, column, where)
+FROM audit_logs WHERE %s%s`, column, where, goOnly)
 		// The Python plane's rows: read from its database while recording, frozen
 		// otherwise (the spacing gap is compared here, not byte for byte).
 		python := golden.InspectRows(t, "audit_logs."+column+" JSON text where "+where, func() string {

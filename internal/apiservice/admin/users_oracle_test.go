@@ -235,11 +235,15 @@ VALUES ($1, $2, $3, 'member', now(), now(), now())`, nextID(), orgID, memberID)
 	golden.CompareRows(t, "audit_logs rows", func() string {
 		return venueoracle.TableRows(t, ctx, venue.AdminURI(t, venue.SourceDB), userPasswordAuditQuery(orgID, adminID))
 	}, goRows)
-	compareAuditJSONWithSpacingGap(t, ctx, golden, venue, fmt.Sprintf("org_id = '%s' AND user_id = '%s'", orgID, adminID), "request_metadata")
+	compareAuditJSONWithSpacingGapGoFiltered(t, ctx, golden, venue, fmt.Sprintf("org_id = '%s' AND user_id = '%s'", orgID, adminID), goOnlyUserCreateAudit, "request_metadata")
 	golden.Finish(t)
 }
 
+// goOnlyUserCreateAudit excludes the Go-only audit row an org-scoped user
+// create writes (CHAOS-8969); the Python plane never audited a create.
+const goOnlyUserCreateAudit = ` AND NOT (action = 'create' AND resource_type = 'user')`
+
 func userPasswordAuditQuery(orgID, adminID uuid.UUID) string {
 	return fmt.Sprintf(`SELECT org_id, user_id, action, resource_type, status, changes::text
-FROM audit_logs WHERE org_id = '%s' AND user_id = '%s' ORDER BY created_at`, orgID, adminID)
+FROM audit_logs WHERE org_id = '%s' AND user_id = '%s'`+goOnlyUserCreateAudit+` ORDER BY created_at`, orgID, adminID)
 }

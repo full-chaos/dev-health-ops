@@ -22,8 +22,8 @@ func TestOrgScopedCreateUserJoinsTheOrgVenueOracle(t *testing.T) {
 	id := func(name string) uuid.UUID {
 		return uuid.MustParse(venueoracle.StableUUID("CHAOS-8969/create-user/" + name))
 	}
-	orgID, otherOrgID := id("org"), id("other-org")
-	adminID, superID := id("admin"), id("super")
+	orgID, otherOrgID, memberOrgID, missingOrgID := id("org"), id("other-org"), id("member-org"), id("missing-org")
+	adminID, superID, demotedID := id("admin"), id("super"), id("demoted")
 
 	const jwtKey = "venue-oracle-create-user-membership-32-bytes!!"
 	venue := venueoracle.Start(t, ctx, venueoracle.Options{
@@ -41,7 +41,7 @@ func TestOrgScopedCreateUserJoinsTheOrgVenueOracle(t *testing.T) {
 			for _, o := range []struct {
 				id         uuid.UUID
 				slug, name string
-			}{{orgID, "create-user-org", "Create User Org"}, {otherOrgID, "create-user-other", "Other"}} {
+			}{{orgID, "create-user-org", "Create User Org"}, {otherOrgID, "create-user-other", "Other"}, {memberOrgID, "create-user-member", "Member Only"}} {
 				exec(`INSERT INTO organizations (id, slug, name, tier, managed_by, is_active, created_at, updated_at)
 VALUES ($1, $2, $3, 'enterprise', 'stripe', true, now(), now())`, o.id, o.slug, o.name)
 			}
@@ -49,11 +49,20 @@ VALUES ($1, $2, $3, 'enterprise', 'stripe', true, now(), now())`, o.id, o.slug, 
 VALUES ($1, 'create-admin@example.com', true, true, false, 0, now(), now())`, adminID)
 			exec(`INSERT INTO users (id, email, is_active, is_verified, is_superuser, token_version, created_at, updated_at)
 VALUES ($1, 'create-super@example.com', true, true, true, 0, now(), now())`, superID)
-			exec(`INSERT INTO memberships (id, org_id, user_id, role, joined_at, created_at, updated_at)
-VALUES ($1, $2, $3, 'admin', now(), now(), now())`, uuid.New(), orgID, adminID)
+			exec(`INSERT INTO users (id, email, is_active, is_verified, is_superuser, token_version, created_at, updated_at)
+VALUES ($1, 'create-demoted@example.com', true, true, false, 0, now(), now())`, demotedID)
+			member := func(org, user uuid.UUID, role string) {
+				exec(`INSERT INTO memberships (id, org_id, user_id, role, joined_at, created_at, updated_at)
+VALUES ($1, $2, $3, $4, now(), now(), now())`, uuid.New(), org, user, role)
+			}
+			member(orgID, adminID, "admin")
+			member(memberOrgID, adminID, "member")
+			member(orgID, demotedID, "member")
 			return map[string]map[string]any{
 				"admin": {"user_id": adminID.String(), "email": "create-admin@example.com", "org_id": orgID.String(), "role": "admin"},
 				"super": {"user_id": superID.String(), "email": "create-super@example.com", "is_superuser": true},
+				// The token still says admin; the membership row says member.
+				"demoted": {"user_id": demotedID.String(), "email": "create-demoted@example.com", "org_id": orgID.String(), "role": "admin"},
 			}
 		},
 	})
@@ -157,6 +166,63 @@ WHERE u.email = $1 AND m.org_id = $2), '')`, email, orgID).Scan(&role)
 		}
 	})
 
+	t.Run("an org add writes one admin audit row in the org", func(t *testing.T) {
+		var userID, actor, action, resourceType, changes string
+		err := pool.QueryRow(ctx, `SELECT u.id::text, coalesce(a.user_id::text, ''), a.action, a.resource_type, a.changes::text
+FROM audit_logs a JOIN users u ON u.id::text = a.resource_id
+WHERE u.email = 'added-admin@example.com' AND a.org_id = $1`, orgID).Scan(&userID, &actor, &action, &resourceType, &changes)
+		if err != nil {
+			t.Fatalf("audit row for the added user: %v", err)
+		}
+		if actor != adminID.String() || action != "create" || resourceType != "user" {
+			t.Fatalf("audit row actor/action/resource = %s/%s/%s, want %s/create/user", actor, action, resourceType, adminID)
+		}
+		var decoded map[string]any
+		if err := json.Unmarshal([]byte(changes), &decoded); err != nil || decoded["role"] != "admin" || decoded["email"] != "added-admin@example.com" {
+			t.Fatalf("audit changes = %s, want email and role admin", changes)
+		}
+	})
+
+	t.Run("a duplicate email differing by case and space is refused like the exact duplicate", func(t *testing.T) {
+		response := create("admin", orgID.String(), `{"email":" Added-Member@Example.com "}`)
+		if response.Status != http.StatusBadRequest {
+			t.Fatalf("status = %d, want 400: %s", response.Status, response.Body)
+		}
+		if n := userCount("added-member@example.com"); n != 1 {
+			t.Fatalf("user rows = %d, want 1", n)
+		}
+	})
+
+	t.Run("a member (not admin) of the X-Org-Id org cannot add", func(t *testing.T) {
+		response := create("admin", memberOrgID.String(), `{"email":"member-org-add@example.com"}`)
+		if response.Status != http.StatusForbidden {
+			t.Fatalf("status = %d, want 403: %s", response.Status, response.Body)
+		}
+		if n := userCount("member-org-add@example.com"); n != 0 {
+			t.Fatalf("left %d user rows, want 0", n)
+		}
+	})
+
+	t.Run("an admin token whose membership is now member cannot add", func(t *testing.T) {
+		response := create("demoted", orgID.String(), `{"email":"demoted-add@example.com"}`)
+		if response.Status != http.StatusForbidden {
+			t.Fatalf("status = %d, want 403: %s", response.Status, response.Body)
+		}
+		if n := userCount("demoted-add@example.com"); n != 0 {
+			t.Fatalf("left %d user rows, want 0", n)
+		}
+	})
+
+	t.Run("a failed membership write leaves no user", func(t *testing.T) {
+		response := create("super", missingOrgID.String(), `{"email":"rollback@example.com"}`)
+		if response.Status < 400 {
+			t.Fatalf("status = %d, want a refusal: %s", response.Status, response.Body)
+		}
+		if n := userCount("rollback@example.com"); n != 0 {
+			t.Fatalf("left %d user rows, want 0", n)
+		}
+	})
+
 	t.Run("an admin of one org cannot add into another org", func(t *testing.T) {
 		response := create("admin", otherOrgID.String(), `{"email":"cross-org@example.com"}`)
 		if response.Status != http.StatusForbidden {
@@ -192,5 +258,5 @@ WHERE u.email = 'platform-user@example.com'`).Scan(&n); err != nil {
 		}
 	})
 
-	venueoracle.WriteGoOnlyProof(t, "an org-scoped user create writes the user and its org membership in one transaction; refused roles and cross-org adds write nothing; a superuser platform create writes no membership")
+	venueoracle.WriteGoOnlyProof(t, "an org-scoped user create writes the user, its org membership and an admin audit row in one transaction; refused roles, non-admin and cross-org adds, and a failed membership write leave no user; a case/space duplicate email is a 400; a superuser platform create writes no membership")
 }

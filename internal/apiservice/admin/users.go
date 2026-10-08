@@ -290,7 +290,7 @@ func (h *handlers) createUser(w http.ResponseWriter, r *http.Request) {
 		in.PasswordHash = &hashed
 	}
 
-	created, err := h.insertUserWithMembership(ctx, in, orgID, role, caller.ID)
+	created, err := h.insertUserWithMembership(ctx, r, in, orgID, role, caller.ID)
 	switch {
 	case err == errEmailExists:
 		policy.WriteDetail(w, http.StatusBadRequest, "User with email "+email+" already exists", nil)
@@ -333,8 +333,10 @@ func (h *handlers) createUserOrg(ctx context.Context, w http.ResponseWriter, r *
 }
 
 // insertUserWithMembership writes the user and, when orgID is set, its
-// membership in one transaction: a failed membership leaves no user behind.
-func (h *handlers) insertUserWithMembership(ctx context.Context, in userCreateInput, orgID uuid.UUID, role string, invitedBy uuid.UUID) (*fullUser, error) {
+// membership and the admin audit row in one transaction: a failed membership
+// or audit write leaves no user behind. A platform create (orgID nil) writes
+// no audit row: audit_logs.org_id is NOT NULL.
+func (h *handlers) insertUserWithMembership(ctx context.Context, r *http.Request, in userCreateInput, orgID uuid.UUID, role string, actor uuid.UUID) (*fullUser, error) {
 	if orgID == uuid.Nil {
 		return h.store.insertUser(ctx, in)
 	}
@@ -348,7 +350,22 @@ func (h *handlers) insertUserWithMembership(ctx context.Context, in userCreateIn
 	if err != nil {
 		return nil, err
 	}
-	if _, err := store.insertMembershipTx(ctx, tx, orgID, created.ID, role, &invitedBy); err != nil {
+	if _, err := store.insertMembershipTx(ctx, tx, orgID, created.ID, role, &actor); err != nil {
+		return nil, err
+	}
+	changes := pyjson.NewObject()
+	changes.Set("email", created.Email)
+	changes.Set("role", role)
+	encodedChanges, err := pyjson.Marshal(changes)
+	if err != nil {
+		return nil, err
+	}
+	description := "User created and added to organization"
+	if _, err := h.audit.Write(ctx, tx, requestAuditEntry(r, audit.Entry{
+		OrgID: orgID, UserID: &actor, Action: audit.ActionCreate,
+		ResourceType: audit.ResourceUser, ResourceID: created.ID.String(),
+		Description: &description, Changes: encodedChanges,
+	})); err != nil {
 		return nil, err
 	}
 	if err := tx.Commit(ctx); err != nil {

@@ -7,6 +7,8 @@ import (
 	"strings"
 
 	"github.com/full-chaos/dev-health-go/clickhouse"
+
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/scopelabel"
 )
 
 // policyRuleNames are the display names of the policy rules the governance
@@ -100,8 +102,8 @@ GROUP BY repo_id, number`, []clickhouse.Binding{
 			warnCatalogue(ctx, operation, fmt.Errorf("pull request titles scan: %w", err))
 			return map[prKey]string{}
 		}
-		if title != "" && want[k] {
-			out[k] = title
+		if clean, ok := scopelabel.CleanName(title); ok && want[k] {
+			out[k] = clean
 		}
 	}
 	if err := rs.Err(); err != nil {

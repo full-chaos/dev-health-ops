@@ -603,3 +603,12 @@ func TestAliasSuggestions_CarryTheCanonicalName(t *testing.T) {
 		t.Errorf("an identity with neither name nor email must have no name, got %q", *n)
 	}
 }
+
+func TestCanonicalName_WhitespaceIsNoName(t *testing.T) {
+	if n := canonicalName(mappedIdentity{displayName: " \t", email: "  "}); n != nil {
+		t.Errorf("whitespace name and email must give nil, got %q", *n)
+	}
+	if n := canonicalName(mappedIdentity{displayName: " \t", email: "bob@x.io"}); n == nil || *n != "bob@x.io" {
+		t.Errorf("whitespace display name must fall back to the email, got %v", n)
+	}
+}

@@ -388,3 +388,21 @@ func TestFlowOpportunities_CatalogueFailureLeavesRowsServed(t *testing.T) {
 		t.Fatalf("names = %s / %s", nameOrNil(opps[0].EntityDisplayName), nameOrNil(opps[1].EntityDisplayName))
 	}
 }
+
+func TestAttributionOverview_WhitespaceTitleIsNil(t *testing.T) {
+	res, _ := overviewWith(t, []titleRow{{"org-1", repoAlpha, 7, " \t"}}, false)
+	if a := attributionRow(t, res, repoAlpha); a.SubjectTitle != nil {
+		t.Fatalf("subjectTitle = %q, want nil", *a.SubjectTitle)
+	}
+}
+
+func TestCatalogue_WhitespaceNamesAreNil(t *testing.T) {
+	c := repoCatalogue{repoNames: map[string]string{"r": " \t"}, teamNames: map[string]string{"t": "  "}}
+	team := "t"
+	if n := c.repoName("r"); n != nil {
+		t.Errorf("repoName = %q, want nil", *n)
+	}
+	if n := c.teamName(&team); n != nil {
+		t.Errorf("teamName = %q, want nil", *n)
+	}
+}

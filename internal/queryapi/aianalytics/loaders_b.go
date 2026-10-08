@@ -6,6 +6,8 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-go/clickhouse"
+
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/scopelabel"
 )
 
 // overlapRow is one per-bucket overlap aggregate of AI-attributed pull
@@ -404,7 +406,7 @@ type repoCatalogue struct {
 
 // repoName is the repository's catalogue full name, or nil.
 func (c repoCatalogue) repoName(repoID string) *string {
-	if n, ok := c.repoNames[repoID]; ok && n != "" {
+	if n, ok := scopelabel.CleanName(c.repoNames[repoID]); ok {
 		return &n
 	}
 	return nil
@@ -423,7 +425,7 @@ func (c repoCatalogue) teamName(teamID *string) *string {
 	if teamID == nil {
 		return nil
 	}
-	if n, ok := c.teamNames[*teamID]; ok && n != "" {
+	if n, ok := scopelabel.CleanName(c.teamNames[*teamID]); ok {
 		return &n
 	}
 	return nil

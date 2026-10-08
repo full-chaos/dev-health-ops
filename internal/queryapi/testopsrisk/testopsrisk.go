@@ -17,6 +17,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph/model"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graphqldate"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/scopelabel"
 )
 
 // QueryClient is the narrow ClickHouse boundary this package needs.
@@ -190,10 +191,16 @@ func readQuadrant(ctx context.Context, client QueryClient, bindings []clickhouse
 	out := []model.TestOpsRiskQuadrantPoint{}
 	for rs.Next() {
 		var label string
-		var name *string
+		var rawName *string
 		var success, pass *float64
-		if err := rs.Scan(&label, &name, &success, &pass); err != nil {
+		if err := rs.Scan(&label, &rawName, &success, &pass); err != nil {
 			return nil, fmt.Errorf("testopsrisk: quadrant scan: %w", err)
+		}
+		var name *string
+		if rawName != nil {
+			if clean, ok := scopelabel.CleanName(*rawName); ok {
+				name = &clean
+			}
 		}
 		out = append(out, model.TestOpsRiskQuadrantPoint{ID: label, Name: name, PipelineSuccessRate: success, TestPassRate: pass})
 	}

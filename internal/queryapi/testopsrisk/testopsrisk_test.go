@@ -312,3 +312,15 @@ func TestQuadrantStatement_NamesOnlyFromTheOrgScopedCatalogue(t *testing.T) {
 		t.Fatal("the quadrant name must come from the org-scoped repos join and be null when empty")
 	}
 }
+
+func TestResolve_WhitespaceQuadrantNameIsNil(t *testing.T) {
+	ws := " \t"
+	cl := &fakeClient{quadrant: [][]any{{"acme/web", &ws, 0.9, 0.8}}}
+	got, err := Resolve(context.Background(), cl, "org-1", model.TestOpsRiskInput{StartDate: date("2026-01-01"), EndDate: date("2026-01-31")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.QuadrantData) != 1 || got.QuadrantData[0].Name != nil {
+		t.Fatalf("quadrant %#v, want a nil name", got.QuadrantData)
+	}
+}

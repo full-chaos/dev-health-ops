@@ -281,7 +281,7 @@ VALUES ($1, $2, $3, 'member', now(), now(), now())`, nextID(), orgID, newMemberI
 			// CHAOS-6731: when a slug is already taken the service appends 8 random
 			// hex digits; the slug's base is compared, its suffix is per-plane random.
 			body = slugSuffix.ReplaceAllString(body, `"slug":"$1-<suffix>"`)
-			return body
+			return withoutServedMemberNames(request, body)
 		},
 	})
 	t.Log(receipt)

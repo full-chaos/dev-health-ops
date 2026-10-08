@@ -175,6 +175,7 @@ func TestBlockedIssueSourceDedupsBeforeItFiltersZero(t *testing.T) {
 		"WHERE latest_snapshot.4 > 0",
 		"AND b.team_id IN {scope_ids:Array(String)}",
 		"GROUP BY provider, work_item_id",
+		"argMax(team_name, day) AS team_name",
 	} {
 		if !strings.Contains(source, want) {
 			t.Fatalf("blocked source missing %q:\n%s", want, source)
@@ -188,6 +189,9 @@ func TestBlockedIssueSourceDedupsBeforeItFiltersZero(t *testing.T) {
 	}
 
 	query := fmt.Sprintf(fetchBlockedIssuesQuery, source, "")
+	if !strings.Contains(query, "nullIf(b.team_name, '') AS team_name") {
+		t.Fatalf("blocked query does not serve team_name:\n%s", query)
+	}
 	if count, limit := strings.Index(query, "count() OVER () AS total_count"), strings.Index(query, "LIMIT {limit:UInt64}"); count == -1 || limit == -1 || count > limit {
 		t.Fatalf("blocked count must be measured before the page limit:\n%s", query)
 	}
@@ -221,10 +225,10 @@ func TestBuildIssuesResponseQueryError(t *testing.T) {
 // the result; Count is the unbounded number before the request's limit.
 func TestBuildIssuesResponseBlockedOnlyReturnsAllProviderRowsAndWindowCount(t *testing.T) {
 	allRows := [][]any{
-		{"github:acme/api#1", "github", "team-a", uint64(4)},
-		{"gitlab:group/api#2", "gitlab", "team-a", uint64(4)},
-		{"jira:OPS-3", "jira", "team-a", uint64(4)},
-		{"linear:ENG-4", "linear", "team-a", uint64(4)},
+		{"github:acme/api#1", "github", "team-a", "Team A", uint64(4)},
+		{"gitlab:group/api#2", "gitlab", "team-a", "Team A", uint64(4)},
+		{"jira:OPS-3", "jira", "team-a", "Team A", uint64(4)},
+		{"linear:ENG-4", "linear", "team-a", nil, uint64(4)},
 	}
 	client := fakeQueryClient{t: t, handler: func(t *testing.T, query string, bindings []dhclickhouse.Binding) (dhclickhouse.RowScanner, error) {
 		if strings.Contains(query, "FROM work_item_cycle_times") || !strings.Contains(query, "FROM work_item_blocked_durations_daily") {
@@ -261,6 +265,17 @@ func TestBuildIssuesResponseBlockedOnlyReturnsAllProviderRowsAndWindowCount(t *t
 		providers[item.Provider] = true
 		if item.Status != "blocked" || item.TeamID == nil || *item.TeamID != "team-a" {
 			t.Fatalf("blocked item = %+v, want blocked with team-a", item)
+		}
+		// A provider row without a stored name serves null, never the key.
+		wantName := "Team A"
+		if item.Provider == "linear" {
+			if item.TeamName != nil {
+				t.Fatalf("%s item team_name = %q, want null", item.Provider, *item.TeamName)
+			}
+			continue
+		}
+		if item.TeamName == nil || *item.TeamName != wantName {
+			t.Fatalf("%s item team_name = %v, want %q", item.Provider, item.TeamName, wantName)
 		}
 	}
 	for _, provider := range []string{"github", "gitlab", "jira", "linear"} {

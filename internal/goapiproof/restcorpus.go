@@ -1264,6 +1264,9 @@ var drilldownIssuesBoundaryTie = BaselineDefect{
 }
 
 var drilldownIssuesParity = Options{
+	GoOnlyKeys: map[string]GoOnlyKey{
+		"data.items.team_name": {Ticket: "CHAOS-8749", Reason: "Go-only: the team's display name beside team_id; the Python reference never served it."},
+	},
 	NumericLeavesDeclared: true,
 	FloatTierB:            drilldownIssuesFloats,
 	FloatExactLeaves:      drilldownIssuesFloatExact,

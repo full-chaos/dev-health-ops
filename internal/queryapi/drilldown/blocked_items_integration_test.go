@@ -71,6 +71,9 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		if item.Status != "blocked" || item.TeamID == nil || *item.TeamID != "team-a" {
 			t.Fatalf("team-a item = %+v, want a blocked team-a item", item)
 		}
+		if item.TeamName == nil || *item.TeamName != "Team A" {
+			t.Fatalf("team-a item team_name = %v, want Team A", item.TeamName)
+		}
 	}
 	want := map[string]string{
 		"github:acme/api#1": "github",

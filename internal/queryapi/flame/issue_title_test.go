@@ -2,6 +2,7 @@ package flame
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -78,5 +79,22 @@ func TestFetchIssueTitleQueryIsBoundToTheCallersOrg(t *testing.T) {
 		if !strings.Contains(fetchIssueTitleQuery, want) {
 			t.Fatalf("title query missing %q:\n%s", want, fetchIssueTitleQuery)
 		}
+	}
+}
+
+func TestIssueFlameRequestFailsWhenTheTitleReadFails(t *testing.T) {
+	titleErr := errors.New("title read failed")
+	client := fakeQueryClient{t: t, handler: func(t *testing.T, query string, bindings []dhclickhouse.Binding) (dhclickhouse.RowScanner, error) {
+		if strings.Contains(query, "FROM work_items FINAL") {
+			return nil, titleErr
+		}
+		return issueTitleClient(t, nil).handler(t, query, bindings)
+	}}
+	got, err := BuildResponse(context.Background(), client, "org-1", Params{EntityType: "issue", EntityID: "wi-1"})
+	if !errors.Is(err, titleErr) {
+		t.Fatalf("err = %v, want the title read error", err)
+	}
+	if got != nil {
+		t.Fatalf("response = %#v, want none on a failed title read", got)
 	}
 }

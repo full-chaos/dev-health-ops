@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/full-chaos/dev-health-ops/internal/httpguard"
 	"io"
 	"net/http"
 
@@ -149,7 +148,7 @@ func (p *LocalProvider) Complete(ctx context.Context, request CompletionRequest)
 			ResponseFormat:      responseFormat,
 		}
 
-		content, usage, err := p.executeChatCompletionRequest(ctx, body)
+		content, usage, err := p.executeChatCompletionRequest(withLLMAttempt(ctx, attempt+1), body)
 		if err != nil {
 			if statusCodeOf(err) == http.StatusBadRequest && responseFormat != nil && attempt < localMaxRetries {
 				// Common with local OpenAI-compatible servers that do not
@@ -203,7 +202,7 @@ func (p *LocalProvider) executeChatCompletionRequest(ctx context.Context, body l
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+p.cfg.APIKey.Reveal())
 
-	resp, err := httpguard.NoRedirects(p.client).Do(req) // the API key rides this request
+	resp, err := tracedLLMDo(p.client, req, ProviderKindLocal, p.cfg.Model)
 	if err != nil {
 		return "", nil, &httpTransportError{cause: logging.TransportFailure(err)}
 	}
@@ -220,9 +219,11 @@ func (p *LocalProvider) executeChatCompletionRequest(ctx context.Context, body l
 
 	var decoded localChatResponse
 	if err := json.Unmarshal(responseBody, &decoded); err != nil {
+		markInvalidAnswer(resp)
 		return "", nil, logging.DecodeFailure(err)
 	}
 	if len(decoded.Choices) == 0 {
+		markInvalidAnswer(resp)
 		return "", nil, fmt.Errorf("local provider response had no choices")
 	}
 	return decoded.Choices[0].Message.Content, decoded.Usage, nil

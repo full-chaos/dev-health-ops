@@ -570,7 +570,7 @@ func (phase *ShadowPhase) classifyOne(ctx context.Context, ledger *shadowLedger,
 			}}
 		}
 	}()
-	classification, err := phase.classifier.Classify(withShadowExchange(ctx, exchange), unit.bundle)
+	classification, err := phase.classifier.Classify(categorize.WithLLMRole(withShadowExchange(ctx, exchange), categorize.LLMRoleShadow), unit.bundle)
 	return shadowResult{unit: unit, classification: classification, err: err, exchange: exchange}
 }
 

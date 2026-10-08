@@ -244,7 +244,7 @@ func (served *ServedDecision) classifyOne(ctx context.Context, unit shadowUnit) 
 			}}
 		}
 	}()
-	classification, err := served.classifier.Classify(withShadowExchange(ctx, exchange), unit.bundle)
+	classification, err := served.classifier.Classify(categorize.WithLLMRole(withShadowExchange(ctx, exchange), categorize.LLMRoleServed), unit.bundle)
 	return shadowResult{unit: unit, classification: classification, err: err, exchange: exchange}
 }
 

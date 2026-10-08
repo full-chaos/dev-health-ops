@@ -226,7 +226,8 @@ func (p *OpenAIProvider) uploadRequest(ctx context.Context, payload []byte) (*ht
 	return req, nil
 }
 
-// batchCall sends one Batch API request, retried once on a retryable failure.
+// batchCall sends one Batch API request, retried once on a retryable failure
+// (never the create).
 // A 2xx answer that is not readable fails as the synchronous call's does.
 // out is a *[]byte for the raw body, a pointer to decode JSON into, or nil.
 // A failure is the classified *llmError the synchronous call returns, so a
@@ -234,8 +235,15 @@ func (p *OpenAIProvider) uploadRequest(ctx context.Context, payload []byte) (*ht
 // same way.
 func (p *OpenAIProvider) batchCall(ctx context.Context, operation string, build func(context.Context) (*http.Request, error), out any) error {
 	ctx = withLLMBatchOperation(ctx, operation)
+	retries := openAIMaxRetries
+	if operation == batchOpCreate {
+		// A batch create is billed and not idempotent: a retry after a lost
+		// answer would start a second batch and orphan the first (openai.py
+		// sent it once too, max_retries=0).
+		retries = 0
+	}
 	var lastErr *llmError
-	for attempt := 0; attempt <= openAIMaxRetries; attempt++ {
+	for attempt := 0; attempt <= retries; attempt++ {
 		req, err := build(withLLMAttempt(ctx, attempt+1))
 		if err != nil {
 			return err
@@ -246,7 +254,7 @@ func (p *OpenAIProvider) batchCall(ctx context.Context, operation string, build 
 		}
 		classified := classifyProviderError(err, statusCodeOf(err), headerOf(err), "openai", p.cfg.Model)
 		lastErr = classified
-		if isRetryable(classified) && attempt < openAIMaxRetries {
+		if isRetryable(classified) && attempt < retries {
 			if !sleepForRetry(ctx, retryDelayFor(classified, attempt)) {
 				return ctx.Err()
 			}
@@ -339,7 +347,11 @@ func parseOpenAIBatchLines(content []byte) ([]BatchItemResult, error) {
 			continue
 		}
 		var line openAIBatchOutputLine
-		if err := json.Unmarshal(raw, &line); err != nil {
+		trimmed := bytes.TrimSpace(raw)
+		if trimmed[0] != '{' {
+			return nil, fmt.Errorf("categorize: batch result line %d is not a JSON object", lineNumber)
+		}
+		if err := json.Unmarshal(trimmed, &line); err != nil {
 			return nil, fmt.Errorf("categorize: batch result line %d is not a JSON object: %w", lineNumber, err)
 		}
 		result := BatchItemResult{CustomID: jsonScalarText(line.CustomID), LineID: jsonScalarText(line.ID)}
@@ -358,8 +370,10 @@ func parseOpenAIBatchLines(content []byte) ([]BatchItemResult, error) {
 		}
 		result.RequestID = jsonScalarText(response.RequestID)
 		result.StatusCode = jsonInt(response.StatusCode)
+		var bodyErr error
 		if len(bytes.TrimSpace(response.Body)) > 0 {
 			parsed, _, err := parseResponsesBody(response.Body)
+			bodyErr = err
 			if err == nil {
 				result.InputTokens = parsed.inputTokens
 				result.OutputTokens = parsed.outputTokens
@@ -378,6 +392,11 @@ func parseOpenAIBatchLines(content []byte) ([]BatchItemResult, error) {
 			}
 			result.ErrorCode = "http_" + status
 			result.ErrorMessage = "Batch response did not contain completion text"
+			if bodyErr != nil {
+				// Not swallowed: the reason rides the line's error into the
+				// unit's failure.
+				result.ErrorMessage += " (the body is not a Responses API body: " + logging.DecodeFailure(bodyErr).Error() + ")"
+			}
 		}
 		results = append(results, result)
 	}

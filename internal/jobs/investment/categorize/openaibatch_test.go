@@ -350,6 +350,17 @@ func TestBatchCallFailuresClassifyLikeTheSynchronousCall(t *testing.T) {
 			t.Fatalf("calls = %v", got)
 		}
 	})
+	t.Run("a create is never retried: a retry could start a second billed batch", func(t *testing.T) {
+		fake, server := newFakeBatchAPI(t)
+		fake.failures["POST /batches"] = []int{502}
+		_, err := batchTestProvider(server.URL).SubmitBatch(context.Background(), batchTestItems())
+		if err == nil || IsDeterministicFailure(err) {
+			t.Fatalf("err = %v", err)
+		}
+		if got := fake.callList(); !reflect.DeepEqual(got, []string{"POST /files", "POST /batches"}) {
+			t.Fatalf("calls = %v", got)
+		}
+	})
 	t.Run("one 500 on poll is retried once", func(t *testing.T) {
 		fake, server := newFakeBatchAPI(t)
 		fake.failures["GET /batches/batch_1"] = []int{500}
@@ -445,5 +456,15 @@ func TestSyncSpanHasNoBatchOperation(t *testing.T) {
 	}
 	if _, ok := spanAttrs(spans[0])[llmAttrBatchOp]; ok {
 		t.Fatal("a synchronous call carries a batch operation")
+	}
+}
+
+func TestBatchLineWithABodyThatIsNotAResponsesBodySaysWhy(t *testing.T) {
+	results, err := parseOpenAIBatchLines([]byte(`{"id":"l1","custom_id":"run1-0","response":{"status_code":200,"body":"plain text"},"error":null}`))
+	if err != nil || len(results) != 1 {
+		t.Fatalf("results %v err %v", results, err)
+	}
+	if results[0].ErrorCode != "http_200" || !strings.Contains(results[0].ErrorMessage, "not a Responses API body") {
+		t.Fatalf("result %+v", results[0])
 	}
 }

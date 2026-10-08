@@ -28,7 +28,7 @@ const batchPythonBuild = "9fb387470e4ab360f88bc052694c891d586824ce"
 const batchProducerIdentity = "python 3.14.7\nunicodedata 16.0.0"
 
 var batchGoldenPins = map[string]string{
-	"batch.golden.json": "5f590784e877992ae5534a1a3e9ab805ee1c777305901ff5fd499283b686eaaa",
+	"batch.golden.json": "9228d5b2aaff16b37ff7845674bfbf2034080480a0c3c62ce92f57ce9364cc7a",
 }
 
 var batchGoldens = programoracle.Set{
@@ -176,6 +176,8 @@ func batchOracleCorpus() batchCorpus {
 				`{"id":"batch_req_14","custom_id":"run2-1","response":{"status_code":200,"request_id":"req_14","body":{"output_text":"{\"x\": 2}"}},"error":null}`,
 			}, "\n") + "\n"},
 			{Name: "line_not_json", Text: "{\"custom_id\":\"run1-12\"}\nnot json\n"},
+			{Name: "line_null", Text: "{\"custom_id\":\"run1-15\"}\nnull\n"},
+			{Name: "line_array", Text: "[1, 2]\n"},
 			// Divergence: openai.py joined the text of every output chunk; the
 			// shared parser keeps only output_text/text chunks (sync semantics).
 			{Name: "divergence_chunk_type_filter", Text: `{"id":"batch_req_15","custom_id":"run3-0","response":{"status_code":200,"request_id":"req_15","body":{"output":[{"type":"reasoning","content":[{"type":"summary_text","text":"thinking "}]},{"type":"message","content":[{"type":"output_text","text":"{\"y\": 1}"}]}]}},"error":null}`},

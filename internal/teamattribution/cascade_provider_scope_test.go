@@ -706,3 +706,34 @@ func TestALinkedIssueKeepsTheDonorsTeamIdentity(t *testing.T) {
 		}
 	}
 }
+
+// A membership candidate that the repository-ownership gate rejects is
+// reported with the team it names, bound where the candidate is made: the
+// rejection carries the catalog name of that team, not the name on the
+// membership fact. The gate reads the candidate before the cascade binds the
+// remaining candidates, so only the bind at creation gives it the name.
+func TestAMembershipRejectionNamesTheBoundTeam(t *testing.T) {
+	repo := "11111111-1111-1111-1111-111111111111"
+	for _, provider := range coOwnerProviders {
+		t.Run(provider, func(t *testing.T) {
+			derived := NewGitHubWorkItemDerivationContext(GithubWorkItemDerivationFacts{
+				Teams: catalogOrder([]GithubWorkItemDerivationTeamFact{
+					{Provider: provider, TeamID: "ENG", TeamName: "Eng " + provider, ProjectKeys: []string{"X"}},
+					{Provider: provider, TeamID: "OWN", TeamName: "Owner " + provider},
+				}),
+				Repos:           []GithubWorkItemDerivationRepoFact{{Provider: provider, TeamID: "OWN", TeamName: "Owner " + provider, RepoID: &repo, IsPrimary: 1, Specificity: 40}},
+				ProviderMembers: []GithubWorkItemDerivationMemberFact{{Provider: provider, TeamID: "ENG", TeamName: "Roster ENG", MemberID: "alice", IsPrimary: 1, Specificity: 60}},
+			})
+			_, _, _, rejections := derived.ResolveWithMembershipRejections(GithubWorkItemDerivationSubject{
+				WorkItemID: provider + ":item-1", Provider: provider, OrgID: "org", RepoID: &repo, Assignees: []string{"alice"},
+			})
+			if len(rejections) != 1 {
+				t.Fatalf("rejections = %d, want 1", len(rejections))
+			}
+			team, name := GithubWorkItemDerivationStringValue(rejections[0].TeamID), GithubWorkItemDerivationStringValue(rejections[0].TeamName)
+			if team != "ENG" || name != "Eng "+provider {
+				t.Errorf("rejection = %q named %q (%s), want ENG named %q (the bound catalog team), not the fact's %q", team, name, rejections[0].Reason, "Eng "+provider, "Roster ENG")
+			}
+		})
+	}
+}

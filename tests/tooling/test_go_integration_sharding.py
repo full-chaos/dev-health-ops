@@ -86,8 +86,10 @@ def _run_check_go(
     manifest: Path = MANIFEST,
     provider_manifest: Path = PROVIDER_MANIFEST,
     github_output: Path | None = None,
+    extra_env: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     env = os.environ.copy()
+    env.update(extra_env or {})
     env["DEV_HEALTH_GO_INTEGRATION_SHARD_MANIFEST"] = str(manifest)
     env["DEV_HEALTH_GO_PROVIDER_TEST_SHARD_MANIFEST"] = str(provider_manifest)
     env["DEV_HEALTH_GO_CACHE"] = str(TEST_GO_CACHE)
@@ -815,6 +817,32 @@ def test_manifest_drift_and_duplicate_packages_fail_loudly(tmp_path: Path) -> No
     assert "provider test shard manifest must declare at least two shards" in (
         invalid_provider_result.stderr
     )
+
+
+def test_an_isolated_package_key_matching_nothing_fails_loudly_and_workerservice_is_a_singleton() -> (
+    None
+):
+    unmatched = _run_check_go(
+        "integration-shard-plan",
+        extra_env={
+            "DEV_HEALTH_GO_INTEGRATION_ISOLATED_KEYS": "internal/workerservice internal/nosuchpackage"
+        },
+    )
+    assert unmatched.returncode != 0
+    assert (
+        "isolated integration package 'internal/nosuchpackage' matches no discovered package"
+        in unmatched.stderr
+    )
+
+    plan = _run_check_go("integration-shard-plan")
+    assert plan.returncode == 0, plan.stderr
+    by_shard: dict[str, list[str]] = {}
+    for line in plan.stdout.splitlines():
+        row = _SHARD_ROW.fullmatch(line)
+        if row:
+            by_shard.setdefault(row.group("shard"), []).append(row.group("package"))
+    (holder,) = [s for s, pkgs in by_shard.items() if "internal/workerservice" in pkgs]
+    assert by_shard[holder] == ["internal/workerservice"]
 
 
 def _declared_image(constant: str) -> str:

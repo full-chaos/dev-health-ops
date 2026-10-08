@@ -969,7 +969,7 @@ DAILY_INTEGRATION_PACKAGE_KEY="internal/jobs/metrics/daily"
 # Packages that get a shard of their own at their TRUE weight (CHAOS-8935).
 # One `go test` starts packages in alphabetical order, so a long package that
 # sorts last starts minutes late and sets the shard's wall time, not its weight.
-INTEGRATION_ISOLATED_PACKAGE_KEYS=" internal/workerservice "
+INTEGRATION_ISOLATED_PACKAGE_KEYS=" ${DEV_HEALTH_GO_INTEGRATION_ISOLATED_KEYS:-internal/workerservice} "
 DAILY_TEST_SHARD_COUNT=0
 DAILY_INTEGRATION_TEST_WEIGHT=0
 DAILY_ORDINARY_TEST_WEIGHT=0
@@ -1234,6 +1234,12 @@ plan_integration_shards() {
   for manifest_key in "${!INTEGRATION_SHARD_WEIGHTS[@]}"; do
     if [ -z "${discovered_run_packages[${manifest_key}]+set}" ]; then
       die "integration shard manifest names undiscovered or denylisted package '${manifest_key}'"
+    fi
+  done
+  local isolated_key
+  for isolated_key in ${INTEGRATION_ISOLATED_PACKAGE_KEYS}; do
+    if [ -z "${discovered_run_packages[${isolated_key}]+set}" ]; then
+      die "isolated integration package '${isolated_key}' matches no discovered package"
     fi
   done
   if [ "${#INTEGRATION_SHARD_WEIGHTS[@]}" -ne "${runnable_count}" ]; then

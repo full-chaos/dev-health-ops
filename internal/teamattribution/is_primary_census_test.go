@@ -204,8 +204,9 @@ var teamGroupedReaderAllowlist = map[string]string{
 //   - a function that names a team-scoped source names it inside the then
 //     branch of `if <team> != ""` / `if len(<team>) > 0`, where <team> is a
 //     team variable or the result of a function of the package that returns
-//     a team filter; or the function's query always groups by team and reads
-//     no primary source;
+//     a team filter; or the function has no such team branch (no
+//     organization path), its query always groups by team and it reads no
+//     primary source;
 //   - a function that reads a primary source (named or inline) in a query
 //     that groups or filters by team must also have that bound team branch
 //     (the primary read is then its organization path), or be allowlisted.
@@ -504,6 +505,15 @@ func (census *attributionPackageCensus) checkFunction(function *ast.FuncDecl) []
 		}
 		return false
 	}
+	// A function with a team branch also has an organization path (the team
+	// is empty); a team-scoped source outside that branch reaches it.
+	hasTeamBranch := false
+	ast.Inspect(function.Body, func(node ast.Node) bool {
+		if guard, ok := node.(*ast.IfStmt); ok && boundCondition(guard.Cond) {
+			hasTeamBranch = true
+		}
+		return true
+	})
 	var stack []ast.Node
 	ast.Inspect(function.Body, func(node ast.Node) bool {
 		if node == nil {
@@ -546,12 +556,12 @@ func (census *attributionPackageCensus) checkFunction(function *ast.FuncDecl) []
 			anyBound = true
 			continue
 		}
-		if grouped && !readsPrimary {
+		if grouped && !readsPrimary && !hasTeamBranch {
 			continue
 		}
 		file, line := census.where(use.ident.Pos())
 		findings = append(findings, attributionFinding{file: file, line: line, name: function.Name.Name,
-			reason: use.ident.Name + " (`is_primary IN (1, 2)`) used outside the then branch of `if <team> != \"\"`, in a function whose query does not always group by team"})
+			reason: use.ident.Name + " (`is_primary IN (1, 2)`) used outside the then branch of `if <team> != \"\"`, in a function that has an organization path or whose query does not always group by team"})
 	}
 	if readsPrimary && (grouped || filtered) && !anyBound {
 		file, line := census.where(function.Name.Pos())

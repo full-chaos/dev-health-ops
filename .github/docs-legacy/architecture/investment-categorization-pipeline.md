@@ -8,6 +8,9 @@ distributions to ClickHouse (see [Investment Data Model](investment-data-model.m
 and is read back — **effort-weighted** — by the API
 (see [Investment API](../api/investment-api.md)).
 
+For the decision backend (TypeSafe Jev) in shadow and served mode, see
+[Investment Decision Adapter](investment-decision-adapter.md).
+
 For the strict LLM input/output schema, see the
 [LLM Categorization Contract](../llm/categorization-contract.md). For the canonical
 themes and subcategories, see the [Investment Taxonomy](../product/investment-taxonomy.md).

@@ -109,6 +109,37 @@ type responseModelOracleRoute struct {
 	data func(value any) (string, error)
 }
 
+// filterOptionsPythonResponse is the shape the frozen FastAPI model of
+// /api/v1/filters/options has. filteroptions.Response has one more field since
+// CHAOS-8748 (team_names), which the Python model never had; the frozen program
+// is not recorded again, so the oracle still checks THAT shape.
+type filterOptionsPythonResponse struct {
+	Teams        []string `json:"teams"`
+	Repos        []string `json:"repos"`
+	Services     []string `json:"services"`
+	Developers   []string `json:"developers"`
+	WorkCategory []string `json:"work_category"`
+	IssueType    []string `json:"issue_type"`
+	FlowStage    []string `json:"flow_stage"`
+}
+
+func TestFilterOptionsResponseIsThePythonResponsePlusTeamNames(t *testing.T) {
+	type field struct{ name, goType, tag string }
+	fieldsOf := func(typ reflect.Type) []field {
+		out := make([]field, 0, typ.NumField())
+		for index := range typ.NumField() {
+			f := typ.Field(index)
+			out = append(out, field{f.Name, f.Type.String(), string(f.Tag)})
+		}
+		return out
+	}
+	want := append(fieldsOf(reflect.TypeOf(filterOptionsPythonResponse{})),
+		field{"TeamNames", "map[string]string", `json:"team_names,omitempty"`})
+	if got := fieldsOf(reflect.TypeOf(filteroptions.Response{})); !reflect.DeepEqual(got, want) {
+		t.Errorf("filteroptions.Response fields =\n %v\nwant the Python fields then team_names:\n %v", got, want)
+	}
+}
+
 // opportunitiesPythonCard and opportunitiesPythonResponse are the shape the
 // frozen FastAPI model of /api/v1/opportunities has: the five fields the
 // Python reference served. The Go response (opportunities.Card) has four more
@@ -134,16 +165,29 @@ type opportunitiesPythonResponse struct {
 	Items []opportunitiesPythonCard `json:"items"`
 }
 
-// issuesPythonResponse is the frozen FastAPI response shape for the issue
-// drilldown. The Go-only Count field is emitted only for the new
-// filters.how.blocked=true contract (CHAOS-8106); ordinary issue drilldowns
-// retain this Python shape. The declaration test below makes that widening
-// explicit instead of treating the frozen model as an API ceiling.
-type issuesPythonResponse struct {
-	Items []drilldown.IssueItem `json:"items"`
+// issuesPythonItem and issuesPythonResponse are the shape the frozen FastAPI
+// model of the issue drilldown has. drilldown.IssueItem has one more field
+// since CHAOS-8749 (team_name), which the Python model never had; the frozen
+// program was recorded for the Python shape and is not recorded again, so the
+// oracle still checks THAT shape. The Go-only Count field is emitted only for
+// the filters.how.blocked=true contract (CHAOS-8106). The declaration test
+// below ties both widenings to the production types.
+type issuesPythonItem struct {
+	WorkItemID     string     `json:"work_item_id"`
+	Provider       string     `json:"provider"`
+	Status         string     `json:"status"`
+	TeamID         *string    `json:"team_id"`
+	CycleTimeHours *float64   `json:"cycle_time_hours"`
+	LeadTimeHours  *float64   `json:"lead_time_hours"`
+	StartedAt      *time.Time `json:"started_at"`
+	CompletedAt    *time.Time `json:"completed_at"`
 }
 
-func TestIssuesResponseIsThePythonResponsePlusBlockedCount(t *testing.T) {
+type issuesPythonResponse struct {
+	Items []issuesPythonItem `json:"items"`
+}
+
+func TestIssuesResponseIsThePythonResponsePlusTheDeclaredGoOnlyFields(t *testing.T) {
 	type field struct{ name, goType, tag string }
 	fieldsOf := func(typ reflect.Type) []field {
 		fields := make([]field, 0, typ.NumField())
@@ -154,18 +198,31 @@ func TestIssuesResponseIsThePythonResponsePlusBlockedCount(t *testing.T) {
 		return fields
 	}
 
-	want := append(fieldsOf(reflect.TypeOf(issuesPythonResponse{})), field{"Count", "*uint64", `json:"count,omitempty"`})
-	if got := fieldsOf(reflect.TypeOf(drilldown.IssuesResponse{})); !reflect.DeepEqual(got, want) {
-		t.Errorf("drilldown.IssuesResponse fields =\n %v\nwant the Python fields followed by blocked-only Count:\n %v", got, want)
+	want := fieldsOf(reflect.TypeOf(issuesPythonItem{}))
+	want = append(want[:4], append([]field{{"TeamName", "*string", `json:"team_name"`}}, want[4:]...)...)
+	if got := fieldsOf(reflect.TypeOf(drilldown.IssueItem{})); !reflect.DeepEqual(got, want) {
+		t.Errorf("drilldown.IssueItem fields =\n %v\nwant the Python fields with team_name after team_id:\n %v", got, want)
+	}
+
+	wantResponse := []field{
+		{"Items", "[]drilldown.IssueItem", `json:"items"`},
+		{"Count", "*uint64", `json:"count,omitempty"`},
+	}
+	if got := fieldsOf(reflect.TypeOf(drilldown.IssuesResponse{})); !reflect.DeepEqual(got, wantResponse) {
+		t.Errorf("drilldown.IssuesResponse fields =\n %v\nwant Items then blocked-only Count:\n %v", got, wantResponse)
 	}
 
 	count := uint64(1)
+	name := "Platform"
 	recorder := httptest.NewRecorder()
-	if err := writeModelResponse(recorder, &drilldown.IssuesResponse{Items: []drilldown.IssueItem{}, Count: &count}); err != nil {
+	if err := writeModelResponse(recorder, &drilldown.IssuesResponse{Items: []drilldown.IssueItem{{TeamName: &name}}, Count: &count}); err != nil {
 		t.Fatalf("writeModelResponse: %v", err)
 	}
-	if body := recorder.Body.String(); !strings.Contains(body, `"count":1`) {
-		t.Errorf("the production body has no blocked-only count: %s", body)
+	body := recorder.Body.String()
+	for _, part := range []string{`"count":1`, `"team_name":"Platform"`} {
+		if !strings.Contains(body, part) {
+			t.Errorf("the production body has no %s: %s", part, body)
+		}
 	}
 }
 
@@ -507,7 +564,7 @@ func responseModelOracleRoutes() map[string]responseModelOracleRoute {
 		"POST /api/v1/investment/flow/repo-team": sankeyRoute,
 		"GET /api/v1/sankey":                     sankeyRoute,
 		"POST /api/v1/sankey":                    sankeyRoute,
-		"GET /api/v1/filters/options":            plain(filteroptions.Response{}),
+		"GET /api/v1/filters/options":            plain(filterOptionsPythonResponse{}),
 	}
 }
 

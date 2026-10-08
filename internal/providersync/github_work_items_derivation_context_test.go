@@ -1506,7 +1506,7 @@ func TestGitHubWorkItemDerivationAuthorNeverOutranksALinkedIssueDonor(t *testing
 			MemberID: "alice", IsPrimary: 1, Specificity: 60, UpdatedAt: now,
 		}},
 	})
-	derived.LinkedIssue = map[string][2]string{
+	derived.LinkedIssue = map[string][3]string{
 		"ghpr:acme/api#9": {"team-platform", "Platform Team"},
 	}
 	reporter := "alice"

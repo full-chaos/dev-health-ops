@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -75,6 +76,23 @@ func membershipResponseObject(m *membership) *pyjson.Object {
 	out.Set("created_at", pyTimeString(m.CreatedAt))
 	out.Set("updated_at", pyTimeString(m.UpdatedAt))
 	return out
+}
+
+// memberWithUserResponseObject is the member list item: the Python
+// membership fields plus the user's name and e-mail (Go-only additive keys; a
+// blank or absent value is null).
+func memberWithUserResponseObject(m *memberWithUser) *pyjson.Object {
+	out := membershipResponseObject(&m.membership)
+	out.Set("user_name", nonBlankString(m.UserName))
+	out.Set("user_email", nonBlankString(m.UserEmail))
+	return out
+}
+
+func nonBlankString(s *string) any {
+	if s == nil || strings.TrimSpace(*s) == "" {
+		return nil
+	}
+	return *s
 }
 
 // listOrganizations is orgs.py's list_organizations.
@@ -358,7 +376,7 @@ func (h *handlers) listMembers(w http.ResponseWriter, r *http.Request) {
 	if raw, present := queryLastValue(r.URL.Query(), "role"); present && raw != "" {
 		role = &raw
 	}
-	members, err := h.store.listMemberships(ctx, orgID, role)
+	members, err := h.store.listMembersWithUsers(ctx, orgID, role)
 	if err != nil {
 		h.logger.ErrorContext(ctx, "admin: list members failed", "error", err)
 		policy.WriteInternal(w)
@@ -366,7 +384,7 @@ func (h *handlers) listMembers(w http.ResponseWriter, r *http.Request) {
 	}
 	list := make([]pyjson.Value, len(members))
 	for i, m := range members {
-		list[i] = membershipResponseObject(m)
+		list[i] = memberWithUserResponseObject(m)
 	}
 	policy.WriteModel(w, http.StatusOK, list, nil)
 }

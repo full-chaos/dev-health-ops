@@ -282,6 +282,47 @@ func (s pgStore) listMemberships(ctx context.Context, orgID uuid.UUID, role *str
 	return out, rows.Err()
 }
 
+// memberWithUser is a membership row plus the display fields of its user.
+// Both are nil when the user row is absent or the stored value is blank.
+type memberWithUser struct {
+	membership
+	UserName  *string
+	UserEmail *string
+}
+
+// listMembersWithUsersQuery reads users only through a membership row of the
+// requested organisation (m.org_id = $1), so a user of another organisation
+// is never served here.
+const listMembersWithUsersQuery = `SELECT m.id, m.org_id, m.user_id, m.role, m.invited_by_id, m.joined_at, m.created_at, m.updated_at,
+	u.full_name, u.email
+FROM memberships m
+LEFT JOIN users u ON u.id = m.user_id
+WHERE m.org_id = $1`
+
+func (s pgStore) listMembersWithUsers(ctx context.Context, orgID uuid.UUID, role *string) ([]*memberWithUser, error) {
+	query := listMembersWithUsersQuery
+	args := []any{orgID}
+	if role != nil {
+		query += ` AND m.role = $2`
+		args = append(args, *role)
+	}
+	query += ` ORDER BY m.created_at`
+	rows, err := s.Pool.Query(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*memberWithUser
+	for rows.Next() {
+		var m memberWithUser
+		if err := rows.Scan(&m.ID, &m.OrgID, &m.UserID, &m.Role, &m.InvitedByID, &m.JoinedAt, &m.CreatedAt, &m.UpdatedAt, &m.UserName, &m.UserEmail); err != nil {
+			return nil, err
+		}
+		out = append(out, &m)
+	}
+	return out, rows.Err()
+}
+
 // insertMembership is MembershipService.add_member. Returns a distinct
 // sentinel error when the pair already has a membership row.
 var errMembershipExists = errors.New("user is already a member of this organization")

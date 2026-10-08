@@ -18,6 +18,10 @@
 // The HTTP client is not here: Transport is an interface, implemented by the
 // TypeSafe client on the shared LLM HTTP layer of package categorize.
 //
+// Architecture of the adapter, the shadow phase, the served mode and the two
+// tables: .github/docs-legacy/architecture/investment-decision-adapter.md (the
+// directory name reads as legacy; it holds the live engineering architecture set).
+//
 // This code was ported from the experiment package decisioneval (branch
 // experiment/decision-categorization-eval, commit cf881a356), Jev parts only.
 // The replay oracle (replay_oracle_test.go) is the acceptance gate of any

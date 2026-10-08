@@ -352,7 +352,7 @@ func loadIssuesGolden(t *testing.T, name string) IssuesResponse {
 
 // issuesFixtureRowScanner replays a fixed slice of pre-built rows in
 // fetchIssuesQuery's own column order (work_item_id, provider, status,
-// team_id, cycle_time_hours, lead_time_hours, started_at, completed_at) --
+// team_id, team_name, cycle_time_hours, lead_time_hours, started_at, completed_at) --
 // a package-local scanner rather than reusing fixtureRowScanner because
 // IssueItem's nullable numeric columns need a **float64 case
 // fixtureRowScanner's PRItem-shaped switch does not declare (PRItem has no
@@ -432,13 +432,13 @@ func TestGoldenGetDefaultOrgScopeIssues(t *testing.T) {
 		}
 		return &issuesFixtureRowScanner{rows: [][]any{
 			{
-				"ghpr:acme/webapp#42", "github", "done", "team-platform",
+				"ghpr:acme/webapp#42", "github", "done", "team-platform", "Platform",
 				12.5, 30.25,
 				day(2024, 1, 10, 9, 0, 0),
 				day(2024, 1, 11, 15, 30, 0),
 			},
 			{
-				"jira:PROJ-7", "jira", "backlog", nil,
+				"jira:PROJ-7", "jira", "backlog", nil, nil,
 				nil, nil,
 				nil, nil,
 			},
@@ -484,7 +484,7 @@ func TestGoldenGetTeamScopeExplicitDatesIssues(t *testing.T) {
 		}
 		return &issuesFixtureRowScanner{rows: [][]any{
 			{
-				"ghpr:acme/webapp#101", "github", "in_review", "team-y",
+				"ghpr:acme/webapp#101", "github", "in_review", "team-y", "Team Y",
 				4.0, 8.0,
 				day(2024, 2, 2, 8, 0, 0),
 				day(2024, 2, 2, 20, 0, 0),
@@ -533,7 +533,7 @@ func TestGoldenPostRepoScopeIgnoredLimitFallbackIssues(t *testing.T) {
 		}
 		return &issuesFixtureRowScanner{rows: [][]any{
 			{
-				"gitlab:acme/svc!9", "gitlab", "done", "team-z",
+				"gitlab:acme/svc!9", "gitlab", "done", "team-z", "Team Z",
 				2.0, 3.5,
 				day(2024, 3, 1, 0, 0, 0),
 				day(2024, 3, 1, 6, 30, 0),

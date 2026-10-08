@@ -20,7 +20,7 @@ func deploymentFlameFixture(t *testing.T, status, environment string, startedAt,
 		if !strings.Contains(query, "FROM deployments FINAL") {
 			t.Fatalf("unexpected query: %s", query)
 		}
-		return &fixtureRowScanner{rows: [][]any{{status, environment, startedAt, finishedAt, deployedAt, mergedAt}}}, nil
+		return &fixtureRowScanner{rows: [][]any{{status, environment, startedAt, finishedAt, deployedAt, mergedAt, ""}}}, nil
 	}}
 }
 
@@ -63,7 +63,7 @@ func TestBuildDeploymentFlameResponseEndSelection(t *testing.T) {
 			t.Fatalf("BuildResponse: %v", err)
 		}
 		want := &Response{
-			Entity:   pyjson.OrderedMapOf(pyjson.KeyValue[any]{Key: "repo_id", Value: repoID}, pyjson.KeyValue[any]{Key: "deployment_id", Value: "x"}, pyjson.KeyValue[any]{Key: "status", Value: "in_progress"}, pyjson.KeyValue[any]{Key: "environment", Value: "production"}),
+			Entity:   pyjson.OrderedMapOf(pyjson.KeyValue[any]{Key: "repo_id", Value: repoID}, pyjson.KeyValue[any]{Key: "deployment_id", Value: "x"}, pyjson.KeyValue[any]{Key: "status", Value: "in_progress"}, pyjson.KeyValue[any]{Key: "environment", Value: "production"}, pyjson.KeyValue[any]{Key: "name", Value: nil}),
 			Timeline: Timeline{Start: startedAt, End: fixedNow},
 			Frames: []Frame{
 				{ID: rootID, ParentID: nil, Label: "Deployment lifecycle", Start: startedAt, End: fixedNow, State: "ci", Category: "planned"},
@@ -104,7 +104,7 @@ func TestBuildDeploymentFlameResponseEndSelection(t *testing.T) {
 			t.Fatalf("BuildResponse: %v", err)
 		}
 		want := &Response{
-			Entity:   pyjson.OrderedMapOf(pyjson.KeyValue[any]{Key: "repo_id", Value: repoID}, pyjson.KeyValue[any]{Key: "deployment_id", Value: "x"}, pyjson.KeyValue[any]{Key: "status", Value: "success"}, pyjson.KeyValue[any]{Key: "environment", Value: "production"}),
+			Entity:   pyjson.OrderedMapOf(pyjson.KeyValue[any]{Key: "repo_id", Value: repoID}, pyjson.KeyValue[any]{Key: "deployment_id", Value: "x"}, pyjson.KeyValue[any]{Key: "status", Value: "success"}, pyjson.KeyValue[any]{Key: "environment", Value: "production"}, pyjson.KeyValue[any]{Key: "name", Value: nil}),
 			Timeline: Timeline{Start: startedAt, End: finishedAt},
 			Frames: []Frame{
 				{ID: rootID, ParentID: nil, Label: "Deployment lifecycle", Start: startedAt, End: finishedAt, State: "ci", Category: "planned"},
@@ -132,7 +132,7 @@ func TestBuildDeploymentFlameResponseEndSelection(t *testing.T) {
 			t.Fatalf("BuildResponse: %v", err)
 		}
 		want := &Response{
-			Entity:   pyjson.OrderedMapOf(pyjson.KeyValue[any]{Key: "repo_id", Value: repoID}, pyjson.KeyValue[any]{Key: "deployment_id", Value: "x"}, pyjson.KeyValue[any]{Key: "status", Value: "in_progress"}, pyjson.KeyValue[any]{Key: "environment", Value: "production"}),
+			Entity:   pyjson.OrderedMapOf(pyjson.KeyValue[any]{Key: "repo_id", Value: repoID}, pyjson.KeyValue[any]{Key: "deployment_id", Value: "x"}, pyjson.KeyValue[any]{Key: "status", Value: "in_progress"}, pyjson.KeyValue[any]{Key: "environment", Value: "production"}, pyjson.KeyValue[any]{Key: "name", Value: nil}),
 			Timeline: Timeline{Start: startedAt, End: fixedNow},
 			Frames: []Frame{
 				{ID: rootID, ParentID: nil, Label: "Deployment lifecycle", Start: startedAt, End: fixedNow, State: "ci", Category: "planned"},
@@ -166,7 +166,7 @@ func TestBuildDeploymentFlameResponseEndSelection(t *testing.T) {
 			t.Fatalf("BuildResponse: %v", err)
 		}
 		want := &Response{
-			Entity:   pyjson.OrderedMapOf(pyjson.KeyValue[any]{Key: "repo_id", Value: repoID}, pyjson.KeyValue[any]{Key: "deployment_id", Value: "x"}, pyjson.KeyValue[any]{Key: "status", Value: "failure"}, pyjson.KeyValue[any]{Key: "environment", Value: "production"}),
+			Entity:   pyjson.OrderedMapOf(pyjson.KeyValue[any]{Key: "repo_id", Value: repoID}, pyjson.KeyValue[any]{Key: "deployment_id", Value: "x"}, pyjson.KeyValue[any]{Key: "status", Value: "failure"}, pyjson.KeyValue[any]{Key: "environment", Value: "production"}, pyjson.KeyValue[any]{Key: "name", Value: nil}),
 			Timeline: Timeline{Start: startedAt, End: failedAt},
 			Frames: []Frame{
 				{ID: rootID, ParentID: nil, Label: "Deployment lifecycle", Start: startedAt, End: failedAt, State: "ci", Category: "planned"},

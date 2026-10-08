@@ -103,6 +103,10 @@ type Response struct {
 	WorkCategory []string `json:"work_category"`
 	IssueType    []string `json:"issue_type"`
 	FlowStage    []string `json:"flow_stage"`
+	// TeamNames maps a team id of Teams to its display name (CHAOS-8748). It is
+	// Go-only: the Python reference never served it. A team with no name is
+	// absent; the key is omitted when no team has one.
+	TeamNames map[string]string `json:"team_names,omitempty"`
 }
 
 // emailValueRe ports filters.py's _EMAIL_VALUE_RE verbatim -- Go's RE2
@@ -143,6 +147,18 @@ const teamsQuery = `
         )
         WHERE value != ''
         ORDER BY value
+    `
+
+// teamNamesQuery reads the display name of each active team of the org. Only
+// the teams table holds a name, so a team id that only appears in the metrics
+// tables has no entry. The name is trimmed in SQL; an empty name is dropped.
+const teamNamesQuery = `
+        SELECT id AS team_id, trim(name) AS team_name
+        FROM teams FINAL
+        WHERE id != '' AND is_active = 1
+          AND org_id = {org_id:String}
+          AND trim(name) != ''
+        ORDER BY id
     `
 
 // reposQuery ports repo_coro (api/queries/filters.py:60-63), with the
@@ -238,6 +254,10 @@ func BuildResponse(ctx context.Context, client QueryClient, orgID string) (Respo
 	if err != nil {
 		return Response{}, err
 	}
+	teamNames, err := namedTeams(ctx, client, bindings)
+	if err != nil {
+		return Response{}, err
+	}
 	repos, err := distinctValues(ctx, client, reposQuery, "filteroptions: repos", bindings)
 	if err != nil {
 		return Response{}, err
@@ -270,5 +290,34 @@ func BuildResponse(ctx context.Context, client QueryClient, orgID string) (Respo
 		WorkCategory: workCategory(),
 		IssueType:    issueTypes,
 		FlowStage:    flowStages,
+		TeamNames:    teamNames,
 	}, nil
+}
+
+// namedTeams runs teamNamesQuery. It returns nil when no team has a name.
+func namedTeams(ctx context.Context, client QueryClient, bindings []dhclickhouse.Binding) (map[string]string, error) {
+	rows, err := client.Query(ctx, teamNamesQuery, bindings)
+	if err != nil {
+		return nil, fmt.Errorf("filteroptions: team names query: %w", err)
+	}
+	defer rows.Close()
+
+	var out map[string]string
+	for rows.Next() {
+		var id, name string
+		if err := rows.Scan(&id, &name); err != nil {
+			return nil, fmt.Errorf("filteroptions: team names scan: %w", err)
+		}
+		if id == "" || name == "" {
+			continue
+		}
+		if out == nil {
+			out = map[string]string{}
+		}
+		out[id] = name
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("filteroptions: team names: %w", err)
+	}
+	return out, nil
 }

@@ -174,6 +174,18 @@ A GitHub PR closing Linear `CHAOS-2400` borrows that issue's `CHAOS` team.
 >    one-team gate: ambiguous here is `ambiguous_provider_membership`;
 >    nothing in either layer is `no_membership`.
 >
+>    **Inactive teams (CHAOS-8938).** An inactive team takes no work item
+>    (`dropInactiveTeamCandidates`), so the gate also drops inactive teams
+>    BEFORE it counts teams, in both layers, with the same test
+>    (`candidateNamesInactiveTeam`): a person of inactive T1 and active T2
+>    attributes to T2 (not `ambiguous_*_membership`); a person of inactive teams
+>    only is `no_membership`; an admin layer whose teams are all inactive has
+>    no candidate and falls through to the provider layer; two ACTIVE teams stay
+>    ambiguous. Python had no inactive teams, so only the reasons for inactive
+>    teams differ from it. Asserted by `TestMembershipGateCountsOnlyActiveTeams`,
+>    `TestAnInactiveOnlyAdminLayerFallsThroughToTheProviderLayer` and
+>    `TestAMemberOfAnInactiveAndAnActiveTeamResolvesToTheActiveTeam`.
+>
 > `team_memberships` keeps its other consumer (drift/conflict review, §0.5)
 > untouched — this ticket only changes which candidate source(s) attribution
 > reads and in what order, not what writes `team_memberships` or how drift
@@ -408,8 +420,8 @@ means the ClickHouse `teams` dimension is empty.
 
 | # | `source` | Resolves from (ClickHouse) | Confidence | Beats | Never overrides | Evidence keys |
 |--:|---|---|---|---|---|---|
-| 0 | `native_team` | `WorkItem.native_team_key` → `teams` | high | all below | — (top) | `native_team_key` |
-| 1 | `issue_project` | native issue project → owning team | high | 2–8 | 0 | `project_id, owner_team` |
+| 0 | `native_team` | `WorkItem.native_team_key` → `teams` of the item's provider, else admin teams (section 0.4e) | high | all below | — (top) | `native_team_key` |
+| 1 | `issue_project` | native issue project key → `teams` of the item's provider that hold it, else admin teams (section 0.4e) | high | 2–8 | 0 | `project_id, owner_team` |
 | 2 | `project_ownership` | `team_project_ownership` | high | 3–8 | 0–1 | `project_id, provider` |
 | 3 | `repo_ownership` | `team_repo_ownership` | medium | 4–8 | 0–2 | `repo_full_name` |
 | 4 | `assignee_membership` | CHAOS-4321 two-layer: `identities`/`teams` (admin override, single-team) else `team_memberships` (provider fallback, single-team) | high (admin) / medium (provider) | 5–8 | 0–3 | `canonical_id, identity` (evidence text: `assignee_membership=<id>`) |
@@ -436,8 +448,8 @@ means the ClickHouse `teams` dimension is empty.
 > producer design (CHAOS-4365 lane): edge-walk `work_items` -- either the item's **own** `project_id`,
 > or, when that has no ownership row, a **donor's** `project_id` reached by walking
 > `work_item_dependencies` (§2, tracker-to-tracker, provider-agnostic) -- into `team_project_ownership`
-> to resolve a team, then stamp that team onto the **original** item's own `repo_id` (already a
-> `work_items` column; no join to `repos` needed to get it). The provider column is iterated
+> to resolve a team, then stamp that team onto the **original** pull request's / merge request's own `repo_id` (already a
+> `work_items` column; no join to `repos` needed to get it; an issue's own `repo_id` is never read). The provider column is iterated
 > generically -- no provider branches. Rows land with **`source = 'inferred'`, at lower
 > `specificity` than a direct producer row**, so a GitHub-team-owned repo's own row (`source =
 > 'provider_access'`, §0.4a) still wins the `is_primary` tie-break for that repo. `inferred` is
@@ -807,17 +819,42 @@ The Atlassian Teams of a Jira site ARE the Jira teams. A team owns a Jira projec
   - **The class.** A team row with `provider = 'jira'`, a non-empty `id`, `native_team_key = id`, and a native
     key that does not start with the team ARI prefix `ari:cloud:identity::team/`. Ownership: `provider =
     'jira'`, `source = 'native'`, open, `team_id = project_key`, and the team is not an Atlassian team.
-    Membership: `provider = 'jira'`, `source = 'native'`, open, team in the class. Derived repository
-    ownership: `source = 'inferred'`, open, team in the class. A row with admin members or a sync policy is
+    Membership: `provider = 'jira'`, `source = 'native'`, open, team id in the class. Derived repository
+    ownership: `source = 'inferred'`, open, team id in the class. A team id is in the class when its current
+    team row has the shape above, **or** when a `source = 'native'` Jira ownership row with `team_id =
+    project_key` (open or closed, not an Atlassian team) names it. The second test is what closes the lead and
+    the derived repository rows of a team whose row was written again after the catalog wrote it: an admin
+    edit (`provider = ''`) or a team of another provider with the same key (`teams` holds one row per id).
+    The membership is matched through the Jira provider, so another provider's membership of the same id
+    stays; a derived repository row of an id whose current team row belongs to another provider (not `''`,
+    not `'jira'`) stays, because that row's provider is the repository's and cannot say whose it is. The
+    admin's team row itself stays active: only its Jira rows retire. A row with admin members or a sync policy is
     retired too and counted (`teams_with_manual_members`, `teams_with_sync_policy`). Kept: Atlassian team
-    rows, `jira_legacy` links, admin teams (an admin import writes `provider = ''` and no native key, so an
-    admin team whose id equals a project key is not in the class and still takes items by key), the other
-    providers, other organizations, `projects` rows.
+    rows, `jira_legacy` links, the other providers, other organizations, `projects` rows. An admin team
+    (an admin import writes `provider = ''` and no native key) is not made inactive and still takes items by
+    key; its Jira lead, its Jira native project link and the derived repository rows of that link retire
+    when its id has a Jira native link of the shape above. **Derived repository rows are closed only when the
+    team keeps no other open project link** (any provider, any source): the derivation reads every link and
+    would open such a row again at its next run, so the retire leaves the rows to the derivation, which
+    recomputes the full set and retracts the rows only the retired link supported.
   - **Attribution reads active teams only, one rule for every provider.** `teamattribution.LoadTeams`
     (`internal/teamattribution/cascade.go`) flags a team whose newest `is_active` is 0 as inactive. The team
     stays known to the cascade (the null-carrying rule treats it as any team), and
     `dropInactiveTeamCandidates` drops every candidate that names it, once, after all paths have produced
-    theirs. A retired, archived or never-active team of any provider takes no work item by project key, team
+    theirs. Teams are (provider, id) here too: every candidate carries the identity (provider, id) of the team
+    it names, bound where the candidate is made (`bindCandidateTeam`; a key holder is its own identity), and
+    the team name and this rule read that identity, never the id alone. The bound team is the ACTIVE team of the
+    item's provider with that id, else the ACTIVE admin team with that id (section 0.4e); when neither is
+    active, the id means the inactive one and the candidate is dropped. A fact whose id only teams of other
+    providers have binds to one of those. A `manual_fallback` rule (its row stores a bare `team_id`) that no
+    active team of the item's provider and no active admin team holds binds to no team: it stays as the rule
+    names it, as on main, and is dropped when any team with the id, of any provider, is inactive (section
+    0.4e). An id that no catalog row has stays as named (unknown, not inactive). An inactive team of
+    another provider with the same id (a retired Jira project-as-team row `ENG` and a Linear team `ENG`) does
+    not drop the item's own active team, and an inactive admin team `ENG` never takes an item through a rule
+    that names `ENG` while the item's provider has an active team `ENG`. Storage limit: the `teams` sorting key is (org_id, id), without `provider`, so a
+    merge keeps one row of two teams that share an id in one organization; the loader sees both only between
+    merges. A retired, archived or never-active team of any provider takes no work item by project key, team
     id, native team key, ownership, membership, linked issue or manual fallback. A Jira project that no Atlassian team is connected to is unassigned. A recompute of an
     old day leaves the items of a now-inactive team unassigned.
   - **Counts.** The result field `ProjectAsTeamRetired`; the metric `dev_health_team_catalog_rows_written_total`
@@ -864,10 +901,10 @@ project (section 0.1): a native team key gives one team.
 
 - **Where it is decided.** One shared seam in `internal/teamattribution/cascade.go`, the same for every
   provider: a project key maps to every ACTIVE team that holds it (`projectKeyTeams`, catalog order
-  (provider, id)). `IssueProjectCandidates` gives an `issue_project` candidate for the first holder, chosen as
-  before this change, and one for each other holder whose provider is the item's provider. A key string held
-  by a team of another provider does not make that team an owner of the item's project (a team reaches an item
-  only through ownership of its project), so it never takes a co-owner row. `project_ownership` facts are
+  (provider, id)). `IssueProjectCandidates` gives an `issue_project` candidate for each holder of the key for
+  the item (section 0.4e): the first is the primary, the others are co-owners. A key string held by a team of
+  another provider does not make that team an owner of the item's project (a team reaches an item only through
+  ownership of its project), so it takes no row. `project_ownership` facts are
   looked up by the item's provider. When the winning source of an item is
   `issue_project` or `project_ownership`, every other team of that source at the SAME rank as the winner
   (`is_primary`, `specificity`, `priority` of the ownership fact) is a co-owner (`projectCoOwners`). A lower
@@ -946,15 +983,9 @@ project (section 0.1): a native team key gives one team.
   list do not show a work unit whose items its team co-owns, until the team-set rollup contract (the same
   follow-up as the daily rollups). The census holds every reader of the vote's team to a named list
   (`workUnitVoteConsumers`); a new reader must be classified there, and a stale entry fails.
-- **Known limit: a key held by teams of two providers.** `projectKeyTeams` is not provider-scoped, and this
-  change does not change how the primary is chosen: the first ACTIVE holder of the key by (provider, id), of
-  any provider, takes the `issue_project` primary row, as before. When that first holder is of another provider
-  than the item, it stays the primary and the item has no `issue_project` co-owner (the other holders of the
-  item's provider take no `issue_project` row; their `project_ownership` rows stay provenance).
-
 Tests: `TestAProjectOfSeveralTeamsAttributesTheItemToEveryActiveTeam` and
 `TestOnlyOwnersAtThePrimaryRankAreCoOwners` and `TestRepositoryAndNativeTeamHaveNoCoOwners` and
-`TestAKeyOfAnotherProvidersTeamMakesNoCoOwner` (the cascade, every provider);
+the section 0.4e tests (the cascade, every provider);
 `TestAnItemOfAProjectOfSeveralTeamsIsWrittenForEveryActiveTeam` (real loaders, real writer, real
 ClickHouse, every provider; a team that moves from 1 to 2 with merges stopped);
 `TestACoOwnerWithTwoOwnershipFactsIsStoredAsACoOwner`, `TestAKeyOfAnotherProvidersTeamIsNeverStoredAsACoOwner`
@@ -970,6 +1001,94 @@ real producer, every provider);
 `TestThroughputOfAProjectOfTwoTeamsCountsInEachTeamAndOnceInTheOrg` (team A, team B, team(s), inactive team C,
 organization once and equal to the store without co-owner rows);
 `TestTheDailyAttributionReadersIgnoreACoOwnerRow`; `TestWorkItemTeamAttributionCoOwnerRowIsNotPrimary`.
+
+#### 0.4e A key string is not a link across providers (CHAOS-8924)
+
+`native_team` and `issue_project` resolve a key string (the item's native team key; its scope and project keys)
+to the teams that hold it, as their id or in `project_keys`. A team reaches an item only through ownership of
+the item's project, and a key string held by a team of another provider is not that ownership. So both tiers
+read the holders of a key through ONE shared function, `keyHoldersOfProvider` in
+`internal/teamattribution/cascade.go` (it applies `teamsForItemProvider`), the same for every provider:
+
+- The holders of a key for an item are the ACTIVE teams that hold it whose `provider` equals the item's
+  `provider` (both trimmed, as `AttributionMapKey` compares them). When no such team holds the key, the holders
+  are the ACTIVE admin teams that hold it: teams with an empty `provider`. Admin create
+  (`teamsidentity.Store.CreateOrUpdateTeam`) and admin import (`teamsidentity.Store.projectTeam`, which copies
+  the discovered provider team's `associations.project_keys`, section 0.4a) write `provider = ""`. A team of
+  another provider is never a holder. An item with an empty `provider` takes the admin teams only.
+- The admin fallback is per key, and it is a key tier: an admin holder takes `issue_project` (rank 1) or
+  `native_team` (rank 0), so it outranks a `project_ownership` fact of a team of the item's provider when no
+  team of the item's provider holds the key. This is as on main, where the first holder of any provider took
+  the row.
+- `native_team`: the first holder in catalog order (provider, id). When the key has no holder, there is no
+  `native_team` candidate.
+- `issue_project`: the item looks up its scope key, then its project key; the first of these keys that has a
+  holder decides (an admin holder of the scope key decides before a team of the item's provider that holds
+  only the project key). Each holder of that key gives a candidate: the first is the primary, the others are
+  co-owners (section 0.4d). When neither key has a holder, the tier gives no candidate and the cascade goes on
+  to its next source (`project_ownership`, then the sources below it), as it does when no team holds the key
+  at all.
+- Teams are (provider, id): a team of another provider with the same id that holds the same key does not hide
+  the item's own team from the key, and an inactive team of another provider with the same id does not drop
+  it (`dropInactiveTeamCandidates` picks the team a candidate id means with the same `teamsForItemProvider`).
+
+**Every tier that reads a key string.** The cascade tiers that pick a TEAM by a key string held in `teams`
+(its id or `project_keys`) are exactly `native_team` and `issue_project`; both read `keyHoldersOfProvider` and
+nothing else reads `projectKeyTeams`. The other key lookups of the cascade are not key-string holders:
+
+- `project_ownership`, `repo_ownership`, `assignee_membership` and `author_membership` read ownership and
+  membership facts keyed by `AttributionMapKey(provider, key)`: the fact's provider is part of the key, so
+  they are same-provider by construction.
+- `linked_issue` resolves an `extkey:` dependency target (a real `work_item_dependencies` row) to the one
+  linear or jira work item with that key (a key held by two items is ambiguous and dropped) and inherits that
+  item's primary team. It links an issue, not a team, and crosses providers on purpose (section 2).
+- `manual_fallback` with scope `issue_key_prefix` is an explicit admin record and is provider-neutral by
+  contract: a rule matches the item's issue-key prefix whatever the rule's `provider` (the other scopes need
+  the rule's provider to be empty or the item's). The row stores a bare `team_id` (its `provider` column is
+  the scope's provider, part of the row's replacement identity). The team it names is decided for the item in
+  this order:
+  - (a) an ACTIVE team of the item's provider has the id: the row binds to that team and takes its name;
+  - (b) else an ACTIVE admin team (empty `provider`) has the id: the row binds to that team and takes its name;
+  - (c) else the row stays provider-neutral, exactly as on main: the rule's `team_id` and the rule's
+    `team_name` (the id when the name is empty), kept only when no team of ANY provider with the id is
+    inactive, else the rule gives no candidate. A team of another provider never gives the row its name, also
+    when it is the only active team with the id. `TestAManualFallbackThatNoActiveOwnOrAdminTeamHoldsIsServedAsOnMain`
+    enumerates every catalog of case (c) for the four providers and asserts main's rows; it passes on main's
+    code unchanged.
+  An id that no catalog row has stays as the rule names it (unknown, not inactive). Rows that differ from main:
+  an inactive admin team and an active team of the item's provider with the same id give the item's team
+  (main gave no candidate); an inactive team of the item's provider and an active admin team with the same id
+  give the admin team (main gave no candidate); a row bound by (a) or (b) carries the bound team's name (main
+  carried the rule's name).
+
+**Effect on stored rows.** Before this change, the first active holder of a key by (provider, id), of any
+provider, took the row. An item whose key a team of another provider (or an admin team) also held could
+therefore have that team as its primary (`is_primary = 1`). From the first attribution run after this change,
+such an item has its primary on a team of its own provider; when no team of its provider holds the key, on an
+admin team that holds it; else on the next source. An item of a team whose id an inactive team of another
+provider shares is attributed to its team again (before, it was dropped). Each item still has exactly one primary row, so organization totals do
+not change. Per-team totals move: the daily rollups keyed by the primary team (`work_item_metrics_daily`,
+`work_item_state_durations_daily`, `work_item_cycle_times`, `issue_type_metrics_daily`,
+`investment_metrics_daily`, `work_item_user_metrics_daily`), the primary-team views and the one-team-per-work-unit
+votes move such items from the other provider's team (or an admin team that a team of the item's provider
+outranks) to the team of the item's provider, to an admin team, to a `project_ownership` or lower source, or
+to `unassigned`.
+
+Tests: `TestIssueProjectPrimaryIsATeamOfTheItemsProvider`,
+`TestAKeyHeldOnlyByOtherProvidersGivesNoKeyTierRow`,
+`TestAnAdminTeamHoldsTheKeyOnlyWhenNoTeamOfTheItemsProviderDoes`,
+`TestTheProviderMatchIsTrimmedAndAnItemWithNoProviderTakesAnAdminTeam`,
+`TestTheFirstKeyHeldByATeamOfTheItemsProviderDecides`, `TestAnAdminHolderOfTheFirstKeyDecides`,
+`TestATeamIDOfAnotherProviderDoesNotHideTheItemsTeam`, `TestNativeTeamIsATeamOfTheItemsProvider`,
+`TestAnInactiveTeamOfAnotherProviderWithTheSameIDDoesNotDropTheItemsTeam`,
+`TestAnIDOfOnlyOtherProvidersFollowsTheirActiveFlag`,
+`TestAnInactiveAdminTeamIsDroppedWhenNoTeamOfTheItemsProviderHasItsID`,
+`TestAManualFallbackIsBoundToAnActiveTeamOfTheItemsProvider` (the cascade, every provider against every other provider
+and the empty provider); `TestProjectAndNativeKeysAttributeOnlyToTeamsOfTheItemsProvider` (real loaders, real
+cascade, real writer, real ClickHouse, every provider, the admin cases included);
+`TestAnInactiveTeamDropsOnlyTheTeamOfItsOwnProviderWithTheSameID` (real loader, every pair of providers);
+`TestProviderTaggedTeamTwinsMatchTheFrozenAnswersForEveryProvider` (the frozen answers, written for admin teams,
+also hold for a team of the item's provider).
 
 #### 0.4a Provider × entity **consumption** (functional — what `run_team_autoimport` actually pulls)
 
@@ -1466,10 +1585,10 @@ flowchart TD
     SYNC -->|"Jira / Linear -- team_autoimport_{jira,linear}.py, source=native"| TPO
     LGN["Linear Go-native route (CHAOS-4431, ACTIVATED 2026-08-29, 27bef7286 --<br/>bypasses the Python populate() path)<br/>internal/providersync/linear_reference_catalog_route.go:386-390 (per-Project<br/>rows, ProjectID=raw Linear Project UUID) + :410-414 (per-team synthetic<br/>org_id:linear:team_key row, kept for backward compat) -&gt; team_project_ownership,<br/>source=native -- WIRED to production as of the 5.6 deploy cut"] --> TPO
 
-    TPO -->|"match: work_items.project_id (item's OWN project;<br/>every provider today, and -- as of CHAOS-4431 -- Linear items assigned to a<br/>real Linear Project too) -- resolution arm 'project_id'"| WI["work_items<br/>(a team-owned tracker item; already carries its own repo_id)<br/>Linear only, CHAOS-4537: native_team_key column IS the resolved<br/>team_id, once validated against a CURRENT teams-table catalog<br/>(codex round 2 P1) -- self-resolving, tried ONLY when the project_id<br/>arm above does not resolve, no team_project_ownership lookup at all<br/>-- resolution arm 'linear_team_key'"]
+    TPO -->|"match: work_items.project_id (item's OWN project;<br/>every provider today, and -- as of CHAOS-4431 -- Linear items assigned to a<br/>real Linear Project too) -- resolution arm 'project_id'"| WI["work_items<br/>(a team-owned tracker item; a pull / merge request item carries its own repo_id)<br/>Linear only, CHAOS-4537: native_team_key column IS the resolved<br/>team_id, once validated against a CURRENT teams-table catalog<br/>(codex round 2 P1) -- self-resolving, tried ONLY when the project_id<br/>arm above does not resolve, no team_project_ownership lookup at all<br/>-- resolution arm 'linear_team_key'"]
     TPO -->|"OR match: a DONOR's own project_id (same arm above),<br/>OR the donor's own native_team_key column directly (CHAOS-4537),<br/>reached by walking work_item_dependencies (§2, tracker-to-tracker,<br/>provider-agnostic) from an item with no ownership of its own<br/>-- gated (see 'Inheritance is gated' below)"| WI
 
-    WI -->|"derive: resolve the team (own or donor, project_id arm tried first,<br/>Linear's native_team_key arm as fallback -- CHAOS-4458 part b);<br/>stamp it onto the ORIGINAL item's own repo_id (work_items column, no join needed to RESOLVE it)<br/>provider column iterated, no provider branches<br/>source=inferred (implemented, CHAOS-4365 -- deriveTeamRepoOwnership)<br/>lower specificity than a direct producer row (native or provider_access)<br/>resolution arm recorded in telemetry (dev_health_team_repo_ownership_derivation_resolution_arm_total)"| TRO_derived["team_repo_ownership (source=inferred)"]
+    WI -->|"derive: resolve the team (own or donor, project_id arm tried first,<br/>Linear's native_team_key arm as fallback -- CHAOS-4458 part b);<br/>stamp it onto a PULL/MERGE REQUEST item's own repo_id (work_items.type pr|merge_request;<br/>an issue's own repo_id is never read -- issues reach repos via work_graph_issue_pr)<br/>provider column iterated, no provider branches<br/>source=inferred (implemented, CHAOS-4365 -- deriveTeamRepoOwnership)<br/>lower specificity than a direct producer row (native or provider_access)<br/>resolution arm recorded in telemetry (dev_health_team_repo_ownership_derivation_resolution_arm_total)"| TRO_derived["team_repo_ownership (source=inferred)"]
 
     WGIP["work_graph_issue_pr<br/>(cross-provider issue&lt;-&gt;PR link, §2, CHAOS-2416 --<br/>THIS table's own repo_id, not the linked work item's:<br/>a genuine cross-repo link is possible)"] -->|"the linked work_item_id's resolved team<br/>(own or donor project_id, same resolver as above)<br/>stamped on work_graph_issue_pr's OWN repo_id --<br/>PR inheritance, design check (b)"| TRO_derived
     WI -. "work_item_id lookup" .-> WGIP
@@ -1490,6 +1609,30 @@ designed-empty case, which is not a failure by itself, or it derived facts it co
 carried, so read `facts_derived` and `facts_unchanged` to tell them apart), `inputs_not_ready`, `error`. A quiet table with
 `unchanged` runs is healthy; a quiet table with `no_signal` runs needs the two counts: `facts_derived=0` is the designed-empty
 case, `facts_derived>0` with `facts_unchanged<facts_derived` is a derivation that did not write what it derived.
+Beside the run's outcome, `owner_tie_unresolved` counts a run that left one or more repos on a full tie (next paragraph); the run
+also writes a WARN `team_repo_ownership_derivation.owner_tie_unresolved` log line with `owner_ties` (the count) and `repo_ids`.
+
+**One owner per repo, ranked by linked share (chris ruling D5432, CHAOS-8945).** When two or more teams reach the same
+repo, the derivation counts each team's candidates per link tier and ranks the teams lexicographically: the most `native`
+links first, then the most `explicit_text` links, then the most `heuristic` links, then links with any other recorded
+provenance. The tier of a `work_graph_issue_pr` candidate is that row's `provenance`; a pull request's / merge request's
+own `repo_id` (`work_items.type` `pr` or `merge_request`) and its `work_item_dependencies` donor edge are
+provider-recorded facts and count as `native` (the issue<->PR link builder stamps the same dependency row `native`). An
+issue's own `repo_id` is never a candidate (entity tree: Repository <> Pull request <> Issue <> Project): a GitHub or
+GitLab issue reaches a repo only through its linked pull request rows in `work_graph_issue_pr`, with that link's tier.
+A repo whose only evidence is an issue's own `repo_id` gets no inferred owner. The top team owns the repo; the other
+teams get no row. A count in a lower tier never outweighs a higher tier: one `native` link beats fifty `explicit_text` links. The same ranking applies to every provider:
+the team's provider is never an input. A repo is never dropped only because two teams have links to it. Only a **full
+tie** (equal counts at every tier) names no owner (chris ruling D5432; lead ruling D5448): the run writes nothing for the repo,
+keeps the open inferred rows of the **tied teams** (the existing owner stays when it is one of them), retracts an open
+inferred row of any team that is **not** in the tie, and signals the tie (`owner_tie_unresolved` + the WARN line above).
+A tie with no open row of a tied team leaves the repo without an inferred owner, signalled on every run while the tie
+lasts. When
+the ranked owner of a repo changes, the old owner's row is retracted and the new owner's row written, as before.
+Before this rule, a single `explicit_text` link from a second team dropped the repo and retracted its owner. Pinned by
+`internal/providersync/team_repo_ownership_ranked_owner_integration_test.go` (real ClickHouse, every provider pair) and
+the `TestRankedOwner*`, `TestOnlyAPullOrMergeRequestsOwnRepoIsACandidate` and
+`TestAnIssueReachesARepoOnlyThroughItsLinkedPRTier` tests in `team_repo_ownership_derivation_test.go`.
 
 `work_items.repo_id` (and, for the PR-inheritance branch, `work_graph_issue_pr.repo_id`) is the
 derivation's output column, not resolved by a join through `repos` — though the WRITE side does
@@ -1521,9 +1664,9 @@ dual-arm precedent), and only when that does not resolve, for a Linear item carr
 reconstructed team-key-shaped identity `"{org_id}:linear:{native_team_key}"`. Applied identically to
 the own-resolution path and the dependency-donor walk (a bare GitHub PR's donor Linear issue resolves
 the same way) AND the PR-inheritance branch (`work_graph_issue_pr`-linked items, same resolver, same
-priority). Never guesses between the two arms: the moment one resolves, the other is not consulted,
-and a genuine ownership conflict on either identity is still dropped by the existing never-guess
-`assign()` rule. Which arm produced each run's rows is visible in
+priority). Never guesses between the two arms: the moment one resolves, the other is not consulted.
+When two teams reach the same repo, the ranked-owner rule above picks the owner, whichever arm
+resolved each team. Which arm produced each run's rows is visible in
 `dev_health_team_repo_ownership_derivation_resolution_arm_total{arm="project_id"|"linear_team_key"}`.
 
 **Post-CHAOS-4431 update: the two id spaces now co-exist, not just the team-key one.** CHAOS-4431's
@@ -1924,7 +2067,7 @@ erDiagram
     teams ||--o{ team_repo_ownership : "team_id (attribution source 3: repo_ownership)"
     team_repo_ownership }o..o{ repos : "repo_id is Nullable and often NULL (e.g. every GitHub provider_access row, team_autoimport_github.py:308-338); resolved at READ time by a case-insensitive (org_id, provider, repo_full_name) name join, unmatched rows dropped -- providers/teams.py:380-392"
     repos ||--o{ work_items : "repo_id"
-    team_project_ownership }o..o{ team_repo_ownership : "sync-derived, provider-agnostic (CHAOS-4365, implemented -- internal/providersync/team_repo_ownership_derivation.go deriveTeamRepoOwnership, internal/providersync/team_repo_ownership_derivation_clickhouse.go TeamRepoOwnershipDerivationService.Derive): work_items' own OR (via work_item_dependencies, §2, gated to inheritance-safe relationship types) a donor's project_id resolves a team; stamps the item's own repo_id -- source=inferred, an already-declared value gaining its first writer. Also reachable via work_graph_issue_pr (design check b): a PR inherits its linked work item's resolved team, stamped on the LINK TABLE's own repo_id (not the work item's), since that link can be genuinely cross-repo."
+    team_project_ownership }o..o{ team_repo_ownership : "sync-derived, provider-agnostic (CHAOS-4365, implemented -- internal/providersync/team_repo_ownership_derivation.go deriveTeamRepoOwnership, internal/providersync/team_repo_ownership_derivation_clickhouse.go TeamRepoOwnershipDerivationService.Derive): work_items' own OR (via work_item_dependencies, §2, gated to inheritance-safe relationship types) a donor's project_id resolves a team; stamps a pull request's / merge request's own repo_id (an issue's own repo_id is never read) -- source=inferred, an already-declared value gaining its first writer. Also reachable via work_graph_issue_pr (design check b): a PR inherits its linked work item's resolved team, stamped on the LINK TABLE's own repo_id (not the work item's), since that link can be genuinely cross-repo."
 
     repos ||--o{ git_pull_requests : "repo_id (raw git-log-sourced PR facts; tenant-scoped by org_id since migration 027, but NO work_item_id: NOT an attribution input)"
     work_items ||--o{ work_graph_issue_pr : "work_item_id (tracker-issue side of the work-graph's own cross-provider link, CHAOS-2416)"

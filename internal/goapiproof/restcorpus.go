@@ -1264,6 +1264,9 @@ var drilldownIssuesBoundaryTie = BaselineDefect{
 }
 
 var drilldownIssuesParity = Options{
+	GoOnlyKeys: map[string]GoOnlyKey{
+		"data.items.team_name": {Ticket: "CHAOS-8749", Reason: "Go-only: the team's display name beside team_id; the Python reference never served it."},
+	},
 	NumericLeavesDeclared: true,
 	FloatTierB:            drilldownIssuesFloats,
 	FloatExactLeaves:      drilldownIssuesFloatExact,
@@ -3943,7 +3946,9 @@ var restEndpointSpecs = map[string]RESTEndpointSpec{
 				// work-unit-explain's own corpus use: it turns a future
 				// numeric field added to this shape into a reported,
 				// undeclared leaf rather than a silent exact comparison.
-				Parity: Options{NumericLeavesDeclared: true, BaselineDefects: []BaselineDefect{{
+				Parity: Options{NumericLeavesDeclared: true, GoOnlyKeys: map[string]GoOnlyKey{
+					"data.team_names": {Ticket: "CHAOS-8748", Reason: "Go-only: team id to display name for the ids of teams; the Python reference never served it."},
+				}, BaselineDefects: []BaselineDefect{{
 					Ticket:             "CHAOS-5798",
 					Reason:             "teams (the user_metrics_daily UNION branch), developers (author_email), repos and flow_stage (work_item_state_durations_daily) are each read from a ReplacingMergeTree table without FINAL (api/queries/filters.py) where this port's five reads all apply FINAL, bounded to the requesting org in the same statement (filteroptions package doc comment). An unmerged physical version whose VALUE changed since the last merge (a team rename, a re-attributed author_email) can leave an extra, stale distinct value in Python's list that this port's FINAL read excludes -- a LIST-LENGTH divergence, which this citation's Paths reach but, by this package's own leaf-only coverage rule (BaselineDefect's doc comment), never silently admit: it stays a real, uncovered finding on the receipt whenever it fires. Go is correct.",
 					Paths:              []string{"data.teams", "data.developers", "data.repos", "data.flow_stage"},

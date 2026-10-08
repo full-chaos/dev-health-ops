@@ -644,10 +644,7 @@ internal/queryapi/analytics/testdata/build_unit_team_subquery_pre_export.sql
 internal/queryapi/analytics/testdata/latest_work_unit_investments_source_pre_export.sql
 internal/queryapi/analytics/testdata/latest_work_unit_repo_effort_source_pre_export.sql
 internal/queryapi/drilldown/testdata/get_default_org_scope.json
-internal/queryapi/drilldown/testdata/get_default_org_scope_issues.json
 internal/queryapi/drilldown/testdata/get_repo_scope_explicit_dates.json
-internal/queryapi/drilldown/testdata/get_team_scope_explicit_dates_issues.json
-internal/queryapi/drilldown/testdata/post_repo_scope_ignored_limit_fallback_issues.json
 internal/queryapi/drilldown/testdata/post_team_scope_limit_fallback.json
 internal/queryapi/filteroptions/testdata/filters_options_org1.json
 internal/queryapi/flame/testdata/deployment_pipeline_only.json

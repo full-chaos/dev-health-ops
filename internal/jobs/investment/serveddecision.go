@@ -10,6 +10,8 @@ package investment
 // the one served path. There is no setting of its own: setting the provider
 // back is the rollback. The shadow phase does not run in such a run.
 //
+// Architecture: .github/docs-legacy/architecture/investment-decision-adapter.md.
+//
 // What a served decision row is, by state (all ruled by chris, 2026-10-07):
 //
 //   - ok: the validated mix, its one cited quote, status ok.

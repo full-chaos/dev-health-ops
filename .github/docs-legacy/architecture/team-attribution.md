@@ -80,6 +80,12 @@ provenance, jump to that node, and verify no higher-precedence stage matched.
 other team at the winner's rank, read by team-scoped views only. The values, the readers and the known limits are in
 `docs/contribute/architecture/team-attribution.md` section 0.4d.
 
+**CHAOS-8924.** A key string is not a link across providers: `native_team` and `issue_project` take the ACTIVE teams
+whose `provider` equals the item's `provider`; when none holds the key, the ACTIVE admin teams (empty `provider`) that
+hold it; a team of another provider never. When the key has no holder, the tier gives no candidate and the cascade goes
+on to its next source. The active-team rule also reads teams as (provider, id). Details and the effect on per-team
+totals: `docs/contribute/architecture/team-attribution.md` section 0.4e.
+
 ```mermaid
 flowchart TD
     Start(["Work item"]) --> COLLECT["Evaluate EVERY applicable source → persist a candidate row per match (provenance).<br/>The linked_issue candidate requires a real work_item_dependencies donor row resolving to a team;<br/>a bare issue-key prefix produces NO linked_issue candidate (it may match a manual_fallback instead)."]
@@ -136,7 +142,7 @@ membership rows and the repository ownership derived from them (`team_repo_owner
 `valid_to`, first-seen `valid_from` is kept, nothing is deleted. Rows with admin members or a sync policy are retired
 too and counted; `jira_legacy` links, Atlassian team rows and admin teams (`provider = ''`) stay. Attribution reads
 ACTIVE teams only, one rule for every provider and every path (`teamattribution.LoadTeams` flags inactive teams, `dropInactiveTeamCandidates` drops their candidates), so a retired team
-takes no work item and a project with no connected Atlassian team is unassigned. The operator verb
+takes no work item and is not counted by the membership one-team gate (a person of a retired and an active team attributes to the active team) and a project with no connected Atlassian team is unassigned. The operator verb
 `dho workers providersync retire-jira-project-as-team --org-stdin` runs the same retire for one organization now.
 The table and the precedence text below are the record of the two-leg design before CHAOS-8888. The current rules
 and their tests are in `docs/contribute/architecture/team-attribution.md` section 0.4c.

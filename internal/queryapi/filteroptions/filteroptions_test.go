@@ -2,6 +2,7 @@ package filteroptions
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"reflect"
 	"strings"
@@ -45,6 +46,7 @@ func (s *fixtureRowScanner) Close() error { return nil }
 // the golden-fixture capture script uses on the Python side, since none of
 // this package's five queries share a param signature to switch on.
 type byQueryClient struct {
+	teamNames  [][2]string
 	teams      []string
 	repos      []string
 	developers []string
@@ -57,6 +59,8 @@ func (c byQueryClient) Query(_ context.Context, query string, bindings []dhclick
 		return nil, errors.New("byQueryClient: expected org_id binding")
 	}
 	switch {
+	case containsAll(query, "AS team_name"):
+		return &namePairScanner{rows: c.teamNames}, nil
 	case containsAll(query, "FROM teams FINAL"):
 		return &fixtureRowScanner{rows: c.teams}, nil
 	case containsAll(query, "FROM repos FINAL"):
@@ -71,6 +75,36 @@ func (c byQueryClient) Query(_ context.Context, query string, bindings []dhclick
 		return nil, errors.New("byQueryClient: unrecognised query")
 	}
 }
+
+// namePairScanner replays (team_id, team_name) rows.
+type namePairScanner struct {
+	rows  [][2]string
+	index int
+}
+
+func (s *namePairScanner) Next() bool {
+	if s.index >= len(s.rows) {
+		return false
+	}
+	s.index++
+	return true
+}
+
+func (s *namePairScanner) Scan(dest ...any) error {
+	if len(dest) != 2 {
+		return errors.New("namePairScanner: expected two dests")
+	}
+	id, ok1 := dest[0].(*string)
+	name, ok2 := dest[1].(*string)
+	if !ok1 || !ok2 {
+		return errors.New("namePairScanner: expected *string dests")
+	}
+	*id, *name = s.rows[s.index-1][0], s.rows[s.index-1][1]
+	return nil
+}
+
+func (s *namePairScanner) Err() error   { return nil }
+func (s *namePairScanner) Close() error { return nil }
 
 func containsAll(haystack, needle string) bool {
 	return len(haystack) >= len(needle) && indexOf(haystack, needle) >= 0
@@ -160,6 +194,53 @@ func TestBuildResponseFiltersNonEmailDevelopers(t *testing.T) {
 	}
 }
 
+// TestBuildResponseServesTeamNamesForEveryProviderKeyForm: team ids of all
+// four providers (jira project key, github "gh:", gitlab "gl:", linear key)
+// map to their names; a team id of Teams without a name is absent.
+func TestBuildResponseServesTeamNamesForEveryProviderKeyForm(t *testing.T) {
+	client := byQueryClient{
+		teams: []string{"ENG", "OPS", "gh:platform", "gl:group/api", "unnamed"},
+		teamNames: [][2]string{
+			{"ENG", "Engineering"},
+			{"OPS", "Operations"},
+			{"gh:platform", "Platform"},
+			{"gl:group/api", "API"},
+			{"blank", ""},
+		},
+	}
+	resp, err := BuildResponse(context.Background(), client, "org-1")
+	if err != nil {
+		t.Fatalf("BuildResponse: %v", err)
+	}
+	want := map[string]string{"ENG": "Engineering", "OPS": "Operations", "gh:platform": "Platform", "gl:group/api": "API"}
+	if !reflect.DeepEqual(resp.TeamNames, want) {
+		t.Fatalf("TeamNames = %v, want %v", resp.TeamNames, want)
+	}
+	if _, ok := resp.TeamNames["unnamed"]; ok {
+		t.Fatalf("a team without a name must be absent: %v", resp.TeamNames)
+	}
+	if !reflect.DeepEqual(resp.Teams, client.teams) {
+		t.Fatalf("Teams list changed: %v", resp.Teams)
+	}
+}
+
+func TestBuildResponseOmitsTeamNamesWhenNoTeamHasOne(t *testing.T) {
+	resp, err := BuildResponse(context.Background(), byQueryClient{teams: []string{"ENG"}}, "org-1")
+	if err != nil {
+		t.Fatalf("BuildResponse: %v", err)
+	}
+	if resp.TeamNames != nil {
+		t.Fatalf("TeamNames = %v, want nil", resp.TeamNames)
+	}
+	body, err := json.Marshal(resp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(body), "team_names") {
+		t.Fatalf("team_names must be omitted when empty: %s", body)
+	}
+}
+
 func TestBuildResponseEmptyResultsAreEmptySlicesNotNil(t *testing.T) {
 	client := byQueryClient{}
 	resp, err := BuildResponse(context.Background(), client, "org-1")
@@ -226,6 +307,7 @@ func TestOrgIDScopesEveryDedupReadAtTheSameNestingDepthAsFinal(t *testing.T) {
 				"FROM work_item_user_metrics_daily FINAL",
 			},
 		},
+		{name: "teamNamesQuery", query: teamNamesQuery, markers: []string{"FROM teams FINAL"}},
 		{name: "reposQuery", query: reposQuery, markers: []string{"FROM repos FINAL"}},
 		{name: "developersQuery", query: developersQuery, markers: []string{"FROM user_metrics_daily FINAL"}},
 		{name: "flowStageQuery", query: flowStageQuery, markers: []string{"FROM work_item_state_durations_daily FINAL"}},

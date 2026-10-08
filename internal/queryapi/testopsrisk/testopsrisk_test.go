@@ -220,11 +220,11 @@ func TestResolve_ScopesEveryStatement(t *testing.T) {
 		t.Fatalf("%d statements", len(cl.statements))
 	}
 	// Each table read in the daily statement and the quadrant statement is org-scoped;
-	// the quadrant's repos join carries the org on its join key.
+	// the quadrant's repos subquery filters the org before it groups.
 	if strings.Count(cl.statements[0], "WHERE org_id = {org_id:String}") != 3 {
 		t.Error("the daily statement must scope all three tables")
 	}
-	if !strings.Contains(cl.statements[1], "WHERE org_id = {org_id:String}") || !strings.Contains(cl.statements[1], "repos.org_id = {org_id:String}") {
+	if !strings.Contains(cl.statements[1], "WHERE org_id = {org_id:String}") || !strings.Contains(cl.statements[1], "FROM repos\n    WHERE org_id = {org_id:String}\n    GROUP BY id") {
 		t.Error("the quadrant statement must scope the release table and its repos join")
 	}
 	for i, b := range cl.bindings {
@@ -308,7 +308,7 @@ func TestResolve_QuadrantPointsCarryTheRepoName(t *testing.T) {
 }
 
 func TestQuadrantStatement_NamesOnlyFromTheOrgScopedCatalogue(t *testing.T) {
-	if !strings.Contains(quadrantQuery, "nullIf(repos.repo, '') AS repo_name") || !strings.Contains(quadrantQuery, "repos.org_id = {org_id:String}") {
+	if !strings.Contains(quadrantQuery, "nullIf(repos.repo, '') AS repo_name") || !strings.Contains(quadrantQuery, "FROM repos\n    WHERE org_id = {org_id:String}\n    GROUP BY id") {
 		t.Fatal("the quadrant name must come from the org-scoped repos join and be null when empty")
 	}
 }

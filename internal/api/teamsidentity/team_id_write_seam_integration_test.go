@@ -336,3 +336,49 @@ func TestAnIdentityLeavingAStoredBareTeamSkipsIt(t *testing.T) {
 		t.Errorf("active = %q, want linear:ENG", got)
 	}
 }
+
+// A bare id resolves only to an ACTIVE prefixed team: an inactive one is
+// not written active again. A request that names a prefixed and a bare id
+// keys both.
+func TestTheWriteSeamResolvesOnlyToAnActiveTeamAndKeysAMixedRequest(t *testing.T) {
+	s, ctx := writeSeamStore(t)
+	writeSeamSeed(t, s, ctx, "linear", "linear:ENG")
+	writeSeamSeed(t, s, ctx, "", "custom:ops")
+	if err := s.Conn.Exec(ctx, `INSERT INTO teams (id, team_uuid, name, members, manual_members, project_keys, repo_patterns, is_active, updated_at, org_id, provider, native_team_key) VALUES ('linear:OLD', generateUUIDv4(), 'Old', [], [], [], [], 0, '2026-09-01 00:00:00', 'org-1', 'linear', 'OLD')`); err != nil {
+		t.Fatal(err)
+	}
+	h := newTestHandlers(s)
+	rec := writeSeamCall(t, h, h.createOrUpdateIdentity, http.MethodPost, "/api/v1/admin/identities", "",
+		map[string]any{"canonical_id": "m1", "team_ids": []string{"OLD"}})
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Errorf("identity naming an inactive team's bare id = %d %s, want 422", rec.Code, rec.Body.String())
+	}
+	rec = writeSeamCall(t, h, h.createOrUpdateIdentity, http.MethodPost, "/api/v1/admin/identities", "",
+		map[string]any{"canonical_id": "m1", "team_ids": []string{"custom:ops", "ENG"}})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("mixed identity = %d %s", rec.Code, rec.Body.String())
+	}
+	identity, err := s.GetIdentity(ctx, "org-1", "m1")
+	if err != nil || identity == nil || strings.Join(identity.TeamIDs, ",") != "custom:ops,linear:ENG" {
+		t.Errorf("identity = %+v, %v; want team_ids [custom:ops linear:ENG]", identity, err)
+	}
+	if got := writeSeamActive(t, s, ctx); got != "custom:ops,linear:ENG" {
+		t.Errorf("active = %q, want custom:ops,linear:ENG", got)
+	}
+}
+
+// A drift decision named by a carried bare id decides the prefixed team's
+// pending change.
+func TestADriftDecisionByABareIDDecidesTheKeyedTeamsChange(t *testing.T) {
+	s, ctx := writeSeamStore(t)
+	writeSeamSeed(t, s, ctx, "linear", "linear:ENG")
+	if err := s.Conn.Exec(ctx, `INSERT INTO team_drift_changes (org_id, change_id, entity_type, entity_id, provider, native_team_key, change_type, field, old_value_json, new_value_json, status, first_seen_at, last_seen_at, updated_at) VALUES ('org-1', 'chg-1', 'team', 'linear:ENG', 'linear', 'ENG', 'field_changed', 'name', '"a"', '"b"', 'pending', '2026-09-01 00:00:00', '2026-09-01 00:00:00', '2026-09-01 00:00:00')`); err != nil {
+		t.Fatal(err)
+	}
+	h := newTestHandlers(s)
+	rec := writeSeamCall(t, h, h.dismissChanges, http.MethodPost, "/api/v1/admin/teams/ENG/dismiss-changes", "ENG",
+		map[string]any{"dismiss_all": true})
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"dismissed":1`) {
+		t.Errorf("dismiss by bare id = %d %s, want the one pending change dismissed", rec.Code, rec.Body.String())
+	}
+}

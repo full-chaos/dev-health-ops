@@ -71,17 +71,28 @@ const jiraProjectAsTeamIDsPredicate = `(team_id IN (` + jiraProjectAsTeamIDsSubq
 const jiraProjectAsTeamMembershipPredicate = `org_id = {org_id:String} AND provider = 'jira' AND source = 'native' ` +
 	`AND valid_to IS NULL AND ` + jiraProjectAsTeamIDsPredicate
 
+// jiraProjectAsTeamOtherOpenLinkIDsSubquery is the team ids that keep an open
+// project link after the ownership close: any open row of the organization, of
+// any provider and any source, that is not a row of the retired shape.
+const jiraProjectAsTeamOtherOpenLinkIDsSubquery = `SELECT team_id FROM team_project_ownership FINAL WHERE ` +
+	`org_id = {org_id:String} AND valid_to IS NULL AND NOT (` + jiraProjectAsTeamOwnershipShape + `)`
+
 // jiraProjectAsTeamRepoOwnershipPredicate is the open DERIVED repository row
 // of a project-as-team (source 'inferred': TeamRepoOwnershipDerivationService
-// derived it from the team's project ownership; its provider is the
-// repository's, so it cannot name the team's). `teams` holds one row for an
-// id in an organization: when that row is another provider's team (not the
-// admin's, whose provider is empty), the id names that team and its derived rows stay. A
-// row of another source (a person's or a provider's statement) is not derived
-// from the retired rows and stays.
+// derived it from the team's project links; its provider is the repository's,
+// so it cannot name the team's). Three conditions keep a row out:
+//   - the id's current team row is another provider's team (not the admin's,
+//     whose provider is empty): the id names that team and its rows stay;
+//   - the team keeps another open project link (a legacy link, an admin link):
+//     the derivation reads every link and would open the row again at its next
+//     run, so the retire leaves the rows to it, and it retracts the rows that
+//     only the retired link supported;
+//   - the row is of another source (a person's or a provider's statement): it
+//     is not derived from the retired rows.
 const jiraProjectAsTeamRepoOwnershipPredicate = `org_id = {org_id:String} AND source = 'inferred' ` +
 	`AND valid_to IS NULL AND ` + jiraProjectAsTeamIDsPredicate + ` ` +
-	`AND team_id NOT IN (SELECT id FROM teams FINAL WHERE org_id = {org_id:String} AND provider NOT IN ('', 'jira'))`
+	`AND team_id NOT IN (SELECT id FROM teams FINAL WHERE org_id = {org_id:String} AND provider NOT IN ('', 'jira')) ` +
+	`AND team_id NOT IN (` + jiraProjectAsTeamOtherOpenLinkIDsSubquery + `)`
 
 const jiraProjectAsTeamActivePredicate = `org_id = {org_id:String} AND is_active = 1 AND ` + jiraProjectAsTeamRowPredicate
 

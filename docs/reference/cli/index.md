@@ -1565,6 +1565,10 @@ Nothing is deleted:
   catalog wrote it (an admin edit, or a team of another provider with the same
   key): the Jira project link of that id (`source = 'native'`,
   `team_id = project_key`) decides, and the team row itself stays;
+- derived repository rows are closed only when the team keeps no other open
+  project link. A team that keeps one (for example a `jira_legacy` link) keeps
+  its derived rows: the repository ownership derivation reads every link and
+  retracts the rows that only the retired link supported;
 - a row with admin members (`manual_members`) or a sync policy is retired too,
   and counted.
 

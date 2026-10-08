@@ -84,6 +84,15 @@ func TestRetireJiraProjectAsTeamRowsFollowsTheOwnershipShapeNotTheCurrentTeamRow
 		}
 		// The admin edits the team: the row is written again with an empty provider.
 		f.teamAt("", "OPS", "", newer)
+		// Links that do not hold the derived row open: a closed legacy link of
+		// the team, and an open link of a team with the same id in another
+		// organization.
+		f.ownership("jira", "OPS", "10098", "OPSL", "jira_legacy")
+		if err := conn.Exec(ctx, `INSERT INTO team_project_ownership (org_id, provider, team_id, project_id, project_key, source, is_primary, specificity, priority, valid_from, valid_to, updated_at) VALUES (?, 'jira', 'OPS', '10098', 'OPSL', 'jira_legacy', 1, 100, 10, ?, ?, ?)`,
+			f.orgID, old, old.Add(time.Hour), old.Add(2*time.Hour)); err != nil {
+			t.Fatalf("close the legacy link: %v", err)
+		}
+		newFixture().ownership("jira", "OPS", "10099", "OPSL", "jira_legacy")
 
 		out := retire(f)
 		if out.Teams != 0 || out.OwnershipClosed != 1 || out.MembershipClosed != 1 || out.RepoOwnershipClosed != 1 {
@@ -168,6 +177,64 @@ func TestRetireJiraProjectAsTeamRowsFollowsTheOwnershipShapeNotTheCurrentTeamRow
 		out := retire(f)
 		if out.TeamsRetired != 1 || out.MembershipClosed != 1 || out.RepoOwnershipClosed != 1 {
 			t.Fatalf("outcome = %+v, want the team, its lead and its derived row retired", out)
+		}
+	})
+
+	t.Run("a team that keeps another open link keeps its derived rows across runs", func(t *testing.T) {
+		f := newFixture()
+		retiredRepo, keptRepo := uuid.New(), uuid.New()
+		f.team("jira", "OPS", "OPS", nil)
+		f.ownership("jira", "OPS", "10001", "OPS", "native")
+		f.membership("jira", "OPS", "jira:lead-ops")
+		f.ownership("jira", "OPS", "10099", "OPSL", "jira_legacy")
+		f.derived("jira", "jira:OPS-1", "10001", retiredRepo, "acme/retired")
+		f.derived("jira", "jira:OPSL-1", "10099", keptRepo, "acme/kept")
+		f.derive()
+		if f.openRepoRows("OPS") != 2 {
+			t.Fatal("the derivation did not write the two derived rows: the test measures nothing")
+		}
+		f.teamAt("", "OPS", "", newer)
+
+		for cycle := 1; cycle <= 3; cycle++ {
+			out := retire(f)
+			if out.RepoOwnershipClosed != 0 {
+				t.Fatalf("cycle %d: the retire closed %d derived rows of a team that keeps a project link", cycle, out.RepoOwnershipClosed)
+			}
+			f.derive()
+			if got := countRows(t, ctx, conn, `SELECT count() FROM team_repo_ownership FINAL WHERE org_id = ? AND team_id = 'OPS' AND repo_full_name = 'acme/kept' AND source = 'inferred' AND valid_to IS NULL`, f.orgID); got != 1 {
+				t.Fatalf("cycle %d: the row of the kept link is not open after the derivation (%d)", cycle, got)
+			}
+		}
+		if got := countRows(t, ctx, conn, `SELECT count() FROM team_repo_ownership FINAL WHERE org_id = ? AND team_id = 'OPS' AND repo_full_name = 'acme/retired' AND source = 'inferred' AND valid_to IS NULL`, f.orgID); got != 0 {
+			t.Fatalf("the derivation left the row of the retired link open (%d)", got)
+		}
+		if f.openLeadRows("jira", "OPS") != 0 || f.openOwnership("jira", "OPS") != 1 || !f.activeTeam("", "OPS") {
+			t.Fatal("the lead did not close, the kept link closed, or the admin's team went inactive")
+		}
+	})
+
+	t.Run("a team of another provider with the project key keeps its derived rows when it has no link", func(t *testing.T) {
+		f := newFixture()
+		for _, provider := range []string{"linear", "github", "gitlab"} {
+			id := "K" + provider
+			repo := uuid.New()
+			f.team("jira", id, id, nil)
+			f.ownership("jira", id, "1"+provider, id, "native")
+			f.teamAt(provider, id, id, newer)
+			seedTeamRepoOwnershipRepos(t, ctx, conn, f.orgID, map[uuid.UUID]string{repo: "acme/" + provider})
+			if err := conn.Exec(ctx, teamRepoOwnershipInsert+` VALUES (?, 'github', ?, ?, ?, 'exact', 'inferred', 0, 100, 0, ?, NULL, ?)`,
+				f.orgID, id, repo, "acme/"+provider, old, old); err != nil {
+				t.Fatalf("insert derived row of the %s team: %v", provider, err)
+			}
+		}
+		out := retire(f)
+		if out.RepoOwnershipRows != 0 || out.RepoOwnershipClosed != 0 {
+			t.Fatalf("outcome = %+v, want no derived row found", out)
+		}
+		for _, provider := range []string{"linear", "github", "gitlab"} {
+			if f.openRepoRows("K"+provider) != 1 {
+				t.Fatalf("the derived row of the %s team was closed", provider)
+			}
 		}
 	})
 

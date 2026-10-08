@@ -109,6 +109,9 @@ func Write(ctx context.Context, conn driver.Conn, orgID string, rows Rows, selec
 	if err := checkTeamIDs(rows); err != nil {
 		return result, err
 	}
+	if err := providersync.CarryTeamIDsBeforeWrite(ctx, conn, orgID, Provider); err != nil {
+		return result, err
+	}
 	scope, missing, err := teamsInScope(ctx, conn, orgID, rows.Teams)
 	if err != nil {
 		return result, fmt.Errorf("read known atlassian teams: %w", err)

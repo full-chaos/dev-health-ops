@@ -202,6 +202,9 @@ func TestClickHouseExternalSinkPreservesManualMembersOnTeamWrite(t *testing.T) {
 	if connection.queryCalls != 1 {
 		t.Fatalf("preserve-lookup calls = %d, want 1", connection.queryCalls)
 	}
+	if connection.carryCountCalls != 1 {
+		t.Fatalf("team id carry count reads = %d, want 1 before the team.v1 write", connection.carryCountCalls)
+	}
 	// The preserve read asks for the id the row is written under: the
 	// system-prefixed id (CHAOS-8939), not the pushed one.
 	askedFor := false

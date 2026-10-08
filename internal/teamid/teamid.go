@@ -40,6 +40,11 @@ func Prefix(provider string) string {
 // providers' and every team.v1 system's.
 var knownKeys = []string{"gh:", "gl:", "linear:", "jira:", "pagerduty:", "custom:", "ms-teams:"}
 
+// KnownKeys returns the prefixes a team id can already carry.
+func KnownKeys() []string {
+	return append([]string(nil), knownKeys...)
+}
+
 // HasKey reports whether the trimmed id already carries a known provider
 // prefix with something after it.
 func HasKey(id string) bool {

@@ -17,6 +17,7 @@ import (
 
 	"github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/full-chaos/dev-health-ops/internal/projectmembership"
+	"github.com/full-chaos/dev-health-ops/internal/providersync"
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 	"github.com/full-chaos/dev-health-ops/internal/storedversion"
 	"github.com/full-chaos/dev-health-ops/internal/streamrunner"
@@ -59,6 +60,13 @@ func (s *ClickHouseExternalBatchSink) Write(ctx context.Context, source external
 		kinds = append(kinds, kind)
 	}
 	slices.Sort(kinds)
+	// Every bare team id of the organization moves to its prefixed form
+	// before a team.v1 or identity.v1 row with a prefixed id is written.
+	if len(grouped["team.v1"]) > 0 || len(grouped["identity.v1"]) > 0 {
+		if err := providersync.CarryTeamIDsBeforeWrite(ctx, s.conn, source.Pointer.OrgID, "team.v1"); err != nil {
+			return ExternalRecomputeScope{}, fmt.Errorf("carry team ids: %w", err)
+		}
+	}
 	// One kind failing must not stop the others being written: Python's
 	// sink isolates per kind (a failed kind is skipped whole, every other kind
 	// is written, then the batch fails and is retried whole; measured on a

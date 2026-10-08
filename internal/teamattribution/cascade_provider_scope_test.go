@@ -492,3 +492,30 @@ func TestAnIDOfOnlyOtherProvidersFollowsTheirActiveFlag(t *testing.T) {
 		}
 	}
 }
+
+// An admin team (no provider) is the team a candidate id means when no team
+// of the item's provider has that id; when that admin team is inactive, the
+// candidate is dropped, also when an active team of another provider has the
+// same id.
+func TestAnInactiveAdminTeamIsDroppedWhenNoTeamOfTheItemsProviderHasItsID(t *testing.T) {
+	for _, provider := range coOwnerProviders {
+		for _, other := range otherProviders(provider) {
+			t.Run(provider+"/active team of "+other, func(t *testing.T) {
+				projectID := "PROJ"
+				derived := NewGitHubWorkItemDerivationContext(GithubWorkItemDerivationFacts{
+					Teams: catalogOrder([]GithubWorkItemDerivationTeamFact{
+						{Provider: "", TeamID: "ENG", Inactive: true},
+						{Provider: other, TeamID: "ENG"},
+					}),
+					Projects: []GithubWorkItemDerivationProjectFact{
+						{Provider: provider, TeamID: "ENG", ProjectID: projectID, IsPrimary: 1, Specificity: 110, Priority: 10},
+					},
+				})
+				teamID, _, candidates := derived.Resolve(GithubWorkItemDerivationSubject{WorkItemID: provider + ":P-1", Provider: provider, ProjectID: &projectID, OrgID: "org"})
+				if teamID != nil {
+					t.Errorf("Resolve team = %q, want none: the admin team ENG is inactive (candidates %+v)", *teamID, candidates)
+				}
+			})
+		}
+	}
+}

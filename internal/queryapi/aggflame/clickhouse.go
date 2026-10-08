@@ -35,6 +35,27 @@ const primaryWorkItemTeamAttributionSource = `(
       )
 )`
 
+// teamScopedWorkItemTeamAttributionSource is the same read for a TEAM-scoped
+// query: it also takes the co-owner rows (is_primary = 2, teamattribution.
+// AttributionCoOwner), so an item of a project with several owning teams is
+// in each of those teams' views. Only a query that filters t.team_id may use
+// it; without a team filter it would count such an item once per team.
+const teamScopedWorkItemTeamAttributionSource = `(
+    SELECT
+        work_item_id,
+        team_id,
+        team_name
+    FROM work_item_team_attributions FINAL
+    WHERE org_id = {org_id:String}
+      AND is_primary IN (1, 2)
+      AND (work_item_id, computed_at) IN (
+          SELECT work_item_id, max(computed_at)
+          FROM work_item_team_attributions
+          WHERE org_id = {org_id:String}
+          GROUP BY work_item_id
+      )
+)`
+
 // cycleBreakdownRow is one row fetch_cycle_breakdown (api/queries/
 // aggregated_flame.py:14-74) returns -- restricted to the two columns
 // _build_cycle_breakdown_tree actually reads (status, total_hours); the
@@ -310,9 +331,11 @@ func fetchThroughput(ctx context.Context, client QueryClient, orgID string, star
 		{Name: "end_day", Value: formatDay(endDay)},
 		{Name: "limit", Value: limit},
 	}
+	attributionSource := primaryWorkItemTeamAttributionSource
 	if teamID != "" {
 		teamFilter = "\n          AND t.team_id = {team_id:String}"
 		bindings = append(bindings, dhclickhouse.Binding{Name: "team_id", Value: teamID})
+		attributionSource = teamScopedWorkItemTeamAttributionSource
 	}
 
 	query := `
@@ -324,9 +347,9 @@ func fetchThroughput(ctx context.Context, client QueryClient, orgID string, star
                 coalesce(nullIf(any(t.team_name), ''), coalesce(nullIf(t.team_id, ''), 'unassigned'))
             ) AS team_name,
             uniqExact(wct.work_item_id) AS items_completed,
-            0 AS items_started
+            toUInt64(0) AS items_started
         FROM work_item_cycle_times AS wct FINAL
-        LEFT JOIN ` + primaryWorkItemTeamAttributionSource + ` AS t
+        LEFT JOIN ` + attributionSource + ` AS t
           ON t.work_item_id = wct.work_item_id
         WHERE wct.day >= {start_day:Date}
           AND wct.day < {end_day:Date}
@@ -368,9 +391,11 @@ func fetchThroughputByType(ctx context.Context, client QueryClient, orgID string
 		{Name: "end_day", Value: formatDay(endDay)},
 		{Name: "limit", Value: limit},
 	}
+	attributionSource := primaryWorkItemTeamAttributionSource
 	if teamID != "" {
 		teamFilter = "\n          AND t.team_id = {team_id:String}"
 		bindings = append(bindings, dhclickhouse.Binding{Name: "team_id", Value: teamID})
+		attributionSource = teamScopedWorkItemTeamAttributionSource
 	}
 
 	query := `
@@ -383,7 +408,7 @@ func fetchThroughputByType(ctx context.Context, client QueryClient, orgID string
             ) AS team_name,
             uniqExact(wct.work_item_id) AS items_completed
         FROM work_item_cycle_times AS wct FINAL
-        LEFT JOIN ` + primaryWorkItemTeamAttributionSource + ` AS t
+        LEFT JOIN ` + attributionSource + ` AS t
           ON t.work_item_id = wct.work_item_id
         WHERE wct.completed_at >= toDateTime({start_day:Date})
           AND wct.completed_at < toDateTime({end_day:Date})

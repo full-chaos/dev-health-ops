@@ -93,7 +93,7 @@ func TestFlameQueriesScopeRepoIDAndOtherPredicatesInsideTheWhereClause(t *testin
 // team-attribution subquery whose result (team_id) is never read by
 // _build_issue_flame_response -- this port's fetchIssueQuery carries no
 // such join at all. A future edit that adds one back (e.g. by copying
-// quadrant.go's primaryWorkItemTeamAttributionSource) must not do so
+// quadrant.go's teamScopedWorkItemTeamAttributionSource) must not do so
 // silently.
 func TestFetchIssueQueryOmitsTheDeadTeamAttributionJoin(t *testing.T) {
 	if strings.Contains(fetchIssueQuery, "JOIN") {

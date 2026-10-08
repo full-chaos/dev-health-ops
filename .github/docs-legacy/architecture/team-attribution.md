@@ -75,6 +75,11 @@ present. "Wins" means *primary selection* — it does not mean lower-precedence 
 unevaluated or unrecorded. **To debug:** read `team_attribution_source` (the winner) from
 provenance, jump to that node, and verify no higher-precedence stage matched.
 
+**CHAOS-8905.** A project with several owning teams gives its items to every active team: one primary row
+(`is_primary = 1`, read by organization totals and the daily rollups) and a co-owner row (`is_primary = 2`) for each
+other team at the winner's rank, read by team-scoped views only. The values, the readers and the known limits are in
+`docs/contribute/architecture/team-attribution.md` section 0.4d.
+
 ```mermaid
 flowchart TD
     Start(["Work item"]) --> COLLECT["Evaluate EVERY applicable source → persist a candidate row per match (provenance).<br/>The linked_issue candidate requires a real work_item_dependencies donor row resolving to a team;<br/>a bare issue-key prefix produces NO linked_issue candidate (it may match a manual_fallback instead)."]

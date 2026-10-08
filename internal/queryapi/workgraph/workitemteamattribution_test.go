@@ -261,15 +261,16 @@ func TestResolveWorkItemTeamAttributions_QueryIsOrgScopedFinalAndBounded(t *test
 	}
 	// Org scope must hold in BOTH the outer WHERE and the snapshot
 	// subquery (removing either leaks another org's rows), and the order
-	// must be exactly work_item_id, is_primary DESC, source.
+	// must be exactly work_item_id, the primary row (is_primary = 1) first,
+	// then co-owner rows (2) before the others (0), then source.
 	if got := strings.Count(sql, "org_id = {org_id:String}"); got != 2 {
 		t.Errorf("org predicate appears %d times, want 2 (outer WHERE + snapshot subquery); got:\n%s", got, sql)
 	}
 	if !strings.Contains(sql, "WHERE org_id = {org_id:String}") {
 		t.Errorf("outer WHERE must start with the org predicate; got:\n%s", sql)
 	}
-	if !strings.Contains(sql, "ORDER BY work_item_id, is_primary DESC, source\n") {
-		t.Errorf("ORDER BY must be exactly work_item_id, is_primary DESC, source; got:\n%s", sql)
+	if !strings.Contains(sql, "ORDER BY work_item_id, is_primary = 1 DESC, is_primary DESC, source\n") {
+		t.Errorf("ORDER BY must be exactly work_item_id, is_primary = 1 DESC, is_primary DESC, source; got:\n%s", sql)
 	}
 	foundOrgID := false
 	for _, b := range client.lastParams {
@@ -497,5 +498,17 @@ func TestResolveWorkItemTeamAttributions_ProductionCounterIncrementsOnlyOnTrunca
 	}
 	if after := workItemTruncationCounter(t); after != before+1 {
 		t.Fatalf("counter %d -> %d, want +1 through the production increment", before, after)
+	}
+}
+
+// isPrimary is true for the ONE primary row only: a co-owner row
+// (is_primary = 2) is served with isPrimary false, so a client that counts
+// primary rows counts the item once.
+func TestWorkItemTeamAttributionCoOwnerRowIsNotPrimary(t *testing.T) {
+	for value, want := range map[uint8]bool{0: false, 1: true, 2: false} {
+		got := rowToWorkItemTeamAttribution("jira:KEY-1", "jira", "team-b", "Team B", "issue_project", "high", value, "issue_project_key=KEY")
+		if got.IsPrimary != want {
+			t.Errorf("is_primary %d: isPrimary = %v, want %v", value, got.IsPrimary, want)
+		}
 	}
 }

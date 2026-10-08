@@ -431,22 +431,20 @@ func fetchQuadrantMetric(ctx context.Context, client QueryClient, spec MetricSpe
 	return scanMetricRows(ctx, client, query, bindings, "quadrant: fetch_quadrant_metric")
 }
 
-// primaryWorkItemTeamAttributionSource inlines
-// api/queries/investment.py's PRIMARY_WORK_ITEM_TEAM_ATTRIBUTION_SOURCE
-// verbatim -- no Go port of this subquery existed anywhere in the tree
-// before this PR (grepped cmd/query-api and internal for
-// work_item_team_attributions read-side usage: providersync only writes
-// it). Ported here as the minimum needed for this route's one caller
-// (fetchWorkItemTeamQuadrantMetric), not as a shared package -- a second
-// caller should promote it, not copy it again.
-const primaryWorkItemTeamAttributionSource = `(
+// teamScopedWorkItemTeamAttributionSource reads an item's latest attribution
+// rows of its primary team (is_primary = 1) and of each co-owner team
+// (is_primary = 2, teamattribution.AttributionCoOwner). Its one caller
+// (fetchWorkItemTeamQuadrantMetric) plots one point per team, so an item of a
+// project with several owning teams counts for each of those teams; no reader
+// here sums the points into an organization total.
+const teamScopedWorkItemTeamAttributionSource = `(
     SELECT
         work_item_id,
         team_id,
         team_name
     FROM work_item_team_attributions FINAL
     WHERE org_id = {org_id:String}
-      AND is_primary = 1
+      AND is_primary IN (1, 2)
       AND (work_item_id, computed_at) IN (
           SELECT work_item_id, max(computed_at)
           FROM work_item_team_attributions
@@ -506,7 +504,7 @@ func fetchWorkItemTeamQuadrantMetric(ctx context.Context, client QueryClient, me
         ) AS team_activity
         GROUP BY bucket, entity_id
         ORDER BY bucket
-    `, bucketExpr(bucket), valueExpr, primaryWorkItemTeamAttributionSource, metricFilter)
+    `, bucketExpr(bucket), valueExpr, teamScopedWorkItemTeamAttributionSource, metricFilter)
 
 	bindings := []dhclickhouse.Binding{
 		{Name: "start_day", Value: formatDay(startDay)},

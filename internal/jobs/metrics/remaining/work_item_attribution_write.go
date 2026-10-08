@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/remaining/stepcause"
+	"github.com/full-chaos/dev-health-ops/internal/teamattribution"
 	"github.com/full-chaos/dev-health-ops/internal/workitemcontract"
 )
 
@@ -224,8 +225,9 @@ is_primary, confidence, evidence, computed_at, writer, run_id)`)
 		if err := batch.Append(
 			row.OrgID, repoID, row.WorkItemID,
 			row.Provider, row.TeamID, row.TeamName, row.Source,
-			// is_primary is a 0/1 flag (IsPrimary is set to exactly 0 or 1),
-			// never anything else -- so it keeps a direct conversion.
+			// is_primary is 0, 1 or 2 (teamattribution.AttributionNotPrimary,
+			// AttributionPrimary, AttributionCoOwner), never anything else --
+			// so it keeps a direct conversion.
 			uint8(row.IsPrimary), row.Confidence, row.Evidence,
 			workitemcontract.AttributionVersionFold(row.ComputedAt, producer.Writer, workItemAttributionStampPrecision),
 			producer.Writer, producer.RunID,
@@ -329,9 +331,9 @@ func workItemAttributionSortingKey(row WorkItemAttributionRow) string {
 // workItemAttributionSortingKeyDedupe mirrors githubWorkItemDerivedSortingKeyDedupe
 // (internal/providersync/github_work_item_derived_effects_clickhouse.go):
 // collapses rows that share a full ClickHouse sorting key, keeping the
-// HIGHEST computed_at version, and breaking an equal-version tie in favor of
-// the PRIMARY row (CHAOS-4244 codex round-3, HIGH) before falling back to
-// last-wins. See that function's doc comment for why version must win over
+// HIGHEST computed_at version, and breaking an equal-version tie by
+// teamattribution.AttributionRowPreference (primary, then co-owner, then
+// provenance) before falling back to last-wins. See that function's doc comment for why version must win over
 // insertion order: this table is a ReplacingMergeTree keyed on computed_at,
 // so an order-only dedup can name a row the server discards.
 func workItemAttributionSortingKeyDedupe(rows []WorkItemAttributionRow) []WorkItemAttributionRow {
@@ -349,12 +351,9 @@ func workItemAttributionSortingKeyDedupe(rows []WorkItemAttributionRow) []WorkIt
 			// existing is strictly newer; keep it.
 		case existing.ComputedAt.Before(row.ComputedAt):
 			winner[key] = index
-		case existing.IsPrimary == 1:
-			// equal version, existing already primary; keep it.
-		case row.IsPrimary == 1:
-			winner[key] = index
-		default:
-			// equal version, neither (or both) primary: last-wins.
+		case teamattribution.AttributionRowPreference(row.IsPrimary) >=
+			teamattribution.AttributionRowPreference(existing.IsPrimary):
+			// equal version: the preferred row wins; an equal preference is last-wins.
 			winner[key] = index
 		}
 	}

@@ -113,7 +113,7 @@ func TestTeamCatalogDiscoveryExecutorRoutesNativeProvidersToTheirCollector(t *te
 	observer := &fakeTeamCatalogObserver{}
 	syncOptions := map[string]any{"auto_import_teams": true}
 	executor := &TeamCatalogDiscoveryExecutor{
-		Native:  map[string]providersync.TeamCatalogCollector{"linear": collector},
+		Native:  carriedForTest(map[string]providersync.TeamCatalogCollector{"linear": collector}),
 		Clients: &fakeProviderClientResolver{credential: credential, integrationID: "integration-1"},
 		Selections: &fakeTeamCatalogSelectionsResolver{
 			selections:  providersync.TeamCatalogSelections{Teams: true, Projects: true, Members: true},
@@ -206,7 +206,7 @@ func TestTeamCatalogDiscoveryExecutorReportsRosterPreservationFailure(t *testing
 	collector := &fakeTeamCatalogCollector{result: providersync.TeamCatalogResult{RosterPreservationFailed: true}}
 	observer := &fakeTeamCatalogObserver{}
 	executor := &TeamCatalogDiscoveryExecutor{
-		Native:  map[string]providersync.TeamCatalogCollector{"linear": collector},
+		Native:  carriedForTest(map[string]providersync.TeamCatalogCollector{"linear": collector}),
 		Clients: &fakeProviderClientResolver{credential: providerfoundation.Credential{Provider: "linear"}},
 		Selections: &fakeTeamCatalogSelectionsResolver{
 			selections: providersync.TeamCatalogSelections{Teams: true},
@@ -229,7 +229,7 @@ func TestTeamCatalogDiscoveryExecutorSkipsNativeProviderWithEverySelectionOff(t 
 	}}
 	observer := &fakeTeamCatalogObserver{}
 	executor := &TeamCatalogDiscoveryExecutor{
-		Native:     map[string]providersync.TeamCatalogCollector{"linear": collector},
+		Native:     carriedForTest(map[string]providersync.TeamCatalogCollector{"linear": collector}),
 		Clients:    &fakeProviderClientResolver{},
 		Selections: &fakeTeamCatalogSelectionsResolver{selections: providersync.TeamCatalogSelections{}},
 		Observer:   observer,
@@ -312,7 +312,7 @@ func (*alwaysMissingReadbackChecker) MissingSprintIDs(_ context.Context, _, _ st
 func TestTeamCatalogDiscoveryExecutorNoOpsForProvidersWithNoImportCapability(t *testing.T) {
 	observer := &fakeTeamCatalogObserver{}
 	executor := &TeamCatalogDiscoveryExecutor{
-		Native:   map[string]providersync.TeamCatalogCollector{"linear": &fakeTeamCatalogCollector{}},
+		Native:   carriedForTest(map[string]providersync.TeamCatalogCollector{"linear": &fakeTeamCatalogCollector{}}),
 		Observer: observer,
 	}
 	summary, err := executor.Discover(context.Background(), testOrg, testRun, "atlassian")
@@ -354,7 +354,7 @@ func TestTeamCatalogDiscoveryExecutorNoOpsForProvidersWithNoImportCapability(t *
 // than silently report an empty, unverified result.
 func TestTeamCatalogDiscoveryExecutorFailsClosedWhenAnImportCapableProviderHasNoCollector(t *testing.T) {
 	executor := &TeamCatalogDiscoveryExecutor{
-		Native: map[string]providersync.TeamCatalogCollector{"linear": &fakeTeamCatalogCollector{}},
+		Native: carriedForTest(map[string]providersync.TeamCatalogCollector{"linear": &fakeTeamCatalogCollector{}}),
 	}
 	if _, err := executor.Discover(context.Background(), testOrg, testRun, "github"); !errors.Is(err, ErrReferenceDiscoveryUnavailable) {
 		t.Fatalf("github missing from Native: error=%v want=%v", err, ErrReferenceDiscoveryUnavailable)
@@ -372,7 +372,7 @@ func TestTeamCatalogDiscoveryExecutorFailsClosedWhenUnconstructed(t *testing.T) 
 	if _, err := zeroExecutor.Discover(context.Background(), testOrg, testRun, "github"); !errors.Is(err, ErrReferenceDiscoveryUnavailable) {
 		t.Fatalf("zero-value executor (no fallback) error=%v want=%v", err, ErrReferenceDiscoveryUnavailable)
 	}
-	nativeOnly := &TeamCatalogDiscoveryExecutor{Native: map[string]providersync.TeamCatalogCollector{"linear": &fakeTeamCatalogCollector{}}}
+	nativeOnly := &TeamCatalogDiscoveryExecutor{Native: carriedForTest(map[string]providersync.TeamCatalogCollector{"linear": &fakeTeamCatalogCollector{}})}
 	if _, err := nativeOnly.Discover(context.Background(), testOrg, testRun, "linear"); !errors.Is(err, ErrReferenceDiscoveryUnavailable) {
 		t.Fatalf("native executor with no Clients error=%v want=%v", err, ErrReferenceDiscoveryUnavailable)
 	}
@@ -389,7 +389,7 @@ func TestTeamCatalogDiscoveryExecutorRecordsADegradedLeg(t *testing.T) {
 	}}
 	observer := &fakeTeamCatalogObserver{}
 	executor := &TeamCatalogDiscoveryExecutor{
-		Native:     map[string]providersync.TeamCatalogCollector{"jira": collector},
+		Native:     carriedForTest(map[string]providersync.TeamCatalogCollector{"jira": collector}),
 		Clients:    &fakeProviderClientResolver{credential: providerfoundation.Credential{Provider: "jira"}, integrationID: "integration-1"},
 		Selections: &fakeTeamCatalogSelectionsResolver{selections: providersync.TeamCatalogSelections{Teams: true}},
 		Observer:   observer,
@@ -422,7 +422,7 @@ func TestTeamCatalogDiscoveryExecutorObservesRetiredProjectAsTeamRowsOnlyWhenARu
 		collector := &fakeTeamCatalogCollector{result: providersync.TeamCatalogResult{ProjectAsTeamRetired: 4}, err: collectErr}
 		observer := &fakeTeamCatalogObserver{}
 		executor := &TeamCatalogDiscoveryExecutor{
-			Native:     map[string]providersync.TeamCatalogCollector{"jira": collector},
+			Native:     carriedForTest(map[string]providersync.TeamCatalogCollector{"jira": collector}),
 			Clients:    &fakeProviderClientResolver{credential: providerfoundation.Credential{Provider: "jira", ID: "cred-1"}},
 			Selections: &fakeTeamCatalogSelectionsResolver{selections: providersync.TeamCatalogSelections{Teams: true}},
 			Observer:   observer,

@@ -104,7 +104,7 @@ func TestTeamCatalogAutoimportDispatcherRoutesNativeProviderDirectly(t *testing.
 	syncOptions := map[string]any{"owner": "acme-group"}
 	dispatcher := &nativeTeamAutoimportDispatcher{
 		resolveProvider: func(context.Context, string, string) (string, error) { return "linear", nil },
-		native:          map[string]providersync.TeamCatalogCollector{"linear": native},
+		native:          carriedForTest(map[string]providersync.TeamCatalogCollector{"linear": native}),
 		clients:         fakeAutoimportClientResolver{integrationID: "integration-1"},
 		selections: fakeAutoimportSelectionsResolver{
 			selections:  providersync.TeamCatalogSelections{Teams: true, Members: true},
@@ -173,7 +173,7 @@ func TestTeamCatalogAutoimportDispatcherDegradesNativeFailureToNonfatal(t *testi
 	observer := &fakeTeamCatalogObserver{}
 	dispatcher := &nativeTeamAutoimportDispatcher{
 		resolveProvider: func(context.Context, string, string) (string, error) { return "linear", nil },
-		native:          map[string]providersync.TeamCatalogCollector{"linear": native},
+		native:          carriedForTest(map[string]providersync.TeamCatalogCollector{"linear": native}),
 		clients:         fakeAutoimportClientResolver{},
 		selections:      fakeAutoimportSelectionsResolver{selections: providersync.TeamCatalogSelections{Teams: true}},
 		observer:        observer,
@@ -234,7 +234,7 @@ func TestTeamCatalogAutoimportDispatcherDegradesResolverFailuresToNonfatal(t *te
 			observer := &fakeTeamCatalogObserver{}
 			dispatcher := &nativeTeamAutoimportDispatcher{
 				resolveProvider: func(context.Context, string, string) (string, error) { return "linear", nil },
-				native:          map[string]providersync.TeamCatalogCollector{"linear": native},
+				native:          carriedForTest(map[string]providersync.TeamCatalogCollector{"linear": native}),
 				clients:         testCase.clients,
 				selections:      testCase.selections,
 				sources:         testCase.sources,
@@ -269,7 +269,7 @@ func TestTeamCatalogAutoimportDispatcherReportsRosterPreservationFailure(t *test
 	observer := &fakeTeamCatalogObserver{}
 	dispatcher := &nativeTeamAutoimportDispatcher{
 		resolveProvider: func(context.Context, string, string) (string, error) { return "linear", nil },
-		native:          map[string]providersync.TeamCatalogCollector{"linear": native},
+		native:          carriedForTest(map[string]providersync.TeamCatalogCollector{"linear": native}),
 		clients:         fakeAutoimportClientResolver{},
 		selections:      fakeAutoimportSelectionsResolver{selections: providersync.TeamCatalogSelections{Teams: true}},
 		observer:        observer,
@@ -301,7 +301,7 @@ func TestTeamCatalogAutoimportDispatcherReportsSkippedCollectorResult(t *testing
 	observer := &fakeTeamCatalogObserver{}
 	dispatcher := &nativeTeamAutoimportDispatcher{
 		resolveProvider: func(context.Context, string, string) (string, error) { return "linear", nil },
-		native:          map[string]providersync.TeamCatalogCollector{"linear": native},
+		native:          carriedForTest(map[string]providersync.TeamCatalogCollector{"linear": native}),
 		clients:         fakeAutoimportClientResolver{},
 		selections:      fakeAutoimportSelectionsResolver{selections: providersync.TeamCatalogSelections{Teams: true}},
 		observer:        observer,
@@ -329,7 +329,7 @@ func TestTeamCatalogAutoimportDispatcherSkipsNativeProviderWithNoSelection(t *te
 	observer := &fakeTeamCatalogObserver{}
 	dispatcher := &nativeTeamAutoimportDispatcher{
 		resolveProvider: func(context.Context, string, string) (string, error) { return "linear", nil },
-		native:          map[string]providersync.TeamCatalogCollector{"linear": native},
+		native:          carriedForTest(map[string]providersync.TeamCatalogCollector{"linear": native}),
 		clients:         fakeAutoimportClientResolver{},
 		selections:      fakeAutoimportSelectionsResolver{selections: providersync.TeamCatalogSelections{}},
 		observer:        observer,
@@ -359,7 +359,7 @@ func TestTeamCatalogAutoimportDispatcherNoOpsForProvidersWithNoImportCapability(
 	observer := &fakeTeamCatalogObserver{}
 	dispatcher := &nativeTeamAutoimportDispatcher{
 		resolveProvider: func(context.Context, string, string) (string, error) { return "pagerduty", nil },
-		native:          map[string]providersync.TeamCatalogCollector{"linear": &linearCollectorSpy{}},
+		native:          carriedForTest(map[string]providersync.TeamCatalogCollector{"linear": &linearCollectorSpy{}}),
 		observer:        observer,
 	}
 	if err := dispatcher.TeamAutoImport(context.Background(), syncdispatchruntime.DomainReference{
@@ -382,7 +382,7 @@ func TestTeamCatalogAutoimportDispatcherNoOpsForProvidersWithNoImportCapability(
 func TestTeamCatalogAutoimportDispatcherFailsClosedWhenAnImportCapableProviderHasNoCollector(t *testing.T) {
 	dispatcher := &nativeTeamAutoimportDispatcher{
 		resolveProvider: func(context.Context, string, string) (string, error) { return "github", nil },
-		native:          map[string]providersync.TeamCatalogCollector{"linear": &linearCollectorSpy{}},
+		native:          carriedForTest(map[string]providersync.TeamCatalogCollector{"linear": &linearCollectorSpy{}}),
 	}
 	if err := dispatcher.TeamAutoImport(context.Background(), syncdispatchruntime.DomainReference{
 		OrganizationID: testOrg, SyncRunID: testRun,
@@ -399,7 +399,7 @@ func TestTeamCatalogAutoimportDispatcherFailsClosedWhenProviderResolutionFails(t
 	resolutionErr := errors.New("resolution failed")
 	dispatcher := &nativeTeamAutoimportDispatcher{
 		resolveProvider: func(context.Context, string, string) (string, error) { return "", resolutionErr },
-		native:          map[string]providersync.TeamCatalogCollector{"linear": &linearCollectorSpy{}},
+		native:          carriedForTest(map[string]providersync.TeamCatalogCollector{"linear": &linearCollectorSpy{}}),
 	}
 	if err := dispatcher.TeamAutoImport(context.Background(), syncdispatchruntime.DomainReference{
 		OrganizationID: testOrg, SyncRunID: testRun,
@@ -429,7 +429,7 @@ func TestTeamCatalogAutoimportDispatcherObservesRetiredProjectAsTeamRowsOnlyWhen
 		observer := &fakeTeamCatalogObserver{}
 		dispatcher := &nativeTeamAutoimportDispatcher{
 			resolveProvider: func(context.Context, string, string) (string, error) { return "jira", nil },
-			native:          map[string]providersync.TeamCatalogCollector{"jira": native},
+			native:          carriedForTest(map[string]providersync.TeamCatalogCollector{"jira": native}),
 			clients:         fakeAutoimportClientResolver{},
 			selections:      fakeAutoimportSelectionsResolver{selections: providersync.TeamCatalogSelections{Teams: true}},
 			observer:        observer,

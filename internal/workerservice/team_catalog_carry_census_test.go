@@ -3,6 +3,8 @@ package workerservice
 import (
 	"context"
 	"errors"
+	"os"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -52,5 +54,41 @@ func TestEveryRegisteredTeamCatalogCollectorCarriesFirstCensus(t *testing.T) {
 		if !errors.Is(err, failed) || !strings.Contains(err.Error(), "team id carry: count") || conn.queries != 1 || conn.batches != 0 {
 			t.Errorf("%s: err = %v, reads = %d, batches = %d; want only the carry's count read and its error", provider, err, conn.queries, conn.batches)
 		}
+	}
+}
+
+// TestNativeTeamCatalogRegistryIsOnlyHandedToTheDispatchers fails when the
+// registry variable in sync_dispatch.go is used in any way but: built by
+// newNativeTeamCatalogCollectors, then handed whole to the two dispatchers.
+// An index write or a second registry would add a collector the carry does
+// not wrap; the dispatchers refuse it (providersync.RequireCarried), and
+// this test fails first.
+func TestNativeTeamCatalogRegistryIsOnlyHandedToTheDispatchers(t *testing.T) {
+	data, err := os.ReadFile("sync_dispatch.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	allowed := []*regexp.Regexp{
+		regexp.MustCompile(`^nativeTeamCatalogCollectors := newNativeTeamCatalogCollectors\(clickhouseConnection\)$`),
+		regexp.MustCompile(`^Native:\s+nativeTeamCatalogCollectors,$`),
+		regexp.MustCompile(`^native:\s+nativeTeamCatalogCollectors,$`),
+	}
+	used := 0
+	for _, line := range strings.Split(string(data), "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "//") || !strings.Contains(trimmed, "nativeTeamCatalogCollectors") || strings.HasPrefix(trimmed, "func newNativeTeamCatalogCollectors(") {
+			continue
+		}
+		used++
+		ok := false
+		for _, pattern := range allowed {
+			ok = ok || pattern.MatchString(trimmed)
+		}
+		if !ok {
+			t.Errorf("sync_dispatch.go: %q uses the collector registry outside the wrapped path", trimmed)
+		}
+	}
+	if used != len(allowed) {
+		t.Errorf("registry used on %d lines, want %d (build, executor, post-sync dispatcher)", used, len(allowed))
 	}
 }

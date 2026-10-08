@@ -486,7 +486,7 @@ func TestJiraAtlassianTeamsReachableThroughTheProductionAutoimportDispatcher(t *
 	}
 	dispatcher := &nativeTeamAutoimportDispatcher{
 		resolveProvider: func(context.Context, string, string) (string, error) { return "jira", nil },
-		native:          map[string]providersync.TeamCatalogCollector{"jira": nativeJira},
+		native:          carriedForTest(map[string]providersync.TeamCatalogCollector{"jira": nativeJira}),
 		clients:         fakeJiraAutoimportClientResolver{credential: credential, client: client, integrationID: "integration-1"},
 		selections:      fakeJiraAutoimportSelectionsResolver{selections: providersync.TeamCatalogSelections{Teams: true, Members: true, Projects: true}},
 		sources:         fakeJiraAutoimportSourceResolver{},

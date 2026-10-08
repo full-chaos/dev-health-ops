@@ -171,6 +171,9 @@ func (executor *TeamCatalogDiscoveryExecutor) Discover(
 			"reference_sprint_ids": []string{},
 		}, nil
 	}
+	if err := providersync.RequireCarried(collector); err != nil {
+		return nil, err
+	}
 	if executor.Clients == nil || executor.Selections == nil {
 		return nil, ErrReferenceDiscoveryUnavailable
 	}

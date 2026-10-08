@@ -2,6 +2,7 @@ package providersync
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
@@ -47,4 +48,19 @@ func CarryFirstTeamCatalogCollectors(conn TeamIDCarryConn, collectors map[string
 		wrapped[provider] = CarryFirstTeamCatalogCollector{Conn: conn, Writer: "team_catalog:" + provider, Collector: collector}
 	}
 	return wrapped
+}
+
+// ErrTeamCatalogCollectorNotCarried marks a collector that reached a dispatch
+// site without the carry wrapper.
+var ErrTeamCatalogCollectorNotCarried = errors.New("team catalog collector is not wrapped by the team id carry")
+
+// RequireCarried refuses a collector that CarryFirstTeamCatalogCollector does
+// not wrap. Both dispatch sites call it before CollectTeamCatalog, so a
+// collector type registered outside the wrapped registry fails loud.
+func RequireCarried(collector TeamCatalogCollector) error {
+	carry, ok := collector.(CarryFirstTeamCatalogCollector)
+	if !ok || carry.Conn == nil || carry.Collector == nil {
+		return ErrTeamCatalogCollectorNotCarried
+	}
+	return nil
 }

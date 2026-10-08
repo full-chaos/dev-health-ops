@@ -179,3 +179,26 @@ func TestOrdinaryIssueItemsCarryNoTitleKey(t *testing.T) {
 		t.Fatalf("ordinary issue item carries a title key: %s", raw)
 	}
 }
+
+func TestBlockedItemsDropATitleEqualToTheirOwnID(t *testing.T) {
+	items := blockedItemsJSON(t, blockedTitleClient(t, map[string]map[string]string{
+		titleOrgA: {
+			"github:acme/api#1":  "github:acme/api#1",
+			"gitlab:group/api#2": "Fix gitlab:group/api#2 crash",
+			"jira:OPS-3":         "  JIRA:ops-3 ",
+			"linear:ENG-4":       "Fix login redirect",
+		},
+	}, nil))
+	want := map[string]any{
+		"github:acme/api#1":  nil,
+		"gitlab:group/api#2": "Fix gitlab:group/api#2 crash",
+		"jira:OPS-3":         nil,
+		"linear:ENG-4":       "Fix login redirect",
+	}
+	for _, item := range items {
+		id := item["work_item_id"].(string)
+		if item["title"] != want[id] {
+			t.Fatalf("%s: title = %#v, want %#v", id, item["title"], want[id])
+		}
+	}
+}

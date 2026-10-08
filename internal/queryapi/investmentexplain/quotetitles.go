@@ -108,7 +108,7 @@ WHERE pr.org_id = {org_id:String}
 			if title == nil {
 				continue
 			}
-			if clean, ok := scopelabel.CleanName(*title); ok {
+			if clean, ok := scopelabel.CleanNameFor(*title, repoID+"#"+number); ok {
 				if _, err := strconv.ParseUint(number, 10, 64); err == nil {
 					titles[repoID+"#"+number] = clean
 				}

@@ -48,7 +48,7 @@ func ResolveWorkItemTitles(ctx context.Context, client Querier, orgID string, id
 			log.Printf("%s: could not resolve work item titles for ids=%d: scan: %v", opts.Log, len(unique), err)
 			return map[string]string{}
 		}
-		if clean, ok := CleanName(title); id != "" && ok {
+		if clean, ok := CleanNameFor(title, id); id != "" && ok {
 			resolved[id] = clean
 		}
 	}

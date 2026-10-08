@@ -251,3 +251,32 @@ func TestEvidenceQuotesKeepRowsAndLogWhenTitleLookupsFail(t *testing.T) {
 		}
 	}
 }
+
+func TestEvidenceQuotesDropATitleEqualToTheirOwnID(t *testing.T) {
+	store := &quoteTitleStore{
+		issueTitles: map[string]map[string]string{qtOrgA: {
+			qtIssue1: qtIssue1,
+			qtIssue2: "Fix " + qtIssue2 + " crash",
+			qtIssue3: "Fix login redirect",
+		}},
+		prTitles: map[string]map[string]string{qtOrgA: {
+			qtRepo + "#482": " " + strings.ToUpper(qtRepo) + "#482 ",
+			qtRepo + "#483": "Fix " + qtRepo + "#483",
+		}},
+	}
+	quotes := quoteEvidence(t, store, qtOrgA)
+	want := map[string]any{
+		qtIssue1: nil,
+		qtIssue2: "Fix " + qtIssue2 + " crash",
+		qtIssue3: "Fix login redirect",
+		qtPRRef:  nil,
+		qtPRBlnk: "Fix " + qtRepo + "#483",
+		qtPRUUID: nil,
+		"abc123": nil,
+	}
+	for id, entry := range quotes {
+		if entry["source_title"] != want[id] {
+			t.Fatalf("%s: source_title = %#v, want %#v", id, entry["source_title"], want[id])
+		}
+	}
+}

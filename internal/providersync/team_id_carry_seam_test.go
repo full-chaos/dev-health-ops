@@ -176,3 +176,25 @@ func TestEveryTeamIDWriteSiteRunsBehindTheCarryCensus(t *testing.T) {
 		t.Error("synccli.go: the Atlassian teams write is not preceded by CarryTeamIDsBeforeWrite in its function")
 	}
 }
+
+func TestRequireCarriedRefusesEveryUncarriedShape(t *testing.T) {
+	ran := false
+	inner := carrySeamCollector{ran: &ran}
+	conn := &carrySeamConn{}
+	for name, collector := range map[string]TeamCatalogCollector{
+		"bare collector":      inner,
+		"nil collector":       nil,
+		"carry without conn":  CarryFirstTeamCatalogCollector{Collector: inner},
+		"carry without inner": CarryFirstTeamCatalogCollector{Conn: conn},
+	} {
+		if err := RequireCarried(collector); !errors.Is(err, ErrTeamCatalogCollectorNotCarried) {
+			t.Errorf("%s: error = %v, want %v", name, err, ErrTeamCatalogCollectorNotCarried)
+		}
+	}
+	if err := RequireCarried(CarryFirstTeamCatalogCollector{Conn: conn, Writer: "test", Collector: inner}); err != nil {
+		t.Errorf("a carried collector: error = %v", err)
+	}
+	if ran || len(conn.queries) != 0 {
+		t.Errorf("RequireCarried ran the collector or read the store: ran=%v queries=%d", ran, len(conn.queries))
+	}
+}

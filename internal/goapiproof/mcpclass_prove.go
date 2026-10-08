@@ -256,6 +256,11 @@ func (r *Runner) MCPClassReceipts(outcomes []Outcome, rootSources map[string][]s
 		// divergence between the MCP pipeline and the document route blocks the root
 		// whether or not the document operation itself is receipt-backed.
 		bornGo := r.Config.DocRouteReference && !docBacked[outcome.Operation] && r.GoServed.BornInGo(outcome.Operation)
+		// With no document receipt behind it, a born-in-Go shape counts only if the match compared something: two empty answers agree on
+		// nothing, and a measurement that did not happen must not become a receipt.
+		if bornGo && sealed.comparedLeaves == 0 {
+			bornGo = false
+		}
 		if state == "executed" && r.Config.DocRouteReference && !docBacked[outcome.Operation] && !bornGo && (sealedMatches(sealed) || sealedStochasticCitation(sealed) != "") {
 			state, reason = "excluded", "doc_operation_not_receipt_backed"
 		}

@@ -1,6 +1,7 @@
 package goapiproof
 
 import (
+	"context"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -102,5 +103,33 @@ func TestBornInGoEntryIsNotANamedLimitForAllowExcluded(t *testing.T) {
 	}
 	if !ledgerHoldsUnprovenLimit(ledger, "featureFlagTimeseries") {
 		t.Error("featureFlagTimeseries lost its named limit")
+	}
+}
+
+// Two empty answers agree on nothing. With no document receipt behind a
+// born-in-Go shape, the class receipt is the only evidence, so a match that
+// compared no leaf is NOT_MEASURED and writes no receipt.
+func TestBornInGoShapeThatComparedNoLeafWritesNoReceipt(t *testing.T) {
+	empty := sealedMatch("sourceHealth", "")
+	empty.comparedLeaves = 0
+	runner := classRunner([]sealedOutcome{empty})
+	runner.Config.DocRouteReference = true
+	runner.GoServed = defaultLedgerForTest(t)
+	receipts, verdicts, err := runner.MCPClassReceipts([]Outcome{executedOutcome("sourceHealth", "")},
+		map[string][]string{mcpclass.Operation("sourceHealth"): {"sourceHealth"}}, map[string]bool{}, time.Now().UTC())
+	if err != nil || len(receipts) != 0 || len(verdicts) != 1 || verdicts[0].Executed != 0 || verdicts[0].TerminalState != "" ||
+		len(verdicts[0].Excluded) != 1 || !strings.Contains(verdicts[0].Excluded[0], "doc_operation_not_receipt_backed") {
+		t.Fatalf("receipts=%d verdicts=%+v err=%v, want NOT_MEASURED: no receipt, executed 0, the shape excluded", len(receipts), verdicts, err)
+	}
+}
+
+// The count is taken from the admitted candidate answer by Run and sealed.
+func TestRunSealsTheNonNullLeafCountOfTheCandidateAnswer(t *testing.T) {
+	runner := newDocRouteRunner(t, goLeg(docRouteAnswer), goLeg(docRouteAnswer), nil)
+	if _, _, err := runner.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := runner.sealed[0].comparedLeaves; got != 1 {
+		t.Fatalf("sealed comparedLeaves %d, want 1 (one non-null key)", got)
 	}
 }

@@ -391,3 +391,19 @@ func TestLLMSpanBodyReadFailureKeepsTheStatusClass(t *testing.T) {
 	_ = resp.Body.Close()
 	assertAllClass(t, llmSpans(recorder), 1, "model_not_found")
 }
+
+// A failed send names the failure class only, never the request URL.
+func TestLLMSpanTransportErrorNamesNoURL(t *testing.T) {
+	recordSpans(t)
+	dead := httptest.NewServer(http.NotFoundHandler())
+	url := dead.URL
+	dead.Close()
+	req, _ := http.NewRequest(http.MethodPost, url+"/secret-path?k=v", nil)
+	_, err := tracedLLMDo(http.DefaultClient, req, ProviderKindLocal, "m")
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+	if strings.Contains(err.Error(), "secret-path") || strings.Contains(err.Error(), "127.0.0.1") {
+		t.Fatalf("error names the URL: %v", err)
+	}
+}

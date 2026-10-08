@@ -134,7 +134,7 @@ func tracedLLMDo(client *http.Client, req *http.Request, provider ProviderKind, 
 	resp, err := httpguard.NoRedirects(client).Do(req.WithContext(spanCtx)) // the API key rides this request
 	if err != nil {
 		endLLMSpan(span, 0, classifyLLMSpan(0, err, ctx.Err()))
-		return nil, err
+		return nil, logging.TransportFailure(err)
 	}
 	resp.Body = &llmSpanBody{ReadCloser: resp.Body, span: span, status: resp.StatusCode, ctx: ctx}
 	return resp, nil

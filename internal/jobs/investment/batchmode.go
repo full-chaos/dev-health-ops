@@ -23,6 +23,7 @@ package investment
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"strconv"
 	"time"
 
@@ -120,6 +121,12 @@ func (m *Materializer) categorizeBatch(
 		return true
 	}
 	run.jobID = submission.ProviderJobID
+	// Named at once: a worker that dies before the batch ends leaves this
+	// line as the only trace of a batch that may still run and bill.
+	m.logger.InfoContext(ctx, "investment llm batch submitted",
+		"run_id", cfg.RunID, "provider", cfg.ProviderName, "model", model,
+		"provider_job_id", run.jobID, "input_file_id", submission.InputFileID, "items", len(items),
+		"timeout_seconds", int(timeout/time.Second))
 
 	state, err := run.wait(ctx, poll, timeout)
 	switch {
@@ -285,9 +292,14 @@ func (run *batchRun) detached(ctx context.Context) (context.Context, context.Can
 	return context.WithTimeout(context.WithoutCancel(ctx), batchCancelTimeout)
 }
 
-// log writes the one log line of a batch.
+// log writes the one log line of a batch: WARN for every outcome but
+// completed, so a timeout, a cancelled run or a failed batch is loud.
 func (run *batchRun) log(ctx context.Context, outcome string, state categorize.BatchState) {
-	run.m.logger.InfoContext(ctx, "investment llm batch complete",
+	level := slog.LevelWarn
+	if outcome == batchOutcomeCompleted {
+		level = slog.LevelInfo
+	}
+	run.m.logger.Log(ctx, level, "investment llm batch complete",
 		"run_id", run.cfg.RunID,
 		"provider", run.cfg.ProviderName,
 		"model", run.model,

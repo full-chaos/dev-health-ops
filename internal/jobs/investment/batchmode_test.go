@@ -313,7 +313,9 @@ func deadEndpoint(t *testing.T) string {
 
 // The rows a batch timeout writes are the rows a synchronous transport
 // failure writes: no outcome for any unit (post-processing gives each the
-// llm_task_failed fallback row) and the same failure count and class.
+// llm_task_failed fallback row), the same failure count and calls. Only the
+// failure class differs, on purpose: a timeout that won is batch_timeout, not
+// llm_error, so it is visible in the run's evidence.
 func TestBatchModeTimeoutFailsUnitsAsASynchronousTransportFailure(t *testing.T) {
 	pending := batchPending(t, 3)
 	want := runCategorize(t, context.Background(), fakeProvider(deadEndpoint(t)), batchTestConfig(LLMBatchModeSync), pending)
@@ -326,6 +328,10 @@ func TestBatchModeTimeoutFailsUnitsAsASynchronousTransportFailure(t *testing.T) 
 	cfg := batchTestConfig(LLMBatchModeProvider)
 	cfg.LLMBatchTimeout = 50 * time.Millisecond
 	got := runCategorize(t, context.Background(), fakeProvider(server.URL), cfg, pending)
+	if !reflect.DeepEqual(got.stats.LLMFailureCounts, map[string]int{"batch_timeout": 3}) {
+		t.Fatalf("failure counts %v, want batch_timeout for every unit", got.stats.LLMFailureCounts)
+	}
+	got.stats.LLMFailureCounts = want.stats.LLMFailureCounts
 	requireSameCategorization(t, got, want)
 	if fake.cancelled != 1 {
 		t.Fatalf("cancelled %d times, want 1", fake.cancelled)
@@ -492,4 +498,38 @@ func TestBatchModeUsesTheSynchronousPath(t *testing.T) {
 			t.Fatalf("result %+v", got)
 		}
 	})
+}
+
+// The provider job id is logged at submit, before the batch ends, and an
+// outcome other than completed is a WARN line.
+func TestBatchModeLogsTheJobAtSubmitAndATimeoutLoudly(t *testing.T) {
+	pending := batchPending(t, 2)
+	fake, server := newFakeOpenAI(t)
+	fake.statuses = []string{"in_progress"}
+	logs := &syncBuffer{}
+	materializer, err := NewMaterializer(unusedReader(t), unusedWriter(t), fakeProvider(server.URL), debugLogger(logs))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := batchTestConfig(LLMBatchModeProvider)
+	cfg.LLMBatchTimeout = 30 * time.Millisecond
+	stats := Stats{LLMFailureCounts: map[string]int{}}
+	if err := materializer.categorizePending(context.Background(), cfg, pending, map[int]categorize.CategorizationOutcome{}, &stats); err != nil {
+		t.Fatal(err)
+	}
+	text := logs.String()
+	submitted := strings.Index(text, `msg="investment llm batch submitted"`)
+	complete := strings.Index(text, `msg="investment llm batch complete"`)
+	if submitted < 0 || complete < submitted || !strings.Contains(text[submitted:complete], "provider_job_id=batch_1") {
+		t.Fatalf("no submit line with the job id before the end line:\n%s", text)
+	}
+	var endLine string
+	for _, line := range strings.Split(text, "\n") {
+		if strings.Contains(line, `msg="investment llm batch complete"`) {
+			endLine = line
+		}
+	}
+	if !strings.Contains(endLine, "level=WARN") || !strings.Contains(endLine, "outcome=timeout") {
+		t.Fatalf("the timeout end line is not a WARN line with outcome=timeout: %q", endLine)
+	}
 }

@@ -273,7 +273,11 @@ them again. A cancelled batch can still bill the requests the provider already
 answered; the run counts their tokens in its `llm_token_usage` row when the
 provider reports them. A rejected key, an unknown model or an exhausted quota
 ends the run with an error, as in `sync` mode. A batch is not resumed after a
-worker restart: the next run sends its own batch.
+worker restart: the next run sends its own batch. The log line
+`investment llm batch submitted` names the provider batch job as soon as it is
+created (look it up there to cancel a batch a stopped worker left running), and
+`investment llm batch complete` ends each batch: a warning unless the outcome is
+`completed`. A timeout counts as `batch_timeout` in the run's failure counts.
 
 Workspace-to-platform fallback defaults to platform after a configured org BYO
 is evaluated; an explicit organization fail_closed choice opts out of that

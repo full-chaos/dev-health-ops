@@ -173,9 +173,10 @@ func BatchMissingResultError(provider, model string) error {
 }
 
 // BatchTimeoutError is the error of each unit of a batch that did not finish
-// within the timeout. It classifies as a synchronous request timeout does.
+// within the timeout: a failed request, not deterministic, of class
+// batch_timeout.
 func BatchTimeoutError(provider, model string) error {
-	return &llmError{kind: llmErrorTimeout, message: "LLM provider batch did not finish within the timeout.", provider: provider, model: model}
+	return &llmError{kind: llmErrorBatchTimeout, message: "LLM provider batch did not finish within the timeout.", provider: provider, model: model}
 }
 
 // BatchEndedError is the error of each unit of a batch that ended failed,

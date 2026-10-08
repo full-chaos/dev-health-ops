@@ -30,9 +30,6 @@ query AIAttributionOverview($orgId: String!, $dateRange: AIDateRangeInput!, $sco
       evidence
       observedAt
       teamId
-      repoName
-      teamName
-      subjectTitle
       __typename
     }
     __typename

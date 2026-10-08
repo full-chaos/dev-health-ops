@@ -3,6 +3,7 @@
 package providersync
 
 import (
+	"hash/fnv"
 	"testing"
 	"time"
 
@@ -34,13 +35,16 @@ func (f retireFixture) openLeadRows(provider, teamID string) uint64 {
 	return countRows(f.t, f.ctx, f.conn, `SELECT count() FROM team_memberships FINAL WHERE org_id = ? AND provider = ? AND team_id = ? AND source = 'native' AND valid_to IS NULL`, f.orgID, provider, teamID)
 }
 
-// derived runs the real repository-ownership derivation for a project link
-// and a work item of that project, so the inferred row is the one the
-// producer writes.
+// derived seeds a work item of the project and a native issue-to-pull-request
+// link to the repository, so the inferred row is the one the producer writes
+// from the link.
 func (f retireFixture) derived(provider, workItem, projectID string, repo uuid.UUID, fullName string) {
 	f.t.Helper()
 	seedTeamRepoOwnershipRepos(f.t, f.ctx, f.conn, f.orgID, map[uuid.UUID]string{repo: fullName})
-	seedWorkItem(f.t, f.ctx, f.conn, f.orgID, workItem, provider, repo, projectID, f.old)
+	seedWorkItem(f.t, f.ctx, f.conn, f.orgID, workItem, provider, uuid.Nil, projectID, f.old)
+	prNumber := fnv.New32a()
+	_, _ = prNumber.Write([]byte(workItem))
+	seedWorkGraphIssuePR(f.t, f.ctx, f.conn, f.orgID, repo, workItem, prNumber.Sum32(), f.old)
 }
 
 func (f retireFixture) derive() {

@@ -1338,6 +1338,9 @@ var explainDriverRankOrderInsensitive = []OrderInsensitiveList{
 }
 
 var explainParity = Options{
+	GoOnlyKeys: map[string]GoOnlyKey{
+		"data.source": {Ticket: "CHAOS-8910", Reason: "Go-only: the stored provider(s) behind the item; the Python reference never served it."},
+	},
 	NumericLeavesDeclared: true,
 	FloatTierB:            explainAggregateFloats,
 	OrderInsensitiveLists: explainDriverRankOrderInsensitive,
@@ -6489,6 +6492,9 @@ func ValidateRESTCorpus() error {
 				return fmt.Errorf("goapiproof: REST corpus entry %q request %q sets CandidateShapeArray but BodyMode is %q, not RESTBodyModeCandidateShape", operation, req.Name, req.BodyMode)
 			}
 			if err := validateBaselineDefects(req.Parity.BaselineDefects); err != nil {
+				return fmt.Errorf("goapiproof: REST corpus entry %q request %q: %w", operation, req.Name, err)
+			}
+			if err := validateGoOnlyKeys(req.Parity.GoOnlyKeys); err != nil {
 				return fmt.Errorf("goapiproof: REST corpus entry %q request %q: %w", operation, req.Name, err)
 			}
 			if err := validateNumericLeaves(req.Parity); err != nil {

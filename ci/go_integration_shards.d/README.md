@@ -53,3 +53,5 @@ planner's printed weights, not from a hardcoded shard membership list --
 so a future package addition that erodes this margin fails that assertion
 loudly, with the actual numbers, instead of a human silently recounting a
 new shard-1 membership as fine.
+
+`internal/workerservice` is isolated by name (`INTEGRATION_ISOLATED_PACKAGE_KEYS` in `ci/check_go.sh`, CHAOS-8935): the planner gives it a shard of its own at its true weight and puts no other package there. One `go test` starts a shard's packages in alphabetical order, so a long package that sorts last started minutes late and set the job's wall time. Each isolated package takes its own shard, so `_shards.tsv` must count one shard per isolated package on top of the shards the other packages need. A name in that list that matches no discovered package fails the plan.

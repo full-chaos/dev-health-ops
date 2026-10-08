@@ -966,6 +966,10 @@ PROVIDER_INTEGRATION_PACKAGE_KEY="internal/providersync"
 # internal/jobs/metrics/daily is split by top-level test name the same way
 # (CHAOS-8813 follow-up): one `go test` of it took 22 of a 25 minute job.
 DAILY_INTEGRATION_PACKAGE_KEY="internal/jobs/metrics/daily"
+# Packages that get a shard of their own at their TRUE weight (CHAOS-8935).
+# One `go test` starts packages in alphabetical order, so a long package that
+# sorts last starts minutes late and sets the shard's wall time, not its weight.
+INTEGRATION_ISOLATED_PACKAGE_KEYS=" ${DEV_HEALTH_GO_INTEGRATION_ISOLATED_KEYS:-internal/workerservice} "
 DAILY_TEST_SHARD_COUNT=0
 DAILY_INTEGRATION_TEST_WEIGHT=0
 DAILY_ORDINARY_TEST_WEIGHT=0
@@ -1232,6 +1236,12 @@ plan_integration_shards() {
       die "integration shard manifest names undiscovered or denylisted package '${manifest_key}'"
     fi
   done
+  local isolated_key
+  for isolated_key in ${INTEGRATION_ISOLATED_PACKAGE_KEYS}; do
+    if [ -z "${discovered_run_packages[${isolated_key}]+set}" ]; then
+      die "isolated integration package '${isolated_key}' matches no discovered package"
+    fi
+  done
   if [ "${#INTEGRATION_SHARD_WEIGHTS[@]}" -ne "${runnable_count}" ]; then
     die "integration shard manifest/package count mismatch after equality validation"
   fi
@@ -1249,15 +1259,27 @@ plan_integration_shards() {
     INTEGRATION_SHARD_NON_PROVIDER_COUNTS[shard]=0
   done
 
+  local isolated closed_shards=" "
   while IFS=$'\t' read -r weight key; do
-    selected_shard=1
-    selected_total="${INTEGRATION_SHARD_TOTALS[1]}"
-    for ((shard = 2; shard <= INTEGRATION_SHARD_COUNT; shard++)); do
-      if [ "${INTEGRATION_SHARD_TOTALS[${shard}]}" -lt "${selected_total}" ]; then
+    isolated=0
+    case "${INTEGRATION_ISOLATED_PACKAGE_KEYS}" in *" ${key} "*) isolated=1 ;; esac
+    selected_shard=0
+    selected_total=0
+    for ((shard = 1; shard <= INTEGRATION_SHARD_COUNT; shard++)); do
+      case "${closed_shards}" in *" ${shard} "*) continue ;; esac
+      if [ "${isolated}" -eq 1 ] && [ "${INTEGRATION_SHARD_PACKAGE_COUNTS[${shard}]}" -ne 0 ]; then
+        continue
+      fi
+      if [ "${selected_shard}" -eq 0 ] || [ "${INTEGRATION_SHARD_TOTALS[${shard}]}" -lt "${selected_total}" ]; then
         selected_shard="${shard}"
         selected_total="${INTEGRATION_SHARD_TOTALS[${shard}]}"
       fi
     done
+    [ "${selected_shard}" -ne 0 ] \
+      || die "integration shard plan has no shard left for '${key}'"
+    if [ "${isolated}" -eq 1 ]; then
+      closed_shards+="${selected_shard} "
+    fi
     INTEGRATION_SHARD_BY_KEY["${key}"]="${selected_shard}"
     INTEGRATION_SHARD_TOTALS[selected_shard]=$((
       INTEGRATION_SHARD_TOTALS[selected_shard] + weight

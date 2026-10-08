@@ -6,6 +6,7 @@ import (
 	"errors"
 	"slices"
 	"sort"
+	"strings"
 	"testing"
 
 	"github.com/full-chaos/dev-health-ops/internal/joboperator"
@@ -30,7 +31,14 @@ func (auditor *refusingAuditor) Begin(_ context.Context, event joboperator.Audit
 // pass every local check.
 type directWriteVerb struct {
 	argv   []string
-	dryRun bool // the verb has --dry-run
+	dryRun bool   // the verb has --dry-run
+	stdin  string // the process stdin (an --org-stdin verb reads its organization there)
+}
+
+// runtimeFor gives runtime the verb's stdin.
+func (verb directWriteVerb) runtimeFor(runtime *operatorRuntime) *operatorRuntime {
+	runtime.stdin = strings.NewReader(verb.stdin)
+	return runtime
 }
 
 const auditTestOrg = "00000000-0000-4000-8000-000000000001"
@@ -55,6 +63,7 @@ func directWriteVerbs() map[string]directWriteVerb {
 		"providersync retire-linear-pseudo-projects":         {argv: []string{"providersync", "retire-linear-pseudo-projects", "--org", org}, dryRun: true},
 		"providersync retire-stale-linear-project-ownership": {argv: []string{"providersync", "retire-stale-linear-project-ownership", "--org", org}, dryRun: true},
 		"providersync retire-jira-key-projects":              {argv: []string{"providersync", "retire-jira-key-projects", "--org", org}, dryRun: true},
+		"providersync retire-jira-project-as-team":           {argv: []string{"providersync", "retire-jira-project-as-team", "--org-stdin"}, dryRun: true, stdin: org + "\n"},
 		"sync-dispatch-outbox close-backlog":                 {argv: []string{"sync-dispatch-outbox", "close-backlog"}, dryRun: true},
 	}
 }
@@ -71,7 +80,7 @@ func TestEveryDirectWriteVerbIsAuditedBeforeItWrites(t *testing.T) {
 	seen := map[string]bool{}
 	for name, verb := range directWriteVerbs() {
 		auditor := &refusingAuditor{}
-		runtime := commandRuntimeWithAuditor(t, commandAuthorizer{}, auditor)
+		runtime := verb.runtimeFor(commandRuntimeWithAuditor(t, commandAuthorizer{}, auditor))
 		var stdout, stderr bytes.Buffer
 		code := dispatch(context.Background(), runtime, append(slices.Clone(verb.argv), auditFlags()...), &stdout, &stderr)
 		if code != 1 || stderr.String() != "{\"error\":{\"code\":\"audit_unavailable\"}}\n" || stdout.Len() != 0 {
@@ -106,7 +115,7 @@ func TestDirectWriteDryRunWritesNoAuditRow(t *testing.T) {
 			continue
 		}
 		auditor := &refusingAuditor{}
-		runtime := commandRuntimeWithAuditor(t, commandAuthorizer{}, auditor)
+		runtime := verb.runtimeFor(commandRuntimeWithAuditor(t, commandAuthorizer{}, auditor))
 		var stdout, stderr bytes.Buffer
 		code := dispatch(context.Background(), runtime, append(slices.Clone(verb.argv), "--dry-run"), &stdout, &stderr)
 		if len(auditor.events) != 0 {
@@ -132,7 +141,7 @@ func TestDirectWriteRequiresReasonAndCorrelation(t *testing.T) {
 			"bad correlation":  {"--reason", "operator_test", "--correlation-id", "has space"},
 		} {
 			auditor := &refusingAuditor{}
-			runtime := commandRuntimeWithAuditor(t, commandAuthorizer{err: joboperator.ErrAuthorization}, auditor)
+			runtime := verb.runtimeFor(commandRuntimeWithAuditor(t, commandAuthorizer{err: joboperator.ErrAuthorization}, auditor))
 			var stdout, stderr bytes.Buffer
 			code := dispatch(context.Background(), runtime, append(slices.Clone(verb.argv), flags...), &stdout, &stderr)
 			if code != 2 || stderr.String() != invalidRequestJSON || len(auditor.events) != 0 {
@@ -146,7 +155,7 @@ func TestDirectWriteRequiresReasonAndCorrelation(t *testing.T) {
 func TestDirectWriteRefusesAnUnauthorizedCaller(t *testing.T) {
 	for name, verb := range directWriteVerbs() {
 		auditor := &refusingAuditor{}
-		runtime := commandRuntimeWithAuditor(t, commandAuthorizer{err: joboperator.ErrAuthorization}, auditor)
+		runtime := verb.runtimeFor(commandRuntimeWithAuditor(t, commandAuthorizer{err: joboperator.ErrAuthorization}, auditor))
 		var stdout, stderr bytes.Buffer
 		code := dispatch(context.Background(), runtime, append(slices.Clone(verb.argv), auditFlags()...), &stdout, &stderr)
 		if code != 1 || stderr.String() != "{\"error\":{\"code\":\"unauthorized\"}}\n" || stdout.Len() != 0 || len(auditor.events) != 0 {

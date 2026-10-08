@@ -117,13 +117,18 @@ func TestPlanOwnershipSnapshotClosesNothingForASnapshotThatIsNotComplete(t *test
 type ownershipWriter struct {
 	provider string
 	// planner is the function that plans this writer's rows through
-	// PlanOwnershipSnapshot. Every jira writer has one.
+	// PlanOwnershipSnapshot. Every jira writer that writes from a provider
+	// snapshot has one.
 	planner string
 	// complete says where the planner's Complete value comes from: the
 	// end-of-data signal behind it. Every planner has one.
 	complete string
 	// note says what the writer does when it has no planner.
 	note string
+	// retiresClass says which class of rows the writer closes as a whole. It
+	// inserts closed rows only (valid_to set) and reads no provider snapshot,
+	// so it has no planner and no completeness.
+	retiresClass string
 }
 
 var ownershipWriters = map[string]ownershipWriter{
@@ -137,6 +142,11 @@ var ownershipWriters = map[string]ownershipWriter{
 		provider: "jira", planner: "internal/atlassianteams.planOwnership",
 		complete: "its `complete` argument = Rows.ProjectLinksComplete (atlassianteams.Collect, collect.go: one finished " +
 			"project-link read for every active team; each read follows the cursor to the end or fails Collect)",
+	},
+	"internal/providersync.RetireJiraProjectAsTeamRows": {
+		provider: "jira", retiresClass: "the open project-as-team rows (source 'native', team_id = project_key, team not an " +
+			"Atlassian team): each is written again with valid_to set, none is opened; pinned against a real ClickHouse by " +
+			"TestRetireJiraProjectAsTeamRows",
 	},
 	"internal/providersync.LinearReferenceCatalogClickHouseEffects.writeOwnership": {
 		provider: "linear", note: "insert only, valid_from = the run time; a stale link is removed by the operator verb retire-stale-linear-project-ownership; not on the shared rule yet",
@@ -331,6 +341,10 @@ func TestJiraOwnershipWriterCensus(t *testing.T) {
 	for name, writer := range ownershipWriters {
 		wantWriters = append(wantWriters, name)
 		switch {
+		case writer.provider == "jira" && strings.TrimSpace(writer.retiresClass) != "":
+			if writer.planner != "" || writer.complete != "" {
+				t.Errorf("%s retires a class of rows and names a planner or a completeness: a writer is one or the other", name)
+			}
 		case writer.provider == "jira":
 			jira++
 			if writer.planner == "" {

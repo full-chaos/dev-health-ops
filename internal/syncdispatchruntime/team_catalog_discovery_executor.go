@@ -207,6 +207,11 @@ func (executor *TeamCatalogDiscoveryExecutor) Discover(
 		OrgID: orgID, SyncRunID: runID, IntegrationID: integrationID,
 		SyncOptions: syncOptions, Strict: true, SourceExternalIDs: sourceExternalIDs,
 	}, credential, client, selections, executor.now())
+	// Observed before the error return: the retire is its own step and stands
+	// when the walk after it fails. Never observed with zero.
+	if executor.Observer != nil && result.ProjectAsTeamRetired > 0 {
+		_ = executor.Observer.ObserveTeamCatalogRowsWritten(normalizedProvider, jobruntime.TeamCatalogTableProjectAsTeamRetired, result.ProjectAsTeamRetired)
+	}
 	if err != nil {
 		return nil, err
 	}

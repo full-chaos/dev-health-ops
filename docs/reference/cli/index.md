@@ -302,9 +302,9 @@ dho sync teams --provider linear --org "$ORG_ID" \
   --auth "$LINEAR_API_KEY"
 ```
 
-Team rows for Jira **projects** come from the automatic team import that runs after a Jira sync (`internal/providersync/jira_team_catalog.go`). There is no command for it, and `--provider jira` here syncs Atlassian Teams, which is different data.
+A Jira **project** is not a team. The automatic team import that runs after a Jira sync (`internal/providersync/jira_team_catalog.go`) writes the Jira `projects` rows and retires the project-as-team rows that earlier versions wrote (see [`providersync retire-jira-project-as-team`](#providersync-retire-jira-project-as-team-chaos-8888)). `--provider jira` here syncs the Atlassian Teams: they are the Jira teams.
 
-- **`--provider jira`** syncs the organization's **Atlassian Teams** (structure, members, connected projects; `--structure`, `--members`, `--projects`; with none of the three, all are synced; `--allow-empty`). A team's projects are the Jira projects ("spaces") the team is connected to in Atlassian, one ownership row per link; a team with no member is synced too. Members and project links that a team no longer has are retracted (closed); an empty result is refused, so a permissions problem retracts nothing, unless `--allow-empty`. A project link is closed only by a run that read every team's links to the end: when a team's link read fails, the run still writes the teams, the members and the links it read, closes no link, and logs a warning (`atlassian team project links incomplete`). A Jira project link that gets no row (no readable project id, or no key) closes no link of its team in that run; the team's other links are written, and the run logs a warning (`atlassian team project links not written`). A gateway answer with a missing list or a missing `pageInfo` is a failed read, not an empty one. Its Atlassian credential (email, api token, tenant URL) is resolved from the org's **stored jira integration** in PostgreSQL (`POSTGRES_URI` or `--db`), the same integration row and credential that work-items sync and the worker's post-sync team auto-import use, decrypted with `SETTINGS_ENCRYPTION_KEY`. The integration's `atlassian_organization_id` config key is an **override only**: when absent, it is derived live from the AGG (Atlassian GraphQL gateway) `tenantContexts(cloudIds: [...])` query using the same stored credential (`internal/atlassianteams.ResolveOrganizationID`). A set value must be UUID- or ARI-shaped (`ari:cloud:platform::org/<uuid>`), validated on save by the admin credentials API (`PATCH /api/v1/admin/credentials/jira/{name}`). `atlassian_cloud_id` is likewise optional and otherwise derived live from the tenant's own site (its `_edge/tenant_info` endpoint). `ATLASSIAN_ORGANIZATION_ID`, `ATLASSIAN_CLOUD_ID`, `ATLASSIAN_EMAIL`, `ATLASSIAN_API_TOKEN` and `ATLASSIAN_JIRA_BASE_URL` (`_FILE` accepted; `JIRA_EMAIL`, `JIRA_API_TOKEN` and `JIRA_BASE_URL` as fallbacks) each override the corresponding stored or resolved value. When `ATLASSIAN_EMAIL`, `ATLASSIAN_API_TOKEN` and `ATLASSIAN_JIRA_BASE_URL` are ALL set, the verb runs fully from the environment with no database at all (an offline or test path only). The same collection also runs automatically as an additional step of the jira team-catalog auto-import, whenever team import is selected (`auto_import_teams`, `auto_import_projects`, `auto_import_members`), so a normal scheduled jira sync produces Atlassian Teams rows on its own. A resolution failure (no organization context, or no permission) degrades non-strict: it logs and keeps the project-as-team result. See `architecture/team-attribution.md` §0.2a.
+- **`--provider jira`** syncs the organization's **Atlassian Teams** (structure, members, connected projects; `--structure`, `--members`, `--projects`; with none of the three, all are synced; `--allow-empty`). A team's projects are the Jira projects ("spaces") the team is connected to in Atlassian, one ownership row per link; a team with no member is synced too. Members and project links that a team no longer has are retracted (closed); an empty result is refused, so a permissions problem retracts nothing, unless `--allow-empty`. A project link is closed only by a run that read every team's links to the end: when a team's link read fails, the run still writes the teams, the members and the links it read, closes no link, and logs a warning (`atlassian team project links incomplete`). A Jira project link that gets no row (no readable project id, or no key) closes no link of its team in that run; the team's other links are written, and the run logs a warning (`atlassian team project links not written`). A gateway answer with a missing list or a missing `pageInfo` is a failed read, not an empty one. Its Atlassian credential (email, api token, tenant URL) is resolved from the org's **stored jira integration** in PostgreSQL (`POSTGRES_URI` or `--db`), the same integration row and credential that work-items sync and the worker's post-sync team auto-import use, decrypted with `SETTINGS_ENCRYPTION_KEY`. The integration's `atlassian_organization_id` config key is an **override only**: when absent, it is derived live from the AGG (Atlassian GraphQL gateway) `tenantContexts(cloudIds: [...])` query using the same stored credential (`internal/atlassianteams.ResolveOrganizationID`). A set value must be UUID- or ARI-shaped (`ari:cloud:platform::org/<uuid>`), validated on save by the admin credentials API (`PATCH /api/v1/admin/credentials/jira/{name}`). `atlassian_cloud_id` is likewise optional and otherwise derived live from the tenant's own site (its `_edge/tenant_info` endpoint). `ATLASSIAN_ORGANIZATION_ID`, `ATLASSIAN_CLOUD_ID`, `ATLASSIAN_EMAIL`, `ATLASSIAN_API_TOKEN` and `ATLASSIAN_JIRA_BASE_URL` (`_FILE` accepted; `JIRA_EMAIL`, `JIRA_API_TOKEN` and `JIRA_BASE_URL` as fallbacks) each override the corresponding stored or resolved value. When `ATLASSIAN_EMAIL`, `ATLASSIAN_API_TOKEN` and `ATLASSIAN_JIRA_BASE_URL` are ALL set, the verb runs fully from the environment with no database at all (an offline or test path only). The same collection also runs automatically as an additional step of the jira team-catalog auto-import, whenever team import is selected (`auto_import_teams`, `auto_import_projects`, `auto_import_members`), so a normal scheduled jira sync produces Atlassian Teams rows on its own. A resolution failure (no organization context, or no permission) degrades non-strict: it logs and keeps the result of the team catalog step (projects and legacy links). See `architecture/team-attribution.md` §0.2a.
 - **`--provider github`** `--owner <github-org> [--auth <token>]` (the token else `GITHUB_TOKEN`; a GitHub Enterprise base URL from `GITHUB_URL` or `GITHUB_BASE_URL`) runs the provider's **team catalog**: the producer the worker's post-sync team autoimport runs. It writes the ClickHouse team dimensions the team-attribution contract prescribes (`teams` rows of `provider_access`, `team_memberships`, `team_repo_ownership`; see `architecture/team-attribution.md` §0). A missing owner, a missing token, or an empty result without `--allow-empty` exits 1; a provider or write failure exits 1 with nothing written. A `403` on one team's repositories fails the run with exit 1 and writes nothing. A team with a non-zero `sync_policy` in `team_sync_policies` is left untouched and reported as `teams_skipped_policy`, not as an empty catalog. A team row has `id` `gh:<slug>`, a trimmed `name`, the provider's `description`, `members` as provider-scoped identity facets (`github:<login>` plus the member's public email, lower-cased), a stable `team_uuid` (uuid5 of the team id), `provider` `github`, `native_team_key` (the slug), `repo_patterns` (the team's repositories as `owner/name`), and `manual_members` (an admin override survives). The catalog writes its tables in order and not in one transaction: a write that fails part way leaves the earlier tables written, and the next run finishes them.
 - **`--provider gitlab`** `--owner <group-path> [--auth <token>]` (the token else `GITLAB_TOKEN`; the instance URL from `GITLAB_URL`, default `https://gitlab.com`) runs the same team catalog seam for GitLab. The group and its direct subgroups become `teams` rows (`provider_access`, `id` `gl:<full_path>`, `native_team_key` the group's `full_path`, `project_keys` the group's own `path_with_namespace` values). The group's own projects populate `team_project_ownership`, members populate `team_memberships` (identity facets `gitlab:<username>` plus the member's email), and the group's full project tree, including subgroups, populates the native `projects` catalog (CHAOS-3380).
 - **`--provider linear`** `[--auth <token>]` (the token else `LINEAR_API_KEY`; `LINEAR_URL` points the verb at a fake API for testing only) needs no `--owner`: an API key scopes the whole Linear workspace, so every team is in scope. Teams become `teams` rows (`provider_access`, `id` the bare team key, `native_team_key` the team's key). Members populate `team_memberships` and the shared `members` dimension (identity facets `linear:<email-or-id>`, lower-cased), and an inactive member is excluded. Linear's own projects populate the native `projects` catalog and `team_project_ownership` when `--projects` is selected. An org-archived Linear team is included, as the workspace returns it. No description is invented when the provider has none.
@@ -764,8 +764,8 @@ verbs, and also the verbs that write outside the operator service:
 `metrics daily-start`, `daily-redrive`, `daily-finalize`, `finalize-redrive`,
 `partition-recompute`, `execution-repair`, `metrics remaining start`,
 `trigger-backstop` and `redrive`, `workgraph trigger` and `repair`,
-`investment trigger`, `external-recompute replay`, both `providersync retire-*`
-verbs and `sync-dispatch-outbox close-backlog`. Each one writes its
+`investment trigger`, `external-recompute replay`, every `providersync retire-*`
+verb and `sync-dispatch-outbox close-backlog`. Each one writes its
 `worker_operator_audits` row before it writes anything else, and completes it
 `succeeded` or `failed`. If the row cannot be written, the command stops with
 `audit_unavailable` and changes nothing. `--dry-run` writes nothing, so it
@@ -1535,6 +1535,63 @@ River, the only remaining transport. To roll back, redeploy a previously
 deployed Go revision from the rollback tag set.
 
 ---
+
+### `dho workers providersync`
+
+#### `providersync retire-jira-project-as-team` (CHAOS-8888)
+
+Earlier versions of the Jira team catalog made a team of every Jira project
+(`teams.id` = the project key, `native_team_key` = the same key), with an
+ownership row from that team to the project and a membership row for the
+project lead. A Jira project is not a team: the Atlassian Teams are the Jira
+teams. Every Jira team-catalog run now retires these rows of its organization,
+before its walk and whatever the walk returns. This verb does the same retire
+now, for one organization, with the same function
+(`providersync.RetireJiraProjectAsTeamRows`).
+
+Nothing is deleted:
+
+- each active project-as-team `teams` row (`provider = 'jira'`, a
+  `native_team_key` equal to the `id`, never a team ARI) is written again with
+  `is_active = 0`;
+- its open `team_project_ownership` rows (`source = 'native'`,
+  `team_id = project_key`) and `team_memberships` rows (`source = 'native'`)
+  are written again with `valid_to` set; `valid_from` stays the first-seen
+  value;
+- the open `team_repo_ownership` rows derived from that ownership
+  (`source = 'inferred'`) are closed the same way: the retired team owns no
+  repository any more, so team authorization through it ends;
+- a row with admin members (`manual_members`) or a sync policy is retired too,
+  and counted.
+
+Not touched: Atlassian team rows (their `native_team_key` is the team ARI),
+`jira_legacy` links, admin teams (an admin import writes `provider = ''` and
+no native key, so an admin team whose id is a project key is not in this
+class), the teams of the other providers, other organizations, and the
+`projects` rows.
+
+The organization comes from stdin only: `--org-stdin` is required and there
+is no `--org`. The stdin rules are those of
+[`metrics daily-start`](#metrics-daily-start-chaos-5055); empty stdin is a
+usage error (exit 2). The verb prints no organization id on stdout, stderr or
+in its own log lines; the audit row holds it. It prints counts only, under
+`retire_jira_project_as_team`: found (`teams`, `teams_with_manual_members`,
+`teams_with_sync_policy`, `ownership_rows`, `membership_rows`,
+`repo_ownership_rows`) and written (`teams_retired`, `ownership_closed`,
+`memberships_closed`, `repo_ownership_closed`; 0 with `--dry-run`). A second
+run reports zero.
+
+```bash
+kubectl exec -i <worker-pod> -- dho workers providersync retire-jira-project-as-team \
+  --org-stdin --dry-run < org-id-source
+kubectl exec -i <worker-pod> -- dho workers providersync retire-jira-project-as-team \
+  --org-stdin --reason <code> --correlation-id <id> < org-id-source
+```
+
+After the retire, attribution reads ACTIVE teams only, for every provider: a
+retired team takes no work item, and a Jira project that no Atlassian team is
+connected to is unassigned. A recompute of an old day leaves the items of a
+now-inactive team unassigned. See `architecture/team-attribution.md` §0.4c.
 
 ## Maintenance
 

@@ -10,24 +10,45 @@ import (
 	"time"
 )
 
-// CHAOS-8892: `--org-stdin` on the two recompute verbs.
+// CHAOS-8892: `--org-stdin` on the two recompute verbs; CHAOS-8888: on
+// `providersync retire-jira-project-as-team`, which takes its organization
+// from stdin only.
 
 const orgStdinTestOrg = "5d8e2c1a-7b3f-4a90-b6d4-0e9f1a2b3c4d"
 
-// orgStdinVerbs are the verbs that accept --org-stdin, with the other flags
-// that make a request valid.
+// orgStdinVerbs are the verbs that accept --org-stdin (group, name and the
+// other flags that make a request valid). The set is orgStdinVerbNames.
 func orgStdinVerbs() map[string][]string {
 	return map[string][]string{
-		"daily-start": {"daily-start", "--day", "2026-08-01"},
-		"partition-recompute": {"partition-recompute", "--from", "2026-08-01", "--to", "2026-08-01",
+		"metrics daily-start": {"metrics", "daily-start", "--day", "2026-08-01"},
+		"metrics partition-recompute": {"metrics", "partition-recompute", "--from", "2026-08-01", "--to", "2026-08-01",
 			"--family", "repo_user_commit", "--review-evidence", "testing"},
+		"providersync retire-jira-project-as-team": {"providersync", "retire-jira-project-as-team"},
+	}
+}
+
+// orgStdinOnlyVerbs have no --org flag: the organization comes from stdin only.
+var orgStdinOnlyVerbs = map[string]bool{"providersync retire-jira-project-as-team": true}
+
+// The test table and the preflight set name the same verbs.
+func TestOrgStdinVerbsAreThePreflightSet(t *testing.T) {
+	if len(orgStdinVerbs()) != len(orgStdinVerbNames) {
+		t.Fatalf("test verbs %d, orgStdinVerbNames %d", len(orgStdinVerbs()), len(orgStdinVerbNames))
+	}
+	for name, base := range orgStdinVerbs() {
+		if !orgStdinVerbNames[name] {
+			t.Errorf("%s is not in orgStdinVerbNames", name)
+		}
+		if hasFlag, _ := orgStdinVerb(append(append([]string{}, base...), "--org-stdin")); !hasFlag {
+			t.Errorf("%s: orgStdinVerb does not see --org-stdin", name)
+		}
 	}
 }
 
 func runOrgStdinVerb(runtime *operatorRuntime, base []string, extra ...string) (int, string, string) {
 	var stdout, stderr bytes.Buffer
 	args := append(append(append([]string{}, base...), auditFlags()...), extra...)
-	code := dispatchMetrics(context.Background(), runtime, args, &stdout, &stderr)
+	code := dispatch(context.Background(), runtime, args, &stdout, &stderr)
 	return code, stdout.String(), stderr.String()
 }
 
@@ -81,6 +102,7 @@ func TestOrgStdinNilStdinIsEmpty(t *testing.T) {
 }
 
 // Without the flag nothing changes: stdin is not read and --org still rules.
+// A stdin-only verb refuses both a missing --org-stdin and an --org.
 func TestOrgStdinFlagAbsentLeavesOrgPathAlone(t *testing.T) {
 	for verb, base := range orgStdinVerbs() {
 		reader := &countingReader{}
@@ -89,7 +111,11 @@ func TestOrgStdinFlagAbsentLeavesOrgPathAlone(t *testing.T) {
 			t.Fatalf("%s: missing --org: code=%d stderr=%q", verb, code, stderr)
 		}
 		code, _, stderr = runOrgStdinVerb(&operatorRuntime{stdin: reader}, base, "--org", orgStdinTestOrg)
-		if code != 1 || !strings.Contains(stderr, "operator_backend_unavailable") {
+		if orgStdinOnlyVerbs[verb] {
+			if code != 2 || stderr != invalidRequestJSON {
+				t.Fatalf("%s: --org on a stdin-only verb: code=%d stderr=%q, want invalid_request", verb, code, stderr)
+			}
+		} else if code != 1 || !strings.Contains(stderr, "operator_backend_unavailable") {
 			t.Fatalf("%s: --org path: code=%d stderr=%q", verb, code, stderr)
 		}
 		if reader.reads != 0 {
@@ -120,8 +146,25 @@ func TestOrgStdinReachesSameRequestAndStaysOutOfOutput(t *testing.T) {
 			}
 			return auditor, stdout, stderr, logs.String()
 		}
-		viaOrg, _, _, orgLogs := audit([]string{"--org", orgStdinTestOrg}, "")
 		viaStdin, stdout, stderr, stdinLogs := audit([]string{"--org-stdin"}, strings.ToUpper(orgStdinTestOrg)+"\r\n")
+		if orgStdinOnlyVerbs[verb] {
+			// No --org path to compare with: the audit request holds the
+			// canonical id, and the refused-write log line exists but holds
+			// no id.
+			if len(viaStdin.events) != 1 || viaStdin.events[0].ResourceType != "organization" || viaStdin.events[0].ResourceID != orgStdinTestOrg {
+				t.Fatalf("%s: audit requests %+v, want one for the organization from stdin", verb, viaStdin.events)
+			}
+			if !strings.Contains(stdinLogs, "audited write refused before it ran") {
+				t.Fatalf("%s: control: no refused-write log line, so the log check below proves nothing: %q", verb, stdinLogs)
+			}
+			for name, text := range map[string]string{"stdout": stdout, "stderr": stderr, "logs": stdinLogs} {
+				if strings.Contains(strings.ToLower(text), orgStdinTestOrg) {
+					t.Fatalf("%s: %s holds the org id: %q", verb, name, text)
+				}
+			}
+			continue
+		}
+		viaOrg, _, _, orgLogs := audit([]string{"--org", orgStdinTestOrg}, "")
 		if len(viaOrg.events) == 1 && len(viaStdin.events) == 1 {
 			viaOrg.events[0].CreatedAt, viaStdin.events[0].CreatedAt = time.Time{}, time.Time{}
 		}
@@ -141,11 +184,13 @@ func TestOrgStdinReachesSameRequestAndStaysOutOfOutput(t *testing.T) {
 
 // --dry-run with stdin: nothing printed holds the id either.
 func TestOrgStdinDryRunPrintsNoOrg(t *testing.T) {
-	runtime := commandRuntimeWithAuditor(t, commandAuthorizer{}, &refusingAuditor{})
-	runtime.stdin = strings.NewReader(orgStdinTestOrg + "\n")
-	code, stdout, stderr := runOrgStdinVerb(runtime, orgStdinVerbs()["partition-recompute"], "--org-stdin", "--dry-run")
-	if code == 2 || strings.Contains(stdout+stderr, orgStdinTestOrg) {
-		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout, stderr)
+	for _, verb := range []string{"metrics partition-recompute", "providersync retire-jira-project-as-team"} {
+		runtime := commandRuntimeWithAuditor(t, commandAuthorizer{}, &refusingAuditor{})
+		runtime.stdin = strings.NewReader(orgStdinTestOrg + "\n")
+		code, stdout, stderr := runOrgStdinVerb(runtime, orgStdinVerbs()[verb], "--org-stdin", "--dry-run")
+		if code == 2 || strings.Contains(stdout+stderr, orgStdinTestOrg) {
+			t.Fatalf("%s: code=%d stdout=%q stderr=%q", verb, code, stdout, stderr)
+		}
 	}
 }
 
@@ -184,13 +229,13 @@ func TestExecuteRefusesBadOrgStdinBeforeBuildingARuntime(t *testing.T) {
 		args := append(append([]string{}, base...), auditFlags("--org-stdin")...)
 		for name, stdin := range map[string]string{"empty": "", "two lines": orgStdinTestOrg + "\n" + orgStdinTestOrg + "\n"} {
 			var stdout, stderr bytes.Buffer
-			code := executeWithStdin(context.Background(), append([]string{"metrics"}, args...), empty, strings.NewReader(stdin), &stdout, &stderr)
+			code := executeWithStdin(context.Background(), args, empty, strings.NewReader(stdin), &stdout, &stderr)
 			if code != 2 || !strings.Contains(stderr.String(), "org_stdin_") || strings.Contains(stderr.String(), orgStdinTestOrg) {
 				t.Fatalf("%s/%s: code=%d stderr=%q", verb, name, code, stderr.String())
 			}
 		}
 		var stdout, stderr bytes.Buffer
-		code := executeWithStdin(context.Background(), append([]string{"metrics"}, args...), empty, strings.NewReader(orgStdinTestOrg+"\n"), &stdout, &stderr)
+		code := executeWithStdin(context.Background(), args, empty, strings.NewReader(orgStdinTestOrg+"\n"), &stdout, &stderr)
 		if code != 1 || !strings.Contains(stderr.String(), "configuration_error") || strings.Contains(stderr.String(), orgStdinTestOrg) {
 			t.Fatalf("%s: valid id: code=%d stderr=%q, want to pass validation and stop at configuration", verb, code, stderr.String())
 		}

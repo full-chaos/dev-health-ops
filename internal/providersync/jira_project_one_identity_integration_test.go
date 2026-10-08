@@ -55,14 +55,17 @@ func countRows(t *testing.T, ctx context.Context, conn driver.Conn, query string
 const openJiraOwnershipCount = `SELECT count() FROM team_project_ownership FINAL WHERE org_id = ? AND provider = 'jira' AND team_id = ? AND project_id = ? AND valid_to IS NULL`
 
 // One Jira project is one project: the team catalog and the work-items route
-// name it by the same native id, so the team that owns the project reaches the
+// name it by the same native id, so a team that owns the project reaches the
 // project's work items through ownership. Both rows come from the real
 // producers -- the catalog collector against a provider answer, and the
 // work-item normalizer with the route's own `projects` row builder.
 //
-// The store starts in the state the old catalog left: an open ownership row
-// and a `projects` row on an id built from the project key. The first sync
-// closes that ownership row; the operator cleanup removes the `projects` row.
+// The store starts in the state the old catalog left: a team made out of the
+// project (a project-as-team) with its lead, open ownership rows and a
+// `projects` row on an id built from the project key. The first sync retires
+// the project-as-team with every row of it and writes none again: the project
+// is a project, and the teams that own it are the linked ops team and the
+// Atlassian team. The operator cleanup removes the key-built `projects` row.
 func TestTeamReachesItsJiraProjectsWorkItemsThroughOwnership(t *testing.T) {
 	ctx, conn := newWorkItemEffectsConn(t)
 	lease := providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil })
@@ -78,8 +81,16 @@ func TestTeamReachesItsJiraProjectsWorkItemsThroughOwnership(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	// An Atlassian Teams link shares provider and source with the catalog's
-	// rows. It is not the catalog's to close.
+	if err := conn.Exec(ctx, `INSERT INTO teams (id, team_uuid, name, members, manual_members, project_keys, repo_patterns, is_active, updated_at, org_id, provider, native_team_key) VALUES ('OPS', ?, 'Ops Project', [], [], ['OPS'], [], 1, ?, ?, 'jira', 'OPS')`,
+		uuid.New(), old, orgID); err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.Exec(ctx, `INSERT INTO team_memberships (org_id, provider, team_id, member_id, identity_facets, source, is_primary, specificity, priority, valid_from, updated_at) VALUES (?, 'jira', 'OPS', 'jira:lead-1', [], 'native', 1, 100, 10, ?, ?)`,
+		orgID, old, old); err != nil {
+		t.Fatal(err)
+	}
+	// An Atlassian Teams link shares provider and source with the
+	// project-as-team rows. It is not a row of that class: it stays.
 	if err := conn.Exec(ctx, insertOwnership, orgID, atlassianTeam, keyBuiltID, old, old); err != nil {
 		t.Fatal(err)
 	}
@@ -147,8 +158,20 @@ func TestTeamReachesItsJiraProjectsWorkItemsThroughOwnership(t *testing.T) {
 	}
 	first := sync(firstSync)
 
-	if got := ownedWorkItems(t, ctx, conn, orgID, "jira", "OPS", firstSync.Add(time.Second)); got != 1 {
-		t.Fatalf("team OPS reaches %d work items of its project through ownership, want 1", got)
+	if got := ownedWorkItems(t, ctx, conn, orgID, "jira", "OPS", firstSync.Add(time.Second)); got != 0 {
+		t.Fatalf("the retired project-as-team OPS reaches %d work items through ownership, want 0", got)
+	}
+	if got := countRows(t, ctx, conn, `SELECT count() FROM teams FINAL WHERE org_id = ? AND id = 'OPS' AND is_active = 1`, orgID); got != 0 {
+		t.Fatalf("%d active project-as-team rows after the sync, want 0", got)
+	}
+	if got := countRows(t, ctx, conn, `SELECT count() FROM teams FINAL WHERE org_id = ? AND id = 'OPS' AND is_active = 0`, orgID); got != 1 {
+		t.Fatalf("%d inactive project-as-team rows after the sync, want 1 (retired, not removed, not written again)", got)
+	}
+	if got := countRows(t, ctx, conn, `SELECT count() FROM team_project_ownership FINAL WHERE org_id = ? AND provider = 'jira' AND team_id = 'OPS' AND valid_to IS NULL`, orgID); got != 0 {
+		t.Fatalf("%d open ownership rows of the project-as-team after the sync, want 0 on any project id", got)
+	}
+	if got := countRows(t, ctx, conn, `SELECT count() FROM team_memberships FINAL WHERE org_id = ? AND provider = 'jira' AND team_id = 'OPS' AND valid_to IS NULL`, orgID); got != 0 {
+		t.Fatalf("%d open membership rows of the project-as-team after the sync, want 0", got)
 	}
 	if got := countRows(t, ctx, conn, `SELECT count() FROM projects FINAL WHERE org_id = ? AND provider = 'jira' AND project_key = 'OPS' AND id != ?`, orgID, keyBuiltID); got != 1 {
 		t.Fatalf("the two producers wrote %d project rows for one project, want 1", got)
@@ -156,8 +179,9 @@ func TestTeamReachesItsJiraProjectsWorkItemsThroughOwnership(t *testing.T) {
 	if got := countRows(t, ctx, conn, openJiraOwnershipCount, orgID, "OPS", keyBuiltID); got != 0 {
 		t.Fatalf("%d ownership rows on the key-built project id are still open after the sync, want 0", got)
 	}
-	if first.OwnershipRetracted != 3 || first.OwnershipWritten != 2 {
-		t.Fatalf("result = %+v, want 2 ownership rows written (the project team and the linked ops team) and the 3 key-built rows retracted", first)
+	if first.ProjectAsTeamRetired != 4 || first.OwnershipRetracted != 1 || first.OwnershipWritten != 1 || first.TeamsWritten != 0 || first.MembershipsWritten != 0 {
+		t.Fatalf("result = %+v, want 4 project-as-team rows retired (the team, its two ownership rows, its lead), 1 ownership row "+
+			"written (the linked ops team), its key-built row retracted, and no team or membership row written", first)
 	}
 	// The linked ops team owns the project by the same native id, so it
 	// reaches the same work item; its row on the key-built id is closed.
@@ -178,13 +202,16 @@ func TestTeamReachesItsJiraProjectsWorkItemsThroughOwnership(t *testing.T) {
 
 	// The same provider answer a day later is the same fact: no new open row.
 	second := sync(firstSync.Add(24 * time.Hour))
-	if got := countRows(t, ctx, conn, openJiraOwnershipCount, orgID, "OPS", "10001"); got != 1 {
-		t.Fatalf("%d open ownership rows after two syncs of the same data, want 1", got)
+	if got := countRows(t, ctx, conn, openJiraOwnershipCount, orgID, opsTeam, "10001"); got != 1 {
+		t.Fatalf("%d open ownership rows of the linked ops team after two syncs of the same data, want 1", got)
 	}
-	if second.OwnershipRetracted != 0 {
-		t.Fatalf("second sync retracted %d rows, want 0", second.OwnershipRetracted)
+	if got := countRows(t, ctx, conn, openJiraOwnershipCount, orgID, "OPS", "10001"); got != 0 {
+		t.Fatalf("%d open ownership rows of the project-as-team after two syncs, want 0: no sync writes one again", got)
 	}
-	if got := countRows(t, ctx, conn, `SELECT toUInt64(toUnixTimestamp64Milli(min(valid_from))) FROM team_project_ownership FINAL WHERE org_id = ? AND team_id = 'OPS' AND project_id = '10001' AND valid_to IS NULL`, orgID); int64(got) != firstSync.UnixMilli() {
+	if second.OwnershipRetracted != 0 || second.ProjectAsTeamRetired != 0 {
+		t.Fatalf("second sync = %+v, want nothing retracted and nothing retired: the class was retired by the first", second)
+	}
+	if got := countRows(t, ctx, conn, `SELECT toUInt64(toUnixTimestamp64Milli(min(valid_from))) FROM team_project_ownership FINAL WHERE org_id = ? AND team_id = ? AND project_id = '10001' AND valid_to IS NULL`, orgID, opsTeam); int64(got) != firstSync.UnixMilli() {
 		t.Fatalf("valid_from = %d, want the time the fact was first seen %d", got, firstSync.UnixMilli())
 	}
 
@@ -246,6 +273,9 @@ func TestTeamReachesItsJiraProjectsWorkItemsThroughOwnership(t *testing.T) {
 // table that could not be read, is a part of what this writer owns: the rows
 // it found are written and no open row is closed. The same store on a
 // complete read closes the row of the project the provider no longer has.
+// The rows this rule is about are the legacy links (an ops team owns a
+// project). A project-as-team row is not under it: the retire step closes it
+// at the first run, whatever the snapshot holds.
 func TestAPartialJiraSnapshotClosesNoOwnership(t *testing.T) {
 	ctx, conn := newWorkItemEffectsConn(t)
 	lease := providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil })
@@ -253,10 +283,17 @@ func TestAPartialJiraSnapshotClosesNoOwnership(t *testing.T) {
 	old := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
 	at := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
 
-	// Project ZZZ is owned by its project team. It is not on the first page.
-	if err := conn.Exec(ctx, `INSERT INTO team_project_ownership (org_id, provider, team_id, project_id, project_key, source, is_primary, specificity, priority, valid_from, updated_at) VALUES (?, 'jira', 'ZZZ', '20001', 'ZZZ', 'native', 1, 100, 10, ?, ?)`,
-		orgID, old, old); err != nil {
+	// Project ZZZ is owned by an ops team through a legacy link, and by the
+	// team the old catalog made out of it. It is not on the first page.
+	if err := conn.Exec(ctx, `INSERT INTO team_project_ownership (org_id, provider, team_id, project_id, project_key, source, is_primary, specificity, priority, valid_from, updated_at) VALUES (?, 'jira', 'ops-team-z', '20001', 'ZZZ', 'jira_legacy', 1, 90, 20, ?, ?), (?, 'jira', 'ZZZ', '20001', 'ZZZ', 'native', 1, 100, 10, ?, ?)`,
+		orgID, old, old, orgID, old, old); err != nil {
 		t.Fatal(err)
+	}
+	for key, team := range map[string]string{"ZZZ": "ops-team-z", "OPS": "ops-team-o"} {
+		if err := conn.Exec(ctx, `INSERT INTO jira_project_ops_team_links (org_id, project_key, ops_team_id, project_name, ops_team_name, updated_at) VALUES (?, ?, ?, ?, ?, ?)`,
+			orgID, key, team, key, team, old); err != nil {
+			t.Fatal(err)
+		}
 	}
 	const page2 = "/rest/api/3/project/search?maxResults=100&startAt=1"
 	ops := `{"id":"10001","key":"OPS","name":"Ops Project"}`
@@ -291,10 +328,14 @@ func TestAPartialJiraSnapshotClosesNoOwnership(t *testing.T) {
 		jiraTeamCatalogProjectSearchURI: {body: `{"values":[` + ops + `],"isLast":false,"total":2}`},
 		page2:                           {status: 403, body: `{}`},
 	})
-	if got := open("ZZZ", "20001"); got != 1 {
+	if got := open("ops-team-z", "20001"); got != 1 {
 		t.Fatalf("a search that stopped after its first page left %d open ownership rows for a project on a later page, want 1", got)
 	}
-	if result.OwnershipRetracted != 0 || !result.OwnershipSnapshotIncomplete || result.OwnershipWritten != 1 || open("OPS", "10001") != 1 {
+	// The retire does not wait for a complete snapshot.
+	if result.ProjectAsTeamRetired != 1 || open("ZZZ", "20001") != 0 {
+		t.Fatalf("result = %+v, open project-as-team rows = %d; want the project-as-team row retired on a partial snapshot too", result, open("ZZZ", "20001"))
+	}
+	if result.OwnershipRetracted != 0 || !result.OwnershipSnapshotIncomplete || result.OwnershipWritten != 1 || open("ops-team-o", "10001") != 1 {
 		t.Fatalf("result = %+v, want the page's one row written, nothing retracted, the snapshot reported as not complete", result)
 	}
 
@@ -304,10 +345,10 @@ func TestAPartialJiraSnapshotClosesNoOwnership(t *testing.T) {
 		jiraTeamCatalogProjectSearchURI: {body: `{"values":[` + ops + `],"isLast":false,"total":2}`},
 		page2:                           {body: `{"values":[{"id":"20001","key":"ZZZ","name":"Zed"}],"isLast":true,"total":2}`},
 	})
-	if result.OwnershipRetracted != 0 || result.OwnershipSnapshotIncomplete || result.OwnershipWritten != 2 || open("ZZZ", "20001") != 1 {
+	if result.OwnershipRetracted != 0 || result.OwnershipSnapshotIncomplete || result.OwnershipWritten != 2 || open("ops-team-z", "20001") != 1 || open("ZZZ", "20001") != 0 {
 		t.Fatalf("result = %+v, want both pages' rows written and nothing retracted", result)
 	}
-	if got := countRows(t, ctx, conn, `SELECT toUInt64(toUnixTimestamp64Milli(min(valid_from))) FROM team_project_ownership FINAL WHERE org_id = ? AND team_id = 'ZZZ' AND valid_to IS NULL`, orgID); int64(got) != old.UnixMilli() {
+	if got := countRows(t, ctx, conn, `SELECT toUInt64(toUnixTimestamp64Milli(min(valid_from))) FROM team_project_ownership FINAL WHERE org_id = ? AND team_id = 'ops-team-z' AND valid_to IS NULL`, orgID); int64(got) != old.UnixMilli() {
 		t.Fatalf("ZZZ valid_from = %d, want the first-seen %d", got, old.UnixMilli())
 	}
 
@@ -320,8 +361,8 @@ func TestAPartialJiraSnapshotClosesNoOwnership(t *testing.T) {
 		t.Fatal(err)
 	}
 	result = sync(at.Add(2*time.Hour), complete)
-	if result.OwnershipRetracted != 0 || !result.OwnershipSnapshotIncomplete || open("ZZZ", "20001") != 1 {
-		t.Fatalf("result = %+v, open ZZZ rows = %d; want nothing closed while the legacy links cannot be read", result, open("ZZZ", "20001"))
+	if result.OwnershipRetracted != 0 || !result.OwnershipSnapshotIncomplete || open("ops-team-z", "20001") != 1 {
+		t.Fatalf("result = %+v, open ZZZ rows = %d; want nothing closed while the legacy links cannot be read", result, open("ops-team-z", "20001"))
 	}
 	if err := conn.Exec(ctx, `RENAME TABLE jira_project_ops_team_links_away TO jira_project_ops_team_links`); err != nil {
 		t.Fatal(err)
@@ -330,16 +371,20 @@ func TestAPartialJiraSnapshotClosesNoOwnership(t *testing.T) {
 	// 4. Every read reaches its end: now the provider's answer is the whole
 	// truth, and the project it no longer has loses its ownership row.
 	result = sync(at.Add(3*time.Hour), complete)
-	if result.OwnershipRetracted != 1 || result.OwnershipSnapshotIncomplete || open("ZZZ", "20001") != 0 || open("OPS", "10001") != 1 {
+	if result.OwnershipRetracted != 1 || result.OwnershipSnapshotIncomplete || open("ops-team-z", "20001") != 0 || open("ops-team-o", "10001") != 1 {
 		t.Fatalf("result = %+v, open ZZZ = %d, open OPS = %d; want ZZZ closed and OPS open on the complete snapshot",
-			result, open("ZZZ", "20001"), open("OPS", "10001"))
+			result, open("ops-team-z", "20001"), open("ops-team-o", "10001"))
+	}
+	if result.ProjectAsTeamRetired != 0 {
+		t.Fatalf("result = %+v, want nothing left to retire after the first run", result)
 	}
 }
 
 // Archiving a project in Jira does not end its ownership. The project search
 // returns live projects only, so the walk also reads the archived ones and
-// keeps their open rows open: the project-as-team row and a legacy link. An
-// archived project nothing owned gets no row. When the archived read does
+// keeps their open legacy links open. The project-as-team row of an archived
+// project is not held: that class is retired as a whole. An archived project
+// nothing owned gets no row. When the archived read does
 // not reach its end nothing is closed, and when the provider has the project
 // in neither answer its rows are closed.
 func TestAnArchivedJiraProjectKeepsItsOwnership(t *testing.T) {
@@ -349,14 +394,19 @@ func TestAnArchivedJiraProjectKeepsItsOwnership(t *testing.T) {
 	old := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
 	at := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
 
-	// ZZZ was synced while it was live: its project team owns it, and an
-	// ops team owns it through a legacy link.
+	// ZZZ was synced while it was live: an ops team owns it through a legacy
+	// link, and the old catalog made a team out of it. The live project OPS
+	// has a legacy link too.
 	if err := conn.Exec(ctx, `INSERT INTO team_project_ownership (org_id, provider, team_id, project_id, project_key, source, is_primary, specificity, priority, valid_from, updated_at) VALUES (?, 'jira', 'ZZZ', '20001', 'ZZZ', 'native', 1, 100, 10, ?, ?), (?, 'jira', 'ops-team-1', '20001', 'ZZZ', 'jira_legacy', 1, 90, 20, ?, ?)`,
 		orgID, old, old, orgID, old, old); err != nil {
 		t.Fatal(err)
 	}
 	if err := conn.Exec(ctx, `INSERT INTO jira_project_ops_team_links (org_id, project_key, ops_team_id, project_name, ops_team_name, updated_at) VALUES (?, ?, ?, ?, ?, ?)`,
 		orgID, "ZZZ", "ops-team-1", "Zed", "Ops Team", old); err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.Exec(ctx, `INSERT INTO jira_project_ops_team_links (org_id, project_key, ops_team_id, project_name, ops_team_name, updated_at) VALUES (?, ?, ?, ?, ?, ?)`,
+		orgID, "OPS", "ops-team-2", "Ops Project", "Ops Team 2", old); err != nil {
 		t.Fatal(err)
 	}
 	live := `{"values":[{"id":"10001","key":"OPS","name":"Ops Project"}],"isLast":true,"total":1}`
@@ -390,18 +440,21 @@ func TestAnArchivedJiraProjectKeepsItsOwnership(t *testing.T) {
 	// 1. ZZZ is archived, with another archived project nothing owns.
 	result := sync(at, jiraTeamCatalogFixtureResponse{
 		body: `{"values":[{"id":"20001","key":"ZZZ","name":"Zed"},{"id":"30001","key":"NEVER","name":"Never"}],"isLast":true}`})
-	if result.OwnershipRetracted != 0 || result.OwnershipSnapshotIncomplete || open("ZZZ", "20001") != 1 || open("ops-team-1", "20001") != 1 || open("OPS", "10001") != 1 {
-		t.Fatalf("result = %+v, open ZZZ = %d, open legacy = %d, open OPS = %d; want a complete snapshot that closes nothing of the archived project",
-			result, open("ZZZ", "20001"), open("ops-team-1", "20001"), open("OPS", "10001"))
+	if result.OwnershipRetracted != 0 || result.OwnershipSnapshotIncomplete || open("ops-team-1", "20001") != 1 || open("ops-team-2", "10001") != 1 {
+		t.Fatalf("result = %+v, open legacy = %d, open OPS = %d; want a complete snapshot that closes no legacy link of the archived project",
+			result, open("ops-team-1", "20001"), open("ops-team-2", "10001"))
 	}
-	if firstSeen("ZZZ") != old.UnixMilli() || firstSeen("ops-team-1") != old.UnixMilli() {
-		t.Fatalf("valid_from of the archived project's rows = %d, %d; want the first-seen %d", firstSeen("ZZZ"), firstSeen("ops-team-1"), old.UnixMilli())
+	if result.ProjectAsTeamRetired != 1 || open("ZZZ", "20001") != 0 {
+		t.Fatalf("result = %+v, open project-as-team rows = %d; want the project-as-team row of the archived project retired", result, open("ZZZ", "20001"))
+	}
+	if firstSeen("ops-team-1") != old.UnixMilli() {
+		t.Fatalf("valid_from of the archived project's legacy link = %d; want the first-seen %d", firstSeen("ops-team-1"), old.UnixMilli())
 	}
 	if open("NEVER", "30001") != 0 {
 		t.Fatal("an archived project that had no ownership row got one")
 	}
-	if got := countRows(t, ctx, conn, `SELECT count() FROM teams FINAL WHERE org_id = ? AND id IN ('ZZZ', 'NEVER')`, orgID); got != 0 {
-		t.Fatalf("%d team rows for archived projects, want none: the archived read holds ownership only", got)
+	if got := countRows(t, ctx, conn, `SELECT count() FROM teams FINAL WHERE org_id = ? AND id IN ('ZZZ', 'NEVER', 'OPS')`, orgID); got != 0 {
+		t.Fatalf("%d team rows for projects, want none: a project is not a team, live or archived", got)
 	}
 	if got := countRows(t, ctx, conn, `SELECT count() FROM projects FINAL WHERE org_id = ? AND id IN ('20001', '30001')`, orgID); got != 0 {
 		t.Fatalf("%d project rows for archived projects, want none", got)
@@ -410,17 +463,17 @@ func TestAnArchivedJiraProjectKeepsItsOwnership(t *testing.T) {
 	// 2. The archived read fails: the live answer has no ZZZ, and nothing
 	// says ZZZ is gone. Nothing is closed.
 	result = sync(at.Add(time.Hour), jiraTeamCatalogFixtureResponse{status: 400, body: `{}`})
-	if result.OwnershipRetracted != 0 || !result.OwnershipSnapshotIncomplete || open("ZZZ", "20001") != 1 || open("ops-team-1", "20001") != 1 {
-		t.Fatalf("result = %+v, open ZZZ = %d, open legacy = %d; want nothing closed and the snapshot reported as not complete when the archived read fails",
-			result, open("ZZZ", "20001"), open("ops-team-1", "20001"))
+	if result.OwnershipRetracted != 0 || !result.OwnershipSnapshotIncomplete || open("ops-team-1", "20001") != 1 {
+		t.Fatalf("result = %+v, open legacy = %d; want nothing closed and the snapshot reported as not complete when the archived read fails",
+			result, open("ops-team-1", "20001"))
 	}
 
 	// 3. Both reads reach their end and neither has ZZZ: the project is
-	// gone, and both of its rows are closed.
+	// gone, and its legacy link is closed.
 	result = sync(at.Add(2*time.Hour), jiraTeamCatalogFixtureResponse{body: `{"values":[],"isLast":true}`})
-	if result.OwnershipRetracted != 2 || result.OwnershipSnapshotIncomplete || open("ZZZ", "20001") != 0 || open("ops-team-1", "20001") != 0 || open("OPS", "10001") != 1 {
-		t.Fatalf("result = %+v, open ZZZ = %d, open legacy = %d, open OPS = %d; want both rows of the deleted project closed",
-			result, open("ZZZ", "20001"), open("ops-team-1", "20001"), open("OPS", "10001"))
+	if result.OwnershipRetracted != 1 || result.OwnershipSnapshotIncomplete || open("ops-team-1", "20001") != 0 || open("ops-team-2", "10001") != 1 {
+		t.Fatalf("result = %+v, open legacy = %d, open OPS = %d; want the legacy link of the deleted project closed",
+			result, open("ops-team-1", "20001"), open("ops-team-2", "10001"))
 	}
 }
 
@@ -429,7 +482,9 @@ func TestAnArchivedJiraProjectKeepsItsOwnership(t *testing.T) {
 // projects and writes the native ones. For an ARCHIVED project no native row
 // is written, so its key-built rows are left open as they are; in a store
 // that has both forms for it, both stay. And an answer with no live project
-// closes nothing, whatever the archived read holds.
+// closes nothing, whatever the archived read holds. All of this is the rule
+// of the legacy links. The project-as-team rows of the same store, on either
+// id form and for a live or an archived project, are retired by the first run.
 func TestAnArchivedJiraProjectKeepsItsKeyBuiltOwnership(t *testing.T) {
 	ctx, conn := newWorkItemEffectsConn(t)
 	lease := providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil })
@@ -473,9 +528,12 @@ func TestAnArchivedJiraProjectKeepsItsKeyBuiltOwnership(t *testing.T) {
 		seed(orgID, "YAK", orgID+":jira:YAK", "YAK", "native")
 		seed(orgID, "OLD", orgID+":jira:OLD", "OLD", "native")
 		seed(orgID, "ops-team-1", orgID+":jira:OLD", "OLD", "jira_legacy")
-		if err := conn.Exec(ctx, `INSERT INTO jira_project_ops_team_links (org_id, project_key, ops_team_id, project_name, ops_team_name, updated_at) VALUES (?, ?, ?, ?, ?, ?)`,
-			orgID, "OLD", "ops-team-1", "Old", "Ops Team", old); err != nil {
-			t.Fatal(err)
+		seed(orgID, "ops-team-2", orgID+":jira:YAK", "YAK", "jira_legacy")
+		for key, team := range map[string]string{"OLD": "ops-team-1", "YAK": "ops-team-2"} {
+			if err := conn.Exec(ctx, `INSERT INTO jira_project_ops_team_links (org_id, project_key, ops_team_id, project_name, ops_team_name, updated_at) VALUES (?, ?, ?, ?, ?, ?)`,
+				orgID, key, team, key, team, old); err != nil {
+				t.Fatal(err)
+			}
 		}
 	}
 
@@ -488,22 +546,28 @@ func TestAnArchivedJiraProjectKeepsItsKeyBuiltOwnership(t *testing.T) {
 		}
 		for run := 1; run <= 2; run++ {
 			result := sync(orgID, at.Add(time.Duration(run)*time.Hour), yak, oldArchived)
-			if result.OwnershipSnapshotIncomplete || open("YAK", orgID+":jira:YAK") != 0 || open("YAK", "20001") != 1 {
-				t.Fatalf("run %d: result = %+v, open key-built YAK = %d, open native YAK = %d; want the live project moved to its native id",
-					run, result, open("YAK", orgID+":jira:YAK"), open("YAK", "20001"))
+			if result.OwnershipSnapshotIncomplete || open("ops-team-2", orgID+":jira:YAK") != 0 || open("ops-team-2", "20001") != 1 {
+				t.Fatalf("run %d: result = %+v, open key-built YAK = %d, open native YAK = %d; want the legacy link of the live project moved to its native id",
+					run, result, open("ops-team-2", orgID+":jira:YAK"), open("ops-team-2", "20001"))
 			}
-			if open("OLD", orgID+":jira:OLD") != 1 || open("ops-team-1", orgID+":jira:OLD") != 1 {
-				t.Fatalf("run %d: open key-built rows of the archived project: project-as-team %d, legacy %d; want both left open",
-					run, open("OLD", orgID+":jira:OLD"), open("ops-team-1", orgID+":jira:OLD"))
+			if open("ops-team-1", orgID+":jira:OLD") != 1 {
+				t.Fatalf("run %d: open key-built legacy links of the archived project = %d; want it left open", run, open("ops-team-1", orgID+":jira:OLD"))
+			}
+			if open("YAK", orgID+":jira:YAK") != 0 || open("YAK", "20001") != 0 || open("OLD", orgID+":jira:OLD") != 0 {
+				t.Fatalf("run %d: open project-as-team rows: YAK key-built %d, YAK native %d, OLD key-built %d; want all retired and none written",
+					run, open("YAK", orgID+":jira:YAK"), open("YAK", "20001"), open("OLD", orgID+":jira:OLD"))
+			}
+			if want := map[int]int{1: 2, 2: 0}[run]; result.ProjectAsTeamRetired != want {
+				t.Fatalf("run %d: project-as-team rows retired = %d, want %d (both key-built rows, once)", run, result.ProjectAsTeamRetired, want)
 			}
 			if got := countRows(t, ctx, conn, `SELECT count() FROM team_project_ownership FINAL WHERE org_id = ? AND project_id = '20002'`, orgID); got != 0 {
 				t.Fatalf("run %d: %d rows written on the native id of the archived project, want none", run, got)
 			}
 			if want := map[int]int{1: 1, 2: 0}[run]; result.OwnershipRetracted != want {
-				t.Fatalf("run %d: retracted = %d, want %d (the key-built row of the live project, once)", run, result.OwnershipRetracted, want)
+				t.Fatalf("run %d: retracted = %d, want %d (the key-built legacy link of the live project, once)", run, result.OwnershipRetracted, want)
 			}
 		}
-		if got := countRows(t, ctx, conn, `SELECT toUInt64(toUnixTimestamp64Milli(min(valid_from))) FROM team_project_ownership FINAL WHERE org_id = ? AND team_id = 'OLD' AND valid_to IS NULL`, orgID); int64(got) != old.UnixMilli() {
+		if got := countRows(t, ctx, conn, `SELECT toUInt64(toUnixTimestamp64Milli(min(valid_from))) FROM team_project_ownership FINAL WHERE org_id = ? AND team_id = 'ops-team-1' AND valid_to IS NULL`, orgID); int64(got) != old.UnixMilli() {
 			t.Fatalf("valid_from of the held row = %d, want the stored %d", got, old.UnixMilli())
 		}
 	})
@@ -514,13 +578,18 @@ func TestAnArchivedJiraProjectKeepsItsKeyBuiltOwnership(t *testing.T) {
 		seed(orgID, "OLD", "20002", "OLD", "native")
 		seed(orgID, "ops-team-1", "20002", "OLD", "jira_legacy")
 		result := sync(orgID, at.Add(time.Hour), yak, oldArchived)
-		for _, row := range [][2]string{{"OLD", orgID + ":jira:OLD"}, {"ops-team-1", orgID + ":jira:OLD"}, {"OLD", "20002"}, {"ops-team-1", "20002"}} {
+		for _, row := range [][2]string{{"ops-team-1", orgID + ":jira:OLD"}, {"ops-team-1", "20002"}} {
 			if got := countRows(t, ctx, conn, openOf, orgID, row[0], row[1]); got != 1 {
-				t.Fatalf("open rows of %v = %d, want 1; result = %+v", row, got, result)
+				t.Fatalf("open legacy links of %v = %d, want 1; result = %+v", row, got, result)
 			}
 		}
-		if result.OwnershipRetracted != 1 || result.OwnershipSnapshotIncomplete {
-			t.Fatalf("result = %+v, want only the key-built row of the live project closed", result)
+		for _, row := range [][2]string{{"OLD", orgID + ":jira:OLD"}, {"OLD", "20002"}} {
+			if got := countRows(t, ctx, conn, openOf, orgID, row[0], row[1]); got != 0 {
+				t.Fatalf("open project-as-team rows of %v = %d, want 0; result = %+v", row, got, result)
+			}
+		}
+		if result.OwnershipRetracted != 1 || result.OwnershipSnapshotIncomplete || result.ProjectAsTeamRetired != 3 {
+			t.Fatalf("result = %+v, want only the key-built legacy link of the live project closed by the snapshot rule and the 3 project-as-team rows retired", result)
 		}
 	})
 
@@ -530,9 +599,14 @@ func TestAnArchivedJiraProjectKeepsItsKeyBuiltOwnership(t *testing.T) {
 		seed(orgID, "OLD", "20002", "OLD", "native")
 		seed(orgID, "YAK", "20001", "YAK", "native")
 		result := sync(orgID, at.Add(time.Hour), none, oldArchived)
-		closed := countRows(t, ctx, conn, `SELECT count() FROM team_project_ownership FINAL WHERE org_id = ? AND valid_to IS NOT NULL`, orgID)
+		closed := countRows(t, ctx, conn, `SELECT count() FROM team_project_ownership FINAL WHERE org_id = ? AND source = 'jira_legacy' AND valid_to IS NOT NULL`, orgID)
 		if closed != 0 || result.OwnershipRetracted != 0 || !result.OwnershipSnapshotIncomplete {
-			t.Fatalf("result = %+v, closed rows = %d; want nothing closed and the snapshot reported as not complete when the live answer is empty", result, closed)
+			t.Fatalf("result = %+v, closed legacy links = %d; want no legacy link closed and the snapshot reported as not complete when the live answer is empty", result, closed)
+		}
+		// The retire reads no provider answer: an empty one does not hold it.
+		openProjectAsTeam := countRows(t, ctx, conn, `SELECT count() FROM team_project_ownership FINAL WHERE org_id = ? AND source = 'native' AND valid_to IS NULL`, orgID)
+		if result.ProjectAsTeamRetired != 4 || openProjectAsTeam != 0 {
+			t.Fatalf("result = %+v, open project-as-team rows = %d; want the 4 project-as-team rows retired on an empty live answer too", result, openProjectAsTeam)
 		}
 		// An organization with no project and no open row has nothing to
 		// keep: its empty answer is complete.

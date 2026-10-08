@@ -412,3 +412,35 @@ func TestTeamCatalogDiscoveryExecutorRecordsADegradedLeg(t *testing.T) {
 		t.Errorf("dispatches = %+v, want one native_failed_nonfatal", observer.dispatches)
 	}
 }
+
+// A Jira run that retired project-as-team rows is counted under its own
+// label, with the number of rows, also when the walk after the retire fails.
+// A run that retired none makes no observation of that label (the 18 calls of
+// the test above hold none of it).
+func TestTeamCatalogDiscoveryExecutorObservesRetiredProjectAsTeamRowsOnlyWhenARunRetiredSome(t *testing.T) {
+	for name, collectErr := range map[string]error{"the walk succeeds": nil, "the walk fails after the retire": errors.New("walk failed")} {
+		collector := &fakeTeamCatalogCollector{result: providersync.TeamCatalogResult{ProjectAsTeamRetired: 4}, err: collectErr}
+		observer := &fakeTeamCatalogObserver{}
+		executor := &TeamCatalogDiscoveryExecutor{
+			Native:     map[string]providersync.TeamCatalogCollector{"jira": collector},
+			Clients:    &fakeProviderClientResolver{credential: providerfoundation.Credential{Provider: "jira", ID: "cred-1"}},
+			Selections: &fakeTeamCatalogSelectionsResolver{selections: providersync.TeamCatalogSelections{Teams: true}},
+			Observer:   observer,
+		}
+		if _, err := executor.Discover(context.Background(), testOrg, testRun, "jira"); (err != nil) != (collectErr != nil) {
+			t.Fatalf("%s: Discover err = %v", name, err)
+		}
+		retired := 0
+		for _, row := range observer.rows {
+			if row.table == jobruntime.TeamCatalogTableProjectAsTeamRetired {
+				retired++
+				if row.provider != "jira" || row.count != 4 {
+					t.Fatalf("%s: row = %+v, want provider jira and count 4", name, row)
+				}
+			}
+		}
+		if retired != 1 {
+			t.Fatalf("%s: %d observations of the retired rows, want 1 (rows=%+v)", name, retired, observer.rows)
+		}
+	}
+}

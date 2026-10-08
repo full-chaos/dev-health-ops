@@ -105,6 +105,11 @@ type TeamCatalogResult struct {
 	// fresh snapshot no longer holds them (Jira catalog). They are not part
 	// of OwnershipWritten.
 	OwnershipRetracted int
+	// ProjectAsTeamRetired counts the rows a Jira run retired of the
+	// project-as-team class (team rows set inactive, ownership and membership
+	// rows closed). Zero for every other provider and for a run that found
+	// none.
+	ProjectAsTeamRetired int
 	// OwnershipSnapshotIncomplete says the run did not read its source to
 	// the end, so it closed no team_project_ownership row.
 	OwnershipSnapshotIncomplete bool

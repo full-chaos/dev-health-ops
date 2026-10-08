@@ -1459,6 +1459,8 @@ func dispatchProvidersync(ctx context.Context, runtime *operatorRuntime, args []
 		return dispatchProvidersyncRetireStaleLinearProjectOwnership(ctx, runtime, args[1:], stdout, stderr)
 	case "retire-jira-key-projects":
 		return dispatchProvidersyncRetireJiraKeyProjects(ctx, runtime, args[1:], stdout, stderr)
+	case "retire-jira-project-as-team":
+		return dispatchProvidersyncRetireJiraProjectAsTeam(ctx, runtime, args[1:], stdout, stderr)
 	default:
 		return writeError(stderr, "invalid_request")
 	}
@@ -1584,6 +1586,41 @@ func dispatchProvidersyncRetireJiraKeyProjects(
 		return run(ctx)
 	}
 	return auditedWrite(ctx, runtime, stderr, mutation, joboperator.ActionProvidersyncCleanup, "organization", authorizeResource, run)
+}
+
+// dispatchProvidersyncRetireJiraProjectAsTeam handles `providersync
+// retire-jira-project-as-team` (CHAOS-8888): it retires the Jira
+// project-as-team rows of ONE organization now, the same
+// providersync.RetireJiraProjectAsTeamRows every Jira team catalog run calls.
+// The team rows go inactive; their open ownership and membership rows and the
+// repository ownership derived from them are closed. Nothing is deleted. The
+// organization comes from stdin only (--org-stdin; there is no --org), so it
+// is on no command line, in no output and in no log line of this process; the
+// audit row holds it. It prints counts only. A second run reports zero.
+func dispatchProvidersyncRetireJiraProjectAsTeam(
+	ctx context.Context, runtime *operatorRuntime, args []string, stdout, stderr io.Writer,
+) int {
+	flags := quietFlags("providersync retire-jira-project-as-team")
+	orgStdin := flags.Bool("org-stdin", false, orgStdinUsage)
+	dryRun := flags.Bool("dry-run", false, "count the Jira project-as-team rows (teams, ownership, memberships, derived repository ownership) that a real run would retire, without writing anything")
+	mutation := addMutationFlags(flags)
+	if flags.Parse(args) != nil || flags.NArg() != 0 || !*orgStdin || !mutation.valid(*dryRun) {
+		return writeError(stderr, "invalid_request")
+	}
+	org, code := resolveOrgFlag(runtime, "", true, stderr)
+	if code != 0 {
+		return code
+	}
+	perform := func(ctx context.Context) int {
+		return runProvidersyncCleanup(ctx, runtime, stdout, stderr, "retire_jira_project_as_team",
+			func(ctx context.Context, conn clickhousedriver.Conn) (any, error) {
+				return providersync.RetireJiraProjectAsTeamRows(ctx, conn, org, time.Now().UTC(), *dryRun)
+			})
+	}
+	if *dryRun {
+		return dryRunPreview(ctx, runtime, stderr, joboperator.ActionProvidersyncCleanup, "organization", org, perform)
+	}
+	return auditedWriteWith(ctx, runtime, stderr, mutation, joboperator.ActionProvidersyncCleanup, "organization", org, false, perform)
 }
 
 // runProvidersyncCleanup opens ClickHouse and runs one providersync cleanup,
@@ -3074,10 +3111,17 @@ func parseOrgStdin(stdin io.Reader) (canonical string, consumed []byte, reason s
 	return canonical, data, ""
 }
 
+// orgStdinVerbNames are the verbs (group and name) that take --org-stdin.
+var orgStdinVerbNames = map[string]bool{
+	"metrics daily-start":                      true,
+	"metrics partition-recompute":              true,
+	"providersync retire-jira-project-as-team": true,
+}
+
 // orgStdinVerb reports whether args (after the optional leading "workers")
 // name a verb that takes --org-stdin and carry that flag.
 func orgStdinVerb(args []string) (hasFlag, hasOrg bool) {
-	if len(args) < 3 || args[0] != "metrics" || (args[1] != "daily-start" && args[1] != "partition-recompute") {
+	if len(args) < 3 || !orgStdinVerbNames[args[0]+" "+args[1]] {
 		return false, false
 	}
 	for _, arg := range args[2:] {

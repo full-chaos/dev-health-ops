@@ -123,6 +123,19 @@ at `unassigned` usually means the ClickHouse `teams` dimension is empty.
 
 ### 0.2a Atlassian Teams (Jira) — two independent legs, ranked at read time
 
+**Superseded for leg 1 by CHAOS-8888.** A Jira project is not a team: the Atlassian Teams are the Jira teams. The
+Jira team catalog writes no team, ownership or membership row from a project any more, and every Jira team-catalog
+run retires the project-as-team rows a store still holds, in one step, unconditional, before its walk
+(`providersync.RetireJiraProjectAsTeamRows`): the team rows go inactive (`is_active = 0`), their open ownership and
+membership rows and the repository ownership derived from them (`team_repo_ownership`, `source = 'inferred'`) get
+`valid_to`, first-seen `valid_from` is kept, nothing is deleted. Rows with admin members or a sync policy are retired
+too and counted; `jira_legacy` links, Atlassian team rows and admin teams (`provider = ''`) stay. Attribution reads
+ACTIVE teams only, one rule for every provider and every path (`teamattribution.LoadTeams` flags inactive teams, `dropInactiveTeamCandidates` drops their candidates), so a retired team
+takes no work item and a project with no connected Atlassian team is unassigned. The operator verb
+`dho workers providersync retire-jira-project-as-team --org-stdin` runs the same retire for one organization now.
+The table and the precedence text below are the record of the two-leg design before CHAOS-8888. The current rules
+and their tests are in `docs/contribute/architecture/team-attribution.md` section 0.4c.
+
 Jira has two team models, and both are INDEPENDENT legs -- each always runs when configured, neither gates the
 other at write time (D2778, correcting an earlier draft of this section that framed the second leg as a
 write-time fallback; chris's design of record is CHAOS-107/CHAOS-2263: "real Atlassian Teams; project-as-team
@@ -167,8 +180,8 @@ production `RankDerivationCandidates` in both input orders, and the Atlassian ca
 either way.
 
 A future write-time toggle (skip the project-as-team leg entirely once an integration has Atlassian Teams
-configured) is a possible follow-up, not implemented -- D2778 records it as an option for chris to decide, not a
-default.
+configured) was a possible follow-up under D2778. CHAOS-8888 replaced it: leg 1 is removed for every integration,
+not toggled, and its stored rows are retired (see the note at the top of this section).
 
 **Organization id resolution (CHAOS-7020/D2817).** The Atlassian Teams leg needs an `atlassian_organization_id`
 the Teams API hard-requires alongside the cloud id; unlike the cloud id (auto-resolved live from the tenant's own
@@ -182,7 +195,8 @@ is now an OVERRIDE only: when set, it wins (validated on save as UUID- or ARI-sh
 /api/v1/admin/credentials/jira/{name}`); when absent, both entry points (the CLI verb and the automatic post-sync
 path) resolve it live, once per run, and never persist it. A resolution failure (the tenant genuinely has no
 organization context, or the credential lacks permission) degrades the same as any other Atlassian Teams read
-failure on the automatic path: non-strict logs and keeps the project-as-team leg's result untouched.
+failure on the automatic path: non-strict logs and keeps the team catalog step's result (projects and legacy
+links) untouched.
 
 ### 0.3 Off-the-rails matrix (symptom → diagnosis → fix)
 

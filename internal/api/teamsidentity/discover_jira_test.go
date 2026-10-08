@@ -3,6 +3,7 @@ package teamsidentity
 import (
 	"bytes"
 	"context"
+	"errors"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"io"
 	"net/http"
@@ -38,70 +39,25 @@ func jiraTestCredential() providerfoundation.Credential {
 	})
 }
 
-// TestDiscoverJiraParsesRealShapedResponse mirrors
-// TeamDiscoveryService.discover_jira (team_discovery.py:299-338): one GET
-// to /rest/api/3/project/search?maxResults=100, basic auth, reading only
-// values[].key/name/description -- a project with no key or no resolvable
-// name is skipped (Python's own `if not project_key or not project_name:
-// continue`), and a missing "name" falls back to the key.
-func TestDiscoverJiraParsesRealShapedResponse(t *testing.T) {
-	doer := &jiraStubDoer{status: 200, body: `{
-		"values": [
-			{"key": "ENG", "name": "Engineering", "description": "core team"},
-			{"key": "DESIGN", "name": null, "description": null},
-			{"key": "", "name": "No Key"},
-			{"key": "GHOST"}
-		]
-	}`}
-	credential := jiraTestCredential()
+// TestDiscoverJiraMakesNoProviderCall: Jira team discovery reads the
+// Atlassian teams the catalog stored; it never lists the Jira projects (GET
+// /rest/api/3/project/search) as teams any more. Without the store it fails
+// and sends no request. The stored-team list itself is pinned against a real
+// ClickHouse in TestDiscoverJiraListsOnlyStoredActiveAtlassianTeams.
+func TestDiscoverJiraMakesNoProviderCall(t *testing.T) {
+	doer := &jiraStubDoer{status: 200, body: `{"values": [{"key": "ENG", "name": "Engineering"}]}`}
 	oldClient := fakehttp.Client(discoveryHTTPClient)
 	discoveryHTTPClient = fakehttp.Client(doer)
 	defer func() { discoveryHTTPClient = fakehttp.Client(oldClient) }()
 
-	teams, err := discoverJira(context.Background(), credential)
-	if err != nil {
-		t.Fatalf("discoverJira: %v", err)
+	teams, err := discoverJira(context.Background(), nil, "org-1", jiraTestCredential())
+	if !errors.Is(err, errDiscoverJiraNoStore) {
+		t.Fatalf("discoverJira without a store: err = %v, want errDiscoverJiraNoStore", err)
 	}
-	if len(teams) != 3 {
-		t.Fatalf("got %d teams, want 3 (the key=\"\" project skipped): %+v", len(teams), teams)
+	if teams != nil {
+		t.Errorf("discoverJira without a store: teams = %+v, want none", teams)
 	}
-	if teams[0].ProviderTeamID != "ENG" || teams[0].Name != "Engineering" || teams[0].Description == nil || *teams[0].Description != "core team" {
-		t.Errorf("teams[0] = %+v, want ENG/Engineering/core team", teams[0])
-	}
-	if teams[1].ProviderTeamID != "DESIGN" || teams[1].Name != "DESIGN" {
-		t.Errorf("teams[1] = %+v, want name falling back to the key DESIGN", teams[1])
-	}
-	if teams[2].ProviderTeamID != "GHOST" || teams[2].Name != "GHOST" {
-		t.Errorf("teams[2] = %+v, want the no-name-field project's key used as its name", teams[2])
-	}
-	for _, team := range teams {
-		if team.ProviderType != "jira" {
-			t.Errorf("ProviderType = %q, want jira", team.ProviderType)
-		}
-		projectKeys, _ := team.Associations.Get("project_keys")
-		if list, ok := projectKeys.([]string); !ok || len(list) != 1 || list[0] != team.ProviderTeamID {
-			t.Errorf("associations.project_keys = %v, want [%s]", projectKeys, team.ProviderTeamID)
-		}
-		providerOrg, _ := team.Associations.Get("provider_org")
-		if providerOrg != "https://acme.atlassian.net" {
-			t.Errorf("associations.provider_org = %v, want the credential's base_url", providerOrg)
-		}
-	}
-
-	if doer.request == nil {
-		t.Fatal("no request was made")
-	}
-	if doer.request.Method != http.MethodGet {
-		t.Errorf("method = %s, want GET", doer.request.Method)
-	}
-	if doer.request.URL.Path != "/rest/api/3/project/search" {
-		t.Errorf("path = %s, want /rest/api/3/project/search", doer.request.URL.Path)
-	}
-	if got := doer.request.URL.Query().Get("maxResults"); got != "100" {
-		t.Errorf("maxResults = %q, want 100 (Python's discover_jira never paginates beyond this)", got)
-	}
-	wantAuth := "Basic ZGV2QGFjbWUudGVzdDpqaXJhLXRva2Vu"
-	if got := doer.request.Header.Get("Authorization"); got != wantAuth {
-		t.Errorf("Authorization = %q, want %q", got, wantAuth)
+	if doer.request != nil {
+		t.Errorf("discoverJira sent %s %s, want no provider request", doer.request.Method, doer.request.URL.Path)
 	}
 }

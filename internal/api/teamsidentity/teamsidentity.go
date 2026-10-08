@@ -395,7 +395,7 @@ func (h handlers) discoverTeams(w http.ResponseWriter, r *http.Request) {
 	)
 	switch provider {
 	case "jira":
-		teams, err = discoverJira(ctx, prepared)
+		teams, err = discoverJira(ctx, h.store.Conn, orgID, prepared)
 	case "linear":
 		teams, err = discoverLinear(ctx, prepared)
 	case "github":

@@ -194,8 +194,8 @@ func TestJiraTeamCatalogCollectSkipsOneBoardsSprint400UnderStrict(t *testing.T) 
 	if batch.Result.WalkSkipped {
 		t.Fatalf("a healthy project must not report WalkSkipped: %+v", batch.Result)
 	}
-	if len(batch.Rows.Teams) != 1 || batch.Rows.Teams[0].ID != "OPS" {
-		t.Fatalf("teams=%+v", batch.Rows.Teams)
+	if len(batch.Rows.Teams) != 0 {
+		t.Fatalf("teams=%+v, want none: a project is not a team", batch.Rows.Teams)
 	}
 	if len(batch.Rows.Sprints) != 1 || batch.Rows.Sprints[0].SprintID != "501" {
 		t.Fatalf("want exactly sprint 501 (board 81's benign 400 skipped), got %+v", batch.Rows.Sprints)
@@ -236,13 +236,11 @@ func TestJiraTeamCatalogCollectResolvesSprintsWhenNothingSelectedUnderStrict(t *
 	if len(batch.Rows.Sprints) != 1 || batch.Rows.Sprints[0].SprintID != "501" {
 		t.Fatalf("sprints must still resolve with nothing selected under strict, got %+v", batch.Rows.Sprints)
 	}
-	if batch.Result.TeamsImported != 1 {
-		// The walk still discovers the team row internally (it is
-		// unconditional, like project search itself), but nothing writable
-		// is selected -- the collector layer, not the Handler, is what
-		// gates the actual write. Pinning TeamsImported here documents
-		// that the Handler's own row-building is selection-agnostic.
-		t.Fatalf("teams imported = %d, want 1 (row-building itself is unconditional)", batch.Result.TeamsImported)
+	if batch.Result.ProjectsImported != 1 || batch.Result.TeamsImported != 0 {
+		// The walk builds the project row whatever is selected (the
+		// collector layer, not the Handler, gates the write), and it builds
+		// no team row from a project.
+		t.Fatalf("projects imported = %d, teams imported = %d, want 1 and 0", batch.Result.ProjectsImported, batch.Result.TeamsImported)
 	}
 }
 
@@ -314,9 +312,9 @@ func TestJiraTeamCatalogCollectReraisesABoardListing400UnderStrict(t *testing.T)
 
 // TestJiraTeamCatalogCollectSkipsBoardDiscoveryForNonSoftwareProjectUnderStrict
 // A project the search returns with no native id (or with a value in the
-// retired key-built form) keeps its team row and gets NO project row and NO
-// ownership row: an id built from the key would name a project no work item
-// points to. The skip is counted in the result.
+// retired key-built form) gets NO project row: an id built from the key would
+// name a project no work item points to. The skip is counted in the result.
+// No project gets a team row or an ownership row.
 func TestJiraTeamCatalogCollectWritesNoProjectIdentityWithoutANativeID(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 8, 30, 12, 0, 0, 0, time.UTC)
@@ -340,11 +338,9 @@ func TestJiraTeamCatalogCollectWritesNoProjectIdentityWithoutANativeID(t *testin
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(batch.Rows.Teams) != 4 {
-		t.Fatalf("teams=%+v, want all 4 projects as teams", batch.Rows.Teams)
-	}
-	if len(batch.Rows.Ownership) != 1 || batch.Rows.Ownership[0].ProjectID != "10001" || batch.Rows.Ownership[0].TeamID != "OPS" {
-		t.Fatalf("ownership=%+v, want only OPS on its native id", batch.Rows.Ownership)
+	if len(batch.Rows.Teams) != 0 || len(batch.Rows.Ownership) != 0 || len(batch.Rows.Memberships) != 0 {
+		t.Fatalf("teams=%+v ownership=%+v memberships=%+v, want none: a project is not a team",
+			batch.Rows.Teams, batch.Rows.Ownership, batch.Rows.Memberships)
 	}
 	if len(batch.Rows.Projects) != 1 || batch.Rows.Projects[0].ID != "10001" {
 		t.Fatalf("projects=%+v, want only OPS on its native id", batch.Rows.Projects)
@@ -403,8 +399,9 @@ func TestJiraTeamCatalogCollectReadsEveryPageOfTheProjectSearch(t *testing.T) {
 		jiraTeamCatalogProjectSearchURI:      {body: jiraProjectSearchPage(0, 100, `,"isLast":false,"total":150`)},
 		jiraTeamCatalogProjectSearchPage2URI: {body: jiraProjectSearchPage(100, 50, `,"isLast":true,"total":150`)},
 	})
-	if len(batch.Rows.Ownership) != 150 || len(batch.Rows.Projects) != 150 || len(batch.Rows.Teams) != 150 {
-		t.Fatalf("teams=%d ownership=%d projects=%d, want 150 each (both pages)", len(batch.Rows.Teams), len(batch.Rows.Ownership), len(batch.Rows.Projects))
+	if len(batch.Rows.Projects) != 150 || len(batch.Rows.Ownership) != 0 || len(batch.Rows.Teams) != 0 {
+		t.Fatalf("teams=%d ownership=%d projects=%d, want 150 projects (both pages) and no team or ownership row",
+			len(batch.Rows.Teams), len(batch.Rows.Ownership), len(batch.Rows.Projects))
 	}
 	if !batch.Result.ProjectSearchComplete || batch.Result.ProjectSearchPages != 2 {
 		t.Fatalf("result=%+v, want the search complete after 2 pages", batch.Result)
@@ -493,8 +490,8 @@ func TestJiraTeamCatalogProjectSearchStopsAtThePageBoundAndIsNotComplete(t *test
 
 // The project search returns live projects only. The walk reads the archived
 // projects with a second search (status=archived), every page of it, and
-// gives them ownership rows to HOLD only: no team, project or member row, and
-// no row among the fresh ownership rows.
+// names them so that their open ownership rows are HELD: no team, project,
+// member or ownership row is built for them.
 func TestJiraTeamCatalogCollectReadsArchivedProjectsToHoldOwnershipOnly(t *testing.T) {
 	t.Parallel()
 	const archivedPage2 = "/rest/api/3/project/search?maxResults=100&startAt=100&status=archived"
@@ -540,8 +537,8 @@ func TestJiraTeamCatalogCollectReadsArchivedProjectsToHoldOwnershipOnly(t *testi
 		}), true, []string{"OLD/20001"}, 2},
 	} {
 		batch, doer := collectJiraProjectSearch(t, tc.pages)
-		if len(batch.Rows.Teams) != 1 || len(batch.Rows.Projects) != 1 || len(batch.Rows.Ownership) != 1 || len(batch.Rows.Memberships) != 0 {
-			t.Errorf("%s: teams=%d projects=%d ownership=%d memberships=%d, want the one live project only", name,
+		if len(batch.Rows.Teams) != 0 || len(batch.Rows.Projects) != 1 || len(batch.Rows.Ownership) != 0 || len(batch.Rows.Memberships) != 0 {
+			t.Errorf("%s: teams=%d projects=%d ownership=%d memberships=%d, want the one live project row only", name,
 				len(batch.Rows.Teams), len(batch.Rows.Projects), len(batch.Rows.Ownership), len(batch.Rows.Memberships))
 		}
 		if batch.Result.ProjectSearchComplete != tc.complete || batch.Result.ProjectSearchPages != 1 || len(doer.requests) != tc.requests {
@@ -603,7 +600,7 @@ func TestJiraHoldArchivedOwnershipHoldsBothIDFormsOfAnArchivedProject(t *testing
 // ports test_jira_populate_skips_board_discovery_for_a_non_software_
 // project_under_strict_reference_discovery: a service_desk
 // project's board discovery is skipped entirely (iter_boards must never
-// even be called for it), but its project/ownership rows still land --
+// even be called for it), but its project row still lands --
 // the skip is boards-only, never project-level.
 func TestJiraTeamCatalogCollectSkipsBoardDiscoveryForNonSoftwareProjectUnderStrict(t *testing.T) {
 	t.Parallel()
@@ -638,20 +635,20 @@ func TestJiraTeamCatalogCollectSkipsBoardDiscoveryForNonSoftwareProjectUnderStri
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(batch.Rows.Teams) != 2 {
-		t.Fatalf("teams=%+v", batch.Rows.Teams)
+	if len(batch.Rows.Teams) != 0 || len(batch.Rows.Ownership) != 0 {
+		t.Fatalf("teams=%+v ownership=%+v, want none: a project is not a team", batch.Rows.Teams, batch.Rows.Ownership)
 	}
 	if len(batch.Rows.Sprints) != 1 || batch.Rows.Sprints[0].SprintID != "601" {
 		t.Fatalf("want exactly OPS's sprint 601 (SUP has no boards), got %+v", batch.Rows.Sprints)
 	}
-	foundSUPOwnership := false
-	for _, row := range batch.Rows.Ownership {
-		if row.TeamID == "SUP" {
-			foundSUPOwnership = true
+	foundSUPProject := false
+	for _, row := range batch.Rows.Projects {
+		if row.ID == "10002" {
+			foundSUPProject = true
 		}
 	}
-	if !foundSUPOwnership {
-		t.Fatalf("SUP's project/ownership row must still land even though its board discovery is skipped: %+v", batch.Rows.Ownership)
+	if !foundSUPProject {
+		t.Fatalf("SUP's project row must still land even though its board discovery is skipped: %+v", batch.Rows.Projects)
 	}
 }
 
@@ -684,21 +681,17 @@ func TestJiraTeamCatalogCollectRaisesOnUnrecognizedProjectTypeUnderStrict(t *tes
 	}
 }
 
-// TestJiraTeamCatalogCollectHappyPathTeamsMembersProjects proves the
-// non-strict, all-selected happy path: a project's lead lands as its sole
-// membership, the roster carries that member's facets, and the project/
-// ownership rows are native-sourced.
-func TestJiraTeamCatalogCollectHappyPathTeamsMembersProjects(t *testing.T) {
+// A project is a project entity and nothing else. With every category
+// selected and a lead on the project, the walk builds the project row and no
+// team, ownership or membership row: the Jira teams are the Atlassian teams,
+// and a project that no Atlassian team is connected to has no team.
+func TestJiraTeamCatalogCollectBuildsTheProjectAndNoTeamOwnershipOrMembershipRow(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 8, 30, 12, 0, 0, 0, time.UTC)
 	doer := &jiraTeamCatalogFixtureDoer{t: t, byURI: map[string]jiraTeamCatalogFixtureResponse{
 		jiraTeamCatalogProjectSearchURI: {
 			body: `{"values":[{"id":"10001","key":"OPS","name":"Ops Project","description":"Ops team project"}]}`,
 		},
-		// Fetched twice: once for the member/lead lookup, once for the
-		// sprint walk's project-type gate -- see jiraTeamCatalogProjectDetailPayload's
-		// doc comment on why these are the SAME response body read for two
-		// different purposes (mirroring Python's two separate call sites).
 		"/rest/api/3/project/OPS": {
 			body: `{"projectTypeKey":"software","lead":{"accountId":"account-1","emailAddress":"ops@example.com","displayName":"Ops Lead"}}`,
 		},
@@ -720,43 +713,16 @@ func TestJiraTeamCatalogCollectHappyPathTeamsMembersProjects(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(batch.Rows.Teams) != 1 {
-		t.Fatalf("teams=%+v", batch.Rows.Teams)
+	if len(batch.Rows.Teams) != 0 || len(batch.Rows.Ownership) != 0 || len(batch.Rows.Memberships) != 0 {
+		t.Fatalf("teams=%+v ownership=%+v memberships=%+v, want none: a project is not a team and its lead is not a member",
+			batch.Rows.Teams, batch.Rows.Ownership, batch.Rows.Memberships)
 	}
-	team := batch.Rows.Teams[0]
-	if team.ID != "OPS" || team.OrgID != "org-1" || team.Provider != "jira" ||
-		team.NativeTeamKey == nil || *team.NativeTeamKey != "OPS" || team.ParentTeamID != nil {
-		t.Fatalf("team=%+v", team)
+	if batch.Result.TeamsImported != 0 || batch.Result.TeamProjectOwnershipImported != 0 ||
+		batch.Result.TeamMembershipsImported != 0 || batch.Result.MembersImported != 0 {
+		t.Fatalf("result=%+v, want no team, ownership, membership or member counted", batch.Result)
 	}
-	if !team.MembersAuthoritative {
-		t.Fatal("MembersAuthoritative must be true once the walk completes with Members selected")
-	}
-	if len(batch.Rows.Memberships) != 1 {
-		t.Fatalf("memberships=%+v", batch.Rows.Memberships)
-	}
-	membership := batch.Rows.Memberships[0]
-	if membership.TeamID != "OPS" || membership.MemberID != "jira:account-1" ||
-		membership.RawProviderUserID == nil || *membership.RawProviderUserID != "jira:accountid:account-1" ||
-		membership.RawEmail == nil || *membership.RawEmail != "ops@example.com" ||
-		membership.IsPrimary != 1 || membership.Source != "native" {
-		t.Fatalf("membership=%+v", membership)
-	}
-	if len(membership.IdentityFacets) != 2 ||
-		membership.IdentityFacets[0] != "jira:accountid:account-1" ||
-		membership.IdentityFacets[1] != "ops@example.com" {
-		t.Fatalf("identity_facets=%+v", membership.IdentityFacets)
-	}
-	if len(batch.Rows.Ownership) != 1 {
-		t.Fatalf("ownership=%+v", batch.Rows.Ownership)
-	}
-	ownership := batch.Rows.Ownership[0]
-	if ownership.TeamID != "OPS" || ownership.ProjectID != "10001" ||
-		ownership.Source != "native" || ownership.Specificity != jiraTeamCatalogNativeSpecificity ||
-		ownership.Priority != jiraTeamCatalogNativePriority {
-		t.Fatalf("ownership=%+v", ownership)
-	}
-	if len(batch.Rows.Projects) != 1 || batch.Rows.Projects[0].ID != "10001" {
-		t.Fatalf("projects=%+v", batch.Rows.Projects)
+	if len(batch.Rows.Projects) != 1 || batch.Rows.Projects[0].ID != "10001" || batch.Result.ProjectsImported != 1 {
+		t.Fatalf("projects=%+v result=%+v, want the one project on its native id", batch.Rows.Projects, batch.Result)
 	}
 	if len(batch.Rows.Sprints) != 0 {
 		t.Fatalf("sprints=%+v", batch.Rows.Sprints)
@@ -880,12 +846,12 @@ func TestJiraTeamCatalogCollectorSkipsCleanlyWithNothingSelectedNonStrict(t *tes
 	}
 }
 
-// TestJiraTeamCatalogCollectResolvesMemberIdentityThroughAliasMap is a collector-level proof: a project lead's membership row must
-// carry the org's ALIAS-RESOLVED canonical identity for its account id, not
-// the raw "jira:accountid:<id>" qualified id the collector would otherwise
-// write. Deliberately not t.Parallel(): it sets IDENTITY_MAPPING_PATH via
-// t.Setenv, which panics if called from a parallel subtest sibling.
-func TestJiraTeamCatalogCollectResolvesMemberIdentityThroughAliasMap(t *testing.T) {
+// With only Members selected, a lead on the project and an alias map that
+// knows the lead's account id, the walk builds no membership row and no team
+// row: a project lead is not a team member, alias or not. Deliberately not
+// t.Parallel(): it sets IDENTITY_MAPPING_PATH via t.Setenv, which panics if
+// called from a parallel subtest sibling.
+func TestJiraTeamCatalogCollectBuildsNoMembershipFromAProjectLeadWithAnAliasMap(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "identity_mapping.yaml")
 	if err := os.WriteFile(path, []byte(`
@@ -925,18 +891,8 @@ identities:
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(batch.Rows.Memberships) != 1 {
-		t.Fatalf("memberships=%+v", batch.Rows.Memberships)
-	}
-	membership := batch.Rows.Memberships[0]
-	if membership.RawProviderUserID == nil || *membership.RawProviderUserID != "person-b@example.com" {
-		t.Fatalf("RawProviderUserID=%v, want alias-resolved person-b@example.com", membership.RawProviderUserID)
-	}
-	if len(membership.IdentityFacets) != 3 ||
-		membership.IdentityFacets[0] != "person-b@example.com" ||
-		membership.IdentityFacets[1] != "jira:accountid:account-1" ||
-		membership.IdentityFacets[2] != "ops@example.com" {
-		t.Fatalf("IdentityFacets=%v, want [person-b@example.com jira:accountid:account-1 ops@example.com]", membership.IdentityFacets)
+	if len(batch.Rows.Memberships) != 0 || len(batch.Rows.Teams) != 0 || batch.Result.MembersImported != 0 {
+		t.Fatalf("memberships=%+v teams=%+v members imported=%d, want none", batch.Rows.Memberships, batch.Rows.Teams, batch.Result.MembersImported)
 	}
 }
 

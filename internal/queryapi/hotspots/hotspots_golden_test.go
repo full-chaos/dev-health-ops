@@ -95,6 +95,9 @@ func TestHotspotsMatchesTheFrozenGolden(t *testing.T) {
 					labels = append(labels, []any{l["repo_id"], l["full_name"]})
 				}
 				responses = append(responses, &fakeRowScanner{rows: labels})
+				// The per-repository top-file read runs after every query the
+				// reference issued; the golden pins only those.
+				responses = append(responses, &fakeRowScanner{rows: nil})
 			}
 			var limit *int
 			if tc.Limit != nil {
@@ -107,10 +110,14 @@ func TestHotspotsMatchesTheFrozenGolden(t *testing.T) {
 				t.Fatalf("Resolve: %v", err)
 			}
 
-			if len(client.statements) != len(tc.PythonQueries) {
-				t.Fatalf("%d queries, want %d", len(client.statements), len(tc.PythonQueries))
+			wantStatements := len(tc.PythonQueries)
+			if len(tc.Rows) > 0 {
+				wantStatements++
 			}
-			for i, statement := range client.statements {
+			if len(client.statements) != wantStatements {
+				t.Fatalf("%d queries, want %d (reference queries plus the repo top-file read when rows exist)", len(client.statements), wantStatements)
+			}
+			for i, statement := range client.statements[:len(tc.PythonQueries)] {
 				gotParams := map[string]any{}
 				var limitValue any
 				for _, b := range client.bindings[i] {

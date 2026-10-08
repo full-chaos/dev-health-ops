@@ -279,6 +279,14 @@ const registeredHotspotsDocument = `query Hotspots($input: HotspotsInput!) {
       evidenceUrl
       __typename
     }
+    repos {
+      repoId
+      repoName
+      topFilePath
+      topRiskScore
+      evidenceUrl
+      __typename
+    }
     __typename
   }
 }`

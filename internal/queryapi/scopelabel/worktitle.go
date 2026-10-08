@@ -8,16 +8,6 @@ import (
 	"github.com/full-chaos/dev-health-go/clickhouse"
 )
 
-// CleanTitle returns the title trimmed, or nil when nothing displayable is
-// left: an empty title and a bare UUID are never served as a name.
-func CleanTitle(raw string) *string {
-	t := strings.TrimSpace(raw)
-	if t == "" || LooksLikeUUID(t) {
-		return nil
-	}
-	return &t
-}
-
 const workItemTitlesQuery = `
 SELECT work_item_id, argMax(title, last_synced) AS title
 FROM work_items FINAL
@@ -58,8 +48,8 @@ func ResolveWorkItemTitles(ctx context.Context, client Querier, orgID string, id
 			log.Printf("%s: could not resolve work item titles for ids=%d: scan: %v", opts.Log, len(unique), err)
 			return map[string]string{}
 		}
-		if clean := CleanTitle(title); id != "" && clean != nil {
-			resolved[id] = *clean
+		if clean, ok := CleanName(title); id != "" && ok {
+			resolved[id] = clean
 		}
 	}
 	if err := rows.Err(); err != nil {

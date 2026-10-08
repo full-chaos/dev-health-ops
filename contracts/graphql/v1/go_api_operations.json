@@ -178,7 +178,12 @@
   },
   {
     "operation": "hotspots",
-    "digest": "6ccfcc785f38dc4a2d3ef5c9bdc2a00e76c02ccf58d11fd1198d2d321165e781"
+    "digest": "e5a6ed356c1b4deca559bf5954509b5fb7a0bb9310d7c4bb7643cd95f752e59f"
+  },
+  {
+    "operation": "hotspots",
+    "digest": "6ccfcc785f38dc4a2d3ef5c9bdc2a00e76c02ccf58d11fd1198d2d321165e781",
+    "legacy": true
   },
   {
     "operation": "improveOpportunities",

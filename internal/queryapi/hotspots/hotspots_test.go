@@ -158,6 +158,9 @@ func TestResolve_HappyPath(t *testing.T) {
 			{rows: [][]any{
 				{"repo-a", "acme/backend"},
 			}},
+			{rows: [][]any{
+				{"repo-a", "src/main.go", uint64(500), uint32(20), uint32(30), 4.5, 0.75, 92.3},
+			}},
 		},
 	}
 	result, err := Resolve(context.Background(), client, "org-1",
@@ -184,8 +187,18 @@ func TestResolve_HappyPath(t *testing.T) {
 	if row.EvidenceURL == nil || *row.EvidenceURL != "/code?file=src/main.go" {
 		t.Fatalf("EvidenceURL = %v", row.EvidenceURL)
 	}
-	if client.calls != 2 {
-		t.Fatalf("calls = %d, want 2 (hotspot fetch + label lookup)", client.calls)
+	if client.calls != 3 {
+		t.Fatalf("calls = %d, want 3 (hotspot fetch + label lookup + repo top-file read)", client.calls)
+	}
+	if len(result.Repos) != 1 {
+		t.Fatalf("len(Repos) = %d, want 1", len(result.Repos))
+	}
+	repo := result.Repos[0]
+	if repo.RepoID != "repo-a" || repo.RepoName != "acme/backend" || repo.TopFilePath != "src/main.go" || repo.TopRiskScore != 92.3 {
+		t.Fatalf("repo = %+v", repo)
+	}
+	if repo.EvidenceURL == nil || *repo.EvidenceURL != "/code?file=src/main.go" {
+		t.Fatalf("repo EvidenceURL = %v", repo.EvidenceURL)
 	}
 }
 
@@ -196,6 +209,9 @@ func TestResolve_NullBlameConcentrationPropagatesAsNil(t *testing.T) {
 				{"repo-a", "src/main.go", uint64(0), uint32(0), uint32(0), 0.0, nil, 0.0},
 			}},
 			{rows: [][]any{}},
+			{rows: [][]any{
+				{"repo-a", "src/main.go", uint64(0), uint32(0), uint32(0), 0.0, nil, 0.0},
+			}},
 		},
 	}
 	result, err := Resolve(context.Background(), client, "org-1",
@@ -219,6 +235,9 @@ func TestResolve_EmptyPathSkipsEvidenceURL(t *testing.T) {
 				{"repo-a", "", uint64(0), uint32(0), uint32(0), 0.0, nil, 0.0},
 			}},
 			{rows: [][]any{}},
+			{rows: [][]any{
+				{"repo-a", "", uint64(0), uint32(0), uint32(0), 0.0, nil, 0.0},
+			}},
 		},
 	}
 	result, err := Resolve(context.Background(), client, "org-1",
@@ -228,6 +247,9 @@ func TestResolve_EmptyPathSkipsEvidenceURL(t *testing.T) {
 	}
 	if result.Rows[0].EvidenceURL != nil {
 		t.Fatalf("EvidenceURL = %v, want nil for empty file_path", result.Rows[0].EvidenceURL)
+	}
+	if len(result.Repos) != 1 || result.Repos[0].EvidenceURL != nil {
+		t.Fatalf("Repos = %+v, want one repo with nil EvidenceURL for empty file_path", result.Repos)
 	}
 }
 
@@ -246,7 +268,10 @@ func TestResolve_EmptyResultSkipsLabelLookup(t *testing.T) {
 		t.Fatalf("Rows = %+v, want empty", result.Rows)
 	}
 	if client.calls != 1 {
-		t.Fatalf("calls = %d, want 1 (no label lookup for zero rows)", client.calls)
+		t.Fatalf("calls = %d, want 1 (no label lookup and no repo top-file read for zero rows)", client.calls)
+	}
+	if result.Repos == nil || len(result.Repos) != 0 {
+		t.Fatalf("Repos = %#v, want a non-nil empty list (no value, never a zero)", result.Repos)
 	}
 }
 
@@ -350,4 +375,70 @@ func contains(haystack, needle string) bool {
 		}
 	}
 	return false
+}
+
+// TestResolve_ReposCarryEachRepositorysTopFileBeyondTheRowLimit pins the
+// per-repository top file: its query is NOT cut by the row limit, shares the
+// rows query's scope bindings, takes one file per repository, and a
+// repository the row cut dropped still gets its name from a second label
+// lookup.
+func TestResolve_ReposCarryEachRepositorysTopFileBeyondTheRowLimit(t *testing.T) {
+	client := &fakeClient{
+		responses: []*fakeRowScanner{
+			{rows: [][]any{
+				{"repo-a", "a/hot.go", uint64(1), uint32(1), uint32(1), 1.0, nil, 3.0},
+			}},
+			{rows: [][]any{{"repo-a", "acme/a"}}},
+			{rows: [][]any{
+				{"repo-a", "a/hot.go", uint64(1), uint32(1), uint32(1), 1.0, nil, 3.0},
+				{"repo-b", "b/my file.go", uint64(1), uint32(1), uint32(1), 1.0, nil, 0.5},
+			}},
+			{rows: [][]any{{"repo-b", "acme/b"}}},
+		},
+	}
+	limit := 1
+	result, err := Resolve(context.Background(), client, "org-1",
+		mustTime(t, "2026-08-01T00:00:00Z"), mustTime(t, "2026-08-31T23:59:59Z"), []string{"acme/a", "acme/b"}, &limit)
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if len(result.Rows) != 1 {
+		t.Fatalf("len(Rows) = %d, want the row limit 1", len(result.Rows))
+	}
+	if len(result.Repos) != 2 {
+		t.Fatalf("len(Repos) = %d, want 2 (one top file per repository, not cut by the row limit)", len(result.Repos))
+	}
+	b := result.Repos[1]
+	if b.RepoID != "repo-b" || b.RepoName != "acme/b" || b.TopFilePath != "b/my file.go" || b.TopRiskScore != 0.5 {
+		t.Fatalf("repo-b = %+v", b)
+	}
+	if b.EvidenceURL == nil || *b.EvidenceURL != "/code?file=b/my%20file.go" {
+		t.Fatalf("repo-b EvidenceURL = %v", b.EvidenceURL)
+	}
+	if client.calls != 4 {
+		t.Fatalf("calls = %d, want 4 (rows, labels, repo top files, labels for repos the row cut dropped)", client.calls)
+	}
+	top := client.statements[2]
+	if !contains(top, "LIMIT 1 BY repo_id") || contains(top, "LIMIT 1\n") {
+		t.Fatalf("repo top-file query = %q, want LIMIT 1 BY repo_id and no row limit of 1", top)
+	}
+	if !contains(top, "argMax(") || !contains(top, "(day, computed_at)") {
+		t.Fatalf("repo top-file query = %q, want the same (day, computed_at) argMax as the rows query", top)
+	}
+	names := func(bs []clickhouse.Binding) map[string]any {
+		m := map[string]any{}
+		for _, b := range bs {
+			m[b.Name] = b.Value
+		}
+		return m
+	}
+	rowsB, topB := names(client.bindings[0]), names(client.bindings[2])
+	for _, k := range []string{"org_id", "since_day", "until_day"} {
+		if rowsB[k] != topB[k] {
+			t.Fatalf("binding %s: rows %v, repo top-file %v, want identical scope", k, rowsB[k], topB[k])
+		}
+	}
+	if _, ok := topB["repo_ids"]; !ok {
+		t.Fatal("repo top-file query lost the repo_ids scope")
+	}
 }

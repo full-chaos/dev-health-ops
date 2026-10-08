@@ -819,7 +819,8 @@ type ComplexityRoot struct {
 	}
 
 	HotspotsResult struct {
-		Rows func(childComplexity int) int
+		Repos func(childComplexity int) int
+		Rows  func(childComplexity int) int
 	}
 
 	IdentityMappingHealth struct {
@@ -1167,6 +1168,14 @@ type ComplexityRoot struct {
 		LineDays          func(childComplexity int) int
 		RepoID            func(childComplexity int) int
 		RepoName          func(childComplexity int) int
+	}
+
+	RepoHotspot struct {
+		EvidenceURL  func(childComplexity int) int
+		RepoID       func(childComplexity int) int
+		RepoName     func(childComplexity int) int
+		TopFilePath  func(childComplexity int) int
+		TopRiskScore func(childComplexity int) int
 	}
 
 	ReportRunConnection struct {
@@ -5220,6 +5229,13 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 
 		return e.complexity.HotspotRow.RiskScore(childComplexity), true
 
+	case "HotspotsResult.repos":
+		if e.complexity.HotspotsResult.Repos == nil {
+			break
+		}
+
+		return e.complexity.HotspotsResult.Repos(childComplexity), true
+
 	case "HotspotsResult.rows":
 		if e.complexity.HotspotsResult.Rows == nil {
 			break
@@ -7191,6 +7207,41 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 		}
 
 		return e.complexity.RepoCoverageBaseline.RepoName(childComplexity), true
+
+	case "RepoHotspot.evidenceUrl":
+		if e.complexity.RepoHotspot.EvidenceURL == nil {
+			break
+		}
+
+		return e.complexity.RepoHotspot.EvidenceURL(childComplexity), true
+
+	case "RepoHotspot.repoId":
+		if e.complexity.RepoHotspot.RepoID == nil {
+			break
+		}
+
+		return e.complexity.RepoHotspot.RepoID(childComplexity), true
+
+	case "RepoHotspot.repoName":
+		if e.complexity.RepoHotspot.RepoName == nil {
+			break
+		}
+
+		return e.complexity.RepoHotspot.RepoName(childComplexity), true
+
+	case "RepoHotspot.topFilePath":
+		if e.complexity.RepoHotspot.TopFilePath == nil {
+			break
+		}
+
+		return e.complexity.RepoHotspot.TopFilePath(childComplexity), true
+
+	case "RepoHotspot.topRiskScore":
+		if e.complexity.RepoHotspot.TopRiskScore == nil {
+			break
+		}
+
+		return e.complexity.RepoHotspot.TopRiskScore(childComplexity), true
 
 	case "ReportRunConnection.items":
 		if e.complexity.ReportRunConnection.Items == nil {
@@ -10207,8 +10258,20 @@ input HotspotsInput {
   limit: Int = null
 }
 
+"""
+Each repository's single highest-risk file in the requested window and scope: the driver, linked to that file's evidence. riskScore is the served file score (an unbounded z-sum), not a repository score; no repository-level score or hotspot count exists. A repository with no hotspot file row is absent.
+"""
+type RepoHotspot {
+  repoId: String!
+  repoName: String!
+  topFilePath: String!
+  topRiskScore: Float!
+  evidenceUrl: String
+}
+
 type HotspotsResult {
   rows: [HotspotRow!]!
+  repos: [RepoHotspot!]!
 }
 
 input HowFilterInput {
@@ -38060,6 +38123,62 @@ func (ec *executionContext) fieldContext_HotspotsResult_rows(_ context.Context, 
 	return fc, nil
 }
 
+func (ec *executionContext) _HotspotsResult_repos(ctx context.Context, field graphql.CollectedField, obj *model.HotspotsResult) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_HotspotsResult_repos(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.Repos, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.([]model.RepoHotspot)
+	fc.Result = res
+	return ec.marshalNRepoHotspot2ᚕgithubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋinternalᚋqueryapiᚋgraphᚋmodelᚐRepoHotspotᚄ(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_HotspotsResult_repos(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "HotspotsResult",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "repoId":
+				return ec.fieldContext_RepoHotspot_repoId(ctx, field)
+			case "repoName":
+				return ec.fieldContext_RepoHotspot_repoName(ctx, field)
+			case "topFilePath":
+				return ec.fieldContext_RepoHotspot_topFilePath(ctx, field)
+			case "topRiskScore":
+				return ec.fieldContext_RepoHotspot_topRiskScore(ctx, field)
+			case "evidenceUrl":
+				return ec.fieldContext_RepoHotspot_evidenceUrl(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type RepoHotspot", field.Name)
+		},
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _IdentityMappingHealth_unmappedCount(ctx context.Context, field graphql.CollectedField, obj *model.IdentityMappingHealth) (ret graphql.Marshaler) {
 	fc, err := ec.fieldContext_IdentityMappingHealth_unmappedCount(ctx, field)
 	if err != nil {
@@ -48292,6 +48411,8 @@ func (ec *executionContext) fieldContext_Query_hotspots(ctx context.Context, fie
 			switch field.Name {
 			case "rows":
 				return ec.fieldContext_HotspotsResult_rows(ctx, field)
+			case "repos":
+				return ec.fieldContext_HotspotsResult_repos(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type HotspotsResult", field.Name)
 		},
@@ -50574,6 +50695,223 @@ func (ec *executionContext) fieldContext_RepoCoverageBaseline_branchDays(_ conte
 		IsResolver: false,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 			return nil, errors.New("field of type Int does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _RepoHotspot_repoId(ctx context.Context, field graphql.CollectedField, obj *model.RepoHotspot) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_RepoHotspot_repoId(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.RepoID, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(string)
+	fc.Result = res
+	return ec.marshalNString2string(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_RepoHotspot_repoId(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "RepoHotspot",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _RepoHotspot_repoName(ctx context.Context, field graphql.CollectedField, obj *model.RepoHotspot) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_RepoHotspot_repoName(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.RepoName, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(string)
+	fc.Result = res
+	return ec.marshalNString2string(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_RepoHotspot_repoName(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "RepoHotspot",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _RepoHotspot_topFilePath(ctx context.Context, field graphql.CollectedField, obj *model.RepoHotspot) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_RepoHotspot_topFilePath(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.TopFilePath, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(string)
+	fc.Result = res
+	return ec.marshalNString2string(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_RepoHotspot_topFilePath(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "RepoHotspot",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _RepoHotspot_topRiskScore(ctx context.Context, field graphql.CollectedField, obj *model.RepoHotspot) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_RepoHotspot_topRiskScore(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.TopRiskScore, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(float64)
+	fc.Result = res
+	return ec.marshalNFloat2float64(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_RepoHotspot_topRiskScore(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "RepoHotspot",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Float does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _RepoHotspot_evidenceUrl(ctx context.Context, field graphql.CollectedField, obj *model.RepoHotspot) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_RepoHotspot_evidenceUrl(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.EvidenceURL, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*string)
+	fc.Result = res
+	return ec.marshalOString2ᚖstring(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_RepoHotspot_evidenceUrl(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "RepoHotspot",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
 		},
 	}
 	return fc, nil
@@ -70730,6 +71068,11 @@ func (ec *executionContext) _HotspotsResult(ctx context.Context, sel ast.Selecti
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
+		case "repos":
+			out.Values[i] = ec._HotspotsResult_repos(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}
@@ -73766,6 +74109,62 @@ func (ec *executionContext) _RepoCoverageBaseline(ctx context.Context, sel ast.S
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.deferred, int32(len(deferred)))
+
+	for label, dfs := range deferred {
+		ec.processDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
+var repoHotspotImplementors = []string{"RepoHotspot"}
+
+func (ec *executionContext) _RepoHotspot(ctx context.Context, sel ast.SelectionSet, obj *model.RepoHotspot) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, repoHotspotImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("RepoHotspot")
+		case "repoId":
+			out.Values[i] = ec._RepoHotspot_repoId(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "repoName":
+			out.Values[i] = ec._RepoHotspot_repoName(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "topFilePath":
+			out.Values[i] = ec._RepoHotspot_topFilePath(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "topRiskScore":
+			out.Values[i] = ec._RepoHotspot_topRiskScore(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "evidenceUrl":
+			out.Values[i] = ec._RepoHotspot_evidenceUrl(ctx, field, obj)
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}
@@ -80556,6 +80955,54 @@ func (ec *executionContext) marshalNRepoCoverageBaseline2ᚕgithubᚗcomᚋfull�
 				defer wg.Done()
 			}
 			ret[i] = ec.marshalNRepoCoverageBaseline2githubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋinternalᚋqueryapiᚋgraphᚋmodelᚐRepoCoverageBaseline(ctx, sel, v[i])
+		}
+		if isLen1 {
+			f(i)
+		} else {
+			go f(i)
+		}
+
+	}
+	wg.Wait()
+
+	for _, e := range ret {
+		if e == graphql.Null {
+			return graphql.Null
+		}
+	}
+
+	return ret
+}
+
+func (ec *executionContext) marshalNRepoHotspot2githubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋinternalᚋqueryapiᚋgraphᚋmodelᚐRepoHotspot(ctx context.Context, sel ast.SelectionSet, v model.RepoHotspot) graphql.Marshaler {
+	return ec._RepoHotspot(ctx, sel, &v)
+}
+
+func (ec *executionContext) marshalNRepoHotspot2ᚕgithubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋinternalᚋqueryapiᚋgraphᚋmodelᚐRepoHotspotᚄ(ctx context.Context, sel ast.SelectionSet, v []model.RepoHotspot) graphql.Marshaler {
+	ret := make(graphql.Array, len(v))
+	var wg sync.WaitGroup
+	isLen1 := len(v) == 1
+	if !isLen1 {
+		wg.Add(len(v))
+	}
+	for i := range v {
+		i := i
+		fc := &graphql.FieldContext{
+			Index:  &i,
+			Result: &v[i],
+		}
+		ctx := graphql.WithFieldContext(ctx, fc)
+		f := func(i int) {
+			defer func() {
+				if r := recover(); r != nil {
+					ec.Error(ctx, ec.Recover(ctx, r))
+					ret = nil
+				}
+			}()
+			if !isLen1 {
+				defer wg.Done()
+			}
+			ret[i] = ec.marshalNRepoHotspot2githubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋinternalᚋqueryapiᚋgraphᚋmodelᚐRepoHotspot(ctx, sel, v[i])
 		}
 		if isLen1 {
 			f(i)

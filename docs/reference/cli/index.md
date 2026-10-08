@@ -1538,6 +1538,50 @@ deployed Go revision from the rollback tag set.
 
 ### `dho workers providersync`
 
+#### `providersync carry-team-ids` (CHAOS-8940)
+
+A provider team id carries its provider's prefix (`linear:<key>`,
+`jira:<uuid>`, `<system>:<id>` for a pushed team; see the team attribution
+architecture, section 0.4f). Rows written before that rule hold the bare id.
+Every writer of a prefixed team id (the Linear team catalog, the Atlassian
+Teams write, the external ingest `team.v1`/`identity.v1` sink, the admin team
+import) moves its organization's bare ids before it writes. This verb does
+the same now, for one organization, with the same function
+(`providersync.CarryTeamIDs`).
+
+Nothing is deleted:
+
+- each active bare-id team row is written again under the new id, and the old
+  row is written again with `is_active = 0`;
+- each open membership, project ownership and repository ownership row of the
+  old id is written again under the new id with the first `valid_from` the old
+  id had for that link, and the old row is closed;
+- observations, sync policies, team drift changes (with their status),
+  `identities.team_ids` and manual attribution fallbacks follow the new id.
+
+Not moved: ids that already hold a provider key, an admin team that no single
+provider's observation names, a Jira project-as-team row (see
+`retire-jira-project-as-team`), inactive teams, other organizations.
+Computed attribution and metric rows keep the old id until the full-history
+recompute that follows the carry.
+
+The organization comes from stdin only: `--org-stdin` is required and there
+is no `--org`, with the stdin rules of
+[`metrics daily-start`](#metrics-daily-start-chaos-5055). The verb prints no
+organization id. It prints counts only, under `carry_team_ids`: `teams`,
+`admin_teams`, `admin_teams_not_carried`, `ambiguous_teams`,
+`teams_already_keyed`, `memberships`, `project_ownership`, `repo_ownership`,
+`link_rows_already_keyed`, `observations`, `sync_policies`, `drift_changes`,
+`identities`, `fallbacks`, and `rows_written` (0 with `--dry-run`). A second
+run reports zero.
+
+```bash
+kubectl exec -i <worker-pod> -- dho workers providersync carry-team-ids \
+  --org-stdin --dry-run < org-id-source
+kubectl exec -i <worker-pod> -- dho workers providersync carry-team-ids \
+  --org-stdin --reason <code> --correlation-id <id> < org-id-source
+```
+
 #### `providersync retire-jira-project-as-team` (CHAOS-8888)
 
 Earlier versions of the Jira team catalog made a team of every Jira project

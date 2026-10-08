@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/identityalias"
+	"github.com/full-chaos/dev-health-ops/internal/teamid"
 )
 
 // The reference catalog is an auxiliary projection of the Linear work-items
@@ -308,6 +309,7 @@ func normalizeLinearReferenceTeam(
 	normalizedAt = normalizedAt.UTC().Truncate(time.Millisecond)
 	teamKey := strings.TrimSpace(payload.Key)
 	nativeTeamKey := teamKey
+	teamID := teamid.Of("linear", teamKey)
 	// Page-1 only (members(first:10)). CHAOS-4431 codex review P1: a team
 	// with more than 10 members must have its roster rebuilt from the FULL
 	// paginated member set once CollectReferenceCatalog finishes fetching
@@ -318,8 +320,8 @@ func normalizeLinearReferenceTeam(
 	// members (no extra page fetched at all).
 	members := linearReferenceTeamRosterFacets(resolver, payload.Members.Nodes)
 	return linearReferenceTeamRow{
-		ID:       teamKey,
-		TeamUUID: uuid.NewSHA1(uuid.NameSpaceURL, []byte("team:"+teamKey)).String(),
+		ID:       teamID,
+		TeamUUID: uuid.NewSHA1(uuid.NameSpaceURL, []byte("team:"+teamID)).String(),
 		Name:     linearFirstNonEmpty(payload.Name, teamKey), Description: payload.Description,
 		// ProjectKeys is deliberately left empty, not []string{teamKey}
 		// (CHAOS-4530: "a team key is not a project key"). A team's own key

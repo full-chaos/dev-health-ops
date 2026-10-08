@@ -307,6 +307,7 @@ internal/syncreconciler	2
 internal/syncroute	1
 internal/syncrunrollup	5
 internal/teamattribution	1
+internal/teamid	1
 internal/teamownership	1
 internal/teamresolve	1
 internal/testsupport/chlogin	1

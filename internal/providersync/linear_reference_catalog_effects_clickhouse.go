@@ -2,12 +2,14 @@ package providersync
 
 import (
 	"context"
+	"errors"
 	"reflect"
 	"strings"
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
+	"github.com/full-chaos/dev-health-ops/internal/teamid"
 	"github.com/google/uuid"
 )
 
@@ -228,6 +230,9 @@ func validateLinearReferenceTeamRow(claim Claim, row linearReferenceTeamRow) err
 	if _, err := uuid.Parse(row.TeamUUID); err != nil {
 		return ErrInvalidConfiguration
 	}
+	if err := teamid.Check("linear", row.ID); err != nil {
+		return errors.Join(ErrInvalidConfiguration, err)
+	}
 	return nil
 }
 
@@ -247,6 +252,9 @@ func validateLinearReferenceMembershipRow(claim Claim, row linearReferenceMember
 		row.ValidFrom.IsZero() || row.UpdatedAt.IsZero() {
 		return ErrInvalidConfiguration
 	}
+	if err := teamid.Check("linear", row.TeamID); err != nil {
+		return errors.Join(ErrInvalidConfiguration, err)
+	}
 	return nil
 }
 
@@ -256,6 +264,9 @@ func validateLinearReferenceOwnershipRow(claim Claim, row linearReferenceOwnersh
 		row.Source != "native" || row.IsPrimary != 1 || row.Specificity != 100 || row.Priority != 10 ||
 		row.ValidFrom.IsZero() || row.UpdatedAt.IsZero() {
 		return ErrInvalidConfiguration
+	}
+	if err := teamid.Check("linear", row.TeamID); err != nil {
+		return errors.Join(ErrInvalidConfiguration, err)
 	}
 	return nil
 }

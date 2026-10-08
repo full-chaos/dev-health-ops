@@ -18,8 +18,8 @@ import (
 )
 
 const (
-	idA = "aaaaaaaa-0000-4000-8000-000000000001"
-	idC = "cccccccc-0000-4000-8000-000000000003"
+	idA = "jira:aaaaaaaa-0000-4000-8000-000000000001"
+	idC = "jira:cccccccc-0000-4000-8000-000000000003"
 )
 
 func openClickHouse(t *testing.T) driver.Conn {
@@ -105,7 +105,7 @@ func TestWriteTeamsMembershipsAndOwnershipAgainstClickHouse(t *testing.T) {
 	want := []string{ // ClickHouse orders bytewise: "PLAT" sorts before the lower-case uuids
 		"PLAT|Platform project|1|PLAT||PLAT",
 		idA + "|Platform|1|PLAT|jira:manual-1|" + teamA,
-		"bbbbbbbb-0000-4000-8000-000000000002|Old|0|||" + teamB,
+		"jira:bbbbbbbb-0000-4000-8000-000000000002|Old|0|||" + teamB,
 		idC + "|Data|1|||" + teamC,
 	}
 	if strings.Join(teams, "\n") != strings.Join(want, "\n") {

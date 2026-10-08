@@ -118,7 +118,7 @@ func openLinks(t *testing.T, conn driver.Conn) string {
 // and members of the same run.
 func TestTheWorkerStepCountsLinksAndDegradesAnIncompleteLinkLeg(t *testing.T) {
 	conn := openLinkLegClickHouse(t)
-	const one, two = "00000000-0000-4000-8000-000000000001", "00000000-0000-4000-8000-000000000002"
+	const one, two = "jira:00000000-0000-4000-8000-000000000001", "jira:00000000-0000-4000-8000-000000000002"
 	project := func(key, id string) graph.TeamConnectedContainer {
 		return graph.TeamConnectedContainer{Typename: "JiraProject", ID: "ari:cloud:jira:site-uuid:project/" + id, Key: key, ProjectID: id}
 	}

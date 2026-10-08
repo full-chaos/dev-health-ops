@@ -23,20 +23,26 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 )
 
-// writeBarrier holds the first statement whose SQL starts with prefix at its
-// start, until Release: the request that runs it has passed its superuser
-// check and has not written yet.
+// writeBarrier holds the first statement whose SQL starts with prefix until
+// Release: at its start (Arm), or after it ran (ArmEnd).
 type writeBarrier struct {
 	mu      sync.Mutex
 	prefix  string
+	atEnd   bool
 	reached chan struct{}
 	release chan struct{}
 }
 
-func (b *writeBarrier) Arm(prefix string) {
+type heldAtEndKey struct{}
+
+func (b *writeBarrier) Arm(prefix string) { b.arm(prefix, false) }
+
+func (b *writeBarrier) ArmEnd(prefix string) { b.arm(prefix, true) }
+
+func (b *writeBarrier) arm(prefix string, atEnd bool) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	b.prefix, b.reached, b.release = prefix, make(chan struct{}), make(chan struct{})
+	b.prefix, b.atEnd, b.reached, b.release = prefix, atEnd, make(chan struct{}), make(chan struct{})
 }
 
 func (b *writeBarrier) Release() {
@@ -52,18 +58,28 @@ func (b *writeBarrier) TraceQueryStart(ctx context.Context, _ *pgx.Conn, data pg
 	b.mu.Lock()
 	hit := b.prefix != "" && strings.HasPrefix(strings.TrimSpace(data.SQL), b.prefix)
 	var reached, release chan struct{}
+	atEnd := b.atEnd
 	if hit {
 		b.prefix, reached, release = "", b.reached, b.release
 	}
 	b.mu.Unlock()
-	if hit {
-		close(reached)
-		<-release
+	if !hit {
+		return ctx
 	}
+	if atEnd {
+		return context.WithValue(ctx, heldAtEndKey{}, [2]chan struct{}{reached, release})
+	}
+	close(reached)
+	<-release
 	return ctx
 }
 
-func (b *writeBarrier) TraceQueryEnd(context.Context, *pgx.Conn, pgx.TraceQueryEndData) {}
+func (b *writeBarrier) TraceQueryEnd(ctx context.Context, _ *pgx.Conn, _ pgx.TraceQueryEndData) {
+	if held, ok := ctx.Value(heldAtEndKey{}).([2]chan struct{}); ok {
+		close(held[0])
+		<-held[1]
+	}
+}
 
 // TestASuperuserGrantCannotLandBetweenTheGuardAndTheWrite holds an org admin's
 // write on a non-superuser target after its superuser check and before its
@@ -281,5 +297,133 @@ VALUES ($1, $2, $3, 'member', now(), now(), now())`, uuid.New(), orgID, targetID
 				t.Error("the grant did not wait for the admin's write: the check and the write are not one unit")
 			}
 		})
+	}
+}
+
+// TestOppositeOwnershipTransfersBothFinish runs two ownership transfers that
+// lock the same two users in opposite roles: the first moves org one from A
+// to B, the second moves org two from B to A. The first is held after its
+// superuser lock statement until the second waits on a lock. Both must
+// finish: the targets are locked in one stable order, so neither transfer
+// can hold one row while it waits for the other.
+func TestOppositeOwnershipTransfersBothFinish(t *testing.T) {
+	ctx := context.Background()
+	pool, instance := migratedPostgres(t, ctx)
+	barrier := &writeBarrier{}
+	t.Cleanup(barrier.Release)
+	config, err := pgxpool.ParseConfig(instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	config.ConnConfig.Tracer = barrier
+	gated, err := pgxpool.NewWithConfig(ctx, config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(gated.Close)
+
+	const jwtKey = "superuser-grant-test-signing-key-32-bytes-long!!"
+	verifier, err := edgetoken.New(jwtKey, "dev-health-ops", "dev-health-api")
+	if err != nil {
+		t.Fatal(err)
+	}
+	signer, err := edgetoken.NewSigner(jwtKey, "dev-health-ops", "dev-health-api")
+	if err != nil {
+		t.Fatal(err)
+	}
+	logger := slog.New(slog.DiscardHandler)
+	auth, err := policy.NewAuthenticator(verifier, policy.PGStore{Pool: pool}, logger)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mux := http.NewServeMux()
+	for _, route := range admin.Routes(admin.Deps{Pool: gated, Guard: policy.NewGuard(auth, logger), Logger: logger}) {
+		if strings.HasPrefix(route.Pattern, "/api/v1/admin/orgs/{org_id}/") {
+			mux.Handle(route.Method+" "+route.Pattern, route.Handler)
+		}
+	}
+	server := httptest.NewServer(mux)
+	t.Cleanup(server.Close)
+
+	rootID, aID, bID, org1, org2 := uuid.New(), uuid.New(), uuid.New(), uuid.New(), uuid.New()
+	for _, statement := range []struct {
+		query string
+		args  []any
+	}{
+		{`INSERT INTO users (id, email, is_active, is_verified, is_superuser, token_version, created_at, updated_at)
+VALUES ($1, 'xfer-root@example.com', true, true, true, 0, now(), now()), ($2, 'xfer-a@example.com', true, true, false, 0, now(), now()),
+($3, 'xfer-b@example.com', true, true, false, 0, now(), now())`, []any{rootID, aID, bID}},
+		{`INSERT INTO organizations (id, slug, name, tier, managed_by, is_active, created_at, updated_at)
+VALUES ($1, 'xfer-one', 'xfer-one', 'community', 'stripe', true, now(), now()), ($2, 'xfer-two', 'xfer-two', 'community', 'stripe', true, now(), now())`, []any{org1, org2}},
+		{`INSERT INTO memberships (id, org_id, user_id, role, joined_at, created_at, updated_at)
+VALUES (gen_random_uuid(), $1, $3, 'owner', now(), now(), now()), (gen_random_uuid(), $1, $4, 'member', now(), now(), now()),
+(gen_random_uuid(), $2, $4, 'owner', now(), now(), now()), (gen_random_uuid(), $2, $3, 'member', now(), now(), now())`, []any{org1, org2, aID, bID}},
+	} {
+		if _, err := pool.Exec(ctx, statement.query, statement.args...); err != nil {
+			t.Fatalf("seed: %v", err)
+		}
+	}
+	root, err := signer.Access(edgetoken.AccessClaims{UserID: rootID.String(), Email: "xfer-root@example.com", Role: "admin", IsSuperuser: true},
+		time.Now(), uuid.NewString())
+	if err != nil {
+		t.Fatal(err)
+	}
+	transfer := func(org, to uuid.UUID) int {
+		request, err := http.NewRequestWithContext(ctx, http.MethodPost, server.URL+"/api/v1/admin/orgs/"+org.String()+"/transfer-ownership",
+			strings.NewReader(fmt.Sprintf(`{"new_owner_user_id":%q}`, to)))
+		if err != nil {
+			return -1
+		}
+		request.Header.Set("Authorization", "Bearer "+root)
+		request.Header.Set("Content-Type", "application/json")
+		response, err := http.DefaultClient.Do(request)
+		if err != nil {
+			return -1
+		}
+		_ = response.Body.Close()
+		return response.StatusCode
+	}
+
+	barrier.ArmEnd("SELECT is_superuser FROM users")
+	first := make(chan int, 1)
+	go func() { first <- transfer(org1, bID) }()
+	select {
+	case <-barrier.reached:
+	case status := <-first:
+		t.Fatalf("the first transfer finished with %d before its superuser lock statement", status)
+	case <-time.After(10 * time.Second):
+		t.Fatal("the first transfer never ran its superuser lock statement")
+	}
+	second := make(chan int, 1)
+	go func() { second <- transfer(org2, aID) }()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		var waiting int
+		if err := pool.QueryRow(ctx, `SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock'`).Scan(&waiting); err != nil {
+			t.Fatal(err)
+		}
+		if waiting > 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			barrier.Release()
+			t.Fatal("the second transfer never waited on a lock held by the first")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	barrier.Release()
+	firstStatus, secondStatus := <-first, <-second
+	owner := func(org uuid.UUID) uuid.UUID {
+		var id uuid.UUID
+		if err := pool.QueryRow(ctx, `SELECT user_id FROM memberships WHERE org_id = $1 AND role = 'owner'`, org).Scan(&id); err != nil {
+			t.Fatal(err)
+		}
+		return id
+	}
+	if firstStatus != http.StatusOK || secondStatus != http.StatusOK {
+		t.Errorf("transfers returned %d and %d, want 200 and 200", firstStatus, secondStatus)
+	}
+	if owner(org1) != bID || owner(org2) != aID {
+		t.Errorf("owners after both transfers: org one %v (want B), org two %v (want A)", owner(org1) == bID, owner(org2) == aID)
 	}
 }

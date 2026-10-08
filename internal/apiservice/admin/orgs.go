@@ -595,20 +595,20 @@ func (h *handlers) transferOwnership(w http.ResponseWriter, r *http.Request) {
 	}
 
 	h.superuserGuardedWrite(ctx, w, user, nil, "transfer_ownership", func(g *superuserTx) func() {
-		if g.refuse(toUserID) {
-			return nil
-		}
 		fromUserID, err := h.store.currentOwner(ctx, g.tx, orgID)
-		if err == errNotAnOwner {
-			policy.WriteDetail(w, http.StatusBadRequest, "Source user is not an owner", nil)
-			return nil
-		}
 		if err != nil {
+			if g.refuse(toUserID) {
+				return nil
+			}
+			if err == errNotAnOwner {
+				policy.WriteDetail(w, http.StatusBadRequest, "Source user is not an owner", nil)
+				return nil
+			}
 			h.logger.ErrorContext(ctx, "admin: resolve current owner failed", "error", err)
 			policy.WriteInternal(w)
 			return nil
 		}
-		if g.refuse(fromUserID) {
+		if g.refuse(toUserID, fromUserID) {
 			return nil
 		}
 		if err := h.store.transferOwnership(ctx, g.tx, orgID, fromUserID, toUserID); err != nil {

@@ -113,26 +113,29 @@ type superuserTx struct {
 	store     pgStore
 }
 
-// refuse locks each target's users row (FOR UPDATE, in this transaction) and
-// decides on the locked value with refuseSuperuserWrite. A concurrent grant
+// refuse locks the targets' users rows (FOR UPDATE, in this transaction) and
+// decides on the locked values with refuseSuperuserWrite. A concurrent grant
 // on a target waits for this transaction; one that committed first is seen.
+// All targets are locked in one statement in id order, so two writes that
+// lock the same rows cannot deadlock.
 func (g *superuserTx) refuse(targetIDs ...uuid.UUID) bool {
 	var target func() (bool, error)
 	if len(targetIDs) > 0 {
 		target = func() (bool, error) {
+			rows, err := g.tx.Query(g.ctx, `SELECT is_superuser FROM users WHERE id = ANY($1) ORDER BY id FOR UPDATE`, targetIDs)
+			if err != nil {
+				return false, err
+			}
+			defer rows.Close()
 			found := false
-			for _, id := range targetIDs {
+			for rows.Next() {
 				var isSuperuser bool
-				err := g.tx.QueryRow(g.ctx, `SELECT is_superuser FROM users WHERE id = $1 FOR UPDATE`, id).Scan(&isSuperuser)
-				if errors.Is(err, pgx.ErrNoRows) {
-					continue
-				}
-				if err != nil {
+				if err := rows.Scan(&isSuperuser); err != nil {
 					return false, err
 				}
 				found = found || isSuperuser
 			}
-			return found, nil
+			return found, rows.Err()
 		}
 	}
 	return g.h.refuseSuperuserWrite(g.ctx, g.w, g.user, g.requested, target, g.route)

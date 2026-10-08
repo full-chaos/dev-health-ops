@@ -1075,6 +1075,25 @@ also hold for a team of the item's provider).
 | github | ✓ `discover_github` | n/a (repo = scope) | ✓ `discover_members_github` | ✓ `team_repo_ownership` | edges **+ roster** (this CS) |
 | gitlab | ✓ `discover_gitlab` | ✓ (GitLab project paths) | ✓ `discover_members_gitlab` | — | edges **+ roster** (this CS) |
 
+**GitHub `provider_access` repo ownership is a snapshot, not an append (CHAOS-8944).** Each GitHub team catalog run
+(`GitHubTeamCatalogClickHouseEffects.SnapshotTeamRepoOwnership`, `internal/providersync/github_team_catalog_effects_clickhouse.go`)
+writes the grants `GET /orgs/{org}/teams/{slug}/repos` returned and closes (writes the same sort key again with
+`valid_to` set) every open `team_repo_ownership` row that GitHub no longer returns. It goes through the one snapshot
+rule, `PlanOwnershipSnapshot` (a repo full name stands in for the project id). Scope of a close, all of it required:
+
+- org = the run's org, `provider = 'github'`, `source = 'provider_access'`. A row of another org, another source
+  (`inferred`, `manual`, `native`) or another provider is never read and never closed.
+- only the teams whose repo listing reached its end in this run (`githubTeamCatalogRows.RepoListedTeamIDs`). A team whose
+  listing failed fails the whole run (nothing is written, nothing is closed). A run that listed no team, and a run that
+  did not select teams (members-only), closes nothing: "the measurement did not happen" is never read as "GitHub returned
+  nothing". A team that is listed with an empty repo list is a real, complete answer, and its rows close.
+- a failed read of the open rows fails the run before any write.
+- a grant that is still returned keeps the `valid_from` of its earliest open row, so a repeat run replaces the row instead
+  of adding one, and an older open duplicate of the same grant is closed.
+
+GitLab writes `team_project_ownership` (`source = 'provider_access'`), not `team_repo_ownership`; it has no repo-ownership
+rows to close.
+
 One path: `run_team_autoimport` → `team_autoimport_<provider>.populate()` → `discover_*` → ClickHouse. (`LinearClient.iter_projects` is vestigial dead code, never a path.)
 
 > **Three (legacy bridge) + three (native, CHAOS-4431/4434/4432) chains reach `team_autoimport_<provider>.

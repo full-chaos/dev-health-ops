@@ -318,11 +318,17 @@ func (adapter GitHubTeamCatalogCollector) CollectTeamCatalog(
 	// the `teams` row's members field, never this table). Independent of the
 	// sync_policy guard above too -- that guard is scoped to the `teams`
 	// table only, matching Linear's own applyTeamSyncPolicyGuard doc comment.
-	if selections.Teams && len(rows.RepoOwnership) > 0 {
-		if err := adapter.Sink.WriteTeamRepoOwnership(ctx, ref.OrgID, rows.RepoOwnership); err != nil {
+	if selections.Teams && (len(rows.RepoOwnership) > 0 || len(rows.RepoListedTeamIDs) > 0) {
+		written, closed, err := adapter.Sink.SnapshotTeamRepoOwnership(
+			ctx, ref.OrgID, rows.RepoOwnership, rows.RepoListedTeamIDs, normalizedAt,
+		)
+		if err != nil {
 			return result, err
 		}
-		result.RepoOwnershipWritten = len(rows.RepoOwnership)
+		result.RepoOwnershipWritten = written
+		slog.Default().InfoContext(ctx, "github_team_catalog_repo_ownership_snapshot",
+			"org_id", ref.OrgID, "teams_listed", len(rows.RepoListedTeamIDs),
+			"rows_written", written, "rows_closed", closed)
 	}
 	if selections.Members {
 		result.MembershipsSkippedManualConflict = membershipsSkippedManualConflict

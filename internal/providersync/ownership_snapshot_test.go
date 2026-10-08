@@ -156,6 +156,19 @@ var ownershipWriters = map[string]ownershipWriter{
 	},
 }
 
+// repoOwnershipPlanners are the planners of the writers of team_repo_ownership
+// (a different table from the one the census above scans for writers). They are
+// pinned like the planners above: each calls PlanOwnershipSnapshot with its own
+// `complete` parameter and names where that value comes from.
+var repoOwnershipPlanners = map[string]ownershipWriter{
+	"internal/providersync.GitHubTeamCatalogClickHouseEffects.SnapshotTeamRepoOwnership": {
+		provider: "github", planner: "internal/providersync.githubRepoOwnershipSnapshot",
+		complete: "SnapshotTeamRepoOwnership passes len(listedTeamIDs) > 0: githubTeamCatalogRows.RepoListedTeamIDs, which " +
+			"GitHubTeamCatalogRouteHandler.Collect fills only after a team's repo listing reached its end (a failed or " +
+			"capped listing fails Collect, github_team_catalog_route.go)",
+	},
+}
+
 var ownershipInsertStatement = regexp.MustCompile(`(?is)\binsert\s+into\s+team_project_ownership\b`)
 
 const ownershipSnapshotEntryPoint = "PlanOwnershipSnapshot"
@@ -381,6 +394,18 @@ func TestJiraOwnershipWriterCensus(t *testing.T) {
 			wantPlanners = append(wantPlanners, writer.planner)
 		case strings.TrimSpace(writer.note) == "":
 			t.Errorf("%s has no planner and no note", name)
+		}
+	}
+	for name, writer := range repoOwnershipPlanners {
+		wantPlanners = append(wantPlanners, writer.planner)
+		if strings.TrimSpace(writer.complete) == "" {
+			t.Errorf("%s: the planner %s does not name where its completeness comes from", name, writer.planner)
+		}
+		if got := census.completeness[writer.planner]; got != "complete" {
+			t.Errorf("%s: the planner %s passes Complete = %q to %s, want its `complete` parameter", name, writer.planner, got, ownershipSnapshotEntryPoint)
+		}
+		if !census.calls[name]["githubRepoOwnershipSnapshot"] {
+			t.Errorf("%s does not call its planner %s", name, writer.planner)
 		}
 	}
 	if jira == 0 {

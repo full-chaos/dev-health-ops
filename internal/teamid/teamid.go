@@ -96,10 +96,24 @@ func Check(provider, id string) error {
 }
 
 // CheckPushed refuses a pushed team id (team.v1) that is empty after its
-// prefix. An id that carries another known provider's prefix is accepted.
+// prefix, or that is only another known provider's prefix. An id that
+// carries another known provider's prefix and a key is accepted.
 func CheckPushed(system, id string) error {
+	if isBareKey(Native(system, strings.TrimSpace(id))) {
+		return fmt.Errorf("%w: %s team id %q has a provider prefix and nothing after it", ErrBareTeamID, strings.TrimSpace(system), id)
+	}
 	if HasKey(id) {
 		return nil
 	}
 	return Check(system, id)
+}
+
+// isBareKey reports whether id is exactly a known provider prefix.
+func isBareKey(id string) bool {
+	for _, k := range knownKeys {
+		if id == k {
+			return true
+		}
+	}
+	return false
 }

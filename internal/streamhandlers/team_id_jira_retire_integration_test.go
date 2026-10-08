@@ -21,6 +21,7 @@ func TestAPushedJiraTeamSurvivesTheJiraProjectAsTeamRetire(t *testing.T) {
 	records := []externalSinkRecord{
 		{Index: 0, Kind: "team.v1", ExternalID: "t1", Payload: map[string]any{"id": "jira:platform", "name": "Platform", "updatedAt": "2026-10-01T00:00:00Z"}},
 		{Index: 1, Kind: "team.v1", ExternalID: "t2", Payload: map[string]any{"id": "payments", "name": "Payments", "updatedAt": "2026-10-01T00:00:00Z"}},
+		{Index: 2, Kind: "team.v1", ExternalID: "t3", Payload: map[string]any{"id": "linear:ENG", "name": "Eng", "updatedAt": "2026-10-01T00:00:00Z"}},
 	}
 	if _, err := sink.Write(ctx, externalSinkBatch{Pointer: pointer, SourceID: uuid.MustParse("9749bda0-fc9f-4076-b19d-7b26c4f306ff"), Records: records}); err != nil {
 		t.Fatalf("push: %v", err)
@@ -46,7 +47,10 @@ func TestAPushedJiraTeamSurvivesTheJiraProjectAsTeamRetire(t *testing.T) {
 	if outcome.TeamsRetired != 0 {
 		t.Errorf("the Jira project-as-team retire deactivated %d pushed team(s)", outcome.TeamsRetired)
 	}
-	for _, id := range []string{"jira:platform", "jira:payments"} {
+	if native, _ := nativeOf("linear:ENG"); native != "<NULL>" {
+		t.Fatalf("native_team_key of a Jira push naming a Linear team = %q, want NULL", native)
+	}
+	for _, id := range []string{"jira:platform", "jira:payments", "linear:ENG"} {
 		if _, active := nativeOf(id); active != 1 {
 			t.Errorf("pushed team %q is_active = %d after the retire, want 1", id, active)
 		}

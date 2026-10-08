@@ -344,7 +344,11 @@ func externalRecordValues(
 		// as a retired project.
 		nativeTeamKey := externalNullableString(payload, "nativeTeamKey")
 		if nativeTeamKey == nil {
-			nativeTeamKey = teamid.Native(system, teamID)
+			// An id that holds another provider's key has no native key of
+			// this system: NULL, never the id itself.
+			if native := teamid.Native(system, teamID); native != teamID {
+				nativeTeamKey = native
+			}
 		}
 		var parentTeamID any
 		if parent := strings.TrimSpace(stringField(payload, "parentTeamId")); parent != "" {

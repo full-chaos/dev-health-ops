@@ -1094,7 +1094,8 @@ system prefix) keeps it, whatever system writes it, and gets no second one. A cu
   uuid never named a stored team.
 - A `team.v1` default `native_team_key` is the id WITHOUT its prefix: the Jira project-as-team retire treats a
   Jira team whose `native_team_key` equals its `id` as a retired project, so a pushed `jira:platform` must not
-  store `jira:platform` there (`TestAPushedJiraTeamSurvivesTheJiraProjectAsTeamRetire`).
+  store `jira:platform` there. An id that holds ANOTHER provider's key (for example `linear:ENG` pushed by
+  `jira`) stores NULL. A pushed id that is only a known prefix (`jira:`, `atlassian:`, `gh:`) is refused (`TestAPushedJiraTeamSurvivesTheJiraProjectAsTeamRetire`).
 - The `jira_legacy` ops-team links are written as `jira:<ops team id>`. The first complete snapshot after the
   deploy closes the unprefixed link and writes the prefixed one (the carry moves the first-seen `valid_from`).
 - Jira team discovery (`GET /teams/discover?provider=jira`) returns `provider_team_id` without the prefix, as

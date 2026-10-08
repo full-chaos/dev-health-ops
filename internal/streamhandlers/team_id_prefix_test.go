@@ -41,6 +41,7 @@ func TestTeamV1WritesTheSystemPrefixedTeamID(t *testing.T) {
 		{"custom", "gh:x", "gh:x"},
 		{"custom", "jira:platform", "jira:platform"},
 		{"jira", "jira:platform", "jira:platform"},
+		{"jira", "linear:ENG", "linear:ENG"},
 	}
 	for _, c := range cases {
 		t.Run(c.system+" "+c.id, func(t *testing.T) {
@@ -58,8 +59,16 @@ func TestTeamV1WritesTheSystemPrefixedTeamID(t *testing.T) {
 			if values[12] != c.system {
 				t.Fatalf("provider = %v, want %q", values[12], c.system)
 			}
-			if want := teamid.Native(c.system, c.want); values[13] != want {
-				t.Fatalf("native_team_key = %v, want %q (the id without the system prefix)", values[13], want)
+			// An id that holds another provider's key has no native key of this system.
+			var wantNative any = teamid.Native(c.system, c.want)
+			if wantNative == c.want {
+				wantNative = nil
+			}
+			if values[13] != wantNative {
+				t.Fatalf("native_team_key = %v, want %v (the id without the system prefix, NULL when the id holds another provider's key)", values[13], wantNative)
+			}
+			if c.system == "jira" && values[13] == values[0] {
+				t.Fatalf("native_team_key equals the id %v: the Jira project-as-team retire would deactivate the team", values[0])
 			}
 
 			if values[14] != teamid.Of(c.system, "parent") {

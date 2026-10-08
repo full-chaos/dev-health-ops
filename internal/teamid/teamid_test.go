@@ -112,6 +112,7 @@ func TestCheckPushedAcceptsAnyKnownKeyAndRefusesAnEmptyOne(t *testing.T) {
 	}
 	for _, c := range []struct{ system, id string }{
 		{"custom", "custom:"}, {"custom", "gh:"}, {"custom", "x"}, {"", "gh:"}, {"custom", ""},
+		{"custom", "jira:"}, {"custom", "atlassian:"}, {"custom", "custom:jira:"}, {"github", "gh:jira:"}, {"jira", "linear:"}, {"atlassian", "atlassian:"},
 	} {
 		if err := CheckPushed(c.system, c.id); !errors.Is(err, ErrBareTeamID) {
 			t.Errorf("CheckPushed(%q, %q) = %v, want ErrBareTeamID", c.system, c.id, err)

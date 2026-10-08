@@ -783,8 +783,9 @@ def test_default_lock_root_resolution(tmp_path, case):
     """CHAOS-8760: the default lock root is DEV_HEALTH_LOCK_ROOT, else the shared dir
     when it exists, else /tmp -- never derived from TMPDIR. The probe prints its lock path.
 
-    The /tmp case only reads the printed path: the probe's lock symlink lands in /tmp for
-    a moment, under a per-test container name, exactly as the old default did.
+    The /tmp case only reads the path the gate prints: an `ln` stand-in refuses the symlink,
+    so nothing is written under /tmp. The gate then dies naming that path, which is the
+    default-lock assertion.
     """
     container = f"test-lockroot-{case}-{tmp_path.name}"
     shared = tmp_path / "shared"
@@ -804,13 +805,24 @@ def test_default_lock_root_resolution(tmp_path, case):
     else:
         extra["DEV_HEALTH_LOCK_SHARED_DIR"] = str(tmp_path / "does-not-exist")
         expected_root = Path("/tmp")
+        no_write = tmp_path / "no_write_bin"
+        no_write.mkdir()
+        ln_stub = no_write / "ln"
+        ln_stub.write_text("#!/bin/sh\necho 'ln refused by the test' >&2\nexit 1\n")
+        ln_stub.chmod(0o755)
+        extra["PATH"] = f"{no_write}:{_BASE_PATH}"
     expected = expected_root / f"dev-health-ops-local-validate.{container}.lock"
     try:
         proc = _spawn_probe_with_env(
             0.2, wait_secs=_WAIT_SECS, extra_env=extra, out_dir=tmp_path
         )
         out = proc.communicate(timeout=_REAP_SECS)[0]
-        assert proc.returncode == 0, out
+        if case == "shared_dir_absent":
+            assert proc.returncode == 2, out
+            assert f"cannot create lock symlink at {expected}" in out, out
+            assert not expected.is_symlink(), "the /tmp case must not write to /tmp"
+        else:
+            assert proc.returncode == 0, out
         assert str(expected) in out, f"expected {expected} in the logs.\n{out}"
         assert str(tmpdir) not in out.replace(str(tmp_path / "x"), ""), (
             "the lock path must not derive from TMPDIR"

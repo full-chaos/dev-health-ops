@@ -55,3 +55,9 @@ web repo's `pnpm graphql:wire-parity:generate --ops-root <ops>` and paste
 the new text into both the Go const and the file here. Regenerating one
 without the other is what
 `registered_forecast_documents_test.go` exists to catch.
+
+## hotspots (CHAOS-8488, dual accept CHAOS-8000)
+
+`hotspots.v1.graphql` is the wire form (`wireForm()` of `web/scripts/graphql-wire-parity.ts`) of web main's
+`HOTSPOTS_QUERY` before it asked for `repos`: sha256 of the trimmed text
+`6ccfcc785f38dc4a2d3ef5c9bdc2a00e76c02ccf58d11fd1198d2d321165e781`, the legacy `registeredHotspotsV1Document`.

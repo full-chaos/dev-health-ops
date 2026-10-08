@@ -291,6 +291,28 @@ const registeredHotspotsDocument = `query Hotspots($input: HotspotsInput!) {
   }
 }`
 
+// registeredHotspotsV1Document is the text hotspots accepted BEFORE it asked for `repos` (CHAOS-8488): the text of
+// CHAOS-4369 Wave 3. It stays a legacy text (see legacyDigestsByOperation), so a web build still sending it keeps
+// working while the new web rolls out; the operation's ONE current document is registeredHotspotsDocument above.
+const registeredHotspotsV1Document = `query Hotspots($input: HotspotsInput!) {
+  hotspots(input: $input) {
+    rows {
+      filePath
+      repoId
+      repoName
+      churnLoc30d
+      churnCommits30d
+      cyclomaticTotal
+      cyclomaticAvg
+      blameConcentration
+      riskScore
+      evidenceUrl
+      __typename
+    }
+    __typename
+  }
+}`
+
 // registeredOperatingReviewDocument is CHAOS-4352 Wave 4 Lane B's
 // (CHAOS-4505) registered document for the operatingReview operation --
 // same "registered documents only" contract, same "sourced from the real
@@ -4541,6 +4563,7 @@ var legacyDigestsByOperation = map[string][]string{
 	"aiWorkflowDrilldown":   {digestHex(registeredAiWorkflowDrilldownV1Document)},
 	"capacityForecast":      {digestHex(registeredCapacityForecastV1Document), digestHex(registeredCapacityForecastV2Document)},
 	"coverageScopeBaseline": {digestHex(registeredCoverageScopeBaselineV1Document)},
+	"hotspots":              {digestHex(registeredHotspotsV1Document)},
 	"home":                  {digestHex(registeredHomeV1Document), digestHex(registeredHomeV2Document), digestHex(registeredHomeV3Document)},
 	"improveOpportunities":  {digestHex(registeredImproveOpportunitiesV1Document)},
 	"operatingReview":       {digestHex(registeredOperatingReviewV1Document), digestHex(registeredOperatingReviewV2Document)},

@@ -837,10 +837,10 @@ func gitLabEndConfirmed(header http.Header) bool {
 }
 
 // githubEndConfirmed reports whether a page without rel="next" is GitHub's
-// explicit end of the list. A Link header with an entry that does not parse,
-// or a rel="next" without a URL, is not an end; nor is a page as full as the
-// requested per_page that carries no Link header at all (GitHub omits the
-// header only for a single-page list).
+// explicit end of the list. A Link header with an entry that does not parse
+// (no leading <URL>, an empty URL, or no rel) is not an end; nor is a page as
+// full as the requested per_page that carries no Link header at all (GitHub
+// omits the header only for a single-page list).
 func githubEndConfirmed(links []string, items int, query url.Values) bool {
 	header := strings.TrimSpace(strings.Join(links, ","))
 	if header == "" {
@@ -849,17 +849,14 @@ func githubEndConfirmed(links []string, items int, query url.Values) bool {
 	}
 	for _, part := range splitLinkHeader(header) {
 		open, close := strings.IndexByte(part, '<'), strings.IndexByte(part, '>')
-		if open != 0 || close <= open {
+		if open != 0 || close <= open || strings.TrimSpace(part[open+1:close]) == "" {
 			return false
 		}
 		rel := false
 		for _, attribute := range strings.Split(part[close+1:], ";") {
-			key, value, found := strings.Cut(strings.TrimSpace(attribute), "=")
+			key, _, found := strings.Cut(strings.TrimSpace(attribute), "=")
 			if found && strings.EqualFold(key, "rel") {
 				rel = true
-				if strings.Trim(value, `"`) == "next" && strings.TrimSpace(part[open+1:close]) == "" {
-					return false
-				}
 			}
 		}
 		if !rel {

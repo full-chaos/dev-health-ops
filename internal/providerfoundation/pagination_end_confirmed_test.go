@@ -94,6 +94,9 @@ func TestGitHubLinkPaginationEndUnconfirmedOnMalformedLinkOrFullPageWithoutLink(
 		{"a rel=next without a URL is not the end", []paginationResponse{
 			{body: `[{"id":1}]`, headers: http.Header{"Link": {`<>; rel="next"`}}},
 		}, true},
+		{"a rel=prev without a URL is not the end", []paginationResponse{
+			{body: `[{"id":1}]`, headers: http.Header{"Link": {`< >; rel="prev"`}}},
+		}, true},
 		{"a full page without any Link is not the end", []paginationResponse{
 			{body: `[{"id":1},{"id":2}]`},
 		}, true},

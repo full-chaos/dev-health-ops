@@ -1163,9 +1163,9 @@ when both of these hold; otherwise that scope closes nothing (its grants are sti
   stopped the walk. GitLab's end is an `X-Next-Page` header that is sent and empty; a malformed or non-positive
   `X-Next-Page`, or no header at all (an end inferred from a short page), leaves that group's listing unproven
   (`PageCollection.EndUnconfirmed`, `internal/providerfoundation/pagination.go`). GitHub's end is a page without
-  `rel="next"` whose `Link` header parses; a `Link` entry without `<...>` or without `rel`, a `rel="next"` without a URL,
-  or a page as full as `per_page` with no `Link` at all leaves that team's listing unproven. A page error, a non-2xx page
-  and a page cap still fail or skip the run as above. Reason `listing_incomplete`; only the unproven teams keep their rows.
+  `rel="next"` whose `Link` header parses; a `Link` entry that does not start with `<URL>`, has an empty URL or has no
+  `rel`, or a page as full as `per_page` with no `Link` at all, leaves that team's listing unproven. A page error, a
+  non-2xx page and a page cap still fail or skip the run as above. Reason `listing_incomplete`; only the unproven teams keep their rows.
 - **No other listing source could own the rows.** The rows carry no integration key, so when another ACTIVE integration of
   the same provider in the same org could list the same scope key (GitLab group path, GitHub org login, compared without
   case), the run closes nothing (reason `scope_shared`). The census is `teamCatalogScopeCensus`

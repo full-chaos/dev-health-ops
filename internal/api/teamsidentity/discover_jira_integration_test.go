@@ -59,16 +59,21 @@ func TestDiscoverJiraListsOnlyStoredActiveAtlassianTeams(t *testing.T) {
 	description := "platform squad"
 	seed := []teamInsertRow{
 		// An active Atlassian team: the only kind discovery lists.
-		{ID: "0a1b2c3d-platform", Name: "Platform", Description: &description, Members: []string{"a@acme.test", "b@acme.test"},
+		{ID: "jira:0a1b2c3d-platform", Name: "Platform", Description: &description, Members: []string{"a@acme.test", "b@acme.test"},
 			ProjectKeys: []string{"ENG", "OPS"}, IsActive: true, OrgID: orgID, Provider: "jira", NativeTeamKey: ari("0a1b2c3d-platform")},
 		// An archived Atlassian team.
-		{ID: "9f8e7d6c-archived", Name: "Archived", IsActive: false, OrgID: orgID, Provider: "jira", NativeTeamKey: ari("9f8e7d6c-archived")},
+		{ID: "jira:9f8e7d6c-archived", Name: "Archived", IsActive: false, OrgID: orgID, Provider: "jira", NativeTeamKey: ari("9f8e7d6c-archived")},
 		// A project-as-team row (the retired class), still active in this store.
 		{ID: "ENG", Name: "Engineering", ProjectKeys: []string{"ENG"}, IsActive: true, OrgID: orgID, Provider: "jira", NativeTeamKey: native("ENG")},
 		// An admin team whose id equals a project key: provider "" and no native key.
 		{ID: "OPS", Name: "Operations", IsActive: true, OrgID: orgID, Provider: ""},
+		// Active jira rows with a team ARI whose ids hold another provider's
+		// key: not Jira teams.
+		{ID: "gh:1c1c1c1c-github", Name: "GitHub-keyed", IsActive: true, OrgID: orgID, Provider: "jira", NativeTeamKey: ari("1c1c1c1c-github")},
+		{ID: "gl:2d2d2d2d-gitlab", Name: "GitLab-keyed", IsActive: true, OrgID: orgID, Provider: "jira", NativeTeamKey: ari("2d2d2d2d-gitlab")},
+		{ID: "linear:3e3e3e3e-linear", Name: "Linear-keyed", IsActive: true, OrgID: orgID, Provider: "jira", NativeTeamKey: ari("3e3e3e3e-linear")},
 		// Another organization's Atlassian team.
-		{ID: "5e5e5e5e-other", Name: "Other", IsActive: true, OrgID: "org-2", Provider: "jira", NativeTeamKey: ari("5e5e5e5e-other")},
+		{ID: "jira:5e5e5e5e-other", Name: "Other", IsActive: true, OrgID: "org-2", Provider: "jira", NativeTeamKey: ari("5e5e5e5e-other")},
 	}
 	for _, row := range seed {
 		row.TeamUUID = teamUUID(row.OrgID, row.ID)
@@ -115,6 +120,17 @@ func TestDiscoverJiraListsOnlyStoredActiveAtlassianTeams(t *testing.T) {
 		sort.Strings(after)
 		if len(after) != 1 || after[0] != "ENG" {
 			t.Errorf("project-as-team rows after an import of the discovered list (%s) = %v, want only the seeded [ENG]", onConflict, after)
+		}
+		// The import writes the catalog's own id, "jira:<uuid>" (teamid.Of),
+		// so it merges into the Atlassian team and makes no bare-id team.
+		for id, want := range map[string]bool{"jira:0a1b2c3d-platform": true, "0a1b2c3d-platform": false} {
+			team, err := store.GetTeam(ctx, orgID, id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if (team != nil) != want {
+				t.Errorf("after the import (%s): team %q present = %v, want %v", onConflict, id, team != nil, want)
+			}
 		}
 	}
 }

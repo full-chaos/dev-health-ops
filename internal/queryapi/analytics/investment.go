@@ -23,6 +23,7 @@ import (
 	"strings"
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph/model"
+	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse/latestrow"
 )
 
 // --- investment.py:342-396: evidence-ref resolution machinery ---------
@@ -232,28 +233,45 @@ func LatestWorkUnitInvestmentsSource() string {
 	return fmt.Sprintf(`(
         SELECT
             work_unit_id,
-            (argMax(tuple(work_unit_type), computed_at)).1 AS work_unit_type,
-            (argMax(tuple(work_unit_name), computed_at)).1 AS work_unit_name,
-            argMax(from_ts, computed_at) AS from_ts,
-            argMax(to_ts, computed_at) AS to_ts,
-            (argMax(tuple(repo_id), computed_at)).1 AS repo_id,
-            (argMax(tuple(provider), computed_at)).1 AS provider,
-            argMax(effort_metric, computed_at) AS effort_metric,
-            argMax(effort_value, computed_at) AS effort_value,
-            argMax(theme_distribution_json, computed_at) AS theme_distribution_json,
-            argMax(subcategory_distribution_json, computed_at) AS subcategory_distribution_json,
-            argMax(structural_evidence_json, computed_at) AS structural_evidence_json,
-            argMax(evidence_quality, computed_at) AS evidence_quality,
-            argMax(evidence_quality_band, computed_at) AS evidence_quality_band,
-            argMax(categorization_status, computed_at) AS categorization_status,
-            argMax(categorization_model_version, computed_at) AS categorization_model_version,
-            argMax(categorization_run_id, computed_at) AS categorization_run_id,
+            %s AS work_unit_type,
+            %s AS work_unit_name,
+            %s AS from_ts,
+            %s AS to_ts,
+            %s AS repo_id,
+            %s AS provider,
+            %s AS effort_metric,
+            %s AS effort_value,
+            %s AS theme_distribution_json,
+            %s AS subcategory_distribution_json,
+            %s AS structural_evidence_json,
+            %s AS evidence_quality,
+            %s AS evidence_quality_band,
+            %s AS categorization_status,
+            %s AS categorization_model_version,
+            %s AS categorization_run_id,
             org_id,
             max(computed_at) AS latest_computed_at
         FROM work_unit_investments
         WHERE org_id = {org_id:String}%s%s
         GROUP BY org_id, work_unit_id
-    )`, supersededWorkUnitIDsFilter(), investmentMembershipScopeFilter())
+    )`,
+		latestrow.ArgMaxKeepNull("work_unit_type"),
+		latestrow.ArgMaxKeepNull("work_unit_name"),
+		latestrow.ArgMax("from_ts"),
+		latestrow.ArgMax("to_ts"),
+		latestrow.ArgMaxKeepNull("repo_id"),
+		latestrow.ArgMaxKeepNull("provider"),
+		latestrow.ArgMax("effort_metric"),
+		latestrow.ArgMax("effort_value"),
+		latestrow.ArgMax("theme_distribution_json"),
+		latestrow.ArgMax("subcategory_distribution_json"),
+		latestrow.ArgMax("structural_evidence_json"),
+		latestrow.ArgMax("evidence_quality"),
+		latestrow.ArgMax("evidence_quality_band"),
+		latestrow.ArgMax("categorization_status"),
+		latestrow.ArgMax("categorization_model_version"),
+		latestrow.ArgMax("categorization_run_id"),
+		supersededWorkUnitIDsFilter(), investmentMembershipScopeFilter())
 }
 
 // windowedUnitEvidenceSource is the source the per-unit team vote
@@ -272,10 +290,10 @@ func LatestWorkUnitInvestmentsSource() string {
 // and of every other latest-version column per statement, and the vote
 // over units outside the window.
 func windowedUnitEvidenceSource() string {
-	return `(
+	return fmt.Sprintf(`(
         SELECT
             work_unit_id,
-            argMax(structural_evidence_json, computed_at) AS structural_evidence_json,
+            %s AS structural_evidence_json,
             org_id
         FROM work_unit_investments
         WHERE org_id = {org_id:String}
@@ -287,7 +305,7 @@ func windowedUnitEvidenceSource() string {
                 AND to_ts >= {start_date:Date}
           )
         GROUP BY org_id, work_unit_id
-    )`
+    )`, latestrow.ArgMax("structural_evidence_json"))
 }
 
 // --- investment.py:90-127: LATEST_WORK_UNIT_REPO_EFFORT_CTE ------------

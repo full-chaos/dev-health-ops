@@ -8,6 +8,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph/model"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/scopelabel"
 )
 
 const observedIdentitiesSQL = `
@@ -282,12 +283,25 @@ func aliasSuggestions(list []unmapped, mapped []mappedIdentity) []model.AliasSug
 		}
 		item := toModelIdentity(identity)
 		suggestions = append(suggestions, model.AliasSuggestion{
-			UnmappedIdentity:     &item,
-			SuggestedCanonicalID: target.canonicalID,
-			Confidence:           aliasConfidence,
+			UnmappedIdentity:       &item,
+			SuggestedCanonicalID:   target.canonicalID,
+			SuggestedCanonicalName: canonicalName(target),
+			Confidence:             aliasConfidence,
 		})
 	}
 	return suggestions
+}
+
+// canonicalName is the display name of a mapped identity, else its email;
+// nil when it has neither (the canonical id is never a name).
+func canonicalName(row mappedIdentity) *string {
+	if n, ok := scopelabel.CleanName(row.displayName); ok {
+		return &n
+	}
+	if n, ok := scopelabel.CleanName(row.email); ok {
+		return &n
+	}
+	return nil
 }
 
 func toModelIdentity(identity unmapped) model.UnmappedIdentity {

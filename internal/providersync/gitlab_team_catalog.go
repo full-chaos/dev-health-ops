@@ -8,6 +8,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/identityalias"
+	"github.com/full-chaos/dev-health-ops/internal/teamid"
 )
 
 // GitLab team-catalog collection is a provider-only reference collector, the
@@ -237,10 +238,10 @@ func BuildGitLabTeamCatalogEffects(rows GitLabTeamCatalogRows, wantTeams, wantPr
 
 // --- Normalization -----------------------------------------------------------
 
-// gitlabTeamID mirrors team_autoimport_gitlab._team_id: "gl:" + the group's
-// full_path, idempotent against an already-prefixed input.
+// gitlabTeamID is the team id of a GitLab group full_path ("gl:<path>",
+// see teamid.Of).
 func gitlabTeamID(fullPath string) string {
-	return "gl:" + strings.TrimPrefix(strings.TrimSpace(fullPath), "gl:")
+	return teamid.Of(gitlabTeamCatalogProvider, fullPath)
 }
 
 // gitlabParentTeamID mirrors _parent_team_id's path-derived branch (GitLab

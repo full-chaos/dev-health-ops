@@ -283,6 +283,7 @@ internal/scheduler/sync	7
 internal/schedulerservice	12
 internal/servicecredcli	1
 internal/storage/clickhouse	1
+internal/storage/clickhouse/latestrow	1
 internal/storage/postgres	29
 internal/storage/postgres/authschema	1
 internal/storage/river	1
@@ -306,6 +307,7 @@ internal/syncreconciler	2
 internal/syncroute	1
 internal/syncrunrollup	5
 internal/teamattribution	1
+internal/teamid	1
 internal/teamownership	1
 internal/teamresolve	1
 internal/testsupport/chlogin	1

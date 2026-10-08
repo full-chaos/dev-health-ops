@@ -2,6 +2,7 @@ package atlassianteams
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -12,6 +13,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/providersync"
+	"github.com/full-chaos/dev-health-ops/internal/teamid"
 )
 
 // The column lists are the ones the project-as-team Jira catalog writes
@@ -103,6 +105,9 @@ func Write(ctx context.Context, conn driver.Conn, orgID string, rows Rows, selec
 	var result Result
 	if conn == nil || orgID == "" {
 		return result, ErrConfiguration
+	}
+	if err := checkTeamIDs(rows); err != nil {
+		return result, err
 	}
 	scope, missing, err := teamsInScope(ctx, conn, orgID, rows.Teams)
 	if err != nil {
@@ -550,4 +555,25 @@ func writeOwnership(ctx context.Context, conn driver.Conn, orgID string, rows []
 		}
 	}
 	return batch.Send()
+}
+
+// checkTeamIDs refuses, before any read or write, a row whose team id does
+// not carry the "jira:" prefix.
+func checkTeamIDs(rows Rows) error {
+	for _, team := range rows.Teams {
+		if err := teamid.Check(Provider, team.ID); err != nil {
+			return errors.Join(ErrConfiguration, err)
+		}
+	}
+	for _, membership := range rows.Memberships {
+		if err := teamid.Check(Provider, membership.TeamID); err != nil {
+			return errors.Join(ErrConfiguration, err)
+		}
+	}
+	for _, link := range rows.Ownership {
+		if err := teamid.Check(Provider, link.TeamID); err != nil {
+			return errors.Join(ErrConfiguration, err)
+		}
+	}
+	return nil
 }

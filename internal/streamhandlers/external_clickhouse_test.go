@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"math"
 	"math/big"
 	"os"
@@ -138,7 +139,7 @@ func TestClickHouseExternalSinkPersistsEveryV1KindWithProvenance(t *testing.T) {
 		legacyScope.RepoIDs[0] != "00b02aea-81bc-1244-b364-f93a0276ede5" {
 		t.Fatalf("repo identity continuity = %v", legacyScope.RepoIDs)
 	}
-	if !slices.Contains(legacyScope.TeamIDs, "team-a") ||
+	if !slices.Contains(legacyScope.TeamIDs, "gh:team-a") ||
 		len(legacyScope.RecordKinds) != len(legacyRecords) ||
 		len(operationalScope.RecordKinds) != len(operationalRecords) {
 		t.Fatalf("recompute scopes legacy=%#v operational=%#v", legacyScope, operationalScope)
@@ -181,7 +182,7 @@ func TestClickHouseExternalSinkPreservesManualMembersOnTeamWrite(t *testing.T) {
 	connection := &productSink{
 		batch: &productBatch{},
 		queryRows: [][]any{
-			{"team-a", []string{"alice@example.test"}},
+			{"gh:team-a", []string{"alice@example.test"}},
 		},
 	}
 	sink, err := NewClickHouseExternalBatchSink(connection)
@@ -200,6 +201,17 @@ func TestClickHouseExternalSinkPreservesManualMembersOnTeamWrite(t *testing.T) {
 	}
 	if connection.queryCalls != 1 {
 		t.Fatalf("preserve-lookup calls = %d, want 1", connection.queryCalls)
+	}
+	// The preserve read asks for the id the row is written under: the
+	// system-prefixed id (CHAOS-8939), not the pushed one.
+	askedFor := false
+	for _, arg := range connection.lastQueryArgs {
+		if named, ok := arg.(driver.NamedValue); ok && named.Name == "team_ids" {
+			askedFor = reflect.DeepEqual(named.Value, []string{"gh:team-a"})
+		}
+	}
+	if !askedFor {
+		t.Fatalf("preserve-lookup args = %#v, want team_ids [gh:team-a]", connection.lastQueryArgs)
 	}
 	if !connection.batch.sent || len(connection.batch.rows) != 1 {
 		t.Fatalf("team sink not durable: %#v", connection.batch)
@@ -324,6 +336,7 @@ func TestExternalClickHouseRowsMatchPythonGoldenOracle(t *testing.T) {
 	if len(golden.Rows) != 21 {
 		t.Fatalf("Python golden rows = %d, want all 21 kinds", len(golden.Rows))
 	}
+	divergences := teamIDDivergenceUse{}
 	for kind, expected := range golden.Rows {
 		kind, expected := kind, expected
 		t.Run(kind, func(t *testing.T) {
@@ -354,6 +367,9 @@ func TestExternalClickHouseRowsMatchPythonGoldenOracle(t *testing.T) {
 			}
 			got := goldenComparable(values)
 			want := goldenComparable(expected.Values)
+			for index, column := range expected.Columns {
+				want[index] = divergences.expected(expected.Table, column, source.System, expected.Payload, want[index])
+			}
 			if !reflect.DeepEqual(got, want) {
 				gotJSON, _ := json.MarshalIndent(got, "", "  ")
 				wantJSON, _ := json.MarshalIndent(want, "", "  ")
@@ -361,6 +377,7 @@ func TestExternalClickHouseRowsMatchPythonGoldenOracle(t *testing.T) {
 			}
 		})
 	}
+	divergences.checkReached(t)
 
 	if got := externalWorkItemID("github", "Acme/API", "7", "pr"); got != golden.EdgeCases["github_pr"] {
 		t.Fatalf("GitHub PR mapping = %q", got)

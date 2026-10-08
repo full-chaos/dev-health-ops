@@ -204,6 +204,8 @@ func (reader *Reader) BuildWorkUnitInvestments(ctx context.Context, opts BuildWo
 		return nil, err
 	}
 
+	sourceTitles := reader.quoteSourceTitles(ctx, opts.OrgID, quoteRows)
+
 	quotesByUnit := map[string][]WorkUnitInvestmentQuoteRow{}
 	for _, quote := range quoteRows {
 		if quote.WorkUnitID == "" {
@@ -266,11 +268,16 @@ func (reader *Reader) BuildWorkUnitInvestments(ctx context.Context, opts BuildWo
 
 		var textualEvidence []map[string]any
 		for _, quote := range quotesByUnit[unitID] {
+			var sourceTitle any
+			if title, ok := sourceTitles[quoteSource{SourceType: quote.SourceType, SourceID: quote.SourceID}]; ok {
+				sourceTitle = title
+			}
 			textualEvidence = append(textualEvidence, map[string]any{
-				"type":   "evidence_quote",
-				"quote":  quote.Quote,
-				"source": quote.SourceType,
-				"id":     quote.SourceID,
+				"type":         "evidence_quote",
+				"quote":        quote.Quote,
+				"source":       quote.SourceType,
+				"id":           quote.SourceID,
+				"source_title": sourceTitle,
 			})
 		}
 

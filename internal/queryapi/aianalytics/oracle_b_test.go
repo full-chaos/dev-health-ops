@@ -270,6 +270,9 @@ func TestGroupB_MatchPythonResolvers(t *testing.T) {
 			if c.Fn == "resolve_ai_attributed_prs" {
 				stripGoOnlyAttributedPrRowFields(gotMap)
 			}
+			if c.Fn == "resolve_ai_attribution_overview" {
+				stripGoOnlyAttributionRowFields(gotMap)
+			}
 			want := map[string]any{}
 			for k, v := range c.Expected {
 				if k != "startDate" && k != "endDate" {
@@ -372,6 +375,24 @@ func stripGoOnlyAttributedPrRowFields(response map[string]any) {
 			continue
 		}
 		for _, f := range goOnlyAttributedPrRowFields {
+			delete(row, f)
+		}
+	}
+}
+
+// goOnlyAttributionRowFields are the aiAttributionOverview row name fields the Go
+// plane added (CHAOS-8954) that the Python reference never had. The oracle strips
+// exactly these; names_8954_test.go pins the fields themselves.
+var goOnlyAttributionRowFields = []string{"repoName", "teamName", "subjectTitle"}
+
+func stripGoOnlyAttributionRowFields(response map[string]any) {
+	rows, _ := response["rows"].([]any)
+	for _, r := range rows {
+		row, ok := r.(map[string]any)
+		if !ok {
+			continue
+		}
+		for _, f := range goOnlyAttributionRowFields {
 			delete(row, f)
 		}
 	}

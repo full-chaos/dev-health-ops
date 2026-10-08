@@ -77,6 +77,7 @@ func TestExternalStatementVariantsMatchThePythonReference(t *testing.T) {
 	}
 	sourceID := uuid.MustParse(variants.SourceID)
 	unreferenced := map[string]bool{}
+	divergences := teamIDDivergenceUse{}
 	for _, variant := range variants.External {
 		name := variant.Kind + " " + variant.System + " " + variant.Field + " " + variant.Statement
 		err := validateExternalRecord(variant.Kind, variant.Payload)
@@ -119,11 +120,13 @@ func TestExternalStatementVariantsMatchThePythonReference(t *testing.T) {
 				unreferenced[variant.Table+"."+column] = true
 				continue
 			}
+			want = divergences.expected(variant.Table, column, variant.System, variant.Payload, want)
 			if got := goldenComparableValue(values[i]); !reflect.DeepEqual(got, want) {
 				t.Errorf("%s: %s = %#v, reference %#v", name, column, got, want)
 			}
 		}
 	}
+	divergences.checkReached(t)
 	var got []string
 	for column := range unreferenced {
 		got = append(got, column)

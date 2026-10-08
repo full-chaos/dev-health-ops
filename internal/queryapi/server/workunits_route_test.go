@@ -605,6 +605,7 @@ func TestBuildWorkUnitsResponseMatchesPythonGolden(t *testing.T) {
 			if err := json.Unmarshal(wantBytes, &want); err != nil {
 				t.Fatalf("decode want: %v", err)
 			}
+			stripServedQuoteSourceTitles(t, got, tc.includeText && len(tc.quoteRows) > 0)
 			// jsonAlmostEqual, not reflect.DeepEqual: span_days is computed
 			// via toTS.Sub(fromTS).Hours()/24 (workunitassembly.go) on this
 			// side and via (to_ts - from_ts).total_seconds()/86400.0 on
@@ -623,6 +624,31 @@ func TestBuildWorkUnitsResponseMatchesPythonGolden(t *testing.T) {
 				t.Fatalf("wire encoding mismatch:\n--- got ---\n%s\n--- want (%s) ---\n%s", gotPretty, tc.golden, wantPretty)
 			}
 		})
+	}
+}
+
+// stripServedQuoteSourceTitles removes the Go-only source_title key (CHAOS-8959)
+// from every textual evidence quote, so the recorded Python golden stays
+// byte-identical. A quote without the key fails: the key is always served,
+// as the title or null.
+func stripServedQuoteSourceTitles(t *testing.T, body any, expectQuotes bool) {
+	t.Helper()
+	items, _ := body.([]any)
+	seen := 0
+	for _, item := range items {
+		evidence, _ := item.(map[string]any)["evidence"].(map[string]any)
+		textual, _ := evidence["textual"].([]any)
+		for _, entry := range textual {
+			quote := entry.(map[string]any)
+			if _, ok := quote["source_title"]; !ok {
+				t.Fatalf("evidence quote has no source_title key: %v", quote)
+			}
+			delete(quote, "source_title")
+			seen++
+		}
+	}
+	if expectQuotes && seen == 0 {
+		t.Fatalf("no evidence quote reached the response body; the source_title strip checked nothing")
 	}
 }
 

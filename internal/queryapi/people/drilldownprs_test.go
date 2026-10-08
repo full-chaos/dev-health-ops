@@ -425,12 +425,28 @@ type errAfterRowsScanner struct {
 
 func (s *errAfterRowsScanner) Err() error { return s.err }
 
+// scanFailsScanner yields one row whose Scan fails.
+type scanFailsScanner struct {
+	pairRowScanner
+}
+
+func (s *scanFailsScanner) Next() bool {
+	if s.index > 0 {
+		return false
+	}
+	s.index++
+	return true
+}
+
+func (s *scanFailsScanner) Scan(dest ...any) error { return errors.New("boom") }
+
 // TestDrilldownPRsFailOnARepoNameReadError: a failed repo-name read (query or
 // iterate) is an error, never a 200 whose repo_name reads as "no name".
 func TestDrilldownPRsFailOnARepoNameReadError(t *testing.T) {
 	const repo = "11111111-1111-1111-1111-111111111111"
 	cases := map[string]func() (dhclickhouse.RowScanner, error){
 		"query":   func() (dhclickhouse.RowScanner, error) { return nil, errors.New("boom") },
+		"scan":    func() (dhclickhouse.RowScanner, error) { return &scanFailsScanner{}, nil },
 		"iterate": func() (dhclickhouse.RowScanner, error) { return &errAfterRowsScanner{err: errors.New("boom")}, nil },
 	}
 	for name, read := range cases {

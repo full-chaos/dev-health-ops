@@ -141,6 +141,27 @@ const primaryWorkItemTeamAttributionSource = `(
       )
 )`
 
+// teamScopedWorkItemTeamAttributionSource is the same read for a TEAM-scoped
+// query: it also takes the co-owner rows (is_primary = 2, teamattribution.
+// AttributionCoOwner), so an item of a project with several owning teams is
+// in each of those teams' views. Only a query that filters t.team_id may use
+// it; without a team filter it would count such an item once per team.
+const teamScopedWorkItemTeamAttributionSource = `(
+    SELECT
+        work_item_id,
+        team_id,
+        team_name
+    FROM work_item_team_attributions FINAL
+    WHERE org_id = {org_id:String}
+      AND is_primary IN (1, 2)
+      AND (work_item_id, computed_at) IN (
+          SELECT work_item_id, max(computed_at)
+          FROM work_item_team_attributions
+          WHERE org_id = {org_id:String}
+          GROUP BY work_item_id
+      )
+)`
+
 // fetchIssuesQuery is the Go port of fetch_issues' SELECT
 // (api/queries/drilldown.py:60-93).
 //
@@ -296,8 +317,12 @@ func BuildIssuesResponse(ctx context.Context, reader *Reader, orgID string, para
 	}
 
 	scopeSQL, scopeBindings := scopeClauseTeam(params.ScopeLevel, params.ScopeIDs)
+	attributionSource := primaryWorkItemTeamAttributionSource
+	if scopeSQL != "" {
+		attributionSource = teamScopedWorkItemTeamAttributionSource
+	}
 
-	query := fmt.Sprintf(fetchIssuesQuery, primaryWorkItemTeamAttributionSource, scopeSQL, settingsMaxExecutionTime())
+	query := fmt.Sprintf(fetchIssuesQuery, attributionSource, scopeSQL, settingsMaxExecutionTime())
 	bindings := append([]dhclickhouse.Binding{
 		{Name: "start_day", Value: formatDay(params.StartDay)},
 		{Name: "end_day", Value: formatDay(params.EndDay)},

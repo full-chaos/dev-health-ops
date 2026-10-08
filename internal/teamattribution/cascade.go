@@ -242,7 +242,11 @@ type ClickHouseFactSource struct {
 }
 
 type GithubWorkItemDerivationContext struct {
-	projectKeyTeams map[string]GithubWorkItemDerivationTeamFact
+	// projectKeyTeams: every ACTIVE team that holds a key, in catalog order
+	// (provider, id), of any provider. A project of several teams of the
+	// item's provider is attributed to all of them (see AttributionCoOwner and
+	// IssueProjectCandidates); a native team key takes the first.
+	projectKeyTeams map[string][]GithubWorkItemDerivationTeamFact
 	projectByID     map[string][]GithubWorkItemDerivationCandidate
 	projectByKey    map[string][]GithubWorkItemDerivationCandidate
 	repoByID        map[string][]GithubWorkItemDerivationCandidate
@@ -346,7 +350,7 @@ func NewGitHubWorkItemDerivationContext(
 	facts GithubWorkItemDerivationFacts,
 ) GithubWorkItemDerivationContext {
 	result := GithubWorkItemDerivationContext{
-		projectKeyTeams:              map[string]GithubWorkItemDerivationTeamFact{},
+		projectKeyTeams:              map[string][]GithubWorkItemDerivationTeamFact{},
 		projectByID:                  map[string][]GithubWorkItemDerivationCandidate{},
 		projectByKey:                 map[string][]GithubWorkItemDerivationCandidate{},
 		repoByID:                     map[string][]GithubWorkItemDerivationCandidate{},
@@ -386,10 +390,9 @@ func NewGitHubWorkItemDerivationContext(
 		}
 	}
 	for _, team := range facts.Teams {
-		// First ACTIVE team by id on a key: an inactive team (a retired
-		// project-as-team row has id = the project key) must not shadow the
-		// active team that holds the same key. dropInactiveTeamCandidates
-		// stays the safety net.
+		// ACTIVE teams only: an inactive team (a retired project-as-team row
+		// has id = the project key) must not take or shadow a key.
+		// dropInactiveTeamCandidates stays the safety net.
 		if team.Inactive {
 			continue
 		}
@@ -398,8 +401,15 @@ func NewGitHubWorkItemDerivationContext(
 			if key == "" {
 				continue
 			}
-			if _, exists := result.projectKeyTeams[key]; !exists {
-				result.projectKeyTeams[key] = team
+			held := false
+			for _, holder := range result.projectKeyTeams[key] {
+				if holder.TeamID == team.TeamID {
+					held = true
+					break
+				}
+			}
+			if !held {
+				result.projectKeyTeams[key] = append(result.projectKeyTeams[key], team)
 			}
 		}
 	}
@@ -698,8 +708,8 @@ func (derived GithubWorkItemDerivationContext) resolve(
 		})
 	}
 	issueProjectTeams := map[string]struct{}{}
-	if candidate := derived.IssueProjectCandidate(subject); candidate != nil {
-		bySource[candidate.Source] = append(bySource[candidate.Source], *candidate)
+	for _, candidate := range derived.IssueProjectCandidates(subject) {
+		bySource[candidate.Source] = append(bySource[candidate.Source], candidate)
 		if candidate.TeamID != nil {
 			issueProjectTeams[*candidate.TeamID] = struct{}{}
 		}
@@ -832,6 +842,7 @@ func (derived GithubWorkItemDerivationContext) resolve(
 		"manual_fallback", "unassigned",
 	}
 	var primary *GithubWorkItemDerivationCandidate
+	var coOwners []GithubWorkItemDerivationCandidate
 	all := make([]GithubWorkItemDerivationCandidate, 0)
 	for _, source := range order {
 		// No team_id collapse here, deliberately (unlike the Python mirror):
@@ -876,6 +887,7 @@ func (derived GithubWorkItemDerivationContext) resolve(
 		if primary == nil && len(candidates) > 0 {
 			value := candidates[0]
 			primary = &value
+			coOwners = projectCoOwners(value, candidates[1:])
 		}
 		all = append(all, candidates...)
 	}
@@ -966,15 +978,87 @@ func (derived GithubWorkItemDerivationContext) resolve(
 		all = append(all, value)
 	}
 	marked := make([]GithubWorkItemDerivationCandidate, len(all))
+	coOwnerMarked := make([]bool, len(coOwners))
 	for index, candidate := range all {
-		candidate.IsPrimary = 0
+		candidate.IsPrimary = AttributionNotPrimary
 		if SameDerivationCandidate(candidate, *primary) {
-			candidate.IsPrimary = 1
+			candidate.IsPrimary = AttributionPrimary
 			primary = &candidate
+		} else {
+			for coOwnerIndex, coOwner := range coOwners {
+				if !coOwnerMarked[coOwnerIndex] && SameDerivationCandidate(candidate, coOwner) {
+					candidate.IsPrimary = AttributionCoOwner
+					coOwnerMarked[coOwnerIndex] = true
+					break
+				}
+			}
 		}
 		marked[index] = candidate
 	}
 	return primary.TeamID, primary.TeamName, marked, rejections
+}
+
+// The values of work_item_team_attributions.is_primary.
+//
+// AttributionPrimary is the ONE row per item that the daily rollups and every
+// organization-level reader count, so an item counts once in an org total.
+// AttributionCoOwner is each OTHER team that owns the item's project at the
+// same rank: the item is also that team's work. A team-scoped reader reads
+// is_primary IN (1, 2) and filters by its team; every other reader reads
+// is_primary = 1. The census test TestWorkItemTeamAttributionIsPrimaryPredicateCensus
+// holds every reader to those two forms.
+const (
+	AttributionNotPrimary = 0
+	AttributionPrimary    = 1
+	AttributionCoOwner    = 2
+)
+
+// AttributionRowPreference orders rows of one item that share a sort key
+// (repo, item, team, source) and one version: the primary row, then a
+// co-owner row, then a provenance row. Every write-time dedupe of these rows
+// breaks an equal-version tie with it: the table is a ReplacingMergeTree that
+// keeps one row per key, and a team that holds the project through two facts
+// gets one 2 row and one 0 row under the same key.
+func AttributionRowPreference(isPrimary int) int {
+	switch isPrimary {
+	case AttributionPrimary:
+		return 2
+	case AttributionCoOwner:
+		return 1
+	default:
+		return 0
+	}
+}
+
+// projectCoOwners returns, for a primary that came from the item's project
+// (issue_project, project_ownership), the candidates of the same source that
+// name another team at the same rank (IsPrimary, Specificity, Priority): one
+// per team, in rank order. A project with several owning teams is attributed
+// to all of them; the rank still decides which ONE is the primary row. Other
+// sources have no co-owners.
+func projectCoOwners(
+	primary GithubWorkItemDerivationCandidate, ranked []GithubWorkItemDerivationCandidate,
+) []GithubWorkItemDerivationCandidate {
+	if primary.Source != "issue_project" && primary.Source != "project_ownership" {
+		return nil
+	}
+	seen := map[string]struct{}{GithubWorkItemDerivationStringValue(primary.TeamID): {}}
+	var result []GithubWorkItemDerivationCandidate
+	for _, candidate := range ranked {
+		teamID := GithubWorkItemDerivationStringValue(candidate.TeamID)
+		if strings.TrimSpace(teamID) == "" ||
+			candidate.IsPrimary != primary.IsPrimary ||
+			candidate.Specificity != primary.Specificity ||
+			candidate.Priority != primary.Priority {
+			continue
+		}
+		if _, duplicate := seen[teamID]; duplicate {
+			continue
+		}
+		seen[teamID] = struct{}{}
+		result = append(result, candidate)
+	}
+	return result
 }
 
 func (derived GithubWorkItemDerivationContext) NativeTeamCandidate(
@@ -983,10 +1067,11 @@ func (derived GithubWorkItemDerivationContext) NativeTeamCandidate(
 	if subject.NativeTeamKey == nil {
 		return nil
 	}
-	team, exists := derived.projectKeyTeams[strings.TrimSpace(*subject.NativeTeamKey)]
-	if !exists {
+	teams := derived.projectKeyTeams[strings.TrimSpace(*subject.NativeTeamKey)]
+	if len(teams) == 0 {
 		return nil
 	}
+	team := teams[0]
 	return &GithubWorkItemDerivationCandidate{
 		Source: "native_team", TeamID: GithubWorkItemDerivationStringPointer(team.TeamID), TeamName: GithubWorkItemDerivationStringPointer(GithubWorkItemDerivationFirstNonEmpty(team.TeamName, team.TeamID)),
 		Confidence: "high", Evidence: "native_team_key=" + *subject.NativeTeamKey,
@@ -994,9 +1079,15 @@ func (derived GithubWorkItemDerivationContext) NativeTeamCandidate(
 	}
 }
 
-func (derived GithubWorkItemDerivationContext) IssueProjectCandidate(
+// IssueProjectCandidates gives an issue_project candidate for the first active
+// team that holds the item's project key (the first key that any team holds),
+// and one for each other holder of the item's provider. A key string held by
+// a team of another provider does not make that team an owner of the item's
+// project, so it never adds a co-owner. Only the first holder, chosen as
+// before, can be of another provider.
+func (derived GithubWorkItemDerivationContext) IssueProjectCandidates(
 	subject GithubWorkItemDerivationSubject,
-) *GithubWorkItemDerivationCandidate {
+) []GithubWorkItemDerivationCandidate {
 	keys := []string{WorkItemDerivationScope(subject)}
 	if subject.ProjectKey != nil && *subject.ProjectKey != keys[0] {
 		keys = append(keys, *subject.ProjectKey)
@@ -1007,15 +1098,23 @@ func (derived GithubWorkItemDerivationContext) IssueProjectCandidate(
 		// the trim belongs on the lookup alone. Trimming the evidence too
 		// would swap one divergence for another; both halves are pinned by the
 		// issue_project_scope_needs_trimming oracle case.
-		team, exists := derived.projectKeyTeams[strings.TrimSpace(key)]
-		if !exists {
+		teams := derived.projectKeyTeams[strings.TrimSpace(key)]
+		if len(teams) == 0 {
 			continue
 		}
-		return &GithubWorkItemDerivationCandidate{
-			Source: "issue_project", TeamID: GithubWorkItemDerivationStringPointer(team.TeamID), TeamName: GithubWorkItemDerivationStringPointer(GithubWorkItemDerivationFirstNonEmpty(team.TeamName, team.TeamID)),
-			Confidence: "high", Evidence: "issue_project_key=" + key,
-			IsPrimary: 1, Specificity: 50, UpdatedAt: NormalizedDerivationTime(time.Time{}),
+		provider := strings.TrimSpace(subject.Provider)
+		result := make([]GithubWorkItemDerivationCandidate, 0, len(teams))
+		for index, team := range teams {
+			if index > 0 && (strings.TrimSpace(teams[0].Provider) != provider || strings.TrimSpace(team.Provider) != provider) {
+				continue
+			}
+			result = append(result, GithubWorkItemDerivationCandidate{
+				Source: "issue_project", TeamID: GithubWorkItemDerivationStringPointer(team.TeamID), TeamName: GithubWorkItemDerivationStringPointer(GithubWorkItemDerivationFirstNonEmpty(team.TeamName, team.TeamID)),
+				Confidence: "high", Evidence: "issue_project_key=" + key,
+				IsPrimary: 1, Specificity: 50, UpdatedAt: NormalizedDerivationTime(time.Time{}),
+			})
 		}
+		return result
 	}
 	return nil
 }

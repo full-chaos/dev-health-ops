@@ -103,7 +103,7 @@ func resolveWorkItemTeamAttributions(ctx context.Context, client QueryClient, or
               WHERE %s
               GROUP BY work_item_id
           )
-        ORDER BY work_item_id, is_primary DESC, source
+        ORDER BY work_item_id, is_primary = 1 DESC, is_primary DESC, source
         LIMIT {limit:UInt64}
     `, strings.Join(outerWhere, " AND "), strings.Join(snapshotWhere, " AND "))
 
@@ -162,7 +162,7 @@ func rowToWorkItemTeamAttribution(workItemID, provider, teamIDCol, teamNameCol, 
 		TeamName:   teamName,
 		Source:     mapTeamAttributionSource(sourceRaw),
 		Confidence: mapTeamAttributionConfidence(confidenceRaw),
-		IsPrimary:  isPrimary != 0,
+		IsPrimary:  isPrimary == 1,
 		Evidence:   evidence,
 	}
 }

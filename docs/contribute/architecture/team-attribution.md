@@ -279,7 +279,9 @@ Resolution is **staged by precedence**. The resolver evaluates the applicable so
 **all** matching ones as candidates; the *winner* (`is_primary`) is the highest-precedence source
 present. "Wins" means *primary selection* — it does not mean lower-precedence sources go
 unevaluated or unrecorded. **To debug:** read `team_attribution_source` (the winner) from
-provenance, jump to that node, and verify no higher-precedence stage matched.
+provenance, jump to that node, and verify no higher-precedence stage matched. An item of a
+project with several owning teams has one primary row (`is_primary = 1`) and a co-owner row
+(`is_primary = 2`) for each other active team of the project at the winner's rank (section 0.4d).
 
 ```mermaid
 flowchart TD
@@ -852,6 +854,122 @@ ClickHouse), `TestTheWorkerStepCountsLinksAndDegradesAnIncompleteLinkLeg`,
 and `TestALinkTheProviderStillReturnsIsNeverClosed` (real ClickHouse: a link with no key, an ARI this code
 does not read beside one it reads, two ids, no `edges`, null `edges`, a team search with no `pageInfo`;
 controls: a link that is gone and an explicit empty list are closed).
+
+#### 0.4d A project of several teams: every active team takes the item (CHAOS-8905)
+
+A project (a Jira space connected to several Atlassian teams, a Linear or GitLab project with several owning
+teams, any provider) can belong to more than one team. An item of such a project is the work of EACH active
+team that owns the project, not of the first team by id. The item's own native team still wins over its
+project (section 0.1): a native team key gives one team.
+
+- **Where it is decided.** One shared seam in `internal/teamattribution/cascade.go`, the same for every
+  provider: a project key maps to every ACTIVE team that holds it (`projectKeyTeams`, catalog order
+  (provider, id)). `IssueProjectCandidates` gives an `issue_project` candidate for the first holder, chosen as
+  before this change, and one for each other holder whose provider is the item's provider. A key string held
+  by a team of another provider does not make that team an owner of the item's project (a team reaches an item
+  only through ownership of its project), so it never takes a co-owner row. `project_ownership` facts are
+  looked up by the item's provider. When the winning source of an item is
+  `issue_project` or `project_ownership`, every other team of that source at the SAME rank as the winner
+  (`is_primary`, `specificity`, `priority` of the ownership fact) is a co-owner (`projectCoOwners`). A lower
+  rank, an empty team id, `repo_ownership`, a membership source and `native_team` give no co-owner. An
+  inactive team takes no row (section 0.4c).
+- **The values of `work_item_team_attributions.is_primary`** (`AttributionNotPrimary`, `AttributionPrimary`,
+  `AttributionCoOwner`; the column is `UInt8`, no migration):
+
+  | value | meaning | who reads it |
+  |---|---|---|
+  | `0` | a candidate the cascade found and did not choose (provenance only) | the provenance list |
+  | `1` | the ONE primary row of the item: the winner by rank, the same team as before this change | every organization-level reader, the daily rollups and their inputs, the one-team-per-work-unit votes (`is_primary = 1`) |
+  | `2` | a co-owner: another active team that owns the item's project at the winner's rank, with its own source and evidence | team-scoped and team-grouped reads only (`is_primary IN (1, 2)` with a team filter, or a query that gives each team its own row, point or node) |
+
+  An item has exactly one `1` row, so an organization total counts it once. A team view (a filter on one team)
+  and a team(s) view (a filter on several teams) read `IN (1, 2)` and show the item under each of their teams
+  that owns it. A team-grouped view (one row, point or node per team, not summed into an organization total)
+  also reads `IN (1, 2)`. Team-scoped and team-grouped readers today: the issues drilldown with a team scope
+  (`internal/queryapi/drilldown/issues.go`), the aggregated-flame throughput with a team
+  (`internal/queryapi/aggflame/clickhouse.go`), the team cycle/throughput quadrant
+  (`internal/queryapi/quadrant/quadrant.go`, one point per team) and the TEAM and REPO flow-matrix dimensions
+  (`internal/queryapi/analytics/flowmatrix.go`: a node per team; repository pairs joined through the team).
+  Readers that stay on `= 1` although they name a team: the organization flame (a breakdown of the
+  organization total by primary team), the daily rollup inputs and the investment team-repository donors
+  (one team per item, section "Known limit" below), and the one-team-per-work-unit votes
+  (`internal/queryapi/workgraph/teamattribution.go`, the investment views' `BuildUnitTeamSubquery`, the
+  investment explanation's majority team). GraphQL `isPrimary` is `true` for `1` only.
+- **The census.** `TestWorkItemTeamAttributionIsPrimaryPredicateCensus` reads every production Go file that
+  names this table and fails on any `is_primary` form other than `= 1` and `IN (1, 2)`: `!= 0`, `> 0`, a bare
+  truthy flag, an aggregate over it, or Go code that reads a scanned flag as not-zero. `IN (1, 2)` is accepted
+  only in a package-level const. Per package (`go/ast`), the census then follows every use of a source: a
+  template const that reaches a source is checked as one query (a team-scoped source needs a team grouping
+  or a team filter; a primary source with either fails); in a function, a team-scoped source is named in
+  the then branch of `if <team> != ""` / `if len(<team>) > 0` (a team variable, or the result of a package
+  function that returns a team filter), or the function's query always groups by team and reads no primary
+  source; a primary source in a query that groups or filters by team needs that bound team branch (it is
+  then the organization path). The two work-unit votes are an allowlist with a reason; a stale entry fails. A primary source const whose
+  own query groups or filters by team fails too.
+  "Groups by team" is read from the SQL text: a `GROUP BY` and a joined team column (`t.team_id`) or
+  `toString(team_id)`, outside the newest-`computed_at` fence. A new reader must take one of the two forms. The census reads SQL text in Go files; it does
+  not see an `is_primary` alias read later in the query or a Go `bool` scan of the column.
+- **The write dedupe.** Each producer collapses rows that share the sort key `(repo, item, team, source)` before
+  the insert (`workItemAttributionSortingKeyDedupe` in `internal/jobs/metrics/remaining`,
+  `githubWorkItemDerivedSortingKeyDedupe` in `internal/providersync`, also for the readback expectation). The
+  newest `computed_at` wins; at one version both break the tie with ONE shared function,
+  `teamattribution.AttributionRowPreference`: `1`, then `2`, then `0`. A team that owns the project through
+  two ownership facts at the top rank gets one `2` row and one `0` row under one key; the preference keeps
+  the `2` row.
+- **A team that moves between 1 and 2.** The table is `ReplacingMergeTree(computed_at)` ordered by
+  `(org_id, repo_id, work_item_id, ifNull(team_id, ''), source)`; `is_primary` is not in the key. A team whose
+  row goes from `1` to `2` (a new team ranks first) keeps the same key, and the newer `computed_at` replaces the
+  row. The readers in this repository also fence the item to its newest `computed_at`; the context-fabric
+  readers read `FINAL` with `is_primary = 1` and rely on that key replacement only (a `2` row never reaches
+  them). Before a merge both versions are stored; `FINAL` and the fence read the new one.
+- **A team that leaves the project.** Its old co-owner row keeps its own key `(…, team, source)`, so no newer
+  row replaces it and it stays stored. The next attribution run of the item (the daily run, or the remaining
+  backstop that re-attributes the scope on a `team_project_ownership` change and the organization on a
+  `teams` change) writes the item's rows with a newer `computed_at` and without that team. The team-scoped
+  readers fence the item to its newest `computed_at`, so from that run on the old row is not read. Until that
+  run the team still shows the item; the organization total is not changed at any time (the old row is a `2`).
+- **Known limit: the daily rollups show the item under one team.** The rollup tables
+  (`work_item_metrics_daily`, `work_item_state_durations_daily`, `work_item_cycle_times`,
+  `issue_type_metrics_daily`, `investment_metrics_daily`, `work_item_user_metrics_daily`) are sums keyed by one
+  `team_id`. Their writers keep the primary team (`Resolve()` and the `is_primary = 1` loaders
+  `LoadWorkItemPrimaryTeamAttributions` / `loadWorkItemScopeAttributions`), so organization totals do not
+  change. A rollup-based team view shows a co-owned item under its primary team only, until the rollup rows
+  carry the team set with one organization-counted row per set. Linked-issue inheritance (section 2) also
+  passes the primary team only.
+- **Known limit: investment and work-unit views follow one team per work unit.** A co-owner team sees the
+  item in the item views (the issues drilldown, the aggregated flame, the team quadrant, the flow-matrix
+  TEAM and REPO activity). The investment views (breakdown, catalog, sankey, grouped sankey, time series, the
+  flow matrix with investment, sankey coverage, investment quality, the investment flow) and the GraphQL
+  work-unit team list (`workUnitTeamAttributions`) take a work unit's team from the work-unit vote over the
+  items' primary rows (`BuildUnitTeamSubquery`, `resolveWorkUnitTeamAttributions`): one team per work unit,
+  also when the view is scoped to a team or grouped by team. So a co-owner team's investment view and work-unit
+  list do not show a work unit whose items its team co-owns, until the team-set rollup contract (the same
+  follow-up as the daily rollups). The census holds every reader of the vote's team to a named list
+  (`workUnitVoteConsumers`); a new reader must be classified there, and a stale entry fails.
+- **Known limit: a key held by teams of two providers.** `projectKeyTeams` is not provider-scoped, and this
+  change does not change how the primary is chosen: the first ACTIVE holder of the key by (provider, id), of
+  any provider, takes the `issue_project` primary row, as before. When that first holder is of another provider
+  than the item, it stays the primary and the item has no `issue_project` co-owner (the other holders of the
+  item's provider take no `issue_project` row; their `project_ownership` rows stay provenance).
+
+Tests: `TestAProjectOfSeveralTeamsAttributesTheItemToEveryActiveTeam` and
+`TestOnlyOwnersAtThePrimaryRankAreCoOwners` and `TestRepositoryAndNativeTeamHaveNoCoOwners` and
+`TestAKeyOfAnotherProvidersTeamMakesNoCoOwner` (the cascade, every provider);
+`TestAnItemOfAProjectOfSeveralTeamsIsWrittenForEveryActiveTeam` (real loaders, real writer, real
+ClickHouse, every provider; a team that moves from 1 to 2 with merges stopped);
+`TestACoOwnerWithTwoOwnershipFactsIsStoredAsACoOwner`, `TestAKeyOfAnotherProvidersTeamIsNeverStoredAsACoOwner`
+and `TestATeamThatLeavesTheProjectHasNoCoOwnerRowAfterTheNextRun` (the same real path);
+`TestTheAttributionWriteDedupeKeepsACoOwnerRowOverAProvenanceRow` and
+`TestTheWriteDedupeKeepsACoOwnerRowOverAProvenanceRowOfTheSameKey` (both write dedupes, both batch orders);
+`TestAStaleCoOwnerRowIsNotInTheTeamView` and `TestAStaleCoOwnerRowIsNotInTheTeamFlame` (the fence of the two
+team-scoped readers);
+`TestTheTeamQuadrantCountsAnItemOfAProjectOfTwoTeamsForEachTeam` and
+`TestTheTeamFlowMatrixCountsAnItemOfAProjectOfTwoTeamsInEachTeamNode` (the team-grouped readers, rows from the
+real producer, every provider);
+`TestAnIssueOfAProjectOfTwoTeamsIsInEachTeamsViewAndOnceInTheOrgView` and
+`TestThroughputOfAProjectOfTwoTeamsCountsInEachTeamAndOnceInTheOrg` (team A, team B, team(s), inactive team C,
+organization once and equal to the store without co-owner rows);
+`TestTheDailyAttributionReadersIgnoreACoOwnerRow`; `TestWorkItemTeamAttributionCoOwnerRowIsNotPrimary`.
 
 #### 0.4a Provider × entity **consumption** (functional — what `run_team_autoimport` actually pulls)
 

@@ -174,6 +174,18 @@ A GitHub PR closing Linear `CHAOS-2400` borrows that issue's `CHAOS` team.
 >    one-team gate: ambiguous here is `ambiguous_provider_membership`;
 >    nothing in either layer is `no_membership`.
 >
+>    **Inactive teams (CHAOS-8938).** An inactive team takes no work item
+>    (`dropInactiveTeamCandidates`), so the gate also drops inactive teams
+>    BEFORE it counts teams, in both layers, with the same test
+>    (`candidateNamesInactiveTeam`): a person of inactive T1 and active T2
+>    attributes to T2 (not `ambiguous_*_membership`); a person of inactive teams
+>    only is `no_membership`; an admin layer whose teams are all inactive has
+>    no candidate and falls through to the provider layer; two ACTIVE teams stay
+>    ambiguous. Python had no inactive teams, so only the reasons for inactive
+>    teams differ from it. Asserted by `TestMembershipGateCountsOnlyActiveTeams`,
+>    `TestAnInactiveOnlyAdminLayerFallsThroughToTheProviderLayer` and
+>    `TestAMemberOfAnInactiveAndAnActiveTeamResolvesToTheActiveTeam`.
+>
 > `team_memberships` keeps its other consumer (drift/conflict review, §0.5)
 > untouched — this ticket only changes which candidate source(s) attribution
 > reads and in what order, not what writes `team_memberships` or how drift

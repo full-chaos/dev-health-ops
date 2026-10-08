@@ -123,6 +123,19 @@ func withoutServedTitle(t *testing.T, body string) string {
 	return strings.Replace(body, key, "", 1)
 }
 
+// withoutServedName removes the deployment entity's name (a release_ref name
+// the Go API serves and the recorded Python response never had) so the
+// recorded goldens stay byte-identical. A null name is the only value these
+// fixtures produce.
+func withoutServedName(t *testing.T, body string) string {
+	t.Helper()
+	const key = `,"name":null`
+	if strings.Count(body, key) != 1 {
+		t.Fatalf("deployment entity must carry exactly one null name here: %s", body)
+	}
+	return strings.Replace(body, key, "", 1)
+}
+
 const repoID = "11111111-1111-1111-1111-111111111111"
 
 // TestGoldenPRWithRework replays testdata/pr_with_rework.json: a merged PR
@@ -247,7 +260,7 @@ func TestGoldenDeploymentWithQueueAndDeploy(t *testing.T) {
 		}
 		return &fixtureRowScanner{rows: [][]any{{
 			"success", "production",
-			day(2024, 1, 12, 1, 0, 0), day(2024, 1, 12, 1, 20, 0), day(2024, 1, 12, 1, 15, 0), day(2024, 1, 11, 23, 0, 0),
+			day(2024, 1, 12, 1, 0, 0), day(2024, 1, 12, 1, 20, 0), day(2024, 1, 12, 1, 15, 0), day(2024, 1, 11, 23, 0, 0), "",
 		}}}, nil
 	}}
 
@@ -256,7 +269,7 @@ func TestGoldenDeploymentWithQueueAndDeploy(t *testing.T) {
 		t.Fatalf("BuildResponse: %v", err)
 	}
 	want := loadGolden(t, "deployment_with_queue_and_deploy.json")
-	if gotJSON, wantJSON := mustMarshal(t, got), mustMarshal(t, want); gotJSON != wantJSON {
+	if gotJSON, wantJSON := withoutServedName(t, mustMarshal(t, got)), mustMarshal(t, want); gotJSON != wantJSON {
 		t.Fatalf("response mismatch\n got:  %s\nwant: %s", gotJSON, wantJSON)
 	}
 }
@@ -271,7 +284,7 @@ func TestGoldenDeploymentPipelineOnly(t *testing.T) {
 		}
 		return &fixtureRowScanner{rows: [][]any{{
 			"failure", "staging",
-			day(2024, 1, 13, 2, 0, 0), day(2024, 1, 13, 2, 5, 0), nil, day(2024, 1, 13, 1, 0, 0),
+			day(2024, 1, 13, 2, 0, 0), day(2024, 1, 13, 2, 5, 0), nil, day(2024, 1, 13, 1, 0, 0), "",
 		}}}, nil
 	}}
 
@@ -280,7 +293,7 @@ func TestGoldenDeploymentPipelineOnly(t *testing.T) {
 		t.Fatalf("BuildResponse: %v", err)
 	}
 	want := loadGolden(t, "deployment_pipeline_only.json")
-	if gotJSON, wantJSON := mustMarshal(t, got), mustMarshal(t, want); gotJSON != wantJSON {
+	if gotJSON, wantJSON := withoutServedName(t, mustMarshal(t, got)), mustMarshal(t, want); gotJSON != wantJSON {
 		t.Fatalf("response mismatch\n got:  %s\nwant: %s", gotJSON, wantJSON)
 	}
 }
@@ -389,7 +402,7 @@ func TestBuildResponseDeploymentNotFoundIs404(t *testing.T) {
 func TestBuildResponseDeploymentTimelineUnavailableIs404(t *testing.T) {
 	client := fakeQueryClient{t: t, handler: func(t *testing.T, query string, bindings []dhclickhouse.Binding) (dhclickhouse.RowScanner, error) {
 		return &fixtureRowScanner{rows: [][]any{{
-			"pending", "production", nil, nil, nil, nil,
+			"pending", "production", nil, nil, nil, nil, "",
 		}}}, nil
 	}}
 	_, err := BuildResponse(context.Background(), client, "org-1", Params{EntityType: "deployment", EntityID: repoID + ":deploy-3"})

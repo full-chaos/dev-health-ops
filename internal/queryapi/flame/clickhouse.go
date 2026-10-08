@@ -58,6 +58,7 @@ type deploymentRow struct {
 	FinishedAt  *time.Time
 	DeployedAt  *time.Time
 	MergedAt    *time.Time
+	ReleaseRef  string
 }
 
 // canonicalRepoID re-derives the canonical (lowercase, hyphenated) UUID
@@ -226,7 +227,8 @@ const fetchDeploymentQuery = `
             started_at,
             finished_at,
             deployed_at,
-            merged_at
+            merged_at,
+            release_ref
         FROM deployments FINAL
         WHERE org_id = {org_id:String}
           AND toString(repo_id) = {repo_id:String}
@@ -255,7 +257,7 @@ func fetchDeployment(ctx context.Context, client QueryClient, repoID, deployment
 		return nil, rows.Err()
 	}
 	var row deploymentRow
-	if err := rows.Scan(&row.Status, &row.Environment, &row.StartedAt, &row.FinishedAt, &row.DeployedAt, &row.MergedAt); err != nil {
+	if err := rows.Scan(&row.Status, &row.Environment, &row.StartedAt, &row.FinishedAt, &row.DeployedAt, &row.MergedAt, &row.ReleaseRef); err != nil {
 		return nil, fmt.Errorf("flame: fetch_deployment scan: %w", err)
 	}
 	return &row, rows.Err()

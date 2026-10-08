@@ -489,6 +489,16 @@ func deploymentStatusIsRunning(status *string) bool {
 	}
 }
 
+// deploymentName serves the deployment's release_ref as its display name. A
+// blank release_ref gives null (the web shows "Unresolved"); the deployment id
+// is never used as a name.
+func deploymentName(releaseRef string) any {
+	if strings.TrimSpace(releaseRef) == "" {
+		return nil
+	}
+	return releaseRef
+}
+
 // buildDeploymentFlameResponse ports _build_deployment_flame_response
 // (services/flame.py:277-360).
 func buildDeploymentFlameResponse(repoID, deploymentID string, deployment deploymentRow) (*Response, error) {
@@ -541,6 +551,7 @@ func buildDeploymentFlameResponse(repoID, deploymentID string, deployment deploy
 		pyjson.KeyValue[any]{Key: "deployment_id", Value: deploymentID},
 		pyjson.KeyValue[any]{Key: "status", Value: nullableString(deployment.Status)},
 		pyjson.KeyValue[any]{Key: "environment", Value: nullableString(deployment.Environment)},
+		pyjson.KeyValue[any]{Key: "name", Value: deploymentName(deployment.ReleaseRef)},
 	)
 	return &Response{Entity: entity, Timeline: timeline, Frames: frames}, nil
 }

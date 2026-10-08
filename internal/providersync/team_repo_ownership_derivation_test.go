@@ -1,6 +1,8 @@
 package providersync
 
 import (
+	"fmt"
+	"reflect"
 	"sort"
 	"testing"
 	"time"
@@ -35,10 +37,10 @@ func TestDeriveTeamRepoOwnershipRedBeforeThisProducerExisted(t *testing.T) {
 		{ProjectID: "proj-1", TeamID: "team-platform", IsPrimary: true},
 	}
 	workItems := []TeamRepoOwnershipWorkItem{
-		{WorkItemID: "gh:acme/repo-a#42", RepoID: "repo-a", ProjectID: "proj-1"},
+		{WorkItemID: "ghpr:acme/repo-a#42", Type: "pr", RepoID: "repo-a", ProjectID: "proj-1"},
 	}
 
-	got := deriveTeamRepoOwnership("org-1", projectLinks, workItems, nil, nil, nil)
+	got := deriveTeamRepoOwnership("org-1", projectLinks, workItems, nil, nil, nil).Rows
 
 	if len(got) != 1 {
 		t.Fatalf("expected 1 derived row, got %d: %+v", len(got), got)
@@ -56,10 +58,10 @@ func TestOwnProjectIDPath(t *testing.T) {
 		{ProjectID: "proj-1", TeamID: "team-platform", IsPrimary: true},
 	}
 	workItems := []TeamRepoOwnershipWorkItem{
-		{WorkItemID: "gh:acme/repo-a#1", RepoID: "repo-a", ProjectID: "proj-1"},
+		{WorkItemID: "ghpr:acme/repo-a#1", Type: "pr", RepoID: "repo-a", ProjectID: "proj-1"},
 	}
 
-	got := deriveTeamRepoOwnership("org-1", projectLinks, workItems, nil, nil, nil)
+	got := deriveTeamRepoOwnership("org-1", projectLinks, workItems, nil, nil, nil).Rows
 
 	if len(got) != 1 || got[0].TeamID != "team-platform" || got[0].RepoID != "repo-a" {
 		t.Fatalf("expected repo-a -> team-platform via own project_id, got %+v", got)
@@ -77,7 +79,7 @@ func TestDependencyDonorWalkPath(t *testing.T) {
 	workItems := []TeamRepoOwnershipWorkItem{
 		// The PR itself: repo_id set, no project_id (GitHub PRs have no
 		// native project membership).
-		{WorkItemID: "ghpr:acme/repo-a#7", RepoID: "repo-a", ProjectID: ""},
+		{WorkItemID: "ghpr:acme/repo-a#7", Type: "pr", RepoID: "repo-a", ProjectID: ""},
 		// The donor: a Linear issue with the project_id, no repo_id.
 		{WorkItemID: "linear:PLAT-9", RepoID: "", ProjectID: "proj-1"},
 	}
@@ -85,7 +87,7 @@ func TestDependencyDonorWalkPath(t *testing.T) {
 		{SourceWorkItemID: "ghpr:acme/repo-a#7", TargetWorkItemID: "linear:PLAT-9", RelationshipType: "relates_to"},
 	}
 
-	got := deriveTeamRepoOwnership("org-1", projectLinks, workItems, edges, nil, nil)
+	got := deriveTeamRepoOwnership("org-1", projectLinks, workItems, edges, nil, nil).Rows
 
 	if len(got) != 1 || got[0].TeamID != "team-platform" || got[0].RepoID != "repo-a" {
 		t.Fatalf("expected repo-a -> team-platform via dependency-donor walk, got %+v", got)
@@ -110,7 +112,7 @@ func TestNonResolvingOwnProjectIDFallsBackToDonorWalk(t *testing.T) {
 	workItems := []TeamRepoOwnershipWorkItem{
 		// The PR: repo_id set, own ProjectID set to the GitHub repo-full-name
 		// shape -- present, non-empty, but never resolves to any team.
-		{WorkItemID: "ghpr:acme/repo-a#7", RepoID: "repo-a", ProjectID: "acme/repo-a"},
+		{WorkItemID: "ghpr:acme/repo-a#7", Type: "pr", RepoID: "repo-a", ProjectID: "acme/repo-a"},
 		// The donor: a Linear issue with the REAL project_id.
 		{WorkItemID: "linear:PLAT-9", RepoID: "", ProjectID: "proj-1"},
 	}
@@ -118,7 +120,7 @@ func TestNonResolvingOwnProjectIDFallsBackToDonorWalk(t *testing.T) {
 		{SourceWorkItemID: "ghpr:acme/repo-a#7", TargetWorkItemID: "linear:PLAT-9", RelationshipType: "relates_to"},
 	}
 
-	got := deriveTeamRepoOwnership("org-1", projectLinks, workItems, edges, nil, nil)
+	got := deriveTeamRepoOwnership("org-1", projectLinks, workItems, edges, nil, nil).Rows
 
 	if len(got) != 1 || got[0].TeamID != "team-platform" || got[0].RepoID != "repo-a" {
 		t.Fatalf("expected repo-a -> team-platform via donor walk despite non-resolving own project_id, got %+v", got)
@@ -134,14 +136,14 @@ func TestBlockingRelationshipTypeNeverInherits(t *testing.T) {
 		{ProjectID: "proj-1", TeamID: "team-platform", IsPrimary: true},
 	}
 	workItems := []TeamRepoOwnershipWorkItem{
-		{WorkItemID: "ghpr:acme/repo-a#7", RepoID: "repo-a", ProjectID: ""},
+		{WorkItemID: "ghpr:acme/repo-a#7", Type: "pr", RepoID: "repo-a", ProjectID: ""},
 		{WorkItemID: "linear:PLAT-9", RepoID: "", ProjectID: "proj-1"},
 	}
 	edges := []TeamRepoOwnershipDependencyEdge{
 		{SourceWorkItemID: "ghpr:acme/repo-a#7", TargetWorkItemID: "linear:PLAT-9", RelationshipType: "blocked_by"},
 	}
 
-	got := deriveTeamRepoOwnership("org-1", projectLinks, workItems, edges, nil, nil)
+	got := deriveTeamRepoOwnership("org-1", projectLinks, workItems, edges, nil, nil).Rows
 
 	if len(got) != 0 {
 		t.Fatalf("expected no inheritance through a blocking relationship, got %+v", got)
@@ -157,7 +159,7 @@ func TestLatestEdgeByLastSyncedWinsPerPair(t *testing.T) {
 		{ProjectID: "proj-1", TeamID: "team-platform", IsPrimary: true},
 	}
 	workItems := []TeamRepoOwnershipWorkItem{
-		{WorkItemID: "ghpr:acme/repo-a#7", RepoID: "repo-a", ProjectID: ""},
+		{WorkItemID: "ghpr:acme/repo-a#7", Type: "pr", RepoID: "repo-a", ProjectID: ""},
 		{WorkItemID: "linear:PLAT-9", RepoID: "", ProjectID: "proj-1"},
 	}
 	older := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
@@ -167,7 +169,7 @@ func TestLatestEdgeByLastSyncedWinsPerPair(t *testing.T) {
 		{SourceWorkItemID: "ghpr:acme/repo-a#7", TargetWorkItemID: "linear:PLAT-9", RelationshipType: "blocked_by", LastSynced: newer},
 	}
 
-	got := deriveTeamRepoOwnership("org-1", projectLinks, workItems, edges, nil, nil)
+	got := deriveTeamRepoOwnership("org-1", projectLinks, workItems, edges, nil, nil).Rows
 
 	if len(got) != 0 {
 		t.Fatalf("expected the newer blocked_by edge to supersede the older relates_to edge, got %+v", got)
@@ -183,14 +185,14 @@ func TestExtkeyDependencyTargetResolvesCrossProvider(t *testing.T) {
 		{Provider: "linear", ProjectID: "proj-1", TeamID: "team-platform", IsPrimary: true},
 	}
 	workItems := []TeamRepoOwnershipWorkItem{
-		{WorkItemID: "ghpr:acme/repo-a#7", RepoID: "repo-a", ProjectID: ""},
+		{WorkItemID: "ghpr:acme/repo-a#7", Type: "pr", RepoID: "repo-a", ProjectID: ""},
 		{WorkItemID: "linear:PLAT-9", Provider: "linear", RepoID: "", ProjectID: "proj-1"},
 	}
 	edges := []TeamRepoOwnershipDependencyEdge{
 		{SourceWorkItemID: "ghpr:acme/repo-a#7", TargetWorkItemID: "extkey:PLAT-9", RelationshipType: "relates_to"},
 	}
 
-	got := deriveTeamRepoOwnership("org-1", projectLinks, workItems, edges, nil, nil)
+	got := deriveTeamRepoOwnership("org-1", projectLinks, workItems, edges, nil, nil).Rows
 
 	if len(got) != 1 || got[0].TeamID != "team-platform" || got[0].RepoID != "repo-a" {
 		t.Fatalf("expected repo-a -> team-platform via extkey resolution, got %+v", got)
@@ -205,7 +207,7 @@ func TestAmbiguousExtkeyDependencyTargetIsNeverGuessed(t *testing.T) {
 		{ProjectID: "proj-1", TeamID: "team-platform", IsPrimary: true},
 	}
 	workItems := []TeamRepoOwnershipWorkItem{
-		{WorkItemID: "ghpr:acme/repo-a#7", RepoID: "repo-a", ProjectID: ""},
+		{WorkItemID: "ghpr:acme/repo-a#7", Type: "pr", RepoID: "repo-a", ProjectID: ""},
 		{WorkItemID: "linear:PLAT-9", Provider: "linear", RepoID: "", ProjectID: "proj-1"},
 		{WorkItemID: "jira:PLAT-9", Provider: "jira", RepoID: "", ProjectID: "proj-1"},
 	}
@@ -213,7 +215,7 @@ func TestAmbiguousExtkeyDependencyTargetIsNeverGuessed(t *testing.T) {
 		{SourceWorkItemID: "ghpr:acme/repo-a#7", TargetWorkItemID: "extkey:PLAT-9", RelationshipType: "relates_to"},
 	}
 
-	got := deriveTeamRepoOwnership("org-1", projectLinks, workItems, edges, nil, nil)
+	got := deriveTeamRepoOwnership("org-1", projectLinks, workItems, edges, nil, nil).Rows
 
 	if len(got) != 0 {
 		t.Fatalf("expected no inheritance through an ambiguous cross-provider key, got %+v", got)
@@ -230,7 +232,7 @@ func TestMultipleDonorCandidatesPickLexicographicallySmallestTarget(t *testing.T
 		{ProjectID: "proj-2", TeamID: "team-growth", IsPrimary: true},
 	}
 	workItems := []TeamRepoOwnershipWorkItem{
-		{WorkItemID: "ghpr:acme/repo-a#7", RepoID: "repo-a", ProjectID: ""},
+		{WorkItemID: "ghpr:acme/repo-a#7", Type: "pr", RepoID: "repo-a", ProjectID: ""},
 		{WorkItemID: "linear:PLAT-9", RepoID: "", ProjectID: "proj-1"},
 		{WorkItemID: "linear:ZETA-1", RepoID: "", ProjectID: "proj-2"},
 	}
@@ -239,7 +241,7 @@ func TestMultipleDonorCandidatesPickLexicographicallySmallestTarget(t *testing.T
 		{SourceWorkItemID: "ghpr:acme/repo-a#7", TargetWorkItemID: "linear:PLAT-9", RelationshipType: "relates_to"},
 	}
 
-	got := deriveTeamRepoOwnership("org-1", projectLinks, workItems, edges, nil, nil)
+	got := deriveTeamRepoOwnership("org-1", projectLinks, workItems, edges, nil, nil).Rows
 
 	// "linear:PLAT-9" < "linear:ZETA-1" lexicographically -> team-platform wins.
 	if len(got) != 1 || got[0].TeamID != "team-platform" || got[0].RepoID != "repo-a" {
@@ -264,7 +266,7 @@ func TestUnownedDonorNeverSuppressesAnOwnedDonor(t *testing.T) {
 		{ProjectID: "proj-owned", TeamID: "team-platform", IsPrimary: true},
 	}
 	workItems := []TeamRepoOwnershipWorkItem{
-		{WorkItemID: "ghpr:acme/repo-a#7", RepoID: "repo-a", ProjectID: ""},
+		{WorkItemID: "ghpr:acme/repo-a#7", Type: "pr", RepoID: "repo-a", ProjectID: ""},
 		{WorkItemID: "linear:AAA-1", RepoID: "", ProjectID: "proj-unowned"},
 		{WorkItemID: "linear:ZETA-1", RepoID: "", ProjectID: "proj-owned"},
 	}
@@ -273,7 +275,7 @@ func TestUnownedDonorNeverSuppressesAnOwnedDonor(t *testing.T) {
 		{SourceWorkItemID: "ghpr:acme/repo-a#7", TargetWorkItemID: "linear:ZETA-1", RelationshipType: "relates_to"},
 	}
 
-	got := deriveTeamRepoOwnership("org-1", projectLinks, workItems, edges, nil, nil)
+	got := deriveTeamRepoOwnership("org-1", projectLinks, workItems, edges, nil, nil).Rows
 
 	if len(got) != 1 || got[0].TeamID != "team-platform" || got[0].RepoID != "repo-a" {
 		t.Fatalf("expected repo-a -> team-platform via the owned donor, unowned donor must never suppress it, got %+v", got)
@@ -302,30 +304,35 @@ func TestPRInheritanceViaIssuePRLink(t *testing.T) {
 		{WorkItemID: "linear:PLAT-9", RepoID: "repo-b", PRNumber: 42},
 	}
 
-	got := deriveTeamRepoOwnership("org-1", projectLinks, workItems, nil, issuePRLinks, nil)
+	got := deriveTeamRepoOwnership("org-1", projectLinks, workItems, nil, issuePRLinks, nil).Rows
 
 	if len(got) != 1 || got[0].TeamID != "team-platform" || got[0].RepoID != "repo-b" {
 		t.Fatalf("expected repo-b -> team-platform via work_graph_issue_pr, got %+v", got)
 	}
 }
 
-// TestConflictingTeamsForTheSameRepoAreNeverGuessed: CHAOS-4321's "never
-// guess" precedent -- if the SAME repo is reachable from two different
-// teams' owned projects, neither wins; the repo is left unresolved.
-func TestConflictingTeamsForTheSameRepoAreNeverGuessed(t *testing.T) {
+// TestAFullTieBetweenTwoTeamsNamesNoOwnerAndIsReported: two teams reach the
+// same repo with equal link counts at every tier (one native candidate
+// each). Neither is guessed: the repo gets no row and is reported as a tie,
+// so the write side keeps its existing owner.
+func TestAFullTieBetweenTwoTeamsNamesNoOwnerAndIsReported(t *testing.T) {
 	projectLinks := []TeamRepoOwnershipProjectLink{
 		{ProjectID: "proj-1", TeamID: "team-platform", IsPrimary: true},
 		{ProjectID: "proj-2", TeamID: "team-growth", IsPrimary: true},
 	}
 	workItems := []TeamRepoOwnershipWorkItem{
-		{WorkItemID: "gh:acme/repo-a#1", RepoID: "repo-a", ProjectID: "proj-1"},
-		{WorkItemID: "gh:acme/repo-a#2", RepoID: "repo-a", ProjectID: "proj-2"},
+		{WorkItemID: "ghpr:acme/repo-a#1", Type: "pr", RepoID: "repo-a", ProjectID: "proj-1"},
+		{WorkItemID: "ghpr:acme/repo-a#2", Type: "pr", RepoID: "repo-a", ProjectID: "proj-2"},
 	}
 
 	got := deriveTeamRepoOwnership("org-1", projectLinks, workItems, nil, nil, nil)
 
-	if len(got) != 0 {
-		t.Fatalf("expected no rows for a repo claimed by two teams, got %+v", got)
+	if len(got.Rows) != 0 {
+		t.Fatalf("expected no rows for a repo two teams reach with equal link counts, got %+v", got.Rows)
+	}
+	want := []TeamRepoOwnershipTie{{RepoID: "repo-a", TeamIDs: []string{"team-growth", "team-platform"}}}
+	if !reflect.DeepEqual(got.Ties, want) {
+		t.Fatalf("ties = %+v, want %+v", got.Ties, want)
 	}
 }
 
@@ -342,10 +349,10 @@ func TestNonPrimaryProjectOwnershipStillResolvesGitLabShaped(t *testing.T) {
 		{ProjectID: "proj-1", TeamID: "team-platform", IsPrimary: false, Specificity: 100},
 	}
 	workItems := []TeamRepoOwnershipWorkItem{
-		{WorkItemID: "gl:acme/repo-a#1", RepoID: "repo-a", ProjectID: "proj-1"},
+		{WorkItemID: "gl:acme/repo-a!1", Type: "merge_request", RepoID: "repo-a", ProjectID: "proj-1"},
 	}
 
-	got := deriveTeamRepoOwnership("org-1", projectLinks, workItems, nil, nil, nil)
+	got := deriveTeamRepoOwnership("org-1", projectLinks, workItems, nil, nil, nil).Rows
 
 	if len(got) != 1 || got[0].TeamID != "team-platform" || got[0].RepoID != "repo-a" {
 		t.Fatalf("expected repo-a -> team-platform via a lone non-primary candidate, got %+v", got)
@@ -362,10 +369,10 @@ func TestPrimaryClaimBeatsHigherSpecificityNonPrimaryClaim(t *testing.T) {
 		{ProjectID: "proj-1", TeamID: "team-growth", IsPrimary: false, Specificity: 65535},
 	}
 	workItems := []TeamRepoOwnershipWorkItem{
-		{WorkItemID: "gh:acme/repo-a#1", RepoID: "repo-a", ProjectID: "proj-1"},
+		{WorkItemID: "ghpr:acme/repo-a#1", Type: "pr", RepoID: "repo-a", ProjectID: "proj-1"},
 	}
 
-	got := deriveTeamRepoOwnership("org-1", projectLinks, workItems, nil, nil, nil)
+	got := deriveTeamRepoOwnership("org-1", projectLinks, workItems, nil, nil, nil).Rows
 
 	if len(got) != 1 || got[0].TeamID != "team-platform" {
 		t.Fatalf("expected the primary claim to win regardless of specificity, got %+v", got)
@@ -382,10 +389,10 @@ func TestTiedTopRankBetweenDifferentTeamsIsNeverGuessed(t *testing.T) {
 		{ProjectID: "proj-1", TeamID: "team-growth", IsPrimary: false, Specificity: 50},
 	}
 	workItems := []TeamRepoOwnershipWorkItem{
-		{WorkItemID: "gl:acme/repo-a#1", RepoID: "repo-a", ProjectID: "proj-1"},
+		{WorkItemID: "gl:acme/repo-a!1", Type: "merge_request", RepoID: "repo-a", ProjectID: "proj-1"},
 	}
 
-	got := deriveTeamRepoOwnership("org-1", projectLinks, workItems, nil, nil, nil)
+	got := deriveTeamRepoOwnership("org-1", projectLinks, workItems, nil, nil, nil).Rows
 
 	if len(got) != 0 {
 		t.Fatalf("expected no rows for a genuine tie between two teams, got %+v", got)
@@ -402,10 +409,10 @@ func TestDuplicateGenerationOfTheSameTeamsClaimIsNotAFalseTie(t *testing.T) {
 		{ProjectID: "proj-1", TeamID: "team-platform", IsPrimary: false, Specificity: 50},
 	}
 	workItems := []TeamRepoOwnershipWorkItem{
-		{WorkItemID: "gl:acme/repo-a#1", RepoID: "repo-a", ProjectID: "proj-1"},
+		{WorkItemID: "gl:acme/repo-a!1", Type: "merge_request", RepoID: "repo-a", ProjectID: "proj-1"},
 	}
 
-	got := deriveTeamRepoOwnership("org-1", projectLinks, workItems, nil, nil, nil)
+	got := deriveTeamRepoOwnership("org-1", projectLinks, workItems, nil, nil, nil).Rows
 
 	if len(got) != 1 || got[0].TeamID != "team-platform" {
 		t.Fatalf("expected repeated claims from the SAME team to resolve, not tie against themselves, got %+v", got)
@@ -417,10 +424,10 @@ func TestDuplicateGenerationOfTheSameTeamsClaimIsNotAFalseTie(t *testing.T) {
 // contributes nothing -- never guessed.
 func TestRepoWithNoOwnershipSignalContributesNoRow(t *testing.T) {
 	workItems := []TeamRepoOwnershipWorkItem{
-		{WorkItemID: "gh:acme/repo-a#1", RepoID: "repo-a", ProjectID: "proj-unowned"},
+		{WorkItemID: "ghpr:acme/repo-a#1", Type: "pr", RepoID: "repo-a", ProjectID: "proj-unowned"},
 	}
 
-	got := deriveTeamRepoOwnership("org-1", nil, workItems, nil, nil, nil)
+	got := deriveTeamRepoOwnership("org-1", nil, workItems, nil, nil, nil).Rows
 
 	if len(got) != 0 {
 		t.Fatalf("expected no rows, got %+v", got)
@@ -436,11 +443,11 @@ func TestMultipleReposForTheSameTeamAllResolve(t *testing.T) {
 		{ProjectID: "proj-1", TeamID: "team-platform", IsPrimary: true},
 	}
 	workItems := []TeamRepoOwnershipWorkItem{
-		{WorkItemID: "gh:acme/repo-a#1", RepoID: "repo-a", ProjectID: "proj-1"},
-		{WorkItemID: "gh:acme/repo-b#1", RepoID: "repo-b", ProjectID: "proj-1"},
+		{WorkItemID: "ghpr:acme/repo-a#1", Type: "pr", RepoID: "repo-a", ProjectID: "proj-1"},
+		{WorkItemID: "ghpr:acme/repo-b#1", Type: "pr", RepoID: "repo-b", ProjectID: "proj-1"},
 	}
 
-	got := sortedDerivedRows(deriveTeamRepoOwnership("org-1", projectLinks, workItems, nil, nil, nil))
+	got := sortedDerivedRows(deriveTeamRepoOwnership("org-1", projectLinks, workItems, nil, nil, nil).Rows)
 
 	if len(got) != 2 {
 		t.Fatalf("expected 2 rows (repo-a, repo-b), got %+v", got)
@@ -464,10 +471,10 @@ func TestDerivedRowsUseTheInferredSpecificityConstant(t *testing.T) {
 		{ProjectID: "proj-1", TeamID: "team-platform", IsPrimary: true},
 	}
 	workItems := []TeamRepoOwnershipWorkItem{
-		{WorkItemID: "gh:acme/repo-a#1", RepoID: "repo-a", ProjectID: "proj-1"},
+		{WorkItemID: "ghpr:acme/repo-a#1", Type: "pr", RepoID: "repo-a", ProjectID: "proj-1"},
 	}
 
-	got := deriveTeamRepoOwnership("org-1", projectLinks, workItems, nil, nil, nil)
+	got := deriveTeamRepoOwnership("org-1", projectLinks, workItems, nil, nil, nil).Rows
 
 	wantSpecificity := teamRepoOwnershipPrecedence[teamRepoOwnershipSourceKindInferred].Specificity
 	if len(got) != 1 || got[0].Specificity != wantSpecificity {
@@ -518,7 +525,6 @@ func TestLinearTeamKeyOwnResolutionMatchesTeamKeyShapedOwnership(t *testing.T) {
 		{
 			WorkItemID:    "linear:CHAOS-1",
 			Provider:      "linear",
-			RepoID:        "repo-a",
 			ProjectID:     "11111111-1111-4111-8111-111111111111", // raw Linear Project UUID: disjoint id space
 			NativeTeamKey: "CHAOS",
 		},
@@ -527,7 +533,7 @@ func TestLinearTeamKeyOwnResolutionMatchesTeamKeyShapedOwnership(t *testing.T) {
 	// CHAOS-4537 codex review P1: knownTeams is the org's current team
 	// catalog -- "CHAOS" must be present for the arm to trust NativeTeamKey.
 	knownTeams := []TeamRepoOwnershipKnownTeam{{Provider: "linear", ID: "CHAOS"}}
-	got := deriveTeamRepoOwnership("org-1", projectLinks, workItems, nil, nil, knownTeams)
+	got := deriveTeamRepoOwnership("org-1", projectLinks, workItems, nil, nativeIssuePRLink("linear:CHAOS-1", "repo-a"), knownTeams).Rows
 
 	if len(got) != 1 || got[0].TeamID != "CHAOS" || got[0].RepoID != "repo-a" {
 		t.Fatalf("expected repo-a -> CHAOS via native_team_key own resolution, got %+v", got)
@@ -553,13 +559,12 @@ func TestLinearTeamKeyArmRejectsUnknownNativeTeamKey(t *testing.T) {
 		{
 			WorkItemID:    "linear:CHAOS-1",
 			Provider:      "linear",
-			RepoID:        "repo-a",
 			ProjectID:     "11111111-1111-4111-8111-111111111111",
 			NativeTeamKey: "CHAOS",
 		},
 	}
 
-	got := deriveTeamRepoOwnership("org-1", nil, workItems, nil, nil, nil)
+	got := deriveTeamRepoOwnership("org-1", nil, workItems, nil, nativeIssuePRLink("linear:CHAOS-1", "repo-a"), nil).Rows
 
 	if len(got) != 0 {
 		t.Fatalf("expected 0 rows -- native_team_key names a team absent from knownTeams, never guessed, got %+v", got)
@@ -583,7 +588,7 @@ func TestLinearTeamKeyDonorWalkMatchesTeamKeyShapedOwnership(t *testing.T) {
 		{Provider: "linear", ProjectID: "org-1:linear:CHAOS", TeamID: "team-WRONG-decoy", IsPrimary: true},
 	}
 	workItems := []TeamRepoOwnershipWorkItem{
-		{WorkItemID: "ghpr:acme/repo-a#7", Provider: "github", RepoID: "repo-a", ProjectID: ""},
+		{WorkItemID: "ghpr:acme/repo-a#7", Type: "pr", Provider: "github", RepoID: "repo-a", ProjectID: ""},
 		{
 			WorkItemID:    "linear:CHAOS-1",
 			Provider:      "linear",
@@ -598,7 +603,7 @@ func TestLinearTeamKeyDonorWalkMatchesTeamKeyShapedOwnership(t *testing.T) {
 	// CHAOS-4537 codex review P1: knownTeams is the org's current team
 	// catalog -- "CHAOS" must be present for the donor's arm to resolve.
 	knownTeams := []TeamRepoOwnershipKnownTeam{{Provider: "linear", ID: "CHAOS"}}
-	got := deriveTeamRepoOwnership("org-1", projectLinks, workItems, edges, nil, knownTeams)
+	got := deriveTeamRepoOwnership("org-1", projectLinks, workItems, edges, nil, knownTeams).Rows
 
 	if len(got) != 1 || got[0].TeamID != "CHAOS" || got[0].RepoID != "repo-a" {
 		t.Fatalf("expected repo-a -> CHAOS via the donor walk's native_team_key resolution, got %+v", got)
@@ -636,7 +641,6 @@ func TestDirectProjectIDArmPreferredOverLinearTeamKeyArm(t *testing.T) {
 		{
 			WorkItemID:    "linear:CHAOS-1",
 			Provider:      "linear",
-			RepoID:        "repo-a",
 			ProjectID:     "22222222-2222-4222-8222-222222222222",
 			NativeTeamKey: "CHAOS",
 		},
@@ -646,7 +650,7 @@ func TestDirectProjectIDArmPreferredOverLinearTeamKeyArm(t *testing.T) {
 	// proves the direct project_id arm wins on priority, not merely because
 	// the fallback arm's key validation happened to reject it.
 	knownTeams := []TeamRepoOwnershipKnownTeam{{Provider: "linear", ID: "CHAOS"}}
-	got := deriveTeamRepoOwnership("org-1", projectLinks, workItems, nil, nil, knownTeams)
+	got := deriveTeamRepoOwnership("org-1", projectLinks, workItems, nil, nativeIssuePRLink("linear:CHAOS-1", "repo-a"), knownTeams).Rows
 
 	if len(got) != 1 || got[0].TeamID != "team-direct" {
 		t.Fatalf("expected repo-a -> team-direct via the direct project_id arm, got %+v", got)
@@ -673,7 +677,6 @@ func TestLinearTeamKeyArmNeverAppliesToNonLinearProviders(t *testing.T) {
 		{
 			WorkItemID:    "gh:acme/repo-a#1",
 			Provider:      "github",
-			RepoID:        "repo-a",
 			ProjectID:     "acme/repo-a", // never resolves (GitHub never writes team_project_ownership)
 			NativeTeamKey: "CHAOS",       // never set by any real GitHub route; here only to prove the gate
 		},
@@ -683,7 +686,7 @@ func TestLinearTeamKeyArmNeverAppliesToNonLinearProviders(t *testing.T) {
 	// proves the provider=="linear" gate blocks this regardless of key
 	// validity, not merely because the key itself would fail validation.
 	knownTeams := []TeamRepoOwnershipKnownTeam{{Provider: "linear", ID: "CHAOS"}}
-	got := deriveTeamRepoOwnership("org-1", projectLinks, workItems, nil, nil, knownTeams)
+	got := deriveTeamRepoOwnership("org-1", projectLinks, workItems, nil, nativeIssuePRLink("gh:acme/repo-a#1", "repo-a"), knownTeams).Rows
 
 	if len(got) != 0 {
 		t.Fatalf("expected 0 rows -- a non-linear provider must never resolve via the linear_team_key arm, got %+v", got)
@@ -717,20 +720,21 @@ func TestResolutionArmIsDeterministicWhenBothArmsAgreeOnTheSameRepoAndTeam(t *te
 		{Provider: "linear", ProjectID: "proj-1", TeamID: "CHAOS", IsPrimary: true},
 		{Provider: "linear", ProjectID: "org-1:linear:CHAOS", TeamID: "team-WRONG-decoy", IsPrimary: true},
 	}
-	// Item A resolves repo-a -> CHAOS via the direct project_id arm.
-	itemA := TeamRepoOwnershipWorkItem{WorkItemID: "linear:CHAOS-1", Provider: "linear", RepoID: "repo-a", ProjectID: "proj-1"}
+	// Item A is a Linear issue linked to a repo-a PR; it resolves CHAOS via the
+	// direct project_id arm.
+	itemA := TeamRepoOwnershipWorkItem{WorkItemID: "linear:CHAOS-1", Provider: "linear", ProjectID: "proj-1"}
 	// Item B is a SEPARATE PR (also repo-a) that only resolves via the
 	// linear_team_key arm.
 	itemB := TeamRepoOwnershipWorkItem{
-		WorkItemID: "ghpr:acme/repo-a#2", Provider: "linear", RepoID: "repo-a",
+		WorkItemID: "ghpr:acme/repo-a#2", Provider: "linear", Type: "pr", RepoID: "repo-a",
 		ProjectID: "22222222-2222-4222-8222-222222222222", NativeTeamKey: "CHAOS",
 	}
 
 	// CHAOS-4537 codex review P1: knownTeams is the org's current team
 	// catalog -- "CHAOS" must be present for item B's arm to resolve.
 	knownTeams := []TeamRepoOwnershipKnownTeam{{Provider: "linear", ID: "CHAOS"}}
-	forward := deriveTeamRepoOwnership("org-1", projectLinks, []TeamRepoOwnershipWorkItem{itemA, itemB}, nil, nil, knownTeams)
-	backward := deriveTeamRepoOwnership("org-1", projectLinks, []TeamRepoOwnershipWorkItem{itemB, itemA}, nil, nil, knownTeams)
+	forward := deriveTeamRepoOwnership("org-1", projectLinks, []TeamRepoOwnershipWorkItem{itemA, itemB}, nil, nativeIssuePRLink("linear:CHAOS-1", "repo-a"), knownTeams).Rows
+	backward := deriveTeamRepoOwnership("org-1", projectLinks, []TeamRepoOwnershipWorkItem{itemB, itemA}, nil, nativeIssuePRLink("linear:CHAOS-1", "repo-a"), knownTeams).Rows
 
 	for _, got := range [][]DerivedTeamRepoOwnershipRow{forward, backward} {
 		if len(got) != 1 || got[0].TeamID != "CHAOS" || got[0].RepoID != "repo-a" {
@@ -772,7 +776,6 @@ func TestLinearTeamKeyOwnResolutionWithEmptyProjectID(t *testing.T) {
 		{
 			WorkItemID:    "linear:CHAOS-3392",
 			Provider:      "linear",
-			RepoID:        "repo-a",
 			ProjectID:     "", // exact live-data shape: never assigned to a Project, not just unmatched
 			NativeTeamKey: "CHAOS",
 		},
@@ -781,7 +784,7 @@ func TestLinearTeamKeyOwnResolutionWithEmptyProjectID(t *testing.T) {
 	// CHAOS-4537 codex review P1: knownTeams is the org's current team
 	// catalog -- "CHAOS" must be present for the arm to resolve.
 	knownTeams := []TeamRepoOwnershipKnownTeam{{Provider: "linear", ID: "CHAOS"}}
-	got := deriveTeamRepoOwnership("org-1", projectLinks, workItems, nil, nil, knownTeams)
+	got := deriveTeamRepoOwnership("org-1", projectLinks, workItems, nil, nativeIssuePRLink("linear:CHAOS-3392", "repo-a"), knownTeams).Rows
 
 	if len(got) != 1 || got[0].TeamID != "CHAOS" || got[0].RepoID != "repo-a" {
 		t.Fatalf("expected repo-a -> CHAOS via native_team_key own resolution with an EMPTY project_id, got %+v", got)
@@ -836,7 +839,7 @@ func TestLinearTeamKeyResolvesViaPRInheritanceIssueLink(t *testing.T) {
 	// CHAOS-4537 codex review P1: knownTeams is the org's current team
 	// catalog -- "CHAOS" must be present for the arm to resolve.
 	knownTeams := []TeamRepoOwnershipKnownTeam{{Provider: "linear", ID: "CHAOS"}}
-	got := deriveTeamRepoOwnership("org-1", projectLinks, workItems, nil, issuePRLinks, knownTeams)
+	got := deriveTeamRepoOwnership("org-1", projectLinks, workItems, nil, issuePRLinks, knownTeams).Rows
 
 	if len(got) != 1 || got[0].TeamID != "CHAOS" || got[0].RepoID != "repo-a" {
 		t.Fatalf("expected repo-a -> CHAOS via PR-inheritance native_team_key resolution, got %+v", got)
@@ -992,6 +995,343 @@ func TestFilterUnchangedTeamRepoOwnershipRows(t *testing.T) {
 				if gotSorted[i] != wantSorted[i] {
 					t.Fatalf("filterUnchangedTeamRepoOwnershipRows() = %+v, want %+v", gotSorted, wantSorted)
 				}
+			}
+		})
+	}
+}
+
+// rankedOwnerTeam is one team of one provider for the ranked-owner tests:
+// it owns one project of that provider, and every link it gets is a
+// work_graph_issue_pr row from one of that project's issues to a PR in the
+// repo.
+type rankedOwnerTeam struct {
+	provider string
+	teamID   string
+}
+
+func (team rankedOwnerTeam) projectID() string { return team.provider + "-proj-" + team.teamID }
+
+// rankedOwnerInputs builds the derivation inputs for repo-1 where each team
+// gets links[tier] issue<->PR links of each provenance tier.
+func rankedOwnerInputs(teams map[rankedOwnerTeam]map[string]int) ([]TeamRepoOwnershipProjectLink, []TeamRepoOwnershipWorkItem, []TeamRepoOwnershipIssuePRLink) {
+	var projectLinks []TeamRepoOwnershipProjectLink
+	var workItems []TeamRepoOwnershipWorkItem
+	var issuePRLinks []TeamRepoOwnershipIssuePRLink
+	pr := uint32(0)
+	for team, links := range teams {
+		projectLinks = append(projectLinks, TeamRepoOwnershipProjectLink{Provider: team.provider, ProjectID: team.projectID(), TeamID: team.teamID, IsPrimary: true})
+		issue := 0
+		for _, provenance := range []string{"native", "explicit_text", "heuristic", "", "fuzzy"} {
+			for range links[provenance] {
+				issue++
+				pr++
+				workItemID := fmt.Sprintf("%s:%s-%d", team.provider, team.teamID, issue)
+				workItems = append(workItems, TeamRepoOwnershipWorkItem{WorkItemID: workItemID, Provider: team.provider, ProjectID: team.projectID()})
+				issuePRLinks = append(issuePRLinks, TeamRepoOwnershipIssuePRLink{WorkItemID: workItemID, RepoID: "repo-1", PRNumber: pr, Provenance: provenance})
+			}
+		}
+	}
+	return projectLinks, workItems, issuePRLinks
+}
+
+// rankedOwnerProviderPairs puts every provider on both sides of a contest at
+// least once: the ranking reads link tiers only, never the team's provider.
+var rankedOwnerProviderPairs = [][2]string{
+	{"linear", "jira"}, {"jira", "github"}, {"github", "gitlab"}, {"gitlab", "linear"},
+}
+
+func deriveRankedOwner(teams map[rankedOwnerTeam]map[string]int) teamRepoOwnershipDerivation {
+	projectLinks, workItems, issuePRLinks := rankedOwnerInputs(teams)
+	return deriveTeamRepoOwnership("org-1", projectLinks, workItems, nil, issuePRLinks, nil)
+}
+
+func assertRankedOwner(t *testing.T, got teamRepoOwnershipDerivation, wantTeam string) {
+	t.Helper()
+	if len(got.Ties) != 0 || len(got.Rows) != 1 || got.Rows[0].RepoID != "repo-1" || got.Rows[0].TeamID != wantTeam {
+		t.Fatalf("got rows %+v ties %+v, want one row repo-1 -> %s and no tie", got.Rows, got.Ties, wantTeam)
+	}
+}
+
+// TestRankedOwnerManyNativeLinksBeatAFewExplicitTextLinks is the shape that
+// dropped a repo before: one team with many native links, other teams with a
+// few explicit_text links each. The repo keeps the first team.
+func TestRankedOwnerManyNativeLinksBeatAFewExplicitTextLinks(t *testing.T) {
+	for _, pair := range rankedOwnerProviderPairs {
+		t.Run(pair[0]+"_over_"+pair[1], func(t *testing.T) {
+			owner := rankedOwnerTeam{pair[0], "owner"}
+			got := deriveRankedOwner(map[rankedOwnerTeam]map[string]int{
+				owner:                {"native": 12, "explicit_text": 3},
+				{pair[1], "rival-a"}: {"explicit_text": 2},
+				{pair[1], "rival-b"}: {"explicit_text": 2},
+				{pair[0], "rival-c"}: {"explicit_text": 2, "heuristic": 1},
+			})
+			assertRankedOwner(t, got, "owner")
+		})
+	}
+}
+
+// TestRankedOwnerOneNativeLinkBeatsManyExplicitTextLinks: tiers rank
+// lexicographically, so a count in a lower tier never outweighs a higher
+// tier, whatever its size.
+func TestRankedOwnerOneNativeLinkBeatsManyExplicitTextLinks(t *testing.T) {
+	for _, pair := range rankedOwnerProviderPairs {
+		t.Run(pair[0]+"_over_"+pair[1], func(t *testing.T) {
+			got := deriveRankedOwner(map[rankedOwnerTeam]map[string]int{
+				{pair[0], "native-team"}: {"native": 1},
+				{pair[1], "text-team"}:   {"explicit_text": 50, "heuristic": 50},
+			})
+			assertRankedOwner(t, got, "native-team")
+		})
+	}
+}
+
+// TestRankedOwnerExplicitTextDecidesAnEqualNativeCount: only an equal native
+// count looks at explicit_text, and explicit_text outranks any heuristic
+// count.
+func TestRankedOwnerExplicitTextDecidesAnEqualNativeCount(t *testing.T) {
+	for _, pair := range rankedOwnerProviderPairs {
+		t.Run(pair[0]+"_over_"+pair[1], func(t *testing.T) {
+			got := deriveRankedOwner(map[rankedOwnerTeam]map[string]int{
+				{pair[0], "text-team"}:      {"native": 2, "explicit_text": 1},
+				{pair[1], "heuristic-team"}: {"native": 2, "heuristic": 9},
+			})
+			assertRankedOwner(t, got, "text-team")
+		})
+	}
+}
+
+// TestRankedOwnerHeuristicDecidesEqualHigherTiers: with native and
+// explicit_text equal, the heuristic count decides, and an unrecorded or
+// unknown provenance only counts after heuristic.
+func TestRankedOwnerHeuristicDecidesEqualHigherTiers(t *testing.T) {
+	for _, pair := range rankedOwnerProviderPairs {
+		t.Run(pair[0]+"_over_"+pair[1], func(t *testing.T) {
+			got := deriveRankedOwner(map[rankedOwnerTeam]map[string]int{
+				{pair[0], "heuristic-team"}: {"native": 1, "explicit_text": 1, "heuristic": 1},
+				{pair[1], "unknown-team"}:   {"native": 1, "explicit_text": 1, "": 5, "fuzzy": 5},
+			})
+			assertRankedOwner(t, got, "heuristic-team")
+		})
+	}
+}
+
+// TestRankedOwnerUnknownProvenanceStillCounts: a link with no named tier is
+// counted in the last tier, never dropped -- it decides a contest that is
+// equal at every named tier.
+func TestRankedOwnerUnknownProvenanceStillCounts(t *testing.T) {
+	got := deriveRankedOwner(map[rankedOwnerTeam]map[string]int{
+		{"jira", "more-unknown"}: {"native": 1, "fuzzy": 2},
+		{"github", "less"}:       {"native": 1, "": 1},
+	})
+	assertRankedOwner(t, got, "more-unknown")
+}
+
+// TestRankedOwnerFullTieAcrossProvidersIsReported: equal counts at every
+// tier name no owner, for every provider pair.
+func TestRankedOwnerFullTieAcrossProvidersIsReported(t *testing.T) {
+	for _, pair := range rankedOwnerProviderPairs {
+		t.Run(pair[0]+"_ties_"+pair[1], func(t *testing.T) {
+			got := deriveRankedOwner(map[rankedOwnerTeam]map[string]int{
+				{pair[0], "team-a"}: {"native": 3, "explicit_text": 1, "heuristic": 2},
+				{pair[1], "team-b"}: {"native": 3, "explicit_text": 1, "heuristic": 2},
+				{pair[1], "team-c"}: {"native": 3, "explicit_text": 1, "heuristic": 1},
+			})
+			want := []TeamRepoOwnershipTie{{RepoID: "repo-1", TeamIDs: []string{"team-a", "team-b"}}}
+			if len(got.Rows) != 0 || !reflect.DeepEqual(got.Ties, want) {
+				t.Fatalf("got rows %+v ties %+v, want no row and ties %+v", got.Rows, got.Ties, want)
+			}
+		})
+	}
+}
+
+// TestRankedOwnerALeaderAfterATieClearsTheTie: a tie between two teams is
+// not final while a later team can still outrank both.
+func TestRankedOwnerALeaderAfterATieClearsTheTie(t *testing.T) {
+	for range 20 {
+		got := deriveRankedOwner(map[rankedOwnerTeam]map[string]int{
+			{"jira", "tied-a"}:   {"native": 2},
+			{"linear", "tied-b"}: {"native": 2},
+			{"gitlab", "leader"}: {"native": 3},
+		})
+		assertRankedOwner(t, got, "leader")
+	}
+}
+
+// TestRankedOwnerSingleTeamIsUnchanged: a repo only one team reaches keeps
+// that team whatever its tier mix.
+func TestRankedOwnerSingleTeamIsUnchanged(t *testing.T) {
+	for _, provider := range []string{"jira", "github", "gitlab", "linear"} {
+		t.Run(provider, func(t *testing.T) {
+			got := deriveRankedOwner(map[rankedOwnerTeam]map[string]int{
+				{provider, "only"}: {"explicit_text": 1, "heuristic": 4},
+			})
+			assertRankedOwner(t, got, "only")
+		})
+	}
+}
+
+// TestRankedOwnerOwnRepoAndDonorCandidatesCountAsNative: a work item's own
+// repo_id and a work_item_dependencies donor edge are provider-recorded
+// facts, so each counts as one native link -- one of either beats any number
+// of explicit_text issue<->PR links.
+func TestRankedOwnerOwnRepoAndDonorCandidatesCountAsNative(t *testing.T) {
+	projectLinks := []TeamRepoOwnershipProjectLink{
+		{Provider: "github", ProjectID: "gh-proj", TeamID: "own-repo-team", IsPrimary: true},
+		{Provider: "jira", ProjectID: "jira-proj", TeamID: "donor-team", IsPrimary: true},
+		{Provider: "linear", ProjectID: "linear-proj", TeamID: "text-team", IsPrimary: true},
+	}
+	workItems := []TeamRepoOwnershipWorkItem{
+		{WorkItemID: "ghpr:acme/repo-own#1", Type: "pr", Provider: "github", RepoID: "repo-own", ProjectID: "gh-proj"},
+		{WorkItemID: "ghpr:acme/repo-donor#2", Type: "pr", Provider: "github", RepoID: "repo-donor"},
+		{WorkItemID: "jira:DON-1", Provider: "jira", ProjectID: "jira-proj"},
+		{WorkItemID: "linear:TXT-1", Provider: "linear", ProjectID: "linear-proj"},
+	}
+	edges := []TeamRepoOwnershipDependencyEdge{
+		{SourceWorkItemID: "ghpr:acme/repo-donor#2", TargetWorkItemID: "jira:DON-1", RelationshipType: "relates_to"},
+	}
+	var issuePRLinks []TeamRepoOwnershipIssuePRLink
+	for pr := range uint32(5) {
+		issuePRLinks = append(issuePRLinks,
+			TeamRepoOwnershipIssuePRLink{WorkItemID: "linear:TXT-1", RepoID: "repo-own", PRNumber: 100 + pr, Provenance: "explicit_text"},
+			TeamRepoOwnershipIssuePRLink{WorkItemID: "linear:TXT-1", RepoID: "repo-donor", PRNumber: 200 + pr, Provenance: "explicit_text"},
+		)
+	}
+
+	got := deriveTeamRepoOwnership("org-1", projectLinks, workItems, edges, issuePRLinks, nil)
+
+	want := []DerivedTeamRepoOwnershipRow{
+		{TeamID: "donor-team", RepoID: "repo-donor", Specificity: teamRepoOwnershipPrecedence[teamRepoOwnershipSourceKindInferred].Specificity, ResolutionArm: TeamRepoOwnershipResolutionArmProjectID},
+		{TeamID: "own-repo-team", RepoID: "repo-own", Specificity: teamRepoOwnershipPrecedence[teamRepoOwnershipSourceKindInferred].Specificity, ResolutionArm: TeamRepoOwnershipResolutionArmProjectID},
+	}
+	if rows := sortedDerivedRows(got.Rows); len(got.Ties) != 0 || !reflect.DeepEqual(rows, want) {
+		t.Fatalf("got rows %+v ties %+v, want %+v", rows, got.Ties, want)
+	}
+}
+
+// TestRetractionDiffKeepsOnlyTheTiedTeamsRowsOfATiedRepo: a full tie names
+// no owner, so the open row of a team in the tie stays open, while the open
+// row of a third team that is not in the tie is retracted; other repos still
+// retract the rows their new ranked owner replaced.
+func TestRetractionDiffKeepsOnlyTheTiedTeamsRowsOfATiedRepo(t *testing.T) {
+	tiedRepo, rankedRepo := uuid.New(), uuid.New()
+	repos := map[uuid.UUID]teamRepoOwnershipRepoInfo{
+		tiedRepo:   {FullName: "acme/tied", Provider: "github"},
+		rankedRepo: {FullName: "acme/ranked", Provider: "gitlab"},
+	}
+	active := []teamRepoOwnershipActiveRow{
+		{Provider: "github", TeamID: "team-a", RepoID: tiedRepo, RepoFullName: "acme/tied"},
+		{Provider: "github", TeamID: "team-old", RepoID: tiedRepo, RepoFullName: "acme/tied"},
+		{Provider: "gitlab", TeamID: "team-a", RepoID: rankedRepo, RepoFullName: "acme/ranked"},
+	}
+	derived := []DerivedTeamRepoOwnershipRow{{TeamID: "team-new", RepoID: rankedRepo.String()}}
+	ties := []TeamRepoOwnershipTie{{RepoID: tiedRepo.String(), TeamIDs: []string{"team-a", "team-b"}}}
+
+	got := diffTeamRepoOwnershipRetractions(active, derived, ties, repos)
+
+	retracted := map[string]bool{}
+	for _, row := range got {
+		retracted[row.TeamID+" "+row.RepoFullName] = true
+	}
+	want := map[string]bool{"team-old acme/tied": true, "team-a acme/ranked": true}
+	if !reflect.DeepEqual(retracted, want) {
+		t.Fatalf("retracted %v, want %v (team-a keeps acme/tied only: it is in that tie, not in a tie on acme/ranked)", retracted, want)
+	}
+}
+
+// TestRetractionDiffKeysEveryClaimByProviderAndRepoName: two repos of one
+// organization can share a full name on different providers. A tie on one
+// and a derived row on one protect only that repo's open rows; the open row
+// of the same team on the other repo stays retractable.
+func TestRetractionDiffKeysEveryClaimByProviderAndRepoName(t *testing.T) {
+	githubRepo, gitlabRepo := uuid.New(), uuid.New()
+	repos := map[uuid.UUID]teamRepoOwnershipRepoInfo{
+		githubRepo: {FullName: "acme/shared", Provider: "github"},
+		gitlabRepo: {FullName: "acme/shared", Provider: "gitlab"},
+	}
+	active := []teamRepoOwnershipActiveRow{
+		{Provider: "github", TeamID: "team-a", RepoID: githubRepo, RepoFullName: "acme/shared"},
+		{Provider: "gitlab", TeamID: "team-a", RepoID: gitlabRepo, RepoFullName: "acme/shared"},
+	}
+	for _, tc := range []struct {
+		name    string
+		derived []DerivedTeamRepoOwnershipRow
+		ties    []TeamRepoOwnershipTie
+	}{
+		{"a tie on the github repo", nil, []TeamRepoOwnershipTie{{RepoID: githubRepo.String(), TeamIDs: []string{"team-a", "team-b"}}}},
+		{"a derived row on the github repo", []DerivedTeamRepoOwnershipRow{{TeamID: "team-a", RepoID: githubRepo.String()}}, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := diffTeamRepoOwnershipRetractions(active, tc.derived, tc.ties, repos)
+			if len(got) != 1 || got[0].Provider != "gitlab" || got[0].RepoID != gitlabRepo {
+				t.Fatalf("retracted %+v, want only team-a's open row on the gitlab repo", got)
+			}
+		})
+	}
+}
+
+// nativeIssuePRLink is one native work_graph_issue_pr row: the issue reaches
+// the repo through a pull request of that repo.
+func nativeIssuePRLink(workItemID, repoID string) []TeamRepoOwnershipIssuePRLink {
+	return []TeamRepoOwnershipIssuePRLink{{WorkItemID: workItemID, RepoID: repoID, PRNumber: 1, Provenance: "native"}}
+}
+
+// TestOnlyAPullOrMergeRequestsOwnRepoIsACandidate: the entity tree relates
+// a repo to its pull requests, and an issue to a repo only through linked
+// pull requests. A GitHub or GitLab issue that carries a repo_id but has no
+// linked PR row names no owner; the PR or MR of the same shape does.
+func TestOnlyAPullOrMergeRequestsOwnRepoIsACandidate(t *testing.T) {
+	for _, tc := range []struct {
+		name, provider, itemType, workItemID string
+		wantOwner                            bool
+	}{
+		{"github issue", "github", "issue", "gh:acme/repo-a#1", false},
+		{"github bug issue", "github", "bug", "gh:acme/repo-a#2", false},
+		{"github untyped item", "github", "", "gh:acme/repo-a#3", false},
+		{"github pull request", "github", "pr", "ghpr:acme/repo-a#4", true},
+		{"gitlab issue", "gitlab", "issue", "gitlab:acme/repo-a#5", false},
+		{"gitlab incident", "gitlab", "incident", "gitlab:acme/repo-a#6", false},
+		{"gitlab merge request", "gitlab", "merge_request", "gitlab:acme/repo-a!7", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			projectLinks := []TeamRepoOwnershipProjectLink{{Provider: tc.provider, ProjectID: "proj-1", TeamID: "team-a", IsPrimary: true}}
+			workItems := []TeamRepoOwnershipWorkItem{{WorkItemID: tc.workItemID, Provider: tc.provider, Type: tc.itemType, RepoID: "repo-a", ProjectID: "proj-1"}}
+
+			got := deriveTeamRepoOwnership("org-1", projectLinks, workItems, nil, nil, nil)
+
+			if tc.wantOwner && (len(got.Rows) != 1 || got.Rows[0].TeamID != "team-a" || got.Rows[0].RepoID != "repo-a") {
+				t.Fatalf("got rows %+v, want repo-a -> team-a from the item's own repo_id", got.Rows)
+			}
+			if !tc.wantOwner && (len(got.Rows) != 0 || len(got.Ties) != 0) {
+				t.Fatalf("got rows %+v ties %+v, want no candidate from an issue's own repo_id", got.Rows, got.Ties)
+			}
+		})
+	}
+}
+
+// TestAnIssueReachesARepoOnlyThroughItsLinkedPRTier: an issue that carries a
+// repo_id and one explicit_text link to a PR of that repo counts as one
+// explicit_text link, not as a native candidate -- so one native PR link of
+// another team outranks it.
+func TestAnIssueReachesARepoOnlyThroughItsLinkedPRTier(t *testing.T) {
+	for _, pair := range [][2]string{{"github", "gh:acme/repo-a#1"}, {"gitlab", "gitlab:acme/repo-a#1"}} {
+		t.Run(pair[0], func(t *testing.T) {
+			projectLinks := []TeamRepoOwnershipProjectLink{
+				{Provider: pair[0], ProjectID: "issue-proj", TeamID: "issue-team", IsPrimary: true},
+				{Provider: "jira", ProjectID: "jira-proj", TeamID: "pr-team", IsPrimary: true},
+			}
+			workItems := []TeamRepoOwnershipWorkItem{
+				{WorkItemID: pair[1], Provider: pair[0], Type: "issue", RepoID: "repo-a", ProjectID: "issue-proj"},
+				{WorkItemID: "jira:PR-1", Provider: "jira", Type: "story", ProjectID: "jira-proj"},
+			}
+			issuePRLinks := []TeamRepoOwnershipIssuePRLink{
+				{WorkItemID: pair[1], RepoID: "repo-a", PRNumber: 1, Provenance: "explicit_text"},
+				{WorkItemID: "jira:PR-1", RepoID: "repo-a", PRNumber: 2, Provenance: "native"},
+			}
+
+			got := deriveTeamRepoOwnership("org-1", projectLinks, workItems, nil, issuePRLinks, nil)
+
+			if len(got.Ties) != 0 || len(got.Rows) != 1 || got.Rows[0].TeamID != "pr-team" {
+				t.Fatalf("got rows %+v ties %+v, want repo-a -> pr-team (1 native link beats the issue's 1 explicit_text link)", got.Rows, got.Ties)
 			}
 		})
 	}

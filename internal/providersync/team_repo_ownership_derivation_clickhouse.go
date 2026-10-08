@@ -62,7 +62,7 @@ type teamRepoOwnershipRepoInfo struct {
 // trustworthy basis for deciding a prior claim is gone.
 //
 // inputsReady=true with written=0 is the OTHER, unrelated zero-row case:
-// inputs existed but genuinely produced nothing (every candidate conflicted,
+// inputs existed but genuinely produced nothing (every reached repo was a full tie,
 // or matched no repo-bearing item) -- the designed-empty case, reported as
 // no_signal (unless retracted>0, in which case every prior claim was
 // retracted and none replaced it).
@@ -75,8 +75,16 @@ type teamRepoOwnershipRepoInfo struct {
 // new, must not add to that exposure): every sync recomputes the org's
 // COMPLETE (team_id, repo_full_name) inferred set from scratch, so a prior
 // active inferred row absent from the new set is provably stale -- its
-// project ownership or donor linkage was removed or reassigned. Retracted
-// by writing a replacement row under the SAME (org_id, provider,
+// project ownership or donor linkage was removed or reassigned, or another
+// team now has the larger linked share of the repo. The set holds one owner
+// per repo: when several teams reach a repo, the team with the most native
+// links wins, then the most explicit_text links, then the most heuristic
+// links (deriveTeamRepoOwnership). A repo is never dropped only because two
+// teams have links to it. A full tie (equal counts at every tier) names no
+// owner: the open rows of the tied teams stay open (no retraction), a row of
+// any other team is retracted, and the run reports the tie in
+// TeamRepoOwnershipDerivationStats.Ties.
+// Retracted by writing a replacement row under the SAME (org_id, provider,
 // repo_full_name, team_id, source, valid_from) ReplacingMergeTree key with
 // valid_to=now and a newer updated_at, so FINAL/argMax(updated_at) readers
 // (providers/teams.py::load_team_repo_ownership_map,
@@ -91,6 +99,10 @@ type TeamRepoOwnershipDerivationStats struct {
 	Derived int
 	// Unchanged is how many of those an already-open row carried unchanged, so the run did not write them.
 	Unchanged int
+	// Ties are the repos two or more teams reach with equal link counts at every tier: the run named no owner for them, kept
+	// the tied teams' open rows and retracted any other team's. Set on every run that reaches the derivation, also when it
+	// writes nothing.
+	Ties []TeamRepoOwnershipTie
 }
 
 // Derive is DeriveWithStats without the stats (the form the integration tests and the older callers use).
@@ -205,7 +217,8 @@ func (service TeamRepoOwnershipDerivationService) derive(ctx context.Context, or
 		return 0, 0, false, nil, nil
 	}
 
-	derived := deriveTeamRepoOwnership(orgID, projectLinks, workItems, dependencyEdges, issuePRLinks, knownTeams)
+	derivation := deriveTeamRepoOwnership(orgID, projectLinks, workItems, dependencyEdges, issuePRLinks, knownTeams)
+	derived := derivation.Rows
 
 	activeRows, err := loadTeamRepoOwnershipActiveInferredRows(ctx, service.Conn, orgID)
 	if err != nil {
@@ -227,7 +240,7 @@ func (service TeamRepoOwnershipDerivationService) derive(ctx context.Context, or
 	// re-syncs team_project_ownership resumes normal retraction.
 	var toRetract []teamRepoOwnershipActiveRow
 	if len(projectLinks) > 0 {
-		toRetract = diffTeamRepoOwnershipRetractions(activeRows, derived, repos)
+		toRetract = diffTeamRepoOwnershipRetractions(activeRows, derived, derivation.Ties, repos)
 	}
 	if len(toRetract) > 0 {
 		retracted, err = retractTeamRepoOwnershipRows(ctx, service.Conn, orgID, now, toRetract)
@@ -237,6 +250,7 @@ func (service TeamRepoOwnershipDerivationService) derive(ctx context.Context, or
 	}
 
 	stats.Derived = len(derived)
+	stats.Ties = derivation.Ties
 	if len(derived) == 0 {
 		return 0, retracted, true, nil, nil
 	}
@@ -486,7 +500,7 @@ func loadTeamRepoOwnershipWorkItems(
 	// team key (issue.team.key) that DOES match. Empty string (ClickHouse's
 	// column default, migration 050) for every non-Linear provider.
 	rows, err := conn.Query(ctx, `
-SELECT work_item_id, provider, repo_id, project_id, native_team_key
+SELECT work_item_id, provider, type, repo_id, project_id, native_team_key
 FROM work_items FINAL
 WHERE org_id = ?`,
 		orgID)
@@ -498,7 +512,7 @@ WHERE org_id = ?`,
 	for rows.Next() {
 		var item TeamRepoOwnershipWorkItem
 		var repoID uuid.UUID
-		if err := rows.Scan(&item.WorkItemID, &item.Provider, &repoID, &item.ProjectID, &item.NativeTeamKey); err != nil {
+		if err := rows.Scan(&item.WorkItemID, &item.Provider, &item.Type, &repoID, &item.ProjectID, &item.NativeTeamKey); err != nil {
 			return nil, err
 		}
 		if repoID != uuid.Nil {
@@ -593,7 +607,7 @@ func loadTeamRepoOwnershipIssuePRLinks(
 	// repo_id IN (?) filter is kept too (defense in depth: this org's own
 	// repo set, loaded separately), but org_id is the authoritative scope.
 	rows, err := conn.Query(ctx, `
-SELECT repo_id, work_item_id, pr_number
+SELECT repo_id, work_item_id, pr_number, provenance
 FROM work_graph_issue_pr FINAL
 WHERE org_id = ? AND repo_id IN (?)`,
 		orgID, repoIDs)
@@ -605,7 +619,7 @@ WHERE org_id = ? AND repo_id IN (?)`,
 	for rows.Next() {
 		var link TeamRepoOwnershipIssuePRLink
 		var repoID uuid.UUID
-		if err := rows.Scan(&repoID, &link.WorkItemID, &link.PRNumber); err != nil {
+		if err := rows.Scan(&repoID, &link.WorkItemID, &link.PRNumber, &link.Provenance); err != nil {
 			return nil, err
 		}
 		if repoID == uuid.Nil {
@@ -669,33 +683,49 @@ WHERE org_id = ?
 }
 
 // diffTeamRepoOwnershipRetractions returns every activeRows entry whose
-// (team_id, repo_full_name) pair is absent from the newly-derived set --
-// pure, no I/O, exhaustively unit-testable. Resolves each derived row's
-// repo_full_name via the SAME repos snapshot writeTeamRepoOwnershipRows
-// uses, so a derived row that writeTeamRepoOwnershipRows would itself skip
-// (unresolvable repo_id) never wrongly protects an active row from
-// retraction.
+// (provider, repo_full_name, team_id) identity is absent from the
+// newly-derived set, except the open row of a team in a tie on that repo: a
+// full tie names no owner, so a tied team's existing open row stays. A row
+// of a team that is not in the tie is retracted. The identity is the one the
+// table keys on, so a same-named repo of another provider is a different
+// repo and neither a derived row nor a tie on one protects the other.
+// Pure, no I/O. Resolves each derived row's repo through the SAME repos
+// snapshot writeTeamRepoOwnershipRows uses, so a derived row that
+// writeTeamRepoOwnershipRows would itself skip (unresolvable repo_id) never
+// wrongly protects an active row from retraction.
 func diffTeamRepoOwnershipRetractions(
 	activeRows []teamRepoOwnershipActiveRow,
 	derived []DerivedTeamRepoOwnershipRow,
+	ties []TeamRepoOwnershipTie,
 	repos map[uuid.UUID]teamRepoOwnershipRepoInfo,
 ) []teamRepoOwnershipActiveRow {
-	type pair struct{ teamID, repoFullName string }
-	desired := make(map[pair]bool, len(derived))
-	for _, row := range derived {
-		repoID, err := uuid.Parse(row.RepoID)
+	type claim struct{ provider, repoFullName, teamID string }
+	resolve := func(id string) (teamRepoOwnershipRepoInfo, bool) {
+		repoID, err := uuid.Parse(id)
 		if err != nil || repoID == uuid.Nil {
-			continue
+			return teamRepoOwnershipRepoInfo{}, false
 		}
 		info, ok := repos[repoID]
-		if !ok || info.FullName == "" {
-			continue
+		return info, ok && info.FullName != ""
+	}
+	desired := make(map[claim]bool, len(derived))
+	for _, row := range derived {
+		if info, ok := resolve(row.RepoID); ok {
+			desired[claim{provider: info.Provider, repoFullName: info.FullName, teamID: row.TeamID}] = true
 		}
-		desired[pair{teamID: row.TeamID, repoFullName: info.FullName}] = true
+	}
+	tied := make(map[claim]bool)
+	for _, tie := range ties {
+		if info, ok := resolve(tie.RepoID); ok {
+			for _, teamID := range tie.TeamIDs {
+				tied[claim{provider: info.Provider, repoFullName: info.FullName, teamID: teamID}] = true
+			}
+		}
 	}
 	var toRetract []teamRepoOwnershipActiveRow
 	for _, row := range activeRows {
-		if desired[pair{teamID: row.TeamID, repoFullName: row.RepoFullName}] {
+		key := claim{provider: row.Provider, repoFullName: row.RepoFullName, teamID: row.TeamID}
+		if desired[key] || tied[key] {
 			continue
 		}
 		toRetract = append(toRetract, row)

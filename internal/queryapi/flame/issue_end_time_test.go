@@ -15,6 +15,9 @@ import (
 func issueFlameFixture(t *testing.T, status string, createdAt time.Time, startedAt, completedAt any) fakeQueryClient {
 	t.Helper()
 	return fakeQueryClient{t: t, handler: func(t *testing.T, query string, bindings []dhclickhouse.Binding) (dhclickhouse.RowScanner, error) {
+		if strings.Contains(query, "FROM work_items FINAL") {
+			return &fixtureRowScanner{}, nil
+		}
 		if !strings.Contains(query, "FROM work_item_cycle_times FINAL") {
 			t.Fatalf("unexpected query: %s", query)
 		}

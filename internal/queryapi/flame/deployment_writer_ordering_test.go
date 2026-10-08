@@ -30,7 +30,7 @@ func TestBuildDeploymentFlameResponseCreationBeforeStartOrdering(t *testing.T) {
 			}
 			return &fixtureRowScanner{rows: [][]any{{
 				"success", "production",
-				day(2026, 1, 10, 10, 1, 0), day(2026, 1, 10, 10, 5, 0), day(2026, 1, 10, 10, 0, 0), day(2026, 1, 10, 9, 0, 0),
+				day(2026, 1, 10, 10, 1, 0), day(2026, 1, 10, 10, 5, 0), day(2026, 1, 10, 10, 0, 0), day(2026, 1, 10, 9, 0, 0), "",
 			}}}, nil
 		}}
 		got, err := BuildResponse(context.Background(), client, "org-1", Params{EntityType: "deployment", EntityID: repoID + ":order-merged"})
@@ -61,7 +61,7 @@ func TestBuildDeploymentFlameResponseCreationBeforeStartOrdering(t *testing.T) {
 			}
 			return &fixtureRowScanner{rows: [][]any{{
 				"success", "production",
-				day(2026, 1, 10, 10, 1, 0), day(2026, 1, 10, 10, 5, 0), day(2026, 1, 10, 10, 0, 0), nil,
+				day(2026, 1, 10, 10, 1, 0), day(2026, 1, 10, 10, 5, 0), day(2026, 1, 10, 10, 0, 0), nil, "",
 			}}}, nil
 		}}
 		got, err := BuildResponse(context.Background(), client, "org-1", Params{EntityType: "deployment", EntityID: repoID + ":order-nomerge"})

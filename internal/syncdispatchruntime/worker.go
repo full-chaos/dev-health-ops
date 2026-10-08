@@ -439,6 +439,9 @@ func (worker *teamRepoOwnershipDerivationWorker) Middleware(job *rivertype.JobRo
 	return worker.taps.middleware(job)
 }
 
+// teamRepoOwnershipTieLogLimit bounds the repo ids one owner-tie log line carries; owner_ties carries the full count.
+const teamRepoOwnershipTieLogLimit = 20
+
 func (worker *teamRepoOwnershipDerivationWorker) Work(ctx context.Context, job *river.Job[TeamRepoOwnershipDerivationJobArgs]) (err error) {
 	if worker == nil || worker.service == nil || job == nil {
 		return ErrWorkerRegistration
@@ -478,6 +481,11 @@ func (worker *teamRepoOwnershipDerivationWorker) Work(ctx context.Context, job *
 				jobruntime.TeamRepoOwnershipDerivationOutcomeRowsRetracted, retracted,
 			)
 		}
+		if len(stats.Ties) > 0 {
+			_ = worker.observer.ObserveTeamRepoOwnershipDerivation(
+				jobruntime.TeamRepoOwnershipDerivationOutcomeOwnerTieUnresolved, len(stats.Ties),
+			)
+		}
 		_ = worker.observer.ObserveTeamRepoOwnershipDerivation(outcome, written)
 		// Resolution-arm breakdown (CHAOS-4458 part (b)): recorded every run,
 		// for every registered arm, so the project_id and linear_team_key
@@ -490,6 +498,13 @@ func (worker *teamRepoOwnershipDerivationWorker) Work(ctx context.Context, job *
 		} {
 			_ = worker.observer.ObserveTeamRepoOwnershipDerivationResolutionArm(arm, armCounts[string(arm)])
 		}
+	}
+	if len(stats.Ties) > 0 {
+		tiedRepoIDs := make([]string, 0, min(len(stats.Ties), teamRepoOwnershipTieLogLimit))
+		for _, tie := range stats.Ties[:min(len(stats.Ties), teamRepoOwnershipTieLogLimit)] {
+			tiedRepoIDs = append(tiedRepoIDs, tie.RepoID)
+		}
+		synclog.Default().Warn(ctx, synclog.MsgTeamRepoOwnershipOwnerTieUnresolved, synclog.Org(synclog.ParseID(job.Args.OrgID)), synclog.Run(synclog.ParseID(job.Args.Payload.SyncRunID)), synclog.Count(synclog.KeyOwnerTies, len(stats.Ties)), synclog.IDs(synclog.KeyRepoIDs, synclog.ParseIDs(tiedRepoIDs)))
 	}
 	synclog.Default().Info(ctx, synclog.MsgTeamRepoOwnershipDerivation, synclog.Text(synclog.KeyOutcome, synclog.ParseLabel(string(outcome))), synclog.Org(synclog.ParseID(job.Args.OrgID)), synclog.Run(synclog.ParseID(job.Args.Payload.SyncRunID)), synclog.Count(synclog.KeyRowsWritten, written), synclog.Count(synclog.KeyRowsRetracted, retracted), synclog.Count(synclog.KeyFactsDerived, stats.Derived), synclog.Count(synclog.KeyFactsUnchanged, stats.Unchanged))
 	completed = true

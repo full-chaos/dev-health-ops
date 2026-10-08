@@ -4,6 +4,7 @@ package teamattribution
 
 import (
 	"context"
+	"slices"
 	"testing"
 	"time"
 
@@ -188,10 +189,10 @@ func TestAnInactiveTeamTakesNoWorkItemForEveryProvider(t *testing.T) {
 }
 
 // An INACTIVE team with no project key and no ownership (null-carrying) and an
-// open membership: the cascade must treat it as it treats any null-carrying
-// team (reason team_null_carrying), never as a team that takes the item. The
-// inactive team stays KNOWN to the cascade; a loader that dropped it would
-// turn the reason into the R74 pass-through and hand the item to it.
+// open membership: the membership gate drops it before it counts teams (reason
+// no_membership), and it never takes the item. The inactive team stays KNOWN
+// to the cascade; a loader that dropped it would make the team unknown, not
+// inactive, and hand the item to it.
 func TestAnInactiveNullCarryingTeamStaysKnownAndTakesNothingThroughMembership(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
 	defer cancel()
@@ -246,8 +247,8 @@ func TestAnInactiveNullCarryingTeamStaysKnownAndTakesNothingThroughMembership(t 
 		if team != nil {
 			t.Errorf("%s: resolved team = %q, want none: the team is inactive (candidates %+v)", provider, *team, candidates)
 		}
-		if len(candidates) != 1 || candidates[0].Evidence != "no_candidate:team_null_carrying" {
-			t.Errorf("%s: candidates = %+v, want the one unassigned candidate with no_candidate:team_null_carrying", provider, candidates)
+		if len(candidates) != 1 || candidates[0].Evidence != "no_candidate:no_membership" {
+			t.Errorf("%s: candidates = %+v, want the one unassigned candidate with no_candidate:no_membership", provider, candidates)
 		}
 	}
 }
@@ -392,6 +393,159 @@ func TestAnInactiveTeamDropsOnlyTheTeamOfItsOwnProviderWithTheSameID(t *testing.
 							provider, other, item.provider, name, got, item.want, candidates)
 					}
 				}
+			}
+		}
+	}
+}
+
+// A person in an inactive team and an active team is attributed to the active
+// team: the exactly-one-team gate of the membership layers counts the active
+// teams only. Real rows, real loaders, all providers, the provider layer
+// (team_memberships) and the admin layer (teams.manual_members).
+func TestAMemberOfAnInactiveAndAnActiveTeamResolvesToTheActiveTeam(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+	instance, err := containers.StartClickHouse(ctx)
+	if err != nil {
+		t.Fatalf("start ClickHouse: %v", err)
+	}
+	t.Cleanup(func() {
+		closeCtx, closeCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer closeCancel()
+		_ = instance.Close(closeCtx)
+	})
+	chschema.Apply(ctx, t, instance)
+	conn, err := clickhousestore.Open(ctx, clickhousestore.DefaultConfig(instance.URI))
+	if err != nil {
+		t.Fatalf("open ClickHouse: %v", err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+	const org = "org-inactive-membership-gate"
+	at := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	for _, provider := range retractionProviders {
+		old, current := "old-"+provider, "cur-"+provider
+		oldUUID, currentUUID := uuid.New(), uuid.New()
+		for version, isActive := range []uint8{1, 0} {
+			stamp := at.Add(time.Duration(version) * time.Hour)
+			if err := conn.Exec(ctx, `INSERT INTO teams (id, team_uuid, name, members, manual_members, project_keys, repo_patterns, is_active, updated_at, last_synced, org_id, provider, native_team_key) VALUES (?, ?, ?, [], [], ['K'], [], ?, ?, ?, ?, ?, ?)`,
+				old, oldUUID, "Old "+provider, isActive, stamp, stamp, org, provider, old); err != nil {
+				t.Fatalf("insert team %s: %v", old, err)
+			}
+		}
+		if err := conn.Exec(ctx, `INSERT INTO teams (id, team_uuid, name, members, manual_members, project_keys, repo_patterns, is_active, updated_at, last_synced, org_id, provider, native_team_key) VALUES (?, ?, ?, [], [], ['K'], [], 1, ?, ?, ?, ?, ?)`,
+			current, currentUUID, "Current "+provider, at, at, org, provider, current); err != nil {
+			t.Fatalf("insert team %s: %v", current, err)
+		}
+		for _, id := range []string{old, current} {
+			if err := conn.Exec(ctx, `INSERT INTO team_memberships (org_id, provider, team_id, member_id, identity_facets, source, is_primary, specificity, priority, valid_from, updated_at) VALUES (?, ?, ?, 'someone', ['someone'], 'native', 1, 100, 10, ?, ?)`,
+				org, provider, id, at, at); err != nil {
+				t.Fatalf("insert membership %s: %v", id, err)
+			}
+		}
+	}
+	source := ClickHouseFactSource{Conn: conn}
+	teams, err := source.LoadTeams(ctx, org)
+	if err != nil {
+		t.Fatalf("LoadTeams: %v", err)
+	}
+	members, err := source.LoadProviderMembers(ctx, org, at.Add(48*time.Hour))
+	if err != nil {
+		t.Fatalf("LoadProviderMembers: %v", err)
+	}
+	derived := NewGitHubWorkItemDerivationContext(GithubWorkItemDerivationFacts{Teams: teams, ProviderMembers: members})
+	for _, provider := range retractionProviders {
+		candidates, reason := derived.ResolveMembership(provider, "someone")
+		if reason != "" || candidateTeams(candidates) != "cur-"+provider {
+			t.Errorf("%s: membership teams %q reason %q, want cur-%s and no reason", provider, candidateTeams(candidates), reason, provider)
+		}
+		typ := map[string]string{"github": "pr", "gitlab": "merge_request", "linear": "issue", "jira": "issue"}[provider]
+		subject := GithubWorkItemDerivationSubject{WorkItemID: provider + ":x#1", Provider: provider, Type: typ, Assignees: []string{"someone"}, OrgID: org}
+		team, _, resolved := derived.Resolve(subject)
+		if got := GithubWorkItemDerivationStringValue(team); got != "cur-"+provider {
+			t.Errorf("%s: resolved team = %q, want cur-%s (candidates %+v)", provider, got, provider, resolved)
+		}
+	}
+}
+
+// The admin layer (teams.manual_members, read by the real LoadMembers). The
+// roster facet carries no provider, so team id "shr" held by an ACTIVE team of
+// another provider names the item's own team "shr" too, which is inactive. The
+// inactive team is not counted: with an active admin team beside it the person
+// goes to the active one; with none the person falls through to the provider
+// layer.
+func TestAnInactiveAdminTeamIsNotCountedByTheMembershipGate(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+	instance, err := containers.StartClickHouse(ctx)
+	if err != nil {
+		t.Fatalf("start ClickHouse: %v", err)
+	}
+	t.Cleanup(func() {
+		closeCtx, closeCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer closeCancel()
+		_ = instance.Close(closeCtx)
+	})
+	chschema.Apply(ctx, t, instance)
+	conn, err := clickhousestore.Open(ctx, clickhousestore.DefaultConfig(instance.URI))
+	if err != nil {
+		t.Fatalf("open ClickHouse: %v", err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+	// Merges stop so that the rows stay physical, as in the other cases here.
+	if err := conn.Exec(ctx, `SYSTEM STOP MERGES teams`); err != nil {
+		t.Fatalf("stop merges: %v", err)
+	}
+	at := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	insertTeam := func(org, provider, id string, active uint8, stamp time.Time, manual []string) {
+		if err := conn.Exec(ctx, `INSERT INTO teams (id, team_uuid, name, members, manual_members, project_keys, repo_patterns, is_active, updated_at, last_synced, org_id, provider, native_team_key) VALUES (?, ?, ?, [], ?, ['K'], [], ?, ?, ?, ?, ?, ?)`,
+			id, uuid.New(), id, manual, active, stamp, stamp, org, provider, id); err != nil {
+			t.Fatalf("insert team %s: %v", id, err)
+		}
+	}
+	for _, provider := range retractionProviders {
+		for _, withActiveAdmin := range []bool{false, true} {
+			org := "org-inactive-admin-" + provider
+			want := "prov-" + provider
+			if withActiveAdmin {
+				org += "-active"
+				want = "adm-" + provider
+			}
+			other := retractionProviders[(slices.Index(retractionProviders, provider)+1)%len(retractionProviders)]
+			own, adm := "prov-"+provider, "adm-"+provider
+			insertTeam(org, provider, "shr", 1, at, nil)
+			insertTeam(org, provider, "shr", 0, at.Add(time.Hour), nil)
+			insertTeam(org, other, "shr", 1, at.Add(2*time.Hour), []string{"someone"})
+			insertTeam(org, provider, own, 1, at, nil)
+			if withActiveAdmin {
+				insertTeam(org, provider, adm, 1, at, []string{"someone"})
+			}
+			if err := conn.Exec(ctx, `INSERT INTO team_memberships (org_id, provider, team_id, member_id, identity_facets, source, is_primary, specificity, priority, valid_from, updated_at) VALUES (?, ?, ?, 'someone', ['someone'], 'native', 1, 100, 10, ?, ?)`,
+				org, provider, own, at, at); err != nil {
+				t.Fatalf("insert membership: %v", err)
+			}
+			source := ClickHouseFactSource{Conn: conn}
+			var facts GithubWorkItemDerivationFacts
+			var tagged []GithubWorkItemDerivationMemberFact
+			if facts.Teams, err = source.LoadTeams(ctx, org); err != nil {
+				t.Fatalf("LoadTeams: %v", err)
+			}
+			if facts.Members, facts.UntypedMembers, facts.ProviderUntypedMembers, tagged, err = source.LoadMembers(ctx, org, at.Add(48*time.Hour)); err != nil {
+				t.Fatalf("LoadMembers: %v", err)
+			}
+			if facts.ProviderMembers, err = source.LoadProviderMembers(ctx, org, at.Add(48*time.Hour)); err != nil {
+				t.Fatalf("LoadProviderMembers: %v", err)
+			}
+			facts.ProviderMembers = append(facts.ProviderMembers, tagged...)
+			derived := NewGitHubWorkItemDerivationContext(facts)
+			candidates, reason := derived.ResolveMembership(provider, "someone")
+			if reason != "" || candidateTeams(candidates) != want {
+				t.Errorf("%s activeAdmin=%v: membership teams %q reason %q, want %s and no reason (admin untyped %d)",
+					provider, withActiveAdmin, candidateTeams(candidates), reason, want, len(facts.UntypedMembers))
+			}
+			typ := map[string]string{"github": "pr", "gitlab": "merge_request", "linear": "issue", "jira": "issue"}[provider]
+			team, _, resolved := derived.Resolve(GithubWorkItemDerivationSubject{WorkItemID: provider + ":x#1", Provider: provider, Type: typ, Assignees: []string{"someone"}, OrgID: org})
+			if got := GithubWorkItemDerivationStringValue(team); got != want {
+				t.Errorf("%s activeAdmin=%v: resolved team = %q, want %s (candidates %+v)", provider, withActiveAdmin, got, want, resolved)
 			}
 		}
 	}

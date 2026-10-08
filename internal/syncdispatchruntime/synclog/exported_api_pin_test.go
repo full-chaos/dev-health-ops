@@ -101,6 +101,8 @@ var exportedAPI = []string{
 	"var synclog.KeyRateLimitDeferrals synclog.Key",
 	"var synclog.KeyFactsDerived synclog.Key",
 	"var synclog.KeyFactsUnchanged synclog.Key",
+	"var synclog.KeyOwnerTies synclog.Key",
+	"var synclog.KeyRepoIDs synclog.Key",
 	"var synclog.KeyReason synclog.Key",
 	"var synclog.KeyRepoCount synclog.Key",
 	"var synclog.KeyTouchedKeysRecorded synclog.Key",
@@ -209,4 +211,5 @@ var exportedAPI = []string{
 	"var synclog.MsgSyncRunAuthFingerprintMismatch synclog.Msg",
 	"var synclog.MsgSyncRunRollupBumped synclog.Msg",
 	"var synclog.MsgTeamRepoOwnershipDerivation synclog.Msg",
+	"var synclog.MsgTeamRepoOwnershipOwnerTieUnresolved synclog.Msg",
 }

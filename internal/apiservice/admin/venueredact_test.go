@@ -163,3 +163,52 @@ func normalizeAuditLogObjectDisplayNames(t *testing.T, object *pyjson.Object) *p
 	}
 	return out
 }
+
+// withoutServedMemberNames removes the Go-only user_name/user_email keys from
+// the member list so the differential proof still compares every field the
+// frozen Python response has. The Go-only member names test checks the values.
+func withoutServedMemberNames(request venueoracle.Request, body string) string {
+	if request.Method != "GET" || !strings.Contains(request.Path, "/members") {
+		return body
+	}
+	value, err := pyjson.DecodeString(body)
+	if err != nil {
+		return body
+	}
+	items, ok := value.([]pyjson.Value)
+	if !ok {
+		return body
+	}
+	out := make([]pyjson.Value, len(items))
+	for i, item := range items {
+		object, ok := item.(*pyjson.Object)
+		if !ok {
+			return body
+		}
+		trimmed := pyjson.NewObject()
+		for _, key := range object.Keys() {
+			if key == "user_name" || key == "user_email" {
+				continue
+			}
+			child, _ := object.Get(key)
+			trimmed.Set(key, child)
+		}
+		out[i] = trimmed
+	}
+	encoded, err := pyjson.Marshal(out)
+	if err != nil {
+		return body
+	}
+	return string(encoded)
+}
+
+func TestWithoutServedMemberNamesKeepsTheLegacyMemberPayload(t *testing.T) {
+	request := venueoracle.Request{Method: "GET", Path: "/api/v1/admin/orgs/o/members"}
+	python := `[{"id":"m","org_id":"o","user_id":"u","role":"member"}]`
+	goBody := `[{"id":"m","org_id":"o","user_id":"u","role":"member","user_name":"Ari","user_email":"a@example.com"}]`
+	for name, body := range map[string]string{"python": python, "go": goBody} {
+		if got := withoutServedMemberNames(request, body); got != python {
+			t.Errorf("%s normalized member body\n got:  %s\n want: %s", name, got, python)
+		}
+	}
+}

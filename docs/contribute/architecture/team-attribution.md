@@ -174,6 +174,18 @@ A GitHub PR closing Linear `CHAOS-2400` borrows that issue's `CHAOS` team.
 >    one-team gate: ambiguous here is `ambiguous_provider_membership`;
 >    nothing in either layer is `no_membership`.
 >
+>    **Inactive teams (CHAOS-8938).** An inactive team takes no work item
+>    (`dropInactiveTeamCandidates`), so the gate also drops inactive teams
+>    BEFORE it counts teams, in both layers, with the same test
+>    (`candidateNamesInactiveTeam`): a person of inactive T1 and active T2
+>    attributes to T2 (not `ambiguous_*_membership`); a person of inactive teams
+>    only is `no_membership`; an admin layer whose teams are all inactive has
+>    no candidate and falls through to the provider layer; two ACTIVE teams stay
+>    ambiguous. Python had no inactive teams, so only the reasons for inactive
+>    teams differ from it. Asserted by `TestMembershipGateCountsOnlyActiveTeams`,
+>    `TestAnInactiveOnlyAdminLayerFallsThroughToTheProviderLayer` and
+>    `TestAMemberOfAnInactiveAndAnActiveTeamResolvesToTheActiveTeam`.
+>
 > `team_memberships` keeps its other consumer (drift/conflict review, §0.5)
 > untouched — this ticket only changes which candidate source(s) attribution
 > reads and in what order, not what writes `team_memberships` or how drift
@@ -436,8 +448,8 @@ means the ClickHouse `teams` dimension is empty.
 > producer design (CHAOS-4365 lane): edge-walk `work_items` -- either the item's **own** `project_id`,
 > or, when that has no ownership row, a **donor's** `project_id` reached by walking
 > `work_item_dependencies` (§2, tracker-to-tracker, provider-agnostic) -- into `team_project_ownership`
-> to resolve a team, then stamp that team onto the **original** item's own `repo_id` (already a
-> `work_items` column; no join to `repos` needed to get it). The provider column is iterated
+> to resolve a team, then stamp that team onto the **original** pull request's / merge request's own `repo_id` (already a
+> `work_items` column; no join to `repos` needed to get it; an issue's own `repo_id` is never read). The provider column is iterated
 > generically -- no provider branches. Rows land with **`source = 'inferred'`, at lower
 > `specificity` than a direct producer row**, so a GitHub-team-owned repo's own row (`source =
 > 'provider_access'`, §0.4a) still wins the `is_primary` tie-break for that repo. `inferred` is
@@ -1717,10 +1729,10 @@ flowchart TD
     SYNC -->|"Jira / Linear -- team_autoimport_{jira,linear}.py, source=native"| TPO
     LGN["Linear Go-native route (CHAOS-4431, ACTIVATED 2026-08-29, 27bef7286 --<br/>bypasses the Python populate() path)<br/>internal/providersync/linear_reference_catalog_route.go:386-390 (per-Project<br/>rows, ProjectID=raw Linear Project UUID) + :410-414 (per-team synthetic<br/>org_id:linear:team_key row, kept for backward compat) -&gt; team_project_ownership,<br/>source=native -- WIRED to production as of the 5.6 deploy cut"] --> TPO
 
-    TPO -->|"match: work_items.project_id (item's OWN project;<br/>every provider today, and -- as of CHAOS-4431 -- Linear items assigned to a<br/>real Linear Project too) -- resolution arm 'project_id'"| WI["work_items<br/>(a team-owned tracker item; already carries its own repo_id)<br/>Linear only, CHAOS-4537: native_team_key column IS the resolved<br/>team_id, once validated against a CURRENT teams-table catalog<br/>(codex round 2 P1) -- self-resolving, tried ONLY when the project_id<br/>arm above does not resolve, no team_project_ownership lookup at all<br/>-- resolution arm 'linear_team_key'"]
+    TPO -->|"match: work_items.project_id (item's OWN project;<br/>every provider today, and -- as of CHAOS-4431 -- Linear items assigned to a<br/>real Linear Project too) -- resolution arm 'project_id'"| WI["work_items<br/>(a team-owned tracker item; a pull / merge request item carries its own repo_id)<br/>Linear only, CHAOS-4537: native_team_key column IS the resolved<br/>team_id, once validated against a CURRENT teams-table catalog<br/>(codex round 2 P1) -- self-resolving, tried ONLY when the project_id<br/>arm above does not resolve, no team_project_ownership lookup at all<br/>-- resolution arm 'linear_team_key'"]
     TPO -->|"OR match: a DONOR's own project_id (same arm above),<br/>OR the donor's own native_team_key column directly (CHAOS-4537),<br/>reached by walking work_item_dependencies (§2, tracker-to-tracker,<br/>provider-agnostic) from an item with no ownership of its own<br/>-- gated (see 'Inheritance is gated' below)"| WI
 
-    WI -->|"derive: resolve the team (own or donor, project_id arm tried first,<br/>Linear's native_team_key arm as fallback -- CHAOS-4458 part b);<br/>stamp it onto the ORIGINAL item's own repo_id (work_items column, no join needed to RESOLVE it)<br/>provider column iterated, no provider branches<br/>source=inferred (implemented, CHAOS-4365 -- deriveTeamRepoOwnership)<br/>lower specificity than a direct producer row (native or provider_access)<br/>resolution arm recorded in telemetry (dev_health_team_repo_ownership_derivation_resolution_arm_total)"| TRO_derived["team_repo_ownership (source=inferred)"]
+    WI -->|"derive: resolve the team (own or donor, project_id arm tried first,<br/>Linear's native_team_key arm as fallback -- CHAOS-4458 part b);<br/>stamp it onto a PULL/MERGE REQUEST item's own repo_id (work_items.type pr|merge_request;<br/>an issue's own repo_id is never read -- issues reach repos via work_graph_issue_pr)<br/>provider column iterated, no provider branches<br/>source=inferred (implemented, CHAOS-4365 -- deriveTeamRepoOwnership)<br/>lower specificity than a direct producer row (native or provider_access)<br/>resolution arm recorded in telemetry (dev_health_team_repo_ownership_derivation_resolution_arm_total)"| TRO_derived["team_repo_ownership (source=inferred)"]
 
     WGIP["work_graph_issue_pr<br/>(cross-provider issue&lt;-&gt;PR link, §2, CHAOS-2416 --<br/>THIS table's own repo_id, not the linked work item's:<br/>a genuine cross-repo link is possible)"] -->|"the linked work_item_id's resolved team<br/>(own or donor project_id, same resolver as above)<br/>stamped on work_graph_issue_pr's OWN repo_id --<br/>PR inheritance, design check (b)"| TRO_derived
     WI -. "work_item_id lookup" .-> WGIP
@@ -1741,6 +1753,30 @@ designed-empty case, which is not a failure by itself, or it derived facts it co
 carried, so read `facts_derived` and `facts_unchanged` to tell them apart), `inputs_not_ready`, `error`. A quiet table with
 `unchanged` runs is healthy; a quiet table with `no_signal` runs needs the two counts: `facts_derived=0` is the designed-empty
 case, `facts_derived>0` with `facts_unchanged<facts_derived` is a derivation that did not write what it derived.
+Beside the run's outcome, `owner_tie_unresolved` counts a run that left one or more repos on a full tie (next paragraph); the run
+also writes a WARN `team_repo_ownership_derivation.owner_tie_unresolved` log line with `owner_ties` (the count) and `repo_ids`.
+
+**One owner per repo, ranked by linked share (chris ruling D5432, CHAOS-8945).** When two or more teams reach the same
+repo, the derivation counts each team's candidates per link tier and ranks the teams lexicographically: the most `native`
+links first, then the most `explicit_text` links, then the most `heuristic` links, then links with any other recorded
+provenance. The tier of a `work_graph_issue_pr` candidate is that row's `provenance`; a pull request's / merge request's
+own `repo_id` (`work_items.type` `pr` or `merge_request`) and its `work_item_dependencies` donor edge are
+provider-recorded facts and count as `native` (the issue<->PR link builder stamps the same dependency row `native`). An
+issue's own `repo_id` is never a candidate (entity tree: Repository <> Pull request <> Issue <> Project): a GitHub or
+GitLab issue reaches a repo only through its linked pull request rows in `work_graph_issue_pr`, with that link's tier.
+A repo whose only evidence is an issue's own `repo_id` gets no inferred owner. The top team owns the repo; the other
+teams get no row. A count in a lower tier never outweighs a higher tier: one `native` link beats fifty `explicit_text` links. The same ranking applies to every provider:
+the team's provider is never an input. A repo is never dropped only because two teams have links to it. Only a **full
+tie** (equal counts at every tier) names no owner (chris ruling D5432; lead ruling D5448): the run writes nothing for the repo,
+keeps the open inferred rows of the **tied teams** (the existing owner stays when it is one of them), retracts an open
+inferred row of any team that is **not** in the tie, and signals the tie (`owner_tie_unresolved` + the WARN line above).
+A tie with no open row of a tied team leaves the repo without an inferred owner, signalled on every run while the tie
+lasts. When
+the ranked owner of a repo changes, the old owner's row is retracted and the new owner's row written, as before.
+Before this rule, a single `explicit_text` link from a second team dropped the repo and retracted its owner. Pinned by
+`internal/providersync/team_repo_ownership_ranked_owner_integration_test.go` (real ClickHouse, every provider pair) and
+the `TestRankedOwner*`, `TestOnlyAPullOrMergeRequestsOwnRepoIsACandidate` and
+`TestAnIssueReachesARepoOnlyThroughItsLinkedPRTier` tests in `team_repo_ownership_derivation_test.go`.
 
 `work_items.repo_id` (and, for the PR-inheritance branch, `work_graph_issue_pr.repo_id`) is the
 derivation's output column, not resolved by a join through `repos` — though the WRITE side does
@@ -1772,9 +1808,9 @@ dual-arm precedent), and only when that does not resolve, for a Linear item carr
 reconstructed team-key-shaped identity `"{org_id}:linear:{native_team_key}"`. Applied identically to
 the own-resolution path and the dependency-donor walk (a bare GitHub PR's donor Linear issue resolves
 the same way) AND the PR-inheritance branch (`work_graph_issue_pr`-linked items, same resolver, same
-priority). Never guesses between the two arms: the moment one resolves, the other is not consulted,
-and a genuine ownership conflict on either identity is still dropped by the existing never-guess
-`assign()` rule. Which arm produced each run's rows is visible in
+priority). Never guesses between the two arms: the moment one resolves, the other is not consulted.
+When two teams reach the same repo, the ranked-owner rule above picks the owner, whichever arm
+resolved each team. Which arm produced each run's rows is visible in
 `dev_health_team_repo_ownership_derivation_resolution_arm_total{arm="project_id"|"linear_team_key"}`.
 
 **Post-CHAOS-4431 update: the two id spaces now co-exist, not just the team-key one.** CHAOS-4431's
@@ -2186,7 +2222,7 @@ erDiagram
     teams ||--o{ team_repo_ownership : "team_id (attribution source 3: repo_ownership)"
     team_repo_ownership }o..o{ repos : "repo_id is Nullable and often NULL (e.g. every GitHub provider_access row, team_autoimport_github.py:308-338); resolved at READ time by a case-insensitive (org_id, provider, repo_full_name) name join, unmatched rows dropped -- providers/teams.py:380-392"
     repos ||--o{ work_items : "repo_id"
-    team_project_ownership }o..o{ team_repo_ownership : "sync-derived, provider-agnostic (CHAOS-4365, implemented -- internal/providersync/team_repo_ownership_derivation.go deriveTeamRepoOwnership, internal/providersync/team_repo_ownership_derivation_clickhouse.go TeamRepoOwnershipDerivationService.Derive): work_items' own OR (via work_item_dependencies, §2, gated to inheritance-safe relationship types) a donor's project_id resolves a team; stamps the item's own repo_id -- source=inferred, an already-declared value gaining its first writer. Also reachable via work_graph_issue_pr (design check b): a PR inherits its linked work item's resolved team, stamped on the LINK TABLE's own repo_id (not the work item's), since that link can be genuinely cross-repo."
+    team_project_ownership }o..o{ team_repo_ownership : "sync-derived, provider-agnostic (CHAOS-4365, implemented -- internal/providersync/team_repo_ownership_derivation.go deriveTeamRepoOwnership, internal/providersync/team_repo_ownership_derivation_clickhouse.go TeamRepoOwnershipDerivationService.Derive): work_items' own OR (via work_item_dependencies, §2, gated to inheritance-safe relationship types) a donor's project_id resolves a team; stamps a pull request's / merge request's own repo_id (an issue's own repo_id is never read) -- source=inferred, an already-declared value gaining its first writer. Also reachable via work_graph_issue_pr (design check b): a PR inherits its linked work item's resolved team, stamped on the LINK TABLE's own repo_id (not the work item's), since that link can be genuinely cross-repo."
 
     repos ||--o{ git_pull_requests : "repo_id (raw git-log-sourced PR facts; tenant-scoped by org_id since migration 027, but NO work_item_id: NOT an attribution input)"
     work_items ||--o{ work_graph_issue_pr : "work_item_id (tracker-issue side of the work-graph's own cross-provider link, CHAOS-2416)"

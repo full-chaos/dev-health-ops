@@ -214,6 +214,9 @@ and the frozen venue oracles. So a Go-edge proof is always the go-only class:
 the verdict is `PROVEN_GO_ONLY (go-edge mode: ...)`, the receipt is the
 cited-mismatch arm with the ledger's own citation, and an operation the
 go-served ledger does not name is refused, never proven by its candidate alone.
+An operation that was Go-only from its first day has no two-plane record: its ledger entry
+is the `unproven_reason` form, and it prints `GO_ONLY_UNPROVEN`. `TestEveryProofSpecOperationIsInTheLedgerOrAMutation`
+fails for a proof-spec operation that is in neither the ledger nor the mutation list.
 
 Go-edge mode refuses, each by its own name:
 

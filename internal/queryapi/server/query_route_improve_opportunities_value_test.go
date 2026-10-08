@@ -15,8 +15,8 @@ var improveOpportunitiesValueSelections = []string{"value", "threshold", "unit",
 
 // The current text is the old text plus exactly the four selections, each on its own line after recommendedAction:
 // take them out and the legacy text is left, byte for byte.
-func TestImproveOpportunitiesCurrentAndV1_DifferByTheFourValueSelections(t *testing.T) {
-	current := registeredImproveOpportunitiesDocument
+func TestImproveOpportunitiesV2AndV1_DifferByTheFourValueSelections(t *testing.T) {
+	current := registeredImproveOpportunitiesV2Document
 	without := current
 	for _, selection := range improveOpportunitiesValueSelections {
 		line := "      " + selection + "\n"
@@ -38,8 +38,8 @@ func TestImproveOpportunitiesCurrentAndV1_DifferByTheFourValueSelections(t *test
 
 func TestImproveOpportunities_BothTextsResolveToTheOneOperation(t *testing.T) {
 	legacy := legacyDigestsByOperation["improveOpportunities"]
-	if len(legacy) != 1 || legacy[0] != digestHex(registeredImproveOpportunitiesV1Document) {
-		t.Fatalf("legacyDigestsByOperation[improveOpportunities] = %v, want exactly the V1 digest", legacy)
+	if len(legacy) != 2 || legacy[0] != digestHex(registeredImproveOpportunitiesV1Document) || legacy[1] != digestHex(registeredImproveOpportunitiesV2Document) {
+		t.Fatalf("legacyDigestsByOperation[improveOpportunities] = %v, want the V1 and V2 digests", legacy)
 	}
 
 	byDigest, err := buildOperationByDigest(
@@ -54,7 +54,7 @@ func TestImproveOpportunities_BothTextsResolveToTheOneOperation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"improveopportunities_captured.graphql", "improveopportunities_v1_captured.graphql"} {
+	for _, name := range []string{"improveopportunities_captured.graphql", "improveopportunities_v1_captured.graphql", "improveopportunities_v2_captured.graphql"} {
 		text, err := os.ReadFile("testdata/wire_capture/" + name)
 		if err != nil {
 			t.Fatalf("read %s: %v", name, err)

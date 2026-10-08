@@ -17,7 +17,6 @@ query DataHealthIdentity($team: ID!) {
           __typename
         }
         suggestedCanonicalId
-        suggestedCanonicalName
         confidence
         __typename
       }

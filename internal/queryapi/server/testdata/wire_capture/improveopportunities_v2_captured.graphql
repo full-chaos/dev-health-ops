@@ -18,7 +18,6 @@ query ImproveOpportunities($scope: AIScopeInput, $limit: Int! = 10, $windowDays:
       threshold
       unit
       thresholdDirection
-      entityDisplayName
       __typename
     }
     __typename

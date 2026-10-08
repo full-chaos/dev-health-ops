@@ -9,6 +9,7 @@ import (
 	"github.com/full-chaos/dev-health-go/clickhouse"
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/scopelabel"
+	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse/latestrow"
 )
 
 // policyRuleNames are the display names of the policy rules the governance
@@ -80,12 +81,12 @@ func loadPRTitles(ctx context.Context, client QueryClient, orgID string, keys []
 			numbers = append(numbers, strconv.FormatUint(uint64(k.number), 10))
 		}
 	}
-	rs, err := client.Query(ctx, `SELECT toString(repo_id) AS repo_id, number, coalesce(argMax(title, last_synced), '') AS title
+	rs, err := client.Query(ctx, fmt.Sprintf(`SELECT toString(repo_id) AS repo_id, number, coalesce(%s, '') AS title
 FROM git_pull_requests
 WHERE org_id = {org_id:String}
   AND toString(repo_id) IN {repo_ids:Array(String)}
   AND toString(number) IN {numbers:Array(String)}
-GROUP BY repo_id, number`, []clickhouse.Binding{
+GROUP BY repo_id, number`, latestrow.ArgMaxKeepNullBy("title", "last_synced")), []clickhouse.Binding{
 		{Name: "org_id", Value: orgID},
 		{Name: "repo_ids", Value: repoIDs},
 		{Name: "numbers", Value: numbers},

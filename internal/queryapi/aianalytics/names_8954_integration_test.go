@@ -101,3 +101,36 @@ func TestRealClickHouse_LoadRepoNamesReadsLatestRow(t *testing.T) {
 		}
 	}
 }
+
+func TestRealClickHouse_PRTitleNullNewestServesNull(t *testing.T) {
+	ctx, conn, client := startStore(t)
+	exec(t, ctx, conn, `SYSTEM STOP MERGES git_pull_requests`)
+	// #20: older row has a title, newest has NULL (both write orders: #21).
+	exec(t, ctx, conn, `INSERT INTO git_pull_requests (repo_id, number, title, created_at, org_id, last_synced)
+        SELECT '%s', 20, NULL, now64(3), '%s', toDateTime64('2026-08-02 00:00:00', 3, 'UTC')`, nameRepo, org1)
+	exec(t, ctx, conn, `INSERT INTO git_pull_requests (repo_id, number, title, created_at, org_id, last_synced)
+        SELECT '%s', 20, 'Old title', now64(3), '%s', toDateTime64('2026-08-01 00:00:00', 3, 'UTC')`, nameRepo, org1)
+	exec(t, ctx, conn, `INSERT INTO git_pull_requests (repo_id, number, title, created_at, org_id, last_synced)
+        SELECT '%s', 21, 'Old title 21', now64(3), '%s', toDateTime64('2026-08-01 00:00:00', 3, 'UTC')`, nameRepo, org1)
+	exec(t, ctx, conn, `INSERT INTO git_pull_requests (repo_id, number, title, created_at, org_id, last_synced)
+        SELECT '%s', 21, NULL, now64(3), '%s', toDateTime64('2026-08-02 00:00:00', 3, 'UTC')`, nameRepo, org1)
+	// #22: equal versions, two titles, both insert orders give the same answer.
+	for _, title := range []string{"Beta", "Alpha"} {
+		exec(t, ctx, conn, `INSERT INTO git_pull_requests (repo_id, number, title, created_at, org_id, last_synced)
+            SELECT '%s', 22, '%s', now64(3), '%s', toDateTime64('2026-08-01 00:00:00', 3, 'UTC')`, nameRepo, title, org1)
+	}
+	// Same key in another org stays out.
+	exec(t, ctx, conn, `INSERT INTO git_pull_requests (repo_id, number, title, created_at, org_id, last_synced)
+        SELECT '%s', 20, 'Other org', now64(3), '%s', toDateTime64('2026-08-09 00:00:00', 3, 'UTC')`, nameRepo, org2)
+	keys := []prKey{{nameRepo, 20}, {nameRepo, 21}, {nameRepo, 22}}
+	got := loadPRTitles(ctx, client, org1, keys, "test")
+	if _, ok := got[keys[0]]; ok {
+		t.Fatalf("#20 served %q, want null", got[keys[0]])
+	}
+	if _, ok := got[keys[1]]; ok {
+		t.Fatalf("#21 served %q, want null", got[keys[1]])
+	}
+	if got[keys[2]] != "Beta" {
+		t.Fatalf("#22 = %q, want the deterministic tiebreak Beta", got[keys[2]])
+	}
+}

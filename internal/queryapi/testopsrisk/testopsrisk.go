@@ -18,6 +18,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph/model"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graphqldate"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/scopelabel"
+	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse/latestrow"
 )
 
 // QueryClient is the narrow ClickHouse boundary this package needs.
@@ -123,7 +124,7 @@ SETTINGS join_use_nulls = 1`
 // NULL, not 0. The Nullable value is wrapped in a tuple because argMax skips
 // NULL values, which would let an older row's factor stand in for the latest
 // row's missing one.
-const quadrantQuery = `SELECT
+var quadrantQuery = fmt.Sprintf(`SELECT
     coalesce(nullIf(repos.repo, ''), toString(latest.repo_id)) AS repo_label,
     nullIf(repos.repo, '') AS repo_name,
     latest.pipeline_success_rate,
@@ -147,14 +148,14 @@ FROM (
     GROUP BY repo_id
 ) AS latest
 LEFT JOIN (
-    SELECT id, argMax(repo, last_synced) AS repo
+    SELECT id, %s AS repo
     FROM repos
     WHERE org_id = {org_id:String}
     GROUP BY id
 ) AS repos
   ON repos.id = latest.repo_id
 ORDER BY latest.confidence_score ASC
-LIMIT 50`
+LIMIT 50`, latestrow.ArgMaxKeepNullBy("repo", "last_synced"))
 
 func readDaily(ctx context.Context, client QueryClient, bindings []clickhouse.Binding) ([]dailyRow, error) {
 	rs, err := client.Query(ctx, dailyQuery, bindings)

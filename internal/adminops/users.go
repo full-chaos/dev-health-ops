@@ -156,8 +156,11 @@ func report(env cli.Env, boundary func(error) error, err error) int {
 	return writeError(env.Stderr, "admin_failed", boundary(err).Error())
 }
 
+// redactor resolves the same DSN operator dialed (POSTGRES_URI fallback
+// included): a narrower resolution than operator's turns every failure of a
+// pod without MIGRATION_DATABASE_URI into the bare text "redacted".
 func redactor(env cli.Env) func(error) error {
-	dsn, _, ok := config.ResolveMigrationDatabase(env.Lookup, io.Discard, false)
+	dsn, _, ok := config.ResolveMigrationDatabase(env.Lookup, io.Discard, true)
 	if !ok {
 		return func(err error) error { return errors.New("redacted") }
 	}

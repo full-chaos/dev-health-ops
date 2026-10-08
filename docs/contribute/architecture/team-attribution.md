@@ -987,6 +987,20 @@ read the holders of a key through ONE shared function, `keyHoldersOfProvider` in
 - Teams are (provider, id): a team of another provider with the same id that holds the same key does not hide
   the item's own team from the key.
 
+**Every tier that reads a key string.** The cascade tiers that pick a TEAM by a key string held in `teams`
+(its id or `project_keys`) are exactly `native_team` and `issue_project`; both read `keyHoldersOfProvider` and
+nothing else reads `projectKeyTeams`. The other key lookups of the cascade are not key-string holders:
+
+- `project_ownership`, `repo_ownership`, `assignee_membership` and `author_membership` read ownership and
+  membership facts keyed by `AttributionMapKey(provider, key)`: the fact's provider is part of the key, so
+  they are same-provider by construction.
+- `linked_issue` resolves an `extkey:` dependency target (a real `work_item_dependencies` row) to the one
+  linear or jira work item with that key (a key held by two items is ambiguous and dropped) and inherits that
+  item's primary team. It links an issue, not a team, and crosses providers on purpose (section 2).
+- `manual_fallback` with scope `issue_key_prefix` is an explicit admin record and is provider-neutral by
+  contract: a rule matches the item's issue-key prefix whatever the rule's `provider` (the other scopes need
+  the rule's provider to be empty or the item's).
+
 **Effect on stored rows.** Before this change, the first active holder of a key by (provider, id), of any
 provider, took the row. An item whose key a team of another provider (or a team with an empty provider) also
 held could therefore have that team as its primary (`is_primary = 1`). From the first attribution run after
@@ -999,7 +1013,7 @@ votes move such items from the other provider's team (or the empty-provider team
 provider, to a `project_ownership` or lower source, or to `unassigned`.
 
 Tests: `TestIssueProjectPrimaryIsATeamOfTheItemsProvider`,
-`TestAKeyHeldOnlyByOtherProvidersGivesNoIssueProjectRow`, `TestIssueProjectProviderMatchIsExactAndNeverEmpty`,
+`TestAKeyHeldOnlyByOtherProvidersGivesNoKeyTierRow`, `TestIssueProjectProviderMatchIsExactAndNeverEmpty`,
 `TestTheFirstKeyHeldByATeamOfTheItemsProviderDecides`, `TestATeamIDOfAnotherProviderDoesNotHideTheItemsTeam`,
 `TestNativeTeamIsATeamOfTheItemsProvider` (the cascade, every provider against every other provider and the
 empty provider); `TestProjectAndNativeKeysAttributeOnlyToTeamsOfTheItemsProvider` (real loaders, real cascade,

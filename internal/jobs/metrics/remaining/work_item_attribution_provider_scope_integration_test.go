@@ -25,7 +25,10 @@ import (
 //     of its provider is the primary;
 //   - a native team key held by a team of another provider that sorts first
 //     and by a team of the item's provider: the native_team primary is the
-//     team of the item's provider.
+//     team of the item's provider;
+//   - a native team key (and project key) held only by teams of other
+//     providers and a team with no provider: no native_team and no
+//     issue_project row; the project ownership is the primary.
 func TestProjectAndNativeKeysAttributeOnlyToTeamsOfTheItemsProvider(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
 	defer cancel()
@@ -85,6 +88,7 @@ func TestProjectAndNativeKeysAttributeOnlyToTeamsOfTheItemsProvider(t *testing.T
 		onlyProjectID := "proj-" + strings.ToLower(only)
 		addSubject(teamattribution.GithubWorkItemDerivationSubject{WorkItemID: provider + ":" + only + "-1", Provider: provider, ProjectKey: &onlyKey, ProjectID: &onlyProjectID})
 		addSubject(teamattribution.GithubWorkItemDerivationSubject{WorkItemID: provider + ":" + native + "-1", Provider: provider, NativeTeamKey: &nativeKey})
+		addSubject(teamattribution.GithubWorkItemDerivationSubject{WorkItemID: provider + ":" + only + "-2", Provider: provider, NativeTeamKey: &onlyKey, ProjectKey: &onlyKey, ProjectID: &onlyProjectID})
 	}
 
 	computedAt := time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC)
@@ -133,5 +137,11 @@ func TestProjectAndNativeKeysAttributeOnlyToTeamsOfTheItemsProvider(t *testing.T
 			t.Errorf("%s: issue_project primary rows of %v, want none", provider, got)
 		}
 		check(provider+":NAT"+upper+"-1", "native_team", "nat-"+provider, "")
+		check(provider+":ONLY"+upper+"-2", "project_ownership", "own-"+provider, "")
+		for _, row := range latestAttributions(t, ctx, conn, orgID, provider+":ONLY"+upper+"-2") {
+			if row.source == "native_team" || row.source == "issue_project" {
+				t.Errorf("%s: %s row of %s, want none", provider, row.source, row.teamID)
+			}
+		}
 	}
 }

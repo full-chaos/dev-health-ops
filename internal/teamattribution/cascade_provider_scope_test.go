@@ -84,58 +84,65 @@ func TestIssueProjectPrimaryIsATeamOfTheItemsProvider(t *testing.T) {
 }
 
 // When only teams of other providers (and a team with no provider) hold the
-// item's key, the issue_project tier gives no candidate and the cascade goes
-// on to its next source: the project ownership of a team of the item's
-// provider when there is one, else no team.
-func TestAKeyHeldOnlyByOtherProvidersGivesNoIssueProjectRow(t *testing.T) {
+// item's key, the native_team and issue_project tiers give no candidate and
+// the cascade goes on to its next source: the project ownership of a team of
+// the item's provider when there is one, else no team. Both tiers: an item
+// with a project key, and an item with the same string as its native team key
+// too.
+func TestAKeyHeldOnlyByOtherProvidersGivesNoKeyTierRow(t *testing.T) {
 	for _, provider := range coOwnerProviders {
-		key := "ONLY"
-		teams := []GithubWorkItemDerivationTeamFact{{Provider: "", TeamID: "admin-team", ProjectKeys: []string{key}}}
-		for _, other := range otherProviders(provider) {
-			teams = append(teams, GithubWorkItemDerivationTeamFact{Provider: other, TeamID: other + "-team", ProjectKeys: []string{key}})
-		}
-		subject := GithubWorkItemDerivationSubject{WorkItemID: provider + ":ONLY-1", Provider: provider, ProjectKey: &key, OrgID: "org"}
-		assertNoIssueProjectRow := func(t *testing.T, candidates []GithubWorkItemDerivationCandidate) {
-			t.Helper()
-			for _, candidate := range candidates {
-				if candidate.Source == "issue_project" {
-					t.Errorf("issue_project row of team %q on a %s item, want none", GithubWorkItemDerivationStringValue(candidate.TeamID), provider)
+		for _, tier := range []string{"issue_project", "native_team"} {
+			key := "ONLY"
+			teams := []GithubWorkItemDerivationTeamFact{{Provider: "", TeamID: "admin-team", ProjectKeys: []string{key}}}
+			for _, other := range otherProviders(provider) {
+				teams = append(teams, GithubWorkItemDerivationTeamFact{Provider: other, TeamID: other + "-team", ProjectKeys: []string{key}})
+			}
+			subject := GithubWorkItemDerivationSubject{WorkItemID: provider + ":ONLY-1", Provider: provider, ProjectKey: &key, OrgID: "org"}
+			if tier == "native_team" {
+				subject.NativeTeamKey = &key
+			}
+			assertNoIssueProjectRow := func(t *testing.T, candidates []GithubWorkItemDerivationCandidate) {
+				t.Helper()
+				for _, candidate := range candidates {
+					if candidate.Source == "issue_project" || candidate.Source == "native_team" {
+						t.Errorf("%s row of team %q on a %s item, want none", candidate.Source, GithubWorkItemDerivationStringValue(candidate.TeamID), provider)
+					}
 				}
 			}
-		}
-		t.Run(provider+"/next tier is project ownership", func(t *testing.T) {
-			derived := NewGitHubWorkItemDerivationContext(GithubWorkItemDerivationFacts{
-				Teams: catalogOrder(append(append([]GithubWorkItemDerivationTeamFact{}, teams...),
-					GithubWorkItemDerivationTeamFact{Provider: provider, TeamID: "owner-team"})),
-				Projects: []GithubWorkItemDerivationProjectFact{
-					{Provider: provider, TeamID: "owner-team", TeamName: "Owner", ProjectKey: &key, IsPrimary: 1, Specificity: 110, Priority: 10},
-				},
+			t.Run(provider+"/"+tier+"/next tier is project ownership", func(t *testing.T) {
+				derived := NewGitHubWorkItemDerivationContext(GithubWorkItemDerivationFacts{
+					Teams: catalogOrder(append(append([]GithubWorkItemDerivationTeamFact{}, teams...),
+						GithubWorkItemDerivationTeamFact{Provider: provider, TeamID: "owner-team"})),
+					Projects: []GithubWorkItemDerivationProjectFact{
+						{Provider: provider, TeamID: "owner-team", TeamName: "Owner", ProjectKey: &key, IsPrimary: 1, Specificity: 110, Priority: 10},
+					},
+				})
+				teamID, _, candidates := derived.Resolve(subject)
+				assertNoIssueProjectRow(t, candidates)
+				team, source, count := primaryRow(candidates)
+				if GithubWorkItemDerivationStringValue(teamID) != "owner-team" || team != "owner-team" || source != "project_ownership" || count != 1 {
+					t.Errorf("primary = %q/%s (%d rows), want owner-team/project_ownership", team, source, count)
+				}
+				assertEveryRowHasProvenance(t, candidates)
 			})
-			teamID, _, candidates := derived.Resolve(subject)
-			assertNoIssueProjectRow(t, candidates)
-			team, source, count := primaryRow(candidates)
-			if GithubWorkItemDerivationStringValue(teamID) != "owner-team" || team != "owner-team" || source != "project_ownership" || count != 1 {
-				t.Errorf("primary = %q/%s (%d rows), want owner-team/project_ownership", team, source, count)
-			}
-			assertEveryRowHasProvenance(t, candidates)
-		})
-		t.Run(provider+"/no next tier", func(t *testing.T) {
-			derived := NewGitHubWorkItemDerivationContext(GithubWorkItemDerivationFacts{Teams: catalogOrder(append([]GithubWorkItemDerivationTeamFact{}, teams...))})
-			teamID, _, candidates := derived.Resolve(subject)
-			assertNoIssueProjectRow(t, candidates)
-			if teamID != nil {
-				t.Errorf("Resolve team = %q, want none", *teamID)
-			}
-			if _, source, _ := primaryRow(candidates); source != "unassigned" {
-				t.Errorf("primary source = %q, want unassigned", source)
-			}
-		})
+			t.Run(provider+"/"+tier+"/no next tier", func(t *testing.T) {
+				derived := NewGitHubWorkItemDerivationContext(GithubWorkItemDerivationFacts{Teams: catalogOrder(append([]GithubWorkItemDerivationTeamFact{}, teams...))})
+				teamID, _, candidates := derived.Resolve(subject)
+				assertNoIssueProjectRow(t, candidates)
+				if teamID != nil {
+					t.Errorf("Resolve team = %q, want none", *teamID)
+				}
+				if _, source, _ := primaryRow(candidates); source != "unassigned" {
+					t.Errorf("primary source = %q, want unassigned", source)
+				}
+			})
+		}
 	}
 }
 
 // A team with no provider is not a holder of any provider's key, and an item
 // with no provider matches no team, also not a team with no provider. The
-// provider is compared trimmed, as AttributionMapKey compares it.
+// provider is compared trimmed, as AttributionMapKey compares it. Both tiers.
 func TestIssueProjectProviderMatchIsExactAndNeverEmpty(t *testing.T) {
 	key := "K"
 	t.Run("item and team with no provider", func(t *testing.T) {
@@ -148,6 +155,11 @@ func TestIssueProjectProviderMatchIsExactAndNeverEmpty(t *testing.T) {
 		if got := derived.IssueProjectCandidates(GithubWorkItemDerivationSubject{WorkItemID: "K-1", Provider: "  ", ProjectKey: &key}); len(got) != 0 {
 			t.Errorf("blank provider: candidates = %+v, want none", got)
 		}
+		for _, provider := range []string{"", "  "} {
+			if got := derived.NativeTeamCandidate(GithubWorkItemDerivationSubject{WorkItemID: "K-1", Provider: provider, NativeTeamKey: &key}); got != nil {
+				t.Errorf("provider %q: native candidate = %+v, want none", provider, *got)
+			}
+		}
 	})
 	for _, provider := range coOwnerProviders {
 		t.Run(provider+"/padded provider", func(t *testing.T) {
@@ -157,6 +169,10 @@ func TestIssueProjectProviderMatchIsExactAndNeverEmpty(t *testing.T) {
 			got := derived.IssueProjectCandidates(GithubWorkItemDerivationSubject{WorkItemID: provider + ":K-1", Provider: provider + " ", ProjectKey: &key})
 			if len(got) != 1 || GithubWorkItemDerivationStringValue(got[0].TeamID) != "padded-team" {
 				t.Errorf("candidates = %+v, want padded-team", got)
+			}
+			native := derived.NativeTeamCandidate(GithubWorkItemDerivationSubject{WorkItemID: provider + ":K-1", Provider: provider + " ", NativeTeamKey: &key})
+			if native == nil || GithubWorkItemDerivationStringValue(native.TeamID) != "padded-team" {
+				t.Errorf("native candidate = %+v, want padded-team", native)
 			}
 		})
 	}
@@ -186,7 +202,8 @@ func TestTheFirstKeyHeldByATeamOfTheItemsProviderDecides(t *testing.T) {
 }
 
 // Teams are (provider, id): a team of another provider with the same id that
-// holds the same key does not hide the item's own team from the key.
+// holds the same key does not hide the item's own team from the key, in
+// either tier.
 func TestATeamIDOfAnotherProviderDoesNotHideTheItemsTeam(t *testing.T) {
 	for _, provider := range coOwnerProviders {
 		for _, other := range otherProviders(provider) {
@@ -201,6 +218,9 @@ func TestATeamIDOfAnotherProviderDoesNotHideTheItemsTeam(t *testing.T) {
 				got := derived.IssueProjectCandidates(GithubWorkItemDerivationSubject{WorkItemID: provider + ":ENG-1", Provider: provider, ProjectKey: &key})
 				if len(got) != 1 || GithubWorkItemDerivationStringValue(got[0].TeamID) != "ENG" {
 					t.Errorf("candidates = %+v, want the %s team ENG", got, provider)
+				}
+				if native := derived.NativeTeamCandidate(GithubWorkItemDerivationSubject{WorkItemID: provider + ":ENG-1", Provider: provider, NativeTeamKey: &key}); native == nil {
+					t.Errorf("native candidate = nil, want the %s team ENG", provider)
 				}
 			})
 		}

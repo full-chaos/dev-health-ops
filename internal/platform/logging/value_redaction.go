@@ -3,7 +3,9 @@ package logging
 import (
 	"context"
 	"fmt"
+	"log"
 	"log/slog"
+	"reflect"
 )
 
 // WithValueRedaction wraps a handler so that every text it is given passes
@@ -12,8 +14,26 @@ import (
 // attributes bound by With. It is for a run that knows values no pattern can
 // find (a database login or password it was handed): the process logger's own
 // redactor (NewJSON) recognises credential shapes, not a login name.
+//
+// slog's built-in default handler is replaced by a text handler on the
+// standard log package's current writer. The built-in handler writes through
+// the log package, and slog.SetDefault points the log package at the new
+// default: a default that kept it would take the log package's mutex again on
+// its first record and block forever.
 func WithValueRedaction(inner slog.Handler, redact func(string) string) slog.Handler {
+	if isSlogBuiltinDefault(inner) {
+		inner = slog.NewTextHandler(log.Writer(), nil)
+	}
 	return valueRedactor{inner: inner, redact: redact}
+}
+
+// isSlogBuiltinDefault reports whether handler is slog's own default handler
+// (log/slog.defaultHandler, unexported), the one a process has before any
+// slog.SetDefault.
+func isSlogBuiltinDefault(handler slog.Handler) bool {
+	kind := reflect.TypeOf(handler)
+	return kind != nil && kind.Kind() == reflect.Pointer &&
+		kind.Elem().PkgPath() == "log/slog" && kind.Elem().Name() == "defaultHandler"
 }
 
 type valueRedactor struct {

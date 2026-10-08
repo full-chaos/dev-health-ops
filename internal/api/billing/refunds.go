@@ -335,6 +335,7 @@ func (h handlers) reserveRefund(ctx context.Context, tx pgx.Tx, request refundRe
 			if err != nil {
 				return pendingRefund{}, nil, err
 			}
+			h.withOrgName(ctx, tx, out)
 			return early(ok(out))
 		case found:
 			// Still pending: the first request's Stripe outcome is not
@@ -480,6 +481,7 @@ func (h handlers) completeRefund(ctx context.Context, tx pgx.Tx, pending pending
 	if err != nil {
 		return reply{}, err
 	}
+	h.withOrgName(ctx, tx, out)
 	return ok(out), nil
 }
 
@@ -583,35 +585,42 @@ func (h handlers) listRefunds(w http.ResponseWriter, r *http.Request) {
 		page.offset = offset.Int64()
 	}
 	h.serve(w, r, "list refunds", func(tx pgx.Tx) (reply, error) {
-		ctx := r.Context()
-		if page.offset < 0 {
-			return reply{}, errOverflow
-		}
-		const where = `WHERE ($1::uuid IS NULL OR s.org_id = $1)`
-		rows, err := tx.Query(ctx, `SELECT `+refundColumns+` FROM refunds s `+where+` ORDER BY s.created_at DESC LIMIT $2 OFFSET $3`,
-			orgID, page.limit, page.offset)
-		if err != nil {
-			return reply{}, err
-		}
-		items := []pyjson.Value{}
-		for rows.Next() {
-			item, err := scanRefundJSON(rows)
-			if err != nil {
-				rows.Close()
-				return reply{}, err
-			}
-			items = append(items, item)
-		}
-		rows.Close()
-		if err := rows.Err(); err != nil {
-			return reply{}, err
-		}
-		var total int64
-		if err := tx.QueryRow(ctx, `SELECT count(s.id) FROM refunds s `+where, orgID).Scan(&total); err != nil {
-			return reply{}, err
-		}
-		return ok(pageJSON(items, total, page)), nil
+		return h.refundListReply(r.Context(), tx, orgID, page)
 	})
+}
+
+// refundListReply is the page of refunds (all orgs, or one when orgID is set), each with its org name.
+func (h handlers) refundListReply(ctx context.Context, tx pgx.Tx, orgID *uuid.UUID, page pageQuery) (reply, error) {
+	if page.offset < 0 {
+		return reply{}, errOverflow
+	}
+	const where = `WHERE ($1::uuid IS NULL OR s.org_id = $1)`
+	rows, err := tx.Query(ctx, `SELECT `+refundColumns+` FROM refunds s `+where+` ORDER BY s.created_at DESC LIMIT $2 OFFSET $3`,
+		orgID, page.limit, page.offset)
+	if err != nil {
+		return reply{}, err
+	}
+	items := []pyjson.Value{}
+	for rows.Next() {
+		item, err := scanRefundJSON(rows)
+		if err != nil {
+			rows.Close()
+			return reply{}, err
+		}
+		items = append(items, item)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return reply{}, err
+	}
+	for _, item := range items {
+		h.withOrgName(ctx, tx, item.(*pyjson.Object))
+	}
+	var total int64
+	if err := tx.QueryRow(ctx, `SELECT count(s.id) FROM refunds s `+where, orgID).Scan(&total); err != nil {
+		return reply{}, err
+	}
+	return ok(pageJSON(items, total, page)), nil
 }
 
 // getRefund is get_refund.
@@ -632,11 +641,11 @@ func (h handlers) getRefund(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.serve(w, r, "get refund", func(tx pgx.Tx) (reply, error) {
-		return refundReply(r.Context(), tx, id, orgID)
+		return h.refundReply(r.Context(), tx, id, orgID)
 	})
 }
 
-func refundReply(ctx context.Context, q querier, id uuid.UUID, org *uuid.UUID) (reply, error) {
+func (h handlers) refundReply(ctx context.Context, q querier, id uuid.UUID, org *uuid.UUID) (reply, error) {
 	sql, args := orgFilter(`WHERE s.id = $1`, []any{id}, org)
 	refund, err := scanRefundJSON(q.QueryRow(ctx, `SELECT `+refundColumns+` FROM refunds s `+sql, args...))
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -645,5 +654,6 @@ func refundReply(ctx context.Context, q querier, id uuid.UUID, org *uuid.UUID) (
 	if err != nil {
 		return reply{}, err
 	}
+	h.withOrgName(ctx, q, refund)
 	return ok(refund), nil
 }

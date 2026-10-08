@@ -68,7 +68,7 @@ func uuidOrNull(value *uuid.UUID) pyjson.Value {
 }
 
 // invoiceJSON is _to_invoice_response.
-func invoiceJSON(ctx context.Context, q querier, inv invoiceRow, withLines bool) (*pyjson.Object, error) {
+func (h handlers) invoiceJSON(ctx context.Context, q querier, inv invoiceRow, withLines bool) (*pyjson.Object, error) {
 	metadata, err := eventPayload(inv.Metadata)
 	if err != nil {
 		return nil, err
@@ -129,6 +129,7 @@ func invoiceJSON(ctx context.Context, q querier, inv invoiceRow, withLines bool)
 		}
 	}
 	out.Set("line_items", lines)
+	h.withOrgName(ctx, q, out)
 	return out, nil
 }
 
@@ -176,7 +177,7 @@ func (h handlers) listInvoices(w http.ResponseWriter, r *http.Request) {
 		}
 		items := make([]pyjson.Value, 0, len(invoices))
 		for _, inv := range invoices {
-			item, err := invoiceJSON(ctx, tx, inv, false)
+			item, err := h.invoiceJSON(ctx, tx, inv, false)
 			if err != nil {
 				return reply{}, err
 			}
@@ -239,7 +240,7 @@ func (h handlers) getInvoice(w http.ResponseWriter, r *http.Request) {
 		if answer != nil || err != nil {
 			return derefReply(answer), err
 		}
-		body, err := invoiceJSON(r.Context(), tx, *inv, true)
+		body, err := h.invoiceJSON(r.Context(), tx, *inv, true)
 		if err != nil {
 			return reply{}, err
 		}
@@ -285,7 +286,7 @@ func (h handlers) voidInvoice(w http.ResponseWriter, r *http.Request) {
 		if refreshed == nil {
 			return detail(http.StatusNotFound, "Invoice not found"), nil
 		}
-		body, err := invoiceJSON(ctx, tx, *refreshed, true)
+		body, err := h.invoiceJSON(ctx, tx, *refreshed, true)
 		if err != nil {
 			return reply{}, err
 		}

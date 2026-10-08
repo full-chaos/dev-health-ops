@@ -337,6 +337,9 @@ func TestDrilldownPRsGolden(t *testing.T) {
 		if v, _ := bindingValue(bindings, "org_id"); v != "org-1" {
 			t.Fatalf("org_id binding = %v, want org-1", v)
 		}
+		if strings.Contains(query, "AS display_name") {
+			return &pairRowScanner{}, nil
+		}
 		return &prsRowScanner{rows: [][]any{
 			{
 				"11111111-1111-1111-1111-111111111111", uint32(42), "Add feature", "Alice Smith", "alice@example.com",
@@ -373,5 +376,127 @@ func TestDrilldownPRsGolden(t *testing.T) {
 	}
 	if string(gotJSON) != string(wantJSON) {
 		t.Fatalf("response mismatch\n got:  %s\nwant: %s", gotJSON, wantJSON)
+	}
+}
+
+// TestDrilldownPRsServeTheStoredRepoName: a stored repository name is served,
+// an absent one is null, and the name read is bound to the requesting org.
+func TestDrilldownPRsServeTheStoredRepoName(t *testing.T) {
+	t.Setenv("IDENTITY_MAPPING_PATH", t.TempDir()+"/missing.yaml")
+	const named = "11111111-1111-1111-1111-111111111111"
+	const unnamed = "22222222-2222-2222-2222-222222222222"
+	var nameOrg any
+	client := personIdentityDispatchClient{identity: "alice@example.com", t: t, handler: func(t *testing.T, query string, bindings []dhclickhouse.Binding) (dhclickhouse.RowScanner, error) {
+		if strings.Contains(query, "AS display_name") {
+			nameOrg, _ = bindingValue(bindings, "org_id")
+			return &pairRowScanner{rows: [][2]string{{named, "acme/api"}}}, nil
+		}
+		return &prsRowScanner{rows: [][]any{
+			{named, uint32(1), "A", "Alice", "alice@example.com", dt(2024, 6, 10, 12, 0, 0), nil, nil, nil},
+			{unnamed, uint32(2), "B", "Alice", "alice@example.com", dt(2024, 6, 9, 12, 0, 0), nil, nil, nil},
+		}}, nil
+	}}
+	reader, err := NewReader(client)
+	if err != nil {
+		t.Fatalf("NewReader: %v", err)
+	}
+	got, err := BuildDrilldownPRsResponse(context.Background(), reader, "org-1", DrilldownPRsParams{
+		PersonID: "anyone", RangeDays: 14, Limit: 50, Now: dt(2024, 6, 15, 0, 0, 0),
+	})
+	if err != nil {
+		t.Fatalf("BuildDrilldownPRsResponse: %v", err)
+	}
+	if nameOrg != "org-1" {
+		t.Fatalf("name read org_id = %v, want org-1", nameOrg)
+	}
+	if got.Items[0].RepoName == nil || *got.Items[0].RepoName != "acme/api" {
+		t.Fatalf("Items[0].RepoName = %v, want acme/api", got.Items[0].RepoName)
+	}
+	if got.Items[1].RepoName != nil {
+		t.Fatalf("Items[1].RepoName = %v, want nil", *got.Items[1].RepoName)
+	}
+}
+
+// errAfterRowsScanner yields its rows, then reports err from Err.
+type errAfterRowsScanner struct {
+	pairRowScanner
+	err error
+}
+
+func (s *errAfterRowsScanner) Err() error { return s.err }
+
+// scanFailsScanner yields one row whose Scan fails.
+type scanFailsScanner struct {
+	pairRowScanner
+}
+
+func (s *scanFailsScanner) Next() bool {
+	if s.index > 0 {
+		return false
+	}
+	s.index++
+	return true
+}
+
+func (s *scanFailsScanner) Scan(dest ...any) error { return errors.New("boom") }
+
+// TestDrilldownPRsFailOnARepoNameReadError: a failed repo-name read (query or
+// iterate) is an error, never a 200 whose repo_name reads as "no name".
+func TestDrilldownPRsFailOnARepoNameReadError(t *testing.T) {
+	const repo = "11111111-1111-1111-1111-111111111111"
+	cases := map[string]func() (dhclickhouse.RowScanner, error){
+		"query":   func() (dhclickhouse.RowScanner, error) { return nil, errors.New("boom") },
+		"scan":    func() (dhclickhouse.RowScanner, error) { return &scanFailsScanner{}, nil },
+		"iterate": func() (dhclickhouse.RowScanner, error) { return &errAfterRowsScanner{err: errors.New("boom")}, nil },
+	}
+	for name, read := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Setenv("IDENTITY_MAPPING_PATH", t.TempDir()+"/missing.yaml")
+			client := personIdentityDispatchClient{identity: "alice@example.com", t: t, handler: func(t *testing.T, query string, bindings []dhclickhouse.Binding) (dhclickhouse.RowScanner, error) {
+				if strings.Contains(query, "AS display_name") {
+					return read()
+				}
+				return &prsRowScanner{rows: [][]any{
+					{repo, uint32(1), "A", "Alice", "alice@example.com", dt(2024, 6, 10, 12, 0, 0), nil, nil, nil},
+				}}, nil
+			}}
+			reader, err := NewReader(client)
+			if err != nil {
+				t.Fatalf("NewReader: %v", err)
+			}
+			if _, err := BuildDrilldownPRsResponse(context.Background(), reader, "org-1", DrilldownPRsParams{
+				PersonID: "anyone", RangeDays: 14, Limit: 50, Now: dt(2024, 6, 15, 0, 0, 0),
+			}); err == nil {
+				t.Fatal("want an error when the repo-name read fails")
+			}
+		})
+	}
+}
+
+// TestDrilldownPRsDropABareUUIDRepoName: a stored repository name that is a
+// bare UUID serves repo_name null.
+func TestDrilldownPRsDropABareUUIDRepoName(t *testing.T) {
+	t.Setenv("IDENTITY_MAPPING_PATH", t.TempDir()+"/missing.yaml")
+	const id = "11111111-1111-1111-1111-111111111111"
+	client := personIdentityDispatchClient{identity: "alice@example.com", t: t, handler: func(t *testing.T, query string, bindings []dhclickhouse.Binding) (dhclickhouse.RowScanner, error) {
+		if strings.Contains(query, "AS display_name") {
+			return &pairRowScanner{rows: [][2]string{{id, "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"}}}, nil
+		}
+		return &prsRowScanner{rows: [][]any{
+			{id, uint32(1), "A", "Alice", "alice@example.com", dt(2024, 6, 10, 12, 0, 0), nil, nil, nil},
+		}}, nil
+	}}
+	reader, err := NewReader(client)
+	if err != nil {
+		t.Fatalf("NewReader: %v", err)
+	}
+	got, err := BuildDrilldownPRsResponse(context.Background(), reader, "org-1", DrilldownPRsParams{
+		PersonID: "anyone", RangeDays: 14, Limit: 50, Now: dt(2024, 6, 15, 0, 0, 0),
+	})
+	if err != nil {
+		t.Fatalf("BuildDrilldownPRsResponse: %v", err)
+	}
+	if got.Items[0].RepoName != nil {
+		t.Fatalf("RepoName = %q, want nil", *got.Items[0].RepoName)
 	}
 }

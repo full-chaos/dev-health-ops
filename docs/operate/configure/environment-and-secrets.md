@@ -250,6 +250,31 @@ budget well below the worker's stop grace period. Apply ClickHouse migrations
 109 and 110 before a worker runs with the phase on; with a table missing the
 phase stops and says so.
 
+### Investment provider batch mode
+
+The worker group that runs `investment.materialize` can send the categorization
+requests of a run as one provider batch job instead of one request per work
+unit. A provider batch costs about half as much and is answered within 24 hours
+instead of at once. Only the `openai` provider has a batch mode (the OpenAI
+Batch API). It is **off by default**: with the setting unset every request is
+sent one by one, as before.
+
+| Variable | Meaning | Default |
+| --- | --- | --- |
+| `INVESTMENT_LLM_BATCH_MODE` | Off by default (`sync`). A batch trades latency (up to the timeout below; the provider window is 24 hours) for about half the generative price. `sync`: one request per work unit. `auto`: a provider batch when the provider has one and the run has at least 25 work units to categorize, else `sync`. `provider_batch`: always a provider batch; a run whose provider has none fails with an error before it reads data. Any other value fails the run. | `sync` |
+| `INVESTMENT_LLM_BATCH_TIMEOUT_SECONDS` | How long a run waits for its batch, in seconds, up to 86400. A value that cannot be used falls back to the default with a warning. | `3000` |
+
+The run waits for the batch inside the job and polls it every 30 seconds. Keep
+the timeout below the job timeout of `investment.materialize` (7200 seconds).
+When the timeout passes, or the job stops (a lost lease, a worker shutdown), the
+run cancels the provider batch; its work units are written as for a failed
+request (the fallback row with status `llm_task_failed`), and a later run asks
+them again. A cancelled batch can still bill the requests the provider already
+answered; the run counts their tokens in its `llm_token_usage` row when the
+provider reports them. A rejected key, an unknown model or an exhausted quota
+ends the run with an error, as in `sync` mode. A batch is not resumed after a
+worker restart: the next run sends its own batch.
+
 Workspace-to-platform fallback defaults to platform after a configured org BYO
 is evaluated; an explicit organization fail_closed choice opts out of that
 fallback. Source-tagged accounting keeps platform-managed usage and BYO usage

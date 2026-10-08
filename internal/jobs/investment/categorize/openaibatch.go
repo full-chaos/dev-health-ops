@@ -352,7 +352,7 @@ func parseOpenAIBatchLines(content []byte) ([]BatchItemResult, error) {
 			return nil, fmt.Errorf("categorize: batch result line %d is not a JSON object", lineNumber)
 		}
 		if err := json.Unmarshal(trimmed, &line); err != nil {
-			return nil, fmt.Errorf("categorize: batch result line %d is not a JSON object: %w", lineNumber, err)
+			return nil, fmt.Errorf("categorize: batch result line %d is not a JSON object: %w", lineNumber, logging.DecodeFailure(err))
 		}
 		result := BatchItemResult{CustomID: jsonScalarText(line.CustomID), LineID: jsonScalarText(line.ID)}
 

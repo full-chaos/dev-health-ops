@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"strings"
 	"unicode"
+
+	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph/units"
 )
 
 // BatchJobStatus is llm/providers/batch.py's BatchJobStatus, narrowed to the
@@ -130,4 +132,54 @@ func validateBatchItems(items []BatchItem) error {
 		seen[item.CustomID] = struct{}{}
 	}
 	return nil
+}
+
+// CategorizeCompletionText is categorize_text_bundle_completion over a
+// completion text the caller already has, such as one Batch API output line:
+// validate, and on failure make the one repair call through opts.Provider,
+// exactly as CategorizeTextBundle does after its own call.
+func CategorizeCompletionText(
+	ctx context.Context, bundle units.TextBundle, text string, opts CategorizeOptions,
+	inputTokens, outputTokens *int, model string,
+) (CategorizationOutcome, error) {
+	if opts.Provider == nil {
+		return CategorizationOutcome{}, ErrNoProvider
+	}
+	return categorizeCompletion(ctx, bundle, text, opts, completionTally{
+		InputTokens:   tokenCount(inputTokens),
+		OutputTokens:  tokenCount(outputTokens),
+		LLMCalls:      1,
+		ResolvedModel: model,
+	})
+}
+
+// BatchItemFailure is the error of one Batch API line that holds no
+// completion, classified as the same failure of a synchronous call would be:
+// the line's status code and error text go through the provider error
+// classifier.
+func BatchItemFailure(result BatchItemResult, provider, model string) error {
+	status := 0
+	if result.StatusCode != nil {
+		status = *result.StatusCode
+	}
+	cause := &httpStatusError{statusCode: status, body: result.ErrorCode + " " + result.ErrorMessage}
+	return classifyProviderError(cause, status, nil, provider, model)
+}
+
+// BatchMissingResultError is the error of a unit whose custom id is in no
+// line of a finished batch.
+func BatchMissingResultError(provider, model string) error {
+	return &llmError{kind: llmErrorOutput, message: "LLM provider batch returned no result for the request.", provider: provider, model: model}
+}
+
+// BatchTimeoutError is the error of each unit of a batch that did not finish
+// within the timeout. It classifies as a synchronous request timeout does.
+func BatchTimeoutError(provider, model string) error {
+	return &llmError{kind: llmErrorTimeout, message: "LLM provider batch did not finish within the timeout.", provider: provider, model: model}
+}
+
+// BatchEndedError is the error of each unit of a batch that ended failed,
+// expired or cancelled at the provider.
+func BatchEndedError(status BatchJobStatus, provider, model string) error {
+	return &llmError{kind: llmErrorServer, message: "LLM provider batch ended " + string(status) + ".", provider: provider, model: model}
 }

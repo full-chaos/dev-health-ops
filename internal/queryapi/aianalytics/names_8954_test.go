@@ -40,7 +40,7 @@ type titleClient struct {
 }
 
 func (c *titleClient) Query(ctx context.Context, st string, b []clickhouse.Binding) (clickhouse.RowScanner, error) {
-	if !strings.Contains(st, "FROM git_pull_requests FINAL") {
+	if !strings.Contains(st, "FROM git_pull_requests") {
 		return c.QueryClient.Query(ctx, st, b)
 	}
 	c.calls++
@@ -219,7 +219,7 @@ func (c *catalogueClient) Query(_ context.Context, st string, b []clickhouse.Bin
 			repoIDs, _ = bd.Value.([]string)
 		}
 	}
-	if strings.Contains(st, "FROM teams") || strings.Contains(st, "FROM repos") || strings.Contains(st, "FROM git_pull_requests FINAL") {
+	if strings.Contains(st, "FROM teams") || strings.Contains(st, "FROM repos") || strings.Contains(st, "FROM git_pull_requests") {
 		if !strings.Contains(st, "org_id = {org_id:String}") {
 			return nil, context.Canceled
 		}
@@ -253,7 +253,7 @@ func (c *catalogueClient) Query(_ context.Context, st string, b []clickhouse.Bin
 			}
 		}
 		return &scriptedRows{rows: rows}, nil
-	case strings.Contains(st, "FROM git_pull_requests FINAL"):
+	case strings.Contains(st, "FROM git_pull_requests"):
 		var rows [][]any
 		for _, r := range c.prs {
 			if r.org != org {

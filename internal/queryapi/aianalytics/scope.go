@@ -125,9 +125,10 @@ func teamRepoIDs(ctx context.Context, client QueryClient, orgID, teamID, operati
 }
 
 func loadTeams(ctx context.Context, client QueryClient, orgID string) ([]aiimpact.Team, error) {
-	rs, err := client.Query(ctx, `SELECT toString(id) AS id, coalesce(name, '') AS name, repo_patterns
+	rs, err := client.Query(ctx, `SELECT toString(id) AS id, coalesce(argMax(name, updated_at), '') AS name, argMax(repo_patterns, updated_at) AS repo_patterns
 FROM teams
-WHERE org_id = {org_id:String}`, []clickhouse.Binding{{Name: "org_id", Value: orgID}})
+WHERE org_id = {org_id:String}
+GROUP BY id`, []clickhouse.Binding{{Name: "org_id", Value: orgID}})
 	if err != nil {
 		return nil, fmt.Errorf("teams query: %w", err)
 	}
@@ -149,9 +150,10 @@ WHERE org_id = {org_id:String}`, []clickhouse.Binding{{Name: "org_id", Value: or
 type repoName struct{ id, fullName string }
 
 func loadRepoNames(ctx context.Context, client QueryClient, orgID string) ([]repoName, error) {
-	rs, err := client.Query(ctx, `SELECT toString(id) AS repo_id, coalesce(repo, '') AS full_name
+	rs, err := client.Query(ctx, `SELECT toString(id) AS repo_id, coalesce(argMax(repo, last_synced), '') AS full_name
 FROM repos
-WHERE org_id = {org_id:String}`, []clickhouse.Binding{{Name: "org_id", Value: orgID}})
+WHERE org_id = {org_id:String}
+GROUP BY id`, []clickhouse.Binding{{Name: "org_id", Value: orgID}})
 	if err != nil {
 		return nil, fmt.Errorf("repos query: %w", err)
 	}

@@ -255,3 +255,30 @@ func TestRealClickHouse_TestopsRiskRangeEndIsInclusiveForEveryTable(t *testing.T
 		t.Fatalf("%#v %v %v", got.PipelineStability, got.QualityDragHours, got.ReleaseConfidence)
 	}
 }
+
+// The repository name is the latest repos row: a newer row with no name
+// beats an older row that still carries one (label falls back to the id,
+// name is nil).
+func TestRealClickHouse_TestopsRiskQuadrantNameReadsLatestRepoRow(t *testing.T) {
+	ctx, conn, client := startStore(t)
+	exec(t, ctx, conn, `SYSTEM STOP MERGES repos`)
+	exec(t, ctx, conn, `INSERT INTO repos (id, repo, org_id, created_at, last_synced) SELECT '%s', '', 'org-1', now64(3), toDateTime64('2026-01-02 00:00:00', 3, 'UTC')`, rB)
+	exec(t, ctx, conn, `INSERT INTO repos (id, repo, org_id, created_at, last_synced) SELECT '%s', 'acme/stale', 'org-1', now64(3), toDateTime64('2026-01-01 00:00:00', 3, 'UTC')`, rB)
+	exec(t, ctx, conn, `INSERT INTO repos (id, repo, org_id, created_at, last_synced) SELECT '%s', 'acme/stale-c', 'org-1', now64(3), toDateTime64('2026-01-01 00:00:00', 3, 'UTC')`, rC)
+	exec(t, ctx, conn, `INSERT INTO repos (id, repo, org_id, created_at, last_synced) SELECT '%s', '', 'org-1', now64(3), toDateTime64('2026-01-02 00:00:00', 3, 'UTC')`, rC)
+	for _, r := range []string{rB, rC} {
+		conf(t, ctx, conn, "org-1", r, "2026-01-04", 0.3, `{"pipeline_success_rate": 0.9, "test_pass_rate": 0.8}`, "2026-01-04 01:00:00")
+	}
+	got, err := Resolve(ctx, client, "org-1", model.TestOpsRiskInput{StartDate: date("2026-01-01"), EndDate: date("2026-01-31")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.QuadrantData) != 2 {
+		t.Fatalf("quadrant %#v", got.QuadrantData)
+	}
+	for _, q := range got.QuadrantData {
+		if q.Name != nil || (q.ID != rB && q.ID != rC) {
+			t.Errorf("point %q name %v, want the id label and nil name", q.ID, q.Name)
+		}
+	}
+}

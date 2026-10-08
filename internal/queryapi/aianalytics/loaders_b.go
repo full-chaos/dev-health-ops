@@ -481,10 +481,11 @@ func loadRepoCatalogue(ctx context.Context, client QueryClient, orgID string, re
 // queryRepoNames returns each found repository's catalogue full name; an empty
 // name stays empty so callers choose their own fallback.
 func queryRepoNames(ctx context.Context, client QueryClient, orgID string, ids []string) (map[string]string, error) {
-	rs, err := client.Query(ctx, `SELECT toString(id) AS repo_id, coalesce(repo, '') AS full_name
+	rs, err := client.Query(ctx, `SELECT toString(id) AS repo_id, coalesce(argMax(repo, last_synced), '') AS full_name
 FROM repos
 WHERE org_id = {org_id:String}
-  AND toString(id) IN {repo_ids:Array(String)}`, []clickhouse.Binding{
+  AND toString(id) IN {repo_ids:Array(String)}
+GROUP BY id`, []clickhouse.Binding{
 		{Name: "org_id", Value: orgID}, {Name: "repo_ids", Value: ids},
 	})
 	if err != nil {

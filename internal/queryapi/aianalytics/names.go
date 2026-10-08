@@ -64,7 +64,7 @@ func loadPRTitles(ctx context.Context, client QueryClient, orgID string, keys []
 	}
 	want := make(map[prKey]bool, len(keys))
 	var repoIDs []string
-	var numbers []uint32
+	var numbers []string
 	seenRepo := map[string]bool{}
 	seenNum := map[uint32]bool{}
 	for _, k := range keys {
@@ -75,14 +75,15 @@ func loadPRTitles(ctx context.Context, client QueryClient, orgID string, keys []
 		}
 		if !seenNum[k.number] {
 			seenNum[k.number] = true
-			numbers = append(numbers, k.number)
+			numbers = append(numbers, strconv.FormatUint(uint64(k.number), 10))
 		}
 	}
-	rs, err := client.Query(ctx, `SELECT toString(repo_id) AS repo_id, number, coalesce(title, '') AS title
-FROM git_pull_requests FINAL
+	rs, err := client.Query(ctx, `SELECT toString(repo_id) AS repo_id, number, coalesce(argMax(title, last_synced), '') AS title
+FROM git_pull_requests
 WHERE org_id = {org_id:String}
   AND toString(repo_id) IN {repo_ids:Array(String)}
-  AND number IN {numbers:Array(UInt32)}`, []clickhouse.Binding{
+  AND toString(number) IN {numbers:Array(String)}
+GROUP BY repo_id, number`, []clickhouse.Binding{
 		{Name: "org_id", Value: orgID},
 		{Name: "repo_ids", Value: repoIDs},
 		{Name: "numbers", Value: numbers},

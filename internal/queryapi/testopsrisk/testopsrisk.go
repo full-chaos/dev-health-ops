@@ -145,9 +145,13 @@ FROM (
       AND day <= {end:Date}
     GROUP BY repo_id
 ) AS latest
-LEFT JOIN repos
-  ON repos.org_id = {org_id:String}
- AND repos.id = latest.repo_id
+LEFT JOIN (
+    SELECT id, argMax(repo, last_synced) AS repo
+    FROM repos
+    WHERE org_id = {org_id:String}
+    GROUP BY id
+) AS repos
+  ON repos.id = latest.repo_id
 ORDER BY latest.confidence_score ASC
 LIMIT 50`
 

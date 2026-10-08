@@ -134,9 +134,11 @@ func TestFilterOptionsResponseIsThePythonResponsePlusTeamNames(t *testing.T) {
 		return out
 	}
 	want := append(fieldsOf(reflect.TypeOf(filterOptionsPythonResponse{})),
-		field{"TeamNames", "map[string]string", `json:"team_names,omitempty"`})
+		field{"TeamNames", "map[string]string", `json:"team_names,omitempty"`},
+		field{"RepoNames", "map[string]string", `json:"repo_names,omitempty"`},
+		field{"DeveloperNames", "map[string]string", `json:"developer_names,omitempty"`})
 	if got := fieldsOf(reflect.TypeOf(filteroptions.Response{})); !reflect.DeepEqual(got, want) {
-		t.Errorf("filteroptions.Response fields =\n %v\nwant the Python fields then team_names:\n %v", got, want)
+		t.Errorf("filteroptions.Response fields =\n %v\nwant the Python fields then team_names, repo_names, developer_names:\n %v", got, want)
 	}
 }
 
@@ -513,6 +515,84 @@ func TestWithoutExplainGoOnlyFieldsLeavesThePythonShapeOrFails(t *testing.T) {
 	}
 }
 
+// personPRsPythonResponse and personIssuesPythonResponse are the shape the
+// frozen FastAPI models of the person drilldown have. people.PullRequestRow has
+// one more field since CHAOS-8955 (repo_name) and people.IssueRow one more
+// (title, repo_names), which the Python models never had; the frozen program is not
+// recorded again, so the oracle still checks THAT shape.
+type personPRsPythonRow struct {
+	RepoID             string     `json:"repo_id"`
+	Number             uint32     `json:"number"`
+	Title              *string    `json:"title"`
+	Author             *string    `json:"author"`
+	CreatedAt          time.Time  `json:"created_at"`
+	MergedAt           *time.Time `json:"merged_at"`
+	FirstReviewAt      *time.Time `json:"first_review_at"`
+	ReviewLatencyHours *float64   `json:"review_latency_hours"`
+	Link               *string    `json:"link"`
+}
+
+type personPRsPythonResponse struct {
+	Items      []personPRsPythonRow `json:"items"`
+	NextCursor *time.Time           `json:"next_cursor"`
+}
+
+type personIssuesPythonRow struct {
+	WorkItemID     string     `json:"work_item_id"`
+	Provider       string     `json:"provider"`
+	Status         string     `json:"status"`
+	TeamID         *string    `json:"team_id"`
+	CycleTimeHours *float64   `json:"cycle_time_hours"`
+	LeadTimeHours  *float64   `json:"lead_time_hours"`
+	StartedAt      *time.Time `json:"started_at"`
+	CompletedAt    *time.Time `json:"completed_at"`
+	Link           *string    `json:"link"`
+}
+
+type personIssuesPythonResponse struct {
+	Items      []personIssuesPythonRow `json:"items"`
+	NextCursor *time.Time              `json:"next_cursor"`
+}
+
+func TestPersonDrilldownRowsArePythonRowsPlusTheDeclaredNameFields(t *testing.T) {
+	type field struct{ name, goType, tag string }
+	fieldsOf := func(typ reflect.Type) []field {
+		out := make([]field, 0, typ.NumField())
+		for index := range typ.NumField() {
+			f := typ.Field(index)
+			out = append(out, field{f.Name, f.Type.String(), string(f.Tag)})
+		}
+		return out
+	}
+	insertAfter := func(base []field, after int, added field) []field {
+		out := append([]field{}, base[:after]...)
+		out = append(out, added)
+		return append(out, base[after:]...)
+	}
+	wantPR := insertAfter(fieldsOf(reflect.TypeOf(personPRsPythonRow{})), 1, field{"RepoName", "*string", `json:"repo_name"`})
+	if got := fieldsOf(reflect.TypeOf(people.PullRequestRow{})); !reflect.DeepEqual(got, wantPR) {
+		t.Errorf("people.PullRequestRow fields =\n %v\nwant the Python fields with repo_name after repo_id:\n %v", got, wantPR)
+	}
+	wantIssue := insertAfter(fieldsOf(reflect.TypeOf(personIssuesPythonRow{})), 1, field{"Title", "*string", `json:"title"`})
+	wantIssue = insertAfter(wantIssue, 2, field{"RepoNames", "[]string", `json:"repo_names"`})
+	if got := fieldsOf(reflect.TypeOf(people.IssueRow{})); !reflect.DeepEqual(got, wantIssue) {
+		t.Errorf("people.IssueRow fields =\n %v\nwant the Python fields with title, repo_names after work_item_id:\n %v", got, wantIssue)
+	}
+
+	repo, title := "acme/api", "Fix login"
+	prBody, err := json.Marshal(people.DrilldownPRsResponse{Items: []people.PullRequestRow{{RepoName: &repo}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	issueBody, err := json.Marshal(people.DrilldownIssuesResponse{Items: []people.IssueRow{{Title: &title, RepoNames: []string{"acme/api"}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(prBody), `"repo_name":"acme/api"`) || !strings.Contains(string(issueBody), `"title":"Fix login"`) || !strings.Contains(string(issueBody), `"repo_names":["acme/api"]`) {
+		t.Errorf("the production bodies lack the name fields: %s %s", prBody, issueBody)
+	}
+}
+
 func responseModelOracleRoutes() map[string]responseModelOracleRoute {
 	plain := func(response any) responseModelOracleRoute { return responseModelOracleRoute{response: response} }
 	sankeyRoute := plain((*sankey.Response)(nil))
@@ -536,8 +616,8 @@ func responseModelOracleRoutes() map[string]responseModelOracleRoute {
 		"GET /api/v1/people":                              plain([]people.SearchResult(nil)),
 		"GET /api/v1/people/{person_id}/summary":          plain(people.SummaryResponse{}),
 		"GET /api/v1/people/{person_id}/metric":           plain(people.MetricResponse{}),
-		"GET /api/v1/people/{person_id}/drilldown/prs":    plain((*people.DrilldownPRsResponse)(nil)),
-		"GET /api/v1/people/{person_id}/drilldown/issues": plain((*people.DrilldownIssuesResponse)(nil)),
+		"GET /api/v1/people/{person_id}/drilldown/prs":    plain((*personPRsPythonResponse)(nil)),
+		"GET /api/v1/people/{person_id}/drilldown/issues": plain((*personIssuesPythonResponse)(nil)),
 		"GET /api/v1/opportunities":                       plain((*opportunitiesPythonResponse)(nil)),
 		"POST /api/v1/opportunities":                      plain((*opportunitiesPythonResponse)(nil)),
 		"GET /api/v1/investment":                          plain((*investment.Response)(nil)),

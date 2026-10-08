@@ -1276,6 +1276,7 @@ linear), `TestAnAdminTeamCreateCarriesTheBareTeamFirst`, `TestAnAdminTeamWriteOf
 `TestAnAdminTeamWriteRefusesAnAmbiguousOrMalformedID`, `TestAnAdminTeamWriteRefusesABareIDNoProviderTeamHolds`,
 `TestTheMemberAndDecisionWritersKeyTheirPathTeamID`, `TestTheAdminImportRefusesAPrefixOnlyTeamID`,
 `TestTheStoreRefusesABareTeamIDWrite`, `TestAnIdentityLeavingAStoredBareTeamSkipsIt`,
+`TestTheWriteSeamResolvesOnlyToAnActiveTeamAndKeysAMixedRequest`, `TestADriftDecisionByABareIDDecidesTheKeyedTeamsChange`,
 `TestEveryTeamIDWriterGoesThroughTheWriteSeamCensus`; `TestIdentityV1RefusesAPrefixOnlyTeamID`
 (`internal/streamhandlers`); `TestMalformedNamesNoTeamOfAnyProvider`, `TestCandidatesAreEveryPrefixOfABareID`
 (`internal/teamid`).

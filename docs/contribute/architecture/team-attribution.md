@@ -1585,6 +1585,23 @@ designed-empty case, which is not a failure by itself, or it derived facts it co
 carried, so read `facts_derived` and `facts_unchanged` to tell them apart), `inputs_not_ready`, `error`. A quiet table with
 `unchanged` runs is healthy; a quiet table with `no_signal` runs needs the two counts: `facts_derived=0` is the designed-empty
 case, `facts_derived>0` with `facts_unchanged<facts_derived` is a derivation that did not write what it derived.
+Beside the run's outcome, `owner_ties_kept` counts a run that left one or more repos on a full tie (next paragraph); the run
+also writes a WARN `team_repo_ownership_derivation.owner_ties_kept` log line with `owner_ties` (the count) and `repo_ids`.
+
+**One owner per repo, ranked by linked share (chris ruling D5432, CHAOS-8945).** When two or more teams reach the same
+repo, the derivation counts each team's candidates per link tier and ranks the teams lexicographically: the most `native`
+links first, then the most `explicit_text` links, then the most `heuristic` links, then links with any other recorded
+provenance. The tier of a `work_graph_issue_pr` candidate is that row's `provenance`; a work item's own `repo_id` and a
+`work_item_dependencies` donor edge are provider-recorded facts and count as `native` (the issue<->PR link builder stamps
+the same dependency row `native`). The top team owns the repo; the other teams get no row. A count in a lower tier never
+outweighs a higher tier: one `native` link beats fifty `explicit_text` links. The same ranking applies to every provider:
+the team's provider is never an input. A repo is never dropped only because two teams have links to it. Only a **full
+tie** (equal counts at every tier) names no owner: the run does not retract the repo's existing open inferred rows (the
+existing owner stays), writes nothing for the repo, and signals the tie (`owner_ties_kept` + the WARN line above). When
+the ranked owner of a repo changes, the old owner's row is retracted and the new owner's row written, as before.
+Before this rule, a single `explicit_text` link from a second team dropped the repo and retracted its owner. Pinned by
+`internal/providersync/team_repo_ownership_ranked_owner_integration_test.go` (real ClickHouse, every provider pair) and
+the `TestRankedOwner*` tests in `team_repo_ownership_derivation_test.go`.
 
 `work_items.repo_id` (and, for the PR-inheritance branch, `work_graph_issue_pr.repo_id`) is the
 derivation's output column, not resolved by a join through `repos` — though the WRITE side does
@@ -1616,9 +1633,9 @@ dual-arm precedent), and only when that does not resolve, for a Linear item carr
 reconstructed team-key-shaped identity `"{org_id}:linear:{native_team_key}"`. Applied identically to
 the own-resolution path and the dependency-donor walk (a bare GitHub PR's donor Linear issue resolves
 the same way) AND the PR-inheritance branch (`work_graph_issue_pr`-linked items, same resolver, same
-priority). Never guesses between the two arms: the moment one resolves, the other is not consulted,
-and a genuine ownership conflict on either identity is still dropped by the existing never-guess
-`assign()` rule. Which arm produced each run's rows is visible in
+priority). Never guesses between the two arms: the moment one resolves, the other is not consulted.
+When two teams reach the same repo, the ranked-owner rule above picks the owner, whichever arm
+resolved each team. Which arm produced each run's rows is visible in
 `dev_health_team_repo_ownership_derivation_resolution_arm_total{arm="project_id"|"linear_team_key"}`.
 
 **Post-CHAOS-4431 update: the two id spaces now co-exist, not just the team-key one.** CHAOS-4431's

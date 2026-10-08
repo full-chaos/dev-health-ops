@@ -1327,11 +1327,19 @@ func seedWorkGraphIssuePR(
 	orgID string, repoID uuid.UUID, workItemID string, prNumber uint32, now time.Time,
 ) {
 	t.Helper()
+	seedWorkGraphIssuePRWithProvenance(t, ctx, conn, orgID, repoID, workItemID, prNumber, "native", now)
+}
+
+func seedWorkGraphIssuePRWithProvenance(
+	t *testing.T, ctx context.Context, conn driver.Conn,
+	orgID string, repoID uuid.UUID, workItemID string, prNumber uint32, provenance string, now time.Time,
+) {
+	t.Helper()
 	batch, err := conn.PrepareBatch(ctx, `INSERT INTO work_graph_issue_pr (repo_id, work_item_id, pr_number, confidence, provenance, evidence, last_synced, org_id)`)
 	if err != nil {
 		t.Fatalf("prepare work_graph_issue_pr batch: %v", err)
 	}
-	if err := batch.Append(repoID, workItemID, prNumber, float32(1.0), "native", "test-seed", now, orgID); err != nil {
+	if err := batch.Append(repoID, workItemID, prNumber, float32(1.0), provenance, "test-seed", now, orgID); err != nil {
 		t.Fatalf("append work_graph_issue_pr row: %v", err)
 	}
 	if err := batch.Send(); err != nil {

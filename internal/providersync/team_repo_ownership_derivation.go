@@ -205,10 +205,15 @@ type TeamRepoOwnershipDependencyEdge struct {
 // own RepoID for a genuine cross-repo link) + PRNumber. PRNumber is not
 // needed by the derivation itself (team_repo_ownership has no per-PR
 // grain) but is kept on the struct for caller-side diagnostics/logging.
+//
+// Provenance is the row's work_graph_issue_pr.provenance tier (native,
+// explicit_text, heuristic): it decides how much the link weighs when two
+// teams reach the same repo (see rankTeamRepoOwnershipCandidates).
 type TeamRepoOwnershipIssuePRLink struct {
 	WorkItemID string
 	RepoID     string
 	PRNumber   uint32
+	Provenance string
 }
 
 // DerivedTeamRepoOwnershipRow is one team_repo_ownership row this producer
@@ -225,10 +230,10 @@ type DerivedTeamRepoOwnershipRow struct {
 	// TeamRepoOwnershipResolutionArmProjectID (the direct join, every
 	// provider) or TeamRepoOwnershipResolutionArmLinearTeamKey (CHAOS-4458
 	// part (b) -- see TeamRepoOwnershipWorkItem's doc comment). Telemetry
-	// only; never written to team_repo_ownership itself. Set to whichever
-	// arm resolved the FIRST work item/PR-link that claimed this repo (the
-	// same first-wins row assign() already applies), so a repo reachable via
-	// both arms still reports one deterministic arm.
+	// only; never written to team_repo_ownership itself. Set to the
+	// highest-priority arm among the owning team's candidates for this repo
+	// (teamRepoOwnershipResolutionArmPriority), so a repo reachable via both
+	// arms still reports one deterministic arm.
 	ResolutionArm string
 }
 
@@ -332,14 +337,82 @@ var teamRepoOwnershipInheritableRelationshipTypes = map[string]bool{
 	"external_issue_key": true,
 }
 
+// teamRepoOwnershipLinkTier* index a candidate's link count by the
+// work_graph_issue_pr provenance tier of the link that produced it. A lower
+// index outranks every higher one: native, then explicit_text, then
+// heuristic, then any other recorded provenance (counted, never dropped,
+// and never above a named tier).
+const (
+	teamRepoOwnershipLinkTierNative = iota
+	teamRepoOwnershipLinkTierExplicitText
+	teamRepoOwnershipLinkTierHeuristic
+	teamRepoOwnershipLinkTierOther
+	teamRepoOwnershipLinkTierCount
+)
+
+// teamRepoOwnershipIssuePRLinkTier maps a work_graph_issue_pr.provenance
+// value to its tier. A work item's own repo_id and a work_item_dependencies
+// donor edge are provider-recorded facts: the issue<->PR link builder stamps
+// the same dependency row "native", so those candidates count as native.
+func teamRepoOwnershipIssuePRLinkTier(provenance string) int {
+	switch provenance {
+	case "native":
+		return teamRepoOwnershipLinkTierNative
+	case "explicit_text":
+		return teamRepoOwnershipLinkTierExplicitText
+	case "heuristic":
+		return teamRepoOwnershipLinkTierHeuristic
+	default:
+		return teamRepoOwnershipLinkTierOther
+	}
+}
+
+// teamRepoOwnershipLinkCounts is one team's link count per tier on one repo.
+type teamRepoOwnershipLinkCounts [teamRepoOwnershipLinkTierCount]int
+
+// compare ranks two teams' link counts lexicographically by tier: the team
+// with more native links wins; only an equal native count looks at
+// explicit_text, and so on. 0 means equal at every tier.
+func (counts teamRepoOwnershipLinkCounts) compare(other teamRepoOwnershipLinkCounts) int {
+	for tier := range counts {
+		if counts[tier] != other[tier] {
+			if counts[tier] > other[tier] {
+				return 1
+			}
+			return -1
+		}
+	}
+	return 0
+}
+
+// TeamRepoOwnershipTie is a repo that two or more teams reach with equal
+// link counts at every tier. The derivation names no owner for it, and the
+// write side keeps the repo's existing open owner row (no retraction).
+type TeamRepoOwnershipTie struct {
+	RepoID  string
+	TeamIDs []string
+}
+
+// teamRepoOwnershipDerivation is the pure derivation's result: one row per
+// repo with a single top-ranked team, plus every repo left on a full tie.
+type teamRepoOwnershipDerivation struct {
+	Rows []DerivedTeamRepoOwnershipRow
+	Ties []TeamRepoOwnershipTie
+}
+
 // deriveTeamRepoOwnership implements both signal paths plus PR inheritance
 // against ALREADY-LOADED rows for one org (loading is the caller's job --
 // this function does no I/O, so it is exhaustively unit-testable). Returns
-// one row per distinct (team_id, repo_id) pair -- never a duplicate, and
-// never a repo attributed to two different teams (CHAOS-4321: on a genuine
-// conflict -- the same repo reachable from two DIFFERENT teams' owned
-// projects -- neither wins; the repo is left unresolved rather than
-// guessed, matching this schema's existing "never guess" precedent).
+// at most one row per repo: a repo is never attributed to two teams.
+//
+// One owner per repo, ranked by linked share (chris ruling D5432): when
+// several teams reach the same repo, each team's candidates are counted per
+// link tier and the teams are ranked lexicographically -- native link count
+// first, then explicit_text, then heuristic. The top team owns the repo; the
+// others get no row. A repo is never dropped only because two teams have
+// links to it. Only a full tie (equal counts at every tier) names no owner:
+// it is reported in Ties, and the caller keeps the repo's existing open
+// owner row instead of retracting it.
 func deriveTeamRepoOwnership(
 	// orgID is unused inside this function as of CHAOS-4537 (the last
 	// internal use, reconstructing the linear_team_key identity, is gone --
@@ -354,7 +427,7 @@ func deriveTeamRepoOwnership(
 	dependencyEdges []TeamRepoOwnershipDependencyEdge,
 	issuePRLinks []TeamRepoOwnershipIssuePRLink,
 	knownTeams []TeamRepoOwnershipKnownTeam,
-) []DerivedTeamRepoOwnershipRow {
+) teamRepoOwnershipDerivation {
 	projectToTeam := resolveProjectToTeam(projectLinks)
 	// CHAOS-4537 codex review P1: the linear_team_key arm below only trusts
 	// a native_team_key value that names a team CURRENTLY in this set --
@@ -382,33 +455,28 @@ func deriveTeamRepoOwnership(
 
 	donorTeamID := buildDonorTeamIDResolver(byID, dependencyEdges, projectToTeam, knownLinearTeamKeys)
 
-	repoToTeam := map[string]string{}
-	repoArm := map[string]string{}
-	conflicted := map[string]bool{}
-	assign := func(repoID, teamID, arm string) {
+	tallies := map[string]map[string]*teamRepoOwnershipLinkCounts{}
+	repoArm := map[string]map[string]string{}
+	assign := func(repoID, teamID, arm string, tier int) {
 		if repoID == "" || teamID == "" {
 			return
 		}
-		if existing, ok := repoToTeam[repoID]; ok {
-			if existing != teamID {
-				conflicted[repoID] = true
-				return
-			}
-			// Same repo, same team, resolved again via a (possibly
-			// different) arm: keep whichever arm ranks higher by
-			// teamRepoOwnershipResolutionArmPriority, deterministically,
-			// rather than whichever candidate this loop happened to visit
-			// first. loadTeamRepoOwnershipWorkItems has no ORDER BY, so an
-			// unqualified first-wins policy let the recorded arm flicker
-			// between identical runs over the same ClickHouse snapshot
-			// (codex adversarial review, 2026-08-29, confirmed finding).
-			if teamRepoOwnershipResolutionArmPriority(arm) > teamRepoOwnershipResolutionArmPriority(repoArm[repoID]) {
-				repoArm[repoID] = arm
-			}
-			return
+		if tallies[repoID] == nil {
+			tallies[repoID] = map[string]*teamRepoOwnershipLinkCounts{}
+			repoArm[repoID] = map[string]string{}
 		}
-		repoToTeam[repoID] = teamID
-		repoArm[repoID] = arm
+		if tallies[repoID][teamID] == nil {
+			tallies[repoID][teamID] = &teamRepoOwnershipLinkCounts{}
+		}
+		tallies[repoID][teamID][tier]++
+		// Same repo, same team, resolved again via a (possibly different)
+		// arm: keep whichever arm ranks higher by
+		// teamRepoOwnershipResolutionArmPriority, deterministically, rather
+		// than whichever candidate this loop happened to visit first --
+		// loadTeamRepoOwnershipWorkItems has no ORDER BY.
+		if teamRepoOwnershipResolutionArmPriority(arm) > teamRepoOwnershipResolutionArmPriority(repoArm[repoID][teamID]) {
+			repoArm[repoID][teamID] = arm
+		}
 	}
 
 	// Path 1 + 2: every repo-bearing work item.
@@ -417,7 +485,7 @@ func deriveTeamRepoOwnership(
 			continue
 		}
 		if teamID, arm := donorTeamID(item.WorkItemID); teamID != "" {
-			assign(item.RepoID, teamID, arm)
+			assign(item.RepoID, teamID, arm, teamRepoOwnershipLinkTierNative)
 		}
 	}
 
@@ -430,23 +498,36 @@ func deriveTeamRepoOwnership(
 			continue
 		}
 		if teamID, arm := donorTeamID(link.WorkItemID); teamID != "" {
-			assign(link.RepoID, teamID, arm)
+			assign(link.RepoID, teamID, arm, teamRepoOwnershipIssuePRLinkTier(link.Provenance))
 		}
 	}
 
-	rows := make([]DerivedTeamRepoOwnershipRow, 0, len(repoToTeam))
-	for repoID, teamID := range repoToTeam {
-		if conflicted[repoID] {
+	var result teamRepoOwnershipDerivation
+	for repoID, teams := range tallies {
+		var leaders []string
+		var best teamRepoOwnershipLinkCounts
+		for teamID, counts := range teams {
+			switch {
+			case len(leaders) == 0 || counts.compare(best) > 0:
+				leaders, best = []string{teamID}, *counts
+			case counts.compare(best) == 0:
+				leaders = append(leaders, teamID)
+			}
+		}
+		if len(leaders) > 1 {
+			sort.Strings(leaders)
+			result.Ties = append(result.Ties, TeamRepoOwnershipTie{RepoID: repoID, TeamIDs: leaders})
 			continue
 		}
-		rows = append(rows, DerivedTeamRepoOwnershipRow{
-			TeamID:        teamID,
+		result.Rows = append(result.Rows, DerivedTeamRepoOwnershipRow{
+			TeamID:        leaders[0],
 			RepoID:        repoID,
 			Specificity:   teamRepoOwnershipPrecedence[teamRepoOwnershipSourceKindInferred].Specificity,
-			ResolutionArm: repoArm[repoID],
+			ResolutionArm: repoArm[repoID][leaders[0]],
 		})
 	}
-	return rows
+	sort.Slice(result.Ties, func(i, j int) bool { return result.Ties[i].RepoID < result.Ties[j].RepoID })
+	return result
 }
 
 // resolveWorkItemTeamID is the single identity-resolution step shared by the

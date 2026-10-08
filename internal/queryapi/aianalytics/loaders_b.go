@@ -410,6 +410,14 @@ func (c repoCatalogue) repoName(repoID string) *string {
 	return nil
 }
 
+// repoNameOf is repoName for a nullable repository id.
+func repoNameOf(c repoCatalogue, repoID *string) *string {
+	if repoID == nil {
+		return nil
+	}
+	return c.repoName(*repoID)
+}
+
 // teamName is the catalogue name of the team with this id, or nil.
 func (c repoCatalogue) teamName(teamID *string) *string {
 	if teamID == nil {

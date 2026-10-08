@@ -124,6 +124,7 @@ SETTINGS join_use_nulls = 1`
 // row's missing one.
 const quadrantQuery = `SELECT
     coalesce(nullIf(repos.repo, ''), toString(latest.repo_id)) AS repo_label,
+    nullIf(repos.repo, '') AS repo_name,
     latest.pipeline_success_rate,
     latest.test_pass_rate
 FROM (
@@ -185,11 +186,12 @@ func readQuadrant(ctx context.Context, client QueryClient, bindings []clickhouse
 	out := []model.TestOpsRiskQuadrantPoint{}
 	for rs.Next() {
 		var label string
+		var name *string
 		var success, pass *float64
-		if err := rs.Scan(&label, &success, &pass); err != nil {
+		if err := rs.Scan(&label, &name, &success, &pass); err != nil {
 			return nil, fmt.Errorf("testopsrisk: quadrant scan: %w", err)
 		}
-		out = append(out, model.TestOpsRiskQuadrantPoint{ID: label, PipelineSuccessRate: success, TestPassRate: pass})
+		out = append(out, model.TestOpsRiskQuadrantPoint{ID: label, Name: name, PipelineSuccessRate: success, TestPassRate: pass})
 	}
 	if err := rs.Err(); err != nil {
 		return nil, fmt.Errorf("testopsrisk: quadrant rows: %w", err)

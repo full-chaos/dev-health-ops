@@ -24,6 +24,12 @@ type AIAttributionEvidenceRow struct {
 	Evidence    string    `json:"evidence"`
 	ObservedAt  time.Time `json:"observedAt"`
 	TeamID      *string   `json:"teamId,omitempty"`
+	// Full name of the repository `repoId` names, from the repository catalogue of the caller's organization. Null when the repository has no stored name; never the id.
+	RepoName *string `json:"repoName,omitempty"`
+	// Name of the team `teamId` names, from the team catalogue of the caller's organization. Null when there is no team or it has no stored name; never the id.
+	TeamName *string `json:"teamName,omitempty"`
+	// Title of the pull request the row's subject names (subjectType `pull_request`), from the stored pull request. Null for any other subject type or when no title is stored; never the id.
+	SubjectTitle *string `json:"subjectTitle,omitempty"`
 }
 
 type AIAttributionMixRow struct {
@@ -125,6 +131,14 @@ type AIGovernanceViolationRow struct {
 	RepoID      *string   `json:"repoId,omitempty"`
 	ObservedAt  time.Time `json:"observedAt"`
 	Evidence    string    `json:"evidence"`
+	// Full name of the repository `repoId` names, from the repository catalogue of the caller's organization. Null when the repository has no stored name; never the id.
+	RepoName *string `json:"repoName,omitempty"`
+	// Name of the team `teamId` names, from the team catalogue of the caller's organization. Null when there is no team or it has no stored name; never the id.
+	TeamName *string `json:"teamName,omitempty"`
+	// Title of the pull request the row's subject names (subjectType `pull_request`), from the stored pull request. Null for any other subject type or when no title is stored; never the id.
+	SubjectTitle *string `json:"subjectTitle,omitempty"`
+	// Fixed display name of the policy rule `ruleId` names (a code-owned set of rules). Null for a rule id outside that set; never the id.
+	RuleName *string `json:"ruleName,omitempty"`
 }
 
 type AIHotspotOverlapRow struct {
@@ -358,7 +372,9 @@ type AiAttributedPrsResult struct {
 type AliasSuggestion struct {
 	UnmappedIdentity     *UnmappedIdentity `json:"unmappedIdentity"`
 	SuggestedCanonicalID string            `json:"suggestedCanonicalId"`
-	Confidence           float64           `json:"confidence"`
+	// Display name of the suggested canonical identity, else its email. Null when neither is stored; never the id.
+	SuggestedCanonicalName *string `json:"suggestedCanonicalName,omitempty"`
+	Confidence             float64 `json:"confidence"`
 }
 
 type AnalyticsRequestInput struct {
@@ -1021,6 +1037,8 @@ type ImproveOpportunity struct {
 	Unit      ImproveOpportunityUnit `json:"unit"`
 	// Which side of the threshold fires the rule: ABOVE (value > threshold) or BELOW (value < threshold).
 	ThresholdDirection ThresholdDirection `json:"thresholdDirection"`
+	// Name of the entity `entityId` names: the repository full name for entityType `repo`, the team name for `team`, from the catalogues of the caller's organization. Null when no name is stored; never the id.
+	EntityDisplayName *string `json:"entityDisplayName,omitempty"`
 }
 
 type MaintainerShare struct {
@@ -1608,7 +1626,9 @@ type TestOpsRiskInput struct {
 }
 
 type TestOpsRiskQuadrantPoint struct {
-	ID                  string   `json:"id"`
+	ID string `json:"id"`
+	// Full name of the repository the point stands for. Null when the repository has no stored name; never the id.
+	Name                *string  `json:"name,omitempty"`
 	PipelineSuccessRate *float64 `json:"pipelineSuccessRate,omitempty"`
 	TestPassRate        *float64 `json:"testPassRate,omitempty"`
 }

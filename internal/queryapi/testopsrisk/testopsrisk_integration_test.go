@@ -155,6 +155,11 @@ func TestRealClickHouse_TestopsRisk(t *testing.T) {
 			t.Errorf("quadrant[%d] id %q want %q", i, q.ID, wantIDs[i])
 		}
 	}
+	// the name is the catalogue name; a repository with no repos row has none (never its id)
+	if got.QuadrantData[0].Name == nil || *got.QuadrantData[0].Name != "acme/web" ||
+		got.QuadrantData[1].Name == nil || *got.QuadrantData[1].Name != "acme/api" || got.QuadrantData[2].Name != nil {
+		t.Errorf("quadrant names %#v", got.QuadrantData)
+	}
 	if *got.QuadrantData[0].PipelineSuccessRate != 0.9 || *got.QuadrantData[1].TestPassRate != 0.4 {
 		t.Errorf("quadrant rates %#v", got.QuadrantData)
 	}

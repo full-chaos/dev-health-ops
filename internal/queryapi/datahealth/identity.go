@@ -282,12 +282,27 @@ func aliasSuggestions(list []unmapped, mapped []mappedIdentity) []model.AliasSug
 		}
 		item := toModelIdentity(identity)
 		suggestions = append(suggestions, model.AliasSuggestion{
-			UnmappedIdentity:     &item,
-			SuggestedCanonicalID: target.canonicalID,
-			Confidence:           aliasConfidence,
+			UnmappedIdentity:       &item,
+			SuggestedCanonicalID:   target.canonicalID,
+			SuggestedCanonicalName: canonicalName(target),
+			Confidence:             aliasConfidence,
 		})
 	}
 	return suggestions
+}
+
+// canonicalName is the display name of a mapped identity, else its email;
+// nil when it has neither (the canonical id is never a name).
+func canonicalName(row mappedIdentity) *string {
+	if row.displayName != "" {
+		n := row.displayName
+		return &n
+	}
+	if row.email != "" {
+		n := row.email
+		return &n
+	}
+	return nil
 }
 
 func toModelIdentity(identity unmapped) model.UnmappedIdentity {

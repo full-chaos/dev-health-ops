@@ -153,7 +153,7 @@ func TestResolve_MatchesPythonCells(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			cl := &fakeClient{daily: daily(c)}
 			for _, q := range c.Quad {
-				cl.quadrant = append(cl.quadrant, []any{q.Label, q.Success, q.Pass})
+				cl.quadrant = append(cl.quadrant, []any{q.Label, nil, q.Success, q.Pass})
 			}
 			got, err := Resolve(context.Background(), cl, "org-1", model.TestOpsRiskInput{StartDate: date("2026-01-01"), EndDate: date("2026-01-31")})
 			if err != nil {
@@ -282,5 +282,33 @@ func TestResolve_SkipsRowsWithoutADay(t *testing.T) {
 	}
 	if len(got.Timeseries) != 1 || got.Timeseries[0].Date.String() != "2026-01-05" || got.QualityDragHours != nil {
 		t.Fatalf("%#v", got)
+	}
+}
+
+// CHAOS-8954: a quadrant point carries the repository's catalogue name next to
+// its id, and nil (never the id) when the repository has none.
+func TestResolve_QuadrantPointsCarryTheRepoName(t *testing.T) {
+	cl := &fakeClient{quadrant: [][]any{
+		{"acme/web", "acme/web", 0.9, 0.8},
+		{"33333333-3333-3333-3333-333333333333", nil, 0.5, 0.4},
+	}}
+	got, err := Resolve(context.Background(), cl, "org-1", model.TestOpsRiskInput{StartDate: date("2026-01-01"), EndDate: date("2026-01-31")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.QuadrantData) != 2 {
+		t.Fatalf("quadrant %#v", got.QuadrantData)
+	}
+	if n := got.QuadrantData[0].Name; n == nil || *n != "acme/web" {
+		t.Errorf("named point: name %v", n)
+	}
+	if n := got.QuadrantData[1].Name; n != nil {
+		t.Errorf("unnamed point: name %q, want nil", *n)
+	}
+}
+
+func TestQuadrantStatement_NamesOnlyFromTheOrgScopedCatalogue(t *testing.T) {
+	if !strings.Contains(quadrantQuery, "nullIf(repos.repo, '') AS repo_name") || !strings.Contains(quadrantQuery, "repos.org_id = {org_id:String}") {
+		t.Fatal("the quadrant name must come from the org-scoped repos join and be null when empty")
 	}
 }

@@ -561,3 +561,51 @@ func TestEveryUnitAskedOfTheServedBackendIsInOneOutcomeCountOnEveryExit(t *testi
 		})
 	}
 }
+
+// countingServedObserver counts the reports of served runs.
+type countingServedObserver struct {
+	mu    sync.Mutex
+	calls int
+	total int
+}
+
+func (observer *countingServedObserver) ObserveServedRun(_ string, outcomes map[string]int) {
+	observer.mu.Lock()
+	defer observer.mu.Unlock()
+	observer.calls++
+	for _, count := range outcomes {
+		observer.total += count
+	}
+}
+
+// The steady state: a served run in which every unit is skipped as unchanged
+// asks nothing, and still reports ONE run line and ONE observation (all
+// zero). A run that reports nothing must never be the healthy case.
+func TestAServedRunWithNoUnitToAskStillReportsItsRun(t *testing.T) {
+	h := newShadowHarness(t)
+	logs := &syncBuffer{}
+	fake := newFakeJev(t, nil)
+	observer := &countingServedObserver{}
+	run := func(runID string, at time.Time, force bool) {
+		t.Helper()
+		m := h.servedMaterializer(t, fake, logs)
+		m.served.SetObserver(observer)
+		cfg := h.config(runID, at)
+		cfg.Force = force
+		if _, err := m.Run(h.ctx, cfg); err != nil {
+			t.Fatalf("%s: %v", runID, err)
+		}
+	}
+	run("run-first", h.within, true)
+	first := fake.count()
+	run("run-steady", h.within.Add(time.Hour), false)
+	if fake.count() != first {
+		t.Fatalf("the steady run sent %d request(s): the setup is wrong", fake.count()-first)
+	}
+	if lines := strings.Count(logs.String(), `msg="investment served decision complete"`); lines != 2 {
+		t.Fatalf("%d served run lines for 2 runs, want 2", lines)
+	}
+	if observer.calls != 2 || observer.total != shadowGatePassUnits {
+		t.Fatalf("observer calls %d with %d units in all, want 2 calls and %d", observer.calls, observer.total, shadowGatePassUnits)
+	}
+}

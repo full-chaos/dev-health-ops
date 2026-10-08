@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -231,5 +232,22 @@ func TestARefusedServedObservationIsLoud(t *testing.T) {
 	CollectorServedObserver{Collector: collector, Logger: debugLogger(logs)}.ObserveServedRun("jev-1.13.0", map[string]int{"ok": 2})
 	if strings.Contains(logs.String(), "not recorded") {
 		t.Fatal("an accepted run logged a WARN line")
+	}
+}
+
+// With no logger the WARN line goes to the process's default logger: a refused
+// observation is never silent.
+func TestARefusedServedObservationWithNoLoggerUsesTheDefaultLogger(t *testing.T) {
+	logs := &syncBuffer{}
+	previous := slog.Default()
+	slog.SetDefault(debugLogger(logs))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+	collector, err := jobruntime.NewMetricsCollector(jobruntime.MetricDimensions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	CollectorServedObserver{Collector: collector}.ObserveServedRun("jev-1.13.0", map[string]int{"llm_error": 1})
+	if !strings.Contains(logs.String(), "investment served outcome counts were not recorded") {
+		t.Fatalf("no WARN line on the default logger:\n%s", logs.String())
 	}
 }

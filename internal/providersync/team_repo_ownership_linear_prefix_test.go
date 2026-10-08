@@ -62,6 +62,16 @@ func TestLinearTeamKeyArmIgnoresAForeignPrefixedTeamID(t *testing.T) {
 			WorkItemID: "linear:ENG-1", Provider: "linear", RepoID: "repo-a", Type: "pr",
 			ProjectID: "11111111-1111-4111-8111-111111111111", NativeTeamKey: "ENG",
 		}}
+		// A row of another provider is not a Linear team, whatever its id.
+		for _, other := range []TeamRepoOwnershipKnownTeam{
+			{Provider: "jira", ID: "ENG", NativeTeamKey: "ENG"},
+			{Provider: "github", ID: "linear:ENG", NativeTeamKey: "ENG"},
+			{Provider: "gitlab", ID: "linear:ENG"},
+		} {
+			if got := deriveTeamRepoOwnership("org-1", nil, workItems, nil, nil, []TeamRepoOwnershipKnownTeam{other}).Rows; len(got) != 0 {
+				t.Errorf("%s row %s: derived %+v, want no row", other.Provider, other.ID, got)
+			}
+		}
 		known := []TeamRepoOwnershipKnownTeam{
 			{Provider: "linear", ID: foreign, NativeTeamKey: "ENG"},
 			{Provider: "linear", ID: "linear:ENG", NativeTeamKey: "ENG"},

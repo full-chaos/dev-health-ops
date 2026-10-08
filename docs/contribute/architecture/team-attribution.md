@@ -1081,8 +1081,10 @@ writes the grants `GET /orgs/{org}/teams/{slug}/repos` returned and closes (writ
 `valid_to` set) every open `team_repo_ownership` row that GitHub no longer returns. It goes through the one snapshot
 rule, `PlanOwnershipSnapshot` (a repo full name stands in for the project id). Scope of a close, all of it required:
 
-- org = the run's org, `provider = 'github'`, `source = 'provider_access'`. A row of another org, another source
-  (`inferred`, `manual`, `native`) or another provider is never read and never closed.
+- org = the run's org, `provider = 'github'`, `source = 'provider_access'`, and the run's GitHub org: only rows whose
+  `repo_full_name` starts with `<github org>/` (the prefix `Collect` builds) are read or closed, because a team id
+  `gh:<slug>` holds no GitHub org and one tenant can sync several GitHub orgs with the same slug. A row of another org,
+  another GitHub org, another source (`inferred`, `manual`, `native`) or another provider is never read and never closed.
 - only the teams whose repo listing reached its end in this run (`githubTeamCatalogRows.RepoListedTeamIDs`). A team whose
   listing failed fails the whole run (nothing is written, nothing is closed). A run that listed no team, and a run that
   did not select teams (members-only), closes nothing: "the measurement did not happen" is never read as "GitHub returned

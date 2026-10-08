@@ -186,6 +186,77 @@ func TestGitHubTeamCatalogClosesProviderAccessRowsGitHubNoLongerReturns(t *testi
 		requireRepoFacts(t, "after GitHub returned no repo", openRepoOwnership(ctx, t, conn, org, "github"))
 	})
 
+	t.Run("two GitHub orgs of one tenant (one name the prefix of the other) with the same team slug keep both grants", func(t *testing.T) {
+		org := "snap-two-github-orgs"
+		acme := map[string]string{
+			"/orgs/acme/teams":                `[{"slug":"platform","name":"Platform"}]`,
+			"/orgs/acme/teams/platform/repos": `[{"name":"api"}]`,
+		}
+		beta := map[string]string{
+			"/orgs/acme-labs/teams":                `[{"slug":"platform","name":"Platform"}]`,
+			"/orgs/acme-labs/teams/platform/repos": `[{"name":"svc"}]`,
+		}
+		run := func(githubOrg string, paths map[string]string, at time.Time) {
+			t.Helper()
+			doer := &githubTeamCatalogFixtureDoer{t: t, byPath: paths}
+			adapter := GitHubTeamCatalogCollector{Sink: GitHubTeamCatalogClickHouseEffects{Conn: conn}}
+			credential := providerfoundation.Credential{Provider: "github", Config: map[string]string{"org": githubOrg}}
+			if _, err := adapter.CollectTeamCatalog(ctx, TeamCatalogReference{OrgID: org, SyncRunID: "run"},
+				credential, githubTeamCatalogAdapterClient(t, doer), teamsOnly, at); err != nil {
+				t.Fatal(err)
+			}
+		}
+		run("acme", acme, t0)
+		run("acme-labs", beta, t0.Add(time.Hour))
+		acmeAPI := repoOwnershipFact{TeamID: "gh:platform", Repo: "acme/api", Source: "provider_access"}
+		labsSvc := repoOwnershipFact{TeamID: "gh:platform", Repo: "acme-labs/svc", Source: "provider_access"}
+		requireRepoFacts(t, "after acme then acme-labs", openRepoOwnership(ctx, t, conn, org, "github"), acmeAPI, labsSvc)
+		// A repo dropped in one GitHub org closes only that org's row.
+		acme["/orgs/acme/teams/platform/repos"] = `[]`
+		run("acme", acme, t0.Add(2*time.Hour))
+		requireRepoFacts(t, "after acme drops api", openRepoOwnership(ctx, t, conn, org, "github"), labsSvc)
+	})
+
+	t.Run("a closed row is not read as open: a repeat run keeps its valid_to and a re-grant opens it again", func(t *testing.T) {
+		org := "snap-closed-stays-closed"
+		both := map[string]string{
+			"/orgs/acme/teams":                `[{"slug":"platform","name":"Platform"}]`,
+			"/orgs/acme/teams/platform/repos": `[{"name":"api"},{"name":"web"}]`,
+		}
+		apiOnly := map[string]string{
+			"/orgs/acme/teams":                both["/orgs/acme/teams"],
+			"/orgs/acme/teams/platform/repos": `[{"name":"api"}]`,
+		}
+		closedAt := func() time.Time {
+			var valid time.Time
+			if err := conn.QueryRow(ctx,
+				`SELECT max(valid_to) FROM team_repo_ownership FINAL WHERE org_id = ? AND repo_full_name = 'acme/web' AND valid_to IS NOT NULL`,
+				org).Scan(&valid); err != nil {
+				t.Fatal(err)
+			}
+			return valid
+		}
+		if _, err := githubSnapshotRun(ctx, t, conn, org, both, nil, teamsOnly, t0); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := githubSnapshotRun(ctx, t, conn, org, apiOnly, nil, teamsOnly, t0.Add(time.Hour)); err != nil {
+			t.Fatal(err)
+		}
+		if got := closedAt(); !got.Equal(t0.Add(time.Hour)) {
+			t.Fatalf("web closed at %s, want %s", got, t0.Add(time.Hour))
+		}
+		if _, err := githubSnapshotRun(ctx, t, conn, org, apiOnly, nil, teamsOnly, t0.Add(2*time.Hour)); err != nil {
+			t.Fatal(err)
+		}
+		if got := closedAt(); !got.Equal(t0.Add(time.Hour)) {
+			t.Fatalf("a later run moved the close of a closed row to %s, want %s", got, t0.Add(time.Hour))
+		}
+		if _, err := githubSnapshotRun(ctx, t, conn, org, both, nil, teamsOnly, t0.Add(3*time.Hour)); err != nil {
+			t.Fatal(err)
+		}
+		requireRepoFacts(t, "after the re-grant", openRepoOwnership(ctx, t, conn, org, "github"), platform, platformWeb)
+	})
+
 	t.Run("a team the run did not list keeps its rows", func(t *testing.T) {
 		org := "snap-unlisted-team"
 		if _, err := githubSnapshotRun(ctx, t, conn, org, twoTeams, nil, teamsOnly, t0); err != nil {

@@ -320,7 +320,7 @@ func (adapter GitHubTeamCatalogCollector) CollectTeamCatalog(
 	// table only, matching Linear's own applyTeamSyncPolicyGuard doc comment.
 	if selections.Teams && (len(rows.RepoOwnership) > 0 || len(rows.RepoListedTeamIDs) > 0) {
 		written, closed, err := adapter.Sink.SnapshotTeamRepoOwnership(
-			ctx, ref.OrgID, rows.RepoOwnership, rows.RepoListedTeamIDs, normalizedAt,
+			ctx, ref.OrgID, orgName, rows.RepoOwnership, rows.RepoListedTeamIDs, normalizedAt,
 		)
 		if err != nil {
 			return result, err

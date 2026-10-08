@@ -215,17 +215,22 @@ func (sink GitHubTeamCatalogClickHouseEffects) ExistingTeamMembers(
 }
 
 // openProviderAccessRepoOwnership reads the open provider_access rows of the
-// listed teams. A failed read is an error, never an empty answer: the caller
-// must not plan a close, or re-stamp valid_from, from a read that did not happen.
+// listed teams under the run's GitHub org (repo full name prefix "<org>/", the
+// prefix Collect builds): a team id "gh:<slug>" holds no GitHub org, so two
+// GitHub orgs of one tenant can share it.
+//
+// A failed read is an error, never an empty answer: the caller must not plan a
+// close, or re-stamp valid_from, from a read that did not happen.
 func (sink GitHubTeamCatalogClickHouseEffects) openProviderAccessRepoOwnership(
-	ctx context.Context, orgID string, teamIDs []string,
+	ctx context.Context, orgID, githubOrg string, teamIDs []string,
 ) ([]githubTeamRepoOwnershipRow, error) {
 	result, err := sink.Conn.Query(ctx, `
 SELECT team_id, repo_id, repo_full_name, match_type, is_primary, specificity, priority, valid_from
 FROM team_repo_ownership FINAL
 WHERE org_id = ? AND provider = ? AND source = ? AND team_id IN ?
+  AND startsWith(repo_full_name, ?)
   AND (valid_to IS NULL OR valid_to > now64(3, 'UTC'))`,
-		orgID, githubTeamCatalogProvider, githubTeamCatalogSource, teamIDs)
+		orgID, githubTeamCatalogProvider, githubTeamCatalogSource, teamIDs, githubOrg+"/")
 	if err != nil {
 		return nil, err
 	}
@@ -253,7 +258,9 @@ WHERE org_id = ? AND provider = ? AND source = ? AND team_id IN ?
 // SnapshotTeamRepoOwnership writes this run's team<->repo grants and closes
 // the open provider_access rows of the LISTED teams that GitHub no longer
 // returns, through the shared PlanOwnershipSnapshot rule (a repo full name
-// stands in for the project id). listedTeamIDs is the set of teams whose repo
+// stands in for the project id). githubOrg is the GitHub org the run listed:
+// only rows whose repo full name starts with "<githubOrg>/" are read or closed.
+// listedTeamIDs is the set of teams whose repo
 // listing reached its end; a team outside it, and a run that listed no team,
 // closes nothing. An already-open grant keeps its first valid_from, so a
 // repeat run replaces the row instead of adding one. Rows of another org,
@@ -261,15 +268,15 @@ WHERE org_id = ? AND provider = ? AND source = ? AND team_id IN ?
 //
 // It returns the grants written and the rows closed.
 func (sink GitHubTeamCatalogClickHouseEffects) SnapshotTeamRepoOwnership(
-	ctx context.Context, orgID string, fresh []githubTeamRepoOwnershipRow, listedTeamIDs []string, at time.Time,
+	ctx context.Context, orgID, githubOrg string, fresh []githubTeamRepoOwnershipRow, listedTeamIDs []string, at time.Time,
 ) (written, closed int, err error) {
-	if sink.Conn == nil || strings.TrimSpace(orgID) == "" || at.IsZero() {
+	if sink.Conn == nil || strings.TrimSpace(orgID) == "" || strings.TrimSpace(githubOrg) == "" || at.IsZero() {
 		return 0, 0, ErrInvalidConfiguration
 	}
 	if len(listedTeamIDs) == 0 {
 		return len(fresh), 0, sink.WriteTeamRepoOwnership(ctx, orgID, fresh)
 	}
-	open, err := sink.openProviderAccessRepoOwnership(ctx, orgID, listedTeamIDs)
+	open, err := sink.openProviderAccessRepoOwnership(ctx, orgID, githubOrg, listedTeamIDs)
 	if err != nil {
 		return 0, 0, err
 	}

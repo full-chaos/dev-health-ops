@@ -181,8 +181,9 @@ A GitHub PR closing Linear `CHAOS-2400` borrows that issue's `CHAOS` team.
 >    attributes to T2 (not `ambiguous_*_membership`); a person of inactive teams
 >    only is `no_membership`; an admin layer whose teams are all inactive has
 >    no candidate and falls through to the provider layer; two ACTIVE teams stay
->    ambiguous. Python had no inactive teams, so only the reasons for inactive
->    teams differ from it. Asserted by `TestMembershipGateCountsOnlyActiveTeams`,
+>    ambiguous. Python never filtered inactive teams; Go drops them before the
+>    gate counts. For inactive-team cases, both the winner and the reason can
+>    differ from the Python answer. Asserted by `TestMembershipGateCountsOnlyActiveTeams`,
 >    `TestAnInactiveOnlyAdminLayerFallsThroughToTheProviderLayer` and
 >    `TestAMemberOfAnInactiveAndAnActiveTeamResolvesToTheActiveTeam`.
 >

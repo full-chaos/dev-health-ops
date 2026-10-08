@@ -220,6 +220,7 @@ func BuildExplainResponse(ctx context.Context, reader *Reader, orgID string, par
 	// repository. One read of the stored URLs serves both.
 	var repositories *[]Repository
 	var sourceURL *string
+	var source *string
 	perRepository := config.GroupBy == "repo_id"
 	scopeRef, scopeIsOneRepository := scopeRepositoryRef(params)
 	if perRepository || scopeIsOneRepository {
@@ -246,9 +247,24 @@ func BuildExplainResponse(ctx context.Context, reader *Reader, orgID string, par
 			list := buildRepositories(contributors, config.Transform, displayNames, sourceURLs)
 			repositories = &list
 		}
+		providers, err := reader.fetchRepoProviders(ctx, orgID, urlIDs)
+		if err != nil {
+			return nil, err
+		}
+		source = joinProviders(urlIDs, providers)
 		if served, ok := sourceURLs[scopeRepoID]; ok && scopeRepoID != "" {
 			sourceURL = &served
 		}
+	}
+
+	// A metric stored per team has no repository behind it: its source is the provider of the
+	// work items in the metric's own table, window and scope.
+	if config.GroupBy == "team_id" {
+		workItemProviders, err := reader.fetchWorkItemProviders(ctx, config.Table, params.StartDay, params.EndDay, scopeFilterSQL, scopeBindings, orgID)
+		if err != nil {
+			return nil, err
+		}
+		source = joinProviderNames(workItemProviders)
 	}
 
 	return &Response{
@@ -268,6 +284,7 @@ func BuildExplainResponse(ctx context.Context, reader *Reader, orgID string, par
 		),
 		Repositories: repositories,
 		SourceURL:    sourceURL,
+		Source:       source,
 	}, nil
 }
 

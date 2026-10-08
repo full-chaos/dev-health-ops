@@ -238,10 +238,11 @@ func TestWholeDaysPutsTheLastFrozenDayOnToday(t *testing.T) {
 	for now, want := range map[string]int{
 		"2026-09-26T19:57:34Z":      0,
 		"2026-09-26T23:59:59Z":      0,
-		"2026-09-27T00:00:00Z":      1,
-		"2026-10-06T03:00:00Z":      10,
-		"2026-09-26T21:57:33+02:00": 0, // 19:57 UTC the same day
-		"2026-09-26T00:30:00-05:00": 0, // 05:30 UTC the same day
+		"2026-09-27T00:00:00Z":      0, // before the frozen time of day: the last day is yesterday (CHAOS-8915)
+		"2026-09-27T19:57:33.279Z":  1,
+		"2026-10-06T03:00:00Z":      9,
+		"2026-09-26T21:57:33+02:00": -1, // 19:57:33.000 UTC, before the frozen instant
+		"2026-09-26T00:30:00-05:00": -1, // 05:30 UTC the same day, before the frozen instant
 	} {
 		instant, err := time.Parse(time.RFC3339, now)
 		if err != nil {

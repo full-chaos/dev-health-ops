@@ -272,3 +272,64 @@ func TestAStoredURLWithUserInfoIsNeverServed(t *testing.T) {
 		t.Fatalf("the body holds the user info: %s", body)
 	}
 }
+
+// CHAOS-8903: source is the sorted, joined distinct providers of the repositories behind a
+// metric stored per repository; "unknown" and empty providers are no provider; a metric stored
+// per team serves null and reads no provider.
+func TestSourceIsTheStoredProvidersBehindARepositoryMetric(t *testing.T) {
+	for _, testCase := range []struct {
+		name      string
+		metric    string
+		providers [][]any
+		want      *string
+	}{
+		{"two providers sorted and joined", "churn", [][]any{{"repo-b", "gitlab"}, {"repo-a", "github"}}, ptr("github, gitlab")},
+		{"one provider once", "churn", [][]any{{"repo-a", "github"}, {"repo-b", "github"}}, ptr("github")},
+		{"unknown and empty are no provider", "churn", [][]any{{"repo-a", "unknown"}, {"repo-b", ""}}, nil},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			dispatch := &explainQueryDispatch{
+				contributorRows: [][]any{{"repo-a", 0.25}, {"repo-b", 0.5}},
+				providerRows:    testCase.providers,
+			}
+			got, err := explainFor(t, dispatch, testCase.metric, "org")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if (got.Source == nil) != (testCase.want == nil) || (got.Source != nil && *got.Source != *testCase.want) {
+				t.Fatalf("source = %v, want %v", got.Source, testCase.want)
+			}
+		})
+	}
+}
+
+func ptr(s string) *string { return &s }
+
+// CHAOS-8910: a metric stored per team takes the distinct providers of the work items behind it.
+func TestSourceOfATeamMetricIsTheWorkItemProviders(t *testing.T) {
+	for _, testCase := range []struct {
+		name string
+		rows [][]any
+		want *string
+	}{
+		{"two providers sorted and joined", [][]any{{"jira"}, {"github"}, {"jira"}}, ptr("github, jira")},
+		{"unknown and empty are no provider", [][]any{{"unknown"}, {""}}, nil},
+		{"no rows", nil, nil},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			dispatch := &explainQueryDispatch{
+				contributorRows:      [][]any{{"team-a", 3.0}},
+				workItemProviderRows: testCase.rows,
+				// A repository table must never be read for a team metric.
+				providerRows: [][]any{{"repo-a", "gitlab"}},
+			}
+			got, err := explainFor(t, dispatch, "throughput", "org")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if (got.Source == nil) != (testCase.want == nil) || (got.Source != nil && *got.Source != *testCase.want) {
+				t.Fatalf("source = %v, want %v", got.Source, testCase.want)
+			}
+		})
+	}
+}

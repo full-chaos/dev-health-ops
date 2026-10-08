@@ -262,10 +262,7 @@ func (table WorldTable) Transform(days int, fromOrg, toOrg string) ([][]any, err
 				if !ok {
 					return nil, fmt.Errorf("table %s row %d column %s: %v is not a time string", table.Name, index, table.Columns[column].Name, out[column])
 				}
-				parsed, err := time.ParseInLocation("2006-01-02 15:04:05.999999999", text, time.UTC)
-				if err != nil {
-					parsed, err = time.ParseInLocation("2006-01-02", text, time.UTC)
-				}
+				parsed, err := parseWorldTime(text)
 				if err != nil {
 					return nil, fmt.Errorf("table %s row %d column %s: %w", table.Name, index, table.Columns[column].Name, err)
 				}
@@ -281,16 +278,34 @@ func (table WorldTable) Transform(days int, fromOrg, toOrg string) ([][]any, err
 	return rows, nil
 }
 
-// WholeDays is the number of calendar days from the day the world was frozen to the day of now, in
-// UTC: the shift that puts the last generated day on today and leaves every time of day alone.
+// parseWorldTime reads a value of a shifted column: a timestamp or a bare date.
+func parseWorldTime(text string) (time.Time, error) {
+	parsed, err := time.ParseInLocation("2006-01-02 15:04:05.999999999", text, time.UTC)
+	if err != nil {
+		parsed, err = time.ParseInLocation("2006-01-02", text, time.UTC)
+	}
+	return parsed, err
+}
+
+// WholeDays is the whole-day shift that puts the last generated day on today while leaving every time
+// of day alone, but never past now: when frozen_at has a later time of day than now, the shift is one
+// day less (the last generated day is yesterday until the clock passes that time of day), so a value
+// the world holds at or before frozen_at is never shifted past now (CHAOS-8915). Values the producer
+// itself wrote after frozen_at (planned sprints, a merge days after the freeze) stay after it by the
+// same distance; no whole-day shift can place them.
 func (world FrozenWorld) WholeDays(now time.Time) (int, error) {
 	frozenAt, err := time.Parse(time.RFC3339Nano, world.FrozenAt)
 	if err != nil {
 		return 0, fmt.Errorf("frozen_at of the world: %w", err)
 	}
-	from := time.Date(frozenAt.UTC().Year(), frozenAt.UTC().Month(), frozenAt.UTC().Day(), 0, 0, 0, 0, time.UTC)
-	to := time.Date(now.UTC().Year(), now.UTC().Month(), now.UTC().Day(), 0, 0, 0, 0, time.UTC)
-	return int(to.Sub(from).Hours() / 24), nil
+	frozenAt, now = frozenAt.UTC(), now.UTC()
+	from := time.Date(frozenAt.Year(), frozenAt.Month(), frozenAt.Day(), 0, 0, 0, 0, time.UTC)
+	to := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
+	days := int(to.Sub(from).Hours() / 24)
+	if frozenAt.Sub(from) > now.Sub(to) {
+		days--
+	}
+	return days, nil
 }
 
 // LoadWorld inserts the world's rows into conn's database for org, table by table in frozen order,
@@ -484,6 +499,10 @@ const defaultOrg = "99741251-4686-5952-911e-46095bcd8122"
 
 const defaultRepoName = "acme/demo-app"
 
+// generateClock is the one clock of a generate run: the shift of every row comes from it and from
+// nothing else. A test replaces it.
+var generateClock = time.Now
+
 func runGenerate(ctx context.Context, env cli.Env) int {
 	flags := flag.NewFlagSet("dho fixtures generate", flag.ContinueOnError)
 	flags.SetOutput(env.Stderr)
@@ -604,7 +623,7 @@ func runGenerate(ctx context.Context, env cli.Env) int {
 
 	logger := logging.NewJSON(env.Stderr, slog.LevelInfo)
 	started := time.Now()
-	counts, err := LoadWorld(ctx, conn, world, orgID, time.Now().UTC())
+	counts, err := LoadWorld(ctx, conn, world, orgID, generateClock().UTC())
 	if err != nil {
 		return writeError(env.Stderr, cli.ExitFailure, "load_failed", boundary.Redact(err).Error())
 	}

@@ -214,6 +214,13 @@ and the frozen venue oracles. So a Go-edge proof is always the go-only class:
 the verdict is `PROVEN_GO_ONLY (go-edge mode: ...)`, the receipt is the
 cited-mismatch arm with the ledger's own citation, and an operation the
 go-served ledger does not name is refused, never proven by its candidate alone.
+An operation that was Go-only from its first day has no two-plane record: its ledger entry
+is the `unproven_reason` form, and it prints `GO_ONLY_UNPROVEN`. `TestEveryProofSpecOperationIsInTheLedgerOrAMutation`
+fails for a proof-spec operation that is in neither the ledger nor the mutation list.
+An unproven entry with `born_in_go: true` marks an operation that never had a Python counterpart. In the
+MCP class proof (doc-route mode) a MATCHED shape of such an operation is counted although no document
+receipt can exist, and the class receipt names it in `shapes_born_in_go`. A diverging shape still blocks,
+and `-allow-excluded` gives a born-in-Go shape nothing.
 
 Go-edge mode refuses, each by its own name:
 

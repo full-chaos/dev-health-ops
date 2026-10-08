@@ -10,6 +10,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/investment/chquery"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph/units"
+	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse/latestrow"
 	"github.com/google/uuid"
 )
 
@@ -379,6 +380,34 @@ func (fetcher chConnDistributionFetcher) FetchLatestDistributions(
 	return fetchLatestDistributions(ctx, fetcher.conn, orgID, workUnitIDs)
 }
 
+// latestDistributionsQuery reads each unit's latest row by latestrow.OrderKey.
+func latestDistributionsQuery() string {
+	return fmt.Sprintf(`
+		WITH latest AS (
+			SELECT
+				work_unit_id,
+				%s AS theme_distribution,
+				%s AS subcategory_distribution,
+				%s AS categorization_status
+			FROM work_unit_investments
+			WHERE org_id = {org_id:String}
+			  AND work_unit_id IN {work_unit_ids:Array(String)}
+			GROUP BY org_id, work_unit_id
+		)
+		SELECT
+			work_unit_id,
+			mapKeys(theme_distribution) AS theme_categories,
+			mapValues(theme_distribution) AS theme_weights,
+			mapKeys(subcategory_distribution) AS subcategory_categories,
+			mapValues(subcategory_distribution) AS subcategory_weights,
+			categorization_status
+		FROM latest
+	`,
+		latestrow.ArgMax("theme_distribution_json"),
+		latestrow.ArgMax("subcategory_distribution_json"),
+		latestrow.ArgMax("categorization_status"))
+}
+
 // fetchLatestDistributions ports _fetch_latest_distributions (backfill.py),
 // returning only the unit ids that actually have a row.
 //
@@ -409,27 +438,7 @@ func fetchLatestDistributions(
 		return map[string]membershipDistribution{}, nil
 	}
 
-	rows, err := conn.Query(ctx, `
-		WITH latest AS (
-			SELECT
-				work_unit_id,
-				argMax(theme_distribution_json, computed_at) AS theme_distribution,
-				argMax(subcategory_distribution_json, computed_at) AS subcategory_distribution,
-				argMax(categorization_status, computed_at) AS categorization_status
-			FROM work_unit_investments
-			WHERE org_id = {org_id:String}
-			  AND work_unit_id IN {work_unit_ids:Array(String)}
-			GROUP BY org_id, work_unit_id
-		)
-		SELECT
-			work_unit_id,
-			mapKeys(theme_distribution) AS theme_categories,
-			mapValues(theme_distribution) AS theme_weights,
-			mapKeys(subcategory_distribution) AS subcategory_categories,
-			mapValues(subcategory_distribution) AS subcategory_weights,
-			categorization_status
-		FROM latest
-	`,
+	rows, err := conn.Query(ctx, latestDistributionsQuery(),
 		clickhouse.Named("org_id", orgID),
 		clickhouse.Named("work_unit_ids", workUnitIDs),
 	)

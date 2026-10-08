@@ -397,7 +397,7 @@ func TestNativeTeamIsATeamOfTheItemsProvider(t *testing.T) {
 // the team key ("ENG"). The inactive team of one provider does not drop the
 // active team of another provider with the same id, in either order of
 // providers and in either catalog order; the inactive team of the item's own
-// provider still drops its candidate. Every path: native team key, project
+// provider still drops its candidate, unless an active admin team has the id. Every path: native team key, project
 // key and project ownership.
 func TestAnInactiveTeamOfAnotherProviderWithTheSameIDDoesNotDropTheItemsTeam(t *testing.T) {
 	key := "ENG"
@@ -449,11 +449,22 @@ func TestAnInactiveTeamOfAnotherProviderWithTheSameIDDoesNotDropTheItemsTeam(t *
 					projectID := "PROJ"
 					subject := GithubWorkItemDerivationSubject{WorkItemID: provider + ":ENG-3", Provider: provider, ProjectID: &projectID, OrgID: "org"}
 					teamID, _, candidates := derived.Resolve(subject)
+					if other == "" {
+						// The active admin team ENG is the team the id means
+						// when the item's own team ENG is inactive.
+						team, source, _ := primaryRow(candidates)
+						if GithubWorkItemDerivationStringValue(teamID) != "ENG" || team != "ENG" || source != "project_ownership" {
+							t.Errorf("primary = %q/%s, want the active admin team ENG/project_ownership (candidates %+v)", team, source, candidates)
+						}
+						for _, candidate := range candidates {
+							if candidate.IsPrimary == AttributionPrimary && (candidate.TeamProvider != "" || !candidate.TeamResolved) {
+								t.Errorf("primary bound to %q (resolved %v), want the admin team", candidate.TeamProvider, candidate.TeamResolved)
+							}
+						}
+						return
+					}
 					if teamID != nil {
 						t.Errorf("Resolve team = %q, want none: the item's own team ENG is inactive (candidates %+v)", *teamID, candidates)
-					}
-					if other == "" {
-						return
 					}
 					// The other provider's active ENG is that provider's team:
 					// its own item resolves to it.
@@ -517,5 +528,69 @@ func TestAnInactiveAdminTeamIsDroppedWhenNoTeamOfTheItemsProviderHasItsID(t *tes
 				}
 			})
 		}
+	}
+}
+
+// A manual fallback is provider-neutral: it applies to items of every
+// provider, and the team id it names is bound for the item like a key holder:
+// the active team of the item's provider with that id, else the active admin
+// team with that id, never a team of another provider. The bound team gives
+// the row its name. An inactive team never takes the item: an inactive admin
+// team ENG with the same id as the item provider's active team ENG neither
+// names the row nor keeps it alive when it is the only team ENG.
+func TestAManualFallbackIsBoundToAnActiveTeamOfTheItemsProvider(t *testing.T) {
+	key := "ENG"
+	rule := GithubWorkItemDerivationManualFallback{ScopeType: "issue_key_prefix", ScopeID: key, TeamID: "ENG", TeamName: "Inactive admin ENG", Priority: 5}
+	for _, provider := range coOwnerProviders {
+		subject := GithubWorkItemDerivationSubject{WorkItemID: provider + ":ENG-3", Provider: provider, OrgID: "org"}
+		resolveWith := func(teams ...GithubWorkItemDerivationTeamFact) (string, string, string, []GithubWorkItemDerivationCandidate) {
+			derived := NewGitHubWorkItemDerivationContext(GithubWorkItemDerivationFacts{
+				Teams: catalogOrder(teams), ManualFallbacks: []GithubWorkItemDerivationManualFallback{rule},
+			})
+			teamID, teamName, candidates := derived.Resolve(subject)
+			_, source, _ := primaryRow(candidates)
+			return GithubWorkItemDerivationStringValue(teamID), GithubWorkItemDerivationStringValue(teamName), source, candidates
+		}
+		t.Run(provider+"/inactive admin and active own team share the id", func(t *testing.T) {
+			team, name, source, candidates := resolveWith(
+				GithubWorkItemDerivationTeamFact{Provider: provider, TeamID: "ENG", TeamName: "Eng " + provider},
+				GithubWorkItemDerivationTeamFact{Provider: "", TeamID: "ENG", TeamName: "Inactive admin ENG", Inactive: true},
+			)
+			if team != "ENG" || name != "Eng "+provider || source != "manual_fallback" {
+				t.Errorf("primary = %q %q/%s, want ENG %q/manual_fallback: the active %s team, never the inactive admin team (candidates %+v)", team, name, source, "Eng "+provider, provider, candidates)
+			}
+		})
+		t.Run(provider+"/only the inactive admin team has the id", func(t *testing.T) {
+			team, _, source, candidates := resolveWith(GithubWorkItemDerivationTeamFact{Provider: "", TeamID: "ENG", TeamName: "Inactive admin ENG", Inactive: true})
+			if team != "" || source != "unassigned" {
+				t.Errorf("primary = %q/%s, want unassigned (candidates %+v)", team, source, candidates)
+			}
+		})
+		t.Run(provider+"/only the inactive own team has the id", func(t *testing.T) {
+			team, _, source, _ := resolveWith(GithubWorkItemDerivationTeamFact{Provider: provider, TeamID: "ENG", Inactive: true})
+			if team != "" || source != "unassigned" {
+				t.Errorf("primary = %q/%s, want unassigned", team, source)
+			}
+		})
+		t.Run(provider+"/active admin team has the id", func(t *testing.T) {
+			team, name, source, _ := resolveWith(GithubWorkItemDerivationTeamFact{Provider: "", TeamID: "ENG", TeamName: "Admin ENG"})
+			if team != "ENG" || name != "Admin ENG" || source != "manual_fallback" {
+				t.Errorf("primary = %q %q/%s, want the admin team ENG", team, name, source)
+			}
+		})
+		for _, other := range otherProviders(provider) {
+			t.Run(provider+"/only a team of "+other+" has the id", func(t *testing.T) {
+				team, _, source, _ := resolveWith(GithubWorkItemDerivationTeamFact{Provider: other, TeamID: "ENG", TeamName: "Eng " + other})
+				if team != "" || source != "unassigned" {
+					t.Errorf("primary = %q/%s, want unassigned: a team of another provider is never bound", team, source)
+				}
+			})
+		}
+		t.Run(provider+"/an id no catalog row has stays as named", func(t *testing.T) {
+			team, name, source, _ := resolveWith()
+			if team != "ENG" || name != "Inactive admin ENG" || source != "manual_fallback" {
+				t.Errorf("primary = %q %q/%s, want ENG as the rule names it", team, name, source)
+			}
+		})
 	}
 }

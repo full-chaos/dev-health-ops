@@ -817,11 +817,16 @@ The Atlassian Teams of a Jira site ARE the Jira teams. A team owns a Jira projec
     (`internal/teamattribution/cascade.go`) flags a team whose newest `is_active` is 0 as inactive. The team
     stays known to the cascade (the null-carrying rule treats it as any team), and
     `dropInactiveTeamCandidates` drops every candidate that names it, once, after all paths have produced
-    theirs. Teams are (provider, id) here too: a candidate names a team id, and the team it means for the item
-    is picked as a key holder is (section 0.4e: the team of the item's provider with that id, else the admin
-    team with that id, else the teams of other providers with that id). An inactive team of another provider
-    with the same id (a retired Jira project-as-team row `ENG` and a Linear team `ENG`) does not drop the
-    item's own active team. Storage limit: the `teams` sorting key is (org_id, id), without `provider`, so a
+    theirs. Teams are (provider, id) here too: every candidate carries the identity (provider, id) of the team
+    it names, bound where the candidate is made (`bindCandidateTeam`; a key holder is its own identity), and
+    the team name and this rule read that identity, never the id alone. The bound team is the ACTIVE team of the
+    item's provider with that id, else the ACTIVE admin team with that id (section 0.4e); when neither is
+    active, the id means the inactive one and the candidate is dropped. A fact whose id only teams of other
+    providers have binds to one of those; a `manual_fallback` rule never binds a team of another provider and
+    is then dropped. An id that no catalog row has stays as named (unknown, not inactive). An inactive team of
+    another provider with the same id (a retired Jira project-as-team row `ENG` and a Linear team `ENG`) does
+    not drop the item's own active team, and an inactive admin team `ENG` never takes an item through a rule
+    that names `ENG` while the item's provider has an active team `ENG`. Storage limit: the `teams` sorting key is (org_id, id), without `provider`, so a
     merge keeps one row of two teams that share an id in one organization; the loader sees both only between
     merges. A retired, archived or never-active team of any provider takes no work item by project key, team
     id, native team key, ownership, membership, linked issue or manual fallback. A Jira project that no Atlassian team is connected to is unassigned. A recompute of an
@@ -1013,7 +1018,10 @@ nothing else reads `projectKeyTeams`. The other key lookups of the cascade are n
   item's primary team. It links an issue, not a team, and crosses providers on purpose (section 2).
 - `manual_fallback` with scope `issue_key_prefix` is an explicit admin record and is provider-neutral by
   contract: a rule matches the item's issue-key prefix whatever the rule's `provider` (the other scopes need
-  the rule's provider to be empty or the item's).
+  the rule's provider to be empty or the item's). The team the rule names is bound for the item like a key
+  holder: the ACTIVE team of the item's provider with that id, else the ACTIVE admin team with that id; a team
+  of another provider never. When none is bound, the rule gives no candidate. The bound team gives the row its
+  name (the rule's `team_name` is used only for an id that no catalog row has).
 
 **Effect on stored rows.** Before this change, the first active holder of a key by (provider, id), of any
 provider, took the row. An item whose key a team of another provider (or an admin team) also held could
@@ -1036,7 +1044,8 @@ Tests: `TestIssueProjectPrimaryIsATeamOfTheItemsProvider`,
 `TestATeamIDOfAnotherProviderDoesNotHideTheItemsTeam`, `TestNativeTeamIsATeamOfTheItemsProvider`,
 `TestAnInactiveTeamOfAnotherProviderWithTheSameIDDoesNotDropTheItemsTeam`,
 `TestAnIDOfOnlyOtherProvidersFollowsTheirActiveFlag`,
-`TestAnInactiveAdminTeamIsDroppedWhenNoTeamOfTheItemsProviderHasItsID` (the cascade, every provider against every other provider
+`TestAnInactiveAdminTeamIsDroppedWhenNoTeamOfTheItemsProviderHasItsID`,
+`TestAManualFallbackIsBoundToAnActiveTeamOfTheItemsProvider` (the cascade, every provider against every other provider
 and the empty provider); `TestProjectAndNativeKeysAttributeOnlyToTeamsOfTheItemsProvider` (real loaders, real
 cascade, real writer, real ClickHouse, every provider, the admin cases included);
 `TestAnInactiveTeamDropsOnlyTheTeamOfItsOwnProviderWithTheSameID` (real loader, every pair of providers);

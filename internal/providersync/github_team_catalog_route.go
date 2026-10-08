@@ -208,6 +208,7 @@ func (collector GitHubTeamCatalogRouteHandler) Collect(
 				repoPatterns = append(repoPatterns, org+"/"+name)
 			}
 
+			rows.RepoListedTeamIDs = append(rows.RepoListedTeamIDs, githubTeamID(slug))
 			team, err := normalizeGitHubTeam(orgID, payload, repoPatterns, normalizedAt)
 			if err != nil {
 				return githubTeamCatalogRows{}, evidence, err

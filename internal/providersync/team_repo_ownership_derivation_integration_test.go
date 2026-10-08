@@ -50,8 +50,8 @@ func TestTeamRepoOwnershipDerivationAgainstMigratedSchema(t *testing.T) {
 	seedTeamProjectOwnership(t, ctx, conn, orgID, "linear", "proj-1", "team-platform", true, now)
 	seedTeamProjectOwnership(t, ctx, conn, orgID, "github", "proj-1", "team-platform", true, now)
 	seedWorkItem(t, ctx, conn, orgID, "linear:PLAT-1", "linear", uuid.Nil, "proj-1", now)
-	seedWorkItem(t, ctx, conn, orgID, "gh:acme/repo-a#1", "github", repoA, "proj-1", now)
-	seedWorkItem(t, ctx, conn, orgID, "ghpr:acme/repo-b#7", "github", repoB, "", now)
+	seedWorkItemOfType(t, ctx, conn, orgID, "ghpr:acme/repo-a#1", "github", "pr", repoA, "proj-1", now)
+	seedWorkItemOfType(t, ctx, conn, orgID, "ghpr:acme/repo-b#7", "github", "pr", repoB, "", now)
 	seedWorkItemDependency(t, ctx, conn, orgID, "ghpr:acme/repo-b#7", "linear:PLAT-1", "relates_to", now)
 	seedWorkGraphIssuePR(t, ctx, conn, orgID, repoC, "linear:PLAT-1", 42, now)
 
@@ -185,7 +185,7 @@ func TestTeamRepoOwnershipDerivationUnchangedFactWritesNothing(t *testing.T) {
 	repoA := uuid.New()
 	seedTeamRepoOwnershipRepos(t, ctx, conn, orgID, map[uuid.UUID]string{repoA: "acme/repo-a"})
 	seedTeamProjectOwnership(t, ctx, conn, orgID, "github", "proj-1", "team-platform", true, seedAt)
-	seedWorkItem(t, ctx, conn, orgID, "gh:acme/repo-a#1", "github", repoA, "proj-1", seedAt)
+	seedWorkItemOfType(t, ctx, conn, orgID, "ghpr:acme/repo-a#1", "github", "pr", repoA, "proj-1", seedAt)
 
 	service := TeamRepoOwnershipDerivationService{Conn: conn}
 
@@ -240,7 +240,7 @@ func TestTeamRepoOwnershipDerivationUnchangedFactWritesNothing(t *testing.T) {
 	// resolve team-platform for repo-a -- the fact drops out of `derived`
 	// and its active row is closed exactly as diffTeamRepoOwnershipRetractions
 	// already did before this ticket.
-	seedWorkItem(t, ctx, conn, orgID, "gh:acme/repo-a#1", "github", repoA, "", time.Now().UTC())
+	seedWorkItemOfType(t, ctx, conn, orgID, "ghpr:acme/repo-a#1", "github", "pr", repoA, "", time.Now().UTC())
 	written3, retracted3, _, _, err := service.Derive(ctx, orgID)
 	if err != nil {
 		t.Fatalf("third Derive (retraction): %v", err)
@@ -266,7 +266,7 @@ func TestTeamRepoOwnershipDerivationUnchangedFactWritesNothing(t *testing.T) {
 	// filter, so filterUnchangedTeamRepoOwnershipRows finds no matching
 	// signature and this must open exactly one brand NEW row rather than
 	// resurrecting the closed one.
-	seedWorkItem(t, ctx, conn, orgID, "gh:acme/repo-a#1", "github", repoA, "proj-1", time.Now().UTC())
+	seedWorkItemOfType(t, ctx, conn, orgID, "ghpr:acme/repo-a#1", "github", "pr", repoA, "proj-1", time.Now().UTC())
 	written4, retracted4, _, _, err := service.Derive(ctx, orgID)
 	if err != nil {
 		t.Fatalf("fourth Derive (return): %v", err)
@@ -332,7 +332,7 @@ func TestTeamRepoOwnershipDerivationCountsAnUnwritableFactAsDerivedNotUnchanged(
 	repoNoName := uuid.New()
 	seedTeamRepoOwnershipRepos(t, ctx, conn, orgID, map[uuid.UUID]string{repoNoName: ""})
 	seedTeamProjectOwnership(t, ctx, conn, orgID, "github", "proj-1", "team-platform", true, seedAt)
-	seedWorkItem(t, ctx, conn, orgID, "gh:acme/no-name#1", "github", repoNoName, "proj-1", seedAt)
+	seedWorkItemOfType(t, ctx, conn, orgID, "ghpr:acme/no-name#1", "github", "pr", repoNoName, "proj-1", seedAt)
 
 	service := TeamRepoOwnershipDerivationService{Conn: conn}
 	written, retracted, ready, _, stats, err := service.DeriveWithStats(ctx, orgID)
@@ -356,7 +356,8 @@ func TestTeamRepoOwnershipDerivationAsOfHistoryAcrossChangeAndRetraction(t *test
 	repoID := uuid.New()
 	seedTeamRepoOwnershipRepos(t, ctx, conn, orgID, map[uuid.UUID]string{repoID: "acme/history-repo"})
 	seedTeamProjectOwnershipGeneration(t, ctx, conn, orgID, "linear", "proj-1", "team-old", true, 100, t0)
-	seedWorkItem(t, ctx, conn, orgID, "linear:HIST-1", "linear", repoID, "proj-1", t0)
+	seedWorkItem(t, ctx, conn, orgID, "linear:HIST-1", "linear", uuid.Nil, "proj-1", t0)
+	seedWorkGraphIssuePR(t, ctx, conn, orgID, repoID, "linear:HIST-1", 901, t0)
 
 	service := TeamRepoOwnershipDerivationService{Conn: conn}
 
@@ -388,7 +389,8 @@ func TestTeamRepoOwnershipDerivationAsOfHistoryAcrossChangeAndRetraction(t *test
 
 	// RETRACTION: the work item stops carrying a project_id -- ownership
 	// disappears entirely, no replacement.
-	seedWorkItem(t, ctx, conn, orgID, "linear:HIST-1", "linear", repoID, "", time.Now().UTC())
+	seedWorkItem(t, ctx, conn, orgID, "linear:HIST-1", "linear", uuid.Nil, "", time.Now().UTC())
+	seedWorkGraphIssuePR(t, ctx, conn, orgID, repoID, "linear:HIST-1", 902, time.Now().UTC())
 	time.Sleep(clickHouseTimeParamGranularity)
 	written, retracted, _, _, err = service.Derive(ctx, orgID)
 	if err != nil {
@@ -559,7 +561,7 @@ func TestTeamRepoOwnershipDerivationResolvesLinearTeamKeyShapedOwnership(t *test
 	)
 	// A bare GitHub PR: no project_id of its own, reaches "CHAOS" only
 	// through the dependency-donor walk onto the Linear issue above.
-	seedWorkItem(t, ctx, conn, orgID, "ghpr:acme/linear-repo#9", "github", repoID, "", now)
+	seedWorkItemOfType(t, ctx, conn, orgID, "ghpr:acme/linear-repo#9", "github", "pr", repoID, "", now)
 	seedWorkItemDependency(t, ctx, conn, orgID, "ghpr:acme/linear-repo#9", "linear:CHAOS-1", "relates_to", now)
 
 	assertTeamRepoOwnershipRowCount(t, ctx, conn, orgID, 0)
@@ -618,9 +620,10 @@ func TestTeamRepoOwnershipDerivationResolvesLinearTeamKeyWithNoProjectOwnershipA
 	// No seedTeamProjectOwnership call at all -- team_project_ownership has
 	// zero rows for this org, of any provider.
 	seedWorkItemWithNativeTeamKey(
-		t, ctx, conn, orgID, "linear:CHAOS-1", "linear", repoID,
+		t, ctx, conn, orgID, "linear:CHAOS-1", "linear", uuid.Nil,
 		"", "CHAOS", now,
 	)
+	seedWorkGraphIssuePR(t, ctx, conn, orgID, repoID, "linear:CHAOS-1", 905, now)
 
 	service := TeamRepoOwnershipDerivationService{Conn: conn}
 	written, retracted, inputsReady, armCounts, err := service.Derive(ctx, orgID)
@@ -662,9 +665,10 @@ func TestTeamRepoOwnershipDerivationRejectsUnknownNativeTeamKey(t *testing.T) {
 	seedTeamRepoOwnershipRepos(t, ctx, conn, orgID, map[uuid.UUID]string{repoID: "acme/linear-repo"})
 	// No seedLinearTeam call -- "CHAOS" is not a known team for this org.
 	seedWorkItemWithNativeTeamKey(
-		t, ctx, conn, orgID, "linear:CHAOS-1", "linear", repoID,
+		t, ctx, conn, orgID, "linear:CHAOS-1", "linear", uuid.Nil,
 		"", "CHAOS", now,
 	)
+	seedWorkGraphIssuePR(t, ctx, conn, orgID, repoID, "linear:CHAOS-1", 905, now)
 
 	service := TeamRepoOwnershipDerivationService{Conn: conn}
 	written, retracted, _, armCounts, err := service.Derive(ctx, orgID)
@@ -780,7 +784,7 @@ func TestTeamRepoOwnershipDerivationPreservesReadinessGateWhenProjectOwnershipIs
 	// yet while work-items sync already has (the OPPOSITE ordering from
 	// TestTeamRepoOwnershipDerivationPreservesReadinessGateForNonLinearOrgsTransientLinkageGap
 	// above).
-	seedWorkItem(t, ctx, conn, orgID, "gh:acme/github-repo#1", "github", repoID, "proj-1", now)
+	seedWorkItemOfType(t, ctx, conn, orgID, "ghpr:acme/github-repo#1", "github", "pr", repoID, "proj-1", now)
 
 	// A pre-existing active inferred row, as if a PRIOR Derive() run (before
 	// the transient gap) had already resolved and written it.
@@ -851,9 +855,10 @@ func TestTeamRepoOwnershipDerivationSkipsRetractionWhenProjectOwnershipIsTransie
 	// CHAOS-4537 targets.
 	seedLinearTeam(t, ctx, conn, orgID, "CHAOS", now)
 	seedWorkItemWithNativeTeamKey(
-		t, ctx, conn, orgID, "linear:CHAOS-1", "linear", linearRepoID,
+		t, ctx, conn, orgID, "linear:CHAOS-1", "linear", uuid.Nil,
 		"", "CHAOS", now,
 	)
+	seedWorkGraphIssuePR(t, ctx, conn, orgID, linearRepoID, "linear:CHAOS-1", 906, now)
 
 	// A pre-existing active inferred row for the OTHER repo, as if a PRIOR
 	// Derive() run (before the transient gap) had resolved it via the
@@ -940,7 +945,7 @@ func TestTeamRepoOwnershipDerivationResolvesGitLabShapedNonPrimaryOwnership(t *t
 	repoID := uuid.New()
 	seedTeamRepoOwnershipRepos(t, ctx, conn, orgID, map[uuid.UUID]string{repoID: "acme/gitlab-repo"})
 	seedTeamProjectOwnership(t, ctx, conn, orgID, "gitlab", "proj-gitlab", "team-gitlab", false, now)
-	seedWorkItem(t, ctx, conn, orgID, "gl:acme/gitlab-repo!1", "gitlab", repoID, "proj-gitlab", now)
+	seedWorkItemOfType(t, ctx, conn, orgID, "gl:acme/gitlab-repo!1", "gitlab", "merge_request", repoID, "proj-gitlab", now)
 
 	service := TeamRepoOwnershipDerivationService{Conn: conn}
 	written, _, _, _, err := service.Derive(ctx, orgID)
@@ -992,7 +997,8 @@ func TestTeamRepoOwnershipDerivationCollapsesStaleGenerations(t *testing.T) {
 	// -- must now outrank team-old's collapsed (corrected) claim.
 	seedTeamProjectOwnershipGeneration(t, ctx, conn, orgID, "linear", "proj-1", "team-new", false, 50, newer)
 
-	seedWorkItem(t, ctx, conn, orgID, "linear:PLAT-1", "linear", repoID, "proj-1", newer)
+	seedWorkItem(t, ctx, conn, orgID, "linear:PLAT-1", "linear", uuid.Nil, "proj-1", newer)
+	seedWorkGraphIssuePR(t, ctx, conn, orgID, repoID, "linear:PLAT-1", 903, newer)
 
 	service := TeamRepoOwnershipDerivationService{Conn: conn}
 	written, _, _, _, err := service.Derive(ctx, orgID)
@@ -1027,7 +1033,8 @@ func TestTeamRepoOwnershipDerivationRetractsAReassignedRepo(t *testing.T) {
 	repoID := uuid.New()
 	seedTeamRepoOwnershipRepos(t, ctx, conn, orgID, map[uuid.UUID]string{repoID: "acme/retraction-repo"})
 	seedTeamProjectOwnershipGeneration(t, ctx, conn, orgID, "linear", "proj-1", "team-old", true, 100, t0)
-	seedWorkItem(t, ctx, conn, orgID, "linear:PLAT-1", "linear", repoID, "proj-1", t0)
+	seedWorkItem(t, ctx, conn, orgID, "linear:PLAT-1", "linear", uuid.Nil, "proj-1", t0)
+	seedWorkGraphIssuePR(t, ctx, conn, orgID, repoID, "linear:PLAT-1", 904, t0)
 
 	service := TeamRepoOwnershipDerivationService{Conn: conn}
 	written, retracted, _, _, err := service.Derive(ctx, orgID)
@@ -1117,7 +1124,7 @@ func TestTeamRepoOwnershipDerivationDoesNotFollowAnotherOrgsDependencyEdge(t *te
 	seedTeamProjectOwnership(t, ctx, conn, orgA, "linear", "proj-a", "team-a-legit", true, now)
 	// A repo-bearing item with NO project_id of its own: it can only reach
 	// a team through a dependency-donor edge.
-	seedWorkItem(t, ctx, conn, orgA, "repo-item", "github", repoA, "", now)
+	seedWorkItemOfType(t, ctx, conn, orgA, "repo-item", "github", "pr", repoA, "", now)
 	// The donor: resolves to team-a-legit via its own project_id, no repo
 	// of its own.
 	seedWorkItem(t, ctx, conn, orgA, "donor-item", "linear", uuid.Nil, "proj-a", now)
@@ -1285,6 +1292,25 @@ func seedWorkItem(
 	}
 }
 
+// seedWorkItemOfType inserts a work_items row with its type: the derivation
+// reads an item's own repo_id only for "pr" and "merge_request".
+func seedWorkItemOfType(
+	t *testing.T, ctx context.Context, conn driver.Conn,
+	orgID, workItemID, provider, itemType string, repoID uuid.UUID, projectID string, now time.Time,
+) {
+	t.Helper()
+	batch, err := conn.PrepareBatch(ctx, `INSERT INTO work_items (repo_id, work_item_id, provider, type, project_id, org_id, last_synced)`)
+	if err != nil {
+		t.Fatalf("prepare work_items batch: %v", err)
+	}
+	if err := batch.Append(repoID, workItemID, provider, itemType, projectID, orgID, now); err != nil {
+		t.Fatalf("append work_items row: %v", err)
+	}
+	if err := batch.Send(); err != nil {
+		t.Fatalf("send work_items batch: %v", err)
+	}
+}
+
 // seedWorkItemWithNativeTeamKey inserts a work_items row carrying
 // native_team_key (migration 050, Linear only) -- seedWorkItem leaves it at
 // ClickHouse's column default (”) for the providers that never set it.
@@ -1327,11 +1353,19 @@ func seedWorkGraphIssuePR(
 	orgID string, repoID uuid.UUID, workItemID string, prNumber uint32, now time.Time,
 ) {
 	t.Helper()
+	seedWorkGraphIssuePRWithProvenance(t, ctx, conn, orgID, repoID, workItemID, prNumber, "native", now)
+}
+
+func seedWorkGraphIssuePRWithProvenance(
+	t *testing.T, ctx context.Context, conn driver.Conn,
+	orgID string, repoID uuid.UUID, workItemID string, prNumber uint32, provenance string, now time.Time,
+) {
+	t.Helper()
 	batch, err := conn.PrepareBatch(ctx, `INSERT INTO work_graph_issue_pr (repo_id, work_item_id, pr_number, confidence, provenance, evidence, last_synced, org_id)`)
 	if err != nil {
 		t.Fatalf("prepare work_graph_issue_pr batch: %v", err)
 	}
-	if err := batch.Append(repoID, workItemID, prNumber, float32(1.0), "native", "test-seed", now, orgID); err != nil {
+	if err := batch.Append(repoID, workItemID, prNumber, float32(1.0), provenance, "test-seed", now, orgID); err != nil {
 		t.Fatalf("append work_graph_issue_pr row: %v", err)
 	}
 	if err := batch.Send(); err != nil {

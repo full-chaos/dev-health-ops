@@ -150,6 +150,7 @@ func (h handlers) subscriptionView(ctx context.Context, q querier, sub subscript
 	out.Set("trial_end", isoformat(sub.TrialEnd))
 	out.Set("plan", plan)
 	out.Set("price", price)
+	h.withOrgName(ctx, q, out)
 	return out, nil
 }
 

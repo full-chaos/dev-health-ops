@@ -89,7 +89,17 @@ func TestTheServedOutcomeCounterHoldsTheCountOfEachOutcome(t *testing.T) {
 		"u-422": func([]byte) jevReply { return jevReply{status: http.StatusUnprocessableEntity, body: []byte(`{}`)} },
 		"u-401": func([]byte) jevReply { return jevReply{status: http.StatusUnauthorized, body: []byte(`{}`)} },
 	}
-	order := []string{"u-ok", "u-ok2", "u-zero", "u-none", "u-bad", "u-model", "u-5xx", "u-429", "u-422", "u-401"}
+	// u-mixed: the first attempt is rate-limited, the retry is refused as
+	// invalid: the LAST attempt names the failure (transport_other).
+	mixedAttempts := 0
+	replies["u-mixed"] = func([]byte) jevReply {
+		mixedAttempts++
+		if mixedAttempts == 1 {
+			return jevReply{status: http.StatusTooManyRequests, headers: map[string]string{"Retry-After": "0.01"}, body: []byte(`{}`)}
+		}
+		return jevReply{status: http.StatusUnprocessableEntity, body: []byte(`{}`)}
+	}
+	order := []string{"u-ok", "u-ok2", "u-zero", "u-none", "u-bad", "u-model", "u-5xx", "u-429", "u-422", "u-mixed", "u-401"}
 	fake := newFakeJev(t, func(_ int, body []byte) jevReply {
 		for _, id := range order {
 			if strings.Contains(string(body), "Export job times out "+id+" ") || strings.Contains(string(body), "Export job times out "+id+"\\") || strings.Contains(string(body), "Export job times out "+id+`"`) {
@@ -137,7 +147,7 @@ func TestTheServedOutcomeCounterHoldsTheCountOfEachOutcome(t *testing.T) {
 	want := map[string]int{
 		servedOutcomeOK: 2, servedOutcomeZeroSupport: 1, servedOutcomeEvidenceNone: 1, servedOutcomeInvalidAnswer: 2,
 		servedOutcomeAdapterDefect: 1, servedOutcomeTimeout: 1, servedOutcomeRefused: 1, servedOutcomeServerError: 1,
-		servedOutcomeRateLimited: 1, servedOutcomeRejected: 1, servedOutcomeTransportOther: 1,
+		servedOutcomeRateLimited: 1, servedOutcomeRejected: 1, servedOutcomeTransportOther: 2,
 	}
 	rendered := collector.PrometheusText()
 	for _, outcome := range servedOutcomes() {
@@ -151,6 +161,7 @@ func TestTheServedOutcomeCounterHoldsTheCountOfEachOutcome(t *testing.T) {
 	for id, wantFailure := range map[string]servedFailure{
 		"u-5xx": {class: servedOutcomeServerError, calls: 1}, "u-429": {class: servedOutcomeRateLimited, calls: 1},
 		"u-422": {class: servedOutcomeTransportOther, calls: 1}, "u-401": {class: servedOutcomeRejected, calls: 1, deterministic: true},
+		"u-mixed":   {class: servedOutcomeTransportOther, calls: 1},
 		"u-model":   {class: servedOutcomeInvalidAnswer, calls: 1},
 		"u-timeout": {class: servedOutcomeTimeout, calls: 1}, "u-refused": {class: servedOutcomeRefused, calls: 0},
 	} {
@@ -159,10 +170,34 @@ func TestTheServedOutcomeCounterHoldsTheCountOfEachOutcome(t *testing.T) {
 			t.Errorf("%s: failure %+v, want %+v", id, got, wantFailure)
 		}
 	}
-	if len(failures) != 7 {
-		t.Errorf("%d failures, want 7: %v", len(failures), failures)
+	if len(failures) != 8 || mixedAttempts != 2 {
+		t.Errorf("%d failures, want 8 (%d attempts of u-mixed): %v", len(failures), mixedAttempts, failures)
 	}
 	if !strings.Contains(logs.String(), "outcome_refused=1") || !strings.Contains(logs.String(), "outcome_timeout=1") {
 		t.Error("the run lines do not hold the outcome counts")
+	}
+}
+
+// A shadow attempt row of a refused connection carries the class refused: the
+// closed set of attempt classes of the shadow sinks holds it.
+func TestAShadowAttemptOfARefusedConnectionIsClassedRefused(t *testing.T) {
+	closed := httptest.NewServer(http.NotFoundHandler())
+	closedURL := closed.URL
+	closed.Close()
+	logs := &syncBuffer{}
+	phase, err := NewShadowPhase(shadowTestSettings(), servedTestClient(t, closedURL, 10*time.Second, logs), debugLogger(logs))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = phase.Close() })
+	store := &memoryShadowStore{}
+	phase.run(context.Background(), store, shadowTestConfig(), shadowTestEntries(t, "u-refused"))
+	if len(store.attempts) != 2 {
+		t.Fatalf("attempt rows = %d, want 2", len(store.attempts))
+	}
+	for _, row := range store.attempts {
+		if row.ErrorClass != string(categorize.SystemOneClassRefused) || row.HTTPStatus != 0 {
+			t.Fatalf("attempt row class %q status %d", row.ErrorClass, row.HTTPStatus)
+		}
 	}
 }

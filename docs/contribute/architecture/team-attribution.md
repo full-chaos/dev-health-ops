@@ -723,7 +723,8 @@ project's items by id. Now:
   (`loadTeamRepoOwnershipProjectLinks`) takes the newest version of each row key first and filters
   `valid_to` after, the same two-level `argMax` form as the attribution cascade (`LoadProjects`).
   Test: `TestTeamRepoOwnershipProjectLinksLeaveOutAClosedRowBeforeAMerge`.
-- Linear and GitLab still have their own insert-only writers; a
+- Linear still has its own insert-only writer; GitLab plans its rows through the same function since CHAOS-8952
+  (section 0.4a); a
   census test (`TestJiraOwnershipWriterCensus`) names every writer of the table and fails for a new Jira
   writer that does not plan its rows through the shared function.
 - The key-built `projects` rows written earlier are removed by a one-time operator verb, see section 1.1.
@@ -1119,8 +1120,34 @@ rule, `PlanOwnershipSnapshot` (a repo full name stands in for the project id). S
 - a grant that is still returned keeps the `valid_from` of its earliest open row, so a repeat run replaces the row instead
   of adding one, and an older open duplicate of the same grant is closed.
 
-GitLab writes `team_project_ownership` (`source = 'provider_access'`), not `team_repo_ownership`; it has no repo-ownership
-rows to close.
+**GitLab `provider_access` project ownership is a snapshot, not an append (CHAOS-8952).** GitLab writes
+`team_project_ownership` (`source = 'provider_access'`), not `team_repo_ownership`. Each GitLab team catalog run that
+selects projects (`GitLabTeamCatalogCollector.CollectTeamCatalog`, `internal/providersync/gitlab_team_catalog_route.go`)
+asks `GitLabTeamCatalogClickHouseEffects.SnapshotOwnership` for the rows of the ownership write: the grants the group
+`/projects` listings returned, plus a closing version (the same sort key written again with `valid_to` set) of every
+open row GitLab no longer returns. It is the same one rule as GitHub and Jira, `PlanOwnershipSnapshot` (the project path
+is the project id); only the open-row read and the listed-team set are GitLab's. Scope of a close, all of it required:
+
+- org = the run's org, `provider = 'gitlab'`, `source = 'provider_access'`. A row of another org, another source
+  (`manual`) or another provider (jira, linear, github) is never read and never closed, even with the same team id and
+  project id.
+- only the teams whose group `/projects` listing was read in this run (`GitLabTeamCatalogRows.OwnershipListedTeamIDs`:
+  the root group and every subgroup of the walk). A group that GitLab no longer lists (a deleted subgroup) is not listed,
+  so its rows stay open: closing a deleted group is out of scope, as for GitHub. A group listed with no project is a
+  real, complete answer, and its rows close. A project held by a group and by its subgroup is closed only where the
+  listing dropped it.
+- a failed listing closes nothing: under non-strict the whole walk is skipped (no write at all), under strict the run
+  fails, and a listing that hit its page cap fails the collector (`ErrPaginationCapExceeded`) before any write. A run
+  that did not select projects (teams-only, members-only) writes no ownership and closes nothing.
+- a failed read of the open rows fails the run before the ownership write. The team, membership and project rows the
+  run writes earlier are not undone.
+- a grant that is still returned keeps the `valid_from` of its earliest open row: a repeat run replaces the row instead
+  of adding one, and an older open duplicate (the writer before this change stamped each run's time) is closed. A closed
+  row is not read as open, so a repeat run keeps its `valid_to` and a re-grant opens it again.
+
+Tests (real ClickHouse, seeded through the real writers and the collector): `TestGitLabTeamCatalogClosesProviderAccessRowsGitLabNoLongerReturns`
+(11 subtests, in `gitlab_team_catalog_ownership_snapshot_integration_test.go`); the census `TestJiraOwnershipWriterCensus`
+names `SnapshotOwnership` and its planner `gitlabOwnershipSnapshot`.
 
 One path: `run_team_autoimport` → `team_autoimport_<provider>.populate()` → `discover_*` → ClickHouse. (`LinearClient.iter_projects` is vestigial dead code, never a path.)
 

@@ -333,16 +333,18 @@ func externalRecordValues(
 		}, nil
 	case "team.v1":
 		teamID := externalTeamID(system, payload, "id")
-		if err := teamid.Check(system, teamID); err != nil {
+		if err := teamid.CheckPushed(system, teamID); err != nil {
 			return nil, err
 		}
 		// A team id carries the system's prefix, so the system's own key of
 		// the team is kept in native_team_key: the pushed nativeTeamKey, else
-		// the pushed id. The attribution cascade matches a work item's
-		// native team key against it.
+		// the pushed id without the system's prefix. The attribution cascade
+		// matches a work item's native team key against it, and the Jira
+		// project-as-team retire treats a team whose id equals its native key
+		// as a retired project.
 		nativeTeamKey := externalNullableString(payload, "nativeTeamKey")
 		if nativeTeamKey == nil {
-			nativeTeamKey = strings.TrimSpace(stringField(payload, "id"))
+			nativeTeamKey = teamid.Native(system, teamID)
 		}
 		var parentTeamID any
 		if parent := strings.TrimSpace(stringField(payload, "parentTeamId")); parent != "" {

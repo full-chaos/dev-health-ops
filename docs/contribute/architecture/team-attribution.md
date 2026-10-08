@@ -1072,7 +1072,9 @@ A team is its id, and the id is unique in an organization because it carries its
 `teams` sorting key is (org_id, id), without `provider`, and every reader that uses `FINAL`, `GROUP BY id` or
 a bare `team_id` key treats one id as one team; so two providers must never write the same id. ONE function
 builds every provider team id: `teamid.Of(provider, key)` in `internal/teamid`. It is idempotent: an id that
-already carries the prefix gets no second one.
+already carries ANY known provider key (`gh:`, `gl:`, `linear:`, `jira:`, `ms-teams:` and every `team.v1`
+system prefix) keeps it, whatever system writes it, and gets no second one. A custom id with no known key gets
+`<system>:`. The `atlassian:` form folds into `jira:`.
 
 | Writer | `provider` | `id` | `native_team_key` |
 |---|---|---|---|
@@ -1080,7 +1082,8 @@ already carries the prefix gets no second one.
 | GitLab team catalog | `gitlab` | `gl:<full_path>` | the full path |
 | Linear reference catalog (team row, memberships, project ownership) | `linear` | `linear:<team key>` | the team key |
 | Atlassian Teams (`dho sync teams --provider jira`, the automatic Jira team import) | `jira` | `jira:<team uuid>` | the team ARI |
-| External ingest `team.v1` | the source system | `gh:`/`gl:` for github/gitlab, `<system>:` for every other system, then the pushed `id` | the pushed `nativeTeamKey`, else the pushed `id` |
+| External ingest `team.v1` | the source system | `gh:`/`gl:` for github/gitlab, `jira:` for jira and atlassian (the pushed team is the native Atlassian team), `<system>:` for every other system, then the pushed `id`; an id that carries a known key stays | the pushed `nativeTeamKey`, else the pushed `id` without its prefix (`teamid.Native`) |
+| Jira ops-team links (`jira_legacy` rows of `team_project_ownership`) | `jira` | `jira:<ops team id>` | n/a |
 | Admin import (`POST /teams/import`) | `""` | `teamid.Of(provider_type, provider_team_id)`: the same id as the provider's catalog | (observation: `provider_team_id`) |
 | Admin create | `""` | the id the admin gives (unchanged) | NULL |
 
@@ -1089,6 +1092,11 @@ already carries the prefix gets no second one.
   `<org>:linear:<team key>`; only its `team_id` is the prefixed id. A Linear project whose owning team node has
   no key gives no ownership row (the result counts it as `ownership_teams_without_key`): the team's Linear
   uuid never named a stored team.
+- A `team.v1` default `native_team_key` is the id WITHOUT its prefix: the Jira project-as-team retire treats a
+  Jira team whose `native_team_key` equals its `id` as a retired project, so a pushed `jira:platform` must not
+  store `jira:platform` there (`TestAPushedJiraTeamSurvivesTheJiraProjectAsTeamRetire`).
+- The `jira_legacy` ops-team links are written as `jira:<ops team id>`. The first complete snapshot after the
+  deploy closes the unprefixed link and writes the prefixed one (the carry moves the first-seen `valid_from`).
 - Jira team discovery (`GET /teams/discover?provider=jira`) returns `provider_team_id` without the prefix, as
   before; the import adds it again.
 - **Write-time refusal.** The Linear effect validators (team, membership and ownership rows), the Atlassian
@@ -1102,11 +1110,13 @@ already carries the prefix gets no second one.
 - **Old rows.** Rows written before this change keep their bare ids until the carry of CHAOS-8940 rewrites
   them; the two changes reach a deploy together. A full Atlassian Teams run deactivates a bare-id Jira team
   row and closes its open memberships and project links, because the snapshot no longer returns that id.
+  The carry runs before any prefixed writer starts (the Linear walk, the Atlassian write, `team.v1` and the
+  admin import), on the same deploy pin as this change.
 
 Tests: `TestOfPrefixesEveryProviderOnce`, `TestCheckRefusesABareOrEmptyProviderTeamID` (`internal/teamid`);
 `TestEveryLinearTeamIDWriteSiteWritesAPrefixedID` (the route, one row class per write site);
 `TestTheLinearEffectsRefuseABareTeamID`; `TestAtlassianWriteRefusesABareTeamID`;
-`TestTeamV1WritesTheSystemPrefixedTeamID`; `TestImportedTeamIDPrefixesEveryProvider`;
+`TestTeamV1WritesTheSystemPrefixedTeamID`; `TestAPushedJiraTeamSurvivesTheJiraProjectAsTeamRetire`; `TestCheckPushedAcceptsAnyKnownKeyAndRefusesAnEmptyOne`; `TestIdentityV1KeepsAKnownKeyAndLeavesBlanksAlone`; `TestImportedTeamIDPrefixesEveryProvider`;
 `TestNativeTeamResolvesThroughTheNativeTeamKey` (the cascade); `TestLinearTeamKeyArmResolvesToThePrefixedTeamID`
 (the ownership derivation).
 

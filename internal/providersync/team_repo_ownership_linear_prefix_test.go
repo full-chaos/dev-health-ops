@@ -18,6 +18,9 @@ func TestLinearTeamKeyArmResolvesToThePrefixedTeamID(t *testing.T) {
 		"bare row first":         {bare, prefixed},
 		"prefixed row first":     {prefixed, bare},
 		"another provider first": {{Provider: "jira", ID: "jira:CHAOS", NativeTeamKey: "CHAOS"}, prefixed},
+		// A prefixed row with no native_team_key is keyed by its id without
+		// the prefix.
+		"prefixed, no native key": {{Provider: "linear", ID: "linear:CHAOS"}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if !hasResolvableLinearNativeTeamKey(workItems, known) {

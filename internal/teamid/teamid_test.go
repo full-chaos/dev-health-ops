@@ -20,10 +20,25 @@ func TestOfPrefixesEveryProviderOnce(t *testing.T) {
 		{"ms-teams", "abc", "ms-teams:abc"},
 		{"custom", "squad-7", "custom:squad-7"},
 		{"pagerduty", "P123", "pagerduty:P123"},
-		{"atlassian", "x", "atlassian:x"},
-		// A Linear key that looks like another provider's prefix is still a
-		// Linear key.
-		{"linear", "gh:ENG", "linear:gh:ENG"},
+		// An id that already carries a known provider key stays, whatever
+		// provider writes it.
+		{"linear", "gh:ENG", "gh:ENG"},
+		{"custom", "gh:x", "gh:x"},
+		{"custom", "gl:acme/ops", "gl:acme/ops"},
+		{"custom", "linear:ENG", "linear:ENG"},
+		{"custom", "jira:abc", "jira:abc"},
+		{"custom", "pagerduty:P1", "pagerduty:P1"},
+		{"pagerduty", "custom:x", "custom:x"},
+		{"github", "ms-teams:abc", "ms-teams:abc"},
+		// A custom id with no known key gets the system's prefix.
+		{"custom", "squad:7", "custom:squad:7"},
+		{"custom", "unknown:7", "custom:unknown:7"},
+		// A pushed Atlassian team is the native Atlassian team: jira prefix,
+		// and the atlassian: form folds into it.
+		{"atlassian", "u-1", "jira:u-1"},
+		{"atlassian", "atlassian:u-1", "jira:u-1"},
+		{"atlassian", "jira:u-1", "jira:u-1"},
+		{"jira", "atlassian:u-1", "jira:u-1"},
 		{"", " ENG ", "ENG"},
 	}
 	for _, c := range cases {
@@ -47,9 +62,9 @@ func TestCheckRefusesABareOrEmptyProviderTeamID(t *testing.T) {
 		{"github", "platform"},
 		{"gitlab", "acme/ops"},
 		{"custom", "squad-7"},
-		{"linear", "gh:ENG"},
 		{"", "ENG"},
 		{" ", "ENG"},
+		{"atlassian", "atlassian:u-1"},
 	}
 	for _, c := range refused {
 		if err := Check(c.provider, c.id); !errors.Is(err, ErrBareTeamID) {
@@ -84,5 +99,28 @@ func TestNativeStripsOnlyTheProvidersOwnPrefix(t *testing.T) {
 		if got := Native(c.provider, c.id); got != c.want {
 			t.Errorf("Native(%q, %q) = %q, want %q", c.provider, c.id, got, c.want)
 		}
+	}
+}
+
+func TestCheckPushedAcceptsAnyKnownKeyAndRefusesAnEmptyOne(t *testing.T) {
+	for _, c := range []struct{ system, id string }{
+		{"custom", "custom:x"}, {"custom", "gh:x"}, {"linear", "gl:a/b"}, {"atlassian", "jira:u"},
+	} {
+		if err := CheckPushed(c.system, c.id); err != nil {
+			t.Errorf("CheckPushed(%q, %q) = %v, want nil", c.system, c.id, err)
+		}
+	}
+	for _, c := range []struct{ system, id string }{
+		{"custom", "custom:"}, {"custom", "gh:"}, {"custom", "x"}, {"", "gh:"}, {"custom", ""},
+	} {
+		if err := CheckPushed(c.system, c.id); !errors.Is(err, ErrBareTeamID) {
+			t.Errorf("CheckPushed(%q, %q) = %v, want ErrBareTeamID", c.system, c.id, err)
+		}
+	}
+}
+
+func TestNativeOfAPushedAtlassianIDIsTheBareUUID(t *testing.T) {
+	if got := Native("atlassian", Of("atlassian", "atlassian:u-1")); got != "u-1" {
+		t.Fatalf("got %q, want u-1", got)
 	}
 }

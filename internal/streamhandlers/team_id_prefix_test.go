@@ -35,7 +35,12 @@ func TestTeamV1WritesTheSystemPrefixedTeamID(t *testing.T) {
 		{"linear", "linear:ENG", "linear:ENG"},
 		{"custom", "squad-7", "custom:squad-7"},
 		{"pagerduty", "P1", "pagerduty:P1"},
-		{"atlassian", "x", "atlassian:x"},
+		{"atlassian", "x", "jira:x"},
+		{"atlassian", "atlassian:x", "jira:x"},
+		{"jira", "atlassian:x", "jira:x"},
+		{"custom", "gh:x", "gh:x"},
+		{"custom", "jira:platform", "jira:platform"},
+		{"jira", "jira:platform", "jira:platform"},
 	}
 	for _, c := range cases {
 		t.Run(c.system+" "+c.id, func(t *testing.T) {
@@ -53,9 +58,10 @@ func TestTeamV1WritesTheSystemPrefixedTeamID(t *testing.T) {
 			if values[12] != c.system {
 				t.Fatalf("provider = %v, want %q", values[12], c.system)
 			}
-			if values[13] != c.id {
-				t.Fatalf("native_team_key = %v, want the pushed id %q", values[13], c.id)
+			if want := teamid.Native(c.system, c.want); values[13] != want {
+				t.Fatalf("native_team_key = %v, want %q (the id without the system prefix)", values[13], want)
 			}
+
 			if values[14] != teamid.Of(c.system, "parent") {
 				t.Fatalf("parent_team_id = %v, want %q", values[14], teamid.Of(c.system, "parent"))
 			}
@@ -99,5 +105,20 @@ func TestIdentityV1PrefixesItsTeamIDs(t *testing.T) {
 	}
 	if got := values[6]; !reflect.DeepEqual(got, []string{"linear:ENG", "linear:OPS"}) {
 		t.Fatalf("team_ids = %v, want [linear:ENG linear:OPS]", got)
+	}
+}
+
+func TestIdentityV1KeepsAKnownKeyAndLeavesBlanksAlone(t *testing.T) {
+	values, err := externalRecordValues(externalSinkBatch{
+		Pointer: externalPointer{OrgID: "org-1", SourceSystem: "custom", SourceInstance: "instance"},
+	}, externalSinkRecord{Kind: "identity.v1", ExternalID: "u", Payload: map[string]any{
+		"canonicalId": "ada@example.test", "updatedAt": "2026-10-08T11:00:00Z",
+		"teamIds": []any{"gh:x", "squad", "  ", ""},
+	}}, time.Date(2026, 10, 8, 12, 0, 0, 0, time.UTC), &ExternalRecomputeScope{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := values[6]; !reflect.DeepEqual(got, []string{"gh:x", "custom:squad", "  ", ""}) {
+		t.Fatalf("team ids = %#v, want [gh:x custom:squad \"  \" \"\"]", got)
 	}
 }

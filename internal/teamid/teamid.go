@@ -27,19 +27,52 @@ func Prefix(provider string) string {
 		return "gh:"
 	case "gitlab":
 		return "gl:"
+	case "atlassian":
+		// A pushed Atlassian team is the team the native Atlassian Teams
+		// sync names, so it takes the jira prefix.
+		return "jira:"
 	default:
 		return provider + ":"
 	}
 }
 
+// knownKeys are the prefixes a team id can already carry: the native
+// providers' and every team.v1 system's.
+var knownKeys = []string{"gh:", "gl:", "linear:", "jira:", "pagerduty:", "custom:", "ms-teams:"}
+
+// HasKey reports whether the trimmed id already carries a known provider
+// prefix with something after it.
+func HasKey(id string) bool {
+	id = strings.TrimSpace(id)
+	for _, k := range knownKeys {
+		if strings.HasPrefix(id, k) && strings.TrimSpace(id[len(k):]) != "" {
+			return true
+		}
+	}
+	return false
+}
+
+// canonical folds the "atlassian:" alias into "jira:".
+func canonical(id string) string {
+	if rest, ok := strings.CutPrefix(id, "atlassian:"); ok {
+		return "jira:" + rest
+	}
+	return id
+}
+
 // Of returns the team id of a provider's native team key or id: the
 // provider's prefix plus the trimmed key. It is idempotent: an id that
-// already carries the provider's prefix gets no second one. With no
-// provider it returns the trimmed id unchanged; Check refuses such an id
-// at a provider writer.
+// already carries any known provider prefix keeps it, whatever provider
+// writes it, and gets no second one. A key without a known prefix gets the
+// provider's. With no provider it returns the trimmed id unchanged; Check
+// refuses such an id at a provider writer.
 func Of(provider, id string) string {
+	id = canonical(strings.TrimSpace(id))
+	if HasKey(id) {
+		return id
+	}
 	prefix := Prefix(provider)
-	return prefix + strings.TrimPrefix(strings.TrimSpace(id), prefix)
+	return prefix + strings.TrimPrefix(id, prefix)
 }
 
 // Native returns the provider's own key of a team id: the id without the
@@ -60,4 +93,13 @@ func Check(provider, id string) error {
 		return fmt.Errorf("%w: %s team id %q", ErrBareTeamID, strings.TrimSpace(provider), id)
 	}
 	return nil
+}
+
+// CheckPushed refuses a pushed team id (team.v1) that is empty after its
+// prefix. An id that carries another known provider's prefix is accepted.
+func CheckPushed(system, id string) error {
+	if HasKey(id) {
+		return nil
+	}
+	return Check(system, id)
 }

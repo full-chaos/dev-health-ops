@@ -539,6 +539,8 @@ func TestTypeSafeCancelDuringRequestIsNotRetried(t *testing.T) {
 	}
 }
 
+// CHAOS-8914: a refused connection is its own class (nothing was sent); it is
+// retried once like every transport failure.
 func TestTypeSafeTransportFailureIsRetriedAndNamesNoURL(t *testing.T) {
 	server := httptest.NewServer(http.NotFoundHandler())
 	url := server.URL
@@ -552,8 +554,13 @@ func TestTypeSafeTransportFailureIsRetriedAndNamesNoURL(t *testing.T) {
 	client.sleep = func(context.Context, time.Duration) bool { return true }
 	_, err = client.SendBody(context.Background(), tsBody)
 	se := mustSystemOneError(t, err)
-	if se.Class != SystemOneClassTransport || len(se.Attempts) != 2 {
+	if se.Class != SystemOneClassRefused || len(se.Attempts) != 2 {
 		t.Fatalf("error=%+v", se)
+	}
+	for _, attempt := range se.Attempts {
+		if attempt.Class != string(SystemOneClassRefused) || attempt.StatusCode != 0 {
+			t.Fatalf("attempt = %+v", attempt)
+		}
 	}
 	assertNoSentinels(t, err.Error(), logs.String(), unwrapAll(err))
 	if strings.Contains(err.Error()+logs.String(), url) {
@@ -1369,5 +1376,33 @@ func TestTypeSafeKeyIsTrimmedOnceForLengthBearerAndRedaction(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+// A connection that the peer accepts and then closes is a transport failure,
+// not a refused connection: a request may have been sent.
+func TestTypeSafeAClosedConnectionIsATransportFailureNotARefusal(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hijacker, ok := w.(http.Hijacker)
+		if !ok {
+			t.Error("the test server cannot hijack")
+			return
+		}
+		conn, _, err := hijacker.Hijack()
+		if err == nil {
+			_ = conn.Close()
+		}
+	}))
+	t.Cleanup(server.Close)
+	client, err := NewTypeSafeClient(TypeSafeClientConfig{APIKey: secrets.NewHidden(tsKey), BaseURL: server.URL, UnsafeAllowAnyBaseURLForTest: true,
+		Logger: slog.New(slog.NewJSONHandler(&bytes.Buffer{}, nil))})
+	if err != nil {
+		t.Fatal(err)
+	}
+	client.sleep = func(context.Context, time.Duration) bool { return true }
+	_, err = client.SendBody(context.Background(), tsBody)
+	se := mustSystemOneError(t, err)
+	if se.Class != SystemOneClassTransport || len(se.Attempts) != 2 {
+		t.Fatalf("error=%+v", se)
 	}
 }

@@ -472,6 +472,45 @@ type investmentShadowAttemptLabels struct {
 	state string
 }
 
+// InvestmentServedRun is what one served decision run of investment.materialize
+// reports (CHAOS-8914): with LLM_PROVIDER=typesafe the decision backend writes
+// the categorization that users see, and these counts are its outcomes. Every
+// label is a member of a closed set; no org id, no work unit id, no free text.
+// Mirrors the investment package's own outcome set as plain strings, since
+// jobruntime must not import that package; investment's tests pin the two
+// sets against each other.
+type InvestmentServedRun struct {
+	// Model is the requested model id. One outside investmentShadowModels is
+	// counted under investmentShadowModelOther.
+	Model string
+	// Outcomes counts classifications by one of InvestmentServedOutcomes.
+	Outcomes map[string]int
+}
+
+// InvestmentServedOutcomes is the closed set of outcomes of one served
+// decision classification, in render order: the three states that write a
+// row from the model's answer, an unusable answer, an adapter defect, and a
+// failed request by class (the unit then keeps its last row).
+func InvestmentServedOutcomes() []string {
+	return []string{
+		"ok", "zero_support", "evidence_none", "invalid_answer", "adapter_defect",
+		"timeout", "refused", "server_error", "rate_limited", "rejected", "transport_other",
+	}
+}
+
+// InvestmentServedMetricNames is every metric name of the served decision
+// mode, in render order. writeInvestmentServedRun renders exactly these.
+func InvestmentServedMetricNames() []string {
+	return []string{investmentServedOutcomesMetric}
+}
+
+const investmentServedOutcomesMetric = "dev_health_investment_served_outcomes_total"
+
+type investmentServedOutcomeLabels struct {
+	model   string
+	outcome string
+}
+
 // IncidentValidFromGuardReason labels one operational_service_repository_mappings
 // row matched by IncidentExecutor's loader (CHAOS-4269/CHAOS-4295): whether
 // it already had a non-NULL valid_from (would have matched the OLD Python
@@ -1429,6 +1468,9 @@ type MetricsCollector struct {
 	investmentShadowPanicsRecovered    uint64
 	investmentShadowAttemptWriteErrors uint64
 	investmentShadowAttemptRowsDropped uint64
+	// investmentServedOutcomes (CHAOS-8914): the outcomes of the served
+	// decision mode -- see InvestmentServedRun.
+	investmentServedOutcomes map[investmentServedOutcomeLabels]uint64
 	// incidentValidFromGuardRows (CHAOS-4269/CHAOS-4295): per-reason counter
 	// of operational_service_repository_mappings rows IncidentExecutor's
 	// loader matched, split by whether the NULL-OK valid_from guard was
@@ -1645,6 +1687,7 @@ var _ TouchedDaysDrainObserver = (*MetricsCollector)(nil)
 var _ TeamRepoOwnershipDerivationObserver = (*MetricsCollector)(nil)
 var _ InvestmentRepoAttributionObserver = (*MetricsCollector)(nil)
 var _ InvestmentShadowPhaseObserver = (*MetricsCollector)(nil)
+var _ InvestmentServedRunObserver = (*MetricsCollector)(nil)
 var _ TeamCatalogObserver = (*MetricsCollector)(nil)
 var _ WorkGraphLeaseObserver = (*MetricsCollector)(nil)
 var _ RemainingMetricsLeaseObserver = (*MetricsCollector)(nil)
@@ -1723,6 +1766,7 @@ func NewMetricsCollector(dimensions MetricDimensions) (*MetricsCollector, error)
 		teamRepoOwnershipResolutionArm:       make(map[TeamRepoOwnershipResolutionArm]uint64, len(teamRepoOwnershipResolutionArms())),
 		investmentRepoAttribution:            make(map[InvestmentRepoAttributionSource]uint64, len(investmentRepoAttributionSources())),
 		investmentShadowAttempts:             make(map[investmentShadowAttemptLabels]uint64),
+		investmentServedOutcomes:             make(map[investmentServedOutcomeLabels]uint64),
 		investmentShadowAttemptLatency:       newHistogramWithBounds(investmentShadowLatencyBuckets),
 		investmentShadowStops:                make(map[string]uint64, len(InvestmentShadowStopReasons())),
 		incidentValidFromGuardRows:           make(map[IncidentValidFromGuardReason]uint64, len(incidentValidFromGuardReasons())),
@@ -2634,6 +2678,30 @@ func (collector *MetricsCollector) ObserveInvestmentShadowPhase(phase Investment
 	collector.investmentShadowPanicsRecovered += uint64(phase.PanicsRecovered)
 	collector.investmentShadowAttemptWriteErrors += uint64(phase.AttemptWriteErrors)
 	collector.investmentShadowAttemptRowsDropped += uint64(phase.AttemptRowsDropped)
+	return nil
+}
+
+// ObserveInvestmentServedRun records the outcomes of one served decision run
+// (CHAOS-8914). It refuses, and records nothing, when an outcome is outside its
+// closed set or a count is negative.
+func (collector *MetricsCollector) ObserveInvestmentServedRun(run InvestmentServedRun) error {
+	for outcome, count := range run.Outcomes {
+		if !slices.Contains(InvestmentServedOutcomes(), outcome) {
+			return errors.New("investment served outcome is not registered")
+		}
+		if count < 0 {
+			return errors.New("investment served outcome count cannot be negative")
+		}
+	}
+	model := run.Model
+	if !slices.Contains(investmentShadowModels, model) {
+		model = investmentShadowModelOther
+	}
+	collector.mu.Lock()
+	defer collector.mu.Unlock()
+	for outcome, count := range run.Outcomes {
+		collector.investmentServedOutcomes[investmentServedOutcomeLabels{model: model, outcome: outcome}] += uint64(count)
+	}
 	return nil
 }
 
@@ -3709,6 +3777,7 @@ func (collector *MetricsCollector) PrometheusText() string {
 	collector.writeTeamRepoOwnershipDerivation(&output)
 	collector.writeInvestmentRepoAttribution(&output)
 	collector.writeInvestmentShadowPhase(&output)
+	collector.writeInvestmentServedRun(&output)
 	collector.writeIncidentValidFromGuard(&output)
 	collector.writeTeamCatalogDispatch(&output)
 	collector.writeTeamCatalogRowsWritten(&output)
@@ -4328,6 +4397,20 @@ func (collector *MetricsCollector) writeInvestmentShadowPhase(output *strings.Bu
 	writeUintSample(output, investmentShadowAttemptWriteErrorsMetric, nil, collector.investmentShadowAttemptWriteErrors)
 	writeMetadata(output, investmentShadowAttemptRowsDroppedMetric, "llm_categorization_attempts rows the investment shadow phase did not write because the buffer of the run was at its row cap.", "counter")
 	writeUintSample(output, investmentShadowAttemptRowsDroppedMetric, nil, collector.investmentShadowAttemptRowsDropped)
+}
+
+// writeInvestmentServedRun renders the outcome counter of the served decision
+// mode, every series pre-seeded at zero: with LLM_PROVIDER not typesafe (the
+// default) every series reads 0.
+func (collector *MetricsCollector) writeInvestmentServedRun(output *strings.Builder) {
+	writeMetadata(output, investmentServedOutcomesMetric, "Classifications of the served decision mode of investment.materialize (LLM_PROVIDER=typesafe), by provider, requested model and outcome: ok, zero_support and evidence_none write a row from the model's answer; invalid_answer and adapter_defect write the invalid_llm_output prior row; timeout, refused, server_error, rate_limited, rejected and transport_other are failed requests, and the unit keeps its last row (rejected ends the run) (CHAOS-8914).", "counter")
+	for _, model := range investmentShadowModels {
+		for _, outcome := range InvestmentServedOutcomes() {
+			writeUintSample(output, investmentServedOutcomesMetric,
+				[]metricLabel{{"provider", investmentShadowProvider}, {"model", model}, {"outcome", outcome}},
+				collector.investmentServedOutcomes[investmentServedOutcomeLabels{model: model, outcome: outcome}])
+		}
+	}
 }
 
 // writeIncidentValidFromGuard renders CHAOS-4269/CHAOS-4295's per-reason

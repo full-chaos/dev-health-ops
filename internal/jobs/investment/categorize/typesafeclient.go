@@ -439,6 +439,7 @@ const (
 	SystemOneClassInvalid       SystemOneClass = "invalid_request" // 400, 422: not retried
 	SystemOneClassTimeout       SystemOneClass = "timeout"         // retried once
 	SystemOneClassTransport     SystemOneClass = "transport"       // retried once
+	SystemOneClassRefused       SystemOneClass = "refused"         // connection refused: nothing was sent; retried once
 	SystemOneClassUnexpected    SystemOneClass = "unexpected_status"
 	SystemOneClassTooLarge      SystemOneClass = "response_too_large"
 	SystemOneClassDecode        SystemOneClass = "decode" // 200 with a body that is not a JSON object
@@ -606,8 +607,13 @@ func (c *TypeSafeClient) once(ctx context.Context, body []byte, lenient bool) (S
 		transport := &httpTransportError{cause: logging.TransportFailure(err)}
 		class, llm := c.classify(transport, 0, nil)
 		// ctx is alive here, so a "deadline" is the client's own Timeout.
-		if tc := logging.TransportClass(err); tc == "timeout" || tc == "deadline" {
+		switch tc := logging.TransportClass(err); tc {
+		case "timeout", "deadline":
 			class, llm.kind = SystemOneClassTimeout, llmErrorTimeout
+		case "refused":
+			// Its own class: the request never left this host. The kind stays
+			// transport, so the retry decision is unchanged.
+			class = SystemOneClassRefused
 		}
 		att.Class = string(class)
 		return SystemOneResult{}, att, &SystemOneError{Class: class, cause: llm}

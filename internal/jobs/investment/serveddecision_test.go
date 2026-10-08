@@ -253,13 +253,13 @@ func TestAServedRequestFailureHasNoOutcomeAndSaysWhetherItRecurs(t *testing.T) {
 	}{
 		{"an invalid request", func(int) jevReply {
 			return jevReply{status: http.StatusUnprocessableEntity, body: []byte(`{"error":"bad"}`)}
-		}, "llm_error", false, 1},
+		}, servedOutcomeTransportOther, false, 1},
 		{"rate limited two times", func(int) jevReply {
 			return jevReply{status: http.StatusTooManyRequests, headers: map[string]string{"Retry-After": "0.02"}, body: []byte(`{}`)}
-		}, "rate_limit", false, 2},
+		}, servedOutcomeRateLimited, false, 2},
 		{"a rejected key", func(int) jevReply {
 			return jevReply{status: http.StatusUnauthorized, body: []byte(`{}`)}
-		}, "", true, 1}, // the class of a rejected key is the client's wording; only "deterministic" is the contract here
+		}, servedOutcomeRejected, true, 1},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -274,7 +274,7 @@ func TestAServedRequestFailureHasNoOutcomeAndSaysWhetherItRecurs(t *testing.T) {
 				t.Fatalf("err = %v, want a served failure", err)
 			}
 			class, deterministic := llmFailureOf(err)
-			if (tc.class != "" && class != tc.class) || class == "" || deterministic != tc.deterministic {
+			if class != tc.class || deterministic != tc.deterministic {
 				t.Errorf("class %q deterministic %v, want %q %v", class, deterministic, tc.class, tc.deterministic)
 			}
 			if got, want := served.keepsLastRow(entry.index), !tc.deterministic; got != want {
@@ -499,7 +499,7 @@ func TestTheRunUsageOfAServedRunHoldsEveryBilledResponse(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(outcomes) != 2 || stats.LLMFailures != 1 || stats.LLMFailureCounts["model_mismatch"] != 1 {
+	if len(outcomes) != 2 || stats.LLMFailures != 1 || stats.LLMFailureCounts[servedOutcomeInvalidAnswer] != 1 {
 		t.Fatalf("outcomes %d failures %d counts %v", len(outcomes), stats.LLMFailures, stats.LLMFailureCounts)
 	}
 	if stats.LLMCalls != 3 || stats.LLMInputTokens != 2383+1000+2383 || stats.LLMOutputTokens != 3*368 {

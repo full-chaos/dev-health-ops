@@ -35,9 +35,9 @@ import (
 	"errors"
 	"log/slog"
 	"math"
-	"strings"
 	"sync"
 
+	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/investment/categorize"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/investment/categorize/decision"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/investment/chwrite"
@@ -67,6 +67,107 @@ const (
 // by the next run.
 const servedLowQualityStatus = categorize.StatusInvalidLLMOutput
 
+// Outcomes of one served classification (CHAOS-8914): a closed set, a metric
+// label and the failure class of a failed request.
+const (
+	servedOutcomeOK             = "ok"
+	servedOutcomeZeroSupport    = "zero_support"
+	servedOutcomeEvidenceNone   = "evidence_none"
+	servedOutcomeInvalidAnswer  = "invalid_answer"
+	servedOutcomeAdapterDefect  = "adapter_defect"
+	servedOutcomeTimeout        = "timeout"
+	servedOutcomeRefused        = "refused"
+	servedOutcomeServerError    = "server_error"
+	servedOutcomeRateLimited    = "rate_limited"
+	servedOutcomeRejected       = "rejected"
+	servedOutcomeTransportOther = "transport_other"
+)
+
+// servedOutcomes is the closed set, in the collector's render order.
+func servedOutcomes() []string {
+	return []string{
+		servedOutcomeOK, servedOutcomeZeroSupport, servedOutcomeEvidenceNone, servedOutcomeInvalidAnswer,
+		servedOutcomeAdapterDefect, servedOutcomeTimeout, servedOutcomeRefused, servedOutcomeServerError,
+		servedOutcomeRateLimited, servedOutcomeRejected, servedOutcomeTransportOther,
+	}
+}
+
+// servedOutcomeOf is the outcome of a classification with its bounded state.
+// A failed request is named by the class of its LAST HTTP attempt (the one
+// that decided it); a request_failed state with a response (a body that is not
+// JSON, a model outside the prefix rule) is an unusable answer.
+func servedOutcomeOf(state string, exchange *shadowExchange) string {
+	switch state {
+	case decision.StateOK:
+		return servedOutcomeOK
+	case decision.StateZeroSupport:
+		return servedOutcomeZeroSupport
+	case decision.StateEvidenceNone:
+		return servedOutcomeEvidenceNone
+	case decision.StateAdapterDefect:
+		return servedOutcomeAdapterDefect
+	case decision.StateRequestFailed:
+	default:
+		return servedOutcomeInvalidAnswer
+	}
+	last := ""
+	if exchange != nil && len(exchange.attempts) > 0 {
+		last = exchange.attempts[len(exchange.attempts)-1].Class
+	}
+	switch categorize.SystemOneClass(last) {
+	case "":
+		if exchange != nil && len(exchange.attempts) > 0 {
+			return servedOutcomeInvalidAnswer
+		}
+		return servedOutcomeTransportOther
+	case categorize.SystemOneClassTimeout:
+		return servedOutcomeTimeout
+	case categorize.SystemOneClassRefused:
+		return servedOutcomeRefused
+	case categorize.SystemOneClassServer:
+		return servedOutcomeServerError
+	case categorize.SystemOneClassRateLimit:
+		return servedOutcomeRateLimited
+	case categorize.SystemOneClassAuth, categorize.SystemOneClassModelNotFound:
+		return servedOutcomeRejected
+	default:
+		return servedOutcomeTransportOther
+	}
+}
+
+// servedSentCalls is 1 when an attempt of the classification left this host,
+// else 0: a refused connection sent nothing, so it is no call in the run's
+// usage row.
+func servedSentCalls(exchange *shadowExchange) int {
+	if exchange == nil {
+		return 0
+	}
+	for _, attempt := range exchange.attempts {
+		if attempt.Class != string(categorize.SystemOneClassRefused) {
+			return 1
+		}
+	}
+	return 0
+}
+
+// ServedObserver receives the outcome counts of one served decision run. A
+// narrow interface, same pattern as ShadowObserver.
+type ServedObserver interface {
+	ObserveServedRun(model string, outcomes map[string]int)
+}
+
+// CollectorServedObserver adapts the metrics collector to ServedObserver.
+type CollectorServedObserver struct {
+	Collector *jobruntime.MetricsCollector
+}
+
+func (observer CollectorServedObserver) ObserveServedRun(model string, outcomes map[string]int) {
+	if observer.Collector == nil {
+		return
+	}
+	_ = observer.Collector.ObserveInvestmentServedRun(jobruntime.InvestmentServedRun{Model: model, Outcomes: outcomes})
+}
+
 // servedClassifier is the decision completer as the served mode uses it.
 type servedClassifier interface {
 	Classify(ctx context.Context, bundle units.TextBundle) (decision.Classification, error)
@@ -91,6 +192,8 @@ type ServedDecision struct {
 	lowQuality  map[int]struct{}
 	keptLastRow map[int]struct{}
 	states      map[string]int
+	outcomes    map[string]int
+	observer    ServedObserver
 	attemptRows int
 	warnLogs    int
 	defectLogs  int
@@ -119,8 +222,15 @@ func newServedDecision(sender systemOneSender, logger *slog.Logger) (*ServedDeci
 		classifier: completer, identity: identity, stamp: shadowConfigStamp(identity),
 		logger: logger, closer: sender.Close,
 		ledger: &shadowLedger{limit: servedNoSpendCap}, attempts: chwrite.NewAttemptBuffer(0),
-		lowQuality: map[int]struct{}{}, keptLastRow: map[int]struct{}{}, states: map[string]int{},
+		lowQuality: map[int]struct{}{}, keptLastRow: map[int]struct{}{}, states: map[string]int{}, outcomes: map[string]int{},
 	}, nil
+}
+
+// SetObserver wires the optional metrics sink. Nil is tolerated.
+func (served *ServedDecision) SetObserver(observer ServedObserver) {
+	if served != nil {
+		served.observer = observer
+	}
 }
 
 // Close releases the client of the backend.
@@ -156,26 +266,6 @@ func llmFailureOf(err error) (class string, deterministic bool) {
 	return categorize.FailureClass(err), categorize.IsDeterministicFailure(err)
 }
 
-// servedFailureClass reads the class of a request_failed classification from
-// its detail code ("request_failed:<class>"). A class outside the code shape
-// is "llm_error".
-func servedFailureClass(classification decision.Classification) string {
-	const prefix = decision.StateRequestFailed + ":"
-	for _, code := range classification.Errors {
-		if !strings.HasPrefix(code, prefix) {
-			continue
-		}
-		class := strings.TrimPrefix(code, prefix)
-		if cut := strings.IndexByte(class, ':'); cut >= 0 {
-			class = class[:cut]
-		}
-		if class != "" && shadowShaped(class, shadowMaxCodeBytes, "_") {
-			return class
-		}
-	}
-	return "llm_error"
-}
-
 // categorize is the served categorization of one unit: one request, no repair,
 // no second backend. It returns the outcome of the unit, or an error when the
 // unit has none (a failed request, a cancelled context).
@@ -195,8 +285,10 @@ func (served *ServedDecision) categorize(ctx context.Context, cfg Config, entry 
 		served.attempts.Add(row)
 	}
 
+	label := servedOutcomeOf(state, result.exchange)
 	served.mu.Lock()
 	served.states[state]++
+	served.outcomes[label]++
 	served.attemptRows += len(rows)
 	if result.panicked {
 		served.panics++
@@ -205,8 +297,8 @@ func (served *ServedDecision) categorize(ctx context.Context, cfg Config, entry 
 
 	if state == decision.StateRequestFailed {
 		failure := &servedFailure{
-			class: servedFailureClass(classification), deterministic: classification.Stop,
-			calls: classification.LLMCalls, inputTokens: classification.InputTokens, outputTokens: classification.OutputTokens,
+			class: label, deterministic: classification.Stop,
+			calls: servedSentCalls(result.exchange), inputTokens: classification.InputTokens, outputTokens: classification.OutputTokens,
 		}
 		if !failure.deterministic {
 			served.mu.Lock()
@@ -396,7 +488,17 @@ func (served *ServedDecision) finish(ctx context.Context, writer *chwrite.Writer
 		slog.Bool("attempt_write_failed", failed),
 		slog.Int("panics_recovered", served.panics),
 	)
+	for _, outcome := range servedOutcomes() {
+		attrs = append(attrs, slog.Int("outcome_"+outcome, served.outcomes[outcome]))
+	}
 	served.logger.InfoContext(ctx, "investment served decision complete", attrs...)
+	if served.observer != nil {
+		outcomes := make(map[string]int, len(served.outcomes))
+		for outcome, count := range served.outcomes {
+			outcomes[outcome] = count
+		}
+		served.observer.ObserveServedRun(served.identity.Model, outcomes)
+	}
 }
 
 // servedDecisionProvider is the Provider of a materializer that the decision

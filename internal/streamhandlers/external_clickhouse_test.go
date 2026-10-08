@@ -684,3 +684,22 @@ func TestClickHouseExternalSinkIsolatesAFailingKind(t *testing.T) {
 		}
 	})
 }
+
+// An identity.v1 push writes prefixed team ids into identities.team_ids, so
+// the team id carry runs before it too.
+func TestTeamIDCarryRunsBeforeAnIdentityOnlyPush(t *testing.T) {
+	connection := &productSink{batch: &productBatch{}}
+	sink, err := NewClickHouseExternalBatchSink(connection)
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := externalSinkBatch{Pointer: externalTestPointer(), SourceID: uuid.New(), Records: []externalSinkRecord{
+		externalSinkFixture("identity.v1", map[string]any{"canonicalId": "ada", "teamIds": []any{"team-a"}, "updatedAt": "2026-07-23T11:00:00Z"}),
+	}}
+	if _, err := sink.Write(context.Background(), source); err != nil {
+		t.Fatal(err)
+	}
+	if connection.carryCountCalls != 1 {
+		t.Fatalf("team id carry count reads = %d, want 1 before the identity.v1 write", connection.carryCountCalls)
+	}
+}

@@ -483,7 +483,7 @@ func (worker *teamRepoOwnershipDerivationWorker) Work(ctx context.Context, job *
 		}
 		if len(stats.Ties) > 0 {
 			_ = worker.observer.ObserveTeamRepoOwnershipDerivation(
-				jobruntime.TeamRepoOwnershipDerivationOutcomeOwnerTiesKept, len(stats.Ties),
+				jobruntime.TeamRepoOwnershipDerivationOutcomeOwnerTieUnresolved, len(stats.Ties),
 			)
 		}
 		_ = worker.observer.ObserveTeamRepoOwnershipDerivation(outcome, written)
@@ -504,7 +504,7 @@ func (worker *teamRepoOwnershipDerivationWorker) Work(ctx context.Context, job *
 		for _, tie := range stats.Ties[:min(len(stats.Ties), teamRepoOwnershipTieLogLimit)] {
 			tiedRepoIDs = append(tiedRepoIDs, tie.RepoID)
 		}
-		synclog.Default().Warn(ctx, synclog.MsgTeamRepoOwnershipOwnerTiesKept, synclog.Org(synclog.ParseID(job.Args.OrgID)), synclog.Run(synclog.ParseID(job.Args.Payload.SyncRunID)), synclog.Count(synclog.KeyOwnerTies, len(stats.Ties)), synclog.IDs(synclog.KeyRepoIDs, synclog.ParseIDs(tiedRepoIDs)))
+		synclog.Default().Warn(ctx, synclog.MsgTeamRepoOwnershipOwnerTieUnresolved, synclog.Org(synclog.ParseID(job.Args.OrgID)), synclog.Run(synclog.ParseID(job.Args.Payload.SyncRunID)), synclog.Count(synclog.KeyOwnerTies, len(stats.Ties)), synclog.IDs(synclog.KeyRepoIDs, synclog.ParseIDs(tiedRepoIDs)))
 	}
 	synclog.Default().Info(ctx, synclog.MsgTeamRepoOwnershipDerivation, synclog.Text(synclog.KeyOutcome, synclog.ParseLabel(string(outcome))), synclog.Org(synclog.ParseID(job.Args.OrgID)), synclog.Run(synclog.ParseID(job.Args.Payload.SyncRunID)), synclog.Count(synclog.KeyRowsWritten, written), synclog.Count(synclog.KeyRowsRetracted, retracted), synclog.Count(synclog.KeyFactsDerived, stats.Derived), synclog.Count(synclog.KeyFactsUnchanged, stats.Unchanged))
 	completed = true

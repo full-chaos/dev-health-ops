@@ -1219,11 +1219,11 @@ func TestRankedOwnerOwnRepoAndDonorCandidatesCountAsNative(t *testing.T) {
 	}
 }
 
-// TestRetractionDiffKeepsEveryOpenRowOfATiedRepo: a full tie names no owner,
-// so every open row of the tied repo stays open -- also one of a third team
-// that is not in the tie -- while the other repos still retract the rows
-// their new ranked owner replaced.
-func TestRetractionDiffKeepsEveryOpenRowOfATiedRepo(t *testing.T) {
+// TestRetractionDiffKeepsOnlyTheTiedTeamsRowsOfATiedRepo: a full tie names
+// no owner, so the open row of a team in the tie stays open, while the open
+// row of a third team that is not in the tie is retracted; other repos still
+// retract the rows their new ranked owner replaced.
+func TestRetractionDiffKeepsOnlyTheTiedTeamsRowsOfATiedRepo(t *testing.T) {
 	tiedRepo, rankedRepo := uuid.New(), uuid.New()
 	repos := map[uuid.UUID]teamRepoOwnershipRepoInfo{
 		tiedRepo:   {FullName: "acme/tied", Provider: "github"},
@@ -1232,18 +1232,20 @@ func TestRetractionDiffKeepsEveryOpenRowOfATiedRepo(t *testing.T) {
 	active := []teamRepoOwnershipActiveRow{
 		{TeamID: "team-a", RepoID: tiedRepo, RepoFullName: "acme/tied"},
 		{TeamID: "team-old", RepoID: tiedRepo, RepoFullName: "acme/tied"},
-		{TeamID: "team-old", RepoID: rankedRepo, RepoFullName: "acme/ranked"},
+		{TeamID: "team-a", RepoID: rankedRepo, RepoFullName: "acme/ranked"},
 	}
 	derived := []DerivedTeamRepoOwnershipRow{{TeamID: "team-new", RepoID: rankedRepo.String()}}
 	ties := []TeamRepoOwnershipTie{{RepoID: tiedRepo.String(), TeamIDs: []string{"team-a", "team-b"}}}
 
 	got := diffTeamRepoOwnershipRetractions(active, derived, ties, repos)
 
-	if len(got) != 1 || got[0].TeamID != "team-old" || got[0].RepoFullName != "acme/ranked" {
-		t.Fatalf("retracted %+v, want only team-old on acme/ranked", got)
+	retracted := map[string]bool{}
+	for _, row := range got {
+		retracted[row.TeamID+" "+row.RepoFullName] = true
 	}
-	if again := diffTeamRepoOwnershipRetractions(active, derived, nil, repos); len(again) != 3 {
-		t.Fatalf("without the tie the diff retracted %+v, want all 3 rows not in the derived set", again)
+	want := map[string]bool{"team-old acme/tied": true, "team-a acme/ranked": true}
+	if !reflect.DeepEqual(retracted, want) {
+		t.Fatalf("retracted %v, want %v (team-a keeps acme/tied only: it is in that tie, not in a tie on acme/ranked)", retracted, want)
 	}
 }
 

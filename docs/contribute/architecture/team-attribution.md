@@ -1585,8 +1585,8 @@ designed-empty case, which is not a failure by itself, or it derived facts it co
 carried, so read `facts_derived` and `facts_unchanged` to tell them apart), `inputs_not_ready`, `error`. A quiet table with
 `unchanged` runs is healthy; a quiet table with `no_signal` runs needs the two counts: `facts_derived=0` is the designed-empty
 case, `facts_derived>0` with `facts_unchanged<facts_derived` is a derivation that did not write what it derived.
-Beside the run's outcome, `owner_ties_kept` counts a run that left one or more repos on a full tie (next paragraph); the run
-also writes a WARN `team_repo_ownership_derivation.owner_ties_kept` log line with `owner_ties` (the count) and `repo_ids`.
+Beside the run's outcome, `owner_tie_unresolved` counts a run that left one or more repos on a full tie (next paragraph); the run
+also writes a WARN `team_repo_ownership_derivation.owner_tie_unresolved` log line with `owner_ties` (the count) and `repo_ids`.
 
 **One owner per repo, ranked by linked share (chris ruling D5432, CHAOS-8945).** When two or more teams reach the same
 repo, the derivation counts each team's candidates per link tier and ranks the teams lexicographically: the most `native`
@@ -1596,11 +1596,14 @@ own `repo_id` (`work_items.type` `pr` or `merge_request`) and its `work_item_dep
 provider-recorded facts and count as `native` (the issue<->PR link builder stamps the same dependency row `native`). An
 issue's own `repo_id` is never a candidate (entity tree: Repository <> Pull request <> Issue <> Project): a GitHub or
 GitLab issue reaches a repo only through its linked pull request rows in `work_graph_issue_pr`, with that link's tier.
-A repo whose only evidence is an issue's own `repo_id` gets no inferred owner. The top team owns the repo; the other teams get no row. A count in a lower tier never
-outweighs a higher tier: one `native` link beats fifty `explicit_text` links. The same ranking applies to every provider:
+A repo whose only evidence is an issue's own `repo_id` gets no inferred owner. The top team owns the repo; the other
+teams get no row. A count in a lower tier never outweighs a higher tier: one `native` link beats fifty `explicit_text` links. The same ranking applies to every provider:
 the team's provider is never an input. A repo is never dropped only because two teams have links to it. Only a **full
-tie** (equal counts at every tier) names no owner: the run does not retract the repo's existing open inferred rows (the
-existing owner stays), writes nothing for the repo, and signals the tie (`owner_ties_kept` + the WARN line above). When
+tie** (equal counts at every tier) names no owner (chris ruling D5432; lead ruling D5448): the run writes nothing for the repo,
+keeps the open inferred rows of the **tied teams** (the existing owner stays when it is one of them), retracts an open
+inferred row of any team that is **not** in the tie, and signals the tie (`owner_tie_unresolved` + the WARN line above).
+A tie with no open row of a tied team leaves the repo without an inferred owner, signalled on every run while the tie
+lasts. When
 the ranked owner of a repo changes, the old owner's row is retracted and the new owner's row written, as before.
 Before this rule, a single `explicit_text` link from a second team dropped the repo and retracted its owner. Pinned by
 `internal/providersync/team_repo_ownership_ranked_owner_integration_test.go` (real ClickHouse, every provider pair) and

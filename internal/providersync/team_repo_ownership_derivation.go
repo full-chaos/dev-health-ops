@@ -223,7 +223,7 @@ type TeamRepoOwnershipDependencyEdge struct {
 //
 // Provenance is the row's work_graph_issue_pr.provenance tier (native,
 // explicit_text, heuristic): it decides how much the link weighs when two
-// teams reach the same repo (see rankTeamRepoOwnershipCandidates).
+// teams reach the same repo (see deriveTeamRepoOwnership).
 type TeamRepoOwnershipIssuePRLink struct {
 	WorkItemID string
 	RepoID     string
@@ -402,8 +402,8 @@ func (counts teamRepoOwnershipLinkCounts) compare(other teamRepoOwnershipLinkCou
 }
 
 // TeamRepoOwnershipTie is a repo that two or more teams reach with equal
-// link counts at every tier. The derivation names no owner for it, and the
-// write side keeps the repo's existing open owner row (no retraction).
+// link counts at every tier. The derivation names no owner for it; the write
+// side keeps the open rows of the tied teams and retracts any other team's.
 type TeamRepoOwnershipTie struct {
 	RepoID  string
 	TeamIDs []string
@@ -427,8 +427,8 @@ type teamRepoOwnershipDerivation struct {
 // first, then explicit_text, then heuristic. The top team owns the repo; the
 // others get no row. A repo is never dropped only because two teams have
 // links to it. Only a full tie (equal counts at every tier) names no owner:
-// it is reported in Ties, and the caller keeps the repo's existing open
-// owner row instead of retracting it.
+// it is reported in Ties, and the caller keeps the tied teams' open rows
+// instead of retracting them.
 func deriveTeamRepoOwnership(
 	// orgID is unused inside this function as of CHAOS-4537 (the last
 	// internal use, reconstructing the linear_team_key identity, is gone --

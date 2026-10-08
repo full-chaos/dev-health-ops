@@ -356,10 +356,10 @@ func TestTeamRepoOwnershipDerivationJobArgsKind(t *testing.T) {
 	}
 }
 
-// TestTeamRepoOwnershipDerivationWorkerSignalsAKeptOwnerTie pins the tie signal: a run that left repos on a full tie (equal link counts
-// at every tier, so no owner was named and the existing owner row stayed open) records the owner_ties_kept outcome beside the run's own
+// TestTeamRepoOwnershipDerivationWorkerSignalsAnUnresolvedOwnerTie pins the tie signal: a run that left repos on a full tie (equal link counts
+// at every tier, so no owner was named) records the owner_tie_unresolved outcome beside the run's own
 // outcome and writes one WARN line with the tie count and the tied repo ids. Not parallel: it replaces the default logger.
-func TestTeamRepoOwnershipDerivationWorkerSignalsAKeptOwnerTie(t *testing.T) {
+func TestTeamRepoOwnershipDerivationWorkerSignalsAnUnresolvedOwnerTie(t *testing.T) {
 	var logged bytes.Buffer
 	previous := slog.Default()
 	slog.SetDefault(slog.New(slog.NewJSONHandler(&logged, nil)))
@@ -376,19 +376,19 @@ func TestTeamRepoOwnershipDerivationWorkerSignalsAKeptOwnerTie(t *testing.T) {
 		t.Fatalf("Work() error = %v, want nil", err)
 	}
 	if len(observer.outcomes) != 2 ||
-		observer.outcomes[0] != jobruntime.TeamRepoOwnershipDerivationOutcomeOwnerTiesKept || observer.written[0] != 1 ||
+		observer.outcomes[0] != jobruntime.TeamRepoOwnershipDerivationOutcomeOwnerTieUnresolved || observer.written[0] != 1 ||
 		observer.outcomes[1] != jobruntime.TeamRepoOwnershipDerivationOutcomeUnchanged {
-		t.Fatalf("observed (outcomes, counts) = (%v, %v), want [owner_ties_kept 1, unchanged]", observer.outcomes, observer.written)
+		t.Fatalf("observed (outcomes, counts) = (%v, %v), want [owner_tie_unresolved 1, unchanged]", observer.outcomes, observer.written)
 	}
 	var found map[string]any
 	for _, line := range strings.Split(strings.TrimSpace(logged.String()), "\n") {
 		var record map[string]any
-		if json.Unmarshal([]byte(line), &record) == nil && record["msg"] == "team_repo_ownership_derivation.owner_ties_kept" {
+		if json.Unmarshal([]byte(line), &record) == nil && record["msg"] == "team_repo_ownership_derivation.owner_tie_unresolved" {
 			found = record
 		}
 	}
 	if found == nil {
-		t.Fatalf("no team_repo_ownership_derivation.owner_ties_kept log line in %q", logged.String())
+		t.Fatalf("no team_repo_ownership_derivation.owner_tie_unresolved log line in %q", logged.String())
 	}
 	repoIDs, _ := found["repo_ids"].([]any)
 	if found["level"] != "WARN" || found["owner_ties"] != float64(1) || len(repoIDs) != 1 || repoIDs[0] != tiedRepo {
@@ -411,7 +411,7 @@ func TestTeamRepoOwnershipDerivationWorkerSendsNoTieSignalWithoutATie(t *testing
 	if len(observer.outcomes) != 1 || observer.outcomes[0] != jobruntime.TeamRepoOwnershipDerivationOutcomeRowsWritten {
 		t.Fatalf("observed outcomes = %v, want [rows_written]", observer.outcomes)
 	}
-	if strings.Contains(logged.String(), "owner_ties_kept") {
+	if strings.Contains(logged.String(), "owner_tie_unresolved") {
 		t.Fatalf("tie log line written on a run without a tie: %q", logged.String())
 	}
 }

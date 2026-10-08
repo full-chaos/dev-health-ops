@@ -12,6 +12,8 @@ import (
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/google/uuid"
+
+	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph/issueprlinks"
 )
 
 // The ranked-owner rule against the real migration chain: a repo that two
@@ -259,6 +261,130 @@ func TestRankedOwnerAnIssuesOwnRepoIsNotACandidateAgainstMigratedSchema(t *testi
 				t.Fatalf("Derive: written=%d retracted=%d, want 0 and 0 (an issue's own repo_id is not a relation)", written, retracted)
 			}
 			org.assertOpenOwners()
+		})
+	}
+}
+
+// TestRankedOwnerFullTieRetractsTheRowOfATeamOutsideTheTie: the repo's
+// owner loses its rank to two other teams that tie with each other. No
+// owner is named, and the old owner -- not in the tie -- is retracted.
+func TestRankedOwnerFullTieRetractsTheRowOfATeamOutsideTheTie(t *testing.T) {
+	ctx, conn := newWorkItemEffectsConn(t)
+	for index, pair := range rankedOwnerIntegrationProviderPairs {
+		t.Run(pair[0]+"_old_owner_"+pair[1]+"_tie", func(t *testing.T) {
+			org := newRankedOwnerOrg(t, ctx, conn, fmt.Sprintf("ranked-third-%d", index))
+			org.ownProject(pair[0], "old-owner")
+			org.link(pair[0], "old-owner", "native", 1)
+			if written, retracted, _ := org.derive(); written != 1 || retracted != 0 {
+				t.Fatalf("first Derive: written=%d retracted=%d, want 1 and 0", written, retracted)
+			}
+			org.assertOpenOwners("old-owner")
+
+			org.ownProject(pair[1], "team-a")
+			org.link(pair[1], "team-a", "native", 2)
+			org.ownProject(pair[0], "team-b")
+			org.link(pair[0], "team-b", "native", 2)
+			written, retracted, stats := org.derive()
+			if written != 0 || retracted != 1 {
+				t.Fatalf("second Derive: written=%d retracted=%d, want 0 and 1 (old-owner is not in the tie)", written, retracted)
+			}
+			org.assertOpenOwners()
+			wantTies := []TeamRepoOwnershipTie{{RepoID: org.repoID.String(), TeamIDs: []string{"team-a", "team-b"}}}
+			if !reflect.DeepEqual(stats.Ties, wantTies) {
+				t.Fatalf("second Derive ties = %+v, want %+v", stats.Ties, wantTies)
+			}
+		})
+	}
+}
+
+// TestRankedOwnerTieWithNoOwnerStaysOwnerlessAndIsReportedEveryRun: a tie
+// on a repo no tied team owns yet names no owner and writes nothing, and
+// every run reports it again while it lasts.
+func TestRankedOwnerTieWithNoOwnerStaysOwnerlessAndIsReportedEveryRun(t *testing.T) {
+	ctx, conn := newWorkItemEffectsConn(t)
+	for index, pair := range rankedOwnerIntegrationProviderPairs {
+		t.Run(pair[0]+"_ties_"+pair[1], func(t *testing.T) {
+			org := newRankedOwnerOrg(t, ctx, conn, fmt.Sprintf("ranked-ownerless-%d", index))
+			org.ownProject(pair[0], "team-a")
+			org.link(pair[0], "team-a", "explicit_text", 1)
+			org.ownProject(pair[1], "team-b")
+			org.link(pair[1], "team-b", "explicit_text", 1)
+			wantTies := []TeamRepoOwnershipTie{{RepoID: org.repoID.String(), TeamIDs: []string{"team-a", "team-b"}}}
+			for run := 1; run <= 2; run++ {
+				written, retracted, stats := org.derive()
+				if written != 0 || retracted != 0 || !reflect.DeepEqual(stats.Ties, wantTies) {
+					t.Fatalf("run %d: written=%d retracted=%d ties=%+v, want 0, 0 and %+v", run, written, retracted, stats.Ties, wantTies)
+				}
+				org.assertOpenOwners()
+			}
+		})
+	}
+}
+
+// writeLinks seeds count issues of the team's project and writes one
+// work_graph_issue_pr row per issue through the production issue<->PR link
+// writer, each at its own PR of the repo. It returns the written links so a
+// caller can write the same keys again.
+func (org *rankedOwnerOrg) writeLinks(provider, teamID, provenance string, count int, at time.Time) []issueprlinks.Link {
+	org.t.Helper()
+	writer, err := issueprlinks.NewWriter(org.conn)
+	if err != nil {
+		org.t.Fatalf("issue-pr link writer: %v", err)
+	}
+	links := make([]issueprlinks.Link, 0, count)
+	for range count {
+		org.issue++
+		org.pr++
+		workItemID := fmt.Sprintf("%s:%s-%d", provider, teamID, org.issue)
+		seedWorkItem(org.t, org.ctx, org.conn, org.orgID, workItemID, provider, uuid.Nil, provider+"-proj-"+teamID, org.at)
+		links = append(links, issueprlinks.Link{OrgID: org.orgID, RepoID: org.repoID, WorkItemID: workItemID, PRNumber: org.pr,
+			Confidence: 1, Provenance: provenance, Evidence: "ranked-owner-test", LastSynced: at})
+	}
+	if err := writer.Write(org.ctx, links); err != nil {
+		org.t.Fatalf("write issue-pr links: %v", err)
+	}
+	return links
+}
+
+// TestRankedOwnerReadsLinksWrittenByTheIssuePRLinkWriter seeds
+// work_graph_issue_pr through the production writer, so the derivation reads
+// the provenance that survives the table's version precedence: a native row
+// outranks a newer explicit_text row of the same (repo, issue, PR) key.
+func TestRankedOwnerReadsLinksWrittenByTheIssuePRLinkWriter(t *testing.T) {
+	ctx, conn := newWorkItemEffectsConn(t)
+	for index, pair := range rankedOwnerIntegrationProviderPairs {
+		t.Run(pair[0]+"_vs_"+pair[1], func(t *testing.T) {
+			older, newer := time.Date(2026, 10, 7, 18, 0, 0, 0, time.UTC), time.Date(2026, 10, 7, 19, 0, 0, 0, time.UTC)
+
+			majority := newRankedOwnerOrg(t, ctx, conn, fmt.Sprintf("ranked-writer-majority-%d", index))
+			majority.ownProject(pair[0], "owner")
+			majority.writeLinks(pair[0], "owner", issueprlinks.ProvenanceNative, 6, older)
+			majority.ownProject(pair[1], "rival")
+			majority.writeLinks(pair[1], "rival", "explicit_text", 2, newer)
+			if written, retracted, _ := majority.derive(); written != 1 || retracted != 0 {
+				t.Fatalf("majority Derive: written=%d retracted=%d, want 1 and 0", written, retracted)
+			}
+			majority.assertOpenOwners("owner")
+
+			precedence := newRankedOwnerOrg(t, ctx, conn, fmt.Sprintf("ranked-writer-precedence-%d", index))
+			precedence.ownProject(pair[0], "three-native")
+			precedence.writeLinks(pair[0], "three-native", issueprlinks.ProvenanceNative, 3, older)
+			precedence.ownProject(pair[1], "four-relinked")
+			relinked := precedence.writeLinks(pair[1], "four-relinked", issueprlinks.ProvenanceNative, 4, older)
+			for i := range relinked {
+				relinked[i].Provenance, relinked[i].LastSynced = "explicit_text", newer
+			}
+			writer, err := issueprlinks.NewWriter(conn)
+			if err != nil {
+				t.Fatalf("issue-pr link writer: %v", err)
+			}
+			if err := writer.Write(ctx, relinked); err != nil {
+				t.Fatalf("rewrite issue-pr links: %v", err)
+			}
+			if written, retracted, _ := precedence.derive(); written != 1 || retracted != 0 {
+				t.Fatalf("precedence Derive: written=%d retracted=%d, want 1 and 0", written, retracted)
+			}
+			precedence.assertOpenOwners("four-relinked")
 		})
 	}
 }

@@ -81,8 +81,9 @@ type teamRepoOwnershipRepoInfo struct {
 // links wins, then the most explicit_text links, then the most heuristic
 // links (deriveTeamRepoOwnership). A repo is never dropped only because two
 // teams have links to it. A full tie (equal counts at every tier) names no
-// owner and is NOT a retraction: the repo's existing open rows stay open,
-// and the run reports the tie in TeamRepoOwnershipDerivationStats.Ties.
+// owner: the open rows of the tied teams stay open (no retraction), a row of
+// any other team is retracted, and the run reports the tie in
+// TeamRepoOwnershipDerivationStats.Ties.
 // Retracted by writing a replacement row under the SAME (org_id, provider,
 // repo_full_name, team_id, source, valid_from) ReplacingMergeTree key with
 // valid_to=now and a newer updated_at, so FINAL/argMax(updated_at) readers
@@ -98,8 +99,9 @@ type TeamRepoOwnershipDerivationStats struct {
 	Derived int
 	// Unchanged is how many of those an already-open row carried unchanged, so the run did not write them.
 	Unchanged int
-	// Ties are the repos two or more teams reach with equal link counts at every tier: the run named no owner for them and
-	// kept their existing open owner rows. Set on every run that reaches the derivation, also when it writes nothing.
+	// Ties are the repos two or more teams reach with equal link counts at every tier: the run named no owner for them, kept
+	// the tied teams' open rows and retracted any other team's. Set on every run that reaches the derivation, also when it
+	// writes nothing.
 	Ties []TeamRepoOwnershipTie
 }
 
@@ -681,9 +683,9 @@ WHERE org_id = ?
 
 // diffTeamRepoOwnershipRetractions returns every activeRows entry whose
 // (team_id, repo_full_name) pair is absent from the newly-derived set,
-// except the rows of a repo in ties: a full tie names no owner, so the
-// repo keeps its existing open owner row -- pure, no I/O, exhaustively
-// unit-testable. Resolves each derived row's
+// except the open row of a team in a tie on that repo: a full tie names no
+// owner, so a tied team's existing open row stays. A row of a team that is
+// not in the tie is retracted -- pure, no I/O, exhaustively unit-testable. Resolves each derived row's
 // repo_full_name via the SAME repos snapshot writeTeamRepoOwnershipRows
 // uses, so a derived row that writeTeamRepoOwnershipRows would itself skip
 // (unresolvable repo_id) never wrongly protects an active row from
@@ -708,15 +710,18 @@ func diffTeamRepoOwnershipRetractions(
 			desired[pair{teamID: row.TeamID, repoFullName: name}] = true
 		}
 	}
-	tied := make(map[string]bool, len(ties))
+	tied := make(map[pair]bool)
 	for _, tie := range ties {
 		if name := repoFullName(tie.RepoID); name != "" {
-			tied[name] = true
+			for _, teamID := range tie.TeamIDs {
+				tied[pair{teamID: teamID, repoFullName: name}] = true
+			}
 		}
 	}
 	var toRetract []teamRepoOwnershipActiveRow
 	for _, row := range activeRows {
-		if desired[pair{teamID: row.TeamID, repoFullName: row.RepoFullName}] || tied[row.RepoFullName] {
+		key := pair{teamID: row.TeamID, repoFullName: row.RepoFullName}
+		if desired[key] || tied[key] {
 			continue
 		}
 		toRetract = append(toRetract, row)

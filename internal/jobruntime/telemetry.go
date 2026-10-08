@@ -316,21 +316,22 @@ func postSyncFanoutOutcomes() []PostSyncFanoutOutcome {
 // inferred (team, repo) claims absent from its new derivation -- a run can
 // both retract stale claims and write fresh ones (or error afterward), and
 // neither fact should shadow the other in telemetry.
-// "owner_ties_kept" is observed separately too, once per run that left one
-// or more repos on a full tie: two or more teams reach the repo with equal
-// link counts at every tier, so the run named no owner and kept the repo's
-// existing open owner row. A WARN log line names the repos.
+// "owner_tie_unresolved" is observed separately too, once per run that left
+// one or more repos on a full tie: two or more teams reach the repo with
+// equal link counts at every tier, so the run named no owner. A tied team's
+// open row stays; a repo with no such row stays ownerless and is signalled
+// on every run while the tie lasts. A WARN log line names the repos.
 type TeamRepoOwnershipDerivationOutcome string
 
 const (
-	TeamRepoOwnershipDerivationOutcomeRowsWritten    TeamRepoOwnershipDerivationOutcome = "rows_written"
-	TeamRepoOwnershipDerivationOutcomeNoSignal       TeamRepoOwnershipDerivationOutcome = "no_signal"
-	TeamRepoOwnershipDerivationOutcomeUnchanged      TeamRepoOwnershipDerivationOutcome = "unchanged"
-	TeamRepoOwnershipDerivationOutcomeInputsNotReady TeamRepoOwnershipDerivationOutcome = "inputs_not_ready"
-	TeamRepoOwnershipDerivationOutcomeError          TeamRepoOwnershipDerivationOutcome = "error"
-	TeamRepoOwnershipDerivationOutcomeRouteMissing   TeamRepoOwnershipDerivationOutcome = "route_missing"
-	TeamRepoOwnershipDerivationOutcomeRowsRetracted  TeamRepoOwnershipDerivationOutcome = "rows_retracted"
-	TeamRepoOwnershipDerivationOutcomeOwnerTiesKept  TeamRepoOwnershipDerivationOutcome = "owner_ties_kept"
+	TeamRepoOwnershipDerivationOutcomeRowsWritten        TeamRepoOwnershipDerivationOutcome = "rows_written"
+	TeamRepoOwnershipDerivationOutcomeNoSignal           TeamRepoOwnershipDerivationOutcome = "no_signal"
+	TeamRepoOwnershipDerivationOutcomeUnchanged          TeamRepoOwnershipDerivationOutcome = "unchanged"
+	TeamRepoOwnershipDerivationOutcomeInputsNotReady     TeamRepoOwnershipDerivationOutcome = "inputs_not_ready"
+	TeamRepoOwnershipDerivationOutcomeError              TeamRepoOwnershipDerivationOutcome = "error"
+	TeamRepoOwnershipDerivationOutcomeRouteMissing       TeamRepoOwnershipDerivationOutcome = "route_missing"
+	TeamRepoOwnershipDerivationOutcomeRowsRetracted      TeamRepoOwnershipDerivationOutcome = "rows_retracted"
+	TeamRepoOwnershipDerivationOutcomeOwnerTieUnresolved TeamRepoOwnershipDerivationOutcome = "owner_tie_unresolved"
 )
 
 func teamRepoOwnershipDerivationOutcomes() []TeamRepoOwnershipDerivationOutcome {
@@ -342,7 +343,7 @@ func teamRepoOwnershipDerivationOutcomes() []TeamRepoOwnershipDerivationOutcome 
 		TeamRepoOwnershipDerivationOutcomeError,
 		TeamRepoOwnershipDerivationOutcomeRouteMissing,
 		TeamRepoOwnershipDerivationOutcomeRowsRetracted,
-		TeamRepoOwnershipDerivationOutcomeOwnerTiesKept,
+		TeamRepoOwnershipDerivationOutcomeOwnerTieUnresolved,
 	}
 }
 
@@ -4358,7 +4359,7 @@ func (collector *MetricsCollector) writeTouchedDaysDrain(output *strings.Builder
 // 2026-08-28, found during the per-file fork audit rather than by codex
 // itself).
 func (collector *MetricsCollector) writeTeamRepoOwnershipDerivation(output *strings.Builder) {
-	writeMetadata(output, "dev_health_team_repo_ownership_derivation_total", "sync.team_repo_ownership_derivation worker outcomes: rows_written, unchanged (every derived fact already carried by an open row), no_signal (derived nothing, not a failure), or error (CHAOS-4365 item 1b); rows_retracted and owner_ties_kept (a repo two or more teams reach with equal link counts at every tier kept its existing owner) are observed beside the run's outcome.", "counter")
+	writeMetadata(output, "dev_health_team_repo_ownership_derivation_total", "sync.team_repo_ownership_derivation worker outcomes: rows_written, unchanged (every derived fact already carried by an open row), no_signal (derived nothing, not a failure), or error (CHAOS-4365 item 1b); rows_retracted and owner_tie_unresolved (a repo two or more teams reach with equal link counts at every tier: no owner named; a tied team's open row stays) are observed beside the run's outcome.", "counter")
 	for _, outcome := range teamRepoOwnershipDerivationOutcomes() {
 		writeUintSample(output, "dev_health_team_repo_ownership_derivation_total",
 			[]metricLabel{{"outcome", string(outcome)}}, collector.teamRepoOwnershipDerivation[outcome])

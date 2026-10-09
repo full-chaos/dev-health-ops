@@ -1387,8 +1387,11 @@ counts the day under both ids. A team id changes for a stored day when a team is
 a provider-keyed id, section 0.4f; a retired project-as-team row, section 0.4c; an admin delete) and when an item or a
 repository moves to another team.
 
-Two rules keep a recomputed day right. Both are structural: a new table or a new resolver cannot leave them out
-without a failed test.
+Two rules keep a recomputed day right. Each is held by a census, not by a list someone must remember: a new
+team-keyed table with no decision fails `stale_team_keys_census_test.go`, and a new read of the `teams` table in the
+daily job that does not apply `internal/teamactive` fails `team_active_census_test.go`. A resolver that takes a team id
+from another source (an ownership row; a stored row of an earlier day, as `ic_finalize` does, see the limits) is held
+by its own test, not by a census.
 
 **1. No resolver resolves to an inactive team.** A team whose newest `teams` row has `is_active = 0` takes no work
 item (`dropInactiveTeamCandidates`, section 0.2) and, with the same test of the newest row
@@ -1477,6 +1480,16 @@ Limits:
   count 0 (a group whose items are all closed; a group with no pull request of unknown origin). Such a row and a row
   of zeros are equal.
 - A reader with no FINAL and no `argMax` sees the old row and the row of zeros until a merge.
+- `ic_landscape_rolling_30d`: the team of a person's point is the team id stored in the person's `user_metrics_daily`
+  rows of the 30-day window; the active resolver is asked only when that is blank. So for up to 30 days after a team id
+  changed, a person with no row on the day gets the point of the day under the old id, and the key is produced, not
+  stale. A history recompute must go from the oldest day to the newest, or run twice. (Not changed here; the same on
+  the code before this change.)
+- A family writes its real rows at its own clock. A real row of a key that an EARLIER row of zeros superseded (the key
+  comes back) is the newest row of its key only when the family's clock is later than that row of zeros. It is not
+  when the key comes back inside the second of that row, or on a host whose clock is behind it. The next run of the
+  day settles it. This does not apply to the three work-item tables: the end of a run stores their rows strictly newer
+  than every stored row of the day.
 - A worker of an older version that computes a stored day again writes under the old id once more. The next run of a
   current worker for that day supersedes the key again.
 - Between the last partition and the end of a run, a shared work scope can hold the rows of a partition whose read

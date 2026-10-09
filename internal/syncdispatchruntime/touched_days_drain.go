@@ -2,6 +2,7 @@ package syncdispatchruntime
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"time"
 
@@ -64,7 +65,17 @@ const (
 	// touchedDrainRetryAfter after its newest run, and a run of any other
 	// trigger that succeeds makes it startable at once.
 	TouchedDrainFailedRunsBeforeSkip = 3
+
+	// touchedDrainStopCheckRunLimit bounds the runs whose mark one pass checks.
+	// The newest runs of the last touchedDrainInFlightWindow are checked; a pass
+	// that hits the bound logs an error and counts it.
+	touchedDrainStopCheckRunLimit = 200
 )
+
+// ErrTouchedTakeTimeUnwritten is returned by a writer that could not record the
+// take time of its runs because the column is absent (a build that runs before
+// its migration). The runs are committed without a take time.
+var ErrTouchedTakeTimeUnwritten = errors.New("the take time of the runs was not recorded")
 
 // TouchedDaysDrainStore is the part of the touched-day record the drain
 // reads and writes. Every failure is an error: an implementation never
@@ -76,9 +87,14 @@ type TouchedDaysDrainStore interface {
 	// ReturnToPending makes the listed keys pending again that are not
 	// pending, and returns the number of days it did that for.
 	ReturnToPending(ctx context.Context, organizationID string, runs []TouchedRunKeys) (int, error)
-	// RunsWithEveryKeyPending counts the runs whose listed keys are all
-	// pending.
-	RunsWithEveryKeyPending(ctx context.Context, organizationID string, runs []TouchedRunKeys) (int, error)
+	// DaysPendingSinceBeforeTake returns the days among the keys the runs list
+	// that have a key still pending whose last touch is strictly before the
+	// take time of the run that lists it. Such a key was touched before the
+	// run read the pending days, so the mark of that run would have ended it:
+	// the mark did not reach the record. A key touched at or after the take
+	// time, or after the mark, is pending for a reason of its own and is not
+	// counted. A run with no take time is not counted.
+	DaysPendingSinceBeforeTake(ctx context.Context, organizationID string, runs []TouchedRunKeys) ([]time.Time, error)
 }
 
 // TouchedDaysDrainRuns is the daily-run state the drain reads and writes.
@@ -91,10 +107,16 @@ type TouchedDaysDrainRuns interface {
 	// ended notEndedAfter after its creation. At most limit runs, newest
 	// first; the flag says that more exist.
 	OwnedKeysOfRunsWithoutResult(ctx context.Context, organizationID string, notEndedAfter time.Duration, limit int) ([]TouchedRunKeys, bool, error)
-	// RunsWithResultOfPass are the runs with a result of the drain pass that
-	// started the run endedRunID, with the keys each lists. None when
-	// endedRunID is not a run of the drain.
-	RunsWithResultOfPass(ctx context.Context, organizationID, endedRunID string) ([]TouchedRunKeys, error)
+	// MarkingRunsToCheck are the runs whose mark the pass checks: the run
+	// endedRunID when it is a run of a post-sync fan-out or of the drain
+	// (whatever its take time), and the ended runs of those two kinds created in
+	// the last window that have a take time. At most limit, newest first; the
+	// flag says that more exist.
+	MarkingRunsToCheck(ctx context.Context, organizationID, endedRunID string, window time.Duration, limit int) ([]TouchedRunKeys, bool, error)
+	// StampTakeTx records the take time on every run of the pass that has none.
+	// It returns ErrTouchedTakeTimeUnwritten, and writes nothing, when the
+	// database cannot hold it.
+	StampTakeTx(ctx context.Context, tx pgx.Tx, organizationID, passID string, takenAt time.Time) error
 	// DaysWithOnlyFailedRuns are the days among days (keys 2006-01-02) whose
 	// newest threshold runs all ended without a result. The value is true
 	// when the newest run of the day is older than retryAfter.
@@ -251,39 +273,70 @@ func (drain *TouchedDaysDrain) inFlight(ctx context.Context, organizationID stri
 // of a daily run triggered. The id of that run follows it.
 const touchedDrainEndTrigger = "e:"
 
-// markOfPassMissing stops the chain when the mark of the pass before this one
-// did not reach the touched-day record.
+// markOfPassMissing stops the chain when the mark of a run that started before
+// this pass did not reach the touched-day record.
 //
-// A chain goes on because the end of a run of one pass triggers the next
-// pass. The runs of a pass are committed before its mark, so a mark that fails
+// A chain goes on because the end of a run triggers the next pass. The runs of
+// a fan-out or of a pass are committed before their mark, so a mark that fails
 // leaves their days pending, and the next pass would start the same newest
-// days again, for as long as the mark fails, and never reach an older day.
-// The pass therefore looks at the pass of the run whose end triggered it: a
-// run of that pass that has a result and whose every key is pending was not
-// marked. It then starts nothing, so the chain ends; the nightly pass (its
-// trigger is not the end of a drain run) and the fan-out of the next sync
-// start runs again.
+// days again, for as long as the mark fails, and never reach an older day. The
+// pass therefore checks the marks of the runs behind it, whatever the run
+// whose end triggered it: the run itself and the ended runs of the last day
+// that started keys (touchedDrainStopCheckRunLimit of them at most).
 //
-// A run whose every key was touched again while it ran looks the same and
-// stops the chain too. The sync that touched them brings a fan-out of its own.
+// A run records its take time with the run (daily_metrics_runs.touched_take_at,
+// the ClickHouse time read before the pending days it was started for), and the
+// mark stamps its keys one millisecond before it. A key of the run that is
+// pending, and was last touched before the take time, is a key whose mark did
+// not land: this is known, not inferred. A key touched at or after the take
+// time was touched again while the run ran, which is normal after a sync with a
+// wide window, and does not stop the chain.
+//
+// A run with no take time (started by a build before the column) cannot be
+// checked: it does not stop the chain, and the run whose end triggered the pass
+// is counted and logged. The nightly pass (the floor of the drain) never stops:
+// it is the one that starts runs again when a mark kept failing.
 func (drain *TouchedDaysDrain) markOfPassMissing(ctx context.Context, pass *touchedDrainPass) (bool, error) {
 	endedRunID, ok := strings.CutPrefix(pass.passID, touchedDrainEndTrigger)
 	if !ok {
 		return false, nil
 	}
-	runs, err := drain.runs.RunsWithResultOfPass(ctx, pass.organizationID, endedRunID)
-	if err != nil || len(runs) == 0 {
+	runs, truncated, err := drain.runs.MarkingRunsToCheck(
+		ctx, pass.organizationID, endedRunID, touchedDrainInFlightWindow, touchedDrainStopCheckRunLimit)
+	if err != nil {
 		return false, err
 	}
-	unmarked, err := drain.store.RunsWithEveryKeyPending(ctx, pass.organizationID, runs)
-	if err != nil || unmarked == 0 {
+	if truncated {
+		drain.logger.Error(ctx, synclog.MsgTouchedDaysDrainFailed,
+			synclog.Text(synclog.KeyPhase, synclog.ParseLabel("stop_check_truncated")),
+			synclog.Org(synclog.ParseID(pass.organizationID)), drainPassAttr(pass.passID))
+		drain.observe(jobruntime.TouchedDaysDrainStopCheckTruncated, 1)
+	}
+	checkable := make([]TouchedRunKeys, 0, len(runs))
+	for _, run := range runs {
+		if run.TakenAt.IsZero() {
+			if run.RunID == endedRunID {
+				drain.logger.Warn(ctx, synclog.MsgTouchedDaysDrainFailed,
+					synclog.Text(synclog.KeyPhase, synclog.ParseLabel("take_time_absent")),
+					synclog.Org(synclog.ParseID(pass.organizationID)), drainPassAttr(pass.passID))
+				drain.observe(jobruntime.TouchedDaysDrainTakeTimeAbsent, 1)
+			}
+			continue
+		}
+		checkable = append(checkable, run)
+	}
+	if len(checkable) == 0 {
+		return false, nil
+	}
+	days, err := drain.store.DaysPendingSinceBeforeTake(ctx, pass.organizationID, checkable)
+	if err != nil || len(days) == 0 {
 		return false, err
 	}
 	drain.logger.Error(ctx, synclog.MsgTouchedDaysDrainFailed,
 		synclog.Text(synclog.KeyPhase, synclog.ParseLabel("chain_stopped_mark_missing")),
 		synclog.Org(synclog.ParseID(pass.organizationID)),
 		drainPassAttr(pass.passID),
-		synclog.Count(synclog.KeyDrainDaysNotMarked, unmarked),
+		synclog.Count(synclog.KeyDrainDaysNotMarked, len(days)),
 	)
 	drain.observe(jobruntime.TouchedDaysDrainChainStopped, 1)
 	return true, nil
@@ -357,14 +410,24 @@ func (drain *TouchedDaysDrain) take(ctx context.Context, pass *touchedDrainPass)
 	if err != nil {
 		return err
 	}
+	// The days that are not skipped come first, newest first, and the retries
+	// of skipped days come after them, newest first: the retries share the
+	// slots of the pass and only use the ones the other days leave. A retry
+	// that failed again never holds the slots of an older healthy day.
 	candidates := make([]time.Time, 0, len(backlog.Days))
+	var retries []time.Time
 	for _, day := range backlog.Days {
-		if retryDue, failed := onlyFailed[day.UTC().Format("2006-01-02")]; failed && !retryDue {
-			pass.skipped = append(pass.skipped, day)
+		if retryDue, failed := onlyFailed[day.UTC().Format("2006-01-02")]; failed {
+			if !retryDue {
+				pass.skipped = append(pass.skipped, day)
+				continue
+			}
+			retries = append(retries, day)
 			continue
 		}
 		candidates = append(candidates, day)
 	}
+	candidates = append(candidates, retries...)
 	limit := drain.runs.RepositoryLimit()
 	for scanned := 0; scanned < len(candidates) && len(pass.starts) < TouchedDaysPerDrainPass; {
 		end := min(scanned+TouchedDaysPerDrainPass, len(candidates))
@@ -457,10 +520,27 @@ func (drain *TouchedDaysDrain) start(ctx context.Context, pass *touchedDrainPass
 		}
 		started = append(started, start)
 	}
+	takeUnwritten := false
+	if len(started) > 0 {
+		// The take time goes in the transaction of the runs: a run never exists
+		// without it, and the mark that follows is judged against it.
+		switch err := drain.runs.StampTakeTx(ctx, tx, pass.organizationID, pass.passID, pass.backlog.TakenAt); {
+		case errors.Is(err, ErrTouchedTakeTimeUnwritten):
+			takeUnwritten = true
+		case err != nil:
+			return err
+		}
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return ErrPostSyncUnavailable
 	}
 	pass.started, pass.alreadyStarted = started, alreadyStarted
+	if takeUnwritten {
+		drain.logger.Error(ctx, synclog.MsgTouchedDaysDrainFailed,
+			synclog.Text(synclog.KeyPhase, synclog.ParseLabel("take_time_unwritten")),
+			synclog.Org(synclog.ParseID(pass.organizationID)), drainPassAttr(pass.passID))
+		drain.observe(jobruntime.TouchedDaysDrainTakeTimeUnwritten, 1)
+	}
 	return nil
 }
 

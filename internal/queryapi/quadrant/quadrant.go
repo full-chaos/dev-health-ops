@@ -89,6 +89,8 @@ import (
 	"time"
 
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
+
+	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse/liverow"
 )
 
 // QueryClient is the read-only ClickHouse query boundary this package
@@ -427,10 +429,26 @@ func quadrantMetricQuery(spec MetricSpec, bucket, teamFilter string) string {
             toFloat64(%s) AS value
         FROM %s%s
         WHERE %s >= {start_day:Date} AND %s < {end_day:Date}%s
-          AND org_id = {org_id:String}%s
+          AND org_id = {org_id:String}%s%s
         GROUP BY bucket, entity_id, entity_label
         ORDER BY bucket
-    `, bucketExpr(bucket, dayExpr), spec.EntityExpr, spec.LabelExpr, spec.ValueExpr, dedupFrom(spec.Table), joinSQL, dayExpr, dayExpr, whereSQL, scopeSQL)
+    `, bucketExpr(bucket, dayExpr), spec.EntityExpr, spec.LabelExpr, spec.ValueExpr, dedupFrom(spec.Table), joinSQL, dayExpr, dayExpr, whereSQL, scopeSQL, liveRowClause(spec.Table))
+}
+
+// liveRowClause keeps only the measurements of a team-keyed daily table (see
+// package liverow). A retraction row is the newest row of a key the compute
+// no longer produces: its team is not a point to plot, and the 0 it holds in
+// a count is not a sample of a mean. The table is read with FINAL (dedupFrom),
+// so the predicate sees the newest row of each key.
+func liveRowClause(table string) string {
+	base, alias, hasAlias := strings.Cut(table, " AS ")
+	if !liverow.Registered(base) {
+		return ""
+	}
+	if !hasAlias {
+		alias = ""
+	}
+	return "\n          AND " + liverow.Predicate(base, alias)
 }
 
 // fetchQuadrantMetric ports fetch_quadrant_metric (queries/quadrant.py:

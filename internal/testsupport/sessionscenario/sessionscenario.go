@@ -164,10 +164,13 @@ VALUES (gen_random_uuid(), $1, $2, $3, '2026-08-01 00:00:00+00'::timestamptz - m
 
 // MetricsStatements seed each plane's ClickHouse database: Org A has data,
 // Org B newer data, Org C and D none.
+//
+// The work item row is a measured row (one completed item). A row of that
+// table with no measure is a retraction row, which is not data.
 var MetricsStatements = []string{
 	"INSERT INTO repo_metrics_daily (org_id, computed_at) VALUES ('" + orgA + "', '2026-08-01 10:00:00')",
 	"INSERT INTO user_metrics_daily (org_id, computed_at) VALUES ('" + orgB + "', '2026-08-05 08:30:00')",
-	"INSERT INTO work_item_metrics_daily (org_id, computed_at) VALUES ('" + orgA + "', '2026-08-02 11:00:00')",
+	"INSERT INTO work_item_metrics_daily (org_id, computed_at, items_completed) VALUES ('" + orgA + "', '2026-08-02 11:00:00', 1)",
 }
 
 // FakeProvider answers the providers' profile endpoints by bearer token.

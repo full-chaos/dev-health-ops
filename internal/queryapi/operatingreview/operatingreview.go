@@ -144,6 +144,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/deltarule"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph/model"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graphqldate"
+	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse/liverow"
 )
 
 // QueryClient is the read-only ClickHouse query boundary this package
@@ -448,7 +449,7 @@ func fetchWorkItems(ctx context.Context, client QueryClient, orgID string, teams
           WHERE org_id = {org_id:String}
             ` + teamFilter + `
             AND day >= {start:Date} AND day < {end:Date}
-          GROUP BY day, provider, work_scope_id` + teamGroup + `
+          GROUP BY day, provider, work_scope_id` + teamGroup + liveRowHaving("work_item_metrics_daily") + `
         )
         GROUP BY day
         ORDER BY day`
@@ -511,7 +512,7 @@ func fetchStateDurations(ctx context.Context, client QueryClient, orgID string, 
           WHERE org_id = {org_id:String}
             ` + teamFilter + `
             AND day >= {start:Date} AND day < {end:Date}
-          GROUP BY day, provider, work_scope_id, status` + teamGroup + `
+          GROUP BY day, provider, work_scope_id, status` + teamGroup + liveRowHaving("work_item_state_durations_daily") + `
         )
         GROUP BY status`
 
@@ -915,7 +916,7 @@ func fetchInvestment(ctx context.Context, client QueryClient, orgID string, team
           WHERE org_id = {org_id:String}
             ` + teamFilter + `
             AND day >= {start:Date} AND day < {end:Date}
-          GROUP BY day, repo_id, investment_area, project_stream` + teamGroup + `
+          GROUP BY day, repo_id, investment_area, project_stream` + teamGroup + liveRowHaving("investment_metrics_daily") + `
         )
         GROUP BY investment_area`
 
@@ -1114,7 +1115,7 @@ func fetchAIGovernance(ctx context.Context, client QueryClient, orgID string, te
         WHERE org_id = {org_id:String}
           ` + teamFilter + `
           AND day >= {start:Date} AND day < {end:Date}
-        GROUP BY day, team_id, repo_id`
+        GROUP BY day, team_id, repo_id` + liveRowHaving("ai_governance_coverage_daily")
 
 	bindings := periodBindings(orgID, start, end, teamBinding)
 	rows, err := client.Query(ctx, query, bindings)
@@ -1217,6 +1218,14 @@ type periodRows struct {
 	investment     []investmentRow
 	aiImpact       []aiImpactRow
 	aiGovernance   []aiGovernanceRawRow
+}
+
+// liveRowHaving keeps a key of a daily table only when its newest row is a
+// measurement (see package liverow). A retraction row is the newest row of a
+// key the compute no longer produces (a retired team id): it is not a sample
+// of an average, not a day of the period, and not a row that proves data.
+func liveRowHaving(table string) string {
+	return "\n          HAVING " + liverow.NewestPredicate(table, "")
 }
 
 // teamClauses returns (teamFilter, teamGroup, teamBinding) mirroring

@@ -400,6 +400,17 @@ func TestVenueOracleQueryAPIDictOrder(t *testing.T) {
 			}
 			goWritten = stripped
 		}
+		if tc.Kind == "home" && recorder.Code == http.StatusOK {
+			// Every REST Home delta ends with the three Go-only keys of
+			// CHAOS-9044, which the frozen Python model never had: compared
+			// without them, and only them (withoutHomeDeltaGoOnlyFields;
+			// a delta that lacks one fails).
+			stripped, err := withoutHomeDeltaGoOnlyFields(goWritten)
+			if err != nil {
+				t.Fatalf("%s: %v", tc.Name, err)
+			}
+			goWritten = stripped
+		}
 		if tc.Kind == "work_units" && recorder.Code == http.StatusOK {
 			// Each evidence quote ends with the Go-only source_title of
 			// CHAOS-8959 (null here: the seeded source has no stored

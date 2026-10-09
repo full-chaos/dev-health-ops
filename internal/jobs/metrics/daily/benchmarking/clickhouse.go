@@ -9,6 +9,8 @@ import (
 
 	"github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
+
+	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse/liverow"
 )
 
 // conn is the narrow ClickHouse capability this package needs, matching
@@ -103,6 +105,17 @@ func NewClickHouseLoader(connection conn, orgID string) (*ClickHouseLoader, erro
 	return &ClickHouseLoader{conn: connection, orgID: orgID}, nil
 }
 
+// liveRowHaving keeps a key of a team-keyed daily table only when its newest
+// row is a measurement (see package liverow). A retraction row holds 0 in a
+// column that is not Nullable: it is not a sample of the mean, and a team that
+// holds only such rows has no series to benchmark.
+func liveRowHaving(table string) string {
+	if !liverow.Registered(table) {
+		return ""
+	}
+	return "\n    HAVING " + liverow.NewestPredicate(table, "")
+}
+
 // FetchMetricSeriesByScope ports fetch_metric_series_by_scope
 // (_common.py:259-341). The SQL is Python's shape verbatim: an inner
 // argMax(value, computed_at) grouped by day plus the metric's own grouping
@@ -167,13 +180,13 @@ FROM (
         (argMax(tuple(%s), computed_at)).1 AS metric_value
     FROM %s
     WHERE %s
-    GROUP BY %s
+    GROUP BY %s%s
 )
 WHERE metric_value IS NOT NULL
 GROUP BY scope_key, day
 ORDER BY scope_key, day`,
 		scopeExpression, definition.ValueColumn, definition.Table,
-		strings.Join(filters, " AND "), strings.Join(innerGroup, ", "),
+		strings.Join(filters, " AND "), strings.Join(innerGroup, ", "), liveRowHaving(definition.Table),
 	)
 
 	arguments := []any{

@@ -130,8 +130,9 @@ func TestBreakdownOverInvestmentMetricsDailyTakesTheNewestRowOfEachKey(t *testin
 // One key of the quality area has a completed item, with a cycle time of 34
 // hours: the cycle time of the area is 34. A mean over every newest row is 17
 // (the row of zeros counted as a measured 0), and a mean over every row with
-// a completion, old or new, is 27. The security area has no completed item:
-// it has no cycle time, which is null, and not 0.
+// a completion, old or new, is 27. The one key of the security area holds a
+// row of zeros as its newest row: a retraction row, which reads as no row, so
+// the area is not a bucket at all.
 func TestCycleTimeOverInvestmentMetricsDailyLeavesOutRowsWithNoCompletedItem(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
 	defer cancel()
@@ -206,8 +207,8 @@ func TestCycleTimeOverInvestmentMetricsDailyLeavesOutRowsWithNoCompletedItem(t *
 	for _, item := range result.Items {
 		values[item.Key] = item.Value
 	}
-	if len(values) != 2 {
-		t.Fatalf("breakdown items = %+v, want the quality area and the security area", result.Items)
+	if len(values) != 1 {
+		t.Fatalf("breakdown items = %+v, want the quality area only", result.Items)
 	}
 	quality, found := values["quality"]
 	if !found || quality == nil {
@@ -218,12 +219,10 @@ func TestCycleTimeOverInvestmentMetricsDailyLeavesOutRowsWithNoCompletedItem(t *
 			"17 counts the row of zeros as a measured 0; 27 counts the older row of the key that lost its completion",
 			*quality)
 	}
-	security, found := values["security"]
-	if !found {
-		t.Fatalf("security area is absent (items %+v), want it with no cycle time", result.Items)
-	}
-	if security != nil {
-		t.Fatalf("security cycle time = %v, want none (null): the area has no completed item, and missing is not 0",
-			*security)
+	// The one key of the security area holds a retraction row as its newest
+	// row. It reads as no row, so the area is not a bucket: it has no cycle
+	// time of 0 and no bucket with an absent value either.
+	if security, found := values["security"]; found {
+		t.Fatalf("security area is a bucket (value %v), want no bucket: its one key holds a retraction row", security)
 	}
 }

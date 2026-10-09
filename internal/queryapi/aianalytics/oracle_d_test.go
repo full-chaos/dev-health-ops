@@ -58,10 +58,12 @@ type fixtureClientD struct {
 }
 
 // catalogueNameRead reports which catalogue a statement reads for display names: "teams", "repos" or "".
-// The repository read is told from the slug lookup (also FROM repos) by its id-list binding.
+// The repository read is told from the slug lookup (also FROM repos) by its id-list binding. The teams read is
+// the statement whose own source is the teams table; the team flow read only names it in the subquery of the
+// active-team rule (FROM teams FINAL).
 func catalogueNameRead(st string) string {
 	switch {
-	case strings.Contains(st, "FROM teams"):
+	case strings.Contains(st, "FROM teams\n"):
 		return "teams"
 	case strings.Contains(st, "FROM repos") && strings.Contains(st, "{repo_ids:Array(String)}"):
 		return "repos"

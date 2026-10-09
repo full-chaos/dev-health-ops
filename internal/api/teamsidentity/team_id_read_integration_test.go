@@ -3,7 +3,9 @@
 package teamsidentity
 
 import (
+	"context"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -77,4 +79,31 @@ func TestAReadByABareIDResolvesLikeAWrite(t *testing.T) {
 			t.Fatalf("GET /teams/gl:QA = %d %v, want 200 gl:QA", code, body["team_id"])
 		}
 	})
+}
+
+// Inferring members needs a project key the team holds: a team with none
+// answers 400, and its id is never taken as a Jira project key, also for a
+// bare row the carry has not moved.
+func TestInferMembersUsesOnlyTheTeamsOwnProjectKey(t *testing.T) {
+	for name, seed := range map[string]func(t *testing.T, s Store, ctx context.Context, h handlers){
+		"an admin team": func(t *testing.T, s Store, ctx context.Context, h handlers) {
+			if rec := writeSeamCall(t, h, h.createOrUpdateTeam, http.MethodPost, "/api/v1/admin/teams", "",
+				map[string]any{"team_id": "nokeys", "name": "No keys"}); rec.Code != http.StatusOK {
+				t.Fatalf("create = %d %s", rec.Code, rec.Body.String())
+			}
+		},
+		"a bare row not carried": func(t *testing.T, s Store, ctx context.Context, h handlers) {
+			writeSeamSeed(t, s, ctx, "jira", "nokeys")
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			s, ctx := writeSeamStore(t)
+			h := newTestHandlers(s)
+			seed(t, s, ctx, h)
+			rec := writeSeamCall(t, h, h.inferMembers, http.MethodGet, "/api/v1/admin/teams/nokeys/infer-members", "nokeys", nil)
+			if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "Team does not have a Jira project key configured") {
+				t.Fatalf("infer for a team without project keys = %d %s, want 400 no Jira project key", rec.Code, rec.Body.String())
+			}
+		})
+	}
 }

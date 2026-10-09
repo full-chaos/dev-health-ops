@@ -63,7 +63,7 @@ func TestVenueOracleProtectedRoutes(t *testing.T) {
 	// are placeholders in the golden on both planes.
 	spec.Scrub = scrubCustomerPushTokens
 	golden := venueoracle.OpenGolden(t, spec)
-	pin := venueoracle.OpenGoPin(t, venueoracle.GoPinSpec{Path: "testdata/venue/protected-routes.go-pin.json", SHA256: "f902c91f0b5b1ef3e0e89a1407eb3c9ff9e02f5067c76855a7b45acf4c9d75ba", Ruling: teamsRuling})
+	pin := venueoracle.OpenGoPin(t, venueoracle.GoPinSpec{Path: "testdata/venue/protected-routes.go-pin.json", SHA256: "131d451a346df56c729dbdb6b1a564daf55a504a62a3553fa49c66c5a96059d3", Ruling: teamsRuling})
 	sent := &sentReports{}
 	endpoint := httptest.NewServer(sent)
 	t.Cleanup(endpoint.Close)
@@ -136,12 +136,7 @@ func TestVenueOracleProtectedRoutes(t *testing.T) {
 		// pythonparity.StrRepr encoder (CHAOS-6322, #2850) -- so the
 		// byte-for-byte body comparison no longer needs a per-request
 		// exception for it.
-		Normalize: func(request venueoracle.Request, body string) string {
-			body = normalizeRuled(body)
-			body = timestampFieldPattern.ReplaceAllString(body, `"$1":"<time>"`)
-			body = importedDiscoveredAtPattern.ReplaceAllString(body, `"discovered_at":"<time>"`)
-			return body
-		},
+		Normalize: normalizeProtected,
 		Inspect: func(request venueoracle.Request, goResponse venueoracle.Response) {
 			if strings.HasPrefix(request.Name, "report: ") && goResponse.Status == http.StatusOK {
 				assertPerTableCounts(t, ctx, venue.AdminURI(t, venue.GoDB), goResponse.Body)
@@ -186,6 +181,16 @@ func TestVenueOracleProtectedRoutes(t *testing.T) {
 		t.Errorf("sent telemetry reports are empty")
 	}
 	fmt.Fprintf(&receipt, "telemetry reports sent: %s\n", venueoracle.Mark(pySent == goSent && pySent != ""))
+	// The fixture's qa and design teams have two holders, so their drift and
+	// member happy paths answer 409; one team with one holder and a project
+	// key pins those paths, Go-only, after every Python-compared request and
+	// Postgres snapshot.
+	for _, request := range soloTeamRequests(venue.Tokens) {
+		response := golden.Project(t, venueoracle.Do(t, base, request))
+		response.Body = normalizeProtected(request, response.Body)
+		fmt.Fprintf(&receipt, "%-58s go-only     go=%d %s\n", request.Name, response.Status,
+			pinMark(pin.Check(t, request.Name, venueoracle.PinText(response))))
+	}
 	// CHAOS-6310: the team + identity admin CRUD routes write ClickHouse,
 	// not Postgres -- same shape, a ClickHouse reader instead of a
 	// Postgres one. FINAL resolves each plane's own ReplacingMergeTree
@@ -445,4 +450,32 @@ func pinMark(same bool) string {
 		return "PINNED"
 	}
 	return "PIN-DIFF"
+}
+
+func normalizeProtected(request venueoracle.Request, body string) string {
+	body = normalizeRuled(body)
+	body = timestampFieldPattern.ReplaceAllString(body, `"$1":"<time>"`)
+	body = importedDiscoveredAtPattern.ReplaceAllString(body, `"discovered_at":"<time>"`)
+	return body
+}
+
+// soloTeamRequests create a team with one holder and a project key, then run
+// the infer, drift approve and dismiss, and member confirm happy paths on it
+// (its drift rows are seeded by seedDriftReview).
+func soloTeamRequests(tokens map[string]string) []venueoracle.Request {
+	headers := map[string]string{"Authorization": "Bearer " + tokens["admin"], "Content-Type": "application/json"}
+	get := map[string]string{"Authorization": "Bearer " + tokens["admin"]}
+	teams := "/api/v1/admin/teams"
+	return []venueoracle.Request{
+		{Name: "solo: create a team with a project key", Method: "POST", Path: teams, Headers: headers,
+			Body: venueoracle.B64(`{"team_id":"solo","name":"Solo","project_keys":["design"]}`)},
+		{Name: "solo: infer members from its project key", Method: "GET", Path: teams + "/solo/infer-members?credential_name=jira-ok", Headers: get},
+		{Name: "solo: approve a name change", Method: "POST", Path: teams + "/solo/approve-changes", Headers: headers,
+			Body: venueoracle.B64(`{"change_ids":["c-name-solo"]}`)},
+		{Name: "solo: dismiss a description change", Method: "POST", Path: teams + "/solo/dismiss-changes", Headers: headers,
+			Body: venueoracle.B64(`{"change_ids":["c-desc-solo"]}`)},
+		{Name: "solo: get after the decisions", Method: "GET", Path: teams + "/solo", Headers: get},
+		{Name: "solo: confirm a new member", Method: "POST", Path: teams + "/solo/confirm-members", Headers: headers,
+			Body: venueoracle.B64(`{"team_id":"solo","links":[{"provider_identity":"sol-gh","provider":"github","canonical_id":"sol","action":"create"}]}`)},
+	}
 }

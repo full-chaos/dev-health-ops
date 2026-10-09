@@ -58,6 +58,9 @@ type jiraTeamCatalogProjectSearchPayload struct {
 	// IsLast and Total are the provider's end-of-data signals of a page.
 	IsLast *bool `json:"isLast"`
 	Total  *int  `json:"total"`
+	// ErrorMessages is the provider's error list. A body that carries it is
+	// an error answer, whatever HTTP status or `total` it comes with.
+	ErrorMessages []string `json:"errorMessages"`
 }
 
 // endOfData says this page is the last one. received is the number of

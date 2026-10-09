@@ -138,8 +138,9 @@ func TestJiraTeamCatalogCollectCountsFailedAndRetriedAttempts(t *testing.T) {
 	if err != nil {
 		t.Fatalf("a board-listing failure must soft-skip the sprint walk under non-strict: %v", err)
 	}
-	if searchAttempts != 2 {
-		t.Fatalf("search attempts=%d want 2 (one failed, one retried)", searchAttempts)
+	// 2 (one failed, one retried) + 1 (the second live read).
+	if searchAttempts != 3 {
+		t.Fatalf("search attempts=%d want 3 (one failed, one retried, one second live read)", searchAttempts)
 	}
 	if boardsAttempts != 2 {
 		t.Fatalf("boards attempts=%d want 2 (both exhausted by the retry policy)", boardsAttempts)
@@ -147,10 +148,10 @@ func TestJiraTeamCatalogCollectCountsFailedAndRetriedAttempts(t *testing.T) {
 	if len(batch.Rows.Sprints) != 0 {
 		t.Fatalf("sprints=%+v want none (the board listing never recovered)", batch.Rows.Sprints)
 	}
-	// 2 (search, retried) + 1 (archived search) + 1 (project detail) +
-	// 2 (boards, exhausted) = 6.
-	if batch.Evidence.Requests != 6 {
-		t.Fatalf("evidence=%+v want Requests=6 (every physical attempt, from one source)", batch.Evidence)
+	// 2 (search, retried) + 1 (archived search) + 1 (second live search) +
+	// 1 (project detail) + 2 (boards, exhausted) = 7.
+	if batch.Evidence.Requests != 7 {
+		t.Fatalf("evidence=%+v want Requests=7 (every physical attempt, from one source)", batch.Evidence)
 	}
 }
 
@@ -406,8 +407,8 @@ func TestJiraTeamCatalogCollectReadsEveryPageOfTheProjectSearch(t *testing.T) {
 	if !batch.Result.ProjectSearchComplete || batch.Result.ProjectSearchPages != 2 {
 		t.Fatalf("result=%+v, want the search complete after 2 pages", batch.Result)
 	}
-	if len(doer.requests) != 3 || doer.requests[2] != jiraTeamCatalogArchivedProjectSearchURI {
-		t.Fatalf("search requests=%v, want the two pages, then the archived read", doer.requests)
+	if len(doer.requests) != 5 || doer.requests[2] != jiraTeamCatalogArchivedProjectSearchURI || doer.requests[3] != jiraTeamCatalogProjectSearchURI {
+		t.Fatalf("search requests=%v, want the two pages, the archived read, then the two pages again", doer.requests)
 	}
 }
 
@@ -479,10 +480,11 @@ func TestJiraTeamCatalogProjectSearchStopsAtThePageBoundAndIsNotComplete(t *test
 		pages[uri] = jiraTeamCatalogFixtureResponse{body: jiraProjectSearchPage(page*2, 2, `,"isLast":false`)}
 	}
 	// No fixture for the page after the bound: a request for it fails the
-	// test. The one request more is the archived read.
+	// test. The one request more is the archived read; the second live read
+	// walks the same pages again.
 	batch, doer := collectJiraProjectSearch(t, pages)
 	if batch.Result.ProjectSearchComplete || batch.Result.ProjectSearchPages != jiraTeamCatalogProjectSearchMaxPages ||
-		len(batch.Rows.Projects) != 2*jiraTeamCatalogProjectSearchMaxPages || len(doer.requests) != jiraTeamCatalogProjectSearchMaxPages+1 {
+		len(batch.Rows.Projects) != 2*jiraTeamCatalogProjectSearchMaxPages || len(doer.requests) != 2*jiraTeamCatalogProjectSearchMaxPages+1 {
 		t.Fatalf("complete=%v pages=%d projects=%d requests=%d, want not complete at the bound of %d pages",
 			batch.Result.ProjectSearchComplete, batch.Result.ProjectSearchPages, len(batch.Rows.Projects), len(doer.requests), jiraTeamCatalogProjectSearchMaxPages)
 	}
@@ -541,8 +543,8 @@ func TestJiraTeamCatalogCollectReadsArchivedProjectsToHoldOwnershipOnly(t *testi
 			t.Errorf("%s: teams=%d projects=%d ownership=%d memberships=%d, want the one live project row only", name,
 				len(batch.Rows.Teams), len(batch.Rows.Projects), len(batch.Rows.Ownership), len(batch.Rows.Memberships))
 		}
-		if batch.Result.ProjectSearchComplete != tc.complete || batch.Result.ProjectSearchPages != 1 || len(doer.requests) != tc.requests {
-			t.Errorf("%s: complete=%v live pages=%d requests=%v, want complete=%v, 1 live page, %d requests", name,
+		if batch.Result.ProjectSearchComplete != tc.complete || batch.Result.ProjectSearchPages != 1 || len(doer.requests) != tc.requests+1 {
+			t.Errorf("%s: complete=%v live pages=%d requests=%v, want complete=%v, 1 live page, %d requests (+1: the second live read)", name,
 				batch.Result.ProjectSearchComplete, batch.Result.ProjectSearchPages, doer.requests, tc.complete, tc.requests)
 		}
 		if tc.archived == nil {
@@ -897,3 +899,110 @@ identities:
 }
 
 var _ TeamCatalogCollector = JiraTeamCatalogCollector{}
+
+// jiraSearchSequenceDoer answers the project search from a script: one body
+// per call of each kind (live, archived), in call order; the last body of a
+// kind repeats. Every other request is a 404.
+type jiraSearchSequenceDoer struct {
+	t        *testing.T
+	live     []string
+	archived []string
+	liveN    int
+	archN    int
+}
+
+func (doer *jiraSearchSequenceDoer) Do(request *http.Request) (*http.Response, error) {
+	body := `{}`
+	status := http.StatusNotFound
+	if request.URL.Path == "/rest/api/3/project/search" {
+		status = http.StatusOK
+		pick := func(bodies []string, n *int) string {
+			index := min(*n, len(bodies)-1)
+			*n++
+			return bodies[index]
+		}
+		if request.URL.Query().Get("status") == "archived" {
+			body = pick(doer.archived, &doer.archN)
+		} else {
+			body = pick(doer.live, &doer.liveN)
+		}
+	}
+	return &http.Response{StatusCode: status, Header: http.Header{"Content-Type": []string{"application/json"}},
+		Body: io.NopCloser(strings.NewReader(body)), Request: request}, nil
+}
+
+func collectJiraSearchSequence(t *testing.T, doer *jiraSearchSequenceDoer) JiraTeamCatalogBatch {
+	t.Helper()
+	batch, err := JiraTeamCatalogRouteHandler{}.CollectTeamCatalog(context.Background(),
+		TeamCatalogReference{OrgID: "org-1", SyncRunID: "run-1"}, providerfoundation.Credential{Provider: "jira"},
+		jiraTeamCatalogTestClient(t, doer), TeamCatalogSelections{Projects: true},
+		time.Date(2026, 8, 30, 12, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	return batch
+}
+
+// CHAOS-8894: the live and archived reads are two calls. A project restored
+// between them is in the first live answer no more and in the archived answer
+// not yet. The walk reads the live projects once more after the archived read,
+// so the project is in the live set and is neither lost nor closed.
+func TestJiraTeamCatalogProjectRestoredBetweenTheTwoReadsIsLive(t *testing.T) {
+	t.Parallel()
+	ops := `{"id":"10001","key":"OPS","name":"Ops"}`
+	moved := `{"id":"20001","key":"MOV","name":"Moved"}`
+	batch := collectJiraSearchSequence(t, &jiraSearchSequenceDoer{t: t,
+		live:     []string{`{"values":[` + ops + `],"isLast":true}`, `{"values":[` + ops + `,` + moved + `],"isLast":true}`},
+		archived: []string{`{"values":[],"isLast":true}`},
+	})
+	ids := []string{}
+	for _, row := range batch.Rows.Projects {
+		ids = append(ids, row.ID)
+	}
+	slices.Sort(ids)
+	if !slices.Equal(ids, []string{"10001", "20001"}) || len(batch.ArchivedProjects) != 0 || !batch.Result.ProjectSearchComplete {
+		t.Fatalf("live=%v archived=%v complete=%v, want the restored project live, none archived, snapshot complete",
+			ids, batch.ArchivedProjects, batch.Result.ProjectSearchComplete)
+	}
+}
+
+// The other direction: a project archived after the first live read is live in
+// that answer and archived in the next; it is held in one of the two sets.
+// A project read as archived and live again is live and not held.
+func TestJiraTeamCatalogProjectArchivedBetweenTheTwoReadsIsKept(t *testing.T) {
+	t.Parallel()
+	moved := `{"id":"20001","key":"MOV","name":"Moved"}`
+	batch := collectJiraSearchSequence(t, &jiraSearchSequenceDoer{t: t,
+		live:     []string{`{"values":[` + moved + `],"isLast":true}`, `{"values":[],"isLast":true}`},
+		archived: []string{`{"values":[` + moved + `],"isLast":true}`},
+	})
+	if len(batch.Rows.Projects) != 1 || batch.Rows.Projects[0].ID != "20001" || !batch.Result.ProjectSearchComplete {
+		t.Fatalf("projects=%d result=%+v, want the project kept from the first live read", len(batch.Rows.Projects), batch.Result)
+	}
+	batch = collectJiraSearchSequence(t, &jiraSearchSequenceDoer{t: t,
+		live:     []string{`{"values":[],"isLast":true}`, `{"values":[` + moved + `],"isLast":true}`},
+		archived: []string{`{"values":[` + moved + `],"isLast":true}`},
+	})
+	if len(batch.Rows.Projects) != 1 || len(batch.ArchivedProjects) != 0 {
+		t.Fatalf("projects=%d archived=%v, want a project read archived and live again to be live and not held", len(batch.Rows.Projects), batch.ArchivedProjects)
+	}
+}
+
+// CHAOS-8894: a 200 body that carries errorMessages is an error answer, even
+// with total 0 and no values; it is not the end of the data. One case per
+// read of the walk.
+func TestJiraTeamCatalogErrorMessagesBodyIsNotTheEndOfData(t *testing.T) {
+	t.Parallel()
+	ok := `{"values":[{"id":"10001","key":"OPS","name":"Ops"}],"isLast":true}`
+	bad := `{"errorMessages":["The value 'archived' does not exist for the field 'status'."],"total":0}`
+	for name, doer := range map[string]*jiraSearchSequenceDoer{
+		"first live read":  {live: []string{bad, ok}, archived: []string{ok}},
+		"archived read":    {live: []string{ok}, archived: []string{bad}},
+		"second live read": {live: []string{ok, bad}, archived: []string{ok}},
+	} {
+		doer.t = t
+		if batch := collectJiraSearchSequence(t, doer); batch.Result.ProjectSearchComplete {
+			t.Errorf("%s: snapshot complete on an errorMessages body, want not complete", name)
+		}
+	}
+}

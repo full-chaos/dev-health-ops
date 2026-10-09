@@ -221,7 +221,18 @@ func (handler JiraTeamCatalogRouteHandler) CollectTeamCatalog(
 		slog.Default().WarnContext(ctx, "jira_team_catalog_archived_project_search_incomplete",
 			"org_id", ref.OrgID, "reason", archivedStop, "pages", archivedPages, "projects", len(archived.Values))
 	}
-	searchComplete = searchComplete && archivedComplete
+	// The two reads above are not one atomic read: a project restored (or
+	// archived) between them is in neither answer. A third read of the live
+	// projects, after the archived one, closes that window: a project that
+	// moved archived -> live shows here, and one that moved live -> archived
+	// showed in the first read. The union of the live reads is the live set.
+	liveAgain, liveAgainComplete, liveAgainPages, liveAgainStop, _ := jiraTeamCatalogSearchProjects(ctx, client, "")
+	if !liveAgainComplete {
+		slog.Default().WarnContext(ctx, "jira_team_catalog_project_search_recheck_incomplete",
+			"org_id", ref.OrgID, "reason", liveAgainStop, "pages", liveAgainPages, "projects", len(liveAgain.Values))
+	}
+	search.Values = jiraUnionProjectSearchEntries(search.Values, liveAgain.Values)
+	searchComplete = searchComplete && archivedComplete && liveAgainComplete
 
 	rows := JiraTeamCatalogRows{}
 	projectsSkippedNoNativeID := 0
@@ -252,8 +263,16 @@ func (handler JiraTeamCatalogRouteHandler) CollectTeamCatalog(
 	rows.Ownership = dedupeJiraOwnershipRows(rows.Ownership)
 	var archivedProjects []JiraArchivedProject
 	archivedSeen := map[JiraArchivedProject]bool{}
+	liveIDs := make(map[string]bool, len(search.Values))
+	for _, entry := range search.Values {
+		liveIDs[strings.TrimSpace(entry.ID)] = true
+	}
 	for _, entry := range archived.Values {
 		project := JiraArchivedProject{ID: strings.TrimSpace(entry.ID), Key: jiraTeamID(entry.Key)}
+		// A project read as archived and live again in the same walk is live.
+		if liveIDs[project.ID] {
+			continue
+		}
 		if project.Key == "" || project.ID == "" || jiraProjectIDIsKeyBuilt(ref.OrgID, project.ID) || archivedSeen[project] {
 			continue
 		}
@@ -338,6 +357,28 @@ func jiraHoldArchivedOwnership(orgID string, archived []JiraArchivedProject, ope
 	return held, rest
 }
 
+// jiraUnionProjectSearchEntries returns first, then every entry of second
+// whose id (or, with no id, key) first does not hold.
+func jiraUnionProjectSearchEntries(first, second []jiraTeamCatalogProjectSearchEntry) []jiraTeamCatalogProjectSearchEntry {
+	seen := make(map[string]bool, len(first))
+	identity := func(entry jiraTeamCatalogProjectSearchEntry) string {
+		if id := strings.TrimSpace(entry.ID); id != "" {
+			return "id:" + id
+		}
+		return "key:" + jiraTeamID(entry.Key)
+	}
+	for _, entry := range first {
+		seen[identity(entry)] = true
+	}
+	for _, entry := range second {
+		if key := identity(entry); !seen[key] {
+			seen[key] = true
+			first = append(first, entry)
+		}
+	}
+	return first
+}
+
 // jiraTeamCatalogSearchProjects reads /rest/api/3/project/search page by
 // page to the provider's end-of-data signal. status is the provider's
 // `status` filter; empty asks for the provider's default, live projects.
@@ -363,6 +404,11 @@ func jiraTeamCatalogSearchProjects(
 			return search, false, pages, "page_error", nil
 		}
 		pages++
+		if len(page.ErrorMessages) > 0 {
+			// An error body under HTTP 200 is not an answer, even when it also
+			// says total 0: the read stops here and is not complete.
+			return search, false, pages, "error_body", nil
+		}
 		search.Values = append(search.Values, page.Values...)
 		if page.endOfData(len(search.Values), jiraTeamCatalogProjectSearchMaxResults) {
 			return search, true, pages, "", nil
@@ -721,6 +767,7 @@ func (collector JiraTeamCatalogCollector) CollectTeamCatalog(
 		// its end: all pages of the project search and the legacy links.
 		snapshotComplete := batch.Result.ProjectSearchComplete && legacyComplete && !liveEmpty
 		if !snapshotComplete {
+			recordJiraOwnershipSnapshotIncomplete(ctx, batch.Result.ProjectSearchComplete, legacyComplete, liveEmpty)
 			slog.Default().WarnContext(ctx, "jira_team_catalog_ownership_snapshot_incomplete",
 				"org_id", ref.OrgID, "project_search_complete", batch.Result.ProjectSearchComplete,
 				"legacy_links_complete", legacyComplete, "no_live_ownership", liveEmpty, "open_rows_kept", len(open)+len(held))

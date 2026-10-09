@@ -89,10 +89,7 @@ VALUES ($1::uuid, $2::uuid, $3::date, $4, 'succeeded', 'succeeded', clock_timest
 
 // The take time is written with the runs of a pass, and the mark of the pass
 // carries it: the keys are dispatched one millisecond before it.
-func TestTouchedDaysDrainRecordsTheTakeTimeWithItsRuns(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
-	defer cancel()
-	rig := newDrainRig(t, ctx)
+func takeTimeTouchedDaysDrainRecordsTheTakeTimeWithItsRuns(t *testing.T, ctx context.Context, rig *drainRig) {
 	orgID := uuid.NewString()
 	newest := time.Date(2026, 7, 31, 0, 0, 0, 0, time.UTC)
 	days := seedPendingDays(t, ctx, rig.touchedRig, orgID, newest, 3)
@@ -176,10 +173,7 @@ func TestPostSyncFanoutRecordsTheTakeTimeOnEveryRunOfTheSyncRun(t *testing.T) {
 // While the mark does not reach ClickHouse, the end of any run stops the chain
 // once: a run of the fan-out, a run of the drain, and the run of the scheduled
 // fan-out (which marks nothing itself) all trigger a pass that starts nothing.
-func TestTouchedDaysDrainEveryRunEndStopsWhileAMarkIsMissing(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
-	defer cancel()
-	rig := newDrainRig(t, ctx)
+func takeTimeTouchedDaysDrainEveryRunEndStopsWhileAMarkIsMissing(t *testing.T, ctx context.Context, rig *drainRig) {
 	target := time.Date(2026, 8, 20, 0, 0, 0, 0, time.UTC)
 	perPass := syncdispatchruntime.TouchedDaysPerDrainPass
 
@@ -266,10 +260,7 @@ WHERE org_id = $1::uuid`, orgID); err != nil {
 // Keys touched again while the runs ran are pending after the mark. That is
 // normal after a sync with a wide window, and the chain goes on: the touched
 // days get their next runs.
-func TestTouchedDaysDrainKeysTouchedAgainAfterTheTakeDoNotStopTheChain(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
-	defer cancel()
-	rig := newDrainRig(t, ctx)
+func takeTimeTouchedDaysDrainKeysTouchedAgainAfterTheTakeDoNotStopTheChain(t *testing.T, ctx context.Context, rig *drainRig) {
 	orgID := uuid.NewString()
 	newest := time.Date(2026, 7, 31, 0, 0, 0, 0, time.UTC)
 	days := seedPendingDays(t, ctx, rig.touchedRig, orgID, newest, 3)
@@ -305,10 +296,7 @@ func TestTouchedDaysDrainKeysTouchedAgainAfterTheTakeDoNotStopTheChain(t *testin
 // A key is a missing mark only when it was last touched strictly before the
 // take time. A touch at exactly the take time is after the mark (which stamps
 // the keys one millisecond before it) and is not.
-func TestTouchedDaysDrainATouchAtTheTakeTimeIsNotAMissingMark(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
-	defer cancel()
-	rig := newDrainRig(t, ctx)
+func takeTimeTouchedDaysDrainATouchAtTheTakeTimeIsNotAMissingMark(t *testing.T, ctx context.Context, rig *drainRig) {
 	orgID := uuid.NewString()
 	newest := time.Date(2026, 7, 31, 0, 0, 0, 0, time.UTC)
 	days := seedPendingDays(t, ctx, rig.touchedRig, orgID, newest, 1)
@@ -349,10 +337,7 @@ func TestTouchedDaysDrainATouchAtTheTakeTimeIsNotAMissingMark(t *testing.T) {
 
 // A run that has no take time (started by a build before the column) cannot be
 // checked: the pass goes on, counts it and says so.
-func TestTouchedDaysDrainARunWithoutATakeTimeDoesNotStopTheChain(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
-	defer cancel()
-	rig := newDrainRig(t, ctx)
+func takeTimeTouchedDaysDrainARunWithoutATakeTimeDoesNotStopTheChain(t *testing.T, ctx context.Context, rig *drainRig) {
 	orgID := uuid.NewString()
 	newest := time.Date(2026, 7, 31, 0, 0, 0, 0, time.UTC)
 	days := seedPendingDays(t, ctx, rig.touchedRig, orgID, newest, 2)
@@ -386,10 +371,7 @@ func TestTouchedDaysDrainARunWithoutATakeTimeDoesNotStopTheChain(t *testing.T) {
 // The runs of the days that are not skipped come first; the retries of skipped
 // days only use the slots that are left. Retries of newer days never take the
 // slots of older days that never failed.
-func TestTouchedDaysDrainRetriesOnlyUseTheSlotsTheOtherDaysLeave(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
-	defer cancel()
-	rig := newDrainRig(t, ctx)
+func takeTimeTouchedDaysDrainRetriesOnlyUseTheSlotsTheOtherDaysLeave(t *testing.T, ctx context.Context, rig *drainRig) {
 	orgID := uuid.NewString()
 	newest := time.Date(2026, 7, 31, 0, 0, 0, 0, time.UTC)
 	perPass := syncdispatchruntime.TouchedDaysPerDrainPass
@@ -490,10 +472,7 @@ func TestTouchedDaysDrainRunsAreCommittedWhenTheTakeTimeColumnIsAbsent(t *testin
 
 // A run of every repository lists every key of its day: the same strict
 // comparison applies to the oldest pending touch of that day.
-func TestTouchedDaysDrainATouchAtTheTakeTimeOfARunOfEveryRepositoryIsNotAMissingMark(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
-	defer cancel()
-	rig := newDrainRig(t, ctx)
+func takeTimeTouchedDaysDrainATouchAtTheTakeTimeOfARunOfEveryRepositoryIsNotAMissingMark(t *testing.T, ctx context.Context, rig *drainRig) {
 	orgID := uuid.NewString()
 	day := time.Date(2026, 7, 31, 0, 0, 0, 0, time.UTC)
 	touchedAt := time.Now().UTC().Add(-time.Hour).Truncate(time.Millisecond)
@@ -519,10 +498,7 @@ func TestTouchedDaysDrainATouchAtTheTakeTimeOfARunOfEveryRepositoryIsNotAMissing
 
 // The take time of a run is written once: a second stamp of the same
 // generation does not move it.
-func TestTouchedDaysDrainTheTakeTimeOfARunIsWrittenOnce(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
-	defer cancel()
-	rig := newDrainRig(t, ctx)
+func takeTimeTouchedDaysDrainTheTakeTimeOfARunIsWrittenOnce(t *testing.T, ctx context.Context, rig *drainRig) {
 	orgID := uuid.NewString()
 	generation := daily.TouchedDrainGenerationPrefix + uuid.NewString()
 	runID := uuid.NewString()
@@ -572,10 +548,7 @@ VALUES ($1::uuid, $2::uuid, $3::date, $4, $5, $5, $7, $7, $7, true, $6)`,
 
 // Under the bound the newest runs are the ones checked: an unmarked key of the
 // newest run stops the chain although more runs than the bound ended.
-func TestTouchedDaysDrainStopCheckUnderTheBoundChecksTheNewestRuns(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
-	defer cancel()
-	rig := newDrainRig(t, ctx)
+func takeTimeTouchedDaysDrainStopCheckUnderTheBoundChecksTheNewestRuns(t *testing.T, ctx context.Context, rig *drainRig) {
 	orgID := uuid.NewString()
 	day := time.Date(2026, 7, 31, 0, 0, 0, 0, time.UTC)
 	take := time.Now().UTC().Add(-time.Hour).Truncate(time.Millisecond)
@@ -597,10 +570,7 @@ func TestTouchedDaysDrainStopCheckUnderTheBoundChecksTheNewestRuns(t *testing.T)
 
 // Runs without a take time do not use the slots of the bound: during a rolling
 // deploy many of them must not hide a stamped run behind them.
-func TestTouchedDaysDrainRunsWithoutATakeTimeDoNotUseTheSlotsOfTheBound(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
-	defer cancel()
-	rig := newDrainRig(t, ctx)
+func takeTimeTouchedDaysDrainRunsWithoutATakeTimeDoNotUseTheSlotsOfTheBound(t *testing.T, ctx context.Context, rig *drainRig) {
 	orgID := uuid.NewString()
 	day := time.Date(2026, 7, 31, 0, 0, 0, 0, time.UTC)
 	take := time.Now().UTC().Add(-time.Hour).Truncate(time.Millisecond)
@@ -619,10 +589,7 @@ func TestTouchedDaysDrainRunsWithoutATakeTimeDoNotUseTheSlotsOfTheBound(t *testi
 
 // A run that ended failed or canceled is checked too: its keys were marked
 // only by a mark that landed, so a lost mark stops the chain.
-func TestTouchedDaysDrainAFailedRunWithALostMarkStopsTheChain(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
-	defer cancel()
-	rig := newDrainRig(t, ctx)
+func takeTimeTouchedDaysDrainAFailedRunWithALostMarkStopsTheChain(t *testing.T, ctx context.Context, rig *drainRig) {
 	orgID := uuid.NewString()
 	day := time.Date(2026, 7, 31, 0, 0, 0, 0, time.UTC)
 	take := time.Now().UTC().Add(-time.Hour).Truncate(time.Millisecond)
@@ -637,48 +604,39 @@ func TestTouchedDaysDrainAFailedRunWithALostMarkStopsTheChain(t *testing.T) {
 
 // The run whose end triggered the pass is read apart from the newest runs, so
 // no number of newer ended runs hides its lost mark.
-func TestTouchedDaysDrainTheTriggerRunIsCheckedWhateverNumberOfNewerRunsEnded(t *testing.T) {
-	for _, newer := range []int{201} {
-		t.Run(fmt.Sprintf("%d_newer_runs", newer), func(t *testing.T) {
-			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
-			defer cancel()
-			rig := newDrainRig(t, ctx)
-			orgID := uuid.NewString()
-			day := time.Date(2026, 7, 31, 0, 0, 0, 0, time.UTC)
-			take := time.Now().UTC().Add(-time.Hour).Truncate(time.Millisecond)
-			touchedEvent(t, ctx, rig.touchedRig, orgID, day, uuid.NewString(), "touched", take.Add(-time.Minute))
-			trigger := insertMarkingRun(t, ctx, rig.touchedRig, orgID, day, "succeeded", &take, time.Now().UTC().Add(-3*time.Hour))
-			for i := 1; i <= newer; i++ {
-				insertMarkingRun(t, ctx, rig.touchedRig, orgID, day.AddDate(0, 0, -i), "succeeded", &take,
-					time.Now().UTC().Add(-time.Duration(i)*time.Second))
+func takeTimeTouchedDaysDrainTheTriggerRunIsCheckedWhateverNumberOfNewerRunsEnded(t *testing.T, ctx context.Context, rig *drainRig) {
+	const newer = 201
+	orgID := uuid.NewString()
+	day := time.Date(2026, 7, 31, 0, 0, 0, 0, time.UTC)
+	take := time.Now().UTC().Add(-time.Hour).Truncate(time.Millisecond)
+	touchedEvent(t, ctx, rig.touchedRig, orgID, day, uuid.NewString(), "touched", take.Add(-time.Minute))
+	trigger := insertMarkingRun(t, ctx, rig.touchedRig, orgID, day, "succeeded", &take, time.Now().UTC().Add(-3*time.Hour))
+	for i := 1; i <= newer; i++ {
+		insertMarkingRun(t, ctx, rig.touchedRig, orgID, day.AddDate(0, 0, -i), "succeeded", &take,
+			time.Now().UTC().Add(-time.Duration(i)*time.Second))
+	}
+	rig.drain(t, nil, nil).DrainTouchedDays(ctx, orgID, "e:"+trigger)
+	if got := rig.observer.count(drainEventChainStopped); got != 1 {
+		t.Fatalf("chain_stopped_mark_missing = %d, want 1 with %d newer ended runs: the lost mark of the trigger run was not seen", got, newer)
+	}
+	stopped := false
+	for _, line := range rig.logLines("touched_days_drain.failed") {
+		if strings.Contains(line, "chain_stopped_mark_missing") {
+			stopped = true
+			if !strings.Contains(line, `"drain_trigger_checked":true`) {
+				t.Fatalf("the stop line does not say that the trigger run was checked: %s", line)
 			}
-			rig.drain(t, nil, nil).DrainTouchedDays(ctx, orgID, "e:"+trigger)
-			if got := rig.observer.count(drainEventChainStopped); got != 1 {
-				t.Fatalf("chain_stopped_mark_missing = %d, want 1 with %d newer ended runs: the lost mark of the trigger run was not seen", got, newer)
-			}
-			stopped := false
-			for _, line := range rig.logLines("touched_days_drain.failed") {
-				if strings.Contains(line, "chain_stopped_mark_missing") {
-					stopped = true
-					if !strings.Contains(line, `"drain_trigger_checked":true`) {
-						t.Fatalf("the stop line does not say that the trigger run was checked: %s", line)
-					}
-				}
-			}
-			if !stopped {
-				t.Fatal("no chain_stopped_mark_missing line")
-			}
-		})
+		}
+	}
+	if !stopped {
+		t.Fatal("no chain_stopped_mark_missing line")
 	}
 }
 
 // The trigger run is returned once even when it is among the newest runs, and
 // it takes no slot of the limit: the flag says truncated only when a run is
 // really left out.
-func TestTouchedDaysDrainTheTriggerRunAmongTheNewestIsReturnedOnceAndTakesNoSlot(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
-	defer cancel()
-	rig := newDrainRig(t, ctx)
+func takeTimeTouchedDaysDrainTheTriggerRunAmongTheNewestIsReturnedOnceAndTakesNoSlot(t *testing.T, ctx context.Context, rig *drainRig) {
 	orgID := uuid.NewString()
 	day := time.Date(2026, 7, 31, 0, 0, 0, 0, time.UTC)
 	take := time.Now().UTC().Add(-time.Hour).Truncate(time.Millisecond)
@@ -715,10 +673,7 @@ func TestTouchedDaysDrainTheTriggerRunAmongTheNewestIsReturnedOnceAndTakesNoSlot
 // small limit through the same code path as the production limit: the trigger
 // run, oldest of all, is returned first whatever the number of newer runs, and
 // the flag says truncated only when one of the others is left out.
-func TestTouchedDaysDrainTheTriggerRunTakesNoSlotAtTheBoundary(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
-	defer cancel()
-	rig := newDrainRig(t, ctx)
+func takeTimeTouchedDaysDrainTheTriggerRunTakesNoSlotAtTheBoundary(t *testing.T, ctx context.Context, rig *drainRig) {
 	day := time.Date(2026, 7, 31, 0, 0, 0, 0, time.UTC)
 	take := time.Now().UTC().Add(-time.Hour).Truncate(time.Millisecond)
 	const limit = 3
@@ -738,5 +693,38 @@ func TestTouchedDaysDrainTheTriggerRunTakesNoSlotAtTheBoundary(t *testing.T) {
 			t.Fatalf("%d newer runs, limit %d: %d runs (want %d), first is the trigger run %v, truncated %v (want %v)",
 				newer, limit, len(runs), wantLen, len(runs) > 0 && runs[0].RunID == trigger, truncated, newer > limit)
 		}
+	}
+}
+
+// The cases share one rig (and so one scratch database of each store): each
+// one works on organizations of its own and clears the observer first.
+func TestTouchedDaysDrainTakeTime(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
+	defer cancel()
+	rig := newDrainRig(t, ctx)
+	cases := []struct {
+		name string
+		run  func(*testing.T, context.Context, *drainRig)
+	}{
+		{"RecordsTheTakeTimeWithItsRuns", takeTimeTouchedDaysDrainRecordsTheTakeTimeWithItsRuns},
+		{"EveryRunEndStopsWhileAMarkIsMissing", takeTimeTouchedDaysDrainEveryRunEndStopsWhileAMarkIsMissing},
+		{"KeysTouchedAgainAfterTheTakeDoNotStopTheChain", takeTimeTouchedDaysDrainKeysTouchedAgainAfterTheTakeDoNotStopTheChain},
+		{"ATouchAtTheTakeTimeIsNotAMissingMark", takeTimeTouchedDaysDrainATouchAtTheTakeTimeIsNotAMissingMark},
+		{"ARunWithoutATakeTimeDoesNotStopTheChain", takeTimeTouchedDaysDrainARunWithoutATakeTimeDoesNotStopTheChain},
+		{"RetriesOnlyUseTheSlotsTheOtherDaysLeave", takeTimeTouchedDaysDrainRetriesOnlyUseTheSlotsTheOtherDaysLeave},
+		{"ATouchAtTheTakeTimeOfARunOfEveryRepositoryIsNotAMissingMark", takeTimeTouchedDaysDrainATouchAtTheTakeTimeOfARunOfEveryRepositoryIsNotAMissingMark},
+		{"TheTakeTimeOfARunIsWrittenOnce", takeTimeTouchedDaysDrainTheTakeTimeOfARunIsWrittenOnce},
+		{"StopCheckUnderTheBoundChecksTheNewestRuns", takeTimeTouchedDaysDrainStopCheckUnderTheBoundChecksTheNewestRuns},
+		{"RunsWithoutATakeTimeDoNotUseTheSlotsOfTheBound", takeTimeTouchedDaysDrainRunsWithoutATakeTimeDoNotUseTheSlotsOfTheBound},
+		{"AFailedRunWithALostMarkStopsTheChain", takeTimeTouchedDaysDrainAFailedRunWithALostMarkStopsTheChain},
+		{"TheTriggerRunIsCheckedWhateverNumberOfNewerRunsEnded", takeTimeTouchedDaysDrainTheTriggerRunIsCheckedWhateverNumberOfNewerRunsEnded},
+		{"TheTriggerRunAmongTheNewestIsReturnedOnceAndTakesNoSlot", takeTimeTouchedDaysDrainTheTriggerRunAmongTheNewestIsReturnedOnceAndTakesNoSlot},
+		{"TheTriggerRunTakesNoSlotAtTheBoundary", takeTimeTouchedDaysDrainTheTriggerRunTakesNoSlotAtTheBoundary},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			rig.reset()
+			c.run(t, ctx, rig)
+		})
 	}
 }

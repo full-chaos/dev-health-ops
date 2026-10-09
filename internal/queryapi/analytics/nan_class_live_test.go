@@ -256,7 +256,7 @@ func nanClassClickHouseURI(t testing.TB) (dsn string, hostPort string) {
 			"this step specifically")
 	}
 	// CHAOS-4643 round 9 enumeration (B5): this branch is DEFENSIVE ONLY and
-	// unreachable with clickhouse-go/v2 pinned at v2.48.0 (go.mod:7). Traced
+	// unreachable with clickhouse-go/v2 pinned at v2.48.0 (go.mod:12). Traced
 	// against the module cache: ParseDSN (clickhouse_options.go:103) calls
 	// opt.fromDSN(dsn) and returns its error unchanged; fromDSN
 	// (clickhouse_options.go:186) returns an error at line ~192-194 when
@@ -1027,7 +1027,7 @@ func TestNanClassClickHouseURI_FailureMessageNeverDerivesFromInput(t *testing.T)
 // TestClickHouseParseDSNContract_SuccessNeverYieldsEmptyAddr pins the
 // assumption documented above nanClassClickHouseURI's "CLICKHOUSE_URI has no
 // host" branch (B5 in CHAOS-4643 round 9's failure-branch enumeration): with
-// clickhouse-go/v2 pinned at v2.48.0 (go.mod:7), a successful
+// clickhouse-go/v2 pinned at v2.48.0 (go.mod:12), a successful
 // chdriver.ParseDSN can never yield an empty opts.Addr, because fromDSN
 // rejects an empty dsn.Host before populating Addr and otherwise always
 // splits a non-empty Host into at least one element. This is a

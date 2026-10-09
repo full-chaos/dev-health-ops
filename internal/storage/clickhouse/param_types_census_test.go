@@ -16,6 +16,7 @@ import (
 
 const (
 	driverPackage      = "github.com/ClickHouse/clickhouse-go/v2"
+	driverTypesPackage = driverPackage + "/lib/driver"
 	namedValueType     = "github.com/ClickHouse/clickhouse-go/v2/lib/driver.NamedValue"
 	queryClientPackage = "github.com/full-chaos/dev-health-go/clickhouse"
 	queryClientBinding = queryClientPackage + ".Binding"
@@ -37,7 +38,8 @@ var (
 		"uint32": true, "uint64": true, "time.Time": true,
 	}
 	// Helpers that bind each value of a map[string]any their callers build.
-	// The census does not type those values: a caller can hand them any type.
+	// The census does not type those values: a caller can hand them any type,
+	// and the same packages build log and JSON maps of the same type.
 	anyValueHelpers = map[string]bool{
 		"internal/jobs/metrics/remaining.namedArguments":        true,
 		"internal/syncdispatchruntime.namedClickHouseArguments": true,
@@ -62,12 +64,12 @@ func TestEveryServerSideParameterHasAProvenType(t *testing.T) {
 	}
 	var importers []string
 	for _, p := range list {
-		if p.Imports[driverPackage] != nil || p.Imports[queryClientPackage] != nil {
+		if p.Imports[driverPackage] != nil || p.Imports[driverTypesPackage] != nil || p.Imports[queryClientPackage] != nil {
 			importers = append(importers, p.PkgPath)
 		}
 	}
 	if len(importers) == 0 {
-		t.Fatal("no package imports the driver or the query client: the scan did not run over production code")
+		t.Fatal("no package imports the driver, its driver types or the query client: the scan did not run over production code")
 	}
 	cfg := &packages.Config{
 		Mode: packages.NeedName | packages.NeedModule | packages.NeedFiles | packages.NeedSyntax | packages.NeedTypes | packages.NeedTypesInfo,

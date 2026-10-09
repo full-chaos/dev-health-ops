@@ -5,6 +5,7 @@ package clickhouse
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -203,6 +204,11 @@ func parameterConns(t *testing.T) (context.Context, driver.Conn, driver.Conn) {
 	httpDSN, err := containers.ClickHouseHTTPDSN(ctx, instance)
 	if err != nil {
 		t.Fatal(err)
+	}
+	// The harness gives a container's HTTP port under the clickhouse://
+	// scheme, and the HTTP transport dials the URL's own scheme.
+	if rest, ok := strings.CutPrefix(httpDSN, "clickhouse://"); ok {
+		httpDSN = "http://" + rest
 	}
 	open := func(dsn string, protocol clickhouse.Protocol) driver.Conn {
 		options, err := clickhouse.ParseDSN(dsn)

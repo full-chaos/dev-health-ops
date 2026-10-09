@@ -1017,7 +1017,12 @@ type DiffOptions struct {
 	// Golden, when set, says the Python answers Diff compares against come
 	// from a frozen golden, not a live Python plane: Diff then writes no
 	// both-planes proof (Golden.Finish writes the Go-only one).
-	Golden *Golden
+	Golden *Golden // Retire, with Golden and Pin, reports the requests whose Python
+	// reference Pin's ruling retired: Diff still sends each to the Go plane in
+	// its place in the sequence, checks Go's normalized answer against Pin,
+	// and declares the Python answer retired (Golden.Retired), uncompared.
+	Retire func(request Request) bool
+	Pin    *GoPin
 }
 
 // Diff sends each request to the Go api at goBase, compares it with the
@@ -1041,6 +1046,9 @@ func Diff(t *testing.T, goBase string, requests []Request, python []Response, op
 		if err := options.Golden.bindAnswers(requests, python); err != nil {
 			t.Fatal(err)
 		}
+	}
+	if (options.Retire != nil) != (options.Pin != nil) || (options.Retire != nil && options.Golden == nil) {
+		t.Fatal("diff: Retire needs a Pin and a Golden")
 	}
 	var receipt strings.Builder
 	for index, request := range requests {
@@ -1070,6 +1078,16 @@ func Diff(t *testing.T, goBase string, requests []Request, python []Response, op
 			}
 			pythonResponse, goResponse = projectedPython, projectedGo
 		}
+		if options.Retire != nil && options.Retire(request) {
+			pinned := goResponse
+			if options.Normalize != nil {
+				pinned.Body = options.Normalize(request, pinned.Body)
+			}
+			options.Golden.retireBound(python[index], options.Pin.spec.Ruling)
+			same := options.Pin.Check(t, request.Name, PinText(pinned))
+			fmt.Fprintf(&receipt, "%-58s retired     go=%d %s\n", request.Name, goResponse.Status, pinMark(same))
+			continue
+		}
 		same, compared, pyShown, goShown := Compare(request, pythonResponse, goResponse, compareOptions)
 		fmt.Fprintf(&receipt, "%-58s python=%d go=%d %s\n", request.Name, python[index].Status, goResponse.Status, Mark(same))
 		if !same {
@@ -1090,6 +1108,14 @@ func Diff(t *testing.T, goBase string, requests []Request, python []Response, op
 		options.Golden.afterDiff()
 	}
 	return receipt.String()
+}
+
+// pinMark is a retired request's receipt mark.
+func pinMark(same bool) string {
+	if same {
+		return "PINNED"
+	}
+	return "PIN-DIFF"
 }
 
 // Compare is Diff's decision for one request: statuses and normalized

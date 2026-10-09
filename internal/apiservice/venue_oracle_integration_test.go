@@ -63,6 +63,7 @@ func TestVenueOracleProtectedRoutes(t *testing.T) {
 	// are placeholders in the golden on both planes.
 	spec.Scrub = scrubCustomerPushTokens
 	golden := venueoracle.OpenGolden(t, spec)
+	pin := venueoracle.OpenGoPin(t, venueoracle.GoPinSpec{Path: "testdata/venue/protected-routes.go-pin.json", SHA256: "b47128aa3be23ab91dcf1032d6fb298d7d17bf177ea91b1d8e6ab08676184f4c", Ruling: teamsRuling})
 	sent := &sentReports{}
 	endpoint := httptest.NewServer(sent)
 	t.Cleanup(endpoint.Close)
@@ -122,9 +123,7 @@ func TestVenueOracleProtectedRoutes(t *testing.T) {
 	requests := venueRequests(seed, venue.Tokens)
 	var receipt strings.Builder
 	pythonResponses := golden.Python(t, venue, requests)
-	pythonProviderRequests := strings.Split(golden.InspectRows(t, "python provider requests", func() string {
-		return strings.Join(members.take(), "\n")
-	}), "\n")
+	golden.RetireRows(t, "python provider requests", teamsRuling)
 	receipt.WriteString(venueoracle.Diff(t, base, requests, pythonResponses, venueoracle.DiffOptions{
 		Golden: golden,
 		// Composes TWO independent normalizations, each scoped to its own
@@ -137,32 +136,28 @@ func TestVenueOracleProtectedRoutes(t *testing.T) {
 		// pythonparity.StrRepr encoder (CHAOS-6322, #2850) -- so the
 		// byte-for-byte body comparison no longer needs a per-request
 		// exception for it.
-		Normalize: func(request venueoracle.Request, body string) string {
-			body = normalizeRuled(body)
-			body = timestampFieldPattern.ReplaceAllString(body, `"$1":"<time>"`)
-			body = importedDiscoveredAtPattern.ReplaceAllString(body, `"discovered_at":"<time>"`)
-			return body
-		},
+		Normalize: normalizeProtected,
 		Inspect: func(request venueoracle.Request, goResponse venueoracle.Response) {
 			if strings.HasPrefix(request.Name, "report: ") && goResponse.Status == http.StatusOK {
 				assertPerTableCounts(t, ctx, venue.AdminURI(t, venue.GoDB), goResponse.Body)
 			}
 		},
+		Retire: retiredTeamsRequest,
+		Pin:    pin,
 		// A HEAD probe has no body to normalize, but its content-length is the
 		// length of the ruled GET body.
 		SkipContentLength: func(request venueoracle.Request) bool {
 			return request.Method == http.MethodHead && (request.Path == "/health" || request.Path == "/health/workers")
 		},
 	}))
-	// The provider traffic the member routes caused: the same requests
-	// (method, path, sorted query) reached the stub from both planes.
+	// The provider traffic the member routes caused (method, path, sorted
+	// query): the member routes are retired, so Go's traffic is pinned.
 	goProviderRequests := members.take()
-	providerSame := strings.Join(pythonProviderRequests, "\n") == strings.Join(goProviderRequests, "\n") && len(goProviderRequests) > 0
-	if !providerSame {
-		t.Errorf("member-route provider requests differ:\n python:\n%s\n go:\n%s",
-			strings.Join(pythonProviderRequests, "\n"), strings.Join(goProviderRequests, "\n"))
+	if len(goProviderRequests) == 0 {
+		t.Errorf("the member routes made no provider request")
 	}
-	fmt.Fprintf(&receipt, "member-route provider requests (%d): %s\n", len(goProviderRequests), venueoracle.Mark(providerSame))
+	fmt.Fprintf(&receipt, "member-route provider requests (%d): %s\n", len(goProviderRequests),
+		pinMark(pin.Check(t, "member-route provider requests", strings.Join(goProviderRequests, "\n"))))
 	// The rows the writes touched are identical on both copies.
 	compareRows(t, ctx, golden, venue, &receipt, "organizations", `SELECT id::text, slug, name, coalesce(description, '<null>'), tier, is_active,
 		updated_at > created_at, settings::text FROM organizations ORDER BY slug`)
@@ -186,41 +181,52 @@ func TestVenueOracleProtectedRoutes(t *testing.T) {
 		t.Errorf("sent telemetry reports are empty")
 	}
 	fmt.Fprintf(&receipt, "telemetry reports sent: %s\n", venueoracle.Mark(pySent == goSent && pySent != ""))
+	// The fixture's qa and design teams have two holders, so their drift and
+	// member happy paths answer 409; one team with one holder and a project
+	// key pins those paths, Go-only, after every Python-compared request and
+	// Postgres snapshot.
+	for _, request := range soloTeamRequests(venue.Tokens) {
+		response := golden.Project(t, venueoracle.Do(t, base, request))
+		response.Body = normalizeProtected(request, response.Body)
+		fmt.Fprintf(&receipt, "%-58s go-only     go=%d %s\n", request.Name, response.Status,
+			pinMark(pin.Check(t, request.Name, venueoracle.PinText(response))))
+	}
 	// CHAOS-6310: the team + identity admin CRUD routes write ClickHouse,
 	// not Postgres -- same shape, a ClickHouse reader instead of a
 	// Postgres one. FINAL resolves each plane's own ReplacingMergeTree
 	// merge state, the same discipline the Python readers use.
-	compareCHRows(t, ctx, golden, venue, &receipt, "teams",
+	pinCHRows(t, ctx, golden, pin, venue, &receipt, "teams",
 		`SELECT id, name, coalesce(description, '<null>'), members, manual_members, project_keys,
 			repo_patterns, is_active, provider, native_team_key FROM teams FINAL
 		WHERE org_id != '' ORDER BY id`)
 	// CHAOS-6311: POST /teams/import's drift-projector writes, compared as
 	// raw text. Timestamps are excluded (each plane mints its own now()).
-	compareCHRows(t, ctx, golden, venue, &receipt, "team_provider_observations",
+	pinCHRows(t, ctx, golden, pin, venue, &receipt, "team_provider_observations",
 		`SELECT provider, native_team_key, team_id, coalesce(name, '<null>'), coalesce(description, '<null>'),
 			members_json, project_keys_json, repo_patterns_json, is_active, coalesce(parent_team_id, '<null>')
 		FROM team_provider_observations FINAL WHERE org_id != '' ORDER BY provider, native_team_key`)
-	compareCHRows(t, ctx, golden, venue, &receipt, "team_drift_changes",
+	pinCHRows(t, ctx, golden, pin, venue, &receipt, "team_drift_changes",
 		`SELECT change_id, entity_type, entity_id, provider, coalesce(native_team_key, '<null>'), change_type,
 			coalesce(field, '<null>'), old_value_json, new_value_json, status, coalesce(decided_by, '<null>')
 		FROM team_drift_changes FINAL WHERE org_id != '' ORDER BY change_id`)
-	compareCHRows(t, ctx, golden, venue, &receipt, "team_memberships",
+	pinCHRows(t, ctx, golden, pin, venue, &receipt, "team_memberships",
 		`SELECT provider, team_id, member_id, coalesce(raw_provider_user_id, '<null>'), coalesce(raw_email, '<null>'), identity_facets,
 			source, is_primary, specificity, priority, valid_from, valid_to IS NULL, toUInt8(ifNull(valid_to > valid_from, 0))
 		FROM team_memberships FINAL WHERE org_id != '' ORDER BY provider, team_id, member_id, source, valid_from`)
-	compareCHRows(t, ctx, golden, venue, &receipt, "manual_attribution_fallbacks",
+	pinCHRows(t, ctx, golden, pin, venue, &receipt, "manual_attribution_fallbacks",
 		`SELECT provider, scope_type, scope_id, team_id, team_name, reason, priority, valid_from, valid_to IS NULL,
 			coalesce(created_by, '<null>'), created_at FROM manual_attribution_fallbacks FINAL WHERE org_id != '' ORDER BY provider, scope_type, scope_id`)
-	compareCHRows(t, ctx, golden, venue, &receipt, "team_drift_changes (seeded review rows, decided fields)",
+	pinCHRows(t, ctx, golden, pin, venue, &receipt, "team_drift_changes (seeded review rows, decided fields)",
 		`SELECT change_id, entity_type, entity_id, status, coalesce(decided_by, '<null>'), decided_at IS NOT NULL, first_seen_at, last_seen_at > toDateTime64('2026-09-10', 6)
 		FROM team_drift_changes FINAL WHERE org_id != '' AND change_id LIKE 'c-%' ORDER BY org_id, change_id`)
 	compareCHRows(t, ctx, golden, venue, &receipt, "team_sync_policies",
 		`SELECT team_id, sync_policy, managed_fields, coalesce(updated_by, '<null>')
 		FROM team_sync_policies FINAL WHERE org_id != '' ORDER BY team_id`)
-	compareCHRows(t, ctx, golden, venue, &receipt, "identities",
+	pinCHRows(t, ctx, golden, pin, venue, &receipt, "identities",
 		`SELECT canonical_id, coalesce(display_name, '<null>'), coalesce(email, '<null>'),
 			provider_identities, team_ids, is_active FROM identities FINAL
 		WHERE org_id != '' ORDER BY canonical_id`)
+	pin.Finish(t)
 	golden.Finish(t)
 	if path := os.Getenv("DEV_HEALTH_VENUE_RECEIPT"); path != "" {
 		_ = os.WriteFile(path, []byte(receipt.String()), 0o600)
@@ -406,4 +412,70 @@ func compareCHRows(t *testing.T, ctx context.Context, golden *venueoracle.Golden
 		t.Errorf("%s after the writes are empty", name)
 	}
 	fmt.Fprintf(receipt, "%s rows after writes: %s\n", name, venueoracle.Mark(pyRows == goRows && pyRows != ""))
+}
+
+// teamsRuling retired the Python reference of the teams and identities admin
+// routes: team ids carry a provider prefix (custom: for an admin team), a
+// bare id resolves to its one holder for a read and a write (two holders are
+// a 409), and team_uuid derives from the id. The rule tests in
+// internal/api/teamsidentity and internal/providersync own that contract;
+// the pin shows any change in Go's answers.
+const teamsRuling = "chris D5685/D5711/D5712/D5714/D5717 (team id carry, CHAOS-8939/CHAOS-8940)"
+
+// retiredTeamsRequest reports a request of the teams and identities admin
+// groups.
+func retiredTeamsRequest(request venueoracle.Request) bool {
+	for _, group := range []string{"teams:", "teams import:", "identities:", "drift:", "members:"} {
+		if strings.HasPrefix(request.Name, group) {
+			return true
+		}
+	}
+	return false
+}
+
+// pinCHRows is compareCHRows for a table the retired routes write: Go's rows
+// are pinned and the frozen Python snapshot is retired.
+func pinCHRows(t *testing.T, ctx context.Context, golden *venueoracle.Golden, pin *venueoracle.GoPin, venue *venueoracle.Venue, receipt *strings.Builder, name, query string) {
+	t.Helper()
+	goRows := golden.Project(t, venueoracle.Response{Body: venueoracle.CHRows(t, ctx, venue.AdminClickHouseURI(t, venue.GoClickHouseDB), query)}).Body
+	golden.RetireRows(t, name, teamsRuling)
+	if goRows == "" {
+		t.Errorf("%s after the writes are empty", name)
+	}
+	fmt.Fprintf(receipt, "%s rows after writes: %s\n", name, pinMark(pin.Check(t, name+" rows", goRows)))
+}
+
+func pinMark(same bool) string {
+	if same {
+		return "PINNED"
+	}
+	return "PIN-DIFF"
+}
+
+func normalizeProtected(request venueoracle.Request, body string) string {
+	body = normalizeRuled(body)
+	body = timestampFieldPattern.ReplaceAllString(body, `"$1":"<time>"`)
+	body = importedDiscoveredAtPattern.ReplaceAllString(body, `"discovered_at":"<time>"`)
+	return body
+}
+
+// soloTeamRequests create a team with one holder and a project key, then run
+// the infer, drift approve and dismiss, and member confirm happy paths on it
+// (its drift rows are seeded by seedDriftReview).
+func soloTeamRequests(tokens map[string]string) []venueoracle.Request {
+	headers := map[string]string{"Authorization": "Bearer " + tokens["admin"], "Content-Type": "application/json"}
+	get := map[string]string{"Authorization": "Bearer " + tokens["admin"]}
+	teams := "/api/v1/admin/teams"
+	return []venueoracle.Request{
+		{Name: "solo: create a team with a project key", Method: "POST", Path: teams, Headers: headers,
+			Body: venueoracle.B64(`{"team_id":"solo","name":"Solo","project_keys":["design"]}`)},
+		{Name: "solo: infer members from its project key", Method: "GET", Path: teams + "/solo/infer-members?credential_name=jira-ok", Headers: get},
+		{Name: "solo: approve a name change", Method: "POST", Path: teams + "/solo/approve-changes", Headers: headers,
+			Body: venueoracle.B64(`{"change_ids":["c-name-solo"]}`)},
+		{Name: "solo: dismiss a description change", Method: "POST", Path: teams + "/solo/dismiss-changes", Headers: headers,
+			Body: venueoracle.B64(`{"change_ids":["c-desc-solo"]}`)},
+		{Name: "solo: get after the decisions", Method: "GET", Path: teams + "/solo", Headers: get},
+		{Name: "solo: confirm a new member", Method: "POST", Path: teams + "/solo/confirm-members", Headers: headers,
+			Body: venueoracle.B64(`{"team_id":"solo","links":[{"provider_identity":"sol-gh","provider":"github","canonical_id":"sol","action":"create"}]}`)},
+	}
 }

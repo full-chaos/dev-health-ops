@@ -142,7 +142,7 @@ func TestTeamCRUDRoundTrip(t *testing.T) {
 
 	desc := "first description"
 	created, err := store.CreateOrUpdateTeam(ctx, orgID, TeamWrite{
-		TeamID: "custom:team-a", Name: "Team A", Description: &desc,
+		Origin: "custom", TeamID: "custom:team-a", Name: "Team A", Description: &desc,
 		RepoPatterns: &[]string{"repo-*"}, ProjectKeys: &[]string{"PROJ"},
 	})
 	if err != nil {

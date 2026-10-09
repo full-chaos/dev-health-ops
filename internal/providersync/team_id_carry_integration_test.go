@@ -184,7 +184,7 @@ func TestCarryTeamIDsMovesEveryBareProviderTeamID(t *testing.T) {
 	// computes, the parent mapped; old rows inactive.
 	for _, want := range []struct{ id, provider, native string }{
 		{"linear:ENG", "linear", "ENG"}, {"linear:SUB", "linear", "SUB"}, {"jira:" + carryAtlassianID, "jira", carryAtlassianARI},
-		{"custom:platform", "custom", "platform"}, {"linear:DATA", "", ""}, {"linear:QA", "", ""},
+		{"custom:platform", "", "platform"}, {"linear:DATA", "", ""}, {"linear:QA", "linear", "QA"},
 	} {
 		got := f.str(`SELECT concat(provider, '|', ifNull(native_team_key, ''), '|', toString(is_active)) FROM teams FINAL WHERE org_id = ? AND id = ?`, want.id)
 		if got != want.provider+"|"+want.native+"|1" {
@@ -735,20 +735,26 @@ func TestCarryTeamIDsKeepsAnAmbiguousAdminEditAsTheAdminsTeam(t *testing.T) {
 	}
 }
 
-// An admin team whose custom:<id> a pushed custom-system team holds is not
-// merged into it: the carry counts the conflict and leaves both as they are.
-func TestCarryTeamIDsLeavesAnAdminTeamWhoseCustomIDAPushedTeamHolds(t *testing.T) {
+// An admin's own team "eng" and a pushed custom-system team "eng" are one
+// custom team, custom:eng: the carry moves the admin team to that id, where
+// the pushed row is kept (a keyed row is not written again) and the bare
+// admin row goes inactive.
+func TestCarryTeamIDsMovesAnAdminTeamOntoThePushedCustomTeamOfItsID(t *testing.T) {
 	ctx, conn := newWorkItemEffectsConn(t)
 	f := carryFixture{t: t, ctx: ctx, conn: conn, orgID: uuid.NewString()}
 	f.team("", "eng", nil, nil, 1, carryOld, []string{"admin@example.com"}, nil)
-	f.team("custom", "custom:eng", carryPtr("eng"), nil, 1, carryOld, nil, nil)
+	f.team("", "custom:eng", carryPtr("eng"), nil, 1, carryOld, nil, nil)
 
 	outcome, err := CarryTeamIDs(ctx, conn, f.orgID, carryAt, false)
-	if err != nil || outcome.AdminTeamsCustomConflict != 1 || outcome.RowsWritten != 0 {
-		t.Fatalf("carry = %+v, %v; want the conflict counted and nothing written", outcome, err)
+	if err != nil || outcome.AdminTeamsToCustom != 1 || outcome.TeamsAlreadyKeyed != 1 {
+		t.Fatalf("carry = %+v, %v; want the admin team moved to the existing custom:eng", outcome, err)
 	}
-	if got := f.str(`SELECT arrayStringConcat(groupArray(concat(id, '|', provider, '|', name, '|', arrayStringConcat(manual_members, ','))), ';') FROM (SELECT id, provider, name, manual_members FROM teams FINAL WHERE org_id = ? AND is_active = 1 ORDER BY id)`); got != "custom:eng|custom|team custom:eng|;eng||team eng|admin@example.com" {
-		t.Errorf("active = %q, want the pushed custom:eng and the admin eng unchanged", got)
+	if got := f.str(`SELECT arrayStringConcat(groupArray(concat(id, '|', provider, '|', name, '|', toString(is_active))), ';') FROM (SELECT id, provider, name, is_active FROM teams FINAL WHERE org_id = ? ORDER BY id)`); got != "custom:eng||team custom:eng|1;eng||team eng|0" {
+		t.Errorf("teams = %q, want one active custom:eng", got)
+	}
+	again, err := CarryTeamIDs(ctx, conn, f.orgID, carryAt.Add(time.Hour), false)
+	if err != nil || again.Found() || again.RowsWritten != 0 {
+		t.Errorf("second carry = %+v, %v; want nothing", again, err)
 	}
 }
 

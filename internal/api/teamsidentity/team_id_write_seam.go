@@ -13,10 +13,10 @@ import (
 // keyTeamIDs runs the team id write seam (providersync.KeyTeamIDsForWrite)
 // for the team ids a request names. Every handler that writes a team id
 // calls it before its first read or write of a team and writes only the ids
-// it returns (a plain admin id comes back as custom:<id>). A refusal answers
-// 422 (a malformed id, or a prefixed id of another provider than the one it
-// is named for) or 409 (a bare id that more than one prefixed team holds, or
-// whose custom:<id> a pushed team holds), before anything is written.
+// it returns (a plain admin id that no team holds comes back as
+// custom:<id>). A refusal answers 422 (a malformed id, or a prefixed id
+// of another provider than the one an import names) or 409 (a bare id that
+// more than one prefixed team holds), before anything is written.
 func (h handlers) keyTeamIDs(w http.ResponseWriter, r *http.Request, writer string, refs []providersync.TeamIDRef) ([]string, bool) {
 	keyed, err := providersync.KeyTeamIDsForWrite(r.Context(), h.store.Conn, orgIDOf(r.Context()), writer, refs)
 	if err == nil {
@@ -30,8 +30,8 @@ func (h handlers) keyTeamIDs(w http.ResponseWriter, r *http.Request, writer stri
 	switch {
 	case errors.Is(err, providersync.ErrTeamIDAmbiguous):
 		policy.WriteDetail(w, http.StatusConflict, fmt.Sprintf("Team id %q names more than one provider team; use the provider-prefixed id", refusal.ID), nil)
-	case errors.Is(err, providersync.ErrTeamIDCustomHeld):
-		policy.WriteDetail(w, http.StatusConflict, fmt.Sprintf("Team id %q is the id of a pushed custom team; use another id", refusal.ID), nil)
+	case errors.Is(err, providersync.ErrTeamIDNoOrigin):
+		h.internal(w, r, "key team ids", err)
 	case errors.Is(err, providersync.ErrTeamIDForeign):
 		policy.WriteDetail(w, http.StatusUnprocessableEntity, fmt.Sprintf("Team id %q carries another provider's prefix than its provider", refusal.ID), nil)
 	default:

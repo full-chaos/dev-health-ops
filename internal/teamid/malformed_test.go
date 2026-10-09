@@ -34,3 +34,13 @@ func TestCandidatesAreEveryPrefixOfABareID(t *testing.T) {
 		}
 	}
 }
+
+// A custom team, pushed or written by the admin, is stored with no provider;
+// every other integration with its own name.
+func TestStoredProviderIsEmptyOnlyForACustomTeam(t *testing.T) {
+	for integration, want := range map[string]string{"custom": "", " custom ": "", "linear": "linear", "jira": "jira", "pagerduty": "pagerduty", "github": "github"} {
+		if got := StoredProvider(integration); got != want {
+			t.Errorf("StoredProvider(%q) = %q, want %q", integration, got, want)
+		}
+	}
+}

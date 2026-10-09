@@ -1102,16 +1102,33 @@ already carries ANY known provider key (`gh:`, `gl:`, `linear:`, `jira:`, `ms-te
 system prefix) keeps it, whatever system writes it, and gets no second one. A custom id with no known key gets
 `<system>:`. The `atlassian:` form folds into `jira:`.
 
+**Custom teams (chris D5685).** A team the web admin writes and a team the `team.v1` system `custom` pushes are
+the same kind of team (an override), in ONE namespace, `custom:<id>` (`teamid.Custom`): an admin team `eng` and a
+pushed `custom` team `eng` are one team, `custom:eng`, and a push and an admin write of it address that team; the
+last write wins, as for any team. Both writers store a custom team with provider `""` (`teamid.StoredProvider`):
+that is the provider-neutral layer of the attribution cascade (`teamsForItemProvider`, an item takes the teams of
+its own provider, else the teams with no provider), so a custom team holds its project keys and its id for the
+work items of every provider, as an admin team always did. A pushed custom team written before this rule has
+provider `custom` until its next push.
+
+**Origin of a team row (chris D5682/D5683).** Every writer names its integration (its origin), and the seam keys
+a bare id by it the same way for every integration (`linear:`, `gl:`, `custom:`); nothing infers an origin from
+provider `""`. `teams.provider`, `native_team_key`, `parent_team_id` and `source_id` are the row's origin. An
+admin write of an EXISTING team (create-or-update, update, member writes, a drift approval, an import) addresses
+that team's id and keeps its origin: an admin edit of `linear:ENG` stays provider `linear` with its native key.
+Only a NEW team takes the writer's origin: a custom team for an admin create, the `provider_type` for an import
+(a custom import is a custom team; native key NULL on the `teams` row, the observation row carries it).
+
 | Writer | `provider` | `id` | `native_team_key` |
 |---|---|---|---|
 | GitHub team catalog | `github` | `gh:<slug>` | the slug |
 | GitLab team catalog | `gitlab` | `gl:<full_path>` | the full path |
 | Linear reference catalog (team row, memberships, project ownership) | `linear` | `linear:<team key>` | the team key |
 | Atlassian Teams (`dho sync teams --provider jira`, the automatic Jira team import) | `jira` | `jira:<team uuid>` | the team ARI |
-| External ingest `team.v1` | the source system | `gh:`/`gl:` for github/gitlab, `jira:` for jira and atlassian (the pushed team is the native Atlassian team), `<system>:` for every other system, then the pushed `id`; an id that carries a known key stays | the pushed `nativeTeamKey`, else the pushed `id` without its prefix (`teamid.NativeKey`); NULL when the id holds another provider's key |
+| External ingest `team.v1` | the source system; `""` for the system `custom` (a custom team) | `gh:`/`gl:` for github/gitlab, `jira:` for jira and atlassian (the pushed team is the native Atlassian team), `<system>:` for every other system, then the pushed `id`; an id that carries a known key stays | the pushed `nativeTeamKey`, else the pushed `id` without its prefix (`teamid.NativeKey`); NULL when the id holds another provider's key |
 | Jira ops-team links (`jira_legacy` rows of `team_project_ownership`) | `jira` | `jira:<ops team id>` | n/a |
-| Admin import (`POST /teams/import`) | `""` | `teamid.Of(provider_type, provider_team_id)`: the same id as the provider's catalog; a `provider_team_id` with another provider's prefix is refused (422) | (observation: `provider_team_id`) |
-| Admin create, update, delete, identity `team_ids` | `""` | the write seam (`providersync.ResolveTeamID`): a prefixed id as given; a bare id the one active prefixed team that holds it, else `custom:<id>` (409 when two hold it, or when a pushed `custom` team holds `custom:<id>`) | NULL |
+| Admin import (`POST /teams/import`) | a new team: the `provider_type` (`""` for `custom`); an existing team: its own | `teamid.Of(provider_type, provider_team_id)`: the same id as the provider's catalog; a `provider_team_id` with another provider's prefix is refused (422) | a new team: NULL (observation: `provider_team_id`); an existing team: its own |
+| Admin create, update, delete, identity `team_ids` | a new team: `""` (a custom team); an existing team: its own | the write seam (`providersync.ResolveTeamID`, integration `custom`): a prefixed id as given; a bare id the one active prefixed team that holds it, else a new `custom:<id>` (409 when two hold it; an update of an id no team holds is 404) | a new team: NULL; an existing team: its own |
 
 - `team.v1` also prefixes `parentTeamId`, and `identity.v1` prefixes its `teamIds`, with the record's system.
 - The Linear team-key ownership row keeps `project_key` = the team key and `project_id` =
@@ -1172,33 +1189,34 @@ or builds a team catalog collector or writes Atlassian team ids, and fails on a 
 `dho workers providersync carry-team-ids` runs the same function (section 1.1).
 
 **One resolver (CHAOS-8940).** `providersync.ResolveTeamID` (`internal/providersync/team_id_resolve.go`) is the one
-rule that turns a team id into the id a writer writes, given the provider of the caller's row: the carry (a team's
-own id, an admin team, an admin edit, a parent) and the write seam call it. A prefixed id keeps its canonical form,
-refused when its prefix is not the caller's provider; a bare id goes, for a provider's own team, to that provider's
-id, else to the one holder, and for an admin team with no holder to `custom:<id>`; two holders, or a `custom:<id>`
-held by a team of another source, are a conflict. A parent resolves against the teams its id moves to, narrowed to
+rule that turns a team id into the id a writer writes, given the integration of the caller (never inferred: a
+bare id with no integration is `ErrTeamIDNoOrigin`): the carry (a team's own id, an admin team, an admin edit, a
+parent) and the write seam call it. A prefixed id keeps its canonical form; an owner's (`TeamIDOwner`: a
+provider's team, an import, an admin's own team the carry moves) is refused when its prefix is not the owner's.
+A bare id goes, for an owner, to its integration's id; for an address (`TeamIDAddress`: the web admin) to the one
+active holder, a conflict when two hold it, else a new team of the writer's integration (`custom:<id>`). A
+parent resolves against the teams its id moves to, narrowed to
 the child's provider when the id is not one team.
 
 **The write seam (CHAOS-8940).** A writer that takes a team id from outside, not from a provider's own key, writes
 only what `providersync.KeyTeamIDsForWrite` (`internal/providersync/team_id_write_seam.go`) returns. It runs the
 carry first, then keeps a prefixed id in its canonical form and resolves a bare id to the ONE active prefixed team
 of the organization that holds it (`teamid.Candidates`: every known prefix plus the id). A bare id that no
-active prefixed team holds is the admin's own team, `custom:<id>` (chris D5631), the id the carry gives an
+active prefixed team holds is a new custom team, `custom:<id>` (chris D5631/D5685), the id the carry gives an
 admin's bare team: `POST /teams` with `team_id: "eng"` writes and answers `team_id: "custom:eng"`, and a later
-write that names `eng` lands on it. It refuses, before any write but the carry:
+write that names `eng` lands on it, also when a push of the `custom` system wrote `custom:eng` (one team). A
+plain id that one active team holds is an edit of that team, which keeps its origin (an update of an id that no
+team holds is 404). A Jira project-as-team row holds a bare id, which is no prefixed team, so an admin write that
+names that id is a new `custom:<id>` team, not an edit of the row; the retire of that class (section 0.4c)
+retires the row and leaves the custom team. It refuses, before any write but the carry:
 
 - a malformed id (`teamid.Malformed`: empty, only a prefix such as `gh:` or `atlassian:`, or a prefix followed by
   only another one such as `linear:gh:`): HTTP 422;
 - a bare id that more than one active prefixed team holds (for example `linear:eng` and `custom:eng`): HTTP 409;
-- a bare admin id whose `custom:<id>` a pushed team of the `custom` system holds: HTTP 409 (never a write into it);
 - an import `provider_team_id` that carries another provider's prefix (`provider_type: jira`, `linear:ENG`): HTTP 422.
 
-The external sink keeps the same rule from the other side (lead D5660): a `team.v1` record whose id is a
-`custom:<id>` that an admin team (provider `""`) holds is refused like an id `teamid.CheckPushed` refuses
-(`externalCheckPushedTeam`, `internal/streamhandlers`): the `team.v1` kind of the batch fails with
-`ErrTeamIDCustomHeld` and is not written, the batch's other kinds are written as on any `team.v1` failure, and
-the sink logs `team_v1_custom_id_held_by_admin` with the source system and the count of refused records (never
-the organization or the id). The admin team keeps its id; the push succeeds after an admin renames or deletes it.
+An admin edit of a pushed `custom:<id>` does not stop the next push of its source, which writes the team and
+keeps the admin's manual members.
 
 So a bare id never reaches a write, and a bare id of a carried team lands on the prefixed team, not on the
 inactive bare row (which a write would make active again). The admin writers (`internal/api/teamsidentity`) all
@@ -1229,19 +1247,20 @@ write, and on a store write that does not refuse a bare id before its batch.
   - A Jira project-as-team row (provider `jira`, `native_team_key` = id, not a team ARI) does not move:
     `RetireJiraProjectAsTeamRows` retires it (section 0.4c).
   - An admin team (provider `""`) moves to `teamid.Of(provider, id)` when exactly one provider's observation
-    names its id (it came from that provider's import). Any other admin team is the admin's own team and moves
-    to `custom:<id>` (chris D5631; counted as `admin_teams_to_custom`), the id the write seam gives a plain
-    admin id. Both keep provider `""` and their `native_team_key`. An admin row counts only while it is the
-    team's current row (`teams FINAL` of that id is an active admin row): an older admin edit of a team whose
+    names its id (it came from that provider's import; it keeps provider `""` and its `native_team_key`). Any
+    other admin team is a custom team and moves to `custom:<id>` (chris D5631/D5685; counted as
+    `admin_teams_to_custom`), the id the write seam gives a plain admin id; when a pushed `custom` team already
+    holds `custom:<id>`, that row stays (`teams_already_keyed`) and the bare admin row goes inactive: one team.
+    An admin row counts only while it is the team's current row (`teams FINAL` of that id is an active admin row): an older admin edit of a team whose
     newer row is inactive is not carried, so the inactive team does not come back as `custom:<id>`. An admin
     edit of a Jira project-as-team row (the same id) stays (counted as `admin_teams_not_carried`): it is that
     row, not a Jira team, and `RetireJiraProjectAsTeamRows` owns it.
   - An admin edit of a provider team (the same id, provider `""`) moves with that team; the newer of the two
-    rows gives the new row's values. An admin edit of an id that two providers' teams hold is neither team: it
+    rows gives the new row's values, and the team's origin (provider, native key, parent, source) stays the
+    provider row's (chris D5682). An admin edit of an id that two providers' teams hold is neither team: it
     moves to `custom:<id>` with its members (the providers' teams move to their own ids).
-  - An admin team whose `custom:<id>` a team of another source already holds (a pushed team of the `custom`
-    system) is not moved and not merged into it: it stays, counted as `admin_teams_custom_conflict`, and the
-    carry logs `team_ids_custom_conflict` with the count on every run.
+  - A custom team the carry writes is stored with provider `""` (`teamid.StoredProvider`), also a bare team an
+    older push of the `custom` system wrote with provider `custom`.
   - A parent (`parent_team_id` of a team row or an observation) moves with the same rule as the row that names
     it: to the parent's team of the row's provider; for a parent id that is one team, to that team; else it
     keeps its id.
@@ -1301,7 +1320,7 @@ first `valid_from` kept; keyed ids and another organization untouched; a second 
 `TestCarryTeamIDsClosesALinkForAReaderOfNow`, `TestCarryTeamIDsSkipsAPrefixOnlyID`,
 `TestCarryTeamIDsMovesAnAdminsOwnTeamToCustom`, `TestCarryTeamIDsLeavesAnAdminRowOlderThanItsInactiveTeam`,
 `TestCarryTeamIDsResolvesAnAmbiguousParentInTheChildsProvider`, `TestCarryTeamIDsKeepsAnAmbiguousAdminEditAsTheAdminsTeam`,
-`TestCarryTeamIDsLeavesAnAdminTeamWhoseCustomIDAPushedTeamHolds`, `TestCarryTeamIDsKeepsAParentThatIsNotOneTeamOutsideItsProvider`
+`TestCarryTeamIDsMovesAnAdminTeamOntoThePushedCustomTeamOfItsID`, `TestCarryTeamIDsKeepsAParentThatIsNotOneTeamOutsideItsProvider`
 (`TestCarryTeamIDsSplitsAnIDTwoProvidersHold` and `TestCarryTeamIDsMovesEveryBareProviderTeamID` also assert a
 second run writes nothing).
 The seam: `TestTheCarryRunsBeforeTheCollectorAndAFailureStopsIt`, `TestEveryTeamIDWriteSiteRunsBehindTheCarryCensus`;
@@ -1318,8 +1337,12 @@ linear), `TestAnAdminTeamCreateCarriesTheBareTeamFirst`, `TestAnAdminTeamWriteOf
 `TestTheStoreRefusesABareTeamIDWrite`, `TestAnIdentityLeavingAStoredBareTeamSkipsIt`,
 `TestTheWriteSeamResolvesOnlyToAnActiveTeamAndKeysAMixedRequest`, `TestADriftDecisionByABareIDDecidesTheKeyedTeamsChange`,
 `TestADeleteByABareIDDeletesTheKeyedTeam`, `TestTheAdminImportRefusesAnotherProvidersPrefixedID`,
-`TestAnAdminWriteOfAPlainIDThatAPushedCustomTeamHoldsConflicts`, `TestResolveTeamIDDecidesEveryCase` (`internal/providersync`),
-`TestATeamV1PushOfAnAdminsCustomIDIsRefused` (`internal/streamhandlers`),
+`TestAnAdminWriteOfAPushedCustomTeamsIDAddressesThatTeam`, `TestAnAdminEditOfAProviderTeamKeepsItsOrigin`,
+`TestANewAdminTeamIsACustomTeam`, `TestAnAdminCustomTeamHoldsAProjectKeyForEveryProvider`, `TestAnAdminReferenceByABareIDResolvesToTheOneExistingTeam`,
+`TestAnAdminWriteNamingAProjectAsTeamIDIsANewAdminTeam`, `TestAnImportedTeamHasItsProviderOrigin`, `TestResolveTeamIDDecidesEveryCase` (`internal/providersync`),
+`TestAPushAfterAnAdminEditOfAPushedCustomTeamUpdatesIt`, `TestAnAdminTeamAndAPushedCustomTeamOfOneIDAreOneTeam`,
+`TestAPushedCustomTeamHoldsAProjectKeyForEveryProvider` (`internal/streamhandlers`),
+`TestStoredProviderIsEmptyOnlyForACustomTeam` (`internal/teamid`),
 `TestEveryTeamIDWriterGoesThroughTheWriteSeamCensus`; `TestIdentityV1RefusesAPrefixOnlyTeamID`
 (`internal/streamhandlers`); `TestMalformedNamesNoTeamOfAnyProvider`, `TestCandidatesAreEveryPrefixOfABareID`
 (`internal/teamid`).

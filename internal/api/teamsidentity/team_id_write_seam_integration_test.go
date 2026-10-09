@@ -14,6 +14,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/providersync"
 	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
+	"github.com/full-chaos/dev-health-ops/internal/teamattribution"
 	"github.com/full-chaos/dev-health-ops/internal/teamid"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/chschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
@@ -298,9 +299,12 @@ func TestTheAdminImportRefusesAPrefixOnlyTeamID(t *testing.T) {
 func TestTheStoreRefusesABareTeamIDWrite(t *testing.T) {
 	s, ctx := writeSeamStore(t)
 	for _, id := range []string{"ENG", "gh:", "linear:gh:", ""} {
-		if _, err := s.CreateOrUpdateTeam(ctx, "org-1", TeamWrite{TeamID: id, Name: "X"}); !errors.Is(err, teamid.ErrBareTeamID) {
+		if _, err := s.CreateOrUpdateTeam(ctx, "org-1", TeamWrite{Origin: teamid.Custom, TeamID: id, Name: "X"}); !errors.Is(err, teamid.ErrBareTeamID) {
 			t.Errorf("CreateOrUpdateTeam(%q) error = %v, want %v", id, err, teamid.ErrBareTeamID)
 		}
+	}
+	if _, err := s.CreateOrUpdateTeam(ctx, "org-1", TeamWrite{TeamID: "custom:new", Name: "X"}); err == nil {
+		t.Error("CreateOrUpdateTeam of a new team with no origin wrote it, want refused")
 	}
 	now := time.Now().UTC()
 	membership := func(teamID string, validTo any) *pyjson.Object {
@@ -433,24 +437,166 @@ func TestTheAdminImportRefusesAnotherProvidersPrefixedID(t *testing.T) {
 	}
 }
 
-// A plain admin id whose custom:<id> a pushed custom-system team holds is a
-// conflict, never a write into the pushed team.
-func TestAnAdminWriteOfAPlainIDThatAPushedCustomTeamHoldsConflicts(t *testing.T) {
+// An admin team and a pushed custom-system team are one kind of team, one
+// namespace: an admin write of the plain id of a pushed custom:eng addresses
+// that team (the last write wins) and keeps its origin; no second team
+// appears.
+func TestAnAdminWriteOfAPushedCustomTeamsIDAddressesThatTeam(t *testing.T) {
 	s, ctx := writeSeamStore(t)
-	writeSeamSeedNative(t, s, ctx, "custom", "custom:eng", "eng")
+	writeSeamSeedNative(t, s, ctx, "", "custom:eng", "eng")
 	h := newTestHandlers(s)
-	rec := writeSeamCall(t, h, h.createOrUpdateTeam, http.MethodPost, "/api/v1/admin/teams", "",
-		map[string]any{"team_id": "eng", "name": "Admin Eng"})
-	if rec.Code != http.StatusConflict {
-		t.Errorf("create = %d %s, want 409", rec.Code, rec.Body.String())
+	for _, payload := range []map[string]any{{"team_id": "eng", "name": "Admin Eng"}, {"team_id": "custom:eng", "name": "Admin Eng 2"}} {
+		rec := writeSeamCall(t, h, h.createOrUpdateTeam, http.MethodPost, "/api/v1/admin/teams", "", payload)
+		if rec.Code != http.StatusOK || decodeBody(t, rec)["team_id"] != "custom:eng" {
+			t.Fatalf("write %v = %d %s, want 200 with team_id custom:eng", payload, rec.Code, rec.Body.String())
+		}
 	}
-	rec = writeSeamCall(t, h, h.createOrUpdateIdentity, http.MethodPost, "/api/v1/admin/identities", "",
-		map[string]any{"canonical_id": "m1", "team_ids": []string{"eng"}})
-	if rec.Code != http.StatusConflict {
-		t.Errorf("identity = %d %s, want 409", rec.Code, rec.Body.String())
+	if got := writeSeamActive(t, s, ctx); got != "custom:eng" {
+		t.Errorf("active = %q, want custom:eng only", got)
 	}
-	team, err := s.GetTeam(ctx, "org-1", "custom:eng")
-	if err != nil || team == nil || team.Name != "Eng" || len(team.ManualMembers) != 0 {
-		t.Errorf("custom:eng = %+v, %v; want the pushed team unchanged", team, err)
+	if got := writeSeamOrigin(t, s, ctx, "custom:eng"); got != "|eng|Admin Eng 2|1" {
+		t.Errorf("custom:eng = %q, want the pushed team renamed, origin kept", got)
+	}
+}
+
+// writeSeamOrigin is a team's provider and native key, "none" for no row.
+func writeSeamOrigin(t *testing.T, s Store, ctx context.Context, id string) string {
+	t.Helper()
+	var got string
+	if err := s.Conn.QueryRow(ctx, `SELECT concat(provider, '|', ifNull(native_team_key, ''), '|', name, '|', toString(is_active)) FROM teams FINAL WHERE org_id = 'org-1' AND id = ?`, id).Scan(&got); err != nil {
+		return "none"
+	}
+	return got
+}
+
+// An admin edit of a provider team addresses that team and keeps its
+// origin: a rename, a member confirmation and an edit by the bare id leave
+// linear:ENG a linear team with its native key.
+func TestAnAdminEditOfAProviderTeamKeepsItsOrigin(t *testing.T) {
+	s, ctx := writeSeamStore(t)
+	writeSeamSeedNative(t, s, ctx, "linear", "linear:ENG", "ENG")
+	h := newTestHandlers(s)
+	for _, rec := range []*httptest.ResponseRecorder{
+		writeSeamCall(t, h, h.updateTeam, http.MethodPatch, "/api/v1/admin/teams/linear:ENG", "linear:ENG", map[string]any{"name": "Renamed"}),
+		writeSeamCall(t, h, h.confirmMembers, http.MethodPost, "/api/v1/admin/teams/linear:ENG/confirm-members", "linear:ENG",
+			map[string]any{"team_id": "linear:ENG", "links": []map[string]any{{"provider": "github", "provider_identity": "octo", "canonical_id": "m1", "action": "create"}}}),
+		writeSeamCall(t, h, h.createOrUpdateTeam, http.MethodPost, "/api/v1/admin/teams", "", map[string]any{"team_id": "ENG", "name": "Renamed"}),
+	} {
+		if rec.Code != http.StatusOK {
+			t.Fatalf("admin edit = %d %s", rec.Code, rec.Body.String())
+		}
+	}
+	if got := writeSeamOrigin(t, s, ctx, "linear:ENG"); got != "linear|ENG|Renamed|1" {
+		t.Errorf("linear:ENG = %q, want linear|ENG|Renamed|1", got)
+	}
+	if got := writeSeamActive(t, s, ctx); got != "linear:ENG" {
+		t.Errorf("active = %q, want linear:ENG only", got)
+	}
+}
+
+// A new admin team is a custom team: custom:<id>, stored with no provider
+// like a pushed custom team.
+func TestANewAdminTeamIsACustomTeam(t *testing.T) {
+	s, ctx := writeSeamStore(t)
+	h := newTestHandlers(s)
+	if rec := writeSeamCall(t, h, h.createOrUpdateTeam, http.MethodPost, "/api/v1/admin/teams", "", map[string]any{"team_id": "eng", "name": "Eng"}); rec.Code != http.StatusOK {
+		t.Fatalf("create = %d %s", rec.Code, rec.Body.String())
+	}
+	if got := writeSeamOrigin(t, s, ctx, "custom:eng"); got != "||Eng|1" {
+		t.Errorf("custom:eng = %q, want ||Eng|1", got)
+	}
+}
+
+// An admin reference to an existing team by its bare id: one active holder
+// is that team, two are a conflict (409), none is not found (404); nothing
+// is written on a refusal.
+func TestAnAdminReferenceByABareIDResolvesToTheOneExistingTeam(t *testing.T) {
+	s, ctx := writeSeamStore(t)
+	writeSeamSeedNative(t, s, ctx, "linear", "linear:ENG", "ENG")
+	writeSeamSeedNative(t, s, ctx, "linear", "linear:OPS", "OPS")
+	writeSeamSeedNative(t, s, ctx, "gitlab", "gl:OPS", "OPS")
+	h := newTestHandlers(s)
+	for _, c := range []struct {
+		id   string
+		code int
+	}{{"ENG", http.StatusOK}, {"OPS", http.StatusConflict}, {"NONE", http.StatusNotFound}} {
+		rec := writeSeamCall(t, h, h.updateTeam, http.MethodPatch, "/api/v1/admin/teams/"+c.id, c.id, map[string]any{"name": "Renamed"})
+		if rec.Code != c.code {
+			t.Errorf("PATCH %s = %d %s, want %d", c.id, rec.Code, rec.Body.String(), c.code)
+		}
+	}
+	if got := writeSeamOrigin(t, s, ctx, "linear:ENG"); got != "linear|ENG|Renamed|1" {
+		t.Errorf("linear:ENG = %q, want the one holder renamed", got)
+	}
+	for _, id := range []string{"linear:OPS", "gl:OPS"} {
+		if got := writeSeamOrigin(t, s, ctx, id); !strings.HasSuffix(got, "|Eng|1") {
+			t.Errorf("%s = %q, want unchanged", id, got)
+		}
+	}
+	if got := writeSeamActive(t, s, ctx); got != "gl:OPS,linear:ENG,linear:OPS" {
+		t.Errorf("active = %q, want no new team", got)
+	}
+}
+
+// A Jira project-as-team row holds a bare id that no write seam resolves to
+// (it is not a prefixed team): an admin write naming that id is a new admin
+// team, custom:<id>, and the retire of the project-as-team class retires
+// the row and leaves the admin team.
+func TestAnAdminWriteNamingAProjectAsTeamIDIsANewAdminTeam(t *testing.T) {
+	s, ctx := writeSeamStore(t)
+	writeSeamSeedNative(t, s, ctx, "jira", "PROJ", "PROJ")
+	h := newTestHandlers(s)
+	if rec := writeSeamCall(t, h, h.createOrUpdateTeam, http.MethodPost, "/api/v1/admin/teams", "", map[string]any{"team_id": "PROJ", "name": "Admin Proj"}); rec.Code != http.StatusOK {
+		t.Fatalf("create = %d %s", rec.Code, rec.Body.String())
+	}
+	if got := writeSeamOrigin(t, s, ctx, "PROJ"); got != "jira|PROJ|Eng|1" {
+		t.Errorf("PROJ = %q, want the project-as-team row unchanged", got)
+	}
+	if _, err := providersync.RetireJiraProjectAsTeamRows(ctx, s.Conn, "org-1", time.Now().UTC(), false); err != nil {
+		t.Fatal(err)
+	}
+	for id, want := range map[string]string{"PROJ": "jira|PROJ|Eng|0", "custom:PROJ": "||Admin Proj|1"} {
+		if got := writeSeamOrigin(t, s, ctx, id); got != want {
+			t.Errorf("%s = %q, want %q", id, got, want)
+		}
+	}
+}
+
+// A new imported team takes its provider_type as its origin (a custom one
+// is a custom team, no provider); an import of an existing team keeps that
+// team's origin.
+func TestAnImportedTeamHasItsProviderOrigin(t *testing.T) {
+	s, ctx := writeSeamStore(t)
+	writeSeamSeedNative(t, s, ctx, "jira", "jira:OLD", "OLD")
+	if rec := postImportBody(t, s, `{"on_conflict":"merge","teams":[{"provider_type":"linear","provider_team_id":"NEW","name":"New"},{"provider_type":"custom","provider_team_id":"web","name":"Web"},{"provider_type":"jira","provider_team_id":"OLD","name":"Imported Old"}]}`); rec.Code != http.StatusOK {
+		t.Fatalf("import = %d %s", rec.Code, rec.Body.String())
+	}
+	for id, want := range map[string]string{"linear:NEW": "linear||New|1", "custom:web": "||Web|1", "jira:OLD": "jira|OLD|Imported Old|1"} {
+		if got := writeSeamOrigin(t, s, ctx, id); got != want {
+			t.Errorf("%s = %q, want %q", id, got, want)
+		}
+	}
+}
+
+// An admin custom team is stored with no provider, as a pushed custom team
+// is: the attribution cascade takes it for a project key of an item of every
+// provider.
+func TestAnAdminCustomTeamHoldsAProjectKeyForEveryProvider(t *testing.T) {
+	s, ctx := writeSeamStore(t)
+	h := newTestHandlers(s)
+	if rec := writeSeamCall(t, h, h.createOrUpdateTeam, http.MethodPost, "/api/v1/admin/teams", "", map[string]any{"team_id": "eng", "name": "Eng", "project_keys": []string{"ENGKEY"}}); rec.Code != http.StatusOK {
+		t.Fatalf("create = %d %s", rec.Code, rec.Body.String())
+	}
+	teams, err := teamattribution.ClickHouseFactSource{Conn: s.Conn}.LoadTeams(ctx, "org-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	derived := teamattribution.NewGitHubWorkItemDerivationContext(teamattribution.GithubWorkItemDerivationFacts{Teams: teams})
+	for _, provider := range []string{"github", "gitlab", "jira", "linear"} {
+		key := "ENGKEY"
+		candidates := derived.IssueProjectCandidates(teamattribution.GithubWorkItemDerivationSubject{Provider: provider, ProjectKey: &key})
+		if len(candidates) != 1 || candidates[0].TeamID == nil || *candidates[0].TeamID != "custom:eng" {
+			t.Errorf("%s item: candidates = %+v, want custom:eng", provider, candidates)
+		}
 	}
 }

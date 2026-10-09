@@ -87,7 +87,7 @@ func (s Store) applyChange(ctx context.Context, orgID string, row reviewChangeRo
 		return nil
 	}
 	_, err = s.CreateOrUpdateTeam(ctx, orgID, TeamWrite{
-		TeamID: row.TeamID, Name: name, Description: description,
+		Origin: row.Provider, TeamID: row.TeamID, Name: name, Description: description,
 		Members: &members, ProjectKeys: &projectKeys, RepoPatterns: &repoPatterns,
 	})
 	return err

@@ -40,6 +40,23 @@ func Prefix(provider string) string {
 	}
 }
 
+// Custom is the integration of a custom team: a team the web admin writes
+// and a team the team.v1 system custom pushes are the same kind of team (an
+// override), one namespace custom:<id>.
+const Custom = "custom"
+
+// StoredProvider is the teams.provider value a team row of an integration
+// is written with: "" for a custom team (the provider-neutral layer of the
+// attribution cascade, which takes a team with no provider for an item of
+// every provider), the integration itself for every other.
+func StoredProvider(integration string) string {
+	integration = strings.TrimSpace(integration)
+	if integration == Custom {
+		return ""
+	}
+	return integration
+}
+
 // knownKeys are the prefixes a team id can already carry: the native
 // providers' and every team.v1 system's.
 var knownKeys = []string{"gh:", "gl:", "linear:", "jira:", "pagerduty:", "custom:", "ms-teams:"}

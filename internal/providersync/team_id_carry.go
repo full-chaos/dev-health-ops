@@ -53,20 +53,12 @@ func teamIDCarryPrefixOnly(column string) string {
 	return "trimBoth(" + column + ") IN (" + strings.Join(forms, ", ") + ")"
 }
 
-// teamIDCarryAdminProvider is the prefix system of an admin's own team: an
-// admin team that no single provider's observation names.
-const teamIDCarryAdminProvider = "custom"
-
 // teamIDCarryActiveAdminIDs is the bare ids whose current team row (FINAL:
 // teams is keyed by (org_id, id)) is an active admin row. An admin row
 // counts only through it: a raw admin row can stay active beside the newer
 // inactive row of another provider's team of that id, because one insert
 // block that holds rows of both collapses to one of them (the carry writes
 // the old rows of a moved team and of its admin edit in one block).
-// teamIDCarryCustomHeldQuery is the custom:<id> ids whose current row is a
-// team of another source than an admin (provider not empty).
-var teamIDCarryCustomHeldQuery = `SELECT id FROM teams FINAL WHERE org_id = {org_id:String} AND provider != '' AND startsWith(id, '` + teamIDCarryAdminProvider + `:')`
-
 var teamIDCarryActiveAdminIDs = `SELECT id FROM teams FINAL WHERE org_id = {org_id:String} AND provider = '' AND is_active = 1 AND ` + teamIDCarryBare("id")
 
 // teamIDCarryCountQuery counts what a carry would move: the (provider, id)
@@ -140,10 +132,6 @@ type TeamIDCarryOutcome struct {
 	// Jira project-as-team row of the same id holds (an admin edit of that
 	// row, which RetireJiraProjectAsTeamRows owns).
 	AdminTeamsNotCarried uint64 `json:"admin_teams_not_carried"`
-	// AdminTeamsCustomConflict is the admin teams that would move to a
-	// custom:<id> that a team of another source (a pushed team of the custom
-	// system) holds: they are not moved and stay as they are.
-	AdminTeamsCustomConflict uint64 `json:"admin_teams_custom_conflict"`
 	// AmbiguousTeams is the bare ids that more than one team holds (two
 	// providers, or a provider and a Jira project-as-team row). Each
 	// provider's rows move to that provider's id; the rows that name the id
@@ -217,9 +205,6 @@ func CarryTeamIDs(ctx context.Context, conn TeamIDCarryConn, orgID string, at ti
 	if err := carry.plan(); err != nil {
 		return TeamIDCarryOutcome{}, err
 	}
-	if outcome.AdminTeamsCustomConflict > 0 {
-		slog.Default().WarnContext(ctx, "team_ids_custom_conflict", "admin_teams_custom_conflict", outcome.AdminTeamsCustomConflict)
-	}
 	if dryRun {
 		return outcome, nil
 	}
@@ -276,9 +261,6 @@ type teamIDCarryRun struct {
 	target  map[string]map[string]string
 	groups  map[string]map[string]bool
 	primary map[string]string
-	// customHeld: the custom:<id> ids whose current row is another source's
-	// team (a pushed team of the custom system), not an admin team.
-	customHeld map[string]bool
 
 	// writes run in this order; teams and observations are last.
 	writes []teamIDCarryWrite
@@ -300,14 +282,6 @@ func (run *teamIDCarryRun) plan() error {
 	adminIDs := make(map[string]bool, len(activeAdmins))
 	for _, row := range activeAdmins {
 		adminIDs[row.str("id")] = true
-	}
-	customHeld, err := run.read(teamIDCarryCustomHeldQuery, run.org)
-	if err != nil {
-		return fmt.Errorf("team id carry: read custom teams: %w", err)
-	}
-	run.customHeld = make(map[string]bool, len(customHeld))
-	for _, row := range customHeld {
-		run.customHeld[row.str("id")] = true
 	}
 	teamRows, err := run.planTeams(teams, observations, adminIDs)
 	if err != nil {
@@ -395,21 +369,18 @@ func (run *teamIDCarryRun) planTeams(teams, observations []chRow, activeAdmins m
 		}
 		targets := map[string]string{}
 		// adminTeamID resolves an admin team that no single provider team
-		// carries: an admin's own team, or an admin edit of an id that two
-		// providers' teams hold. A custom:<id> that a team of another source
-		// holds is a conflict: the admin row stays as it is.
-		adminTeamID := func(provider string) (string, bool) {
-			newID, err := ResolveTeamID(TeamIDRequest{Provider: provider, ID: id, Mode: TeamIDOwner,
-				CustomHeld: run.customHeld[teamid.Of(teamIDCarryAdminProvider, id)]})
+		// carries: an admin's own team (a custom team, teamid.Custom), or an
+		// admin edit of an id that two providers' teams hold.
+		adminTeamID := func(provider string) (string, error) {
+			newID, err := ResolveTeamID(TeamIDRequest{Provider: provider, ID: id, Mode: TeamIDOwner})
 			if err != nil {
-				run.outcome.AdminTeamsCustomConflict++
-				return "", false
+				return "", fmt.Errorf("team id carry: resolve an admin team id: %w", err)
 			}
-			if provider == "" {
+			if provider == teamid.Custom {
 				run.outcome.AdminTeamsToCustom++
 			}
 			run.outcome.AdminTeams++
-			return newID, true
+			return newID, nil
 		}
 		switch {
 		case len(carried) == 0 && admin == nil:
@@ -423,16 +394,16 @@ func (run *teamIDCarryRun) planTeams(teams, observations []chRow, activeAdmins m
 				continue
 			}
 			// An admin team that one provider's observation names came from
-			// that provider's import.
-			provider := ""
+			// that provider's import; any other is the admin's own team.
+			provider := teamid.Custom
 			if len(observedBy[id]) == 1 {
 				for observed := range observedBy[id] {
 					provider = observed
 				}
 			}
-			newID, ok := adminTeamID(provider)
-			if !ok {
-				continue
+			newID, err := adminTeamID(provider)
+			if err != nil {
+				return nil, err
 			}
 			targets[""] = newID
 			created = append(created, newTeam{content: *admin, id: newID})
@@ -446,11 +417,15 @@ func (run *teamIDCarryRun) planTeams(teams, observations []chRow, activeAdmins m
 				targets[row.str("provider")] = newID
 				content := row
 				if len(carried) == 1 && admin != nil {
-					// An admin edit of a provider team writes the same id with
-					// no provider; it is that team, so it moves with it.
+					// An admin edit of a provider team wrote the same id with
+					// no provider; it is that team, so it moves with it and
+					// keeps the team's origin.
 					targets[""] = newID
 					if admin.time("updated_at").After(row.time("updated_at")) {
 						content = *admin
+						for _, column := range []string{"provider", "native_team_key", "parent_team_id", "source_id"} {
+							content = content.with(column, row.value(column))
+						}
 					}
 					retired = append(retired, *admin)
 				}
@@ -460,11 +435,13 @@ func (run *teamIDCarryRun) planTeams(teams, observations []chRow, activeAdmins m
 			if len(carried) > 1 && admin != nil {
 				// An admin edit of an id two providers' teams hold is neither
 				// team: it is kept as the admin's own team, with its members.
-				if newID, ok := adminTeamID(""); ok {
-					targets[""] = newID
-					created = append(created, newTeam{content: *admin, id: newID})
-					retired = append(retired, *admin)
+				newID, err := adminTeamID(teamid.Custom)
+				if err != nil {
+					return nil, err
 				}
+				targets[""] = newID
+				created = append(created, newTeam{content: *admin, id: newID})
+				retired = append(retired, *admin)
 			}
 		}
 		run.outcome.Teams++
@@ -484,7 +461,10 @@ func (run *teamIDCarryRun) planTeams(teams, observations []chRow, activeAdmins m
 
 	rows := make([]chRow, 0, len(created)+len(retired))
 	for _, team := range created {
-		rows = append(rows, run.newTeamRow(team.content, team.content.str("id"), team.id))
+		// A custom team, pushed or the admin's, is stored with no provider
+		// (teamid.StoredProvider).
+		row := run.newTeamRow(team.content, team.content.str("id"), team.id)
+		rows = append(rows, row.with("provider", teamid.StoredProvider(row.str("provider"))))
 	}
 	for _, row := range retired {
 		rows = append(rows, row.with("is_active", uint8(0)).with("updated_at", teamIDCarryBump(run.at, row.time("updated_at"), time.Microsecond)))
@@ -1091,7 +1071,7 @@ func CarryTeamIDsBeforeWrite(ctx context.Context, conn TeamIDCarryConn, orgID, w
 	}
 	if outcome.Found() || outcome.AdminTeamsNotCarried > 0 {
 		slog.Default().InfoContext(ctx, "team_ids_carried", "writer", writer,
-			"teams", outcome.Teams, "admin_teams", outcome.AdminTeams, "admin_teams_to_custom", outcome.AdminTeamsToCustom, "admin_teams_not_carried", outcome.AdminTeamsNotCarried, "admin_teams_custom_conflict", outcome.AdminTeamsCustomConflict,
+			"teams", outcome.Teams, "admin_teams", outcome.AdminTeams, "admin_teams_to_custom", outcome.AdminTeamsToCustom, "admin_teams_not_carried", outcome.AdminTeamsNotCarried,
 			"ambiguous_teams", outcome.AmbiguousTeams, "teams_already_keyed", outcome.TeamsAlreadyKeyed,
 			"memberships", outcome.Memberships, "project_ownership", outcome.ProjectOwnership, "repo_ownership", outcome.RepoOwnership,
 			"link_rows_already_keyed", outcome.LinkRowsAlreadyKeyed, "observations", outcome.Observations,

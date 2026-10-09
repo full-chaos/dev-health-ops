@@ -76,8 +76,10 @@ func TestProjectTeamAutoApplyImportsThenMerges(t *testing.T) {
 		t.Fatalf("scan: %v", err)
 	}
 	rows.Close()
-	if provider != "" {
-		t.Errorf("catalog row provider = %q, want empty", provider)
+	// A new imported team takes its provider_type as its origin, no longer
+	// the legacy Python provider "".
+	if provider != "jira" {
+		t.Errorf("catalog row provider = %q, want jira", provider)
 	}
 	if nativeTeamKey != nil {
 		t.Errorf("catalog row native_team_key = %v, want nil", *nativeTeamKey)

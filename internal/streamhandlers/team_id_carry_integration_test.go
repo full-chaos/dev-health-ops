@@ -3,12 +3,13 @@
 package streamhandlers
 
 import (
-	"errors"
+	"context"
 	"testing"
 
+	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/google/uuid"
 
-	"github.com/full-chaos/dev-health-ops/internal/providersync"
+	"github.com/full-chaos/dev-health-ops/internal/teamattribution"
 )
 
 // A team.v1 push carries the bare team before it writes: the admin's manual
@@ -40,11 +41,58 @@ func TestATeamV1PushCarriesTheBareTeamFirst(t *testing.T) {
 	}
 }
 
-// A team.v1 push of the custom system whose id an admin team holds (the
-// carry gives an admin's own team custom:<id>) is refused like a team.v1
-// id CheckPushed refuses: the team.v1 kind fails and the admin team stays;
-// the batch's other kinds are written as on any team.v1 failure.
-func TestATeamV1PushOfAnAdminsCustomIDIsRefused(t *testing.T) {
+func teamRowSummary(t *testing.T, conn driver.Conn, ctx context.Context, id string) string {
+	t.Helper()
+	var got string
+	if err := conn.QueryRow(ctx, `SELECT concat(provider, '|', name, '|', arrayStringConcat(manual_members, ','), '|', toString(is_active)) FROM teams FINAL WHERE org_id = ? AND id = ?`, projectMembershipTestOrg, id).Scan(&got); err != nil {
+		return "none"
+	}
+	return got
+}
+
+// An older admin edit of a pushed custom team (it stored provider "")
+// leaves that team the source's: the next push of the source writes it
+// (keeping the admin's manual member) and every other team of the batch.
+func TestAPushAfterAnAdminEditOfAPushedCustomTeamUpdatesIt(t *testing.T) {
+	ctx, conn := newProjectMembershipConn(t)
+	pointer := projectMembershipPointer()
+	pointer.SourceSystem, pointer.SourceInstance = "custom", "acme"
+	sink, err := NewClickHouseExternalBatchSink(conn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	push := func(name, at string) error {
+		records := []externalSinkRecord{
+			{Index: 0, Kind: "team.v1", ExternalID: "t1", Payload: map[string]any{"id": "eng", "name": name, "updatedAt": at}},
+			{Index: 1, Kind: "team.v1", ExternalID: "t2", Payload: map[string]any{"id": "ops", "name": "Ops " + name, "updatedAt": at}},
+		}
+		_, err := sink.Write(ctx, externalSinkBatch{Pointer: pointer, SourceID: uuid.New(), Records: records})
+		return err
+	}
+	if err := push("Pushed Eng", "2026-10-01T00:00:00Z"); err != nil {
+		t.Fatalf("first push: %v", err)
+	}
+	if err := conn.Exec(ctx, `INSERT INTO teams (id, team_uuid, name, members, manual_members, project_keys, repo_patterns, is_active, updated_at, org_id, provider) VALUES ('custom:eng', generateUUIDv4(), 'Pushed Eng', [], ['admin@example.com'], [], [], 1, '2026-10-02 00:00:00', ?, '')`, projectMembershipTestOrg); err != nil {
+		t.Fatal(err)
+	}
+	if err := push("Pushed Eng v2", "2026-10-08T00:00:00Z"); err != nil {
+		t.Fatalf("push after the admin edit: %v", err)
+	}
+	for id, want := range map[string]string{
+		"custom:eng": "|Pushed Eng v2|admin@example.com|1",
+		"custom:ops": "|Ops Pushed Eng v2||1",
+	} {
+		if got := teamRowSummary(t, conn, ctx, id); got != want {
+			t.Errorf("%s = %q, want %q", id, got, want)
+		}
+	}
+}
+
+// An admin's own team "eng" and a pushed custom-system team "eng" are one
+// custom team: the push carries the bare admin team to custom:eng and
+// writes over it (the last write wins), keeping the admin's manual member;
+// no second team appears.
+func TestAnAdminTeamAndAPushedCustomTeamOfOneIDAreOneTeam(t *testing.T) {
 	ctx, conn := newProjectMembershipConn(t)
 	if err := conn.Exec(ctx, `INSERT INTO teams (id, team_uuid, name, members, manual_members, project_keys, repo_patterns, is_active, updated_at, org_id, provider) VALUES ('eng', generateUUIDv4(), 'Admin Eng', [], ['admin@example.com'], [], [], 1, '2026-09-01 00:00:00', ?, '')`, projectMembershipTestOrg); err != nil {
 		t.Fatal(err)
@@ -55,26 +103,47 @@ func TestATeamV1PushOfAnAdminsCustomIDIsRefused(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	records := []externalSinkRecord{
-		{Index: 0, Kind: "team.v1", ExternalID: "t1", Payload: map[string]any{"id": "eng", "name": "Pushed Eng", "updatedAt": "2026-10-08T00:00:00Z"}},
-		{Index: 1, Kind: "identity.v1", ExternalID: "u1", Payload: map[string]any{"canonicalId": "ada@example.test", "updatedAt": "2026-10-08T00:00:00Z", "teamIds": []any{"squad"}}},
+	records := []externalSinkRecord{{Index: 0, Kind: "team.v1", ExternalID: "t1", Payload: map[string]any{"id": "eng", "name": "Pushed Eng", "updatedAt": "2026-10-08T00:00:00Z"}}}
+	if _, err := sink.Write(ctx, externalSinkBatch{Pointer: pointer, SourceID: uuid.New(), Records: records}); err != nil {
+		t.Fatalf("push: %v", err)
 	}
-	_, err = sink.Write(ctx, externalSinkBatch{Pointer: pointer, SourceID: uuid.New(), Records: records})
-	if !errors.Is(err, providersync.ErrTeamIDCustomHeld) {
-		t.Fatalf("write error = %v, want the custom id conflict", err)
-	}
-	var got string
-	if err := conn.QueryRow(ctx, `SELECT concat(provider, '|', name, '|', arrayStringConcat(manual_members, ','), '|', toString(is_active)) FROM teams FINAL WHERE org_id = ? AND id = 'custom:eng'`, projectMembershipTestOrg).Scan(&got); err != nil {
+	var active string
+	if err := conn.QueryRow(ctx, `SELECT arrayStringConcat(groupArray(id), ',') FROM (SELECT id FROM teams FINAL WHERE org_id = ? AND is_active = 1 ORDER BY id)`, projectMembershipTestOrg).Scan(&active); err != nil {
 		t.Fatal(err)
 	}
-	if got != "|Admin Eng|admin@example.com|1" {
-		t.Errorf("custom:eng = %q, want the admin team unchanged", got)
+	if active != "custom:eng" {
+		t.Errorf("active = %q, want custom:eng only", active)
 	}
-	var identities uint64
-	if err := conn.QueryRow(ctx, `SELECT count() FROM identities FINAL WHERE org_id = ? AND canonical_id = 'ada@example.test'`, projectMembershipTestOrg).Scan(&identities); err != nil {
+	if got := teamRowSummary(t, conn, ctx, "custom:eng"); got != "|Pushed Eng|admin@example.com|1" {
+		t.Errorf("custom:eng = %q, want the pushed write over the admin team, member kept", got)
+	}
+}
+
+// A pushed custom team is stored like an admin team, with no provider, so
+// the attribution cascade takes it for a project key of an item of every
+// provider, as it takes an admin team.
+func TestAPushedCustomTeamHoldsAProjectKeyForEveryProvider(t *testing.T) {
+	ctx, conn := newProjectMembershipConn(t)
+	pointer := projectMembershipPointer()
+	pointer.SourceSystem, pointer.SourceInstance = "custom", "acme"
+	sink, err := NewClickHouseExternalBatchSink(conn)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if identities != 1 {
-		t.Errorf("identity.v1 rows = %d, want 1 (the other kind is written)", identities)
+	records := []externalSinkRecord{{Index: 0, Kind: "team.v1", ExternalID: "t1", Payload: map[string]any{"id": "eng", "name": "Eng", "projectKeys": []any{"ENGKEY"}, "updatedAt": "2026-10-08T00:00:00Z"}}}
+	if _, err := sink.Write(ctx, externalSinkBatch{Pointer: pointer, SourceID: uuid.New(), Records: records}); err != nil {
+		t.Fatalf("push: %v", err)
+	}
+	teams, err := teamattribution.ClickHouseFactSource{Conn: conn}.LoadTeams(ctx, projectMembershipTestOrg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	derived := teamattribution.NewGitHubWorkItemDerivationContext(teamattribution.GithubWorkItemDerivationFacts{Teams: teams})
+	for _, provider := range []string{"github", "gitlab", "jira", "linear"} {
+		key := "ENGKEY"
+		candidates := derived.IssueProjectCandidates(teamattribution.GithubWorkItemDerivationSubject{Provider: provider, ProjectKey: &key})
+		if len(candidates) != 1 || candidates[0].TeamID == nil || *candidates[0].TeamID != "custom:eng" {
+			t.Errorf("%s item: candidates = %+v, want custom:eng", provider, candidates)
+		}
 	}
 }

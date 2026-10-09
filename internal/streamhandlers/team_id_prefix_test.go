@@ -56,8 +56,8 @@ func TestTeamV1WritesTheSystemPrefixedTeamID(t *testing.T) {
 			if values[0] != c.want || values[1] != wantUUID {
 				t.Fatalf("id, team_uuid = %v, %v; want %q, %v", values[0], values[1], c.want, wantUUID)
 			}
-			if values[12] != c.system {
-				t.Fatalf("provider = %v, want %q", values[12], c.system)
+			if want := teamid.StoredProvider(c.system); values[12] != want {
+				t.Fatalf("provider = %v, want %q", values[12], want)
 			}
 			// An id that holds another provider's key has no native key of this system.
 			var wantNative any

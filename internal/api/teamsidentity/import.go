@@ -142,7 +142,7 @@ func (h handlers) importTeams(w http.ResponseWriter, r *http.Request) {
 	orgID := orgIDOf(ctx)
 	refs := make([]providersync.TeamIDRef, len(teams))
 	for i, team := range teams {
-		refs[i] = providersync.TeamIDRef{Provider: team.ProviderType, ID: team.ProviderTeamID}
+		refs[i] = providersync.TeamIDRef{Provider: team.ProviderType, ID: team.ProviderTeamID, Mode: providersync.TeamIDOwner}
 	}
 	if _, ok := h.keyTeamIDs(w, r, "admin_import", refs); !ok {
 		return

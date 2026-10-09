@@ -18,6 +18,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	"github.com/full-chaos/dev-health-ops/internal/providersync"
+	"github.com/full-chaos/dev-health-ops/internal/teamid"
 )
 
 // Routes returns this area's routes: the 7 pure-CRUD team+identity admin
@@ -293,7 +294,7 @@ func (h handlers) createOrUpdateTeam(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	write := TeamWrite{TeamID: keyed[0], Name: name, RepoPatterns: &repoPatterns, ProjectKeys: &projectKeys}
+	write := TeamWrite{Origin: teamid.Custom, TeamID: keyed[0], Name: name, RepoPatterns: &repoPatterns, ProjectKeys: &projectKeys}
 	if hasDescription {
 		write.Description = &description
 	}
@@ -570,7 +571,7 @@ func (h handlers) updateTeam(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	write := TeamWrite{TeamID: teamID, Name: existing.Name, Description: existing.Description}
+	write := TeamWrite{Origin: existing.origin.Provider, TeamID: teamID, Name: existing.Name, Description: existing.Description}
 	if hasName {
 		write.Name = name
 	}

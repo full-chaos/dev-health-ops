@@ -116,10 +116,10 @@ func TestCreateOrUpdateIdentityReconcilesTeamMembership(t *testing.T) {
 	store, ctx := startTeamsIdentitiesStore(t)
 	h := newTestHandlers(store)
 
-	if _, err := store.CreateOrUpdateTeam(ctx, "org-1", TeamWrite{TeamID: "custom:team-x", Name: "Team X"}); err != nil {
+	if _, err := store.CreateOrUpdateTeam(ctx, "org-1", TeamWrite{Origin: "custom", TeamID: "custom:team-x", Name: "Team X"}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.CreateOrUpdateTeam(ctx, "org-1", TeamWrite{TeamID: "custom:team-y", Name: "Team Y"}); err != nil {
+	if _, err := store.CreateOrUpdateTeam(ctx, "org-1", TeamWrite{Origin: "custom", TeamID: "custom:team-y", Name: "Team Y"}); err != nil {
 		t.Fatal(err)
 	}
 	// A pre-existing, unrelated member of team-x that reconciliation must

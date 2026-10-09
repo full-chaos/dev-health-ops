@@ -134,3 +134,69 @@ func TestForecastInputsOfANamedRetiredTeamGiveRetractionRowsNoWeight(t *testing.
 }
 
 func ptr(value float64) *float64 { return &value }
+
+// TestEstimateCoverageOfANamedRetiredTeamHasNoRule holds the one read of a
+// named team that gets no rule, and the reason. In
+// estimate_coverage_metrics_daily a MEASURED group whose items are all closed
+// is stored with 0 in every count and no ratio, which is what a retraction
+// row holds: no reader can drop one and keep the other. The read sums the
+// newest day of each key, so a retraction row adds 0; what is left is that an
+// id whose keys are all retracted answers "ratio not known" (as a team with
+// an empty backlog does), where an id with no row answers a ratio of 0.
+func TestEstimateCoverageOfANamedRetiredTeamHasNoRule(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+	store := retractionseed.Start(ctx, t)
+	client, err := dhclickhouse.NewClickHouseQueryClientWithOptions(dhclickhouse.Options{DSN: store.URI})
+	if err != nil {
+		t.Fatalf("construct query client: %v", err)
+	}
+	defer func() { _ = client.Close() }()
+
+	type answer struct {
+		Ratio                           any
+		Estimated, Unestimated, Backlog int
+	}
+	read := func(org, teamID string) answer {
+		t.Helper()
+		coverage, err := loadEstimateCoverage(ctx, client, org, []string{teamID}, nil)
+		if err != nil {
+			t.Fatalf("%s %s: %v", org, teamID, err)
+		}
+		return answer{deref(coverage.ratio), coverage.estimatedCount, coverage.unestimatedCount, coverage.backlogSize}
+	}
+
+	// A measured group with an empty backlog, stored as the writer stores it:
+	// the counts are 0 and the ratio is not set.
+	const emptyBacklogTeam = "team-with-an-empty-backlog"
+	lastDay := store.Days[len(store.Days)-1]
+	if err := store.Conn.Exec(ctx, `INSERT INTO estimate_coverage_metrics_daily
+(org_id, day, provider, work_scope_id, team_id, team_name, estimated_count, unestimated_count, backlog_size, computed_at)
+VALUES (?, ?, 'jira', 'ENGPROJ', ?, 'Empty', 0, 0, 0, ?)`,
+		retractionseed.ControlOrg, lastDay, emptyBacklogTeam, store.NewComputedAt); err != nil {
+		t.Fatalf("store the measured empty backlog: %v", err)
+	}
+	measuredEmpty := read(retractionseed.ControlOrg, emptyBacklogTeam)
+	if want := (answer{Ratio: nil}); measuredEmpty != want {
+		t.Fatalf("a measured empty backlog = %+v, want %+v", measuredEmpty, want)
+	}
+	if none, want := read(retractionseed.ControlOrg, "no-such-team"), (answer{Ratio: 0.0}); none != want {
+		t.Fatalf("an id with no row = %+v, want %+v", none, want)
+	}
+
+	for index, team := range retractionseed.Teams {
+		// The control answer, from the seed: on its one measured day the
+		// retired id holds 3+index estimated and 3+index unestimated items.
+		wip := 3 + index
+		control := read(retractionseed.ControlOrg, team.RetiredID)
+		if want := (answer{Ratio: 0.5, Estimated: wip, Unestimated: wip, Backlog: 2 * wip}); control != want {
+			t.Fatalf("%s control %s = %+v, want %+v", team.Provider, team.RetiredID, control, want)
+		}
+		// The retraction row is the newest row of the key: it reads as the
+		// measured empty backlog, and not as the day before it.
+		if retracted := read(retractionseed.RetractedOrg, team.RetiredID); retracted != measuredEmpty {
+			t.Errorf("%s: estimate coverage of %s = %+v, want that of a measured empty backlog %+v",
+				team.Provider, team.RetiredID, retracted, measuredEmpty)
+		}
+	}
+}

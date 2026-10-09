@@ -1,9 +1,9 @@
 {
   "header": {
     "test": "TestRevisionsMatchTheFrozenAlembicOutput",
-    "python_build": "0e5514e1032cf6a33bca555cf58ef3ff4f1973f3",
-    "producer_digest": "4fff53b0b6afbd7874ccaadf8d29f284c09f4ae3d6b4cb4b5a651bb201b8bbd0",
-    "recipe": "git worktree add --detach $DIR 0e5514e1032cf6a33bca555cf58ef3ff4f1973f3 (with its .venv: uv sync --frozen --no-install-project); then from the repository root: go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/pgmigrate/ -test '^TestRevisionsMatchTheFrozenAlembicOutput$' -python-root $DIR",
+    "python_build": "cf5e0591401c9c72e117a41c8d3bfe084ba85fba",
+    "producer_digest": "6b181f5454e0ca98e056484b05983cbd6b9f88f04042ec6aa5983216ddc17dd9",
+    "recipe": "git worktree add --detach $DIR cf5e0591401c9c72e117a41c8d3bfe084ba85fba (with its .venv: uv sync --frozen --no-install-project); then from the repository root: go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/pgmigrate/ -test '^TestRevisionsMatchTheFrozenAlembicOutput$' -python-root $DIR",
     "recorded_by": "goldenrecord",
     "blanked": {}
   },
@@ -16,7 +16,7 @@
       "request_headers_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "status": 0,
       "headers": {},
-      "body": "[{\"name\":\"heads\",\"stdout\":\"0066 (river_cutover) (head)\\n0148 (application_schema) (head)\\n\"},{\"name\":\"current at the head\",\"stdout\":\"0148 (head)\\n0066 (head)\\n\"},{\"name\":\"current without the cutover head\",\"stdout\":\"0148 (head)\\n\"},{\"name\":\"current below the head\",\"stdout\":\"0148 (head)\\n0066 (head)\\n\"},{\"name\":\"current of an empty version table\",\"stdout\":\"\"},{\"name\":\"current without a version table\",\"stdout\":\"\"}]"
+      "body": "[{\"name\":\"heads\",\"stdout\":\"0066 (river_cutover) (head)\\n0149 (application_schema) (head)\\n\"},{\"name\":\"current at the head\",\"stdout\":\"0066 (head)\\n0149 (head)\\n\"},{\"name\":\"current without the cutover head\",\"stdout\":\"0149 (head)\\n\"},{\"name\":\"current below the head\",\"stdout\":\"0066 (head)\\n0149 (head)\\n\"},{\"name\":\"current of an empty version table\",\"stdout\":\"\"},{\"name\":\"current without a version table\",\"stdout\":\"\"}]"
     }
   ]
 }

@@ -607,9 +607,21 @@ func resolveSankeyCoverage(ctx context.Context, client QueryClient, orgID string
 		return nil
 	}
 
-	// analytics.py:877-882 -- a zero denominator yields 0, NOT null. The
-	// SDL types both fields non-nullable (SankeyCoverage.teamCoverage:
-	// Float!), so 0 is the only representable answer here anyway.
+	// CHAOS-6129: nothing measurable is not 0 % covered. ClickHouse answers an
+	// aggregate over zero input rows with ONE row of zeros (sum() of nothing is
+	// 0), so the zero-rows branch above never sees an empty window, and the
+	// guards below used to leave {0, 0} behind: the same answer as a measured
+	// 0 %. With both denominators zero there is no coverage to report, so the
+	// result's coverage stays null (SankeyResult.coverage is nullable), which
+	// clients render as unknown. A declared divergence from Python
+	// (analytics.py:877-882 answers 0 here).
+	//
+	// One denominator zero while the other is positive still reports 0 for that
+	// field: the SDL types both fields non-nullable (SankeyCoverage.teamCoverage:
+	// Float!), so that case needs a schema change and is a separate change.
+	if total == 0 && repoTotal == 0 {
+		return nil
+	}
 	coverage := &model.SankeyCoverage{}
 	if total > 0 {
 		coverage.TeamCoverage = assignedTeam / total

@@ -703,6 +703,7 @@ func edgeCompare(t *testing.T, goBase string, cs []edgeCase, python []venueoracl
 	receipt.WriteString(venueoracle.Diff(t, goBase, parity, parityPython, venueoracle.DiffOptions{
 		Normalize: func(request venueoracle.Request, body string) string {
 			body = coverageDivergenceNormalize(request, body)
+			body = sankeyCoverageDivergenceNormalize(request, body)
 			body = noDataStatusNormalize(request, body, operatingReviewTablesEmpty)
 			body = goOnlyMetricsNormalize(request, body)
 			if base != nil {
@@ -715,6 +716,9 @@ func edgeCompare(t *testing.T, goBase string, cs []edgeCase, python []venueoracl
 				t.Errorf("%s: %s", request.Name, why)
 			}
 			if ok, why := goOnlyMetricsInspect(request, goResponse.Body); !ok {
+				t.Errorf("%s: %s", request.Name, why)
+			}
+			if ok, why := sankeyCoverageDivergenceInspect(request, goResponse.Body); !ok {
 				t.Errorf("%s: %s", request.Name, why)
 			}
 			if isThroughputForecastRequest(request) && !strings.Contains(goResponse.Body, goZeroCoverage) {

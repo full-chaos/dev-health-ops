@@ -150,7 +150,7 @@ func TestManualDailyRunGenerationOutputSatisfiesIsManualDailyGeneration(t *testi
 
 // TestEscapeLikePrefixEscapesActualUnderscoresInTheScheduledFanoutPrefix is
 // the regression test for codex adversarial review round 3, P1:
-// HasSucceededRunForDay's coverage query restricts matches to
+// coveringRunForDay's coverage query restricts matches to
 // ScheduledFanoutGenerationPrefix/postSyncGenerationPrefix via LIKE, and
 // ScheduledFanoutGenerationPrefix itself contains literal underscores
 // ("fixed-schedule:daily_metrics_fanout:") -- LIKE's own wildcard for

@@ -30,7 +30,7 @@ import (
 
 // downgradePythonBuild is the build whose Python `dev-hops migrate postgres downgrade` (real Alembic) answered
 // the scenarios: a build that still carried the Python CLI.
-const downgradePythonBuild = "0e5514e1032cf6a33bca555cf58ef3ff4f1973f3"
+const downgradePythonBuild = "cf5e0591401c9c72e117a41c8d3bfe084ba85fba"
 
 // downgradePythonProgram is the entry point the producer runs: the real dev-hops CLI.
 const downgradePythonProgram = "import sys\nfrom dev_health_ops import cli\nraise SystemExit(cli.main(sys.argv[1:]))\n"
@@ -657,7 +657,7 @@ func TestDowngradeMatchesFrozenPythonDowngrade(t *testing.T) {
 	golden := venueoracle.OpenGolden(t, venueoracle.GoldenSpec{
 		Path:        "testdata/golden/downgrade.json",
 		PythonBuild: downgradePythonBuild,
-		SHA256:      "ed5173f697ece4c33b2438712ab893be72112adb1caa1628d266e012d05c33ff",
+		SHA256:      "2739c76d57732a79a29b3345b42002189c41d453e20d7f0ddef1187e594dcac5",
 		Recipe: "git worktree add --detach $DIR " + downgradePythonBuild + " (with its .venv: uv sync --frozen --no-install-project); then from the repository root: " +
 			"go run ./internal/testsupport/venueoracle/goldenrecord -pkg ./internal/pgmigrate/ -test '^TestDowngradeMatchesFrozenPythonDowngrade$' -python-root $DIR",
 	})

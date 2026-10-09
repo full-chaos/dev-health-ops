@@ -19,6 +19,7 @@ import (
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/pytime"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/deltarule"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/quadrant"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/timewindow"
 )
@@ -39,14 +40,6 @@ func safeFloat(v float64) float64 {
 // safeTransform ports safe_transform (api/utils/numeric.py:55-65).
 func safeTransform(transform func(float64) float64, v float64) float64 {
 	return safeFloat(transform(v))
-}
-
-// deltaPct ports delta_pct (api/utils/numeric.py:68-80).
-func deltaPct(current, previous float64) float64 {
-	if previous == 0 {
-		return 0.0
-	}
-	return (current - previous) / previous * 100.0
 }
 
 // SummaryParams is GET /api/v1/people/{person_id}/summary's
@@ -105,6 +98,12 @@ type PersonDelta struct {
 	Unit     string       `json:"unit"`
 	DeltaPct float64      `json:"delta_pct"`
 	Spark    []SparkPoint `json:"spark"`
+	// HasData / HasPriorData (CHAOS-9044, Go-only, last so the frozen field
+	// order is kept): the current / comparison window holds a stored value
+	// for the metric. When false, Value (or the delta's base) is a 0
+	// placeholder, not a measured zero, and DeltaPct is 0 (deltarule).
+	HasData      bool `json:"has_data"`
+	HasPriorData bool `json:"has_prior_data"`
 }
 
 // SummarySentence ports SummarySentence (api/models/schemas.py:45-48).
@@ -753,11 +752,11 @@ func BuildSummaryResponse(ctx context.Context, reader *Reader, orgID string, par
 
 	deltas := make([]PersonDelta, 0, len(personMetrics))
 	for _, metric := range personMetrics {
-		currentValue, err := fetchPersonMetricValue(ctx, reader.client, metric.Table, metric.Column, metric.Aggregator, metric.IdentityColumn, identityInputs, startDay, endDay, metric.ExtraWhere, orgID)
+		currentValue, hasData, err := fetchPersonMetricValue(ctx, reader.client, metric.Table, metric.Column, metric.Aggregator, metric.IdentityColumn, identityInputs, startDay, endDay, metric.ExtraWhere, orgID)
 		if err != nil {
 			return SummaryResponse{}, err
 		}
-		previousValue, err := fetchPersonMetricValue(ctx, reader.client, metric.Table, metric.Column, metric.Aggregator, metric.IdentityColumn, identityInputs, compareStart, compareEnd, metric.ExtraWhere, orgID)
+		previousValue, hasPriorData, err := fetchPersonMetricValue(ctx, reader.client, metric.Table, metric.Column, metric.Aggregator, metric.IdentityColumn, identityInputs, compareStart, compareEnd, metric.ExtraWhere, orgID)
 		if err != nil {
 			return SummaryResponse{}, err
 		}
@@ -768,17 +767,19 @@ func BuildSummaryResponse(ctx context.Context, reader *Reader, orgID string, par
 
 		current := safeFloat(currentValue)
 		previous := safeFloat(previousValue)
-		pctChange := safeFloat(deltaPct(current, previous))
+		pctChange := safeFloat(deltarule.Pct(current, previous, hasData, hasPriorData))
 
 		spark := sparkPoints(series, metric.Transform)
 
 		deltas = append(deltas, PersonDelta{
-			Metric:   metric.Metric,
-			Label:    metric.Label,
-			Value:    safeTransform(metric.Transform, current),
-			Unit:     metric.Unit,
-			DeltaPct: pctChange,
-			Spark:    spark,
+			Metric:       metric.Metric,
+			Label:        metric.Label,
+			Value:        safeTransform(metric.Transform, current),
+			Unit:         metric.Unit,
+			DeltaPct:     pctChange,
+			Spark:        spark,
+			HasData:      hasData,
+			HasPriorData: hasPriorData,
 		})
 	}
 

@@ -12,6 +12,16 @@ import (
 // restRunOrder and restmounted.go's mountedRESTPaths each carry one
 // further line. Nothing else in those shared files changes here.
 
+// homeDeltaGoOnlyKeys declares the three Go-only keys every REST Home delta
+// carries after the frozen Python MetricDelta fields (CHAOS-9044). The recorded
+// answer is never edited; a leaf the Go answer carries and Python never had is
+// declared at its own path, and only there.
+var homeDeltaGoOnlyKeys = map[string]GoOnlyKey{
+	"data.deltas.has_data":       {Ticket: "CHAOS-9044", Reason: "Go-only: the current window holds a stored value for the metric; false = value is a 0 placeholder, not a measured zero. The Python reference never served it."},
+	"data.deltas.has_prior_data": {Ticket: "CHAOS-9044", Reason: "Go-only: the comparison window holds a stored value; false = the delta has no base and delta_pct is 0. The Python reference never served it."},
+	"data.deltas.rate_state":     {Ticket: "CHAOS-9044", Reason: "Go-only: why change failure rate has a value or not (measured, unknown_no_incident_evidence, not_applicable_no_deployments); null for every other metric. The Python reference never served it."},
+}
+
 // homeNumericLeaves is every numeric leaf this route's response can
 // reach, named float or integer and traced to its producing query, per
 // entry, for every 200-status request below (Options.
@@ -46,6 +56,7 @@ import (
 //     a floating aggregate.
 var homeNumericLeaves = Options{
 	NumericLeavesDeclared: true,
+	GoOnlyKeys:            homeDeltaGoOnlyKeys,
 	FloatTierB: map[string]string{
 		"data.freshness.coverage.repos_covered_pct":            "fetch_coverage's covered/total ratio *100 (api/queries/freshness.py) -- a genuine ratio.",
 		"data.freshness.coverage.prs_linked_to_issues_pct":     "fetch_coverage's linked/total ratio *100 -- a genuine ratio.",
@@ -155,6 +166,7 @@ var homeConfidenceTierDefect = BaselineDefect{
 // homeNumericLeaves unchanged.
 var homeConfidenceTierParity = Options{
 	NumericLeavesDeclared: homeNumericLeaves.NumericLeavesDeclared,
+	GoOnlyKeys:            homeNumericLeaves.GoOnlyKeys,
 	FloatTierB:            homeNumericLeaves.FloatTierB,
 	IntegerLeaves:         homeNumericLeaves.IntegerLeaves,
 	VolatileFields:        homeNumericLeaves.VolatileFields,

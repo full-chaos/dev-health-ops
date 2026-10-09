@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"reflect"
 	"strings"
@@ -196,6 +197,27 @@ func TestGoldenCycleBreakdownMilestoneFallbackIsADeclaredDifference(t *testing.T
 	if got.Root.Name != "Cycle Time" || got.Root.Value != 0 || len(got.Root.Children) != 0 || got.Root.Children == nil ||
 		len(got.Meta.Notes) != 0 || got.Meta.Approximation.Used || got.Meta.Approximation.Method != nil {
 		t.Fatalf("Go must answer the empty Cycle Time tree for the recorded input, got %+v", *got)
+	}
+}
+
+// TestCycleBreakdownStateDurationReadErrorIsAnErrorNotTheEmptyTree holds the
+// other half of CHAOS-6606 without a server: a FAILED state-duration read is an
+// error (the route answers 503), never the empty "Cycle Time" tree that an
+// empty window answers. Without it, removing the milestone fallback could be
+// "fixed" by swallowing the read error.
+func TestCycleBreakdownStateDurationReadErrorIsAnErrorNotTheEmptyTree(t *testing.T) {
+	boom := errors.New("clickhouse: connection refused")
+	client := fakeQueryClient{t: t, handler: func(t *testing.T, query string, bindings []dhclickhouse.Binding) (dhclickhouse.RowScanner, error) {
+		return nil, boom
+	}}
+	got, err := BuildResponse(context.Background(), client, "org-1", Params{
+		Mode: "cycle_breakdown", StartDay: day(2024, 3, 1), EndDay: day(2024, 3, 5), Limit: 500, MinValue: 1,
+	})
+	if err == nil || got != nil {
+		t.Fatalf("a failed state-duration read answered %+v, %v; want a nil response and an error", got, err)
+	}
+	if !errors.Is(err, boom) {
+		t.Fatalf("error %v does not carry the read failure", err)
 	}
 }
 

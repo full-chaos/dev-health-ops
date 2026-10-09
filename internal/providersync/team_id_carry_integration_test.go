@@ -737,24 +737,78 @@ func TestCarryTeamIDsKeepsAnAmbiguousAdminEditAsTheAdminsTeam(t *testing.T) {
 
 // An admin's own team "eng" and a pushed custom-system team "eng" are one
 // custom team, custom:eng: the carry moves the admin team to that id, where
-// the pushed row is kept (a keyed row is not written again) and the bare
-// admin row goes inactive.
+// the pushed row is kept (a keyed row is not written again), takes the
+// admin's manual members, and the bare admin row goes inactive. This holds
+// for a pushed row stored with no provider or with provider custom, and for
+// an admin row older or newer than it.
 func TestCarryTeamIDsMovesAnAdminTeamOntoThePushedCustomTeamOfItsID(t *testing.T) {
+	for _, c := range []struct {
+		name, pushedProvider string
+		adminNewer           bool
+	}{{"stored no provider", "", false}, {"stored custom, admin newer", "custom", true}, {"stored custom, admin older", "custom", false}} {
+		t.Run(c.name, func(t *testing.T) {
+			ctx, conn := newWorkItemEffectsConn(t)
+			f := carryFixture{t: t, ctx: ctx, conn: conn, orgID: uuid.NewString()}
+			adminAt, pushedAt := carryOld, carryOld.Add(time.Minute)
+			if c.adminNewer {
+				adminAt, pushedAt = pushedAt, adminAt
+			}
+			f.team("", "eng", nil, nil, 1, adminAt, []string{"admin@example.com"}, nil)
+			f.team(c.pushedProvider, "custom:eng", carryPtr("eng"), nil, 1, pushedAt, []string{"pushed@example.com"}, nil)
+
+			outcome, err := CarryTeamIDs(ctx, conn, f.orgID, carryAt, false)
+			if err != nil || outcome.AdminTeamsToCustom != 1 || outcome.TeamsAlreadyKeyed != 1 || outcome.ManualMembersFolded != 1 {
+				t.Fatalf("carry = %+v, %v; want the admin team folded into the existing custom:eng", outcome, err)
+			}
+			want := "custom:eng|" + c.pushedProvider + "|team custom:eng|pushed@example.com,admin@example.com|1;eng||team eng|admin@example.com|0"
+			if got := f.str(`SELECT arrayStringConcat(groupArray(concat(id, '|', provider, '|', name, '|', arrayStringConcat(manual_members, ','), '|', toString(is_active))), ';') FROM (SELECT * FROM teams FINAL WHERE org_id = ? ORDER BY id)`); got != want {
+				t.Errorf("teams = %q, want %q", got, want)
+			}
+			again, err := CarryTeamIDs(ctx, conn, f.orgID, carryAt.Add(time.Hour), false)
+			if err != nil || again.Found() || again.RowsWritten != 0 {
+				t.Errorf("second carry = %+v, %v; want nothing", again, err)
+			}
+		})
+	}
+}
+
+// A kept row that already holds every manual member of the moved row is not
+// written again.
+func TestCarryTeamIDsDoesNotRewriteAKeptRowThatHoldsTheMembers(t *testing.T) {
 	ctx, conn := newWorkItemEffectsConn(t)
 	f := carryFixture{t: t, ctx: ctx, conn: conn, orgID: uuid.NewString()}
 	f.team("", "eng", nil, nil, 1, carryOld, []string{"admin@example.com"}, nil)
-	f.team("", "custom:eng", carryPtr("eng"), nil, 1, carryOld, nil, nil)
+	f.team("", "custom:eng", carryPtr("eng"), nil, 1, carryOld, []string{"admin@example.com"}, nil)
+	before := f.str(`SELECT toString(max(updated_at)) FROM teams WHERE org_id = ? AND id = 'custom:eng'`)
 
 	outcome, err := CarryTeamIDs(ctx, conn, f.orgID, carryAt, false)
-	if err != nil || outcome.AdminTeamsToCustom != 1 || outcome.TeamsAlreadyKeyed != 1 {
-		t.Fatalf("carry = %+v, %v; want the admin team moved to the existing custom:eng", outcome, err)
+	if err != nil || outcome.TeamsAlreadyKeyed != 1 || outcome.ManualMembersFolded != 0 {
+		t.Fatalf("carry = %+v, %v; want nothing folded", outcome, err)
 	}
-	if got := f.str(`SELECT arrayStringConcat(groupArray(concat(id, '|', provider, '|', name, '|', toString(is_active))), ';') FROM (SELECT id, provider, name, is_active FROM teams FINAL WHERE org_id = ? ORDER BY id)`); got != "custom:eng||team custom:eng|1;eng||team eng|0" {
-		t.Errorf("teams = %q, want one active custom:eng", got)
+	if got := f.str(`SELECT concat(toString(count()), '|', toString(max(updated_at))) FROM teams WHERE org_id = ? AND id = 'custom:eng'`); got != "1|"+before {
+		t.Errorf("custom:eng rows|newest = %q, want one row at %s", got, before)
 	}
-	again, err := CarryTeamIDs(ctx, conn, f.orgID, carryAt.Add(time.Hour), false)
-	if err != nil || again.Found() || again.RowsWritten != 0 {
-		t.Errorf("second carry = %+v, %v; want nothing", again, err)
+	if got := f.str(`SELECT arrayStringConcat(manual_members, ',') FROM teams FINAL WHERE org_id = ? AND id = 'custom:eng'`); got != "admin@example.com" {
+		t.Errorf("custom:eng manual members = %q, want admin@example.com once", got)
+	}
+}
+
+// An admin edit of a provider team's bare id, carried after that team was
+// already written under its prefixed id, is that team: the kept row takes
+// the edit's manual members and keeps its own origin.
+func TestCarryTeamIDsFoldsAnAdminEditIntoTheKeptProviderTeam(t *testing.T) {
+	ctx, conn := newWorkItemEffectsConn(t)
+	f := carryFixture{t: t, ctx: ctx, conn: conn, orgID: uuid.NewString()}
+	f.team("", "ENG", nil, nil, 1, carryOld.Add(2*time.Minute), []string{"admin@example.com"}, nil)
+	f.observation("linear", "ENG", "ENG")
+	f.team("linear", "linear:ENG", carryPtr("ENG"), nil, 1, carryOld.Add(time.Minute), nil, nil)
+
+	outcome, err := CarryTeamIDs(ctx, conn, f.orgID, carryAt, false)
+	if err != nil || outcome.ManualMembersFolded != 1 {
+		t.Fatalf("carry = %+v, %v; want the admin edit's member folded", outcome, err)
+	}
+	if got := f.str(`SELECT arrayStringConcat(groupArray(concat(id, '|', provider, '|', ifNull(native_team_key, ''), '|', arrayStringConcat(manual_members, ','), '|', toString(is_active))), ';') FROM (SELECT * FROM teams FINAL WHERE org_id = ? ORDER BY id)`); got != "ENG|||admin@example.com|0;linear:ENG|linear|ENG|admin@example.com|1" {
+		t.Errorf("teams = %q, want linear:ENG with the admin's member", got)
 	}
 }
 

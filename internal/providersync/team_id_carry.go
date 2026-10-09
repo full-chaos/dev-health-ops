@@ -140,6 +140,10 @@ type TeamIDCarryOutcome struct {
 	// TeamsAlreadyKeyed is the new ids that already had a row. That row is
 	// not written again; the old row still goes inactive.
 	TeamsAlreadyKeyed uint64 `json:"teams_already_keyed"`
+	// ManualMembersFolded is the part of those whose kept row took the
+	// manual members of the old row that it did not hold yet, so an admin's
+	// members are not lost (one team).
+	ManualMembersFolded uint64 `json:"manual_members_folded"`
 	// The open link rows moved, and the ones whose prefixed twin was already
 	// open (the old row is closed, no second open row is written).
 	Memberships          uint64 `json:"memberships"`
@@ -541,14 +545,59 @@ func (run *teamIDCarryRun) dropKeyedTeams(rows *[]chRow) error {
 		return fmt.Errorf("team id carry: read prefixed teams: %w", err)
 	}
 	kept := (*rows)[:0]
+	folded := map[string][]string{}
+	var foldIDs []string
 	for _, row := range *rows {
 		if row.u8("is_active") == 1 && existing[row.str("id")] {
 			run.outcome.TeamsAlreadyKeyed++
+			if members := row.strs("manual_members"); len(members) > 0 {
+				id := row.str("id")
+				if _, seen := folded[id]; !seen {
+					foldIDs = append(foldIDs, id)
+				}
+				folded[id] = append(folded[id], members...)
+			}
 			continue
 		}
 		kept = append(kept, row)
 	}
 	*rows = kept
+	return run.foldManualMembers(rows, foldIDs, folded)
+}
+
+// foldManualMembers writes a new version of each kept row that takes the
+// manual members of the dropped rows of its id that it does not hold yet:
+// the kept row and the moved bare team are one team, and manual members are
+// an admin's statement that no other writer restores.
+func (run *teamIDCarryRun) foldManualMembers(rows *[]chRow, ids []string, members map[string][]string) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	current, err := run.read(`SELECT `+teamIDCarryTeamsColumns+` FROM teams FINAL WHERE org_id = {org_id:String} AND id IN {ids:Array(String)}`, run.org, clickhouse.Named("ids", ids))
+	if err != nil {
+		return fmt.Errorf("team id carry: read kept teams: %w", err)
+	}
+	for _, row := range current {
+		merged := append([]string(nil), row.strs("manual_members")...)
+		held := map[string]bool{}
+		for _, member := range merged {
+			held[member] = true
+		}
+		for _, member := range members[row.str("id")] {
+			if !held[member] {
+				held[member] = true
+				merged = append(merged, member)
+			}
+		}
+		if len(merged) == len(row.strs("manual_members")) {
+			continue
+		}
+		run.outcome.ManualMembersFolded++
+		// One tick past the stored version, not the carry's time: the row
+		// keeps its writer's clock, so a later write of that writer (a push
+		// stamped by its source) still wins.
+		*rows = append(*rows, row.with("manual_members", merged).with("updated_at", row.time("updated_at").Add(time.Microsecond)))
+	}
 	return nil
 }
 
@@ -1072,7 +1121,7 @@ func CarryTeamIDsBeforeWrite(ctx context.Context, conn TeamIDCarryConn, orgID, w
 	if outcome.Found() || outcome.AdminTeamsNotCarried > 0 {
 		slog.Default().InfoContext(ctx, "team_ids_carried", "writer", writer,
 			"teams", outcome.Teams, "admin_teams", outcome.AdminTeams, "admin_teams_to_custom", outcome.AdminTeamsToCustom, "admin_teams_not_carried", outcome.AdminTeamsNotCarried,
-			"ambiguous_teams", outcome.AmbiguousTeams, "teams_already_keyed", outcome.TeamsAlreadyKeyed,
+			"ambiguous_teams", outcome.AmbiguousTeams, "teams_already_keyed", outcome.TeamsAlreadyKeyed, "manual_members_folded", outcome.ManualMembersFolded,
 			"memberships", outcome.Memberships, "project_ownership", outcome.ProjectOwnership, "repo_ownership", outcome.RepoOwnership,
 			"link_rows_already_keyed", outcome.LinkRowsAlreadyKeyed, "observations", outcome.Observations,
 			"sync_policies", outcome.SyncPolicies, "drift_changes", outcome.DriftChanges, "identity_drift_changes", outcome.IdentityDriftChanges, "identities", outcome.Identities,

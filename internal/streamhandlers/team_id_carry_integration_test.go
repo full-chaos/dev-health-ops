@@ -147,3 +147,32 @@ func TestAPushedCustomTeamHoldsAProjectKeyForEveryProvider(t *testing.T) {
 		}
 	}
 }
+
+// A bare admin team beside a custom:eng an earlier push already wrote (with
+// provider custom) is one team: the push carries first, the kept custom:eng
+// takes the admin's manual member, and the push writes over it and keeps
+// that member.
+func TestAPushAfterAnAdminTeamBesideAKeyedCustomTeamKeepsTheAdminsMember(t *testing.T) {
+	ctx, conn := newProjectMembershipConn(t)
+	if err := conn.Exec(ctx, `INSERT INTO teams (id, team_uuid, name, members, manual_members, project_keys, repo_patterns, is_active, updated_at, org_id, provider, native_team_key) VALUES ('custom:eng', generateUUIDv4(), 'Pushed Eng', [], [], [], [], 1, '2026-09-01 00:00:00', ?, 'custom', 'eng')`, projectMembershipTestOrg); err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.Exec(ctx, `INSERT INTO teams (id, team_uuid, name, members, manual_members, project_keys, repo_patterns, is_active, updated_at, org_id, provider) VALUES ('eng', generateUUIDv4(), 'Admin Eng', [], ['admin@example.com'], [], [], 1, '2026-09-02 00:00:00', ?, '')`, projectMembershipTestOrg); err != nil {
+		t.Fatal(err)
+	}
+	pointer := projectMembershipPointer()
+	pointer.SourceSystem, pointer.SourceInstance = "custom", "acme"
+	sink, err := NewClickHouseExternalBatchSink(conn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	records := []externalSinkRecord{{Index: 0, Kind: "team.v1", ExternalID: "t1", Payload: map[string]any{"id": "eng", "name": "Pushed Eng v2", "updatedAt": "2026-10-08T00:00:00Z"}}}
+	if _, err := sink.Write(ctx, externalSinkBatch{Pointer: pointer, SourceID: uuid.New(), Records: records}); err != nil {
+		t.Fatalf("push: %v", err)
+	}
+	for id, want := range map[string]string{"custom:eng": "|Pushed Eng v2|admin@example.com|1", "eng": "|Admin Eng|admin@example.com|0"} {
+		if got := teamRowSummary(t, conn, ctx, id); got != want {
+			t.Errorf("%s = %q, want %q", id, got, want)
+		}
+	}
+}

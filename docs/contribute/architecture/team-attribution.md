@@ -1250,11 +1250,17 @@ write, and on a store write that does not refuse a bare id before its batch.
     names its id (it came from that provider's import; it keeps provider `""` and its `native_team_key`). Any
     other admin team is a custom team and moves to `custom:<id>` (chris D5631/D5685; counted as
     `admin_teams_to_custom`), the id the write seam gives a plain admin id; when a pushed `custom` team already
-    holds `custom:<id>`, that row stays (`teams_already_keyed`) and the bare admin row goes inactive: one team.
+    holds `custom:<id>`, that row stays (`teams_already_keyed`), takes the admin row's manual members it does not
+    hold yet, and the bare admin row goes inactive: one team.
     An admin row counts only while it is the team's current row (`teams FINAL` of that id is an active admin row): an older admin edit of a team whose
     newer row is inactive is not carried, so the inactive team does not come back as `custom:<id>`. An admin
     edit of a Jira project-as-team row (the same id) stays (counted as `admin_teams_not_carried`): it is that
     row, not a Jira team, and `RetireJiraProjectAsTeamRows` owns it.
+  - A new id that already has a row (`teams_already_keyed`): that row is not written again, but when the moved
+    row holds manual members the kept row does not, a new version of the kept row takes them
+    (`manual_members_folded`), stamped one microsecond past the stored version so a later write of its own
+    writer still wins. Manual members are an admin's statement that no other writer restores; the kept row and
+    the moved team are one team.
   - An admin edit of a provider team (the same id, provider `""`) moves with that team; the newer of the two
     rows gives the new row's values, and the team's origin (provider, native key, parent, source) stays the
     provider row's (chris D5682). An admin edit of an id that two providers' teams hold is neither team: it
@@ -1268,7 +1274,9 @@ write, and on a store write that does not refuse a bare id before its batch.
     `ambiguous`: each provider's rows move to that provider's id, and the rows that name the id without a
     provider (sync policy, drift changes, `identities.team_ids`, manual fallbacks) stay.
   - An id that already holds a key is never rewritten (chris D5427). When the new id already has a row (a
-    prefixed writer wrote it), that row is kept and only the old row goes inactive.
+    prefixed writer wrote it), that row is kept and the old row goes inactive; the kept row only takes the old
+    row's manual members it does not hold yet (lead D5698, see `manual_members_folded` above), so an admin's
+    members are not lost.
   - An id that is only a provider prefix (`gh:`, `linear: `, `atlassian:`) is no team of any provider:
     `teamid.Of` would give it a second prefix (`linear:gh:`). The carry leaves it, counts it as
     `malformed_team_ids` (the team rows and observations of such an id) and logs `team_ids_malformed_skipped`
@@ -1320,7 +1328,7 @@ first `valid_from` kept; keyed ids and another organization untouched; a second 
 `TestCarryTeamIDsClosesALinkForAReaderOfNow`, `TestCarryTeamIDsSkipsAPrefixOnlyID`,
 `TestCarryTeamIDsMovesAnAdminsOwnTeamToCustom`, `TestCarryTeamIDsLeavesAnAdminRowOlderThanItsInactiveTeam`,
 `TestCarryTeamIDsResolvesAnAmbiguousParentInTheChildsProvider`, `TestCarryTeamIDsKeepsAnAmbiguousAdminEditAsTheAdminsTeam`,
-`TestCarryTeamIDsMovesAnAdminTeamOntoThePushedCustomTeamOfItsID`, `TestCarryTeamIDsKeepsAParentThatIsNotOneTeamOutsideItsProvider`
+`TestCarryTeamIDsMovesAnAdminTeamOntoThePushedCustomTeamOfItsID`, `TestCarryTeamIDsFoldsAnAdminEditIntoTheKeptProviderTeam`, `TestCarryTeamIDsKeepsAParentThatIsNotOneTeamOutsideItsProvider`
 (`TestCarryTeamIDsSplitsAnIDTwoProvidersHold` and `TestCarryTeamIDsMovesEveryBareProviderTeamID` also assert a
 second run writes nothing).
 The seam: `TestTheCarryRunsBeforeTheCollectorAndAFailureStopsIt`, `TestEveryTeamIDWriteSiteRunsBehindTheCarryCensus`;
@@ -1340,7 +1348,7 @@ linear), `TestAnAdminTeamCreateCarriesTheBareTeamFirst`, `TestAnAdminTeamWriteOf
 `TestAnAdminWriteOfAPushedCustomTeamsIDAddressesThatTeam`, `TestAnAdminEditOfAProviderTeamKeepsItsOrigin`,
 `TestANewAdminTeamIsACustomTeam`, `TestAnAdminCustomTeamHoldsAProjectKeyForEveryProvider`, `TestAnAdminReferenceByABareIDResolvesToTheOneExistingTeam`,
 `TestAnAdminWriteNamingAProjectAsTeamIDIsANewAdminTeam`, `TestAnImportedTeamHasItsProviderOrigin`, `TestResolveTeamIDDecidesEveryCase` (`internal/providersync`),
-`TestAPushAfterAnAdminEditOfAPushedCustomTeamUpdatesIt`, `TestAnAdminTeamAndAPushedCustomTeamOfOneIDAreOneTeam`,
+`TestAPushAfterAnAdminEditOfAPushedCustomTeamUpdatesIt`, `TestAnAdminTeamAndAPushedCustomTeamOfOneIDAreOneTeam`, `TestAPushAfterAnAdminTeamBesideAKeyedCustomTeamKeepsTheAdminsMember`,
 `TestAPushedCustomTeamHoldsAProjectKeyForEveryProvider` (`internal/streamhandlers`),
 `TestStoredProviderIsEmptyOnlyForACustomTeam` (`internal/teamid`),
 `TestEveryTeamIDWriterGoesThroughTheWriteSeamCensus`; `TestIdentityV1RefusesAPrefixOnlyTeamID`

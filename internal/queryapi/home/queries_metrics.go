@@ -13,8 +13,6 @@ import (
 	"time"
 
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
-
-	"github.com/full-chaos/dev-health-ops/internal/teamkeytables"
 )
 
 func formatDay(t time.Time) string { return t.Format("2006-01-02") }
@@ -38,18 +36,6 @@ func metricFromClause(table, column, scopeFilter, startParam, endParam string) s
 	for _, vc := range valueColumns {
 		valueProjections = append(valueProjections, fmt.Sprintf("argMax(%s, computed_at) AS %s", vc, vc))
 	}
-	// A team-keyed table holds a row of zeros over each key that a recompute
-	// no longer produces (a team that was replaced, an item that moved). Such
-	// a key holds no measure: it is not a sample of an average, not a row of
-	// the row count and not a group of the driver read. The test is the one
-	// the writer uses (package teamkeytables). Python's read has no such
-	// clause: it has no row of zeros to meet in these tables.
-	liveKey := ""
-	if declared, teamKeyed := teamkeytables.ByTable(table); teamKeyed {
-		// The columns are qualified: the projection above gives each
-		// aggregate the name of its column.
-		liveKey = "\n            HAVING " + declared.LiveHaving(table+".")
-	}
 	return fmt.Sprintf(`(
             SELECT
                 %s,
@@ -58,9 +44,9 @@ func metricFromClause(table, column, scopeFilter, startParam, endParam string) s
             WHERE day >= {%s:Date} AND day < {%s:Date}
             %s
               AND org_id = {org_id:String}
-            GROUP BY %s%s
+            GROUP BY %s
         )`, strings.Join(naturalKey, ",\n                "), strings.Join(valueProjections, ",\n                "),
-		table, startParam, endParam, scopeFilter, strings.Join(naturalKey, ", "), liveKey)
+		table, startParam, endParam, scopeFilter, strings.Join(naturalKey, ", "))
 }
 
 // metricValueExpression ports _metric_value_expression (api/queries/

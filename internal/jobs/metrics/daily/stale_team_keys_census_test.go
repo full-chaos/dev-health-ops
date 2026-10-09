@@ -550,6 +550,7 @@ func TestEveryStaleKeyTableCensusHasACallOfTheRule(t *testing.T) {
 	// The calls, outside the file of the rule.
 	called := map[string][]string{}
 	calledInFamily := map[string][]string{}
+	calledForRun := map[string]bool{}
 	calledFunctions := map[string]bool{}
 	for name, file := range files {
 		ast.Inspect(file, func(node ast.Node) bool {
@@ -583,6 +584,8 @@ func TestEveryStaleKeyTableCensusHasACallOfTheRule(t *testing.T) {
 			called[table] = append(called[table], name)
 			if function.Name != "retractStaleTeamKeysOfRun" {
 				calledInFamily[table] = append(calledInFamily[table], name)
+			} else {
+				calledForRun[table] = true
 			}
 			return true
 		})
@@ -611,6 +614,11 @@ func TestEveryStaleKeyTableCensusHasACallOfTheRule(t *testing.T) {
 		}
 		if !contains(called[table.Table], "stale_team_keys_run.go") {
 			t.Errorf("run-level table %s has no call of the rule in stale_team_keys_run.go", table.Table)
+		}
+	}
+	for table := range calledForRun {
+		if !runTables[table] {
+			t.Errorf("table %s is decided once for a run and is not in RunStaleKeyTables", table)
 		}
 	}
 	partitionFamilyFiles := map[string]bool{}

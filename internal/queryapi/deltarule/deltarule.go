@@ -69,15 +69,3 @@ func Absolute(current, prior float64, currentHasData, priorHasData bool) float64
 // Defined reports whether the delta carries a percent that is a statement:
 // both windows measured and the prior not 0 (or both 0).
 func (d Delta) Defined() bool { return d.Kind == KindPct }
-
-// Sign is the direction of a delta of KindFromZero: +1 when the current value
-// is above the measured 0, -1 when below. It is 0 for any other kind.
-func Sign(d Delta, current float64) int {
-	if d.Kind != KindFromZero {
-		return 0
-	}
-	if current < 0 {
-		return -1
-	}
-	return 1
-}

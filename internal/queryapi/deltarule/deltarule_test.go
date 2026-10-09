@@ -45,7 +45,4 @@ func TestADeltaNeedsTwoMeasuredValuesAndIsUndefinedFromAMeasuredZero(t *testing.
 			t.Errorf("%s: Defined = %v", tc.name, d.Defined())
 		}
 	}
-	if Sign(Of(5, 0, true, true), 5) != 1 || Sign(Of(-5, 0, true, true), -5) != -1 || Sign(Of(5, 2, true, true), 5) != 0 {
-		t.Error("Sign: +1 above a measured zero, -1 below, 0 for every other kind")
-	}
 }

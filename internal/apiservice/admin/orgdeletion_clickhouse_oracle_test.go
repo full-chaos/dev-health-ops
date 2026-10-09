@@ -206,4 +206,8 @@ var clickHouseOrgTablesAfterThePythonFreeze = map[string]string{
 	// by org_id and written by the investment worker, so an organization's
 	// attempt rows must go when the organization is deleted.
 	"llm_categorization_attempts": "110_llm_categorization_attempts.sql",
+	// Whether each work-item provider tracks story points and bugs
+	// (CHAOS-8895). Keyed by org_id and written by the daily metrics job, so an
+	// organization's rows must go when the organization is deleted.
+	"work_item_measure_capability": "111_work_item_measure_capability.sql",
 }

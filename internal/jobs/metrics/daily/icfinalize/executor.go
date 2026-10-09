@@ -152,10 +152,29 @@ func SynthesizedRepoID(orgID, identityID string) uuid.UUID {
 
 // Executor computes the ic_finalize family natively.
 type Executor struct {
-	conn       Conn
-	now        func() time.Time
-	teamMapper TeamMapper
+	conn                Conn
+	now                 func() time.Time
+	teamMapper          TeamMapper
+	landscapeSuperseder LandscapeSuperseder
 }
+
+// LandscapeSuperseder runs after the landscape write of a day. It gets every
+// record the compute wrote (none for a day with no point) and writes a row of
+// zeros over each stored key of the day that the compute did not produce. It
+// returns the number of rows it wrote. The rule is the one of the team-keyed
+// daily tables (package daily, stale_team_keys.go); it is injected because
+// this package does not import that one.
+type LandscapeSuperseder func(
+	ctx context.Context, orgID string, asOf, computedAt time.Time, written []LandscapeRecord,
+) (int, error)
+
+// SetLandscapeSuperseder wires the stale-key rule of ic_landscape_rolling_30d.
+func (executor *Executor) SetLandscapeSuperseder(superseder LandscapeSuperseder) {
+	executor.landscapeSuperseder = superseder
+}
+
+// LandscapeRowRepoID is the repo_id of every landscape row.
+func LandscapeRowRepoID() uuid.UUID { return landscapeRepoID }
 
 // NewExecutor builds the executor. now is injected so computed_at -- the one
 // remaining non-deterministic value the reference produces -- is controllable
@@ -350,12 +369,22 @@ func (executor *Executor) computeForDay(
 			}
 		}
 	}
-	landscapeWritten, err := executor.writeLandscape(
-		ctx, orgID, day, computedAt, ComputeLandscape(stats, landscapeTeams))
+	landscape := ComputeLandscape(stats, landscapeTeams)
+	landscapeWritten, err := executor.writeLandscape(ctx, orgID, day, computedAt, landscape)
 	if err != nil {
 		return written, err
 	}
-	return written + landscapeWritten, nil
+	written += landscapeWritten
+	if executor.landscapeSuperseder != nil {
+		// Also with no record: a day that lost every point still holds the
+		// points of the earlier compute.
+		superseded, err := executor.landscapeSuperseder(ctx, orgID, day, computedAt, landscape)
+		written += superseded
+		if err != nil {
+			return written, err
+		}
+	}
+	return written, nil
 }
 
 func (executor *Executor) writeUserMetrics(

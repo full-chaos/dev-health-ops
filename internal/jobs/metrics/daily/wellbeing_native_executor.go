@@ -13,6 +13,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/numerical"
+	"github.com/full-chaos/dev-health-ops/internal/teamkeytables"
 )
 
 // TeamWellbeingExecutor is the NATIVE implementation of the team_wellbeing
@@ -202,6 +203,50 @@ func (executor *TeamWellbeingExecutor) ComputeFamily(
 	written, err := WriteTeamMetricsDailyPerRepo(ctx, executor.conn, run.OrganizationID, day, perRepoMetrics, computedAtByRepo)
 	if err != nil {
 		return 0, err
+	}
+
+	// The stale-key rule (stale_team_keys.go): a (team, repository) key of
+	// the day and of the partition's repositories that this compute did not
+	// produce gets a row of zeros. The row of zeros of a repository takes the
+	// computed_at of the rows this compute wrote for that repository: the
+	// readers that take the newest generation of a repository
+	// (loadTeamMetricsCognitiveLoadInputsForDay, the repository read of the
+	// cognitive-load query) must find both in one generation, or the row of
+	// zeros would hide the rows of the day. A repository with no row in this
+	// compute has no generation; its rows of zeros take the clock.
+	var produced []staleKey
+	computedAtOfRepo := make(map[string]time.Time, len(perRepoMetrics))
+	for index, group := range perRepoMetrics {
+		for _, metric := range group {
+			produced = append(produced, staleKey{metric.TeamID, metric.RepoID})
+			computedAtOfRepo[metric.RepoID] = computedAtByRepo[index]
+		}
+	}
+	var fallbackComputedAt time.Time
+	zeroRowComputedAt := func(key staleKey) time.Time {
+		if computedAt, ok := computedAtOfRepo[key[1]]; ok {
+			return computedAt
+		}
+		if fallbackComputedAt.IsZero() {
+			fallbackComputedAt = executor.nowUTC()
+		}
+		return fallbackComputedAt
+	}
+	repositories := make([][]string, 0, len(repoIDs))
+	for _, repoID := range repoIDs {
+		repositories = append(repositories, []string{repoID.String()})
+	}
+	superseded, err := supersedeStaleTeamKeysAt(
+		ctx, executor.conn, teamkeytables.TeamMetricsDaily, run.OrganizationID, day,
+		newStaleKeyScope(repositories...), produced, zeroRowComputedAt,
+	)
+	written += superseded
+	if err != nil {
+		if written == 0 {
+			return 0, err
+		}
+		return written, fmt.Errorf("%w: team_wellbeing failed on partition %s after %d row(s) already landed: %w",
+			ErrPartialWrite, partition.ID, written, err)
 	}
 
 	// CHAOS-4329: observe AFTER the write durably lands (mirrors

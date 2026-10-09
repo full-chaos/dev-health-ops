@@ -30,6 +30,43 @@ func TestLoadWellbeingTeamsUsesProductionQueryWithTenantFence(t *testing.T) {
 	if connection.query != "SELECT id, name, members, repo_patterns FROM teams FINAL WHERE org_id = ?" {
 		t.Fatalf("unexpected query: %s", connection.query)
 	}
+	// The active-team rule is a second read with the same tenant fence; the
+	// production query above is not changed for it.
+	if len(connection.queries) != 2 || !isTeamRuleRead(connection.queries[1]) ||
+		len(connection.argumentSets[1]) != 1 || connection.argumentSets[1][0] != "org-1" {
+		t.Fatalf("queries=%q arguments=%v, want the production query and then the inactive-team read of the tenant",
+			connection.queries, connection.argumentSets)
+	}
+}
+
+// A failed read of the inactive teams fails the three team resolvers. None of
+// them goes on with every team: that would give a repository, a pattern or a
+// member to a team that was replaced.
+func TestATeamResolverFailsWhenTheInactiveTeamsCannotBeRead(t *testing.T) {
+	failure := errors.New("clickhouse: connection reset")
+	ctx := context.Background()
+
+	wellbeing := &recordingRepositoryConnection{teamRuleReadErr: failure, rows: &wellbeingTeamRowsStub{teams: []WellbeingTeam{
+		{ID: "platform", Name: "Platform", RepoPatterns: []string{"acme/*"}},
+	}}}
+	if teams, err := LoadWellbeingTeams(ctx, wellbeing, "org-1"); !errors.Is(err, failure) || teams != nil {
+		t.Errorf("LoadWellbeingTeams = %v, %v; want no team and the failure", teams, err)
+	}
+
+	aiImpact := &governanceQueryRecorder{teamRuleReadErr: failure}
+	if teams, err := LoadAIImpactTeams(ctx, aiImpact, "org-1"); !errors.Is(err, failure) || teams != nil {
+		t.Errorf("LoadAIImpactTeams = %v, %v; want no team and the failure", teams, err)
+	}
+
+	repoID := uuid.New()
+	ownership := &governanceQueryRecorder{teamRuleReadErr: failure, rows: &fakeOwnershipRows{
+		rows: []fakeOwnershipRow{{repoID: repoID.String(), teamID: "platform"}},
+	}}
+	owners, err := resolveAIImpactRepoToTeam(ctx, ownership, "org-1", time.Now().UTC(), []uuid.UUID{repoID},
+		map[string]string{repoID.String(): "acme/api"}, NewRepoPatternResolver(nil))
+	if !errors.Is(err, failure) || owners != nil {
+		t.Errorf("the repository owners = %v, %v; want no owner and the failure", owners, err)
+	}
 }
 
 func TestLoadWellbeingTeamsRejectsMissingOrg(t *testing.T) {

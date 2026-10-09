@@ -220,6 +220,17 @@ func All() []Table {
 	}
 }
 
+// ByTable returns the declaration of a table. A reader that is built for more
+// than one table asks here whether its table takes the rule.
+func ByTable(name string) (Table, bool) {
+	for _, table := range All() {
+		if table.Table == name {
+			return table, true
+		}
+	}
+	return Table{}, false
+}
+
 // Valid reports whether the declaration is usable.
 func (table Table) Valid() error {
 	if table.Table == "" || table.DayColumn == "" || len(table.Keys) == 0 ||
@@ -272,14 +283,22 @@ func (column KeyColumn) StoredValue(text string) (any, error) {
 // LiveHaving is the test of one key in a GROUP BY over the key columns of the
 // raw table: the newest row of the key (by computed_at) holds a measure. It is
 // false for a key whose newest row is a row of zeros.
-func (table Table) LiveHaving() string {
+//
+// qualifier is the name or the alias of the table in the FROM clause with its
+// dot ("work_item_metrics_daily."), or "" for none. A reader whose SELECT
+// gives an aggregate the name of its column (argMax(x, computed_at) AS x) MUST
+// pass it: ClickHouse resolves a bare x in HAVING to that alias, and the test
+// would then hold an aggregate inside an aggregate. A qualified name is the
+// column of the table.
+func (table Table) LiveHaving(qualifier string) string {
 	live := make([]string, 0, len(table.Measures)+len(table.NullableMeasures))
+	version := qualifier + "computed_at"
 	for _, measure := range table.Measures {
-		live = append(live, "argMax("+measure+", computed_at) != 0")
+		live = append(live, "argMax("+qualifier+measure+", "+version+") != 0")
 	}
 	for _, measure := range table.NullableMeasures {
 		// The tuple keeps a NULL of the newest row: argMax skips NULL values.
-		live = append(live, "isNotNull(tupleElement(argMax(tuple("+measure+"), computed_at), 1))")
+		live = append(live, "isNotNull(tupleElement(argMax(tuple("+qualifier+measure+"), "+version+"), 1))")
 	}
 	return strings.Join(live, " OR ")
 }
@@ -317,7 +336,7 @@ func (table Table) LiveKeysQuery() string {
 	keys := strings.Join(expressions, ", ")
 	return "SELECT " + keys + " FROM " + table.Table +
 		" WHERE org_id = ? AND " + table.DayColumn + " = ?" + where +
-		" GROUP BY " + keys + " HAVING " + table.LiveHaving() +
+		" GROUP BY " + keys + " HAVING " + table.LiveHaving("") +
 		" ORDER BY " + keys
 }
 

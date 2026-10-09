@@ -638,7 +638,7 @@ func TestTouchedDaysDrainAFailedRunWithALostMarkStopsTheChain(t *testing.T) {
 // The run whose end triggered the pass is read apart from the newest runs, so
 // no number of newer ended runs hides its lost mark.
 func TestTouchedDaysDrainTheTriggerRunIsCheckedWhateverNumberOfNewerRunsEnded(t *testing.T) {
-	for _, newer := range []int{199, 200, 201, 260} {
+	for _, newer := range []int{201} {
 		t.Run(fmt.Sprintf("%d_newer_runs", newer), func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 			defer cancel()
@@ -708,5 +708,35 @@ func TestTouchedDaysDrainTheTriggerRunAmongTheNewestIsReturnedOnceAndTakesNoSlot
 	runs, truncated, err = store.TouchedMarkingRunsToCheck(ctx, orgID, trigger, 24*time.Hour, 2)
 	if err != nil || !truncated || len(runs) != 3 {
 		t.Fatalf("limit 2: runs %d, truncated %v, err %v; want 3 runs (trigger + 2) and truncated", len(runs), truncated, err)
+	}
+}
+
+// The bound is a property of the statement, so the boundary is proved with a
+// small limit through the same code path as the production limit: the trigger
+// run, oldest of all, is returned first whatever the number of newer runs, and
+// the flag says truncated only when one of the others is left out.
+func TestTouchedDaysDrainTheTriggerRunTakesNoSlotAtTheBoundary(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+	rig := newDrainRig(t, ctx)
+	day := time.Date(2026, 7, 31, 0, 0, 0, 0, time.UTC)
+	take := time.Now().UTC().Add(-time.Hour).Truncate(time.Millisecond)
+	const limit = 3
+	for _, newer := range []int{limit - 1, limit, limit + 1, limit + 10} {
+		orgID := uuid.NewString()
+		trigger := insertMarkingRun(t, ctx, rig.touchedRig, orgID, day, "succeeded", &take, time.Now().UTC().Add(-3*time.Hour))
+		for i := 1; i <= newer; i++ {
+			insertMarkingRun(t, ctx, rig.touchedRig, orgID, day.AddDate(0, 0, -i), "succeeded", &take,
+				time.Now().UTC().Add(-time.Duration(i)*time.Minute))
+		}
+		runs, truncated, err := rig.productionRuns().store.TouchedMarkingRunsToCheck(ctx, orgID, trigger, 24*time.Hour, limit)
+		if err != nil {
+			t.Fatal(err)
+		}
+		wantLen := 1 + min(newer, limit)
+		if len(runs) != wantLen || runs[0].RunID != trigger || truncated != (newer > limit) {
+			t.Fatalf("%d newer runs, limit %d: %d runs (want %d), first is the trigger run %v, truncated %v (want %v)",
+				newer, limit, len(runs), wantLen, len(runs) > 0 && runs[0].RunID == trigger, truncated, newer > limit)
+		}
 	}
 }

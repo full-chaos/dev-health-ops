@@ -83,7 +83,7 @@ var teamIDCarryCountQuery = `SELECT ` +
 	`(SELECT count() FROM team_provider_observations FINAL WHERE org_id = {org_id:String} AND provider != '' AND ` + teamIDCarryPrefixOnly("team_id") + `)`
 
 var teamIDCarryTeamsQuery = `SELECT id, team_uuid, name, description, members, manual_members, updated_at, last_synced, ` +
-	`org_id, provider, native_team_key, parent_team_id, project_keys, repo_patterns, is_active, source_id ` +
+	`org_id, provider, native_team_key, parent_team_id, project_keys, repo_patterns, is_active, source_id, created_at ` +
 	`FROM teams WHERE org_id = {org_id:String} AND ` + teamIDCarryBare("id") + ` ` +
 	`ORDER BY updated_at DESC, last_synced DESC LIMIT 1 BY provider, id`
 
@@ -113,7 +113,7 @@ const (
 	teamIDCarryDriftColumns     = "org_id, change_id, entity_type, entity_id, provider, native_team_key, change_type, field, old_value_json, new_value_json, status, first_seen_at, last_seen_at, decided_at, decided_by, updated_at"
 	teamIDCarryIdentityColumns  = "org_id, canonical_id, identity_uuid, display_name, email, provider_identities, team_ids, is_active, updated_at, source_id"
 	teamIDCarryFallbackColumns  = "org_id, provider, scope_type, scope_id, team_id, team_name, reason, priority, valid_from, valid_to, created_by, created_at, updated_at"
-	teamIDCarryTeamsColumns     = "id, team_uuid, name, description, members, manual_members, updated_at, last_synced, org_id, provider, native_team_key, parent_team_id, project_keys, repo_patterns, is_active, source_id"
+	teamIDCarryTeamsColumns     = "id, team_uuid, name, description, members, manual_members, updated_at, last_synced, org_id, provider, native_team_key, parent_team_id, project_keys, repo_patterns, is_active, source_id, created_at"
 	teamIDCarryObservationsCols = "org_id, provider, native_team_key, team_id, name, description, members_json, project_keys_json, repo_patterns_json, is_active, parent_team_id, discovered_at, updated_at"
 )
 

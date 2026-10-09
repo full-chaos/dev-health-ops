@@ -157,6 +157,7 @@ VALUES ($1, $2, true, true, false, 0, now(), now())`, user.id, user.email)
 		// empty lists agreeing: each stamp's Python rendering must appear
 		// in the Go answer of the list routes.
 		Inspect: func(request venueoracle.Request, goResponse venueoracle.Response) {
+			checkTeamCreatedAt(t, request, goResponse)
 			if request.Name != "teams inactive too" && request.Name != "identities inactive too" {
 				return
 			}

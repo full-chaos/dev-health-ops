@@ -13,6 +13,7 @@ import (
 	"github.com/ClickHouse/clickhouse-go/v2/lib/column"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
+	"github.com/full-chaos/dev-health-ops/internal/teamcreated"
 	"github.com/google/uuid"
 )
 
@@ -25,11 +26,14 @@ import (
 type fakeGitLabWriteTeamsConn struct {
 	driver.Conn
 	rosterQueryErr error
+	created        map[string]time.Time
 	batch          *fakeGitLabWriteTeamsBatch
 }
 
 func (f *fakeGitLabWriteTeamsConn) Query(_ context.Context, query string, _ ...any) (driver.Rows, error) {
 	switch {
+	case query == teamcreated.Query:
+		return &fakeGitLabCreatedRows{rows: f.created, index: -1}, nil
 	case strings.Contains(query, "manual_members"):
 		return &fakeGitLabGuardMembershipRows{rows: nil, index: -1}, nil
 	case strings.Contains(query, "SELECT id, members FROM teams"):
@@ -54,6 +58,7 @@ func (f *fakeGitLabWriteTeamsConn) PrepareBatch(context.Context, string, ...driv
 type fakeGitLabWriteTeamsBatch struct {
 	driver.Batch
 	appendedIDs []string
+	appended    [][]any
 	sent        bool
 	aborted     bool
 }
@@ -64,6 +69,7 @@ func (b *fakeGitLabWriteTeamsBatch) Append(v ...any) error {
 		return fmt.Errorf("fakeGitLabWriteTeamsBatch: unexpected Append arg0 type %T", v[0])
 	}
 	b.appendedIDs = append(b.appendedIDs, id)
+	b.appended = append(b.appended, v)
 	return nil
 }
 func (b *fakeGitLabWriteTeamsBatch) Send() error  { b.sent = true; return nil }
@@ -202,5 +208,53 @@ func TestGitLabTeamCatalogCollectorNonStrictWalkFailureMakesNoWrites(t *testing.
 	}
 	if conn.batch != nil {
 		t.Fatalf("PrepareBatch was called (batch=%+v) -- a non-strict walk failure must make ZERO Sink calls", conn.batch)
+	}
+}
+
+type fakeGitLabCreatedRows struct {
+	driver.Rows
+	rows  map[string]time.Time
+	index int
+	ids   []string
+}
+
+func (r *fakeGitLabCreatedRows) Next() bool {
+	if r.index == -1 {
+		for id := range r.rows {
+			r.ids = append(r.ids, id)
+		}
+	}
+	r.index++
+	return r.index < len(r.ids)
+}
+
+func (r *fakeGitLabCreatedRows) Scan(dest ...any) error {
+	*dest[0].(*string) = r.ids[r.index]
+	*dest[1].(*time.Time) = r.rows[r.ids[r.index]]
+	return nil
+}
+func (r *fakeGitLabCreatedRows) Close() error { return nil }
+func (r *fakeGitLabCreatedRows) Err() error   { return nil }
+
+// The created_at column is the last value of the gitlab team insert: a team
+// with a stored row keeps that creation time, a new team takes its own
+// updated_at.
+func TestGitLabWriteTeamsCarriesCreatedAt(t *testing.T) {
+	original := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	conn := &fakeGitLabWriteTeamsConn{created: map[string]time.Time{"gl:org": original}}
+	sink := GitLabTeamCatalogClickHouseEffects{
+		Conn:  conn,
+		Lease: providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }),
+	}
+	rows := []gitlabTeamCatalogTeamRow{gitlabWriteTeamsTestRow("gl:org", true), gitlabWriteTeamsTestRow("gl:org/new", true)}
+	if err := sink.writeTeams(context.Background(), Claim{Unit: Unit{OrgID: "org-1", Provider: gitlabTeamCatalogProvider}}, rows); err != nil {
+		t.Fatal(err)
+	}
+	last := func(i int) time.Time { v := conn.batch.appended[i]; return v[len(v)-1].(time.Time) }
+	if !last(0).Equal(original) {
+		t.Fatalf("existing team created_at = %v, want %v", last(0), original)
+	}
+	if !last(1).Equal(rows[1].UpdatedAt) {
+		t.Fatalf("new team created_at = %v, want its updated_at %v", last(1), rows[1].UpdatedAt)
 	}
 }

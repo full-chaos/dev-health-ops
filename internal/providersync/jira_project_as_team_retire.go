@@ -126,9 +126,9 @@ const jiraProjectAsTeamCloseRepoOwnership = teamRepoOwnershipInsert + ` ` +
 	`FROM team_repo_ownership FINAL WHERE ` + jiraProjectAsTeamRepoOwnershipPredicate
 
 const jiraProjectAsTeamDeactivateTeams = `INSERT INTO teams ` +
-	`(id, team_uuid, name, description, members, manual_members, project_keys, repo_patterns, is_active, updated_at, org_id, provider, native_team_key, parent_team_id, source_id) ` +
+	`(id, team_uuid, name, description, members, manual_members, project_keys, repo_patterns, is_active, updated_at, org_id, provider, native_team_key, parent_team_id, source_id, created_at) ` +
 	`SELECT id, team_uuid, name, description, members, manual_members, project_keys, repo_patterns, 0, ` +
-	`greatest({at:DateTime64(3, 'UTC')}, updated_at + toIntervalMillisecond(1)), org_id, provider, native_team_key, parent_team_id, source_id ` +
+	`greatest({at:DateTime64(3, 'UTC')}, updated_at + toIntervalMillisecond(1)), org_id, provider, native_team_key, parent_team_id, source_id, created_at ` +
 	`FROM teams FINAL WHERE ` + jiraProjectAsTeamActivePredicate
 
 // JiraProjectAsTeamRetireOutcome is counts only: no id, key or name of a team,

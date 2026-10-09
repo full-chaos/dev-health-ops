@@ -905,3 +905,23 @@ func TestCarryTeamIDsCarriesAnIDWithAQuoteOrABackslash(t *testing.T) {
 		})
 	}
 }
+
+// The keyed copy of a moved team and the retired bare row keep the creation
+// time the bare row held: a move is not a creation.
+func TestCarryTeamIDsKeepsTeamCreatedAt(t *testing.T) {
+	ctx, conn := newWorkItemEffectsConn(t)
+	f := carryFixture{t: t, ctx: ctx, conn: conn, orgID: uuid.NewString()}
+	created := time.Date(2026, 3, 4, 5, 6, 7, 0, time.UTC)
+	f.team("", "chosen", nil, nil, 1, carryOld, nil, nil)
+	f.exec(`ALTER TABLE teams UPDATE created_at = ? WHERE org_id = ? AND id = 'chosen' SETTINGS mutations_sync = 2`, created, f.orgID)
+	if _, err := CarryTeamIDs(ctx, conn, f.orgID, carryAt, false); err != nil {
+		t.Fatal(err)
+	}
+	const read = `SELECT toString(created_at) FROM teams FINAL WHERE org_id = ? AND id = ?`
+	want := created.Format("2006-01-02 15:04:05.000000")
+	for _, id := range []string{"custom:chosen", "chosen"} {
+		if got := f.str(read, id); got != want {
+			t.Errorf("created_at of %s = %q, want %q", id, got, want)
+		}
+	}
+}

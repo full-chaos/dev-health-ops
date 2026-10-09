@@ -365,6 +365,9 @@ func TestExternalClickHouseRowsMatchPythonGoldenOracle(t *testing.T) {
 				t.Fatal(err)
 			}
 			table, columns := externalQueryContract(query)
+			columns = slices.DeleteFunc(columns, func(column string) bool {
+				return slices.Contains(externalUnreferencedColumns[table], column)
+			})
 			if table != expected.Table || !slices.Equal(columns, expected.Columns) {
 				t.Fatalf("ClickHouse contract mismatch:\n got table=%s columns=%v\nwant table=%s columns=%v", table, columns, expected.Table, expected.Columns)
 			}
@@ -701,5 +704,62 @@ func TestTeamIDCarryRunsBeforeAnIdentityOnlyPush(t *testing.T) {
 	}
 	if connection.carryCountCalls != 1 {
 		t.Fatalf("team id carry count reads = %d, want 1 before the identity.v1 write", connection.carryCountCalls)
+	}
+}
+
+func teamCreatedAtWrite(t *testing.T, connection *productSink) error {
+	t.Helper()
+	sink, err := NewClickHouseExternalBatchSink(connection)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sink.now = func() time.Time { return time.Date(2026, 7, 23, 12, 0, 0, 0, time.UTC) }
+	_, err = sink.Write(context.Background(), externalSinkBatch{
+		Pointer: externalTestPointer(), SourceID: uuid.New(),
+		Records: []externalSinkRecord{externalSinkFixture("team.v1", map[string]any{
+			"id": "team-a", "name": "Team A", "updatedAt": "2026-07-23T11:00:00Z",
+		})},
+	})
+	return err
+}
+
+// A team.v1 write of a team that already has a stored row keeps that row's
+// creation time; the new version's updated_at is later, so the two differ.
+func TestClickHouseExternalSinkCarriesTeamCreatedAtOnUpdate(t *testing.T) {
+	original := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	connection := &productSink{batch: &productBatch{}, createdRows: [][]any{{"gh:team-a", original}}}
+	if err := teamCreatedAtWrite(t, connection); err != nil {
+		t.Fatal(err)
+	}
+	row := connection.batch.rows[0]
+	if got, ok := row[len(row)-1].(time.Time); !ok || !got.Equal(original) {
+		t.Fatalf("created_at = %v, want the stored %v", row[len(row)-1], original)
+	}
+	if updated, _ := row[9].(time.Time); !updated.After(original) {
+		t.Fatalf("updated_at %v is not after created_at %v", row[9], original)
+	}
+}
+
+// A team with no stored row gets created_at = its own first updated_at.
+func TestClickHouseExternalSinkStampsNewTeamCreatedAtWithItsUpdatedAt(t *testing.T) {
+	connection := &productSink{batch: &productBatch{}}
+	if err := teamCreatedAtWrite(t, connection); err != nil {
+		t.Fatal(err)
+	}
+	row := connection.batch.rows[0]
+	if created, _ := row[len(row)-1].(time.Time); !created.Equal(row[9].(time.Time)) {
+		t.Fatalf("created_at = %v, want updated_at %v", row[len(row)-1], row[9])
+	}
+}
+
+// A failed created_at read aborts the write: a blind first-write stamp would
+// move an existing team's creation time.
+func TestClickHouseExternalSinkAbortsTeamWriteWhenCreatedAtReadFails(t *testing.T) {
+	connection := &productSink{batch: &productBatch{}, createdErr: errors.New("clickhouse unavailable")}
+	if err := teamCreatedAtWrite(t, connection); err == nil {
+		t.Fatal("expected Write to fail closed when the created_at read errors")
+	}
+	if connection.batch.sent {
+		t.Fatal("team row must never be sent when its created_at could not be carried")
 	}
 }

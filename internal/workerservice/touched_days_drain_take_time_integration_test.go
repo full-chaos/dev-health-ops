@@ -487,3 +487,70 @@ func TestTouchedDaysDrainRunsAreCommittedWhenTheTakeTimeColumnIsAbsent(t *testin
 		t.Fatal("the fan-out started no run")
 	}
 }
+
+// A run of every repository lists every key of its day: the same strict
+// comparison applies to the oldest pending touch of that day.
+func TestTouchedDaysDrainATouchAtTheTakeTimeOfARunOfEveryRepositoryIsNotAMissingMark(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+	rig := newDrainRig(t, ctx)
+	orgID := uuid.NewString()
+	day := time.Date(2026, 7, 31, 0, 0, 0, 0, time.UTC)
+	touchedAt := time.Now().UTC().Add(-time.Hour).Truncate(time.Millisecond)
+	touchedEvent(t, ctx, rig.touchedRig, orgID, day, uuid.NewString(), "touched", touchedAt)
+
+	check := func(take time.Time) []time.Time {
+		t.Helper()
+		got, err := rig.touched.DaysPendingSinceBeforeTake(ctx, orgID, []syncdispatchruntime.TouchedRunKeys{{
+			RunID: uuid.NewString(), Day: day, FullOrganization: true, TakenAt: take,
+		}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return got
+	}
+	if got := check(touchedAt); len(got) != 0 {
+		t.Fatalf("days pending since before the take = %v, want none: a touch at the take time is after the mark", got)
+	}
+	if got := check(touchedAt.Add(time.Millisecond)); len(got) != 1 {
+		t.Fatalf("days pending since before the take = %v, want the day: a touch one millisecond before the take time is a missing mark", got)
+	}
+}
+
+// The take time of a run is written once: a second stamp of the same
+// generation does not move it.
+func TestTouchedDaysDrainTheTakeTimeOfARunIsWrittenOnce(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+	rig := newDrainRig(t, ctx)
+	orgID := uuid.NewString()
+	generation := daily.TouchedDrainGenerationPrefix + uuid.NewString()
+	runID := uuid.NewString()
+	if _, err := rig.pool.Exec(ctx, `
+INSERT INTO public.daily_metrics_runs
+    (id, org_id, target_day, generation, status, finalization_status, created_at, updated_at, finalized_at, full_org)
+VALUES ($1::uuid, $2::uuid, '2026-07-31'::date, $3, 'succeeded', 'succeeded', clock_timestamp(), clock_timestamp(), clock_timestamp(), true)`,
+		runID, orgID, generation); err != nil {
+		t.Fatal(err)
+	}
+	first := time.Date(2026, 7, 31, 10, 0, 0, 0, time.UTC)
+	stamp := func(at time.Time) {
+		t.Helper()
+		tx, err := rig.pool.Begin(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := rig.productionRuns().store.StampTouchedTakeTx(ctx, tx, orgID, generation, at); err != nil {
+			_ = tx.Rollback(ctx)
+			t.Fatal(err)
+		}
+		if err := tx.Commit(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+	stamp(first)
+	stamp(first.Add(time.Hour))
+	if got := takeTimes(t, ctx, rig.touchedRig, orgID, daily.TouchedDrainGenerationPrefix)[runID]; !got.Equal(first) {
+		t.Fatalf("take time = %v, want %v: a second stamp moved it", got, first)
+	}
+}

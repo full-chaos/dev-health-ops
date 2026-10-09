@@ -30,6 +30,13 @@ func TestLoadWellbeingTeamsUsesProductionQueryWithTenantFence(t *testing.T) {
 	if connection.query != "SELECT id, name, members, repo_patterns FROM teams FINAL WHERE org_id = ?" {
 		t.Fatalf("unexpected query: %s", connection.query)
 	}
+	// The active-team rule is a second read with the same tenant fence; the
+	// production query above is not changed for it.
+	if len(connection.queries) != 2 || !isTeamRuleRead(connection.queries[1]) ||
+		len(connection.argumentSets[1]) != 1 || connection.argumentSets[1][0] != "org-1" {
+		t.Fatalf("queries=%q arguments=%v, want the production query and then the inactive-team read of the tenant",
+			connection.queries, connection.argumentSets)
+	}
 }
 
 func TestLoadWellbeingTeamsRejectsMissingOrg(t *testing.T) {

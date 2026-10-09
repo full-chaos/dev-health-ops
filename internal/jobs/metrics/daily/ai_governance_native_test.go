@@ -12,6 +12,8 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/aigovernance"
+	"github.com/full-chaos/dev-health-ops/internal/teamactive"
+	"github.com/full-chaos/dev-health-ops/internal/teamkeytables"
 )
 
 // governanceQueryRecorder embeds the package's panicking stubDriverConn and
@@ -19,16 +21,34 @@ import (
 // still panics loudly rather than returning a silently-zero value.
 type governanceQueryRecorder struct {
 	stubDriverConn
-	calls [][]any
-	rows  chdriver.Rows
+	calls   [][]any
+	queries []string
+	rows    chdriver.Rows
 }
 
-func (conn *governanceQueryRecorder) Query(_ context.Context, _ string, args ...any) (chdriver.Rows, error) {
+func (conn *governanceQueryRecorder) Query(_ context.Context, query string, args ...any) (chdriver.Rows, error) {
 	conn.calls = append(conn.calls, args)
-	if conn.rows != nil {
+	conn.queries = append(conn.queries, query)
+	if conn.rows != nil && !isTeamRuleRead(query) {
 		return conn.rows, nil
 	}
 	return &emptyGovernanceRows{}, nil
+}
+
+// isTeamRuleRead reports whether a query is one of the two reads the team
+// rules add to a family: the inactive team ids (package teamactive) and the
+// live keys of a team-keyed daily table (stale_team_keys.go). A fake that
+// serves canned rows of a family's own read answers these with no row.
+func isTeamRuleRead(query string) bool {
+	if strings.Contains(query, "FROM teams") && strings.Contains(query, teamactive.NewestRowInactive) {
+		return true
+	}
+	for _, table := range StaleTeamKeyTables() {
+		if query == table.LiveKeysQuery() {
+			return true
+		}
+	}
+	return false
 }
 
 type emptyGovernanceRows struct{ chdriver.Rows }
@@ -90,8 +110,10 @@ func TestAIGovernanceComputeFamilyStillRunsWithNoRepoIDs(t *testing.T) {
 	if written != 0 {
 		t.Fatalf("wrote %d rows from an empty artifact set, want 0", written)
 	}
-	if len(conn.calls) != 1 {
-		t.Fatalf("issued %d queries, want exactly 1 -- an empty repo scope must NOT short-circuit this family", len(conn.calls))
+	// The artifact load, then the live-key read of the stale-key rule.
+	if len(conn.queries) != 2 || isTeamRuleRead(conn.queries[0]) ||
+		conn.queries[1] != teamkeytables.AIGovernanceCoverageDaily.LiveKeysQuery() {
+		t.Fatalf("issued %d queries, want the artifact load and the live-key read -- an empty repo scope must NOT short-circuit this family", len(conn.queries))
 	}
 }
 
@@ -236,7 +258,10 @@ type orderRecordingConn struct {
 	batch    *recordingBatch
 }
 
-func (conn *orderRecordingConn) Query(_ context.Context, _ string, _ ...any) (chdriver.Rows, error) {
+func (conn *orderRecordingConn) Query(_ context.Context, query string, _ ...any) (chdriver.Rows, error) {
+	if isTeamRuleRead(query) {
+		return &emptyGovernanceRows{}, nil
+	}
 	return &oneGovernanceArtifactRows{}, nil
 }
 

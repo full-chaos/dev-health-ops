@@ -13,6 +13,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/workitemblockers"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/workitemmetrics"
+	"github.com/full-chaos/dev-health-ops/internal/teamkeytables"
 )
 
 // unassignedTeamID/unassignedTeamName are package-local names for
@@ -114,8 +115,27 @@ func (executor *WorkItemStateExecutor) ComputeFamily(
 	// With no item, or no transition for any item, every item is skipped
 	// (Python's `if not item_transitions: continue`), so there is nothing to
 	// read the blocked spans for.
+	//
+	// The stale-key rule still applies (stale_team_keys.go): a key of the
+	// read's work scopes that held a duration and that this compute does not
+	// produce gets a row of zeros.
+	supersede := func(total int, rows []workItemStateDailyRow) (int, error) {
+		produced := make([]staleKey, 0, len(rows))
+		for _, row := range rows {
+			produced = append(produced, staleKey{row.Provider, row.WorkScopeID, row.TeamID, row.Status})
+		}
+		written, err := supersedeStaleTeamKeys(
+			ctx, executor.conn, teamkeytables.WorkItemStateDurationsDaily, run.OrganizationID, day,
+			read.staleKeyScope(), produced, computedAt,
+		)
+		total += written
+		if err != nil {
+			return wrapWorkItemScopePartialWrite("work_item_state", total, partition, err)
+		}
+		return total, nil
+	}
 	if len(read.Items) == 0 || len(read.Transitions) == 0 {
-		return 0, nil
+		return supersede(0, nil)
 	}
 
 	// The blocked spans (CHAOS-8493) are organization-wide -- a blocker lives
@@ -155,7 +175,7 @@ func (executor *WorkItemStateExecutor) ComputeFamily(
 		_ = executor.missingAttributionObserver.ObserveWorkItemStateMissingAttribution(missingAttribution)
 	}
 	if len(rows) == 0 {
-		return 0, nil
+		return supersede(0, nil)
 	}
 
 	// Each writer reports its true row count on an ambiguous Send error, so
@@ -169,7 +189,7 @@ func (executor *WorkItemStateExecutor) ComputeFamily(
 	if err != nil {
 		return wrapWorkItemScopePartialWrite("work_item_state", total, partition, err)
 	}
-	return total, nil
+	return supersede(total, rows)
 }
 
 // workItemStateSegment is one (status, start, end) span in a work item's

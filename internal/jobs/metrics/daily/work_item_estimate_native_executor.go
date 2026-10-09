@@ -8,6 +8,7 @@ import (
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/workitemmetrics"
+	"github.com/full-chaos/dev-health-ops/internal/teamkeytables"
 )
 
 // WorkItemEstimateExecutor is the NATIVE implementation of the
@@ -80,6 +81,19 @@ func (executor *WorkItemEstimateExecutor) ComputeFamily(
 	written, err := WriteEstimateCoverageMetricsDaily(
 		ctx, executor.conn, run.OrganizationID, scope.day, rows, computedAt,
 	)
+	if err != nil {
+		return wrapWorkItemScopePartialWrite("work_item_estimate", written, partition, err)
+	}
+	// The stale-key rule (stale_team_keys.go).
+	produced := make([]staleKey, 0, len(rows))
+	for _, row := range rows {
+		produced = append(produced, staleKey{row.Provider, row.WorkScopeID, row.TeamID})
+	}
+	superseded, err := supersedeStaleTeamKeys(
+		ctx, executor.conn, teamkeytables.EstimateCoverageMetricsDaily, run.OrganizationID, scope.day,
+		read.staleKeyScope(), produced, computedAt,
+	)
+	written += superseded
 	if err != nil {
 		return wrapWorkItemScopePartialWrite("work_item_estimate", written, partition, err)
 	}

@@ -1378,6 +1378,80 @@ Tests: `TestOfPrefixesEveryProviderOnce`, `TestCheckRefusesABareOrEmptyProviderT
 `TestNativeTeamResolvesThroughTheNativeTeamKey` (the cascade); `TestLinearTeamKeyArmResolvesToThePrefixedTeamID`
 (the ownership derivation).
 
+#### 0.4g A stored day after a team id changes (CHAOS-9026)
+
+A daily table whose sorting key holds a team id keeps one row for each team id. The tables are append only and a
+reader takes the newest row of each KEY. So when a later compute of a stored day gives the day's work to another team
+id, the row under the old id is another key and stays the newest row of that key. A read with no team filter then
+counts the day under both ids. A team id changes for a stored day when a team is set inactive (a carry of a bare id to
+a provider-keyed id, section 0.4f; a retired project-as-team row, section 0.4c; an admin delete) and when an item or a
+repository moves to another team.
+
+Two rules keep a recomputed day right. Both are structural: a new table or a new resolver cannot leave them out
+without a failed test.
+
+**1. No resolver resolves to an inactive team.** A team whose newest `teams` row has `is_active = 0` takes no work
+item (`dropInactiveTeamCandidates`, section 0.2) and, with the same test of the newest row
+(`internal/teamactive`, `NewestRowInactive`), gives no repository, no repository pattern and no member to a daily
+metric family:
+
+- `teamownership.AuthoritativeOwnerByRepo` skips an ownership row of an inactive team. A lower-ranked row of an active
+  team for the same repository then wins; a repository with no active owner goes to the caller's pattern fallback.
+  Callers: testops, `ai_impact`, `team_cognitive_load`, `team_complexity`, `compounding_risk_team`.
+- `LoadWellbeingTeams` (`team_wellbeing`, `ic_finalize`, and the pattern fallback of the three finalize families) and
+  `LoadAIImpactTeams` (`ai_impact`) drop the inactive teams after their read.
+
+The SQL text of these reads is the Python reference's and is not changed: the inactive ids are a second read
+(`teamactive.LoadInactive`) and are applied in Go. With no inactive team the result of every resolver is the
+reference's. A failed read of the inactive ids fails the family; it is never taken as "no inactive team".
+Asserted on real ClickHouse by `TestNoTeamResolverResolvesToAnInactiveTeam`.
+
+**2. A run writes a row of zeros over each key it no longer produces.** After a family wrote its rows for a day, it
+reads the live keys of its own scope and day (a key is live while its newest row holds a measure), takes away the keys
+it produced, and writes one row over each key that is left: the key, `computed_at`, 0 in every count and value, NULL
+in every Nullable measure. It writes nothing for a day or a team with no data, and a second run writes nothing. The
+row carries the `computed_at` of the rows of the same run (for `team_metrics_daily`: of the rows of the same
+repository), because some readers keep only the newest generation of a repository and would lose the live rows behind
+a newer row of zeros.
+
+| Table | Family | Scope of one run |
+| --- | --- | --- |
+| `work_item_metrics_daily` | `work_item` | the work scopes the partition read |
+| `work_item_state_durations_daily` | `work_item_state` | the work scopes the partition read |
+| `estimate_coverage_metrics_daily` | `work_item_estimate` | the work scopes the partition read |
+| `team_metrics_daily` | `team_wellbeing` | the repositories of the partition |
+| `ai_impact_metrics_daily` | `ai_impact` | the repositories of the partition |
+| `ai_governance_coverage_daily` | `ai_governance` | the organization's day |
+| `team_cognitive_load_daily` | `team_cognitive_load` | the organization's day |
+| `team_complexity_daily` | `team_complexity` | the organization's day |
+| `ic_landscape_rolling_30d` | `ic_finalize` | the organization's day |
+| `compounding_risk_daily` (rows of scope `team`) | `compounding_risk_team` | the organization's day |
+
+`issue_type_metrics_daily` and `investment_metrics_daily` hold the same rule in their own writers
+(`withIssueTypeMetricsZeroRows`, `withInvestmentMetricsZeroRows`). They are plain `MergeTree` tables: a row of zeros
+replaces nothing there, so the rule holds only for a reader that takes the newest row of a key by `computed_at`.
+
+The tables are declared once, in `internal/teamkeytables`. The writer (`supersedeStaleTeamKeys`,
+`internal/jobs/metrics/daily/stale_team_keys.go`) builds its read and its row from the declaration, and so does the
+predicate for readers: `Table.LiveRow` (one newest row) and `Table.LiveHaving` (a `GROUP BY` over the key). A reader
+that sums is right with a row of zeros. A reader that takes an average over rows of a NOT NULL column, counts rows or
+lists the team ids of a table must leave the superseded keys out with that predicate, or it takes a row of zeros as a
+sample of 0.
+
+The census (`stale_team_keys_census_test.go`) reads the schema and the source and fails when a table with a
+`team_id` or a `scope_id` in its sorting key has no decision (the shared rule, its own rule, or a written exemption),
+when a declaration does not agree with the table's columns, when a declared table has no call of the rule, and when a
+file that is not a declared writer holds an INSERT of one of the tables.
+
+Limits:
+
+- `estimate_coverage_metrics_daily` and the `unknown` bucket of `ai_impact_metrics_daily` hold real rows with every
+  count 0 (a group whose items are all closed; a group with no pull request of unknown origin). Such a row and a row
+  of zeros are equal.
+- A reader with no FINAL and no `argMax` sees the old row and the row of zeros until a merge.
+- A worker of an older version that computes a stored day again writes under the old id once more. The next run of a
+  current worker for that day supersedes the key again.
+
 #### 0.4a Provider × entity **consumption** (functional — what `run_team_autoimport` actually pulls)
 
 | provider | teams | projects | members | repo ownership | member store written |

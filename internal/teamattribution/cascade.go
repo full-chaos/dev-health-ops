@@ -24,6 +24,7 @@ import (
 	"github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
+	"github.com/full-chaos/dev-health-ops/internal/teamactive"
 	"github.com/full-chaos/dev-health-ops/internal/teamid"
 )
 
@@ -1549,8 +1550,10 @@ func (derived GithubWorkItemDerivationContext) ResolveWithoutLinked(
 }
 
 // teamNewestRowInactive: the newest row decides, so a team that was set
-// inactive and then active again is active.
-const teamNewestRowInactive = `argMax(is_active, (updated_at, last_synced, is_active)) = 0`
+// inactive and then active again is active. The text is the one of package
+// teamactive, which the repository and member resolvers of the daily metric
+// families use.
+const teamNewestRowInactive = teamactive.NewestRowInactive
 
 // dropInactiveTeamCandidates is the one rule for which teams take part in
 // attribution: a candidate that names an inactive team is dropped, whatever

@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/workitemmetrics"
+	"github.com/full-chaos/dev-health-ops/internal/teamkeytables"
 )
 
 // WorkItemExecutor is the NATIVE implementation of the `work_item`
@@ -117,6 +118,20 @@ func (executor *WorkItemExecutor) ComputeFamily(
 	}
 	written, err = WriteWorkItemCycleTimes(
 		ctx, executor.conn, run.OrganizationID, triplet.CycleTimes, computedAt,
+	)
+	total += written
+	if err != nil {
+		return wrapWorkItemScopePartialWrite("work_item", total, partition, err)
+	}
+	// The stale-key rule (stale_team_keys.go): a (scope, team) key of the day
+	// that this compute no longer produces gets a row of zeros.
+	produced := make([]staleKey, 0, len(triplet.MetricsDaily))
+	for _, row := range triplet.MetricsDaily {
+		produced = append(produced, staleKey{row.Provider, row.WorkScopeID, row.TeamID})
+	}
+	written, err = supersedeStaleTeamKeys(
+		ctx, executor.conn, teamkeytables.WorkItemMetricsDaily, run.OrganizationID, scope.day,
+		read.staleKeyScope(), produced, computedAt,
 	)
 	total += written
 	if err != nil {

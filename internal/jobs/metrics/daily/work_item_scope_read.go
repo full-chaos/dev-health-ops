@@ -87,10 +87,24 @@ type workItemScopeReadStats struct {
 }
 
 type workItemScopeRead struct {
+	// Scopes are the work scopes the read covers: the ones the partition's
+	// repositories have an item in for the day. The stale-key rule of the
+	// families is bounded by them.
+	Scopes       map[workItemScopeKey]struct{}
 	Items        []workItemMetricsRow
 	Transitions  []workItemStateTransition
 	Attributions map[string]workItemPrimaryAttribution
 	Stats        workItemScopeReadStats
+}
+
+// staleKeyScope is the read's work scopes as the scope of the stale-key rule:
+// one (provider, work_scope_id) tuple for each.
+func (read workItemScopeRead) staleKeyScope() staleKeyScope {
+	tuples := make([][]string, 0, len(read.Scopes))
+	for key := range read.Scopes {
+		tuples = append(tuples, []string{key.provider, key.scope})
+	}
+	return newStaleKeyScope(tuples...)
 }
 
 // stateItems is the column subset the work_item_state compute reads.
@@ -429,7 +443,7 @@ func loadWorkItemScopeRead(
 	if err != nil {
 		return workItemScopeRead{}, err
 	}
-	read := workItemScopeRead{Attributions: map[string]workItemPrimaryAttribution{}}
+	read := workItemScopeRead{Scopes: scopes, Attributions: map[string]workItemPrimaryAttribution{}}
 	read.Stats.Scopes = len(scopes)
 	if len(scopes) == 0 {
 		return read, nil

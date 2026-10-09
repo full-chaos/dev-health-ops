@@ -36,6 +36,8 @@ import (
 	"github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/google/uuid"
+
+	"github.com/full-chaos/dev-health-ops/internal/teamactive"
 )
 
 // OwnedRepoIDs returns the distinct set of repo IDs team_repo_ownership links
@@ -135,6 +137,10 @@ func OwnedRepoIDs(
 // low-ranked one depending on team iteration order. This function is the
 // fix: the SAME query, ranking, and tie-break Python already uses, so a
 // multi-claimed repo resolves identically in both languages.
+//
+// One rule is added to the reference: an ownership row of an INACTIVE team
+// (package teamactive) is skipped. With no inactive team the result is the
+// reference's.
 func AuthoritativeOwnerByRepo(
 	ctx context.Context, conn driver.Conn, orgID string, asOf time.Time,
 ) (map[string]string, error) {
@@ -158,6 +164,15 @@ func AuthoritativeOwnerByRepo(
 	// ("cannot be parsed as DateTime64(3, 'UTC')... isn't parsed
 	// completely") -- a named parameter is parsed as a literal, not
 	// evaluated as an expression.
+	//
+	// The active-team rule (package teamactive) is read first. The ownership
+	// read below is the Python reference's text, so the rule is applied to
+	// its rows in Go. A failed read of the inactive teams is returned: an
+	// owner map built without it would give a repository to a replaced team.
+	inactive, err := teamactive.LoadInactive(ctx, conn, orgID)
+	if err != nil {
+		return nil, fmt.Errorf("AuthoritativeOwnerByRepo: %w", err)
+	}
 	rows, err := conn.Query(ctx, `
         SELECT
             toString(coalesce(o.repo_id, r.id)) AS repo_id,
@@ -186,6 +201,13 @@ func AuthoritativeOwnerByRepo(
 		var repoIDText, teamID string
 		if err := rows.Scan(&repoIDText, &teamID); err != nil {
 			return nil, err
+		}
+		if inactive.Has(teamID) {
+			// Skipped, not kept as an empty owner: a lower-ranked row of an
+			// active team for the same repository still wins, and a
+			// repository with no active owner goes to the caller's pattern
+			// fallback, as a repository with no ownership row does.
+			continue
 		}
 		repoID, err := uuid.Parse(repoIDText)
 		if err != nil || repoID == uuid.Nil {

@@ -24,6 +24,9 @@ type githubTeamCatalogFixtureDoer struct {
 	byPath   map[string]string
 	statuses map[string]int
 	requests []string
+	// links sets a Link header by path; a page-2 request is answered from
+	// byPath[path+"?page=2"].
+	links map[string]string
 }
 
 func (doer *githubTeamCatalogFixtureDoer) Do(request *http.Request) (*http.Response, error) {
@@ -33,7 +36,11 @@ func (doer *githubTeamCatalogFixtureDoer) Do(request *http.Request) (*http.Respo
 		path = path + "?" + request.URL.RawQuery
 	}
 	doer.requests = append(doer.requests, request.URL.Path)
-	body, ok := doer.byPath[request.URL.Path]
+	key := request.URL.Path
+	if page := request.URL.Query().Get("page"); page != "" && page != "1" {
+		key += "?page=" + page
+	}
+	body, ok := doer.byPath[key]
 	if !ok {
 		doer.t.Fatalf("unexpected request path %q (query=%q)", request.URL.Path, request.URL.RawQuery)
 	}
@@ -41,9 +48,13 @@ func (doer *githubTeamCatalogFixtureDoer) Do(request *http.Request) (*http.Respo
 	if status == 0 {
 		status = http.StatusOK
 	}
+	header := http.Header{"Content-Type": []string{"application/json"}}
+	if link, ok := doer.links[key]; ok {
+		header.Set("Link", link)
+	}
 	return &http.Response{
 		StatusCode: status,
-		Header:     http.Header{"Content-Type": []string{"application/json"}},
+		Header:     header,
 		Body:       io.NopCloser(strings.NewReader(body)),
 		Request:    request,
 	}, nil

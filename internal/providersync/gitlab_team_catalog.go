@@ -164,6 +164,16 @@ type GitLabTeamCatalogRows struct {
 	// reviewMembershipsForDrift's doc comment for why an unobserved scope
 	// must never have its stale pending changes resolved.
 	ObservedMembershipTeamIDs []string `json:"-"`
+	// OwnershipListedTeamIDs (CHAOS-8952) lists every team (by "gl:" id)
+	// whose group /projects listing reached its end this call, set only when
+	// ownership is selected. It is the scope of the ownership snapshot close:
+	// a team outside it keeps its open rows. A failed or capped listing never
+	// reaches the collector's write (walk skipped, error, or ErrPaginationCapExceeded).
+	OwnershipListedTeamIDs []string `json:"-"`
+	// OwnershipUnprovenTeamIDs is the part of OwnershipListedTeamIDs whose
+	// /projects listing stopped without GitLab's end-of-list signal
+	// (ownershipListingProvesEnd): decideOwnershipClose keeps their rows open.
+	OwnershipUnprovenTeamIDs []string `json:"-"`
 }
 
 const (

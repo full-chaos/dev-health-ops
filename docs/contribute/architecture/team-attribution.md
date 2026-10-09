@@ -724,7 +724,8 @@ project's items by id. Now:
   (`loadTeamRepoOwnershipProjectLinks`) takes the newest version of each row key first and filters
   `valid_to` after, the same two-level `argMax` form as the attribution cascade (`LoadProjects`).
   Test: `TestTeamRepoOwnershipProjectLinksLeaveOutAClosedRowBeforeAMerge`.
-- Linear and GitLab still have their own insert-only writers; a
+- Linear still has its own insert-only writer; GitLab plans its rows through the same function since CHAOS-8952
+  (section 0.4a); a
   census test (`TestJiraOwnershipWriterCensus`) names every writer of the table and fails for a new Jira
   writer that does not plan its rows through the shared function.
 - The key-built `projects` rows written earlier are removed by a one-time operator verb, see section 1.1.
@@ -1174,7 +1175,8 @@ rule, `PlanOwnershipSnapshot` (a repo full name stands in for the project id). S
   `repo_full_name` starts with `<github org>/` (the prefix `Collect` builds) are read or closed, because a team id
   `gh:<slug>` holds no GitHub org and one tenant can sync several GitHub orgs with the same slug. A row of another org,
   another GitHub org, another source (`inferred`, `manual`, `native`) or another provider is never read and never closed.
-- only the teams whose repo listing reached its end in this run (`githubTeamCatalogRows.RepoListedTeamIDs`). A team whose
+- only the teams whose repo listing reached a confirmed end in this run (`githubTeamCatalogRows.RepoListedTeamIDs`, less
+  the close gate's exclusions below). A team whose
   listing failed fails the whole run (nothing is written, nothing is closed). A run that listed no team, and a run that
   did not select teams (members-only), closes nothing: "the measurement did not happen" is never read as "GitHub returned
   nothing". A team that is listed with an empty repo list is a real, complete answer, and its rows close.
@@ -1184,8 +1186,76 @@ rule, `PlanOwnershipSnapshot` (a repo full name stands in for the project id). S
 - a grant that is still returned keeps the `valid_from` of its earliest open row, so a repeat run replaces the row instead
   of adding one, and an older open duplicate of the same grant is closed.
 
-GitLab writes `team_project_ownership` (`source = 'provider_access'`), not `team_repo_ownership`; it has no repo-ownership
-rows to close.
+**GitLab `provider_access` project ownership is a snapshot, not an append (CHAOS-8952).** GitLab writes
+`team_project_ownership` (`source = 'provider_access'`), not `team_repo_ownership`. Each GitLab team catalog run that
+selects projects (`GitLabTeamCatalogCollector.CollectTeamCatalog`, `internal/providersync/gitlab_team_catalog_route.go`)
+asks `GitLabTeamCatalogClickHouseEffects.SnapshotOwnership` for the rows of the ownership write: the grants the group
+`/projects` listings returned, plus a closing version (the same sort key written again with `valid_to` set) of every
+open row GitLab no longer returns. It is the same one rule as GitHub and Jira, `PlanOwnershipSnapshot` (the project path
+is the project id); only the open-row read and the listed-team set are GitLab's. Scope of a close, all of it required:
+
+- org = the run's org, `provider = 'gitlab'`, `source = 'provider_access'`. A row of another org, another source
+  (`manual`) or another provider (jira, linear, github) is never read and never closed, even with the same team id and
+  project id.
+- only the teams whose group `/projects` listing was read to a confirmed end in this run
+  (`GitLabTeamCatalogRows.OwnershipListedTeamIDs`: the root group and every subgroup of the walk, less the close gate's
+  exclusions below). A group that GitLab no longer lists (a deleted subgroup) is not listed,
+  so its rows stay open: closing a deleted group is out of scope, as for GitHub. A group listed with no project is a
+  real, complete answer, and its rows close. A project held by a group and by its subgroup is closed only where the
+  listing dropped it.
+- a failed listing closes nothing: under non-strict the whole walk is skipped (no write at all), under strict the run
+  fails, and a listing that hit its page cap fails the collector (`ErrPaginationCapExceeded`) before any write. A run
+  that did not select projects (teams-only, members-only) writes no ownership and closes nothing.
+- a failed read of the open rows fails the run before the ownership write. The team, membership and project rows the
+  run writes earlier are not undone.
+- a grant that is still returned keeps the `valid_from` of its earliest open row: a repeat run replaces the row instead
+  of adding one, and an older open duplicate (the writer before this change stamped each run's time) is closed. A closed
+  row is not read as open, so a repeat run keeps its `valid_to` and a re-grant opens it again.
+
+Tests (real ClickHouse, seeded through the real writers and the collector): `TestGitLabTeamCatalogClosesProviderAccessRowsGitLabNoLongerReturns`
+(in `gitlab_team_catalog_ownership_snapshot_integration_test.go`); the census `TestJiraOwnershipWriterCensus`
+names `SnapshotOwnership` and its planner `gitlabOwnershipSnapshot`.
+
+**The close gate, GitHub and GitLab alike (CHAOS-8952).** Every `provider_access` close goes through ONE gate,
+`decideOwnershipClose` (`internal/providersync/ownership_close_gate.go`), before the snapshot is planned. A close runs only
+when both of these hold; otherwise that scope closes nothing (its grants are still written, on their first-seen
+`valid_from`), and the skip is loud: one WARN line `ownership_close_skipped` (org, provider, reasons, counts), a
+`DegradedLeg` (`leg = ownership_close`, `outcome = skipped`) on the run's result, which the post-sync dispatcher stores in
+`sync_runs.result.degraded` and counts as `native_failed_nonfatal` on `dev_health_team_catalog_dispatch_total`.
+
+- **The listing is proven complete** (`ownershipListingProvesEnd`): the walker stopped on the provider's own end-of-list
+  signal and no bound stopped the walk (`PageCollection.EndProven`, `internal/providerfoundation/pagination.go`). ONE
+  reading of the continuation headers per walker decides both "follow the next page" and "the end is proven", so the two
+  can never disagree: `githubPageStep` / `linkHeaderNext` for GitHub, `gitLabPageStep` for GitLab. GitHub: the `Link`
+  header is read over every field line, with `rel` tokens space-split and compared without case (`rel="next last"`,
+  `rel=NEXT` and a `rel="next"` in a second `Link` line are all followed). The end is proven only when no entry is
+  `rel="next"` and every entry is `<URL>` with a non-empty URL, followed only by `;` parameters whose `rel` names at least one relation (`rel=""` proves nothing); with no `Link` at all, only on a page shorter
+  than `per_page`. GitLab: the end is proven only when `X-Next-Page` is sent once and empty and no well-formed `Link`
+  announces a next page; a malformed or non-positive `X-Next-Page`, no header (an end inferred from a short page) or a
+  `Link` with `rel="next"` leaves that group's listing unproven. A caller bound (`StopAt`, `StopAfter`, `MaxItems`) never
+  proves an end. Every page must decode as a JSON array: a 200 body `null` or an object is an error
+  (`decodePage`), never a page with zero items. A page error, a non-2xx page and a page cap still fail or skip the run as
+  above. Reason `listing_incomplete`; only the unproven teams keep their rows.
+- **No other integration of the provider in the org.** The rows carry no integration key, and two integrations'
+  configured scopes cannot be compared safely (a subgroup of the other's group, a numeric group id, a trailing `/`, an
+  escaped path, another case), so when the org has ANY other ACTIVE integration of the same provider, the run closes
+  nothing (reason `scope_shared`), whatever scope that integration names. A per-integration key on the rows is CHAOS-8990.
+  The census is `teamCatalogScopeCensus.CountActiveSiblingIntegrations` (`internal/workerservice/team_catalog_clients.go`):
+  the count of the org's other active integrations whose provider matches without case or surrounding space. A failed
+  census read (`scope_census_failed`), no census, or a run with no integration id (`scope_census_unavailable`: the
+  `dho sync teams` CLI verb, whose collectors carry no census) closes nothing; the CLI shows only the WARN line.
+
+Tests: `TestDecideOwnershipCloseClosesOnlyProvenListingsOfAnUnsharedScope` (the gate),
+`TestGitLabPaginationEndProvenOnlyWhenXNextPageIsSentEmpty`,
+`TestGitHubLinkPaginationEndProvenOnlyWhenTheWalkersLinkReadingFindsNoNext` and
+`TestGitHubLinkPaginationEndNotProvenWhenACallerBoundStopsTheWalk` (the end signal and the page decode), the provider
+subtests of `TestGitLabTeamCatalogClosesProviderAccessRowsGitLabNoLongerReturns` and
+`TestGitHubTeamCatalogClosesProviderAccessRowsGitHubNoLongerReturns`, `TestGitHubOwnershipCloseFollowsEveryLinkFormItReadsAsNext`,
+`TestOwnershipCloseNeverReadsANullOrObjectPageAsAnEmptyListing` and
+`TestGitLabOwnershipCloseNeedsNoLinkNextBesideAnEmptyXNextPage` (real ClickHouse),
+`TestTeamCatalogScopeCensusCountsTheOrgsOtherActiveIntegrationsOfOneProvider` (real Postgres, the migrated schema), and
+`TestOwnershipCloseSkipsForAnyOtherActiveIntegrationEndToEnd` (real Postgres census into both collectors and real
+ClickHouse).
 
 One path: `run_team_autoimport` → `team_autoimport_<provider>.populate()` → `discover_*` → ClickHouse. (`LinearClient.iter_projects` is vestigial dead code, never a path.)
 

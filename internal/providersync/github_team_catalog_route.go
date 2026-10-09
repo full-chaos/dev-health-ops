@@ -209,6 +209,9 @@ func (collector GitHubTeamCatalogRouteHandler) Collect(
 			}
 
 			rows.RepoListedTeamIDs = append(rows.RepoListedTeamIDs, githubTeamID(slug))
+			if !ownershipListingProvesEnd(repoPages) {
+				rows.RepoUnprovenTeamIDs = append(rows.RepoUnprovenTeamIDs, githubTeamID(slug))
+			}
 			team, err := normalizeGitHubTeam(orgID, payload, repoPatterns, normalizedAt)
 			if err != nil {
 				return githubTeamCatalogRows{}, evidence, err

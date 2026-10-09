@@ -47,6 +47,13 @@ type PageCollection struct {
 	// ItemCapReached: MaxItems was reached, so the boundary was positively
 	// observed and everything beyond it is known to be beyond the cap.
 	ItemCapReached bool
+	// EndProven: the walk stopped because the walker's own reading of the
+	// provider's continuation headers found no next page AND those headers
+	// carry the provider's explicit end-of-list signal. Only the GitHub Link
+	// and GitLab page-param walkers set it; every other stop (a bound, a
+	// caller's StopAt/StopAfter, an unreadable header, an end inferred from the
+	// page size) leaves it false.
+	EndProven bool
 }
 
 // PageVisit is the bounded page callback used by resumable provider routes.
@@ -103,7 +110,7 @@ func VisitGitHubLinkPages(
 			return result, decodeErr
 		}
 		result.Pages++
-		next = githubNextLink(response.Header.Get("Link"))
+		next, result.EndProven = githubPageStep(response.Header, len(items), options.Query)
 		if err := visit(PageVisit{
 			Items: items, Pages: result.Pages, CursorBefore: cursorBefore, CursorAfter: next,
 		}); err != nil {
@@ -160,15 +167,7 @@ func VisitGitLabPageParamPages(
 		result.Pages++
 		nextPage := 0
 		if !options.SinglePage {
-			nextHeader := strings.TrimSpace(response.Header.Get("X-Next-Page"))
-			if nextHeader != "" {
-				nextPage, _ = strconv.Atoi(nextHeader)
-				if nextPage < 1 {
-					nextPage = 0
-				}
-			} else if len(items) >= options.PerPage {
-				nextPage = page + 1
-			}
+			nextPage, result.EndProven = gitLabPageStep(response.Header, page, len(items), options.PerPage)
 		}
 		if err := visit(PageVisit{
 			Items: items, Pages: result.Pages,
@@ -264,7 +263,7 @@ func CollectGitHubLinkPages(
 		result.Pages++
 		if options.StopAt == nil && options.StopAfter == nil && options.Keep == nil && options.MaxItems == 0 {
 			result.Items = append(result.Items, items...)
-			next = githubNextLink(response.Header.Get("Link"))
+			next, result.EndProven = githubPageStep(response.Header, len(items), options.Query)
 			continue
 		}
 		crossedBoundary := false
@@ -288,7 +287,7 @@ func CollectGitHubLinkPages(
 		if crossedBoundary {
 			return result, nil
 		}
-		next = githubNextLink(response.Header.Get("Link"))
+		next, result.EndProven = githubPageStep(response.Header, len(items), options.Query)
 	}
 	return result, nil
 }
@@ -306,7 +305,9 @@ type GitLabPageOptions struct {
 // CollectGitLabPageParamPages mirrors Python's page/per_page paginator. A
 // non-empty X-Next-Page is authoritative; an absent or empty header falls back
 // to the full-page item-count heuristic. Malformed next-page values stop
-// safely, matching the existing Python implementation.
+// safely, matching the existing Python implementation. gitLabPageStep is the
+// one reading of the headers: it picks the next page and says whether a stop
+// is GitLab's own end signal (EndProven).
 func CollectGitLabPageParamPages(
 	ctx context.Context,
 	client *HTTPClient,
@@ -342,6 +343,8 @@ func CollectGitLabPageParamPages(
 			return PageCollection{}, decodeErr
 		}
 		result.Pages++
+		nextPage, endProven := gitLabPageStep(response.Header, page, len(items), options.PerPage)
+		result.EndProven = endProven
 		if len(items) == 0 {
 			return result, nil
 		}
@@ -349,22 +352,10 @@ func CollectGitLabPageParamPages(
 		// Some active Python provider methods deliberately issue exactly one
 		// page request and accept a full page as a truncated-but-complete
 		// boundary. Do not infer a second page for those callers.
-		if options.SinglePage {
+		if options.SinglePage || nextPage == 0 {
 			return result, nil
 		}
-		nextHeader := strings.TrimSpace(response.Header.Get("X-Next-Page"))
-		if nextHeader != "" {
-			nextPage, parseErr := strconv.Atoi(nextHeader)
-			if parseErr != nil || nextPage < 1 {
-				return result, nil
-			}
-			page = nextPage
-			continue
-		}
-		if len(items) < options.PerPage {
-			return result, nil
-		}
-		page++
+		page = nextPage
 	}
 	return result, nil
 }
@@ -714,6 +705,15 @@ func decodePage(response *http.Response, dataKey string) ([]json.RawMessage, err
 	if err != nil || len(body) > maxProviderPageBody {
 		return nil, ErrPaginationInvalid
 	}
+	// json.Unmarshal reads a top-level null as a nil slice or map without an
+	// error, so a 200 `null` body would decode as a page with zero items.
+	topLevel := byte('{')
+	if dataKey == "" {
+		topLevel = '['
+	}
+	if trimmed := bytes.TrimSpace(body); len(trimmed) == 0 || trimmed[0] != topLevel {
+		return nil, ErrPaginationInvalid
+	}
 	if dataKey == "" {
 		var items []json.RawMessage
 		if err := json.Unmarshal(body, &items); err != nil {
@@ -815,20 +815,90 @@ func launchDarklyNextHref(payload map[string]json.RawMessage) (string, error) {
 	return strings.TrimSpace(values["next"].Href), nil
 }
 
-func githubNextLink(header string) string {
-	for _, part := range splitLinkHeader(header) {
-		open, close := strings.IndexByte(part, '<'), strings.IndexByte(part, '>')
-		if open < 0 || close <= open {
-			continue
+// gitLabPageStep is the one reading of GitLab's offset continuation headers:
+// it returns the page to fetch next (0 = stop) and whether that stop is
+// GitLab's own end of the list. A present X-Next-Page that is not a positive
+// integer stops the walk unproven. An absent or empty X-Next-Page falls back
+// to the full-page heuristic; the end is proven only when X-Next-Page was sent
+// once and empty, and no well-formed Link header announces a next page
+// (keyset pagination answers with Link and no X-Next-Page).
+func gitLabPageStep(header http.Header, page, items, perPage int) (int, bool) {
+	values := header.Values("X-Next-Page")
+	if len(values) > 0 {
+		if value := strings.TrimSpace(values[0]); value != "" {
+			next, err := strconv.Atoi(value)
+			if err != nil || next < 1 {
+				return 0, false
+			}
+			return next, false
 		}
-		for _, attribute := range strings.Split(part[close+1:], ";") {
-			key, value, found := strings.Cut(strings.TrimSpace(attribute), "=")
-			if found && strings.EqualFold(key, "rel") && strings.Trim(value, `"`) == "next" {
-				return strings.TrimSpace(part[open+1 : close])
+	}
+	if items > 0 && items >= perPage {
+		return page + 1, false
+	}
+	linkNext, linkParsed := linkHeaderNext(header.Values("Link"))
+	return 0, len(values) == 1 && linkParsed && linkNext == ""
+}
+
+// githubPageStep is the one reading of GitHub's Link continuation: it returns
+// the rel="next" URL to follow ("" = stop) and whether that stop is GitHub's
+// own end of the list. A stop is proven only when every Link entry parses and
+// none is rel="next", or, with no Link header at all, when the page is shorter
+// than the requested per_page (GitHub omits Link only for a one-page list).
+func githubPageStep(header http.Header, items int, query url.Values) (string, bool) {
+	links := header.Values("Link")
+	next, parsed := linkHeaderNext(links)
+	if next != "" || !parsed {
+		return next, false
+	}
+	if strings.TrimSpace(strings.Join(links, "")) != "" {
+		return "", true
+	}
+	perPage, err := strconv.Atoi(strings.TrimSpace(query.Get("per_page")))
+	return "", err != nil || perPage < 1 || items < perPage
+}
+
+// linkHeaderNext reads an RFC 8288 Link header over every field line: the
+// first non-empty rel="next" target (rel tokens are space-separated and
+// case-insensitive), and parsed=false when any entry is not "<URL>" with a
+// non-empty URL, followed only by ";"-separated parameters of which a rel
+// holds at least one token (rel="" names no relation, so it proves nothing).
+func linkHeaderNext(values []string) (next string, parsed bool) {
+	parsed = true
+	for _, value := range values {
+		for _, part := range splitLinkHeader(value) {
+			open, close := strings.IndexByte(part, '<'), strings.IndexByte(part, '>')
+			if open < 0 || close <= open {
+				parsed = false
+				continue
+			}
+			target := strings.TrimSpace(part[open+1 : close])
+			if open != 0 || target == "" {
+				parsed = false
+			}
+			params := strings.TrimSpace(part[close+1:])
+			if params != "" && !strings.HasPrefix(params, ";") {
+				parsed = false
+			}
+			relTokens := 0
+			for _, attribute := range strings.Split(params, ";") {
+				key, relValue, found := strings.Cut(strings.TrimSpace(attribute), "=")
+				if !found || !strings.EqualFold(strings.TrimSpace(key), "rel") {
+					continue
+				}
+				for _, token := range strings.Fields(strings.Trim(strings.TrimSpace(relValue), `"`)) {
+					relTokens++
+					if strings.EqualFold(token, "next") && next == "" && target != "" {
+						next = target
+					}
+				}
+			}
+			if relTokens == 0 {
+				parsed = false
 			}
 		}
 	}
-	return ""
+	return next, parsed
 }
 
 func splitLinkHeader(header string) []string {

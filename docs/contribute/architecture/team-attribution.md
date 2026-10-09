@@ -1406,26 +1406,44 @@ The SQL text of these reads is the Python reference's and is not changed: the in
 reference's. A failed read of the inactive ids fails the family; it is never taken as "no inactive team".
 Asserted on real ClickHouse by `TestNoTeamResolverResolvesToAnInactiveTeam`.
 
-**2. A run writes a row of zeros over each key it no longer produces.** After a family wrote its rows for a day, it
-reads the live keys of its own scope and day (a key is live while its newest row holds a measure), takes away the keys
-it produced, and writes one row over each key that is left: the key, `computed_at`, 0 in every count and value, NULL
-in every Nullable measure. It writes nothing for a day or a team with no data, and a second run writes nothing. The
-row carries the `computed_at` of the rows of the same run (for `team_metrics_daily`: of the rows of the same
-repository), because some readers keep only the newest generation of a repository and would lose the live rows behind
-a newer row of zeros.
+**2. A run writes a row of zeros over each key it no longer produces.** The rule reads the live keys of a scope and
+day (a key is live while its newest row holds a measure), takes away the keys the run produces, and writes one row
+over each key that is left: the key, `computed_at`, 0 in every count and value, NULL in every Nullable measure. It
+writes nothing for a day or a team with no data, and a second run writes nothing.
 
-| Table | Family | Scope of one run |
-| --- | --- | --- |
-| `work_item_metrics_daily` | `work_item` | the work scopes the partition read |
-| `work_item_state_durations_daily` | `work_item_state` | the work scopes the partition read |
-| `estimate_coverage_metrics_daily` | `work_item_estimate` | the work scopes the partition read |
-| `team_metrics_daily` | `team_wellbeing` | the repositories of the partition |
-| `ai_impact_metrics_daily` | `ai_impact` | the repositories of the partition |
-| `ai_governance_coverage_daily` | `ai_governance` | the organization's day |
-| `team_cognitive_load_daily` | `team_cognitive_load` | the organization's day |
-| `team_complexity_daily` | `team_complexity` | the organization's day |
-| `ic_landscape_rolling_30d` | `ic_finalize` | the organization's day |
-| `compounding_risk_daily` (rows of scope `team`) | `compounding_risk_team` | the organization's day |
+WHERE the rule runs depends on who can write a key:
+
+- **A table whose keys two partitions of one run can write is decided once for the run**, at the finalize, after
+  every partition is done and before the finalize families (`RunStaleKeyRetractor`,
+  `internal/jobs/metrics/daily/stale_team_keys_run.go`; the step is `FinalizeHandler.retractStaleKeys`). A partition
+  computes every work scope that its repositories have an item in, from the items of every repository, with the
+  attributions that are stored when it reads. So two partitions that share a work scope both write the rows of that
+  scope, and the read of one can be older than the attribution write of the other. A partition that decided "the keys
+  I did not produce" from its own read wrote a row of zeros over the row the other partition had just written. The
+  run-level step reads the live keys FIRST, THEN computes the keys of the day from the stored inputs with the same
+  compute the family runs, and supersedes live minus computed. A key that is right holds its inputs before its row is
+  written, so it is in the computed set whatever wrote it and whenever: no clock and no insert order decides which
+  key is superseded. The version of the row of zeros is taken from the stored rows (one second after the newest row
+  of the day when the clock of the host is not later), so a row from a host whose clock is ahead is superseded too.
+- **A table whose key scope is the partition's own repository keeps the rule in its family**: a repository is in one
+  partition of a run. The row of zeros carries the `computed_at` of the rows the family wrote for the same
+  repository, because some readers of `team_metrics_daily` keep only the newest generation of a repository and would
+  lose the live rows behind a newer row of zeros.
+- **A table that a finalize family writes** is written once for a run already; the family applies the rule after its
+  write.
+
+| Table | Family | Where the rule runs | Scope |
+| --- | --- | --- | --- |
+| `work_item_metrics_daily` | `work_item` | once for the run | the work scopes of the run's repositories |
+| `work_item_state_durations_daily` | `work_item_state` | once for the run | the work scopes of the run's repositories |
+| `estimate_coverage_metrics_daily` | `work_item_estimate` | once for the run | the work scopes of the run's repositories |
+| `ai_governance_coverage_daily` | `ai_governance` (every partition computes the organization's day) | once for the run | the organization's day |
+| `team_metrics_daily` | `team_wellbeing` | in the family, for its partition | the repositories of the partition |
+| `ai_impact_metrics_daily` | `ai_impact` | in the family, for its partition | the repositories of the partition |
+| `team_cognitive_load_daily` | `team_cognitive_load` | in the finalize family | the organization's day |
+| `team_complexity_daily` | `team_complexity` | in the finalize family | the organization's day |
+| `ic_landscape_rolling_30d` | `ic_finalize` | in the finalize family | the organization's day |
+| `compounding_risk_daily` (rows of scope `team`) | `compounding_risk_team` | in the finalize family | the organization's day |
 
 `issue_type_metrics_daily` and `investment_metrics_daily` hold the same rule in their own writers
 (`withIssueTypeMetricsZeroRows`, `withInvestmentMetricsZeroRows`). They are plain `MergeTree` tables: a row of zeros
@@ -1440,8 +1458,9 @@ sample of 0.
 
 The census (`stale_team_keys_census_test.go`) reads the schema and the source and fails when a table with a
 `team_id` or a `scope_id` in its sorting key has no decision (the shared rule, its own rule, or a written exemption),
-when a declaration does not agree with the table's columns, when a declared table has no call of the rule, and when a
-file that is not a declared writer holds an INSERT of one of the tables.
+when a declaration does not agree with the table's columns, when a declared table has no call of the rule, when a
+file that is not a declared writer holds an INSERT of one of the tables, and when a partition family calls the rule
+for a table whose key scope is not the repository (such a table is decided once for the run).
 
 Limits:
 
@@ -1451,6 +1470,12 @@ Limits:
 - A reader with no FINAL and no `argMax` sees the old row and the row of zeros until a merge.
 - A worker of an older version that computes a stored day again writes under the old id once more. The next run of a
   current worker for that day supersedes the key again.
+- Two partitions that share a work scope both write the REAL rows of the scope, each from the attributions stored at
+  its read, and the row written last is the newest row of its key. The run-level step settles which KEYS hold a
+  measure; it does not rewrite the values of a key that both partitions wrote. The values are equal when the
+  attributions of the scope did not change between the two reads.
+- The run-level step reads the items of every work scope of the run once more. Its cost is about one more read of the
+  work-item families for each run.
 
 #### 0.4a Provider × entity **consumption** (functional — what `run_team_autoimport` actually pulls)
 

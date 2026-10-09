@@ -34,6 +34,13 @@ import (
 // every Nullable measure. It is written only over a key that held a measure,
 // never for a day or a team with no data: missing stays missing.
 //
+// Who applies the rule depends on who can write a key. A table whose keys two
+// partitions of one run can write is decided once for the run, after every
+// partition is done (retractStaleTeamKeysOfRun, stale_team_keys_run.go). A
+// table whose key scope is the partition's own repository, and a table that a
+// finalize family writes once for a run, keep the rule in their family
+// (supersedeStaleTeamKeys). The census holds that split.
+//
 // The set of tables is StaleTeamKeyTables. issue_type_metrics_daily and
 // investment_metrics_daily hold the same rule in their own writers
 // (withIssueTypeMetricsZeroRows, withInvestmentMetricsZeroRows): they are plain

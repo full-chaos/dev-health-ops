@@ -36,7 +36,7 @@ func TestHomePRReworkRatio_CountsReviewedPullRequestsOnly(t *testing.T) {
 	admin, client := newHomeTestClickHouse(ctx, t)
 
 	const orgID = "home-org-pr-rework"
-	const teamNR, teamNG, teamZ = "team-nr", "team-ng", "team-z"
+	const teamNR, teamNG, teamZ, teamGO = "team-nr", "team-ng", "team-z", "team-go"
 	repoN, repoZ, repoR, repoG := uuid.New(), uuid.New(), uuid.New(), uuid.New()
 	repoE, repoO, repoV := uuid.New(), uuid.New(), uuid.New()
 	day1 := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
@@ -116,6 +116,8 @@ func TestHomePRReworkRatio_CountsReviewedPullRequestsOnly(t *testing.T) {
 	own(teamNG, repoN)
 	own(teamNG, repoG)
 	own(teamZ, repoZ)
+	own(teamGO, repoG)
+	own(teamGO, repoO)
 
 	spec := metricSpec{}
 	for _, candidate := range metrics {
@@ -168,6 +170,10 @@ func TestHomePRReworkRatio_CountsReviewedPullRequestsOnly(t *testing.T) {
 		{"a team: the sum over its repositories", teamScope(teamNR), day1, day2, 50, true, measured},
 		{"a team with a repository of each kind and no reviewed pull request: unknown", teamScope(teamNG), day1, day2, 0, false, unknown},
 		{"a team whose reviewed pull requests have no rework", teamScope(teamZ), day1, day2, 0, true, measured},
+		// The merged pull requests of a row with no stored counts are not in
+		// the view's merged count: every COUNTED merged pull request of this
+		// team is of the provider with no signal.
+		{"a team with a no-signal repository and a row written before the counts", teamScope(teamGO), day1, day2, 0, false, noSignal},
 		// N 0/0, Z 0/2, R 1/2, G -, E -, O -, V -: 1 of 4 reviewed.
 		{"the organization, day 1", ScopeFilter{Level: "org"}, day1, day2, 25, true, measured},
 		{"a window with no stored row", repoScope(repoR), day1.AddDate(0, 0, -30), day1.AddDate(0, 0, -20), 0, false, noState},

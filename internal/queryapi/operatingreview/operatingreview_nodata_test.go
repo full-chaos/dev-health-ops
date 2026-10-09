@@ -7,6 +7,7 @@ import (
 	"sort"
 	"testing"
 
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/changefailure"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph/model"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graphqldate"
 )
@@ -16,12 +17,12 @@ import (
 // themselves are unchanged (the frozen golden pins them): a missing week and a
 // stored zero both give value 0, and only these two fields tell them apart.
 
-// allMetricKeys are the 24 metrics of the review, in section order.
+// allMetricKeys are the 26 metrics of the review, in section order.
 var allMetricKeys = []string{
 	"cycle_time_p50_hours", "throughput", "wip_count",
 	"state_duration_hours", "review_latency_hours", "wip_age_p90_hours",
 	"hotspot_risk_score", "ownership_concentration", "complexity_per_kloc", "bus_factor",
-	"deployments_count", "change_failure_rate", "incidents_count", "mttr_hours",
+	"deployments_count", "change_failure_rate", "deployment_failure_rate", "revert_rate", "incidents_count", "mttr_hours",
 	"ktlo_units", "new_value_units", "security_units", "infra_units",
 	"ai_adoption_ratio", "ai_cycle_time_delta_hours", "ai_review_amplification", "ai_risk_drag",
 	"ai_governance_coverage", "ai_opportunity_signals",
@@ -83,12 +84,13 @@ func sameKeys(a, b []string) bool {
 // the grouped reads return no row, and each scalar aggregate returns ONE row of
 // zeros / NULL / NaN with a known count of 0.
 func emptyWeekScanners() []*fakeRowScanner {
-	out := emptyScanners(10)
-	out[2] = &fakeRowScanner{rows: [][]any{{uint64(0), nil, math.NaN(), math.NaN(), uint32(0), math.NaN(), nil, uint64(0)}}} // repo_metrics
-	out[3] = &fakeRowScanner{rows: [][]any{{math.NaN(), uint64(0)}}}                                                         // hotspots
-	out[4] = &fakeRowScanner{rows: [][]any{{math.NaN(), uint64(0)}}}                                                         // complexity
-	out[5] = &fakeRowScanner{rows: [][]any{{uint64(0), uint64(0), uint64(0)}}}                                               // deployments
-	out[6] = &fakeRowScanner{rows: [][]any{{uint64(0), nil, uint64(0)}}}                                                     // incidents
+	out := emptyScanners(11)
+	out[2] = &fakeRowScanner{rows: [][]any{{uint64(0), nil, math.NaN(), math.NaN(), uint32(0), nil, nil, uint64(0)}}} // repo_metrics
+	out[3] = &fakeRowScanner{rows: [][]any{{math.NaN(), uint64(0)}}}                                                  // hotspots
+	out[4] = &fakeRowScanner{rows: [][]any{{math.NaN(), uint64(0)}}}                                                  // complexity
+	out[5] = &fakeRowScanner{rows: [][]any{{uint64(0), uint64(0), uint64(0)}}}                                        // deployments
+	out[6] = &fakeRowScanner{rows: [][]any{{uint64(0), nil, uint64(0)}}}                                              // incidents
+	out[10] = &fakeRowScanner{rows: [][]any{{uint64(0), uint64(0), uint64(0), uint64(0), uint64(0), uint64(0)}}}      // change_failure
 	return out
 }
 
@@ -102,11 +104,12 @@ func storedZeroWeekScanners() []*fakeRowScanner {
 		{rows: [][]any{{uint64(0), 0.0, 0.0, 0.0, uint32(0), 0.0, 0.0, uint64(1)}}},                                // repo_metrics
 		{rows: [][]any{{0.4, uint64(1)}}},                                                                          // hotspots
 		{rows: [][]any{{0.0, uint64(1)}}},                                                                          // complexity
-		{rows: [][]any{{uint64(0), uint64(0), uint64(1)}}},                                                         // deployments
+		{rows: [][]any{{uint64(1), uint64(0), uint64(1)}}},                                                         // deployments
 		{rows: [][]any{{uint64(0), 0.0, uint64(1)}}},                                                               // incidents
 		{rows: [][]any{{"feature_delivery", uint64(0)}}},                                                           // investment
 		{rows: [][]any{{"human", uint64(5), uint64(0), uint64(0), uint64(5), uint64(0), 0.0, 0.0, 0.0, 0.0, 0.0}}}, // ai_impact
 		{rows: [][]any{{day("2026-08-24"), nil, nil, uint64(0), uint64(0), uint64(0), uint64(0), uint64(0)}}},      // ai_governance
+		{rows: [][]any{{uint64(1), uint64(0), uint64(0), uint64(1), uint64(0), uint64(1)}}},                        // change_failure
 	}
 }
 
@@ -116,7 +119,7 @@ func resolveWeeks(t *testing.T, current, prior []*fakeRowScanner, errs []error) 
 }
 
 // resolveReviewWeeks reaches the production Resolve builder with the same
-// ten-current-then-ten-prior read schedule used by the GraphQL resolver.
+// eleven-current-then-eleven-prior read schedule used by the GraphQL resolver.
 // Tests that inspect review-level statements and recommendations use this
 // rather than constructing a review or section directly.
 func resolveReviewWeeks(t *testing.T, current, prior []*fakeRowScanner, errs []error) *model.OperatingReview {
@@ -126,8 +129,8 @@ func resolveReviewWeeks(t *testing.T, current, prior []*fakeRowScanner, errs []e
 	if err != nil {
 		t.Fatal(err)
 	}
-	if client.calls != 20 {
-		t.Fatalf("Resolve made %d reads, want 20", client.calls)
+	if client.calls != 22 {
+		t.Fatalf("Resolve made %d reads, want 22", client.calls)
 	}
 	return review
 }
@@ -162,14 +165,16 @@ func TestHasData_SeparatesAStoredZeroFromAMissingWeek(t *testing.T) {
 		}
 		// ai_governance_coverage reads "no AI artifact" as fully covered (1.0), and the hotspot
 		// read cannot store a zero; every other stored-zero metric is 0, the same value as missing.
+		// deployments_count is 1: a deployment and failure rate is only defined
+		// over at least one deployment, so a stored-zero rate needs one.
 		if s.Value == 0 {
 			zeros++
-		} else if key != "hotspot_risk_score" && key != "ai_governance_coverage" {
+		} else if key != "hotspot_risk_score" && key != "ai_governance_coverage" && key != "deployments_count" {
 			t.Errorf("%s: stored-zero week gives %v, want 0", key, s.Value)
 		}
 	}
-	if zeros != len(allMetricKeys)-2 {
-		t.Errorf("%d metrics are a stored 0 with hasData true, want %d: the zero/missing pair is not measured", zeros, len(allMetricKeys)-2)
+	if zeros != len(allMetricKeys)-3 {
+		t.Errorf("%d metrics are a stored 0 with hasData true, want %d: the zero/missing pair is not measured", zeros, len(allMetricKeys)-3)
 	}
 }
 
@@ -246,19 +251,21 @@ func TestHasData_AFailedReadIsNoDataForItsMetricsOnly(t *testing.T) {
 	}{
 		"work_items":      {0, []string{"cycle_time_p50_hours", "throughput", "wip_count", "wip_age_p90_hours"}},
 		"state_durations": {1, []string{"state_duration_hours"}},
-		// change_failure_rate and mttr_hours fall back to the repository row, so losing it loses them
-		// only when their first source has no value: here deployments count 0 and incidents hold an MTTR.
-		"repo_metrics":  {2, []string{"review_latency_hours", "ownership_concentration", "bus_factor", "change_failure_rate"}},
+		// mttr_hours falls back to the repository row, so losing it loses mttr_hours only when the
+		// incident read has no value: here incidents hold an MTTR.
+		"repo_metrics":  {2, []string{"review_latency_hours", "ownership_concentration", "bus_factor", "revert_rate"}},
 		"hotspots":      {3, []string{"hotspot_risk_score"}},
 		"complexity":    {4, []string{"complexity_per_kloc"}},
-		"deployments":   {5, []string{"deployments_count"}},
+		"deployments":   {5, []string{"deployments_count", "deployment_failure_rate"}},
 		"incidents":     {6, []string{"incidents_count"}},
 		"investment":    {7, []string{"ktlo_units", "new_value_units", "security_units", "infra_units"}},
 		"ai_impact":     {8, []string{"ai_adoption_ratio", "ai_cycle_time_delta_hours", "ai_review_amplification", "ai_risk_drag"}},
 		"ai_governance": {9, []string{"ai_governance_coverage"}},
+		// change failure rate has one source: its own counts.
+		"change_failure": {10, []string{"change_failure_rate"}},
 	} {
 		t.Run(name, func(t *testing.T) {
-			errs := make([]error, 20)
+			errs := make([]error, 22)
 			errs[tc.call] = errors.New("boom")
 			metrics := resolveWeeks(t, storedZeroWeekScanners(), storedZeroWeekScanners(), errs)
 			lost := map[string]bool{}
@@ -303,7 +310,7 @@ func TestHasData_PresenceRuleOfEachMetric(t *testing.T) {
 			[]string{"bus_factor"}},
 		{"a review latency", periodRows{repoMetrics: []repoMetricsRow{{prFirstReviewP50Hours: fp(0)}}}, []string{"review_latency_hours"}},
 		{"an ownership ratio", periodRows{repoMetrics: []repoMetricsRow{{singleOwnerFileRatio30d: fp(0)}}}, []string{"ownership_concentration"}},
-		{"a repository change failure rate", periodRows{repoMetrics: []repoMetricsRow{{changeFailureRate: fp(0)}}}, []string{"change_failure_rate"}},
+		{"a revert rate", periodRows{repoMetrics: []repoMetricsRow{{revertRate: fp(0)}}}, []string{"revert_rate"}},
 		{"a repository MTTR", periodRows{repoMetrics: []repoMetricsRow{{mttrHours: fp(0)}}}, []string{"mttr_hours"}},
 		{"the hotspot aggregate over no row", periodRows{hotspots: []hotspotsAggRow{{}}}, nil},
 		{"a hotspot risk", periodRows{hotspots: []hotspotsAggRow{{riskScore: fp(0.4), hotspotsCount: 1}}}, []string{"hotspot_risk_score"}},
@@ -313,7 +320,17 @@ func TestHasData_PresenceRuleOfEachMetric(t *testing.T) {
 		{"deployment rows stored, no deployment", periodRows{deployments: []deploymentsAggRow{{storedRows: 2}}},
 			[]string{"deployments_count"}},
 		{"deployments", periodRows{deployments: []deploymentsAggRow{{deploymentsCount: 4, storedRows: 2}}},
-			[]string{"deployments_count", "change_failure_rate"}},
+			[]string{"deployments_count", "deployment_failure_rate"}},
+		{"change-failure rows with deployments and no incident evidence",
+			periodRows{changeFailure: []changeFailureAggRow{{view: changefailure.View{Counts: changefailure.Counts{Deployments: 4}, StoredRows: 2}}}}, nil},
+		{"change-failure rows with incident evidence and no deployment",
+			periodRows{changeFailure: []changeFailureAggRow{{view: changefailure.View{Counts: changefailure.Counts{IncidentsDirect: 1}, StoredRows: 1}}}}, nil},
+		{"change-failure rows with deployments and a direct incident",
+			periodRows{changeFailure: []changeFailureAggRow{{view: changefailure.View{Counts: changefailure.Counts{Deployments: 4, IncidentsDirect: 1}, StoredRows: 2}}}},
+			[]string{"change_failure_rate"}},
+		{"change-failure rows with deployments and a via-deployment incident",
+			periodRows{changeFailure: []changeFailureAggRow{{view: changefailure.View{Counts: changefailure.Counts{Deployments: 4, IncidentsViaDeployment: 1}, StoredRows: 2}}}},
+			[]string{"change_failure_rate"}},
 		{"the incident aggregate over no row", periodRows{incidents: []incidentsAggRow{{}}}, nil},
 		{"incident rows stored, MTTR NULL", periodRows{incidents: []incidentsAggRow{{storedRows: 1}}}, []string{"incidents_count"}},
 		{"an incident MTTR", periodRows{incidents: []incidentsAggRow{{mttrP50Hours: fp(0), storedRows: 1}}},
@@ -366,5 +383,54 @@ func TestFetchDeploymentsAndIncidents_CarryTheStoredRowCount(t *testing.T) {
 	incidents, err := fetchIncidentsAgg(ctx, client, "org-1", day("2026-08-24"), day("2026-08-31"))
 	if err != nil || len(incidents) != 1 || incidents[0].storedRows != 3 {
 		t.Fatalf("incidents = %+v, %v; want storedRows 3", incidents, err)
+	}
+}
+
+// Change failure rate carries the state of the CURRENT week, so unknown, not
+// applicable and a week with no stored counts are three answers, not one "no
+// data". The prior week's state is not served: hasPriorData says whether it
+// is measured. No other metric carries a state.
+func TestChangeFailureRateCarriesTheStateOfTheCurrentWeek(t *testing.T) {
+	rows := func(counts changefailure.Counts, stored uint64) periodRows {
+		return periodRows{changeFailure: []changeFailureAggRow{{view: changefailure.View{Counts: counts, StoredRows: stored}}}}
+	}
+	week := day("2026-08-24")
+	for _, tc := range []struct {
+		name    string
+		rows    periodRows
+		value   float64
+		hasData bool
+		state   string
+	}{
+		{"no read result", periodRows{}, 0, false, "null"},
+		{"no stored row", rows(changefailure.Counts{}, 0), 0, false, "null"},
+		{"stored rows of zeros", rows(changefailure.Counts{}, 3), 0, false, "not_applicable_no_deployments"},
+		{"an incident, no deployment", rows(changefailure.Counts{IncidentsViaDeployment: 1}, 1), 0, false, "not_applicable_no_deployments"},
+		{"deployments, no incident evidence", rows(changefailure.Counts{Deployments: 4, FailedNative: 1}, 2), 0, false, "unknown_no_incident_evidence"},
+		{"measured zero", rows(changefailure.Counts{Deployments: 4, IncidentsDirect: 1}, 2), 0, true, "measured"},
+		{"measured", rows(changefailure.Counts{Deployments: 4, FailedNative: 1, FailedHeuristic: 1, IncidentsDirect: 1}, 2), 0.5, true, "measured"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			state := func(m model.OperatingReviewMetric) string {
+				if m.RateState == nil {
+					return "null"
+				}
+				return *m.RateState
+			}
+			asCurrent := metricsByKey(t, computeReview("org-1", nil, week, tc.rows, periodRows{}))
+			got := asCurrent["change_failure_rate"]
+			if state(got) != tc.state || got.HasData != tc.hasData || got.Value != tc.value {
+				t.Errorf("as the current week: value %v hasData %v rateState %s, want %v %v %s", got.Value, got.HasData, state(got), tc.value, tc.hasData, tc.state)
+			}
+			for key, m := range asCurrent {
+				if key != "change_failure_rate" && m.RateState != nil {
+					t.Errorf("%s carries rateState %s", key, *m.RateState)
+				}
+			}
+			asPrior := metricsByKey(t, computeReview("org-1", nil, week, periodRows{}, tc.rows))["change_failure_rate"]
+			if asPrior.RateState != nil || asPrior.Delta.HasPriorData != tc.hasData || asPrior.Delta.PriorValue != tc.value {
+				t.Errorf("as the prior week: rateState %s hasPriorData %v priorValue %v, want null %v %v", state(asPrior), asPrior.Delta.HasPriorData, asPrior.Delta.PriorValue, tc.hasData, tc.value)
+			}
+		})
 	}
 }

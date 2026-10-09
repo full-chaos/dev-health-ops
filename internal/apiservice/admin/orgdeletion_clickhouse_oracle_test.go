@@ -210,4 +210,8 @@ var clickHouseOrgTablesAfterThePythonFreeze = map[string]string{
 	// (CHAOS-8895). Keyed by org_id and written by the daily metrics job, so an
 	// organization's rows must go when the organization is deleted.
 	"work_item_measure_capability": "111_work_item_measure_capability.sql",
+	// The daily change-failure counts of each repository (CHAOS-8981). Keyed
+	// by org_id and written by the daily metrics job, so an organization's rows
+	// must go when the organization is deleted.
+	"repo_change_failure_daily": "112_change_failure_rate_incident_basis.sql",
 }

@@ -7,6 +7,8 @@ import (
 	"time"
 
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
+
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/changefailure"
 )
 
 // dedupNaturalKeys ports api/queries/metrics.py's _DEDUP_BY_COMPUTED_AT,
@@ -24,6 +26,7 @@ var dedupNaturalKeys = map[string][]string{
 	"work_item_state_durations_daily": {"day", "provider", "work_scope_id", "team_id", "status"},
 	"work_item_metrics_daily":         {"day", "provider", "work_scope_id", "team_id"},
 	"deploy_metrics_daily":            {"day", "repo_id"},
+	changefailure.Table:               {"day", "repo_id"},
 }
 
 // nullableMetricColumns names every metricConfigs column that is
@@ -36,6 +39,52 @@ var dedupNaturalKeys = map[string][]string{
 var nullableMetricColumns = map[string]bool{
 	"cycle_time_p50_hours":      true,
 	"pr_first_review_p50_hours": true,
+	"revert_rate":               true,
+}
+
+// sourceColumns are the columns metricFromClause deduplicates for a metric:
+// the metric's own column, or the inputs of its fixed rule.
+func sourceColumns(table, column string) []string {
+	switch {
+	case table == changefailure.Table:
+		return changefailure.CountColumns
+	case table == "repo_metrics_daily" && column == "revert_rate":
+		return []string{"revert_rate", "prs_merged"}
+	default:
+		return []string{column}
+	}
+}
+
+// aggregateSQL returns a metric's value expression over deduplicated rows
+// and the expression that says whether the value is defined. "ratio" is
+// change failure rate's one rule (changefailure.WindowRateSQL), which here
+// only ranks contributors and drivers: the served value and its state come
+// from changefailure.Evaluate (BuildExplainResponse), so the rule has no
+// "defined" count and reports none; "merged_weighted" is total reverted / total merged
+// pull requests (the day's revert rate * prs_merged is its reverted count),
+// over the days that have a stored revert rate. A day without one is unknown
+// and adds nothing: the deprecated change_failure_rate column is never read
+// for it, because its 0 was not measured.
+func aggregateSQL(aggregator, column string) (value, known string) {
+	switch aggregator {
+	case "ratio":
+		return changefailure.WindowRateSQL, "toUInt64(0)"
+	case "merged_weighted":
+		return fmt.Sprintf("toFloat64(sum(%s * prs_merged) / nullIf(sumIf(prs_merged, isNotNull(%s)), 0))", column, column),
+			fmt.Sprintf("count(%s)", column)
+	default:
+		return fmt.Sprintf("toFloat64(%s(%s))", aggregator, column), fmt.Sprintf("count(%s)", column)
+	}
+}
+
+// definedOnly is the HAVING clause that drops a group whose value is
+// undefined: a contributor or driver with no deployment or no incident
+// evidence, or with no stored revert rate, is not shown as 0.
+func definedOnly(aggregator string) string {
+	if aggregator == "ratio" || aggregator == "merged_weighted" {
+		return "HAVING value IS NOT NULL"
+	}
+	return ""
 }
 
 // metricValueProjection applies the class ruling (b) dedup fix for a
@@ -81,6 +130,10 @@ func metricValueProjection(column string) string {
 func metricFromClause(table, column, scopeFilterSQL, startParam, endParam string) string {
 	keys := dedupNaturalKeys[table]
 	keyColumns := strings.Join(keys, ",\n        ")
+	projections := make([]string, 0, 2)
+	for _, source := range sourceColumns(table, column) {
+		projections = append(projections, metricValueProjection(source))
+	}
 	return fmt.Sprintf(`(
     SELECT
         %s,
@@ -90,7 +143,7 @@ func metricFromClause(table, column, scopeFilterSQL, startParam, endParam string
     %s
       AND org_id = {org_id:String}
     GROUP BY %s
-)`, keyColumns, metricValueProjection(column), table, startParam, endParam, scopeFilterSQL, keyColumns)
+)`, keyColumns, strings.Join(projections, ",\n        "), table, startParam, endParam, scopeFilterSQL, keyColumns)
 }
 
 // fetchMetricValue ports fetch_metric_value (api/queries/metrics.py:
@@ -119,13 +172,14 @@ func (reader *Reader) fetchMetricValue(ctx context.Context, table, column, aggre
 	// change_failure_rate) already return Float64/Float32 on their own,
 	// so this cast is a no-op for them -- never a value change, only a
 	// static, driver-safe destination type.
+	valueSQL, knownSQL := aggregateSQL(aggregator, column)
 	query := fmt.Sprintf(`
 SELECT
-    toFloat64(%s(%s)) AS value,
-    count(%s) AS known_count
+    %s AS value,
+    %s AS known_count
 FROM %s
 %s
-`, aggregator, column, column, fromClause, settingsMaxExecutionTime())
+`, valueSQL, knownSQL, fromClause, settingsMaxExecutionTime())
 
 	bindings := append([]dhclickhouse.Binding{
 		{Name: "start_day", Value: dateBindingValue(startDay)},
@@ -156,6 +210,40 @@ FROM %s
 	// as data and an empty window (sum() answers 0, avg() answers NaN)
 	// does not. Never a test on the aggregate itself.
 	return floatOrZero(value), knownCount > 0, nil
+}
+
+// fetchChangeFailureView reads the window's summed change-failure counts for
+// the scope and the number of stored rows behind them, from the newest version
+// of each repository and day.
+func (reader *Reader) fetchChangeFailureView(ctx context.Context, startDay, endDay time.Time, scopeFilterSQL string, scopeBindings []dhclickhouse.Binding, orgID string) (changefailure.View, error) {
+	if reader == nil || reader.client == nil {
+		return changefailure.View{}, ErrUnavailable
+	}
+	query := fmt.Sprintf(`
+SELECT %s
+FROM %s
+%s
+`, changefailure.ViewSumsSQL, metricFromClause(changefailure.Table, "change_failure_rate", scopeFilterSQL, "start_day", "end_day"), settingsMaxExecutionTime())
+	bindings := append([]dhclickhouse.Binding{
+		{Name: "start_day", Value: dateBindingValue(startDay)},
+		{Name: "end_day", Value: dateBindingValue(endDay)},
+		{Name: "org_id", Value: orgID},
+	}, scopeBindings...)
+	rows, err := reader.client.Query(ctx, query, bindings)
+	if err != nil {
+		return changefailure.View{}, fmt.Errorf("fetch change failure counts: %w", err)
+	}
+	defer rows.Close()
+	var view changefailure.View
+	if rows.Next() {
+		if err := rows.Scan(changefailure.ViewScanDest(&view)...); err != nil {
+			return changefailure.View{}, fmt.Errorf("scan change failure counts: %w", err)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return changefailure.View{}, fmt.Errorf("iterate change failure counts: %w", err)
+	}
+	return view, nil
 }
 
 // metricRow is one row fetchMetricContributors/fetchMetricDriverDelta
@@ -193,16 +281,18 @@ func (reader *Reader) fetchMetricContributors(ctx context.Context, table, column
 	// fetchMetricValue's own doc comment -- a sum-aggregated integer
 	// column returns UInt64, which this binary's native driver refuses to
 	// scan into a *float64 destination.
+	valueSQL, _ := aggregateSQL(aggregator, column)
 	query := fmt.Sprintf(`
 SELECT
     toString(%s) AS id,
-    toFloat64(%s(%s)) AS value
+    %s AS value
 FROM %s
 GROUP BY %s
+%s
 ORDER BY value DESC
 LIMIT {limit:UInt64}
 %s
-`, groupBy, aggregator, column, fromClause, groupBy, settingsMaxExecutionTime())
+`, groupBy, valueSQL, fromClause, groupBy, definedOnly(aggregator), settingsMaxExecutionTime())
 
 	bindings := append([]dhclickhouse.Binding{
 		{Name: "start_day", Value: dateBindingValue(startDay)},
@@ -253,6 +343,7 @@ func (reader *Reader) fetchMetricDriverDelta(ctx context.Context, table, column,
 
 	currentFrom := metricFromClause(table, column, scopeFilterSQL, "start_day", "end_day")
 	previousFrom := metricFromClause(table, column, scopeFilterSQL, "compare_start", "compare_end")
+	valueSQL, _ := aggregateSQL(aggregator, column)
 	// current/previous were a `WITH current AS (...), previous AS (...)`
 	// CTE pair until this fix: dev-health-go's client-side read-only
 	// guard (clickhouse/client.go's validateReadOnlyStatement) requires a
@@ -276,19 +367,20 @@ SELECT
     current.value AS value,
     CASE WHEN previous.value = 0 THEN 0 ELSE (current.value - previous.value) / previous.value * 100 END AS delta_pct
 FROM (
-    SELECT toString(%s) AS id, toFloat64(%s(%s)) AS value
+    SELECT toString(%s) AS id, %s AS value
     FROM %s
     GROUP BY %s
+    %s
 ) AS current
 LEFT JOIN (
-    SELECT toString(%s) AS id, toFloat64(%s(%s)) AS value
+    SELECT toString(%s) AS id, %s AS value
     FROM %s
     GROUP BY %s
 ) AS previous ON current.id = previous.id
 ORDER BY delta_pct DESC
 LIMIT {limit:UInt64}
 %s
-`, groupBy, aggregator, column, currentFrom, groupBy, groupBy, aggregator, column, previousFrom, groupBy, settingsMaxExecutionTime())
+`, groupBy, valueSQL, currentFrom, groupBy, definedOnly(aggregator), groupBy, valueSQL, previousFrom, groupBy, settingsMaxExecutionTime())
 
 	bindings := append([]dhclickhouse.Binding{
 		{Name: "start_day", Value: dateBindingValue(startDay)},

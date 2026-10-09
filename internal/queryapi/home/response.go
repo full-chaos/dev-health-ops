@@ -75,6 +75,12 @@ type MetricDelta struct {
 	HasData      bool         `json:"has_data"`
 	HasPriorData bool         `json:"has_prior_data"`
 	Spark        []SparkPoint `json:"spark"`
+	// RateState says why change failure rate has a value or not (CHAOS-8981):
+	// "measured" (the value may be 0), "unknown_no_incident_evidence" or
+	// "not_applicable_no_deployments". nil when the window holds no stored
+	// counts, and for every other metric. GraphQL only, like the presence
+	// flags.
+	RateState *string `json:"rate_state,omitempty"`
 }
 
 // ReworkThemeAllocation is the wire shape of ReworkThemeAllocation

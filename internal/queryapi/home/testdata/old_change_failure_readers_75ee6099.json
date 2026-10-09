@@ -1,0 +1,919 @@
+{
+  "about": "Statements of the readers of repo_metrics_daily.change_failure_rate and of dora_metrics_daily as they were BEFORE CHAOS-8981, with their bindings and the results they returned on the schema of that commit (ClickHouse migrations 000-111) over rows written by that commit's repo_metrics_daily writer. Recorded by running each reader at ops_sha against a real ClickHouse; the acr statement text is copied from acr_sha. The replay test seeds the same logical rows on the migrated schema and requires the same column types and values.",
+  "ops_sha": "75ee6099fc3de0a9fcc175c0270393b5de40cffb",
+  "acr_sha": "b2eac67",
+  "old_writer_insert_columns": [
+    "repo_id",
+    "day",
+    "commits_count",
+    "total_loc_touched",
+    "avg_commit_size_loc",
+    "large_commit_ratio",
+    "prs_merged",
+    "median_pr_cycle_hours",
+    "pr_cycle_p75_hours",
+    "pr_cycle_p90_hours",
+    "prs_with_first_review",
+    "pr_first_review_p50_hours",
+    "pr_first_review_p90_hours",
+    "pr_review_time_p50_hours",
+    "pr_pickup_time_p50_hours",
+    "large_pr_ratio",
+    "pr_rework_ratio",
+    "pr_size_p50_loc",
+    "pr_size_p90_loc",
+    "pr_comments_per_100_loc",
+    "pr_reviews_per_100_loc",
+    "rework_churn_ratio_30d",
+    "single_owner_file_ratio_30d",
+    "review_load_top_reviewer_ratio",
+    "bus_factor",
+    "code_ownership_gini",
+    "mttr_hours",
+    "change_failure_rate",
+    "computed_at",
+    "org_id"
+  ],
+  "statements": [
+    {
+      "reader": "ops home.fetchMetricValue(repo_metrics_daily, change_failure_rate, avg)",
+      "sql": "\n        SELECT\n\t\t\ttoInt64(count()) AS row_count,\n            toFloat64(avg(change_failure_rate)) AS value\n        FROM (\n            SELECT\n                day,\n                repo_id,\n                argMax(change_failure_rate, computed_at) AS change_failure_rate\n            FROM repo_metrics_daily\n            WHERE day >= {start_day:Date} AND day < {end_day:Date}\n            \n              AND org_id = {org_id:String}\n            GROUP BY day, repo_id\n        )\n    ",
+      "bindings": [
+        {
+          "name": "start_day",
+          "type": "string",
+          "value": "2026-09-01"
+        },
+        {
+          "name": "end_day",
+          "type": "string",
+          "value": "2026-09-07"
+        },
+        {
+          "name": "org_id",
+          "type": "string",
+          "value": "org-old-readers"
+        }
+      ],
+      "column_types": [
+        "Int64",
+        "Float64"
+      ],
+      "rows": [
+        [
+          "18",
+          "0.17777777777777778"
+        ]
+      ]
+    },
+    {
+      "reader": "ops home.fetchMetricSeries(repo_metrics_daily, change_failure_rate, avg)",
+      "sql": "\n        SELECT\n            day,\n            toFloat64(avg(change_failure_rate)) AS value\n        FROM (\n            SELECT\n                day,\n                repo_id,\n                argMax(change_failure_rate, computed_at) AS change_failure_rate\n            FROM repo_metrics_daily\n            WHERE day >= {start_day:Date} AND day < {end_day:Date}\n            \n              AND org_id = {org_id:String}\n            GROUP BY day, repo_id\n        )\n        GROUP BY day\n        ORDER BY day\n    ",
+      "bindings": [
+        {
+          "name": "start_day",
+          "type": "string",
+          "value": "2026-09-01"
+        },
+        {
+          "name": "end_day",
+          "type": "string",
+          "value": "2026-09-07"
+        },
+        {
+          "name": "org_id",
+          "type": "string",
+          "value": "org-old-readers"
+        }
+      ],
+      "column_types": [
+        "Date",
+        "Float64"
+      ],
+      "rows": [
+        [
+          "2026-09-01T00:00:00Z",
+          "0.18333333333333335"
+        ],
+        [
+          "2026-09-02T00:00:00Z",
+          "0.18333333333333335"
+        ],
+        [
+          "2026-09-03T00:00:00Z",
+          "0.18333333333333335"
+        ],
+        [
+          "2026-09-04T00:00:00Z",
+          "0.18333333333333335"
+        ],
+        [
+          "2026-09-05T00:00:00Z",
+          "0.18333333333333335"
+        ],
+        [
+          "2026-09-06T00:00:00Z",
+          "0.15"
+        ]
+      ]
+    },
+    {
+      "reader": "ops home.fetchMetricDriverDelta(repo_metrics_daily, change_failure_rate, repo_id)",
+      "sql": "\n        SELECT\n            current.id AS id,\n            current.value AS value,\n            CASE WHEN previous.value = 0 THEN 0 ELSE (current.value - previous.value) / previous.value * 100 END AS delta_pct\n        FROM (\n            SELECT repo_id AS id, avg(change_failure_rate) AS value\n            FROM (\n            SELECT\n                day,\n                repo_id,\n                argMax(change_failure_rate, computed_at) AS change_failure_rate\n            FROM repo_metrics_daily\n            WHERE day >= {start_day:Date} AND day < {end_day:Date}\n            \n              AND org_id = {org_id:String}\n            GROUP BY day, repo_id\n        )\n            GROUP BY repo_id\n        ) AS current\n        LEFT JOIN (\n            SELECT repo_id AS id, avg(change_failure_rate) AS value\n            FROM (\n            SELECT\n                day,\n                repo_id,\n                argMax(change_failure_rate, computed_at) AS change_failure_rate\n            FROM repo_metrics_daily\n            WHERE day >= {compare_start:Date} AND day < {compare_end:Date}\n            \n              AND org_id = {org_id:String}\n            GROUP BY day, repo_id\n        )\n            GROUP BY repo_id\n        ) AS previous ON current.id = previous.id\n        ORDER BY delta_pct DESC\n        LIMIT {limit:UInt32}\n    ",
+      "bindings": [
+        {
+          "name": "start_day",
+          "type": "string",
+          "value": "2026-09-01"
+        },
+        {
+          "name": "end_day",
+          "type": "string",
+          "value": "2026-09-07"
+        },
+        {
+          "name": "compare_start",
+          "type": "string",
+          "value": "2026-08-26"
+        },
+        {
+          "name": "compare_end",
+          "type": "string",
+          "value": "2026-09-01"
+        },
+        {
+          "name": "org_id",
+          "type": "string",
+          "value": "org-old-readers"
+        },
+        {
+          "name": "limit",
+          "type": "uint32",
+          "value": 3
+        }
+      ],
+      "column_types": [
+        "UUID",
+        "Float64",
+        "Float64"
+      ],
+      "rows": [
+        [
+          "0a000000-0000-4000-8000-000000000001",
+          "0.25",
+          "-50"
+        ],
+        [
+          "0a000000-0000-4000-8000-000000000002",
+          "0.19999999999999998",
+          "0"
+        ],
+        [
+          "0a000000-0000-4000-8000-000000000003",
+          "0.08333333333333333",
+          "0"
+        ]
+      ]
+    },
+    {
+      "reader": "acr devhealthfacts.readRepositoryMetrics (dev-health-acr b2eac67)",
+      "sql": "SELECT toString(repo_id), toString(day), toInt64(commits_count), toInt64(prs_merged), toFloat64(median_pr_cycle_hours), toFloat64(change_failure_rate), toUInt8(isNotNull(mttr_hours)), toFloat64(ifNull(mttr_hours, 0)), toInt64(bus_factor), toFloat64(code_ownership_gini), toInt64(total_days)\nFROM (\n\tSELECT repo_id, day, commits_count, prs_merged, median_pr_cycle_hours, change_failure_rate, mttr_hours, bus_factor, code_ownership_gini,\n\t\tcount() OVER (PARTITION BY repo_id) AS total_days\n\tFROM (\n\t\tSELECT repo_id, day, commits_count, prs_merged, median_pr_cycle_hours, change_failure_rate, mttr_hours, bus_factor, code_ownership_gini,\n\t\t\trow_number() OVER (PARTITION BY repo_id, day ORDER BY computed_at DESC, cityHash64(tuple(commits_count, prs_merged, median_pr_cycle_hours, change_failure_rate, ifNull(mttr_hours, -1), bus_factor, code_ownership_gini)) DESC) AS rn\n\t\tFROM repo_metrics_daily\n\t\tWHERE org_id = {org_id:String} AND toString(repo_id) IN {ids:Array(String)} AND day >= toDate({series_window_start:DateTime64(6,'UTC')}) AND day <= toDate({series_window_end:DateTime64(6,'UTC')})\n\t)\n\tWHERE rn = 1\n)\nORDER BY repo_id, day DESC\nLIMIT 200 BY repo_id",
+      "bindings": [
+        {
+          "name": "org_id",
+          "type": "string",
+          "value": "org-old-readers"
+        },
+        {
+          "name": "ids",
+          "type": "strings",
+          "value": [
+            "0a000000-0000-4000-8000-000000000001",
+            "0a000000-0000-4000-8000-000000000002",
+            "0a000000-0000-4000-8000-000000000003"
+          ]
+        },
+        {
+          "name": "series_window_start",
+          "type": "time",
+          "value": "2026-09-01T00:00:00Z"
+        },
+        {
+          "name": "series_window_end",
+          "type": "time",
+          "value": "2026-09-07T00:00:00Z"
+        }
+      ],
+      "column_types": [
+        "String",
+        "String",
+        "Int64",
+        "Int64",
+        "Float64",
+        "Float64",
+        "UInt8",
+        "Float64",
+        "Int64",
+        "Float64",
+        "Int64"
+      ],
+      "rows": [
+        [
+          "0a000000-0000-4000-8000-000000000001",
+          "2026-09-01",
+          "1",
+          "4",
+          "0",
+          "0.25",
+          "0",
+          "0",
+          "0",
+          "0",
+          "6"
+        ],
+        [
+          "0a000000-0000-4000-8000-000000000001",
+          "2026-09-02",
+          "1",
+          "4",
+          "0",
+          "0.25",
+          "0",
+          "0",
+          "0",
+          "0",
+          "6"
+        ],
+        [
+          "0a000000-0000-4000-8000-000000000001",
+          "2026-09-03",
+          "1",
+          "4",
+          "0",
+          "0.25",
+          "0",
+          "0",
+          "0",
+          "0",
+          "6"
+        ],
+        [
+          "0a000000-0000-4000-8000-000000000001",
+          "2026-09-04",
+          "1",
+          "4",
+          "0",
+          "0.25",
+          "0",
+          "0",
+          "0",
+          "0",
+          "6"
+        ],
+        [
+          "0a000000-0000-4000-8000-000000000001",
+          "2026-09-05",
+          "1",
+          "4",
+          "0",
+          "0.25",
+          "0",
+          "0",
+          "0",
+          "0",
+          "6"
+        ],
+        [
+          "0a000000-0000-4000-8000-000000000001",
+          "2026-09-06",
+          "1",
+          "4",
+          "0",
+          "0.25",
+          "0",
+          "0",
+          "0",
+          "0",
+          "6"
+        ],
+        [
+          "0a000000-0000-4000-8000-000000000002",
+          "2026-09-01",
+          "1",
+          "5",
+          "0",
+          "0.2",
+          "0",
+          "0",
+          "0",
+          "0",
+          "6"
+        ],
+        [
+          "0a000000-0000-4000-8000-000000000002",
+          "2026-09-02",
+          "1",
+          "5",
+          "0",
+          "0.2",
+          "0",
+          "0",
+          "0",
+          "0",
+          "6"
+        ],
+        [
+          "0a000000-0000-4000-8000-000000000002",
+          "2026-09-03",
+          "1",
+          "5",
+          "0",
+          "0.2",
+          "0",
+          "0",
+          "0",
+          "0",
+          "6"
+        ],
+        [
+          "0a000000-0000-4000-8000-000000000002",
+          "2026-09-04",
+          "1",
+          "5",
+          "0",
+          "0.2",
+          "0",
+          "0",
+          "0",
+          "0",
+          "6"
+        ],
+        [
+          "0a000000-0000-4000-8000-000000000002",
+          "2026-09-05",
+          "1",
+          "5",
+          "0",
+          "0.2",
+          "0",
+          "0",
+          "0",
+          "0",
+          "6"
+        ],
+        [
+          "0a000000-0000-4000-8000-000000000002",
+          "2026-09-06",
+          "1",
+          "5",
+          "0",
+          "0.2",
+          "0",
+          "0",
+          "0",
+          "0",
+          "6"
+        ],
+        [
+          "0a000000-0000-4000-8000-000000000003",
+          "2026-09-01",
+          "1",
+          "10",
+          "0",
+          "0.1",
+          "0",
+          "0",
+          "0",
+          "0",
+          "6"
+        ],
+        [
+          "0a000000-0000-4000-8000-000000000003",
+          "2026-09-02",
+          "1",
+          "10",
+          "0",
+          "0.1",
+          "0",
+          "0",
+          "0",
+          "0",
+          "6"
+        ],
+        [
+          "0a000000-0000-4000-8000-000000000003",
+          "2026-09-03",
+          "1",
+          "10",
+          "0",
+          "0.1",
+          "0",
+          "0",
+          "0",
+          "0",
+          "6"
+        ],
+        [
+          "0a000000-0000-4000-8000-000000000003",
+          "2026-09-04",
+          "1",
+          "10",
+          "0",
+          "0.1",
+          "0",
+          "0",
+          "0",
+          "0",
+          "6"
+        ],
+        [
+          "0a000000-0000-4000-8000-000000000003",
+          "2026-09-05",
+          "1",
+          "10",
+          "0",
+          "0.1",
+          "0",
+          "0",
+          "0",
+          "0",
+          "6"
+        ],
+        [
+          "0a000000-0000-4000-8000-000000000003",
+          "2026-09-06",
+          "1",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "0",
+          "6"
+        ]
+      ]
+    },
+    {
+      "reader": "ops explain.fetchMetricValue(repo_metrics_daily, change_failure_rate, avg)",
+      "sql": "\nSELECT\n    toFloat64(avg(change_failure_rate)) AS value,\n    count(change_failure_rate) AS known_count\nFROM (\n    SELECT\n        day,\n        repo_id,\n        argMax(change_failure_rate, computed_at) AS change_failure_rate\n    FROM repo_metrics_daily\n    WHERE day >= {start_day:Date} AND day < {end_day:Date}\n    \n      AND org_id = {org_id:String}\n    GROUP BY day,\n        repo_id\n)\nSETTINGS max_execution_time = 30\n",
+      "bindings": [
+        {
+          "name": "start_day",
+          "type": "string",
+          "value": "2026-09-01"
+        },
+        {
+          "name": "end_day",
+          "type": "string",
+          "value": "2026-09-07"
+        },
+        {
+          "name": "org_id",
+          "type": "string",
+          "value": "org-old-readers"
+        }
+      ],
+      "column_types": [
+        "Float64",
+        "UInt64"
+      ],
+      "rows": [
+        [
+          "0.17777777777777778",
+          "18"
+        ]
+      ]
+    },
+    {
+      "reader": "ops explain.fetchMetricContributors(repo_metrics_daily, change_failure_rate, repo_id, avg)",
+      "sql": "\nSELECT\n    toString(repo_id) AS id,\n    toFloat64(avg(change_failure_rate)) AS value\nFROM (\n    SELECT\n        day,\n        repo_id,\n        argMax(change_failure_rate, computed_at) AS change_failure_rate\n    FROM repo_metrics_daily\n    WHERE day >= {start_day:Date} AND day < {end_day:Date}\n    \n      AND org_id = {org_id:String}\n    GROUP BY day,\n        repo_id\n)\nGROUP BY repo_id\nORDER BY value DESC\nLIMIT {limit:UInt64}\nSETTINGS max_execution_time = 30\n",
+      "bindings": [
+        {
+          "name": "start_day",
+          "type": "string",
+          "value": "2026-09-01"
+        },
+        {
+          "name": "end_day",
+          "type": "string",
+          "value": "2026-09-07"
+        },
+        {
+          "name": "org_id",
+          "type": "string",
+          "value": "org-old-readers"
+        },
+        {
+          "name": "limit",
+          "type": "int",
+          "value": 6
+        }
+      ],
+      "column_types": [
+        "String",
+        "Float64"
+      ],
+      "rows": [
+        [
+          "0a000000-0000-4000-8000-000000000001",
+          "0.25"
+        ],
+        [
+          "0a000000-0000-4000-8000-000000000002",
+          "0.19999999999999998"
+        ],
+        [
+          "0a000000-0000-4000-8000-000000000003",
+          "0.08333333333333333"
+        ]
+      ]
+    },
+    {
+      "reader": "ops explain.fetchMetricDriverDelta(repo_metrics_daily, change_failure_rate, repo_id, avg)",
+      "sql": "\nSELECT\n    current.id AS id,\n    current.value AS value,\n    CASE WHEN previous.value = 0 THEN 0 ELSE (current.value - previous.value) / previous.value * 100 END AS delta_pct\nFROM (\n    SELECT toString(repo_id) AS id, toFloat64(avg(change_failure_rate)) AS value\n    FROM (\n    SELECT\n        day,\n        repo_id,\n        argMax(change_failure_rate, computed_at) AS change_failure_rate\n    FROM repo_metrics_daily\n    WHERE day >= {start_day:Date} AND day < {end_day:Date}\n    \n      AND org_id = {org_id:String}\n    GROUP BY day,\n        repo_id\n)\n    GROUP BY repo_id\n) AS current\nLEFT JOIN (\n    SELECT toString(repo_id) AS id, toFloat64(avg(change_failure_rate)) AS value\n    FROM (\n    SELECT\n        day,\n        repo_id,\n        argMax(change_failure_rate, computed_at) AS change_failure_rate\n    FROM repo_metrics_daily\n    WHERE day >= {compare_start:Date} AND day < {compare_end:Date}\n    \n      AND org_id = {org_id:String}\n    GROUP BY day,\n        repo_id\n)\n    GROUP BY repo_id\n) AS previous ON current.id = previous.id\nORDER BY delta_pct DESC\nLIMIT {limit:UInt64}\nSETTINGS max_execution_time = 30\n",
+      "bindings": [
+        {
+          "name": "start_day",
+          "type": "string",
+          "value": "2026-09-01"
+        },
+        {
+          "name": "end_day",
+          "type": "string",
+          "value": "2026-09-07"
+        },
+        {
+          "name": "compare_start",
+          "type": "string",
+          "value": "2026-08-26"
+        },
+        {
+          "name": "compare_end",
+          "type": "string",
+          "value": "2026-09-01"
+        },
+        {
+          "name": "org_id",
+          "type": "string",
+          "value": "org-old-readers"
+        },
+        {
+          "name": "limit",
+          "type": "int",
+          "value": 3
+        }
+      ],
+      "column_types": [
+        "String",
+        "Float64",
+        "Float64"
+      ],
+      "rows": [
+        [
+          "0a000000-0000-4000-8000-000000000001",
+          "0.25",
+          "-50"
+        ],
+        [
+          "0a000000-0000-4000-8000-000000000002",
+          "0.19999999999999998",
+          "0"
+        ],
+        [
+          "0a000000-0000-4000-8000-000000000003",
+          "0.08333333333333333",
+          "0"
+        ]
+      ]
+    },
+    {
+      "reader": "ops operatingreview.fetchRepoMetrics",
+      "sql": "\n        SELECT\n          sum(prs_merged) AS prs_merged,\n          avg(pr_first_review_p50_hours) AS pr_first_review_p50_hours,\n          avg(single_owner_file_ratio_30d) AS single_owner_file_ratio_30d,\n          avg(code_ownership_gini) AS code_ownership_gini,\n          min(bus_factor) AS bus_factor,\n          avg(change_failure_rate) AS change_failure_rate,\n          avg(mttr_hours) AS mttr_hours,\n          count() AS repo_metrics_known_count\n        FROM (\n          SELECT\n            day,\n            repo_id,\n            argMax(prs_merged, computed_at) AS prs_merged,\n            (argMax(tuple(pr_first_review_p50_hours), computed_at)).1 AS pr_first_review_p50_hours,\n            argMax(single_owner_file_ratio_30d, computed_at) AS single_owner_file_ratio_30d,\n            argMax(code_ownership_gini, computed_at) AS code_ownership_gini,\n            argMax(bus_factor, computed_at) AS bus_factor,\n            argMax(change_failure_rate, computed_at) AS change_failure_rate,\n            (argMax(tuple(mttr_hours), computed_at)).1 AS mttr_hours\n          FROM repo_metrics_daily\n          WHERE org_id = {org_id:String}\n            AND day >= {start:Date} AND day < {end:Date}\n          GROUP BY day, repo_id\n        )",
+      "bindings": [
+        {
+          "name": "org_id",
+          "type": "string",
+          "value": "org-old-readers"
+        },
+        {
+          "name": "start",
+          "type": "string",
+          "value": "2026-08-31"
+        },
+        {
+          "name": "end",
+          "type": "string",
+          "value": "2026-09-07"
+        }
+      ],
+      "column_types": [
+        "UInt64",
+        "Nullable(Float64)",
+        "Float64",
+        "Float64",
+        "UInt32",
+        "Float64",
+        "Nullable(Float64)",
+        "UInt64"
+      ],
+      "rows": [
+        [
+          "104",
+          "NULL",
+          "0",
+          "0",
+          "0",
+          "0.17777777777777778",
+          "NULL",
+          "18"
+        ]
+      ]
+    },
+    {
+      "reader": "ops aianalytics.loadRepoFlowRows",
+      "sql": "SELECT\n    toString(repo_id) AS entity_id,\n    uniqExact(day) AS data_days,\n    toNullable(avg(pr_first_review_p50_hours)) AS pr_first_review_p50_hours,\n    toNullable(avg(pr_rework_ratio)) AS pr_rework_ratio,\n    toNullable(avg(rework_churn_ratio_30d)) AS rework_churn_ratio_30d,\n    toNullable(avg(change_failure_rate)) AS change_failure_rate\nFROM (\n    SELECT *\n    FROM repo_metrics_daily\n    WHERE org_id = {org_id:String}\n    ORDER BY computed_at DESC\n    LIMIT 1 BY org_id, repo_id, day\n) AS repo_metrics_daily\nWHERE day >= today() - {window_days:UInt32}\n  AND org_id = {org_id:String}\nGROUP BY repo_id\nHAVING data_days >= 5\nORDER BY data_days DESC\nLIMIT 500",
+      "bindings": [
+        {
+          "name": "org_id",
+          "type": "string",
+          "value": "org-old-readers"
+        },
+        {
+          "name": "window_days",
+          "type": "uint32",
+          "value": 3650
+        }
+      ],
+      "column_types": [
+        "String",
+        "UInt64",
+        "Nullable(Float64)",
+        "Nullable(Float64)",
+        "Nullable(Float64)",
+        "Nullable(Float64)"
+      ],
+      "rows": [
+        [
+          "0a000000-0000-4000-8000-000000000001",
+          "7",
+          "NULL",
+          "0",
+          "0",
+          "0.2857142857142857"
+        ],
+        [
+          "0a000000-0000-4000-8000-000000000002",
+          "6",
+          "NULL",
+          "0",
+          "0",
+          "0.19999999999999998"
+        ],
+        [
+          "0a000000-0000-4000-8000-000000000003",
+          "6",
+          "NULL",
+          "0",
+          "0",
+          "0.08333333333333333"
+        ]
+      ]
+    },
+    {
+      "reader": "ops report.buildChartQuery(change_failure_rate, line, group by \"day\")",
+      "sql": "SELECT\n        toDate(day) AS x,\n        CAST(NULL, 'Nullable(String)') AS group_value,\n        avg(change_failure_rate) AS y\n    FROM (SELECT * FROM repo_metrics_daily ORDER BY computed_at DESC LIMIT 1 BY org_id, repo_id, day) AS repo_metrics_daily\n    WHERE\n        change_failure_rate IS NOT NULL AND\n        org_id = {org_id:String} AND\n        day >= {time_range_start:Date} AND\n        day <= {time_range_end:Date}\n    GROUP BY x\n    ORDER BY x",
+      "bindings": [
+        {
+          "name": "org_id",
+          "type": "string",
+          "value": "org-old-readers"
+        },
+        {
+          "name": "time_range_start",
+          "type": "string",
+          "value": "2026-09-01"
+        },
+        {
+          "name": "time_range_end",
+          "type": "string",
+          "value": "2026-09-06"
+        }
+      ],
+      "column_types": [
+        "Date",
+        "Nullable(String)",
+        "Float64"
+      ],
+      "rows": [
+        [
+          "2026-09-01T00:00:00Z",
+          "NULL",
+          "0.18333333333333335"
+        ],
+        [
+          "2026-09-02T00:00:00Z",
+          "NULL",
+          "0.18333333333333335"
+        ],
+        [
+          "2026-09-03T00:00:00Z",
+          "NULL",
+          "0.18333333333333335"
+        ],
+        [
+          "2026-09-04T00:00:00Z",
+          "NULL",
+          "0.18333333333333335"
+        ],
+        [
+          "2026-09-05T00:00:00Z",
+          "NULL",
+          "0.18333333333333335"
+        ],
+        [
+          "2026-09-06T00:00:00Z",
+          "NULL",
+          "0.15"
+        ]
+      ]
+    },
+    {
+      "reader": "ops report.buildChartQuery(change_failure_rate, bar, group by \"repo\")",
+      "sql": "SELECT\n        repo_id AS x,\n        CAST(NULL, 'Nullable(String)') AS group_value,\n        avg(change_failure_rate) AS y\n    FROM (SELECT * FROM repo_metrics_daily ORDER BY computed_at DESC LIMIT 1 BY org_id, repo_id, day) AS repo_metrics_daily\n    WHERE\n        change_failure_rate IS NOT NULL AND\n        org_id = {org_id:String} AND\n        day >= {time_range_start:Date} AND\n        day <= {time_range_end:Date}\n    GROUP BY x\n    ORDER BY y DESC, x",
+      "bindings": [
+        {
+          "name": "org_id",
+          "type": "string",
+          "value": "org-old-readers"
+        },
+        {
+          "name": "time_range_start",
+          "type": "string",
+          "value": "2026-09-01"
+        },
+        {
+          "name": "time_range_end",
+          "type": "string",
+          "value": "2026-09-06"
+        }
+      ],
+      "column_types": [
+        "UUID",
+        "Nullable(String)",
+        "Float64"
+      ],
+      "rows": [
+        [
+          "0a000000-0000-4000-8000-000000000001",
+          "NULL",
+          "0.25"
+        ],
+        [
+          "0a000000-0000-4000-8000-000000000002",
+          "NULL",
+          "0.19999999999999998"
+        ],
+        [
+          "0a000000-0000-4000-8000-000000000003",
+          "NULL",
+          "0.08333333333333333"
+        ]
+      ]
+    },
+    {
+      "reader": "ops report.buildChartQuery(change_failure_rate, scorecard, group by \"\")",
+      "sql": "SELECT\n        CAST('total', 'String') AS x,\n        CAST(NULL, 'Nullable(String)') AS group_value,\n        avg(change_failure_rate) AS y\n    FROM (SELECT * FROM repo_metrics_daily ORDER BY computed_at DESC LIMIT 1 BY org_id, repo_id, day) AS repo_metrics_daily\n    WHERE\n        change_failure_rate IS NOT NULL AND\n        org_id = {org_id:String} AND\n        day >= {time_range_start:Date} AND\n        day <= {time_range_end:Date}",
+      "bindings": [
+        {
+          "name": "org_id",
+          "type": "string",
+          "value": "org-old-readers"
+        },
+        {
+          "name": "time_range_start",
+          "type": "string",
+          "value": "2026-09-01"
+        },
+        {
+          "name": "time_range_end",
+          "type": "string",
+          "value": "2026-09-06"
+        }
+      ],
+      "column_types": [
+        "String",
+        "Nullable(String)",
+        "Float64"
+      ],
+      "rows": [
+        [
+          "total",
+          "NULL",
+          "0.17777777777777784"
+        ]
+      ]
+    },
+    {
+      "reader": "ops report.buildChartQuery(value, line, group by \"day\")",
+      "sql": "SELECT\n        toDate(day) AS x,\n        CAST(NULL, 'Nullable(String)') AS group_value,\n        avg(value) AS y\n    FROM (SELECT * FROM dora_metrics_daily ORDER BY computed_at DESC LIMIT 1 BY org_id, repo_id, day, metric_name) AS dora_metrics_daily\n    WHERE\n        value IS NOT NULL AND\n        org_id = {org_id:String} AND\n        day >= {time_range_start:Date} AND\n        day <= {time_range_end:Date}\n    GROUP BY x\n    ORDER BY x",
+      "bindings": [
+        {
+          "name": "org_id",
+          "type": "string",
+          "value": "org-old-readers"
+        },
+        {
+          "name": "time_range_start",
+          "type": "string",
+          "value": "2026-09-01"
+        },
+        {
+          "name": "time_range_end",
+          "type": "string",
+          "value": "2026-09-06"
+        }
+      ],
+      "column_types": [
+        "Date",
+        "Nullable(String)",
+        "Float64"
+      ],
+      "rows": [
+        [
+          "2026-09-01T00:00:00Z",
+          "NULL",
+          "2.15"
+        ],
+        [
+          "2026-09-02T00:00:00Z",
+          "NULL",
+          "2.15"
+        ],
+        [
+          "2026-09-03T00:00:00Z",
+          "NULL",
+          "2.15"
+        ],
+        [
+          "2026-09-04T00:00:00Z",
+          "NULL",
+          "2.15"
+        ],
+        [
+          "2026-09-05T00:00:00Z",
+          "NULL",
+          "2.15"
+        ],
+        [
+          "2026-09-06T00:00:00Z",
+          "NULL",
+          "2.15"
+        ]
+      ]
+    },
+    {
+      "reader": "ops report.buildChartQuery(value, bar, group by \"repo\")",
+      "sql": "SELECT\n        repo_id AS x,\n        CAST(NULL, 'Nullable(String)') AS group_value,\n        avg(value) AS y\n    FROM (SELECT * FROM dora_metrics_daily ORDER BY computed_at DESC LIMIT 1 BY org_id, repo_id, day, metric_name) AS dora_metrics_daily\n    WHERE\n        value IS NOT NULL AND\n        org_id = {org_id:String} AND\n        day >= {time_range_start:Date} AND\n        day <= {time_range_end:Date}\n    GROUP BY x\n    ORDER BY y DESC, x",
+      "bindings": [
+        {
+          "name": "org_id",
+          "type": "string",
+          "value": "org-old-readers"
+        },
+        {
+          "name": "time_range_start",
+          "type": "string",
+          "value": "2026-09-01"
+        },
+        {
+          "name": "time_range_end",
+          "type": "string",
+          "value": "2026-09-06"
+        }
+      ],
+      "column_types": [
+        "UUID",
+        "Nullable(String)",
+        "Float64"
+      ],
+      "rows": [
+        [
+          "0a000000-0000-4000-8000-000000000001",
+          "NULL",
+          "2.1500000000000004"
+        ],
+        [
+          "0a000000-0000-4000-8000-000000000002",
+          "NULL",
+          "2.1500000000000004"
+        ],
+        [
+          "0a000000-0000-4000-8000-000000000003",
+          "NULL",
+          "2.1500000000000004"
+        ]
+      ]
+    }
+  ]
+}

@@ -8,11 +8,17 @@
   "doc": "Move the checked-in worker job kinds to the River transport."
  },
  {
-  "revision": "0148",
-  "down": "0147",
+  "revision": "0149",
+  "down": "0148",
   "labels": "application_schema",
   "realHead": true,
   "head": true,
+  "doc": "Add ``daily_metrics_runs.touched_take_at`` -- the take time of the touched days a run was started for."
+ },
+ {
+  "revision": "0148",
+  "down": "0147",
+  "labels": "application_schema",
   "doc": "Add ``daily_metrics_runs.full_org`` -- whether a run computes the whole organization."
  },
  {

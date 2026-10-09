@@ -36,6 +36,8 @@ The exact pairs, labels, units, thresholds, and population are defined by the cu
 4. **Scope, period, and filters** determine which work can appear.
 5. **Point details or supporting actions**, when available, provide the evidence path.
 
+For a repository, the cycle-time axis of a week or month is the median over every pull request merged in that period. Each pull request has one weight, so a day with many merges counts once per pull request, not once per day. A period with no merge has no point. See [pull request cycle time](../../reference/metrics/definitions.md#pull-request-cycle-time).
+
 Quadrants use the displayed measures rather than a hidden composite performance score. Read the values and units first; the zone label is secondary.
 
 ## Read a point

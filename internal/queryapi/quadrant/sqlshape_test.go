@@ -37,6 +37,10 @@ func TestOrgIDScopesEveryQuadrantMetricReadAtTheSameNestingDepthAsFinal(t *testi
 			"repo_metrics_daily AS m FINAL",
 			"INNER JOIN repos FINAL ON repos.id = m.repo_id AND repos.org_id",
 		}},
+		{"RepoMetrics cycle_time (git_pull_requests + repos join)", RepoMetrics["cycle_time"], []string{
+			"git_pull_requests AS m FINAL",
+			"INNER JOIN repos FINAL ON repos.id = m.repo_id AND repos.org_id",
+		}},
 		{"RepoMetrics wip (work_item_metrics_daily + repos join on work_scope_id)", RepoMetrics["wip"], []string{
 			"work_item_metrics_daily AS m FINAL",
 			"INNER JOIN repos FINAL ON repos.repo = m.work_scope_id AND repos.org_id",

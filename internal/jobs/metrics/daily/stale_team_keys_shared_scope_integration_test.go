@@ -211,6 +211,25 @@ FROM work_item_state_durations_daily FINAL WHERE org_id = ? AND day = ? GROUP BY
 	return out
 }
 
+// countSharedScopeRowsOfTeamsSince is the number of stored rows of the team
+// ids in the three shared tables whose computed_at is a time or later.
+func countSharedScopeRowsOfTeamsSince(
+	t *testing.T, ctx context.Context, conn driver.Conn, org string, since time.Time, teams ...string,
+) uint64 {
+	t.Helper()
+	var total uint64
+	for _, table := range []string{"work_item_metrics_daily", "estimate_coverage_metrics_daily", "work_item_state_durations_daily"} {
+		var count uint64
+		if err := conn.QueryRow(ctx, "SELECT count() FROM "+table+
+			" WHERE org_id = ? AND day = ? AND ifNull(team_id, '') IN ? AND computed_at >= ?",
+			org, sharedScopeDay, teams, since).Scan(&count); err != nil {
+			t.Fatalf("count the rows of %v in %s: %v", teams, table, err)
+		}
+		total += count
+	}
+	return total
+}
+
 func TestTwoPartitionsOfOneWorkScopeEndTheDayUnderTheNewTeamIDs(t *testing.T) {
 	ctx := context.Background()
 	conn := workItemAttributionLinkedIssueMigratedClickHouse(t, ctx)
@@ -300,13 +319,187 @@ func TestTwoPartitionsOfOneWorkScopeEndTheDayUnderTheNewTeamIDs(t *testing.T) {
 				t.Errorf("the day after the recompute, by team:\n got  %v\n want %v", after, want)
 			}
 
-			// The end of a run can be tried again: it then writes nothing.
-			if written := endStaleKeyRun(t, ctx, conn, second, clockA.Add(2*time.Hour)); written != 0 {
-				t.Errorf("a second end of the run wrote %d row(s) of zeros, want 0", written)
+			// The end of a run can be tried again: it then changes nothing a
+			// reader sees and writes no row under an old id.
+			again := clockA.Add(2 * time.Hour)
+			endStaleKeyRun(t, ctx, conn, second, again)
+			if after := readSharedScope(t, ctx, conn, org); !reflect.DeepEqual(after, want) {
+				t.Errorf("a second end of the run changed the day:\n got  %v\n want %v", after, want)
 			}
-			if again := readSharedScope(t, ctx, conn, org); !reflect.DeepEqual(again, want) {
-				t.Errorf("a second end of the run changed the day:\n got  %v\n want %v", again, want)
+			if rows := countSharedScopeRowsOfTeamsSince(t, ctx, conn, org, again, "ENG", "OPS"); rows != 0 {
+				t.Errorf("a second end of the run wrote %d row(s) under the old ids, want 0", rows)
 			}
 		})
+	}
+}
+
+// The rows of a shared work scope, not only its keys: an item moves from one
+// active team to another, and the partition that holds the item writes the new
+// attribution while the other partition has already read the old one. Both
+// keys are right, so no key is superseded; but the partition that read first
+// and wrote last stores the item under its old team, and the day counts the
+// item twice. The end of the run computes the rows of the scope once, after
+// every partition wrote its attributions, and stores them as the newest rows,
+// in each of the three work-item tables.
+func TestTheEndOfARunSettlesTheRowsOfASharedWorkScope(t *testing.T) {
+	ctx := context.Background()
+	conn := workItemAttributionLinkedIssueMigratedClickHouse(t, ctx)
+	day := sharedScopeDay
+	for index, testCase := range []struct {
+		// family is the family of partition A that partition B runs inside,
+		// before A's first batch into table; measure is read from table.
+		family, table, measure string
+	}{
+		{"work_item", "work_item_metrics_daily", "wip_count_end_of_day"},
+		{"work_item_estimate", "estimate_coverage_metrics_daily", "backlog_size"},
+		{"work_item_state", "work_item_state_durations_daily", "items_touched"},
+	} {
+		t.Run(testCase.family, func(t *testing.T) {
+			org := fmt.Sprintf("00000000-0000-4000-8000-0000005d%04d", index+1)
+			repos := []RepositoryID{RepositoryID(sharedScopeRepoAPI.String()), RepositoryID(sharedScopeRepoWeb.String())}
+			seedSharedScopeTeams(t, ctx, conn, org, day.Add(-72*time.Hour),
+				staleKeyAcceptanceTeam{id: "ENG", nativeKey: "ENG", active: true},
+				staleKeyAcceptanceTeam{id: "OPS", nativeKey: "OPS", active: true},
+			)
+			started := day.Add(-24 * time.Hour)
+			item := func(repo uuid.UUID, id, teamKey string, synced time.Time) {
+				t.Helper()
+				if err := conn.Exec(ctx, `INSERT INTO work_items (
+    repo_id, work_item_id, provider, type, status, project_id, native_team_key,
+    created_at, started_at, story_points, org_id, last_synced)
+    VALUES (?, ?, 'linear', 'story', 'in_progress', 'board-1', ?, ?, ?, ?, ?, ?)`,
+					repo, id, teamKey, day.Add(-48*time.Hour), started, 3.0, org, synced); err != nil {
+					t.Fatalf("insert work item %s: %v", id, err)
+				}
+			}
+			for _, seeded := range []struct {
+				repo uuid.UUID
+				id   string
+			}{{sharedScopeRepoAPI, "A-1"}, {sharedScopeRepoWeb, "W-1"}} {
+				item(seeded.repo, seeded.id, "ENG", day.Add(12*time.Hour))
+				if err := conn.Exec(ctx, `INSERT INTO work_item_transitions
+    (repo_id, work_item_id, occurred_at, provider, from_status, to_status, from_status_raw, to_status_raw, actor, org_id, last_synced)
+    VALUES (?, ?, ?, 'linear', 'todo', 'in_progress', 'todo', 'in_progress', '', ?, ?)`,
+					seeded.repo, seeded.id, started, org, day.Add(12*time.Hour)); err != nil {
+					t.Fatalf("insert transition of %s: %v", seeded.id, err)
+				}
+			}
+			byTeam := func() map[string]float64 {
+				t.Helper()
+				rows, err := conn.Query(ctx, "SELECT ifNull(team_id, ''), toFloat64(sum("+testCase.measure+")) FROM "+testCase.table+
+					" FINAL WHERE org_id = ? AND day = ? GROUP BY ifNull(team_id, '') HAVING sum("+testCase.measure+") > 0", org, day)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer rows.Close()
+				out := map[string]float64{}
+				for rows.Next() {
+					var team string
+					var value float64
+					if err := rows.Scan(&team, &value); err != nil {
+						t.Fatal(err)
+					}
+					out[team] = value
+				}
+				return out
+			}
+
+			history := day.Add(30 * time.Hour)
+			first := Run{ID: uuid.NewString(), OrganizationID: org, TargetDay: day, FullOrg: true, DiscoveredRepoIDs: repos}
+			for _, repo := range []uuid.UUID{sharedScopeRepoAPI, sharedScopeRepoWeb} {
+				for _, family := range sharedScopeFamilies {
+					runSharedScopeFamily(t, ctx, conn, family, first, repo, history)
+				}
+			}
+			endStaleKeyRun(t, ctx, conn, first, history.Add(time.Minute))
+			if before := byTeam(); !reflect.DeepEqual(before, map[string]float64{"ENG": 2}) {
+				t.Fatalf("the first compute is not the case: %s of %s by team = %v", testCase.measure, testCase.table, before)
+			}
+
+			// The item of repository web moves to team OPS.
+			item(sharedScopeRepoWeb, "W-1", "OPS", history.Add(time.Hour))
+
+			// The recompute, both partitions in one second: A reads the scope,
+			// then B runs whole (it writes the new attribution of its item and
+			// its rows), then A writes the rows of its older read.
+			clock := history.Add(10 * time.Hour)
+			second := Run{ID: uuid.NewString(), OrganizationID: org, TargetDay: day, FullOrg: true, DiscoveredRepoIDs: repos}
+			hooked := &sharedScopeHookConn{Conn: conn, beforeInsertInto: testCase.table, hook: func() {
+				for _, family := range sharedScopeFamilies {
+					runSharedScopeFamily(t, ctx, conn, family, second, sharedScopeRepoWeb, clock)
+				}
+			}}
+			for _, family := range sharedScopeFamilies {
+				on := driver.Conn(conn)
+				if family == testCase.family {
+					on = hooked
+				}
+				runSharedScopeFamily(t, ctx, on, family, second, sharedScopeRepoAPI, clock)
+			}
+			if !hooked.fired {
+				t.Fatal("partition B did not run inside partition A: the case did not measure")
+			}
+			endStaleKeyRun(t, ctx, conn, second, clock)
+
+			if after, want := byTeam(), map[string]float64{"ENG": 1, "OPS": 1}; !reflect.DeepEqual(after, want) {
+				t.Errorf("%s of %s by team = %v, want %v: each item once, under its team of today",
+					testCase.measure, testCase.table, after, want)
+			}
+		})
+	}
+}
+
+// Two runs of one day (two generations: the nightly run and a tagged re-run)
+// that end at the same time: the end of the second run runs whole inside the
+// end of the first, before its first write, on the same clock. Both read the
+// same stored inputs, so both compute the same rows and the same stale keys,
+// and the day ends right whichever write is stored last.
+func TestTwoRunsOfOneDayThatEndTogetherLeaveTheDayRight(t *testing.T) {
+	ctx := context.Background()
+	conn := workItemAttributionLinkedIssueMigratedClickHouse(t, ctx)
+	day := sharedScopeDay
+	const org = "00000000-0000-4000-8000-0000005e0001"
+	repos := []RepositoryID{RepositoryID(sharedScopeRepoAPI.String()), RepositoryID(sharedScopeRepoWeb.String())}
+	seedSharedScopeTeams(t, ctx, conn, org, day.Add(-72*time.Hour),
+		staleKeyAcceptanceTeam{id: "ENG", nativeKey: "ENG", active: true},
+		staleKeyAcceptanceTeam{id: "OPS", nativeKey: "OPS", active: true},
+	)
+	seedSharedScopeItems(t, ctx, conn, org)
+	partitions := func(run Run, clock time.Time) {
+		for _, repo := range []uuid.UUID{sharedScopeRepoAPI, sharedScopeRepoWeb} {
+			for _, family := range sharedScopeFamilies {
+				runSharedScopeFamily(t, ctx, conn, family, run, repo, clock)
+			}
+		}
+	}
+	history := day.Add(30 * time.Hour)
+	first := Run{ID: uuid.NewString(), OrganizationID: org, TargetDay: day, FullOrg: true, DiscoveredRepoIDs: repos}
+	partitions(first, history)
+	endStaleKeyRun(t, ctx, conn, first, history.Add(time.Minute))
+	before := readSharedScope(t, ctx, conn, org)
+	seedSharedScopeTeams(t, ctx, conn, org, history.Add(time.Hour),
+		staleKeyAcceptanceTeam{id: "ENG", nativeKey: "ENG", active: false},
+		staleKeyAcceptanceTeam{id: "linear:ENG", nativeKey: "ENG", active: true},
+		staleKeyAcceptanceTeam{id: "OPS", nativeKey: "OPS", active: false},
+		staleKeyAcceptanceTeam{id: "linear:OPS", nativeKey: "OPS", active: true},
+	)
+
+	// Two runs compute the day; then both end on one clock, the second inside
+	// the first.
+	clock := history.Add(10 * time.Hour)
+	nightly := Run{ID: uuid.NewString(), OrganizationID: org, TargetDay: day, FullOrg: true, DiscoveredRepoIDs: repos}
+	tagged := Run{ID: uuid.NewString(), OrganizationID: org, TargetDay: day, FullOrg: true, DiscoveredRepoIDs: repos}
+	partitions(nightly, clock)
+	partitions(tagged, clock)
+	hooked := &sharedScopeHookConn{Conn: conn, beforeInsertInto: "work_item_metrics_daily", hook: func() {
+		endStaleKeyRun(t, ctx, conn, tagged, clock)
+	}}
+	endStaleKeyRun(t, ctx, hooked, nightly, clock)
+	if !hooked.fired {
+		t.Fatal("the end of the second run did not run inside the end of the first: the case did not measure")
+	}
+	want := map[string]string{"linear:ENG": before["ENG"], "linear:OPS": before["OPS"]}
+	if after := readSharedScope(t, ctx, conn, org); !reflect.DeepEqual(after, want) || len(want) != 2 {
+		t.Errorf("the day after two runs ended together, by team:\n got  %v\n want %v", after, want)
 	}
 }

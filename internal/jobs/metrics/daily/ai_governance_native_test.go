@@ -48,7 +48,7 @@ func isTeamRuleRead(query string) bool {
 		return true
 	}
 	for _, table := range StaleTeamKeyTables() {
-		if query == table.LiveKeysQuery() {
+		if query == table.LiveKeyVersionsQuery() {
 			return true
 		}
 	}

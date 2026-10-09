@@ -2,6 +2,7 @@ package teamkeytables
 
 import (
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -55,6 +56,15 @@ func TestTheLivePredicateNamesEveryMeasureWithTheQualifier(t *testing.T) {
 		"SELECT toString(team_id) FROM team_complexity_daily WHERE org_id = ? AND day = ? GROUP BY toString(team_id) HAVING "+
 			TeamComplexityDaily.LiveHaving("")+" ORDER BY toString(team_id)"; got != want {
 		t.Errorf("LiveKeysQuery:\n got  %s\n want %s", got, want)
+	}
+	// The writer's read: the same keys, and the newest version of each.
+	if got, want := TeamComplexityDaily.LiveKeyVersionsQuery(),
+		"SELECT toString(team_id), max(computed_at) FROM team_complexity_daily WHERE org_id = ? AND day = ? GROUP BY toString(team_id) HAVING "+
+			TeamComplexityDaily.LiveHaving("")+" ORDER BY toString(team_id)"; got != want {
+		t.Errorf("LiveKeyVersionsQuery:\n got  %s\n want %s", got, want)
+	}
+	if got := CompoundingRiskDailyTeam.LiveKeyVersionsQuery(); !strings.Contains(got, "AND (scope = 'team') GROUP BY") {
+		t.Errorf("LiveKeyVersionsQuery of a shared table has no fixed predicate: %s", got)
 	}
 	// A table that the family shares with another writer reads its own rows.
 	if got, want := CompoundingRiskDailyTeam.LiveKeysQuery(),

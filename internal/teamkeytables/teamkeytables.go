@@ -388,6 +388,27 @@ func (table Table) LiveKeysQuery() string {
 		" ORDER BY " + keys
 }
 
+// LiveKeyVersionsQuery is LiveKeysQuery with one more column after the key
+// columns: the newest computed_at of the key. The writer makes a row of zeros
+// strictly newer than it, so the row of zeros and the row it supersedes never
+// hold one computed_at (a reader that takes the newest row by argMax or by
+// LIMIT 1 BY may take either row of such a pair).
+func (table Table) LiveKeyVersionsQuery() string {
+	expressions := make([]string, 0, len(table.Keys))
+	for _, column := range table.Keys {
+		expressions = append(expressions, column.ReadExpression())
+	}
+	where := ""
+	if table.Where != "" {
+		where = " AND (" + table.Where + ")"
+	}
+	keys := strings.Join(expressions, ", ")
+	return "SELECT " + keys + ", max(computed_at) FROM " + table.Table +
+		" WHERE org_id = ? AND " + table.DayColumn + " = ?" + where +
+		" GROUP BY " + keys + " HAVING " + table.LiveHaving("") +
+		" ORDER BY " + keys
+}
+
 // ScopeTuple is the values of the scope columns of one key, joined. key holds
 // the values of Keys in their order.
 func (table Table) ScopeTuple(key []string) string {

@@ -16,7 +16,8 @@ import (
 
 // StaleKeyRetractor supersedes, once for a run, the team keys of the day that
 // the run's partitions no longer produce, in the tables whose keys more than
-// one partition of a run can write. The finalize handler calls it after every
+// one partition of a run can write, and settles the rows of the work-item
+// tables among them. The finalize handler calls it after every
 // partition of the run is done and before the finalize families.
 type StaleKeyRetractor interface {
 	RetractStaleKeys(ctx context.Context, run Run) (rowsWritten int, err error)
@@ -91,45 +92,60 @@ func (retractor *RunStaleKeyRetractor) RetractStaleKeys(ctx context.Context, run
 	day := scope.day
 	conn := retractor.conn
 
-	workItemKeys := func(keyCtx context.Context) (staleKeyScope, []staleKey, error) {
+	// For the three work-item tables the step also stores the rows it
+	// computed: it runs after every partition wrote its attributions, so its
+	// rows are the rows of the day, and it writes them newer than the rows of
+	// the partitions (see retractStaleTeamKeysOfRun, step 4).
+	workItemKeys := func(keyCtx context.Context) (runStaleKeys, error) {
 		read, triplet, err := computeWorkItemTriplet(keyCtx, conn, run, partition, scope)
 		if err != nil {
-			return nil, nil, err
+			return runStaleKeys{}, err
 		}
 		keys := make([]staleKey, 0, len(triplet.MetricsDaily))
 		for _, row := range triplet.MetricsDaily {
 			keys = append(keys, staleKey{row.Provider, row.WorkScopeID, row.TeamID})
 		}
-		return read.staleKeyScope(), keys, nil
+		return runStaleKeys{scope: read.staleKeyScope(), keys: keys,
+			writeRows: func(writeCtx context.Context, version time.Time) (int, error) {
+				return WriteWorkItemMetricsDaily(writeCtx, conn, run.OrganizationID, day, triplet.MetricsDaily, version)
+			}}, nil
 	}
-	estimateKeys := func(keyCtx context.Context) (staleKeyScope, []staleKey, error) {
+	estimateKeys := func(keyCtx context.Context) (runStaleKeys, error) {
 		read, rows, err := computeWorkItemEstimateRows(keyCtx, conn, run, partition, scope)
 		if err != nil {
-			return nil, nil, err
+			return runStaleKeys{}, err
 		}
 		keys := make([]staleKey, 0, len(rows))
 		for _, row := range rows {
 			keys = append(keys, staleKey{row.Provider, row.WorkScopeID, row.TeamID})
 		}
-		return read.staleKeyScope(), keys, nil
+		return runStaleKeys{scope: read.staleKeyScope(), keys: keys,
+			writeRows: func(writeCtx context.Context, version time.Time) (int, error) {
+				return WriteEstimateCoverageMetricsDaily(writeCtx, conn, run.OrganizationID, day, rows, version)
+			}}, nil
 	}
-	stateKeys := func(keyCtx context.Context) (staleKeyScope, []staleKey, error) {
+	stateKeys := func(keyCtx context.Context) (runStaleKeys, error) {
 		computed, err := computeWorkItemStateRows(keyCtx, conn, run, partition, scope, retractor.nowUTC())
 		if err != nil {
-			return nil, nil, err
+			return runStaleKeys{}, err
 		}
 		keys := make([]staleKey, 0, len(computed.rows))
 		for _, row := range computed.rows {
 			keys = append(keys, staleKey{row.Provider, row.WorkScopeID, row.TeamID, row.Status})
 		}
-		return computed.read.staleKeyScope(), keys, nil
+		return runStaleKeys{scope: computed.read.staleKeyScope(), keys: keys,
+			writeRows: func(writeCtx context.Context, version time.Time) (int, error) {
+				return WriteWorkItemStateDurationsDaily(writeCtx, conn, run.OrganizationID, day, computed.rows, version)
+			}}, nil
 	}
-	governanceKeys := func(keyCtx context.Context) (staleKeyScope, []staleKey, error) {
+	// ai_governance_coverage_daily: every partition computes the same rows
+	// from the same artifacts, so the step supersedes the stale keys only.
+	governanceKeys := func(keyCtx context.Context) (runStaleKeys, error) {
 		// The window of the family: the day, inclusive of its last
 		// microsecond (see AIGovernanceExecutor).
 		artifacts, err := LoadGovernanceArtifacts(keyCtx, conn, run.OrganizationID, day, day.Add(24*time.Hour-time.Microsecond))
 		if err != nil {
-			return nil, nil, err
+			return runStaleKeys{}, err
 		}
 		coverage := aigovernance.RollupCoverageDaily(artifacts, day)
 		keys := make([]staleKey, 0, len(coverage))
@@ -143,15 +159,15 @@ func (retractor *RunStaleKeyRetractor) RetractStaleKeys(ctx context.Context, run
 			}
 			keys = append(keys, staleKey{teamID, repoID.String()})
 		}
-		return nil, keys, nil
+		return runStaleKeys{keys: keys}, nil
 	}
 
 	// Each step names its table in its call, so the census can read which
 	// table the run-level rule is applied to.
 	//
-	// The version of the rows of zeros is read when the step starts, on this
-	// host's clock. It only orders the row of zeros after the row it
-	// supersedes; which keys are superseded does not depend on it.
+	// The clock of this host is read when a step starts. It is only the
+	// version of the rows the step writes; which keys are superseded does not
+	// depend on it.
 	steps := []func() (string, int, error){
 		func() (string, int, error) {
 			rows, err := retractStaleTeamKeysOfRun(ctx, conn, teamkeytables.WorkItemMetricsDaily,

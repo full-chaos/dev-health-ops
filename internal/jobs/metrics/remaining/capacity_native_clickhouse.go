@@ -555,6 +555,27 @@ type capacityTableRequirement struct {
 	sortingKey []string
 }
 
+// withLiveRowColumns returns the columns a statement names itself plus the
+// columns the live-row rule of the table reads (package liverow). The rule is
+// built into the statement text at run time, so its columns are not in the
+// query text of this package: they are added here, or a schema that lacks one
+// of them would pass the startup check and then fail every read that holds
+// the rule.
+func withLiveRowColumns(table string, named ...string) []string {
+	columns := append([]string(nil), named...)
+	seen := map[string]bool{}
+	for _, column := range columns {
+		seen[column] = true
+	}
+	for _, column := range liverow.Columns(table) {
+		if !seen[column] {
+			seen[column] = true
+			columns = append(columns, column)
+		}
+	}
+	return columns
+}
+
 // capacityTableRequirements is every table the executor touches, and what it
 // needs from each.
 //
@@ -566,10 +587,12 @@ type capacityTableRequirement struct {
 // depend on is as much a precondition as a column they name.
 var capacityTableRequirements = map[string]capacityTableRequirement{
 	"work_item_metrics_daily": {
-		columns: []string{
+		// The target discovery and the throughput read hold the live-row
+		// rule of the table, which tests every measure column of it.
+		columns: withLiveRowColumns("work_item_metrics_daily",
 			"day", "org_id", "team_id", "work_scope_id",
 			"items_completed", "wip_count_end_of_day",
-		},
+		),
 		readWithFINAL: true,
 		// Migration 055 converts this table's engine to
 		// ReplacingMergeTree(computed_at), and migration 027 sets its

@@ -50,7 +50,9 @@ var stamps = []string{
 // is raw response text (R398), so a "Z" suffix or a trimmed zero is a diff.
 func TestAdminTimestampVenueOracle(t *testing.T) {
 	golden := venueoracle.OpenGolden(t, venueGolden("admin-timestamp-venue-oracle", t.Name(), "17f49f524b1b8975af3131974e14f6de019bd60fdacde6b3dbcc24470751f154"))
-	runAdminTimestampVenue(t, golden)
+	pin := venueoracle.OpenGoPin(t, venueoracle.GoPinSpec{Path: "testdata/admin-timestamp-venue-oracle.go-pin.json", SHA256: "5de11c9dde6c7b64cafdb2b861bdab4e9cd58190ed019d3468a7d1e7b857bc5a", Ruling: teamsRuling})
+	runAdminTimestampVenue(t, golden, pin)
+	pin.Finish(t)
 	golden.Finish(t)
 }
 
@@ -61,12 +63,14 @@ func TestAdminTimestampVenueOracle(t *testing.T) {
 // offset changes with daylight saving.
 func TestAdminTimestampServerZoneVenueOracle(t *testing.T) {
 	golden := venueoracle.OpenGolden(t, venueGolden("admin-timestamp-server-zone-venue-oracle", t.Name(), "d38c319c43a759cafab68772221d1cac676887b50dbeae489e09379c3ed6bbcd"))
+	pin := venueoracle.OpenGoPin(t, venueoracle.GoPinSpec{Path: "testdata/admin-timestamp-server-zone-venue-oracle.go-pin.json", SHA256: "10b1fb99f57560417ddba1fc1d7c01371ecbdaf54a6ce586f052b71182b72afb", Ruling: teamsRuling})
 	t.Setenv(containers.ClickHouseTimezoneEnv, "America/Los_Angeles")
-	runAdminTimestampVenue(t, golden)
+	runAdminTimestampVenue(t, golden, pin)
+	pin.Finish(t)
 	golden.Finish(t)
 }
 
-func runAdminTimestampVenue(t *testing.T, golden *venueoracle.Golden) {
+func runAdminTimestampVenue(t *testing.T, golden *venueoracle.Golden, pin *venueoracle.GoPin) {
 	zone := os.Getenv(containers.ClickHouseTimezoneEnv)
 	ctx := context.Background()
 	root := golden.PythonRoot(t, repoRoot(t))
@@ -147,6 +151,8 @@ VALUES ($1, $2, true, true, false, 0, now(), now())`, user.id, user.email)
 	receipt := venueoracle.Diff(t, base, requests, python, venueoracle.DiffOptions{
 		Golden:    golden,
 		Normalize: normalizeClock,
+		Retire:    retiredByTeamsRuling,
+		Pin:       pin,
 		// The seed must reach every stored shape, or a SAME could be two
 		// empty lists agreeing: each stamp's Python rendering must appear
 		// in the Go answer of the list routes.
@@ -300,4 +306,17 @@ func repoRoot(t *testing.T) string {
 // every replay must send the same bytes.
 func stableID(name string) uuid.UUID {
 	return uuid.MustParse(venueoracle.StableUUID("admin-stamp-" + name))
+}
+
+// teamsRuling retired the Python reference of the writes whose answers the
+// team id rules changed: an admin team is custom:<id>, a bare id resolves to
+// its one holder, team_uuid (the "id" field) derives from the id. The rule
+// tests in internal/api/teamsidentity and internal/providersync own that
+// contract; the reads of the seeded rows stay compared with Python.
+const teamsRuling = "chris D5685/D5711/D5712/D5714/D5717 (team id carry, CHAOS-8939/CHAOS-8940)"
+
+// retiredByTeamsRuling reports the writes, and the reads after them, that
+// answer with a team id the rules changed.
+func retiredByTeamsRuling(request venueoracle.Request) bool {
+	return strings.HasPrefix(request.Name, "clock: ") || request.Name == "POST an identity into an unknown team"
 }

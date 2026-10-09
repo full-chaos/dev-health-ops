@@ -25,7 +25,7 @@ const MaxArrayBytes = 64 * 1024
 var clickhouseStringQuote = strings.NewReplacer(`\`, `\\`, `'`, `\'`)
 
 // RenderedStringLen is the length of one element as clickhouse-go renders it
-// (clickhouse-go v2.47.0 bind.go format(): quotes around the value, `\` and `'`
+// (clickhouse-go v2.48.0 bind.go format(): quotes around the value, `\` and `'`
 // each doubled by a backslash).
 func RenderedStringLen(s string) int {
 	return len(clickhouseStringQuote.Replace(s)) + 2

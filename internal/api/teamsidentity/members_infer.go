@@ -391,12 +391,11 @@ func (h handlers) inferMembers(w http.ResponseWriter, r *http.Request) {
 		policy.WriteDetail(w, http.StatusNotFound, "Team not found", nil)
 		return
 	}
+	// The project is the team's own key, never a guess from its id: a team
+	// reaches a project only through what it holds (chris D5726).
 	projectKey := ""
 	if len(team.ProjectKeys) > 0 {
 		projectKey = team.ProjectKeys[0]
-	}
-	if projectKey == "" && !strings.Contains(teamID, ":") {
-		projectKey = teamID
 	}
 	if projectKey == "" {
 		policy.WriteDetail(w, http.StatusBadRequest, "Team does not have a Jira project key configured", nil)

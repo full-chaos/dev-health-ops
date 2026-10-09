@@ -248,6 +248,9 @@ func (adapter *ClickHouseQueryAdapter) Query(ctx context.Context, input QueryInp
 	if err != nil {
 		return QueryResult{}, err
 	}
+	if err := validateChartMetrics(ctx, definition.Charts); err != nil {
+		return QueryResult{}, err
+	}
 	result := QueryResult{Plan: definition.Plan, Metadata: map[string]string{"renderer_version": "reports.v1"}}
 	for _, spec := range definition.Charts {
 		chart, err := adapter.executeChart(ctx, spec)
@@ -273,6 +276,11 @@ type metricDefinition struct {
 	// metricDefinition.numeratorDenominator's caller in buildChartQuery.
 	Numerator   string `json:"numerator,omitempty"`
 	Denominator string `json:"denominator,omitempty"`
+	// ValueKind is not part of the registry artifact (that file mirrors the
+	// Python registry, and tests/reports/test_metric_registry_export.py holds
+	// it equal). It is set at load from nonNumericMetrics: "numeric" for every
+	// metric that is not named there.
+	ValueKind string `json:"-"`
 }
 
 type metricRegistryArtifact struct {
@@ -292,6 +300,7 @@ func mustLoadMetricRegistry() map[string]metricDefinition {
 	}
 	result := make(map[string]metricDefinition, len(artifact.Metrics))
 	for _, definition := range artifact.Metrics {
+		definition = applyGoDeclarations(definition)
 		if definition.CanonicalName == "" || definition.DisplayName == "" ||
 			definition.Unit == "" || !identifier.MatchString(definition.CanonicalName) ||
 			!identifier.MatchString(definition.SourceTable) {
@@ -303,6 +312,78 @@ func mustLoadMetricRegistry() map[string]metricDefinition {
 		result[definition.CanonicalName] = definition
 	}
 	return result
+}
+
+// The registry artifact mirrors the Python registry and cannot be edited from
+// Go, so what the Go reader knows about the real schema is declared here, once,
+// and applied to each entry at load (applyGoDeclarations).
+//
+// registryTableToSchemaTable maps a source table the registry names to the
+// table the migrations create. The Python registry names two tables that no
+// migration builds.
+var registryTableToSchemaTable = map[string]string{
+	"ic_landscape_rolling":           "ic_landscape_rolling_30d",
+	"work_item_state_duration_daily": "work_item_state_durations_daily",
+}
+
+// nonNumericMetrics names the registry entries whose column is not a number:
+// a dimension or an attribute of the row (text), or a point in time
+// (timestamp). A chart of one is refused with a ChartMetricError; every other
+// registry metric is numeric. The test
+// TestClickHouseQueryAdapterChartsEveryRegistryMetric holds this set equal to
+// the column types of the migrated schema.
+var nonNumericMetrics = map[string]string{
+	"assignee": "text", "author": "text", "reviewer": "text", "commit_hash": "text",
+	"size_bucket": "text", "work_item_id": "text", "investment_area": "text",
+	"project_stream": "text", "issue_type_norm": "text", "map_name": "text",
+	"created_at": "timestamp", "started_at": "timestamp", "completed_at": "timestamp",
+}
+
+const (
+	valueKindNumeric = "numeric"
+)
+
+func applyGoDeclarations(definition metricDefinition) metricDefinition {
+	if table, ok := registryTableToSchemaTable[definition.SourceTable]; ok {
+		definition.SourceTable = table
+	}
+	definition.ValueKind = valueKindNumeric
+	if kind, ok := nonNumericMetrics[definition.CanonicalName]; ok {
+		definition.ValueKind = kind
+	}
+	return definition
+}
+
+// ChartMetricError is the refusal of a chart of a metric the reader cannot
+// chart. It is a request error (it matches ErrContractMismatch), not a
+// dependency outage: retrying the same plan cannot change the answer.
+type ChartMetricError struct {
+	Metric string
+	Kind   string
+}
+
+func (err *ChartMetricError) Error() string {
+	return fmt.Sprintf("report chart metric %q is %s, not a number: it cannot be charted", err.Metric, err.Kind)
+}
+
+// Is makes the refusal an invalid-request error.
+func (err *ChartMetricError) Is(target error) bool { return target == ErrContractMismatch }
+
+// validateChartMetrics refuses every non-numeric chart of the plan before any
+// query runs, and logs the refusal with the metric name.
+func validateChartMetrics(ctx context.Context, charts []ChartSpec) error {
+	for _, spec := range charts {
+		definition, ok := supportedMetrics[spec.Metric]
+		if !ok || definition.ValueKind == valueKindNumeric {
+			continue
+		}
+		err := &ChartMetricError{Metric: spec.Metric, Kind: definition.ValueKind}
+		slog.ErrorContext(ctx, "report.chart_metric_refused",
+			"metric", spec.Metric, "value_kind", definition.ValueKind, "source_table", definition.SourceTable,
+			"chart_id", spec.ChartID, "error", err)
+		return err
+	}
+	return nil
 }
 
 var identifier = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
@@ -394,14 +475,14 @@ func buildChartWhere(spec ChartSpec, definition metricDefinition) (string, []any
 		if _, err := time.Parse(time.DateOnly, spec.TimeRangeStart); err != nil {
 			return "", nil, ErrContractMismatch
 		}
-		clauses = append(clauses, "day >= {time_range_start:Date}")
+		clauses = append(clauses, definition.dayColumn()+" >= {time_range_start:Date}")
 		parameters = append(parameters, clickhouse.Named("time_range_start", spec.TimeRangeStart))
 	}
 	if spec.TimeRangeEnd != "" {
 		if _, err := time.Parse(time.DateOnly, spec.TimeRangeEnd); err != nil {
 			return "", nil, ErrContractMismatch
 		}
-		clauses = append(clauses, "day <= {time_range_end:Date}")
+		clauses = append(clauses, definition.dayColumn()+" <= {time_range_end:Date}")
 		parameters = append(parameters, clickhouse.Named("time_range_end", spec.TimeRangeEnd))
 	}
 	if len(spec.FilterTeams) > 0 && definition.hasDimension("team") {
@@ -471,13 +552,14 @@ func (adapter *ClickHouseQueryAdapter) observeDedupGuard(ctx context.Context, sp
 
 func buildChartQuery(spec ChartSpec, definition metricDefinition) (string, []any, error) {
 	xExpression, xType, temporal := "'total'", "String", false
+	day := definition.dayColumn()
 	switch spec.GroupBy {
 	case "day":
-		xExpression, xType, temporal = "toDate(day)", "Date", true
+		xExpression, xType, temporal = "toDate("+day+")", "Date", true
 	case "week":
-		xExpression, xType, temporal = "toStartOfWeek(day)", "Date", true
+		xExpression, xType, temporal = "toStartOfWeek("+day+")", "Date", true
 	case "month":
-		xExpression, xType, temporal = "toStartOfMonth(day)", "Date", true
+		xExpression, xType, temporal = "toStartOfMonth("+day+")", "Date", true
 	case "team", "repo", "service":
 		if definition.hasDimension(spec.GroupBy) {
 			xExpression = spec.GroupBy + "_id"
@@ -487,7 +569,7 @@ func buildChartQuery(spec ChartSpec, definition metricDefinition) (string, []any
 	}
 	if spec.GroupBy == "" && (spec.ChartType == "line" || spec.ChartType == "heatmap") &&
 		definition.hasDimension("day") {
-		xExpression, xType, temporal = "toDate(day)", "Date", true
+		xExpression, xType, temporal = "toDate("+day+")", "Date", true
 	}
 	yExpression := averageExpression(definition.SourceTable, spec.Metric)
 	if strings.HasSuffix(spec.Metric, "_count") || definition.Unit == "count" {
@@ -599,6 +681,23 @@ func sourceFrom(metric string, definition metricDefinition) string {
     ) AS %s`,
 		definition.Denominator, definition.Numerator, definition.Denominator,
 		metric, dedupSource, definition.SourceTable)
+}
+
+// dayColumnByTable declares, once per source table, the Date column a chart
+// filters and buckets by when it is not the registry-wide default "day". A
+// snapshot table keys on the day of the snapshot instead.
+var dayColumnByTable = map[string]string{
+	"file_complexity_snapshots": "as_of_day",
+	"ic_landscape_rolling_30d":  "as_of_day",
+}
+
+// dayColumn is the Date column of the metric's source table that time ranges
+// and day/week/month buckets apply to.
+func (definition metricDefinition) dayColumn() string {
+	if column, ok := dayColumnByTable[definition.SourceTable]; ok {
+		return column
+	}
+	return "day"
 }
 
 func (definition metricDefinition) hasDimension(target string) bool {

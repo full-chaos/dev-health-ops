@@ -298,6 +298,11 @@ func fail(ctx context.Context, store RunStore, runID string, claim RunClaim, cod
 	if err := store.Fail(ctx, runID, claim, code); err != nil {
 		return jobruntime.Retryable(fmt.Errorf("%s: %w", code, err))
 	}
+	// A plan that charts a metric the reader refuses stays refused: no retry.
+	var refused *ChartMetricError
+	if errors.As(cause, &refused) {
+		return jobruntime.Permanent(fmt.Errorf("%s: %w", code, cause))
+	}
 	return jobruntime.Retryable(fmt.Errorf("%s: %w", code, cause))
 }
 

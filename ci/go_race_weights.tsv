@@ -152,6 +152,7 @@ internal/jobs/metrics/daily/reviewedges	1
 internal/jobs/metrics/finite	1
 internal/jobs/metrics/numerical	4
 internal/jobs/metrics/numerical/cpyrandom	4
+internal/jobs/metrics/prrework	1
 internal/jobs/metrics/querybound	1
 internal/jobs/metrics/remaining	31
 internal/jobs/metrics/remaining/stepcause	68

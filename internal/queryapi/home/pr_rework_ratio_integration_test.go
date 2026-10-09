@@ -44,6 +44,11 @@ func TestHomePRReworkRatio_CountsReviewedPullRequestsOnly(t *testing.T) {
 	older := time.Date(2026, 9, 3, 6, 0, 0, 0, time.UTC)
 	newer := older.Add(time.Hour)
 
+	// Two versions of a day are stored below. A background merge would keep
+	// only the newest one and hide a reader that does not select it.
+	if err := admin.Exec(ctx, "SYSTEM STOP MERGES repo_metrics_daily"); err != nil {
+		t.Fatal(err)
+	}
 	unreviewed := prreworktest.PullRequest{}
 	reviewed := prreworktest.PullRequest{Reviews: 2}
 	rework := prreworktest.PullRequest{Reviews: 3, ChangesRequested: 1}

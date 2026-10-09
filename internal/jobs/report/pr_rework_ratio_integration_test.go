@@ -49,6 +49,11 @@ func TestPRReworkRatioChartIsTheWindowRuleOverReviewedPullRequests(t *testing.T)
 	day2, day3 := day1.AddDate(0, 0, 1), day1.AddDate(0, 0, 2)
 	older := day1.Add(80 * time.Hour)
 	newer := older.Add(time.Hour)
+	// Two versions of a day are stored below. A background merge would keep
+	// only the newest one and hide a reader that does not select it.
+	if err := conn.Exec(ctx, "SYSTEM STOP MERGES repo_metrics_daily"); err != nil {
+		t.Fatal(err)
+	}
 	unreviewed := prreworktest.PullRequest{}
 	reviewed := prreworktest.PullRequest{Reviews: 2}
 	rework := prreworktest.PullRequest{Reviews: 3, ChangesRequested: 1}

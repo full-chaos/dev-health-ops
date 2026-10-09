@@ -204,6 +204,33 @@ func (executor *TeamWellbeingExecutor) ComputeFamily(
 		return 0, err
 	}
 
+	// The stale-key rule (stale_team_keys.go): a (team, repository) key of
+	// the day and of the partition's repositories that this compute did not
+	// produce gets a row of zeros. The version is read after the writes, so it
+	// is not older than any row of this compute.
+	var produced []staleKey
+	for _, group := range perRepoMetrics {
+		for _, metric := range group {
+			produced = append(produced, staleKey{metric.TeamID, metric.RepoID})
+		}
+	}
+	repositories := make([][]string, 0, len(repoIDs))
+	for _, repoID := range repoIDs {
+		repositories = append(repositories, []string{repoID.String()})
+	}
+	superseded, err := supersedeStaleTeamKeys(
+		ctx, executor.conn, staleKeysTeamMetricsDaily, run.OrganizationID, day,
+		newStaleKeyScope(repositories...), produced, executor.nowUTC(),
+	)
+	written += superseded
+	if err != nil {
+		if written == 0 {
+			return 0, err
+		}
+		return written, fmt.Errorf("%w: team_wellbeing failed on partition %s after %d row(s) already landed: %w",
+			ErrPartialWrite, partition.ID, written, err)
+	}
+
 	// CHAOS-4329: observe AFTER the write durably lands (mirrors
 	// ObserveZeroUnitFinalization's post-commit rule elsewhere in this
 	// repo), once per team, from the EXACT rows just written -- grouping

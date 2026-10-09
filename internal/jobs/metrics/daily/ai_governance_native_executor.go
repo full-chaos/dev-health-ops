@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/aigovernance"
@@ -148,10 +150,33 @@ func (executor *AIGovernanceExecutor) ComputeFamily(
 		// work_item_state/work_item/work_item_estimate/work_graph_edges.
 		return wrapAIGovernancePartialWrite(writtenCoverage, err)
 	}
+	// The stale-key rule (stale_team_keys.go), after both tables: a (team,
+	// repository) key of the day's coverage that this compute did not produce
+	// gets a row of zeros. The family computes the organization's day whole,
+	// so the rule has no scope. ai_policy_events takes no row of zeros: its
+	// rows are events, not counts (see the census).
+	produced := make([]staleKey, 0, len(coverage))
+	for _, row := range coverage {
+		teamID, repoID := "", uuid.Nil
+		if row.TeamID != nil {
+			teamID = *row.TeamID
+		}
+		if row.RepoID != nil {
+			repoID = *row.RepoID
+		}
+		produced = append(produced, staleKey{teamID, repoID.String()})
+	}
+	superseded, err := supersedeStaleTeamKeys(
+		ctx, executor.conn, staleKeysAIGovernanceCoverageDaily, run.OrganizationID, dayStart,
+		nil, produced, computedAt,
+	)
+	if err != nil {
+		return wrapWorkItemScopePartialWrite("ai_governance", writtenEvents+writtenCoverage+superseded, partition, err)
+	}
 	// Both tables count toward this family's rows-written telemetry, matching
 	// how Python's two unconditional writes (job_daily.py:1904-1905) both
 	// belong to ai_governance.
-	return writtenEvents + writtenCoverage, nil
+	return writtenEvents + writtenCoverage + superseded, nil
 }
 
 // wrapAIGovernancePartialWrite mirrors wrapWorkGraphEdgesPartialWrite's/

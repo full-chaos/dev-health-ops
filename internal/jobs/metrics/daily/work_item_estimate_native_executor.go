@@ -83,6 +83,19 @@ func (executor *WorkItemEstimateExecutor) ComputeFamily(
 	if err != nil {
 		return wrapWorkItemScopePartialWrite("work_item_estimate", written, partition, err)
 	}
+	// The stale-key rule (stale_team_keys.go).
+	produced := make([]staleKey, 0, len(rows))
+	for _, row := range rows {
+		produced = append(produced, staleKey{row.Provider, row.WorkScopeID, row.TeamID})
+	}
+	superseded, err := supersedeStaleTeamKeys(
+		ctx, executor.conn, staleKeysEstimateCoverageMetricsDaily, run.OrganizationID, scope.day,
+		read.staleKeyScope(), produced, computedAt,
+	)
+	written += superseded
+	if err != nil {
+		return wrapWorkItemScopePartialWrite("work_item_estimate", written, partition, err)
+	}
 	return written, nil
 }
 

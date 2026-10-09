@@ -69,6 +69,35 @@ func (executor *AIImpactExecutor) ComputeFamily(
 	dayEnd := dayStart.AddDate(0, 0, 1)
 	computedAt := executor.nowUTC()
 
+	// The stale-key rule (stale_team_keys.go): a key of the day and of the
+	// partition's repositories that this compute did not produce gets a row of
+	// zeros. It also runs when the compute has no row to write.
+	supersede := func(written int, records []aiimpact.Record) (int, error) {
+		produced := make([]staleKey, 0, len(records))
+		for _, record := range records {
+			teamID := ""
+			if record.TeamID != nil {
+				teamID = *record.TeamID
+			}
+			produced = append(produced, staleKey{
+				teamID, record.RepoID.String(), record.WorkType, string(record.AttributionBucket),
+			})
+		}
+		repositories := make([][]string, 0, len(repoIDs))
+		for _, repoID := range repoIDs {
+			repositories = append(repositories, []string{repoID.String()})
+		}
+		superseded, err := supersedeStaleTeamKeys(
+			ctx, executor.conn, staleKeysAIImpactMetricsDaily, run.OrganizationID, dayStart,
+			newStaleKeyScope(repositories...), produced, computedAt,
+		)
+		written += superseded
+		if err != nil {
+			return wrapWorkItemScopePartialWrite("ai_impact", written, partition, err)
+		}
+		return written, nil
+	}
+
 	pullRequests, err := LoadAIImpactPullRequests(ctx, executor.conn, run.OrganizationID, repoIDs, dayStart, dayEnd)
 	if err != nil {
 		return 0, err
@@ -77,7 +106,7 @@ func (executor *AIImpactExecutor) ComputeFamily(
 		// No PRs in the window means no facts, and compute would produce no
 		// rows. Returning early also keeps the linkage query from running with
 		// an empty pr_numbers list.
-		return 0, nil
+		return supersede(0, nil)
 	}
 
 	reviews, err := LoadAIImpactReviews(ctx, executor.conn, run.OrganizationID, repoIDs, dayStart, dayEnd)
@@ -184,9 +213,13 @@ func (executor *AIImpactExecutor) ComputeFamily(
 		TeamResolver: teamResolver, RepoNamesByID: repoNames,
 	})
 	if len(records) == 0 {
-		return 0, nil
+		return supersede(0, nil)
 	}
-	return WriteAIImpactMetrics(ctx, executor.conn, records, computedAt)
+	written, err := WriteAIImpactMetrics(ctx, executor.conn, records, computedAt)
+	if err != nil {
+		return written, err
+	}
+	return supersede(written, records)
 }
 
 var _ NativeFamilyExecutor = (*AIImpactExecutor)(nil)

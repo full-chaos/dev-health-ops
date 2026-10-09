@@ -122,6 +122,20 @@ func (executor *WorkItemExecutor) ComputeFamily(
 	if err != nil {
 		return wrapWorkItemScopePartialWrite("work_item", total, partition, err)
 	}
+	// The stale-key rule (stale_team_keys.go): a (scope, team) key of the day
+	// that this compute no longer produces gets a row of zeros.
+	produced := make([]staleKey, 0, len(triplet.MetricsDaily))
+	for _, row := range triplet.MetricsDaily {
+		produced = append(produced, staleKey{row.Provider, row.WorkScopeID, row.TeamID})
+	}
+	written, err = supersedeStaleTeamKeys(
+		ctx, executor.conn, staleKeysWorkItemMetricsDaily, run.OrganizationID, scope.day,
+		read.staleKeyScope(), produced, computedAt,
+	)
+	total += written
+	if err != nil {
+		return wrapWorkItemScopePartialWrite("work_item", total, partition, err)
+	}
 	return total, nil
 }
 

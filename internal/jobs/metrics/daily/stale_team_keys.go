@@ -83,6 +83,13 @@ type StaleKeyTable struct {
 	// NullableMeasures are the Nullable measures. A key is live while its
 	// newest row holds a value in one of them.
 	NullableMeasures []string
+	// Labels are the stored columns that are a name of the key, not a
+	// measure (team_name). A row of zeros stores the column default in them.
+	Labels []string
+	// Configuration are the stored columns that hold the configuration of the
+	// compute, not a measure of the key. A row of zeros stores the column
+	// default in them, and they do not make a key live.
+	Configuration []string
 	// Where is a fixed predicate for a table that the family shares with
 	// another writer ("" for the whole table).
 	Where string
@@ -93,7 +100,7 @@ var (
 	staleKeysWorkItemMetricsDaily = StaleKeyTable{
 		Table: "work_item_metrics_daily", Family: "work_item", DayColumn: "day",
 		Keys:       []StaleKeyColumn{{"provider", staleKeyString}, {"work_scope_id", staleKeyString}, {"team_id", staleKeyString}},
-		TeamColumn: "team_id", Scope: []string{"provider", "work_scope_id"},
+		TeamColumn: "team_id", Scope: []string{"provider", "work_scope_id"}, Labels: []string{"team_name"},
 		Measures: []string{
 			"items_started", "items_completed", "items_started_unassigned", "items_completed_unassigned",
 			"wip_count_end_of_day", "wip_unassigned_end_of_day", "bug_completed_ratio", "story_points_completed",
@@ -109,7 +116,7 @@ var (
 		Keys: []StaleKeyColumn{
 			{"provider", staleKeyString}, {"work_scope_id", staleKeyString}, {"team_id", staleKeyString}, {"status", staleKeyString},
 		},
-		TeamColumn: "team_id", Scope: []string{"provider", "work_scope_id"},
+		TeamColumn: "team_id", Scope: []string{"provider", "work_scope_id"}, Labels: []string{"team_name"},
 		Measures: []string{"duration_hours", "items_touched", "avg_wip"},
 	}
 	staleKeysEstimateCoverageMetricsDaily = StaleKeyTable{
@@ -117,14 +124,14 @@ var (
 		Keys: []StaleKeyColumn{
 			{"provider", staleKeyString}, {"work_scope_id", staleKeyString}, {"team_id", staleKeyNullableString},
 		},
-		TeamColumn: "team_id", Scope: []string{"provider", "work_scope_id"},
+		TeamColumn: "team_id", Scope: []string{"provider", "work_scope_id"}, Labels: []string{"team_name"},
 		Measures:         []string{"estimated_count", "unestimated_count", "backlog_size"},
 		NullableMeasures: []string{"ratio"},
 	}
 	staleKeysTeamMetricsDaily = StaleKeyTable{
 		Table: "team_metrics_daily", Family: "team_wellbeing", DayColumn: "day",
 		Keys:       []StaleKeyColumn{{"team_id", staleKeyString}, {"repo_id", staleKeyString}},
-		TeamColumn: "team_id", Scope: []string{"repo_id"},
+		TeamColumn: "team_id", Scope: []string{"repo_id"}, Labels: []string{"team_name"},
 		Measures: []string{
 			"commits_count", "after_hours_commits_count", "weekend_commits_count",
 			"after_hours_commit_ratio", "weekend_commit_ratio",
@@ -167,6 +174,38 @@ var (
 		},
 		NullableMeasures: []string{"after_hours_commit_ratio", "weekend_commit_ratio"},
 	}
+	// ic_landscape_rolling_30d holds one point for each (team, map, identity)
+	// of a day. Its repo_id is one fixed placeholder id.
+	staleKeysICLandscapeRolling30d = StaleKeyTable{
+		Table: "ic_landscape_rolling_30d", Family: "ic_finalize", DayColumn: "as_of_day",
+		Keys: []StaleKeyColumn{
+			{"repo_id", staleKeyUUID}, {"team_id", staleKeyString}, {"map_name", staleKeyString}, {"identity_id", staleKeyString},
+		},
+		TeamColumn: "team_id",
+		Measures: []string{
+			"x_raw", "y_raw", "x_norm", "y_norm",
+			"churn_loc_30d", "delivery_units_30d", "cycle_p50_30d_hours", "wip_max_30d",
+		},
+	}
+	// compounding_risk_daily holds the team id in scope_id for the rows of
+	// scope 'team'. The rows of scope 'repo' belong to another family and hold
+	// no team id.
+	staleKeysCompoundingRiskDailyTeam = StaleKeyTable{
+		Table: "compounding_risk_daily", Family: "compounding_risk_team", DayColumn: "day",
+		Keys:       []StaleKeyColumn{{"scope", staleKeyString}, {"scope_id", staleKeyString}},
+		TeamColumn: "scope_id",
+		NullableMeasures: []string{
+			"compounding_risk", "churn_norm", "complexity_norm", "ownership_norm", "review_norm",
+			"rework_churn", "complexity_delta", "bus_factor", "ownership_gini", "single_owner_ratio",
+			"review_latency_p90h",
+		},
+		// The weights and thresholds are the configuration of the compute,
+		// not measures of the team: a row of zeros stores 0 in them.
+		Configuration: []string{
+			"severity", "w_churn", "w_complexity", "w_ownership", "w_review", "threshold_elevated", "threshold_high",
+		},
+		Where: "scope = 'team'",
+	}
 	staleKeysTeamComplexityDaily = StaleKeyTable{
 		Table: "team_complexity_daily", Family: "team_complexity", DayColumn: "day",
 		Keys:       []StaleKeyColumn{{"team_id", staleKeyString}},
@@ -190,6 +229,8 @@ func StaleTeamKeyTables() []StaleKeyTable {
 		staleKeysAIGovernanceCoverageDaily,
 		staleKeysTeamCognitiveLoadDaily,
 		staleKeysTeamComplexityDaily,
+		staleKeysICLandscapeRolling30d,
+		staleKeysCompoundingRiskDailyTeam,
 	}
 }
 
@@ -380,10 +421,27 @@ func supersedeStaleTeamKeys(
 	ctx context.Context, conn staleKeyConn, table StaleKeyTable, organizationID string, day time.Time,
 	scope staleKeyScope, produced []staleKey, computedAt time.Time,
 ) (int, error) {
+	if computedAt.IsZero() {
+		return 0, ErrInvalidState
+	}
+	return supersedeStaleTeamKeysAt(ctx, conn, table, organizationID, day, scope, produced,
+		func(staleKey) time.Time { return computedAt })
+}
+
+// supersedeStaleTeamKeysAt is supersedeStaleTeamKeys for a family that gives
+// the rows of one run more than one computed_at: computedAtOf returns the
+// computed_at of the row of zeros of one key. A reader that takes the rows of
+// the newest computed_at of a group (team_metrics_daily, by repository) must
+// find the row of zeros in the same generation as the rows the run wrote for
+// that group.
+func supersedeStaleTeamKeysAt(
+	ctx context.Context, conn staleKeyConn, table StaleKeyTable, organizationID string, day time.Time,
+	scope staleKeyScope, produced []staleKey, computedAtOf func(staleKey) time.Time,
+) (int, error) {
 	if err := table.valid(); err != nil {
 		return 0, err
 	}
-	if conn == nil || strings.TrimSpace(organizationID) == "" || day.IsZero() || computedAt.IsZero() {
+	if conn == nil || strings.TrimSpace(organizationID) == "" || day.IsZero() || computedAtOf == nil {
 		return 0, ErrInvalidState
 	}
 	if len(table.Scope) > 0 && len(scope) == 0 {
@@ -407,8 +465,12 @@ func supersedeStaleTeamKeys(
 	if err != nil {
 		return 0, fmt.Errorf("prepare %s zero rows: %w", table.Table, err)
 	}
-	dayValue, computedAtUTC := staleKeyDay(day), computedAt.UTC()
+	dayValue := staleKeyDay(day)
 	for _, key := range stale {
+		computedAt := computedAtOf(key)
+		if computedAt.IsZero() {
+			return 0, fmt.Errorf("%w: %s zero row has no computed_at", ErrInvalidState, table.Table)
+		}
 		values := make([]any, 0, len(key)+3)
 		values = append(values, organizationID, dayValue)
 		for index, column := range table.Keys {
@@ -418,7 +480,7 @@ func supersedeStaleTeamKeys(
 			}
 			values = append(values, value)
 		}
-		values = append(values, computedAtUTC)
+		values = append(values, computedAt.UTC())
 		if err := batch.Append(values...); err != nil {
 			return 0, fmt.Errorf("append %s zero row: %w", table.Table, err)
 		}

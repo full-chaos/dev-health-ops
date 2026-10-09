@@ -83,9 +83,13 @@ func TestAIImpactComputeFamilyStopsWhenNoPullRequestsAreInWindow(t *testing.T) {
 	if written != 0 {
 		t.Fatalf("wrote %d rows with no in-window PRs, want 0", written)
 	}
-	if len(conn.calls) != 1 {
-		t.Fatalf("issued %d queries, want exactly 1 -- the executor must stop after the "+
-			"pull-request load returns nothing", len(conn.calls))
+	// The pull-request load, then the live-key read of the stale-key rule: a
+	// day that lost its pull requests still holds the keys of the earlier
+	// compute.
+	if len(conn.queries) != 2 || isTeamRuleRead(conn.queries[0]) ||
+		conn.queries[1] != staleKeysAIImpactMetricsDaily.liveKeysQuery() {
+		t.Fatalf("issued %d queries, want the pull-request load and the live-key read -- the executor must stop "+
+			"its own reads after the pull-request load returns nothing", len(conn.queries))
 	}
 }
 

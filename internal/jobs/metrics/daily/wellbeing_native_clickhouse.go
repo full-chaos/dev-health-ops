@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/numerical"
+	"github.com/full-chaos/dev-health-ops/internal/teamactive"
 )
 
 // WellbeingTeam is one team row as read from ClickHouse `teams` -- the same
@@ -34,6 +35,10 @@ type WellbeingTeam struct {
 // keeps this reader from drifting out of sync with a column the Python
 // selector adds later. conn reuses this package's existing repositoryRows
 // capability (clickhouse.go) -- a plain Query method, nothing more.
+//
+// One rule is added to the reference: the inactive teams (package teamactive)
+// are dropped from the result. With no inactive team the result is the
+// reference's.
 func LoadWellbeingTeams(ctx context.Context, conn repositoryRows, organizationID string) ([]WellbeingTeam, error) {
 	if conn == nil || strings.TrimSpace(organizationID) == "" {
 		return nil, ErrInvalidState
@@ -58,7 +63,14 @@ func LoadWellbeingTeams(ctx context.Context, conn repositoryRows, organizationID
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate wellbeing teams: %w", err)
 	}
-	return teams, nil
+	// The active-team rule (package teamactive), applied after the read so
+	// the query stays the reference's text: an inactive team gives its
+	// repository patterns and its members to no resolver.
+	inactive, err := teamactive.LoadInactive(ctx, conn, organizationID)
+	if err != nil {
+		return nil, fmt.Errorf("load wellbeing teams: %w", err)
+	}
+	return teamactive.Keep(teams, inactive, func(team WellbeingTeam) string { return team.ID }), nil
 }
 
 // repoPatternResolver ports RepoPatternTeamResolver / build_repo_pattern_resolver

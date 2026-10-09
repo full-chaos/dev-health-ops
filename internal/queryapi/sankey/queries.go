@@ -310,7 +310,13 @@ type stateStatusCountRow struct {
 // table's ReplacingMergeTree sorting key (org_id, provider, work_scope_id,
 // team_id, status, day), is equivalent to FINAL for this table -- and
 // items_touched is a non-nullable UInt32 per DDL, so no null-skip risk --
-// this port reads FINAL directly instead, no divergence.
+// this port reads FINAL directly instead.
+//
+// One difference from Python: a newest row that holds no measure is a
+// retraction row (package liverow) and is left out. It adds 0 to the sum, but
+// this read makes a LIST of statuses, and a status whose rows in scope are all
+// retraction rows (the keys of a retired team id) is a status with no data,
+// not a status with 0 items.
 //
 // sum(items_touched) promotes UInt32 to UInt64, which the driver refuses
 // to scan into *float64. _build_state_flow reads this field with

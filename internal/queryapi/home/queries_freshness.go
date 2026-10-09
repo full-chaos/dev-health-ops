@@ -288,8 +288,13 @@ func sourceStatus(seenAt *time.Time, startDay time.Time) string {
 // (api/queries/metrics.py:276-336). investment_metrics_daily is plain
 // MergeTree, never converted (confirmed against prod system.tables) --
 // Python already dedups it by hand with a per-key argMax(...,
-// computed_at) subquery matching its natural key; ported verbatim, no
-// divergence.
+// computed_at) subquery matching its natural key; ported verbatim.
+//
+// One difference from Python: a key whose newest row holds no measure (a row
+// of zeros its writer stored over a key it no longer produces, package
+// liverow) is left out. It adds 0 to the sums, but the result is a LIST of
+// themes, and a theme whose keys in scope are all such rows (a retired team
+// id) has no data: it is not a theme with an allocation of 0.
 func fetchReworkThemeAllocation(ctx context.Context, client QueryClient, startDay, endDay time.Time, scopeFilter string, scopeBindings []dhclickhouse.Binding, workCategorySQL string, workCategoryBindings []dhclickhouse.Binding, orgID string) ([]ReworkThemeAllocation, error) {
 	canonicalThemeExpr := canonicalInvestmentThemeSQL("investment_area")
 	query := fmt.Sprintf(`

@@ -50,7 +50,7 @@ var stamps = []string{
 // is raw response text (R398), so a "Z" suffix or a trimmed zero is a diff.
 func TestAdminTimestampVenueOracle(t *testing.T) {
 	golden := venueoracle.OpenGolden(t, venueGolden("admin-timestamp-venue-oracle", t.Name(), "17f49f524b1b8975af3131974e14f6de019bd60fdacde6b3dbcc24470751f154"))
-	pin := venueoracle.OpenGoPin(t, venueoracle.GoPinSpec{Path: "testdata/admin-timestamp-venue-oracle.go-pin.json", SHA256: "5de11c9dde6c7b64cafdb2b861bdab4e9cd58190ed019d3468a7d1e7b857bc5a", Ruling: teamsRuling})
+	pin := venueoracle.OpenGoPin(t, venueoracle.GoPinSpec{Path: "testdata/admin-timestamp-venue-oracle.go-pin.json", SHA256: "a3c70b274752482700bd95275e55de275d11acb3b82dd451336a3686d8b2bc85", Ruling: teamsRuling})
 	runAdminTimestampVenue(t, golden, pin)
 	pin.Finish(t)
 	golden.Finish(t)
@@ -63,7 +63,7 @@ func TestAdminTimestampVenueOracle(t *testing.T) {
 // offset changes with daylight saving.
 func TestAdminTimestampServerZoneVenueOracle(t *testing.T) {
 	golden := venueoracle.OpenGolden(t, venueGolden("admin-timestamp-server-zone-venue-oracle", t.Name(), "d38c319c43a759cafab68772221d1cac676887b50dbeae489e09379c3ed6bbcd"))
-	pin := venueoracle.OpenGoPin(t, venueoracle.GoPinSpec{Path: "testdata/admin-timestamp-server-zone-venue-oracle.go-pin.json", SHA256: "10b1fb99f57560417ddba1fc1d7c01371ecbdaf54a6ce586f052b71182b72afb", Ruling: teamsRuling})
+	pin := venueoracle.OpenGoPin(t, venueoracle.GoPinSpec{Path: "testdata/admin-timestamp-server-zone-venue-oracle.go-pin.json", SHA256: "acef5f460285ecf6000bb0caa551360e1e4c6aff3fa754eec568ade6addd34c7", Ruling: teamsRuling})
 	t.Setenv(containers.ClickHouseTimezoneEnv, "America/Los_Angeles")
 	runAdminTimestampVenue(t, golden, pin)
 	pin.Finish(t)

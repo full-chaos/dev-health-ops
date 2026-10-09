@@ -381,6 +381,12 @@ func gitlabTeamsRules() map[string]gitlabTeamsRule {
 			}
 			return ""
 		}, why: "legacy: none; catalog: the group's own projects (its path_with_namespace values)"},
+		"created_at": {check: func(sc *gitlabScenario, py, gr map[string]string) string {
+			if py["created_at"] != "" && py["created_at"] != "<NULL>" || gr["created_at"] != gr["updated_at"] {
+				return fmt.Sprintf("created_at: python %q (no such column), go %q (want its updated_at %q)", py["created_at"], gr["created_at"], gr["updated_at"])
+			}
+			return ""
+		}, why: "legacy rows carry no creation time; the catalog stamps a new team with its own updated_at"},
 		"updated_at": {check: func(sc *gitlabScenario, py, gr map[string]string) string {
 			if py["updated_at"] != "<time>" || gr["updated_at"] != "2026-09-26 12:00:00.000000" {
 				return fmt.Sprintf("updated_at: python %q, go %q (want the run's clock)", py["updated_at"], gr["updated_at"])

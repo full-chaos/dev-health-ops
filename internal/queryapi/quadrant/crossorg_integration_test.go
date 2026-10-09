@@ -47,6 +47,15 @@ func TestRepoGrainQuadrantMetricsReadOnlyTheCallingOrgsRowsForASharedRepoID(t *t
 			row.org, f.RepoID, day, f.Identity, f.Identity, row.reviews, row.firstReviewH)
 	}
 
+	// cycle_time reads the pull requests merged in the week, not the daily
+	// rollup: one pull request per org, 48 h in org A and 480 h in org B.
+	for org, hours := range map[string]int{f.OrgA: 48, f.OrgB: 480} {
+		created := day.Add(time.Hour)
+		writePullRequests(ctx, t, admin, org, f.RepoID, []pullRequestSeed{{
+			number: 1, createdAt: created, mergedAt: mergedHoursAfter(created, hours), lastSynced: day,
+		}})
+	}
+
 	start := time.Date(2026, 9, 14, 0, 0, 0, 0, time.UTC)
 	end := time.Date(2026, 9, 21, 0, 0, 0, 0, time.UTC)
 	want := map[string]float64{

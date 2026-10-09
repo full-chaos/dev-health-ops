@@ -132,6 +132,7 @@ func TestDedupFromUsesFinalForEveryDailyTable(t *testing.T) {
 		{"work_item_user_metrics_daily AS m", "work_item_user_metrics_daily AS m FINAL"},
 		{"user_metrics_daily AS m", "user_metrics_daily AS m FINAL"},
 		{"repo_metrics_daily AS m", "repo_metrics_daily AS m FINAL"},
+		{"git_pull_requests AS m", "git_pull_requests AS m FINAL"},
 	}
 	for _, tc := range cases {
 		if got := dedupFrom(tc.table); got != tc.want {

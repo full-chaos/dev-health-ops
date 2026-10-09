@@ -117,6 +117,9 @@ type MetricSpec struct {
 	WhereClause               string
 	Transform                 func(float64) float64
 	UsePrimaryTeamAttribution bool
+	// DayExpr is the UTC date a row falls on, for the window filter and the
+	// bucket. Empty means the daily table's own day column.
+	DayExpr string
 }
 
 func identity(v float64) float64 { return v }
@@ -202,12 +205,21 @@ var RepoMetrics = map[string]MetricSpec{
 		JoinClause:  "INNER JOIN repos FINAL ON repos.id = m.repo_id AND repos.org_id = {org_id:String}",
 		WhereClause: "AND repos.repo != ''", Transform: identity,
 	},
+	// cycle_time is the median over every pull request merged in the bucket,
+	// one weight per pull request. A mean or median of
+	// repo_metrics_daily's daily medians weights a day with one merge the
+	// same as a day with 149, so it is not read here. Old pull requests merged
+	// late count with their full cycle time. quantileExactInclusive(0.5) is
+	// the median repouser.Compute writes per day: the middle value, or the
+	// mean of the two middle values.
 	"cycle_time": {
 		Metric: "cycle_time", Label: "Cycle Time", Unit: "days",
-		Table: "repo_metrics_daily AS m", ValueExpr: "avg(m.median_pr_cycle_hours)",
+		Table:      "git_pull_requests AS m",
+		ValueExpr:  "quantileExactInclusive(0.5)(dateDiff('millisecond', m.created_at, m.merged_at) / 3600000.0)",
+		DayExpr:    "toDate(m.merged_at)",
 		EntityExpr: "repos.repo", LabelExpr: "repos.repo",
 		JoinClause:  "INNER JOIN repos FINAL ON repos.id = m.repo_id AND repos.org_id = {org_id:String}",
-		WhereClause: "AND m.median_pr_cycle_hours > 0 AND repos.repo != ''",
+		WhereClause: "AND repos.repo != ''",
 		Transform:   hoursToDays,
 	},
 	"wip": {
@@ -325,11 +337,14 @@ var QuadrantDefinitions = map[string]QuadrantDefinition{
 // them: a bare LIMIT-1-BY sorts and collapses the whole table with no
 // per-tenant scope of its own, so FINAL is the correct dedup here.
 
-var replacingMergeTreeDailyTables = map[string]bool{
+var replacingMergeTreeTables = map[string]bool{
 	"work_item_metrics_daily":      true,
 	"work_item_user_metrics_daily": true,
 	"user_metrics_daily":           true,
 	"repo_metrics_daily":           true,
+	// ReplacingMergeTree(last_synced): a pull request synced twice before a
+	// merge must count once in the cycle-time median.
+	"git_pull_requests": true,
 }
 
 // dedupFrom wraps a ReplacingMergeTree daily-family table in FINAL --
@@ -341,7 +356,7 @@ var replacingMergeTreeDailyTables = map[string]bool{
 // that reason, matching filteroptions's own "no wrapping subquery" rule.
 func dedupFrom(table string) string {
 	base, alias, hasAlias := strings.Cut(table, " AS ")
-	if !replacingMergeTreeDailyTables[base] {
+	if !replacingMergeTreeTables[base] {
 		return table
 	}
 	aliasSQL := ""
@@ -368,11 +383,18 @@ type metricRow struct {
 	Value       float64
 }
 
-func bucketExpr(bucket string) string {
+func bucketExpr(bucket, dayExpr string) string {
 	if bucket == "month" {
-		return "toStartOfMonth(day)"
+		return "toStartOfMonth(" + dayExpr + ")"
 	}
-	return "toStartOfWeek(day)"
+	return "toStartOfWeek(" + dayExpr + ")"
+}
+
+func specDayExpr(spec MetricSpec) string {
+	if spec.DayExpr == "" {
+		return "day"
+	}
+	return spec.DayExpr
 }
 
 // quadrantMetricQuery builds fetch_quadrant_metric's SQL text (queries/
@@ -396,6 +418,7 @@ func quadrantMetricQuery(spec MetricSpec, bucket, teamFilter string) string {
 	if teamFilter != "" {
 		scopeSQL = "\nAND m.team_id = {team_id:String}"
 	}
+	dayExpr := specDayExpr(spec)
 	return fmt.Sprintf(`
         SELECT
             %s AS bucket,
@@ -403,11 +426,11 @@ func quadrantMetricQuery(spec MetricSpec, bucket, teamFilter string) string {
             %s AS entity_label,
             toFloat64(%s) AS value
         FROM %s%s
-        WHERE day >= {start_day:Date} AND day < {end_day:Date}%s
+        WHERE %s >= {start_day:Date} AND %s < {end_day:Date}%s
           AND org_id = {org_id:String}%s
         GROUP BY bucket, entity_id, entity_label
         ORDER BY bucket
-    `, bucketExpr(bucket), spec.EntityExpr, spec.LabelExpr, spec.ValueExpr, dedupFrom(spec.Table), joinSQL, whereSQL, scopeSQL)
+    `, bucketExpr(bucket, dayExpr), spec.EntityExpr, spec.LabelExpr, spec.ValueExpr, dedupFrom(spec.Table), joinSQL, dayExpr, dayExpr, whereSQL, scopeSQL)
 }
 
 // fetchQuadrantMetric ports fetch_quadrant_metric (queries/quadrant.py:
@@ -504,7 +527,7 @@ func fetchWorkItemTeamQuadrantMetric(ctx context.Context, client QueryClient, me
         ) AS team_activity
         GROUP BY bucket, entity_id
         ORDER BY bucket
-    `, bucketExpr(bucket), valueExpr, teamScopedWorkItemTeamAttributionSource, metricFilter)
+    `, bucketExpr(bucket, "day"), valueExpr, teamScopedWorkItemTeamAttributionSource, metricFilter)
 
 	bindings := []dhclickhouse.Binding{
 		{Name: "start_day", Value: formatDay(startDay)},

@@ -69,7 +69,7 @@ func TestNativeTeamCatalogRegistryIsOnlyHandedToTheDispatchers(t *testing.T) {
 		t.Fatal(err)
 	}
 	allowed := []*regexp.Regexp{
-		regexp.MustCompile(`^nativeTeamCatalogCollectors := newNativeTeamCatalogCollectors\(clickhouseConnection\)$`),
+		regexp.MustCompile(`^nativeTeamCatalogCollectors := newNativeTeamCatalogCollectors\(clickhouseConnection, teamCatalogScopeCensus\{pool: postgresDatabase\.pools\.Domain\}\)$`),
 		regexp.MustCompile(`^Native:\s+nativeTeamCatalogCollectors,$`),
 		regexp.MustCompile(`^native:\s+nativeTeamCatalogCollectors,$`),
 	}

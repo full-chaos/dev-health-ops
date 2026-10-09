@@ -36,7 +36,7 @@ type linearReferenceProjectTeamPayload struct {
 
 type linearReferenceProjectTeamsPayload struct {
 	Nodes    []linearReferenceProjectTeamPayload `json:"nodes"`
-	PageInfo linearPageInfoPayload               `json:"pageInfo"`
+	PageInfo linearReferencePageEnd              `json:"pageInfo"`
 }
 
 type linearReferenceProjectPayload struct {
@@ -54,7 +54,7 @@ type linearReferenceProjectPayload struct {
 
 type linearReferenceCatalogTeamMembersPayload struct {
 	Nodes    []linearReferenceCatalogMemberPayload `json:"nodes"`
-	PageInfo linearPageInfoPayload                 `json:"pageInfo"`
+	PageInfo linearReferencePageEnd                `json:"pageInfo"`
 }
 
 type linearReferenceCatalogTeamPayload struct {
@@ -74,7 +74,7 @@ type linearReferenceCatalogMemberPayload struct {
 
 type linearReferenceCatalogTeamPagePayload struct {
 	Nodes    []linearReferenceCatalogTeamPayload `json:"nodes"`
-	PageInfo linearPageInfoPayload               `json:"pageInfo"`
+	PageInfo linearReferencePageEnd              `json:"pageInfo"`
 }
 
 type linearReferenceCatalogMemberPagePayload struct {
@@ -515,4 +515,29 @@ func (row linearReferenceProjectRow) validate(claim Claim) error {
 		return fmt.Errorf("%w: invalid Linear reference project row", ErrInvalidConfiguration)
 	}
 	return nil
+}
+
+// linearReferencePageEnd is the page-end signal of a connection embedded in a
+// catalog node (a project's teams, a team's members). It is the one decode type
+// of every such signal on a path that feeds an ownership snapshot: HasNextPage
+// is a pointer, so an absent or null field is NOT an end. A catalog run reads
+// "no more pages" only from an explicit false (Proven); anything else is not
+// proven complete (TestPageInfoDecodeCensus keeps a plain bool out of these
+// paths).
+type linearReferencePageEnd struct {
+	HasNextPage *bool  `json:"hasNextPage"`
+	EndCursor   string `json:"endCursor"`
+}
+
+// Proven says the provider stated the page end at all.
+func (end linearReferencePageEnd) Proven() bool { return end.HasNextPage != nil }
+
+// More says the provider stated there is a next page.
+func (end linearReferencePageEnd) More() bool { return end.HasNextPage != nil && *end.HasNextPage }
+
+// linearReferenceNoMorePages is the stated end of a connection this run has
+// read to its last page itself.
+func linearReferenceNoMorePages() linearReferencePageEnd {
+	none := false
+	return linearReferencePageEnd{HasNextPage: &none}
 }

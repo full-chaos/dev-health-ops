@@ -2,6 +2,7 @@ package providersync
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -57,7 +58,7 @@ func TestLinearOwnershipSnapshotRule(t *testing.T) {
 // false, so the snapshot closes nothing for the projects after it.
 func TestLinearProjectsCompleteIsFalseWhenANodeIsGivenUp(t *testing.T) {
 	node := func(id string) string {
-		return `{"id":` + id + `,"name":"P","description":"","status":{"id":"s","name":"Active","type":"started"},"trashed":false,"targetDate":"","archivedAt":null,"url":"","lead":null,"teams":{"nodes":[{"id":"team-raw-1","key":"QA"}]}}`
+		return `{"id":` + id + `,"name":"P","description":"","status":{"id":"s","name":"Active","type":"started"},"trashed":false,"targetDate":"","archivedAt":null,"url":"","lead":null,"teams":{"nodes":[{"id":"team-raw-1","key":"QA"}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}`
 	}
 	wantReason := map[string]string{
 		"undecodable node":      "project_node_undecodable",
@@ -155,4 +156,82 @@ func TestLinearOwnershipSnapshotCompleteNeedsEveryTerm(t *testing.T) {
 			t.Errorf("%s: snapshot reported complete", name)
 		}
 	}
+}
+
+func runLinearCatalogWalk(t *testing.T, strict bool, teamsJSON, projectsJSON string) (LinearReferenceCatalogBatch, error) {
+	t.Helper()
+	claim := nativeTestClaim("linear", "work-items")
+	claim.OrgID = chaos4530SyntheticOrgID
+	claim.SourceExternalID = "workspace"
+	responses := []string{teamsJSON}
+	if strings.Contains(teamsJSON, `"key":"QA"`) {
+		responses = append(responses, `{"data":{"cycles":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}`)
+	}
+	responses = append(responses, projectsJSON)
+	ref := teamCatalogRefFromClaim(claim)
+	ref.Strict = strict
+	return (LinearReferenceCatalogRouteHandler{PerPage: 50, MaxPages: 10}).CollectReferenceCatalog(
+		context.Background(), ref,
+		providerfoundation.Credential{Provider: "linear", ID: claim.CredentialID},
+		linearWorkItemsClient(t, fakehttp.Client(&linearWorkItemsDoer{responses: responses})),
+		TeamCatalogSelections{Teams: true, Members: true, Projects: true}, time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC),
+	)
+}
+
+const linearOneTeamJSON = `{"data":{"teams":{"nodes":[{"id":"team-raw-1","key":"QA","name":"Quality","members":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}`
+
+// TestLinearCatalogNeverReadsAnAbsentPageEndAsTheEnd pins one rule at every
+// level: an absent or null page end is not an end. A page end counts only
+// from an explicit false.
+func TestLinearCatalogNeverReadsAnAbsentPageEndAsTheEnd(t *testing.T) {
+	projectNode := func(teams string) string {
+		return `{"id":"p1","name":"P","description":"","status":{"id":"s","name":"Active","type":"started"},"trashed":false,"targetDate":"","archivedAt":null,"url":"","lead":null,"teams":` + teams + `}`
+	}
+	page := func(nodes string, pageInfo string) string {
+		return `{"data":{"projects":{"nodes":[` + nodes + `]` + pageInfo + `}}}`
+	}
+	end := `,"pageInfo":{"hasNextPage":false,"endCursor":null}`
+	cases := map[string]string{
+		"nested teams.pageInfo absent":        page(projectNode(`{"nodes":[{"id":"t","key":"QA"}]}`), end),
+		"nested teams.pageInfo null":          page(projectNode(`{"nodes":[{"id":"t","key":"QA"}],"pageInfo":null}`), end),
+		"nested teams.hasNextPage absent":     page(projectNode(`{"nodes":[{"id":"t","key":"QA"}],"pageInfo":{"endCursor":null}}`), end),
+		"nested teams.hasNextPage null":       page(projectNode(`{"nodes":[{"id":"t","key":"QA"}],"pageInfo":{"hasNextPage":null}}`), end),
+		"top-level projects pageInfo absent":  page(projectNode(`{"nodes":[{"id":"t","key":"QA"}],`+`"pageInfo":{"hasNextPage":false,"endCursor":null}}`), ``),
+		"top-level projects hasNextPage null": page(projectNode(`{"nodes":[{"id":"t","key":"QA"}],`+`"pageInfo":{"hasNextPage":false,"endCursor":null}}`), `,"pageInfo":{"hasNextPage":null}`),
+	}
+	for name, projects := range cases {
+		t.Run(name, func(t *testing.T) {
+			batch, err := runLinearCatalogWalk(t, false, linearOneTeamJSON, projects)
+			if err != nil {
+				t.Fatalf("non-strict keeps what it read: %v", err)
+			}
+			if batch.Evidence.ProjectsComplete {
+				t.Fatalf("ProjectsComplete = true on %s", name)
+			}
+			open := []linearReferenceOwnershipRow{linearOwnershipTestRow(t, "linear:QA", "keep", time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC))}
+			_, closed := linearOwnershipSnapshot(batch.Rows.Ownership, open, time.Now().UTC(), batch.Evidence.TeamsComplete && batch.Evidence.ProjectsComplete)
+			if closed != 0 {
+				t.Fatalf("the snapshot closed %d rows on %s", closed, name)
+			}
+		})
+	}
+	t.Run("explicit false end is complete", func(t *testing.T) {
+		good := page(projectNode(`{"nodes":[{"id":"t","key":"QA"}],"pageInfo":{"hasNextPage":false,"endCursor":null}}`), end)
+		batch, err := runLinearCatalogWalk(t, false, linearOneTeamJSON, good)
+		if err != nil || !batch.Evidence.ProjectsComplete {
+			t.Fatalf("a stated end must be complete: err=%v complete=%v", err, batch.Evidence.ProjectsComplete)
+		}
+	})
+	t.Run("strict: nested absent fails the run", func(t *testing.T) {
+		_, err := runLinearCatalogWalk(t, true, linearOneTeamJSON, page(projectNode(`{"nodes":[]}`), end))
+		if err == nil {
+			t.Fatal("strict mode must fail on an unstated page end")
+		}
+	})
+	t.Run("team members pageInfo absent fails the run", func(t *testing.T) {
+		teams := `{"data":{"teams":{"nodes":[{"id":"team-raw-1","key":"QA","name":"Quality","members":{"nodes":[]}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}`
+		if _, err := runLinearCatalogWalk(t, false, teams, page(``, end)); err == nil {
+			t.Fatal("a roster with no stated end must fail, not pass as complete")
+		}
+	})
 }

@@ -112,7 +112,7 @@ func runLinearCollectorOverSeededOwnership(t *testing.T, projectNodes string, no
 }
 
 func linearProjectNodeJSON(id, teamKey string) string {
-	return `{"id":"` + id + `","name":"P","description":"","status":{"id":"s","name":"Active","type":"started"},"trashed":false,"targetDate":"","archivedAt":null,"url":"","lead":null,"teams":{"nodes":[{"id":"team-raw-1","key":"` + teamKey + `"}]}}`
+	return `{"id":"` + id + `","name":"P","description":"","status":{"id":"s","name":"Active","type":"started"},"trashed":false,"targetDate":"","archivedAt":null,"url":"","lead":null,"teams":{"nodes":[{"id":"team-raw-1","key":"` + teamKey + `"}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}`
 }
 
 // TestLinearCollectorClosesNothingUnlessTheSnapshotIsCompleteAndNotEmpty drives
@@ -128,6 +128,13 @@ func TestLinearCollectorClosesNothingUnlessTheSnapshotIsCompleteAndNotEmpty(t *t
 	})
 	t.Run("a project node the walk gave up on", func(t *testing.T) {
 		open, result := runLinearCollectorOverSeededOwnership(t, linearProjectNodeJSON("other", "QA")+`,{"id":5}`)
+		if open["keep"] != 1 || result.OwnershipRetracted != 0 || !result.OwnershipSnapshotIncomplete {
+			t.Fatalf("open=%v retracted=%d incomplete=%v, want keep open, 0 closed, incomplete", open, result.OwnershipRetracted, result.OwnershipSnapshotIncomplete)
+		}
+	})
+	t.Run("a project whose teams page end is not stated", func(t *testing.T) {
+		unstated := `{"id":"unstated","name":"P","description":"","status":{"id":"s","name":"Active","type":"started"},"trashed":false,"targetDate":"","archivedAt":null,"url":"","lead":null,"teams":{"nodes":[{"id":"team-raw-1","key":"QA"}]}}`
+		open, result := runLinearCollectorOverSeededOwnership(t, linearProjectNodeJSON("other", "QA")+`,`+unstated)
 		if open["keep"] != 1 || result.OwnershipRetracted != 0 || !result.OwnershipSnapshotIncomplete {
 			t.Fatalf("open=%v retracted=%d incomplete=%v, want keep open, 0 closed, incomplete", open, result.OwnershipRetracted, result.OwnershipSnapshotIncomplete)
 		}

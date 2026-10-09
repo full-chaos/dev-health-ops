@@ -1,0 +1,12 @@
+# Top-level-test shards of internal/workerservice for integration CI (CHAOS-9060).
+#
+# One `go test` of this package took 24 of the 25 minutes of its job on the
+# hosted runner (main 20.5-21 min, a head with 19 more tests 23m56s and then a
+# cancelled job), so a merge would leave the shard red at random. ci/check_go.sh
+# therefore runs the package ONLY as these name-partitioned shards (the same
+# mechanism as go_daily_test_shards.tsv) and never in the `packages` target.
+# Every discovered top-level test lands in exactly one shard.
+# Weights are relative classes (integration-tagged vs ordinary), not seconds.
+shards	2
+integration-test-weight	100
+ordinary-test-weight	1

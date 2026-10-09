@@ -17,13 +17,15 @@ import (
 // merged pull requests, 0 with none). The counts take the same pull requests
 // the same way: merged inside the day's window.
 //
-// providerByRepo holds the provider of each repository. A repository that is
-// not in it has no known provider and therefore no rework signal: its merged
-// pull requests count as "no signal", never as reviewed.
+// hasReworkSignal says, for each repository, whether its provider can store a
+// changes-requested review (the caller takes it from the provider layer's
+// declaration). A repository that is not in it has no known provider and
+// therefore no rework signal: its merged pull requests count as "no signal",
+// never as reviewed.
 //
 // A repository row with no merged pull request gets zero counts: the day was
 // counted and nothing merged.
-func ApplyPRRework(result *Result, day time.Time, pullRequests []PullRequestRow, providerByRepo map[uuid.UUID]string) {
+func ApplyPRRework(result *Result, day time.Time, pullRequests []PullRequestRow, hasReworkSignal map[uuid.UUID]bool) {
 	if result == nil {
 		return
 	}
@@ -43,7 +45,7 @@ func ApplyPRRework(result *Result, day time.Time, pullRequests []PullRequestRow,
 	}
 	for i := range result.RepoMetrics {
 		repoID := result.RepoMetrics[i].RepoID
-		counts := prrework.CountMerged(merged[repoID], prrework.ProviderHasReworkSignal(providerByRepo[repoID]))
+		counts := prrework.CountMerged(merged[repoID], hasReworkSignal[repoID])
 		result.RepoMetrics[i].PRRework = &counts
 		// The one-day column holds the value only: NULL for every state that
 		// is not measured. A reader that needs the state reads the counts.

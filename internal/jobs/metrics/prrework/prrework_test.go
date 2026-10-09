@@ -60,16 +60,6 @@ func TestCountMergedKeepsUnreviewedPullRequestsOutOfTheRatio(t *testing.T) {
 	}
 }
 
-func TestOnlyAProviderWithTheEventHasTheReworkSignal(t *testing.T) {
-	for provider, want := range map[string]bool{
-		"github": true, " GitHub ": true, "gitlab": false, "local": false, "": false, "bitbucket": false, "custom:push": false,
-	} {
-		if got := ProviderHasReworkSignal(provider); got != want {
-			t.Errorf("ProviderHasReworkSignal(%q) = %v, want %v", provider, got, want)
-		}
-	}
-}
-
 func ptr(v float64) *float64 { return &v }
 
 func same(a, b *float64) bool {

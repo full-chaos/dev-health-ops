@@ -17,6 +17,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/daily/repouser"
+	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 )
 
 // PullRequest is one pull request of a repository and day.
@@ -32,7 +33,8 @@ type PullRequest struct {
 // WriteDay computes one repository's day from its pull requests and stores
 // the repo_metrics_daily row (and the user rows of the same compute) as the
 // daily job does. provider is the provider of the repository as the repos
-// table names it.
+// table names it; its rework signal is the provider layer's declaration, as
+// in the daily job.
 func WriteDay(
 	ctx context.Context, t testing.TB, conn driver.Conn, organizationID string, repoID uuid.UUID, provider string,
 	day, computedAt time.Time, pullRequests []PullRequest,
@@ -57,7 +59,9 @@ func WriteDay(
 		rows = append(rows, row)
 	}
 	result := repouser.Compute(dayStart, nil, rows, nil, computedAt, repouser.DefaultNormalizeIdentity, 1000, nil, nil, nil, nil, nil)
-	repouser.ApplyPRRework(&result, dayStart, rows, map[uuid.UUID]string{repoID: provider})
+	repouser.ApplyPRRework(&result, dayStart, rows, map[uuid.UUID]bool{
+		repoID: providerfoundation.EmitsPullRequestReviewState(provider, providerfoundation.ReviewStateChangesRequested),
+	})
 	if len(result.RepoMetrics) != 1 {
 		t.Fatalf("prreworktest: the compute gave %d repository row(s) for one repository", len(result.RepoMetrics))
 	}

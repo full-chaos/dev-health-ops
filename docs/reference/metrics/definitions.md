@@ -161,11 +161,16 @@ reviews were never read must not show `0%`.
 
 - **Review evidence** of a pull request: the sync stored one review or more on
   it (`git_pull_requests.reviews_count > 0`), or a changes-requested review.
-- **Provider.** Only a provider that has a changes-requested event counts
-  (GitHub). GitLab has no such event (its reviews are rebuilt from approvals
-  and notes), and a local git repository has no reviews; a repository with no
-  known provider is treated the same. Their merged pull requests are counted
-  as "no rework signal", never as reviewed.
+- **Capability, not provider name.** The ratio is measured only for a provider
+  whose normalizer can store a changes-requested review. That is one
+  declaration at the provider layer
+  (`internal/providerfoundation/pull_request_review_states.go`), held against
+  the normalizers by a test; the metric asks it and names no provider. Today
+  GitHub's normalizer stores the provider's review state as it is, and the
+  GitLab normalizer rebuilds reviews from approvals and notes and stores no
+  review that asks for changes. A provider with no declaration, and a
+  repository with no known provider, have no signal. Merged pull requests with
+  no signal are counted as "no rework signal", never as reviewed.
 - **Stored inputs** on `repo_metrics_daily`, one row for each repository and
   day (migration `113_pr_rework_ratio_review_basis.sql`): `prs_merged`,
   `prs_merged_reviewed`, `prs_merged_rework`, `prs_merged_no_rework_signal`.

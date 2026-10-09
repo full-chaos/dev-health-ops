@@ -12,6 +12,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/changefailure"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/daily/repouser"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/prrework"
+	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 )
 
 // repoUserCommitWindowDays mirrors job_daily.py's h_start_date = d - timedelta(days=29):
@@ -162,12 +163,18 @@ func (executor *RepoUserCommitExecutor) ComputeFamily(
 	)
 	repouser.ApplyChangeFailure(&result, dayStart, changeFailure, storedChangeFailure, computedAt)
 	// The rework ratio counts reviewed pull requests only, and only of a
-	// provider that has a changes-requested event.
+	// provider that can store a changes-requested review. That capability is
+	// the provider layer's declaration, asked for each repository's provider;
+	// no provider is named here.
 	repoProviders, err := LoadRepoProviders(ctx, executor.conn, run.OrganizationID, repoIDs)
 	if err != nil {
 		return 0, err
 	}
-	repouser.ApplyPRRework(&result, dayStart, prs, repoProviders)
+	reworkSignal := make(map[uuid.UUID]bool, len(repoProviders))
+	for repoID, provider := range repoProviders {
+		reworkSignal[repoID] = providerfoundation.EmitsPullRequestReviewState(provider, providerfoundation.ReviewStateChangesRequested)
+	}
+	repouser.ApplyPRRework(&result, dayStart, prs, reworkSignal)
 	var reworkTotal prrework.Counts
 	for _, row := range result.RepoMetrics {
 		if row.PRRework != nil {

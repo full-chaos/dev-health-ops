@@ -26,8 +26,6 @@
 // reviewed pull request must not weigh as much as a day with fifty.
 package prrework
 
-import "strings"
-
 // State says why a view has a ratio or not. Unknown, not applicable and a
 // measured 0 are different answers, and a reader must be able to show which
 // one it has.
@@ -136,9 +134,11 @@ type PullRequest struct {
 }
 
 // CountMerged counts the merged pull requests of one repository and day.
-// hasSignal says that the repository's provider has a changes-requested
-// event. Without it no pull request counts as reviewed: its 0 is the
-// provider's shape, not a measure.
+// hasSignal says that the repository's provider can store a changes-requested
+// review. The caller takes that from the provider layer's declaration
+// (providerfoundation.EmitsPullRequestReviewState); this package knows no
+// provider. Without the signal no pull request counts as reviewed: its 0 is
+// the provider's shape, not a measure.
 //
 // A pull request with a changes-requested review has review evidence by that
 // fact, whatever its review count says.
@@ -158,20 +158,4 @@ func CountMerged(pullRequests []PullRequest, hasSignal bool) Counts {
 		}
 	}
 	return counts
-}
-
-// ProviderHasReworkSignal says that a repository provider stores a
-// changes-requested review when a reviewer asks for changes. An unknown
-// provider has none: a 0 that the provider cannot make other than 0 is never
-// served as a measure.
-//
-// GitHub has the event. GitLab has no such event (its reviews are rebuilt from
-// approvals and notes), and a local git repository has no reviews at all.
-func ProviderHasReworkSignal(provider string) bool {
-	switch strings.ToLower(strings.TrimSpace(provider)) {
-	case "github":
-		return true
-	default:
-		return false
-	}
 }

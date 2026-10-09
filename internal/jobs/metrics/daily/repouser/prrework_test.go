@@ -49,7 +49,9 @@ func TestApplyPRReworkCountsTheDaysMergedPullRequestsByReviewEvidence(t *testing
 	for _, row := range result.RepoMetrics {
 		before[row.RepoID] = row.PRReworkRatio
 	}
-	ApplyPRRework(&result, day, rows, map[uuid.UUID]string{github: "github", gitlab: "gitlab", quiet: "github"})
+	// The first and the third repository are of a provider with the
+	// changes-requested signal, the second is not.
+	ApplyPRRework(&result, day, rows, map[uuid.UUID]bool{github: true, gitlab: false, quiet: true})
 
 	want := map[uuid.UUID]prrework.Counts{
 		github: {Merged: 3, Reviewed: 2, Rework: 1},

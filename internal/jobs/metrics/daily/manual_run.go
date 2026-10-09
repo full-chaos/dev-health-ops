@@ -7,6 +7,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 // ManualDailyRunOutcome reports what StartManualDailyRun did for one day.
@@ -14,6 +16,34 @@ type ManualDailyRunOutcome struct {
 	Day        string
 	RunID      string
 	Generation string
+	// AlreadyStarted is true when the run row of this (org, day, generation)
+	// existed before the call, so the call started nothing new (the
+	// idempotent replay of an earlier identical request). It is not part of
+	// the command's output: a caller that wants it reads it from here.
+	AlreadyStarted bool `json:"-"`
+}
+
+// MaxRerunTagLength bounds a rerun tag. The tag is hashed into the
+// generation, never embedded, so the bound only keeps argv, audit and log
+// lines small.
+const MaxRerunTagLength = 32
+
+// ValidRerunTag reports whether tag is a well-formed rerun tag: 1 to
+// MaxRerunTagLength characters of [A-Za-z0-9._-]. The set holds no "|" and no
+// "," so a tag can never shift the field boundaries of the generation seed.
+func ValidRerunTag(tag string) bool {
+	if tag == "" || len(tag) > MaxRerunTagLength {
+		return false
+	}
+	for _, r := range tag {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9',
+			r == '.', r == '_', r == '-':
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // ManualDailyRunGeneration derives a deterministic generation for a manual
@@ -35,12 +65,28 @@ type ManualDailyRunOutcome struct {
 // Generation at 64 bytes and a raw org+day+repo-id-list easily exceeds that
 // once more than a couple of repositories are named.
 func ManualDailyRunGeneration(organizationID, day string, repositoryIDs []RepositoryID) string {
+	return ManualDailyRerunGeneration(organizationID, day, repositoryIDs, "")
+}
+
+// ManualDailyRerunGeneration is ManualDailyRunGeneration with an optional
+// caller-chosen rerun tag. An empty tag gives byte-for-byte the generation of
+// ManualDailyRunGeneration. A non-empty tag is hashed into the seed after a
+// "|rerun:" field, so (org, day, repository set, tag) names one logical
+// request: the same tag twice lands on StartRunTx's ON CONFLICT DO NOTHING
+// and starts nothing, and a new tag names a new run for a day that already has
+// one. The tag must pass ValidRerunTag; "|" is not in its alphabet and a
+// repository id is a uuid, so no tag can make two different requests hash from
+// the same seed.
+func ManualDailyRerunGeneration(organizationID, day string, repositoryIDs []RepositoryID, rerunTag string) string {
 	sorted := make([]string, len(repositoryIDs))
 	for i, id := range repositoryIDs {
 		sorted[i] = string(id)
 	}
 	sort.Strings(sorted)
 	seed := organizationID + "|" + day + "|" + strings.Join(sorted, ",")
+	if rerunTag != "" {
+		seed += "|rerun:" + rerunTag
+	}
 	sum := sha256.Sum256([]byte(seed))
 	return ManualDailyGenerationPrefix + hex.EncodeToString(sum[:])[:16]
 }
@@ -122,6 +168,14 @@ func (store *PostgresStore) StartManualDailyRun(
 		}
 	}
 
+	var alreadyStarted bool
+	if err := tx.QueryRow(ctx, `
+SELECT EXISTS (SELECT 1 FROM public.daily_metrics_runs WHERE id = $1::uuid)`,
+		newRun(uuid.MustParse(organizationID).String(), targetDay, generation).ID,
+	).Scan(&alreadyStarted); err != nil {
+		return ManualDailyRunOutcome{}, ErrUnavailable
+	}
+
 	run, err := store.StartRunTx(ctx, tx, StartRunRequest{
 		OrganizationID: organizationID,
 		TargetDay:      targetDay,
@@ -135,5 +189,5 @@ func (store *PostgresStore) StartManualDailyRun(
 		return ManualDailyRunOutcome{}, ErrUnavailable
 	}
 	committed = true
-	return ManualDailyRunOutcome{Day: day, RunID: run.ID, Generation: generation}, nil
+	return ManualDailyRunOutcome{Day: day, RunID: run.ID, Generation: generation, AlreadyStarted: alreadyStarted}, nil
 }

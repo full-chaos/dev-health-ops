@@ -3,8 +3,10 @@ package workersctl
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -698,6 +700,18 @@ func TestDispatchMetricsDailyStartValidatesFlagsBeforeTouchingTheBackend(t *test
 		"invalid repo-id": {
 			"daily-start", "--org", org, "--day", "2026-08-01", "--repo-id", "not-a-uuid",
 		},
+		"empty rerun tag": {
+			"daily-start", "--org", org, "--day", "2026-08-01", "--rerun-tag", "", "--reason", "operator_test", "--correlation-id", "corr-1",
+		},
+		"rerun tag with a bad character": {
+			"daily-start", "--org", org, "--day", "2026-08-01", "--rerun-tag", "a|b", "--reason", "operator_test", "--correlation-id", "corr-1",
+		},
+		"rerun tag over the length bound": {
+			"daily-start", "--org", org, "--day", "2026-08-01", "--rerun-tag", strings.Repeat("x", 33), "--reason", "operator_test", "--correlation-id", "corr-1",
+		},
+		"rerun tag does not lift the window cap": {
+			"daily-start", "--org", org, "--day", "2026-01-01", "--to", "2026-12-31", "--rerun-tag", "fix-1", "--reason", "operator_test", "--correlation-id", "corr-1",
+		},
 	}
 	for name, args := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -718,6 +732,18 @@ func TestDispatchMetricsDailyStartReportsBackendUnavailableOnceFlagsAreValid(t *
 	code := dispatchMetrics(context.Background(), &operatorRuntime{}, []string{
 		"daily-start", "--org", "00000000-0000-4000-8000-000000000001", "--day", "2026-08-01",
 		"--reason", "operator_test", "--correlation-id", "corr-1",
+	}, &stdout, &stderr)
+	if code != 1 || stderr.String() != "{\"error\":{\"code\":\"operator_backend_unavailable\"}}\n" {
+		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+}
+
+// A well-formed tag reaches the backend check, like the same call without it.
+func TestDispatchMetricsDailyStartWithAValidRerunTagReachesTheBackend(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := dispatchMetrics(context.Background(), &operatorRuntime{}, []string{
+		"daily-start", "--org", "00000000-0000-4000-8000-000000000001", "--day", "2026-08-01",
+		"--rerun-tag", "fix-1", "--reason", "operator_test", "--correlation-id", "corr-1",
 	}, &stdout, &stderr)
 	if code != 1 || stderr.String() != "{\"error\":{\"code\":\"operator_backend_unavailable\"}}\n" {
 		t.Fatalf("code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
@@ -1918,5 +1944,152 @@ func TestDispatchMetricsRemainingTriggerBackstopAcceptsExplicitPastDay(t *testin
 	const operatorBackendUnavailableJSON = "{\"error\":{\"code\":\"operator_backend_unavailable\"}}\n"
 	if code != 1 || stderr.String() != operatorBackendUnavailableJSON {
 		t.Fatalf("valid past --day rejected at validation: code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+}
+
+func TestTaggedDailyStartResultSaysWhichDaysThisCallStarted(t *testing.T) {
+	result := taggedDailyStartResult("fix-1", []daily.ManualDailyRunOutcome{
+		{Day: "2026-08-01", RunID: "r1", Generation: "g1"},
+		{Day: "2026-08-02", RunID: "r2", Generation: "g2", AlreadyStarted: true},
+	}, false)
+	raw, err := json.Marshal(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const want = `{"days":[{"Day":"2026-08-01","Generation":"g1","RunID":"r1","started":true},` +
+		`{"Day":"2026-08-02","Generation":"g2","RunID":"r2","started":false}],"deferred_discovery":false,"rerun_tag":"fix-1"}`
+	if string(raw) != want {
+		t.Fatalf("tagged result = %s\nwant          %s", raw, want)
+	}
+	// The plain outcome keeps the keys it had before the option existed.
+	plain, err := json.Marshal(daily.ManualDailyRunOutcome{Day: "d", RunID: "r", Generation: "g", AlreadyStarted: true})
+	if err != nil || string(plain) != `{"Day":"d","RunID":"r","Generation":"g"}` {
+		t.Fatalf("plain outcome = %s err=%v", plain, err)
+	}
+}
+
+func TestDailyStartResultKeepsThePlainShapeWithoutATag(t *testing.T) {
+	results := []daily.ManualDailyRunOutcome{{Day: "2026-08-01", RunID: "r1", Generation: "g1", AlreadyStarted: true}}
+	raw, err := json.Marshal(dailyStartResult("", false, results, true))
+	if err != nil {
+		t.Fatal(err)
+	}
+	const want = `{"days":[{"Day":"2026-08-01","RunID":"r1","Generation":"g1"}],"deferred_discovery":true}`
+	if string(raw) != want {
+		t.Fatalf("plain result = %s\nwant          %s", raw, want)
+	}
+	tagged, err := json.Marshal(dailyStartResult("fix-1", true, results, false))
+	if err != nil || !strings.Contains(string(tagged), `"rerun_tag":"fix-1"`) || !strings.Contains(string(tagged), `"started":false`) {
+		t.Fatalf("tagged result = %s err=%v", tagged, err)
+	}
+}
+
+func TestLogRerunOutcomeIsLoudForStartedReplayedAndRefused(t *testing.T) {
+	var buffer bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buffer, nil)))
+	defer slog.SetDefault(previous)
+	ctx := context.Background()
+	for _, step := range []struct {
+		outcome daily.ManualDailyRunOutcome
+		err     error
+		want    []string
+	}{
+		{daily.ManualDailyRunOutcome{RunID: "r1"}, nil, []string{"rerun started", "rerun_tag=fix-1", "day=2026-08-01", "run_id=r1"}},
+		{daily.ManualDailyRunOutcome{RunID: "r1", AlreadyStarted: true}, nil, []string{"rerun already started, nothing new", "run_id=r1"}},
+		{daily.ManualDailyRunOutcome{}, daily.ErrDayAlreadyCovered, []string{"rerun refused", "reason=already_covered"}},
+		{daily.ManualDailyRunOutcome{}, daily.ErrUnavailable, []string{"rerun refused", "reason=start_failed"}},
+	} {
+		buffer.Reset()
+		logRerunOutcome(ctx, "fix-1", "2026-08-01", step.outcome, step.err)
+		for _, fragment := range step.want {
+			if !strings.Contains(buffer.String(), fragment) {
+				t.Errorf("log %q lacks %q", buffer.String(), fragment)
+			}
+		}
+		if strings.Contains(buffer.String(), "organization") {
+			t.Errorf("a rerun log line must hold no organization id: %q", buffer.String())
+		}
+	}
+}
+
+type recordingDailyStarter struct {
+	days        []string
+	generations []string
+	failOn      string
+	err         error
+}
+
+func (starter *recordingDailyStarter) StartManualDailyRun(
+	_ context.Context, _ string, day, generation string, _ []daily.RepositoryID, _ daily.RunPublisher,
+) (daily.ManualDailyRunOutcome, error) {
+	if day == starter.failOn {
+		return daily.ManualDailyRunOutcome{}, starter.err
+	}
+	starter.days = append(starter.days, day)
+	starter.generations = append(starter.generations, generation)
+	return daily.ManualDailyRunOutcome{Day: day, Generation: generation}, nil
+}
+
+// The tag given on the command line is part of the generation of every day of
+// the window; without it the generation is the one the command always used.
+func TestStartDailyDaysPutsTheRerunTagIntoEveryGeneration(t *testing.T) {
+	const org = "00000000-0000-4000-8000-000000000001"
+	repos := []daily.RepositoryID{"00000000-0000-4000-8000-000000000002"}
+	from, to := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC), time.Date(2026, 8, 3, 0, 0, 0, 0, time.UTC)
+
+	plain := &recordingDailyStarter{}
+	if _, err := startDailyDays(context.Background(), plain, nil, org, from, to, repos, "", false); err != nil {
+		t.Fatal(err)
+	}
+	tagged := &recordingDailyStarter{}
+	results, err := startDailyDays(context.Background(), tagged, nil, org, from, to, repos, "fix-1", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 3 || !reflect.DeepEqual(tagged.days, []string{"2026-08-01", "2026-08-02", "2026-08-03"}) {
+		t.Fatalf("days = %v, results = %d", tagged.days, len(results))
+	}
+	for i, day := range tagged.days {
+		if want := daily.ManualDailyRerunGeneration(org, day, repos, "fix-1"); tagged.generations[i] != want {
+			t.Errorf("tagged generation of %s = %q, want %q", day, tagged.generations[i], want)
+		}
+		if want := daily.ManualDailyRunGeneration(org, day, repos); plain.generations[i] != want {
+			t.Errorf("plain generation of %s = %q, want the untagged %q", day, plain.generations[i], want)
+		}
+		if tagged.generations[i] == plain.generations[i] {
+			t.Errorf("the tag did not change the generation of %s", day)
+		}
+	}
+}
+
+// A tagged window logs one line per day; a plain window logs none.
+func TestStartDailyDaysLogsOneLinePerDayOnlyWhenTagged(t *testing.T) {
+	var buffer bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buffer, nil)))
+	defer slog.SetDefault(previous)
+	from, to := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC), time.Date(2026, 8, 2, 0, 0, 0, 0, time.UTC)
+	const org = "00000000-0000-4000-8000-000000000001"
+	if _, err := startDailyDays(context.Background(), &recordingDailyStarter{}, nil, org, from, to, nil, "", false); err != nil {
+		t.Fatal(err)
+	}
+	if buffer.Len() != 0 {
+		t.Fatalf("a plain window must log nothing: %q", buffer.String())
+	}
+	if _, err := startDailyDays(context.Background(), &recordingDailyStarter{}, nil, org, from, to, nil, "fix-1", true); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Count(buffer.String(), "rerun started"); got != 2 {
+		t.Fatalf("a tagged window of 2 days must log 2 started lines, got %d: %q", got, buffer.String())
+	}
+}
+
+func TestStartDailyDaysStopsAtTheFirstRefusalAndKeepsTheDaysBefore(t *testing.T) {
+	starter := &recordingDailyStarter{failOn: "2026-08-02", err: daily.ErrDayAlreadyCovered}
+	results, err := startDailyDays(context.Background(), starter, nil, "00000000-0000-4000-8000-000000000001",
+		time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC), time.Date(2026, 8, 3, 0, 0, 0, 0, time.UTC), nil, "fix-1", true)
+	if !errors.Is(err, daily.ErrDayAlreadyCovered) || len(results) != 1 || starter.days[len(starter.days)-1] != "2026-08-01" {
+		t.Fatalf("results=%d days=%v err=%v", len(results), starter.days, err)
 	}
 }

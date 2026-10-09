@@ -89,6 +89,8 @@ import (
 	"time"
 
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
+
+	"github.com/full-chaos/dev-health-ops/internal/teamkeytables"
 )
 
 // QueryClient is the read-only ClickHouse query boundary this package
@@ -158,21 +160,21 @@ var TeamMetrics = map[string]MetricSpec{
 		Metric: "throughput", Label: "Throughput", Unit: "items",
 		Table: "work_item_metrics_daily AS m", ValueExpr: "sum(m.items_completed)",
 		EntityExpr: "m.team_id", LabelExpr: teamLabelExpr,
-		WhereClause: "AND m.team_id != ''", Transform: identity,
+		WhereClause: "AND m.team_id != '' AND " + workItemMetricsLiveRow, Transform: identity,
 		UsePrimaryTeamAttribution: true,
 	},
 	"cycle_time": {
 		Metric: "cycle_time", Label: "Cycle Time", Unit: "days",
 		Table: "work_item_metrics_daily AS m", ValueExpr: "avg(m.cycle_time_p50_hours)",
 		EntityExpr: "m.team_id", LabelExpr: teamLabelExpr,
-		WhereClause: "AND m.cycle_time_p50_hours IS NOT NULL AND m.team_id != ''",
+		WhereClause: "AND m.cycle_time_p50_hours IS NOT NULL AND m.team_id != '' AND " + workItemMetricsLiveRow,
 		Transform:   hoursToDays, UsePrimaryTeamAttribution: true,
 	},
 	"wip": {
 		Metric: "wip", Label: "WIP", Unit: "items",
 		Table: "work_item_metrics_daily AS m", ValueExpr: "avg(m.wip_count_end_of_day)",
 		EntityExpr: "m.team_id", LabelExpr: teamLabelExpr,
-		WhereClause: "AND m.team_id != ''", Transform: identity,
+		WhereClause: "AND m.team_id != '' AND " + workItemMetricsLiveRow, Transform: identity,
 	},
 	"review_load": {
 		Metric: "review_load", Label: "Review Load", Unit: "reviews",
@@ -188,6 +190,14 @@ var TeamMetrics = map[string]MetricSpec{
 		Transform:   identity,
 	},
 }
+
+// workItemMetricsLiveRow leaves out a row of work_item_metrics_daily whose key
+// a recompute superseded: the daily family writes a row of zeros over each
+// key that it no longer produces (a team that was replaced, an item that
+// moved). Such a row is not a point of its team and not a sample of an
+// average. The test is the writer's (package teamkeytables). Python's specs
+// have no such clause: they have no row of zeros to meet in this table.
+var workItemMetricsLiveRow = teamkeytables.WorkItemMetricsDaily.LiveRow("m.")
 
 // RepoMetrics ports REPO_METRICS (quadrant.py:138-206) verbatim.
 var RepoMetrics = map[string]MetricSpec{
@@ -227,7 +237,7 @@ var RepoMetrics = map[string]MetricSpec{
 		Table: "work_item_metrics_daily AS m", ValueExpr: "avg(m.wip_count_end_of_day)",
 		EntityExpr: "repos.repo", LabelExpr: "repos.repo",
 		JoinClause:  "INNER JOIN repos FINAL ON repos.repo = m.work_scope_id AND repos.org_id = {org_id:String}",
-		WhereClause: "AND m.work_scope_id != ''", Transform: identity,
+		WhereClause: "AND m.work_scope_id != '' AND " + workItemMetricsLiveRow, Transform: identity,
 	},
 	"review_load": {
 		Metric: "review_load", Label: "Review Load", Unit: "reviews",

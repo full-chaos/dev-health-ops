@@ -51,7 +51,6 @@ var ownWriterMarkers = map[string][]string{
 var noRuleForReaders = map[string]string{
 	"estimate_coverage_metrics_daily": "a group whose items are all closed is stored with a backlog of 0 and no ratio",
 	"ai_impact_metrics_daily":         "the bucket 'unknown' is stored for every group, also with no pull request",
-	"ic_landscape_rolling_30d":        "a person with no churn, delivery or WIP in 30 days can hold 0 in every column",
 }
 
 // Tables returns the tables a reader can apply the rule to, sorted.

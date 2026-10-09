@@ -82,7 +82,8 @@ func TestEveryRegistryTableHasARuleOrAReason(t *testing.T) {
 		}
 	}
 	want := []string{
-		"ai_governance_coverage_daily", "compounding_risk_daily", "investment_metrics_daily", "issue_type_metrics_daily",
+		"ai_governance_coverage_daily", "compounding_risk_daily", "ic_landscape_rolling_30d",
+		"investment_metrics_daily", "issue_type_metrics_daily",
 		"team_cognitive_load_daily", "team_complexity_daily", "team_metrics_daily",
 		"work_item_metrics_daily", "work_item_state_durations_daily",
 	}
@@ -94,7 +95,7 @@ func TestEveryRegistryTableHasARuleOrAReason(t *testing.T) {
 func TestATableWithNoRulePanics(t *testing.T) {
 	for _, table := range []string{
 		"repo_metrics_daily", // not a team-keyed table
-		"estimate_coverage_metrics_daily", "ai_impact_metrics_daily", "ic_landscape_rolling_30d",
+		"estimate_coverage_metrics_daily", "ai_impact_metrics_daily",
 	} {
 		if Registered(table) {
 			t.Errorf("%s reads as registered", table)

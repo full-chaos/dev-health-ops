@@ -68,9 +68,9 @@ func TestTheRuleKeepsEachMeasurementAndDropsARetraction(t *testing.T) {
 		// The team column and the measure columns come from the registry, or
 		// from this package for the two tables with the rule in their own
 		// writers.
-		id, markers := "team_id", ownWriterMarkers[table]
+		id, dayColumn, markers := "team_id", "day", ownWriterMarkers[table]
 		if declared, ok := teamkeytables.ByTable(table); ok {
-			id = declared.TeamColumn
+			id, dayColumn = declared.TeamColumn, declared.DayColumn
 			markers = append(append([]string(nil), declared.Measures...), declared.NullableMeasures...)
 		}
 		if len(markers) == 0 {
@@ -81,19 +81,19 @@ func TestTheRuleKeepsEachMeasurementAndDropsARetraction(t *testing.T) {
 			key := "only " + marker
 			want = append(want, key)
 			if err := conn.Exec(ctx, fmt.Sprintf(
-				"INSERT INTO %s (org_id, day, %s, %s, computed_at) VALUES (?, ?, ?, 1, ?)", table, id, marker),
+				"INSERT INTO %s (org_id, %s, %s, %s, computed_at) VALUES (?, ?, ?, 1, ?)", table, dayColumn, id, marker),
 				org, day, key, newer); err != nil {
 				t.Fatalf("%s: insert %q: %v", table, key, err)
 			}
 		}
 		sort.Strings(want)
 		if err := conn.Exec(ctx, fmt.Sprintf(
-			"INSERT INTO %s (org_id, day, %s, %s, computed_at) VALUES (?, ?, 'retracted', 5, ?)", table, id, markers[0]),
+			"INSERT INTO %s (org_id, %s, %s, %s, computed_at) VALUES (?, ?, 'retracted', 5, ?)", table, dayColumn, id, markers[0]),
 			org, day, older); err != nil {
 			t.Fatalf("%s: insert the measured row of the retracted key: %v", table, err)
 		}
 		if err := conn.Exec(ctx, fmt.Sprintf(
-			"INSERT INTO %s (org_id, day, %s, computed_at) VALUES (?, ?, 'retracted', ?)", table, id),
+			"INSERT INTO %s (org_id, %s, %s, computed_at) VALUES (?, ?, 'retracted', ?)", table, dayColumn, id),
 			org, day, newer); err != nil {
 			t.Fatalf("%s: insert the retraction row: %v", table, err)
 		}

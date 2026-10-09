@@ -1229,7 +1229,7 @@ when both of these hold; otherwise that scope closes nothing (its grants are sti
   can never disagree: `githubPageStep` / `linkHeaderNext` for GitHub, `gitLabPageStep` for GitLab. GitHub: the `Link`
   header is read over every field line, with `rel` tokens space-split and compared without case (`rel="next last"`,
   `rel=NEXT` and a `rel="next"` in a second `Link` line are all followed). The end is proven only when no entry is
-  `rel="next"` and every entry is `<URL>` with a non-empty URL and a `rel`; with no `Link` at all, only on a page shorter
+  `rel="next"` and every entry is `<URL>` with a non-empty URL, followed only by `;` parameters whose `rel` names at least one relation (`rel=""` proves nothing); with no `Link` at all, only on a page shorter
   than `per_page`. GitLab: the end is proven only when `X-Next-Page` is sent once and empty and no well-formed `Link`
   announces a next page; a malformed or non-positive `X-Next-Page`, no header (an end inferred from a short page) or a
   `Link` with `rel="next"` leaves that group's listing unproven. A caller bound (`StopAt`, `StopAfter`, `MaxItems`) never

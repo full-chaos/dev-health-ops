@@ -85,6 +85,12 @@ func TestGitLabPaginationEndProvenOnlyWhenXNextPageIsSentEmpty(t *testing.T) {
 		{name: "an empty X-Next-Page with an unreadable Link is not the end", responses: []paginationResponse{
 			{body: `[{"id":1}]`, headers: http.Header{"X-Next-Page": {""}, "Link": {`https://gitlab.example/x; rel="last"`}}},
 		}},
+		{name: "an empty X-Next-Page with an empty rel is not the end", responses: []paginationResponse{
+			{body: `[]`, headers: http.Header{"X-Next-Page": {""}, "Link": {`<https://gitlab.example/api/v4/groups/org/projects?page=2>; rel=""`}}},
+		}},
+		{name: "an empty X-Next-Page with a blank rel is not the end", responses: []paginationResponse{
+			{body: `[]`, headers: http.Header{"X-Next-Page": {""}, "Link": {`<https://gitlab.example/api/v4/groups/org/projects?page=2>; rel=" "`}}},
+		}},
 		{name: "a 200 null body is an error, not an empty page", responses: []paginationResponse{
 			{body: `null`, headers: http.Header{"X-Next-Page": {""}}},
 		}, wantErr: true},
@@ -149,6 +155,21 @@ func TestGitHubLinkPaginationEndProvenOnlyWhenTheWalkersLinkReadingFindsNoNext(t
 		}},
 		{name: "an unreadable second Link field line is not the end", responses: []paginationResponse{
 			{body: `[{"id":1}]`, headers: http.Header{"Link": {`<` + page1 + `>; rel="prev"`, `garbage`}}},
+		}},
+		{name: "a Link entry with an empty rel is not the end", responses: []paginationResponse{
+			{body: `[]`, headers: http.Header{"Link": {`<` + page2 + `>; rel=""`}}},
+		}},
+		{name: "a Link entry with a blank rel is not the end", responses: []paginationResponse{
+			{body: `[]`, headers: http.Header{"Link": {`<` + page2 + `>; rel=" "`}}},
+		}},
+		{name: "a Link entry with a rel and no value is not the end", responses: []paginationResponse{
+			{body: `[]`, headers: http.Header{"Link": {`<` + page2 + `>; rel=`}}},
+		}},
+		{name: "a Link entry with text between the URL and its parameters is not the end", responses: []paginationResponse{
+			{body: `[{"id":1}]`, headers: http.Header{"Link": {`<` + page1 + `> junk; rel="prev"`}}},
+		}},
+		{name: "an empty rel beside a well-formed entry is not the end", responses: []paginationResponse{
+			{body: `[]`, headers: http.Header{"Link": {`<` + page1 + `>; rel="prev", <` + page2 + `>; rel=""`}}},
 		}},
 		{name: "a rel=next without a URL is not the end", responses: []paginationResponse{
 			{body: `[{"id":1}]`, headers: http.Header{"Link": {`<>; rel="next"`}}},

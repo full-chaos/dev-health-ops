@@ -861,7 +861,8 @@ func githubPageStep(header http.Header, items int, query url.Values) (string, bo
 // linkHeaderNext reads an RFC 8288 Link header over every field line: the
 // first non-empty rel="next" target (rel tokens are space-separated and
 // case-insensitive), and parsed=false when any entry is not "<URL>" with a
-// non-empty URL followed by a rel parameter.
+// non-empty URL, followed only by ";"-separated parameters of which a rel
+// holds at least one token (rel="" names no relation, so it proves nothing).
 func linkHeaderNext(values []string) (next string, parsed bool) {
 	parsed = true
 	for _, value := range values {
@@ -875,20 +876,24 @@ func linkHeaderNext(values []string) (next string, parsed bool) {
 			if open != 0 || target == "" {
 				parsed = false
 			}
-			hasRel := false
-			for _, attribute := range strings.Split(part[close+1:], ";") {
+			params := strings.TrimSpace(part[close+1:])
+			if params != "" && !strings.HasPrefix(params, ";") {
+				parsed = false
+			}
+			relTokens := 0
+			for _, attribute := range strings.Split(params, ";") {
 				key, relValue, found := strings.Cut(strings.TrimSpace(attribute), "=")
 				if !found || !strings.EqualFold(strings.TrimSpace(key), "rel") {
 					continue
 				}
-				hasRel = true
 				for _, token := range strings.Fields(strings.Trim(strings.TrimSpace(relValue), `"`)) {
+					relTokens++
 					if strings.EqualFold(token, "next") && next == "" && target != "" {
 						next = target
 					}
 				}
 			}
-			if !hasRel {
+			if relTokens == 0 {
 				parsed = false
 			}
 		}

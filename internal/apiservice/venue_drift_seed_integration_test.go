@@ -58,6 +58,9 @@ func seedDriftReview(t *testing.T, ctx context.Context, venue *venueoracle.Venue
 		{orgA, "c-dismissed", "team", "qa", "jira", "qa", "field_changed", "name", `"x"`, `"z"`, "dismissed", "2026-09-01 03:00:00"},
 		{orgA, "c-badjson", "team", "qa", "jira", "qa", "field_changed", "description", `not json`, `{bad`, "pending", "2026-09-01 02:00:00"},
 		{orgB, "c-other-org", "team", "qa", "jira", "qa", "field_changed", "name", `"o"`, `"p"`, "pending", "2026-09-01 01:00:00"},
+		// A team with one holder (soloTeamRequests creates custom:solo).
+		{orgA, "c-name-solo", "team", "custom:solo", "jira", "solo", "field_changed", "name", `"Solo"`, `"Solo Observed"`, "pending", "2026-09-01 00:30:00"},
+		{orgA, "c-desc-solo", "team", "custom:solo", "jira", "solo", "field_changed", "description", `null`, `"solo desc"`, "pending", "2026-09-01 00:20:00"},
 	}
 	for _, database := range []string{venue.PythonClickHouseDB, venue.GoClickHouseDB} {
 		conn, err := chclickhouse.Open(ctx, chclickhouse.DefaultConfig(venue.AdminClickHouseURI(t, database)))
@@ -85,6 +88,7 @@ func seedDriftReview(t *testing.T, ctx context.Context, venue *venueoracle.Venue
 				ts("2026-09-01 00:00:00"), ts("2026-09-01 00:00:00")))
 		}
 		obs("qa", "qa", "QA Observed", "obs desc", `["b","c"]`, `["PK1"]`, `["r1"]`)
+		obs("custom:solo", "solo", "Solo Observed", "solo desc", `[]`, `["design"]`, `[]`)
 		// A double-encoded members column: _json_list decodes it a second time.
 		obs("dr-team", "dr-team", "DR Observed", "", `"[\"x\",\"y\"]"`, `["DR1","DR2"]`, `["dr/repo"]`)
 		exec(fmt.Sprintf(`INSERT INTO team_memberships (org_id, provider, team_id, member_id, raw_provider_user_id, raw_email, identity_facets, source,

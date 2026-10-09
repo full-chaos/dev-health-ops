@@ -105,6 +105,7 @@ import (
 	"fmt"
 	"os"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/home"
@@ -456,6 +457,37 @@ func TestDirectionIsTheSignOfTheChange(t *testing.T) {
 		}
 		if *card.Direction != want {
 			t.Errorf("%s: direction = %q for a change of %v, want %q", card.Title, *card.Direction, *card.ChangePercent, want)
+		}
+	}
+}
+
+// A rise from a measured 0 (the percent is undefined) is a move: a lower-is-better
+// metric that rose from 0 is an opportunity, with a null change_percent and a
+// direction from the sign of the current value; a metric with no value in a
+// window is not.
+func TestARiseFromAMeasuredZeroIsAnOpportunityWithoutAPercent(t *testing.T) {
+	h := &home.Response{
+		Deltas: []home.MetricDelta{
+			{Metric: "churn", Label: "Code Churn", Unit: "loc", Value: 5, DeltaPct: nil, HasData: true, HasPriorData: true},
+			{Metric: "cycle_time", Label: "Cycle Time", Value: 0, DeltaPct: pctp(0), HasData: false, HasPriorData: true},
+		},
+	}
+	got := FromHomeResponse(h, home.Filters{Time: home.TimeFilter{RangeDays: 7, CompareDays: 7}, Scope: home.ScopeFilter{Level: "org"}})
+	if len(got.Items) != 1 || got.Items[0].Title != "Reduce Code Churn" {
+		t.Fatalf("cards = %+v, want one card: Reduce Code Churn", got.Items)
+	}
+	card := got.Items[0]
+	if card.ChangePercent != nil || card.Direction == nil || *card.Direction != "up" {
+		t.Errorf("card = change_percent %v direction %v, want null and up", card.ChangePercent, card.Direction)
+	}
+	if strings.Contains(card.Rationale, "%") || !strings.Contains(card.Rationale, "from 0 loc to 5 loc") {
+		t.Errorf("rationale = %q, want the change in absolute values and no percent", card.Rationale)
+	}
+	h.Deltas[0].Value = -5
+	down := FromHomeResponse(h, home.Filters{Time: home.TimeFilter{RangeDays: 7, CompareDays: 7}, Scope: home.ScopeFilter{Level: "org"}})
+	for _, card := range down.Items {
+		if card.Title == "Reduce Code Churn" {
+			t.Errorf("a lower-is-better metric that fell from a measured zero is not an opportunity: %+v", card)
 		}
 	}
 }

@@ -242,7 +242,7 @@ func TestAMeasuredZeroPriorIsNeverSteadyOrAPercent(t *testing.T) {
 		t.Errorf("MoveWords from a measured zero to a negative value = %q", got)
 	}
 	// Both windows 0 is a true 0 %: steady.
-	steady := MetricDelta{Metric: "churn", Label: "Code Churn", Unit: "loc", Value: 0, DeltaPct: pctp(0), HasData: true, HasPriorData: true}
+	steady := MetricDelta{Metric: "throughput", Label: "Throughput", Unit: "items", Value: 0, DeltaPct: pctp(0), HasData: true, HasPriorData: true}
 	if got := MoveWords(steady); got != "held steady 0%" {
 		t.Errorf("MoveWords 0 -> 0 = %q, want held steady 0%%", got)
 	}

@@ -375,17 +375,18 @@ func TestResolve_TeamAndRepoCombined_PatternFallbackResolves(t *testing.T) {
 			{rows: [][]any{{"repo-uuid-1", "org/repo-a"}}},
 			{rows: nil}, // no native ownership row for this repo at all
 			{rows: [][]any{{"team-a", []string{"org/repo-a"}}}},
-			{rows: nil}, // user metrics
-			{rows: nil}, // repo-scoped team metrics
+			{rows: [][]any{{"team-a"}}}, // active-team set
+			{rows: nil},                 // user metrics
+			{rows: nil},                 // repo-scoped team metrics
 		},
-		errs: []error{nil, nil, nil, nil, nil},
+		errs: []error{nil, nil, nil, nil, nil, nil},
 	}
 	result, err := Resolve(context.Background(), client, "org-1", mustDate(t, "2026-08-01"), mustDate(t, "2026-08-31"), strPtr("team-a"), strPtr("org/repo-a"))
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
-	if client.calls != 5 {
-		t.Fatalf("calls = %d, want 5 (candidates, ownership, teams, user metrics, repo-scoped team metrics)", client.calls)
+	if client.calls != 6 {
+		t.Fatalf("calls = %d, want 6 (candidates, ownership, teams, active-team set, user metrics, repo-scoped team metrics)", client.calls)
 	}
 	if result.Signals == nil {
 		t.Fatal("expected a non-nil (possibly empty) signals slice")

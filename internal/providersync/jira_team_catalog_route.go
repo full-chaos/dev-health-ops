@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -263,14 +264,17 @@ func (handler JiraTeamCatalogRouteHandler) CollectTeamCatalog(
 	rows.Ownership = dedupeJiraOwnershipRows(rows.Ownership)
 	var archivedProjects []JiraArchivedProject
 	archivedSeen := map[JiraArchivedProject]bool{}
-	liveIDs := make(map[string]bool, len(search.Values))
-	for _, entry := range search.Values {
-		liveIDs[strings.TrimSpace(entry.ID)] = true
+	// Rule: the reads are ordered in time. Only a live read taken AFTER the
+	// archived read can prove a project live again, so the skip set is the
+	// second live read alone (the union feeds the project rows only).
+	liveAfterArchived := make(map[string]bool, len(liveAgain.Values))
+	for _, entry := range liveAgain.Values {
+		liveAfterArchived[strings.TrimSpace(entry.ID)] = true
 	}
 	for _, entry := range archived.Values {
 		project := JiraArchivedProject{ID: strings.TrimSpace(entry.ID), Key: jiraTeamID(entry.Key)}
-		// A project read as archived and live again in the same walk is live.
-		if liveIDs[project.ID] {
+		// A project read as archived and live in the read after it is live.
+		if liveAfterArchived[project.ID] {
 			continue
 		}
 		if project.Key == "" || project.ID == "" || jiraProjectIDIsKeyBuilt(ref.OrgID, project.ID) || archivedSeen[project] {
@@ -765,19 +769,13 @@ func (collector JiraTeamCatalogCollector) CollectTeamCatalog(
 		liveEmpty := len(ownership) == 0 && len(open) > 0
 		// The snapshot is complete only when every read behind it reached
 		// its end: all pages of the project search and the legacy links.
-		snapshotComplete := batch.Result.ProjectSearchComplete && legacyComplete && !liveEmpty
-		if !snapshotComplete {
-			recordJiraOwnershipSnapshotIncomplete(ctx, batch.Result.ProjectSearchComplete, legacyComplete, liveEmpty)
-			slog.Default().WarnContext(ctx, "jira_team_catalog_ownership_snapshot_incomplete",
-				"org_id", ref.OrgID, "project_search_complete", batch.Result.ProjectSearchComplete,
-				"legacy_links_complete", legacyComplete, "no_live_ownership", liveEmpty, "open_rows_kept", len(open)+len(held))
-		}
+		snapshotComplete := judgeJiraOwnershipSnapshot(ctx, ref.OrgID, batch.Result.ProjectSearchComplete, legacyComplete, liveEmpty, len(open)+len(held))
 		result.OwnershipSnapshotIncomplete = !snapshotComplete
 		var retracted []jiraTeamCatalogOwnershipRow
 		ownership, retracted = jiraOwnershipSnapshot(ownership, open, normalizedAt.UTC().Truncate(time.Millisecond), snapshotComplete)
 		if len(retracted) > 0 {
 			slog.Default().InfoContext(ctx, "jira_team_catalog_ownership_retracted",
-				"org_id", ref.OrgID, "rows", len(retracted))
+				"org_id", ref.OrgID, "rows", len(retracted), "project_ids", jiraRetractedProjectIDs(retracted))
 		}
 		result.OwnershipRetracted = len(retracted)
 		freshOwnership := len(ownership)
@@ -833,3 +831,18 @@ func jiraRosterFromMemberships(rows []jiraTeamCatalogMembershipRow) map[string][
 }
 
 var _ TeamCatalogCollector = JiraTeamCatalogCollector{}
+
+// jiraRetractedProjectIDs names the projects whose open ownership rows a
+// sync closes, sorted and without repeats, so a wrong closure is traceable.
+func jiraRetractedProjectIDs(rows []jiraTeamCatalogOwnershipRow) []string {
+	seen := map[string]bool{}
+	ids := []string{}
+	for _, row := range rows {
+		if !seen[row.ProjectID] {
+			seen[row.ProjectID] = true
+			ids = append(ids, row.ProjectID)
+		}
+	}
+	sort.Strings(ids)
+	return ids
+}

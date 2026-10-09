@@ -5,7 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 	"io"
+	"maps"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -1004,5 +1006,134 @@ func TestJiraTeamCatalogErrorMessagesBodyIsNotTheEndOfData(t *testing.T) {
 		if batch := collectJiraSearchSequence(t, doer); batch.Result.ProjectSearchComplete {
 			t.Errorf("%s: snapshot complete on an errorMessages body, want not complete", name)
 		}
+	}
+}
+
+// CHAOS-8894 rule: the reads are ordered in time, and only a live read taken
+// AFTER the archived read proves a project live again. The held archived set
+// and the completeness flag are asserted for all four orderings.
+func TestJiraTeamCatalogArchivedProjectIsLiveOnlyWhenTheReadAfterItSaysSo(t *testing.T) {
+	t.Parallel()
+	ops := `{"id":"10001","key":"OPS","name":"Ops"}`
+	mov := `{"id":"20001","key":"MOV","name":"Moved"}`
+	page := func(entries ...string) string { return `{"values":[` + strings.Join(entries, ",") + `],"isLast":true}` }
+	for name, tc := range map[string]struct {
+		live1, archived, live2 string
+		held                   []string
+		projects               []string
+	}{
+		"archived only":                 {page(ops), page(mov), page(ops), []string{"20001"}, []string{"10001"}},
+		"live1 and archived, not live2": {page(ops, mov), page(mov), page(ops), []string{"20001"}, []string{"10001", "20001"}},
+		"archived and live2 (restored)": {page(ops), page(mov), page(ops, mov), nil, []string{"10001", "20001"}},
+		"live1, archived and live2":     {page(ops, mov), page(mov), page(ops, mov), nil, []string{"10001", "20001"}},
+	} {
+		batch := collectJiraSearchSequence(t, &jiraSearchSequenceDoer{t: t,
+			live: []string{tc.live1, tc.live2}, archived: []string{tc.archived}})
+		held := []string{}
+		for _, project := range batch.ArchivedProjects {
+			held = append(held, project.ID)
+		}
+		ids := []string{}
+		for _, row := range batch.Rows.Projects {
+			ids = append(ids, row.ID)
+		}
+		slices.Sort(ids)
+		if !slices.Equal(held, append([]string{}, tc.held...)) || !slices.Equal(ids, tc.projects) || !batch.Result.ProjectSearchComplete {
+			t.Errorf("%s: held=%v projects=%v complete=%v, want held=%v projects=%v complete", name,
+				held, ids, batch.Result.ProjectSearchComplete, tc.held, tc.projects)
+		}
+	}
+}
+
+// The union of the live reads is by project id: a project renamed between the
+// two live reads (same id, new key) is one project row.
+func TestJiraTeamCatalogLiveReadsAreUnitedByProjectID(t *testing.T) {
+	t.Parallel()
+	batch := collectJiraSearchSequence(t, &jiraSearchSequenceDoer{t: t,
+		live:     []string{`{"values":[{"id":"10001","key":"OPS","name":"Ops"}],"isLast":true}`, `{"values":[{"id":"10001","key":"OPS2","name":"Ops"}],"isLast":true}`},
+		archived: []string{`{"values":[],"isLast":true}`},
+	})
+	if len(batch.Rows.Projects) != 1 {
+		t.Fatalf("projects=%d, want one row for one project id read twice", len(batch.Rows.Projects))
+	}
+}
+
+func jiraSnapshotIncompleteCounts(t *testing.T) map[string]int64 {
+	t.Helper()
+	var resource metricdata.ResourceMetrics
+	if err := meterReader.Collect(context.Background(), &resource); err != nil {
+		t.Fatal(err)
+	}
+	out := map[string]int64{}
+	for _, scope := range resource.ScopeMetrics {
+		for _, m := range scope.Metrics {
+			if m.Name != jiraOwnershipSnapshotIncompleteName {
+				continue
+			}
+			sum, ok := m.Data.(metricdata.Sum[int64])
+			if !ok {
+				t.Fatalf("%s is %T, want an int64 sum", m.Name, m.Data)
+			}
+			for _, point := range sum.DataPoints {
+				reason, _ := point.Attributes.Value("reason")
+				out[reason.AsString()] += point.Value
+			}
+		}
+	}
+	return out
+}
+
+// Not parallel: it reads a process-wide counter.
+func TestRecordJiraOwnershipSnapshotIncompleteCountsEachReason(t *testing.T) {
+	for _, c := range []struct {
+		name                                      string
+		searchComplete, legacyComplete, liveEmpty bool
+		want                                      map[string]int64
+	}{
+		{"complete", true, true, false, map[string]int64{}},
+		{"search", false, true, false, map[string]int64{"project_search": 1}},
+		{"legacy", true, false, false, map[string]int64{"legacy_links": 1}},
+		{"live empty", true, true, true, map[string]int64{"no_live_ownership": 1}},
+		{"all", false, false, true, map[string]int64{"project_search": 1, "legacy_links": 1, "no_live_ownership": 1}},
+	} {
+		before := jiraSnapshotIncompleteCounts(t)
+		recordJiraOwnershipSnapshotIncomplete(context.Background(), c.searchComplete, c.legacyComplete, c.liveEmpty)
+		after := jiraSnapshotIncompleteCounts(t)
+		moved := map[string]int64{}
+		for reason, n := range after {
+			if d := n - before[reason]; d != 0 {
+				moved[reason] = d
+			}
+		}
+		if !maps.Equal(moved, c.want) {
+			t.Errorf("%s: counter moved %v, want %v", c.name, moved, c.want)
+		}
+	}
+}
+
+func TestJudgeJiraOwnershipSnapshotCountsOnlyAnIncompleteOne(t *testing.T) {
+	ctx := context.Background()
+	before := jiraSnapshotIncompleteCounts(t)
+	if !judgeJiraOwnershipSnapshot(ctx, "org-1", true, true, false, 0) {
+		t.Fatal("complete reads judged incomplete")
+	}
+	if got := jiraSnapshotIncompleteCounts(t); !maps.Equal(got, before) {
+		t.Fatalf("a complete snapshot moved the counter: %v -> %v", before, got)
+	}
+	if judgeJiraOwnershipSnapshot(ctx, "org-1", true, false, false, 2) {
+		t.Fatal("an unread legacy links table judged complete")
+	}
+	if got := jiraSnapshotIncompleteCounts(t); got["legacy_links"] != before["legacy_links"]+1 {
+		t.Fatalf("counter %v -> %v, want legacy_links +1", before, got)
+	}
+}
+
+func TestJiraUnionProjectSearchEntriesIsByProjectID(t *testing.T) {
+	t.Parallel()
+	got := jiraUnionProjectSearchEntries(
+		[]jiraTeamCatalogProjectSearchEntry{{ID: "1", Key: "OPS"}},
+		[]jiraTeamCatalogProjectSearchEntry{{ID: "1", Key: "OPS2"}, {ID: "2", Key: "NEW"}, {ID: "", Key: "ops"}})
+	if len(got) != 3 || got[0].Key != "OPS" || got[1].ID != "2" || got[2].ID != "" {
+		t.Fatalf("union = %+v, want the first entry kept, a renamed id not repeated, a new id and an id-less key added once", got)
 	}
 }

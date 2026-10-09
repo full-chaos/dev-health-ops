@@ -204,3 +204,46 @@ func TestExplainChangeFailureRateServesNoDeltaWhenAWindowHasNoValue(t *testing.T
 		}
 	}
 }
+
+// A day computed twice keeps its newest version: the counts of the older run
+// (a measured 25 %) do not add to the newer run's (an unknown: deployments and
+// no incident evidence), and the older run does not win.
+func TestExplainChangeFailureRateReadsTheNewestVersionOfADay(t *testing.T) {
+	ctx := context.Background()
+	admin, client := newExplainTestClickHouse(ctx, t)
+	writer, err := repouser.NewWriter(admin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reader, err := NewReader(client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const org = "explain-newest-version"
+	repo := uuid.New()
+	day := time.Date(2026, 9, 10, 0, 0, 0, 0, time.UTC)
+	older := day.AddDate(0, 0, 2)
+	newer := day.AddDate(0, 0, 3)
+	for _, row := range []repouser.ChangeFailureDaily{
+		{RepoID: repo, Day: day, Counts: changefailure.Counts{Deployments: 4, FailedHeuristic: 1, IncidentsDirect: 1}, ComputedAt: older},
+		{RepoID: repo, Day: day, Counts: changefailure.Counts{Deployments: 4}, ComputedAt: newer},
+	} {
+		if _, err := writer.WriteChangeFailure(ctx, []repouser.ChangeFailureDaily{row}, org); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := BuildExplainResponse(ctx, reader, org, Params{
+		Metric: "change_failure_rate", StartDay: day, EndDay: day.AddDate(0, 0, 1),
+		CompareStart: day.AddDate(0, 0, -1), CompareEnd: day,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.HasData || got.Value != 0 || got.RateState == nil || *got.RateState != string(changefailure.StateUnknown) {
+		state := "<nil>"
+		if got.RateState != nil {
+			state = *got.RateState
+		}
+		t.Errorf("value %v has_data %v rate_state %s, want the newer run's unknown (no data)", got.Value, got.HasData, state)
+	}
+}

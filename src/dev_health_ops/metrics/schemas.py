@@ -277,7 +277,8 @@ class RepoMetricsDailyRecord:
     # DORA proxies.
     mttr_hours: float | None = None
     change_failure_rate: float = 0.0
-    # Reverted / merged pull requests (CHAOS-8981); None when nothing merged.
+    # Reverted / merged pull requests (CHAOS-8981). None on every row until a
+    # revert detector exists: nothing measures it yet.
     revert_rate: float | None = None
     org_id: str = ""
 

@@ -817,9 +817,8 @@ restricted to historical days (unlike `metrics remaining start` below) --
 
 **Coverage check (codex adversarial review round 2, P1):** a deferred-discovery
 request (no `--repo-id`) is refused with `already_covered` if the same
-(org, day) already has a succeeded run from a DIFFERENT trigger -- the nightly
-fixed schedule, a post-sync re-drive, or an earlier manual trigger under a
-different generation. This prevents duplicate-writing every native daily
+(org, day) already has a succeeded run from the nightly fixed schedule or a
+post-sync re-drive (a manual run never counts as covering). This prevents duplicate-writing every native daily
 family (`file_hotspots` included) for a day that already computed. A retried
 CLI invocation for the identical logical request is unaffected (it reuses the
 same deterministic generation and lands on the ordinary idempotency path, not

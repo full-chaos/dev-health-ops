@@ -395,3 +395,25 @@ func TestADriftDecisionByABareIDDecidesTheKeyedTeamsChange(t *testing.T) {
 		t.Errorf("dismiss by bare id = %d %s, want the one pending change dismissed", rec.Code, rec.Body.String())
 	}
 }
+
+// A delete named by a carried bare id deletes the prefixed team, not only
+// the inactive bare rows.
+func TestADeleteByABareIDDeletesTheKeyedTeam(t *testing.T) {
+	s, ctx := writeSeamStore(t)
+	writeSeamSeed(t, s, ctx, "linear", "ENG")
+	if _, err := providersync.CarryTeamIDs(ctx, s.Conn, "org-1", time.Now().UTC(), false); err != nil {
+		t.Fatal(err)
+	}
+	h := newTestHandlers(s)
+	rec := writeSeamCall(t, h, h.deleteTeam, http.MethodDelete, "/api/v1/admin/teams/ENG", "ENG", map[string]any{})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("delete = %d %s", rec.Code, rec.Body.String())
+	}
+	if got := writeSeamActive(t, s, ctx); got != "" {
+		t.Errorf("active = %q after the delete, want none", got)
+	}
+	rec = writeSeamCall(t, h, h.deleteTeam, http.MethodDelete, "/api/v1/admin/teams/gh:", "gh:", map[string]any{})
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Errorf("delete of a prefix-only id = %d %s, want 422", rec.Code, rec.Body.String())
+	}
+}

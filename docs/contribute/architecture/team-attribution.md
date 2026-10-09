@@ -1185,7 +1185,8 @@ write that names `eng` lands on it. It refuses, before any write but the carry:
 So a bare id never reaches a write, and a bare id of a carried team lands on the prefixed team, not on the
 inactive bare row (which a write would make active again). The admin writers (`internal/api/teamsidentity`) all
 call it through `keyTeamIDs` before their first read or write of a team: team create (`POST /teams`) and update
-(`PATCH /teams/{team_id}`), identity create or update (`team_ids`), the two member confirmations
+(`PATCH /teams/{team_id}`), team delete (`DELETE /teams/{team_id}`, so a bare id of a carried team deletes the
+prefixed team), identity create or update (`team_ids`), the two member confirmations
 (`/teams/{team_id}/confirm-members`, `/confirm-inferred-members`), the import (`POST /teams/import`, over
 `teamid.Of(provider_type, provider_team_id)`), and a drift decision (`/teams/{team_id}/approve-changes`,
 `/dismiss-changes`). The store refuses a bare or malformed id at its own writes too (`insertTeamRow`, and an OPEN
@@ -1196,8 +1197,10 @@ id from a provider's own key do not take an outside id and stay on `teamid.Of`: 
 Atlassian Teams write behind the carry, and the external sink (`team.v1` and `identity.v1` ids go through
 `teamid.CheckPushed`, so a prefix-only `identity.v1` team id is refused as a `team.v1` id is). No team id writer
 is on Postgres. `TestEveryTeamIDWriterGoesThroughTheWriteSeamCensus` (`internal/api/teamsidentity`) lists every
-production line that writes a team-keyed table with its route, and every function of the admin package that
-writes a team id; it fails on a new writer, on an admin writer that does not run the seam before its first
+production line that writes a team-keyed table with its route (plain or backquoted table name, or an INSERT built
+from a table variable), and every function of the admin package that writes or deletes a team id; the one listed
+exception is `dho fixtures generate` (`internal/fixturescli`), which writes the frozen fixture world's rows as they
+are (contrived CI data) into an organization that holds no synced data; it fails on a new writer, on an admin writer that does not run the seam before its first
 write, and on a store write that does not refuse a bare id before its batch.
 
 - **Source.** The raw `teams` rows, not `FINAL`: the newest row of each (provider, id) whose id is not empty
@@ -1287,6 +1290,7 @@ linear), `TestAnAdminTeamCreateCarriesTheBareTeamFirst`, `TestAnAdminTeamWriteOf
 `TestTheMemberAndDecisionWritersKeyTheirPathTeamID`, `TestTheAdminImportRefusesAPrefixOnlyTeamID`,
 `TestTheStoreRefusesABareTeamIDWrite`, `TestAnIdentityLeavingAStoredBareTeamSkipsIt`,
 `TestTheWriteSeamResolvesOnlyToAnActiveTeamAndKeysAMixedRequest`, `TestADriftDecisionByABareIDDecidesTheKeyedTeamsChange`,
+`TestADeleteByABareIDDeletesTheKeyedTeam`,
 `TestEveryTeamIDWriterGoesThroughTheWriteSeamCensus`; `TestIdentityV1RefusesAPrefixOnlyTeamID`
 (`internal/streamhandlers`); `TestMalformedNamesNoTeamOfAnyProvider`, `TestCandidatesAreEveryPrefixOfABareID`
 (`internal/teamid`).

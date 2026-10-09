@@ -305,8 +305,11 @@ func (h handlers) createOrUpdateTeam(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h handlers) deleteTeam(w http.ResponseWriter, r *http.Request) {
-	teamID := pathParam(r, "team_id")
-	deleted, err := h.store.DeleteTeam(r.Context(), orgIDOf(r.Context()), teamID)
+	keyed, ok := h.keyTeamIDs(w, r, "admin_team_delete", []string{pathParam(r, "team_id")})
+	if !ok {
+		return
+	}
+	deleted, err := h.store.DeleteTeam(r.Context(), orgIDOf(r.Context()), keyed[0])
 	if err != nil {
 		h.internal(w, r, "delete team", err)
 		return

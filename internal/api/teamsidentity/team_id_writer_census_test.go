@@ -35,19 +35,30 @@ var teamIDWriters = map[string]struct {
 }
 
 // teamIDDynamicWriters is every production line that builds an INSERT from a
-// table name held in a variable; only the carry writes a team table so.
-var teamIDDynamicWriters = map[string]int{
-	"internal/providersync/team_id_carry.go": 1,
-	"internal/chmigrate/apply.go":            2,
-	"internal/providerfoundation/sinks.go":   1,
+// table name held in a variable, and why it may write a team-keyed table
+// without the seam or does not write one.
+var teamIDDynamicWriters = map[string]struct {
+	count int
+	route string
+}{
+	"internal/providersync/team_id_carry.go": {1, "the carry: keyed ids only (teamIDCarryGuard)"},
+	"internal/chmigrate/apply.go":            {2, "schema migrations: no team row"},
+	"internal/providerfoundation/sinks.go":   {1, "raw provider record tables: no team-keyed table"},
+	// Exception: `dho fixtures generate` writes contrived CI data, the frozen
+	// fixture world's rows as they are, into an organization that holds no
+	// synced data (it refuses one without --allow-mixed-org). Its team ids
+	// are the frozen world's; a carry or the seam keys them at the first
+	// real write of that organization.
+	"internal/fixturescli/generate.go":  {1, "exception: dho fixtures generate, contrived CI data"},
+	"internal/fixturescli/synthetic.go": {1, "exception: dho fixtures generate, contrived CI data"},
 }
 
 var (
-	teamIDTableInsert   = regexp.MustCompile(`INSERT INTO (teams|identities|team_memberships|team_project_ownership|team_repo_ownership|team_sync_policies|team_drift_changes|manual_attribution_fallbacks|team_provider_observations)\b`)
-	teamIDDynamicInsert = regexp.MustCompile(`"INSERT INTO "\s*\+`)
+	teamIDTableInsert   = regexp.MustCompile("(?i)INSERT INTO `?(teams|identities|team_memberships|team_project_ownership|team_repo_ownership|team_sync_policies|team_drift_changes|manual_attribution_fallbacks|team_provider_observations)\\b")
+	teamIDDynamicInsert = regexp.MustCompile("(?i)\"INSERT INTO `?\"\\s*\\+")
 	// adminTeamIDWrite is a call that writes a team id (or a row that names
 	// one) in this package.
-	adminTeamIDWrite = regexp.MustCompile(`\.(CreateOrUpdateTeam|SetMembers|AddMembers|RemoveMembers|CreateOrUpdateIdentity|insertTeamRow|insertIdentityRow|insertTeamMembership|insertManualFallback|applyChange|applyIdentityMembershipChange|expireConflict|projectTeam|insertObservation|insertChanges|markPending|insertDecisionRows)\(`)
+	adminTeamIDWrite = regexp.MustCompile(`\.(DeleteTeam|CreateOrUpdateTeam|SetMembers|AddMembers|RemoveMembers|CreateOrUpdateIdentity|insertTeamRow|insertIdentityRow|insertTeamMembership|insertManualFallback|applyChange|applyIdentityMembershipChange|expireConflict|projectTeam|insertObservation|insertChanges|markPending|insertDecisionRows)\(`)
 )
 
 // TestEveryTeamIDWriterGoesThroughTheWriteSeamCensus fails when a line that
@@ -108,13 +119,13 @@ func TestEveryTeamIDWriterGoesThroughTheWriteSeamCensus(t *testing.T) {
 		}
 	}
 	for file, count := range dynamic {
-		if teamIDDynamicWriters[file] != count {
-			t.Errorf("%s: %d INSERTs built from a table variable, want %d", file, count, teamIDDynamicWriters[file])
+		if teamIDDynamicWriters[file].count != count {
+			t.Errorf("%s: %d INSERTs built from a table variable, want %d: list it with its route", file, count, teamIDDynamicWriters[file].count)
 		}
 	}
 	for file, want := range teamIDDynamicWriters {
-		if dynamic[file] != want {
-			t.Errorf("%s: %d INSERTs built from a table variable, want %d", file, dynamic[file], want)
+		if dynamic[file] != want.count {
+			t.Errorf("%s: %d INSERTs built from a table variable, want %d (%s)", file, dynamic[file], want.count, want.route)
 		}
 	}
 
@@ -134,8 +145,8 @@ func TestEveryTeamIDWriterGoesThroughTheWriteSeamCensus(t *testing.T) {
 			}
 		}
 	}
-	if handlers != 7 {
-		t.Errorf("%d functions outside the store write a team id, want 7 (createOrUpdateTeam, updateTeam, createOrUpdateIdentity, confirmMembers, confirmInferredMembers, importTeams, decideChanges)", handlers)
+	if handlers != 8 {
+		t.Errorf("%d functions outside the store write a team id, want 8 (createOrUpdateTeam, updateTeam, deleteTeam, createOrUpdateIdentity, confirmMembers, confirmInferredMembers, importTeams, decideChanges)", handlers)
 	}
 	// The store refuses a bare id before the write it guards.
 	store := packageSources(t, filepath.Join(root, "internal", "api", "teamsidentity"))

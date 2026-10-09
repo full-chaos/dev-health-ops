@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -853,5 +854,54 @@ func TestCarryTeamIDsKeepsAParentThatIsNotOneTeamOutsideItsProvider(t *testing.T
 		if got := f.str(`SELECT ifNull(parent_team_id, '') FROM teams FINAL WHERE org_id = ? AND id = ?`, id); got != want {
 			t.Errorf("%s parent = %q, want %q", id, got, want)
 		}
+	}
+}
+
+// A stored team id holding a quote or a backslash reaches ClickHouse inside
+// an Array(String) query parameter in the carry and in the write seam. The
+// native protocol reads such a parameter through one extra quoted layer, so
+// a driver that does not escape the backslash of that layer fails the whole
+// carry, and with it every admin write and team sync of the organization.
+func TestCarryTeamIDsCarriesAnIDWithAQuoteOrABackslash(t *testing.T) {
+	ctx, conn := newWorkItemEffectsConn(t)
+	for _, id := range []string{"O'BRIEN", `BACK\SLASH`, `Q\'MIX`} {
+		t.Run(id, func(t *testing.T) {
+			f := carryFixture{t: t, ctx: ctx, conn: conn, orgID: uuid.NewString()}
+			f.team("linear", id, carryPtr(id), nil, 1, carryOld, nil, nil)
+			f.membership("linear", id, "m1", carryOld, nil)
+			f.observation("linear", id, id)
+			f.team("linear", "ENG", carryPtr("ENG"), nil, 1, carryOld, nil, nil)
+
+			outcome, err := CarryTeamIDs(ctx, conn, f.orgID, carryAt, false)
+			if err != nil || outcome.Teams != 2 {
+				t.Fatalf("carry = %+v, %v; want both teams moved", outcome, err)
+			}
+			active := []string{"linear:ENG", "linear:" + id}
+			sort.Strings(active)
+			want := strings.Join(active, ",")
+			if got := f.str(`SELECT arrayStringConcat(groupArray(id), ',') FROM (SELECT id FROM teams FINAL WHERE org_id = ? AND is_active = 1 ORDER BY id)`); got != want {
+				t.Errorf("active = %q, want %q", got, want)
+			}
+			if got := f.str(`SELECT arrayStringConcat(groupArray(team_id), ',') FROM (SELECT team_id FROM team_memberships FINAL WHERE org_id = ? AND valid_to IS NULL ORDER BY team_id)`); got != "linear:"+id {
+				t.Errorf("memberships = %q, want %q", got, "linear:"+id)
+			}
+			again, err := CarryTeamIDs(ctx, conn, f.orgID, carryAt.Add(time.Hour), false)
+			if err != nil || again.Teams != 0 || again.RowsWritten != 0 {
+				t.Errorf("second carry = %+v, %v; want no write", again, err)
+			}
+
+			missing := "doesn't-" + id
+			keyed, err := KeyTeamIDsForWrite(ctx, conn, f.orgID, "test", AdminTeamIDRefs(missing, id))
+			if err != nil {
+				t.Fatalf("write seam: %v", err)
+			}
+			wantMissing, err := ResolveTeamID(TeamIDRequest{Provider: teamid.Custom, ID: missing, Mode: TeamIDAddress, Holders: map[string]string{}})
+			if err != nil {
+				t.Fatalf("resolve %q without a holder: %v", missing, err)
+			}
+			if len(keyed) != 2 || keyed[0] != wantMissing || keyed[1] != "linear:"+id {
+				t.Errorf("write seam = %q, want [%q %q]", keyed, wantMissing, "linear:"+id)
+			}
+		})
 	}
 }

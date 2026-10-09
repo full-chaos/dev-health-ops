@@ -407,7 +407,7 @@ func quoted(value string) string {
 }
 
 // renderedList is the array literal clickhouse-go writes for a list of
-// strings (clickhouse-go v2.47.0 bind.go format()).
+// strings (clickhouse-go v2.48.0 bind.go format()).
 func renderedList(list []string) string {
 	parts := make([]string, 0, len(list))
 	for _, element := range list {

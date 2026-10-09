@@ -60,11 +60,6 @@ func AdminTeamIDRefs(ids ...string) []TeamIDRef {
 // *TeamIDWriteError before anything but the carry is written.
 // See docs/contribute/architecture/team-attribution.md "Team ids".
 func KeyTeamIDsForWrite(ctx context.Context, conn TeamIDCarryConn, orgID, writer string, refs []TeamIDRef) ([]string, error) {
-	for _, ref := range refs {
-		if teamid.Malformed(ref.ID) {
-			return nil, refuseTeamIDWrite(ctx, writer, &TeamIDWriteError{ID: ref.ID, Err: teamid.ErrMalformedTeamID})
-		}
-	}
 	if err := CarryTeamIDsBeforeWrite(ctx, conn, orgID, writer); err != nil {
 		return nil, err
 	}

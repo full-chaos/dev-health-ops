@@ -67,13 +67,16 @@ func TestFetchInvestmentTakesTheNewestRowOfEachKey(t *testing.T) {
 			rows[0].deliveryUnits)
 	}
 
-	// With a team filter the key of that team alone: its newest row is zero.
+	// With a team filter the key of that team alone. Its newest row is the row
+	// of zeros the daily job stored when the completion left the key: a
+	// retraction row. It reads as no row: the team has no investment for the
+	// day, which is not the stale 2 and not a measured 0.
 	team := "team-x"
 	rows, err = fetchInvestment(ctx, client, org, teamSelection{team}, day, day.AddDate(0, 0, 1))
 	if err != nil {
 		t.Fatalf("fetchInvestment team: %v", err)
 	}
-	if len(rows) != 1 || rows[0].deliveryUnits != 0 {
-		t.Fatalf("fetchInvestment for team-x = %+v, want one row with 0 delivery units (the newest row of the key), not the stale 2", rows)
+	if len(rows) != 0 {
+		t.Fatalf("fetchInvestment for team-x = %+v, want no row: the newest row of its key is a retraction row (the stale row held 2)", rows)
 	}
 }

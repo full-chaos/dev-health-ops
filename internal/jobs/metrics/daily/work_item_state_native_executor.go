@@ -13,7 +13,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/workitemblockers"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/workitemmetrics"
-	"github.com/full-chaos/dev-health-ops/internal/teamkeytables"
 )
 
 // unassignedTeamID/unassignedTeamName are package-local names for
@@ -107,49 +106,20 @@ func (executor *WorkItemStateExecutor) ComputeFamily(
 
 	// The version is taken before the reads (see WorkItemExecutor).
 	computedAt := executor.nowUTC()
-	read, err := loadWorkItemScopeRead(ctx, executor.conn, "work_item_state", run, partition,
-		workItemPartitionScope{day: day, start: start, end: end, repoIDs: repoIDs}, true, false)
+	computed, err := computeWorkItemStateRows(ctx, executor.conn, run, partition,
+		workItemPartitionScope{day: day, start: start, end: end, repoIDs: repoIDs}, computedAt)
 	if err != nil {
 		return 0, err
 	}
 	// With no item, or no transition for any item, every item is skipped
-	// (Python's `if not item_transitions: continue`), so there is nothing to
-	// read the blocked spans for.
-	//
-	// The stale-key rule still applies (stale_team_keys.go): a key of the
-	// read's work scopes that held a duration and that this compute does not
-	// produce gets a row of zeros.
-	supersede := func(total int, rows []workItemStateDailyRow) (int, error) {
-		produced := make([]staleKey, 0, len(rows))
-		for _, row := range rows {
-			produced = append(produced, staleKey{row.Provider, row.WorkScopeID, row.TeamID, row.Status})
-		}
-		written, err := supersedeStaleTeamKeys(
-			ctx, executor.conn, teamkeytables.WorkItemStateDurationsDaily, run.OrganizationID, day,
-			read.staleKeyScope(), produced, computedAt,
-		)
-		total += written
-		if err != nil {
-			return wrapWorkItemScopePartialWrite("work_item_state", total, partition, err)
-		}
-		return total, nil
-	}
-	if len(read.Items) == 0 || len(read.Transitions) == 0 {
-		return supersede(0, nil)
-	}
-
-	// The blocked spans (CHAOS-8493) are organization-wide -- a blocker lives
-	// in any repository, or in none. A failed read fails the partition.
-	// Computing without it would write full-length rows for the statuses the
-	// blocked hours belong to, and those rows would read as a complete answer.
-	blocked, ended, err := workitemblockers.LoadBlockedIntervals(ctx, executor.conn, run.OrganizationID)
-	if err != nil {
-		return 0, err
+	// (Python's `if not item_transitions: continue`), so nothing was computed.
+	if !computed.ran {
+		return 0, nil
 	}
 	// One line per partition, no id: how many relations the end rule closed,
 	// by provider, and how many of them are the named case of a github issue
 	// on a Projects v2 board.
-	counts := ended.Counts()
+	counts := computed.ended.Counts()
 	slog.Info(workitemmetrics.EndedRelationsLogMessage,
 		"writer", "daily_family",
 		"relations", counts.Relations,
@@ -161,10 +131,7 @@ func (executor *WorkItemStateExecutor) ComputeFamily(
 		"ended_other", counts.EndedOther,
 		"github_board_candidates", counts.GitHubBoardCandidates,
 	)
-
-	rows, itemRows, missingAttribution := computeWorkItemStateDurationRowsForRepo(
-		day, start, end, read.stateItems(), read.Transitions, read.Attributions, computedAt, blocked,
-	)
+	rows, itemRows, missingAttribution := computed.rows, computed.itemRows, computed.missingAttribution
 
 	// CHAOS-4278: observe as soon as the count is known, BEFORE the write.
 	// missingAttribution describes the INPUT, independent of whether the
@@ -175,7 +142,7 @@ func (executor *WorkItemStateExecutor) ComputeFamily(
 		_ = executor.missingAttributionObserver.ObserveWorkItemStateMissingAttribution(missingAttribution)
 	}
 	if len(rows) == 0 {
-		return supersede(0, nil)
+		return 0, nil
 	}
 
 	// Each writer reports its true row count on an ambiguous Send error, so
@@ -189,7 +156,50 @@ func (executor *WorkItemStateExecutor) ComputeFamily(
 	if err != nil {
 		return wrapWorkItemScopePartialWrite("work_item_state", total, partition, err)
 	}
-	return supersede(total, rows)
+	return total, nil
+}
+
+// workItemStateComputed is what computeWorkItemStateRows returns.
+type workItemStateComputed struct {
+	// ran is false when the read has no item or no transition: nothing was
+	// computed and the blocked spans were not read.
+	ran                bool
+	read               workItemScopeRead
+	rows               []workItemStateDailyRow
+	itemRows           []workItemBlockedDurationDailyRow
+	missingAttribution int
+	ended              workitemmetrics.EndedRelationStats
+}
+
+// computeWorkItemStateRows reads the work scopes of the partition's
+// repositories and the blocked spans, and computes the state-duration rows of
+// the day. It writes nothing, logs nothing and observes nothing (see
+// computeWorkItemTriplet for its two callers).
+//
+// The blocked spans (CHAOS-8493) are organization-wide -- a blocker lives in
+// any repository, or in none. A failed read is returned. Computing without it
+// would give full-length rows for the statuses the blocked hours belong to,
+// and those rows would read as a complete answer.
+func computeWorkItemStateRows(
+	ctx context.Context, conn driver.Conn, run Run, partition Partition, scope workItemPartitionScope, computedAt time.Time,
+) (workItemStateComputed, error) {
+	read, err := loadWorkItemScopeRead(ctx, conn, "work_item_state", run, partition, scope, true, false)
+	if err != nil {
+		return workItemStateComputed{}, err
+	}
+	computed := workItemStateComputed{read: read}
+	if len(read.Items) == 0 || len(read.Transitions) == 0 {
+		return computed, nil
+	}
+	blocked, ended, err := workitemblockers.LoadBlockedIntervals(ctx, conn, run.OrganizationID)
+	if err != nil {
+		return workItemStateComputed{}, err
+	}
+	computed.ran, computed.ended = true, ended
+	computed.rows, computed.itemRows, computed.missingAttribution = computeWorkItemStateDurationRowsForRepo(
+		scope.day, scope.start, scope.end, read.stateItems(), read.Transitions, read.Attributions, computedAt, blocked,
+	)
+	return computed, nil
 }
 
 // workItemStateSegment is one (status, start, end) span in a work item's

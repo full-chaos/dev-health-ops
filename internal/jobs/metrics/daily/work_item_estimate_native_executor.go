@@ -8,7 +8,6 @@ import (
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/workitemmetrics"
-	"github.com/full-chaos/dev-health-ops/internal/teamkeytables"
 )
 
 // WorkItemEstimateExecutor is the NATIVE implementation of the
@@ -61,20 +60,13 @@ func (executor *WorkItemEstimateExecutor) ComputeFamily(
 
 	// The version is taken before the reads (see WorkItemExecutor).
 	computedAt := executor.nowUTC()
-	read, err := loadWorkItemScopeRead(ctx, executor.conn, "work_item_estimate", run, partition, scope, false, true)
+	read, rows, err := computeWorkItemEstimateRows(ctx, executor.conn, run, partition, scope)
 	if err != nil {
 		return 0, err
 	}
 	if len(read.Items) == 0 {
 		return 0, nil
 	}
-	sorted := sortWorkItemMetricsRows(read.Items)
-	projected := workItemMetricsItems(sorted)
-	rows := workitemmetrics.ComputeEstimateCoverage(
-		scope.day,
-		projected,
-		workitemmetrics.AssertAligned(len(sorted), projected, workItemMetricsResolver(sorted, read.Attributions)),
-	)
 	// One table and one batch. The writer reports its true row count on an
 	// ambiguous Send error, and that error is a partial write: the rows may
 	// be stored.
@@ -84,20 +76,30 @@ func (executor *WorkItemEstimateExecutor) ComputeFamily(
 	if err != nil {
 		return wrapWorkItemScopePartialWrite("work_item_estimate", written, partition, err)
 	}
-	// The stale-key rule (stale_team_keys.go).
-	produced := make([]staleKey, 0, len(rows))
-	for _, row := range rows {
-		produced = append(produced, staleKey{row.Provider, row.WorkScopeID, row.TeamID})
-	}
-	superseded, err := supersedeStaleTeamKeys(
-		ctx, executor.conn, teamkeytables.EstimateCoverageMetricsDaily, run.OrganizationID, scope.day,
-		read.staleKeyScope(), produced, computedAt,
-	)
-	written += superseded
-	if err != nil {
-		return wrapWorkItemScopePartialWrite("work_item_estimate", written, partition, err)
-	}
 	return written, nil
+}
+
+// computeWorkItemEstimateRows reads the work scopes of the partition's
+// repositories and computes the estimate-coverage rows of the day. It writes
+// nothing (see computeWorkItemTriplet for its two callers).
+func computeWorkItemEstimateRows(
+	ctx context.Context, conn driver.Conn, run Run, partition Partition, scope workItemPartitionScope,
+) (workItemScopeRead, []workitemmetrics.EstimateCoverageRow, error) {
+	read, err := loadWorkItemScopeRead(ctx, conn, "work_item_estimate", run, partition, scope, false, true)
+	if err != nil {
+		return workItemScopeRead{}, nil, err
+	}
+	if len(read.Items) == 0 {
+		return read, nil, nil
+	}
+	sorted := sortWorkItemMetricsRows(read.Items)
+	projected := workItemMetricsItems(sorted)
+	rows := workitemmetrics.ComputeEstimateCoverage(
+		scope.day,
+		projected,
+		workitemmetrics.AssertAligned(len(sorted), projected, workItemMetricsResolver(sorted, read.Attributions)),
+	)
+	return read, rows, nil
 }
 
 var _ NativeFamilyExecutor = (*WorkItemEstimateExecutor)(nil)

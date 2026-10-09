@@ -31,8 +31,9 @@ import (
 // filter: sankey fetchExpenseCounts and fetchStateStatusCounts
 // (internal/queryapi/sankey/queries.go), Home fetchBlockedHours
 // (internal/queryapi/home/queries_metrics.go) and the capacity throughput read
-// (internal/queryapi/capacityforecast/clickhouse.go). The file uses no symbol
-// of the rule, so the same file runs on a tree without the rule.
+// (internal/queryapi/capacityforecast/clickhouse.go). The file uses one symbol
+// of the rule, endStaleKeyRun (see its file for how the same test runs on a
+// tree without the rule).
 
 const staleKeyAcceptanceOrg = "00000000-0000-4000-8000-00000000e0a0"
 
@@ -130,7 +131,7 @@ func seedStaleKeyAcceptanceItems(t *testing.T, ctx context.Context, conn driver.
 }
 
 // runStaleKeyAcceptanceFamilies computes the day once with the four work-item
-// families in their run order, at one clock.
+// families in their run order, at one clock, and ends the run.
 func runStaleKeyAcceptanceFamilies(t *testing.T, ctx context.Context, conn driver.Conn, clock time.Time) {
 	t.Helper()
 	run := Run{ID: uuid.NewString(), OrganizationID: staleKeyAcceptanceOrg, TargetDay: staleKeyAcceptanceDay}
@@ -168,6 +169,10 @@ func runStaleKeyAcceptanceFamilies(t *testing.T, ctx context.Context, conn drive
 			t.Fatalf("%s at %s: %v", family.name, clock.Format(time.RFC3339), err)
 		}
 	}
+	// The end of the run: the keys of the day that its partitions no longer
+	// produce are superseded once, for the whole run.
+	run.DiscoveredRepoIDs = partition.RepoIDs
+	endStaleKeyRun(t, ctx, conn, run, clock.Add(time.Minute))
 }
 
 // staleKeyAcceptanceReads is what the readers return for the day.

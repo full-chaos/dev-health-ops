@@ -245,12 +245,16 @@ func TestNewHomeGetHandlerHappyPathShape(t *testing.T) {
 	if body.Constraint == nil || body.Constraint["title"] != "" || body.Constraint["claim"] != "" {
 		t.Fatalf("no-data REST constraint = %#v, want an empty legacy card", body.Constraint)
 	}
+	// CHAOS-9044: every REST delta carries the three Go-only fields after the
+	// frozen ones, so a client can tell no data from a measured zero.
 	for _, delta := range body.Deltas {
-		if _, ok := delta["has_data"]; ok {
-			t.Fatalf("REST delta contains GraphQL-only has_data: %#v", delta)
+		for _, key := range []string{"has_data", "has_prior_data", "rate_state"} {
+			if _, ok := delta[key]; !ok {
+				t.Fatalf("REST delta lacks %s: %#v", key, delta)
+			}
 		}
-		if _, ok := delta["has_prior_data"]; ok {
-			t.Fatalf("REST delta contains GraphQL-only has_prior_data: %#v", delta)
+		if delta["has_data"] != false || delta["has_prior_data"] != false || delta["delta_pct"] != float64(0) {
+			t.Fatalf("a delta of an empty organization = %#v, want has_data false, has_prior_data false and delta_pct 0", delta)
 		}
 	}
 }

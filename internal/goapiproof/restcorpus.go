@@ -1766,6 +1766,10 @@ var peopleSummaryNumericInts = map[string]string{
 
 var peopleSummaryParity = Options{
 	NumericLeavesDeclared: true,
+	GoOnlyKeys: map[string]GoOnlyKey{
+		"data.deltas.has_data":       {Ticket: "CHAOS-9044", Reason: "Go-only: the current window holds a stored value for the metric; false = value is a 0 placeholder, not a measured zero. The Python reference never served it."},
+		"data.deltas.has_prior_data": {Ticket: "CHAOS-9044", Reason: "Go-only: the comparison window holds a stored value; false = the delta has no base and delta_pct is 0. The Python reference never served it."},
+	},
 	FloatTierB:            peopleSummaryNumericFloats,
 	IntegerLeaves:         peopleSummaryNumericInts,
 	BaselineDefects:       append([]BaselineDefect{}, peopleDetailParity.BaselineDefects...),

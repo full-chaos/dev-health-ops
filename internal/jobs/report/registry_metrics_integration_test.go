@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -29,7 +30,8 @@ import (
 // of its metrics failed). The column types and the date column differ by
 // table, so each metric is charted on its own.
 //
-// Each table gets one row holding a distinct value per metric; both chart
+// Each table gets two versions of one key (an older run with every value
+// raised by 1000, then the newest) holding a distinct value per metric; both chart
 // shapes the reader has (scorecard total, and a line by day) must return the
 // value the metric's aggregation gives for that row.
 func TestClickHouseQueryAdapterChartsEveryRegistryMetric(t *testing.T) {
@@ -59,6 +61,75 @@ func TestClickHouseQueryAdapterChartsEveryRegistryMetric(t *testing.T) {
 	sort.Strings(names)
 	if len(names) < 100 {
 		t.Fatalf("only %d metrics found in the registry", len(names))
+	}
+
+	// Every declaration in tableReads is held against the migrated schema: the
+	// table exists, ReplacingMergeTree tables key on exactly their ORDER BY and
+	// version on the engine's version column, plain MergeTree tables key on a
+	// superset of their ORDER BY, and the date, key and version columns exist.
+	tableInfo, err := conn.Query(ctx, "SELECT name, engine, sorting_key, engine_full FROM system.tables WHERE database = currentDatabase()")
+	if err != nil {
+		t.Fatal(err)
+	}
+	type tableSchema struct{ engine, sorting, full string }
+	schemas := map[string]tableSchema{}
+	for tableInfo.Next() {
+		var name string
+		var info tableSchema
+		if err := tableInfo.Scan(&name, &info.engine, &info.sorting, &info.full); err != nil {
+			t.Fatal(err)
+		}
+		schemas[name] = info
+	}
+	tableInfo.Close()
+	columnSet := map[string]bool{}
+	columnRows, err := conn.Query(ctx, "SELECT table, name FROM system.columns WHERE database = currentDatabase()")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for columnRows.Next() {
+		var table, column string
+		if err := columnRows.Scan(&table, &column); err != nil {
+			t.Fatal(err)
+		}
+		columnSet[table+"."+column] = true
+	}
+	columnRows.Close()
+	versionOfEngine := regexp.MustCompile(`^ReplacingMergeTree\((\w+)\)`)
+	for table, read := range tableReads {
+		info, ok := schemas[table]
+		if !ok {
+			t.Errorf("tableReads declares %s, which does not exist in the migrated schema", table)
+			continue
+		}
+		for _, column := range append([]string{read.Version, metricDefinition{SourceTable: table}.dayColumn()}, read.Key...) {
+			if !columnSet[table+"."+column] {
+				t.Errorf("tableReads[%s]: column %s does not exist", table, column)
+			}
+		}
+		sorting := strings.Split(strings.ReplaceAll(info.sorting, " ", ""), ",")
+		switch {
+		case info.engine == "ReplacingMergeTree":
+			match := versionOfEngine.FindStringSubmatch(info.full)
+			if match == nil || match[1] != read.Version {
+				t.Errorf("tableReads[%s]: version %q, engine says %q", table, read.Version, info.full)
+			}
+			if strings.Join(sorting, ",") != strings.Join(read.Key, ",") {
+				t.Errorf("tableReads[%s]: key %v, ORDER BY is %v", table, read.Key, sorting)
+			}
+		case info.engine == "MergeTree":
+			for _, column := range sorting {
+				found := false
+				for _, key := range read.Key {
+					found = found || key == column
+				}
+				if !found {
+					t.Errorf("tableReads[%s]: key %v lacks ORDER BY column %s", table, read.Key, column)
+				}
+			}
+		default:
+			t.Errorf("tableReads[%s]: engine %s is not covered by the declaration rules", table, info.engine)
+		}
 	}
 
 	// The class of each metric comes from the migrated column type. The
@@ -147,13 +218,36 @@ func TestClickHouseQueryAdapterChartsEveryRegistryMetric(t *testing.T) {
 			}
 		}
 	}
+	// Two versions of the one key per table: an older run (every value +1000,
+	// computed first) and the newest run (the seeded values). A chart that
+	// counts both versions, or reads the older one, is not the seeded value.
+	// Merges are stopped so a background merge cannot collapse the versions
+	// and make the test pass without the reader's own selection.
 	for table := range columns {
+		if err := conn.Exec(ctx, "SYSTEM STOP MERGES "+table); err != nil {
+			t.Fatalf("stop merges of %s: %v", table, err)
+		}
 		dayColumn := metricDefinition{SourceTable: table}.dayColumn()
-		statement := fmt.Sprintf(
-			"INSERT INTO %s (org_id, %s, %s) VALUES ('%s', '2026-01-05', %s)",
-			table, dayColumn, strings.Join(columns[table], ", "), org, strings.Join(values[table], ", "))
-		if err := conn.Exec(ctx, statement); err != nil {
-			t.Fatalf("seed %s: %v", table, err)
+		version := tableReads[table].Version
+		older := make([]string, len(values[table]))
+		for index, value := range values[table] {
+			parsed, err := strconv.ParseFloat(value, 64)
+			if err != nil {
+				t.Fatal(err)
+			}
+			older[index] = fmt.Sprint(parsed + 1000)
+		}
+		for _, run := range []struct {
+			computedAt string
+			rowValues  []string
+		}{{"2026-01-06 10:00:00", older}, {"2026-01-06 11:00:00", values[table]}} {
+			statement := fmt.Sprintf(
+				"INSERT INTO %s (org_id, %s, %s, %s) VALUES ('%s', '2026-01-05', %s, '%s')",
+				table, dayColumn, strings.Join(columns[table], ", "), version, org,
+				strings.Join(run.rowValues, ", "), run.computedAt)
+			if err := conn.Exec(ctx, statement); err != nil {
+				t.Fatalf("seed %s: %v", table, err)
+			}
 		}
 	}
 	// What the chart of a metric must read for the seeded row: the value for a
@@ -198,6 +292,48 @@ func TestClickHouseQueryAdapterChartsEveryRegistryMetric(t *testing.T) {
 			}
 		}
 	}
+	compared := 0
+	// Differential: work_item_metrics_daily was read with FINAL before the
+	// per-table declaration. On the two seeded versions the old rule and the
+	// declared rule give the same numbers.
+	for _, name := range names {
+		definition := supportedMetrics[name]
+		if definition.SourceTable != "work_item_metrics_daily" || definition.Numerator != "" {
+			continue
+		}
+		if _, sampled := sampleCountColumns[definition.SourceTable][name]; sampled || strings.HasSuffix(name, "_count") || definition.Unit == "count" {
+			continue
+		}
+		var finalAverage float64
+		row := conn.QueryRow(ctx, fmt.Sprintf("SELECT avg(%s) FROM work_item_metrics_daily FINAL WHERE org_id = ?", name), org)
+		if err := row.Scan(&finalAverage); err != nil {
+			t.Fatal(err)
+		}
+		compared++
+		if finalAverage != want(name) {
+			t.Errorf("%s: FINAL reads %v, the declared newest-version read gives %v", name, finalAverage, want(name))
+		}
+	}
+	for _, name := range names {
+		definition := supportedMetrics[name]
+		if definition.SourceTable != "work_item_metrics_daily" || !(strings.HasSuffix(name, "_count") || definition.Unit == "count") {
+			continue
+		}
+		var finalSum uint64
+		row := conn.QueryRow(ctx, fmt.Sprintf("SELECT sum(%s) FROM work_item_metrics_daily FINAL WHERE org_id = ?", name), org)
+		if err := row.Scan(&finalSum); err != nil {
+			t.Fatal(err)
+		}
+		compared++
+		if float64(finalSum) != want(name) {
+			t.Errorf("%s: FINAL sums %d, the declared newest-version read gives %v", name, finalSum, want(name))
+		}
+	}
+
+	if compared < 2 {
+		t.Fatalf("the FINAL differential compared %d metrics", compared)
+	}
+
 	// A chart of a non-numeric column is refused as a request error that names
 	// the metric, not reported as an outage.
 	for _, name := range nonNumeric {

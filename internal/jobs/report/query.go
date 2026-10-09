@@ -340,7 +340,8 @@ var nonNumericMetrics = map[string]string{
 }
 
 const (
-	valueKindNumeric = "numeric"
+	valueKindNumeric    = "numeric"
+	kindUndeclaredTable = "undeclared-table"
 )
 
 func applyGoDeclarations(definition metricDefinition) metricDefinition {
@@ -359,10 +360,16 @@ func applyGoDeclarations(definition metricDefinition) metricDefinition {
 // dependency outage: retrying the same plan cannot change the answer.
 type ChartMetricError struct {
 	Metric string
-	Kind   string
+	// Kind is the value kind of a non-numeric metric ("text", "timestamp"), or
+	// "undeclared-table" for a metric whose source table has no tableReads entry.
+	Kind  string
+	Table string
 }
 
 func (err *ChartMetricError) Error() string {
+	if err.Kind == kindUndeclaredTable {
+		return fmt.Sprintf("report chart metric %q reads table %q, which has no read declaration: it cannot be charted", err.Metric, err.Table)
+	}
 	return fmt.Sprintf("report chart metric %q is %s, not a number: it cannot be charted", err.Metric, err.Kind)
 }
 
@@ -374,12 +381,19 @@ func (err *ChartMetricError) Is(target error) bool { return target == ErrContrac
 func validateChartMetrics(ctx context.Context, charts []ChartSpec) error {
 	for _, spec := range charts {
 		definition, ok := supportedMetrics[spec.Metric]
-		if !ok || definition.ValueKind == valueKindNumeric {
+		if !ok {
 			continue
 		}
-		err := &ChartMetricError{Metric: spec.Metric, Kind: definition.ValueKind}
+		kind := definition.ValueKind
+		if _, declared := tableReads[definition.SourceTable]; !declared {
+			kind = kindUndeclaredTable
+		}
+		if kind == valueKindNumeric {
+			continue
+		}
+		err := &ChartMetricError{Metric: spec.Metric, Kind: kind, Table: definition.SourceTable}
 		slog.ErrorContext(ctx, "report.chart_metric_refused",
-			"metric", spec.Metric, "value_kind", definition.ValueKind, "source_table", definition.SourceTable,
+			"metric", spec.Metric, "value_kind", kind, "source_table", definition.SourceTable,
 			"chart_id", spec.ChartID, "error", err)
 		return err
 	}
@@ -497,19 +511,19 @@ func buildChartWhere(spec ChartSpec, definition metricDefinition) (string, []any
 }
 
 // dedupGuardQuery returns a companion COUNT query for a chart metric whose
-// source table is registered in appendOnlyDailyKeys (CHAOS-4140's dedup
-// guard applies), or ok=false for a table with no known re-drive risk (no
-// guard to measure). It scans the SAME where clause and bound parameters
+// source table is declared in tableReads (CHAOS-4140's dedup
+// guard applies to every charted table), or ok=false for an undeclared table. It scans the SAME where clause and bound parameters
 // buildChartQuery's aggregate applies, so "observed" is exactly the physical
 // row count behind that chart's key range; uniqExact over the table's own
 // natural key gives the deduped row count dedupFromSource's LIMIT 1 BY would
 // collapse to, so observed-minus-that is the retried-generation rows the
 // guard discarded.
 func dedupGuardQuery(spec ChartSpec, definition metricDefinition) (statement string, parameters []any, table string, ok bool) {
-	keys, ok := appendOnlyDailyKeys[definition.SourceTable]
+	read, ok := tableReads[definition.SourceTable]
 	if !ok {
 		return "", nil, "", false
 	}
+	keys := read.Key
 	where, parameters, err := buildChartWhere(spec, definition)
 	if err != nil {
 		return "", nil, "", false
@@ -551,6 +565,9 @@ func (adapter *ClickHouseQueryAdapter) observeDedupGuard(ctx context.Context, sp
 }
 
 func buildChartQuery(spec ChartSpec, definition metricDefinition) (string, []any, error) {
+	if _, declared := tableReads[definition.SourceTable]; !declared {
+		return "", nil, &ChartMetricError{Metric: spec.Metric, Kind: kindUndeclaredTable, Table: definition.SourceTable}
+	}
 	xExpression, xType, temporal := "'total'", "String", false
 	day := definition.dayColumn()
 	switch spec.GroupBy {
@@ -683,19 +700,11 @@ func sourceFrom(metric string, definition metricDefinition) string {
 		metric, dedupSource, definition.SourceTable)
 }
 
-// dayColumnByTable declares, once per source table, the Date column a chart
-// filters and buckets by when it is not the registry-wide default "day". A
-// snapshot table keys on the day of the snapshot instead.
-var dayColumnByTable = map[string]string{
-	"file_complexity_snapshots": "as_of_day",
-	"ic_landscape_rolling_30d":  "as_of_day",
-}
-
 // dayColumn is the Date column of the metric's source table that time ranges
 // and day/week/month buckets apply to.
 func (definition metricDefinition) dayColumn() string {
-	if column, ok := dayColumnByTable[definition.SourceTable]; ok {
-		return column
+	if read, ok := tableReads[definition.SourceTable]; ok && read.Day != "" {
+		return read.Day
 	}
 	return "day"
 }

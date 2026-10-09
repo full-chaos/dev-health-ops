@@ -45,8 +45,6 @@ var classifiedDynamicFinalReads = map[string]struct {
 		"the FROM of a metric read whose table comes from the fixed per-metric table list (user, repo and team metric rollups); no operational table is in it"},
 	"queryapi/people/metricconfig.go": {1,
 		"dedupTable answers the three ReplacingMergeTree metric sources of that package's fixed config; no operational table"},
-	"jobs/report/dedup.go": {1,
-		"dedupFromSource reads the registered daily metric rollups (rerunDedupedDailyTables, appendOnlyDailyKeys); no operational table"},
 	"queryapi/scopelabel/scopelabel.go": {1,
 		"the optional FINAL of the repos and teams name lookups (kind is repo or team)"},
 	"jobs/dimensionfold/fold.go": {1,

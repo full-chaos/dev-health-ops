@@ -1,10 +1,12 @@
 GRANT SELECT, INSERT, ALTER DELETE ON default.teams
 GRANT SELECT, INSERT, ALTER DELETE ON default.identities
-GRANT SELECT ON default.team_sync_policies
+GRANT SELECT, INSERT ON default.team_sync_policies
 GRANT SELECT, INSERT ON default.team_provider_observations
 GRANT SELECT, INSERT ON default.team_drift_changes
-GRANT INSERT ON default.team_memberships
-GRANT INSERT ON default.manual_attribution_fallbacks
+GRANT SELECT, INSERT ON default.team_memberships
+GRANT SELECT, INSERT ON default.team_project_ownership
+GRANT SELECT, INSERT ON default.team_repo_ownership
+GRANT SELECT, INSERT ON default.manual_attribution_fallbacks
 GRANT SELECT ON default.repo_metrics_daily
 GRANT SELECT ON default.user_metrics_daily
 GRANT SELECT ON default.team_metrics_daily

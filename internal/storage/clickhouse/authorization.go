@@ -52,16 +52,23 @@ func APIPosture(database string) Posture {
 		// Nothing else touches these tables through this login, and none
 		// of them is ever deleted from here (status moves by inserting a
 		// newer ReplacingMergeTree row).
-		{Database: database, Table: "team_sync_policies", AllowSelect: true},
+		{Database: database, Table: "team_sync_policies", AllowInsert: true, AllowSelect: true},
 		{Database: database, Table: "team_provider_observations", AllowInsert: true, AllowSelect: true},
 		{Database: database, Table: "team_drift_changes", AllowInsert: true, AllowSelect: true},
 		// Team drift review (CHAOS-6312): approving an identity membership
 		// change inserts the membership and expires the manual membership /
 		// member fallback it conflicted with (a newer ReplacingMergeTree row),
 		// and approving a team change reads the provider observation it
-		// applies. Insert only: nothing here reads or deletes these tables.
-		{Database: database, Table: "team_memberships", AllowInsert: true},
-		{Database: database, Table: "manual_attribution_fallbacks", AllowInsert: true},
+		// applies.
+		// Every admin team write first runs the team id carry
+		// (providersync.KeyTeamIDsForWrite): it reads a bare team's open
+		// links, sync policy and fallbacks and re-inserts them under the
+		// prefixed id, so those tables need select and insert here. Nothing
+		// here deletes from them.
+		{Database: database, Table: "team_memberships", AllowInsert: true, AllowSelect: true},
+		{Database: database, Table: "team_project_ownership", AllowInsert: true, AllowSelect: true},
+		{Database: database, Table: "team_repo_ownership", AllowInsert: true, AllowSelect: true},
+		{Database: database, Table: "manual_attribution_fallbacks", AllowInsert: true, AllowSelect: true},
 		// Organization activity for the login route's active-org choice
 		// and GET /api/v1/auth/me/organizations (_load_org_activity): a
 		// row count and the newest computed_at per org, read only.

@@ -34,6 +34,13 @@ import (
 // every Nullable measure. It is written only over a key that held a measure,
 // never for a day or a team with no data: missing stays missing.
 //
+// Who applies the rule depends on who can write a key. A table whose keys two
+// partitions of one run can write is decided once for the run, after every
+// partition is done (retractStaleTeamKeysOfRun, stale_team_keys_run.go). A
+// table whose key scope is the partition's own repository, and a table that a
+// finalize family writes once for a run, keep the rule in their family
+// (supersedeStaleTeamKeys). The census holds that split.
+//
 // The set of tables is StaleTeamKeyTables. issue_type_metrics_daily and
 // investment_metrics_daily hold the same rule in their own writers
 // (withIssueTypeMetricsZeroRows, withInvestmentMetricsZeroRows): they are plain
@@ -76,32 +83,42 @@ type staleKeyConn interface {
 	PrepareBatch(ctx context.Context, query string, opts ...driver.PrepareBatchOption) (driver.Batch, error)
 }
 
-// loadLiveStaleKeys returns the live keys of one organization and day.
+// loadLiveStaleKeys returns the live keys of one organization and day, and for
+// each the newest computed_at stored under it.
 func loadLiveStaleKeys(
 	ctx context.Context, conn staleKeyConn, table StaleKeyTable, organizationID string, day time.Time,
-) ([]staleKey, error) {
-	rows, err := conn.Query(ctx, table.LiveKeysQuery(), organizationID, staleKeyDay(day))
+) ([]staleKey, map[string]time.Time, error) {
+	rows, err := conn.Query(ctx, table.LiveKeyVersionsQuery(), organizationID, staleKeyDay(day))
 	if err != nil {
-		return nil, fmt.Errorf("load %s live keys: %w", table.Table, err)
+		return nil, nil, fmt.Errorf("load %s live keys: %w", table.Table, err)
 	}
 	defer rows.Close()
 	var keys []staleKey
+	versions := map[string]time.Time{}
 	for rows.Next() {
 		values := make([]string, len(table.Keys))
-		targets := make([]any, len(values))
+		var version time.Time
+		targets := make([]any, 0, len(values)+1)
 		for index := range values {
-			targets[index] = &values[index]
+			targets = append(targets, &values[index])
 		}
+		targets = append(targets, &version)
 		if err := rows.Scan(targets...); err != nil {
-			return nil, fmt.Errorf("scan %s live key: %w", table.Table, err)
+			return nil, nil, fmt.Errorf("scan %s live key: %w", table.Table, err)
 		}
 		keys = append(keys, staleKey(values))
+		versions[staleKey(values).text()] = version
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate %s live keys: %w", table.Table, err)
+		return nil, nil, fmt.Errorf("iterate %s live keys: %w", table.Table, err)
 	}
-	return keys, nil
+	return keys, versions, nil
 }
+
+// staleKeyVersionStep is added to the newest stored computed_at of a key to
+// get a version that is strictly newer in every table: the coarsest
+// computed_at column keeps whole seconds.
+const staleKeyVersionStep = time.Second
 
 func staleKeyDay(day time.Time) time.Time {
 	utc := day.UTC()
@@ -131,14 +148,23 @@ func staleKeysOf(table StaleKeyTable, live []staleKey, scope staleKeyScope, prod
 	return stale
 }
 
-// supersedeStaleTeamKeys applies the rule for one table after a run wrote its
-// rows: it reads the live keys of the organization and day, keeps the ones of
-// the run's scope that the run did not produce, and writes a row of zeros over
+// supersedeStaleTeamKeys applies the rule for one table after a family wrote
+// its rows: it reads the live keys of the organization and day, keeps the ones
+// of the scope that the family did not produce, and writes a row of zeros over
 // each. It returns the number of rows of zeros.
 //
-// scope is the values of table.Scope of every unit the run computed; it is
-// ignored for a table with no scope column. produced is every key the run
+// It is for a table that no other partition of the run writes the same keys
+// of: a table whose key scope is the partition's own repository, or a table a
+// finalize family writes once for a run. A table that the partitions of a run
+// share is decided by retractStaleTeamKeysOfRun.
+//
+// scope is the values of table.Scope of every unit the family computed; it is
+// ignored for a table with no scope column. produced is every key the family
 // wrote, in the order of table.Keys.
+//
+// The row of zeros of a key gets computedAt, or one step after the newest
+// stored row of that key when computedAt is not later: a row of zeros is
+// strictly newer than the row it supersedes, never of the same computed_at.
 //
 // A failed read is returned: the run then fails and is tried again, and a
 // stale key is never taken as "no stale key". The write reports its row count
@@ -150,35 +176,184 @@ func supersedeStaleTeamKeys(
 	if computedAt.IsZero() {
 		return 0, ErrInvalidState
 	}
-	return supersedeStaleTeamKeysAt(ctx, conn, table, organizationID, day, scope, produced,
-		func(staleKey) time.Time { return computedAt })
+	return supersedeStaleKeys(ctx, conn, table, organizationID, day, scope, produced,
+		func(_ staleKey, stored time.Time) time.Time {
+			version := computedAt.UTC()
+			if floor := stored.UTC().Add(staleKeyVersionStep); floor.After(version) {
+				version = floor
+			}
+			return version
+		})
 }
 
-// supersedeStaleTeamKeysAt is supersedeStaleTeamKeys for a family that gives
-// the rows of one run more than one computed_at: computedAtOf returns the
-// computed_at of the row of zeros of one key. A reader that takes the rows of
-// the newest computed_at of a group (team_metrics_daily, by repository) must
-// find the row of zeros in the same generation as the rows the run wrote for
-// that group.
+// supersedeStaleTeamKeysAt is the rule for team_metrics_daily, whose family
+// gives the rows of each repository their own computed_at: computedAtOf
+// returns the computed_at of the row of zeros of one key, and the row gets
+// exactly that. A reader that takes the rows of the newest computed_at of a
+// repository must find the row of zeros in the same generation as the rows
+// the family wrote for that repository, so this row is NOT raised above the
+// row it supersedes (see the limits in the architecture document).
 func supersedeStaleTeamKeysAt(
 	ctx context.Context, conn staleKeyConn, table StaleKeyTable, organizationID string, day time.Time,
 	scope staleKeyScope, produced []staleKey, computedAtOf func(staleKey) time.Time,
 ) (int, error) {
+	if computedAtOf == nil {
+		return 0, ErrInvalidState
+	}
+	return supersedeStaleKeys(ctx, conn, table, organizationID, day, scope, produced,
+		func(key staleKey, _ time.Time) time.Time { return computedAtOf(key) })
+}
+
+// supersedeStaleKeys is the rule of a family. versionOf gets a stale key and
+// the newest computed_at stored under it, and returns the computed_at of its
+// row of zeros.
+func supersedeStaleKeys(
+	ctx context.Context, conn staleKeyConn, table StaleKeyTable, organizationID string, day time.Time,
+	scope staleKeyScope, produced []staleKey, versionOf func(key staleKey, stored time.Time) time.Time,
+) (int, error) {
 	if err := table.Valid(); err != nil {
 		return 0, fmt.Errorf("%w: %v", ErrInvalidState, err)
 	}
-	if conn == nil || strings.TrimSpace(organizationID) == "" || day.IsZero() || computedAtOf == nil {
+	if conn == nil || strings.TrimSpace(organizationID) == "" || day.IsZero() || versionOf == nil {
 		return 0, ErrInvalidState
 	}
 	if len(table.Scope) > 0 && len(scope) == 0 {
 		// A run with no unit computed nothing: it holds no key to supersede.
 		return 0, nil
 	}
-	live, err := loadLiveStaleKeys(ctx, conn, table, organizationID, day)
+	live, versions, err := loadLiveStaleKeys(ctx, conn, table, organizationID, day)
 	if err != nil {
 		return 0, err
 	}
-	stale := staleKeysOf(table, live, scope, produced)
+	return writeStaleKeyZeroRows(ctx, conn, table, organizationID, day, staleKeysOf(table, live, scope, produced),
+		func(key staleKey) time.Time { return versionOf(key, versions[key.text()]) })
+}
+
+// runStaleKeys is what the compute of a run gives the run-level rule for one
+// table: the scope and the keys of the day, and for a table whose rows the
+// run settles too, the write of those rows at a version.
+type runStaleKeys struct {
+	scope staleKeyScope
+	keys  []staleKey
+	// writeRows stores the rows of the day that were computed with the keys,
+	// at the version. Nil for a table whose rows the partitions settle.
+	writeRows func(ctx context.Context, version time.Time) (int, error)
+}
+
+// retractStaleTeamKeysOfRun applies the rule once for a whole run, for a table
+// whose keys more than one partition of a run can write (a work scope with
+// items in the repositories of two partitions; a table that every partition
+// computes for the whole organization).
+//
+// A partition cannot decide such a key. What a partition "did not produce" is
+// measured against its own read, and its read can be older than the write of
+// another partition of the same run: it then writes a row of zeros over the
+// row the other partition just wrote. So the families of these tables write no
+// row of zeros, and this runs once, after every partition of the run is done.
+//
+// The order of the two reads is the rule:
+//
+//  1. the live keys of the day are read FIRST;
+//  2. THEN keys computes the keys of the day from the stored inputs as they
+//     are now (the same compute the family runs);
+//  3. a live key of the run's scope that step 2 did not compute gets a row of
+//     zeros;
+//  4. for a table whose rows the run settles (the three work-item tables),
+//     the rows that step 2 computed are stored too, with the rows of zeros.
+//     Two partitions that share a work scope both write the real rows of the
+//     scope, each from the attributions stored at its read; the rows of this
+//     step are computed once, after every partition wrote its attributions,
+//     and are the newest version of their keys.
+//
+// A key that is right holds its inputs before its row is written (a family
+// writes its rows after it read them). So a right key that is live in step 1
+// is computed in step 2, whatever wrote it and whenever: no clock and no
+// insert order decides which key is superseded. clock is only the version of
+// the rows this step writes, and it is raised above the stored rows of the day
+// when this host's clock is not later than they are.
+func retractStaleTeamKeysOfRun(
+	ctx context.Context, conn staleKeyConn, table StaleKeyTable, organizationID string, day time.Time,
+	compute func(context.Context) (runStaleKeys, error), clock time.Time,
+) (int, error) {
+	if err := table.Valid(); err != nil {
+		return 0, fmt.Errorf("%w: %v", ErrInvalidState, err)
+	}
+	if conn == nil || strings.TrimSpace(organizationID) == "" || day.IsZero() || compute == nil || clock.IsZero() {
+		return 0, ErrInvalidState
+	}
+	live, _, err := loadLiveStaleKeys(ctx, conn, table, organizationID, day)
+	if err != nil {
+		return 0, err
+	}
+	if len(live) == 0 {
+		// The partitions stored no measure for the day: there is no key to
+		// supersede and no row to settle.
+		return 0, nil
+	}
+	// Every row this step writes must be strictly newer than every row of the
+	// day that is stored: a row of zeros newer than the row it supersedes, a
+	// settled row newer than the row of a partition. The clock of this host
+	// cannot promise that (a partition can run on a host whose clock is ahead,
+	// and several tables keep computed_at to the second), so the version is
+	// taken from the stored rows when the clock is not later.
+	newest, err := newestStaleKeyVersion(ctx, conn, table, organizationID, day)
+	if err != nil {
+		return 0, err
+	}
+	version := clock.UTC()
+	if floor := newest.UTC().Add(staleKeyVersionStep); floor.After(version) {
+		version = floor
+	}
+	computed, err := compute(ctx)
+	if err != nil {
+		return 0, err
+	}
+	written := 0
+	if computed.writeRows != nil {
+		written, err = computed.writeRows(ctx, version)
+		if err != nil {
+			return written, err
+		}
+	}
+	zeros, err := writeStaleKeyZeroRows(ctx, conn, table, organizationID, day,
+		staleKeysOf(table, live, computed.scope, computed.keys),
+		func(staleKey) time.Time { return version })
+	return written + zeros, err
+}
+
+// newestStaleKeyVersion is the newest computed_at of the rows of one
+// organization and day.
+func newestStaleKeyVersion(
+	ctx context.Context, conn staleKeyConn, table StaleKeyTable, organizationID string, day time.Time,
+) (time.Time, error) {
+	where := ""
+	if table.Where != "" {
+		where = " AND (" + table.Where + ")"
+	}
+	rows, err := conn.Query(ctx, "SELECT max(computed_at) FROM "+table.Table+
+		" WHERE org_id = ? AND "+table.DayColumn+" = ?"+where, organizationID, staleKeyDay(day))
+	if err != nil {
+		return time.Time{}, fmt.Errorf("load the newest %s version: %w", table.Table, err)
+	}
+	defer rows.Close()
+	var newest time.Time
+	if rows.Next() {
+		if err := rows.Scan(&newest); err != nil {
+			return time.Time{}, fmt.Errorf("scan the newest %s version: %w", table.Table, err)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return time.Time{}, fmt.Errorf("read the newest %s version: %w", table.Table, err)
+	}
+	return newest, nil
+}
+
+// writeStaleKeyZeroRows writes one row of zeros over each key. It reports its
+// row count on a Send error, because the rows may be stored.
+func writeStaleKeyZeroRows(
+	ctx context.Context, conn staleKeyConn, table StaleKeyTable, organizationID string, day time.Time,
+	stale []staleKey, computedAtOf func(staleKey) time.Time,
+) (int, error) {
 	if len(stale) == 0 {
 		return 0, nil
 	}

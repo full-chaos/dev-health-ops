@@ -13,7 +13,6 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/aigovernance"
 	"github.com/full-chaos/dev-health-ops/internal/teamactive"
-	"github.com/full-chaos/dev-health-ops/internal/teamkeytables"
 )
 
 // governanceQueryRecorder embeds the package's panicking stubDriverConn and
@@ -49,7 +48,7 @@ func isTeamRuleRead(query string) bool {
 		return true
 	}
 	for _, table := range StaleTeamKeyTables() {
-		if query == table.LiveKeysQuery() {
+		if query == table.LiveKeyVersionsQuery() {
 			return true
 		}
 	}
@@ -115,10 +114,8 @@ func TestAIGovernanceComputeFamilyStillRunsWithNoRepoIDs(t *testing.T) {
 	if written != 0 {
 		t.Fatalf("wrote %d rows from an empty artifact set, want 0", written)
 	}
-	// The artifact load, then the live-key read of the stale-key rule.
-	if len(conn.queries) != 2 || isTeamRuleRead(conn.queries[0]) ||
-		conn.queries[1] != teamkeytables.AIGovernanceCoverageDaily.LiveKeysQuery() {
-		t.Fatalf("issued %d queries, want the artifact load and the live-key read -- an empty repo scope must NOT short-circuit this family", len(conn.queries))
+	if len(conn.calls) != 1 {
+		t.Fatalf("issued %d queries, want exactly 1 -- an empty repo scope must NOT short-circuit this family", len(conn.calls))
 	}
 }
 

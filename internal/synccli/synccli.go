@@ -58,8 +58,9 @@ const (
 	gatewayPath       = "/gateway/api"
 	teamsUsage        = "usage: dho sync teams --provider jira --org <org-id> [--structure] [--members] [--projects]\n\n" +
 		"Syncs the organization's Atlassian Teams into ClickHouse. With none of --structure,\n" +
-		"--members and --projects, all three are synced. Members and project links a team no longer has are\n" +
-		"retracted (closed); an empty result is refused, so a permissions problem retracts nothing, unless --allow-empty.\n\n" +
+		"--members and --projects, all three are synced. This verb writes what it reads and closes nothing: it has\n" +
+		"no integration census, so it cannot prove that it is the only Jira integration of the organization (the\n" +
+		"worker's sync closes members and links a team no longer has). An empty result is refused unless --allow-empty.\n\n" +
 		"--provider github|gitlab|linear --org <org-id> [--owner <org-or-group>] [--auth <token>] runs\n" +
 		"that provider's own team catalog instead of Atlassian Teams (--owner is required for github/\n" +
 		"gitlab, not used for linear); see docs/reference/cli/index.md for its exact flags, refusals\n" +
@@ -176,7 +177,7 @@ func runTeams(ctx context.Context, env cli.Env, d deps) int {
 	structure := flags.Bool("structure", false, "sync the teams")
 	members := flags.Bool("members", false, "sync team memberships")
 	projects := flags.Bool("projects", false, "sync the projects each team works on")
-	allowEmpty := flags.Bool("allow-empty", false, "accept an empty result (jira: retracts every member and link; github/gitlab/linear: exit 0 instead of refusing)")
+	allowEmpty := flags.Bool("allow-empty", false, "accept an empty result (exit 0 instead of refusing; nothing is written or closed for it)")
 	if err := flags.Parse(env.Args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return cli.ExitOK
@@ -253,8 +254,8 @@ func runTeams(ctx context.Context, env cli.Env, d deps) int {
 		return writeError(env.Stderr, cli.ExitFailure, "read_failed", redact(err))
 	}
 	// An empty answer is far more often a permissions or configuration problem
-	// than an organization with no teams, and writing it would retract every
-	// member and link: refuse it unless the operator says it is real.
+	// than an organization with no teams: refuse it unless the operator says
+	// it is real. (It closes nothing either way: see the scope note below.)
 	if len(rows.Teams) == 0 && !*allowEmpty {
 		return writeError(env.Stderr, cli.ExitFailure, "empty_result",
 			"the gateway returned no Atlassian teams; nothing was written. Check the organization id, the cloud id and the credentials, or pass --allow-empty if the organization really has no teams")
@@ -264,7 +265,11 @@ func runTeams(ctx context.Context, env cli.Env, d deps) int {
 	if err := providersync.CarryTeamIDsBeforeWrite(ctx, conn, orgID, "atlassian_teams_cli"); err != nil {
 		return writeError(env.Stderr, cli.ExitFailure, "write_failed", redact(err))
 	}
-	result, err := atlassianteams.Write(ctx, conn, orgID, rows, selections)
+	// This verb has no integration census, so the scope gate is not proven:
+	// it writes what it read and closes nothing (the same as the GitHub and
+	// GitLab forms of this verb). The worker's run closes.
+	result, err := atlassianteams.Write(ctx, conn, orgID, rows, selections,
+		providersync.ProveSoleScope(ctx, nil, orgID, atlassianteams.Provider, ""))
 	if err != nil {
 		return writeError(env.Stderr, cli.ExitFailure, "write_failed", redact(err))
 	}

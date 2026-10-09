@@ -30,8 +30,9 @@ func runLinearCatalogBehindTheCarry(t *testing.T, f carryFixture) TeamCatalogRes
 		`{"data":{"projects":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}`,
 	}}
 	collector := CarryFirstTeamCatalogCollector{Conn: f.conn, Writer: "test", Collector: LinearTeamCatalogCollector{
-		Handler: LinearReferenceCatalogRouteHandler{PerPage: 50, MaxPages: 10},
-		Sink:    LinearReferenceCatalogClickHouseEffects{Conn: f.conn, Lease: carrySeamLease()},
+		ScopeCensus: staticScopeCensus{},
+		Handler:     LinearReferenceCatalogRouteHandler{PerPage: 50, MaxPages: 10},
+		Sink:        LinearReferenceCatalogClickHouseEffects{Conn: f.conn, Lease: carrySeamLease()},
 	}}
 	claim := nativeTestClaim("linear", "work-items")
 	claim.OrgID = f.orgID
@@ -119,8 +120,9 @@ func TestTheJiraProjectAsTeamCatalogKeepsTheFirstSeenOfALink(t *testing.T) {
 		jiraTeamCatalogProjectSearchURI: {body: `{"values":[{"id":"10001","key":"OPS","name":"Ops"}],"isLast":true,"total":1}`},
 	}
 	collector := CarryFirstTeamCatalogCollector{Conn: conn, Writer: "test", Collector: JiraTeamCatalogCollector{
-		Handler: JiraTeamCatalogRouteHandler{},
-		Sink:    JiraTeamCatalogClickHouseEffects{Conn: conn, Lease: carrySeamLease()},
+		ScopeCensus: staticScopeCensus{},
+		Handler:     JiraTeamCatalogRouteHandler{},
+		Sink:        JiraTeamCatalogClickHouseEffects{Conn: conn, Lease: carrySeamLease()},
 	}}
 	if _, err := collector.CollectTeamCatalog(ctx, TeamCatalogReference{OrgID: f.orgID, SyncRunID: "run"},
 		providerfoundation.Credential{Provider: "jira"},

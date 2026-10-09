@@ -19,8 +19,8 @@ import (
 // input is gone). The executor must leave no measure under that key, must not
 // touch a key outside its scope, and must write its own rows as before.
 //
-// The file uses no symbol of the rule, so the same file runs on a tree
-// without it.
+// The file uses one symbol of the rule, endStaleKeyRun (see its file for how
+// the same test runs on a tree without the rule).
 
 const otherFamiliesOrg = "00000000-0000-4000-8000-00000000d0d3"
 
@@ -129,6 +129,9 @@ WHERE org_id = ? AND day = ? AND repo_id = ?`, []any{org, day, api}, &total)
 		if _, err := executor.ComputeFamily(ctx, run, Partition{ID: uuid.NewString(), RunID: run.ID}); err != nil {
 			t.Fatalf("ai_governance: %v", err)
 		}
+		// Every partition computes this table for the whole organization, so
+		// its stale keys are superseded once, at the end of the run.
+		endStaleKeyRun(t, ctx, conn, run, earlier.Add(11*time.Hour))
 		var artifacts uint64
 		scan("coverage of the day", `SELECT toUInt64(sum(ai_artifacts + declared_artifacts + human_reviewed_prs + security_scanned_prs + in_policy_artifacts))
 FROM ai_governance_coverage_daily FINAL WHERE org_id = ? AND day = ?`, []any{org, day}, &artifacts)

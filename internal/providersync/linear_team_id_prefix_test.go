@@ -25,7 +25,7 @@ func collectLinearTeamIDFixture(t *testing.T) (Claim, LinearReferenceCatalogBatc
 			`{"id":"team-raw-qa","key":"QA","name":"Quality","members":{"nodes":[{"id":"user-1","name":"Alice","email":"alice@example.com","active":true}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}` +
 			`],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}`,
 		`{"data":{"cycles":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}`,
-		`{"data":{"projects":{"nodes":[{"id":"7a6b5c4d-0000-4000-8000-00000000000a","name":"Q Project","description":"","status":{"id":"s","name":"Active","type":"started"},"trashed":false,"targetDate":"","archivedAt":null,"url":"","lead":null,"teams":{"nodes":[{"id":"team-raw-qa","key":"QA"},{"id":"team-raw-nokey","key":""}]}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}`,
+		`{"data":{"projects":{"nodes":[{"id":"7a6b5c4d-0000-4000-8000-00000000000a","name":"Q Project","description":"","status":{"id":"s","name":"Active","type":"started"},"trashed":false,"targetDate":"","archivedAt":null,"url":"","lead":null,"teams":{"nodes":[{"id":"team-raw-qa","key":"QA"},{"id":"team-raw-nokey","key":""}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}`,
 	}}
 	batch, err := (LinearReferenceCatalogRouteHandler{PerPage: 50, MaxPages: 10}).CollectReferenceCatalog(
 		context.Background(), teamCatalogRefFromClaim(claim),
@@ -88,14 +88,14 @@ func TestEveryLinearTeamIDWriteSiteWritesAPrefixedID(t *testing.T) {
 		if err := validateLinearReferenceOwnershipRow(claim, row); err != nil {
 			t.Errorf("ownership row %+v refused at write: %v", row, err)
 		}
-		switch row.ProjectID {
+		switch row.ProjectID.String() {
 		case "7a6b5c4d-0000-4000-8000-00000000000a":
 			projectRows++
 			if row.TeamID != "linear:QA" || row.ProjectKey != nil {
 				t.Errorf("project ownership row: team_id %q project_key %v, want linear:QA and nil", row.TeamID, row.ProjectKey)
 			}
 		case claim.OrgID + ":linear:QA":
-			key := row.ProjectID[len(claim.OrgID+":linear:"):]
+			key := row.ProjectID.String()[len(claim.OrgID+":linear:"):]
 			teamKeyRows[key] = true
 			if row.TeamID != "linear:"+key || row.ProjectKey == nil || *row.ProjectKey != key {
 				t.Errorf("team-key ownership row %s: team_id %q project_key %v, want linear:%s and the native key %s",

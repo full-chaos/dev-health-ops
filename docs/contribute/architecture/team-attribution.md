@@ -686,10 +686,53 @@ project's items by id. Now:
   key-built id. The `source = 'native'` rows with `team_id = project_key` (the project-as-team class) are
   not given to the snapshot rule: every catalog run retires them as a class (section 0.4c). The catalog closes nothing when its
   project search returned no project.
-- **Only a complete snapshot closes a row** (`providersync.OwnershipSnapshot.Complete`; the zero value is
-  not complete). A row that is missing from a part of the provider's answer is not a fact the provider
-  dropped. A run that did not read its source to the end writes what it found, keeps first-seen
-  `valid_from`, closes nothing, and says so:
+- **A row is closed only through its fact kind, on that kind's own proof** (`providersync.PlanSnapshot`,
+  `ownership_snapshot.go`; CHAOS-8886). A writer gives the rule one typed snapshot for each kind of fact its
+  table holds (`KindSnapshot`): the kind (`snapshot_kinds.go`: a name, the rows it holds, and what an empty
+  answer of the kind means) and a proof made only from named terms (`ProveSnapshot`; the zero value and a
+  term with no reason are not proven). There is no completeness bool and no count argument: the rule sorts
+  the fresh and the open rows by kind and counts them itself. A kind closes its open rows only when its
+  scope proof holds (see below), its walk proof holds (every read of ITS walk reached a stated end) and
+  the run holds at least one row of THAT kind. A row of another kind never makes a kind "not empty", an open row that no kind holds is never
+  closed, and a kind that is read per team with its own proven end per team declares an empty answer to be
+  an answer (`EmptyIsAnAnswer`). The kinds:
+
+  | Kind | Writer | Walk behind the proof | Scope proof | Empty answer |
+  | --- | --- | --- | --- | --- |
+  | `linear_project_ownership` | Linear catalog | every project page, node and project-team page; no link without a key | sole integration | closes nothing |
+  | `linear_team_key_ownership` | Linear catalog | the team walk | sole integration | closes nothing |
+  | `jira_legacy_ownership` | Jira catalog | the project search (live, archived, live again) and the legacy links read | sole integration | closes nothing |
+  | `atlassian_team_catalog` | Atlassian Teams | the team search | sole integration | closes nothing: no team is deactivated or put in scope |
+  | `atlassian_team_memberships` | Atlassian Teams | one member read per active team | sole integration | is an answer (per team) |
+  | `atlassian_team_project_links` | Atlassian Teams | one link read per active team | sole integration | is an answer (per team) |
+  | `gitlab_group_project_grants` | GitLab catalog | one listing per closable group (section 0.4a) | sole integration | is an answer (per group) |
+  | `github_team_repo_grants` | GitHub catalog | one listing per closable team | sole integration | is an answer (per team) |
+
+  **Scope proof, for every kind** (`providersync.ProveSoleScope`, the one scope gate; `ScopeProof` is an
+  argument of every kind snapshot, so no kind can be stated without it). Ownership, membership and catalog
+  rows carry no integration key, and an organization can hold two integrations of one provider, so a walk
+  proves its own scope only. A kind closes only when the run's integration is the ONLY ACTIVE integration of
+  its provider in the organization (the census reads `public.integrations.is_active`, the run's own row
+  left out). With another active integration, with no census or no integration id (the `dho sync teams`
+  CLI verb), or when the census read fails, the run writes what it found, keeps first-seen `valid_from`,
+  closes nothing, and says so with the reason `scope_shared`, `scope_census_unavailable` or
+  `scope_census_failed` (the same WARN line and counter as below). An integration that is not active does
+  not block the close. GitHub and GitLab had this gate since section 0.4a; Linear, the Jira catalog and
+  the three Atlassian Teams kinds are behind the same one
+  (`TestTwoLinearIntegrationsOfOneOrganization`, `TestTwoJiraIntegrationsOfOneOrganization`,
+  `TestTwoJiraIntegrationsOfOneOrganizationKeepEachOthersAtlassianTeams`). No kind is exempt: no provider
+  here makes a second integration impossible.
+
+  A kind that closes nothing while it holds open rows is loud: one `team_catalog_snapshot_close_abandoned`
+  WARN line (`kind`, `reasons`, `open_rows_kept`) and one count of
+  `team_catalog_snapshot_close_abandoned_total{provider, kind, reason}` per reason (`empty_answer`, or the
+  reason of each term that did not hold). Census: `TestSnapshotKindCensus` (the kinds and their empty-answer
+  policy are a named table) and `TestEveryCloseSiteTakesTheTypedSnapshot` (every function that turns a
+  plan's retractions into rows is named, calls the rule itself and takes the typed snapshot, never a bool;
+  a proof term made from a constant fails).
+- **Only a proven snapshot closes a row.** A row that is missing from a part of the provider's answer is
+  not a fact the provider dropped. A run that did not read its source to the end writes what it found,
+  keeps first-seen `valid_from`, closes nothing, and says so:
   - Jira team catalog (legacy links): the Jira project search is read page by page (`startAt`) to the provider's
     end-of-data signal: `isLast` when the page has it, else `total`, else a page that has entries and is
     shorter than the page size. A page with no entries and no signal (an empty object or an error body
@@ -718,16 +761,35 @@ project's items by id. Now:
     (its writable links are still written), the run logs `jira_atlassian_teams_project_links_unreadable`
     with the count, and the link leg is degraded (`project_link_not_written`). One writable link beside
     it does not change that.
-  - The census test also fails when a planner passes a constant for `Complete`.
+  - The census test also fails when a proof term is made from a constant.
 - **A closed row is not owned before a merge.** A row is closed by writing its key again with `valid_to`
   set, so until a merge both versions are stored. The ownership reader of the repository derivation
   (`loadTeamRepoOwnershipProjectLinks`) takes the newest version of each row key first and filters
   `valid_to` after, the same two-level `argMax` form as the attribution cascade (`LoadProjects`).
   Test: `TestTeamRepoOwnershipProjectLinksLeaveOutAClosedRowBeforeAMerge`.
-- Linear still has its own insert-only writer; GitLab plans its rows through the same function since CHAOS-8952
+- Linear plans its ownership rows through the same function since CHAOS-8886
+  (`LinearReferenceCatalogClickHouseEffects.SnapshotOwnership`; open rows read are `provider = 'linear'`,
+  `source = 'native'`). Those rows are two fact kinds, each closed on its own walk: the ownership of real
+  projects (every project page and project-team page reached a stated end and no project-team link was
+  without a key) and the `{org}:linear:{team key}` row of each team (the team walk reached its end). An
+  empty answer of a kind closes no row of that kind: zero project nodes with a team present keeps every
+  open project row, and zero teams with a project present keeps every open team-key row
+  (`TestLinearCollectorEmptyAnswerOfAKindClosesNoRowOfThatKind`).
+  GitLab plans its rows through the same function since CHAOS-8952
   (section 0.4a); a
   census test (`TestJiraOwnershipWriterCensus`) names every writer of the table and fails for a new Jira
   writer that does not plan its rows through the shared function.
+- **One typed project id** (`providersync.ProjectID`, `project_id.go`, CHAOS-8886): the field is unexported
+  and every row type that persists a project id (`projects.id`, `team_project_ownership.project_id`) holds the
+  type, so a bare string does not compile into a sink row and a zero id is refused at the write. One
+  constructor per form: `JiraProjectID` and `LinearProjectID` (the native id, bare), `GitLabCatalogProjectID`
+  (`{org_id}:gitlab:{native id}`). Three NAMED exceptions, each with its reason in `projectIDNamedExceptions`:
+  `GitLabPathOwnershipProjectID` (the project path, until CHAOS-8883), `GitHubRepoProjectID` (GitHub has no
+  project; ownership names the repository full name), `LinearTeamKeyProjectID` (`{org_id}:linear:{team key}`,
+  CHAOS-4458). The stored strings are the same as before. Tests:
+  `TestProjectIDConstructorsAreByteEqualToTheHandBuiltForms`, `TestProjectIDCannotBeBuiltFromAString` (real
+  compile failures, with a control that must compile), `TestProjectIDConstructionCensus` (no literal, no
+  hand-built `{org}:{provider}:` string, exception callers pinned, sink field types pinned).
 - The key-built `projects` rows written earlier are removed by a one-time operator verb, see section 1.1.
 - Known limit: a native Jira project id is unique per Jira site. One organization with two Jira sites
   could give two projects the same id. The work-item rows had this limit before this change.
@@ -767,6 +829,20 @@ The Atlassian Teams of a Jira site ARE the Jira teams. A team owns a Jira projec
   type this code does not know makes the snapshot NOT complete: the links that were read are written, no row
   is closed, and each team's catalog `project_keys` keeps what it had. Zero links for a team on a complete
   read is a valid answer.
+- **A team search that answers no team closes nothing.** The teams of the catalog are a fact kind of
+  their own (`atlassian_team_catalog`): a team already in the catalog and not in the answer is treated as
+  deleted upstream (deactivated, its memberships and links in scope of the close) only when the search
+  reached its end AND answered at least one team. A search with no team is far more often an access change
+  than an organization that deleted every team: no team is deactivated, no membership and no link is
+  closed, and the run logs `team_catalog_snapshot_close_abandoned` with `reasons=empty_answer`
+  (`TestATeamSearchThatAnswersNoTeamClosesNothing`). Memberships go through the same rule
+  (`atlassian_team_memberships`, proof `Rows.MembershipsComplete`: one finished member read for every
+  active team); a later open duplicate of a membership the run still holds is closed, as for the links.
+  A member read finishes only on a stated page end: an answer with a missing or null `pageInfo` or
+  `hasNextPage` is an error of the member read, which fails the collection, so nothing is written and
+  nothing is closed on it (vendored patch 0008; `TestAMemberReadWithoutAProvenEndClosesNoMembership`).
+  Limit, not decided: a missing or null `edges` list on a STATED last page is still read as "no member";
+  no recorded real answer of an empty roster says whether the provider sends an empty list or null for it.
 - **A row is closed only when every Jira project link the provider returned for its team was written.**
   One rule, per team, in one place (`teamLinkLedger` in `internal/atlassianteams/collect.go`): the
   `JiraProject` links the provider returned for the team are counted, and so are the ones behind an
@@ -1387,8 +1463,11 @@ counts the day under both ids. A team id changes for a stored day when a team is
 a provider-keyed id, section 0.4f; a retired project-as-team row, section 0.4c; an admin delete) and when an item or a
 repository moves to another team.
 
-Two rules keep a recomputed day right. Both are structural: a new table or a new resolver cannot leave them out
-without a failed test.
+Two rules keep a recomputed day right. Each is held by a census, not by a list someone must remember: a new
+team-keyed table with no decision fails `stale_team_keys_census_test.go`, and a new read of the `teams` table in the
+daily job that does not apply `internal/teamactive` fails `team_active_census_test.go`. A resolver that takes a team id
+from another source (an ownership row; a stored row of an earlier day, as `ic_finalize` does, see the limits) is held
+by its own test, not by a census.
 
 **1. No resolver resolves to an inactive team.** A team whose newest `teams` row has `is_active = 0` takes no work
 item (`dropInactiveTeamCandidates`, section 0.2) and, with the same test of the newest row
@@ -1406,26 +1485,53 @@ The SQL text of these reads is the Python reference's and is not changed: the in
 reference's. A failed read of the inactive ids fails the family; it is never taken as "no inactive team".
 Asserted on real ClickHouse by `TestNoTeamResolverResolvesToAnInactiveTeam`.
 
-**2. A run writes a row of zeros over each key it no longer produces.** After a family wrote its rows for a day, it
-reads the live keys of its own scope and day (a key is live while its newest row holds a measure), takes away the keys
-it produced, and writes one row over each key that is left: the key, `computed_at`, 0 in every count and value, NULL
-in every Nullable measure. It writes nothing for a day or a team with no data, and a second run writes nothing. The
-row carries the `computed_at` of the rows of the same run (for `team_metrics_daily`: of the rows of the same
-repository), because some readers keep only the newest generation of a repository and would lose the live rows behind
-a newer row of zeros.
+**2. A run writes a row of zeros over each key it no longer produces.** The rule reads the live keys of a scope and
+day (a key is live while its newest row holds a measure), takes away the keys the run produces, and writes one row
+over each key that is left: the key, `computed_at`, 0 in every count and value, NULL in every Nullable measure. It
+writes nothing for a day or a team with no data, and a second run writes nothing.
 
-| Table | Family | Scope of one run |
-| --- | --- | --- |
-| `work_item_metrics_daily` | `work_item` | the work scopes the partition read |
-| `work_item_state_durations_daily` | `work_item_state` | the work scopes the partition read |
-| `estimate_coverage_metrics_daily` | `work_item_estimate` | the work scopes the partition read |
-| `team_metrics_daily` | `team_wellbeing` | the repositories of the partition |
-| `ai_impact_metrics_daily` | `ai_impact` | the repositories of the partition |
-| `ai_governance_coverage_daily` | `ai_governance` | the organization's day |
-| `team_cognitive_load_daily` | `team_cognitive_load` | the organization's day |
-| `team_complexity_daily` | `team_complexity` | the organization's day |
-| `ic_landscape_rolling_30d` | `ic_finalize` | the organization's day |
-| `compounding_risk_daily` (rows of scope `team`) | `compounding_risk_team` | the organization's day |
+WHERE the rule runs depends on who can write a key:
+
+- **A table whose keys two partitions of one run can write is decided once for the run**, at the finalize, after
+  every partition is done and before the finalize families (`RunStaleKeyRetractor`,
+  `internal/jobs/metrics/daily/stale_team_keys_run.go`; the step is `FinalizeHandler.retractStaleKeys`). A partition
+  computes every work scope that its repositories have an item in, from the items of every repository, with the
+  attributions that are stored when it reads. So two partitions that share a work scope both write the rows of that
+  scope, and the read of one can be older than the attribution write of the other. A partition that decided "the keys
+  I did not produce" from its own read wrote a row of zeros over the row the other partition had just written. The
+  run-level step reads the live keys FIRST, THEN computes the keys of the day from the stored inputs with the same
+  compute the family runs, and supersedes live minus computed. A key that is right holds its inputs before its row is
+  written, so it is in the computed set whatever wrote it and whenever: no clock and no insert order decides which
+  key is superseded. For the three work-item tables the step also STORES the rows it computed: two partitions that
+  share a work scope both write the real rows of the scope, each from the attributions stored at its read, and the
+  rows of the step are computed once, after every partition wrote its attributions, so they are the rows of the day.
+  Every row the step writes is strictly newer than every stored row of the day in that table: its version is the
+  clock of the host, or one second after the newest stored row when the clock is not later (a partition can run on a
+  host whose clock is ahead, and several tables keep `computed_at` to the second).
+- **A table whose key scope is the partition's own repository keeps the rule in its family**: a repository is in one
+  partition of a run.
+- **A table that a finalize family writes** is written once for a run already; the family applies the rule after its
+  write.
+
+A row of zeros is strictly newer than the row it supersedes, never of the same `computed_at`: with an equal
+`computed_at` only a FINAL read follows the order of the inserts, and a reader that takes the newest row by `argMax`
+or by `LIMIT 1 BY` may take either row. A family's row of zeros gets the family's `computed_at`, or one second after
+the newest stored row of its key when that is not earlier. One table is different: in `team_metrics_daily` the row of
+zeros carries exactly the `computed_at` of the rows the family wrote for the same repository, because two readers of
+that table keep only the newest generation of a repository and would lose the live rows behind a newer row of zeros.
+
+| Table | Family | Where the rule runs | Scope |
+| --- | --- | --- | --- |
+| `work_item_metrics_daily` | `work_item` | once for the run | the work scopes of the run's repositories |
+| `work_item_state_durations_daily` | `work_item_state` | once for the run | the work scopes of the run's repositories |
+| `estimate_coverage_metrics_daily` | `work_item_estimate` | once for the run | the work scopes of the run's repositories |
+| `ai_governance_coverage_daily` | `ai_governance` (every partition computes the organization's day) | once for the run | the organization's day |
+| `team_metrics_daily` | `team_wellbeing` | in the family, for its partition | the repositories of the partition |
+| `ai_impact_metrics_daily` | `ai_impact` | in the family, for its partition | the repositories of the partition |
+| `team_cognitive_load_daily` | `team_cognitive_load` | in the finalize family | the organization's day |
+| `team_complexity_daily` | `team_complexity` | in the finalize family | the organization's day |
+| `ic_landscape_rolling_30d` | `ic_finalize` | in the finalize family | the organization's day |
+| `compounding_risk_daily` (rows of scope `team`) | `compounding_risk_team` | in the finalize family | the organization's day |
 
 `issue_type_metrics_daily` and `investment_metrics_daily` hold the same rule in their own writers
 (`withIssueTypeMetricsZeroRows`, `withInvestmentMetricsZeroRows`). They are plain `MergeTree` tables: a row of zeros
@@ -1440,8 +1546,9 @@ sample of 0.
 
 The census (`stale_team_keys_census_test.go`) reads the schema and the source and fails when a table with a
 `team_id` or a `scope_id` in its sorting key has no decision (the shared rule, its own rule, or a written exemption),
-when a declaration does not agree with the table's columns, when a declared table has no call of the rule, and when a
-file that is not a declared writer holds an INSERT of one of the tables.
+when a declaration does not agree with the table's columns, when a declared table has no call of the rule, when a
+file that is not a declared writer holds an INSERT of one of the tables, and when a partition family calls the rule
+for a table whose key scope is not the repository (such a table is decided once for the run).
 
 Limits:
 
@@ -1449,8 +1556,28 @@ Limits:
   count 0 (a group whose items are all closed; a group with no pull request of unknown origin). Such a row and a row
   of zeros are equal.
 - A reader with no FINAL and no `argMax` sees the old row and the row of zeros until a merge.
+- `ic_landscape_rolling_30d`: the team of a person's point is the team id stored in the person's `user_metrics_daily`
+  rows of the 30-day window; the active resolver is asked only when that is blank. So for up to 30 days after a team id
+  changed, a person with no row on the day gets the point of the day under the old id, and the key is produced, not
+  stale. A history recompute must go from the oldest day to the newest, or run twice. (Not changed here; the same on
+  the code before this change.)
+- A family writes its real rows at its own clock. A real row of a key that an EARLIER row of zeros superseded (the key
+  comes back) is the newest row of its key only when the family's clock is later than that row of zeros. It is not
+  when the key comes back inside the second of that row, or on a host whose clock is behind it. The next run of the
+  day settles it. This does not apply to the three work-item tables: the end of a run stores their rows strictly newer
+  than every stored row of the day.
 - A worker of an older version that computes a stored day again writes under the old id once more. The next run of a
   current worker for that day supersedes the key again.
+- Between the last partition and the end of a run, a shared work scope can hold the rows of a partition whose read
+  was older than another partition's attribution write. The end of the run replaces them. A run whose finalize does
+  not complete leaves them until its retry or the next run of the day.
+- `work_item_user_metrics_daily` and `work_item_cycle_times` (not team-keyed) are written by the partitions only.
+- Two runs of one day that are in progress at the same time each settle the day from the inputs stored when they end.
+  When the inputs change between the two ends, the rows of the run that ended on the later version stay.
+- `team_metrics_daily`: a row of zeros has the `computed_at` of its batch. When another run wrote the superseded key
+  at that same microsecond or later, the old row stays the newest row of its key until the next run of the day.
+- The run-level step reads the items of every work scope of the run once more and writes their rows once more. Its
+  cost is about one more read and write of the work-item families for each run.
 
 #### 0.4a Provider × entity **consumption** (functional — what `run_team_autoimport` actually pulls)
 

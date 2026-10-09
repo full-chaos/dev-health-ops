@@ -375,3 +375,62 @@ func TestTheStaleKeyRuleTellsARealTeamRiskRowWithNoScoreFromARowOfZeros(t *testi
 		t.Errorf("the row of zeros that supersedes the real row is live for a reader")
 	}
 }
+
+// A row of zeros is STRICTLY newer than the row it supersedes, in every table
+// and so in every precision of computed_at (second, millisecond, microsecond):
+// also when the family's clock is the computed_at of the old row, and when it
+// is behind it. With an equal computed_at only a FINAL read follows the order
+// of the inserts; a reader that takes the newest row by argMax or by
+// LIMIT 1 BY may take either row.
+func TestARowOfZerosIsStrictlyNewerThanTheRowItSupersedes(t *testing.T) {
+	ctx := context.Background()
+	conn := workItemAttributionLinkedIssueMigratedClickHouse(t, ctx)
+	stored := staleKeyRuleDay.Add(30 * time.Hour)
+	for _, table := range StaleTeamKeyTables() {
+		for _, testCase := range []struct {
+			name, team string
+			clock      time.Time
+		}{
+			// Each case has its own team id: its key is its own in a table
+			// with no scope column too.
+			{"the clock is the computed_at of the old row", "platform-equal", stored},
+			{"the clock is one hour behind the old row", "platform-behind", stored.Add(-time.Hour)},
+		} {
+			name, clock := testCase.name, testCase.clock
+			t.Run(table.Table+"/"+name, func(t *testing.T) {
+				key := staleKeyRuleKey(table, testCase.team, "strict")
+				insertStaleKeyRuleLiveRow(t, ctx, conn, table, key, stored)
+				var scope staleKeyScope
+				if len(table.Scope) > 0 {
+					scope = staleKeyScope{table.ScopeTuple(key): {}}
+				}
+				written, err := supersedeStaleTeamKeys(ctx, conn, table, staleKeyRuleOrg, staleKeyRuleDay, scope, nil, clock)
+				if err != nil || written < 1 {
+					t.Fatalf("the rule wrote %d row(s) (err %v), want the row of zeros of the key", written, err)
+				}
+				predicates := []string{"org_id = ?", table.DayColumn + " = ?"}
+				args := []any{staleKeyRuleOrg, staleKeyRuleDay}
+				for index, column := range table.Keys {
+					predicates = append(predicates, column.ReadExpression()+" = ?")
+					args = append(args, key[index])
+				}
+				measure := append(append([]string{}, table.Measures...), table.NullableMeasures...)[0]
+				var versions, distinct uint64
+				var newestIsZero uint8
+				// argMax over a tuple keeps a NULL of the newest row.
+				query := "SELECT count(), uniqExact(computed_at), toUInt8(ifNull(tupleElement(argMax(tuple(toFloat64(" + measure +
+					")), computed_at), 1), 0) = 0) FROM " + table.Table + " WHERE " + strings.Join(predicates, " AND ")
+				if err := conn.QueryRow(ctx, query, args...).Scan(&versions, &distinct, &newestIsZero); err != nil {
+					t.Fatalf("read the versions of the key: %v", err)
+				}
+				if versions != 2 || distinct != 2 {
+					t.Fatalf("the key holds %d row(s) with %d computed_at value(s), want 2 and 2: the row of zeros must not share the computed_at of the old row",
+						versions, distinct)
+				}
+				if newestIsZero != 1 {
+					t.Errorf("the newest row of the key by computed_at is the old row, not the row of zeros")
+				}
+			})
+		}
+	}
+}

@@ -36,7 +36,7 @@ type linearReferenceProjectTeamPayload struct {
 
 type linearReferenceProjectTeamsPayload struct {
 	Nodes    []linearReferenceProjectTeamPayload `json:"nodes"`
-	PageInfo linearPageInfoPayload               `json:"pageInfo"`
+	PageInfo linearReferencePageEnd              `json:"pageInfo"`
 }
 
 type linearReferenceProjectPayload struct {
@@ -54,7 +54,7 @@ type linearReferenceProjectPayload struct {
 
 type linearReferenceCatalogTeamMembersPayload struct {
 	Nodes    []linearReferenceCatalogMemberPayload `json:"nodes"`
-	PageInfo linearPageInfoPayload                 `json:"pageInfo"`
+	PageInfo linearReferencePageEnd                `json:"pageInfo"`
 }
 
 type linearReferenceCatalogTeamPayload struct {
@@ -74,7 +74,7 @@ type linearReferenceCatalogMemberPayload struct {
 
 type linearReferenceCatalogTeamPagePayload struct {
 	Nodes    []linearReferenceCatalogTeamPayload `json:"nodes"`
-	PageInfo linearPageInfoPayload               `json:"pageInfo"`
+	PageInfo linearReferencePageEnd              `json:"pageInfo"`
 }
 
 type linearReferenceCatalogMemberPagePayload struct {
@@ -133,7 +133,7 @@ type linearReferenceOwnershipRow struct {
 	OrgID       string     `json:"org_id"`
 	Provider    string     `json:"provider"`
 	TeamID      string     `json:"team_id"`
-	ProjectID   string     `json:"project_id"`
+	ProjectID   ProjectID  `json:"project_id"`
 	ProjectKey  *string    `json:"project_key"`
 	Source      string     `json:"source"`
 	IsPrimary   uint8      `json:"is_primary"`
@@ -148,7 +148,7 @@ type linearReferenceOwnershipRow struct {
 // native Linear enrichment selected by PROJECTS_QUERY. The enrichment is
 // intentionally typed instead of being hidden in a JSON metadata blob.
 type linearReferenceProjectRow struct {
-	ID         string               `json:"id"`
+	ID         ProjectID            `json:"id"`
 	OrgID      string               `json:"org_id"`
 	Provider   string               `json:"provider"`
 	ProjectKey *string              `json:"project_key"`
@@ -287,8 +287,12 @@ func normalizeLinearReferenceProject(
 	if payload.Trashed || payload.ArchivedAt != nil && strings.TrimSpace(*payload.ArchivedAt) != "" {
 		isActive = 0
 	}
+	projectID, projectIDOK := LinearProjectID(payload.ID)
+	if !projectIDOK {
+		return linearReferenceProjectRow{}, fmt.Errorf("%w: Linear project without an id", ErrInvalidConfiguration)
+	}
 	return linearReferenceProjectRow{
-		ID: payload.ID, OrgID: claim.OrgID, Provider: "linear", Name: linearFirstNonEmpty(payload.Name, payload.ID),
+		ID: projectID, OrgID: claim.OrgID, Provider: "linear", Name: linearFirstNonEmpty(payload.Name, payload.ID),
 		IsActive: isActive, State: strings.TrimSpace(payload.Status.Type), TargetDate: targetDate,
 		URL: strings.TrimSpace(payload.URL), TeamIDs: teamIDs, TeamKeys: teamKeys,
 		LeadID: leadID, LeadName: leadName, LeadEmail: leadEmail,
@@ -506,9 +510,34 @@ func minInt(left, right int) int {
 
 func (row linearReferenceProjectRow) validate(claim Claim) error {
 	if claim.Provider != "linear" || row.Provider != "linear" ||
-		row.OrgID != claim.OrgID || strings.TrimSpace(row.ID) == "" ||
+		row.OrgID != claim.OrgID || row.ID.IsZero() ||
 		row.UpdatedAt.IsZero() || row.LastSynced.IsZero() {
 		return fmt.Errorf("%w: invalid Linear reference project row", ErrInvalidConfiguration)
 	}
 	return nil
+}
+
+// linearReferencePageEnd is the page-end signal of a connection embedded in a
+// catalog node (a project's teams, a team's members). It is the one decode type
+// of every such signal on a path that feeds an ownership snapshot: HasNextPage
+// is a pointer, so an absent or null field is NOT an end. A catalog run reads
+// "no more pages" only from an explicit false (Proven); anything else is not
+// proven complete (TestPageInfoDecodeCensus keeps a plain bool out of these
+// paths).
+type linearReferencePageEnd struct {
+	HasNextPage *bool  `json:"hasNextPage"`
+	EndCursor   string `json:"endCursor"`
+}
+
+// Proven says the provider stated the page end at all.
+func (end linearReferencePageEnd) Proven() bool { return end.HasNextPage != nil }
+
+// More says the provider stated there is a next page.
+func (end linearReferencePageEnd) More() bool { return end.HasNextPage != nil && *end.HasNextPage }
+
+// linearReferenceNoMorePages is the stated end of a connection this run has
+// read to its last page itself.
+func linearReferenceNoMorePages() linearReferencePageEnd {
+	none := false
+	return linearReferencePageEnd{HasNextPage: &none}
 }

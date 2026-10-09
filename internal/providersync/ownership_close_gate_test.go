@@ -25,6 +25,24 @@ func (census staticScopeCensus) CountActiveSiblingIntegrations(context.Context, 
 	return census.siblings, census.err
 }
 
+// activeIntegrationCensus is a scope census over a fixed set of the
+// organization's integrations of one provider: id -> is active. It counts the
+// ACTIVE ones other than the run's own, as the worker's census reads
+// public.integrations.is_active (workerservice.teamCatalogScopeCensus, pinned
+// against a real Postgres by
+// TestTeamCatalogScopeCensusCountsTheOrgsOtherActiveIntegrationsOfOneProvider).
+type activeIntegrationCensus map[string]bool
+
+func (census activeIntegrationCensus) CountActiveSiblingIntegrations(_ context.Context, _, _, integrationID string) (int, error) {
+	siblings := 0
+	for id, active := range census {
+		if active && id != integrationID {
+			siblings++
+		}
+	}
+	return siblings, nil
+}
+
 func closeLegReasons(legs []DegradedLeg) []string {
 	var reasons []string
 	for _, leg := range legs {
@@ -122,22 +140,101 @@ func TestDecideOwnershipCloseClosesOnlyProvenListingsOfAnUnsharedScope(t *testin
 	}
 }
 
-func TestRetainClosableRetractionsDropsRetractionsOfOtherTeams(t *testing.T) {
+// The gate's snapshot is the grant kind of the closable teams: a team outside
+// it is of no kind, so its open rows never close, and a gate that lets no
+// team close carries the reason of every skip.
+func TestOwnershipCloseDecisionSnapshotClosesOnlyTheClosableTeams(t *testing.T) {
 	at := time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)
 	before := at.Add(-time.Hour)
 	open := []OwnershipSnapshotRow{
-		{TeamID: "gl:a", ProjectID: "a/1", Source: "provider_access", ValidFrom: before},
-		{TeamID: "gl:b", ProjectID: "b/1", Source: "provider_access", ValidFrom: before},
+		{TeamID: "gl:a", ProjectID: testPID("a/1"), Source: "provider_access", ValidFrom: before},
+		{TeamID: "gl:b", ProjectID: testPID("b/1"), Source: "provider_access", ValidFrom: before},
+		{TeamID: "gl:a", ProjectID: testPID("a/2"), Source: "manual", ValidFrom: before},
 	}
-	plan := PlanOwnershipSnapshot(OwnershipSnapshot{Complete: true}, open, at)
-	if len(plan.Retract) != 2 {
-		t.Fatalf("seed plan retracts %d rows, want 2", len(plan.Retract))
+	ref := TeamCatalogReference{OrgID: "org-1", IntegrationID: "integration-a"}
+	decide := func(census OwnershipScopeCensus, listed, unproven []string) SnapshotPlan {
+		decision := decideOwnershipClose(context.Background(), census, ownershipCloseRequest{
+			ref: ref, provider: "gitlab", listed: listed, unproven: unproven,
+		})
+		return PlanOwnershipSnapshot(nil, open, at, decision.snapshot(GitLabGroupProjectGrantKind))
 	}
-	kept := retainClosableRetractions(plan, open, []string{"gl:a"})
-	if len(kept.Retract) != 1 || open[kept.Retract[0].Open].TeamID != "gl:a" {
-		t.Fatalf("kept retractions = %+v, want only gl:a's row", kept.Retract)
+	closedTeams := func(plan SnapshotPlan) []string {
+		out := []string{}
+		for _, retraction := range plan.Retract {
+			out = append(out, open[retraction.Open].TeamID+"/"+open[retraction.Open].Source)
+		}
+		return out
 	}
-	if none := retainClosableRetractions(plan, open, nil); len(none.Retract) != 0 {
-		t.Fatalf("no closable team kept %d retractions", len(none.Retract))
+	for _, c := range []struct {
+		name             string
+		census           OwnershipScopeCensus
+		listed, unproven []string
+		wantClosed       []string
+		wantReasons      []string
+	}{
+		{"both listings proven: an empty answer of a listed team closes its grants",
+			staticScopeCensus{}, []string{"gl:a", "gl:b"}, nil, []string{"gl:a/provider_access", "gl:b/provider_access"}, nil},
+		{"one listing not proven: only the proven team closes",
+			staticScopeCensus{}, []string{"gl:a", "gl:b"}, []string{"gl:b"}, []string{"gl:a/provider_access"}, nil},
+		// The scope gate is asked only when a listing proved its end: before
+		// that nothing can close, and the scope stays not proven.
+		{"no listing proven", staticScopeCensus{}, []string{"gl:a", "gl:b"}, []string{"gl:a", "gl:b"}, []string{},
+			[]string{ScopeNotProven, OwnershipCloseSkippedListingIncomplete}},
+		{"no census", nil, []string{"gl:a", "gl:b"}, nil, []string{}, []string{OwnershipCloseSkippedCensusUnavailable}},
+		{"the census read failed", staticScopeCensus{err: errors.New("down")}, []string{"gl:a"}, nil, []string{},
+			[]string{OwnershipCloseSkippedCensusFailed}},
+		{"another integration shares the scope", staticScopeCensus{siblings: 1}, []string{"gl:a"}, nil, []string{},
+			[]string{OwnershipCloseSkippedScopeShared}},
+		{"no team listed", staticScopeCensus{}, nil, nil, []string{}, []string{ScopeNotProven, OwnershipCloseSkippedNoTeamListed}},
+		{"an inactive second integration does not block the close: the census counts active ones only",
+			activeIntegrationCensus{"integration-a": true, "integration-b": false}, []string{"gl:a", "gl:b"}, nil,
+			[]string{"gl:a/provider_access", "gl:b/provider_access"}, nil},
+		{"an active second integration blocks the close",
+			activeIntegrationCensus{"integration-a": true, "integration-b": true}, []string{"gl:a", "gl:b"}, nil, []string{},
+			[]string{OwnershipCloseSkippedScopeShared}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			plan := decide(c.census, c.listed, c.unproven)
+			if got := closedTeams(plan); !reflect.DeepEqual(got, c.wantClosed) {
+				t.Errorf("closed = %v, want %v", got, c.wantClosed)
+			}
+			var reasons []string
+			for _, outcome := range plan.Kinds {
+				reasons = append(reasons, outcome.Abandoned...)
+			}
+			if !reflect.DeepEqual(reasons, c.wantReasons) {
+				t.Errorf("abandon reasons = %v, want %v", reasons, c.wantReasons)
+			}
+		})
+	}
+}
+
+// ProveSoleScope is the one scope gate: only a census that answers zero other
+// active integrations proves the scope. No census, no integration id, a
+// failed read and one sibling each give their own reason; a failed read is
+// never zero.
+func TestProveSoleScopeNamesWhyAScopeIsNotProven(t *testing.T) {
+	ctx := context.Background()
+	for _, c := range []struct {
+		name          string
+		census        OwnershipScopeCensus
+		integrationID string
+		want          []string
+	}{
+		{"the only active integration", staticScopeCensus{}, "integration-a", nil},
+		{"an inactive second integration", activeIntegrationCensus{"integration-a": true, "integration-b": false}, "integration-a", nil},
+		{"an active second integration", activeIntegrationCensus{"integration-a": true, "integration-b": true}, "integration-a",
+			[]string{OwnershipCloseSkippedScopeShared}},
+		{"no census", nil, "integration-a", []string{OwnershipCloseSkippedCensusUnavailable}},
+		{"no integration id", staticScopeCensus{}, " ", []string{OwnershipCloseSkippedCensusUnavailable}},
+		{"a failed census read", staticScopeCensus{err: errors.New("down")}, "integration-a", []string{OwnershipCloseSkippedCensusFailed}},
+	} {
+		scope := ProveSoleScope(ctx, c.census, "org-1", "linear", c.integrationID)
+		if scope.Proven() != (len(c.want) == 0) || !reflect.DeepEqual(scope.Missing(), append([]string(nil), c.want...)) && len(c.want) != 0 {
+			t.Errorf("%s: proven=%v missing=%v, want missing %v", c.name, scope.Proven(), scope.Missing(), c.want)
+		}
+	}
+	if zero := (ScopeProof{}); zero.Proven() || !reflect.DeepEqual(zero.Missing(), []string{ScopeNotProven}) {
+		t.Errorf("the zero scope proof: proven=%v missing=%v, want not proven", zero.Proven(), zero.Missing())
 	}
 }

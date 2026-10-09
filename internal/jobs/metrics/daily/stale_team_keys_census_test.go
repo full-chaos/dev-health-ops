@@ -549,6 +549,8 @@ func TestEveryStaleKeyTableCensusHasACallOfTheRule(t *testing.T) {
 
 	// The calls, outside the file of the rule.
 	called := map[string][]string{}
+	calledInFamily := map[string][]string{}
+	calledForRun := map[string]bool{}
 	calledFunctions := map[string]bool{}
 	for name, file := range files {
 		ast.Inspect(file, func(node ast.Node) bool {
@@ -561,7 +563,8 @@ func TestEveryStaleKeyTableCensusHasACallOfTheRule(t *testing.T) {
 				return true
 			}
 			calledFunctions[function.Name] = true
-			if name == "stale_team_keys.go" || (function.Name != "supersedeStaleTeamKeys" && function.Name != "supersedeStaleTeamKeysAt") {
+			if name == "stale_team_keys.go" || (function.Name != "supersedeStaleTeamKeys" &&
+				function.Name != "supersedeStaleTeamKeysAt" && function.Name != "retractStaleTeamKeysOfRun") {
 				return true
 			}
 			if len(call.Args) < 3 {
@@ -579,6 +582,11 @@ func TestEveryStaleKeyTableCensusHasACallOfTheRule(t *testing.T) {
 			}
 			table := tableOfVariable[selector.Sel.Name]
 			called[table] = append(called[table], name)
+			if function.Name != "retractStaleTeamKeysOfRun" {
+				calledInFamily[table] = append(calledInFamily[table], name)
+			} else {
+				calledForRun[table] = true
+			}
 			return true
 		})
 	}
@@ -588,6 +596,53 @@ func TestEveryStaleKeyTableCensusHasACallOfTheRule(t *testing.T) {
 				"its rows under a superseded team id stay the newest rows of their keys", table)
 		}
 	}
+	// A partition never decides a key that another partition of the run can
+	// write. The tables whose keys are shared between the partitions of a
+	// run are decided once for the run (RunStaleKeyTables, in
+	// stale_team_keys_run.go) and by no family. A family of a partition may
+	// call the rule only for a table whose key scope is the repository: a
+	// repository is in one partition of a run.
+	runTables := map[string]bool{}
+	for _, table := range RunStaleKeyTables() {
+		runTables[table.Table] = true
+		if !listed[table.Table] {
+			t.Errorf("run-level table %s is not a declared table", table.Table)
+		}
+		if files := calledInFamily[table.Table]; len(files) > 0 {
+			t.Errorf("table %s is decided once for a run and %v also call the rule for it: "+
+				"a partition would write a row of zeros over a row another partition just wrote", table.Table, files)
+		}
+		if !contains(called[table.Table], "stale_team_keys_run.go") {
+			t.Errorf("run-level table %s has no call of the rule in stale_team_keys_run.go", table.Table)
+		}
+	}
+	for table := range calledForRun {
+		if !runTables[table] {
+			t.Errorf("table %s is decided once for a run and is not in RunStaleKeyTables", table)
+		}
+	}
+	partitionFamilyFiles := map[string]bool{}
+	for name, file := range files {
+		ast.Inspect(file, func(node ast.Node) bool {
+			function, isFunction := node.(*ast.FuncDecl)
+			if isFunction && function.Recv != nil && function.Name.Name == "ComputeFamily" {
+				partitionFamilyFiles[name] = true
+			}
+			return true
+		})
+	}
+	if len(partitionFamilyFiles) < 10 {
+		t.Fatalf("found %d file(s) with a partition family: the census did not measure", len(partitionFamilyFiles))
+	}
+	for _, declared := range StaleTeamKeyTables() {
+		for _, file := range calledInFamily[declared.Table] {
+			if partitionFamilyFiles[file] && !reflect.DeepEqual(declared.Scope, []string{"repo_id"}) {
+				t.Errorf("%s holds a partition family and calls the rule for %s, whose key scope is %v, not the repository: "+
+					"decide such a table once for the run (RunStaleKeyTables)", file, declared.Table, declared.Scope)
+			}
+		}
+	}
+
 	for table, function := range teamKeyOwnRule {
 		if !calledFunctions[function] {
 			t.Errorf("table %s holds its own rule in %s, and no file of the package calls it", table, function)

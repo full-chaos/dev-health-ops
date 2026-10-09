@@ -24,8 +24,8 @@ func gitlabTeamCatalogIntegrationRows(orgID string, now time.Time) GitLabTeamCat
 			normalizeGitLabTeamRow(orgID, gitlabTeamCatalogGroupPayload{FullPath: "org/team-a", Name: "Team A"}, []string{teamAProjectKey}, now),
 		},
 		Ownership: []gitlabTeamCatalogOwnershipRow{
-			normalizeGitLabOwnershipRow(orgID, "gl:org", rootProjectKey, gitlabTeamCatalogBaseSpecificity, now),
-			normalizeGitLabOwnershipRow(orgID, "gl:org/team-a", teamAProjectKey, gitlabTeamCatalogBaseSpecificity+gitlabTeamCatalogChildSpecificityStep, now),
+			mustGitLabOwnershipRow(orgID, "gl:org", rootProjectKey, gitlabTeamCatalogBaseSpecificity, now),
+			mustGitLabOwnershipRow(orgID, "gl:org/team-a", teamAProjectKey, gitlabTeamCatalogBaseSpecificity+gitlabTeamCatalogChildSpecificityStep, now),
 		},
 		Memberships: mustGitLabMembershipRows(orgID, now),
 		Projects: []gitlabTeamCatalogProjectRow{

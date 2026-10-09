@@ -147,9 +147,10 @@ func TestTeamReachesItsJiraProjectsWorkItemsThroughOwnership(t *testing.T) {
 			"/rest/agile/1.0/board?maxResults=100&projectKeyOrId=OPS&startAt=0": {body: `{"values":[],"isLast":true}`},
 		}}
 		result, err := JiraTeamCatalogCollector{
-			Handler: JiraTeamCatalogRouteHandler{},
-			Sink:    JiraTeamCatalogClickHouseEffects{Conn: conn, Lease: lease},
-		}.CollectTeamCatalog(ctx, TeamCatalogReference{OrgID: orgID, SyncRunID: "run"},
+			ScopeCensus: staticScopeCensus{},
+			Handler:     JiraTeamCatalogRouteHandler{},
+			Sink:        JiraTeamCatalogClickHouseEffects{Conn: conn, Lease: lease},
+		}.CollectTeamCatalog(ctx, TeamCatalogReference{OrgID: orgID, SyncRunID: "run", IntegrationID: "integration-a"},
 			providerfoundation.Credential{Provider: "jira"}, jiraTeamCatalogTestClient(t, fakehttp.Client(doer)),
 			TeamCatalogSelections{Projects: true}, at)
 		if err != nil {
@@ -308,9 +309,10 @@ func TestAPartialJiraSnapshotClosesNoOwnership(t *testing.T) {
 			byURI[uri] = response
 		}
 		result, err := JiraTeamCatalogCollector{
-			Handler: JiraTeamCatalogRouteHandler{},
-			Sink:    JiraTeamCatalogClickHouseEffects{Conn: conn, Lease: lease},
-		}.CollectTeamCatalog(ctx, TeamCatalogReference{OrgID: orgID, SyncRunID: "run"},
+			ScopeCensus: staticScopeCensus{},
+			Handler:     JiraTeamCatalogRouteHandler{},
+			Sink:        JiraTeamCatalogClickHouseEffects{Conn: conn, Lease: lease},
+		}.CollectTeamCatalog(ctx, TeamCatalogReference{OrgID: orgID, SyncRunID: "run", IntegrationID: "integration-a"},
 			providerfoundation.Credential{Provider: "jira"},
 			jiraTeamCatalogTestClient(t, fakehttp.Client(&jiraTeamCatalogFixtureDoer{t: t, byURI: byURI})),
 			TeamCatalogSelections{Projects: true}, at)
@@ -415,9 +417,10 @@ func TestAnArchivedJiraProjectKeepsItsOwnership(t *testing.T) {
 	sync := func(at time.Time, archived jiraTeamCatalogFixtureResponse) TeamCatalogResult {
 		t.Helper()
 		result, err := JiraTeamCatalogCollector{
-			Handler: JiraTeamCatalogRouteHandler{},
-			Sink:    JiraTeamCatalogClickHouseEffects{Conn: conn, Lease: lease},
-		}.CollectTeamCatalog(ctx, TeamCatalogReference{OrgID: orgID, SyncRunID: "run"},
+			ScopeCensus: staticScopeCensus{},
+			Handler:     JiraTeamCatalogRouteHandler{},
+			Sink:        JiraTeamCatalogClickHouseEffects{Conn: conn, Lease: lease},
+		}.CollectTeamCatalog(ctx, TeamCatalogReference{OrgID: orgID, SyncRunID: "run", IntegrationID: "integration-a"},
 			providerfoundation.Credential{Provider: "jira"},
 			jiraTeamCatalogTestClient(t, fakehttp.Client(&jiraTeamCatalogFixtureDoer{t: t, byURI: map[string]jiraTeamCatalogFixtureResponse{
 				"/rest/api/3/project/OPS":               {body: `{"projectTypeKey":"business"}`},
@@ -506,9 +509,10 @@ func TestAnArchivedJiraProjectKeepsItsKeyBuiltOwnership(t *testing.T) {
 	sync := func(orgID string, at time.Time, live, archived string) TeamCatalogResult {
 		t.Helper()
 		result, err := JiraTeamCatalogCollector{
-			Handler: JiraTeamCatalogRouteHandler{},
-			Sink:    JiraTeamCatalogClickHouseEffects{Conn: conn, Lease: lease},
-		}.CollectTeamCatalog(ctx, TeamCatalogReference{OrgID: orgID, SyncRunID: "run"},
+			ScopeCensus: staticScopeCensus{},
+			Handler:     JiraTeamCatalogRouteHandler{},
+			Sink:        JiraTeamCatalogClickHouseEffects{Conn: conn, Lease: lease},
+		}.CollectTeamCatalog(ctx, TeamCatalogReference{OrgID: orgID, SyncRunID: "run", IntegrationID: "integration-a"},
 			providerfoundation.Credential{Provider: "jira"},
 			jiraTeamCatalogTestClient(t, fakehttp.Client(&jiraTeamCatalogFixtureDoer{t: t, byURI: map[string]jiraTeamCatalogFixtureResponse{
 				"/rest/api/3/project/YAK":                                   {body: `{"projectTypeKey":"business"}`},
@@ -630,7 +634,7 @@ func TestProjectIdentityIsOneIDAcrossCatalogOwnershipAndWorkItems(t *testing.T) 
 	t.Run("linear", func(t *testing.T) {
 		projectID := "6f1c2d3e-4a5b-4c6d-8e7f-0a1b2c3d4e5f"
 		if err := (LinearReferenceCatalogClickHouseEffects{Conn: conn, Lease: lease}).writeOwnership(ctx, []linearReferenceOwnershipRow{{
-			OrgID: orgID, Provider: "linear", TeamID: "ENG", ProjectID: projectID,
+			OrgID: orgID, Provider: "linear", TeamID: "ENG", ProjectID: testPID(projectID),
 			Source: "native", IsPrimary: 1, Specificity: 100, Priority: 10, ValidFrom: now, UpdatedAt: now,
 		}}); err != nil {
 			t.Fatal(err)
@@ -669,7 +673,7 @@ func TestProjectIdentityIsOneIDAcrossCatalogOwnershipAndWorkItems(t *testing.T) 
 		if !ok {
 			t.Fatal("gitlab project row was not built")
 		}
-		ownership := normalizeGitLabOwnershipRow(orgID, "gl:acme", "acme/api", gitlabTeamCatalogBaseSpecificity, now)
+		ownership := mustGitLabOwnershipRow(orgID, "gl:acme", "acme/api", gitlabTeamCatalogBaseSpecificity, now)
 		if ownership.ProjectID == project.ID {
 			t.Fatalf("GitLab ownership and catalog now share the id %q: this is no longer a known red, move the row to the green cases", project.ID)
 		}

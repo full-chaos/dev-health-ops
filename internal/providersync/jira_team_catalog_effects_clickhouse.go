@@ -536,7 +536,7 @@ func jiraTargetDateEqual(left, right *time.Time) bool {
 // complete = false, with no rows: the caller then has only a part of what
 // this writer owns and must close nothing.
 func jiraLegacyProjectOwnershipLinks(
-	ctx context.Context, conn driver.Conn, orgID string, nativeIDByKey map[string]string, normalizedAt time.Time,
+	ctx context.Context, conn driver.Conn, orgID string, nativeIDByKey map[string]ProjectID, normalizedAt time.Time,
 ) (ownership []jiraTeamCatalogOwnershipRow, skipped int, complete bool, err error) {
 	if conn == nil || strings.TrimSpace(orgID) == "" {
 		return nil, 0, false, ErrInvalidConfiguration
@@ -565,7 +565,7 @@ WHERE org_id = {org_id:String}`,
 			continue
 		}
 		nativeProjectID := nativeIDByKey[projectKey]
-		if nativeProjectID == "" {
+		if nativeProjectID.IsZero() {
 			skipped++
 			continue
 		}
@@ -620,23 +620,13 @@ func jiraOpenCatalogOwnership(ctx context.Context, conn driver.Conn, orgID strin
 // jiraOwnershipSnapshot applies the shared snapshot rule
 // (PlanOwnershipSnapshot) to one write of the Jira catalog: the fresh rows on
 // their first-seen valid_from, and the open rows of this writer the snapshot
-// no longer holds, closed at `at`.
-//
-// complete says every read the fresh rows come from reached its end: every
-// page of the project search, and the legacy links table. Anything less
-// closes nothing.
-//
-// An empty fresh snapshot retracts nothing: a project search that returns no
-// project is far more often an access change than an organization that
-// removed every project, and closing all ownership on it would empty every
-// team answer until the next good run.
+// no longer holds, closed at `at`. snapshot is the writer's one kind
+// (JiraLegacyOwnershipKind) with the proof of its reads; an unproven or empty
+// kind closes nothing.
 func jiraOwnershipSnapshot(
-	fresh, open []jiraTeamCatalogOwnershipRow, at time.Time, complete bool,
-) (kept, retracted []jiraTeamCatalogOwnershipRow) {
+	fresh, open []jiraTeamCatalogOwnershipRow, at time.Time, snapshot KindSnapshot[OwnershipSnapshotRow],
+) (kept, retracted []jiraTeamCatalogOwnershipRow, plan SnapshotPlan) {
 	kept = append([]jiraTeamCatalogOwnershipRow(nil), fresh...)
-	if len(fresh) == 0 {
-		return kept, nil
-	}
 	facts := func(rows []jiraTeamCatalogOwnershipRow) []OwnershipSnapshotRow {
 		out := make([]OwnershipSnapshotRow, len(rows))
 		for index, row := range rows {
@@ -644,7 +634,7 @@ func jiraOwnershipSnapshot(
 		}
 		return out
 	}
-	plan := PlanOwnershipSnapshot(OwnershipSnapshot{Fresh: facts(fresh), Complete: complete}, facts(open), at)
+	plan = PlanOwnershipSnapshot(facts(fresh), facts(open), at, snapshot)
 	for index := range kept {
 		kept[index].ValidFrom = plan.ValidFrom[index]
 	}
@@ -655,5 +645,5 @@ func jiraOwnershipSnapshot(
 		row.UpdatedAt = at
 		retracted = append(retracted, row)
 	}
-	return kept, retracted
+	return kept, retracted, plan
 }

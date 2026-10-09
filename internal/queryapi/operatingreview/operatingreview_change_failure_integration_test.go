@@ -272,3 +272,81 @@ func nearly(got, want float64) bool {
 	diff := got - want
 	return diff < 1e-12 && diff > -1e-12
 }
+
+// A delta states a move between two measured values (deltarule). When the
+// current or the prior week has no value, the delta numbers are 0 and the flags
+// say why: the same contract Home and /explain serve. A measured prior stays
+// as priorValue, a fact; two measured weeks keep their move.
+func TestResolveServesNoDeltaNumbersWhenAWeekHasNoValue(t *testing.T) {
+	ctx, admin, client := startOperatingReviewSchema(t)
+
+	week := time.Date(2026, 8, 24, 0, 0, 0, 0, time.UTC)
+	computedAt := week.AddDate(0, 0, 8)
+	writer, err := repouser.NewWriter(admin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	measured := changefailure.Counts{Deployments: 10, FailedHeuristic: 5, IncidentsDirect: 1}
+	quarter := changefailure.Counts{Deployments: 4, FailedHeuristic: 1, IncidentsDirect: 1}
+	for _, tc := range []struct {
+		org                string
+		prior, current     *changefailure.Counts
+		wantMove           bool
+		wantAbsolute       float64
+		wantPercent        float64
+		wantPriorValue     float64
+		wantHasPriorData   bool
+		wantCurrentHasData bool
+	}{
+		{"org-delta-current-unknown", &measured, &changefailure.Counts{Deployments: 4}, false, 0, 0, 0.5, true, false},
+		{"org-delta-current-not-applicable", &measured, &changefailure.Counts{IncidentsDirect: 1}, false, 0, 0, 0.5, true, false},
+		{"org-delta-current-no-counts", &measured, nil, false, 0, 0, 0.5, true, false},
+		{"org-delta-prior-unknown", &changefailure.Counts{Deployments: 4}, &quarter, false, 0, 0, 0, false, true},
+		{"org-delta-prior-not-applicable", &changefailure.Counts{IncidentsDirect: 1}, &quarter, false, 0, 0, 0, false, true},
+		{"org-delta-prior-no-counts", nil, &quarter, false, 0, 0, 0, false, true},
+		// Control: two measured weeks keep their move.
+		{"org-delta-both-measured", &measured, &quarter, true, -0.25, -50, 0.5, true, true},
+	} {
+		t.Run(tc.org, func(t *testing.T) {
+			var rows []repouser.ChangeFailureDaily
+			if tc.prior != nil {
+				rows = append(rows, repouser.ChangeFailureDaily{RepoID: uuid.New(), Day: week.AddDate(0, 0, -6), ComputedAt: computedAt, Counts: *tc.prior})
+			}
+			if tc.current != nil {
+				rows = append(rows, repouser.ChangeFailureDaily{RepoID: uuid.New(), Day: week.AddDate(0, 0, 1), ComputedAt: computedAt, Counts: *tc.current})
+			}
+			if _, err := writer.WriteChangeFailure(ctx, rows, tc.org); err != nil {
+				t.Fatal(err)
+			}
+			review, err := Resolve(ctx, client, tc.org, nil, graphqldate.New(week))
+			if err != nil {
+				t.Fatal(err)
+			}
+			found := false
+			for _, section := range review.Sections {
+				for _, m := range section.Metrics {
+					if m.Key != "change_failure_rate" {
+						continue
+					}
+					found = true
+					d := m.Delta
+					if m.HasData != tc.wantCurrentHasData || d.HasPriorData != tc.wantHasPriorData {
+						t.Errorf("hasData %v hasPriorData %v, want %v %v", m.HasData, d.HasPriorData, tc.wantCurrentHasData, tc.wantHasPriorData)
+					}
+					if !nearly(d.Absolute, tc.wantAbsolute) || d.Percent == nil || !nearly(*d.Percent, tc.wantPercent) || !nearly(d.PriorValue, tc.wantPriorValue) {
+						t.Errorf("delta absolute %v percent %v priorValue %v, want %v %v %v", d.Absolute, d.Percent, d.PriorValue, tc.wantAbsolute, tc.wantPercent, tc.wantPriorValue)
+					}
+					if !tc.wantMove && d.Status != "" {
+						t.Errorf("delta status %q for a week without a value, want none", d.Status)
+					}
+					if tc.wantMove && d.Status != "improved" {
+						t.Errorf("delta status %q for two measured weeks, want improved", d.Status)
+					}
+				}
+			}
+			if !found {
+				t.Fatal("the review has no change_failure_rate metric")
+			}
+		})
+	}
+}

@@ -151,3 +151,56 @@ func near(got, want float64) bool {
 	diff := got - want
 	return diff < 1e-9 && diff > -1e-9
 }
+
+// /explain serves the same contract as Home and the operating review
+// (deltarule): no delta when the current or the prior window has no value.
+func TestExplainChangeFailureRateServesNoDeltaWhenAWindowHasNoValue(t *testing.T) {
+	ctx := context.Background()
+	admin, client := newExplainTestClickHouse(ctx, t)
+	writer, err := repouser.NewWriter(admin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reader, err := NewReader(client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	day := time.Date(2026, 9, 10, 0, 0, 0, 0, time.UTC)
+	computedAt := day.AddDate(0, 0, 5)
+	measured := changefailure.Counts{Deployments: 10, FailedHeuristic: 5, IncidentsDirect: 1}
+	quarter := changefailure.Counts{Deployments: 4, FailedHeuristic: 1, IncidentsDirect: 1}
+	for _, tc := range []struct {
+		org            string
+		prior, current *changefailure.Counts
+		wantDelta      float64
+	}{
+		{"explain-delta-current-unknown", &measured, &changefailure.Counts{Deployments: 4}, 0},
+		{"explain-delta-current-not-applicable", &measured, &changefailure.Counts{IncidentsDirect: 1}, 0},
+		{"explain-delta-current-no-counts", &measured, nil, 0},
+		{"explain-delta-prior-unknown", &changefailure.Counts{Deployments: 4}, &quarter, 0},
+		{"explain-delta-prior-no-counts", nil, &quarter, 0},
+		{"explain-delta-both-measured", &measured, &quarter, -50},
+	} {
+		repo := uuid.New()
+		var rows []repouser.ChangeFailureDaily
+		if tc.prior != nil {
+			rows = append(rows, repouser.ChangeFailureDaily{RepoID: repo, Day: day.AddDate(0, 0, -1), Counts: *tc.prior, ComputedAt: computedAt})
+		}
+		if tc.current != nil {
+			rows = append(rows, repouser.ChangeFailureDaily{RepoID: repo, Day: day, Counts: *tc.current, ComputedAt: computedAt})
+		}
+		if _, err := writer.WriteChangeFailure(ctx, rows, tc.org); err != nil {
+			t.Fatal(err)
+		}
+		got, err := BuildExplainResponse(ctx, reader, tc.org, Params{
+			Metric: "change_failure_rate", StartDay: day, EndDay: day.AddDate(0, 0, 1),
+			CompareStart: day.AddDate(0, 0, -1), CompareEnd: day,
+		})
+		if err != nil {
+			t.Fatalf("%s: %v", tc.org, err)
+		}
+		if !near(got.DeltaPct, tc.wantDelta) {
+			t.Errorf("%s: delta_pct = %v (has_data %v, has_prior_data %v), want %v", tc.org, got.DeltaPct, got.HasData, got.HasPriorData, tc.wantDelta)
+		}
+	}
+}

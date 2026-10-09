@@ -12,6 +12,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/full-chaos/dev-health-ops/internal/api/pytime"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/deltarule"
 	"math"
 	"strings"
 	"sync"
@@ -27,14 +28,6 @@ func safeFloat(v float64) float64 {
 		return 0.0
 	}
 	return v
-}
-
-// deltaPct ports delta_pct (api/utils/numeric.py:68-76).
-func deltaPct(current, previous float64) float64 {
-	if previous == 0 {
-		return 0.0
-	}
-	return (current - previous) / previous * 100.0
 }
 
 // sparkPoints ports _spark_points (services/home.py:293-298).
@@ -149,13 +142,7 @@ func computeMetricDelta(ctx context.Context, client QueryClient, spec metricSpec
 	currentValue = safeFloat(currentValue)
 	previousValue = safeFloat(previousValue)
 	spark := sparkPoints(series, spec.Transform)
-	pctChange := safeFloat(deltaPct(currentValue, previousValue))
-	if !hasData || !hasPriorData {
-		// A delta states a move between two measured values. A window with no
-		// stored value reads 0 here, and 0 against a real prior is -100 %: that
-		// is a placeholder, not a fall. The flags carry the fact.
-		pctChange = 0
-	}
+	pctChange := safeFloat(deltarule.Pct(currentValue, previousValue, hasData, hasPriorData))
 
 	return MetricDelta{
 		Metric:       spec.Metric,
@@ -379,7 +366,7 @@ func BuildResponse(ctx context.Context, chClient QueryClient, pgClient PGQueryCl
 
 	events := []EventItem{}
 	for _, delta := range deltas {
-		if delta.HasData && delta.HasPriorData && absFloat(delta.DeltaPct) >= 25 {
+		if deltarule.Complete(delta.HasData, delta.HasPriorData) && absFloat(delta.DeltaPct) >= 25 {
 			eventType := "spike"
 			if delta.DeltaPct > 0 {
 				eventType = "regression"

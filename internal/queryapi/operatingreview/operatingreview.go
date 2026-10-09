@@ -141,6 +141,7 @@ import (
 	"github.com/full-chaos/dev-health-go/clickhouse"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/changefailure"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/deltarule"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph/model"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graphqldate"
 )
@@ -1538,8 +1539,15 @@ func metricScope(m reviewMetric) model.OperatingReviewMetricScope {
 func (m reviewMetric) dataIn(current, prior periodRows, has func(periodRows) bool) reviewMetric {
 	m.hasData = has(current)
 	m.delta.hasPriorData = has(prior)
-	if !m.hasData || !m.delta.hasPriorData {
+	if !deltarule.Complete(m.hasData, m.delta.hasPriorData) {
+		// One contract with Home and /explain: a delta states a move between
+		// two measured values, so the delta numbers are 0 and the flags carry
+		// the fact. priorValue stays: a measured prior is a fact, and a
+		// missing one is already a 0 placeholder.
+		zero := 0.0
 		m.delta.status = ""
+		m.delta.absolute = deltarule.Absolute(m.value, m.delta.priorValue, m.hasData, m.delta.hasPriorData)
+		m.delta.percent = &zero
 	}
 	return m
 }

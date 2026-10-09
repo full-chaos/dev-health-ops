@@ -10,6 +10,7 @@ import (
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/changefailure"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/deltarule"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
 )
 
@@ -195,12 +196,7 @@ func BuildExplainResponse(ctx context.Context, reader *Reader, orgID string, par
 	}
 	currentValue := safeFloat(currentRaw)
 	previousValue := safeFloat(previousRaw)
-	pctChange := safeFloat(deltaPct(currentValue, previousValue))
-	if !hasData || !hasPriorData {
-		// CHAOS-8491: a window with no stored value is not a measured 0. An empty current window
-		// would otherwise read as -100 % against a real prior; the flags below carry the fact.
-		pctChange = 0.0
-	}
+	pctChange := safeFloat(deltarule.Pct(currentValue, previousValue, hasData, hasPriorData))
 
 	drivers, err := reader.fetchMetricDriverDelta(ctx, config.Table, config.Column, config.GroupBy, config.Aggregator, params.StartDay, params.EndDay, params.CompareStart, params.CompareEnd, scopeFilterSQL, scopeBindings, orgID)
 	if err != nil {

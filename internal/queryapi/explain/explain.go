@@ -192,14 +192,6 @@ func safeTransform(transform func(float64) float64, value float64) float64 {
 	return safeFloat(transform(value))
 }
 
-// deltaPct ports api/utils/numeric.py's delta_pct.
-func deltaPct(current, previous float64) float64 {
-	if previous == 0 {
-		return 0.0
-	}
-	return (current - previous) / previous * 100.0
-}
-
 // primaryScopeID ports explain.py's _primary_scope_id.
 func primaryScopeID(scopeIDs []string) string {
 	if len(scopeIDs) > 0 {

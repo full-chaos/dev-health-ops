@@ -959,7 +959,7 @@ func TestJiraTeamCatalogProjectRestoredBetweenTheTwoReadsIsLive(t *testing.T) {
 	})
 	ids := []string{}
 	for _, row := range batch.Rows.Projects {
-		ids = append(ids, row.ID)
+		ids = append(ids, row.ID.String())
 	}
 	slices.Sort(ids)
 	if !slices.Equal(ids, []string{"10001", "20001"}) || len(batch.ArchivedProjects) != 0 || !batch.Result.ProjectSearchComplete {
@@ -978,7 +978,7 @@ func TestJiraTeamCatalogProjectArchivedBetweenTheTwoReadsIsKept(t *testing.T) {
 		live:     []string{`{"values":[` + moved + `],"isLast":true}`, `{"values":[],"isLast":true}`},
 		archived: []string{`{"values":[` + moved + `],"isLast":true}`},
 	})
-	if len(batch.Rows.Projects) != 1 || batch.Rows.Projects[0].ID != "20001" || !batch.Result.ProjectSearchComplete {
+	if len(batch.Rows.Projects) != 1 || batch.Rows.Projects[0].ID.String() != "20001" || !batch.Result.ProjectSearchComplete {
 		t.Fatalf("projects=%d result=%+v, want the project kept from the first live read", len(batch.Rows.Projects), batch.Result)
 	}
 	batch = collectJiraSearchSequence(t, &jiraSearchSequenceDoer{t: t,
@@ -1035,7 +1035,7 @@ func TestJiraTeamCatalogArchivedProjectIsLiveOnlyWhenTheReadAfterItSaysSo(t *tes
 		}
 		ids := []string{}
 		for _, row := range batch.Rows.Projects {
-			ids = append(ids, row.ID)
+			ids = append(ids, row.ID.String())
 		}
 		slices.Sort(ids)
 		if !slices.Equal(held, append([]string{}, tc.held...)) || !slices.Equal(ids, tc.projects) || !batch.Result.ProjectSearchComplete {

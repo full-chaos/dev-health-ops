@@ -839,9 +839,10 @@ func jiraRetractedProjectIDs(rows []jiraTeamCatalogOwnershipRow) []string {
 	seen := map[string]bool{}
 	ids := []string{}
 	for _, row := range rows {
-		if !seen[row.ProjectID] {
-			seen[row.ProjectID] = true
-			ids = append(ids, row.ProjectID)
+		id := row.ProjectID.String()
+		if !seen[id] {
+			seen[id] = true
+			ids = append(ids, id)
 		}
 	}
 	sort.Strings(ids)

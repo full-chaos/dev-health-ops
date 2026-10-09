@@ -24,10 +24,10 @@ var plainBoolPageEnds = map[string]struct {
 	count  int
 	reason string
 }{
-	"linear_work_items_route.go":           {1, "Linear work-item connections: no ownership snapshot reads them"},
-	"github_work_items_social_fetch.go":    {1, "GitHub pull-request social fetch: no ownership snapshot"},
-	"github_pr_reviews_fetch.go":           {1, "GitHub review fetch: no ownership snapshot"},
-	"jira_atlassian_route.go":              {1, "Jira work-item route: no ownership snapshot"},
+	"linear_work_items_route.go":        {1, "Linear work-item connections: no ownership snapshot reads them"},
+	"github_work_items_social_fetch.go": {1, "GitHub pull-request social fetch: no ownership snapshot"},
+	"github_pr_reviews_fetch.go":        {1, "GitHub review fetch: no ownership snapshot"},
+	"jira_atlassian_route.go":           {1, "Jira work-item route: no ownership snapshot"},
 }
 
 // snapshotPageInfoFields are the PageInfo fields of the Linear catalog payloads

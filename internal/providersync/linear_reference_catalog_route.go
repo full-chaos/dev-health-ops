@@ -269,8 +269,12 @@ func (handler LinearReferenceCatalogRouteHandler) CollectReferenceCatalog(
 		// actually persisted.
 		if selections.Members {
 			memberNodes := append([]linearReferenceCatalogMemberPayload(nil), payload.Members.Nodes...)
-			membersComplete := !payload.Members.PageInfo.HasNextPage
-			if payload.Members.PageInfo.HasNextPage {
+			if !payload.Members.PageInfo.Proven() {
+				// An absent page end is not an end: the roster may be cut.
+				return linearReferenceCatalogFailureBatch(evidence, "members", evidence.Pages, evidence.Records, providerfoundation.ErrPaginationInvalid, false)
+			}
+			membersComplete := !payload.Members.PageInfo.More()
+			if payload.Members.PageInfo.More() {
 				extra, memberPages, memberCap, memberErr := collectLinearReferenceTeamMembers(ctx, client, payload, maxPages)
 				evidence.Pages += memberPages
 				if memberErr != nil || memberCap {
@@ -391,8 +395,15 @@ func (handler LinearReferenceCatalogRouteHandler) CollectReferenceCatalog(
 		if (projectErr != nil || projectCap) && ref.Strict {
 			return linearReferenceCatalogFailureBatch(evidence, "projects", evidence.Pages, evidence.Records, projectErr, projectCap)
 		}
-		if projectErr == nil && !projectCap {
-			evidence.ProjectsComplete = true
+		// Completeness is fail-closed: it starts false and is set true at the
+		// ONE place below, after every page was read (projectsFetched) and
+		// every node was read and normalized (no abandon). A snapshot closes
+		// ownership only on it, so a node the walk gave up on must leave it
+		// false, whatever came before.
+		projectsFetched := projectErr == nil && !projectCap
+		abandonReason := ""
+		if !projectsFetched {
+			abandonReason = "project_pages_not_read_to_the_end"
 		}
 		evidence.Records += len(projectRaw)
 	projectNodes:
@@ -402,9 +413,19 @@ func (handler LinearReferenceCatalogRouteHandler) CollectReferenceCatalog(
 				if ref.Strict {
 					return linearReferenceCatalogFailureBatch(evidence, "projects", evidence.Pages, evidence.Records, err, false)
 				}
+				abandonReason = "project_node_undecodable"
 				break projectNodes
 			}
-			if payload.Teams.PageInfo.HasNextPage {
+			if !payload.Teams.PageInfo.Proven() {
+				// An absent page end is not an end: the project may have more
+				// owning teams than this page holds, so the run is not complete.
+				if ref.Strict {
+					return linearReferenceCatalogFailureBatch(evidence, "projects", evidence.Pages, evidence.Records, providerfoundation.ErrPaginationInvalid, false)
+				}
+				abandonReason = "project_teams_page_end_not_stated"
+				break projectNodes
+			}
+			if payload.Teams.PageInfo.More() {
 				teams, teamsErr := collectLinearReferenceProjectTeams(ctx, client, payload)
 				evidence.Pages += teams.pages
 				if teamsErr != nil {
@@ -413,11 +434,11 @@ func (handler LinearReferenceCatalogRouteHandler) CollectReferenceCatalog(
 					if ref.Strict {
 						return linearReferenceCatalogFailureBatch(evidence, "projects", evidence.Pages, evidence.Records, teamsErr, errors.Is(teamsErr, ErrPaginationCapExceeded))
 					}
-					evidence.ProjectsComplete = false
+					abandonReason = "project_teams_pages_not_read_to_the_end"
 					break projectNodes
 				}
 				payload.Teams.Nodes = append(payload.Teams.Nodes, teams.nodes...)
-				payload.Teams.PageInfo = linearPageInfoPayload{}
+				payload.Teams.PageInfo = linearReferenceNoMorePages()
 			}
 			// CHAOS-4431 codex review P2: each native project is versioned at
 			// the moment THIS node was observed, not at walk start, so two
@@ -429,6 +450,7 @@ func (handler LinearReferenceCatalogRouteHandler) CollectReferenceCatalog(
 				if ref.Strict {
 					return linearReferenceCatalogFailureBatch(evidence, "projects", evidence.Pages, evidence.Records, normalizeErr, false)
 				}
+				abandonReason = "project_node_not_normalizable"
 				break projectNodes
 			}
 			rows.Projects = append(rows.Projects, project)
@@ -454,6 +476,12 @@ func (handler LinearReferenceCatalogRouteHandler) CollectReferenceCatalog(
 					Priority: 10, ValidFrom: observedAt, UpdatedAt: observedAt,
 				})
 			}
+		}
+		evidence.ProjectsComplete = projectsFetched && abandonReason == ""
+		if abandonReason != "" {
+			slog.Default().WarnContext(ctx, "linear_reference_catalog_projects_incomplete",
+				"org_id", claim.OrgID, "reason", abandonReason, "projects_kept", len(rows.Projects))
+			recordLinearOwnershipSnapshotIncomplete(ctx, abandonReason)
 		}
 	} else {
 		evidence.ProjectsComplete = true
@@ -513,7 +541,12 @@ func (handler LinearReferenceCatalogRouteHandler) CollectReferenceCatalog(
 		if team.NativeTeamKey != nil {
 			projectKey = *team.NativeTeamKey
 		}
-		projectID := claim.OrgID + ":linear:" + projectKey
+		projectID, projectIDOK := LinearTeamKeyProjectID(claim.OrgID, projectKey)
+		if !projectIDOK {
+			// A team row always carries its key (normalizeLinearReferenceTeam
+			// refuses a blank one); a row without it has no identity to write.
+			continue
+		}
 		projectKeyPtr := optionalLinearString(projectKey)
 		teamID := team.ID
 		rows.Ownership = append(rows.Ownership, linearReferenceOwnershipRow{

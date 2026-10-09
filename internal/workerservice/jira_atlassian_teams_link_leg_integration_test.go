@@ -72,6 +72,7 @@ func openLinkLegClickHouse(t *testing.T) driver.Conn {
 func collectLinkLeg(t *testing.T, conn driver.Conn, links func(string) ([]graph.TeamConnectedContainer, error), at time.Time) providersync.TeamCatalogResult {
 	t.Helper()
 	collector := jiraCombinedTeamCatalogCollector{
+		ScopeCensus:   soleIntegrationCensus{},
 		ProjectAsTeam: &fakeProjectAsTeamCollector{},
 		Conn:          conn,
 		NewClient:     func(string, atlassian.AuthProvider) atlassianteams.Client { return twoAtlassianTeams{links: links} },

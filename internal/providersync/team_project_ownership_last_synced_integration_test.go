@@ -22,16 +22,16 @@ func TestTeamProjectOwnershipWritersStampIngestTimeAgainstMigratedSchema(t *test
 	writers := map[string]func() error{
 		"jira": func() error {
 			return JiraTeamCatalogClickHouseEffects{Conn: conn, Lease: lease}.writeOwnership(ctx,
-				[]jiraTeamCatalogOwnershipRow{normalizeJiraOwnershipRow("org-stamp", "PLAT", "10001", projectKey, provider)})
+				[]jiraTeamCatalogOwnershipRow{normalizeJiraOwnershipRow("org-stamp", "PLAT", testPID("10001"), projectKey, provider)})
 		},
 		"gitlab": func() error {
 			return GitLabTeamCatalogClickHouseEffects{Conn: conn, Lease: lease}.writeOwnership(ctx,
-				[]gitlabTeamCatalogOwnershipRow{normalizeGitLabOwnershipRow("org-stamp", "gl:org", projectKey, gitlabTeamCatalogBaseSpecificity, provider)})
+				[]gitlabTeamCatalogOwnershipRow{mustGitLabOwnershipRow("org-stamp", "gl:org", projectKey, gitlabTeamCatalogBaseSpecificity, provider)})
 		},
 		"linear": func() error {
 			return LinearReferenceCatalogClickHouseEffects{Conn: conn, Lease: lease}.writeOwnership(ctx,
 				[]linearReferenceOwnershipRow{{
-					OrgID: "org-stamp", Provider: "linear", TeamID: "ENG", ProjectID: "project-1", ProjectKey: &projectKey,
+					OrgID: "org-stamp", Provider: "linear", TeamID: "ENG", ProjectID: testPID("project-1"), ProjectKey: &projectKey,
 					Source: "native", IsPrimary: 1, Specificity: 100, Priority: 10, ValidFrom: provider, UpdatedAt: provider,
 				}})
 		},
@@ -74,16 +74,16 @@ func TestTeamProjectOwnershipLastSyncedIsTakenAfterADelayedLeaseCheck(t *testing
 	writers := map[string]func() error{
 		"jira": func() error {
 			return JiraTeamCatalogClickHouseEffects{Conn: conn, Lease: lease}.writeOwnership(ctx,
-				[]jiraTeamCatalogOwnershipRow{normalizeJiraOwnershipRow("org-delay", "PLAT", "10001", projectKey, provider)})
+				[]jiraTeamCatalogOwnershipRow{normalizeJiraOwnershipRow("org-delay", "PLAT", testPID("10001"), projectKey, provider)})
 		},
 		"gitlab": func() error {
 			return GitLabTeamCatalogClickHouseEffects{Conn: conn, Lease: lease}.writeOwnership(ctx,
-				[]gitlabTeamCatalogOwnershipRow{normalizeGitLabOwnershipRow("org-delay", "gl:org", projectKey, gitlabTeamCatalogBaseSpecificity, provider)})
+				[]gitlabTeamCatalogOwnershipRow{mustGitLabOwnershipRow("org-delay", "gl:org", projectKey, gitlabTeamCatalogBaseSpecificity, provider)})
 		},
 		"linear": func() error {
 			return LinearReferenceCatalogClickHouseEffects{Conn: conn, Lease: lease}.writeOwnership(ctx,
 				[]linearReferenceOwnershipRow{{
-					OrgID: "org-delay", Provider: "linear", TeamID: "ENG", ProjectID: "project-1", ProjectKey: &projectKey,
+					OrgID: "org-delay", Provider: "linear", TeamID: "ENG", ProjectID: testPID("project-1"), ProjectKey: &projectKey,
 					Source: "native", IsPrimary: 1, Specificity: 100, Priority: 10, ValidFrom: provider, UpdatedAt: provider,
 				}})
 		},

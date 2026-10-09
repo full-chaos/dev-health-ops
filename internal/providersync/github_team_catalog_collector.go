@@ -326,12 +326,14 @@ func (adapter GitHubTeamCatalogCollector) CollectTeamCatalog(
 			ref: ref, provider: githubTeamCatalogProvider,
 			listed: rows.RepoListedTeamIDs, unproven: rows.RepoUnprovenTeamIDs,
 		})
-		written, closed, err := adapter.Sink.SnapshotTeamRepoOwnership(
-			ctx, ref.OrgID, orgName, rows.RepoOwnership, decision.read, decision.closable, normalizedAt,
+		written, plan, err := adapter.Sink.SnapshotTeamRepoOwnership(
+			ctx, ref.OrgID, orgName, rows.RepoOwnership, decision.read, decision.snapshot(GitHubTeamRepoGrantKind), normalizedAt,
 		)
 		if err != nil {
 			return result, err
 		}
+		closed := len(plan.Retract)
+		ReportSnapshotPlan(ctx, githubTeamCatalogProvider, ref.OrgID, plan)
 		result.RepoOwnershipWritten = written
 		result.DegradedLegs = append(result.DegradedLegs, decision.legs...)
 		slog.Default().InfoContext(ctx, "github_team_catalog_repo_ownership_snapshot",

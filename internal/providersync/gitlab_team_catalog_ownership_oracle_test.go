@@ -88,9 +88,12 @@ func buildGitLabTeamCatalogOwnershipOracleRow(t *testing.T, input map[string]any
 	targetProjectPath := input["target_project_path"].(string)
 	teamID := gitlabTeamID(targetFullPath)
 	specificity := uint16(gitlabTeamCatalogBaseSpecificity + gitlabTeamDepth(teamID, parentByTeam)*gitlabTeamCatalogChildSpecificityStep)
-	row := normalizeGitLabOwnershipRow(input["org_id"].(string), teamID, targetProjectPath, specificity, normalizedAt)
+	row, ok := normalizeGitLabOwnershipRow(input["org_id"].(string), teamID, targetProjectPath, specificity, normalizedAt)
+	if !ok {
+		t.Fatal("normalizeGitLabOwnershipRow rejected a valid oracle case")
+	}
 	return gitlabTeamCatalogOwnershipProducerRow{
-		OrgID: row.OrgID, Provider: row.Provider, TeamID: row.TeamID, ProjectID: row.ProjectID,
+		OrgID: row.OrgID, Provider: row.Provider, TeamID: row.TeamID, ProjectID: row.ProjectID.String(),
 		ProjectKey: row.ProjectKey, Source: row.Source, IsPrimary: int(row.IsPrimary),
 		Specificity: int(row.Specificity), Priority: int(row.Priority),
 		ValidFrom: row.ValidFrom, ValidTo: row.ValidTo, UpdatedAt: row.UpdatedAt,

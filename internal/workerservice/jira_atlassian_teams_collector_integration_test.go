@@ -104,6 +104,7 @@ func TestJiraCombinedCollectorWritesRealAtlassianTeamsWhenConfigured(t *testing.
 
 	fake := &fakeProjectAsTeamCollector{result: providersync.TeamCatalogResult{TeamsWritten: 1, MembersWritten: 1, MembershipsWritten: 1, ProjectsWritten: 1}}
 	collector := jiraCombinedTeamCatalogCollector{
+		ScopeCensus:   soleIntegrationCensus{},
 		ProjectAsTeam: fake,
 		Conn:          conn,
 		NewClient:     func(string, atlassian.AuthProvider) atlassianteams.Client { return oneAtlassianTeam{} },
@@ -186,6 +187,7 @@ func TestJiraCombinedCollectorResolvesOrganizationIDWhenNotConfigured(t *testing
 	fake := &fakeProjectAsTeamCollector{result: providersync.TeamCatalogResult{TeamsWritten: 1}}
 	resolver := &fakeOrganizationResolver{result: fakeResolvedOrganizationID("resolved-org-456")}
 	collector := jiraCombinedTeamCatalogCollector{
+		ScopeCensus:             soleIntegrationCensus{},
 		ProjectAsTeam:           fake,
 		Conn:                    conn,
 		NewClient:               func(string, atlassian.AuthProvider) atlassianteams.Client { return oneAtlassianTeam{} },
@@ -249,6 +251,7 @@ func TestJiraCombinedCollectorDegradesNonStrictWhenOrganizationIDResolutionFails
 	resolver := &fakeOrganizationResolver{err: atlassianteams.ErrOrganizationPermission}
 	newClientCalled := false
 	collector := jiraCombinedTeamCatalogCollector{
+		ScopeCensus:   soleIntegrationCensus{},
 		ProjectAsTeam: fake,
 		Conn:          conn,
 		NewClient: func(string, atlassian.AuthProvider) atlassianteams.Client {
@@ -313,6 +316,7 @@ func TestJiraCombinedCollectorRunsAtlassianTeamsLegEvenWhenProjectAsTeamIsSkippe
 
 	fake := &fakeProjectAsTeamCollector{result: providersync.TeamCatalogResult{Skipped: true, SkipReason: "project_discovery_failed"}}
 	collector := jiraCombinedTeamCatalogCollector{
+		ScopeCensus:   soleIntegrationCensus{},
 		ProjectAsTeam: fake,
 		Conn:          conn,
 		NewClient:     func(string, atlassian.AuthProvider) atlassianteams.Client { return oneAtlassianTeam{} },
@@ -376,6 +380,7 @@ func TestJiraCombinedCollectorDoesNotClaimAtlassianTeamsWhenTeamsNotSelected(t *
 
 	fake := &fakeProjectAsTeamCollector{result: providersync.TeamCatalogResult{ProjectsWritten: 1}}
 	collector := jiraCombinedTeamCatalogCollector{
+		ScopeCensus:   soleIntegrationCensus{},
 		ProjectAsTeam: fake,
 		Conn:          conn,
 		NewClient:     func(string, atlassian.AuthProvider) atlassianteams.Client { return oneAtlassianTeam{} },
@@ -473,6 +478,7 @@ func TestJiraAtlassianTeamsReachableThroughTheProductionAutoimportDispatcher(t *
 	fakeProjectAsTeam := &fakeProjectAsTeamCollector{result: providersync.TeamCatalogResult{TeamsWritten: 1, MembersWritten: 1, MembershipsWritten: 1, ProjectsWritten: 1}}
 	// The EXACT construction sync_dispatch.go's "jira" entry uses, verbatim.
 	nativeJira := jiraCombinedTeamCatalogCollector{
+		ScopeCensus:   soleIntegrationCensus{},
 		ProjectAsTeam: fakeProjectAsTeam,
 		Conn:          conn,
 		NewClient:     func(string, atlassian.AuthProvider) atlassianteams.Client { return oneAtlassianTeam{} },

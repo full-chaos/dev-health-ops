@@ -735,32 +735,32 @@ func (sink LinearReferenceCatalogClickHouseEffects) openOwnership(ctx context.Co
 
 // SnapshotOwnership returns the rows of one ownership write: this run's rows
 // on their first-seen valid_from, and the open rows of this writer that the
-// run no longer holds, closed at `at`, through the shared PlanOwnershipSnapshot
-// rule. complete says every read the fresh rows come from reached its end;
-// anything less closes nothing. An empty fresh set closes nothing either: a
-// walk that returns no ownership is more often an access change than an
-// organization that dropped every link. A failed read of the open rows is an
-// error before any write. It returns the rows to write and how many of them
-// close a row.
+// run no longer holds, closed at `at`, through the shared snapshot rule
+// (PlanOwnershipSnapshot). The writer's table holds two fact kinds, the
+// ownership of real projects and the team-key row of each team; kinds is one
+// snapshot per kind, each with the proof of its own walk, and a kind closes
+// only its own rows (see PlanSnapshot). A failed read of the open rows is an
+// error before any write. It returns the rows to write and the plan.
 func (sink LinearReferenceCatalogClickHouseEffects) SnapshotOwnership(
-	ctx context.Context, orgID string, fresh []linearReferenceOwnershipRow, at time.Time, complete bool,
-) ([]linearReferenceOwnershipRow, int, error) {
+	ctx context.Context, orgID string, fresh []linearReferenceOwnershipRow, at time.Time,
+	kinds ...KindSnapshot[OwnershipSnapshotRow],
+) ([]linearReferenceOwnershipRow, SnapshotPlan, error) {
 	if sink.Conn == nil || strings.TrimSpace(orgID) == "" || at.IsZero() {
-		return nil, 0, ErrInvalidConfiguration
+		return nil, SnapshotPlan{}, ErrInvalidConfiguration
 	}
 	open, err := sink.openOwnership(ctx, orgID)
 	if err != nil {
-		return nil, 0, err
+		return nil, SnapshotPlan{}, err
 	}
-	rows, closed := linearOwnershipSnapshot(fresh, open, at, complete && len(fresh) > 0)
-	return rows, closed, nil
+	rows, plan := linearOwnershipSnapshot(fresh, open, at, kinds...)
+	return rows, plan, nil
 }
 
 // linearOwnershipSnapshot applies the shared snapshot rule
 // (PlanOwnershipSnapshot) to one run of the Linear catalog.
 func linearOwnershipSnapshot(
-	fresh, open []linearReferenceOwnershipRow, at time.Time, complete bool,
-) ([]linearReferenceOwnershipRow, int) {
+	fresh, open []linearReferenceOwnershipRow, at time.Time, kinds ...KindSnapshot[OwnershipSnapshotRow],
+) ([]linearReferenceOwnershipRow, SnapshotPlan) {
 	facts := func(rows []linearReferenceOwnershipRow) []OwnershipSnapshotRow {
 		out := make([]OwnershipSnapshotRow, len(rows))
 		for index, row := range rows {
@@ -768,7 +768,7 @@ func linearOwnershipSnapshot(
 		}
 		return out
 	}
-	plan := PlanOwnershipSnapshot(OwnershipSnapshot{Fresh: facts(fresh), Complete: complete}, facts(open), at)
+	plan := PlanOwnershipSnapshot(facts(fresh), facts(open), at, kinds...)
 	rows := make([]linearReferenceOwnershipRow, 0, len(fresh)+len(plan.Retract))
 	for index, row := range fresh {
 		row.ValidFrom = plan.ValidFrom[index]
@@ -781,5 +781,5 @@ func linearOwnershipSnapshot(
 		row.UpdatedAt = at
 		rows = append(rows, row)
 	}
-	return rows, len(plan.Retract)
+	return rows, plan
 }

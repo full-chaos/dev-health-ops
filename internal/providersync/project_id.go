@@ -116,6 +116,14 @@ func LinearTeamKeyProjectID(orgID, teamKey string) (ProjectID, bool) {
 // String is the stored form.
 func (id ProjectID) String() string { return id.value }
 
+// IsLinearTeamKeyForm reports whether the id is the {org}:linear:{team key}
+// form of LinearTeamKeyProjectID for orgID. A Linear project's own id is
+// never of that form.
+func (id ProjectID) IsLinearTeamKeyForm(orgID string) bool {
+	prefix := orgID + ":linear:"
+	return orgID != "" && strings.HasPrefix(id.value, prefix) && nonBlank(id.value[len(prefix):])
+}
+
 // IsZero reports whether the id is unset.
 func (id ProjectID) IsZero() bool { return id.value == "" }
 

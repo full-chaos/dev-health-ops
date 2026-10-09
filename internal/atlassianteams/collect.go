@@ -184,6 +184,16 @@ type Rows struct {
 	Ownership   []OwnershipRow
 	// ProjectLinks counts the links behind Ownership.
 	ProjectLinks ProjectLinkCounts
+	// TeamSearchComplete says the team search followed the provider's cursor
+	// to its end. Only Collect sets it. Rows built any other way leave it
+	// false, and Write then treats no team as deleted upstream: it
+	// deactivates none, and closes no membership or link of a team outside
+	// Teams.
+	TeamSearchComplete bool
+	// MembershipsComplete says the members were selected and every active
+	// team's member read reached its end. Only Collect sets it. Rows built
+	// any other way leave it false, and Write then closes no membership.
+	MembershipsComplete bool
 	// ProjectLinksComplete says the team search ended and every active team's
 	// link read reached the provider's last page with only known link types.
 	// Only Collect sets it. Rows built any other way leave it false, and Write
@@ -411,7 +421,7 @@ func Collect(ctx context.Context, client Client, params Params) (Rows, error) {
 		return Rows{}, fmt.Errorf("search atlassian teams: %w", err)
 	}
 	var rows Rows
-	activeTeams, projectReads := 0, 0
+	activeTeams, projectReads, memberReads := 0, 0, 0
 	seen := map[string]bool{}
 	for _, team := range teams {
 		id, err := teamID(team.ID)
@@ -439,6 +449,7 @@ func Collect(ctx context.Context, client Client, params Params) (Rows, error) {
 			if err != nil {
 				return Rows{}, fmt.Errorf("read members of team %s: %w", id, err)
 			}
+			memberReads++
 			members := map[string]bool{}
 			for _, relation := range relations {
 				if relation.RelationType != "TEAM_MEMBER" {
@@ -536,6 +547,11 @@ func Collect(ctx context.Context, client Client, params Params) (Rows, error) {
 	// that got no row does not end here: it names its team
 	// (UnreadableProjectLinkTeams), and Write closes no row of that team.
 	rows.ProjectLinksComplete = params.Selections.Projects && projectReads == activeTeams && rows.ProjectLinks.SkippedUnknownType == 0
+	// A member read that fails returns out of this function, so the count is
+	// one read for every active team when the members were selected.
+	rows.MembershipsComplete = params.Selections.Members && memberReads == activeTeams
+	// The search error returned above: reaching this line is the search's end.
+	rows.TeamSearchComplete = err == nil
 	return rows, nil
 }
 

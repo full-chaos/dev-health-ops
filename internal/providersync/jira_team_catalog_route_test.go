@@ -1113,18 +1113,55 @@ func TestRecordJiraOwnershipSnapshotIncompleteCountsEachReason(t *testing.T) {
 
 func TestJudgeJiraOwnershipSnapshotCountsOnlyAnIncompleteOne(t *testing.T) {
 	ctx := context.Background()
-	before := jiraSnapshotIncompleteCounts(t)
-	if !judgeJiraOwnershipSnapshot(ctx, "org-1", true, true, false, 0) {
-		t.Fatal("complete reads judged incomplete")
+	at := time.Date(2026, 10, 9, 12, 0, 0, 0, time.UTC)
+	held := []OwnershipSnapshotRow{{TeamID: "jira:ops", ProjectID: testPID("10001"), Source: jiraTeamCatalogLegacySource, ValidFrom: at.Add(-time.Hour)}}
+	plan := func(search, legacy bool, fresh, open []OwnershipSnapshotRow) SnapshotPlan {
+		return PlanOwnershipSnapshot(fresh, open, at, JiraLegacyOwnershipKind().Snapshot(ProveSnapshot(
+			SnapshotTerm{Holds: search, Reason: jiraSnapshotProjectSearch},
+			SnapshotTerm{Holds: legacy, Reason: jiraSnapshotLegacyLinks})))
 	}
-	if got := jiraSnapshotIncompleteCounts(t); !maps.Equal(got, before) {
-		t.Fatalf("a complete snapshot moved the counter: %v -> %v", before, got)
+	moved := func(before map[string]int64) map[string]int64 {
+		out := map[string]int64{}
+		for reason, n := range jiraSnapshotIncompleteCounts(t) {
+			if d := n - before[reason]; d != 0 {
+				out[reason] = d
+			}
+		}
+		return out
 	}
-	if judgeJiraOwnershipSnapshot(ctx, "org-1", true, false, false, 2) {
-		t.Fatal("an unread legacy links table judged complete")
-	}
-	if got := jiraSnapshotIncompleteCounts(t); got["legacy_links"] != before["legacy_links"]+1 {
-		t.Fatalf("counter %v -> %v, want legacy_links +1", before, got)
+	for _, c := range []struct {
+		name           string
+		search, legacy bool
+		fresh, open    []OwnershipSnapshotRow
+		incomplete     bool
+		want           map[string]int64
+	}{
+		{"complete reads over a held row", true, true, held, held, false, map[string]int64{}},
+		{"an unread legacy links table", true, false, held, held, true, map[string]int64{"legacy_links": 1}},
+		{"a project search that did not end", false, true, held, held, true, map[string]int64{"project_search": 1}},
+		{"no live ownership over an open row", true, true, nil, held, true, map[string]int64{"no_live_ownership": 1}},
+		{"no live ownership and no open row: nothing was kept", true, true, nil, nil, false, map[string]int64{}},
+		{"both reads cut and no live ownership", false, false, nil, held, true, map[string]int64{"project_search": 1, "legacy_links": 1, "no_live_ownership": 1}},
+	} {
+		before := jiraSnapshotIncompleteCounts(t)
+		abandonedBefore := snapshotAbandonedCounts(t)
+		if got := judgeJiraOwnershipSnapshot(ctx, "org-1", plan(c.search, c.legacy, c.fresh, c.open), len(c.open)); got != c.incomplete {
+			t.Errorf("%s: incomplete = %v, want %v", c.name, got, c.incomplete)
+		}
+		if got := moved(before); !maps.Equal(got, c.want) {
+			t.Errorf("%s: %s moved %v, want %v", c.name, jiraOwnershipSnapshotIncompleteName, got, c.want)
+		}
+		// The shared counter names the kind and the term's own reason.
+		wantShared := map[string]int64{}
+		for reason, n := range c.want {
+			if reason == "no_live_ownership" {
+				reason = SnapshotEmptyAnswer
+			}
+			wantShared["jira/jira_legacy_ownership/"+reason] = n
+		}
+		if got := snapshotAbandonedMoved(t, abandonedBefore); !maps.Equal(got, wantShared) {
+			t.Errorf("%s: %s moved %v, want %v", c.name, snapshotCloseAbandonedName, got, wantShared)
+		}
 	}
 }
 

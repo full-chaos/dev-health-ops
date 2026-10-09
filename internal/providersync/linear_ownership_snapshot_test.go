@@ -2,6 +2,7 @@ package providersync
 
 import (
 	"context"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -35,7 +36,11 @@ func TestLinearOwnershipSnapshotRule(t *testing.T) {
 	lost := linearOwnershipTestRow(t, "linear:ENG", "p2", t0)
 	open := []linearReferenceOwnershipRow{kept, lost}
 
-	rows, closed := linearOwnershipSnapshot([]linearReferenceOwnershipRow{linearOwnershipTestRow(t, "linear:ENG", "p1", t1)}, open, t1, true)
+	kinds := func(complete bool) []KindSnapshot[OwnershipSnapshotRow] {
+		return linearOwnershipKindSnapshots("org-1", LinearReferenceCatalogEvidence{TeamsComplete: true, ProjectsComplete: complete}, LinearReferenceCatalogResult{})
+	}
+	rows, plan := linearOwnershipSnapshot([]linearReferenceOwnershipRow{linearOwnershipTestRow(t, "linear:ENG", "p1", t1)}, open, t1, kinds(true)...)
+	closed := len(plan.Retract)
 	if closed != 1 || len(rows) != 2 {
 		t.Fatalf("complete run: rows=%d closed=%d, want 2 and 1", len(rows), closed)
 	}
@@ -46,7 +51,8 @@ func TestLinearOwnershipSnapshotRule(t *testing.T) {
 		t.Errorf("lost fact not closed at the run time: %+v", rows[1])
 	}
 
-	rows, closed = linearOwnershipSnapshot([]linearReferenceOwnershipRow{linearOwnershipTestRow(t, "linear:ENG", "p1", t2)}, open, t2, false)
+	rows, plan = linearOwnershipSnapshot([]linearReferenceOwnershipRow{linearOwnershipTestRow(t, "linear:ENG", "p1", t2)}, open, t2, kinds(false)...)
+	closed = len(plan.Retract)
 	if closed != 0 || len(rows) != 1 || !rows[0].ValidFrom.Equal(t0) {
 		t.Errorf("incomplete run: rows=%d closed=%d first=%v, want 1, 0 and first-seen valid_from", len(rows), closed, rows[0].ValidFrom)
 	}
@@ -105,12 +111,43 @@ func TestLinearProjectsCompleteIsFalseWhenANodeIsGivenUp(t *testing.T) {
 				linearOwnershipTestRow(t, "linear:QA", "p1", time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)),
 				linearOwnershipTestRow(t, "linear:QA", "p3", time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)),
 			}
-			_, closed := linearOwnershipSnapshot(batch.Rows.Ownership, open, time.Now().UTC(), batch.Evidence.TeamsComplete && batch.Evidence.ProjectsComplete)
-			if closed != 0 {
+			_, plan := linearOwnershipSnapshot(batch.Rows.Ownership, open, time.Now().UTC(),
+				linearOwnershipKindSnapshots(claim.OrgID, batch.Evidence, batch.Result)...)
+			if closed := len(plan.Retract); closed != 0 {
 				t.Fatalf("the snapshot closed %d rows after a given-up node: p3 must stay open", closed)
+			}
+			if got := plan.SnapshotReasons(); !reflect.DeepEqual(got, []string{linearSnapshotProjectsNotRead}) {
+				t.Fatalf("abandon reasons = %v, want the project walk term", got)
 			}
 		})
 	}
+}
+
+// linearIncompleteCounts reads the Linear incomplete-snapshot counter of the
+// test binary's one meter reader, by reason.
+func linearIncompleteCounts(t *testing.T) map[string]int64 {
+	t.Helper()
+	var collected metricdata.ResourceMetrics
+	if err := meterReader.Collect(context.Background(), &collected); err != nil {
+		t.Fatal(err)
+	}
+	out := map[string]int64{}
+	for _, scope := range collected.ScopeMetrics {
+		for _, m := range scope.Metrics {
+			if m.Name != linearOwnershipSnapshotIncompleteName {
+				continue
+			}
+			sum, ok := m.Data.(metricdata.Sum[int64])
+			if !ok {
+				t.Fatalf("%s is %T, want an int64 sum", m.Name, m.Data)
+			}
+			for _, point := range sum.DataPoints {
+				reason, _ := point.Attributes.Value("reason")
+				out[reason.AsString()] += point.Value
+			}
+		}
+	}
+	return out
 }
 
 func linearIncompleteCount(collected metricdata.ResourceMetrics, reason string) int64 {
@@ -134,27 +171,133 @@ func linearIncompleteCount(collected metricdata.ResourceMetrics, reason string) 
 	return total
 }
 
-// TestLinearOwnershipSnapshotCompleteNeedsEveryTerm kills the three terms one
-// at a time. A failed team walk returns an error before the collector reads
-// the flag, so the TeamsComplete term cannot be driven false through the
+// TestLinearOwnershipKindSnapshotsGiveEachKindItsOwnTerms kills the three
+// terms one at a time, and pins which kind each one gates: the team walk
+// gates the team-key rows only, the project walk and the keyless link gate the
+// project rows only. A failed team walk returns an error before the collector
+// reads the flag, so the TeamsComplete term cannot be driven false through the
 // collector; this is its only observer.
-func TestLinearOwnershipSnapshotCompleteNeedsEveryTerm(t *testing.T) {
-	good := LinearReferenceCatalogEvidence{TeamsComplete: true, ProjectsComplete: true}
-	if !linearOwnershipSnapshotComplete(good, LinearReferenceCatalogResult{}) {
-		t.Fatal("a fully read run with no dropped link must be complete")
+func TestLinearOwnershipKindSnapshotsGiveEachKindItsOwnTerms(t *testing.T) {
+	const org = "org-1"
+	at := time.Date(2026, 10, 9, 12, 0, 0, 0, time.UTC)
+	before := at.Add(-time.Hour)
+	teamKey := func(key string) linearReferenceOwnershipRow {
+		row := linearOwnershipTestRow(t, "linear:"+key, "unused", before)
+		row.ProjectID = mustProjectID(t)(LinearTeamKeyProjectID(org, key))
+		return row
 	}
+	open := []linearReferenceOwnershipRow{
+		linearOwnershipTestRow(t, "linear:QA", "lost-project", before),
+		teamKey("GONE"),
+	}
+	fresh := []linearReferenceOwnershipRow{
+		linearOwnershipTestRow(t, "linear:QA", "held-project", at),
+		teamKey("QA"),
+	}
+	good := LinearReferenceCatalogEvidence{TeamsComplete: true, ProjectsComplete: true}
 	teams := good
 	teams.TeamsComplete = false
 	projects := good
 	projects.ProjectsComplete = false
-	for name, got := range map[string]bool{
-		"teams not complete":    linearOwnershipSnapshotComplete(teams, LinearReferenceCatalogResult{}),
-		"projects not complete": linearOwnershipSnapshotComplete(projects, LinearReferenceCatalogResult{}),
-		"keyless link dropped":  linearOwnershipSnapshotComplete(good, LinearReferenceCatalogResult{OwnershipTeamsWithoutKey: 1}),
+	for name, c := range map[string]struct {
+		evidence   LinearReferenceCatalogEvidence
+		result     LinearReferenceCatalogResult
+		wantClosed []string
+		wantReason map[string][]string
+	}{
+		"every term holds": {good, LinearReferenceCatalogResult{}, []string{"lost-project", org + ":linear:GONE"}, map[string][]string{}},
+		"teams not complete": {teams, LinearReferenceCatalogResult{}, []string{"lost-project"},
+			map[string][]string{"linear_team_key_ownership": {linearSnapshotTeamsNotRead}}},
+		"projects not complete": {projects, LinearReferenceCatalogResult{}, []string{org + ":linear:GONE"},
+			map[string][]string{"linear_project_ownership": {linearSnapshotProjectsNotRead}}},
+		"keyless link dropped": {good, LinearReferenceCatalogResult{OwnershipTeamsWithoutKey: 1}, []string{org + ":linear:GONE"},
+			map[string][]string{"linear_project_ownership": {linearSnapshotKeylessLink}}},
 	} {
-		if got {
-			t.Errorf("%s: snapshot reported complete", name)
+		rows, plan := linearOwnershipSnapshot(fresh, open, at, linearOwnershipKindSnapshots(org, c.evidence, c.result)...)
+		closed := []string{}
+		for _, row := range rows {
+			if row.ValidTo != nil {
+				closed = append(closed, row.ProjectID.String())
+			}
 		}
+		if !reflect.DeepEqual(closed, c.wantClosed) {
+			t.Errorf("%s: closed %v, want %v", name, closed, c.wantClosed)
+		}
+		reasons := map[string][]string{}
+		for _, outcome := range plan.Abandoned() {
+			reasons[outcome.Kind] = outcome.Abandoned
+		}
+		if !reflect.DeepEqual(reasons, c.wantReason) {
+			t.Errorf("%s: abandoned %v, want %v", name, reasons, c.wantReason)
+		}
+	}
+}
+
+// TestLinearEmptyAnswerOfOneKindClosesNoRowOfThatKind runs the real walk and
+// the real kinds: a kind whose own answer is empty closes none of its rows,
+// whatever the other kind holds. Zero project nodes with a team present keeps
+// the open project rows (the team-key row of the team does not make the
+// project kind "not empty"), and zero teams with a project present keeps the
+// open team-key rows.
+func TestLinearEmptyAnswerOfOneKindClosesNoRowOfThatKind(t *testing.T) {
+	before := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+	const org = chaos4530SyntheticOrgID
+	projectRow := linearOwnershipTestRow(t, "linear:QA", "keep", before)
+	teamKeyRow := linearOwnershipTestRow(t, "linear:OLD", "unused", before)
+	teamKeyRow.ProjectID = mustProjectID(t)(LinearTeamKeyProjectID(org, "OLD"))
+	open := []linearReferenceOwnershipRow{projectRow, teamKeyRow}
+	end := `,"pageInfo":{"hasNextPage":false,"endCursor":null}`
+	project := `{"id":"other","name":"P","description":"","status":{"id":"s","name":"Active","type":"started"},"trashed":false,"targetDate":"","archivedAt":null,"url":"","lead":null,"teams":{"nodes":[{"id":"team-raw-1","key":"QA"}]` + end + `}}`
+	noTeams := `{"data":{"teams":{"nodes":[]` + end + `}}}`
+	projects := func(nodes string) string { return `{"data":{"projects":{"nodes":[` + nodes + `]` + end + `}}}` }
+	for name, c := range map[string]struct {
+		teams, projects string
+		wantOpen        []string
+		wantAbandoned   map[string][]string
+	}{
+		"control: a team and a project, both kinds close what they lost": {linearOneTeamJSON, projects(project),
+			[]string{}, map[string][]string{}},
+		"zero projects and a team present: the project row stays open": {linearOneTeamJSON, projects(``),
+			[]string{"keep"}, map[string][]string{"linear_project_ownership": {SnapshotEmptyAnswer}}},
+		"zero teams and a project present: the team-key row stays open": {noTeams, projects(project),
+			[]string{org + ":linear:OLD"}, map[string][]string{"linear_team_key_ownership": {SnapshotEmptyAnswer}}},
+		"zero teams and zero projects: both stay open": {noTeams, projects(``),
+			[]string{"keep", org + ":linear:OLD"},
+			map[string][]string{"linear_project_ownership": {SnapshotEmptyAnswer}, "linear_team_key_ownership": {SnapshotEmptyAnswer}}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			batch, err := runLinearCatalogWalk(t, false, c.teams, c.projects)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !batch.Evidence.TeamsComplete || !batch.Evidence.ProjectsComplete {
+				t.Fatalf("the walk must be complete for this test to measure the empty rule: %+v", batch.Evidence)
+			}
+			rows, plan := linearOwnershipSnapshot(batch.Rows.Ownership, open, time.Date(2026, 10, 9, 12, 0, 0, 0, time.UTC),
+				linearOwnershipKindSnapshots(org, batch.Evidence, batch.Result)...)
+			closed := map[string]bool{}
+			for _, row := range rows {
+				if row.ValidTo != nil {
+					closed[row.ProjectID.String()] = true
+				}
+			}
+			stillOpen := []string{}
+			for _, row := range open {
+				if !closed[row.ProjectID.String()] {
+					stillOpen = append(stillOpen, row.ProjectID.String())
+				}
+			}
+			if !reflect.DeepEqual(stillOpen, c.wantOpen) {
+				t.Errorf("open after the run = %v, want %v", stillOpen, c.wantOpen)
+			}
+			abandoned := map[string][]string{}
+			for _, outcome := range plan.Abandoned() {
+				abandoned[outcome.Kind] = outcome.Abandoned
+			}
+			if !reflect.DeepEqual(abandoned, c.wantAbandoned) {
+				t.Errorf("abandoned = %v, want %v", abandoned, c.wantAbandoned)
+			}
+		})
 	}
 }
 
@@ -191,26 +334,41 @@ func TestLinearCatalogNeverReadsAnAbsentPageEndAsTheEnd(t *testing.T) {
 		return `{"data":{"projects":{"nodes":[` + nodes + `]` + pageInfo + `}}}`
 	}
 	end := `,"pageInfo":{"hasNextPage":false,"endCursor":null}`
-	cases := map[string]string{
-		"nested teams.pageInfo absent":        page(projectNode(`{"nodes":[{"id":"t","key":"QA"}]}`), end),
-		"nested teams.pageInfo null":          page(projectNode(`{"nodes":[{"id":"t","key":"QA"}],"pageInfo":null}`), end),
-		"nested teams.hasNextPage absent":     page(projectNode(`{"nodes":[{"id":"t","key":"QA"}],"pageInfo":{"endCursor":null}}`), end),
-		"nested teams.hasNextPage null":       page(projectNode(`{"nodes":[{"id":"t","key":"QA"}],"pageInfo":{"hasNextPage":null}}`), end),
-		"top-level projects pageInfo absent":  page(projectNode(`{"nodes":[{"id":"t","key":"QA"}],`+`"pageInfo":{"hasNextPage":false,"endCursor":null}}`), ``),
-		"top-level projects hasNextPage null": page(projectNode(`{"nodes":[{"id":"t","key":"QA"}],`+`"pageInfo":{"hasNextPage":false,"endCursor":null}}`), `,"pageInfo":{"hasNextPage":null}`),
+	// Each case names the reason label the walk counts and logs the abandoned
+	// close with.
+	const nestedNotStated, pagesNotRead = "project_teams_page_end_not_stated", "project_pages_not_read_to_the_end"
+	cases := map[string][2]string{
+		"nested teams.pageInfo absent":        {page(projectNode(`{"nodes":[{"id":"t","key":"QA"}]}`), end), nestedNotStated},
+		"nested teams.pageInfo null":          {page(projectNode(`{"nodes":[{"id":"t","key":"QA"}],"pageInfo":null}`), end), nestedNotStated},
+		"nested teams.hasNextPage absent":     {page(projectNode(`{"nodes":[{"id":"t","key":"QA"}],"pageInfo":{"endCursor":null}}`), end), nestedNotStated},
+		"nested teams.hasNextPage null":       {page(projectNode(`{"nodes":[{"id":"t","key":"QA"}],"pageInfo":{"hasNextPage":null}}`), end), nestedNotStated},
+		"top-level projects pageInfo absent":  {page(projectNode(`{"nodes":[{"id":"t","key":"QA"}],`+`"pageInfo":{"hasNextPage":false,"endCursor":null}}`), ``), pagesNotRead},
+		"top-level projects hasNextPage null": {page(projectNode(`{"nodes":[{"id":"t","key":"QA"}],`+`"pageInfo":{"hasNextPage":false,"endCursor":null}}`), `,"pageInfo":{"hasNextPage":null}`), pagesNotRead},
 	}
-	for name, projects := range cases {
+	for name, c := range cases {
+		projects, wantReason := c[0], c[1]
 		t.Run(name, func(t *testing.T) {
+			counted := linearIncompleteCounts(t)
 			batch, err := runLinearCatalogWalk(t, false, linearOneTeamJSON, projects)
 			if err != nil {
 				t.Fatalf("non-strict keeps what it read: %v", err)
+			}
+			moved := map[string]int64{}
+			for reason, n := range linearIncompleteCounts(t) {
+				if d := n - counted[reason]; d != 0 {
+					moved[reason] = d
+				}
+			}
+			if !reflect.DeepEqual(moved, map[string]int64{wantReason: 1}) {
+				t.Fatalf("%s moved %v, want {%s: 1}", linearOwnershipSnapshotIncompleteName, moved, wantReason)
 			}
 			if batch.Evidence.ProjectsComplete {
 				t.Fatalf("ProjectsComplete = true on %s", name)
 			}
 			open := []linearReferenceOwnershipRow{linearOwnershipTestRow(t, "linear:QA", "keep", time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC))}
-			_, closed := linearOwnershipSnapshot(batch.Rows.Ownership, open, time.Now().UTC(), batch.Evidence.TeamsComplete && batch.Evidence.ProjectsComplete)
-			if closed != 0 {
+			_, plan := linearOwnershipSnapshot(batch.Rows.Ownership, open, time.Now().UTC(),
+				linearOwnershipKindSnapshots(chaos4530SyntheticOrgID, batch.Evidence, batch.Result)...)
+			if closed := len(plan.Retract); closed != 0 {
 				t.Fatalf("the snapshot closed %d rows on %s", closed, name)
 			}
 		})

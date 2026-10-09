@@ -16,6 +16,8 @@ const (
 	OwnershipCloseSkippedScopeShared       = "scope_shared"
 	OwnershipCloseSkippedCensusUnavailable = "scope_census_unavailable"
 	OwnershipCloseSkippedCensusFailed      = "scope_census_failed"
+	// OwnershipCloseSkippedNoTeamListed: no team listing returned at all.
+	OwnershipCloseSkippedNoTeamListed = "no_team_listed"
 
 	ownershipCloseLeg = "ownership_close"
 )
@@ -47,6 +49,10 @@ type ownershipCloseDecision struct {
 	// closable is the part of read whose open rows a snapshot may close.
 	closable []string
 	legs     []DegradedLeg
+	// proven counts the listed teams whose listing proved its end.
+	proven int
+	// skipped holds every reason the gate gave up a close for.
+	skipped map[string]bool
 }
 
 // decideOwnershipClose is the one gate in front of every provider_access
@@ -58,7 +64,7 @@ type ownershipCloseDecision struct {
 // teams: its rows stay open. Every skip is one WARN line and a DegradedLeg on
 // the result, never silent.
 func decideOwnershipClose(ctx context.Context, census OwnershipScopeCensus, request ownershipCloseRequest) ownershipCloseDecision {
-	decision := ownershipCloseDecision{read: request.listed}
+	decision := ownershipCloseDecision{read: request.listed, skipped: map[string]bool{}}
 	if len(request.listed) == 0 {
 		return decision
 	}
@@ -69,6 +75,7 @@ func decideOwnershipClose(ctx context.Context, census OwnershipScopeCensus, requ
 	var reasons []string
 	skip := func(reason, detail string) {
 		reasons = append(reasons, reason)
+		decision.skipped[reason] = true
 		decision.legs = append(decision.legs, DegradedLeg{
 			Dataset: "team_ownership", Leg: ownershipCloseLeg, Outcome: "skipped", Reason: reason, Detail: detail,
 		})
@@ -78,6 +85,7 @@ func decideOwnershipClose(ctx context.Context, census OwnershipScopeCensus, requ
 			decision.closable = append(decision.closable, teamID)
 		}
 	}
+	decision.proven = len(decision.closable)
 	unprovenListed := len(request.listed) - len(decision.closable)
 	if unprovenListed > 0 {
 		skip(OwnershipCloseSkippedListingIncomplete, strconv.Itoa(unprovenListed)+" team listings without a confirmed end")
@@ -114,19 +122,16 @@ func decideOwnershipClose(ctx context.Context, census OwnershipScopeCensus, requ
 	return decision
 }
 
-// retainClosableRetractions keeps only the retractions of open rows whose team
-// may close. The first-seen valid_from of every fresh row stays as planned.
-func retainClosableRetractions(plan OwnershipSnapshotPlan, open []OwnershipSnapshotRow, closable []string) OwnershipSnapshotPlan {
-	allowed := make(map[string]bool, len(closable))
-	for _, teamID := range closable {
-		allowed[teamID] = true
-	}
-	var kept []OwnershipSnapshotRetraction
-	for _, retraction := range plan.Retract {
-		if allowed[open[retraction.Open].TeamID] {
-			kept = append(kept, retraction)
-		}
-	}
-	plan.Retract = kept
-	return plan
+// snapshot is the grant kind of the closable teams (kind makes it from the
+// closable set) with the proof of this gate: a team listing returned, at least
+// one listing proved its end, and the scope census allowed the close. A team
+// outside closable is of no kind, so its open rows never close.
+func (decision ownershipCloseDecision) snapshot(kind func(closable []string) SnapshotKind[OwnershipSnapshotRow]) KindSnapshot[OwnershipSnapshotRow] {
+	return kind(decision.closable).Snapshot(ProveSnapshot(
+		SnapshotTerm{Holds: len(decision.read) > 0, Reason: OwnershipCloseSkippedNoTeamListed},
+		SnapshotTerm{Holds: len(decision.read) == 0 || decision.proven > 0, Reason: OwnershipCloseSkippedListingIncomplete},
+		SnapshotTerm{Holds: !decision.skipped[OwnershipCloseSkippedCensusUnavailable], Reason: OwnershipCloseSkippedCensusUnavailable},
+		SnapshotTerm{Holds: !decision.skipped[OwnershipCloseSkippedCensusFailed], Reason: OwnershipCloseSkippedCensusFailed},
+		SnapshotTerm{Holds: !decision.skipped[OwnershipCloseSkippedScopeShared], Reason: OwnershipCloseSkippedScopeShared},
+	))
 }

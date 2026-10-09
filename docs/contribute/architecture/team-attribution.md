@@ -686,10 +686,38 @@ project's items by id. Now:
   key-built id. The `source = 'native'` rows with `team_id = project_key` (the project-as-team class) are
   not given to the snapshot rule: every catalog run retires them as a class (section 0.4c). The catalog closes nothing when its
   project search returned no project.
-- **Only a complete snapshot closes a row** (`providersync.OwnershipSnapshot.Complete`; the zero value is
-  not complete). A row that is missing from a part of the provider's answer is not a fact the provider
-  dropped. A run that did not read its source to the end writes what it found, keeps first-seen
-  `valid_from`, closes nothing, and says so:
+- **A row is closed only through its fact kind, on that kind's own proof** (`providersync.PlanSnapshot`,
+  `ownership_snapshot.go`; CHAOS-8886). A writer gives the rule one typed snapshot for each kind of fact its
+  table holds (`KindSnapshot`): the kind (`snapshot_kinds.go`: a name, the rows it holds, and what an empty
+  answer of the kind means) and a proof made only from named terms (`ProveSnapshot`; the zero value and a
+  term with no reason are not proven). There is no completeness bool and no count argument: the rule sorts
+  the fresh and the open rows by kind and counts them itself. A kind closes its open rows only when its
+  proof holds (every read of ITS walk reached a stated end) and the run holds at least one row of THAT
+  kind. A row of another kind never makes a kind "not empty", an open row that no kind holds is never
+  closed, and a kind that is read per team with its own proven end per team declares an empty answer to be
+  an answer (`EmptyIsAnAnswer`). The kinds:
+
+  | Kind | Writer | Walk behind the proof | Empty answer |
+  | --- | --- | --- | --- |
+  | `linear_project_ownership` | Linear catalog | every project page, node and project-team page; no link without a key | closes nothing |
+  | `linear_team_key_ownership` | Linear catalog | the team walk | closes nothing |
+  | `jira_legacy_ownership` | Jira catalog | the project search (live, archived, live again) and the legacy links read | closes nothing |
+  | `atlassian_team_catalog` | Atlassian Teams | the team search | closes nothing: no team is deactivated or put in scope |
+  | `atlassian_team_memberships` | Atlassian Teams | one member read per active team | is an answer (per team) |
+  | `atlassian_team_project_links` | Atlassian Teams | one link read per active team | is an answer (per team) |
+  | `gitlab_group_project_grants` | GitLab catalog | one listing per closable group (section 0.4a) | is an answer (per group) |
+  | `github_team_repo_grants` | GitHub catalog | one listing per closable team | is an answer (per team) |
+
+  A kind that closes nothing while it holds open rows is loud: one `team_catalog_snapshot_close_abandoned`
+  WARN line (`kind`, `reasons`, `open_rows_kept`) and one count of
+  `team_catalog_snapshot_close_abandoned_total{provider, kind, reason}` per reason (`empty_answer`, or the
+  reason of each term that did not hold). Census: `TestSnapshotKindCensus` (the kinds and their empty-answer
+  policy are a named table) and `TestEveryCloseSiteTakesTheTypedSnapshot` (every function that turns a
+  plan's retractions into rows is named, calls the rule itself and takes the typed snapshot, never a bool;
+  a proof term made from a constant fails).
+- **Only a proven snapshot closes a row.** A row that is missing from a part of the provider's answer is
+  not a fact the provider dropped. A run that did not read its source to the end writes what it found,
+  keeps first-seen `valid_from`, closes nothing, and says so:
   - Jira team catalog (legacy links): the Jira project search is read page by page (`startAt`) to the provider's
     end-of-data signal: `isLast` when the page has it, else `total`, else a page that has entries and is
     shorter than the page size. A page with no entries and no signal (an empty object or an error body
@@ -718,7 +746,7 @@ project's items by id. Now:
     (its writable links are still written), the run logs `jira_atlassian_teams_project_links_unreadable`
     with the count, and the link leg is degraded (`project_link_not_written`). One writable link beside
     it does not change that.
-  - The census test also fails when a planner passes a constant for `Complete`.
+  - The census test also fails when a proof term is made from a constant.
 - **A closed row is not owned before a merge.** A row is closed by writing its key again with `valid_to`
   set, so until a merge both versions are stored. The ownership reader of the repository derivation
   (`loadTeamRepoOwnershipProjectLinks`) takes the newest version of each row key first and filters
@@ -726,8 +754,12 @@ project's items by id. Now:
   Test: `TestTeamRepoOwnershipProjectLinksLeaveOutAClosedRowBeforeAMerge`.
 - Linear plans its ownership rows through the same function since CHAOS-8886
   (`LinearReferenceCatalogClickHouseEffects.SnapshotOwnership`; open rows read are `provider = 'linear'`,
-  `source = 'native'`). Its run is complete only when the team walk and every project page and project-team
-  page reached their end and no project-team link was without a key; an empty answer closes nothing.
+  `source = 'native'`). Those rows are two fact kinds, each closed on its own walk: the ownership of real
+  projects (every project page and project-team page reached a stated end and no project-team link was
+  without a key) and the `{org}:linear:{team key}` row of each team (the team walk reached its end). An
+  empty answer of a kind closes no row of that kind: zero project nodes with a team present keeps every
+  open project row, and zero teams with a project present keeps every open team-key row
+  (`TestLinearCollectorEmptyAnswerOfAKindClosesNoRowOfThatKind`).
   GitLab plans its rows through the same function since CHAOS-8952
   (section 0.4a); a
   census test (`TestJiraOwnershipWriterCensus`) names every writer of the table and fails for a new Jira
@@ -782,6 +814,15 @@ The Atlassian Teams of a Jira site ARE the Jira teams. A team owns a Jira projec
   type this code does not know makes the snapshot NOT complete: the links that were read are written, no row
   is closed, and each team's catalog `project_keys` keeps what it had. Zero links for a team on a complete
   read is a valid answer.
+- **A team search that answers no team closes nothing.** The teams of the catalog are a fact kind of
+  their own (`atlassian_team_catalog`): a team already in the catalog and not in the answer is treated as
+  deleted upstream (deactivated, its memberships and links in scope of the close) only when the search
+  reached its end AND answered at least one team. A search with no team is far more often an access change
+  than an organization that deleted every team: no team is deactivated, no membership and no link is
+  closed, and the run logs `team_catalog_snapshot_close_abandoned` with `reasons=empty_answer`
+  (`TestATeamSearchThatAnswersNoTeamClosesNothing`). Memberships go through the same rule
+  (`atlassian_team_memberships`, proof `Rows.MembershipsComplete`: one finished member read for every
+  active team); a later open duplicate of a membership the run still holds is closed, as for the links.
 - **A row is closed only when every Jira project link the provider returned for its team was written.**
   One rule, per team, in one place (`teamLinkLedger` in `internal/atlassianteams/collect.go`): the
   `JiraProject` links the provider returned for the team are counted, and so are the ones behind an

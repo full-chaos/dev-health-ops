@@ -30,7 +30,8 @@ func TestLinearOwnershipThreeSyncsLeaveOneOpenRowPerFact(t *testing.T) {
 			row.OrgID = org
 			fresh = append(fresh, row)
 		}
-		rows, _, err := sink.SnapshotOwnership(ctx, org, fresh, at, complete)
+		rows, _, err := sink.SnapshotOwnership(ctx, org, fresh, at, linearOwnershipKindSnapshots(org,
+			LinearReferenceCatalogEvidence{TeamsComplete: true, ProjectsComplete: complete}, LinearReferenceCatalogResult{})...)
 		if err != nil {
 			t.Fatal(err)
 		}

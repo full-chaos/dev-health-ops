@@ -122,22 +122,63 @@ func TestDecideOwnershipCloseClosesOnlyProvenListingsOfAnUnsharedScope(t *testin
 	}
 }
 
-func TestRetainClosableRetractionsDropsRetractionsOfOtherTeams(t *testing.T) {
+// The gate's snapshot is the grant kind of the closable teams: a team outside
+// it is of no kind, so its open rows never close, and a gate that lets no
+// team close carries the reason of every skip.
+func TestOwnershipCloseDecisionSnapshotClosesOnlyTheClosableTeams(t *testing.T) {
 	at := time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)
 	before := at.Add(-time.Hour)
 	open := []OwnershipSnapshotRow{
 		{TeamID: "gl:a", ProjectID: testPID("a/1"), Source: "provider_access", ValidFrom: before},
 		{TeamID: "gl:b", ProjectID: testPID("b/1"), Source: "provider_access", ValidFrom: before},
+		{TeamID: "gl:a", ProjectID: testPID("a/2"), Source: "manual", ValidFrom: before},
 	}
-	plan := PlanOwnershipSnapshot(OwnershipSnapshot{Complete: true}, open, at)
-	if len(plan.Retract) != 2 {
-		t.Fatalf("seed plan retracts %d rows, want 2", len(plan.Retract))
+	ref := TeamCatalogReference{OrgID: "org-1", IntegrationID: "integration-a"}
+	decide := func(census OwnershipScopeCensus, listed, unproven []string) SnapshotPlan {
+		decision := decideOwnershipClose(context.Background(), census, ownershipCloseRequest{
+			ref: ref, provider: "gitlab", listed: listed, unproven: unproven,
+		})
+		return PlanOwnershipSnapshot(nil, open, at, decision.snapshot(GitLabGroupProjectGrantKind))
 	}
-	kept := retainClosableRetractions(plan, open, []string{"gl:a"})
-	if len(kept.Retract) != 1 || open[kept.Retract[0].Open].TeamID != "gl:a" {
-		t.Fatalf("kept retractions = %+v, want only gl:a's row", kept.Retract)
+	closedTeams := func(plan SnapshotPlan) []string {
+		out := []string{}
+		for _, retraction := range plan.Retract {
+			out = append(out, open[retraction.Open].TeamID+"/"+open[retraction.Open].Source)
+		}
+		return out
 	}
-	if none := retainClosableRetractions(plan, open, nil); len(none.Retract) != 0 {
-		t.Fatalf("no closable team kept %d retractions", len(none.Retract))
+	for _, c := range []struct {
+		name             string
+		census           OwnershipScopeCensus
+		listed, unproven []string
+		wantClosed       []string
+		wantReasons      []string
+	}{
+		{"both listings proven: an empty answer of a listed team closes its grants",
+			staticScopeCensus{}, []string{"gl:a", "gl:b"}, nil, []string{"gl:a/provider_access", "gl:b/provider_access"}, nil},
+		{"one listing not proven: only the proven team closes",
+			staticScopeCensus{}, []string{"gl:a", "gl:b"}, []string{"gl:b"}, []string{"gl:a/provider_access"}, nil},
+		{"no listing proven", staticScopeCensus{}, []string{"gl:a", "gl:b"}, []string{"gl:a", "gl:b"}, []string{},
+			[]string{OwnershipCloseSkippedListingIncomplete}},
+		{"no census", nil, []string{"gl:a", "gl:b"}, nil, []string{}, []string{OwnershipCloseSkippedCensusUnavailable}},
+		{"the census read failed", staticScopeCensus{err: errors.New("down")}, []string{"gl:a"}, nil, []string{},
+			[]string{OwnershipCloseSkippedCensusFailed}},
+		{"another integration shares the scope", staticScopeCensus{siblings: 1}, []string{"gl:a"}, nil, []string{},
+			[]string{OwnershipCloseSkippedScopeShared}},
+		{"no team listed", staticScopeCensus{}, nil, nil, []string{}, []string{OwnershipCloseSkippedNoTeamListed}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			plan := decide(c.census, c.listed, c.unproven)
+			if got := closedTeams(plan); !reflect.DeepEqual(got, c.wantClosed) {
+				t.Errorf("closed = %v, want %v", got, c.wantClosed)
+			}
+			var reasons []string
+			for _, outcome := range plan.Kinds {
+				reasons = append(reasons, outcome.Abandoned...)
+			}
+			if !reflect.DeepEqual(reasons, c.wantReasons) {
+				t.Errorf("abandon reasons = %v, want %v", reasons, c.wantReasons)
+			}
+		})
 	}
 }

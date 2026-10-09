@@ -1,6 +1,7 @@
 package providersync
 
 import (
+	"reflect"
 	"testing"
 	"time"
 
@@ -262,41 +263,61 @@ func TestJiraOwnershipSnapshotKeepsFirstSeenAndClosesWhatTheSnapshotLost(t *test
 			Source: source, IsPrimary: 1, Specificity: 100, Priority: 10, ValidFrom: validFrom, UpdatedAt: validFrom,
 		}
 	}
-	fresh := []jiraTeamCatalogOwnershipRow{row("10001", "native", now)}
-	open := []jiraTeamCatalogOwnershipRow{
-		row("10001", "native", later), row("10001", "native", first), // one fact, two open rows
-		row("org-1:jira:OPS", "native", first), // the retired identity
-		row("10001", "jira_legacy", first),     // same project, another source: its own fact
+	proven := func(complete bool) KindSnapshot[OwnershipSnapshotRow] {
+		return JiraLegacyOwnershipKind().Snapshot(ProveSnapshot(SnapshotTerm{Holds: complete, Reason: jiraSnapshotProjectSearch}))
 	}
-	kept, retracted := jiraOwnershipSnapshot(fresh, open, now, true)
+	fresh := []jiraTeamCatalogOwnershipRow{row("10001", "jira_legacy", now)}
+	open := []jiraTeamCatalogOwnershipRow{
+		row("10001", "jira_legacy", later), row("10001", "jira_legacy", first), // one fact, two open rows
+		row("org-1:jira:OPS", "jira_legacy", first), // the retired identity
+		row("10002", "jira_legacy", first),          // a project the snapshot lost
+		row("10001", "native", first),               // another writer's row: not of this writer's kind
+	}
+	kept, retracted, _ := jiraOwnershipSnapshot(fresh, open, now, proven(true))
 	if len(kept) != 1 || !kept[0].ValidFrom.Equal(first) || kept[0].ValidTo != nil {
 		t.Fatalf("kept=%+v, want the one fresh row on its first-seen valid_from, open", kept)
 	}
 	if len(retracted) != 3 {
-		t.Fatalf("retracted=%+v, want the later duplicate, the key-built row and the legacy row", retracted)
+		t.Fatalf("retracted=%+v, want the later duplicate, the key-built row and the lost project", retracted)
 	}
 	for _, closed := range retracted {
 		if closed.ValidTo == nil || !closed.ValidTo.Equal(now) || !closed.UpdatedAt.Equal(now) {
 			t.Fatalf("closed row=%+v, want valid_to = updated_at = the run time", closed)
 		}
-		if closed.ProjectID.String() == "10001" && closed.Source == "native" && closed.ValidFrom.Equal(first) {
+		if closed.ProjectID.String() == "10001" && closed.ValidFrom.Equal(first) {
 			t.Fatalf("the first-seen row of a fact the snapshot still holds was closed: %+v", closed)
+		}
+		if closed.Source != "jira_legacy" {
+			t.Fatalf("a row of another source was closed: %+v", closed)
 		}
 	}
 
 	// A part of the provider's answer closes nothing and still keeps the first-seen stamp.
-	kept, retracted = jiraOwnershipSnapshot(fresh, open, now, false)
+	kept, retracted, plan := jiraOwnershipSnapshot(fresh, open, now, proven(false))
 	if len(kept) != 1 || !kept[0].ValidFrom.Equal(first) || len(retracted) != 0 {
 		t.Fatalf("a snapshot that is not complete: kept=%+v retracted=%+v, want nothing closed", kept, retracted)
 	}
+	if got := plan.SnapshotReasons(); !reflect.DeepEqual(got, []string{jiraSnapshotProjectSearch}) {
+		t.Fatalf("reasons = %v, want the term that did not hold", got)
+	}
 
-	kept, retracted = jiraOwnershipSnapshot(nil, open, now, true)
+	// An empty answer closes nothing, and says so.
+	kept, retracted, plan = jiraOwnershipSnapshot(nil, open, now, proven(true))
 	if len(kept) != 0 || len(retracted) != 0 {
 		t.Fatalf("an empty snapshot closed rows: kept=%+v retracted=%+v", kept, retracted)
 	}
+	if got := plan.SnapshotReasons(); !reflect.DeepEqual(got, []string{SnapshotEmptyAnswer}) {
+		t.Fatalf("reasons = %v, want %s", got, SnapshotEmptyAnswer)
+	}
+
+	// A fresh row of another source does not make this writer's kind not empty.
+	kept, retracted, _ = jiraOwnershipSnapshot([]jiraTeamCatalogOwnershipRow{row("10009", "native", now)}, open, now, proven(true))
+	if len(kept) != 1 || len(retracted) != 0 {
+		t.Fatalf("a row of another kind let the legacy rows close: retracted=%+v", retracted)
+	}
 
 	// A second run on the same data writes the same key again and closes nothing.
-	kept, retracted = jiraOwnershipSnapshot(fresh, []jiraTeamCatalogOwnershipRow{row("10001", "native", first)}, now.Add(time.Hour), true)
+	kept, retracted, _ = jiraOwnershipSnapshot(fresh, []jiraTeamCatalogOwnershipRow{row("10001", "jira_legacy", first)}, now.Add(time.Hour), proven(true))
 	if len(kept) != 1 || !kept[0].ValidFrom.Equal(first) || len(retracted) != 0 {
 		t.Fatalf("second run: kept=%+v retracted=%+v", kept, retracted)
 	}

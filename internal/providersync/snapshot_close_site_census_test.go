@@ -1,0 +1,157 @@
+package providersync
+
+import (
+	"reflect"
+	"sort"
+	"strings"
+	"testing"
+)
+
+// snapshotKindCensus is every fact kind a snapshot may close, by the name on
+// its log line and metric: the constructor that makes it, what an empty
+// answer of the kind means, and why. A new kind, or a change of a kind's
+// empty-answer policy, is a deliberate edit of this table.
+var snapshotKindCensus = map[string]struct {
+	constructor, empty, why string
+}{
+	"linear_project_ownership": {"internal/providersync.LinearProjectOwnershipKind", "EmptyClosesNothing",
+		"one projects walk for the workspace: an answer with no project ownership is an access change before it is a removal"},
+	"linear_team_key_ownership": {"internal/providersync.LinearTeamKeyOwnershipKind", "EmptyClosesNothing",
+		"one teams walk for the workspace: an answer with no team is an access change before it is a removal"},
+	"jira_legacy_ownership": {"internal/providersync.JiraLegacyOwnershipKind", "EmptyClosesNothing",
+		"one project search for the site: no live project is far more often an access change than a removal"},
+	"gitlab_group_project_grants": {"internal/providersync.GitLabGroupProjectGrantKind", "EmptyIsAnAnswer",
+		"one listing per group, each with its own proven end, in a scope no other integration lists: a group with no project is an answer"},
+	"github_team_repo_grants": {"internal/providersync.GitHubTeamRepoGrantKind", "EmptyIsAnAnswer",
+		"one listing per team, each with its own proven end, in a scope no other integration lists: a team with no repository is an answer"},
+	"atlassian_team_project_links": {"internal/providersync.AtlassianTeamLinkKind", "EmptyIsAnAnswer",
+		"one link read per team, each to its end: a team with no link is an answer; a team outside the search answer is in scope " +
+			"only through atlassian_team_catalog"},
+	"atlassian_team_memberships": {"internal/providersync.AtlassianTeamMembershipKind", "EmptyIsAnAnswer",
+		"one member read per team, each to its end: a team with no member is an answer; a team outside the search answer is in " +
+			"scope only through atlassian_team_catalog"},
+	"atlassian_team_catalog": {"internal/providersync.AtlassianTeamCatalogKind", "EmptyClosesNothing",
+		"one team search for the organization: a search that answers no team is an access change before every team was deleted"},
+}
+
+// snapshotCloseSites is every production function that turns the retractions
+// of a snapshot plan into rows to write: the only places a provider snapshot
+// closes a row. Each one names the rule it calls and the proof it takes.
+var snapshotCloseSites = map[string]string{
+	"internal/providersync.linearOwnershipSnapshot":     "KindSnapshot arguments from linearOwnershipKindSnapshots (two kinds, each with the terms of its own walk)",
+	"internal/providersync.jiraOwnershipSnapshot":       "KindSnapshot argument: JiraLegacyOwnershipKind with the project search and legacy links terms",
+	"internal/providersync.gitlabOwnershipSnapshot":     "KindSnapshot argument from ownershipCloseDecision.snapshot (closable teams only, the gate's terms)",
+	"internal/providersync.githubRepoOwnershipSnapshot": "KindSnapshot argument from ownershipCloseDecision.snapshot (closable teams only, the gate's terms)",
+	"internal/atlassianteams.planOwnership":             "KindSnapshot argument: AtlassianTeamLinkKind with the Rows.ProjectLinksComplete term",
+	"internal/atlassianteams.planMemberships":           "KindSnapshot argument: AtlassianTeamMembershipKind with the Rows.MembershipsComplete term",
+	"internal/atlassianteams.teamsInScope":              "makes its proof in place: AtlassianTeamCatalogKind with the Rows.TeamSearchComplete term",
+}
+
+// validToOutsideTheSnapshotRule is every production function that sets a
+// valid_to and is NOT a close site of the snapshot rule, with the proof it
+// closes on. A new one is a deliberate edit here.
+var validToOutsideTheSnapshotRule = map[string]string{
+	"internal/providersync.pagerDutyServiceMappingTombstone": "PagerDuty reference tombstone (the ported _reference_tombstone): the sink " +
+		"is given a CompleteRouteBatch only, and the route returns an error and no batch for a failed page or the page bound. An " +
+		"empty complete answer tombstones every active row: ported behaviour of an operational table, not under the team catalog rule",
+}
+
+// TestSnapshotKindCensus pins the fact kinds: every NewSnapshotKind call of
+// the production tree is in snapshot_kinds.go, has a literal name and a named
+// empty-answer policy, and is the kind the table says.
+func TestSnapshotKindCensus(t *testing.T) {
+	census := ownershipCensusOfTheTree(t)
+	if !reflect.DeepEqual(census.kindFiles, map[string]bool{"internal/providersync/snapshot_kinds.go": true}) {
+		t.Errorf("NewSnapshotKind is called in %v, want only internal/providersync/snapshot_kinds.go: a fact kind is made in one file",
+			census.kindFiles)
+	}
+	got := map[string][2]string{}
+	for constructor, kinds := range census.kinds {
+		for _, kind := range kinds {
+			if _, twice := got[kind[0]]; twice {
+				t.Errorf("the kind name %q is made twice", kind[0])
+			}
+			got[kind[0]] = [2]string{constructor, kind[1]}
+		}
+	}
+	want := map[string][2]string{}
+	for name, entry := range snapshotKindCensus {
+		want[name] = [2]string{entry.constructor, entry.empty}
+		if strings.TrimSpace(entry.why) == "" {
+			t.Errorf("the kind %q does not say why its empty answer means %s", name, entry.empty)
+		}
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("the fact kinds changed.\n got  %v\n want %v\nA kind and what its empty answer means are named in snapshotKindCensus.", got, want)
+	}
+}
+
+// TestEveryCloseSiteTakesTheTypedSnapshot fails when a function closes rows
+// from a snapshot without the typed per-kind proof: a new close site, a close
+// site that goes back to a bool, a close that does not come from the rule, or
+// a proof term made from a constant.
+func TestEveryCloseSiteTakesTheTypedSnapshot(t *testing.T) {
+	census := ownershipCensusOfTheTree(t)
+
+	closeSites := []string{}
+	for function := range census.closes {
+		closeSites = append(closeSites, function)
+	}
+	sort.Strings(closeSites)
+	want := make([]string, 0, len(snapshotCloseSites))
+	for function, proof := range snapshotCloseSites {
+		want = append(want, function)
+		if strings.TrimSpace(proof) == "" {
+			t.Errorf("%s does not name the proof it takes", function)
+		}
+	}
+	sort.Strings(want)
+	if !reflect.DeepEqual(closeSites, want) {
+		t.Fatalf("the functions that turn a plan's retractions into rows changed.\n got  %v\n want %v\n"+
+			"A close site is named in snapshotCloseSites with the proof it takes.", closeSites, want)
+	}
+	for _, function := range closeSites {
+		callsRule := false
+		for entry := range ownershipSnapshotEntryPoints {
+			callsRule = callsRule || census.calls[function][entry]
+		}
+		if !callsRule {
+			t.Errorf("%s closes rows of a plan it did not make: a close site calls the snapshot rule itself", function)
+		}
+		if !census.takesKind[function] && !census.calls[function]["ProveSnapshot"] {
+			t.Errorf("%s takes no KindSnapshot and makes no proof: a close site takes the typed per-kind snapshot", function)
+		}
+		if len(census.boolParams[function]) != 0 {
+			t.Errorf("%s has the bool parameters %v: completeness is a SnapshotProof inside a KindSnapshot, never a bool",
+				function, census.boolParams[function])
+		}
+	}
+	// Every caller of the rule is a close site: nobody plans a snapshot and
+	// drops the plan, or closes through another path.
+	for _, planner := range census.planners {
+		if !census.closes[planner] {
+			t.Errorf("%s calls the snapshot rule and is not a close site", planner)
+		}
+	}
+	// A row's valid_to is set from a plan's retraction, in a close site.
+	for function, proof := range validToOutsideTheSnapshotRule {
+		if !census.setsValidTo[function] || census.closes[function] || strings.TrimSpace(proof) == "" {
+			t.Errorf("%s is named in validToOutsideTheSnapshotRule and sets no valid_to, is a close site, or names no proof", function)
+		}
+	}
+	for function := range census.setsValidTo {
+		if _, named := validToOutsideTheSnapshotRule[function]; named {
+			continue
+		}
+		if !census.closes[function] {
+			t.Errorf("%s sets a valid_to and is not a close site of the snapshot rule: name it in snapshotCloseSites and plan the "+
+				"close through PlanSnapshot", function)
+		}
+	}
+	if len(census.setsValidTo) < 4 {
+		t.Fatalf("the scan found %d functions that set a valid_to: it measured nothing", len(census.setsValidTo))
+	}
+	if len(census.constantTerms) != 0 {
+		t.Errorf("a snapshot proof term is made from a constant or has no named reason: %v", census.constantTerms)
+	}
+}

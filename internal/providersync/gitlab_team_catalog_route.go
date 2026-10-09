@@ -752,11 +752,13 @@ func (collector GitLabTeamCatalogCollector) CollectTeamCatalog(
 				ref: ref, provider: gitlabTeamCatalogProvider,
 				listed: batch.Rows.OwnershipListedTeamIDs, unproven: batch.Rows.OwnershipUnprovenTeamIDs,
 			})
-			ownershipRows, closed, snapshotErr := collector.Sink.SnapshotOwnership(
-				ctx, ref.OrgID, batch.Rows.Ownership, decision.read, decision.closable, normalizedAt)
+			ownershipRows, plan, snapshotErr := collector.Sink.SnapshotOwnership(
+				ctx, ref.OrgID, batch.Rows.Ownership, decision.read, decision.snapshot(GitLabGroupProjectGrantKind), normalizedAt)
 			if snapshotErr != nil {
 				return result, snapshotErr
 			}
+			closed := len(plan.Retract)
+			ReportSnapshotPlan(ctx, gitlabTeamCatalogProvider, ref.OrgID, plan)
 			ownershipEffect, effectErr := effectBatchFromValues(gitlabTeamCatalogOwnershipDestination, EffectReadbackRequired, ownershipRows)
 			if effectErr != nil {
 				return result, effectErr

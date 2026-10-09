@@ -476,6 +476,22 @@
       },
       "open_regressions": []
     },
+    "finalize/work_item_measure_capability": {
+      "parity": {
+        "status": "unverified",
+        "ticket": "CHAOS-8895",
+        "evidence": "No Python family existed to compare with. internal/providersync/work_item_measure_capability_matrix_integration_test.go runs the family over rows of four providers produced by their real normalizers and stored by the real raw sinks."
+      },
+      "deployed": {
+        "revision": "unknown",
+        "read_at": "2026-10-06T02:34:43.774743783Z",
+        "source": "not read: the family is new in CHAOS-8895 and no deployed build holds it yet"
+      },
+      "proof": {
+        "ref": "none"
+      },
+      "open_regressions": []
+    },
     "remaining/capacity": {
       "parity": {
         "status": "verified",

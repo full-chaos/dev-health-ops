@@ -196,6 +196,18 @@ KNOWN_UNCOVERED = {
     # FinalizeHandler path so Go-only families (team_complexity first) leave
     # this set instead of accumulating in it forever.
     "team_complexity",
+    # CHAOS-8895, pinned with evidence, not by default; closing it is
+    # CHAOS-9001. The worker under the E2E gate runs the finalize families
+    # (ic_finalize and compounding_risk_team are asserted there), and
+    # `fixtures generate` loads work_items rows open on every day of the
+    # window, so this family should write rows there. Its table is keyed
+    # (org_id, provider, measure, window_end), with no repo_id, team or day.
+    # The org + computed_at policy of team_readback may serve it; nobody has
+    # run the gate with it, and adding the name without a run would claim
+    # coverage nobody observed. Closing it needs that check (one row per
+    # measure for the seeded provider, latest window_end = the computed day)
+    # proven by a hosted E2E run.
+    "work_item_measure_capability",
 }
 
 

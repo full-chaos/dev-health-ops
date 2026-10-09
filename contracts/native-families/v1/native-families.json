@@ -31,7 +31,8 @@
     "compounding_risk_team": "finalize",
     "ic_finalize": "finalize",
     "team_cognitive_load": "finalize",
-    "team_complexity": "finalize"
+    "team_complexity": "finalize",
+    "work_item_measure_capability": "finalize"
   },
   "remaining": {
     "capacity": "native",

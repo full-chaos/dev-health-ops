@@ -27,7 +27,7 @@ func TestFamilyRegistryIsCompleteAndRoutesCorePortFirst(t *testing.T) {
 	if err := json.Unmarshal(data, &registry); err != nil {
 		t.Fatal(err)
 	}
-	if registry.SchemaVersion != 1 || len(registry.Families) != 28 {
+	if registry.SchemaVersion != 1 || len(registry.Families) != 29 {
 		t.Fatalf("invalid family registry: %#v", registry)
 	}
 	// The port enum is closed: "pending" (still Python-only), "next_core"
@@ -72,7 +72,7 @@ func TestFamilyRegistryIsCompleteAndRoutesCorePortFirst(t *testing.T) {
 		seen[family.Name] = true
 	}
 	expected := []string{
-		"repo_user_commit", "team_wellbeing", "file_hotspots", "file_risk_hotspots", "work_item", "work_item_estimate", "work_item_attribution", "work_item_state", "work_item_issue_type", "work_item_investment", "review_edges", "cicd", "testops_pipeline", "testops_test", "testops_coverage", "deploy", "incident", "ai_governance", "ai_impact", "ai_workflow", "work_graph_edges", "compounding_risk", "testops_risk", "benchmarking", "ic_finalize", "team_cognitive_load",
+		"repo_user_commit", "team_wellbeing", "file_hotspots", "file_risk_hotspots", "work_item", "work_item_estimate", "work_item_attribution", "work_item_state", "work_item_issue_type", "work_item_investment", "review_edges", "cicd", "testops_pipeline", "testops_test", "testops_coverage", "deploy", "incident", "ai_governance", "ai_impact", "ai_workflow", "work_graph_edges", "compounding_risk", "testops_risk", "benchmarking", "ic_finalize", "team_cognitive_load", "work_item_measure_capability",
 	}
 	for _, core := range expected {
 		if !seen[core] {
@@ -218,12 +218,13 @@ func TestFamilyRegistryIsCompleteAndRoutesCorePortFirst(t *testing.T) {
 	// compounding_risk_team (CHAOS-5084) is finalize-scope too -- see the
 	// comment on the assertion above.
 	nonDefaultPhase := map[string]string{
-		"compounding_risk":      "post_bridge",
-		"benchmarking":          "finalize",
-		"ic_finalize":           "finalize",
-		"team_cognitive_load":   "finalize",
-		"compounding_risk_team": "finalize",
-		"team_complexity":       "finalize",
+		"compounding_risk":             "post_bridge",
+		"benchmarking":                 "finalize",
+		"ic_finalize":                  "finalize",
+		"team_cognitive_load":          "finalize",
+		"compounding_risk_team":        "finalize",
+		"team_complexity":              "finalize",
+		"work_item_measure_capability": "finalize",
 	}
 	for name, phase := range byPhase {
 		if phase == "" {

@@ -106,8 +106,12 @@ func readClickHouseMigrations(t *testing.T) []clickHouseMigration {
 		if err != nil {
 			t.Fatalf("read migration %s: %v", name, err)
 		}
+		text := string(content)
+		if strings.HasSuffix(name, ".sql") {
+			text = sqlWithoutLineComments(text)
+		}
 		migrations = append(migrations, clickHouseMigration{
-			ordinal: ordinal, name: name, content: string(content),
+			ordinal: ordinal, name: name, content: text,
 		})
 	}
 	if len(migrations) == 0 {
@@ -292,4 +296,17 @@ func equalStringSlices(left, right []string) bool {
 		}
 	}
 	return true
+}
+
+// sqlLineComment is a SQL comment from "--" to the end of its line.
+var sqlLineComment = regexp.MustCompile(`--[^\n]*`)
+
+// sqlWithoutLineComments drops the "--" comments of a .sql migration. The DDL
+// scans below match the table name anywhere before an ORDER BY or ENGINE
+// clause, so a migration whose comment names the table, ahead of its own
+// CREATE TABLE of another table, would otherwise be read as declaring that
+// table's sorting key and version column. No migration of the chain puts
+// "--" inside a string literal.
+func sqlWithoutLineComments(content string) string {
+	return sqlLineComment.ReplaceAllString(content, "")
 }

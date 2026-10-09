@@ -101,13 +101,15 @@ VALUES ($1, 'venue-chdel-super@example.com', true, true, true, 0, now(), now())`
 		}
 	}
 
-	// The two shadow tables (CHAOS-8868, migrations 109 and 110) hold org_id and
-	// the worker writes them, so an organization's rows in them must go with the
+	// The two shadow tables (CHAOS-8868, migrations 109 and 110) and the
+	// work-item measure capability (CHAOS-8895, migration 111) hold org_id and
+	// a worker writes them, so an organization's rows in them must go with the
 	// organization. One row each for the target and the control organization:
 	// without a seeded row the discovered-table loop below is vacuous for them.
 	shadowTables := map[string]string{
-		"work_unit_investment_shadow": `INSERT INTO work_unit_investment_shadow (org_id, work_unit_id, categorization_input_hash, shadow_config, computed_at) VALUES (?, 'wu-1', 'hash-1', 'config-1', now64(3))`,
-		"llm_categorization_attempts": `INSERT INTO llm_categorization_attempts (org_id, run_id, work_unit_id, role, attempt, computed_at) VALUES (?, 'run-1', 'wu-1', 'shadow', 1, now64(3))`,
+		"work_unit_investment_shadow":  `INSERT INTO work_unit_investment_shadow (org_id, work_unit_id, categorization_input_hash, shadow_config, computed_at) VALUES (?, 'wu-1', 'hash-1', 'config-1', now64(3))`,
+		"llm_categorization_attempts":  `INSERT INTO llm_categorization_attempts (org_id, run_id, work_unit_id, role, attempt, computed_at) VALUES (?, 'run-1', 'wu-1', 'shadow', 1, now64(3))`,
+		"work_item_measure_capability": `INSERT INTO work_item_measure_capability (org_id, provider, measure, tracked, window_end, computed_at) VALUES (?, 'jira', 'story_points_completed', 1, today(), now64(3))`,
 	}
 	for _, org := range []uuid.UUID{targetOrgID, controlOrgID} {
 		for table, insert := range shadowTables {

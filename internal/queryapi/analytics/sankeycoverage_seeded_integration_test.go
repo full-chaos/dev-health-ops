@@ -1166,11 +1166,13 @@ func TestResolveSankeyCoverage_SeededRealClickHouse_WorkCategorySelectsPositiveW
 }
 
 // TestResolveSankeyCoverage_SeededRealClickHouse_EmptyWindowIsNilNotZero
-// pins the degradation boundary: a window with no rows returns zero rows,
-// which Python leaves as coverage=None (`if c_rows:`) rather than 0/0.
-// Asserting this is what keeps "no data" distinguishable from "0% covered"
-// -- exactly the confusion the Allocation tiles suffered from while this
-// field was hardcoded nil.
+// pins the degradation boundary (CHAOS-6129): a window with nothing measurable
+// has NO coverage, not a coverage of {0, 0}. ClickHouse answers an aggregate
+// over zero input rows with one row of zeros, so the zero-rows branch of
+// resolveSankeyCoverage never sees an empty window; the zero denominators
+// do. A null coverage keeps "no data" distinguishable from "0 % covered", the
+// confusion the Allocation tiles suffered from. The assertion also runs
+// through Resolve, the batch handler a GraphQL request reaches.
 func TestResolveSankeyCoverage_SeededRealClickHouse_EmptyWindowIsNilNotZero(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
 	defer cancel()
@@ -1220,11 +1222,32 @@ func TestResolveSankeyCoverage_SeededRealClickHouse_EmptyWindowIsNilNotZero(t *t
 	// An aggregate over zero rows still returns ONE row in ClickHouse
 	// (sum() of nothing is 0), so this asserts the total>0 guard, not an
 	// empty result set: coverage is a real object whose shares are 0.
-	got := resolveSankeyCoverage(ctx, client, "org-with-no-rows", req, 60, true, nil)
-	if got == nil {
-		t.Fatal("expected a SankeyCoverage object (ClickHouse returns one aggregate row even over zero input rows), got nil")
+	if got := resolveSankeyCoverage(ctx, client, "org-with-no-rows", req, 60, true, nil); got != nil {
+		t.Fatalf("empty window: coverage = %+v, want nil (nothing measurable is not 0%% covered)", got)
 	}
-	if got.TeamCoverage != 0 || got.RepoCoverage != 0 {
-		t.Errorf("empty window: TeamCoverage=%v RepoCoverage=%v, want 0/0 (the total>0 guard, analytics.py:878-881)", got.TeamCoverage, got.RepoCoverage)
+
+	// Through the batch handler: the sankey of an org with no rows answers with
+	// a null coverage, and a null coverage is the only thing that says so.
+	resolved, err := Resolve(ctx, client, "org-with-no-rows", model.AnalyticsRequestInput{
+		Sankey: &model.SankeyRequestInput{
+			Path:    []model.DimensionInput{model.DimensionInputTeam, model.DimensionInputTheme},
+			Measure: model.MeasureInputCount,
+			DateRange: &model.DateRangeInput{
+				StartDate: mustGraphQLDate("2026-01-01"),
+				EndDate:   mustGraphQLDate("2026-01-08"),
+			},
+			MaxNodes: 16,
+			MaxEdges: 100,
+		},
+		UseInvestment: boolPtr(true),
+	})
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if resolved == nil || resolved.Sankey == nil {
+		t.Fatalf("Resolve returned no sankey: %+v", resolved)
+	}
+	if resolved.Sankey.Coverage != nil {
+		t.Fatalf("Resolve: empty window coverage = %+v, want nil", resolved.Sankey.Coverage)
 	}
 }

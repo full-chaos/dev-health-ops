@@ -102,7 +102,9 @@ var namesOnly = map[string]struct{ reader, why string }{
 	"internal/queryapi/quadrant/quadrant.go":                 {"quadrantMetricQuery", "metric specs"},
 	"internal/queryapi/datahealth/coverage.go":               {"MetricLineage", "the lineage registry"},
 	"internal/api/session/activity.go":                       {"orgActivity", "the four activity tables"},
-	"internal/jobs/report/dedup.go":                          {"dedupFromSource", "the dedup registries"},
+	"internal/jobs/report/dedup.go":                          {"dedupFromSource", "the sample-count registry of the charts"},
+	"internal/jobs/report/tablereads.go":                     {"dedupFromSource", "the key and version of each table the charts read"},
+	"internal/jobs/report/query.go":                          {"dedupFromSource", "the map from a registry table name to its schema table; every chart source comes from dedupFromSource (sourceFrom)"},
 	"internal/jobs/metrics/daily/benchmarking/clickhouse.go": {"FetchMetricSeriesByScope", "metric definitions"},
 }
 

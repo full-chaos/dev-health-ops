@@ -103,12 +103,23 @@ func TestTwoLinearIntegrationsOfOneOrganization(t *testing.T) {
 			if got := open(); !reflect.DeepEqual(got, setup) {
 				t.Fatalf("setup: after the run of A open = %v, want %v", got, setup)
 			}
-			counted := snapshotAbandonedCounts(t)
+			counted, linearCounted := snapshotAbandonedCounts(t), linearIncompleteCounts(t)
 			result := run(c.second, c.census, first.Add(time.Hour), c.secondAnswer)
-			wantCounted := map[string]int64{}
+			wantCounted, wantLinear := map[string]int64{}, map[string]int64{}
 			if c.wantIncomplete {
 				wantCounted["linear/linear_project_ownership/"+OwnershipCloseSkippedScopeShared] = 1
 				wantCounted["linear/linear_team_key_ownership/"+OwnershipCloseSkippedScopeShared] = 1
+				// The Linear counter names the reason once for the run.
+				wantLinear[OwnershipCloseSkippedScopeShared] = 1
+			}
+			linearMoved := map[string]int64{}
+			for reason, n := range linearIncompleteCounts(t) {
+				if d := n - linearCounted[reason]; d != 0 {
+					linearMoved[reason] = d
+				}
+			}
+			if !reflect.DeepEqual(linearMoved, wantLinear) {
+				t.Errorf("%s moved %v, want %v", linearOwnershipSnapshotIncompleteName, linearMoved, wantLinear)
 			}
 			if got := snapshotAbandonedMoved(t, counted); !reflect.DeepEqual(got, wantCounted) {
 				t.Errorf("%s moved %v, want %v", snapshotCloseAbandonedName, got, wantCounted)

@@ -19,11 +19,12 @@ var labelLookups = map[string]string{
 	"home/queries_signals.go":    "label lookup for the scope ids of the risk rows",
 	"analytics/catalog.go":       "lists teams itself with the same rule inline (is_active = 1 on teams FINAL); asserted below",
 	"activeteams/activeteams.go": "defines the rule",
-	// Lists every team (inactive twins included) to build a repo-pattern
-	// resolver. Its SQL text is pinned by a golden captured from the Python
-	// reference, so adding the rule is a deliberate divergence from that
-	// oracle and waits for an owner decision. Visible here on purpose.
-	"cognitiveload/cognitiveload.go": "PENDING DECISION: SQL text pinned by the frozen Python golden",
+}
+
+// ruleAppliedInGo are readers whose SQL text is pinned by a golden captured
+// from the Python reference, so the rule is applied in Go after the read.
+var ruleAppliedInGo = map[string]string{
+	"cognitiveload/cognitiveload.go": "rule applied in Go; SQL pinned by python_queries golden",
 }
 
 var (
@@ -61,6 +62,9 @@ func TestEveryTeamListReaderAppliesTheActiveTeamRule(t *testing.T) {
 				t.Errorf("%s lists distinct team ids but is declared a label lookup", rel)
 			}
 			return nil
+		}
+		if _, ok := ruleAppliedInGo[rel]; ok && !strings.Contains(src, "activeteams.IDsSubquery") {
+			t.Errorf("%s must apply the shared rule in Go (%s)", rel, ruleAppliedInGo[rel])
 		}
 		if !strings.Contains(src, "activeteams.") {
 			t.Errorf("%s reads teams or lists team ids without the shared activeteams rule", rel)

@@ -61,6 +61,7 @@ import (
 
 	"github.com/full-chaos/dev-health-go/clickhouse"
 
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/activeteams"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph/model"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graphqldate"
 )
@@ -737,7 +738,46 @@ func fetchAllTeamsForPatternFallback(ctx context.Context, client QueryClient, or
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("rows: %w", err)
 	}
-	return result, nil
+	if len(result) == 0 {
+		return result, nil
+	}
+	// The SQL above is pinned to the Python reference and reads every team row,
+	// so the retired twin of a team (same repo_patterns) is in `result`. A
+	// retired id never acts as a team: keep only the ids of the shared
+	// active-team set, read through the shared rule.
+	active, err := fetchActiveTeamIDs(ctx, client, orgID)
+	if err != nil {
+		return nil, err
+	}
+	kept := result[:0]
+	for _, t := range result {
+		if _, ok := active[t.id]; ok {
+			kept = append(kept, t)
+		}
+	}
+	return kept, nil
+}
+
+// fetchActiveTeamIDs reads the ids of the active teams of the org through
+// the shared activeteams rule.
+func fetchActiveTeamIDs(ctx context.Context, client QueryClient, orgID string) (map[string]struct{}, error) {
+	rows, err := client.Query(ctx, activeteams.IDsSubquery, []clickhouse.Binding{{Name: "org_id", Value: orgID}})
+	if err != nil {
+		return nil, fmt.Errorf("active teams query: %w", err)
+	}
+	defer rows.Close()
+	ids := map[string]struct{}{}
+	for rows.Next() {
+		var id string
+		if scanErr := rows.Scan(&id); scanErr != nil {
+			return nil, fmt.Errorf("active teams scan: %w", scanErr)
+		}
+		ids[id] = struct{}{}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("active teams rows: %w", err)
+	}
+	return ids, nil
 }
 
 // repoPatternResolver ports RepoPatternTeamResolver/build_repo_pattern_resolver

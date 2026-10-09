@@ -11,6 +11,7 @@ import (
 
 	"github.com/full-chaos/dev-health-go/clickhouse"
 
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/activeteams"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graphqldate"
 )
 
@@ -138,6 +139,16 @@ type goldenClient struct {
 }
 
 func (c *goldenClient) Query(_ context.Context, statement string, bindings []clickhouse.Binding) (clickhouse.RowScanner, error) {
+	if statement == activeteams.IDsSubquery {
+		// The shared active-team read is Go-only (the Python reference has no
+		// such read) and is kept out of the pinned query sequence. The golden
+		// inputs hold no inactive team, so every scripted team is active.
+		var out [][]any
+		for _, r := range c.src["teams"] {
+			out = append(out, []any{r["id"]})
+		}
+		return &fakeRowScanner{rows: out}, nil
+	}
 	kind := queryKind(statement)
 	c.kinds = append(c.kinds, kind)
 	c.statements = append(c.statements, statement)

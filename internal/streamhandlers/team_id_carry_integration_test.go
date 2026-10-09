@@ -176,3 +176,37 @@ func TestAPushAfterAnAdminTeamBesideAKeyedCustomTeamKeepsTheAdminsMember(t *test
 		}
 	}
 }
+
+// A push stamped at the same version as the kept custom:eng, with a bare
+// admin team beside it, writes its rename: the carry's fold takes the
+// admin's member at the stored version, and the push, inserted after it at an
+// equal or newer version, wins.
+func TestAPushAtTheKeptRowsVersionAfterAFoldWritesItsRename(t *testing.T) {
+	for _, c := range []struct{ name, updatedAt string }{
+		{"push equal to stored", "2026-10-01T00:00:00Z"},
+		{"push newer than stored", "2026-10-01T00:00:01Z"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			ctx, conn := newProjectMembershipConn(t)
+			if err := conn.Exec(ctx, `INSERT INTO teams (id, team_uuid, name, members, manual_members, project_keys, repo_patterns, is_active, updated_at, org_id, provider, native_team_key) VALUES ('custom:eng', generateUUIDv4(), 'Pushed Eng', [], [], [], [], 1, '2026-10-01 00:00:00', ?, '', 'eng')`, projectMembershipTestOrg); err != nil {
+				t.Fatal(err)
+			}
+			if err := conn.Exec(ctx, `INSERT INTO teams (id, team_uuid, name, members, manual_members, project_keys, repo_patterns, is_active, updated_at, org_id, provider) VALUES ('eng', generateUUIDv4(), 'Admin Eng', [], ['admin@example.com'], [], [], 1, '2026-10-02 00:00:00', ?, '')`, projectMembershipTestOrg); err != nil {
+				t.Fatal(err)
+			}
+			pointer := projectMembershipPointer()
+			pointer.SourceSystem, pointer.SourceInstance = "custom", "acme"
+			sink, err := NewClickHouseExternalBatchSink(conn)
+			if err != nil {
+				t.Fatal(err)
+			}
+			records := []externalSinkRecord{{Index: 0, Kind: "team.v1", ExternalID: "t1", Payload: map[string]any{"id": "eng", "name": "Renamed", "updatedAt": c.updatedAt}}}
+			if _, err := sink.Write(ctx, externalSinkBatch{Pointer: pointer, SourceID: uuid.New(), Records: records}); err != nil {
+				t.Fatal(err)
+			}
+			if got := teamRowSummary(t, conn, ctx, "custom:eng"); got != "|Renamed|admin@example.com|1" {
+				t.Errorf("custom:eng = %q, want the push's name with the admin's member", got)
+			}
+		})
+	}
+}

@@ -1258,8 +1258,8 @@ write, and on a store write that does not refuse a bare id before its batch.
     row, not a Jira team, and `RetireJiraProjectAsTeamRows` owns it.
   - A new id that already has a row (`teams_already_keyed`): that row is not written again, but when the moved
     row holds manual members the kept row does not, a new version of the kept row takes them
-    (`manual_members_folded`), stamped one microsecond past the stored version so a later write of its own
-    writer still wins. Manual members are an admin's statement that no other writer restores; the kept row and
+    (`manual_members_folded`), written at the stored version (ReplacingMergeTree keeps the last inserted row
+    of an equal version), so a later write of its own writer stamped at or after that version still wins. Manual members are an admin's statement that no other writer restores; the kept row and
     the moved team are one team.
   - An admin edit of a provider team (the same id, provider `""`) moves with that team; the newer of the two
     rows gives the new row's values, and the team's origin (provider, native key, parent, source) stays the

@@ -593,10 +593,12 @@ func (run *teamIDCarryRun) foldManualMembers(rows *[]chRow, ids []string, member
 			continue
 		}
 		run.outcome.ManualMembersFolded++
-		// One tick past the stored version, not the carry's time: the row
-		// keeps its writer's clock, so a later write of that writer (a push
-		// stamped by its source) still wins.
-		*rows = append(*rows, row.with("manual_members", merged).with("updated_at", row.time("updated_at").Add(time.Microsecond)))
+		// At the stored version, not past it and not at the carry's time: the
+		// row keeps its writer's clock, the newer insert wins an equal version
+		// (ReplacingMergeTree keeps the last inserted row), and a later write of
+		// that writer stamped at or after that version (a push stamped by its
+		// source) still wins.
+		*rows = append(*rows, row.with("manual_members", merged))
 	}
 	return nil
 }

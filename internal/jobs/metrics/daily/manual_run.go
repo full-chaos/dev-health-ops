@@ -220,6 +220,10 @@ SELECT EXISTS (SELECT 1 FROM public.daily_metrics_runs WHERE id = $1::uuid)`,
 		return ManualDailyRunOutcome{}, ErrUnavailable
 	}
 
+	if alreadyStarted {
+		// A replay of the same tag starts nothing: it overrides nothing.
+		overriddenBy = ""
+	}
 	run, err := store.StartRunTx(ctx, tx, StartRunRequest{
 		OrganizationID: organizationID,
 		TargetDay:      targetDay,

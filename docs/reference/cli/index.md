@@ -842,9 +842,15 @@ unchanged.
 
 - The tag is 1 to 32 characters of `A-Z a-z 0-9 . _ -`. Anything else, and an empty
   `--rerun-tag ""`, is `invalid_request` (exit 2) before the backend is opened.
-- Every other guard stays: the 31-day window, `--org-stdin`, the audited write, and
-  the coverage check of a call without `--repo-id` (a day that the nightly schedule or
-  a post-sync run covered still answers `already_covered`; the tag does not lift it).
+- Every other guard stays: the 31-day window, `--org-stdin` and the audited write. The
+  coverage check of a call without `--repo-id`: a call WITHOUT `--rerun-tag` on a day that
+  the nightly schedule or a post-sync run covered still answers `already_covered`; a call
+  WITH `--rerun-tag` is admitted on such a day (the tag is the operator's statement
+  "compute this day again"). The admission writes one Warn line ("rerun admitted on a
+  covered day": tag, day, run id, id of the newest covering run it overrides) and puts
+  `covered_day_overridden_by` on that day of the result; a replay of the same tag starts
+  nothing and says neither. Two different tags on one day are two runs: run one call at a
+  time, because the plain MergeTree tables named below count every run of a day.
 - A rerun writes the same keys as the first run, and a later `computed_at` replaces an
   earlier one in the ReplacingMergeTree daily tables, so readers that take the newest row
   count the day once. Raw reads of the plain MergeTree tables (`investment_metrics_daily`,

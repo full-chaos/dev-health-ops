@@ -380,7 +380,7 @@ SELECT EXISTS (SELECT 1 FROM public.daily_metrics_runs WHERE id = $1::uuid)`, ru
 	return exists, nil
 }
 
-// HasSucceededRunForDay reports whether a SCHEDULED-FANOUT or POST-SYNC
+// coveringRunForDay reports which run covers (the newest one, by id) when a SCHEDULED-FANOUT or POST-SYNC
 // daily-metrics run (never a manual one -- see below) under a DIFFERENT
 // generation than excludeGeneration has already reached a successful
 // terminal state for (organizationID, day): 'succeeded' (materialized
@@ -416,15 +416,10 @@ SELECT EXISTS (SELECT 1 FROM public.daily_metrics_runs WHERE id = $1::uuid)`, ru
 // caller's generation always carries the `manual-daily:` prefix), so this
 // is defensive rather than load-bearing after the restriction above --
 // kept for clarity and in case a future caller's generation space widens.
-func (store *PostgresStore) HasSucceededRunForDay(
-	ctx context.Context, tx pgx.Tx, organizationID, day, excludeGeneration string,
-) (bool, error) {
-	runID, err := store.coveringRunForDay(ctx, tx, organizationID, day, excludeGeneration)
-	return runID != "", err
-}
-
-// coveringRunForDay is HasSucceededRunForDay that names the run: the id of the
-// newest covering run, or "" when none covers the day.
+//
+// It returns the id of the NEWEST covering run (created_at, then id), or ""
+// when none covers the day: a tagged call names that run as the one it
+// overrides.
 func (store *PostgresStore) coveringRunForDay(
 	ctx context.Context, tx pgx.Tx, organizationID, day, excludeGeneration string,
 ) (string, error) {

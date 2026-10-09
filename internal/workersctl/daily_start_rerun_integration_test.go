@@ -101,7 +101,7 @@ func TestDailyStartDispatchWithARerunTagOnRealPostgres(t *testing.T) {
 		t.Fatalf("a tagged no-repo call on a schedule-covered day must start and name the run it overrides: %d %s", c, out)
 	}
 	c, out, _ = call("schedcovered-norepo-again", "--day", "2026-06-01", "--rerun-tag", "fix-9")
-	if c != 0 || !strings.Contains(out, `"started":false`) {
-		t.Fatalf("the same tag again must start nothing: %d %s", c, out)
+	if c != 0 || !strings.Contains(out, `"started":false`) || strings.Contains(out, "covered_day_overridden_by") {
+		t.Fatalf("the same tag again must start nothing and override nothing: %d %s", c, out)
 	}
 }

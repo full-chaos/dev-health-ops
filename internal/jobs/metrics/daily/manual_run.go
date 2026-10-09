@@ -21,6 +21,12 @@ type ManualDailyRunOutcome struct {
 	// idempotent replay of an earlier identical request). It is not part of
 	// the command's output: a caller that wants it reads it from here.
 	AlreadyStarted bool `json:"-"`
+	// CoveredDayOverriddenBy is the run id of the scheduled-fanout or post-sync
+	// run that already covered the day when a call with a rerun tag was
+	// admitted (StartManualDailyRerun). Empty when the day was not covered or
+	// the call carried no tag. Like AlreadyStarted it is not part of the plain
+	// command output.
+	CoveredDayOverriddenBy string `json:"-"`
 }
 
 // MaxRerunTagLength bounds a rerun tag. The tag is hashed into the
@@ -127,6 +133,40 @@ func (store *PostgresStore) StartManualDailyRun(
 	repositoryIDs []RepositoryID,
 	publisher RunPublisher,
 ) (ManualDailyRunOutcome, error) {
+	return store.startManualDailyRun(ctx, organizationID, day, generation, repositoryIDs, publisher, false)
+}
+
+// StartManualDailyRerun is StartManualDailyRun for a call that carries a
+// rerun tag (generation = ManualDailyRerunGeneration with that tag). The tag
+// is the operator's statement "compute this day again": an all-repository call
+// is admitted on a day that a scheduled-fanout or post-sync run already
+// covers, and the outcome names the run it overrode
+// (ManualDailyRunOutcome.CoveredDayOverriddenBy) so the caller can say so
+// loudly. Nothing else changes: the tag stays in the generation, so the same
+// tag twice for one (org, day, repository set) is still one run, and a call
+// without a tag keeps the refusal. The Python daily job has no such check at
+// all (it recomputes any day it is asked for); the refusal is a Go-side guard
+// against an accidental duplicate, and this is its one narrow exception.
+func (store *PostgresStore) StartManualDailyRerun(
+	ctx context.Context,
+	organizationID, day, generation string,
+	repositoryIDs []RepositoryID,
+	publisher RunPublisher,
+	rerunTag string,
+) (ManualDailyRunOutcome, error) {
+	if !ValidRerunTag(rerunTag) {
+		return ManualDailyRunOutcome{}, ErrInvalidState
+	}
+	return store.startManualDailyRun(ctx, organizationID, day, generation, repositoryIDs, publisher, true)
+}
+
+func (store *PostgresStore) startManualDailyRun(
+	ctx context.Context,
+	organizationID, day, generation string,
+	repositoryIDs []RepositoryID,
+	publisher RunPublisher,
+	admitCoveredDay bool,
+) (ManualDailyRunOutcome, error) {
 	if !store.valid() {
 		return ManualDailyRunOutcome{}, ErrUnavailable
 	}
@@ -142,6 +182,7 @@ func (store *PostgresStore) StartManualDailyRun(
 	if err != nil {
 		return ManualDailyRunOutcome{}, ErrUnavailable
 	}
+	overriddenBy := ""
 	committed := false
 	defer func() {
 		if committed {
@@ -159,12 +200,15 @@ func (store *PostgresStore) StartManualDailyRun(
 		); err != nil {
 			return ManualDailyRunOutcome{}, ErrUnavailable
 		}
-		covered, err := store.HasSucceededRunForDay(ctx, tx, organizationID, day, generation)
+		coveringRunID, err := store.coveringRunForDay(ctx, tx, organizationID, day, generation)
 		if err != nil {
 			return ManualDailyRunOutcome{}, err
 		}
-		if covered {
-			return ManualDailyRunOutcome{}, ErrDayAlreadyCovered
+		if coveringRunID != "" {
+			if !admitCoveredDay {
+				return ManualDailyRunOutcome{}, ErrDayAlreadyCovered
+			}
+			overriddenBy = coveringRunID
 		}
 	}
 
@@ -176,6 +220,10 @@ SELECT EXISTS (SELECT 1 FROM public.daily_metrics_runs WHERE id = $1::uuid)`,
 		return ManualDailyRunOutcome{}, ErrUnavailable
 	}
 
+	if alreadyStarted {
+		// A replay of the same tag starts nothing: it overrides nothing.
+		overriddenBy = ""
+	}
 	run, err := store.StartRunTx(ctx, tx, StartRunRequest{
 		OrganizationID: organizationID,
 		TargetDay:      targetDay,
@@ -189,5 +237,8 @@ SELECT EXISTS (SELECT 1 FROM public.daily_metrics_runs WHERE id = $1::uuid)`,
 		return ManualDailyRunOutcome{}, ErrUnavailable
 	}
 	committed = true
-	return ManualDailyRunOutcome{Day: day, RunID: run.ID, Generation: generation, AlreadyStarted: alreadyStarted}, nil
+	return ManualDailyRunOutcome{
+		Day: day, RunID: run.ID, Generation: generation, AlreadyStarted: alreadyStarted,
+		CoveredDayOverriddenBy: overriddenBy,
+	}, nil
 }

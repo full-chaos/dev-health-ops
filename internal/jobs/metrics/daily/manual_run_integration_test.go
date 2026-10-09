@@ -122,7 +122,7 @@ func TestStartManualDailyRunWithDeferredDiscoveryMaterializesThroughTheSharedPat
 // the same org/day is refused with ErrDayAlreadyCovered rather than
 // dispatching a duplicate.
 //
-// Round 3 (codex adversarial review, P1) narrowed HasSucceededRunForDay to
+// Round 3 (codex adversarial review, P1) narrowed coveringRunForDay to
 // ONLY scheduled-fanout/post-sync generations as valid coverage sources --
 // an earlier manual trigger (repository-scoped or not) can no longer serve
 // as the "already covered" source; see
@@ -190,7 +190,7 @@ VALUES ($1::uuid,$2::uuid,$3::date,'fixed-schedule:daily_metrics_fanout:2026-08-
 }
 
 // TestStartManualDailyRunStillAllowsAnIdempotentRetryOfItsOwnSuccess proves
-// HasSucceededRunForDay's excludeGeneration parameter does its job: a
+// coveringRunForDay's excludeGeneration parameter does its job: a
 // retried CLI invocation for the SAME logical manual request (deterministic
 // generation, ManualDailyRunGeneration) must still reach StartRunTx's own
 // ON CONFLICT DO NOTHING idempotency path -- not be refused as
@@ -264,7 +264,7 @@ WHERE id = $2::uuid`, now, outcome.RunID); err != nil {
 
 // TestStartManualDailyRunDoesNotFalselyBlockAnAllRepositoryRequestAfterARepositoryScopedOne
 // is the red-on-baseline proof for codex adversarial review round 3, P1
-// (CHAOS-5055): round 2's own HasSucceededRunForDay check queried only
+// (CHAOS-5055): round 2's own coveringRunForDay check queried only
 // (org_id, target_day, status) with no awareness of which repositories a
 // prior run actually covered. A successful REPOSITORY-SCOPED manual run
 // (e.g. `--repo-id R`) satisfied that EXISTS check for the whole org+day,
@@ -272,7 +272,7 @@ WHERE id = $2::uuid`, now, outcome.RunID); err != nil {
 // was refused as "already covered" -- even though every OTHER repository
 // in the organization was never computed. That is a SILENT
 // UNDER-COMPUTATION, worse than the duplicate-compute the check exists to
-// prevent. Round 3 restricted HasSucceededRunForDay to scheduled-fanout/
+// prevent. Round 3 restricted coveringRunForDay to scheduled-fanout/
 // post-sync generations only (see its own doc comment); this test proves a
 // prior repository-scoped manual success no longer blocks a later
 // all-repository manual request for the same org/day.

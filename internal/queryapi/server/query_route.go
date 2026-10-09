@@ -1948,6 +1948,53 @@ const registeredTestopsRiskDocument = `query TestOpsRisk($orgId: String!, $input
     }
     quadrantData {
       id
+      name
+      pipelineSuccessRate
+      testPassRate
+      __typename
+    }
+    confidenceSpark {
+      ts
+      value
+      __typename
+    }
+    confidenceDelta
+    dragSpark {
+      ts
+      value
+      __typename
+    }
+    dragDelta
+    stabilitySpark {
+      ts
+      value
+      __typename
+    }
+    stabilityDelta
+    __typename
+  }
+}`
+
+// registeredTestopsRiskV1Document is the text testopsRisk accepted BEFORE it selected the CHAOS-8954 name fields. It stays a
+// legacy text (see legacyDigestsByOperation), so a web build still sending it keeps working while the new web rolls
+// out; the operation's ONE current document is registeredTestopsRiskDocument above.
+const registeredTestopsRiskV1Document = `query TestOpsRisk($orgId: String!, $input: TestOpsRiskInput!) {
+  testopsRisk(orgId: $orgId, input: $input) {
+    releaseConfidence
+    qualityDragHours
+    pipelineStability
+    timeseries {
+      date
+      riskScore
+      __typename
+    }
+    qualityDragBreakdown {
+      category
+      hours
+      __typename
+    }
+    quadrantData {
+      id
       pipelineSuccessRate
       testPassRate
       __typename
@@ -2383,6 +2430,36 @@ const registeredImproveOpportunitiesDocument = `query ImproveOpportunities($scop
       threshold
       unit
       thresholdDirection
+      entityDisplayName
+      __typename
+    }
+    __typename
+  }
+}`
+
+// registeredImproveOpportunitiesV2Document is the text improveOpportunities accepted BEFORE it selected the CHAOS-8954 name fields. It stays a
+// legacy text (see legacyDigestsByOperation), so a web build still sending it keeps working while the new web rolls
+// out; the operation's ONE current document is registeredImproveOpportunitiesDocument above.
+const registeredImproveOpportunitiesV2Document = `query ImproveOpportunities($scope: AIScopeInput, $limit: Int! = 10, $windowDays: Int! = 30) {
+  improveOpportunities(scope: $scope, limit: $limit, windowDays: $windowDays) {
+    orgId
+    detectorReady
+    totalCount
+    opportunities {
+      opportunityId
+      kind
+      entityType
+      entityId
+      title
+      rationale
+      score
+      severity
+      evidenceRefs
+      recommendedAction
+      value
+      threshold
+      unit
+      thresholdDirection
       __typename
     }
     __typename
@@ -2420,6 +2497,39 @@ const registeredImproveOpportunitiesV1Document = `query ImproveOpportunities($sc
 // `aiGovernanceSummary` operation, the exact wire-form text a real web client sends
 // (testdata/wire_capture/aigovernancesummary_captured.graphql).
 const registeredAiGovernanceSummaryDocument = `query AIGovernanceSummary($orgId: String!, $dateRange: AIDateRangeInput!, $scope: AIScopeInput, $violationLimit: Int! = 50) {
+  aiGovernanceSummary(
+    orgId: $orgId
+    dateRange: $dateRange
+    scope: $scope
+    violationLimit: $violationLimit
+  ) {
+    orgId
+    startDate
+    endDate
+    dataAvailable
+    recentViolations {
+      ruleId
+      severity
+      subjectType
+      subjectId
+      teamId
+      repoId
+      observedAt
+      evidence
+      repoName
+      teamName
+      subjectTitle
+      ruleName
+      __typename
+    }
+    __typename
+  }
+}`
+
+// registeredAiGovernanceSummaryV1Document is the text aiGovernanceSummary accepted BEFORE it selected the CHAOS-8954 name fields. It stays a
+// legacy text (see legacyDigestsByOperation), so a web build still sending it keeps working while the new web rolls
+// out; the operation's ONE current document is registeredAiGovernanceSummaryDocument above.
+const registeredAiGovernanceSummaryV1Document = `query AIGovernanceSummary($orgId: String!, $dateRange: AIDateRangeInput!, $scope: AIScopeInput, $violationLimit: Int! = 50) {
   aiGovernanceSummary(
     orgId: $orgId
     dateRange: $dateRange
@@ -2681,6 +2791,50 @@ const registeredAiAttributedPrsV1Document = `query AIAttributedPrs($orgId: Strin
 // `aiAttributionOverview` operation, the exact wire-form text a real web client sends
 // (testdata/wire_capture/aiattributionoverview_captured.graphql).
 const registeredAiAttributionOverviewDocument = `query AIAttributionOverview($orgId: String!, $dateRange: AIDateRangeInput!, $scope: AIAttributionScopeInput, $limit: Int! = 50, $offset: Int! = 0) {
+  aiAttributionOverview(
+    orgId: $orgId
+    dateRange: $dateRange
+    scope: $scope
+    limit: $limit
+    offset: $offset
+  ) {
+    orgId
+    startDate
+    endDate
+    mix {
+      kind
+      count
+      share
+      __typename
+    }
+    totalAttributed
+    hasMore
+    dataAvailable
+    rows {
+      subjectType
+      subjectId
+      repoId
+      provider
+      kind
+      source
+      confidence
+      actor
+      evidence
+      observedAt
+      teamId
+      repoName
+      teamName
+      subjectTitle
+      __typename
+    }
+    __typename
+  }
+}`
+
+// registeredAiAttributionOverviewV1Document is the text aiAttributionOverview accepted BEFORE it selected the CHAOS-8954 name fields. It stays a
+// legacy text (see legacyDigestsByOperation), so a web build still sending it keeps working while the new web rolls
+// out; the operation's ONE current document is registeredAiAttributionOverviewDocument above.
+const registeredAiAttributionOverviewV1Document = `query AIAttributionOverview($orgId: String!, $dateRange: AIDateRangeInput!, $scope: AIAttributionScopeInput, $limit: Int! = 50, $offset: Int! = 0) {
   aiAttributionOverview(
     orgId: $orgId
     dateRange: $dateRange
@@ -3083,6 +3237,38 @@ const registeredConnectorsDataHealthDocument = `query GetConnectorsDataHealth($t
 // TestRegisteredDataHealthDocuments_MatchCapturedWireFixtures. Registration
 // serves it: the catalog switch reads no routing row (CHAOS-8702).
 const registeredDataHealthIdentityDocument = `query DataHealthIdentity($team: ID!) {
+  dataHealth(team: $team) {
+    identityMapping {
+      unmappedCount
+      unmappedIdentities {
+        provider
+        email
+        displayName
+        observedCount
+        __typename
+      }
+      suggestedAliases {
+        unmappedIdentity {
+          provider
+          email
+          displayName
+          __typename
+        }
+        suggestedCanonicalId
+        suggestedCanonicalName
+        confidence
+        __typename
+      }
+      __typename
+    }
+    __typename
+  }
+}`
+
+// registeredDataHealthIdentityV1Document is the text dataHealthIdentity accepted BEFORE it selected the CHAOS-8954 name fields. It stays a
+// legacy text (see legacyDigestsByOperation), so a web build still sending it keeps working while the new web rolls
+// out; the operation's ONE current document is registeredDataHealthIdentityDocument above.
+const registeredDataHealthIdentityV1Document = `query DataHealthIdentity($team: ID!) {
   dataHealth(team: $team) {
     identityMapping {
       unmappedCount
@@ -4577,6 +4763,10 @@ func newDocumentDispatchHandler(getenv getenvFunc, routeMux *routeswitch.Mux, op
 // digestByOperation. The literal below is cmd/registrydump's second parse target: keep its exact shape
 // (`"<operation>": {digestHex(<constIdent>), ...}`). Empty = every operation accepts one text.
 var legacyDigestsByOperation = map[string][]string{
+	"testopsRisk":           {digestHex(registeredTestopsRiskV1Document)},
+	"dataHealthIdentity":    {digestHex(registeredDataHealthIdentityV1Document)},
+	"aiGovernanceSummary":   {digestHex(registeredAiGovernanceSummaryV1Document)},
+	"aiAttributionOverview": {digestHex(registeredAiAttributionOverviewV1Document)},
 	"aiAttributedPrs":       {digestHex(registeredAiAttributedPrsV1Document)},
 	"aiImpactSummary":       {digestHex(registeredAiImpactSummaryV1Document)},
 	"aiOpportunities":       {digestHex(registeredAiOpportunitiesV1Document)},
@@ -4585,7 +4775,7 @@ var legacyDigestsByOperation = map[string][]string{
 	"coverageScopeBaseline": {digestHex(registeredCoverageScopeBaselineV1Document)},
 	"hotspots":              {digestHex(registeredHotspotsV1Document)},
 	"home":                  {digestHex(registeredHomeV1Document), digestHex(registeredHomeV2Document), digestHex(registeredHomeV3Document)},
-	"improveOpportunities":  {digestHex(registeredImproveOpportunitiesV1Document)},
+	"improveOpportunities":  {digestHex(registeredImproveOpportunitiesV1Document), digestHex(registeredImproveOpportunitiesV2Document)},
 	"operatingReview":       {digestHex(registeredOperatingReviewV1Document), digestHex(registeredOperatingReviewV2Document)},
 	"reviewEdges":           {digestHex(registeredReviewEdgesV1Document)},
 }

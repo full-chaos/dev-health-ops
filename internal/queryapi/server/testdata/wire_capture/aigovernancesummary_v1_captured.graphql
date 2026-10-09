@@ -18,10 +18,6 @@ query AIGovernanceSummary($orgId: String!, $dateRange: AIDateRangeInput!, $scope
       repoId
       observedAt
       evidence
-      repoName
-      teamName
-      subjectTitle
-      ruleName
       __typename
     }
     __typename

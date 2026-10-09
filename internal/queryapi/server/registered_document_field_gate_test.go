@@ -605,11 +605,11 @@ func walkPopulatabilityRoot(t *testing.T, fset *token.FileSet, root string, orac
 			switch fn := n.(type) {
 			case *goast.FuncDecl:
 				if fn.Body != nil {
-					scanFunctionBody(fn.Body, oracle, typeNames)
+					scanFunctionBody(fn.Body, oracle, typeNames, sliceParamModelTypes(fn, typeNames))
 				}
 				return false
 			case *goast.FuncLit:
-				scanFunctionBody(fn.Body, oracle, typeNames)
+				scanFunctionBody(fn.Body, oracle, typeNames, nil)
 				return false
 			}
 			return true
@@ -655,12 +655,12 @@ func walkPopulatabilityRoot(t *testing.T, fset *token.FileSet, root string, orac
 // pattern do not occur in this codebase today; treated as a documented
 // scope limitation, not silently assumed away -- a real instance would
 // surface as a normal "never assigned" gate finding, loud, not silent).
-func scanFunctionBody(body *goast.BlockStmt, oracle *populatabilityOracle, typeNames map[string]bool) {
+func scanFunctionBody(body *goast.BlockStmt, oracle *populatabilityOracle, typeNames map[string]bool, sliceTypes map[string]string) {
 	varTypes := map[string]string{}
 	goast.Inspect(body, func(n goast.Node) bool {
 		switch node := n.(type) {
 		case *goast.FuncLit:
-			scanFunctionBody(node.Body, oracle, typeNames)
+			scanFunctionBody(node.Body, oracle, typeNames, nil)
 			return false
 		case *goast.CompositeLit:
 			if typeName, ok := compositeLitModelType(node); ok && typeNames[typeName] {
@@ -678,10 +678,90 @@ func scanFunctionBody(body *goast.BlockStmt, oracle *populatabilityOracle, typeN
 			}
 		case *goast.AssignStmt:
 			recordVarTypeFromDefine(node, varTypes, typeNames)
+			recordElementAliasFromDefine(node, varTypes, sliceTypes)
 			recordPostConstructionFieldAssignments(node, varTypes, oracle)
+			recordSliceElementFieldAssignments(node, sliceTypes, oracle)
 		}
 		return true
 	})
+}
+
+// sliceParamModelTypes maps each parameter of fn declared `[]model.T` (a tracked type) to T. A function that fills
+// optional fields of the rows it was handed (nameViolations, nameFlowOpportunities in CHAOS-8954) sets them as
+// `rows[i].Field = v` or through `r := &rows[i]`, with no composite literal of its own.
+func sliceParamModelTypes(fn *goast.FuncDecl, typeNames map[string]bool) map[string]string {
+	out := map[string]string{}
+	if fn.Type == nil || fn.Type.Params == nil {
+		return out
+	}
+	for _, field := range fn.Type.Params.List {
+		arr, ok := field.Type.(*goast.ArrayType)
+		if !ok || arr.Len != nil {
+			continue
+		}
+		sel, ok := arr.Elt.(*goast.SelectorExpr)
+		if !ok {
+			continue
+		}
+		pkg, ok := sel.X.(*goast.Ident)
+		if !ok || pkg.Name != "model" || !typeNames[sel.Sel.Name] {
+			continue
+		}
+		for _, name := range field.Names {
+			out[name.Name] = sel.Sel.Name
+		}
+	}
+	return out
+}
+
+// recordElementAliasFromDefine tracks `r := &rows[i]` for a slice parameter of a tracked type.
+func recordElementAliasFromDefine(assign *goast.AssignStmt, varTypes map[string]string, sliceTypes map[string]string) {
+	if assign.Tok != token.DEFINE || len(assign.Lhs) != len(assign.Rhs) {
+		return
+	}
+	for i, lhs := range assign.Lhs {
+		ident, ok := lhs.(*goast.Ident)
+		if !ok || ident.Name == "_" {
+			continue
+		}
+		unary, ok := assign.Rhs[i].(*goast.UnaryExpr)
+		if !ok || unary.Op != token.AND {
+			continue
+		}
+		index, ok := unary.X.(*goast.IndexExpr)
+		if !ok {
+			continue
+		}
+		if slice, ok := index.X.(*goast.Ident); ok {
+			if typeName, known := sliceTypes[slice.Name]; known {
+				varTypes[ident.Name] = typeName
+			}
+		}
+	}
+}
+
+// recordSliceElementFieldAssignments handles `rows[i].Field = value` for a slice parameter of a tracked type.
+func recordSliceElementFieldAssignments(assign *goast.AssignStmt, sliceTypes map[string]string, oracle *populatabilityOracle) {
+	if len(assign.Lhs) != len(assign.Rhs) {
+		return
+	}
+	for i, lhs := range assign.Lhs {
+		sel, ok := lhs.(*goast.SelectorExpr)
+		if !ok {
+			continue
+		}
+		index, ok := sel.X.(*goast.IndexExpr)
+		if !ok {
+			continue
+		}
+		slice, ok := index.X.(*goast.Ident)
+		if !ok {
+			continue
+		}
+		if typeName, known := sliceTypes[slice.Name]; known {
+			recordFieldSite(oracle, typeName, sel.Sel.Name, assign.Rhs[i])
+		}
+	}
 }
 
 // compositeLitModelType returns the bare type name of a `model.<Name>`

@@ -7,8 +7,6 @@ import (
 	"time"
 
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
-
-	"github.com/full-chaos/dev-health-ops/internal/teamkeytables"
 )
 
 // dedupNaturalKeys ports api/queries/metrics.py's _DEDUP_BY_COMPUTED_AT,
@@ -83,16 +81,6 @@ func metricValueProjection(column string) string {
 func metricFromClause(table, column, scopeFilterSQL, startParam, endParam string) string {
 	keys := dedupNaturalKeys[table]
 	keyColumns := strings.Join(keys, ",\n        ")
-	// SUPERSEDED KEYS: a team-keyed table holds a row of zeros over each key
-	// that a recompute no longer produces (a team that was replaced, an item
-	// that moved). Such a key holds no measure: it is not a sample of an
-	// average, not a contributor and not a driver. The test is the one the
-	// writer uses (package teamkeytables); its columns are qualified because
-	// the projection gives the aggregate the name of its column.
-	liveKey := ""
-	if declared, teamKeyed := teamkeytables.ByTable(table); teamKeyed {
-		liveKey = "\n    HAVING " + declared.LiveHaving(table+".")
-	}
 	return fmt.Sprintf(`(
     SELECT
         %s,
@@ -101,8 +89,8 @@ func metricFromClause(table, column, scopeFilterSQL, startParam, endParam string
     WHERE day >= {%s:Date} AND day < {%s:Date}
     %s
       AND org_id = {org_id:String}
-    GROUP BY %s%s
-)`, keyColumns, metricValueProjection(column), table, startParam, endParam, scopeFilterSQL, keyColumns, liveKey)
+    GROUP BY %s
+)`, keyColumns, metricValueProjection(column), table, startParam, endParam, scopeFilterSQL, keyColumns)
 }
 
 // fetchMetricValue ports fetch_metric_value (api/queries/metrics.py:

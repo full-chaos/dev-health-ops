@@ -380,7 +380,7 @@ SELECT EXISTS (SELECT 1 FROM public.daily_metrics_runs WHERE id = $1::uuid)`, ru
 	return exists, nil
 }
 
-// HasSucceededRunForDay reports whether a SCHEDULED-FANOUT or POST-SYNC
+// coveringRunForDay reports which run covers (the newest one, by id) when a SCHEDULED-FANOUT or POST-SYNC
 // daily-metrics run (never a manual one -- see below) under a DIFFERENT
 // generation than excludeGeneration has already reached a successful
 // terminal state for (organizationID, day): 'succeeded' (materialized
@@ -416,28 +416,33 @@ SELECT EXISTS (SELECT 1 FROM public.daily_metrics_runs WHERE id = $1::uuid)`, ru
 // caller's generation always carries the `manual-daily:` prefix), so this
 // is defensive rather than load-bearing after the restriction above --
 // kept for clarity and in case a future caller's generation space widens.
-func (store *PostgresStore) HasSucceededRunForDay(
+//
+// It returns the id of the NEWEST covering run (created_at, then id), or ""
+// when none covers the day: a tagged call names that run as the one it
+// overrides.
+func (store *PostgresStore) coveringRunForDay(
 	ctx context.Context, tx pgx.Tx, organizationID, day, excludeGeneration string,
-) (bool, error) {
+) (string, error) {
 	if !store.valid() || tx == nil || !validUUID(organizationID) || day == "" {
-		return false, ErrUnavailable
+		return "", ErrUnavailable
 	}
-	var exists bool
+	var runID string
 	err := tx.QueryRow(ctx, `
-SELECT EXISTS (
-    SELECT 1 FROM public.daily_metrics_runs
+SELECT COALESCE((
+    SELECT id::text FROM public.daily_metrics_runs
     WHERE org_id = $1::uuid AND target_day = $2::date
       AND generation <> $3
       AND (generation LIKE $4 OR generation LIKE $5)
       AND status IN ('succeeded', 'no_repositories')
-)`, organizationID, day, excludeGeneration,
+    ORDER BY created_at DESC, id DESC LIMIT 1
+), '')`, organizationID, day, excludeGeneration,
 		escapeLikePrefix(ScheduledFanoutGenerationPrefix)+"%",
 		escapeLikePrefix(postSyncGenerationPrefix)+"%",
-	).Scan(&exists)
+	).Scan(&runID)
 	if err != nil {
-		return false, ErrUnavailable
+		return "", ErrUnavailable
 	}
-	return exists, nil
+	return runID, nil
 }
 
 // escapeLikePrefix escapes SQL LIKE's own wildcard characters (%, _) in a

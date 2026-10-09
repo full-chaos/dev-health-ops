@@ -183,8 +183,7 @@ func (collector LinearTeamCatalogCollector) CollectTeamCatalog(
 		// valid_from it was first seen with, and an open row of this writer
 		// that a complete run no longer holds is closed in this write. A new
 		// stamp at each sync would add one more open row for the same fact.
-		snapshotComplete := batch.Evidence.TeamsComplete && batch.Evidence.ProjectsComplete &&
-			batch.Result.OwnershipTeamsWithoutKey == 0
+		snapshotComplete := linearOwnershipSnapshotComplete(batch.Evidence, batch.Result)
 		ownershipRows, retracted, err := collector.Sink.SnapshotOwnership(
 			ctx, ref.OrgID, batch.Rows.Ownership, normalizedAt.UTC().Truncate(time.Millisecond), snapshotComplete)
 		if err != nil {
@@ -234,3 +233,11 @@ func (collector LinearTeamCatalogCollector) CollectTeamCatalog(
 }
 
 var _ TeamCatalogCollector = LinearTeamCatalogCollector{}
+
+// linearOwnershipSnapshotComplete says whether one catalog run may close
+// ownership rows. Every term is required: the team walk and every project
+// page and node reached their end, and no project-team link was dropped for
+// a missing team key (a dropped link is a fact the run did not see).
+func linearOwnershipSnapshotComplete(evidence LinearReferenceCatalogEvidence, result LinearReferenceCatalogResult) bool {
+	return evidence.TeamsComplete && evidence.ProjectsComplete && result.OwnershipTeamsWithoutKey == 0
+}

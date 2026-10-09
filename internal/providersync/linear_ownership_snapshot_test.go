@@ -132,3 +132,27 @@ func linearIncompleteCount(collected metricdata.ResourceMetrics, reason string) 
 	}
 	return total
 }
+
+// TestLinearOwnershipSnapshotCompleteNeedsEveryTerm kills the three terms one
+// at a time. A failed team walk returns an error before the collector reads
+// the flag, so the TeamsComplete term cannot be driven false through the
+// collector; this is its only observer.
+func TestLinearOwnershipSnapshotCompleteNeedsEveryTerm(t *testing.T) {
+	good := LinearReferenceCatalogEvidence{TeamsComplete: true, ProjectsComplete: true}
+	if !linearOwnershipSnapshotComplete(good, LinearReferenceCatalogResult{}) {
+		t.Fatal("a fully read run with no dropped link must be complete")
+	}
+	teams := good
+	teams.TeamsComplete = false
+	projects := good
+	projects.ProjectsComplete = false
+	for name, got := range map[string]bool{
+		"teams not complete":    linearOwnershipSnapshotComplete(teams, LinearReferenceCatalogResult{}),
+		"projects not complete": linearOwnershipSnapshotComplete(projects, LinearReferenceCatalogResult{}),
+		"keyless link dropped":  linearOwnershipSnapshotComplete(good, LinearReferenceCatalogResult{OwnershipTeamsWithoutKey: 1}),
+	} {
+		if got {
+			t.Errorf("%s: snapshot reported complete", name)
+		}
+	}
+}

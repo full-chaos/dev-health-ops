@@ -2,11 +2,13 @@ package daily
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 // TouchedDrainGenerationPrefix identifies a daily-metrics run started by the
@@ -160,6 +162,9 @@ type TouchedRunKeys struct {
 	// ExceptRepositoryIDs are, for a run of every repository, the
 	// repositories that a newer run lists.
 	ExceptRepositoryIDs []string
+	// TakenAt is the take time of the run (daily_metrics_runs.touched_take_at):
+	// zero when none was recorded.
+	TakenAt time.Time
 }
 
 // OwnedKeysOfTouchedRunsWithoutResult returns the keys whose owner run ended
@@ -272,54 +277,172 @@ LIMIT $5`,
 	return runs, truncated, nil
 }
 
-// TouchedDrainRunsWithResultOfPass returns the runs with a result of the
-// drain pass that started the run endedRunID, with the keys each lists. It
-// returns no run when endedRunID is not a run of the drain.
+// undefinedColumnCode is the SQLSTATE of a statement that names a column the
+// table does not have.
+const undefinedColumnCode = "42703"
+
+// ErrTouchedTakeColumnAbsent is returned by StampTouchedTakeTx when
+// daily_metrics_runs has no touched_take_at column: a build that runs before
+// its migration (a rolling update). The caller goes on without the take time
+// and reports the miss; the runs it started are then runs of an unknown take.
+var ErrTouchedTakeColumnAbsent = errors.New("daily_metrics_runs.touched_take_at is absent")
+
+// StampTouchedTakeTx records the take time of a pass or a fan-out on every run
+// of the generation that has none, in the transaction that created the runs.
 //
-// The runs of one pass share one generation. A run with a result is ended and
-// neither failed nor canceled.
-func (store *PostgresStore) TouchedDrainRunsWithResultOfPass(
-	ctx context.Context, organizationID, endedRunID string,
-) ([]TouchedRunKeys, error) {
-	if !store.valid() || !validUUID(organizationID) || !validUUID(endedRunID) {
-		return nil, ErrInvalidState
+// The take time is the ClickHouse time read before the pending days that the
+// runs were started for. The mark of those runs stamps the keys one
+// millisecond before it, so the drain can tell a mark that never landed (a
+// listed key still pending, last touched before the take time) from a key that
+// was touched again after the take (touched at or after it). A run that has a
+// take time keeps it: a second delivery of the same fan-out reads another time
+// and does not list the runs of the first.
+//
+// The UPDATE runs in a savepoint: when the column is absent the statement
+// fails, and only the savepoint is rolled back, so the caller's transaction
+// still commits its runs.
+func (store *PostgresStore) StampTouchedTakeTx(
+	ctx context.Context, tx pgx.Tx, organizationID, generation string, takenAt time.Time,
+) error {
+	if !store.valid() || tx == nil || !validUUID(organizationID) || generation == "" ||
+		len(generation) > 64 || takenAt.IsZero() {
+		return ErrInvalidState
+	}
+	nested, err := tx.Begin(ctx)
+	if err != nil {
+		return ErrUnavailable
+	}
+	if _, err := nested.Exec(ctx, `
+UPDATE public.daily_metrics_runs
+SET touched_take_at = $3
+WHERE org_id = $1::uuid AND generation = $2 AND touched_take_at IS NULL`,
+		organizationID, generation, takenAt.UTC().Truncate(time.Millisecond)); err != nil {
+		_ = nested.Rollback(ctx)
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == undefinedColumnCode {
+			return ErrTouchedTakeColumnAbsent
+		}
+		return ErrUnavailable
+	}
+	if err := nested.Commit(ctx); err != nil {
+		return ErrUnavailable
+	}
+	return nil
+}
+
+// TouchedMarkingRunsToCheck returns the runs whose mark the drain checks: the
+// run endedRunID (when it is a run that marks keys, whatever its take time) and
+// the runs of a post-sync fan-out or of the drain that ended, were created in
+// the last window, and have a take time. The run endedRunID comes first and is
+// read apart from the others, so it never competes with the limit however many
+// newer runs exist; the others are the newest limit, newest first, and the flag
+// says that more of them exist.
+//
+// A run that is not ended is left out on purpose: the mark of a fan-out follows
+// its commit by a moment, and a pass in that moment must not read the missing
+// mark as lost. A run of any other generation never marks keys and is not
+// returned.
+//
+// The take time is read through to_jsonb of the row, so a database without the
+// column answers NULL for it and the caller treats the run as one of an unknown
+// take. A run of every repository lists no key: the caller asks for every
+// pending key of its day.
+func (store *PostgresStore) TouchedMarkingRunsToCheck(
+	ctx context.Context, organizationID, endedRunID string, window time.Duration, limit int,
+) ([]TouchedRunKeys, bool, error) {
+	if !store.valid() || !validUUID(organizationID) || window <= 0 || limit < 1 ||
+		(endedRunID != "" && !validUUID(endedRunID)) {
+		return nil, false, ErrInvalidState
+	}
+	org := uuid.MustParse(organizationID).String()
+	var runs []TouchedRunKeys
+	ended := ""
+	if endedRunID != "" {
+		ended = uuid.MustParse(endedRunID).String()
+		// $5 is named only so that the statement uses every parameter it is given.
+		trigger, _, err := store.queryMarkingRuns(ctx, `
+  AND run.id = $4::uuid AND $5::float8 IS NOT NULL`, 1, org, ended)
+		if err != nil {
+			return nil, false, err
+		}
+		runs = trigger
+	}
+	newest, truncated, err := store.queryMarkingRuns(ctx, `
+  AND run.status NOT IN ('pending', 'running')
+  AND run.created_at >= clock_timestamp() - make_interval(secs => $5)
+  AND (to_jsonb(run) ->> 'touched_take_at') IS NOT NULL
+  AND ($4::uuid IS NULL OR run.id <> $4::uuid)`, limit, org, ended, window.Seconds())
+	if err != nil {
+		return nil, false, err
+	}
+	return append(runs, newest...), truncated, nil
+}
+
+// queryMarkingRuns reads the runs of the organization that mark keys and match
+// the extra condition, newest first, at most limit; the flag says that more
+// matched. $1 is the organization, $2 and $3 the generation patterns, $4 the
+// run that ended (NULL for none) and $5 the window in seconds.
+func (store *PostgresStore) queryMarkingRuns(
+	ctx context.Context, condition string, limit int, organizationID, endedRunID string, window ...float64,
+) ([]TouchedRunKeys, bool, error) {
+	var ended any
+	if endedRunID != "" {
+		ended = endedRunID
+	}
+	seconds := 0.0
+	if len(window) > 0 {
+		seconds = window[0]
 	}
 	rows, err := store.pool.Query(ctx, `
-SELECT run.id::text, run.target_day, ARRAY(
+SELECT run.id::text, run.target_day, run.full_org,
+       (to_jsonb(run) ->> 'touched_take_at')::timestamptz,
+       CASE WHEN run.full_org THEN ARRAY[]::text[] ELSE ARRAY(
            SELECT DISTINCT listed.repo
            FROM public.daily_metrics_partitions AS part
            CROSS JOIN LATERAL json_array_elements_text(part.repo_ids::json) AS listed(repo)
            WHERE part.run_id = run.id
            ORDER BY listed.repo
-       )
-FROM public.daily_metrics_runs AS ended
-JOIN public.daily_metrics_runs AS run
-  ON run.org_id = ended.org_id AND run.generation = ended.generation
-WHERE ended.id = $2::uuid AND ended.org_id = $1::uuid
-  AND ended.generation LIKE $3
-  AND NOT run.full_org
-  AND run.status NOT IN ('pending', 'running', 'failed', 'canceled')
-ORDER BY run.target_day`,
-		uuid.MustParse(organizationID).String(), uuid.MustParse(endedRunID).String(),
+       ) END
+FROM public.daily_metrics_runs AS run
+WHERE run.org_id = $1::uuid
+  AND `+fmt.Sprintf(touchedMarkingRunSQL, "run", 2, 3)+condition+`
+ORDER BY run.created_at DESC, run.id DESC
+LIMIT $6`,
+		organizationID,
+		escapeLikePrefix(postSyncGenerationPrefix)+"%",
 		escapeLikePrefix(TouchedDrainGenerationPrefix)+"%",
+		ended, seconds, limit+1,
 	)
 	if err != nil {
-		return nil, ErrUnavailable
+		return nil, false, ErrUnavailable
 	}
 	defer rows.Close()
-	var runs []TouchedRunKeys
+	var (
+		runs      []TouchedRunKeys
+		truncated bool
+	)
 	for rows.Next() {
-		var run TouchedRunKeys
-		if err := rows.Scan(&run.RunID, &run.Day, &run.RepositoryIDs); err != nil {
-			return nil, ErrUnavailable
+		var (
+			run     TouchedRunKeys
+			takenAt *time.Time
+		)
+		if err := rows.Scan(&run.RunID, &run.Day, &run.FullOrganization, &takenAt, &run.RepositoryIDs); err != nil {
+			return nil, false, ErrUnavailable
+		}
+		if len(runs) == limit {
+			truncated = true
+			break
 		}
 		run.Day = run.Day.UTC()
+		if takenAt != nil {
+			run.TakenAt = takenAt.UTC()
+		}
 		runs = append(runs, run)
 	}
 	if rows.Err() != nil {
-		return nil, ErrUnavailable
+		return nil, false, ErrUnavailable
 	}
-	return runs, nil
+	return runs, truncated, nil
 }
 
 // TouchedDaysWithOnlyFailedRuns returns the days among days whose newest

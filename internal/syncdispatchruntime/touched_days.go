@@ -2,6 +2,7 @@ package syncdispatchruntime
 
 import (
 	"context"
+	"errors"
 	"sort"
 	"time"
 
@@ -145,6 +146,11 @@ type TouchedDayPostSyncWriter interface {
 	// repository). It returns false, and starts nothing, when a run of this
 	// sync run exists for the day already.
 	StartTouchedDayTx(ctx context.Context, tx pgx.Tx, plan PostSyncPlan, day time.Time, repositoryIDs []string) (bool, error)
+	// StampTakeTx records takenAt on every run of the sync run that has no take
+	// time: the window runs and the runs of the touched days. It returns
+	// ErrTouchedTakeTimeUnwritten, and writes nothing, when the database
+	// cannot hold it.
+	StampTakeTx(ctx context.Context, tx pgx.Tx, plan PostSyncPlan, takenAt time.Time) error
 }
 
 // SetTouchedDays wires the touched-day recompute (CHAOS-8813): the fan-out
@@ -204,6 +210,8 @@ type touchedDaysResult struct {
 	dailyStarted   bool
 	started        []touchedDayStart
 	alreadyStarted int
+	// takeUnwritten is true when the runs were committed without a take time.
+	takeUnwritten bool
 }
 
 // takeTouchedDays records the days that the raw rows of the sync run touched
@@ -345,6 +353,17 @@ func (service *NativePostSyncService) startTouchedDaysTx(
 		}
 		result.started = append(result.started, start)
 	}
+	if take.takenAt.IsZero() {
+		return nil
+	}
+	// The take time goes in the transaction of the runs, so no run exists without
+	// it, and the drain judges the mark against it.
+	switch err := service.touchedWriter.StampTakeTx(ctx, tx, plan, take.takenAt); {
+	case errors.Is(err, ErrTouchedTakeTimeUnwritten):
+		result.takeUnwritten = true
+	case err != nil:
+		return err
+	}
 	return nil
 }
 
@@ -377,6 +396,9 @@ func (service *NativePostSyncService) finishTouchedDays(
 		if err := service.touched.MarkDispatched(ctx, take.organizationID, take.takenAt, fullDays, keys); err != nil {
 			service.observeTouchedDaysFailure(ctx, args, "mark", jobruntime.PostSyncTouchedDaysMarkFailed)
 		}
+	}
+	if result.takeUnwritten {
+		service.observeTouchedDaysFailure(ctx, args, "take_time_unwritten", jobruntime.PostSyncTouchedDaysTakeTimeUnwritten)
 	}
 	if len(take.overLimit) > 0 {
 		// One line for each fan-out, never one for each day: the same days are

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
@@ -379,6 +380,10 @@ type TouchedRunKeys struct {
 	// ExceptRepositoryIDs are the repositories a run of every repository does
 	// not list, because a newer run lists them.
 	ExceptRepositoryIDs []string
+	// TakenAt is the take time of the run: the ClickHouse time read before the
+	// pending days the run was started for, recorded with the run. Zero when
+	// the run has none.
+	TakenAt time.Time
 }
 
 // touchedReturnKeysPerStatement bounds the keys one statement of
@@ -516,66 +521,137 @@ FROM (`+marked+`)`, organizationID, days, argument); err != nil {
 	return nil
 }
 
-// RunsWithEveryKeyPending returns how many of the given runs have every key
-// they list pending. A run that lists no key is not counted.
+// DaysPendingSinceBeforeTake returns the days (UTC, ascending, distinct) of
+// the keys that the given runs list and that are pending although they were
+// last touched strictly before the take time of the run that lists them.
 //
-// The drain reads it for the runs with a result of one pass: the mark of the
-// pass ends each of their keys, so such a run says that the mark did not reach
-// the table (or that every key of the run was touched again while it ran).
-func (store *ClickHouseTouchedDaysStore) RunsWithEveryKeyPending(
+// The mark of a run ends every key it lists that was touched before its take
+// time (it stamps one millisecond before it), so such a key says that the mark
+// did not reach the table. A key last touched at or after the take time was
+// touched again while the run ran: it is pending for a reason of its own. A
+// run of every repository lists every key of its day. A run with no take time
+// is skipped.
+//
+// Two statements read the table once each: the first for the days of the runs
+// of every repository (the oldest pending touch of each), the second for the
+// keys of the runs of listed repositories. The comparison with the take times
+// is made here, where it can be read.
+func (store *ClickHouseTouchedDaysStore) DaysPendingSinceBeforeTake(
 	ctx context.Context, organizationID string, runs []TouchedRunKeys,
-) (int, error) {
+) ([]time.Time, error) {
 	if store == nil || store.conn == nil || organizationID == "" {
-		return 0, ErrTouchedDaysUnavailable
+		return nil, ErrTouchedDaysUnavailable
 	}
-	listed := map[string]uint64{}
-	var keys []string
+	var (
+		fullDayTakes = map[string]int64{}
+		listedTakes  = map[string][]int64{}
+		fullDays     []string
+		listedDays   []string
+		listedKeys   []string
+	)
 	for _, run := range runs {
-		if run.FullOrganization || len(run.RepositoryIDs) == 0 {
+		if run.TakenAt.IsZero() {
 			continue
 		}
-		day := run.Day.UTC().Format("2006-01-02")
+		day, take := run.Day.UTC().Format("2006-01-02"), run.TakenAt.UnixMilli()
+		if run.FullOrganization {
+			if newest, seen := fullDayTakes[day]; !seen {
+				fullDays = append(fullDays, day)
+				fullDayTakes[day] = take
+			} else if take > newest {
+				fullDayTakes[day] = take
+			}
+			continue
+		}
 		for _, repositoryID := range run.RepositoryIDs {
 			parsed, err := uuid.Parse(repositoryID)
 			if err != nil {
-				return 0, ErrTouchedDaysUnavailable
+				return nil, ErrTouchedDaysUnavailable
 			}
-			keys = append(keys, run.RunID+"|"+day+"|"+parsed.String())
+			key := day + "|" + parsed.String()
+			if _, seen := listedTakes[key]; !seen {
+				listedKeys = append(listedKeys, key)
+				listedDays = append(listedDays, day)
+			}
+			listedTakes[key] = append(listedTakes[key], take)
 		}
-		listed[run.RunID] = uint64(len(run.RepositoryIDs))
 	}
-	if len(keys) == 0 {
-		return 0, nil
-	}
-	rows, err := store.conn.Query(ctx, `
-SELECT splitByChar('|', listed)[1] AS run, count()
-FROM (SELECT arrayJoin(?) AS listed)
-WHERE (splitByChar('|', listed)[2], splitByChar('|', listed)[3]) IN (
-    SELECT toString(day), toString(repo_id) FROM (`+pendingTouchedKeysSQL+`
-    )
+	found := map[string]struct{}{}
+	if len(fullDays) > 0 {
+		rows, err := store.conn.Query(ctx, `
+SELECT toString(day), toUnixTimestamp64Milli(min(touched_at))
+FROM (
+    SELECT day, repo_id, maxIf(at, kind = 'touched') AS touched_at
+    FROM daily_metrics_touched_days
+    WHERE org_id = ? AND has(?, toString(day))
+    GROUP BY day, repo_id
+    HAVING touched_at > maxIf(at, kind = 'dispatched')
 )
-GROUP BY run`, keys, organizationID)
-	if err != nil {
-		return 0, ErrTouchedDaysUnavailable
-	}
-	defer rows.Close()
-	whollyPending := 0
-	for rows.Next() {
-		var (
-			runID   string
-			pending uint64
-		)
-		if err := rows.Scan(&runID, &pending); err != nil {
-			return 0, ErrTouchedDaysUnavailable
+GROUP BY day`, organizationID, fullDays)
+		if err != nil {
+			return nil, ErrTouchedDaysUnavailable
 		}
-		if pending == listed[runID] {
-			whollyPending++
+		for rows.Next() {
+			var (
+				day         string
+				touchedMill int64
+			)
+			if err := rows.Scan(&day, &touchedMill); err != nil {
+				_ = rows.Close()
+				return nil, ErrTouchedDaysUnavailable
+			}
+			if touchedMill < fullDayTakes[day] {
+				found[day] = struct{}{}
+			}
+		}
+		if err := errors.Join(rows.Err(), rows.Close()); err != nil {
+			return nil, ErrTouchedDaysUnavailable
 		}
 	}
-	if err := rows.Err(); err != nil {
-		return 0, ErrTouchedDaysUnavailable
+	if len(listedKeys) > 0 {
+		rows, err := store.conn.Query(ctx, `
+SELECT toString(day), toString(repo_id), toUnixTimestamp64Milli(touched_at)
+FROM (
+    SELECT day, repo_id, maxIf(at, kind = 'touched') AS touched_at
+    FROM daily_metrics_touched_days
+    WHERE org_id = ? AND has(?, toString(day))
+      AND has(?, concat(toString(day), '|', toString(repo_id)))
+    GROUP BY day, repo_id
+    HAVING touched_at > maxIf(at, kind = 'dispatched')
+)`, organizationID, listedDays, listedKeys)
+		if err != nil {
+			return nil, ErrTouchedDaysUnavailable
+		}
+		for rows.Next() {
+			var (
+				day, repo   string
+				touchedMill int64
+			)
+			if err := rows.Scan(&day, &repo, &touchedMill); err != nil {
+				_ = rows.Close()
+				return nil, ErrTouchedDaysUnavailable
+			}
+			for _, take := range listedTakes[day+"|"+repo] {
+				if touchedMill < take {
+					found[day] = struct{}{}
+					break
+				}
+			}
+		}
+		if err := errors.Join(rows.Err(), rows.Close()); err != nil {
+			return nil, ErrTouchedDaysUnavailable
+		}
 	}
-	return whollyPending, nil
+	days := make([]time.Time, 0, len(found))
+	for day := range found {
+		parsed, err := time.Parse("2006-01-02", day)
+		if err != nil {
+			return nil, ErrTouchedDaysUnavailable
+		}
+		days = append(days, parsed.UTC())
+	}
+	sort.Slice(days, func(left, right int) bool { return days[left].Before(days[right]) })
+	return days, nil
 }
 
 // clock reads the ClickHouse clock at millisecond precision.

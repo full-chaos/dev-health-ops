@@ -59,6 +59,7 @@ service-to-repository mappings.
 - `estimate_coverage_metrics_daily` (daily backlog estimate coverage, by provider/team/scope)
 - `work_item_user_metrics_daily` (daily aggregates, by provider/user/team)
 - `work_item_cycle_times` (per-work-item fact rows for completed items)
+- `work_item_measure_capability` (whether each provider tracks story points and bugs, by provider/measure/window end; a missing row is unknown)
 
 ### Team Well-being (team-level only)
 

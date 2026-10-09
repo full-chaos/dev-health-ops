@@ -87,7 +87,7 @@ All relational metadata scoped to the organization is explicitly deleted from th
 
 ### Phase 4: Purge Analytics and Derived Metrics (ClickHouse)
 All analytics data, raw logs, and derived metrics are purged from the ClickHouse analytics store. The platform utilizes ClickHouse `ALTER TABLE ... DELETE WHERE org_id = {org_id}` (or `DROP PARTITION` where applicable) to prune the following tables:
-- **Daily Metrics**: `repo_metrics_daily`, `user_metrics_daily`, `team_metrics_daily`, `work_item_metrics_daily`, `work_item_user_metrics_daily`, `work_item_state_durations_daily`, `commit_metrics`, `file_metrics_daily`, `ic_landscape_rolling_30d`, `review_edges_daily`, `cicd_metrics_daily`, `deploy_metrics_daily`, `incident_metrics_daily`, `dora_metrics_daily`, `issue_type_metrics_daily`.
+- **Daily Metrics**: `repo_metrics_daily`, `user_metrics_daily`, `team_metrics_daily`, `work_item_metrics_daily`, `work_item_user_metrics_daily`, `work_item_state_durations_daily`, `work_item_measure_capability`, `commit_metrics`, `file_metrics_daily`, `ic_landscape_rolling_30d`, `review_edges_daily`, `cicd_metrics_daily`, `deploy_metrics_daily`, `incident_metrics_daily`, `dora_metrics_daily`, `issue_type_metrics_daily`.
 - **Investment & Work Graph**: `investment_classifications_daily`, `investment_metrics_daily`, `work_unit_investments`, `work_unit_investment_quotes`, `work_unit_investment_shadow`, `llm_categorization_attempts`, `investment_explanations`, and all `work_graph` cached analysis tables.
 - **AI & Governance**: `ai_attribution`, `ai_impact_metrics_daily`, `ai_policy_events`, `ai_governance_coverage_daily`, `recommendations_daily`.
 - **Raw Logs & Security**: `security_alerts`, `backfill_log`, `teams`, `repos`.

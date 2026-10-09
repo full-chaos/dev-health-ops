@@ -1103,6 +1103,22 @@ func dailyNativeFamilyRegistrations(
 			"error", teamComplexityErr,
 		)
 	}
+	// CHAOS-8895: work_item_measure_capability is finalize-scope (one
+	// org-wide read per run) with no co-registration dependency: it reads
+	// only stored work items. A refusal leaves it unregistered and every
+	// finalize run fails loud (ErrFinalizeFamilyIncomplete).
+	if capabilityExecutor, capabilityErr := daily.NewWorkItemMeasureCapabilityExecutor(clickhouseConnection); capabilityErr == nil {
+		finalize[daily.WorkItemMeasureCapabilityFamilyName] = capabilityExecutor
+	} else {
+		logger.Error(
+			"work_item_measure_capability native finalize family refused; "+
+				"the family has no registered executor and every "+
+				"finalize run will fail loud "+
+				"(ErrFinalizeFamilyIncomplete) until this is fixed. "+
+				"Every other daily-metrics family is unaffected.",
+			"error", capabilityErr,
+		)
+	}
 	// CHAOS-5194: benchmarking, relocated from post_bridge (see the removed
 	// registration below, and BenchmarkingFinalizeExecutor's own doc comment
 	// for why). No co-registration dependency on ic_finalize above: this

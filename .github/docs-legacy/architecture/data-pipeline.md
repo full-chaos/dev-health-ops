@@ -384,7 +384,10 @@ gitlab, jira and linear writes none of `work_item_metrics_daily`,
 `work_item_user_metrics_daily`, `work_item_cycle_times`,
 `work_item_state_durations_daily`, `estimate_coverage_metrics_daily`,
 `work_item_team_attributions`, `issue_type_metrics_daily`,
-`investment_classifications_daily` and `investment_metrics_daily`. The daily
+`investment_classifications_daily` and `investment_metrics_daily`, nor
+`work_item_measure_capability` (whether each provider tracks story points and
+bugs, written once for each daily run by the finalize family
+`work_item_measure_capability` since CHAOS-8895). The daily
 job is their one writer (the families `work_item`, `work_item_state`,
 `work_item_estimate`, `work_item_attribution`, `work_item_issue_type` and
 `work_item_investment` of `internal/jobs/metrics/daily`); each provider's sync

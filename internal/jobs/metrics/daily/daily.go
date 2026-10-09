@@ -1383,7 +1383,7 @@ func NewFinalizeHandler(store Store) (*FinalizeHandler, error) {
 // to detect a recognised family with NO registered executor at all: with no
 // bridge left to fall open to, that is now ErrFinalizeFamilyIncomplete, not a
 // silent no-op.
-var pythonRecognisedFinalizeFamilies = []string{"ic_finalize", TeamCognitiveLoadFamilyName, TeamComplexityFamilyName, BenchmarkingFamilyName, CompoundingRiskTeamFamilyName}
+var pythonRecognisedFinalizeFamilies = []string{"ic_finalize", TeamCognitiveLoadFamilyName, TeamComplexityFamilyName, BenchmarkingFamilyName, CompoundingRiskTeamFamilyName, WorkItemMeasureCapabilityFamilyName}
 
 // ErrUnknownFinalizeFamily is returned when SetNativeFinalizeFamilies is
 // asked to register a name outside pythonRecognisedFinalizeFamilies.

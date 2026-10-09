@@ -206,8 +206,12 @@ func sweepReplacingMergeTreeTables(t *testing.T) []replacingMergeTreeTable {
 // (version computed_at), keyed on (org_id, run_id, work_unit_id, role,
 // config, kind, attempt) -- CHAOS-8868. Both are append-only: a reader takes argMax on
 // computed_at over the sorting key (the attempt table before it sums).
+// 119 -> 120: 111_work_item_measure_capability.sql adds
+// `work_item_measure_capability` (version computed_at), keyed on
+// (org_id, provider, measure, window_end) -- CHAOS-8895. A reader takes the
+// latest window_end at or before its question and argMax on computed_at.
 func TestSweepReplacingMergeTreeTablesMatchesTheAuthoritativeCount(t *testing.T) {
-	const wantCount = 119
+	const wantCount = 120
 
 	tables := sweepReplacingMergeTreeTables(t)
 	if len(tables) != wantCount {

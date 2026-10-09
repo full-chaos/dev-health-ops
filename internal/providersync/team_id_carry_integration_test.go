@@ -691,3 +691,83 @@ func (c *queryCountingConn) Query(ctx context.Context, query string, args ...any
 	c.queries++
 	return c.TeamIDCarryConn.Query(ctx, query, args...)
 }
+
+// A parent id that two providers' teams hold resolves inside the child's
+// provider, for the team row and for the observation.
+func TestCarryTeamIDsResolvesAnAmbiguousParentInTheChildsProvider(t *testing.T) {
+	ctx, conn := newWorkItemEffectsConn(t)
+	f := carryFixture{t: t, ctx: ctx, conn: conn, orgID: uuid.NewString()}
+	f.team("linear", "PARENT", carryPtr("PARENT"), nil, 1, carryOld, nil, nil)
+	f.team("gitlab", "PARENT", carryPtr("PARENT"), nil, 1, carryOld.Add(time.Minute), nil, nil)
+	f.team("linear", "CHILD", carryPtr("CHILD"), carryPtr("PARENT"), 1, carryOld, nil, nil)
+	f.exec(`INSERT INTO team_provider_observations (org_id, provider, native_team_key, team_id, name, members_json, project_keys_json, repo_patterns_json, is_active, parent_team_id, discovered_at, updated_at) VALUES (?, 'linear', 'CHILD', 'CHILD', 'obs', '[]', '[]', '[]', 1, 'PARENT', ?, ?)`, f.orgID, carryOld, carryOld)
+
+	if _, err := CarryTeamIDs(ctx, conn, f.orgID, carryAt, false); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.str(`SELECT ifNull(parent_team_id, '') FROM teams FINAL WHERE org_id = ? AND id = 'linear:CHILD' AND is_active = 1`); got != "linear:PARENT" {
+		t.Errorf("child parent = %q, want linear:PARENT", got)
+	}
+	if got := f.str(`SELECT ifNull(parent_team_id, '') FROM team_provider_observations FINAL WHERE org_id = ? AND provider = 'linear' AND native_team_key = 'CHILD'`); got != "linear:PARENT" {
+		t.Errorf("observation parent = %q, want linear:PARENT", got)
+	}
+}
+
+// An admin edit of an id that two providers' teams hold is kept as the
+// admin's own team, custom:<id>, with its members.
+func TestCarryTeamIDsKeepsAnAmbiguousAdminEditAsTheAdminsTeam(t *testing.T) {
+	ctx, conn := newWorkItemEffectsConn(t)
+	f := carryFixture{t: t, ctx: ctx, conn: conn, orgID: uuid.NewString()}
+	f.team("linear", "ENG", carryPtr("ENG"), nil, 1, carryOld, nil, nil)
+	f.team("gitlab", "ENG", carryPtr("ENG"), nil, 1, carryOld.Add(time.Minute), nil, nil)
+	f.team("", "ENG", nil, nil, 1, carryOld.Add(2*time.Minute), []string{"admin@example.com"}, nil)
+
+	outcome, err := CarryTeamIDs(ctx, conn, f.orgID, carryAt, false)
+	if err != nil || outcome.AdminTeamsToCustom != 1 {
+		t.Fatalf("carry = %+v, %v; want the admin edit moved to custom", outcome, err)
+	}
+	if got := f.str(`SELECT arrayStringConcat(groupArray(concat(id, '|', arrayStringConcat(manual_members, ','))), ';') FROM (SELECT id, manual_members FROM teams FINAL WHERE org_id = ? AND is_active = 1 ORDER BY id)`); got != "custom:ENG|admin@example.com;gl:ENG|;linear:ENG|" {
+		t.Errorf("active = %q, want custom:ENG with the admin's member, gl:ENG, linear:ENG", got)
+	}
+	again, err := CarryTeamIDs(ctx, conn, f.orgID, carryAt.Add(time.Hour), false)
+	if err != nil || again.Found() || again.RowsWritten != 0 {
+		t.Errorf("second carry = %+v, %v; want nothing", again, err)
+	}
+}
+
+// An admin team whose custom:<id> a pushed custom-system team holds is not
+// merged into it: the carry counts the conflict and leaves both as they are.
+func TestCarryTeamIDsLeavesAnAdminTeamWhoseCustomIDAPushedTeamHolds(t *testing.T) {
+	ctx, conn := newWorkItemEffectsConn(t)
+	f := carryFixture{t: t, ctx: ctx, conn: conn, orgID: uuid.NewString()}
+	f.team("", "eng", nil, nil, 1, carryOld, []string{"admin@example.com"}, nil)
+	f.team("custom", "custom:eng", carryPtr("eng"), nil, 1, carryOld, nil, nil)
+
+	outcome, err := CarryTeamIDs(ctx, conn, f.orgID, carryAt, false)
+	if err != nil || outcome.AdminTeamsCustomConflict != 1 || outcome.RowsWritten != 0 {
+		t.Fatalf("carry = %+v, %v; want the conflict counted and nothing written", outcome, err)
+	}
+	if got := f.str(`SELECT arrayStringConcat(groupArray(concat(id, '|', provider, '|', name, '|', arrayStringConcat(manual_members, ','))), ';') FROM (SELECT id, provider, name, manual_members FROM teams FINAL WHERE org_id = ? AND is_active = 1 ORDER BY id)`); got != "custom:eng|custom|team custom:eng|;eng||team eng|admin@example.com" {
+		t.Errorf("active = %q, want the pushed custom:eng and the admin eng unchanged", got)
+	}
+}
+
+// A parent id that is not one team (a Linear team and a Jira project-as-team
+// row) resolves only inside the child's provider: a GitLab child keeps it.
+func TestCarryTeamIDsKeepsAParentThatIsNotOneTeamOutsideItsProvider(t *testing.T) {
+	ctx, conn := newWorkItemEffectsConn(t)
+	f := carryFixture{t: t, ctx: ctx, conn: conn, orgID: uuid.NewString()}
+	f.team("linear", "ENG", carryPtr("ENG"), nil, 1, carryOld, nil, nil)
+	f.team("jira", "ENG", carryPtr("ENG"), nil, 1, carryOld.Add(-time.Minute), nil, nil)
+	f.team("gitlab", "SUB", carryPtr("SUB"), carryPtr("ENG"), 1, carryOld, nil, nil)
+	f.team("linear", "LSUB", carryPtr("LSUB"), carryPtr("ENG"), 1, carryOld, nil, nil)
+
+	if _, err := CarryTeamIDs(ctx, conn, f.orgID, carryAt, false); err != nil {
+		t.Fatal(err)
+	}
+	for id, want := range map[string]string{"gl:SUB": "ENG", "linear:LSUB": "linear:ENG"} {
+		if got := f.str(`SELECT ifNull(parent_team_id, '') FROM teams FINAL WHERE org_id = ? AND id = ?`, id); got != want {
+			t.Errorf("%s parent = %q, want %q", id, got, want)
+		}
+	}
+}

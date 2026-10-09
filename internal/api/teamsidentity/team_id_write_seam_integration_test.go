@@ -417,3 +417,40 @@ func TestADeleteByABareIDDeletesTheKeyedTeam(t *testing.T) {
 		t.Errorf("delete of a prefix-only id = %d %s, want 422", rec.Code, rec.Body.String())
 	}
 }
+
+// An import names its ids for a provider: another provider's prefixed id is
+// refused, and the team it names is not written.
+func TestTheAdminImportRefusesAnotherProvidersPrefixedID(t *testing.T) {
+	s, ctx := writeSeamStore(t)
+	writeSeamSeedNative(t, s, ctx, "linear", "linear:ENG", "ENG")
+	rec := postImportBody(t, s, `{"on_conflict":"merge","teams":[{"provider_type":"jira","provider_team_id":"linear:ENG","name":"Jira impostor"}]}`)
+	var team string
+	if err := s.Conn.QueryRow(ctx, `SELECT concat(provider, '|', name, '|', ifNull(native_team_key, ''), '|', toString(is_active)) FROM teams FINAL WHERE org_id = 'org-1' AND id = 'linear:ENG'`).Scan(&team); err != nil {
+		t.Fatal(err)
+	}
+	if rec.Code != http.StatusUnprocessableEntity || team != "linear|Eng|ENG|1" {
+		t.Errorf("import = %d %s, team = %q; want 422 and linear:ENG unchanged", rec.Code, rec.Body.String(), team)
+	}
+}
+
+// A plain admin id whose custom:<id> a pushed custom-system team holds is a
+// conflict, never a write into the pushed team.
+func TestAnAdminWriteOfAPlainIDThatAPushedCustomTeamHoldsConflicts(t *testing.T) {
+	s, ctx := writeSeamStore(t)
+	writeSeamSeedNative(t, s, ctx, "custom", "custom:eng", "eng")
+	h := newTestHandlers(s)
+	rec := writeSeamCall(t, h, h.createOrUpdateTeam, http.MethodPost, "/api/v1/admin/teams", "",
+		map[string]any{"team_id": "eng", "name": "Admin Eng"})
+	if rec.Code != http.StatusConflict {
+		t.Errorf("create = %d %s, want 409", rec.Code, rec.Body.String())
+	}
+	rec = writeSeamCall(t, h, h.createOrUpdateIdentity, http.MethodPost, "/api/v1/admin/identities", "",
+		map[string]any{"canonical_id": "m1", "team_ids": []string{"eng"}})
+	if rec.Code != http.StatusConflict {
+		t.Errorf("identity = %d %s, want 409", rec.Code, rec.Body.String())
+	}
+	team, err := s.GetTeam(ctx, "org-1", "custom:eng")
+	if err != nil || team == nil || team.Name != "Eng" || len(team.ManualMembers) != 0 {
+		t.Errorf("custom:eng = %+v, %v; want the pushed team unchanged", team, err)
+	}
+}

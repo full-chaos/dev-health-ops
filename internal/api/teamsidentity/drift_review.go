@@ -10,6 +10,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/api/pybody"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
+	"github.com/full-chaos/dev-health-ops/internal/providersync"
 )
 
 // Team drift review (CHAOS-6312): ports ClickHouseTeamDriftService
@@ -181,7 +182,7 @@ func (h handlers) decideChanges(w http.ResponseWriter, r *http.Request, approve 
 
 	ctx := r.Context()
 	orgID := orgIDOf(ctx)
-	keyed, ok := h.keyTeamIDs(w, r, "admin_team_changes", []string{pathParam(r, "team_id")})
+	keyed, ok := h.keyTeamIDs(w, r, "admin_team_changes", providersync.AdminTeamIDRefs(pathParam(r, "team_id")))
 	if !ok {
 		return
 	}

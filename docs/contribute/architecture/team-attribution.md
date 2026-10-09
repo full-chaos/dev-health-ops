@@ -1109,8 +1109,8 @@ system prefix) keeps it, whatever system writes it, and gets no second one. A cu
 | Atlassian Teams (`dho sync teams --provider jira`, the automatic Jira team import) | `jira` | `jira:<team uuid>` | the team ARI |
 | External ingest `team.v1` | the source system | `gh:`/`gl:` for github/gitlab, `jira:` for jira and atlassian (the pushed team is the native Atlassian team), `<system>:` for every other system, then the pushed `id`; an id that carries a known key stays | the pushed `nativeTeamKey`, else the pushed `id` without its prefix (`teamid.NativeKey`); NULL when the id holds another provider's key |
 | Jira ops-team links (`jira_legacy` rows of `team_project_ownership`) | `jira` | `jira:<ops team id>` | n/a |
-| Admin import (`POST /teams/import`) | `""` | `teamid.Of(provider_type, provider_team_id)`: the same id as the provider's catalog | (observation: `provider_team_id`) |
-| Admin create | `""` | the id the admin gives (unchanged) | NULL |
+| Admin import (`POST /teams/import`) | `""` | `teamid.Of(provider_type, provider_team_id)`: the same id as the provider's catalog; a `provider_team_id` with another provider's prefix is refused (422) | (observation: `provider_team_id`) |
+| Admin create, update, delete, identity `team_ids` | `""` | the write seam (`providersync.ResolveTeamID`): a prefixed id as given; a bare id the one active prefixed team that holds it, else `custom:<id>` (409 when two hold it, or when a pushed `custom` team holds `custom:<id>`) | NULL |
 
 - `team.v1` also prefixes `parentTeamId`, and `identity.v1` prefixes its `teamIds`, with the record's system.
 - The Linear team-key ownership row keeps `project_key` = the team key and `project_id` =
@@ -1170,6 +1170,13 @@ the path before it writes:
 or builds a team catalog collector or writes Atlassian team ids, and fails on a new one. The operator verb
 `dho workers providersync carry-team-ids` runs the same function (section 1.1).
 
+**One resolver (CHAOS-8940).** `providersync.ResolveTeamID` (`internal/providersync/team_id_resolve.go`) is the one
+rule that turns a team id into the id a writer writes, given the provider of the caller's row: the carry (a team's
+own id, an admin team, an admin edit, a parent) and the write seam call it. A prefixed id keeps its canonical form,
+refused when its prefix is not the caller's provider; a bare id goes to the holder of the caller's provider, for a
+provider's own team to that provider's id, to the one holder, and for an admin team with no holder to
+`custom:<id>`; two holders, or a `custom:<id>` held by a team of another source, are a conflict.
+
 **The write seam (CHAOS-8940).** A writer that takes a team id from outside, not from a provider's own key, writes
 only what `providersync.KeyTeamIDsForWrite` (`internal/providersync/team_id_write_seam.go`) returns. It runs the
 carry first, then keeps a prefixed id in its canonical form and resolves a bare id to the ONE active prefixed team
@@ -1180,7 +1187,9 @@ write that names `eng` lands on it. It refuses, before any write but the carry:
 
 - a malformed id (`teamid.Malformed`: empty, only a prefix such as `gh:` or `atlassian:`, or a prefix followed by
   only another one such as `linear:gh:`): HTTP 422;
-- a bare id that more than one active prefixed team holds (for example `linear:eng` and `custom:eng`): HTTP 409.
+- a bare id that more than one active prefixed team holds (for example `linear:eng` and `custom:eng`): HTTP 409;
+- a bare admin id whose `custom:<id>` a pushed team of the `custom` system holds: HTTP 409 (never a write into it);
+- an import `provider_team_id` that carries another provider's prefix (`provider_type: jira`, `linear:ENG`): HTTP 422.
 
 So a bare id never reaches a write, and a bare id of a carried team lands on the prefixed team, not on the
 inactive bare row (which a write would make active again). The admin writers (`internal/api/teamsidentity`) all
@@ -1219,7 +1228,14 @@ write, and on a store write that does not refuse a bare id before its batch.
     edit of a Jira project-as-team row (the same id) stays (counted as `admin_teams_not_carried`): it is that
     row, not a Jira team, and `RetireJiraProjectAsTeamRows` owns it.
   - An admin edit of a provider team (the same id, provider `""`) moves with that team; the newer of the two
-    rows gives the new row's values.
+    rows gives the new row's values. An admin edit of an id that two providers' teams hold is neither team: it
+    moves to `custom:<id>` with its members (the providers' teams move to their own ids).
+  - An admin team whose `custom:<id>` a team of another source already holds (a pushed team of the `custom`
+    system) is not moved and not merged into it: it stays, counted as `admin_teams_custom_conflict`, and the
+    carry logs `team_ids_custom_conflict` with the count on every run.
+  - A parent (`parent_team_id` of a team row or an observation) moves with the same rule as the row that names
+    it: to the parent's team of the row's provider; for a parent id that is one team, to that team; else it
+    keeps its id.
   - An id that two providers' teams hold (or a provider's team and an active Jira project-as-team row) is
     `ambiguous`: each provider's rows move to that provider's id, and the rows that name the id without a
     provider (sync policy, drift changes, `identities.team_ids`, manual fallbacks) stay.
@@ -1274,7 +1290,9 @@ first `valid_from` kept; keyed ids and another organization untouched; a second 
 `TestCarryTeamIDsMovesTheParentOfAnObservation`, `TestCarryTeamIDsClosesAFutureLinkAtItsStart`,
 `TestCarryTeamIDsLeavesAnAdminEditOfAProjectAsTeamRow`, `TestCarryTeamIDsSupersedesAPendingIdentityChangeOfAMovedTeam`,
 `TestCarryTeamIDsClosesALinkForAReaderOfNow`, `TestCarryTeamIDsSkipsAPrefixOnlyID`,
-`TestCarryTeamIDsMovesAnAdminsOwnTeamToCustom`, `TestCarryTeamIDsLeavesAnAdminRowOlderThanItsInactiveTeam`
+`TestCarryTeamIDsMovesAnAdminsOwnTeamToCustom`, `TestCarryTeamIDsLeavesAnAdminRowOlderThanItsInactiveTeam`,
+`TestCarryTeamIDsResolvesAnAmbiguousParentInTheChildsProvider`, `TestCarryTeamIDsKeepsAnAmbiguousAdminEditAsTheAdminsTeam`,
+`TestCarryTeamIDsLeavesAnAdminTeamWhoseCustomIDAPushedTeamHolds`, `TestCarryTeamIDsKeepsAParentThatIsNotOneTeamOutsideItsProvider`
 (`TestCarryTeamIDsSplitsAnIDTwoProvidersHold` and `TestCarryTeamIDsMovesEveryBareProviderTeamID` also assert a
 second run writes nothing).
 The seam: `TestTheCarryRunsBeforeTheCollectorAndAFailureStopsIt`, `TestEveryTeamIDWriteSiteRunsBehindTheCarryCensus`;
@@ -1290,7 +1308,8 @@ linear), `TestAnAdminTeamCreateCarriesTheBareTeamFirst`, `TestAnAdminTeamWriteOf
 `TestTheMemberAndDecisionWritersKeyTheirPathTeamID`, `TestTheAdminImportRefusesAPrefixOnlyTeamID`,
 `TestTheStoreRefusesABareTeamIDWrite`, `TestAnIdentityLeavingAStoredBareTeamSkipsIt`,
 `TestTheWriteSeamResolvesOnlyToAnActiveTeamAndKeysAMixedRequest`, `TestADriftDecisionByABareIDDecidesTheKeyedTeamsChange`,
-`TestADeleteByABareIDDeletesTheKeyedTeam`,
+`TestADeleteByABareIDDeletesTheKeyedTeam`, `TestTheAdminImportRefusesAnotherProvidersPrefixedID`,
+`TestAnAdminWriteOfAPlainIDThatAPushedCustomTeamHoldsConflicts`, `TestResolveTeamIDDecidesEveryCase` (`internal/providersync`),
 `TestEveryTeamIDWriterGoesThroughTheWriteSeamCensus`; `TestIdentityV1RefusesAPrefixOnlyTeamID`
 (`internal/streamhandlers`); `TestMalformedNamesNoTeamOfAnyProvider`, `TestCandidatesAreEveryPrefixOfABareID`
 (`internal/teamid`).

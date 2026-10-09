@@ -10,6 +10,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/api/pybody"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
+	"github.com/full-chaos/dev-health-ops/internal/providersync"
 )
 
 var (
@@ -257,7 +258,7 @@ func (h handlers) confirmMembers(w http.ResponseWriter, r *http.Request) {
 		policy.WriteDetail(w, http.StatusBadRequest, "team_id mismatch between path and body", nil)
 		return
 	}
-	keyed, ok := h.keyTeamIDs(w, r, "admin_confirm_members", []string{teamID})
+	keyed, ok := h.keyTeamIDs(w, r, "admin_confirm_members", providersync.AdminTeamIDRefs(teamID))
 	if !ok {
 		return
 	}
@@ -362,7 +363,7 @@ func (h handlers) confirmInferredMembers(w http.ResponseWriter, r *http.Request)
 		policy.WriteDetail(w, http.StatusBadRequest, "team_id in path/body must match", nil)
 		return
 	}
-	keyed, ok := h.keyTeamIDs(w, r, "admin_confirm_inferred_members", []string{teamID})
+	keyed, ok := h.keyTeamIDs(w, r, "admin_confirm_inferred_members", providersync.AdminTeamIDRefs(teamID))
 	if !ok {
 		return
 	}

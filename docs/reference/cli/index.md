@@ -1560,8 +1560,13 @@ Nothing is deleted:
 - observations, sync policies, team drift changes (with their status),
   `identities.team_ids` and manual attribution fallbacks follow the new id.
 
-Not moved: ids that already hold a provider key, an admin team that no single
-provider's observation names, a Jira project-as-team row (see
+An admin team that one provider's observation names moves to that provider's
+id; any other admin team (and an admin edit of an id two providers' teams
+hold) moves to `custom:<id>` (`admin_teams_to_custom`).
+
+Not moved: ids that already hold a provider key, an admin team whose
+`custom:<id>` a pushed `custom` team holds (`admin_teams_custom_conflict`), an
+admin edit of a Jira project-as-team row and that row (see
 `retire-jira-project-as-team`), inactive teams, other organizations.
 Computed attribution and metric rows keep the old id until the full-history
 recompute that follows the carry.
@@ -1570,7 +1575,7 @@ The organization comes from stdin only: `--org-stdin` is required and there
 is no `--org`, with the stdin rules of
 [`metrics daily-start`](#metrics-daily-start-chaos-5055). The verb prints no
 organization id. It prints counts only, under `carry_team_ids`: `teams`,
-`admin_teams`, `admin_teams_to_custom`, `admin_teams_not_carried`, `ambiguous_teams`,
+`admin_teams`, `admin_teams_to_custom`, `admin_teams_not_carried`, `admin_teams_custom_conflict`, `ambiguous_teams`,
 `teams_already_keyed`, `memberships`, `project_ownership`, `repo_ownership`,
 `link_rows_already_keyed`, `observations`, `sync_policies`, `drift_changes`, `identity_drift_changes`,
 `identities`, `fallbacks`, `malformed_team_ids`, and `rows_written` (0 with `--dry-run`). A second

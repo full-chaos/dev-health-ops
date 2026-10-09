@@ -17,6 +17,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
+	"github.com/full-chaos/dev-health-ops/internal/providersync"
 )
 
 // Routes returns this area's routes: the 7 pure-CRUD team+identity admin
@@ -288,7 +289,7 @@ func (h handlers) createOrUpdateTeam(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	keyed, ok := h.keyTeamIDs(w, r, "admin_team", []string{teamID})
+	keyed, ok := h.keyTeamIDs(w, r, "admin_team", providersync.AdminTeamIDRefs(teamID))
 	if !ok {
 		return
 	}
@@ -305,7 +306,7 @@ func (h handlers) createOrUpdateTeam(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h handlers) deleteTeam(w http.ResponseWriter, r *http.Request) {
-	keyed, ok := h.keyTeamIDs(w, r, "admin_team_delete", []string{pathParam(r, "team_id")})
+	keyed, ok := h.keyTeamIDs(w, r, "admin_team_delete", providersync.AdminTeamIDRefs(pathParam(r, "team_id")))
 	if !ok {
 		return
 	}
@@ -554,7 +555,7 @@ func (h handlers) updateTeam(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	keyed, ok := h.keyTeamIDs(w, r, "admin_team", []string{teamID})
+	keyed, ok := h.keyTeamIDs(w, r, "admin_team", providersync.AdminTeamIDRefs(teamID))
 	if !ok {
 		return
 	}
@@ -673,7 +674,7 @@ func (h handlers) createOrUpdateIdentity(w http.ResponseWriter, r *http.Request)
 
 	ctx := r.Context()
 	orgID := orgIDOf(ctx)
-	teamIDs, ok = h.keyTeamIDs(w, r, "admin_identity", teamIDs)
+	teamIDs, ok = h.keyTeamIDs(w, r, "admin_identity", providersync.AdminTeamIDRefs(teamIDs...))
 	if !ok {
 		return
 	}

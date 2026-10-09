@@ -63,6 +63,10 @@ const teamIDCarryAdminProvider = "custom"
 // inactive row of another provider's team of that id, because one insert
 // block that holds rows of both collapses to one of them (the carry writes
 // the old rows of a moved team and of its admin edit in one block).
+// teamIDCarryCustomHeldQuery is the custom:<id> ids whose current row is a
+// team of another source than an admin (provider not empty).
+var teamIDCarryCustomHeldQuery = `SELECT id FROM teams FINAL WHERE org_id = {org_id:String} AND provider != '' AND startsWith(id, '` + teamIDCarryAdminProvider + `:')`
+
 var teamIDCarryActiveAdminIDs = `SELECT id FROM teams FINAL WHERE org_id = {org_id:String} AND provider = '' AND is_active = 1 AND ` + teamIDCarryBare("id")
 
 // teamIDCarryCountQuery counts what a carry would move: the (provider, id)
@@ -136,6 +140,10 @@ type TeamIDCarryOutcome struct {
 	// Jira project-as-team row of the same id holds (an admin edit of that
 	// row, which RetireJiraProjectAsTeamRows owns).
 	AdminTeamsNotCarried uint64 `json:"admin_teams_not_carried"`
+	// AdminTeamsCustomConflict is the admin teams that would move to a
+	// custom:<id> that a team of another source (a pushed team of the custom
+	// system) holds: they are not moved and stay as they are.
+	AdminTeamsCustomConflict uint64 `json:"admin_teams_custom_conflict"`
 	// AmbiguousTeams is the bare ids that more than one team holds (two
 	// providers, or a provider and a Jira project-as-team row). Each
 	// provider's rows move to that provider's id; the rows that name the id
@@ -209,6 +217,9 @@ func CarryTeamIDs(ctx context.Context, conn TeamIDCarryConn, orgID string, at ti
 	if err := carry.plan(); err != nil {
 		return TeamIDCarryOutcome{}, err
 	}
+	if outcome.AdminTeamsCustomConflict > 0 {
+		slog.Default().WarnContext(ctx, "team_ids_custom_conflict", "admin_teams_custom_conflict", outcome.AdminTeamsCustomConflict)
+	}
 	if dryRun {
 		return outcome, nil
 	}
@@ -265,6 +276,9 @@ type teamIDCarryRun struct {
 	target  map[string]map[string]string
 	groups  map[string]map[string]bool
 	primary map[string]string
+	// customHeld: the custom:<id> ids whose current row is another source's
+	// team (a pushed team of the custom system), not an admin team.
+	customHeld map[string]bool
 
 	// writes run in this order; teams and observations are last.
 	writes []teamIDCarryWrite
@@ -287,7 +301,18 @@ func (run *teamIDCarryRun) plan() error {
 	for _, row := range activeAdmins {
 		adminIDs[row.str("id")] = true
 	}
-	teamRows := run.planTeams(teams, observations, adminIDs)
+	customHeld, err := run.read(teamIDCarryCustomHeldQuery, run.org)
+	if err != nil {
+		return fmt.Errorf("team id carry: read custom teams: %w", err)
+	}
+	run.customHeld = make(map[string]bool, len(customHeld))
+	for _, row := range customHeld {
+		run.customHeld[row.str("id")] = true
+	}
+	teamRows, err := run.planTeams(teams, observations, adminIDs)
+	if err != nil {
+		return err
+	}
 	if err := run.dropKeyedTeams(&teamRows); err != nil {
 		return err
 	}
@@ -313,7 +338,7 @@ func (run *teamIDCarryRun) plan() error {
 
 // planTeams decides, per bare id, which provider groups move and to which
 // id, and builds the new and the inactive team rows.
-func (run *teamIDCarryRun) planTeams(teams, observations []chRow, activeAdmins map[string]bool) []chRow {
+func (run *teamIDCarryRun) planTeams(teams, observations []chRow, activeAdmins map[string]bool) ([]chRow, error) {
 	run.target = map[string]map[string]string{}
 	run.groups = map[string]map[string]bool{}
 	run.primary = map[string]string{}
@@ -369,6 +394,23 @@ func (run *teamIDCarryRun) planTeams(teams, observations []chRow, activeAdmins m
 			}
 		}
 		targets := map[string]string{}
+		// adminTeamID resolves an admin team that no single provider team
+		// carries: an admin's own team, or an admin edit of an id that two
+		// providers' teams hold. A custom:<id> that a team of another source
+		// holds is a conflict: the admin row stays as it is.
+		adminTeamID := func(provider string) (string, bool) {
+			newID, err := ResolveTeamID(TeamIDRequest{Provider: provider, ID: id, Mode: TeamIDOwner,
+				CustomHeld: run.customHeld[teamid.Of(teamIDCarryAdminProvider, id)]})
+			if err != nil {
+				run.outcome.AdminTeamsCustomConflict++
+				return "", false
+			}
+			if provider == "" {
+				run.outcome.AdminTeamsToCustom++
+			}
+			run.outcome.AdminTeams++
+			return newID, true
+		}
 		switch {
 		case len(carried) == 0 && admin == nil:
 			continue
@@ -381,25 +423,26 @@ func (run *teamIDCarryRun) planTeams(teams, observations []chRow, activeAdmins m
 				continue
 			}
 			// An admin team that one provider's observation names came from
-			// that provider's import; any other is the admin's own team and
-			// takes the custom prefix, the id the write seam gives a plain
-			// admin id.
-			provider := teamIDCarryAdminProvider
+			// that provider's import.
+			provider := ""
 			if len(observedBy[id]) == 1 {
 				for observed := range observedBy[id] {
 					provider = observed
 				}
-			} else {
-				run.outcome.AdminTeamsToCustom++
 			}
-			newID := teamid.Of(provider, id)
+			newID, ok := adminTeamID(provider)
+			if !ok {
+				continue
+			}
 			targets[""] = newID
 			created = append(created, newTeam{content: *admin, id: newID})
 			retired = append(retired, *admin)
-			run.outcome.AdminTeams++
 		default:
 			for _, row := range carried {
-				newID := teamid.Of(row.str("provider"), id)
+				newID, err := ResolveTeamID(TeamIDRequest{Provider: row.str("provider"), ID: id, Mode: TeamIDOwner})
+				if err != nil {
+					return nil, fmt.Errorf("team id carry: resolve a provider team id: %w", err)
+				}
 				targets[row.str("provider")] = newID
 				content := row
 				if len(carried) == 1 && admin != nil {
@@ -413,6 +456,15 @@ func (run *teamIDCarryRun) planTeams(teams, observations []chRow, activeAdmins m
 				}
 				created = append(created, newTeam{content: content, id: newID})
 				retired = append(retired, row)
+			}
+			if len(carried) > 1 && admin != nil {
+				// An admin edit of an id two providers' teams hold is neither
+				// team: it is kept as the admin's own team, with its members.
+				if newID, ok := adminTeamID(""); ok {
+					targets[""] = newID
+					created = append(created, newTeam{content: *admin, id: newID})
+					retired = append(retired, *admin)
+				}
 			}
 		}
 		run.outcome.Teams++
@@ -437,7 +489,7 @@ func (run *teamIDCarryRun) planTeams(teams, observations []chRow, activeAdmins m
 	for _, row := range retired {
 		rows = append(rows, row.with("is_active", uint8(0)).with("updated_at", teamIDCarryBump(run.at, row.time("updated_at"), time.Microsecond)))
 	}
-	return rows
+	return rows, nil
 }
 
 func (run *teamIDCarryRun) newTeamRow(content chRow, oldID, newID string) chRow {
@@ -454,11 +506,31 @@ func (run *teamIDCarryRun) newTeamRow(content chRow, oldID, newID string) chRow 
 		}
 	}
 	if parent := content.strPtr("parent_team_id"); parent != nil {
-		if mapped, ok := run.primary[*parent]; ok {
+		if mapped, ok := run.parentID(provider, *parent); ok {
 			row = row.with("parent_team_id", &mapped)
 		}
 	}
 	return row
+}
+
+// parentID is the new id of a moved parent that a row of the provider names:
+// the parent's team of that provider, else the one team the parent moves to.
+// An id that is not one team (two providers, or a Jira project-as-team row)
+// resolves only inside the provider; a parent that does not move keeps its id.
+func (run *teamIDCarryRun) parentID(provider, parent string) (string, bool) {
+	moves, ok := run.target[parent]
+	if !ok {
+		return "", false
+	}
+	holders := moves
+	if _, one := run.primary[parent]; !one {
+		holders = map[string]string{provider: moves[provider]}
+	}
+	resolved, err := ResolveTeamID(TeamIDRequest{Provider: provider, ID: parent, Mode: TeamIDReference, Holders: holders})
+	if err != nil || resolved == teamid.Of("", parent) {
+		return "", false
+	}
+	return resolved, true
 }
 
 // teamIDCarryJiraProjectAsTeam is the shape RetireJiraProjectAsTeamRows
@@ -825,7 +897,7 @@ func (run *teamIDCarryRun) planObservations(observations []chRow) teamIDCarryWri
 	for _, row := range observations {
 		row = row.with("team_id", teamid.Of(row.str("provider"), row.str("team_id")))
 		if parent := row.strPtr("parent_team_id"); parent != nil {
-			if mapped, ok := run.primary[*parent]; ok {
+			if mapped, ok := run.parentID(row.str("provider"), *parent); ok {
 				row = row.with("parent_team_id", &mapped)
 			}
 		}
@@ -1019,7 +1091,7 @@ func CarryTeamIDsBeforeWrite(ctx context.Context, conn TeamIDCarryConn, orgID, w
 	}
 	if outcome.Found() || outcome.AdminTeamsNotCarried > 0 {
 		slog.Default().InfoContext(ctx, "team_ids_carried", "writer", writer,
-			"teams", outcome.Teams, "admin_teams", outcome.AdminTeams, "admin_teams_to_custom", outcome.AdminTeamsToCustom, "admin_teams_not_carried", outcome.AdminTeamsNotCarried,
+			"teams", outcome.Teams, "admin_teams", outcome.AdminTeams, "admin_teams_to_custom", outcome.AdminTeamsToCustom, "admin_teams_not_carried", outcome.AdminTeamsNotCarried, "admin_teams_custom_conflict", outcome.AdminTeamsCustomConflict,
 			"ambiguous_teams", outcome.AmbiguousTeams, "teams_already_keyed", outcome.TeamsAlreadyKeyed,
 			"memberships", outcome.Memberships, "project_ownership", outcome.ProjectOwnership, "repo_ownership", outcome.RepoOwnership,
 			"link_rows_already_keyed", outcome.LinkRowsAlreadyKeyed, "observations", outcome.Observations,

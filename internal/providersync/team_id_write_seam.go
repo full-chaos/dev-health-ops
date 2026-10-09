@@ -17,8 +17,8 @@ import (
 var ErrTeamIDAmbiguous = errors.New("team id has no provider prefix and names more than one prefixed team")
 
 // TeamIDWriteError is a refusal of the team id write seam: the id as the
-// writer gave it and the reason (teamid.ErrMalformedTeamID or
-// ErrTeamIDAmbiguous).
+// writer gave it and the reason (teamid.ErrMalformedTeamID,
+// ErrTeamIDForeign, ErrTeamIDAmbiguous or ErrTeamIDCustomHeld).
 type TeamIDWriteError struct {
 	ID  string
 	Err error
@@ -28,72 +28,89 @@ func (e *TeamIDWriteError) Error() string { return fmt.Sprintf("team id %q: %v",
 
 func (e *TeamIDWriteError) Unwrap() error { return e.Err }
 
-const teamIDWriteSeamActiveQuery = `SELECT id FROM teams FINAL WHERE org_id = {org_id:String} AND is_active = 1 AND id IN {ids:Array(String)}`
+const teamIDWriteSeamActiveQuery = `SELECT id, provider FROM teams FINAL WHERE org_id = {org_id:String} AND is_active = 1 AND id IN {ids:Array(String)}`
+
+// TeamIDRef is a team id a writer takes from outside, with the provider it
+// is named for ("" for an admin id).
+type TeamIDRef struct {
+	Provider string
+	ID       string
+}
+
+// AdminTeamIDRefs names ids an admin gives without a provider.
+func AdminTeamIDRefs(ids ...string) []TeamIDRef {
+	refs := make([]TeamIDRef, len(ids))
+	for i, id := range ids {
+		refs[i] = TeamIDRef{ID: id}
+	}
+	return refs
+}
 
 // KeyTeamIDsForWrite is the one write seam of a team id a writer takes
 // from outside (an admin request): every such writer calls it and writes
 // only the ids it returns, in the order given. It carries the
 // organization's bare team ids first (CarryTeamIDsBeforeWrite), so a bare
-// team the request names has already moved. Then a prefixed id keeps its
-// canonical form, and a bare id resolves to the one active prefixed team
-// of the organization that holds it (teamid.Candidates); a bare id that no
-// active prefixed team holds is the admin's own team, custom:<id> (the id
-// the carry gives an admin's bare team). A malformed id (teamid.Malformed)
-// and a bare id that two active prefixed teams hold are refused with a
-// *TeamIDWriteError before anything but the carry is written. So no writer
-// behind it writes a bare team id, and no bare id it names resurrects a
-// carried team.
+// team the request names has already moved, then resolves each id with
+// ResolveTeamID against the organization's active prefixed teams: a bare
+// admin id goes to the one team that holds it, else custom:<id>; an id
+// named for a provider goes to that provider's id. A malformed id, a
+// prefixed id of another provider than the one named (ErrTeamIDForeign), a
+// bare id two teams hold (ErrTeamIDAmbiguous), and a custom:<id> that a
+// team of another source holds (ErrTeamIDCustomHeld) are refused with a
+// *TeamIDWriteError before anything but the carry is written.
 // See docs/contribute/architecture/team-attribution.md "Team ids".
-func KeyTeamIDsForWrite(ctx context.Context, conn TeamIDCarryConn, orgID, writer string, ids []string) ([]string, error) {
-	for _, id := range ids {
-		if teamid.Malformed(id) {
-			return nil, refuseTeamIDWrite(ctx, writer, &TeamIDWriteError{ID: id, Err: teamid.ErrMalformedTeamID})
+func KeyTeamIDsForWrite(ctx context.Context, conn TeamIDCarryConn, orgID, writer string, refs []TeamIDRef) ([]string, error) {
+	for _, ref := range refs {
+		if teamid.Malformed(ref.ID) {
+			return nil, refuseTeamIDWrite(ctx, writer, &TeamIDWriteError{ID: ref.ID, Err: teamid.ErrMalformedTeamID})
 		}
 	}
 	if err := CarryTeamIDsBeforeWrite(ctx, conn, orgID, writer); err != nil {
 		return nil, err
 	}
-	keyed := make([]string, len(ids))
 	var candidates []string
-	for i, id := range ids {
-		keyed[i] = teamid.Of("", id)
-		candidates = append(candidates, teamid.Candidates(id)...)
+	for _, ref := range refs {
+		candidates = append(candidates, teamid.Candidates(ref.ID)...)
 	}
-	if len(candidates) == 0 {
-		return keyed, nil
-	}
-	active := map[string]bool{}
-	rows, err := conn.Query(ctx, teamIDWriteSeamActiveQuery, clickhouse.Named("org_id", strings.TrimSpace(orgID)), clickhouse.Named("ids", candidates))
-	if err != nil {
-		return nil, fmt.Errorf("team id write seam: read teams: %w", err)
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
+	// active: prefixed id -> provider of its current row ("" for an admin row).
+	active := map[string]string{}
+	if len(candidates) > 0 {
+		rows, err := conn.Query(ctx, teamIDWriteSeamActiveQuery, clickhouse.Named("org_id", strings.TrimSpace(orgID)), clickhouse.Named("ids", candidates))
+		if err != nil {
 			return nil, fmt.Errorf("team id write seam: read teams: %w", err)
 		}
-		active[id] = true
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("team id write seam: read teams: %w", err)
-	}
-	for i, id := range ids {
-		var held []string
-		for _, candidate := range teamid.Candidates(id) {
-			if active[candidate] {
-				held = append(held, candidate)
+		defer rows.Close()
+		for rows.Next() {
+			var id, provider string
+			if err := rows.Scan(&id, &provider); err != nil {
+				return nil, fmt.Errorf("team id write seam: read teams: %w", err)
 			}
+			active[id] = provider
 		}
-		// A prefixed id has no candidates: the custom branch keeps its prefix.
-		switch {
-		case len(held) == 1:
-			keyed[i] = held[0]
-		case len(held) == 0:
-			keyed[i] = teamid.Of(teamIDCarryAdminProvider, id)
-		default:
-			return nil, refuseTeamIDWrite(ctx, writer, &TeamIDWriteError{ID: id, Err: ErrTeamIDAmbiguous})
+		if err := rows.Err(); err != nil {
+			return nil, fmt.Errorf("team id write seam: read teams: %w", err)
 		}
+	}
+	keyed := make([]string, len(refs))
+	for i, ref := range refs {
+		req := TeamIDRequest{Provider: ref.Provider, ID: ref.ID, Mode: TeamIDOwner, Holders: map[string]string{}}
+		for _, candidate := range teamid.Candidates(ref.ID) {
+			rowProvider, ok := active[candidate]
+			if !ok {
+				continue
+			}
+			holder := teamIDPrefixProvider(candidate)
+			if holder == teamIDCarryAdminProvider && rowProvider != "" {
+				req.CustomHeld = true
+				continue
+			}
+			req.Holders[holder] = candidate
+		}
+		resolved, err := ResolveTeamID(req)
+		if err != nil {
+			return nil, refuseTeamIDWrite(ctx, writer, &TeamIDWriteError{ID: ref.ID, Err: err})
+		}
+		keyed[i] = resolved
 	}
 	return keyed, nil
 }
@@ -102,8 +119,13 @@ func KeyTeamIDsForWrite(ctx context.Context, conn TeamIDCarryConn, orgID, writer
 // the id) and returns it.
 func refuseTeamIDWrite(ctx context.Context, writer string, refusal *TeamIDWriteError) error {
 	reason := "malformed"
-	if errors.Is(refusal.Err, ErrTeamIDAmbiguous) {
+	switch {
+	case errors.Is(refusal.Err, ErrTeamIDAmbiguous):
 		reason = "ambiguous"
+	case errors.Is(refusal.Err, ErrTeamIDForeign):
+		reason = "foreign_provider"
+	case errors.Is(refusal.Err, ErrTeamIDCustomHeld):
+		reason = "custom_held"
 	}
 	slog.Default().WarnContext(ctx, "team_id_write_refused", "writer", writer, "reason", reason)
 	return refusal

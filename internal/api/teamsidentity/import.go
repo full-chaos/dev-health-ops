@@ -6,6 +6,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/api/pybody"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
+	"github.com/full-chaos/dev-health-ops/internal/providersync"
 )
 
 // parseTeamImportRequest mirrors TeamImportRequest (schemas_flat.py:
@@ -139,11 +140,11 @@ func (h handlers) importTeams(w http.ResponseWriter, r *http.Request) {
 
 	ctx := r.Context()
 	orgID := orgIDOf(ctx)
-	ids := make([]string, len(teams))
+	refs := make([]providersync.TeamIDRef, len(teams))
 	for i, team := range teams {
-		ids[i] = importedTeamID(team.ProviderType, team.ProviderTeamID)
+		refs[i] = providersync.TeamIDRef{Provider: team.ProviderType, ID: team.ProviderTeamID}
 	}
-	if _, ok := h.keyTeamIDs(w, r, "admin_import", ids); !ok {
+	if _, ok := h.keyTeamIDs(w, r, "admin_import", refs); !ok {
 		return
 	}
 	var (

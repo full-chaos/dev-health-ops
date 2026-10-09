@@ -147,40 +147,15 @@ func TestGoldenCycleBreakdownBasic(t *testing.T) {
 	assertGolden(t, got, "cycle_breakdown_basic.json")
 }
 
-// TestGoldenCycleBreakdownMilestoneFallback replays testdata/
-// cycle_breakdown_milestone_fallback.json: fetch_cycle_breakdown returns
-// no rows, fetch_cycle_milestones returns two, both remapped into the
-// "Other" category and multiplied avg_hours*total_items.
-func TestGoldenCycleBreakdownMilestoneFallback(t *testing.T) {
-	client := fakeQueryClient{t: t, handler: func(t *testing.T, query string, bindings []dhclickhouse.Binding) (dhclickhouse.RowScanner, error) {
-		switch {
-		case strings.Contains(query, "FROM work_item_state_durations_daily"):
-			return &fixtureRowScanner{}, nil
-		case strings.Contains(query, "FROM work_item_cycle_milestones_daily"):
-			return &fixtureRowScanner{rows: [][]any{
-				{"design", 10.0, uint64(4)},
-				{"build", 5.5, uint64(8)},
-			}}, nil
-		default:
-			t.Fatalf("unexpected query for cycle_breakdown_milestone_fallback fixture:\n%s", query)
-			return nil, nil
-		}
-	}}
-
-	got, err := BuildResponse(context.Background(), client, "org-1", Params{
-		Mode: "cycle_breakdown", StartDay: day(2024, 2, 1), EndDay: day(2024, 2, 15),
-		Provider: "prov-x", Limit: 500, MinValue: 1,
-	})
-	if err != nil {
-		t.Fatalf("BuildResponse: %v", err)
-	}
-	assertGolden(t, got, "cycle_breakdown_milestone_fallback.json")
-}
-
 // TestGoldenCycleBreakdownEmpty replays testdata/cycle_breakdown_empty.json:
-// both readers return no rows -- zero-value root, no notes, no filters.
+// the state-duration read returns no rows -- zero-value root, no notes, no
+// filters, and no second read: the fake answers every query with no rows and
+// the test fails if any query but the state-duration read is issued.
 func TestGoldenCycleBreakdownEmpty(t *testing.T) {
 	client := fakeQueryClient{t: t, handler: func(t *testing.T, query string, bindings []dhclickhouse.Binding) (dhclickhouse.RowScanner, error) {
+		if !strings.Contains(query, "FROM work_item_state_durations_daily") {
+			t.Fatalf("an empty cycle breakdown must issue no other read, got:\n%s", query)
+		}
 		return &fixtureRowScanner{}, nil
 	}}
 

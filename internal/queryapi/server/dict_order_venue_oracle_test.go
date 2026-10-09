@@ -354,9 +354,11 @@ func TestVenueOracleQueryAPIDictOrder(t *testing.T) {
 		{Name: "investment flow coverage", Route: "POST /api/v1/investment/flow", Kind: "flow",
 			Args: map[string]any{"filters": window, "flow_mode": "team_category_repo"}, method: http.MethodPost, path: "/api/v1/investment/flow",
 			body: `{"filters":{"time":{"range_days":7}},"flow_mode":"team_category_repo"}`},
-		// No cycle_breakdown case: both sides read work_item_cycle_milestones_daily,
-		// which no ClickHouse migration creates, so both answer 503 on a
-		// migrated database. Its filters order is pinned by a unit test.
+		// No cycle_breakdown case: the recorded Python answer of an empty window
+		// is 503 (its fallback read of work_item_cycle_milestones_daily, a table no
+		// ClickHouse migration creates), while query-api answers the empty tree
+		// (CHAOS-6606), so there is nothing to compare. Its filters order is
+		// pinned by a unit test.
 		{Name: "aggregated flame throughput filters", Route: "GET /api/v1/flame/aggregated", Kind: "aggflame",
 			Args:   map[string]any{"mode": "throughput", "start_day": start, "end_day": end, "team_id": "team-a", "repo_id": repoID},
 			method: http.MethodGet, path: "/api/v1/flame/aggregated?mode=throughput&start_date=" + start + "&end_date=" + end + "&team_id=team-a&repo_id=" + repoID},

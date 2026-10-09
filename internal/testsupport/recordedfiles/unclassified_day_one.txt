@@ -636,7 +636,6 @@ internal/queryapi/aggflame/testdata/code_hotspots_basic.json
 internal/queryapi/aggflame/testdata/code_hotspots_empty.json
 internal/queryapi/aggflame/testdata/cycle_breakdown_basic.json
 internal/queryapi/aggflame/testdata/cycle_breakdown_empty.json
-internal/queryapi/aggflame/testdata/cycle_breakdown_milestone_fallback.json
 internal/queryapi/aggflame/testdata/throughput_both_empty.json
 internal/queryapi/aggflame/testdata/throughput_typed.json
 internal/queryapi/aianalytics/testdata/README.md

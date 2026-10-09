@@ -25,8 +25,8 @@ type TeamIDRequest struct {
 	Provider string
 	ID       string
 	Mode     TeamIDMode
-	// Holders is the prefixed teams that hold the bare id, by provider ("" for
-	// an admin team).
+	// Holders is the prefixed teams that hold the bare id (or that it moves
+	// to), by provider ("" for an admin team).
 	Holders map[string]string
 	// CustomHeld says custom:<id> is held by a team of another source (a
 	// pushed team of the custom system), not by an admin team.
@@ -45,12 +45,12 @@ var ErrTeamIDCustomHeld = errors.New("team id custom:<id> is held by a team of a
 // writes: the carry (a team's own id, an admin edit, a parent), and the
 // admin write seam. A malformed id is refused. A prefixed id keeps its
 // canonical form, and is refused when it is another provider's than the
-// caller's. A bare id resolves, in order, to the holder of the caller's
-// provider; for an owner with a provider, to that provider's id; to the one
-// holder; and for an admin owner with no holder to custom:<id> (chris
-// D5631), refused when a team of another source holds that id. Two holders
-// are a conflict (ErrTeamIDAmbiguous). A reference that does not resolve
-// keeps its id.
+// caller's. A bare id resolves, for an owner with a provider, to that
+// provider's id; else to the one holder; and for an admin owner with no
+// holder to custom:<id> (chris D5631), refused when a team of another source
+// holds that id. Two holders are a conflict (ErrTeamIDAmbiguous). A
+// reference that does not resolve to one holder keeps its id; a caller that
+// resolves a reference inside a provider passes that provider's holder only.
 func ResolveTeamID(req TeamIDRequest) (string, error) {
 	if teamid.Malformed(req.ID) {
 		return "", teamid.ErrMalformedTeamID
@@ -64,9 +64,6 @@ func ResolveTeamID(req TeamIDRequest) (string, error) {
 			}
 		}
 		return id, nil
-	}
-	if held := req.Holders[provider]; held != "" {
-		return held, nil
 	}
 	if provider != "" && req.Mode == TeamIDOwner {
 		return teamid.Of(provider, id), nil

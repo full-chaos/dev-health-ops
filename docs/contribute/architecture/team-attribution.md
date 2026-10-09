@@ -1173,9 +1173,10 @@ or builds a team catalog collector or writes Atlassian team ids, and fails on a 
 **One resolver (CHAOS-8940).** `providersync.ResolveTeamID` (`internal/providersync/team_id_resolve.go`) is the one
 rule that turns a team id into the id a writer writes, given the provider of the caller's row: the carry (a team's
 own id, an admin team, an admin edit, a parent) and the write seam call it. A prefixed id keeps its canonical form,
-refused when its prefix is not the caller's provider; a bare id goes to the holder of the caller's provider, for a
-provider's own team to that provider's id, to the one holder, and for an admin team with no holder to
-`custom:<id>`; two holders, or a `custom:<id>` held by a team of another source, are a conflict.
+refused when its prefix is not the caller's provider; a bare id goes, for a provider's own team, to that provider's
+id, else to the one holder, and for an admin team with no holder to `custom:<id>`; two holders, or a `custom:<id>`
+held by a team of another source, are a conflict. A parent resolves against the teams its id moves to, narrowed to
+the child's provider when the id is not one team.
 
 **The write seam (CHAOS-8940).** A writer that takes a team id from outside, not from a provider's own key, writes
 only what `providersync.KeyTeamIDsForWrite` (`internal/providersync/team_id_write_seam.go`) returns. It runs the

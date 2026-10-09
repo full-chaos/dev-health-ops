@@ -374,7 +374,8 @@ SELECT
     toUInt8(previous.present = 1 AND previous.value IS NOT NULL) AS has_prior_data,
     CASE
         WHEN current.value IS NULL OR previous.present = 0 OR previous.value IS NULL THEN NULL
-        WHEN previous.value = 0 THEN 0
+        WHEN previous.value = 0 AND current.value = 0 THEN 0
+        WHEN previous.value = 0 THEN NULL
         ELSE (current.value - previous.value) / previous.value * 100
     END AS delta_pct
 FROM (

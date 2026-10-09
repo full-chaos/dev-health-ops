@@ -516,9 +516,9 @@ func TestHasDataFlagsSeparateAnEmptyWindowFromAStoredZero(t *testing.T) {
 			if err != nil {
 				t.Fatalf("BuildExplainResponse: %v", err)
 			}
-			if got.Value != tc.wantValue || got.DeltaPct != tc.wantDelta || got.HasData != tc.wantHasData || got.HasPriorData != tc.wantHasPriorData {
+			if got.Value != tc.wantValue || deltaOf(got.DeltaPct) != tc.wantDelta || got.HasData != tc.wantHasData || got.HasPriorData != tc.wantHasPriorData {
 				t.Fatalf("value=%v delta_pct=%v has_data=%v has_prior_data=%v, want %v/%v/%v/%v",
-					got.Value, got.DeltaPct, got.HasData, got.HasPriorData, tc.wantValue, tc.wantDelta, tc.wantHasData, tc.wantHasPriorData)
+					got.Value, deltaOf(got.DeltaPct), got.HasData, got.HasPriorData, tc.wantValue, tc.wantDelta, tc.wantHasData, tc.wantHasPriorData)
 			}
 		})
 	}

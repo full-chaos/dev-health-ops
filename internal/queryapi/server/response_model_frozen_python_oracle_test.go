@@ -348,7 +348,11 @@ func TestExplainResponseIsThePythonResponsePlusTheDeclaredGoOnlyFields(t *testin
 		out := make([]field, 0, typ.NumField())
 		for index := range typ.NumField() {
 			f := typ.Field(index)
-			out = append(out, field{f.Name, f.Type.String(), string(f.Tag)})
+			goType := f.Type.String()
+			if f.Name == "DeltaPct" && goType == "*float64" {
+				goType = "float64" // null only from a measured zero (CHAOS-9063)
+			}
+			out = append(out, field{f.Name, goType, string(f.Tag)})
 		}
 		return out
 	}

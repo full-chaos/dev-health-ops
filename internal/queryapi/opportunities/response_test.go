@@ -189,9 +189,9 @@ func TestFromHomeResponseRepoScoped(t *testing.T) {
 func TestFromHomeResponsePRReworkRatioDefaultExperiments(t *testing.T) {
 	h := &home.Response{
 		Deltas: []home.MetricDelta{
-			{Metric: "pr_rework_ratio", Label: "PR Rework Ratio", DeltaPct: 15.0},
-			{Metric: "cycle_time", Label: "Cycle Time", DeltaPct: -5.0},
-			{Metric: "deploy_freq", Label: "Deploy Frequency", DeltaPct: 0.0},
+			{Metric: "pr_rework_ratio", Label: "PR Rework Ratio", DeltaPct: pctp(15.0), HasData: true, HasPriorData: true},
+			{Metric: "cycle_time", Label: "Cycle Time", DeltaPct: pctp(-5.0), HasData: true, HasPriorData: true},
+			{Metric: "deploy_freq", Label: "Deploy Frequency", DeltaPct: pctp(0.0), HasData: true, HasPriorData: true},
 		},
 	}
 	f := home.Filters{
@@ -208,8 +208,8 @@ func TestFromHomeResponsePRReworkRatioDefaultExperiments(t *testing.T) {
 func TestFromHomeResponseNoCardsFallback(t *testing.T) {
 	h := &home.Response{
 		Deltas: []home.MetricDelta{
-			{Metric: "cycle_time", Label: "Cycle Time", DeltaPct: -5.0},
-			{Metric: "deploy_freq", Label: "Deploy Frequency", DeltaPct: 0.0},
+			{Metric: "cycle_time", Label: "Cycle Time", DeltaPct: pctp(-5.0), HasData: true, HasPriorData: true},
+			{Metric: "deploy_freq", Label: "Deploy Frequency", DeltaPct: pctp(0.0), HasData: true, HasPriorData: true},
 		},
 	}
 	f := home.Filters{
@@ -231,12 +231,12 @@ func TestFromHomeResponseMoreThanFourPositiveDeltasKeepsTopFour(t *testing.T) {
 	// Five lower-is-better metrics that climbed (worsened) and one that fell.
 	h := &home.Response{
 		Deltas: []home.MetricDelta{
-			{Metric: "cycle_time", Label: "A", DeltaPct: 10},
-			{Metric: "review_latency", Label: "B", DeltaPct: 50},
-			{Metric: "churn", Label: "C", DeltaPct: 40},
-			{Metric: "wip_saturation", Label: "D", DeltaPct: 30},
-			{Metric: "blocked_work", Label: "E", DeltaPct: 20},
-			{Metric: "change_failure_rate", Label: "F", DeltaPct: -1},
+			{Metric: "cycle_time", Label: "A", DeltaPct: pctp(10), HasData: true, HasPriorData: true},
+			{Metric: "review_latency", Label: "B", DeltaPct: pctp(50), HasData: true, HasPriorData: true},
+			{Metric: "churn", Label: "C", DeltaPct: pctp(40), HasData: true, HasPriorData: true},
+			{Metric: "wip_saturation", Label: "D", DeltaPct: pctp(30), HasData: true, HasPriorData: true},
+			{Metric: "blocked_work", Label: "E", DeltaPct: pctp(20), HasData: true, HasPriorData: true},
+			{Metric: "change_failure_rate", Label: "F", DeltaPct: pctp(-1), HasData: true, HasPriorData: true},
 		},
 	}
 	f := home.Filters{Time: home.TimeFilter{RangeDays: 14, CompareDays: 14}, Scope: home.ScopeFilter{Level: "org"}}
@@ -269,7 +269,7 @@ func polarityFilters() home.Filters {
 
 func TestLowerIsBetterMetricThatClimbedIsReduce(t *testing.T) {
 	h := &home.Response{Deltas: []home.MetricDelta{
-		{Metric: "cycle_time", Label: "Cycle Time", DeltaPct: 19.4},
+		{Metric: "cycle_time", Label: "Cycle Time", DeltaPct: pctp(19.4), HasData: true, HasPriorData: true},
 	}}
 	got := FromHomeResponse(h, polarityFilters())
 	if len(got.Items) != 1 {
@@ -286,7 +286,7 @@ func TestLowerIsBetterMetricThatClimbedIsReduce(t *testing.T) {
 func TestHigherIsBetterMetricThatFellIsRecover(t *testing.T) {
 	for _, metric := range []string{"throughput", "deploy_freq", "ci_success"} {
 		h := &home.Response{Deltas: []home.MetricDelta{
-			{Metric: metric, Label: "Label " + metric, DeltaPct: -18.6},
+			{Metric: metric, Label: "Label " + metric, DeltaPct: pctp(-18.6), HasData: true, HasPriorData: true},
 		}}
 		got := FromHomeResponse(h, polarityFilters())
 		if len(got.Items) != 1 {
@@ -306,9 +306,9 @@ func TestHigherIsBetterMetricThatFellIsRecover(t *testing.T) {
 func TestImprovementsAreNotOpportunities(t *testing.T) {
 	// Throughput up and cycle time down are good news: no card, the fallback.
 	h := &home.Response{Deltas: []home.MetricDelta{
-		{Metric: "throughput", Label: "Throughput", DeltaPct: 33},
-		{Metric: "cycle_time", Label: "Cycle Time", DeltaPct: -20},
-		{Metric: "ci_success", Label: "CI Success Rate", DeltaPct: 5},
+		{Metric: "throughput", Label: "Throughput", DeltaPct: pctp(33), HasData: true, HasPriorData: true},
+		{Metric: "cycle_time", Label: "Cycle Time", DeltaPct: pctp(-20), HasData: true, HasPriorData: true},
+		{Metric: "ci_success", Label: "CI Success Rate", DeltaPct: pctp(5), HasData: true, HasPriorData: true},
 	}}
 	got := FromHomeResponse(h, polarityFilters())
 	if len(got.Items) != 1 || got.Items[0].ID != "opp-0" || got.Items[0].Title != "Maintain steady flow" {
@@ -318,9 +318,9 @@ func TestImprovementsAreNotOpportunities(t *testing.T) {
 
 func TestOpportunitiesRankByTheSizeOfTheMoveAcrossPolarities(t *testing.T) {
 	h := &home.Response{Deltas: []home.MetricDelta{
-		{Metric: "cycle_time", Label: "Cycle Time", DeltaPct: 10},
-		{Metric: "throughput", Label: "Throughput", DeltaPct: -40},
-		{Metric: "churn", Label: "Code Churn", DeltaPct: 25},
+		{Metric: "cycle_time", Label: "Cycle Time", DeltaPct: pctp(10), HasData: true, HasPriorData: true},
+		{Metric: "throughput", Label: "Throughput", DeltaPct: pctp(-40), HasData: true, HasPriorData: true},
+		{Metric: "churn", Label: "Code Churn", DeltaPct: pctp(25), HasData: true, HasPriorData: true},
 	}}
 	got := FromHomeResponse(h, polarityFilters())
 	titles := make([]string, 0, len(got.Items))
@@ -351,11 +351,11 @@ func TestCardServesTheChangeOfItsMetric(t *testing.T) {
 	h := &home.Response{
 		Deltas: []home.MetricDelta{
 			// lower is better, climbed: a card, direction up.
-			{Metric: "cycle_time", Label: "Cycle Time", DeltaPct: 33.33333333333333},
+			{Metric: "cycle_time", Label: "Cycle Time", DeltaPct: pctp(33.33333333333333), HasData: true, HasPriorData: true},
 			// higher is better, fell: a card, direction down.
-			{Metric: "throughput", Label: "Throughput", DeltaPct: -20.5},
+			{Metric: "throughput", Label: "Throughput", DeltaPct: pctp(-20.5), HasData: true, HasPriorData: true},
 			// an improvement: no card.
-			{Metric: "review_latency", Label: "Review Latency", DeltaPct: -40},
+			{Metric: "review_latency", Label: "Review Latency", DeltaPct: pctp(-40), HasData: true, HasPriorData: true},
 		},
 	}
 	// Two different numbers, so each key is shown to hold its own window.
@@ -396,7 +396,7 @@ func TestCardServesTheChangeOfItsMetric(t *testing.T) {
 // The fallback card is about no metric. It has no change and no direction:
 // null, never 0 and never "up".
 func TestFallbackCardHasNoChangeAndNoDirection(t *testing.T) {
-	h := &home.Response{Deltas: []home.MetricDelta{{Metric: "cycle_time", Label: "Cycle Time", DeltaPct: -5}}}
+	h := &home.Response{Deltas: []home.MetricDelta{{Metric: "cycle_time", Label: "Cycle Time", DeltaPct: pctp(-5), HasData: true, HasPriorData: true}}}
 	f := home.Filters{Time: home.TimeFilter{RangeDays: 30, CompareDays: 14}, Scope: home.ScopeFilter{Level: "org"}}
 	got := FromHomeResponse(h, f)
 	if len(got.Items) != 1 || got.Items[0].ID != "opp-0" {
@@ -436,10 +436,10 @@ func TestFallbackCardHasNoChangeAndNoDirection(t *testing.T) {
 func TestDirectionIsTheSignOfTheChange(t *testing.T) {
 	h := &home.Response{
 		Deltas: []home.MetricDelta{
-			{Metric: "cycle_time", Label: "Cycle Time", DeltaPct: 10},
-			{Metric: "throughput", Label: "Throughput", DeltaPct: -30},
-			{Metric: "churn", Label: "Code Churn", DeltaPct: 5},
-			{Metric: "deploy_freq", Label: "Deploy Frequency", DeltaPct: -2},
+			{Metric: "cycle_time", Label: "Cycle Time", DeltaPct: pctp(10), HasData: true, HasPriorData: true},
+			{Metric: "throughput", Label: "Throughput", DeltaPct: pctp(-30), HasData: true, HasPriorData: true},
+			{Metric: "churn", Label: "Code Churn", DeltaPct: pctp(5), HasData: true, HasPriorData: true},
+			{Metric: "deploy_freq", Label: "Deploy Frequency", DeltaPct: pctp(-2), HasData: true, HasPriorData: true},
 		},
 	}
 	got := FromHomeResponse(h, home.Filters{Time: home.TimeFilter{RangeDays: 7, CompareDays: 7}, Scope: home.ScopeFilter{Level: "org"}})

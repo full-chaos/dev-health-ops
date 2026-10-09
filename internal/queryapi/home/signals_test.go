@@ -96,9 +96,9 @@ func TestRecommendationSignalRequiresTitle(t *testing.T) {
 
 func TestSelectConstraintPicksHighestDeltaPct(t *testing.T) {
 	deltas := []MetricDelta{
-		{Metric: "a", Label: "A", DeltaPct: -10, HasData: true, HasPriorData: true},
-		{Metric: "b", Label: "B", DeltaPct: 30, HasData: true, HasPriorData: true},
-		{Metric: "c", Label: "C", DeltaPct: 5, HasData: true, HasPriorData: true},
+		{Metric: "a", Label: "A", DeltaPct: pctp(-10), HasData: true, HasPriorData: true},
+		{Metric: "b", Label: "B", DeltaPct: pctp(30), HasData: true, HasPriorData: true},
+		{Metric: "c", Label: "C", DeltaPct: pctp(5), HasData: true, HasPriorData: true},
 	}
 	got, ok := SelectConstraint(deltas)
 	if !ok || got.Metric != "b" {
@@ -111,13 +111,13 @@ func TestSelectConstraintPicksHighestDeltaPct(t *testing.T) {
 // no constraint (not "Cycle Time held steady 0%").
 func TestSelectConstraintNeedsTwoMeasuredWindows(t *testing.T) {
 	oneSided := []MetricDelta{
-		{Metric: "a", Label: "A", DeltaPct: 0, HasData: true, HasPriorData: false},
-		{Metric: "b", Label: "B", DeltaPct: 0, HasData: false, HasPriorData: true},
+		{Metric: "a", Label: "A", DeltaPct: pctp(0), HasData: true, HasPriorData: false},
+		{Metric: "b", Label: "B", DeltaPct: pctp(0), HasData: false, HasPriorData: true},
 	}
 	if got, ok := SelectConstraint(oneSided); ok {
 		t.Fatalf("SelectConstraint over one-sided deltas = %q, want none", got.Metric)
 	}
-	mixed := append(oneSided, MetricDelta{Metric: "c", Label: "C", DeltaPct: -5, HasData: true, HasPriorData: true})
+	mixed := append(oneSided, MetricDelta{Metric: "c", Label: "C", DeltaPct: pctp(-5), HasData: true, HasPriorData: true})
 	if got, ok := SelectConstraint(mixed); !ok || got.Metric != "c" {
 		t.Fatalf("SelectConstraint = %q (ok %v), want the only complete delta c", got.Metric, ok)
 	}
@@ -130,8 +130,8 @@ func TestSelectConstraintNeedsTwoMeasuredWindows(t *testing.T) {
 // value but states no prior value, no delta and no direction claim.
 func TestMetricSignalOfAOneSidedDeltaStatesNoMove(t *testing.T) {
 	deltas := []MetricDelta{
-		{Metric: "churn", Label: "Code Churn", Unit: "loc", Value: 5, DeltaPct: 0, HasData: true, HasPriorData: false},
-		{Metric: "cycle_time", Label: "Cycle Time", Unit: "days", Value: 4, DeltaPct: -20, HasData: true, HasPriorData: true},
+		{Metric: "churn", Label: "Code Churn", Unit: "loc", Value: 5, DeltaPct: pctp(0), HasData: true, HasPriorData: false},
+		{Metric: "cycle_time", Label: "Cycle Time", Unit: "days", Value: 4, DeltaPct: pctp(-20), HasData: true, HasPriorData: true},
 	}
 	signals := BuildMetricSignals(deltas, Filters{}, DataConfidence{})
 	byMetric := map[string]Signal{}
@@ -204,7 +204,7 @@ func TestGroupThousands(t *testing.T) {
 
 // The signal a caller reads carries the grouped value, current and prior.
 func TestBuildMetricSignalsServesGroupedValues(t *testing.T) {
-	deltas := []MetricDelta{{Metric: "churn", Label: "Code Churn", Unit: "loc", Value: 3387254, DeltaPct: 25, HasData: true, HasPriorData: true}}
+	deltas := []MetricDelta{{Metric: "churn", Label: "Code Churn", Unit: "loc", Value: 3387254, DeltaPct: pctp(25), HasData: true, HasPriorData: true}}
 	signals := BuildMetricSignals(deltas, Filters{Scope: ScopeFilter{Level: "org"}}, DataConfidence{})
 	if len(signals) != 1 {
 		t.Fatalf("signals = %d, want 1", len(signals))
@@ -226,5 +226,55 @@ func TestFormatValueIntegerVsDecimal(t *testing.T) {
 	}
 	if got := formatValue(150.5, ""); got != "150" {
 		t.Errorf("formatValue(150.5) = %q, want %q", got, "150")
+	}
+}
+
+// From a measured 0 (both windows stored, prior 0, current not 0) the percent
+// is undefined: the sentence and the signal state the change in absolute values,
+// never "held steady", "flat", a percent or the current value as the prior.
+func TestAMeasuredZeroPriorIsNeverSteadyOrAPercent(t *testing.T) {
+	fromZero := MetricDelta{Metric: "churn", Label: "Code Churn", Unit: "loc", Value: 5, DeltaPct: nil, HasData: true, HasPriorData: true}
+	if got := MoveWords(fromZero); got != "rose from 0 loc to 5 loc" {
+		t.Errorf("MoveWords from a measured zero = %q", got)
+	}
+	fell := MetricDelta{Metric: "churn", Label: "Code Churn", Unit: "loc", Value: -5, DeltaPct: nil, HasData: true, HasPriorData: true}
+	if got := MoveWords(fell); got != "fell from 0 loc to -5 loc" {
+		t.Errorf("MoveWords from a measured zero to a negative value = %q", got)
+	}
+	// Both windows 0 is a true 0 %: steady.
+	steady := MetricDelta{Metric: "churn", Label: "Code Churn", Unit: "loc", Value: 0, DeltaPct: pctp(0), HasData: true, HasPriorData: true}
+	if got := MoveWords(steady); got != "held steady 0%" {
+		t.Errorf("MoveWords 0 -> 0 = %q, want held steady 0%%", got)
+	}
+
+	signals := BuildMetricSignals([]MetricDelta{fromZero}, Filters{}, DataConfidence{})
+	if len(signals) != 1 {
+		t.Fatalf("signals = %d, want 1", len(signals))
+	}
+	s := signals[0]
+	if s.PriorValue == nil || *s.PriorValue != "0 loc" || s.Delta == nil || *s.Delta != "+5 loc" || s.Direction != "up" || s.CurrentValue != "5 loc" {
+		t.Errorf("signal = current %q prior %v delta %v direction %q, want 5 loc, the measured 0 loc, +5 loc, up", s.CurrentValue, s.PriorValue, s.Delta, s.Direction)
+	}
+	if strings.Contains(s.Title, "flat") || strings.Contains(s.Title, "steady") || strings.Contains(s.WhyItMatters, "flat") {
+		t.Errorf("signal claims no change: %q / %q", s.Title, s.WhyItMatters)
+	}
+	if s.Delta != nil && strings.Contains(*s.Delta, "%") {
+		t.Errorf("signal delta %q states a percent against zero", *s.Delta)
+	}
+
+	// With a defined percent elsewhere, that delta ranks first; with none, the
+	// rise from a measured 0 is still named.
+	defined := MetricDelta{Metric: "cycle_time", Label: "Cycle Time", Value: 4, DeltaPct: pctp(-20), HasData: true, HasPriorData: true}
+	if got, ok := topDeltaByMagnitude([]MetricDelta{fromZero, defined}); !ok || got.Metric != "cycle_time" {
+		t.Errorf("topDeltaByMagnitude = %q (ok %v), want the delta with a defined percent", got.Metric, ok)
+	}
+	if got, ok := topDeltaByMagnitude([]MetricDelta{steady, fromZero}); !ok || got.Metric != "churn" {
+		t.Errorf("topDeltaByMagnitude over a true 0 %% and a rise from zero = %q (ok %v), want the rise from zero", got.Metric, ok)
+	}
+	if got, ok := topDeltaByMagnitude([]MetricDelta{fromZero}); !ok || got.Metric != "churn" {
+		t.Errorf("topDeltaByMagnitude over a rise from zero only = %q (ok %v), want churn", got.Metric, ok)
+	}
+	if got, ok := SelectConstraint([]MetricDelta{fromZero}); !ok || got.Metric != "churn" {
+		t.Errorf("SelectConstraint over a rise from zero only = %q (ok %v), want churn", got.Metric, ok)
 	}
 }

@@ -92,11 +92,14 @@ type SparkPoint struct {
 
 // PersonDelta ports PersonDelta (api/models/schemas.py:378-384).
 type PersonDelta struct {
-	Metric   string       `json:"metric"`
-	Label    string       `json:"label"`
-	Value    float64      `json:"value"`
-	Unit     string       `json:"unit"`
-	DeltaPct float64      `json:"delta_pct"`
+	Metric string  `json:"metric"`
+	Label  string  `json:"label"`
+	Value  float64 `json:"value"`
+	Unit   string  `json:"unit"`
+	// DeltaPct is the percent change (deltarule): 0 when a window has no stored
+	// value, null when the prior is a measured 0 and the current is not (a
+	// percent change against zero is undefined).
+	DeltaPct *float64     `json:"delta_pct"`
 	Spark    []SparkPoint `json:"spark"`
 	// HasData / HasPriorData (CHAOS-9044, Go-only, last so the frozen field
 	// order is kept): the current / comparison window holds a stored value
@@ -637,6 +640,21 @@ func metricLink(personID, metric string, rangeDays, compareDays int) string {
 	return fmt.Sprintf("/api/v1/people/%s/metric?metric=%s&range_days=%d&compare_days=%d", personID, metric, rangeDays, compareDays)
 }
 
+// percent returns the delta's percent when it is a statement: both windows
+// measured and the percent defined. ok is false for a window without a value
+// and for a rise from a measured 0.
+func (d PersonDelta) percent() (float64, bool) {
+	if !deltarule.Complete(d.HasData, d.HasPriorData) || d.DeltaPct == nil {
+		return 0, false
+	}
+	return *d.DeltaPct, true
+}
+
+// fromZero: both windows measured, the prior a measured 0, the current not.
+func (d PersonDelta) fromZero() bool {
+	return deltarule.Complete(d.HasData, d.HasPriorData) && d.DeltaPct == nil
+}
+
 // narrativeForDeltas ports _narrative_for_deltas (services/people.py:
 // 331-371): the top-2-by-|delta_pct| deltas, as human sentences, ranked
 // with a STABLE sort (Python's `sorted` is stable; ties keep
@@ -649,12 +667,24 @@ func narrativeForDeltas(deltas []PersonDelta, personID string, rangeDays, compar
 	// the 0 placeholder).
 	ranked := make([]PersonDelta, 0, len(deltas))
 	for _, delta := range deltas {
-		if deltarule.Complete(delta.HasData, delta.HasPriorData) {
+		if _, ok := delta.percent(); ok || delta.fromZero() {
 			ranked = append(ranked, delta)
 		}
 	}
+	// By the size of the percent; a rise from a measured 0 has none and ranks
+	// below every non-zero percent and above a true 0 %.
+	magnitude := func(d PersonDelta) float64 {
+		if pct, ok := d.percent(); ok {
+			if pct == 0 {
+				return 0
+			}
+			return math.Abs(pct)
+		}
+		// A rise from a measured 0 outranks a true 0 % (held steady).
+		return 1e-12
+	}
 	sort.SliceStable(ranked, func(i, j int) bool {
-		return math.Abs(ranked[i].DeltaPct) > math.Abs(ranked[j].DeltaPct)
+		return magnitude(ranked[i]) > magnitude(ranked[j])
 	})
 
 	narrative := make([]SummarySentence, 0, 2)
@@ -663,11 +693,16 @@ func narrativeForDeltas(deltas []PersonDelta, personID string, rangeDays, compar
 			break
 		}
 		direction := "decreased"
-		if delta.DeltaPct > 0 {
+		if pct, ok := delta.percent(); ok {
+			if pct > 0 {
+				direction = "increased"
+			}
+			if pct == 0 {
+				direction = "held steady"
+			}
+		} else if delta.Value > 0 {
+			// From a measured 0: the direction is the sign of the current value.
 			direction = "increased"
-		}
-		if delta.DeltaPct == 0 {
-			direction = "held steady"
 		}
 
 		var text string
@@ -776,7 +811,11 @@ func BuildSummaryResponse(ctx context.Context, reader *Reader, orgID string, par
 
 		current := safeFloat(currentValue)
 		previous := safeFloat(previousValue)
-		pctChange := safeFloat(deltarule.Pct(current, previous, hasData, hasPriorData))
+		pctChange := deltarule.Of(current, previous, hasData, hasPriorData).Pct
+		if pctChange != nil {
+			safe := safeFloat(*pctChange)
+			pctChange = &safe
+		}
 
 		spark := sparkPoints(series, metric.Transform)
 

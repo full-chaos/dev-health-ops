@@ -67,13 +67,34 @@ type peopleSummaryPythonResponse struct {
 
 type fieldShape struct{ name, goType, tag string }
 
+// fieldShapes lists a struct's fields. A DeltaPct that is a nullable number
+// (*float64) is listed as the number the frozen Python model has (float64): it
+// is null only where the percent is undefined (CHAOS-9063), and the type of
+// the null is declared and pinned in TestDeltaPctIsNullableOnTheProductionTypes.
 func fieldShapes(typ reflect.Type) []fieldShape {
 	out := make([]fieldShape, 0, typ.NumField())
 	for index := range typ.NumField() {
 		f := typ.Field(index)
-		out = append(out, fieldShape{f.Name, f.Type.String(), string(f.Tag)})
+		goType := f.Type.String()
+		if f.Name == "DeltaPct" && goType == "*float64" {
+			goType = "float64"
+		}
+		out = append(out, fieldShape{f.Name, goType, string(f.Tag)})
 	}
 	return out
+}
+
+func TestDeltaPctIsNullableOnTheProductionTypes(t *testing.T) {
+	for name, typ := range map[string]reflect.Type{
+		"homeRESTMetricDelta": reflect.TypeOf(homeRESTMetricDelta{}),
+		"people.PersonDelta":  reflect.TypeOf(people.PersonDelta{}),
+		"home.MetricDelta":    reflect.TypeOf(home.MetricDelta{}),
+	} {
+		f, ok := typ.FieldByName("DeltaPct")
+		if !ok || f.Type.String() != "*float64" {
+			t.Errorf("%s.DeltaPct is %v, want *float64 (null from a measured zero)", name, f.Type)
+		}
+	}
 }
 
 // assertLegacyPlusTail fails unless production's fields are the legacy fields,

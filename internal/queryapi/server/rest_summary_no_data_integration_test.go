@@ -31,12 +31,12 @@ import (
 )
 
 type restDelta struct {
-	Metric       string  `json:"metric"`
-	Value        float64 `json:"value"`
-	DeltaPct     float64 `json:"delta_pct"`
-	HasData      *bool   `json:"has_data"`
-	HasPriorData *bool   `json:"has_prior_data"`
-	RateState    *string `json:"rate_state"`
+	Metric       string   `json:"metric"`
+	Value        float64  `json:"value"`
+	DeltaPct     *float64 `json:"delta_pct"`
+	HasData      *bool    `json:"has_data"`
+	HasPriorData *bool    `json:"has_prior_data"`
+	RateState    *string  `json:"rate_state"`
 }
 
 func restSummaryDeltas(t *testing.T, mux *http.ServeMux, org, target string) map[string]restDelta {
@@ -75,19 +75,37 @@ type restCell struct {
 	hasData        bool
 	hasPriorData   bool
 	value          float64
-	deltaPct       float64
+	deltaPct       *float64 // nil = null: a percent change against a measured zero is undefined
 }
 
 func restCells() []restCell {
 	f := func(v float64) *float64 { return &v }
 	return []restCell{
-		{"no row in either window", nil, nil, false, false, 0, 0},
-		{"prior window only", nil, f(10), false, true, 0, 0},
-		{"current window only", f(5), nil, true, false, 5, 0},
-		{"a measured zero in both windows", f(0), f(0), true, true, 0, 0},
-		{"a measured zero now, a value before", f(0), f(10), true, true, 0, -100},
-		{"two measured values", f(5), f(10), true, true, 5, -50},
+		{"no row in either window", nil, nil, false, false, 0, f(0)},
+		{"prior window only", nil, f(10), false, true, 0, f(0)},
+		{"current window only", f(5), nil, true, false, 5, f(0)},
+		{"a measured zero in both windows", f(0), f(0), true, true, 0, f(0)},
+		{"a measured zero now, a value before", f(0), f(10), true, true, 0, f(-100)},
+		{"two measured values", f(5), f(10), true, true, 5, f(-50)},
+		// A measured prior of 0 and a current value that is not 0: a percent
+		// change against zero is undefined, so delta_pct is null, never 0 %.
+		{"a measured zero before, a value now", f(5), f(0), true, true, 5, nil},
 	}
+}
+
+// sameDelta reports whether a served delta_pct is the expected one (null or a number).
+func sameDelta(got, want *float64) bool {
+	if got == nil || want == nil {
+		return got == nil && want == nil
+	}
+	return *got == *want
+}
+
+func showDelta(p *float64) string {
+	if p == nil {
+		return "null"
+	}
+	return fmt.Sprint(*p)
 }
 
 func TestRESTHomeDeltasTellNoDataFromAMeasuredZero(t *testing.T) {
@@ -121,8 +139,8 @@ func TestRESTHomeDeltasTellNoDataFromAMeasuredZero(t *testing.T) {
 		if delta.HasData == nil || delta.HasPriorData == nil || *delta.HasData != cell.hasData || *delta.HasPriorData != cell.hasPriorData {
 			t.Errorf("%s: has_data %s has_prior_data %s, want %v %v", cell.name, flag(delta.HasData), flag(delta.HasPriorData), cell.hasData, cell.hasPriorData)
 		}
-		if delta.Value != cell.value || delta.DeltaPct != cell.deltaPct {
-			t.Errorf("%s: value %v delta_pct %v, want %v %v", cell.name, delta.Value, delta.DeltaPct, cell.value, cell.deltaPct)
+		if delta.Value != cell.value || !sameDelta(delta.DeltaPct, cell.deltaPct) {
+			t.Errorf("%s: value %v delta_pct %s, want %v %s", cell.name, delta.Value, showDelta(delta.DeltaPct), cell.value, showDelta(cell.deltaPct))
 		}
 	}
 }
@@ -173,8 +191,8 @@ func TestRESTHomeChangeFailureRateCarriesItsState(t *testing.T) {
 		if delta.RateState != nil {
 			state = *delta.RateState
 		}
-		if delta.HasData == nil || *delta.HasData != tc.hasData || state != tc.state || delta.Value != tc.value || delta.DeltaPct != tc.deltaPct {
-			t.Errorf("%s: has_data %s rate_state %q value %v delta_pct %v, want %v %q %v %v", tc.org, flag(delta.HasData), state, delta.Value, delta.DeltaPct, tc.hasData, tc.state, tc.value, tc.deltaPct)
+		if delta.HasData == nil || *delta.HasData != tc.hasData || state != tc.state || delta.Value != tc.value || delta.DeltaPct == nil || *delta.DeltaPct != tc.deltaPct {
+			t.Errorf("%s: has_data %s rate_state %q value %v delta_pct %s, want %v %q %v %v", tc.org, flag(delta.HasData), state, delta.Value, showDelta(delta.DeltaPct), tc.hasData, tc.state, tc.value, tc.deltaPct)
 		}
 	}
 }
@@ -221,8 +239,8 @@ func TestRESTPersonSummaryDeltasTellNoDataFromAMeasuredZero(t *testing.T) {
 		if delta.HasData == nil || delta.HasPriorData == nil || *delta.HasData != cell.hasData || *delta.HasPriorData != cell.hasPriorData {
 			t.Errorf("%s: has_data %s has_prior_data %s, want %v %v", cell.name, flag(delta.HasData), flag(delta.HasPriorData), cell.hasData, cell.hasPriorData)
 		}
-		if delta.Value != cell.value || delta.DeltaPct != cell.deltaPct {
-			t.Errorf("%s: value %v delta_pct %v, want %v %v", cell.name, delta.Value, delta.DeltaPct, cell.value, cell.deltaPct)
+		if delta.Value != cell.value || !sameDelta(delta.DeltaPct, cell.deltaPct) {
+			t.Errorf("%s: value %v delta_pct %s, want %v %s", cell.name, delta.Value, showDelta(delta.DeltaPct), cell.value, showDelta(cell.deltaPct))
 		}
 	}
 }

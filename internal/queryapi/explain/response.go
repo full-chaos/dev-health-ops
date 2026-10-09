@@ -196,7 +196,11 @@ func BuildExplainResponse(ctx context.Context, reader *Reader, orgID string, par
 	}
 	currentValue := safeFloat(currentRaw)
 	previousValue := safeFloat(previousRaw)
-	pctChange := safeFloat(deltarule.Pct(currentValue, previousValue, hasData, hasPriorData))
+	pctChange := deltarule.Of(currentValue, previousValue, hasData, hasPriorData).Pct
+	if pctChange != nil {
+		safe := safeFloat(*pctChange)
+		pctChange = &safe
+	}
 
 	drivers, err := reader.fetchMetricDriverDelta(ctx, config.Table, config.Column, config.GroupBy, config.Aggregator, params.StartDay, params.EndDay, params.CompareStart, params.CompareEnd, scopeFilterSQL, scopeBindings, orgID)
 	if err != nil {

@@ -1354,10 +1354,10 @@ var explainParity = Options{
 	BaselineDefects: []BaselineDefect{
 		{
 			Ticket:             "CHAOS-9063",
-			Reason:             "the Python reference serves delta_pct 0.0 for a driver with no row in the comparison window (its LEFT JOIN default is 0) and 0.0 for every contributor row (explain.py's delta_value=0.0 literal). Both are a placeholder that stated a change nothing measured; the candidate serves null, with has_prior_data false beside it.",
-			Paths:              []string{"data.drivers.delta_pct", "data.contributors.delta_pct"},
+			Reason:             "the Python reference serves delta_pct 0.0 for a driver with no row in the comparison window (its LEFT JOIN default is 0) and 0.0 for every contributor row (explain.py's delta_value=0.0 literal); and 0.0 for a delta against a measured 0 (delta_pct returns 0.0 for a zero previous). Each stated a change nothing measured; the candidate serves null (a driver or contributor without a comparison row with has_prior_data false beside it, a percent against a measured 0 with both flags true).",
+			Paths:              []string{"data.delta_pct", "data.drivers.delta_pct", "data.contributors.delta_pct"},
 			Intermittent:       true,
-			IntermittentReason: "present only for a request whose response holds contributor rows, or a driver row that has no comparison-window row; an empty response shows no difference",
+			IntermittentReason: "present only for a request whose response holds contributor rows, a driver row that has no comparison-window row, or a metric whose comparison window holds a stored 0; an empty response shows no difference",
 		},
 		{
 			Ticket: "CHAOS-5813",
@@ -1781,9 +1781,15 @@ var peopleSummaryParity = Options{
 		"data.deltas.has_data":       {Ticket: "CHAOS-9044", Reason: "Go-only: the current window holds a stored value for the metric; false = value is a 0 placeholder, not a measured zero. The Python reference never served it."},
 		"data.deltas.has_prior_data": {Ticket: "CHAOS-9044", Reason: "Go-only: the comparison window holds a stored value; false = the delta has no base and delta_pct is 0. The Python reference never served it."},
 	},
-	FloatTierB:            peopleSummaryNumericFloats,
-	IntegerLeaves:         peopleSummaryNumericInts,
-	BaselineDefects:       append([]BaselineDefect{}, peopleDetailParity.BaselineDefects...),
+	FloatTierB:    peopleSummaryNumericFloats,
+	IntegerLeaves: peopleSummaryNumericInts,
+	BaselineDefects: append(append([]BaselineDefect{}, peopleDetailParity.BaselineDefects...), BaselineDefect{
+		Ticket:             "CHAOS-9063",
+		Reason:             "the reference's delta_pct returns 0.0 for a zero previous value, so a metric that rose from a measured 0 reads 0 %; the candidate serves null for it (the percent is undefined), with has_data and has_prior_data true beside it.",
+		Paths:              []string{"data.deltas.delta_pct"},
+		Intermittent:       true,
+		IntermittentReason: "present only while a person metric's prior window holds a stored 0 and its current window a non-zero value",
+	}),
 	OrderInsensitiveLists: peopleSummaryCollaborationOrderInsensitiveLists,
 }
 

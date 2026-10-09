@@ -74,7 +74,7 @@ type homeRESTMetricDelta struct {
 	Label        string            `json:"label"`
 	Value        float64           `json:"value"`
 	Unit         string            `json:"unit"`
-	DeltaPct     float64           `json:"delta_pct"`
+	DeltaPct     *float64          `json:"delta_pct"`
 	Spark        []home.SparkPoint `json:"spark"`
 	HasData      bool              `json:"has_data"`
 	HasPriorData bool              `json:"has_prior_data"`

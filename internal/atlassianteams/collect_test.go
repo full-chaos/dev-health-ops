@@ -264,7 +264,7 @@ func TestCollectReadsTeamsMembersAndProjectsThroughTheRealClient(t *testing.T) {
 		t.Errorf("an archived team has no members: %v", members["jira:bbbbbbbb-0000-4000-8000-000000000002"])
 	}
 
-	if len(rows.Ownership) != 1 || rows.Ownership[0].ProjectID != "10001" || rows.Ownership[0].ProjectKey != "PLAT" ||
+	if len(rows.Ownership) != 1 || rows.Ownership[0].ProjectID.String() != "10001" || rows.Ownership[0].ProjectKey != "PLAT" ||
 		rows.Ownership[0].Source != "native" || rows.Ownership[0].Specificity != 110 || rows.Ownership[0].Priority != 10 {
 		t.Errorf("ownership = %+v", rows.Ownership)
 	}

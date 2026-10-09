@@ -1,0 +1,110 @@
+package providersync
+
+import "time"
+
+// The fact kinds of every writer that closes rows from a provider snapshot.
+// Every kind is made here and nowhere else (TestSnapshotKindCensus): a new
+// kind, or a change of what an empty answer of a kind means, is an edit of
+// this file and of the census table.
+
+// MembershipSnapshotRow is one team_memberships fact as the snapshot rule
+// reads it: the team, the member and the stored valid_from.
+type MembershipSnapshotRow struct {
+	TeamID, MemberID string
+	ValidFrom        time.Time
+}
+
+// MembershipSnapshotKey names a membership fact.
+func MembershipSnapshotKey(row MembershipSnapshotRow) string {
+	return row.TeamID + "\x00" + row.MemberID
+}
+
+// TeamSnapshotRow is one catalog team as the snapshot rule reads it.
+type TeamSnapshotRow struct{ TeamID string }
+
+// TeamSnapshotKey names a catalog team.
+func TeamSnapshotKey(row TeamSnapshotRow) string { return row.TeamID }
+
+// LinearProjectOwnershipKind is the ownership of real Linear projects: source
+// native, an id that is not the team-key form. Its walk is the projects walk.
+// An answer with no project ownership row closes nothing.
+func LinearProjectOwnershipKind(orgID string) SnapshotKind[OwnershipSnapshotRow] {
+	return NewSnapshotKind("linear_project_ownership", EmptyClosesNothing, func(row OwnershipSnapshotRow) bool {
+		return row.Source == "native" && !row.ProjectID.IsLinearTeamKeyForm(orgID)
+	})
+}
+
+// LinearTeamKeyOwnershipKind is the {org}:linear:{team key} row of each team
+// (LinearTeamKeyProjectID). Its walk is the teams walk. An answer with no team
+// closes nothing.
+func LinearTeamKeyOwnershipKind(orgID string) SnapshotKind[OwnershipSnapshotRow] {
+	return NewSnapshotKind("linear_team_key_ownership", EmptyClosesNothing, func(row OwnershipSnapshotRow) bool {
+		return row.Source == "native" && row.ProjectID.IsLinearTeamKeyForm(orgID)
+	})
+}
+
+// JiraLegacyOwnershipKind is the Jira catalog's own rows: source jira_legacy.
+// Its walk is the project search and the legacy links read. An answer with no
+// live ownership row closes nothing.
+func JiraLegacyOwnershipKind() SnapshotKind[OwnershipSnapshotRow] {
+	return NewSnapshotKind("jira_legacy_ownership", EmptyClosesNothing, func(row OwnershipSnapshotRow) bool {
+		return row.Source == jiraTeamCatalogLegacySource
+	})
+}
+
+// teamIn says whether a row's team is one of teams.
+func teamIn(teams []string) func(teamID string) bool {
+	allowed := make(map[string]bool, len(teams))
+	for _, teamID := range teams {
+		allowed[teamID] = true
+	}
+	return func(teamID string) bool { return allowed[teamID] }
+}
+
+// GitLabGroupProjectGrantKind is the GitLab provider_access grants of the
+// teams whose own listing proved its end in a scope no other integration
+// lists (decideOwnershipClose). Each team's listing is its own walk, so a team
+// with no grant is an answer: its rows close. A team outside closable is of no
+// kind, and its rows never close.
+func GitLabGroupProjectGrantKind(closable []string) SnapshotKind[OwnershipSnapshotRow] {
+	closes := teamIn(closable)
+	return NewSnapshotKind("gitlab_group_project_grants", EmptyIsAnAnswer, func(row OwnershipSnapshotRow) bool {
+		return row.Source == gitlabTeamCatalogSource && closes(row.TeamID)
+	})
+}
+
+// GitHubTeamRepoGrantKind is the GitHub provider_access team_repo_ownership
+// grants (a repository full name stands in for the project) of the teams
+// decideOwnershipClose lets close, on the same terms as the GitLab kind.
+func GitHubTeamRepoGrantKind(closable []string) SnapshotKind[OwnershipSnapshotRow] {
+	closes := teamIn(closable)
+	return NewSnapshotKind("github_team_repo_grants", EmptyIsAnAnswer, func(row OwnershipSnapshotRow) bool {
+		return row.Source == githubTeamCatalogSource && closes(row.TeamID)
+	})
+}
+
+// AtlassianTeamLinkKind is the Atlassian Teams project links: source native,
+// of a team whose every Jira project link got a row (a team in unreadable has
+// a link the provider still returns and this run could not write, so its rows
+// are of no kind and never close). Each team's link read is its own walk, so
+// a team with no link is an answer.
+func AtlassianTeamLinkKind(source string, unreadable []string) SnapshotKind[OwnershipSnapshotRow] {
+	skip := teamIn(unreadable)
+	return NewSnapshotKind("atlassian_team_project_links", EmptyIsAnAnswer, func(row OwnershipSnapshotRow) bool {
+		return row.Source == source && !skip(row.TeamID)
+	})
+}
+
+// AtlassianTeamMembershipKind is the Atlassian Teams memberships. Each team's
+// member read is its own walk, so a team with no member is an answer.
+func AtlassianTeamMembershipKind() SnapshotKind[MembershipSnapshotRow] {
+	return NewSnapshotKind("atlassian_team_memberships", EmptyIsAnAnswer, func(MembershipSnapshotRow) bool { return true })
+}
+
+// AtlassianTeamCatalogKind is the Atlassian teams of the catalog. Its walk is
+// the team search. A search that answers no team closes nothing: no team is
+// deactivated, and no team outside the answer is in scope for the membership
+// and link closes.
+func AtlassianTeamCatalogKind() SnapshotKind[TeamSnapshotRow] {
+	return NewSnapshotKind("atlassian_team_catalog", EmptyClosesNothing, func(TeamSnapshotRow) bool { return true })
+}

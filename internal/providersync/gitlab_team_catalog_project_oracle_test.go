@@ -75,7 +75,7 @@ func buildGitLabTeamCatalogProjectOracleRow(t *testing.T, input map[string]any) 
 		t.Fatal("normalizeGitLabProjectCatalogRow rejected a valid oracle case")
 	}
 	return gitlabTeamCatalogProjectProducerRow{
-		ID: row.ID, Provider: row.Provider, Name: row.Name, IsActive: int(row.IsActive),
+		ID: row.ID.String(), Provider: row.Provider, Name: row.Name, IsActive: int(row.IsActive),
 		UpdatedAt: row.UpdatedAt, LastSynced: row.LastSynced, ProjectKey: row.ProjectKey,
 		OrgID: row.OrgID, State: row.State, URL: row.URL, TeamIDs: row.TeamIDs, TeamKeys: row.TeamKeys,
 		LeadID: row.LeadID, LeadName: row.LeadName, LeadEmail: row.LeadEmail,

@@ -246,14 +246,14 @@ func linearReferenceCatalogIntegrationRows(claim Claim, now time.Time) LinearRef
 			Priority: 10, ValidFrom: now, UpdatedAt: now,
 		}},
 		Projects: []linearReferenceProjectRow{{
-			ID: "project-1", OrgID: claim.OrgID, Provider: "linear", ProjectKey: &projectKey,
+			ID: testPID("project-1"), OrgID: claim.OrgID, Provider: "linear", ProjectKey: &projectKey,
 			Name: "Platform", IsActive: 1, State: "started", TargetDate: &projectTargetDate,
 			URL: "https://linear.app/project-1", TeamIDs: []string{"team-1"}, TeamKeys: []string{"ENG"},
 			LeadID: linearReferenceStringPtr("user-7"), LeadName: linearReferenceStringPtr("Alice"),
 			LeadEmail: linearReferenceStringPtr("alice@example.com"), UpdatedAt: now, LastSynced: now,
 		}},
 		Ownership: []linearReferenceOwnershipRow{{
-			OrgID: claim.OrgID, Provider: "linear", TeamID: "linear:ENG", ProjectID: "project-1",
+			OrgID: claim.OrgID, Provider: "linear", TeamID: "linear:ENG", ProjectID: testPID("project-1"),
 			ProjectKey: &projectKey, Source: "native", IsPrimary: 1, Specificity: 100,
 			Priority: 10, ValidFrom: now, UpdatedAt: now,
 		}},

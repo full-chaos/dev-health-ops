@@ -92,9 +92,14 @@ const (
 // Retraction: the members and project links an Atlassian team held before and
 // the snapshot omits (a person who left, a project it stopped working on, an
 // archived or deleted team) are closed with a replacement row (valid_to = now,
-// the same sort key), because the attribution loaders read valid_to. A project
-// link is closed only by a complete collection (Rows.ProjectLinksComplete,
-// through providersync.PlanOwnershipSnapshot). Only rows
+// the same sort key), because the attribution loaders read valid_to. Every
+// close goes through the one snapshot rule (providersync.PlanSnapshot), one
+// fact kind at a time, each on the proof of its own reads: the teams of the
+// catalog (Rows.TeamSearchComplete; a search that answers no team deactivates
+// none and puts no other team in scope), the memberships
+// (Rows.MembershipsComplete) and the project links (Rows.ProjectLinksComplete).
+// A kind that closes nothing while it holds open rows is logged and counted
+// (providersync.ReportSnapshotPlan). Only rows
 // of Atlassian teams (their catalog row carries the team ARI) with source
 // native are touched; the project-as-team rows never are. Members and links
 // that stay keep their original valid_from, so a re-run replaces a row instead
@@ -109,10 +114,11 @@ func Write(ctx context.Context, conn driver.Conn, orgID string, rows Rows, selec
 	if err := checkTeamIDs(rows); err != nil {
 		return result, err
 	}
-	scope, missing, err := teamsInScope(ctx, conn, orgID, rows.Teams)
+	scope, missing, catalog, err := teamsInScope(ctx, conn, orgID, rows)
 	if err != nil {
 		return result, fmt.Errorf("read known atlassian teams: %w", err)
 	}
+	providersync.ReportSnapshotPlan(ctx, Provider, orgID, catalog)
 	var deactivate []inactiveTeam
 	if selections.Structure {
 		if deactivate, err = planDeactivations(ctx, conn, orgID, missing); err != nil {
@@ -158,16 +164,24 @@ func Write(ctx context.Context, conn driver.Conn, orgID string, rows Rows, selec
 	var memberships []MembershipRow
 	var expiredMemberships []openMembership
 	if selections.Members {
-		if memberships, expiredMemberships, err = planMemberships(ctx, conn, orgID, scope, freshMemberships); err != nil {
+		var plan providersync.SnapshotPlan
+		if memberships, expiredMemberships, plan, err = planMemberships(ctx, conn, orgID, scope, freshMemberships, now,
+			providersync.AtlassianTeamMembershipKind().Snapshot(providersync.ProveSnapshot(
+				providersync.SnapshotTerm{Holds: rows.MembershipsComplete, Reason: snapshotMemberReadsNotEnded}))); err != nil {
 			return result, fmt.Errorf("read current team memberships: %w", err)
 		}
+		providersync.ReportSnapshotPlan(ctx, Provider, orgID, plan)
 	}
 	var ownership []OwnershipRow
 	var expiredOwnership []openOwnership
 	if selections.Projects {
-		if ownership, expiredOwnership, err = planOwnership(ctx, conn, orgID, scope, rows.Ownership, now, rows.ProjectLinksComplete, rows.UnreadableProjectLinkTeams); err != nil {
+		var plan providersync.SnapshotPlan
+		if ownership, expiredOwnership, plan, err = planOwnership(ctx, conn, orgID, scope, rows.Ownership, now,
+			providersync.AtlassianTeamLinkKind(Source, rows.UnreadableProjectLinkTeams).Snapshot(providersync.ProveSnapshot(
+				providersync.SnapshotTerm{Holds: rows.ProjectLinksComplete, Reason: snapshotLinkReadsNotEnded}))); err != nil {
 			return result, fmt.Errorf("read current team project ownership: %w", err)
 		}
+		providersync.ReportSnapshotPlan(ctx, Provider, orgID, plan)
 	}
 	if selections.Projects {
 		result.ProjectLinks = rows.ProjectLinks
@@ -225,35 +239,62 @@ func Write(ctx context.Context, conn driver.Conn, orgID string, rows Rows, selec
 	return result, nil
 }
 
+// The reasons of the Atlassian Teams snapshot terms.
+const (
+	snapshotTeamSearchNotEnded  = "team_search_not_read_to_the_end"
+	snapshotMemberReadsNotEnded = "member_reads_not_read_to_the_end"
+	snapshotLinkReadsNotEnded   = "project_links_not_read_to_the_end"
+)
+
 // teamsInScope is every Atlassian team this run answers for: the ones the
-// snapshot returned and the ones already in the catalog; missing is the second
-// group minus the first (teams deleted upstream).
-func teamsInScope(ctx context.Context, conn driver.Conn, orgID string, teams []TeamRow) (ids, missing []string, err error) {
+// snapshot returned, and the ones already in the catalog that the snapshot
+// rule says were deleted upstream (missing). A catalog team outside the answer
+// is deleted upstream only when the team search reached its end and returned
+// at least one team (providersync.AtlassianTeamCatalogKind): a search that
+// answers no team is far more often an access change than an organization
+// that deleted every team, so it puts no other team in scope, and nothing of
+// those teams is closed or deactivated.
+func teamsInScope(ctx context.Context, conn driver.Conn, orgID string, rows Rows) (ids, missing []string, plan providersync.SnapshotPlan, err error) {
 	seen := map[string]bool{}
-	for _, team := range teams {
+	var fresh []providersync.TeamSnapshotRow
+	for _, team := range rows.Teams {
 		if !seen[team.ID] {
 			seen[team.ID] = true
 			ids = append(ids, team.ID)
+			fresh = append(fresh, providersync.TeamSnapshotRow{TeamID: team.ID})
 		}
 	}
 	result, err := conn.Query(ctx, knownTeamsQuery,
 		clickhouse.Named("org_id", orgID), clickhouse.Named("provider", Provider), clickhouse.Named("ari_prefix", atlassianTeamARIPrefix))
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, plan, err
 	}
 	defer result.Close()
+	var known []providersync.TeamSnapshotRow
+	knownSeen := map[string]bool{}
 	for result.Next() {
 		var id string
 		if err := result.Scan(&id); err != nil {
-			return nil, nil, err
+			return nil, nil, plan, err
 		}
-		if !seen[id] {
-			seen[id] = true
-			ids = append(ids, id)
-			missing = append(missing, id)
+		if !knownSeen[id] {
+			knownSeen[id] = true
+			known = append(known, providersync.TeamSnapshotRow{TeamID: id})
 		}
 	}
-	return ids, missing, result.Err()
+	if err := result.Err(); err != nil {
+		return nil, nil, plan, err
+	}
+	plan = providersync.PlanSnapshot(fresh, known, providersync.TeamSnapshotKey,
+		func(providersync.TeamSnapshotRow) time.Time { return time.Time{} }, time.Time{},
+		providersync.AtlassianTeamCatalogKind().Snapshot(providersync.ProveSnapshot(
+			providersync.SnapshotTerm{Holds: rows.TeamSearchComplete, Reason: snapshotTeamSearchNotEnded})))
+	for _, retraction := range plan.Retract {
+		id := known[retraction.Open].TeamID
+		ids = append(ids, id)
+		missing = append(missing, id)
+	}
+	return ids, missing, plan, nil
 }
 
 type inactiveTeam struct {
@@ -299,31 +340,44 @@ type openMembership struct {
 	specificity       uint16
 	priority          int32
 	validFrom         time.Time
-}
-
-type openOwnership struct {
-	teamID, projectID string
-	projectKey        *string
-	source            string
-	isPrimary         uint8
-	specificity       uint16
-	priority          int32
-	validFrom         time.Time
 	// closedAt is the valid_to the snapshot rule closes this row with.
 	closedAt time.Time
 }
 
-// planMemberships reads the open memberships of the teams in scope, gives each
-// fresh row the valid_from of the row it replaces, and returns the open rows
-// the snapshot no longer has.
-func planMemberships(ctx context.Context, conn driver.Conn, orgID string, scope []string, fresh []MembershipRow) ([]MembershipRow, []openMembership, error) {
+type openOwnership struct {
+	teamID      string
+	projectID   providersync.ProjectID
+	projectKey  *string
+	source      string
+	isPrimary   uint8
+	specificity uint16
+	priority    int32
+	validFrom   time.Time
+	// closedAt is the valid_to the snapshot rule closes this row with.
+	closedAt time.Time
+}
+
+// planMemberships reads the open memberships of the teams in scope and
+// applies the shared snapshot rule (providersync.PlanSnapshot): a fresh row
+// keeps the valid_from it was first seen with, and every open membership the
+// snapshot no longer has is returned to be closed. A team in scope with no
+// fresh member loses all of its members: scope holds the teams deleted
+// upstream.
+//
+// snapshot is the membership kind with the proof of the member reads
+// (Rows.MembershipsComplete): only a collection that read every active team's
+// members to the end closes a membership.
+func planMemberships(
+	ctx context.Context, conn driver.Conn, orgID string, scope []string, fresh []MembershipRow, now time.Time,
+	snapshot providersync.KindSnapshot[providersync.MembershipSnapshotRow],
+) ([]MembershipRow, []openMembership, providersync.SnapshotPlan, error) {
 	if len(scope) == 0 {
-		return fresh, nil, nil
+		return fresh, nil, providersync.SnapshotPlan{}, nil
 	}
 	result, err := conn.Query(ctx, openMembershipsQuery,
 		clickhouse.Named("org_id", orgID), clickhouse.Named("provider", Provider), clickhouse.Named("team_ids", scope))
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, providersync.SnapshotPlan{}, err
 	}
 	defer result.Close()
 	var open []openMembership
@@ -331,37 +385,35 @@ func planMemberships(ctx context.Context, conn driver.Conn, orgID string, scope 
 		var row openMembership
 		if err := result.Scan(&row.teamID, &row.memberID, &row.rawProviderUserID, &row.rawEmail, &row.identityFacets, &row.source,
 			&row.isPrimary, &row.specificity, &row.priority, &row.validFrom); err != nil {
-			return nil, nil, err
+			return nil, nil, providersync.SnapshotPlan{}, err
 		}
 		open = append(open, row)
 	}
 	if err := result.Err(); err != nil {
-		return nil, nil, err
+		return nil, nil, providersync.SnapshotPlan{}, err
 	}
-	firstSeen := map[string]time.Time{}
-	for _, row := range open {
-		key := row.teamID + "\x00" + row.memberID
-		if at, ok := firstSeen[key]; !ok || row.validFrom.Before(at) {
-			firstSeen[key] = row.validFrom
-		}
+	freshFacts := make([]providersync.MembershipSnapshotRow, len(fresh))
+	for i, row := range fresh {
+		freshFacts[i] = providersync.MembershipSnapshotRow{TeamID: row.TeamID, MemberID: row.MemberID, ValidFrom: row.ValidFrom}
 	}
-	current := map[string]bool{}
+	openFacts := make([]providersync.MembershipSnapshotRow, len(open))
+	for i, row := range open {
+		openFacts[i] = providersync.MembershipSnapshotRow{TeamID: row.teamID, MemberID: row.memberID, ValidFrom: row.validFrom}
+	}
+	plan := providersync.PlanSnapshot(freshFacts, openFacts, providersync.MembershipSnapshotKey,
+		func(row providersync.MembershipSnapshotRow) time.Time { return row.ValidFrom }, now, snapshot)
 	out := make([]MembershipRow, len(fresh))
 	for i, row := range fresh {
-		key := row.TeamID + "\x00" + row.MemberID
-		current[key] = true
-		if at, ok := firstSeen[key]; ok && at.Before(row.ValidFrom) {
-			row.ValidFrom = at
-		}
+		row.ValidFrom = plan.ValidFrom[i]
 		out[i] = row
 	}
 	var expired []openMembership
-	for _, row := range open {
-		if !current[row.teamID+"\x00"+row.memberID] {
-			expired = append(expired, row)
-		}
+	for _, retraction := range plan.Retract {
+		row := open[retraction.Open]
+		row.closedAt = retraction.ClosedAt
+		expired = append(expired, row)
 	}
-	return out, expired, nil
+	return out, expired, plan, nil
 }
 
 // planOwnership reads the open project links of the teams in scope and
@@ -370,33 +422,35 @@ func planMemberships(ctx context.Context, conn driver.Conn, orgID string, scope 
 // the snapshot no longer has is returned to be closed. A team in scope with no
 // fresh link loses all of its links: scope holds the teams deleted upstream.
 //
-// complete is Rows.ProjectLinksComplete: only a collection that read every
-// team's project links to the end closes a link.
-//
-// unreadable is Rows.UnreadableProjectLinkTeams: no open link of such a team
-// is closed. Its open links still go into the plan, because the team's fresh
-// links take their first-seen valid_from from them; only the plan's closing
-// of them is dropped.
-func planOwnership(ctx context.Context, conn driver.Conn, orgID string, scope []string, fresh []OwnershipRow, now time.Time, complete bool, unreadable []string) ([]OwnershipRow, []openOwnership, error) {
+// snapshot is the link kind with the proof of the link reads
+// (Rows.ProjectLinksComplete): only a collection that read every team's
+// project links to the end closes a link. The kind leaves out the teams of
+// Rows.UnreadableProjectLinkTeams: no open link of such a team is closed. Its
+// open links still go into the plan, because the team's fresh links take
+// their first-seen valid_from from them.
+func planOwnership(
+	ctx context.Context, conn driver.Conn, orgID string, scope []string, fresh []OwnershipRow, now time.Time,
+	snapshot providersync.KindSnapshot[providersync.OwnershipSnapshotRow],
+) ([]OwnershipRow, []openOwnership, providersync.SnapshotPlan, error) {
 	if len(scope) == 0 {
-		return fresh, nil, nil
+		return fresh, nil, providersync.SnapshotPlan{}, nil
 	}
 	result, err := conn.Query(ctx, openOwnershipQuery,
 		clickhouse.Named("org_id", orgID), clickhouse.Named("provider", Provider), clickhouse.Named("team_ids", scope))
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, providersync.SnapshotPlan{}, err
 	}
 	defer result.Close()
 	var open []openOwnership
 	for result.Next() {
 		var row openOwnership
 		if err := result.Scan(&row.teamID, &row.projectID, &row.projectKey, &row.source, &row.isPrimary, &row.specificity, &row.priority, &row.validFrom); err != nil {
-			return nil, nil, err
+			return nil, nil, providersync.SnapshotPlan{}, err
 		}
 		open = append(open, row)
 	}
 	if err := result.Err(); err != nil {
-		return nil, nil, err
+		return nil, nil, providersync.SnapshotPlan{}, err
 	}
 	freshFacts := make([]providersync.OwnershipSnapshotRow, len(fresh))
 	for i, row := range fresh {
@@ -406,7 +460,7 @@ func planOwnership(ctx context.Context, conn driver.Conn, orgID string, scope []
 	for i, row := range open {
 		openFacts[i] = providersync.OwnershipSnapshotRow{TeamID: row.teamID, ProjectID: row.projectID, Source: row.source, ValidFrom: row.validFrom}
 	}
-	plan := providersync.PlanOwnershipSnapshot(providersync.OwnershipSnapshot{Fresh: freshFacts, Complete: complete}, openFacts, now)
+	plan := providersync.PlanOwnershipSnapshot(freshFacts, openFacts, now, snapshot)
 	out := make([]OwnershipRow, len(fresh))
 	for i, row := range fresh {
 		row.ValidFrom = plan.ValidFrom[i]
@@ -415,13 +469,10 @@ func planOwnership(ctx context.Context, conn driver.Conn, orgID string, scope []
 	var expired []openOwnership
 	for _, retraction := range plan.Retract {
 		row := open[retraction.Open]
-		if slices.Contains(unreadable, row.teamID) {
-			continue
-		}
 		row.closedAt = retraction.ClosedAt
 		expired = append(expired, row)
 	}
-	return out, expired, nil
+	return out, expired, plan, nil
 }
 
 // writeTeams writes the catalog rows. keepProjectKeys keeps every team's
@@ -519,7 +570,7 @@ func writeMemberships(ctx context.Context, conn driver.Conn, orgID string, rows 
 	}
 	// A closed replacement has the sort key of the open row it retracts.
 	for _, row := range expired {
-		closedAt := now
+		closedAt := row.closedAt
 		if err := batch.Append(
 			orgID, Provider, row.teamID, row.memberID, row.rawProviderUserID, row.rawEmail, row.identityFacets, row.source,
 			row.isPrimary, row.specificity, row.priority, row.validFrom, &closedAt, now,

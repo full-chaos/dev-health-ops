@@ -59,6 +59,13 @@ type DateValued interface {
 	OracleDate() string
 }
 
+// StringValued is how a Go type with a hidden string value (a typed id with an
+// unexported field) declares that it persists as a plain string, so
+// TypedEncode tags it "str" like the Python side.
+type StringValued interface {
+	OracleString() string
+}
+
 // Case is one input case for a generic Python<->Go oracle comparison. Input
 // must be JSON-serializable exactly as the target pair's Python
 // build_row(case) expects it.
@@ -244,6 +251,9 @@ func TypedEncode(t *testing.T, v reflect.Value) any {
 	// DateValued to opt into the matching tag.
 	if dated, ok := v.Interface().(DateValued); ok {
 		return map[string]any{"t": "date", "v": dated.OracleDate()}
+	}
+	if text, ok := v.Interface().(StringValued); ok {
+		return map[string]any{"t": "str", "v": text.OracleString()}
 	}
 	switch v.Kind() {
 	case reflect.String:

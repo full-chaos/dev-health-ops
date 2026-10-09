@@ -363,37 +363,38 @@ WHERE org_id = ? AND provider = ? AND source = ? AND team_id IN ?
 // SnapshotOwnership returns the rows of one ownership write: this run's
 // grants on their first-seen valid_from, and the open provider_access rows of
 // the CLOSABLE teams that GitLab no longer returns, closed at `at`, through
-// the shared PlanOwnershipSnapshot rule. readTeamIDs is every team whose
-// project listing returned: their open rows give the first-seen valid_from.
-// closableTeamIDs is the part of it that decideOwnershipClose lets close; a
-// team outside it, and a run with none, closes nothing. Rows of another org,
-// provider or source are never read and never closed. A failed read of the
-// open rows is an error before any write. It returns the rows to write and
-// how many of them close a row.
+// the shared snapshot rule (PlanOwnershipSnapshot). readTeamIDs is every team
+// whose project listing returned: their open rows give the first-seen
+// valid_from. grants is the grant kind of the teams decideOwnershipClose lets
+// close, with the gate's proof; a team outside it, and a run with none, closes
+// nothing. Rows of another org, provider or source are never read and never
+// closed. A failed read of the open rows is an error before any write. It
+// returns the rows to write and the plan.
 func (sink GitLabTeamCatalogClickHouseEffects) SnapshotOwnership(
-	ctx context.Context, orgID string, fresh []gitlabTeamCatalogOwnershipRow, readTeamIDs, closableTeamIDs []string, at time.Time,
-) ([]gitlabTeamCatalogOwnershipRow, int, error) {
+	ctx context.Context, orgID string, fresh []gitlabTeamCatalogOwnershipRow, readTeamIDs []string,
+	grants KindSnapshot[OwnershipSnapshotRow], at time.Time,
+) ([]gitlabTeamCatalogOwnershipRow, SnapshotPlan, error) {
 	if sink.Conn == nil || strings.TrimSpace(orgID) == "" || at.IsZero() {
-		return nil, 0, ErrInvalidConfiguration
+		return nil, SnapshotPlan{}, ErrInvalidConfiguration
 	}
 	if len(readTeamIDs) == 0 {
-		return fresh, 0, nil
+		return fresh, SnapshotPlan{}, nil
 	}
 	open, err := sink.openProviderAccessOwnership(ctx, orgID, readTeamIDs)
 	if err != nil {
-		return nil, 0, err
+		return nil, SnapshotPlan{}, err
 	}
-	rows, closed := gitlabOwnershipSnapshot(fresh, open, at, len(closableTeamIDs) > 0, closableTeamIDs)
-	return rows, closed, nil
+	rows, plan := gitlabOwnershipSnapshot(fresh, open, at, grants)
+	return rows, plan, nil
 }
 
 // gitlabOwnershipSnapshot applies the shared snapshot rule
-// (PlanOwnershipSnapshot) to one run. complete says the listings of the
-// closable teams reached a confirmed end; anything less closes nothing, and
-// an open row of a team outside closable is never closed.
+// (PlanOwnershipSnapshot) to one run. grants names the teams whose listing
+// reached a confirmed end; an open row of a team outside it is of no kind and
+// is never closed.
 func gitlabOwnershipSnapshot(
-	fresh, open []gitlabTeamCatalogOwnershipRow, at time.Time, complete bool, closable []string,
-) ([]gitlabTeamCatalogOwnershipRow, int) {
+	fresh, open []gitlabTeamCatalogOwnershipRow, at time.Time, grants KindSnapshot[OwnershipSnapshotRow],
+) ([]gitlabTeamCatalogOwnershipRow, SnapshotPlan) {
 	facts := func(rows []gitlabTeamCatalogOwnershipRow) []OwnershipSnapshotRow {
 		out := make([]OwnershipSnapshotRow, len(rows))
 		for index, row := range rows {
@@ -401,9 +402,7 @@ func gitlabOwnershipSnapshot(
 		}
 		return out
 	}
-	openFacts := facts(open)
-	plan := retainClosableRetractions(
-		PlanOwnershipSnapshot(OwnershipSnapshot{Fresh: facts(fresh), Complete: complete}, openFacts, at), openFacts, closable)
+	plan := PlanOwnershipSnapshot(facts(fresh), facts(open), at, grants)
 	rows := make([]gitlabTeamCatalogOwnershipRow, 0, len(fresh)+len(plan.Retract))
 	for index, row := range fresh {
 		row.ValidFrom = plan.ValidFrom[index]
@@ -416,7 +415,7 @@ func gitlabOwnershipSnapshot(
 		row.UpdatedAt = at
 		rows = append(rows, row)
 	}
-	return rows, len(plan.Retract)
+	return rows, plan
 }
 
 func (sink GitLabTeamCatalogClickHouseEffects) writeOwnership(ctx context.Context, rows []gitlabTeamCatalogOwnershipRow) error {

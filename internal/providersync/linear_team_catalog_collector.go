@@ -2,6 +2,8 @@ package providersync
 
 import (
 	"context"
+	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
@@ -177,9 +179,48 @@ func (collector LinearTeamCatalogCollector) CollectTeamCatalog(
 		if err := collector.Sink.WriteEffect(ctx, writeClaim, batch.Effects.Projects); err != nil {
 			return result, err
 		}
-		if err := collector.Sink.WriteEffect(ctx, writeClaim, batch.Effects.Ownership); err != nil {
+		// Snapshot rule, the one every ownership writer shares
+		// (PlanOwnershipSnapshot): a row the run still holds keeps the
+		// valid_from it was first seen with, and an open row of this writer
+		// that the run no longer holds is closed in this write only when the
+		// walk of ITS kind proved its end and found at least one row of the
+		// kind. A new stamp at each sync would add one more open row for the
+		// same fact.
+		ownershipRows, plan, err := collector.Sink.SnapshotOwnership(
+			ctx, ref.OrgID, batch.Rows.Ownership, normalizedAt.UTC().Truncate(time.Millisecond),
+			linearOwnershipKindSnapshots(ref.OrgID, batch.Evidence, batch.Result)...)
+		if err != nil {
 			return result, err
 		}
+		retracted := len(plan.Retract)
+		incomplete := ReportSnapshotPlan(ctx, "linear", ref.OrgID, plan)
+		if incomplete {
+			slog.Default().WarnContext(ctx, "linear_reference_catalog_ownership_snapshot_incomplete",
+				"org_id", ref.OrgID, "teams_complete", batch.Evidence.TeamsComplete,
+				"projects_complete", batch.Evidence.ProjectsComplete,
+				"teams_without_key", batch.Result.OwnershipTeamsWithoutKey, "reasons", strings.Join(plan.SnapshotReasons(), ","))
+			// The project-walk causes are counted where the walk gives up; the
+			// ones below are decided here.
+			for _, reason := range plan.SnapshotReasons() {
+				switch reason {
+				case linearSnapshotTeamsNotRead, linearSnapshotKeylessLink, SnapshotEmptyAnswer:
+					recordLinearOwnershipSnapshotIncomplete(ctx, reason)
+				}
+			}
+		}
+		if retracted > 0 {
+			slog.Default().InfoContext(ctx, "linear_reference_catalog_ownership_retracted",
+				"org_id", ref.OrgID, "rows", retracted)
+		}
+		ownershipEffect, err := effectBatchFromValues(linearReferenceCatalogOwnershipDestination, EffectReadbackRequired, ownershipRows)
+		if err != nil {
+			return result, err
+		}
+		if err := collector.Sink.WriteEffect(ctx, writeClaim, ownershipEffect); err != nil {
+			return result, err
+		}
+		result.OwnershipRetracted = retracted
+		result.OwnershipSnapshotIncomplete = incomplete
 		result.ProjectsWritten = batch.Result.Projects
 		result.OwnershipWritten = batch.Result.Ownership
 		result.ProjectsWithoutKey = batch.Result.ProjectsWithoutKey
@@ -197,3 +238,30 @@ func (collector LinearTeamCatalogCollector) CollectTeamCatalog(
 }
 
 var _ TeamCatalogCollector = LinearTeamCatalogCollector{}
+
+// The reasons of the Linear snapshot terms. The project-walk causes
+// (project_pages_not_read_to_the_end, project_teams_page_end_not_stated, ...)
+// are named where the walk gives up; linearSnapshotProjectsNotRead is the
+// term that carries them.
+const (
+	linearSnapshotTeamsNotRead    = "teams_not_read_to_the_end"
+	linearSnapshotProjectsNotRead = "projects_not_read_to_the_end"
+	linearSnapshotKeylessLink     = "project_team_link_without_key"
+)
+
+// linearOwnershipKindSnapshots is the proof of each fact kind of one Linear
+// catalog run. Each kind's proof holds only terms of its own walk: the team
+// walk for the team-key rows; every project page and node, and every
+// project-team link with a key, for the project rows (a dropped link is a fact
+// the run did not see).
+func linearOwnershipKindSnapshots(orgID string, evidence LinearReferenceCatalogEvidence, result LinearReferenceCatalogResult) []KindSnapshot[OwnershipSnapshotRow] {
+	return []KindSnapshot[OwnershipSnapshotRow]{
+		LinearProjectOwnershipKind(orgID).Snapshot(ProveSnapshot(
+			SnapshotTerm{Holds: evidence.ProjectsComplete, Reason: linearSnapshotProjectsNotRead},
+			SnapshotTerm{Holds: result.OwnershipTeamsWithoutKey == 0, Reason: linearSnapshotKeylessLink},
+		)),
+		LinearTeamKeyOwnershipKind(orgID).Snapshot(ProveSnapshot(
+			SnapshotTerm{Holds: evidence.TeamsComplete, Reason: linearSnapshotTeamsNotRead},
+		)),
+	}
+}

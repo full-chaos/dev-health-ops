@@ -153,7 +153,7 @@ type jiraTeamCatalogOwnershipRow struct {
 	OrgID       string     `json:"org_id"`
 	Provider    string     `json:"provider"`
 	TeamID      string     `json:"team_id"`
-	ProjectID   string     `json:"project_id"`
+	ProjectID   ProjectID  `json:"project_id"`
 	ProjectKey  *string    `json:"project_key"`
 	Source      string     `json:"source"`
 	IsPrimary   uint8      `json:"is_primary"`
@@ -186,7 +186,7 @@ type jiraTeamCatalogMembershipRow struct {
 // captured on team_memberships, so those columns stay empty/nil here,
 // matching Python's ProjectRecord defaults exactly.
 type jiraTeamCatalogProjectRow struct {
-	ID         string     `json:"id"`
+	ID         ProjectID  `json:"id"`
 	OrgID      string     `json:"org_id"`
 	Provider   string     `json:"provider"`
 	ProjectKey *string    `json:"project_key"`
@@ -264,7 +264,7 @@ func normalizeJiraTeamRow(
 // same value work_items.project_id holds, so a team reaches its project's
 // work items by (provider, project_id) with no key join. project_key is a
 // label only.
-func normalizeJiraOwnershipRow(orgID, teamID, projectID, projectKey string, normalizedAt time.Time) jiraTeamCatalogOwnershipRow {
+func normalizeJiraOwnershipRow(orgID, teamID string, projectID ProjectID, projectKey string, normalizedAt time.Time) jiraTeamCatalogOwnershipRow {
 	key := projectKey
 	return jiraTeamCatalogOwnershipRow{
 		OrgID: orgID, Provider: jiraTeamCatalogProvider, TeamID: teamID,
@@ -274,7 +274,7 @@ func normalizeJiraOwnershipRow(orgID, teamID, projectID, projectKey string, norm
 	}
 }
 
-func normalizeJiraProjectRow(orgID, projectID, projectKey, name string, normalizedAt time.Time) jiraTeamCatalogProjectRow {
+func normalizeJiraProjectRow(orgID string, projectID ProjectID, projectKey, name string, normalizedAt time.Time) jiraTeamCatalogProjectRow {
 	key := projectKey
 	return jiraTeamCatalogProjectRow{
 		ID: projectID, OrgID: orgID, Provider: jiraTeamCatalogProvider,
@@ -359,7 +359,7 @@ func dedupeJiraProjectCatalogRows(rows []jiraTeamCatalogProjectRow) []jiraTeamCa
 	seen := make(map[string]bool, len(rows))
 	result := make([]jiraTeamCatalogProjectRow, 0, len(rows))
 	for _, row := range rows {
-		key := row.OrgID + "\x00" + row.Provider + "\x00" + row.ID
+		key := row.OrgID + "\x00" + row.Provider + "\x00" + row.ID.String()
 		if seen[key] {
 			continue
 		}
@@ -373,7 +373,7 @@ func dedupeJiraOwnershipRows(rows []jiraTeamCatalogOwnershipRow) []jiraTeamCatal
 	seen := make(map[string]bool, len(rows))
 	result := make([]jiraTeamCatalogOwnershipRow, 0, len(rows))
 	for _, row := range rows {
-		key := row.OrgID + "\x00" + row.Provider + "\x00" + row.TeamID + "\x00" + row.ProjectID + "\x00" + row.Source
+		key := row.OrgID + "\x00" + row.Provider + "\x00" + row.TeamID + "\x00" + row.ProjectID.String() + "\x00" + row.Source
 		if seen[key] {
 			continue
 		}
@@ -407,7 +407,7 @@ func validateJiraTeamRow(claim Claim, row jiraTeamCatalogTeamRow) error {
 
 func validateJiraOwnershipRow(claim Claim, row jiraTeamCatalogOwnershipRow) error {
 	if claim.Provider != jiraTeamCatalogProvider || row.Provider != jiraTeamCatalogProvider ||
-		row.OrgID != claim.OrgID || strings.TrimSpace(row.TeamID) == "" || strings.TrimSpace(row.ProjectID) == "" ||
+		row.OrgID != claim.OrgID || strings.TrimSpace(row.TeamID) == "" || row.ProjectID.IsZero() ||
 		row.IsPrimary > 1 || row.ValidFrom.IsZero() || row.UpdatedAt.IsZero() {
 		return ErrInvalidConfiguration
 	}
@@ -423,7 +423,7 @@ func validateJiraOwnershipRow(claim Claim, row jiraTeamCatalogOwnershipRow) erro
 		}
 		return nil
 	}
-	if jiraProjectIDIsKeyBuilt(row.OrgID, row.ProjectID) {
+	if jiraProjectIDIsKeyBuilt(row.OrgID, row.ProjectID.String()) {
 		return ErrInvalidConfiguration
 	}
 	switch row.Source {
@@ -453,10 +453,10 @@ func validateJiraMembershipRow(claim Claim, row jiraTeamCatalogMembershipRow) er
 
 func (row jiraTeamCatalogProjectRow) validate(claim Claim) error {
 	if claim.Provider != jiraTeamCatalogProvider || row.Provider != jiraTeamCatalogProvider ||
-		row.OrgID != claim.OrgID || strings.TrimSpace(row.ID) == "" || row.UpdatedAt.IsZero() || row.LastSynced.IsZero() {
+		row.OrgID != claim.OrgID || row.ID.IsZero() || row.UpdatedAt.IsZero() || row.LastSynced.IsZero() {
 		return ErrInvalidConfiguration
 	}
-	if jiraProjectIDIsKeyBuilt(row.OrgID, row.ID) {
+	if jiraProjectIDIsKeyBuilt(row.OrgID, row.ID.String()) {
 		return ErrInvalidConfiguration
 	}
 	return nil

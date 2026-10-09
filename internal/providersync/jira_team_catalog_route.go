@@ -249,8 +249,9 @@ func (handler JiraTeamCatalogRouteHandler) CollectTeamCatalog(
 			continue
 		}
 		projectKeys = append(projectKeys, key)
-		nativeProjectID := strings.TrimSpace(entry.ID)
-		if nativeProjectID == "" || jiraProjectIDIsKeyBuilt(ref.OrgID, nativeProjectID) {
+		nativeID := strings.TrimSpace(entry.ID)
+		nativeProjectID, nativeOK := JiraProjectID(nativeID)
+		if !nativeOK || jiraProjectIDIsKeyBuilt(ref.OrgID, nativeID) {
 			projectsSkippedNoNativeID++
 			continue
 		}
@@ -352,7 +353,7 @@ func jiraHoldArchivedOwnership(orgID string, archived []JiraArchivedProject, ope
 		isArchived[jiraKeyBuiltProjectIDPrefix(orgID)+project.Key] = true
 	}
 	for _, row := range open {
-		if isArchived[row.ProjectID] {
+		if isArchived[row.ProjectID.String()] {
 			held = append(held, row)
 			continue
 		}
@@ -730,7 +731,7 @@ func (collector JiraTeamCatalogCollector) CollectTeamCatalog(
 		// a key comes from this walk's own project search, never from a
 		// read of `projects`: a key the provider did not return this run has
 		// no identity to write.
-		nativeIDByKey := make(map[string]string, len(projects))
+		nativeIDByKey := make(map[string]ProjectID, len(projects))
 		for _, row := range projects {
 			if row.ProjectKey != nil {
 				nativeIDByKey[*row.ProjectKey] = row.ID
@@ -763,16 +764,20 @@ func (collector JiraTeamCatalogCollector) CollectTeamCatalog(
 			slog.Default().InfoContext(ctx, "jira_team_catalog_archived_ownership_held",
 				"org_id", ref.OrgID, "rows", len(held))
 		}
-		// An answer with no live ownership row closes nothing, whatever the
-		// archived read holds: no live project is far more often an access
-		// change than an organization that removed every project.
-		liveEmpty := len(ownership) == 0 && len(open) > 0
-		// The snapshot is complete only when every read behind it reached
-		// its end: all pages of the project search and the legacy links.
-		snapshotComplete := judgeJiraOwnershipSnapshot(ctx, ref.OrgID, batch.Result.ProjectSearchComplete, legacyComplete, liveEmpty, len(open)+len(held))
-		result.OwnershipSnapshotIncomplete = !snapshotComplete
+		// The snapshot closes only through its kind: every read behind it
+		// reached its end (all pages of the project search and the legacy
+		// links), and the answer holds at least one live ownership row (no
+		// live project is far more often an access change than an
+		// organization that removed every project), whatever the archived
+		// read holds.
+		snapshot := JiraLegacyOwnershipKind().Snapshot(ProveSnapshot(
+			SnapshotTerm{Holds: batch.Result.ProjectSearchComplete, Reason: jiraSnapshotProjectSearch},
+			SnapshotTerm{Holds: legacyComplete, Reason: jiraSnapshotLegacyLinks},
+		))
 		var retracted []jiraTeamCatalogOwnershipRow
-		ownership, retracted = jiraOwnershipSnapshot(ownership, open, normalizedAt.UTC().Truncate(time.Millisecond), snapshotComplete)
+		var plan SnapshotPlan
+		ownership, retracted, plan = jiraOwnershipSnapshot(ownership, open, normalizedAt.UTC().Truncate(time.Millisecond), snapshot)
+		result.OwnershipSnapshotIncomplete = judgeJiraOwnershipSnapshot(ctx, ref.OrgID, plan, len(open)+len(held))
 		if len(retracted) > 0 {
 			slog.Default().InfoContext(ctx, "jira_team_catalog_ownership_retracted",
 				"org_id", ref.OrgID, "rows", len(retracted), "project_ids", jiraRetractedProjectIDs(retracted))
@@ -838,9 +843,10 @@ func jiraRetractedProjectIDs(rows []jiraTeamCatalogOwnershipRow) []string {
 	seen := map[string]bool{}
 	ids := []string{}
 	for _, row := range rows {
-		if !seen[row.ProjectID] {
-			seen[row.ProjectID] = true
-			ids = append(ids, row.ProjectID)
+		id := row.ProjectID.String()
+		if !seen[id] {
+			seen[id] = true
+			ids = append(ids, id)
 		}
 	}
 	sort.Strings(ids)

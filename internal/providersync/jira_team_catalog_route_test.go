@@ -345,7 +345,7 @@ func TestJiraTeamCatalogCollectWritesNoProjectIdentityWithoutANativeID(t *testin
 		t.Fatalf("teams=%+v ownership=%+v memberships=%+v, want none: a project is not a team",
 			batch.Rows.Teams, batch.Rows.Ownership, batch.Rows.Memberships)
 	}
-	if len(batch.Rows.Projects) != 1 || batch.Rows.Projects[0].ID != "10001" {
+	if len(batch.Rows.Projects) != 1 || batch.Rows.Projects[0].ID.String() != "10001" {
 		t.Fatalf("projects=%+v, want only OPS on its native id", batch.Rows.Projects)
 	}
 	if batch.Result.ProjectsSkippedNoNativeID != 3 {
@@ -575,7 +575,7 @@ func TestJiraTeamCatalogCollectReadsArchivedProjectsToHoldOwnershipOnly(t *testi
 func TestJiraHoldArchivedOwnershipHoldsBothIDFormsOfAnArchivedProject(t *testing.T) {
 	t.Parallel()
 	row := func(team, project, source string) jiraTeamCatalogOwnershipRow {
-		return jiraTeamCatalogOwnershipRow{TeamID: team, ProjectID: project, Source: source}
+		return jiraTeamCatalogOwnershipRow{TeamID: team, ProjectID: testPID(project), Source: source}
 	}
 	archived := []JiraArchivedProject{{ID: "20001", Key: "OLD"}, {ID: "20002", Key: "GONE"}}
 	open := []jiraTeamCatalogOwnershipRow{
@@ -647,7 +647,7 @@ func TestJiraTeamCatalogCollectSkipsBoardDiscoveryForNonSoftwareProjectUnderStri
 	}
 	foundSUPProject := false
 	for _, row := range batch.Rows.Projects {
-		if row.ID == "10002" {
+		if row.ID.String() == "10002" {
 			foundSUPProject = true
 		}
 	}
@@ -725,7 +725,7 @@ func TestJiraTeamCatalogCollectBuildsTheProjectAndNoTeamOwnershipOrMembershipRow
 		batch.Result.TeamMembershipsImported != 0 || batch.Result.MembersImported != 0 {
 		t.Fatalf("result=%+v, want no team, ownership, membership or member counted", batch.Result)
 	}
-	if len(batch.Rows.Projects) != 1 || batch.Rows.Projects[0].ID != "10001" || batch.Result.ProjectsImported != 1 {
+	if len(batch.Rows.Projects) != 1 || batch.Rows.Projects[0].ID.String() != "10001" || batch.Result.ProjectsImported != 1 {
 		t.Fatalf("projects=%+v result=%+v, want the one project on its native id", batch.Rows.Projects, batch.Result)
 	}
 	if len(batch.Rows.Sprints) != 0 {
@@ -959,7 +959,7 @@ func TestJiraTeamCatalogProjectRestoredBetweenTheTwoReadsIsLive(t *testing.T) {
 	})
 	ids := []string{}
 	for _, row := range batch.Rows.Projects {
-		ids = append(ids, row.ID)
+		ids = append(ids, row.ID.String())
 	}
 	slices.Sort(ids)
 	if !slices.Equal(ids, []string{"10001", "20001"}) || len(batch.ArchivedProjects) != 0 || !batch.Result.ProjectSearchComplete {
@@ -978,7 +978,7 @@ func TestJiraTeamCatalogProjectArchivedBetweenTheTwoReadsIsKept(t *testing.T) {
 		live:     []string{`{"values":[` + moved + `],"isLast":true}`, `{"values":[],"isLast":true}`},
 		archived: []string{`{"values":[` + moved + `],"isLast":true}`},
 	})
-	if len(batch.Rows.Projects) != 1 || batch.Rows.Projects[0].ID != "20001" || !batch.Result.ProjectSearchComplete {
+	if len(batch.Rows.Projects) != 1 || batch.Rows.Projects[0].ID.String() != "20001" || !batch.Result.ProjectSearchComplete {
 		t.Fatalf("projects=%d result=%+v, want the project kept from the first live read", len(batch.Rows.Projects), batch.Result)
 	}
 	batch = collectJiraSearchSequence(t, &jiraSearchSequenceDoer{t: t,
@@ -1035,7 +1035,7 @@ func TestJiraTeamCatalogArchivedProjectIsLiveOnlyWhenTheReadAfterItSaysSo(t *tes
 		}
 		ids := []string{}
 		for _, row := range batch.Rows.Projects {
-			ids = append(ids, row.ID)
+			ids = append(ids, row.ID.String())
 		}
 		slices.Sort(ids)
 		if !slices.Equal(held, append([]string{}, tc.held...)) || !slices.Equal(ids, tc.projects) || !batch.Result.ProjectSearchComplete {
@@ -1113,18 +1113,55 @@ func TestRecordJiraOwnershipSnapshotIncompleteCountsEachReason(t *testing.T) {
 
 func TestJudgeJiraOwnershipSnapshotCountsOnlyAnIncompleteOne(t *testing.T) {
 	ctx := context.Background()
-	before := jiraSnapshotIncompleteCounts(t)
-	if !judgeJiraOwnershipSnapshot(ctx, "org-1", true, true, false, 0) {
-		t.Fatal("complete reads judged incomplete")
+	at := time.Date(2026, 10, 9, 12, 0, 0, 0, time.UTC)
+	held := []OwnershipSnapshotRow{{TeamID: "jira:ops", ProjectID: testPID("10001"), Source: jiraTeamCatalogLegacySource, ValidFrom: at.Add(-time.Hour)}}
+	plan := func(search, legacy bool, fresh, open []OwnershipSnapshotRow) SnapshotPlan {
+		return PlanOwnershipSnapshot(fresh, open, at, JiraLegacyOwnershipKind().Snapshot(ProveSnapshot(
+			SnapshotTerm{Holds: search, Reason: jiraSnapshotProjectSearch},
+			SnapshotTerm{Holds: legacy, Reason: jiraSnapshotLegacyLinks})))
 	}
-	if got := jiraSnapshotIncompleteCounts(t); !maps.Equal(got, before) {
-		t.Fatalf("a complete snapshot moved the counter: %v -> %v", before, got)
+	moved := func(before map[string]int64) map[string]int64 {
+		out := map[string]int64{}
+		for reason, n := range jiraSnapshotIncompleteCounts(t) {
+			if d := n - before[reason]; d != 0 {
+				out[reason] = d
+			}
+		}
+		return out
 	}
-	if judgeJiraOwnershipSnapshot(ctx, "org-1", true, false, false, 2) {
-		t.Fatal("an unread legacy links table judged complete")
-	}
-	if got := jiraSnapshotIncompleteCounts(t); got["legacy_links"] != before["legacy_links"]+1 {
-		t.Fatalf("counter %v -> %v, want legacy_links +1", before, got)
+	for _, c := range []struct {
+		name           string
+		search, legacy bool
+		fresh, open    []OwnershipSnapshotRow
+		incomplete     bool
+		want           map[string]int64
+	}{
+		{"complete reads over a held row", true, true, held, held, false, map[string]int64{}},
+		{"an unread legacy links table", true, false, held, held, true, map[string]int64{"legacy_links": 1}},
+		{"a project search that did not end", false, true, held, held, true, map[string]int64{"project_search": 1}},
+		{"no live ownership over an open row", true, true, nil, held, true, map[string]int64{"no_live_ownership": 1}},
+		{"no live ownership and no open row: nothing was kept", true, true, nil, nil, false, map[string]int64{}},
+		{"both reads cut and no live ownership", false, false, nil, held, true, map[string]int64{"project_search": 1, "legacy_links": 1, "no_live_ownership": 1}},
+	} {
+		before := jiraSnapshotIncompleteCounts(t)
+		abandonedBefore := snapshotAbandonedCounts(t)
+		if got := judgeJiraOwnershipSnapshot(ctx, "org-1", plan(c.search, c.legacy, c.fresh, c.open), len(c.open)); got != c.incomplete {
+			t.Errorf("%s: incomplete = %v, want %v", c.name, got, c.incomplete)
+		}
+		if got := moved(before); !maps.Equal(got, c.want) {
+			t.Errorf("%s: %s moved %v, want %v", c.name, jiraOwnershipSnapshotIncompleteName, got, c.want)
+		}
+		// The shared counter names the kind and the term's own reason.
+		wantShared := map[string]int64{}
+		for reason, n := range c.want {
+			if reason == "no_live_ownership" {
+				reason = SnapshotEmptyAnswer
+			}
+			wantShared["jira/jira_legacy_ownership/"+reason] = n
+		}
+		if got := snapshotAbandonedMoved(t, abandonedBefore); !maps.Equal(got, wantShared) {
+			t.Errorf("%s: %s moved %v, want %v", c.name, snapshotCloseAbandonedName, got, wantShared)
+		}
 	}
 }
 

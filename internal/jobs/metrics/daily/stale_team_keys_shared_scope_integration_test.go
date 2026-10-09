@@ -503,3 +503,105 @@ func TestTwoRunsOfOneDayThatEndTogetherLeaveTheDayRight(t *testing.T) {
 		t.Errorf("the day after two runs ended together, by team:\n got  %v\n want %v", after, want)
 	}
 }
+
+// A key comes back. The rows of zeros of a run are raised above the stored
+// rows, so they can be newer than the clock; a REAL row that a later run
+// writes for the same key must then be strictly newer than that row of zeros,
+// or real work reads as zero. The partitions write at their clock and can
+// lose; the end of the run stores the rows of the day strictly newer than
+// every stored row, so after the run ended every form of "the newest row"
+// (FINAL, argMax, LIMIT 1 BY) returns the real row.
+//
+// The teams are replaced by keyed ids and the day is computed again: the old
+// keys get rows of zeros. Then the old ids are active again and the day is
+// computed a third time, in the SAME second as the second run, and on a clock
+// two seconds BEHIND it.
+func TestARealRowOfAKeyThatComesBackIsNewerThanItsRowOfZeros(t *testing.T) {
+	ctx := context.Background()
+	conn := workItemAttributionLinkedIssueMigratedClickHouse(t, ctx)
+	day := sharedScopeDay
+	for index, testCase := range []struct {
+		name  string
+		third time.Duration // the clock of the third run against the second
+	}{
+		{"the third run in the same second as the second", 0},
+		{"the third run on a clock two seconds behind the second", -2 * time.Second},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			org := fmt.Sprintf("00000000-0000-4000-8000-0000005f%04d", index+1)
+			repos := []RepositoryID{RepositoryID(sharedScopeRepoAPI.String()), RepositoryID(sharedScopeRepoWeb.String())}
+			// The attribution family has its own clock: the attributions of a
+			// run are an input here, and the case is about the rows of the
+			// three tables, not about the version of an attribution.
+			compute := func(attributed, clock time.Time) {
+				t.Helper()
+				run := Run{ID: uuid.NewString(), OrganizationID: org, TargetDay: day, FullOrg: true, DiscoveredRepoIDs: repos}
+				for _, repo := range []uuid.UUID{sharedScopeRepoAPI, sharedScopeRepoWeb} {
+					for _, family := range sharedScopeFamilies {
+						at := clock
+						if family == "work_item_attribution" {
+							at = attributed
+						}
+						runSharedScopeFamily(t, ctx, conn, family, run, repo, at)
+					}
+				}
+				endStaleKeyRun(t, ctx, conn, run, clock)
+			}
+			teams := func(at time.Time, bareActive bool) {
+				t.Helper()
+				seedSharedScopeTeams(t, ctx, conn, org, at,
+					staleKeyAcceptanceTeam{id: "ENG", nativeKey: "ENG", active: bareActive},
+					staleKeyAcceptanceTeam{id: "linear:ENG", nativeKey: "ENG", active: !bareActive},
+					staleKeyAcceptanceTeam{id: "OPS", nativeKey: "OPS", active: bareActive},
+					staleKeyAcceptanceTeam{id: "linear:OPS", nativeKey: "OPS", active: !bareActive},
+				)
+			}
+			seedSharedScopeTeams(t, ctx, conn, org, day.Add(-72*time.Hour),
+				staleKeyAcceptanceTeam{id: "ENG", nativeKey: "ENG", active: true},
+				staleKeyAcceptanceTeam{id: "OPS", nativeKey: "OPS", active: true},
+			)
+			seedSharedScopeItems(t, ctx, conn, org)
+			history := day.Add(30 * time.Hour)
+			compute(history, history)
+			before := readSharedScope(t, ctx, conn, org)
+
+			teams(history.Add(time.Hour), false)
+			second := history.Add(10 * time.Hour)
+			compute(history.Add(90*time.Minute), second)
+			if keyed := readSharedScope(t, ctx, conn, org); keyed["linear:ENG"] != before["ENG"] || len(keyed) != 2 {
+				t.Fatalf("the second compute is not the case: %v", keyed)
+			}
+
+			// The old ids are active again; the third run is not later than
+			// the rows of zeros of the second.
+			teams(history.Add(2*time.Hour), true)
+			compute(history.Add(150*time.Minute), second.Add(testCase.third))
+
+			if after := readSharedScope(t, ctx, conn, org); !reflect.DeepEqual(after, before) {
+				t.Errorf("FINAL: the day by team after the keys came back:\n got  %v\n want %v", after, before)
+			}
+			// The other two forms of "the newest row of a key", for the key of
+			// team ENG in each table.
+			for _, read := range []struct{ table, measure, extraKey string }{
+				{"work_item_metrics_daily", "items_completed", ""},
+				{"estimate_coverage_metrics_daily", "backlog_size", ""},
+				{"work_item_state_durations_daily", "items_touched", " AND status = 'in_progress'"},
+			} {
+				where := " WHERE org_id = ? AND day = ? AND provider = 'linear' AND work_scope_id = 'board-1' AND ifNull(team_id, '') = 'ENG'" + read.extraKey
+				var byArgMax, byLimit float64
+				if err := conn.QueryRow(ctx, "SELECT toFloat64(argMax("+read.measure+", computed_at)) FROM "+read.table+where,
+					org, day).Scan(&byArgMax); err != nil {
+					t.Fatalf("argMax read of %s: %v", read.table, err)
+				}
+				if err := conn.QueryRow(ctx, "SELECT toFloat64("+read.measure+") FROM "+read.table+where+
+					" ORDER BY computed_at DESC LIMIT 1 BY org_id", org, day).Scan(&byLimit); err != nil {
+					t.Fatalf("LIMIT 1 BY read of %s: %v", read.table, err)
+				}
+				if byArgMax == 0 || byLimit == 0 {
+					t.Errorf("%s of %s for the key that came back: argMax %v, LIMIT 1 BY %v; want the real row in both",
+						read.measure, read.table, byArgMax, byLimit)
+				}
+			}
+		})
+	}
+}

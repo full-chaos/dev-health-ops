@@ -53,6 +53,10 @@ var classifiedDynamicFinalReads = map[string]struct {
 		"OPTIMIZE TABLE ... FINAL, a merge request, not a read"},
 	"providersync/team_id_carry.go": {2,
 		"planLink reads one of the three fixed team link tables of teamIDCarryLinks (team_memberships, team_project_ownership, team_repo_ownership); no operational table. FINAL is the current-row read there: each table is a ReplacingMergeTree(updated_at) keyed (org_id, provider, natural, team_id, source, valid_from), the read is bound by org_id, and the carry closes a link by re-inserting the same key with valid_to set and a later updated_at, so only FINAL drops the superseded open version before valid_to IS NULL filters it"},
+	"queryapi/datahealth/coverage.go": {1,
+		"lineageSource reads the team-keyed daily rollups of the lineage registry that have a live-row rule (work_item_metrics_daily, team_metrics_daily); no operational table"},
+	"api/session/activity.go": {1,
+		"activityStatement reads the team-keyed daily rollups among its four fixed metric tables (team_metrics_daily, work_item_metrics_daily); no operational table"},
 	"storedversion/storedversion.go": {1,
 		"Apply reads the tables of the stored-version spec set; the operational writers are explicitly out of that set (storedversion/writers_test.go outOfScopeWriters)"},
 }

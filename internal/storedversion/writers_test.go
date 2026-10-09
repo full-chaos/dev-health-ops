@@ -88,6 +88,7 @@ var outOfScopeWriters = map[string]string{
 	"internal/operationalbackfill/write.go|operational_alerts":                                                  "operational",
 	"internal/operationalbackfill/write.go|operational_on_call_schedules":                                       "operational",
 	"internal/testsupport/crossorg/crossorg.go|repos":                                                           "test support: seeds repos rows into a throwaway testcontainers ClickHouse for the cross-org integration tests; no production binary imports it",
+	"internal/testsupport/retractionseed/retractionseed.go|repos":                                               "test support: seeds repos rows into a throwaway ClickHouse for the retraction-row reader tests; no production binary imports it",
 }
 
 // unresolvedWriters build the table name at run time; each names why it

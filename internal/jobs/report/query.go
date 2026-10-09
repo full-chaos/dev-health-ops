@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"regexp"
 	"strings"
 	"time"
@@ -317,6 +318,7 @@ func (adapter *ClickHouseQueryAdapter) executeChart(ctx context.Context, spec Ch
 	}
 	rows, err := adapter.conn.Query(ctx, statement, parameters...)
 	if err != nil {
+		logChartFailure(ctx, spec, definition, "query", err)
 		return ChartResult{}, fmt.Errorf("query report chart: %w", ErrDependencyUnavailable)
 	}
 	defer rows.Close()
@@ -335,10 +337,12 @@ func (adapter *ClickHouseQueryAdapter) executeChart(ctx context.Context, spec Ch
 		if temporal {
 			var instant time.Time
 			if err := rows.Scan(&instant, &group, &y); err != nil {
+				logChartFailure(ctx, spec, definition, "scan", err)
 				return ChartResult{}, fmt.Errorf("scan report chart: %w", ErrDependencyUnavailable)
 			}
 			x = instant.Format(time.DateOnly)
 		} else if err := rows.Scan(&x, &group, &y); err != nil {
+			logChartFailure(ctx, spec, definition, "scan", err)
 			return ChartResult{}, fmt.Errorf("scan report chart: %w", ErrDependencyUnavailable)
 		}
 		if y == nil {
@@ -351,6 +355,7 @@ func (adapter *ClickHouseQueryAdapter) executeChart(ctx context.Context, spec Ch
 		result.DataPoints = append(result.DataPoints, point)
 	}
 	if err := rows.Err(); err != nil {
+		logChartFailure(ctx, spec, definition, "iterate", err)
 		return ChartResult{}, fmt.Errorf("iterate report chart: %w", ErrDependencyUnavailable)
 	}
 	// CHAOS-4140: best-effort telemetry for the dedup guard buildChartQuery
@@ -360,6 +365,18 @@ func (adapter *ClickHouseQueryAdapter) executeChart(ctx context.Context, spec Ch
 	// callers ignoring its error.
 	adapter.observeDedupGuard(ctx, spec, definition)
 	return result, nil
+}
+
+// logChartFailure records the real cause of a failed chart read. The error
+// returned to the caller stays the bounded ErrDependencyUnavailable (the cause
+// of a driver error is not for a report run's stored status); without this
+// line the cause was dropped and a refused scan looked like an outage. The
+// whole report fails with the chart: a failed read never becomes a measured 0.
+// The job runtime counts the failed run by its reason.
+func logChartFailure(ctx context.Context, spec ChartSpec, definition metricDefinition, stage string, cause error) {
+	slog.ErrorContext(ctx, "report.chart_read_failed",
+		"stage", stage, "metric", spec.Metric, "source_table", definition.SourceTable,
+		"chart_id", spec.ChartID, "chart_type", spec.ChartType, "group_by", spec.GroupBy, "error", cause)
 }
 
 // buildChartWhere builds the WHERE clause and bound parameters shared by
@@ -474,7 +491,10 @@ func buildChartQuery(spec ChartSpec, definition metricDefinition) (string, []any
 	}
 	yExpression := averageExpression(definition.SourceTable, spec.Metric)
 	if strings.HasSuffix(spec.Metric, "_count") || definition.Unit == "count" {
-		yExpression = fmt.Sprintf("sum(%s)", spec.Metric)
+		// sum() of an unsigned integer column is UInt64 in ClickHouse and the
+		// chart read scans y into a float64, which the driver refuses. Cast
+		// in the query so the scan target never depends on the column type.
+		yExpression = fmt.Sprintf("toFloat64(sum(%s))", spec.Metric)
 	}
 	// yExpression for a numerator/denominator ratio metric stays a plain
 	// avg(metric) -- CHAOS-4329 codex round 2 ("preserve team-level

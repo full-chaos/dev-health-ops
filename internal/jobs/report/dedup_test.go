@@ -184,7 +184,7 @@ func TestBuildChartQueryAveragesLeadTimeOverRowsWithACompletedItem(t *testing.T)
 	if query := build("lead_p50_hours"); !strings.Contains(query, "avg(if(completed_count > 0, lead_p50_hours, NULL)) AS y") {
 		t.Fatalf("lead_p50_hours is not averaged over the rows with a completed item:\n%s", query)
 	}
-	if query := build("completed_count"); !strings.Contains(query, "sum(completed_count) AS y") {
+	if query := build("completed_count"); !strings.Contains(query, "toFloat64(sum(completed_count)) AS y") {
 		t.Fatalf("completed_count is not a plain sum:\n%s", query)
 	}
 	if got := averageExpression("cicd_metrics_daily", "success_rate"); got != "avg(success_rate)" {

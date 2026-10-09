@@ -1057,7 +1057,7 @@ func fetchAIGovernance(ctx context.Context, client QueryClient, orgID string, te
         WHERE org_id = {org_id:String}
           ` + teamFilter + `
           AND day >= {start:Date} AND day < {end:Date}
-        GROUP BY day, team_id, repo_id`
+        GROUP BY day, team_id, repo_id` + liveRowHaving("ai_governance_coverage_daily")
 
 	bindings := periodBindings(orgID, start, end, teamBinding)
 	rows, err := client.Query(ctx, query, bindings)

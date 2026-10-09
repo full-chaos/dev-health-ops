@@ -47,6 +47,9 @@ func readReviewRows(ctx context.Context, t *testing.T, client QueryClient, org s
 	if rows.AIImpact, err = fetchAIImpact(ctx, client, org, nil, start, end); err != nil {
 		t.Fatalf("%s ai impact: %v", org, err)
 	}
+	if rows.AIGovernance, err = fetchAIGovernance(ctx, client, org, nil, start, end); err != nil {
+		t.Fatalf("%s ai governance: %v", org, err)
+	}
 	rows.StateDurations = byText(rows.StateDurations)
 	rows.Investment = byText(rows.Investment)
 	rows.AIImpact = byText(rows.AIImpact)
@@ -92,6 +95,9 @@ func TestOperatingReviewReadersGiveRetractionRowsNoWeight(t *testing.T) {
 	if len(control.AIImpact) != 1 || control.AIImpact[0].prsTotal != 6*(4+5+6+7) {
 		t.Fatalf("control ai impact = %+v, want one bucket with 132 pull requests", control.AIImpact)
 	}
+	if len(control.AIGovernance) != 6*4 {
+		t.Fatalf("control ai governance = %d rows, want one for each team and day (24)", len(control.AIGovernance))
+	}
 
 	retracted := readReviewRows(ctx, t, client, retractionseed.RetractedOrg, start, end)
 	if !reflect.DeepEqual(control, retracted) {
@@ -121,5 +127,8 @@ func TestOperatingReviewReadsNoRowForRetractionRowsOnly(t *testing.T) {
 	rows := readReviewRows(ctx, t, client, org, day, day.AddDate(0, 0, 1))
 	if len(rows.WorkItems)+len(rows.StateDurations)+len(rows.Investment)+len(rows.AIImpact)+len(rows.AIGovernance) != 0 {
 		t.Errorf("a period of retraction rows only gives rows: %+v", rows)
+	}
+	if coverage := aiGovernanceCoverage(rows.AIGovernance); coverage != 0 {
+		t.Errorf("AI governance coverage = %v for a period with no measurement, want 0 (missing)", coverage)
 	}
 }

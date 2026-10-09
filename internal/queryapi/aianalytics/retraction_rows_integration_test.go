@@ -43,7 +43,10 @@ func readAIAnswers(ctx context.Context, t *testing.T, client QueryClient, org st
 	if err != nil {
 		t.Fatal(err)
 	}
-	_ = model.AIDateRangeInput{StartDate: startDate, EndDate: endDate}
+	answers.Coverage, err = loadCoverage(ctx, client, org, model.AIDateRangeInput{StartDate: startDate, EndDate: endDate}, scope{})
+	if err != nil {
+		t.Fatalf("%s coverage: %v", org, err)
+	}
 	answers.Daily, err = loadDaily(ctx, client, org, start, end, scope{})
 	if err != nil {
 		t.Fatalf("%s daily: %v", org, err)
@@ -87,8 +90,9 @@ func TestAIAnalyticsLoadersGiveRetractionRowsNoWeight(t *testing.T) {
 	if got := *control.TeamFlow[2].WipCongestion; got != 0.5 {
 		t.Fatalf("control wip congestion of jira:ENG = %v, want 0.5", got)
 	}
-	if len(control.Daily) != 6*4 {
-		t.Fatalf("control daily rows = %d, want 24 (four teams, six days)", len(control.Daily))
+	if len(control.Coverage) != 6*4 || len(control.Daily) != 6*4 {
+		t.Fatalf("control coverage rows = %d, daily rows = %d, want 24 each (four teams, six days)",
+			len(control.Coverage), len(control.Daily))
 	}
 
 	retracted := readAIAnswers(ctx, t, client, retractionseed.RetractedOrg, start, end)

@@ -40,6 +40,23 @@ func (h handlers) keyTeamIDs(w http.ResponseWriter, r *http.Request, writer stri
 	return nil, false
 }
 
+// readTeamID resolves the team id a read route names
+// (providersync.ResolveTeamIDForRead): a bare id reads the one team that
+// holds it, two holders answer 409 as a write does, none reads the id as
+// given.
+func (h handlers) readTeamID(w http.ResponseWriter, r *http.Request, teamID string) (string, bool) {
+	resolved, err := providersync.ResolveTeamIDForRead(r.Context(), h.store.Conn, orgIDOf(r.Context()), teamID)
+	if err == nil {
+		return resolved, true
+	}
+	if errors.Is(err, providersync.ErrTeamIDAmbiguous) {
+		policy.WriteDetail(w, http.StatusConflict, fmt.Sprintf("Team id %q names more than one provider team; use the provider-prefixed id", teamID), nil)
+		return "", false
+	}
+	h.internal(w, r, "resolve team id", err)
+	return "", false
+}
+
 // checkKeyedTeamID is the store's guard before it writes a team id: an id
 // without a provider prefix, or a malformed one, is refused, so a writer
 // that did not go through keyTeamIDs fails before its write.

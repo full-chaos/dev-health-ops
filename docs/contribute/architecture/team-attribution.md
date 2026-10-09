@@ -1220,6 +1220,12 @@ retires the row and leaves the custom team. It refuses, before any write but the
 An admin edit of a pushed `custom:<id>` does not stop the next push of its source, which writes the team and
 keeps the admin's manual members.
 
+A read that names one team (`GET /teams/{team_id}`, `GET /teams/{team_id}/discover-members`,
+`GET /teams/{team_id}/infer-members`) resolves its id with the same rule and lookup
+(`providersync.ResolveTeamIDForRead`, chris D5711/D5712), without the carry: a prefixed id is read as given, a
+bare id reads the one active prefixed team that holds it (HTTP 409 when two do), and a bare id that no prefixed
+team holds is read as given, so a row the carry has not moved yet is still found and no row is a 404.
+
 So a bare id never reaches a write, and a bare id of a carried team lands on the prefixed team, not on the
 inactive bare row (which a write would make active again). The admin writers (`internal/api/teamsidentity`) all
 call it through `keyTeamIDs` before their first read or write of a team: team create (`POST /teams`) and update

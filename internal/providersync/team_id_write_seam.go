@@ -71,32 +71,13 @@ func KeyTeamIDsForWrite(ctx context.Context, conn TeamIDCarryConn, orgID, writer
 	for _, ref := range refs {
 		candidates = append(candidates, teamid.Candidates(ref.ID)...)
 	}
-	active := map[string]bool{}
-	if len(candidates) > 0 {
-		rows, err := conn.Query(ctx, teamIDWriteSeamActiveQuery, clickhouse.Named("org_id", strings.TrimSpace(orgID)), clickhouse.Named("ids", candidates))
-		if err != nil {
-			return nil, fmt.Errorf("team id write seam: read teams: %w", err)
-		}
-		defer rows.Close()
-		for rows.Next() {
-			var id string
-			if err := rows.Scan(&id); err != nil {
-				return nil, fmt.Errorf("team id write seam: read teams: %w", err)
-			}
-			active[id] = true
-		}
-		if err := rows.Err(); err != nil {
-			return nil, fmt.Errorf("team id write seam: read teams: %w", err)
-		}
+	active, err := activeTeamIDs(ctx, conn, orgID, candidates)
+	if err != nil {
+		return nil, fmt.Errorf("team id write seam: read teams: %w", err)
 	}
 	keyed := make([]string, len(refs))
 	for i, ref := range refs {
-		req := TeamIDRequest{Provider: ref.Provider, ID: ref.ID, Mode: ref.Mode, Holders: map[string]string{}}
-		for _, candidate := range teamid.Candidates(ref.ID) {
-			if active[candidate] {
-				req.Holders[teamIDPrefixProvider(candidate)] = candidate
-			}
-		}
+		req := TeamIDRequest{Provider: ref.Provider, ID: ref.ID, Mode: ref.Mode, Holders: teamIDHolders(ref.ID, active)}
 		resolved, err := ResolveTeamID(req)
 		if err != nil {
 			return nil, refuseTeamIDWrite(ctx, writer, &TeamIDWriteError{ID: ref.ID, Err: err})
@@ -104,6 +85,63 @@ func KeyTeamIDsForWrite(ctx context.Context, conn TeamIDCarryConn, orgID, writer
 		keyed[i] = resolved
 	}
 	return keyed, nil
+}
+
+// ResolveTeamIDForRead is the team id a reader that names a team from
+// outside (an admin GET of one team) reads: the write seam's lookup and
+// ResolveTeamID, without the carry, which only a write runs. A prefixed id
+// is read as given; a bare id is the one active prefixed team that holds it,
+// and two holders are ErrTeamIDAmbiguous. A bare id that no prefixed team
+// holds, or a malformed one, is read as given: a row the carry has not moved
+// yet is still found by it, and no row is a 404.
+func ResolveTeamIDForRead(ctx context.Context, conn TeamIDCarryConn, orgID, id string) (string, error) {
+	candidates := teamid.Candidates(id)
+	if len(candidates) == 0 {
+		return id, nil
+	}
+	active, err := activeTeamIDs(ctx, conn, orgID, candidates)
+	if err != nil {
+		return "", fmt.Errorf("team id read: read teams: %w", err)
+	}
+	holders := teamIDHolders(id, active)
+	if len(holders) == 0 {
+		return id, nil
+	}
+	return ResolveTeamID(TeamIDRequest{Provider: teamid.Custom, ID: id, Mode: TeamIDAddress, Holders: holders})
+}
+
+// activeTeamIDs is the set of ids among candidates that an active team of
+// the organization holds.
+func activeTeamIDs(ctx context.Context, conn TeamIDCarryConn, orgID string, candidates []string) (map[string]bool, error) {
+	active := map[string]bool{}
+	if len(candidates) == 0 {
+		return active, nil
+	}
+	rows, err := conn.Query(ctx, teamIDWriteSeamActiveQuery, clickhouse.Named("org_id", strings.TrimSpace(orgID)), clickhouse.Named("ids", candidates))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		active[id] = true
+	}
+	return active, rows.Err()
+}
+
+// teamIDHolders is the active prefixed teams that hold the bare id, by the
+// provider their prefix names.
+func teamIDHolders(id string, active map[string]bool) map[string]string {
+	holders := map[string]string{}
+	for _, candidate := range teamid.Candidates(id) {
+		if active[candidate] {
+			holders[teamIDPrefixProvider(candidate)] = candidate
+		}
+	}
+	return holders
 }
 
 // refuseTeamIDWrite logs a refusal with its reason and writer only (never

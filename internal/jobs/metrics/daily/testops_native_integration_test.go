@@ -480,8 +480,10 @@ func assertTestopsDailyTeam(
 	}
 }
 
-// applyTestopsRepositoryOwnershipSchema supplies the two tables the
-// authoritative owner reader queries. The risk integration tests have small
+// applyTestopsRepositoryOwnershipSchema supplies the three tables the
+// authoritative owner reader queries: the ownership rows, the repositories
+// they name, and the teams whose inactive rows the reader leaves out
+// (package teamactive). The risk integration tests have small
 // purpose-built schemas, so they must declare this production dependency
 // explicitly instead of accidentally testing an older resolver.
 func applyTestopsRepositoryOwnershipSchema(ctx context.Context, t *testing.T, conn driver.Conn) {
@@ -499,6 +501,10 @@ func applyTestopsRepositoryOwnershipSchema(ctx context.Context, t *testing.T, co
     updated_at DateTime64(3, 'UTC')
 ) ENGINE = ReplacingMergeTree(updated_at)
   ORDER BY (org_id, provider, repo_full_name, team_id, source, valid_from)`,
+		`CREATE TABLE teams (
+    id String, name String, is_active UInt8 DEFAULT 1, org_id String,
+    updated_at DateTime64(6), last_synced DateTime64(6) DEFAULT now()
+) ENGINE = ReplacingMergeTree(updated_at) ORDER BY (org_id, id)`,
 	} {
 		if err := conn.Exec(ctx, statement); err != nil {
 			t.Fatalf("create TestOps ownership dependency: %v", err)

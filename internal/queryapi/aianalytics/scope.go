@@ -11,6 +11,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/aiimpact"
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/activeteams"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph/model"
 	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse/latestrow"
 )
@@ -129,7 +130,8 @@ func loadTeams(ctx context.Context, client QueryClient, orgID string) ([]aiimpac
 	rs, err := client.Query(ctx, fmt.Sprintf(`SELECT toString(id) AS id, coalesce(%s, '') AS name, argMax(repo_patterns, updated_at) AS repo_patterns
 FROM teams
 WHERE org_id = {org_id:String}
-GROUP BY id`, latestrow.ArgMaxKeepNullBy("name", "updated_at")), []clickhouse.Binding{{Name: "org_id", Value: orgID}})
+  AND id IN (%s)
+GROUP BY id`, latestrow.ArgMaxKeepNullBy("name", "updated_at"), activeteams.IDsSubquery), []clickhouse.Binding{{Name: "org_id", Value: orgID}})
 	if err != nil {
 		return nil, fmt.Errorf("teams query: %w", err)
 	}

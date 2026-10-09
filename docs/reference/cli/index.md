@@ -829,6 +829,44 @@ against. This does NOT protect the reverse direction (a manual trigger fired
 BEFORE that day's fixed-schedule occurrence) -- closing that would mean
 changing the nightly schedule's own behavior, deliberately out of scope here.
 
+**Run a day again (`--rerun-tag <tag>`):** the generation of a manual run is a hash
+of the organization, the day and the repository set, and a run is stored once per
+generation. A repository-scoped call (`--repo-id`) skips the coverage check above, so
+what stops it for a day that already has this run is the generation: the same call
+again is the idempotent replay of the first, and it starts nothing. `--rerun-tag`
+puts a caller-chosen tag into the hash. The same tag for the same organization, day
+and repository set starts nothing a second time; a new tag starts a new run for a day
+that already has one. A day is computed again after a data repair by giving the repair
+its own tag. Without the option the generation, the command and its output are
+unchanged.
+
+- The tag is 1 to 32 characters of `A-Z a-z 0-9 . _ -`. Anything else, and an empty
+  `--rerun-tag ""`, is `invalid_request` (exit 2) before the backend is opened.
+- Every other guard stays: the 31-day window, `--org-stdin`, the audited write, and
+  the coverage check of a call without `--repo-id` (a day that the nightly schedule or
+  a post-sync run covered still answers `already_covered`; the tag does not lift it).
+- A rerun writes the same keys as the first run, and a later `computed_at` replaces an
+  earlier one in the ReplacingMergeTree daily tables, so readers that take the newest row
+  count the day once. Raw reads of the plain MergeTree tables (`investment_metrics_daily`,
+  `issue_type_metrics_daily`, `investment_classifications_daily`) and of the view
+  `v_investment_flow_edges` count every generation of a day; any second run of a day does
+  that, with or without a tag. A rerun deletes no row: a row stored under a key
+  that the new run no longer produces stays, and only the writer of that table can zero it.
+- Output: a call with a tag prints `rerun_tag` and, per day, `started` (`false` when the
+  run of that tag and day was already there). The CLI is a one-shot process with no metrics
+  endpoint, so the signal is a log line per day (`rerun started`, `rerun already started,
+  nothing new`, `rerun refused` with a `reason`), the stored run (its generation is
+  derived from the tag).
+- The audit row holds the principal, the action, the organization, `--reason` and
+  `--correlation-id`, and no tag. Pass the tag in `--correlation-id` as well
+  (for example `--correlation-id chaos-NNNN-fix-1`), so the audit row names the rerun.
+
+```bash
+kubectl exec -i <worker-pod> -- dho workers metrics daily-start \
+  --org-stdin --day 2026-08-01 --to 2026-08-31 --repo-id <uuid> [--repo-id <uuid> ...] \
+  --rerun-tag chaos-NNNN-1 --reason <code> --correlation-id <id> < org-id-source
+```
+
 **Organization from stdin (CHAOS-8892):** `--org-stdin` replaces `--org`. The
 verb reads ONE line from stdin, drops one trailing newline, and uses it as the
 organization id, so the id is on no command line. This is the route on a

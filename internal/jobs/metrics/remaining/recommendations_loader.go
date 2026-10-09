@@ -8,6 +8,7 @@ import (
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/google/uuid"
 
+	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse/liverow"
 	"github.com/full-chaos/dev-health-ops/internal/teamownership"
 )
 
@@ -125,6 +126,15 @@ func safeFloat(value *float64) (float64, bool) {
 	return SafeFloat(*value, true)
 }
 
+// measuredKeyHaving keeps a key of a team-keyed daily table only when its
+// newest row is a measurement (package liverow). The loader reads the rows of
+// ONE team id. When that id was retired, its newest rows are retraction rows:
+// a day that holds only such rows is a day with no data for the team, not a
+// day with a WIP, a throughput or an after-hours ratio of 0.
+func measuredKeyHaving(table string) string {
+	return "\n                HAVING " + liverow.NewestPredicate(table, "")
+}
+
 // loadWIPThroughput ports _load_wip_throughput.
 //
 // TEAM-SCOPED (work_item_metrics_daily carries team_id). The inner GROUP BY
@@ -142,7 +152,7 @@ func (loader *RecommendationsLoader) loadWIPThroughput(
                 FROM work_item_metrics_daily
                 WHERE team_id = {team_id:String}
                   AND day >= {start:Date} AND day < {end:Date}` + loader.orgClause() + `
-                GROUP BY day, provider, work_scope_id
+                GROUP BY day, provider, work_scope_id` + measuredKeyHaving("work_item_metrics_daily") + `
             )
             GROUP BY day ORDER BY day
         `
@@ -356,7 +366,7 @@ func (loader *RecommendationsLoader) loadSustainabilitySignals(
                         FROM team_metrics_daily
                         WHERE team_id = {team_id:String}
                           AND day >= {start:Date} AND day < {end:Date}` + loader.orgClause() + `
-                        GROUP BY day, repo_id
+                        GROUP BY day, repo_id` + measuredKeyHaving("team_metrics_daily") + `
                     )
                     WHERE repo_id != '' OR real_repo_count = 0
                 )
@@ -390,7 +400,7 @@ func (loader *RecommendationsLoader) loadSustainabilitySignals(
                 FROM work_item_metrics_daily
                 WHERE team_id = {team_id:String}
                   AND day >= {start:Date} AND day < {end:Date}` + loader.orgClause() + `
-                GROUP BY day, provider, work_scope_id
+                GROUP BY day, provider, work_scope_id` + measuredKeyHaving("work_item_metrics_daily") + `
             )
             GROUP BY day ORDER BY day
         `

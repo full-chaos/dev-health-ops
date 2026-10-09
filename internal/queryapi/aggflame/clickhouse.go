@@ -6,6 +6,8 @@ import (
 	"time"
 
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
+
+	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse/liverow"
 )
 
 const dateLayout = "2006-01-02"
@@ -112,6 +114,7 @@ func fetchCycleBreakdown(ctx context.Context, client QueryClient, orgID string, 
               AND day >= {start_day:Date}
               AND day < {end_day:Date}` + filter + `
             GROUP BY day, provider, work_scope_id, team_id, status
+            HAVING ` + liverow.NewestPredicate("work_item_state_durations_daily", "") + `
         )
         GROUP BY status
         ORDER BY total_hours DESC

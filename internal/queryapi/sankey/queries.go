@@ -14,6 +14,7 @@ import (
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/analytics"
+	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse/liverow"
 )
 
 // dateBindingValue formats t as a bare "YYYY-MM-DD" string for binding
@@ -324,11 +325,12 @@ func fetchStateStatusCounts(ctx context.Context, client QueryClient, startDay, e
         FROM work_item_state_durations_daily FINAL
         WHERE day >= {start_day:Date} AND day < {end_day:Date}
           AND org_id = {org_id:String}
+          AND %s
             %s
         GROUP BY status
         ORDER BY items_touched DESC
         %s
-    `, scopeFilterSQL, settingsMaxExecutionTime())
+    `, liverow.Predicate("work_item_state_durations_daily", ""), scopeFilterSQL, settingsMaxExecutionTime())
 	bindings := append([]dhclickhouse.Binding{
 		{Name: "start_day", Value: dateBindingValue(startDay)},
 		{Name: "end_day", Value: dateBindingValue(endDay)},

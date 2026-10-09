@@ -14,6 +14,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph/model"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graphqldate"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/newestrow"
+	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse/liverow"
 )
 
 // The reads, ported from metrics/capacity_queries.py (the two compute-path
@@ -114,9 +115,10 @@ func loadThroughput(
         SELECT day, SUM(items_completed) AS items_completed
         FROM work_item_metrics_daily FINAL
         WHERE %s
+          AND %s
         GROUP BY day
         ORDER BY day
-    `, strings.Join(conditions, " AND "))
+    `, strings.Join(conditions, " AND "), liverow.Predicate("work_item_metrics_daily", ""))
 
 	rows, err := client.Query(ctx, query, bindings)
 	if err != nil {

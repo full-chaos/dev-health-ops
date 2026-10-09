@@ -33,6 +33,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/api/pytime"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph/units"
+	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse/liverow"
 )
 
 // fetchLastIngestedAt ports fetch_last_ingested_at (api/queries/
@@ -313,11 +314,12 @@ func fetchReworkThemeAllocation(ctx context.Context, client QueryClient, startDa
             %s
               AND org_id = {org_id:String}
             GROUP BY day, repo_id, team_id, canonical_theme, project_stream
+            HAVING %s
         )
         WHERE canonical_theme != ''
         GROUP BY canonical_theme
         ORDER BY allocation DESC
-    `, canonicalThemeExpr, scopeFilter, workCategorySQL)
+    `, canonicalThemeExpr, scopeFilter, workCategorySQL, liverow.NewestPredicate("investment_metrics_daily", ""))
 
 	bindings := []dhclickhouse.Binding{
 		{Name: "start_day", Value: formatDay(startDay)},

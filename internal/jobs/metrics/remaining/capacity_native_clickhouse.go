@@ -73,9 +73,10 @@ func (executor *CapacityExecutor) loadThroughput(
         SELECT day, SUM(items_completed) AS items_completed
         FROM work_item_metrics_daily FINAL
         WHERE %s
+          AND %s
         GROUP BY day
         ORDER BY day
-    `, strings.Join(conditions, " AND "))
+    `, strings.Join(conditions, " AND "), liverow.Predicate("work_item_metrics_daily", ""))
 
 	rows, err := executor.conn.Query(ctx, query, namedArguments(arguments)...)
 	if err != nil {

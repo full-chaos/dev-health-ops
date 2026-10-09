@@ -147,6 +147,58 @@ func TestGoldenCycleBreakdownBasic(t *testing.T) {
 	assertGolden(t, got, "cycle_breakdown_basic.json")
 }
 
+// TestGoldenCycleBreakdownMilestoneFallbackIsADeclaredDifference holds the ONE
+// declared difference from the recorded Python scenario
+// testdata/cycle_breakdown_milestone_fallback.json (captured from the real
+// Python builder under unittest.mock, #2602 / CHAOS-5829; the file is kept
+// byte for byte). In that scenario the state-duration read returns no rows and
+// Python then read work_item_cycle_milestones_daily through a mocked reader,
+// answering a milestone-based approximation. Go issues NO second read and
+// answers the empty "Cycle Time" tree, because: the table
+// work_item_cycle_milestones_daily has no migration and no writer; in
+// production the Python fallback read failed (Code 60), so the recorded answer
+// could not occur; D5812 (CHAOS-6606).
+//
+// The test loads the frozen record and asserts it still holds the fallback
+// shape (so a changed file is seen), then asserts Go's answer for the same
+// input.
+func TestGoldenCycleBreakdownMilestoneFallbackIsADeclaredDifference(t *testing.T) {
+	recorded := loadGolden(t, "cycle_breakdown_milestone_fallback.json")
+	if !recorded.Meta.Approximation.Used || recorded.Meta.Approximation.Method == nil || *recorded.Meta.Approximation.Method != "milestones" ||
+		len(recorded.Meta.Notes) != 1 || len(recorded.Root.Children) == 0 || recorded.Root.Value <= 0 {
+		t.Fatalf("the recorded scenario no longer holds the milestone fallback shape: %+v", recorded)
+	}
+
+	reads := 0
+	client := fakeQueryClient{t: t, handler: func(t *testing.T, query string, bindings []dhclickhouse.Binding) (dhclickhouse.RowScanner, error) {
+		reads++
+		if !strings.Contains(query, "FROM work_item_state_durations_daily") {
+			t.Fatalf("Go must issue no read but the state-duration read for the recorded input, got:\n%s", query)
+		}
+		return &fixtureRowScanner{}, nil
+	}}
+	got, err := BuildResponse(context.Background(), client, "org-1", Params{
+		Mode: "cycle_breakdown", StartDay: day(2024, 2, 1), EndDay: day(2024, 2, 15),
+		Provider: "prov-x", Limit: 500, MinValue: 1,
+	})
+	if err != nil {
+		t.Fatalf("BuildResponse: %v", err)
+	}
+	if reads != 1 {
+		t.Fatalf("reads = %d, want exactly the one state-duration read", reads)
+	}
+	if got.Mode != recorded.Mode || got.Unit != recorded.Unit ||
+		got.Meta.WindowStart != recorded.Meta.WindowStart || got.Meta.WindowEnd != recorded.Meta.WindowEnd ||
+		!reflect.DeepEqual(got.Meta.Filters, recorded.Meta.Filters) {
+		t.Fatalf("Go differs from the record beyond the declared fallback:\n got:  %+v\n want: %+v", *got, recorded)
+	}
+	// The declared difference: the empty tree, no note, no approximation.
+	if got.Root.Name != "Cycle Time" || got.Root.Value != 0 || len(got.Root.Children) != 0 || got.Root.Children == nil ||
+		len(got.Meta.Notes) != 0 || got.Meta.Approximation.Used || got.Meta.Approximation.Method != nil {
+		t.Fatalf("Go must answer the empty Cycle Time tree for the recorded input, got %+v", *got)
+	}
+}
+
 // TestGoldenCycleBreakdownEmpty replays testdata/cycle_breakdown_empty.json:
 // the state-duration read returns no rows -- zero-value root, no notes, no
 // filters, and no second read: the fake answers every query with no rows and

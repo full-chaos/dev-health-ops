@@ -55,3 +55,5 @@ loudly, with the actual numbers, instead of a human silently recounting a
 new shard-1 membership as fine.
 
 `internal/workerservice` is isolated by name (`INTEGRATION_ISOLATED_PACKAGE_KEYS` in `ci/check_go.sh`, CHAOS-8935): the planner gives it a shard of its own at its true weight and puts no other package there. One `go test` starts a shard's packages in alphabetical order, so a long package that sorts last started minutes late and set the job's wall time. Each isolated package takes its own shard, so `_shards.tsv` must count one shard per isolated package on top of the shards the other packages need. A name in that list that matches no discovered package fails the plan.
+
+`internal/workerservice` is also split by top-level test name (CHAOS-9060): one `go test` of it took 24 of the 25 minutes of its job. It runs only as the name-partitioned `workerservice` test shards of `ci/go_workerservice_test_shards.tsv` (the same mechanism as the `daily` shards), never in the `packages` target. Its shard here (its isolated shard, at its weight) therefore has no `packages` job; `_shards.tsv` is unchanged.

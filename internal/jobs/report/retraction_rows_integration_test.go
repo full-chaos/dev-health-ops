@@ -4,9 +4,9 @@ package report
 
 import (
 	"context"
+	"math"
 	"reflect"
 	"sort"
-	"strings"
 	"testing"
 	"time"
 
@@ -29,7 +29,7 @@ var teamKeyedTables = map[string]bool{
 // column. A text column has no mean, so no chart of it can be read.
 var textColumns = map[string]bool{"investment_area": true, "issue_type_norm": true, "project_stream": true}
 
-// TestReportChartsGiveRetractionRowsNoWeight charts EVERY averaged metric of
+// TestReportChartsGiveRetractionRowsNoWeight charts EVERY metric of
 // metric_registry.json that reads a team-keyed daily table, as a
 // scorecard, by team and by day, for two organizations that hold the same
 // measurements. One of them also holds the old rows of the retired team ids
@@ -45,16 +45,12 @@ func TestReportChartsGiveRetractionRowsNoWeight(t *testing.T) {
 	first, last := store.Days[1].Format("2006-01-02"), store.Days[len(store.Days)-1].Format("2006-01-02")
 	var metricNames []string
 	for name, definition := range supportedMetrics {
-		// A metric that buildChartQuery sums is left out: a retraction row adds
-		// 0 to a sum, and the sum of an integer column is not a value the
-		// adapter can scan from a real ClickHouse (it expects a float).
-		summed := strings.HasSuffix(name, "_count") || definition.Unit == "count"
-		if teamKeyedTables[definition.SourceTable] && !summed && !textColumns[name] {
+		if teamKeyedTables[definition.SourceTable] && !textColumns[name] {
 			metricNames = append(metricNames, name)
 		}
 	}
 	sort.Strings(metricNames)
-	if len(metricNames) < 15 {
+	if len(metricNames) < 20 {
 		t.Fatalf("only %d registry metrics read a team-keyed daily table: %v", len(metricNames), metricNames)
 	}
 	shapes := []struct{ chartType, groupBy string }{{"scorecard", ""}, {"bar", "team"}, {"line", "day"}}
@@ -128,9 +124,28 @@ func TestReportChartsGiveRetractionRowsNoWeight(t *testing.T) {
 	for _, metric := range metricNames {
 		for _, shape := range shapes {
 			chart := metric + "/" + shape.chartType
-			if !reflect.DeepEqual(control[chart], retracted[chart]) {
+			if !samePoints(control[chart], retracted[chart]) {
 				t.Errorf("the retraction rows changed chart %s:\n control   %+v\n retracted %+v", chart, control[chart], retracted[chart])
 			}
 		}
 	}
+}
+
+// samePoints compares two charts point by point. The values compare within a
+// relative 1e-12: a mean of values that are not exact in binary (hours over
+// 24) can differ in its last bit with the order in which the engine adds the
+// rows, and the second organization holds more rows.
+func samePoints(a, b []DataPoint) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i].X != b[i].X || a[i].Group != b[i].Group {
+			return false
+		}
+		if diff := math.Abs(a[i].Y - b[i].Y); diff > 1e-12*math.Max(math.Abs(a[i].Y), math.Abs(b[i].Y)) {
+			return false
+		}
+	}
+	return true
 }

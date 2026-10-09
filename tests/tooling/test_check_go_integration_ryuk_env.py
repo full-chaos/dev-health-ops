@@ -86,7 +86,7 @@ def _values(lines: list[str]) -> set[str]:
 
 def test_shard_run_disables_ryuk_in_ci(tmp_path: Path) -> None:
     lines = _run(
-        tmp_path, "integration-shard", "packages", "3", env_extra={"CI": "true"}
+        tmp_path, "integration-shard", "packages", "4", env_extra={"CI": "true"}
     )
     # A measurement that did not happen must fail: the shard ran go test.
     assert lines, "the stand-in go recorded no `go test` call"
@@ -95,7 +95,7 @@ def test_shard_run_disables_ryuk_in_ci(tmp_path: Path) -> None:
 
 
 def test_shard_run_keeps_ryuk_outside_ci(tmp_path: Path) -> None:
-    lines = _run(tmp_path, "integration-shard", "packages", "3", env_extra={})
+    lines = _run(tmp_path, "integration-shard", "packages", "4", env_extra={})
     assert lines
     assert _values(lines) == {"<unset>"}, lines
 
@@ -105,7 +105,7 @@ def test_a_caller_value_wins(tmp_path: Path) -> None:
         tmp_path,
         "integration-shard",
         "packages",
-        "3",
+        "4",
         env_extra={"CI": "true", "TESTCONTAINERS_RYUK_DISABLED": "false"},
     )
     assert lines

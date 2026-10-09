@@ -1570,10 +1570,10 @@ The organization comes from stdin only: `--org-stdin` is required and there
 is no `--org`, with the stdin rules of
 [`metrics daily-start`](#metrics-daily-start-chaos-5055). The verb prints no
 organization id. It prints counts only, under `carry_team_ids`: `teams`,
-`admin_teams`, `admin_teams_not_carried`, `ambiguous_teams`,
+`admin_teams`, `admin_teams_to_custom`, `admin_teams_not_carried`, `ambiguous_teams`,
 `teams_already_keyed`, `memberships`, `project_ownership`, `repo_ownership`,
 `link_rows_already_keyed`, `observations`, `sync_policies`, `drift_changes`, `identity_drift_changes`,
-`identities`, `fallbacks`, and `rows_written` (0 with `--dry-run`). A second
+`identities`, `fallbacks`, `malformed_team_ids`, and `rows_written` (0 with `--dry-run`). A second
 run reports zero.
 
 ```bash

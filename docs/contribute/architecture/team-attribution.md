@@ -1173,13 +1173,14 @@ or builds a team catalog collector or writes Atlassian team ids, and fails on a 
 **The write seam (CHAOS-8940).** A writer that takes a team id from outside, not from a provider's own key, writes
 only what `providersync.KeyTeamIDsForWrite` (`internal/providersync/team_id_write_seam.go`) returns. It runs the
 carry first, then keeps a prefixed id in its canonical form and resolves a bare id to the ONE active prefixed team
-of the organization that holds it (`teamid.Candidates`: every known prefix plus the id). It refuses, before any
-write but the carry:
+of the organization that holds it (`teamid.Candidates`: every known prefix plus the id). A bare id that no
+active prefixed team holds is the admin's own team, `custom:<id>` (chris D5631), the id the carry gives an
+admin's bare team: `POST /teams` with `team_id: "eng"` writes and answers `team_id: "custom:eng"`, and a later
+write that names `eng` lands on it. It refuses, before any write but the carry:
 
 - a malformed id (`teamid.Malformed`: empty, only a prefix such as `gh:` or `atlassian:`, or a prefix followed by
   only another one such as `linear:gh:`): HTTP 422;
-- a bare id that no active prefixed team holds: HTTP 422 (use a prefixed id, for an admin's own team `custom:<id>`);
-- a bare id that more than one active prefixed team holds: HTTP 409.
+- a bare id that more than one active prefixed team holds (for example `linear:eng` and `custom:eng`): HTTP 409.
 
 So a bare id never reaches a write, and a bare id of a carried team lands on the prefixed team, not on the
 inactive bare row (which a write would make active again). The admin writers (`internal/api/teamsidentity`) all
@@ -1206,11 +1207,14 @@ write, and on a store write that does not refuse a bare id before its batch.
     pushed team.
   - A Jira project-as-team row (provider `jira`, `native_team_key` = id, not a team ARI) does not move:
     `RetireJiraProjectAsTeamRows` retires it (section 0.4c).
-  - An admin team (provider `""`) moves only when exactly one provider's observation names its id (it came
-    from that provider's import); it keeps provider `""` and its `native_team_key`. An admin team with no such
-    observation is the admin's choice and stays (counted as `admin_teams_not_carried`). An admin edit of a Jira
-    project-as-team row (the same id) stays too (also counted there): it is that row, not a Jira team, and
-    `RetireJiraProjectAsTeamRows` owns it.
+  - An admin team (provider `""`) moves to `teamid.Of(provider, id)` when exactly one provider's observation
+    names its id (it came from that provider's import). Any other admin team is the admin's own team and moves
+    to `custom:<id>` (chris D5631; counted as `admin_teams_to_custom`), the id the write seam gives a plain
+    admin id. Both keep provider `""` and their `native_team_key`. An admin row counts only while it is the
+    team's current row (`teams FINAL` of that id is an active admin row): an older admin edit of a team whose
+    newer row is inactive is not carried, so the inactive team does not come back as `custom:<id>`. An admin
+    edit of a Jira project-as-team row (the same id) stays (counted as `admin_teams_not_carried`): it is that
+    row, not a Jira team, and `RetireJiraProjectAsTeamRows` owns it.
   - An admin edit of a provider team (the same id, provider `""`) moves with that team; the newer of the two
     rows gives the new row's values.
   - An id that two providers' teams hold (or a provider's team and an active Jira project-as-team row) is
@@ -1223,7 +1227,10 @@ write, and on a store write that does not refuse a bare id before its batch.
     `malformed_team_ids` (the team rows and observations of such an id) and logs `team_ids_malformed_skipped`
     with the count on every run; the guard refuses a planned malformed id.
 - **Writes.** Append-only: no `DELETE` and no `ALTER UPDATE`. Every read runs before the first write, so a
-  failed read fails the carry with nothing written.
+  failed read fails the carry with nothing written. The carry inserts with `optimize_on_insert = 0`: with it, an
+  insert block that holds two rows of one `(org_id, id)` (the old rows of two providers' teams of one bare id,
+  or of a team and its admin edit) is collapsed to one, the other provider's older active row stays the newest
+  raw row of its group, and every later carry would move it again.
   - `teams`: the new row (the old row's values; `team_uuid` = the writer's rule for the new id;
     `native_team_key` = the old id when it was empty; `parent_team_id` mapped), then the old row again with
     `is_active = 0`.
@@ -1263,7 +1270,10 @@ first `valid_from` kept; keyed ids and another organization untouched; a second 
 `TestCarryTeamIDsKeepsTheDecisionOfAnOldDecidedChange`, `TestCarryTeamIDsNamesATeamOnceInAnIdentity`,
 `TestCarryTeamIDsMovesTheParentOfAnObservation`, `TestCarryTeamIDsClosesAFutureLinkAtItsStart`,
 `TestCarryTeamIDsLeavesAnAdminEditOfAProjectAsTeamRow`, `TestCarryTeamIDsSupersedesAPendingIdentityChangeOfAMovedTeam`,
-`TestCarryTeamIDsClosesALinkForAReaderOfNow`, `TestCarryTeamIDsSkipsAPrefixOnlyID`.
+`TestCarryTeamIDsClosesALinkForAReaderOfNow`, `TestCarryTeamIDsSkipsAPrefixOnlyID`,
+`TestCarryTeamIDsMovesAnAdminsOwnTeamToCustom`, `TestCarryTeamIDsLeavesAnAdminRowOlderThanItsInactiveTeam`
+(`TestCarryTeamIDsSplitsAnIDTwoProvidersHold` and `TestCarryTeamIDsMovesEveryBareProviderTeamID` also assert a
+second run writes nothing).
 The seam: `TestTheCarryRunsBeforeTheCollectorAndAFailureStopsIt`, `TestEveryTeamIDWriteSiteRunsBehindTheCarryCensus`;
 through the real collectors, `TestTheLinearCatalogReadsTheBareTeamsPolicyAndManualMembersAfterTheCarry`,
 `TestTheLinearCatalogKeepsOneTeamForAnAdminTeamItNames`, `TestTheJiraProjectAsTeamCatalogKeepsTheFirstSeenOfALink`;
@@ -1273,7 +1283,7 @@ every registered collector (`TestEveryRegisteredTeamCatalogCollectorCarriesFirst
 `TestTeamIDCarryRunsBeforeAnIdentityOnlyPush`, `TestAdminImportCarriesTheBareTeamFirst`. The write seam
 (`internal/api/teamsidentity`): `TestAnIdentityAssignOfACarriedBareTeamIDWritesTheKeyedTeam` (jira, github, gitlab,
 linear), `TestAnAdminTeamCreateCarriesTheBareTeamFirst`, `TestAnAdminTeamWriteOfABareIDWritesTheKeyedTeam`,
-`TestAnAdminTeamWriteRefusesAnAmbiguousOrMalformedID`, `TestAnAdminTeamWriteRefusesABareIDNoProviderTeamHolds`,
+`TestAnAdminTeamWriteRefusesAnAmbiguousOrMalformedID`, `TestAnAdminTeamCreateOfAPlainIDWritesTheCustomTeam`,
 `TestTheMemberAndDecisionWritersKeyTheirPathTeamID`, `TestTheAdminImportRefusesAPrefixOnlyTeamID`,
 `TestTheStoreRefusesABareTeamIDWrite`, `TestAnIdentityLeavingAStoredBareTeamSkipsIt`,
 `TestTheWriteSeamResolvesOnlyToAnActiveTeamAndKeysAMixedRequest`, `TestADriftDecisionByABareIDDecidesTheKeyedTeamsChange`,

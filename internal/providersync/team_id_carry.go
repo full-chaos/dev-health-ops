@@ -53,11 +53,17 @@ func teamIDCarryPrefixOnly(column string) string {
 	return "trimBoth(" + column + ") IN (" + strings.Join(forms, ", ") + ")"
 }
 
-// teamIDCarryObservedIDs is the bare team ids that exactly one provider's
-// observation names: an admin team of such an id came from that provider's
-// import (internal/api/teamsidentity drift.go).
-var teamIDCarryObservedIDs = `SELECT team_id FROM team_provider_observations FINAL WHERE org_id = {org_id:String} ` +
-	`AND provider != '' AND ` + teamIDCarryBare("team_id") + ` GROUP BY team_id HAVING uniqExact(provider) = 1`
+// teamIDCarryAdminProvider is the prefix system of an admin's own team: an
+// admin team that no single provider's observation names.
+const teamIDCarryAdminProvider = "custom"
+
+// teamIDCarryActiveAdminIDs is the bare ids whose current team row (FINAL:
+// teams is keyed by (org_id, id)) is an active admin row. An admin row
+// counts only through it: a raw admin row can stay active beside the newer
+// inactive row of another provider's team of that id, because one insert
+// block that holds rows of both collapses to one of them (the carry writes
+// the old rows of a moved team and of its admin edit in one block).
+var teamIDCarryActiveAdminIDs = `SELECT id FROM teams FINAL WHERE org_id = {org_id:String} AND provider = '' AND is_active = 1 AND ` + teamIDCarryBare("id")
 
 // teamIDCarryCountQuery counts what a carry would move: the (provider, id)
 // groups whose newest raw row is active with a bare id (a provider's team,
@@ -74,7 +80,7 @@ var teamIDCarryCountQuery = `SELECT ` +
 	`FROM teams WHERE org_id = {org_id:String} AND ` + teamIDCarryBare("id") + ` GROUP BY provider, id) ` +
 	`WHERE active = 1 ` +
 	`AND NOT (provider = 'jira' AND native_key = id AND NOT startsWith(native_key, '` + jiraAtlassianTeamARIPrefix + `')) ` +
-	`AND (provider != '' OR id IN (` + teamIDCarryObservedIDs + `))), ` +
+	`AND (provider != '' OR id IN (` + teamIDCarryActiveAdminIDs + `))), ` +
 	`(SELECT count() FROM team_provider_observations FINAL WHERE org_id = {org_id:String} AND provider != '' AND ` + teamIDCarryBare("team_id") + `), ` +
 	`(SELECT count() FROM (SELECT provider, id, argMax(is_active, (updated_at, last_synced)) AS active ` +
 	`FROM teams WHERE org_id = {org_id:String} AND ` + teamIDCarryPrefixOnly("id") + ` GROUP BY provider, id) WHERE active = 1) + ` +
@@ -120,12 +126,15 @@ const (
 type TeamIDCarryOutcome struct {
 	DryRun bool `json:"dry_run"`
 	// Teams is the bare team ids moved to the prefixed form; AdminTeams is
-	// the part of them that are admin teams an observation names.
-	Teams      uint64 `json:"teams"`
-	AdminTeams uint64 `json:"admin_teams"`
-	// AdminTeamsNotCarried is the active admin teams with a bare id that no
-	// single provider's observation names (the admin chose the id), or that
-	// a Jira project-as-team row of the same id holds.
+	// the part of them that are admin teams (provider ""), and
+	// AdminTeamsToCustom the part of those that no single provider's
+	// observation names: the admin's own teams, moved to custom:<id>.
+	Teams              uint64 `json:"teams"`
+	AdminTeams         uint64 `json:"admin_teams"`
+	AdminTeamsToCustom uint64 `json:"admin_teams_to_custom"`
+	// AdminTeamsNotCarried is the active admin teams with a bare id that a
+	// Jira project-as-team row of the same id holds (an admin edit of that
+	// row, which RetireJiraProjectAsTeamRows owns).
 	AdminTeamsNotCarried uint64 `json:"admin_teams_not_carried"`
 	// AmbiguousTeams is the bare ids that more than one team holds (two
 	// providers, or a provider and a Jira project-as-team row). Each
@@ -270,7 +279,15 @@ func (run *teamIDCarryRun) plan() error {
 	if err != nil {
 		return fmt.Errorf("team id carry: read observations: %w", err)
 	}
-	teamRows := run.planTeams(teams, observations)
+	activeAdmins, err := run.read(teamIDCarryActiveAdminIDs, run.org)
+	if err != nil {
+		return fmt.Errorf("team id carry: read admin teams: %w", err)
+	}
+	adminIDs := make(map[string]bool, len(activeAdmins))
+	for _, row := range activeAdmins {
+		adminIDs[row.str("id")] = true
+	}
+	teamRows := run.planTeams(teams, observations, adminIDs)
 	if err := run.dropKeyedTeams(&teamRows); err != nil {
 		return err
 	}
@@ -296,7 +313,7 @@ func (run *teamIDCarryRun) plan() error {
 
 // planTeams decides, per bare id, which provider groups move and to which
 // id, and builds the new and the inactive team rows.
-func (run *teamIDCarryRun) planTeams(teams, observations []chRow) []chRow {
+func (run *teamIDCarryRun) planTeams(teams, observations []chRow, activeAdmins map[string]bool) []chRow {
 	run.target = map[string]map[string]string{}
 	run.groups = map[string]map[string]bool{}
 	run.primary = map[string]string{}
@@ -342,7 +359,9 @@ func (run *teamIDCarryRun) planTeams(teams, observations []chRow) []chRow {
 			}
 			switch {
 			case row.str("provider") == "":
-				admin = &row
+				if activeAdmins[id] {
+					admin = &row
+				}
 			case teamIDCarryJiraProjectAsTeam(row):
 				blocked = true
 			default:
@@ -357,13 +376,21 @@ func (run *teamIDCarryRun) planTeams(teams, observations []chRow) []chRow {
 			// An admin edit of a Jira project-as-team row is that row, and
 			// RetireJiraProjectAsTeamRows owns it: it does not become a
 			// Jira team.
-			if blocked || len(observedBy[id]) != 1 {
+			if blocked {
 				run.outcome.AdminTeamsNotCarried++
 				continue
 			}
-			var provider string
-			for observed := range observedBy[id] {
-				provider = observed
+			// An admin team that one provider's observation names came from
+			// that provider's import; any other is the admin's own team and
+			// takes the custom prefix, the id the write seam gives a plain
+			// admin id.
+			provider := teamIDCarryAdminProvider
+			if len(observedBy[id]) == 1 {
+				for observed := range observedBy[id] {
+					provider = observed
+				}
+			} else {
+				run.outcome.AdminTeamsToCustom++
 			}
 			newID := teamid.Of(provider, id)
 			targets[""] = newID
@@ -839,12 +866,21 @@ func teamIDCarryGuard(write teamIDCarryWrite) error {
 	return nil
 }
 
+// teamIDCarryInsertSettings keeps every row of a carry insert: with
+// optimize_on_insert a block that holds two rows of one sorting key (the old
+// rows of two providers' teams of one bare id, or of a team and its admin
+// edit) is collapsed to one before it is written, and the other provider's
+// older active row then stays the newest raw row of its group, so every
+// later carry would move it again.
+var teamIDCarryInsertSettings = clickhouse.Settings{"optimize_on_insert": 0}
+
 func (run *teamIDCarryRun) write() error {
+	ctx := clickhouse.Context(run.ctx, clickhouse.WithSettings(teamIDCarryInsertSettings))
 	for _, write := range run.writes {
 		if len(write.rows) == 0 {
 			continue
 		}
-		batch, err := run.conn.PrepareBatch(run.ctx, "INSERT INTO "+write.table+" ("+write.columns+")")
+		batch, err := run.conn.PrepareBatch(ctx, "INSERT INTO "+write.table+" ("+write.columns+")")
 		if err != nil {
 			return fmt.Errorf("team id carry: write %s: %w", write.table, err)
 		}
@@ -983,7 +1019,7 @@ func CarryTeamIDsBeforeWrite(ctx context.Context, conn TeamIDCarryConn, orgID, w
 	}
 	if outcome.Found() || outcome.AdminTeamsNotCarried > 0 {
 		slog.Default().InfoContext(ctx, "team_ids_carried", "writer", writer,
-			"teams", outcome.Teams, "admin_teams", outcome.AdminTeams, "admin_teams_not_carried", outcome.AdminTeamsNotCarried,
+			"teams", outcome.Teams, "admin_teams", outcome.AdminTeams, "admin_teams_to_custom", outcome.AdminTeamsToCustom, "admin_teams_not_carried", outcome.AdminTeamsNotCarried,
 			"ambiguous_teams", outcome.AmbiguousTeams, "teams_already_keyed", outcome.TeamsAlreadyKeyed,
 			"memberships", outcome.Memberships, "project_ownership", outcome.ProjectOwnership, "repo_ownership", outcome.RepoOwnership,
 			"link_rows_already_keyed", outcome.LinkRowsAlreadyKeyed, "observations", outcome.Observations,

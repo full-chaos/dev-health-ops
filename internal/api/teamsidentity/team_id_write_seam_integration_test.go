@@ -213,17 +213,30 @@ func TestAnAdminTeamWriteRefusesAnAmbiguousOrMalformedID(t *testing.T) {
 	}
 }
 
-// A bare id that no prefixed team holds is refused before any write.
-func TestAnAdminTeamWriteRefusesABareIDNoProviderTeamHolds(t *testing.T) {
+// A plain id that no prefixed team holds is the admin's own team: it is
+// written, and answered, as custom:<id>; a second write of the plain id
+// lands on the same team.
+func TestAnAdminTeamCreateOfAPlainIDWritesTheCustomTeam(t *testing.T) {
 	s, ctx := writeSeamStore(t)
 	h := newTestHandlers(s)
-	rec := writeSeamCall(t, h, h.createOrUpdateTeam, http.MethodPost, "/api/v1/admin/teams", "",
-		map[string]any{"team_id": "eng", "name": "Eng"})
-	if rec.Code != http.StatusUnprocessableEntity {
-		t.Errorf("create = %d %s, want 422", rec.Code, rec.Body.String())
+	for _, name := range []string{"Eng", "Eng renamed"} {
+		rec := writeSeamCall(t, h, h.createOrUpdateTeam, http.MethodPost, "/api/v1/admin/teams", "",
+			map[string]any{"team_id": "eng", "name": name})
+		if rec.Code != http.StatusOK || decodeBody(t, rec)["team_id"] != "custom:eng" {
+			t.Fatalf("create %q = %d %s, want 200 with team_id custom:eng", name, rec.Code, rec.Body.String())
+		}
 	}
-	if got := writeSeamActive(t, s, ctx); got != "" {
-		t.Errorf("active = %q after a refused create, want none", got)
+	if got := writeSeamActive(t, s, ctx); got != "custom:eng" {
+		t.Errorf("active = %q, want custom:eng", got)
+	}
+	rec := writeSeamCall(t, h, h.createOrUpdateIdentity, http.MethodPost, "/api/v1/admin/identities", "",
+		map[string]any{"canonical_id": "m1", "email": "m1@example.com", "team_ids": []string{"eng"}})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("identity = %d %s", rec.Code, rec.Body.String())
+	}
+	team, err := s.GetTeam(ctx, "org-1", "custom:eng")
+	if err != nil || team == nil || team.Name != "Eng renamed" || !strings.Contains(strings.Join(team.ManualMembers, ","), "m1@example.com") {
+		t.Errorf("custom:eng = %+v, %v; want the renamed team with m1", team, err)
 	}
 }
 
@@ -350,8 +363,8 @@ func TestTheWriteSeamResolvesOnlyToAnActiveTeamAndKeysAMixedRequest(t *testing.T
 	h := newTestHandlers(s)
 	rec := writeSeamCall(t, h, h.createOrUpdateIdentity, http.MethodPost, "/api/v1/admin/identities", "",
 		map[string]any{"canonical_id": "m1", "team_ids": []string{"OLD"}})
-	if rec.Code != http.StatusUnprocessableEntity {
-		t.Errorf("identity naming an inactive team's bare id = %d %s, want 422", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusNotFound || !strings.Contains(rec.Body.String(), "custom:OLD") {
+		t.Errorf("identity naming an inactive team's bare id = %d %s, want 404 for custom:OLD", rec.Code, rec.Body.String())
 	}
 	rec = writeSeamCall(t, h, h.createOrUpdateIdentity, http.MethodPost, "/api/v1/admin/identities", "",
 		map[string]any{"canonical_id": "m1", "team_ids": []string{"custom:ops", "ENG"}})

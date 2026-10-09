@@ -157,16 +157,19 @@ func TestCarryTeamIDsMovesEveryBareProviderTeamID(t *testing.T) {
 	if err != nil {
 		t.Fatalf("carry: %v", err)
 	}
-	if outcome.Teams != 6 || outcome.AdminTeams != 1 || outcome.AdminTeamsNotCarried != 1 || outcome.AmbiguousTeams != 0 ||
+	if outcome.Teams != 7 || outcome.AdminTeams != 2 || outcome.AdminTeamsToCustom != 1 || outcome.AdminTeamsNotCarried != 0 || outcome.AmbiguousTeams != 0 ||
 		outcome.Memberships != 4 || outcome.ProjectOwnership != 2 || outcome.RepoOwnership != 1 || outcome.Observations != 2 ||
 		outcome.SyncPolicies != 1 || outcome.DriftChanges != 0 || outcome.Identities != 1 || outcome.Fallbacks != 1 || outcome.RowsWritten == 0 {
 		t.Fatalf("outcome = %+v", outcome)
 	}
 
-	// Bare census: only the admin-chosen id and the Jira project-as-team row
-	// (retired by its own step) stay active with a bare id.
-	if got := f.str(carryActiveBareTeams); got != "PROJ,chosen" {
-		t.Fatalf("active bare team ids = %q, want PROJ,chosen", got)
+	// Bare census: only the Jira project-as-team row (retired by its own
+	// step) stays active with a bare id; the admin's own team is custom:chosen.
+	if got := f.str(carryActiveBareTeams); got != "PROJ" {
+		t.Fatalf("active bare team ids = %q, want PROJ", got)
+	}
+	if got := f.str(`SELECT concat(toString(is_active), '/', provider) FROM teams FINAL WHERE org_id = ? AND id = 'custom:chosen'`); got != "1/" {
+		t.Errorf("custom:chosen = %q, want an active admin team", got)
 	}
 	for _, table := range []string{"team_memberships", "team_project_ownership", "team_repo_ownership"} {
 		if got := f.count(`SELECT count() FROM `+table+` FINAL WHERE org_id = ? AND valid_to IS NULL AND team_id IN ('ENG', 'SUB', 'DATA', 'QA', 'platform', ?) AND NOT (provider = 'custom' AND team_id = 'ENG')`, carryAtlassianID); got != 0 {
@@ -203,7 +206,7 @@ func TestCarryTeamIDsMovesEveryBareProviderTeamID(t *testing.T) {
 	if got := f.count(`SELECT count() FROM teams FINAL WHERE org_id = ? AND id = 'custom:platform' AND source_id IS NOT NULL`); got != 1 {
 		t.Errorf("custom:platform lost its source_id")
 	}
-	if got := f.count(`SELECT count() FROM teams FINAL WHERE org_id = ? AND id IN ('ENG', 'SUB', 'DATA', 'QA', 'platform', ?) AND is_active = 1`, carryAtlassianID); got != 0 {
+	if got := f.count(`SELECT count() FROM teams FINAL WHERE org_id = ? AND id IN ('ENG', 'SUB', 'DATA', 'QA', 'platform', 'chosen', ?) AND is_active = 1`, carryAtlassianID); got != 0 {
 		t.Errorf("%d old team rows still active", got)
 	}
 	if got := f.str(`SELECT toString(max(updated_at)) FROM teams WHERE org_id = ? AND id = 'gh:web'`); got != ghBefore {
@@ -212,8 +215,8 @@ func TestCarryTeamIDsMovesEveryBareProviderTeamID(t *testing.T) {
 	if got := f.count(`SELECT count() FROM teams WHERE org_id = ? AND id = 'linear:OPS'`); got != 1 {
 		t.Errorf("keyed linear:OPS has %d rows, want 1", got)
 	}
-	if got := f.count(`SELECT count() FROM teams FINAL WHERE org_id = ? AND id IN ('OLD', 'chosen', 'PROJ') AND id IN (SELECT id FROM teams WHERE org_id = ? AND updated_at > ?)`, f.orgID, carryOld.Add(2*time.Hour)); got != 0 {
-		t.Errorf("an inactive, admin-chosen or project-as-team id was written: %d", got)
+	if got := f.count(`SELECT count() FROM teams FINAL WHERE org_id = ? AND id IN ('OLD', 'PROJ') AND id IN (SELECT id FROM teams WHERE org_id = ? AND updated_at > ?)`, f.orgID, carryOld.Add(2*time.Hour)); got != 0 {
+		t.Errorf("an inactive or project-as-team id was written: %d", got)
 	}
 
 	// Links: first-seen valid_from (closed rows included), old row closed.
@@ -348,6 +351,10 @@ func TestCarryTeamIDsSplitsAnIDTwoProvidersHold(t *testing.T) {
 	if got := f.str(carryActiveBareTeams); got != "" {
 		t.Errorf("active bare ids = %q", got)
 	}
+	again, err := CarryTeamIDs(ctx, conn, f.orgID, carryAt.Add(time.Hour), false)
+	if err != nil || again.Found() || again.RowsWritten != 0 {
+		t.Errorf("second run = %+v, %v; want nothing", again, err)
+	}
 }
 
 func carryTableCounts(f carryFixture) []uint64 {
@@ -366,7 +373,7 @@ func TestCarryTeamIDsDryRunWritesNothing(t *testing.T) {
 	seedEveryClass(f)
 	before := carryTableCounts(f)
 	outcome, err := CarryTeamIDs(ctx, conn, f.orgID, carryAt, true)
-	if err != nil || !outcome.DryRun || outcome.Teams != 6 || outcome.Memberships != 4 || outcome.RowsWritten != 0 {
+	if err != nil || !outcome.DryRun || outcome.Teams != 7 || outcome.Memberships != 4 || outcome.RowsWritten != 0 {
 		t.Fatalf("dry run = %+v, %v", outcome, err)
 	}
 	if after := carryTableCounts(f); !reflect.DeepEqual(before, after) {
@@ -614,5 +621,55 @@ func TestCarryTeamIDsSkipsAPrefixOnlyID(t *testing.T) {
 				t.Errorf("second carry = %+v, %v; want no write and the malformed ids counted again", again, err)
 			}
 		})
+	}
+}
+
+// An admin's own team (no single provider's observation names its id) moves
+// to custom:<id> with every row that names it; an admin team that two
+// providers' observations name does too. A second run writes nothing.
+func TestCarryTeamIDsMovesAnAdminsOwnTeamToCustom(t *testing.T) {
+	ctx, conn := newWorkItemEffectsConn(t)
+	f := carryFixture{t: t, ctx: ctx, conn: conn, orgID: uuid.NewString()}
+	f.team("", "chosen", nil, nil, 1, carryOld, []string{"m1"}, nil)
+	f.team("", "TWO", nil, nil, 1, carryOld, nil, nil)
+	f.observation("linear", "TWO", "TWO")
+	f.observation("gitlab", "TWO", "TWO")
+	f.membership("", "chosen", "m1", carryOld, nil)
+	f.exec(`INSERT INTO identities (org_id, canonical_id, identity_uuid, team_ids, updated_at) VALUES (?, 'person-1', ?, ['chosen'], ?)`, f.orgID, uuid.New(), carryOld)
+
+	outcome, err := CarryTeamIDs(ctx, conn, f.orgID, carryAt, false)
+	if err != nil || outcome.Teams != 2 || outcome.AdminTeams != 2 || outcome.AdminTeamsToCustom != 2 || outcome.AdminTeamsNotCarried != 0 || outcome.Memberships != 1 || outcome.Identities != 1 {
+		t.Fatalf("carry = %+v, %v; want both admin teams moved to custom", outcome, err)
+	}
+	if got := f.str(`SELECT arrayStringConcat(groupArray(concat(id, '/', arrayStringConcat(manual_members, ';'))), ',') FROM (SELECT id, manual_members FROM teams FINAL WHERE org_id = ? AND is_active = 1 ORDER BY id)`); got != "custom:TWO/,custom:chosen/m1" {
+		t.Errorf("active = %q, want custom:TWO and custom:chosen with m1", got)
+	}
+	if got := f.str(`SELECT arrayStringConcat(team_ids, ',') FROM identities FINAL WHERE org_id = ? AND canonical_id = 'person-1'`); got != "custom:chosen" {
+		t.Errorf("identity team_ids = %q, want custom:chosen", got)
+	}
+	if got := f.count(`SELECT count() FROM team_memberships FINAL WHERE org_id = ? AND team_id = 'custom:chosen' AND valid_to IS NULL`); got != 1 {
+		t.Errorf("open custom:chosen memberships = %d, want 1", got)
+	}
+	again, err := CarryTeamIDs(ctx, conn, f.orgID, carryAt.Add(time.Hour), false)
+	if err != nil || again.Found() || again.RowsWritten != 0 {
+		t.Errorf("second carry = %+v, %v; want nothing", again, err)
+	}
+}
+
+// An admin row counts only while it is the team's current row: an older
+// admin edit of a team whose newer row is inactive is not carried, so the
+// inactive team does not come back as custom:<id>.
+func TestCarryTeamIDsLeavesAnAdminRowOlderThanItsInactiveTeam(t *testing.T) {
+	ctx, conn := newWorkItemEffectsConn(t)
+	f := carryFixture{t: t, ctx: ctx, conn: conn, orgID: uuid.NewString()}
+	f.team("", "ENG", nil, nil, 1, carryOld, []string{"admin-edit"}, nil)
+	f.team("linear", "ENG", carryPtr("ENG"), nil, 0, carryOld.Add(time.Hour), nil, nil)
+
+	outcome, err := CarryTeamIDs(ctx, conn, f.orgID, carryAt, false)
+	if err != nil || outcome.Found() || outcome.RowsWritten != 0 {
+		t.Fatalf("carry = %+v, %v; want nothing carried", outcome, err)
+	}
+	if got := f.count(`SELECT count() FROM teams FINAL WHERE org_id = ? AND is_active = 1`); got != 0 {
+		t.Errorf("active teams = %d, want 0", got)
 	}
 }

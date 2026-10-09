@@ -12,17 +12,13 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/teamid"
 )
 
-// ErrTeamIDNotKeyed marks a team id without a provider prefix that names
-// no active prefixed team of the organization.
-var ErrTeamIDNotKeyed = errors.New("team id has no provider prefix and names no prefixed team")
-
 // ErrTeamIDAmbiguous marks a team id without a provider prefix that more
 // than one active prefixed team of the organization holds.
 var ErrTeamIDAmbiguous = errors.New("team id has no provider prefix and names more than one prefixed team")
 
 // TeamIDWriteError is a refusal of the team id write seam: the id as the
-// writer gave it and the reason (teamid.ErrMalformedTeamID,
-// ErrTeamIDNotKeyed or ErrTeamIDAmbiguous).
+// writer gave it and the reason (teamid.ErrMalformedTeamID or
+// ErrTeamIDAmbiguous).
 type TeamIDWriteError struct {
 	ID  string
 	Err error
@@ -40,11 +36,13 @@ const teamIDWriteSeamActiveQuery = `SELECT id FROM teams FINAL WHERE org_id = {o
 // organization's bare team ids first (CarryTeamIDsBeforeWrite), so a bare
 // team the request names has already moved. Then a prefixed id keeps its
 // canonical form, and a bare id resolves to the one active prefixed team
-// of the organization that holds it (teamid.Candidates). A malformed id
-// (teamid.Malformed), a bare id that no active prefixed team holds, and a
-// bare id that two hold are refused with a *TeamIDWriteError before
-// anything but the carry is written. So no writer behind it writes a bare
-// team id, and no bare id it names resurrects a carried team.
+// of the organization that holds it (teamid.Candidates); a bare id that no
+// active prefixed team holds is the admin's own team, custom:<id> (the id
+// the carry gives an admin's bare team). A malformed id (teamid.Malformed)
+// and a bare id that two active prefixed teams hold are refused with a
+// *TeamIDWriteError before anything but the carry is written. So no writer
+// behind it writes a bare team id, and no bare id it names resurrects a
+// carried team.
 // See docs/contribute/architecture/team-attribution.md "Team ids".
 func KeyTeamIDsForWrite(ctx context.Context, conn TeamIDCarryConn, orgID, writer string, ids []string) ([]string, error) {
 	for _, id := range ids {
@@ -92,7 +90,7 @@ func KeyTeamIDsForWrite(ctx context.Context, conn TeamIDCarryConn, orgID, writer
 		case len(held) == 1:
 			keyed[i] = held[0]
 		case len(held) == 0:
-			return nil, refuseTeamIDWrite(ctx, writer, &TeamIDWriteError{ID: id, Err: ErrTeamIDNotKeyed})
+			keyed[i] = teamid.Of(teamIDCarryAdminProvider, id)
 		default:
 			return nil, refuseTeamIDWrite(ctx, writer, &TeamIDWriteError{ID: id, Err: ErrTeamIDAmbiguous})
 		}
@@ -104,10 +102,7 @@ func KeyTeamIDsForWrite(ctx context.Context, conn TeamIDCarryConn, orgID, writer
 // the id) and returns it.
 func refuseTeamIDWrite(ctx context.Context, writer string, refusal *TeamIDWriteError) error {
 	reason := "malformed"
-	switch {
-	case errors.Is(refusal.Err, ErrTeamIDNotKeyed):
-		reason = "not_keyed"
-	case errors.Is(refusal.Err, ErrTeamIDAmbiguous):
+	if errors.Is(refusal.Err, ErrTeamIDAmbiguous) {
 		reason = "ambiguous"
 	}
 	slog.Default().WarnContext(ctx, "team_id_write_refused", "writer", writer, "reason", reason)

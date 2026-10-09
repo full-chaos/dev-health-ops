@@ -13,8 +13,8 @@ import (
 // keyTeamIDs runs the team id write seam (providersync.KeyTeamIDsForWrite)
 // for the team ids a request names. Every handler that writes a team id
 // calls it before its first read or write of a team and writes only the ids
-// it returns. A refusal answers 422 (a malformed id, or a bare id that no
-// prefixed team holds) or 409 (a bare id that more than one prefixed team
+// it returns (a plain admin id comes back as custom:<id>). A refusal answers
+// 422 (a malformed id) or 409 (a bare id that more than one prefixed team
 // holds), before anything is written.
 func (h handlers) keyTeamIDs(w http.ResponseWriter, r *http.Request, writer string, ids []string) ([]string, bool) {
 	keyed, err := providersync.KeyTeamIDsForWrite(r.Context(), h.store.Conn, orgIDOf(r.Context()), writer, ids)
@@ -29,8 +29,6 @@ func (h handlers) keyTeamIDs(w http.ResponseWriter, r *http.Request, writer stri
 	switch {
 	case errors.Is(err, providersync.ErrTeamIDAmbiguous):
 		policy.WriteDetail(w, http.StatusConflict, fmt.Sprintf("Team id %q names more than one provider team; use the provider-prefixed id", refusal.ID), nil)
-	case errors.Is(err, providersync.ErrTeamIDNotKeyed):
-		policy.WriteDetail(w, http.StatusUnprocessableEntity, fmt.Sprintf("Team id %q has no provider prefix and names no provider team; use a provider-prefixed id", refusal.ID), nil)
 	default:
 		policy.WriteDetail(w, http.StatusUnprocessableEntity, fmt.Sprintf("Team id %q is empty or only a provider prefix", refusal.ID), nil)
 	}

@@ -76,7 +76,7 @@ const unknownTableExceptionCode = 60
 // text at all, only this package's own test fakes' flat errors);
 // tightened to a structured check per chris/orchestrator's follow-up
 // ruling the same day, once the driver's typed Exception (already an
-// indirect dependency via go.mod's direct clickhouse-go/v2 v2.47.0) was
+// indirect dependency via go.mod's direct clickhouse-go/v2 v2.48.0) was
 // confirmed to carry Code as a real field, not just a rendered string.
 func isMissingMembershipTableError(err error) bool {
 	if err == nil {

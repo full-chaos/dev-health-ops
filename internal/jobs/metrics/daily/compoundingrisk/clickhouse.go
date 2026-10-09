@@ -134,15 +134,14 @@ func (loader *ClickHouseLoader) LoadRepoMetrics(
 		clickhouse.Named("org_id", orgID),
 		// ANCHOR: bind a Go `string` for EVERY typed {name:Type} query
 		// parameter -- Date, UUID, all of them. This is a property of the
-		// driver, not of any one type. clickhouse-go/v2@v2.47.0
-		// query_parameters.go:32-40 passes a Go string through VERBATIM and
-		// sends everything else through format(), which wraps the value in
-		// single quotes. A wire-level typed parameter is then parsed by the
-		// SERVER, so those quotes become part of the literal and the type
-		// parser rejects it:
+		// driver, not of any one type. clickhouse-go/v2@v2.48.0
+		// query_parameters.go:51-64 passes a Go string through VERBATIM,
+		// sends a time.Time as epoch seconds and everything else through
+		// formatValue, which wraps a Stringer such as uuid.UUID in single
+		// quotes. A wire-level typed parameter is then parsed by the SERVER,
+		// so neither form is a Date and the quotes become part of the UUID:
 		//
-		//	time.Time -> "Cannot parse date here: toDateTime('2026-08-24
-		//	              00:00:00') cannot be parsed as Date"
+		//	time.Time -> "Value 1791504000 cannot be parsed as Date"
 		//	uuid.UUID -> "Cannot parse UUID from String: invalid format,
 		//	              expected 32 hexadecimal digits"
 		//

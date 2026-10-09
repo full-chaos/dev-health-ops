@@ -164,7 +164,7 @@ ORDER BY value DESC, dimension_value ASC
 // after the toFloat64(...) coercion in CompileBreakdown -- Nullable
 // propagates through toFloat64, it does not collapse it. Scanning that
 // NULL into a bare, non-pointer float64 silently reads back as the Go
-// zero value 0.0 (verified against the pinned clickhouse-go v2.47.0
+// zero value 0.0 (verified against the pinned clickhouse-go v2.48.0
 // driver: Float64.ScanRow's `case *float64` branch never sees the NULL
 // at all -- Nullable.ScanRow intercepts it first and only recognises
 // `case **float64: *v = nil` as a nullable-aware destination), which is

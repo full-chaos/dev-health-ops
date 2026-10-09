@@ -256,7 +256,7 @@ func nanClassClickHouseURI(t testing.TB) (dsn string, hostPort string) {
 			"this step specifically")
 	}
 	// CHAOS-4643 round 9 enumeration (B5): this branch is DEFENSIVE ONLY and
-	// unreachable with clickhouse-go/v2 pinned at v2.47.0 (go.mod:7). Traced
+	// unreachable with clickhouse-go/v2 pinned at v2.48.0 (go.mod:12). Traced
 	// against the module cache: ParseDSN (clickhouse_options.go:103) calls
 	// opt.fromDSN(dsn) and returns its error unchanged; fromDSN
 	// (clickhouse_options.go:186) returns an error at line ~192-194 when
@@ -1027,7 +1027,7 @@ func TestNanClassClickHouseURI_FailureMessageNeverDerivesFromInput(t *testing.T)
 // TestClickHouseParseDSNContract_SuccessNeverYieldsEmptyAddr pins the
 // assumption documented above nanClassClickHouseURI's "CLICKHOUSE_URI has no
 // host" branch (B5 in CHAOS-4643 round 9's failure-branch enumeration): with
-// clickhouse-go/v2 pinned at v2.47.0 (go.mod:7), a successful
+// clickhouse-go/v2 pinned at v2.48.0 (go.mod:12), a successful
 // chdriver.ParseDSN can never yield an empty opts.Addr, because fromDSN
 // rejects an empty dsn.Host before populating Addr and otherwise always
 // splits a non-empty Host into at least one element. This is a
@@ -1105,7 +1105,7 @@ var nanClassClickHouseURIFailureExitInventory = []nanClassClickHouseURIFailureEx
 	{call: "Fatalf", justification: "B3: chdriver.ParseDSN error -- oracle class \"parse\""},
 	{call: "Fatalf", justification: "B4: opts.Protocol == chdriver.HTTP -- oracle class \"protocol\""},
 	{call: "Fatalf", justification: "B5: len(opts.Addr) == 0 -- defensive-only, unreachable with " +
-		"clickhouse-go/v2 v2.47.0 pinned; see the comment at the call site and " +
+		"clickhouse-go/v2 v2.48.0 pinned; see the comment at the call site and " +
 		"TestClickHouseParseDSNContract_SuccessNeverYieldsEmptyAddr, which pins the assumption directly"},
 	{call: "Fatalf", justification: "B6: net.SplitHostPort fails / empty host / empty port -- oracle class \"hostlist\""},
 	{call: "Fatalf", justification: "B7: port == \"8123\" || port == \"8443\" -- oracle class \"httpport\" (CHAOS-4643 round 9)"},

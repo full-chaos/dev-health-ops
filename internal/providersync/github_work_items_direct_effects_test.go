@@ -3,6 +3,7 @@ package providersync
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -434,6 +435,14 @@ func (c unreachableConn) AsyncInsert(context.Context, string, bool, ...any) erro
 func (c unreachableConn) Ping(context.Context) error { c.reached("Ping"); return nil }
 func (c unreachableConn) Stats() chdriver.Stats      { c.reached("Stats"); return chdriver.Stats{} }
 func (c unreachableConn) Close() error               { return nil }
+func (c unreachableConn) QueryFormat(context.Context, string, string, ...any) (io.ReadCloser, error) {
+	c.reached("QueryFormat")
+	return nil, nil
+}
+func (c unreachableConn) InsertFormat(context.Context, string, string, io.Reader) error {
+	c.reached("InsertFormat")
+	return nil
+}
 
 var _ chdriver.Conn = unreachableConn{}
 

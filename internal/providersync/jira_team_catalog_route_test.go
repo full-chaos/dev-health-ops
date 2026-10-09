@@ -5,7 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 	"io"
+	"maps"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -138,8 +140,9 @@ func TestJiraTeamCatalogCollectCountsFailedAndRetriedAttempts(t *testing.T) {
 	if err != nil {
 		t.Fatalf("a board-listing failure must soft-skip the sprint walk under non-strict: %v", err)
 	}
-	if searchAttempts != 2 {
-		t.Fatalf("search attempts=%d want 2 (one failed, one retried)", searchAttempts)
+	// 2 (one failed, one retried) + 1 (the second live read).
+	if searchAttempts != 3 {
+		t.Fatalf("search attempts=%d want 3 (one failed, one retried, one second live read)", searchAttempts)
 	}
 	if boardsAttempts != 2 {
 		t.Fatalf("boards attempts=%d want 2 (both exhausted by the retry policy)", boardsAttempts)
@@ -147,10 +150,10 @@ func TestJiraTeamCatalogCollectCountsFailedAndRetriedAttempts(t *testing.T) {
 	if len(batch.Rows.Sprints) != 0 {
 		t.Fatalf("sprints=%+v want none (the board listing never recovered)", batch.Rows.Sprints)
 	}
-	// 2 (search, retried) + 1 (archived search) + 1 (project detail) +
-	// 2 (boards, exhausted) = 6.
-	if batch.Evidence.Requests != 6 {
-		t.Fatalf("evidence=%+v want Requests=6 (every physical attempt, from one source)", batch.Evidence)
+	// 2 (search, retried) + 1 (archived search) + 1 (second live search) +
+	// 1 (project detail) + 2 (boards, exhausted) = 7.
+	if batch.Evidence.Requests != 7 {
+		t.Fatalf("evidence=%+v want Requests=7 (every physical attempt, from one source)", batch.Evidence)
 	}
 }
 
@@ -406,8 +409,8 @@ func TestJiraTeamCatalogCollectReadsEveryPageOfTheProjectSearch(t *testing.T) {
 	if !batch.Result.ProjectSearchComplete || batch.Result.ProjectSearchPages != 2 {
 		t.Fatalf("result=%+v, want the search complete after 2 pages", batch.Result)
 	}
-	if len(doer.requests) != 3 || doer.requests[2] != jiraTeamCatalogArchivedProjectSearchURI {
-		t.Fatalf("search requests=%v, want the two pages, then the archived read", doer.requests)
+	if len(doer.requests) != 5 || doer.requests[2] != jiraTeamCatalogArchivedProjectSearchURI || doer.requests[3] != jiraTeamCatalogProjectSearchURI {
+		t.Fatalf("search requests=%v, want the two pages, the archived read, then the two pages again", doer.requests)
 	}
 }
 
@@ -479,10 +482,11 @@ func TestJiraTeamCatalogProjectSearchStopsAtThePageBoundAndIsNotComplete(t *test
 		pages[uri] = jiraTeamCatalogFixtureResponse{body: jiraProjectSearchPage(page*2, 2, `,"isLast":false`)}
 	}
 	// No fixture for the page after the bound: a request for it fails the
-	// test. The one request more is the archived read.
+	// test. The one request more is the archived read; the second live read
+	// walks the same pages again.
 	batch, doer := collectJiraProjectSearch(t, pages)
 	if batch.Result.ProjectSearchComplete || batch.Result.ProjectSearchPages != jiraTeamCatalogProjectSearchMaxPages ||
-		len(batch.Rows.Projects) != 2*jiraTeamCatalogProjectSearchMaxPages || len(doer.requests) != jiraTeamCatalogProjectSearchMaxPages+1 {
+		len(batch.Rows.Projects) != 2*jiraTeamCatalogProjectSearchMaxPages || len(doer.requests) != 2*jiraTeamCatalogProjectSearchMaxPages+1 {
 		t.Fatalf("complete=%v pages=%d projects=%d requests=%d, want not complete at the bound of %d pages",
 			batch.Result.ProjectSearchComplete, batch.Result.ProjectSearchPages, len(batch.Rows.Projects), len(doer.requests), jiraTeamCatalogProjectSearchMaxPages)
 	}
@@ -541,8 +545,8 @@ func TestJiraTeamCatalogCollectReadsArchivedProjectsToHoldOwnershipOnly(t *testi
 			t.Errorf("%s: teams=%d projects=%d ownership=%d memberships=%d, want the one live project row only", name,
 				len(batch.Rows.Teams), len(batch.Rows.Projects), len(batch.Rows.Ownership), len(batch.Rows.Memberships))
 		}
-		if batch.Result.ProjectSearchComplete != tc.complete || batch.Result.ProjectSearchPages != 1 || len(doer.requests) != tc.requests {
-			t.Errorf("%s: complete=%v live pages=%d requests=%v, want complete=%v, 1 live page, %d requests", name,
+		if batch.Result.ProjectSearchComplete != tc.complete || batch.Result.ProjectSearchPages != 1 || len(doer.requests) != tc.requests+1 {
+			t.Errorf("%s: complete=%v live pages=%d requests=%v, want complete=%v, 1 live page, %d requests (+1: the second live read)", name,
 				batch.Result.ProjectSearchComplete, batch.Result.ProjectSearchPages, doer.requests, tc.complete, tc.requests)
 		}
 		if tc.archived == nil {
@@ -897,3 +901,239 @@ identities:
 }
 
 var _ TeamCatalogCollector = JiraTeamCatalogCollector{}
+
+// jiraSearchSequenceDoer answers the project search from a script: one body
+// per call of each kind (live, archived), in call order; the last body of a
+// kind repeats. Every other request is a 404.
+type jiraSearchSequenceDoer struct {
+	t        *testing.T
+	live     []string
+	archived []string
+	liveN    int
+	archN    int
+}
+
+func (doer *jiraSearchSequenceDoer) Do(request *http.Request) (*http.Response, error) {
+	body := `{}`
+	status := http.StatusNotFound
+	if request.URL.Path == "/rest/api/3/project/search" {
+		status = http.StatusOK
+		pick := func(bodies []string, n *int) string {
+			index := min(*n, len(bodies)-1)
+			*n++
+			return bodies[index]
+		}
+		if request.URL.Query().Get("status") == "archived" {
+			body = pick(doer.archived, &doer.archN)
+		} else {
+			body = pick(doer.live, &doer.liveN)
+		}
+	}
+	return &http.Response{StatusCode: status, Header: http.Header{"Content-Type": []string{"application/json"}},
+		Body: io.NopCloser(strings.NewReader(body)), Request: request}, nil
+}
+
+func collectJiraSearchSequence(t *testing.T, doer *jiraSearchSequenceDoer) JiraTeamCatalogBatch {
+	t.Helper()
+	batch, err := JiraTeamCatalogRouteHandler{}.CollectTeamCatalog(context.Background(),
+		TeamCatalogReference{OrgID: "org-1", SyncRunID: "run-1"}, providerfoundation.Credential{Provider: "jira"},
+		jiraTeamCatalogTestClient(t, doer), TeamCatalogSelections{Projects: true},
+		time.Date(2026, 8, 30, 12, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	return batch
+}
+
+// CHAOS-8894: the live and archived reads are two calls. A project restored
+// between them is in the first live answer no more and in the archived answer
+// not yet. The walk reads the live projects once more after the archived read,
+// so the project is in the live set and is neither lost nor closed.
+func TestJiraTeamCatalogProjectRestoredBetweenTheTwoReadsIsLive(t *testing.T) {
+	t.Parallel()
+	ops := `{"id":"10001","key":"OPS","name":"Ops"}`
+	moved := `{"id":"20001","key":"MOV","name":"Moved"}`
+	batch := collectJiraSearchSequence(t, &jiraSearchSequenceDoer{t: t,
+		live:     []string{`{"values":[` + ops + `],"isLast":true}`, `{"values":[` + ops + `,` + moved + `],"isLast":true}`},
+		archived: []string{`{"values":[],"isLast":true}`},
+	})
+	ids := []string{}
+	for _, row := range batch.Rows.Projects {
+		ids = append(ids, row.ID)
+	}
+	slices.Sort(ids)
+	if !slices.Equal(ids, []string{"10001", "20001"}) || len(batch.ArchivedProjects) != 0 || !batch.Result.ProjectSearchComplete {
+		t.Fatalf("live=%v archived=%v complete=%v, want the restored project live, none archived, snapshot complete",
+			ids, batch.ArchivedProjects, batch.Result.ProjectSearchComplete)
+	}
+}
+
+// The other direction: a project archived after the first live read is live in
+// that answer and archived in the next; it is held in one of the two sets.
+// A project read as archived and live again is live and not held.
+func TestJiraTeamCatalogProjectArchivedBetweenTheTwoReadsIsKept(t *testing.T) {
+	t.Parallel()
+	moved := `{"id":"20001","key":"MOV","name":"Moved"}`
+	batch := collectJiraSearchSequence(t, &jiraSearchSequenceDoer{t: t,
+		live:     []string{`{"values":[` + moved + `],"isLast":true}`, `{"values":[],"isLast":true}`},
+		archived: []string{`{"values":[` + moved + `],"isLast":true}`},
+	})
+	if len(batch.Rows.Projects) != 1 || batch.Rows.Projects[0].ID != "20001" || !batch.Result.ProjectSearchComplete {
+		t.Fatalf("projects=%d result=%+v, want the project kept from the first live read", len(batch.Rows.Projects), batch.Result)
+	}
+	batch = collectJiraSearchSequence(t, &jiraSearchSequenceDoer{t: t,
+		live:     []string{`{"values":[],"isLast":true}`, `{"values":[` + moved + `],"isLast":true}`},
+		archived: []string{`{"values":[` + moved + `],"isLast":true}`},
+	})
+	if len(batch.Rows.Projects) != 1 || len(batch.ArchivedProjects) != 0 {
+		t.Fatalf("projects=%d archived=%v, want a project read archived and live again to be live and not held", len(batch.Rows.Projects), batch.ArchivedProjects)
+	}
+}
+
+// CHAOS-8894: a 200 body that carries errorMessages is an error answer, even
+// with total 0 and no values; it is not the end of the data. One case per
+// read of the walk.
+func TestJiraTeamCatalogErrorMessagesBodyIsNotTheEndOfData(t *testing.T) {
+	t.Parallel()
+	ok := `{"values":[{"id":"10001","key":"OPS","name":"Ops"}],"isLast":true}`
+	bad := `{"errorMessages":["The value 'archived' does not exist for the field 'status'."],"total":0}`
+	for name, doer := range map[string]*jiraSearchSequenceDoer{
+		"first live read":  {live: []string{bad, ok}, archived: []string{ok}},
+		"archived read":    {live: []string{ok}, archived: []string{bad}},
+		"second live read": {live: []string{ok, bad}, archived: []string{ok}},
+	} {
+		doer.t = t
+		if batch := collectJiraSearchSequence(t, doer); batch.Result.ProjectSearchComplete {
+			t.Errorf("%s: snapshot complete on an errorMessages body, want not complete", name)
+		}
+	}
+}
+
+// CHAOS-8894 rule: the reads are ordered in time, and only a live read taken
+// AFTER the archived read proves a project live again. The held archived set
+// and the completeness flag are asserted for all four orderings.
+func TestJiraTeamCatalogArchivedProjectIsLiveOnlyWhenTheReadAfterItSaysSo(t *testing.T) {
+	t.Parallel()
+	ops := `{"id":"10001","key":"OPS","name":"Ops"}`
+	mov := `{"id":"20001","key":"MOV","name":"Moved"}`
+	page := func(entries ...string) string { return `{"values":[` + strings.Join(entries, ",") + `],"isLast":true}` }
+	for name, tc := range map[string]struct {
+		live1, archived, live2 string
+		held                   []string
+		projects               []string
+	}{
+		"archived only":                 {page(ops), page(mov), page(ops), []string{"20001"}, []string{"10001"}},
+		"live1 and archived, not live2": {page(ops, mov), page(mov), page(ops), []string{"20001"}, []string{"10001", "20001"}},
+		"archived and live2 (restored)": {page(ops), page(mov), page(ops, mov), nil, []string{"10001", "20001"}},
+		"live1, archived and live2":     {page(ops, mov), page(mov), page(ops, mov), nil, []string{"10001", "20001"}},
+	} {
+		batch := collectJiraSearchSequence(t, &jiraSearchSequenceDoer{t: t,
+			live: []string{tc.live1, tc.live2}, archived: []string{tc.archived}})
+		held := []string{}
+		for _, project := range batch.ArchivedProjects {
+			held = append(held, project.ID)
+		}
+		ids := []string{}
+		for _, row := range batch.Rows.Projects {
+			ids = append(ids, row.ID)
+		}
+		slices.Sort(ids)
+		if !slices.Equal(held, append([]string{}, tc.held...)) || !slices.Equal(ids, tc.projects) || !batch.Result.ProjectSearchComplete {
+			t.Errorf("%s: held=%v projects=%v complete=%v, want held=%v projects=%v complete", name,
+				held, ids, batch.Result.ProjectSearchComplete, tc.held, tc.projects)
+		}
+	}
+}
+
+// The union of the live reads is by project id: a project renamed between the
+// two live reads (same id, new key) is one project row.
+func TestJiraTeamCatalogLiveReadsAreUnitedByProjectID(t *testing.T) {
+	t.Parallel()
+	batch := collectJiraSearchSequence(t, &jiraSearchSequenceDoer{t: t,
+		live:     []string{`{"values":[{"id":"10001","key":"OPS","name":"Ops"}],"isLast":true}`, `{"values":[{"id":"10001","key":"OPS2","name":"Ops"}],"isLast":true}`},
+		archived: []string{`{"values":[],"isLast":true}`},
+	})
+	if len(batch.Rows.Projects) != 1 {
+		t.Fatalf("projects=%d, want one row for one project id read twice", len(batch.Rows.Projects))
+	}
+}
+
+func jiraSnapshotIncompleteCounts(t *testing.T) map[string]int64 {
+	t.Helper()
+	var resource metricdata.ResourceMetrics
+	if err := meterReader.Collect(context.Background(), &resource); err != nil {
+		t.Fatal(err)
+	}
+	out := map[string]int64{}
+	for _, scope := range resource.ScopeMetrics {
+		for _, m := range scope.Metrics {
+			if m.Name != jiraOwnershipSnapshotIncompleteName {
+				continue
+			}
+			sum, ok := m.Data.(metricdata.Sum[int64])
+			if !ok {
+				t.Fatalf("%s is %T, want an int64 sum", m.Name, m.Data)
+			}
+			for _, point := range sum.DataPoints {
+				reason, _ := point.Attributes.Value("reason")
+				out[reason.AsString()] += point.Value
+			}
+		}
+	}
+	return out
+}
+
+// Not parallel: it reads a process-wide counter.
+func TestRecordJiraOwnershipSnapshotIncompleteCountsEachReason(t *testing.T) {
+	for _, c := range []struct {
+		name                                      string
+		searchComplete, legacyComplete, liveEmpty bool
+		want                                      map[string]int64
+	}{
+		{"complete", true, true, false, map[string]int64{}},
+		{"search", false, true, false, map[string]int64{"project_search": 1}},
+		{"legacy", true, false, false, map[string]int64{"legacy_links": 1}},
+		{"live empty", true, true, true, map[string]int64{"no_live_ownership": 1}},
+		{"all", false, false, true, map[string]int64{"project_search": 1, "legacy_links": 1, "no_live_ownership": 1}},
+	} {
+		before := jiraSnapshotIncompleteCounts(t)
+		recordJiraOwnershipSnapshotIncomplete(context.Background(), c.searchComplete, c.legacyComplete, c.liveEmpty)
+		after := jiraSnapshotIncompleteCounts(t)
+		moved := map[string]int64{}
+		for reason, n := range after {
+			if d := n - before[reason]; d != 0 {
+				moved[reason] = d
+			}
+		}
+		if !maps.Equal(moved, c.want) {
+			t.Errorf("%s: counter moved %v, want %v", c.name, moved, c.want)
+		}
+	}
+}
+
+func TestJudgeJiraOwnershipSnapshotCountsOnlyAnIncompleteOne(t *testing.T) {
+	ctx := context.Background()
+	before := jiraSnapshotIncompleteCounts(t)
+	if !judgeJiraOwnershipSnapshot(ctx, "org-1", true, true, false, 0) {
+		t.Fatal("complete reads judged incomplete")
+	}
+	if got := jiraSnapshotIncompleteCounts(t); !maps.Equal(got, before) {
+		t.Fatalf("a complete snapshot moved the counter: %v -> %v", before, got)
+	}
+	if judgeJiraOwnershipSnapshot(ctx, "org-1", true, false, false, 2) {
+		t.Fatal("an unread legacy links table judged complete")
+	}
+	if got := jiraSnapshotIncompleteCounts(t); got["legacy_links"] != before["legacy_links"]+1 {
+		t.Fatalf("counter %v -> %v, want legacy_links +1", before, got)
+	}
+}
+
+func TestJiraUnionProjectSearchEntriesIsByProjectID(t *testing.T) {
+	t.Parallel()
+	got := jiraUnionProjectSearchEntries(
+		[]jiraTeamCatalogProjectSearchEntry{{ID: "1", Key: "OPS"}},
+		[]jiraTeamCatalogProjectSearchEntry{{ID: "1", Key: "OPS2"}, {ID: "2", Key: "NEW"}, {ID: "", Key: "ops"}})
+	if len(got) != 3 || got[0].Key != "OPS" || got[1].ID != "2" || got[2].ID != "" {
+		t.Fatalf("union = %+v, want the first entry kept, a renamed id not repeated, a new id and an id-less key added once", got)
+	}
+}

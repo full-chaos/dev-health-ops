@@ -140,6 +140,7 @@ import (
 
 	"github.com/full-chaos/dev-health-go/clickhouse"
 
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/changefailure"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph/model"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graphqldate"
 )
@@ -312,6 +313,15 @@ func pluck[T any](rows []T, get func(T) *float64) []*float64 {
 
 func f(v float64) *float64 { return &v }
 
+// floatOrZero is the 0 placeholder a metric value carries when it is
+// undefined; hasData (dataIn) says it is not a measured 0.
+func floatOrZero(v *float64) float64 {
+	if v == nil {
+		return 0
+	}
+	return *v
+}
+
 // knownCountGuard ports the shipped `known_count` guard
 // (resolvers/analytics.py:262-269, cited at this port's base SHA
 // e9ea257ff -- EvidenceQualityStats.mean/stddev):
@@ -342,7 +352,7 @@ func f(v float64) *float64 { return &v }
 //
 // field identifies which GraphQL metric key this guard call is protecting
 // (a closed vocabulary: "hotspot_risk_score", "ownership_concentration",
-// "complexity_per_kloc", "change_failure_rate") -- recorded on
+// "complexity_per_kloc") -- recorded on
 // knownCountGuardFiredCounter ONLY when the guard actually fires, per
 // brief §8 ("emit its decision basis... that the guard fired, and on what
 // counted basis"), never unconditionally (an unconditional emit would
@@ -531,7 +541,7 @@ func fetchStateDurations(ctx context.Context, client QueryClient, orgID string, 
 type repoMetricsRow struct {
 	prsMerged             float64
 	prFirstReviewP50Hours *float64
-	// singleOwnerFileRatio30d and changeFailureRate are nil when the
+	// singleOwnerFileRatio30d is nil when the
 	// query's companion count is 0 -- the same CHAOS-4563 known_count
 	// guard as hotspotsAggRow.riskScore/complexityAggRow.cyclomaticPerKloc
 	// above. Both underlying columns are plain (non-Nullable) Float64
@@ -549,8 +559,11 @@ type repoMetricsRow struct {
 	singleOwnerFileRatio30d *float64
 	codeOwnershipGini       float64
 	busFactor               float64
-	changeFailureRate       *float64
-	mttrHours               *float64
+	// revertRate is the week's reverted / merged pull requests (each day's
+	// revert_rate weighted by its merged count); nil when no day of the week
+	// has a stored revert rate.
+	revertRate *float64
+	mttrHours  *float64
 	// storedRows is repo_metrics_known_count: the number of (day, repo) rows
 	// the week holds. The aggregate always returns one row, so this, not the
 	// row itself, says whether the week has data (CHAOS-8115).
@@ -564,9 +577,18 @@ type repoMetricsRow struct {
 // CHAOS-4534: neither plane is correct today). No team_filter/team_group --
 // repo_metrics_daily has no team_id column, matching the Python query
 // (which does not splice either f-string placeholder into this one).
-// pr_first_review_p50_hours and mttr_hours are Nullable(Float64) on
-// repo_metrics_daily; both are tuple-wrapped so argMax cannot skip a
-// newest row that carries NULL in either.
+// pr_first_review_p50_hours, revert_rate and mttr_hours are Nullable(Float64)
+// on repo_metrics_daily; each is tuple-wrapped so argMax cannot skip a
+// newest row that carries NULL. revert_rate is the day's reverted / merged
+// pull requests, so the week's rate is total reverted / total merged:
+// sum(revert_rate_day * merged_prs) over the merged pull requests of the days
+// that have a stored revert rate. A day without one is unknown and adds
+// nothing to either sum; the deprecated change_failure_rate column is never
+// read for it, because its 0 was not measured. No writer stores a revert rate
+// yet, so the week has none.
+// The inner read names the column `repo_metrics_daily.prs_merged` and uses its
+// own aliases, because a bare `prs_merged` there resolves to the aggregate
+// alias of the same name and ClickHouse refuses the nested aggregate.
 func fetchRepoMetrics(ctx context.Context, client QueryClient, orgID string, start, end time.Time) ([]repoMetricsRow, error) {
 	query := `
         SELECT
@@ -575,7 +597,7 @@ func fetchRepoMetrics(ctx context.Context, client QueryClient, orgID string, sta
           avg(single_owner_file_ratio_30d) AS single_owner_file_ratio_30d,
           avg(code_ownership_gini) AS code_ownership_gini,
           min(bus_factor) AS bus_factor,
-          avg(change_failure_rate) AS change_failure_rate,
+          toFloat64(sum(revert_rate_day * merged_prs) / nullIf(sumIf(merged_prs, isNotNull(revert_rate_day)), 0)) AS revert_rate,
           avg(mttr_hours) AS mttr_hours,
           count() AS repo_metrics_known_count
         FROM (
@@ -587,7 +609,8 @@ func fetchRepoMetrics(ctx context.Context, client QueryClient, orgID string, sta
             argMax(single_owner_file_ratio_30d, computed_at) AS single_owner_file_ratio_30d,
             argMax(code_ownership_gini, computed_at) AS code_ownership_gini,
             argMax(bus_factor, computed_at) AS bus_factor,
-            argMax(change_failure_rate, computed_at) AS change_failure_rate,
+            (argMax(tuple(revert_rate), computed_at)).1 AS revert_rate_day,
+            argMax(repo_metrics_daily.prs_merged, computed_at) AS merged_prs,
             (argMax(tuple(mttr_hours), computed_at)).1 AS mttr_hours
           FROM repo_metrics_daily
           WHERE org_id = {org_id:String}
@@ -608,10 +631,10 @@ func fetchRepoMetrics(ctx context.Context, client QueryClient, orgID string, sta
 		var prFirstReviewP50 *float64
 		var singleOwnerRatio, codeOwnershipGini float64
 		var busFactor uint32
-		var changeFailureRate float64
+		var revertRate *float64
 		var mttrHours *float64
 		var knownCount uint64
-		if scanErr := rows.Scan(&prsMerged, &prFirstReviewP50, &singleOwnerRatio, &codeOwnershipGini, &busFactor, &changeFailureRate, &mttrHours, &knownCount); scanErr != nil {
+		if scanErr := rows.Scan(&prsMerged, &prFirstReviewP50, &singleOwnerRatio, &codeOwnershipGini, &busFactor, &revertRate, &mttrHours, &knownCount); scanErr != nil {
 			return nil, fmt.Errorf("operatingreview: repo_metrics scan: %w", scanErr)
 		}
 		out = append(out, repoMetricsRow{
@@ -620,10 +643,44 @@ func fetchRepoMetrics(ctx context.Context, client QueryClient, orgID string, sta
 			singleOwnerFileRatio30d: knownCountGuard(ctx, "ownership_concentration", singleOwnerRatio, knownCount),
 			codeOwnershipGini:       codeOwnershipGini,
 			busFactor:               float64(busFactor),
-			changeFailureRate:       knownCountGuard(ctx, "change_failure_rate", changeFailureRate, knownCount),
+			revertRate:              revertRate,
 			mttrHours:               mttrHours,
 			storedRows:              knownCount,
 		})
+	}
+	return out, rows.Err()
+}
+
+// changeFailureAggRow is the week's summed change-failure counts
+// (repo_change_failure_daily, newest computed_at per repository and day).
+// storedRows is the number of (repository, day) rows the week holds.
+type changeFailureAggRow struct {
+	view changefailure.View
+}
+
+// fetchChangeFailureAgg reads the organisation's change-failure counts for
+// the week and the number of stored rows behind them (CHAOS-8981). The rate
+// itself is changefailure.Evaluate over the sum, never an average of daily
+// rates.
+func fetchChangeFailureAgg(ctx context.Context, client QueryClient, orgID string, start, end time.Time) ([]changeFailureAggRow, error) {
+	query := `
+        SELECT ` + changefailure.ViewSumsSQL + `
+        FROM ` + changefailure.LatestRowsSQL("start", "end", "")
+
+	bindings := periodBindings(orgID, start, end, nil)
+	rows, err := client.Query(ctx, query, bindings)
+	if err != nil {
+		return nil, fmt.Errorf("operatingreview: change_failure query: %w", err)
+	}
+	defer rows.Close()
+
+	var out []changeFailureAggRow
+	for rows.Next() {
+		var row changeFailureAggRow
+		if scanErr := rows.Scan(changefailure.ViewScanDest(&row.view)...); scanErr != nil {
+			return nil, fmt.Errorf("operatingreview: change_failure scan: %w", scanErr)
+		}
+		out = append(out, row)
 	}
 	return out, rows.Err()
 }
@@ -1154,6 +1211,7 @@ type periodRows struct {
 	hotspots       []hotspotsAggRow
 	complexity     []complexityAggRow
 	deployments    []deploymentsAggRow
+	changeFailure  []changeFailureAggRow
 	incidents      []incidentsAggRow
 	investment     []investmentRow
 	aiImpact       []aiImpactRow
@@ -1268,6 +1326,11 @@ func fetchPeriodRows(ctx context.Context, client QueryClient, orgID string, team
 	errSwallow(ctx, "ai_governance", err)
 	aiGovernance = discardOnError(aiGovernance, err)
 
+	// Read last so the first ten reads keep their order (CHAOS-8981).
+	changeFailure, err := fetchChangeFailureAgg(ctx, client, orgID, start, end)
+	errSwallow(ctx, "change_failure", err)
+	changeFailure = discardOnError(changeFailure, err)
+
 	return periodRows{
 		workItems:      workItems,
 		stateDurations: stateDurations,
@@ -1275,6 +1338,7 @@ func fetchPeriodRows(ctx context.Context, client QueryClient, orgID string, team
 		hotspots:       hotspots,
 		complexity:     complexity,
 		deployments:    deployments,
+		changeFailure:  changeFailure,
 		incidents:      incidents,
 		investment:     investment,
 		aiImpact:       aiImpact,
@@ -1313,11 +1377,11 @@ func mustSwallowCounter() metric.Int64Counter {
 // knownCountGuardFiredCounter counts every CHAOS-4563 known_count guard
 // trip -- i.e. every time knownCountGuard discarded a raw scanned value
 // (NaN on the live path) in favor of nil because its query's companion
-// count was 0 -- tagged by `field`, a closed vocabulary of the three guard
+// count was 0 -- tagged by `field`, a closed vocabulary of the guard
 // sites' GraphQL metric keys (hotspot_risk_score, ownership_concentration,
-// complexity_per_kloc, change_failure_rate -- singleOwnerFileRatio30d and
-// changeFailureRate share the repo_metrics query and its one count, so both
-// can fire together). This is telemetry FOR THE GUARD ITSELF -- distinct
+// complexity_per_kloc). change_failure_rate left this vocabulary with
+// CHAOS-8981: its states are changefailure.Evaluate's, not a guard's.
+// This is telemetry FOR THE GUARD ITSELF -- distinct
 // from fetchSwallowedCounter above, which counts a whole TABLE's query
 // failing; this counts one FIELD's average being genuinely absent, which
 // is not a failure at all, just a decision the guard is now making
@@ -1435,6 +1499,16 @@ type reviewMetric struct {
 	// organisationWide: the metric's daily tables hold no team, so its value is
 	// the whole organisation's whatever team is selected (CHAOS-8516).
 	organisationWide bool
+	// rateState is the state of change failure rate for the week
+	// (changefailure.Outcome.StateOrNil): why it has a value or not. nil for
+	// every other metric and for a week with no stored counts (CHAOS-8981).
+	rateState *string
+}
+
+// state attaches the week's change-failure state to the metric.
+func (m reviewMetric) state(outcome changefailure.Outcome) reviewMetric {
+	m.rateState = outcome.StateOrNil()
+	return m
 }
 
 // organisation marks a metric whose reads carry no team filter: the request's
@@ -1530,15 +1604,20 @@ func hasDeploymentRows(p periodRows) bool {
 	return false
 }
 
-// hasChangeFailureRate follows changeFailureRate: the rate of the week's own
-// deployments when there is at least one, else the stored repository rate.
-// Stored deployment rows that count no deployment give no rate.
+// hasChangeFailureRate: the week's rate is measured (a deployment and
+// incident evidence). Every other state is no data, and the metric's rateState
+// says which one.
 func hasChangeFailureRate(p periodRows) bool {
-	if sumF(pluck(p.deployments, func(r deploymentsAggRow) *float64 { return f(r.deploymentsCount) })) > 0 {
-		return true
-	}
-	return anyPresent(pluck(p.repoMetrics, func(r repoMetricsRow) *float64 { return r.changeFailureRate }))
+	return changeFailureOutcome(p).State == changefailure.StateMeasured
 }
+
+// hasDeploymentFailureRate: the week counts at least one deployment.
+func hasDeploymentFailureRate(p periodRows) bool {
+	return sumF(pluck(p.deployments, func(r deploymentsAggRow) *float64 { return f(r.deploymentsCount) })) > 0
+}
+
+// hasRevertRate: a day of the week has a stored revert rate.
+func hasRevertRate(p periodRows) bool { return revertRate(p) != nil }
 
 func hasIncidentRows(p periodRows) bool {
 	for _, r := range p.incidents {
@@ -1723,18 +1802,40 @@ func recommendationsFromSections(sections []reviewSection) []string {
 	return recommendations
 }
 
-// changeFailureRate ports _change_failure_rate
-// (metrics/operating_review.py:819-824) verbatim, except the fallback avg
-// now reads repoMetricsRow.changeFailureRate's own CHAOS-4563 known_count
-// guard (nil, not a raw NaN, when the period's repo_metrics window is
-// empty) -- see repoMetricsRow's doc comment.
-func changeFailureRate(current periodRows) float64 {
+// changeFailureOutcome is the week's incident-based change failure rate with
+// its state (CHAOS-8981): changefailure.Evaluate over the week's summed counts
+// and stored rows. The value is set only for a measured rate; the state says
+// whether the week is unknown, not applicable or was never counted. Python's
+// _change_failure_rate (failed deployment runs / deployments, else the
+// average stored revert ratio) is deliberately not followed: the first is
+// deploymentFailureRate, the second revertRate.
+func changeFailureOutcome(current periodRows) changefailure.Outcome {
+	var view changefailure.View
+	for _, row := range current.changeFailure {
+		view.Counts = view.Counts.Add(row.view.Counts)
+		view.StoredRows += row.view.StoredRows
+	}
+	return changefailure.Evaluate(view)
+}
+
+// deploymentFailureRate is failed deployment runs / deployments for the week
+// (0 when the week has no deployment; hasDeploymentFailureRate says so).
+func deploymentFailureRate(current periodRows) float64 {
 	deployments := sumF(pluck(current.deployments, func(r deploymentsAggRow) *float64 { return f(r.deploymentsCount) }))
 	failed := sumF(pluck(current.deployments, func(r deploymentsAggRow) *float64 { return f(r.failedDeploymentsCount) }))
 	if deployments > 0 {
 		return failed / deployments
 	}
-	return avgF(pluck(current.repoMetrics, func(r repoMetricsRow) *float64 { return r.changeFailureRate }))
+	return 0
+}
+
+// revertRate is the week's reverted / merged pull requests.
+func revertRate(current periodRows) *float64 {
+	values := presentValues(pluck(current.repoMetrics, func(r repoMetricsRow) *float64 { return r.revertRate }))
+	if len(values) == 0 {
+		return nil
+	}
+	return f(values[0])
 }
 
 // aiAdoptionRatio ports _ai_adoption_ratio (metrics/operating_review.py:
@@ -1915,12 +2016,13 @@ func toGraphQLSection(s reviewSection) model.OperatingReviewSection {
 	metrics := make([]model.OperatingReviewMetric, 0, len(s.metrics))
 	for _, m := range s.metrics {
 		metrics = append(metrics, model.OperatingReviewMetric{
-			Key:     m.key,
-			Label:   m.label,
-			Value:   m.value,
-			Unit:    m.unit,
-			HasData: m.hasData,
-			Scope:   metricScope(m),
+			Key:       m.key,
+			Label:     m.label,
+			Value:     m.value,
+			Unit:      m.unit,
+			HasData:   m.hasData,
+			Scope:     metricScope(m),
+			RateState: m.rateState,
 			Delta: &model.OperatingReviewDelta{
 				Value:        m.delta.value,
 				PriorValue:   m.delta.priorValue,
@@ -2027,7 +2129,12 @@ func reliabilitySection(current, prior periodRows) reviewSection {
 			sumF(pluck(prior.deployments, func(r deploymentsAggRow) *float64 { return f(r.deploymentsCount) })),
 			"deployments", higherIsBetter).dataIn(current, prior, hasDeploymentRows).organisation(),
 		buildMetric("change_failure_rate", "Change failure rate",
-			changeFailureRate(current), changeFailureRate(prior), "ratio", lowerIsBetter).dataIn(current, prior, hasChangeFailureRate).organisation(),
+			floatOrZero(changeFailureOutcome(current).Value), floatOrZero(changeFailureOutcome(prior).Value), "ratio", lowerIsBetter).
+			dataIn(current, prior, hasChangeFailureRate).organisation().state(changeFailureOutcome(current)),
+		buildMetric("deployment_failure_rate", "Deployment failure rate",
+			deploymentFailureRate(current), deploymentFailureRate(prior), "ratio", lowerIsBetter).dataIn(current, prior, hasDeploymentFailureRate).organisation(),
+		buildMetric("revert_rate", "Revert rate",
+			floatOrZero(revertRate(current)), floatOrZero(revertRate(prior)), "ratio", lowerIsBetter).dataIn(current, prior, hasRevertRate).organisation(),
 		buildMetric("incidents_count", "Incidents",
 			sumF(pluck(current.incidents, func(r incidentsAggRow) *float64 { return f(r.incidentsCount) })),
 			sumF(pluck(prior.incidents, func(r incidentsAggRow) *float64 { return f(r.incidentsCount) })),

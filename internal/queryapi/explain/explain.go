@@ -145,6 +145,19 @@ type Response struct {
 	// metric stored per repository (or the scope's one repository), the work-item table's
 	// provider for a metric stored per team. null when none is stored.
 	Source *string `json:"source"`
+	// LinkTier (CHAOS-8981, Go-only) names the weakest deployment-incident link
+	// tier behind a measured change failure rate: "heuristic" when a failed
+	// deployment counts through heuristic links only, "native" when every
+	// failed deployment has a native link. null for every other metric, for
+	// a rate that is not measured, and for a measured 0 (no failed deployment).
+	LinkTier *string `json:"link_tier"`
+	// RateState (CHAOS-8981, Go-only, last so the older Go-only tail keeps its
+	// order) says why change failure rate has a value or not:
+	// "measured" (the value may be 0), "unknown_no_incident_evidence"
+	// (deployments, no incident tied to the scope in the window) or
+	// "not_applicable_no_deployments". null when the window holds no stored
+	// counts at all, and for every other metric.
+	RateState *string `json:"rate_state"`
 }
 
 // safeFloat ports api/utils/numeric.py's safe_float for an already-float64

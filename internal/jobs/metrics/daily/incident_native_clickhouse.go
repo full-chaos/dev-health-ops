@@ -102,12 +102,7 @@ func LoadIncidentsStarted(
 		"started_at >= {start:DateTime64(3, 'UTC')}",
 		"started_at < {end:DateTime64(3, 'UTC')}",
 	}, contract)
-	currentMappings := remaining.CurrentOperationalRowsSQL("operational_service_repository_mappings", []string{
-		"repo_id IS NOT NULL",
-		"is_active = 1",
-		"(valid_from IS NULL OR valid_from <= {as_of:DateTime64(6, 'UTC')})",
-		"(valid_to IS NULL OR valid_to > {as_of:DateTime64(6, 'UTC')})",
-	}, contract)
+	currentMappings := activeServiceRepositoryMappingsSQL(contract)
 	rows, err := conn.Query(ctx, `
 SELECT repo_id, incident_id, status, started_at, resolved_at, mapping_valid_from
 FROM (
@@ -203,6 +198,20 @@ ORDER BY repo_id, incident_id`,
 	}
 
 	return incidents, nil
+}
+
+// activeServiceRepositoryMappingsSQL selects the current, active
+// service-to-repository mapping rows valid at {as_of:DateTime64(6, 'UTC')}:
+// the direct incident-to-repository tie. LoadIncidentsStarted joins incidents
+// through it, and LoadViaDeploymentIncidentLinks uses it to keep an incident
+// with a direct tie off the via-deployment path.
+func activeServiceRepositoryMappingsSQL(contract remaining.OperationalOrderingContract) string {
+	return remaining.CurrentOperationalRowsSQL("operational_service_repository_mappings", []string{
+		"repo_id IS NOT NULL",
+		"is_active = 1",
+		"(valid_from IS NULL OR valid_from <= {as_of:DateTime64(6, 'UTC')})",
+		"(valid_to IS NULL OR valid_to > {as_of:DateTime64(6, 'UTC')})",
+	}, contract)
 }
 
 // incidentBatchConn is the narrow write capability

@@ -135,6 +135,7 @@ internal/jobs/investment/chwrite	1
 internal/jobs/metrics/aigovernance	1
 internal/jobs/metrics/aiimpact	2
 internal/jobs/metrics/aiworkflow	1
+internal/jobs/metrics/changefailure	1
 internal/jobs/metrics/checkedcast	1
 internal/jobs/metrics/complexity	3
 internal/jobs/metrics/complexity/lizardcc	7

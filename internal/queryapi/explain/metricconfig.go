@@ -1,5 +1,7 @@
 package explain
 
+import "github.com/full-chaos/dev-health-ops/internal/jobs/metrics/changefailure"
+
 // metricConfig ports api/services/explain.py's _MetricConfig TypedDict --
 // one entry per supported metric key.
 type metricConfig struct {
@@ -9,7 +11,7 @@ type metricConfig struct {
 	Column     string
 	GroupBy    string
 	Scope      string // "team" or "repo"
-	Aggregator string // "avg" or "sum"
+	Aggregator string // "avg", "sum", or a fixed rule: "ratio", "merged_weighted"
 	// StatusFilter, when non-empty, is the exact Column-table status value
 	// every read of this metric restricts to (a plain `status = '<value>'`
 	// alongside the org/scope filter, same subquery, same nesting depth).
@@ -81,10 +83,24 @@ var metricConfigs = map[string]metricConfig{
 		StatusFilter: "blocked",
 		Transform:    identityTransform,
 	},
+	// Incident-based (CHAOS-8981): deployments linked to an incident /
+	// deployments over the window's summed daily counts, undefined without a
+	// deployment or without incident evidence. Aggregator "ratio" is read
+	// through changefailure.WindowRateSQL, never an average of daily ratios.
 	"change_failure_rate": {
 		Label: "Change Failure Rate", Unit: "%",
-		Table: "repo_metrics_daily", Column: "change_failure_rate",
-		GroupBy: "repo_id", Scope: "repo", Aggregator: "avg",
+		Table: changefailure.Table, Column: "change_failure_rate",
+		GroupBy: "repo_id", Scope: "repo", Aggregator: "ratio",
+		Transform: func(v float64) float64 { return v * 100.0 },
+	},
+	// Reverted / merged pull requests, weighted by each day's merged pull
+	// requests so the window value is total reverted / total merged. No
+	// writer stores a revert rate yet (nothing detects a reverted pull
+	// request), so the metric has no data: unknown, never 0%.
+	"revert_rate": {
+		Label: "Revert Rate", Unit: "%",
+		Table: "repo_metrics_daily", Column: "revert_rate",
+		GroupBy: "repo_id", Scope: "repo", Aggregator: "merged_weighted",
 		Transform: func(v float64) float64 { return v * 100.0 },
 	},
 }

@@ -99,8 +99,11 @@ func ComputeDORA(day time.Time, deployments []Deployment, incidents []Incident) 
 		if bucket.total > 0 {
 			result = append(result, DORAMetric{
 				RepoID: repoID,
-				Name:   "change_failure_rate",
-				Value:  float64(bucket.failed) / float64(bucket.total),
+				// Failed deployment runs / deployments: deployment failure
+				// rate. Change failure rate is the incident-based measure
+				// (internal/jobs/metrics/changefailure, CHAOS-8981).
+				Name:  "deployment_failure_rate",
+				Value: float64(bucket.failed) / float64(bucket.total),
 			})
 		}
 		if len(bucket.leadTimes) > 0 {

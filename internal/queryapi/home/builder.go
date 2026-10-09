@@ -16,6 +16,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/changefailure"
 )
 
 // safeFloat ports safe_float (api/utils/numeric.py:22-34): default 0.0
@@ -56,8 +58,45 @@ func computeMetricDelta(ctx context.Context, client QueryClient, spec metricSpec
 	var currentValue, previousValue float64
 	var hasData, hasPriorData bool
 	var series []dayValueRow
+	var rateState *string
 
-	if spec.Metric == "blocked_work" {
+	if spec.Table == changefailure.Table {
+		// Change failure rate: the window's summed counts through the one rule
+		// (changefailure.Evaluate), so the state goes out with the value and
+		// unknown, not applicable and "never counted" are not one empty answer.
+		var wg sync.WaitGroup
+		var errCur, errPrev, errSeries error
+		var current, previous changefailure.View
+		wg.Add(3)
+		go func() {
+			defer wg.Done()
+			current, errCur = fetchChangeFailureView(ctx, client, startDay, endDay, scopeFilter, scopeBindings, orgID)
+		}()
+		go func() {
+			defer wg.Done()
+			previous, errPrev = fetchChangeFailureView(ctx, client, compareStart, compareEnd, scopeFilter, scopeBindings, orgID)
+		}()
+		go func() {
+			defer wg.Done()
+			series, errSeries = fetchMetricSeries(ctx, client, spec.Table, spec.Column, startDay, endDay, scopeFilter, scopeBindings, spec.Aggregator, orgID)
+		}()
+		wg.Wait()
+		for _, err := range []error{errCur, errPrev, errSeries} {
+			if err != nil {
+				return MetricDelta{}, err
+			}
+		}
+		currentOutcome, previousOutcome := changefailure.Evaluate(current), changefailure.Evaluate(previous)
+		if currentOutcome.Value != nil {
+			currentValue = *currentOutcome.Value
+		}
+		if previousOutcome.Value != nil {
+			previousValue = *previousOutcome.Value
+		}
+		hasData = currentOutcome.State == changefailure.StateMeasured
+		hasPriorData = previousOutcome.State == changefailure.StateMeasured
+		rateState = currentOutcome.StateOrNil()
+	} else if spec.Metric == "blocked_work" {
 		var wg sync.WaitGroup
 		var errCur, errPrev error
 		wg.Add(2)
@@ -121,6 +160,7 @@ func computeMetricDelta(ctx context.Context, client QueryClient, spec metricSpec
 		HasData:      hasData,
 		HasPriorData: hasPriorData,
 		Spark:        spark,
+		RateState:    rateState,
 	}, nil
 }
 

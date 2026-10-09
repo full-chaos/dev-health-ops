@@ -239,6 +239,7 @@ func TestRegisteredCapturedDocuments_MatchCapturedWireFixtures(t *testing.T) {
 		{"testdata/wire_capture/home_v1_captured.graphql", registeredHomeV1Document},
 		{"testdata/wire_capture/home_v2_captured.graphql", registeredHomeV2Document},
 		{"testdata/wire_capture/home_v3_captured.graphql", registeredHomeV3Document},
+		{"testdata/wire_capture/home_v4_captured.graphql", registeredHomeV4Document},
 		{"testdata/wire_capture/saved_reports_captured.graphql", registeredSavedReportsDocument},
 		{"testdata/wire_capture/saved_report_captured.graphql", registeredSavedReportDocument},
 		{"testdata/wire_capture/report_runs_captured.graphql", registeredReportRunsDocument},
@@ -260,6 +261,7 @@ func TestRegisteredCapturedDocuments_MatchCapturedWireFixtures(t *testing.T) {
 		{"testdata/wire_capture/operatingreview_captured.graphql", registeredOperatingReviewDocument},
 		{"testdata/wire_capture/operatingreview_v1_captured.graphql", registeredOperatingReviewV1Document},
 		{"testdata/wire_capture/operatingreview_v2_captured.graphql", registeredOperatingReviewV2Document},
+		{"testdata/wire_capture/operatingreview_v3_captured.graphql", registeredOperatingReviewV3Document},
 		{"testdata/wire_capture/reviewedges_captured.graphql", registeredReviewEdgesDocument},
 		{"testdata/wire_capture/reviewedges_v1_captured.graphql", registeredReviewEdgesV1Document},
 	} {

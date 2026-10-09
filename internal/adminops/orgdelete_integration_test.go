@@ -124,6 +124,7 @@ var orgDeleteTablesAfterThePythonFreeze = map[string]string{
 	"work_unit_investment_shadow":       "109_work_unit_investment_shadow.sql",        // CHAOS-8868
 	"llm_categorization_attempts":       "110_llm_categorization_attempts.sql",        // CHAOS-8868
 	"work_item_measure_capability":      "111_work_item_measure_capability.sql",       // CHAOS-8895
+	"repo_change_failure_daily":         "112_change_failure_rate_incident_basis.sql", // CHAOS-8981
 }
 
 // planClickHouseTables returns the table -> row count map of a delete

@@ -499,6 +499,10 @@ func (h handlers) getTeam(w http.ResponseWriter, r *http.Request) {
 		h.pendingChanges(w, r)
 		return
 	}
+	teamID, ok := h.readTeamID(w, r, teamID)
+	if !ok {
+		return
+	}
 	team, err := h.store.GetTeam(r.Context(), orgIDOf(r.Context()), teamID)
 	if err != nil {
 		h.internal(w, r, "get team", err)

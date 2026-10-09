@@ -378,7 +378,10 @@ func (h handlers) inferMembers(w http.ResponseWriter, r *http.Request) {
 	days := windowDays.Int64()
 	ctx := r.Context()
 	orgID := orgIDOf(ctx)
-	teamID := r.PathValue("team_id")
+	teamID, ok := h.readTeamID(w, r, r.PathValue("team_id"))
+	if !ok {
+		return
+	}
 	team, err := h.store.GetTeam(ctx, orgID, teamID)
 	if err != nil {
 		h.internal(w, r, "get team", err)

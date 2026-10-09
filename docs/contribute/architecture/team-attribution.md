@@ -1220,6 +1220,19 @@ retires the row and leaves the custom team. It refuses, before any write but the
 An admin edit of a pushed `custom:<id>` does not stop the next push of its source, which writes the team and
 keeps the admin's manual members.
 
+A read that names one team (`GET /teams/{team_id}`, `GET /teams/{team_id}/discover-members`,
+`GET /teams/{team_id}/infer-members`) resolves its id with the same rule and lookup
+(`providersync.ResolveTeamIDForRead`, chris D5711/D5712), without the carry: a prefixed id is read as given, a
+bare id reads the one active prefixed team that holds it (HTTP 409 when two do), and a bare id that no prefixed
+team holds is read as given, so a row the carry has not moved yet is still found and no row is a 404.
+
+**Team uuid (chris D5714).** `teams.team_uuid` derives from the team id: every provider writer and the
+`team.v1` sink write `uuid5(URL, "team:" + id)` at every write, the admin store gives a new team
+`uuid5(URL, "team:" + org_id + ":" + id)` and keeps the stored value on an edit, and the carry writes the
+writer's rule for the new id. It is not a stable identity across an id change: the admin REST `id` field
+(`GET/POST/PATCH /api/v1/admin/teams*`), its only reader, changes when the team id changes. The team id is the
+identity; the web admin addresses teams by `team_id`.
+
 So a bare id never reaches a write, and a bare id of a carried team lands on the prefixed team, not on the
 inactive bare row (which a write would make active again). The admin writers (`internal/api/teamsidentity`) all
 call it through `keyTeamIDs` before their first read or write of a team: team create (`POST /teams`) and update
@@ -1288,7 +1301,8 @@ write, and on a store write that does not refuse a bare id before its batch.
   insert block that holds two rows of one `(org_id, id)` (the old rows of two providers' teams of one bare id,
   or of a team and its admin edit) is collapsed to one, the other provider's older active row stays the newest
   raw row of its group, and every later carry would move it again.
-  - `teams`: the new row (the old row's values; `team_uuid` = the writer's rule for the new id;
+  - `teams`: the new row (the old row's values; `team_uuid` = the writer's rule for the new id, see "Team uuid"
+    below;
     `native_team_key` = the old id when it was empty; `parent_team_id` mapped), then the old row again with
     `is_active = 0`.
   - `team_memberships`, `team_project_ownership`, `team_repo_ownership`: each OPEN row is written again under

@@ -671,3 +671,42 @@ func TestTouchedDaysDrainTheTriggerRunIsCheckedWhateverNumberOfNewerRunsEnded(t 
 		})
 	}
 }
+
+// The trigger run is returned once even when it is among the newest runs, and
+// it takes no slot of the limit: the flag says truncated only when a run is
+// really left out.
+func TestTouchedDaysDrainTheTriggerRunAmongTheNewestIsReturnedOnceAndTakesNoSlot(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+	rig := newDrainRig(t, ctx)
+	orgID := uuid.NewString()
+	day := time.Date(2026, 7, 31, 0, 0, 0, 0, time.UTC)
+	take := time.Now().UTC().Add(-time.Hour).Truncate(time.Millisecond)
+	trigger := insertMarkingRun(t, ctx, rig.touchedRig, orgID, day, "succeeded", &take, time.Now().UTC().Add(-time.Minute))
+	others := map[string]bool{}
+	for i := 1; i <= 3; i++ {
+		id := insertMarkingRun(t, ctx, rig.touchedRig, orgID, day.AddDate(0, 0, -i), "succeeded", &take,
+			time.Now().UTC().Add(-time.Duration(i+1)*time.Minute))
+		others[id] = true
+	}
+	store := rig.productionRuns().store
+	runs, truncated, err := store.TouchedMarkingRunsToCheck(ctx, orgID, trigger, 24*time.Hour, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if truncated {
+		t.Fatal("truncated = true, want false: no run is left out (the trigger run takes no slot of the limit)")
+	}
+	if len(runs) != 4 || runs[0].RunID != trigger {
+		t.Fatalf("runs = %v, want the trigger run first and the 3 others", runs)
+	}
+	for _, run := range runs[1:] {
+		if !others[run.RunID] {
+			t.Fatalf("run %s is not one of the others (the trigger run was returned twice?): %v", run.RunID, runs)
+		}
+	}
+	runs, truncated, err = store.TouchedMarkingRunsToCheck(ctx, orgID, trigger, 24*time.Hour, 2)
+	if err != nil || !truncated || len(runs) != 3 {
+		t.Fatalf("limit 2: runs %d, truncated %v, err %v; want 3 runs (trigger + 2) and truncated", len(runs), truncated, err)
+	}
+}

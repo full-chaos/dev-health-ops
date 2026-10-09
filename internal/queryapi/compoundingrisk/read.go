@@ -73,16 +73,19 @@ func (l idList) bounded() []string {
 	return append([]string(nil), l...)
 }
 
-// repoIDFilter is the predicate that keeps stored repo rows whose scope id
-// names a repository of the org by id or by full name.
 // measuredRowHaving keeps a scope id only when its newest row of the day is a
 // measurement (package liverow). The daily family writes a retraction row over
 // the key of a team id it no longer produces. That row has a NULL score, like
 // the row of a team that was measured with too little data, but it is not a
-// team: it must not be listed as a point with no score, and it must not make
-// a day look as if it held team rows.
+// team: it must not be listed as a point with no score, and a day that holds
+// only such rows must give no team row (the breakout then derives the teams
+// from the repositories). The newest-day pick counts the rows with a score,
+// which a retraction row never is; it carries the clause so that each read of
+// the table states the rule.
 var measuredRowHaving = "\n                HAVING " + liverow.NewestPredicate("compounding_risk_daily", "")
 
+// repoIDFilter is the predicate that keeps stored repo rows whose scope id
+// names a repository of the org by id or by full name.
 const repoIDFilter = `
                   AND scope_id IN (
                       SELECT toString(id) FROM repos

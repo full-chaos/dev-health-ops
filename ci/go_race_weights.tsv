@@ -285,6 +285,7 @@ internal/schedulerservice	12
 internal/servicecredcli	1
 internal/storage/clickhouse	1
 internal/storage/clickhouse/latestrow	1
+internal/storage/clickhouse/liverow	11
 internal/storage/postgres	29
 internal/storage/postgres/authschema	1
 internal/storage/river	1
@@ -342,6 +343,7 @@ internal/testsupport/recordedfiles/manifest	1
 internal/testsupport/recordedpaths	1
 internal/testsupport/redirectprobe	1
 internal/testsupport/registryschema	1
+internal/testsupport/retractionseed	1
 internal/testsupport/rotguard	1
 internal/testsupport/routingauditschema	1
 internal/testsupport/sessionscenario	1

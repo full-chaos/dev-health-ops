@@ -212,7 +212,14 @@ func TestEveryReadOfARegisteredTableAppliesTheRule(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if !named.Match(raw) && !strings.Contains(string(raw), "liverow.") {
+			// A plain substring test first: the pattern over every file of the
+			// module is slow under the race detector.
+			source := string(raw)
+			mentions := strings.Contains(source, "liverow.")
+			for _, table := range Tables() {
+				mentions = mentions || strings.Contains(source, table)
+			}
+			if !mentions {
 				continue
 			}
 			rel, err := filepath.Rel(root, path)
@@ -234,13 +241,16 @@ func TestEveryReadOfARegisteredTableAppliesTheRule(t *testing.T) {
 			}
 		}
 		carries := map[string]bool{}
+		var helpers []string
+		for helper := range direct {
+			helpers = append(helpers, regexp.QuoteMeta(helper))
+		}
+		var refersToHelper *regexp.Regexp
+		if len(helpers) > 0 {
+			refersToHelper = regexp.MustCompile(`\b(` + strings.Join(helpers, "|") + `)\b`)
+		}
 		for _, u := range units {
-			carries[u.name] = direct[u.name]
-			for helper := range direct {
-				if !carries[u.name] && regexp.MustCompile(`\b`+regexp.QuoteMeta(helper)+`\b`).MatchString(u.code) {
-					carries[u.name] = true
-				}
-			}
+			carries[u.name] = direct[u.name] || refersToHelper != nil && refersToHelper.MatchString(u.code)
 		}
 		filesWithRead := map[string]bool{}
 		filesWithName := map[string][]string{}

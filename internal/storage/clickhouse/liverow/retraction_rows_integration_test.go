@@ -139,3 +139,66 @@ func TestTheRuleKeepsEachMeasurementAndDropsARetraction(t *testing.T) {
 		}
 	}
 }
+
+// TestFinalFollowsInsertOrderWhenComputeTimesAreEqual holds what a FINAL read
+// with the rule does when a measured row and a row of zeros of ONE key carry
+// the same computed_at (the column has second precision in this table, so two
+// writes inside one second tie). The engine keeps the row inserted last, so
+// the key is a measurement when the measured row came last and a retraction
+// when the row of zeros came last. A reader that takes the newest row with
+// argMax has no such order and may take either row of a tie; that case is not
+// asserted here, and a writer must not create it.
+func TestFinalFollowsInsertOrderWhenComputeTimesAreEqual(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+	instance, err := containers.StartClickHouse(ctx)
+	if err != nil {
+		t.Fatalf("start ClickHouse: %v", err)
+	}
+	defer func() { _ = instance.Close(context.Background()) }()
+	chschema.Apply(ctx, t, instance)
+	options, err := clickhouse.ParseDSN(instance.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn, err := clickhouse.Open(options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = conn.Close() }()
+
+	const org = "org-live-row-tie"
+	day := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
+	at := day.Add(10 * time.Hour)
+	measured := `INSERT INTO work_item_metrics_daily (org_id, day, provider, work_scope_id, team_id, items_completed, computed_at)
+VALUES (?, ?, 'github', 'scope', ?, 3, ?)`
+	zeros := `INSERT INTO work_item_metrics_daily (org_id, day, provider, work_scope_id, team_id, computed_at)
+VALUES (?, ?, 'github', 'scope', ?, ?)`
+	for _, write := range []struct{ statement, team string }{
+		{measured, "zeros last"}, {zeros, "zeros last"},
+		{zeros, "measured last"}, {measured, "measured last"},
+	} {
+		if err := conn.Exec(ctx, write.statement, org, day, write.team, at); err != nil {
+			t.Fatalf("insert for %q: %v", write.team, err)
+		}
+	}
+	rows, err := conn.Query(ctx, "SELECT team_id FROM work_item_metrics_daily FINAL WHERE org_id = ? AND "+
+		Predicate("work_item_metrics_daily", "")+" ORDER BY team_id", org)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var kept []string
+	for rows.Next() {
+		var team string
+		if err := rows.Scan(&team); err != nil {
+			t.Fatal(err)
+		}
+		kept = append(kept, team)
+	}
+	if err := rows.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"measured last"}; !reflect.DeepEqual(kept, want) {
+		t.Fatalf("FINAL with the rule keeps %v, want %v: for equal compute times the row inserted last is the newest", kept, want)
+	}
+}

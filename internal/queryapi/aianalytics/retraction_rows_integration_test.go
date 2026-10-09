@@ -19,8 +19,9 @@ import (
 // aiAnswers is what the AI analytics loaders of the team-keyed daily tables
 // give for one organization.
 type aiAnswers struct {
-	TeamFlow []flowRow
-	Coverage []model.AIGovernanceCoverageRow
+	TeamFlow     []flowRow
+	NamedRetired []flowRow
+	Coverage     []model.AIGovernanceCoverageRow
 }
 
 func readAIAnswers(ctx context.Context, t *testing.T, client QueryClient, org string, start, end time.Time) aiAnswers {
@@ -34,6 +35,15 @@ func readAIAnswers(ctx context.Context, t *testing.T, client QueryClient, org st
 		t.Fatalf("%s team flow: %v", org, err)
 	}
 	sort.Slice(answers.TeamFlow, func(i, j int) bool { return answers.TeamFlow[i].EntityID < answers.TeamFlow[j].EntityID })
+	// The same read for a team the caller names: a retired id. The active-team
+	// rule does not apply to a named team, so only the live-row rule keeps its
+	// retraction rows from counting as days of data.
+	answers.NamedRetired, err = loadTeamFlowRows(ctx, client, []clickhouse.Binding{
+		{Name: "org_id", Value: org}, {Name: "window_days", Value: uint32(30)},
+	}, retractionseed.Teams[0].RetiredID)
+	if err != nil {
+		t.Fatalf("%s team flow of the retired id: %v", org, err)
+	}
 	startDate, err := graphqldate.Parse(start.Format("2006-01-02"))
 	if err != nil {
 		t.Fatal(err)
@@ -89,6 +99,11 @@ func TestAIAnalyticsLoadersGiveRetractionRowsNoWeight(t *testing.T) {
 	// jira:ENG is the first seeded team: wip_congestion_ratio 0.5 each day.
 	if got := *control.TeamFlow[2].WipCongestion; got != 0.5 {
 		t.Fatalf("control wip congestion of jira:ENG = %v, want 0.5", got)
+	}
+	// The retired id of the first team holds one measured day (the day that was
+	// not computed again): fewer than the 5 days a flow entity needs.
+	if len(control.NamedRetired) != 0 {
+		t.Fatalf("control team flow of the named retired id = %+v, want no row (one day of data)", control.NamedRetired)
 	}
 	if len(control.Coverage) != 6*4 {
 		t.Fatalf("control coverage rows = %d, want 24 (four teams, six days)", len(control.Coverage))

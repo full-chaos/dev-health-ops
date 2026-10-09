@@ -5,6 +5,10 @@ import (
 	"testing"
 	"time"
 
+	"go.opentelemetry.io/otel"
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata"
+
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 )
@@ -55,11 +59,19 @@ func TestLinearProjectsCompleteIsFalseWhenANodeIsGivenUp(t *testing.T) {
 	node := func(id string) string {
 		return `{"id":` + id + `,"name":"P","description":"","status":{"id":"s","name":"Active","type":"started"},"trashed":false,"targetDate":"","archivedAt":null,"url":"","lead":null,"teams":{"nodes":[{"id":"team-raw-1","key":"QA"}]}}`
 	}
+	wantReason := map[string]string{
+		"undecodable node":      "project_node_undecodable",
+		"not normalizable node": "project_node_not_normalizable",
+	}
 	for name, bad := range map[string]string{
 		"undecodable node":      node("5"),  // id is a number: json.Unmarshal fails
 		"not normalizable node": node(`""`), // empty id: normalize refuses
 	} {
 		t.Run(name, func(t *testing.T) {
+			reader := sdkmetric.NewManualReader()
+			previous := otel.GetMeterProvider()
+			otel.SetMeterProvider(sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader)))
+			t.Cleanup(func() { otel.SetMeterProvider(previous) })
 			claim := nativeTestClaim("linear", "work-items")
 			claim.OrgID = chaos4530SyntheticOrgID
 			claim.SourceExternalID = "workspace"
@@ -77,6 +89,13 @@ func TestLinearProjectsCompleteIsFalseWhenANodeIsGivenUp(t *testing.T) {
 			if err != nil {
 				t.Fatalf("non-strict walk must keep what it read: %v", err)
 			}
+			var collected metricdata.ResourceMetrics
+			if err := reader.Collect(context.Background(), &collected); err != nil {
+				t.Fatal(err)
+			}
+			if got := linearIncompleteCount(collected, wantReason[name]); got != 1 {
+				t.Fatalf("%s{reason=%q} = %d, want 1", linearOwnershipSnapshotIncompleteName, wantReason[name], got)
+			}
 			if batch.Evidence.ProjectsComplete {
 				t.Fatalf("ProjectsComplete = true after a node was given up on; rows=%d", len(batch.Rows.Projects))
 			}
@@ -91,4 +110,25 @@ func TestLinearProjectsCompleteIsFalseWhenANodeIsGivenUp(t *testing.T) {
 			}
 		})
 	}
+}
+
+func linearIncompleteCount(collected metricdata.ResourceMetrics, reason string) int64 {
+	var total int64
+	for _, scope := range collected.ScopeMetrics {
+		for _, m := range scope.Metrics {
+			if m.Name != linearOwnershipSnapshotIncompleteName {
+				continue
+			}
+			sum, ok := m.Data.(metricdata.Sum[int64])
+			if !ok {
+				continue
+			}
+			for _, point := range sum.DataPoints {
+				if value, found := point.Attributes.Value("reason"); found && value.AsString() == reason {
+					total += point.Value
+				}
+			}
+		}
+	}
+	return total
 }

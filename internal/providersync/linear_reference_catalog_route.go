@@ -468,6 +468,7 @@ func (handler LinearReferenceCatalogRouteHandler) CollectReferenceCatalog(
 		if abandonReason != "" {
 			slog.Default().WarnContext(ctx, "linear_reference_catalog_projects_incomplete",
 				"org_id", claim.OrgID, "reason", abandonReason, "projects_kept", len(rows.Projects))
+			recordLinearOwnershipSnapshotIncomplete(ctx, abandonReason)
 		}
 	} else {
 		evidence.ProjectsComplete = true

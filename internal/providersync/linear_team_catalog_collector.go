@@ -195,6 +195,14 @@ func (collector LinearTeamCatalogCollector) CollectTeamCatalog(
 				"org_id", ref.OrgID, "teams_complete", batch.Evidence.TeamsComplete,
 				"projects_complete", batch.Evidence.ProjectsComplete,
 				"teams_without_key", batch.Result.OwnershipTeamsWithoutKey)
+			// The project-walk cause is counted where the walk gives up; the
+			// two below are decided here.
+			if !batch.Evidence.TeamsComplete {
+				recordLinearOwnershipSnapshotIncomplete(ctx, "teams_not_read_to_the_end")
+			}
+			if batch.Result.OwnershipTeamsWithoutKey > 0 {
+				recordLinearOwnershipSnapshotIncomplete(ctx, "project_team_link_without_key")
+			}
 		}
 		if retracted > 0 {
 			slog.Default().InfoContext(ctx, "linear_reference_catalog_ownership_retracted",

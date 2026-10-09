@@ -30,7 +30,7 @@ var ddls = []string{
 	`CREATE TABLE repos (id UUID, repo String, provider String DEFAULT 'unknown', org_id String DEFAULT 'default',
       created_at DateTime64(3, 'UTC'), last_synced DateTime64(3, 'UTC')) ENGINE = ReplacingMergeTree(last_synced) ORDER BY id`,
 	`CREATE TABLE teams (id String, name String, org_id String DEFAULT 'default', repo_patterns Array(String) DEFAULT [],
-      updated_at DateTime64(6)) ENGINE = ReplacingMergeTree(updated_at) ORDER BY id`,
+      is_active UInt8 DEFAULT 1, updated_at DateTime64(6)) ENGINE = ReplacingMergeTree(updated_at) ORDER BY id`,
 	`CREATE TABLE team_repo_ownership (org_id String, provider String, team_id String, repo_id Nullable(UUID),
       repo_full_name String, match_type Enum8('exact' = 1, 'pattern' = 2),
       source Enum8('native' = 1, 'jira_legacy' = 2, 'provider_access' = 3, 'manual' = 4, 'inferred' = 5),

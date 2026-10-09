@@ -12,6 +12,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"slices"
 	"sort"
@@ -903,8 +904,18 @@ func dispatchMetricsDailyStart(ctx context.Context, runtime *operatorRuntime, ar
 	to := flags.String("to", "", "last target_day, inclusive (YYYY-MM-DD, UTC) -- defaults to --day for a single day")
 	var repoIDs stringList
 	flags.Var(&repoIDs, "repo-id", "repository uuid to scope this run to (repeatable); omit for every org repository (deferred discovery, same as the fixed-schedule fanout)")
+	rerunTag := flags.String("rerun-tag", "", "optional tag (1-32 characters of A-Z a-z 0-9 . _ -) that is part of the run generation: the same tag for the same org, day and repository set starts nothing a second time, a new tag starts a new run for a day that already has one (a recompute after a data repair)")
 	mutation := addMutationFlags(flags)
 	if flags.Parse(args) != nil || flags.NArg() != 0 || !mutation.valid(false) {
+		return writeError(stderr, "invalid_request")
+	}
+	rerunTagSet := false
+	flags.Visit(func(f *flag.Flag) {
+		if f.Name == "rerun-tag" {
+			rerunTagSet = true
+		}
+	})
+	if rerunTagSet && !daily.ValidRerunTag(*rerunTag) {
 		return writeError(stderr, "invalid_request")
 	}
 	canonicalOrg, code := resolveOrgFlag(runtime, *org, *orgStdin, stderr)
@@ -947,35 +958,105 @@ func dispatchMetricsDailyStart(ctx context.Context, runtime *operatorRuntime, ar
 		if err != nil {
 			return writeError(stderr, "operator_backend_unavailable")
 		}
-		var results []daily.ManualDailyRunOutcome
-		for cursor := fromDay; !cursor.After(toDay); cursor = cursor.AddDate(0, 0, 1) {
-			dayString := cursor.Format("2006-01-02")
-			generation := daily.ManualDailyRunGeneration(*org, dayString, repositoryIDs)
-			outcome, err := store.StartManualDailyRun(ctx, *org, dayString, generation, repositoryIDs, publisher)
-			if errors.Is(err, daily.ErrDayAlreadyCovered) {
-				// A clean, distinguishable code (codex adversarial review round
-				// 2, P1) rather than the generic operator_request_failed
-				// writeServiceError would otherwise report -- an operator
-				// re-running `metrics daily` over a range needs to see WHICH
-				// day was already covered by a different trigger, not just
-				// that the range as a whole failed partway through.
-				return writeError(stderr, "already_covered")
-			}
-			if err != nil {
-				return writeServiceError(stderr, err)
-			}
-			results = append(results, outcome)
+		results, err := startDailyDays(ctx, store, publisher, *org, fromDay, toDay, repositoryIDs, *rerunTag, rerunTagSet)
+		if errors.Is(err, daily.ErrDayAlreadyCovered) {
+			// A clean, distinguishable code (codex adversarial review round
+			// 2, P1) rather than the generic operator_request_failed
+			// writeServiceError would otherwise report -- an operator
+			// re-running `metrics daily` over a range needs to see WHICH
+			// day was already covered by a different trigger, not just
+			// that the range as a whole failed partway through.
+			return writeError(stderr, "already_covered")
 		}
-		return writeResult(stdout, stderr, map[string]any{
-			"days": results,
-			// deferred_discovery is true when no --repo-id was given: the run(s)
-			// cover every org repository, resolved later by the worker from live
-			// ClickHouse identity, not this command's own (possibly stale) view
-			// of the org's repository set.
-			"deferred_discovery": len(repositoryIDs) == 0,
-		})
+		if err != nil {
+			return writeServiceError(stderr, err)
+		}
+		return writeResult(stdout, stderr, dailyStartResult(*rerunTag, rerunTagSet, results, len(repositoryIDs) == 0))
 	}
 	return auditedWriteWith(ctx, runtime, stderr, mutation, joboperator.ActionMetricsDailyStart, "organization", *org, !*orgStdin, perform)
+}
+
+// manualDailyStarter is the part of daily.PostgresStore that
+// `metrics daily-start` calls once per day.
+type manualDailyStarter interface {
+	StartManualDailyRun(
+		ctx context.Context, organizationID, day, generation string,
+		repositoryIDs []daily.RepositoryID, publisher daily.RunPublisher,
+	) (daily.ManualDailyRunOutcome, error)
+}
+
+// startDailyDays starts one manual daily run per day of [fromDay, toDay]. The
+// rerun tag (when set) is part of every day's generation. It stops at the first
+// error and returns the days started before it.
+func startDailyDays(
+	ctx context.Context, starter manualDailyStarter, publisher daily.RunPublisher, org string,
+	fromDay, toDay time.Time, repositoryIDs []daily.RepositoryID, rerunTag string, rerunTagSet bool,
+) ([]daily.ManualDailyRunOutcome, error) {
+	var results []daily.ManualDailyRunOutcome
+	for cursor := fromDay; !cursor.After(toDay); cursor = cursor.AddDate(0, 0, 1) {
+		dayString := cursor.Format("2006-01-02")
+		generation := daily.ManualDailyRerunGeneration(org, dayString, repositoryIDs, rerunTag)
+		outcome, err := starter.StartManualDailyRun(ctx, org, dayString, generation, repositoryIDs, publisher)
+		if rerunTagSet {
+			logRerunOutcome(ctx, rerunTag, dayString, outcome, err)
+		}
+		if err != nil {
+			return results, err
+		}
+		results = append(results, outcome)
+	}
+	return results, nil
+}
+
+// dailyStartResult is the output of `metrics daily-start`. Only a tagged call
+// changes the shape: the plain call prints exactly what it printed before the
+// option existed. deferred_discovery is true when no --repo-id was given: the
+// run(s) cover every org repository, resolved later by the worker from live
+// ClickHouse identity, not this command's own (possibly stale) view of the
+// org's repository set.
+func dailyStartResult(tag string, tagSet bool, results []daily.ManualDailyRunOutcome, deferredDiscovery bool) map[string]any {
+	if !tagSet {
+		return map[string]any{"days": results, "deferred_discovery": deferredDiscovery}
+	}
+	return taggedDailyStartResult(tag, results, deferredDiscovery)
+}
+
+// taggedDailyStartResult is the output of a tagged call: the plain fields of
+// each day plus whether this call started it.
+func taggedDailyStartResult(tag string, results []daily.ManualDailyRunOutcome, deferredDiscovery bool) map[string]any {
+	days := make([]map[string]any, 0, len(results))
+	for _, outcome := range results {
+		days = append(days, map[string]any{
+			"Day": outcome.Day, "RunID": outcome.RunID, "Generation": outcome.Generation,
+			"started": !outcome.AlreadyStarted,
+		})
+	}
+	return map[string]any{"days": days, "rerun_tag": tag, "deferred_discovery": deferredDiscovery}
+}
+
+// logRerunOutcome is the loud line of a tagged `metrics daily-start` day: one
+// line when a rerun run is started, one when the same tag finds the run
+// already there (nothing started), one with the reason when a guard refuses.
+// A one-shot CLI has no metrics endpoint to scrape (see the note on
+// dispatchMetricsRemaining), so the signal is this line, the result JSON and
+// the durable run row (generation hashed from the tag) plus the audit row.
+// The organization id is never logged (--org-stdin rule).
+func logRerunOutcome(ctx context.Context, tag, day string, outcome daily.ManualDailyRunOutcome, err error) {
+	attrs := []slog.Attr{slog.String("rerun_tag", tag), slog.String("day", day)}
+	switch {
+	case errors.Is(err, daily.ErrDayAlreadyCovered):
+		slog.Default().LogAttrs(ctx, slog.LevelWarn, "dho workers: metrics daily-start rerun refused",
+			append(attrs, slog.String("reason", "already_covered"))...)
+	case err != nil:
+		slog.Default().LogAttrs(ctx, slog.LevelWarn, "dho workers: metrics daily-start rerun refused",
+			append(attrs, slog.String("reason", "start_failed"), slog.Any("error", err))...)
+	case outcome.AlreadyStarted:
+		slog.Default().LogAttrs(ctx, slog.LevelInfo, "dho workers: metrics daily-start rerun already started, nothing new",
+			append(attrs, slog.String("run_id", outcome.RunID))...)
+	default:
+		slog.Default().LogAttrs(ctx, slog.LevelInfo, "dho workers: metrics daily-start rerun started",
+			append(attrs, slog.String("run_id", outcome.RunID))...)
+	}
 }
 
 // dispatchMetricsDailyBlocked handles `metrics daily-blocked` (CHAOS-5040):

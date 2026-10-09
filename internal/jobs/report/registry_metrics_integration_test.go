@@ -33,7 +33,7 @@ import (
 //
 // Each table gets two versions of one key (an older run with every value
 // raised by 1000, then the newest) holding a distinct value per metric; both chart
-// shapes the reader has (scorecard total, and a line by day, week and month) must return the
+// shapes the reader has (scorecard total, and a line by day, week and month, or with no group) must return the
 // value the metric's aggregation gives for that row.
 func TestClickHouseQueryAdapterChartsEveryRegistryMetric(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Minute)
@@ -318,7 +318,7 @@ func TestClickHouseQueryAdapterChartsEveryRegistryMetric(t *testing.T) {
 		return seeded[definition.SourceTable+"."+name]
 	}
 
-	for _, shape := range []struct{ chartType, groupBy string }{{"scorecard", ""}, {"line", "day"}, {"line", "week"}, {"line", "month"}} {
+	for _, shape := range []struct{ chartType, groupBy string }{{"scorecard", ""}, {"line", "day"}, {"line", "week"}, {"line", "month"}, {"line", ""}} {
 		for _, name := range names {
 			loader := reportLoaderFunc(func(context.Context, QueryInput) (ReportDefinition, error) {
 				return ReportDefinition{

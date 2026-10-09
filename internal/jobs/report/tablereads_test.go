@@ -1,8 +1,11 @@
 package report
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
+	"strings"
 	"testing"
 )
 
@@ -53,5 +56,23 @@ func TestChartOfAnUndeclaredTableIsRefusedBeforeAnyQuery(t *testing.T) {
 	}
 	if _, _, buildErr := buildChartQuery(ChartSpec{Metric: metric}, supportedMetrics[metric]); !errors.As(buildErr, &refused) {
 		t.Fatalf("buildChartQuery of an undeclared table = %v, want the same refusal", buildErr)
+	}
+}
+
+// The refusal is logged with its name and the metric, so a refused plan is
+// found from the log. Not parallel: it swaps the default logger.
+func TestRefusalOfANonNumericMetricIsLoggedWithTheMetricName(t *testing.T) {
+	var logs bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+
+	if err := validateChartMetrics(context.Background(), []ChartSpec{{ChartID: "c", Metric: "assignee"}}); err == nil {
+		t.Fatal("assignee was not refused")
+	}
+	for _, want := range []string{"report.chart_metric_refused", "metric=assignee", "value_kind=text", "source_table=work_item_cycle_times"} {
+		if !strings.Contains(logs.String(), want) {
+			t.Fatalf("log %q lacks %q", logs.String(), want)
+		}
 	}
 }

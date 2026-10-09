@@ -15,6 +15,7 @@ import (
 	"testing"
 
 	"github.com/full-chaos/dev-health-ops/internal/chmigrate"
+	"github.com/full-chaos/dev-health-ops/internal/teamkeytables"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 )
 
@@ -327,7 +328,7 @@ func TestEveryStaleKeyTableCensusDeclarationAgreesWithTheSchema(t *testing.T) {
 	tables := loadCensusTables(t)
 	for _, declared := range StaleTeamKeyTables() {
 		t.Run(declared.Table, func(t *testing.T) {
-			if err := declared.valid(); err != nil {
+			if err := declared.Valid(); err != nil {
 				t.Fatal(err)
 			}
 			table, known := tables[declared.Table]
@@ -352,8 +353,8 @@ func TestEveryStaleKeyTableCensusDeclarationAgreesWithTheSchema(t *testing.T) {
 			}
 			for _, key := range declared.Keys {
 				gotKeys = append(gotKeys, key.Name)
-				kind := map[string]staleKeyKind{
-					"Nullable(String)": staleKeyNullableString, "UUID": staleKeyUUID, "Nullable(UUID)": staleKeyNullableUUID,
+				kind := map[string]teamkeytables.KeyKind{
+					"Nullable(String)": teamkeytables.KeyNullableString, "UUID": teamkeytables.KeyUUID, "Nullable(UUID)": teamkeytables.KeyNullableUUID,
 				}[columns[key.Name].typ] // every other type is read and stored as text
 				if key.Kind != kind {
 					t.Errorf("key column %s has type %s and is declared as kind %d, want kind %d",
@@ -471,9 +472,19 @@ func parseDailyPackage(t *testing.T) map[string]*ast.File {
 func TestEveryStaleKeyTableCensusHasACallOfTheRule(t *testing.T) {
 	files := parseDailyPackage(t)
 
-	// The declarations: the variable of each StaleKeyTable literal, by table.
+	// The declarations: the variable of each Table literal of package
+	// teamkeytables, by table.
+	root, err := moduleroot.Root()
+	if err != nil {
+		t.Fatalf("module root: %v", err)
+	}
+	declarations, err := parser.ParseFile(token.NewFileSet(),
+		filepath.Join(root, "internal", "teamkeytables", "teamkeytables.go"), nil, parser.SkipObjectResolution)
+	if err != nil {
+		t.Fatalf("parse the declarations: %v", err)
+	}
 	tableOfVariable := map[string]string{}
-	ast.Inspect(files["stale_team_keys.go"], func(node ast.Node) bool {
+	ast.Inspect(declarations, func(node ast.Node) bool {
 		spec, isSpec := node.(*ast.ValueSpec)
 		if !isSpec || len(spec.Names) != 1 || len(spec.Values) != 1 {
 			return true
@@ -482,7 +493,7 @@ func TestEveryStaleKeyTableCensusHasACallOfTheRule(t *testing.T) {
 		if !isLiteral {
 			return true
 		}
-		if typ, isIdent := literal.Type.(*ast.Ident); !isIdent || typ.Name != "StaleKeyTable" {
+		if typ, isIdent := literal.Type.(*ast.Ident); !isIdent || typ.Name != "Table" {
 			return true
 		}
 		for _, element := range literal.Elts {
@@ -503,8 +514,8 @@ func TestEveryStaleKeyTableCensusHasACallOfTheRule(t *testing.T) {
 	for _, table := range StaleTeamKeyTables() {
 		listed[table.Table] = true
 	}
-	if len(tableOfVariable) != len(listed) {
-		t.Errorf("stale_team_keys.go declares %d StaleKeyTable variable(s) and StaleTeamKeyTables lists %d: every declaration must be listed",
+	if len(tableOfVariable) != len(listed) || len(listed) == 0 {
+		t.Errorf("package teamkeytables declares %d Table variable(s) and lists %d: every declaration must be listed",
 			len(tableOfVariable), len(listed))
 	}
 
@@ -529,12 +540,17 @@ func TestEveryStaleKeyTableCensusHasACallOfTheRule(t *testing.T) {
 				t.Errorf("%s: a call of %s with %d argument(s)", name, function.Name, len(call.Args))
 				return true
 			}
-			variable, isVariable := call.Args[2].(*ast.Ident)
-			if !isVariable || tableOfVariable[variable.Name] == "" {
-				t.Errorf("%s: a call of %s must name a declared StaleKeyTable variable as its table", name, function.Name)
+			selector, isSelector := call.Args[2].(*ast.SelectorExpr)
+			if !isSelector || tableOfVariable[selector.Sel.Name] == "" {
+				t.Errorf("%s: a call of %s must name a declared table of package teamkeytables as its table", name, function.Name)
 				return true
 			}
-			called[tableOfVariable[variable.Name]] = append(called[tableOfVariable[variable.Name]], name)
+			if pkg, isIdent := selector.X.(*ast.Ident); !isIdent || pkg.Name != "teamkeytables" {
+				t.Errorf("%s: a call of %s must name a declared table of package teamkeytables as its table", name, function.Name)
+				return true
+			}
+			table := tableOfVariable[selector.Sel.Name]
+			called[table] = append(called[table], name)
 			return true
 		})
 	}

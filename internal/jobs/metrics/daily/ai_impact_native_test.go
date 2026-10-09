@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/aiimpact"
+	"github.com/full-chaos/dev-health-ops/internal/teamkeytables"
 )
 
 func TestNewAIImpactExecutorRejectsNilConn(t *testing.T) {
@@ -87,7 +88,7 @@ func TestAIImpactComputeFamilyStopsWhenNoPullRequestsAreInWindow(t *testing.T) {
 	// day that lost its pull requests still holds the keys of the earlier
 	// compute.
 	if len(conn.queries) != 2 || isTeamRuleRead(conn.queries[0]) ||
-		conn.queries[1] != staleKeysAIImpactMetricsDaily.liveKeysQuery() {
+		conn.queries[1] != teamkeytables.AIImpactMetricsDaily.LiveKeysQuery() {
 		t.Fatalf("issued %d queries, want the pull-request load and the live-key read -- the executor must stop "+
 			"its own reads after the pull-request load returns nothing", len(conn.queries))
 	}

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
+	"github.com/full-chaos/dev-health-ops/internal/teamkeytables"
 	"github.com/google/uuid"
 )
 
@@ -53,7 +54,7 @@ func staleKeyRuleKey(table StaleKeyTable, team, unit string) staleKey {
 			key = append(key, fixed)
 		case column.Name == table.TeamColumn:
 			key = append(key, team)
-		case column.Kind == staleKeyUUID || column.Kind == staleKeyNullableUUID:
+		case column.Kind == teamkeytables.KeyUUID || column.Kind == teamkeytables.KeyNullableUUID:
 			seed := column.Name
 			if inScope[column.Name] {
 				seed += ":" + unit
@@ -76,7 +77,7 @@ func insertStaleKeyRuleLiveRow(
 	columns := []string{"org_id", table.DayColumn}
 	values := []any{staleKeyRuleOrg, staleKeyRuleDay}
 	for index, column := range table.Keys {
-		stored, err := column.storedValue(key[index])
+		stored, err := column.StoredValue(key[index])
 		if err != nil {
 			t.Fatalf("%s key value: %v", table.Table, err)
 		}
@@ -122,7 +123,7 @@ func readStaleKeyRuleStored(
 	predicates := []string{"org_id = ?", table.DayColumn + " = ?"}
 	args := []any{staleKeyRuleOrg, staleKeyRuleDay}
 	for index, column := range table.Keys {
-		predicates = append(predicates, column.readExpression()+" = ?")
+		predicates = append(predicates, column.ReadExpression()+" = ?")
 		args = append(args, key[index])
 	}
 	where := strings.Join(predicates, " AND ")
@@ -166,7 +167,7 @@ func TestTheStaleKeyRuleWritesARowOfZerosOverEachSupersededKey(t *testing.T) {
 			var scope staleKeyScope
 			if scoped {
 				insertStaleKeyRuleLiveRow(t, ctx, conn, table, outside, first)
-				scope = staleKeyScope{table.scopeTuple(oldKey): {}}
+				scope = staleKeyScope{table.ScopeTuple(oldKey): {}}
 			}
 			if table.Where != "" {
 				// A row that the fixed predicate excludes: the same team id
@@ -253,9 +254,9 @@ func TestTheStaleKeyRuleStoresANullKeyColumnAsNull(t *testing.T) {
 		key := staleKeyRuleKey(table, "platform", "unit-a")
 		for index, column := range table.Keys {
 			switch column.Kind {
-			case staleKeyNullableString:
+			case teamkeytables.KeyNullableString:
 				key[index], nullable = "", true
-			case staleKeyNullableUUID:
+			case teamkeytables.KeyNullableUUID:
 				key[index], nullable = uuid.Nil.String(), true
 			}
 		}
@@ -266,7 +267,7 @@ func TestTheStaleKeyRuleStoresANullKeyColumnAsNull(t *testing.T) {
 			insertStaleKeyRuleLiveRow(t, ctx, conn, table, key, first)
 			var scope staleKeyScope
 			if len(table.Scope) > 0 {
-				scope = staleKeyScope{table.scopeTuple(key): {}}
+				scope = staleKeyScope{table.ScopeTuple(key): {}}
 			}
 			written, err := supersedeStaleTeamKeys(ctx, conn, table, staleKeyRuleOrg, staleKeyRuleDay, scope, nil, first.Add(time.Hour))
 			if err != nil || written != 1 {

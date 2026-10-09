@@ -10,6 +10,7 @@ import (
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/aigovernance"
+	"github.com/full-chaos/dev-health-ops/internal/teamkeytables"
 )
 
 // AIGovernanceExecutor is the NATIVE implementation of the ai_governance
@@ -167,7 +168,7 @@ func (executor *AIGovernanceExecutor) ComputeFamily(
 		produced = append(produced, staleKey{teamID, repoID.String()})
 	}
 	superseded, err := supersedeStaleTeamKeys(
-		ctx, executor.conn, staleKeysAIGovernanceCoverageDaily, run.OrganizationID, dayStart,
+		ctx, executor.conn, teamkeytables.AIGovernanceCoverageDaily, run.OrganizationID, dayStart,
 		nil, produced, computedAt,
 	)
 	if err != nil {

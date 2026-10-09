@@ -11,6 +11,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/aiimpact"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/numerical"
+	"github.com/full-chaos/dev-health-ops/internal/teamkeytables"
 	"github.com/full-chaos/dev-health-ops/internal/teamownership"
 	"github.com/full-chaos/dev-health-ops/internal/teamresolve"
 )
@@ -88,7 +89,7 @@ func (executor *AIImpactExecutor) ComputeFamily(
 			repositories = append(repositories, []string{repoID.String()})
 		}
 		superseded, err := supersedeStaleTeamKeys(
-			ctx, executor.conn, staleKeysAIImpactMetricsDaily, run.OrganizationID, dayStart,
+			ctx, executor.conn, teamkeytables.AIImpactMetricsDaily, run.OrganizationID, dayStart,
 			newStaleKeyScope(repositories...), produced, computedAt,
 		)
 		written += superseded

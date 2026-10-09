@@ -13,6 +13,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/workitemblockers"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/workitemmetrics"
+	"github.com/full-chaos/dev-health-ops/internal/teamkeytables"
 )
 
 // unassignedTeamID/unassignedTeamName are package-local names for
@@ -124,7 +125,7 @@ func (executor *WorkItemStateExecutor) ComputeFamily(
 			produced = append(produced, staleKey{row.Provider, row.WorkScopeID, row.TeamID, row.Status})
 		}
 		written, err := supersedeStaleTeamKeys(
-			ctx, executor.conn, staleKeysWorkItemStateDurationsDaily, run.OrganizationID, day,
+			ctx, executor.conn, teamkeytables.WorkItemStateDurationsDaily, run.OrganizationID, day,
 			read.staleKeyScope(), produced, computedAt,
 		)
 		total += written

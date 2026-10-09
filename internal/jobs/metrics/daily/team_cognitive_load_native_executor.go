@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/numerical"
+	"github.com/full-chaos/dev-health-ops/internal/teamkeytables"
 	"github.com/full-chaos/dev-health-ops/internal/teamownership"
 )
 
@@ -156,7 +157,7 @@ func (executor *TeamCognitiveLoadExecutor) ComputeFinalizeFamily(
 func (executor *TeamCognitiveLoadExecutor) supersedeStaleKeys(
 	ctx context.Context, organizationID string, day time.Time, produced []staleKey, computedAt time.Time, written int,
 ) (int, error) {
-	superseded, err := supersedeStaleTeamKeys(ctx, executor.conn, staleKeysTeamCognitiveLoadDaily, organizationID, day, nil, produced, computedAt)
+	superseded, err := supersedeStaleTeamKeys(ctx, executor.conn, teamkeytables.TeamCognitiveLoadDaily, organizationID, day, nil, produced, computedAt)
 	written += superseded
 	if err != nil {
 		if written == 0 {

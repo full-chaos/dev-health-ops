@@ -13,6 +13,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/numerical"
+	"github.com/full-chaos/dev-health-ops/internal/teamkeytables"
 )
 
 // TeamWellbeingExecutor is the NATIVE implementation of the team_wellbeing
@@ -236,7 +237,7 @@ func (executor *TeamWellbeingExecutor) ComputeFamily(
 		repositories = append(repositories, []string{repoID.String()})
 	}
 	superseded, err := supersedeStaleTeamKeysAt(
-		ctx, executor.conn, staleKeysTeamMetricsDaily, run.OrganizationID, day,
+		ctx, executor.conn, teamkeytables.TeamMetricsDaily, run.OrganizationID, day,
 		newStaleKeyScope(repositories...), produced, zeroRowComputedAt,
 	)
 	written += superseded

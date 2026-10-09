@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/workitemmetrics"
+	"github.com/full-chaos/dev-health-ops/internal/teamkeytables"
 )
 
 // WorkItemExecutor is the NATIVE implementation of the `work_item`
@@ -129,7 +130,7 @@ func (executor *WorkItemExecutor) ComputeFamily(
 		produced = append(produced, staleKey{row.Provider, row.WorkScopeID, row.TeamID})
 	}
 	written, err = supersedeStaleTeamKeys(
-		ctx, executor.conn, staleKeysWorkItemMetricsDaily, run.OrganizationID, scope.day,
+		ctx, executor.conn, teamkeytables.WorkItemMetricsDaily, run.OrganizationID, scope.day,
 		read.staleKeyScope(), produced, computedAt,
 	)
 	total += written

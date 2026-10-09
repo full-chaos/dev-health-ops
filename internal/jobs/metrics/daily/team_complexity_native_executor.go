@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
+	"github.com/full-chaos/dev-health-ops/internal/teamkeytables"
 	"github.com/google/uuid"
 )
 
@@ -126,7 +127,7 @@ func (executor *TeamComplexityExecutor) ComputeFinalizeFamily(
 func (executor *TeamComplexityExecutor) supersedeStaleKeys(
 	ctx context.Context, organizationID string, day time.Time, produced []staleKey, computedAt time.Time, written int,
 ) (int, error) {
-	superseded, err := supersedeStaleTeamKeys(ctx, executor.conn, staleKeysTeamComplexityDaily, organizationID, day, nil, produced, computedAt)
+	superseded, err := supersedeStaleTeamKeys(ctx, executor.conn, teamkeytables.TeamComplexityDaily, organizationID, day, nil, produced, computedAt)
 	written += superseded
 	if err != nil {
 		if written == 0 {

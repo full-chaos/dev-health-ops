@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/daily/icfinalize"
+	"github.com/full-chaos/dev-health-ops/internal/teamkeytables"
 )
 
 // ICFinalizeExecutor adapts icfinalize's run-scoped executor to this package's
@@ -60,7 +61,7 @@ func NewICFinalizeExecutor(conn icfinalize.Conn) *ICFinalizeExecutor {
 		for _, record := range written {
 			produced = append(produced, staleKey{repoID, record.TeamID, record.MapName, record.IdentityID})
 		}
-		return supersedeStaleTeamKeys(ctx, conn, staleKeysICLandscapeRolling30d, orgID, asOf, nil, produced, computedAt)
+		return supersedeStaleTeamKeys(ctx, conn, teamkeytables.ICLandscapeRolling30d, orgID, asOf, nil, produced, computedAt)
 	})
 	return &ICFinalizeExecutor{inner: inner}
 }

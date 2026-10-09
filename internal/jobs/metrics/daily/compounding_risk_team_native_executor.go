@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/daily/compoundingrisk"
+	"github.com/full-chaos/dev-health-ops/internal/teamkeytables"
 	"github.com/full-chaos/dev-health-ops/internal/teamresolve"
 )
 
@@ -248,7 +249,7 @@ func (executor *CompoundingRiskTeamExecutor) supersedeStaleKeys(
 	ctx context.Context, organizationID string, day time.Time, produced []staleKey, computedAt time.Time, written int,
 ) (int, error) {
 	superseded, err := supersedeStaleTeamKeys(
-		ctx, executor.conn, staleKeysCompoundingRiskDailyTeam, organizationID, day, nil, produced, computedAt,
+		ctx, executor.conn, teamkeytables.CompoundingRiskDailyTeam, organizationID, day, nil, produced, computedAt,
 	)
 	written += superseded
 	if err != nil {

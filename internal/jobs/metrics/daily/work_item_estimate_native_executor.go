@@ -8,6 +8,7 @@ import (
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/workitemmetrics"
+	"github.com/full-chaos/dev-health-ops/internal/teamkeytables"
 )
 
 // WorkItemEstimateExecutor is the NATIVE implementation of the
@@ -89,7 +90,7 @@ func (executor *WorkItemEstimateExecutor) ComputeFamily(
 		produced = append(produced, staleKey{row.Provider, row.WorkScopeID, row.TeamID})
 	}
 	superseded, err := supersedeStaleTeamKeys(
-		ctx, executor.conn, staleKeysEstimateCoverageMetricsDaily, run.OrganizationID, scope.day,
+		ctx, executor.conn, teamkeytables.EstimateCoverageMetricsDaily, run.OrganizationID, scope.day,
 		read.staleKeyScope(), produced, computedAt,
 	)
 	written += superseded

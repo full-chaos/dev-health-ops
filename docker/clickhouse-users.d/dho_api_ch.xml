@@ -14,11 +14,13 @@
       <grants>
         <query>GRANT SELECT, INSERT, ALTER DELETE ON default.teams</query>
         <query>GRANT SELECT, INSERT, ALTER DELETE ON default.identities</query>
-        <query>GRANT SELECT ON default.team_sync_policies</query>
+        <query>GRANT SELECT, INSERT ON default.team_sync_policies</query>
         <query>GRANT SELECT, INSERT ON default.team_provider_observations</query>
         <query>GRANT SELECT, INSERT ON default.team_drift_changes</query>
-        <query>GRANT INSERT ON default.team_memberships</query>
-        <query>GRANT INSERT ON default.manual_attribution_fallbacks</query>
+        <query>GRANT SELECT, INSERT ON default.team_memberships</query>
+        <query>GRANT SELECT, INSERT ON default.team_project_ownership</query>
+        <query>GRANT SELECT, INSERT ON default.team_repo_ownership</query>
+        <query>GRANT SELECT, INSERT ON default.manual_attribution_fallbacks</query>
         <query>GRANT SELECT ON default.repo_metrics_daily</query>
         <query>GRANT SELECT ON default.user_metrics_daily</query>
         <query>GRANT SELECT ON default.team_metrics_daily</query>

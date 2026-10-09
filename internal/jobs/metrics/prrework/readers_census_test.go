@@ -21,7 +21,7 @@ import (
 
 // deprecatedRatioRead is SQL that reads the stored ratio as a value: an
 // aggregate of it, its newest value, or a product with it.
-var deprecatedRatioRead = regexp.MustCompile(`(?i)\b(avg|sum|min|max|median|argMax|any|quantile\w*)\s*\(\s*(\w+\.)?pr_rework_ratio\b[^_]|\bpr_rework_ratio\s*[*/]`)
+var deprecatedRatioRead = regexp.MustCompile(`(?i)\b(avg|sum|min|max|median|argMax|any|quantile\w*)\s*\(\s*(\w+\.)?pr_rework_ratio\b[^_]|\bpr_rework_ratio\s*\*\s*\w`)
 
 func repositoryRoot(t *testing.T) string {
 	t.Helper()

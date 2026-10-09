@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/activeteams"
 	"reflect"
 	"strings"
 	"testing"
@@ -453,5 +454,17 @@ func TestBuildResponseDropsABareUUIDTeamName(t *testing.T) {
 	}
 	if want := map[string]string{"team-b": "Platform"}; !reflect.DeepEqual(resp.TeamNames, want) {
 		t.Fatalf("TeamNames = %v, want %v", resp.TeamNames, want)
+	}
+}
+
+// TestTeamsQueryGatesEveryMetricsBranchWithTheActiveTeamRule pins that each
+// derived-table branch of teamsQuery keeps a team id only through the shared
+// activeteams rule, so a retired id that survives in metrics rows is never listed.
+func TestTeamsQueryGatesEveryMetricsBranchWithTheActiveTeamRule(t *testing.T) {
+	if got := strings.Count(teamsQuery, activeteams.ListablePredicate("team_id")); got != 2 {
+		t.Fatalf("teamsQuery applies the shared active-team rule %d times, want 2 (user_metrics_daily, work_item_user_metrics_daily)", got)
+	}
+	if !strings.Contains(activeteams.IDsSubquery, "is_active = 1") || !strings.Contains(activeteams.IDsSubquery, "FROM teams FINAL") {
+		t.Fatalf("shared rule lost FINAL or is_active: %s", activeteams.IDsSubquery)
 	}
 }

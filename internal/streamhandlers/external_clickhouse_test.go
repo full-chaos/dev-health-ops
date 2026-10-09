@@ -182,7 +182,7 @@ func TestClickHouseExternalSinkPreservesManualMembersOnTeamWrite(t *testing.T) {
 	connection := &productSink{
 		batch: &productBatch{},
 		queryRows: [][]any{
-			{"gh:team-a", []string{"alice@example.test"}},
+			{"gh:team-a", []string{"alice@example.test"}, "custom"},
 		},
 	}
 	sink, err := NewClickHouseExternalBatchSink(connection)

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"math"
 	"net"
 	"net/url"
@@ -31,7 +32,29 @@ const externalUpdatedAtClampSkew = 5 * time.Minute
 // ClickHouseStore._preserve_existing_manual_members's SELECT (CHAOS-4321,
 // team-lead ruling 2026-08-26): one batched read per team.v1 kind per Write
 // call, keyed by (org_id, id), never N+1.
-const teamManualMembersPreserveQuery = "SELECT id, manual_members FROM teams FINAL WHERE org_id = {org_id:String} AND id IN {team_ids:Array(String)}"
+const teamManualMembersPreserveQuery = "SELECT id, manual_members, provider FROM teams FINAL WHERE org_id = {org_id:String} AND id IN {team_ids:Array(String)}"
+
+// externalStoredTeam is the current row of a team a team.v1 batch writes:
+// its manual members (carried forward) and its provider ("" for an admin
+// team).
+type externalStoredTeam struct {
+	ManualMembers []string
+	Provider      string
+}
+
+// externalCheckPushedTeam is the team.v1 id check: teamid.CheckPushed, and a
+// custom:<id> that an admin team holds (the carry gives an admin's own team
+// that id, chris D5631) is refused the same way, never written over.
+func externalCheckPushedTeam(system, teamID string, stored map[string]externalStoredTeam) error {
+	if err := teamid.CheckPushed(system, teamID); err != nil {
+		return err
+	}
+	if team, ok := stored[teamID]; ok && team.Provider == "" && strings.HasPrefix(teamID, "custom:") {
+		slog.Default().Warn("team_v1_custom_id_held_by_admin", "source_system", system, "refused_records", 1)
+		return fmt.Errorf("%w: pushed custom team id held by an admin team", providersync.ErrTeamIDCustomHeld)
+	}
+	return nil
+}
 
 type ClickHouseExternalBatchSink struct {
 	conn productClickHouse
@@ -92,7 +115,7 @@ func (s *ClickHouseExternalBatchSink) Write(ctx context.Context, source external
 		// durably written by this point -- that is pre-existing behavior
 		// for ANY failure partway through this loop, not new here: this
 		// function has never wrapped its per-kind writes in one transaction.)
-		var existingManualMembers map[string][]string
+		var existingManualMembers map[string]externalStoredTeam
 		if kind == "team.v1" {
 			teamIDs := make([]string, 0, len(grouped[kind]))
 			for _, record := range grouped[kind] {
@@ -168,7 +191,7 @@ func (s *ClickHouseExternalBatchSink) Write(ctx context.Context, source external
 // defaults that case to [], the correct value for a genuinely new team.
 func (s *ClickHouseExternalBatchSink) preserveExistingManualMembers(
 	ctx context.Context, orgID string, teamIDs []string,
-) (map[string][]string, error) {
+) (map[string]externalStoredTeam, error) {
 	if len(teamIDs) == 0 {
 		return nil, nil
 	}
@@ -178,14 +201,14 @@ func (s *ClickHouseExternalBatchSink) preserveExistingManualMembers(
 		return nil, err
 	}
 	defer rows.Close()
-	existing := make(map[string][]string, len(teamIDs))
+	existing := make(map[string]externalStoredTeam, len(teamIDs))
 	for rows.Next() {
-		var id string
+		var id, provider string
 		var manualMembers []string
-		if err := rows.Scan(&id, &manualMembers); err != nil {
+		if err := rows.Scan(&id, &manualMembers, &provider); err != nil {
 			return nil, err
 		}
-		existing[id] = manualMembers
+		existing[id] = externalStoredTeam{ManualMembers: manualMembers, Provider: provider}
 	}
 	return existing, rows.Err()
 }
@@ -231,7 +254,7 @@ func externalRecordValues(
 	record externalSinkRecord,
 	now time.Time,
 	scope *ExternalRecomputeScope,
-	existingManualMembers map[string][]string,
+	existingManualMembers map[string]externalStoredTeam,
 ) ([]any, error) {
 	payload := record.Payload
 	orgID, system, instance := source.Pointer.OrgID, source.Pointer.SourceSystem, source.Pointer.SourceInstance
@@ -341,7 +364,7 @@ func externalRecordValues(
 		}, nil
 	case "team.v1":
 		teamID := externalTeamID(system, payload, "id")
-		if err := teamid.CheckPushed(system, teamID); err != nil {
+		if err := externalCheckPushedTeam(system, teamID, existingManualMembers); err != nil {
 			return nil, err
 		}
 		// A team id carries the system's prefix, so the system's own key of
@@ -379,7 +402,7 @@ func externalRecordValues(
 		// correctly defaults to [].
 		manualMembers := []string{}
 		if existing, ok := existingManualMembers[teamID]; ok {
-			manualMembers = existing
+			manualMembers = existing.ManualMembers
 		}
 		return []any{
 			teamID, uuid.NewSHA1(uuid.NameSpaceURL, []byte("team:"+teamID)), stringField(payload, "name"),

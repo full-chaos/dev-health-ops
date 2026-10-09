@@ -1192,6 +1192,13 @@ write that names `eng` lands on it. It refuses, before any write but the carry:
 - a bare admin id whose `custom:<id>` a pushed team of the `custom` system holds: HTTP 409 (never a write into it);
 - an import `provider_team_id` that carries another provider's prefix (`provider_type: jira`, `linear:ENG`): HTTP 422.
 
+The external sink keeps the same rule from the other side (lead D5660): a `team.v1` record whose id is a
+`custom:<id>` that an admin team (provider `""`) holds is refused like an id `teamid.CheckPushed` refuses
+(`externalCheckPushedTeam`, `internal/streamhandlers`): the `team.v1` kind of the batch fails with
+`ErrTeamIDCustomHeld` and is not written, the batch's other kinds are written as on any `team.v1` failure, and
+the sink logs `team_v1_custom_id_held_by_admin` with the source system and the count of refused records (never
+the organization or the id). The admin team keeps its id; the push succeeds after an admin renames or deletes it.
+
 So a bare id never reaches a write, and a bare id of a carried team lands on the prefixed team, not on the
 inactive bare row (which a write would make active again). The admin writers (`internal/api/teamsidentity`) all
 call it through `keyTeamIDs` before their first read or write of a team: team create (`POST /teams`) and update
@@ -1311,6 +1318,7 @@ linear), `TestAnAdminTeamCreateCarriesTheBareTeamFirst`, `TestAnAdminTeamWriteOf
 `TestTheWriteSeamResolvesOnlyToAnActiveTeamAndKeysAMixedRequest`, `TestADriftDecisionByABareIDDecidesTheKeyedTeamsChange`,
 `TestADeleteByABareIDDeletesTheKeyedTeam`, `TestTheAdminImportRefusesAnotherProvidersPrefixedID`,
 `TestAnAdminWriteOfAPlainIDThatAPushedCustomTeamHoldsConflicts`, `TestResolveTeamIDDecidesEveryCase` (`internal/providersync`),
+`TestATeamV1PushOfAnAdminsCustomIDIsRefused` (`internal/streamhandlers`),
 `TestEveryTeamIDWriterGoesThroughTheWriteSeamCensus`; `TestIdentityV1RefusesAPrefixOnlyTeamID`
 (`internal/streamhandlers`); `TestMalformedNamesNoTeamOfAnyProvider`, `TestCandidatesAreEveryPrefixOfABareID`
 (`internal/teamid`).

@@ -63,6 +63,17 @@ var unruledReads = map[string]string{
 	"internal/jobs/metrics/remaining/recommendations_loader.go":                    "reads of ONE team id the job already evaluates: sums and Nullable means of the newest rows",
 }
 
+// heldBy names, for an unruledReads entry whose reason is "the rule reaches
+// this statement through another declaration", that declaration (of the same
+// package). The census holds that it applies the rule, so the reason cannot
+// go stale.
+var heldBy = map[string]string{
+	"internal/queryapi/home/queries_signals.go:compoundingRiskSQLBase":            "fetchRiskSignals",
+	"internal/queryapi/analytics/timeseries.go:investmentMetricsDailyNewestRows":  "investmentMetricsDailyDedupSource",
+	"internal/queryapi/cognitiveload/cognitiveload.go:fetchTeamMetrics":           "retractedTeamDaysQuery",
+	"internal/queryapi/cognitiveload/cognitiveload.go:fetchRepoScopedTeamMetrics": "retractedRepoDaysQuery",
+}
+
 // namesOnly are the files that name a table with a live-row rule in code and
 // hold no FROM or JOIN of it. A key is "dir/" or "file". reader, when set, is
 // the declaration of the same package that builds the read from the table
@@ -248,6 +259,9 @@ func TestEveryReadOfARegisteredTableAppliesTheRule(t *testing.T) {
 				continue
 			}
 			if allowedBy(unruledReads, usedReads, u.file, u.file+":"+u.name, u.file) {
+				if holder, ok := heldBy[u.file+":"+u.name]; ok && !carries[holder] {
+					t.Errorf("READ %s:%s: the declaration %s, through which the rule reaches it, does not apply the rule", u.file, u.name, holder)
+				}
 				continue
 			}
 			var tablesRead []string
@@ -280,6 +294,11 @@ func TestEveryReadOfARegisteredTableAppliesTheRule(t *testing.T) {
 	for key := range unruledReads {
 		if !usedReads[key] {
 			t.Errorf("stale unruledReads entry %s", key)
+		}
+	}
+	for key := range heldBy {
+		if _, ok := unruledReads[key]; !ok {
+			t.Errorf("heldBy entry %s has no unruledReads entry", key)
 		}
 	}
 	for key := range namesOnly {

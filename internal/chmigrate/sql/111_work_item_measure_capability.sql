@@ -21,7 +21,9 @@
 -- window. Reader contract: take the row with the latest window_end at or
 -- before the end of the question, and argMax on computed_at for that key.
 -- Merges are eventual, so a reader always deduplicates and never reads the
--- rows as they are.
+-- rows as they are. computed_at keeps milliseconds: two runs of one day in the
+-- same second would otherwise tie, and a merge keeps the LAST inserted row of
+-- a tie, which can be the older observation.
 CREATE TABLE IF NOT EXISTS work_item_measure_capability (
     org_id String,
     provider LowCardinality(String),
@@ -31,6 +33,6 @@ CREATE TABLE IF NOT EXISTS work_item_measure_capability (
     item_count UInt32,
     window_start Date,
     window_end Date,
-    computed_at DateTime('UTC')
+    computed_at DateTime64(3, 'UTC')
 ) ENGINE = ReplacingMergeTree(computed_at)
 ORDER BY (org_id, provider, measure, window_end);

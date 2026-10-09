@@ -128,7 +128,9 @@ func WriteWorkItemMeasureCapability(
 	if err != nil {
 		return 0, fmt.Errorf("prepare work_item_measure_capability batch: %w", err)
 	}
-	computedAtUTC := computedAt.UTC()
+	// computed_at is the ReplacingMergeTree version: milliseconds keep two
+	// writes of one key in the same second apart.
+	computedAtUTC := computedAt.UTC().Truncate(time.Millisecond)
 	for _, row := range rows {
 		counters, err := workItemUInt32s("work_item_measure_capability",
 			fmt.Sprintf("%s %s", row.Provider, row.Measure),

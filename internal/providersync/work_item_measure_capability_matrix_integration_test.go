@@ -639,3 +639,46 @@ func TestWorkItemMeasureCapabilityCountsAnItemStoredUnderTwoRepositoriesOnce(t *
 		t.Fatalf("capability rows:\n got %+v\nwant %+v", got, want)
 	}
 }
+
+// Two runs of one day can write the same key within one second. The newer
+// write is the answer, before and after a merge, whichever order the two
+// inserts land in.
+func TestWorkItemMeasureCapabilityNewestWriteOfOneSecondWins(t *testing.T) {
+	ctx, conn := newWorkItemEffectsConn(t)
+	orgID := uuid.NewString()
+	first, last := workitemmetrics.CapabilityWindow(capabilityMatrixDay)
+	row := func(tracked bool) []workitemmetrics.CapabilityRow {
+		evidence := 0
+		if tracked {
+			evidence = 1
+		}
+		return []workitemmetrics.CapabilityRow{{
+			Provider: "jira", Measure: workitemmetrics.MeasureStoryPointsCompleted, Tracked: tracked,
+			EvidenceCount: evidence, ItemCount: 1, WindowStart: first, WindowEnd: last,
+		}}
+	}
+	second := capabilityMatrixDay.Add(21 * time.Hour)
+	older, newer := second.Add(100*time.Millisecond), second.Add(900*time.Millisecond)
+	// The newer observation lands first: an equal version would let the
+	// later insert, the older observation, win the merge.
+	if _, err := daily.WriteWorkItemMeasureCapability(ctx, conn, orgID, row(true), newer); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := daily.WriteWorkItemMeasureCapability(ctx, conn, orgID, row(false), older); err != nil {
+		t.Fatal(err)
+	}
+	want := []capabilityStoredRow{{"jira", workitemmetrics.MeasureStoryPointsCompleted, 1, 1, 1, first, last}}
+	if got := capabilityRead(ctx, t, conn, orgID, capabilityMatrixDay); !reflect.DeepEqual(got, want) {
+		t.Fatalf("before a merge:\n got %+v\nwant %+v", got, want)
+	}
+	if err := conn.Exec(ctx, "OPTIMIZE TABLE work_item_measure_capability FINAL"); err != nil {
+		t.Fatal(err)
+	}
+	var rows uint64
+	if err := conn.QueryRow(ctx, "SELECT count() FROM work_item_measure_capability WHERE org_id = ?", orgID).Scan(&rows); err != nil {
+		t.Fatal(err)
+	}
+	if got := capabilityRead(ctx, t, conn, orgID, capabilityMatrixDay); rows != 1 || !reflect.DeepEqual(got, want) {
+		t.Fatalf("after a merge (%d row(s) left):\n got %+v\nwant %+v", rows, got, want)
+	}
+}

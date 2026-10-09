@@ -6,6 +6,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse/liverow"
 )
 
 // recommendationsDetachedWriteTimeout bounds the post-cancellation write.
@@ -25,11 +27,16 @@ const recommendationsDetachedWriteTimeout = 15 * time.Second
 // because that is precisely the team owed a fired=false tombstone to clear its
 // stale guidance. Narrowing this to the window would silently strand exactly
 // the teams the tombstones exist for.
-const discoverTeamIDsSQL = `
+//
+// A team whose rows of the window are all retraction rows is not discovered:
+// it is a key the compute no longer produces (a retired team id), and it has
+// no data to evaluate.
+var discoverTeamIDsSQL = `
     SELECT DISTINCT team_id
     FROM work_item_metrics_daily FINAL
     WHERE day >= today() - 30
-      AND team_id != ''`
+      AND team_id != ''
+      AND ` + liverow.Predicate("work_item_metrics_daily", "")
 
 // DiscoverTeamIDs returns the teams with recent activity for an org.
 //

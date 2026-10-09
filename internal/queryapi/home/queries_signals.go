@@ -21,6 +21,8 @@ import (
 	"time"
 
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
+
+	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse/liverow"
 )
 
 const recommendationsSQL = `
@@ -147,6 +149,7 @@ const compoundingRiskSQLBase = `
                         AND day < {end_day:Date}
                       %s
                       GROUP BY day, scope, scope_id
+                      HAVING %s
                   )
                   GROUP BY day
               )
@@ -168,7 +171,13 @@ func fetchRiskSignals(ctx context.Context, client QueryClient, f Filters, startD
 	if scoped && len(f.Scope.IDs) > 0 {
 		latestScopeFilter = "AND scope = {scope:String} AND scope_id IN {scope_ids:Array(String)}"
 	}
-	query := fmt.Sprintf(compoundingRiskSQLBase, latestScopeFilter)
+	// measuredRisk keeps a scope id only when its newest row is a measurement
+	// (package liverow). A retraction row over the key of a retired team id
+	// has a NULL score: counted as a row it would make every day look
+	// incomplete (missing_scores > 0) and the day picker would refuse the
+	// newest day, and listed as a row it would be a signal with no score.
+	measuredRisk := liverow.NewestPredicate("compounding_risk_daily", "")
+	query := fmt.Sprintf(compoundingRiskSQLBase, latestScopeFilter, measuredRisk)
 	if scoped && len(f.Scope.IDs) > 0 {
 		query += `
       AND scope = {scope:String}
@@ -177,6 +186,7 @@ func fetchRiskSignals(ctx context.Context, client QueryClient, f Filters, startD
 	}
 	query += `
         GROUP BY scope, scope_id
+        HAVING ` + measuredRisk + `
     )
     ORDER BY score DESC NULLS LAST
     LIMIT 5

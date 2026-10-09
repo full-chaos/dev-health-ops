@@ -6,6 +6,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/changefailure"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/prrework"
+	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse/liverow"
 )
 
 // CHAOS-4246: the weekly-report engine charts daily metric rollups that are
@@ -92,13 +93,26 @@ func averageExpression(table, metric string) string {
 // version of each declared key. A table with no declaration is not readable
 // (tableReads, validateChartMetrics refuses it before any query), so there is
 // no raw fallback.
+//
+// For a table with a live-row rule (package liverow) the source also leaves
+// out the retraction rows: the newest row of a key the compute no longer
+// produces (a retired team id) holds no measure and is not a measurement.
+// buildChartQuery averages most metrics, so each such row would be one more
+// sample of 0, and a chart grouped by team would show the retired id as a
+// team. The rule is applied to the rows that LIMIT 1 BY kept, never before: a
+// filter that ran first would drop the retraction row and serve the older row
+// it replaced.
 func dedupFromSource(table string) string {
 	read, ok := tableReads[table]
 	if !ok {
 		return table
 	}
-	return fmt.Sprintf(
+	newest := fmt.Sprintf(
 		"(SELECT * FROM %s ORDER BY %s DESC LIMIT 1 BY %s) AS %s",
 		table, read.Version, strings.Join(read.Key, ", "), table,
 	)
+	if !liverow.Registered(table) {
+		return newest
+	}
+	return fmt.Sprintf("(SELECT * FROM %s WHERE %s) AS %s", newest, liverow.Predicate(table, ""), table)
 }

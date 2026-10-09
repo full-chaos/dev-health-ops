@@ -64,6 +64,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/activeteams"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph/model"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graphqldate"
+	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse/liverow"
 )
 
 // QueryClient is the read-only ClickHouse query boundary this package
@@ -414,7 +415,128 @@ func fetchTeamMetrics(ctx context.Context, client QueryClient, orgID, sinceDate,
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("rows: %w", err)
 	}
-	return result, nil
+	if len(result) == 0 {
+		return result, nil
+	}
+	// The SQL above is pinned to the Python reference. It gives a team with no
+	// commit on a day a ratio of 0.0 and counts it in the mean across teams.
+	// A team whose newest rows of the day are retraction rows (package
+	// liverow: the keys of a retired team id) has no commit because it was
+	// not measured, not because it worked no late hour. Those days are read
+	// again over the measured teams only and replace the pinned values.
+	corrections, err := fetchRetractedTeamDays(ctx, client, innerWhere, bindings)
+	if err != nil {
+		return nil, err
+	}
+	return applyRetractedTeamDays(result, corrections), nil
+}
+
+// retractedTeamDay is the corrected value of one day that holds a team with
+// retraction rows only.
+type retractedTeamDay struct {
+	afterHoursCommitRatio float64
+	weekendCommitRatio    float64
+	measuredTeams         uint64
+}
+
+// retractedTeamDaysQuery has the layers of the pinned fetchTeamMetrics query
+// and one more fact per (day, team): is one of its newest rows a measurement.
+// It returns only the days that hold a team with none, with the mean over the
+// measured teams. A day with no such team is not returned, so a store with no
+// retraction row gives no row and the pinned values stand as they are.
+func retractedTeamDaysQuery(innerWhere string) string {
+	return `
+        SELECT
+            day,
+            avgIf(after_hours_commit_ratio, measured) AS after_hours_commit_ratio,
+            avgIf(weekend_commit_ratio, measured)     AS weekend_commit_ratio,
+            countIf(measured)                         AS measured_teams
+        FROM (
+            SELECT
+                day,
+                team_id,
+                sum(commits_count)             AS total_commits,
+                sum(after_hours_commits_count) AS total_after_hours_commits,
+                sum(weekend_commits_count)      AS total_weekend_commits,
+                max(live) = 1                  AS measured,
+                if(total_commits > 0,
+                   total_after_hours_commits / total_commits, 0.0
+                ) AS after_hours_commit_ratio,
+                if(total_commits > 0,
+                   total_weekend_commits / total_commits, 0.0
+                ) AS weekend_commit_ratio
+            FROM (
+                SELECT day, team_id, repo_id, commits_count, after_hours_commits_count, weekend_commits_count, live
+                FROM (
+                    SELECT
+                        day,
+                        team_id,
+                        repo_id,
+                        argMax(commits_count,             computed_at) AS commits_count,
+                        argMax(after_hours_commits_count, computed_at) AS after_hours_commits_count,
+                        argMax(weekend_commits_count,      computed_at) AS weekend_commits_count,
+                        ` + liverow.NewestPredicate("team_metrics_daily", "") + ` AS live,
+                        countIf(repo_id != '') OVER (PARTITION BY day, team_id) AS real_repo_count
+                    FROM team_metrics_daily
+                    ` + innerWhere + `
+                    GROUP BY day, team_id, repo_id
+                )
+                WHERE repo_id != '' OR real_repo_count = 0
+            )
+            GROUP BY day, team_id
+        )
+        GROUP BY day
+        HAVING countIf(NOT measured) > 0
+        ORDER BY day`
+}
+
+func fetchRetractedTeamDays(ctx context.Context, client QueryClient, innerWhere string, bindings []clickhouse.Binding) (map[time.Time]retractedTeamDay, error) {
+	rows, err := client.Query(ctx, retractedTeamDaysQuery(innerWhere), bindings)
+	if err != nil {
+		return nil, fmt.Errorf("retracted team days query: %w", err)
+	}
+	defer rows.Close()
+	corrections := map[time.Time]retractedTeamDay{}
+	for rows.Next() {
+		var day time.Time
+		var correction retractedTeamDay
+		if scanErr := rows.Scan(&day, &correction.afterHoursCommitRatio, &correction.weekendCommitRatio, &correction.measuredTeams); scanErr != nil {
+			return nil, fmt.Errorf("retracted team days scan: %w", scanErr)
+		}
+		corrections[day.UTC()] = correction
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("retracted team days rows: %w", err)
+	}
+	return corrections, nil
+}
+
+// applyRetractedTeamDays replaces the value of each corrected day, and drops a
+// day that no measured team is left on: a day with no measurement has no
+// ratio, it does not have a ratio of 0.
+func applyRetractedTeamDays(rows []teamRatioRow, corrections map[time.Time]retractedTeamDay) []teamRatioRow {
+	if len(corrections) == 0 {
+		return rows
+	}
+	kept := rows[:0]
+	for _, row := range rows {
+		correction, corrected := corrections[row.day.UTC()]
+		if !corrected {
+			kept = append(kept, row)
+			continue
+		}
+		if correction.measuredTeams == 0 {
+			continue
+		}
+		row.afterHoursCommitRatio = correction.afterHoursCommitRatio
+		row.weekendCommitRatio = correction.weekendCommitRatio
+		kept = append(kept, row)
+	}
+	if len(kept) == 0 {
+		// The same value the read gives for a window with no row at all.
+		return nil
+	}
+	return kept
 }
 
 // fullDayRow is one day's complete signal read directly from
@@ -934,5 +1056,81 @@ func fetchRepoScopedTeamMetrics(ctx context.Context, client QueryClient, orgID, 
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("rows: %w", err)
 	}
-	return result, nil
+	if len(result) == 0 {
+		return result, nil
+	}
+	// The SQL above is pinned to the Python reference. It gives a day whose
+	// newest rows of the repository hold no commit a ratio of 0.0. Those rows
+	// are retraction rows (package liverow): a measured row holds a commit.
+	// Such a day has no measurement, so it is left out, as a day with no row.
+	retracted, err := fetchRetractedRepoDays(ctx, client, bindings)
+	if err != nil {
+		return nil, err
+	}
+	if len(retracted) == 0 {
+		return result, nil
+	}
+	kept := result[:0]
+	for _, row := range result {
+		if !retracted[row.day.UTC()] {
+			kept = append(kept, row)
+		}
+	}
+	if len(kept) == 0 {
+		return nil, nil
+	}
+	return kept, nil
+}
+
+// retractedRepoDaysQuery has the latest-generation join of the pinned
+// fetchRepoScopedTeamMetrics query and returns the days on which no row of
+// that generation is a measurement.
+var retractedRepoDaysQuery = `
+        SELECT t.day AS no_measured_row_day
+        FROM team_metrics_daily AS t
+        INNER JOIN (
+            SELECT day, max(computed_at) AS latest_computed_at
+            FROM team_metrics_daily
+            WHERE org_id = {org_id:String}
+              AND day >= {since_date:Date}
+              AND day <= {until_date:Date}
+              AND repo_id IN (
+                  SELECT toString(id) FROM repos
+                  WHERE org_id = {org_id:String}
+                    AND (repo = {repo_id:String} OR toString(id) = {repo_id:String})
+              )
+            GROUP BY day
+        ) AS latest_gen
+            ON t.day = latest_gen.day
+               AND t.computed_at = latest_gen.latest_computed_at
+        WHERE t.org_id = {org_id:String}
+          AND t.day >= {since_date:Date}
+          AND t.day <= {until_date:Date}
+          AND t.repo_id IN (
+              SELECT toString(id) FROM repos
+              WHERE org_id = {org_id:String}
+                AND (repo = {repo_id:String} OR toString(id) = {repo_id:String})
+          )
+        GROUP BY t.day
+        HAVING max(` + liverow.Predicate("team_metrics_daily", "t") + `) = 0
+        ORDER BY no_measured_row_day`
+
+func fetchRetractedRepoDays(ctx context.Context, client QueryClient, bindings []clickhouse.Binding) (map[time.Time]bool, error) {
+	rows, err := client.Query(ctx, retractedRepoDaysQuery, bindings)
+	if err != nil {
+		return nil, fmt.Errorf("retracted repo days query: %w", err)
+	}
+	defer rows.Close()
+	days := map[time.Time]bool{}
+	for rows.Next() {
+		var day time.Time
+		if scanErr := rows.Scan(&day); scanErr != nil {
+			return nil, fmt.Errorf("retracted repo days scan: %w", scanErr)
+		}
+		days[day.UTC()] = true
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("retracted repo days rows: %w", err)
+	}
+	return days, nil
 }

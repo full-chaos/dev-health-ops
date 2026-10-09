@@ -23,6 +23,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/apiservice"
 	"github.com/full-chaos/dev-health-ops/internal/auth/edgetoken"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
+	"github.com/full-chaos/dev-health-ops/internal/chmigrate"
 	chclickhouse "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
@@ -32,8 +33,33 @@ import (
 var metricsDDL = []string{
 	"CREATE TABLE repo_metrics_daily (org_id String, computed_at DateTime('UTC')) ENGINE = MergeTree ORDER BY org_id",
 	"CREATE TABLE user_metrics_daily (org_id String, computed_at DateTime('UTC')) ENGINE = MergeTree ORDER BY org_id",
-	"CREATE TABLE team_metrics_daily (org_id String, computed_at DateTime('UTC')) ENGINE = MergeTree ORDER BY org_id",
-	"CREATE TABLE work_item_metrics_daily (org_id String, computed_at DateTime('UTC')) ENGINE = MergeTree ORDER BY org_id",
+}
+
+// teamKeyedMetricTables are the two activity tables that can hold retraction
+// rows. The activity read takes their newest rows and tests their measure
+// columns, so they are created from the schema baseline of the migration
+// chain, not as a table of two columns.
+var teamKeyedMetricTables = []string{"team_metrics_daily", "work_item_metrics_daily"}
+
+func teamKeyedMetricsDDL(t *testing.T) []string {
+	t.Helper()
+	baseline, err := chmigrate.LoadBaseline()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var statements []string
+	for _, table := range teamKeyedMetricTables {
+		found := false
+		for _, object := range baseline.Objects {
+			if object.Name == table {
+				statements, found = append(statements, object.Create), true
+			}
+		}
+		if !found {
+			t.Fatalf("the schema baseline has no table %s", table)
+		}
+	}
+	return statements
 }
 
 // TestSessionRoutesMatchGolden replays the session scenario against the Go
@@ -133,7 +159,7 @@ func startStack(t *testing.T, ctx context.Context) stack {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = chConn.Close() })
-	for _, statement := range append(append([]string{}, metricsDDL...), sessionscenario.MetricsStatements...) {
+	for _, statement := range append(append(append([]string{}, metricsDDL...), teamKeyedMetricsDDL(t)...), sessionscenario.MetricsStatements...) {
 		if err := chConn.Exec(ctx, statement); err != nil {
 			t.Fatalf("metrics: %v", err)
 		}

@@ -99,3 +99,11 @@ func TestCarryFailsClosed(t *testing.T) {
 		t.Fatalf("no ids: %v %v", got, err)
 	}
 }
+
+func TestForCutsANewTeamsTimeToTheStoredMicroseconds(t *testing.T) {
+	first := time.Date(2026, 5, 6, 7, 8, 9, 123456789, time.UTC)
+	want := time.Date(2026, 5, 6, 7, 8, 9, 123456000, time.UTC)
+	if got := For(nil, "team-a", first); !got.Equal(want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+}

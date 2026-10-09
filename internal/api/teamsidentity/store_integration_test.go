@@ -336,7 +336,7 @@ func TestTeamUpdateKeepsCreatedAt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !second.CreatedAt.Equal(first.CreatedAt) || !first.CreatedAt.Equal(first.UpdatedAt) {
+	if !second.CreatedAt.Equal(first.CreatedAt) || !first.CreatedAt.Equal(first.UpdatedAt.Truncate(time.Microsecond)) {
 		t.Fatalf("created_at: first %v (updated %v), second %v", first.CreatedAt, first.UpdatedAt, second.CreatedAt)
 	}
 	if !second.UpdatedAt.After(second.CreatedAt) {

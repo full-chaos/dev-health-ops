@@ -65,12 +65,12 @@ func Carry(ctx context.Context, conn Querier, orgID string, teamIDs []string) (m
 }
 
 // For is the created_at to append for a team: the carried time, else
-// firstWrite for a team that has no stored row yet.
+// firstWrite for a team that has no stored row yet, cut to the microseconds the column stores.
 func For(carried map[string]time.Time, teamID string, firstWrite time.Time) time.Time {
 	if created, ok := carried[teamID]; ok {
 		return created
 	}
-	return firstWrite
+	return firstWrite.Truncate(time.Microsecond)
 }
 
 func isNil(conn Querier) bool {

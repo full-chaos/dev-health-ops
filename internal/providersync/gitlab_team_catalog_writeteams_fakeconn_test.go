@@ -254,7 +254,7 @@ func TestGitLabWriteTeamsCarriesCreatedAt(t *testing.T) {
 	if !last(0).Equal(original) {
 		t.Fatalf("existing team created_at = %v, want %v", last(0), original)
 	}
-	if !last(1).Equal(rows[1].UpdatedAt) {
+	if !last(1).Equal(rows[1].UpdatedAt.Truncate(time.Microsecond)) {
 		t.Fatalf("new team created_at = %v, want its updated_at %v", last(1), rows[1].UpdatedAt)
 	}
 }

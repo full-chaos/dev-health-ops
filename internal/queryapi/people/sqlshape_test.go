@@ -91,9 +91,9 @@ func TestFetchPersonMetricValueOrgIDAtSameDepthAsFinal(t *testing.T) {
 	var captured string
 	client := fakeQueryClient{t: t, handler: func(t *testing.T, query string, bindings []dhclickhouse.Binding) (dhclickhouse.RowScanner, error) {
 		captured = query
-		return &scalarFloatScanner{value: 0}, nil
+		return &valueWithCountScanner{}, nil
 	}}
-	if _, err := fetchPersonMetricValue(context.Background(), client, "user_metrics_daily", "loc_touched", "sum", "identity_id", []string{"alice@example.com"}, day(2024, 6, 1), day(2024, 6, 15), "", "org-1"); err != nil {
+	if _, _, err := fetchPersonMetricValue(context.Background(), client, "user_metrics_daily", "loc_touched", "sum", "identity_id", []string{"alice@example.com"}, day(2024, 6, 1), day(2024, 6, 15), "", "org-1"); err != nil {
 		t.Fatalf("fetchPersonMetricValue: %v", err)
 	}
 	if strings.Contains(captured, "LIMIT 1 BY") {

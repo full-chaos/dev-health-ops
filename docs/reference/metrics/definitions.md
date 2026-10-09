@@ -39,10 +39,12 @@ silently mapped to a different measure.
 | `cycle_time_p50_hours` | hours | Average the persisted latest daily/scope p50 values | `work_item_metrics_daily` |
 | `avg_wip` | items | Average the latest daily status snapshots | `work_item_state_durations_daily` |
 | `deployments_count` | deployments | Sum the latest daily repository rows | `deploy_metrics_daily` |
-| `change_failure_rate` | ratio | Deployments linked to an incident divided by deployments, over the window's summed counts | `repo_change_failure_daily` |
+| `change_failure_rate` | ratio | Deployments linked to an incident divided by deployments, over the window's summed counts (target; see the note below) | `repo_change_failure_daily` (target) |
 | `investment_allocation_pct` | percent | Canonical-theme completed-work share | `investment_metrics_daily` |
 | `cyclomatic_per_kloc` | cyclomatic complexity per KLOC | Average the latest daily repository density | `repo_complexity_daily` |
 | `compounding_risk_score` | score from 0 to 1 | Mean of the latest persisted scoped scores | `compounding_risk_daily` |
+
+State today: the Ask Dev service (acr) still reads the deprecated `repo_metrics_daily.change_failure_rate` column, so its answer is not yet this definition; moving it to `repo_change_failure_daily` is ticket 9018. Query-api (Home, `/explain`, operating review, report) already follows this definition.
 
 Change failure rate is weighted over the whole selected window. It is never an
 average of daily percentages and never falls back to PR reverts or to the

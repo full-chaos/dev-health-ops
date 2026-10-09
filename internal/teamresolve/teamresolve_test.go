@@ -4,6 +4,7 @@ import (
 	"context"
 	stddriver "database/sql/driver"
 	"errors"
+	"io"
 	"testing"
 	"time"
 
@@ -123,6 +124,12 @@ func (erroringOwnershipConn) AsyncInsert(context.Context, string, bool, ...any) 
 func (erroringOwnershipConn) Ping(context.Context) error { panic("stub: Ping") }
 func (erroringOwnershipConn) Stats() chdriver.Stats      { panic("stub: Stats") }
 func (erroringOwnershipConn) Close() error               { panic("stub: Close") }
+func (erroringOwnershipConn) QueryFormat(context.Context, string, string, ...any) (io.ReadCloser, error) {
+	panic("stub: QueryFormat")
+}
+func (erroringOwnershipConn) InsertFormat(context.Context, string, string, io.Reader) error {
+	panic("stub: InsertFormat")
+}
 func (erroringOwnershipConn) CheckNamedValue(*stddriver.NamedValue) error {
 	panic("stub: CheckNamedValue")
 }

@@ -3,6 +3,7 @@ package remaining
 import (
 	"context"
 	"database/sql/driver"
+	"io"
 
 	chdriver "github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 )
@@ -30,7 +31,13 @@ func (driverConnStub) Exec(context.Context, string, ...any) error { panic("stub:
 func (driverConnStub) AsyncInsert(context.Context, string, bool, ...any) error {
 	panic("stub: AsyncInsert")
 }
-func (driverConnStub) Ping(context.Context) error               { panic("stub: Ping") }
-func (driverConnStub) Stats() chdriver.Stats                    { panic("stub: Stats") }
-func (driverConnStub) Close() error                             { panic("stub: Close") }
+func (driverConnStub) Ping(context.Context) error { panic("stub: Ping") }
+func (driverConnStub) Stats() chdriver.Stats      { panic("stub: Stats") }
+func (driverConnStub) Close() error               { panic("stub: Close") }
+func (driverConnStub) QueryFormat(context.Context, string, string, ...any) (io.ReadCloser, error) {
+	panic("stub: QueryFormat")
+}
+func (driverConnStub) InsertFormat(context.Context, string, string, io.Reader) error {
+	panic("stub: InsertFormat")
+}
 func (driverConnStub) CheckNamedValue(*driver.NamedValue) error { panic("stub: CheckNamedValue") }

@@ -76,7 +76,7 @@ func (f *fakeRowScanner) Scan(dest ...any) error {
 			// adding this case, not assumed: clickhouse-go/v2's
 			// lib/column/column_gen.go has a dedicated generated Int64
 			// column type with `case *int64:` scan destinations
-			// (v2.47.0, this module's pinned version) -- Int64 -> *int64
+			// (v2.48.0, this module's pinned version) -- Int64 -> *int64
 			// is a standard supported pairing, unlike UInt64 (which
 			// specifically requires *uint64 because a real UInt64 can
 			// exceed int64's range).
@@ -129,7 +129,7 @@ func (f *fakeRowScanner) Scan(dest ...any) error {
 			// executeBreakdownRaw now scans category-2 AT-RISK measures
 			// into (var value *float64; rows.Scan(&dimValue, &value)).
 			// Verified against the real driver, not assumed:
-			// clickhouse-go v2.47.0's lib/column/nullable.go
+			// clickhouse-go v2.48.0's lib/column/nullable.go
 			// Nullable.ScanRow intercepts a NULL row FIRST and only
 			// recognises `case **float64: *v = nil` as a nullable
 			// destination (a bare *float64 never sees the NULL at

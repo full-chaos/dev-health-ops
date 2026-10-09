@@ -115,7 +115,17 @@ func TestDailyHandlersOfTheWorkerTriggerTheTouchedDaysDrain(t *testing.T) {
 	if _, err := newDrainingDailyDispatcher(nil, nil, nil, nil); err == nil {
 		t.Fatal("a dispatcher without a drain was built")
 	}
-	if _, err := newDrainingDailyFinalizeHandler(nil, nil); err == nil {
+	if _, err := newDrainingDailyFinalizeHandler(nil, nil, nil); err == nil {
 		t.Fatal("a finalize handler without a drain was built")
+	}
+
+	// The finalize handler of the worker also carries the run-level retraction
+	// of stale team keys: without it a run ends with the keys that its
+	// partitions no longer produce in place, and nothing else supersedes them.
+	if !triggers.finalize.HasStaleKeyRetractor() {
+		t.Fatal("the finalize handler of the worker has no stale-key retractor: a recomputed day would be counted under two team ids")
+	}
+	if _, err := newDrainingDailyFinalizeHandler(nil, floor, nil); err == nil {
+		t.Fatal("a finalize handler with no connection for the stale-key retractor was built")
 	}
 }

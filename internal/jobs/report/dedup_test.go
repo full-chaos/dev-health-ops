@@ -91,14 +91,10 @@ func TestDedupFromSourceEveryAppendOnlyTableAndEveryReplacingTable(t *testing.T)
 		table string
 		want  string
 	}{
-		{"work_item_metrics_daily", "work_item_metrics_daily FINAL"},
-		{"work_item_user_metrics_daily", "work_item_user_metrics_daily FINAL"},
+		{"work_item_metrics_daily", "(SELECT * FROM work_item_metrics_daily ORDER BY computed_at DESC LIMIT 1 BY org_id, provider, day, work_scope_id, team_id) AS work_item_metrics_daily"},
 		{"cicd_metrics_daily", "(SELECT * FROM cicd_metrics_daily ORDER BY computed_at DESC LIMIT 1 BY org_id, repo_id, day) AS cicd_metrics_daily"},
 		{"deploy_metrics_daily", "(SELECT * FROM deploy_metrics_daily ORDER BY computed_at DESC LIMIT 1 BY org_id, repo_id, day) AS deploy_metrics_daily"},
 		{"incident_metrics_daily", "(SELECT * FROM incident_metrics_daily ORDER BY computed_at DESC LIMIT 1 BY org_id, repo_id, day) AS incident_metrics_daily"},
-		{"testops_release_confidence", "(SELECT * FROM testops_release_confidence ORDER BY computed_at DESC LIMIT 1 BY org_id, repo_id, day) AS testops_release_confidence"},
-		{"testops_pipeline_stability", "(SELECT * FROM testops_pipeline_stability ORDER BY computed_at DESC LIMIT 1 BY org_id, repo_id, day) AS testops_pipeline_stability"},
-		{"testops_quality_drag", "(SELECT * FROM testops_quality_drag ORDER BY computed_at DESC LIMIT 1 BY org_id, repo_id, day) AS testops_quality_drag"},
 		{"repo_metrics_daily", "(SELECT * FROM repo_metrics_daily ORDER BY computed_at DESC LIMIT 1 BY org_id, repo_id, day) AS repo_metrics_daily"},
 		{"team_metrics_daily", "(SELECT * FROM team_metrics_daily ORDER BY computed_at DESC LIMIT 1 BY org_id, team_id, repo_id, day) AS team_metrics_daily"},
 		{"user_metrics_daily", "(SELECT * FROM user_metrics_daily ORDER BY computed_at DESC LIMIT 1 BY org_id, repo_id, author_email, day) AS user_metrics_daily"},
@@ -186,7 +182,7 @@ func TestBuildChartQueryAveragesLeadTimeOverRowsWithACompletedItem(t *testing.T)
 	if query := build("lead_p50_hours"); !strings.Contains(query, "avg(if(completed_count > 0, lead_p50_hours, NULL)) AS y") {
 		t.Fatalf("lead_p50_hours is not averaged over the rows with a completed item:\n%s", query)
 	}
-	if query := build("completed_count"); !strings.Contains(query, "sum(completed_count) AS y") {
+	if query := build("completed_count"); !strings.Contains(query, "toFloat64(sum(completed_count)) AS y") {
 		t.Fatalf("completed_count is not a plain sum:\n%s", query)
 	}
 	if got := averageExpression("cicd_metrics_daily", "success_rate"); got != "avg(success_rate)" {

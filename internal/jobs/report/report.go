@@ -242,6 +242,12 @@ func execute(ctx context.Context, envelope jobcontract.Envelope, reportID string
 			input, queryErr := dependencies.Query.Query(workCtx, QueryInput{ReportID: reportID, RunID: runID})
 			if queryErr != nil {
 				failureCode = "query_failed"
+				// A plan that charts a metric the reader refuses is not an outage: its
+				// run gets its own stored code, so the two are told apart.
+				var refused *ChartMetricError
+				if errors.As(queryErr, &refused) {
+					failureCode = "chart_metric_refused"
+				}
 				return queryErr
 			}
 			var renderErr error
@@ -297,6 +303,11 @@ func notify(ctx context.Context, dependencies Dependencies, runID, reportID stri
 func fail(ctx context.Context, store RunStore, runID string, claim RunClaim, code string, cause error) error {
 	if err := store.Fail(ctx, runID, claim, code); err != nil {
 		return jobruntime.Retryable(fmt.Errorf("%s: %w", code, err))
+	}
+	// A plan that charts a metric the reader refuses stays refused: no retry.
+	var refused *ChartMetricError
+	if errors.As(cause, &refused) {
+		return jobruntime.Permanent(fmt.Errorf("%s: %w", code, cause))
 	}
 	return jobruntime.Retryable(fmt.Errorf("%s: %w", code, cause))
 }

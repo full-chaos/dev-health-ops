@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
+	"github.com/full-chaos/dev-health-ops/internal/teamkeytables"
 	"github.com/google/uuid"
 )
 
@@ -80,8 +81,9 @@ func (executor *TeamComplexityExecutor) ComputeFinalizeFamily(
 	if len(repoRows) == 0 {
 		// Python: `if not repo_complexity_rows: return 0` (implicit -- the
 		// aggregator's own loop simply produces no buckets). Matches
-		// team_cognitive_load's identical early-empty contract.
-		return 0, nil
+		// team_cognitive_load's identical early-empty contract. A team key
+		// that still holds a measure for the day is stale.
+		return executor.supersedeStaleKeys(ctx, run.OrganizationID, day, nil, executor.nowUTC(), 0)
 	}
 
 	teams, err := LoadWellbeingTeams(ctx, executor.conn, run.OrganizationID)
@@ -106,13 +108,34 @@ func (executor *TeamComplexityExecutor) ComputeFinalizeFamily(
 
 	computedAt := executor.nowUTC()
 	rows := buildTeamComplexityRows(run.OrganizationID, day, repoRows, repoToTeam, computedAt)
+	produced := make([]staleKey, 0, len(rows))
+	for _, row := range rows {
+		produced = append(produced, staleKey{row.TeamID})
+	}
 	if len(rows) == 0 {
-		return 0, nil
+		return executor.supersedeStaleKeys(ctx, run.OrganizationID, day, nil, computedAt, 0)
 	}
 	if err := executor.writer.write(ctx, rows); err != nil {
 		return 0, err
 	}
-	return len(rows), nil
+	return executor.supersedeStaleKeys(ctx, run.OrganizationID, day, produced, computedAt, len(rows))
+}
+
+// supersedeStaleKeys applies the stale-key rule (stale_team_keys.go) for the
+// day: the family computes the organization's day whole, so every live team
+// key of the day that this compute did not produce gets a row of zeros.
+func (executor *TeamComplexityExecutor) supersedeStaleKeys(
+	ctx context.Context, organizationID string, day time.Time, produced []staleKey, computedAt time.Time, written int,
+) (int, error) {
+	superseded, err := supersedeStaleTeamKeys(ctx, executor.conn, teamkeytables.TeamComplexityDaily, organizationID, day, nil, produced, computedAt)
+	written += superseded
+	if err != nil {
+		if written == 0 {
+			return 0, err
+		}
+		return written, fmt.Errorf("%w: team_complexity failed after %d row(s) already landed: %w", ErrPartialWrite, written, err)
+	}
+	return written, nil
 }
 
 var _ NativeFinalizeFamilyExecutor = (*TeamComplexityExecutor)(nil)

@@ -143,6 +143,8 @@ type recordingRepositoryConnection struct {
 	// second (CHAOS-8821).
 	queries      []string
 	argumentSets [][]any
+	// teamRuleReadErr fails the reads the team rules add (isTeamRuleRead).
+	teamRuleReadErr error
 }
 
 func (connection *recordingRepositoryConnection) Query(
@@ -150,10 +152,19 @@ func (connection *recordingRepositoryConnection) Query(
 	query string,
 	arguments ...any,
 ) (driver.Rows, error) {
-	connection.query = query
-	connection.arguments = arguments
 	connection.queries = append(connection.queries, query)
 	connection.argumentSets = append(connection.argumentSets, arguments)
+	if isTeamRuleRead(query) {
+		// The reads the team rules add are kept in queries only: query and
+		// arguments stay the family's own read, and the canned rows are its
+		// rows.
+		if connection.teamRuleReadErr != nil {
+			return nil, connection.teamRuleReadErr
+		}
+		return &emptyGovernanceRows{}, nil
+	}
+	connection.query = query
+	connection.arguments = arguments
 	return connection.rows, nil
 }
 

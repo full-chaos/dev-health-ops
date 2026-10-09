@@ -57,7 +57,9 @@ func identityUUID(orgID, canonicalID string) uuid.UUID {
 // (ExtraData/ManagedFields/SyncPolicy/FlaggedChanges/LastDriftSyncAt) are
 // stable defaults, not stored.
 type Team struct {
-	ID            string // the team_uuid, string form -- the wire "id"
+	// ID is the team_uuid, string form -- the wire "id". It derives from the
+	// team id, so it changes when the team id changes (the carry).
+	ID            string
 	TeamUUID      uuid.UUID
 	TeamID        string // the ClickHouse slug -- the wire "team_id"
 	Name          string

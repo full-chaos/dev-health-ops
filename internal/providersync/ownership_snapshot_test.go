@@ -22,7 +22,7 @@ func TestPlanOwnershipSnapshotKeepsFirstSeenAndRetractsTheRest(t *testing.T) {
 	later := first.Add(24 * time.Hour)
 	now := first.Add(48 * time.Hour)
 	fact := func(team, project, source string, validFrom time.Time) OwnershipSnapshotRow {
-		return OwnershipSnapshotRow{TeamID: team, ProjectID: project, Source: source, ValidFrom: validFrom}
+		return OwnershipSnapshotRow{TeamID: team, ProjectID: testPID(project), Source: source, ValidFrom: validFrom}
 	}
 	fresh := []OwnershipSnapshotRow{fact("T", "10001", "native", now), fact("T", "10002", "native", now)}
 	open := []OwnershipSnapshotRow{
@@ -73,11 +73,11 @@ func TestPlanOwnershipSnapshotKeepsFirstSeenAndRetractsTheRest(t *testing.T) {
 func TestPlanOwnershipSnapshotClosesNothingForASnapshotThatIsNotComplete(t *testing.T) {
 	first := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
 	now := first.Add(48 * time.Hour)
-	fresh := []OwnershipSnapshotRow{{TeamID: "T", ProjectID: "10001", Source: "native", ValidFrom: now}}
+	fresh := []OwnershipSnapshotRow{{TeamID: "T", ProjectID: testPID("10001"), Source: "native", ValidFrom: now}}
 	open := []OwnershipSnapshotRow{
-		{TeamID: "T", ProjectID: "10001", Source: "native", ValidFrom: first},
-		{TeamID: "T", ProjectID: "10001", Source: "native", ValidFrom: first.Add(time.Hour)}, // a later duplicate
-		{TeamID: "T", ProjectID: "20002", Source: "native", ValidFrom: first},                // not in this part of the answer
+		{TeamID: "T", ProjectID: testPID("10001"), Source: "native", ValidFrom: first},
+		{TeamID: "T", ProjectID: testPID("10001"), Source: "native", ValidFrom: first.Add(time.Hour)}, // a later duplicate
+		{TeamID: "T", ProjectID: testPID("20002"), Source: "native", ValidFrom: first},                // not in this part of the answer
 	}
 	for name, snapshot := range map[string]OwnershipSnapshot{
 		"stated not complete":        {Fresh: fresh, Complete: false},
@@ -149,7 +149,8 @@ var ownershipWriters = map[string]ownershipWriter{
 			"TestRetireJiraProjectAsTeamRows",
 	},
 	"internal/providersync.LinearReferenceCatalogClickHouseEffects.writeOwnership": {
-		provider: "linear", note: "insert only, valid_from = the run time; a stale link is removed by the operator verb retire-stale-linear-project-ownership; not on the shared rule yet",
+		provider: "linear", note: "plain insert of the rows LinearTeamCatalogCollector.CollectTeamCatalog plans through " +
+			"LinearReferenceCatalogClickHouseEffects.SnapshotOwnership (linearOwnershipSnapshot, pinned in repoOwnershipPlanners)",
 	},
 	"internal/providersync.GitLabTeamCatalogClickHouseEffects.writeOwnership": {
 		provider: "gitlab", note: "plain insert of the rows GitLabTeamCatalogCollector.CollectTeamCatalog plans through " +
@@ -167,6 +168,13 @@ var repoOwnershipPlanners = map[string]ownershipWriter{
 		complete: "SnapshotTeamRepoOwnership passes len(closableTeamIDs) > 0: decideOwnershipClose's closable set, the " +
 			"teams of githubTeamCatalogRows.RepoListedTeamIDs whose listing proved its end (ownershipListingProvesEnd) " +
 			"in a scope no other active GitHub integration of the org could list (ownership_close_gate.go)",
+	},
+	"internal/providersync.LinearReferenceCatalogClickHouseEffects.SnapshotOwnership": {
+		provider: "linear", planner: "internal/providersync.linearOwnershipSnapshot",
+		complete: "SnapshotOwnership passes its `complete` argument and an empty fresh set closes nothing: " +
+			"LinearTeamCatalogCollector.CollectTeamCatalog passes LinearReferenceCatalogEvidence.TeamsComplete AND " +
+			"ProjectsComplete (the team walk and every project page and project-team page reached their end) AND " +
+			"no project-team link without a key (linear_team_catalog_collector.go)",
 	},
 	"internal/providersync.GitLabTeamCatalogClickHouseEffects.SnapshotOwnership": {
 		provider: "gitlab", planner: "internal/providersync.gitlabOwnershipSnapshot",

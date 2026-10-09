@@ -111,7 +111,7 @@ func collectLinearProjectTeamsFrom(t *testing.T, server *linearProjectTeamsServe
 func projectOwnershipRows(batch LinearReferenceCatalogBatch) int {
 	total := 0
 	for _, row := range batch.Rows.Ownership {
-		if row.ProjectID == "project-big" {
+		if row.ProjectID.String() == "project-big" {
 			total++
 		}
 	}

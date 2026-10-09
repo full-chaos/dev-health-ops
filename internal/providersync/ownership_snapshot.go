@@ -6,8 +6,9 @@ import "time"
 // rule reads it: the columns that name the fact (team, project, source) and
 // the valid_from it is stored under.
 type OwnershipSnapshotRow struct {
-	TeamID, ProjectID, Source string
-	ValidFrom                 time.Time
+	TeamID, Source string
+	ProjectID      ProjectID
+	ValidFrom      time.Time
 }
 
 // OwnershipSnapshot is what one run found, and whether that is everything.
@@ -38,12 +39,12 @@ type OwnershipSnapshotPlan struct {
 }
 
 func ownershipSnapshotKey(row OwnershipSnapshotRow) string {
-	return row.TeamID + "\x00" + row.ProjectID + "\x00" + row.Source
+	return row.TeamID + "\x00" + row.ProjectID.String() + "\x00" + row.Source
 }
 
 // PlanOwnershipSnapshot is the ONE snapshot rule of team_project_ownership.
 // Every writer whose run is a full snapshot of what it owns goes through it:
-// the Jira project-as-team catalog and the Atlassian Teams writer today
+// the Jira, GitHub, GitLab and Linear catalogs and the Atlassian Teams writer
 // (TestJiraOwnershipWriterCensus keeps that a named set).
 //
 // snapshot.Fresh is what this run found; open is what the table holds open

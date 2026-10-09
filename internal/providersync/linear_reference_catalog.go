@@ -133,7 +133,7 @@ type linearReferenceOwnershipRow struct {
 	OrgID       string     `json:"org_id"`
 	Provider    string     `json:"provider"`
 	TeamID      string     `json:"team_id"`
-	ProjectID   string     `json:"project_id"`
+	ProjectID   ProjectID  `json:"project_id"`
 	ProjectKey  *string    `json:"project_key"`
 	Source      string     `json:"source"`
 	IsPrimary   uint8      `json:"is_primary"`
@@ -148,7 +148,7 @@ type linearReferenceOwnershipRow struct {
 // native Linear enrichment selected by PROJECTS_QUERY. The enrichment is
 // intentionally typed instead of being hidden in a JSON metadata blob.
 type linearReferenceProjectRow struct {
-	ID         string               `json:"id"`
+	ID         ProjectID            `json:"id"`
 	OrgID      string               `json:"org_id"`
 	Provider   string               `json:"provider"`
 	ProjectKey *string              `json:"project_key"`
@@ -287,8 +287,12 @@ func normalizeLinearReferenceProject(
 	if payload.Trashed || payload.ArchivedAt != nil && strings.TrimSpace(*payload.ArchivedAt) != "" {
 		isActive = 0
 	}
+	projectID, projectIDOK := LinearProjectID(payload.ID)
+	if !projectIDOK {
+		return linearReferenceProjectRow{}, fmt.Errorf("%w: Linear project without an id", ErrInvalidConfiguration)
+	}
 	return linearReferenceProjectRow{
-		ID: payload.ID, OrgID: claim.OrgID, Provider: "linear", Name: linearFirstNonEmpty(payload.Name, payload.ID),
+		ID: projectID, OrgID: claim.OrgID, Provider: "linear", Name: linearFirstNonEmpty(payload.Name, payload.ID),
 		IsActive: isActive, State: strings.TrimSpace(payload.Status.Type), TargetDate: targetDate,
 		URL: strings.TrimSpace(payload.URL), TeamIDs: teamIDs, TeamKeys: teamKeys,
 		LeadID: leadID, LeadName: leadName, LeadEmail: leadEmail,
@@ -506,7 +510,7 @@ func minInt(left, right int) int {
 
 func (row linearReferenceProjectRow) validate(claim Claim) error {
 	if claim.Provider != "linear" || row.Provider != "linear" ||
-		row.OrgID != claim.OrgID || strings.TrimSpace(row.ID) == "" ||
+		row.OrgID != claim.OrgID || row.ID.IsZero() ||
 		row.UpdatedAt.IsZero() || row.LastSynced.IsZero() {
 		return fmt.Errorf("%w: invalid Linear reference project row", ErrInvalidConfiguration)
 	}

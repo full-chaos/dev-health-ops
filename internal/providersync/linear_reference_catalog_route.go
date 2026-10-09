@@ -513,7 +513,12 @@ func (handler LinearReferenceCatalogRouteHandler) CollectReferenceCatalog(
 		if team.NativeTeamKey != nil {
 			projectKey = *team.NativeTeamKey
 		}
-		projectID := claim.OrgID + ":linear:" + projectKey
+		projectID, projectIDOK := LinearTeamKeyProjectID(claim.OrgID, projectKey)
+		if !projectIDOK {
+			// A team row always carries its key (normalizeLinearReferenceTeam
+			// refuses a blank one); a row without it has no identity to write.
+			continue
+		}
 		projectKeyPtr := optionalLinearString(projectKey)
 		teamID := team.ID
 		rows.Ownership = append(rows.Ownership, linearReferenceOwnershipRow{

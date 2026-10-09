@@ -88,14 +88,14 @@ func TestEveryLinearTeamIDWriteSiteWritesAPrefixedID(t *testing.T) {
 		if err := validateLinearReferenceOwnershipRow(claim, row); err != nil {
 			t.Errorf("ownership row %+v refused at write: %v", row, err)
 		}
-		switch row.ProjectID {
+		switch row.ProjectID.String() {
 		case "7a6b5c4d-0000-4000-8000-00000000000a":
 			projectRows++
 			if row.TeamID != "linear:QA" || row.ProjectKey != nil {
 				t.Errorf("project ownership row: team_id %q project_key %v, want linear:QA and nil", row.TeamID, row.ProjectKey)
 			}
 		case claim.OrgID + ":linear:QA":
-			key := row.ProjectID[len(claim.OrgID+":linear:"):]
+			key := row.ProjectID.String()[len(claim.OrgID+":linear:"):]
 			teamKeyRows[key] = true
 			if row.TeamID != "linear:"+key || row.ProjectKey == nil || *row.ProjectKey != key {
 				t.Errorf("team-key ownership row %s: team_id %q project_key %v, want linear:%s and the native key %s",

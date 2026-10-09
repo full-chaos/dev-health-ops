@@ -237,8 +237,9 @@ func (handler JiraTeamCatalogRouteHandler) CollectTeamCatalog(
 			continue
 		}
 		projectKeys = append(projectKeys, key)
-		nativeProjectID := strings.TrimSpace(entry.ID)
-		if nativeProjectID == "" || jiraProjectIDIsKeyBuilt(ref.OrgID, nativeProjectID) {
+		nativeID := strings.TrimSpace(entry.ID)
+		nativeProjectID, nativeOK := JiraProjectID(nativeID)
+		if !nativeOK || jiraProjectIDIsKeyBuilt(ref.OrgID, nativeID) {
 			projectsSkippedNoNativeID++
 			continue
 		}
@@ -329,7 +330,7 @@ func jiraHoldArchivedOwnership(orgID string, archived []JiraArchivedProject, ope
 		isArchived[jiraKeyBuiltProjectIDPrefix(orgID)+project.Key] = true
 	}
 	for _, row := range open {
-		if isArchived[row.ProjectID] {
+		if isArchived[row.ProjectID.String()] {
 			held = append(held, row)
 			continue
 		}
@@ -680,7 +681,7 @@ func (collector JiraTeamCatalogCollector) CollectTeamCatalog(
 		// a key comes from this walk's own project search, never from a
 		// read of `projects`: a key the provider did not return this run has
 		// no identity to write.
-		nativeIDByKey := make(map[string]string, len(projects))
+		nativeIDByKey := make(map[string]ProjectID, len(projects))
 		for _, row := range projects {
 			if row.ProjectKey != nil {
 				nativeIDByKey[*row.ProjectKey] = row.ID

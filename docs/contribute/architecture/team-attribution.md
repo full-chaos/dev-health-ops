@@ -724,10 +724,25 @@ project's items by id. Now:
   (`loadTeamRepoOwnershipProjectLinks`) takes the newest version of each row key first and filters
   `valid_to` after, the same two-level `argMax` form as the attribution cascade (`LoadProjects`).
   Test: `TestTeamRepoOwnershipProjectLinksLeaveOutAClosedRowBeforeAMerge`.
-- Linear still has its own insert-only writer; GitLab plans its rows through the same function since CHAOS-8952
+- Linear plans its ownership rows through the same function since CHAOS-8886
+  (`LinearReferenceCatalogClickHouseEffects.SnapshotOwnership`; open rows read are `provider = 'linear'`,
+  `source = 'native'`). Its run is complete only when the team walk and every project page and project-team
+  page reached their end and no project-team link was without a key; an empty answer closes nothing.
+  GitLab plans its rows through the same function since CHAOS-8952
   (section 0.4a); a
   census test (`TestJiraOwnershipWriterCensus`) names every writer of the table and fails for a new Jira
   writer that does not plan its rows through the shared function.
+- **One typed project id** (`providersync.ProjectID`, `project_id.go`, CHAOS-8886): the field is unexported
+  and every row type that persists a project id (`projects.id`, `team_project_ownership.project_id`) holds the
+  type, so a bare string does not compile into a sink row and a zero id is refused at the write. One
+  constructor per form: `JiraProjectID` and `LinearProjectID` (the native id, bare), `GitLabCatalogProjectID`
+  (`{org_id}:gitlab:{native id}`). Three NAMED exceptions, each with its reason in `projectIDNamedExceptions`:
+  `GitLabPathOwnershipProjectID` (the project path, until CHAOS-8883), `GitHubRepoProjectID` (GitHub has no
+  project; ownership names the repository full name), `LinearTeamKeyProjectID` (`{org_id}:linear:{team key}`,
+  CHAOS-4458). The stored strings are the same as before. Tests:
+  `TestProjectIDConstructorsAreByteEqualToTheHandBuiltForms`, `TestProjectIDCannotBeBuiltFromAString` (real
+  compile failures, with a control that must compile), `TestProjectIDConstructionCensus` (no literal, no
+  hand-built `{org}:{provider}:` string, exception callers pinned, sink field types pinned).
 - The key-built `projects` rows written earlier are removed by a one-time operator verb, see section 1.1.
 - Known limit: a native Jira project id is unique per Jira site. One organization with two Jira sites
   could give two projects the same id. The work-item rows had this limit before this change.

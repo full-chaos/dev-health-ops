@@ -301,7 +301,10 @@ func githubRepoOwnershipSnapshot(
 	facts := func(rows []githubTeamRepoOwnershipRow) []OwnershipSnapshotRow {
 		out := make([]OwnershipSnapshotRow, len(rows))
 		for index, row := range rows {
-			out[index] = OwnershipSnapshotRow{TeamID: row.TeamID, ProjectID: row.RepoFullName, Source: row.Source, ValidFrom: row.ValidFrom}
+			// validRepoOwnership refuses an empty repository name before a row
+			// is written, so a zero id here never reaches the table.
+			repoID, _ := GitHubRepoProjectID(row.RepoFullName)
+			out[index] = OwnershipSnapshotRow{TeamID: row.TeamID, ProjectID: repoID, Source: row.Source, ValidFrom: row.ValidFrom}
 		}
 		return out
 	}

@@ -630,7 +630,7 @@ func TestProjectIdentityIsOneIDAcrossCatalogOwnershipAndWorkItems(t *testing.T) 
 	t.Run("linear", func(t *testing.T) {
 		projectID := "6f1c2d3e-4a5b-4c6d-8e7f-0a1b2c3d4e5f"
 		if err := (LinearReferenceCatalogClickHouseEffects{Conn: conn, Lease: lease}).writeOwnership(ctx, []linearReferenceOwnershipRow{{
-			OrgID: orgID, Provider: "linear", TeamID: "ENG", ProjectID: projectID,
+			OrgID: orgID, Provider: "linear", TeamID: "ENG", ProjectID: testPID(projectID),
 			Source: "native", IsPrimary: 1, Specificity: 100, Priority: 10, ValidFrom: now, UpdatedAt: now,
 		}}); err != nil {
 			t.Fatal(err)
@@ -669,7 +669,7 @@ func TestProjectIdentityIsOneIDAcrossCatalogOwnershipAndWorkItems(t *testing.T) 
 		if !ok {
 			t.Fatal("gitlab project row was not built")
 		}
-		ownership := normalizeGitLabOwnershipRow(orgID, "gl:acme", "acme/api", gitlabTeamCatalogBaseSpecificity, now)
+		ownership := mustGitLabOwnershipRow(orgID, "gl:acme", "acme/api", gitlabTeamCatalogBaseSpecificity, now)
 		if ownership.ProjectID == project.ID {
 			t.Fatalf("GitLab ownership and catalog now share the id %q: this is no longer a known red, move the row to the green cases", project.ID)
 		}

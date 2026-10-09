@@ -2,6 +2,7 @@ package providersync
 
 import (
 	"context"
+	"log/slog"
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
@@ -177,9 +178,37 @@ func (collector LinearTeamCatalogCollector) CollectTeamCatalog(
 		if err := collector.Sink.WriteEffect(ctx, writeClaim, batch.Effects.Projects); err != nil {
 			return result, err
 		}
-		if err := collector.Sink.WriteEffect(ctx, writeClaim, batch.Effects.Ownership); err != nil {
+		// Snapshot rule, the one every ownership writer shares
+		// (PlanOwnershipSnapshot): a row the run still holds keeps the
+		// valid_from it was first seen with, and an open row of this writer
+		// that a complete run no longer holds is closed in this write. A new
+		// stamp at each sync would add one more open row for the same fact.
+		snapshotComplete := batch.Evidence.TeamsComplete && batch.Evidence.ProjectsComplete &&
+			batch.Result.OwnershipTeamsWithoutKey == 0
+		ownershipRows, retracted, err := collector.Sink.SnapshotOwnership(
+			ctx, ref.OrgID, batch.Rows.Ownership, normalizedAt.UTC().Truncate(time.Millisecond), snapshotComplete)
+		if err != nil {
 			return result, err
 		}
+		if !snapshotComplete {
+			slog.Default().WarnContext(ctx, "linear_reference_catalog_ownership_snapshot_incomplete",
+				"org_id", ref.OrgID, "teams_complete", batch.Evidence.TeamsComplete,
+				"projects_complete", batch.Evidence.ProjectsComplete,
+				"teams_without_key", batch.Result.OwnershipTeamsWithoutKey)
+		}
+		if retracted > 0 {
+			slog.Default().InfoContext(ctx, "linear_reference_catalog_ownership_retracted",
+				"org_id", ref.OrgID, "rows", retracted)
+		}
+		ownershipEffect, err := effectBatchFromValues(linearReferenceCatalogOwnershipDestination, EffectReadbackRequired, ownershipRows)
+		if err != nil {
+			return result, err
+		}
+		if err := collector.Sink.WriteEffect(ctx, writeClaim, ownershipEffect); err != nil {
+			return result, err
+		}
+		result.OwnershipRetracted = retracted
+		result.OwnershipSnapshotIncomplete = !snapshotComplete
 		result.ProjectsWritten = batch.Result.Projects
 		result.OwnershipWritten = batch.Result.Ownership
 		result.ProjectsWithoutKey = batch.Result.ProjectsWithoutKey

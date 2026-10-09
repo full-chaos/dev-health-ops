@@ -536,7 +536,7 @@ func jiraTargetDateEqual(left, right *time.Time) bool {
 // complete = false, with no rows: the caller then has only a part of what
 // this writer owns and must close nothing.
 func jiraLegacyProjectOwnershipLinks(
-	ctx context.Context, conn driver.Conn, orgID string, nativeIDByKey map[string]string, normalizedAt time.Time,
+	ctx context.Context, conn driver.Conn, orgID string, nativeIDByKey map[string]ProjectID, normalizedAt time.Time,
 ) (ownership []jiraTeamCatalogOwnershipRow, skipped int, complete bool, err error) {
 	if conn == nil || strings.TrimSpace(orgID) == "" {
 		return nil, 0, false, ErrInvalidConfiguration
@@ -565,7 +565,7 @@ WHERE org_id = {org_id:String}`,
 			continue
 		}
 		nativeProjectID := nativeIDByKey[projectKey]
-		if nativeProjectID == "" {
+		if nativeProjectID.IsZero() {
 			skipped++
 			continue
 		}

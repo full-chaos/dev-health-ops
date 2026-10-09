@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	clickhouse "github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	"github.com/full-chaos/dev-health-ops/internal/teamid"
@@ -259,8 +260,18 @@ func validateLinearReferenceMembershipRow(claim Claim, row linearReferenceMember
 }
 
 func validateLinearReferenceOwnershipRow(claim Claim, row linearReferenceOwnershipRow) error {
+	if row.ValidTo != nil {
+		// A retraction closes a row that an earlier run wrote, so it carries
+		// that row's own values. Only its identity and interval are checked.
+		if claim.Provider != "linear" || row.Provider != "linear" || row.OrgID != claim.OrgID ||
+			strings.TrimSpace(row.TeamID) == "" || row.ProjectID.IsZero() || row.Source != "native" ||
+			row.ValidFrom.IsZero() || row.UpdatedAt.IsZero() || row.ValidTo.Before(row.ValidFrom) {
+			return ErrInvalidConfiguration
+		}
+		return nil
+	}
 	if claim.Provider != "linear" || row.Provider != "linear" || row.OrgID != claim.OrgID ||
-		strings.TrimSpace(row.TeamID) == "" || strings.TrimSpace(row.ProjectID) == "" ||
+		strings.TrimSpace(row.TeamID) == "" || row.ProjectID.IsZero() ||
 		row.Source != "native" || row.IsPrimary != 1 || row.Specificity != 100 || row.Priority != 10 ||
 		row.ValidFrom.IsZero() || row.UpdatedAt.IsZero() {
 		return ErrInvalidConfiguration
@@ -578,7 +589,7 @@ func (sink LinearReferenceCatalogClickHouseEffects) inspectProjects(ctx context.
 
 func (sink LinearReferenceCatalogClickHouseEffects) inspectOwnership(ctx context.Context, claim Claim, expected []linearReferenceOwnershipRow) (EffectInspection, error) {
 	return inspectLinearReferenceRows(expected, func(row linearReferenceOwnershipRow) (EffectInspection, error) {
-		result, err := sink.Conn.Query(ctx, `SELECT org_id, provider, team_id, project_id, project_key, source, is_primary, specificity, priority, valid_from, valid_to, updated_at FROM team_project_ownership FINAL WHERE org_id = ? AND provider = ? AND team_id = ? AND project_id = ? AND source = ?`, claim.OrgID, "linear", row.TeamID, row.ProjectID, "native")
+		result, err := sink.Conn.Query(ctx, `SELECT org_id, provider, team_id, project_id, project_key, source, is_primary, specificity, priority, valid_from, valid_to, updated_at FROM team_project_ownership FINAL WHERE org_id = ? AND provider = ? AND team_id = ? AND project_id = ? AND source = ? AND toUnixTimestamp64Milli(valid_from) = ?`, claim.OrgID, "linear", row.TeamID, row.ProjectID.String(), "native", row.ValidFrom.UnixMilli())
 		if err != nil {
 			return EffectConflict, err
 		}
@@ -694,3 +705,81 @@ func linearReferenceDateEqual(left, right *linearReferenceDate) bool {
 
 var _ EffectSink = LinearReferenceCatalogClickHouseEffects{}
 var _ EffectReadback = LinearReferenceCatalogClickHouseEffects{}
+
+// linearOpenOwnershipQuery reads the open team_project_ownership rows THIS
+// writer owns: provider linear, source native.
+const linearOpenOwnershipQuery = `
+SELECT team_id, project_id, project_key, toString(source), is_primary, specificity, priority, valid_from
+FROM team_project_ownership FINAL
+WHERE org_id = {org_id:String} AND provider = 'linear' AND valid_to IS NULL
+  AND source = 'native'`
+
+func (sink LinearReferenceCatalogClickHouseEffects) openOwnership(ctx context.Context, orgID string) ([]linearReferenceOwnershipRow, error) {
+	result, err := sink.Conn.Query(ctx, linearOpenOwnershipQuery, clickhouse.Named("org_id", orgID))
+	if err != nil {
+		return nil, err
+	}
+	defer result.Close()
+	var open []linearReferenceOwnershipRow
+	for result.Next() {
+		row := linearReferenceOwnershipRow{OrgID: orgID, Provider: "linear"}
+		if err := result.Scan(&row.TeamID, &row.ProjectID, &row.ProjectKey, &row.Source, &row.IsPrimary,
+			&row.Specificity, &row.Priority, &row.ValidFrom); err != nil {
+			return nil, err
+		}
+		row.ValidFrom = row.ValidFrom.UTC()
+		open = append(open, row)
+	}
+	return open, result.Err()
+}
+
+// SnapshotOwnership returns the rows of one ownership write: this run's rows
+// on their first-seen valid_from, and the open rows of this writer that the
+// run no longer holds, closed at `at`, through the shared PlanOwnershipSnapshot
+// rule. complete says every read the fresh rows come from reached its end;
+// anything less closes nothing. An empty fresh set closes nothing either: a
+// walk that returns no ownership is more often an access change than an
+// organization that dropped every link. A failed read of the open rows is an
+// error before any write. It returns the rows to write and how many of them
+// close a row.
+func (sink LinearReferenceCatalogClickHouseEffects) SnapshotOwnership(
+	ctx context.Context, orgID string, fresh []linearReferenceOwnershipRow, at time.Time, complete bool,
+) ([]linearReferenceOwnershipRow, int, error) {
+	if sink.Conn == nil || strings.TrimSpace(orgID) == "" || at.IsZero() {
+		return nil, 0, ErrInvalidConfiguration
+	}
+	open, err := sink.openOwnership(ctx, orgID)
+	if err != nil {
+		return nil, 0, err
+	}
+	rows, closed := linearOwnershipSnapshot(fresh, open, at, complete && len(fresh) > 0)
+	return rows, closed, nil
+}
+
+// linearOwnershipSnapshot applies the shared snapshot rule
+// (PlanOwnershipSnapshot) to one run of the Linear catalog.
+func linearOwnershipSnapshot(
+	fresh, open []linearReferenceOwnershipRow, at time.Time, complete bool,
+) ([]linearReferenceOwnershipRow, int) {
+	facts := func(rows []linearReferenceOwnershipRow) []OwnershipSnapshotRow {
+		out := make([]OwnershipSnapshotRow, len(rows))
+		for index, row := range rows {
+			out[index] = OwnershipSnapshotRow{TeamID: row.TeamID, ProjectID: row.ProjectID, Source: row.Source, ValidFrom: row.ValidFrom}
+		}
+		return out
+	}
+	plan := PlanOwnershipSnapshot(OwnershipSnapshot{Fresh: facts(fresh), Complete: complete}, facts(open), at)
+	rows := make([]linearReferenceOwnershipRow, 0, len(fresh)+len(plan.Retract))
+	for index, row := range fresh {
+		row.ValidFrom = plan.ValidFrom[index]
+		rows = append(rows, row)
+	}
+	for _, retraction := range plan.Retract {
+		row := open[retraction.Open]
+		closedAt := retraction.ClosedAt
+		row.ValidTo = &closedAt
+		row.UpdatedAt = at
+		rows = append(rows, row)
+	}
+	return rows, len(plan.Retract)
+}

@@ -302,13 +302,14 @@ type openMembership struct {
 }
 
 type openOwnership struct {
-	teamID, projectID string
-	projectKey        *string
-	source            string
-	isPrimary         uint8
-	specificity       uint16
-	priority          int32
-	validFrom         time.Time
+	teamID      string
+	projectID   providersync.ProjectID
+	projectKey  *string
+	source      string
+	isPrimary   uint8
+	specificity uint16
+	priority    int32
+	validFrom   time.Time
 	// closedAt is the valid_to the snapshot rule closes this row with.
 	closedAt time.Time
 }

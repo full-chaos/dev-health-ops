@@ -126,8 +126,8 @@ func TestRetainClosableRetractionsDropsRetractionsOfOtherTeams(t *testing.T) {
 	at := time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)
 	before := at.Add(-time.Hour)
 	open := []OwnershipSnapshotRow{
-		{TeamID: "gl:a", ProjectID: "a/1", Source: "provider_access", ValidFrom: before},
-		{TeamID: "gl:b", ProjectID: "b/1", Source: "provider_access", ValidFrom: before},
+		{TeamID: "gl:a", ProjectID: testPID("a/1"), Source: "provider_access", ValidFrom: before},
+		{TeamID: "gl:b", ProjectID: testPID("b/1"), Source: "provider_access", ValidFrom: before},
 	}
 	plan := PlanOwnershipSnapshot(OwnershipSnapshot{Complete: true}, open, at)
 	if len(plan.Retract) != 2 {

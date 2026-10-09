@@ -342,7 +342,7 @@ func TestJiraTeamCatalogCollectWritesNoProjectIdentityWithoutANativeID(t *testin
 		t.Fatalf("teams=%+v ownership=%+v memberships=%+v, want none: a project is not a team",
 			batch.Rows.Teams, batch.Rows.Ownership, batch.Rows.Memberships)
 	}
-	if len(batch.Rows.Projects) != 1 || batch.Rows.Projects[0].ID != "10001" {
+	if len(batch.Rows.Projects) != 1 || batch.Rows.Projects[0].ID.String() != "10001" {
 		t.Fatalf("projects=%+v, want only OPS on its native id", batch.Rows.Projects)
 	}
 	if batch.Result.ProjectsSkippedNoNativeID != 3 {
@@ -571,7 +571,7 @@ func TestJiraTeamCatalogCollectReadsArchivedProjectsToHoldOwnershipOnly(t *testi
 func TestJiraHoldArchivedOwnershipHoldsBothIDFormsOfAnArchivedProject(t *testing.T) {
 	t.Parallel()
 	row := func(team, project, source string) jiraTeamCatalogOwnershipRow {
-		return jiraTeamCatalogOwnershipRow{TeamID: team, ProjectID: project, Source: source}
+		return jiraTeamCatalogOwnershipRow{TeamID: team, ProjectID: testPID(project), Source: source}
 	}
 	archived := []JiraArchivedProject{{ID: "20001", Key: "OLD"}, {ID: "20002", Key: "GONE"}}
 	open := []jiraTeamCatalogOwnershipRow{
@@ -643,7 +643,7 @@ func TestJiraTeamCatalogCollectSkipsBoardDiscoveryForNonSoftwareProjectUnderStri
 	}
 	foundSUPProject := false
 	for _, row := range batch.Rows.Projects {
-		if row.ID == "10002" {
+		if row.ID.String() == "10002" {
 			foundSUPProject = true
 		}
 	}
@@ -721,7 +721,7 @@ func TestJiraTeamCatalogCollectBuildsTheProjectAndNoTeamOwnershipOrMembershipRow
 		batch.Result.TeamMembershipsImported != 0 || batch.Result.MembersImported != 0 {
 		t.Fatalf("result=%+v, want no team, ownership, membership or member counted", batch.Result)
 	}
-	if len(batch.Rows.Projects) != 1 || batch.Rows.Projects[0].ID != "10001" || batch.Result.ProjectsImported != 1 {
+	if len(batch.Rows.Projects) != 1 || batch.Rows.Projects[0].ID.String() != "10001" || batch.Result.ProjectsImported != 1 {
 		t.Fatalf("projects=%+v result=%+v, want the one project on its native id", batch.Rows.Projects, batch.Result)
 	}
 	if len(batch.Rows.Sprints) != 0 {

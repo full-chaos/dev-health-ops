@@ -15,11 +15,12 @@ import (
 )
 
 type productSink struct {
-	query   string
-	queries []string
-	batch   *productBatch
-	batches []*productBatch
-	err     error
+	carryCountCalls int
+	query           string
+	queries         []string
+	batch           *productBatch
+	batches         []*productBatch
+	err             error
 
 	// queryRows/queryErr configure Query -- used by
 	// ClickHouseExternalBatchSink's team.v1 manual_members preserve-lookup
@@ -49,6 +50,12 @@ func (s *productSink) PrepareBatch(_ context.Context, query string, _ ...driver.
 }
 
 func (s *productSink) Query(_ context.Context, query string, args ...any) (driver.Rows, error) {
+	// The team id carry's count read (providersync.CarryTeamIDs) runs before
+	// every team.v1 and identity.v1 write; this store holds no bare id.
+	if strings.Contains(query, "argMax(is_active, (updated_at, last_synced))") {
+		s.carryCountCalls++
+		return &productRows{rows: [][]any{{uint64(0), uint64(0), uint64(0)}}}, nil
+	}
 	s.queryCalls++
 	s.lastQuery = query
 	s.lastQueryArgs = args
@@ -75,6 +82,8 @@ func (r *productRows) Scan(dest ...any) error {
 			*target, _ = row[i].(string)
 		case *[]string:
 			*target, _ = row[i].([]string)
+		case *uint64:
+			*target, _ = row[i].(uint64)
 		default:
 			return fmt.Errorf("productRows: unsupported scan dest %T", d)
 		}

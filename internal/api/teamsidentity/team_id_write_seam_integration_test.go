@@ -1,0 +1,602 @@
+//go:build integration
+
+package teamsidentity
+
+import (
+	"context"
+	"errors"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
+	"github.com/full-chaos/dev-health-ops/internal/providersync"
+	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
+	"github.com/full-chaos/dev-health-ops/internal/teamattribution"
+	"github.com/full-chaos/dev-health-ops/internal/teamid"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/chschema"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
+)
+
+func writeSeamStore(t *testing.T) (Store, context.Context) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	t.Cleanup(cancel)
+	instance, err := containers.StartClickHouse(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		closeCtx, closeCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer closeCancel()
+		_ = instance.Close(closeCtx)
+	})
+	chschema.Apply(ctx, t, instance)
+	conn, err := clickhouse.Open(ctx, clickhouse.DefaultConfig(instance.URI))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+	return Store{Conn: conn}, ctx
+}
+
+// writeSeamSeed writes one active team of a provider with a bare id, as a
+// store held it before ids carried a prefix.
+func writeSeamSeed(t *testing.T, s Store, ctx context.Context, provider, id string) {
+	t.Helper()
+	writeSeamSeedNative(t, s, ctx, provider, id, id)
+}
+
+func writeSeamSeedNative(t *testing.T, s Store, ctx context.Context, provider, id, native string) {
+	t.Helper()
+	if err := s.Conn.Exec(ctx, `INSERT INTO teams (id, team_uuid, name, members, manual_members, project_keys, repo_patterns, is_active, updated_at, org_id, provider, native_team_key) VALUES (?, generateUUIDv4(), 'Eng', [], [], [], [], 1, '2026-09-01 00:00:00', 'org-1', ?, ?)`, id, provider, native); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func writeSeamActive(t *testing.T, s Store, ctx context.Context) string {
+	t.Helper()
+	rows, err := s.Conn.Query(ctx, `SELECT id FROM teams FINAL WHERE org_id = 'org-1' AND is_active = 1 ORDER BY id`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			t.Fatal(err)
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	return strings.Join(ids, ",")
+}
+
+func writeSeamCall(t *testing.T, h handlers, handler http.HandlerFunc, method, path, teamID string, payload map[string]any) *httptest.ResponseRecorder {
+	t.Helper()
+	if teamID == "" {
+		return callWithBody(t, h, handler, method, path, "org-1", payload)
+	}
+	return callWithBody(t, h, func(w http.ResponseWriter, r *http.Request) {
+		r.SetPathValue("team_id", teamID)
+		handler(w, r)
+	}, method, path, "org-1", payload)
+}
+
+// An identity assignment that names a carried bare team id lands on the
+// prefixed team; the bare team stays inactive.
+func TestAnIdentityAssignOfACarriedBareTeamIDWritesTheKeyedTeam(t *testing.T) {
+	const atlassianTeam = "aaaaaaaa-0000-4000-8000-000000000001"
+	for _, c := range []struct{ provider, bare, native, keyed string }{
+		{"linear", "ENG", "ENG", "linear:ENG"},
+		{"jira", atlassianTeam, "ari:cloud:identity::team/" + atlassianTeam, "jira:" + atlassianTeam},
+		{"github", "ENG", "ENG", "gh:ENG"},
+		{"gitlab", "ENG", "ENG", "gl:ENG"},
+	} {
+		t.Run(c.provider, func(t *testing.T) {
+			s, ctx := writeSeamStore(t)
+			writeSeamSeedNative(t, s, ctx, c.provider, c.bare, c.native)
+			if _, err := providersync.CarryTeamIDs(ctx, s.Conn, "org-1", time.Now().UTC(), false); err != nil {
+				t.Fatal(err)
+			}
+			keyed := c.keyed
+			if got := writeSeamActive(t, s, ctx); got != keyed {
+				t.Fatalf("after the carry: active = %q, want %q", got, keyed)
+			}
+			h := newTestHandlers(s)
+			rec := writeSeamCall(t, h, h.createOrUpdateIdentity, http.MethodPost, "/api/v1/admin/identities", "",
+				map[string]any{"canonical_id": "m1", "email": "m1@example.com", "team_ids": []string{c.bare}})
+			if rec.Code != http.StatusOK {
+				t.Fatalf("identity assign = %d %s", rec.Code, rec.Body.String())
+			}
+			if got := writeSeamActive(t, s, ctx); got != keyed {
+				t.Errorf("after the assign: active = %q, want %q", got, keyed)
+			}
+			identity, err := s.GetIdentity(ctx, "org-1", "m1")
+			if err != nil || identity == nil {
+				t.Fatalf("identity = %v, %v", identity, err)
+			}
+			if strings.Join(identity.TeamIDs, ",") != keyed {
+				t.Errorf("identity team_ids = %v, want [%s]", identity.TeamIDs, keyed)
+			}
+			team, err := s.GetTeam(ctx, "org-1", keyed)
+			if err != nil || team == nil || !strings.Contains(strings.Join(team.ManualMembers, ","), "m1@example.com") {
+				t.Errorf("keyed team = %+v, %v; want m1@example.com in its manual members", team, err)
+			}
+		})
+	}
+}
+
+// An admin create of the prefixed id of a team the store still holds bare
+// carries the bare team first: one active team.
+func TestAnAdminTeamCreateCarriesTheBareTeamFirst(t *testing.T) {
+	s, ctx := writeSeamStore(t)
+	writeSeamSeed(t, s, ctx, "linear", "ENG")
+	h := newTestHandlers(s)
+	rec := writeSeamCall(t, h, h.createOrUpdateTeam, http.MethodPost, "/api/v1/admin/teams", "",
+		map[string]any{"team_id": "linear:ENG", "name": "Eng"})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("create = %d %s", rec.Code, rec.Body.String())
+	}
+	if got := writeSeamActive(t, s, ctx); got != "linear:ENG" {
+		t.Errorf("active = %q, want linear:ENG", got)
+	}
+}
+
+// An admin create or update that names a bare id of a carried team writes
+// the prefixed team.
+func TestAnAdminTeamWriteOfABareIDWritesTheKeyedTeam(t *testing.T) {
+	for name, call := range map[string]func(h handlers) *httptest.ResponseRecorder{
+		"create": func(h handlers) *httptest.ResponseRecorder {
+			return writeSeamCall(t, h, h.createOrUpdateTeam, http.MethodPost, "/api/v1/admin/teams", "",
+				map[string]any{"team_id": "ENG", "name": "Renamed"})
+		},
+		"update": func(h handlers) *httptest.ResponseRecorder {
+			return writeSeamCall(t, h, h.updateTeam, http.MethodPatch, "/api/v1/admin/teams/ENG", "ENG",
+				map[string]any{"name": "Renamed"})
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			s, ctx := writeSeamStore(t)
+			writeSeamSeed(t, s, ctx, "linear", "ENG")
+			h := newTestHandlers(s)
+			rec := call(h)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("%s = %d %s", name, rec.Code, rec.Body.String())
+			}
+			if got := writeSeamActive(t, s, ctx); got != "linear:ENG" {
+				t.Errorf("active = %q, want linear:ENG", got)
+			}
+			team, err := s.GetTeam(ctx, "org-1", "linear:ENG")
+			if err != nil || team == nil || team.Name != "Renamed" {
+				t.Errorf("linear:ENG = %+v, %v; want name Renamed", team, err)
+			}
+		})
+	}
+}
+
+// A bare id that two providers' prefixed teams hold is refused before any
+// write; a prefix-only id is refused.
+func TestAnAdminTeamWriteRefusesAnAmbiguousOrMalformedID(t *testing.T) {
+	s, ctx := writeSeamStore(t)
+	writeSeamSeed(t, s, ctx, "linear", "ENG")
+	writeSeamSeed(t, s, ctx, "github", "gh:ENG")
+	if _, err := providersync.CarryTeamIDs(ctx, s.Conn, "org-1", time.Now().UTC(), false); err != nil {
+		t.Fatal(err)
+	}
+	before := writeSeamActive(t, s, ctx)
+	if before != "gh:ENG,linear:ENG" {
+		t.Fatalf("seed: active = %q", before)
+	}
+	h := newTestHandlers(s)
+	for id, want := range map[string]int{"ENG": http.StatusConflict, "gh:": http.StatusUnprocessableEntity, " linear: ": http.StatusUnprocessableEntity} {
+		rec := writeSeamCall(t, h, h.createOrUpdateTeam, http.MethodPost, "/api/v1/admin/teams", "",
+			map[string]any{"team_id": id, "name": "X"})
+		if rec.Code != want {
+			t.Errorf("create %q = %d %s, want %d", id, rec.Code, rec.Body.String(), want)
+		}
+		rec = writeSeamCall(t, h, h.createOrUpdateIdentity, http.MethodPost, "/api/v1/admin/identities", "",
+			map[string]any{"canonical_id": "m1", "team_ids": []string{id}})
+		if rec.Code != want {
+			t.Errorf("identity %q = %d %s, want %d", id, rec.Code, rec.Body.String(), want)
+		}
+	}
+	if got := writeSeamActive(t, s, ctx); got != before {
+		t.Errorf("active = %q after refused writes, want %q", got, before)
+	}
+	if identity, err := s.GetIdentity(ctx, "org-1", "m1"); err != nil || identity != nil {
+		t.Errorf("identity written on a refused write: %+v, %v", identity, err)
+	}
+}
+
+// A plain id that no prefixed team holds is the admin's own team: it is
+// written, and answered, as custom:<id>; a second write of the plain id
+// lands on the same team.
+func TestAnAdminTeamCreateOfAPlainIDWritesTheCustomTeam(t *testing.T) {
+	s, ctx := writeSeamStore(t)
+	h := newTestHandlers(s)
+	for _, name := range []string{"Eng", "Eng renamed"} {
+		rec := writeSeamCall(t, h, h.createOrUpdateTeam, http.MethodPost, "/api/v1/admin/teams", "",
+			map[string]any{"team_id": "eng", "name": name})
+		if rec.Code != http.StatusOK || decodeBody(t, rec)["team_id"] != "custom:eng" {
+			t.Fatalf("create %q = %d %s, want 200 with team_id custom:eng", name, rec.Code, rec.Body.String())
+		}
+	}
+	if got := writeSeamActive(t, s, ctx); got != "custom:eng" {
+		t.Errorf("active = %q, want custom:eng", got)
+	}
+	rec := writeSeamCall(t, h, h.createOrUpdateIdentity, http.MethodPost, "/api/v1/admin/identities", "",
+		map[string]any{"canonical_id": "m1", "email": "m1@example.com", "team_ids": []string{"eng"}})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("identity = %d %s", rec.Code, rec.Body.String())
+	}
+	team, err := s.GetTeam(ctx, "org-1", "custom:eng")
+	if err != nil || team == nil || team.Name != "Eng renamed" || !strings.Contains(strings.Join(team.ManualMembers, ","), "m1@example.com") {
+		t.Errorf("custom:eng = %+v, %v; want the renamed team with m1", team, err)
+	}
+}
+
+// The member confirmations and a drift decision name a team by the path:
+// a bare path id of a carried team lands on the prefixed team.
+func TestTheMemberAndDecisionWritersKeyTheirPathTeamID(t *testing.T) {
+	s, ctx := writeSeamStore(t)
+	writeSeamSeed(t, s, ctx, "linear", "ENG")
+	h := newTestHandlers(s)
+	rec := writeSeamCall(t, h, h.confirmMembers, http.MethodPost, "/api/v1/admin/teams/ENG/confirm-members", "ENG",
+		map[string]any{"team_id": "ENG", "links": []map[string]any{{"provider": "github", "provider_identity": "octo", "canonical_id": "m1", "action": "create"}}})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("confirm members = %d %s", rec.Code, rec.Body.String())
+	}
+	rec = writeSeamCall(t, h, h.confirmInferredMembers, http.MethodPost, "/api/v1/admin/teams/ENG/confirm-inferred-members", "ENG",
+		map[string]any{"team_id": "ENG", "members": []map[string]any{{"account_id": "acc-1", "action": "add", "display_name": "Ann"}}})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("confirm inferred = %d %s", rec.Code, rec.Body.String())
+	}
+	rec = writeSeamCall(t, h, h.dismissChanges, http.MethodPost, "/api/v1/admin/teams/ENG/dismiss-changes", "ENG",
+		map[string]any{"dismiss_all": true})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("dismiss = %d %s", rec.Code, rec.Body.String())
+	}
+	if got := writeSeamActive(t, s, ctx); got != "linear:ENG" {
+		t.Errorf("active = %q, want linear:ENG", got)
+	}
+	for _, canonical := range []string{"m1", "jira:acc-1"} {
+		identity, err := s.GetIdentity(ctx, "org-1", canonical)
+		if err != nil || identity == nil || strings.Join(identity.TeamIDs, ",") != "linear:ENG" {
+			t.Errorf("identity %s = %+v, %v; want team_ids [linear:ENG]", canonical, identity, err)
+		}
+	}
+	team, err := s.GetTeam(ctx, "org-1", "linear:ENG")
+	if err != nil || team == nil || !strings.Contains(strings.Join(team.ManualMembers, ","), "m1") {
+		t.Errorf("linear:ENG = %+v, %v; want the confirmed members", team, err)
+	}
+}
+
+// An import of a provider team id that is only a prefix is refused before
+// anything is written.
+func TestTheAdminImportRefusesAPrefixOnlyTeamID(t *testing.T) {
+	s, ctx := writeSeamStore(t)
+	rec := postImportBody(t, s, `{"teams":[{"provider_type":"github","provider_team_id":"gh:","name":"X"}]}`)
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Errorf("import = %d %s, want 422", rec.Code, rec.Body.String())
+	}
+	var observations uint64
+	if err := s.Conn.QueryRow(ctx, `SELECT count() FROM team_provider_observations WHERE org_id = 'org-1'`).Scan(&observations); err != nil {
+		t.Fatal(err)
+	}
+	if got := writeSeamActive(t, s, ctx); got != "" || observations != 0 {
+		t.Errorf("active = %q, observations = %d after a refused import, want none", got, observations)
+	}
+}
+
+// The store refuses to write a bare or malformed team id, and an open
+// membership or fallback of one; it still closes a stored one.
+func TestTheStoreRefusesABareTeamIDWrite(t *testing.T) {
+	s, ctx := writeSeamStore(t)
+	for _, id := range []string{"ENG", "gh:", "linear:gh:", ""} {
+		if _, err := s.CreateOrUpdateTeam(ctx, "org-1", TeamWrite{Origin: teamid.Custom, TeamID: id, Name: "X"}); !errors.Is(err, teamid.ErrBareTeamID) {
+			t.Errorf("CreateOrUpdateTeam(%q) error = %v, want %v", id, err, teamid.ErrBareTeamID)
+		}
+	}
+	if _, err := s.CreateOrUpdateTeam(ctx, "org-1", TeamWrite{TeamID: "custom:new", Name: "X"}); err == nil {
+		t.Error("CreateOrUpdateTeam of a new team with no origin wrote it, want refused")
+	}
+	now := time.Now().UTC()
+	membership := func(teamID string, validTo any) *pyjson.Object {
+		row := pyjson.NewObject()
+		for _, kv := range [][2]any{{"provider", "github"}, {"team_id", teamID}, {"member_id", "m1"}, {"source", "manual"},
+			{"valid_from", now}, {"valid_to", validTo}, {"updated_at", now}, {"scope_type", "member"}, {"scope_id", "m1"}} {
+			row.Set(kv[0].(string), kv[1])
+		}
+		return row
+	}
+	if err := s.insertTeamMembership(ctx, "org-1", membership("ENG", nil)); !errors.Is(err, teamid.ErrBareTeamID) {
+		t.Errorf("open bare membership: error = %v", err)
+	}
+	if err := s.insertManualFallback(ctx, "org-1", membership("ENG", nil), now); !errors.Is(err, teamid.ErrBareTeamID) {
+		t.Errorf("open bare fallback: error = %v", err)
+	}
+	if err := s.insertTeamMembership(ctx, "org-1", membership("ENG", now)); err != nil {
+		t.Errorf("closing a stored bare membership: error = %v", err)
+	}
+	if err := s.insertManualFallback(ctx, "org-1", membership("ENG", now), now); err != nil {
+		t.Errorf("closing a stored bare fallback: error = %v", err)
+	}
+	if got := writeSeamActive(t, s, ctx); got != "" {
+		t.Errorf("active = %q, want none", got)
+	}
+}
+
+// An identity that leaves a team it names by a stored bare id is written;
+// the bare team is not written again, so an inactive one stays inactive.
+func TestAnIdentityLeavingAStoredBareTeamSkipsIt(t *testing.T) {
+	s, ctx := writeSeamStore(t)
+	writeSeamSeed(t, s, ctx, "linear", "linear:ENG")
+	if err := s.Conn.Exec(ctx, `INSERT INTO teams (id, team_uuid, name, members, manual_members, project_keys, repo_patterns, is_active, updated_at, org_id, provider, native_team_key) VALUES ('ENG', generateUUIDv4(), 'Eng', [], ['m1@example.com'], [], [], 0, '2026-09-02 00:00:00', 'org-1', 'linear', 'ENG')`); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Conn.Exec(ctx, `INSERT INTO identities (org_id, canonical_id, identity_uuid, provider_identities, team_ids, is_active, updated_at) VALUES ('org-1', 'm1', generateUUIDv4(), '{}', ['ENG'], 1, '2026-09-01 00:00:00')`); err != nil {
+		t.Fatal(err)
+	}
+	h := newTestHandlers(s)
+	rec := writeSeamCall(t, h, h.createOrUpdateIdentity, http.MethodPost, "/api/v1/admin/identities", "",
+		map[string]any{"canonical_id": "m1", "email": "m1@example.com", "team_ids": []string{"linear:ENG"}})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("identity = %d %s", rec.Code, rec.Body.String())
+	}
+	if got := writeSeamActive(t, s, ctx); got != "linear:ENG" {
+		t.Errorf("active = %q, want linear:ENG", got)
+	}
+}
+
+// A bare id resolves only to an ACTIVE prefixed team: an inactive one is
+// not written active again. A request that names a prefixed and a bare id
+// keys both.
+func TestTheWriteSeamResolvesOnlyToAnActiveTeamAndKeysAMixedRequest(t *testing.T) {
+	s, ctx := writeSeamStore(t)
+	writeSeamSeed(t, s, ctx, "linear", "linear:ENG")
+	writeSeamSeed(t, s, ctx, "", "custom:ops")
+	if err := s.Conn.Exec(ctx, `INSERT INTO teams (id, team_uuid, name, members, manual_members, project_keys, repo_patterns, is_active, updated_at, org_id, provider, native_team_key) VALUES ('linear:OLD', generateUUIDv4(), 'Old', [], [], [], [], 0, '2026-09-01 00:00:00', 'org-1', 'linear', 'OLD')`); err != nil {
+		t.Fatal(err)
+	}
+	h := newTestHandlers(s)
+	rec := writeSeamCall(t, h, h.createOrUpdateIdentity, http.MethodPost, "/api/v1/admin/identities", "",
+		map[string]any{"canonical_id": "m1", "team_ids": []string{"OLD"}})
+	if rec.Code != http.StatusNotFound || !strings.Contains(rec.Body.String(), "custom:OLD") {
+		t.Errorf("identity naming an inactive team's bare id = %d %s, want 404 for custom:OLD", rec.Code, rec.Body.String())
+	}
+	rec = writeSeamCall(t, h, h.createOrUpdateIdentity, http.MethodPost, "/api/v1/admin/identities", "",
+		map[string]any{"canonical_id": "m1", "team_ids": []string{"custom:ops", "ENG"}})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("mixed identity = %d %s", rec.Code, rec.Body.String())
+	}
+	identity, err := s.GetIdentity(ctx, "org-1", "m1")
+	if err != nil || identity == nil || strings.Join(identity.TeamIDs, ",") != "custom:ops,linear:ENG" {
+		t.Errorf("identity = %+v, %v; want team_ids [custom:ops linear:ENG]", identity, err)
+	}
+	if got := writeSeamActive(t, s, ctx); got != "custom:ops,linear:ENG" {
+		t.Errorf("active = %q, want custom:ops,linear:ENG", got)
+	}
+}
+
+// A drift decision named by a carried bare id decides the prefixed team's
+// pending change.
+func TestADriftDecisionByABareIDDecidesTheKeyedTeamsChange(t *testing.T) {
+	s, ctx := writeSeamStore(t)
+	writeSeamSeed(t, s, ctx, "linear", "linear:ENG")
+	if err := s.Conn.Exec(ctx, `INSERT INTO team_drift_changes (org_id, change_id, entity_type, entity_id, provider, native_team_key, change_type, field, old_value_json, new_value_json, status, first_seen_at, last_seen_at, updated_at) VALUES ('org-1', 'chg-1', 'team', 'linear:ENG', 'linear', 'ENG', 'field_changed', 'name', '"a"', '"b"', 'pending', '2026-09-01 00:00:00', '2026-09-01 00:00:00', '2026-09-01 00:00:00')`); err != nil {
+		t.Fatal(err)
+	}
+	h := newTestHandlers(s)
+	rec := writeSeamCall(t, h, h.dismissChanges, http.MethodPost, "/api/v1/admin/teams/ENG/dismiss-changes", "ENG",
+		map[string]any{"dismiss_all": true})
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"dismissed":1`) {
+		t.Errorf("dismiss by bare id = %d %s, want the one pending change dismissed", rec.Code, rec.Body.String())
+	}
+}
+
+// A delete named by a carried bare id deletes the prefixed team, not only
+// the inactive bare rows.
+func TestADeleteByABareIDDeletesTheKeyedTeam(t *testing.T) {
+	s, ctx := writeSeamStore(t)
+	writeSeamSeed(t, s, ctx, "linear", "ENG")
+	if _, err := providersync.CarryTeamIDs(ctx, s.Conn, "org-1", time.Now().UTC(), false); err != nil {
+		t.Fatal(err)
+	}
+	h := newTestHandlers(s)
+	rec := writeSeamCall(t, h, h.deleteTeam, http.MethodDelete, "/api/v1/admin/teams/ENG", "ENG", map[string]any{})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("delete = %d %s", rec.Code, rec.Body.String())
+	}
+	if got := writeSeamActive(t, s, ctx); got != "" {
+		t.Errorf("active = %q after the delete, want none", got)
+	}
+	rec = writeSeamCall(t, h, h.deleteTeam, http.MethodDelete, "/api/v1/admin/teams/gh:", "gh:", map[string]any{})
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Errorf("delete of a prefix-only id = %d %s, want 422", rec.Code, rec.Body.String())
+	}
+}
+
+// An import names its ids for a provider: another provider's prefixed id is
+// refused, and the team it names is not written.
+func TestTheAdminImportRefusesAnotherProvidersPrefixedID(t *testing.T) {
+	s, ctx := writeSeamStore(t)
+	writeSeamSeedNative(t, s, ctx, "linear", "linear:ENG", "ENG")
+	rec := postImportBody(t, s, `{"on_conflict":"merge","teams":[{"provider_type":"jira","provider_team_id":"linear:ENG","name":"Jira impostor"}]}`)
+	var team string
+	if err := s.Conn.QueryRow(ctx, `SELECT concat(provider, '|', name, '|', ifNull(native_team_key, ''), '|', toString(is_active)) FROM teams FINAL WHERE org_id = 'org-1' AND id = 'linear:ENG'`).Scan(&team); err != nil {
+		t.Fatal(err)
+	}
+	if rec.Code != http.StatusUnprocessableEntity || team != "linear|Eng|ENG|1" {
+		t.Errorf("import = %d %s, team = %q; want 422 and linear:ENG unchanged", rec.Code, rec.Body.String(), team)
+	}
+}
+
+// An admin team and a pushed custom-system team are one kind of team, one
+// namespace: an admin write of the plain id of a pushed custom:eng addresses
+// that team (the last write wins) and keeps its origin; no second team
+// appears.
+func TestAnAdminWriteOfAPushedCustomTeamsIDAddressesThatTeam(t *testing.T) {
+	s, ctx := writeSeamStore(t)
+	writeSeamSeedNative(t, s, ctx, "", "custom:eng", "eng")
+	h := newTestHandlers(s)
+	for _, payload := range []map[string]any{{"team_id": "eng", "name": "Admin Eng"}, {"team_id": "custom:eng", "name": "Admin Eng 2"}} {
+		rec := writeSeamCall(t, h, h.createOrUpdateTeam, http.MethodPost, "/api/v1/admin/teams", "", payload)
+		if rec.Code != http.StatusOK || decodeBody(t, rec)["team_id"] != "custom:eng" {
+			t.Fatalf("write %v = %d %s, want 200 with team_id custom:eng", payload, rec.Code, rec.Body.String())
+		}
+	}
+	if got := writeSeamActive(t, s, ctx); got != "custom:eng" {
+		t.Errorf("active = %q, want custom:eng only", got)
+	}
+	if got := writeSeamOrigin(t, s, ctx, "custom:eng"); got != "|eng|Admin Eng 2|1" {
+		t.Errorf("custom:eng = %q, want the pushed team renamed, origin kept", got)
+	}
+}
+
+// writeSeamOrigin is a team's provider and native key, "none" for no row.
+func writeSeamOrigin(t *testing.T, s Store, ctx context.Context, id string) string {
+	t.Helper()
+	var got string
+	if err := s.Conn.QueryRow(ctx, `SELECT concat(provider, '|', ifNull(native_team_key, ''), '|', name, '|', toString(is_active)) FROM teams FINAL WHERE org_id = 'org-1' AND id = ?`, id).Scan(&got); err != nil {
+		return "none"
+	}
+	return got
+}
+
+// An admin edit of a provider team addresses that team and keeps its
+// origin: a rename, a member confirmation and an edit by the bare id leave
+// linear:ENG a linear team with its native key.
+func TestAnAdminEditOfAProviderTeamKeepsItsOrigin(t *testing.T) {
+	s, ctx := writeSeamStore(t)
+	writeSeamSeedNative(t, s, ctx, "linear", "linear:ENG", "ENG")
+	h := newTestHandlers(s)
+	for _, rec := range []*httptest.ResponseRecorder{
+		writeSeamCall(t, h, h.updateTeam, http.MethodPatch, "/api/v1/admin/teams/linear:ENG", "linear:ENG", map[string]any{"name": "Renamed"}),
+		writeSeamCall(t, h, h.confirmMembers, http.MethodPost, "/api/v1/admin/teams/linear:ENG/confirm-members", "linear:ENG",
+			map[string]any{"team_id": "linear:ENG", "links": []map[string]any{{"provider": "github", "provider_identity": "octo", "canonical_id": "m1", "action": "create"}}}),
+		writeSeamCall(t, h, h.createOrUpdateTeam, http.MethodPost, "/api/v1/admin/teams", "", map[string]any{"team_id": "ENG", "name": "Renamed"}),
+	} {
+		if rec.Code != http.StatusOK {
+			t.Fatalf("admin edit = %d %s", rec.Code, rec.Body.String())
+		}
+	}
+	if got := writeSeamOrigin(t, s, ctx, "linear:ENG"); got != "linear|ENG|Renamed|1" {
+		t.Errorf("linear:ENG = %q, want linear|ENG|Renamed|1", got)
+	}
+	if got := writeSeamActive(t, s, ctx); got != "linear:ENG" {
+		t.Errorf("active = %q, want linear:ENG only", got)
+	}
+}
+
+// A new admin team is a custom team: custom:<id>, stored with no provider
+// like a pushed custom team.
+func TestANewAdminTeamIsACustomTeam(t *testing.T) {
+	s, ctx := writeSeamStore(t)
+	h := newTestHandlers(s)
+	if rec := writeSeamCall(t, h, h.createOrUpdateTeam, http.MethodPost, "/api/v1/admin/teams", "", map[string]any{"team_id": "eng", "name": "Eng"}); rec.Code != http.StatusOK {
+		t.Fatalf("create = %d %s", rec.Code, rec.Body.String())
+	}
+	if got := writeSeamOrigin(t, s, ctx, "custom:eng"); got != "||Eng|1" {
+		t.Errorf("custom:eng = %q, want ||Eng|1", got)
+	}
+}
+
+// An admin reference to an existing team by its bare id: one active holder
+// is that team, two are a conflict (409), none is not found (404); nothing
+// is written on a refusal.
+func TestAnAdminReferenceByABareIDResolvesToTheOneExistingTeam(t *testing.T) {
+	s, ctx := writeSeamStore(t)
+	writeSeamSeedNative(t, s, ctx, "linear", "linear:ENG", "ENG")
+	writeSeamSeedNative(t, s, ctx, "linear", "linear:OPS", "OPS")
+	writeSeamSeedNative(t, s, ctx, "gitlab", "gl:OPS", "OPS")
+	h := newTestHandlers(s)
+	for _, c := range []struct {
+		id   string
+		code int
+	}{{"ENG", http.StatusOK}, {"OPS", http.StatusConflict}, {"NONE", http.StatusNotFound}} {
+		rec := writeSeamCall(t, h, h.updateTeam, http.MethodPatch, "/api/v1/admin/teams/"+c.id, c.id, map[string]any{"name": "Renamed"})
+		if rec.Code != c.code {
+			t.Errorf("PATCH %s = %d %s, want %d", c.id, rec.Code, rec.Body.String(), c.code)
+		}
+	}
+	if got := writeSeamOrigin(t, s, ctx, "linear:ENG"); got != "linear|ENG|Renamed|1" {
+		t.Errorf("linear:ENG = %q, want the one holder renamed", got)
+	}
+	for _, id := range []string{"linear:OPS", "gl:OPS"} {
+		if got := writeSeamOrigin(t, s, ctx, id); !strings.HasSuffix(got, "|Eng|1") {
+			t.Errorf("%s = %q, want unchanged", id, got)
+		}
+	}
+	if got := writeSeamActive(t, s, ctx); got != "gl:OPS,linear:ENG,linear:OPS" {
+		t.Errorf("active = %q, want no new team", got)
+	}
+}
+
+// A Jira project-as-team row holds a bare id that no write seam resolves to
+// (it is not a prefixed team): an admin write naming that id is a new admin
+// team, custom:<id>, and the retire of the project-as-team class retires
+// the row and leaves the admin team.
+func TestAnAdminWriteNamingAProjectAsTeamIDIsANewAdminTeam(t *testing.T) {
+	s, ctx := writeSeamStore(t)
+	writeSeamSeedNative(t, s, ctx, "jira", "PROJ", "PROJ")
+	h := newTestHandlers(s)
+	if rec := writeSeamCall(t, h, h.createOrUpdateTeam, http.MethodPost, "/api/v1/admin/teams", "", map[string]any{"team_id": "PROJ", "name": "Admin Proj"}); rec.Code != http.StatusOK {
+		t.Fatalf("create = %d %s", rec.Code, rec.Body.String())
+	}
+	if got := writeSeamOrigin(t, s, ctx, "PROJ"); got != "jira|PROJ|Eng|1" {
+		t.Errorf("PROJ = %q, want the project-as-team row unchanged", got)
+	}
+	if _, err := providersync.RetireJiraProjectAsTeamRows(ctx, s.Conn, "org-1", time.Now().UTC(), false); err != nil {
+		t.Fatal(err)
+	}
+	for id, want := range map[string]string{"PROJ": "jira|PROJ|Eng|0", "custom:PROJ": "||Admin Proj|1"} {
+		if got := writeSeamOrigin(t, s, ctx, id); got != want {
+			t.Errorf("%s = %q, want %q", id, got, want)
+		}
+	}
+}
+
+// A new imported team takes its provider_type as its origin (a custom one
+// is a custom team, no provider); an import of an existing team keeps that
+// team's origin.
+func TestAnImportedTeamHasItsProviderOrigin(t *testing.T) {
+	s, ctx := writeSeamStore(t)
+	writeSeamSeedNative(t, s, ctx, "jira", "jira:OLD", "OLD")
+	if rec := postImportBody(t, s, `{"on_conflict":"merge","teams":[{"provider_type":"linear","provider_team_id":"NEW","name":"New"},{"provider_type":"custom","provider_team_id":"web","name":"Web"},{"provider_type":"jira","provider_team_id":"OLD","name":"Imported Old"}]}`); rec.Code != http.StatusOK {
+		t.Fatalf("import = %d %s", rec.Code, rec.Body.String())
+	}
+	for id, want := range map[string]string{"linear:NEW": "linear||New|1", "custom:web": "||Web|1", "jira:OLD": "jira|OLD|Imported Old|1"} {
+		if got := writeSeamOrigin(t, s, ctx, id); got != want {
+			t.Errorf("%s = %q, want %q", id, got, want)
+		}
+	}
+}
+
+// An admin custom team is stored with no provider, as a pushed custom team
+// is: the attribution cascade takes it for a project key of an item of every
+// provider.
+func TestAnAdminCustomTeamHoldsAProjectKeyForEveryProvider(t *testing.T) {
+	s, ctx := writeSeamStore(t)
+	h := newTestHandlers(s)
+	if rec := writeSeamCall(t, h, h.createOrUpdateTeam, http.MethodPost, "/api/v1/admin/teams", "", map[string]any{"team_id": "eng", "name": "Eng", "project_keys": []string{"ENGKEY"}}); rec.Code != http.StatusOK {
+		t.Fatalf("create = %d %s", rec.Code, rec.Body.String())
+	}
+	teams, err := teamattribution.ClickHouseFactSource{Conn: s.Conn}.LoadTeams(ctx, "org-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	derived := teamattribution.NewGitHubWorkItemDerivationContext(teamattribution.GithubWorkItemDerivationFacts{Teams: teams})
+	for _, provider := range []string{"github", "gitlab", "jira", "linear"} {
+		key := "ENGKEY"
+		candidates := derived.IssueProjectCandidates(teamattribution.GithubWorkItemDerivationSubject{Provider: provider, ProjectKey: &key})
+		if len(candidates) != 1 || candidates[0].TeamID == nil || *candidates[0].TeamID != "custom:eng" {
+			t.Errorf("%s item: candidates = %+v, want custom:eng", provider, candidates)
+		}
+	}
+}

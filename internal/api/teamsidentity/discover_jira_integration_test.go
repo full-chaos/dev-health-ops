@@ -60,25 +60,25 @@ func TestDiscoverJiraListsOnlyStoredActiveAtlassianTeams(t *testing.T) {
 	seed := []teamInsertRow{
 		// An active Atlassian team: the only kind discovery lists.
 		{ID: "jira:0a1b2c3d-platform", Name: "Platform", Description: &description, Members: []string{"a@acme.test", "b@acme.test"},
-			ProjectKeys: []string{"ENG", "OPS"}, IsActive: true, OrgID: orgID, Provider: "jira", NativeTeamKey: ari("0a1b2c3d-platform")},
+			ProjectKeys: []string{"ENG", "OPS"}, IsActive: true, OrgID: orgID, Origin: teamOrigin{Provider: "jira", NativeTeamKey: ari("0a1b2c3d-platform")}},
 		// An archived Atlassian team.
-		{ID: "jira:9f8e7d6c-archived", Name: "Archived", IsActive: false, OrgID: orgID, Provider: "jira", NativeTeamKey: ari("9f8e7d6c-archived")},
+		{ID: "jira:9f8e7d6c-archived", Name: "Archived", IsActive: false, OrgID: orgID, Origin: teamOrigin{Provider: "jira", NativeTeamKey: ari("9f8e7d6c-archived")}},
 		// A project-as-team row (the retired class), still active in this store.
-		{ID: "ENG", Name: "Engineering", ProjectKeys: []string{"ENG"}, IsActive: true, OrgID: orgID, Provider: "jira", NativeTeamKey: native("ENG")},
+		{ID: "ENG", Name: "Engineering", ProjectKeys: []string{"ENG"}, IsActive: true, OrgID: orgID, Origin: teamOrigin{Provider: "jira", NativeTeamKey: native("ENG")}},
 		// An admin team whose id equals a project key: provider "" and no native key.
-		{ID: "OPS", Name: "Operations", IsActive: true, OrgID: orgID, Provider: ""},
+		{ID: "OPS", Name: "Operations", IsActive: true, OrgID: orgID, Origin: teamOrigin{Provider: ""}},
 		// Active jira rows with a team ARI whose ids hold another provider's
 		// key: not Jira teams.
-		{ID: "gh:1c1c1c1c-github", Name: "GitHub-keyed", IsActive: true, OrgID: orgID, Provider: "jira", NativeTeamKey: ari("1c1c1c1c-github")},
-		{ID: "gl:2d2d2d2d-gitlab", Name: "GitLab-keyed", IsActive: true, OrgID: orgID, Provider: "jira", NativeTeamKey: ari("2d2d2d2d-gitlab")},
-		{ID: "linear:3e3e3e3e-linear", Name: "Linear-keyed", IsActive: true, OrgID: orgID, Provider: "jira", NativeTeamKey: ari("3e3e3e3e-linear")},
+		{ID: "gh:1c1c1c1c-github", Name: "GitHub-keyed", IsActive: true, OrgID: orgID, Origin: teamOrigin{Provider: "jira", NativeTeamKey: ari("1c1c1c1c-github")}},
+		{ID: "gl:2d2d2d2d-gitlab", Name: "GitLab-keyed", IsActive: true, OrgID: orgID, Origin: teamOrigin{Provider: "jira", NativeTeamKey: ari("2d2d2d2d-gitlab")}},
+		{ID: "linear:3e3e3e3e-linear", Name: "Linear-keyed", IsActive: true, OrgID: orgID, Origin: teamOrigin{Provider: "jira", NativeTeamKey: ari("3e3e3e3e-linear")}},
 		// Another organization's Atlassian team.
-		{ID: "jira:5e5e5e5e-other", Name: "Other", IsActive: true, OrgID: "org-2", Provider: "jira", NativeTeamKey: ari("5e5e5e5e-other")},
+		{ID: "jira:5e5e5e5e-other", Name: "Other", IsActive: true, OrgID: "org-2", Origin: teamOrigin{Provider: "jira", NativeTeamKey: ari("5e5e5e5e-other")}},
 	}
 	for _, row := range seed {
 		row.TeamUUID = teamUUID(row.OrgID, row.ID)
 		row.UpdatedAt = now
-		if err := store.insertTeamRow(ctx, row); err != nil {
+		if err := seedTeamRow(ctx, store, row); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -133,4 +133,23 @@ func TestDiscoverJiraListsOnlyStoredActiveAtlassianTeams(t *testing.T) {
 			}
 		}
 	}
+}
+
+// seedTeamRow writes a team row as a store holds it, a bare legacy id
+// included: insertTeamRow refuses a bare id.
+func seedTeamRow(ctx context.Context, store Store, row teamInsertRow) error {
+	isActive := uint8(0)
+	if row.IsActive {
+		isActive = 1
+	}
+	return store.Conn.Exec(ctx, `INSERT INTO teams (id, team_uuid, name, description, members, manual_members, project_keys, repo_patterns, is_active, updated_at, last_synced, org_id, provider, native_team_key, parent_team_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		row.ID, row.TeamUUID, row.Name, row.Description, nonNil(row.Members), nonNil(row.ManualMembers), nonNil(row.ProjectKeys), nonNil(row.RepoPatterns),
+		isActive, row.UpdatedAt, row.UpdatedAt, row.OrgID, row.Origin.Provider, row.Origin.NativeTeamKey, row.Origin.ParentTeamID)
+}
+
+func nonNil(values []string) []string {
+	if values == nil {
+		return []string{}
+	}
+	return values
 }

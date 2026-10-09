@@ -469,19 +469,18 @@ func (s Store) projectTeam(ctx context.Context, orgID string, team discoveredTea
 		manualMembers := []string{}
 		members := []string{}
 		teamUUIDValue := teamUUID(orgID, observed.TeamID)
+		// A new imported team takes its provider_type as its origin, not the
+		// legacy Python provider "" (a custom import is a custom team, stored
+		// with no provider: teamid.StoredProvider); native_team_key stays NULL
+		// on the teams row (the observation row above carries it). An
+		// existing team keeps its own origin.
+		origin := teamOrigin{Provider: teamid.StoredProvider(observed.Provider), ParentTeamID: observed.ParentTeamID}
 		if existing != nil {
 			manualMembers = existing.ManualMembers
 			members = existing.Members
 			teamUUIDValue = existing.TeamUUID
+			origin = existing.origin
 		}
-		// import_teams' own catalog_row (clickhouse_team_admin.py:413-425)
-		// deliberately writes provider="" and native_team_key=None on the
-		// TEAMS TABLE row -- NOT the discovered team's real provider/
-		// native_team_key (those ARE carried on the observation row
-		// above). An admin-imported team must never be silently reclaimed
-		// or overwritten by a later real provider sync matching on
-		// provider+native_team_key; only the observation history remembers
-		// where it came from.
 		// The catalog row takes the RAW association values (Python passes
 		// `associations.get("project_keys", [])` straight into the insert,
 		// only the observation goes through _list_field), so what
@@ -498,8 +497,7 @@ func (s Store) projectTeam(ctx context.Context, orgID string, team discoveredTea
 			ID: observed.TeamID, TeamUUID: teamUUIDValue, Name: stringPtrOr(observed.Name, observed.TeamID),
 			Description: observed.Description, Members: members, ManualMembers: manualMembers,
 			ProjectKeys: catalogProjectKeys, RepoPatterns: catalogRepoPatterns, IsActive: true,
-			OrgID: orgID, Provider: "", NativeTeamKey: nil, ParentTeamID: observed.ParentTeamID,
-			UpdatedAt: now,
+			OrgID: orgID, Origin: origin, UpdatedAt: now,
 		}); err != nil {
 			return projectTeamResult{}, err
 		}

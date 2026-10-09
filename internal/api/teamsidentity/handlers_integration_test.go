@@ -60,7 +60,7 @@ func TestCreateOrUpdateIdentityRejectsUnknownTeamID(t *testing.T) {
 	h := newTestHandlers(store)
 
 	recorder := callWithBody(t, h, h.createOrUpdateIdentity, http.MethodPost, "/api/v1/admin/identities", "org-1",
-		map[string]any{"canonical_id": "carol", "team_ids": []string{"does-not-exist"}})
+		map[string]any{"canonical_id": "carol", "team_ids": []string{"custom:does-not-exist"}})
 	if recorder.Code != http.StatusNotFound {
 		t.Fatalf("status=%d want=404 body=%s", recorder.Code, recorder.Body.String())
 	}
@@ -116,25 +116,25 @@ func TestCreateOrUpdateIdentityReconcilesTeamMembership(t *testing.T) {
 	store, ctx := startTeamsIdentitiesStore(t)
 	h := newTestHandlers(store)
 
-	if _, err := store.CreateOrUpdateTeam(ctx, "org-1", TeamWrite{TeamID: "team-x", Name: "Team X"}); err != nil {
+	if _, err := store.CreateOrUpdateTeam(ctx, "org-1", TeamWrite{Origin: "custom", TeamID: "custom:team-x", Name: "Team X"}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.CreateOrUpdateTeam(ctx, "org-1", TeamWrite{TeamID: "team-y", Name: "Team Y"}); err != nil {
+	if _, err := store.CreateOrUpdateTeam(ctx, "org-1", TeamWrite{Origin: "custom", TeamID: "custom:team-y", Name: "Team Y"}); err != nil {
 		t.Fatal(err)
 	}
 	// A pre-existing, unrelated member of team-x that reconciliation must
 	// never touch.
-	if _, err := store.AddMembers(ctx, "org-1", "team-x", []string{"preexisting@example.com"}); err != nil {
+	if _, err := store.AddMembers(ctx, "org-1", "custom:team-x", []string{"preexisting@example.com"}); err != nil {
 		t.Fatal(err)
 	}
 
 	created := callWithBody(t, h, h.createOrUpdateIdentity, http.MethodPost, "/api/v1/admin/identities", "org-1",
-		map[string]any{"canonical_id": "frank", "email": "frank@example.com", "team_ids": []string{"team-x"}})
+		map[string]any{"canonical_id": "frank", "email": "frank@example.com", "team_ids": []string{"custom:team-x"}})
 	if created.Code != http.StatusOK {
 		t.Fatalf("create status=%d body=%s", created.Code, created.Body.String())
 	}
 
-	teamX, err := store.GetTeam(ctx, "org-1", "team-x")
+	teamX, err := store.GetTeam(ctx, "org-1", "custom:team-x")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -148,12 +148,12 @@ func TestCreateOrUpdateIdentityReconcilesTeamMembership(t *testing.T) {
 	// Move frank from team-x to team-y, and change his email (the facet
 	// tracked). Both the old team AND the old facet must be cleaned up.
 	updated := callWithBody(t, h, h.createOrUpdateIdentity, http.MethodPost, "/api/v1/admin/identities", "org-1",
-		map[string]any{"canonical_id": "frank", "email": "frank-new@example.com", "team_ids": []string{"team-y"}})
+		map[string]any{"canonical_id": "frank", "email": "frank-new@example.com", "team_ids": []string{"custom:team-y"}})
 	if updated.Code != http.StatusOK {
 		t.Fatalf("update status=%d body=%s", updated.Code, updated.Body.String())
 	}
 
-	teamXAfter, err := store.GetTeam(ctx, "org-1", "team-x")
+	teamXAfter, err := store.GetTeam(ctx, "org-1", "custom:team-x")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -164,7 +164,7 @@ func TestCreateOrUpdateIdentityReconcilesTeamMembership(t *testing.T) {
 		t.Fatalf("team-x must still keep the pre-existing member: %+v", teamXAfter.Members)
 	}
 
-	teamY, err := store.GetTeam(ctx, "org-1", "team-y")
+	teamY, err := store.GetTeam(ctx, "org-1", "custom:team-y")
 	if err != nil {
 		t.Fatal(err)
 	}

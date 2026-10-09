@@ -24,11 +24,12 @@ func orgStdinVerbs() map[string][]string {
 		"metrics partition-recompute": {"metrics", "partition-recompute", "--from", "2026-08-01", "--to", "2026-08-01",
 			"--family", "repo_user_commit", "--review-evidence", "testing"},
 		"providersync retire-jira-project-as-team": {"providersync", "retire-jira-project-as-team"},
+		"providersync carry-team-ids":              {"providersync", "carry-team-ids"},
 	}
 }
 
 // orgStdinOnlyVerbs have no --org flag: the organization comes from stdin only.
-var orgStdinOnlyVerbs = map[string]bool{"providersync retire-jira-project-as-team": true}
+var orgStdinOnlyVerbs = map[string]bool{"providersync retire-jira-project-as-team": true, "providersync carry-team-ids": true}
 
 // The test table and the preflight set name the same verbs.
 func TestOrgStdinVerbsAreThePreflightSet(t *testing.T) {
@@ -184,7 +185,7 @@ func TestOrgStdinReachesSameRequestAndStaysOutOfOutput(t *testing.T) {
 
 // --dry-run with stdin: nothing printed holds the id either.
 func TestOrgStdinDryRunPrintsNoOrg(t *testing.T) {
-	for _, verb := range []string{"metrics partition-recompute", "providersync retire-jira-project-as-team"} {
+	for _, verb := range []string{"metrics partition-recompute", "providersync retire-jira-project-as-team", "providersync carry-team-ids"} {
 		runtime := commandRuntimeWithAuditor(t, commandAuthorizer{}, &refusingAuditor{})
 		runtime.stdin = strings.NewReader(orgStdinTestOrg + "\n")
 		code, stdout, stderr := runOrgStdinVerb(runtime, orgStdinVerbs()[verb], "--org-stdin", "--dry-run")

@@ -22,6 +22,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2"
@@ -30,6 +31,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/api/pybody"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
+	"github.com/full-chaos/dev-health-ops/internal/teamid"
 )
 
 // teamNamespace/identityNamespace mirror Python's uuid.uuid5(NAMESPACE_URL,
@@ -67,6 +69,20 @@ type Team struct {
 	IsActive      bool
 	UpdatedAt     time.Time
 	OrgID         string
+
+	origin teamOrigin
+}
+
+// teamOrigin is where a stored team row comes from: its provider (the
+// integration that wrote it, as teamid.StoredProvider stores it: "" for a
+// custom team, pushed or the web admin's), its native key, parent and push
+// source. An admin write of an existing team keeps it; only a new team takes
+// the writer's origin.
+type teamOrigin struct {
+	Provider      string
+	NativeTeamKey *string
+	ParentTeamID  *string
+	SourceID      *uuid.UUID
 }
 
 // Identity mirrors ClickHouseIdentity's attribute surface.
@@ -88,7 +104,7 @@ type Store struct {
 	Conn driver.Conn
 }
 
-const teamSelectColumns = "id, team_uuid, name, description, members, project_keys, repo_patterns, is_active, updated_at, org_id, manual_members"
+const teamSelectColumns = "id, team_uuid, name, description, members, project_keys, repo_patterns, is_active, updated_at, org_id, manual_members, provider, native_team_key, parent_team_id, source_id"
 
 // queryTeams is _query_teams: teamID nil lists every (optionally
 // active-only) team; teamID non-nil scopes to one.
@@ -123,14 +139,16 @@ func (s Store) queryTeams(ctx context.Context, orgID string, teamID *string, act
 			members, projectKeys, repoPatterns, manual []string
 			isActive                                   uint8
 			updatedAt                                  time.Time
+			origin                                     teamOrigin
 		)
-		if err := rows.Scan(&id, &teamUUIDCol, &name, &description, &members, &projectKeys, &repoPatterns, &isActive, &updatedAt, &orgIDCol, &manual); err != nil {
+		if err := rows.Scan(&id, &teamUUIDCol, &name, &description, &members, &projectKeys, &repoPatterns, &isActive, &updatedAt, &orgIDCol, &manual,
+			&origin.Provider, &origin.NativeTeamKey, &origin.ParentTeamID, &origin.SourceID); err != nil {
 			return nil, fmt.Errorf("scan team row: %w", err)
 		}
 		teams = append(teams, Team{
 			ID: teamUUIDCol.String(), TeamUUID: teamUUIDCol, TeamID: id, Name: name, Description: description,
 			Members: members, ManualMembers: manual, ProjectKeys: projectKeys, RepoPatterns: repoPatterns,
-			IsActive: isActive != 0, UpdatedAt: updatedAt, OrgID: orgIDCol,
+			IsActive: isActive != 0, UpdatedAt: updatedAt, OrgID: orgIDCol, origin: origin,
 		})
 	}
 	return teams, rows.Err()
@@ -160,6 +178,9 @@ func (s Store) GetTeam(ctx context.Context, orgID, teamID string) (*Team, error)
 // Description has NO such fallback in Python (used exactly as given, nil
 // included) -- it is a plain *string here, always applied as given.
 type TeamWrite struct {
+	// Origin is the integration a NEW team is written for (the web admin
+	// passes teamid.Custom); an existing team keeps its own origin.
+	Origin        string
 	TeamID        string
 	Name          string
 	Description   *string
@@ -186,8 +207,11 @@ func (s Store) CreateOrUpdateTeam(ctx context.Context, orgID string, write TeamW
 		return Team{}, err
 	}
 	uuidValue := teamUUID(orgID, write.TeamID)
+	origin := teamOrigin{Provider: teamid.StoredProvider(write.Origin)}
 	if existing != nil {
-		uuidValue = existing.TeamUUID
+		uuidValue, origin = existing.TeamUUID, existing.origin
+	} else if strings.TrimSpace(write.Origin) == "" {
+		return Team{}, fmt.Errorf("create team %q: no origin", write.TeamID)
 	}
 	var existingMembers, existingManual []string
 	if existing != nil {
@@ -202,14 +226,14 @@ func (s Store) CreateOrUpdateTeam(ctx context.Context, orgID string, write TeamW
 	if err := s.insertTeamRow(ctx, teamInsertRow{
 		ID: write.TeamID, TeamUUID: uuidValue, Name: write.Name, Description: write.Description,
 		Members: resolvedMembers, ManualMembers: resolvedManual, ProjectKeys: resolvedProjects, RepoPatterns: resolvedRepos,
-		IsActive: true, OrgID: orgID, Provider: "", NativeTeamKey: nil, ParentTeamID: nil, UpdatedAt: now,
+		IsActive: true, OrgID: orgID, Origin: origin, UpdatedAt: now,
 	}); err != nil {
 		return Team{}, err
 	}
 	return Team{
 		ID: uuidValue.String(), TeamUUID: uuidValue, TeamID: write.TeamID, Name: write.Name, Description: write.Description,
 		Members: resolvedMembers, ManualMembers: resolvedManual, ProjectKeys: resolvedProjects, RepoPatterns: resolvedRepos,
-		IsActive: true, UpdatedAt: now, OrgID: orgID,
+		IsActive: true, UpdatedAt: now, OrgID: orgID, origin: origin,
 	}, nil
 }
 
@@ -248,7 +272,7 @@ func (s Store) SetMembers(ctx context.Context, orgID, teamID string, members []s
 	}
 	sortedMembers := sortedUnique(members)
 	write := TeamWrite{
-		TeamID: teamID, Name: existing.Name, Description: existing.Description,
+		Origin: existing.origin.Provider, TeamID: teamID, Name: existing.Name, Description: existing.Description,
 		RepoPatterns: ptrSlice(existing.RepoPatterns), ProjectKeys: ptrSlice(existing.ProjectKeys),
 		Members: &sortedMembers,
 	}
@@ -328,23 +352,26 @@ func (s Store) DeleteTeam(ctx context.Context, orgID, teamID string) (bool, erro
 }
 
 type teamInsertRow struct {
-	ID, Name                    string
-	TeamUUID                    uuid.UUID
-	Description                 *string
-	Members, ManualMembers      []string
-	ProjectKeys, RepoPatterns   []string
-	IsActive                    bool
-	OrgID, Provider             string
-	NativeTeamKey, ParentTeamID *string
-	UpdatedAt                   time.Time
+	ID, Name                  string
+	TeamUUID                  uuid.UUID
+	Description               *string
+	Members, ManualMembers    []string
+	ProjectKeys, RepoPatterns []string
+	IsActive                  bool
+	OrgID                     string
+	Origin                    teamOrigin
+	UpdatedAt                 time.Time
 }
 
 // insertTeamRow is storage/clickhouse.py's insert_teams -- one row, the
-// exact 16-column list that table's real writer uses (source_id is always
-// NULL from this admin surface; no caller here ever knows a customer-push
-// source).
+// exact 16-column list that table's real writer uses. provider,
+// native_team_key, parent_team_id and source_id are the row's origin: a
+// stored team's own on an edit, the writer's on a new team.
 func (s Store) insertTeamRow(ctx context.Context, row teamInsertRow) error {
 	const insertSQL = "INSERT INTO teams (id, team_uuid, name, description, members, manual_members, project_keys, repo_patterns, is_active, updated_at, last_synced, org_id, provider, native_team_key, parent_team_id, source_id)"
+	if err := checkKeyedTeamID(row.ID); err != nil {
+		return err
+	}
 	batch, err := s.Conn.PrepareBatch(ctx, insertSQL)
 	if err != nil {
 		return fmt.Errorf("prepare team insert: %w", err)
@@ -358,7 +385,7 @@ func (s Store) insertTeamRow(ctx context.Context, row teamInsertRow) error {
 	if err := batch.Append(
 		row.ID, row.TeamUUID, row.Name, row.Description, row.Members, row.ManualMembers,
 		row.ProjectKeys, row.RepoPatterns, isActive, row.UpdatedAt, now, row.OrgID,
-		row.Provider, row.NativeTeamKey, row.ParentTeamID, (*uuid.UUID)(nil),
+		row.Origin.Provider, row.Origin.NativeTeamKey, row.Origin.ParentTeamID, row.Origin.SourceID,
 	); err != nil {
 		return fmt.Errorf("append team row: %w", err)
 	}

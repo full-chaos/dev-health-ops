@@ -45,7 +45,7 @@ func TestRecordSyncRunDegradedLegsMergesIntoTheRunResult(t *testing.T) {
 		Detail: "Invalid Organization Ari: some-uuid Authorization: Bearer secret-token-value"}}}}
 	dispatcher := &nativeTeamAutoimportDispatcher{
 		resolveProvider: func(context.Context, string, string) (string, error) { return "linear", nil },
-		native:          map[string]providersync.TeamCatalogCollector{"linear": spy},
+		native:          carriedForTest(map[string]providersync.TeamCatalogCollector{"linear": spy}),
 		clients:         fakeAutoimportClientResolver{integrationID: "integration-1"},
 		selections:      fakeAutoimportSelectionsResolver{selections: providersync.TeamCatalogSelections{Teams: true}},
 		recordDegraded:  recordSyncRunDegradedLegs(pool),

@@ -95,6 +95,7 @@ var outOfScopeWriters = map[string]string{
 var unresolvedWriters = map[string]string{
 	"internal/providerfoundation/sinks.go":          "writes the normalized provider-entity schema (schema_version, dedupe_key, attributes_json), which no in-scope table has",
 	"internal/storage/postgres/authschema/apply.go": "PostgreSQL schema-migration ledger",
+	"internal/providersync/team_id_carry.go":        "the team id carry names its table at run time (INSERT INTO + write.table) and writes teams and link rows, team policies, drift changes and fallbacks, which are not in-scope tables; the one in-scope table it writes is identities (planIdentities), and that write is a whole-row copy: the row is read by FINAL with every column, only team_ids and updated_at change (updated_at is bumped past the stored stamp so the new version wins), so every other column is carried forward unchanged -- R1/R2 applied by hand like internal/api/teamsidentity/store.go, not through storedversion.Contract",
 	"internal/chmigrate/apply.go":                   "ClickHouse schema migrator: records schema_migrations, and seeds the head baseline's captured rows only into a table it has just created and that holds no row; the checked-in baseline seeds no table, and its drift test ties it to the Python chain",
 }
 

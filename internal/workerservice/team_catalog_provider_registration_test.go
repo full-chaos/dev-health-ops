@@ -40,44 +40,12 @@ func parseCmdFile(t *testing.T, filename string) *ast.File {
 }
 
 func TestNativeTeamCatalogCollectorsRegisterAllFourProviders(t *testing.T) {
-	file := parseCmdFile(t, "sync_dispatch.go")
-
+	// The registry builds without a live connection: its constructor is
+	// called directly, and every entry runs behind the carry
+	// (TestEveryRegisteredTeamCatalogCollectorCarriesFirstCensus).
 	var keys []string
-	ast.Inspect(file, func(node ast.Node) bool {
-		assign, ok := node.(*ast.AssignStmt)
-		if !ok {
-			return true
-		}
-		for i, lhs := range assign.Lhs {
-			ident, ok := lhs.(*ast.Ident)
-			if !ok || ident.Name != "nativeTeamCatalogCollectors" {
-				continue
-			}
-			if i >= len(assign.Rhs) {
-				continue
-			}
-			composite, ok := assign.Rhs[i].(*ast.CompositeLit)
-			if !ok {
-				continue
-			}
-			for _, elt := range composite.Elts {
-				kv, ok := elt.(*ast.KeyValueExpr)
-				if !ok {
-					continue
-				}
-				lit, ok := kv.Key.(*ast.BasicLit)
-				if !ok || lit.Kind != token.STRING {
-					continue
-				}
-				// Strip the surrounding quotes BasicLit.Value carries.
-				keys = append(keys, lit.Value[1:len(lit.Value)-1])
-			}
-		}
-		return true
-	})
-
-	if keys == nil {
-		t.Fatal("nativeTeamCatalogCollectors literal not found in sync_dispatch.go -- did the variable get renamed?")
+	for provider := range newNativeTeamCatalogCollectors(&teamCatalogCarryConn{}, nil) {
+		keys = append(keys, provider)
 	}
 	sort.Strings(keys)
 	want := []string{"github", "gitlab", "jira", "linear"}

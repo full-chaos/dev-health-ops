@@ -32,6 +32,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
+	"github.com/full-chaos/dev-health-ops/internal/providersync"
 	clickhousestore "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
 )
 
@@ -257,6 +258,11 @@ func runTeams(ctx context.Context, env cli.Env, d deps) int {
 	if len(rows.Teams) == 0 && !*allowEmpty {
 		return writeError(env.Stderr, cli.ExitFailure, "empty_result",
 			"the gateway returned no Atlassian teams; nothing was written. Check the organization id, the cloud id and the credentials, or pass --allow-empty if the organization really has no teams")
+	}
+	// This verb writes Atlassian team ids without a team catalog collector, so
+	// it carries the bare ids itself (providersync.CarryFirstTeamCatalogCollector).
+	if err := providersync.CarryTeamIDsBeforeWrite(ctx, conn, orgID, "atlassian_teams_cli"); err != nil {
+		return writeError(env.Stderr, cli.ExitFailure, "write_failed", redact(err))
 	}
 	result, err := atlassianteams.Write(ctx, conn, orgID, rows, selections)
 	if err != nil {

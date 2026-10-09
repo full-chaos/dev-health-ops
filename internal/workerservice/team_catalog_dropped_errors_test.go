@@ -51,7 +51,7 @@ func TestTeamAutoImportLogsTheCauseOfADroppedClientError(t *testing.T) {
 	observer := &fakeTeamCatalogObserver{}
 	dispatcher := &nativeTeamAutoimportDispatcher{
 		resolveProvider: func(context.Context, string, string) (string, error) { return "jira", nil },
-		native:          map[string]providersync.TeamCatalogCollector{"jira": &linearCollectorSpy{}},
+		native:          carriedForTest(map[string]providersync.TeamCatalogCollector{"jira": &linearCollectorSpy{}}),
 		clients:         failingClientResolver{err: cause},
 		selections:      fakeAutoimportSelectionsResolver{selections: providersync.TeamCatalogSelections{Teams: true}},
 		observer:        observer,
@@ -75,7 +75,7 @@ func TestTeamAutoImportLogsTheCauseOfADroppedCollectorError(t *testing.T) {
 	observer := &fakeTeamCatalogObserver{}
 	dispatcher := &nativeTeamAutoimportDispatcher{
 		resolveProvider: func(context.Context, string, string) (string, error) { return "linear", nil },
-		native:          map[string]providersync.TeamCatalogCollector{"linear": &linearCollectorSpy{err: errors.New("linear API rate limited")}},
+		native:          carriedForTest(map[string]providersync.TeamCatalogCollector{"linear": &linearCollectorSpy{err: errors.New("linear API rate limited")}}),
 		clients:         fakeAutoimportClientResolver{integrationID: "integration-1"},
 		selections:      fakeAutoimportSelectionsResolver{selections: providersync.TeamCatalogSelections{Teams: true}},
 		observer:        observer,
@@ -215,7 +215,7 @@ func TestTeamAutoImportLogOfADroppedErrorIsSanitized(t *testing.T) {
 	logs := captureWarnings(t)
 	dispatcher := &nativeTeamAutoimportDispatcher{
 		resolveProvider: func(context.Context, string, string) (string, error) { return "linear", nil },
-		native:          map[string]providersync.TeamCatalogCollector{"linear": &linearCollectorSpy{err: errors.New("request failed: Authorization: Bearer lin_api_secretvalue123456")}},
+		native:          carriedForTest(map[string]providersync.TeamCatalogCollector{"linear": &linearCollectorSpy{err: errors.New("request failed: Authorization: Bearer lin_api_secretvalue123456")}}),
 		clients:         fakeAutoimportClientResolver{integrationID: "integration-1"},
 		selections:      fakeAutoimportSelectionsResolver{selections: providersync.TeamCatalogSelections{Teams: true}},
 	}
@@ -235,7 +235,7 @@ func TestTeamAutoImportRecordsADegradedLegOnTheRun(t *testing.T) {
 	observer := &fakeTeamCatalogObserver{}
 	dispatcher := &nativeTeamAutoimportDispatcher{
 		resolveProvider: func(context.Context, string, string) (string, error) { return "linear", nil },
-		native:          map[string]providersync.TeamCatalogCollector{"linear": spy},
+		native:          carriedForTest(map[string]providersync.TeamCatalogCollector{"linear": spy}),
 		clients:         fakeAutoimportClientResolver{integrationID: "integration-1"},
 		selections:      fakeAutoimportSelectionsResolver{selections: providersync.TeamCatalogSelections{Teams: true}},
 		observer:        observer,
@@ -275,7 +275,7 @@ func TestEveryDegradedLegSinkIsFreeOfTheEchoedCredential(t *testing.T) {
 	observer := &fakeTeamCatalogObserver{}
 	dispatcher := &nativeTeamAutoimportDispatcher{
 		resolveProvider: func(context.Context, string, string) (string, error) { return "jira", nil },
-		native:          map[string]providersync.TeamCatalogCollector{"jira": combined},
+		native:          carriedForTest(map[string]providersync.TeamCatalogCollector{"jira": combined}),
 		clients:         credentialClientResolver{credential: credential},
 		selections:      fakeAutoimportSelectionsResolver{selections: providersync.TeamCatalogSelections{Teams: true}},
 		observer:        observer,

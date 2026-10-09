@@ -532,6 +532,10 @@ func (dispatcher *nativeTeamAutoimportDispatcher) TeamAutoImport(
 		dispatcher.observeDispatch(provider, jobruntime.TeamCatalogOutcomeNotImportCapable)
 		return nil
 	}
+	// A wiring bug, like the missing collector above: fail loud, never degrade.
+	if err := providersync.RequireCarried(collector); err != nil {
+		return err
+	}
 	// Non-strict: mirrors Python's run_team_autoimport, which catches every
 	// populator exception -- including auth/config resolution failures, not
 	// only the populate call itself -- and returns a zero summary rather

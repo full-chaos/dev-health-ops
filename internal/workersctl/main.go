@@ -1461,6 +1461,8 @@ func dispatchProvidersync(ctx context.Context, runtime *operatorRuntime, args []
 		return dispatchProvidersyncRetireJiraKeyProjects(ctx, runtime, args[1:], stdout, stderr)
 	case "retire-jira-project-as-team":
 		return dispatchProvidersyncRetireJiraProjectAsTeam(ctx, runtime, args[1:], stdout, stderr)
+	case "carry-team-ids":
+		return dispatchProvidersyncCarryTeamIDs(ctx, runtime, args[1:], stdout, stderr)
 	default:
 		return writeError(stderr, "invalid_request")
 	}
@@ -1615,6 +1617,40 @@ func dispatchProvidersyncRetireJiraProjectAsTeam(
 		return runProvidersyncCleanup(ctx, runtime, stdout, stderr, "retire_jira_project_as_team",
 			func(ctx context.Context, conn clickhousedriver.Conn) (any, error) {
 				return providersync.RetireJiraProjectAsTeamRows(ctx, conn, org, time.Now().UTC(), *dryRun)
+			})
+	}
+	if *dryRun {
+		return dryRunPreview(ctx, runtime, stderr, joboperator.ActionProvidersyncCleanup, "organization", org, perform)
+	}
+	return auditedWriteWith(ctx, runtime, stderr, mutation, joboperator.ActionProvidersyncCleanup, "organization", org, false, perform)
+}
+
+// dispatchProvidersyncCarryTeamIDs handles `providersync carry-team-ids`
+// (CHAOS-8940): it moves the bare team ids of ONE organization to their
+// provider-prefixed form now, the same providersync.CarryTeamIDs every
+// writer of a prefixed team id calls before it writes. The old team rows go
+// inactive and their open links are closed; nothing is deleted. Computed
+// attribution rows are not rewritten (a recompute writes them under the new
+// id). The organization comes from stdin only (--org-stdin; there is no
+// --org). It prints counts only. A second run reports zero.
+func dispatchProvidersyncCarryTeamIDs(
+	ctx context.Context, runtime *operatorRuntime, args []string, stdout, stderr io.Writer,
+) int {
+	flags := quietFlags("providersync carry-team-ids")
+	orgStdin := flags.Bool("org-stdin", false, orgStdinUsage)
+	dryRun := flags.Bool("dry-run", false, "count the team ids and the rows that name them (teams, memberships, ownership, observations, sync policies, drift changes, identities, fallbacks) that a real run would move, without writing anything")
+	mutation := addMutationFlags(flags)
+	if flags.Parse(args) != nil || flags.NArg() != 0 || !*orgStdin || !mutation.valid(*dryRun) {
+		return writeError(stderr, "invalid_request")
+	}
+	org, code := resolveOrgFlag(runtime, "", true, stderr)
+	if code != 0 {
+		return code
+	}
+	perform := func(ctx context.Context) int {
+		return runProvidersyncCleanup(ctx, runtime, stdout, stderr, "carry_team_ids",
+			func(ctx context.Context, conn clickhousedriver.Conn) (any, error) {
+				return providersync.CarryTeamIDs(ctx, conn, org, time.Now().UTC(), *dryRun)
 			})
 	}
 	if *dryRun {
@@ -3116,6 +3152,7 @@ var orgStdinVerbNames = map[string]bool{
 	"metrics daily-start":                      true,
 	"metrics partition-recompute":              true,
 	"providersync retire-jira-project-as-team": true,
+	"providersync carry-team-ids":              true,
 }
 
 // orgStdinVerb reports whether args (after the optional leading "workers")

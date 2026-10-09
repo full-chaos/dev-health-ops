@@ -11,6 +11,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/changefailure"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/daily/repouser"
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/prrework"
 )
 
 // repoUserCommitWindowDays mirrors job_daily.py's h_start_date = d - timedelta(days=29):
@@ -160,6 +161,24 @@ func (executor *RepoUserCommitExecutor) ComputeFamily(
 		mttrByRepo, reworkByRepo, singleOwnerByRepo, busFactorByRepo, giniByRepo,
 	)
 	repouser.ApplyChangeFailure(&result, dayStart, changeFailure, storedChangeFailure, computedAt)
+	// The rework ratio counts reviewed pull requests only, and only of a
+	// provider that has a changes-requested event.
+	repoProviders, err := LoadRepoProviders(ctx, executor.conn, run.OrganizationID, repoIDs)
+	if err != nil {
+		return 0, err
+	}
+	repouser.ApplyPRRework(&result, dayStart, prs, repoProviders)
+	var reworkTotal prrework.Counts
+	for _, row := range result.RepoMetrics {
+		if row.PRRework != nil {
+			reworkTotal = reworkTotal.Add(*row.PRRework)
+		}
+	}
+	slog.Default().DebugContext(ctx, "metrics daily: pull request rework counts",
+		"org_id", run.OrganizationID, "day", dayStart.Format(time.DateOnly), "partition_id", partition.ID,
+		"repositories", len(result.RepoMetrics), "repositories_with_provider", len(repoProviders),
+		"merged", reworkTotal.Merged, "reviewed", reworkTotal.Reviewed, "rework", reworkTotal.Rework,
+		"no_rework_signal", reworkTotal.NoSignal)
 
 	repoRows, userRows, commitRows, err := executor.writer.WriteResult(ctx, result, run.OrganizationID)
 	if err != nil {

@@ -1342,12 +1342,23 @@ var explainDriverRankOrderInsensitive = []OrderInsensitiveList{
 
 var explainParity = Options{
 	GoOnlyKeys: map[string]GoOnlyKey{
-		"data.source": {Ticket: "CHAOS-8910", Reason: "Go-only: the stored provider(s) behind the item; the Python reference never served it."},
+		"data.source":                      {Ticket: "CHAOS-8910", Reason: "Go-only: the stored provider(s) behind the item; the Python reference never served it."},
+		"data.drivers.has_data":            {Ticket: "CHAOS-9063", Reason: "Go-only: the driver holds a stored value in the current window; the Python reference never served it."},
+		"data.drivers.has_prior_data":      {Ticket: "CHAOS-9063", Reason: "Go-only: the driver holds a stored value in the comparison window; false = delta_pct is null. The Python reference never served it."},
+		"data.contributors.has_data":       {Ticket: "CHAOS-9063", Reason: "Go-only: the contributor holds a stored value in the current window; the Python reference never served it."},
+		"data.contributors.has_prior_data": {Ticket: "CHAOS-9063", Reason: "Go-only: a contributor row is read for the current window only, so it never has a comparison value; the Python reference never served it."},
 	},
 	NumericLeavesDeclared: true,
 	FloatTierB:            explainAggregateFloats,
 	OrderInsensitiveLists: explainDriverRankOrderInsensitive,
 	BaselineDefects: []BaselineDefect{
+		{
+			Ticket:             "CHAOS-9063",
+			Reason:             "the Python reference serves delta_pct 0.0 for a driver with no row in the comparison window (its LEFT JOIN default is 0) and 0.0 for every contributor row (explain.py's delta_value=0.0 literal). Both are a placeholder that stated a change nothing measured; the candidate serves null, with has_prior_data false beside it.",
+			Paths:              []string{"data.drivers.delta_pct", "data.contributors.delta_pct"},
+			Intermittent:       true,
+			IntermittentReason: "present only for a request whose response holds contributor rows, or a driver row that has no comparison-window row; an empty response shows no difference",
+		},
 		{
 			Ticket: "CHAOS-5813",
 			Reason: "repos and teams are both ReplacingMergeTree (repos since 000_raw_tables.sql, teams since 002_teams.sql); resolveScopeDisplayNames' own Python source (identity.py) reads neither with FINAL or any argMax dedup, so an unmerged physical version of a driver's or contributor's repo/team row can surface as a stale display_name for that id (or, transiently, an extra physical row read as part of the same scan). This port reads both FINAL. Go is correct.",

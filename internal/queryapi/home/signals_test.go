@@ -1,6 +1,7 @@
 package home
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -95,13 +96,58 @@ func TestRecommendationSignalRequiresTitle(t *testing.T) {
 
 func TestSelectConstraintPicksHighestDeltaPct(t *testing.T) {
 	deltas := []MetricDelta{
-		{Metric: "a", Label: "A", DeltaPct: -10, HasData: true},
-		{Metric: "b", Label: "B", DeltaPct: 30, HasData: true},
-		{Metric: "c", Label: "C", DeltaPct: 5, HasData: true},
+		{Metric: "a", Label: "A", DeltaPct: -10, HasData: true, HasPriorData: true},
+		{Metric: "b", Label: "B", DeltaPct: 30, HasData: true, HasPriorData: true},
+		{Metric: "c", Label: "C", DeltaPct: 5, HasData: true, HasPriorData: true},
 	}
-	got := SelectConstraint(deltas)
-	if got.Metric != "b" {
-		t.Fatalf("SelectConstraint = %q, want %q", got.Metric, "b")
+	got, ok := SelectConstraint(deltas)
+	if !ok || got.Metric != "b" {
+		t.Fatalf("SelectConstraint = %q (ok %v), want %q", got.Metric, ok, "b")
+	}
+}
+
+// A constraint is a claim about a move between two measured values: a metric
+// with data in one window only is not named, and with no such metric there is
+// no constraint (not "Cycle Time held steady 0%").
+func TestSelectConstraintNeedsTwoMeasuredWindows(t *testing.T) {
+	oneSided := []MetricDelta{
+		{Metric: "a", Label: "A", DeltaPct: 0, HasData: true, HasPriorData: false},
+		{Metric: "b", Label: "B", DeltaPct: 0, HasData: false, HasPriorData: true},
+	}
+	if got, ok := SelectConstraint(oneSided); ok {
+		t.Fatalf("SelectConstraint over one-sided deltas = %q, want none", got.Metric)
+	}
+	mixed := append(oneSided, MetricDelta{Metric: "c", Label: "C", DeltaPct: -5, HasData: true, HasPriorData: true})
+	if got, ok := SelectConstraint(mixed); !ok || got.Metric != "c" {
+		t.Fatalf("SelectConstraint = %q (ok %v), want the only complete delta c", got.Metric, ok)
+	}
+	if _, ok := topDeltaByMagnitude(oneSided); ok {
+		t.Fatal("topDeltaByMagnitude named a one-sided delta")
+	}
+}
+
+// A signal of a metric with a value in this window only keeps its current
+// value but states no prior value, no delta and no direction claim.
+func TestMetricSignalOfAOneSidedDeltaStatesNoMove(t *testing.T) {
+	deltas := []MetricDelta{
+		{Metric: "churn", Label: "Code Churn", Unit: "loc", Value: 5, DeltaPct: 0, HasData: true, HasPriorData: false},
+		{Metric: "cycle_time", Label: "Cycle Time", Unit: "days", Value: 4, DeltaPct: -20, HasData: true, HasPriorData: true},
+	}
+	signals := BuildMetricSignals(deltas, Filters{}, DataConfidence{})
+	byMetric := map[string]Signal{}
+	for _, signal := range signals {
+		byMetric[signal.Metric] = signal
+	}
+	one := byMetric["churn"]
+	if one.PriorValue != nil || one.Delta != nil || one.CurrentValue != "5 loc" {
+		t.Errorf("one-sided signal = current %q prior %v delta %v, want current 5 loc and no prior value and no delta", one.CurrentValue, one.PriorValue, one.Delta)
+	}
+	if strings.Contains(one.Title, "flat") || strings.Contains(one.WhyItMatters, "flat") || strings.Contains(one.Title, "steady") {
+		t.Errorf("one-sided signal claims a trend: %q / %q", one.Title, one.WhyItMatters)
+	}
+	two := byMetric["cycle_time"]
+	if two.PriorValue == nil || two.Delta == nil || *two.Delta != "-20%" {
+		t.Errorf("two-sided signal = prior %v delta %v, want a prior value and -20%%", two.PriorValue, two.Delta)
 	}
 }
 
@@ -158,7 +204,7 @@ func TestGroupThousands(t *testing.T) {
 
 // The signal a caller reads carries the grouped value, current and prior.
 func TestBuildMetricSignalsServesGroupedValues(t *testing.T) {
-	deltas := []MetricDelta{{Metric: "churn", Label: "Code Churn", Unit: "loc", Value: 3387254, DeltaPct: 25, HasData: true}}
+	deltas := []MetricDelta{{Metric: "churn", Label: "Code Churn", Unit: "loc", Value: 3387254, DeltaPct: 25, HasData: true, HasPriorData: true}}
 	signals := BuildMetricSignals(deltas, Filters{Scope: ScopeFilter{Level: "org"}}, DataConfidence{})
 	if len(signals) != 1 {
 		t.Fatalf("signals = %d, want 1", len(signals))

@@ -350,18 +350,22 @@ func BuildResponse(ctx context.Context, chClient QueryClient, pgClient PGQueryCl
 		})
 	}
 
-	constraintMetric := SelectConstraint(deltas)
-	constraint := ConstraintCard{
-		Title: "This week's constraint: " + constraintMetric.Label,
-		Claim: fmt.Sprintf("%s %s %s over the last %d days.",
-			constraintMetric.Label, direction(constraintMetric.DeltaPct), formatDeltaWords(constraintMetric.DeltaPct), f.Time.RangeDays),
-		Evidence: []ConstraintEvidence{
-			{Label: "Drill into " + constraintMetric.Label, Link: evidenceLink(constraintMetric.Metric, f)},
-		},
-		Experiments: []string{
-			"Rebalance reviewer rotation to reduce queueing.",
-			"Set WIP limits per team and auto-alert at saturation.",
-		},
+	// A constraint is a claim about a move between two measured values: none
+	// is made when no metric has both windows (CHAOS-9063).
+	var constraintCard *ConstraintCard
+	if constraintMetric, ok := SelectConstraint(deltas); ok {
+		constraintCard = &ConstraintCard{
+			Title: "This week's constraint: " + constraintMetric.Label,
+			Claim: fmt.Sprintf("%s %s %s over the last %d days.",
+				constraintMetric.Label, direction(constraintMetric.DeltaPct), formatDeltaWords(constraintMetric.DeltaPct), f.Time.RangeDays),
+			Evidence: []ConstraintEvidence{
+				{Label: "Drill into " + constraintMetric.Label, Link: evidenceLink(constraintMetric.Metric, f)},
+			},
+			Experiments: []string{
+				"Rebalance reviewer rotation to reduce queueing.",
+				"Set WIP limits per team and auto-alert at saturation.",
+			},
+		}
 	}
 
 	events := []EventItem{}
@@ -395,7 +399,7 @@ func BuildResponse(ctx context.Context, chClient QueryClient, pgClient PGQueryCl
 		ReworkThemeAllocation: reworkAllocation,
 		Summary:               summary,
 		Tiles:                 tiles(),
-		Constraint:            &constraint,
+		Constraint:            constraintCard,
 		Events:                events,
 		HealthState:           healthState,
 		Signals:               signals,
@@ -472,7 +476,7 @@ func topDeltaByMagnitude(deltas []MetricDelta) (MetricDelta, bool) {
 	var bestMag float64
 	found := false
 	for _, d := range deltas {
-		if !d.HasData {
+		if !deltarule.Complete(d.HasData, d.HasPriorData) {
 			continue
 		}
 		mag := absFloat(d.DeltaPct)

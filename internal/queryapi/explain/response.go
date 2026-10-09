@@ -226,14 +226,15 @@ func BuildExplainResponse(ctx context.Context, reader *Reader, orgID string, par
 
 	driverModels := make([]Contributor, 0, len(drivers))
 	for _, row := range drivers {
-		driverModels = append(driverModels, buildContributor(row, params.Metric, params.ScopeLevel, primaryID, config.Transform, displayNames, row.DeltaPct))
+		driverModels = append(driverModels, buildContributor(row, params.Metric, params.ScopeLevel, primaryID, config.Transform, displayNames))
 	}
 
 	contributorModels := make([]Contributor, 0, len(contributors))
 	for _, row := range contributors {
-		// explain.py:240: delta_value=0.0 literal -- a contributor row
-		// never carries its own delta (only a driver row does).
-		contributorModels = append(contributorModels, buildContributor(row, params.Metric, params.ScopeLevel, primaryID, config.Transform, displayNames, 0.0))
+		// explain.py:240 serves delta_value=0.0 for a contributor row: it
+		// never carries its own delta (only a driver row does), and the row
+		// is read for the current window only, so it serves none (null).
+		contributorModels = append(contributorModels, buildContributor(row, params.Metric, params.ScopeLevel, primaryID, config.Transform, displayNames))
 	}
 
 	// CHAOS-8103 (Go-only fields). Repositories: the contributor rows of a
@@ -338,7 +339,7 @@ func collectRowIDs(drivers, contributors []metricRow) []string {
 }
 
 // buildContributor ports explain.py's _build_contributor (282-312).
-func buildContributor(row metricRow, metric, scopeLevel, primaryID string, transform func(float64) float64, displayNames map[string]string, deltaValue float64) Contributor {
+func buildContributor(row metricRow, metric, scopeLevel, primaryID string, transform func(float64) float64, displayNames map[string]string) Contributor {
 	scopeID := row.ID
 	resolved, hasResolved := displayNames[scopeID]
 	var label string
@@ -357,7 +358,9 @@ func buildContributor(row metricRow, metric, scopeLevel, primaryID string, trans
 		Label:        label,
 		DisplayName:  displayName,
 		Value:        safeTransform(transform, rawValue),
-		DeltaPct:     deltaValue,
+		DeltaPct:     row.DeltaPct,
+		HasData:      row.HasData,
+		HasPriorData: row.HasPriorData,
 		EvidenceLink: fmt.Sprintf("/api/v1/drilldown/prs?metric=%s&scope_type=%s&scope_id=%s", metric, scopeLevel, primaryID),
 	}
 }

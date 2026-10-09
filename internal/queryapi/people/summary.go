@@ -643,7 +643,16 @@ func metricLink(personID, metric string, rangeDays, compareDays int) string {
 // personMetrics' own declaration order) -- sort.SliceStable, not
 // sort.Slice, for the same reason.
 func narrativeForDeltas(deltas []PersonDelta, personID string, rangeDays, compareDays int) []SummarySentence {
-	ranked := append([]PersonDelta(nil), deltas...)
+	// Only a delta that states a move between two measured values can be named
+	// (deltarule.Complete): "held steady" is a claim, and a metric with no value
+	// in a window has not held anything (CHAOS-9063; the Python original names
+	// the 0 placeholder).
+	ranked := make([]PersonDelta, 0, len(deltas))
+	for _, delta := range deltas {
+		if deltarule.Complete(delta.HasData, delta.HasPriorData) {
+			ranked = append(ranked, delta)
+		}
+	}
 	sort.SliceStable(ranked, func(i, j int) bool {
 		return math.Abs(ranked[i].DeltaPct) > math.Abs(ranked[j].DeltaPct)
 	})

@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/api/pytime"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/deltarule"
 	"regexp"
 	"sort"
 	"strconv"
@@ -371,12 +372,19 @@ func BuildMetricSignals(deltas []MetricDelta, f Filters, dataConfidence DataConf
 		evidenceCount := len(delta.Spark)
 		impact := metricImpact(delta.Metric, delta.DeltaPct)
 
-		var priorValueStr *string
-		if prior, ok := priorValue(delta.Value, delta.DeltaPct); ok {
-			s := formatValue(prior, delta.Unit)
-			priorValueStr = &s
+		// The prior value and the delta are derived from the delta, so they
+		// exist only when the delta states a move between two measured values
+		// (deltarule): a window without a prior value has none, and is not
+		// "flat" or "+0%" (CHAOS-9063).
+		complete := deltarule.Complete(delta.HasData, delta.HasPriorData)
+		var priorValueStr, deltaStr *string
+		if complete {
+			if prior, ok := priorValue(delta.Value, delta.DeltaPct); ok {
+				s := formatValue(prior, delta.Unit)
+				priorValueStr = &s
+			}
+			deltaStr = formatDeltaValue(&delta.DeltaPct)
 		}
-		deltaPct := delta.DeltaPct
 		evidenceRefStr := evidenceLink(delta.Metric, f)
 
 		category := metricCategories[delta.Metric]
@@ -384,19 +392,25 @@ func BuildMetricSignals(deltas []MetricDelta, f Filters, dataConfidence DataConf
 			category = CategoryDelivery
 		}
 
+		title := fmt.Sprintf("%s appears %s", delta.Label, dir)
+		why := whyForMetric(delta.Metric, delta.Label, dir)
+		if !complete {
+			title = fmt.Sprintf("%s has no prior period to compare", delta.Label)
+			why = fmt.Sprintf("%s has a value in this window and none in the prior one, so no trend is stated.", delta.Label)
+		}
 		signals = append(signals, Signal{
 			ID:                fmt.Sprintf("metric:%s", delta.Metric),
-			Title:             fmt.Sprintf("%s appears %s", delta.Label, dir),
+			Title:             title,
 			Metric:            delta.Metric,
 			CurrentValue:      formatValue(delta.Value, delta.Unit),
 			PriorValue:        priorValueStr,
-			Delta:             formatDeltaValue(&deltaPct),
+			Delta:             deltaStr,
 			Direction:         dir,
 			Severity:          severityForImpact(impact),
 			Confidence:        confidenceFromEvidence(evidenceCount, dataConfidence.CoveragePct),
 			AffectedScope:     primaryScopeLabel(f),
 			EvidenceCount:     evidenceCount,
-			WhyItMatters:      whyForMetric(delta.Metric, delta.Label, dir),
+			WhyItMatters:      why,
 			RecommendedAction: actionForMetric(delta.Metric),
 			EvidenceRef:       &evidenceRefStr,
 			Category:          category,
@@ -678,21 +692,23 @@ func RiskSignal(row RiskRow, f Filters, dataConfidence DataConfidence) (Signal, 
 	}, true
 }
 
-// SelectConstraint ports _select_constraint (services/home.py:953-963).
-func SelectConstraint(deltas []MetricDelta) MetricDelta {
-	withData := make([]MetricDelta, 0, len(deltas))
+// SelectConstraint ports _select_constraint (services/home.py:953-963), over
+// the deltas that state a move between two measured values (deltarule.Complete).
+// ok is false when no delta does: a constraint is a claim about a move, so
+// there is none to name (CHAOS-9063; the Python original named "cycle_time"
+// with a placeholder delta of 0).
+func SelectConstraint(deltas []MetricDelta) (MetricDelta, bool) {
+	withMove := make([]MetricDelta, 0, len(deltas))
 	for _, delta := range deltas {
-		if delta.HasData {
-			withData = append(withData, delta)
+		if deltarule.Complete(delta.HasData, delta.HasPriorData) {
+			withMove = append(withMove, delta)
 		}
 	}
-	if len(withData) == 0 {
-		return MetricDelta{Metric: "cycle_time", Label: "Cycle Time", Unit: "days"}
+	if len(withMove) == 0 {
+		return MetricDelta{}, false
 	}
-	out := make([]MetricDelta, len(withData))
-	copy(out, withData)
-	sort.SliceStable(out, func(i, j int) bool { return out[i].DeltaPct < out[j].DeltaPct })
-	return out[len(out)-1]
+	sort.SliceStable(withMove, func(i, j int) bool { return withMove[i].DeltaPct < withMove[j].DeltaPct })
+	return withMove[len(withMove)-1], true
 }
 
 // tiles ports the fixed tiles map (services/home.py:1187-1208), built

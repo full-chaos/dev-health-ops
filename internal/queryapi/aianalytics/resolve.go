@@ -7,6 +7,9 @@ import (
 	"sort"
 	"time"
 
+	"github.com/full-chaos/dev-health-go/clickhouse"
+
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/activeteams"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph/model"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graphqldate"
 )
@@ -55,7 +58,80 @@ func loadRows(ctx context.Context, client QueryClient, orgID string, dr model.AI
 		return nil, sc, nil
 	}
 	rows, err := loadDaily(ctx, client, orgID, dr.StartDate.Time(), dr.EndDate.Time(), sc)
+	if err != nil {
+		return rows, sc, err
+	}
+	rows, err = withoutEmptyRowsOfRetiredTeams(ctx, client, orgID, rows)
 	return rows, sc, err
+}
+
+// withoutEmptyRowsOfRetiredTeams drops the rows that hold no measure and
+// carry a team id that is not a team (not active, not the no-team value).
+//
+// ai_impact_metrics_daily has no column that tells a retraction row (the row
+// of zeros the daily writer stores over the key of a retired team id) from a
+// measured row with no pull request: the bucket 'unknown' is stored for
+// every group. So the row itself cannot be judged. Its team id can: a retired
+// id is not a team, and a row of it that holds no measure is not a row of the
+// daily list and does not prove that the window holds data. A row with a
+// measure is kept under whatever id it was stored, so no total changes. The
+// active team ids are read only when such a row is present.
+func withoutEmptyRowsOfRetiredTeams(ctx context.Context, client QueryClient, orgID string, rows []dailyRow) ([]dailyRow, error) {
+	candidate := false
+	for i := range rows {
+		if rows[i].TeamID != "" && rows[i].TeamID != activeteams.UnassignedID && rows[i].holdsNoMeasure() {
+			candidate = true
+			break
+		}
+	}
+	if !candidate {
+		return rows, nil
+	}
+	rs, err := client.Query(ctx, activeteams.IDsSubquery, []clickhouse.Binding{{Name: "org_id", Value: orgID}})
+	if err != nil {
+		return nil, fmt.Errorf("aianalytics: active teams query: %w", err)
+	}
+	defer rs.Close()
+	active := map[string]bool{}
+	for rs.Next() {
+		var id string
+		if err := rs.Scan(&id); err != nil {
+			return nil, fmt.Errorf("aianalytics: active teams scan: %w", err)
+		}
+		active[id] = true
+	}
+	if err := rs.Err(); err != nil {
+		return nil, fmt.Errorf("aianalytics: active teams rows: %w", err)
+	}
+	kept := make([]dailyRow, 0, len(rows))
+	for _, row := range rows {
+		if row.TeamID != "" && row.TeamID != activeteams.UnassignedID && !active[row.TeamID] && row.holdsNoMeasure() {
+			continue
+		}
+		kept = append(kept, row)
+	}
+	return kept, nil
+}
+
+// holdsNoMeasure reports whether every count of the row is 0 and every
+// average and rate is absent: the content of a retraction row, and of a
+// measured row of a group with no pull request.
+func (r dailyRow) holdsNoMeasure() bool {
+	counts := r.PrsTotal + r.PrsMerged + r.AIAssistedPrs + r.AgentCreatedPrs + r.HumanPrs + r.UnknownPrs +
+		r.ReworkPrs + r.FollowupCommits + r.RevertPrs + r.IncidentsCount + r.TestGapPrs
+	if counts != 0 || r.LevPrs != 0 {
+		return false
+	}
+	for _, value := range []*float64{
+		r.AIAssistedPrRatio, r.CycleTimeAvgHours, r.AICycleTimeDelta, r.ReviewsPerPr, r.AIReviewAmp, r.ChangesRequestedPer,
+		r.ReworkDragRate, r.RevertRate, r.IncidentDragRate, r.TestGapRate,
+		r.LevCycle, r.LevReview, r.LevRework, r.LevTest, r.LevIncident,
+	} {
+		if value != nil {
+			return false
+		}
+	}
+	return true
 }
 
 // ---- impact summary -------------------------------------------------------

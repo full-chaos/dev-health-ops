@@ -13,6 +13,7 @@ import (
 
 	"github.com/full-chaos/dev-health-go/clickhouse"
 
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/activeteams"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph/model"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graphqldate"
 )
@@ -101,6 +102,20 @@ func mustDay(s string) time.Time {
 }
 
 func (f *fixtureClient) Query(_ context.Context, st string, b []clickhouse.Binding) (clickhouse.RowScanner, error) {
+	if st == activeteams.IDsSubquery {
+		// The read of the active team ids is Go-only (the Python reference has
+		// no such read) and is kept out of the recorded sequence. The recorded
+		// data hold no inactive team, so every team id of the rows is active.
+		seen := map[string]bool{}
+		var rows [][]any
+		for _, m := range f.ds.Daily {
+			if id, _ := m["team_id"].(string); id != "" && !seen[id] {
+				seen[id] = true
+				rows = append(rows, []any{id})
+			}
+		}
+		return &scriptedRows{rows: rows}, nil
+	}
 	f.statements = append(f.statements, st)
 	f.bindings = append(f.bindings, b)
 	switch {

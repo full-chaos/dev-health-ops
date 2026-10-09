@@ -63,9 +63,9 @@ type SparkPoint struct {
 	Value float64              `json:"value"`
 }
 
-// MetricDelta is the Home domain shape. Its two presence flags are exposed by
-// GraphQL only; server.homeRESTResponse omits them for the frozen Python REST
-// contract, whose Pydantic MetricDelta does not declare either field.
+// MetricDelta is the Home domain shape. Its two presence flags and the rate
+// state are served by GraphQL and, after the frozen fields, by REST
+// (server.homeRESTMetricDelta, CHAOS-9044).
 type MetricDelta struct {
 	Metric string  `json:"metric"`
 	Label  string  `json:"label"`
@@ -81,8 +81,7 @@ type MetricDelta struct {
 	// RateState says why change failure rate has a value or not (CHAOS-8981):
 	// "measured" (the value may be 0), "unknown_no_incident_evidence" or
 	// "not_applicable_no_deployments". nil when the window holds no stored
-	// counts, and for every other metric. GraphQL only, like the presence
-	// flags.
+	// counts, and for every other metric.
 	RateState *string `json:"rate_state,omitempty"`
 }
 

@@ -150,6 +150,12 @@ func computeMetricDelta(ctx context.Context, client QueryClient, spec metricSpec
 	previousValue = safeFloat(previousValue)
 	spark := sparkPoints(series, spec.Transform)
 	pctChange := safeFloat(deltaPct(currentValue, previousValue))
+	if !hasData || !hasPriorData {
+		// A delta states a move between two measured values. A window with no
+		// stored value reads 0 here, and 0 against a real prior is -100 %: that
+		// is a placeholder, not a fall. The flags carry the fact.
+		pctChange = 0
+	}
 
 	return MetricDelta{
 		Metric:       spec.Metric,
@@ -373,7 +379,7 @@ func BuildResponse(ctx context.Context, chClient QueryClient, pgClient PGQueryCl
 
 	events := []EventItem{}
 	for _, delta := range deltas {
-		if absFloat(delta.DeltaPct) >= 25 {
+		if delta.HasData && delta.HasPriorData && absFloat(delta.DeltaPct) >= 25 {
 			eventType := "spike"
 			if delta.DeltaPct > 0 {
 				eventType = "regression"

@@ -17,6 +17,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -223,5 +224,31 @@ func TestRESTPersonSummaryDeltasTellNoDataFromAMeasuredZero(t *testing.T) {
 		if delta.Value != cell.value || delta.DeltaPct != cell.deltaPct {
 			t.Errorf("%s: value %v delta_pct %v, want %v %v", cell.name, delta.Value, delta.DeltaPct, cell.value, cell.deltaPct)
 		}
+	}
+}
+
+// The strip the venue oracle applies (withoutHomeDeltaGoOnlyFields) must hold on
+// the body the real handler writes: every delta ends with the three keys, and
+// what is left is the frozen shape in the writer's own key order.
+func TestRESTHomeBodyStripsToTheFrozenShape(t *testing.T) {
+	_, client := startTeamScopeClickHouse(t)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/home?range_days=7&compare_days=7&end_date=2026-08-25", nil)
+	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "rest-home-strip", Role: "owner"}))
+	rec := httptest.NewRecorder()
+	newHomeGetHandler(client, nil)(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("HTTP %d: %s", rec.Code, rec.Body.String())
+	}
+	stripped, err := withoutHomeDeltaGoOnlyFields(rec.Body.String())
+	if err != nil {
+		t.Fatalf("the real Home body does not strip: %v\n%s", err, rec.Body.String())
+	}
+	for _, key := range homeDeltaGoOnlyKeys {
+		if strings.Contains(stripped, `"`+key+`"`) {
+			t.Errorf("%s is still in the stripped body", key)
+		}
+	}
+	if !strings.Contains(stripped, `"constraint":{"title":"","claim":"","evidence":[],"experiments":[]}`) {
+		t.Errorf("the stripped body does not keep the writer's key order for the constraint card: %s", stripped)
 	}
 }

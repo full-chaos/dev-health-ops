@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -122,61 +123,55 @@ func TestRESTSummaryDeltasArePythonDeltasPlusTheDeclaredGoOnlyFields(t *testing.
 }
 
 // homeDeltaGoOnlyKeys are the keys of a REST Home delta that the frozen Python
-// model never had (CHAOS-9044).
+// model never had (CHAOS-9044), in the order the production type declares them.
 var homeDeltaGoOnlyKeys = []string{"has_data", "has_prior_data", "rate_state"}
+
+// homeDeltaGoOnlyTail matches the three keys at the end of a delta object.
+var homeDeltaGoOnlyTail = regexp.MustCompile(`,"has_data":(?:true|false),"has_prior_data":(?:true|false),"rate_state":(?:null|"[^"\\]*")\}`)
 
 // withoutHomeDeltaGoOnlyFields returns a REST Home body as the production
 // writer writes it, without the declared Go-only keys of each delta, so the
-// venue oracle compares it with the frozen Python body. Every delta must carry
-// all three keys (a missing key fails, so dropping one is not masked) and no
-// key outside the declared three is removed.
+// venue oracle compares it with the frozen Python body. The text is edited, not
+// re-encoded: the order of every other key is the writer's, which the ledger of
+// the Home oracle compares as text. Every delta must end with all three keys in
+// the declared order (a missing or misplaced key fails, so dropping one is not
+// masked), and each key must occur exactly once per delta.
 func withoutHomeDeltaGoOnlyFields(body string) (string, error) {
-	decoder := json.NewDecoder(strings.NewReader(body))
-	decoder.UseNumber()
-	var root map[string]any
-	if err := decoder.Decode(&root); err != nil {
+	var root struct {
+		Deltas []json.RawMessage `json:"deltas"`
+	}
+	if err := json.Unmarshal([]byte(body), &root); err != nil {
 		return "", fmt.Errorf("home body is not a JSON object: %w", err)
 	}
-	deltas, ok := root["deltas"].([]any)
-	if !ok {
+	if root.Deltas == nil {
 		return "", fmt.Errorf("home body has no deltas list: %s", body)
 	}
-	for index, raw := range deltas {
-		delta, ok := raw.(map[string]any)
-		if !ok {
-			return "", fmt.Errorf("home delta %d is not an object", index)
-		}
-		for _, key := range homeDeltaGoOnlyKeys {
-			if _, present := delta[key]; !present {
-				return "", fmt.Errorf("home delta %d carries no %s", index, key)
-			}
-			delete(delta, key)
+	matches := homeDeltaGoOnlyTail.FindAllStringIndex(body, -1)
+	if len(matches) != len(root.Deltas) {
+		return "", fmt.Errorf("%d of %d home deltas end with the declared Go-only keys", len(matches), len(root.Deltas))
+	}
+	for _, key := range homeDeltaGoOnlyKeys {
+		if got := strings.Count(body, `"`+key+`":`); got != len(root.Deltas) {
+			return "", fmt.Errorf("key %s occurs %d times for %d deltas", key, got, len(root.Deltas))
 		}
 	}
-	out, err := json.Marshal(root)
-	if err != nil {
-		return "", err
-	}
-	return string(out), nil
+	return homeDeltaGoOnlyTail.ReplaceAllString(body, "}"), nil
 }
 
 func TestWithoutHomeDeltaGoOnlyFieldsRemovesOnlyTheDeclaredKeys(t *testing.T) {
-	body := `{"deltas":[{"metric":"m","value":1,"has_data":true,"has_prior_data":false,"rate_state":null,"spark":[]}],"summary":[]}`
+	body := `{"deltas":[{"metric":"m","value":1,"spark":[],"has_data":true,"has_prior_data":false,"rate_state":null},{"metric":"n","spark":[],"has_data":false,"has_prior_data":false,"rate_state":"measured"}],"constraint":{"title":"","claim":""}}`
 	got, err := withoutHomeDeltaGoOnlyFields(body)
-	if err != nil || got != `{"deltas":[{"metric":"m","spark":[],"value":1}],"summary":[]}` {
+	if err != nil || got != `{"deltas":[{"metric":"m","value":1,"spark":[]},{"metric":"n","spark":[]}],"constraint":{"title":"","claim":""}}` {
 		t.Fatalf("got %s, %v", got, err)
 	}
 	for name, bad := range map[string]string{
 		"a delta without rate_state": `{"deltas":[{"metric":"m","has_data":true,"has_prior_data":true}]}`,
+		"keys out of order":          `{"deltas":[{"metric":"m","has_prior_data":true,"has_data":true,"rate_state":null}]}`,
+		"an extra key after them":    `{"deltas":[{"metric":"m","has_data":true,"has_prior_data":true,"rate_state":null,"other":1}]}`,
 		"no deltas list":             `{"summary":[]}`,
 	} {
 		if out, err := withoutHomeDeltaGoOnlyFields(bad); err == nil {
 			t.Errorf("%s: got %s, want an error", name, out)
 		}
-	}
-	// A different key on a delta is kept, so an undeclared extra still differs.
-	kept, err := withoutHomeDeltaGoOnlyFields(`{"deltas":[{"has_data":true,"has_prior_data":true,"rate_state":null,"other":1}]}`)
-	if err != nil || kept != `{"deltas":[{"other":1}]}` {
-		t.Errorf("got %s, %v", kept, err)
 	}
 }

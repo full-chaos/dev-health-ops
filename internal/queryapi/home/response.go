@@ -81,8 +81,7 @@ type MetricDelta struct {
 	// The pull request rework ratio: "measured", "unknown_no_review_evidence",
 	// "not_applicable_no_rework_signal" or
 	// "not_applicable_no_merged_pull_requests". nil when the window holds no
-	// stored counts, and for every other metric. GraphQL only, like the presence
-	// flags.
+	// stored counts, and for every other metric.
 	RateState *string `json:"rate_state,omitempty"`
 }
 

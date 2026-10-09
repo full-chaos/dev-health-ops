@@ -419,25 +419,35 @@ SELECT EXISTS (SELECT 1 FROM public.daily_metrics_runs WHERE id = $1::uuid)`, ru
 func (store *PostgresStore) HasSucceededRunForDay(
 	ctx context.Context, tx pgx.Tx, organizationID, day, excludeGeneration string,
 ) (bool, error) {
+	runID, err := store.coveringRunForDay(ctx, tx, organizationID, day, excludeGeneration)
+	return runID != "", err
+}
+
+// coveringRunForDay is HasSucceededRunForDay that names the run: the id of the
+// newest covering run, or "" when none covers the day.
+func (store *PostgresStore) coveringRunForDay(
+	ctx context.Context, tx pgx.Tx, organizationID, day, excludeGeneration string,
+) (string, error) {
 	if !store.valid() || tx == nil || !validUUID(organizationID) || day == "" {
-		return false, ErrUnavailable
+		return "", ErrUnavailable
 	}
-	var exists bool
+	var runID string
 	err := tx.QueryRow(ctx, `
-SELECT EXISTS (
-    SELECT 1 FROM public.daily_metrics_runs
+SELECT COALESCE((
+    SELECT id::text FROM public.daily_metrics_runs
     WHERE org_id = $1::uuid AND target_day = $2::date
       AND generation <> $3
       AND (generation LIKE $4 OR generation LIKE $5)
       AND status IN ('succeeded', 'no_repositories')
-)`, organizationID, day, excludeGeneration,
+    ORDER BY created_at DESC, id DESC LIMIT 1
+), '')`, organizationID, day, excludeGeneration,
 		escapeLikePrefix(ScheduledFanoutGenerationPrefix)+"%",
 		escapeLikePrefix(postSyncGenerationPrefix)+"%",
-	).Scan(&exists)
+	).Scan(&runID)
 	if err != nil {
-		return false, ErrUnavailable
+		return "", ErrUnavailable
 	}
-	return exists, nil
+	return runID, nil
 }
 
 // escapeLikePrefix escapes SQL LIKE's own wildcard characters (%, _) in a

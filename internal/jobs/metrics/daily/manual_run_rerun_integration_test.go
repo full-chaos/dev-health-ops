@@ -106,27 +106,76 @@ func TestStartManualDailyRunWithARerunTagStartsOneRunPerTagForADayThatHasARun(t 
 	}
 }
 
-// The guard of the deferred-discovery path stays in force for a tagged call:
-// the tag changes the generation of the request, not the answer for a day the
-// schedule already computed.
-func TestStartManualDailyRunWithARerunTagStillRefusesADayTheScheduleCovered(t *testing.T) {
+// A call without a tag keeps the refusal for a day that the schedule or a sync
+// already covered; a call with a tag is the operator's statement "compute this
+// day again" and is admitted (CHAOS-8941 recompute route). Both for the two
+// covering generations, through the real admission path.
+func TestStartManualDailyRunRefusesACoveredDayAndARerunTagAdmitsIt(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 	store, publisher, pool := rerunStore(t, ctx)
 	const org = "00000000-0000-4000-8000-0000000009a2"
-	const day = "2026-08-26"
 	now := time.Now().UTC()
-	if _, err := pool.Exec(ctx, `
+	covers := []struct{ day, id, generation string }{
+		{"2026-08-26", "00000000-0000-4000-8000-0000000009c1", "fixed-schedule:daily_metrics_fanout:2026-08-26T01:00:00Z"},
+		{"2026-08-27", "00000000-0000-4000-8000-0000000009c2", "post-sync:00000000-0000-4000-8000-0000000009d2"},
+	}
+	for _, cover := range covers {
+		if _, err := pool.Exec(ctx, `
 INSERT INTO daily_metrics_runs (id,org_id,target_day,generation,status,finalization_status,created_at,updated_at)
-VALUES ('00000000-0000-4000-8000-0000000009c1',$1::uuid,$2::date,'fixed-schedule:daily_metrics_fanout:2026-08-26T01:00:00Z','succeeded','succeeded',$3,$3)`,
-		org, day, now); err != nil {
-		t.Fatal(err)
+VALUES ($1::uuid,$2::uuid,$3::date,$4,'succeeded','succeeded',$5,$5)`,
+			cover.id, org, cover.day, cover.generation, now); err != nil {
+			t.Fatal(err)
+		}
 	}
-	_, err := store.StartManualDailyRun(ctx, org, day, ManualDailyRerunGeneration(org, day, nil, "fix-1"), nil, publisher)
-	if !errors.Is(err, ErrDayAlreadyCovered) {
-		t.Fatalf("a tagged deferred-discovery call must still be refused for a covered day: %v", err)
+	for _, cover := range covers {
+		day := cover.day
+		// no tag: refused, starts nothing
+		_, err := store.StartManualDailyRun(ctx, org, day, ManualDailyRunGeneration(org, day, nil), nil, publisher)
+		if !errors.Is(err, ErrDayAlreadyCovered) || rerunRunCount(t, ctx, pool, org, day) != 1 {
+			t.Fatalf("%s: a call without a tag must be refused for a covered day: %v", cover.generation, err)
+		}
+		// the tag admits it: one new run, named after the run it overrides
+		generation := ManualDailyRerunGeneration(org, day, nil, "recompute-1")
+		tagged, err := store.StartManualDailyRerun(ctx, org, day, generation, nil, publisher, "recompute-1")
+		if err != nil || tagged.AlreadyStarted || tagged.CoveredDayOverriddenBy != cover.id || rerunRunCount(t, ctx, pool, org, day) != 2 {
+			t.Fatalf("%s: a tagged call must start one run and name the covering run: %+v err %v runs %d",
+				cover.generation, tagged, err, rerunRunCount(t, ctx, pool, org, day))
+		}
+		var generationStored string
+		if err := pool.QueryRow(ctx, `SELECT generation FROM daily_metrics_runs WHERE id = $1::uuid`, tagged.RunID).Scan(&generationStored); err != nil || generationStored != generation {
+			t.Fatalf("the tagged run must carry the tag in its generation: %q err=%v", generationStored, err)
+		}
+		// the same tag again: one run (identity holds), still named
+		same, err := store.StartManualDailyRerun(ctx, org, day, generation, nil, publisher, "recompute-1")
+		if err != nil || !same.AlreadyStarted || same.RunID != tagged.RunID || rerunRunCount(t, ctx, pool, org, day) != 2 {
+			t.Fatalf("%s: the same tag again must start nothing: %+v err %v", cover.generation, same, err)
+		}
+		// a new tag is a new run; the plain call is still refused afterwards
+		next, err := store.StartManualDailyRerun(ctx, org, day, ManualDailyRerunGeneration(org, day, nil, "recompute-2"), nil, publisher, "recompute-2")
+		if err != nil || next.AlreadyStarted || next.RunID == tagged.RunID || rerunRunCount(t, ctx, pool, org, day) != 3 {
+			t.Fatalf("%s: a new tag must start one more run: %+v err %v", cover.generation, next, err)
+		}
+		if _, err := store.StartManualDailyRun(ctx, org, day, ManualDailyRunGeneration(org, day, nil), nil, publisher); !errors.Is(err, ErrDayAlreadyCovered) {
+			t.Fatalf("%s: a call without a tag must still be refused: %v", cover.generation, err)
+		}
 	}
-	if rerunRunCount(t, ctx, pool, org, day) != 1 {
-		t.Fatalf("the refused call must start nothing")
+}
+
+// A tagged call on a day that nothing covers names no overridden run, and an
+// ill-formed tag is refused before anything is written.
+func TestStartManualDailyRerunOnAnUncoveredDayOverridesNothing(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	store, publisher, pool := rerunStore(t, ctx)
+	const org = "00000000-0000-4000-8000-0000000009a3"
+	const day = "2026-08-28"
+	out, err := store.StartManualDailyRerun(ctx, org, day, ManualDailyRerunGeneration(org, day, nil, "t1"), nil, publisher, "t1")
+	if err != nil || out.AlreadyStarted || out.CoveredDayOverriddenBy != "" {
+		t.Fatalf("an uncovered day overrides nothing: %+v err %v", out, err)
+	}
+	if _, err := store.StartManualDailyRerun(ctx, org, "2026-08-29", "x", nil, publisher, "bad tag|"); !errors.Is(err, ErrInvalidState) ||
+		rerunRunCount(t, ctx, pool, org, "2026-08-29") != 0 {
+		t.Fatalf("an ill-formed tag must be refused before any write: %v", err)
 	}
 }

@@ -30,7 +30,7 @@ func TestATeamSearchThatAnswersNoTeamClosesNothing(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		result, err := Write(ctx, conn, org, rows, everything)
+		result, err := Write(ctx, conn, org, rows, everything, soleScope())
 		if err != nil {
 			t.Fatal(err)
 		}

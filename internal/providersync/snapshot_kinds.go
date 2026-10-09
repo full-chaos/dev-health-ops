@@ -9,20 +9,28 @@ import "time"
 // docs/contribute/architecture/team-attribution.md (section 0.4b), which
 // TestSnapshotKindPolicyTableIsTheDocumentedOne compares with this one.
 //
-// The policy table. "closes nothing": the kind has ONE walk for the whole
-// provider answer, and an answer with no row of the kind is more often an
-// access change than a real empty state. "is an answer": the kind is read per
-// team, each read proves its own end, and a team with no row is a real answer.
+// The policy table.
 //
-//	kind                          empty answer
-//	linear_project_ownership      closes nothing
-//	linear_team_key_ownership     closes nothing
-//	jira_legacy_ownership         closes nothing
-//	atlassian_team_catalog        closes nothing
-//	atlassian_team_memberships    is an answer
-//	atlassian_team_project_links  is an answer
-//	gitlab_group_project_grants   is an answer
-//	github_team_repo_grants       is an answer
+// Scope: every kind closes only behind the one scope gate (ProveSoleScope:
+// the run's integration is the only ACTIVE integration of its provider in the
+// organization). No row of any kind carries an integration key, and an
+// organization can hold two integrations of one provider, so a walk proves
+// its own scope only: no kind is exempt.
+//
+// Empty answer: "closes nothing": the kind has ONE walk for the whole provider
+// answer, and an answer with no row of the kind is more often an access
+// change than a real empty state. "is an answer": the kind is read per team,
+// each read proves its own end, and a team with no row is a real answer.
+//
+//	kind                          scope             empty answer
+//	linear_project_ownership      sole integration  closes nothing
+//	linear_team_key_ownership     sole integration  closes nothing
+//	jira_legacy_ownership         sole integration  closes nothing
+//	atlassian_team_catalog        sole integration  closes nothing
+//	atlassian_team_memberships    sole integration  is an answer
+//	atlassian_team_project_links  sole integration  is an answer
+//	gitlab_group_project_grants   sole integration  is an answer
+//	github_team_repo_grants       sole integration  is an answer
 
 // MembershipSnapshotRow is one team_memberships fact as the snapshot rule
 // reads it: the team, the member and the stored valid_from.

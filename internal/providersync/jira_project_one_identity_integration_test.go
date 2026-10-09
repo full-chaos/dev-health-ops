@@ -147,9 +147,10 @@ func TestTeamReachesItsJiraProjectsWorkItemsThroughOwnership(t *testing.T) {
 			"/rest/agile/1.0/board?maxResults=100&projectKeyOrId=OPS&startAt=0": {body: `{"values":[],"isLast":true}`},
 		}}
 		result, err := JiraTeamCatalogCollector{
-			Handler: JiraTeamCatalogRouteHandler{},
-			Sink:    JiraTeamCatalogClickHouseEffects{Conn: conn, Lease: lease},
-		}.CollectTeamCatalog(ctx, TeamCatalogReference{OrgID: orgID, SyncRunID: "run"},
+			ScopeCensus: staticScopeCensus{},
+			Handler:     JiraTeamCatalogRouteHandler{},
+			Sink:        JiraTeamCatalogClickHouseEffects{Conn: conn, Lease: lease},
+		}.CollectTeamCatalog(ctx, TeamCatalogReference{OrgID: orgID, SyncRunID: "run", IntegrationID: "integration-a"},
 			providerfoundation.Credential{Provider: "jira"}, jiraTeamCatalogTestClient(t, fakehttp.Client(doer)),
 			TeamCatalogSelections{Projects: true}, at)
 		if err != nil {
@@ -308,9 +309,10 @@ func TestAPartialJiraSnapshotClosesNoOwnership(t *testing.T) {
 			byURI[uri] = response
 		}
 		result, err := JiraTeamCatalogCollector{
-			Handler: JiraTeamCatalogRouteHandler{},
-			Sink:    JiraTeamCatalogClickHouseEffects{Conn: conn, Lease: lease},
-		}.CollectTeamCatalog(ctx, TeamCatalogReference{OrgID: orgID, SyncRunID: "run"},
+			ScopeCensus: staticScopeCensus{},
+			Handler:     JiraTeamCatalogRouteHandler{},
+			Sink:        JiraTeamCatalogClickHouseEffects{Conn: conn, Lease: lease},
+		}.CollectTeamCatalog(ctx, TeamCatalogReference{OrgID: orgID, SyncRunID: "run", IntegrationID: "integration-a"},
 			providerfoundation.Credential{Provider: "jira"},
 			jiraTeamCatalogTestClient(t, fakehttp.Client(&jiraTeamCatalogFixtureDoer{t: t, byURI: byURI})),
 			TeamCatalogSelections{Projects: true}, at)
@@ -415,9 +417,10 @@ func TestAnArchivedJiraProjectKeepsItsOwnership(t *testing.T) {
 	sync := func(at time.Time, archived jiraTeamCatalogFixtureResponse) TeamCatalogResult {
 		t.Helper()
 		result, err := JiraTeamCatalogCollector{
-			Handler: JiraTeamCatalogRouteHandler{},
-			Sink:    JiraTeamCatalogClickHouseEffects{Conn: conn, Lease: lease},
-		}.CollectTeamCatalog(ctx, TeamCatalogReference{OrgID: orgID, SyncRunID: "run"},
+			ScopeCensus: staticScopeCensus{},
+			Handler:     JiraTeamCatalogRouteHandler{},
+			Sink:        JiraTeamCatalogClickHouseEffects{Conn: conn, Lease: lease},
+		}.CollectTeamCatalog(ctx, TeamCatalogReference{OrgID: orgID, SyncRunID: "run", IntegrationID: "integration-a"},
 			providerfoundation.Credential{Provider: "jira"},
 			jiraTeamCatalogTestClient(t, fakehttp.Client(&jiraTeamCatalogFixtureDoer{t: t, byURI: map[string]jiraTeamCatalogFixtureResponse{
 				"/rest/api/3/project/OPS":               {body: `{"projectTypeKey":"business"}`},
@@ -506,9 +509,10 @@ func TestAnArchivedJiraProjectKeepsItsKeyBuiltOwnership(t *testing.T) {
 	sync := func(orgID string, at time.Time, live, archived string) TeamCatalogResult {
 		t.Helper()
 		result, err := JiraTeamCatalogCollector{
-			Handler: JiraTeamCatalogRouteHandler{},
-			Sink:    JiraTeamCatalogClickHouseEffects{Conn: conn, Lease: lease},
-		}.CollectTeamCatalog(ctx, TeamCatalogReference{OrgID: orgID, SyncRunID: "run"},
+			ScopeCensus: staticScopeCensus{},
+			Handler:     JiraTeamCatalogRouteHandler{},
+			Sink:        JiraTeamCatalogClickHouseEffects{Conn: conn, Lease: lease},
+		}.CollectTeamCatalog(ctx, TeamCatalogReference{OrgID: orgID, SyncRunID: "run", IntegrationID: "integration-a"},
 			providerfoundation.Credential{Provider: "jira"},
 			jiraTeamCatalogTestClient(t, fakehttp.Client(&jiraTeamCatalogFixtureDoer{t: t, byURI: map[string]jiraTeamCatalogFixtureResponse{
 				"/rest/api/3/project/YAK":                                   {body: `{"projectTypeKey":"business"}`},

@@ -16,6 +16,13 @@ import (
 var snapshotKindCensus = map[string]struct {
 	constructor, empty, why string
 }{
+	// Scope: EVERY kind below closes only behind the one scope gate
+	// (ProveSoleScope: no other active integration of the provider in the
+	// organization). The rows of no kind carry an integration key, and
+	// public.integrations has no unique (org, provider) rule, so no kind can
+	// say "two integrations cannot exist": snapshotKindScope is the same for
+	// all, and TestSnapshotKindPolicyTableIsTheDocumentedOne pins it in the
+	// two documented tables.
 	"linear_project_ownership": {"internal/providersync.LinearProjectOwnershipKind", "EmptyClosesNothing",
 		"one projects walk for the workspace: an answer with no project ownership is an access change before it is a removal"},
 	"linear_team_key_ownership": {"internal/providersync.LinearTeamKeyOwnershipKind", "EmptyClosesNothing",
@@ -156,7 +163,27 @@ func TestEveryCloseSiteTakesTheTypedSnapshot(t *testing.T) {
 	if len(census.constantTerms) != 0 {
 		t.Errorf("a snapshot proof term is made from a constant or has no named reason: %v", census.constantTerms)
 	}
+	// One scope gate, used by every provider: a proven ScopeProof is made in
+	// proveSoleScope and nowhere else, and it is the only reader of the
+	// integration census. A kind cannot be stated without a ScopeProof (it is
+	// an argument of SnapshotKind.Snapshot), so every close site is behind it.
+	gate := "internal/providersync.proveSoleScope"
+	for _, maker := range census.scopeMakers {
+		if maker != gate {
+			t.Errorf("%s makes a ScopeProof: the scope gate %s is the only maker", maker, gate)
+		}
+	}
+	if len(census.scopeMakers) == 0 {
+		t.Fatal("the scan found no maker of a ScopeProof: it measured nothing")
+	}
+	if !reflect.DeepEqual(census.censusCallers, []string{gate}) {
+		t.Errorf("the integration census is read by %v, want only %s", census.censusCallers, gate)
+	}
 }
+
+// snapshotKindScope is the scope proof every fact kind needs, as the two
+// documented tables word it.
+const snapshotKindScope = "sole integration"
 
 // TestSnapshotKindPolicyTableIsTheDocumentedOne compares the three places
 // that state what an empty answer of a fact kind means: the census (which
@@ -172,7 +199,7 @@ func TestSnapshotKindPolicyTableIsTheDocumentedOne(t *testing.T) {
 		if !known {
 			t.Fatalf("the kind %q has the empty-answer policy %q, which this test has no wording for", name, entry.empty)
 		}
-		want[name] = policy
+		want[name] = snapshotKindScope + "; " + policy
 	}
 	read := func(path string, row *regexp.Regexp) map[string]string {
 		t.Helper()
@@ -186,7 +213,7 @@ func TestSnapshotKindPolicyTableIsTheDocumentedOne(t *testing.T) {
 				if _, twice := got[match[1]]; twice {
 					t.Errorf("%s names the kind %q twice", path, match[1])
 				}
-				got[match[1]] = match[2]
+				got[match[1]] = match[2] + "; " + match[3]
 			}
 		}
 		if len(got) == 0 {
@@ -194,12 +221,12 @@ func TestSnapshotKindPolicyTableIsTheDocumentedOne(t *testing.T) {
 		}
 		return got
 	}
-	code := read("snapshot_kinds.go", regexp.MustCompile(`^//\t([a-z_]+)\s+(closes nothing|is an answer)$`))
+	code := read("snapshot_kinds.go", regexp.MustCompile(`^//\t([a-z_]+)\s+(sole integration)\s+(closes nothing|is an answer)$`))
 	if !reflect.DeepEqual(code, want) {
 		t.Errorf("the policy table in the doc comment of snapshot_kinds.go differs from the census.\n got  %v\n want %v", code, want)
 	}
 	document := read("../../docs/contribute/architecture/team-attribution.md",
-		regexp.MustCompile("^\\s*\\| `([a-z_]+)` \\|[^|]*\\|[^|]*\\| (closes nothing|is an answer)\\b[^|]*\\|$"))
+		regexp.MustCompile("^\\s*\\| `([a-z_]+)` \\|[^|]*\\|[^|]*\\| (sole integration) \\| (closes nothing|is an answer)\\b[^|]*\\|$"))
 	if !reflect.DeepEqual(document, want) {
 		t.Errorf("the kinds table of docs/contribute/architecture/team-attribution.md differs from the census.\n got  %v\n want %v", document, want)
 	}

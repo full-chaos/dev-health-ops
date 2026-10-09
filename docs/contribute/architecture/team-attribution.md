@@ -692,21 +692,36 @@ project's items by id. Now:
   answer of the kind means) and a proof made only from named terms (`ProveSnapshot`; the zero value and a
   term with no reason are not proven). There is no completeness bool and no count argument: the rule sorts
   the fresh and the open rows by kind and counts them itself. A kind closes its open rows only when its
-  proof holds (every read of ITS walk reached a stated end) and the run holds at least one row of THAT
-  kind. A row of another kind never makes a kind "not empty", an open row that no kind holds is never
+  scope proof holds (see below), its walk proof holds (every read of ITS walk reached a stated end) and
+  the run holds at least one row of THAT kind. A row of another kind never makes a kind "not empty", an open row that no kind holds is never
   closed, and a kind that is read per team with its own proven end per team declares an empty answer to be
   an answer (`EmptyIsAnAnswer`). The kinds:
 
-  | Kind | Writer | Walk behind the proof | Empty answer |
-  | --- | --- | --- | --- |
-  | `linear_project_ownership` | Linear catalog | every project page, node and project-team page; no link without a key | closes nothing |
-  | `linear_team_key_ownership` | Linear catalog | the team walk | closes nothing |
-  | `jira_legacy_ownership` | Jira catalog | the project search (live, archived, live again) and the legacy links read | closes nothing |
-  | `atlassian_team_catalog` | Atlassian Teams | the team search | closes nothing: no team is deactivated or put in scope |
-  | `atlassian_team_memberships` | Atlassian Teams | one member read per active team | is an answer (per team) |
-  | `atlassian_team_project_links` | Atlassian Teams | one link read per active team | is an answer (per team) |
-  | `gitlab_group_project_grants` | GitLab catalog | one listing per closable group (section 0.4a) | is an answer (per group) |
-  | `github_team_repo_grants` | GitHub catalog | one listing per closable team | is an answer (per team) |
+  | Kind | Writer | Walk behind the proof | Scope proof | Empty answer |
+  | --- | --- | --- | --- | --- |
+  | `linear_project_ownership` | Linear catalog | every project page, node and project-team page; no link without a key | sole integration | closes nothing |
+  | `linear_team_key_ownership` | Linear catalog | the team walk | sole integration | closes nothing |
+  | `jira_legacy_ownership` | Jira catalog | the project search (live, archived, live again) and the legacy links read | sole integration | closes nothing |
+  | `atlassian_team_catalog` | Atlassian Teams | the team search | sole integration | closes nothing: no team is deactivated or put in scope |
+  | `atlassian_team_memberships` | Atlassian Teams | one member read per active team | sole integration | is an answer (per team) |
+  | `atlassian_team_project_links` | Atlassian Teams | one link read per active team | sole integration | is an answer (per team) |
+  | `gitlab_group_project_grants` | GitLab catalog | one listing per closable group (section 0.4a) | sole integration | is an answer (per group) |
+  | `github_team_repo_grants` | GitHub catalog | one listing per closable team | sole integration | is an answer (per team) |
+
+  **Scope proof, for every kind** (`providersync.ProveSoleScope`, the one scope gate; `ScopeProof` is an
+  argument of every kind snapshot, so no kind can be stated without it). Ownership, membership and catalog
+  rows carry no integration key, and an organization can hold two integrations of one provider, so a walk
+  proves its own scope only. A kind closes only when the run's integration is the ONLY ACTIVE integration of
+  its provider in the organization (the census reads `public.integrations.is_active`, the run's own row
+  left out). With another active integration, with no census or no integration id (the `dho sync teams`
+  CLI verb), or when the census read fails, the run writes what it found, keeps first-seen `valid_from`,
+  closes nothing, and says so with the reason `scope_shared`, `scope_census_unavailable` or
+  `scope_census_failed` (the same WARN line and counter as below). An integration that is not active does
+  not block the close. GitHub and GitLab had this gate since section 0.4a; Linear, the Jira catalog and
+  the three Atlassian Teams kinds are behind the same one
+  (`TestTwoLinearIntegrationsOfOneOrganization`, `TestTwoJiraIntegrationsOfOneOrganization`,
+  `TestTwoJiraIntegrationsOfOneOrganizationKeepEachOthersAtlassianTeams`). No kind is exempt: no provider
+  here makes a second integration impossible.
 
   A kind that closes nothing while it holds open rows is loud: one `team_catalog_snapshot_close_abandoned`
   WARN line (`kind`, `reasons`, `open_rows_kept`) and one count of

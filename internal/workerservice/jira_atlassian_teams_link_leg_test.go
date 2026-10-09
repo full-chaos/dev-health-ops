@@ -39,6 +39,7 @@ func TestAnEmptyAtlassianTeamSearchIsADegradedLegNotSilence(t *testing.T) {
 		map[string]string{"base_url": "https://acme.atlassian.net", "atlassian_organization_id": "org-123", "atlassian_cloud_id": "cloud-123"},
 		map[string]secrets.Value{"email": secrets.NewValue("sync@example.test"), "api_token": secrets.NewValue("synthetic-api-token-value")})
 	collector := jiraCombinedTeamCatalogCollector{
+		ScopeCensus:   soleIntegrationCensus{},
 		ProjectAsTeam: projectAsTeamStub{result: providersync.TeamCatalogResult{TeamsWritten: 1}},
 		Conn:          nopConn{},
 		NewClient:     func(string, atlassian.AuthProvider) atlassianteams.Client { return noAtlassianTeams{} },

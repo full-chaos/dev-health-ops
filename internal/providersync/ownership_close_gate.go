@@ -35,6 +35,35 @@ type OwnershipScopeCensus interface {
 	CountActiveSiblingIntegrations(ctx context.Context, orgID, provider, integrationID string) (int, error)
 }
 
+// ProveSoleScope is the ONE scope gate of every snapshot close, for every
+// provider: the run may close open rows only when the organization has no
+// other ACTIVE integration of the same provider (census:
+// public.integrations.is_active, the run's own integration left out). Rows
+// carry no integration key, and two integrations' configured scopes cannot be
+// compared safely, so any other active integration may be the owner of a row
+// this run does not hold. A run with no census or no integration id, and a
+// census read that fails, are not proven either: a failed read is never zero.
+func ProveSoleScope(ctx context.Context, census OwnershipScopeCensus, orgID, provider, integrationID string) ScopeProof {
+	proof, _, _ := proveSoleScope(ctx, census, orgID, provider, integrationID)
+	return proof
+}
+
+// proveSoleScope is ProveSoleScope with the sibling count and the census
+// error text, for the gate's own log line.
+func proveSoleScope(ctx context.Context, census OwnershipScopeCensus, orgID, provider, integrationID string) (ScopeProof, int, string) {
+	if census == nil || strings.TrimSpace(integrationID) == "" {
+		return ScopeProof{stated: true, missing: []string{OwnershipCloseSkippedCensusUnavailable}}, 0, ""
+	}
+	siblings, err := census.CountActiveSiblingIntegrations(ctx, orgID, provider, integrationID)
+	if err != nil {
+		return ScopeProof{stated: true, missing: []string{OwnershipCloseSkippedCensusFailed}}, 0, err.Error()
+	}
+	if siblings != 0 {
+		return ScopeProof{stated: true, missing: []string{OwnershipCloseSkippedScopeShared}}, siblings, ""
+	}
+	return ScopeProof{stated: true}, 0, ""
+}
+
 type ownershipCloseRequest struct {
 	ref      TeamCatalogReference
 	provider string
@@ -51,8 +80,9 @@ type ownershipCloseDecision struct {
 	legs     []DegradedLeg
 	// proven counts the listed teams whose listing proved its end.
 	proven int
-	// skipped holds every reason the gate gave up a close for.
-	skipped map[string]bool
+	// scope is the scope gate's answer. It is asked only when a listing
+	// proved its end; before that nothing can close and it stays not proven.
+	scope ScopeProof
 }
 
 // decideOwnershipClose is the one gate in front of every provider_access
@@ -64,7 +94,7 @@ type ownershipCloseDecision struct {
 // teams: its rows stay open. Every skip is one WARN line and a DegradedLeg on
 // the result, never silent.
 func decideOwnershipClose(ctx context.Context, census OwnershipScopeCensus, request ownershipCloseRequest) ownershipCloseDecision {
-	decision := ownershipCloseDecision{read: request.listed, skipped: map[string]bool{}}
+	decision := ownershipCloseDecision{read: request.listed}
 	if len(request.listed) == 0 {
 		return decision
 	}
@@ -75,7 +105,6 @@ func decideOwnershipClose(ctx context.Context, census OwnershipScopeCensus, requ
 	var reasons []string
 	skip := func(reason, detail string) {
 		reasons = append(reasons, reason)
-		decision.skipped[reason] = true
 		decision.legs = append(decision.legs, DegradedLeg{
 			Dataset: "team_ownership", Leg: ownershipCloseLeg, Outcome: "skipped", Reason: reason, Detail: detail,
 		})
@@ -93,23 +122,19 @@ func decideOwnershipClose(ctx context.Context, census OwnershipScopeCensus, requ
 	var siblingsSharing int
 	censusError := ""
 	if len(decision.closable) > 0 {
-		switch {
-		case census == nil || strings.TrimSpace(request.ref.IntegrationID) == "":
-			skip(OwnershipCloseSkippedCensusUnavailable, "no integration census for this run")
+		decision.scope, siblingsSharing, censusError = proveSoleScope(ctx, census, request.ref.OrgID, request.provider, request.ref.IntegrationID)
+		for _, reason := range decision.scope.Missing() {
+			detail := "no integration census for this run"
+			switch reason {
+			case OwnershipCloseSkippedCensusFailed:
+				detail = censusError
+			case OwnershipCloseSkippedScopeShared:
+				detail = strconv.Itoa(siblingsSharing) + " other active integrations of this provider in the org"
+			}
+			skip(reason, detail)
+		}
+		if !decision.scope.Proven() {
 			decision.closable = nil
-		default:
-			siblings, err := census.CountActiveSiblingIntegrations(ctx, request.ref.OrgID, request.provider, request.ref.IntegrationID)
-			if err != nil {
-				censusError = err.Error()
-				skip(OwnershipCloseSkippedCensusFailed, censusError)
-				decision.closable = nil
-				break
-			}
-			if siblings != 0 {
-				siblingsSharing = siblings
-				skip(OwnershipCloseSkippedScopeShared, strconv.Itoa(siblings)+" other active integrations of this provider in the org")
-				decision.closable = nil
-			}
 		}
 	}
 	if len(reasons) > 0 {
@@ -123,15 +148,12 @@ func decideOwnershipClose(ctx context.Context, census OwnershipScopeCensus, requ
 }
 
 // snapshot is the grant kind of the closable teams (kind makes it from the
-// closable set) with the proof of this gate: a team listing returned, at least
-// one listing proved its end, and the scope census allowed the close. A team
+// closable set) with the scope gate's proof and the proof of the listings: a
+// team listing returned and at least one listing proved its end. A team
 // outside closable is of no kind, so its open rows never close.
 func (decision ownershipCloseDecision) snapshot(kind func(closable []string) SnapshotKind[OwnershipSnapshotRow]) KindSnapshot[OwnershipSnapshotRow] {
-	return kind(decision.closable).Snapshot(ProveSnapshot(
+	return kind(decision.closable).Snapshot(decision.scope, ProveSnapshot(
 		SnapshotTerm{Holds: len(decision.read) > 0, Reason: OwnershipCloseSkippedNoTeamListed},
 		SnapshotTerm{Holds: len(decision.read) == 0 || decision.proven > 0, Reason: OwnershipCloseSkippedListingIncomplete},
-		SnapshotTerm{Holds: !decision.skipped[OwnershipCloseSkippedCensusUnavailable], Reason: OwnershipCloseSkippedCensusUnavailable},
-		SnapshotTerm{Holds: !decision.skipped[OwnershipCloseSkippedCensusFailed], Reason: OwnershipCloseSkippedCensusFailed},
-		SnapshotTerm{Holds: !decision.skipped[OwnershipCloseSkippedScopeShared], Reason: OwnershipCloseSkippedScopeShared},
 	))
 }

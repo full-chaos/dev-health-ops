@@ -85,9 +85,10 @@ func runKindCase[R any](t *testing.T, c kindCase[R]) {
 		}
 		return out
 	}
-	plan := func(fresh []R, proof SnapshotProof) SnapshotPlan {
-		return PlanSnapshot(fresh, open, c.key, c.stamp, at, c.kind.Snapshot(proof))
+	planScoped := func(fresh []R, scope ScopeProof, proof SnapshotProof) SnapshotPlan {
+		return PlanSnapshot(fresh, open, c.key, c.stamp, at, c.kind.Snapshot(scope, proof))
 	}
+	plan := func(fresh []R, proof SnapshotProof) SnapshotPlan { return planScoped(fresh, testSoleScope(), proof) }
 	name := c.provider + "/" + c.kind.Name()
 
 	t.Run(name+"/control: a proven answer that holds a row of the kind closes the row it lost", func(t *testing.T) {
@@ -111,6 +112,29 @@ func runKindCase[R any](t *testing.T, c kindCase[R]) {
 	t.Run(name+"/a proof nobody stated closes nothing", func(t *testing.T) {
 		got := plan([]R{freshHeld}, SnapshotProof{})
 		if len(got.Retract) != 0 || !reflect.DeepEqual(got.SnapshotReasons(), []string{snapshotProofNotStated}) {
+			t.Fatalf("closed %v reasons %v", closed(got), got.SnapshotReasons())
+		}
+	})
+	t.Run(name+"/another active integration of the provider in the organization closes nothing", func(t *testing.T) {
+		counted := snapshotAbandonedCounts(t)
+		got := planScoped([]R{freshHeld, freshForeign}, testSharedScope(), testProof(true))
+		if len(got.Retract) != 0 || !reflect.DeepEqual(got.SnapshotReasons(), []string{OwnershipCloseSkippedScopeShared}) {
+			t.Fatalf("a run that is not the only owner of the rows closed %v (reasons %v)", closed(got), got.SnapshotReasons())
+		}
+		if got.ValidFrom[0] != before {
+			t.Fatalf("the held fact moved to %v, want its first-seen %v: a shared scope still writes what the run found", got.ValidFrom[0], before)
+		}
+		if !ReportSnapshotPlan(context.Background(), c.provider, "org-1", got) {
+			t.Fatal("a shared scope was not reported")
+		}
+		want := map[string]int64{c.provider + "/" + c.kind.Name() + "/" + OwnershipCloseSkippedScopeShared: 1}
+		if moved := snapshotAbandonedMoved(t, counted); !reflect.DeepEqual(moved, want) {
+			t.Fatalf("%s moved %v, want %v", snapshotCloseAbandonedName, moved, want)
+		}
+	})
+	t.Run(name+"/a scope nobody proved closes nothing", func(t *testing.T) {
+		got := planScoped([]R{freshHeld, freshForeign}, ScopeProof{}, testProof(true))
+		if len(got.Retract) != 0 || !reflect.DeepEqual(got.SnapshotReasons(), []string{ScopeNotProven}) {
 			t.Fatalf("closed %v reasons %v", closed(got), got.SnapshotReasons())
 		}
 	})
@@ -221,9 +245,10 @@ func runSingleKindCase[R any](t *testing.T, c kindCase[R]) {
 		}
 		return out
 	}
-	plan := func(fresh []R, proof SnapshotProof) SnapshotPlan {
-		return PlanSnapshot(fresh, open, c.key, c.stamp, at, c.kind.Snapshot(proof))
+	planScoped := func(fresh []R, scope ScopeProof, proof SnapshotProof) SnapshotPlan {
+		return PlanSnapshot(fresh, open, c.key, c.stamp, at, c.kind.Snapshot(scope, proof))
 	}
+	plan := func(fresh []R, proof SnapshotProof) SnapshotPlan { return planScoped(fresh, testSoleScope(), proof) }
 	name := c.provider + "/" + c.kind.Name()
 	t.Run(name+"/control: a proven answer that holds a row of the kind closes the row it lost", func(t *testing.T) {
 		if got := plan([]R{c.own("held", at)}, testProof(true)); !reflect.DeepEqual(closed(got), []string{c.key(lost)}) {
@@ -239,6 +264,24 @@ func runSingleKindCase[R any](t *testing.T, c kindCase[R]) {
 	t.Run(name+"/a proof nobody stated closes nothing", func(t *testing.T) {
 		if got := plan([]R{c.own("held", at)}, SnapshotProof{}); len(got.Retract) != 0 {
 			t.Fatalf("closed %v", closed(got))
+		}
+	})
+	t.Run(name+"/another active integration of the provider in the organization closes nothing", func(t *testing.T) {
+		counted := snapshotAbandonedCounts(t)
+		got := planScoped([]R{c.own("held", at)}, testSharedScope(), testProof(true))
+		if len(got.Retract) != 0 || !reflect.DeepEqual(got.SnapshotReasons(), []string{OwnershipCloseSkippedScopeShared}) {
+			t.Fatalf("a run that is not the only owner of the rows closed %v (reasons %v)", closed(got), got.SnapshotReasons())
+		}
+		ReportSnapshotPlan(context.Background(), c.provider, "org-1", got)
+		want := map[string]int64{c.provider + "/" + c.kind.Name() + "/" + OwnershipCloseSkippedScopeShared: 1}
+		if moved := snapshotAbandonedMoved(t, counted); !reflect.DeepEqual(moved, want) {
+			t.Fatalf("%s moved %v, want %v", snapshotCloseAbandonedName, moved, want)
+		}
+	})
+	t.Run(name+"/a scope nobody proved closes nothing", func(t *testing.T) {
+		got := planScoped([]R{c.own("held", at)}, ScopeProof{}, testProof(true))
+		if len(got.Retract) != 0 || !reflect.DeepEqual(got.SnapshotReasons(), []string{ScopeNotProven}) {
+			t.Fatalf("closed %v reasons %v", closed(got), got.SnapshotReasons())
 		}
 	})
 	t.Run(name+"/an answer with no row at all", func(t *testing.T) {
@@ -269,7 +312,7 @@ func TestPlanSnapshotNeverClosesARowTwoKindsHold(t *testing.T) {
 	at := time.Date(2026, 10, 9, 12, 0, 0, 0, time.UTC)
 	open := []OwnershipSnapshotRow{{TeamID: "T", ProjectID: testPID("p"), Source: "native", ValidFrom: at.Add(-time.Hour)}}
 	fresh := []OwnershipSnapshotRow{{TeamID: "T", ProjectID: testPID("q"), Source: "native", ValidFrom: at}}
-	one := testEveryRowKind(EmptyIsAnAnswer).Snapshot(testProof(true))
+	one := testEveryRowKind(EmptyIsAnAnswer).Snapshot(testSoleScope(), testProof(true))
 	if plan := PlanOwnershipSnapshot(fresh, open, at, one); len(plan.Retract) != 1 {
 		t.Fatalf("control: one kind holds the row and closes it; got %+v", plan.Retract)
 	}
@@ -282,7 +325,7 @@ func TestPlanSnapshotNeverClosesARowTwoKindsHold(t *testing.T) {
 // is not reported. The same answer over an open row is.
 func TestReportSnapshotPlanIsQuietWhenAnEmptyAnswerKeptNothing(t *testing.T) {
 	at := time.Date(2026, 10, 9, 12, 0, 0, 0, time.UTC)
-	kind := JiraLegacyOwnershipKind().Snapshot(testProof(true))
+	kind := JiraLegacyOwnershipKind().Snapshot(testSoleScope(), testProof(true))
 	open := []OwnershipSnapshotRow{{TeamID: "T", ProjectID: testPID("p"), Source: jiraTeamCatalogLegacySource, ValidFrom: at.Add(-time.Hour)}}
 	counted := snapshotAbandonedCounts(t)
 	if ReportSnapshotPlan(context.Background(), "jira", "org-1", PlanOwnershipSnapshot(nil, nil, at, kind)) {
@@ -315,8 +358,7 @@ func TestReportSnapshotPlanWritesOneWarnLinePerAbandonedKind(t *testing.T) {
 		{TeamID: "linear:QA", ProjectID: testPID("other-source"), Source: "manual", ValidFrom: at.Add(-time.Hour)},
 	}
 	fresh := []OwnershipSnapshotRow{{TeamID: "linear:QA", ProjectID: mustProjectID(t)(LinearTeamKeyProjectID(org, "QA")), Source: "native", ValidFrom: at}}
-	plan := PlanOwnershipSnapshot(fresh, open, at, linearOwnershipKindSnapshots(org,
-		LinearReferenceCatalogEvidence{TeamsComplete: true, ProjectsComplete: true}, LinearReferenceCatalogResult{})...)
+	plan := PlanOwnershipSnapshot(fresh, open, at, linearOwnershipKindSnapshots(org, testSoleScope(), LinearReferenceCatalogEvidence{TeamsComplete: true, ProjectsComplete: true}, LinearReferenceCatalogResult{})...)
 	if !ReportSnapshotPlan(context.Background(), "linear", org, plan) {
 		t.Fatal("an empty project answer over an open project row was not reported")
 	}

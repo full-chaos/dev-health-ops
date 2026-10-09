@@ -3,6 +3,7 @@ package providersync
 import (
 	"context"
 	"log/slog"
+	"strings"
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -49,6 +50,7 @@ func judgeJiraOwnershipSnapshot(ctx context.Context, orgID string, plan Snapshot
 		return false
 	}
 	searchComplete, legacyComplete, liveEmpty := true, true, false
+	var scope []string
 	for _, reason := range plan.SnapshotReasons() {
 		switch reason {
 		case jiraSnapshotProjectSearch:
@@ -57,11 +59,17 @@ func judgeJiraOwnershipSnapshot(ctx context.Context, orgID string, plan Snapshot
 			legacyComplete = false
 		case SnapshotEmptyAnswer:
 			liveEmpty = true
+		default:
+			// The scope gate's reasons (scope_shared, ...): counted under
+			// their own label.
+			scope = append(scope, reason)
+			jiraOwnershipSnapshotIncomplete.Add(ctx, 1, metric.WithAttributes(attribute.String("reason", reason)))
 		}
 	}
 	recordJiraOwnershipSnapshotIncomplete(ctx, searchComplete, legacyComplete, liveEmpty)
 	slog.Default().WarnContext(ctx, "jira_team_catalog_ownership_snapshot_incomplete",
 		"org_id", orgID, "project_search_complete", searchComplete,
-		"legacy_links_complete", legacyComplete, "no_live_ownership", liveEmpty, "open_rows_kept", keptRows)
+		"legacy_links_complete", legacyComplete, "no_live_ownership", liveEmpty, "scope", strings.Join(scope, ","),
+		"open_rows_kept", keptRows)
 	return true
 }

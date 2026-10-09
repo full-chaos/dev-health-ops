@@ -604,6 +604,9 @@ func jiraTeamCatalogSkippable400Detail(body []byte) string {
 type JiraTeamCatalogCollector struct {
 	Handler JiraTeamCatalogRouteHandler
 	Sink    JiraTeamCatalogClickHouseEffects
+	// ScopeCensus counts the org's other active Jira integrations. Without
+	// it no ownership row is closed (ProveSoleScope).
+	ScopeCensus OwnershipScopeCensus
 }
 
 func (collector JiraTeamCatalogCollector) CollectTeamCatalog(
@@ -770,10 +773,11 @@ func (collector JiraTeamCatalogCollector) CollectTeamCatalog(
 		// live project is far more often an access change than an
 		// organization that removed every project), whatever the archived
 		// read holds.
-		snapshot := JiraLegacyOwnershipKind().Snapshot(ProveSnapshot(
-			SnapshotTerm{Holds: batch.Result.ProjectSearchComplete, Reason: jiraSnapshotProjectSearch},
-			SnapshotTerm{Holds: legacyComplete, Reason: jiraSnapshotLegacyLinks},
-		))
+		snapshot := JiraLegacyOwnershipKind().Snapshot(
+			ProveSoleScope(ctx, collector.ScopeCensus, ref.OrgID, jiraTeamCatalogProvider, ref.IntegrationID), ProveSnapshot(
+				SnapshotTerm{Holds: batch.Result.ProjectSearchComplete, Reason: jiraSnapshotProjectSearch},
+				SnapshotTerm{Holds: legacyComplete, Reason: jiraSnapshotLegacyLinks},
+			))
 		var retracted []jiraTeamCatalogOwnershipRow
 		var plan SnapshotPlan
 		ownership, retracted, plan = jiraOwnershipSnapshot(ownership, open, normalizedAt.UTC().Truncate(time.Millisecond), snapshot)

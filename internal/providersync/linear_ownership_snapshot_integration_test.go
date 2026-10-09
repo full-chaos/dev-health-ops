@@ -30,8 +30,7 @@ func TestLinearOwnershipThreeSyncsLeaveOneOpenRowPerFact(t *testing.T) {
 			row.OrgID = org
 			fresh = append(fresh, row)
 		}
-		rows, _, err := sink.SnapshotOwnership(ctx, org, fresh, at, linearOwnershipKindSnapshots(org,
-			LinearReferenceCatalogEvidence{TeamsComplete: true, ProjectsComplete: complete}, LinearReferenceCatalogResult{})...)
+		rows, _, err := sink.SnapshotOwnership(ctx, org, fresh, at, linearOwnershipKindSnapshots(org, testSoleScope(), LinearReferenceCatalogEvidence{TeamsComplete: true, ProjectsComplete: complete}, LinearReferenceCatalogResult{})...)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -96,8 +95,9 @@ func runLinearCollectorOverSeededOwnership(t *testing.T, projectNodes string, no
 	ref := teamCatalogRefFromClaim(claim)
 	ref.Strict = false
 	collector := LinearTeamCatalogCollector{
-		Handler: LinearReferenceCatalogRouteHandler{PerPage: 50, MaxPages: 10},
-		Sink:    sink,
+		ScopeCensus: staticScopeCensus{},
+		Handler:     LinearReferenceCatalogRouteHandler{PerPage: 50, MaxPages: 10},
+		Sink:        sink,
 	}
 	result, err := collector.CollectTeamCatalog(ctx, ref,
 		providerfoundation.Credential{Provider: "linear", ID: claim.CredentialID}, linearWorkItemsClient(t, fakehttp.Client(doer)),

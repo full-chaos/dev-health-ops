@@ -18,6 +18,9 @@ import (
 type LinearTeamCatalogCollector struct {
 	Handler LinearReferenceCatalogRouteHandler
 	Sink    LinearReferenceCatalogClickHouseEffects
+	// ScopeCensus counts the org's other active Linear integrations. Without
+	// it no ownership row is closed (ProveSoleScope).
+	ScopeCensus OwnershipScopeCensus
 }
 
 // CollectTeamCatalog walks Linear's teams/members/projects once and writes
@@ -188,7 +191,8 @@ func (collector LinearTeamCatalogCollector) CollectTeamCatalog(
 		// same fact.
 		ownershipRows, plan, err := collector.Sink.SnapshotOwnership(
 			ctx, ref.OrgID, batch.Rows.Ownership, normalizedAt.UTC().Truncate(time.Millisecond),
-			linearOwnershipKindSnapshots(ref.OrgID, batch.Evidence, batch.Result)...)
+			linearOwnershipKindSnapshots(ref.OrgID, ProveSoleScope(ctx, collector.ScopeCensus, ref.OrgID, "linear", ref.IntegrationID),
+				batch.Evidence, batch.Result)...)
 		if err != nil {
 			return result, err
 		}
@@ -203,7 +207,8 @@ func (collector LinearTeamCatalogCollector) CollectTeamCatalog(
 			// ones below are decided here.
 			for _, reason := range plan.SnapshotReasons() {
 				switch reason {
-				case linearSnapshotTeamsNotRead, linearSnapshotKeylessLink, SnapshotEmptyAnswer:
+				case linearSnapshotTeamsNotRead, linearSnapshotKeylessLink, SnapshotEmptyAnswer,
+					OwnershipCloseSkippedScopeShared, OwnershipCloseSkippedCensusUnavailable, OwnershipCloseSkippedCensusFailed, ScopeNotProven:
 					recordLinearOwnershipSnapshotIncomplete(ctx, reason)
 				}
 			}
@@ -250,17 +255,19 @@ const (
 )
 
 // linearOwnershipKindSnapshots is the proof of each fact kind of one Linear
-// catalog run. Each kind's proof holds only terms of its own walk: the team
-// walk for the team-key rows; every project page and node, and every
-// project-team link with a key, for the project rows (a dropped link is a fact
-// the run did not see).
-func linearOwnershipKindSnapshots(orgID string, evidence LinearReferenceCatalogEvidence, result LinearReferenceCatalogResult) []KindSnapshot[OwnershipSnapshotRow] {
+// catalog run. scope is the scope gate's answer for the run (the open rows
+// read are every Linear row of the organization, whatever workspace wrote
+// them). Each kind's proof holds only terms of its own walk: the team walk for
+// the team-key rows; every project page and node, and every project-team link
+// with a key, for the project rows (a dropped link is a fact the run did not
+// see).
+func linearOwnershipKindSnapshots(orgID string, scope ScopeProof, evidence LinearReferenceCatalogEvidence, result LinearReferenceCatalogResult) []KindSnapshot[OwnershipSnapshotRow] {
 	return []KindSnapshot[OwnershipSnapshotRow]{
-		LinearProjectOwnershipKind(orgID).Snapshot(ProveSnapshot(
+		LinearProjectOwnershipKind(orgID).Snapshot(scope, ProveSnapshot(
 			SnapshotTerm{Holds: evidence.ProjectsComplete, Reason: linearSnapshotProjectsNotRead},
 			SnapshotTerm{Holds: result.OwnershipTeamsWithoutKey == 0, Reason: linearSnapshotKeylessLink},
 		)),
-		LinearTeamKeyOwnershipKind(orgID).Snapshot(ProveSnapshot(
+		LinearTeamKeyOwnershipKind(orgID).Snapshot(scope, ProveSnapshot(
 			SnapshotTerm{Holds: evidence.TeamsComplete, Reason: linearSnapshotTeamsNotRead},
 		)),
 	}

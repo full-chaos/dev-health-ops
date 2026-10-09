@@ -37,7 +37,7 @@ func TestLinearOwnershipSnapshotRule(t *testing.T) {
 	open := []linearReferenceOwnershipRow{kept, lost}
 
 	kinds := func(complete bool) []KindSnapshot[OwnershipSnapshotRow] {
-		return linearOwnershipKindSnapshots("org-1", LinearReferenceCatalogEvidence{TeamsComplete: true, ProjectsComplete: complete}, LinearReferenceCatalogResult{})
+		return linearOwnershipKindSnapshots("org-1", testSoleScope(), LinearReferenceCatalogEvidence{TeamsComplete: true, ProjectsComplete: complete}, LinearReferenceCatalogResult{})
 	}
 	rows, plan := linearOwnershipSnapshot([]linearReferenceOwnershipRow{linearOwnershipTestRow(t, "linear:ENG", "p1", t1)}, open, t1, kinds(true)...)
 	closed := len(plan.Retract)
@@ -112,7 +112,7 @@ func TestLinearProjectsCompleteIsFalseWhenANodeIsGivenUp(t *testing.T) {
 				linearOwnershipTestRow(t, "linear:QA", "p3", time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)),
 			}
 			_, plan := linearOwnershipSnapshot(batch.Rows.Ownership, open, time.Now().UTC(),
-				linearOwnershipKindSnapshots(claim.OrgID, batch.Evidence, batch.Result)...)
+				linearOwnershipKindSnapshots(claim.OrgID, testSoleScope(), batch.Evidence, batch.Result)...)
 			if closed := len(plan.Retract); closed != 0 {
 				t.Fatalf("the snapshot closed %d rows after a given-up node: p3 must stay open", closed)
 			}
@@ -213,7 +213,7 @@ func TestLinearOwnershipKindSnapshotsGiveEachKindItsOwnTerms(t *testing.T) {
 		"keyless link dropped": {good, LinearReferenceCatalogResult{OwnershipTeamsWithoutKey: 1}, []string{org + ":linear:GONE"},
 			map[string][]string{"linear_project_ownership": {linearSnapshotKeylessLink}}},
 	} {
-		rows, plan := linearOwnershipSnapshot(fresh, open, at, linearOwnershipKindSnapshots(org, c.evidence, c.result)...)
+		rows, plan := linearOwnershipSnapshot(fresh, open, at, linearOwnershipKindSnapshots(org, testSoleScope(), c.evidence, c.result)...)
 		closed := []string{}
 		for _, row := range rows {
 			if row.ValidTo != nil {
@@ -230,6 +230,38 @@ func TestLinearOwnershipKindSnapshotsGiveEachKindItsOwnTerms(t *testing.T) {
 		if !reflect.DeepEqual(reasons, c.wantReason) {
 			t.Errorf("%s: abandoned %v, want %v", name, reasons, c.wantReason)
 		}
+	}
+}
+
+// Both Linear kinds take the scope gate's answer: with another active Linear
+// integration in the organization, a complete and non-empty run closes no row
+// of either kind and names scope_shared for both.
+func TestLinearOwnershipKindSnapshotsCloseNothingOnASharedScope(t *testing.T) {
+	const org = "org-1"
+	at := time.Date(2026, 10, 9, 12, 0, 0, 0, time.UTC)
+	before := at.Add(-time.Hour)
+	teamKey := func(key string, validFrom time.Time) linearReferenceOwnershipRow {
+		row := linearOwnershipTestRow(t, "linear:"+key, "unused", validFrom)
+		row.ProjectID = mustProjectID(t)(LinearTeamKeyProjectID(org, key))
+		return row
+	}
+	open := []linearReferenceOwnershipRow{linearOwnershipTestRow(t, "linear:QA", "other-workspace-project", before), teamKey("OTHER", before)}
+	fresh := []linearReferenceOwnershipRow{linearOwnershipTestRow(t, "linear:OPS", "this-workspace-project", at), teamKey("OPS", at)}
+	good := LinearReferenceCatalogEvidence{TeamsComplete: true, ProjectsComplete: true}
+	_, shared := linearOwnershipSnapshot(fresh, open, at, linearOwnershipKindSnapshots(org, testSharedScope(), good, LinearReferenceCatalogResult{})...)
+	reasons := map[string][]string{}
+	for _, outcome := range shared.Abandoned() {
+		reasons[outcome.Kind] = outcome.Abandoned
+	}
+	want := map[string][]string{
+		"linear_project_ownership":  {OwnershipCloseSkippedScopeShared},
+		"linear_team_key_ownership": {OwnershipCloseSkippedScopeShared},
+	}
+	if len(shared.Retract) != 0 || !reflect.DeepEqual(reasons, want) {
+		t.Fatalf("a shared scope: retract=%+v abandoned=%v, want nothing closed and %v", shared.Retract, reasons, want)
+	}
+	if _, sole := linearOwnershipSnapshot(fresh, open, at, linearOwnershipKindSnapshots(org, testSoleScope(), good, LinearReferenceCatalogResult{})...); len(sole.Retract) != 2 {
+		t.Fatalf("control, the only integration: retract=%+v, want both rows of the lost workspace state closed", sole.Retract)
 	}
 }
 
@@ -274,7 +306,7 @@ func TestLinearEmptyAnswerOfOneKindClosesNoRowOfThatKind(t *testing.T) {
 				t.Fatalf("the walk must be complete for this test to measure the empty rule: %+v", batch.Evidence)
 			}
 			rows, plan := linearOwnershipSnapshot(batch.Rows.Ownership, open, time.Date(2026, 10, 9, 12, 0, 0, 0, time.UTC),
-				linearOwnershipKindSnapshots(org, batch.Evidence, batch.Result)...)
+				linearOwnershipKindSnapshots(org, testSoleScope(), batch.Evidence, batch.Result)...)
 			closed := map[string]bool{}
 			for _, row := range rows {
 				if row.ValidTo != nil {
@@ -367,7 +399,7 @@ func TestLinearCatalogNeverReadsAnAbsentPageEndAsTheEnd(t *testing.T) {
 			}
 			open := []linearReferenceOwnershipRow{linearOwnershipTestRow(t, "linear:QA", "keep", time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC))}
 			_, plan := linearOwnershipSnapshot(batch.Rows.Ownership, open, time.Now().UTC(),
-				linearOwnershipKindSnapshots(chaos4530SyntheticOrgID, batch.Evidence, batch.Result)...)
+				linearOwnershipKindSnapshots(chaos4530SyntheticOrgID, testSoleScope(), batch.Evidence, batch.Result)...)
 			if closed := len(plan.Retract); closed != 0 {
 				t.Fatalf("the snapshot closed %d rows on %s", closed, name)
 			}

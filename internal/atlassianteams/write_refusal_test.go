@@ -56,7 +56,7 @@ func TestAtlassianWriteRefusesABareTeamID(t *testing.T) {
 			rows := base()
 			plant(&rows)
 			touches := 0
-			_, err := Write(context.Background(), touchCountingConn{touches: &touches}, "org-1", rows, Selections{Structure: true, Members: true, Projects: true})
+			_, err := Write(context.Background(), touchCountingConn{touches: &touches}, "org-1", rows, Selections{Structure: true, Members: true, Projects: true}, soleScope())
 			if !errors.Is(err, teamid.ErrBareTeamID) || !errors.Is(err, ErrConfiguration) {
 				t.Fatalf("Write = %v, want a refusal of the bare team id", err)
 			}
@@ -66,7 +66,7 @@ func TestAtlassianWriteRefusesABareTeamID(t *testing.T) {
 		})
 	}
 	touches := 0
-	if _, err := Write(context.Background(), touchCountingConn{touches: &touches}, "org-1", base(), Selections{Structure: true}); errors.Is(err, teamid.ErrBareTeamID) || touches == 0 {
+	if _, err := Write(context.Background(), touchCountingConn{touches: &touches}, "org-1", base(), Selections{Structure: true}, soleScope()); errors.Is(err, teamid.ErrBareTeamID) || touches == 0 {
 		t.Fatalf("Write of prefixed rows = %v after %d touches, want it to pass the refusal and read", err, touches)
 	}
 }

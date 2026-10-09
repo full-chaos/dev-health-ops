@@ -1,6 +1,7 @@
 package providersync
 
 import (
+	"context"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -23,6 +24,18 @@ func testEveryRowKind(empty EmptyAnswer) SnapshotKind[OwnershipSnapshotRow] {
 	return NewSnapshotKind("test_every_row", empty, func(OwnershipSnapshotRow) bool { return true })
 }
 
+// testSoleScope is the scope gate's answer for a run that is the only active
+// integration of its provider in the organization.
+func testSoleScope() ScopeProof {
+	return ProveSoleScope(context.Background(), staticScopeCensus{}, "org-1", "test", "integration-a")
+}
+
+// testSharedScope is the gate's answer when one other active integration of
+// the provider exists.
+func testSharedScope() ScopeProof {
+	return ProveSoleScope(context.Background(), staticScopeCensus{siblings: 1}, "org-1", "test", "integration-a")
+}
+
 // testProof is a one-term proof.
 func testProof(holds bool) SnapshotProof {
 	return ProveSnapshot(SnapshotTerm{Holds: holds, Reason: "test_walk_not_read_to_the_end"})
@@ -35,7 +48,7 @@ func TestPlanOwnershipSnapshotKeepsFirstSeenAndRetractsTheRest(t *testing.T) {
 	fact := func(team, project, source string, validFrom time.Time) OwnershipSnapshotRow {
 		return OwnershipSnapshotRow{TeamID: team, ProjectID: testPID(project), Source: source, ValidFrom: validFrom}
 	}
-	proven := testEveryRowKind(EmptyIsAnAnswer).Snapshot(testProof(true))
+	proven := testEveryRowKind(EmptyIsAnAnswer).Snapshot(testSoleScope(), testProof(true))
 	fresh := []OwnershipSnapshotRow{fact("T", "10001", "native", now), fact("T", "10002", "native", now)}
 	open := []OwnershipSnapshotRow{
 		fact("T", "10001", "native", later),              // 0: a later duplicate of a held fact
@@ -81,7 +94,7 @@ func TestPlanOwnershipSnapshotKeepsFirstSeenAndRetractsTheRest(t *testing.T) {
 	}
 
 	// The same answer for a kind whose empty answer closes nothing.
-	kept := PlanOwnershipSnapshot(nil, open[:2], now, testEveryRowKind(EmptyClosesNothing).Snapshot(testProof(true)))
+	kept := PlanOwnershipSnapshot(nil, open[:2], now, testEveryRowKind(EmptyClosesNothing).Snapshot(testSoleScope(), testProof(true)))
 	if len(kept.Retract) != 0 || !reflect.DeepEqual(kept.Kinds[0].Abandoned, []string{SnapshotEmptyAnswer}) {
 		t.Fatalf("empty snapshot of a kind whose empty answer closes nothing: %+v", kept)
 	}
@@ -107,11 +120,11 @@ func TestPlanOwnershipSnapshotClosesNothingForASnapshotThatIsNotComplete(t *test
 		kinds  []KindSnapshot[OwnershipSnapshotRow]
 		reason string
 	}{
-		"stated not complete":      {fresh, []KindSnapshot[OwnershipSnapshotRow]{kind.Snapshot(testProof(false))}, "test_walk_not_read_to_the_end"},
-		"proof not stated":         {fresh, []KindSnapshot[OwnershipSnapshotRow]{kind.Snapshot(SnapshotProof{})}, snapshotProofNotStated},
-		"a term with no reason":    {fresh, []KindSnapshot[OwnershipSnapshotRow]{kind.Snapshot(ProveSnapshot(SnapshotTerm{Holds: true}))}, "snapshot_term_without_reason"},
-		"one of two terms":         {fresh, []KindSnapshot[OwnershipSnapshotRow]{kind.Snapshot(ProveSnapshot(SnapshotTerm{Holds: true, Reason: "a"}, SnapshotTerm{Holds: false, Reason: "b"}))}, "b"},
-		"no fresh row, not proven": {nil, []KindSnapshot[OwnershipSnapshotRow]{kind.Snapshot(testProof(false))}, "test_walk_not_read_to_the_end"},
+		"stated not complete":      {fresh, []KindSnapshot[OwnershipSnapshotRow]{kind.Snapshot(testSoleScope(), testProof(false))}, "test_walk_not_read_to_the_end"},
+		"proof not stated":         {fresh, []KindSnapshot[OwnershipSnapshotRow]{kind.Snapshot(testSoleScope(), SnapshotProof{})}, snapshotProofNotStated},
+		"a term with no reason":    {fresh, []KindSnapshot[OwnershipSnapshotRow]{kind.Snapshot(testSoleScope(), ProveSnapshot(SnapshotTerm{Holds: true}))}, "snapshot_term_without_reason"},
+		"one of two terms":         {fresh, []KindSnapshot[OwnershipSnapshotRow]{kind.Snapshot(testSoleScope(), ProveSnapshot(SnapshotTerm{Holds: true, Reason: "a"}, SnapshotTerm{Holds: false, Reason: "b"}))}, "b"},
+		"no fresh row, not proven": {nil, []KindSnapshot[OwnershipSnapshotRow]{kind.Snapshot(testSoleScope(), testProof(false))}, "test_walk_not_read_to_the_end"},
 		"a kind nobody made":       {fresh, []KindSnapshot[OwnershipSnapshotRow]{{}}, "snapshot_kind_not_made"},
 		"no kind at all":           {fresh, nil, ""},
 	} {
@@ -132,7 +145,7 @@ func TestPlanOwnershipSnapshotClosesNothingForASnapshotThatIsNotComplete(t *test
 			t.Errorf("%s: reasons=%v, want %q", name, got, c.reason)
 		}
 	}
-	if complete := PlanOwnershipSnapshot(fresh, open, now, kind.Snapshot(testProof(true))); len(complete.Retract) != 2 {
+	if complete := PlanOwnershipSnapshot(fresh, open, now, kind.Snapshot(testSoleScope(), testProof(true))); len(complete.Retract) != 2 {
 		t.Fatalf("the same rows as a proven snapshot: retract=%+v, want the duplicate and the lost fact closed", complete.Retract)
 	}
 }
@@ -267,6 +280,11 @@ type ownershipCensus struct {
 	// constantTerms: the functions that hold a SnapshotTerm literal whose
 	// Holds is the constant true or false, or whose Reason is not a name.
 	constantTerms []string
+	// scopeMakers: the functions that hold a ScopeProof literal with a field
+	// (the zero literal is the unproven value and makes nothing).
+	scopeMakers []string
+	// censusCallers: the functions that call CountActiveSiblingIntegrations.
+	censusCallers []string
 }
 
 func ownershipCensusFunctionName(directory string, function *ast.FuncDecl) string {
@@ -409,6 +427,9 @@ func scanOwnershipCensus(t *testing.T, repoRoot string, roots ...string) ownersh
 					case *ast.SelectorExpr:
 						name = literal.Sel.Name
 					}
+					if name == "ScopeProof" && len(typed.Elts) > 0 {
+						census.scopeMakers = append(census.scopeMakers, qualified)
+					}
 					if name != "SnapshotTerm" {
 						break
 					}
@@ -463,6 +484,9 @@ func scanOwnershipCensus(t *testing.T, repoRoot string, roots ...string) ownersh
 				case *ast.CallExpr:
 					name := calleeName(typed)
 					called[name] = true
+					if name == "CountActiveSiblingIntegrations" {
+						census.censusCallers = append(census.censusCallers, qualified)
+					}
 					if name == "NewSnapshotKind" && len(typed.Args) == 3 {
 						kind := [2]string{"<not a literal>", "<not a name>"}
 						if literal, ok := typed.Args[0].(*ast.BasicLit); ok && literal.Kind == token.STRING {
@@ -492,6 +516,8 @@ func scanOwnershipCensus(t *testing.T, repoRoot string, roots ...string) ownersh
 	sort.Strings(census.writers)
 	sort.Strings(census.planners)
 	sort.Strings(census.constantTerms)
+	sort.Strings(census.scopeMakers)
+	sort.Strings(census.censusCallers)
 	return census
 }
 

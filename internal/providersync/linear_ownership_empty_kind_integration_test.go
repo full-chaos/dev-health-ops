@@ -65,8 +65,9 @@ func TestLinearCollectorEmptyAnswerOfAKindClosesNoRowOfThatKind(t *testing.T) {
 			ref := teamCatalogRefFromClaim(claim)
 			ref.Strict = false
 			collector := LinearTeamCatalogCollector{
-				Handler: LinearReferenceCatalogRouteHandler{PerPage: 50, MaxPages: 10},
-				Sink:    sink,
+				ScopeCensus: staticScopeCensus{},
+				Handler:     LinearReferenceCatalogRouteHandler{PerPage: 50, MaxPages: 10},
+				Sink:        sink,
 			}
 			result, err := collector.CollectTeamCatalog(ctx, ref,
 				providerfoundation.Credential{Provider: "linear", ID: claim.CredentialID},

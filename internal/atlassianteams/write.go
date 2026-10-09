@@ -66,6 +66,12 @@ type Result struct {
 	// DeactivatedTeams counts catalog rows of Atlassian teams the snapshot no
 	// longer returns (deleted upstream), rewritten inactive.
 	DeactivatedTeams int
+	// CloseAbandoned holds, sorted and without repeats, the reason of every
+	// fact kind (teams, memberships, project links) whose close this call gave
+	// up while open rows of the kind were kept: the scope gate's reason
+	// (scope_shared, ...), a read that did not reach its end, or an empty
+	// team search. Empty when every selected kind could close.
+	CloseAbandoned []string
 }
 
 const (
@@ -106,7 +112,13 @@ const (
 // of adding one. Teams are written only when the structure was selected; an
 // existing team's manual members are carried over, and its project keys when
 // the project links were not read this run, or not read for that team.
-func Write(ctx context.Context, conn driver.Conn, orgID string, rows Rows, selections Selections) (Result, error) {
+//
+// scope is the scope gate's answer for the run (providersync.ProveSoleScope
+// for provider jira): the reads below are every Atlassian team row of the
+// organization, whatever site wrote them, so a run closes and deactivates
+// only when the organization has no other active Jira integration. A scope
+// that is not proven writes what the run found and closes nothing.
+func Write(ctx context.Context, conn driver.Conn, orgID string, rows Rows, selections Selections, scope providersync.ScopeProof) (Result, error) {
 	var result Result
 	if conn == nil || orgID == "" {
 		return result, ErrConfiguration
@@ -114,11 +126,18 @@ func Write(ctx context.Context, conn driver.Conn, orgID string, rows Rows, selec
 	if err := checkTeamIDs(rows); err != nil {
 		return result, err
 	}
-	scope, missing, catalog, err := teamsInScope(ctx, conn, orgID, rows)
+	teams, missing, catalog, err := teamsInScope(ctx, conn, orgID, rows, scope)
 	if err != nil {
 		return result, fmt.Errorf("read known atlassian teams: %w", err)
 	}
-	providersync.ReportSnapshotPlan(ctx, Provider, orgID, catalog)
+	abandoned := map[string]bool{}
+	report := func(plan providersync.SnapshotPlan) {
+		providersync.ReportSnapshotPlan(ctx, Provider, orgID, plan)
+		for _, reason := range plan.SnapshotReasons() {
+			abandoned[reason] = true
+		}
+	}
+	report(catalog)
 	var deactivate []inactiveTeam
 	if selections.Structure {
 		if deactivate, err = planDeactivations(ctx, conn, orgID, missing); err != nil {
@@ -165,24 +184,28 @@ func Write(ctx context.Context, conn driver.Conn, orgID string, rows Rows, selec
 	var expiredMemberships []openMembership
 	if selections.Members {
 		var plan providersync.SnapshotPlan
-		if memberships, expiredMemberships, plan, err = planMemberships(ctx, conn, orgID, scope, freshMemberships, now,
-			providersync.AtlassianTeamMembershipKind().Snapshot(providersync.ProveSnapshot(
+		if memberships, expiredMemberships, plan, err = planMemberships(ctx, conn, orgID, teams, freshMemberships, now,
+			providersync.AtlassianTeamMembershipKind().Snapshot(scope, providersync.ProveSnapshot(
 				providersync.SnapshotTerm{Holds: rows.MembershipsComplete, Reason: snapshotMemberReadsNotEnded}))); err != nil {
 			return result, fmt.Errorf("read current team memberships: %w", err)
 		}
-		providersync.ReportSnapshotPlan(ctx, Provider, orgID, plan)
+		report(plan)
 	}
 	var ownership []OwnershipRow
 	var expiredOwnership []openOwnership
 	if selections.Projects {
 		var plan providersync.SnapshotPlan
-		if ownership, expiredOwnership, plan, err = planOwnership(ctx, conn, orgID, scope, rows.Ownership, now,
-			providersync.AtlassianTeamLinkKind(Source, rows.UnreadableProjectLinkTeams).Snapshot(providersync.ProveSnapshot(
+		if ownership, expiredOwnership, plan, err = planOwnership(ctx, conn, orgID, teams, rows.Ownership, now,
+			providersync.AtlassianTeamLinkKind(Source, rows.UnreadableProjectLinkTeams).Snapshot(scope, providersync.ProveSnapshot(
 				providersync.SnapshotTerm{Holds: rows.ProjectLinksComplete, Reason: snapshotLinkReadsNotEnded}))); err != nil {
 			return result, fmt.Errorf("read current team project ownership: %w", err)
 		}
-		providersync.ReportSnapshotPlan(ctx, Provider, orgID, plan)
+		report(plan)
 	}
+	for reason := range abandoned {
+		result.CloseAbandoned = append(result.CloseAbandoned, reason)
+	}
+	slices.Sort(result.CloseAbandoned)
 	if selections.Projects {
 		result.ProjectLinks = rows.ProjectLinks
 		result.ProjectLinksIncomplete = !rows.ProjectLinksComplete
@@ -253,8 +276,10 @@ const (
 // at least one team (providersync.AtlassianTeamCatalogKind): a search that
 // answers no team is far more often an access change than an organization
 // that deleted every team, so it puts no other team in scope, and nothing of
-// those teams is closed or deactivated.
-func teamsInScope(ctx context.Context, conn driver.Conn, orgID string, rows Rows) (ids, missing []string, plan providersync.SnapshotPlan, err error) {
+// those teams is closed or deactivated. The same holds when the scope gate
+// did not prove the run the only Jira integration of the organization: a
+// catalog team outside the answer may be a team of another site.
+func teamsInScope(ctx context.Context, conn driver.Conn, orgID string, rows Rows, scope providersync.ScopeProof) (ids, missing []string, plan providersync.SnapshotPlan, err error) {
 	seen := map[string]bool{}
 	var fresh []providersync.TeamSnapshotRow
 	for _, team := range rows.Teams {
@@ -287,7 +312,7 @@ func teamsInScope(ctx context.Context, conn driver.Conn, orgID string, rows Rows
 	}
 	plan = providersync.PlanSnapshot(fresh, known, providersync.TeamSnapshotKey,
 		func(providersync.TeamSnapshotRow) time.Time { return time.Time{} }, time.Time{},
-		providersync.AtlassianTeamCatalogKind().Snapshot(providersync.ProveSnapshot(
+		providersync.AtlassianTeamCatalogKind().Snapshot(scope, providersync.ProveSnapshot(
 			providersync.SnapshotTerm{Holds: rows.TeamSearchComplete, Reason: snapshotTeamSearchNotEnded})))
 	for _, retraction := range plan.Retract {
 		id := known[retraction.Open].TeamID

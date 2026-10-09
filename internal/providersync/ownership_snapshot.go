@@ -63,6 +63,32 @@ func (proof SnapshotProof) Missing() []string {
 	return append([]string(nil), proof.missing...)
 }
 
+// ScopeProof says the run is the only possible owner of the open rows its
+// kinds hold. The rows carry no integration key, so a walk proves its own
+// scope only: when another active integration of the same provider exists in
+// the organization, an open row the run does not hold may be that
+// integration's row, and closing it would remove ownership the other
+// integration writes again at its next run. It is made only by ProveSoleScope
+// (the one scope gate, ownership_close_gate.go). The zero value is not proven.
+type ScopeProof struct {
+	stated  bool
+	missing []string
+}
+
+// ScopeNotProven is the reason of a scope proof nobody made.
+const ScopeNotProven = "scope_not_proven"
+
+// Proven reports whether the scope gate let the run close.
+func (scope ScopeProof) Proven() bool { return scope.stated && len(scope.missing) == 0 }
+
+// Missing is why the scope is not proven.
+func (scope ScopeProof) Missing() []string {
+	if !scope.stated {
+		return []string{ScopeNotProven}
+	}
+	return append([]string(nil), scope.missing...)
+}
+
 // EmptyAnswer is what a proven snapshot of a fact kind that holds no row of
 // the kind means. Each kind states it where the kind is made.
 type EmptyAnswer int
@@ -100,17 +126,21 @@ func NewSnapshotKind[R any](name string, empty EmptyAnswer, holds func(R) bool) 
 // Name is the kind's label.
 func (kind SnapshotKind[R]) Name() string { return kind.name }
 
-// Snapshot states what one run proved for the kind.
-func (kind SnapshotKind[R]) Snapshot(proof SnapshotProof) KindSnapshot[R] {
-	return KindSnapshot[R]{kind: kind, proof: proof}
+// Snapshot states what one run proved for the kind: scope, that the run is
+// the only possible owner of the kind's open rows, and proof, that the kind's
+// walk reached a stated end. Both are arguments, so a kind cannot be stated
+// as proven without either.
+func (kind SnapshotKind[R]) Snapshot(scope ScopeProof, proof SnapshotProof) KindSnapshot[R] {
+	return KindSnapshot[R]{kind: kind, scope: scope, proof: proof}
 }
 
-// KindSnapshot is one kind and the proof of its walk: the only form in which
-// PlanSnapshot accepts what a run found. The rule counts the rows of the kind
-// itself, so a caller cannot state a count, pass a list of another kind as
-// this kind's answer, or leave out the proof.
+// KindSnapshot is one kind with the proof of its scope and the proof of its
+// walk: the only form in which PlanSnapshot accepts what a run found. The rule
+// counts the rows of the kind itself, so a caller cannot state a count, pass a
+// list of another kind as this kind's answer, or leave out a proof.
 type KindSnapshot[R any] struct {
 	kind  SnapshotKind[R]
+	scope ScopeProof
 	proof SnapshotProof
 }
 
@@ -207,6 +237,10 @@ func PlanOwnershipSnapshot(fresh, open []OwnershipSnapshotRow, at time.Time, kin
 // hold (a fact the snapshot no longer has, an id form no writer produces any
 // more, a later duplicate of a fact it does have) only when:
 //
+//   - its scope holds: the run is the only possible owner of the kind's open
+//     rows (ProveSoleScope: no other active integration of the provider in the
+//     organization), so a row the run does not hold is not another
+//     integration's row;
 //   - its proof holds: every read of the kind's walk reached a stated end; and
 //   - the run holds at least one row of THE KIND, unless the kind declares an
 //     empty answer to be an answer (EmptyIsAnAnswer). A row of another kind
@@ -246,6 +280,9 @@ func PlanSnapshot[R any](
 		if snapshot.kind.holds == nil || strings.TrimSpace(snapshot.kind.name) == "" {
 			outcome.Abandoned = append(outcome.Abandoned, "snapshot_kind_not_made")
 			continue
+		}
+		if !snapshot.scope.Proven() {
+			outcome.Abandoned = append(outcome.Abandoned, snapshot.scope.Missing()...)
 		}
 		if !snapshot.proof.Proven() {
 			outcome.Abandoned = append(outcome.Abandoned, snapshot.proof.Missing()...)

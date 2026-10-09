@@ -5,6 +5,7 @@ package aianalytics
 import (
 	"context"
 	"reflect"
+	"sort"
 	"testing"
 	"time"
 
@@ -43,16 +44,27 @@ func TestLoadTeamsListsOnlyActiveTeams(t *testing.T) {
 	base := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
 	insert := `INSERT INTO teams (id, team_uuid, name, members, repo_patterns, updated_at, org_id, is_active)
 		VALUES (?, generateUUIDv4(), ?, [], ['org/*'], ?, ?, ?)`
+	const otherOrg = "org-9032-other-tenant"
 	for _, row := range []struct {
-		id     string
-		at     time.Time
-		active uint8
+		id, name, org string
+		at            time.Time
+		active        uint8
 	}{
-		{"github:platform", base.Add(time.Hour), 1},
-		{"platform", base, 1}, // the bare row the carry retires below
-		{"platform", base.Add(time.Hour), 0},
+		{"github:platform", "Platform", org, base.Add(time.Hour), 1},
+		{"platform", "Platform", org, base, 1}, // the bare row the carry retires below
+		{"platform", "Platform", org, base.Add(time.Hour), 0},
+		// A second provider id shape: the rule must not ride on `github:`.
+		{"linear:growth", "Growth", org, base.Add(time.Hour), 1},
+		{"growth", "Growth", org, base, 1},
+		{"growth", "Growth", org, base.Add(time.Hour), 0},
+		{"jira:payments", "Payments", org, base.Add(time.Hour), 1},
+		// Another tenant holds the SAME bare ids as ACTIVE rows, and its own team.
+		{"platform", "Other Platform", otherOrg, base, 1},
+		{"growth", "Other Growth", otherOrg, base, 1},
+		{"other:team", "Other Team", otherOrg, base, 1},
+		{"github:platform", "Other GitHub Platform", otherOrg, base.Add(2 * time.Hour), 1},
 	} {
-		if err := conn.Exec(ctx, insert, row.id, "Platform", row.at, org, row.active); err != nil {
+		if err := conn.Exec(ctx, insert, row.id, row.name, row.at, row.org, row.active); err != nil {
 			t.Fatalf("insert team %+v: %v", row, err)
 		}
 	}
@@ -61,10 +73,22 @@ func TestLoadTeamsListsOnlyActiveTeams(t *testing.T) {
 		t.Fatalf("loadTeams: %v", err)
 	}
 	var ids []string
+	names := map[string]string{}
 	for _, team := range teams {
 		ids = append(ids, team.ID)
+		names[team.ID] = team.Name
 	}
-	if want := []string{"github:platform"}; !reflect.DeepEqual(ids, want) {
+	wantNames := map[string]string{"github:platform": "Platform", "jira:payments": "Payments", "linear:growth": "Growth"}
+	if !reflect.DeepEqual(names, wantNames) {
+		t.Fatalf("loadTeams names = %v, want %v", names, wantNames)
+	}
+	if want := []string{"github:platform", "jira:payments", "linear:growth"}; !reflect.DeepEqual(sortedCopy(ids), want) {
 		t.Fatalf("loadTeams ids = %v, want %v", ids, want)
 	}
+}
+
+func sortedCopy(in []string) []string {
+	out := append([]string(nil), in...)
+	sort.Strings(out)
+	return out
 }

@@ -698,18 +698,6 @@ func TestDispatchMetricsDailyStartValidatesFlagsBeforeTouchingTheBackend(t *test
 		"invalid repo-id": {
 			"daily-start", "--org", org, "--day", "2026-08-01", "--repo-id", "not-a-uuid",
 		},
-		"empty rerun token": {
-			"daily-start", "--org", org, "--day", "2026-08-01", "--rerun", "",
-			"--reason", "operator_test", "--correlation-id", "corr-1",
-		},
-		"rerun token with a character outside the set": {
-			"daily-start", "--org", org, "--day", "2026-08-01", "--rerun", "two words",
-			"--reason", "operator_test", "--correlation-id", "corr-1",
-		},
-		"rerun token over 64 characters": {
-			"daily-start", "--org", org, "--day", "2026-08-01", "--rerun", strings.Repeat("a", 65),
-			"--reason", "operator_test", "--correlation-id", "corr-1",
-		},
 	}
 	for name, args := range cases {
 		t.Run(name, func(t *testing.T) {

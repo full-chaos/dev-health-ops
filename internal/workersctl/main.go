@@ -903,14 +903,8 @@ func dispatchMetricsDailyStart(ctx context.Context, runtime *operatorRuntime, ar
 	to := flags.String("to", "", "last target_day, inclusive (YYYY-MM-DD, UTC) -- defaults to --day for a single day")
 	var repoIDs stringList
 	flags.Var(&repoIDs, "repo-id", "repository uuid to scope this run to (repeatable); omit for every org repository (deferred discovery, same as the fixed-schedule fanout)")
-	rerun := flags.String("rerun", "", "compute each day again, also a day that a run already covers: a token of 1 to 64 letters, digits, '.', '_' or '-' that names this re-run. The same token starts nothing a second time (a retry is safe); a new token starts a new run. A day with a manual run pending or running is refused with in_progress")
 	mutation := addMutationFlags(flags)
 	if flags.Parse(args) != nil || flags.NArg() != 0 || !mutation.valid(false) {
-		return writeError(stderr, "invalid_request")
-	}
-	rerunSet := false
-	flags.Visit(func(visited *flag.Flag) { rerunSet = rerunSet || visited.Name == "rerun" })
-	if rerunSet && !daily.ValidManualDailyRerunToken(*rerun) {
 		return writeError(stderr, "invalid_request")
 	}
 	canonicalOrg, code := resolveOrgFlag(runtime, *org, *orgStdin, stderr)
@@ -956,23 +950,8 @@ func dispatchMetricsDailyStart(ctx context.Context, runtime *operatorRuntime, ar
 		var results []daily.ManualDailyRunOutcome
 		for cursor := fromDay; !cursor.After(toDay); cursor = cursor.AddDate(0, 0, 1) {
 			dayString := cursor.Format("2006-01-02")
-			var (
-				outcome daily.ManualDailyRunOutcome
-				err     error
-			)
-			if rerunSet {
-				generation := daily.ManualDailyRerunGeneration(*org, dayString, repositoryIDs, *rerun)
-				outcome, err = store.StartManualDailyRerun(ctx, *org, dayString, generation, repositoryIDs, publisher)
-			} else {
-				generation := daily.ManualDailyRunGeneration(*org, dayString, repositoryIDs)
-				outcome, err = store.StartManualDailyRun(ctx, *org, dayString, generation, repositoryIDs, publisher)
-			}
-			if errors.Is(err, daily.ErrManualRunInFlight) {
-				// The days before this one are started. The same command with
-				// the same token starts none of them again and goes on from
-				// this day when its run in flight has ended.
-				return writeError(stderr, "in_progress")
-			}
+			generation := daily.ManualDailyRunGeneration(*org, dayString, repositoryIDs)
+			outcome, err := store.StartManualDailyRun(ctx, *org, dayString, generation, repositoryIDs, publisher)
 			if errors.Is(err, daily.ErrDayAlreadyCovered) {
 				// A clean, distinguishable code (codex adversarial review round
 				// 2, P1) rather than the generic operator_request_failed
@@ -994,9 +973,6 @@ func dispatchMetricsDailyStart(ctx context.Context, runtime *operatorRuntime, ar
 			// ClickHouse identity, not this command's own (possibly stale) view
 			// of the org's repository set.
 			"deferred_discovery": len(repositoryIDs) == 0,
-			// rerun is true when --rerun was given: each day is computed again
-			// under the generation of the token.
-			"rerun": rerunSet,
 		})
 	}
 	return auditedWriteWith(ctx, runtime, stderr, mutation, joboperator.ActionMetricsDailyStart, "organization", *org, !*orgStdin, perform)

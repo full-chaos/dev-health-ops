@@ -68,12 +68,6 @@ var (
 	// unrelated to this diff, and are out of this fix's scope -- see the
 	// doc comment on StartManualDailyRun).
 	ErrDayAlreadyCovered = errors.New("daily metrics day is already covered by a succeeded run")
-	// ErrManualRunInFlight means a re-run of a stored day (`metrics daily-start
-	// --rerun`) found another manual run of the same (organization, day)
-	// pending or running. It is refused, not queued: the operator sends the
-	// request again when the run in flight has ended. See
-	// StartManualDailyRerun.
-	ErrManualRunInFlight = errors.New("a manual daily metrics run of the day is in flight")
 	// ErrPostBridgeFamilyIncomplete means computePostBridgeNativeFamilies hit
 	// a refusal or a partial write for at least one post_bridge family this
 	// partition (CHAOS-5190, astra scale review F1). Work uses it to hold the

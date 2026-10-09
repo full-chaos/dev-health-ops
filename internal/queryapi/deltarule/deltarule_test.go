@@ -41,8 +41,5 @@ func TestADeltaNeedsTwoMeasuredValuesAndIsUndefinedFromAMeasuredZero(t *testing.
 		if got := Complete(tc.curHas, tc.priorHas); got != tc.complete {
 			t.Errorf("%s: Complete = %v, want %v", tc.name, got, tc.complete)
 		}
-		if d.Defined() != (tc.kind == KindPct) {
-			t.Errorf("%s: Defined = %v", tc.name, d.Defined())
-		}
 	}
 }

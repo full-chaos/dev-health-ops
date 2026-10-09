@@ -152,7 +152,10 @@ type Golden struct {
 	// snapshot nothing consumed is a comparison that no longer happens.
 	rowsUsed    map[string]bool
 	rowsFetched map[string]bool
-	state       goldenState
+	// retired counts, per ruling, the answers and row comparisons the test
+	// retired (golden_retired.go).
+	retired map[string]retiredCount
+	state   goldenState
 	// What a recording replaced by a placeholder (see golden_blanked.go): the
 	// count per pattern, and the digests of the raw values a Scrub blanked.
 	blankCounts   map[string]int
@@ -1301,7 +1304,7 @@ func (g *Golden) Finish(t *testing.T) {
 	if err := g.pythonEnvUnboundErr(); err != nil {
 		t.Fatal(err)
 	}
-	WriteGoOnlyProof(t, "Go against the Python plane's answers executed on build "+g.spec.PythonBuild+" (frozen golden "+filepath.Base(g.spec.Path)+")")
+	WriteGoOnlyProof(t, "Go against the Python plane's answers executed on build "+g.spec.PythonBuild+" (frozen golden "+filepath.Base(g.spec.Path)+")"+g.retiredText())
 	g.use.finish()
 }
 

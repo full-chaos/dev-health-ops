@@ -66,6 +66,14 @@ type Table struct {
 	// Measures are the stored counts and values. A key is live while its
 	// newest row holds a value other than 0 in one of them.
 	Measures []string
+	// Counts are the measures that are unsigned integer columns: every
+	// unsigned column of the table outside its sorting key. A row of zeros
+	// holds 0 in each. See MarkerColumns.
+	Counts []string
+	// Marker is, for a table with no count column, the columns that are never
+	// 0 in a row the family computed and are all 0 in a row of zeros. They are
+	// measures of the declaration too. See MarkerColumns.
+	Marker []string
 	// NullableMeasures are the Nullable measures. A key is live while its
 	// newest row holds a value in one of them.
 	NullableMeasures []string
@@ -87,6 +95,7 @@ var (
 		Table: "work_item_metrics_daily", Family: "work_item", DayColumn: "day",
 		Keys:       []KeyColumn{{"provider", KeyString}, {"work_scope_id", KeyString}, {"team_id", KeyString}},
 		TeamColumn: "team_id", Scope: []string{"provider", "work_scope_id"}, Labels: []string{"team_name"},
+		Counts: []string{"items_started", "items_completed", "items_started_unassigned", "items_completed_unassigned", "wip_count_end_of_day", "wip_unassigned_end_of_day", "new_bugs_count", "new_items_count"},
 		Measures: []string{
 			"items_started", "items_completed", "items_started_unassigned", "items_completed_unassigned",
 			"wip_count_end_of_day", "wip_unassigned_end_of_day", "bug_completed_ratio", "story_points_completed",
@@ -103,6 +112,7 @@ var (
 			{"provider", KeyString}, {"work_scope_id", KeyString}, {"team_id", KeyString}, {"status", KeyString},
 		},
 		TeamColumn: "team_id", Scope: []string{"provider", "work_scope_id"}, Labels: []string{"team_name"},
+		Counts:   []string{"items_touched"},
 		Measures: []string{"duration_hours", "items_touched", "avg_wip"},
 	}
 	EstimateCoverageMetricsDaily = Table{
@@ -111,6 +121,7 @@ var (
 			{"provider", KeyString}, {"work_scope_id", KeyString}, {"team_id", KeyNullableString},
 		},
 		TeamColumn: "team_id", Scope: []string{"provider", "work_scope_id"}, Labels: []string{"team_name"},
+		Counts:           []string{"estimated_count", "unestimated_count", "backlog_size"},
 		Measures:         []string{"estimated_count", "unestimated_count", "backlog_size"},
 		NullableMeasures: []string{"ratio"},
 	}
@@ -118,6 +129,7 @@ var (
 		Table: "team_metrics_daily", Family: "team_wellbeing", DayColumn: "day",
 		Keys:       []KeyColumn{{"team_id", KeyString}, {"repo_id", KeyString}},
 		TeamColumn: "team_id", Scope: []string{"repo_id"}, Labels: []string{"team_name"},
+		Counts: []string{"commits_count", "after_hours_commits_count", "weekend_commits_count"},
 		Measures: []string{
 			"commits_count", "after_hours_commits_count", "weekend_commits_count",
 			"after_hours_commit_ratio", "weekend_commit_ratio",
@@ -129,6 +141,7 @@ var (
 			{"team_id", KeyString}, {"repo_id", KeyUUID}, {"work_type", KeyString}, {"attribution_bucket", KeyString},
 		},
 		TeamColumn: "team_id", Scope: []string{"repo_id"},
+		Counts: []string{"prs_total", "prs_merged", "ai_assisted_prs", "agent_created_prs", "human_prs", "unknown_prs", "agent_created_pr_count", "rework_prs", "followup_commits_count", "revert_prs", "incidents_count", "test_gap_prs"},
 		Measures: []string{
 			"prs_total", "prs_merged", "ai_assisted_prs", "agent_created_prs", "human_prs", "unknown_prs",
 			"agent_created_pr_count", "rework_prs", "followup_commits_count", "revert_prs", "incidents_count",
@@ -146,6 +159,7 @@ var (
 		Table: "ai_governance_coverage_daily", Family: "ai_governance", DayColumn: "day",
 		Keys:       []KeyColumn{{"team_id", KeyNullableString}, {"repo_id", KeyNullableUUID}},
 		TeamColumn: "team_id",
+		Counts:     []string{"ai_artifacts", "declared_artifacts", "human_reviewed_prs", "security_scanned_prs", "in_policy_artifacts"},
 		Measures: []string{
 			"ai_artifacts", "declared_artifacts", "human_reviewed_prs", "security_scanned_prs", "in_policy_artifacts",
 		},
@@ -154,6 +168,7 @@ var (
 		Table: "team_cognitive_load_daily", Family: "team_cognitive_load", DayColumn: "day",
 		Keys:       []KeyColumn{{"team_id", KeyString}},
 		TeamColumn: "team_id",
+		Counts:     []string{"contributing_repo_count", "sample_author_count"},
 		Measures: []string{
 			"pr_interruption_load", "context_spread_count", "review_request_load",
 			"contributing_repo_count", "sample_author_count",
@@ -168,6 +183,7 @@ var (
 			{"repo_id", KeyUUID}, {"team_id", KeyString}, {"map_name", KeyString}, {"identity_id", KeyString},
 		},
 		TeamColumn: "team_id",
+		Counts:     []string{"churn_loc_30d", "delivery_units_30d", "wip_max_30d"},
 		Measures: []string{
 			"x_raw", "y_raw", "x_norm", "y_norm",
 			"churn_loc_30d", "delivery_units_30d", "cycle_p50_30d_hours", "wip_max_30d",
@@ -190,6 +206,9 @@ var (
 		Measures: []string{
 			"w_churn", "w_complexity", "w_ownership", "w_review", "threshold_elevated", "threshold_high",
 		},
+		Marker: []string{
+			"w_churn", "w_complexity", "w_ownership", "w_review", "threshold_elevated", "threshold_high",
+		},
 		NullableMeasures: []string{
 			"compounding_risk", "churn_norm", "complexity_norm", "ownership_norm", "review_norm",
 			"rework_churn", "complexity_delta", "bus_factor", "ownership_gini", "single_owner_ratio",
@@ -204,6 +223,7 @@ var (
 		Table: "team_complexity_daily", Family: "team_complexity", DayColumn: "day",
 		Keys:       []KeyColumn{{"team_id", KeyString}},
 		TeamColumn: "team_id",
+		Counts:     []string{"loc_total", "cyclomatic_total", "high_complexity_functions", "very_high_complexity_functions", "contributing_repo_count"},
 		Measures: []string{
 			"loc_total", "cyclomatic_total", "cyclomatic_per_kloc", "high_complexity_functions",
 			"very_high_complexity_functions", "contributing_repo_count",
@@ -286,6 +306,26 @@ func (column KeyColumn) StoredValue(text string) (any, error) {
 	default:
 		return text, nil
 	}
+}
+
+// MarkerColumns are the columns a reader can test to tell a row of zeros from
+// a row the family computed, with no Float64 comparison: the unsigned count
+// columns of the table (all 0 in a row of zeros), or, for a table with no
+// count column, its Marker columns (all 0 in a row of zeros, never 0 in a
+// computed row). The writer stores 0 in every one of them: none is in the
+// INSERT of a row of zeros and each has the column default 0.
+//
+// The test "every marker column is 0" is exact for the tables with a Marker
+// and for the tables whose family always stores a count above 0. It is NOT
+// exact for estimate_coverage_metrics_daily and for the 'unknown' bucket of
+// ai_impact_metrics_daily, whose families store computed rows with every
+// count 0, and for ic_landscape_rolling_30d, where a computed row can hold 0
+// in its three counts (its x_norm and y_norm are never 0, see LiveRow).
+func (table Table) MarkerColumns() []string {
+	if len(table.Counts) > 0 {
+		return append([]string(nil), table.Counts...)
+	}
+	return append([]string(nil), table.Marker...)
 }
 
 // LiveHaving is the test of one key in a GROUP BY over the key columns of the

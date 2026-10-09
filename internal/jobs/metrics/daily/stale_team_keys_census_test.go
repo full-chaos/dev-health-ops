@@ -419,6 +419,34 @@ func TestEveryStaleKeyTableCensusDeclarationAgreesWithTheSchema(t *testing.T) {
 					}
 				}
 			}
+			// The count columns are every unsigned column outside the sorting
+			// key, and each is a measure. A table with none declares its
+			// marker columns, which are measures too. A reader's test of a
+			// row of zeros is built from them (MarkerColumns).
+			var unsigned []string
+			for _, column := range table.columns {
+				if strings.HasPrefix(column.typ, "UInt") && !contains(table.sortingKey, column.name) {
+					unsigned = append(unsigned, column.name)
+				}
+			}
+			sort.Strings(unsigned)
+			declaredCounts := append([]string(nil), declared.Counts...)
+			sort.Strings(declaredCounts)
+			if !reflect.DeepEqual(declaredCounts, unsigned) && (len(declaredCounts) > 0 || len(unsigned) > 0) {
+				t.Errorf("declared counts %v, the unsigned columns outside the sorting key are %v", declaredCounts, unsigned)
+			}
+			for _, column := range append(append([]string(nil), declared.Counts...), declared.Marker...) {
+				if !contains(declared.Measures, column) {
+					t.Errorf("count or marker column %s is not a measure: the rule would not read it and a reader would", column)
+				}
+			}
+			if (len(declared.Counts) == 0) == (len(declared.Marker) == 0) {
+				t.Errorf("the table declares %d count column(s) and %d marker column(s): a table with no count column declares its marker, and only such a table",
+					len(declared.Counts), len(declared.Marker))
+			}
+			if len(declared.MarkerColumns()) == 0 {
+				t.Errorf("the table has no marker column for a reader")
+			}
 			for _, column := range table.columns {
 				if _, declaredRole := roles[column.name]; !declaredRole {
 					t.Errorf("column %s (%s) has no role in the declaration: declare it as a measure, a Nullable measure, "+

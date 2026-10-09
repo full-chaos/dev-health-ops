@@ -15,6 +15,7 @@ import (
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/changefailure"
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/prrework"
 )
 
 func formatDay(t time.Time) string { return t.Format("2006-01-02") }
@@ -34,12 +35,18 @@ func metricFromClause(table, column, scopeFilter, startParam, endParam string) s
 		// as a stored ratio.
 		valueColumns = changefailure.CountColumns
 	}
-	if table == "repo_metrics_daily" && column == "pr_rework_ratio" {
-		// The weighted aggregate also consumes prs_merged; both must come
-		// from the same latest daily generation.
-		valueColumns = append(valueColumns, "prs_merged")
-	}
 	var valueProjections []string
+	if isPRRework(table, column) {
+		// The rework ratio is computed from the day's counts, never read as a
+		// stored ratio. The counts are Nullable (a row written before they
+		// existed holds NULL), and argMax skips a NULL argument: it would take
+		// a count of an OLDER row of the day. The tuple keeps the NULL of the
+		// newest row, so all four counts come from one generation.
+		valueColumns = nil
+		for _, vc := range prrework.CountColumns {
+			valueProjections = append(valueProjections, fmt.Sprintf("tupleElement(argMax(tuple(%s), computed_at), 1) AS %s", vc, vc))
+		}
+	}
 	for _, vc := range valueColumns {
 		valueProjections = append(valueProjections, fmt.Sprintf("argMax(%s, computed_at) AS %s", vc, vc))
 	}
@@ -67,8 +74,10 @@ func metricValueExpression(table, column, aggregator string) string {
 	// unsupported"), matching quadrant.go's own identical convention.
 	// avg() already returns Float64 regardless of the summed column's own
 	// width, so the cast is a no-op there.
-	if table == "repo_metrics_daily" && column == "pr_rework_ratio" {
-		return "toFloat64(SUM(pr_rework_ratio * prs_merged) / NULLIF(SUM(prs_merged), 0))"
+	if isPRRework(table, column) {
+		// NULL when the window holds no reviewed pull request: a pull request
+		// with no review data says nothing about rework.
+		return prrework.WindowRateSQL
 	}
 	if table == changefailure.Table {
 		// NULL when the window is not applicable (no deployment) or unknown
@@ -232,6 +241,39 @@ func fetchChangeFailureView(ctx context.Context, client QueryClient, startDay, e
 	return view, rows.Err()
 }
 
+// isPRRework says that a metric spec is the pull request rework ratio: the
+// one repo_metrics_daily metric that is a ratio of stored counts.
+func isPRRework(table, column string) bool {
+	return table == prrework.Table && column == prrework.DeprecatedRatioColumn
+}
+
+// fetchPRReworkView reads the window's summed rework counts for the scope and
+// the number of stored rows that hold counts, from the newest version of each
+// repository and day (the same deduplicated source as the series).
+func fetchPRReworkView(ctx context.Context, client QueryClient, startDay, endDay time.Time, scopeFilter string, scopeBindings []dhclickhouse.Binding, orgID string) (prrework.View, error) {
+	query := fmt.Sprintf(`
+        SELECT %s
+        FROM %s
+    `, prrework.ViewSumsSQL, metricFromClause(prrework.Table, prrework.DeprecatedRatioColumn, scopeFilter, "start_day", "end_day"))
+	bindings := append([]dhclickhouse.Binding{
+		{Name: "start_day", Value: formatDay(startDay)},
+		{Name: "end_day", Value: formatDay(endDay)},
+		{Name: "org_id", Value: orgID},
+	}, scopeBindings...)
+	rows, err := client.Query(ctx, query, bindings)
+	if err != nil {
+		return prrework.View{}, fmt.Errorf("home: fetch_pr_rework_view query: %w", err)
+	}
+	defer rows.Close()
+	var view prrework.View
+	if rows.Next() {
+		if err := rows.Scan(prrework.ViewScanDest(&view)...); err != nil {
+			return prrework.View{}, fmt.Errorf("home: fetch_pr_rework_view scan: %w", err)
+		}
+	}
+	return view, rows.Err()
+}
+
 // fetchBlockedHours ports fetch_blocked_hours (api/queries/metrics.py:
 // 207-248).
 func fetchBlockedHours(ctx context.Context, client QueryClient, startDay, endDay time.Time, scopeFilter string, scopeBindings []dhclickhouse.Binding, orgID string) (float64, []dayValueRow, bool, error) {
@@ -302,8 +344,11 @@ type driverRow struct {
 func fetchMetricDriverDelta(ctx context.Context, client QueryClient, table, column, groupBy string, startDay, endDay, compareStart, compareEnd time.Time, scopeFilter string, scopeBindings []dhclickhouse.Binding, orgID string, limit int) ([]driverRow, error) {
 	currentFrom := metricFromClause(table, column, scopeFilter, "start_day", "end_day")
 	previousFrom := metricFromClause(table, column, scopeFilter, "compare_start", "compare_end")
+	if isPRRework(table, column) {
+		return fetchRateDriverDelta(ctx, client, prrework.WindowRateSQL, groupBy, currentFrom, previousFrom, startDay, endDay, compareStart, compareEnd, scopeBindings, orgID, limit)
+	}
 	if table == changefailure.Table {
-		return fetchChangeFailureDriverDelta(ctx, client, groupBy, currentFrom, previousFrom, startDay, endDay, compareStart, compareEnd, scopeBindings, orgID, limit)
+		return fetchRateDriverDelta(ctx, client, changefailure.WindowRateSQL, groupBy, currentFrom, previousFrom, startDay, endDay, compareStart, compareEnd, scopeBindings, orgID, limit)
 	}
 	query := fmt.Sprintf(`
         SELECT
@@ -352,12 +397,13 @@ func fetchMetricDriverDelta(ctx context.Context, client QueryClient, table, colu
 	return out, rows.Err()
 }
 
-// fetchChangeFailureDriverDelta is fetchMetricDriverDelta for change failure
-// rate: each group's value is the window rate of its own summed counts, and a
-// group whose current rate is undefined (no deployment or no incident
-// evidence) is not a driver. A group with no defined previous rate gets a 0
-// delta, like a previous value of 0.
-func fetchChangeFailureDriverDelta(ctx context.Context, client QueryClient, groupBy, currentFrom, previousFrom string, startDay, endDay, compareStart, compareEnd time.Time, scopeBindings []dhclickhouse.Binding, orgID string, limit int) ([]driverRow, error) {
+// fetchRateDriverDelta is fetchMetricDriverDelta for a rate that is a ratio
+// of summed counts (change failure rate, the pull request rework ratio):
+// each group's value is the window rate of its own summed counts (rateSQL),
+// and a group whose current rate is undefined (no deployment or no incident
+// evidence; no reviewed pull request) is not a driver. A group with no
+// defined previous rate gets a 0 delta, like a previous value of 0.
+func fetchRateDriverDelta(ctx context.Context, client QueryClient, rateSQL, groupBy, currentFrom, previousFrom string, startDay, endDay, compareStart, compareEnd time.Time, scopeBindings []dhclickhouse.Binding, orgID string, limit int) ([]driverRow, error) {
 	query := fmt.Sprintf(`
         SELECT
             current.id AS id,
@@ -376,7 +422,7 @@ func fetchChangeFailureDriverDelta(ctx context.Context, client QueryClient, grou
         WHERE current.value IS NOT NULL
         ORDER BY delta_pct DESC
         LIMIT {limit:UInt32}
-    `, groupBy, changefailure.WindowRateSQL, currentFrom, groupBy, groupBy, changefailure.WindowRateSQL, previousFrom, groupBy)
+    `, groupBy, rateSQL, currentFrom, groupBy, groupBy, rateSQL, previousFrom, groupBy)
 	bindings := append([]dhclickhouse.Binding{
 		{Name: "start_day", Value: formatDay(startDay)},
 		{Name: "end_day", Value: formatDay(endDay)},

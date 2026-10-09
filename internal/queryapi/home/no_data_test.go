@@ -9,6 +9,7 @@ import (
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/changefailure"
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/prrework"
 )
 
 // TestBuildResponseEmptyCurrentWindowIsNoData guards the distinction between
@@ -90,6 +91,9 @@ func TestBuildResponseNoCurrentDataDoesNotTurnPriorDataIntoAClaim(t *testing.T) 
 		}
 		if strings.Contains(query, "FROM repo_change_failure_daily") && strings.Contains(query, changefailure.ViewSumsSQL) {
 			return &fixtureRowScanner{rows: [][]any{{uint64(0), uint64(0), uint64(0), uint64(0), uint64(0), uint64(0)}}}, nil
+		}
+		if strings.Contains(query, prrework.ViewSumsSQL) {
+			return &fixtureRowScanner{rows: [][]any{{uint64(0), uint64(0), uint64(0), uint64(0), uint64(0)}}}, nil
 		}
 		if strings.Contains(query, "FROM work_item_state_durations_daily") {
 			return &fixtureRowScanner{}, nil

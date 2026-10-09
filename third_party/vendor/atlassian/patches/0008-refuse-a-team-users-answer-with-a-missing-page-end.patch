@@ -1,0 +1,41 @@
+diff --git a/third_party/vendor/atlassian/atlassian/graph/gen/teamwork_graph_api.go b/third_party/vendor/atlassian/atlassian/graph/gen/teamwork_graph_api.go
+index dc9263abc..a7a2afb16 100644
+--- a/third_party/vendor/atlassian/atlassian/graph/gen/teamwork_graph_api.go
++++ b/third_party/vendor/atlassian/atlassian/graph/gen/teamwork_graph_api.go
+@@ -485,9 +485,36 @@ func DecodeTeamUsers(data map[string]any) (*GraphStoreCypherQueryV2Connection, e
+ 	if out.Result == nil {
+ 		return nil, errors.New("missing teamworkGraph_teamUsers")
+ 	}
++	if err := checkTeamUsersShape(b); err != nil {
++		return nil, err
++	}
+ 	return out.Result, nil
+ }
+ 
++// checkTeamUsersShape refuses a teamworkGraph_teamUsers answer that does not say where its list ends (local
++// modification, patch 0008). The typed decode above reads a missing or null pageInfo, and a missing or null
++// hasNextPage, as "no next page"; a caller that takes the result for the whole roster would then drop every
++// member the answer did not carry. A page end counts only when the answer states it.
++func checkTeamUsersShape(body []byte) error {
++	var shape struct {
++		Result *struct {
++			PageInfo *struct {
++				HasNextPage *bool `json:"hasNextPage"`
++			} `json:"pageInfo"`
++		} `json:"teamworkGraph_teamUsers"`
++	}
++	if err := json.Unmarshal(body, &shape); err != nil {
++		return err
++	}
++	if shape.Result == nil {
++		return errors.New("missing teamworkGraph_teamUsers")
++	}
++	if shape.Result.PageInfo == nil || shape.Result.PageInfo.HasNextPage == nil {
++		return errors.New("missing teamworkGraph_teamUsers.pageInfo.hasNextPage")
++	}
++	return nil
++}
++
+ type UserTeamsData struct {
+ 	Result *GraphStoreCypherQueryV2Connection `json:"teamworkGraph_userTeams"`
+ }

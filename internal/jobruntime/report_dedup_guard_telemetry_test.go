@@ -53,7 +53,7 @@ func TestReportDedupGuardCountersReachTheExposition(t *testing.T) {
 // TestReportDedupGuardIsAbsentUntilFirstObservation is the counterpoint to
 // the DORA-refusal "emit every reason at zero" pattern: the (table, reason)
 // key set is not statically known to jobruntime (internal/jobs/report owns
-// appendOnlyDailyKeys), so unlike doraRefusalReasons there is no closed list
+// tableReads), so unlike doraRefusalReasons there is no closed list
 // to pre-populate. A fresh collector must publish neither metric name at
 // all, and the first observation must bring both up together.
 func TestReportDedupGuardIsAbsentUntilFirstObservation(t *testing.T) {

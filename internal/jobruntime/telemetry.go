@@ -3416,7 +3416,7 @@ var reportDedupGuardReasons = []string{ReportDedupReasonRetryGeneration}
 
 // ObserveReportDedupGuard records one dedup-guarded report chart read over an
 // append-only daily rollup table (internal/jobs/report/dedup.go's
-// appendOnlyDailyKeys). observedRows is the physical row count the guard's
+// tableReads). observedRows is the physical row count the guard's
 // key range scanned; skippedRows is how many of those it discarded as a
 // stale compute generation (a row sharing a natural key with another row
 // carrying a later computed_at). CHAOS-4140 found dora_metrics_daily itself
@@ -4659,7 +4659,7 @@ func (collector *MetricsCollector) writeRemainingMetricsLease(output *strings.Bu
 // writeReportDedupGuard exposes CHAOS-4140's report dedup-guard counters
 // (ObserveReportDedupGuard). Unlike the DORA/capacity refusal reasons above,
 // the (table, reason) key set is not statically known to this package --
-// internal/jobs/report owns appendOnlyDailyKeys, not jobruntime -- so only
+// internal/jobs/report owns tableReads, not jobruntime -- so only
 // keys actually observed are emitted, in sorted order for a deterministic
 // snapshot.
 func (collector *MetricsCollector) writeReportDedupGuard(output *strings.Builder) {

@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/daily/compoundingrisk"
+	"github.com/full-chaos/dev-health-ops/internal/teamkeytables"
 	"github.com/full-chaos/dev-health-ops/internal/teamresolve"
 )
 
@@ -108,7 +109,9 @@ func (executor *CompoundingRiskTeamExecutor) ComputeFinalizeFamily(
 		return 0, err
 	}
 	if len(orgRepoMetrics) == 0 {
-		return 0, nil
+		// A day with no input produces no team row; a team key that still
+		// holds a score for the day is stale.
+		return executor.supersedeStaleKeys(ctx, run.OrganizationID, day, nil, executor.nowUTC(), 0)
 	}
 
 	teams, err := LoadWellbeingTeams(ctx, executor.conn, run.OrganizationID)
@@ -163,7 +166,7 @@ func (executor *CompoundingRiskTeamExecutor) ComputeFinalizeFamily(
 			"org_repo_count", len(orgRepoMetrics), "teams_in_org", len(teams),
 			"cause", "no repo in this org resolves to any team today",
 		)
-		return 0, nil
+		return executor.supersedeStaleKeys(ctx, run.OrganizationID, day, nil, executor.nowUTC(), 0)
 	}
 
 	// Python's build_compounding_risk_rows_for_day loops EVERY org_repo_metrics
@@ -214,7 +217,7 @@ func (executor *CompoundingRiskTeamExecutor) ComputeFinalizeFamily(
 		compoundingrisk.DefaultWeights, compoundingrisk.DefaultThresholds, compoundingrisk.DefaultReferences,
 	)
 	if len(records) == 0 {
-		return 0, nil
+		return executor.supersedeStaleKeys(ctx, run.OrganizationID, day, nil, computedAt, 0)
 	}
 
 	// CHAOS-5084 r1 (P2, codex, confirmed via repro): WriteRecords reports the
@@ -231,7 +234,31 @@ func (executor *CompoundingRiskTeamExecutor) ComputeFinalizeFamily(
 	if err != nil {
 		return rowsWritten, err
 	}
-	return rowsWritten, nil
+	produced := make([]staleKey, 0, len(records))
+	for _, record := range records {
+		produced = append(produced, staleKey{string(record.Scope), record.ScopeID})
+	}
+	return executor.supersedeStaleKeys(ctx, run.OrganizationID, day, produced, computedAt, rowsWritten)
+}
+
+// supersedeStaleKeys applies the stale-key rule (stale_team_keys.go) to the
+// team rows of the day: the family computes the organization's day whole, so
+// every team key of the day that still holds a score and that this compute did
+// not produce gets a row of zeros (a NULL score, severity unknown).
+func (executor *CompoundingRiskTeamExecutor) supersedeStaleKeys(
+	ctx context.Context, organizationID string, day time.Time, produced []staleKey, computedAt time.Time, written int,
+) (int, error) {
+	superseded, err := supersedeStaleTeamKeys(
+		ctx, executor.conn, teamkeytables.CompoundingRiskDailyTeam, organizationID, day, nil, produced, computedAt,
+	)
+	written += superseded
+	if err != nil {
+		if written == 0 {
+			return 0, err
+		}
+		return written, fmt.Errorf("%w: compounding_risk_team failed after %d row(s) already landed: %w", ErrPartialWrite, written, err)
+	}
+	return written, nil
 }
 
 var _ NativeFinalizeFamilyExecutor = (*CompoundingRiskTeamExecutor)(nil)

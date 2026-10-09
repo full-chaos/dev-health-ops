@@ -80,25 +80,19 @@ func (executor *WorkItemExecutor) ComputeFamily(
 		return 0, err
 	}
 
-	// The version is taken before the reads: the newest version is then the
-	// newest read, also when two partitions of one run share a work scope.
+	// The version is taken before the reads, so a partition that read later
+	// writes the later version. That orders two partitions of one run that
+	// share a work scope only when their clocks agree and their reads are
+	// more than the precision of computed_at apart; nothing here depends on
+	// it for which keys of the day hold a measure (see RunStaleKeyRetractor).
 	computedAt := executor.nowUTC()
-	read, err := loadWorkItemScopeRead(ctx, executor.conn, "work_item", run, partition, scope, true, true)
+	read, triplet, err := computeWorkItemTriplet(ctx, executor.conn, run, partition, scope)
 	if err != nil {
 		return 0, err
 	}
 	if len(read.Items) == 0 {
 		return 0, nil
 	}
-
-	sorted := sortWorkItemMetricsRows(read.Items)
-	projected := workItemMetricsItems(sorted)
-	triplet := workitemmetrics.ComputeDailyTriplet(
-		scope.day,
-		projected,
-		workItemMetricsTransitions(read.Transitions),
-		workitemmetrics.AssertAligned(len(sorted), projected, workItemMetricsResolver(sorted, read.Attributions)),
-	)
 
 	// Each Write* call reports its true row count on an ambiguous Send error,
 	// so the count is added before the error check.
@@ -123,6 +117,32 @@ func (executor *WorkItemExecutor) ComputeFamily(
 		return wrapWorkItemScopePartialWrite("work_item", total, partition, err)
 	}
 	return total, nil
+}
+
+// computeWorkItemTriplet reads the work scopes of the partition's repositories
+// and computes the work_item rows of the day. It writes nothing. The family
+// calls it for one partition; the run-level retraction of stale team keys
+// calls it for every repository of the run (RunStaleKeyRetractor), so both
+// derive the keys of the day from one compute.
+func computeWorkItemTriplet(
+	ctx context.Context, conn driver.Conn, run Run, partition Partition, scope workItemPartitionScope,
+) (workItemScopeRead, workitemmetrics.Triplet, error) {
+	read, err := loadWorkItemScopeRead(ctx, conn, "work_item", run, partition, scope, true, true)
+	if err != nil {
+		return workItemScopeRead{}, workitemmetrics.Triplet{}, err
+	}
+	if len(read.Items) == 0 {
+		return read, workitemmetrics.Triplet{}, nil
+	}
+	sorted := sortWorkItemMetricsRows(read.Items)
+	projected := workItemMetricsItems(sorted)
+	triplet := workitemmetrics.ComputeDailyTriplet(
+		scope.day,
+		projected,
+		workItemMetricsTransitions(read.Transitions),
+		workitemmetrics.AssertAligned(len(sorted), projected, workItemMetricsResolver(sorted, read.Attributions)),
+	)
+	return read, triplet, nil
 }
 
 // workItemPartitionScope is the (day, window, repoIDs) triple the work-item

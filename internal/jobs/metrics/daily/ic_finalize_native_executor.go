@@ -2,8 +2,10 @@ package daily
 
 import (
 	"context"
+	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/daily/icfinalize"
+	"github.com/full-chaos/dev-health-ops/internal/teamkeytables"
 )
 
 // ICFinalizeExecutor adapts icfinalize's run-scoped executor to this package's
@@ -47,6 +49,19 @@ func NewICFinalizeExecutor(conn icfinalize.Conn) *ICFinalizeExecutor {
 			teamID, _ := resolver.ResolveMember(identity)
 			return teamID, teamID != ""
 		}, nil
+	})
+	// The stale-key rule (stale_team_keys.go): the family computes the
+	// organization's day whole, so every stored point of the day that this
+	// compute did not produce gets a row of zeros.
+	inner.SetLandscapeSuperseder(func(
+		ctx context.Context, orgID string, asOf, computedAt time.Time, written []icfinalize.LandscapeRecord,
+	) (int, error) {
+		repoID := icfinalize.LandscapeRowRepoID().String()
+		produced := make([]staleKey, 0, len(written))
+		for _, record := range written {
+			produced = append(produced, staleKey{repoID, record.TeamID, record.MapName, record.IdentityID})
+		}
+		return supersedeStaleTeamKeys(ctx, conn, teamkeytables.ICLandscapeRolling30d, orgID, asOf, nil, produced, computedAt)
 	})
 	return &ICFinalizeExecutor{inner: inner}
 }

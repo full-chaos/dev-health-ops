@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/aiimpact"
+	"github.com/full-chaos/dev-health-ops/internal/teamactive"
 )
 
 // The dedup rule for every reader in this file, stated once.
@@ -420,18 +421,17 @@ WHERE p.org_id = ? AND p.repo_id IN ? AND p.pr_number IN ?`,
 // tie-break between equal-length prefixes -- is deterministic. Python's
 // get_all_teams has no such guarantee; see RepoPatternResolver's doc comment.
 //
-// # NO is_active FILTER -- codex round chaos-4280-r3, finding 2
+// # The active-team rule is applied in Go, not in the query
 //
-// This used to filter `WHERE is_active = 1`, which has no basis in
-// production: `get_all_teams` (sinks/clickhouse/core.py:109) SELECTs
-// `id, name, members, project_keys, repo_patterns` -- it does not even read
-// `is_active` -- and `build_repo_pattern_resolver` (providers/teams.py:248)
-// never checks it either. Every team, active or not, participates in
-// production's pattern resolution. The filter had no comment justifying it
-// and no defect it was tracking; it was an unexamined assumption introduced
-// during the port. An inactive team with a matching pattern was silently
-// losing its PRs to the "unknown" bucket while Python still attributed them
-// to it.
+// The query holds no is_active filter: `get_all_teams`
+// (sinks/clickhouse/core.py:109) SELECTs `id, name, members, project_keys,
+// repo_patterns` and does not read `is_active`, and the text here stays the
+// reference's read. The reference had no inactive team to meet. Since a team
+// can be replaced by a provider-keyed id, an inactive team that kept its
+// patterns would take the pull requests of the team that replaced it, under
+// an id that no reader shows. So the rows of the inactive teams (package
+// teamactive, the rule of every team resolver) are dropped after the read.
+// With no inactive team the result is the reference's.
 func LoadAIImpactTeams(
 	ctx context.Context, conn repositoryRows, organizationID string,
 ) ([]aiimpact.Team, error) {
@@ -473,7 +473,11 @@ ORDER BY id`, organizationID)
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate ai impact team rows: %w", err)
 	}
-	return result, nil
+	inactive, err := teamactive.LoadInactive(ctx, conn, organizationID)
+	if err != nil {
+		return nil, fmt.Errorf("load ai impact teams: %w", err)
+	}
+	return teamactive.Keep(result, inactive, func(team aiimpact.Team) string { return team.ID }), nil
 }
 
 // LoadAIImpactRepoNames reads the repo full names the team resolver matches

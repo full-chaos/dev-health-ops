@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/numerical"
+	"github.com/full-chaos/dev-health-ops/internal/teamkeytables"
 	"github.com/full-chaos/dev-health-ops/internal/teamownership"
 )
 
@@ -96,7 +97,9 @@ func (executor *TeamCognitiveLoadExecutor) ComputeFinalizeFamily(
 	}
 	if len(userRows) == 0 && len(teamRows) == 0 {
 		// Python: `if not user_metrics_rows and not team_wellbeing_rows: return 0`.
-		return 0, nil
+		// A day with no input produces no row; a team key that still holds
+		// a measure for the day is stale.
+		return executor.supersedeStaleKeys(ctx, run.OrganizationID, day, nil, executor.nowUTC(), 0)
 	}
 
 	teams, err := LoadWellbeingTeams(ctx, executor.conn, run.OrganizationID)
@@ -135,13 +138,34 @@ func (executor *TeamCognitiveLoadExecutor) ComputeFinalizeFamily(
 
 	computedAt := executor.nowUTC()
 	rows := buildTeamCognitiveLoadRows(run.OrganizationID, day, userRows, teamRows, repoToTeam, computedAt)
+	produced := make([]staleKey, 0, len(rows))
+	for _, row := range rows {
+		produced = append(produced, staleKey{row.TeamID})
+	}
 	if len(rows) == 0 {
-		return 0, nil
+		return executor.supersedeStaleKeys(ctx, run.OrganizationID, day, nil, computedAt, 0)
 	}
 	if err := executor.writer.write(ctx, rows); err != nil {
 		return 0, err
 	}
-	return len(rows), nil
+	return executor.supersedeStaleKeys(ctx, run.OrganizationID, day, produced, computedAt, len(rows))
+}
+
+// supersedeStaleKeys applies the stale-key rule (stale_team_keys.go) for the
+// day: the family computes the organization's day whole, so every live team
+// key of the day that this compute did not produce gets a row of zeros.
+func (executor *TeamCognitiveLoadExecutor) supersedeStaleKeys(
+	ctx context.Context, organizationID string, day time.Time, produced []staleKey, computedAt time.Time, written int,
+) (int, error) {
+	superseded, err := supersedeStaleTeamKeys(ctx, executor.conn, teamkeytables.TeamCognitiveLoadDaily, organizationID, day, nil, produced, computedAt)
+	written += superseded
+	if err != nil {
+		if written == 0 {
+			return 0, err
+		}
+		return written, fmt.Errorf("%w: team_cognitive_load failed after %d row(s) already landed: %w", ErrPartialWrite, written, err)
+	}
+	return written, nil
 }
 
 // authoritativeOwnersKnownToRepoCatalog filters an org-wide authoritative

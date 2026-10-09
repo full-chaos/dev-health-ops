@@ -1338,7 +1338,10 @@ type FinalizeHandler struct {
 	// computeNativeFinalizeFamilies fails the attempt loudly
 	// (ErrFinalizeFamilyIncomplete) instead of silently leaving it
 	// unwritten.
-	nativeFinalizeFamilies    map[string]NativeFinalizeFamilyExecutor
+	nativeFinalizeFamilies map[string]NativeFinalizeFamilyExecutor
+	// staleKeyRetractor runs once per run, before the families (see
+	// retractStaleKeys).
+	staleKeyRetractor         StaleKeyRetractor
 	nativeFinalizeFamilyNames []string
 	// nativeFinalizeObserver reports each family's outcome. Reuses the
 	// PartitionHandler observer rather than declaring a parallel interface:
@@ -1351,6 +1354,49 @@ type FinalizeHandler struct {
 	// touchedDrainer starts runs for the pending touched days when a run
 	// ends (CHAOS-8846). Optional: nil is no pass.
 	touchedDrainer TouchedDaysDrainer
+}
+
+// SetStaleKeyRetractor attaches the run-level retraction of stale team keys
+// (RunStaleKeyRetractor). A handler with none skips the step and says so in
+// the log of each run: the production worker must attach one.
+func (handler *FinalizeHandler) SetStaleKeyRetractor(retractor StaleKeyRetractor) {
+	if handler != nil {
+		handler.staleKeyRetractor = retractor
+	}
+}
+
+// HasStaleKeyRetractor reports whether the run-level retraction is attached.
+func (handler *FinalizeHandler) HasStaleKeyRetractor() bool {
+	return handler != nil && handler.staleKeyRetractor != nil
+}
+
+// StaleKeyRetractionSkippedLogMessage is the line of a finalize run that has
+// no retractor.
+const StaleKeyRetractionSkippedLogMessage = "daily stale team keys retraction skipped: no retractor is attached"
+
+// retractStaleKeys runs the retraction for the run. The claim of a finalize
+// carries no repository list, so the union of the run's partitions is read
+// from the store. Any failure fails the finalize, which is tried again: a run
+// that ended with its stale keys in place would read as a complete day.
+func (handler *FinalizeHandler) retractStaleKeys(ctx context.Context, run Run) error {
+	if handler.staleKeyRetractor == nil {
+		slog.Default().Warn(StaleKeyRetractionSkippedLogMessage,
+			"run_id", run.ID, "organization_id", run.OrganizationID,
+			"target_day", run.TargetDay.Format("2006-01-02"),
+		)
+		return nil
+	}
+	if len(run.DiscoveredRepoIDs) == 0 {
+		stored, err := handler.store.LoadRun(ctx, run.ID)
+		if err != nil {
+			return fmt.Errorf("%w: stale team keys: load the repositories of the run: %w", ErrNativeFinalizeFamilyFailed, err)
+		}
+		run.DiscoveredRepoIDs = stored.DiscoveredRepoIDs
+	}
+	if _, err := handler.staleKeyRetractor.RetractStaleKeys(ctx, run); err != nil {
+		return fmt.Errorf("%w: stale team keys: %w", ErrNativeFinalizeFamilyFailed, err)
+	}
+	return nil
 }
 
 func NewFinalizeHandler(store Store) (*FinalizeHandler, error) {
@@ -1677,6 +1723,14 @@ func (handler *FinalizeHandler) Work(ctx context.Context, execution *jobruntime.
 			// callback deliberately: a native family's compute is real work
 			// and must hold the lease for its own duration, same as the
 			// deleted bridge call used to.
+			//
+			// The stale team keys of the tables that the partitions of a run
+			// share are superseded first, once for the run: every partition
+			// is done (ClaimFinalize), and the finalize families read those
+			// tables.
+			if err := handler.retractStaleKeys(workCtx, claim.Run); err != nil {
+				return err
+			}
 			return handler.computeNativeFinalizeFamilies(workCtx, claim.Run)
 		},
 	); err != nil {

@@ -7,6 +7,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/jackc/pgx/v5"
 )
 
 // ManualDailyRunOutcome reports what StartManualDailyRun did for one day.
@@ -35,12 +37,53 @@ type ManualDailyRunOutcome struct {
 // Generation at 64 bytes and a raw org+day+repo-id-list easily exceeds that
 // once more than a couple of repositories are named.
 func ManualDailyRunGeneration(organizationID, day string, repositoryIDs []RepositoryID) string {
+	return manualDailyGeneration(organizationID, day, repositoryIDs, "")
+}
+
+// ManualDailyRerunGeneration derives the generation of a re-run: the logical
+// request of ManualDailyRunGeneration plus the operator's re-run token.
+//
+// The deterministic generation of a manual request makes a second identical
+// request start nothing, which is right for a retried invocation and wrong
+// when the operator must compute a stored day again (the teams changed after
+// the day was computed). The token names one such re-run. The same token
+// derives the same generation, so a retried re-run still starts nothing; a new
+// token derives a new generation and so a new run. It carries the manual
+// prefix, so the worker handles the run as any manual run.
+func ManualDailyRerunGeneration(organizationID, day string, repositoryIDs []RepositoryID, rerunToken string) string {
+	return manualDailyGeneration(organizationID, day, repositoryIDs, rerunToken)
+}
+
+// ValidManualDailyRerunToken reports whether a re-run token is 1 to 64
+// characters of letters, digits, '.', '_' and '-'. The token is hashed into
+// the generation and is printed in no error.
+func ValidManualDailyRerunToken(token string) bool {
+	if len(token) == 0 || len(token) > 64 {
+		return false
+	}
+	for _, character := range token {
+		switch {
+		case character >= 'a' && character <= 'z', character >= 'A' && character <= 'Z',
+			character >= '0' && character <= '9', character == '.', character == '_', character == '-':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+func manualDailyGeneration(organizationID, day string, repositoryIDs []RepositoryID, rerunToken string) string {
 	sorted := make([]string, len(repositoryIDs))
 	for i, id := range repositoryIDs {
 		sorted[i] = string(id)
 	}
 	sort.Strings(sorted)
 	seed := organizationID + "|" + day + "|" + strings.Join(sorted, ",")
+	if rerunToken != "" {
+		// A repository id is a uuid and holds no '|', so a token cannot make
+		// the seed of another request.
+		seed += "|rerun:" + rerunToken
+	}
 	sum := sha256.Sum256([]byte(seed))
 	return ManualDailyGenerationPrefix + hex.EncodeToString(sum[:])[:16]
 }
@@ -81,6 +124,40 @@ func (store *PostgresStore) StartManualDailyRun(
 	repositoryIDs []RepositoryID,
 	publisher RunPublisher,
 ) (ManualDailyRunOutcome, error) {
+	return store.startManualDailyRun(ctx, organizationID, day, generation, repositoryIDs, publisher, false)
+}
+
+// StartManualDailyRerun starts a run that computes a stored day again. It is
+// StartManualDailyRun with two differences:
+//
+//   - the day may already be covered: ErrDayAlreadyCovered is never returned,
+//     because computing the covered day again is the request;
+//   - the request is refused with ErrManualRunInFlight while another manual
+//     run of the same (organization, day) is pending or running. With that, a
+//     caller that sends a new token on each attempt has at most one manual run
+//     of a day in flight, and a loop cannot stack runs of one day. The check
+//     and the insert are one transaction under the advisory lock of the day,
+//     so two concurrent re-runs cannot both pass it.
+//
+// generation MUST come from ManualDailyRerunGeneration. A request whose
+// generation already has a run is the retry of that re-run: it starts nothing
+// and is not refused, whatever is in flight.
+func (store *PostgresStore) StartManualDailyRerun(
+	ctx context.Context,
+	organizationID, day, generation string,
+	repositoryIDs []RepositoryID,
+	publisher RunPublisher,
+) (ManualDailyRunOutcome, error) {
+	return store.startManualDailyRun(ctx, organizationID, day, generation, repositoryIDs, publisher, true)
+}
+
+func (store *PostgresStore) startManualDailyRun(
+	ctx context.Context,
+	organizationID, day, generation string,
+	repositoryIDs []RepositoryID,
+	publisher RunPublisher,
+	rerun bool,
+) (ManualDailyRunOutcome, error) {
 	if !store.valid() {
 		return ManualDailyRunOutcome{}, ErrUnavailable
 	}
@@ -106,13 +183,30 @@ func (store *PostgresStore) StartManualDailyRun(
 		_ = tx.Rollback(rollbackCtx)
 	}()
 
-	if len(repositoryIDs) == 0 {
+	if len(repositoryIDs) == 0 || rerun {
 		if _, err := tx.Exec(ctx,
 			"SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))",
 			"daily_metrics_manual_day", organizationID+":"+day,
 		); err != nil {
 			return ManualDailyRunOutcome{}, ErrUnavailable
 		}
+	}
+	switch {
+	case rerun:
+		exists, err := store.RunExistsTx(ctx, tx, organizationID, targetDay, generation)
+		if err != nil {
+			return ManualDailyRunOutcome{}, err
+		}
+		if !exists {
+			inFlight, err := store.hasManualRunInFlightForDay(ctx, tx, organizationID, day)
+			if err != nil {
+				return ManualDailyRunOutcome{}, err
+			}
+			if inFlight {
+				return ManualDailyRunOutcome{}, ErrManualRunInFlight
+			}
+		}
+	case len(repositoryIDs) == 0:
 		covered, err := store.HasSucceededRunForDay(ctx, tx, organizationID, day, generation)
 		if err != nil {
 			return ManualDailyRunOutcome{}, err
@@ -136,4 +230,26 @@ func (store *PostgresStore) StartManualDailyRun(
 	}
 	committed = true
 	return ManualDailyRunOutcome{Day: day, RunID: run.ID, Generation: generation}, nil
+}
+
+// hasManualRunInFlightForDay reports whether a manual run of the
+// (organization, day) is pending or running, under any manual generation.
+func (store *PostgresStore) hasManualRunInFlightForDay(
+	ctx context.Context, tx pgx.Tx, organizationID, day string,
+) (bool, error) {
+	if !store.valid() || tx == nil || !validUUID(organizationID) || day == "" {
+		return false, ErrUnavailable
+	}
+	var exists bool
+	err := tx.QueryRow(ctx, `
+SELECT EXISTS (
+    SELECT 1 FROM public.daily_metrics_runs
+    WHERE org_id = $1::uuid AND target_day = $2::date
+      AND generation LIKE $3
+      AND status IN ('pending', 'running')
+)`, organizationID, day, escapeLikePrefix(ManualDailyGenerationPrefix)+"%").Scan(&exists)
+	if err != nil {
+		return false, ErrUnavailable
+	}
+	return exists, nil
 }

@@ -49,3 +49,49 @@ func TestStartManualDailyRunRejectsInvalidInputBeforeTouchingTheDatabase(t *test
 		t.Fatalf("invalid org against an unconfigured store: err=%v want=%v", err, ErrUnavailable)
 	}
 }
+
+// The generation of a re-run: the same token is the same run, a new token is
+// a new run, and no token is the plain manual request.
+func TestManualDailyRerunGenerationNamesOneRerunByItsToken(t *testing.T) {
+	t.Parallel()
+	const org = "00000000-0000-4000-8000-000000000001"
+	const repoA = "00000000-0000-4000-8000-000000000002"
+	const repoB = "00000000-0000-4000-8000-000000000003"
+	plain := ManualDailyRunGeneration(org, "2026-07-24", []RepositoryID{repoA, repoB})
+
+	first := ManualDailyRerunGeneration(org, "2026-07-24", []RepositoryID{repoA, repoB}, "carry-1")
+	if first == plain {
+		t.Fatalf("a re-run must not be the generation of the plain request, or it starts nothing: %q", first)
+	}
+	if retry := ManualDailyRerunGeneration(org, "2026-07-24", []RepositoryID{repoB, repoA}, "carry-1"); retry != first {
+		t.Fatalf("the same token must be the same run, in any repository order: %q vs %q", retry, first)
+	}
+	if second := ManualDailyRerunGeneration(org, "2026-07-24", []RepositoryID{repoA, repoB}, "carry-2"); second == first {
+		t.Fatalf("a new token must be a new run: %q", second)
+	}
+	if otherDay := ManualDailyRerunGeneration(org, "2026-07-25", []RepositoryID{repoA, repoB}, "carry-1"); otherDay == first {
+		t.Fatalf("the same token on another day must be another run: %q", otherDay)
+	}
+	if deferred := ManualDailyRerunGeneration(org, "2026-07-24", nil, "carry-1"); deferred == first {
+		t.Fatalf("the same token with another repository scope must be another run: %q", deferred)
+	}
+	if !isManualDailyGeneration(first) || len(first) > 64 {
+		t.Fatalf("a re-run generation must be a manual generation of at most 64 bytes: %q", first)
+	}
+	if none := ManualDailyRerunGeneration(org, "2026-07-24", []RepositoryID{repoA, repoB}, ""); none != plain {
+		t.Fatalf("no token is the plain request: %q vs %q", none, plain)
+	}
+}
+
+func TestValidManualDailyRerunToken(t *testing.T) {
+	t.Parallel()
+	for token, want := range map[string]bool{
+		"carry-1": true, "a": true, "2026-10-09.window_3": true, strings.Repeat("a", 64): true,
+		"": false, strings.Repeat("a", 65): false, "two words": false, "a|b": false, "a/b": false,
+		"caf\u00e9": false, "a,b": false, "a:b": false,
+	} {
+		if got := ValidManualDailyRerunToken(token); got != want {
+			t.Errorf("ValidManualDailyRerunToken(%q) = %v, want %v", token, got, want)
+		}
+	}
+}

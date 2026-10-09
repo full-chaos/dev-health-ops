@@ -11,6 +11,7 @@ import (
 	stdclickhouse "github.com/ClickHouse/clickhouse-go/v2"
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/aigovernance"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/chschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 )
@@ -206,7 +207,12 @@ func TestFetchAIImpactReturnsNewestNullRatesNotStaleValues(t *testing.T) {
 // the production reader against ClickHouse. The selected team has unequal
 // (day, team_id, repo_id) groups, so a mean of ratios would be 0.85 while the
 // required ratio of sums is 107/110. Rows from another team and org must not
-// enter the reader, and a zero-activity group remains fully covered.
+// enter the reader.
+//
+// A team with no AI activity has no row: the real rollup stores a group only
+// for an AI-detected artifact, so a stored row with 0 in every count is not a
+// measurement of "no AI activity". It is the retraction row the daily writer
+// stores over a key it no longer produces, and it reads as no row.
 func TestFetchAIGovernanceRealClickHouse_RatioOfSumsUsesSelectedRawGroups(t *testing.T) {
 	ctx, admin, client := startOperatingReviewSchema(t)
 
@@ -243,7 +249,17 @@ func TestFetchAIGovernanceRealClickHouse_RatioOfSumsUsesSelectedRawGroups(t *tes
 	// Neither of these rows belongs in the selected-team result.
 	seed(org, otherTeam, "85240000-0000-4000-8000-000000000003", 1000, 0, 0, 0, 0, newer)
 	seed(otherOrg, team, "85240000-0000-4000-8000-000000000004", 1000, 0, 0, 0, 0, newer)
-	// A present group with no AI activity is fully covered, not missing data.
+	// The team with no AI activity, through the real rollup: an artifact that
+	// is not AI-detected gives no group, so the writer stores no row for it.
+	zeroTeamID := zeroTeam
+	if produced := aigovernance.RollupCoverageDaily([]aigovernance.Artifact{{
+		OrgID: org, TeamID: &zeroTeamID, SubjectType: "pull_request", SubjectID: "1", ObservedAt: day.Add(time.Hour),
+	}}, day); len(produced) != 0 {
+		t.Fatalf("the rollup stores %+v for a team with no AI-detected artifact, want no row", produced)
+	}
+	// What the store CAN hold for that team with 0 in every count: a key that
+	// was measured once and holds a retraction row now.
+	seed(org, zeroTeam, "85240000-0000-4000-8000-000000000005", 3, 3, 3, 3, 3, older)
 	seed(org, zeroTeam, "85240000-0000-4000-8000-000000000005", 0, 0, 0, 0, 0, newer)
 
 	rows, err := fetchAIGovernance(ctx, client, org, teamSelection{selectedTeam}, day, day.AddDate(0, 0, 1))
@@ -262,8 +278,8 @@ func TestFetchAIGovernanceRealClickHouse_RatioOfSumsUsesSelectedRawGroups(t *tes
 	if err != nil {
 		t.Fatalf("fetchAIGovernance(all teams): %v", err)
 	}
-	if len(allRows) != 4 {
-		t.Fatalf("fetchAIGovernance(all teams) returned %d rows, want 4: %+v", len(allRows), allRows)
+	if len(allRows) != 3 {
+		t.Fatalf("fetchAIGovernance(all teams) returned %d rows, want 3 (the retraction row is not a row): %+v", len(allRows), allRows)
 	}
 	const wantAllTeamsCoverage = 107.0 / 1110.0
 	if got := aiGovernanceCoverage(allRows); math.Abs(got-wantAllTeamsCoverage) > 1e-12 {
@@ -274,10 +290,12 @@ func TestFetchAIGovernanceRealClickHouse_RatioOfSumsUsesSelectedRawGroups(t *tes
 	if err != nil {
 		t.Fatalf("fetchAIGovernance(zero-activity team): %v", err)
 	}
-	if len(zeroRows) != 1 {
-		t.Fatalf("fetchAIGovernance(zero-activity team) returned %d rows, want 1: %+v", len(zeroRows), zeroRows)
+	if len(zeroRows) != 0 {
+		t.Fatalf("fetchAIGovernance(zero-activity team) returned %d rows, want none: %+v", len(zeroRows), zeroRows)
 	}
-	if got := aiGovernanceCoverage(zeroRows); got != 1.0 {
-		t.Errorf("aiGovernanceCoverage(zero-activity team) = %v, want 1.0", got)
+	// The coverage of a team with a retraction row only is the coverage the
+	// reader gives for no row at all.
+	if got, want := aiGovernanceCoverage(zeroRows), aiGovernanceCoverage(nil); got != want {
+		t.Errorf("aiGovernanceCoverage(zero-activity team) = %v, want %v (as for no row)", got, want)
 	}
 }

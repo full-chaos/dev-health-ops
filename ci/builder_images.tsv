@@ -1,0 +1,18 @@
+# Images that docker/setup-buildx-action and docker/setup-qemu-action pull when a
+# job sets up a builder (CHAOS-9064). Both default to Docker Hub, and an
+# anonymous pull from a hosted runner fails once the shared IP uses up Docker
+# Hub's rate limit. CI takes them from the ghcr.io mirror instead, by digest.
+#
+# <name><TAB><upstream ref: repo:tag@sha256:<digest of the multi-arch INDEX>>
+#
+# mirror-test-images.yml reads this file, copies each ref verbatim into
+# ghcr.io/<owner>/<repo>:<tag> (same digest), and verifies the digest and that
+# the index holds linux/amd64 and linux/arm64. Workflows use
+# ghcr.io/<owner>/<repo>@sha256:<digest>; tests/tooling/test_builder_images_pinned.py
+# holds every setup-buildx / setup-qemu step to the digests below.
+#
+# To bump an image: put the new index digest here, update the digest in the
+# workflow steps the test names, and let mirror-test-images.yml publish it
+# (it runs on a push to main that touches this file, or dispatch it on the branch).
+buildkit	moby/buildkit:buildx-stable-1@sha256:cec9f139f45e93c5c69c60f8b07cfad9f43f4ef6b6a6cd917527fea5ff2e3dea
+binfmt	tonistiigi/binfmt:latest@sha256:400a4873b838d1b89194d982c45e5fb3cda4593fbfd7e08a02e76b03b21166f0

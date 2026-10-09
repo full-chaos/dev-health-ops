@@ -7,6 +7,8 @@ import (
 
 	"github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/google/uuid"
+
+	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse/liverow"
 )
 
 // activity is OrganizationActivity.
@@ -39,8 +41,7 @@ func (h handlers) orgActivity(ctx context.Context, orgIDs []uuid.UUID) map[uuid.
 		for _, table := range metricTables {
 			var count uint64
 			var last time.Time
-			err := h.ClickHouse.QueryRow(ctx,
-				"SELECT count() AS row_count, max(computed_at) AS last_metrics_at FROM "+table+" WHERE org_id = {org_id:String}",
+			err := h.ClickHouse.QueryRow(ctx, activityStatement(table),
 				clickhouse.Named("org_id", orgID.String())).Scan(&count, &last)
 			if err != nil {
 				h.Logger.DebugContext(ctx, "skipping org activity lookup for table", slog.String("table", table), slog.String("error", err.Error()))
@@ -56,6 +57,24 @@ func (h handlers) orgActivity(ctx context.Context, orgIDs []uuid.UUID) map[uuid.
 		out[orgID] = result
 	}
 	return out
+}
+
+// activityStatement counts the metric rows of one organization in table and
+// takes their newest computed_at.
+//
+// A team-keyed daily table can hold retraction rows (package liverow): the
+// newest row of a key the compute no longer produces, with 0 in every count.
+// Such a row is not data. For those tables the statement reads the newest row
+// of each key (FINAL) and keeps the measurements only, so an organization
+// whose only newest rows are retraction rows has no data, and a retraction
+// row does not make its metrics look newer than its last measurement.
+func activityStatement(table string) string {
+	source, where := table, "org_id = {org_id:String}"
+	if liverow.Registered(table) {
+		source += " FINAL"
+		where += " AND " + liverow.Predicate(table, "")
+	}
+	return "SELECT count() AS row_count, max(computed_at) AS last_metrics_at FROM " + source + " WHERE " + where
 }
 
 // minTime is datetime.min in UTC, the sort value of a missing timestamp.

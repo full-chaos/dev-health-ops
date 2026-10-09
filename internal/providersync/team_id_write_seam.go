@@ -85,8 +85,8 @@ func KeyTeamIDsForWrite(ctx context.Context, conn TeamIDCarryConn, orgID, writer
 				held = append(held, candidate)
 			}
 		}
+		// A prefixed id has no candidates: the custom branch keeps its prefix.
 		switch {
-		case teamid.HasKey(keyed[i]):
 		case len(held) == 1:
 			keyed[i] = held[0]
 		case len(held) == 0:

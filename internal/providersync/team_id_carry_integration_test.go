@@ -665,11 +665,29 @@ func TestCarryTeamIDsLeavesAnAdminRowOlderThanItsInactiveTeam(t *testing.T) {
 	f.team("", "ENG", nil, nil, 1, carryOld, []string{"admin-edit"}, nil)
 	f.team("linear", "ENG", carryPtr("ENG"), nil, 0, carryOld.Add(time.Hour), nil, nil)
 
-	outcome, err := CarryTeamIDs(ctx, conn, f.orgID, carryAt, false)
-	if err != nil || outcome.Found() || outcome.RowsWritten != 0 {
-		t.Fatalf("carry = %+v, %v; want nothing carried", outcome, err)
+	// The count read finds nothing: no plan read follows it.
+	counting := &queryCountingConn{TeamIDCarryConn: conn}
+	outcome, err := CarryTeamIDs(ctx, counting, f.orgID, carryAt, false)
+	if err != nil || outcome.Found() || outcome.RowsWritten != 0 || counting.queries != 1 {
+		t.Fatalf("carry = %+v, %v, %d reads; want the count read only", outcome, err, counting.queries)
 	}
-	if got := f.count(`SELECT count() FROM teams FINAL WHERE org_id = ? AND is_active = 1`); got != 0 {
-		t.Errorf("active teams = %d, want 0", got)
+	// With another bare team to carry, the plan still leaves the admin row.
+	f.team("linear", "OPS", carryPtr("OPS"), nil, 1, carryOld, nil, nil)
+	outcome, err = CarryTeamIDs(ctx, conn, f.orgID, carryAt, false)
+	if err != nil || outcome.Teams != 1 || outcome.AdminTeams != 0 {
+		t.Fatalf("carry = %+v, %v; want OPS only", outcome, err)
 	}
+	if got := f.str(`SELECT arrayStringConcat(groupArray(id), ',') FROM (SELECT id FROM teams FINAL WHERE org_id = ? AND is_active = 1 ORDER BY id)`); got != "linear:OPS" {
+		t.Errorf("active = %q, want linear:OPS", got)
+	}
+}
+
+type queryCountingConn struct {
+	TeamIDCarryConn
+	queries int
+}
+
+func (c *queryCountingConn) Query(ctx context.Context, query string, args ...any) (driver.Rows, error) {
+	c.queries++
+	return c.TeamIDCarryConn.Query(ctx, query, args...)
 }

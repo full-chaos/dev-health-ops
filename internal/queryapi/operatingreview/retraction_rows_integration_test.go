@@ -119,7 +119,7 @@ func TestOperatingReviewReadsNoRowForRetractionRowsOnly(t *testing.T) {
 	}
 	defer func() { _ = client.Close() }()
 
-	const org = "org-retraction-rows-only"
+	const org = retractionseed.RetractionOnlyOrg
 	day := store.Days[len(store.Days)-1]
 	for _, team := range retractionseed.Teams {
 		retractionseed.Retract(ctx, t, store.Conn, org, day, team, store.OldComputedAt, store.NewComputedAt)

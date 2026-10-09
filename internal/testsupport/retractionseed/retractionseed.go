@@ -33,11 +33,16 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 )
 
-// The two organizations of the seed.
+// The two organizations of the seed. The ids have the form of a UUID because
+// some readers take the organization as one.
 const (
-	ControlOrg   = "org-retraction-control"
-	RetractedOrg = "org-retraction-retracted"
+	ControlOrg   = "c0c0c0c0-0000-4000-8000-000000000001"
+	RetractedOrg = "c0c0c0c0-0000-4000-8000-000000000002"
 )
+
+// RetractionOnlyOrg is an organization id for a test that stores retraction
+// rows only (Retract). Apply stores nothing for it.
+const RetractionOnlyOrg = "c0c0c0c0-0000-4000-8000-000000000003"
 
 // Team is one team of the seed: the id it was stored under before the carry
 // (RetiredID, now inactive in the teams table) and the provider-keyed id it

@@ -1056,5 +1056,81 @@ func fetchRepoScopedTeamMetrics(ctx context.Context, client QueryClient, orgID, 
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("rows: %w", err)
 	}
-	return result, nil
+	if len(result) == 0 {
+		return result, nil
+	}
+	// The SQL above is pinned to the Python reference. It gives a day whose
+	// newest rows of the repository hold no commit a ratio of 0.0. Those rows
+	// are retraction rows (package liverow): a measured row holds a commit.
+	// Such a day has no measurement, so it is left out, as a day with no row.
+	retracted, err := fetchRetractedRepoDays(ctx, client, bindings)
+	if err != nil {
+		return nil, err
+	}
+	if len(retracted) == 0 {
+		return result, nil
+	}
+	kept := result[:0]
+	for _, row := range result {
+		if !retracted[row.day.UTC()] {
+			kept = append(kept, row)
+		}
+	}
+	if len(kept) == 0 {
+		return nil, nil
+	}
+	return kept, nil
+}
+
+// retractedRepoDaysQuery has the latest-generation join of the pinned
+// fetchRepoScopedTeamMetrics query and returns the days on which no row of
+// that generation is a measurement.
+var retractedRepoDaysQuery = `
+        SELECT t.day AS no_measured_row_day
+        FROM team_metrics_daily AS t
+        INNER JOIN (
+            SELECT day, max(computed_at) AS latest_computed_at
+            FROM team_metrics_daily
+            WHERE org_id = {org_id:String}
+              AND day >= {since_date:Date}
+              AND day <= {until_date:Date}
+              AND repo_id IN (
+                  SELECT toString(id) FROM repos
+                  WHERE org_id = {org_id:String}
+                    AND (repo = {repo_id:String} OR toString(id) = {repo_id:String})
+              )
+            GROUP BY day
+        ) AS latest_gen
+            ON t.day = latest_gen.day
+               AND t.computed_at = latest_gen.latest_computed_at
+        WHERE t.org_id = {org_id:String}
+          AND t.day >= {since_date:Date}
+          AND t.day <= {until_date:Date}
+          AND t.repo_id IN (
+              SELECT toString(id) FROM repos
+              WHERE org_id = {org_id:String}
+                AND (repo = {repo_id:String} OR toString(id) = {repo_id:String})
+          )
+        GROUP BY t.day
+        HAVING max(` + liverow.Predicate("team_metrics_daily", "t") + `) = 0
+        ORDER BY no_measured_row_day`
+
+func fetchRetractedRepoDays(ctx context.Context, client QueryClient, bindings []clickhouse.Binding) (map[time.Time]bool, error) {
+	rows, err := client.Query(ctx, retractedRepoDaysQuery, bindings)
+	if err != nil {
+		return nil, fmt.Errorf("retracted repo days query: %w", err)
+	}
+	defer rows.Close()
+	days := map[time.Time]bool{}
+	for rows.Next() {
+		var day time.Time
+		if scanErr := rows.Scan(&day); scanErr != nil {
+			return nil, fmt.Errorf("retracted repo days scan: %w", scanErr)
+		}
+		days[day.UTC()] = true
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("retracted repo days rows: %w", err)
+	}
+	return days, nil
 }

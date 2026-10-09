@@ -77,7 +77,7 @@ func TestTeamRiskRowsGiveRetractionRowsNoWeight(t *testing.T) {
 	// A day whose only newest team rows are retraction rows holds no team
 	// row. The team breakout decides on "is there a team row" whether to
 	// derive the teams from the repositories, so an empty list matters.
-	const org = "org-retraction-rows-only"
+	const org = retractionseed.RetractionOnlyOrg
 	for _, team := range retractionseed.Teams {
 		retractionseed.Retract(ctx, t, store.Conn, org, newest, team, store.OldComputedAt, store.NewComputedAt)
 	}

@@ -77,3 +77,56 @@ func TestTeamCommitRatiosGiveRetractionRowsNoWeight(t *testing.T) {
 		t.Fatalf("the retraction rows changed a day:\n control   %+v\n retracted %+v", control, retracted)
 	}
 }
+
+// TestRepoCommitRatiosLeaveOutADayOfRetractionRowsOnly reads the commit
+// ratios of one repository. On one day the newest rows of the repository are
+// retraction rows only: the team that held its commits was retired and the
+// second compute found no commit. That day has no measurement, so it is not a
+// day with a ratio of 0.
+func TestRepoCommitRatiosLeaveOutADayOfRetractionRowsOnly(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+	store := retractionseed.Start(ctx, t)
+	client, err := dhclickhouse.NewClickHouseQueryClientWithOptions(dhclickhouse.Options{DSN: store.URI})
+	if err != nil {
+		t.Fatalf("construct query client: %v", err)
+	}
+	defer func() { _ = client.Close() }()
+
+	team := retractionseed.Teams[0]
+	since, until := store.Days[1].Format("2006-01-02"), store.Days[len(store.Days)-1].Format("2006-01-02")
+
+	// The seeded organizations: the repository of the first team makes 2 of 8
+	// commits after hours on each of the six days, with and without the
+	// retraction rows of the retired id (they share the compute time of the
+	// measured rows, as the writer stores them).
+	for _, org := range []string{retractionseed.ControlOrg, retractionseed.RetractedOrg} {
+		rows, err := fetchRepoScopedTeamMetrics(ctx, client, org, since, until, team.RepoID)
+		if err != nil {
+			t.Fatalf("%s: %v", org, err)
+		}
+		if len(rows) != 6 {
+			t.Fatalf("%s days = %+v, want six", org, rows)
+		}
+		for _, row := range rows {
+			if row.afterHoursCommitRatio != 0.25 || row.weekendCommitRatio != 0 {
+				t.Fatalf("%s day = %+v, want 0.25 and 0", org, row)
+			}
+		}
+	}
+
+	day := store.Days[len(store.Days)-1]
+	retractionseed.Retract(ctx, t, store.Conn, retractionseed.RetractionOnlyOrg, day, team, store.OldComputedAt, store.NewComputedAt)
+	if err := store.Conn.Exec(ctx, `INSERT INTO repos (id, repo, created_at, last_synced, org_id, provider)
+VALUES (?, ?, ?, ?, ?, ?)`, team.RepoID, team.WorkScope, store.OldComputedAt, store.NewComputedAt,
+		retractionseed.RetractionOnlyOrg, team.Provider); err != nil {
+		t.Fatalf("insert the repository: %v", err)
+	}
+	rows, err := fetchRepoScopedTeamMetrics(ctx, client, retractionseed.RetractionOnlyOrg, since, until, team.RepoID)
+	if err != nil {
+		t.Fatalf("retraction rows only: %v", err)
+	}
+	if len(rows) != 0 {
+		t.Fatalf("a day of retraction rows only is served as %+v, want no day", rows)
+	}
+}

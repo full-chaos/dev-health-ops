@@ -40,16 +40,12 @@ var notReaders = map[string]string{
 		"(it must stay in the newest-day pick, so that a retracted key gives 0 and not its older backlog)",
 	"internal/queryapi/throughputforecast/clickhouse.go": "sums by day, means of day sums, and Nullable means over the newest-day row of each key " +
 		"(a retraction row adds 0 and its Nullable measures are NULL)",
-	"internal/queryapi/aianalytics/ai_opportunities.go": "sums, and means weighted by prs_total: a retraction row has weight 0 and stays under the minimum pull request gate",
-	"internal/queryapi/analytics/catalog.go":            "lists ACTIVE teams only (teams FINAL, is_active = 1); the row count orders them; SQL pinned by the frozen catalog golden",
-	"internal/queryapi/datahealth/coverage.go": "storage facts of a table (rows stored, time of the newest compute), not a measurement: " +
-		"a retraction row is a stored row written by a compute",
+	"internal/queryapi/aianalytics/ai_opportunities.go":         "sums, and means weighted by prs_total: a retraction row has weight 0 and stays under the minimum pull request gate",
+	"internal/queryapi/analytics/catalog.go":                    "lists ACTIVE teams only (teams FINAL, is_active = 1); the row count orders them; SQL pinned by the frozen catalog golden",
 	"internal/jobs/metrics/remaining/recommendations_loader.go": "reads of ONE team id the job already evaluates: sums and Nullable means of the newest rows",
 	"internal/jobs/metrics/remaining/recommendations_rules.go":  "table names in rule evidence, no query",
 	"internal/jobs/metrics/remaining/recommendations_native.go": "table names in readiness messages, no query",
 	"internal/api/syncadmin/backfill_detail.go":                 "reads scope 'repo' rows only; a team retraction row has scope 'team'",
-	"internal/api/session/activity.go": "has-data and last-compute time of the org (count and max over the raw table); " +
-		"outside the query API, reported to the lead for its own decision",
 }
 
 var tableName = func() *regexp.Regexp {

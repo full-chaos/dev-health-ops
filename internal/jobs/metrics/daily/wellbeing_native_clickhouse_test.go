@@ -39,6 +39,36 @@ func TestLoadWellbeingTeamsUsesProductionQueryWithTenantFence(t *testing.T) {
 	}
 }
 
+// A failed read of the inactive teams fails the three team resolvers. None of
+// them goes on with every team: that would give a repository, a pattern or a
+// member to a team that was replaced.
+func TestATeamResolverFailsWhenTheInactiveTeamsCannotBeRead(t *testing.T) {
+	failure := errors.New("clickhouse: connection reset")
+	ctx := context.Background()
+
+	wellbeing := &recordingRepositoryConnection{teamRuleReadErr: failure, rows: &wellbeingTeamRowsStub{teams: []WellbeingTeam{
+		{ID: "platform", Name: "Platform", RepoPatterns: []string{"acme/*"}},
+	}}}
+	if teams, err := LoadWellbeingTeams(ctx, wellbeing, "org-1"); !errors.Is(err, failure) || teams != nil {
+		t.Errorf("LoadWellbeingTeams = %v, %v; want no team and the failure", teams, err)
+	}
+
+	aiImpact := &governanceQueryRecorder{teamRuleReadErr: failure}
+	if teams, err := LoadAIImpactTeams(ctx, aiImpact, "org-1"); !errors.Is(err, failure) || teams != nil {
+		t.Errorf("LoadAIImpactTeams = %v, %v; want no team and the failure", teams, err)
+	}
+
+	repoID := uuid.New()
+	ownership := &governanceQueryRecorder{teamRuleReadErr: failure, rows: &fakeOwnershipRows{
+		rows: []fakeOwnershipRow{{repoID: repoID.String(), teamID: "platform"}},
+	}}
+	owners, err := resolveAIImpactRepoToTeam(ctx, ownership, "org-1", time.Now().UTC(), []uuid.UUID{repoID},
+		map[string]string{repoID.String(): "acme/api"}, NewRepoPatternResolver(nil))
+	if !errors.Is(err, failure) || owners != nil {
+		t.Errorf("the repository owners = %v, %v; want no owner and the failure", owners, err)
+	}
+}
+
 func TestLoadWellbeingTeamsRejectsMissingOrg(t *testing.T) {
 	if _, err := LoadWellbeingTeams(context.Background(), &recordingRepositoryConnection{}, ""); !errors.Is(err, ErrInvalidState) {
 		t.Fatalf("err=%v, want ErrInvalidState", err)

@@ -103,3 +103,25 @@ func TestAKeyColumnIsReadAndStoredByItsKind(t *testing.T) {
 		t.Errorf("ScopeTuple = %q, want %q", got, want)
 	}
 }
+
+// The marker columns a reader tests: the counts, or the marker of a table
+// with no count. A caller cannot change the declaration through the result.
+func TestMarkerColumnsAreTheCountsOrTheMarkerOfATableWithNoCount(t *testing.T) {
+	if got, want := WorkItemStateDurationsDaily.MarkerColumns(), []string{"items_touched"}; len(got) != 1 || got[0] != want[0] {
+		t.Errorf("MarkerColumns = %v, want %v", got, want)
+	}
+	risk := CompoundingRiskDailyTeam.MarkerColumns()
+	if len(CompoundingRiskDailyTeam.Counts) != 0 || len(risk) != 6 || risk[0] != "w_churn" || risk[5] != "threshold_high" {
+		t.Errorf("the team risk table has counts %v and marker columns %v, want no count and the six weights and thresholds",
+			CompoundingRiskDailyTeam.Counts, risk)
+	}
+	risk[0] = "changed"
+	if CompoundingRiskDailyTeam.Marker[0] != "w_churn" {
+		t.Error("a caller changed the declaration through MarkerColumns")
+	}
+	for _, table := range All() {
+		if len(table.MarkerColumns()) == 0 {
+			t.Errorf("%s has no marker column", table.Table)
+		}
+	}
+}

@@ -312,6 +312,22 @@ func TestTheStaleKeyRuleStoresANullKeyColumnAsNull(t *testing.T) {
 			if stored := readStaleKeyRuleStored(t, ctx, conn, table, key); stored.versions != 2 || stored.measureSum != 0 {
 				t.Errorf("the key with a NULL column holds %+v, want 2 versions and 0 in every measure", stored)
 			}
+			// Both stored versions hold NULL in the column, not the empty
+			// value the sorting key reads it as: a read of the column itself
+			// finds the row of zeros where it found the row it supersedes.
+			for _, column := range table.Keys {
+				if column.Kind != teamkeytables.KeyNullableString && column.Kind != teamkeytables.KeyNullableUUID {
+					continue
+				}
+				var nulls uint64
+				if err := conn.QueryRow(ctx, fmt.Sprintf("SELECT countIf(isNull(%s)) FROM %s WHERE org_id = ? AND %s = ?",
+					column.Name, table.Table, table.DayColumn), staleKeyRuleOrg, staleKeyRuleDay).Scan(&nulls); err != nil {
+					t.Fatalf("count the NULL values of %s: %v", column.Name, err)
+				}
+				if nulls != 2 {
+					t.Errorf("%d stored version(s) hold NULL in %s, want 2: the first row and the row of zeros", nulls, column.Name)
+				}
+			}
 			var total uint64
 			if err := conn.QueryRow(ctx, fmt.Sprintf("SELECT count() FROM %s FINAL WHERE org_id = ? AND %s = ?", table.Table, table.DayColumn),
 				staleKeyRuleOrg, staleKeyRuleDay).Scan(&total); err != nil {
@@ -321,5 +337,41 @@ func TestTheStaleKeyRuleStoresANullKeyColumnAsNull(t *testing.T) {
 				t.Errorf("%s holds %d key(s) for the day, want 1: the row of zeros must land on the key it supersedes", table.Table, total)
 			}
 		})
+	}
+}
+
+// compounding_risk_daily has no count column, and a real team row can hold
+// NULL in every score and input (a team with no input: severity unknown). The
+// weights of the compute tell such a row from a row of zeros: the real row is
+// live (the rule supersedes it when its team id is no longer produced, and a
+// reader keeps it), and the row of zeros that supersedes it is not.
+func TestTheStaleKeyRuleTellsARealTeamRiskRowWithNoScoreFromARowOfZeros(t *testing.T) {
+	ctx := context.Background()
+	conn := workItemAttributionLinkedIssueMigratedClickHouse(t, ctx)
+	table := teamkeytables.CompoundingRiskDailyTeam
+	first := staleKeyRuleDay.Add(30 * time.Hour)
+	if err := conn.Exec(ctx, `INSERT INTO compounding_risk_daily
+    (org_id, day, scope, scope_id, severity, w_churn, w_complexity, w_ownership, w_review, threshold_elevated, threshold_high, computed_at)
+    VALUES (?, ?, 'team', 'platform', 'unknown', 0.3, 0.3, 0.2, 0.2, 0.4, 0.65, ?)`, staleKeyRuleOrg, staleKeyRuleDay, first); err != nil {
+		t.Fatalf("insert the real row with no score: %v", err)
+	}
+	live := func() uint64 {
+		t.Helper()
+		var count uint64
+		if err := conn.QueryRow(ctx, "SELECT count() FROM compounding_risk_daily FINAL WHERE org_id = ? AND day = ? AND scope = 'team' AND "+
+			table.LiveRow(""), staleKeyRuleOrg, staleKeyRuleDay).Scan(&count); err != nil {
+			t.Fatalf("count the live team rows: %v", err)
+		}
+		return count
+	}
+	if live() != 1 {
+		t.Fatalf("a real team row with no score is not live for a reader")
+	}
+	written, err := supersedeStaleTeamKeys(ctx, conn, table, staleKeyRuleOrg, staleKeyRuleDay, nil, nil, first.Add(time.Hour))
+	if err != nil || written != 1 {
+		t.Fatalf("the rule wrote %d row(s) (err %v), want 1: the real row with no score is a live key", written, err)
+	}
+	if live() != 0 {
+		t.Errorf("the row of zeros that supersedes the real row is live for a reader")
 	}
 }

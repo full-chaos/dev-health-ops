@@ -121,7 +121,7 @@ QUALIFY ROW_NUMBER() OVER (
 		// repo_patterns is Array(String) -- another distinct scan type.
 		`CREATE TABLE teams (
     id String, name String, repo_patterns Array(String), is_active UInt8 DEFAULT 1,
-    updated_at DateTime64(6), org_id String
+    updated_at DateTime64(6), last_synced DateTime64(6) DEFAULT now(), org_id String
 ) ENGINE = ReplacingMergeTree(updated_at) ORDER BY (org_id, id)`,
 		`CREATE TABLE repos (
     id UUID, repo String, last_synced DateTime64(3, 'UTC'), org_id String,
@@ -916,7 +916,7 @@ QUALIFY ROW_NUMBER() OVER (
 ) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (org_id, repo_id, commit_hash, file_path)`,
 		`CREATE TABLE teams (
     id String, name String, repo_patterns Array(String), is_active UInt8 DEFAULT 1,
-    updated_at DateTime64(6), org_id String
+    updated_at DateTime64(6), last_synced DateTime64(6) DEFAULT now(), org_id String
 ) ENGINE = ReplacingMergeTree(updated_at) ORDER BY (org_id, id)`,
 		`CREATE TABLE repos (
     id UUID, repo String, last_synced DateTime64(3, 'UTC'), org_id String,
@@ -1107,7 +1107,7 @@ QUALIFY ROW_NUMBER() OVER (
 		// resolver ALONE would resolve nothing for this repo.
 		`CREATE TABLE teams (
     id String, name String, repo_patterns Array(String), is_active UInt8 DEFAULT 1,
-    updated_at DateTime64(6), org_id String
+    updated_at DateTime64(6), last_synced DateTime64(6) DEFAULT now(), org_id String
 ) ENGINE = ReplacingMergeTree(updated_at) ORDER BY (org_id, id)`,
 		`CREATE TABLE repos (
     id UUID, repo String, last_synced DateTime64(3, 'UTC'), org_id String,

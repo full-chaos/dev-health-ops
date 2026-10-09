@@ -48,6 +48,12 @@ var teamIDDynamicWriters = map[string]struct {
 	"internal/providersync/team_id_carry.go": {1, "the carry: keyed ids only (teamIDCarryGuard)"},
 	"internal/chmigrate/apply.go":            {2, "schema migrations: no team row"},
 	"internal/providerfoundation/sinks.go":   {1, "raw provider record tables: no team-keyed table"},
+	// The stale-key rule of the daily metric families writes a row of zeros
+	// over a stored key of a derived daily table. It stores the team id that
+	// the superseded row holds, also a bare id of a team that was replaced: a
+	// keyed id would be another key and would leave the old row in place. It
+	// writes no team row and no link row (package teamkeytables).
+	"internal/jobs/metrics/daily/stale_team_keys.go": {1, "stale-key rule: the stored id of the superseded row, daily metric tables only"},
 	// Exception: `dho fixtures generate` writes contrived CI data, the frozen
 	// fixture world's rows as they are, into an organization that holds no
 	// synced data (it refuses one without --allow-mixed-org). Its team ids

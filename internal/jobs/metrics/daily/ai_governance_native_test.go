@@ -24,11 +24,16 @@ type governanceQueryRecorder struct {
 	calls   [][]any
 	queries []string
 	rows    chdriver.Rows
+	// teamRuleReadErr fails the reads the team rules add (isTeamRuleRead).
+	teamRuleReadErr error
 }
 
 func (conn *governanceQueryRecorder) Query(_ context.Context, query string, args ...any) (chdriver.Rows, error) {
 	conn.calls = append(conn.calls, args)
 	conn.queries = append(conn.queries, query)
+	if conn.teamRuleReadErr != nil && isTeamRuleRead(query) {
+		return nil, conn.teamRuleReadErr
+	}
 	if conn.rows != nil && !isTeamRuleRead(query) {
 		return conn.rows, nil
 	}

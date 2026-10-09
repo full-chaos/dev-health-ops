@@ -1423,14 +1423,23 @@ WHERE the rule runs depends on who can write a key:
   run-level step reads the live keys FIRST, THEN computes the keys of the day from the stored inputs with the same
   compute the family runs, and supersedes live minus computed. A key that is right holds its inputs before its row is
   written, so it is in the computed set whatever wrote it and whenever: no clock and no insert order decides which
-  key is superseded. The version of the row of zeros is taken from the stored rows (one second after the newest row
-  of the day when the clock of the host is not later), so a row from a host whose clock is ahead is superseded too.
+  key is superseded. For the three work-item tables the step also STORES the rows it computed: two partitions that
+  share a work scope both write the real rows of the scope, each from the attributions stored at its read, and the
+  rows of the step are computed once, after every partition wrote its attributions, so they are the rows of the day.
+  Every row the step writes is strictly newer than every stored row of the day in that table: its version is the
+  clock of the host, or one second after the newest stored row when the clock is not later (a partition can run on a
+  host whose clock is ahead, and several tables keep `computed_at` to the second).
 - **A table whose key scope is the partition's own repository keeps the rule in its family**: a repository is in one
-  partition of a run. The row of zeros carries the `computed_at` of the rows the family wrote for the same
-  repository, because some readers of `team_metrics_daily` keep only the newest generation of a repository and would
-  lose the live rows behind a newer row of zeros.
+  partition of a run.
 - **A table that a finalize family writes** is written once for a run already; the family applies the rule after its
   write.
+
+A row of zeros is strictly newer than the row it supersedes, never of the same `computed_at`: with an equal
+`computed_at` only a FINAL read follows the order of the inserts, and a reader that takes the newest row by `argMax`
+or by `LIMIT 1 BY` may take either row. A family's row of zeros gets the family's `computed_at`, or one second after
+the newest stored row of its key when that is not earlier. One table is different: in `team_metrics_daily` the row of
+zeros carries exactly the `computed_at` of the rows the family wrote for the same repository, because two readers of
+that table keep only the newest generation of a repository and would lose the live rows behind a newer row of zeros.
 
 | Table | Family | Where the rule runs | Scope |
 | --- | --- | --- | --- |
@@ -1470,12 +1479,16 @@ Limits:
 - A reader with no FINAL and no `argMax` sees the old row and the row of zeros until a merge.
 - A worker of an older version that computes a stored day again writes under the old id once more. The next run of a
   current worker for that day supersedes the key again.
-- Two partitions that share a work scope both write the REAL rows of the scope, each from the attributions stored at
-  its read, and the row written last is the newest row of its key. The run-level step settles which KEYS hold a
-  measure; it does not rewrite the values of a key that both partitions wrote. The values are equal when the
-  attributions of the scope did not change between the two reads.
-- The run-level step reads the items of every work scope of the run once more. Its cost is about one more read of the
-  work-item families for each run.
+- Between the last partition and the end of a run, a shared work scope can hold the rows of a partition whose read
+  was older than another partition's attribution write. The end of the run replaces them. A run whose finalize does
+  not complete leaves them until its retry or the next run of the day.
+- `work_item_user_metrics_daily` and `work_item_cycle_times` (not team-keyed) are written by the partitions only.
+- Two runs of one day that are in progress at the same time each settle the day from the inputs stored when they end.
+  When the inputs change between the two ends, the rows of the run that ended on the later version stay.
+- `team_metrics_daily`: a row of zeros has the `computed_at` of its batch. When another run wrote the superseded key
+  at that same microsecond or later, the old row stays the newest row of its key until the next run of the day.
+- The run-level step reads the items of every work scope of the run once more and writes their rows once more. Its
+  cost is about one more read and write of the work-item families for each run.
 
 #### 0.4a Provider × entity **consumption** (functional — what `run_team_autoimport` actually pulls)
 

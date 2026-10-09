@@ -311,8 +311,10 @@ func TestTouchedDaysDrain(t *testing.T) {
 		if got := rig.observer.count(jobruntime.TouchedDaysDrainDaysAlreadyStarted); got != 5 {
 			t.Fatalf("days_already_started counter = %d, want 5", got)
 		}
-		// Another trigger computes the days once more and marks them.
-		rig.drain(t, nil, nil).DrainTouchedDays(ctx, orgID, pass("e"))
+		// The nightly trigger (the floor) computes the days once more and marks
+		// them. A trigger that is the end of a run would stop here: the runs of
+		// the pass ended and their mark is missing.
+		rig.drain(t, nil, nil).DrainTouchedDays(ctx, orgID, pass("n"))
 		if got := rig.listedRunsByDay(t, ctx, orgID); got[days[0]] != 2 || got[days[4]] != 2 {
 			t.Fatalf("runs after the next pass = %v, want a second run for each day", got)
 		}

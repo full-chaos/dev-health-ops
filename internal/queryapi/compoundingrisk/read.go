@@ -18,6 +18,8 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-go/clickhouse"
+
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/activeteams"
 )
 
 // QueryClient is the narrow ClickHouse boundary this package needs.
@@ -348,8 +350,8 @@ func teamLabels(ctx context.Context, client QueryClient, orgID string) (map[stri
 	labels := map[string]string{}
 	var order []string
 	rs, err := client.Query(ctx, `
-            SELECT id, name
-            FROM teams
+            SELECT id, name, id IN (`+activeteams.IDsSubquery+`) AS listable
+            FROM teams FINAL
             WHERE org_id = {org_id:String}
             `, []clickhouse.Binding{{Name: "org_id", Value: orgID}})
 	if err != nil {
@@ -359,11 +361,14 @@ func teamLabels(ctx context.Context, client QueryClient, orgID string) (map[stri
 	defer rs.Close()
 	for rs.Next() {
 		var id, name string
-		if err := rs.Scan(&id, &name); err != nil {
+		var listable uint8
+		if err := rs.Scan(&id, &name, &listable); err != nil {
 			log.Printf("compoundingrisk: could not read a team row: %v", err)
 			return map[string]string{}, nil
 		}
-		if _, seen := labels[id]; !seen {
+		// Every team row labels its id (a rollup may still carry a retired
+		// id), but only an active team is a candidate to list.
+		if _, seen := labels[id]; !seen && listable == 1 {
 			order = append(order, id)
 		}
 		if name == "" {

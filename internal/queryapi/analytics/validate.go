@@ -10,6 +10,8 @@ package analytics
 import (
 	"fmt"
 	"time"
+
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/prrework"
 )
 
 // ValidationError mirrors Python's api/graphql/errors.py ValidationError --
@@ -246,7 +248,8 @@ const cycleTimeHoursOverRowsWithACompletion = "AVG(if(work_items_completed > 0, 
 //     MeasureTestSuiteDurationP95, MeasureCoverage*,
 //     MeasureFlagFrictionDelta/ErrorRateDelta/ActivationRate).
 //  3. Self-guarded by `.../NULLIF(SUM(...), 0)`: safe TODAY, but ONLY
-//     because of the NULLIF -- MeasurePRReworkRatio below and the
+//     because of the NULLIF -- MeasurePRReworkRatio below (its guard is
+//     the `if(sum(...) = 0, NULL, ...)` of prrework.WindowRateSQL) and the
 //     `useRepoAllocation` cycleTimeExpr/throughputExpr here are safe
 //     SOLELY due to this guard, not their underlying column's
 //     nullability. A future edit that "simplifies away" a NULLIF (e.g.
@@ -282,8 +285,12 @@ func dbExpression(measure Measure, useInvestment, useRepoAllocation bool) (strin
 	case MeasureChurnLOC:
 		return "SUM(churn_loc)", nil
 	case MeasurePRReworkRatio:
-		// category 3 -- safe ONLY via NULLIF, see dbExpression's doc comment.
-		return "SUM(pr_rework_ratio * prs_merged) / NULLIF(SUM(prs_merged), 0)", nil
+		// The ratio of the bucket's summed counts over REVIEWED pull requests
+		// (package prrework), NULL when the bucket holds none: a pull request
+		// with no review data says nothing about rework, and the stored ratio
+		// of the old name counted it as "no rework". Self-guarded like
+		// category 3: the expression is NULL, never a division by 0.
+		return prrework.WindowRateSQL, nil
 	case MeasureCycleTimeHours:
 		return cycleTimeHoursOverRowsWithACompletion, nil
 	case MeasureThroughput:

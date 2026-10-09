@@ -5,7 +5,24 @@ import "time"
 // The fact kinds of every writer that closes rows from a provider snapshot.
 // Every kind is made here and nowhere else (TestSnapshotKindCensus): a new
 // kind, or a change of what an empty answer of a kind means, is an edit of
-// this file and of the census table.
+// this file, of the census table and of the table in
+// docs/contribute/architecture/team-attribution.md (section 0.4b), which
+// TestSnapshotKindPolicyTableIsTheDocumentedOne compares with this one.
+//
+// The policy table. "closes nothing": the kind has ONE walk for the whole
+// provider answer, and an answer with no row of the kind is more often an
+// access change than a real empty state. "is an answer": the kind is read per
+// team, each read proves its own end, and a team with no row is a real answer.
+//
+//	kind                          empty answer
+//	linear_project_ownership      closes nothing
+//	linear_team_key_ownership     closes nothing
+//	jira_legacy_ownership         closes nothing
+//	atlassian_team_catalog        closes nothing
+//	atlassian_team_memberships    is an answer
+//	atlassian_team_project_links  is an answer
+//	gitlab_group_project_grants   is an answer
+//	github_team_repo_grants       is an answer
 
 // MembershipSnapshotRow is one team_memberships fact as the snapshot rule
 // reads it: the team, the member and the stored valid_from.

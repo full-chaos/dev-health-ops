@@ -1,7 +1,9 @@
 package providersync
 
 import (
+	"os"
 	"reflect"
+	"regexp"
 	"sort"
 	"strings"
 	"testing"
@@ -153,5 +155,52 @@ func TestEveryCloseSiteTakesTheTypedSnapshot(t *testing.T) {
 	}
 	if len(census.constantTerms) != 0 {
 		t.Errorf("a snapshot proof term is made from a constant or has no named reason: %v", census.constantTerms)
+	}
+}
+
+// TestSnapshotKindPolicyTableIsTheDocumentedOne compares the three places
+// that state what an empty answer of a fact kind means: the census (which
+// TestSnapshotKindCensus compares with the code that makes the kinds), the
+// table in the doc comment of snapshot_kinds.go, and the table of the
+// architecture document. A kind or a policy that is in one and not in the
+// others fails.
+func TestSnapshotKindPolicyTableIsTheDocumentedOne(t *testing.T) {
+	wording := map[string]string{"EmptyClosesNothing": "closes nothing", "EmptyIsAnAnswer": "is an answer"}
+	want := map[string]string{}
+	for name, entry := range snapshotKindCensus {
+		policy, known := wording[entry.empty]
+		if !known {
+			t.Fatalf("the kind %q has the empty-answer policy %q, which this test has no wording for", name, entry.empty)
+		}
+		want[name] = policy
+	}
+	read := func(path string, row *regexp.Regexp) map[string]string {
+		t.Helper()
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read %s: %v", path, err)
+		}
+		got := map[string]string{}
+		for _, line := range strings.Split(string(raw), "\n") {
+			if match := row.FindStringSubmatch(line); match != nil {
+				if _, twice := got[match[1]]; twice {
+					t.Errorf("%s names the kind %q twice", path, match[1])
+				}
+				got[match[1]] = match[2]
+			}
+		}
+		if len(got) == 0 {
+			t.Fatalf("%s holds no row of the policy table: the test measured nothing", path)
+		}
+		return got
+	}
+	code := read("snapshot_kinds.go", regexp.MustCompile(`^//\t([a-z_]+)\s+(closes nothing|is an answer)$`))
+	if !reflect.DeepEqual(code, want) {
+		t.Errorf("the policy table in the doc comment of snapshot_kinds.go differs from the census.\n got  %v\n want %v", code, want)
+	}
+	document := read("../../docs/contribute/architecture/team-attribution.md",
+		regexp.MustCompile("^\\s*\\| `([a-z_]+)` \\|[^|]*\\|[^|]*\\| (closes nothing|is an answer)\\b[^|]*\\|$"))
+	if !reflect.DeepEqual(document, want) {
+		t.Errorf("the kinds table of docs/contribute/architecture/team-attribution.md differs from the census.\n got  %v\n want %v", document, want)
 	}
 }

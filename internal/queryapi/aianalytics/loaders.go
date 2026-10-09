@@ -9,13 +9,9 @@ import (
 	"github.com/full-chaos/dev-health-go/clickhouse"
 
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
-	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse/liverow"
 )
 
-// The HAVING leaves out a key whose newest row is a retraction row (package
-// liverow): it is not a row of the daily list, it does not prove that the
-// window holds data, and its computed_at is not the time of a measurement.
-var dailyStatement = `SELECT
+const dailyStatement = `SELECT
     team_id,
     toString(repo_id) AS repo_id_str,
     day,
@@ -51,7 +47,6 @@ var dailyStatement = `SELECT
 FROM ai_impact_metrics_daily AS metrics
 WHERE %s
 GROUP BY org_id, team_id, repo_id, work_type, day, attribution_bucket
-HAVING ` + liverow.NewestPredicate("ai_impact_metrics_daily", "metrics") + `
 ORDER BY day, repo_id, work_type, attribution_bucket`
 
 // dateValue is a Date parameter's text form: the UTC calendar day.

@@ -14,6 +14,7 @@ import (
 	"github.com/ClickHouse/clickhouse-go/v2"
 
 	"github.com/full-chaos/dev-health-ops/internal/chmigrate"
+	"github.com/full-chaos/dev-health-ops/internal/teamkeytables"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/chschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 )
@@ -22,9 +23,11 @@ import (
 // rule on a real ClickHouse, on the schema of the migration chain, for EVERY
 // registered table.
 //
-// Each table gets one key for each marker column, with 1 in that column and
-// the default in every other: a row with one count above zero is a
-// measurement, whichever count it is. It also gets a key that was measured at
+// Each table gets one key for each measure column, with 1 in that column and
+// the default in every other: a row with one measure is a measurement,
+// whichever measure it is. For compounding_risk_daily those are also the rows
+// of a team that was measured with too little data: a stored weight, and NULL
+// in the score. It also gets a key that was measured at
 // first and holds a retraction row now (the key and computed_at only, as the
 // daily writer stores it). Both forms must keep each of the first keys and
 // drop the retracted one. A form that ran before the newest row was chosen
@@ -62,11 +65,17 @@ func TestTheRuleKeepsEachMeasurementAndDropsARetraction(t *testing.T) {
 	older, newer := day.Add(10*time.Hour), day.Add(11*time.Hour)
 
 	for _, table := range Tables() {
-		id := "team_id"
-		if table == "compounding_risk_daily" {
-			id = "scope_id"
+		// The team column and the measure columns come from the registry, or
+		// from this package for the two tables with the rule in their own
+		// writers.
+		id, markers := "team_id", ownWriterMarkers[table]
+		if declared, ok := teamkeytables.ByTable(table); ok {
+			id = declared.TeamColumn
+			markers = append(append([]string(nil), declared.Measures...), declared.NullableMeasures...)
 		}
-		markers := MarkerColumns(table)
+		if len(markers) == 0 {
+			t.Fatalf("%s: no measure column", table)
+		}
 		var want []string
 		for _, marker := range markers {
 			key := "only " + marker
@@ -125,7 +134,7 @@ func TestTheRuleKeepsEachMeasurementAndDropsARetraction(t *testing.T) {
 				t.Fatalf("%s (%s): close: %v", table, name, err)
 			}
 			if !reflect.DeepEqual(got, want) {
-				t.Errorf("%s (%s) keeps %v, want %v: one key for each marker column and not the retracted key", table, name, got, want)
+				t.Errorf("%s (%s) keeps %v, want %v: one key for each measure column and not the retracted key", table, name, got, want)
 			}
 		}
 	}

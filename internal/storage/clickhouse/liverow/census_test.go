@@ -23,7 +23,8 @@ var notReaders = map[string]string{
 	"internal/jobs/metrics/workitemengine/":            "compute and insert of the work item engine rows (writer)",
 	"internal/jobruntime/telemetry.go":                 "table names in telemetry labels",
 	"internal/storage/clickhouse/authorization.go":     "SELECT grants of the reader role, no query",
-	"internal/storage/clickhouse/liverow/liverow.go":   "defines the rule",
+	"internal/storage/clickhouse/liverow/liverow.go":   "the reader side of the rule",
+	"internal/teamkeytables/teamkeytables.go":          "the registry of the tables and their measures",
 	"internal/goapiproof/":                             "names of proof routes, no query",
 	"internal/workitemcontract/manifest.go":            "table names of the work item contract manifest, no query",
 	"internal/workersctl/main.go":                      "command help text, no query",
@@ -40,7 +41,6 @@ var notReaders = map[string]string{
 		"(it must stay in the newest-day pick, so that a retracted key gives 0 and not its older backlog)",
 	"internal/queryapi/throughputforecast/clickhouse.go": "sums by day, means of day sums, and Nullable means over the newest-day row of each key " +
 		"(a retraction row adds 0 and its Nullable measures are NULL)",
-	"internal/queryapi/aianalytics/ai_opportunities.go":         "sums, and means weighted by prs_total: a retraction row has weight 0 and stays under the minimum pull request gate",
 	"internal/queryapi/analytics/catalog.go":                    "lists ACTIVE teams only (teams FINAL, is_active = 1); the row count orders them; SQL pinned by the frozen catalog golden",
 	"internal/jobs/metrics/remaining/recommendations_loader.go": "reads of ONE team id the job already evaluates: sums and Nullable means of the newest rows",
 	"internal/jobs/metrics/remaining/recommendations_rules.go":  "table names in rule evidence, no query",

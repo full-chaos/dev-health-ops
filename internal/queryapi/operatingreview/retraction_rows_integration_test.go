@@ -125,7 +125,12 @@ func TestOperatingReviewReadsNoRowForRetractionRowsOnly(t *testing.T) {
 		retractionseed.Retract(ctx, t, store.Conn, org, day, team, store.OldComputedAt, store.NewComputedAt)
 	}
 	rows := readReviewRows(ctx, t, client, org, day, day.AddDate(0, 0, 1))
-	if len(rows.WorkItems)+len(rows.StateDurations)+len(rows.Investment)+len(rows.AIImpact)+len(rows.AIGovernance) != 0 {
+	// The AI impact read is not in this check: ai_impact_metrics_daily stores
+	// a measured row with 0 in every measure (the bucket 'unknown' of a group
+	// with no pull request), so a retraction row cannot be told from a
+	// measurement there. That read sums and takes Nullable means, which a
+	// row of zeros does not move (held by the test above).
+	if len(rows.WorkItems)+len(rows.StateDurations)+len(rows.Investment)+len(rows.AIGovernance) != 0 {
 		t.Errorf("a period of retraction rows only gives rows: %+v", rows)
 	}
 	if coverage := aiGovernanceCoverage(rows.AIGovernance); coverage != 0 {

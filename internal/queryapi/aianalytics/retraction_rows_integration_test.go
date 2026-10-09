@@ -21,7 +21,6 @@ import (
 type aiAnswers struct {
 	TeamFlow []flowRow
 	Coverage []model.AIGovernanceCoverageRow
-	Daily    []dailyRow
 }
 
 func readAIAnswers(ctx context.Context, t *testing.T, client QueryClient, org string, start, end time.Time) aiAnswers {
@@ -47,19 +46,20 @@ func readAIAnswers(ctx context.Context, t *testing.T, client QueryClient, org st
 	if err != nil {
 		t.Fatalf("%s coverage: %v", org, err)
 	}
-	answers.Daily, err = loadDaily(ctx, client, org, start, end, scope{})
-	if err != nil {
-		t.Fatalf("%s daily: %v", org, err)
-	}
 	return answers
 }
 
-// TestAIAnalyticsLoadersGiveRetractionRowsNoWeight reads the team flow rows,
-// the governance coverage rows and the daily impact rows of two organizations
-// that hold the same measurements. One of them also holds the old rows of the
-// retired team ids and the retraction row over each (package retractionseed).
-// The rows must be the same: a retired team id is not a flow entity with five
-// days of data, and a retraction row is not a coverage row or a daily row.
+// TestAIAnalyticsLoadersGiveRetractionRowsNoWeight reads the team flow rows
+// and the governance coverage rows of two organizations that hold the same
+// measurements. One of them also holds the old rows of the retired team ids
+// and the retraction row over each (package retractionseed). The rows must be
+// the same: a retired team id is not a flow entity with five days of data,
+// and a retraction row is not a coverage row.
+//
+// The daily impact rows (loadDaily) are not read here. ai_impact_metrics_daily
+// stores a measured row with 0 in every measure (the bucket 'unknown' of a
+// group with no pull request), so a retraction row cannot be told from a
+// measurement there and both are served as a row of zeros.
 func TestAIAnalyticsLoadersGiveRetractionRowsNoWeight(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
 	defer cancel()
@@ -90,9 +90,8 @@ func TestAIAnalyticsLoadersGiveRetractionRowsNoWeight(t *testing.T) {
 	if got := *control.TeamFlow[2].WipCongestion; got != 0.5 {
 		t.Fatalf("control wip congestion of jira:ENG = %v, want 0.5", got)
 	}
-	if len(control.Coverage) != 6*4 || len(control.Daily) != 6*4 {
-		t.Fatalf("control coverage rows = %d, daily rows = %d, want 24 each (four teams, six days)",
-			len(control.Coverage), len(control.Daily))
+	if len(control.Coverage) != 6*4 {
+		t.Fatalf("control coverage rows = %d, want 24 (four teams, six days)", len(control.Coverage))
 	}
 
 	retracted := readAIAnswers(ctx, t, client, retractionseed.RetractedOrg, start, end)

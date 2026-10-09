@@ -1,130 +1,155 @@
 package liverow
 
 import (
+	"os"
+	"path/filepath"
+	"reflect"
 	"regexp"
-	"sort"
 	"strings"
 	"testing"
 
-	"github.com/full-chaos/dev-health-ops/internal/chmigrate"
+	"github.com/full-chaos/dev-health-ops/internal/teamkeytables"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 )
 
-func TestPredicateQualifiesEveryMarkerColumn(t *testing.T) {
+func TestPredicateIsTheRegistryRuleWithEveryColumnQualified(t *testing.T) {
+	// A registry table: the two forms of the registry, under the table name
+	// and under an alias.
 	if got, want := Predicate("work_item_state_durations_daily", ""),
-		"(work_item_state_durations_daily.items_touched != 0)"; got != want {
+		"(work_item_state_durations_daily.duration_hours != 0 OR work_item_state_durations_daily.items_touched != 0 OR "+
+			"work_item_state_durations_daily.avg_wip != 0)"; got != want {
 		t.Fatalf("Predicate = %q, want %q", got, want)
 	}
-	if got, want := Predicate("team_metrics_daily", "t"),
-		"(t.commits_count != 0 OR t.after_hours_commits_count != 0 OR t.weekend_commits_count != 0)"; got != want {
+	if got, want := Predicate("team_metrics_daily", "t"), teamkeytables.TeamMetricsDaily.LiveRow("t."); got != want {
+		t.Fatalf("Predicate = %q, want the registry row test %q", got, want)
+	}
+	if got, want := NewestPredicate("work_item_state_durations_daily", "s"),
+		"(argMax(s.duration_hours, s.computed_at) != 0 OR argMax(s.items_touched, s.computed_at) != 0 OR "+
+			"argMax(s.avg_wip, s.computed_at) != 0)"; got != want {
+		t.Fatalf("NewestPredicate = %q, want %q", got, want)
+	}
+	// A table with the rule in its own writer.
+	if got, want := Predicate("issue_type_metrics_daily", ""),
+		"(issue_type_metrics_daily.created_count != 0 OR issue_type_metrics_daily.completed_count != 0 OR "+
+			"issue_type_metrics_daily.active_count != 0)"; got != want {
 		t.Fatalf("Predicate = %q, want %q", got, want)
 	}
-	if got, want := NewestPredicate("ai_governance_coverage_daily", "coverage"),
-		"argMax((coverage.ai_artifacts != 0 OR coverage.declared_artifacts != 0 OR coverage.human_reviewed_prs != 0 OR "+
-			"coverage.security_scanned_prs != 0 OR coverage.in_policy_artifacts != 0), coverage.computed_at)"; got != want {
+	if got, want := NewestPredicate("issue_type_metrics_daily", "i"),
+		"(argMax(i.created_count, i.computed_at) != 0 OR argMax(i.completed_count, i.computed_at) != 0 OR "+
+			"argMax(i.active_count, i.computed_at) != 0)"; got != want {
 		t.Fatalf("NewestPredicate = %q, want %q", got, want)
 	}
-	if got, want := NewestPredicate("work_item_state_durations_daily", ""),
-		"argMax((work_item_state_durations_daily.items_touched != 0), work_item_state_durations_daily.computed_at)"; got != want {
-		t.Fatalf("NewestPredicate = %q, want %q", got, want)
-	}
-}
-
-func TestPredicateOfAnUnknownTablePanics(t *testing.T) {
-	for name, call := range map[string]func(){
-		"Predicate":       func() { Predicate("repo_metrics_daily", "") },
-		"NewestPredicate": func() { NewestPredicate("repo_metrics_daily", "") },
-	} {
-		func() {
-			defer func() {
-				if recover() == nil {
-					t.Errorf("%s of a table with no rule did not panic", name)
-				}
-			}()
-			call()
-		}()
-	}
-	if Registered("repo_metrics_daily") || MarkerColumns("repo_metrics_daily") != nil {
-		t.Fatal("repo_metrics_daily reads as registered")
-	}
-}
-
-func TestMeasured(t *testing.T) {
-	for _, tc := range []struct {
-		counts []uint64
-		want   bool
-	}{
-		{nil, false},
-		{[]uint64{0, 0, 0}, false},
-		{[]uint64{0, 0, 1}, true},
-		{[]uint64{5}, true},
-	} {
-		if got := Measured(tc.counts...); got != tc.want {
-			t.Errorf("Measured(%v) = %v, want %v", tc.counts, got, tc.want)
+	// No column of any predicate is bare: each name follows a qualifier.
+	bare := regexp.MustCompile(`(^|[( ,])[a-z_0-9]+ (!= 0|IS NOT NULL)`)
+	for _, table := range Tables() {
+		for _, predicate := range []string{Predicate(table, ""), NewestPredicate(table, ""), Predicate(table, "x"), NewestPredicate(table, "x")} {
+			if bare.MatchString(predicate) || strings.Contains(predicate, "(computed_at") || strings.Contains(predicate, " computed_at") {
+				t.Errorf("%s: a column has no qualifier in %s", table, predicate)
+			}
 		}
 	}
 }
 
-var (
-	columnPattern  = regexp.MustCompile("`(\\w+)` ((?:[^,(]|\\([^)]*\\))+)")
-	orderByPattern = regexp.MustCompile(`ORDER BY \(([^)]*(?:\([^)]*\)[^)]*)*)\)`)
-)
+// TestEveryRegistryTableHasARuleOrAReason holds this package against the
+// registry: each registry table gives a reader a predicate, or it is named in
+// noRuleForReaders with the reason a measured row can equal a retraction row
+// there. A table added to the registry later is in Tables() at once.
+func TestEveryRegistryTableHasARuleOrAReason(t *testing.T) {
+	registry := map[string]bool{}
+	for _, table := range teamkeytables.All() {
+		registry[table.Table] = true
+		_, none := noRuleForReaders[table.Table]
+		if Registered(table.Table) == none {
+			t.Errorf("%s: Registered = %v, in noRuleForReaders = %v", table.Table, Registered(table.Table), none)
+		}
+		if !none {
+			if got, want := Predicate(table.Table, "q"), table.LiveRow("q."); got != want {
+				t.Errorf("%s: Predicate = %q, want the registry row test %q", table.Table, got, want)
+			}
+			if got, want := NewestPredicate(table.Table, "q"), "("+table.LiveHaving("q.")+")"; got != want {
+				t.Errorf("%s: NewestPredicate = %q, want the registry key test %q", table.Table, got, want)
+			}
+		}
+	}
+	for table := range noRuleForReaders {
+		if !registry[table] {
+			t.Errorf("stale noRuleForReaders entry %s: not a registry table", table)
+		}
+	}
+	for table := range ownWriterMarkers {
+		if registry[table] {
+			t.Errorf("%s is in the registry now: delete its ownWriterMarkers entry", table)
+		}
+	}
+	want := []string{
+		"ai_governance_coverage_daily", "compounding_risk_daily", "investment_metrics_daily", "issue_type_metrics_daily",
+		"team_cognitive_load_daily", "team_complexity_daily", "team_metrics_daily",
+		"work_item_metrics_daily", "work_item_state_durations_daily",
+	}
+	if got := Tables(); !reflect.DeepEqual(got, want) {
+		t.Errorf("Tables() = %v, want %v", got, want)
+	}
+}
 
-// TestMarkerColumnsAreTheCountsOfTheSchema holds the registry against the
-// schema baseline of the migration chain. Each marker is a stored column that
-// is not Nullable, so a retraction row holds 0 in it. For a table with counts,
-// the markers are EXACTLY its unsigned integer columns outside the sorting
-// key: a count column added to the table later is a measurement the rule
-// would not see, so it fails here until it is registered.
-func TestMarkerColumnsAreTheCountsOfTheSchema(t *testing.T) {
-	baseline, err := chmigrate.LoadBaseline()
+func TestATableWithNoRulePanics(t *testing.T) {
+	for _, table := range []string{
+		"repo_metrics_daily", // not a team-keyed table
+		"estimate_coverage_metrics_daily", "ai_impact_metrics_daily", "ic_landscape_rolling_30d",
+	} {
+		if Registered(table) {
+			t.Errorf("%s reads as registered", table)
+		}
+		for name, call := range map[string]func(){
+			"Predicate":       func() { Predicate(table, "") },
+			"NewestPredicate": func() { NewestPredicate(table, "") },
+		} {
+			func() {
+				defer func() {
+					if recover() == nil {
+						t.Errorf("%s(%s) did not panic", name, table)
+					}
+				}()
+				call()
+			}()
+		}
+	}
+}
+
+// TestOwnWriterMarkersAreTheLiveKeyColumnsOfTheWriters holds the two tables
+// that are not in the registry against the statements with which their own
+// daily families find the live keys of a day: the same columns, so the reader
+// and the writer agree on what a row of zeros is.
+func TestOwnWriterMarkersAreTheLiveKeyColumnsOfTheWriters(t *testing.T) {
+	root, err := moduleroot.Root()
 	if err != nil {
 		t.Fatal(err)
 	}
-	creates := map[string]string{}
-	for _, object := range baseline.Objects {
-		creates[object.Name] = object.Create
+	raw, err := os.ReadFile(filepath.Join(root, "internal/jobs/metrics/daily/work_item_engine_native_clickhouse.go"))
+	if err != nil {
+		t.Fatal(err)
 	}
-	for _, table := range Tables() {
-		create, ok := creates[table]
-		if !ok {
-			t.Errorf("%s: no such table in the schema baseline", table)
+	source := string(raw)
+	for table, columns := range ownWriterMarkers {
+		var clauses []string
+		for _, column := range columns {
+			clauses = append(clauses, "argMax("+column+", computed_at) != 0")
+		}
+		statement := "FROM " + table + "\n"
+		at := strings.Index(source, statement)
+		if at < 0 {
+			t.Errorf("%s: the writer has no live-key read of the table", table)
 			continue
 		}
-		body := create[strings.Index(create, "(")+1 : strings.Index(create, ") ENGINE")]
-		types := map[string]string{}
-		for _, match := range columnPattern.FindAllStringSubmatch(body, -1) {
-			types[match[1]] = strings.TrimSpace(match[2])
+		rest := source[at:]
+		end := strings.Index(rest, "ORDER BY")
+		if end < 0 {
+			t.Errorf("%s: the live-key read has no ORDER BY to end at", table)
+			continue
 		}
-		inKey := map[string]bool{}
-		if key := orderByPattern.FindStringSubmatch(create); key != nil {
-			for _, name := range regexp.MustCompile(`\w+`).FindAllString(key[1], -1) {
-				inKey[name] = true
-			}
-		}
-		markers := MarkerColumns(table)
-		for _, column := range markers {
-			kind, ok := types[column]
-			switch {
-			case !ok:
-				t.Errorf("%s.%s: no such column", table, column)
-			case strings.HasPrefix(kind, "Nullable") || strings.HasPrefix(kind, "LowCardinality(Nullable"):
-				t.Errorf("%s.%s is %s: a retraction row holds NULL there, not 0", table, column, kind)
-			}
-		}
-		if table == "compounding_risk_daily" {
-			continue // markers are the stored configuration; the table has no count
-		}
-		var counts []string
-		for name, kind := range types {
-			if strings.HasPrefix(kind, "UInt") && !inKey[name] {
-				counts = append(counts, name)
-			}
-		}
-		sort.Strings(counts)
-		sorted := append([]string(nil), markers...)
-		sort.Strings(sorted)
-		if strings.Join(counts, ",") != strings.Join(sorted, ",") {
-			t.Errorf("%s: markers %v, want every unsigned count column outside the key %v", table, sorted, counts)
+		having := rest[strings.Index(rest, "HAVING ")+len("HAVING ") : end]
+		got := strings.Join(strings.Fields(having), " ")
+		if want := strings.Join(clauses, " OR "); got != want {
+			t.Errorf("%s: the writer's live-key test is %q, the reader markers give %q", table, got, want)
 		}
 	}
 }

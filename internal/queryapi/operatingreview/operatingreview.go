@@ -939,7 +939,7 @@ func fetchAIImpact(ctx context.Context, client QueryClient, orgID string, teams 
           WHERE org_id = {org_id:String}
             ` + teamFilter + `
             AND day >= {start:Date} AND day < {end:Date}
-          GROUP BY day, repo_id, team_id, work_type, attribution_bucket` + liveRowHaving("ai_impact_metrics_daily") + `
+          GROUP BY day, repo_id, team_id, work_type, attribution_bucket
         )
         GROUP BY attribution_bucket`
 

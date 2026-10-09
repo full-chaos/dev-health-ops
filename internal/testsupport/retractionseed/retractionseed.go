@@ -44,6 +44,10 @@ const (
 // rows only (Retract). Apply stores nothing for it.
 const RetractionOnlyOrg = "c0c0c0c0-0000-4000-8000-000000000003"
 
+// DoubledOrg is an organization id for a test of a reader that lists teams
+// (Double). Apply stores nothing for it.
+const DoubledOrg = "c0c0c0c0-0000-4000-8000-000000000004"
+
 // Team is one team of the seed: the id it was stored under before the carry
 // (RetiredID, now inactive in the teams table) and the provider-keyed id it
 // has now (KeyedID).
@@ -206,6 +210,26 @@ func Retract(
 	insertRetractions(ctx, t, conn, org, day, team, team.RetiredID, newComputedAt)
 }
 
+// Double stores, for DoubledOrg, the state of days that were computed again
+// before the writers stored retraction rows: on each of those days a measured
+// row under the keyed id AND a measured row under the retired id, with the
+// teams rows of both (the keyed id active, the retired id inactive). No row
+// there is a retraction row. A reader that LISTS teams must list the keyed
+// ids only: a retired id is not a team.
+func Double(ctx context.Context, t testing.TB, conn driver.Conn, seed Seed) {
+	t.Helper()
+	seedTeams(ctx, t, conn, DoubledOrg, seed)
+	for dayIndex, day := range seed.Days {
+		if dayIndex == 0 {
+			continue
+		}
+		for teamIndex, team := range Teams {
+			insertMeasured(ctx, t, conn, DoubledOrg, day, team, team.KeyedID, measureOf(teamIndex, dayIndex), seed.NewComputedAt)
+			insertMeasured(ctx, t, conn, DoubledOrg, day, team, team.RetiredID, measureOf(teamIndex, dayIndex), seed.NewComputedAt)
+		}
+	}
+}
+
 func seedTeams(ctx context.Context, t testing.TB, conn driver.Conn, org string, seed Seed) {
 	t.Helper()
 	const insert = `INSERT INTO teams (id, team_uuid, name, members, repo_patterns, updated_at, org_id, provider, is_active)
@@ -248,6 +272,10 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			org, day, team.Provider, team.WorkScope, teamID, team.Name, state.status, state.hours, m.started, state.hours/24, computedAt)
 	}
+	exec(ctx, t, conn, `INSERT INTO estimate_coverage_metrics_daily
+(org_id, day, provider, work_scope_id, team_id, team_name, estimated_count, unestimated_count, backlog_size, ratio, computed_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0.5, ?)`,
+		org, day, team.Provider, team.WorkScope, teamID, team.Name, m.wip, m.wip, 2*m.wip, computedAt)
 	exec(ctx, t, conn, `INSERT INTO team_metrics_daily
 (org_id, day, team_id, team_name, repo_id, commits_count, after_hours_commits_count, weekend_commits_count,
  after_hours_commit_ratio, weekend_commit_ratio, computed_at)
@@ -296,6 +324,8 @@ VALUES (?, ?, ?, ?, ?, ?)`, org, day, team.Provider, team.WorkScope, teamID, com
 (org_id, day, provider, work_scope_id, team_id, status, computed_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
 			org, day, team.Provider, team.WorkScope, teamID, status, computedAt)
 	}
+	exec(ctx, t, conn, `INSERT INTO estimate_coverage_metrics_daily (org_id, day, provider, work_scope_id, team_id, computed_at)
+VALUES (?, ?, ?, ?, ?, ?)`, org, day, team.Provider, team.WorkScope, teamID, computedAt)
 	exec(ctx, t, conn, `INSERT INTO team_metrics_daily (org_id, day, team_id, repo_id, computed_at)
 VALUES (?, ?, ?, ?, ?)`, org, day, teamID, team.RepoID, computedAt)
 	exec(ctx, t, conn, `INSERT INTO investment_metrics_daily

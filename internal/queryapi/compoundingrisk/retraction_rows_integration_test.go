@@ -5,11 +5,13 @@ package compoundingrisk
 import (
 	"context"
 	"reflect"
+	"sort"
 	"testing"
 	"time"
 
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph/model"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/retractionseed"
 )
 
@@ -87,5 +89,46 @@ func TestTeamRiskRowsGiveRetractionRowsNoWeight(t *testing.T) {
 	}
 	if len(rows) != 0 {
 		t.Fatalf("a day of retraction rows only lists team rows: %+v", rows)
+	}
+}
+
+// TestTeamBreakoutListsTheActiveTeams resolves the team breakout of an
+// organization whose newest day holds measured risk rows under a keyed id and
+// under the retired id it replaced (the state of a day computed again before
+// the writers stored retraction rows). With no team named, the breakout lists
+// the active teams: a retired id is not a team, also when it holds a score. A
+// breakout that names the retired id still gets its row.
+func TestTeamBreakoutListsTheActiveTeams(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+	store := retractionseed.Start(ctx, t)
+	retractionseed.Double(ctx, t, store.Conn, store.Seed)
+	client, err := dhclickhouse.NewClickHouseQueryClientWithOptions(dhclickhouse.Options{DSN: store.URI})
+	if err != nil {
+		t.Fatalf("construct query client: %v", err)
+	}
+	defer func() { _ = client.Close() }()
+
+	now := store.Days[len(store.Days)-1].Add(12 * time.Hour)
+	scopeIDs := func(teamIDs []string) []string {
+		t.Helper()
+		result, err := Resolve(ctx, client, retractionseed.DoubledOrg,
+			&model.CompoundingRiskFilterInput{Breakout: model.CompoundingRiskScopeTeam, TeamIds: teamIDs, TrendDays: 7}, now)
+		if err != nil {
+			t.Fatalf("Resolve: %v", err)
+		}
+		var ids []string
+		for _, row := range result.Rows {
+			ids = append(ids, row.ScopeID)
+		}
+		sort.Strings(ids)
+		return ids
+	}
+	if got, want := scopeIDs(nil), []string{"github:platform", "gitlab:ops", "jira:ENG", "linear:core"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("team breakout lists %v, want the active teams %v", got, want)
+	}
+	retired := retractionseed.Teams[0].RetiredID
+	if got, want := scopeIDs([]string{retired}), []string{retired}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("team breakout of the named retired id lists %v, want %v", got, want)
 	}
 }

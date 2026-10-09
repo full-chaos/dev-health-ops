@@ -3,6 +3,8 @@ package report
 import (
 	"strings"
 	"testing"
+
+	"github.com/full-chaos/dev-health-ops/internal/teamkeytables"
 )
 
 // TestBuildChartQueryDedupsCicdMetricsDaily is the CHAOS-4246 regression
@@ -90,8 +92,9 @@ func TestDedupFromSourceEveryAppendOnlyTableAndEveryReplacingTable(t *testing.T)
 		want  string
 	}{
 		// The two tables below have a live-row rule: the newest rows are read
-		// first (FINAL, LIMIT 1 BY) and the retraction rows are dropped after.
-		{"work_item_metrics_daily", "(SELECT * FROM work_item_metrics_daily FINAL WHERE (work_item_metrics_daily.items_started != 0 OR work_item_metrics_daily.items_completed != 0 OR work_item_metrics_daily.items_started_unassigned != 0 OR work_item_metrics_daily.items_completed_unassigned != 0 OR work_item_metrics_daily.wip_count_end_of_day != 0 OR work_item_metrics_daily.wip_unassigned_end_of_day != 0 OR work_item_metrics_daily.new_bugs_count != 0 OR work_item_metrics_daily.new_items_count != 0)) AS work_item_metrics_daily"},
+		// first (FINAL, LIMIT 1 BY) and the retraction rows are dropped after,
+		// by the row test of the table registry.
+		{"work_item_metrics_daily", "(SELECT * FROM work_item_metrics_daily FINAL WHERE " + teamkeytables.WorkItemMetricsDaily.LiveRow("work_item_metrics_daily.") + ") AS work_item_metrics_daily"},
 		{"work_item_user_metrics_daily", "work_item_user_metrics_daily FINAL"},
 		{"cicd_metrics_daily", "(SELECT * FROM cicd_metrics_daily ORDER BY computed_at DESC LIMIT 1 BY org_id, repo_id, day) AS cicd_metrics_daily"},
 		{"deploy_metrics_daily", "(SELECT * FROM deploy_metrics_daily ORDER BY computed_at DESC LIMIT 1 BY org_id, repo_id, day) AS deploy_metrics_daily"},
@@ -100,7 +103,10 @@ func TestDedupFromSourceEveryAppendOnlyTableAndEveryReplacingTable(t *testing.T)
 		{"testops_pipeline_stability", "(SELECT * FROM testops_pipeline_stability ORDER BY computed_at DESC LIMIT 1 BY org_id, repo_id, day) AS testops_pipeline_stability"},
 		{"testops_quality_drag", "(SELECT * FROM testops_quality_drag ORDER BY computed_at DESC LIMIT 1 BY org_id, repo_id, day) AS testops_quality_drag"},
 		{"repo_metrics_daily", "(SELECT * FROM repo_metrics_daily ORDER BY computed_at DESC LIMIT 1 BY org_id, repo_id, day) AS repo_metrics_daily"},
-		{"team_metrics_daily", "(SELECT * FROM (SELECT * FROM team_metrics_daily ORDER BY computed_at DESC LIMIT 1 BY org_id, team_id, repo_id, day) AS team_metrics_daily WHERE (team_metrics_daily.commits_count != 0 OR team_metrics_daily.after_hours_commits_count != 0 OR team_metrics_daily.weekend_commits_count != 0)) AS team_metrics_daily"},
+		{"team_metrics_daily", "(SELECT * FROM (SELECT * FROM team_metrics_daily ORDER BY computed_at DESC LIMIT 1 BY org_id, team_id, repo_id, day) AS team_metrics_daily WHERE " + teamkeytables.TeamMetricsDaily.LiveRow("team_metrics_daily.") + ") AS team_metrics_daily"},
+		// The two plain MergeTree tables with the rule in their own writers.
+		{"investment_metrics_daily", "(SELECT * FROM (SELECT * FROM investment_metrics_daily ORDER BY computed_at DESC LIMIT 1 BY org_id, repo_id, day, team_id, investment_area, project_stream) AS investment_metrics_daily WHERE (investment_metrics_daily.delivery_units != 0 OR investment_metrics_daily.work_items_completed != 0 OR investment_metrics_daily.prs_merged != 0 OR investment_metrics_daily.churn_loc != 0)) AS investment_metrics_daily"},
+		{"issue_type_metrics_daily", "(SELECT * FROM (SELECT * FROM issue_type_metrics_daily ORDER BY computed_at DESC LIMIT 1 BY org_id, repo_id, day, provider, team_id, issue_type_norm) AS issue_type_metrics_daily WHERE (issue_type_metrics_daily.created_count != 0 OR issue_type_metrics_daily.completed_count != 0 OR issue_type_metrics_daily.active_count != 0)) AS issue_type_metrics_daily"},
 		{"user_metrics_daily", "(SELECT * FROM user_metrics_daily ORDER BY computed_at DESC LIMIT 1 BY org_id, repo_id, author_email, day) AS user_metrics_daily"},
 		{"testops_pipeline_metrics_daily", "(SELECT * FROM testops_pipeline_metrics_daily ORDER BY computed_at DESC LIMIT 1 BY org_id, repo_id, day) AS testops_pipeline_metrics_daily"},
 		{"testops_test_metrics_daily", "(SELECT * FROM testops_test_metrics_daily ORDER BY computed_at DESC LIMIT 1 BY org_id, repo_id, day) AS testops_test_metrics_daily"},

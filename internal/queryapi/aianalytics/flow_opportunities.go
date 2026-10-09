@@ -10,6 +10,7 @@ import (
 	"github.com/full-chaos/dev-health-go/clickhouse"
 
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/activeteams"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph/model"
 	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse/liverow"
 )
@@ -287,7 +288,11 @@ func loadRepoFlowRows(ctx context.Context, client QueryClient, base []clickhouse
 
 func loadTeamFlowRows(ctx context.Context, client QueryClient, base []clickhouse.Binding, teamID string) ([]flowRow, error) {
 	bindings := append([]clickhouse.Binding(nil), base...)
-	statement := strings.ReplaceAll(teamFlowStatement, "@@TEAM@@", "")
+	// With no team named, the entities are the active teams (and the
+	// documented no-team value): a team id that only survives in stored rows
+	// (a bare id that was retired for a provider-keyed id) is not a team. A
+	// named team is read as named: an id the caller holds may be a retired one.
+	statement := strings.ReplaceAll(teamFlowStatement, "@@TEAM@@", "\n  AND "+activeteams.ListablePredicate("team_id"))
 	if teamID != "" {
 		bindings = append(bindings, clickhouse.Binding{Name: "team_id", Value: teamID})
 		statement = strings.ReplaceAll(teamFlowStatement, "@@TEAM@@", "\n  AND team_id = {team_id:String}")

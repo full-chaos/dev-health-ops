@@ -10,6 +10,7 @@ import (
 	"github.com/full-chaos/dev-health-go/clickhouse"
 
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/activeteams"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph/model"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graphqldate"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
@@ -140,6 +141,26 @@ func teamPoints(day time.Time, rows []storedRow, teamsOfRepo map[string][]string
 		return *a > *b
 	})
 	return out
+}
+
+// listedTeamRows is the team rows a breakout with no team filter may list:
+// the rows of the active teams (listable, from teamLabels) and of the
+// documented no-team value. A team id that only survives in stored risk rows
+// (a bare id that was retired for a provider-keyed id) is not a team and is
+// not listed beside the id that replaced it. A breakout that names its teams
+// keeps the rows of those ids: an id the caller already holds may be a
+// retired one.
+func listedTeamRows(rows []storedRow, requested idList, listable []string) []storedRow {
+	if len(requested) > 0 {
+		return rows
+	}
+	var kept []storedRow
+	for _, row := range rows {
+		if row.scopeID == activeteams.UnassignedID || contains(listable, row.scopeID) {
+			kept = append(kept, row)
+		}
+	}
+	return kept
 }
 
 func contains(list []string, v string) bool {
@@ -301,8 +322,9 @@ func Resolve(ctx context.Context, client QueryClient, orgID string, filter *mode
 		if err != nil {
 			return nil, err
 		}
+		labels, order := teamLabels(ctx, client, orgID)
+		teamRows = listedTeamRows(teamRows, teamIDs, order)
 		if len(teamRows) > 0 {
-			labels, _ := teamLabels(ctx, client, orgID)
 			for _, r := range teamRows {
 				points = append(points, point(model.CompoundingRiskScopeTeam, d, r.scopeID, labelOr(labels, r.scopeID), r))
 			}
@@ -316,7 +338,6 @@ func Resolve(ctx context.Context, client QueryClient, orgID string, filter *mode
 			if err != nil {
 				return nil, err
 			}
-			labels, order := teamLabels(ctx, client, orgID)
 			candidates := teamIDs
 			if len(candidates) == 0 {
 				candidates = order

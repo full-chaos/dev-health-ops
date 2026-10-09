@@ -11,7 +11,9 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/changefailure"
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/activeteams"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph/model"
+	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse/liverow"
 )
 
 const (
@@ -245,7 +247,9 @@ LEFT JOIN (
 ORDER BY data_days DESC
 LIMIT 500`
 
-const teamFlowStatement = `SELECT
+// A retraction row (see package liverow) is left out: it is not a day of data
+// of its team, and the 0 it holds in wip_congestion_ratio is not a measured 0.
+var teamFlowStatement = `SELECT
     team_id AS entity_id,
     uniqExact(day) AS data_days,
     toNullable(avg(cycle_time_p50_hours)) AS cycle_time_p50_hours,
@@ -255,6 +259,7 @@ FROM work_item_metrics_daily FINAL
 WHERE day >= today() - {window_days:UInt32}@@TEAM@@
   AND org_id = {org_id:String}
   AND team_id != ''
+  AND ` + liverow.Predicate("work_item_metrics_daily", "") + `
 GROUP BY team_id
 HAVING data_days >= 5
 ORDER BY data_days DESC
@@ -309,7 +314,11 @@ func loadRepoFlowRows(ctx context.Context, client QueryClient, base []clickhouse
 
 func loadTeamFlowRows(ctx context.Context, client QueryClient, base []clickhouse.Binding, teamID string) ([]flowRow, error) {
 	bindings := append([]clickhouse.Binding(nil), base...)
-	statement := strings.ReplaceAll(teamFlowStatement, "@@TEAM@@", "")
+	// With no team named, the entities are the active teams (and the
+	// documented no-team value): a team id that only survives in stored rows
+	// (a bare id that was retired for a provider-keyed id) is not a team. A
+	// named team is read as named: an id the caller holds may be a retired one.
+	statement := strings.ReplaceAll(teamFlowStatement, "@@TEAM@@", "\n  AND "+activeteams.ListablePredicate("team_id"))
 	if teamID != "" {
 		bindings = append(bindings, clickhouse.Binding{Name: "team_id", Value: teamID})
 		statement = strings.ReplaceAll(teamFlowStatement, "@@TEAM@@", "\n  AND team_id = {team_id:String}")

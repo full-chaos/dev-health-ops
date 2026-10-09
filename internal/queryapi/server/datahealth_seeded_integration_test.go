@@ -13,6 +13,7 @@ import (
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/full-chaos/dev-health-ops/internal/chmigrate"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/datahealth"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/pgschema"
@@ -64,9 +65,7 @@ CREATE TABLE identities (
     is_active UInt8 DEFAULT 1, updated_at DateTime64(6)
 ) ENGINE = ReplacingMergeTree(updated_at) ORDER BY (org_id, canonical_id);
 
-CREATE TABLE work_item_metrics_daily (org_id String, day Date, computed_at DateTime('UTC')) ENGINE = MergeTree ORDER BY (org_id, day);
 CREATE TABLE repo_metrics_daily (org_id String, day Date, computed_at DateTime('UTC')) ENGINE = MergeTree ORDER BY (org_id, day);
-CREATE TABLE team_metrics_daily (org_id String, day Date, computed_at DateTime('UTC')) ENGINE = MergeTree ORDER BY (org_id, day);
 CREATE TABLE work_unit_investments (org_id String, work_unit_id String, computed_at DateTime64(3, 'UTC')) ENGINE = MergeTree ORDER BY (org_id, work_unit_id);
 `
 
@@ -94,6 +93,25 @@ func TestDataHealthReadersSeededRealStores(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = conn.Close() }()
+	// The two team-keyed lineage tables come from the schema baseline of the
+	// migration chain: the lineage read takes their newest rows and tests
+	// their measure columns, which a hand-typed table of three columns lacks.
+	baseline, err := chmigrate.LoadBaseline()
+	if err != nil {
+		t.Fatal(err)
+	}
+	created := 0
+	for _, object := range baseline.Objects {
+		if object.Name == "work_item_metrics_daily" || object.Name == "team_metrics_daily" {
+			if err := conn.Exec(ctx, object.Create); err != nil {
+				t.Fatalf("clickhouse ddl of %s: %v", object.Name, err)
+			}
+			created++
+		}
+	}
+	if created != 2 {
+		t.Fatalf("the schema baseline gave %d of the two team-keyed lineage tables", created)
+	}
 	for _, stmt := range strings.Split(dataHealthClickHouseDDL, ";") {
 		if strings.TrimSpace(stmt) == "" {
 			continue
@@ -143,8 +161,16 @@ func TestDataHealthReadersSeededRealStores(t *testing.T) {
 	mustExec(fmt.Sprintf("INSERT INTO identities (org_id, canonical_id, identity_uuid, display_name, email, provider_identities, team_ids, is_active, updated_at) VALUES ('%s','known-c',generateUUIDv4(),'Known Person','known@example.com','{\"jira\":[\"jdoe-alias\"]}',[],1,now64(6)),('%s','ann-c',generateUUIDv4(),NULL,'ann@corp.example','{}',['team-x'],1,now64(6)),('%s','off',generateUUIDv4(),'Off','off@example.com','{}',[],0,now64(6))", org, org, org))
 	// deployments: repoA covered by PR number, repoB uncovered, foreign ignored
 	mustExec(fmt.Sprintf("INSERT INTO deployments (repo_id, deployment_id, pull_request_number, release_ref, last_synced, org_id) VALUES ('%s','d1',7,'',now64(3),'%s'),('%s','d2',NULL,'',now64(3),'%s'),('%s','d3',NULL,'v1',now64(3),'%s')", repoA, org, repoB, org, repoC, other))
-	for _, table := range []string{"work_item_metrics_daily", "repo_metrics_daily", "team_metrics_daily"} {
-		mustExec(fmt.Sprintf("INSERT INTO %s (org_id, day, computed_at) VALUES ('%s', '2026-01-01', '2026-01-02 03:04:05'), ('%s', '2026-01-02', '2026-01-03 03:04:05'), ('%s','2026-01-03','2030-01-01 00:00:00')", table, org, org, other))
+	// Each metric row is a measured row: a row of a team-keyed table with no
+	// measure is a retraction row, which the lineage does not count.
+	for table, measure := range map[string]string{
+		"work_item_metrics_daily": "items_completed", "repo_metrics_daily": "", "team_metrics_daily": "commits_count",
+	} {
+		columns, one := "org_id, day, computed_at", ""
+		if measure != "" {
+			columns, one = columns+", "+measure, ", 1"
+		}
+		mustExec(fmt.Sprintf("INSERT INTO %s (%s) VALUES ('%s', '2026-01-01', '2026-01-02 03:04:05'%s), ('%s', '2026-01-02', '2026-01-03 03:04:05'%s), ('%s','2026-01-03','2030-01-01 00:00:00'%s)", table, columns, org, one, org, one, other, one))
 	}
 
 	pgExec := func(sql string, args ...any) {

@@ -141,6 +141,7 @@ var (
 	KeyDrainNewestSkippedDay        = Key{"drain_newest_skipped_day"}
 	KeyDrainOldestPendingAge        = Key{"drain_oldest_pending_age"}
 	KeyDrainReadTruncated           = Key{"drain_read_truncated"}
+	KeyDrainTriggerChecked          = Key{"drain_trigger_checked"}
 	KeyOutcome                      = Key{"outcome"}
 	KeyErrorCode                    = Key{"error_code"}
 	KeyCount                        = Key{"count"}

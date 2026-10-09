@@ -9,6 +9,7 @@ import (
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/changefailure"
+	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse/liverow"
 )
 
 // dedupNaturalKeys ports api/queries/metrics.py's _DEDUP_BY_COMPUTED_AT,
@@ -142,8 +143,19 @@ func metricFromClause(table, column, scopeFilterSQL, startParam, endParam string
     WHERE day >= {%s:Date} AND day < {%s:Date}
     %s
       AND org_id = {org_id:String}
-    GROUP BY %s
-)`, keyColumns, strings.Join(projections, ",\n        "), table, startParam, endParam, scopeFilterSQL, keyColumns)
+    GROUP BY %s%s
+)`, keyColumns, strings.Join(projections, ",\n        "), table, startParam, endParam, scopeFilterSQL, keyColumns, liveRowHaving(table))
+}
+
+// liveRowHaving keeps a key of a team-keyed daily table only when its newest
+// row is a measurement (see package liverow). A retraction row is the newest
+// row of a key the compute no longer produces: it is not a sample of an
+// average, and its team is not a contributor or a driver.
+func liveRowHaving(table string) string {
+	if !liverow.Registered(table) {
+		return ""
+	}
+	return "\n    HAVING " + liverow.NewestPredicate(table, "")
 }
 
 // fetchMetricValue ports fetch_metric_value (api/queries/metrics.py:

@@ -10,6 +10,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph/model"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graphqldate"
+	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse/liverow"
 )
 
 // investmentMetricsDailyDedupSource ports compiler.py's
@@ -18,7 +19,23 @@ import (
 // via argMax(col, computed_at) because investment_metrics_daily is a
 // plain MergeTree (migration 007) that does not self-merge duplicate
 // (re)writes of the same natural key (CHAOS-2710).
-const investmentMetricsDailyDedupSource = `(
+//
+// The HAVING leaves out a key whose newest row is a retraction row (package
+// liverow): the daily family writes a row of zeros over a key it no longer
+// produces, for example the key of a retired team id. That row adds nothing
+// to a sum, but it is a row to a count (sankey coverage) and a bucket to a
+// team, repository or category dimension. A key with no measurement is not a
+// bucket with a value of 0.
+var investmentMetricsDailyDedupSource = investmentMetricsDailyNewestRows(
+	"\n    HAVING " + liverow.NewestPredicate("investment_metrics_daily", ""))
+
+// investmentMetricsDailyEveryNewestRow is the same source with the retraction
+// rows kept: the text the frozen catalog golden pins. Only the catalog reads
+// it (catalog.go), and only to order the ACTIVE teams it lists by a row count.
+var investmentMetricsDailyEveryNewestRow = investmentMetricsDailyNewestRows("")
+
+func investmentMetricsDailyNewestRows(having string) string {
+	return `(
     SELECT
         org_id,
         day,
@@ -33,8 +50,9 @@ const investmentMetricsDailyDedupSource = `(
         argMax(cycle_p50_hours, computed_at) AS cycle_p50_hours
     FROM investment_metrics_daily
     WHERE org_id = {org_id:String}
-    GROUP BY org_id, day, repo_id, team_id, investment_area, project_stream
+    GROUP BY org_id, day, repo_id, team_id, investment_area, project_stream` + having + `
 ) AS investment_metrics_daily`
+}
 
 // appendOnlyDailyNaturalKeys is the subset of clickhouse_dedup.py's
 // _APPEND_ONLY_DAILY_KEYS registry this package's Measure.source_table()

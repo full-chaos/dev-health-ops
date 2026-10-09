@@ -8,6 +8,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/changefailure"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph/model"
+	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse/liverow"
 )
 
 const deploymentCoverageSQL = `
@@ -114,6 +115,28 @@ var lineageRegistry = map[string]lineageEntry{
 	"investment_mix":       {[]string{"work_unit_investments"}, windowSpec{kind: "rolling", durationDays: days(30)}},
 }
 
+// lineageSource and measuredRowsOnly leave the retraction rows of a team-keyed
+// daily table (package liverow) out of the lineage read. A retraction row is
+// the newest row of a key the compute no longer produces, and it holds no
+// measurement: counted, it would add to the row count of the metric, and its
+// computed_at would make a metric that was last measured long ago look
+// freshly computed. For such a table the read takes the newest row of each
+// key (FINAL) and keeps the measurements, so the older row a retraction
+// replaced is not counted again either.
+func lineageSource(table string) string {
+	if !liverow.Registered(table) {
+		return table
+	}
+	return table + " FINAL"
+}
+
+func measuredRowsOnly(table string) string {
+	if !liverow.Registered(table) {
+		return ""
+	}
+	return "\n  AND " + liverow.Predicate(table, "")
+}
+
 // MetricLineage ports compute_metric_lineage: the freshness of the tables a
 // metric is computed from. An unknown metric, or one whose tables all failed
 // to answer, has no lineage. A table that answers with no rows reports the
@@ -127,7 +150,7 @@ func (r *Reader) MetricLineage(ctx context.Context, orgID, metricID string) *mod
 	found := false
 	totalRows := 0
 	for _, table := range entry.tables {
-		statement := "\nSELECT argMax(computed_at, computed_at) AS computed_at, count() AS row_count\nFROM " + table + "\nWHERE org_id = {org_id:String}"
+		statement := "\nSELECT argMax(computed_at, computed_at) AS computed_at, count() AS row_count\nFROM " + lineageSource(table) + "\nWHERE org_id = {org_id:String}" + measuredRowsOnly(table)
 		r.queryRows(ctx, "lineage_"+table, statement, []clickhouse.Binding{{Name: "org_id", Value: orgID}},
 			func(rows clickhouse.RowScanner) error {
 				var computed *time.Time

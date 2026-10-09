@@ -62,28 +62,38 @@ type homeRESTResponse struct {
 	DataConfidence        home.DataConfidence          `json:"data_confidence"`
 }
 
-// homeRESTMetricDelta is the frozen Python MetricDelta shape. hasData and
-// hasPriorData are GraphQL-only distinctions, because FastAPI drops fields it
-// does not declare in its legacy REST model.
+// homeRESTMetricDelta is the frozen Python MetricDelta shape plus three
+// Go-only fields at the end (CHAOS-9044): has_data / has_prior_data (the
+// window holds a stored value; when false the matching value is a 0
+// placeholder, not a measured zero, and delta_pct is 0) and rate_state (why
+// change failure rate has a value or not; null for every other metric and
+// when the window holds no stored counts). The frozen fields keep their
+// order and meaning, so a client that ignores the new ones reads what it read.
 type homeRESTMetricDelta struct {
-	Metric   string            `json:"metric"`
-	Label    string            `json:"label"`
-	Value    float64           `json:"value"`
-	Unit     string            `json:"unit"`
-	DeltaPct float64           `json:"delta_pct"`
-	Spark    []home.SparkPoint `json:"spark"`
+	Metric       string            `json:"metric"`
+	Label        string            `json:"label"`
+	Value        float64           `json:"value"`
+	Unit         string            `json:"unit"`
+	DeltaPct     float64           `json:"delta_pct"`
+	Spark        []home.SparkPoint `json:"spark"`
+	HasData      bool              `json:"has_data"`
+	HasPriorData bool              `json:"has_prior_data"`
+	RateState    *string           `json:"rate_state"`
 }
 
 func homeRESTResponseFrom(resp *home.Response) homeRESTResponse {
 	deltas := make([]homeRESTMetricDelta, 0, len(resp.Deltas))
 	for _, delta := range resp.Deltas {
 		deltas = append(deltas, homeRESTMetricDelta{
-			Metric:   delta.Metric,
-			Label:    delta.Label,
-			Value:    delta.Value,
-			Unit:     delta.Unit,
-			DeltaPct: delta.DeltaPct,
-			Spark:    delta.Spark,
+			Metric:       delta.Metric,
+			Label:        delta.Label,
+			Value:        delta.Value,
+			Unit:         delta.Unit,
+			DeltaPct:     delta.DeltaPct,
+			Spark:        delta.Spark,
+			HasData:      delta.HasData,
+			HasPriorData: delta.HasPriorData,
+			RateState:    delta.RateState,
 		})
 	}
 

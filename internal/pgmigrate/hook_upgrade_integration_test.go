@@ -26,7 +26,7 @@ import (
 const oldestSupportedProdHead = "0138"
 
 // hookStatesSHA256 pins testdata/golden/hook_states.json (the record verb rewrites it).
-const hookStatesSHA256 = "ae63cc3ac46802ab3d8d7171ae0f16e59ece459feaa2e251565904c4c3dacd83"
+const hookStatesSHA256 = "b0d3b9bb5828a92e636643a7e005ebdde2eb80e2cf9a433ba4d595c83f9fe30f"
 
 // TestHookVerbUpgradesAnOldProductionDatabaseToTheAlembicHead is the differential behind
 // CHAOS-6801. A production database that is at an older Alembic head must be brought to the head by

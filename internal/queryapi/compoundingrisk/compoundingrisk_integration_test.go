@@ -30,7 +30,7 @@ var ddls = []string{
 	`CREATE TABLE repos (id UUID, repo String, provider String DEFAULT 'unknown', org_id String DEFAULT 'default',
       created_at DateTime64(3, 'UTC'), last_synced DateTime64(3, 'UTC')) ENGINE = ReplacingMergeTree(last_synced) ORDER BY id`,
 	`CREATE TABLE teams (id String, name String, org_id String DEFAULT 'default', repo_patterns Array(String) DEFAULT [],
-      is_active UInt8 DEFAULT 1, updated_at DateTime64(6)) ENGINE = ReplacingMergeTree(updated_at) ORDER BY id`,
+      is_active UInt8 DEFAULT 1, updated_at DateTime64(6)) ENGINE = ReplacingMergeTree(updated_at) ORDER BY (org_id, id)`,
 	`CREATE TABLE team_repo_ownership (org_id String, provider String, team_id String, repo_id Nullable(UUID),
       repo_full_name String, match_type Enum8('exact' = 1, 'pattern' = 2),
       source Enum8('native' = 1, 'jira_legacy' = 2, 'provider_access' = 3, 'manual' = 4, 'inferred' = 5),
@@ -234,7 +234,10 @@ func TestRealClickHouse_TeamBreakout(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if fmt.Sprint(ids(all.Rows)) != "[t1 t9]" || all.Rows[0].ScopeLabel != "Platform" || all.Rows[1].ScopeLabel != "t9" || all.Rows[0].Scope != model.CompoundingRiskScopeTeam {
+	// t9 holds a stored row and no team row: it is not a team (an id that only
+	// survives in stored rows), so a breakout with no team named does not
+	// list it. The breakout that names it, below, still gets its row.
+	if fmt.Sprint(ids(all.Rows)) != "[t1]" || all.Rows[0].ScopeLabel != "Platform" || all.Rows[0].Scope != model.CompoundingRiskScopeTeam {
 		t.Fatalf("stored rows %#v", all.Rows)
 	}
 	one, _ := Resolve(ctx, client, "org-1", teamIn("t9"), now)
@@ -287,6 +290,9 @@ func TestRealClickHouse_SameIDsInTwoOrgs(t *testing.T) {
 	put(t, ctx, conn, risk{org: "org-2", scope: "team", id: "t1", day: day(now, 1), score: "0.9", sev: "high"})
 	own(t, ctx, conn, "org-2", "t2", rA, "other/web")
 	exec(t, ctx, conn, `INSERT INTO teams (id, name, org_id, updated_at) VALUES ('t2', 'Owners', 'org-2', now64(6))`)
+	// org-2 has its own team t1 with its own name: a stored team row is listed
+	// for a team of the organization, and the name is never org-1's.
+	exec(t, ctx, conn, `INSERT INTO teams (id, name, org_id, updated_at) VALUES ('t1', 'Second', 'org-2', now64(6))`)
 
 	for _, c := range []struct {
 		org, label, score string
@@ -301,7 +307,7 @@ func TestRealClickHouse_SameIDsInTwoOrgs(t *testing.T) {
 	}
 	for _, c := range []struct {
 		org, label, score string
-	}{{"org-1", "Platform", "0.3"}, {"org-2", "t1", "0.9"}} {
+	}{{"org-1", "Platform", "0.3"}, {"org-2", "Second", "0.9"}} {
 		got, err := Resolve(ctx, client, c.org, &model.CompoundingRiskFilterInput{Breakout: model.CompoundingRiskScopeTeam, TrendDays: 30}, now)
 		if err != nil {
 			t.Fatal(err)

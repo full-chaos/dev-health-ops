@@ -127,6 +127,7 @@ var exportedAPI = []string{
 	"var synclog.KeyDrainNewestSkippedDay synclog.Key",
 	"var synclog.KeyDrainOldestPendingAge synclog.Key",
 	"var synclog.KeyDrainReadTruncated synclog.Key",
+	"var synclog.KeyDrainTriggerChecked synclog.Key",
 	"var synclog.KeyRestoredAvailableAt synclog.Key",
 	"var synclog.KeyRouteFamily synclog.Key",
 	"var synclog.KeyRowsRetracted synclog.Key",

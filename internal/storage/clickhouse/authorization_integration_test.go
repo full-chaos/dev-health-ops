@@ -66,6 +66,8 @@ func startPostureHarness(t *testing.T) *postureHarness {
 		"CREATE TABLE team_drift_changes (org_id String, change_id String) ENGINE = ReplacingMergeTree() ORDER BY change_id",
 		"CREATE TABLE team_memberships (org_id String, member_id String) ENGINE = ReplacingMergeTree() ORDER BY member_id",
 		"CREATE TABLE manual_attribution_fallbacks (org_id String, scope_id String) ENGINE = ReplacingMergeTree() ORDER BY scope_id",
+		"CREATE TABLE team_project_ownership (org_id String, project_id String) ENGINE = ReplacingMergeTree() ORDER BY project_id",
+		"CREATE TABLE team_repo_ownership (org_id String, repo_full_name String) ENGINE = ReplacingMergeTree() ORDER BY repo_full_name",
 		"CREATE TABLE other_table (id String) ENGINE = ReplacingMergeTree() ORDER BY id",
 		"CREATE TABLE repo_metrics_daily (org_id String) ENGINE = ReplacingMergeTree() ORDER BY org_id",
 		"CREATE TABLE user_metrics_daily (org_id String) ENGINE = ReplacingMergeTree() ORDER BY org_id",
@@ -115,13 +117,16 @@ const (
 	grantIdentitiesExact = "GRANT SELECT, INSERT, ALTER DELETE ON default.identities"
 
 	// POST /teams/import's drift-projector tables (CHAOS-6311).
-	grantSyncPoliciesExact = "GRANT SELECT ON default.team_sync_policies"
+	grantSyncPoliciesExact = "GRANT SELECT, INSERT ON default.team_sync_policies"
 	grantObservationsExact = "GRANT SELECT, INSERT ON default.team_provider_observations"
 	grantDriftChangesExact = "GRANT SELECT, INSERT ON default.team_drift_changes"
 
-	// Team drift review's edge tables (CHAOS-6312).
-	grantMembershipsExact = "GRANT INSERT ON default.team_memberships"
-	grantFallbacksExact   = "GRANT INSERT ON default.manual_attribution_fallbacks"
+	// Team drift review's edge tables (CHAOS-6312) and the team id carry's
+	// link tables, which every admin team write runs first.
+	grantMembershipsExact      = "GRANT SELECT, INSERT ON default.team_memberships"
+	grantProjectOwnershipExact = "GRANT SELECT, INSERT ON default.team_project_ownership"
+	grantRepoOwnershipExact    = "GRANT SELECT, INSERT ON default.team_repo_ownership"
+	grantFallbacksExact        = "GRANT SELECT, INSERT ON default.manual_attribution_fallbacks"
 
 	// The backfill job detail's metrics diagnostics reads (CHAOS-6439);
 	// its repo_metrics_daily read rides grantMetricsExact below.
@@ -154,7 +159,7 @@ var grantMetricsExact = []string{
 // and the metric tables), appended to each test's teams/identities grants so
 // the whole manifest is met.
 func importGrants() []string {
-	return append([]string{grantSyncPoliciesExact, grantObservationsExact, grantDriftChangesExact, grantMembershipsExact, grantFallbacksExact,
+	return append([]string{grantSyncPoliciesExact, grantObservationsExact, grantDriftChangesExact, grantMembershipsExact, grantProjectOwnershipExact, grantRepoOwnershipExact, grantFallbacksExact,
 		grantRepoComplexityExact, grantCompoundingExact, grantTelemetryExact, grantLLMUsageExact, grantWorkUnitInvestExact, grantWorkItemsExact}, grantMetricsExact...)
 }
 
@@ -285,7 +290,7 @@ func TestCheckPostureRejectsExtraPrivilegeOnDeclaredTable(t *testing.T) {
 func TestCheckPostureRejectsMissingImportTableGrant(t *testing.T) {
 	h := startPostureHarness(t)
 	conn := h.newUser(t, grantTeamsExact, grantIdentitiesExact, grantSyncPoliciesExact,
-		grantObservationsExact, grantMembershipsExact, grantFallbacksExact, "GRANT SELECT ON default.team_drift_changes")
+		grantObservationsExact, grantMembershipsExact, grantProjectOwnershipExact, grantRepoOwnershipExact, grantFallbacksExact, "GRANT SELECT ON default.team_drift_changes")
 	err := CheckAPIClickHouseAuthorization(h.ctx, conn)
 	if err == nil || !errors.Is(err, ErrPostureMismatch) {
 		t.Fatalf("missing INSERT on team_drift_changes must fail with ErrPostureMismatch, got: %v", err)

@@ -1200,7 +1200,9 @@ the child's provider when the id is not one team.
 
 **The write seam (CHAOS-8940).** A writer that takes a team id from outside, not from a provider's own key, writes
 only what `providersync.KeyTeamIDsForWrite` (`internal/providersync/team_id_write_seam.go`) returns. It runs the
-carry first, then keeps a prefixed id in its canonical form and resolves a bare id to the ONE active prefixed team
+carry first, on the writer's own ClickHouse login: for the api that is `dho_api_ch`, whose manifest
+(`clickhouse.APIPosture`) grants select and insert on every table the carry reads and writes (CHAOS-9005; a
+missing grant made every admin team write a 500). It then keeps a prefixed id in its canonical form and resolves a bare id to the ONE active prefixed team
 of the organization that holds it (`teamid.Candidates`: every known prefix plus the id). A bare id that no
 active prefixed team holds is a new custom team, `custom:<id>` (chris D5631/D5685), the id the carry gives an
 admin's bare team: `POST /teams` with `team_id: "eng"` writes and answers `team_id: "custom:eng"`, and a later

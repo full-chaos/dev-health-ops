@@ -862,7 +862,6 @@ internal/queryapi/server/testdata/work_unit_explain/unknown_scope_type_is_not_a_
 internal/scheduler/fixed/testdata/python_ask_dev_feature_oracle.py
 internal/scheduler/sync/testdata/python_feature_decision_reason_oracle.py
 internal/scheduler/sync/testdata/python_planner_oracle.py
-internal/storage/clickhouse/testdata/api_grants.golden
 internal/synccli/testdata/batch_loop_oracle.py
 internal/synccli/testdata/local_sync_oracle.py
 internal/synccli/testdata/sync_target_oracle.py

@@ -95,17 +95,21 @@ def _docker_ready() -> bool:
 )
 def test_real_container_names_only() -> None:
     """End to end against a synthetic created (never started) container."""
-    image = next(
-        (
-            img
-            for img in ("busybox:latest", "alpine:latest")
-            if subprocess.run(
-                ["docker", "image", "inspect", img], capture_output=True
-            ).returncode
-            == 0
-        ),
-        "busybox:latest",
+    # The test only needs a container that exists with these env names; the
+    # container is created and never started. An image imported from an empty
+    # tar needs no registry: a pull from Docker Hub (busybox, alpine) fails on a
+    # hosted runner once the anonymous rate limit of its shared IP is used up.
+    image = "env-names-test-empty:" + uuid.uuid4().hex[:12]
+    empty_tar = subprocess.run(
+        ["tar", "-cT", "/dev/null"], capture_output=True, timeout=30, check=True
+    ).stdout
+    imported = subprocess.run(
+        ["docker", "import", "-", image],
+        input=empty_tar,
+        capture_output=True,
+        timeout=120,
     )
+    assert imported.returncode == 0, imported.stderr
     name = "env-names-test-" + uuid.uuid4().hex[:12]
     created = subprocess.run(
         [
@@ -136,3 +140,4 @@ def test_real_container_names_only() -> None:
         assert "=" not in res.stdout
     finally:
         subprocess.run(["docker", "rm", "-f", name], capture_output=True, timeout=60)
+        subprocess.run(["docker", "rmi", "-f", image], capture_output=True, timeout=60)

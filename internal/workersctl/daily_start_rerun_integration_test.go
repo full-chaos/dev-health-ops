@@ -92,8 +92,16 @@ func TestDailyStartDispatchWithARerunTagOnRealPostgres(t *testing.T) {
 	if !strings.Contains(out, `"started":true`) {
 		t.Fatalf("repo-scoped tagged call on a schedule-covered day did not start: %s", out)
 	}
-	c, _, e := call("schedcovered-norepo", "--day", "2026-06-01", "--rerun-tag", "fix-9")
+	c, _, e := call("schedcovered-plain", "--day", "2026-06-01")
 	if c == 0 || !strings.Contains(e, "already_covered") {
-		t.Fatalf("tagged no-repo call on a schedule-covered day must be already_covered: %d %s", c, e)
+		t.Fatalf("an untagged no-repo call on a schedule-covered day must stay already_covered: %d %s", c, e)
+	}
+	c, out, _ = call("schedcovered-norepo", "--day", "2026-06-01", "--rerun-tag", "fix-9")
+	if c != 0 || !strings.Contains(out, `"started":true`) || !strings.Contains(out, `"covered_day_overridden_by"`) {
+		t.Fatalf("a tagged no-repo call on a schedule-covered day must start and name the run it overrides: %d %s", c, out)
+	}
+	c, out, _ = call("schedcovered-norepo-again", "--day", "2026-06-01", "--rerun-tag", "fix-9")
+	if c != 0 || !strings.Contains(out, `"started":false`) || strings.Contains(out, "covered_day_overridden_by") {
+		t.Fatalf("the same tag again must start nothing and override nothing: %d %s", c, out)
 	}
 }

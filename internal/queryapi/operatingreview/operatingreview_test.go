@@ -398,10 +398,10 @@ func TestFetchRepoMetrics_EmptyWindowGuardsNaNToNil(t *testing.T) {
 	// prs_merged=0, pr_first_review_p50_hours=NULL (Nullable column,
 	// unaffected by this guard), single_owner_file_ratio_30d=NaN,
 	// code_ownership_gini=NaN (deliberately un-gated, see repoMetricsRow's
-	// doc comment), bus_factor=0, change_failure_rate=NaN,
-	// mttr_hours=NULL, repo_metrics_known_count=0.
+	// doc comment), bus_factor=0, revert_rate=NULL (nullIf over no merged
+	// pull request), mttr_hours=NULL, repo_metrics_known_count=0.
 	client := &fakeClient{
-		responses: []*fakeRowScanner{{rows: [][]any{{uint64(0), nil, math.NaN(), math.NaN(), uint32(0), math.NaN(), nil, uint64(0)}}}},
+		responses: []*fakeRowScanner{{rows: [][]any{{uint64(0), nil, math.NaN(), math.NaN(), uint32(0), nil, nil, uint64(0)}}}},
 		errs:      make([]error, 1),
 	}
 	rows, err := fetchRepoMetrics(context.Background(), client, "org1", day("2026-08-24"), day("2026-08-31"))
@@ -414,8 +414,8 @@ func TestFetchRepoMetrics_EmptyWindowGuardsNaNToNil(t *testing.T) {
 	if rows[0].singleOwnerFileRatio30d != nil {
 		t.Errorf("singleOwnerFileRatio30d = %v, want nil for repo_metrics_known_count=0", *rows[0].singleOwnerFileRatio30d)
 	}
-	if rows[0].changeFailureRate != nil {
-		t.Errorf("changeFailureRate = %v, want nil for repo_metrics_known_count=0", *rows[0].changeFailureRate)
+	if rows[0].revertRate != nil {
+		t.Errorf("revertRate = %v, want nil when no pull request merged", *rows[0].revertRate)
 	}
 	// codeOwnershipGini is deliberately un-gated -- still carries the raw
 	// (unused) NaN. Asserting this pins the "no reachable defect, so no
@@ -438,8 +438,8 @@ func TestFetchRepoMetrics_PopulatedWindowKeepsExactValues(t *testing.T) {
 	if len(rows) != 1 || rows[0].singleOwnerFileRatio30d == nil || *rows[0].singleOwnerFileRatio30d != 0.6 {
 		t.Fatalf("singleOwnerFileRatio30d = %v, want pointer to 0.6 (control: populated window keeps the real value)", rows[0].singleOwnerFileRatio30d)
 	}
-	if rows[0].changeFailureRate == nil || *rows[0].changeFailureRate != 0.1 {
-		t.Fatalf("changeFailureRate = %v, want pointer to 0.1 (control: populated window keeps the real value)", rows[0].changeFailureRate)
+	if rows[0].revertRate == nil || *rows[0].revertRate != 0.1 {
+		t.Fatalf("revertRate = %v, want pointer to 0.1 (control: populated window keeps the real value)", rows[0].revertRate)
 	}
 }
 
@@ -649,18 +649,19 @@ func TestResolve_HappyPath_ComputesRealPayload(t *testing.T) {
 		{rows: [][]any{{"feature_delivery", uint64(7)}}},                                                             // investment
 		{rows: [][]any{{"human", uint64(10), uint64(2), uint64(1), uint64(6), uint64(1), 1.0, 1.2, 0.1, 0.05, 0.0}}}, // ai_impact
 		{rows: [][]any{{day("2026-08-24"), nil, nil, uint64(4), uint64(3), uint64(2), uint64(4), uint64(4)}}},        // ai_governance
+		{rows: [][]any{{uint64(9), uint64(1), uint64(2), uint64(1), uint64(1), uint64(4)}}},                          // change_failure
 	}
 	client := &fakeClient{
-		responses: append(append([]*fakeRowScanner{}, current...), emptyScanners(10)...),
-		errs:      make([]error, 20),
+		responses: append(append([]*fakeRowScanner{}, current...), emptyScanners(11)...),
+		errs:      make([]error, 22),
 	}
 
 	got, err := Resolve(context.Background(), client, "org1", nil, graphqldate.New(day("2026-08-24")))
 	if err != nil {
 		t.Fatalf("Resolve returned error: %v", err)
 	}
-	if client.calls != 20 {
-		t.Fatalf("expected 20 Query calls (10 tables x 2 periods), got %d", client.calls)
+	if client.calls != 22 {
+		t.Fatalf("expected 22 Query calls (11 tables x 2 periods), got %d", client.calls)
 	}
 	if got.OrgID != "org1" {
 		t.Errorf("OrgID = %q, want org1", got.OrgID)
@@ -738,6 +739,27 @@ func TestResolve_HappyPath_ComputesRealPayload(t *testing.T) {
 	if v := riskMetric("complexity_per_kloc"); v != 12.5 {
 		t.Errorf("complexity_per_kloc = %v, want 12.5 (populated window, complexity_known_count=3)", v)
 	}
+
+	// Reliability: change failure rate is (1 native + 2 heuristic) failed /
+	// 9 deployments over the summed counts; deployment failure rate is the
+	// deployment read's 1 failed run / 9; revert rate is the repo row's 0.1.
+	reliability := section("reliability")
+	reliabilityMetric := func(key string) (float64, bool) {
+		for _, m := range got.Sections[reliability.idx].Metrics {
+			if m.Key == key {
+				return m.Value, m.HasData
+			}
+		}
+		t.Fatalf("reliability metric %q not found", key)
+		return 0, false
+	}
+	for key, want := range map[string]float64{
+		"change_failure_rate": 3.0 / 9.0, "deployment_failure_rate": 1.0 / 9.0, "revert_rate": 0.1,
+	} {
+		if v, has := reliabilityMetric(key); v != want || !has {
+			t.Errorf("%s = %v (hasData %v), want %v with data", key, v, has, want)
+		}
+	}
 }
 
 // TestResolve_EmptyWindowGuardedMetricsAreNotNaN is CHAOS-4563's core
@@ -755,18 +777,16 @@ func TestResolve_HappyPath_ComputesRealPayload(t *testing.T) {
 // the guard actually firing from a bug that always returns 0 regardless of
 // the input.
 func TestResolve_EmptyWindowGuardedMetricsAreNotNaN(t *testing.T) {
-	responses := emptyScanners(20)
+	responses := emptyScanners(22)
 	// The exact live shape for a scalar aggregate over zero underlying
 	// rows: exactly one row, NaN on the plain-Float64 aggregate, companion
-	// count = 0. Deployments (call index 5) is left at its emptyScanners
-	// zero-row default so change_failure_rate's sum(deployments)==0
-	// branch falls through to the repo_metrics avg guard being tested,
-	// rather than masking it behind the deployments>0 branch.
-	responses[2] = &fakeRowScanner{rows: [][]any{{uint64(0), nil, math.NaN(), math.NaN(), uint32(0), math.NaN(), nil, uint64(0)}}} // repo_metrics
-	responses[3] = &fakeRowScanner{rows: [][]any{{math.NaN(), uint64(0)}}}                                                         // hotspots
-	responses[4] = &fakeRowScanner{rows: [][]any{{math.NaN(), uint64(0)}}}                                                         // complexity
+	// count = 0. revert_rate is NULL there (nullIf over no merged pull
+	// request). change_failure_rate has no stored count at all.
+	responses[2] = &fakeRowScanner{rows: [][]any{{uint64(0), nil, math.NaN(), math.NaN(), uint32(0), nil, nil, uint64(0)}}} // repo_metrics
+	responses[3] = &fakeRowScanner{rows: [][]any{{math.NaN(), uint64(0)}}}                                                  // hotspots
+	responses[4] = &fakeRowScanner{rows: [][]any{{math.NaN(), uint64(0)}}}                                                  // complexity
 
-	client := &fakeClient{responses: responses, errs: make([]error, 20)}
+	client := &fakeClient{responses: responses, errs: make([]error, 22)}
 
 	got, err := Resolve(context.Background(), client, "org1", nil, graphqldate.New(day("2026-08-24")))
 	if err != nil {
@@ -818,7 +838,10 @@ func TestResolve_EmptyWindowGuardedMetricsAreNotNaN(t *testing.T) {
 			t.Error("change_failure_rate = NaN, want a finite value")
 		}
 		if m.Value != 0.0 {
-			t.Errorf("change_failure_rate = %v, want 0.0 (deployments empty AND repo_metrics empty)", m.Value)
+			t.Errorf("change_failure_rate = %v, want the 0.0 placeholder (no change-failure counts)", m.Value)
+		}
+		if m.HasData {
+			t.Error("change_failure_rate hasData = true with no change-failure counts, want false")
 		}
 	}
 }
@@ -837,13 +860,13 @@ func TestResolve_SwallowsOneTableFailure_DegradesOnlyThatSection(t *testing.T) {
 	// than delivery_movement's throughput/wip_count (both fed by
 	// work_items) must reflect the real data -- proving a single swallow
 	// does not collapse to an all-or-nothing response.
-	responses := emptyScanners(20)
+	responses := emptyScanners(22)
 	// current repo_metrics (call index 2) carries real data so
 	// review_latency_hours (bottleneck section) is provably non-zero,
 	// independent of the swallowed work_items table.
 	responses[2] = &fakeRowScanner{rows: [][]any{{uint64(5), 6.0, 0.2, 0.1, uint32(2), 0.05, 1.0, uint64(5)}}} // + CHAOS-4563 known_count
 
-	errs := make([]error, 20)
+	errs := make([]error, 22)
 	errs[0] = errors.New("simulated work_item_metrics_daily failure")
 
 	client := &fakeClient{responses: responses, errs: errs}
@@ -852,8 +875,8 @@ func TestResolve_SwallowsOneTableFailure_DegradesOnlyThatSection(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Resolve should swallow the single table failure, got error: %v", err)
 	}
-	if client.calls != 20 {
-		t.Fatalf("expected all 20 calls to still be attempted, got %d", client.calls)
+	if client.calls != 22 {
+		t.Fatalf("expected all 22 calls to still be attempted, got %d", client.calls)
 	}
 
 	var bottleneck, delivery []struct {
@@ -931,7 +954,7 @@ func TestFetchPeriodRows_MidStreamFailureDiscardsPartialRows(t *testing.T) {
 	// removed. The mid-stream case this test exists for is scanner-level:
 	// Query succeeds, then Next()/Err() fails partway through iteration --
 	// expressed by the scanner's own err/failAfterRows fields alone.
-	responses := emptyScanners(10)
+	responses := emptyScanners(11)
 	responses[0] = &fakeRowScanner{
 		rows: [][]any{
 			{day("2026-08-24"), uint64(10), uint64(8), uint32(4), 5.0, 9.0, 1.0, 2.0},
@@ -940,15 +963,15 @@ func TestFetchPeriodRows_MidStreamFailureDiscardsPartialRows(t *testing.T) {
 		failAfterRows: 1,
 	}
 
-	client := &fakeClient{responses: responses, errs: make([]error, 10)}
+	client := &fakeClient{responses: responses, errs: make([]error, 11)}
 
 	result := fetchPeriodRows(context.Background(), client, "org1", nil, day("2026-08-24"))
 
 	if len(result.workItems) != 0 {
 		t.Fatalf("workItems = %d rows, want 0 -- the one successfully-scanned row before the mid-stream failure must be discarded, not kept", len(result.workItems))
 	}
-	if client.calls != 10 {
-		t.Fatalf("expected 10 calls (one full period), got %d", client.calls)
+	if client.calls != 11 {
+		t.Fatalf("expected 11 calls (one full period), got %d", client.calls)
 	}
 }
 

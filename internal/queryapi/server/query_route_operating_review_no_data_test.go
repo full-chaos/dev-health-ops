@@ -36,8 +36,8 @@ func TestOperatingReviewCurrentAndV1_DifferByTheTwoDataSelections(t *testing.T) 
 
 func TestOperatingReview_BothTextsResolveToTheOneOperation(t *testing.T) {
 	legacy := legacyDigestsByOperation["operatingReview"]
-	if len(legacy) != 2 || legacy[0] != digestHex(registeredOperatingReviewV1Document) || legacy[1] != digestHex(registeredOperatingReviewV2Document) {
-		t.Fatalf("legacyDigestsByOperation[operatingReview] = %v, want exactly the V1 and the V2 digest", legacy)
+	if len(legacy) != 3 || legacy[0] != digestHex(registeredOperatingReviewV1Document) || legacy[1] != digestHex(registeredOperatingReviewV2Document) || legacy[2] != digestHex(registeredOperatingReviewV3Document) {
+		t.Fatalf("legacyDigestsByOperation[operatingReview] = %v, want exactly the V1, the V2 and the V3 digest", legacy)
 	}
 	byDigest, err := buildOperationByDigest(
 		map[string]string{
@@ -51,7 +51,7 @@ func TestOperatingReview_BothTextsResolveToTheOneOperation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"operatingreview_captured.graphql", "operatingreview_v1_captured.graphql", "operatingreview_v2_captured.graphql"} {
+	for _, name := range []string{"operatingreview_captured.graphql", "operatingreview_v1_captured.graphql", "operatingreview_v2_captured.graphql", "operatingreview_v3_captured.graphql"} {
 		text, err := os.ReadFile("testdata/wire_capture/" + name)
 		if err != nil {
 			t.Fatalf("read %s: %v", name, err)
@@ -63,21 +63,44 @@ func TestOperatingReview_BothTextsResolveToTheOneOperation(t *testing.T) {
 	}
 }
 
-// CHAOS-8516: the current text is the V2 text plus exactly the scope of a metric.
-func TestOperatingReviewCurrentAndV2_DifferByTheMetricScope(t *testing.T) {
-	current := registeredOperatingReviewDocument
+// CHAOS-8516: the V3 text is the V2 text plus exactly the scope of a metric.
+func TestOperatingReviewV3AndV2_DifferByTheMetricScope(t *testing.T) {
+	// Since CHAOS-8981 the current text also asks for the state of change failure rate; the text of CHAOS-8516 is
+	// the legacy V3 text, and it is V3 that differs from V2 by the scope.
+	current := registeredOperatingReviewV3Document
 	added := "        hasData\n        scope\n"
 	if strings.Count(current, added) != 1 {
-		t.Fatal("the current operatingReview document does not ask for scope right after hasData, once")
+		t.Fatal("the V3 operatingReview document does not ask for scope right after hasData, once")
 	}
 	if strings.Contains(registeredOperatingReviewV2Document, "scope") || strings.Contains(registeredOperatingReviewV1Document, "scope") {
-		t.Fatal("a legacy operatingReview document asks for scope: it is not an old text")
+		t.Fatal("a legacy operatingReview document before V3 asks for scope: it is not an old text")
 	}
 	if without := strings.Replace(current, added, "        hasData\n", 1); without != registeredOperatingReviewV2Document {
-		t.Fatalf("the current document less the scope selection is not the V2 text:\n%s", without)
+		t.Fatalf("the V3 document less the scope selection is not the V2 text:\n%s", without)
 	}
-	digests := map[string]bool{digestHex(current): true, digestHex(registeredOperatingReviewV1Document): true, digestHex(registeredOperatingReviewV2Document): true}
-	if len(digests) != 3 {
-		t.Fatal("two of the three operatingReview texts have the same digest")
+}
+
+// CHAOS-8981: the current text is the V3 text plus exactly the state of change failure rate of a metric. No
+// legacy text asks for it, so a web build on any older text keeps the answer it had.
+func TestOperatingReviewCurrentAndV3_DifferByTheRateState(t *testing.T) {
+	current := registeredOperatingReviewDocument
+	added := "        scope\n        rateState\n"
+	if strings.Count(current, added) != 1 || strings.Count(current, "rateState") != 1 {
+		t.Fatal("the current operatingReview document does not ask for rateState right after scope, once")
+	}
+	for name, legacy := range map[string]string{"V1": registeredOperatingReviewV1Document, "V2": registeredOperatingReviewV2Document, "V3": registeredOperatingReviewV3Document} {
+		if strings.Contains(legacy, "rateState") {
+			t.Fatalf("the legacy %s operatingReview document asks for rateState: it is not an old text", name)
+		}
+	}
+	if without := strings.Replace(current, added, "        scope\n", 1); without != registeredOperatingReviewV3Document {
+		t.Fatalf("the current document less the rateState selection is not the V3 text:\n%s", without)
+	}
+	digests := map[string]bool{
+		digestHex(current): true, digestHex(registeredOperatingReviewV1Document): true,
+		digestHex(registeredOperatingReviewV2Document): true, digestHex(registeredOperatingReviewV3Document): true,
+	}
+	if len(digests) != 4 {
+		t.Fatal("two of the four operatingReview texts have the same digest")
 	}
 }

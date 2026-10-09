@@ -98,7 +98,15 @@ var defaultDORAMetrics = []string{
 	"deployment_frequency",
 	"lead_time_for_changes",
 	"time_to_restore_service",
-	"change_failure_rate",
+	"deployment_failure_rate",
+}
+
+// legacyDORAMetricNames maps a metric name a job scope may still carry to the
+// name the metric is written under now. The deployment-status ratio was
+// called change_failure_rate until CHAOS-8981; a scope that names the old key
+// keeps getting the same ratio, never nothing.
+var legacyDORAMetricNames = map[string]string{
+	"change_failure_rate": "deployment_failure_rate",
 }
 
 // NewDORAExecutor fails closed. A nil connection means the worker cannot
@@ -279,6 +287,9 @@ func metricFilter(raw *string) map[string]struct{} {
 	if raw != nil {
 		for _, name := range strings.Split(*raw, ",") {
 			trimmed := strings.TrimSpace(name)
+			if renamed, ok := legacyDORAMetricNames[trimmed]; ok {
+				trimmed = renamed
+			}
 			if trimmed != "" {
 				wanted[trimmed] = struct{}{}
 			}

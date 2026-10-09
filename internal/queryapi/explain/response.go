@@ -9,6 +9,8 @@ import (
 
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/changefailure"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/deltarule"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
 )
 
@@ -158,22 +160,43 @@ func BuildExplainResponse(ctx context.Context, reader *Reader, orgID string, par
 	}
 	scopeFilterSQL += metricStatusFilterSQL(config.StatusFilter)
 
-	currentRaw, hasData, err := reader.fetchMetricValue(ctx, config.Table, config.Column, config.Aggregator, params.StartDay, params.EndDay, scopeFilterSQL, scopeBindings, orgID)
-	if err != nil {
-		return nil, err
-	}
-	previousRaw, hasPriorData, err := reader.fetchMetricValue(ctx, config.Table, config.Column, config.Aggregator, params.CompareStart, params.CompareEnd, scopeFilterSQL, scopeBindings, orgID)
-	if err != nil {
-		return nil, err
+	var (
+		currentRaw, previousRaw float64
+		hasData, hasPriorData   bool
+		rateState, linkTier     *string
+	)
+	if config.Table == changefailure.Table {
+		// Change failure rate: the window's summed counts through the one rule
+		// (changefailure.Evaluate). The state goes out with the value, so
+		// unknown, not applicable and "never counted" are not one empty answer,
+		// and a measured rate names the weakest link tier behind it: a
+		// heuristic link is never presented as a native one.
+		current, err := reader.fetchChangeFailureView(ctx, params.StartDay, params.EndDay, scopeFilterSQL, scopeBindings, orgID)
+		if err != nil {
+			return nil, err
+		}
+		previous, err := reader.fetchChangeFailureView(ctx, params.CompareStart, params.CompareEnd, scopeFilterSQL, scopeBindings, orgID)
+		if err != nil {
+			return nil, err
+		}
+		currentOutcome, previousOutcome := changefailure.Evaluate(current), changefailure.Evaluate(previous)
+		currentRaw, hasData = floatOrZero(currentOutcome.Value), currentOutcome.State == changefailure.StateMeasured
+		previousRaw, hasPriorData = floatOrZero(previousOutcome.Value), previousOutcome.State == changefailure.StateMeasured
+		rateState, linkTier = currentOutcome.StateOrNil(), currentOutcome.LinkTierOrNil()
+	} else {
+		var err error
+		currentRaw, hasData, err = reader.fetchMetricValue(ctx, config.Table, config.Column, config.Aggregator, params.StartDay, params.EndDay, scopeFilterSQL, scopeBindings, orgID)
+		if err != nil {
+			return nil, err
+		}
+		previousRaw, hasPriorData, err = reader.fetchMetricValue(ctx, config.Table, config.Column, config.Aggregator, params.CompareStart, params.CompareEnd, scopeFilterSQL, scopeBindings, orgID)
+		if err != nil {
+			return nil, err
+		}
 	}
 	currentValue := safeFloat(currentRaw)
 	previousValue := safeFloat(previousRaw)
-	pctChange := safeFloat(deltaPct(currentValue, previousValue))
-	if !hasData || !hasPriorData {
-		// CHAOS-8491: a window with no stored value is not a measured 0. An empty current window
-		// would otherwise read as -100 % against a real prior; the flags below carry the fact.
-		pctChange = 0.0
-	}
+	pctChange := safeFloat(deltarule.Pct(currentValue, previousValue, hasData, hasPriorData))
 
 	drivers, err := reader.fetchMetricDriverDelta(ctx, config.Table, config.Column, config.GroupBy, config.Aggregator, params.StartDay, params.EndDay, params.CompareStart, params.CompareEnd, scopeFilterSQL, scopeBindings, orgID)
 	if err != nil {
@@ -285,6 +308,8 @@ func BuildExplainResponse(ctx context.Context, reader *Reader, orgID string, par
 		Repositories: repositories,
 		SourceURL:    sourceURL,
 		Source:       source,
+		LinkTier:     linkTier,
+		RateState:    rateState,
 	}, nil
 }
 

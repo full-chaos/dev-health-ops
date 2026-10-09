@@ -304,6 +304,8 @@ var explainGoOnlyResponseFields = []struct{ name, goType, tag string }{
 	{"HasData", "bool", `json:"has_data"`},
 	{"HasPriorData", "bool", `json:"has_prior_data"`},
 	{"Source", "*string", `json:"source"`},
+	{"LinkTier", "*string", `json:"link_tier"`},
+	{"RateState", "*string", `json:"rate_state"`},
 }
 
 func TestExplainResponseIsThePythonResponsePlusTheDeclaredGoOnlyFields(t *testing.T) {
@@ -337,9 +339,9 @@ func TestExplainResponseIsThePythonResponsePlusTheDeclaredGoOnlyFields(t *testin
 	}{
 		{explain.Response{Drivers: []explain.Contributor{}, Contributors: []explain.Contributor{}, Repositories: &repositories, SourceURL: &sourceURL, HasData: true, HasPriorData: true}, []string{
 			`"repositories":[{"id":"repo-a","name":"webapp","value":3.0,"source_url":"https://github.com/acme/webapp"},{"id":"repo-b","name":null,"value":1.0,"source_url":null}]`,
-			`"source_url":"https://github.com/acme/webapp","has_data":true,"has_prior_data":true,"source":null}`,
+			`"source_url":"https://github.com/acme/webapp","has_data":true,"has_prior_data":true,"source":null,"link_tier":null,"rate_state":null}`,
 		}},
-		{explain.Response{Drivers: []explain.Contributor{}, Contributors: []explain.Contributor{}}, []string{`"repositories":null,"source_url":null,"has_data":false,"has_prior_data":false,"source":null}`}},
+		{explain.Response{Drivers: []explain.Contributor{}, Contributors: []explain.Contributor{}}, []string{`"repositories":null,"source_url":null,"has_data":false,"has_prior_data":false,"source":null,"link_tier":null,"rate_state":null}`}},
 	} {
 		recorder := httptest.NewRecorder()
 		if err := writeModelResponse(recorder, &testCase.response); err != nil {
@@ -394,7 +396,7 @@ func assertExplainTailMatchesProducerModel(t *testing.T, rawSchema json.RawMessa
 		}
 		fmt.Fprintf(&prefix, "%q:null", name)
 	}
-	valid := prefix.String() + `,"repositories":null,"source_url":null,"has_data":false,"has_prior_data":false,"source":null}`
+	valid := prefix.String() + `,"repositories":null,"source_url":null,"has_data":false,"has_prior_data":false,"source":null,"link_tier":null,"rate_state":null}`
 	if got, err := withoutExplainGoOnlyFields(valid); err != nil || got != prefix.String()+`}` {
 		t.Fatalf("withoutExplainGoOnlyFields(valid producer body) = %s, %v; want %s", got, err, prefix.String()+`}`)
 	}
@@ -495,7 +497,7 @@ func TestWithoutExplainGoOnlyFieldsLeavesThePythonShapeOrFails(t *testing.T) {
 		}
 		fmt.Fprintf(&prefix, "%q:null", name)
 	}
-	valid := prefix.String() + `,"repositories":null,"source_url":null,"has_data":false,"has_prior_data":false,"source":null}`
+	valid := prefix.String() + `,"repositories":null,"source_url":null,"has_data":false,"has_prior_data":false,"source":null,"link_tier":null,"rate_state":null}`
 	for _, testCase := range []struct{ body, want string }{
 		{valid, prefix.String() + `}`},
 	} {

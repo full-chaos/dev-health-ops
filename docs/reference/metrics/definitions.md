@@ -39,15 +39,18 @@ silently mapped to a different measure.
 | `cycle_time_p50_hours` | hours | Average the persisted latest daily/scope p50 values | `work_item_metrics_daily` |
 | `avg_wip` | items | Average the latest daily status snapshots | `work_item_state_durations_daily` |
 | `deployments_count` | deployments | Sum the latest daily repository rows | `deploy_metrics_daily` |
-| `change_failure_rate` | ratio | Total failed deployments divided by total deployments | `deploy_metrics_daily` |
+| `change_failure_rate` | ratio | Deployments linked to an incident divided by deployments, over the window's summed counts (target; see the note below) | `repo_change_failure_daily` (target) |
 | `investment_allocation_pct` | percent | Canonical-theme completed-work share | `investment_metrics_daily` |
 | `cyclomatic_per_kloc` | cyclomatic complexity per KLOC | Average the latest daily repository density | `repo_complexity_daily` |
 | `compounding_risk_score` | score from 0 to 1 | Mean of the latest persisted scoped scores | `compounding_risk_daily` |
 
+State today: the Ask Dev service (acr) still reads the deprecated `repo_metrics_daily.change_failure_rate` column, so its answer is not yet this definition; moving it to `repo_change_failure_daily` is ticket 9018. Query-api (Home, `/explain`, operating review, report) already follows this definition.
+
 Change failure rate is weighted over the whole selected window. It is never an
-average of daily percentages and never falls back to PR reverts, incidents, or
-`repo_metrics_daily`. A zero deployment denominator is insufficient evidence;
-it is distinct from a measured zero failure rate.
+average of daily percentages and never falls back to PR reverts or to the
+deployment-status ratio. A zero deployment denominator is "not applicable", and
+a window with no incident evidence is "unknown"; both are distinct from a
+measured zero failure rate. See [Change failure rate](#change-failure-rate).
 
 Investment allocation uses only the five canonical themes and
 `work_items_completed` as its denominator. Unclassified work is excluded from
@@ -61,6 +64,92 @@ zero semantics, supported scopes and dimensions, range limits, comparison
 rule, definition version, query version, source version, and freshness policy.
 The query response preserves source evidence references and reports the prior
 immediately preceding window of equal duration when comparison is requested.
+
+## Change failure rate
+
+Change failure rate is the share of deployments that are linked to an
+incident. It answers "how often does a change we ship cause a failure?", so it
+needs incident evidence: without it, the platform cannot tell a healthy
+repository from one whose incidents are not recorded.
+
+- **Deployments.** The deployments of the view's repositories whose day
+  (`deployed_at`, else `finished_at`, else `started_at`, else `last_synced`)
+  is in the view's window.
+- **Failed deployments.** The deployments among them that at least one
+  deployment-incident link names. A deployment with a native link counts as
+  native; a deployment with only heuristic links counts as heuristic. Today
+  the daily link producer writes heuristic links only: an incident links to
+  every deployment of its repository on the incident's day. The stored counts
+  keep the two tiers apart, and `/explain` names the weakest tier behind a
+  measured rate in `link_tier` (`heuristic` or `native`).
+- **Incident evidence.** The incidents that started in the window and tie to
+  the view's repositories. An incident ties to a repository directly, through
+  a service-to-repository mapping. Only when it has no direct tie does it tie
+  through the repository of its linked deployment. A deployment id that names
+  more than one repository ties nothing.
+- **Subject.** A repository view counts that repository. A team view counts
+  the repositories the team owns. An organization view counts every
+  repository. The window is the view's time filter; a view without one is all
+  time.
+
+| Window state | Value | State |
+| --- | --- | --- |
+| No stored counts in the window | none | no state (empty) |
+| Stored counts, no deployment | none: not applicable | `not_applicable_no_deployments` |
+| Deployments, no incident evidence | none: unknown | `unknown_no_incident_evidence` |
+| Deployments and incident evidence | failed deployments / deployments (0 is a measured zero) | `measured` |
+
+The three states with no value are different answers, so every surface that
+shows the rate also gives the state: `/api/v1/explain` in `rate_state` (beside
+`link_tier`), and the GraphQL `home` deltas and `operatingReview` metrics in
+`rateState`. The state is empty for every other metric. "No stored counts"
+means that nothing was counted for the window: the days were not computed, or
+no repository of the view had a deployment or an incident.
+
+A report chart of change failure rate uses the same rule for each of its
+buckets (a day, a week, a repository, the total): a bucket with no measured
+rate has no point.
+
+The daily inputs are stored per repository and day in
+`repo_change_failure_daily` (deployments, failed deployments by tier,
+incidents by tie). A repository and day with no deployment and no incident has
+no row. Readers sum the counts over the view, so the rate is never an average
+of daily rates. `repo_metrics_daily.change_failure_rate_incident` holds the
+one-day value for the repository-day rows of that table, and is empty when the
+day is not applicable or unknown.
+
+When a day is computed again and a repository has nothing left to count (its
+incident was deleted, or its service now maps to another repository), the
+stored counts are replaced by a row of zeros. Zeros read like no row: no
+deployment and no incident.
+
+**DEPRECATED: `repo_metrics_daily.change_failure_rate`.** This column is not
+the change failure rate. It still holds the revert ratio (reverted / merged
+pull requests, with a forced denominator of 1, so `0` when nothing merged),
+with its old type, so that an older release keeps reading what it read before.
+Do not read it for change failure rate. CHAOS-9017 removes it.
+
+### Revert rate
+
+Revert rate is reverted pull requests divided by merged pull requests. It is
+**not measured yet**: no writer detects a reverted pull request (the loader does
+not read the pull request title), so `repo_metrics_daily.revert_rate` is empty
+(`NULL`) on every row and every surface shows no data, never 0%. The deprecated
+`change_failure_rate` column is not copied into it: the reverted count behind
+that column was always 0. A real detector is a follow-up.
+
+### Deployment failure rate
+
+Deployment failure rate is failed deployment runs divided by deployments, from
+the deployment status. It is stored in `dora_metrics_daily` under
+`metric_name = deployment_failure_rate`. A run that fails to deploy is not a
+change that caused a failure in production, so this ratio is not change
+failure rate.
+
+**DEPRECATED: `dora_metrics_daily` rows with `metric_name =
+change_failure_rate`.** They hold the same deployment-status ratio under its
+old name, written before the rename or by an older release. They are kept as
+they are. CHAOS-9017 renames or removes them.
 
 ## Pull request cycle time
 

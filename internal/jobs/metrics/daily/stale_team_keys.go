@@ -115,10 +115,43 @@ func loadLiveStaleKeys(
 	return keys, versions, nil
 }
 
-// staleKeyVersionStep is added to the newest stored computed_at of a key to
-// get a version that is strictly newer in every table: the coarsest
-// computed_at column keeps whole seconds.
-const staleKeyVersionStep = time.Second
+// staleKeyVersionSteps holds, for each table of the rule, one unit of its
+// computed_at column: the smallest step that gives a strictly newer version.
+// A larger step would put a row of zeros further ahead of the clock than it
+// must be, and a real row that a later compute writes for the same key at its
+// own clock would then read as superseded for that much longer.
+//
+// A test reads the column types of the schema and fails when a step is not
+// the unit of its column.
+var staleKeyVersionSteps = map[string]time.Duration{
+	teamkeytables.WorkItemMetricsDaily.Table:         time.Second,
+	teamkeytables.WorkItemStateDurationsDaily.Table:  time.Second,
+	teamkeytables.EstimateCoverageMetricsDaily.Table: time.Millisecond,
+	teamkeytables.TeamMetricsDaily.Table:             time.Microsecond,
+	teamkeytables.AIImpactMetricsDaily.Table:         time.Millisecond,
+	teamkeytables.AIGovernanceCoverageDaily.Table:    time.Millisecond,
+	teamkeytables.TeamCognitiveLoadDaily.Table:       time.Microsecond,
+	teamkeytables.TeamComplexityDaily.Table:          time.Microsecond,
+	teamkeytables.ICLandscapeRolling30d.Table:        time.Second,
+	teamkeytables.CompoundingRiskDailyTeam.Table:     time.Second,
+}
+
+// staleKeyVersionAfter is the version of a row that must be strictly newer
+// than a stored row: at, or one unit of the table's computed_at column after
+// stored when at is not later than that. The floor is a value the column
+// keeps exactly, so a later at, cut to the column's unit by the store, is
+// still not before it.
+func staleKeyVersionAfter(table StaleKeyTable, at, stored time.Time) (time.Time, error) {
+	step, listed := staleKeyVersionSteps[table.Table]
+	if !listed || step <= 0 {
+		return time.Time{}, fmt.Errorf("%w: no computed_at unit is declared for %s", ErrInvalidState, table.Table)
+	}
+	version := at.UTC()
+	if floor := stored.UTC().Add(step); floor.After(version) {
+		version = floor
+	}
+	return version, nil
+}
 
 func staleKeyDay(day time.Time) time.Time {
 	utc := day.UTC()
@@ -162,8 +195,9 @@ func staleKeysOf(table StaleKeyTable, live []staleKey, scope staleKeyScope, prod
 // ignored for a table with no scope column. produced is every key the family
 // wrote, in the order of table.Keys.
 //
-// The row of zeros of a key gets computedAt, or one step after the newest
-// stored row of that key when computedAt is not later: a row of zeros is
+// The row of zeros of a key gets computedAt, or one unit of the table's
+// computed_at column after the newest stored row of that key when computedAt
+// is not later: a row of zeros is
 // strictly newer than the row it supersedes, never of the same computed_at.
 //
 // A failed read is returned: the run then fails and is tried again, and a
@@ -176,12 +210,13 @@ func supersedeStaleTeamKeys(
 	if computedAt.IsZero() {
 		return 0, ErrInvalidState
 	}
+	if _, err := staleKeyVersionAfter(table, computedAt, time.Time{}); err != nil {
+		return 0, err
+	}
 	return supersedeStaleKeys(ctx, conn, table, organizationID, day, scope, produced,
 		func(_ staleKey, stored time.Time) time.Time {
-			version := computedAt.UTC()
-			if floor := stored.UTC().Add(staleKeyVersionStep); floor.After(version) {
-				version = floor
-			}
+			// The table has a declared unit (checked above).
+			version, _ := staleKeyVersionAfter(table, computedAt, stored)
 			return version
 		})
 }
@@ -300,9 +335,9 @@ func retractStaleTeamKeysOfRun(
 	if err != nil {
 		return 0, err
 	}
-	version := clock.UTC()
-	if floor := newest.UTC().Add(staleKeyVersionStep); floor.After(version) {
-		version = floor
+	version, err := staleKeyVersionAfter(table, clock, newest)
+	if err != nil {
+		return 0, err
 	}
 	computed, err := compute(ctx)
 	if err != nil {

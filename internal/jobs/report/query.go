@@ -272,6 +272,9 @@ type metricDefinition struct {
 	// metricDefinition.numeratorDenominator's caller in buildChartQuery.
 	Numerator   string `json:"numerator,omitempty"`
 	Denominator string `json:"denominator,omitempty"`
+	// rule is set by withChartRule, never by the registry: the aggregate of
+	// a metric that is a rule over the stored counts of SourceTable.
+	rule string
 }
 
 type metricRegistryArtifact struct {
@@ -311,6 +314,7 @@ func (adapter *ClickHouseQueryAdapter) executeChart(ctx context.Context, spec Ch
 	if !ok || !identifier.MatchString(spec.Metric) || !identifier.MatchString(definition.SourceTable) {
 		return ChartResult{}, fmt.Errorf("unsupported chart metric %q", spec.Metric)
 	}
+	definition = withChartRule(definition)
 	statement, parameters, err := buildChartQuery(spec, definition)
 	if err != nil {
 		return ChartResult{}, err
@@ -368,6 +372,11 @@ func (adapter *ClickHouseQueryAdapter) executeChart(ctx context.Context, spec Ch
 // dedup-guard counters would not describe the chart they are attached to.
 func buildChartWhere(spec ChartSpec, definition metricDefinition) (string, []any, error) {
 	clauses := []string{spec.Metric + " IS NOT NULL"}
+	if definition.rule != "" {
+		// A rule has no column of the metric's name. Every stored row is an
+		// input of the rule; the rule itself says when a bucket has no value.
+		clauses = []string{"1"}
+	}
 	parameters := make([]any, 0, 5)
 	if spec.OrganizationID != "" {
 		clauses = append(clauses, "org_id = {org_id:String}")
@@ -475,6 +484,9 @@ func buildChartQuery(spec ChartSpec, definition metricDefinition) (string, []any
 	yExpression := averageExpression(definition.SourceTable, spec.Metric)
 	if strings.HasSuffix(spec.Metric, "_count") || definition.Unit == "count" {
 		yExpression = fmt.Sprintf("sum(%s)", spec.Metric)
+	}
+	if definition.rule != "" {
+		yExpression = definition.rule
 	}
 	// yExpression for a numerator/denominator ratio metric stays a plain
 	// avg(metric) -- CHAOS-4329 codex round 2 ("preserve team-level

@@ -14,6 +14,7 @@ import (
 
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/changefailure"
 	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse/liverow"
 )
 
@@ -29,6 +30,11 @@ func metricFromClause(table, column, scopeFilter, startParam, endParam string) s
 		return table
 	}
 	valueColumns := []string{column}
+	if table == changefailure.Table {
+		// change failure rate is computed from the day's counts, never read
+		// as a stored ratio.
+		valueColumns = changefailure.CountColumns
+	}
 	if table == "repo_metrics_daily" && column == "pr_rework_ratio" {
 		// The weighted aggregate also consumes prs_merged; both must come
 		// from the same latest daily generation.
@@ -77,6 +83,11 @@ func metricValueExpression(table, column, aggregator string) string {
 	// width, so the cast is a no-op there.
 	if table == "repo_metrics_daily" && column == "pr_rework_ratio" {
 		return "toFloat64(SUM(pr_rework_ratio * prs_merged) / NULLIF(SUM(prs_merged), 0))"
+	}
+	if table == changefailure.Table {
+		// NULL when the window is not applicable (no deployment) or unknown
+		// (no incident evidence): missing is not healthy.
+		return changefailure.WindowRateSQL
 	}
 	return fmt.Sprintf("toFloat64(%s(%s))", aggregator, column)
 }
@@ -136,11 +147,20 @@ func fetchMetricSeries(ctx context.Context, client QueryClient, table, column st
 
 	var out []dayValueRow
 	for rows.Next() {
-		var row dayValueRow
-		if err := rows.Scan(&row.Day, &row.Value); err != nil {
+		var day time.Time
+		var value *float64
+		if err := rows.Scan(&day, &value); err != nil {
 			return nil, fmt.Errorf("home: fetch_metric_series scan: %w", err)
 		}
-		out = append(out, row)
+		if value == nil {
+			// A day with no value of the metric is left out of the series,
+			// never drawn as 0: a mean over days whose stored value is NULL (no
+			// reviewed pull request, no completed item), a weighted ratio with
+			// no weight, a change failure rate with no deployment or no
+			// incident evidence.
+			continue
+		}
+		out = append(out, dayValueRow{Day: day, Value: *value})
 	}
 	return out, rows.Err()
 }
@@ -185,11 +205,45 @@ func fetchMetricValue(ctx context.Context, client QueryClient, table, column str
 		return metricValue{}, rows.Err()
 	}
 	var rowCount int64
-	var value float64
+	var value *float64
 	if err := rows.Scan(&rowCount, &value); err != nil {
 		return metricValue{}, fmt.Errorf("home: fetch_metric_value scan: %w", err)
 	}
-	return metricValue{Value: value, HasData: rowCount > 0}, rows.Err()
+	if value == nil {
+		// An undefined aggregate is no data, whatever the row count: the
+		// window's rows hold no value of the metric (see fetchMetricSeries).
+		// Scanned into a plain float64 it would read as 0 with data, a
+		// measured zero that nobody measured.
+		return metricValue{}, rows.Err()
+	}
+	return metricValue{Value: *value, HasData: rowCount > 0}, rows.Err()
+}
+
+// fetchChangeFailureView reads the window's summed change-failure counts for
+// the scope and the number of stored rows behind them, from the newest version
+// of each repository and day (the same deduplicated source as the series).
+func fetchChangeFailureView(ctx context.Context, client QueryClient, startDay, endDay time.Time, scopeFilter string, scopeBindings []dhclickhouse.Binding, orgID string) (changefailure.View, error) {
+	query := fmt.Sprintf(`
+        SELECT %s
+        FROM %s
+    `, changefailure.ViewSumsSQL, metricFromClause(changefailure.Table, "change_failure_rate", scopeFilter, "start_day", "end_day"))
+	bindings := append([]dhclickhouse.Binding{
+		{Name: "start_day", Value: formatDay(startDay)},
+		{Name: "end_day", Value: formatDay(endDay)},
+		{Name: "org_id", Value: orgID},
+	}, scopeBindings...)
+	rows, err := client.Query(ctx, query, bindings)
+	if err != nil {
+		return changefailure.View{}, fmt.Errorf("home: fetch_change_failure_view query: %w", err)
+	}
+	defer rows.Close()
+	var view changefailure.View
+	if rows.Next() {
+		if err := rows.Scan(changefailure.ViewScanDest(&view)...); err != nil {
+			return changefailure.View{}, fmt.Errorf("home: fetch_change_failure_view scan: %w", err)
+		}
+	}
+	return view, rows.Err()
 }
 
 // fetchBlockedHours ports fetch_blocked_hours (api/queries/metrics.py:
@@ -262,6 +316,9 @@ type driverRow struct {
 func fetchMetricDriverDelta(ctx context.Context, client QueryClient, table, column, groupBy string, startDay, endDay, compareStart, compareEnd time.Time, scopeFilter string, scopeBindings []dhclickhouse.Binding, orgID string, limit int) ([]driverRow, error) {
 	currentFrom := metricFromClause(table, column, scopeFilter, "start_day", "end_day")
 	previousFrom := metricFromClause(table, column, scopeFilter, "compare_start", "compare_end")
+	if table == changefailure.Table {
+		return fetchChangeFailureDriverDelta(ctx, client, groupBy, currentFrom, previousFrom, startDay, endDay, compareStart, compareEnd, scopeBindings, orgID, limit)
+	}
 	query := fmt.Sprintf(`
         SELECT
             current.id AS id,
@@ -301,6 +358,60 @@ func fetchMetricDriverDelta(ctx context.Context, client QueryClient, table, colu
 		var value, deltaPct float64
 		if err := rows.Scan(&id, &value, &deltaPct); err != nil {
 			return nil, fmt.Errorf("home: fetch_metric_driver_delta scan: %w", err)
+		}
+		if id != "" {
+			out = append(out, driverRow{ID: id})
+		}
+	}
+	return out, rows.Err()
+}
+
+// fetchChangeFailureDriverDelta is fetchMetricDriverDelta for change failure
+// rate: each group's value is the window rate of its own summed counts, and a
+// group whose current rate is undefined (no deployment or no incident
+// evidence) is not a driver. A group with no defined previous rate gets a 0
+// delta, like a previous value of 0.
+func fetchChangeFailureDriverDelta(ctx context.Context, client QueryClient, groupBy, currentFrom, previousFrom string, startDay, endDay, compareStart, compareEnd time.Time, scopeBindings []dhclickhouse.Binding, orgID string, limit int) ([]driverRow, error) {
+	query := fmt.Sprintf(`
+        SELECT
+            current.id AS id,
+            assumeNotNull(current.value) AS value,
+            CASE WHEN ifNull(previous.value, 0) = 0 THEN 0 ELSE (assumeNotNull(current.value) - assumeNotNull(previous.value)) / assumeNotNull(previous.value) * 100 END AS delta_pct
+        FROM (
+            SELECT %s AS id, %s AS value
+            FROM %s
+            GROUP BY %s
+        ) AS current
+        LEFT JOIN (
+            SELECT %s AS id, %s AS value
+            FROM %s
+            GROUP BY %s
+        ) AS previous ON current.id = previous.id
+        WHERE current.value IS NOT NULL
+        ORDER BY delta_pct DESC
+        LIMIT {limit:UInt32}
+    `, groupBy, changefailure.WindowRateSQL, currentFrom, groupBy, groupBy, changefailure.WindowRateSQL, previousFrom, groupBy)
+	bindings := append([]dhclickhouse.Binding{
+		{Name: "start_day", Value: formatDay(startDay)},
+		{Name: "end_day", Value: formatDay(endDay)},
+		{Name: "compare_start", Value: formatDay(compareStart)},
+		{Name: "compare_end", Value: formatDay(compareEnd)},
+		{Name: "org_id", Value: orgID},
+		{Name: "limit", Value: uint32(limit)},
+	}, scopeBindings...)
+
+	rows, err := client.Query(ctx, query, bindings)
+	if err != nil {
+		return nil, fmt.Errorf("home: fetch_change_failure_driver_delta query: %w", err)
+	}
+	defer rows.Close()
+
+	var out []driverRow
+	for rows.Next() {
+		var id string
+		var value, deltaPct float64
+		if err := rows.Scan(&id, &value, &deltaPct); err != nil {
+			return nil, fmt.Errorf("home: fetch_change_failure_driver_delta scan: %w", err)
 		}
 		if id != "" {
 			out = append(out, driverRow{ID: id})

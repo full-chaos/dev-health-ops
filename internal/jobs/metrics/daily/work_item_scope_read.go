@@ -224,15 +224,52 @@ func newerWorkItemVersion(candidate, current workItemScopedRow) bool {
 	return candidate.RepoID.String() < current.RepoID.String()
 }
 
-// loadWorkItemPartitionScopes reads the work scopes that the partition's
+// loadWorkItemPartitionScopes reads the work scopes that the given
 // repositories have an item in for the day.
+//
+// The list of repositories has no bound of its own: a partition holds a few,
+// the end of a run passes every repository of the run. clickhouse-go writes
+// the list INTO the statement text, so the read is done once per chunk of the
+// list (package querybound) and the scopes are unioned. A scope is a set
+// member, so the union of the chunks is what one statement over the whole
+// list returns.
 func loadWorkItemPartitionScopes(
 	ctx context.Context, conn repositoryRows, organizationID string, repoIDs []uuid.UUID, start, end time.Time,
 ) (map[workItemScopeKey]struct{}, error) {
 	scopes := make(map[workItemScopeKey]struct{})
-	if len(repoIDs) == 0 {
-		return scopes, nil
+	for _, chunk := range chunkRepositoryIDs(repoIDs, maxWorkItemScopeFilterBytes) {
+		if err := loadWorkItemPartitionScopeChunk(ctx, conn, organizationID, chunk, start, end, scopes); err != nil {
+			return nil, err
+		}
 	}
+	return scopes, nil
+}
+
+// chunkRepositoryIDs splits the list into consecutive chunks whose array
+// literal is at most maxBytes as clickhouse-go renders it (a repository id is
+// rendered as its quoted text form). Every id is in exactly one chunk; an
+// empty list gives no chunk.
+func chunkRepositoryIDs(repoIDs []uuid.UUID, maxBytes int) [][]uuid.UUID {
+	if len(repoIDs) == 0 {
+		return nil
+	}
+	rendered := make([]string, len(repoIDs))
+	for index, repoID := range repoIDs {
+		rendered[index] = repoID.String()
+	}
+	chunks := make([][]uuid.UUID, 0, 1)
+	offset := 0
+	for _, chunk := range querybound.ChunkStringsByRenderedBytes(rendered, maxBytes) {
+		chunks = append(chunks, repoIDs[offset:offset+len(chunk)])
+		offset += len(chunk)
+	}
+	return chunks
+}
+
+func loadWorkItemPartitionScopeChunk(
+	ctx context.Context, conn repositoryRows, organizationID string, repoIDs []uuid.UUID, start, end time.Time,
+	scopes map[workItemScopeKey]struct{},
+) error {
 	rows, err := conn.Query(ctx, `
 SELECT DISTINCT provider, project_key, project_id, native_team_key, project_name
 FROM work_items FINAL
@@ -242,7 +279,7 @@ WHERE org_id = ? AND repo_id IN ?
 		organizationID, repoIDs, end.UTC(), start.UTC(),
 	)
 	if err != nil {
-		return nil, fmt.Errorf("load work item partition scopes: %w", err)
+		return fmt.Errorf("load work item partition scopes: %w", err)
 	}
 	defer rows.Close()
 	for rows.Next() {
@@ -250,14 +287,14 @@ WHERE org_id = ? AND repo_id IN ?
 		if err := rows.Scan(
 			&item.Provider, &item.ProjectKey, &item.ProjectID, &item.NativeTeamKey, &item.ProjectName,
 		); err != nil {
-			return nil, fmt.Errorf("scan work item partition scope: %w", err)
+			return fmt.Errorf("scan work item partition scope: %w", err)
 		}
 		scopes[workItemScopeKey{provider: item.Provider, scope: item.workScopeID()}] = struct{}{}
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate work item partition scopes: %w", err)
+		return fmt.Errorf("iterate work item partition scopes: %w", err)
 	}
-	return scopes, nil
+	return nil
 }
 
 // The columns of the items query after the ones every family reads. The

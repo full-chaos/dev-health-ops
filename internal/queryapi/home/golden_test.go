@@ -65,6 +65,8 @@ import (
 	"time"
 
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
+
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/changefailure"
 )
 
 func loadGolden(t *testing.T, name string) Response {
@@ -173,6 +175,29 @@ func orgGoldenHandler(t *testing.T) func(t *testing.T, query string, bindings []
 
 		case strings.Contains(q, "delta_pct") && strings.Contains(q, "AS previous ON"):
 			return &fixtureRowScanner{rows: [][]any{{"team-alpha", 10.0, 20.0}}}, nil
+
+		case strings.Contains(q, "FROM repo_change_failure_daily"):
+			// Change failure rate has no "(column)) AS value" marker. Its day
+			// series is the shared window ratio per day; its value is the
+			// window's summed counts and stored-row count, which the shared
+			// rule turns into the value and its state.
+			fx := metricFixtures["change_failure_rate"]
+			if strings.Contains(q, "GROUP BY day") && strings.Contains(q, "ORDER BY day") {
+				if !strings.Contains(q, changefailure.WindowRateSQL) {
+					t.Fatalf("change failure rate series does not apply the shared window rule:\n%s", q)
+				}
+				return seriesScanner(fx.series), nil
+			}
+			if !strings.Contains(q, changefailure.ViewSumsSQL) {
+				t.Fatalf("change failure rate value does not read the shared view sums:\n%s", q)
+			}
+			// 10 of 100 deployments failed in the current window, 8 of 100 in
+			// the prior one: the fixture's 0.1 and 0.08.
+			failed := uint64(fx.previous * 100)
+			if isCurrentWindow(bindings) {
+				failed = uint64(fx.current * 100)
+			}
+			return &fixtureRowScanner{rows: [][]any{{uint64(100), failed, uint64(0), uint64(1), uint64(0), uint64(7)}}}, nil
 
 		case strings.Contains(q, "FROM recommendations_daily"):
 			t.Fatal("recommendations_daily must not be read at org scope")

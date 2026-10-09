@@ -10,6 +10,7 @@ import (
 
 	"github.com/full-chaos/dev-health-go/clickhouse"
 
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/changefailure"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph/model"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graphqldate"
 )
@@ -19,7 +20,7 @@ import (
 // all-teams review. It is not made from team values.
 
 // teamReadCalls are the per-period call indexes (fetchPeriodRows' fixed order)
-// of the five reads that carry a team filter; the other five never do.
+// of the five reads that carry a team filter; the other six never do.
 var teamReadCalls = map[int]string{0: "work_items", 1: "state_durations", 7: "investment", 8: "ai_impact", 9: "ai_governance"}
 
 // bindingClient is fakeClient plus the bindings of each call.
@@ -128,12 +129,12 @@ func TestResolveInput_SeveralTeamsBindTheSelectionOnTheTeamReadsOnly(t *testing.
 	if got.TeamID != nil {
 		t.Errorf("teamId = %q for several teams, want null", *got.TeamID)
 	}
-	if client.calls != 20 {
-		t.Fatalf("%d reads, want 20", client.calls)
+	if client.calls != 22 {
+		t.Fatalf("%d reads, want 22", client.calls)
 	}
-	for call := 0; call < 20; call++ {
+	for call := 0; call < 22; call++ {
 		statement, bindings := client.statements[call], client.bindings[call]
-		table, teamScoped := teamReadCalls[call%10]
+		table, teamScoped := teamReadCalls[call%11]
 		ids, bound := bindingOf(bindings, "team_ids")
 		_, single := bindingOf(bindings, "team_id")
 		if single {
@@ -200,11 +201,12 @@ func scopesOf(review *model.OperatingReview) (organisation, team []string) {
 func TestOrganisationMetricsAreTheOnesWhoseReadsHaveNoTeam(t *testing.T) {
 	week := day("2026-08-24")
 	organisationRows := periodRows{
-		repoMetrics: []repoMetricsRow{{prFirstReviewP50Hours: fp(1), singleOwnerFileRatio30d: fp(0.5), changeFailureRate: fp(0.1), mttrHours: fp(2), busFactor: 2, storedRows: 1}},
-		hotspots:    []hotspotsAggRow{{riskScore: fp(0.4), hotspotsCount: 1}},
-		complexity:  []complexityAggRow{{cyclomaticPerKloc: fp(3)}},
-		deployments: []deploymentsAggRow{{deploymentsCount: 2, storedRows: 1}},
-		incidents:   []incidentsAggRow{{incidentsCount: 1, mttrP50Hours: fp(1), storedRows: 1}},
+		repoMetrics:   []repoMetricsRow{{prFirstReviewP50Hours: fp(1), singleOwnerFileRatio30d: fp(0.5), revertRate: fp(0.1), mttrHours: fp(2), busFactor: 2, storedRows: 1}},
+		changeFailure: []changeFailureAggRow{{view: changefailure.View{Counts: changefailure.Counts{Deployments: 2, FailedHeuristic: 1, IncidentsDirect: 1}, StoredRows: 1}}},
+		hotspots:      []hotspotsAggRow{{riskScore: fp(0.4), hotspotsCount: 1}},
+		complexity:    []complexityAggRow{{cyclomaticPerKloc: fp(3)}},
+		deployments:   []deploymentsAggRow{{deploymentsCount: 2, storedRows: 1}},
+		incidents:     []incidentsAggRow{{incidentsCount: 1, mttrP50Hours: fp(1), storedRows: 1}},
 	}
 	teamRows := periodRows{
 		workItems:      []workItemsRow{{itemsCompleted: 1, cycleTimeP50Hours: fp(1), wipAgeP90Hours: fp(1)}},
@@ -215,7 +217,7 @@ func TestOrganisationMetricsAreTheOnesWhoseReadsHaveNoTeam(t *testing.T) {
 		aiGovernance: []aiGovernanceRawRow{{aiArtifacts: 1, declaredArtifacts: 1}},
 	}
 	wantOrganisation := sorted("review_latency_hours", "hotspot_risk_score", "ownership_concentration", "complexity_per_kloc",
-		"bus_factor", "deployments_count", "change_failure_rate", "incidents_count", "mttr_hours")
+		"bus_factor", "deployments_count", "change_failure_rate", "deployment_failure_rate", "revert_rate", "incidents_count", "mttr_hours")
 
 	review := computeReview("org-1", nil, week, organisationRows, periodRows{})
 	organisation, team := scopesOf(review)

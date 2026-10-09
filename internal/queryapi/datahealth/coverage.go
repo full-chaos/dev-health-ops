@@ -6,6 +6,7 @@ import (
 
 	"github.com/full-chaos/dev-health-go/clickhouse"
 
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/changefailure"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph/model"
 	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse/liverow"
 )
@@ -107,7 +108,8 @@ var lineageRegistry = map[string]lineageEntry{
 	"review_load":          {[]string{"repo_metrics_daily"}, windowSpec{kind: "daily"}},
 	"review_latency":       {[]string{"repo_metrics_daily"}, windowSpec{kind: "daily"}},
 	"deployment_frequency": {[]string{"repo_metrics_daily"}, windowSpec{kind: "daily"}},
-	"change_failure_rate":  {[]string{"repo_metrics_daily"}, windowSpec{kind: "daily"}},
+	"change_failure_rate":  {[]string{changefailure.Table}, windowSpec{kind: "daily"}},
+	"revert_rate":          {[]string{"repo_metrics_daily"}, windowSpec{kind: "daily"}},
 	"after_hours_ratio":    {[]string{"team_metrics_daily"}, windowSpec{kind: "daily"}},
 	"weekend_ratio":        {[]string{"team_metrics_daily"}, windowSpec{kind: "daily"}},
 	"investment_mix":       {[]string{"work_unit_investments"}, windowSpec{kind: "rolling", durationDays: days(30)}},

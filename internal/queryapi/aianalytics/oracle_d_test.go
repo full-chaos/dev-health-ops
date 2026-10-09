@@ -12,6 +12,7 @@ import (
 
 	"github.com/full-chaos/dev-health-go/clickhouse"
 
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/changefailure"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph/model"
 )
 
@@ -260,6 +261,12 @@ func TestOpportunityDetectors_MatchPythonDetectors(t *testing.T) {
 	if len(doc.Cases) == 0 {
 		t.Fatal("no captured cases")
 	}
+	renamedChangeFailureEvidence := 0
+	defer func() {
+		if renamedChangeFailureEvidence == 0 {
+			t.Error("no captured flow case carries change-failure evidence: the evidence rename below is untested")
+		}
+	}()
 	for _, c := range doc.Cases {
 		t.Run(c.Name, func(t *testing.T) {
 			client := &fixtureClientD{c: c}
@@ -281,6 +288,7 @@ func TestOpportunityDetectors_MatchPythonDetectors(t *testing.T) {
 			_ = json.Unmarshal(enc, &gotMap)
 			if c.Kind != "ai" {
 				checkAndStripFlowGoOnly(t, gotMap)
+				renamedChangeFailureEvidence += renameChangeFailureEvidence(c.Expected)
 			}
 			g, w := normalizeD(gotMap), normalizeD(c.Expected)
 			if !reflect.DeepEqual(g, w) {
@@ -383,4 +391,35 @@ func normalizeD(v any) any {
 		return out
 	}
 	return v
+}
+
+// renameChangeFailureEvidence rewrites the Python capture's change-failure
+// evidence reference to the table Go reads it from. CHAOS-8981 moved change
+// failure rate to repo_change_failure_daily (incident-based, window counts);
+// the rule, threshold, rationale and score are still compared with Python
+// whole. It returns the number of references rewritten.
+func renameChangeFailureEvidence(value any) int {
+	const legacy = "repo_metrics_daily:change_failure_rate:"
+	count := 0
+	switch typed := value.(type) {
+	case map[string]any:
+		for key, child := range typed {
+			if text, ok := child.(string); ok && strings.HasPrefix(text, legacy) {
+				typed[key] = changefailure.Table + ":change_failure_rate:" + strings.TrimPrefix(text, legacy)
+				count++
+				continue
+			}
+			count += renameChangeFailureEvidence(child)
+		}
+	case []any:
+		for i, child := range typed {
+			if text, ok := child.(string); ok && strings.HasPrefix(text, legacy) {
+				typed[i] = changefailure.Table + ":change_failure_rate:" + strings.TrimPrefix(text, legacy)
+				count++
+				continue
+			}
+			count += renameChangeFailureEvidence(child)
+		}
+	}
+	return count
 }

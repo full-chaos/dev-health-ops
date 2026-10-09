@@ -209,7 +209,7 @@ func sweepReplacingMergeTreeTables(t *testing.T) []replacingMergeTreeTable {
 // 119 -> 120: 111_work_item_measure_capability.sql adds
 // `work_item_measure_capability` (version computed_at), keyed on
 // (org_id, provider, measure, window_end) -- CHAOS-8895. A reader takes the
-// latest window_end at or before its question and argMax on computed_at.
+// rows of window_end = its day and argMax on computed_at.
 func TestSweepReplacingMergeTreeTablesMatchesTheAuthoritativeCount(t *testing.T) {
 	const wantCount = 120
 

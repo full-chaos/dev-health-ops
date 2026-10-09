@@ -420,20 +420,20 @@ type capabilityStoredRow struct {
 	WindowEnd     time.Time
 }
 
-// capabilityRead is the reader contract of the table: for each key, the row
-// of the latest window_end at or before the question's end, newest
-// computed_at first.
+// capabilityRead is the reader contract of the table (exact day): for each
+// key, the row with window_end = asOf, newest computed_at first. No row for
+// that day is unknown, never an earlier window's answer.
 func capabilityRead(ctx context.Context, t *testing.T, conn driver.Conn, orgID string, asOf time.Time) []capabilityStoredRow {
 	t.Helper()
 	rows, err := conn.Query(ctx, `
 SELECT provider, measure,
-       argMax(tracked, (window_end, computed_at)),
-       argMax(evidence_count, (window_end, computed_at)),
-       argMax(item_count, (window_end, computed_at)),
-       argMax(window_start, (window_end, computed_at)),
-       max(window_end)
+       argMax(tracked, computed_at),
+       argMax(evidence_count, computed_at),
+       argMax(item_count, computed_at),
+       argMax(window_start, computed_at),
+       any(window_end)
 FROM work_item_measure_capability
-WHERE org_id = ? AND window_end <= ?
+WHERE org_id = ? AND window_end = ?
 GROUP BY provider, measure
 ORDER BY provider, measure`, orgID, asOf)
 	if err != nil {
@@ -680,5 +680,45 @@ func TestWorkItemMeasureCapabilityNewestWriteOfOneSecondWins(t *testing.T) {
 	}
 	if got := capabilityRead(ctx, t, conn, orgID, capabilityMatrixDay); rows != 1 || !reflect.DeepEqual(got, want) {
 		t.Fatalf("after a merge (%d row(s) left):\n got %+v\nwant %+v", rows, got, want)
+	}
+}
+
+// The answer for a day is the row of that day's window. A day whose window
+// holds no item has no row, and reads as unknown: never as the answer of an
+// earlier window.
+func TestWorkItemMeasureCapabilityDayWithoutItemsIsUnknown(t *testing.T) {
+	ctx, conn := newWorkItemEffectsConn(t)
+	normalizedAt := capabilityMatrixDay.Add(20 * time.Hour)
+	orgID := uuid.NewString()
+	points := 3.0
+	done := capabilityMatrixDay.AddDate(0, 0, -1)
+	claim := capabilityClaim(t, "jira", orgID)
+	rows := capabilityJiraRows(t, claim, []capabilityMatrixItem{
+		{number: 1, bug: true, points: &points, createdAt: capabilityMatrixDay.AddDate(0, 0, -10), completedAt: &done},
+	}, normalizedAt)
+	sink, err := NewGitHubWorkItemClickHouseEffects(conn, githubDerivedIntegrationLease(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeDailyFamilyMatrixEffect(ctx, t, claim, "work_items", marshalDailyFamilyMatrixRows(t, rows), sink.WorkItems)
+	repoIDs := []daily.RepositoryID{daily.RepositoryID(uuid.Nil.String())}
+
+	// The item was completed the day before capabilityMatrixDay, so it is in
+	// that day's window and in no window of a day 120 days later.
+	laterDay := capabilityMatrixDay.AddDate(0, 0, 120)
+	capabilityRunDaily(ctx, t, conn, orgID, capabilityMatrixDay, repoIDs)
+	capabilityRunDaily(ctx, t, conn, orgID, laterDay, repoIDs)
+
+	if got := capabilityRead(ctx, t, conn, orgID, laterDay); len(got) != 0 {
+		t.Fatalf("as of %s, a day whose window has no item: got %+v, want no row (unknown)",
+			laterDay.Format(time.DateOnly), got)
+	}
+	first, last := workitemmetrics.CapabilityWindow(capabilityMatrixDay)
+	want := []capabilityStoredRow{
+		{"jira", workitemmetrics.MeasureBugCompletedRatio, 1, 1, 1, first, last},
+		{"jira", workitemmetrics.MeasureStoryPointsCompleted, 1, 1, 1, first, last},
+	}
+	if got := capabilityRead(ctx, t, conn, orgID, capabilityMatrixDay); !reflect.DeepEqual(got, want) {
+		t.Fatalf("as of %s:\n got %+v\nwant %+v", capabilityMatrixDay.Format(time.DateOnly), got, want)
 	}
 }

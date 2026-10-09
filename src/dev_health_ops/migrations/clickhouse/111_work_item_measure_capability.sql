@@ -18,9 +18,11 @@
 --
 -- window_end is in the sorting key so that a run for an old day (a backfill)
 -- adds the answer of its own window and never replaces the answer of a newer
--- window. Reader contract: take the row with the latest window_end at or
--- before the end of the question, and argMax on computed_at for that key.
--- Merges are eventual, so a reader always deduplicates and never reads the
+-- window. Reader contract (exact day): the answer for day D is the row with
+-- window_end = D, argMax on computed_at for that key. No row with
+-- window_end = D is unknown for D: a reader never falls back to the row of an
+-- earlier window, which would turn "no items in D's window" into an old
+-- answer. Merges are eventual, so a reader always deduplicates and never reads the
 -- rows as they are. computed_at keeps milliseconds: two runs of one day in the
 -- same second would otherwise tie, and a merge keeps the LAST inserted row of
 -- a tie, which can be the older observation.

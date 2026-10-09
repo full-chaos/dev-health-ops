@@ -89,7 +89,9 @@ func TestDedupFromSourceEveryAppendOnlyTableAndEveryReplacingTable(t *testing.T)
 		table string
 		want  string
 	}{
-		{"work_item_metrics_daily", "work_item_metrics_daily FINAL"},
+		// The two tables below have a live-row rule: the newest rows are read
+		// first (FINAL, LIMIT 1 BY) and the retraction rows are dropped after.
+		{"work_item_metrics_daily", "(SELECT * FROM work_item_metrics_daily FINAL WHERE (work_item_metrics_daily.items_started != 0 OR work_item_metrics_daily.items_completed != 0 OR work_item_metrics_daily.items_started_unassigned != 0 OR work_item_metrics_daily.items_completed_unassigned != 0 OR work_item_metrics_daily.wip_count_end_of_day != 0 OR work_item_metrics_daily.wip_unassigned_end_of_day != 0 OR work_item_metrics_daily.new_bugs_count != 0 OR work_item_metrics_daily.new_items_count != 0)) AS work_item_metrics_daily"},
 		{"work_item_user_metrics_daily", "work_item_user_metrics_daily FINAL"},
 		{"cicd_metrics_daily", "(SELECT * FROM cicd_metrics_daily ORDER BY computed_at DESC LIMIT 1 BY org_id, repo_id, day) AS cicd_metrics_daily"},
 		{"deploy_metrics_daily", "(SELECT * FROM deploy_metrics_daily ORDER BY computed_at DESC LIMIT 1 BY org_id, repo_id, day) AS deploy_metrics_daily"},
@@ -98,7 +100,7 @@ func TestDedupFromSourceEveryAppendOnlyTableAndEveryReplacingTable(t *testing.T)
 		{"testops_pipeline_stability", "(SELECT * FROM testops_pipeline_stability ORDER BY computed_at DESC LIMIT 1 BY org_id, repo_id, day) AS testops_pipeline_stability"},
 		{"testops_quality_drag", "(SELECT * FROM testops_quality_drag ORDER BY computed_at DESC LIMIT 1 BY org_id, repo_id, day) AS testops_quality_drag"},
 		{"repo_metrics_daily", "(SELECT * FROM repo_metrics_daily ORDER BY computed_at DESC LIMIT 1 BY org_id, repo_id, day) AS repo_metrics_daily"},
-		{"team_metrics_daily", "(SELECT * FROM team_metrics_daily ORDER BY computed_at DESC LIMIT 1 BY org_id, team_id, repo_id, day) AS team_metrics_daily"},
+		{"team_metrics_daily", "(SELECT * FROM (SELECT * FROM team_metrics_daily ORDER BY computed_at DESC LIMIT 1 BY org_id, team_id, repo_id, day) AS team_metrics_daily WHERE (team_metrics_daily.commits_count != 0 OR team_metrics_daily.after_hours_commits_count != 0 OR team_metrics_daily.weekend_commits_count != 0)) AS team_metrics_daily"},
 		{"user_metrics_daily", "(SELECT * FROM user_metrics_daily ORDER BY computed_at DESC LIMIT 1 BY org_id, repo_id, author_email, day) AS user_metrics_daily"},
 		{"testops_pipeline_metrics_daily", "(SELECT * FROM testops_pipeline_metrics_daily ORDER BY computed_at DESC LIMIT 1 BY org_id, repo_id, day) AS testops_pipeline_metrics_daily"},
 		{"testops_test_metrics_daily", "(SELECT * FROM testops_test_metrics_daily ORDER BY computed_at DESC LIMIT 1 BY org_id, repo_id, day) AS testops_test_metrics_daily"},

@@ -149,6 +149,13 @@ func (c *goldenClient) Query(_ context.Context, statement string, bindings []cli
 		}
 		return &fakeRowScanner{rows: out}, nil
 	}
+	if strings.Contains(statement, "AS measured_teams") {
+		// The read of the days that hold a team with retraction rows only is
+		// Go-only (the Python reference has no such read) and is kept out of
+		// the pinned query sequence. The golden inputs hold no retraction
+		// row, so no day is corrected.
+		return &fakeRowScanner{}, nil
+	}
 	kind := queryKind(statement)
 	c.kinds = append(c.kinds, kind)
 	c.statements = append(c.statements, statement)

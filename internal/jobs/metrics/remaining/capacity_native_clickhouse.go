@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/numerical"
+	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse/liverow"
 )
 
 // The capacity reads, ported from capacity_queries.py.
@@ -184,11 +185,15 @@ func (executor *CapacityExecutor) resolveScopes(
 
 	// discover_team_scopes uses ClickHouse's own today(), not the client's --
 	// a different clock from the throughput window's. Reproduced as written.
+	// A (team, scope) whose rows of the window are all retraction rows has no
+	// work to forecast: it is a key the compute no longer produces (a retired
+	// team id), not a team with a backlog of zero.
 	query := `
         SELECT DISTINCT team_id, work_scope_id
         FROM work_item_metrics_daily FINAL
         WHERE day >= today() - 30
         AND org_id = {org_id:String}
+        AND ` + liverow.Predicate("work_item_metrics_daily", "") + `
     `
 	rows, err := executor.conn.Query(
 		ctx, query, clickhouse.Named("org_id", organizationID))

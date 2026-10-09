@@ -194,15 +194,17 @@ func TestResolve_OrgWide_MergesOnUnionOfDays(t *testing.T) {
 			{rows: [][]any{{day("2026-08-20"), uint64(4), uint64(2), uint64(1)}}},
 			// team metrics: day 2 only (a weekend with commit-timing data but no per-developer load)
 			{rows: [][]any{{day("2026-08-21"), 0.5, 0.0}}},
+			// days with a team of retraction rows only: none
+			{rows: nil},
 		},
-		errs: []error{nil, nil},
+		errs: []error{nil, nil, nil},
 	}
 	result, err := Resolve(context.Background(), client, "org-1", mustDate(t, "2026-08-01"), mustDate(t, "2026-08-31"), nil, nil)
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
-	if client.calls != 2 {
-		t.Fatalf("calls = %d, want 2", client.calls)
+	if client.calls != 3 {
+		t.Fatalf("calls = %d, want 3 (user metrics, team metrics, retracted team days)", client.calls)
 	}
 	if len(result.Signals) != 2 {
 		t.Fatalf("expected 2 signals (union of days), got %d: %+v", len(result.Signals), result.Signals)

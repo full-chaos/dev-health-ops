@@ -11,6 +11,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph/model"
+	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse/liverow"
 )
 
 const (
@@ -219,7 +220,9 @@ HAVING data_days >= 5
 ORDER BY data_days DESC
 LIMIT 500`
 
-const teamFlowStatement = `SELECT
+// A retraction row (see package liverow) is left out: it is not a day of data
+// of its team, and the 0 it holds in wip_congestion_ratio is not a measured 0.
+var teamFlowStatement = `SELECT
     team_id AS entity_id,
     uniqExact(day) AS data_days,
     toNullable(avg(cycle_time_p50_hours)) AS cycle_time_p50_hours,
@@ -229,6 +232,7 @@ FROM work_item_metrics_daily FINAL
 WHERE day >= today() - {window_days:UInt32}@@TEAM@@
   AND org_id = {org_id:String}
   AND team_id != ''
+  AND ` + liverow.Predicate("work_item_metrics_daily", "") + `
 GROUP BY team_id
 HAVING data_days >= 5
 ORDER BY data_days DESC

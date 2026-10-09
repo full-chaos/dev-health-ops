@@ -3,6 +3,8 @@ package report
 import (
 	"fmt"
 	"strings"
+
+	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse/liverow"
 )
 
 // CHAOS-4246: dedup sources for re-run-safe daily rollup tables, mirroring
@@ -154,7 +156,25 @@ func averageExpression(table, metric string) string {
 // append-only daily table, or the bare table name otherwise (a table this
 // package reads that carries no known re-drive risk, e.g. a single-write
 // snapshot table).
+//
+// For a table with a live-row rule (package liverow) the source also leaves
+// out the retraction rows: the newest row of a key the compute no longer
+// produces (a retired team id) holds 0 in every count and is not a
+// measurement. buildChartQuery averages most metrics, so each such row would
+// be one more sample of 0, and a chart grouped by team would show the retired
+// id as a team. The rule is applied to the rows that FINAL or LIMIT 1 BY
+// kept, never before: a filter that ran first would drop the retraction row
+// and serve the older row it replaced.
 func dedupFromSource(table string) string {
+	source := latestGenerationSource(table)
+	if !liverow.Registered(table) {
+		return source
+	}
+	return fmt.Sprintf("(SELECT * FROM %s WHERE %s) AS %s", source, liverow.Predicate(table, ""), table)
+}
+
+// latestGenerationSource is the newest row of each key of table.
+func latestGenerationSource(table string) string {
 	if rerunDedupedDailyTables[table] {
 		return table + " FINAL"
 	}

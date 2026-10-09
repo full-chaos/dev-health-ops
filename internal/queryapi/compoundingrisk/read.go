@@ -20,6 +20,7 @@ import (
 	"github.com/full-chaos/dev-health-go/clickhouse"
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/activeteams"
+	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse/liverow"
 )
 
 // QueryClient is the narrow ClickHouse boundary this package needs.
@@ -74,6 +75,14 @@ func (l idList) bounded() []string {
 
 // repoIDFilter is the predicate that keeps stored repo rows whose scope id
 // names a repository of the org by id or by full name.
+// measuredRowHaving keeps a scope id only when its newest row of the day is a
+// measurement (package liverow). The daily family writes a retraction row over
+// the key of a team id it no longer produces. That row has a NULL score, like
+// the row of a team that was measured with too little data, but it is not a
+// team: it must not be listed as a point with no score, and it must not make
+// a day look as if it held team rows.
+var measuredRowHaving = "\n                HAVING " + liverow.NewestPredicate("compounding_risk_daily", "")
+
 const repoIDFilter = `
                   AND scope_id IN (
                       SELECT toString(id) FROM repos
@@ -121,7 +130,7 @@ func latestDay(ctx context.Context, client QueryClient, orgID, scope string, ids
 		}
 	}
 	query += `
-                GROUP BY day, scope_id
+                GROUP BY day, scope_id` + measuredRowHaving + `
             )
             GROUP BY day
         )
@@ -220,7 +229,7 @@ func latestRows(ctx context.Context, client QueryClient, orgID string, day time.
 			bindings = append(bindings, clickhouse.Binding{Name: "scope_ids", Value: ids.bounded()})
 		}
 	}
-	query += fmt.Sprintf("\n    GROUP BY scope_id\n)\nORDER BY score DESC NULLS LAST\nLIMIT %d", maxRows)
+	query += fmt.Sprintf("\n    GROUP BY scope_id%s\n)\nORDER BY score DESC NULLS LAST\nLIMIT %d", measuredRowHaving, maxRows)
 
 	rs, err := client.Query(ctx, query, bindings)
 	if err != nil {

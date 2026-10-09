@@ -4,6 +4,7 @@ import (
 	"context"
 	stddriver "database/sql/driver"
 	"errors"
+	"io"
 	"testing"
 	"time"
 
@@ -38,9 +39,15 @@ func (stubDriverConn) Exec(context.Context, string, ...any) error { panic("stub:
 func (stubDriverConn) AsyncInsert(context.Context, string, bool, ...any) error {
 	panic("stub: AsyncInsert")
 }
-func (stubDriverConn) Ping(context.Context) error                  { panic("stub: Ping") }
-func (stubDriverConn) Stats() chdriver.Stats                       { panic("stub: Stats") }
-func (stubDriverConn) Close() error                                { panic("stub: Close") }
+func (stubDriverConn) Ping(context.Context) error { panic("stub: Ping") }
+func (stubDriverConn) Stats() chdriver.Stats      { panic("stub: Stats") }
+func (stubDriverConn) Close() error               { panic("stub: Close") }
+func (stubDriverConn) QueryFormat(context.Context, string, string, ...any) (io.ReadCloser, error) {
+	panic("stub: QueryFormat")
+}
+func (stubDriverConn) InsertFormat(context.Context, string, string, io.Reader) error {
+	panic("stub: InsertFormat")
+}
 func (stubDriverConn) CheckNamedValue(*stddriver.NamedValue) error { panic("stub: CheckNamedValue") }
 
 func mustParseDay(t *testing.T, value string) time.Time {

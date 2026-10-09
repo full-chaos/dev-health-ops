@@ -272,7 +272,7 @@ ORDER BY bucket ASC, value DESC, dimension_value ASC
 // (chris 2026-08-31 04:18, Option B), the SAME shape and SAME product
 // ruling CHAOS-4650 applied to breakdown.go's breakdownRow.Value; see
 // that doc comment for the full mechanism writeup (verified against
-// pinned clickhouse-go v2.47.0: Nullable.ScanRow only recognises **T
+// pinned clickhouse-go v2.48.0: Nullable.ScanRow only recognises **T
 // for its NULL branch -- a bare *float64 destination never observes the
 // NULL at all and silently keeps its zero-initialised 0.0). CompileTimeseries
 // wraps every measure expression in toFloat64(...), which does NOT

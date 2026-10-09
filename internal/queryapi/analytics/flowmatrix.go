@@ -966,7 +966,7 @@ func ExecuteFlowMatrix(ctx context.Context, client QueryClient, nodesQuery, edge
 // product ruling CHAOS-4650/CHAOS-4657 applied to breakdown.go's
 // breakdownRow.Value / timeseries.go's ExecuteTimeseries; see
 // breakdown.go's doc comment for the full mechanism writeup (verified
-// against pinned clickhouse-go v2.47.0: Nullable.ScanRow only
+// against pinned clickhouse-go v2.48.0: Nullable.ScanRow only
 // recognises **T for its NULL branch -- a bare *float64 destination
 // never observes the NULL at all and silently keeps its
 // zero-initialised 0.0).

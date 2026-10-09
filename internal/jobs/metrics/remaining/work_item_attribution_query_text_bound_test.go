@@ -23,7 +23,7 @@ import (
 const clickhouseMaxQuerySize = 262144
 
 // renderedForClickHouse renders query the way clickhouse-go's bindPositional
-// does (clickhouse-go v2.47.0 bind.go: format(): a string is quoted with `\`
+// does (clickhouse-go v2.48.0 bind.go: format(): a string is quoted with `\`
 // -> `\\` and `'` -> `\'`; a slice is `[` + elements joined by ", " + `]`), so
 // the length asserted below is the length of the text the server would read.
 // time.Time is rendered as a fixed-width literal; it is the same size for every

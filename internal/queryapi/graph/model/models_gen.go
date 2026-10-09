@@ -1062,6 +1062,8 @@ type MetricDelta struct {
 	// Whether the comparison window has one or more stored source rows.
 	HasPriorData bool         `json:"hasPriorData"`
 	Spark        []SparkPoint `json:"spark"`
+	// Why change failure rate has a value or not (CHAOS-8981): measured (the value may be 0), unknown_no_incident_evidence (deployments, and no incident tied to the scope in the window) or not_applicable_no_deployments. Null when the window holds no stored counts, and for every other metric.
+	RateState *string `json:"rateState,omitempty"`
 }
 
 type MetricLineage struct {
@@ -1117,6 +1119,8 @@ type OperatingReviewMetric struct {
 	HasData bool `json:"hasData"`
 	// Whether the request's team selection narrows this metric (CHAOS-8516).
 	Scope OperatingReviewMetricScope `json:"scope"`
+	// Why change failure rate has a value or not (CHAOS-8981): measured (the value may be 0), unknown_no_incident_evidence (deployments, and no incident tied to the organization in the week) or not_applicable_no_deployments. Null when the week holds no stored counts, and for every other metric.
+	RateState *string `json:"rateState,omitempty"`
 }
 
 type OperatingReviewSection struct {

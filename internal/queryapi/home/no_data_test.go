@@ -7,6 +7,8 @@ import (
 	"time"
 
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
+
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/changefailure"
 )
 
 // TestBuildResponseEmptyCurrentWindowIsNoData guards the distinction between
@@ -26,6 +28,14 @@ func TestBuildResponseEmptyCurrentWindowIsNoData(t *testing.T) {
 			strings.Contains(query, "FROM cicd_metrics_daily") {
 			if strings.Contains(query, "AS row_count") {
 				return &fixtureRowScanner{rows: [][]any{{int64(0), 0.0}}}, nil
+			}
+			return &fixtureRowScanner{}, nil
+		}
+		// Change failure rate: an empty window sums to zeros over zero stored
+		// rows, which the shared rule reads as no stored counts.
+		if strings.Contains(query, "FROM repo_change_failure_daily") && !strings.Contains(query, "delta_pct") {
+			if strings.Contains(query, changefailure.ViewSumsSQL) {
+				return &fixtureRowScanner{rows: [][]any{{uint64(0), uint64(0), uint64(0), uint64(0), uint64(0), uint64(0)}}}, nil
 			}
 			return &fixtureRowScanner{}, nil
 		}
@@ -77,6 +87,9 @@ func TestBuildResponseNoCurrentDataDoesNotTurnPriorDataIntoAClaim(t *testing.T) 
 			strings.Contains(query, "FROM deploy_metrics_daily") ||
 			strings.Contains(query, "FROM cicd_metrics_daily")) && strings.Contains(query, "AS row_count") {
 			return &fixtureRowScanner{rows: [][]any{{int64(0), 0.0}}}, nil
+		}
+		if strings.Contains(query, "FROM repo_change_failure_daily") && strings.Contains(query, changefailure.ViewSumsSQL) {
+			return &fixtureRowScanner{rows: [][]any{{uint64(0), uint64(0), uint64(0), uint64(0), uint64(0), uint64(0)}}}, nil
 		}
 		if strings.Contains(query, "FROM work_item_state_durations_daily") {
 			return &fixtureRowScanner{}, nil

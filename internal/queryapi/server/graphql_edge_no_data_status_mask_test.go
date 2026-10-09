@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -120,5 +121,66 @@ func TestNoDataStatusMaskDoesNotHideAZeroWeekWithStoredRows(t *testing.T) {
 	}
 	if noDataStatusNormalize(request, python, tablesHoldRows) == noDataStatusNormalize(request, goClearedOnStoredZero, tablesHoldRows) {
 		t.Fatal("with stored rows in the fixture the cleared status of a stored 0-vs-0 week is hidden")
+	}
+}
+
+// The ruled divergence of operatingReview.sections.metrics (CHAOS-8981): query-api serves two metrics the
+// recorded Python answer never had, deployment_failure_rate (the deployment-status ratio that used to be
+// stored under the name change_failure_rate) and revert_rate. Only those two metric objects are removed, on
+// operating review answers, from both sides; every other metric and field is still compared by Diff. The
+// raw Go answer is asserted to carry both (goOnlyMetricsInspect), so dropping one fails instead of being masked.
+var goOnlyMetricObject = regexp.MustCompile(`,\{"key":"(?:deployment_failure_rate|revert_rate)",[^{}]*"delta":\{[^{}]*\}[^{}]*\}`)
+
+func goOnlyMetricsNormalize(request venueoracle.Request, body string) string {
+	if !isOperatingReviewRequest(request) {
+		return body
+	}
+	return goOnlyMetricObject.ReplaceAllString(body, "")
+}
+
+func goOnlyMetricsInspect(request venueoracle.Request, goBody string) (bool, string) {
+	if !isOperatingReviewRequest(request) || !strings.HasPrefix(goBody, `{"data":{`) {
+		return true, ""
+	}
+	for _, key := range []string{"deployment_failure_rate", "revert_rate"} {
+		if !strings.Contains(goBody, `"key":"`+key+`"`) {
+			return false, "query-api must serve the metric " + key + " (CHAOS-8981)"
+		}
+	}
+	return true, ""
+}
+
+// A pure test, so it runs in the unit leg and not only with the venue.
+func TestGoOnlyMetricsMaskRemovesOnlyThoseTwoMetrics(t *testing.T) {
+	request := venueoracle.Request{Name: "POST operatingReview"}
+	delta := `"delta":{"value":0,"priorValue":0,"absolute":0,"percent":0,"status":"","hasPriorData":false}`
+	metric := func(key string) string {
+		return `{"key":"` + key + `","label":"L","value":0,"unit":"ratio",` + delta + `,"hasData":false}`
+	}
+	wrap := func(keys ...string) string {
+		parts := make([]string, 0, len(keys))
+		for _, key := range keys {
+			parts = append(parts, metric(key))
+		}
+		return `{"data":{"operatingReview":{"metrics":[` + strings.Join(parts, ",") + `]}}}`
+	}
+	python := wrap("deployments_count", "change_failure_rate", "incidents_count")
+	goBody := wrap("deployments_count", "change_failure_rate", "deployment_failure_rate", "revert_rate", "incidents_count")
+	if goOnlyMetricsNormalize(request, goBody) != python {
+		t.Fatalf("the two Go-only metrics are not removed:\n%s", goOnlyMetricsNormalize(request, goBody))
+	}
+	// Another metric that differs is not masked.
+	if goOnlyMetricsNormalize(request, wrap("deployments_count", "other_metric", "incidents_count")) == python {
+		t.Fatal("a different metric was masked")
+	}
+	// Another operation is left alone.
+	if other := (venueoracle.Request{Name: "POST home"}); goOnlyMetricsNormalize(other, goBody) != goBody {
+		t.Fatal("an answer of another operation was changed")
+	}
+	if ok, _ := goOnlyMetricsInspect(request, python); ok {
+		t.Fatal("a Go answer without the two metrics passes the inspection")
+	}
+	if ok, why := goOnlyMetricsInspect(request, goBody); !ok {
+		t.Fatalf("the intended Go answer fails the inspection: %s", why)
 	}
 }

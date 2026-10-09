@@ -1387,6 +1387,16 @@
       "unit": "ratio"
     },
     {
+      "canonical_name": "revert_rate",
+      "dimensions": [
+        "repo",
+        "day"
+      ],
+      "display_name": "Revert Rate",
+      "source_table": "repo_metrics_daily",
+      "unit": "ratio"
+    },
+    {
       "canonical_name": "review_load_top_reviewer_ratio",
       "dimensions": [
         "repo",

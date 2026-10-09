@@ -1,5 +1,7 @@
 package home
 
+import "github.com/full-chaos/dev-health-ops/internal/jobs/metrics/changefailure"
+
 // metricSpec ports one entry of _METRICS (services/home.py:63-174).
 type metricSpec struct {
 	Metric     string
@@ -25,7 +27,9 @@ var metrics = []metricSpec{
 	{Metric: "churn", Label: "Code Churn", Unit: "loc", Table: "repo_metrics_daily", Column: "total_loc_touched", Aggregator: "sum", Transform: identityTransform, Scope: "repo"},
 	{Metric: "wip_saturation", Label: "WIP Saturation", Unit: "%", Table: "work_item_metrics_daily", Column: "wip_congestion_ratio", Aggregator: "avg", Transform: percentTransform, Scope: "team"},
 	{Metric: "blocked_work", Label: "Blocked Work", Unit: "hours", Table: "work_item_state_durations_daily", Column: "duration_hours", Aggregator: "sum", Transform: identityTransform, Scope: "team"},
-	{Metric: "change_failure_rate", Label: "Change Failure Rate", Unit: "%", Table: "repo_metrics_daily", Column: "change_failure_rate", Aggregator: "avg", Transform: percentTransform, Scope: "repo"},
+	// Incident-based (CHAOS-8981): a ratio of the window's summed counts,
+	// never an average of daily ratios. See changefailure.WindowRateSQL.
+	{Metric: "change_failure_rate", Label: "Change Failure Rate", Unit: "%", Table: changefailure.Table, Column: "change_failure_rate", Aggregator: "ratio", Transform: percentTransform, Scope: "repo"},
 	{Metric: "rework_ratio", Label: "Rework Ratio", Unit: "%", Table: "repo_metrics_daily", Column: "rework_churn_ratio_30d", Aggregator: "avg", Transform: percentTransform, Scope: "repo"},
 	{Metric: "pr_rework_ratio", Label: "PR Rework Ratio", Unit: "%", Table: "repo_metrics_daily", Column: "pr_rework_ratio", Aggregator: "avg", Transform: percentTransform, Scope: "repo"},
 	{Metric: "ci_success", Label: "CI Success Rate", Unit: "%", Table: "cicd_metrics_daily", Column: "success_rate", Aggregator: "avg", Transform: percentTransform, Scope: "repo"},
@@ -44,6 +48,7 @@ var dedupByComputedAt = map[string][]string{
 	"incident_metrics_daily":          {"day", "repo_id"},
 	"testops_release_confidence":      {"day", "repo_id"},
 	"testops_pipeline_stability":      {"day", "repo_id"},
+	changefailure.Table:               {"day", "repo_id"},
 }
 
 func metricTable(metric string) string {

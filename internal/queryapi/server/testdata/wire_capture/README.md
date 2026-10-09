@@ -247,38 +247,58 @@ to the query source text.
 
 # home wire-capture fixture
 
-`home_captured.graphql` (`Home`) is the current wire-form text of
-`HOME_QUERY` (`web/src/lib/graphql/queries.ts`). It was captured on
-2026-10-04 from web commit `9e4315766c6a0345a9bd84d5a5038a6f1b4da52d`
-with the normal `graphqlFetch` path, using
-`scripts/capture-graphql-wire-fixture.ts --operation home`.
-The capture imports the real `HOME_QUERY` and uses the same pinned urql
-client path that production uses. It is the source for
-`registeredHomeDocument`; it is not a hand-derived schema fixture.
+`home_captured.graphql` (`Home`) is the current registered text. It is
+NOT a capture: it is `home_v4_captured.graphql` plus the one line
+`rateState` in `deltas`, after `spark { ... }` (CHAOS-8981, the state of
+change failure rate), written in the form urql prints. No web build sends
+it yet. The web change that selects `rateState` must put the field at
+that place in `HOME_QUERY` and run
+`scripts/capture-graphql-wire-fixture.ts --operation home`; if the real
+capture differs from this file, the capture wins and this file and
+`registeredHomeDocument` move to it.
 
-`home_v3_captured.graphql` is the immediately preceding, real captured
-Home document. CHAOS-8102 preserves it while web builds roll over to the
-current document, which adds `HomeSignal.attribution`.
+`home_v4_captured.graphql` is the last real capture and the text every
+current web build sends: captured on 2026-10-04 from web commit
+`9e4315766c6a0345a9bd84d5a5038a6f1b4da52d` with the normal `graphqlFetch`
+path, using `scripts/capture-graphql-wire-fixture.ts --operation home`
+(the real `HOME_QUERY` through the same pinned urql client path that
+production uses). CHAOS-8981 keeps it as a legacy text.
+
+`home_v3_captured.graphql` is the real captured Home document before
+CHAOS-8102 added `HomeSignal.attribution`.
 `home_v2_captured.graphql` is the earlier text before CHAOS-8107 added
 `scopeDataConfidence`. `home_v1_captured.graphql` is the text before
 CHAOS-8169 added `deltas.hasData` and `deltas.hasPriorData`. The route maps
-all four digests to the `home` operation. Remove a legacy registration only
+all five digests to the `home` operation. Remove a legacy registration only
 with its cleanup ticket after no supported web build sends it.
 
 `query_route_wire_capture_test.go` verifies each registered text against
-its captured bytes. `query_route_home_no_data_test.go` verifies the
-current and three legacy documents’ selections and that all resolve to `home`.
+its file's bytes. `query_route_home_no_data_test.go` verifies the
+current and four legacy documents’ selections and that all resolve to `home`.
 
 | fixture | sha256(wire form) |
 | --- | --- |
-| `home_captured.graphql` | `f920722d8e56ae44b85ce535ab0364ab10eb6baf70da1b49cc60a1f915abe7a1` |
+| `home_captured.graphql` | `5351e92b61599543ce5913591687ac01f642e27b6ab01577357e442b15e27dce` |
+| `home_v4_captured.graphql` | `f920722d8e56ae44b85ce535ab0364ab10eb6baf70da1b49cc60a1f915abe7a1` |
 | `home_v3_captured.graphql` | `cff105a9f8c5d5f2363f3d50510db34081c84c9c652afe380975b49c15a4c6eb` |
 | `home_v2_captured.graphql` | `c02bb493d709b8c445e2ac711bdf93d6a2cdb7933d1073a20bf7dad3ffd06545` |
 | `home_v1_captured.graphql` | `9776798e809030868e3a7fc8643b06d122573f03a3c48a7710d86b1842b33554` |
 
-For contrast, `sha256(HOME_QUERY.trim())` on the raw, unprinted current
-source text is `bcba9a4e032d9664672cc828ac4cfe9406807139b13d2f66fe04b3ee3787dc09`.
-It differs from the current wire-form digest because the source text has
+For contrast, `sha256(HOME_QUERY.trim())` on the raw, unprinted source
+text of that web commit is `bcba9a4e032d9664672cc828ac4cfe9406807139b13d2f66fe04b3ee3787dc09`.
+It differs from every wire-form digest because the source text has
 no injected `__typename`. The negative control in
 `TestRegisteredHomeDocument_MatchesCapturedWireFixture` pins that
 difference.
+
+# operatingReview wire fixture
+
+`operatingreview_captured.graphql` is the current registered text. Like
+the Home file it is NOT a capture: it is
+`operatingreview_v3_captured.graphql` plus the one line `rateState` in
+`metrics`, after `scope` (CHAOS-8981). `operatingreview_v3_captured.graphql`
+(digest `fef895a373f536846afdb3bb93ef12dd03d8af8d23f3663b290c350e622ed8c3`)
+is the text every current web build sends. The web change that selects
+`rateState` must put the field at that place in `OPERATING_REVIEW_QUERY`,
+and its real wire text wins over this file if they differ. The current
+digest is `54a442197685a26436f6287e8377a26b6451de33e251e857afa30abe32df9ac9`.

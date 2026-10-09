@@ -11,6 +11,8 @@ import (
 	"time"
 
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
+
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/changefailure"
 )
 
 // fixtureRowScanner replays a fixed slice of pre-built rows -- same shape
@@ -142,6 +144,11 @@ type explainQueryDispatch struct {
 	// workItemProviderRows answers fetchWorkItemProviders (CHAOS-8910): one provider per row.
 	workItemProviderRows [][]any
 
+	// changeFailureViewRows answers fetchChangeFailureView: deployments,
+	// failed native, failed heuristic, incidents direct, incidents via
+	// deployment, stored rows (uint64 each). No row reads as all zeros.
+	changeFailureViewRows [][]any
+
 	// resolveRepoIDMiss answers a resolveRepoID read with no row (a
 	// reference that resolves to no repository).
 	resolveRepoIDMiss bool
@@ -164,6 +171,11 @@ func (d *explainQueryDispatch) handle(t *testing.T, query string, bindings []dhc
 		return &fixtureRowScanner{rows: [][]any{d.resolveRepoIDRow}}, nil
 	case strings.Contains(query, "FROM repos FINAL") && d.resolveRepoIDMiss:
 		return &fixtureRowScanner{}, nil
+	case strings.Contains(query, changefailure.ViewSumsSQL):
+		// fetchChangeFailureView: the window's summed counts and stored-row
+		// count, which the shared rule turns into the value, its state and
+		// its link tier.
+		return &fixtureRowScanner{rows: d.changeFailureViewRows}, nil
 	case strings.Contains(query, "delta_pct"):
 		return &fixtureRowScanner{rows: d.driverRows}, nil
 	case strings.Contains(query, "ORDER BY value DESC"):

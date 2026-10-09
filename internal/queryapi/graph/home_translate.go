@@ -126,6 +126,7 @@ func homeResultFromResponse(resp *home.Response) *model.HomeResult {
 			HasData:      d.HasData,
 			HasPriorData: d.HasPriorData,
 			Spark:        homeSparkFromResponse(d.Spark),
+			RateState:    d.RateState,
 		})
 	}
 

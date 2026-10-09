@@ -3,11 +3,13 @@ package daily
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/google/uuid"
 
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/changefailure"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/daily/repouser"
 )
 
@@ -29,6 +31,7 @@ const repoUserCommitWindowDays = 30
 // package's pure Compute kernel and loader/writer, and carries no
 // additional fidelity notes of its own.
 type RepoUserCommitExecutor struct {
+	conn   driver.Conn
 	loader *repouser.ClickHouseLoader
 	writer *repouser.Writer
 	nowUTC func() time.Time
@@ -54,7 +57,7 @@ func NewRepoUserCommitExecutor(conn driver.Conn) (*RepoUserCommitExecutor, error
 		return nil, fmt.Errorf("%w: %v", errRepoUserCommitUnavailable, err)
 	}
 	return &RepoUserCommitExecutor{
-		loader: loader, writer: writer,
+		conn: conn, loader: loader, writer: writer,
 		nowUTC: func() time.Time { return time.Now().UTC() },
 	}, nil
 }
@@ -63,7 +66,7 @@ func NewRepoUserCommitExecutor(conn driver.Conn) (*RepoUserCommitExecutor, error
 func (executor *RepoUserCommitExecutor) ComputeFamily(
 	ctx context.Context, run Run, partition Partition,
 ) (int, error) {
-	if executor == nil || executor.loader == nil || executor.writer == nil {
+	if executor == nil || executor.conn == nil || executor.loader == nil || executor.writer == nil {
 		return 0, errRepoUserCommitUnavailable
 	}
 	if run.OrganizationID == "" || run.TargetDay.IsZero() {
@@ -115,11 +118,48 @@ func (executor *RepoUserCommitExecutor) ComputeFamily(
 	}
 
 	computedAt := executor.nowUTC()
+
+	// Change failure rate (CHAOS-8981): the day's deployments, the incidents
+	// that started on the day with their direct repository tie, and the
+	// persisted via-deployment tier. The same clock reading is the mapping
+	// as-of, as in the work_graph_edges family.
+	deployments, err := LoadWorkGraphEdgeDeployments(ctx, executor.conn, run.OrganizationID, repoIDs, dayStart, dayEnd)
+	if err != nil {
+		return 0, err
+	}
+	startedIncidents, err := LoadIncidentsStarted(ctx, executor.conn, run.OrganizationID, repoIDs, dayStart, dayEnd, computedAt, nil)
+	if err != nil {
+		return 0, err
+	}
+	viaDeployment, err := LoadViaDeploymentIncidentLinks(ctx, executor.conn, run.OrganizationID, repoIDs, dayStart, dayEnd, computedAt)
+	if err != nil {
+		return 0, err
+	}
+	changeFailure, err := changeFailureCounts(deployments, startedIncidents, viaDeployment, run.OrganizationID, computedAt)
+	if err != nil {
+		return 0, err
+	}
+	storedChangeFailure, err := LoadStoredChangeFailureRepositories(ctx, executor.conn, run.OrganizationID, repoIDs, dayStart)
+	if err != nil {
+		return 0, err
+	}
+	var changeFailureTotal changefailure.Counts
+	for _, counts := range changeFailure {
+		changeFailureTotal = changeFailureTotal.Add(counts)
+	}
+	slog.Default().DebugContext(ctx, "metrics daily: change failure counts",
+		"org_id", run.OrganizationID, "day", dayStart.Format(time.DateOnly), "partition_id", partition.ID,
+		"repositories", len(changeFailure), "deployments", changeFailureTotal.Deployments,
+		"failed_native", changeFailureTotal.FailedNative, "failed_heuristic", changeFailureTotal.FailedHeuristic,
+		"incidents_direct", changeFailureTotal.IncidentsDirect, "incidents_via_deployment", changeFailureTotal.IncidentsViaDeployment,
+		"ambiguous_links", viaDeployment.Ambiguous, "stored_repositories", len(storedChangeFailure))
+
 	result := repouser.Compute(
 		dayStart, commits, prs, reviews, computedAt,
 		repouser.DefaultNormalizeIdentity, 1000,
 		mttrByRepo, reworkByRepo, singleOwnerByRepo, busFactorByRepo, giniByRepo,
 	)
+	repouser.ApplyChangeFailure(&result, dayStart, changeFailure, storedChangeFailure, computedAt)
 
 	repoRows, userRows, commitRows, err := executor.writer.WriteResult(ctx, result, run.OrganizationID)
 	if err != nil {
@@ -134,7 +174,11 @@ func (executor *RepoUserCommitExecutor) ComputeFamily(
 		// earlier one already landed rows must not read as a full refusal.
 		return wrapRepoUserCommitPartialWrite(repoRows+userRows+commitRows, err)
 	}
-	return repoRows + userRows + commitRows, nil
+	changeFailureRows, err := executor.writer.WriteChangeFailure(ctx, result.ChangeFailure, run.OrganizationID)
+	if err != nil {
+		return wrapRepoUserCommitPartialWrite(repoRows+userRows+commitRows+changeFailureRows, fmt.Errorf("write change failure: %w", err))
+	}
+	return repoRows + userRows + commitRows + changeFailureRows, nil
 }
 
 // wrapRepoUserCommitPartialWrite mirrors wrapAIGovernancePartialWrite's/

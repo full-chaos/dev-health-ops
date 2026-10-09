@@ -260,27 +260,28 @@ WHERE org_id = ? AND provider = ? AND source = ? AND team_id IN ?
 // returns, through the shared PlanOwnershipSnapshot rule (a repo full name
 // stands in for the project id). githubOrg is the GitHub org the run listed:
 // only rows whose repo full name starts with "<githubOrg>/" are read or closed.
-// listedTeamIDs is the set of teams whose repo
-// listing reached its end; a team outside it, and a run that listed no team,
+// readTeamIDs is every team whose repo listing returned: their open rows give
+// the first-seen valid_from. closableTeamIDs is the part of it that
+// decideOwnershipClose lets close; a team outside it, and a run with none,
 // closes nothing. An already-open grant keeps its first valid_from, so a
 // repeat run replaces the row instead of adding one. Rows of another org,
 // provider or source are never read and never closed.
 //
 // It returns the grants written and the rows closed.
 func (sink GitHubTeamCatalogClickHouseEffects) SnapshotTeamRepoOwnership(
-	ctx context.Context, orgID, githubOrg string, fresh []githubTeamRepoOwnershipRow, listedTeamIDs []string, at time.Time,
+	ctx context.Context, orgID, githubOrg string, fresh []githubTeamRepoOwnershipRow, readTeamIDs, closableTeamIDs []string, at time.Time,
 ) (written, closed int, err error) {
 	if sink.Conn == nil || strings.TrimSpace(orgID) == "" || strings.TrimSpace(githubOrg) == "" || at.IsZero() {
 		return 0, 0, ErrInvalidConfiguration
 	}
-	if len(listedTeamIDs) == 0 {
+	if len(readTeamIDs) == 0 {
 		return len(fresh), 0, sink.WriteTeamRepoOwnership(ctx, orgID, fresh)
 	}
-	open, err := sink.openProviderAccessRepoOwnership(ctx, orgID, githubOrg, listedTeamIDs)
+	open, err := sink.openProviderAccessRepoOwnership(ctx, orgID, githubOrg, readTeamIDs)
 	if err != nil {
 		return 0, 0, err
 	}
-	rows, closed := githubRepoOwnershipSnapshot(fresh, open, at, len(listedTeamIDs) > 0)
+	rows, closed := githubRepoOwnershipSnapshot(fresh, open, at, len(closableTeamIDs) > 0, closableTeamIDs)
 	if err := sink.WriteTeamRepoOwnership(ctx, orgID, rows); err != nil {
 		return 0, 0, err
 	}
@@ -291,10 +292,11 @@ func (sink GitHubTeamCatalogClickHouseEffects) SnapshotTeamRepoOwnership(
 // (PlanOwnershipSnapshot, a repo full name standing in for the project id) to
 // one run: the fresh grants on their first-seen valid_from, then the open rows
 // the snapshot no longer holds, closed at `at`. complete says every repo
-// listing the fresh rows come from reached its end; anything less closes
-// nothing. It returns the rows to write and how many of them close a row.
+// listing of the closable teams reached a confirmed end; anything less closes
+// nothing, and an open row of a team outside closable is never closed. It
+// returns the rows to write and how many of them close a row.
 func githubRepoOwnershipSnapshot(
-	fresh, open []githubTeamRepoOwnershipRow, at time.Time, complete bool,
+	fresh, open []githubTeamRepoOwnershipRow, at time.Time, complete bool, closable []string,
 ) ([]githubTeamRepoOwnershipRow, int) {
 	facts := func(rows []githubTeamRepoOwnershipRow) []OwnershipSnapshotRow {
 		out := make([]OwnershipSnapshotRow, len(rows))
@@ -303,7 +305,9 @@ func githubRepoOwnershipSnapshot(
 		}
 		return out
 	}
-	plan := PlanOwnershipSnapshot(OwnershipSnapshot{Fresh: facts(fresh), Complete: complete}, facts(open), at)
+	openFacts := facts(open)
+	plan := retainClosableRetractions(
+		PlanOwnershipSnapshot(OwnershipSnapshot{Fresh: facts(fresh), Complete: complete}, openFacts, at), openFacts, closable)
 	rows := make([]githubTeamRepoOwnershipRow, 0, len(fresh)+len(plan.Retract))
 	for index, row := range fresh {
 		row.ValidFrom = plan.ValidFrom[index]

@@ -735,3 +735,27 @@ WHERE id = $1::uuid AND org_id = $2`, runID, orgID, string(payload))
 		return nil
 	}
 }
+
+// teamCatalogScopeCensus implements providersync.OwnershipScopeCensus: the
+// count of the org's other ACTIVE integrations of one provider.
+type teamCatalogScopeCensus struct {
+	pool *pgxpool.Pool
+}
+
+func (census teamCatalogScopeCensus) CountActiveSiblingIntegrations(
+	ctx context.Context, orgID, provider, integrationID string,
+) (int, error) {
+	if census.pool == nil || orgID == "" || provider == "" || integrationID == "" {
+		return 0, providersync.ErrInvalidConfiguration
+	}
+	var siblings int
+	if err := census.pool.QueryRow(ctx, `
+SELECT count(*)
+FROM public.integrations
+WHERE integrations.org_id = $1 AND lower(trim(integrations.provider)) = $2
+  AND integrations.is_active AND integrations.id <> $3::uuid`,
+		orgID, strings.ToLower(strings.TrimSpace(provider)), integrationID).Scan(&siblings); err != nil {
+		return 0, err
+	}
+	return siblings, nil
+}

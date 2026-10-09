@@ -188,6 +188,10 @@ type githubTeamCatalogRows struct {
 	// It is the scope of the provider_access close: a team that is not here
 	// (listing failed, or repos were not selected) never has a row closed.
 	RepoListedTeamIDs []string
+	// RepoUnprovenTeamIDs is the part of RepoListedTeamIDs whose listing
+	// stopped without GitHub's end-of-list signal (ownershipListingProvesEnd):
+	// decideOwnershipClose keeps their rows open.
+	RepoUnprovenTeamIDs []string
 }
 
 // githubTeamID is the team id of a GitHub team slug ("gh:<slug>", see

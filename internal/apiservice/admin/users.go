@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"golang.org/x/crypto/bcrypt"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/audit"
@@ -203,10 +204,17 @@ func (h *handlers) getUser(w http.ResponseWriter, r *http.Request) {
 	policy.WriteModel(w, http.StatusOK, userResponseObject(target), nil)
 }
 
-// createUser is users.py's create_user: unauthenticated by design in the
-// Python route (no Depends(require_admin) on this one -- account
-// self-registration rides this same admin endpoint).
+// createUserRoles are the roles an add may give: "owner" moves only through
+// transfer-ownership.
+var createUserRoles = map[string]bool{"admin": true, "member": true, "viewer": true}
+
+// createUser is users.py's create_user plus the org membership the Python
+// route never wrote (CHAOS-8969): an org-scoped create (X-Org-Id, else a
+// non-superuser's own org claim) writes the user and its membership in one
+// transaction, because the org Users list reads users JOIN memberships. A
+// superuser with no org scope creates a platform user with no membership.
 func (h *handlers) createUser(w http.ResponseWriter, r *http.Request) {
+	caller := policy.UserFrom(r.Context())
 	ctx := r.Context()
 	body := bodyFromContext(ctx)
 	var errs pybody.Errors
@@ -214,6 +222,7 @@ func (h *handlers) createUser(w http.ResponseWriter, r *http.Request) {
 	var email, password, username, fullName, authProvider, authProviderID string
 	var isVerified, isSuperuser bool
 	var fullNamePresent, authProviderPresent, authProviderIDPresent bool
+	role, rolePresent := "member", false
 	if ok {
 		email, _ = errs.RequiredString(object, "email", 1, 0)
 		password, _ = errs.OptionalString(object, "password", 8, 128)
@@ -228,9 +237,26 @@ func (h *handlers) createUser(w http.ResponseWriter, r *http.Request) {
 		authProviderID, authProviderIDPresent = errs.OptionalString(object, "auth_provider_id", 0, 0)
 		isVerified, _ = errs.DefaultedBool(object, "is_verified")
 		isSuperuser, _ = errs.DefaultedBool(object, "is_superuser")
+		var roleValue string
+		if roleValue, rolePresent = errs.OptionalString(object, "role", 0, 0); rolePresent {
+			role = roleValue
+		}
 	}
 	if len(errs) > 0 {
 		policy.WriteJSON(w, http.StatusUnprocessableEntity, pybody.Detail(errs), nil)
+		return
+	}
+
+	orgID, scoped := h.createUserOrg(ctx, w, r, caller)
+	if !scoped {
+		return
+	}
+	if orgID == uuid.Nil && rolePresent {
+		policy.WriteDetail(w, http.StatusBadRequest, "A role needs an organization: send X-Org-Id", nil)
+		return
+	}
+	if orgID != uuid.Nil && !createUserRoles[role] {
+		policy.WriteDetail(w, http.StatusBadRequest, "Invalid role: "+role+" (use admin, member or viewer)", nil)
 		return
 	}
 
@@ -255,30 +281,90 @@ func (h *handlers) createUser(w http.ResponseWriter, r *http.Request) {
 	if authProviderIDPresent {
 		in.AuthProviderID = &authProviderID
 	}
-	if password != "" {
-		hashed, hashErr := passwordhash.Hash(password)
-		if hashErr != nil {
-			h.logger.ErrorContext(ctx, "admin: password hash failed", "error", hashErr)
-			policy.WriteInternal(w)
-			return
+	h.superuserGuardedWrite(ctx, w, policy.UserFrom(ctx), &isSuperuser, "create_user", func(g *superuserTx) func() {
+		if g.refuse() {
+			return nil
 		}
-		in.PasswordHash = &hashed
-	}
+		if password != "" {
+			hashed, hashErr := passwordhash.Hash(password)
+			if hashErr != nil {
+				h.logger.ErrorContext(ctx, "admin: password hash failed", "error", hashErr)
+				policy.WriteInternal(w)
+				return nil
+			}
+			in.PasswordHash = &hashed
+		}
+		created, err := h.insertUserWithMembership(ctx, r, g.tx, g.store, in, orgID, role, caller.ID)
+		switch {
+		case err == errEmailExists:
+			policy.WriteDetail(w, http.StatusBadRequest, "User with email "+email+" already exists", nil)
+			return nil
+		case err == errUsernameExists:
+			policy.WriteDetail(w, http.StatusBadRequest, "User with username "+username+" already exists", nil)
+			return nil
+		case err != nil:
+			h.logger.ErrorContext(ctx, "admin: create user failed", "error", err)
+			policy.WriteInternal(w)
+			return nil
+		}
+		return func() { policy.WriteModel(w, http.StatusCreated, userResponseObject(created), nil) }
+	})
+}
 
-	created, err := h.store.insertUser(ctx, in)
-	switch {
-	case err == errEmailExists:
-		policy.WriteDetail(w, http.StatusBadRequest, "User with email "+email+" already exists", nil)
-		return
-	case err == errUsernameExists:
-		policy.WriteDetail(w, http.StatusBadRequest, "User with username "+username+" already exists", nil)
-		return
-	case err != nil:
-		h.logger.ErrorContext(ctx, "admin: create user failed", "error", err)
-		policy.WriteInternal(w)
-		return
+// createUserOrg is the organization an add joins the new user to: X-Org-Id
+// when sent, else a non-superuser's org claim; uuid.Nil is a superuser's
+// platform create. ok is false when a response was already written.
+func (h *handlers) createUserOrg(ctx context.Context, w http.ResponseWriter, r *http.Request, caller *policy.User) (uuid.UUID, bool) {
+	raw := r.Header.Get("X-Org-Id")
+	if raw == "" {
+		if caller.IsSuperuser {
+			return uuid.Nil, true
+		}
+		claim, ok := orgIDForNonSuperuser(w, caller)
+		if !ok {
+			return uuid.Nil, false
+		}
+		raw = claim
 	}
-	policy.WriteModel(w, http.StatusCreated, userResponseObject(created), nil)
+	orgID, err := uuid.Parse(raw)
+	if err != nil {
+		policy.WriteDetail(w, http.StatusBadRequest, "Invalid organization id", nil)
+		return uuid.Nil, false
+	}
+	if !h.ensureOrgAdminAccess(ctx, w, caller, orgID) {
+		return uuid.Nil, false
+	}
+	return orgID, true
+}
+
+// insertUserWithMembership writes, in the caller's transaction, the user and,
+// when orgID is set, its membership and the admin audit row: the transaction
+// commits all of them or none. A platform create (orgID nil) writes no audit
+// row: audit_logs.org_id is NOT NULL.
+func (h *handlers) insertUserWithMembership(ctx context.Context, r *http.Request, tx pgx.Tx, store pgStore, in userCreateInput, orgID uuid.UUID, role string, actor uuid.UUID) (*fullUser, error) {
+	created, err := store.insertUser(ctx, in)
+	if err != nil || orgID == uuid.Nil {
+		return created, err
+	}
+	if _, err := store.insertMembershipTx(ctx, tx, orgID, created.ID, role, &actor); err != nil {
+		return nil, err
+	}
+	changes := pyjson.NewObject()
+	changes.Set("email", created.Email)
+	changes.Set("role", role)
+	encodedChanges, err := pyjson.Marshal(changes)
+	if err != nil {
+		return nil, err
+	}
+	description := "User created and added to organization"
+	if _, err := h.audit.Write(ctx, tx, requestAuditEntry(r, audit.Entry{
+		OrgID: orgID, UserID: &actor, Action: audit.ActionCreate,
+		ResourceType: audit.ResourceUser, ResourceID: created.ID.String(),
+		Description: &description, Changes: encodedChanges,
+	})); err != nil {
+		return nil, err
+	}
+	return created, nil
 }
 
 // updateUser is users.py's update_user.
@@ -344,25 +430,29 @@ func (h *handlers) updateUser(w http.ResponseWriter, r *http.Request) {
 		policy.WriteJSON(w, http.StatusUnprocessableEntity, pybody.Detail(errs), nil)
 		return
 	}
-
-	updated, err := h.store.updateUser(ctx, targetID, patch)
-	switch {
-	case err == errEmailExists:
-		policy.WriteDetail(w, http.StatusBadRequest, "Email "+deref(patch.Email)+" already in use", nil)
-		return
-	case err == errUsernameExists:
-		policy.WriteDetail(w, http.StatusBadRequest, "Username "+deref(patch.Username)+" already in use", nil)
-		return
-	case err != nil:
-		h.logger.ErrorContext(ctx, "admin: update user failed", "error", err)
-		policy.WriteInternal(w)
-		return
-	}
-	if updated == nil {
-		policy.WriteDetail(w, http.StatusNotFound, "User not found", nil)
-		return
-	}
-	policy.WriteModel(w, http.StatusOK, userResponseObject(updated), nil)
+	h.superuserGuardedWrite(ctx, w, user, patch.IsSuperuser, "update_user", func(g *superuserTx) func() {
+		if g.refuse(targetID) {
+			return nil
+		}
+		updated, err := g.store.updateUser(ctx, targetID, patch)
+		switch {
+		case err == errEmailExists:
+			policy.WriteDetail(w, http.StatusBadRequest, "Email "+deref(patch.Email)+" already in use", nil)
+			return nil
+		case err == errUsernameExists:
+			policy.WriteDetail(w, http.StatusBadRequest, "Username "+deref(patch.Username)+" already in use", nil)
+			return nil
+		case err != nil:
+			h.logger.ErrorContext(ctx, "admin: update user failed", "error", err)
+			policy.WriteInternal(w)
+			return nil
+		}
+		if updated == nil {
+			policy.WriteDetail(w, http.StatusNotFound, "User not found", nil)
+			return nil
+		}
+		return func() { policy.WriteModel(w, http.StatusOK, userResponseObject(updated), nil) }
+	})
 }
 
 // setUserPassword is users.py's set_user_password: rate-limited
@@ -417,103 +507,96 @@ func (h *handlers) setUserPassword(w http.ResponseWriter, r *http.Request) {
 	if !h.ensureUserInScope(ctx, w, user, orgID, targetID) {
 		return
 	}
-
-	actingID, parseErr := uuid.Parse(user.UserID)
-	if parseErr != nil {
-		policy.WriteDetail(w, http.StatusForbidden, "Admin password verification failed", nil)
-		return
-	}
-	admin, err := h.store.fullUserByID(ctx, actingID)
-	if err != nil {
-		h.logger.ErrorContext(ctx, "admin: set password acting-admin lookup failed", "error", err)
-		policy.WriteInternal(w)
-		return
-	}
-	if admin == nil || admin.PasswordHash == nil {
-		policy.WriteDetail(w, http.StatusForbidden, "Admin password verification failed", nil)
-		return
-	}
-	if len(adminPassword) > 72 {
-		// Python's route calls bcrypt.checkpw directly (not the
-		// try/except-wrapped _verify_password helper), so a plaintext
-		// longer than 72 bytes RAISES ValueError there -- unhandled, the
-		// generic 500, never "verification failed" (verified live:
-		// bcrypt.checkpw(b"a"*73, hash) raises "password cannot be longer
-		// than 72 bytes"). Go's bcrypt.CompareHashAndPassword has no such
-		// check (blowfish's own key expansion silently processes the
-		// extra bytes and the compare just falls through to an ordinary
-		// mismatch), so this route checks the length itself to match.
-		h.logger.ErrorContext(ctx, "admin: set password acting-admin password exceeds bcrypt's 72-byte limit")
-		policy.WriteInternal(w)
-		return
-	}
-	if bcrypt.CompareHashAndPassword([]byte(*admin.PasswordHash), []byte(adminPassword)) != nil {
-		policy.WriteDetail(w, http.StatusForbidden, "Admin password verification failed", nil)
-		return
-	}
-
-	newHash, hashErr := passwordhash.Hash(newPassword)
-	if hashErr != nil {
-		h.logger.ErrorContext(ctx, "admin: password hash failed", "error", hashErr)
-		policy.WriteInternal(w)
-		return
-	}
-
-	auditOrgID, orgErr := parseOptionalOrgID(orgIDRaw)
-	if orgErr == nil && auditOrgID == uuid.Nil {
-		if fallback, err := h.store.membershipOrgIDForUser(ctx, targetID); err == nil && fallback != nil {
-			auditOrgID = *fallback
-		}
-	}
-
-	// The password UPDATE, the refresh_tokens revocation, and the audit
-	// write all go through ONE transaction: Python's set_password and
+	// The guard, the password UPDATE, the refresh_tokens revocation, and the
+	// audit write all go through ONE transaction: Python's set_password and
 	// revoke_all_for_user share the request's own SQLAlchemy session with
 	// the router's own emit_audit_log call, one implicit commit for all
 	// three.
-	tx, txErr := h.store.Pool.Begin(ctx)
-	if txErr != nil {
-		h.logger.ErrorContext(ctx, "admin: set password begin tx failed", "error", txErr)
-		policy.WriteInternal(w)
-		return
-	}
-	defer func() { _ = tx.Rollback(ctx) }()
-
-	success, err := h.store.setUserPassword(ctx, tx, targetID, newHash)
-	if err != nil {
-		h.logger.ErrorContext(ctx, "admin: set password failed", "error", err)
-		policy.WriteInternal(w)
-		return
-	}
-	if !success {
-		policy.WriteDetail(w, http.StatusNotFound, "User not found", nil)
-		return
-	}
-	if err := h.store.revokeAllRefreshTokens(ctx, tx, targetID); err != nil {
-		h.logger.ErrorContext(ctx, "admin: revoke refresh tokens failed", "error", err)
-		policy.WriteInternal(w)
-		return
-	}
-	if auditOrgID != uuid.Nil {
-		description := "Admin changed user password"
-		if _, err := h.audit.Write(ctx, tx, requestAuditEntry(r, audit.Entry{
-			OrgID: auditOrgID, UserID: &actingID, Action: audit.ActionPasswordChanged,
-			ResourceType: audit.ResourceUser, ResourceID: target.ID.String(), Description: &description,
-		})); err != nil {
-			h.logger.ErrorContext(ctx, "admin: password-change audit write failed", "error", err)
-			policy.WriteInternal(w)
-			return
+	h.superuserGuardedWrite(ctx, w, user, nil, "set_user_password", func(g *superuserTx) func() {
+		if g.refuse(targetID) {
+			return nil
 		}
-	}
-	if err := tx.Commit(ctx); err != nil {
-		h.logger.ErrorContext(ctx, "admin: set password commit failed", "error", err)
-		policy.WriteInternal(w)
-		return
-	}
 
-	out := pyjson.NewObject()
-	out.Set("success", true)
-	policy.WriteModel(w, http.StatusOK, out, nil)
+		actingID, parseErr := uuid.Parse(user.UserID)
+		if parseErr != nil {
+			policy.WriteDetail(w, http.StatusForbidden, "Admin password verification failed", nil)
+			return nil
+		}
+		admin, err := g.store.fullUserByID(ctx, actingID)
+		if err != nil {
+			h.logger.ErrorContext(ctx, "admin: set password acting-admin lookup failed", "error", err)
+			policy.WriteInternal(w)
+			return nil
+		}
+		if admin == nil || admin.PasswordHash == nil {
+			policy.WriteDetail(w, http.StatusForbidden, "Admin password verification failed", nil)
+			return nil
+		}
+		if len(adminPassword) > 72 {
+			// Python's route calls bcrypt.checkpw directly (not the
+			// try/except-wrapped _verify_password helper), so a plaintext
+			// longer than 72 bytes RAISES ValueError there -- unhandled, the
+			// generic 500, never "verification failed" (verified live:
+			// bcrypt.checkpw(b"a"*73, hash) raises "password cannot be longer
+			// than 72 bytes"). Go's bcrypt.CompareHashAndPassword has no such
+			// check (blowfish's own key expansion silently processes the
+			// extra bytes and the compare just falls through to an ordinary
+			// mismatch), so this route checks the length itself to match.
+			h.logger.ErrorContext(ctx, "admin: set password acting-admin password exceeds bcrypt's 72-byte limit")
+			policy.WriteInternal(w)
+			return nil
+		}
+		if bcrypt.CompareHashAndPassword([]byte(*admin.PasswordHash), []byte(adminPassword)) != nil {
+			policy.WriteDetail(w, http.StatusForbidden, "Admin password verification failed", nil)
+			return nil
+		}
+
+		newHash, hashErr := passwordhash.Hash(newPassword)
+		if hashErr != nil {
+			h.logger.ErrorContext(ctx, "admin: password hash failed", "error", hashErr)
+			policy.WriteInternal(w)
+			return nil
+		}
+
+		auditOrgID, orgErr := parseOptionalOrgID(orgIDRaw)
+		if orgErr == nil && auditOrgID == uuid.Nil {
+			if fallback, err := g.store.membershipOrgIDForUser(ctx, targetID); err == nil && fallback != nil {
+				auditOrgID = *fallback
+			}
+		}
+
+		success, err := h.store.setUserPassword(ctx, g.tx, targetID, newHash)
+		if err != nil {
+			h.logger.ErrorContext(ctx, "admin: set password failed", "error", err)
+			policy.WriteInternal(w)
+			return nil
+		}
+		if !success {
+			policy.WriteDetail(w, http.StatusNotFound, "User not found", nil)
+			return nil
+		}
+		if err := h.store.revokeAllRefreshTokens(ctx, g.tx, targetID); err != nil {
+			h.logger.ErrorContext(ctx, "admin: revoke refresh tokens failed", "error", err)
+			policy.WriteInternal(w)
+			return nil
+		}
+		if auditOrgID != uuid.Nil {
+			description := "Admin changed user password"
+			if _, err := h.audit.Write(ctx, g.tx, requestAuditEntry(r, audit.Entry{
+				OrgID: auditOrgID, UserID: &actingID, Action: audit.ActionPasswordChanged,
+				ResourceType: audit.ResourceUser, ResourceID: target.ID.String(), Description: &description,
+			})); err != nil {
+				h.logger.ErrorContext(ctx, "admin: password-change audit write failed", "error", err)
+				policy.WriteInternal(w)
+				return nil
+			}
+		}
+		return func() {
+			out := pyjson.NewObject()
+			out.Set("success", true)
+			policy.WriteModel(w, http.StatusOK, out, nil)
+		}
+	})
 }
 
 // deleteUser is users.py's delete_user.
@@ -547,17 +630,24 @@ func (h *handlers) deleteUser(w http.ResponseWriter, r *http.Request) {
 	if !h.ensureUserInScope(ctx, w, user, orgID, targetID) {
 		return
 	}
-	deleted, err := h.store.deleteUser(ctx, targetID)
-	if err != nil {
-		h.logger.ErrorContext(ctx, "admin: delete user failed", "error", err)
-		policy.WriteInternal(w)
-		return
-	}
-	if !deleted {
-		policy.WriteDetail(w, http.StatusNotFound, "User not found", nil)
-		return
-	}
-	out := pyjson.NewObject()
-	out.Set("deleted", true)
-	policy.WriteModel(w, http.StatusOK, out, nil)
+	h.superuserGuardedWrite(ctx, w, user, nil, "delete_user", func(g *superuserTx) func() {
+		if g.refuse(targetID) {
+			return nil
+		}
+		deleted, err := g.store.deleteUser(ctx, targetID)
+		if err != nil {
+			h.logger.ErrorContext(ctx, "admin: delete user failed", "error", err)
+			policy.WriteInternal(w)
+			return nil
+		}
+		if !deleted {
+			policy.WriteDetail(w, http.StatusNotFound, "User not found", nil)
+			return nil
+		}
+		return func() {
+			out := pyjson.NewObject()
+			out.Set("deleted", true)
+			policy.WriteModel(w, http.StatusOK, out, nil)
+		}
+	})
 }

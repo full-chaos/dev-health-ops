@@ -2,10 +2,13 @@ package drilldown
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"time"
 
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
+
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/scopelabel"
 )
 
 // IssueParams is the already-resolved request shape both GET and POST
@@ -58,6 +61,10 @@ type IssueParams struct {
 //
 // team_name is Go-only (CHAOS-8749): the attribution row already carries the
 // team's display name, null when the row has none.
+//
+// title is Go-only (CHAOS-8959) and set on blocked-only items alone: the
+// work item's stored title, or an explicit null when there is none. A nil
+// Title leaves the key out, so the ordinary drilldown keeps its payload.
 type IssueItem struct {
 	WorkItemID     string     `json:"work_item_id"`
 	Provider       string     `json:"provider"`
@@ -68,6 +75,20 @@ type IssueItem struct {
 	LeadTimeHours  *float64   `json:"lead_time_hours"`
 	StartedAt      *time.Time `json:"started_at"`
 	CompletedAt    *time.Time `json:"completed_at"`
+	Title          *ItemTitle `json:"title,omitempty"`
+}
+
+// ItemTitle is a served name that is always written, as the title or null.
+type ItemTitle struct {
+	Value *string
+}
+
+// MarshalJSON writes the title, or null when there is none.
+func (t ItemTitle) MarshalJSON() ([]byte, error) {
+	if t.Value == nil {
+		return []byte("null"), nil
+	}
+	return json.Marshal(*t.Value)
 }
 
 // IssuesResponse ports DrilldownResponse(items=...) for ordinary issue
@@ -399,5 +420,27 @@ func buildBlockedIssuesResponse(ctx context.Context, reader *Reader, orgID strin
 		return nil, fmt.Errorf("iterate blocked issue rows: %w", err)
 	}
 
+	attachBlockedTitles(ctx, reader, orgID, items)
 	return &IssuesResponse{Items: items, Count: &count}, nil
+}
+
+// attachBlockedTitles sets Title on every blocked item from work_items inside
+// the caller's organisation. A failed lookup is logged by scopelabel and the
+// rows stay, each with a null title; an id is never served as a name.
+func attachBlockedTitles(ctx context.Context, reader *Reader, orgID string, items []IssueItem) {
+	ids := make([]string, 0, len(items))
+	for _, item := range items {
+		ids = append(ids, item.WorkItemID)
+	}
+	titles := scopelabel.ResolveWorkItemTitles(ctx, reader.client, orgID, ids, scopelabel.Options{
+		Suffix: settingsMaxExecutionTime(),
+		Log:    "query-api: drilldown blocked issues",
+	})
+	for i := range items {
+		title := ItemTitle{}
+		if value, ok := titles[items[i].WorkItemID]; ok {
+			title.Value = &value
+		}
+		items[i].Title = &title
+	}
 }

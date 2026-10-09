@@ -288,6 +288,7 @@ func (handler GitLabTeamCatalogRouteHandler) CollectTeamCatalog(
 		// guard added for finding #4 above and discard otherwise valid
 		// member rows.
 		var projectKeys []string
+		projectListingProven := false
 		if selections.Teams || selections.Projects {
 			projectPages, err := providerfoundation.CollectGitLabPageParamPages(ctx, client, providerfoundation.GitLabPageOptions{
 				Path: groupPathValue + "/projects", PerPage: gitlabTeamCatalogListPerPage, MaxPages: gitlabTeamCatalogProjectsMaxPages,
@@ -299,6 +300,7 @@ func (handler GitLabTeamCatalogRouteHandler) CollectTeamCatalog(
 			if projectPages.PageBudgetExhausted {
 				evidence.Truncated = true
 			}
+			projectListingProven = ownershipListingProvesEnd(projectPages)
 			projectKeys = make([]string, 0, len(projectPages.Items))
 			for _, raw := range projectPages.Items {
 				var project gitlabTeamCatalogProjectPayload
@@ -319,6 +321,10 @@ func (handler GitLabTeamCatalogRouteHandler) CollectTeamCatalog(
 
 		if selections.Projects {
 			teamID := gitlabTeamID(group.FullPath)
+			rows.OwnershipListedTeamIDs = append(rows.OwnershipListedTeamIDs, teamID)
+			if !projectListingProven {
+				rows.OwnershipUnprovenTeamIDs = append(rows.OwnershipUnprovenTeamIDs, teamID)
+			}
 			specificity := uint16(gitlabTeamCatalogBaseSpecificity + gitlabTeamDepth(teamID, parentByTeam)*gitlabTeamCatalogChildSpecificityStep)
 			for _, path := range projectKeys {
 				key := teamID + "\x00" + path
@@ -551,6 +557,9 @@ func distinctGitLabMembershipMembers(rows []gitlabTeamCatalogMembershipRow) map[
 type GitLabTeamCatalogCollector struct {
 	Handler GitLabTeamCatalogRouteHandler
 	Sink    GitLabTeamCatalogClickHouseEffects
+	// ScopeCensus counts the org's other active GitLab integrations. Without
+	// it no provider_access row is closed (decideOwnershipClose).
+	ScopeCensus OwnershipScopeCensus
 }
 
 func (collector GitLabTeamCatalogCollector) CollectTeamCatalog(
@@ -737,9 +746,26 @@ func (collector GitLabTeamCatalogCollector) CollectTeamCatalog(
 	}
 	if selections.Projects {
 		if batch.Effects.Ownership != nil {
-			if err := collector.Sink.WriteEffect(ctx, writeClaim, *batch.Effects.Ownership); err != nil {
+			decision := decideOwnershipClose(ctx, collector.ScopeCensus, ownershipCloseRequest{
+				ref: ref, provider: gitlabTeamCatalogProvider,
+				listed: batch.Rows.OwnershipListedTeamIDs, unproven: batch.Rows.OwnershipUnprovenTeamIDs,
+			})
+			ownershipRows, closed, snapshotErr := collector.Sink.SnapshotOwnership(
+				ctx, ref.OrgID, batch.Rows.Ownership, decision.read, decision.closable, normalizedAt)
+			if snapshotErr != nil {
+				return result, snapshotErr
+			}
+			ownershipEffect, effectErr := effectBatchFromValues(gitlabTeamCatalogOwnershipDestination, EffectReadbackRequired, ownershipRows)
+			if effectErr != nil {
+				return result, effectErr
+			}
+			if err := collector.Sink.WriteEffect(ctx, writeClaim, ownershipEffect); err != nil {
 				return result, err
 			}
+			result.DegradedLegs = append(result.DegradedLegs, decision.legs...)
+			slog.Default().InfoContext(ctx, "gitlab_team_catalog_ownership_snapshot",
+				"org_id", ref.OrgID, "teams_listed", len(batch.Rows.OwnershipListedTeamIDs),
+				"teams_closable", len(decision.closable), "grants_written", len(batch.Rows.Ownership), "rows_closed", closed)
 			result.OwnershipWritten = batch.Result.TeamProjectOwnershipImported
 		}
 		if batch.Effects.Projects != nil {

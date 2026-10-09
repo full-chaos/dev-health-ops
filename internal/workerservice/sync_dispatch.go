@@ -717,7 +717,7 @@ func buildSyncCoordinatorWorker(
 		closeClickHouse()
 		return workerFamily{}, errWorkerDependencyUnavailable
 	}
-	nativeTeamCatalogCollectors := newNativeTeamCatalogCollectors(clickhouseConnection)
+	nativeTeamCatalogCollectors := newNativeTeamCatalogCollectors(clickhouseConnection, teamCatalogScopeCensus{pool: postgresDatabase.pools.Domain})
 	teamCatalogClients := teamCatalogClientResolver{
 		pool: postgresDatabase.pools.Domain,
 		credentials: providerfoundation.CredentialResolver{
@@ -957,7 +957,7 @@ func newTouchedDaysDrain(
 // collectors, one per provider. Every collector runs behind the team id
 // carry (providersync.CarryFirstTeamCatalogCollector), so the carry runs
 // before any collector of the organization reads or writes a team id.
-func newNativeTeamCatalogCollectors(clickhouseConnection driver.Conn) map[string]providersync.TeamCatalogCollector {
+func newNativeTeamCatalogCollectors(clickhouseConnection driver.Conn, scopeCensus providersync.OwnershipScopeCensus) map[string]providersync.TeamCatalogCollector {
 	return providersync.CarryFirstTeamCatalogCollectors(clickhouseConnection, map[string]providersync.TeamCatalogCollector{
 		"linear": providersync.LinearTeamCatalogCollector{
 			Sink: providersync.LinearReferenceCatalogClickHouseEffects{
@@ -976,8 +976,9 @@ func newNativeTeamCatalogCollectors(clickhouseConnection driver.Conn) map[string
 			// without it, every membership facet set collapses to just
 			// "github:<login>" and an email-based assignee can no longer
 			// match team attribution.
-			Client: providersync.GitHubTeamCatalogRouteHandler{ResolveEmail: true},
-			Sink:   providersync.GitHubTeamCatalogClickHouseEffects{Conn: clickhouseConnection},
+			Client:      providersync.GitHubTeamCatalogRouteHandler{ResolveEmail: true},
+			Sink:        providersync.GitHubTeamCatalogClickHouseEffects{Conn: clickhouseConnection},
+			ScopeCensus: scopeCensus,
 		},
 		// CHAOS-4432: GitLab teams/team_project_ownership/team_memberships +
 		// native projects catalog (CHAOS-3380), Go-native. GroupPathResolver
@@ -990,6 +991,7 @@ func newNativeTeamCatalogCollectors(clickhouseConnection driver.Conn) map[string
 			Sink: providersync.GitLabTeamCatalogClickHouseEffects{
 				Conn: clickhouseConnection, Lease: teamCatalogLease{},
 			},
+			ScopeCensus: scopeCensus,
 		},
 		// Jira teams/team_project_ownership/team_memberships/sprints +
 		// native projects catalog, Go-native: a Jira project IS the team

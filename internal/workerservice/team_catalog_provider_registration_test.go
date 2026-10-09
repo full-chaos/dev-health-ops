@@ -44,7 +44,7 @@ func TestNativeTeamCatalogCollectorsRegisterAllFourProviders(t *testing.T) {
 	// called directly, and every entry runs behind the carry
 	// (TestEveryRegisteredTeamCatalogCollectorCarriesFirstCensus).
 	var keys []string
-	for provider := range newNativeTeamCatalogCollectors(&teamCatalogCarryConn{}) {
+	for provider := range newNativeTeamCatalogCollectors(&teamCatalogCarryConn{}, nil) {
 		keys = append(keys, provider)
 	}
 	sort.Strings(keys)

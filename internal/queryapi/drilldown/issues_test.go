@@ -231,6 +231,9 @@ func TestBuildIssuesResponseBlockedOnlyReturnsAllProviderRowsAndWindowCount(t *t
 		{"linear:ENG-4", "linear", "team-a", nil, uint64(4)},
 	}
 	client := fakeQueryClient{t: t, handler: func(t *testing.T, query string, bindings []dhclickhouse.Binding) (dhclickhouse.RowScanner, error) {
+		if strings.Contains(query, "FROM work_items") {
+			return &fixtureRowScanner{}, nil
+		}
 		if strings.Contains(query, "FROM work_item_cycle_times") || !strings.Contains(query, "FROM work_item_blocked_durations_daily") {
 			t.Fatalf("blocked-only request read the wrong source:\n%s", query)
 		}

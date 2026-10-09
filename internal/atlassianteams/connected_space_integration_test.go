@@ -34,7 +34,7 @@ func TestTheConnectedSpacesOfASiteBecomeOwnershipRows(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		result, err := Write(ctx, conn, "org-1", rows, everything)
+		result, err := Write(ctx, conn, "org-1", rows, everything, soleScope())
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -91,7 +91,7 @@ func TestALostLinkIsClosedOnlyByACompleteSync(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		result, err := Write(ctx, conn, "org-1", rows, everything)
+		result, err := Write(ctx, conn, "org-1", rows, everything, soleScope())
 		if err != nil {
 			t.Fatal(err)
 		}

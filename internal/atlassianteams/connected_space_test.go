@@ -90,7 +90,7 @@ func serveSite(teams []siteTeam, override func(request) (int, any, bool)) func(r
 func ownershipPairs(rows Rows) []string {
 	var out []string
 	for _, row := range rows.Ownership {
-		out = append(out, row.TeamID+">"+row.ProjectID+":"+row.ProjectKey)
+		out = append(out, row.TeamID+">"+row.ProjectID.String()+":"+row.ProjectKey)
 	}
 	sort.Strings(out)
 	return out
@@ -344,7 +344,7 @@ func TestEveryLinkTypeIsWrittenSkippedOrMakesTheSnapshotIncomplete(t *testing.T)
 			if len(rows.Teams) != 1 || len(rows.Memberships) != 1 {
 				t.Errorf("teams = %d, memberships = %d, want 1 and 1", len(rows.Teams), len(rows.Memberships))
 			}
-			if tc.rows == 1 && (rows.Ownership[0].ProjectID != "10001" || rows.Ownership[0].ProjectKey != "SYNA") {
+			if tc.rows == 1 && (rows.Ownership[0].ProjectID.String() != "10001" || rows.Ownership[0].ProjectKey != "SYNA") {
 				t.Errorf("ownership row = %+v, want project 10001 / SYNA", rows.Ownership[0])
 			}
 		})

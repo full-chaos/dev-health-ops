@@ -54,7 +54,11 @@ type jiraCombinedTeamCatalogCollector struct {
 	// inject a fake for it without a real ClickHouse connection; production
 	// always wires the real one (sync_dispatch.go).
 	ProjectAsTeam providersync.TeamCatalogCollector
-	Conn          driver.Conn
+	// ScopeCensus counts the org's other active Jira integrations. Without
+	// it the Atlassian Teams write closes and deactivates nothing
+	// (providersync.ProveSoleScope).
+	ScopeCensus providersync.OwnershipScopeCensus
+	Conn        driver.Conn
 	// Doer builds the Atlassian Teams (AGG GraphQL gateway) HTTP client; a
 	// nil Doer, matching CollectTeamCatalog's other providers, defaults to a
 	// short-timeout *http.Client at call time.
@@ -142,7 +146,10 @@ func (collector jiraCombinedTeamCatalogCollector) CollectTeamCatalog(
 	result.MembersWritten += atlassianResult.MembersWritten
 	result.TeamKeys = append(result.TeamKeys, atlassianResult.TeamKeys...)
 	result.OwnershipRetracted += atlassianResult.ExpiredOwnership
-	result.OwnershipSnapshotIncomplete = result.OwnershipSnapshotIncomplete || atlassianResult.ProjectLinksIncomplete
+	// A close the write gave up (the scope gate, an unfinished read, an empty
+	// team search) kept open rows: the snapshot was not applied in full.
+	result.OwnershipSnapshotIncomplete = result.OwnershipSnapshotIncomplete || atlassianResult.ProjectLinksIncomplete ||
+		len(atlassianResult.CloseAbandoned) > 0
 	links := atlassianResult.ProjectLinks
 	result.ProjectLinksSeen += links.Seen
 	result.ProjectLinksSkippedNotProject += links.SkippedNonJira
@@ -347,7 +354,8 @@ func (collector jiraCombinedTeamCatalogCollector) collectAtlassianTeams(
 			degraded = append(degraded, *leg)
 		}
 	}
-	result, err = atlassianteams.Write(ctx, collector.Conn, ref.OrgID, rows, atlassianSelections)
+	result, err = atlassianteams.Write(ctx, collector.Conn, ref.OrgID, rows, atlassianSelections,
+		providersync.ProveSoleScope(ctx, collector.ScopeCensus, ref.OrgID, atlassianteams.Provider, ref.IntegrationID))
 	if err != nil {
 		return result, nil, err
 	}

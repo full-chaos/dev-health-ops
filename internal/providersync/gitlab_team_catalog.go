@@ -82,7 +82,7 @@ type gitlabTeamCatalogOwnershipRow struct {
 	OrgID       string     `json:"org_id"`
 	Provider    string     `json:"provider"`
 	TeamID      string     `json:"team_id"`
-	ProjectID   string     `json:"project_id"`
+	ProjectID   ProjectID  `json:"project_id"`
 	ProjectKey  *string    `json:"project_key"`
 	Source      string     `json:"source"`
 	IsPrimary   uint8      `json:"is_primary"`
@@ -116,7 +116,7 @@ type gitlabTeamCatalogMembershipRow struct {
 // carries the same 16 columns; GitLab has no team/lead enrichment, so those
 // stay empty/nil, matching Python's ProjectRecord defaults.
 type gitlabTeamCatalogProjectRow struct {
-	ID         string     `json:"id"`
+	ID         ProjectID  `json:"id"`
 	OrgID      string     `json:"org_id"`
 	Provider   string     `json:"provider"`
 	ProjectKey *string    `json:"project_key"`
@@ -313,14 +313,18 @@ func normalizeGitLabOwnershipRow(
 	orgID, teamID, projectPath string,
 	specificity uint16,
 	normalizedAt time.Time,
-) gitlabTeamCatalogOwnershipRow {
+) (gitlabTeamCatalogOwnershipRow, bool) {
+	projectID, ok := GitLabPathOwnershipProjectID(projectPath)
+	if !ok {
+		return gitlabTeamCatalogOwnershipRow{}, false
+	}
 	projectKey := projectPath
 	return gitlabTeamCatalogOwnershipRow{
 		OrgID: orgID, Provider: gitlabTeamCatalogProvider, TeamID: teamID,
-		ProjectID: projectPath, ProjectKey: &projectKey, Source: gitlabTeamCatalogSource,
+		ProjectID: projectID, ProjectKey: &projectKey, Source: gitlabTeamCatalogSource,
 		IsPrimary: 0, Specificity: specificity, Priority: gitlabTeamCatalogProviderAccessPriority,
 		ValidFrom: normalizedAt, UpdatedAt: normalizedAt,
-	}
+	}, true
 }
 
 // gitlabTeamCatalogMembershipFacets mirrors IdentityResolver.membership_facets,
@@ -369,10 +373,6 @@ func normalizeGitLabMembershipRow(
 	return row, memberID, true
 }
 
-func gitlabProjectCatalogID(orgID, nativeID string) string {
-	return orgID + ":gitlab:" + nativeID
-}
-
 func normalizeGitLabProjectCatalogRow(
 	orgID string,
 	payload gitlabTeamCatalogProjectPayload,
@@ -380,7 +380,8 @@ func normalizeGitLabProjectCatalogRow(
 ) (gitlabTeamCatalogProjectRow, bool) {
 	nativeID := strings.TrimSpace(payload.ID.String())
 	path := strings.TrimSpace(payload.PathWithNamespace)
-	if nativeID == "" || path == "" {
+	projectID, ok := GitLabCatalogProjectID(orgID, nativeID)
+	if !ok || path == "" {
 		return gitlabTeamCatalogProjectRow{}, false
 	}
 	isActive := uint8(1)
@@ -389,7 +390,7 @@ func normalizeGitLabProjectCatalogRow(
 	}
 	projectKey := path
 	return gitlabTeamCatalogProjectRow{
-		ID: gitlabProjectCatalogID(orgID, nativeID), OrgID: orgID, Provider: gitlabTeamCatalogProvider,
+		ID: projectID, OrgID: orgID, Provider: gitlabTeamCatalogProvider,
 		ProjectKey: &projectKey, Name: gitlabFirstNonEmpty(payload.Name, path), IsActive: isActive,
 		TeamIDs: []string{}, TeamKeys: []string{}, URL: strings.TrimSpace(payload.WebURL),
 		UpdatedAt: normalizedAt, LastSynced: normalizedAt,
@@ -442,7 +443,7 @@ func dedupeGitLabProjectCatalogRows(rows []gitlabTeamCatalogProjectRow) []gitlab
 	seen := make(map[string]bool, len(rows))
 	result := make([]gitlabTeamCatalogProjectRow, 0, len(rows))
 	for _, row := range rows {
-		key := row.OrgID + "\x00" + row.Provider + "\x00" + row.ID
+		key := row.OrgID + "\x00" + row.Provider + "\x00" + row.ID.String()
 		if seen[key] {
 			continue
 		}
@@ -466,7 +467,7 @@ func validateGitLabTeamRow(claim Claim, row gitlabTeamCatalogTeamRow) error {
 
 func validateGitLabOwnershipRow(claim Claim, row gitlabTeamCatalogOwnershipRow) error {
 	if claim.Provider != gitlabTeamCatalogProvider || row.Provider != gitlabTeamCatalogProvider ||
-		row.OrgID != claim.OrgID || strings.TrimSpace(row.TeamID) == "" || strings.TrimSpace(row.ProjectID) == "" ||
+		row.OrgID != claim.OrgID || strings.TrimSpace(row.TeamID) == "" || row.ProjectID.IsZero() ||
 		row.Source != gitlabTeamCatalogSource || row.IsPrimary != 0 || row.Priority != gitlabTeamCatalogProviderAccessPriority ||
 		row.ValidFrom.IsZero() || row.UpdatedAt.IsZero() {
 		return ErrInvalidConfiguration
@@ -486,7 +487,7 @@ func validateGitLabMembershipRow(claim Claim, row gitlabTeamCatalogMembershipRow
 
 func (row gitlabTeamCatalogProjectRow) validate(claim Claim) error {
 	if claim.Provider != gitlabTeamCatalogProvider || row.Provider != gitlabTeamCatalogProvider ||
-		row.OrgID != claim.OrgID || strings.TrimSpace(row.ID) == "" || row.UpdatedAt.IsZero() || row.LastSynced.IsZero() {
+		row.OrgID != claim.OrgID || row.ID.IsZero() || row.UpdatedAt.IsZero() || row.LastSynced.IsZero() {
 		return ErrInvalidConfiguration
 	}
 	return nil

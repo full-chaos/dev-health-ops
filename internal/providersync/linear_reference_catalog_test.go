@@ -37,7 +37,7 @@ func TestLinearReferenceCatalogNormalizesRetiredProjectAndLeadTeams(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	if row.ID != "project-42" || row.OrgID != claim.OrgID || row.Provider != "linear" ||
+	if row.ID.String() != "project-42" || row.OrgID != claim.OrgID || row.Provider != "linear" ||
 		row.Name != "Platform" || row.IsActive != 0 || row.State != "completed" ||
 		row.TargetDate == nil || row.TargetDate.Format("2006-01-02") != "2026-09-30" ||
 		row.URL != "https://linear.app/acme/project-42" ||
@@ -162,8 +162,8 @@ func TestLinearReferenceCatalogBuildsConcreteEffects(t *testing.T) {
 		Teams:       []linearReferenceTeamRow{{OrgID: claim.OrgID, Provider: "linear", ID: "team-1", Name: "Engineering", NativeTeamKey: linearReferenceStringPtr("ENG"), UpdatedAt: now}},
 		Members:     []linearReferenceMemberRow{{OrgID: claim.OrgID, MemberID: "linear:alice@example.com", Name: "Alice", ProviderIdentities: `{"linear": ["alice@example.com"]}`, IsActive: 1, UpdatedAt: now}},
 		Memberships: []linearReferenceMembershipRow{{OrgID: claim.OrgID, Provider: "linear", TeamID: "team-1", MemberID: "linear:alice@example.com", Source: "native", IsPrimary: 1, Specificity: 100, Priority: 10, ValidFrom: now, UpdatedAt: now}},
-		Projects:    []linearReferenceProjectRow{{OrgID: claim.OrgID, Provider: "linear", ID: "project-1", Name: "Platform", IsActive: 1, UpdatedAt: now, LastSynced: now}},
-		Ownership:   []linearReferenceOwnershipRow{{OrgID: claim.OrgID, Provider: "linear", TeamID: "team-1", ProjectID: "project-1", Source: "native", IsPrimary: 1, Specificity: 100, Priority: 10, ValidFrom: now, UpdatedAt: now}},
+		Projects:    []linearReferenceProjectRow{{OrgID: claim.OrgID, Provider: "linear", ID: testPID("project-1"), Name: "Platform", IsActive: 1, UpdatedAt: now, LastSynced: now}},
+		Ownership:   []linearReferenceOwnershipRow{{OrgID: claim.OrgID, Provider: "linear", TeamID: "team-1", ProjectID: testPID("project-1"), Source: "native", IsPrimary: 1, Specificity: 100, Priority: 10, ValidFrom: now, UpdatedAt: now}},
 		Sprints:     []linearSprintRow{{OrgID: claim.OrgID, Provider: "linear", SprintID: "linear:cycle:cycle-1", Name: linearReferenceStringPtr("Cycle 1"), State: linearReferenceStringPtr("active"), NativeTeamKey: linearReferenceStringPtr("ENG"), LastSynced: now}},
 	}
 	effects, err := BuildLinearReferenceCatalogEffects(rows)
@@ -200,7 +200,7 @@ func TestLinearReferenceCatalogRejectsForeignProjectEffectRow(t *testing.T) {
 	claim := nativeTestClaim("linear", "work-items")
 	now := time.Date(2026, 8, 10, 12, 34, 56, 0, time.UTC)
 	row := linearReferenceProjectRow{
-		ID: "project-1", OrgID: "other-org", Provider: "linear", Name: "Platform",
+		ID: testPID("project-1"), OrgID: "other-org", Provider: "linear", Name: "Platform",
 		IsActive: 1, UpdatedAt: now, LastSynced: now,
 	}
 	if err := row.validate(claim); !errors.Is(err, ErrInvalidConfiguration) {
@@ -215,7 +215,7 @@ func TestLinearReferenceCatalogCollectsTeamsMembersProjectsAndOwnership(t *testi
 	doer := &linearWorkItemsDoer{responses: []string{
 		`{"data":{"teams":{"nodes":[{"id":"team-raw-1","key":"ENG","name":"Engineering","description":"Platform team","members":{"nodes":[{"id":"user-1","name":"Alice","email":"alice@example.com","active":true},{"id":"user-2","name":"Inactive","email":"inactive@example.com","active":false}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}`,
 		`{"data":{"cycles":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}`,
-		`{"data":{"projects":{"nodes":[{"id":"project-42","name":"Platform","description":"Platform project","status":{"id":"status-1","name":"Completed","type":"completed"},"trashed":false,"targetDate":"2026-09-30","archivedAt":null,"url":"https://linear.app/project-42","lead":{"id":"user-1","name":"Alice","email":"alice@example.com"},"teams":{"nodes":[{"id":"team-raw-1","key":"ENG"}]} }],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}`,
+		`{"data":{"projects":{"nodes":[{"id":"project-42","name":"Platform","description":"Platform project","status":{"id":"status-1","name":"Completed","type":"completed"},"trashed":false,"targetDate":"2026-09-30","archivedAt":null,"url":"https://linear.app/project-42","lead":{"id":"user-1","name":"Alice","email":"alice@example.com"},"teams":{"nodes":[{"id":"team-raw-1","key":"ENG"}],"pageInfo":{"hasNextPage":false,"endCursor":null}} }],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}`,
 	}}
 	batch, err := (LinearReferenceCatalogRouteHandler{PerPage: 50, MaxPages: 10}).CollectReferenceCatalog(
 		context.Background(), teamCatalogRefFromClaim(claim),
@@ -257,14 +257,14 @@ func TestLinearReferenceCatalogCollectsTeamsMembersProjectsAndOwnership(t *testi
 	}
 	pseudoProjectID := claim.OrgID + ":linear:ENG"
 	for _, project := range batch.Rows.Projects {
-		if project.ID == pseudoProjectID {
+		if project.ID.String() == pseudoProjectID {
 			t.Fatalf("CHAOS-4530: team-key-shaped pseudo-project must never be written to `projects`, in any form: %+v", project)
 		}
 	}
 	var realOwnership, teamKeyOwnership *linearReferenceOwnershipRow
 	for index := range batch.Rows.Ownership {
 		row := &batch.Rows.Ownership[index]
-		switch row.ProjectID {
+		switch row.ProjectID.String() {
 		case "project-42":
 			realOwnership = row
 		case claim.OrgID + ":linear:ENG":
@@ -623,7 +623,7 @@ func chaos4530CollectReferenceCatalog(t *testing.T, selectProjects bool) LinearR
 	doer := &linearWorkItemsDoer{responses: []string{
 		`{"data":{"teams":{"nodes":[{"id":"team-raw-1","key":"QA","name":"Quality","members":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}`,
 		`{"data":{"cycles":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}`,
-		`{"data":{"projects":{"nodes":[{"id":"` + chaos4530SyntheticProjectID + `","name":"Synthetic Project","description":"","status":{"id":"s","name":"Active","type":"started"},"trashed":false,"targetDate":"","archivedAt":null,"url":"","lead":null,"teams":{"nodes":[{"id":"team-raw-1","key":"QA"}]}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}`,
+		`{"data":{"projects":{"nodes":[{"id":"` + chaos4530SyntheticProjectID + `","name":"Synthetic Project","description":"","status":{"id":"s","name":"Active","type":"started"},"trashed":false,"targetDate":"","archivedAt":null,"url":"","lead":null,"teams":{"nodes":[{"id":"team-raw-1","key":"QA"}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}`,
 	}}
 	batch, err := (LinearReferenceCatalogRouteHandler{PerPage: 50, MaxPages: 10}).CollectReferenceCatalog(
 		context.Background(), teamCatalogRefFromClaim(claim),
@@ -652,7 +652,7 @@ func TestLinearReferenceCatalogNeverWritesTeamKeyShapedPseudoProject(t *testing.
 		batch := chaos4530CollectReferenceCatalog(t, selectProjects)
 		pseudoID := chaos4530SyntheticOrgID + ":linear:QA"
 		for _, project := range batch.Rows.Projects {
-			if project.ID == pseudoID {
+			if project.ID.String() == pseudoID {
 				t.Fatalf("selectProjects=%v: team-key-shaped pseudo-project must never be written to `projects`, in any form: %+v", selectProjects, project)
 			}
 			if project.ProjectKey != nil && *project.ProjectKey == "QA" {
@@ -670,7 +670,7 @@ func TestLinearReferenceCatalogRealProjectOwnershipNeverCarriesTheTeamKey(t *tes
 	batch := chaos4530CollectReferenceCatalog(t, true)
 	found := false
 	for _, ownership := range batch.Rows.Ownership {
-		if ownership.ProjectID != chaos4530SyntheticProjectID {
+		if ownership.ProjectID.String() != chaos4530SyntheticProjectID {
 			continue
 		}
 		found = true
@@ -693,7 +693,7 @@ func TestLinearReferenceCatalogRealProjectOwnershipNeverCarriesTheTeamKey(t *tes
 // prod depends on (5.6 readback: team_repo_ownership inferred 0 -> 10).
 func TestLinearReferenceCatalogTeamKeyOwnershipRowMatchesItsOneReader(t *testing.T) {
 	batch := chaos4530CollectReferenceCatalog(t, true)
-	wantProjectID := linearTeamKeyProjectID(chaos4530SyntheticOrgID, "QA")
+	wantProjectID := mustProjectID(t)(LinearTeamKeyProjectID(chaos4530SyntheticOrgID, "QA"))
 	var teamKeyRow *linearReferenceOwnershipRow
 	for index := range batch.Rows.Ownership {
 		if batch.Rows.Ownership[index].ProjectID == wantProjectID {

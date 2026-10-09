@@ -332,7 +332,9 @@ func (handler GitLabTeamCatalogRouteHandler) CollectTeamCatalog(
 					continue
 				}
 				seenOwnership[key] = true
-				rows.Ownership = append(rows.Ownership, normalizeGitLabOwnershipRow(ref.OrgID, teamID, path, specificity, normalizedAt))
+				if ownership, ok := normalizeGitLabOwnershipRow(ref.OrgID, teamID, path, specificity, normalizedAt); ok {
+					rows.Ownership = append(rows.Ownership, ownership)
+				}
 			}
 		}
 
@@ -419,7 +421,7 @@ func (handler GitLabTeamCatalogRouteHandler) CollectTeamCatalog(
 		// team-lead ruling 2026-08-28): mirrors team_autoimport_gitlab.
 		// _gitlab_project_catalog_rows's source_external_ids filter --
 		// only a discovered project whose raw numeric id (the SAME id
-		// gitlabProjectCatalogID mints this row's id from) is in the
+		// GitLabCatalogProjectID mints this row's id from) is in the
 		// run's enabled-source set is cataloged. The shared resolver
 		// (teamCatalogSourceResolver, internal/workerservice/team_catalog_
 		// clients.go) populates ref.SourceExternalIDs from the identical
@@ -529,8 +531,8 @@ func (handler GitLabTeamCatalogRouteHandler) CollectTeamCatalog(
 	return GitLabTeamCatalogBatch{Rows: rows, Effects: effects, Result: result, Evidence: evidence}, nil
 }
 
-func distinctGitLabOwnershipProjects(rows []gitlabTeamCatalogOwnershipRow) map[string]struct{} {
-	seen := make(map[string]struct{}, len(rows))
+func distinctGitLabOwnershipProjects(rows []gitlabTeamCatalogOwnershipRow) map[ProjectID]struct{} {
+	seen := make(map[ProjectID]struct{}, len(rows))
 	for _, row := range rows {
 		seen[row.ProjectID] = struct{}{}
 	}
@@ -750,11 +752,13 @@ func (collector GitLabTeamCatalogCollector) CollectTeamCatalog(
 				ref: ref, provider: gitlabTeamCatalogProvider,
 				listed: batch.Rows.OwnershipListedTeamIDs, unproven: batch.Rows.OwnershipUnprovenTeamIDs,
 			})
-			ownershipRows, closed, snapshotErr := collector.Sink.SnapshotOwnership(
-				ctx, ref.OrgID, batch.Rows.Ownership, decision.read, decision.closable, normalizedAt)
+			ownershipRows, plan, snapshotErr := collector.Sink.SnapshotOwnership(
+				ctx, ref.OrgID, batch.Rows.Ownership, decision.read, decision.snapshot(GitLabGroupProjectGrantKind), normalizedAt)
 			if snapshotErr != nil {
 				return result, snapshotErr
 			}
+			closed := len(plan.Retract)
+			ReportSnapshotPlan(ctx, gitlabTeamCatalogProvider, ref.OrgID, plan)
 			ownershipEffect, effectErr := effectBatchFromValues(gitlabTeamCatalogOwnershipDestination, EffectReadbackRequired, ownershipRows)
 			if effectErr != nil {
 				return result, effectErr

@@ -15,7 +15,8 @@ The following table defines the canonical metrics exposed via the API, their dat
 | `churn` | Code Churn | loc | `repo_metrics_daily` | `total_loc_touched` | Sum | Repo | Total lines of code modified. High churn may indicate instability or rework. |
 | `wip_saturation` | WIP Saturation | % | `work_item_metrics_daily` | `wip_congestion_ratio` | Avg | Team | Ratio of active items to developer capacity. Lower is better. |
 | `blocked_work` | Blocked Work | hours | `work_item_state_durations_daily` | `duration_hours` | Sum | Team | Total time items spent in a blocked state. Lower is better. |
-| `change_failure_rate` | Change Failure Rate | % | `repo_metrics_daily` | `change_failure_rate` | Avg | Repo | Percentage of deployments causing failure. Lower is better. |
+| `change_failure_rate` | Change Failure Rate | % | `repo_change_failure_daily` | deployment and incident counts | Ratio of window sums (`changefailure.WindowRateSQL`) | Repo | Deployments linked to an incident / deployments. None when no deployment (not applicable) or no incident evidence (unknown); the Home delta's `rateState` and `/explain`'s `rate_state` say which. Lower is better. CHAOS-8981. |
+| `revert_rate` | Revert Rate | % | `repo_metrics_daily` | `revert_rate` | Total reverted / total merged | Repo | Reverted / merged pull requests. Not measured yet: always none (no data) until a revert detector exists. The same ratio is still written to the DEPRECATED `repo_metrics_daily.change_failure_rate` column for older readers (CHAOS-9017 drops it). |
 | `rework_ratio` | Rework Ratio | % | `repo_metrics_daily` | `rework_churn_ratio_30d` | Avg | Repo | Ratio of churn in recently modified code. Lower is better. |
 | `ci_success` | CI Success Rate | % | `cicd_metrics_daily` | `success_rate` | Avg | Repo | Percentage of successful CI pipeline runs. Higher is better. |
 

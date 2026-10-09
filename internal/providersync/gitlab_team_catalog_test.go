@@ -95,7 +95,7 @@ func TestNormalizeGitLabProjectCatalogRow(t *testing.T) {
 	if !ok {
 		t.Fatal("expected ok")
 	}
-	if row.ID != "org-1:gitlab:42" {
+	if row.ID.String() != "org-1:gitlab:42" {
 		t.Fatalf("id = %q", row.ID)
 	}
 	if row.IsActive != 0 {
@@ -474,7 +474,7 @@ func TestGitLabTeamCatalogNativeProjectCatalogScopedBySourceExternalIDs(t *testi
 		t.Fatalf("native projects = %d, want 2 (scoped out id 102)", len(batch.Rows.Projects))
 	}
 	for _, row := range batch.Rows.Projects {
-		if row.ID == gitlabProjectCatalogID("org-1", "102") {
+		if row.ID == mustProjectID(t)(GitLabCatalogProjectID("org-1", "102")) {
 			t.Fatalf("id 102 must be scoped out, got rows=%+v", batch.Rows.Projects)
 		}
 	}
@@ -508,7 +508,7 @@ func TestGitLabTeamCatalogNativeProjectCatalogIncompleteWhenSelectedSourceIsMiss
 	}
 	// The discovered-and-matched project ("100") must still be collected --
 	// a missing OTHER selected id must not also suppress what WAS found.
-	if len(batch.Rows.Projects) != 1 || batch.Rows.Projects[0].ID != gitlabProjectCatalogID("org-1", "100") {
+	if len(batch.Rows.Projects) != 1 || batch.Rows.Projects[0].ID != mustProjectID(t)(GitLabCatalogProjectID("org-1", "100")) {
 		t.Fatalf("expected project 100 still collected, got rows=%+v", batch.Rows.Projects)
 	}
 }

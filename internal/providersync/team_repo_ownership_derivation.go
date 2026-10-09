@@ -328,27 +328,13 @@ func teamRepoOwnershipResolutionArmPriority(arm string) int {
 	}
 }
 
-// linearTeamKeyProjectID reconstructs the SAME project_id string
-// team_autoimport_linear.py's ownership writer stamps for a team with no
-// explicit Linear Project associations: `_project_id(org_id, "linear",
-// project_key)` where project_key defaults to the team's own key
-// (team_autoimport_linear.py:454-456,472,487) -- i.e. "{org_id}:linear:
-// {team_key}".
-//
-// CHAOS-4537: no longer called by anything in this file --
-// resolveWorkItemTeamID maps NativeTeamKey to a known team id instead of
-// reconstructing this identity and looking it up in team_project_ownership
-// (see TeamRepoOwnershipWorkItem's doc comment for why that indirection was
-// safe to remove). Kept only so linear_reference_catalog_test.go's
-// TestLinearReferenceCatalogTeamKeyOwnershipRowMatchesItsOneReader can still
-// name the writer's own row shape by construction -- that row itself is
-// still written (linear_reference_catalog_route.go, out of this ticket's
-// scope) and is now vestigial from THIS reader's point of view; removing the
-// write is a deliberate fast-follow, filed once this redirect is proven
-// live, not bundled into CHAOS-4537.
-func linearTeamKeyProjectID(orgID, teamKey string) string {
-	return orgID + ":linear:" + teamKey
-}
+// The `{org_id}:linear:{team_key}` project_id that team_autoimport_linear.py's
+// ownership writer stamps for a team with no explicit Linear Project
+// associations is built by LinearTeamKeyProjectID (project_id.go), the one
+// constructor of that form. resolveWorkItemTeamID maps NativeTeamKey to a
+// known team id instead of looking the row up in team_project_ownership
+// (CHAOS-4537), so the row is vestigial from this reader's point of view; it
+// is still written (CHAOS-4458 part (b)).
 
 // teamRepoOwnershipInheritableRelationshipTypes mirrors
 // compute_work_items.py's _INHERITABLE_RELATIONSHIP_TYPES verbatim: only

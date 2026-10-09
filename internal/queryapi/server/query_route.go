@@ -325,7 +325,57 @@ const registeredHotspotsV1Document = `query Hotspots($input: HotspotsInput!) {
 // `operatingReview(orgId: String!, input: OperatingReviewInput!)` (the
 // $orgId variable is parsed by this route but never trusted for scoping;
 // see operatingreview package's doc comment's Authorization section).
+//
+// The `rateState` line of a metric (the state of change failure rate) is
+// NOT from the web file: the web does not select it yet, and sends the V3
+// text below. The line is here so the field can be asked for at all (a
+// field no registered text selects is unreachable); the web's real wire
+// text wins over this one if they differ when the web selects the field.
 const registeredOperatingReviewDocument = `query OperatingReview($orgId: String!, $input: OperatingReviewInput!) {
+  operatingReview(orgId: $orgId, input: $input) {
+    orgId
+    teamId
+    weekStart
+    priorWeekStart
+    sections {
+      key
+      title
+      changed
+      improved
+      worsened
+      metrics {
+        key
+        label
+        value
+        unit
+        hasData
+        scope
+        rateState
+        delta {
+          value
+          priorValue
+          absolute
+          percent
+          status
+          hasPriorData
+          __typename
+        }
+        __typename
+      }
+      __typename
+    }
+    recommendations
+    recommendationsEmptyState
+    __typename
+  }
+}`
+
+// registeredOperatingReviewV3Document is the text of `operatingReview` BEFORE a metric carried the state of change
+// failure rate (CHAOS-8981, `rateState`): the text of CHAOS-8516, with `scope`. It stays a legacy text (see
+// legacyDigestsByOperation) beside V1 and V2, so a web build still sending it keeps working; it is the text every
+// web build sends until the web selects `rateState`. Remove it with the cleanup ticket once no client sends it
+// (testdata/wire_capture/operatingreview_v3_captured.graphql).
+const registeredOperatingReviewV3Document = `query OperatingReview($orgId: String!, $input: OperatingReviewInput!) {
   operatingReview(orgId: $orgId, input: $input) {
     orgId
     teamId
@@ -486,7 +536,168 @@ const registeredOperatingReviewV1Document = `query OperatingReview($orgId: Strin
 // document digest (see that function below), so any client selecting a
 // new field got a 404 digest-miss even though queryResolver.Home mapped
 // it correctly. So this selection set is exhaustive per type.
+//
+// One line is NOT a capture: `rateState` in deltas (the state of change
+// failure rate). The web does not select it yet and sends the V4 text
+// below; the line is here because a field no registered text selects is
+// unreachable. The web's real capture wins over this text if they differ
+// when the web selects the field (testdata/wire_capture/README.md).
 const registeredHomeDocument = `query Home($orgId: String!, $filters: FilterInput, $window: HomeWindowInput) {
+  home(orgId: $orgId, filters: $filters, window: $window) {
+    freshness {
+      lastIngestedAt
+      latestSuccessfulSyncAt
+      sources {
+        provider
+        status
+        __typename
+      }
+      coverage {
+        reposCoveredPct
+        prsLinkedToIssuesPct
+        issuesWithCycleStatesPct
+        __typename
+      }
+      __typename
+    }
+    deltas {
+      metric
+      label
+      value
+      unit
+      deltaPct
+      hasData
+      hasPriorData
+      spark {
+        ts
+        value
+        __typename
+      }
+      rateState
+      __typename
+    }
+    reworkThemeAllocation {
+      theme
+      label
+      allocation
+      allocationPct
+      prsMerged
+      churnLoc
+      __typename
+    }
+    summary {
+      id
+      text
+      evidenceLink
+      __typename
+    }
+    tiles {
+      key
+      value {
+        title
+        subtitle
+        link
+        __typename
+      }
+      __typename
+    }
+    constraint {
+      title
+      claim
+      evidence {
+        label
+        link
+        __typename
+      }
+      experiments
+      __typename
+    }
+    events {
+      ts
+      type
+      text
+      link
+      __typename
+    }
+    healthState {
+      status
+      headline
+      summary
+      asOf
+      __typename
+    }
+    signals {
+      id
+      title
+      metric
+      currentValue
+      priorValue
+      delta
+      direction
+      severity
+      confidence
+      affectedScope
+      evidenceCount
+      whyItMatters
+      recommendedAction
+      evidenceRef
+      category
+      scopeEntity {
+        id
+        displayName
+        __typename
+      }
+      attribution {
+        items
+        sources {
+          source
+          items
+          share
+          __typename
+        }
+        confidence {
+          confidence
+          items
+          share
+          __typename
+        }
+        __typename
+      }
+      __typename
+    }
+    limitingFactor {
+      claim
+      whyItMatters
+      recommendedAction
+      confidence
+      evidenceRef
+      __typename
+    }
+    dataConfidence {
+      level
+      coveragePct
+      connectedSources
+      missingSources
+      caveats
+      __typename
+    }
+    scopeDataConfidence {
+      level
+      coveragePct
+      lastIngestedAt
+      caveats
+      __typename
+    }
+    __typename
+  }
+}`
+
+// registeredHomeV4Document is the real Home text from before CHAOS-8981
+// added MetricDelta.rateState (the state of change failure rate). It stays
+// a legacy text so every web build that does not select the state remains
+// accepted; it is the text the web sends until it selects `rateState`. Its
+// captured wire form is testdata/wire_capture/home_v4_captured.graphql.
+const registeredHomeV4Document = `query Home($orgId: String!, $filters: FilterInput, $window: HomeWindowInput) {
   home(orgId: $orgId, filters: $filters, window: $window) {
     freshness {
       lastIngestedAt
@@ -4774,9 +4985,9 @@ var legacyDigestsByOperation = map[string][]string{
 	"capacityForecast":      {digestHex(registeredCapacityForecastV1Document), digestHex(registeredCapacityForecastV2Document)},
 	"coverageScopeBaseline": {digestHex(registeredCoverageScopeBaselineV1Document)},
 	"hotspots":              {digestHex(registeredHotspotsV1Document)},
-	"home":                  {digestHex(registeredHomeV1Document), digestHex(registeredHomeV2Document), digestHex(registeredHomeV3Document)},
+	"home":                  {digestHex(registeredHomeV1Document), digestHex(registeredHomeV2Document), digestHex(registeredHomeV3Document), digestHex(registeredHomeV4Document)},
 	"improveOpportunities":  {digestHex(registeredImproveOpportunitiesV1Document), digestHex(registeredImproveOpportunitiesV2Document)},
-	"operatingReview":       {digestHex(registeredOperatingReviewV1Document), digestHex(registeredOperatingReviewV2Document)},
+	"operatingReview":       {digestHex(registeredOperatingReviewV1Document), digestHex(registeredOperatingReviewV2Document), digestHex(registeredOperatingReviewV3Document)},
 	"reviewEdges":           {digestHex(registeredReviewEdgesV1Document)},
 }
 

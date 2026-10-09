@@ -166,7 +166,18 @@ func TestComputeMatchesFrozenPythonGolden(t *testing.T) {
 	// (see PullRequestRow.Title's doc comment) -- Title is never populated
 	// from ClickHouse, matching Python's own "title" column never being
 	// selected by loaders/clickhouse.py's real pr_query.
-	assertFloat(t, "repo A change_failure_rate", repoAMetric.ChangeFailureRate, 0.0)
+	assertFloat(t, "repo A change_failure_rate (deprecated: the legacy revert ratio)", repoAMetric.ChangeFailureRate, 0.0)
+	// Two pull requests merged, and no revert rate: nothing detects a
+	// reverted pull request, so the rate is unknown. It is never the 0 of the
+	// deprecated column.
+	if repoAMetric.RevertRate != nil {
+		t.Errorf("repo A revert_rate = %v, want nil (unknown: no revert detector)", *repoAMetric.RevertRate)
+	}
+	// Compute has no deployment or incident input: the incident-based change
+	// failure rate stays unknown until ApplyChangeFailure sets it.
+	if repoAMetric.ChangeFailureRateIncident != nil {
+		t.Errorf("repo A change_failure_rate_incident = %v, want nil before ApplyChangeFailure", *repoAMetric.ChangeFailureRateIncident)
+	}
 	assertFloat(t, "repo A median_pr_cycle_hours", repoAMetric.MedianPRCycleHours, 3.5)
 	assertFloat(t, "repo A pr_cycle_p75_hours", repoAMetric.PRCycleP75Hours, 4.25)
 	assertFloat(t, "repo A pr_cycle_p90_hours", repoAMetric.PRCycleP90Hours, 4.7)
@@ -187,6 +198,12 @@ func TestComputeMatchesFrozenPythonGolden(t *testing.T) {
 	if repoBMetric.MTTRHours != nil {
 		t.Errorf("repo B mttr_hours: got %v, want nil", *repoBMetric.MTTRHours)
 	}
+	// The deprecated column keeps the forced 0 that older readers know, and
+	// there is no revert rate here either.
+	if repoBMetric.RevertRate != nil {
+		t.Errorf("repo B revert_rate: got %v, want nil", *repoBMetric.RevertRate)
+	}
+	assertFloat(t, "repo B change_failure_rate (deprecated)", repoBMetric.ChangeFailureRate, 0.0)
 	if repoBMetric.PRSizeP50LOC != nil || repoBMetric.PRCommentsPer100LOC != nil {
 		t.Errorf("repo B: expected nil PR-derived percentile fields for a PR-less repo")
 	}
@@ -288,4 +305,32 @@ func findUser(t *testing.T, rows []UserMetric, repoID uuid.UUID, email string) U
 	}
 	t.Fatalf("user metric %s/%s not found", repoID, email)
 	return UserMetric{}
+}
+
+// The deprecated change_failure_rate column holds the ported rule exactly: a
+// merged pull request whose title names a revert counts, and the ratio is
+// reverted / merged. The production loader never reads the title, so there the
+// count is 0 and the ratio is 0 for every row. That is why it is not a
+// revert rate: with or without a title, Compute sets no RevertRate.
+func TestComputeKeepsThePortedRatioInTheDeprecatedColumnAndSetsNoRevertRate(t *testing.T) {
+	compute := func(pullRequests []PullRequestRow) RepoMetric {
+		t.Helper()
+		result := Compute(day, fixtureCommits(), pullRequests, fixtureReviews(),
+			time.Date(2026, 7, 21, 0, 0, 0, 0, time.UTC), DefaultNormalizeIdentity, 1000, nil, nil, nil, nil, nil)
+		return findRepo(t, result.RepoMetrics, repoA)
+	}
+	asLoaded := compute(fixturePullRequests())
+	withTitles := fixturePullRequests()
+	withTitles[0].Title = `Revert "Add checkout retry"`
+	withTitles[1].Title = "Add checkout retry"
+	titled := compute(withTitles)
+
+	if asLoaded.PRsMerged != 2 || titled.PRsMerged != 2 {
+		t.Fatalf("merged pull requests = %d and %d, want 2 and 2", asLoaded.PRsMerged, titled.PRsMerged)
+	}
+	assertFloat(t, "deprecated ratio, titles not loaded", asLoaded.ChangeFailureRate, 0.0)
+	assertFloat(t, "deprecated ratio, one of two merged pull requests titled as a revert", titled.ChangeFailureRate, 0.5)
+	if asLoaded.RevertRate != nil || titled.RevertRate != nil {
+		t.Errorf("revert_rate = %v and %v, want nil for both: Compute measures no revert rate", asLoaded.RevertRate, titled.RevertRate)
+	}
 }

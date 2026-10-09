@@ -989,6 +989,7 @@ func newNativeTeamCatalogCollectors(clickhouseConnection driver.Conn, scopeCensu
 			Sink: providersync.LinearReferenceCatalogClickHouseEffects{
 				Conn: clickhouseConnection, Lease: teamCatalogLease{},
 			},
+			ScopeCensus: scopeCensus,
 		},
 		// CHAOS-4434: GitHub teams/team_memberships, Go-native. No Projects
 		// surface exists for GitHub at all (auto_import_capabilities("github").
@@ -1041,9 +1042,11 @@ func newNativeTeamCatalogCollectors(clickhouseConnection driver.Conn, scopeCensu
 				Sink: providersync.JiraTeamCatalogClickHouseEffects{
 					Conn: clickhouseConnection, Lease: teamCatalogLease{},
 				},
+				ScopeCensus: scopeCensus,
 			},
-			Conn: clickhouseConnection,
-			Doer: httpguard.NewClient(45 * time.Second),
+			ScopeCensus: scopeCensus,
+			Conn:        clickhouseConnection,
+			Doer:        httpguard.NewClient(45 * time.Second),
 		},
 	})
 }

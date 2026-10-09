@@ -49,6 +49,8 @@ func (s *fixtureRowScanner) Scan(dest ...any) error {
 			}
 		case *int64:
 			*typed = row[i].(int64)
+		case *uint64:
+			*typed = row[i].(uint64)
 		case *bool:
 			*typed = row[i].(bool)
 		}

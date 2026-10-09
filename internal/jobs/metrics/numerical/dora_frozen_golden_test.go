@@ -97,6 +97,19 @@ func TestComputeDORAMatchesFrozenPythonGolden(t *testing.T) {
 		if err != nil {
 			t.Fatalf("case %d: marshal got: %v", index, err)
 		}
+		// The frozen Python golden names the deployment-status ratio
+		// change_failure_rate; Go writes it as deployment_failure_rate
+		// (CHAOS-8981). Only the name differs; the value must still match.
+		renamed := 0
+		for i := range testCase.Expected {
+			if testCase.Expected[i].Name == "change_failure_rate" {
+				testCase.Expected[i].Name = "deployment_failure_rate"
+				renamed++
+			}
+		}
+		if index == 0 && renamed == 0 {
+			t.Fatalf("case 0: golden carries no change_failure_rate row -- the rename mapping above is untested")
+		}
 		wantJSON, err := json.Marshal(testCase.Expected)
 		if err != nil {
 			t.Fatalf("case %d: marshal want: %v", index, err)

@@ -107,7 +107,7 @@ func TestALinkTheProviderStillReturnsIsNeverClosed(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if result, err := Write(ctx, conn, "org-1", rows, everything); err != nil || result.OwnershipWritten != 4 || result.TeamsWritten != 3 {
+			if result, err := Write(ctx, conn, "org-1", rows, everything, soleScope()); err != nil || result.OwnershipWritten != 4 || result.TeamsWritten != 3 {
 				t.Fatalf("first run result = %+v, err = %v, want 3 teams and 4 links", result, err)
 			}
 			requireLines(t, "ownership after the first run", lines(t, conn, ownershipState), allOpen)
@@ -117,13 +117,13 @@ func TestALinkTheProviderStillReturnsIsNeverClosed(t *testing.T) {
 			switch {
 			case tc.collectFails && err == nil:
 				// What the write of such a collection does is the defect: run it, then read the state below.
-				result, writeErr := Write(ctx, conn, "org-1", rows, everything)
+				result, writeErr := Write(ctx, conn, "org-1", rows, everything, soleScope())
 				t.Errorf("the collection returned %d teams and no error (write: %+v, err %v), want a failed collection", len(rows.Teams), result, writeErr)
 			case tc.collectFails:
 			case err != nil:
 				t.Fatal(err)
 			default:
-				result, err := Write(ctx, conn, "org-1", rows, everything)
+				result, err := Write(ctx, conn, "org-1", rows, everything, soleScope())
 				if err != nil {
 					t.Fatal(err)
 				}

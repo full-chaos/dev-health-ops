@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/changefailure"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph/model"
 )
 
@@ -127,7 +128,7 @@ func (g goldenRows) toPeriodRows() periodRows {
 			prsMerged: gNum(r, "prs_merged"), prFirstReviewP50Hours: gNullable(r, "pr_first_review_p50_hours"),
 			singleOwnerFileRatio30d: gNullable(r, "single_owner_file_ratio_30d"),
 			codeOwnershipGini:       gNum(r, "code_ownership_gini"), busFactor: gNum(r, "bus_factor"),
-			changeFailureRate: gNullable(r, "change_failure_rate"), mttrHours: gNullable(r, "mttr_hours"),
+			revertRate: gNullable(r, "revert_rate"), mttrHours: gNullable(r, "mttr_hours"),
 			storedRows: uint64(len(g["repo_metrics"])),
 		})
 	}
@@ -142,6 +143,18 @@ func (g goldenRows) toPeriodRows() periodRows {
 			deploymentsCount: gNum(r, "deployments_count"), failedDeploymentsCount: gNum(r, "failed_deployments_count"),
 			storedRows: uint64(len(g["deployments"])),
 		})
+	}
+	for _, r := range g["change_failure"] {
+		p.changeFailure = append(p.changeFailure, changeFailureAggRow{view: changefailure.View{
+			Counts: changefailure.Counts{
+				Deployments:            uint64(gNum(r, "deployments_count")),
+				FailedNative:           uint64(gNum(r, "failed_deployments_native")),
+				FailedHeuristic:        uint64(gNum(r, "failed_deployments_heuristic")),
+				IncidentsDirect:        uint64(gNum(r, "incidents_direct")),
+				IncidentsViaDeployment: uint64(gNum(r, "incidents_via_deployment")),
+			},
+			StoredRows: uint64(len(g["change_failure"])),
+		}})
 	}
 	for _, r := range g["incidents"] {
 		p.incidents = append(p.incidents, incidentsAggRow{

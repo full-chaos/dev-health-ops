@@ -219,6 +219,7 @@ internal/pythonparity/emailvalidator	230
 internal/pythonparity/pyidna	241
 internal/pythonparity/pyunicodedata	57
 internal/pythonparity/scopeparity	3
+internal/queryapi/activeteams	1
 internal/queryapi/aggflame	1
 internal/queryapi/aianalytics	6
 internal/queryapi/analytics	3

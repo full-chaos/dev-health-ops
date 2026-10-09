@@ -80,6 +80,7 @@ import (
 	"regexp"
 
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/activeteams"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/scopelabel"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph/units"
@@ -131,7 +132,7 @@ func isEmailValue(value string) bool {
 // already carried FINAL in the reference and keeps it). Every branch's
 // org_id predicate sits in the same WHERE clause as its table's FINAL
 // source -- see the package doc comment's bounded-scan note.
-const teamsQuery = `
+var teamsQuery = `
         SELECT DISTINCT value
         FROM (
             SELECT id AS value
@@ -145,6 +146,7 @@ const teamsQuery = `
             FROM user_metrics_daily FINAL
             WHERE team_id != ''
               AND org_id = {org_id:String}
+              AND ` + activeteams.ListablePredicate("team_id") + `
 
             UNION ALL
 
@@ -152,6 +154,7 @@ const teamsQuery = `
             FROM work_item_user_metrics_daily FINAL
             WHERE team_id != ''
               AND org_id = {org_id:String}
+              AND ` + activeteams.ListablePredicate("team_id") + `
         )
         WHERE value != ''
         ORDER BY value

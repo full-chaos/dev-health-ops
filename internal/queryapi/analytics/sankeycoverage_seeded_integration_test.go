@@ -1220,8 +1220,9 @@ func TestResolveSankeyCoverage_SeededRealClickHouse_EmptyWindowIsNilNotZero(t *t
 	}
 
 	// An aggregate over zero rows still returns ONE row in ClickHouse
-	// (sum() of nothing is 0), so this asserts the total>0 guard, not an
-	// empty result set: coverage is a real object whose shares are 0.
+	// (sum() of nothing is 0), so the zero-rows branch never fires for an
+	// empty window; both denominators are 0 and the coverage is null
+	// (CHAOS-6129), not an object whose shares are 0.
 	if got := resolveSankeyCoverage(ctx, client, "org-with-no-rows", req, 60, true, nil); got != nil {
 		t.Fatalf("empty window: coverage = %+v, want nil (nothing measurable is not 0%% covered)", got)
 	}

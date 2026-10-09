@@ -312,6 +312,22 @@ func TestTheStaleKeyRuleStoresANullKeyColumnAsNull(t *testing.T) {
 			if stored := readStaleKeyRuleStored(t, ctx, conn, table, key); stored.versions != 2 || stored.measureSum != 0 {
 				t.Errorf("the key with a NULL column holds %+v, want 2 versions and 0 in every measure", stored)
 			}
+			// Both stored versions hold NULL in the column, not the empty
+			// value the sorting key reads it as: a read of the column itself
+			// finds the row of zeros where it found the row it supersedes.
+			for _, column := range table.Keys {
+				if column.Kind != teamkeytables.KeyNullableString && column.Kind != teamkeytables.KeyNullableUUID {
+					continue
+				}
+				var nulls uint64
+				if err := conn.QueryRow(ctx, fmt.Sprintf("SELECT countIf(isNull(%s)) FROM %s WHERE org_id = ? AND %s = ?",
+					column.Name, table.Table, table.DayColumn), staleKeyRuleOrg, staleKeyRuleDay).Scan(&nulls); err != nil {
+					t.Fatalf("count the NULL values of %s: %v", column.Name, err)
+				}
+				if nulls != 2 {
+					t.Errorf("%d stored version(s) hold NULL in %s, want 2: the first row and the row of zeros", nulls, column.Name)
+				}
+			}
 			var total uint64
 			if err := conn.QueryRow(ctx, fmt.Sprintf("SELECT count() FROM %s FINAL WHERE org_id = ? AND %s = ?", table.Table, table.DayColumn),
 				staleKeyRuleOrg, staleKeyRuleDay).Scan(&total); err != nil {

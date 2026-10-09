@@ -772,6 +772,30 @@ func TestCarryTeamIDsMovesAnAdminTeamOntoThePushedCustomTeamOfItsID(t *testing.T
 	}
 }
 
+// The fold reads and writes the kept row of the carried organization only:
+// another organization's row of the same id keeps its members and gets no
+// new version.
+func TestCarryTeamIDsFoldStaysInItsOrganization(t *testing.T) {
+	ctx, conn := newWorkItemEffectsConn(t)
+	f := carryFixture{t: t, ctx: ctx, conn: conn, orgID: uuid.NewString()}
+	other := carryFixture{t: t, ctx: ctx, conn: conn, orgID: uuid.NewString()}
+	f.team("", "custom:eng", carryPtr("eng"), nil, 1, carryOld, nil, nil)
+	f.team("", "eng", nil, nil, 1, carryOld.Add(time.Hour), []string{"a@example.com"}, nil)
+	other.team("", "custom:eng", carryPtr("eng"), nil, 1, carryOld, []string{"b@example.com"}, nil)
+
+	outcome, err := CarryTeamIDs(ctx, conn, f.orgID, carryAt, false)
+	if err != nil || outcome.ManualMembersFolded != 1 {
+		t.Fatalf("carry = %+v, %v; want one fold", outcome, err)
+	}
+	const q = `SELECT concat(toString((SELECT count() FROM teams WHERE org_id = ? AND id = 'custom:eng')), '|', arrayStringConcat(manual_members, ',')) FROM teams FINAL WHERE org_id = ? AND id = 'custom:eng'`
+	if got := other.str(q, other.orgID); got != "1|b@example.com" {
+		t.Errorf("other organization custom:eng = %q, want 1|b@example.com", got)
+	}
+	if got := f.str(q, f.orgID); got != "2|a@example.com" {
+		t.Errorf("own organization custom:eng = %q, want 2|a@example.com", got)
+	}
+}
+
 // A kept row that already holds every manual member of the moved row is not
 // written again.
 func TestCarryTeamIDsDoesNotRewriteAKeptRowThatHoldsTheMembers(t *testing.T) {

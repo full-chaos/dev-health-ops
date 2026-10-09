@@ -102,8 +102,10 @@ func TestPRReworkRatioTimeseries_SeededRealClickHouse_ReviewedPullRequestsOnly(t
 			t.Errorf("%s: no bucket", name)
 		case want == nil && got != nil:
 			t.Errorf("%s = %v, want no value: no pull request of the bucket has review data", name, *got)
-		case want != nil && (got == nil || math.Abs(*got-*want) > 1e-12):
-			t.Errorf("%s = %v, want %v", name, got, *want)
+		case want != nil && got == nil:
+			t.Errorf("%s has no value, want %v", name, *want)
+		case want != nil && math.Abs(*got-*want) > 1e-12:
+			t.Errorf("%s = %v, want %v", name, *got, *want)
 		}
 	}
 	value := func(v float64) *float64 { return &v }

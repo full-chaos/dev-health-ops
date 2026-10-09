@@ -62,6 +62,26 @@ rule, definition version, query version, source version, and freshness policy.
 The query response preserves source evidence references and reports the prior
 immediately preceding window of equal duration when comparison is requested.
 
+## Pull request cycle time
+
+The cycle time of one pull request is `merged_at - created_at`, in hours. A
+pull request that was open for a long time and merged late counts with its
+full cycle time: it is a real input, not an outlier to remove.
+
+- **Day.** `repo_metrics_daily.median_pr_cycle_hours` is the median over the
+  pull requests of the repository merged on that UTC day. A day on which many
+  old pull requests merge can have a median of hundreds of hours.
+- **Week or month.** The repository cycle-time axis of Quadrants is the median
+  over **every** pull request of the repository merged in that week or month,
+  read from `git_pull_requests` (latest synced version of each pull request).
+  Each pull request has one weight. It is never a mean or a median of the
+  daily medians: those give a day with one merge the same weight as a day with
+  149 merges.
+- **Median.** With an even count, the median is the mean of the two middle
+  values, the same rule as the daily value.
+- **No merge.** A week or month with no merged pull request has no value. It
+  is not zero.
+
 ## Blocked hours in `work_item_state_durations_daily`
 
 `work_item_state_durations_daily` holds, for each day, the hours that work

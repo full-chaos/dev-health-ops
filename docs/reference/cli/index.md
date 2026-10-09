@@ -846,14 +846,20 @@ unchanged.
   the coverage check of a call without `--repo-id` (a day that the nightly schedule or
   a post-sync run covered still answers `already_covered`; the tag does not lift it).
 - A rerun writes the same keys as the first run, and a later `computed_at` replaces an
-  earlier one in the daily tables (ReplacingMergeTree on `computed_at`, or a reader that
-  takes the newest row), so readers count the day once. A rerun deletes no row: a row stored under a key
+  earlier one in the ReplacingMergeTree daily tables, so readers that take the newest row
+  count the day once. Raw reads of the plain MergeTree tables (`investment_metrics_daily`,
+  `issue_type_metrics_daily`, `investment_classifications_daily`) and of the view
+  `v_investment_flow_edges` count every generation of a day; any second run of a day does
+  that, with or without a tag. A rerun deletes no row: a row stored under a key
   that the new run no longer produces stays, and only the writer of that table can zero it.
 - Output: a call with a tag prints `rerun_tag` and, per day, `started` (`false` when the
   run of that tag and day was already there). The CLI is a one-shot process with no metrics
   endpoint, so the signal is a log line per day (`rerun started`, `rerun already started,
   nothing new`, `rerun refused` with a `reason`), the stored run (its generation is
-  derived from the tag) and the audit row.
+  derived from the tag).
+- The audit row holds the principal, the action, the organization, `--reason` and
+  `--correlation-id`, and no tag. Pass the tag in `--correlation-id` as well
+  (for example `--correlation-id chaos-NNNN-fix-1`), so the audit row names the rerun.
 
 ```bash
 kubectl exec -i <worker-pod> -- dho workers metrics daily-start \

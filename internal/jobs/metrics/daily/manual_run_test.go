@@ -95,7 +95,7 @@ func TestManualDailyRerunGenerationNamesOneRequestPerTag(t *testing.T) {
 
 func TestValidRerunTag(t *testing.T) {
 	t.Parallel()
-	for _, tag := range []string{"a", "fix-1", "CHAOS_9026.rerun-2", strings.Repeat("x", MaxRerunTagLength)} {
+	for _, tag := range []string{"a", "fix-1", "AZaz09", "CHAOS_9026.rerun-2", strings.Repeat("x", MaxRerunTagLength)} {
 		if !ValidRerunTag(tag) {
 			t.Errorf("ValidRerunTag(%q) = false, want true", tag)
 		}
@@ -114,5 +114,18 @@ func TestValidRerunTag(t *testing.T) {
 		if ValidRerunTag(tag) {
 			t.Errorf("ValidRerunTag(%q) = true, want false", tag)
 		}
+	}
+}
+
+// The seed format of a tagged request is the identity of a tag across
+// releases: a change to it would silently start every earlier tag again. The
+// literal was computed outside this code (sha256 of
+// "<org>|<day>|<repo>|rerun:fix-1", first 16 hex characters).
+func TestManualDailyRerunGenerationSeedFormatIsPinned(t *testing.T) {
+	t.Parallel()
+	got := ManualDailyRerunGeneration("00000000-0000-4000-8000-000000000001", "2026-07-24",
+		[]RepositoryID{"00000000-0000-4000-8000-000000000002"}, "fix-1")
+	if want := "manual-daily:0fb88cd3d5422ce7"; got != want {
+		t.Fatalf("tagged generation = %q, want %q", got, want)
 	}
 }

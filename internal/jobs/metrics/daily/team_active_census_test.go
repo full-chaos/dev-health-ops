@@ -22,9 +22,15 @@ import (
 // by parsing the source, not by a list of names, so a NEW read of the table
 // with no rule fails here.
 //
+// The SQL text is read as the code builds it from string literals: a
+// statement in one literal, a statement joined from literals with `+`, and
+// the table name as a literal of its own (handed to a format or joined to a
+// value) all count as a read.
+//
 // What the census does not hold: a resolver that takes a team id from another
-// source (an ownership row, a stored row of an earlier day). Each of those has
-// its own test.
+// source (an ownership row, a stored row of an earlier day), and a statement
+// whose table name comes from outside this package tree. Each resolver of the
+// first kind has its own test.
 
 // teamsReadPattern is a read of the teams table in SQL text.
 var teamsReadPattern = regexp.MustCompile(`(?i)\b(from|join)\s+teams\b`)
@@ -32,6 +38,56 @@ var teamsReadPattern = regexp.MustCompile(`(?i)\b(from|join)\s+teams\b`)
 // teamsReadsWithoutTheRule are the functions that read the teams table and
 // need no active-team rule, each with the reason. Key: "file:function".
 var teamsReadsWithoutTheRule = map[string]string{}
+
+// readsTeamsText says that a text is SQL that reads the teams table, or is
+// the name of the table by itself.
+func readsTeamsText(text string) bool {
+	return teamsReadPattern.MatchString(text) || strings.TrimSpace(text) == "teams"
+}
+
+// foldStringParts joins the string literals of a `+` expression in their
+// order. A part that is not a literal is a gap the pattern cannot match over.
+func foldStringParts(expression ast.Expr) string {
+	switch typed := expression.(type) {
+	case *ast.BinaryExpr:
+		if typed.Op == token.ADD {
+			return foldStringParts(typed.X) + foldStringParts(typed.Y)
+		}
+	case *ast.ParenExpr:
+		return foldStringParts(typed.X)
+	case *ast.BasicLit:
+		if typed.Kind == token.STRING {
+			if text, err := strconv.Unquote(typed.Value); err == nil {
+				return text
+			}
+		}
+	}
+	return "\x00"
+}
+
+func TestTheCensusOfTeamsReadsSeesAStatementBuiltFromParts(t *testing.T) {
+	for source, want := range map[string]bool{
+		`"SELECT id FROM teams FINAL"`:                       true,
+		`"SELECT id FROM " + "teams" + " FINAL WHERE x = ?"`: true,
+		`"SELECT id FROM " + ("teams" + " FINAL")`:           true,
+		`"SELECT id FROM " + name + " FINAL"`:                false,
+		`"SELECT t.id FROM repos r LEFT JOIN teams AS t"`:    true,
+		`"SELECT id FROM team_repo_ownership"`:               false,
+		`"SELECT id FROM " + "team" + "s_archive"`:           false,
+		`"SELECT id FROM teams_archive"`:                     false,
+	} {
+		expression, err := parser.ParseExpr(source)
+		if err != nil {
+			t.Fatalf("parse %s: %v", source, err)
+		}
+		if got := readsTeamsText(foldStringParts(expression)); got != want {
+			t.Errorf("%s: read of teams = %v, want %v", source, got, want)
+		}
+	}
+	if !readsTeamsText(" teams ") || readsTeamsText("teams_archive") {
+		t.Errorf("the table name by itself must count, a longer name must not")
+	}
+}
 
 func TestEveryReadOfTeamsInTheDailyJobAppliesTheActiveTeamRuleCensus(t *testing.T) {
 	fileSet := token.NewFileSet()
@@ -59,12 +115,21 @@ func TestEveryReadOfTeamsInTheDailyJobAppliesTheActiveTeamRuleCensus(t *testing.
 		literalReadsTeams := func(node ast.Node) bool {
 			found := false
 			ast.Inspect(node, func(inner ast.Node) bool {
-				literal, isLiteral := inner.(*ast.BasicLit)
-				if !isLiteral || literal.Kind != token.STRING {
-					return true
-				}
-				if text, err := strconv.Unquote(literal.Value); err == nil && teamsReadPattern.MatchString(text) {
-					found = true
+				switch typed := inner.(type) {
+				case *ast.BinaryExpr:
+					// A statement joined from parts: read it as one text.
+					if typed.Op == token.ADD {
+						if readsTeamsText(foldStringParts(typed)) {
+							found = true
+						}
+					}
+				case *ast.BasicLit:
+					if typed.Kind != token.STRING {
+						return true
+					}
+					if text, err := strconv.Unquote(typed.Value); err == nil && readsTeamsText(text) {
+						found = true
+					}
 				}
 				return true
 			})

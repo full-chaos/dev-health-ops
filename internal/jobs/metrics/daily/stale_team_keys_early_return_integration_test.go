@@ -22,9 +22,7 @@ import (
 // The file uses one symbol of the rule, endStaleKeyRun, for the table that the
 // end of a run decides (work_item_state_durations_daily).
 //
-// Two returns of the families are not cases here because no input reaches
-// them: ai_impact with pull requests and no record (its compute emits the
-// 'unknown' bucket for every group of pull requests), and
+// One return of the families is not a case here because no input reaches it:
 // compounding_risk_team with a repository-to-team map and no record (the map
 // holds only repositories that have a metrics row, and each gives its team an
 // input).
@@ -193,6 +191,42 @@ func TestAFamilyThatWritesNoRowStillSupersedesTheKeysOfTheDay(t *testing.T) {
 		}
 		if value := held(t, "ai_impact_metrics_daily", "team_id", "prs_total", org, fmt.Sprintf(" AND repo_id = '%s'", other)); value != 5 {
 			t.Errorf("the key of a repository outside the partition holds %v, want its 5", value)
+		}
+	})
+
+	// A pull request that was opened on the day and merged on a later day is
+	// read for the day and gives no record: the compute takes the merge as the
+	// event, and that is not in the day.
+	t.Run("ai_impact, pull requests that give no record", func(t *testing.T) {
+		const org = "00000000-0000-4000-8000-0000007e000a"
+		exec(t, "insert the earlier ai_impact row", `INSERT INTO ai_impact_metrics_daily
+    (org_id, team_id, repo_id, work_type, day, attribution_bucket, prs_total, prs_merged, human_prs, computed_at)
+    VALUES (?, 'platform', ?, 'earlier', ?, 'human', 5, 5, 5, ?)`, org, repo, day, earlier)
+		exec(t, "insert pull request", `INSERT INTO git_pull_requests
+    (repo_id, number, title, state, author_name, author_email, created_at, merged_at, additions, deletions, changed_files, last_synced, org_id)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			repo, uint32(7), "Add the thing", "merged", "Dev", "dev@example.com", day.Add(2*time.Hour), day.Add(50*time.Hour),
+			uint32(10), uint32(2), uint32(1), earlier, org)
+		executor, err := NewAIImpactExecutor(conn)
+		if err != nil {
+			t.Fatal(err)
+		}
+		executor.nowUTC = func() time.Time { return clock }
+		run := Run{ID: uuid.NewString(), OrganizationID: org, TargetDay: day}
+		partition := Partition{ID: uuid.NewString(), RunID: run.ID, RepoIDs: []RepositoryID{RepositoryID(repo.String())}}
+		if _, err := executor.ComputeFamily(ctx, run, partition); err != nil {
+			t.Fatalf("ai_impact: %v", err)
+		}
+		var produced uint64
+		if err := conn.QueryRow(ctx, `SELECT toUInt64(sum(prs_total)) FROM ai_impact_metrics_daily FINAL
+WHERE org_id = ? AND day = ? AND repo_id = ? AND team_id != 'platform'`, org, day, repo).Scan(&produced); err != nil {
+			t.Fatalf("read the day: %v", err)
+		}
+		if produced != 0 {
+			t.Fatalf("the compute gave %d pull request(s) for the day: the case is not the return with no record", produced)
+		}
+		if value := held(t, "ai_impact_metrics_daily", "team_id", "prs_total", org, fmt.Sprintf(" AND repo_id = '%s'", repo)); value != 0 {
+			t.Errorf("the key of the partition's repository still holds %v", value)
 		}
 	})
 

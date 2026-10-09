@@ -1506,8 +1506,10 @@ WHERE the rule runs depends on who can write a key:
   share a work scope both write the real rows of the scope, each from the attributions stored at its read, and the
   rows of the step are computed once, after every partition wrote its attributions, so they are the rows of the day.
   Every row the step writes is strictly newer than every stored row of the day in that table: its version is the
-  clock of the host, or one second after the newest stored row when the clock is not later (a partition can run on a
-  host whose clock is ahead, and several tables keep `computed_at` to the second).
+  clock of the host, or one unit of the table's `computed_at` column after the newest stored row when the clock is not
+  later (a partition can run on a host whose clock is ahead, and several tables keep `computed_at` to the second).
+  The step reads the work scopes of the run's repositories in chunks of the repository list (`internal/jobs/metrics/
+  querybound`): the list of a run has no bound, and the driver writes a list into the statement text.
 - **A table whose key scope is the partition's own repository keeps the rule in its family**: a repository is in one
   partition of a run.
 - **A table that a finalize family writes** is written once for a run already; the family applies the rule after its
@@ -1515,8 +1517,10 @@ WHERE the rule runs depends on who can write a key:
 
 A row of zeros is strictly newer than the row it supersedes, never of the same `computed_at`: with an equal
 `computed_at` only a FINAL read follows the order of the inserts, and a reader that takes the newest row by `argMax`
-or by `LIMIT 1 BY` may take either row. A family's row of zeros gets the family's `computed_at`, or one second after
-the newest stored row of its key when that is not earlier. One table is different: in `team_metrics_daily` the row of
+or by `LIMIT 1 BY` may take either row. A family's row of zeros gets the family's `computed_at`, or one unit of the
+table's `computed_at` column (a second, a millisecond or a microsecond; `staleKeyVersionSteps`, checked against the
+schema by a test) after the newest stored row of its key when that is not earlier. The step is the smallest one that
+is strictly newer: a larger step would put the row of zeros ahead of the clock. One table is different: in `team_metrics_daily` the row of
 zeros carries exactly the `computed_at` of the rows the family wrote for the same repository, because two readers of
 that table keep only the newest generation of a repository and would lose the live rows behind a newer row of zeros.
 
@@ -1562,10 +1566,21 @@ Limits:
   stale. A history recompute must go from the oldest day to the newest, or run twice. (Not changed here; the same on
   the code before this change.)
 - A family writes its real rows at its own clock. A real row of a key that an EARLIER row of zeros superseded (the key
-  comes back) is the newest row of its key only when the family's clock is later than that row of zeros. It is not
-  when the key comes back inside the second of that row, or on a host whose clock is behind it. The next run of the
-  day settles it. This does not apply to the three work-item tables: the end of a run stores their rows strictly newer
-  than every stored row of the day.
+  comes back) is the newest row of its key only when the family's clock, cut to the unit of the table's `computed_at`
+  column, is later than that row of zeros. The row of zeros is at the later of its family's clock and one unit after
+  the row it superseded. So the real row loses when the key comes back inside one unit of the row of zeros (a second
+  in `ic_landscape_rolling_30d` and `compounding_risk_daily`, a millisecond or a microsecond in the other tables), or
+  on a host whose clock is behind the row of zeros, or after a row from a host whose clock was ahead. The next run of
+  the day settles it. This does not apply to the three work-item tables: the end of a run stores their rows strictly
+  newer than every stored row of the day.
+- Two runs of one day that end at the same time and do NOT read the same inputs (two runs with different repository
+  lists that share a work scope; the "change" is the other run's own attribution write) can leave the rows of the run
+  whose rows are on the later version, and for equal versions the rows of the later insert. Seen in a test of this
+  shape: one key of an inactive team stays counted beside the right keys (an over-count, no key lost). The next run of
+  the day settles it. Two runs of the whole organization read the same inputs and leave the day right.
+- The end of a run computes the three work-item tables once more in one process, over every work scope the run's
+  repositories have an item in, with no row cap: about 1.5 MiB of heap for each 1,000 open or day-completed items of
+  those scopes, for each table in turn.
 - A worker of an older version that computes a stored day again writes under the old id once more. The next run of a
   current worker for that day supersedes the key again.
 - Between the last partition and the end of a run, a shared work scope can hold the rows of a partition whose read

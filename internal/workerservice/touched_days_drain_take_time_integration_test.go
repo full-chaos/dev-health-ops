@@ -634,3 +634,40 @@ func TestTouchedDaysDrainAFailedRunWithALostMarkStopsTheChain(t *testing.T) {
 		t.Fatalf("chain_stopped_mark_missing = %d, want 1 for a failed run with a lost mark", got)
 	}
 }
+
+// The run whose end triggered the pass is read apart from the newest runs, so
+// no number of newer ended runs hides its lost mark.
+func TestTouchedDaysDrainTheTriggerRunIsCheckedWhateverNumberOfNewerRunsEnded(t *testing.T) {
+	for _, newer := range []int{199, 200, 201, 260} {
+		t.Run(fmt.Sprintf("%d_newer_runs", newer), func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+			defer cancel()
+			rig := newDrainRig(t, ctx)
+			orgID := uuid.NewString()
+			day := time.Date(2026, 7, 31, 0, 0, 0, 0, time.UTC)
+			take := time.Now().UTC().Add(-time.Hour).Truncate(time.Millisecond)
+			touchedEvent(t, ctx, rig.touchedRig, orgID, day, uuid.NewString(), "touched", take.Add(-time.Minute))
+			trigger := insertMarkingRun(t, ctx, rig.touchedRig, orgID, day, "succeeded", &take, time.Now().UTC().Add(-3*time.Hour))
+			for i := 1; i <= newer; i++ {
+				insertMarkingRun(t, ctx, rig.touchedRig, orgID, day.AddDate(0, 0, -i), "succeeded", &take,
+					time.Now().UTC().Add(-time.Duration(i)*time.Second))
+			}
+			rig.drain(t, nil, nil).DrainTouchedDays(ctx, orgID, "e:"+trigger)
+			if got := rig.observer.count(drainEventChainStopped); got != 1 {
+				t.Fatalf("chain_stopped_mark_missing = %d, want 1 with %d newer ended runs: the lost mark of the trigger run was not seen", got, newer)
+			}
+			stopped := false
+			for _, line := range rig.logLines("touched_days_drain.failed") {
+				if strings.Contains(line, "chain_stopped_mark_missing") {
+					stopped = true
+					if !strings.Contains(line, `"drain_trigger_checked":true`) {
+						t.Fatalf("the stop line does not say that the trigger run was checked: %s", line)
+					}
+				}
+			}
+			if !stopped {
+				t.Fatal("no chain_stopped_mark_missing line")
+			}
+		})
+	}
+}

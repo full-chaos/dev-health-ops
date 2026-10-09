@@ -200,6 +200,9 @@ type touchedDrainPass struct {
 	// runsChanged is true when a run of the organization was created between
 	// the reads of the pass and its lock: the pass started nothing.
 	runsChanged bool
+	// triggerChecked is true when the run whose end triggered the pass was
+	// among the runs whose mark the pass checked.
+	triggerChecked bool
 }
 
 // DrainTouchedDays runs one pass for the organization. passID names the
@@ -321,6 +324,9 @@ func (drain *TouchedDaysDrain) markOfPassMissing(ctx context.Context, pass *touc
 	}
 	checkable := make([]TouchedRunKeys, 0, len(runs))
 	for _, run := range runs {
+		if run.RunID == endedRunID {
+			pass.triggerChecked = true
+		}
 		if run.TakenAt.IsZero() {
 			if run.RunID == endedRunID {
 				drain.logger.Warn(ctx, synclog.MsgTouchedDaysDrainFailed,
@@ -344,6 +350,7 @@ func (drain *TouchedDaysDrain) markOfPassMissing(ctx context.Context, pass *touc
 		synclog.Org(synclog.ParseID(pass.organizationID)),
 		drainPassAttr(pass.passID),
 		synclog.Count(synclog.KeyDrainDaysNotMarked, len(days)),
+		synclog.Flag(synclog.KeyDrainTriggerChecked, pass.triggerChecked),
 	)
 	drain.observe(jobruntime.TouchedDaysDrainChainStopped, 1)
 	return true, nil
@@ -657,6 +664,7 @@ func (drain *TouchedDaysDrain) report(ctx context.Context, pass *touchedDrainPas
 		synclog.Count(synclog.KeyDrainRunsInFlight, pass.inFlight),
 		synclog.Elapsed(synclog.KeyDrainOldestPendingAge, age),
 		synclog.Flag(synclog.KeyDrainReadTruncated, pass.backlog.Truncated),
+		synclog.Flag(synclog.KeyDrainTriggerChecked, pass.triggerChecked),
 	}
 	if len(pass.backlog.Days) > 0 {
 		// The days are newest first: the last one is the oldest the read

@@ -700,7 +700,7 @@ bookkeeping, not team attribution.
 *The check.* A pass that the end of a run triggered (trigger letter `e`)
 checks the run whose end triggered it and the runs of a fan-out or of the drain
 of the organization that ended in the last 24 hours and have a take time (the
-newest 200). The run that ended can be a run of a fan-out, of the drain or of
+newest 200, and the run that ended in addition: it is read apart and never competes with the bound). The run that ended can be a run of a fan-out, of the drain or of
 the nightly schedule. When a pending key of one of those runs was last touched
 before its take time, the pass writes one Error line (phase
 `chain_stopped_mark_missing`, with `drain_days_not_marked`, the number of days

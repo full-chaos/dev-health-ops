@@ -333,8 +333,10 @@ WHERE org_id = $1::uuid AND generation = $2 AND touched_take_at IS NULL`,
 // TouchedMarkingRunsToCheck returns the runs whose mark the drain checks: the
 // run endedRunID (when it is a run that marks keys, whatever its take time) and
 // the runs of a post-sync fan-out or of the drain that ended, were created in
-// the last window, and have a take time. Newest first, at most limit; the flag
-// says that more exist.
+// the last window, and have a take time. The run endedRunID comes first and is
+// read apart from the others, so it never competes with the limit however many
+// newer runs exist; the others are the newest limit, newest first, and the flag
+// says that more of them exist.
 //
 // A run that is not ended is left out on purpose: the mark of a fan-out follows
 // its commit by a moment, and a pass in that moment must not read the missing
@@ -352,9 +354,44 @@ func (store *PostgresStore) TouchedMarkingRunsToCheck(
 		(endedRunID != "" && !validUUID(endedRunID)) {
 		return nil, false, ErrInvalidState
 	}
-	ended := any(nil)
+	org := uuid.MustParse(organizationID).String()
+	var runs []TouchedRunKeys
+	ended := ""
 	if endedRunID != "" {
 		ended = uuid.MustParse(endedRunID).String()
+		// $5 is named only so that the statement uses every parameter it is given.
+		trigger, _, err := store.queryMarkingRuns(ctx, `
+  AND run.id = $4::uuid AND $5::float8 IS NOT NULL`, 1, org, ended)
+		if err != nil {
+			return nil, false, err
+		}
+		runs = trigger
+	}
+	newest, truncated, err := store.queryMarkingRuns(ctx, `
+  AND run.status NOT IN ('pending', 'running')
+  AND run.created_at >= clock_timestamp() - make_interval(secs => $5)
+  AND (to_jsonb(run) ->> 'touched_take_at') IS NOT NULL
+  AND ($4::uuid IS NULL OR run.id <> $4::uuid)`, limit, org, ended, window.Seconds())
+	if err != nil {
+		return nil, false, err
+	}
+	return append(runs, newest...), truncated, nil
+}
+
+// queryMarkingRuns reads the runs of the organization that mark keys and match
+// the extra condition, newest first, at most limit; the flag says that more
+// matched. $1 is the organization, $2 and $3 the generation patterns, $4 the
+// run that ended (NULL for none) and $5 the window in seconds.
+func (store *PostgresStore) queryMarkingRuns(
+	ctx context.Context, condition string, limit int, organizationID, endedRunID string, window ...float64,
+) ([]TouchedRunKeys, bool, error) {
+	var ended any
+	if endedRunID != "" {
+		ended = endedRunID
+	}
+	seconds := 0.0
+	if len(window) > 0 {
+		seconds = window[0]
 	}
 	rows, err := store.pool.Query(ctx, `
 SELECT run.id::text, run.target_day, run.full_org,
@@ -368,17 +405,13 @@ SELECT run.id::text, run.target_day, run.full_org,
        ) END
 FROM public.daily_metrics_runs AS run
 WHERE run.org_id = $1::uuid
-  AND `+fmt.Sprintf(touchedMarkingRunSQL, "run", 2, 3)+`
-  AND (run.id = $4::uuid OR (
-        run.status NOT IN ('pending', 'running')
-        AND run.created_at >= clock_timestamp() - make_interval(secs => $5)
-        AND (to_jsonb(run) ->> 'touched_take_at') IS NOT NULL))
+  AND `+fmt.Sprintf(touchedMarkingRunSQL, "run", 2, 3)+condition+`
 ORDER BY run.created_at DESC, run.id DESC
 LIMIT $6`,
-		uuid.MustParse(organizationID).String(),
+		organizationID,
 		escapeLikePrefix(postSyncGenerationPrefix)+"%",
 		escapeLikePrefix(TouchedDrainGenerationPrefix)+"%",
-		ended, window.Seconds(), limit+1,
+		ended, seconds, limit+1,
 	)
 	if err != nil {
 		return nil, false, ErrUnavailable

@@ -137,7 +137,7 @@ jobs:
 
       - name: Upload Semgrep SARIF to code scanning
         if: always() && hashFiles('semgrep.sarif') != ''
-        uses: github/codeql-action/upload-sarif@b96794f015dfd88f77b49b1c93e0fa7110f94c63 # v4.38.0
+        uses: github/codeql-action/upload-sarif@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
         with:
           sarif_file: semgrep.sarif
 
@@ -239,7 +239,7 @@ jobs:
       # alert), always under `gitleaks`. A scan that failed for another reason (exit 1: the SARIF holds no result) uploads nothing.
       - name: Upload Gitleaks SARIF to code scanning
         if: always() && hashFiles('results.sarif') != '' && (steps.scan.outputs.rc == '2' || (steps.scan.outputs.rc == '0' && github.event_name == 'pull_request'))
-        uses: github/codeql-action/upload-sarif@b96794f015dfd88f77b49b1c93e0fa7110f94c63 # v4.38.0
+        uses: github/codeql-action/upload-sarif@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
         with:
           sarif_file: results.sarif
           category: ${{ github.event_name == 'pull_request' && 'gitleaks' || format('gitleaks-{0}-{1}', github.event_name, github.sha) }}

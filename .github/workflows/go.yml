@@ -826,7 +826,7 @@ jobs:
       - name: Warm the syft tool cache (attempt 1)
         id: syft-download-1
         continue-on-error: true
-        uses: anchore/sbom-action/download-syft@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
+        uses: anchore/sbom-action/download-syft@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
         with:
           syft-version: v1.42.3
 
@@ -834,7 +834,7 @@ jobs:
         id: syft-download-2
         if: steps.syft-download-1.outcome == 'failure'
         continue-on-error: true
-        uses: anchore/sbom-action/download-syft@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
+        uses: anchore/sbom-action/download-syft@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
         with:
           syft-version: v1.42.3
 
@@ -842,12 +842,12 @@ jobs:
         id: syft-download-3
         if: steps.syft-download-2.outcome == 'failure'
         continue-on-error: true
-        uses: anchore/sbom-action/download-syft@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
+        uses: anchore/sbom-action/download-syft@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
         with:
           syft-version: v1.42.3
 
       - name: Generate ${{ matrix.target }} SBOM
-        uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
+        uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
         with:
           image: dev-health-go-${{ matrix.target }}:security
           format: spdx-json

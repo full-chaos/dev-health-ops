@@ -212,6 +212,42 @@ WHERE org_id = ? AND day = ? AND scope = 'repo' AND scope_id = 'platform'`, stal
 				}
 			}
 
+			// The predicate for readers agrees with the writer's read: both
+			// forms hold the keys with a measure and leave out the key with
+			// the row of zeros.
+			liveWant := uint64(1)
+			if scoped {
+				liveWant = 2
+			}
+			where := "org_id = ? AND " + table.DayColumn + " = ?"
+			if table.Where != "" {
+				where += " AND (" + table.Where + ")"
+			}
+			qualified := make([]string, 0, len(table.Keys))
+			for _, column := range table.Keys {
+				qualified = append(qualified, "t."+column.Name)
+			}
+			for form, query := range map[string]string{
+				"every key":         "SELECT count() FROM " + table.Table + " FINAL WHERE " + where,
+				"LiveRow":           "SELECT count() FROM " + table.Table + " FINAL WHERE " + where + " AND " + table.LiveRow(""),
+				"LiveRow qualified": "SELECT count() FROM " + table.Table + " AS t FINAL WHERE " + where + " AND " + table.LiveRow("t."),
+				"LiveHaving": "SELECT count() FROM (SELECT 1 FROM " + table.Table + " AS t WHERE " + where +
+					" GROUP BY " + strings.Join(qualified, ", ") + " HAVING " + table.LiveHaving("t.") + ")",
+				"LiveKeysQuery": "SELECT count() FROM (" + table.LiveKeysQuery() + ")",
+			} {
+				var count uint64
+				if err := conn.QueryRow(ctx, query, staleKeyRuleOrg, staleKeyRuleDay).Scan(&count); err != nil {
+					t.Fatalf("%s: %v\n%s", form, err, query)
+				}
+				want := liveWant
+				if form == "every key" {
+					want = liveWant + 1
+				}
+				if count != want {
+					t.Errorf("%s holds %d key(s), want %d", form, count, want)
+				}
+			}
+
 			// A second run writes nothing: the newest row of the old key is a
 			// row of zeros.
 			third := second.Add(10 * time.Hour)

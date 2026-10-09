@@ -176,21 +176,29 @@ var (
 	// compounding_risk_daily holds the team id in scope_id for the rows of
 	// scope 'team'. The rows of scope 'repo' belong to another family and hold
 	// no team id.
+	//
+	// The table has no count column, and a real row can hold NULL in every
+	// score and input (a team with no input: severity unknown). So the
+	// weights and thresholds of the compute are declared as measures: the
+	// writer stores them in every real row and they are never 0, and a row of
+	// zeros holds 0 in them. They are what tells a row of zeros from a real
+	// row with no score.
 	CompoundingRiskDailyTeam = Table{
 		Table: "compounding_risk_daily", Family: "compounding_risk_team", DayColumn: "day",
 		Keys:       []KeyColumn{{"scope", KeyString}, {"scope_id", KeyString}},
 		TeamColumn: "scope_id",
+		Measures: []string{
+			"w_churn", "w_complexity", "w_ownership", "w_review", "threshold_elevated", "threshold_high",
+		},
 		NullableMeasures: []string{
 			"compounding_risk", "churn_norm", "complexity_norm", "ownership_norm", "review_norm",
 			"rework_churn", "complexity_delta", "bus_factor", "ownership_gini", "single_owner_ratio",
 			"review_latency_p90h",
 		},
-		// The weights and thresholds are the configuration of the compute,
-		// not measures of the team: a row of zeros stores 0 in them.
-		Configuration: []string{
-			"severity", "w_churn", "w_complexity", "w_ownership", "w_review", "threshold_elevated", "threshold_high",
-		},
-		Where: "scope = 'team'",
+		// severity is the label of the score. A row of zeros stores its
+		// default, 'unknown'.
+		Configuration: []string{"severity"},
+		Where:         "scope = 'team'",
 	}
 	TeamComplexityDaily = Table{
 		Table: "team_complexity_daily", Family: "team_complexity", DayColumn: "day",
@@ -218,6 +226,17 @@ func All() []Table {
 		CompoundingRiskDailyTeam,
 		TeamComplexityDaily,
 	}
+}
+
+// ByTable returns the declaration of a table. A reader that is built for more
+// than one table asks here whether its table takes the rule.
+func ByTable(name string) (Table, bool) {
+	for _, table := range All() {
+		if table.Table == name {
+			return table, true
+		}
+	}
+	return Table{}, false
 }
 
 // Valid reports whether the declaration is usable.
@@ -272,14 +291,22 @@ func (column KeyColumn) StoredValue(text string) (any, error) {
 // LiveHaving is the test of one key in a GROUP BY over the key columns of the
 // raw table: the newest row of the key (by computed_at) holds a measure. It is
 // false for a key whose newest row is a row of zeros.
-func (table Table) LiveHaving() string {
+//
+// qualifier is the name or the alias of the table in the FROM clause with its
+// dot ("work_item_metrics_daily."), or "" for none. A reader whose SELECT
+// gives an aggregate the name of its column (argMax(x, computed_at) AS x) MUST
+// pass it: ClickHouse resolves a bare x in HAVING to that alias, and the test
+// would then hold an aggregate inside an aggregate. A qualified name is the
+// column of the table.
+func (table Table) LiveHaving(qualifier string) string {
 	live := make([]string, 0, len(table.Measures)+len(table.NullableMeasures))
+	version := qualifier + "computed_at"
 	for _, measure := range table.Measures {
-		live = append(live, "argMax("+measure+", computed_at) != 0")
+		live = append(live, "argMax("+qualifier+measure+", "+version+") != 0")
 	}
 	for _, measure := range table.NullableMeasures {
 		// The tuple keeps a NULL of the newest row: argMax skips NULL values.
-		live = append(live, "isNotNull(tupleElement(argMax(tuple("+measure+"), computed_at), 1))")
+		live = append(live, "isNotNull(tupleElement(argMax(tuple("+qualifier+measure+"), "+version+"), 1))")
 	}
 	return strings.Join(live, " OR ")
 }
@@ -317,7 +344,7 @@ func (table Table) LiveKeysQuery() string {
 	keys := strings.Join(expressions, ", ")
 	return "SELECT " + keys + " FROM " + table.Table +
 		" WHERE org_id = ? AND " + table.DayColumn + " = ?" + where +
-		" GROUP BY " + keys + " HAVING " + table.LiveHaving() +
+		" GROUP BY " + keys + " HAVING " + table.LiveHaving("") +
 		" ORDER BY " + keys
 }
 

@@ -5,6 +5,7 @@ package compoundingrisk
 import (
 	"context"
 	"reflect"
+	"sort"
 	"testing"
 	"time"
 
@@ -43,24 +44,45 @@ func TestTeamLabelsListsOnlyActiveTeamsButLabelsRetiredIDs(t *testing.T) {
 	base := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
 	insert := `INSERT INTO teams (id, team_uuid, name, members, repo_patterns, updated_at, org_id, is_active)
 		VALUES (?, generateUUIDv4(), ?, [], ['org/*'], ?, ?, ?)`
+	const otherOrg = "org-9032-other-tenant"
 	for _, row := range []struct {
-		id     string
-		at     time.Time
-		active uint8
+		id, name, org string
+		at            time.Time
+		active        uint8
 	}{
-		{"github:platform", base.Add(time.Hour), 1},
-		{"platform", base, 1}, // the bare row the carry retires below
-		{"platform", base.Add(time.Hour), 0},
+		{"github:platform", "Platform", org, base.Add(time.Hour), 1},
+		{"platform", "Platform", org, base, 1}, // the bare row the carry retires below
+		{"platform", "Platform", org, base.Add(time.Hour), 0},
+		// A second provider id shape: the rule must not ride on `github:`.
+		{"linear:growth", "Growth", org, base.Add(time.Hour), 1},
+		{"growth", "Growth", org, base, 1},
+		{"growth", "Growth", org, base.Add(time.Hour), 0},
+		{"jira:payments", "Payments", org, base.Add(time.Hour), 1},
+		// Another tenant holds the SAME bare ids as ACTIVE rows, and its own team.
+		{"platform", "Other Platform", otherOrg, base, 1},
+		{"growth", "Other Growth", otherOrg, base, 1},
+		{"other:team", "Other Team", otherOrg, base, 1},
+		{"github:platform", "Other GitHub Platform", otherOrg, base.Add(2 * time.Hour), 1},
 	} {
-		if err := conn.Exec(ctx, insert, row.id, "Platform", row.at, org, row.active); err != nil {
+		if err := conn.Exec(ctx, insert, row.id, row.name, row.at, row.org, row.active); err != nil {
 			t.Fatalf("insert team %+v: %v", row, err)
 		}
 	}
 	labels, order := teamLabels(ctx, client, org)
-	if want := []string{"github:platform"}; !reflect.DeepEqual(order, want) {
+	if want := []string{"github:platform", "jira:payments", "linear:growth"}; !reflect.DeepEqual(sortedCopy(order), want) {
 		t.Fatalf("candidate order = %v, want %v", order, want)
 	}
-	if labels["platform"] != "Platform" || labels["github:platform"] != "Platform" {
-		t.Fatalf("labels = %v, want both ids labelled", labels)
+	wantLabels := map[string]string{
+		"github:platform": "Platform", "platform": "Platform",
+		"linear:growth": "Growth", "growth": "Growth", "jira:payments": "Payments",
 	}
+	if !reflect.DeepEqual(labels, wantLabels) {
+		t.Fatalf("labels = %v, want %v", labels, wantLabels)
+	}
+}
+
+func sortedCopy(in []string) []string {
+	out := append([]string(nil), in...)
+	sort.Strings(out)
+	return out
 }

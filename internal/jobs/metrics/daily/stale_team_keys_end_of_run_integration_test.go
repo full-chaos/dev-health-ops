@@ -5,6 +5,7 @@ package daily
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -17,9 +18,25 @@ import (
 // the row of an earlier compute in a work scope that ONE repository of the run
 // still has an item in; that repository is the first or the last of the list,
 // so a read that takes a part of the list only leaves the row.
+//
+// The path to the read: RetractStaleKeys -> retractStaleTeamKeysOfRun, which
+// returns before its compute for a table that holds NO live key of the day
+// -> the compute of the table -> loadWorkItemPartitionScopes. So a run of any
+// size reaches the read only when a work-item table holds a measure for the
+// day; the stored row of each case is what makes that so. The limit is the
+// server's max_query_size (the parser's limit on the statement text; the
+// default is 262144 bytes) and one repository id is about 40 bytes of the
+// text. The test reads the server's value and shows on the same connection
+// that one statement with the whole list is refused where it must be, so a
+// case is not green because its list was short for this server.
 func TestTheEndOfARunReadsTheWorkScopesOfAnyNumberOfRepositories(t *testing.T) {
 	ctx := context.Background()
 	conn := workItemAttributionLinkedIssueMigratedClickHouse(t, ctx)
+	var maxQuerySize uint64
+	if err := conn.QueryRow(ctx, "SELECT toUInt64(value) FROM system.settings WHERE name = 'max_query_size'").Scan(&maxQuerySize); err != nil {
+		t.Fatalf("read max_query_size of the server: %v", err)
+	}
+	refused := 0
 	day := earlyReturnDay
 	earlier := day.Add(30 * time.Hour)
 	clock := earlier.Add(10 * time.Hour)
@@ -52,6 +69,26 @@ func TestTheEndOfARunReadsTheWorkScopesOfAnyNumberOfRepositories(t *testing.T) {
 				if position == "last" {
 					repos = append(repos, RepositoryID(repo.String()))
 				}
+				// The mechanism on this server: the read of the scopes as ONE
+				// statement over the whole list.
+				ids := make([]uuid.UUID, len(repos))
+				for at, id := range repos {
+					ids[at] = uuid.MustParse(string(id))
+				}
+				listBytes := uint64(len(ids)) * 40
+				rows, err := conn.Query(ctx, "SELECT DISTINCT provider FROM work_items FINAL WHERE org_id = ? AND repo_id IN ?", org, ids)
+				if err == nil {
+					err = rows.Close()
+				}
+				switch {
+				case listBytes > maxQuerySize && (err == nil || !strings.Contains(err.Error(), "code: 62")):
+					t.Fatalf("a list of about %d bytes in one statement gave %v on a server with max_query_size %d, want code 62: the case is not set",
+						listBytes, err, maxQuerySize)
+				case listBytes > maxQuerySize:
+					refused++
+				case err != nil:
+					t.Fatalf("a list of about %d bytes in one statement (max_query_size %d): %v", listBytes, maxQuerySize, err)
+				}
 				run := Run{ID: uuid.NewString(), OrganizationID: org, TargetDay: day, DiscoveredRepoIDs: repos}
 				// A failed step ends the test here: the finalize of the run
 				// would fail and be tried again with the same list.
@@ -67,6 +104,10 @@ WHERE org_id = ? AND day = ? AND team_id = 'platform'`, org, day).Scan(&held); e
 				}
 			})
 		}
+	}
+	if refused < 2 {
+		t.Errorf("%d case(s) hold a list that one statement cannot carry on this server (max_query_size %d): the test needs two or more",
+			refused, maxQuerySize)
 	}
 }
 

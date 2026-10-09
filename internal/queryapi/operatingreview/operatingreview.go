@@ -142,6 +142,8 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph/model"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graphqldate"
+
+	"github.com/full-chaos/dev-health-ops/internal/teamkeytables"
 )
 
 // QueryClient is the read-only ClickHouse query boundary this package
@@ -477,8 +479,13 @@ type stateDurationRow struct {
 	avgWip        float64
 }
 
-// fetchStateDurations ports the "state_durations" query verbatim
-// (metrics/operating_review.py:157-182).
+// fetchStateDurations ports the "state_durations" query
+// (metrics/operating_review.py:157-182), with one clause added: a key whose
+// newest row is a row of zeros is left out (the HAVING of the inner read).
+// The table holds such a row over each key that a recompute no longer
+// produces, and the two averages would take it as a sample of 0. The test is
+// the writer's (package teamkeytables); its columns are qualified because the
+// projection gives each aggregate the name of its column.
 func fetchStateDurations(ctx context.Context, client QueryClient, orgID string, teams teamSelection, start, end time.Time) ([]stateDurationRow, error) {
 	teamFilter, teamGroup, teamBinding := teamClauses(teams)
 	query := `
@@ -501,6 +508,7 @@ func fetchStateDurations(ctx context.Context, client QueryClient, orgID string, 
             ` + teamFilter + `
             AND day >= {start:Date} AND day < {end:Date}
           GROUP BY day, provider, work_scope_id, status` + teamGroup + `
+          HAVING ` + teamkeytables.WorkItemStateDurationsDaily.LiveHaving("work_item_state_durations_daily.") + `
         )
         GROUP BY status`
 
@@ -1058,6 +1066,12 @@ func fetchAIGovernance(ctx context.Context, client QueryClient, orgID string, te
           AND day >= {start:Date} AND day < {end:Date}
         GROUP BY day, team_id, repo_id`
 
+	// A key whose newest row is a row of zeros (the daily family writes one
+	// over a key whose AI artifacts are gone) is read here as a present row
+	// with no AI artifact, which aiGovernanceCoverage holds as fully covered.
+	// That is the contract of a present all-zero row and it is kept: the sums
+	// are right with such a row, and only a selection that holds nothing but
+	// rows of zeros differs from a first compute (fully covered, not no data).
 	bindings := periodBindings(orgID, start, end, teamBinding)
 	rows, err := client.Query(ctx, query, bindings)
 	if err != nil {

@@ -391,8 +391,15 @@ func (handler LinearReferenceCatalogRouteHandler) CollectReferenceCatalog(
 		if (projectErr != nil || projectCap) && ref.Strict {
 			return linearReferenceCatalogFailureBatch(evidence, "projects", evidence.Pages, evidence.Records, projectErr, projectCap)
 		}
-		if projectErr == nil && !projectCap {
-			evidence.ProjectsComplete = true
+		// Completeness is fail-closed: it starts false and is set true at the
+		// ONE place below, after every page was read (projectsFetched) and
+		// every node was read and normalized (no abandon). A snapshot closes
+		// ownership only on it, so a node the walk gave up on must leave it
+		// false, whatever came before.
+		projectsFetched := projectErr == nil && !projectCap
+		abandonReason := ""
+		if !projectsFetched {
+			abandonReason = "project_pages_not_read_to_the_end"
 		}
 		evidence.Records += len(projectRaw)
 	projectNodes:
@@ -402,6 +409,7 @@ func (handler LinearReferenceCatalogRouteHandler) CollectReferenceCatalog(
 				if ref.Strict {
 					return linearReferenceCatalogFailureBatch(evidence, "projects", evidence.Pages, evidence.Records, err, false)
 				}
+				abandonReason = "project_node_undecodable"
 				break projectNodes
 			}
 			if payload.Teams.PageInfo.HasNextPage {
@@ -413,7 +421,7 @@ func (handler LinearReferenceCatalogRouteHandler) CollectReferenceCatalog(
 					if ref.Strict {
 						return linearReferenceCatalogFailureBatch(evidence, "projects", evidence.Pages, evidence.Records, teamsErr, errors.Is(teamsErr, ErrPaginationCapExceeded))
 					}
-					evidence.ProjectsComplete = false
+					abandonReason = "project_teams_pages_not_read_to_the_end"
 					break projectNodes
 				}
 				payload.Teams.Nodes = append(payload.Teams.Nodes, teams.nodes...)
@@ -429,6 +437,7 @@ func (handler LinearReferenceCatalogRouteHandler) CollectReferenceCatalog(
 				if ref.Strict {
 					return linearReferenceCatalogFailureBatch(evidence, "projects", evidence.Pages, evidence.Records, normalizeErr, false)
 				}
+				abandonReason = "project_node_not_normalizable"
 				break projectNodes
 			}
 			rows.Projects = append(rows.Projects, project)
@@ -454,6 +463,11 @@ func (handler LinearReferenceCatalogRouteHandler) CollectReferenceCatalog(
 					Priority: 10, ValidFrom: observedAt, UpdatedAt: observedAt,
 				})
 			}
+		}
+		evidence.ProjectsComplete = projectsFetched && abandonReason == ""
+		if abandonReason != "" {
+			slog.Default().WarnContext(ctx, "linear_reference_catalog_projects_incomplete",
+				"org_id", claim.OrgID, "reason", abandonReason, "projects_kept", len(rows.Projects))
 		}
 	} else {
 		evidence.ProjectsComplete = true

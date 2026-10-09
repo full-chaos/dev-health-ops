@@ -554,3 +554,83 @@ VALUES ($1::uuid, $2::uuid, '2026-07-31'::date, $3, 'succeeded', 'succeeded', cl
 		t.Fatalf("take time = %v, want %v: a second stamp moved it", got, first)
 	}
 }
+
+// insertMarkingRun adds an ended run of every repository of one day, created at
+// the given time, with the status and take time the case needs (nil: none).
+func insertMarkingRun(t *testing.T, ctx context.Context, rig *touchedRig, orgID string, day time.Time, status string, take *time.Time, created time.Time) string {
+	t.Helper()
+	runID := uuid.NewString()
+	if _, err := rig.pool.Exec(ctx, `
+INSERT INTO public.daily_metrics_runs
+    (id, org_id, target_day, generation, status, finalization_status, created_at, updated_at, finalized_at, full_org, touched_take_at)
+VALUES ($1::uuid, $2::uuid, $3::date, $4, $5, $5, $7, $7, $7, true, $6)`,
+		runID, orgID, day.Format("2006-01-02"), "post-sync:"+uuid.NewString(), status, take, created); err != nil {
+		t.Fatal(err)
+	}
+	return runID
+}
+
+// Under the bound the newest runs are the ones checked: an unmarked key of the
+// newest run stops the chain although more runs than the bound ended.
+func TestTouchedDaysDrainStopCheckUnderTheBoundChecksTheNewestRuns(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+	rig := newDrainRig(t, ctx)
+	orgID := uuid.NewString()
+	day := time.Date(2026, 7, 31, 0, 0, 0, 0, time.UTC)
+	take := time.Now().UTC().Add(-time.Hour).Truncate(time.Millisecond)
+	touchedEvent(t, ctx, rig.touchedRig, orgID, day, uuid.NewString(), "touched", take.Add(-time.Minute))
+	insertMarkingRun(t, ctx, rig.touchedRig, orgID, day, "succeeded", &take, time.Now().UTC().Add(-time.Minute))
+	for i := 1; i <= 204; i++ {
+		insertMarkingRun(t, ctx, rig.touchedRig, orgID, day.AddDate(0, 0, -i), "succeeded", &take,
+			time.Now().UTC().Add(-time.Duration(i+1)*time.Minute/2))
+	}
+	nightly := insertNightlyRun(t, ctx, rig.touchedRig, orgID, day.AddDate(0, 0, -400))
+	rig.drain(t, nil, nil).DrainTouchedDays(ctx, orgID, "e:"+nightly)
+	if got := rig.observer.count(drainEventChainStopped); got != 1 {
+		t.Fatalf("chain_stopped_mark_missing = %d, want 1: the missing mark of the newest run was not seen", got)
+	}
+	if got := rig.observer.count(jobruntime.TouchedDaysDrainStopCheckTruncated); got != 1 {
+		t.Fatalf("stop_check_truncated = %d, want 1", got)
+	}
+}
+
+// Runs without a take time do not use the slots of the bound: during a rolling
+// deploy many of them must not hide a stamped run behind them.
+func TestTouchedDaysDrainRunsWithoutATakeTimeDoNotUseTheSlotsOfTheBound(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+	rig := newDrainRig(t, ctx)
+	orgID := uuid.NewString()
+	day := time.Date(2026, 7, 31, 0, 0, 0, 0, time.UTC)
+	take := time.Now().UTC().Add(-time.Hour).Truncate(time.Millisecond)
+	touchedEvent(t, ctx, rig.touchedRig, orgID, day, uuid.NewString(), "touched", take.Add(-time.Minute))
+	insertMarkingRun(t, ctx, rig.touchedRig, orgID, day, "succeeded", &take, time.Now().UTC().Add(-time.Hour))
+	for i := 1; i <= 205; i++ {
+		insertMarkingRun(t, ctx, rig.touchedRig, orgID, day.AddDate(0, 0, -i), "succeeded", nil,
+			time.Now().UTC().Add(-time.Duration(i)*time.Second))
+	}
+	nightly := insertNightlyRun(t, ctx, rig.touchedRig, orgID, day.AddDate(0, 0, -400))
+	rig.drain(t, nil, nil).DrainTouchedDays(ctx, orgID, "e:"+nightly)
+	if got := rig.observer.count(drainEventChainStopped); got != 1 {
+		t.Fatalf("chain_stopped_mark_missing = %d, want 1: runs without a take time hid the stamped run", got)
+	}
+}
+
+// A run that ended failed or canceled is checked too: its keys were marked
+// only by a mark that landed, so a lost mark stops the chain.
+func TestTouchedDaysDrainAFailedRunWithALostMarkStopsTheChain(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+	rig := newDrainRig(t, ctx)
+	orgID := uuid.NewString()
+	day := time.Date(2026, 7, 31, 0, 0, 0, 0, time.UTC)
+	take := time.Now().UTC().Add(-time.Hour).Truncate(time.Millisecond)
+	touchedEvent(t, ctx, rig.touchedRig, orgID, day, uuid.NewString(), "touched", take.Add(-time.Minute))
+	insertMarkingRun(t, ctx, rig.touchedRig, orgID, day, "failed", &take, time.Now().UTC().Add(-time.Minute))
+	nightly := insertNightlyRun(t, ctx, rig.touchedRig, orgID, day.AddDate(0, 0, -400))
+	rig.drain(t, nil, nil).DrainTouchedDays(ctx, orgID, "e:"+nightly)
+	if got := rig.observer.count(drainEventChainStopped); got != 1 {
+		t.Fatalf("chain_stopped_mark_missing = %d, want 1 for a failed run with a lost mark", got)
+	}
+}

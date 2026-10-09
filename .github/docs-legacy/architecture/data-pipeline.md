@@ -711,8 +711,9 @@ starts the newest days again when the mark works. While the mark keeps failing
 that is one set of 31 days for each night, and every run end stops. The check
 reads runs of the last 24 hours only; a mark that is missing for longer is
 retried by the nightly pass. A pass that finds more runs than the bound checks
-the newest and counts `stop_check_truncated` (Error line phase
-`stop_check_truncated`).
+the newest and counts `stop_check_truncated` (Warn line phase
+`stop_check_truncated`): an organization with that many ended runs in a day is
+healthy, so this is not an error.
 
 *A run with no take time* (a run of a build before the column) cannot be
 judged: it does not stop the chain. A pass that its end triggered counts
@@ -779,8 +780,11 @@ the age is a lower bound.
 - A key that a sync touched between the read of the pending days of a fan-out
   and the write of that touch (the touch carries an earlier ClickHouse time
   than the take time but is visible later) is read as a missing mark by a
-  pass in that millisecond window: the pass starts nothing, and the nightly
-  pass or the next fan-out starts runs again. Nothing is lost.
+  pass in that window: the pass starts nothing, and the nightly pass or the
+  next fan-out starts runs again. Nothing is lost. The window is the insert
+  latency of the touch (seconds for a wide window), not a millisecond; it
+  matters for a run of every repository, whose day is judged by its oldest
+  pending touch.
 - The mark of a pass is one insert for each month of its days. A mark that
   reaches some months only ends the chain as a mark that reached none.
 - The fan-out has no skip rule. A day that the drain skips stays pending, so

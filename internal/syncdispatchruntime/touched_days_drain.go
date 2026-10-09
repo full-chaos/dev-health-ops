@@ -290,7 +290,12 @@ const touchedDrainEndTrigger = "e:"
 // pending, and was last touched before the take time, is a key whose mark did
 // not land: this is known, not inferred. A key touched at or after the take
 // time was touched again while the run ran, which is normal after a sync with a
-// wide window, and does not stop the chain.
+// wide window, and does not stop the chain. One case reads as a missing mark
+// although the mark landed: a touch whose event time is before the take time
+// but that became visible after the mark (the touch reads the clock, then
+// inserts). The window is the insert latency of that touch, seconds for a wide
+// window. It is a delay only: the key stays pending, and the nightly pass or
+// the next fan-out starts runs again.
 //
 // A run with no take time (started by a build before the column) cannot be
 // checked: it does not stop the chain, and the run whose end triggered the pass
@@ -307,7 +312,9 @@ func (drain *TouchedDaysDrain) markOfPassMissing(ctx context.Context, pass *touc
 		return false, err
 	}
 	if truncated {
-		drain.logger.Error(ctx, synclog.MsgTouchedDaysDrainFailed,
+		// An organization with more ended marking runs than the bound in a day
+		// is a healthy state, not a fault: a warning and the counter say so.
+		drain.logger.Warn(ctx, synclog.MsgTouchedDaysDrainFailed,
 			synclog.Text(synclog.KeyPhase, synclog.ParseLabel("stop_check_truncated")),
 			synclog.Org(synclog.ParseID(pass.organizationID)), drainPassAttr(pass.passID))
 		drain.observe(jobruntime.TouchedDaysDrainStopCheckTruncated, 1)

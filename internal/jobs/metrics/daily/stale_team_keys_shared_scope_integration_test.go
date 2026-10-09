@@ -571,6 +571,29 @@ func TestARealRowOfAKeyThatComesBackIsNewerThanItsRowOfZeros(t *testing.T) {
 			if keyed := readSharedScope(t, ctx, conn, org); keyed["linear:ENG"] != before["ENG"] || len(keyed) != 2 {
 				t.Fatalf("the second compute is not the case: %v", keyed)
 			}
+			// The newest row of the key of team ENG is now its row of zeros.
+			// A tie with it is not enough: FINAL takes the later insert of a
+			// tie, the other two forms can take either row.
+			keyTables := []struct{ table, measure, extraKey string }{
+				{"work_item_metrics_daily", "items_completed", ""},
+				{"estimate_coverage_metrics_daily", "backlog_size", ""},
+				{"work_item_state_durations_daily", "items_touched", " AND status = 'in_progress'"},
+			}
+			keyOf := func(extraKey string) string {
+				return " WHERE org_id = ? AND day = ? AND provider = 'linear' AND work_scope_id = 'board-1' AND ifNull(team_id, '') = 'ENG'" + extraKey
+			}
+			newestOf := func(table, extraKey string) time.Time {
+				t.Helper()
+				var newest time.Time
+				if err := conn.QueryRow(ctx, "SELECT max(computed_at) FROM "+table+keyOf(extraKey), org, day).Scan(&newest); err != nil {
+					t.Fatalf("read the newest row of %s: %v", table, err)
+				}
+				return newest
+			}
+			zeros := map[string]time.Time{}
+			for _, read := range keyTables {
+				zeros[read.table] = newestOf(read.table, read.extraKey)
+			}
 
 			// The old ids are active again; the third run is not later than
 			// the rows of zeros of the second.
@@ -582,12 +605,12 @@ func TestARealRowOfAKeyThatComesBackIsNewerThanItsRowOfZeros(t *testing.T) {
 			}
 			// The other two forms of "the newest row of a key", for the key of
 			// team ENG in each table.
-			for _, read := range []struct{ table, measure, extraKey string }{
-				{"work_item_metrics_daily", "items_completed", ""},
-				{"estimate_coverage_metrics_daily", "backlog_size", ""},
-				{"work_item_state_durations_daily", "items_touched", " AND status = 'in_progress'"},
-			} {
-				where := " WHERE org_id = ? AND day = ? AND provider = 'linear' AND work_scope_id = 'board-1' AND ifNull(team_id, '') = 'ENG'" + read.extraKey
+			for _, read := range keyTables {
+				where := keyOf(read.extraKey)
+				if real := newestOf(read.table, read.extraKey); !real.After(zeros[read.table]) {
+					t.Errorf("%s: the newest row of the key that came back is at %s, its row of zeros at %s; want strictly newer",
+						read.table, real.Format(time.RFC3339Nano), zeros[read.table].Format(time.RFC3339Nano))
+				}
 				var byArgMax, byLimit float64
 				if err := conn.QueryRow(ctx, "SELECT toFloat64(argMax("+read.measure+", computed_at)) FROM "+read.table+where,
 					org, day).Scan(&byArgMax); err != nil {

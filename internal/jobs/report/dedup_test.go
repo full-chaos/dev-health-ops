@@ -3,6 +3,8 @@ package report
 import (
 	"strings"
 	"testing"
+
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/changefailure"
 )
 
 // TestBuildChartQueryDedupsCicdMetricsDaily is the CHAOS-4246 regression
@@ -185,5 +187,61 @@ func TestBuildChartQueryAveragesLeadTimeOverRowsWithACompletedItem(t *testing.T)
 	}
 	if got := averageExpression("cicd_metrics_daily", "success_rate"); got != "avg(success_rate)" {
 		t.Fatalf("a metric with no registered sample count = %q, want a plain avg", got)
+	}
+}
+
+// A chart of change failure rate is the shared window rule over the newest
+// counts of each repository and day in the bucket: not an average of stored
+// one-day values, and never the deprecated repo_metrics_daily column of the
+// same name, which holds the legacy revert ratio. Every other metric of
+// repo_metrics_daily reads its own column.
+func TestChangeFailureRateChartIsTheSharedRuleOverTheCounts(t *testing.T) {
+	t.Parallel()
+	build := func(metric, chartType, groupBy string) (string, metricDefinition) {
+		t.Helper()
+		registered, ok := supportedMetrics[metric]
+		if !ok || registered.SourceTable != "repo_metrics_daily" {
+			t.Fatalf("fixture drift: %s is not a repo_metrics_daily registry metric (got %+v)", metric, registered)
+		}
+		definition := withChartRule(registered)
+		query, _, err := buildChartQuery(ChartSpec{
+			ChartID: "chart-1", PlanID: "plan-1", ChartType: chartType, Metric: metric, GroupBy: groupBy,
+			TimeRangeStart: "2026-01-01", TimeRangeEnd: "2026-01-07", OrganizationID: "org-1",
+		}, definition)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return strings.Join(strings.Fields(query), " "), definition
+	}
+	const source = "FROM (SELECT * FROM repo_change_failure_daily ORDER BY computed_at DESC LIMIT 1 BY org_id, repo_id, day) AS repo_change_failure_daily WHERE 1 AND org_id = {org_id:String}"
+	rule := strings.Join(strings.Fields(changefailure.WindowRateSQL), " ")
+	for _, shape := range []struct{ chartType, groupBy string }{{"line", "day"}, {"bar", "repo"}, {"scorecard", ""}, {"line", "week"}} {
+		query, definition := build("change_failure_rate", shape.chartType, shape.groupBy)
+		if definition.SourceTable != changefailure.Table {
+			t.Fatalf("change_failure_rate chart table = %q, want %q", definition.SourceTable, changefailure.Table)
+		}
+		if !strings.Contains(query, rule+" AS y") || !strings.Contains(query, source) {
+			t.Errorf("%s by %q does not apply the shared rule to the newest counts:\n%s", shape.chartType, shape.groupBy, query)
+		}
+		for _, banned := range []string{"avg(", "repo_metrics_daily", "change_failure_rate IS NOT NULL", "change_failure_rate_incident"} {
+			if strings.Contains(query, banned) {
+				t.Errorf("%s by %q reads %q:\n%s", shape.chartType, shape.groupBy, banned, query)
+			}
+		}
+	}
+	// The guard that counts discarded versions describes the same table.
+	if _, _, table, ok := dedupGuardQuery(ChartSpec{Metric: "change_failure_rate", OrganizationID: "org-1"}, withChartRule(supportedMetrics["change_failure_rate"])); !ok || table != changefailure.Table {
+		t.Errorf("dedup guard table = %q (ok %v), want %q", table, ok, changefailure.Table)
+	}
+	// No other metric has a rule: revert rate is its own stored column.
+	query, definition := build("revert_rate", "line", "day")
+	if definition.SourceTable != "repo_metrics_daily" || definition.rule != "" || !strings.Contains(query, "avg(revert_rate) AS y") || !strings.Contains(query, "WHERE revert_rate IS NOT NULL AND") {
+		t.Errorf("revert_rate chart is not the mean of its own column:\n%s", query)
+	}
+	// The rule belongs to the repository metric only: the DORA metric of the
+	// same name is not this registry row, and a row on another table keeps it.
+	other := metricDefinition{CanonicalName: "change_failure_rate", SourceTable: "dora_metrics_daily"}
+	if got := withChartRule(other); got.SourceTable != other.SourceTable || got.rule != "" {
+		t.Errorf("withChartRule moved a metric of %s: %+v", other.SourceTable, got)
 	}
 }

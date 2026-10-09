@@ -78,6 +78,7 @@ UNIT_OVERRIDES = {
     "pr_reviews_per_100_loc": "count_per_100_loc",
     "predictability_score": "score",
     "rerun_rate": "ratio",
+    "revert_rate": "ratio",
     "review_load_top_reviewer_ratio": "ratio",
     "review_reciprocity": "ratio",
     "rework_churn_ratio_30d": "ratio",
@@ -98,7 +99,7 @@ UNIT_OVERRIDES = {
 DESCRIPTION_OVERRIDES = {
     "after_hours_commit_ratio": "Share of team commits made outside normal working hours.",
     "avg_queue_seconds": "Average time pipeline runs spent waiting before execution.",
-    "change_failure_rate": "Share of changes that led to failed deployments or incidents.",
+    "change_failure_rate": "Share of deployments linked to an incident; unknown without incident evidence.",
     "coverage_delta_pct": "Change in line coverage versus the prior coverage snapshot.",
     "cycle_time_p50_hours": "Median time from work start to completion.",
     "cycle_time_p90_hours": "90th percentile time from work start to completion.",

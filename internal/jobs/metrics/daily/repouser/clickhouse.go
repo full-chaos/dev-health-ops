@@ -3,12 +3,14 @@ package repouser
 import (
 	"context"
 	"fmt"
+	"math"
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/google/uuid"
 
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/changefailure"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/checkedcast"
 )
 
@@ -495,7 +497,8 @@ func (writer *Writer) writeRepoMetrics(ctx context.Context, rows []RepoMetric, o
 		large_pr_ratio, pr_rework_ratio, pr_size_p50_loc, pr_size_p90_loc,
 		pr_comments_per_100_loc, pr_reviews_per_100_loc, rework_churn_ratio_30d,
 		single_owner_file_ratio_30d, review_load_top_reviewer_ratio, bus_factor,
-		code_ownership_gini, mttr_hours, change_failure_rate, computed_at, org_id
+		code_ownership_gini, mttr_hours, change_failure_rate, revert_rate,
+		change_failure_rate_incident, computed_at, org_id
 	)`)
 	if err != nil {
 		return 0, fmt.Errorf("prepare repo_metrics_daily batch: %w", err)
@@ -527,7 +530,7 @@ func (writer *Writer) writeRepoMetrics(ctx context.Context, rows []RepoMetric, o
 			row.PRSizeP50LOC, row.PRSizeP90LOC, row.PRCommentsPer100LOC, row.PRReviewsPer100LOC,
 			row.ReworkChurnRatio30d, row.SingleOwnerFileRatio30d, row.ReviewLoadTopReviewerRatio,
 			busFactor, row.CodeOwnershipGini, row.MTTRHours, row.ChangeFailureRate,
-			row.ComputedAt, orgID,
+			row.RevertRate, row.ChangeFailureRateIncident, row.ComputedAt, orgID,
 		); err != nil {
 			return 0, fmt.Errorf("append repo_metrics_daily row: %w", err)
 		}
@@ -542,6 +545,57 @@ func (writer *Writer) writeRepoMetrics(ctx context.Context, rows []RepoMetric, o
 	// work_graph_edges_native_clickhouse.go's established pattern).
 	if err := batch.Send(); err != nil {
 		return len(rows), fmt.Errorf("send repo_metrics_daily batch: %w", err)
+	}
+	return len(rows), nil
+}
+
+// WriteChangeFailure inserts result.ChangeFailure into
+// repo_change_failure_daily (CHAOS-8981), stamping every row with orgID. On a
+// Send error it reports len(rows), like the other writes here: the insert may
+// have landed server-side.
+func (writer *Writer) WriteChangeFailure(ctx context.Context, rows []ChangeFailureDaily, orgID string) (int, error) {
+	if writer == nil || writer.conn == nil {
+		return 0, fmt.Errorf("repouser: writer unavailable")
+	}
+	if orgID == "" {
+		return 0, fmt.Errorf("repouser: organization id is required to write %s", changefailure.Table)
+	}
+	if len(rows) == 0 {
+		return 0, nil
+	}
+	// The table name is a literal (it is changefailure.Table) so the writer
+	// census of internal/storedversion can read which table this insert names.
+	batch, err := writer.conn.PrepareBatch(ctx, `INSERT INTO repo_change_failure_daily (
+		org_id, repo_id, day, deployments_count, failed_deployments_native,
+		failed_deployments_heuristic, incidents_direct, incidents_via_deployment, computed_at
+	)`)
+	if err != nil {
+		return 0, fmt.Errorf("prepare %s batch: %w", changefailure.Table, err)
+	}
+	for _, row := range rows {
+		values := []uint64{
+			row.Counts.Deployments, row.Counts.FailedNative, row.Counts.FailedHeuristic,
+			row.Counts.IncidentsDirect, row.Counts.IncidentsViaDeployment,
+		}
+		narrowed := make([]any, 0, len(values))
+		for index, value := range values {
+			// Clamp to one past the UInt32 range first so the int conversion
+			// cannot wrap; checkedcast then refuses the clamped value.
+			clamped := int(min(value, uint64(math.MaxUint32)+1))
+			checked, err := checkedcast.Uint32(clamped, changefailure.Table, changefailure.CountColumns[index])
+			if err != nil {
+				return 0, err
+			}
+			narrowed = append(narrowed, checked)
+		}
+		args := append([]any{orgID, row.RepoID, row.Day}, narrowed...)
+		args = append(args, row.ComputedAt)
+		if err := batch.Append(args...); err != nil {
+			return 0, fmt.Errorf("append %s row: %w", changefailure.Table, err)
+		}
+	}
+	if err := batch.Send(); err != nil {
+		return len(rows), fmt.Errorf("send %s batch: %w", changefailure.Table, err)
 	}
 	return len(rows), nil
 }

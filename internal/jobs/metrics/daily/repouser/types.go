@@ -71,6 +71,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/changefailure"
 )
 
 // CommitStatRow is one file-level delta within one commit -- the LEFT JOIN of
@@ -158,8 +160,24 @@ type RepoMetric struct {
 	BusFactor                  int
 	CodeOwnershipGini          float64
 	MTTRHours                  *float64
-	ChangeFailureRate          float64
-	ComputedAt                 time.Time
+	// ChangeFailureRate is DEPRECATED (CHAOS-9017 drops the column): the
+	// legacy revert ratio, reverted / merged pull requests with the denominator
+	// forced to 1, so 0 when nothing merged. It is still written so that an
+	// older reader and a rollback keep reading the value they always read. It
+	// is not the change failure rate: that is ChangeFailureRateIncident. It is
+	// not a measured revert rate either: with no title loaded the reverted
+	// count is always 0 (see Title above).
+	ChangeFailureRate float64
+	// ChangeFailureRateIncident is the day's incident-based change failure
+	// rate (changefailure.Rate over this repository's counts for the day). Nil
+	// is "not applicable" (no deployment) or "unknown" (no incident evidence);
+	// Compute leaves it nil and ApplyChangeFailure sets it.
+	ChangeFailureRateIncident *float64
+	// RevertRate is reverted / merged pull requests. Compute never sets it:
+	// nothing detects a reverted pull request yet (CHAOS-9034), and a rate
+	// that was not measured is stored as NULL (unknown), never as 0.
+	RevertRate *float64
+	ComputedAt time.Time
 }
 
 // UserMetric mirrors dev_health_ops.metrics.schemas.UserMetricsDailyRecord,
@@ -219,4 +237,16 @@ type Result struct {
 	RepoMetrics   []RepoMetric
 	UserMetrics   []UserMetric
 	CommitMetrics []CommitMetric
+	// ChangeFailure holds one repo_change_failure_daily row for each
+	// repository with a deployment or an incident on the day; set by
+	// ApplyChangeFailure, empty otherwise.
+	ChangeFailure []ChangeFailureDaily
+}
+
+// ChangeFailureDaily is one repo_change_failure_daily row.
+type ChangeFailureDaily struct {
+	RepoID     uuid.UUID
+	Day        time.Time
+	Counts     changefailure.Counts
+	ComputedAt time.Time
 }

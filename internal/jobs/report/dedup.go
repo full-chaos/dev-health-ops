@@ -3,6 +3,8 @@ package report
 import (
 	"fmt"
 	"strings"
+
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/changefailure"
 )
 
 // CHAOS-4246: the weekly-report engine charts daily metric rollups that are
@@ -25,6 +27,43 @@ import (
 // by a row of zeros.
 var sampleCountColumns = map[string]map[string]string{
 	"issue_type_metrics_daily": {"lead_p50_hours": "completed_count"},
+}
+
+// chartRule is a chart metric that is not a stored column: its value is a
+// rule over the stored counts of another table.
+type chartRule struct {
+	// table holds the counts; it must be declared in tableReads.
+	table string
+	// expression aggregates the counts of a chart bucket into the value. NULL
+	// means the bucket has no value, and executeChart draws no point.
+	expression string
+}
+
+// chartRules names, per registry metric, the rule its chart reads instead of
+// the column of the metric's own name.
+//
+// Change failure rate follows the view (CHAOS-8981): a chart bucket is a
+// window, so its value is the shared window rule over the bucket's summed
+// counts, the same number Home, /explain and the operating review give for
+// that window. An average of stored one-day values is a different number (a
+// day whose incident starts on another day has no value of its own), and the
+// column repo_metrics_daily.change_failure_rate is DEPRECATED (CHAOS-9017
+// drops it): it still holds the legacy revert ratio for older readers and is
+// never charted as change failure rate. The exported registry keeps naming
+// repo_metrics_daily as the metric's table; the chart reports the table it
+// reads.
+var chartRules = map[string]chartRule{
+	"change_failure_rate": {table: changefailure.Table, expression: changefailure.WindowRateSQL},
+}
+
+// withChartRule returns the definition a chart of the metric is built from:
+// the registry definition, on the rule's table when the metric has a rule.
+func withChartRule(definition metricDefinition) metricDefinition {
+	if rule, ok := chartRules[definition.CanonicalName]; ok && definition.SourceTable == "repo_metrics_daily" {
+		definition.SourceTable = rule.table
+		definition.rule = rule.expression
+	}
+	return definition
 }
 
 // averageExpression is buildChartQuery's mean of metric. For a metric with a

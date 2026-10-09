@@ -17,6 +17,7 @@ query OperatingReview($orgId: String!, $input: OperatingReviewInput!) {
         unit
         hasData
         scope
+        rateState
         delta {
           value
           priorValue

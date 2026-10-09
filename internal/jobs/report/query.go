@@ -281,6 +281,9 @@ type metricDefinition struct {
 	// it equal). It is set at load from nonNumericMetrics: "numeric" for every
 	// metric that is not named there.
 	ValueKind string `json:"-"`
+	// rule is set by withChartRule, never by the registry: the aggregate of
+	// a metric that is a rule over the stored counts of SourceTable.
+	rule string
 }
 
 type metricRegistryArtifact struct {
@@ -384,6 +387,7 @@ func validateChartMetrics(ctx context.Context, charts []ChartSpec) error {
 		if !ok {
 			continue
 		}
+		definition = withChartRule(definition)
 		kind := definition.ValueKind
 		if _, declared := tableReads[definition.SourceTable]; !declared {
 			kind = kindUndeclaredTable
@@ -407,6 +411,7 @@ func (adapter *ClickHouseQueryAdapter) executeChart(ctx context.Context, spec Ch
 	if !ok || !identifier.MatchString(spec.Metric) || !identifier.MatchString(definition.SourceTable) {
 		return ChartResult{}, fmt.Errorf("unsupported chart metric %q", spec.Metric)
 	}
+	definition = withChartRule(definition)
 	statement, parameters, err := buildChartQuery(spec, definition)
 	if err != nil {
 		return ChartResult{}, err
@@ -480,6 +485,11 @@ func logChartFailure(ctx context.Context, spec ChartSpec, definition metricDefin
 // dedup-guard counters would not describe the chart they are attached to.
 func buildChartWhere(spec ChartSpec, definition metricDefinition) (string, []any, error) {
 	clauses := []string{spec.Metric + " IS NOT NULL"}
+	if definition.rule != "" {
+		// A rule has no column of the metric's name. Every stored row is an
+		// input of the rule; the rule itself says when a bucket has no value.
+		clauses = []string{"1"}
+	}
 	parameters := make([]any, 0, 5)
 	if spec.OrganizationID != "" {
 		clauses = append(clauses, "org_id = {org_id:String}")
@@ -594,6 +604,9 @@ func buildChartQuery(spec ChartSpec, definition metricDefinition) (string, []any
 		// chart read scans y into a float64, which the driver refuses. Cast
 		// in the query so the scan target never depends on the column type.
 		yExpression = fmt.Sprintf("toFloat64(sum(%s))", spec.Metric)
+	}
+	if definition.rule != "" {
+		yExpression = definition.rule
 	}
 	// yExpression for a numerator/denominator ratio metric stays a plain
 	// avg(metric) -- CHAOS-4329 codex round 2 ("preserve team-level

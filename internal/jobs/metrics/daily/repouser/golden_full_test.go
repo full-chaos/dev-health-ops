@@ -223,9 +223,27 @@ func toGoldenRepoMetric(t *testing.T, row RepoMetric) goldenRepoMetric {
 		ReworkChurnRatio30d: row.ReworkChurnRatio30d, SingleOwnerFileRatio30d: row.SingleOwnerFileRatio30d,
 		ReviewLoadTopReviewerRatio: row.ReviewLoadTopReviewerRatio, BusFactor: row.BusFactor,
 		CodeOwnershipGini: row.CodeOwnershipGini, MTTRHours: row.MTTRHours,
-		ChangeFailureRate: row.ChangeFailureRate, ComputedAt: comparableTime{row.ComputedAt},
+		ChangeFailureRate: legacyRevertRatio(t, row), ComputedAt: comparableTime{row.ComputedAt},
 		OrgID: "",
 	}
+}
+
+// legacyRevertRatio returns the value the frozen Python golden names
+// change_failure_rate: the legacy revert ratio (reverted / merged pull
+// requests, denominator forced to 1, so 0.0 when nothing merged), which Go
+// still writes to the deprecated column unchanged. It also checks the two
+// values beside it that Compute must leave unset (CHAOS-8981): RevertRate,
+// because nothing detects a reverted pull request and an unmeasured rate is
+// unknown, and the incident-based ChangeFailureRateIncident.
+func legacyRevertRatio(t *testing.T, row RepoMetric) float64 {
+	t.Helper()
+	if row.ChangeFailureRateIncident != nil {
+		t.Errorf("repo %s: Compute set change_failure_rate_incident %v; only ApplyChangeFailure may", row.RepoID, *row.ChangeFailureRateIncident)
+	}
+	if row.RevertRate != nil {
+		t.Errorf("repo %s: Compute set revert_rate %v with %d merged pull requests; it measures none", row.RepoID, *row.RevertRate, row.PRsMerged)
+	}
+	return row.ChangeFailureRate
 }
 
 func toGoldenUserMetric(t *testing.T, row UserMetric) goldenUserMetric {

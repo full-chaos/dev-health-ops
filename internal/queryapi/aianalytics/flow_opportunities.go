@@ -9,6 +9,7 @@ import (
 
 	"github.com/full-chaos/dev-health-go/clickhouse"
 
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/changefailure"
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph/model"
 )
@@ -143,7 +144,7 @@ var repoRules = []flowRule{
 		o := makeFlow(kindChangeFailure, "repo", r.EntityID, "High change failure rate in "+r.EntityID,
 			"Change failure rate was "+pct(*r.ChangeFailure, 0)+" over the last "+days(w)+" days (threshold: "+pct(changeFailureThreshold, 0)+").",
 			scoreRatio(*r.ChangeFailure, changeFailureThreshold),
-			[]string{"repo_metrics_daily:change_failure_rate:" + r.EntityID},
+			[]string{changefailure.Table + ":change_failure_rate:" + r.EntityID},
 			above(*r.ChangeFailure, changeFailureThreshold, model.ImproveOpportunityUnitRatio))
 		return &o
 	},
@@ -198,24 +199,49 @@ func applyFlowRules(rows []flowRow, rules []flowRule, windowDays int) []model.Im
 	return out
 }
 
-const repoFlowStatement = `SELECT
-    toString(repo_id) AS entity_id,
-    uniqExact(day) AS data_days,
-    toNullable(avg(pr_first_review_p50_hours)) AS pr_first_review_p50_hours,
-    toNullable(avg(pr_rework_ratio)) AS pr_rework_ratio,
-    toNullable(avg(rework_churn_ratio_30d)) AS rework_churn_ratio_30d,
-    toNullable(avg(change_failure_rate)) AS change_failure_rate
+// repoFlowStatement reads each repository's window averages from
+// repo_metrics_daily and its change failure rate from the window's summed
+// counts in repo_change_failure_daily (changefailure.WindowRateSQL, CHAOS-8981):
+// NULL, and so no opportunity, when the window has no deployment or no
+// incident evidence.
+var repoFlowStatement = `SELECT
+    toString(m.repo_id) AS entity_id,
+    m.data_days AS data_days,
+    m.pr_first_review_p50_hours AS pr_first_review_p50_hours,
+    m.pr_rework_ratio AS pr_rework_ratio,
+    m.rework_churn_ratio_30d AS rework_churn_ratio_30d,
+    cf.change_failure_rate AS change_failure_rate
 FROM (
-    SELECT *
-    FROM repo_metrics_daily
-    WHERE org_id = {org_id:String}
-    ORDER BY computed_at DESC
-    LIMIT 1 BY org_id, repo_id, day
-) AS repo_metrics_daily
-WHERE day >= today() - {window_days:UInt32}@@REPO@@
-  AND org_id = {org_id:String}
-GROUP BY repo_id
-HAVING data_days >= 5
+    SELECT
+        repo_id,
+        uniqExact(day) AS data_days,
+        toNullable(avg(pr_first_review_p50_hours)) AS pr_first_review_p50_hours,
+        toNullable(avg(pr_rework_ratio)) AS pr_rework_ratio,
+        toNullable(avg(rework_churn_ratio_30d)) AS rework_churn_ratio_30d
+    FROM (
+        SELECT *
+        FROM repo_metrics_daily
+        WHERE org_id = {org_id:String}
+        ORDER BY computed_at DESC
+        LIMIT 1 BY org_id, repo_id, day
+    ) AS repo_metrics_daily
+    WHERE day >= today() - {window_days:UInt32}@@REPO@@
+      AND org_id = {org_id:String}
+    GROUP BY repo_id
+    HAVING data_days >= 5
+) AS m
+LEFT JOIN (
+    SELECT repo_id, ` + changefailure.WindowRateSQL + ` AS change_failure_rate
+    FROM (
+        SELECT repo_id, day, ` + strings.Join(changefailure.CountColumns, ", ") + `
+        FROM ` + changefailure.Table + `
+        WHERE org_id = {org_id:String}
+          AND day >= today() - {window_days:UInt32}@@REPO@@
+        ORDER BY computed_at DESC
+        LIMIT 1 BY org_id, repo_id, day
+    )
+    GROUP BY repo_id
+) AS cf ON m.repo_id = cf.repo_id
 ORDER BY data_days DESC
 LIMIT 500`
 

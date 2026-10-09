@@ -364,19 +364,19 @@ func TestGitLabTeamCatalogClosesProviderAccessRowsGitLabNoLongerReturns(t *testi
 		older := t0.Add(-48 * time.Hour)
 		// Same team id and project id in every row below: only org, source or
 		// provider differ, each planted with an older valid_from than the run.
-		otherOrg := normalizeGitLabOwnershipRow(other, "gl:org", "org/old-svc", gitlabTeamCatalogBaseSpecificity, older)
-		otherSource := normalizeGitLabOwnershipRow(org, "gl:org", "org/old-svc", gitlabTeamCatalogBaseSpecificity, older)
+		otherOrg := mustGitLabOwnershipRow(other, "gl:org", "org/old-svc", gitlabTeamCatalogBaseSpecificity, older)
+		otherSource := mustGitLabOwnershipRow(org, "gl:org", "org/old-svc", gitlabTeamCatalogBaseSpecificity, older)
 		otherSource.Source = "manual"
 		if err := sink.writeOwnership(ctx, []gitlabTeamCatalogOwnershipRow{otherOrg, otherSource}); err != nil {
 			t.Fatal(err)
 		}
-		jiraRow := normalizeJiraOwnershipRow(org, "gl:org", "org/old-svc", "OLD", older)
+		jiraRow := normalizeJiraOwnershipRow(org, "gl:org", testPID("org/old-svc"), "OLD", older)
 		if err := (JiraTeamCatalogClickHouseEffects{Conn: conn, Lease: sink.Lease}).writeOwnership(ctx, []jiraTeamCatalogOwnershipRow{jiraRow}); err != nil {
 			t.Fatal(err)
 		}
 		linearKey := "org/old-svc"
 		linearRow := linearReferenceOwnershipRow{
-			OrgID: org, Provider: "linear", TeamID: "gl:org", ProjectID: "org/old-svc", ProjectKey: &linearKey,
+			OrgID: org, Provider: "linear", TeamID: "gl:org", ProjectID: testPID("org/old-svc"), ProjectKey: &linearKey,
 			Source: "provider_access", Specificity: 1, Priority: 1, ValidFrom: older, UpdatedAt: older,
 		}
 		if err := (LinearReferenceCatalogClickHouseEffects{Conn: conn, Lease: sink.Lease}).writeOwnership(ctx, []linearReferenceOwnershipRow{linearRow}); err != nil {
@@ -454,7 +454,7 @@ func TestGitLabTeamCatalogClosesProviderAccessRowsGitLabNoLongerReturns(t *testi
 		sink := GitLabTeamCatalogClickHouseEffects{Conn: conn, Lease: providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil })}
 		// The writer before this change stamped each run's own valid_from.
 		for _, at := range []time.Time{t0, t0.Add(time.Hour)} {
-			row := normalizeGitLabOwnershipRow(org, "gl:org", "org/root-svc", gitlabTeamCatalogBaseSpecificity, at)
+			row := mustGitLabOwnershipRow(org, "gl:org", "org/root-svc", gitlabTeamCatalogBaseSpecificity, at)
 			if err := sink.writeOwnership(ctx, []gitlabTeamCatalogOwnershipRow{row}); err != nil {
 				t.Fatal(err)
 			}

@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/changefailure"
 	clickhousestore "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/chschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
@@ -32,7 +33,7 @@ import (
 //
 // Each table gets two versions of one key (an older run with every value
 // raised by 1000, then the newest) holding a distinct value per metric; both chart
-// shapes the reader has (scorecard total, and a line by day) must return the
+// shapes the reader has (scorecard total, and a line by day, week and month) must return the
 // value the metric's aggregation gives for that row.
 func TestClickHouseQueryAdapterChartsEveryRegistryMetric(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Minute)
@@ -154,7 +155,25 @@ func TestClickHouseQueryAdapterChartsEveryRegistryMetric(t *testing.T) {
 	numericType := regexp.MustCompile(`^(?:Nullable\()?(?:U?Int(?:8|16|32|64|128|256)|Float(?:32|64)|Decimal.*)\)?$`)
 	var numeric, nonNumeric []string
 	for _, name := range names {
-		definition := supportedMetrics[name]
+		definition := withChartRule(supportedMetrics[name])
+		if definition.rule != "" {
+			// A metric with a chart rule is read from the rule's table through
+			// the rule, not from a column of its own name: its inputs are the
+			// counts of that table.
+			for _, column := range changefailure.CountColumns {
+				if _, ok := columnTypes[definition.SourceTable+"."+column]; !ok {
+					t.Errorf("registry metric %s: rule input %s.%s does not exist", name, definition.SourceTable, column)
+				}
+			}
+			if _, ok := columnTypes[definition.SourceTable+"."+definition.dayColumn()]; !ok {
+				t.Errorf("registry metric %s: date column %s.%s does not exist", name, definition.SourceTable, definition.dayColumn())
+			}
+			if definition.ValueKind != valueKindNumeric {
+				t.Errorf("registry metric %s: a chart rule yields a number, declared %q", name, definition.ValueKind)
+			}
+			numeric = append(numeric, name)
+			continue
+		}
 		columnType, ok := columnTypes[definition.SourceTable+"."+name]
 		if !ok {
 			t.Errorf("registry metric %s: column %s.%s does not exist in the migrated schema", name, definition.SourceTable, name)
@@ -192,11 +211,26 @@ func TestClickHouseQueryAdapterChartsEveryRegistryMetric(t *testing.T) {
 		columns[table] = append(columns[table], column)
 		values[table] = append(values[table], fmt.Sprint(value))
 	}
+	ruleTables := map[string]bool{}
 	for index, name := range names {
-		table := supportedMetrics[name].SourceTable
+		definition := withChartRule(supportedMetrics[name])
+		if definition.rule != "" {
+			ruleTables[definition.SourceTable] = true
+			continue
+		}
+		table := definition.SourceTable
 		value := float64(3 + index)
 		seeded[table+"."+name] = value
 		add(table, name, value)
+	}
+	// The inputs of a chart rule: counts that make the rule a number (deployments
+	// and incidents present).
+	for table := range ruleTables {
+		for index, column := range changefailure.CountColumns {
+			value := float64([]int{10, 2, 1, 3, 1}[index])
+			seeded[table+"."+column] = value
+			add(table, column, value)
+		}
 	}
 	// A ratio the reader recomputes from table-local counts needs both counts.
 	for _, name := range names {
@@ -253,7 +287,29 @@ func TestClickHouseQueryAdapterChartsEveryRegistryMetric(t *testing.T) {
 	// What the chart of a metric must read for the seeded row: the value for a
 	// sum or an average of one row, and numerator/denominator for a ratio the
 	// reader recomputes from its table-local counts.
+	// A metric with a chart rule is read through the rule: its expected value is
+	// the rule evaluated by the server over the newest version of each key
+	// (FINAL), not over the reader's own selection.
+	ruleWant := map[string]float64{}
+	for _, name := range names {
+		definition := withChartRule(supportedMetrics[name])
+		if definition.rule == "" {
+			continue
+		}
+		var value *float64
+		row := conn.QueryRow(ctx, fmt.Sprintf("SELECT %s FROM %s FINAL WHERE org_id = ?", definition.rule, definition.SourceTable), org)
+		if err := row.Scan(&value); err != nil {
+			t.Fatal(err)
+		}
+		if value == nil {
+			t.Fatalf("%s: the rule is NULL on the seeded rows: the test would not exercise it", name)
+		}
+		ruleWant[name] = *value
+	}
 	want := func(name string) float64 {
+		if value, ok := ruleWant[name]; ok {
+			return value
+		}
 		definition := supportedMetrics[name]
 		if definition.Numerator != "" && definition.Denominator != "" {
 			return seeded[definition.SourceTable+"."+definition.Numerator] /
@@ -262,7 +318,7 @@ func TestClickHouseQueryAdapterChartsEveryRegistryMetric(t *testing.T) {
 		return seeded[definition.SourceTable+"."+name]
 	}
 
-	for _, shape := range []struct{ chartType, groupBy string }{{"scorecard", ""}, {"line", "day"}} {
+	for _, shape := range []struct{ chartType, groupBy string }{{"scorecard", ""}, {"line", "day"}, {"line", "week"}, {"line", "month"}} {
 		for _, name := range names {
 			loader := reportLoaderFunc(func(context.Context, QueryInput) (ReportDefinition, error) {
 				return ReportDefinition{

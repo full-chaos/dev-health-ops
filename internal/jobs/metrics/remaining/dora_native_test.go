@@ -71,7 +71,7 @@ func TestDayRangeCrossesAMonthBoundary(t *testing.T) {
 func TestMetricFilterMirrorsParseMetrics(t *testing.T) {
 	all := map[string]bool{
 		"deployment_frequency": true, "lead_time_for_changes": true,
-		"time_to_restore_service": true, "change_failure_rate": true,
+		"time_to_restore_service": true, "deployment_failure_rate": true,
 	}
 	names := func(raw *string) map[string]bool {
 		got := map[string]bool{}
@@ -106,10 +106,14 @@ func TestMetricFilterMirrorsParseMetrics(t *testing.T) {
 		assertSet(t, names(&junk), all)
 	})
 	t.Run("a real list selects exactly those", func(t *testing.T) {
-		subset := "deployment_frequency, change_failure_rate"
+		subset := "deployment_frequency, deployment_failure_rate"
 		assertSet(t, names(&subset), map[string]bool{
-			"deployment_frequency": true, "change_failure_rate": true,
+			"deployment_frequency": true, "deployment_failure_rate": true,
 		})
+	})
+	t.Run("the old name of the deployment-status ratio selects it under its new name", func(t *testing.T) {
+		legacy := "change_failure_rate"
+		assertSet(t, names(&legacy), map[string]bool{"deployment_failure_rate": true})
 	})
 }
 

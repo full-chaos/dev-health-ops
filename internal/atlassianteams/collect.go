@@ -32,6 +32,7 @@ import (
 	"atlassian/atlassian/graph"
 
 	"github.com/full-chaos/dev-health-ops/internal/identityalias"
+	"github.com/full-chaos/dev-health-ops/internal/providersync"
 	"github.com/full-chaos/dev-health-ops/internal/teamid"
 )
 
@@ -128,7 +129,7 @@ type OwnershipRow struct {
 	OrgID       string
 	Provider    string
 	TeamID      string
-	ProjectID   string
+	ProjectID   providersync.ProjectID
 	ProjectKey  string
 	Source      string
 	IsPrimary   uint8
@@ -183,6 +184,16 @@ type Rows struct {
 	Ownership   []OwnershipRow
 	// ProjectLinks counts the links behind Ownership.
 	ProjectLinks ProjectLinkCounts
+	// TeamSearchComplete says the team search followed the provider's cursor
+	// to its end. Only Collect sets it. Rows built any other way leave it
+	// false, and Write then treats no team as deleted upstream: it
+	// deactivates none, and closes no membership or link of a team outside
+	// Teams.
+	TeamSearchComplete bool
+	// MembershipsComplete says the members were selected and every active
+	// team's member read reached its end. Only Collect sets it. Rows built
+	// any other way leave it false, and Write then closes no membership.
+	MembershipsComplete bool
 	// ProjectLinksComplete says the team search ended and every active team's
 	// link read reached the provider's last page with only known link types.
 	// Only Collect sets it. Rows built any other way leave it false, and Write
@@ -359,15 +370,19 @@ func connectedProjectNativeID(container graph.TeamConnectedContainer) (string, b
 
 // connectedProject reads the project of a JiraProject link node: its native
 // id and its key, or the reason the link gets no row.
-func connectedProject(container graph.TeamConnectedContainer) (nativeProjectID, key string, skip linkSkip) {
-	nativeProjectID, ok := connectedProjectNativeID(container)
+func connectedProject(container graph.TeamConnectedContainer) (projectID providersync.ProjectID, key string, skip linkSkip) {
+	nativeID, ok := connectedProjectNativeID(container)
 	if !ok {
-		return "", "", linkNoNativeID
+		return providersync.ProjectID{}, "", linkNoNativeID
+	}
+	projectID, ok = providersync.JiraProjectID(nativeID)
+	if !ok {
+		return providersync.ProjectID{}, "", linkNoNativeID
 	}
 	if key = strings.TrimSpace(container.Key); key == "" {
-		return "", "", linkNoProjectKey
+		return providersync.ProjectID{}, "", linkNoProjectKey
 	}
-	return nativeProjectID, key, linkWritable
+	return projectID, key, linkWritable
 }
 
 // Collect reads the selected dimensions of every Atlassian team and returns
@@ -406,7 +421,7 @@ func Collect(ctx context.Context, client Client, params Params) (Rows, error) {
 		return Rows{}, fmt.Errorf("search atlassian teams: %w", err)
 	}
 	var rows Rows
-	activeTeams, projectReads := 0, 0
+	activeTeams, projectReads, memberReads := 0, 0, 0
 	seen := map[string]bool{}
 	for _, team := range teams {
 		id, err := teamID(team.ID)
@@ -434,6 +449,7 @@ func Collect(ctx context.Context, client Client, params Params) (Rows, error) {
 			if err != nil {
 				return Rows{}, fmt.Errorf("read members of team %s: %w", id, err)
 			}
+			memberReads++
 			members := map[string]bool{}
 			for _, relation := range relations {
 				if relation.RelationType != "TEAM_MEMBER" {
@@ -478,7 +494,7 @@ func Collect(ctx context.Context, client Client, params Params) (Rows, error) {
 				}
 			default:
 				projectReads++
-				linked := map[string]bool{}
+				linked := map[providersync.ProjectID]bool{}
 				var ledger teamLinkLedger
 				for _, container := range containers {
 					rows.ProjectLinks.Seen++
@@ -493,18 +509,18 @@ func Collect(ctx context.Context, client Client, params Params) (Rows, error) {
 						continue
 					}
 					ledger.inScope++
-					nativeProjectID, key, skip := connectedProject(container)
+					projectID, key, skip := connectedProject(container)
 					if skip != linkWritable {
 						rows.ProjectLinks.count(skip)
 						continue
 					}
-					if linked[nativeProjectID] {
+					if linked[projectID] {
 						// A second link to a project of this team: the first one's row is its row.
 						rows.ProjectLinks.SkippedDuplicate++
 					} else {
-						linked[nativeProjectID] = true
+						linked[projectID] = true
 						rows.Ownership = append(rows.Ownership, OwnershipRow{
-							OrgID: params.OrgID, Provider: Provider, TeamID: id, ProjectID: nativeProjectID,
+							OrgID: params.OrgID, Provider: Provider, TeamID: id, ProjectID: projectID,
 							ProjectKey: key, Source: Source, IsPrimary: 1, Specificity: OwnershipSpecificity,
 							Priority: OwnershipPriority, ValidFrom: now, UpdatedAt: now,
 						})
@@ -531,6 +547,11 @@ func Collect(ctx context.Context, client Client, params Params) (Rows, error) {
 	// that got no row does not end here: it names its team
 	// (UnreadableProjectLinkTeams), and Write closes no row of that team.
 	rows.ProjectLinksComplete = params.Selections.Projects && projectReads == activeTeams && rows.ProjectLinks.SkippedUnknownType == 0
+	// A member read that fails returns out of this function, so the count is
+	// one read for every active team when the members were selected.
+	rows.MembershipsComplete = params.Selections.Members && memberReads == activeTeams
+	// The search error returned above: reaching this line is the search's end.
+	rows.TeamSearchComplete = err == nil
 	return rows, nil
 }
 

@@ -242,6 +242,12 @@ func execute(ctx context.Context, envelope jobcontract.Envelope, reportID string
 			input, queryErr := dependencies.Query.Query(workCtx, QueryInput{ReportID: reportID, RunID: runID})
 			if queryErr != nil {
 				failureCode = "query_failed"
+				// A plan that charts a metric the reader refuses is not an outage: its
+				// run gets its own stored code, so the two are told apart.
+				var refused *ChartMetricError
+				if errors.As(queryErr, &refused) {
+					failureCode = "chart_metric_refused"
+				}
 				return queryErr
 			}
 			var renderErr error

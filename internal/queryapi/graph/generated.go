@@ -878,6 +878,7 @@ type ComplexityRoot struct {
 		HasPriorData func(childComplexity int) int
 		Label        func(childComplexity int) int
 		Metric       func(childComplexity int) int
+		RateState    func(childComplexity int) int
 		Spark        func(childComplexity int) int
 		Unit         func(childComplexity int) int
 		Value        func(childComplexity int) int
@@ -924,13 +925,14 @@ type ComplexityRoot struct {
 	}
 
 	OperatingReviewMetric struct {
-		Delta   func(childComplexity int) int
-		HasData func(childComplexity int) int
-		Key     func(childComplexity int) int
-		Label   func(childComplexity int) int
-		Scope   func(childComplexity int) int
-		Unit    func(childComplexity int) int
-		Value   func(childComplexity int) int
+		Delta     func(childComplexity int) int
+		HasData   func(childComplexity int) int
+		Key       func(childComplexity int) int
+		Label     func(childComplexity int) int
+		RateState func(childComplexity int) int
+		Scope     func(childComplexity int) int
+		Unit      func(childComplexity int) int
+		Value     func(childComplexity int) int
 	}
 
 	OperatingReviewSection struct {
@@ -5540,6 +5542,13 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 
 		return e.complexity.MetricDelta.Metric(childComplexity), true
 
+	case "MetricDelta.rateState":
+		if e.complexity.MetricDelta.RateState == nil {
+			break
+		}
+
+		return e.complexity.MetricDelta.RateState(childComplexity), true
+
 	case "MetricDelta.spark":
 		if e.complexity.MetricDelta.Spark == nil {
 			break
@@ -5788,6 +5797,13 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 		}
 
 		return e.complexity.OperatingReviewMetric.Label(childComplexity), true
+
+	case "OperatingReviewMetric.rateState":
+		if e.complexity.OperatingReviewMetric.RateState == nil {
+			break
+		}
+
+		return e.complexity.OperatingReviewMetric.RateState(childComplexity), true
 
 	case "OperatingReviewMetric.scope":
 		if e.complexity.OperatingReviewMetric.Scope == nil {
@@ -10585,6 +10601,8 @@ type MetricDelta {
   "Whether the comparison window has one or more stored source rows."
   hasPriorData: Boolean!
   spark: [SparkPoint!]!
+  "Why change failure rate has a value or not (CHAOS-8981): measured (the value may be 0), unknown_no_incident_evidence (deployments, and no incident tied to the scope in the window) or not_applicable_no_deployments. Null when the window holds no stored counts, and for every other metric."
+  rateState: String
 }
 
 type MetricLineage {
@@ -10662,6 +10680,10 @@ type OperatingReviewMetric {
   Whether the request's team selection narrows this metric (CHAOS-8516).
   """
   scope: OperatingReviewMetricScope!
+  """
+  Why change failure rate has a value or not (CHAOS-8981): measured (the value may be 0), unknown_no_incident_evidence (deployments, and no incident tied to the organization in the week) or not_applicable_no_deployments. Null when the week holds no stored counts, and for every other metric.
+  """
+  rateState: String
 }
 
 enum OperatingReviewMetricScope {
@@ -36487,6 +36509,8 @@ func (ec *executionContext) fieldContext_HomeResult_deltas(_ context.Context, fi
 				return ec.fieldContext_MetricDelta_hasPriorData(ctx, field)
 			case "spark":
 				return ec.fieldContext_MetricDelta_spark(ctx, field)
+			case "rateState":
+				return ec.fieldContext_MetricDelta_rateState(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type MetricDelta", field.Name)
 		},
@@ -40331,6 +40355,47 @@ func (ec *executionContext) fieldContext_MetricDelta_spark(_ context.Context, fi
 	return fc, nil
 }
 
+func (ec *executionContext) _MetricDelta_rateState(ctx context.Context, field graphql.CollectedField, obj *model.MetricDelta) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_MetricDelta_rateState(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.RateState, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*string)
+	fc.Result = res
+	return ec.marshalOString2ᚖstring(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_MetricDelta_rateState(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MetricDelta",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _MetricLineage_metricId(ctx context.Context, field graphql.CollectedField, obj *model.MetricLineage) (ret graphql.Marshaler) {
 	fc, err := ec.fieldContext_MetricLineage_metricId(ctx, field)
 	if err != nil {
@@ -41932,6 +41997,47 @@ func (ec *executionContext) fieldContext_OperatingReviewMetric_scope(_ context.C
 	return fc, nil
 }
 
+func (ec *executionContext) _OperatingReviewMetric_rateState(ctx context.Context, field graphql.CollectedField, obj *model.OperatingReviewMetric) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_OperatingReviewMetric_rateState(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.RateState, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*string)
+	fc.Result = res
+	return ec.marshalOString2ᚖstring(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_OperatingReviewMetric_rateState(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "OperatingReviewMetric",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _OperatingReviewSection_key(ctx context.Context, field graphql.CollectedField, obj *model.OperatingReviewSection) (ret graphql.Marshaler) {
 	fc, err := ec.fieldContext_OperatingReviewSection_key(ctx, field)
 	if err != nil {
@@ -42073,6 +42179,8 @@ func (ec *executionContext) fieldContext_OperatingReviewSection_metrics(_ contex
 				return ec.fieldContext_OperatingReviewMetric_hasData(ctx, field)
 			case "scope":
 				return ec.fieldContext_OperatingReviewMetric_scope(ctx, field)
+			case "rateState":
+				return ec.fieldContext_OperatingReviewMetric_rateState(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type OperatingReviewMetric", field.Name)
 		},
@@ -72458,6 +72566,8 @@ func (ec *executionContext) _MetricDelta(ctx context.Context, sel ast.SelectionS
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
+		case "rateState":
+			out.Values[i] = ec._MetricDelta_rateState(ctx, field, obj)
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}
@@ -72822,6 +72932,8 @@ func (ec *executionContext) _OperatingReviewMetric(ctx context.Context, sel ast.
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
+		case "rateState":
+			out.Values[i] = ec._OperatingReviewMetric_rateState(ctx, field, obj)
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}

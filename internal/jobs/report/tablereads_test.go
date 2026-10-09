@@ -13,9 +13,12 @@ import (
 func TestEveryRegistryTableHasOneReadDeclaration(t *testing.T) {
 	used := map[string]bool{}
 	for name, definition := range supportedMetrics {
+		// A metric with a chart rule is read from the rule's table.
+		table := withChartRule(definition).SourceTable
+		used[table] = true
 		used[definition.SourceTable] = true
-		if _, ok := tableReads[definition.SourceTable]; !ok {
-			t.Errorf("metric %s reads %s, which has no tableReads declaration", name, definition.SourceTable)
+		if _, ok := tableReads[table]; !ok {
+			t.Errorf("metric %s reads %s, which has no tableReads declaration", name, table)
 		}
 	}
 	for table, read := range tableReads {

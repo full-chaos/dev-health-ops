@@ -82,6 +82,18 @@ func seedGroupD(t *testing.T, ctx context.Context, conn chdriver.Conn) {
                 SELECT today() - %d, 'team-a', %v, 5, '%s', now64(3)`, d, o.cycle, o.org)
 		}
 	}
+	// change failure: org-1's rA has 3 of 10 deployments linked to an incident
+	// (an older version of the same day says none); org-2's rA deploys as
+	// often, fails as often, and has no incident evidence, so its rate is
+	// unknown and fires nothing.
+	changeFailure := func(org string, failed, incidents int, computed string) {
+		exec(t, ctx, conn, `INSERT INTO repo_change_failure_daily (org_id, repo_id, day, deployments_count,
+            failed_deployments_native, failed_deployments_heuristic, incidents_direct, incidents_via_deployment, computed_at)
+            SELECT '%s', '%s', today() - 1, 10, 0, %d, %d, 0, toDateTime64('%s', 3, 'UTC')`, org, rA, failed, incidents, computed)
+	}
+	changeFailure(org1, 0, 0, "2026-09-01 00:00:00")
+	changeFailure(org1, 3, 1, "2026-09-02 00:00:00")
+	changeFailure(org2, 3, 0, "2026-09-02 00:00:00")
 }
 
 func kinds(recs []model.AIOpportunity) map[model.AIOpportunityKind]model.AIOpportunity {
@@ -235,12 +247,19 @@ func TestRealClickHouse_AIDetectors(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		var review, cycle bool
+		var review, cycle, changeFailure bool
 		for _, o := range got.Opportunities {
 			review = review || o.Kind == model.ImproveOpportunityKindHighReviewLatency
 			cycle = cycle || o.Kind == model.ImproveOpportunityKindSlowCycleTime
+			if o.Kind == model.ImproveOpportunityKindHighChangeFailure {
+				changeFailure = true
+				// 3 of 10 from the newest version of the day, never the older 0 of 10.
+				if !strings.Contains(o.Rationale, "30%") {
+					t.Errorf("change failure rationale %q, want the window rate 30%%", o.Rationale)
+				}
+			}
 		}
-		if !review || !cycle || !got.DetectorReady || got.TotalCount != len(got.Opportunities) {
+		if !review || !cycle || !changeFailure || !got.DetectorReady || got.TotalCount != len(got.Opportunities) {
 			t.Fatalf("org-1: %+v", got)
 		}
 		other, err := FlowOpportunities(ctx, client, org2, nil, 10, 30)
@@ -262,7 +281,7 @@ func TestRealClickHouse_AIDetectors(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if len(teamed.Opportunities) != 2 {
+		if len(teamed.Opportunities) != 3 {
 			t.Fatalf("team scope narrows only the team read: %+v", teamed.Opportunities)
 		}
 		absent, err := FlowOpportunities(ctx, client, org1, &model.AIScopeInput{TeamID: &none}, 10, 30)

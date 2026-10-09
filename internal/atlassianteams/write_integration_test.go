@@ -95,7 +95,7 @@ func TestWriteTeamsMembershipsAndOwnershipAgainstClickHouse(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err := Write(ctx, conn, org, rows, selections); err != nil {
+		if _, err := Write(ctx, conn, org, rows, selections, soleScope()); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -180,7 +180,7 @@ func TestARunRetractsWhatTheSnapshotNoLongerHas(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		result, err := Write(ctx, conn, org, rows, everything)
+		result, err := Write(ctx, conn, org, rows, everything, soleScope())
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -258,7 +258,7 @@ func TestAFailedWriteLeavesNoTeamWithoutItsMembers(t *testing.T) {
 	// The table stays readable but refuses every insert: the failure happens at
 	// write time, after memberships were committed.
 	exec(t, conn, `ALTER TABLE team_project_ownership ADD CONSTRAINT never_writable CHECK 1 = 0`)
-	_, err = Write(ctx, conn, "org-1", rows, everything)
+	_, err = Write(ctx, conn, "org-1", rows, everything, soleScope())
 	if err == nil || !strings.Contains(err.Error(), "write team project ownership") || !strings.Contains(err.Error(), "already written: team memberships") {
 		t.Fatalf("err = %v, want the failing stage and the committed one named", err)
 	}
@@ -283,7 +283,7 @@ func TestOwnershipLastSyncedIsTheIngestTimeNotTheProviderTime(t *testing.T) {
 		t.Fatal(err)
 	}
 	before := time.Now().UTC().Add(-time.Second)
-	if _, err := Write(ctx, conn, "org-1", rows, everything); err != nil {
+	if _, err := Write(ctx, conn, "org-1", rows, everything, soleScope()); err != nil {
 		t.Fatal(err)
 	}
 	after := time.Now().UTC().Add(time.Second)
@@ -317,7 +317,7 @@ func TestOwnershipLastSyncedIsTheIngestTimeNotTheProviderTime(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Write(ctx, conn, "org-1", rows, everything); err != nil {
+	if _, err := Write(ctx, conn, "org-1", rows, everything, soleScope()); err != nil {
 		t.Fatal(err)
 	}
 	closed := lines(t, conn, `SELECT toString(count()) FROM team_project_ownership WHERE org_id = 'org-1' AND provider = 'jira' AND valid_to IS NOT NULL AND last_synced > toDateTime64('2021-01-01 00:00:00', 3, 'UTC')`)
@@ -357,13 +357,13 @@ func TestAnAtlassianTeamsRunClosesTheKeyBuiltProjectLinks(t *testing.T) {
 	// or a collection that did not read them all) close no link.
 	partial := rows
 	partial.ProjectLinksComplete = false
-	if result, err := Write(ctx, conn, org, partial, everything); err != nil || result.ExpiredOwnership != 0 {
+	if result, err := Write(ctx, conn, org, partial, everything, soleScope()); err != nil || result.ExpiredOwnership != 0 {
 		t.Fatalf("a write of links that are not complete: result=%+v err=%v, want no link closed", result, err)
 	}
 	if got := lines(t, conn, `SELECT toString(count()) FROM team_project_ownership FINAL WHERE org_id = 'org-1' AND provider = 'jira' AND valid_to IS NULL`); len(got) != 1 || got[0] != "4" {
 		t.Fatalf("open rows after the write that is not complete = %v, want all 4 still open", got)
 	}
-	result, err := Write(ctx, conn, org, rows, everything)
+	result, err := Write(ctx, conn, org, rows, everything, soleScope())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -387,7 +387,7 @@ func TestAnAtlassianTeamsRunClosesTheKeyBuiltProjectLinks(t *testing.T) {
 	if rows, err = Collect(ctx, g.client(), p); err != nil {
 		t.Fatal(err)
 	}
-	if result, err = Write(ctx, conn, org, rows, everything); err != nil {
+	if result, err = Write(ctx, conn, org, rows, everything, soleScope()); err != nil {
 		t.Fatal(err)
 	}
 	if result.ExpiredOwnership != 0 {
@@ -425,7 +425,7 @@ func TestATeamWithNoReadableProjectLinkKeepsItsOpenLinks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, err := Write(ctx, conn, org, rows, everything)
+	result, err := Write(ctx, conn, org, rows, everything, soleScope())
 	if err != nil {
 		t.Fatal(err)
 	}

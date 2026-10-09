@@ -135,6 +135,7 @@ internal/jobs/investment/chwrite	1
 internal/jobs/metrics/aigovernance	1
 internal/jobs/metrics/aiimpact	2
 internal/jobs/metrics/aiworkflow	1
+internal/jobs/metrics/changefailure	1
 internal/jobs/metrics/checkedcast	1
 internal/jobs/metrics/complexity	3
 internal/jobs/metrics/complexity/lizardcc	7
@@ -232,6 +233,7 @@ internal/queryapi/complexitytimeseries	1
 internal/queryapi/compoundingrisk	1
 internal/queryapi/coveragebaselines	1
 internal/queryapi/datahealth	1
+internal/queryapi/deltarule	1
 internal/queryapi/digest	1
 internal/queryapi/drilldown	1
 internal/queryapi/experiments	1

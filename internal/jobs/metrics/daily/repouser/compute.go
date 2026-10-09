@@ -526,11 +526,17 @@ func Compute(
 		largePRCount := repoLargePRs[repoID]
 		reworkPRCount := repoReworkPRs[repoID]
 		revertPRCount := repoRevertPRs[repoID]
+		// The deprecated change_failure_rate column keeps the ported ratio,
+		// reverted / merged pull requests with the denominator forced to 1, for
+		// older readers. The reverted count needs the pull request title,
+		// which the loader never reads (PullRequestRow.Title), so the stored
+		// ratio is 0 for every row. It is therefore not a measured revert rate,
+		// and RevertRate stays nil: unknown is not 0 (CHAOS-8981).
 		totalPRsMerged := prsMerged
 		if totalPRsMerged == 0 {
 			totalPRsMerged = 1
 		}
-		changeFailureRate := float64(revertPRCount) / float64(totalPRsMerged)
+		legacyRevertRatio := float64(revertPRCount) / float64(totalPRsMerged)
 		prsWithFirstReview := repoPRsWithFirstReview[repoID]
 
 		largePRRatio, prReworkRatio := 0.0, 0.0
@@ -614,7 +620,7 @@ func Compute(
 			BusFactor:                  busFactor,
 			CodeOwnershipGini:          gini,
 			MTTRHours:                  mttrHours,
-			ChangeFailureRate:          changeFailureRate,
+			ChangeFailureRate:          legacyRevertRatio,
 			ComputedAt:                 computedAtUTC,
 		})
 	}

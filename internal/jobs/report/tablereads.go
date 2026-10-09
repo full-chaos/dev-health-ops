@@ -1,5 +1,7 @@
 package report
 
+import "github.com/full-chaos/dev-health-ops/internal/jobs/metrics/changefailure"
+
 // tableRead declares, for one source table of the metric registry, how the
 // chart reader reads it: the date column time ranges and day/week/month
 // buckets apply to (empty means "day"), the columns that identify one row,
@@ -22,6 +24,7 @@ type tableRead struct {
 // is not declared here cannot be charted: validateChartMetrics refuses it
 // before any query, so a new table is never read raw.
 var tableReads = map[string]tableRead{
+	changefailure.Table:               {Key: []string{"org_id", "repo_id", "day"}, Version: "computed_at"},
 	"cicd_metrics_daily":              {Key: []string{"org_id", "repo_id", "day"}, Version: "computed_at"},
 	"commit_metrics":                  {Key: []string{"org_id", "repo_id", "day", "author_email", "commit_hash"}, Version: "computed_at"},
 	"deploy_metrics_daily":            {Key: []string{"org_id", "repo_id", "day"}, Version: "computed_at"},

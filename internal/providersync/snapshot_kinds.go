@@ -34,10 +34,12 @@ import "time"
 //
 // Absence: what proves that an open fact the run does not hold is gone
 // (AbsenceProof, an argument of every kind snapshot). "one response or direct
-// answer": the kind's listing is read by position (a page number, an offset);
-// a listing of ONE response proves what it does not hold, and for a listing
-// of more than one response the provider's own answer for that one fact does,
-// inside a budget of AbsenceLookupBudget per run (AbsenceByListing). "cursor
+// answer": the kind's listings are read by position (a page number, an
+// offset); the walks prove what they do not hold only when EVERY walk that
+// feeds the kind's held set was ONE response, and otherwise the provider's own
+// answer for that one fact does, asked for every state the held set admits,
+// inside a budget of AbsenceLookupBudget per run (AbsenceByListing;
+// TestHeldSetWalkCensus names the walks of each kind). "cursor
 // walk": the walk follows the provider's cursor to its proven end, and its
 // answer is taken as the proof (AbsenceByWalk); the providers state no
 // contract for a list that changes during such a walk, so it is a named risk.

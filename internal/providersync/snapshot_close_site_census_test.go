@@ -323,3 +323,129 @@ func TestAbsenceProofCensus(t *testing.T) {
 		t.Errorf("the kinds by absence proof are %v, want 5 by the cursor walk and 3 by one response or the direct answer", byAbsence)
 	}
 }
+
+// heldSetWalk is one list walk of a catalog collector: what it reads, which
+// kind's HELD SET its answer feeds (the facts a run takes as still there), and
+// what proves an absence for that kind.
+type heldSetWalk struct{ reads, feeds, proof string }
+
+// heldSetWalks is EVERY list walk of the five catalog collectors, in source
+// order, by the call that makes it. The proof of an absence belongs to the
+// held set, so to every walk that feeds it: a kind closed by "one response or
+// direct answer" takes its walks as proof only when each of them was one
+// response, and its direct answer asks for every state those walks admit.
+//
+// A new walk in one of these files changes the count and fails
+// TestHeldSetWalkCensus until it is named here with the held set it feeds and
+// its proof. Per kind:
+//
+//   - github_team_repo_grants: ONE walk per team (the team's repositories;
+//     GitHub lists archived repositories in the same walk).
+//   - gitlab_group_project_grants: ONE walk per group (the group's projects,
+//     with the provider's default filters; the direct answer uses the same
+//     endpoint and filters). The walk of all projects with subgroups feeds the
+//     catalog's project rows, not a grant.
+//   - jira_legacy_ownership: THREE walks (live, archived, live again); the
+//     archived one feeds the held set because an archived project keeps its
+//     open rows. A row whose project the live answer holds is decided by the
+//     legacy links, one read of the store.
+//   - linear_team_key_ownership: ONE walk (teams), by cursor.
+//   - linear_project_ownership: TWO walks by cursor (projects, with archived
+//     projects in the same walk; and the continuation of one project's teams).
+//   - atlassian_team_catalog, atlassian_team_memberships,
+//     atlassian_team_project_links: ONE walk each, by cursor (the team search;
+//     one member read per team; one link read per team).
+var heldSetWalks = map[string]struct {
+	call  string
+	walks []heldSetWalk
+}{
+	"internal/providersync/github_team_catalog_route.go": {`providerfoundation\.CollectGitHubLinkPages\(`, []heldSetWalk{
+		{"the teams of the organization", "no held set: a team that is not listed closes nothing", "none needed"},
+		{"the repositories of one team", "github_team_repo_grants", "one response, or GitHub's answer for the grant"},
+		{"the members of one team", "no close", "none needed"},
+	}},
+	"internal/providersync/gitlab_team_catalog_route.go": {`providerfoundation\.CollectGitLabPageParamPages\(`, []heldSetWalk{
+		{"the subgroups of the root group", "no held set: a group that is not listed closes nothing", "none needed"},
+		{"the projects of one group", "gitlab_group_project_grants", "one response, or GitLab's answer for the project"},
+		{"the members of one group", "no close", "none needed"},
+		{"all projects with subgroups", "no held set of a grant: the catalog's project rows", "none needed"},
+	}},
+	"internal/providersync/jira_team_catalog_route.go": {`:= jiraTeamCatalogSearchProjects\(`, []heldSetWalk{
+		{"the live project search", "jira_legacy_ownership", "every walk one response, or Jira's answer for live and archived"},
+		{"the archived project search", "jira_legacy_ownership (an archived project keeps its open rows)", "the same"},
+		{"the live project search, again", "jira_legacy_ownership", "the same"},
+	}},
+	"internal/providersync/linear_reference_catalog_route.go": {`:= collectLinearReferenceConnection\(`, []heldSetWalk{
+		{"the teams of the workspace", "linear_team_key_ownership", "cursor walk"},
+		{"the projects of the workspace, archived ones too", "linear_project_ownership", "cursor walk"},
+		{"the continuation of one project's teams", "linear_project_ownership", "cursor walk"},
+		{"the continuation of one team's members", "no close", "none needed"},
+	}},
+	"internal/atlassianteams/collect.go": {`client\.(SearchTeams|IterTeamUsers|IterTeamConnectedContainers)\(`, []heldSetWalk{
+		{"the team search", "atlassian_team_catalog", "cursor walk"},
+		{"the members of one team", "atlassian_team_memberships", "cursor walk"},
+		{"the project links of one team", "atlassian_team_project_links", "cursor walk"},
+	}},
+}
+
+// TestHeldSetWalkCensus pins every list walk of the catalog collectors and
+// the held set each feeds. It also holds the Jira walks of the code to the
+// table: the three project searches are the three walks the close names.
+func TestHeldSetWalkCensus(t *testing.T) {
+	read := func(path string) string {
+		t.Helper()
+		raw, err := os.ReadFile("../../" + path)
+		if err != nil {
+			t.Fatalf("read %s: %v", path, err)
+		}
+		var code []string
+		for _, line := range strings.Split(string(raw), "\n") {
+			if !strings.HasPrefix(strings.TrimSpace(line), "//") {
+				code = append(code, line)
+			}
+		}
+		return strings.Join(code, "\n")
+	}
+	feeds := map[string]int{}
+	for path, entry := range heldSetWalks {
+		got := len(regexp.MustCompile(entry.call).FindAllString(read(path), -1))
+		if got != len(entry.walks) {
+			t.Errorf("%s makes %d list walk(s) by %s, the census names %d: a walk is named with the held set it feeds and its proof",
+				path, got, entry.call, len(entry.walks))
+		}
+		for _, walk := range entry.walks {
+			if strings.TrimSpace(walk.reads) == "" || strings.TrimSpace(walk.feeds) == "" || strings.TrimSpace(walk.proof) == "" {
+				t.Errorf("%s: a walk of the census has no text: %+v", path, walk)
+			}
+			for kind := range snapshotKindCensus {
+				if strings.HasPrefix(walk.feeds, kind) {
+					feeds[kind]++
+				}
+			}
+		}
+	}
+	// Every kind has a walk that feeds it, and the count per kind is the one
+	// the comment above states.
+	want := map[string]int{
+		"github_team_repo_grants": 1, "gitlab_group_project_grants": 1, "jira_legacy_ownership": 3,
+		"linear_team_key_ownership": 1, "linear_project_ownership": 2,
+		"atlassian_team_catalog": 1, "atlassian_team_memberships": 1, "atlassian_team_project_links": 1,
+	}
+	if !reflect.DeepEqual(feeds, want) {
+		t.Errorf("the walks that feed each kind's held set are %v, want %v", feeds, want)
+	}
+	// The Jira close names its walks in code: as many as the searches.
+	jira := read("internal/providersync/jira_team_catalog_route.go")
+	literal := regexp.MustCompile(`(?s)projectSearchWalks := \[\]ListWalk\{(.*?)\n\t\}`).FindStringSubmatch(jira)
+	if literal == nil {
+		t.Fatal("the Jira route does not name its project search walks")
+	}
+	if named := strings.Count(literal[1], "Responses:"); named != len(heldSetWalks["internal/providersync/jira_team_catalog_route.go"].walks) {
+		t.Errorf("the Jira close names %d project search walk(s), the route makes %d: every search feeds the held set",
+			named, len(heldSetWalks["internal/providersync/jira_team_catalog_route.go"].walks))
+	}
+	// The Jira answer asks for every state those walks admit.
+	if answer := read("internal/providersync/ownership_absence.go"); !strings.Contains(answer, `[]string{"live", jiraTeamCatalogProjectStatusArchived}`) {
+		t.Error("the Jira direct answer does not ask for live AND archived projects: the held set admits both")
+	}
+}

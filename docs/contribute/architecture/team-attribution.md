@@ -715,21 +715,34 @@ project's items by id. Now:
   changes between two requests, the later items move, and a fact that still holds is on no page. So an open
   fact that the run does not hold is closed only when its absence is proven:
   - **one response or direct answer** (`AbsenceByListing`; the GitHub and GitLab grants and the Jira legacy
-    rows). A listing read in ONE response cannot move: what it does not hold is gone. For a listing of more
-    than one response, the absent fact is a CANDIDATE: the run asks the provider for that one fact (GitHub:
-    the team's permission for the repository; GitLab: the group's projects searched for the project; Jira:
-    the live project search for the project id) and closes the row only when that one response says "not
-    there". "Still there" keeps the row open on its first `valid_from`. A failed answer, and a candidate
-    past the run's budget of `AbsenceLookupBudget` (100) direct answers, close nothing; the next run goes
-    on. Each of the three writes one WARN line (`snapshot_absence_not_proven`, with the counts) and a
-    degraded leg on the run's result. For Jira the rule applies to a project the search does not hold; a
-    project the search does hold whose legacy link is gone closes on the link read, which is one read of
-    the store. The Jira catalog also reads the live search twice and takes the union, so one change during
-    a read hides nothing there.
+    rows). The proof belongs to the HELD SET of a row (the facts the run takes as still there), so to EVERY
+    list walk whose answer feeds it, never to one of them: the walks prove an absence only when each of them
+    was ONE response (`EveryWalkWasOneResponse`; nothing can move inside one response). When one of them took
+    more than one response, the absent fact is a CANDIDATE: the run asks the provider for that one fact and
+    closes the row only when that one response says "not there". The answer must ask for every state the
+    held set admits. "Still there" keeps the row open on its first `valid_from`. A failed answer, and a
+    candidate past the run's budget of `AbsenceLookupBudget` (100) direct answers, close nothing; the next
+    run goes on. Each kind writes one WARN line (`snapshot_absence_not_proven`, with the counts) and a
+    degraded leg on the run's result. The walks and the answers:
+    - GitHub grants: one walk per team (the team's repositories; archived repositories are in the same
+      walk). The answer is the team's permission for the repository.
+    - GitLab grants: one walk per group (the group's projects, with the provider's default filters). The
+      answer is the same endpoint, searched for the project, with the same filters.
+    - Jira legacy rows: THREE walks (the live project search, the archived project search, the live search
+      again). The archived search feeds the held set because an archived project keeps its open rows. The
+      answer is the project search for the project id, asked for live AND archived projects: an answer for
+      live projects only would call an archived project gone. A row whose project the live answer holds is
+      another case: the project is there, so what went is its legacy link, and the links are one read of
+      the store. The two live walks are a union, so one change during a live walk hides nothing; a change
+      during the archived walk does.
+    `TestHeldSetWalkCensus` names every list walk of the five collectors and the held set it feeds; a new
+    walk fails it until it is named with its proof.
   - **cursor walk** (`AbsenceByWalk(AbsenceWalkByCursor)`; the Linear and Atlassian Teams kinds). The walk
     follows the provider's cursor to its proven end and its answer is taken as the proof. The providers
     state no contract for a list that changes during such a walk, so this is a named risk, not a measured
-    proof.
+    proof. Their walks: the Linear team walk (team-key rows); the Linear project walk, which holds archived
+    projects too, and the continuation of one project's teams (project rows: two walks); the Atlassian team
+    search, one member read per team and one link read per team.
   A walk that did NOT reach its proven end (an error, a cut, a bound) closes nothing, for every kind: that is
   the kind's `SnapshotProof`, as before.
 

@@ -3,6 +3,7 @@ package providersync
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -266,6 +267,12 @@ func (collector GitHubTeamCatalogRouteHandler) Collect(
 				return githubTeamCatalogRows{}, evidence, memberErr
 			} else {
 				evidence.SkippedTeamMemberships++
+				// A skipped roster is visible at Info level only through the
+				// counter; the line names the provider and the team, never a
+				// member (CHAOS-9149).
+				slog.Default().WarnContext(ctx, "github_team_catalog_member_read_failed",
+					"org_id", orgID, "provider", githubTeamCatalogProvider, "team", membershipTeamLogToken(githubTeamID(slug)),
+					"cause", memberReadFailureCause(memberErr))
 			}
 		}
 	}
@@ -389,4 +396,17 @@ func perPageQuery(perPage int) url.Values {
 	values := url.Values{}
 	values.Set("per_page", strconv.Itoa(perPage))
 	return values
+}
+
+// memberReadFailureCause is the fixed word for why a team's member read failed:
+// no error text, which may carry a login, an address or a URL.
+func memberReadFailureCause(err error) string {
+	switch {
+	case errors.Is(err, ErrPaginationCapExceeded):
+		return "pagination_cap"
+	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
+		return "cancelled"
+	default:
+		return "read_failed"
+	}
 }

@@ -8,6 +8,7 @@ import (
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
+	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse/liverow"
 	"github.com/full-chaos/dev-health-ops/internal/teamattribution"
 )
 
@@ -203,11 +204,14 @@ func (sink GitHubWorkItemUserMetricsDailyClickHouseEffects) InspectGitHubWorkIte
 func (sink GitHubWorkItemUserMetricsDailyClickHouseEffects) inspect(
 	ctx context.Context, expected githubWorkItemUserMetricsDailyRow,
 ) (EffectInspection, error) {
+	// A key whose newest version is a retraction row (CHAOS-9135) is absent: the
+	// effect has to be written again, not recovered as a conflict.
 	rows, err := sink.Conn.Query(ctx, `SELECT day, provider, work_scope_id, user_identity,
 team_id, team_name, items_started, items_completed, wip_count_end_of_day,
 cycle_time_p50_hours, cycle_time_p90_hours, computed_at, org_id
 FROM work_item_user_metrics_daily FINAL
-WHERE org_id = ? AND provider = ? AND work_scope_id = ? AND user_identity = ? AND day = ?`,
+WHERE org_id = ? AND provider = ? AND work_scope_id = ? AND user_identity = ? AND day = ?
+  AND `+liverow.Predicate("work_item_user_metrics_daily", ""),
 		expected.OrgID, expected.Provider, expected.WorkScopeID, expected.UserIdentity, string(expected.Day))
 	if err != nil {
 		return EffectConflict, err

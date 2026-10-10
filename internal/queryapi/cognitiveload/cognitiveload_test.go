@@ -196,19 +196,21 @@ func TestResolve_OrgWide_MergesOnUnionOfDays(t *testing.T) {
 		responses: []*fakeRowScanner{
 			// user metrics: day 1 only
 			{rows: [][]any{{day("2026-08-20"), uint64(4), uint64(2), uint64(1)}}},
+			// days whose every user key is a retraction row: none
+			{rows: nil},
 			// team metrics: day 2 only (a weekend with commit-timing data but no per-developer load)
 			{rows: [][]any{{day("2026-08-21"), 0.5, 0.0}}},
 			// days with a team of retraction rows only: none
 			{rows: nil},
 		},
-		errs: []error{nil, nil, nil},
+		errs: []error{nil, nil, nil, nil},
 	}
 	result, err := Resolve(context.Background(), client, "org-1", mustDate(t, "2026-08-01"), mustDate(t, "2026-08-31"), nil, nil)
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
-	if client.calls != 3 {
-		t.Fatalf("calls = %d, want 3 (user metrics, team metrics, retracted team days)", client.calls)
+	if client.calls != 4 {
+		t.Fatalf("calls = %d, want 4 (user metrics, retracted user days, team metrics, retracted team days)", client.calls)
 	}
 	if len(result.Signals) != 2 {
 		t.Fatalf("expected 2 signals (union of days), got %d: %+v", len(result.Signals), result.Signals)
@@ -278,17 +280,18 @@ func TestResolve_TeamAndRepoCombined_OwnershipResolves(t *testing.T) {
 			{rows: [][]any{{"repo-uuid-1", "org/repo-a"}}},                        // repo candidates
 			{rows: [][]any{{"repo-uuid-1", "team-a"}}},                            // ownership: native, owned by team-a
 			{rows: [][]any{{day("2026-08-20"), uint64(4), uint64(2), uint64(1)}}}, // user metrics
-			{rows: [][]any{{day("2026-08-20"), 0.25, 0.0}}},                       // repo-scoped team metrics
+			{rows: nil}, // days whose every user key is a retraction row: none
+			{rows: [][]any{{day("2026-08-20"), 0.25, 0.0}}}, // repo-scoped team metrics
 			{rows: nil}, // days of the repository with retraction rows only: none
 		},
-		errs: []error{nil, nil, nil, nil, nil},
+		errs: []error{nil, nil, nil, nil, nil, nil},
 	}
 	result, err := Resolve(context.Background(), client, "org-1", mustDate(t, "2026-08-01"), mustDate(t, "2026-08-31"), strPtr("team-a"), strPtr("org/repo-a"))
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
-	if client.calls != 5 {
-		t.Fatalf("calls = %d, want 5 (candidates, ownership, user metrics, repo-scoped team metrics, retracted repo days)", client.calls)
+	if client.calls != 6 {
+		t.Fatalf("calls = %d, want 6 (candidates, ownership, user metrics, retracted user days, repo-scoped team metrics, retracted repo days)", client.calls)
 	}
 	if !strings.Contains(client.statements[0], "FROM repos FINAL") {
 		t.Errorf("expected first query to resolve repo candidates, got: %s", client.statements[0])

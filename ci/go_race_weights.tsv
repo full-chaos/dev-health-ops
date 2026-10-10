@@ -229,6 +229,7 @@ internal/queryapi/analytics	3
 internal/queryapi/authctx	1
 internal/queryapi/busfactor	1
 internal/queryapi/capacityforecast	1
+internal/queryapi/chclient	1
 internal/queryapi/chpairliteral	1
 internal/queryapi/cognitiveload	1
 internal/queryapi/complexitytimeseries	1

@@ -264,6 +264,7 @@ func (loader *RecommendationsLoader) loadReviewSignals(
                 WHERE team_id = {team_id:String}
                   AND day >= {start:Date} AND day < {end:Date}` + loader.orgClause() + `
                 GROUP BY repo_id, author_email, day
+                HAVING ` + liverow.NewestPredicate("user_metrics_daily", "") + `
             )
             GROUP BY author_email
         `

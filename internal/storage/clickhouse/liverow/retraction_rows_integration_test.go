@@ -69,6 +69,12 @@ func TestTheRuleKeepsEachMeasurementAndDropsARetraction(t *testing.T) {
 	older, newer := day.Add(10*time.Hour), day.Add(11*time.Hour)
 
 	for _, table := range Tables() {
+		if declared, ok := teamkeytables.ByTable(table); ok && declared.Retracted != "" {
+			// A table with a retraction marker is tested by its own test
+			// (retracted_user_level_integration_test.go): no measure tells its
+			// row of zeros.
+			continue
+		}
 		// The team column and the measure columns come from the registry, or
 		// from this package for the two tables with the rule in their own
 		// writers.

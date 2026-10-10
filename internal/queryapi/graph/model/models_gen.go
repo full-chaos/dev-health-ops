@@ -1068,7 +1068,7 @@ type MetricDelta struct {
 	Label  string  `json:"label"`
 	Value  float64 `json:"value"`
 	Unit   string  `json:"unit"`
-	// Percent change between the windows. 0 when a window has no stored value (see hasData / hasPriorData); null when the prior value is a measured 0 and the current value is not, because a percent change against zero is undefined (CHAOS-9063).
+	// Percent change between the windows. Null whenever a percent has no meaning: a window has no stored value (see hasData / hasPriorData, which say which side), or the prior value is a measured 0 and the current value is not (a percent change against zero is undefined; rateState / the sentence say so). A measured value on both sides keeps its percent (CHAOS-9063, CHAOS-9111).
 	DeltaPct *float64 `json:"deltaPct,omitempty"`
 	// Whether the current window has one or more stored source rows. A stored zero has this field set to true.
 	HasData bool `json:"hasData"`
@@ -1115,7 +1115,7 @@ type OperatingReviewDelta struct {
 	Absolute   float64  `json:"absolute"`
 	Percent    *float64 `json:"percent,omitempty"`
 	Status     string   `json:"status"`
-	// False = the prior week holds no stored value for the metric (CHAOS-8115); see ``OperatingReviewMetric.hasData``. ``priorValue`` is then a 0 placeholder, and ``absolute``, ``percent`` and ``status`` compare with that placeholder: a client draws "No data" for the prior week and no change.
+	// False = the prior week holds no stored value for the metric (CHAOS-8115); see ``OperatingReviewMetric.hasData``. ``priorValue`` is then a 0 placeholder, ``absolute`` is 0, ``percent`` is null and ``status`` is empty: a client draws "No data" for the prior week and no change (CHAOS-8115, CHAOS-9111).
 	HasPriorData bool `json:"hasPriorData"`
 }
 

@@ -132,7 +132,7 @@ type Response struct {
 	Label          string                    `json:"label"`
 	Unit           string                    `json:"unit"`
 	Value          float64                   `json:"value"`
-	DeltaPct       *float64                  `json:"delta_pct"` // 0 when a window has no stored value, null from a measured 0 (deltarule)
+	DeltaPct       *float64                  `json:"delta_pct"` // null when a window has no stored value or the prior is a measured 0 (deltarule)
 	Drivers        []Contributor             `json:"drivers"`
 	Contributors   []Contributor             `json:"contributors"`
 	DrilldownLinks pyjson.OrderedMap[string] `json:"drilldown_links"`

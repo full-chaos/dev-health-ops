@@ -400,7 +400,7 @@ func TestVenueOracleQueryAPIDictOrder(t *testing.T) {
 			// The explain body ends with the Go-only fields of CHAOS-8103,
 			// which the frozen Python model never had: compared without
 			// them, and only them (withoutExplainGoOnlyFields).
-			stripped, err := withoutExplainGoOnlyFields(goWritten)
+			stripped, err := withoutExplainGoOnlyFields(venueGoBody(goWritten))
 			if err != nil {
 				t.Fatalf("%s: %v", tc.Name, err)
 			}
@@ -411,7 +411,7 @@ func TestVenueOracleQueryAPIDictOrder(t *testing.T) {
 			// CHAOS-9044, which the frozen Python model never had: compared
 			// without them, and only them (withoutHomeDeltaGoOnlyFields;
 			// a delta that lacks one fails).
-			stripped, err := withoutHomeDeltaGoOnlyFields(goWritten)
+			stripped, err := withoutHomeDeltaGoOnlyFields(venueGoBody(goWritten))
 			if err != nil {
 				t.Fatalf("%s: %v", tc.Name, err)
 			}

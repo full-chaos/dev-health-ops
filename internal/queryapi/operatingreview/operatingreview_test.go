@@ -1065,3 +1065,37 @@ func TestADeltaFromAMeasuredZeroHasNoPercentButKeepsItsStatus(t *testing.T) {
 		t.Errorf("delta = percent %v status %q absolute %v hasData %v hasPriorData %v, want null, worsened, 5, true, true", m.delta.percent, m.delta.status, m.delta.absolute, m.hasData, m.delta.hasPriorData)
 	}
 }
+
+// CHAOS-9111: a week with no stored value has no percent (null), whatever the other
+// week holds; two measured weeks keep theirs.
+func TestDataIn_PercentIsNullWhenAWeekHasNoStoredValue(t *testing.T) {
+	for _, tc := range []struct {
+		name                 string
+		currentHas, priorHas bool
+		wantNull             bool
+	}{
+		{"no prior week", true, false, true},
+		{"no current week", false, true, true},
+		{"neither week", false, false, true},
+		{"both weeks", true, true, false},
+	} {
+		calls := 0
+		has := func(periodRows) bool {
+			calls++
+			if calls == 1 {
+				return tc.currentHas
+			}
+			return tc.priorHas
+		}
+		m := buildMetric("k", "Label", 5, 2, "u", higherIsBetter).dataIn(periodRows{}, periodRows{}, has)
+		if tc.wantNull && m.delta.percent != nil {
+			t.Errorf("%s: percent = %v, want null", tc.name, *m.delta.percent)
+		}
+		if !tc.wantNull && (m.delta.percent == nil || *m.delta.percent != 150) {
+			t.Errorf("%s: percent = %v, want 150", tc.name, m.delta.percent)
+		}
+		if tc.wantNull && (m.delta.absolute != 0 || m.delta.status != "") {
+			t.Errorf("%s: absolute %v status %q, want 0 and empty", tc.name, m.delta.absolute, m.delta.status)
+		}
+	}
+}

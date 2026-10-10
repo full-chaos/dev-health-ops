@@ -216,8 +216,8 @@ func TestAServedDecisionRunWritesTheContractRowsForEachState(t *testing.T) {
 		t.Errorf("the run line does not report the states, or a log line holds source text:\n%s", lastLines(text, 6))
 	}
 
-	// Run 2, not forced: the ok unit is reused (same stamp, same input); the two
-	// low-quality units are asked again.
+	// Run 2, not forced: the ok unit and the two low-quality units are reused
+	// (same stamp, same input; a deterministic outcome is terminal, CHAOS-9147).
 	before := fake.count()
 	cfg2 := h.config("run-2", h.within.Add(time.Hour))
 	cfg2.Force = false
@@ -225,8 +225,8 @@ func TestAServedDecisionRunWritesTheContractRowsForEachState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("run 2: %v", err)
 	}
-	if stats2.SkippedExisting != 1 || fake.count()-before != 2 {
-		t.Errorf("run 2 skipped %d and sent %d; want 1 and 2", stats2.SkippedExisting, fake.count()-before)
+	if stats2.SkippedExisting != shadowGatePassUnits || fake.count()-before != 0 {
+		t.Errorf("run 2 skipped %d and sent %d; want %d and 0", stats2.SkippedExisting, fake.count()-before, shadowGatePassUnits)
 	}
 	if row, _ := h.latestServedRow(t, "A1"); row.run != "run-1" || row.quotes != 1 {
 		t.Errorf("the ok unit was rewritten by run 2, or lost its quote: run %q quotes %d", row.run, row.quotes)

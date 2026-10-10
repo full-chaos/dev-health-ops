@@ -251,9 +251,17 @@ The adapter has nine states. Served mode maps them as follows
 
 Notes:
 
-- `zero_support` and `evidence_none` rows have status `invalid_llm_output`, so
-  skip-existing does not reuse them. Such a unit is asked again in every run. This
-  costs one request per unit per run (about USD 0.0001) and is a known limit.
+- `zero_support` and `evidence_none` rows have status `invalid_llm_output` and the
+  audit code `served_top_raw_key` or `served_level_mix`. They are TERMINAL (CHAOS-9147):
+  skip-existing reuses such a row for the same input hash and stamp (the stamp holds
+  rubric and model), so the unit is asked again only when its evidence, the rubric
+  stamp or the model changed. Any other `invalid_llm_output` row (refused, invalid or
+  missing answer, adapter defect, or a generative row) has no such code and is still
+  asked again. A failed request writes no row (above), so that unit is asked again.
+  A skipped terminal unit is counted: field `units_skipped_terminal` of the run line
+  "investment served decision complete" and field `skipped_terminal` of
+  "investment materialization complete" (both inside `skipped_existing`). The outcome
+  metric counts units asked of the backend, so a skipped unit is not in it.
 - A unit cancelled by the run context has no row from this run.
 - Every unit asked of the served backend is in exactly one outcome count of the metric
   (section 6), on every exit of the run.
@@ -287,7 +295,8 @@ the three writes) is the one served path.
 `work_unit_investments` has one row for each `(org_id, work_unit_id)` (key without
 model version). `FetchExistingInvestmentKeys` (`chquery/entities.go`) takes
 `argMax(..., computed_at)` for each unit first, and then tests on that latest row:
-status in (`ok`, `repaired`), `categorization_model_version` equals the current
+status in (`ok`, `repaired`, or a terminal served low-quality row, section 5.1 notes),
+`categorization_model_version` equals the current
 version (the stamp, for a decision run), and the input hash is in the wanted set.
 No filter runs before the `argMax`.
 
@@ -412,7 +421,8 @@ The review about 48 hours later is CHAOS-8922.
 - Evidence base: one organization, English text, agent-labeled gold (results doc R2.7).
   `enablement` recall fell in round 2 (1 of 4 held-out gold positives).
 - Jev is not bit-stable on repeat. A unit asked again can change its mix.
-- `zero_support` and `evidence_none` units are asked again every run (section 4).
+- `zero_support` and `evidence_none` units are terminal for an unchanged input (CHAOS-9147);
+  a change of evidence, rubric stamp or model asks them again.
 - Shadow phase runs inside the job and has no circuit breaker.
 - Served mode is process-wide, not per org. A per-org LLM setting is the later home.
 - A near tie between keys (about 1%) can change order between the stored

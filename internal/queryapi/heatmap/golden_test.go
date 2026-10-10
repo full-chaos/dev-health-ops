@@ -2,6 +2,7 @@ package heatmap
 
 import (
 	"context"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -327,4 +328,44 @@ func TestBuildResponseUnknownMetricIs404(t *testing.T) {
 // so this test can build a realistic scope_id for a fixture identity.
 func personIDFor(identity string) string {
 	return quadrant.PersonIDForIdentity(identity)
+}
+
+// CHAOS-9159: the individual heatmap is keyed by a person, so a named repository cannot
+// narrow it: said (repo_filter_applied false), with no reason; with none named, null.
+func TestBuildResponseIndividualSaysARepositoryIsNotApplied(t *testing.T) {
+	client := fakeQueryClient{t: t, handler: func(t *testing.T, query string, bindings []dhclickhouse.Binding) (dhclickhouse.RowScanner, error) {
+		switch {
+		case strings.Contains(query, "lower(hex(MD5(identity)))"):
+			return &fixtureRowScanner{rows: [][]any{{"alice@example.com"}}}, nil
+		case strings.Contains(query, "GROUP BY weekday, hour") && strings.Contains(query, "author_email IN"):
+			return &fixtureRowScanner{rows: [][]any{{int32(2), int32(10), 4.0}}}, nil
+		default:
+			t.Fatalf("unexpected query:\n%s", query)
+			return nil, nil
+		}
+	}}
+	for _, tc := range []struct {
+		name  string
+		repos []string
+		want  string
+	}{
+		{"a repository is named", []string{"acme/unknown"}, "false"},
+		{"an empty name is no repository", []string{""}, "nil"},
+		{"none named", nil, "nil"},
+	} {
+		got, err := BuildResponse(context.Background(), client, "org-1", Params{
+			Type: "individual", Metric: "active_hours", ScopeType: "developer",
+			ScopeID: personIDFor("alice@example.com"), RangeDays: 14, Limit: 50, RepoRefs: tc.repos,
+		})
+		if err != nil {
+			t.Fatalf("%s: BuildResponse: %v", tc.name, err)
+		}
+		flag := "nil"
+		if got.RepoFilterApplied != nil {
+			flag = fmt.Sprint(*got.RepoFilterApplied)
+		}
+		if flag != tc.want || got.FilterEmptyReason != nil {
+			t.Errorf("%s: repo_filter_applied = %s, filter_empty_reason = %v; want %s, null", tc.name, flag, got.FilterEmptyReason, tc.want)
+		}
+	}
 }

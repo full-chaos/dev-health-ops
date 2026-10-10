@@ -289,3 +289,44 @@ func TestGitHubRenameIsAppliedEvenWhenTheMemberReadHasNoEndSignal(t *testing.T) 
 		t.Errorf("open = %v, departures counted = %d, want octocat and new-hubot and 0", facts, result.MembershipsClosed)
 	}
 }
+
+// A login freed by one person and taken by another comes back with ANOTHER provider user id
+// (round 122 r4): the first person's row is kept as closed history and the new person starts
+// at the run time, never inheriting the first person's valid_from or id.
+func TestGitHubALoginTakenByAnotherPersonStartsANewFactAndKeepsTheFirstPersonsHistory(t *testing.T) {
+	ctx, conn := newWorkItemEffectsConn(t)
+	const orgID = "org-9144-github-reuse"
+	logs := captureMemberLogs(t)
+	credential := providerfoundation.Credential{Provider: "github", Config: map[string]string{"org": "acme"}}
+	sync := func(at time.Time, members string) TeamCatalogResult {
+		t.Helper()
+		doer := &githubTeamCatalogFixtureDoer{t: t, byPath: map[string]string{
+			"/orgs/acme/teams":                  `[{"slug":"platform","name":"Platform"}]`,
+			"/orgs/acme/teams/platform/repos":   `[]`,
+			"/orgs/acme/teams/platform/members": members,
+		}}
+		adapter := GitHubTeamCatalogCollector{Sink: GitHubTeamCatalogClickHouseEffects{Conn: conn}, ScopeCensus: staticScopeCensus{}}
+		result, err := adapter.CollectTeamCatalog(ctx, TeamCatalogReference{OrgID: orgID, SyncRunID: "run", IntegrationID: "integration-a"},
+			credential, githubTeamCatalogAdapterClient(t, fakehttp.Client(doer)), TeamCatalogSelections{Teams: true, Members: true}, at)
+		if err != nil {
+			t.Fatalf("sync at %s: %v", at, err)
+		}
+		return result
+	}
+	const alice = "gh:platform|gh:alice"
+	sync(departureAt[0], `[{"login":"octocat","id":1},{"login":"alice","id":2}]`)
+	sync(departureAt[1], `[{"login":"octocat","id":1},{"login":"alice","id":3}]`)
+	facts := openMembershipFacts(ctx, t, conn, orgID, "github")
+	requireOpen(t, "a taken login", facts, alice, departureAt[1]) // a new person: a new valid_from
+	requireOpen(t, "a taken login", facts, "gh:platform|gh:octocat", departureAt[0])
+	requireClosed(t, "a taken login", closedMembershipFacts(ctx, t, conn, orgID, "github"), alice,
+		departureAt[0].Format(time.RFC3339)+"->"+departureAt[1].Format(time.RFC3339))
+	requireProviderUserIDs(t, "a taken login", providerUserIDs(ctx, t, conn, orgID, "github"),
+		map[string]string{"gh:octocat": "1", "gh:alice": "3"})
+	if lines := logs.lines("team_membership_id_reused"); len(lines) != 1 || lines[0]["reused"] != float64(1) || strings.Contains(logs.text(), "alice") {
+		t.Errorf("reuse log lines = %v (or a login in a log line), want one line of reused=1", lines)
+	}
+	// The run after changes nothing.
+	sync(departureAt[2], `[{"login":"octocat","id":1},{"login":"alice","id":3}]`)
+	requireOpen(t, "the run after", openMembershipFacts(ctx, t, conn, orgID, "github"), alice, departureAt[1])
+}

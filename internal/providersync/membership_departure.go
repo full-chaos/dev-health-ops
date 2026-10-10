@@ -162,6 +162,10 @@ type MembershipSnapshotOutcome struct {
 	// email changed): the new row took the valid_from of the open row, which is
 	// retired, so there is no leave and no join (CHAOS-9144).
 	Renamed int
+	// IDReused: facts whose member id came back with ANOTHER provider user id than every
+	// open row of it holds (a freed login taken by a new person): the open rows are
+	// closed and the fact starts a new row, so the old person keeps their own history.
+	IDReused int
 }
 
 // membershipTeamLogToken names a team in a log line as a string: the id of a
@@ -181,8 +185,8 @@ func membershipTeamLogToken(teamID string) string {
 }
 
 type membershipTeamTally struct {
-	closed, duplicates, renamed int
-	skipped                     map[string]int
+	closed, duplicates, renamed, reused int
+	skipped                             map[string]int
 }
 
 // Snapshot returns the rows of one membership write: the rows to write on the
@@ -328,6 +332,25 @@ func (writer MembershipSnapshotWriter[R]) Snapshot(
 			closes = append(closes, closing{row, closedAt})
 		}
 	}
+	// A member id that came back with another provider user id is a new person: the old
+	// row is closed (history) and the written row starts at the run time (see planIDReuse).
+	alreadyClosing := map[string]bool{}
+	for _, existing := range closes {
+		alreadyClosing[membershipOpenRowKey(existing.open)] = true
+	}
+	for _, row := range writer.planIDReuse(open, observed, toWrite, stamp, at) {
+		outcome.IDReused++
+		of(row.TeamID).reused++
+		if alreadyClosing[membershipOpenRowKey(row)] {
+			continue
+		}
+		alreadyClosing[membershipOpenRowKey(row)] = true
+		closedAt := at
+		if closedAt.Before(row.ValidFrom) {
+			closedAt = row.ValidFrom
+		}
+		closes = append(closes, closing{row, closedAt})
+	}
 	for key := range renamedAway {
 		outcome.Renamed++
 		team, _, _ := strings.Cut(key, "\x00")
@@ -344,6 +367,11 @@ func (writer MembershipSnapshotWriter[R]) Snapshot(
 			slog.Default().InfoContext(ctx, "team_membership_renamed",
 				"org_id", orgID, "provider", writer.Provider, "team", membershipTeamLogToken(teamID),
 				"renamed", counts.renamed)
+		}
+		if counts.reused > 0 {
+			slog.Default().InfoContext(ctx, "team_membership_id_reused",
+				"org_id", orgID, "provider", writer.Provider, "team", membershipTeamLogToken(teamID),
+				"reused", counts.reused)
 		}
 		if counts.closed+counts.duplicates > 0 {
 			slog.Default().InfoContext(ctx, "team_membership_closed",
@@ -461,6 +489,59 @@ func (writer MembershipSnapshotWriter[R]) planRenames(
 // membershipOpenRowKey names one open row (its fact and valid_from).
 func membershipOpenRowKey(row openMembership) string {
 	return row.TeamID + "\x00" + row.MemberID + "\x00" + row.ValidFrom.UTC().Format(time.RFC3339Nano)
+}
+
+// planIDReuse finds the facts the run returns under the SAME member id but another
+// provider user id than every open row of the fact holds (CHAOS-9144, round 122 r4):
+// a login freed by one person and taken by another. It gives the written row a new
+// valid_from (the run time, not the open row's) and returns the open rows to close,
+// so the first person's row is kept as history and the new person does not inherit it.
+// A fact with any open row that holds no id (a row written before the column) or the
+// same id is one person still: nothing is done.
+func (writer MembershipSnapshotWriter[R]) planIDReuse(
+	open []openMembership, observed, toWrite []R, stamp map[string]time.Time, at time.Time,
+) []openMembership {
+	if writer.ProviderUserID == nil {
+		return nil
+	}
+	written := map[string]bool{}
+	for _, row := range toWrite {
+		written[MembershipSnapshotKey(MembershipSnapshotRow{TeamID: writer.TeamID(row), MemberID: writer.MemberID(row)})] = true
+	}
+	byFact := map[string][]openMembership{}
+	for _, row := range open {
+		key := MembershipSnapshotKey(MembershipSnapshotRow{TeamID: row.TeamID, MemberID: row.MemberID})
+		byFact[key] = append(byFact[key], row)
+	}
+	var closing []openMembership
+	for _, row := range observed {
+		id := writer.ProviderUserID(row)
+		if id == nil || strings.TrimSpace(*id) == "" {
+			continue
+		}
+		key := MembershipSnapshotKey(MembershipSnapshotRow{TeamID: writer.TeamID(row), MemberID: writer.MemberID(row)})
+		rows := byFact[key]
+		if len(rows) == 0 || !written[key] {
+			continue
+		}
+		different := true
+		for _, openRow := range rows {
+			stored := ""
+			if openRow.ProviderUserID != nil {
+				stored = strings.TrimSpace(*openRow.ProviderUserID)
+			}
+			if stored == "" || stored == strings.TrimSpace(*id) || openRow.UpdatedAt.After(at) {
+				different = false
+				break
+			}
+		}
+		if !different {
+			continue
+		}
+		stamp[key] = at
+		closing = append(closing, rows...)
+	}
+	return closing
 }
 
 type membershipRetraction struct {

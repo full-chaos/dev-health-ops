@@ -125,3 +125,62 @@ func TestPlanRenamesOneClauseAtATime(t *testing.T) {
 		}
 	})
 }
+
+// planIDReuse (round 122 r4): the same member id back with another provider user id is a new person.
+func TestPlanIDReuseOneClauseAtATime(t *testing.T) {
+	at := time.Date(2026, 10, 10, 12, 0, 0, 0, time.UTC)
+	first := at.AddDate(0, 0, -30)
+	id := func(value string) *string { return &value }
+	open := func(member string, providerID *string, updated time.Time) openMembership {
+		return openMembership{TeamID: "t", MemberID: member, ProviderUserID: providerID, ValidFrom: first, UpdatedAt: updated}
+	}
+	row := func(member string, providerID *string) githubMembershipRow {
+		return githubMembershipRow{TeamID: "t", MemberID: member, ProviderUserID: providerID, ValidFrom: at}
+	}
+	run := func(openRows []openMembership, observed []githubMembershipRow, written []githubMembershipRow) ([]openMembership, map[string]time.Time) {
+		stamp := map[string]time.Time{}
+		for _, o := range observed {
+			stamp["t\x00"+o.MemberID] = first
+		}
+		if written == nil {
+			written = observed
+		}
+		return githubMembershipWriter.planIDReuse(openRows, observed, written, stamp, at), stamp
+	}
+	t.Run("another id on the same member id closes the open row and starts at the run time", func(t *testing.T) {
+		closing, stamp := run([]openMembership{open("gh:a", id("2"), first)}, []githubMembershipRow{row("gh:a", id("3"))}, nil)
+		if len(closing) != 1 || !stamp["t\x00gh:a"].Equal(at) {
+			t.Fatalf("closing = %v, valid_from %s, want the open row and %s", closing, stamp["t\x00gh:a"], at)
+		}
+	})
+	t.Run("the same id is the same person", func(t *testing.T) {
+		if closing, _ := run([]openMembership{open("gh:a", id(" 3 "), first)}, []githubMembershipRow{row("gh:a", id("3"))}, nil); len(closing) != 0 {
+			t.Fatalf("closing = %v, want nothing", closing)
+		}
+	})
+	t.Run("a stored row with no id, or a blank id, is never judged another person", func(t *testing.T) {
+		if closing, _ := run([]openMembership{open("gh:a", nil, first), open("gh:b", id(" "), first)}, []githubMembershipRow{row("gh:a", id("3")), row("gh:b", id("3"))}, nil); len(closing) != 0 {
+			t.Fatalf("closing = %v, want nothing", closing)
+		}
+	})
+	t.Run("an observed row with no id changes nothing", func(t *testing.T) {
+		if closing, _ := run([]openMembership{open("gh:a", id("2"), first), open("gh:b", id("2"), first)}, []githubMembershipRow{row("gh:a", nil), row("gh:b", id(" "))}, nil); len(closing) != 0 {
+			t.Fatalf("closing = %v, want nothing", closing)
+		}
+	})
+	t.Run("one open row of the fact with no id or the same id keeps the fact one person", func(t *testing.T) {
+		if closing, _ := run([]openMembership{open("gh:a", id("2"), first), open("gh:a", nil, first)}, []githubMembershipRow{row("gh:a", id("3"))}, nil); len(closing) != 0 {
+			t.Fatalf("closing = %v, want nothing", closing)
+		}
+	})
+	t.Run("a member the guard keeps out is not written, so nothing changes", func(t *testing.T) {
+		if closing, _ := run([]openMembership{open("gh:a", id("2"), first)}, []githubMembershipRow{row("gh:a", id("3"))}, []githubMembershipRow{}); len(closing) != 0 {
+			t.Fatalf("closing = %v, want nothing", closing)
+		}
+	})
+	t.Run("an open row newer than the read is left alone", func(t *testing.T) {
+		if closing, _ := run([]openMembership{open("gh:a", id("2"), at.Add(time.Hour))}, []githubMembershipRow{row("gh:a", id("3"))}, nil); len(closing) != 0 {
+			t.Fatalf("closing = %v, want nothing", closing)
+		}
+	})
+}

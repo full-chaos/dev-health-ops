@@ -20,7 +20,6 @@ import (
 type reviewRows struct {
 	WorkItems      []workItemsRow
 	StateDurations []stateDurationRow
-	Investment     []investmentRow
 	AIImpact       []aiImpactRow
 	AIGovernance   []aiGovernanceRawRow
 }
@@ -41,9 +40,6 @@ func readReviewRows(ctx context.Context, t *testing.T, client QueryClient, org s
 	if rows.StateDurations, err = fetchStateDurations(ctx, client, org, nil, start, end); err != nil {
 		t.Fatalf("%s state durations: %v", org, err)
 	}
-	if rows.Investment, err = fetchInvestment(ctx, client, org, nil, start, end); err != nil {
-		t.Fatalf("%s investment: %v", org, err)
-	}
 	if rows.AIImpact, err = fetchAIImpact(ctx, client, org, nil, start, end); err != nil {
 		t.Fatalf("%s ai impact: %v", org, err)
 	}
@@ -51,7 +47,6 @@ func readReviewRows(ctx context.Context, t *testing.T, client QueryClient, org s
 		t.Fatalf("%s ai governance: %v", org, err)
 	}
 	rows.StateDurations = byText(rows.StateDurations)
-	rows.Investment = byText(rows.Investment)
 	rows.AIImpact = byText(rows.AIImpact)
 	rows.AIGovernance = byText(rows.AIGovernance)
 	return rows
@@ -88,9 +83,6 @@ func TestOperatingReviewReadersGiveRetractionRowsNoWeight(t *testing.T) {
 	}
 	if len(control.WorkItems) != 6 {
 		t.Fatalf("control work items = %d days, want 6", len(control.WorkItems))
-	}
-	if want := []investmentRow{{investmentArea: "feature_delivery", deliveryUnits: 6 * (3 + 4 + 5 + 6)}}; !reflect.DeepEqual(control.Investment, want) {
-		t.Fatalf("control investment = %+v, want %+v", control.Investment, want)
 	}
 	if len(control.AIImpact) != 1 || control.AIImpact[0].prsTotal != 6*(4+5+6+7) {
 		t.Fatalf("control ai impact = %+v, want one bucket with 132 pull requests", control.AIImpact)
@@ -130,7 +122,7 @@ func TestOperatingReviewReadsNoRowForRetractionRowsOnly(t *testing.T) {
 	// with no pull request), so a retraction row cannot be told from a
 	// measurement there. That read sums and takes Nullable means, which a
 	// row of zeros does not move (held by the test above).
-	if len(rows.WorkItems)+len(rows.StateDurations)+len(rows.Investment)+len(rows.AIGovernance) != 0 {
+	if len(rows.WorkItems)+len(rows.StateDurations)+len(rows.AIGovernance) != 0 {
 		t.Errorf("a period of retraction rows only gives rows: %+v", rows)
 	}
 	if coverage := aiGovernanceCoverage(rows.AIGovernance); coverage != 0 {

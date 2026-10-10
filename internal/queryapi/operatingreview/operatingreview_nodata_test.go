@@ -17,13 +17,13 @@ import (
 // themselves are unchanged (the frozen golden pins them): a missing week and a
 // stored zero both give value 0, and only these two fields tell them apart.
 
-// allMetricKeys are the 26 metrics of the review, in section order.
+// allMetricKeys are the 27 metrics of the review, in section order.
 var allMetricKeys = []string{
 	"cycle_time_p50_hours", "throughput", "wip_count",
 	"state_duration_hours", "review_latency_hours", "wip_age_p90_hours",
 	"hotspot_risk_score", "ownership_concentration", "complexity_per_kloc", "bus_factor",
 	"deployments_count", "change_failure_rate", "deployment_failure_rate", "revert_rate", "incidents_count", "mttr_hours",
-	"ktlo_units", "new_value_units", "security_units", "infra_units",
+	"feature_delivery_effort", "operational_effort", "maintenance_effort", "quality_effort", "risk_effort",
 	"ai_adoption_ratio", "ai_cycle_time_delta_hours", "ai_review_amplification", "ai_risk_drag",
 	"ai_governance_coverage", "ai_opportunity_signals",
 }
@@ -106,7 +106,7 @@ func storedZeroWeekScanners() []*fakeRowScanner {
 		{rows: [][]any{{0.0, uint64(1)}}},                                                                          // complexity
 		{rows: [][]any{{uint64(1), uint64(0), uint64(1)}}},                                                         // deployments
 		{rows: [][]any{{uint64(0), 0.0, uint64(1)}}},                                                               // incidents
-		{rows: [][]any{{"feature_delivery", uint64(0)}}},                                                           // investment
+		{rows: [][]any{{"feature_delivery", 0.0, 0.0, 0.0}}},                                                       // investment
 		{rows: [][]any{{"human", uint64(5), uint64(0), uint64(0), uint64(5), uint64(0), 0.0, 0.0, 0.0, 0.0, 0.0}}}, // ai_impact
 		{rows: [][]any{{day("2026-08-24"), nil, nil, uint64(0), uint64(0), uint64(0), uint64(0), uint64(0)}}},      // ai_governance
 		{rows: [][]any{{uint64(1), uint64(0), uint64(0), uint64(1), uint64(0), uint64(1)}}},                        // change_failure
@@ -258,7 +258,7 @@ func TestHasData_AFailedReadIsNoDataForItsMetricsOnly(t *testing.T) {
 		"complexity":    {4, []string{"complexity_per_kloc"}},
 		"deployments":   {5, []string{"deployments_count", "deployment_failure_rate"}},
 		"incidents":     {6, []string{"incidents_count"}},
-		"investment":    {7, []string{"ktlo_units", "new_value_units", "security_units", "infra_units"}},
+		"investment":    {7, []string{"feature_delivery_effort", "operational_effort", "maintenance_effort", "quality_effort", "risk_effort"}},
 		"ai_impact":     {8, []string{"ai_adoption_ratio", "ai_cycle_time_delta_hours", "ai_review_amplification", "ai_risk_drag"}},
 		"ai_governance": {9, []string{"ai_governance_coverage"}},
 		// change failure rate has one source: its own counts.
@@ -335,8 +335,8 @@ func TestHasData_PresenceRuleOfEachMetric(t *testing.T) {
 		{"incident rows stored, MTTR NULL", periodRows{incidents: []incidentsAggRow{{storedRows: 1}}}, []string{"incidents_count"}},
 		{"an incident MTTR", periodRows{incidents: []incidentsAggRow{{mttrP50Hours: fp(0), storedRows: 1}}},
 			[]string{"incidents_count", "mttr_hours"}},
-		{"an investment row of an area the review does not show", periodRows{investment: []investmentRow{{investmentArea: "other"}}},
-			[]string{"ktlo_units", "new_value_units", "security_units", "infra_units"}},
+		{"an investment row of a theme the review does not show", periodRows{investment: []investmentRow{{theme: "other"}}},
+			[]string{"feature_delivery_effort", "operational_effort", "maintenance_effort", "quality_effort", "risk_effort"}},
 		{"AI rows that count no pull request", periodRows{aiImpact: []aiImpactRow{{}}}, nil},
 		{"AI rows with pull requests", periodRows{aiImpact: []aiImpactRow{{prsTotal: 3}}}, []string{"ai_adoption_ratio"}},
 		{"an AI cycle time delta", periodRows{aiImpact: []aiImpactRow{{aiCycleTimeDeltaHours: fp(0)}}}, []string{"ai_cycle_time_delta_hours"}},

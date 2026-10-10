@@ -3,6 +3,7 @@
 package operatingreview
 
 import (
+	"fmt"
 	"reflect"
 	"testing"
 	"time"
@@ -30,12 +31,12 @@ func TestRealClickHouse_ReviewOfSeveralTeamsIsTheUnionOfTheirRows(t *testing.T) 
 			t.Fatalf("insert work items %s/%s: %v", org, team, err)
 		}
 	}
+	seq := 0
 	investment := func(org, team string, units int) {
-		if err := admin.Exec(ctx, `INSERT INTO investment_metrics_daily
-			(repo_id, day, team_id, investment_area, project_stream, delivery_units, work_items_completed, prs_merged, churn_loc, cycle_p50_hours, org_id, computed_at)
-			VALUES (?, ?, ?, 'ktlo', 'stream', ?, 0, 0, 0, 0, ?, ?)`, repoID, week, team, uint32(units), org, computed); err != nil {
-			t.Fatalf("insert investment %s/%s: %v", org, team, err)
-		}
+		seq++
+		repo := fmt.Sprintf("8516%04d-8516-4516-8516-851685168516", seq)
+		seedOwnedRepo(ctx, t, admin, org, team, repo, computed.AddDate(0, 0, 8))
+		seedCanonicalUnit(ctx, t, admin, org, fmt.Sprintf("wu-%s-%s", org, team), repo, week.Add(36*time.Hour), float64(units), map[string]float64{"maintenance.debt": 1})
 	}
 	for _, org := range []string{full, onlyAB} {
 		workItems(org, "team-a", 3, 4, 10)
@@ -82,7 +83,7 @@ func TestRealClickHouse_ReviewOfSeveralTeamsIsTheUnionOfTheirRows(t *testing.T) 
 		"throughput":           8,  // 3 + 5: a count is a sum; team C and the team-less row are out
 		"wip_count":            9,  // the largest stored WIP of the two teams
 		"cycle_time_p50_hours": 20, // the mean of the two stored values of the day
-		"ktlo_units":           7,  // 3 + 4
+		"maintenance_effort":   7,  // 3 + 4
 		"deployments_count":    5,  // the organisation's: no team narrows it
 	} {
 		if m := metric(ab, key); m.Value != want || !m.HasData {

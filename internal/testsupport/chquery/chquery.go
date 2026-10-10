@@ -21,3 +21,12 @@ import (
 func NewProductionClient(dsn string) (*dhclickhouse.Client, error) {
 	return dhclickhouse.NewClickHouseQueryClientWithOptions(chclient.Options(dsn))
 }
+
+// NewClientWithRowBound is NewProductionClient with an explicit result-row
+// bound: for a test that proves a read of more rows than a given ceiling fails
+// (the 1,000-row ceiling the REST clients had before CHAOS-9126).
+func NewClientWithRowBound(dsn string, rows uint) (*dhclickhouse.Client, error) {
+	opts := chclient.Options(dsn)
+	opts.MaxResultRows = &rows
+	return dhclickhouse.NewClickHouseQueryClientWithOptions(opts)
+}

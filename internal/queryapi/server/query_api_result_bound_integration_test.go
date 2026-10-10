@@ -87,49 +87,46 @@ FROM numbers(?)`, org, uint64(n))
 			t.Fatalf("HTTP %d; want 200 with the unit's theme (body %.200s)", code, body)
 		}
 	})
-}
 
-// boundedClient is a read client with a tiny row bound, for the named-cause test.
-func TestRESTBoundHitNamesItsCause(t *testing.T) {
-	conn, _ := startTeamScopeClickHouse(t)
-	ctx := context.Background()
-	const org = "bound-named-9126"
-	if err := conn.Exec(ctx, `INSERT INTO repos (id, repo, created_at, last_synced, org_id, provider)
+	t.Run("a bound hit names its cause; a store that is down does not", func(t *testing.T) {
+		const org = "bound-named-9126"
+		if err := conn.Exec(ctx, `INSERT INTO repos (id, repo, created_at, last_synced, org_id, provider)
 SELECT generateUUIDv4(), concat('acme/repo-', toString(number)), now(), now(), ?, 'github' FROM numbers(50)`, org); err != nil {
-		t.Fatal(err)
-	}
-	dsn := teamScopeDSN
-	opts := chclient.Options(dsn)
-	rows := uint(10)
-	opts.MaxResultRows = &rows
-	tight, err := dhclickhouse.NewClickHouseQueryClientWithOptions(opts)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = tight.Close() })
+			t.Fatal(err)
+		}
+		dsn := teamScopeDSN
+		opts := chclient.Options(dsn)
+		rows := uint(10)
+		opts.MaxResultRows = &rows
+		tight, err := dhclickhouse.NewClickHouseQueryClientWithOptions(opts)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = tight.Close() })
 
-	var logs bytes.Buffer
-	log.SetOutput(&logs)
-	t.Cleanup(func() { log.SetOutput(nil) })
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/filters/options?scope_id=a&scope_id=b", nil)
-	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: org, Role: "owner"}))
-	rec := httptest.NewRecorder()
-	newFilterOptionsWorkHandler(tight)(rec, req)
-	if rec.Code != 503 || !strings.Contains(rec.Body.String(), "Result too large") {
-		t.Fatalf("bound hit: HTTP %d %s, want 503 with the named cause", rec.Code, rec.Body.String())
-	}
-	if l := logs.String(); !strings.Contains(l, "WARN filteroptions: read hit the result_rows bound") || !strings.Contains(l, "scope_ids=2") || strings.Contains(l, "acme/repo") {
-		t.Fatalf("WARN line = %q, want operation, bound, scope id count, no values", l)
-	}
+		var logs bytes.Buffer
+		log.SetOutput(&logs)
+		t.Cleanup(func() { log.SetOutput(nil) })
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/filters/options?scope_id=a&scope_id=b", nil)
+		req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: org, Role: "owner"}))
+		rec := httptest.NewRecorder()
+		newFilterOptionsWorkHandler(tight)(rec, req)
+		if rec.Code != 503 || !strings.Contains(rec.Body.String(), "Result too large") {
+			t.Fatalf("bound hit: HTTP %d %s, want 503 with the named cause", rec.Code, rec.Body.String())
+		}
+		if l := logs.String(); !strings.Contains(l, "WARN filteroptions: read hit the result_rows bound") || !strings.Contains(l, "scope_ids=2") || strings.Contains(l, "acme/repo") {
+			t.Fatalf("WARN line = %q, want operation, bound, scope id count, no values", l)
+		}
 
-	if err := tight.Close(); err != nil {
-		t.Fatal(err)
-	}
-	req = httptest.NewRequest(http.MethodGet, "/api/v1/filters/options", nil)
-	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: org, Role: "owner"}))
-	rec = httptest.NewRecorder()
-	newFilterOptionsWorkHandler(tight)(rec, req)
-	if rec.Code != 503 || !strings.Contains(rec.Body.String(), "Data unavailable") {
-		t.Fatalf("store down: HTTP %d %s, want 503 Data unavailable", rec.Code, rec.Body.String())
-	}
+		if err := tight.Close(); err != nil {
+			t.Fatal(err)
+		}
+		req = httptest.NewRequest(http.MethodGet, "/api/v1/filters/options", nil)
+		req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: org, Role: "owner"}))
+		rec = httptest.NewRecorder()
+		newFilterOptionsWorkHandler(tight)(rec, req)
+		if rec.Code != 503 || !strings.Contains(rec.Body.String(), "Data unavailable") {
+			t.Fatalf("store down: HTTP %d %s, want 503 Data unavailable", rec.Code, rec.Body.String())
+		}
+	})
 }

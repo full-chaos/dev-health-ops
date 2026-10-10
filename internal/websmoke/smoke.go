@@ -18,7 +18,9 @@
 // GraphQL tokens of the registered document (whitespace and commas aside), and the
 // registered document's sha256 must be a digest the edge catalog (Config.Catalog) holds for its
 // operation (current or legacy); either failing is document_digest_mismatch, so a change in web's
-// document is caught. REST paths must still appear as a literal in the web source file that
+// document is caught. Web's document may equal ANY document the build registers for the operation,
+// the current one or a legacy one (a two-step pin: this ops with the older web); a legacy match is
+// named in the receipt (legacy_documents), never reported as a mismatch (CHAOS-9146). REST paths must still appear as a literal in the web source file that
 // calls them.
 //
 // KNOWN-MISSING operations come from the bigboy routing-ops list (ci/bigboy). A known-missing check is
@@ -52,6 +54,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/goapidigest"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/server"
 )
 
 // Exit codes of the verb.
@@ -153,6 +156,11 @@ type Config struct {
 	ReceiptPath  string
 	// Documents returns the registered wire-form document of an operation.
 	Documents func(operation string) (string, bool)
+	// RegisteredDocuments returns every document the build registers for an operation, the
+	// current one first, then the legacy ones (CHAOS-9146). Web's document passes when it
+	// carries the tokens of any of them and that text's digest is in the catalog. Nil means the
+	// current document only (Documents).
+	RegisteredDocuments func(operation string) ([]server.RegisteredDocument, bool)
 	// Now is the clock; nil means time.Now.
 	Now func() time.Time
 }
@@ -586,7 +594,7 @@ func (s *runner) webSource() (result, error) {
 		}
 		catalog[e.Operation][e.Digest] = true
 	}
-	var mismatched []string
+	var mismatched, legacy []string
 	for _, g := range graphqlSources {
 		text, err := os.ReadFile(filepath.Join(s.cfg.WebSrc, g.File))
 		if err != nil {
@@ -601,17 +609,41 @@ func (s *runner) webSource() (result, error) {
 			return nil, fail("registered_document_missing=%s", g.Op)
 		}
 		// Web's own text, formatted as urql formats it (the Python urql_format rule), must carry the
-		// GraphQL tokens of the registered document, __typename placement included, and the registered document must hash to the catalog: so a change in
-		// web's document is a mismatch, exactly as the printed-document digest was.
-		if !sameTokens(webDoc, doc) || !catalog[g.Op][DocumentDigest(doc)] {
-			mismatched = append(mismatched, g.Op)
+		// GraphQL tokens of a registered document, __typename placement included, and that document must hash to
+		// the catalog: so a change in web's document is a mismatch, exactly as the printed-document digest was.
+		// The registered documents are the current one and the legacy ones (CHAOS-9146): an older web
+		// of a two-step pin sends a legacy text, which the edge accepts, and the receipt says "legacy".
+		candidates := []server.RegisteredDocument{{Text: doc}}
+		if s.cfg.RegisteredDocuments != nil {
+			all, known := s.cfg.RegisteredDocuments(g.Op)
+			if !known || len(all) == 0 {
+				return nil, fail("registered_document_missing=%s", g.Op)
+			}
+			candidates = all
 		}
+		matched, found := server.RegisteredDocument{}, false
+		for _, candidate := range candidates {
+			if sameTokens(webDoc, candidate.Text) && catalog[g.Op][DocumentDigest(candidate.Text)] {
+				matched, found = candidate, true
+				break
+			}
+		}
+		if !found {
+			mismatched = append(mismatched, g.Op)
+		} else if matched.Legacy {
+			legacy = append(legacy, g.Op)
+		}
+		// The smoke always SENDS the current registered document, whichever web carries.
 		s.documents[g.Op] = doc
 	}
 	if len(mismatched) > 0 {
 		return nil, fail("document_digest_mismatch=%s", strings.Join(mismatched, ","))
 	}
-	return result{"rest_paths": len(restSources), "graphql_documents": len(graphqlSources), "digests_match": true}, nil
+	out := result{"rest_paths": len(restSources), "graphql_documents": len(graphqlSources), "digests_match": true}
+	if len(legacy) > 0 {
+		out["legacy_documents"] = strings.Join(legacy, ",")
+	}
+	return out, nil
 }
 
 // publicHostUnauth (D2735): a browser request without a session must land on web (303), never a plane.

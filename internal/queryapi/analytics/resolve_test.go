@@ -965,6 +965,7 @@ func TestResolve_ThemeAndSubcategoryAreCanonicalOnly_ForTimeseriesBreakdownAndSa
 	for _, force := range []*bool{nil, boolPtr(false)} {
 		for _, dim := range []model.DimensionInput{model.DimensionInputTheme, model.DimensionInputSubcategory} {
 			client := &routingFakeClient{}
+			client.on("quality_known_count", &fakeRowScanner{})
 			client.on("subcategory_kv", &fakeRowScanner{})
 			client.on("investment_area", &fakeRowScanner{})
 			client.on("project_stream", &fakeRowScanner{})
@@ -994,5 +995,81 @@ func TestResolve_ThemeAndSubcategoryAreCanonicalOnly_ForTimeseriesBreakdownAndSa
 		if col, err := dbColumn(dim, false); err == nil {
 			t.Errorf("dbColumn(%s, false) = %q, want an error: the legacy classifier keys are not read any more", dim, col)
 		}
+	}
+}
+
+// CHAOS-9195 round 113 r1 P1 #1: the sankey COVERAGE read follows the same canonical-only override
+// as the nodes and edges. It read the legacy investment_metrics_daily when the flag was false/unset.
+func TestResolve_SankeyCoverage_ThemeIsCanonicalOnly_EvenWithUseInvestmentFalse(t *testing.T) {
+	for _, force := range []*bool{nil, boolPtr(false)} {
+		for _, dim := range []model.DimensionInput{model.DimensionInputTheme, model.DimensionInputSubcategory} {
+			client := &routingFakeClient{}
+			client.on("investment_metrics_daily", &fakeRowScanner{})
+			client.on("project_stream", &fakeRowScanner{})
+			client.on("work_unit_investments", &fakeRowScanner{})
+			batch := model.AnalyticsRequestInput{
+				UseInvestment: force,
+				Sankey: &model.SankeyRequestInput{
+					Path:      []model.DimensionInput{dim, model.DimensionInputRepo},
+					Measure:   model.MeasureInputCount,
+					DateRange: &model.DateRangeInput{StartDate: mustGraphQLDate("2026-01-01"), EndDate: mustGraphQLDate("2026-01-07")},
+					MaxNodes:  100,
+					MaxEdges:  500,
+				},
+			}
+			if _, err := ResolveSelected(context.Background(), client, "org-1", batch, EverythingSelected()); err != nil {
+				t.Fatalf("%s force=%v: %v", dim, force, err)
+			}
+			canonical := 0
+			for _, call := range client.calls {
+				if call == "investment_metrics_daily" || call == "project_stream" {
+					t.Errorf("%s force=%v: a statement (coverage) read the legacy source %q; calls=%v", dim, force, call, client.calls)
+				}
+				if call == "work_unit_investments" {
+					canonical++
+				}
+			}
+			if canonical < 2 {
+				t.Errorf("%s force=%v: want nodes+edges and coverage on the canonical source (>=2), got %d; calls=%v", dim, force, canonical, client.calls)
+			}
+		}
+	}
+}
+
+// CHAOS-9195 round 113 r1 P1 #2: evidence-quality stats and groups open when a request of the batch is
+// upgraded to the canonical path, also against useInvestment=false.
+func TestResolve_EvidenceQuality_OpensForCanonicalOnlyRequest_EvenWithUseInvestmentFalse(t *testing.T) {
+	client := &routingFakeClient{}
+	client.on("quality_known_count", &fakeRowScanner{
+		rows: [][]any{{uint64(10), uint64(10), 0.5, 0.1, uint64(0), uint64(5), uint64(5), uint64(0), uint64(0)}},
+	})
+	client.on("subcategory_kv", &fakeRowScanner{})
+	gb := model.DimensionInputTheme
+	batch := model.AnalyticsRequestInput{
+		UseInvestment:          boolPtr(false),
+		Breakdowns:             []model.BreakdownRequestInput{bdInput(model.DimensionInputTheme, model.MeasureInputCount)},
+		EvidenceQualityGroupBy: &gb,
+	}
+	result, err := Resolve(context.Background(), client, "org-1", batch)
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if result.EvidenceQualityStats == nil || result.EvidenceQualityStats.Total != 10 {
+		t.Fatalf("EvidenceQualityStats = %+v, want total 10 (the quality read must run)", result.EvidenceQualityStats)
+	}
+	// Control: a batch with no canonical-only request and useInvestment=false keeps the gate shut.
+	client2 := &routingFakeClient{}
+	client2.on("quality_known_count", &fakeRowScanner{})
+	client2.on("investment_metrics_daily", &fakeRowScanner{})
+	batch2 := model.AnalyticsRequestInput{
+		UseInvestment: boolPtr(false),
+		Breakdowns:    []model.BreakdownRequestInput{bdInput(model.DimensionInputRepo, model.MeasureInputCount)},
+	}
+	r2, err := Resolve(context.Background(), client2, "org-1", batch2)
+	if err != nil {
+		t.Fatalf("Resolve control: %v", err)
+	}
+	if r2.EvidenceQualityStats != nil {
+		t.Errorf("control: stats must stay nil without a canonical-only request, got %+v", r2.EvidenceQualityStats)
 	}
 }

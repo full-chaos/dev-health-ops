@@ -262,9 +262,13 @@ func ResolveSelected(ctx context.Context, client QueryClient, orgID string, batc
 	//
 	// Each of the two is its own statement and is sent only for an operation
 	// that selected it (Selection).
+	// A THEME / SUBCATEGORY request anywhere in the batch is upgraded to the
+	// canonical path per request (CHAOS-9195); the evidence-quality reads open
+	// with it, also against an explicit useInvestment=false.
+	qualityInvestment := useInvestment || batchHasCanonicalOnlyDimension(batch)
 	var evidenceQualityStats *model.EvidenceQualityStats
 	if selected.EvidenceQualityStats {
-		stats, err := resolveEvidenceQualityStats(ctx, client, orgID, batch, useInvestment, resolvedFilters)
+		stats, err := resolveEvidenceQualityStats(ctx, client, orgID, batch, qualityInvestment, resolvedFilters)
 		if err != nil {
 			return nil, fmt.Errorf("analytics: evidenceQualityStats: %w", err)
 		}
@@ -272,7 +276,7 @@ func ResolveSelected(ctx context.Context, client QueryClient, orgID string, batc
 	}
 	// The groups: the batch's group dimension is validated in every case; the
 	// statement is sent only when the groups are selected.
-	evidenceQualityByGroup, err := resolveEvidenceQualityByGroup(ctx, client, orgID, batch, useInvestment, resolvedFilters, selected.EvidenceQualityByGroup)
+	evidenceQualityByGroup, err := resolveEvidenceQualityByGroup(ctx, client, orgID, batch, qualityInvestment, resolvedFilters, selected.EvidenceQualityByGroup)
 	if err != nil {
 		return nil, fmt.Errorf("analytics: evidenceQualityByGroup: %w", err)
 	}
@@ -419,9 +423,11 @@ func resolveSankey(ctx context.Context, client QueryClient, orgID string, input 
 		useInvestment = pathAutoRoutesToInvestment(req.Path)
 	}
 
+	canonicalForced := false
 	for _, d := range req.Path {
 		if canonicalOnlyDimension(d) {
 			useInvestment = true // canonical-only (CHAOS-9195), also against an explicit false
+			canonicalForced = true
 		}
 	}
 	groupedQuery, err := CompileSankeyGrouped(req, orgID, queryTimeoutSecs, useInvestment, filters)
@@ -498,7 +504,7 @@ func resolveSankey(ctx context.Context, client QueryClient, orgID string, input 
 	// run at the same time: the request costs the slower of the two, not
 	// their sum. Python ran coverage after nodes/edges; the order is not
 	// observable in the response.
-	coverageUseInvestment := effective != nil && *effective
+	coverageUseInvestment := (effective != nil && *effective) || canonicalForced
 	started := time.Now()
 	var (
 		nodes              []model.SankeyNode
@@ -680,3 +686,30 @@ func resolveFlowMatrix(ctx context.Context, client QueryClient, orgID string, in
 // featureflags.EventNotMaterializedReason and
 // workgraph.MembershipNotMaterialized.
 const FlowMatrixExecutionFailedReason = "FLOW_MATRIX_EXECUTION_FAILED"
+
+// batchHasCanonicalOnlyDimension: any timeseries, breakdown or sankey step of
+// the batch names THEME or SUBCATEGORY (CHAOS-9195).
+func batchHasCanonicalOnlyDimension(batch model.AnalyticsRequestInput) bool {
+	canon := func(d model.DimensionInput) bool {
+		v, err := dimensionFromInput(d)
+		return err == nil && canonicalOnlyDimension(v)
+	}
+	for _, ts := range batch.Timeseries {
+		if canon(ts.Dimension) {
+			return true
+		}
+	}
+	for _, bd := range batch.Breakdowns {
+		if canon(bd.Dimension) {
+			return true
+		}
+	}
+	if batch.Sankey != nil {
+		for _, d := range batch.Sankey.Path {
+			if canon(d) {
+				return true
+			}
+		}
+	}
+	return false
+}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/identityalias"
+	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 )
 
@@ -300,6 +302,7 @@ func (collector GitHubTeamCatalogRouteHandler) collectTeamMemberships(
 		return nil, false, false, ErrPaginationCapExceeded
 	}
 	memberships := make([]githubMembershipRow, 0, len(pages.Items))
+	unusable := 0
 	for _, memberRaw := range pages.Items {
 		var memberPayload githubTeamMemberPayload
 		if err := json.Unmarshal(memberRaw, &memberPayload); err != nil {
@@ -307,6 +310,9 @@ func (collector GitHubTeamCatalogRouteHandler) collectTeamMemberships(
 		}
 		login := strings.TrimSpace(memberPayload.Login)
 		if login == "" {
+			// A member node the collector cannot use: the team's list is not
+			// known to be complete, so nothing of the team closes (CHAOS-9079).
+			unusable++
 			continue
 		}
 		email := ""
@@ -323,7 +329,13 @@ func (collector GitHubTeamCatalogRouteHandler) collectTeamMemberships(
 		}
 		memberships = append(memberships, membership)
 	}
-	return memberships, true, ownershipListingProvesEnd(pages), nil
+	provesEnd := ownershipListingProvesEnd(pages)
+	if unusable > 0 {
+		provesEnd = false
+		slog.Default().WarnContext(ctx, "github_team_catalog_member_unusable",
+			"org_id", orgID, logging.ProviderIDAttr("team_id", githubTeamID(slug)), "unusable_members", unusable)
+	}
+	return memberships, true, provesEnd, nil
 }
 
 // resolveEmail fetches GET /users/{login} once per login per collection

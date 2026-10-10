@@ -298,6 +298,7 @@ func (handler LinearReferenceCatalogRouteHandler) CollectReferenceCatalog(
 			// otherwise any team with more than 10 members gets a `teams.
 			// members` silently truncated to its first page forever.
 			team.Members = linearReferenceTeamRosterFacets(resolver, memberNodes)
+			unusableMembers := 0
 			for _, memberPayload := range memberNodes {
 				if memberPayload.Active != nil && !*memberPayload.Active {
 					continue
@@ -308,12 +309,18 @@ func (handler LinearReferenceCatalogRouteHandler) CollectReferenceCatalog(
 					// with either field absent is not an authoritative identity row.
 					if errors.Is(memberErr, ErrInvalidConfiguration) &&
 						strings.TrimSpace(memberPayload.ID) == "" && strings.TrimSpace(memberPayload.Email) == "" {
+						unusableMembers++
 						continue
 					}
 					return linearReferenceCatalogFailureBatch(evidence, "members", evidence.Pages, evidence.Records, memberErr, false)
 				}
 				rows.Members = append(rows.Members, member)
 				rows.Memberships = append(rows.Memberships, membership)
+			}
+			if unusableMembers > 0 {
+				rows.UnusableMemberTeamIDs = append(rows.UnusableMemberTeamIDs, team.ID)
+				slog.Default().WarnContext(ctx, "linear_reference_catalog_member_unusable",
+					"org_id", claim.OrgID, logging.ProviderIDAttr("team_id", team.ID), "unusable_members", unusableMembers)
 			}
 			evidence.MembersComplete = evidence.MembersComplete && membersComplete
 			if len(rows.Teams) == 0 {

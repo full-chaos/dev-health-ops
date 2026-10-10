@@ -711,6 +711,17 @@ project's items by id. Now:
   | `github_team_memberships` | GitHub catalog | one member read per team, to the provider's end-of-list signal | sole integration | is an answer (per team) |
   | `gitlab_team_memberships` | GitLab catalog | one member read per group, to the provider's end-of-list signal | sole integration | is an answer (per group) |
 
+  **Team membership kinds** (CHAOS-9079). A member is closed (`valid_to` = the run time) only when the
+  member is absent from the COMPLETE member read of ITS team, per team for every provider, in a scope no other
+  integration reads. "Complete" is the read's own end-of-list signal; a read cut by a bound, a failed read, and
+  a read that held a member node the collector cannot use (GitHub: no login; GitLab: a node the normalizer
+  rejects; Linear: neither an id nor an email) close nothing for that team, and the unusable nodes are logged
+  with a count (`*_member_unusable`, team scope, no member value). Absence is judged against the members the
+  provider returned, never against the part the membership-conflict guard keeps. A Linear member who is
+  inactive (`active: false`) is a deactivated user and is not a current member: it is closed like a member who
+  left. A member who comes back is a new fact with a new `valid_from`. Every close is logged
+  (`team_membership_closed`: provider, team, count).
+
   **Scope proof, for every kind** (`providersync.ProveSoleScope`, the one scope gate; `ScopeProof` is an
   argument of every kind snapshot, so no kind can be stated without it). Ownership, membership and catalog
   rows carry no integration key, and an organization can hold two integrations of one provider, so a walk

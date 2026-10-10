@@ -3,10 +3,13 @@ package providersync
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
+
+	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 )
 
 // CHAOS-9079: a member who is absent from the COMPLETE member read of a team is
@@ -94,6 +97,14 @@ func (writer MembershipSnapshotWriter[R]) Snapshot(
 		return out
 	}
 	stamp, retractions, plan := planMembershipSnapshot(open, facts(observed), at, kinds...)
+	closedPerTeam := map[string]int{}
+	for _, retraction := range retractions {
+		closedPerTeam[retraction.open.TeamID]++
+	}
+	for teamID, closed := range closedPerTeam {
+		slog.Default().InfoContext(ctx, "team_membership_closed",
+			"org_id", orgID, "provider", writer.Provider, logging.ProviderIDAttr("team_id", teamID), "closed", closed)
+	}
 	rows := make([]R, 0, len(toWrite)+len(retractions))
 	for _, row := range toWrite {
 		if from, ok := stamp[MembershipSnapshotKey(MembershipSnapshotRow{TeamID: writer.TeamID(row), MemberID: writer.MemberID(row)})]; ok {

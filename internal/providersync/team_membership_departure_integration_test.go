@@ -248,3 +248,134 @@ func TestLinearDepartedMemberIsClosedByTheCompleteReadAndAPartialReadClosesNothi
 	}
 	requireOpen(t, "after the return", openMembershipFacts(f.ctx, t, f.conn, f.orgID, "linear"), bobFact, departureAt[4])
 }
+
+// The cases that must NOT close, and the empty list both ways (D5823): an
+// unusable member node, a truncated read and a failed read leave a departed
+// member open; a list that is empty AND proved its end closes every member of
+// the team, a list that is empty without the provider's end signal closes none.
+
+func TestGitHubUnusableNodeAndTruncatedReadCloseNothingAndAnEmptyCompleteListClosesAll(t *testing.T) {
+	ctx, conn := newWorkItemEffectsConn(t)
+	const orgID = "org-9079-github-edge"
+	credential := providerfoundation.Credential{Provider: "github", Config: map[string]string{"org": "acme"}}
+	const octocat, hubot = "gh:platform|gh:octocat", "gh:platform|gh:hubot"
+	sync := func(at time.Time, maxPages int, members string, links map[string]string, extra map[string]string) {
+		t.Helper()
+		byPath := map[string]string{
+			"/orgs/acme/teams":                  `[{"slug":"platform","name":"Platform","description":"Platform team"}]`,
+			"/orgs/acme/teams/platform/repos":   `[{"name":"api"}]`,
+			"/orgs/acme/teams/platform/members": members,
+		}
+		for key, body := range extra {
+			byPath[key] = body
+		}
+		doer := &githubTeamCatalogFixtureDoer{t: t, byPath: byPath, links: links}
+		adapter := GitHubTeamCatalogCollector{Client: GitHubTeamCatalogRouteHandler{MaxPages: maxPages},
+			Sink: GitHubTeamCatalogClickHouseEffects{Conn: conn}, ScopeCensus: staticScopeCensus{}}
+		if _, err := adapter.CollectTeamCatalog(ctx, TeamCatalogReference{OrgID: orgID, SyncRunID: "run", IntegrationID: "integration-a"},
+			credential, githubTeamCatalogAdapterClient(t, fakehttp.Client(doer)),
+			TeamCatalogSelections{Teams: true, Members: true}, at); err != nil {
+			t.Fatalf("sync at %s: %v", at, err)
+		}
+	}
+	sync(departureAt[0], 0, `[{"login":"octocat"},{"login":"hubot"}]`, nil, nil)
+	// An unusable node (no login): hubot is absent but the list is not known to be complete.
+	sync(departureAt[1], 0, `[{"login":"octocat"},{"login":""}]`, nil, nil)
+	facts := openMembershipFacts(ctx, t, conn, orgID, "github")
+	requireOpen(t, "after an unusable node", facts, hubot, departureAt[0])
+	// A read cut by the page budget: the run skips the team's memberships, closes nothing.
+	sync(departureAt[2], 1, `[{"login":"octocat"}]`,
+		map[string]string{"/orgs/acme/teams/platform/members": `<https://api.github.com/orgs/acme/teams/platform/members?page=2>; rel="next"`},
+		map[string]string{"/orgs/acme/teams/platform/members?page=2": `[{"login":"hubot"}]`})
+	requireOpen(t, "after a truncated read", openMembershipFacts(ctx, t, conn, orgID, "github"), hubot, departureAt[0])
+	// An empty list that proved its end: every member of the team closes.
+	sync(departureAt[3], 0, `[]`, nil, nil)
+	facts = openMembershipFacts(ctx, t, conn, orgID, "github")
+	if len(facts) != 0 {
+		t.Errorf("an empty complete member list left %v open, want none", facts)
+	}
+	closed := closedMembershipFacts(ctx, t, conn, orgID, "github")
+	requireClosed(t, "after the empty complete list", closed, octocat, departureAt[0].Format(time.RFC3339)+"->"+departureAt[3].Format(time.RFC3339))
+	requireClosed(t, "after the empty complete list", closed, hubot, departureAt[0].Format(time.RFC3339)+"->"+departureAt[3].Format(time.RFC3339))
+}
+
+func TestGitLabUnusableNodeAndAnEmptyListWithoutAnEndSignalCloseNothing(t *testing.T) {
+	ctx, conn := newWorkItemEffectsConn(t)
+	const orgID = "org-9079-gitlab-edge"
+	fake := newGitLabMembersServer(t, "alice", "carol")
+	credential := providerfoundation.Credential{Provider: "gitlab", Config: map[string]string{"group_path": "org"}}
+	sync := func(at time.Time) {
+		t.Helper()
+		collector := GitLabTeamCatalogCollector{Sink: GitLabTeamCatalogClickHouseEffects{
+			Conn: conn, Lease: providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }),
+		}, ScopeCensus: staticScopeCensus{}}
+		ref := TeamCatalogReference{OrgID: orgID, SyncRunID: "run", IntegrationID: "integration-a"}
+		if _, err := collector.CollectTeamCatalog(ctx, ref, credential, gitlabTeamCatalogTestClient(t, fake.URL),
+			TeamCatalogSelections{Teams: true, Members: true}, at); err != nil {
+			t.Fatalf("sync at %s: %v", at, err)
+		}
+	}
+	const alice, carol = "gl:org/team-a|gl:alice", "gl:org/team-a|gl:carol"
+	sync(departureAt[0])
+	// A member node the normalizer rejects (no username): carol is absent, the list is not known complete.
+	fake.setRaw([]map[string]any{{"username": "alice", "name": "alice", "email": "alice@example.com"}, {"name": "ghost"}}, false)
+	sync(departureAt[1])
+	requireOpen(t, "after an unusable node", openMembershipFacts(ctx, t, conn, orgID, "gitlab"), carol, departureAt[0])
+	// An empty list WITHOUT the provider's end signal closes nothing.
+	fake.setRaw([]map[string]any{}, true)
+	sync(departureAt[2])
+	facts := openMembershipFacts(ctx, t, conn, orgID, "gitlab")
+	requireOpen(t, "after an empty list without an end signal", facts, alice, departureAt[0])
+	requireOpen(t, "after an empty list without an end signal", facts, carol, departureAt[0])
+	// An empty list that proved its end closes every member of the group.
+	fake.setRaw([]map[string]any{}, false)
+	sync(departureAt[3])
+	if facts := openMembershipFacts(ctx, t, conn, orgID, "gitlab"); len(facts) != 0 {
+		t.Errorf("an empty complete member list left %v open, want none", facts)
+	}
+}
+
+func TestLinearUnusableNodeCloseNothingAndAnEmptyCompleteListClosesAll(t *testing.T) {
+	ctx, conn := newWorkItemEffectsConn(t)
+	f := carryFixture{t: t, ctx: ctx, conn: conn, orgID: uuid.NewString()}
+	alice := `{"id":"user-1","name":"Alice","email":"alice@example.com","active":true}`
+	bob := `{"id":"user-2","name":"Bob","email":"bob@example.com","active":true}`
+	ghost := `{"name":"Ghost","active":true}`
+	run := func(at time.Time, members string) {
+		t.Helper()
+		responses := []string{
+			`{"data":{"teams":{"nodes":[{"id":"team-raw-eng","key":"ENG","name":"Provider Eng","members":{"nodes":[` + members + `],"pageInfo":{"hasNextPage":false,"endCursor":null}}}],` +
+				`"pageInfo":{"hasNextPage":false,"endCursor":null}}}}`,
+			`{"data":{"cycles":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}`,
+			`{"data":{"projects":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}`,
+		}
+		collector := LinearTeamCatalogCollector{
+			ScopeCensus: staticScopeCensus{},
+			Handler:     LinearReferenceCatalogRouteHandler{PerPage: 50, MaxPages: 10},
+			Sink:        LinearReferenceCatalogClickHouseEffects{Conn: f.conn, Lease: carrySeamLease()},
+		}
+		claim := nativeTestClaim("linear", "work-items")
+		claim.OrgID = f.orgID
+		ref := teamCatalogRefFromClaim(claim)
+		ref.Strict = true
+		ref.IntegrationID = "integration-a"
+		if _, err := collector.CollectTeamCatalog(f.ctx, ref,
+			providerfoundation.Credential{Provider: "linear", ID: claim.CredentialID},
+			linearWorkItemsClient(t, fakehttp.Client(&linearWorkItemsDoer{responses: responses})),
+			TeamCatalogSelections{Teams: true, Members: true, Projects: true}, at); err != nil {
+			t.Fatalf("sync at %s: %v", at, err)
+		}
+	}
+	const aliceFact, bobFact = "linear:ENG|linear:alice@example.com", "linear:ENG|linear:bob@example.com"
+	run(departureAt[0], alice+","+bob)
+	// A node with neither id nor email: bob is absent, the team's list is not known complete.
+	run(departureAt[1], alice+","+ghost)
+	facts := openMembershipFacts(f.ctx, t, f.conn, f.orgID, "linear")
+	requireOpen(t, "after an unusable node", facts, bobFact, departureAt[0])
+	requireOpen(t, "after an unusable node", facts, aliceFact, departureAt[0])
+	// An empty list that proved its end closes every member of the team.
+	run(departureAt[2], "")
+	if facts := openMembershipFacts(f.ctx, t, f.conn, f.orgID, "linear"); len(facts) != 0 {
+		t.Errorf("an empty complete member list left %v open, want none", facts)
+	}
+}

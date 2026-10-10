@@ -376,6 +376,7 @@ func (handler GitLabTeamCatalogRouteHandler) CollectTeamCatalog(
 				if !ownershipListingProvesEnd(memberPages) {
 					rows.UnprovenMembershipTeamIDs = append(rows.UnprovenMembershipTeamIDs, teamID)
 				}
+				unusable := 0
 				for _, raw := range memberPages.Items {
 					var member gitlabTeamCatalogMemberPayload
 					if err := json.Unmarshal(raw, &member); err != nil {
@@ -383,6 +384,9 @@ func (handler GitLabTeamCatalogRouteHandler) CollectTeamCatalog(
 					}
 					row, memberID, ok := normalizeGitLabMembershipRow(ref.OrgID, teamID, member, resolver, normalizedAt)
 					if !ok {
+						// A member node the collector cannot use: the group's list is
+						// not known to be complete, so nothing of it closes (CHAOS-9079).
+						unusable++
 						continue
 					}
 					key := teamID + "\x00" + memberID
@@ -391,6 +395,13 @@ func (handler GitLabTeamCatalogRouteHandler) CollectTeamCatalog(
 					}
 					seenMembership[key] = true
 					rows.Memberships = append(rows.Memberships, row)
+				}
+				if unusable > 0 {
+					if ownershipListingProvesEnd(memberPages) {
+						rows.UnprovenMembershipTeamIDs = append(rows.UnprovenMembershipTeamIDs, teamID)
+					}
+					slog.Default().WarnContext(ctx, "gitlab_team_catalog_member_unusable",
+						"org_id", ref.OrgID, logging.ProviderIDAttr("team_id", teamID), "unusable_members", unusable)
 				}
 			}
 		}

@@ -170,7 +170,9 @@ func (collector LinearTeamCatalogCollector) CollectTeamCatalog(
 		for _, team := range batch.Rows.Teams {
 			teamIDs = append(teamIDs, team.ID)
 		}
-		var unprovenTeamIDs []string
+		// A team whose member list held a node the collector cannot use is not
+		// complete either: nothing of it closes.
+		unprovenTeamIDs := batch.Rows.UnusableMemberTeamIDs
 		if !batch.Evidence.MembersComplete {
 			unprovenTeamIDs = teamIDs
 		}

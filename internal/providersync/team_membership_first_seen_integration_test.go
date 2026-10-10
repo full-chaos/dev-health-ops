@@ -231,6 +231,11 @@ type gitlabMembersServer struct {
 	// endless answers every page of the team's member list with one member and a
 	// next page, so the walk ends on its page budget, not on the provider's end.
 	endless bool
+	// raw, when set, is the exact member list answered (a node the collector
+	// cannot use, for example).
+	raw []map[string]any
+	// noEndSignal leaves the end-of-list header off: the provider never says the list ended.
+	noEndSignal bool
 }
 
 func newGitLabMembersServer(t *testing.T, usernames ...string) *gitlabMembersServer {
@@ -262,8 +267,13 @@ func newGitLabMembersServer(t *testing.T, usernames ...string) *gitlabMembersSer
 			for _, username := range fake.members {
 				out = append(out, map[string]any{"username": username, "name": username, "email": username + "@example.com"})
 			}
+			if fake.raw != nil {
+				out = fake.raw
+			}
 			// GitLab's end of an offset listing: X-Next-Page sent and empty.
-			w.Header()["X-Next-Page"] = []string{""}
+			if !fake.noEndSignal {
+				w.Header()["X-Next-Page"] = []string{""}
+			}
 			writeGitLabTeamCatalogJSON(t, w, out)
 		default:
 			http.NotFound(w, r)
@@ -271,6 +281,12 @@ func newGitLabMembersServer(t *testing.T, usernames ...string) *gitlabMembersSer
 	}))
 	t.Cleanup(fake.Close)
 	return fake
+}
+
+func (fake *gitlabMembersServer) setRaw(raw []map[string]any, noEndSignal bool) {
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	fake.raw, fake.noEndSignal = raw, noEndSignal
 }
 
 func (fake *gitlabMembersServer) setEndless(endless bool) {

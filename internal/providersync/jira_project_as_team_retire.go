@@ -109,9 +109,9 @@ const jiraProjectAsTeamCountQuery = `SELECT ` +
 // valid_to and updated_at change. valid_to is never before valid_from, and
 // updated_at is past the stored version so the closed row wins the merge.
 const jiraProjectAsTeamCloseMemberships = `INSERT INTO team_memberships ` +
-	`(org_id, provider, team_id, member_id, raw_provider_user_id, raw_email, identity_facets, source, is_primary, specificity, priority, valid_from, valid_to, updated_at) ` +
+	`(org_id, provider, team_id, member_id, raw_provider_user_id, raw_email, identity_facets, source, is_primary, specificity, priority, valid_from, valid_to, updated_at, provider_user_id) ` +
 	`SELECT org_id, provider, team_id, member_id, raw_provider_user_id, raw_email, identity_facets, source, is_primary, specificity, priority, valid_from, ` +
-	`greatest({at:DateTime64(3, 'UTC')}, valid_from), greatest({at:DateTime64(3, 'UTC')}, updated_at + toIntervalMillisecond(1)) ` +
+	`greatest({at:DateTime64(3, 'UTC')}, valid_from), greatest({at:DateTime64(3, 'UTC')}, updated_at + toIntervalMillisecond(1)), provider_user_id ` +
 	`FROM team_memberships FINAL WHERE ` + jiraProjectAsTeamMembershipPredicate
 
 const jiraProjectAsTeamCloseOwnership = `INSERT INTO team_project_ownership ` +

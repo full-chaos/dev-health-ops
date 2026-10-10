@@ -129,3 +129,25 @@ func TestMembershipPayloadJSONAddsOnlyTheProviderUserIDAndNeverChangesTheHashedS
 		t.Error("the hashed shape must stay the Python shape")
 	}
 }
+
+// The retirement of a Jira project-as-team row closes its membership rows with an
+// INSERT ... SELECT: the closed row keeps provider_user_id.
+func TestJiraProjectAsTeamRetirementKeepsTheProviderUserIDOfAMembership(t *testing.T) {
+	ctx, conn := newWorkItemEffectsConn(t)
+	f := retireFixture{t: t, ctx: ctx, conn: conn, orgID: uuid.NewString(), old: time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)}
+	f.team("jira", "OPS", "OPS", nil)
+	f.ownership("jira", "OPS", "10001", "OPS", "native")
+	if err := conn.Exec(ctx, `INSERT INTO team_memberships (`+withIDColumns+`) VALUES (?, 'jira', 'OPS', 'jira:lead-1', NULL, NULL, [], 'native', 1, 100, 10, ?, NULL, ?, 'account-1')`, f.orgID, f.old, f.old); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := RetireJiraProjectAsTeamRows(ctx, conn, f.orgID, time.Date(2026, 10, 7, 12, 0, 0, 0, time.UTC), false); err != nil {
+		t.Fatal(err)
+	}
+	var got string
+	if err := conn.QueryRow(ctx, `SELECT ifNull(provider_user_id, '<NULL>') FROM team_memberships FINAL WHERE org_id = ? AND team_id = 'OPS' AND member_id = 'jira:lead-1' AND valid_to IS NOT NULL`, f.orgID).Scan(&got); err != nil {
+		t.Fatal(err)
+	}
+	if got != "account-1" {
+		t.Errorf("retired membership provider_user_id = %q, want account-1", got)
+	}
+}

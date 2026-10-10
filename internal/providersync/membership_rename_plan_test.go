@@ -57,6 +57,17 @@ func TestPlanRenamesOneClauseAtATime(t *testing.T) {
 			t.Fatalf("replaced = %v, valid_from %s, want both rows and %s", replaced, stamp[key("t", "gh:new")], first)
 		}
 	})
+	t.Run("one open row continues as ONE new member id: the provider id under two new member ids", func(t *testing.T) {
+		replaced, stamp := run([]openMembership{open("t", "gh:old", id("7"), first, first)},
+			[]githubMembershipRow{row("t", "gh:zeta", id("7")), row("t", "gh:alpha", id("7"))}, nil)
+		if len(replaced) != 1 || !replaced[key("t", "gh:old")] {
+			t.Fatalf("replaced = %v, want gh:old once", replaced)
+		}
+		if !stamp[key("t", "gh:alpha")].Equal(first) || !stamp[key("t", "gh:zeta")].Equal(at) {
+			t.Errorf("valid_from alpha = %s, zeta = %s, want the old row's %s for the first member id only and the run time %s for the other",
+				stamp[key("t", "gh:alpha")], stamp[key("t", "gh:zeta")], first, at)
+		}
+	})
 	t.Run("another id is another person", func(t *testing.T) {
 		replaced, stamp := run([]openMembership{open("t", "gh:old", id("7"), first, first)}, []githubMembershipRow{row("t", "gh:new", id("8"))}, nil)
 		if len(replaced) != 0 || !stamp[key("t", "gh:new")].Equal(at) {

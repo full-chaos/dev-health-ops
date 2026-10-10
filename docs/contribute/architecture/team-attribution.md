@@ -809,7 +809,9 @@ project's items by id. Now:
      without the id the run wrote is a conflict, so it is written again, never "exact"); the team-id carry
      copies it to the keyed team id; the identity-drift review stages it in the `new_value_json` payload (the
      change id is still the hash of the payload without it, so a pending change keeps its id) and an approval
-     writes it. Each run logs `team_membership_renamed` (provider, team, renamed)
+     writes it; the retirement of a Jira project-as-team row keeps it on the closed row. One open row continues as
+     ONE new member id: a provider returning the same user id under two new member ids in one run is the provider's
+     statement, so the first member id (sorted) takes the open row's `valid_from` and the other joins as new. Each run logs `team_membership_renamed` (provider, team, renamed)
      once per team, never a login or an email.
   A member returned with `active: false` is a deactivated user: the provider says so, and it is closed (an
   email-keyed member too). A member who comes back is a new fact with a new `valid_from`. Every close is logged

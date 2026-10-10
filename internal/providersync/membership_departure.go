@@ -393,7 +393,16 @@ func (writer MembershipSnapshotWriter[R]) planRenames(
 		}
 		byID[idKey{row.TeamID, strings.TrimSpace(*row.ProviderUserID)}] = append(byID[idKey{row.TeamID, strings.TrimSpace(*row.ProviderUserID)}], row)
 	}
-	for _, row := range observed {
+	// An open row continues as ONE new member id: the provider returning one user id
+	// under two new member ids in a run (two logins for one id) cannot be one open row
+	// for the person (both are the provider's statement), so the first member id (in
+	// sorted order, deterministic) takes the open row and the other joins as new.
+	consumed := map[string]bool{}
+	ordered := append([]R(nil), observed...)
+	sort.SliceStable(ordered, func(i, j int) bool {
+		return writer.TeamID(ordered[i])+"\x00"+writer.MemberID(ordered[i]) < writer.TeamID(ordered[j])+"\x00"+writer.MemberID(ordered[j])
+	})
+	for _, row := range ordered {
 		id := writer.ProviderUserID(row)
 		if id == nil || strings.TrimSpace(*id) == "" {
 			continue
@@ -408,7 +417,7 @@ func (writer MembershipSnapshotWriter[R]) planRenames(
 		var replaced []openMembership
 		for _, candidate := range byID[idKey{team, strings.TrimSpace(*id)}] {
 			candidateKey := MembershipSnapshotKey(MembershipSnapshotRow{TeamID: candidate.TeamID, MemberID: candidate.MemberID})
-			if candidate.MemberID == member || held[candidateKey] || candidate.UpdatedAt.After(at) {
+			if candidate.MemberID == member || held[candidateKey] || consumed[candidateKey] || candidate.UpdatedAt.After(at) {
 				continue
 			}
 			replaced = append(replaced, candidate)
@@ -424,7 +433,9 @@ func (writer MembershipSnapshotWriter[R]) planRenames(
 			stamp[key] = *earliest
 		}
 		for _, candidate := range replaced {
-			renamedAway[MembershipSnapshotKey(MembershipSnapshotRow{TeamID: candidate.TeamID, MemberID: candidate.MemberID})] = true
+			candidateKey := MembershipSnapshotKey(MembershipSnapshotRow{TeamID: candidate.TeamID, MemberID: candidate.MemberID})
+			renamedAway[candidateKey] = true
+			consumed[candidateKey] = true
 		}
 	}
 	return renamedAway

@@ -79,6 +79,12 @@ func aggregateSQL(aggregator, column string) (value, known string) {
 	}
 }
 
+// A contributor or driver with no stored value on either side is not a driver
+// (CHAOS-9101): fetchMetricContributors drops a group with no current value
+// (a contributor has no comparison side), fetchMetricDriverDelta one with no
+// current AND no prior value. Dropping in SQL, before the LIMIT, keeps a no-data
+// group from taking one of the few places.
+//
 // definedOnly is the HAVING clause that drops a group whose value is
 // undefined: a contributor or driver with no deployment or no incident
 // evidence, or with no stored revert rate, is not shown as 0.
@@ -310,7 +316,7 @@ GROUP BY %s
 ORDER BY value DESC
 LIMIT {limit:UInt64}
 %s
-`, groupBy, valueSQL, fromClause, groupBy, definedOnly(aggregator), settingsMaxExecutionTime())
+`, groupBy, valueSQL, fromClause, groupBy, "HAVING value IS NOT NULL", settingsMaxExecutionTime())
 
 	bindings := append([]dhclickhouse.Binding{
 		{Name: "start_day", Value: dateBindingValue(startDay)},
@@ -397,6 +403,7 @@ LEFT JOIN (
     FROM %s
     GROUP BY %s
 ) AS previous ON current.id = previous.id
+WHERE current.value IS NOT NULL OR (previous.present = 1 AND previous.value IS NOT NULL)
 ORDER BY delta_pct DESC NULLS LAST
 LIMIT {limit:UInt64}
 %s

@@ -26,9 +26,16 @@ func TestRecommendationsSchemaCheckNamesTheReworkCountColumns(t *testing.T) {
 	if err := verifyRecommendationsSchema(ctx, conn); err != nil {
 		t.Fatalf("the schema of the migration chain is refused: %v", err)
 	}
-	// Each count column the read uses that the migration adds, dropped in
-	// turn and put back.
-	for _, column := range []string{prrework.ColumnReviewed, prrework.ColumnRework, prrework.ColumnNoSignal} {
+	// Each count column the read uses, dropped in turn and put back with its
+	// own type: the three the migration adds, and the merged count the table
+	// held from its first version.
+	for _, column := range prrework.CountColumns {
+		var columnType string
+		if err := conn.QueryRow(ctx,
+			"SELECT type FROM system.columns WHERE database = currentDatabase() AND table = 'repo_metrics_daily' AND name = ?", column,
+		).Scan(&columnType); err != nil {
+			t.Fatalf("read the type of %s: %v", column, err)
+		}
 		if err := conn.Exec(ctx, "ALTER TABLE repo_metrics_daily DROP COLUMN "+column); err != nil {
 			t.Fatalf("drop %s: %v", column, err)
 		}
@@ -36,7 +43,7 @@ func TestRecommendationsSchemaCheckNamesTheReworkCountColumns(t *testing.T) {
 		if !errors.Is(err, ErrRecommendationsSchemaIncompatible) || !strings.Contains(err.Error(), column) {
 			t.Errorf("a schema with no %s: the check gives %v, want ErrRecommendationsSchemaIncompatible that names the column", column, err)
 		}
-		if err := conn.Exec(ctx, "ALTER TABLE repo_metrics_daily ADD COLUMN "+column+" Nullable(UInt32)"); err != nil {
+		if err := conn.Exec(ctx, "ALTER TABLE repo_metrics_daily ADD COLUMN "+column+" "+columnType); err != nil {
 			t.Fatalf("add %s again: %v", column, err)
 		}
 	}

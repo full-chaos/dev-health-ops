@@ -25,7 +25,7 @@ type LinearReferenceCatalogClickHouseEffects struct {
 	Lease providerfoundation.LeaseGuard
 }
 
-const linearReferenceTeamsInsert = `INSERT INTO teams (id, team_uuid, name, description, members, manual_members, project_keys, repo_patterns, is_active, updated_at, org_id, provider, native_team_key, parent_team_id, created_at)`
+const linearReferenceTeamsInsert = `INSERT INTO teams (id, team_uuid, name, description, manual_members, project_keys, repo_patterns, is_active, updated_at, org_id, provider, native_team_key, parent_team_id, created_at)`
 const linearReferenceMembersInsert = `INSERT INTO members (org_id, member_id, name, email, provider_identities, is_active, updated_at)`
 const linearReferenceMembershipsInsert = `INSERT INTO team_memberships (org_id, provider, team_id, member_id, raw_provider_user_id, raw_email, identity_facets, source, is_primary, specificity, priority, valid_from, valid_to, updated_at)`
 
@@ -317,7 +317,7 @@ func (sink LinearReferenceCatalogClickHouseEffects) writeTeams(ctx context.Conte
 			return ErrInvalidConfiguration
 		}
 		manualMembers := existingManualMembers[row.ID]
-		if err := batch.Append(row.ID, teamUUID, row.Name, row.Description, row.Members, manualMembers, row.ProjectKeys, row.RepoPatterns, row.IsActive, row.UpdatedAt, row.OrgID, row.Provider, row.NativeTeamKey, row.ParentTeamID, teamcreated.For(createdAt, row.ID, row.UpdatedAt)); err != nil {
+		if err := batch.Append(row.ID, teamUUID, row.Name, row.Description, manualMembers, row.ProjectKeys, row.RepoPatterns, row.IsActive, row.UpdatedAt, row.OrgID, row.Provider, row.NativeTeamKey, row.ParentTeamID, teamcreated.For(createdAt, row.ID, row.UpdatedAt)); err != nil {
 			return err
 		}
 	}
@@ -476,7 +476,7 @@ func equalLinearReferenceSprint(expected, actual linearSprintRow) bool {
 
 func (sink LinearReferenceCatalogClickHouseEffects) inspectTeams(ctx context.Context, claim Claim, expected []linearReferenceTeamRow) (EffectInspection, error) {
 	return inspectLinearReferenceRows(expected, func(row linearReferenceTeamRow) (EffectInspection, error) {
-		result, err := sink.Conn.Query(ctx, `SELECT id, team_uuid, name, description, members, project_keys, repo_patterns, is_active, updated_at, org_id, provider, native_team_key, parent_team_id FROM teams FINAL WHERE org_id = ? AND provider = ? AND id = ?`, claim.OrgID, "linear", row.ID)
+		result, err := sink.Conn.Query(ctx, `SELECT id, team_uuid, name, description, project_keys, repo_patterns, is_active, updated_at, org_id, provider, native_team_key, parent_team_id FROM teams FINAL WHERE org_id = ? AND provider = ? AND id = ?`, claim.OrgID, "linear", row.ID)
 		if err != nil {
 			return EffectConflict, err
 		}
@@ -485,7 +485,7 @@ func (sink LinearReferenceCatalogClickHouseEffects) inspectTeams(ctx context.Con
 		var teamUUID uuid.UUID
 		found := 0
 		for result.Next() {
-			if err := result.Scan(&actual.ID, &teamUUID, &actual.Name, &actual.Description, &actual.Members, &actual.ProjectKeys, &actual.RepoPatterns, &actual.IsActive, &actual.UpdatedAt, &actual.OrgID, &actual.Provider, &actual.NativeTeamKey, &actual.ParentTeamID); err != nil {
+			if err := result.Scan(&actual.ID, &teamUUID, &actual.Name, &actual.Description, &actual.ProjectKeys, &actual.RepoPatterns, &actual.IsActive, &actual.UpdatedAt, &actual.OrgID, &actual.Provider, &actual.NativeTeamKey, &actual.ParentTeamID); err != nil {
 				return EffectConflict, err
 			}
 			actual.TeamUUID = teamUUID.String()
@@ -651,7 +651,7 @@ func inspectLinearReferenceRows[T any](rows []T, inspect func(T) (EffectInspecti
 
 func equalLinearReferenceTeam(left, right linearReferenceTeamRow) bool {
 	return left.ID == right.ID && left.TeamUUID == right.TeamUUID && left.Name == right.Name &&
-		reflect.DeepEqual(left.Description, right.Description) && reflect.DeepEqual(left.Members, right.Members) &&
+		reflect.DeepEqual(left.Description, right.Description) &&
 		reflect.DeepEqual(left.ProjectKeys, right.ProjectKeys) && reflect.DeepEqual(left.RepoPatterns, right.RepoPatterns) &&
 		left.IsActive == right.IsActive && left.OrgID == right.OrgID && left.Provider == right.Provider &&
 		reflect.DeepEqual(left.NativeTeamKey, right.NativeTeamKey) && reflect.DeepEqual(left.ParentTeamID, right.ParentTeamID) &&

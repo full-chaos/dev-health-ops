@@ -14,7 +14,7 @@ import (
 
 // createTeamsIdentitiesTables is the real teams/identities DDL, transcribed
 // verbatim from src/dev_health_ops/migrations/clickhouse/{002,011,024,025,
-// 051,065,079}_*.sql (teams) and {054,065}_*.sql (identities) -- the exact
+// 051,065,079,115}_*.sql (teams, without the dropped roster column) and {054,065}_*.sql (identities) -- the exact
 // column set/types/engine/ORDER BY those migrations produce, not a
 // hand-guessed shape. See .remember/lanes/gwc-w1-acr/chaos-6251-pr1-reference.md
 // for the full derivation.
@@ -28,7 +28,6 @@ func createTeamsIdentitiesTables(t *testing.T, ctx context.Context, conn interfa
 			team_uuid UUID,
 			name String,
 			description Nullable(String),
-			members Array(String),
 			manual_members Array(String) DEFAULT [],
 			project_keys Array(String) DEFAULT [],
 			repo_patterns Array(String) DEFAULT [],
@@ -57,6 +56,25 @@ func createTeamsIdentitiesTables(t *testing.T, ctx context.Context, conn interfa
 			source_id Nullable(UUID) DEFAULT NULL
 		) ENGINE = ReplacingMergeTree(updated_at)
 		ORDER BY (org_id, canonical_id)`,
+		// team_memberships: the head of the chain (060 and the later source
+		// and validity columns).
+		`CREATE TABLE team_memberships (
+			org_id String,
+			provider String,
+			team_id String,
+			member_id String,
+			raw_provider_user_id Nullable(String),
+			raw_email Nullable(String),
+			source Enum8('native' = 1, 'jira_legacy' = 2, 'provider_access' = 3, 'manual' = 4, 'inferred' = 5),
+			is_primary UInt8 DEFAULT 0,
+			specificity UInt16 DEFAULT 0,
+			priority Int32 DEFAULT 0,
+			valid_from DateTime64(3, 'UTC'),
+			valid_to Nullable(DateTime64(3, 'UTC')),
+			updated_at DateTime64(3, 'UTC'),
+			identity_facets Array(String) DEFAULT []
+		) ENGINE = ReplacingMergeTree(updated_at)
+		ORDER BY (org_id, provider, team_id, member_id, source, valid_from)`,
 		// team_sync_policies/team_provider_observations/team_drift_changes:
 		// alembic-equivalent transcriptions of
 		// 056_team_sync_policies.sql / 057_team_provider_observations.sql /
@@ -192,15 +210,13 @@ func TestTeamCRUDRoundTrip(t *testing.T) {
 		t.Fatalf("repo_patterns not carried forward: %+v", updated.RepoPatterns)
 	}
 
-	// CHAOS-4321: AddMembers unions into both members and manual_members.
+	// CHAOS-4321: AddMembers unions into manual_members (the roster column
+	// `members` is no longer written, CHAOS-9087).
 	afterAdd, err := store.AddMembers(ctx, orgID, "custom:team-a", []string{"alice@example.com"})
 	if err != nil {
 		t.Fatalf("add members: %v", err)
 	}
-	if afterAdd == nil || len(afterAdd.Members) != 1 || afterAdd.Members[0] != "alice@example.com" {
-		t.Fatalf("members not added: %+v", afterAdd)
-	}
-	if len(afterAdd.ManualMembers) != 1 || afterAdd.ManualMembers[0] != "alice@example.com" {
+	if afterAdd == nil || len(afterAdd.ManualMembers) != 1 || afterAdd.ManualMembers[0] != "alice@example.com" {
 		t.Fatalf("manual_members not tracked: %+v", afterAdd)
 	}
 
@@ -221,9 +237,6 @@ func TestTeamCRUDRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("omitted-field update after members exist: %v", err)
 	}
-	if len(afterOmittedUpdate.Members) != 1 || afterOmittedUpdate.Members[0] != "alice@example.com" {
-		t.Fatalf("members cleared by an update that omitted the field: %+v", afterOmittedUpdate)
-	}
 	if len(afterOmittedUpdate.ManualMembers) != 1 || afterOmittedUpdate.ManualMembers[0] != "alice@example.com" {
 		t.Fatalf("manual_members cleared by an update that omitted the field: %+v", afterOmittedUpdate)
 	}
@@ -232,7 +245,7 @@ func TestTeamCRUDRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("remove members: %v", err)
 	}
-	if afterRemove == nil || len(afterRemove.Members) != 0 || len(afterRemove.ManualMembers) != 0 {
+	if afterRemove == nil || len(afterRemove.ManualMembers) != 0 {
 		t.Fatalf("members not removed: %+v", afterRemove)
 	}
 

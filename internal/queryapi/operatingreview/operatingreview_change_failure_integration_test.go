@@ -333,7 +333,9 @@ func TestResolveServesNoDeltaNumbersWhenAWeekHasNoValue(t *testing.T) {
 					if m.HasData != tc.wantCurrentHasData || d.HasPriorData != tc.wantHasPriorData {
 						t.Errorf("hasData %v hasPriorData %v, want %v %v", m.HasData, d.HasPriorData, tc.wantCurrentHasData, tc.wantHasPriorData)
 					}
-					if !nearly(d.Absolute, tc.wantAbsolute) || d.Percent == nil || !nearly(*d.Percent, tc.wantPercent) || !nearly(d.PriorValue, tc.wantPriorValue) {
+					// A week with no stored value has no percent (null, CHAOS-9111); two measured weeks keep theirs.
+					percentOK := (!tc.wantMove && d.Percent == nil) || (tc.wantMove && d.Percent != nil && nearly(*d.Percent, tc.wantPercent))
+					if !nearly(d.Absolute, tc.wantAbsolute) || !percentOK || !nearly(d.PriorValue, tc.wantPriorValue) {
 						t.Errorf("delta absolute %v percent %v priorValue %v, want %v %v %v", d.Absolute, d.Percent, d.PriorValue, tc.wantAbsolute, tc.wantPercent, tc.wantPriorValue)
 					}
 					if !tc.wantMove && d.Status != "" {

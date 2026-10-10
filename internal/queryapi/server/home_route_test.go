@@ -253,8 +253,8 @@ func TestNewHomeGetHandlerHappyPathShape(t *testing.T) {
 				t.Fatalf("REST delta lacks %s: %#v", key, delta)
 			}
 		}
-		if delta["has_data"] != false || delta["has_prior_data"] != false || delta["delta_pct"] != float64(0) {
-			t.Fatalf("a delta of an empty organization = %#v, want has_data false, has_prior_data false and delta_pct 0", delta)
+		if delta["has_data"] != false || delta["has_prior_data"] != false || delta["delta_pct"] != nil {
+			t.Fatalf("a delta of an empty organization = %#v, want has_data false, has_prior_data false and delta_pct null (a percent has no meaning without data; CHAOS-9111)", delta)
 		}
 	}
 }

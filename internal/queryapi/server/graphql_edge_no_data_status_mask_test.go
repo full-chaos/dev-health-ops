@@ -24,8 +24,12 @@ import (
 const (
 	zeroDeltaPrefix   = `"delta":{"value":0,"priorValue":0,"absolute":0,"percent":0,"status":`
 	pythonNoDataState = zeroDeltaPrefix + `"unchanged"`
-	goNoDataState     = zeroDeltaPrefix + `""`
-	declaredNoData    = zeroDeltaPrefix + `"<declared CHAOS-8525: no-data week>"`
+	// CHAOS-9111: the Go answer of a week with no data also has a null percent (a percent has no meaning
+	// against a value nobody measured), where the recorded Python answer holds 0. The mask covers the pair
+	// as one declared state, under the same precondition and only on an all-zero delta.
+	goNoDataPrefix = `"delta":{"value":0,"priorValue":0,"absolute":0,"percent":null,"status":`
+	goNoDataState  = goNoDataPrefix + `""`
+	declaredNoData = zeroDeltaPrefix + `"<declared CHAOS-8525 / CHAOS-9111: no-data week>"`
 )
 
 // operatingReviewTables are the ClickHouse tables the operating review reads (operatingreview.go).

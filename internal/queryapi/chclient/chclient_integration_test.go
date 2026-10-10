@@ -52,7 +52,7 @@ func TestBoundHitClassifiesWhatTheRealClientReturns(t *testing.T) {
 
 	// The deadline and the server's own timeout race: read it several times, every
 	// answer must classify as the time bound.
-	for attempt := 1; attempt <= 6; attempt++ {
+	for attempt := 1; attempt <= 10; attempt++ {
 		timeOpts := Options(instance.URI)
 		timeOpts.MaxExecutionTime = 1
 		err := run(t, timeOpts, "SELECT sleepEachRow(0.2) FROM numbers(30) SETTINGS max_block_size = 1")

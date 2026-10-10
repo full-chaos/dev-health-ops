@@ -311,6 +311,23 @@ func (writer MembershipSnapshotWriter[R]) Snapshot(
 		of(first.TeamID).closed++
 	}
 
+	// A rename is the provider's own statement (the stored user id), not an absence: it
+	// does not wait for the proof a departure needs. An open row it replaces that the
+	// rule did not retract (the team's list is not proven, or its kind is out of scope)
+	// is closed here, or the person would hold two open rows.
+	retracted := map[string]bool{}
+	for _, retraction := range retractions {
+		retracted[membershipOpenRowKey(retraction.open)] = true
+	}
+	for _, row := range open {
+		if key := MembershipSnapshotKey(MembershipSnapshotRow{TeamID: row.TeamID, MemberID: row.MemberID}); renamedAway[key] && !retracted[membershipOpenRowKey(row)] {
+			closedAt := at
+			if closedAt.Before(row.ValidFrom) {
+				closedAt = row.ValidFrom
+			}
+			closes = append(closes, closing{row, closedAt})
+		}
+	}
 	for key := range renamedAway {
 		outcome.Renamed++
 		team, _, _ := strings.Cut(key, "\x00")
@@ -439,6 +456,11 @@ func (writer MembershipSnapshotWriter[R]) planRenames(
 		}
 	}
 	return renamedAway
+}
+
+// membershipOpenRowKey names one open row (its fact and valid_from).
+func membershipOpenRowKey(row openMembership) string {
+	return row.TeamID + "\x00" + row.MemberID + "\x00" + row.ValidFrom.UTC().Format(time.RFC3339Nano)
 }
 
 type membershipRetraction struct {

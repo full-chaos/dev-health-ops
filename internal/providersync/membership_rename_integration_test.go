@@ -254,3 +254,38 @@ func TestLinearChangedEmailContinuesTheOpenRowInsteadOfLeavingTwoOpenRows(t *tes
 	requireProviderUserIDs(t, "after the email change", providerUserIDs(f.ctx, t, f.conn, f.orgID, "linear"),
 		map[string]string{"linear:alice@example.com": "user-1", "linear:robert@example.com": "user-2"})
 }
+
+// A rename does not wait for the proof a departure needs: a team whose member read has no
+// end signal (a full page and no Link) still replaces the old login's open row, so the
+// person does not hold two open rows (round 122 r3).
+func TestGitHubRenameIsAppliedEvenWhenTheMemberReadHasNoEndSignal(t *testing.T) {
+	ctx, conn := newWorkItemEffectsConn(t)
+	const orgID = "org-9144-github-unproven"
+	credential := providerfoundation.Credential{Provider: "github", Config: map[string]string{"org": "acme"}}
+	run := func(at time.Time, members string, perPage int) TeamCatalogResult {
+		t.Helper()
+		doer := &githubTeamCatalogFixtureDoer{t: t, byPath: map[string]string{
+			"/orgs/acme/teams":                  `[{"slug":"platform","name":"Platform"}]`,
+			"/orgs/acme/teams/platform/repos":   `[]`,
+			"/orgs/acme/teams/platform/members": members,
+		}}
+		adapter := GitHubTeamCatalogCollector{Client: GitHubTeamCatalogRouteHandler{PerPage: perPage},
+			Sink: GitHubTeamCatalogClickHouseEffects{Conn: conn}, ScopeCensus: staticScopeCensus{}}
+		result, err := adapter.CollectTeamCatalog(ctx, TeamCatalogReference{OrgID: orgID, SyncRunID: "run", IntegrationID: "integration-a"},
+			credential, githubTeamCatalogAdapterClient(t, fakehttp.Client(doer)), TeamCatalogSelections{Teams: true, Members: true}, at)
+		if err != nil {
+			t.Fatalf("sync at %s: %v", at, err)
+		}
+		return result
+	}
+	run(departureAt[0], `[{"login":"octocat","id":1},{"login":"old-hubot","id":2}]`, 0)
+	// per_page 2 and two members back with no Link: the read is not known to have ended.
+	result := run(departureAt[1], `[{"login":"octocat","id":1},{"login":"new-hubot","id":2}]`, 2)
+	facts := openMembershipFacts(ctx, t, conn, orgID, "github")
+	requireOpen(t, "an unproven read", facts, "gh:platform|gh:new-hubot", departureAt[0])
+	requireOpen(t, "an unproven read", facts, "gh:platform|gh:octocat", departureAt[0])
+	requireNotOpen(t, "an unproven read", facts, "gh:platform|gh:old-hubot")
+	if len(facts) != 2 || result.MembershipsClosed != 0 {
+		t.Errorf("open = %v, departures counted = %d, want octocat and new-hubot and 0", facts, result.MembershipsClosed)
+	}
+}

@@ -119,16 +119,16 @@ func TestRESTSummaryDeltasArePythonDeltasPlusTheDeclaredGoOnlyFields(t *testing.
 		{"HasPriorData", "bool", `json:"has_prior_data"`},
 	})
 
-	// The rest of each response is the frozen shape, field for field: only the
-	// element type of Deltas differs.
-	sameButDeltas := func(production, legacy reflect.Type) {
+	// The rest of each response is the frozen shape, field for field, followed by
+	// the declared Go-only tail (none for people): only the element type of Deltas differs.
+	sameButDeltas := func(production, legacy reflect.Type, tail []fieldShape) {
 		t.Helper()
 		prod, leg := fieldShapes(production), fieldShapes(legacy)
-		if len(prod) != len(leg) {
-			t.Errorf("%s has %d fields, the frozen shape %d", production, len(prod), len(leg))
+		if len(prod) != len(leg)+len(tail) {
+			t.Errorf("%s has %d fields, the frozen shape %d plus %d declared Go-only", production, len(prod), len(leg), len(tail))
 			return
 		}
-		for index := range prod {
+		for index := range leg {
 			if prod[index].name == "Deltas" {
 				if leg[index].name != "Deltas" || prod[index].tag != leg[index].tag {
 					t.Errorf("%s Deltas field = %v, frozen %v", production, prod[index], leg[index])
@@ -139,9 +139,16 @@ func TestRESTSummaryDeltasArePythonDeltasPlusTheDeclaredGoOnlyFields(t *testing.
 				t.Errorf("%s field %d = %v, frozen %v", production, index, prod[index], leg[index])
 			}
 		}
+		for index, want := range tail {
+			if got := prod[len(leg)+index]; got != want {
+				t.Errorf("%s Go-only field %d = %v, want %v", production, index, got, want)
+			}
+		}
 	}
-	sameButDeltas(reflect.TypeOf(homeRESTResponse{}), reflect.TypeOf(homePythonResponse{}))
-	sameButDeltas(reflect.TypeOf(people.SummaryResponse{}), reflect.TypeOf(peopleSummaryPythonResponse{}))
+	sameButDeltas(reflect.TypeOf(homeRESTResponse{}), reflect.TypeOf(homePythonResponse{}), []fieldShape{
+		{"FilterEmptyReason", "*string", `json:"filter_empty_reason"`},
+	})
+	sameButDeltas(reflect.TypeOf(people.SummaryResponse{}), reflect.TypeOf(peopleSummaryPythonResponse{}), nil)
 }
 
 // homeDeltaGoOnlyKeys are the keys of a REST Home delta that the frozen Python
@@ -189,15 +196,25 @@ func withoutHomeDeltaGoOnlyFields(body string) (string, error) {
 		out.WriteString(homeDeltaGoOnlyEnd.ReplaceAllString(delta, "}"))
 		rest = rest[at+len(delta):]
 	}
-	out.WriteString(rest)
+	// The one Go-only key of the response itself (CHAOS-9098) is the last key of the body.
+	if got := strings.Count(body, `"filter_empty_reason":`); got != 1 || !homeResponseGoOnlyEnd.MatchString(rest) {
+		return "", fmt.Errorf("home body must end with the one Go-only key filter_empty_reason (found it %d times)", got)
+	}
+	out.WriteString(homeResponseGoOnlyEnd.ReplaceAllString(rest, "}"))
 	return out.String(), nil
 }
 
+// homeResponseGoOnlyEnd matches the Go-only key at the very end of the REST Home body.
+var homeResponseGoOnlyEnd = regexp.MustCompile(`,"filter_empty_reason":(?:null|"[^"\\]*")\}\s*$`)
+
 func TestWithoutHomeDeltaGoOnlyFieldsRemovesOnlyTheDeclaredKeys(t *testing.T) {
-	body := `{"deltas":[{"metric":"m","value":1,"spark":[],"has_data":true,"has_prior_data":false,"rate_state":null,"repo_filter_applied":null},{"metric":"n","spark":[],"has_data":false,"has_prior_data":false,"rate_state":"measured","repo_filter_applied":false}],"constraint":{"title":"","claim":""}}`
+	body := `{"deltas":[{"metric":"m","value":1,"spark":[],"has_data":true,"has_prior_data":false,"rate_state":null,"repo_filter_applied":null},{"metric":"n","spark":[],"has_data":false,"has_prior_data":false,"rate_state":"measured","repo_filter_applied":false}],"constraint":{"title":"","claim":""},"filter_empty_reason":"repository_not_found"}`
 	got, err := withoutHomeDeltaGoOnlyFields(body)
 	if err != nil || got != `{"deltas":[{"metric":"m","value":1,"spark":[]},{"metric":"n","spark":[]}],"constraint":{"title":"","claim":""}}` {
 		t.Fatalf("got %s, %v", got, err)
+	}
+	if got, err := withoutHomeDeltaGoOnlyFields(`{"deltas":[],"filter_empty_reason":null}`); err != nil || got != `{"deltas":[]}` {
+		t.Fatalf("a null filter_empty_reason: got %s, %v", got, err)
 	}
 	for name, bad := range map[string]string{
 		"a delta without rate_state":          `{"deltas":[{"metric":"m","has_data":true,"has_prior_data":true}]}`,
@@ -208,6 +225,11 @@ func TestWithoutHomeDeltaGoOnlyFieldsRemovesOnlyTheDeclaredKeys(t *testing.T) {
 		// The tail of another object must not stand in for a delta that lacks it.
 		"a delta without them while another object holds the tail": `{"deltas":[{"metric":"m"}],"other":{"x":1,"has_data":true,"has_prior_data":true,"rate_state":null,"repo_filter_applied":null}}`,
 		"a delta with a duplicate key":                             `{"deltas":[{"has_data":true,"has_data":true,"has_prior_data":true,"rate_state":null,"repo_filter_applied":null}]}`,
+		// CHAOS-9098: the response-level Go-only key must be served, once, last.
+		"no filter_empty_reason":          `{"deltas":[]}`,
+		"filter_empty_reason not last":    `{"deltas":[],"filter_empty_reason":null,"other":1}`,
+		"filter_empty_reason twice":       `{"deltas":[],"filter_empty_reason":null,"filter_empty_reason":null}`,
+		"filter_empty_reason of a number": `{"deltas":[],"filter_empty_reason":7}`,
 	} {
 		if out, err := withoutHomeDeltaGoOnlyFields(bad); err == nil {
 			t.Errorf("%s: got %s, want an error", name, out)

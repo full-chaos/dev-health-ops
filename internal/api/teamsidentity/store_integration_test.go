@@ -39,7 +39,8 @@ func createTeamsIdentitiesTables(t *testing.T, ctx context.Context, conn interfa
 			provider String DEFAULT '',
 			native_team_key Nullable(String),
 			parent_team_id Nullable(String),
-			source_id Nullable(UUID) DEFAULT NULL
+			source_id Nullable(UUID) DEFAULT NULL,
+			created_at Nullable(DateTime64(6))
 		) ENGINE = ReplacingMergeTree(updated_at)
 		ORDER BY (id)`,
 		`CREATE TABLE identities (
@@ -319,5 +320,33 @@ func TestIdentityCRUDRoundTrip(t *testing.T) {
 	}
 	if afterDelete != nil {
 		t.Fatalf("identity still visible after DELETE: %+v", afterDelete)
+	}
+}
+
+// An admin edit of a stored team keeps the creation time of its oldest
+// stored version, and the answer and the read-back agree on it.
+func TestTeamUpdateKeepsCreatedAt(t *testing.T) {
+	store, ctx := startTeamsIdentitiesStore(t)
+	first, err := store.CreateOrUpdateTeam(ctx, "org-1", TeamWrite{Origin: "custom", TeamID: "custom:keep", Name: "One"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	name := "Two"
+	second, err := store.CreateOrUpdateTeam(ctx, "org-1", TeamWrite{Origin: "custom", TeamID: "custom:keep", Name: name})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !second.CreatedAt.Equal(first.CreatedAt) || !first.CreatedAt.Equal(first.UpdatedAt.Truncate(time.Microsecond)) {
+		t.Fatalf("created_at: first %v (updated %v), second %v", first.CreatedAt, first.UpdatedAt, second.CreatedAt)
+	}
+	if !second.UpdatedAt.After(second.CreatedAt) {
+		t.Fatalf("updated_at %v is not after created_at %v", second.UpdatedAt, second.CreatedAt)
+	}
+	read, err := store.GetTeam(ctx, "org-1", "custom:keep")
+	if err != nil || read == nil {
+		t.Fatalf("read back: %v %v", read, err)
+	}
+	if !read.CreatedAt.Equal(first.CreatedAt) {
+		t.Fatalf("read-back created_at %v, want %v", read.CreatedAt, first.CreatedAt)
 	}
 }

@@ -1454,6 +1454,14 @@ Tests: `TestOfPrefixesEveryProviderOnce`, `TestCheckRefusesABareOrEmptyProviderT
 `TestNativeTeamResolvesThroughTheNativeTeamKey` (the cascade); `TestLinearTeamKeyArmResolvesToThePrefixedTeamID`
 (the ownership derivation).
 
+#### 0.4h Team creation time (`teams.created_at`)
+
+`teams` is a `ReplacingMergeTree(updated_at)`: every write is a new version and the newest wins. A creation time therefore lives only if each writer copies it onto the version it inserts. Migration 113 adds `created_at Nullable(DateTime64(6))` (the precision of `updated_at`, so a new team has `created_at = updated_at` exactly). There is no `DEFAULT`: a default would stamp the new version's time on every update.
+
+- **Carry.** Every Go writer of `teams` reads `internal/teamcreated.Carry` before its INSERT: `min(coalesce(created_at, updated_at))` over every stored version of the team (not `FINAL`, so unmerged older versions count). A team with no stored row gets `created_at = updated_at` of its first write. A failed read aborts the write. The writers are the admin API (`internal/api/teamsidentity`), the GitHub, GitLab, Jira and Linear catalog sinks, `internal/atlassianteams`, the `team.v1` push sink and, as column copies, the team id carry and the Jira project-as-team retire. A census test fails when an `INSERT INTO teams` drops the column.
+- **Legacy rows.** Rows written before migration 113, and rows written by a Python writer, have `created_at = NULL`. No mutation backfills them (versions already merged away cannot be recovered). The carry fills the column from the oldest surviving version at the team's next Go write. Until then readers show `coalesce(created_at, updated_at)`, so for such a team `created_at` can equal `updated_at`; this is a fallback, not a measured creation time.
+- **Reader.** The admin teams API (`GET/POST/PATCH /admin/teams`) renders the stored `created_at` and an unchanged `updated_at`. `identities` still render `created_at = updated_at`.
+
 #### 0.4g A stored day after a team id changes (CHAOS-9026)
 
 A daily table whose sorting key holds a team id keeps one row for each team id. The tables are append only and a

@@ -38,6 +38,10 @@ import (
 // the frozen worlds were recorded, to a table they write: table -> column ->
 // the migration that added it. This is the ONE list for such columns.
 var columnsAfterTheCapture = map[string]map[string]string{
+	// The creation time of a team: the frozen worlds' team rows carry none.
+	"teams": {
+		"created_at": "113_teams_created_at.sql",
+	},
 	// The provider's own time of a work item relation (CHAOS-8574). No
 	// frozen relation has one.
 	// Which items of a relation write it (CHAOS-8578). No frozen relation

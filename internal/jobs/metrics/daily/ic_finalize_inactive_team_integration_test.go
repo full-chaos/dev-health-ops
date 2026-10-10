@@ -27,7 +27,7 @@ import (
 //   - carol: a row ten days before under ENG, and a row of the day that the
 //     repository/user family wrote as unassigned.
 //   - erin: an older row under one active team, the newest row under another.
-//   - frank: a row of the day under ENG; he is a member of an active team.
+//   - frank: a row of the day under ENG; he has a membership in an active team.
 //   - henry: no row on the day; the row of the older day was computed last.
 //   - ivy: two rows of one day and one compute time, of two repositories and
 //     two active teams.
@@ -63,7 +63,7 @@ func TestTheLandscapeFinalizeGivesNoPersonAnInactiveTeam(t *testing.T) {
 	}{
 		{"ENG", "jira", 0, []string{}},
 		{"jira:ENG", "jira", 1, []string{}},
-		{"github:platform", "github", 1, []string{"frank@example.com"}},
+		{"github:platform", "github", 1, []string{}},
 	} {
 		exec("insert team "+team.id, `INSERT INTO teams
     (id, team_uuid, name, members, repo_patterns, updated_at, last_synced, org_id, provider, is_active)
@@ -71,6 +71,12 @@ func TestTheLandscapeFinalizeGivesNoPersonAnInactiveTeam(t *testing.T) {
 			team.id, uuid.NewSHA1(uuid.NameSpaceURL, []byte("team:"+team.id)), "Team "+team.id, team.members,
 			[]string{}, t0, t0, org, team.provider, team.active)
 	}
+
+	exec("insert frank's membership", `INSERT INTO team_memberships
+    (org_id, provider, team_id, member_id, raw_email, source, is_primary, specificity, priority, valid_from, valid_to, updated_at, identity_facets)
+    VALUES (?, ?, ?, ?, ?, 'native', ?, ?, ?, ?, ?, ?, ?)`,
+		org, "github", "github:platform", "frank", "frank@example.com", uint8(1), uint16(100), int32(10), t0, (*time.Time)(nil), t0,
+		[]string{"frank@example.com"})
 
 	userRow := func(repo uuid.UUID, rowDay time.Time, person, team string, computedAt time.Time) {
 		t.Helper()

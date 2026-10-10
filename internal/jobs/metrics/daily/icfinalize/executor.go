@@ -362,11 +362,33 @@ var landscapeRepoID = uuid.UUID{}
 // landscape input is a READBACK of the user-metrics write, so the two halves
 // cannot be reordered or run independently.
 func (executor *Executor) computeForDay(
-	ctx context.Context, orgID string, day time.Time, resolveTeam TeamResolver, inactive teamactive.Inactive,
+	ctx context.Context, orgID string, day time.Time, teamsOf PersonTeams, inactive teamactive.Inactive,
 ) (int, error) {
 	if err := requireOrganization(ctx, orgID, day); err != nil {
 		return 0, err
 	}
+	// The teams of a person: the memberships, less the inactive teams. An
+	// inactive team gives no row and no point, as a stored inactive id does.
+	activeTeamsOf := func(identity string) []string {
+		if teamsOf == nil {
+			return nil
+		}
+		var active []string
+		for _, teamID := range teamsOf(identity) {
+			if teamID != "" && !inactive.Has(teamID) {
+				active = append(active, teamID)
+			}
+		}
+		return active
+	}
+	// The person's row of the day holds one team: the first.
+	resolveTeam := TeamResolver(func(identity string) (string, bool) {
+		teams := activeTeamsOf(identity)
+		if len(teams) == 0 {
+			return "", false
+		}
+		return teams[0], true
+	})
 	gitMetrics, err := executor.loadGitMetrics(ctx, orgID, day, inactive)
 	if err != nil {
 		return 0, err
@@ -387,23 +409,13 @@ func (executor *Executor) computeForDay(
 	if err != nil {
 		return written, err
 	}
-	// ComputeLandscape's own team_map is a fallback used only when a stat row's
-	// OWN team_id is empty (compute_ic.py's `if not team_id: team_id =
-	// team_map.get(identity, "unassigned")`), unlike MergeICUserMetrics'
-	// override semantics above -- but it is resolved through the same
-	// TeamResolver, built here per rolling-stat identity rather than passed a
-	// pre-built map, for the same reason MergeICUserMetrics takes the resolver
-	// directly: identity normalization stays inside the resolver's own
-	// implementation.
-	landscapeTeams := map[string]string{}
-	if resolveTeam != nil {
-		for _, stat := range stats {
-			if mapped, ok := resolveTeam(stat.IdentityID); ok && mapped != "" {
-				landscapeTeams[stat.IdentityID] = mapped
-			}
-		}
-	}
-	landscape := ComputeLandscape(stats, landscapeTeams)
+	// A person who is a member of N active teams gets a point in EACH of
+	// them: the person's 30-day numbers are ranked among the members of each
+	// team (the key of the landscape holds the team). A person with no
+	// membership keeps the team of the newest stored row, and ComputeLandscape
+	// gives "unassigned" where that is blank.
+	stats = StatsOfEachTeam(stats, activeTeamsOf)
+	landscape := ComputeLandscape(stats, nil)
 	landscapeWritten, err := executor.writeLandscape(ctx, orgID, day, computedAt, landscape)
 	if err != nil {
 		return written, err
@@ -510,36 +522,36 @@ func (executor *Executor) writeLandscape(
 
 // TeamResolver resolves one identity -> team_id, mirroring
 // `team_map.get(identity)` inside compute_ic.py's per-identity loop. ok is
-// false exactly when Python's `.get()` would have returned None (no entry),
-// which MergeICUserMetrics treats identically to a false/empty mapped value:
-// the git record's own team_id survives.
+// false when the identity has no team, in which case the base record's own
+// team_id survives. MergeICUserMetrics takes it for the team of the person's
+// ONE row of the day.
 type TeamResolver func(identity string) (teamID string, ok bool)
 
-// TeamMapper builds a TeamResolver scoped to one organization, mirroring
-// Python's load_team_map() -- itself backed by a per-process global resolver
-// that is effectively org-scoped by construction (a single deployment serves
-// one org's team config at a time). Returning a RESOLVER rather than a
-// pre-built map keeps identity normalization (case/whitespace) inside the
-// resolver's own implementation instead of requiring every caller to
-// replicate it correctly against a hand-built map's keys.
-//
-// CHAOS-5151's fourth defect: this used to be `func(ctx) (map[string]string,
-// error)` -- no org parameter at all -- wired via SetTeamMapper, which
-// nothing in internal/workerservice/daily.go ever called. teamMapper was
-// therefore always nil and every identity silently fell through to its
-// git-backed team_id (typically "unassigned"), regardless of real team
-// ownership. Injected as a function value (built once, at construction, from
-// a live per-call ClickHouse read) rather than a stored map, so a single
-// Executor instance shared across CONCURRENT finalize runs for different
-// organizations never mutates shared state per call -- see
-// ic_finalize_native_executor.go's wiring.
-type TeamMapper func(ctx context.Context, orgID string) (TeamResolver, error)
+// PersonTeams gives the teams a person is a member of, on the day the family
+// computes: every team, the first being the person's first team (the team of
+// the person's row in user_metrics_daily, which holds one team). No team is
+// an empty result.
+type PersonTeams func(identity string) []string
 
-// SetTeamMapper wires the resolver-builder. A nil mapper means an empty
-// TeamResolver, which is the reference's behaviour when load_team_map()
-// returns nothing: identities fall through to "unassigned" rather than the
-// family failing.
+// TeamMapper builds the PersonTeams of one organization for one point in
+// time. asOf is that point: a membership counts when it is valid at asOf.
+//
+// The mapper is called once for each run, with the organization and the time
+// of that run, so one Executor can serve runs of many organizations and days.
+type TeamMapper func(ctx context.Context, orgID string, asOf time.Time) (PersonTeams, error)
+
+// SetTeamMapper wires the membership read. A nil mapper means no person has a
+// team: every identity keeps the team of its stored row, or "unassigned".
 func (executor *Executor) SetTeamMapper(mapper TeamMapper) { executor.teamMapper = mapper }
+
+// membershipAsOf is the time at which a person's team memberships are read for
+// the day the family computes: the day itself, as the work item attribution
+// reads them for the work of that day (its facts are loaded with the
+// partition's day). One rule gives the team of a person on a day and the team
+// of the work of that day, so the landscape and the work numbers agree. A
+// membership that ended before the day, or that starts after it, gives the
+// person no team on that day.
+func membershipAsOf(targetDay time.Time) time.Time { return targetDay }
 
 // ComputeFinalizeFamily implements daily.NativeFinalizeFamilyExecutor.
 //
@@ -551,13 +563,13 @@ func (executor *Executor) ComputeFinalizeFamily(ctx context.Context, run RunScop
 	if err := requireOrganization(ctx, run.OrganizationID, run.TargetDay); err != nil {
 		return 0, err
 	}
-	var resolveTeam TeamResolver
+	var teamsOf PersonTeams
 	if executor.teamMapper != nil {
-		resolved, err := executor.teamMapper(ctx, run.OrganizationID)
+		resolved, err := executor.teamMapper(ctx, run.OrganizationID, membershipAsOf(run.TargetDay))
 		if err != nil {
 			return 0, err
 		}
-		resolveTeam = resolved
+		teamsOf = resolved
 	}
 	// The stored rows this family reads hold the team id they were written
 	// with. A failed read of the inactive teams fails the run: with an empty
@@ -567,7 +579,7 @@ func (executor *Executor) ComputeFinalizeFamily(ctx context.Context, run RunScop
 	if err != nil {
 		return 0, err
 	}
-	return executor.computeForDay(ctx, run.OrganizationID, run.TargetDay, resolveTeam, inactive)
+	return executor.computeForDay(ctx, run.OrganizationID, run.TargetDay, teamsOf, inactive)
 }
 
 // RunScope is the subset of daily.Run this package needs. Declaring it here

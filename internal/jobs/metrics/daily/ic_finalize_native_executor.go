@@ -2,9 +2,14 @@ package daily
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"time"
 
+	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
+
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/daily/icfinalize"
+	"github.com/full-chaos/dev-health-ops/internal/teamattribution"
 	"github.com/full-chaos/dev-health-ops/internal/teamkeytables"
 )
 
@@ -22,33 +27,27 @@ type ICFinalizeExecutor struct {
 // NewICFinalizeExecutor builds the adapter. conn is the ClickHouse connection
 // the family reads back from and writes through.
 //
-// Wires a real team resolver (CHAOS-5151's fourth defect: SetTeamMapper
-// previously had no caller at all, so every identity fell through to its
-// git-backed team_id, typically "unassigned", regardless of real team
-// ownership). Reuses team_wellbeing's own, already-tested
-// LoadWellbeingTeams + NewMemberResolver (wellbeing_native_clickhouse.go) --
-// the SAME production query Python's load_team_resolver_from_store is built
-// from -- rather than inventing a second identity->team path.
+// The teams of a person come from the table team_memberships, through the
+// read the work item attribution uses (teamattribution.LoadProviderMembers):
+// one rule says who is a member of which team at a point in time, for the
+// person's own rows and points here and for the work the person is assigned.
+// The roster column teams.members is NOT read: it is a copy the team sync
+// keeps beside the table, with no validity window, and it can be empty while
+// the table holds the memberships.
 //
 // The mapper is set ONCE here, at construction, not per finalize call: the
-// closure it wires takes orgID as an explicit parameter and does a fresh,
+// closure takes the organization and the time as parameters and does a fresh,
 // independent ClickHouse read on every invocation, so concurrent
 // ComputeFinalizeFamily calls for DIFFERENT organizations sharing this one
-// Executor instance never mutate shared state -- only icfinalize.Executor's
-// own `teamMapper` field is written, and that write happens exactly once,
-// before any concurrent read of it can occur.
-func NewICFinalizeExecutor(conn icfinalize.Conn) *ICFinalizeExecutor {
+// Executor instance never mutate shared state.
+func NewICFinalizeExecutor(conn driver.Conn) *ICFinalizeExecutor {
 	inner := icfinalize.NewExecutor(conn)
-	inner.SetTeamMapper(func(ctx context.Context, orgID string) (icfinalize.TeamResolver, error) {
-		teams, err := LoadWellbeingTeams(ctx, conn, orgID)
+	inner.SetTeamMapper(func(ctx context.Context, orgID string, asOf time.Time) (icfinalize.PersonTeams, error) {
+		members, err := teamattribution.ClickHouseFactSource{Conn: conn}.LoadProviderMembers(ctx, orgID, asOf)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("load the team memberships of the organization: %w", err)
 		}
-		resolver := NewMemberResolver(teams)
-		return func(identity string) (string, bool) {
-			teamID, _ := resolver.ResolveMember(identity)
-			return teamID, teamID != ""
-		}, nil
+		return personTeamsOf(members), nil
 	})
 	// The stale-key rule (stale_team_keys.go): the family computes the
 	// organization's day whole, so every stored point of the day that this
@@ -64,6 +63,64 @@ func NewICFinalizeExecutor(conn icfinalize.Conn) *ICFinalizeExecutor {
 		return supersedeStaleTeamKeys(ctx, conn, teamkeytables.ICLandscapeRolling30d, orgID, asOf, nil, produced, computedAt)
 	})
 	return &ICFinalizeExecutor{inner: inner}
+}
+
+// personTeamsOf indexes membership facts by person. A person is found by an
+// identity facet of a membership row: the strings the team sync stores for
+// "who this member can appear as" (the email, the provider-qualified name,
+// the alias). A row with no facet is found by its member id and its email.
+// The comparison is the one of the attribution
+// (teamattribution.NormalizeDerivationIdentity).
+//
+// The teams of a person are every team with a membership, each one time, in
+// the rank order of the attribution (teamattribution.RankDerivationCandidates:
+// primary first, then the more specific, then the lower priority number, the
+// newer row, the team id), so the FIRST team is a fixed choice and not the
+// order of a query.
+func personTeamsOf(members []teamattribution.GithubWorkItemDerivationMemberFact) icfinalize.PersonTeams {
+	byPerson := map[string][]teamattribution.GithubWorkItemDerivationCandidate{}
+	for _, member := range members {
+		if strings.TrimSpace(member.TeamID) == "" {
+			continue
+		}
+		candidate := teamattribution.GithubWorkItemDerivationCandidateFromFact(
+			"team_membership", member.TeamID, member.TeamName, "",
+			member.IsPrimary, member.Specificity, member.Priority, member.UpdatedAt,
+		)
+		names := member.IdentityFacets
+		if len(names) == 0 {
+			names = []string{member.MemberID, teamattribution.GithubWorkItemDerivationStringValue(member.RawEmail)}
+		}
+		seen := map[string]struct{}{}
+		for _, name := range names {
+			key := teamattribution.NormalizeDerivationIdentity(name)
+			if key == "" {
+				continue
+			}
+			if _, twice := seen[key]; twice {
+				continue
+			}
+			seen[key] = struct{}{}
+			byPerson[key] = append(byPerson[key], candidate)
+		}
+	}
+	teamsByPerson := make(map[string][]string, len(byPerson))
+	for key, candidates := range byPerson {
+		var teams []string
+		listed := map[string]struct{}{}
+		for _, candidate := range teamattribution.RankDerivationCandidates(candidates) {
+			teamID := teamattribution.GithubWorkItemDerivationStringValue(candidate.TeamID)
+			if _, twice := listed[teamID]; twice || teamID == "" {
+				continue
+			}
+			listed[teamID] = struct{}{}
+			teams = append(teams, teamID)
+		}
+		teamsByPerson[key] = teams
+	}
+	return func(identity string) []string {
+		return teamsByPerson[teamattribution.NormalizeDerivationIdentity(identity)]
+	}
 }
 
 // ComputeFinalizeFamily implements NativeFinalizeFamilyExecutor.

@@ -70,7 +70,7 @@ func TestIcFinalizeGuardDoesNotRefuseARealOrganization(t *testing.T) {
 func TestIcFinalizeRefusesBeforeTheTeamMapperRuns(t *testing.T) {
 	mapperCalls := 0
 	executor := NewExecutor(&touchedConn{})
-	executor.SetTeamMapper(func(context.Context, string) (TeamResolver, error) {
+	executor.SetTeamMapper(func(context.Context, string, time.Time) (PersonTeams, error) {
 		mapperCalls++
 		return nil, nil
 	})

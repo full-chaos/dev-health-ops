@@ -45,6 +45,38 @@ var mapNames = [3]string{"churn_throughput", "cycle_throughput", "wip_throughput
 // honest choice and the values are order-invariant. Recorded because "the port
 // sorts and the reference does not" is exactly the kind of difference that
 // looks like a bug to the next reader.
+// StatsOfEachTeam gives a person who is a member of teams one stat for each
+// team, in the order of the teams, each with the person's 30-day numbers. A
+// person with no team keeps the one stat, with the team it was read with. A
+// blank or "unknown" identity is no person and is not looked up.
+func StatsOfEachTeam(stats []RollingStat, teamsOf func(identity string) []string) []RollingStat {
+	if teamsOf == nil {
+		return stats
+	}
+	expanded := make([]RollingStat, 0, len(stats))
+	for _, stat := range stats {
+		var teams []string
+		if stat.IdentityID != "" && stat.IdentityID != "unknown" {
+			teams = teamsOf(stat.IdentityID)
+		}
+		if len(teams) == 0 {
+			expanded = append(expanded, stat)
+			continue
+		}
+		seen := map[string]bool{}
+		for _, teamID := range teams {
+			if seen[teamID] {
+				continue
+			}
+			seen[teamID] = true
+			of := stat
+			of.TeamID = teamID
+			expanded = append(expanded, of)
+		}
+	}
+	return expanded
+}
+
 func ComputeLandscape(stats []RollingStat, teamMap map[string]string) []LandscapeRecord {
 	type enriched struct {
 		stat   RollingStat

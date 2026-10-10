@@ -16,17 +16,23 @@ import (
 )
 
 // headerFixtureDoer answers GitHub requests by path (page 2 as "?page=2"),
-// with any number of Link field lines per path.
+// with any number of Link field lines per path. notFound is the paths GitHub
+// answers 404 for: the direct check of a grant the team no longer has.
 type headerFixtureDoer struct {
-	t      *testing.T
-	byPath map[string]string
-	links  map[string][]string
+	t        *testing.T
+	byPath   map[string]string
+	links    map[string][]string
+	notFound map[string]bool
 }
 
 func (doer *headerFixtureDoer) Do(request *http.Request) (*http.Response, error) {
 	key := request.URL.Path
 	if page := request.URL.Query().Get("page"); page != "" && page != "1" {
 		key += "?page=" + page
+	}
+	if doer.notFound[key] {
+		return &http.Response{StatusCode: http.StatusNotFound, Header: http.Header{"Content-Type": []string{"application/json"}},
+			Body: io.NopCloser(strings.NewReader(`{"message":"Not Found","status":"404"}`)), Request: request}, nil
 	}
 	body, ok := doer.byPath[key]
 	if !ok {
@@ -51,6 +57,8 @@ func githubListingProofRun(ctx context.Context, t *testing.T, conn driver.Conn, 
 // decides to follow rel="next" is the one that decides the end. A next page
 // announced in a second Link field line, in a rel list, or in another case is
 // read, so its repo stays open, and the repo GitHub no longer lists closes.
+// The listing is two responses, so the close is on GitHub's own answer for
+// that grant (the direct check answers "not found").
 func TestGitHubOwnershipCloseFollowsEveryLinkFormItReadsAsNext(t *testing.T) {
 	ctx, conn := newWorkItemEffectsConn(t)
 	t0 := time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)
@@ -77,8 +85,9 @@ func TestGitHubOwnershipCloseFollowsEveryLinkFormItReadsAsNext(t *testing.T) {
 				t.Fatal(err)
 			}
 			doer := &headerFixtureDoer{t: t,
-				byPath: map[string]string{"/orgs/acme/teams": teams, repos: `[{"name":"api"}]`, repos + "?page=2": `[{"name":"late"}]`},
-				links:  map[string][]string{repos: test.links, repos + "?page=2": lastPage},
+				byPath:   map[string]string{"/orgs/acme/teams": teams, repos: `[{"name":"api"}]`, repos + "?page=2": `[{"name":"late"}]`},
+				links:    map[string][]string{repos: test.links, repos + "?page=2": lastPage},
+				notFound: map[string]bool{repos + "/acme/old": true},
 			}
 			result, err := githubListingProofRun(ctx, t, conn, org, doer, t0.Add(time.Hour))
 			if err != nil {

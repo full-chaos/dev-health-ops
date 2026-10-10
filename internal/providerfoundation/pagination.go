@@ -840,6 +840,16 @@ func gitLabPageStep(header http.Header, page, items, perPage int) (int, bool) {
 	return 0, len(values) == 1 && linkParsed && linkNext == ""
 }
 
+// GitLabListEndedInOneResponse reports whether one GitLab list response of
+// items entries, asked with perPage, is the WHOLE list by GitLab's own end
+// signal. It is the paginator's own reading (gitLabPageStep), for a caller
+// that asks one question and must know that no entry is on a page it did not
+// request.
+func GitLabListEndedInOneResponse(header http.Header, items, perPage int) bool {
+	next, ended := gitLabPageStep(header, 1, items, perPage)
+	return next == 0 && ended
+}
+
 // githubPageStep is the one reading of GitHub's Link continuation: it returns
 // the rel="next" URL to follow ("" = stop) and whether that stop is GitHub's
 // own end of the list. A stop is proven only when every Link entry parses and

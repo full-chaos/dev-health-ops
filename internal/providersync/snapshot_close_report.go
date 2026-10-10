@@ -23,6 +23,7 @@ const SnapshotCloseAbandonedLog = "team_catalog_snapshot_close_abandoned"
 // table that held none of its rows protected nothing and is not reported. It
 // returns whether any kind was reported.
 func ReportSnapshotPlan(ctx context.Context, provider, orgID string, plan SnapshotPlan) bool {
+	reportSnapshotAbsences(ctx, provider, orgID, plan)
 	abandoned := plan.Abandoned()
 	if len(abandoned) == 0 {
 		return false
@@ -47,4 +48,24 @@ func ReportSnapshotPlan(ctx context.Context, provider, orgID string, plan Snapsh
 		}
 	}
 	return true
+}
+
+// SnapshotAbsenceNotProvenLog is the WARN line of a kind that kept an open row
+// its answer does not hold, because nothing proved the row gone.
+const SnapshotAbsenceNotProvenLog = "snapshot_absence_not_proven"
+
+// reportSnapshotAbsences writes one WARN line for each kind of the plan that
+// kept an open row the run's answer does not hold: the provider's own answer
+// said it still holds (the listing lost it), or nothing proved it gone, or the
+// run's budget of direct answers ended first. A kind with none is silent.
+func reportSnapshotAbsences(ctx context.Context, provider, orgID string, plan SnapshotPlan) {
+	for _, outcome := range plan.Kinds {
+		if outcome.StillHeld+outcome.AbsenceNotProven+outcome.AbsenceOverBudget == 0 {
+			continue
+		}
+		slog.Default().WarnContext(ctx, SnapshotAbsenceNotProvenLog,
+			"org_id", orgID, "provider", provider, "kind", outcome.Kind, "absence_proof", outcome.AbsenceProof,
+			"rows_closed", outcome.Closed, "rows_still_held", outcome.StillHeld,
+			"rows_absence_not_proven", outcome.AbsenceNotProven, "rows_over_lookup_budget", outcome.AbsenceOverBudget)
+	}
 }

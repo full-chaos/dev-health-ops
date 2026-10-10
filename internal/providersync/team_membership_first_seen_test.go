@@ -459,7 +459,7 @@ func TestPlanMembershipSnapshotClosesOnlyAMemberAbsentFromACompleteRead(t *testi
 	}
 	holds := ScopeProof{stated: true}
 	snapshot := func(closable []string, scope ScopeProof) KindSnapshot[MembershipSnapshotRow] {
-		return GitHubTeamMembershipKind(closable).Snapshot(scope, ProveSnapshot(SnapshotTerm{Holds: true, Reason: "read_returned"}))
+		return GitHubTeamMembershipKind(closable).Snapshot(scope, ProveSnapshot(SnapshotTerm{Holds: true, Reason: "read_returned"}), AbsenceByCloseWriter[MembershipSnapshotRow]())
 	}
 	closed := func(retractions []membershipRetraction) map[string]int {
 		out := map[string]int{}

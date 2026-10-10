@@ -115,7 +115,7 @@ SELECT generateUUIDv4(), concat('acme/repo-', toString(number)), now(), now(), ?
 		if rec.Code != 503 || !strings.Contains(rec.Body.String(), "Result too large") {
 			t.Fatalf("bound hit: HTTP %d %s, want 503 with the named cause", rec.Code, rec.Body.String())
 		}
-		if l := logs.String(); !strings.Contains(l, "WARN filteroptions: read hit the result_rows bound") || !strings.Contains(l, "scope_ids=2") || strings.Contains(l, "acme/repo") {
+		if l := logs.String(); !strings.Contains(l, "WARN filteroptions: read hit the result_size bound") || !strings.Contains(l, "scope_ids=2") || strings.Contains(l, "acme/repo") {
 			t.Fatalf("WARN line = %q, want operation, bound, scope id count, no values", l)
 		}
 

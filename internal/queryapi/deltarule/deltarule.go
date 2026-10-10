@@ -65,3 +65,20 @@ func Absolute(current, prior float64, currentHasData, priorHasData bool) float64
 	}
 	return current - prior
 }
+
+// DriverPercentSQL is the ClickHouse expression of the delta between a driver's
+// current and prior value, for the queries that rank drivers (the /explain
+// drivers and the Home "driven by" lookup). It is the SQL form of Of: a driver
+// with no row in the comparison window, or a NULL on either side, has no delta
+// (NULL, never the 0 a LEFT JOIN default would give); a measured 0 against a
+// measured 0 is a true 0; a measured 0 against a value has no percent (NULL);
+// otherwise (current - previous) / previous * 100. current and previous are
+// the two value expressions, previousPresent is a column that is 1 on a row
+// of the previous side and 0 where the LEFT JOIN found none.
+func DriverPercentSQL(current, previous, previousPresent string) string {
+	return "CASE" +
+		" WHEN " + current + " IS NULL OR " + previousPresent + " = 0 OR " + previous + " IS NULL THEN NULL" +
+		" WHEN " + previous + " = 0 AND " + current + " = 0 THEN 0" +
+		" WHEN " + previous + " = 0 THEN NULL" +
+		" ELSE (" + current + " - " + previous + ") / " + previous + " * 100 END"
+}

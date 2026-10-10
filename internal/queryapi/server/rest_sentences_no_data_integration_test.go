@@ -190,3 +190,71 @@ func TestRESTPersonNarrativeNeedsTwoMeasuredWindows(t *testing.T) {
 		t.Errorf("narrative with two measured windows = %v, want one sentence about the decrease of code churn", got)
 	}
 }
+
+// "driven by <ids>" names the drivers of the percent in the sentence: only
+// repositories that hold a value in BOTH windows have a delta to drive it. A
+// repository with a current value and no comparison row is not named (it read as
+// a delta of 0 and ranked by it, so it could displace a measured driver), and
+// when no driver has a delta the sentence names none (CHAOS-9063).
+func TestRESTHomeDrivenByNamesOnlyDriversWithAMeasuredDelta(t *testing.T) {
+	conn, client := startTeamScopeClickHouse(t)
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /api/v1/home", newHomeGetHandler(client, nil))
+	const target = "/api/v1/home?range_days=7&compare_days=7&end_date=2026-08-25"
+	current, prior := time.Date(2026, 8, 22, 0, 0, 0, 0, time.UTC), time.Date(2026, 8, 14, 0, 0, 0, 0, time.UTC)
+	seed := func(org string, repo uuid.UUID, day time.Time, churn uint32) {
+		t.Helper()
+		if err := conn.Exec(context.Background(),
+			`INSERT INTO repo_metrics_daily (repo_id, day, total_loc_touched, computed_at, org_id) VALUES (?, ?, ?, ?, ?)`,
+			repo, day, churn, time.Date(2026, 8, 26, 0, 0, 0, 0, time.UTC), org); err != nil {
+			t.Fatal(err)
+		}
+	}
+	churnSentence := func(org string) string {
+		var body restHomeSentences
+		getJSON(t, mux, org, target, &body)
+		for _, sentence := range body.Summary {
+			if strings.HasPrefix(sentence.Text, "Code Churn") {
+				return sentence.Text
+			}
+		}
+		t.Fatalf("%s: no Code Churn sentence in %+v", org, body.Summary)
+		return ""
+	}
+
+	// Four repositories with both windows (10 -> 5) and one with a current value only.
+	const org = "driven-by-measured"
+	var measured []uuid.UUID
+	for range 4 {
+		repo := uuid.New()
+		measured = append(measured, repo)
+		seed(org, repo, prior, 10)
+		seed(org, repo, current, 5)
+	}
+	currentOnly := uuid.New()
+	seed(org, currentOnly, current, 900)
+	sentence := churnSentence(org)
+	if strings.Contains(sentence, currentOnly.String()) {
+		t.Errorf("the sentence names the repository with no comparison row as a driver: %s", sentence)
+	}
+	named := 0
+	for _, repo := range measured {
+		if strings.Contains(sentence, repo.String()) {
+			named++
+		}
+	}
+	if named != 3 {
+		t.Errorf("the sentence names %d of the measured repositories, want the 3 the lookup limit allows: %s", named, sentence)
+	}
+
+	// No driver has a delta: every repository with a current value has no
+	// comparison row (the prior window is held by a repository that has no
+	// current row), so the sentence names no driver.
+	const none = "driven-by-none"
+	seed(none, uuid.New(), prior, 10)
+	seed(none, uuid.New(), current, 5)
+	seed(none, uuid.New(), current, 7)
+	if sentence := churnSentence(none); strings.Contains(sentence, "driven by") {
+		t.Errorf("no driver has a delta, but the sentence names one: %s", sentence)
+	}
+}

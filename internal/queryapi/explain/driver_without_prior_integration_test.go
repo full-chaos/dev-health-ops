@@ -23,13 +23,15 @@ func TestExplainDriverWithoutAPriorRowServesNoDelta(t *testing.T) {
 		t.Fatal(err)
 	}
 	const org = "explain-driver-no-prior"
-	repoBoth, repoCurrentOnly := uuid.New(), uuid.New()
+	repoBoth, repoCurrentOnly, repoCurrentZero := uuid.New(), uuid.New(), uuid.New()
 	current := time.Date(2026, 9, 10, 0, 0, 0, 0, time.UTC)
 	prior := current.AddDate(0, 0, -1)
 	computedAt := current.AddDate(0, 0, 3)
 	for repo, rows := range map[uuid.UUID]map[time.Time]uint32{
 		repoBoth:        {current: 5, prior: 10},
 		repoCurrentOnly: {current: 7},
+		// A stored 0 now and no comparison row: still no delta (the LEFT JOIN default is 0, and 0 against 0 would read as a true 0 %).
+		repoCurrentZero: {current: 0},
 	} {
 		for day, churn := range rows {
 			if err := admin.Exec(ctx,
@@ -46,16 +48,23 @@ func TestExplainDriverWithoutAPriorRowServesNoDelta(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got.Drivers) != 2 {
-		t.Fatalf("drivers = %+v, want 2", got.Drivers)
+	if len(got.Drivers) != 3 {
+		t.Fatalf("drivers = %+v, want 3", got.Drivers)
 	}
-	first, second := got.Drivers[0], got.Drivers[1]
+	first := got.Drivers[0]
+	for _, driver := range got.Drivers[1:] {
+		if driver.ID != repoCurrentOnly.String() && driver.ID != repoCurrentZero.String() {
+			t.Errorf("driver %s ranks after the measured one but has no comparison row", driver.ID)
+		}
+		if driver.DeltaPct != nil || !driver.HasData || driver.HasPriorData {
+			t.Errorf("driver %+v (delta %v), want delta null, has_data true, has_prior_data false", driver, driver.DeltaPct)
+		}
+	}
+	second := got.Drivers[1]
 	if first.ID != repoBoth.String() || first.DeltaPct == nil || !near(*first.DeltaPct, -50) || !first.HasData || !first.HasPriorData {
 		t.Errorf("first driver = %+v (delta %v), want the repository with both windows at -50 with both flags", first, first.DeltaPct)
 	}
-	if second.ID != repoCurrentOnly.String() || second.DeltaPct != nil || !second.HasData || second.HasPriorData {
-		t.Errorf("second driver = %+v (delta %v), want the current-only repository with delta null, has_data true and has_prior_data false", second, second.DeltaPct)
-	}
+	_ = second
 	if len(got.Contributors) == 0 {
 		t.Fatal("no contributors")
 	}

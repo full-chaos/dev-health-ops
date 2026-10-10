@@ -9,6 +9,7 @@ import (
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/changefailure"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/deltarule"
 	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse/liverow"
 )
 
@@ -384,12 +385,7 @@ SELECT
     current.value AS value,
     toUInt8(current.value IS NOT NULL) AS has_data,
     toUInt8(previous.present = 1 AND previous.value IS NOT NULL) AS has_prior_data,
-    CASE
-        WHEN current.value IS NULL OR previous.present = 0 OR previous.value IS NULL THEN NULL
-        WHEN previous.value = 0 AND current.value = 0 THEN 0
-        WHEN previous.value = 0 THEN NULL
-        ELSE (current.value - previous.value) / previous.value * 100
-    END AS delta_pct
+    %s AS delta_pct
 FROM (
     SELECT toString(%s) AS id, %s AS value
     FROM %s
@@ -404,7 +400,7 @@ LEFT JOIN (
 ORDER BY delta_pct DESC NULLS LAST
 LIMIT {limit:UInt64}
 %s
-`, groupBy, valueSQL, currentFrom, groupBy, definedOnly(aggregator), groupBy, valueSQL, previousFrom, groupBy, settingsMaxExecutionTime())
+`, deltarule.DriverPercentSQL("current.value", "previous.value", "previous.present"), groupBy, valueSQL, currentFrom, groupBy, definedOnly(aggregator), groupBy, valueSQL, previousFrom, groupBy, settingsMaxExecutionTime())
 
 	bindings := append([]dhclickhouse.Binding{
 		{Name: "start_day", Value: dateBindingValue(startDay)},

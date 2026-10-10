@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/prrework"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/prrework/prreworktest"
 )
 
@@ -137,5 +138,47 @@ func TestHomePRReworkRatio_DeltaAndDriversFollowTheDeltaRule(t *testing.T) {
 		}
 		t.Errorf("the drivers of the rework ratio are %v, want [D1 D2]: ranked by the ratio over reviewed pull requests, "+
 			"with no driver that has no percent or no value", got)
+	}
+}
+
+// CHAOS-9158 (D5856), the rate-class path (fetchRateDriverDelta): a repository
+// with a measured prior and NO row in the current window is the same state as
+// one whose current row holds no review data (an undefined rate): neither is
+// named as a driver, because the lookup names a group only for a percent and a
+// percent needs a measured rate on both sides. Rows from the daily job's own
+// compute and writer.
+func TestHomePRReworkDriverLookupTreatsAPriorOnlyRepositoryLikeAnUndefinedCurrentOne(t *testing.T) {
+	ctx := context.Background()
+	admin, client := newHomeTestClickHouse(ctx, t)
+
+	const orgID = "home-org-pr-rework-prior-only"
+	measured, priorOnly, undefinedCurrent := uuid.New(), uuid.New(), uuid.New()
+	current := time.Date(2026, 9, 8, 0, 0, 0, 0, time.UTC)
+	prior := current.AddDate(0, 0, -7)
+	computedAt := time.Date(2026, 9, 10, 6, 0, 0, 0, time.UTC)
+	unreviewed := prreworktest.PullRequest{}
+	reviewed := prreworktest.PullRequest{Reviews: 2}
+	rework := prreworktest.PullRequest{Reviews: 3, ChangesRequested: 1}
+	write := func(repo uuid.UUID, on time.Time, pullRequests ...prreworktest.PullRequest) {
+		t.Helper()
+		prreworktest.WriteDay(ctx, t, admin, orgID, repo, "github", on, computedAt, pullRequests)
+	}
+	write(measured, prior, reviewed, rework) // 50 % of the reviewed
+	write(measured, current, rework, rework) // 100 %
+	write(priorOnly, prior, reviewed, rework)
+	write(undefinedCurrent, prior, reviewed, rework)
+	write(undefinedCurrent, current, unreviewed, unreviewed) // a row, no review data: the rate is undefined
+
+	rows, err := fetchMetricDriverDelta(ctx, client, prrework.Table, prrework.DeprecatedRatioColumn, "repo_id",
+		current, current.AddDate(0, 0, 1), prior, prior.AddDate(0, 0, 1), "", nil, orgID, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	named := map[string]bool{}
+	for _, row := range rows {
+		named[row.ID] = true
+	}
+	if !named[measured.String()] || named[priorOnly.String()] || named[undefinedCurrent.String()] || len(named) != 1 {
+		t.Errorf("drivers %v, want only the measured repository %s (a prior-only and an undefined-current repository are the same state: neither has a percent)", named, measured)
 	}
 }

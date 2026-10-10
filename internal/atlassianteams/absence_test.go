@@ -110,6 +110,10 @@ func TestTeamAbsenceReadsTheRecordedTeamByIDAnswers(t *testing.T) {
 		{"an archived team has no members and no links: the catalog fact is gone", 200, teamByIDFound(t, "ARCHIVED"), providersync.SnapshotAbsenceProven},
 		{"a team with no state proves nothing", 200, teamByIDFound(t, ""), providersync.SnapshotAbsenceNotProven},
 		{"another error classification proves nothing", 200, forbidden, providersync.SnapshotAbsenceNotProven},
+		{"the NotFound classification with another status proves nothing", 200,
+			json.RawMessage(`{"errors":[{"message":"x","extensions":{"errorSource":"UNDERLYING_SERVICE","statusCode":400,"classification":"NotFound"}}],"data":{"team":{"teamV2":null}}}`), providersync.SnapshotAbsenceNotProven},
+		{"a status 404 with another classification proves nothing", 200,
+			json.RawMessage(`{"errors":[{"message":"x","extensions":{"errorSource":"UNDERLYING_SERVICE","statusCode":404,"classification":"Gone"}}],"data":{"team":{"teamV2":null}}}`), providersync.SnapshotAbsenceNotProven},
 		{"HTTP 500 proves nothing", 500, map[string]any{"errors": []any{map[string]any{"message": "boom"}}}, providersync.SnapshotAbsenceNotProven},
 	}
 	for _, c := range cases {

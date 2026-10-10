@@ -53,8 +53,10 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/atlassianteams"
+	"github.com/full-chaos/dev-health-ops/internal/httpguard"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
+	pgstorage "github.com/full-chaos/dev-health-ops/internal/storage/postgres"
 )
 
 const (
@@ -117,13 +119,12 @@ func (r *recorder) RoundTrip(request *http.Request) (*http.Response, error) {
 	return response, nil
 }
 
-// client is the doer the product's clients accept: a real *http.Client whose
-// transport is the recorder, and which follows no redirect.
+// client is the doer the product's clients accept: the shared no-redirect client
+// (httpguard.NewClient) whose transport is the recorder.
 func (r *recorder) client() *http.Client {
-	return &http.Client{
-		Timeout: 45 * time.Second, Transport: r,
-		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
-	}
+	client := httpguard.NewClient(45 * time.Second)
+	client.Transport = r
+	return client
 }
 
 // shape replaces every value by its type and keeps the first element of an array.
@@ -223,11 +224,11 @@ func run(ctx context.Context, provider, out string, dry bool) error {
 	if !dry && strings.TrimSpace(out) == "" {
 		return errors.New("-out is required")
 	}
-	dsn := os.Getenv(envPostgres)
+	dsn := secrets.GetenvDSN(envPostgres)
 	if strings.TrimSpace(dsn) == "" {
 		return errors.New(envPostgres + " is not set")
 	}
-	keyValue := os.Getenv(envKey)
+	keyValue := secrets.GetenvSecret(envKey)
 	if strings.TrimSpace(keyValue) == "" {
 		return errors.New(envKey + " is not set")
 	}
@@ -236,9 +237,11 @@ func run(ctx context.Context, provider, out string, dry bool) error {
 		return errors.New("the encryption key is not usable")
 	}
 	dsn = strings.Replace(strings.Replace(dsn, "postgresql+asyncpg://", "postgresql://", 1), "postgres+asyncpg://", "postgresql://", 1)
+	// The boundary of the connection redacts the login and the password it resolves, in any error text.
+	boundary := pgstorage.Boundary(dsn)
 	pool, err := pgxpool.New(ctx, dsn)
 	if err != nil {
-		return errors.New("the database connection could not be opened")
+		return fmt.Errorf("the database connection could not be opened: %w", boundary.Redact(err))
 	}
 	defer pool.Close()
 
@@ -445,9 +448,11 @@ func recordAtlassian(ctx context.Context, s *session, credential providerfoundat
 	}
 	gatewayURL := tenant.String() + "/gateway/api"
 	auth := atlassian.BasicAPITokenAuth{Email: email.Reveal(), Token: token}
+	gatewayClient := httpguard.NewClient(45 * time.Second)
+	gatewayClient.Transport = &recorder{inner: atlassianteams.CompletePagesOnly(nil)}
 	gateway := &graph.Client{
 		BaseURL: gatewayURL, Auth: auth, Strict: true,
-		HTTPClient: &http.Client{Timeout: 45 * time.Second, Transport: &recorder{inner: atlassianteams.CompletePagesOnly(nil)}},
+		HTTPClient: gatewayClient,
 	}
 	gatewayRecorder := gateway.HTTPClient.Transport.(*recorder)
 	organizationID := strings.TrimSpace(credential.Config["atlassian_organization_id"])

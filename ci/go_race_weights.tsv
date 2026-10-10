@@ -364,3 +364,4 @@ internal/workerservice	20
 internal/workitemcontract	1
 tests/compatibility/river/cmd/river-compat	1
 tests/compatibility/river/go	1
+tools/record-provider-answers	1

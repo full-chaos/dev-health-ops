@@ -231,6 +231,8 @@ func TestClickHouseConfigdStartsAndAnswersOnThePodAddress(t *testing.T) {
 		t.Fatalf("/ping from another container did not answer on the service address: %v\n%s\nconfig.d: %s\n%.2000s", err, o, files, tail(string(logs), 2000))
 	}
 
+	t.Logf("PING_OK: started %s and /ping answered from another container on the service address", image)
+
 	// The image's own file and every chart file are all in config.d / users.d.
 	ls := func(dir string) string {
 		o, err := dc("exec", "-T", "clickhouse", "ls", dir)

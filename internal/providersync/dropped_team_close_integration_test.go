@@ -469,6 +469,7 @@ type droppedGitLabGroups struct {
 	subgroups  []string
 	twoPages   bool
 	emptyList  bool
+	noEnd      bool // the subgroup listing carries no end signal (no X-Next-Page)
 	projects   map[string][]string
 	members    map[string][]string
 	teamLookup map[string]teamLookupAnswer // full path -> answer; none: GitLab's 404
@@ -512,6 +513,9 @@ func newDroppedGitLabGroups(t *testing.T) *droppedGitLabGroups {
 			}
 			if fake.twoPages {
 				w.Header()["X-Next-Page"] = []string{"2"}
+			}
+			if fake.noEnd {
+				delete(w.Header(), "X-Next-Page")
 			}
 			writeGitLabTeamCatalogJSON(t, w, out)
 		case strings.HasSuffix(path, "/projects"):
@@ -682,6 +686,21 @@ func TestGitLabTeamThatIsNoLongerListedKeepsItsRowsUntilTheRunProvesItGone(t *te
 					t.Errorf("legs = %q, want the not-proven reason", got)
 				}
 			})
+		}
+	})
+
+	t.Run("a subgroup listing whose end GitLab did not state closes nothing", func(t *testing.T) {
+		fake := newDroppedGitLabGroups(t)
+		orgID := seed(t, "no-end-signal", fake)
+		fake.edit(func(f *droppedGitLabGroups) { withoutB(f); f.noEnd = true })
+		result := gitlabDroppedRun(ctx, t, conn, orgID, fake, all, droppedAt[1], staticScopeCensus{})
+		requireGitLabFacts(t, "no end signal", openGitLabOwnership(ctx, t, conn, orgID, "gitlab"), teamA, teamB)
+		requireOpenFacts(t, "no end signal", openMembershipFacts(ctx, t, conn, orgID, "gitlab"), alice, bob)
+		if got := legReasons(result); !strings.Contains(got, "team_listing_incomplete") {
+			t.Errorf("legs = %q, want the team-listing-incomplete reason", got)
+		}
+		if group, _ := fake.lookups(); group != 0 {
+			t.Errorf("the provider was asked for %d groups, want 0", group)
 		}
 	})
 

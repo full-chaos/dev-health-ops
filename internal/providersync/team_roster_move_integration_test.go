@@ -5,6 +5,7 @@ package providersync
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -166,5 +167,59 @@ func TestMoveAdminTeamRosterToMembershipsRefusesAnInvalidCall(t *testing.T) {
 		if err := call(); !errors.Is(err, ErrInvalidConfiguration) {
 			t.Errorf("%s: err = %v, want ErrInvalidConfiguration", name, err)
 		}
+	}
+}
+
+// skipMembershipInsertConn swallows the one INSERT the step writes, so the
+// proof that follows the write finds the open rows unchanged.
+type skipMembershipInsertConn struct {
+	driver.Conn
+}
+
+func (conn skipMembershipInsertConn) Exec(ctx context.Context, query string, args ...any) error {
+	if strings.Contains(query, "INSERT INTO team_memberships") {
+		return nil
+	}
+	return conn.Conn.Exec(ctx, query, args...)
+}
+
+// The step proves its own write with a fresh read: a write that left the open
+// membership rows unchanged is reported as not proven, never as moved.
+func TestMoveAdminTeamRosterToMembershipsFailsWhenTheWriteIsNotProven(t *testing.T) {
+	ctx, conn := newWorkItemEffectsConn(t)
+	at := time.Date(2026, 10, 10, 12, 0, 0, 0, time.UTC)
+	f := rosterMoveFixture{t: t, ctx: ctx, conn: conn, at: at}
+	const org = "roster-move-proof-org"
+	f.team(org, "", "custom:ops", 1, []string{"erin@x.example"})
+
+	outcome, err := MoveAdminTeamRosterToMemberships(ctx, skipMembershipInsertConn{Conn: conn}, org, at, false)
+	if !errors.Is(err, ErrTeamRosterMoveNotProven) {
+		t.Fatalf("err = %v, outcome %+v, want ErrTeamRosterMoveNotProven", err, outcome)
+	}
+}
+
+// More entries than the bound are refused before any row is written.
+func TestMoveAdminTeamRosterToMembershipsRefusesAnEntryCountAboveTheBound(t *testing.T) {
+	ctx, conn := newWorkItemEffectsConn(t)
+	at := time.Date(2026, 10, 10, 12, 0, 0, 0, time.UTC)
+	const org = "roster-move-bound-org"
+	if err := conn.Exec(ctx, `INSERT INTO teams (id, team_uuid, name, members, manual_members, project_keys, repo_patterns, is_active, updated_at, org_id, provider)
+SELECT 'custom:big', generateUUIDv4(), 'big', arrayMap(x -> concat('person-', toString(x)), range(?)), [], [], [], 1, ?, ?, ''`,
+		uint64(TeamRosterMoveBound+1), at.Add(-time.Hour), org); err != nil {
+		t.Fatal(err)
+	}
+	outcome, err := MoveAdminTeamRosterToMemberships(ctx, conn, org, at, false)
+	if !errors.Is(err, ErrTeamRosterMoveTooMany) {
+		t.Fatalf("err = %v, want ErrTeamRosterMoveTooMany", err)
+	}
+	if outcome.AdminToMove != TeamRosterMoveBound+1 || outcome.Moved != 0 {
+		t.Fatalf("outcome = %+v, want %d to move and none moved", outcome, TeamRosterMoveBound+1)
+	}
+	var written uint64
+	if err := conn.QueryRow(ctx, `SELECT count() FROM team_memberships FINAL WHERE org_id = ?`, org).Scan(&written); err != nil {
+		t.Fatal(err)
+	}
+	if written != 0 {
+		t.Fatalf("%d membership rows written above the bound", written)
 	}
 }

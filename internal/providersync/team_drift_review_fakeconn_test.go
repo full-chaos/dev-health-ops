@@ -359,6 +359,43 @@ func TestReviewTeamRowsForDriftDifferentDiffSupersedesStalePending(t *testing.T)
 	}
 }
 
+// The team roster is no longer a stored, managed field (CHAOS-9087): a change
+// staged for the retired field `members` before is superseded the next time
+// its team is reviewed, and the managed fields never include it, so a changed
+// observed roster stages nothing.
+func TestReviewTeamRowsForDriftSupersedesAChangeStagedForTheRetiredRosterField(t *testing.T) {
+	rosterField := "members"
+	staleChangeID := changeIDForTeamField("org-1", "gh:team-a", "members", `[]`, `["x"]`)
+	name := "Same"
+	conn := &fakeTeamDriftConn{
+		// The stored policy of the team still names the retired field.
+		policies:     map[string]teamDriftPolicy{"gh:team-a": {Policy: teamDriftFlagForReviewPolicy, ManagedFields: normalizeManagedFields([]string{"members", "name"})}},
+		existingRows: map[string]teamDriftExistingRow{"gh:team-a": {Name: &name}},
+		existingChanges: []teamDriftChangeRow{
+			{ChangeID: staleChangeID, EntityID: "gh:team-a", Provider: "github", Field: &rosterField,
+				OldValueJSON: `[]`, NewValueJSON: `["x"]`, Status: teamDriftStatusPending, FirstSeenAt: time.Now()},
+		},
+	}
+	teams := []teamDriftTeamView{
+		{ID: "gh:team-a", Provider: "github", NativeTeamKey: "team-a", Name: &name, Members: []string{"observed-1", "observed-2"}},
+	}
+	_, skipped, staged, superseded, err := reviewTeamRowsForDrift(context.Background(), conn, "org-1", teams, time.Now())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(skipped) != 1 || staged != 0 || superseded != 1 {
+		t.Fatalf("skipped=%v staged=%d superseded=%d, want the team skipped, nothing staged, one superseded", skipped, staged, superseded)
+	}
+	if len(conn.insertedChanges) != 1 || conn.insertedChanges[0].ChangeID != staleChangeID || conn.insertedChanges[0].Status != teamDriftStatusSuperseded {
+		t.Fatalf("insertedChanges=%+v, want the stale roster change written superseded and nothing else", conn.insertedChanges)
+	}
+	for _, field := range teamDriftManagedFields {
+		if field == "members" {
+			t.Fatalf("teamDriftManagedFields = %v names the retired roster field", teamDriftManagedFields)
+		}
+	}
+}
+
 // TestReviewTeamRowsForDriftManualPolicySkipsWriteAndStagesNothing pins the
 // CORRECTED semantics (codex review, PR #2002 round 1, P1): project_team's
 // guard is `if policy != FLAG_FOR_REVIEW_POLICY or not detect_drift: return

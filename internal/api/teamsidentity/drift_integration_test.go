@@ -4,6 +4,7 @@ package teamsidentity
 
 import (
 	"testing"
+	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2"
 
@@ -144,5 +145,75 @@ func TestProjectTeamSkipOnConflictOnlyRecordsAnObservation(t *testing.T) {
 	}
 	if after.UpdatedAt != before.UpdatedAt {
 		t.Errorf("skip must not re-write the catalog row at all: UpdatedAt changed")
+	}
+}
+
+// The team roster is no longer a stored field (CHAOS-9087). A change recorded
+// for the retired field `members` before is approved as a status only: the
+// approval writes nothing, with or without a provider observation to read.
+func TestApplyingAChangeOfTheRetiredRosterFieldWritesNothing(t *testing.T) {
+	store, ctx := startTeamsIdentitiesStore(t)
+	const orgID = "org-1"
+	if _, err := store.projectTeam(ctx, orgID, discoveredJiraTeam("ENG", "Engineering"), "skip"); err != nil {
+		t.Fatalf("projectTeam: %v", err)
+	}
+	before, err := store.GetTeam(ctx, orgID, "jira:ENG")
+	if err != nil || before == nil {
+		t.Fatalf("GetTeam: %v, %+v", err, before)
+	}
+	field := "members"
+	if err := store.applyChange(ctx, orgID, reviewChangeRow{
+		ChangeID: "c-members", EntityType: "team", TeamID: "jira:ENG", TeamName: "Engineering", Provider: "jira",
+		ChangeType: "field_changed", Field: &field, OldValueJSON: `[]`, NewValueJSON: `["x"]`,
+	}); err != nil {
+		t.Fatalf("applyChange of the retired roster field: %v", err)
+	}
+	after, err := store.GetTeam(ctx, orgID, "jira:ENG")
+	if err != nil || after == nil {
+		t.Fatalf("GetTeam: %v, %+v", err, after)
+	}
+	if !after.UpdatedAt.Equal(before.UpdatedAt) || len(after.ManualMembers) != 0 {
+		t.Fatalf("the approval of a retired-field change wrote the team: before %+v, after %+v", before, after)
+	}
+}
+
+// A team flagged for review whose stored policy still names the retired
+// field stages no roster change, and a roster change staged earlier is
+// superseded.
+func TestFlagForReviewSupersedesAPendingChangeOfTheRetiredRosterField(t *testing.T) {
+	store, ctx := startTeamsIdentitiesStore(t)
+	const orgID = "org-1"
+	if _, err := store.projectTeam(ctx, orgID, discoveredJiraTeam("ENG", "Engineering"), "skip"); err != nil {
+		t.Fatalf("projectTeam: %v", err)
+	}
+	if err := store.Conn.Exec(ctx, `INSERT INTO team_sync_policies (org_id, team_id, sync_policy, managed_fields, updated_by, updated_at) VALUES (?, 'jira:ENG', 1, ['members', 'name'], NULL, now64(6))`, orgID); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	field := "members"
+	nativeKey := "ENG"
+	if err := store.insertChanges(ctx, []teamDriftChangeRow{{
+		OrgID: orgID, ChangeID: "c-members-old", EntityType: entityTypeTeam, EntityID: "jira:ENG", Provider: "jira",
+		NativeTeamKey: &nativeKey, ChangeType: changeTypeField, Field: &field, OldValueJSON: `[]`, NewValueJSON: `["x"]`,
+		Status: statusPending, FirstSeenAt: now, LastSeenAt: now, UpdatedAt: now,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.projectTeam(ctx, orgID, discoveredJiraTeam("ENG", "Engineering renamed"), "merge"); err != nil {
+		t.Fatalf("projectTeam (flagged): %v", err)
+	}
+	var status string
+	if err := store.Conn.QueryRow(ctx, `SELECT status FROM team_drift_changes FINAL WHERE org_id = ? AND change_id = 'c-members-old'`, orgID).Scan(&status); err != nil {
+		t.Fatal(err)
+	}
+	if status != statusSuperseded {
+		t.Fatalf("status of the roster change = %q, want %q", status, statusSuperseded)
+	}
+	var rosterChanges, nameChanges uint64
+	if err := store.Conn.QueryRow(ctx, `SELECT countIf(field = 'members' AND status = 'pending'), countIf(field = 'name' AND status = 'pending') FROM team_drift_changes FINAL WHERE org_id = ? AND entity_id = 'jira:ENG'`, orgID).Scan(&rosterChanges, &nameChanges); err != nil {
+		t.Fatal(err)
+	}
+	if rosterChanges != 0 || nameChanges != 1 {
+		t.Fatalf("pending changes: roster %d, name %d, want 0 and 1 (the rename is staged, the roster is not a field)", rosterChanges, nameChanges)
 	}
 }

@@ -21,6 +21,7 @@ type QualityStatsFilters struct {
 	StartTS            time.Time
 	EndTS              time.Time
 	RepoIDs            []string
+	ReposNamed         bool // the request names repositories (teamscope.NamedRepoRefs)
 	TeamScopeCondition string
 	TeamScopeBindings  []dhclickhouse.Binding
 	Themes             []string
@@ -74,7 +75,7 @@ func (r *Reader) FetchInvestmentQualityStats(ctx context.Context, filters Qualit
 	}
 
 	categorySQL, categoryBindings := filters.categoryClause()
-	scopeSQL, scopeBindings := combinedScopeClause(filters.RepoIDs, filters.TeamScopeCondition, filters.TeamScopeBindings)
+	scopeSQL, scopeBindings := combinedScopeClause(filters.ReposNamed, filters.RepoIDs, filters.TeamScopeCondition, filters.TeamScopeBindings)
 
 	query := fmt.Sprintf(`
 SELECT

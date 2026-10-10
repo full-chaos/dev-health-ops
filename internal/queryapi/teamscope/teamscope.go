@@ -28,11 +28,14 @@
 package teamscope
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"time"
 
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
+
+	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 )
 
 // Binding names carried by RepoCondition's own bindings. They are prefixed
@@ -205,4 +208,93 @@ func NamedRepoRefs(scopeLevel string, scopeIDs, whatRepos []string) []string {
 		}
 	}
 	return refs
+}
+
+// RowQuerier is the read boundary ResolveRepoRef needs.
+type RowQuerier interface {
+	Query(ctx context.Context, statement string, bindings []dhclickhouse.Binding) (dhclickhouse.RowScanner, error)
+}
+
+// ResolveRepoRef ports resolve_repo_id (api/queries/scopes.py:19-50): a UUID-shaped
+// reference is verified against repos.id of the org, anything else matches
+// repos.repo. settings is the caller's own "SETTINGS ..." clause (each package keeps
+// its own time budget) and errPrefix its own error wording: both are the only
+// differences the seven copies of this function had. ok is false when nothing
+// resolves.
+func ResolveRepoRef(ctx context.Context, client RowQuerier, repoRef, orgID, settings, errPrefix string) (id string, ok bool, err error) {
+	var query string
+	var bindings []dhclickhouse.Binding
+	if parsed, perr := pythonparity.ParseUUID(repoRef); perr == nil {
+		query = fmt.Sprintf(`
+SELECT toString(id) AS id
+FROM repos FINAL
+WHERE toString(id) = {repo_id:String}
+  AND org_id = {org_id:String}
+LIMIT 1
+%s
+`, settings)
+		bindings = []dhclickhouse.Binding{
+			{Name: "repo_id", Value: parsed.String()},
+			{Name: "org_id", Value: orgID},
+		}
+	} else {
+		query = fmt.Sprintf(`
+SELECT toString(id) AS id
+FROM repos FINAL
+WHERE repo = {repo_name:String}
+  AND org_id = {org_id:String}
+LIMIT 1
+%s
+`, settings)
+		bindings = []dhclickhouse.Binding{
+			{Name: "repo_name", Value: repoRef},
+			{Name: "org_id", Value: orgID},
+		}
+	}
+	rows, err := client.Query(ctx, query, bindings)
+	if err != nil {
+		return "", false, fmt.Errorf("%sresolve repo id: %w", errPrefix, err)
+	}
+	defer rows.Close()
+	if !rows.Next() {
+		if err := rows.Err(); err != nil {
+			return "", false, fmt.Errorf("%siterate resolve repo id rows: %w", errPrefix, err)
+		}
+		return "", false, nil
+	}
+	if err := rows.Scan(&id); err != nil {
+		return "", false, fmt.Errorf("%sscan resolve repo id row: %w", errPrefix, err)
+	}
+	return id, true, nil
+}
+
+// ResolveRepoRefs ports resolve_repo_ids (api/queries/scopes.py:53-69): every
+// non-empty reference, one lookup each (bounded by what the caller named), those
+// that resolve in order.
+func ResolveRepoRefs(ctx context.Context, client RowQuerier, repoRefs []string, orgID, settings, errPrefix string) ([]string, error) {
+	var resolved []string
+	for _, ref := range repoRefs {
+		if ref == "" {
+			continue
+		}
+		id, ok, err := ResolveRepoRef(ctx, client, ref, orgID, settings, errPrefix)
+		if err != nil {
+			return nil, err
+		}
+		if ok {
+			resolved = append(resolved, id)
+		}
+	}
+	return resolved, nil
+}
+
+// RepoScopeApplies is the ONE gate of the surfaces that read a repository filter
+// (CHAOS-9104, D5844, D5900): the repository condition applies for a team or repo
+// scope (as the reference does) and, beyond it, whenever the request NAMES
+// repositories (teamscope.NamedRepoRefs) under any scope level: a repository
+// filter narrows under any scope, never widens. The reference gated by the scope
+// level alone, so an organization scope with what.repos was served unfiltered;
+// that divergence is declared at the surfaces that read this gate.
+func RepoScopeApplies(scopeLevel string, reposNamed bool) bool {
+	return scopeLevel == "team" || scopeLevel == "repo" || reposNamed
 }

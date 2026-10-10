@@ -64,7 +64,9 @@ func themeAllocationFromEffort(rows []investmentexplain.ThemeEffortRow) []Rework
 	kept := make([]investmentexplain.ThemeEffortRow, 0, len(rows))
 	total := 0.0
 	for _, row := range rows {
-		if !units.IsTheme(row.Theme) {
+		// A zero-weight key of a dense distribution is not a share: the Investment page drops
+		// non-positive rows too (investment/response.go), so the tile never lists a 0% theme.
+		if !units.IsTheme(row.Theme) || row.Effort <= 0 {
 			continue
 		}
 		kept = append(kept, row)

@@ -262,8 +262,15 @@ func BuildResponse(ctx context.Context, chClient QueryClient, pgClient PGQueryCl
 		latestSuccessfulSyncAt = synced
 	}
 
+	// The allocation reads investment_metrics_daily, keyed by repository AND team.
+	// The reference chose its scope by scope level alone, so a team scope that also
+	// named a repository served the TEAM's number. A repository filter narrows under
+	// any scope (D5844, D5900, CHAOS-9150): a named repository selects the repository
+	// scope, in which the team's repositories AND the named ones apply, and a named
+	// repository that resolves to nothing leaves nothing (D5841). DECLARED DIVERGENCE
+	// from the reference, for exactly the request that names a repository.
 	allocationScope := "team"
-	if f.Scope.Level == "repo" {
+	if f.Scope.Level == "repo" || repoFilterRequested(f) {
 		allocationScope = "repo"
 	}
 	allocationScopeFilter, allocationScopeBindings, err := scopeFilterForMetric(ctx, chClient, allocationScope, f, orgID, "team_id", "repo_id", now)

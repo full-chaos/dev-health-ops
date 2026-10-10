@@ -271,7 +271,7 @@ func TestGitLabTeamCatalogClosesProviderAccessRowsGitLabNoLongerReturns(t *testi
 		requireGitLabFacts(t, "after empty listing", openGitLabOwnership(ctx, t, conn, org, "gitlab"), rootSvc, rootOld)
 	})
 
-	t.Run("a group GitLab no longer lists is not listed, so its rows stay open", func(t *testing.T) {
+	t.Run("a group GitLab no longer lists closes on a listing of one response (CHAOS-9102)", func(t *testing.T) {
 		org, fake := "gl-snap-unlisted-group", newGitLabSnapshotServer(t)
 		seedTree(fake)
 		if _, err := gitlabSnapshotRun(ctx, t, conn, org, fake, projectsOnly, false, t0); err != nil {
@@ -282,7 +282,7 @@ func TestGitLabTeamCatalogClosesProviderAccessRowsGitLabNoLongerReturns(t *testi
 			t.Fatal(err)
 		}
 		requireGitLabFacts(t, "after the subgroup vanished", openGitLabOwnership(ctx, t, conn, org, "gitlab"),
-			rootSvc, rootOld, teamAApi, teamAWeb)
+			rootSvc, rootOld)
 	})
 
 	t.Run("a failed project listing closes nothing, under non-strict and strict", func(t *testing.T) {

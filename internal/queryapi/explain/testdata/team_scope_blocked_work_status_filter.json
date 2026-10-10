@@ -11,7 +11,9 @@
       "value": 12.0,
       "delta_pct": 50.0,
       "evidence_link": "/api/v1/drilldown/prs?metric=blocked_work&scope_type=team&scope_id=team-ops",
-      "display_name": "Team Ops"
+      "display_name": "Team Ops",
+      "has_data": true,
+      "has_prior_data": true
     }
   ],
   "contributors": [
@@ -19,9 +21,11 @@
       "id": "team-ops",
       "label": "Team Ops",
       "value": 12.0,
-      "delta_pct": 0.0,
+      "delta_pct": null,
       "evidence_link": "/api/v1/drilldown/prs?metric=blocked_work&scope_type=team&scope_id=team-ops",
-      "display_name": "Team Ops"
+      "display_name": "Team Ops",
+      "has_data": true,
+      "has_prior_data": false
     }
   ],
   "drilldown_links": {

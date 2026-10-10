@@ -178,8 +178,20 @@ func TestHomeChangeFailureRate_FollowsTheViewsWindowAndSubject(t *testing.T) {
 		t.Errorf("series of repo A = %+v, want day 1 = 1 and day 2 = 0", points)
 	}
 
-	// Drivers: only a repository with a defined rate can drive the metric. B
-	// (unknown) and C (not applicable) are not drivers at 0%.
+	// Drivers: only a repository with a defined rate AND a rate in the comparison
+	// window can drive the metric. B (unknown) and C (not applicable) are not
+	// drivers at 0%, and a repository with no comparison row is not a driver of a
+	// percent it has no part in: none of them has one yet.
+	none, err := fetchMetricDriverDelta(ctx, client, spec.Table, spec.Column, "repo_id", day1, after, day1.AddDate(0, 0, -7), day1, "", nil, orgID, 10)
+	if err != nil {
+		t.Fatalf("fetchMetricDriverDelta: %v", err)
+	}
+	if len(none) != 0 {
+		t.Errorf("change failure rate drivers without a comparison row = %+v, want none", none)
+	}
+	priorDay := day1.AddDate(0, 0, -3)
+	write(orgID, repoA, priorDay, newer, changefailure.Counts{Deployments: 4, FailedNative: 1, IncidentsDirect: 1})
+	write(orgID, repoD, priorDay, newer, changefailure.Counts{Deployments: 4, FailedNative: 2, IncidentsDirect: 1})
 	drivers, err := fetchMetricDriverDelta(ctx, client, spec.Table, spec.Column, "repo_id", day1, after, day1.AddDate(0, 0, -7), day1, "", nil, orgID, 10)
 	if err != nil {
 		t.Fatalf("fetchMetricDriverDelta: %v", err)

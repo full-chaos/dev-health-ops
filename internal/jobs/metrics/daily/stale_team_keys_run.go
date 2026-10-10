@@ -52,6 +52,10 @@ type StaleKeyRetractor interface {
 type RunStaleKeyRetractor struct {
 	conn   driver.Conn
 	nowUTC func() time.Time
+	// presentRepositories reads the repositories the organization holds at
+	// the time of the call: the same read that makes the repository list of a
+	// run at its dispatch.
+	presentRepositories func(ctx context.Context, organizationID string) ([]RepositoryID, error)
 }
 
 var errRunStaleKeyRetractorUnavailable = errors.New("daily stale team key retractor unavailable")
@@ -71,8 +75,9 @@ func RunStaleKeyTables() []StaleKeyTable {
 // OrganizationRunStaleKeyTables are the tables whose keys a partition decides
 // inside its own repositories. At the end of a run of the whole organization
 // RunStaleKeyRetractor supersedes their live keys of a repository that is in no
-// partition of the run (retractStaleTeamKeysOutsideRun); a run of some
-// repositories leaves them alone.
+// partition of the run AND that the organization does not hold any more
+// (retractStaleTeamKeysOutsideRun); a run of some repositories leaves them
+// alone.
 func OrganizationRunStaleKeyTables() []StaleKeyTable {
 	return []StaleKeyTable{
 		teamkeytables.TeamMetricsDaily,
@@ -85,8 +90,28 @@ func NewRunStaleKeyRetractor(conn driver.Conn) (*RunStaleKeyRetractor, error) {
 	if conn == nil {
 		return nil, errRunStaleKeyRetractorUnavailable
 	}
-	return &RunStaleKeyRetractor{conn: conn, nowUTC: func() time.Time { return time.Now().UTC() }}, nil
+	discoverer, err := NewClickHouseRepositoryDiscoverer(conn)
+	if err != nil {
+		return nil, errRunStaleKeyRetractorUnavailable
+	}
+	return &RunStaleKeyRetractor{
+		conn: conn, nowUTC: func() time.Time { return time.Now().UTC() },
+		presentRepositories: discoverer.RepositoryIDs,
+	}, nil
 }
+
+// ErrOrganizationRepositoriesNotRead is returned when the end of a run of the
+// whole organization cannot read the repositories the organization holds now.
+// Without that read no key of a repository outside the run is proven to be of
+// a repository that is gone, so nothing is superseded in the
+// repository-scoped tables.
+var ErrOrganizationRepositoriesNotRead = errors.New("daily stale team keys: the repositories of the organization are not read")
+
+// StaleKeysRepositoryNotInRunLogMessage is the line the end of a run of the
+// whole organization writes when the organization holds a repository that is
+// in no partition of the run (the repository list of a run is the one of its
+// dispatch). The stored keys of such a repository are left as they are.
+const StaleKeysRepositoryNotInRunLogMessage = "daily stale team keys: the organization holds a repository that is in no partition of the run; its keys are left as they are"
 
 // StaleKeysRetractedLogMessage is the one line a run writes when its
 // retraction is done.
@@ -225,10 +250,19 @@ func (retractor *RunStaleKeyRetractor) RetractStaleKeys(ctx context.Context, run
 			return teamkeytables.AIGovernanceCoverageDaily.Table, rows, zeros, err
 		},
 	}
+	// left is, per repository-scoped table, the live keys of a repository
+	// that is in no partition of the run and that the organization holds now.
+	left := make(map[string]int, len(OrganizationRunStaleKeyTables()))
+	notInRun := 0
 	if wholeOrganization {
 		// The tables whose keys a partition decides inside its own
-		// repositories: the keys of a repository that is in no partition of
-		// this run are the run's to supersede.
+		// repositories. The repository list of the run is the one of its
+		// dispatch, so "in no partition of this run" does not say that a
+		// repository is gone: a repository the organization got later, and
+		// that a run of its own computed for the day, is in no partition
+		// too. The organization's repositories are read again here, and a key
+		// is superseded only when its repository is in neither set. A run
+		// never hides a key that can be true.
 		// scope.repoIDs is the run's repositories, parsed: the text form of
 		// each id is the form the keys hold.
 		owned := make([][]string, 0, len(scope.repoIDs))
@@ -236,9 +270,26 @@ func (retractor *RunStaleKeyRetractor) RetractStaleKeys(ctx context.Context, run
 			owned = append(owned, []string{repoID.String()})
 		}
 		ownedScope := newStaleKeyScope(owned...)
+		if retractor.presentRepositories == nil {
+			return 0, fmt.Errorf("%w: no read is wired", ErrOrganizationRepositoriesNotRead)
+		}
+		present, err := retractor.presentRepositories(ctx, run.OrganizationID)
+		if err != nil {
+			return 0, fmt.Errorf("%w: %w", ErrOrganizationRepositoriesNotRead, err)
+		}
+		presentTuples := make([][]string, 0, len(present))
+		for _, repositoryID := range present {
+			presentTuples = append(presentTuples, []string{string(repositoryID)})
+			if _, inRun := ownedScope[string(repositoryID)]; !inRun {
+				notInRun++
+			}
+		}
+		presentScope := newStaleKeyScope(presentTuples...)
 		for _, table := range OrganizationRunStaleKeyTables() {
 			steps = append(steps, func() (string, int, int, error) {
-				rows, err := retractStaleTeamKeysOutsideRun(ctx, conn, table, run.OrganizationID, day, ownedScope, retractor.nowUTC())
+				rows, kept, err := retractStaleTeamKeysOutsideRun(ctx, conn, table, run.OrganizationID, day,
+					ownedScope, presentScope, retractor.nowUTC())
+				left[table.Table] = kept
 				return table.Table, rows, rows, err
 			})
 		}
@@ -263,6 +314,16 @@ func (retractor *RunStaleKeyRetractor) RetractStaleKeys(ctx context.Context, run
 			return total, fmt.Errorf("%w: stale team keys of %s failed after %d row(s) already landed: %w",
 				ErrPartialWrite, table, total, err)
 		}
+	}
+	if notInRun > 0 {
+		slog.Default().Warn(StaleKeysRepositoryNotInRunLogMessage,
+			"run_id", run.ID, "organization_id", run.OrganizationID,
+			"target_day", day.Format("2006-01-02"),
+			"repositories", len(run.DiscoveredRepoIDs),
+			"repositories_not_in_run", notInRun,
+			"team_metrics_daily_keys_left", left[teamkeytables.TeamMetricsDaily.Table],
+			"ai_impact_metrics_daily_keys_left", left[teamkeytables.AIImpactMetricsDaily.Table],
+		)
 	}
 	slog.Default().Info(StaleKeysRetractedLogMessage,
 		"run_id", run.ID, "organization_id", run.OrganizationID,

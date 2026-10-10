@@ -1522,9 +1522,20 @@ WHERE the rule runs depends on who can write a key:
   settles them all; (b) supersedes every live key of the day that it did not compute, of any provider and any work
   scope; and (c) in the tables whose keys a partition decides inside its own repositories (`team_metrics_daily`,
   `ai_impact_metrics_daily`; `OrganizationRunStaleKeyTables`) supersedes the live keys of a repository that is in no
-  partition of the run, the `team_metrics_daily` rows with no repository among them. A run of some repositories does
-  none of this: it stays inside the work scopes its repositories reach, and a key of another scope is never its to
-  supersede. The scope of a run is read from the store at the end of the run (`LoadRun`), not from the claim.
+  partition of the run AND that the organization does not hold any more, the `team_metrics_daily` rows with no
+  repository among them. A run of some repositories does none of this: it stays inside the work scopes its
+  repositories reach, and a key of another scope is never its to supersede. The scope of a run is read from the store
+  at the end of the run (`LoadRun`), not from the claim.
+- **A retraction never hides a key that can be true.** The repository list of a run is the one of its dispatch, so
+  "in no partition of the run" does not say that a repository is gone: a repository the organization got later, which
+  a run of its own computed for the day, is in no partition too, and so is a repository of a newer run when an older
+  run ends late or its end is driven again. For (c) the end of an organization-wide run therefore reads the
+  organization's repositories AGAIN, with the read that makes the list of a run
+  (`ClickHouseRepositoryDiscoverer.RepositoryIDs`), and supersedes a key only when its repository is in NEITHER the
+  run's list NOR that present set. A key of a repository that is present and in no partition stays as it is; the run
+  logs one WARN line with the count of such repositories and of the keys left in each table, and the repository's own
+  run or the next organization-wide run decides them. When the second read fails the step fails
+  (`ErrOrganizationRepositoriesNotRead`) and writes nothing: no key is superseded on a list that is not proven.
 
 A row of zeros is strictly newer than the row it supersedes, never of the same `computed_at`: with an equal
 `computed_at` only a FINAL read follows the order of the inserts, and a reader that takes the newest row by `argMax`

@@ -403,52 +403,62 @@ const StaleKeysEmptyOrganizationDayLogMessage = "daily stale team keys: the orga
 // retractStaleTeamKeysOutsideRun is the rule of a run of the whole
 // organization for a table whose keys the partitions decide inside their own
 // repositories (table.Scope is the repository): a live key of the day whose
-// repository is in NO partition of the run gets a row of zeros. The keys of
-// the run's repositories are left to their partition, which read and wrote
-// them.
+// repository is in NO partition of the run, and that the organization does not
+// hold now, gets a row of zeros. The keys of the run's repositories are left
+// to their partition, which read and wrote them.
 //
-// Such a key is of a repository the organization-wide run did not compute
-// (a repository that is gone, or a row written before the table held a
-// repository), so no compute of this run can make it right. owned is the
-// repositories of every partition of the run, as scope tuples.
+// Such a key is of a repository that is gone, or of a row written before the
+// table held a repository, so no compute can make it right. owned is the
+// repositories of every partition of the run, present the repositories the
+// organization holds now, both as scope tuples. A key of a repository that is
+// present and in no partition is left as it is and counted (kept): the run's
+// list is the one of its dispatch, and a run of that repository alone can
+// have written the key since.
 //
 // The version is the clock, raised above every stored row of the day: the
 // row of zeros is then the newest row of its key, and for a reader that keeps
 // the newest generation of a repository it is the whole generation.
 func retractStaleTeamKeysOutsideRun(
 	ctx context.Context, conn staleKeyConn, table StaleKeyTable, organizationID string, day time.Time,
-	owned staleKeyScope, clock time.Time,
-) (int, error) {
+	owned, present staleKeyScope, clock time.Time,
+) (written, kept int, err error) {
 	if err := table.Valid(); err != nil {
-		return 0, fmt.Errorf("%w: %v", ErrInvalidState, err)
+		return 0, 0, fmt.Errorf("%w: %v", ErrInvalidState, err)
 	}
 	if conn == nil || strings.TrimSpace(organizationID) == "" || day.IsZero() || clock.IsZero() || len(table.Scope) == 0 {
-		return 0, ErrInvalidState
+		return 0, 0, ErrInvalidState
 	}
 	live, _, err := loadLiveStaleKeys(ctx, conn, table, organizationID, day)
 	if err != nil {
-		return 0, err
+		return 0, 0, err
 	}
 	var outside []staleKey
 	for _, key := range live {
-		if _, inRun := owned[table.ScopeTuple(key)]; !inRun {
-			outside = append(outside, key)
+		repository := table.ScopeTuple(key)
+		if _, inRun := owned[repository]; inRun {
+			continue
 		}
+		if _, held := present[repository]; held {
+			kept++
+			continue
+		}
+		outside = append(outside, key)
 	}
 	if len(outside) == 0 {
-		return 0, nil
+		return 0, kept, nil
 	}
 	sort.Slice(outside, func(left, right int) bool { return outside[left].text() < outside[right].text() })
 	newest, err := newestStaleKeyVersion(ctx, conn, table, organizationID, day)
 	if err != nil {
-		return 0, err
+		return 0, kept, err
 	}
 	version, err := staleKeyVersionAfter(table, clock, newest)
 	if err != nil {
-		return 0, err
+		return 0, kept, err
 	}
-	return writeStaleKeyZeroRows(ctx, conn, table, organizationID, day, outside,
+	written, err = writeStaleKeyZeroRows(ctx, conn, table, organizationID, day, outside,
 		func(staleKey) time.Time { return version })
+	return written, kept, err
 }
 
 // newestStaleKeyVersion is the newest computed_at of the rows of one

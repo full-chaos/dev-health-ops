@@ -6,6 +6,7 @@
 package chclient
 
 import (
+	"context"
 	"errors"
 
 	chdriver "github.com/ClickHouse/clickhouse-go/v2"
@@ -57,6 +58,12 @@ const (
 // BoundHit reports which bound a ClickHouse error hit, with its code; it is
 // BoundNone for any other error.
 func BoundHit(err error) (Bound, int32) {
+	// The client enforces max_execution_time with a context deadline, so a time
+	// bound reaches the caller as a wrapped context.DeadlineExceeded, not as a
+	// ClickHouse exception (round 94 F1); the server's own code 159 is the same bound.
+	if errors.Is(err, context.DeadlineExceeded) {
+		return BoundTime, codeTimeoutExceeded
+	}
 	var exception *chdriver.Exception
 	if !errors.As(err, &exception) {
 		return BoundNone, 0

@@ -44,7 +44,10 @@ func TestEveryQueryAPIClickHouseClientIsBuiltFromTheSharedConstructor(t *testing
 			if m := call.FindStringSubmatch(line); m != nil {
 				checked++
 				arg := m[1]
-				if !strings.Contains(arg, "newUnrestrictedReadClickHouseOptions(") && !strings.Contains(arg, "chclient.Options(") && strings.TrimSpace(strings.TrimSuffix(arg, ")")) != "opts" {
+				// a variable named opts counts only when this file builds it from the shared path
+				optsFromSharedPath := strings.TrimSpace(strings.TrimSuffix(arg, ")")) == "opts" &&
+					(strings.Contains(src, "opts := newUnrestrictedReadClickHouseOptions(") || strings.Contains(src, "opts := chclient.Options("))
+				if !strings.Contains(arg, "newUnrestrictedReadClickHouseOptions(") && !strings.Contains(arg, "chclient.Options(") && !optsFromSharedPath {
 					t.Errorf("%s builds a ClickHouse client without the shared options: %s", rel, trimmed)
 				}
 			}

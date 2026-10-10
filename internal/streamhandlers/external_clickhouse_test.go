@@ -766,9 +766,9 @@ func TestClickHouseExternalSinkAbortsTeamWriteWhenCreatedAtReadFails(t *testing.
 	}
 }
 
-// A pushed identity names team ids, and a writer makes the team row exist
-// before any row that names the team: the teams of a batch are written before
-// every other kind of it, also
+// A pushed identity names team ids: the teams of a batch are written before
+// the identities that name them, as the reference's sink writes them. They are
+// written before every other kind of the batch, also
 // before a kind whose name sorts earlier (identity.v1, commit.v1). The other
 // kinds keep their sorted order.
 func TestThePushedTeamsOfABatchAreWrittenBeforeTheIdentitiesThatNameThem(t *testing.T) {

@@ -62,10 +62,12 @@ func (s *ClickHouseExternalBatchSink) Write(ctx context.Context, source external
 		kinds = append(kinds, kind)
 	}
 	slices.Sort(kinds)
-	// The teams of a batch are written FIRST: a writer makes the team row
-	// exist before any row that names the team. An identity.v1 record names
-	// team ids, and in the sorted order the identities were written before
-	// the teams of their own batch.
+	// The teams of a batch are written FIRST. An identity.v1 record names
+	// team ids, so the team rows of a batch are stored before the identities
+	// that name them, as the reference's sink stores them (its order is
+	// repository, commit, pull request, review, team, identity). In the
+	// sorted order the identities were written before the teams of their own
+	// batch.
 	slices.SortStableFunc(kinds, func(first, second string) int {
 		switch {
 		case first == "team.v1" && second != "team.v1":

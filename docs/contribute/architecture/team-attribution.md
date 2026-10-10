@@ -1659,6 +1659,23 @@ Limits:
 - The run-level step reads the items of every work scope of the run once more and writes their rows once more. Its
   cost is about one more read and write of the work-item families for each run.
 
+#### 0.4i A push batch: the team rows before the identities that name them (CHAOS-9125)
+
+- **Order.** A push batch (`internal/streamhandlers`) writes its `team.v1` rows before every other kind. An
+  `identity.v1` record names team ids (`identities.team_ids`), and the kinds of a batch were written in sorted
+  order, so the identities of a batch were stored before the teams of the same batch. The Python sink stores
+  the teams before the identities (repository, commit, pull request, review, team, identity). Each kind is
+  still written on its own: a failed kind is skipped whole, the others are written, and the batch fails and is
+  retried whole.
+- **An identity can name a team the source never pushes.** The identity is stored as pushed, no team row is
+  made up for it, and the record is not refused. After the batch the sink writes ONE WARN line, `external push:
+  identities name team ids that have no team row`, with counts only: `identities` (identity records of the
+  batch), `team_ids_named`, `team_ids_with_no_team_row`, the organization and the source system. It holds no
+  team id and no identity id: either can be a person's own words. A failed count read is logged at WARN too
+  and does not fail the write, because the rows of the batch are stored.
+- **Not changed here.** What a reader makes of a team id with no team row (section 0.4c: the cascade keeps it
+  as an unknown team).
+
 #### 0.4a Provider × entity **consumption** (functional — what `run_team_autoimport` actually pulls)
 
 | provider | teams | projects | members | repo ownership | member store written |

@@ -161,6 +161,20 @@ SELECT id, team_uuid, name, members, now64(6) + INTERVAL 1 SECOND, org_id, provi
 			if !reflect.DeepEqual(teams, []string{stays}) || !reflect.DeepEqual(names, map[string]string{stays: "Apps"}) {
 				t.Errorf("filter options after the delete: teams %v names %v, want only %s", teams, names, stays)
 			}
+			// The row of the deleted team keeps every field it had: a reader of
+			// the table finds for it what it finds for any inactive team.
+			var kept struct {
+				Name                        string
+				Members, Manual, Keys, Repo []string
+			}
+			if err := conn.QueryRow(ctx, `SELECT name, members, manual_members, project_keys, repo_patterns FROM teams FINAL WHERE org_id = ? AND id = ?`,
+				org, gone).Scan(&kept.Name, &kept.Members, &kept.Manual, &kept.Keys, &kept.Repo); err != nil {
+				t.Fatal(err)
+			}
+			if kept.Name != "Platform" || !reflect.DeepEqual(kept.Members, members) || !reflect.DeepEqual(kept.Manual, members) ||
+				!reflect.DeepEqual(kept.Keys, keys) || !reflect.DeepEqual(kept.Repo, patterns) {
+				t.Errorf("the row of the deleted team = %+v, want the name, members, project keys and repository patterns it had", kept)
+			}
 			// Neither the refused update nor the second delete wrote a version.
 			var rows, activeRows, marked uint64
 			if err := conn.QueryRow(ctx, `SELECT count(), countIf(is_active = 1), countIf(deleted_at IS NOT NULL)

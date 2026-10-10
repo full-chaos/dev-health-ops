@@ -5,6 +5,7 @@ package providersync
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -69,7 +70,7 @@ func TestTeamCatalogTurnKeepsOneOpenRowOfANewFactAcrossOverlappingRuns(t *testin
 		t.Fatal(err)
 	}
 	t.Cleanup(pool.Close)
-	turn := PostgresTeamCatalogTurn{Pool: pool, Poll: 50 * time.Millisecond}
+	turn := NewPostgresTeamCatalogTurn(pool, 50*time.Millisecond)
 
 	openRows := func(org string) uint64 {
 		t.Helper()
@@ -171,5 +172,54 @@ WHERE l.locktype = 'advisory' AND l.pid <> pg_backend_pid()`); err != nil {
 			t.Fatalf("the turn was not freed by the loss of its holder: %v", err)
 		}
 		next()
+	})
+
+	t.Run("holders never take the last connection: the run's own queries still get one (round 111 P1)", func(t *testing.T) {
+		small, err := pgxpool.New(ctx, instance.URI+"&pool_max_conns=4")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer small.Close()
+		squad := NewPostgresTeamCatalogTurn(small, 20*time.Millisecond)
+		// four sync workers, four domain connections: each run holds its turn and then queries the SAME pool
+		var wg sync.WaitGroup
+		var failed atomic.Int32
+		var holding, peak atomic.Int32
+		for i := 0; i < 4; i++ {
+			wg.Add(1)
+			go func(provider string) {
+				defer wg.Done()
+				runCtx, stop := context.WithTimeout(ctx, 20*time.Second)
+				defer stop()
+				release, err := squad.Serialize(runCtx, "org-squad", provider)
+				if err != nil {
+					failed.Add(1)
+					t.Errorf("%s: no turn: %v", provider, err)
+					return
+				}
+				defer release()
+				now := holding.Add(1)
+				for {
+					seen := peak.Load()
+					if now <= seen || peak.CompareAndSwap(seen, now) {
+						break
+					}
+				}
+				time.Sleep(300 * time.Millisecond) // the run is under way, then it queries the pool
+				var one int
+				if err := small.QueryRow(runCtx, `SELECT 1`).Scan(&one); err != nil {
+					failed.Add(1)
+					t.Errorf("%s: the run's own query starved behind the held turns: %v", provider, err)
+				}
+				holding.Add(-1)
+			}([]string{"linear", "github", "gitlab", "jira"}[i])
+		}
+		wg.Wait()
+		if failed.Load() != 0 {
+			t.Fatalf("%d runs failed", failed.Load())
+		}
+		if peak.Load() > 3 {
+			t.Errorf("%d runs held a turn at once on a pool of 4 connections, want at most 3", peak.Load())
+		}
 	})
 }

@@ -3,6 +3,7 @@ package workerservice
 import (
 	"context"
 	"errors"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"os"
 	"regexp"
 	"strings"
@@ -70,7 +71,7 @@ func TestNativeTeamCatalogRegistryIsOnlyHandedToTheDispatchers(t *testing.T) {
 		t.Fatal(err)
 	}
 	allowed := []*regexp.Regexp{
-		regexp.MustCompile(`^nativeTeamCatalogCollectors := newNativeTeamCatalogCollectors\(clickhouseConnection, providersync\.PostgresTeamCatalogTurn\{Pool: postgresDatabase\.pools\.Domain\}, teamCatalogScopeCensus\{pool: postgresDatabase\.pools\.Domain\}\)$`),
+		regexp.MustCompile(`^nativeTeamCatalogCollectors := newProductionTeamCatalogCollectors\(clickhouseConnection, postgresDatabase\.pools\.Domain\)$`),
 		regexp.MustCompile(`^Native:\s+nativeTeamCatalogCollectors,$`),
 		regexp.MustCompile(`^native:\s+nativeTeamCatalogCollectors,$`),
 	}
@@ -124,11 +125,26 @@ func TestEveryRegisteredTeamCatalogCollectorTakesItsTurnFirst(t *testing.T) {
 			t.Errorf("%s: err = %v, turns = %v; want the turn of (org-1, %s) taken once before the carry's read", provider, err, turn.calls, provider)
 		}
 	}
-	data, err := os.ReadFile("sync_dispatch.go")
+	// The production constructor, built from a pool (no connection is made), hands every
+	// collector the Postgres turn: checked on what it returns, not on the text of its call site.
+	pool, err := pgxpool.New(context.Background(), "postgres://turn:turn@127.0.0.1:1/turn?pool_max_conns=4")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(data), "newNativeTeamCatalogCollectors(clickhouseConnection, providersync.PostgresTeamCatalogTurn{Pool: postgresDatabase.pools.Domain}") {
-		t.Error("the production registry is not built with the Postgres turn: two overlapping runs of one integration can leave two open rows (CHAOS-9140)")
+	defer pool.Close()
+	production := newProductionTeamCatalogCollectors(&teamCatalogCarryConn{}, pool)
+	if len(production) < 4 {
+		t.Fatalf("production registry = %d collectors, want every provider", len(production))
+	}
+	for provider, collector := range production {
+		carried, ok := collector.(providersync.CarryFirstTeamCatalogCollector)
+		if !ok {
+			t.Errorf("%s: %T is not behind the carry wrapper", provider, collector)
+			continue
+		}
+		turn, ok := carried.Serializer.(*providersync.PostgresTeamCatalogTurn)
+		if !ok || turn == nil {
+			t.Errorf("%s: serializer is %T, want the Postgres turn (CHAOS-9140)", provider, carried.Serializer)
+		}
 	}
 }

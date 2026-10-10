@@ -86,7 +86,7 @@ func TestTeamCatalogTurnThroughATransactionModePgBouncer(t *testing.T) {
 	})
 
 	t.Run("the turn (xact lock in a held transaction) excludes and releases through the pooler", func(t *testing.T) {
-		turn := PostgresTeamCatalogTurn{Pool: pool, Poll: 30 * time.Millisecond}
+		turn := NewPostgresTeamCatalogTurn(pool, 30*time.Millisecond)
 		release, err := turn.Serialize(ctx, "org-proof-9140", "linear")
 		if err != nil {
 			t.Fatal(err)

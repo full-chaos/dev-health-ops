@@ -614,7 +614,7 @@ func (collector GitLabTeamCatalogCollector) CollectTeamCatalog(
 	var keptMemberships []gitlabTeamCatalogMembershipRow
 	var membershipsSkippedManualConflict, membershipsStagedForReview, driftChangesSuperseded int
 	if selections.Members {
-		// CHAOS-4444 / codex review round 1, P2: batch.Rows.Teams only exists `if selections.Teams` --
+		// batch.Rows.Teams only exists `if selections.Teams` --
 		// deriving observed scopes from it undercounts to EMPTY whenever a
 		// run selects Members without Teams. ObservedMembershipTeamIDs is
 		// populated whenever a group's member fetch succeeds, independent

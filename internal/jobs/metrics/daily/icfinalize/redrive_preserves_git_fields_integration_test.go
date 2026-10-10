@@ -80,8 +80,8 @@ func TestRedrivePreservesGitFields(t *testing.T) {
 	// keeps the team NAME it was read with (a pass-through column, as every
 	// other one here); a person with NO team is written as unassigned, id and
 	// name, whatever the stored row held.
-	executor.SetTeamMapper(func(context.Context, string, time.Time) (PersonTeams, error) {
-		return func(string) []string { return []string{"team-a"} }, nil
+	executor.SetTeamMapper(func(context.Context, string, time.Time) (PersonTeams, TeamNames, error) {
+		return func(string) []string { return []string{"team-a"} }, nil, nil
 	})
 	if _, err := executor.ComputeFinalizeFamily(ctx, RunScope{
 		OrganizationID: orgID, TargetDay: day,

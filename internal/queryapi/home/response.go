@@ -78,10 +78,13 @@ type MetricDelta struct {
 	HasData      bool         `json:"has_data"`
 	HasPriorData bool         `json:"has_prior_data"`
 	Spark        []SparkPoint `json:"spark"`
-	// RateState says why change failure rate has a value or not (CHAOS-8981):
-	// "measured" (the value may be 0), "unknown_no_incident_evidence" or
-	// "not_applicable_no_deployments". nil when the window holds no stored
-	// counts, and for every other metric.
+	// RateState says why a rate that is a ratio of stored counts has a value
+	// or not. Change failure rate (CHAOS-8981): "measured" (the value may be
+	// 0), "unknown_no_incident_evidence" or "not_applicable_no_deployments".
+	// The pull request rework ratio: "measured", "unknown_no_review_evidence",
+	// "not_applicable_no_rework_signal" or
+	// "not_applicable_no_merged_pull_requests". nil when the window holds no
+	// stored counts, and for every other metric.
 	RateState *string `json:"rate_state,omitempty"`
 }
 

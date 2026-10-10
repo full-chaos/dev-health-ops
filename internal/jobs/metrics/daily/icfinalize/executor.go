@@ -11,6 +11,8 @@ import (
 	"github.com/google/uuid"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/metric"
+
+	"github.com/full-chaos/dev-health-ops/internal/teamactive"
 )
 
 // ErrOrganizationRequired is returned when ic_finalize is asked to compute a day
@@ -185,7 +187,27 @@ func NewExecutor(conn Conn) *Executor {
 	return &Executor{conn: conn, now: func() time.Time { return time.Now().UTC() }}
 }
 
-func (executor *Executor) loadGitMetrics(ctx context.Context, orgID string, day time.Time) ([]GitUserMetric, error) {
+// The team a stored row falls back to when its own team id names an inactive
+// team: the values the repository/user family writes for a row with no team
+// (repouser, compute.go), which is also the reference's default.
+const (
+	unassignedTeamID   = "unassigned"
+	unassignedTeamName = "Unassigned"
+)
+
+// loadGitMetrics reads back the newest row of every (repository, person) of
+// the day. That is more than the rows this run's partitions wrote: a person
+// with work items and no commit has a row that an earlier finalize stored
+// under a made-up repository id, and a repository that is no longer computed
+// keeps its last row. Each row read here is written again by writeUserMetrics
+// with the team it is read with.
+//
+// So a stored team id of an INACTIVE team (inactive) is read as the fallback
+// team: the row is then written again under the mapped team or as
+// "unassigned", and never again under the id of a team that was replaced.
+func (executor *Executor) loadGitMetrics(
+	ctx context.Context, orgID string, day time.Time, inactive teamactive.Inactive,
+) ([]GitUserMetric, error) {
 	rows, err := executor.conn.Query(ctx, gitMetricsSQL,
 		clickhouse.Named("day", day.UTC().Format("2006-01-02")),
 		clickhouse.Named("org_id", orgID))
@@ -230,6 +252,9 @@ func (executor *Executor) loadGitMetrics(ctx context.Context, orgID string, day 
 		); err != nil {
 			return nil, err
 		}
+		if inactive.Has(metric.TeamID) {
+			metric.TeamID, metric.TeamName = unassignedTeamID, unassignedTeamName
+		}
 		metric.LOCAdded = int64(locAdded)
 		metric.LOCDeleted = int64(locDeleted)
 		metric.PRsAuthored = int64(prsAuthored)
@@ -250,7 +275,13 @@ func (executor *Executor) loadGitMetrics(ctx context.Context, orgID string, day 
 	return metrics, rows.Err()
 }
 
-func (executor *Executor) loadWorkItemMetrics(ctx context.Context, orgID string, day time.Time) ([]WorkItemUserMetric, error) {
+// loadWorkItemMetrics reads the work item rows of the people of the day. A
+// stored team id of an inactive team is read as the fallback team, as in
+// loadGitMetrics: a row of a key the work item family no longer writes keeps
+// the id it was stored with.
+func (executor *Executor) loadWorkItemMetrics(
+	ctx context.Context, orgID string, day time.Time, inactive teamactive.Inactive,
+) ([]WorkItemUserMetric, error) {
 	rows, err := executor.conn.Query(ctx, workItemMetricsSQL,
 		clickhouse.Named("day", day.UTC().Format("2006-01-02")),
 		clickhouse.Named("org_id", orgID))
@@ -270,6 +301,9 @@ func (executor *Executor) loadWorkItemMetrics(ctx context.Context, orgID string,
 			&metric.TeamID, &metric.TeamName, &itemsStarted, &itemsCompleted,
 			&wipCountEndOfDay, &metric.CycleTimeP50Hrs, &metric.CycleTimeP90Hrs); err != nil {
 			return nil, err
+		}
+		if inactive.Has(metric.TeamID) {
+			metric.TeamID, metric.TeamName = unassignedTeamID, unassignedTeamName
 		}
 		metric.ItemsStarted = int64(itemsStarted)
 		metric.ItemsCompleted = int64(itemsCompleted)
@@ -328,16 +362,16 @@ var landscapeRepoID = uuid.UUID{}
 // landscape input is a READBACK of the user-metrics write, so the two halves
 // cannot be reordered or run independently.
 func (executor *Executor) computeForDay(
-	ctx context.Context, orgID string, day time.Time, resolveTeam TeamResolver,
+	ctx context.Context, orgID string, day time.Time, resolveTeam TeamResolver, inactive teamactive.Inactive,
 ) (int, error) {
 	if err := requireOrganization(ctx, orgID, day); err != nil {
 		return 0, err
 	}
-	gitMetrics, err := executor.loadGitMetrics(ctx, orgID, day)
+	gitMetrics, err := executor.loadGitMetrics(ctx, orgID, day, inactive)
 	if err != nil {
 		return 0, err
 	}
-	workItems, err := executor.loadWorkItemMetrics(ctx, orgID, day)
+	workItems, err := executor.loadWorkItemMetrics(ctx, orgID, day, inactive)
 	if err != nil {
 		return 0, err
 	}
@@ -349,7 +383,7 @@ func (executor *Executor) computeForDay(
 		return 0, err
 	}
 
-	stats, err := LoadRollingStats(ctx, executor.conn, orgID, day)
+	stats, err := LoadRollingStats(ctx, executor.conn, orgID, day, inactive)
 	if err != nil {
 		return written, err
 	}
@@ -525,7 +559,15 @@ func (executor *Executor) ComputeFinalizeFamily(ctx context.Context, run RunScop
 		}
 		resolveTeam = resolved
 	}
-	return executor.computeForDay(ctx, run.OrganizationID, run.TargetDay, resolveTeam)
+	// The stored rows this family reads hold the team id they were written
+	// with. A failed read of the inactive teams fails the run: with an empty
+	// set the family would write a person's rows and points under a team that
+	// was replaced.
+	inactive, err := teamactive.LoadInactive(ctx, executor.conn, run.OrganizationID)
+	if err != nil {
+		return 0, err
+	}
+	return executor.computeForDay(ctx, run.OrganizationID, run.TargetDay, resolveTeam, inactive)
 }
 
 // RunScope is the subset of daily.Run this package needs. Declaring it here

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"math"
 	"net"
 	"net/url"
@@ -60,7 +61,10 @@ func (s *ClickHouseExternalBatchSink) Write(ctx context.Context, source external
 	for kind := range grouped {
 		kinds = append(kinds, kind)
 	}
-	slices.Sort(kinds)
+	// The kinds of a batch are written in the order of the reference's sink
+	// (externalKindOrder), not in the order of their names. One effect: the
+	// team rows of a batch are stored before the identities that name them.
+	slices.SortFunc(kinds, compareExternalKinds)
 	// Every bare team id of the organization moves to its prefixed form
 	// before a team.v1 or identity.v1 row with a prefixed id is written.
 	if len(grouped["team.v1"]) > 0 || len(grouped["identity.v1"]) > 0 {
@@ -89,7 +93,7 @@ func (s *ClickHouseExternalBatchSink) Write(ctx context.Context, source external
 		// this Write() call before any team.v1 row is prepared, same as
 		// every other failure in this function; the message redelivers and
 		// the row is retried, never silently written wrong. (Every other
-		// kind in this batch that sorted before "team.v1" has already been
+		// kind in this batch that is written before "team.v1" has already been
 		// durably written by this point -- that is pre-existing behavior
 		// for ANY failure partway through this loop, not new here: this
 		// function has never wrapped its per-kind writes in one transaction.)
@@ -156,13 +160,19 @@ func (s *ClickHouseExternalBatchSink) Write(ctx context.Context, source external
 		return nil
 	}
 	var kindErrors []error
+	identitiesWritten := false
 	for _, kind := range kinds {
 		if err := writeKind(kind); err != nil {
 			if ctx.Err() != nil {
 				return ExternalRecomputeScope{}, err
 			}
 			kindErrors = append(kindErrors, err)
+			continue
 		}
+		identitiesWritten = identitiesWritten || kind == "identity.v1"
+	}
+	if identitiesWritten {
+		s.warnOfIdentityTeamsWithNoTeamRow(ctx, source.Pointer, grouped["identity.v1"])
 	}
 	if len(kindErrors) > 0 {
 		return ExternalRecomputeScope{}, errors.Join(kindErrors...)
@@ -171,6 +181,137 @@ func (s *ClickHouseExternalBatchSink) Write(ctx context.Context, source external
 	scope.TeamIDs = sortedExternalStrings(scope.TeamIDs)
 	scope.RecordKinds = sortedExternalStrings(scope.RecordKinds)
 	return scope, nil
+}
+
+// externalKindOrder is the order in which the kinds of one batch are written.
+// It is the order of the reference's sink (write_batch of
+// external_ingest/sinks.py): the git kinds, the team, the identity, the
+// operational kinds in the order of its operational_writes list, then the
+// work item kinds. An identity.v1 record names team ids, so in this order the
+// team rows of a batch are stored before the identities that name them; in
+// the order of the kind names they were stored after them.
+//
+// project_membership_transition.v1 is a kind of this port only, with no place
+// in the reference: it is last.
+//
+// A test holds the list against the reference's source, and holds that every
+// kind the sink can write is in it once.
+var externalKindOrder = []string{
+	"repository.v1",
+	"commit.v1",
+	"pull_request.v1",
+	"review.v1",
+	"team.v1",
+	"identity.v1",
+	"operational_service.v1",
+	"operational_incident.v1",
+	"operational_alert.v1",
+	"incident_timeline_event.v1",
+	"incident_note.v1",
+	"incident_responder.v1",
+	"escalation_policy.v1",
+	"on_call_schedule.v1",
+	"on_call_assignment.v1",
+	"operational_team.v1",
+	"operational_user.v1",
+	"service_repository_mapping.v1",
+	"work_item.v1",
+	"work_item_transition.v1",
+	"work_item_dependency.v1",
+	"project_membership_transition.v1",
+}
+
+// compareExternalKinds orders two kinds by externalKindOrder. A kind that is
+// not in the list (the sink has no statement for it, and its write fails) is
+// after every kind of the list, by its name.
+func compareExternalKinds(first, second string) int {
+	firstAt, secondAt := slices.Index(externalKindOrder, first), slices.Index(externalKindOrder, second)
+	switch {
+	case firstAt >= 0 && secondAt >= 0:
+		return firstAt - secondAt
+	case firstAt >= 0:
+		return -1
+	case secondAt >= 0:
+		return 1
+	}
+	return strings.Compare(first, second)
+}
+
+// externalTeamsWithARowQuery reads which of the named team ids have a row in
+// teams.
+const externalTeamsWithARowQuery = "SELECT DISTINCT id FROM teams WHERE org_id = {org_id:String} AND id IN {team_ids:Array(String)}"
+
+// warnOfIdentityTeamsWithNoTeamRow says, in one WARN line, how many of the
+// team ids that the identities of a batch name have no row in teams once the
+// batch is written. A source can push an identity that names a team it never
+// pushes: the identity is stored as it was pushed, no team row is made up for
+// it, and nothing refuses the record, so without this line nobody would know
+// that the id names no team.
+//
+// The line holds counts only: a team id and an identity id can be a person's
+// own words. A failed count read is logged too and does not fail the write:
+// the rows of the batch are stored.
+func (s *ClickHouseExternalBatchSink) warnOfIdentityTeamsWithNoTeamRow(
+	ctx context.Context, pointer externalPointer, identities []externalSinkRecord,
+) {
+	named := map[string]struct{}{}
+	for _, record := range identities {
+		teamIDs, err := externalTeamIDs(pointer.SourceSystem, stringArrayField(record.Payload, "teamIds"))
+		if err != nil {
+			continue // the write of this record already failed for it
+		}
+		for _, teamID := range teamIDs {
+			if strings.TrimSpace(teamID) != "" {
+				named[teamID] = struct{}{}
+			}
+		}
+	}
+	if len(named) == 0 {
+		return
+	}
+	teamIDs := sortedExternalStrings(mapKeys(named))
+	rows, err := s.conn.Query(ctx, externalTeamsWithARowQuery,
+		clickhouse.Named("org_id", pointer.OrgID), clickhouse.Named("team_ids", teamIDs))
+	if err != nil {
+		slog.WarnContext(ctx, "external push: the team rows of the pushed identities could not be counted",
+			"organization_id", pointer.OrgID, "source_system", pointer.SourceSystem, "error", err.Error())
+		return
+	}
+	defer func() { _ = rows.Close() }()
+	withRow := 0
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			slog.WarnContext(ctx, "external push: the team rows of the pushed identities could not be counted",
+				"organization_id", pointer.OrgID, "source_system", pointer.SourceSystem, "error", err.Error())
+			return
+		}
+		if _, isNamed := named[id]; isNamed {
+			withRow++
+		}
+	}
+	if err := rows.Err(); err != nil {
+		slog.WarnContext(ctx, "external push: the team rows of the pushed identities could not be counted",
+			"organization_id", pointer.OrgID, "source_system", pointer.SourceSystem, "error", err.Error())
+		return
+	}
+	if missing := len(named) - withRow; missing > 0 {
+		slog.WarnContext(ctx, externalIdentityTeamsWithNoRowEvent,
+			"organization_id", pointer.OrgID, "source_system", pointer.SourceSystem,
+			"identities", len(identities), "team_ids_named", len(named), "team_ids_with_no_team_row", missing)
+	}
+}
+
+// externalIdentityTeamsWithNoRowEvent is the message of the WARN line of
+// warnOfIdentityTeamsWithNoTeamRow.
+const externalIdentityTeamsWithNoRowEvent = "external push: identities name team ids that have no team row"
+
+func mapKeys(set map[string]struct{}) []string {
+	keys := make([]string, 0, len(set))
+	for key := range set {
+		keys = append(keys, key)
+	}
+	return keys
 }
 
 // preserveExistingManualMembers batch-reads the current manual_members for

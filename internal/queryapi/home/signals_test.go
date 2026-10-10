@@ -1,6 +1,9 @@
 package home
 
 import (
+	"encoding/json"
+	"reflect"
+	"sort"
 	"strings"
 	"testing"
 )
@@ -229,6 +232,22 @@ func TestFormatValueIntegerVsDecimal(t *testing.T) {
 	}
 }
 
+// The risk signal carries the coverage of the score it shows (CHAOS-6545); every
+// other signal has none.
+func TestRiskSignalCarriesTheCoverageOfItsScore(t *testing.T) {
+	score, coverage := 0.9, 0.3
+	row := RiskRow{Scope: "repo", ScopeID: "r1", Score: &score, Severity: "high", ScopeDisplayName: "checkout-service", Coverage: &coverage}
+	signal, ok := RiskSignal(row, DefaultFilters(), DataConfidence{})
+	if !ok || signal.Coverage == nil || *signal.Coverage != 0.3 {
+		t.Fatalf("risk signal coverage = %v (ok %v), want 0.3", signal.Coverage, ok)
+	}
+	row.Coverage = nil
+	signal, ok = RiskSignal(row, DefaultFilters(), DataConfidence{})
+	if !ok || signal.Coverage != nil {
+		t.Fatalf("a row with no coverage gives a signal with none: %v", signal.Coverage)
+	}
+}
+
 // From a measured 0 (both windows stored, prior 0, current not 0) the percent
 // is undefined: the sentence and the signal state the change in absolute values,
 // never "held steady", "flat", a percent or the current value as the prior.
@@ -276,5 +295,36 @@ func TestAMeasuredZeroPriorIsNeverSteadyOrAPercent(t *testing.T) {
 	}
 	if got, ok := SelectConstraint([]MetricDelta{fromZero}); !ok || got.Metric != "churn" {
 		t.Errorf("SelectConstraint over a rise from zero only = %q (ok %v), want churn", got.Metric, ok)
+	}
+}
+
+// The REST Home answer carries NO coverage key: the field exists on the Go
+// signal and is served by GraphQL only (CHAOS-6545), because the REST response
+// model is pinned by a Python-recorded golden. The key set of a signal that
+// holds a coverage is the marshalled bytes' key set, not a Go snapshot.
+func TestRESTSignalJSONHasNoCoverageKey(t *testing.T) {
+	coverage := 0.3
+	raw, err := json.Marshal(Signal{ID: "risk:repo:r1", Metric: "compounding_risk", Coverage: &coverage})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var keys map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &keys); err != nil {
+		t.Fatal(err)
+	}
+	got := make([]string, 0, len(keys))
+	for key := range keys {
+		got = append(got, key)
+	}
+	sort.Strings(got)
+	want := []string{
+		"affected_scope", "category", "confidence", "current_value", "delta", "direction", "evidence_count",
+		"evidence_ref", "id", "metric", "prior_value", "recommended_action", "scope_entity", "severity", "title", "why_it_matters",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("REST signal keys = %v, want %v (no coverage key)", got, want)
+	}
+	if strings.Contains(string(raw), "coverage") {
+		t.Fatalf("a REST signal must not carry coverage: %s", raw)
 	}
 }

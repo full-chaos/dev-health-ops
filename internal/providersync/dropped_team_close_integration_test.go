@@ -381,6 +381,27 @@ func TestGitHubTeamThatIsNoLongerListedKeepsItsRowsUntilTheRunProvesItGone(t *te
 		}
 	})
 
+	t.Run("a listing whose end GitHub did not state closes nothing", func(t *testing.T) {
+		org := newDroppedGitHubOrg()
+		orgID := seed(t, "no-end-signal", org)
+		// A full page of 100 teams and no Link header: nothing says the list ended.
+		org.edit(func(o *droppedGitHubOrg) {
+			o.listed = []string{"platform"}
+			for index := 1; index < 100; index++ {
+				o.listed = append(o.listed, fmt.Sprintf("filler-%03d", index))
+			}
+		})
+		result := githubDroppedRun(ctx, t, conn, orgID, org, both, droppedAt[1], staticScopeCensus{})
+		requireRepoFacts(t, "no end signal", openRepoOwnership(ctx, t, conn, orgID, "github"), append(platformRows, opsStays...)...)
+		requireOpenFacts(t, "no end signal", openMembershipFacts(ctx, t, conn, orgID, "github"), mona, hubot)
+		if got := legReasons(result); !strings.Contains(got, "team_listing_incomplete") {
+			t.Errorf("legs = %q, want the team-listing-incomplete reason", got)
+		}
+		if team, _, _ := org.lookups(); team != 0 {
+			t.Errorf("the provider was asked for %d teams, want 0", team)
+		}
+	})
+
 	t.Run("a run that selects one dataset closes that dataset only", func(t *testing.T) {
 		org := newDroppedGitHubOrg()
 		orgID := seed(t, "one-dataset", org)
@@ -410,6 +431,19 @@ func TestGitHubTeamThatIsNoLongerListedKeepsItsRowsUntilTheRunProvesItGone(t *te
 		facts := openMembershipFacts(ctx, t, conn, orgID, "github")
 		requireOpenFacts(t, "github memberships", facts, mona, "gh:ops|gh:manual", "custom:ops|gh:custom")
 		requireOpenFacts(t, "gitlab memberships", openMembershipFacts(ctx, t, conn, orgID, "gitlab"), "gh:ops|gh:other")
+	})
+
+	t.Run("a team with open rows under another GitHub organization only is no dropped team of this run: it is not asked for", func(t *testing.T) {
+		org := newDroppedGitHubOrg()
+		orgID := seed(t, "other-org-team", org)
+		seedRepoOwnership(ctx, t, conn, orgID, "github", "gh:legacy", "elsewhere/x", "provider_access", droppedAt[0])
+		org.edit(func(o *droppedGitHubOrg) { platformOnly(o); o.twoPages = true })
+		githubDroppedRun(ctx, t, conn, orgID, org, TeamCatalogSelections{Teams: true}, droppedAt[1], staticScopeCensus{})
+		if team, _, _ := org.lookups(); team != 1 {
+			t.Errorf("the provider was asked for %d teams, want 1 (gh:ops): gh:legacy holds rows under another GitHub organization only", team)
+		}
+		requireRepoFacts(t, "other org", openRepoOwnership(ctx, t, conn, orgID, "github"),
+			append(append([]repoOwnershipFact{}, platformRows...), repoOwnershipFact{"gh:legacy", "elsewhere/x", "provider_access"})...)
 	})
 
 	t.Run("a team that comes back is a new fact", func(t *testing.T) {

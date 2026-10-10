@@ -257,6 +257,7 @@ func TestTheGitHubAnswerForOneTeam(t *testing.T) {
 		{"500", 500, `{"message":"Not Found"}`, SnapshotAbsenceNotProven},
 		{"200 for the team", 200, `{"slug":"ops","name":"Ops"}`, SnapshotFactStillHeld},
 		{"200 for the team, another case", 200, `{"slug":"OPS"}`, SnapshotFactStillHeld},
+		{"202 with the team's body", 202, `{"slug":"ops"}`, SnapshotAbsenceNotProven},
 		{"200 for another team (a rename)", 200, `{"slug":"operations"}`, SnapshotAbsenceNotProven},
 		{"200 with no slug", 200, `{}`, SnapshotAbsenceNotProven},
 		{"200 with a body that is not an object", 200, `[]`, SnapshotAbsenceNotProven},

@@ -19,7 +19,7 @@ import (
 // "team_memberships" tables so both writers stay byte-compatible with every
 // other provider's rows in the same ReplacingMergeTree.
 const githubTeamCatalogTeamsInsert = `INSERT INTO teams (id, team_uuid, name, description, members, manual_members, project_keys, repo_patterns, is_active, updated_at, org_id, provider, native_team_key, parent_team_id, created_at)`
-const githubTeamCatalogMembershipsInsert = `INSERT INTO team_memberships (org_id, provider, team_id, member_id, raw_provider_user_id, raw_email, identity_facets, source, is_primary, specificity, priority, valid_from, valid_to, updated_at)`
+const githubTeamCatalogMembershipsInsert = `INSERT INTO team_memberships (org_id, provider, team_id, member_id, raw_provider_user_id, raw_email, identity_facets, source, is_primary, specificity, priority, valid_from, valid_to, updated_at, provider_user_id)`
 
 // githubTeamCatalogRepoOwnershipInsert matches team_repo_ownership's exact
 // column order (storage/clickhouse.py's write_team_repo_ownership).
@@ -119,8 +119,7 @@ func (sink GitHubTeamCatalogClickHouseEffects) WriteMemberships(ctx context.Cont
 		if err := batch.Append(
 			row.OrgID, row.Provider, row.TeamID, row.MemberID, row.RawProviderUserID,
 			row.RawEmail, row.IdentityFacets, row.Source, row.IsPrimary, row.Specificity,
-			row.Priority, row.ValidFrom, row.ValidTo, row.UpdatedAt,
-		); err != nil {
+			row.Priority, row.ValidFrom, row.ValidTo, row.UpdatedAt, row.ProviderUserID); err != nil {
 			return err
 		}
 	}

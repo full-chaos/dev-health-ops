@@ -127,6 +127,8 @@ type linearReferenceMembershipRow struct {
 	ValidFrom         time.Time  `json:"valid_from"`
 	ValidTo           *time.Time `json:"valid_to"`
 	UpdatedAt         time.Time  `json:"updated_at"`
+	// ProviderUserID is the provider's own stable id of the member (CHAOS-9144); nil when it has none.
+	ProviderUserID *string `json:"provider_user_id"`
 }
 
 type linearReferenceOwnershipRow struct {
@@ -452,6 +454,7 @@ func normalizeLinearReferenceMember(
 		RawProviderUserID: &facets[0], RawEmail: email, IdentityFacets: facets,
 		Source: "native", IsPrimary: 1, Specificity: 100, Priority: 10,
 		ValidFrom: normalizedAt, UpdatedAt: normalizedAt,
+		ProviderUserID: providerUserIDString(payload.ID),
 	}, memberID, nil
 }
 

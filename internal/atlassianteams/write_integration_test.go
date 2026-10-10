@@ -123,6 +123,14 @@ func TestWriteTeamsMembershipsAndOwnershipAgainstClickHouse(t *testing.T) {
 		t.Fatalf("memberships:\n%s\nwant:\n%s", strings.Join(memberships, "\n"), strings.Join(wantMemberships, "\n"))
 	}
 
+	// CHAOS-9144: the member's own Atlassian accountId, as the provider wrote it (the member id lower-cases
+	// it); the row of the earlier project-as-team catalog has none.
+	providerUserIDs := lines(t, conn, `SELECT concat(member_id, '|', ifNull(provider_user_id, '<NULL>')) FROM team_memberships FINAL WHERE org_id = 'org-1' AND provider = 'jira' AND valid_to IS NULL ORDER BY member_id`)
+	wantProviderUserIDs := []string{"jira:alice-1|Alice-1", "jira:bob-2|bob-2", "jira:carol-3|carol-3", "jira:lead-9|<NULL>"}
+	if strings.Join(providerUserIDs, "\n") != strings.Join(wantProviderUserIDs, "\n") {
+		t.Fatalf("provider_user_id of the open memberships:\n%s\nwant:\n%s", strings.Join(providerUserIDs, "\n"), strings.Join(wantProviderUserIDs, "\n"))
+	}
+
 	ownership := lines(t, conn, `SELECT concat(team_id, '|', project_id, '|', ifNull(project_key, ''), '|', source, '|', toString(specificity), '|', toString(priority)) FROM team_project_ownership FINAL WHERE org_id = 'org-1' AND provider = 'jira' ORDER BY team_id`)
 	wantOwnership := []string{
 		"PLAT|10001|PLAT|native|100|10",

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -32,9 +33,11 @@ type openMembership struct {
 	Specificity                       uint16
 	Priority                          int32
 	ValidFrom, UpdatedAt              time.Time
+	// ProviderUserID is the provider's own stable id of the member (CHAOS-9144); nil when none is stored.
+	ProviderUserID *string
 }
 
-const membershipOpenRowsFullQuery = `SELECT org_id, provider, team_id, member_id, raw_provider_user_id, raw_email, identity_facets, source, is_primary, specificity, priority, valid_from, updated_at
+const membershipOpenRowsFullQuery = `SELECT org_id, provider, team_id, member_id, raw_provider_user_id, raw_email, identity_facets, source, is_primary, specificity, priority, valid_from, updated_at, provider_user_id
 FROM team_memberships FINAL
 WHERE org_id = ? AND provider = ? AND source = ? AND valid_to IS NULL`
 
@@ -48,7 +51,7 @@ func readOpenMembershipRows(ctx context.Context, conn driver.Conn, orgID, provid
 	for result.Next() {
 		var row openMembership
 		if err := result.Scan(&row.OrgID, &row.Provider, &row.TeamID, &row.MemberID, &row.RawProviderUserID, &row.RawEmail,
-			&row.IdentityFacets, &row.Source, &row.IsPrimary, &row.Specificity, &row.Priority, &row.ValidFrom, &row.UpdatedAt); err != nil {
+			&row.IdentityFacets, &row.Source, &row.IsPrimary, &row.Specificity, &row.Priority, &row.ValidFrom, &row.UpdatedAt, &row.ProviderUserID); err != nil {
 			return nil, err
 		}
 		row.ValidFrom, row.UpdatedAt = row.ValidFrom.UTC(), row.UpdatedAt.UTC()
@@ -126,6 +129,12 @@ type MembershipSnapshotWriter[R any] struct {
 	// is never closed by the list rule: a changed or hidden email would read as
 	// a departure.
 	KeyedByEmail func(open openMembership) bool
+	// ProviderUserID is the provider's own stable id of the member a row names
+	// (nil when the row has none). With it, a member the provider returns under a
+	// NEW member id whose id an open row of the same team already holds is the same
+	// person renamed: the open row continues (CHAOS-9144). Nil means the writer
+	// detects no rename.
+	ProviderUserID func(R) *string
 }
 
 // Skipped reasons of a candidate that is left open.
@@ -149,6 +158,10 @@ type MembershipSnapshotOutcome struct {
 	DuplicatesRetired int
 	// Skipped: facts left open, by reason.
 	Skipped map[string]int
+	// Renamed: facts that are one person under a new member id (a login or an
+	// email changed): the new row took the valid_from of the open row, which is
+	// retired, so there is no leave and no join (CHAOS-9144).
+	Renamed int
 }
 
 // membershipTeamLogToken names a team in a log line as a string: the id of a
@@ -168,8 +181,8 @@ func membershipTeamLogToken(teamID string) string {
 }
 
 type membershipTeamTally struct {
-	closed, duplicates int
-	skipped            map[string]int
+	closed, duplicates, renamed int
+	skipped                     map[string]int
 }
 
 // Snapshot returns the rows of one membership write: the rows to write on the
@@ -211,6 +224,7 @@ func (writer MembershipSnapshotWriter[R]) Snapshot(
 	for _, fact := range observedFacts {
 		held[MembershipSnapshotKey(fact)] = true
 	}
+	renamedAway := writer.planRenames(open, observed, toWrite, held, stamp, at)
 	outcome := MembershipSnapshotOutcome{Plan: plan, Skipped: map[string]int{}}
 	tally := map[string]*membershipTeamTally{}
 	of := func(teamID string) *membershipTeamTally {
@@ -229,6 +243,11 @@ func (writer MembershipSnapshotWriter[R]) Snapshot(
 	byFact := map[string][]membershipRetraction{}
 	for _, retraction := range retractions {
 		key := MembershipSnapshotKey(MembershipSnapshotRow{TeamID: retraction.open.TeamID, MemberID: retraction.open.MemberID})
+		if renamedAway[key] {
+			// The same person under a new member id: this row is replaced, not a departure.
+			closes = append(closes, closing{retraction.open, retraction.closedAt})
+			continue
+		}
 		if held[key] {
 			// A later open row of a fact the run holds again: not a departure.
 			closes = append(closes, closing{retraction.open, retraction.closedAt})
@@ -292,6 +311,11 @@ func (writer MembershipSnapshotWriter[R]) Snapshot(
 		of(first.TeamID).closed++
 	}
 
+	for key := range renamedAway {
+		outcome.Renamed++
+		team, _, _ := strings.Cut(key, "\x00")
+		of(team).renamed++
+	}
 	teamIDs := make([]string, 0, len(tally))
 	for teamID := range tally {
 		teamIDs = append(teamIDs, teamID)
@@ -299,6 +323,11 @@ func (writer MembershipSnapshotWriter[R]) Snapshot(
 	sort.Strings(teamIDs)
 	for _, teamID := range teamIDs {
 		counts := tally[teamID]
+		if counts.renamed > 0 {
+			slog.Default().InfoContext(ctx, "team_membership_renamed",
+				"org_id", orgID, "provider", writer.Provider, "team", membershipTeamLogToken(teamID),
+				"renamed", counts.renamed)
+		}
 		if counts.closed+counts.duplicates > 0 {
 			slog.Default().InfoContext(ctx, "team_membership_closed",
 				"org_id", orgID, "provider", writer.Provider, "team", membershipTeamLogToken(teamID),
@@ -330,6 +359,75 @@ func (writer MembershipSnapshotWriter[R]) Snapshot(
 		rows = append(rows, writer.Closed(closing.open, closing.closedAt, updatedAt))
 	}
 	return rows, outcome, nil
+}
+
+// planRenames finds the members the provider returned under a NEW member id
+// whose provider user id an open row of the same team holds under another member
+// id (CHAOS-9144): one person, renamed. It gives the new fact the valid_from of
+// the earliest such open row (stamp) and returns the facts (team and member id)
+// of the open rows that are replaced, which Snapshot closes as renames, not as
+// departures. Only a new member that is WRITTEN (toWrite) replaces an open row;
+// an open row that is itself still observed, or newer than the read, is never
+// replaced; a row with no stored id is never matched (a blank id matches nothing).
+func (writer MembershipSnapshotWriter[R]) planRenames(
+	open []openMembership, observed, toWrite []R, held map[string]bool, stamp map[string]time.Time, at time.Time,
+) map[string]bool {
+	renamedAway := map[string]bool{}
+	if writer.ProviderUserID == nil {
+		return renamedAway
+	}
+	written := map[string]bool{}
+	for _, row := range toWrite {
+		written[MembershipSnapshotKey(MembershipSnapshotRow{TeamID: writer.TeamID(row), MemberID: writer.MemberID(row)})] = true
+	}
+	openFacts := map[string]bool{}
+	for _, row := range open {
+		openFacts[MembershipSnapshotKey(MembershipSnapshotRow{TeamID: row.TeamID, MemberID: row.MemberID})] = true
+	}
+	// The open rows of a team by their provider user id.
+	type idKey struct{ team, id string }
+	byID := map[idKey][]openMembership{}
+	for _, row := range open {
+		if row.ProviderUserID == nil || strings.TrimSpace(*row.ProviderUserID) == "" {
+			continue
+		}
+		byID[idKey{row.TeamID, strings.TrimSpace(*row.ProviderUserID)}] = append(byID[idKey{row.TeamID, strings.TrimSpace(*row.ProviderUserID)}], row)
+	}
+	for _, row := range observed {
+		id := writer.ProviderUserID(row)
+		if id == nil || strings.TrimSpace(*id) == "" {
+			continue
+		}
+		team, member := writer.TeamID(row), writer.MemberID(row)
+		key := MembershipSnapshotKey(MembershipSnapshotRow{TeamID: team, MemberID: member})
+		if openFacts[key] || !written[key] {
+			// The member is already open under this member id, or is not written.
+			continue
+		}
+		var earliest *time.Time
+		var replaced []openMembership
+		for _, candidate := range byID[idKey{team, strings.TrimSpace(*id)}] {
+			candidateKey := MembershipSnapshotKey(MembershipSnapshotRow{TeamID: candidate.TeamID, MemberID: candidate.MemberID})
+			if candidate.MemberID == member || held[candidateKey] || candidate.UpdatedAt.After(at) {
+				continue
+			}
+			replaced = append(replaced, candidate)
+			if earliest == nil || candidate.ValidFrom.Before(*earliest) {
+				from := candidate.ValidFrom
+				earliest = &from
+			}
+		}
+		if len(replaced) == 0 {
+			continue
+		}
+		if from, ok := stamp[key]; !ok || earliest.Before(from) {
+			stamp[key] = *earliest
+		}
+		for _, candidate := range replaced {
+			renamedAway[MembershipSnapshotKey(MembershipSnapshotRow{TeamID: candidate.TeamID, MemberID: candidate.MemberID})] = true
+		}
+	}
+	return renamedAway
 }
 
 type membershipRetraction struct {
@@ -379,6 +477,7 @@ type membershipColumns struct {
 	ValidFrom         time.Time
 	ValidTo           *time.Time
 	UpdatedAt         time.Time
+	ProviderUserID    *string
 }
 
 func closedMembershipColumns(open openMembership, closedAt, updatedAt time.Time) membershipColumns {
@@ -388,5 +487,27 @@ func closedMembershipColumns(open openMembership, closedAt, updatedAt time.Time)
 		RawProviderUserID: open.RawProviderUserID, RawEmail: open.RawEmail, IdentityFacets: open.IdentityFacets,
 		Source: open.Source, IsPrimary: open.IsPrimary, Specificity: open.Specificity, Priority: open.Priority,
 		ValidFrom: open.ValidFrom, ValidTo: &closed, UpdatedAt: updatedAt.UTC(),
+		ProviderUserID: open.ProviderUserID,
 	}
+}
+
+// providerUserIDText is a provider's numeric user id as the text stored in
+// team_memberships.provider_user_id (CHAOS-9144); nil for an id the node did not
+// carry (a number below 1 is not a user id).
+func providerUserIDText(id int64) *string {
+	if id < 1 {
+		return nil
+	}
+	text := strconv.FormatInt(id, 10)
+	return &text
+}
+
+// providerUserIDString is a provider's text user id (a Linear id, an Atlassian
+// accountId) trimmed, or nil when blank.
+func providerUserIDString(id string) *string {
+	trimmed := strings.TrimSpace(id)
+	if trimmed == "" {
+		return nil
+	}
+	return &trimmed
 }

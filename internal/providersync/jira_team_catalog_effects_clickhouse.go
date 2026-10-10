@@ -34,7 +34,7 @@ const jiraTeamCatalogTeamsInsert = `INSERT INTO teams (id, team_uuid, name, desc
 
 // Omits last_synced on purpose: the server stamps it at insert time (server insert time, not commit order: readers re-read a 300 s window and dedup by key, migration 099).
 const jiraTeamCatalogOwnershipInsert = `INSERT INTO team_project_ownership (org_id, provider, team_id, project_id, project_key, source, is_primary, specificity, priority, valid_from, valid_to, updated_at)`
-const jiraTeamCatalogMembershipsInsert = `INSERT INTO team_memberships (org_id, provider, team_id, member_id, raw_provider_user_id, raw_email, identity_facets, source, is_primary, specificity, priority, valid_from, valid_to, updated_at)`
+const jiraTeamCatalogMembershipsInsert = `INSERT INTO team_memberships (org_id, provider, team_id, member_id, raw_provider_user_id, raw_email, identity_facets, source, is_primary, specificity, priority, valid_from, valid_to, updated_at, provider_user_id)`
 const jiraTeamCatalogProjectsInsert = `INSERT INTO projects (id, org_id, provider, project_key, name, is_active, state, target_date, url, team_ids, team_keys, lead_id, lead_name, lead_email, updated_at, last_synced)`
 
 func (sink JiraTeamCatalogClickHouseEffects) WriteEffect(ctx context.Context, claim Claim, effect EffectBatch) error {
@@ -260,7 +260,7 @@ func (sink JiraTeamCatalogClickHouseEffects) writeMemberships(ctx context.Contex
 	}
 	defer batch.Abort()
 	for _, row := range rows {
-		if err := batch.Append(row.OrgID, row.Provider, row.TeamID, row.MemberID, row.RawProviderUserID, row.RawEmail, row.IdentityFacets, row.Source, row.IsPrimary, row.Specificity, row.Priority, row.ValidFrom, row.ValidTo, row.UpdatedAt); err != nil {
+		if err := batch.Append(row.OrgID, row.Provider, row.TeamID, row.MemberID, row.RawProviderUserID, row.RawEmail, row.IdentityFacets, row.Source, row.IsPrimary, row.Specificity, row.Priority, row.ValidFrom, row.ValidTo, row.UpdatedAt, row.ProviderUserID); err != nil {
 			return err
 		}
 	}

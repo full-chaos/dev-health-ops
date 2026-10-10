@@ -179,6 +179,8 @@ type jiraTeamCatalogMembershipRow struct {
 	ValidFrom         time.Time  `json:"valid_from"`
 	ValidTo           *time.Time `json:"valid_to"`
 	UpdatedAt         time.Time  `json:"updated_at"`
+	// ProviderUserID is the provider's own stable id of the member (CHAOS-9144); nil when it has none.
+	ProviderUserID *string `json:"provider_user_id"`
 }
 
 // jiraTeamCatalogProjectRow shares the `projects` table with Linear/GitLab's
@@ -341,6 +343,9 @@ func normalizeJiraMembershipRow(
 		Source: jiraTeamCatalogSource, IsPrimary: 1,
 		Specificity: jiraTeamCatalogNativeSpecificity, Priority: jiraTeamCatalogNativePriority,
 		ValidFrom: normalizedAt, UpdatedAt: normalizedAt,
+		// Only a real Jira accountId is a provider user id: the email and the
+		// display name the id falls back to are not stable (CHAOS-9144).
+		ProviderUserID: providerUserIDString(lead.AccountID),
 	}, true
 }
 

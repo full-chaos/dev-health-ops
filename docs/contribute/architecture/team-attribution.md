@@ -788,16 +788,30 @@ project's items by id. Now:
      that pages by cursor cannot be shifted by a departure between two requests, so its list rule stands.
   3. no open row of the fact is newer than the time the run read the provider: a run whose list is older than a
      row never closes it (two overlapping runs of one integration).
-  4. a member whose id is made from an email is NOT closed by the list rule, because the provider's user id is
-     not stored (`raw_provider_user_id` holds the first identity facet, not the provider's user id): a changed
-     or hidden email would read as a departure and a join. A login rename of a provider that keys by login
-     reads as a departure and a join with a new `valid_from`; both are named limits.
+  4. a member whose id is made from an email is NOT closed by the list rule: a hidden or changed email would read
+     as a departure. `raw_provider_user_id` still holds the first identity facet, not the provider's user id (the
+     field is pinned by the frozen comparison with the reference); the provider's own stable user id is the
+     separate column `team_memberships.provider_user_id` (CHAOS-9144, migration 117, `Nullable(String)`): GitHub
+     and GitLab numeric user id, Linear user id, Atlassian accountId; NULL on a row written before the column
+     and on a row a person wrote by hand. Its one use is the **rename rule**: when a run returns a member
+     under a NEW member id (a GitHub or GitLab login rename, a Linear email change) whose `provider_user_id`
+     an open row of the SAME team and provider already holds under another member id, that open row continues:
+     the new member id takes the `valid_from` of the earliest such open row, the old open row is retired
+     (closed at the run time, not counted as a departure, no direct lookup is made for it), and the team has
+     one open row for the person, not a leave and a join and not two open rows. A row with no stored id is
+     never matched (its first sync after the column writes the id; a rename before that sync is still a leave
+     and a join, once), a different id under a new login is another person, and an id that two open rows of
+     one team share replaces both. `member_id`, `identity_facets` and `raw_provider_user_id` are not changed
+     by the rule. Jira (Atlassian Teams) keys the member by the accountId itself, so no rename can happen
+     there; the column holds the accountId. Each run logs `team_membership_renamed` (provider, team, renamed)
+     once per team, never a login or an email.
   A member returned with `active: false` is a deactivated user: the provider says so, and it is closed (an
   email-keyed member too). A member who comes back is a new fact with a new `valid_from`. Every close is logged
   once per team (`team_membership_closed`: provider, team, closed, duplicates_retired) and every candidate left
   open once per team (`team_membership_close_skipped`: provider, team, and a count of facts for each reason:
   `row_newer_than_read`, `no_stable_user_id`, `provider_says_member`, `lookup_not_proven`,
-  `lookup_budget_ended`). The team in a log line is its slug or path without the provider prefix.
+  `lookup_budget_ended`). The team in a log line is its slug or path without the provider prefix. A rename is
+  its own line (`team_membership_renamed`), never a close.
 
   **Scope proof, for every kind** (`providersync.ProveSoleScope`, the one scope gate; `ScopeProof` is an
   argument of every kind snapshot, so no kind can be stated without it). Ownership, membership and catalog

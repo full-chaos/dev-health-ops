@@ -9,6 +9,8 @@ import (
 	"time"
 
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
+
+	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse/liverow"
 )
 
 func combineScope(sqlA string, bindingsA []dhclickhouse.Binding, sqlB string, bindingsB []dhclickhouse.Binding) (string, []dhclickhouse.Binding) {
@@ -143,9 +145,11 @@ func buildStateFlow(ctx context.Context, client QueryClient, startDay, endDay ti
 	if !tablesPresent(ctx, client, []string{"work_item_state_durations_daily"}) {
 		return nil, nil, nil
 	}
-	if !columnsPresent(ctx, client, "work_item_state_durations_daily", []string{
+	// The status read holds the live-row rule of the table, so the columns
+	// the rule tests are columns this flow needs.
+	if !columnsPresent(ctx, client, "work_item_state_durations_daily", append([]string{
 		"day", "status", "items_touched", "team_id", "work_scope_id",
-	}) {
+	}, liverow.Columns("work_item_state_durations_daily")...)) {
 		return nil, nil, nil
 	}
 

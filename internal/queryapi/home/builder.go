@@ -53,6 +53,7 @@ func computeMetricDelta(ctx context.Context, client QueryClient, spec metricSpec
 	var hasData, hasPriorData bool
 	var series []dayValueRow
 	var rateState *string
+	var rateCoverage *float64
 
 	if spec.Table == changefailure.Table {
 		// Change failure rate: the window's summed counts through the one rule
@@ -126,6 +127,7 @@ func computeMetricDelta(ctx context.Context, client QueryClient, spec metricSpec
 		hasData = currentOutcome.State == prrework.StateMeasured
 		hasPriorData = previousOutcome.State == prrework.StateMeasured
 		rateState = currentOutcome.StateOrNil()
+		rateCoverage = currentOutcome.Coverage
 	} else if spec.Metric == "blocked_work" {
 		var wg sync.WaitGroup
 		var errCur, errPrev error
@@ -195,6 +197,7 @@ func computeMetricDelta(ctx context.Context, client QueryClient, spec metricSpec
 		HasPriorData: hasPriorData,
 		Spark:        spark,
 		RateState:    rateState,
+		RateCoverage: rateCoverage,
 	}, nil
 }
 

@@ -157,9 +157,13 @@ func TestICFinalizeMatchesTheFrozenPythonGolden(t *testing.T) {
 		"bob@example.com":   "team-shared-ab",
 		"carol@example.com": "team-wi-c",
 	}
-	resolveTeam := TeamResolver(func(identity string) (string, bool) {
-		mapped, ok := teamMap[identity]
-		return mapped, ok
+	// The reference knows one team for a person: each identity of the corpus
+	// is a member of one team.
+	resolveTeam := PersonTeams(func(identity string) []string {
+		if mapped, ok := teamMap[identity]; ok {
+			return []string{mapped}
+		}
+		return nil
 	})
 
 	if _, err := executor.computeForDay(ctx, orgID, day, resolveTeam, nil); err != nil {

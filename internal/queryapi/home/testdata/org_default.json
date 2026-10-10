@@ -204,7 +204,8 @@
           "value": 13
         }
       ],
-      "rate_state": "measured"
+      "rate_state": "measured",
+      "rate_coverage": 0.5
     },
     {
       "metric": "ci_success",

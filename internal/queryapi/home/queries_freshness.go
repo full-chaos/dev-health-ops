@@ -33,6 +33,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/api/pytime"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph/units"
+	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse/liverow"
 )
 
 // fetchLastIngestedAt ports fetch_last_ingested_at (api/queries/
@@ -287,8 +288,21 @@ func sourceStatus(seenAt *time.Time, startDay time.Time) string {
 // (api/queries/metrics.py:276-336). investment_metrics_daily is plain
 // MergeTree, never converted (confirmed against prod system.tables) --
 // Python already dedups it by hand with a per-key argMax(...,
-// computed_at) subquery matching its natural key; ported verbatim, no
-// divergence.
+// computed_at) subquery matching its natural key; ported verbatim.
+//
+// One difference from Python: a key whose newest row holds no measure (a row
+// of zeros its writer stored over a key it no longer produces, package
+// liverow) is left out. It adds 0 to the sums, but the result is a LIST of
+// themes, and a theme whose keys in scope are all such rows (a retired team
+// id) has no data: it is not a theme with an allocation of 0.
+//
+// The rule is applied to the key the WRITER writes (day, repository, team,
+// investment_area, project_stream), before the step that takes one row for
+// each theme: several stored areas can map to one theme, and a row of zeros
+// over one of them must not stand for the theme while another area of that
+// theme is measured. The theme step itself is the reference's and is not
+// changed: among the areas of a theme it takes the row with the newest
+// compute time.
 func fetchReworkThemeAllocation(ctx context.Context, client QueryClient, startDay, endDay time.Time, scopeFilter string, scopeBindings []dhclickhouse.Binding, workCategorySQL string, workCategoryBindings []dhclickhouse.Binding, orgID string) ([]ReworkThemeAllocation, error) {
 	canonicalThemeExpr := canonicalInvestmentThemeSQL("investment_area")
 	query := fmt.Sprintf(`
@@ -302,22 +316,36 @@ func fetchReworkThemeAllocation(ctx context.Context, client QueryClient, startDa
                 day,
                 repo_id,
                 team_id,
-                %s AS canonical_theme,
+                canonical_theme,
                 project_stream,
-                argMax(work_items_completed, computed_at) AS work_items_completed,
-                argMax(prs_merged, computed_at) AS prs_merged,
-                argMax(churn_loc, computed_at) AS churn_loc
-            FROM investment_metrics_daily
-            WHERE day >= {start_day:Date} AND day < {end_day:Date}
-            %s
-            %s
-              AND org_id = {org_id:String}
+                argMax(work_items_completed, newest_at) AS work_items_completed,
+                argMax(prs_merged, newest_at) AS prs_merged,
+                argMax(churn_loc, newest_at) AS churn_loc
+            FROM (
+                SELECT
+                    day,
+                    repo_id,
+                    team_id,
+                    %s AS canonical_theme,
+                    project_stream,
+                    argMax(investment_metrics_daily.work_items_completed, investment_metrics_daily.computed_at) AS work_items_completed,
+                    argMax(investment_metrics_daily.prs_merged, investment_metrics_daily.computed_at) AS prs_merged,
+                    argMax(investment_metrics_daily.churn_loc, investment_metrics_daily.computed_at) AS churn_loc,
+                    max(investment_metrics_daily.computed_at) AS newest_at
+                FROM investment_metrics_daily
+                WHERE day >= {start_day:Date} AND day < {end_day:Date}
+                %s
+                %s
+                  AND org_id = {org_id:String}
+                GROUP BY day, repo_id, team_id, investment_area, project_stream
+                HAVING %s
+            )
             GROUP BY day, repo_id, team_id, canonical_theme, project_stream
         )
         WHERE canonical_theme != ''
         GROUP BY canonical_theme
         ORDER BY allocation DESC
-    `, canonicalThemeExpr, scopeFilter, workCategorySQL)
+    `, canonicalThemeExpr, scopeFilter, workCategorySQL, liverow.NewestPredicate("investment_metrics_daily", ""))
 
 	bindings := []dhclickhouse.Binding{
 		{Name: "start_day", Value: formatDay(startDay)},

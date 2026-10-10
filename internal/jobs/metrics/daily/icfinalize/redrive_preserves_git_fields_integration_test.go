@@ -76,6 +76,13 @@ func TestRedrivePreservesGitFields(t *testing.T) {
 
 	executor := NewExecutor(conn)
 	executor.now = func() time.Time { return time.Date(2026, 9, 4, 12, 0, 0, 0, time.UTC) }
+	// The person is a member of the team of the stored row. A row of a member
+	// keeps the team NAME it was read with (a pass-through column, as every
+	// other one here); a person with NO team is written as unassigned, id and
+	// name, whatever the stored row held.
+	executor.SetTeamMapper(func(context.Context, string, time.Time) (PersonTeams, error) {
+		return func(string) []string { return []string{"team-a"} }, nil
+	})
 	if _, err := executor.ComputeFinalizeFamily(ctx, RunScope{
 		OrganizationID: orgID, TargetDay: day,
 	}); err != nil {

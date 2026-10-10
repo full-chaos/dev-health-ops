@@ -172,7 +172,7 @@ reviews were never read must not show `0%`.
   repository with no known provider, have no signal. Merged pull requests with
   no signal are counted as "no rework signal", never as reviewed.
 - **Stored inputs** on `repo_metrics_daily`, one row for each repository and
-  day (migration `113_pr_rework_ratio_review_basis.sql`): `prs_merged`,
+  day (migration `114_pr_rework_ratio_review_basis.sql`): `prs_merged`,
   `prs_merged_reviewed`, `prs_merged_rework`, `prs_merged_no_rework_signal`.
   A row written before the migration holds `NULL` counts: not measured.
 - **One rule** (`internal/jobs/metrics/prrework`, `Rate` in Go and

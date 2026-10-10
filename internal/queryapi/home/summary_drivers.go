@@ -47,7 +47,9 @@ func driverNames(ctx context.Context, client QueryClient, orgID, group string, r
 	var out []string
 	seen := map[string]bool{}
 	for _, id := range ids {
-		name, ok := names[id]
+		// A name that is the id is no name: an id stored in the name column is
+		// still an id (the same rule the explain route applies).
+		name, ok := scopelabel.CleanNameFor(names[id], id)
 		if !ok || (kind == "team" && !active[id]) || seen[name] {
 			continue
 		}

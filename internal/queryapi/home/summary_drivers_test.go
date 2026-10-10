@@ -50,3 +50,20 @@ func TestDriverNamesLeaveTheDriversOutWhenAReadFails(t *testing.T) {
 		t.Errorf("no driver row, no names: %v", got)
 	}
 }
+
+// An id with no name, and a name that is the id, are left out of the sentence
+// (CHAOS-9046); the names that exist are kept in the order of the rows.
+func TestDriverNamesLeaveOutAnIDWithNoNameAndANameThatIsTheID(t *testing.T) {
+	rows := []driverRow{{ID: "linear:ENG"}, {ID: "custom:none"}, {ID: "jira:abc"}, {ID: "github:acme/ops"}, {ID: "gitlab:grp/web"}}
+	client := fakeQueryClient{t: t, handler: func(_ *testing.T, query string, _ []dhclickhouse.Binding) (dhclickhouse.RowScanner, error) {
+		if strings.Contains(query, "is_active = 1") {
+			return &fixtureRowScanner{rows: [][]any{{"linear:ENG"}, {"custom:none"}, {"jira:abc"}, {"github:acme/ops"}, {"gitlab:grp/web"}}}, nil
+		}
+		// custom:none has no row; jira:abc is named by its own id (any case); gitlab:grp/web has a blank name
+		return &fixtureRowScanner{rows: [][]any{{"linear:ENG", "Engineering"}, {"jira:abc", "JIRA:ABC"}, {"github:acme/ops", "Ops"}, {"gitlab:grp/web", "  "}}}, nil
+	}}
+	got := driverNames(context.Background(), client, "org", "team_id", rows)
+	if strings.Join(got, ",") != "Engineering,Ops" {
+		t.Fatalf("driver names = %v, want Engineering, Ops", got)
+	}
+}

@@ -166,6 +166,18 @@ func defaultRecordInvestmentCoverageFailure(ctx context.Context, orgID string, m
 	slog.ErrorContext(ctx, "investment_coverage.query_failed", logAttrs...)
 }
 
+// reportInvestmentCoverageFailure is what every failure site of the coverage
+// read calls. A statement that the client's cancel ended is reported as a
+// cancel (clientcancel.go) and not as a failure; a statement that never left
+// this process (the compile stage) cannot be one.
+func reportInvestmentCoverageFailure(ctx context.Context, orgID string, measure Measure, useInvestment bool, stage coverageFailureStage, queryID string, err error) {
+	if stage != coverageStageCompile && reportedAsClientCancel(ctx, "investment_coverage",
+		"org_id", orgID, "measure", string(measure), "use_investment", useInvestment, "stage", string(stage), "query_id", queryID) {
+		return
+	}
+	recordInvestmentCoverageFailure(ctx, orgID, measure, useInvestment, stage, queryID, err)
+}
+
 // isLocalValidationFailure reports whether err is, or wraps, one of
 // dev-health-go's FOUR local (pre-dispatch) validation sentinels:
 // ErrUnsafeStatement (validateReadOnlyStatement), and ErrInvalidBinding /
@@ -521,7 +533,7 @@ func resolveSankeyCoverage(ctx context.Context, client QueryClient, orgID string
 		// Python raises inside the try (the f-string construction and
 		// translate_filters both run there, analytics.py:836-865), so a
 		// construction failure lands in the same except branch.
-		recordInvestmentCoverageFailure(ctx, orgID, req.Measure, useInvestment, coverageStageCompile, "", err)
+		reportInvestmentCoverageFailure(ctx, orgID, req.Measure, useInvestment, coverageStageCompile, "", err)
 		return nil
 	}
 
@@ -574,7 +586,7 @@ func resolveSankeyCoverage(ctx context.Context, client QueryClient, orgID string
 		if isLocalValidationFailure(err) {
 			reportedQueryID = ""
 		}
-		recordInvestmentCoverageFailure(ctx, orgID, req.Measure, useInvestment, coverageStageQuery, reportedQueryID, fmt.Errorf("query: %w", err))
+		reportInvestmentCoverageFailure(ctx, orgID, req.Measure, useInvestment, coverageStageQuery, reportedQueryID, fmt.Errorf("query: %w", err))
 		return nil
 	}
 	defer rows.Close()
@@ -583,7 +595,7 @@ func resolveSankeyCoverage(ctx context.Context, client QueryClient, orgID string
 		// Python: `if c_rows:` -- zero rows leaves coverage as None with
 		// no error and no telemetry, because nothing failed.
 		if rowsErr := rows.Err(); rowsErr != nil {
-			recordInvestmentCoverageFailure(ctx, orgID, req.Measure, useInvestment, coverageStageRows, queryID, fmt.Errorf("rows: %w", rowsErr))
+			reportInvestmentCoverageFailure(ctx, orgID, req.Measure, useInvestment, coverageStageRows, queryID, fmt.Errorf("rows: %w", rowsErr))
 		}
 		return nil
 	}
@@ -599,11 +611,11 @@ func resolveSankeyCoverage(ctx context.Context, client QueryClient, orgID string
 	// breakdown.go's doc comment for the branch-by-branch detail.
 	var directRepo, teamFallbackRepo, fanoutReposPerUnit *float64
 	if scanErr := rows.Scan(&total, &assignedTeam, &repoTotal, &assignedRepo, &directRepo, &teamFallbackRepo, &fanoutReposPerUnit); scanErr != nil {
-		recordInvestmentCoverageFailure(ctx, orgID, req.Measure, useInvestment, coverageStageScan, queryID, fmt.Errorf("scan: %w", scanErr))
+		reportInvestmentCoverageFailure(ctx, orgID, req.Measure, useInvestment, coverageStageScan, queryID, fmt.Errorf("scan: %w", scanErr))
 		return nil
 	}
 	if rowsErr := rows.Err(); rowsErr != nil {
-		recordInvestmentCoverageFailure(ctx, orgID, req.Measure, useInvestment, coverageStageRows, queryID, fmt.Errorf("rows: %w", rowsErr))
+		reportInvestmentCoverageFailure(ctx, orgID, req.Measure, useInvestment, coverageStageRows, queryID, fmt.Errorf("rows: %w", rowsErr))
 		return nil
 	}
 

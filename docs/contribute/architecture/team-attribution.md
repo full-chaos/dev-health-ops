@@ -1818,7 +1818,7 @@ Limits:
 - Between the last partition and the end of a run, a shared work scope can hold the rows of a partition whose read
   was older than another partition's attribution write. The end of the run replaces them. A run whose finalize does
   not complete leaves them until its retry or the next run of the day.
-- `work_item_user_metrics_daily` and `work_item_cycle_times` (not team-keyed) are written by the partitions only.
+- `work_item_cycle_times` (not team-keyed) is written by the partitions only. `work_item_user_metrics_daily` is settled at run scope (retraction marker, CHAOS-9135).
 - Two runs of one day that are in progress at the same time each settle the day from the inputs stored when they end.
   When the inputs change between the two ends, the rows of the run that ended on the later version stay.
 - `team_metrics_daily`: a row of zeros has the `computed_at` of its batch. When another run wrote the superseded key

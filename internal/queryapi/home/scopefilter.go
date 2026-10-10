@@ -80,6 +80,36 @@ func repoFilterRequested(f Filters) bool {
 	return len(teamscope.NamedRepoRefs(f.Scope.Level, f.Scope.IDs, f.What.Repos)) > 0
 }
 
+// filterEmptyReason is Response.FilterEmptyReason (CHAOS-9098): why the
+// repositories a request names matched nothing, by the one rule of
+// teamscope.ClassifyEmptyFilter. nil when the request names no repository, and
+// whenever something matched.
+func filterEmptyReason(ctx context.Context, client QueryClient, f Filters, orgID string, asOf time.Time) (*teamscope.EmptyReason, error) {
+	refs := teamscope.NamedRepoRefs(f.Scope.Level, f.Scope.IDs, f.What.Repos)
+	if len(refs) == 0 {
+		return nil, nil
+	}
+	resolved, err := resolveRepoIDs(ctx, client, refs, orgID)
+	if err != nil {
+		return nil, err
+	}
+	var teamIDs []string
+	if f.Scope.Level == "team" {
+		for _, id := range f.Scope.IDs {
+			if id != "" {
+				teamIDs = append(teamIDs, id)
+			}
+		}
+	}
+	held := 0
+	if len(teamIDs) > 0 {
+		if held, err = teamscope.CountTeamHeldRepos(ctx, client, orgID, resolved, teamIDs, asOf); err != nil {
+			return nil, err
+		}
+	}
+	return teamscope.ClassifyEmptyFilter(len(refs), len(resolved), len(teamIDs) > 0, held), nil
+}
+
 // repoFilterApplied is MetricDelta.RepoFilterApplied: nil when the request names
 // no repository; otherwise true: a repository-keyed metric is narrowed by its
 // repo_id (and has no data when the named repositories resolved to nothing), a

@@ -32,6 +32,9 @@ func TestEveryGoTeamsInsertWritesCreatedAt(t *testing.T) {
 			if err != nil {
 				return err
 			}
+			if rel, _ := filepath.Rel(root, path); strings.HasPrefix(filepath.ToSlash(rel), "internal/testsupport/") {
+				return nil // test seeds, not a writer of production rows
+			}
 			source := string(raw)
 			for _, at := range teamsInsert.FindAllStringIndex(source, -1) {
 				found++

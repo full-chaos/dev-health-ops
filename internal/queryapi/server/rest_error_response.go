@@ -26,6 +26,8 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/chclient"
 	"log"
 	"net/http"
 	"strings"
@@ -125,10 +127,64 @@ func writeRESTMethodNotAllowed(w http.ResponseWriter, r *http.Request, component
 // correlate a live 503 back to the failure that produced it. err must
 // never be nil: TestDataUnavailableCallSitesLogTheCause guards every
 // call site in this package for that.
+//
+// A read that hit a BOUND of the store client (result rows, bytes, execution
+// time: ClickHouse codes 158/396, 307, 159) is not "the store is down": the
+// route keeps the reference's status (503) and its error shape ({"detail":
+// "..."}) but names the cause, so a caller can tell "too large" from "store
+// down" (CHAOS-9126, D5879). One WARN names the operation, the bound and the
+// count of scope ids of the request (a count, never a value).
 func writeRESTDataUnavailable(w http.ResponseWriter, r *http.Request, component, orgID string, err error) {
+	if detail, ok := logRESTBoundHit(r, component, orgID, err); ok {
+		writeRESTError(w, r, component, orgID, http.StatusServiceUnavailable, detail)
+		return
+	}
 	log.Printf("query-api: %s: degraded to 503 Data unavailable: org_id=%s request_id=%s err=%v",
 		component, orgID, envelopeRequestID(r), err)
 	writeRESTError(w, r, component, orgID, http.StatusServiceUnavailable, "Data unavailable")
+}
+
+// logRESTBoundHit says whether err is a bound of the store client (rows, bytes,
+// execution time) and, when it is, logs the one WARN line (route, bound, code,
+// count of scope ids; never a value) and returns the named cause to answer.
+// A deadline of the CALLER's own request (its context ended) is not a bound of
+// the client: it is not named as one.
+func logRESTBoundHit(r *http.Request, component, orgID string, err error) (detail string, ok bool) {
+	bound, code := chclient.BoundHit(err)
+	if bound == chclient.BoundNone {
+		return "", false
+	}
+	if bound == chclient.BoundTime && r.Context().Err() != nil {
+		return "", false
+	}
+	limit := "max_execution_time"
+	switch bound {
+	case chclient.BoundResult:
+		limit = fmt.Sprintf("max_result_rows=%d (code 396 also covers max_result_bytes)", chclient.MaxResultRows)
+	case chclient.BoundBytes:
+		limit = "max_bytes_to_read"
+	}
+	source := fmt.Sprintf("clickhouse code %d", code)
+	if code == 0 {
+		source = "deadline of the client"
+	}
+	log.Printf("query-api: WARN %s: read hit the %s bound (%s, limit=%s): scope_ids=%d org_id=%s request_id=%s err=%v",
+		component, bound, source, limit, len(r.URL.Query()["scope_id"]), orgID, envelopeRequestID(r), err)
+	return restBoundDetail(bound), true
+}
+
+// restBoundDetail is the named cause. The time text says only what is known: the
+// read did not finish inside its time limit, whether the statement was slow or the
+// store stopped answering (the client cannot tell them apart). The two causes
+// stay apart in the LOG (server code 159/160 against "deadline of the client"). a bound hit answers with.
+func restBoundDetail(bound chclient.Bound) string {
+	switch bound {
+	case chclient.BoundTime:
+		return "Query did not finish within its time limit"
+	case chclient.BoundBytes:
+		return "Query read limit exceeded"
+	}
+	return "Result too large"
 }
 
 // jwtHeaderAlg is the credential-kind dispatch: it peeks a JWT's own

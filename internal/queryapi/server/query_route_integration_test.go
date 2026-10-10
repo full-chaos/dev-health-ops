@@ -177,7 +177,13 @@ func (c *fakeReviewEdgesCHClient) Query(_ context.Context, statement string, _ [
 // dual-run proof (ops/tests/api/graphql/test_go_api_dual_run_cognitive_load.py).
 type fakeCognitiveLoadCHClient struct{ calls int }
 
-func (c *fakeCognitiveLoadCHClient) Query(_ context.Context, _ string, _ []clickhouse.Binding) (clickhouse.RowScanner, error) {
+func (c *fakeCognitiveLoadCHClient) Query(_ context.Context, query string, _ []clickhouse.Binding) (clickhouse.RowScanner, error) {
+	// CHAOS-9135: the user-metrics fetch reads the days whose every user key is
+	// retracted with a third statement (the one that names no_live_user_day). It
+	// answers no such day and does not count in the parity of the two reads above.
+	if strings.Contains(query, "no_live_user_day") {
+		return &fakeRows{rows: nil}, nil
+	}
 	c.calls++
 	if c.calls%2 == 1 {
 		return &fakeRows{rows: [][]any{

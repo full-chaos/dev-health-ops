@@ -22,6 +22,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/deltarule"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/quadrant"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/timewindow"
+	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse/liverow"
 )
 
 // safeFloat ports safe_float (api/utils/numeric.py:22-36) specialized to
@@ -371,6 +372,7 @@ func fetchIdentityCoverage(ctx context.Context, client QueryClient, identities [
             FROM user_metrics_daily FINAL
             WHERE identity_id IN {identities:Array(String)}
               AND org_id = {org_id:String}
+              AND %[1]s
             LIMIT 1
 
             UNION ALL
@@ -379,10 +381,11 @@ func fetchIdentityCoverage(ctx context.Context, client QueryClient, identities [
             FROM work_item_user_metrics_daily FINAL
             WHERE user_identity IN {identities:Array(String)}
               AND org_id = {org_id:String}
+              AND %[2]s
             LIMIT 1
         )
-        %s
-    `, settingsMaxExecutionTime())
+        %[3]s
+    `, liverow.Predicate("user_metrics_daily", ""), liverow.Predicate("work_item_user_metrics_daily", ""), settingsMaxExecutionTime())
 	rows, err := client.Query(ctx, query, []dhclickhouse.Binding{
 		{Name: "identities", Value: identities},
 		{Name: "org_id", Value: orgID},
@@ -548,7 +551,7 @@ func fetchPersonCollaboration(ctx context.Context, client QueryClient, identitie
 	Label   string
 	Value   float64
 }, error) {
-	const latestUserMetrics = `(
+	latestUserMetrics := `(
             SELECT
                 day,
                 repo_id,
@@ -562,6 +565,7 @@ func fetchPersonCollaboration(ctx context.Context, client QueryClient, identitie
               AND identity_id IN {identities:Array(String)}
               AND org_id = {org_id:String}
             GROUP BY day, repo_id, author_email
+            HAVING ` + liverow.NewestPredicate("user_metrics_daily", "") + `
         ) AS latest_user_metrics`
 	query := fmt.Sprintf(`
         SELECT 'review_load' AS section, 'Reviews given' AS label, toFloat64(sum(reviews_given)) AS value FROM %[1]s
@@ -585,6 +589,7 @@ func fetchPersonCollaboration(ctx context.Context, client QueryClient, identitie
         WHERE day >= {start_day:Date} AND day < {end_day:Date}
           AND user_identity IN {identities:Array(String)}
           AND org_id = {org_id:String}
+          AND %[3]s
 
         UNION ALL
 
@@ -593,8 +598,9 @@ func fetchPersonCollaboration(ctx context.Context, client QueryClient, identitie
         WHERE day >= {start_day:Date} AND day < {end_day:Date}
           AND user_identity IN {identities:Array(String)}
           AND org_id = {org_id:String}
+          AND %[3]s
         %[2]s
-    `, latestUserMetrics, settingsMaxExecutionTime())
+    `, latestUserMetrics, settingsMaxExecutionTime(), liverow.Predicate("work_item_user_metrics_daily", ""))
 	rows, err := client.Query(ctx, query, []dhclickhouse.Binding{
 		{Name: "start_day", Value: formatDay(startDay)},
 		{Name: "end_day", Value: formatDay(endDay)},

@@ -57,14 +57,33 @@ type Table struct {
 	// Keys are the sorting-key columns other than org_id and DayColumn, in the
 	// order of the key.
 	Keys []KeyColumn
-	// TeamColumn is the key column that holds the team id.
+	// TeamColumn is the column that holds the team id: a key column, or, for a
+	// table with Retracted set, a value column of a row (its sorting key holds
+	// no team).
 	TeamColumn string
 	// Scope are the key columns that bound what one run computes. A run
 	// supersedes only keys whose values of these columns are in its scope. An
 	// empty Scope is a table that one run computes whole for the day.
 	Scope []string
+	// Retracted is the UInt8 column (DEFAULT 0) that marks a row of zeros, for a
+	// table in which a MEASURED row can hold 0 in every measure, so a row of
+	// zeros cannot be told from it by its measures (the two user-level tables,
+	// CHAOS-9135). A computed row stores 0, the row of zeros of the writer
+	// stores 1, and a key is live while its NEWEST row holds 0. The marker is
+	// read after the newest row of a key is chosen, never before: a retraction
+	// newer than a value hides it, and a value newer than a retraction shows
+	// it. A table with a Retracted column declares no measures to test.
+	Retracted string
+	// Carried are the value columns that the row of zeros of a table with a
+	// Retracted column copies from the NEWEST row of its key (team_id and
+	// team_name of the user-level tables). A reader that filters on one of them
+	// BEFORE it takes the newest row of a key then keeps the row of zeros next
+	// to the row it retracts, and the newest of the two wins. Without the copy
+	// that filter would drop the row of zeros and serve the older row.
+	Carried []KeyColumn
 	// Measures are the stored counts and values. A key is live while its
-	// newest row holds a value other than 0 in one of them.
+	// newest row holds a value other than 0 in one of them. Not used by a table
+	// with a Retracted column.
 	Measures []string
 	// Counts are the measures that are unsigned integer columns: every
 	// unsigned column of the table outside its sorting key. A row of zeros
@@ -219,6 +238,26 @@ var (
 		Configuration: []string{"severity"},
 		Where:         "scope = 'team'",
 	}
+	// The two user-level tables hold the team of a person as a VALUE column:
+	// their sorting key is (scope, person, day), so a recompute that gives the
+	// person another team replaces the row, and the key that goes stale is a
+	// (scope, person, day) that the compute no longer produces. A measured row
+	// of these tables can hold 0 in every measure (a person assigned only to an
+	// item created that day), so the row of zeros carries the Retracted marker.
+	WorkItemUserMetricsDaily = Table{
+		Table: "work_item_user_metrics_daily", Family: "work_item", DayColumn: "day",
+		Keys: []KeyColumn{
+			{"provider", KeyString}, {"work_scope_id", KeyString}, {"user_identity", KeyString},
+		},
+		TeamColumn: "team_id", Scope: []string{"provider", "work_scope_id"}, Labels: []string{"team_name"},
+		Retracted: "retracted", Carried: []KeyColumn{{"team_id", KeyString}, {"team_name", KeyString}},
+	}
+	UserMetricsDaily = Table{
+		Table: "user_metrics_daily", Family: "repo_user_commit", DayColumn: "day",
+		Keys:       []KeyColumn{{"repo_id", KeyUUID}, {"author_email", KeyString}},
+		TeamColumn: "team_id", Scope: []string{"repo_id"}, Labels: []string{"team_name"},
+		Retracted: "retracted", Carried: []KeyColumn{{"team_id", KeyNullableString}, {"team_name", KeyNullableString}},
+	}
 	TeamComplexityDaily = Table{
 		Table: "team_complexity_daily", Family: "team_complexity", DayColumn: "day",
 		Keys:       []KeyColumn{{"team_id", KeyString}},
@@ -245,6 +284,8 @@ func All() []Table {
 		ICLandscapeRolling30d,
 		CompoundingRiskDailyTeam,
 		TeamComplexityDaily,
+		WorkItemUserMetricsDaily,
+		UserMetricsDaily,
 	}
 }
 
@@ -262,7 +303,7 @@ func ByTable(name string) (Table, bool) {
 // Valid reports whether the declaration is usable.
 func (table Table) Valid() error {
 	if table.Table == "" || table.DayColumn == "" || len(table.Keys) == 0 ||
-		len(table.Measures)+len(table.NullableMeasures) == 0 {
+		(table.Retracted == "" && len(table.Measures)+len(table.NullableMeasures) == 0) {
 		return fmt.Errorf("%w: table %q is not declared", ErrInvalid, table.Table)
 	}
 	return nil
@@ -309,7 +350,9 @@ func (column KeyColumn) StoredValue(text string) (any, error) {
 }
 
 // MarkerColumns are the columns a reader can test to tell a row of zeros from
-// a row the family computed, with no Float64 comparison: the unsigned count
+// a row the family computed, with no Float64 comparison. For a table with a
+// Retracted column it is that column, which is 1 in a row of zeros and 0 in a
+// computed row. For the other tables: the unsigned count
 // columns of the table (all 0 in a row of zeros), or, for a table with no
 // count column, its Marker columns (all 0 in a row of zeros, never 0 in a
 // computed row). The writer stores 0 in every one of them: none is in the
@@ -322,6 +365,9 @@ func (column KeyColumn) StoredValue(text string) (any, error) {
 // count 0, and for ic_landscape_rolling_30d, where a computed row can hold 0
 // in its three counts (its x_norm and y_norm are never 0, see LiveRow).
 func (table Table) MarkerColumns() []string {
+	if table.Retracted != "" {
+		return []string{table.Retracted}
+	}
 	if len(table.Counts) > 0 {
 		return append([]string(nil), table.Counts...)
 	}
@@ -339,6 +385,9 @@ func (table Table) MarkerColumns() []string {
 // would then hold an aggregate inside an aggregate. A qualified name is the
 // column of the table.
 func (table Table) LiveHaving(qualifier string) string {
+	if table.Retracted != "" {
+		return "argMax(" + qualifier + table.Retracted + ", " + qualifier + "computed_at) = 0"
+	}
 	live := make([]string, 0, len(table.Measures)+len(table.NullableMeasures))
 	version := qualifier + "computed_at"
 	for _, measure := range table.Measures {
@@ -359,6 +408,9 @@ func (table Table) LiveHaving(qualifier string) string {
 // A reader that takes an average over rows, counts rows, or lists the keys of
 // the table adds it, so a superseded key is not a sample, a row or a key.
 func (table Table) LiveRow(qualifier string) string {
+	if table.Retracted != "" {
+		return "(" + qualifier + table.Retracted + " = 0)"
+	}
 	live := make([]string, 0, len(table.Measures)+len(table.NullableMeasures))
 	for _, measure := range table.Measures {
 		live = append(live, qualifier+measure+" != 0")

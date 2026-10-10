@@ -1724,6 +1724,26 @@ take it through `internal/storage/clickhouse/liverow`, and the rule there is: a 
   the repositories of a day) and tests the rolled row takes a newer row of zeros of ONE stored key as the row of
   all of them, and drops the measured ones with it. The home theme allocation reads the stored investment area
   (day, repository, team, area, project stream), applies the predicate there, and only then takes the theme.
+
+**The two user-level daily tables (CHAOS-9135).** `user_metrics_daily` and `work_item_user_metrics_daily` hold the team
+in a VALUE column (the sorting key is scope, person and day), so a key that a run no longer produces cannot be told
+from a key the run measured as zero: a person whose measured row is all zero is a real row (a person assigned only
+to an item created that day). They take an explicit marker instead: `retracted UInt8 DEFAULT 0`
+(`teamkeytables.Table.Retracted`, ClickHouse migration 116). The stale-key rule writes a row with `retracted = 1`, 0 in
+every count, and the `team_id` and `team_name` of the newest row it retracts (`Table.Carried`), so a reader that
+filters on a team BEFORE it takes the newest row still sees the retraction next to the row it retracts. A measured row
+of zeros keeps `retracted = 0` and stays a real row.
+
+- Who writes it: the repository partition family retracts the `user_metrics_daily` keys of its repositories; the
+  organization run retracts the keys of repositories that are gone, and skips the keys the finalize family
+  synthesized; `ic_finalize` retracts those synthesized keys (`icfinalize.SynthesizedRepoID`);
+  `work_item_user_metrics_daily` is a run-level step with the other work-item tables.
+- Who reads it: every reader of either table takes the newest version first and THEN filters
+  (`liverow.Predicate`, `liverow.NewestPredicate`); the census in `internal/storage/clickhouse/liverow` fails for a
+  reader that does not. `ResolveRepoIDsForTeams` leaves out a key whose newest row of the team is a retraction.
+- Roll order: apply migration 116 first, then the code. After the roll, a recompute of the days is needed: a stale key
+  stored before the roll is only retracted when its day is computed again.
+- Not covered: `work_item_blocked_durations_daily` has the same kind of stale key and takes a follow-up.
 - A reader that takes the state on the newest day of each key (a backlog, a current WIP, a stored risk score) must
   NOT filter before it picks the newest row: the row of zeros is what says the key holds nothing now, and a filter
   that ran first would serve the older row. It then gives 0 or no value, as for a key with no row.
@@ -1802,7 +1822,7 @@ Limits:
 - Between the last partition and the end of a run, a shared work scope can hold the rows of a partition whose read
   was older than another partition's attribution write. The end of the run replaces them. A run whose finalize does
   not complete leaves them until its retry or the next run of the day.
-- `work_item_user_metrics_daily` and `work_item_cycle_times` (not team-keyed) are written by the partitions only.
+- `work_item_cycle_times` (not team-keyed) is written by the partitions only. `work_item_user_metrics_daily` is settled at run scope (retraction marker, CHAOS-9135).
 - Two runs of one day that are in progress at the same time each settle the day from the inputs stored when they end.
   When the inputs change between the two ends, the rows of the run that ended on the later version stay.
 - `team_metrics_daily`: a row of zeros has the `computed_at` of its batch. When another run wrote the superseded key
@@ -1856,10 +1876,14 @@ later change of owner does not rewrite the items of earlier days.
 - **What a back-dated row does:** an ownership row written now with a `valid_from` in the past changes the
   items whose day is on or after that `valid_from`. This is the case the backstop exists for; the daily family
   does not compute old days again.
-- **Not under this rule yet:** the provider sync derivation resolves the items of a sync with the facts at the
-  sync's time (it mirrors the reference job, which loads its context once per run), and the investment
-  materialize job reads the repositories of a donor team at its run time. Both write a newer row that a later
-  daily partition of the item's day, or a backstop run, replaces.
+- **The table has these two writers only.** The provider sync derivation computes with the facts at the sync's
+  time (it mirrors the reference job, which loads its context once per run), but it stores no team attribution:
+  the work-items sync sink of every provider refuses the nine tables computed from stored work-item rows,
+  `work_item_team_attributions` among them (`TestWorkItemSyncSinksRefuseEveryDailyJobTable`).
+- **The investment materialize job** follows the same rule for its team ownership fallback: a work unit takes
+  the repositories of its donor team valid at the end of the unit's own span, never later than the run
+  (CHAOS-9179; [investment](../../reference/data-models/investment.md), "Team ownership fallback"). It takes
+  the instant the span ends, not the start of a day.
 
 #### 0.4a Provider × entity **consumption** (functional — what `run_team_autoimport` actually pulls)
 

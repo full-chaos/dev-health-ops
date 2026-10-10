@@ -160,11 +160,46 @@ type Stats struct {
 	RepoOwnershipDonorRows      int `json:"repo_ownership_donor_rows"`
 	RepoOwnershipDonorIssues    int `json:"repo_ownership_donor_issues"`
 	RepoOwnershipRepoShares     int `json:"repo_ownership_repo_shares"`
+	// The earliest and the latest end time a unit of this run took its
+	// repository ownership at; zero when no unit reached the fallback read.
+	// Not part of the stored stats: they describe the run's log record.
+	ownershipFirstUnitAsOf time.Time
+	ownershipLastUnitAsOf  time.Time
 	// RejectedConfidences sums, across every component this run assembled, the
 	// edge confidences excluded from evidence-quality scoring because they are
 	// not finite (NaN or +/-Inf). Zero on a run where every confidence was
 	// finite.
 	RejectedConfidences int `json:"rejected_confidences"`
+}
+
+// unitOwnershipAsOf is the instant a work unit takes the repositories of its
+// donor teams at: the end of the unit's own span, and never later than the
+// run. Ownership starts when it was first known and a later change does not
+// move the effort of a unit that ended before it; a unit whose span ends after
+// the run (a clock ahead of this host) reads no row the run could not see.
+func unitOwnershipAsOf(unitEnd, runAsOf time.Time) time.Time {
+	if unitEnd.IsZero() || unitEnd.After(runAsOf) {
+		return runAsOf
+	}
+	return unitEnd
+}
+
+func (stats *Stats) observeUnitOwnershipAsOf(at time.Time) {
+	if stats.ownershipFirstUnitAsOf.IsZero() || at.Before(stats.ownershipFirstUnitAsOf) {
+		stats.ownershipFirstUnitAsOf = at
+	}
+	if at.After(stats.ownershipLastUnitAsOf) {
+		stats.ownershipLastUnitAsOf = at
+	}
+}
+
+// formatUnitOwnershipAsOf writes "" for a run in which no unit reached the
+// fallback read: the field is still emitted, as every field of the record is.
+func formatUnitOwnershipAsOf(at time.Time) string {
+	if at.IsZero() {
+		return ""
+	}
+	return at.UTC().Format(time.RFC3339Nano)
 }
 
 // logOwnershipFallback emits the team-ownership fallback record. CHAOS-5460:
@@ -189,6 +224,8 @@ func (m *Materializer) logOwnershipFallback(ctx context.Context, cfg Config, sta
 		"donor_rows", stats.RepoOwnershipDonorRows,
 		"donor_issues", stats.RepoOwnershipDonorIssues,
 		"ownership_as_of", ownershipAsOf.Format(time.RFC3339Nano),
+		"ownership_as_of_first_unit", formatUnitOwnershipAsOf(stats.ownershipFirstUnitAsOf),
+		"ownership_as_of_last_unit", formatUnitOwnershipAsOf(stats.ownershipLastUnitAsOf),
 	)
 }
 
@@ -394,16 +431,15 @@ func (m *Materializer) Run(ctx context.Context, cfg Config) (Stats, error) {
 	outcomes := make(map[int]categorize.CategorizationOutcome, len(components))
 	all := make([]preprocessed, 0, len(components))
 	issueIDs, _, _ := collectNodeIDs(components)
-	teamRepoDonors, err := m.reader.FetchTeamRepoDonors(ctx, issueIDs, cfg.OrgID, ownershipAsOf)
+	// The donor teams of the issues and every ownership row that began at or
+	// before the run are read once; each unit then takes the rows valid at its
+	// own end time (unitOwnershipAsOf).
+	donorSet, err := m.reader.FetchTeamRepoDonorSet(ctx, issueIDs, cfg.OrgID, ownershipAsOf)
 	if err != nil {
 		return Stats{}, fmt.Errorf("fetch team repository donors: %w", err)
 	}
-	teamDonorsByIssue := make(map[string][]chquery.TeamRepoDonor)
-	for _, donor := range teamRepoDonors {
-		teamDonorsByIssue[donor.WorkItemID] = append(teamDonorsByIssue[donor.WorkItemID], donor)
-	}
-	stats.RepoOwnershipDonorRows = len(teamRepoDonors)
-	stats.RepoOwnershipDonorIssues = len(teamDonorsByIssue)
+	stats.RepoOwnershipDonorRows = donorSet.Rows
+	stats.RepoOwnershipDonorIssues = len(donorSet.TeamsByWorkItem)
 
 	for index, component := range components {
 		cascade := repoCascades[index]
@@ -423,10 +459,12 @@ func (m *Materializer) Run(ctx context.Context, cfg Config) (Stats, error) {
 			stats.RepoOwnershipWindowSkipped++
 			continue // no bounds, or entirely outside the window
 		}
+		unitAsOf := unitOwnershipAsOf(result.Investment.ToTS, ownershipAsOf)
+		stats.observeUnitOwnershipAsOf(unitAsOf)
 		var componentDonors []chquery.TeamRepoDonor
 		for _, node := range component.Nodes {
 			if node.Type == "issue" {
-				componentDonors = append(componentDonors, teamDonorsByIssue[node.ID]...)
+				componentDonors = append(componentDonors, donorSet.DonorsAt(node.ID, unitAsOf)...)
 			}
 		}
 		var ownershipOutcome string

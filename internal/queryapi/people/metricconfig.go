@@ -48,6 +48,8 @@
 // change).
 package people
 
+import "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse/liverow"
+
 // personMetricDefinition ports MetricDefinition (api/models/schemas.py:
 // 424-426): the free-text description/interpretation pair a metric's
 // config carries.
@@ -264,4 +266,17 @@ func personMetricConfig(metric string) (personMetric, bool) {
 // dedup_from's per-table split.
 func dedupTable(table string) string {
 	return table + " FINAL"
+}
+
+// liveWhere is the clause that leaves a retraction row out of a {table} read
+// (CHAOS-9135): the two user-level tables carry a row of zeros over a person-day
+// that a recompute no longer produces, and a read of them is taken from FINAL,
+// so the clause tests the NEWEST row of each key. It sits in the same WHERE as
+// the org_id predicate and the FINAL source. A table with no retraction marker
+// gets no clause.
+func liveWhere(table string) string {
+	if liverow.Registered(table) {
+		return "\n  AND " + liverow.Predicate(table, "")
+	}
+	return ""
 }

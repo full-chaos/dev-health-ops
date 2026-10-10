@@ -133,6 +133,9 @@ func Columns(table string) []string {
 		return append([]string(nil), columns...)
 	}
 	declared := mustTable(table)
+	if declared.Retracted != "" {
+		return []string{declared.Retracted}
+	}
 	return append(append([]string(nil), declared.Measures...), declared.NullableMeasures...)
 }
 

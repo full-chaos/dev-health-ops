@@ -79,7 +79,7 @@ WHERE day >= {start_day:Date} AND day < {end_day:Date}
 // column; value is then a measurement (a stored 0 included). When false the
 // value is a 0 placeholder, not a measured zero (CHAOS-9044).
 func fetchPersonMetricValue(ctx context.Context, client QueryClient, table, column, aggregator, identityColumn string, identities []string, startDay, endDay time.Time, extraWhere, orgID string) (value float64, hasData bool, err error) {
-	query := fmt.Sprintf(personMetricValueQuery, aggregator, column, dedupTable(table), identityColumn, extraWhere, settingsMaxExecutionTime())
+	query := fmt.Sprintf(personMetricValueQuery, aggregator, column, dedupTable(table), identityColumn, extraWhere+liveWhere(table), settingsMaxExecutionTime())
 	bindings := []dhclickhouse.Binding{
 		{Name: "start_day", Value: formatDay(startDay)},
 		{Name: "end_day", Value: formatDay(endDay)},
@@ -143,7 +143,7 @@ ORDER BY day
 // people.py:115-142): one (day, value) row per day with any data in
 // range.
 func fetchPersonMetricSeries(ctx context.Context, client QueryClient, table, column, aggregator, identityColumn string, identities []string, startDay, endDay time.Time, extraWhere, orgID string) ([]personMetricTimeseriesRow, error) {
-	query := fmt.Sprintf(personMetricSeriesQuery, aggregator, column, dedupTable(table), identityColumn, extraWhere, settingsMaxExecutionTime())
+	query := fmt.Sprintf(personMetricSeriesQuery, aggregator, column, dedupTable(table), identityColumn, extraWhere+liveWhere(table), settingsMaxExecutionTime())
 	bindings := []dhclickhouse.Binding{
 		{Name: "start_day", Value: formatDay(startDay)},
 		{Name: "end_day", Value: formatDay(endDay)},
@@ -209,7 +209,7 @@ func fetchPersonBreakdown(ctx context.Context, client QueryClient, cfg personBre
 	}
 	query := fmt.Sprintf(personBreakdownQuery,
 		cfg.GroupExpr, cfg.Aggregator, cfg.Column, dedupTable(cfg.Table), joinClause,
-		cfg.IdentityColumn, cfg.ExtraWhere, cfg.GroupExpr, settingsMaxExecutionTime())
+		cfg.IdentityColumn, cfg.ExtraWhere+liveWhere(cfg.Table), cfg.GroupExpr, settingsMaxExecutionTime())
 	bindings := []dhclickhouse.Binding{
 		{Name: "start_day", Value: formatDay(startDay)},
 		{Name: "end_day", Value: formatDay(endDay)},

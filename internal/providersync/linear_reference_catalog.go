@@ -434,28 +434,46 @@ func normalizeLinearReferenceMember(
 	}
 	normalizedAt = normalizedAt.UTC().Truncate(time.Millisecond)
 	memberID := linearMemberID(identity)
-	identityValue, err := json.Marshal(identity)
+	memberRow, err := linearReferenceMemberRowOf(claim, payload, normalizedAt, 1)
 	if err != nil {
 		return linearReferenceMemberRow{}, linearReferenceMembershipRow{}, "", err
 	}
-	// Python's _provider_identities uses json.dumps(..., sort_keys=True),
-	// whose default separators retain one space after the object colon and
-	// array comma. Keep the durable String column byte-for-byte compatible with
-	// that producer rather than relying on Go's compact encoder.
-	identityJSON := `{"linear": [` + string(identityValue) + `]}`
-	name := linearFirstNonEmpty(payload.Name, identity)
-	email := optionalLinearString(payload.Email)
+	email := memberRow.Email
 	facets := linearReferenceMembershipFacets(resolver, identity, payload.Email)
-	return linearReferenceMemberRow{
-		OrgID: claim.OrgID, MemberID: memberID, Name: name, Email: email,
-		ProviderIdentities: string(identityJSON), IsActive: 1, UpdatedAt: normalizedAt,
-	}, linearReferenceMembershipRow{
+	return memberRow, linearReferenceMembershipRow{
 		OrgID: claim.OrgID, Provider: "linear", TeamID: teamID, MemberID: memberID,
 		RawProviderUserID: &facets[0], RawEmail: email, IdentityFacets: facets,
 		Source: "native", IsPrimary: 1, Specificity: 100, Priority: 10,
 		ValidFrom: normalizedAt, UpdatedAt: normalizedAt,
 		ProviderUserID: providerUserIDString(payload.ID),
 	}, memberID, nil
+}
+
+// linearReferenceMemberRowOf is the row of the members dimension for one Linear
+// user: the member id is the e-mail, else the Linear id, so the row of a user
+// who is later reported as not active is the NEXT VERSION of the row the user
+// had while active. isActive is Linear's own active flag of the user.
+func linearReferenceMemberRowOf(
+	claim Claim, payload linearReferenceCatalogMemberPayload, normalizedAt time.Time, isActive uint8,
+) (linearReferenceMemberRow, error) {
+	identity := strings.TrimSpace(linearFirstNonEmpty(payload.Email, payload.ID))
+	if identity == "" || strings.TrimSpace(claim.OrgID) == "" || normalizedAt.IsZero() {
+		return linearReferenceMemberRow{}, ErrInvalidConfiguration
+	}
+	identityValue, err := json.Marshal(identity)
+	if err != nil {
+		return linearReferenceMemberRow{}, err
+	}
+	// Python's _provider_identities uses json.dumps(..., sort_keys=True),
+	// whose default separators retain one space after the object colon and
+	// array comma. Keep the durable String column byte-for-byte compatible with
+	// that producer rather than relying on Go's compact encoder.
+	identityJSON := `{"linear": [` + string(identityValue) + `]}`
+	return linearReferenceMemberRow{
+		OrgID: claim.OrgID, MemberID: linearMemberID(identity), Name: linearFirstNonEmpty(payload.Name, identity),
+		Email: optionalLinearString(payload.Email), ProviderIdentities: string(identityJSON),
+		IsActive: isActive, UpdatedAt: normalizedAt.UTC().Truncate(time.Millisecond),
+	}, nil
 }
 
 func linearMemberID(identity string) string {

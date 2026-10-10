@@ -1900,10 +1900,14 @@ later change of owner does not rewrite the items of earlier days.
 - **What a back-dated row does:** an ownership row written now with a `valid_from` in the past changes the
   items whose day is on or after that `valid_from`. This is the case the backstop exists for; the daily family
   does not compute old days again.
-- **Not under this rule yet:** the provider sync derivation resolves the items of a sync with the facts at the
-  sync's time (it mirrors the reference job, which loads its context once per run), and the investment
-  materialize job reads the repositories of a donor team at its run time. Both write a newer row that a later
-  daily partition of the item's day, or a backstop run, replaces.
+- **The table has these two writers only.** The provider sync derivation computes with the facts at the sync's
+  time (it mirrors the reference job, which loads its context once per run), but it stores no team attribution:
+  the work-items sync sink of every provider refuses the nine tables computed from stored work-item rows,
+  `work_item_team_attributions` among them (`TestWorkItemSyncSinksRefuseEveryDailyJobTable`).
+- **The investment materialize job** follows the same rule for its team ownership fallback: a work unit takes
+  the repositories of its donor team valid at the end of the unit's own span, never later than the run
+  (CHAOS-9179; [investment](../../reference/data-models/investment.md), "Team ownership fallback"). It takes
+  the instant the span ends, not the start of a day.
 
 #### 0.4a Provider × entity **consumption** (functional — what `run_team_autoimport` actually pulls)
 

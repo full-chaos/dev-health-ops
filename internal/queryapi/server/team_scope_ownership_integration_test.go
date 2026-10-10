@@ -10,6 +10,7 @@ package server
 
 import (
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/chclient"
 
 	"context"
 	"testing"
@@ -40,6 +41,9 @@ var (
 	teamScopeReadTo   = time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
 )
 
+// teamScopeDSN is the DSN of the ClickHouse the last startTeamScopeClickHouse call started.
+var teamScopeDSN string
+
 // startTeamScopeClickHouse starts a real ClickHouse, migrates it to the
 // chain's head, and hands back a raw connection for seeding plus the
 // read-only query client production's readers run through.
@@ -65,7 +69,9 @@ func startTeamScopeClickHouse(t *testing.T) (chdriver.Conn, *dhclickhouse.Client
 	}
 	t.Cleanup(func() { _ = conn.Close() })
 
-	client, err := dhclickhouse.NewClickHouseQueryClientWithOptions(dhclickhouse.Options{DSN: instance.URI})
+	// The one constructor path of every query-API read client (CHAOS-9126).
+	teamScopeDSN = instance.URI
+	client, err := chclient.New(instance.URI)
 	if err != nil {
 		t.Fatalf("construct ClickHouse query client: %v", err)
 	}

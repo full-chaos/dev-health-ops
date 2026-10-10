@@ -47,7 +47,7 @@ func TestTeamOwnershipDocumentedPrecedenceMatchesCode(t *testing.T) {
 	for _, field := range []string{
 		"allocated", "own_repo", "stronger_allocation", "direct_repo_evidence",
 		"no_eligible_owner", "window_skipped", "repo_shares", "donor_rows",
-		"donor_issues", "ownership_as_of",
+		"donor_issues", "ownership_as_of", "ownership_as_of_first_unit", "ownership_as_of_last_unit",
 	} {
 		if !strings.Contains(cliDoc, "`"+field+"`") {
 			t.Errorf("telemetry field %q is emitted but not documented in the CLI reference", field)

@@ -382,3 +382,82 @@ VALUES (toDate('2026-08-20'), 'github', 'gh:a/r#orphan', 't-alpha', 7, '%s', %s)
 		t.Errorf("blocked_work = %v (has data %v) from an item with no work_items row, want no data", got.Value, got.HasData)
 	}
 }
+
+func repoLinkedSeedRepos(ctx context.Context, t *testing.T, admin stdclickhouse.Conn, org string) {
+	t.Helper()
+	synced := oracleTS("2026-08-26 00:00:00")
+	for _, repo := range []struct{ id, name string }{{oracleR1, "a/r1"}, {oracleR2, "a/r2"}} {
+		if err := admin.Exec(ctx, fmt.Sprintf(`INSERT INTO repos (id, repo, provider, org_id, created_at, last_synced) VALUES (toUUID('%s'), '%s', 'github', '%s', %s, %s)`, repo.id, repo.name, org, synced, synced)); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// One work item stored under two repository ids is the version that passes the DAY's
+// predicate and is newest among those, chosen per day as the daily job chooses it: an
+// older open version still counts on the days a newer, completed version does not pass.
+func TestRepoLinkedVersionIsChosenPerDayAsTheDailyJobChoosesIt(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+	admin, client := newHomeTestClickHouse(ctx, t)
+	const org = "oracle-version-per-day"
+	repoLinkedSeedRepos(ctx, t, admin, org)
+	insert := func(repo, status, completed, synced string) {
+		t.Helper()
+		if err := admin.Exec(ctx, fmt.Sprintf(`INSERT INTO work_items (repo_id, work_item_id, provider, status, type, project_id, created_at, started_at, completed_at, org_id, last_synced)
+VALUES (toUUID('%s'), 'gh:a/r#1', 'github', '%s', 'task', 'a/r', %s, %s, %s, '%s', %s)`,
+			repo, status, oracleTS("2026-08-01 09:00:00"), oracleTS("2026-08-02 09:00:00"), oracleTS(completed), org, oracleTS(synced))); err != nil {
+			t.Fatal(err)
+		}
+	}
+	insert(oracleR1, "in_progress", "", "2026-08-20 00:00:00")
+	// Newer, completed before the current window: it passes only the days up to its completion.
+	insert(oracleR2, "done", "2026-08-12 10:00:00", "2026-08-26 00:00:00")
+	if err := admin.Exec(ctx, fmt.Sprintf(`INSERT INTO work_graph_issue_pr (repo_id, work_item_id, pr_number, confidence, provenance, evidence, last_synced, org_id)
+VALUES (toUUID('%s'), 'gh:a/r#1', 1, 1.0, 'native', '', %s, '%s')`, oracleR1, oracleTS("2026-08-26 00:00:00"), org)); err != nil {
+		t.Fatal(err)
+	}
+	start, end := time.Date(2026, 8, 18, 0, 0, 0, 0, time.UTC), time.Date(2026, 8, 25, 0, 0, 0, 0, time.UTC)
+	got, err := computeMetricDelta(ctx, client, metricSpecByName(t, "wip_saturation"), start, end, time.Date(2026, 8, 11, 0, 0, 0, 0, time.UTC), start,
+		Filters{What: WhatFilter{Repos: []string{oracleR1}}}, org, end)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.HasData || got.Value <= 0 {
+		t.Errorf("wip_saturation = %v (has data %v): on the days of the current window only the open version passes the predicate, so the item is in progress", got.Value, got.HasData)
+	}
+}
+
+// The identity of an item in this read is its provider and its id. A blocked-duration
+// row of a provider whose id has no work_items row of that provider is invisible, even
+// when another provider's item has the same id.
+func TestRepoLinkedBlockedRowIsQualifiedByProvider(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+	admin, client := newHomeTestClickHouse(ctx, t)
+	const org = "oracle-blocked-provider"
+	repoLinkedSeedRepos(ctx, t, admin, org)
+	synced := oracleTS("2026-08-26 00:00:00")
+	for _, statement := range []string{
+		fmt.Sprintf(`INSERT INTO work_items (repo_id, work_item_id, provider, status, type, project_id, created_at, started_at, org_id, last_synced)
+VALUES (toUUID('%s'), 'shared:1', 'jira', 'in_progress', 'task', 'P', %s, %s, '%s', %s)`, oracleR1, oracleTS("2026-08-01 09:00:00"), oracleTS("2026-08-02 09:00:00"), org, synced),
+		fmt.Sprintf(`INSERT INTO work_graph_issue_pr (repo_id, work_item_id, pr_number, confidence, provenance, evidence, last_synced, org_id)
+VALUES (toUUID('%s'), 'shared:1', 1, 1.0, 'native', '', %s, '%s')`, oracleR1, synced, org),
+		// The blocked row is of the GITHUB item of that id, which has no work_items row.
+		fmt.Sprintf(`INSERT INTO work_item_blocked_durations_daily (day, provider, work_item_id, team_id, duration_hours, org_id, computed_at)
+VALUES (toDate('2026-08-20'), 'github', 'shared:1', 't-alpha', 7, '%s', %s)`, org, synced),
+	} {
+		if err := admin.Exec(ctx, statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+	start, end := time.Date(2026, 8, 18, 0, 0, 0, 0, time.UTC), time.Date(2026, 8, 25, 0, 0, 0, 0, time.UTC)
+	got, err := computeMetricDelta(ctx, client, metricSpecByName(t, "blocked_work"), start, end, time.Date(2026, 8, 11, 0, 0, 0, 0, time.UTC), start,
+		Filters{What: WhatFilter{Repos: []string{oracleR1}}}, org, end)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.HasData || got.Value != 0 {
+		t.Errorf("blocked_work = %v (has data %v) from a github blocked row of an id only a jira item has, want no data", got.Value, got.HasData)
+	}
+}

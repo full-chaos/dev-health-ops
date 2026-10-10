@@ -83,9 +83,13 @@ type RepoLinkCoverage struct {
 
 // repoLinkedView is everything one request reads once for the four metrics.
 type repoLinkedView struct {
-	state          string
-	items          []workitemmetrics.StoredItem
-	attributions   map[string]workitemmetrics.PrimaryAttribution
+	state string
+	// versions are the stored rows of the linked items that pass the predicate of
+	// some day of the two windows, every version of every item: which version an item
+	// is on a day is decided per day (workitemmetrics.OncePerProviderAndID), as the
+	// daily job decides it.
+	versions       []linkedItemVersion
+	attributions   map[linkedItemAddress]workitemmetrics.PrimaryAttribution
 	blocked        []blockedItemRow
 	basis          RepoLinkBasis
 	multiRepoItems int
@@ -93,6 +97,23 @@ type repoLinkedView struct {
 	// rowsByDay are the compute's rows for every day of both windows.
 	rowsByDay map[time.Time][]workitemmetrics.MetricsDailyRow
 }
+
+// linkedItemVersion is one stored work_items row of a linked item: the item, the
+// repository id of the row and its version.
+type linkedItemVersion struct {
+	item   workitemmetrics.StoredItem
+	repoID string
+	synced time.Time
+}
+
+func (v linkedItemVersion) version() workitemmetrics.ItemVersion {
+	return workitemmetrics.ItemVersion{Provider: v.item.Provider, WorkItemID: v.item.WorkItemID, RepoID: v.repoID, LastSynced: v.synced}
+}
+
+// linkedItemAddress is the address of a stored row: the item (provider and
+// provider-local id, the identity every read of this view carries) and the
+// repository id the row is stored under.
+type linkedItemAddress struct{ provider, workItemID, repoID string }
 
 // blockedItemRow is one (day, team) of the per-item blocked hours.
 type blockedItemRow struct {
@@ -110,9 +131,6 @@ type repoLinkedLoader struct {
 	orgID                                      string
 	repoIDs                                    []string
 	compareStart, compareEnd, startDay, endDay time.Time
-
-	// itemRepo is the repository of the stored row chosen for each item.
-	itemRepo map[string]string
 
 	once sync.Once
 	view *repoLinkedView
@@ -196,6 +214,15 @@ func repoLinkBoundHit(err error) string {
 const repoLinkedSettings = "\nSETTINGS max_execution_time = %d, max_result_rows = %d"
 
 // linkedItemsSubquery is the item ids linked to the repositories' pull requests.
+//
+// Identity census of this read (CHAOS-9094): an item is its (provider, work_item_id)
+// in every read here: the stored rows and their versions (readItems,
+// workitemmetrics.OncePerProviderAndID), the attributions (readAttributions), the
+// blocked rows (readBlocked) and the coverage groups. The ONE place that matches on
+// work_item_id alone is the link: work_graph_issue_pr carries no provider (key
+// repo_id, work_item_id, pr_number), and every producer prefixes the id with its
+// provider (jira:, gh:, linear:, gitlab), so the id names the item across providers.
+// A link row cannot be told from a link of another provider's item of the same id.
 const linkedItemsSubquery = `(SELECT work_item_id FROM work_graph_issue_pr FINAL
         WHERE org_id = {org_id:String} AND repo_id IN {link_repo_ids:Array(UUID)})`
 
@@ -211,15 +238,15 @@ func (loader *repoLinkedLoader) bindings() []dhclickhouse.Binding {
 func (loader *repoLinkedLoader) readLinked(ctx context.Context, view *repoLinkedView) (*repoLinkedView, error) {
 	budget := fmt.Sprintf(repoLinkedSettings, repoLinkedMaxExecutionSeconds, RepoLinkedMaxResultRows)
 
-	items, err := loader.readItems(ctx, budget)
+	versions, err := loader.readItems(ctx, budget)
 	if err != nil {
 		return nil, err
 	}
-	attributions, err := loader.readAttributions(ctx, budget, items)
+	attributions, err := loader.readAttributions(ctx, budget, versions)
 	if err != nil {
 		return nil, err
 	}
-	view.items, view.attributions = items, attributions
+	view.versions, view.attributions = versions, attributions
 	if err := loader.readBasis(ctx, budget, view); err != nil {
 		return nil, err
 	}
@@ -231,19 +258,20 @@ func (loader *repoLinkedLoader) readLinked(ctx context.Context, view *repoLinked
 		return nil, err
 	}
 	view.blocked = blocked
-	view.rowsByDay = computeRowsByDay(loader.compareStart, loader.endDay, items, attributions)
-	if len(items) == 0 && len(blocked) == 0 {
+	view.rowsByDay = computeRowsByDay(loader.compareStart, loader.endDay, versions, attributions)
+	if len(versions) == 0 && len(blocked) == 0 {
 		view.state = repoLinkNoLinks
 	}
 	return view, nil
 }
 
-// readItems reads the linked items the work_item family would load for some day
-// of the two windows: the family's predicate (created before the window ends and
-// either not done or completed no earlier than its start), over the union of
-// the days, from work_items FINAL, once per (provider, id) by the newest
-// last_synced (the lower repository id on a tie).
-func (loader *repoLinkedLoader) readItems(ctx context.Context, budget string) ([]workitemmetrics.StoredItem, error) {
+// readItems reads the stored rows of the linked items that the work_item family
+// would load for some day of the two windows: the family's predicate (created before
+// the window ends and either not done or completed no earlier than its start), over
+// the union of the days, from work_items FINAL. Every version is kept: the version
+// an item is on a day is chosen per day by computeRowsByDay, with the daily job's
+// own rule.
+func (loader *repoLinkedLoader) readItems(ctx context.Context, budget string) ([]linkedItemVersion, error) {
 	rows, err := loader.client.Query(ctx, `
 SELECT toString(repo_id), last_synced,
        work_item_id, provider, status, project_key, project_id, native_team_key, project_name,
@@ -257,14 +285,9 @@ WHERE org_id = {org_id:String}
 		return nil, fmt.Errorf("home: repo-linked items: %w", err)
 	}
 	defer rows.Close()
-	type versioned struct {
-		item   workitemmetrics.StoredItem
-		repoID string
-		synced time.Time
-	}
-	best := map[[2]string]versioned{}
+	var out []linkedItemVersion
 	for rows.Next() {
-		var v versioned
+		var v linkedItemVersion
 		var completed, started, closed *time.Time
 		var points *float64
 		item := &v.item
@@ -274,25 +297,11 @@ WHERE org_id = {org_id:String}
 			return nil, fmt.Errorf("home: repo-linked items scan: %w", err)
 		}
 		item.CompletedAt, item.StartedAt, item.ClosedAt, item.StoryPoints = completed, started, closed, points
-		key := [2]string{item.Provider, item.WorkItemID}
-		if current, seen := best[key]; seen {
-			newer := v.synced.After(current.synced) || (v.synced.Equal(current.synced) && v.repoID < current.repoID)
-			if !newer {
-				continue
-			}
-		}
-		best[key] = v
+		out = append(out, v)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("home: repo-linked items: %w", err)
 	}
-	out := make([]workitemmetrics.StoredItem, 0, len(best))
-	loader.itemRepo = make(map[string]string, len(best))
-	for _, v := range best {
-		out = append(out, v.item)
-		loader.itemRepo[v.item.WorkItemID] = v.repoID
-	}
-	sort.Slice(out, func(i, j int) bool { return out[i].WorkItemID < out[j].WorkItemID })
 	return out, nil
 }
 
@@ -300,35 +309,34 @@ WHERE org_id = {org_id:String}
 // work_item_team_attributions the work_item family reads (is_primary = 1, the
 // newest snapshot of each (repository, item)). An item with no row has none, which
 // the compute resolves to unassigned as the family does.
-func (loader *repoLinkedLoader) readAttributions(ctx context.Context, budget string, items []workitemmetrics.StoredItem) (map[string]workitemmetrics.PrimaryAttribution, error) {
-	out := map[string]workitemmetrics.PrimaryAttribution{}
-	if len(items) == 0 {
+func (loader *repoLinkedLoader) readAttributions(ctx context.Context, budget string, versions []linkedItemVersion) (map[linkedItemAddress]workitemmetrics.PrimaryAttribution, error) {
+	out := map[linkedItemAddress]workitemmetrics.PrimaryAttribution{}
+	if len(versions) == 0 {
 		return out, nil
 	}
 	rows, err := loader.client.Query(ctx, `
-SELECT toString(repo_id), work_item_id, ifNull(team_id, ''), ifNull(team_name, '')
+SELECT toString(repo_id), provider, work_item_id, ifNull(team_id, ''), ifNull(team_name, '')
 FROM work_item_team_attributions FINAL
 WHERE org_id = {org_id:String} AND is_primary = 1
   AND work_item_id IN `+linkedItemsSubquery+`
-  AND (repo_id, work_item_id, computed_at) IN (
-      SELECT repo_id, work_item_id, max(computed_at)
+  AND (repo_id, provider, work_item_id, computed_at) IN (
+      SELECT repo_id, provider, work_item_id, max(computed_at)
       FROM work_item_team_attributions
       WHERE org_id = {org_id:String} AND work_item_id IN `+linkedItemsSubquery+`
-      GROUP BY repo_id, work_item_id)`+budget, loader.bindings())
+      GROUP BY repo_id, provider, work_item_id)`+budget, loader.bindings())
 	if err != nil {
 		return nil, fmt.Errorf("home: repo-linked attributions: %w", err)
 	}
 	defer rows.Close()
 	for rows.Next() {
-		var repoID, itemID string
+		var address linkedItemAddress
 		var attribution workitemmetrics.PrimaryAttribution
-		if err := rows.Scan(&repoID, &itemID, &attribution.TeamID, &attribution.TeamName); err != nil {
+		if err := rows.Scan(&address.repoID, &address.provider, &address.workItemID, &attribution.TeamID, &attribution.TeamName); err != nil {
 			return nil, fmt.Errorf("home: repo-linked attributions scan: %w", err)
 		}
-		// The attribution of the stored row the item was read from.
-		if loader.itemRepo[itemID] == repoID {
-			out[itemID] = attribution
-		}
+		// Every stored row of an item keeps its own attribution: the day's chosen
+		// version (computeRowsByDay) takes the attribution of the row it is.
+		out[address] = attribution
 	}
 	return out, rows.Err()
 }
@@ -354,8 +362,8 @@ GROUP BY work_item_id`+budget, loader.bindings())
 	}
 	defer rows.Close()
 	inView := map[string]bool{}
-	for _, item := range view.items {
-		inView[item.WorkItemID] = true
+	for _, v := range view.versions {
+		inView[v.item.WorkItemID] = true
 	}
 	for rows.Next() {
 		var id, tier string
@@ -422,7 +430,7 @@ FROM (
   FROM work_item_blocked_durations_daily
   WHERE org_id = {org_id:String} AND day >= {win_start:Date} AND day < {win_end:Date}
     AND work_item_id IN `+linkedItemsSubquery+`
-    AND work_item_id IN (SELECT work_item_id FROM work_items FINAL WHERE org_id = {org_id:String})
+    AND (provider, work_item_id) IN (SELECT provider, work_item_id FROM work_items FINAL WHERE org_id = {org_id:String})
   GROUP BY day, provider, work_item_id
 )
 GROUP BY day, team_id`+budget, loader.bindings())
@@ -442,16 +450,40 @@ GROUP BY day, team_id`+budget, loader.bindings())
 }
 
 // computeRowsByDay runs the work_item family's compute for every day of the
-// window over the items. The compute itself keeps the items that are relevant to
-// the day (created before it ends and started, completed or open at its end, or
-// created in it), as it does for the daily job.
-func computeRowsByDay(from, to time.Time, items []workitemmetrics.StoredItem, attributions map[string]workitemmetrics.PrimaryAttribution) map[time.Time][]workitemmetrics.MetricsDailyRow {
+// window. For each day the rows are the versions that pass the day's predicate,
+// each item once by the daily job's own rule (workitemmetrics.OncePerProviderAndID:
+// a version that does not pass the day's predicate does not compete), each with the
+// attribution of the stored row it is. The compute itself keeps the items that are
+// relevant to the day, as it does for the daily job.
+func computeRowsByDay(from, to time.Time, versions []linkedItemVersion, attributions map[linkedItemAddress]workitemmetrics.PrimaryAttribution) map[time.Time][]workitemmetrics.MetricsDailyRow {
 	out := map[time.Time][]workitemmetrics.MetricsDailyRow{}
-	if len(items) == 0 {
+	if len(versions) == 0 {
 		return out
 	}
 	for day := from; day.Before(to); day = day.AddDate(0, 0, 1) {
-		if rows := workitemmetrics.ComputeStoredItemsDay(day, items, nil, attributions).MetricsDaily; len(rows) > 0 {
+		dayEnd := day.AddDate(0, 0, 1)
+		var passing []linkedItemVersion
+		var keys []workitemmetrics.ItemVersion
+		for _, v := range versions {
+			if workitemmetrics.PassesDayPredicate(v.item.Status, v.item.CreatedAt, v.item.CompletedAt, day, dayEnd) {
+				passing = append(passing, v)
+				keys = append(keys, v.version())
+			}
+		}
+		kept, _ := workitemmetrics.OncePerProviderAndID(keys)
+		items := make([]workitemmetrics.StoredItem, 0, len(kept))
+		dayAttributions := map[string]workitemmetrics.PrimaryAttribution{}
+		for _, index := range kept {
+			v := passing[index]
+			items = append(items, v.item)
+			if attribution, found := attributions[linkedItemAddress{v.item.Provider, v.item.WorkItemID, v.repoID}]; found {
+				dayAttributions[v.item.WorkItemID] = attribution
+			}
+		}
+		if len(items) == 0 {
+			continue
+		}
+		if rows := workitemmetrics.ComputeStoredItemsDay(day, items, nil, dayAttributions).MetricsDaily; len(rows) > 0 {
 			out[day] = rows
 		}
 	}

@@ -1514,6 +1514,17 @@ WHERE the rule runs depends on who can write a key:
   partition of a run.
 - **A table that a finalize family writes** is written once for a run already; the family applies the rule after its
   write.
+- **A run of the whole organization owns the whole day** (`Run.FullOrg`; the scheduled fan-out and a run started with
+  no repository list). A work scope that the organization has no item in any more is computed by nothing, so the rows
+  an earlier compute stored under it (under a team id, and under `unassigned`) would stay counted for ever under a
+  rule that looks only at the scopes a run produced. So the end of an organization-wide run (a) reads the work scopes
+  from EVERY work item of the organization for the day, not through the run's repository list, and computes and
+  settles them all; (b) supersedes every live key of the day that it did not compute, of any provider and any work
+  scope; and (c) in the tables whose keys a partition decides inside its own repositories (`team_metrics_daily`,
+  `ai_impact_metrics_daily`; `OrganizationRunStaleKeyTables`) supersedes the live keys of a repository that is in no
+  partition of the run, the `team_metrics_daily` rows with no repository among them. A run of some repositories does
+  none of this: it stays inside the work scopes its repositories reach, and a key of another scope is never its to
+  supersede. The scope of a run is read from the store at the end of the run (`LoadRun`), not from the claim.
 
 A row of zeros is strictly newer than the row it supersedes, never of the same `computed_at`: with an equal
 `computed_at` only a FINAL read follows the order of the inserts, and a reader that takes the newest row by `argMax`

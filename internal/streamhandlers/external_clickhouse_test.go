@@ -843,6 +843,15 @@ func TestAPushedIdentityThatNamesATeamWithNoTeamRowIsCountedInOneWarnLine(t *tes
 			}
 		}
 	})
+	// Only a row of a NAMED id counts as "has a row": an answer that holds
+	// another id must not hide a named team that has none.
+	t.Run("a row of an id that was not named does not count", func(t *testing.T) {
+		connection := &productSink{batch: &productBatch{}, teamRowIDs: []string{"gh:team-a", "gh:some-other-team"}}
+		logs := write(t, connection, ada, team)
+		if !strings.Contains(logs, "team_ids_named=2") || !strings.Contains(logs, "team_ids_with_no_team_row=1") {
+			t.Errorf("want one team id with no team row of the two named:\n%s", logs)
+		}
+	})
 	t.Run("every named team has a row", func(t *testing.T) {
 		connection := &productSink{batch: &productBatch{}, teamRowIDs: []string{"gh:team-a", "gh:team-never-pushed"}}
 		if logs := write(t, connection, ada, team); strings.Contains(logs, "level=WARN") {

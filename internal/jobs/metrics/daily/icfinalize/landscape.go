@@ -47,19 +47,19 @@ var mapNames = [3]string{"churn_throughput", "cycle_throughput", "wip_throughput
 // looks like a bug to the next reader.
 // StatsOfEachTeam gives a person who is a member of teams one stat for each
 // team, in the order of the teams, each with the person's 30-day numbers. A
-// person with no team keeps the one stat, with the team it was read with. A
-// blank or "unknown" identity is no person and is not looked up.
+// person with no team gets the one stat with NO team: the team a stat was
+// read with comes from stored rows, which are this family's own earlier
+// output, and is never the team of the person. A blank or "unknown" identity
+// is no person and is not looked up.
 func StatsOfEachTeam(stats []RollingStat, teamsOf func(identity string) []string) []RollingStat {
-	if teamsOf == nil {
-		return stats
-	}
 	expanded := make([]RollingStat, 0, len(stats))
 	for _, stat := range stats {
 		var teams []string
-		if stat.IdentityID != "" && stat.IdentityID != "unknown" {
+		if teamsOf != nil && stat.IdentityID != "" && stat.IdentityID != "unknown" {
 			teams = teamsOf(stat.IdentityID)
 		}
 		if len(teams) == 0 {
+			stat.TeamID = ""
 			expanded = append(expanded, stat)
 			continue
 		}

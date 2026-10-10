@@ -26,18 +26,20 @@ import (
 //   - dave: no row on the day; one row ten days before it, under ENG.
 //   - carol: a row ten days before under ENG, and a row of the day that the
 //     repository/user family wrote as unassigned.
-//   - erin: an older row under one active team, the newest row under another.
+//   - erin: stored rows under two ACTIVE teams, and no membership.
 //   - frank: a row of the day under ENG; he has a membership in an active team.
-//   - henry: no row on the day; the row of the older day was computed last.
-//   - ivy: two rows of one day and one compute time, of two repositories and
-//     two active teams.
+//   - henry, ivy: stored rows of older days under active teams, and no
+//     membership.
 //
 // The family reads every newest row of the day back and writes it again, and
 // it gives each person of the trailing 30 days a point in the landscape of the
 // day. After the run no row of the day and no live point may sit under ENG:
-// such a row is written again under the mapped team or as unassigned. A row of
-// a day the run does not compute keeps its stored id, and it gives no point
-// that id.
+// such a row is written again under the team of the person's membership, or as
+// unassigned. The same holds for a stored ACTIVE team: the team a row was
+// stored with is the family's own earlier output and is never the person's
+// team, so erin, henry and ivy, who are members of no team, are unassigned. A
+// row of a day the run does not compute keeps its stored id, and it gives no
+// point that id.
 func TestTheLandscapeFinalizeGivesNoPersonAnInactiveTeam(t *testing.T) {
 	ctx := context.Background()
 	conn := workItemAttributionLinkedIssueMigratedClickHouse(t, ctx)
@@ -94,11 +96,9 @@ func TestTheLandscapeFinalizeGivesNoPersonAnInactiveTeam(t *testing.T) {
 	userRow(repoLive, fiveDaysBefore, "erin@example.com", "github:platform", earlier)
 	userRow(repoLive, day, "erin@example.com", "jira:ENG", later)
 	userRow(repoLive, day, "frank@example.com", "ENG", earlier)
-	// The team of a person is the team of the NEWEST row by compute time, not
-	// of the newest day: henry's older day was computed last.
+	// Stored rows of older days under active teams; no membership.
 	userRow(repoLive, tenDaysBefore, "henry@example.com", "jira:ENG", later)
 	userRow(repoLive, fiveDaysBefore, "henry@example.com", "github:platform", earlier)
-	// One day, one compute time: the repository id decides, so two runs agree.
 	userRow(repoOld, fiveDaysBefore, "ivy@example.com", "jira:ENG", earlier)
 	userRow(repoLive, fiveDaysBefore, "ivy@example.com", "github:platform", earlier)
 	exec("insert bob's work items", `INSERT INTO work_item_user_metrics_daily
@@ -171,16 +171,16 @@ WHERE org_id = ? AND day = ? AND author_email = 'dave@example.com'`, org, tenDay
 	want := answers{
 		Points: map[string][]string{
 			"alice@example.com": {"unassigned"}, "bob@example.com": {"unassigned"}, "carol@example.com": {"unassigned"},
-			"dave@example.com": {"unassigned"}, "erin@example.com": {"jira:ENG"}, "frank@example.com": {"github:platform"},
-			"henry@example.com": {"jira:ENG"}, "ivy@example.com": {"github:platform"},
+			"dave@example.com": {"unassigned"}, "erin@example.com": {"unassigned"}, "frank@example.com": {"github:platform"},
+			"henry@example.com": {"unassigned"}, "ivy@example.com": {"unassigned"},
 		},
-		// A row read with an inactive team gets the fallback id AND its name.
-		// A mapped row keeps the name it was read with (frank), as every row
-		// the family maps does.
+		// A row of a person with no team gets the fallback id AND its name,
+		// whatever it was stored with. A member's row keeps the name it was
+		// read with (frank: read with an inactive team, so the fallback's).
 		Rows: map[string]string{
 			"alice@example.com": "unassigned / Unassigned", "bob@example.com": "unassigned / Unassigned",
-			"carol@example.com": "unassigned / Team unassigned",
-			"erin@example.com":  "jira:ENG / Team jira:ENG", "frank@example.com": "github:platform / Unassigned",
+			"carol@example.com": "unassigned / Unassigned",
+			"erin@example.com":  "unassigned / Unassigned", "frank@example.com": "github:platform / Unassigned",
 		},
 		// Not a row of the day: the run does not write it again.
 		DaveTenDaysBefore: "ENG",
@@ -211,15 +211,13 @@ WHERE org_id = ? AND as_of_day = ? AND team_id = 'ENG' AND `+teamkeytables.ICLan
 //   - The window is the day and the 29 days before it: a person whose only
 //     row is 29 days before gets a point, a person whose only row is 30 days
 //     before gets none.
-//   - A team is inactive by its NEWEST teams row: a team that was set
-//     inactive and active again is active (its stored id stays), and a team
-//     that was active and is inactive now is inactive.
+//   - A team is inactive by its NEWEST teams row: a member of a team that was
+//     set inactive and active again has that team, and a member of a team
+//     that was active and is inactive now has none.
 //   - The rule is of ONE organization: an id that is inactive in one
-//     organization and active in another stays a team in the other.
-//   - "unassigned" is a stored value like any other and is not looked up: a
-//     person whose newest stored row is unassigned, with no row on the day,
-//     stays unassigned in the landscape, also when the member map names a
-//     team for the person. (The map is asked for a blank team only.)
+//     organization and active in another is a team for a member in the other.
+//   - The roster column of a team gives nobody a team: a person named there,
+//     with no membership row, is unassigned.
 func TestTheEdgesOfTheInactiveTeamRuleOfTheLandscapeFinalize(t *testing.T) {
 	ctx := context.Background()
 	conn := workItemAttributionLinkedIssueMigratedClickHouse(t, ctx)
@@ -269,12 +267,25 @@ func TestTheEdgesOfTheInactiveTeamRuleOfTheLandscapeFinalize(t *testing.T) {
 	// The same id is an active team of another organization.
 	team(otherOrg, "ENG", 1, t0)
 
+	membership := func(orgID, person, teamID string) {
+		t.Helper()
+		exec("insert membership of "+person, `INSERT INTO team_memberships
+    (org_id, provider, team_id, member_id, raw_email, source, is_primary, specificity, priority, valid_from, valid_to, updated_at, identity_facets)
+    VALUES (?, 'jira', ?, ?, ?, 'native', 1, 100, 10, ?, NULL, ?, ?)`,
+			orgID, teamID, person, person, t0, t0, []string{person})
+	}
+	membership(org, "back-again@example.com", "back-again")
+	membership(org, "closed-later@example.com", "closed-later")
+	membership(org, "eng@example.com", "ENG")
+	membership(otherOrg, "other@example.com", "ENG")
+
 	userRow(org, back(29), "edge-in@example.com", "ENG")
 	userRow(org, back(30), "edge-out@example.com", "ENG")
-	userRow(org, back(3), "back-again@example.com", "back-again")
-	userRow(org, back(3), "closed-later@example.com", "closed-later")
+	userRow(org, back(3), "back-again@example.com", "unassigned")
+	userRow(org, back(3), "closed-later@example.com", "unassigned")
+	userRow(org, back(3), "eng@example.com", "unassigned")
 	userRow(org, back(5), "member@example.com", "unassigned")
-	userRow(otherOrg, day, "other@example.com", "ENG")
+	userRow(otherOrg, day, "other@example.com", "unassigned")
 
 	points := func(orgID string) map[string][]string {
 		t.Helper()
@@ -314,7 +325,9 @@ WHERE org_id = ? AND as_of_day = ? AND `+teamkeytables.ICLandscapeRolling30d.Liv
 		"edge-in@example.com":      {"unassigned"},
 		"back-again@example.com":   {"back-again"},
 		"closed-later@example.com": {"unassigned"},
-		"member@example.com":       {"unassigned"},
+		// A member of ENG, which is inactive in this organization.
+		"eng@example.com":    {"unassigned"},
+		"member@example.com": {"unassigned"},
 		// edge-out has no row in the window: no point.
 	}
 	if got := points(org); !reflect.DeepEqual(got, want) {

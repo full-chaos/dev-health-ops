@@ -381,13 +381,20 @@ func (executor *Executor) computeForDay(
 		}
 		return active
 	}
-	// The person's row of the day holds one team: the first.
+	// The person's row of the day holds one team: the first of the person's
+	// teams, and "unassigned" for a person with no team on the day.
+	//
+	// The resolver ALWAYS answers, so the team a row was stored with is never
+	// the team it is written with. A stored team is this family's own earlier
+	// output (the repository/user family writes "unassigned" for every row):
+	// taking it back as a source would keep a person in a team for as long as
+	// an old row is read, also after the membership ended. That is the person
+	// who left a team and stayed in its landscape.
 	resolveTeam := TeamResolver(func(identity string) (string, bool) {
-		teams := activeTeamsOf(identity)
-		if len(teams) == 0 {
-			return "", false
+		if teams := activeTeamsOf(identity); len(teams) > 0 {
+			return teams[0], true
 		}
-		return teams[0], true
+		return unassignedTeamID, true
 	})
 	gitMetrics, err := executor.loadGitMetrics(ctx, orgID, day, inactive)
 	if err != nil {
@@ -399,6 +406,13 @@ func (executor *Executor) computeForDay(
 	}
 
 	merged := MergeICUserMetrics(gitMetrics, workItems, resolveTeam)
+	for index := range merged {
+		// The name of a row with no team is the fallback's too, not the name
+		// the row was stored with.
+		if merged[index].TeamID == unassignedTeamID {
+			merged[index].PassThrough.TeamName = unassignedTeamName
+		}
+	}
 	computedAt := executor.now()
 	written, err := executor.writeUserMetrics(ctx, orgID, day, computedAt, merged)
 	if err != nil {
@@ -412,8 +426,9 @@ func (executor *Executor) computeForDay(
 	// A person who is a member of N active teams gets a point in EACH of
 	// them: the person's 30-day numbers are ranked among the members of each
 	// team (the key of the landscape holds the team). A person with no
-	// membership keeps the team of the newest stored row, and ComputeLandscape
-	// gives "unassigned" where that is blank.
+	// membership on the day gets no team here, whatever the stored rows of the
+	// 30 days hold (they are this family's own earlier output), and
+	// ComputeLandscape gives "unassigned" for a person with no team.
 	stats = StatsOfEachTeam(stats, activeTeamsOf)
 	landscape := ComputeLandscape(stats, nil)
 	landscapeWritten, err := executor.writeLandscape(ctx, orgID, day, computedAt, landscape)

@@ -129,8 +129,9 @@ func TestTeamFallbackChainMatchesTheReference(t *testing.T) {
 }
 
 // A person who is a member of teams gets one stat for each team, with the
-// person's own numbers; a person with no team keeps the stat as it was read;
-// a blank or "unknown" identity is no person and is not looked up.
+// person's own numbers; a person with no team gets the stat with NO team (the
+// team it was read with is the family's own earlier output and is dropped); a
+// blank or "unknown" identity is no person and is not looked up.
 func TestStatsOfEachTeamGivesAMemberOneStatForEachTeam(t *testing.T) {
 	looked := map[string]int{}
 	teamsOf := func(identity string) []string {
@@ -154,8 +155,8 @@ func TestStatsOfEachTeamGivesAMemberOneStatForEachTeam(t *testing.T) {
 		{IdentityID: "two", TeamID: "team-a", ChurnLOC30d: 7},
 		{IdentityID: "two", TeamID: "team-b", ChurnLOC30d: 7},
 		{IdentityID: "one", TeamID: "team-c", ChurnLOC30d: 3},
-		{IdentityID: "none", TeamID: "stored-none", ChurnLOC30d: 1},
-		{IdentityID: "", TeamID: "stored-blank"},
+		{IdentityID: "none", TeamID: "", ChurnLOC30d: 1},
+		{IdentityID: "", TeamID: ""},
 		{IdentityID: "unknown", TeamID: ""},
 	}
 	if got := StatsOfEachTeam(stats, teamsOf); !reflect.DeepEqual(got, want) {
@@ -164,7 +165,13 @@ func TestStatsOfEachTeamGivesAMemberOneStatForEachTeam(t *testing.T) {
 	if looked[""] != 0 || looked["unknown"] != 0 {
 		t.Fatalf("a blank or unknown identity was looked up: %v", looked)
 	}
-	if got := StatsOfEachTeam(stats, nil); !reflect.DeepEqual(got, stats) {
-		t.Fatalf("with no membership read the stats must not change: %+v", got)
+	// With no membership read nobody has a team: every stored team is dropped.
+	for _, stat := range StatsOfEachTeam(stats, nil) {
+		if stat.TeamID != "" {
+			t.Fatalf("with no membership read %q keeps the stored team %q", stat.IdentityID, stat.TeamID)
+		}
+	}
+	if len(StatsOfEachTeam(stats, nil)) != len(stats) {
+		t.Fatal("with no membership read each person keeps one stat")
 	}
 }

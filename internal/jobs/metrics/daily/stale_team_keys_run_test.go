@@ -3,6 +3,7 @@ package daily
 import (
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
 	"testing"
 	"time"
@@ -186,5 +187,30 @@ func TestRunStaleKeyRetractorRefusesWhatItCannotRun(t *testing.T) {
 		if _, err := retractor.RetractStaleKeys(context.Background(), run); !errors.Is(err, ErrInvalidState) {
 			t.Errorf("%s: err = %v, want ErrInvalidState", name, err)
 		}
+	}
+}
+
+// A log line of the step names at most StaleKeyLoggedRepositoryLimit
+// repository ids, sorted, and says how many more there are.
+func TestTheLoggedRepositoryIDsAreSortedAndBounded(t *testing.T) {
+	repositories := map[string]struct{}{}
+	for index := 0; index < StaleKeyLoggedRepositoryLimit+5; index++ {
+		repositories[fmt.Sprintf("repo-%03d", StaleKeyLoggedRepositoryLimit+5-index)] = struct{}{}
+	}
+	ids, more := loggedRepositoryIDs(repositories)
+	if len(ids) != StaleKeyLoggedRepositoryLimit || more != 5 {
+		t.Fatalf("%d ids and %d more for %d repositories, want %d and 5", len(ids), more, len(repositories), StaleKeyLoggedRepositoryLimit)
+	}
+	for index, id := range ids {
+		if want := fmt.Sprintf("repo-%03d", index+1); id != want {
+			t.Fatalf("id %d is %s, want %s: the list is not the first ids in order", index, id, want)
+		}
+	}
+	few := map[string]struct{}{"b": {}, "a": {}}
+	if ids, more := loggedRepositoryIDs(few); len(ids) != 2 || ids[0] != "a" || ids[1] != "b" || more != 0 {
+		t.Errorf("two repositories give %v and %d more, want [a b] and 0", ids, more)
+	}
+	if ids, more := loggedRepositoryIDs(nil); len(ids) != 0 || more != 0 || ids == nil {
+		t.Errorf("no repository gives %v and %d more, want an empty list (not null) and 0", ids, more)
 	}
 }

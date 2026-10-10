@@ -816,12 +816,18 @@ func (collector JiraTeamCatalogCollector) CollectTeamCatalog(
 		//
 		// A row whose project IS in the live answer is another case: the
 		// project is there, so what went is its legacy link, and the links
-		// are one read of the store.
-		searched := make(map[string]bool, len(projects))
+		// are one read of the store. That holds for a row of the retired id
+		// form too ("{org}:jira:{KEY}"): its project is named by its KEY, and
+		// when the answer holds that key the project is there under its
+		// native id and the retired row is superseded.
+		searched := make(map[string]bool, 2*len(projects))
 		for _, row := range projects {
 			searched[row.ID.String()] = true
+			if row.ProjectKey != nil {
+				searched[jiraKeyBuiltProjectIDPrefix(ref.OrgID)+*row.ProjectKey] = true
+			}
 		}
-		lookups := NewOwnershipAbsenceLookups(ctx, jiraProjectAbsence{client: client})
+		lookups := NewOwnershipAbsenceLookups(ctx, jiraProjectAbsence{client: client, orgID: ref.OrgID})
 		snapshot := JiraLegacyOwnershipKind().Snapshot(
 			ProveSoleScope(ctx, collector.ScopeCensus, ref.OrgID, jiraTeamCatalogProvider, ref.IntegrationID), ProveSnapshot(
 				SnapshotTerm{Holds: batch.Result.ProjectSearchComplete, Reason: jiraSnapshotProjectSearch},

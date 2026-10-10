@@ -118,19 +118,43 @@ func (prover gitlabGroupProjectAbsence) OwnershipAbsence(ctx context.Context, ro
 // project gone. An entry with the id says the project still exists, live or
 // archived. An answer with no entry that the provider marks as the whole
 // answer says it is neither. Any other answer proves nothing.
+//
+// The question uses the identifier the row was BUILT FROM. A row of today holds
+// the project's native id and is asked for by `id`. A row of the retired form
+// holds an id built from the project KEY ("{org}:jira:{KEY}", see
+// jiraKeyBuiltProjectIDPrefix): the provider never gave that value, answers
+// 400 for it as an id, and must not be sent the organization id. Such a row is
+// asked for by `keys`, with the key alone.
 type jiraProjectAbsence struct {
 	client *providerfoundation.HTTPClient
+	// orgID is the organization of the run: it tells a key-built id from a
+	// native one.
+	orgID string
+}
+
+// jiraProjectAbsenceQuestion is the search parameter and value that name the
+// project of a row, and the same value as the provider's entry holds it.
+func (prover jiraProjectAbsence) question(row OwnershipSnapshotRow) (parameter, value string, ok bool) {
+	projectID := strings.TrimSpace(row.ProjectID.String())
+	if projectID == "" {
+		return "", "", false
+	}
+	if strings.TrimSpace(prover.orgID) != "" && jiraProjectIDIsKeyBuilt(prover.orgID, projectID) {
+		key := jiraTeamID(strings.TrimPrefix(projectID, jiraKeyBuiltProjectIDPrefix(prover.orgID)))
+		return "keys", key, key != ""
+	}
+	return "id", projectID, true
 }
 
 // jiraProjectAbsenceStatuses is every project state the held set admits.
 var jiraProjectAbsenceStatuses = []string{"live", jiraTeamCatalogProjectStatusArchived}
 
 func (prover jiraProjectAbsence) OwnershipAbsence(ctx context.Context, row OwnershipSnapshotRow) SnapshotAbsence {
-	nativeID := strings.TrimSpace(row.ProjectID.String())
-	if prover.client == nil || nativeID == "" {
+	parameter, value, ok := prover.question(row)
+	if prover.client == nil || !ok {
 		return SnapshotAbsenceNotProven
 	}
-	query := url.Values{"id": {nativeID}, "maxResults": {"50"}, "status": jiraProjectAbsenceStatuses}
+	query := url.Values{parameter: {value}, "maxResults": {"50"}, "status": jiraProjectAbsenceStatuses}
 	var page jiraTeamCatalogProjectSearchPayload
 	if err := jiraFetchObject(ctx, prover.client, http.MethodGet, "/rest/api/3/project/search?"+query.Encode(), nil, &page); err != nil {
 		return SnapshotAbsenceNotProven
@@ -139,7 +163,11 @@ func (prover jiraProjectAbsence) OwnershipAbsence(ctx context.Context, row Owner
 		return SnapshotAbsenceNotProven
 	}
 	for _, entry := range page.Values {
-		if strings.TrimSpace(entry.ID) == nativeID {
+		held := strings.TrimSpace(entry.ID)
+		if parameter == "keys" {
+			held = jiraTeamID(entry.Key)
+		}
+		if held == value {
 			return SnapshotFactStillHeld
 		}
 	}

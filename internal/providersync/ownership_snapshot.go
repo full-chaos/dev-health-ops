@@ -2,6 +2,8 @@ package providersync
 
 import (
 	"context"
+	"encoding/binary"
+	"hash/fnv"
 	"sort"
 	"strings"
 	"time"
@@ -494,6 +496,10 @@ func PlanSnapshot[R any](
 			outcome.Abandoned = append(outcome.Abandoned, SnapshotEmptyAnswer)
 		}
 	}
+	// candidates is the open rows the run does not hold, of a kind that may
+	// close: each needs the kind's proof of an absence.
+	var candidates, closes []int
+	owners := make(map[int]int)
 	for index, row := range open {
 		owner := -1
 		for k, snapshot := range kinds {
@@ -518,28 +524,62 @@ func PlanSnapshot[R any](
 		if len(outcome.Abandoned) > 0 {
 			continue
 		}
+		owners[index] = owner
 		if !current[fact] {
-			switch kinds[owner].absence.of(row) {
-			case SnapshotAbsenceProven:
-			case SnapshotFactStillHeld:
-				outcome.StillHeld++
-				continue
-			case SnapshotAbsenceOverBudget:
-				outcome.AbsenceOverBudget++
-				continue
-			default:
-				outcome.AbsenceNotProven++
-				continue
-			}
+			candidates = append(candidates, index)
+			continue
 		}
+		closes = append(closes, index)
+	}
+	// The proofs are asked in an order that changes with the run (the time of
+	// the run is the seed). A proof can cost a direct answer of the provider,
+	// and a run has a budget of them: in a fixed order the same first
+	// candidates would take the budget at every run, and a candidate behind
+	// them would never be asked. The plan itself does not depend on the order
+	// when the budget is not reached.
+	order := append([]int(nil), candidates...)
+	sort.Slice(order, func(left, right int) bool {
+		a, b := snapshotAskRank(key(open[order[left]]), at), snapshotAskRank(key(open[order[right]]), at)
+		if a != b {
+			return a < b
+		}
+		return order[left] < order[right]
+	})
+	for _, index := range order {
+		outcome := &plan.Kinds[owners[index]]
+		switch kinds[owners[index]].absence.of(open[index]) {
+		case SnapshotAbsenceProven:
+			closes = append(closes, index)
+		case SnapshotFactStillHeld:
+			outcome.StillHeld++
+		case SnapshotAbsenceOverBudget:
+			outcome.AbsenceOverBudget++
+		default:
+			outcome.AbsenceNotProven++
+		}
+	}
+	sort.Ints(closes)
+	for _, index := range closes {
+		row := open[index]
 		closedAt := at
 		if closedAt.Before(validFrom(row)) {
 			closedAt = validFrom(row)
 		}
 		plan.Retract = append(plan.Retract, SnapshotRetraction{Open: index, ClosedAt: closedAt})
-		outcome.Closed++
+		plan.Kinds[owners[index]].Closed++
 	}
 	return plan
+}
+
+// snapshotAskRank orders the candidates of one run: a hash of the fact and
+// the time of the run. Two runs at different times ask in different orders.
+func snapshotAskRank(fact string, at time.Time) uint64 {
+	hash := fnv.New64a()
+	_, _ = hash.Write([]byte(fact))
+	var seed [8]byte
+	binary.BigEndian.PutUint64(seed[:], uint64(at.UnixNano()))
+	_, _ = hash.Write(seed[:])
+	return hash.Sum64()
 }
 
 // SnapshotReasons is every distinct reason of the abandoned kinds, sorted.

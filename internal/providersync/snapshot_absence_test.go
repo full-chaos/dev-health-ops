@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"reflect"
+	"sort"
 	"testing"
 	"time"
 )
@@ -96,8 +97,12 @@ func TestPlanSnapshotClosesAnAbsentFactOnlyOnAProofOfItsAbsence(t *testing.T) {
 				t.Errorf("the outcome is %+v, want closed %d, still held %d, not proven %d, over budget %d, proof %q, not abandoned",
 					outcome, len(test.closed), test.held, test.notProven, test.overBudget, test.statement)
 			}
-			if !reflect.DeepEqual(asked, test.asked) {
-				t.Errorf("the provider was asked for %v, want %v: only a fact the run does not hold, of a listing of more than one response", asked, test.asked)
+			// The order of the questions changes with the run: compare as sets.
+			sort.Strings(asked)
+			wantAsked := append([]string(nil), test.asked...)
+			sort.Strings(wantAsked)
+			if !reflect.DeepEqual(asked, wantAsked) {
+				t.Errorf("the provider was asked for %v, want %v: only a fact the run does not hold, of a listing of more than one response", asked, wantAsked)
 			}
 			// A fact the run holds keeps its first valid_from, whatever the proof.
 			if !plan.ValidFrom[0].Equal(first) {
@@ -205,6 +210,7 @@ func TestTheGateTakesAOneResponseListingAsTheProofAndAsksForTheOthers(t *testing
 	for _, retraction := range plan.Retract {
 		closed = append(closed, retraction.Open)
 	}
+	sort.Strings(asked)
 	if !reflect.DeepEqual(closed, []int{0, 1}) || !reflect.DeepEqual(asked, []string{"paged/a", "paged/b", "uncounted/a"}) || plan.Kinds[0].StillHeld != 2 {
 		t.Errorf("the plan closes %v after asking for %v with %d still held; want rows 0 and 1, the facts of the paged and the uncounted team asked, 2 still held",
 			closed, asked, plan.Kinds[0].StillHeld)
@@ -217,5 +223,73 @@ func TestTheGateTakesAOneResponseListingAsTheProofAndAsksForTheOthers(t *testing
 	legs := SnapshotAbsenceLegs(plan)
 	if len(legs) != 1 || legs[0].Reason != OwnershipAbsenceNotProven || legs[0].Leg != ownershipAbsenceLeg {
 		t.Errorf("the legs of the plan are %+v, want one %s leg", legs, OwnershipAbsenceNotProven)
+	}
+}
+
+// The budget of direct answers must not go to the same candidates at every
+// run. 120 open facts are absent. For 100 of them the provider's answer always
+// fails; for 20 it says "gone". In a fixed order the 100 could take the whole
+// budget at every run and the 20 would never be asked. The rule asks in an
+// order that changes with the run, so over a few runs every one of the 20 is
+// asked and closed.
+func TestTheBudgetOfDirectAnswersDoesNotGoToTheSameCandidatesAtEveryRun(t *testing.T) {
+	first := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+	const failing, answering = AbsenceLookupBudget, 20
+	open := make([]OwnershipSnapshotRow, 0, failing+answering)
+	// The failing ones come FIRST in the table's order.
+	for index := 0; index < failing; index++ {
+		open = append(open, OwnershipSnapshotRow{TeamID: "T", ProjectID: testPID(fmt.Sprintf("a-fails-%03d", index)), Source: "native", ValidFrom: first})
+	}
+	for index := 0; index < answering; index++ {
+		open = append(open, OwnershipSnapshotRow{TeamID: "T", ProjectID: testPID(fmt.Sprintf("z-gone-%03d", index)), Source: "native", ValidFrom: first})
+	}
+	kind := testEveryRowKind(EmptyIsAnAnswer)
+	closed := map[string]bool{}
+	orders := map[string]bool{}
+	for run := 1; run <= 8; run++ {
+		at := first.Add(time.Duration(run) * time.Hour)
+		var stillOpen []OwnershipSnapshotRow
+		for _, row := range open {
+			if !closed[row.ProjectID.String()] {
+				stillOpen = append(stillOpen, row)
+			}
+		}
+		var asked []string
+		lookups := NewAbsenceLookups(context.Background(), ownershipSnapshotKey, func(_ context.Context, row OwnershipSnapshotRow) SnapshotAbsence {
+			asked = append(asked, row.ProjectID.String())
+			if row.ProjectID.String()[0] == 'z' {
+				return SnapshotAbsenceProven
+			}
+			return SnapshotAbsenceNotProven
+		})
+		plan := PlanOwnershipSnapshot(nil, stillOpen, at, kind.Snapshot(testSoleScope(), testProof(true),
+			AbsenceByListing(testPaged[OwnershipSnapshotRow], lookups.Answer)))
+		if len(asked) != AbsenceLookupBudget {
+			t.Fatalf("run %d asked the provider %d time(s), want the budget of %d: the case is not set", run, len(asked), AbsenceLookupBudget)
+		}
+		for _, retraction := range plan.Retract {
+			closed[stillOpen[retraction.Open].ProjectID.String()] = true
+		}
+		if outcome := plan.Kinds[0]; outcome.Closed+outcome.AbsenceNotProven+outcome.AbsenceOverBudget != len(stillOpen) {
+			t.Fatalf("run %d: the outcome %+v does not account for the %d open rows", run, outcome, len(stillOpen))
+		}
+		orders[fmt.Sprint(asked[:5])] = true
+		// The rows of the plan stay in the order of the open rows.
+		for index := 1; index < len(plan.Retract); index++ {
+			if plan.Retract[index-1].Open >= plan.Retract[index].Open {
+				t.Fatalf("run %d: the retractions are not in the order of the open rows", run)
+			}
+		}
+	}
+	if len(closed) != answering {
+		t.Errorf("after 8 runs %d of the %d facts the provider calls gone are closed: the budget went to the candidates that never answer", len(closed), answering)
+	}
+	if len(orders) < 2 {
+		t.Errorf("every run asked the same first candidates: the order does not change with the run")
+	}
+	// The same run time asks in the same order: a plan can be made again.
+	rank := snapshotAskRank("a fact", first)
+	if rank != snapshotAskRank("a fact", first) || rank == snapshotAskRank("a fact", first.Add(time.Hour)) {
+		t.Errorf("the order of a run is not a function of its time alone, or two run times give one order")
 	}
 }

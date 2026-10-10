@@ -41,6 +41,7 @@ func point(scope model.CompoundingRiskScope, day time.Time, scopeID, label strin
 		ScopeID:    scopeID,
 		ScopeLabel: label,
 		Score:      r.score,
+		Coverage:   r.coverage,
 		Severity:   severityFrom(r.severity),
 		Components: &model.CompoundingRiskComponents{
 			ChurnNorm: r.churnNorm, ComplexityNorm: r.complexityNorm, OwnershipNorm: r.ownershipNorm,
@@ -53,6 +54,35 @@ func point(scope model.CompoundingRiskScope, day time.Time, scopeID, label strin
 		ComputedAt:  r.computedAt,
 		ScopeEntity: &model.CompoundingRiskScopeEntity{ID: scopeID, DisplayName: label},
 	}
+}
+
+// coverageOf is the share of the weight that was present in a stored row's
+// score: the sum of the weights of its present component norms over the sum
+// of its four weights, in [0, 1]; nil when the weights sum to zero. It is read
+// from the row itself (weights and norms are stored), so rows written before
+// the score covered partial inputs answer consistently.
+func coverageOf(r storedRow) *float64 {
+	total := r.wChurn + r.wComplexity + r.wOwnership + r.wReview
+	if total <= 0 {
+		return nil
+	}
+	var present float64
+	for _, component := range []struct {
+		norm   *float64
+		weight float64
+	}{
+		{r.churnNorm, r.wChurn}, {r.complexityNorm, r.wComplexity},
+		{r.ownershipNorm, r.wOwnership}, {r.reviewNorm, r.wReview},
+	} {
+		if component.norm != nil {
+			present += component.weight
+		}
+	}
+	coverage := present / total
+	if coverage > 1 {
+		coverage = 1
+	}
+	return &coverage
 }
 
 func labelOr(labels map[string]string, id string) string {
@@ -113,6 +143,7 @@ func teamPoints(day time.Time, rows []storedRow, teamsOfRepo map[string][]string
 		}
 		agg := first
 		agg.score = avg
+		agg.coverage = meanOf(rs, func(r storedRow) *float64 { return r.coverage })
 		agg.churnNorm = meanOf(rs, func(r storedRow) *float64 { return r.churnNorm })
 		agg.complexityNorm = meanOf(rs, func(r storedRow) *float64 { return r.complexityNorm })
 		agg.ownershipNorm = meanOf(rs, func(r storedRow) *float64 { return r.ownershipNorm })

@@ -307,13 +307,15 @@ WHERE org_id = ? AND day = '2026-08-24'`, orgA)
 	}
 }
 
-// TestCompoundingRiskComplexityWindowOneSidedYieldsUnknown pins the
-// missing-input path end to end: a repo whose complexity history sits entirely
-// on ONE side of the window midpoint gets a NULL half from ClickHouse's avg(),
-// which Python turns into None and which must block the composite -- score
-// NULL, severity "unknown", and the row still written so absence of signal
-// stays inspectable.
-func TestCompoundingRiskComplexityWindowOneSidedYieldsUnknown(t *testing.T) {
+// TestCompoundingRiskComplexityWindowOneSidedScoresFromTheOtherInputs pins the
+// missing-input path end to end (CHAOS-6545, D5817): a repo whose complexity
+// history sits entirely on ONE side of the window midpoint gets a NULL half
+// from ClickHouse's avg(), so its complexity delta is missing. The composite is
+// then the weighted mean over the three inputs that are present (weights
+// renormalized over them), not NULL and not a score that counts the missing
+// input as zero; the missing input stays NULL on the row, and the row says how
+// much of the weight was present.
+func TestCompoundingRiskComplexityWindowOneSidedScoresFromTheOtherInputs(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
@@ -376,26 +378,30 @@ INSERT INTO repo_complexity_daily
 		severity string
 		delta    *float64
 		churn    *float64
+		cNorm    *float64
 	)
 	if err := conn.QueryRow(ctx, `
-SELECT compounding_risk, severity, complexity_delta, churn_norm
+SELECT compounding_risk, severity, complexity_delta, churn_norm, complexity_norm
 FROM compounding_risk_daily WHERE org_id = ?`, org,
-	).Scan(&score, &severity, &delta, &churn); err != nil {
+	).Scan(&score, &severity, &delta, &churn, &cNorm); err != nil {
 		t.Fatal(err)
 	}
-	if score != nil {
-		t.Errorf("compounding_risk = %v, want NULL (complexity delta unresolvable)", *score)
+	// churn 0.15/0.30 = 0.5 (w 0.30), ownership max(0.35, 0.20) = 0.35 (w 0.20),
+	// review 12/48 = 0.25 (w 0.20): (0.15 + 0.07 + 0.05) / 0.70.
+	want := (0.30*0.5 + 0.20*0.35 + 0.20*0.25) / 0.70
+	if score == nil || math.Abs(*score-want) > 1e-12 {
+		t.Errorf("compounding_risk = %v, want the mean over the three present inputs %v", score, want)
 	}
-	if delta != nil {
-		t.Errorf("complexity_delta = %v, want NULL (no data past the window midpoint)", *delta)
+	if severity != compoundingrisk.SeverityLow {
+		t.Errorf("severity = %q, want %q for %v", severity, compoundingrisk.SeverityLow, want)
 	}
-	if severity != compoundingrisk.SeverityUnknown {
-		t.Errorf("severity = %q, want %q", severity, compoundingrisk.SeverityUnknown)
+	if delta != nil || cNorm != nil {
+		t.Errorf("the missing complexity input must stay NULL on the row (delta %v, norm %v), never 0", delta, cNorm)
 	}
 	// The components that DID resolve are still persisted -- absence of one
 	// signal must not erase the others.
 	if churn == nil || *churn != 0.5 {
-		t.Errorf("churn_norm = %v, want 0.5 (0.15/0.30) even though the composite is unknown", churn)
+		t.Errorf("churn_norm = %v, want 0.5 (0.15/0.30)", churn)
 	}
 }
 

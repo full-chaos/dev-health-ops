@@ -551,6 +551,7 @@ type ComplexityRoot struct {
 	CompoundingRiskPoint struct {
 		Components  func(childComplexity int) int
 		ComputedAt  func(childComplexity int) int
+		Coverage    func(childComplexity int) int
 		Day         func(childComplexity int) int
 		Scope       func(childComplexity int) int
 		ScopeEntity func(childComplexity int) int
@@ -4108,6 +4109,13 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 		}
 
 		return e.complexity.CompoundingRiskPoint.ComputedAt(childComplexity), true
+
+	case "CompoundingRiskPoint.coverage":
+		if e.complexity.CompoundingRiskPoint.Coverage == nil {
+			break
+		}
+
+		return e.complexity.CompoundingRiskPoint.Coverage(childComplexity), true
 
 	case "CompoundingRiskPoint.day":
 		if e.complexity.CompoundingRiskPoint.Day == nil {
@@ -10051,6 +10059,13 @@ type CompoundingRiskPoint {
   scopeId: String!
   scopeLabel: String!
   score: Float
+  """
+  The share of the score's weight that was present: the weights of the inputs
+  that had data over the sum of all four weights, in [0, 1]. The score is the
+  weighted mean over the present inputs, so a coverage below 1 says it was
+  computed from fewer than four inputs. Null when no weight is stored.
+  """
+  coverage: Float
   severity: CompoundingRiskSeverity!
   components: CompoundingRiskComponents!
   weights: CompoundingRiskWeights!
@@ -30964,6 +30979,47 @@ func (ec *executionContext) fieldContext_CompoundingRiskPoint_score(_ context.Co
 	return fc, nil
 }
 
+func (ec *executionContext) _CompoundingRiskPoint_coverage(ctx context.Context, field graphql.CollectedField, obj *model.CompoundingRiskPoint) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_CompoundingRiskPoint_coverage(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.Coverage, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*float64)
+	fc.Result = res
+	return ec.marshalOFloat2ᚖfloat64(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_CompoundingRiskPoint_coverage(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "CompoundingRiskPoint",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Float does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _CompoundingRiskPoint_severity(ctx context.Context, field graphql.CollectedField, obj *model.CompoundingRiskPoint) (ret graphql.Marshaler) {
 	fc, err := ec.fieldContext_CompoundingRiskPoint_severity(ctx, field)
 	if err != nil {
@@ -31409,6 +31465,8 @@ func (ec *executionContext) fieldContext_CompoundingRiskResult_rows(_ context.Co
 				return ec.fieldContext_CompoundingRiskPoint_scopeLabel(ctx, field)
 			case "score":
 				return ec.fieldContext_CompoundingRiskPoint_score(ctx, field)
+			case "coverage":
+				return ec.fieldContext_CompoundingRiskPoint_coverage(ctx, field)
 			case "severity":
 				return ec.fieldContext_CompoundingRiskPoint_severity(ctx, field)
 			case "components":
@@ -70229,6 +70287,8 @@ func (ec *executionContext) _CompoundingRiskPoint(ctx context.Context, sel ast.S
 			}
 		case "score":
 			out.Values[i] = ec._CompoundingRiskPoint_score(ctx, field, obj)
+		case "coverage":
+			out.Values[i] = ec._CompoundingRiskPoint_coverage(ctx, field, obj)
 		case "severity":
 			out.Values[i] = ec._CompoundingRiskPoint_severity(ctx, field, obj)
 			if out.Values[i] == graphql.Null {

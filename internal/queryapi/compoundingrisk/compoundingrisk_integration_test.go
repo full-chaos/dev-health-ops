@@ -158,6 +158,14 @@ func TestRealClickHouse_RepoBreakout(t *testing.T) {
 	if a := got.Rows[1]; *a.Components.ChurnNorm != 0.1 || a.Components.ComplexityNorm != nil {
 		t.Errorf("components %#v", a.Components)
 	}
+	// coverage = the stored weights of the present component norms over all
+	// four (0.4 + 0.3 + 0.2 + 0.1): rA has the churn norm only, rB and rC none.
+	if a := got.Rows[1]; a.Coverage == nil || *a.Coverage < 0.4-1e-12 || *a.Coverage > 0.4+1e-12 {
+		t.Errorf("coverage of the churn-only row = %v, want 0.4", a.Coverage)
+	}
+	if c := got.Rows[2]; c.Coverage == nil || *c.Coverage != 0 {
+		t.Errorf("coverage of the row with no input = %v, want 0 (not null, not 1)", c.Coverage)
+	}
 	if c := got.Rows[2]; c.Score != nil || c.ScopeLabel != rC || c.Severity != model.CompoundingRiskSeverityUnknown {
 		t.Errorf("unscored row %#v", c)
 	}

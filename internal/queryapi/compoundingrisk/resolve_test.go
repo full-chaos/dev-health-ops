@@ -234,3 +234,62 @@ func TestIDList_BoundedAtMaxRows(t *testing.T) {
 		t.Fatalf("the statement carried %d ids", len(ids))
 	}
 }
+
+// coverage is the share of the stored weights whose component norm is present
+// (CHAOS-6545): derived from the row, so a row written before the score
+// covered partial inputs answers the same way. It never turns a missing input
+// into a zero.
+func TestCoverageOf_ShareOfThePresentWeights(t *testing.T) {
+	row := func(churn, complexity, ownership, review bool) storedRow {
+		r := mkRow("r", nil, "unknown")
+		r.wChurn, r.wComplexity, r.wOwnership, r.wReview = .3, .3, .2, .2
+		if churn {
+			r.churnNorm = fp(.5)
+		}
+		if complexity {
+			r.complexityNorm = fp(.5)
+		}
+		if ownership {
+			r.ownershipNorm = fp(.5)
+		}
+		if review {
+			r.reviewNorm = fp(.5)
+		}
+		return r
+	}
+	for _, c := range []struct {
+		name string
+		r    storedRow
+		want float64
+	}{
+		{"all four", row(true, true, true, true), 1.0},
+		{"review missing", row(true, true, true, false), 0.8},
+		{"complexity and review missing", row(true, false, true, false), 0.5},
+		{"churn only", row(true, false, false, false), 0.3},
+		{"none", row(false, false, false, false), 0},
+	} {
+		got := coverageOf(c.r)
+		if got == nil || *got < c.want-1e-12 || *got > c.want+1e-12 {
+			t.Errorf("%s: coverage = %v, want %v", c.name, got, c.want)
+		}
+	}
+	zero := mkRow("r", nil, "unknown")
+	zero.wChurn, zero.wComplexity, zero.wOwnership, zero.wReview = 0, 0, 0, 0
+	if coverageOf(zero) != nil {
+		t.Error("weights that sum to zero have no coverage (null), not 0")
+	}
+}
+
+// A team point carries the mean of the coverage of its rows, as it carries the
+// mean of their scores.
+func TestTeamPoints_CarryTheMeanCoverageOfTheirRows(t *testing.T) {
+	a, b := mkRow("a", fp(.4), "elevated"), mkRow("b", fp(.2), "low")
+	a.churnNorm, a.complexityNorm, a.ownershipNorm, a.reviewNorm = fp(.4), fp(.4), fp(.4), fp(.4)
+	b.churnNorm = fp(.2)
+	a.coverage, b.coverage = coverageOf(a), coverageOf(b)
+	points := teamPoints(time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC), []storedRow{a, b},
+		map[string][]string{"a": {"t"}, "b": {"t"}}, map[string]string{"t": "T"}, nil, time.Unix(0, 0))
+	if len(points) != 1 || points[0].Coverage == nil || *points[0].Coverage < 0.7-1e-12 || *points[0].Coverage > 0.7+1e-12 {
+		t.Fatalf("team point = %+v, want coverage (1.0 + 0.4) / 2 = 0.7", points)
+	}
+}

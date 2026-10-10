@@ -656,11 +656,16 @@ type CompoundingRiskFilterInput struct {
 }
 
 type CompoundingRiskPoint struct {
-	Day         graphqldate.Date            `json:"day"`
-	Scope       CompoundingRiskScope        `json:"scope"`
-	ScopeID     string                      `json:"scopeId"`
-	ScopeLabel  string                      `json:"scopeLabel"`
-	Score       *float64                    `json:"score,omitempty"`
+	Day        graphqldate.Date     `json:"day"`
+	Scope      CompoundingRiskScope `json:"scope"`
+	ScopeID    string               `json:"scopeId"`
+	ScopeLabel string               `json:"scopeLabel"`
+	Score      *float64             `json:"score,omitempty"`
+	// The share of the score's weight that was present: the weights of the inputs
+	// that had data over the sum of all four weights, in [0, 1]. The score is the
+	// weighted mean over the present inputs, so a coverage below 1 says it was
+	// computed from fewer than four inputs. Null when no weight is stored.
+	Coverage    *float64                    `json:"coverage,omitempty"`
 	Severity    CompoundingRiskSeverity     `json:"severity"`
 	Components  *CompoundingRiskComponents  `json:"components"`
 	Weights     *CompoundingRiskWeights     `json:"weights"`

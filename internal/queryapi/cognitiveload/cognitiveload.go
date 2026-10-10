@@ -14,8 +14,11 @@
 //     query, no merge.
 //  2. Team+repo COMBINED (both set, CHAOS-4406/CHAOS-4462): neither
 //     user_metrics_daily's nor team_metrics_daily's own team_id column can
-//     be trusted (CHAOS-4396 taint -- author-membership fallback, or
-//     unset for a native org with empty repo_patterns). resolveOwnedRepoID
+//     be trusted (CHAOS-4396 taint -- user_metrics_daily is always
+//     "unassigned"; team_metrics_daily takes its team from repository
+//     ownership since the wellbeing change, but days computed before it still
+//     hold the author-membership / "unassigned" rows until recomputed).
+//     resolveOwnedRepoID
 //     confirms via team_repo_ownership (falling back to teams.repo_patterns
 //     only when native ownership resolves no row at all) that the
 //     requested repo is CURRENTLY, CANONICALLY owned by the requested

@@ -86,6 +86,10 @@ func repoGoldenHandler(t *testing.T) func(t *testing.T, query string, bindings [
 		case strings.Contains(q, "FROM recommendations_daily"):
 			t.Fatal("recommendations_daily must not be read at repo scope")
 			return nil, nil
+		case strings.Contains(q, "link_repo_ids") || strings.Contains(q, "countIf(work_item_id IN"):
+			// CHAOS-9094: a repository filter scopes the work-item metrics through
+			// the items linked to the repository; the recorded org has none.
+			return &fixtureRowScanner{rows: nil}, nil
 		}
 		return base(t, query, bindings)
 	}
@@ -106,7 +110,33 @@ func TestGoldenRepoScoped(t *testing.T) {
 	}
 	want := loadGolden(t, "repo_scoped.json")
 	alignSignalRepoFilter(t, got, &want)
+	alignRepoLinks(t, got, &want)
 	assertResponseEqual(t, *got, want)
+}
+
+// The repo-link fields of a delta (CHAOS-9094) are GraphQL only (json "-"), so the
+// golden cannot hold them. The four work-item metrics under a repository filter
+// carry them, the others must not; the recorded organization has no linked item, so
+// each of the four says no_links with empty counts. They are then copied onto the
+// golden's delta so the rest of the response is compared as recorded.
+func alignRepoLinks(t *testing.T, got, want *Response) {
+	t.Helper()
+	for i, d := range got.Deltas {
+		if !repoLinkedMetrics[d.Metric] {
+			if d.RepoLinkState != nil || d.RepoLinkBasis != nil || d.RepoLinkCoverage != nil || d.RepoLinkMultiRepoItems != nil {
+				t.Errorf("delta %s is not a work-item metric but carries repo-link fields", d.Metric)
+			}
+			continue
+		}
+		if d.RepoLinkState == nil || *d.RepoLinkState != repoLinkNoLinks || d.RepoLinkBasis == nil || *d.RepoLinkBasis != (RepoLinkBasis{}) ||
+			d.RepoLinkMultiRepoItems == nil || *d.RepoLinkMultiRepoItems != 0 || d.RepoLinkCoverage == nil || *d.RepoLinkCoverage != (RepoLinkCoverage{}) {
+			t.Errorf("delta %s repo-link fields = %+v, want no_links with empty counts", d.Metric, d)
+		}
+		if i < len(want.Deltas) {
+			want.Deltas[i].RepoLinkState, want.Deltas[i].RepoLinkBasis = d.RepoLinkState, d.RepoLinkBasis
+			want.Deltas[i].RepoLinkMultiRepoItems, want.Deltas[i].RepoLinkCoverage = d.RepoLinkMultiRepoItems, d.RepoLinkCoverage
+		}
+	}
 }
 
 // A Home signal's repoFilterApplied is GraphQL only (json "-"), so the golden file

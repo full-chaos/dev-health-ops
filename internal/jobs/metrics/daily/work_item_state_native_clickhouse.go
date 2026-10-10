@@ -8,6 +8,8 @@ import (
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/google/uuid"
+
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/workitemmetrics"
 )
 
 // workItemStateWorkItem is the narrow subset of the `work_items` ClickHouse
@@ -36,22 +38,7 @@ type workItemStateWorkItem struct {
 // non-jira item whose project_key is set but the three fields above are
 // all empty). May return "".
 func (item workItemStateWorkItem) workScopeID() string {
-	if item.Provider == "jira" && item.ProjectKey != "" {
-		return item.ProjectKey
-	}
-	if item.ProjectID != "" {
-		return item.ProjectID
-	}
-	if item.ProjectName != "" {
-		return item.ProjectName
-	}
-	if item.NativeTeamKey != "" {
-		return item.NativeTeamKey
-	}
-	if item.ProjectKey != "" {
-		return item.ProjectKey
-	}
-	return ""
+	return workitemmetrics.WorkScopeID(item.Provider, item.ProjectKey, item.ProjectID, item.NativeTeamKey, item.ProjectName)
 }
 
 // workItemStateTransition is the narrow subset of `work_item_transitions`

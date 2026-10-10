@@ -146,14 +146,31 @@ func tripletFromWorkItemRows(
 	day time.Time, items []workItemMetricsRow, transitions []workItemStateTransition,
 	attributions map[string]workItemPrimaryAttribution,
 ) workitemmetrics.Triplet {
-	sorted := sortWorkItemMetricsRows(items)
-	projected := workItemMetricsItems(sorted)
-	return workitemmetrics.ComputeDailyTriplet(
-		day,
-		projected,
-		workItemMetricsTransitions(transitions),
-		workitemmetrics.AssertAligned(len(sorted), projected, workItemMetricsResolver(sorted, attributions)),
+	return workitemmetrics.ComputeStoredItemsDay(
+		day, storedItemsOfRows(items), workItemMetricsTransitions(transitions), primaryAttributionsOf(attributions),
 	)
+}
+
+// storedItemsOfRows converts the family's rows to the neutral compute's items.
+func storedItemsOfRows(rows []workItemMetricsRow) []workitemmetrics.StoredItem {
+	items := make([]workitemmetrics.StoredItem, 0, len(rows))
+	for _, row := range rows {
+		items = append(items, workitemmetrics.StoredItem{
+			WorkItemID: row.WorkItemID, Provider: row.Provider, Status: row.Status,
+			ProjectKey: row.ProjectKey, ProjectID: row.ProjectID, NativeTeamKey: row.NativeTeamKey, ProjectName: row.ProjectName,
+			CreatedAt: row.CreatedAt, CompletedAt: row.CompletedAt,
+			Type: row.Type, Assignees: row.Assignees, StartedAt: row.StartedAt, ClosedAt: row.ClosedAt, StoryPoints: row.StoryPoints,
+		})
+	}
+	return items
+}
+
+func primaryAttributionsOf(attributions map[string]workItemPrimaryAttribution) map[string]workitemmetrics.PrimaryAttribution {
+	out := make(map[string]workitemmetrics.PrimaryAttribution, len(attributions))
+	for id, attribution := range attributions {
+		out[id] = workitemmetrics.PrimaryAttribution{TeamID: attribution.TeamID, TeamName: attribution.TeamName}
+	}
+	return out
 }
 
 // workItemPartitionScope is the (day, window, repoIDs) triple the work-item
@@ -227,23 +244,7 @@ func sortWorkItemMetricsRows(items []workItemMetricsRow) []workItemMetricsRow {
 }
 
 func workItemMetricsItems(rows []workItemMetricsRow) []workitemmetrics.Item {
-	items := make([]workitemmetrics.Item, 0, len(rows))
-	for index, row := range rows {
-		items = append(items, workitemmetrics.Item{
-			SourceIndex: index,
-			WorkItemID:  row.WorkItemID,
-			Provider:    row.Provider,
-			Type:        row.Type,
-			Status:      row.Status,
-			Assignee:    workitemmetrics.FirstAssignee(row.Assignees),
-			CreatedAt:   row.CreatedAt,
-			StartedAt:   row.StartedAt,
-			CompletedAt: row.CompletedAt,
-			ClosedAt:    row.ClosedAt,
-			StoryPoints: row.StoryPoints,
-		})
-	}
-	return items
+	return workitemmetrics.ProjectStoredItems(storedItemsOfRows(rows))
 }
 
 func workItemMetricsTransitions(rows []workItemStateTransition) []workitemmetrics.Transition {
@@ -267,15 +268,7 @@ func workItemMetricsTransitions(rows []workItemStateTransition) []workitemmetric
 func workItemMetricsResolver(
 	rows []workItemMetricsRow, attributions map[string]workItemPrimaryAttribution,
 ) workitemmetrics.Resolver {
-	return func(index int) workitemmetrics.Attribution {
-		row := rows[index]
-		teamID, teamName := resolveWorkItemPrimaryTeam(attributions[row.WorkItemID])
-		return workitemmetrics.Attribution{
-			WorkScopeID: row.workScopeID(),
-			TeamID:      teamID,
-			TeamName:    teamName,
-		}
-	}
+	return workitemmetrics.StoredItemResolver(storedItemsOfRows(rows), primaryAttributionsOf(attributions))
 }
 
 var _ NativeFamilyExecutor = (*WorkItemExecutor)(nil)

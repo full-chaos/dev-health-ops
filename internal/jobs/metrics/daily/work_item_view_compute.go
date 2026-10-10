@@ -32,37 +32,30 @@ type WorkItemViewItem struct {
 	TeamName       string
 }
 
-// WorkItemViewScopeID is the work scope of an item: the one derivation of this
-// package (WorkItem.work_scope_id).
+// WorkItemViewScopeID is the work scope of an item: the one derivation
+// (workitemmetrics.WorkScopeID).
 func WorkItemViewScopeID(item WorkItemViewItem) string {
-	return workItemStateWorkItem{
-		Provider: item.Provider, ProjectKey: item.ProjectKey, ProjectID: item.ProjectID,
-		NativeTeamKey: item.NativeTeamKey, ProjectName: item.ProjectName,
-	}.workScopeID()
+	return workitemmetrics.WorkScopeID(item.Provider, item.ProjectKey, item.ProjectID, item.NativeTeamKey, item.ProjectName)
 }
 
-// ComputeWorkItemMetricsDay is the work_item family's compute for one UTC day
-// over the given items: the SAME function the family calls
-// (tripletFromWorkItemRows), so a metric read at request time is the metric the
-// daily job stores. Transitions are not read: they only feed the flow
-// breakdown (active and wait time) of the cycle-time record, which none of
-// the rows returned here depends on.
+// ComputeWorkItemMetricsDay is the work_item family's compute for one UTC day over
+// the given items, by the same function the family calls
+// (workitemmetrics.ComputeStoredItemsDay). Transitions are not read: they only feed
+// the flow breakdown of the cycle-time record, which none of the rows returned here
+// depends on.
 func ComputeWorkItemMetricsDay(day time.Time, items []WorkItemViewItem) []workitemmetrics.MetricsDailyRow {
-	rows := make([]workItemMetricsRow, 0, len(items))
-	attributions := make(map[string]workItemPrimaryAttribution, len(items))
+	rows := make([]workitemmetrics.StoredItem, 0, len(items))
+	attributions := make(map[string]workitemmetrics.PrimaryAttribution, len(items))
 	for _, item := range items {
-		rows = append(rows, workItemMetricsRow{
-			workItemStateWorkItem: workItemStateWorkItem{
-				WorkItemID: item.WorkItemID, Provider: item.Provider, Status: item.Status,
-				ProjectKey: item.ProjectKey, ProjectID: item.ProjectID, NativeTeamKey: item.NativeTeamKey,
-				ProjectName: item.ProjectName, CreatedAt: item.CreatedAt, CompletedAt: item.CompletedAt,
-			},
-			Type: item.Type, Assignees: item.Assignees, StartedAt: item.StartedAt,
-			ClosedAt: item.ClosedAt, StoryPoints: item.StoryPoints,
+		rows = append(rows, workitemmetrics.StoredItem{
+			WorkItemID: item.WorkItemID, Provider: item.Provider, Status: item.Status,
+			ProjectKey: item.ProjectKey, ProjectID: item.ProjectID, NativeTeamKey: item.NativeTeamKey, ProjectName: item.ProjectName,
+			CreatedAt: item.CreatedAt, CompletedAt: item.CompletedAt,
+			Type: item.Type, Assignees: item.Assignees, StartedAt: item.StartedAt, ClosedAt: item.ClosedAt, StoryPoints: item.StoryPoints,
 		})
 		if item.HasAttribution {
-			attributions[item.WorkItemID] = workItemPrimaryAttribution{TeamID: item.TeamID, TeamName: item.TeamName}
+			attributions[item.WorkItemID] = workitemmetrics.PrimaryAttribution{TeamID: item.TeamID, TeamName: item.TeamName}
 		}
 	}
-	return tripletFromWorkItemRows(day, rows, nil, attributions).MetricsDaily
+	return workitemmetrics.ComputeStoredItemsDay(day, rows, nil, attributions).MetricsDaily
 }

@@ -388,6 +388,17 @@ func (s Store) DeleteTeam(ctx context.Context, orgID, teamID string) (bool, erro
 	return true, nil
 }
 
+// newestTeamVersion is the time of the newest stored version of a team, of
+// every version (active, inactive, deleted); nil when the id has no row.
+func (s Store) newestTeamVersion(ctx context.Context, orgID, teamID string) (*time.Time, error) {
+	var newest *time.Time
+	if err := s.Conn.QueryRow(ctx, "SELECT maxOrNull(updated_at) FROM teams WHERE org_id = {org_id:String} AND id = {team_id:String}",
+		clickhouse.Named("org_id", orgID), clickhouse.Named("team_id", teamID)).Scan(&newest); err != nil {
+		return nil, fmt.Errorf("read the newest version of the team: %w", err)
+	}
+	return newest, nil
+}
+
 type teamInsertRow struct {
 	ID, Name                  string
 	TeamUUID                  uuid.UUID
@@ -422,10 +433,9 @@ func (s Store) insertTeamRow(ctx context.Context, row teamInsertRow) (time.Time,
 	if err := checkKeyedTeamID(row.ID); err != nil {
 		return time.Time{}, time.Time{}, err
 	}
-	var newest *time.Time
-	if err := s.Conn.QueryRow(ctx, "SELECT maxOrNull(updated_at) FROM teams WHERE org_id = {org_id:String} AND id = {team_id:String}",
-		clickhouse.Named("org_id", row.OrgID), clickhouse.Named("team_id", row.ID)).Scan(&newest); err != nil {
-		return time.Time{}, time.Time{}, fmt.Errorf("read the newest version of the team: %w", err)
+	newest, err := s.newestTeamVersion(ctx, row.OrgID, row.ID)
+	if err != nil {
+		return time.Time{}, time.Time{}, err
 	}
 	if newest != nil && !row.UpdatedAt.After(*newest) {
 		row.UpdatedAt = newest.Add(time.Microsecond)

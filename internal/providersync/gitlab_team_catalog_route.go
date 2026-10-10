@@ -274,6 +274,7 @@ func (handler GitLabTeamCatalogRouteHandler) CollectTeamCatalog(
 	rows := GitLabTeamCatalogRows{}
 	seenOwnership := map[string]bool{}
 	seenMembership := map[string]bool{}
+	groupByTeam := map[string]string{}
 
 	for _, group := range groups {
 		groupPathValue := providerRelativePath(client, "api", "v4", "groups", strings.TrimSpace(group.FullPath))
@@ -345,6 +346,7 @@ func (handler GitLabTeamCatalogRouteHandler) CollectTeamCatalog(
 
 		if selections.Members {
 			teamID := gitlabTeamID(group.FullPath)
+			groupByTeam[teamID] = groupPathValue
 			memberPages, memberErr := providerfoundation.CollectGitLabPageParamPages(ctx, client, providerfoundation.GitLabPageOptions{
 				Path: groupPathValue + "/members", PerPage: gitlabTeamCatalogListPerPage, MaxPages: gitlabTeamCatalogMembersMaxPages,
 			})
@@ -378,6 +380,10 @@ func (handler GitLabTeamCatalogRouteHandler) CollectTeamCatalog(
 					evidence.Truncated = true
 				}
 				rows.ObservedMembershipTeamIDs = append(rows.ObservedMembershipTeamIDs, teamID)
+				if !ownershipListingProvesEnd(memberPages) {
+					rows.UnprovenMembershipTeamIDs = append(rows.UnprovenMembershipTeamIDs, teamID)
+				}
+				unusable := 0
 				for _, raw := range memberPages.Items {
 					var member gitlabTeamCatalogMemberPayload
 					if err := json.Unmarshal(raw, &member); err != nil {
@@ -385,6 +391,9 @@ func (handler GitLabTeamCatalogRouteHandler) CollectTeamCatalog(
 					}
 					row, memberID, ok := normalizeGitLabMembershipRow(ref.OrgID, teamID, member, resolver, normalizedAt)
 					if !ok {
+						// A member node the collector cannot use: the group's list is
+						// not known to be complete, so nothing of it closes (CHAOS-9079).
+						unusable++
 						continue
 					}
 					key := teamID + "\x00" + memberID
@@ -393,6 +402,13 @@ func (handler GitLabTeamCatalogRouteHandler) CollectTeamCatalog(
 					}
 					seenMembership[key] = true
 					rows.Memberships = append(rows.Memberships, row)
+				}
+				if unusable > 0 {
+					if ownershipListingProvesEnd(memberPages) {
+						rows.UnprovenMembershipTeamIDs = append(rows.UnprovenMembershipTeamIDs, teamID)
+					}
+					slog.Default().WarnContext(ctx, "gitlab_team_catalog_member_unusable",
+						"org_id", ref.OrgID, "provider", gitlabTeamCatalogProvider, "team", membershipTeamLogToken(teamID), "unusable_members", unusable)
 				}
 			}
 		}
@@ -531,6 +547,11 @@ func (handler GitLabTeamCatalogRouteHandler) CollectTeamCatalog(
 		ProjectsImported: len(distinctGitLabOwnershipProjects(rows.Ownership)),
 		MembersImported:  len(distinctGitLabMembershipMembers(rows.Memberships)),
 		Complete:         !evidence.Truncated && len(evidence.MissingSelectedSources) == 0,
+	}
+	if selections.Members {
+		rows.MembershipAbsence = &MembershipLookupBudget{
+			Inner: gitlabMembershipAbsence{client: client, groupByTeam: groupByTeam}, Left: membershipLookupBudget,
+		}
 	}
 	evidence.Requests = requests
 	return GitLabTeamCatalogBatch{Rows: rows, Effects: effects, Result: result, Evidence: evidence}, nil
@@ -741,12 +762,24 @@ func (collector GitLabTeamCatalogCollector) CollectTeamCatalog(
 		// memberships table never disagree about which assignments are
 		// safe. Independent of the #3 sync_policy guard above: this gate
 		// applies even to policy-0 teams (team-attribution.md:793-797).
-		// CHAOS-9007: a membership keeps the valid_from it was first seen with.
-		keptMemberships, reuseErr := reuseGitLabMembershipFirstSeen(ctx, collector.Sink.Conn, ref.OrgID, keptMemberships)
+		// CHAOS-9007 / CHAOS-9079: a membership keeps the valid_from it was first
+		// seen with, and a member absent from the COMPLETE read of its group is
+		// closed (through the one snapshot rule). Absence is judged against the
+		// members the provider returned, not the part the conflict guard keeps.
+		decision := decideOwnershipClose(ctx, collector.ScopeCensus, ownershipCloseRequest{
+			ref: ref, provider: gitlabTeamCatalogProvider, listed: batch.Rows.ObservedMembershipTeamIDs,
+			unproven: batch.Rows.UnprovenMembershipTeamIDs, dataset: "team_memberships", leg: membershipCloseLeg,
+		})
+		membershipRows, membershipOutcome, reuseErr := gitlabMembershipWriter.Snapshot(
+			ctx, collector.Sink.Conn, ref.OrgID, batch.Rows.Memberships, keptMemberships, normalizedAt.UTC().Truncate(time.Millisecond),
+			batch.Rows.MembershipAbsence, decision.membershipSnapshot(GitLabTeamMembershipKind))
 		if reuseErr != nil {
 			return result, reuseErr
 		}
-		membershipsEffect, effectErr := effectBatchFromValues(gitlabTeamCatalogMembershipsDestination, EffectReadbackRequired, keptMemberships)
+		ReportSnapshotPlan(ctx, gitlabTeamCatalogProvider, ref.OrgID, membershipOutcome.Plan)
+		result.DegradedLegs = append(result.DegradedLegs, decision.legs...)
+		result.MembershipsClosed = membershipOutcome.Closed
+		membershipsEffect, effectErr := effectBatchFromValues(gitlabTeamCatalogMembershipsDestination, EffectReadbackRequired, membershipRows)
 		if effectErr != nil {
 			return result, effectErr
 		}

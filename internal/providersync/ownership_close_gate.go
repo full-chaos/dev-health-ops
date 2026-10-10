@@ -20,6 +20,8 @@ const (
 	OwnershipCloseSkippedNoTeamListed = "no_team_listed"
 
 	ownershipCloseLeg = "ownership_close"
+	// membershipCloseLeg is the leg of a skipped team membership close.
+	membershipCloseLeg = "membership_close"
 )
 
 // ownershipListingProvesEnd reports whether one team's listing may close that
@@ -92,6 +94,9 @@ type ownershipCloseRequest struct {
 	// provider's own answer. A listed team with no count is taken as not
 	// read in one response.
 	responses map[string]int
+	// dataset and leg name the degraded leg of a skipped close; empty means the
+	// ownership close. The membership close (CHAOS-9079) goes through this one gate.
+	dataset, leg string
 }
 
 type ownershipCloseDecision struct {
@@ -127,10 +132,17 @@ func decideOwnershipClose(ctx context.Context, census OwnershipScopeCensus, requ
 		unproven[teamID] = true
 	}
 	var reasons []string
+	dataset, leg := request.dataset, request.leg
+	if dataset == "" {
+		dataset = "team_ownership"
+	}
+	if leg == "" {
+		leg = ownershipCloseLeg
+	}
 	skip := func(reason, detail string) {
 		reasons = append(reasons, reason)
 		decision.legs = append(decision.legs, DegradedLeg{
-			Dataset: "team_ownership", Leg: ownershipCloseLeg, Outcome: "skipped", Reason: reason, Detail: detail,
+			Dataset: dataset, Leg: leg, Outcome: "skipped", Reason: reason, Detail: detail,
 		})
 	}
 	for _, teamID := range request.listed {
@@ -163,7 +175,7 @@ func decideOwnershipClose(ctx context.Context, census OwnershipScopeCensus, requ
 	}
 	if len(reasons) > 0 {
 		slog.Default().WarnContext(ctx, "ownership_close_skipped",
-			"org_id", request.ref.OrgID, "provider", request.provider, "reasons", strings.Join(reasons, ","),
+			"org_id", request.ref.OrgID, "provider", request.provider, "dataset", dataset, "reasons", strings.Join(reasons, ","),
 			"teams_listed", len(request.listed), "teams_unproven", unprovenListed,
 			"teams_closable", len(decision.closable), "integrations_sharing_scope", siblingsSharing,
 			"error", censusError)
@@ -251,4 +263,16 @@ func SnapshotAbsenceLegs(plan SnapshotPlan) []DegradedLeg {
 		}
 	}
 	return legs
+}
+
+// membershipSnapshot is the membership kind of the closable teams, with the
+// scope gate's proof and the proof of the member reads (CHAOS-9079): a read
+// returned and at least one read proved its end. A team outside closable is of
+// no kind, so its open memberships never close. The rule gives candidates
+// only: MembershipSnapshotWriter.Snapshot closes one on its own proof.
+func (decision ownershipCloseDecision) membershipSnapshot(kind func(closable []string) SnapshotKind[MembershipSnapshotRow]) KindSnapshot[MembershipSnapshotRow] {
+	return kind(decision.closable).Snapshot(decision.scope, ProveSnapshot(
+		SnapshotTerm{Holds: len(decision.read) > 0, Reason: OwnershipCloseSkippedNoTeamListed},
+		SnapshotTerm{Holds: len(decision.read) == 0 || decision.proven > 0, Reason: OwnershipCloseSkippedListingIncomplete},
+	), AbsenceByCloseWriter[MembershipSnapshotRow]())
 }

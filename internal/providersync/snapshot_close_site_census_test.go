@@ -36,6 +36,13 @@ var snapshotKindCensus = map[string]struct {
 		"one listing per group, each with its own proven end, in a scope no other integration lists: a group with no project is an answer", "one response or direct answer"},
 	"github_team_repo_grants": {"internal/providersync.GitHubTeamRepoGrantKind", "EmptyIsAnAnswer",
 		"one listing per team, each with its own proven end, in a scope no other integration lists: a team with no repository is an answer", "one response or direct answer"},
+	"linear_team_memberships": {"internal/providersync.LinearTeamMembershipKind", "EmptyIsAnAnswer",
+		"every team's member list ends or the run fails before any write (evidence.MembersComplete), in a scope no other integration reads: " +
+			"a team with no member is an answer", "the writer of the kind"},
+	"github_team_memberships": {"internal/providersync.GitHubTeamMembershipKind", "EmptyIsAnAnswer",
+		"one member read per team, each with its own proven end, in a scope no other integration reads: a team with no member is an answer", "the writer of the kind"},
+	"gitlab_team_memberships": {"internal/providersync.GitLabTeamMembershipKind", "EmptyIsAnAnswer",
+		"one member read per group, each with its own proven end, in a scope no other integration reads: a group with no member is an answer", "the writer of the kind"},
 	"atlassian_team_project_links": {"internal/providersync.AtlassianTeamLinkKind", "EmptyIsAnAnswer",
 		"one link read per team, each to its end: a team with no link is an answer; a team outside the search answer is in scope " +
 			"only through atlassian_team_catalog", "cursor walk"},
@@ -54,6 +61,7 @@ var snapshotCloseSites = map[string]string{
 	"internal/providersync.jiraOwnershipSnapshot":       "KindSnapshot argument: JiraLegacyOwnershipKind with the project search and legacy links terms",
 	"internal/providersync.gitlabOwnershipSnapshot":     "KindSnapshot argument from ownershipCloseDecision.snapshot (closable teams only, the gate's terms)",
 	"internal/providersync.githubRepoOwnershipSnapshot": "KindSnapshot argument from ownershipCloseDecision.snapshot (closable teams only, the gate's terms)",
+	"internal/providersync.planMembershipSnapshot":      "KindSnapshot arguments passed through from MembershipSnapshotWriter.Snapshot, made in the collectors from ownershipCloseDecision.membershipSnapshot (closable teams only, the gate's terms)",
 	"internal/atlassianteams.planOwnership":             "KindSnapshot argument: AtlassianTeamLinkKind with the Rows.ProjectLinksComplete term",
 	"internal/atlassianteams.planMemberships":           "KindSnapshot argument: AtlassianTeamMembershipKind with the Rows.MembershipsComplete term",
 	"internal/atlassianteams.teamsInScope":              "makes its proof in place: AtlassianTeamCatalogKind with the Rows.TeamSearchComplete term",
@@ -174,6 +182,13 @@ func TestEveryCloseSiteTakesTheTypedSnapshot(t *testing.T) {
 			t.Errorf("stampOnlySnapshotPlanners names %s, which does not call the snapshot rule", planner)
 		}
 	}
+	// planMembershipSnapshot is a close site by itself: the one function allowed
+	// to call it is the writer that writes what it plans.
+	for function, calls := range census.calls {
+		if calls["planMembershipSnapshot"] && function != "internal/providersync.MembershipSnapshotWriter.Snapshot" {
+			t.Errorf("%s calls planMembershipSnapshot: only MembershipSnapshotWriter.Snapshot may, it writes what the plan closes", function)
+		}
+	}
 	// A row's valid_to is set from a plan's retraction, in a close site.
 	for function, proof := range validToOutsideTheSnapshotRule {
 		if !census.setsValidTo[function] || census.closes[function] || strings.TrimSpace(proof) == "" {
@@ -253,12 +268,12 @@ func TestSnapshotKindPolicyTableIsTheDocumentedOne(t *testing.T) {
 		}
 		return got
 	}
-	code := read("snapshot_kinds.go", regexp.MustCompile(`^//\t([a-z_]+)\s+(sole integration)\s+(closes nothing|is an answer)\s+(cursor walk|one response or direct answer)$`))
+	code := read("snapshot_kinds.go", regexp.MustCompile(`^//\t([a-z_]+)\s+(sole integration)\s+(closes nothing|is an answer)\s+(cursor walk|one response or direct answer|the writer of the kind)$`))
 	if !reflect.DeepEqual(code, want) {
 		t.Errorf("the policy table in the doc comment of snapshot_kinds.go differs from the census.\n got  %v\n want %v", code, want)
 	}
 	document := read("../../docs/contribute/architecture/team-attribution.md",
-		regexp.MustCompile("^\\s*\\| `([a-z_]+)` \\|[^|]*\\|[^|]*\\| (sole integration) \\| (closes nothing|is an answer)\\b[^|]*\\| (cursor walk|one response or direct answer) \\|$"))
+		regexp.MustCompile("^\\s*\\| `([a-z_]+)` \\|[^|]*\\|[^|]*\\| (sole integration) \\| (closes nothing|is an answer)\\b[^|]*\\| (cursor walk|one response or direct answer|the writer of the kind) \\|$"))
 	if !reflect.DeepEqual(document, want) {
 		t.Errorf("the kinds table of docs/contribute/architecture/team-attribution.md differs from the census.\n got  %v\n want %v", document, want)
 	}
@@ -277,6 +292,9 @@ func TestSnapshotKindPolicyTableIsTheDocumentedOne(t *testing.T) {
 //     by one response or the direct answer.
 //   - jira_team_catalog_route.go: jira_legacy_ownership, by one response (or a
 //     project the search holds) or the direct answer.
+//   - ownership_close_gate.go, the second call (ownershipCloseDecision.
+//     membershipSnapshot): the three team membership kinds, whose candidates
+//     the one writer MembershipSnapshotWriter.Snapshot decides fact by fact.
 //
 // A new call, or a kind that moves from one statement to the other, is a
 // deliberate edit of this table, of snapshotKindCensus and of the two
@@ -284,7 +302,7 @@ func TestSnapshotKindPolicyTableIsTheDocumentedOne(t *testing.T) {
 var snapshotAbsenceCalls = map[string]map[string]int{
 	"internal/providersync/linear_team_catalog_collector.go": {"AbsenceByWalk": 2},
 	"internal/atlassianteams/write.go":                       {"AbsenceByWalk": 3},
-	"internal/providersync/ownership_close_gate.go":          {"AbsenceByListing": 1},
+	"internal/providersync/ownership_close_gate.go":          {"AbsenceByListing": 1, "AbsenceByCloseWriter": 1},
 	"internal/providersync/jira_team_catalog_route.go":       {"AbsenceByListing": 1},
 }
 
@@ -292,7 +310,7 @@ var snapshotAbsenceCalls = map[string]map[string]int{
 // the only walk taken as that proof is the cursor walk. It reads the source of
 // the two packages that hold a close site.
 func TestAbsenceProofCensus(t *testing.T) {
-	call := regexp.MustCompile(`\b(?:providersync\.)?(AbsenceByWalk|AbsenceByListing)(?:\[[^\]]+\])?\(`)
+	call := regexp.MustCompile(`\b(?:providersync\.)?(AbsenceByWalk|AbsenceByListing|AbsenceByCloseWriter)(?:\[[^\]]+\])?\(`)
 	walk := regexp.MustCompile(`AbsenceByWalk(?:\[[^\]]+\])?\((?:providersync\.)?(\w+)\)`)
 	got := map[string]map[string]int{}
 	files := 0
@@ -348,8 +366,23 @@ func TestAbsenceProofCensus(t *testing.T) {
 	for _, entry := range snapshotKindCensus {
 		byAbsence[entry.absence]++
 	}
-	if byAbsence["cursor walk"] != 5 || byAbsence["one response or direct answer"] != 3 || len(byAbsence) != 2 {
-		t.Errorf("the kinds by absence proof are %v, want 5 by the cursor walk and 3 by one response or the direct answer", byAbsence)
+	if byAbsence["cursor walk"] != 5 || byAbsence["one response or direct answer"] != 3 || byAbsence["the writer of the kind"] != 3 || len(byAbsence) != 3 {
+		t.Errorf("the kinds by absence proof are %v, want 5 by the cursor walk, 3 by one response or the direct answer and 3 by the writer of the kind", byAbsence)
+	}
+	// The writer's own proof is stated for the membership row type only, and
+	// its candidates reach one function: the writer that decides them.
+	gate, err := os.ReadFile("ownership_close_gate.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Count(string(gate), "AbsenceByCloseWriter[MembershipSnapshotRow]()") != 1 {
+		t.Errorf("AbsenceByCloseWriter is for the membership kinds only: one call, of the row type MembershipSnapshotRow")
+	}
+	for kind, entry := range snapshotKindCensus {
+		catalogMembership := strings.HasSuffix(kind, "_team_memberships") && kind != "atlassian_team_memberships"
+		if (entry.absence == "the writer of the kind") != catalogMembership {
+			t.Errorf("kind %s states the absence proof %q: the writer of the kind is for the three catalog membership kinds, and only for them", kind, entry.absence)
+		}
 	}
 }
 

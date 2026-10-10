@@ -164,6 +164,12 @@ type GitLabTeamCatalogRows struct {
 	// reviewMembershipsForDrift's doc comment for why an unobserved scope
 	// must never have its stale pending changes resolved.
 	ObservedMembershipTeamIDs []string `json:"-"`
+	// UnprovenMembershipTeamIDs (CHAOS-9079) is the part of ObservedMembershipTeamIDs
+	// whose member read was cut by a bound or did not reach the provider's own
+	// end-of-list signal: a member absent from it is not known to have left.
+	UnprovenMembershipTeamIDs []string `json:"-"`
+	// MembershipAbsence (CHAOS-9079): see githubTeamCatalogRows.MembershipAbsence.
+	MembershipAbsence MembershipAbsenceProver `json:"-"`
 	// OwnershipListedTeamIDs (CHAOS-8952) lists every team (by "gl:" id)
 	// whose group /projects listing reached its end this call, set only when
 	// ownership is selected. It is the scope of the ownership snapshot close:

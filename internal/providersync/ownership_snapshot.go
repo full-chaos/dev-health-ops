@@ -138,8 +138,8 @@ const (
 // a fact that still holds is on no page. So the end of a walk is never the
 // proof of an absence by itself: each kind states what is.
 //
-// It is made only by AbsenceByWalk and AbsenceByListing. The zero value proves
-// no absence, so a kind whose proof nobody stated closes no absent fact.
+// It is made only by AbsenceByWalk, AbsenceByListing and AbsenceByCloseWriter.
+// The zero value proves no absence, so a kind whose proof nobody stated closes no absent fact.
 type AbsenceProof[R any] struct {
 	statement string
 	verdict   func(R) SnapshotAbsence
@@ -167,6 +167,20 @@ func AbsenceByWalk[R any](walk AbsenceWalk) AbsenceProof[R] {
 		return AbsenceProof[R]{}
 	}
 	return AbsenceProof[R]{statement: statement, verdict: func(R) SnapshotAbsence { return SnapshotAbsenceProven }}
+}
+
+// AbsenceByCloseWriterStatement is the statement of AbsenceByCloseWriter.
+const AbsenceByCloseWriterStatement = "decided_by_the_writer_of_the_kind"
+
+// AbsenceByCloseWriter states that the rule proves no absence for this kind:
+// every absent fact the rule retracts is a CANDIDATE only, and the one writer
+// of the kind closes a candidate after its own proof, fact by fact. It is for
+// a kind whose writer holds that proof already; the census
+// (TestAbsenceProofCensus) names the writer and allows no other caller. A
+// kind that states it and writes the rule's retractions as they are would
+// close on the end of a walk, which is the defect this type exists to stop.
+func AbsenceByCloseWriter[R any]() AbsenceProof[R] {
+	return AbsenceProof[R]{statement: AbsenceByCloseWriterStatement, verdict: func(R) SnapshotAbsence { return SnapshotAbsenceProven }}
 }
 
 // AbsenceByListingStatement is the statement of AbsenceByListing.

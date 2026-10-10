@@ -347,14 +347,25 @@ func (adapter GitHubTeamCatalogCollector) CollectTeamCatalog(
 	if selections.Members {
 		result.MembershipsSkippedManualConflict = membershipsSkippedManualConflict
 		result.MembershipsStagedForReview = membershipsStagedForReview
-		if len(keptMemberships) > 0 {
-			// CHAOS-9007: a membership keeps the valid_from it was first seen with.
-			var reuseErr error
-			keptMemberships, reuseErr = reuseGitHubMembershipFirstSeen(ctx, adapter.Sink.Conn, ref.OrgID, keptMemberships)
-			if reuseErr != nil {
-				return result, reuseErr
-			}
-			if err := adapter.Sink.WriteMemberships(ctx, ref.OrgID, keptMemberships); err != nil {
+		// CHAOS-9007 / CHAOS-9079: a membership keeps the valid_from it was first
+		// seen with, and a member absent from the COMPLETE read of its team is
+		// closed (through the one snapshot rule). Absence is judged against the
+		// members the provider returned, not the part the conflict guard keeps.
+		decision := decideOwnershipClose(ctx, adapter.ScopeCensus, ownershipCloseRequest{
+			ref: ref, provider: githubTeamCatalogProvider, listed: rows.ObservedMembershipTeamIDs,
+			unproven: rows.UnprovenMembershipTeamIDs, dataset: "team_memberships", leg: membershipCloseLeg,
+		})
+		membershipRows, membershipOutcome, snapshotErr := githubMembershipWriter.Snapshot(
+			ctx, adapter.Sink.Conn, ref.OrgID, rows.Memberships, keptMemberships, normalizedAt.UTC().Truncate(time.Millisecond),
+			rows.MembershipAbsence, decision.membershipSnapshot(GitHubTeamMembershipKind))
+		if snapshotErr != nil {
+			return result, snapshotErr
+		}
+		ReportSnapshotPlan(ctx, githubTeamCatalogProvider, ref.OrgID, membershipOutcome.Plan)
+		result.DegradedLegs = append(result.DegradedLegs, decision.legs...)
+		result.MembershipsClosed = membershipOutcome.Closed
+		if len(membershipRows) > 0 {
+			if err := adapter.Sink.WriteMemberships(ctx, ref.OrgID, membershipRows); err != nil {
 				return result, err
 			}
 			result.MembershipsWritten = len(keptMemberships)

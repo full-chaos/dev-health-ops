@@ -31,6 +31,9 @@ import "time"
 //	atlassian_team_project_links  sole integration  is an answer    cursor walk
 //	gitlab_group_project_grants   sole integration  is an answer    one response or direct answer
 //	github_team_repo_grants       sole integration  is an answer    one response or direct answer
+//	linear_team_memberships       sole integration  is an answer    the writer of the kind
+//	github_team_memberships       sole integration  is an answer    the writer of the kind
+//	gitlab_team_memberships       sole integration  is an answer    the writer of the kind
 //
 // Absence: what proves that an open fact the run does not hold is gone
 // (AbsenceProof, an argument of every kind snapshot). "one response or direct
@@ -43,6 +46,9 @@ import "time"
 // walk": the walk follows the provider's cursor to its proven end, and its
 // answer is taken as the proof (AbsenceByWalk); the providers state no
 // contract for a list that changes during such a walk, so it is a named risk.
+// "the writer of the kind": the rule lists every absent fact as a candidate
+// and the one writer of the kind (MembershipSnapshotWriter.Snapshot) closes a
+// candidate only on its own proof, fact by fact (AbsenceByCloseWriter).
 
 // MembershipSnapshotRow is one team_memberships fact as the snapshot rule
 // reads it: the team, the member and the stored valid_from.
@@ -144,4 +150,33 @@ func AtlassianTeamMembershipKind() SnapshotKind[MembershipSnapshotRow] {
 // and link closes.
 func AtlassianTeamCatalogKind() SnapshotKind[TeamSnapshotRow] {
 	return NewSnapshotKind("atlassian_team_catalog", EmptyClosesNothing, func(TeamSnapshotRow) bool { return true })
+}
+
+// The team membership kinds (CHAOS-9079): the memberships a provider catalog
+// writes (source native for Linear, provider_access for GitHub and GitLab) of
+// the teams whose own member read proved its end in a scope no other
+// integration reads (decideOwnershipClose). Each team's member read is its own
+// walk, so a team with no member is an answer: its open memberships close. A
+// team outside closable is of no kind, and its rows never close. A member
+// absent from the complete read of its team is closed (valid_to = the run
+// time); a member who comes back is a new fact with a new valid_from.
+
+func teamMembershipHolds(closable []string) func(MembershipSnapshotRow) bool {
+	closes := teamIn(closable)
+	return func(row MembershipSnapshotRow) bool { return closes(row.TeamID) }
+}
+
+// LinearTeamMembershipKind is the Linear catalog's team memberships.
+func LinearTeamMembershipKind(closable []string) SnapshotKind[MembershipSnapshotRow] {
+	return NewSnapshotKind("linear_team_memberships", EmptyIsAnAnswer, teamMembershipHolds(closable))
+}
+
+// GitHubTeamMembershipKind is the GitHub team memberships.
+func GitHubTeamMembershipKind(closable []string) SnapshotKind[MembershipSnapshotRow] {
+	return NewSnapshotKind("github_team_memberships", EmptyIsAnAnswer, teamMembershipHolds(closable))
+}
+
+// GitLabTeamMembershipKind is the GitLab group memberships.
+func GitLabTeamMembershipKind(closable []string) SnapshotKind[MembershipSnapshotRow] {
+	return NewSnapshotKind("gitlab_team_memberships", EmptyIsAnAnswer, teamMembershipHolds(closable))
 }

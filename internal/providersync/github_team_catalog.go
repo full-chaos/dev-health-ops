@@ -183,6 +183,14 @@ type githubTeamCatalogRows struct {
 	// comment for why an unobserved scope must never have its stale pending
 	// changes resolved.
 	ObservedMembershipTeamIDs []string
+	// UnprovenMembershipTeamIDs (CHAOS-9079) is the part of ObservedMembershipTeamIDs
+	// whose member read did not reach the provider's own end-of-list signal: its
+	// members may be cut, so a member absent from it is not known to have left.
+	UnprovenMembershipTeamIDs []string
+	// MembershipAbsence (CHAOS-9079) answers, for a member the member list lacks,
+	// whether the provider's own lookup says the person is not in the team. Not
+	// part of any wire shape.
+	MembershipAbsence MembershipAbsenceProver
 	// RepoListedTeamIDs lists every team (by "gh:" id) whose
 	// GET /orgs/{org}/teams/{slug}/repos listing reached its end this call.
 	// It is the scope of the provider_access close: a team that is not here

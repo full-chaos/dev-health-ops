@@ -261,6 +261,25 @@ WHERE org_id = ? AND provider = ? AND source = ? AND team_id IN ?
 	return open, nil
 }
 
+const githubRepoOwnershipTeamsQuery = `SELECT DISTINCT team_id FROM team_repo_ownership FINAL
+WHERE org_id = ? AND provider = ? AND source = ? AND startsWith(repo_full_name, ?)
+  AND (valid_to IS NULL OR valid_to > now64(3, 'UTC'))`
+
+// OpenRepoOwnershipTeamsNotListed reads the teams that hold an open
+// provider_access row under the run's GitHub org (repo full name prefix
+// "<org>/") and that the run's team listing does not return: the dropped teams
+// of the ownership close (team_absence.go). A failed read is an error, never
+// "no team".
+func (sink GitHubTeamCatalogClickHouseEffects) OpenRepoOwnershipTeamsNotListed(
+	ctx context.Context, orgID, githubOrg string, listed []string,
+) ([]string, error) {
+	if sink.Conn == nil || strings.TrimSpace(orgID) == "" || strings.TrimSpace(githubOrg) == "" {
+		return nil, ErrInvalidConfiguration
+	}
+	return openTeamIDsNotListed(ctx, sink.Conn, githubRepoOwnershipTeamsQuery, "AND team_id NOT IN ?", listed,
+		orgID, githubTeamCatalogProvider, githubTeamCatalogSource, githubOrg+"/")
+}
+
 // SnapshotTeamRepoOwnership writes this run's team<->repo grants and closes
 // the open provider_access rows of the LISTED teams that GitHub no longer
 // returns, through the shared snapshot rule (PlanOwnershipSnapshot, a repo full

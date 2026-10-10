@@ -9,6 +9,7 @@ import (
 	"log"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -106,7 +107,7 @@ SELECT generateUUIDv4(), concat('acme/repo-', toString(number)), now(), now(), ?
 
 		var logs bytes.Buffer
 		log.SetOutput(&logs)
-		t.Cleanup(func() { log.SetOutput(nil) })
+		t.Cleanup(func() { log.SetOutput(os.Stderr) })
 		req := httptest.NewRequest(http.MethodGet, "/api/v1/filters/options?scope_id=a&scope_id=b", nil)
 		req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: org, Role: "owner"}))
 		rec := httptest.NewRecorder()

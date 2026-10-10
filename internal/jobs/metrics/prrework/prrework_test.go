@@ -1,6 +1,7 @@
 package prrework
 
 import (
+	"math"
 	"strconv"
 	"testing"
 )
@@ -74,4 +75,49 @@ func show(v *float64) string {
 		return "nil"
 	}
 	return strconv.FormatFloat(*v, 'f', -1, 64)
+}
+
+// The coverage of a view is over EVERY merged pull request the view stores: a
+// row with no counts (a day stored before the counts existed) is in the
+// denominator only. The ratio and its state stay a statement about the rows
+// that hold counts.
+func TestEvaluateTakesTheCoverageOverEveryStoredRow(t *testing.T) {
+	near := func(got *float64, want float64) bool { return got != nil && math.Abs(*got-want) < 1e-12 }
+	counted := Counts{Merged: 12, Reviewed: 5, Rework: 1}
+	for _, test := range []struct {
+		name     string
+		view     View
+		state    State
+		coverage float64 // -1: nil
+	}{
+		{"every row holds counts", View{Counts: counted, StoredRows: 1, MergedOfEveryRow: 12}, StateMeasured, 5.0 / 12},
+		{"one counted row and rows with 88 more merged pull requests and no counts", View{Counts: counted, StoredRows: 1, MergedOfEveryRow: 100}, StateMeasured, 0.05},
+		{"a view that gives no sum of every row keeps the coverage of its counts", View{Counts: counted, StoredRows: 1}, StateMeasured, 5.0 / 12},
+		{"a sum of every row below the counts is not used", View{Counts: counted, StoredRows: 1, MergedOfEveryRow: 3}, StateMeasured, 5.0 / 12},
+		{"no review data, and rows with no counts", View{Counts: Counts{Merged: 3}, StoredRows: 1, MergedOfEveryRow: 30}, StateUnknown, 0},
+		{"no signal, and rows with no counts", View{Counts: Counts{Merged: 4, NoSignal: 4}, StoredRows: 1, MergedOfEveryRow: 30}, StateNotApplicableNoSignal, 0},
+		{"a counted day with no merged pull request, and rows with no counts that hold some", View{StoredRows: 1, MergedOfEveryRow: 30}, StateNotApplicableNoMerged, 0},
+		{"a counted day with no merged pull request and nothing else", View{StoredRows: 1}, StateNotApplicableNoMerged, -1},
+		{"no row holds counts", View{MergedOfEveryRow: 30}, StateNoStoredCounts, -1},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			outcome := Evaluate(test.view)
+			if outcome.State != test.state {
+				t.Errorf("state %q, want %q", outcome.State, test.state)
+			}
+			if test.coverage < 0 {
+				if outcome.Coverage != nil {
+					t.Errorf("coverage %v, want none", *outcome.Coverage)
+				}
+				return
+			}
+			if !near(outcome.Coverage, test.coverage) {
+				t.Errorf("coverage %v, want %v", outcome.Coverage, test.coverage)
+			}
+			// The ratio is of the counted rows, whatever the other rows hold.
+			if rate := Rate(test.view.Counts); (rate.Value == nil) != (outcome.Value == nil) || (rate.Value != nil && *rate.Value != *outcome.Value) {
+				t.Errorf("the ratio changed with the rows that hold no counts")
+			}
+		})
+	}
 }

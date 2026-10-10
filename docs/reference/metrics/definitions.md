@@ -189,18 +189,25 @@ reviews were never read must not show `0%`.
 
 - **A window is the ratio of the sums**, never a mean of daily ratios: a day
   with one reviewed pull request does not weigh as much as a day with fifty.
-- **Coverage** is `prs_merged_reviewed / prs_merged`: the share of the merged
-  pull requests the ratio speaks for, from 0 to 1 (not a percent). The rule
-  returns it, and the GraphQL Home delta serves it as `rateCoverage`: 0 when no
-  merged pull request has review data of a provider that stores a
-  changes-requested review (the states `unknown_no_review_evidence` and
-  `not_applicable_no_rework_signal`), no value when no pull request merged,
-  when the view holds no stored counts, and for every other metric. The pull
-  requests of a provider with no such review are in the denominator only: 6
-  reviewed pull requests of one provider and 4 pull requests of a provider
-  with no signal give 0.6. The REST Home response, the analytics measure, the
-  flow opportunity, the recommendations job and the report chart do not serve
-  it.
+- **Coverage** is the reviewed pull requests over the merged pull requests of
+  the view: the share of the merged pull requests the ratio speaks for, from 0
+  to 1 (not a percent). The numerator is `prs_merged_reviewed`. The denominator
+  is `prs_merged` of EVERY stored row of the view, also of a row that holds no
+  counts (a day stored before the counts existed and not computed again): such
+  a day is in the denominator only, so a window that is partly not counted has
+  a low coverage. The ratio and its state are of the rows that hold counts
+  only. The GraphQL Home delta serves it as `rateCoverage`: 0 when no merged
+  pull request has review data of a provider that stores a changes-requested
+  review (the states `unknown_no_review_evidence` and
+  `not_applicable_no_rework_signal`); no value when no stored row of the view
+  holds a merged pull request, when no stored row holds counts (the state is
+  empty), and for every other metric. The pull requests of a provider with no
+  such review are in the denominator only: 6 reviewed pull requests of one
+  provider and 4 pull requests of a provider with no signal give 0.6. A
+  repository-day with no stored row at all is not in the denominator: the
+  coverage cannot show a day that was never computed. The REST Home response,
+  the analytics measure, the flow opportunity, the recommendations job and the
+  report chart do not serve it.
 - **Readers** that apply the rule: Home (`pr_rework_ratio`, with the state in
   `rateState` and the coverage in `rateCoverage`), the analytics measure `PR_REWORK_RATIO`, the "high rework" flow
   opportunity, the recommendations job, and the weekly report chart.

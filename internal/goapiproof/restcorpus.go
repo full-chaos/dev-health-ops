@@ -1340,6 +1340,54 @@ var explainDriverRankOrderInsensitive = []OrderInsensitiveList{
 	{Path: "data.contributors", KeyFields: []string{"id"}, Reason: "the same ranking divergence as data.drivers, over contributors", Ticket: "CHAOS-5818"},
 }
 
+// explainStaleNullableDefect is the reference's stale read of a Nullable
+// value column, on the value leaves. Its consequence on the percent leaves is
+// declared by shape (explainValueDrivenPercentDefects).
+var explainStaleNullableDefect = BaselineDefect{
+	Ticket: "CHAOS-5813",
+	Reason: "work_item_metrics_daily.cycle_time_p50_hours and repo_metrics_daily.pr_first_review_p50_hours are both Nullable(Float64) (001_metrics_v2.sql); Python's own reader (api/queries/metrics.py's metric-value read) takes a bare argMax(col, computed_at) over them, which can return a STALE non-null version instead of the row at the TRUE latest version whenever that latest version's own value is NULL -- argMax's own candidate selection skips a NULL arg rather than tracking \"the value at the max version\". This port's metricValueProjection wraps the column in a tuple, (argMax(tuple(col), computed_at)).1, so the true latest version always wins, NULL included -- reaching every numeric field this route derives from that column (the headline value/delta and every driver/contributor value) for the cycle_time and review_latency metrics, the only two this route reaches whose column is Nullable. Go is correct.",
+	Paths: []string{
+		"data.value",
+		"data.drivers.value",
+		"data.contributors.value",
+	},
+	Intermittent:       true,
+	IntermittentReason: "present only while the metric's own source table holds an unmerged physical version whose latest row is NULL for this column, and only for the cycle_time/review_latency metrics (the only two Nullable(Float64) columns this route reaches); a comparison taken after the next merge, or for any other metric, shows no divergence under these paths",
+}
+
+// explainBlockedStatusDefect is the reference's blocked_work read with no
+// status predicate, on the value leaves. Its consequence on the percent
+// leaves is declared by shape (explainValueDrivenPercentDefects).
+var explainBlockedStatusDefect = BaselineDefect{
+	Ticket: "CHAOS-5819",
+	Reason: "blocked_work's table/column read (work_item_state_durations_daily.duration_hours) carries no status predicate in fetch_metric_value/fetch_metric_contributors/fetch_metric_driver_delta (api/queries/metrics.py, api/queries/explain.py), so the 'Blocked Work' headline, its drivers and its contributors sum/rank duration_hours across every status the table records (backlog/todo/in_progress/in_review/blocked/done/canceled/unknown) -- only this table's OTHER, unrelated reader (fetch_blocked_hours, used by home.py, never by /explain) restricts to status = 'blocked'. This port's blocked_work config carries a StatusFilter of 'blocked' (internal/queryapi/explain/metricconfig.go), reaching every numeric field this route derives from that column for this one metric. Go is correct. This same divergence can also manifest as a LIST-LENGTH difference: a window/scope whose blocked-status rows are fewer than its non-blocked ones leaves data.drivers/data.contributors shorter on the candidate side, and a window with no blocked-status row at all leaves them empty against a populated baseline. Paths above cannot reach that manifestation and no addition to them would: classifyBaselineDefects (compare.go) admits a finding only when leafDifference(shape) holds, which is exactly ShapeValue/ShapeNull/ShapeScalarType -- a length, presence or structure difference is categorically outside every BaselineDefect's coverage, independent of what its Paths name. A list-length instance of this divergence is therefore knowingly left uncovered and stays a visible, real finding on the receipt whenever it fires.",
+	Paths: []string{
+		"data.value",
+		"data.drivers.value",
+		"data.contributors.value",
+	},
+	Intermittent:       true,
+	IntermittentReason: "present only for a blocked_work request whose window/scope has at least one non-blocked-status row contributing duration_hours for a natural key (day, provider, work_scope_id, team_id) that also carries a blocked-status row; a window with no non-blocked duration recorded, or no data at all, shows no divergence under these paths, and no other metric ever reaches this path",
+}
+
+// explainValueDrivenPercentDefects declares, by shape, the consequence on the
+// percent of the explain metric and of a driver for each baseline defect that
+// changes the value the percent is made of (valueDrivenPercentDefects). A
+// contributor has a current side only: its percent is not a consequence of
+// these defects and is not named here.
+func explainValueDrivenPercentDefects(bases ...BaselineDefect) []BaselineDefect {
+	var out []BaselineDefect
+	for _, base := range bases {
+		out = append(out, valueDrivenPercentDefects(base, "data.delta_pct", func() *SiblingCondition {
+			return &SiblingCondition{ObjectPath: "data"}
+		})...)
+		out = append(out, valueDrivenPercentDefects(base, "data.drivers.delta_pct", func() *SiblingCondition {
+			return &SiblingCondition{ListPath: "data.drivers", KeyFields: []string{"id"}}
+		})...)
+	}
+	return out
+}
+
 // explainPercentDefects are the declared differences on the percent of the explain
 // metric itself (one object), of a driver and of a contributor (keyed by id): the
 // same two exact-pair, flag-conditioned declarations as Home's (CHAOS-9063,
@@ -1370,7 +1418,7 @@ var explainParity = Options{
 	NumericLeavesDeclared: true,
 	FloatTierB:            explainAggregateFloats,
 	OrderInsensitiveLists: explainDriverRankOrderInsensitive,
-	BaselineDefects: append(explainPercentDefects(), []BaselineDefect{
+	BaselineDefects: append(append(explainPercentDefects(), explainValueDrivenPercentDefects(explainStaleNullableDefect, explainBlockedStatusDefect)...), []BaselineDefect{
 		// The percent of the metric, of a driver and of a contributor (CHAOS-9063, CHAOS-9111): see explainPercentDefects.
 		{
 			Ticket: "CHAOS-5813",
@@ -1384,19 +1432,7 @@ var explainParity = Options{
 			Intermittent:       true,
 			IntermittentReason: "present only while repos or teams holds an unmerged physical version for an id this response actually names; a comparison taken after the next background merge shows no divergence under these paths",
 		},
-		{
-			Ticket: "CHAOS-5813",
-			Reason: "work_item_metrics_daily.cycle_time_p50_hours and repo_metrics_daily.pr_first_review_p50_hours are both Nullable(Float64) (001_metrics_v2.sql); Python's own reader (api/queries/metrics.py's metric-value read) takes a bare argMax(col, computed_at) over them, which can return a STALE non-null version instead of the row at the TRUE latest version whenever that latest version's own value is NULL -- argMax's own candidate selection skips a NULL arg rather than tracking \"the value at the max version\". This port's metricValueProjection wraps the column in a tuple, (argMax(tuple(col), computed_at)).1, so the true latest version always wins, NULL included -- reaching every numeric field this route derives from that column (the headline value/delta and every driver/contributor value) for the cycle_time and review_latency metrics, the only two this route reaches whose column is Nullable. Go is correct.",
-			Paths: []string{
-				"data.value",
-				"data.delta_pct",
-				"data.drivers.value",
-				"data.drivers.delta_pct",
-				"data.contributors.value",
-			},
-			Intermittent:       true,
-			IntermittentReason: "present only while the metric's own source table holds an unmerged physical version whose latest row is NULL for this column, and only for the cycle_time/review_latency metrics (the only two Nullable(Float64) columns this route reaches); a comparison taken after the next merge, or for any other metric, shows no divergence under these paths",
-		},
+		explainStaleNullableDefect,
 		{
 			Ticket: "CHAOS-5818",
 			Reason: "fetch_metric_contributors and fetch_metric_driver_delta (api/queries/explain.py) rank every metric with a hardcoded avg(column), regardless of that metric's own aggregator in _METRIC_CONFIG -- this table's own headline reader, fetch_metric_value (api/queries/metrics.py), already keys off the metric's configured aggregator, so an avg-aggregator metric's ranking agrees with its own headline while a sum-aggregator metric's ranking (throughput, deploy_freq, churn, blocked_work) silently averages a quantity the metric's own label, unit and headline all present as a total. This port's fetchMetricContributors/fetchMetricDriverDelta (internal/queryapi/explain/metrics.go) take the metric's own config.Aggregator, matching the headline read. Go is correct. DIRECTION: a sum over N>=1 non-negative values is >= their average, equal only at N=1 -- every one of the four sum-aggregator metrics this entry covers reads a structurally non-negative column (metricconfig.go: throughput/items_completed and deploy_freq/deployments_count are counts, churn/total_loc_touched is touched-lines, blocked_work/duration_hours is a duration; none can go negative), so candidate (Go, sum) is admitted only when strictly greater than baseline (Python, avg) at the same driver/contributor id -- the reverse of every OTHER KeyedDirectionShape in this file, which is why this entry sets CandidateMustBeGreater. The non-negativity is this claim's own premise, not incidental: the same argument reverses for a signed quantity (see data.drivers.delta_pct's own drop below), and no metric this entry reaches carries one. Pairing is by id, over data.drivers/data.contributors declared order-insensitive under this ticket (explainDriverRankOrderInsensitive above) -- see that declaration's own doc comment for why positional pairing cannot be used here and what leaving it in costs.",
@@ -1428,19 +1464,7 @@ var explainParity = Options{
 				CandidateMustBeGreater: true,
 			},
 		},
-		{
-			Ticket: "CHAOS-5819",
-			Reason: "blocked_work's table/column read (work_item_state_durations_daily.duration_hours) carries no status predicate in fetch_metric_value/fetch_metric_contributors/fetch_metric_driver_delta (api/queries/metrics.py, api/queries/explain.py), so the 'Blocked Work' headline, its drivers and its contributors sum/rank duration_hours across every status the table records (backlog/todo/in_progress/in_review/blocked/done/canceled/unknown) -- only this table's OTHER, unrelated reader (fetch_blocked_hours, used by home.py, never by /explain) restricts to status = 'blocked'. This port's blocked_work config carries a StatusFilter of 'blocked' (internal/queryapi/explain/metricconfig.go), reaching every numeric field this route derives from that column for this one metric. Go is correct. This same divergence can also manifest as a LIST-LENGTH difference: a window/scope whose blocked-status rows are fewer than its non-blocked ones leaves data.drivers/data.contributors shorter on the candidate side, and a window with no blocked-status row at all leaves them empty against a populated baseline. Paths above cannot reach that manifestation and no addition to them would: classifyBaselineDefects (compare.go) admits a finding only when leafDifference(shape) holds, which is exactly ShapeValue/ShapeNull/ShapeScalarType -- a length, presence or structure difference is categorically outside every BaselineDefect's coverage, independent of what its Paths name. A list-length instance of this divergence is therefore knowingly left uncovered and stays a visible, real finding on the receipt whenever it fires.",
-			Paths: []string{
-				"data.value",
-				"data.delta_pct",
-				"data.drivers.value",
-				"data.drivers.delta_pct",
-				"data.contributors.value",
-			},
-			Intermittent:       true,
-			IntermittentReason: "present only for a blocked_work request whose window/scope has at least one non-blocked-status row contributing duration_hours for a natural key (day, provider, work_scope_id, team_id) that also carries a blocked-status row; a window with no non-blocked duration recorded, or no data at all, shows no divergence under these paths, and no other metric ever reaches this path",
-		},
+		explainBlockedStatusDefect,
 		{
 			Ticket:             "CHAOS-5819",
 			Reason:             "the same status-filter divergence as this ticket's own value entry above (restcorpus.go), taken to its full consequence on the drivers list: a window with no status='blocked' row leaves the candidate's blocked-only fetchMetricDriverDelta GROUP BY empty (metrics.go), so data.value/data.delta_pct read 0 on the candidate (covered by the sibling value entry) while data.drivers, ranked from the SAME all-status avg() the value entry's own baseline reads (explain.py), still carries whatever driver a blocked_work window with non-blocked duration surfaces -- a baseline-only PRESENCE difference this entry's own ZeroValueEmptyListShape admits, categorically outside the sibling entry's leaf-only Paths (leafDifference, compare.go). Go is correct.",
@@ -1486,7 +1510,7 @@ var explainParity = Options{
 var explainScopeDropDefect = BaselineDefect{
 	Ticket:             "CHAOS-5813",
 	Reason:             "explain.py's own call site for scope_filter_for_metric (api/services/explain.py:150-152) is the only caller anywhere in the Python source that omits the org_id keyword -- it silently defaults to \"\". For a repo-scoped metric (review_latency/deploy_freq/churn/change_failure_rate) that flows into resolve_repo_id's own org_id filter, which no real org's repos row ever matches: every repo/team scope ref fails to resolve, repo_ids ends up [], and the scope filter is silently dropped, so the headline value/delta and every driver/contributor value are computed over the whole org rather than the requested scope. This port passes the real org id throughout. Go is correct. The reference's own team-to-repo resolver for this scope (resolve_repo_ids_for_teams, api/queries/scopes.py:72-89) reads DISTINCT repo_id straight off user_metrics_daily.team_id -- it bridges through the metrics table, never through team ownership -- while this port resolves a team's repositories from team_repo_ownership (internal/queryapi/teamscope), so for a team scope the two planes read different tables: see this file's own TEAM SCOPE paragraph above for why that difference is a knowingly uncovered finding rather than a declared defect. This same divergence can also manifest as a LIST-LENGTH difference: data.drivers/data.contributors come back shorter on the candidate side than the baseline's substituted org-wide list, and a scope with no matching rows in the window leaves them empty against a populated baseline, with data.value/data.delta_pct then reading 0 against a real number rather than a differently-scoped one -- a structural difference, never covered by ANY BaselineDefect shape (see compare.go's leafDifference gate), knowingly left uncovered and a real, visible finding on the receipt whenever a requested scope's resolved repo set is small or has no overlap with the metric's own source table. The same gap can also surface one layer earlier, before any field comparison runs: a resolved scope narrow enough widens the two response bodies past the proof comparator's own size-disagreement threshold, and the request is REFUSED as legs_do_not_overlap instead of reaching an admitted mismatch -- the same fallout, not a second defect.",
-	Paths:              []string{"data.value", "data.delta_pct", "data.drivers.value", "data.drivers.delta_pct", "data.contributors.value"},
+	Paths:              []string{"data.value", "data.drivers.value", "data.contributors.value"},
 	Intermittent:       true,
 	IntermittentReason: "present only while the requested repo/team scope's own aggregate actually differs from the whole org's aggregate for this metric and window; a scope whose narrowed value happens to equal the org-wide one shows no divergence under these paths",
 }
@@ -1499,7 +1523,7 @@ var explainRepoTeamScopedParity = Options{
 	NumericLeavesDeclared: true,
 	FloatTierB:            explainAggregateFloats,
 	OrderInsensitiveLists: explainDriverRankOrderInsensitive,
-	BaselineDefects:       append(append([]BaselineDefect{}, explainParity.BaselineDefects...), explainScopeDropDefect),
+	BaselineDefects:       append(append(append([]BaselineDefect{}, explainParity.BaselineDefects...), explainScopeDropDefect), explainValueDrivenPercentDefects(explainScopeDropDefect)...),
 }
 
 // explainScopedRequest builds one repo- or team-scoped explain request
@@ -1676,7 +1700,6 @@ var peopleDetailParity = Options{
 				// (personMetrics' own per-metric table), plus the narrative
 				// sentences derived from deltas' own values.
 				"data.deltas.value",
-				"data.deltas.delta_pct",
 				"data.deltas.spark.value",
 				"data.narrative",
 				// GET .../summary: fetchPersonWorkMix/fetchPersonFlowBreakdown
@@ -1794,9 +1817,14 @@ var peopleSummaryParity = Options{
 		"data.deltas.has_data":       {Ticket: "CHAOS-9044", Reason: "Go-only: the current window holds a stored value for the metric; false = value is a 0 placeholder, not a measured zero. The Python reference never served it."},
 		"data.deltas.has_prior_data": {Ticket: "CHAOS-9044", Reason: "Go-only: the comparison window holds a stored value; false = the delta has no base and delta_pct is null. The Python reference never served it."},
 	},
-	FloatTierB:            peopleSummaryNumericFloats,
-	IntegerLeaves:         peopleSummaryNumericInts,
-	BaselineDefects:       append(append([]BaselineDefect{}, peopleDetailParity.BaselineDefects...), metricPercentDefects("data.deltas", "data.deltas.delta_pct", "person metric")...),
+	FloatTierB:    peopleSummaryNumericFloats,
+	IntegerLeaves: peopleSummaryNumericInts,
+	BaselineDefects: append(append(append([]BaselineDefect{}, peopleDetailParity.BaselineDefects...), metricPercentDefects("data.deltas", "data.deltas.delta_pct", "person metric")...),
+		// The consequence of the template's raw-read defect on a delta's percent, by
+		// shape; the template names the value leaves only.
+		valueDrivenPercentDefects(peopleDetailParity.BaselineDefects[0], "data.deltas.delta_pct", func() *SiblingCondition {
+			return &SiblingCondition{ListPath: "data.deltas"}
+		})...),
 	OrderInsensitiveLists: peopleSummaryCollaborationOrderInsensitiveLists,
 }
 

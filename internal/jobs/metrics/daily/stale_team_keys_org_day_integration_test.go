@@ -3,12 +3,30 @@
 package daily
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"errors"
+	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/google/uuid"
 )
+
+// emptyScopeReadConn answers the organization-wide read of the work scopes
+// with no row, as a read that is cut off does. Every other statement goes to
+// the server as it is.
+type emptyScopeReadConn struct{ driver.Conn }
+
+func (conn *emptyScopeReadConn) Query(ctx context.Context, query string, args ...any) (driver.Rows, error) {
+	if strings.Contains(query, "SELECT DISTINCT provider, project_key") && !strings.Contains(query, "repo_id IN") {
+		return conn.Conn.Query(ctx, strings.Replace(query, "WHERE org_id = ?", "WHERE 1 = 0 AND org_id = ?", 1), args...)
+	}
+	return conn.Conn.Query(ctx, query, args...)
+}
 
 // A run of the whole organization owns the whole day. A work scope that the
 // organization has no item in any more is computed by no run, so the rows an
@@ -160,8 +178,40 @@ FINAL WHERE org_id = ? AND day = ? AND provider = ? AND work_scope_id = ?`, []an
 				t.Fatalf("%s: the stored rows hold %v before the run, want %v: the case is not set", provider, got, storedGone)
 			}
 		}
+		// The one line the end of a run logs: the class of the retraction and
+		// the rows of zeros per table.
+		var logged bytes.Buffer
+		previous := slog.Default()
+		slog.SetDefault(slog.New(slog.NewJSONHandler(&logged, nil)))
 		compute(Run{ID: uuid.NewString(), OrganizationID: org, TargetDay: day, FullOrg: true, DiscoveredRepoIDs: listed},
 			sharedScopeRepoAPI, sharedScopeRepoWeb)
+		slog.SetDefault(previous)
+		var line map[string]any
+		for _, raw := range strings.Split(logged.String(), "\n") {
+			var entry map[string]any
+			if json.Unmarshal([]byte(raw), &entry) == nil && entry["msg"] == StaleKeysRetractedLogMessage {
+				line = entry
+			}
+		}
+		// In each work-item table: 4 providers x 2 teams of the scopes with no
+		// item, and one key of board-1 that the first partition wrote before
+		// the second partition attributed its items (the end of a run settles
+		// that key too). One key of a repository in no partition in ai_impact,
+		// and two in team_metrics (that repository, and the row with no
+		// repository).
+		for field, want := range map[string]any{
+			"retraction_scope":                          StaleKeyRetractionOrganizationDay,
+			"work_item_metrics_daily_zero_rows":         float64(9),
+			"estimate_coverage_metrics_daily_zero_rows": float64(9),
+			"work_item_state_durations_daily_zero_rows": float64(9),
+			"ai_governance_coverage_daily_zero_rows":    float64(0),
+			"team_metrics_daily_zero_rows":              float64(2),
+			"ai_impact_metrics_daily_zero_rows":         float64(1),
+		} {
+			if line == nil || line[field] != want {
+				t.Errorf("the log line of the run holds %s = %v, want %v (line %v)", field, line[field], want, line)
+			}
+		}
 
 		for _, provider := range orgDayProviders {
 			for _, team := range []string{"ENG", "unassigned"} {
@@ -170,6 +220,18 @@ FINAL WHERE org_id = ? AND day = ? AND provider = ? AND work_scope_id = ?`, []an
 						provider, team, got)
 				}
 			}
+		}
+		// The ninth superseded key of each table: board-1 under `unassigned`,
+		// written by the first partition before the second one attributed its
+		// items, and superseded at the end of the run.
+		var transient uint64
+		if err := conn.QueryRow(ctx, `SELECT count() FROM work_item_metrics_daily
+WHERE org_id = ? AND day = ? AND provider = 'linear' AND work_scope_id = 'board-1' AND team_id = 'unassigned'`, org, day).Scan(&transient); err != nil {
+			t.Fatal(err)
+		}
+		if transient == 0 || held(org, "linear", "board-1", "unassigned") != zero {
+			t.Errorf("board-1 under unassigned: %d stored row(s), holding %v; want a key that a partition wrote and the end of the run superseded",
+				transient, held(org, "linear", "board-1", "unassigned"))
 		}
 		// The scopes the organization has items in hold their rows.
 		if got := held(org, "linear", "board-1", "ENG"); got[0] == 0 || got[1] == 0 || got[2] == 0 {
@@ -198,6 +260,35 @@ FINAL WHERE org_id = ? AND day = ? AND provider = ? AND work_scope_id = ?`, []an
 		if got := repoHeld(org, "team_metrics_daily", "commits_count + after_hours_commits_count", ""); got != 0 {
 			t.Errorf("team_metrics_daily: the row with no repository still holds %v", got)
 		}
+		// A reader of team_metrics_daily does not count a superseded row. The
+		// daily job's own reader (the input of team_cognitive_load) takes the
+		// newest generation of each repository: the repository in no
+		// partition gives 0 commits, the row with no repository gives none,
+		// and the repository of the run gives its 7.
+		inputs, err := loadTeamMetricsCognitiveLoadInputsForDay(ctx, conn, org, day)
+		if err != nil {
+			t.Fatal(err)
+		}
+		commits := map[string]int{}
+		for _, input := range inputs {
+			commits[input.RepoID.String()] += input.CommitsCount
+		}
+		total := 0
+		for _, count := range commits {
+			total += count
+		}
+		if total != 7 || commits[sharedScopeRepoAPI.String()] != 7 || commits[orgDayRepoGone.String()] != 0 {
+			t.Errorf("the reader of team_metrics_daily counts %d commit(s) for the day (by repository %v), want only the 7 of the run's repository",
+				total, commits)
+		}
+		// A read with no newest-generation step and no filter: the newest row
+		// of each key, summed (FINAL), is the 7 too.
+		var final float64
+		scan("read team_metrics_daily", "SELECT toFloat64(sum(commits_count)) FROM team_metrics_daily FINAL WHERE org_id = ? AND day = ?",
+			[]any{org, day}, &final)
+		if final != 7 {
+			t.Errorf("a FINAL read of team_metrics_daily with no filter counts %v commit(s) for the day, want 7", final)
+		}
 		// A second end of the same run writes nothing: a superseded key is
 		// not live.
 		run := Run{ID: uuid.NewString(), OrganizationID: org, TargetDay: day, FullOrg: true, DiscoveredRepoIDs: listed}
@@ -219,6 +310,59 @@ FINAL WHERE org_id = ? AND day = ? AND provider = ? AND work_scope_id = ?`, []an
 		count(&after)
 		if after != before {
 			t.Errorf("a second end of the run wrote %d more row(s) in the repository-scoped tables, want none", after-before)
+		}
+	})
+
+	// A day with NO work item in the organization: every stored key of the
+	// day is stale. The run supersedes them only because a second read states
+	// that the day has no item.
+	t.Run("a run of the whole organization on a day with no work item", func(t *testing.T) {
+		const org = "00000000-0000-4000-8000-0000006e0003"
+		for _, team := range []string{"ENG", "unassigned"} {
+			exec("stored work_item_metrics row", `INSERT INTO work_item_metrics_daily
+    (day, provider, work_scope_id, team_id, team_name, items_started, items_completed, wip_count_end_of_day, computed_at, org_id)
+    VALUES (?, 'linear', 'gone-linear', ?, ?, 10, 9, 2, ?, ?)`, day, team, team, stored, org)
+		}
+		run := Run{ID: uuid.NewString(), OrganizationID: org, TargetDay: day, FullOrg: true, DiscoveredRepoIDs: listed}
+		var logged bytes.Buffer
+		previous := slog.Default()
+		slog.SetDefault(slog.New(slog.NewJSONHandler(&logged, nil)))
+		endStaleKeyRun(t, ctx, conn, run, clock)
+		slog.SetDefault(previous)
+		for _, team := range []string{"ENG", "unassigned"} {
+			if got := held(org, "linear", "gone-linear", team); got != zero {
+				t.Errorf("an empty day: the stored key of team %q still holds %v", team, got)
+			}
+		}
+		if !strings.Contains(logged.String(), StaleKeysEmptyOrganizationDayLogMessage) {
+			t.Errorf("the run superseded every key of a day with no work item and did not log %q", StaleKeysEmptyOrganizationDayLogMessage)
+		}
+	})
+
+	// The same run, and the scope read comes back EMPTY while the
+	// organization has items for the day (here: the read is cut off by the
+	// connection). The step must fail and supersede nothing: an empty read is
+	// not a proof of an empty day.
+	t.Run("a run of the whole organization whose scope read is empty and the day is not", func(t *testing.T) {
+		const org = "00000000-0000-4000-8000-0000006e0004"
+		setUp(org)
+		retractor, err := NewRunStaleKeyRetractor(&emptyScopeReadConn{Conn: conn})
+		if err != nil {
+			t.Fatal(err)
+		}
+		retractor.nowUTC = func() time.Time { return clock }
+		run := Run{ID: uuid.NewString(), OrganizationID: org, TargetDay: day, FullOrg: true, DiscoveredRepoIDs: listed}
+		written, err := retractor.RetractStaleKeys(ctx, run)
+		if !errors.Is(err, ErrOrganizationDayNotProvenEmpty) || written != 0 {
+			t.Fatalf("the step wrote %d row(s) with error %v, want no row and ErrOrganizationDayNotProvenEmpty", written, err)
+		}
+		for _, provider := range orgDayProviders {
+			for _, team := range []string{"ENG", "unassigned"} {
+				if got := held(org, provider, "gone-"+provider, team); got != storedGone {
+					t.Errorf("%s: after the failed step the key of team %q holds %v, want the stored %v: nothing may be superseded",
+						provider, team, got, storedGone)
+				}
+			}
 		}
 	})
 

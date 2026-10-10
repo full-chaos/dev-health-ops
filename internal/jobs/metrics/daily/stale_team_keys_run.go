@@ -118,6 +118,11 @@ func (retractor *RunStaleKeyRetractor) RetractStaleKeys(ctx context.Context, run
 	wholeOrganization := run.FullOrg
 	scope.everyRepository = wholeOrganization
 	day := scope.day
+	// The second read of an organization-wide run whose scope read gave no
+	// work item (see retractStaleTeamKeysOfRun).
+	proveNoItem := func(proofCtx context.Context) error {
+		return proveOrganizationHasNoWorkItemForDay(proofCtx, retractor.conn, run.OrganizationID, scope.start, scope.end)
+	}
 	conn := retractor.conn
 
 	// For the three work-item tables the step also stores the rows it
@@ -133,7 +138,7 @@ func (retractor *RunStaleKeyRetractor) RetractStaleKeys(ctx context.Context, run
 		for _, row := range triplet.MetricsDaily {
 			keys = append(keys, staleKey{row.Provider, row.WorkScopeID, row.TeamID})
 		}
-		return runStaleKeys{scope: read.staleKeyScope(), everyScope: wholeOrganization, keys: keys,
+		return runStaleKeys{scope: read.staleKeyScope(), everyScope: wholeOrganization, proveNoItem: proveNoItem, keys: keys,
 			writeRows: func(writeCtx context.Context, version time.Time) (int, error) {
 				return WriteWorkItemMetricsDaily(writeCtx, conn, run.OrganizationID, day, triplet.MetricsDaily, version)
 			}}, nil
@@ -147,7 +152,7 @@ func (retractor *RunStaleKeyRetractor) RetractStaleKeys(ctx context.Context, run
 		for _, row := range rows {
 			keys = append(keys, staleKey{row.Provider, row.WorkScopeID, row.TeamID})
 		}
-		return runStaleKeys{scope: read.staleKeyScope(), everyScope: wholeOrganization, keys: keys,
+		return runStaleKeys{scope: read.staleKeyScope(), everyScope: wholeOrganization, proveNoItem: proveNoItem, keys: keys,
 			writeRows: func(writeCtx context.Context, version time.Time) (int, error) {
 				return WriteEstimateCoverageMetricsDaily(writeCtx, conn, run.OrganizationID, day, rows, version)
 			}}, nil
@@ -161,7 +166,7 @@ func (retractor *RunStaleKeyRetractor) RetractStaleKeys(ctx context.Context, run
 		for _, row := range computed.rows {
 			keys = append(keys, staleKey{row.Provider, row.WorkScopeID, row.TeamID, row.Status})
 		}
-		return runStaleKeys{scope: computed.read.staleKeyScope(), everyScope: wholeOrganization, keys: keys,
+		return runStaleKeys{scope: computed.read.staleKeyScope(), everyScope: wholeOrganization, proveNoItem: proveNoItem, keys: keys,
 			writeRows: func(writeCtx context.Context, version time.Time) (int, error) {
 				return WriteWorkItemStateDurationsDaily(writeCtx, conn, run.OrganizationID, day, computed.rows, version)
 			}}, nil
@@ -196,26 +201,28 @@ func (retractor *RunStaleKeyRetractor) RetractStaleKeys(ctx context.Context, run
 	// The clock of this host is read when a step starts. It is only the
 	// version of the rows the step writes; which keys are superseded does not
 	// depend on it.
-	steps := []func() (string, int, error){
-		func() (string, int, error) {
-			rows, err := retractStaleTeamKeysOfRun(ctx, conn, teamkeytables.WorkItemMetricsDaily,
+	// A step returns its table, the rows it wrote, and how many of them are
+	// rows of zeros (the retraction).
+	steps := []func() (string, int, int, error){
+		func() (string, int, int, error) {
+			rows, zeros, err := retractStaleTeamKeysOfRun(ctx, conn, teamkeytables.WorkItemMetricsDaily,
 				run.OrganizationID, day, workItemKeys, retractor.nowUTC())
-			return teamkeytables.WorkItemMetricsDaily.Table, rows, err
+			return teamkeytables.WorkItemMetricsDaily.Table, rows, zeros, err
 		},
-		func() (string, int, error) {
-			rows, err := retractStaleTeamKeysOfRun(ctx, conn, teamkeytables.EstimateCoverageMetricsDaily,
+		func() (string, int, int, error) {
+			rows, zeros, err := retractStaleTeamKeysOfRun(ctx, conn, teamkeytables.EstimateCoverageMetricsDaily,
 				run.OrganizationID, day, estimateKeys, retractor.nowUTC())
-			return teamkeytables.EstimateCoverageMetricsDaily.Table, rows, err
+			return teamkeytables.EstimateCoverageMetricsDaily.Table, rows, zeros, err
 		},
-		func() (string, int, error) {
-			rows, err := retractStaleTeamKeysOfRun(ctx, conn, teamkeytables.WorkItemStateDurationsDaily,
+		func() (string, int, int, error) {
+			rows, zeros, err := retractStaleTeamKeysOfRun(ctx, conn, teamkeytables.WorkItemStateDurationsDaily,
 				run.OrganizationID, day, stateKeys, retractor.nowUTC())
-			return teamkeytables.WorkItemStateDurationsDaily.Table, rows, err
+			return teamkeytables.WorkItemStateDurationsDaily.Table, rows, zeros, err
 		},
-		func() (string, int, error) {
-			rows, err := retractStaleTeamKeysOfRun(ctx, conn, teamkeytables.AIGovernanceCoverageDaily,
+		func() (string, int, int, error) {
+			rows, zeros, err := retractStaleTeamKeysOfRun(ctx, conn, teamkeytables.AIGovernanceCoverageDaily,
 				run.OrganizationID, day, governanceKeys, retractor.nowUTC())
-			return teamkeytables.AIGovernanceCoverageDaily.Table, rows, err
+			return teamkeytables.AIGovernanceCoverageDaily.Table, rows, zeros, err
 		},
 	}
 	if wholeOrganization {
@@ -230,18 +237,20 @@ func (retractor *RunStaleKeyRetractor) RetractStaleKeys(ctx context.Context, run
 		}
 		ownedScope := newStaleKeyScope(owned...)
 		for _, table := range OrganizationRunStaleKeyTables() {
-			steps = append(steps, func() (string, int, error) {
+			steps = append(steps, func() (string, int, int, error) {
 				rows, err := retractStaleTeamKeysOutsideRun(ctx, conn, table, run.OrganizationID, day, ownedScope, retractor.nowUTC())
-				return table.Table, rows, err
+				return table.Table, rows, rows, err
 			})
 		}
 	}
 	total := 0
 	written := make(map[string]int, len(steps))
+	retracted := make(map[string]int, len(steps))
 	for _, step := range steps {
-		table, rows, err := step()
+		table, rows, zeros, err := step()
 		total += rows
 		written[table] = rows
+		retracted[table] = zeros
 		if err != nil {
 			slog.Default().Error("daily stale team keys retraction failed",
 				"run_id", run.ID, "organization_id", run.OrganizationID,
@@ -263,11 +272,71 @@ func (retractor *RunStaleKeyRetractor) RetractStaleKeys(ctx context.Context, run
 		"estimate_coverage_metrics_daily", written[teamkeytables.EstimateCoverageMetricsDaily.Table],
 		"work_item_state_durations_daily", written[teamkeytables.WorkItemStateDurationsDaily.Table],
 		"ai_governance_coverage_daily", written[teamkeytables.AIGovernanceCoverageDaily.Table],
-		"whole_organization", wholeOrganization,
-		"team_metrics_daily_outside_run", written[teamkeytables.TeamMetricsDaily.Table],
-		"ai_impact_metrics_daily_outside_run", written[teamkeytables.AIImpactMetricsDaily.Table],
+		// The class of the retraction and, per table, the rows of zeros among
+		// the rows above (the retraction itself).
+		"retraction_scope", staleKeyRetractionScope(wholeOrganization),
+		"work_item_metrics_daily_zero_rows", retracted[teamkeytables.WorkItemMetricsDaily.Table],
+		"estimate_coverage_metrics_daily_zero_rows", retracted[teamkeytables.EstimateCoverageMetricsDaily.Table],
+		"work_item_state_durations_daily_zero_rows", retracted[teamkeytables.WorkItemStateDurationsDaily.Table],
+		"ai_governance_coverage_daily_zero_rows", retracted[teamkeytables.AIGovernanceCoverageDaily.Table],
+		"team_metrics_daily_zero_rows", retracted[teamkeytables.TeamMetricsDaily.Table],
+		"ai_impact_metrics_daily_zero_rows", retracted[teamkeytables.AIImpactMetricsDaily.Table],
 	)
 	return total, nil
+}
+
+// The two classes of a retraction, as the log line names them.
+const (
+	StaleKeyRetractionOrganizationDay = "organization_day"
+	StaleKeyRetractionRunScopes       = "run_scopes"
+)
+
+func staleKeyRetractionScope(wholeOrganization bool) string {
+	if wholeOrganization {
+		return StaleKeyRetractionOrganizationDay
+	}
+	return StaleKeyRetractionRunScopes
+}
+
+// proveOrganizationHasNoWorkItemForDay is the second read of a run of the
+// whole organization that read no work item for a day: a count of the items
+// the scope read selects (created before the day ends and open, or completed
+// on the day or later). It returns nil only when the count is read and is 0.
+// A count above 0 means the first read did not see items that are there, and
+// no answer means the read did not end: both are ErrOrganizationDayNotProvenEmpty.
+func proveOrganizationHasNoWorkItemForDay(
+	ctx context.Context, conn repositoryRows, organizationID string, start, end time.Time,
+) error {
+	rows, err := conn.Query(ctx, `
+SELECT count()
+FROM work_items FINAL
+WHERE org_id = ?
+  AND created_at < ?
+  AND (status != 'done' OR completed_at >= ?)`,
+		organizationID, end.UTC(), start.UTC(),
+	)
+	if err != nil {
+		return fmt.Errorf("%w: count the work items of the day: %w", ErrOrganizationDayNotProvenEmpty, err)
+	}
+	defer rows.Close()
+	if !rows.Next() {
+		if err := rows.Err(); err != nil {
+			return fmt.Errorf("%w: count the work items of the day: %w", ErrOrganizationDayNotProvenEmpty, err)
+		}
+		return fmt.Errorf("%w: the count of the work items of the day gave no answer", ErrOrganizationDayNotProvenEmpty)
+	}
+	var items uint64
+	if err := rows.Scan(&items); err != nil {
+		return fmt.Errorf("%w: scan the count of the work items of the day: %w", ErrOrganizationDayNotProvenEmpty, err)
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("%w: count the work items of the day: %w", ErrOrganizationDayNotProvenEmpty, err)
+	}
+	if items != 0 {
+		return fmt.Errorf("%w: the scope read gave no work item and a count of the same items gives %d",
+			ErrOrganizationDayNotProvenEmpty, items)
+	}
+	return nil
 }
 
 var _ StaleKeyRetractor = (*RunStaleKeyRetractor)(nil)

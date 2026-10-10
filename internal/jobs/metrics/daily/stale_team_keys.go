@@ -2,7 +2,9 @@ package daily
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"log/slog"
 	"sort"
 	"strings"
 	"time"
@@ -278,7 +280,11 @@ type runStaleKeys struct {
 	// everyScope is true for a run of the whole organization: every live key
 	// of the day that is not in keys is stale, whatever its scope value.
 	everyScope bool
-	keys       []staleKey
+	// proveNoItem is the second read of an organization-wide run whose first
+	// read gave no work item: it returns nil only when it states, by itself,
+	// that the organization has no work item for the day.
+	proveNoItem func(ctx context.Context) error
+	keys        []staleKey
 	// writeRows stores the rows of the day that were computed with the keys,
 	// at the version. Nil for a table whose rows the partitions settle.
 	writeRows func(ctx context.Context, version time.Time) (int, error)
@@ -318,21 +324,21 @@ type runStaleKeys struct {
 func retractStaleTeamKeysOfRun(
 	ctx context.Context, conn staleKeyConn, table StaleKeyTable, organizationID string, day time.Time,
 	compute func(context.Context) (runStaleKeys, error), clock time.Time,
-) (int, error) {
+) (written, zeros int, err error) {
 	if err := table.Valid(); err != nil {
-		return 0, fmt.Errorf("%w: %v", ErrInvalidState, err)
+		return 0, 0, fmt.Errorf("%w: %v", ErrInvalidState, err)
 	}
 	if conn == nil || strings.TrimSpace(organizationID) == "" || day.IsZero() || compute == nil || clock.IsZero() {
-		return 0, ErrInvalidState
+		return 0, 0, ErrInvalidState
 	}
 	live, _, err := loadLiveStaleKeys(ctx, conn, table, organizationID, day)
 	if err != nil {
-		return 0, err
+		return 0, 0, err
 	}
 	if len(live) == 0 {
 		// The partitions stored no measure for the day: there is no key to
 		// supersede and no row to settle.
-		return 0, nil
+		return 0, 0, nil
 	}
 	// Every row this step writes must be strictly newer than every row of the
 	// day that is stored: a row of zeros newer than the row it supersedes, a
@@ -342,28 +348,57 @@ func retractStaleTeamKeysOfRun(
 	// taken from the stored rows when the clock is not later.
 	newest, err := newestStaleKeyVersion(ctx, conn, table, organizationID, day)
 	if err != nil {
-		return 0, err
+		return 0, 0, err
 	}
 	version, err := staleKeyVersionAfter(table, clock, newest)
 	if err != nil {
-		return 0, err
+		return 0, 0, err
 	}
 	computed, err := compute(ctx)
 	if err != nil {
-		return 0, err
+		return 0, 0, err
 	}
-	written := 0
+	if computed.everyScope && len(computed.scope) == 0 {
+		// The run of the whole organization read NO work item for a day that
+		// holds stored keys with a measure. Every one of those keys is then
+		// stale and gets a row of zeros: the whole day of the table. That is
+		// right when the day is empty, and it is the worst result of a read
+		// that came back empty for another reason. So an empty read alone
+		// supersedes nothing: a second read of the same items must state
+		// that there is none, or the step fails and the finalize is tried
+		// again.
+		if computed.proveNoItem == nil {
+			return 0, 0, fmt.Errorf("%w: %s: the organization-wide read gave no work item and no proof of an empty day is set",
+				ErrOrganizationDayNotProvenEmpty, table.Table)
+		}
+		if err := computed.proveNoItem(ctx); err != nil {
+			return 0, 0, fmt.Errorf("%s: %w", table.Table, err)
+		}
+		slog.Default().Warn(StaleKeysEmptyOrganizationDayLogMessage,
+			"organization_id", organizationID, "target_day", staleKeyDay(day).Format("2006-01-02"),
+			"table", table.Table, "live_keys", len(live))
+	}
 	if computed.writeRows != nil {
 		written, err = computed.writeRows(ctx, version)
 		if err != nil {
-			return written, err
+			return written, 0, err
 		}
 	}
-	zeros, err := writeStaleKeyZeroRows(ctx, conn, table, organizationID, day,
+	zeros, err = writeStaleKeyZeroRows(ctx, conn, table, organizationID, day,
 		staleKeysOf(table, live, computed.scope, computed.everyScope, computed.keys),
 		func(staleKey) time.Time { return version })
-	return written + zeros, err
+	return written + zeros, zeros, err
 }
+
+// ErrOrganizationDayNotProvenEmpty means that a run of the whole organization
+// read no work item for a day that holds stored keys, and the second read did
+// not confirm that the day has none. Nothing is superseded.
+var ErrOrganizationDayNotProvenEmpty = errors.New("daily stale team keys: the organization-day is not proven empty")
+
+// StaleKeysEmptyOrganizationDayLogMessage is the line a run of the whole
+// organization writes when it supersedes every stored key of a table for a
+// day that two reads state to have no work item.
+const StaleKeysEmptyOrganizationDayLogMessage = "daily stale team keys: the organization has no work item for the day; every stored key of the day is superseded"
 
 // retractStaleTeamKeysOutsideRun is the rule of a run of the whole
 // organization for a table whose keys the partitions decide inside their own

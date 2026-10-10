@@ -1551,9 +1551,10 @@ func explainScopedRequest(name, metric, scopeType, producerName string) RESTRequ
 // resolves the same scope from user_metrics_daily.team_id
 // (resolve_repo_ids_for_teams, api/queries/scopes.py) -- explainScopeDropDefect's
 // own Reason states the two tables. Neither declares an EqualLeaves or
-// BoundedLeaves entry: a matched contributor/driver's own "value"/
-// "delta_pct" leaf is already reached by explainScopeDropDefect's own
-// blanket Paths citation above (data.contributors.value, data.drivers.value)
+// BoundedLeaves entry: a matched contributor/driver's own "value" leaf is
+// already reached by explainScopeDropDefect's own blanket Paths citation
+// above (data.contributors.value, data.drivers.value), and a driver's
+// "delta_pct" by the two exact shapes of explainValueDrivenPercentDefects,
 // for every author BOTH planes return, so this pair of declarations adds
 // only the membership admission that citation's leaf-only coverage
 // cannot reach (compare.go's leafDifference gate) -- it never re-cites,
@@ -2072,10 +2073,11 @@ var flamePRIDBoundParity = Options{
 // number, and no shape in this package claims otherwise for a ratio or
 // average leaf (TeamRepoSubsetShape's own doc comment, teamreposubset.go,
 // states this for the leaves it declares; explainScopeDropDefect below
-// already blanket-admits explain's own data.value/data.delta_pct and
-// matched-author data.contributors.value/data.drivers.value for a MATCHED
-// author regardless of direction, which is a wider admission than a
-// direction-only shape would grant and is unchanged by this file).
+// already blanket-admits explain's own data.value and matched-author
+// data.contributors.value/data.drivers.value for a MATCHED author
+// regardless of direction, which is a wider admission than a
+// direction-only shape would grant and is unchanged by this file; the
+// percent leaves are admitted in their two exact shapes only).
 //
 // A LIST MEMBERSHIP difference -- an element the organization-wide
 // baseline carries that a genuinely narrower team-scoped candidate does

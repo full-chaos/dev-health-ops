@@ -2045,6 +2045,10 @@ func compareJSON(baseline, candidate any, path string, opts Options, envelopeKey
 							Path:   path,
 							Detail: fmt.Sprintf("%d != %d (Tier A, exact integer)", baselineInt, candidateInt),
 							Shape:  ShapeValue,
+							// A shaped declaration reads the two leaves, so a
+							// whole-number pair carries them like every other
+							// numeric finding.
+							baselineLeaf: baseline, candidateLeaf: candidate,
 						}}
 					}
 					return nil

@@ -125,10 +125,6 @@ func (executor *WorkItemAttributionExecutor) ComputeOrg(
 		affectedIDs[id] = struct{}{}
 	}
 
-	facts, err := executor.loadFacts(ctx, orgID, now)
-	if err != nil {
-		return outcome, err
-	}
 	dependencies, err := executor.loadDependencyEdges(ctx, orgID, subjects)
 	if err != nil {
 		return outcome, err
@@ -209,10 +205,6 @@ func (executor *WorkItemAttributionExecutor) ComputeOrg(
 		}
 	}
 
-	derived := teamattribution.NewGitHubWorkItemDerivationContext(facts)
-	linkedIssue, _, _ := derived.BuildLinkedIssueIndex("", subjects, dependencies, nil)
-	derived.LinkedIssue = linkedIssue
-
 	// CHAOS-5078 codex r1 F2 fix: exclude any item the native daily
 	// `work_item_attribution` family has ALREADY written TODAY. Without
 	// this, an ownership change detected the same day daily already ran
@@ -235,7 +227,10 @@ func (executor *WorkItemAttributionExecutor) ComputeOrg(
 		delete(affectedIDs, id)
 	}
 
-	rows := BuildWorkItemAttributionRows(orgID, now, affectedIDs, subjects, derived)
+	rows, err := executor.buildRowsAtEachItemsDay(ctx, orgID, now, affectedIDs, subjects, dependencies)
+	if err != nil {
+		return outcome, err
+	}
 
 	// Codex confirmation-pass P1 (#2276, found on re-review after the 7th-site
 	// fix landed): WriteAttributions' own batch.Send() branch already
@@ -257,6 +252,122 @@ func (executor *WorkItemAttributionExecutor) ComputeOrg(
 	}
 	executor.observeRun(orgID, outcome)
 	return outcome, nil
+}
+
+// buildRowsAtEachItemsDay resolves every affected item with the ownership and
+// membership facts valid on THAT ITEM's day, and never with the facts of the
+// run's time.
+//
+// The run starts because an ownership row changed, and it rederives every item
+// of the changed repository or project, of any age. Facts read at the run's
+// time would put today's owner on all of them: each change would rewrite the
+// history of the repository, and an item older than the first known ownership
+// of its repository would get a team it never had. Ownership starts when it
+// was first known; history is not rewritten.
+//
+// An item's day is the day the daily work_item_attribution family resolves it
+// on (WorkItemAttributionItemDay), so both writers of the table give one item
+// the same row. The items are grouped by day and the facts are read once per
+// day.
+func (executor *WorkItemAttributionExecutor) buildRowsAtEachItemsDay(
+	ctx context.Context, orgID string, now time.Time,
+	affectedIDs map[string]struct{},
+	subjects map[string]teamattribution.GithubWorkItemDerivationSubject,
+	dependencies []teamattribution.GithubWorkItemDerivationDependencyEdge,
+) ([]WorkItemAttributionRow, error) {
+	if len(affectedIDs) == 0 {
+		return nil, nil
+	}
+	completedDays, err := executor.loadCompletedDays(ctx, orgID)
+	if err != nil {
+		return nil, err
+	}
+	idsByDay := map[time.Time]map[string]struct{}{}
+	for id := range affectedIDs {
+		day := WorkItemAttributionItemDay(completedDays, id, now)
+		if idsByDay[day] == nil {
+			idsByDay[day] = map[string]struct{}{}
+		}
+		idsByDay[day][id] = struct{}{}
+	}
+	days := make([]time.Time, 0, len(idsByDay))
+	for day := range idsByDay {
+		days = append(days, day)
+	}
+	sort.Slice(days, func(i, j int) bool { return days[i].Before(days[j]) })
+
+	var rows []WorkItemAttributionRow
+	for _, day := range days {
+		facts, err := executor.loadFacts(ctx, orgID, day)
+		if err != nil {
+			return nil, err
+		}
+		derived := teamattribution.NewGitHubWorkItemDerivationContext(facts)
+		linkedIssue, _, _ := derived.BuildLinkedIssueIndex("", subjects, dependencies, nil)
+		derived.LinkedIssue = linkedIssue
+		rows = append(rows, BuildWorkItemAttributionRows(orgID, now, idsByDay[day], subjects, derived)...)
+	}
+	return rows, nil
+}
+
+// WorkItemAttributionItemDay is the day whose ownership and membership facts
+// give a work item its team: the start (UTC) of the day the item was
+// completed, or of the day of now for an item that is not completed.
+//
+// It is the day the daily work_item_attribution family leaves on the item. A
+// day's partition there holds every item created before the day's end that is
+// not done or was completed on or after the day's start, and resolves it with
+// the facts at the day's start; the newest row of an item is kept. So the last
+// partition that holds a completed item is its completion day, and an item
+// that is not completed is in the partition of each new day.
+//
+// completedDays holds the completion day of the items that are done and have a
+// completion time (loadCompletedDays). A done item with no completion time is
+// in no day's partition; it takes the day of now here. A completion time after
+// the day of now is a day no partition has computed: the item is in the
+// partition of the day of now (its completion is not before that day's start),
+// so it takes the day of now too.
+func WorkItemAttributionItemDay(completedDays map[string]time.Time, workItemID string, now time.Time) time.Time {
+	today := workItemAttributionUTCDay(now)
+	if day, ok := completedDays[workItemID]; ok && !day.After(today) {
+		return day
+	}
+	return today
+}
+
+func workItemAttributionUTCDay(value time.Time) time.Time {
+	utc := value.UTC()
+	return time.Date(utc.Year(), utc.Month(), utc.Day(), 0, 0, 0, 0, time.UTC)
+}
+
+// loadCompletedDays reads the completion day of every completed item of the
+// organization. One statement with no list of ids: the affected set of an
+// org-wide run is every item, and a list of ids in the statement text is what
+// workItemAttributionMaxArrayBytes exists to bound.
+func (executor *WorkItemAttributionExecutor) loadCompletedDays(
+	ctx context.Context, orgID string,
+) (map[string]time.Time, error) {
+	rows, err := executor.conn.Query(ctx, `
+SELECT work_item_id, toUnixTimestamp64Milli(assumeNotNull(completed_at))
+FROM work_items FINAL
+WHERE org_id = ? AND status = 'done' AND completed_at IS NOT NULL`, orgID)
+	if err != nil {
+		return nil, stepcause.Failure(stepcause.QueryWorkItemCompletionDays, err)
+	}
+	defer func() { _ = rows.Close() }()
+	days := map[string]time.Time{}
+	for rows.Next() {
+		var id string
+		var completedMillis int64
+		if err := rows.Scan(&id, &completedMillis); err != nil {
+			return nil, stepcause.Failure(stepcause.ScanWorkItemCompletionDay, err)
+		}
+		days[id] = workItemAttributionUTCDay(time.UnixMilli(completedMillis))
+	}
+	if err := rows.Err(); err != nil {
+		return nil, stepcause.Failure(stepcause.IterateWorkItemCompletionDays, err)
+	}
+	return days, nil
 }
 
 // observeRun reports a completed run to the optional observer. Nil is

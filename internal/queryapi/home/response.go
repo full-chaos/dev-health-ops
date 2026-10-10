@@ -298,6 +298,13 @@ type Response struct {
 	LimitingFactor        LimitingFactor          `json:"limiting_factor"`
 	DataConfidence        DataConfidence          `json:"data_confidence"`
 	ScopeDataConfidence   ScopeDataConfidence     `json:"scope_data_confidence"`
+	// FilterEmptyReason (CHAOS-9098) says why the repositories the request names
+	// matched nothing: repository_not_in_team or repository_not_found; null when
+	// the request names no repository and whenever something matched (also when
+	// only part of the named repositories did, and when the window has no rows).
+	// One value for the whole answer. GraphQL and REST serve it after the frozen
+	// fields; the Python response model does not carry it.
+	FilterEmptyReason *string `json:"-"`
 }
 
 // Tile is one entry of HomeResponse.tiles (services/home.py:1187-1208) --

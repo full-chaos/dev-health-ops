@@ -34,12 +34,15 @@ const WindowRateSQL = `if(sum(ifNull(prs_merged_reviewed, 0)) = 0, NULL, toFloat
 
 // ViewSumsSQL selects, from rows of Table already deduplicated to the newest
 // computed_at per (org_id, repo_id, day), the summed counts in CountColumns
-// order and the number of rows that hold counts: the columns ViewScanDest
-// scans. prs_merged is summed over the rows that hold counts only, so the
-// coverage is reviewed / merged of the same rows.
-const ViewSumsSQL = `toUInt64(sumIf(prs_merged, prs_merged_reviewed IS NOT NULL)), toUInt64(sum(ifNull(prs_merged_reviewed, 0))), toUInt64(sum(ifNull(prs_merged_rework, 0))), toUInt64(sum(ifNull(prs_merged_no_rework_signal, 0))), toUInt64(countIf(prs_merged_reviewed IS NOT NULL))`
+// order, the number of rows that hold counts, and the merged pull requests of
+// EVERY row: the columns ViewScanDest scans. The first sum of prs_merged is
+// over the rows that hold counts only: the ratio and its state are a statement
+// about those rows. The last sum is over every stored row, with or without
+// counts: it is the denominator of the coverage, so a window that holds rows
+// from before the counts existed shows that part as not covered.
+const ViewSumsSQL = `toUInt64(sumIf(prs_merged, prs_merged_reviewed IS NOT NULL)), toUInt64(sum(ifNull(prs_merged_reviewed, 0))), toUInt64(sum(ifNull(prs_merged_rework, 0))), toUInt64(sum(ifNull(prs_merged_no_rework_signal, 0))), toUInt64(countIf(prs_merged_reviewed IS NOT NULL)), toUInt64(sum(prs_merged))`
 
 // ViewScanDest returns the scan destinations for one ViewSumsSQL row.
 func ViewScanDest(view *View) []any {
-	return []any{&view.Merged, &view.Reviewed, &view.Rework, &view.NoSignal, &view.StoredRows}
+	return []any{&view.Merged, &view.Reviewed, &view.Rework, &view.NoSignal, &view.StoredRows, &view.MergedOfEveryRow}
 }

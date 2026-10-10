@@ -303,6 +303,13 @@ type RepositoryDiscoverer interface {
 	RepositoryIDs(context.Context, string) ([]RepositoryID, error)
 }
 
+// RepositoriesNotDiscoveredReporter is a discoverer that can say which stored
+// rows its discovery cannot reach. It reports through the log and returns
+// nothing: the report never changes or fails a run.
+type RepositoriesNotDiscoveredReporter interface {
+	ReportRepositoriesNotDiscovered(ctx context.Context, organizationID string)
+}
+
 // Publisher persists a child handoff. Its production implementation must use
 // the checked-in outbox contract rather than inserting a River job directly.
 type Publisher interface {
@@ -518,6 +525,12 @@ func (handler *Dispatcher) Work(ctx context.Context, execution *jobruntime.Execu
 				return jobruntime.Permanent(err)
 			}
 			return jobruntime.Retryable(err)
+		}
+		// Once for the discovery this run stored, after it is stored: the
+		// report is a scan of the source tables, and a dispatch that is
+		// retried before the partitions exist discovers again.
+		if reporter, ok := handler.discoverer.(RepositoriesNotDiscoveredReporter); ok {
+			reporter.ReportRepositoriesNotDiscovered(ctx, run.OrganizationID)
 		}
 	}
 	partitions, err := handler.store.DispatchablePartitions(ctx, runID)

@@ -111,8 +111,46 @@ func formatDeltaWords(deltaPct float64) string {
 	return fmt.Sprintf("%.0f%%", absFloat(deltaPct))
 }
 
-// primaryScopeLabel ports _primary_scope_label (services/home.py:313-316).
+// primaryScopeLabel ports _primary_scope_label (services/home.py:313-316), but
+// the label is a NAME, never the id (CHAOS-9116): the display names of the
+// requested scope ids, joined by ", " (an id with no name is left out); when
+// none has a name, the generic phrase of the scope ("the selected team", "the
+// selected repositories"). Without ids it is the level, as before.
 func primaryScopeLabel(f Filters) string {
+	if len(f.Scope.IDs) == 0 {
+		return f.Scope.Level
+	}
+	var named []string
+	for _, id := range f.Scope.IDs {
+		if name, ok := f.Scope.names[id]; ok {
+			named = append(named, name)
+		}
+	}
+	if len(named) > 0 {
+		return strings.Join(named, ", ")
+	}
+	noun := f.Scope.Level
+	switch f.Scope.Level {
+	case "team":
+		noun = "team"
+	case "repo":
+		noun = "repositor"
+	}
+	if noun == "repositor" {
+		if len(f.Scope.IDs) > 1 {
+			return "the selected repositories"
+		}
+		return "the selected repository"
+	}
+	if len(f.Scope.IDs) > 1 {
+		return "the selected " + noun + "s"
+	}
+	return "the selected " + noun
+}
+
+// rawScopeKey is the request scope as the structured fields carry it (signal
+// ids, evidence links): the ids joined, or the level. It is not prose.
+func rawScopeKey(f Filters) string {
 	if len(f.Scope.IDs) > 0 {
 		return strings.Join(f.Scope.IDs, ",")
 	}
@@ -611,6 +649,9 @@ type RecommendationRow struct {
 	LatestRationale string
 	LatestSuccess   string
 	LatestEvidence  string
+	// TeamName is the display name of TeamID, resolved by BuildResponse; empty
+	// when the team has none (the signal then says "a team", never the id).
+	TeamName string
 }
 
 // RecommendationSignal ports _recommendation_signal
@@ -635,8 +676,12 @@ func RecommendationSignal(row RecommendationRow, f Filters, dataConfidence DataC
 		ruleID = "recommendation"
 	}
 	teamID := row.TeamID
+	affectedScope := row.TeamName
 	if teamID == "" {
-		teamID = primaryScopeLabel(f)
+		teamID = rawScopeKey(f)
+		affectedScope = primaryScopeLabel(f)
+	} else if affectedScope == "" {
+		affectedScope = "a team"
 	}
 	whyItMatters := row.LatestRationale
 	if whyItMatters == "" {
@@ -660,7 +705,7 @@ func RecommendationSignal(row RecommendationRow, f Filters, dataConfidence DataC
 		Direction:         "flat",
 		Severity:          severity,
 		Confidence:        confidenceFromEvidence(len(evidence), dataConfidence.CoveragePct),
-		AffectedScope:     teamID,
+		AffectedScope:     affectedScope,
 		EvidenceCount:     len(evidence),
 		WhyItMatters:      whyItMatters,
 		RecommendedAction: recommendedAction,

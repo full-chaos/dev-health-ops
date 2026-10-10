@@ -58,6 +58,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"math"
 	"os"
 	"reflect"
 	"strings"
@@ -67,6 +68,7 @@ import (
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/changefailure"
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/prrework"
 )
 
 func loadGolden(t *testing.T, name string) Response {
@@ -157,15 +159,26 @@ func orgGoldenHandler(t *testing.T) func(t *testing.T, query string, bindings []
 				{"maintenance", 50.0, int64(10), int64(300)},
 			}}, nil
 
-		case strings.Contains(q, "SUM(pr_rework_ratio * prs_merged)"):
+		case strings.Contains(q, prrework.WindowRateSQL) || strings.Contains(q, prrework.ViewSumsSQL):
+			// The pull request rework ratio has no "(column)) AS value" marker.
+			// Its day series is the shared window ratio per day; its value is
+			// the window's summed counts, which the shared rule turns into the
+			// value and its state.
 			fx := metricFixtures["pr_rework_ratio"]
 			if strings.Contains(q, "GROUP BY day") && strings.Contains(q, "ORDER BY day") {
 				return seriesScanner(fx.series), nil
 			}
-			if isCurrentWindow(bindings) {
-				return &fixtureRowScanner{rows: [][]any{{int64(1), fx.current}}}, nil
+			if strings.Contains(q, "SUM(pr_rework_ratio") || strings.Contains(q, "argMax(pr_rework_ratio") {
+				t.Fatalf("the rework ratio reads the deprecated stored ratio:\n%s", q)
 			}
-			return &fixtureRowScanner{rows: [][]any{{int64(1), fx.previous}}}, nil
+			// 12 of 100 reviewed pull requests had rework in the current
+			// window, 10 of 100 in the prior one (the fixture's 0.12 and 0.10),
+			// of 200 merged pull requests.
+			rework := uint64(math.Round(fx.previous * 100))
+			if isCurrentWindow(bindings) {
+				rework = uint64(math.Round(fx.current * 100))
+			}
+			return &fixtureRowScanner{rows: [][]any{{uint64(200), uint64(100), rework, uint64(0), uint64(7)}}}, nil
 
 		case strings.Contains(q, "duration_hours") && strings.Contains(q, "FROM work_item_state_durations_daily"):
 			if isCurrentWindow(bindings) {

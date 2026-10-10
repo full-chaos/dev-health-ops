@@ -11,6 +11,8 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -98,7 +100,7 @@ func TestARefusedStripeSignatureIsLoggedAndCountedByClass(t *testing.T) {
 			if answer.Code != http.StatusBadRequest || answer.Body.String() != refusal {
 				t.Fatalf("answer = %d %q, want 400 %q", answer.Code, answer.Body.String(), refusal)
 			}
-			var warnings []map[string]any
+			var records, warnings []map[string]any
 			for _, raw := range strings.Split(strings.TrimSpace(logs), "\n") {
 				if raw == "" {
 					continue
@@ -107,12 +109,29 @@ func TestARefusedStripeSignatureIsLoggedAndCountedByClass(t *testing.T) {
 				if err := json.Unmarshal([]byte(raw), &entry); err != nil {
 					t.Fatalf("log line is not JSON: %q", raw)
 				}
+				records = append(records, entry)
 				if entry["msg"] == line {
 					warnings = append(warnings, entry)
 				}
 			}
 			if len(warnings) != 1 {
 				t.Fatalf("the refusal left %d lines %q, want 1; the log:\n%s", len(warnings), line, logs)
+			}
+			// The refusal is the ONLY record of the request, and it holds the
+			// class and nothing more. A substring check alone would miss a
+			// part of the header or of the body in a second record or in one
+			// more field; with one record and a fixed set of fields there is
+			// no place for any of it.
+			if len(records) != 1 {
+				t.Errorf("the refused request left %d log records, want 1 (the refusal):\n%s", len(records), logs)
+			}
+			var fields []string
+			for field := range warnings[0] {
+				fields = append(fields, field)
+			}
+			sort.Strings(fields)
+			if want := []string{"class", "level", "msg", "time"}; !reflect.DeepEqual(fields, want) {
+				t.Errorf("the fields of the refusal line = %v, want exactly %v", fields, want)
 			}
 			if warnings[0]["level"] != "WARN" || warnings[0]["class"] != c.class {
 				t.Errorf("the line = level %v class %v, want WARN %s", warnings[0]["level"], warnings[0]["class"], c.class)

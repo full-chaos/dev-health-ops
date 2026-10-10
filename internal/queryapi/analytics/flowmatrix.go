@@ -952,6 +952,14 @@ func ExecuteFlowMatrix(ctx context.Context, client QueryClient, nodesQuery, edge
 	}()
 	wg.Wait()
 
+	// Both statements can fail, and for two reasons: the client's cancel ends
+	// one while the other fails by itself. The error that is returned decides
+	// how the read is reported (clientcancel.go), so a cancel of the nodes
+	// statement never goes before the error of the edges statement: that one
+	// is a real failure, or a cancel too.
+	if nodesErr != nil && edgesErr != nil && clientCancelled(ctx, nodesErr) {
+		return nil, nil, fmt.Errorf("analytics: flowMatrix edges: %w", edgesErr)
+	}
 	if nodesErr != nil {
 		return nil, nil, fmt.Errorf("analytics: flowMatrix nodes: %w", nodesErr)
 	}

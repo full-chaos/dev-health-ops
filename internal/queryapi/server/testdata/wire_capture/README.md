@@ -247,6 +247,15 @@ to the query source text.
 
 # home wire-capture fixture
 
+Newest text (CHAOS-9094): `home_captured.graphql` is NOT a capture. It is
+`home_v8_captured.graphql` (the previous current text, byte-identical, kept as a
+legacy registration) plus the selections `repoLinkState`, `repoLinkBasis { native
+explicitText heuristic }`, `repoLinkMultiRepoItems` and `repoLinkCoverage
+{ linkedItems itemsInWindow }` in `deltas` after `repoFilterApplied`, in the form
+urql prints. The web change that selects them must put the fields at those places in
+`HOME_QUERY` and run `scripts/capture-graphql-wire-fixture.ts --operation home`; if the
+real capture differs, the capture wins and this file and `registeredHomeDocument` move to it.
+
 Newest text (CHAOS-9093): `home_captured.graphql` is NOT a capture. It is
 `home_v7_captured.graphql` (the previous current text, byte-identical, kept as a
 legacy registration) plus two lines, `repoFilterApplied` in `deltas` after

@@ -1,11 +1,14 @@
 package chclient
 
 import (
+	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"os"
 	"testing"
+	"time"
 
 	chdriver "github.com/ClickHouse/clickhouse-go/v2"
 )
@@ -43,5 +46,41 @@ func TestBoundHitDecidesByCause(t *testing.T) {
 		if got, _ := BoundHit(tc.err); got != tc.want {
 			t.Errorf("%s: BoundHit = %q, want %q", tc.name, got, tc.want)
 		}
+	}
+}
+
+// The shape a loaded CI runner showed: the connection's read deadline ends the read
+// and the driver wraps the socket's own timeout twice ("query processing: failed to
+// read packet ...: read: ... i/o timeout"). The error here comes from a REAL socket
+// whose peer never answers, wrapped the way clickhouse-go wraps it.
+func TestBoundHitSeesARealSocketReadTimeout(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = listener.Close() }()
+	go func() {
+		conn, err := listener.Accept()
+		if err == nil {
+			time.Sleep(2 * time.Second)
+			_ = conn.Close()
+		}
+	}()
+	conn, err := net.Dial("tcp", listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = conn.Close() }()
+	if err := conn.SetReadDeadline(time.Now().Add(100 * time.Millisecond)); err != nil {
+		t.Fatal(err)
+	}
+	_, readErr := bufio.NewReader(conn).ReadByte()
+	if readErr == nil {
+		t.Fatal("the read did not time out")
+	}
+	wrapped := fmt.Errorf("ClickHouse row iteration failed: %w",
+		fmt.Errorf("query processing: failed to read packet from %s (conn_id=%d): %w", conn.RemoteAddr(), 1, readErr))
+	if bound, _ := BoundHit(wrapped); bound != BoundTime {
+		t.Errorf("a real socket read timeout (%T %v): BoundHit = %q, want %q", errors.Unwrap(errors.Unwrap(wrapped)), readErr, bound, BoundTime)
 	}
 }

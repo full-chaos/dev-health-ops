@@ -474,7 +474,47 @@ func TestHeldSetWalkCensus(t *testing.T) {
 			named, len(heldSetWalks["internal/providersync/jira_team_catalog_route.go"].walks))
 	}
 	// The Jira answer asks for every state those walks admit.
-	if answer := read("internal/providersync/ownership_absence.go"); !strings.Contains(answer, `[]string{"live", jiraTeamCatalogProjectStatusArchived}`) {
+	answer := read("internal/providersync/ownership_absence.go")
+	if !strings.Contains(answer, `[]string{"live", jiraTeamCatalogProjectStatusArchived}`) {
 		t.Error("the Jira direct answer does not ask for live AND archived projects: the held set admits both")
 	}
+	// A direct answer asks with the identifier the row was built from. The id
+	// forms a row of each listing kind can hold, and the question for each:
+	for kind, forms := range ownershipRowIDForms {
+		if _, known := snapshotKindCensus[kind]; !known || snapshotKindCensus[kind].absence != "one response or direct answer" {
+			t.Errorf("%s has row id forms and is not a kind of the listing rule", kind)
+		}
+		for _, form := range forms {
+			if strings.TrimSpace(form.form) == "" || strings.TrimSpace(form.question) == "" || !strings.Contains(answer, form.inCode) {
+				t.Errorf("%s, id form %q: the direct answers do not hold %q", kind, form.form, form.inCode)
+			}
+		}
+	}
+	listing := 0
+	for _, entry := range snapshotKindCensus {
+		if entry.absence == "one response or direct answer" {
+			listing++
+		}
+	}
+	if len(ownershipRowIDForms) != listing {
+		t.Errorf("%d kinds of the listing rule, %d of them name their row id forms", listing, len(ownershipRowIDForms))
+	}
+}
+
+// ownershipRowIDForms is, for each kind that closes on a direct answer, every
+// form the project id of an open row can have, and the question the answer
+// asks for it. A provider is asked with a value it gave (or that names what it
+// gave), never with a value this system built. inCode is the text of the
+// answer's source that makes the question.
+var ownershipRowIDForms = map[string][]struct{ form, question, inCode string }{
+	"github_team_repo_grants": {
+		{"owner/repository (the repository full name)", "the team's permission for owner/repository", `"/repos/"+url.PathEscape(owner)+"/"+url.PathEscape(repo)`},
+	},
+	"gitlab_group_project_grants": {
+		{"the project path with its namespace", "the group's projects searched for the project's own name, compared by the whole path", `strings.TrimSpace(project.PathWithNamespace) == projectPath`},
+	},
+	"jira_legacy_ownership": {
+		{"the native project id", "the project search by `id`", `return "id", projectID, true`},
+		{"{org}:jira:{KEY}, the retired id built from the project key", "the project search by `keys`, with the key alone", `return "keys", key, key != ""`},
+	},
 }

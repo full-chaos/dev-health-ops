@@ -54,6 +54,8 @@ type jiraProjectServer struct {
 	// lookupStatus, when not 0, is the status every search for one id answers.
 	lookupStatus int
 	lookups      int
+	// lookupQueries is the query string of each search for one project.
+	lookupQueries []string
 }
 
 type jiraProjectDoer func(*http.Request) (*http.Response, error)
@@ -76,13 +78,20 @@ func (server *jiraProjectServer) doer(t *testing.T) jiraProjectDoer {
 		}
 		path, query := request.URL.Path, request.URL.Query()
 		switch {
-		case path == "/rest/api/3/project/search" && query.Get("id") != "":
-			// The search for one project. As the provider does, it answers for
-			// the states `status` names, and for live projects only when the
-			// request names none.
+		case path == "/rest/api/3/project/search" && (query.Get("id") != "" || query.Get("keys") != ""):
+			// The search for one project, by id or by key. As the provider
+			// does, it answers for the states `status` names (live projects
+			// only when the request names none), and 400 for an id that is
+			// not a number.
 			server.lookups++
+			server.lookupQueries = append(server.lookupQueries, request.URL.RawQuery)
 			if server.lookupStatus != 0 {
 				return respond(server.lookupStatus, `{"errorMessages":["simulated failure"]}`)
+			}
+			if id := query.Get("id"); id != "" {
+				if _, err := strconv.Atoi(id); err != nil {
+					return respond(400, `{"errorMessages":["The value '`+id+`' is not a valid project ID."],"errors":{}}`)
+				}
 			}
 			statuses := query["status"]
 			if len(statuses) == 0 {
@@ -94,7 +103,7 @@ func (server *jiraProjectServer) doer(t *testing.T) jiraProjectDoer {
 					list = server.archived
 				}
 				for _, key := range list {
-					if jiraProjectNativeID(key) == query.Get("id") {
+					if (query.Get("id") != "" && jiraProjectNativeID(key) == query.Get("id")) || (query.Get("keys") != "" && key == query.Get("keys")) {
 						return respond(200, `{"values":[`+entry(key)+`],"startAt":0,"isLast":true,"total":1}`)
 					}
 				}
@@ -489,6 +498,72 @@ func TestJiraLegacyOwnershipOfAnArchivedProjectIsNotClosedByAnArchivedSearchThat
 		}
 		if lookups != 1 || len(warnings) != 0 {
 			t.Errorf("the sync made %d search(es) for one project and %d WARN line(s), want 1 and none", lookups, len(warnings))
+		}
+	})
+}
+
+// A row of the RETIRED id form ("{org}:jira:{KEY}", built from the project key
+// before the one-id rule) is superseded by the row on the native id. On a site
+// of more than one page it is a candidate like any other absent fact, and the
+// provider answers 400 when it is asked for that value as an id. So such a row
+// is named by its KEY: when the live answer holds the key, the project is
+// there under its native id and the retired row closes with no request; when
+// it does not, the provider is asked by key, never with the organization id.
+func TestJiraKeyBuiltOwnershipRowClosesOnASiteOfMoreThanOnePage(t *testing.T) {
+	ctx, conn := newWorkItemEffectsConn(t)
+	t0 := time.Date(2026, 10, 2, 8, 0, 0, 0, time.UTC)
+	const count = 3 * jiraTeamCatalogProjectSearchMaxResults / 2
+	seed := func(orgID string, keys []string, retiredKey string) {
+		t.Helper()
+		for _, key := range keys {
+			if err := conn.Exec(ctx, `INSERT INTO jira_project_ops_team_links (org_id, project_key, ops_team_id, project_name, ops_team_name, updated_at) VALUES (?, ?, ?, ?, ?, ?)`,
+				orgID, key, "ops-team-a", "Project "+key, "Ops Team", t0.Add(-time.Hour)); err != nil {
+				t.Fatal(err)
+			}
+		}
+		// The open row an earlier release wrote on the key-built id.
+		if err := conn.Exec(ctx, `INSERT INTO team_project_ownership
+(org_id, provider, team_id, project_id, project_key, source, is_primary, priority, valid_from, updated_at)
+VALUES (?, 'jira', 'ops-team-a', ?, ?, ?, 0, 0, ?, ?)`,
+			orgID, jiraKeyBuiltProjectIDPrefix(orgID)+retiredKey, retiredKey, jiraTeamCatalogLegacySource, t0.Add(-24*time.Hour), t0.Add(-24*time.Hour)); err != nil {
+			t.Fatalf("seed the key-built row: %v", err)
+		}
+	}
+
+	t.Run("the project of the retired row is live", func(t *testing.T) {
+		orgID := uuid.NewString()
+		keys := jiraProjectKeys(count)
+		seed(orgID, keys, "K007")
+		server := &jiraProjectServer{projects: keys}
+		result, lookups, warnings := jiraProjectRun(ctx, t, conn, orgID, server, t0)
+		open := jiraLegacyOpen(ctx, t, conn, orgID)
+		if _, isOpen := open[jiraKeyBuiltProjectIDPrefix(orgID)+"K007"]; isOpen {
+			t.Errorf("the row on the retired key-built id is still open: the project is in the answer under its native id")
+		}
+		if _, isOpen := open[jiraProjectNativeID("K007")]; !isOpen || len(open) != count {
+			t.Errorf("the row on the native id is open %v and %d rows are open; want open and %d", isOpen, len(open), count)
+		}
+		if lookups != 0 || len(warnings) != 0 || len(absenceLegReasons(result)) != 0 {
+			t.Errorf("the sync made %d search(es) for one project, %d WARN line(s) and the legs %v; want none: the answer the run holds names the key",
+				lookups, len(warnings), absenceLegReasons(result))
+		}
+	})
+
+	t.Run("the project of the retired row is gone", func(t *testing.T) {
+		orgID := uuid.NewString()
+		keys := jiraProjectKeys(count)
+		seed(orgID, keys, "GONE")
+		server := &jiraProjectServer{projects: keys}
+		_, lookups, warnings := jiraProjectRun(ctx, t, conn, orgID, server, t0)
+		if _, isOpen := jiraLegacyOpen(ctx, t, conn, orgID)[jiraKeyBuiltProjectIDPrefix(orgID)+"GONE"]; isOpen {
+			t.Errorf("the row on the retired key-built id of a project that is gone is still open")
+		}
+		var queries []string
+		server.set(func(server *jiraProjectServer) { queries = append(queries, server.lookupQueries...) })
+		if lookups != 1 || len(warnings) != 0 || len(queries) != 1 || !strings.Contains(queries[0], "keys=GONE") ||
+			strings.Contains(queries[0], "id=") || strings.Contains(queries[0], orgID) {
+			t.Errorf("the sync made %d search(es) for one project (%v) and %d WARN line(s); want one, by keys=GONE, with no id and no organization id",
+				lookups, queries, len(warnings))
 		}
 	})
 }

@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"sort"
+	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -227,6 +229,21 @@ type gitlabMembersServer struct {
 	*httptest.Server
 	mu      sync.Mutex
 	members []string
+	// endless answers every page of the team's member list with one member and a
+	// next page, so the walk ends on its page budget, not on the provider's end.
+	endless bool
+	// raw, when set, is the exact member list answered (a node the collector
+	// cannot use, for example).
+	raw []map[string]any
+	// noEndSignal leaves the end-of-list header off: the provider never says the list ended.
+	noEndSignal bool
+	// A direct lookup (GET /groups/org%2Fteam-a/members?query=<username>) is answered
+	// from the provider's truth: lookupMembers (the list when nil). lookupStatus,
+	// when set, is the status every lookup answers; lookups counts them.
+	lookupMembers []string
+	lookupStatus  int
+	lookupNoEnd   bool // the lookup answer carries no end-of-list signal
+	lookups       int
 }
 
 func newGitLabMembersServer(t *testing.T, usernames ...string) *gitlabMembersServer {
@@ -245,9 +262,47 @@ func newGitLabMembersServer(t *testing.T, usernames ...string) *gitlabMembersSer
 		case "/api/v4/groups/org/members":
 			writeGitLabTeamCatalogJSON(t, w, []map[string]any{})
 		case "/api/v4/groups/org%2Fteam-a/members":
+			if query := r.URL.Query().Get("query"); query != "" {
+				fake.lookups++
+				if fake.lookupStatus != 0 {
+					http.Error(w, "{}", fake.lookupStatus)
+					return
+				}
+				truth := fake.members
+				if fake.lookupMembers != nil {
+					truth = fake.lookupMembers
+				}
+				out := []map[string]any{}
+				for _, username := range truth {
+					if strings.Contains(strings.ToLower(username), strings.ToLower(query)) { // GitLab's search is case-insensitive
+						out = append(out, map[string]any{"username": username, "name": username})
+					}
+				}
+				if !fake.lookupNoEnd {
+					w.Header()["X-Next-Page"] = []string{""}
+				}
+				writeGitLabTeamCatalogJSON(t, w, out)
+				return
+			}
+			if fake.endless {
+				page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+				if page < 1 {
+					page = 1
+				}
+				w.Header().Set("X-Next-Page", strconv.Itoa(page+1))
+				writeGitLabTeamCatalogJSON(t, w, []map[string]any{{"username": fmt.Sprintf("endless-%d", page), "name": "x", "email": fmt.Sprintf("endless-%d@example.com", page)}})
+				return
+			}
 			out := []map[string]any{}
 			for _, username := range fake.members {
 				out = append(out, map[string]any{"username": username, "name": username, "email": username + "@example.com"})
+			}
+			if fake.raw != nil {
+				out = fake.raw
+			}
+			// GitLab's end of an offset listing: X-Next-Page sent and empty.
+			if !fake.noEndSignal {
+				w.Header()["X-Next-Page"] = []string{""}
 			}
 			writeGitLabTeamCatalogJSON(t, w, out)
 		default:
@@ -256,6 +311,39 @@ func newGitLabMembersServer(t *testing.T, usernames ...string) *gitlabMembersSer
 	}))
 	t.Cleanup(fake.Close)
 	return fake
+}
+
+func (fake *gitlabMembersServer) setRaw(raw []map[string]any, noEndSignal bool) {
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	fake.raw, fake.noEndSignal = raw, noEndSignal
+}
+
+// setLookup sets what the provider answers to a direct lookup: the members it
+// says exist (nil: the list), and a status to answer instead (0: none).
+func (fake *gitlabMembersServer) setLookup(members []string, status int) {
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	fake.lookupMembers, fake.lookupStatus = members, status
+}
+
+// setLookupNoEnd makes the lookup answer leave GitLab's end-of-list signal off.
+func (fake *gitlabMembersServer) setLookupNoEnd(noEnd bool) {
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	fake.lookupNoEnd = noEnd
+}
+
+func (fake *gitlabMembersServer) lookupCount() int {
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	return fake.lookups
+}
+
+func (fake *gitlabMembersServer) setEndless(endless bool) {
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	fake.endless = endless
 }
 
 func (fake *gitlabMembersServer) setMembers(usernames ...string) {

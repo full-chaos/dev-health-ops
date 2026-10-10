@@ -343,7 +343,7 @@ func datetimeColumn(value pyjson.Value) (*time.Time, error) {
 	return nil, fmt.Errorf("cannot store %T as a datetime", value)
 }
 
-const teamMembershipsInsert = `INSERT INTO team_memberships (org_id, provider, team_id, member_id, raw_provider_user_id, raw_email, identity_facets, source, is_primary, specificity, priority, valid_from, valid_to, updated_at)`
+const teamMembershipsInsert = `INSERT INTO team_memberships (org_id, provider, team_id, member_id, raw_provider_user_id, raw_email, identity_facets, source, is_primary, specificity, priority, valid_from, valid_to, updated_at, provider_user_id)`
 
 // insertTeamMembership is ClickHouseStore.insert_team_memberships for one
 // row (_insert_team_edge_rows' per-column normalization).
@@ -407,7 +407,7 @@ func (s Store) insertTeamMembership(ctx context.Context, orgID string, row *pyjs
 	if err := batch.Append(rowOrg, strOrEmpty(objectValue(row, "provider")), strOrEmpty(objectValue(row, "team_id")),
 		strOrEmpty(objectValue(row, "member_id")), optionalText("raw_provider_user_id"), optionalText("raw_email"), facets,
 		strOrEmpty(objectValue(row, "source")), uint8(isPrimary), uint16(specificity), int32(priority),
-		*validFrom, validTo, *updatedAt); err != nil {
+		*validFrom, validTo, *updatedAt, optionalText("provider_user_id")); err != nil {
 		return err
 	}
 	return batch.Send()

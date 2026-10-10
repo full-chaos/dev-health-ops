@@ -12,7 +12,7 @@ import (
 // (every provider's writer) reaches it. This test enumerates the whole input space:
 //
 //	open rows of the SAME member id        0 / 1 / 2
-//	their stored provider user id          NULL / same / other / mixed (other + NULL; needs 2 rows)
+//	their stored provider user id          NULL / blank (whitespace; = NULL) / same / other / mixed (other + NULL; needs 2 rows)
 //	incoming provider user id              present / absent
 //	open rows of ANOTHER member id that
 //	  hold the incoming id (same team)     0 / 1 / 2
@@ -26,7 +26,7 @@ import (
 
 type continuityCell struct {
 	same     int    // open rows of the same member id: 0, 1, 2
-	stored   string // "-" (no same rows), "null", "same", "other", "mixed"
+	stored   string // "-" (no same rows), "null", "blank", "same", "other", "mixed"
 	incoming string // "present" or "absent"
 	others   int    // open rows of another member id holding the incoming id
 }
@@ -47,7 +47,7 @@ var continuityTable = map[continuityCell]continuityWant{}
 
 func init() {
 	// incoming absent: the provider made no statement, whatever else the table holds.
-	for _, shape := range [][2]interface{}{{0, "-"}, {1, "null"}, {1, "same"}, {1, "other"}, {2, "null"}, {2, "same"}, {2, "other"}, {2, "mixed"}} {
+	for _, shape := range [][2]interface{}{{0, "-"}, {1, "null"}, {1, "blank"}, {1, "same"}, {1, "other"}, {2, "null"}, {2, "blank"}, {2, "same"}, {2, "other"}, {2, "mixed"}} {
 		for others := 0; others <= 2; others++ {
 			continuityTable[continuityCell{shape[0].(int), shape[1].(string), "absent", others}] = continuityWant{action: membershipNoChange, from: "rule"}
 		}
@@ -57,7 +57,7 @@ func init() {
 	continuityTable[continuityCell{0, "-", "present", 1}] = continuityWant{action: membershipRenameContinue, from: "earliest", renamed: 1, named: "r1: a login rename is one person"}
 	continuityTable[continuityCell{0, "-", "present", 2}] = continuityWant{action: membershipRenameContinue, from: "earliest", renamed: 2, named: "r2: two open rows of one id both replaced, earliest valid_from"}
 	// open rows of the member id that are the same person (NULL, same, mixed): they continue; a rename is never applied on top.
-	for _, stored := range []string{"null", "same", "mixed"} {
+	for _, stored := range []string{"null", "blank", "same", "mixed"} {
 		for same := 1; same <= 2; same++ {
 			if stored == "mixed" && same == 1 {
 				continue // a mixed fact needs two rows
@@ -88,7 +88,7 @@ func allContinuityCells() []continuityCell {
 	for _, shape := range []struct {
 		same   int
 		stored string
-	}{{0, "-"}, {1, "null"}, {1, "same"}, {1, "other"}, {2, "null"}, {2, "same"}, {2, "other"}, {2, "mixed"}} {
+	}{{0, "-"}, {1, "null"}, {1, "blank"}, {1, "same"}, {1, "other"}, {2, "null"}, {2, "blank"}, {2, "same"}, {2, "other"}, {2, "mixed"}} {
 		for _, incoming := range []string{"present", "absent"} {
 			for others := 0; others <= 2; others++ {
 				cells = append(cells, continuityCell{shape.same, shape.stored, incoming, others})
@@ -131,6 +131,8 @@ func continuityFixture(cell continuityCell, provider string) (open []openMembers
 		switch cell.stored {
 		case "null":
 			return nil
+		case "blank":
+			return text("  ")
 		case "same":
 			return text(incoming)
 		case "other":

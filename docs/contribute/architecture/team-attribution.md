@@ -823,7 +823,7 @@ project's items by id. Now:
   | any | any | any, but `I` absent or blank | `no_change` (the snapshot rule alone) | the rule's | none by this decision |
   | 0 | n/a | 0 | `new_row` | the run's | none |
   | 0 | n/a | 1 or 2 | `rename_continue` | earliest of those rows | those rows, as a rename |
-  | 1 or 2 | NULL, or `I`, or a mix of other and NULL | 0, 1 or 2 | `continue_row` | the rule's (the first-seen) | none: the other rows are not renamed away (they close only as departures, when the read is proven) |
+  | 1 or 2 | NULL, blank (the same as NULL), or `I`, or a mix of other and NULL/blank | 0, 1 or 2 | `continue_row` | the rule's (the first-seen) | none: the other rows are not renamed away (they close only as departures, when the read is proven) |
   | 1 or 2 | every row another id (none NULL, none newer than the read) | 0 | `close_history_new_row` | the run time | every open row of the member id, as history (`team_membership_id_reused`) |
   | 1 or 2 | every row another id | 1 or 2 | `close_history_rename_continue` | earliest of the renamed rows | the member id's rows as history AND the renamed rows |
 

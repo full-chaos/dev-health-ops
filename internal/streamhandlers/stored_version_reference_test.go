@@ -79,6 +79,7 @@ func TestExternalStatementVariantsMatchThePythonReference(t *testing.T) {
 	sourceID := uuid.MustParse(variants.SourceID)
 	unreferenced := map[string]bool{}
 	divergences := teamIDDivergenceUse{}
+	referenceOnly := referenceOnlyUse{}
 	for _, variant := range variants.External {
 		name := variant.Kind + " " + variant.System + " " + variant.Field + " " + variant.Statement
 		err := validateExternalRecord(variant.Kind, variant.Payload)
@@ -115,8 +116,9 @@ func TestExternalStatementVariantsMatchThePythonReference(t *testing.T) {
 		}
 		columns := strings.Split(extended[strings.IndexByte(extended, '(')+1:strings.LastIndexByte(extended, ')')], ",")
 		reference := map[string]any{}
-		for i, column := range variant.Columns {
-			reference[column] = goldenComparableValue(variant.Values[i])
+		referenceColumns, referenceValues := referenceOnly.drop(variant.Table, variant.Columns, variant.Values)
+		for i, column := range referenceColumns {
+			reference[column] = goldenComparableValue(referenceValues[i])
 		}
 		for i, column := range columns {
 			want, ok := reference[column]
@@ -131,6 +133,7 @@ func TestExternalStatementVariantsMatchThePythonReference(t *testing.T) {
 		}
 	}
 	divergences.checkReached(t)
+	referenceOnly.checkReached(t)
 	var got []string
 	for column := range unreferenced {
 		got = append(got, column)

@@ -126,7 +126,7 @@ func TestComputeWellbeingPerRepoMatchesMultiRepoPartitionGolden(t *testing.T) {
 				{ID: "team-repo", Name: "Repo Team", RepoPatterns: []string{"org/service-a", "org/service-b"}},
 			}
 			repoResolver := NewRepoPatternResolver(teams)
-			memberResolver := NewMemberResolver(teams)
+			memberResolver := newTestMemberResolver(nil)
 
 			perRepo := computeWellbeingPerRepo(
 				day, repoIDs, commits, testCase.RepoNamesByID, repoResolver, memberResolver,

@@ -1357,7 +1357,7 @@ func MetricTeamAttributionMembershipLayerLabel(value string) string {
 // RecordTeamAttributionMembershipLayer counts ONE winning
 // assignee_membership/author_membership resolution by which layer resolved
 // it -- admin_override (identities.team_ids ∪ teams.manual_members) or
-// provider_fallback (team_memberships ∪ teams.members). Called from
+// provider_fallback (team_memberships). Called from
 // WriteGitHubWorkItemEffect, the actual metrics-capable write boundary --
 // NOT from resolveMembership/resolve(), which stay pure. See
 // githubWorkItemTeamAttributionRow.Priority's doc comment for why the

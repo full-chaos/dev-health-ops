@@ -242,7 +242,7 @@ func TestNarrowRepoScope(t *testing.T) {
 		{"nothing named, no team", false, "", "", "", 0},
 		{"team only", false, "", team, " AND " + team, 1},
 		{"named and resolved, no team", true, explicit, "", explicit, 1},
-		{"named and resolved with a team: the intersection", true, explicit, team, " AND (repo_id IN {scope_ids:Array(String)} AND " + team + ")", 2},
+		{"named and resolved with a team: the intersection, both as text", true, explicit, team, " AND (toString(repo_id) IN {scope_ids:Array(String)} AND toString(" + strings.Replace(team, " IN ", ") IN ", 1) + ")", 2},
 		{"named, resolved to nothing, no team: nothing", true, "", "", " AND 1 = 0", 0},
 		{"named, resolved to nothing, with a team: nothing, not the team's", true, "", team, " AND 1 = 0", 0},
 	} {
@@ -343,5 +343,21 @@ func TestResolveRepoRefs(t *testing.T) {
 	}
 	if !strings.Contains(q.statements[0], "toString(id) = {repo_id:String}") || !strings.Contains(q.statements[1], "repo = {repo_name:String}") {
 		t.Errorf("a UUID is looked up by id and a name by repo:\n%v", q.statements)
+	}
+}
+
+// CHAOS-9183: both membership tests of the combined filter compare the repository as TEXT
+// (a UUID column against a String list AND a String subquery fails ClickHouse 26.7.1.1315
+// analysis with code 169), for any column expression; a column that is already text is left.
+func TestTextRepoMembership(t *testing.T) {
+	for in, want := range map[string]string{
+		"repo_id IN {scope_ids:Array(String)}":                      "toString(repo_id) IN {scope_ids:Array(String)}",
+		"work_unit_investments.repo_id IN {repo_ids:Array(String)}": "toString(work_unit_investments.repo_id) IN {repo_ids:Array(String)}",
+		"toString(repos.id) IN {x:Array(String)}":                   "toString(repos.id) IN {x:Array(String)}",
+		"no membership test":                                        "no membership test",
+	} {
+		if got := textRepoMembership(in); got != want {
+			t.Errorf("textRepoMembership(%q) = %q, want %q", in, got, want)
+		}
 	}
 }

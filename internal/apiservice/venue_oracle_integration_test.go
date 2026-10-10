@@ -63,7 +63,7 @@ func TestVenueOracleProtectedRoutes(t *testing.T) {
 	// are placeholders in the golden on both planes.
 	spec.Scrub = scrubCustomerPushTokens
 	golden := venueoracle.OpenGolden(t, spec)
-	pin := venueoracle.OpenGoPin(t, venueoracle.GoPinSpec{Path: "testdata/venue/protected-routes.go-pin.json", SHA256: "b47128aa3be23ab91dcf1032d6fb298d7d17bf177ea91b1d8e6ab08676184f4c", Ruling: teamsRuling})
+	pin := venueoracle.OpenGoPin(t, venueoracle.GoPinSpec{Path: "testdata/venue/protected-routes.go-pin.json", SHA256: "470f231695f0d55637ea5f7a9c758c6b71d5d76f599b320e9c84748a3d4a1b5e", Ruling: teamsRuling})
 	sent := &sentReports{}
 	endpoint := httptest.NewServer(sent)
 	t.Cleanup(endpoint.Close)
@@ -196,7 +196,7 @@ func TestVenueOracleProtectedRoutes(t *testing.T) {
 	// Postgres one. FINAL resolves each plane's own ReplacingMergeTree
 	// merge state, the same discipline the Python readers use.
 	pinCHRows(t, ctx, golden, pin, venue, &receipt, "teams",
-		`SELECT id, name, coalesce(description, '<null>'), members, manual_members, project_keys,
+		`SELECT id, name, coalesce(description, '<null>'), manual_members, project_keys,
 			repo_patterns, is_active, provider, native_team_key FROM teams FINAL
 		WHERE org_id != '' ORDER BY id`)
 	// CHAOS-6311: POST /teams/import's drift-projector writes, compared as

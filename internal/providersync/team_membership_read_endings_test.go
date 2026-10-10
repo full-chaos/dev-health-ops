@@ -127,8 +127,8 @@ func TestGitHubMemberReadEndings(t *testing.T) {
 			rows, _, err := handler.Collect(ctx, "org-1", false, true)
 			closable := endingsClosable(rows.ObservedMembershipTeamIDs, rows.UnprovenMembershipTeamIDs)
 			observed := len(rows.ObservedMembershipTeamIDs) == 1
-			t.Logf("GH | %s | err=%v | observed=%v | unproven=%v | failed=%v | closable=%v | memberships=%d",
-				tc.name, err, rows.ObservedMembershipTeamIDs, rows.UnprovenMembershipTeamIDs, rows.FailedMemberFetchTeamIDs, closable, len(rows.Memberships))
+			t.Logf("GH | %s | err=%v | observed=%v | unproven=%v | closable=%v | memberships=%d",
+				tc.name, err, rows.ObservedMembershipTeamIDs, rows.UnprovenMembershipTeamIDs, closable, len(rows.Memberships))
 			if (len(closable) == 1) != tc.wantClosable || observed != tc.wantObserved || len(rows.Memberships) != tc.wantMemberIDs {
 				t.Errorf("closable=%v observed=%v memberships=%d, want closable=%v observed=%v memberships=%d",
 					closable, observed, len(rows.Memberships), tc.wantClosable, tc.wantObserved, tc.wantMemberIDs)
@@ -217,8 +217,8 @@ func TestGitLabMemberReadEndings(t *testing.T) {
 			rows := batch.Rows
 			closable := endingsClosable(rows.ObservedMembershipTeamIDs, rows.UnprovenMembershipTeamIDs)
 			observed := len(rows.ObservedMembershipTeamIDs) == 1
-			t.Logf("GL | %s | err=%v | observed=%v | unproven=%v | failed=%v | closable=%v | memberships=%d | complete=%v truncated=%v skipped=%v",
-				tc.name, err, rows.ObservedMembershipTeamIDs, rows.UnprovenMembershipTeamIDs, rows.FailedMemberFetchTeamIDs, closable, len(rows.Memberships),
+			t.Logf("GL | %s | err=%v | observed=%v | unproven=%v | closable=%v | memberships=%d | complete=%v truncated=%v skipped=%v",
+				tc.name, err, rows.ObservedMembershipTeamIDs, rows.UnprovenMembershipTeamIDs, closable, len(rows.Memberships),
 				batch.Result.Complete, batch.Evidence.Truncated, batch.Result.WalkSkipped)
 			if (err != nil) != tc.wantErr || (len(closable) == 1) != tc.wantClosable || observed != tc.wantObserved || len(rows.Memberships) != tc.wantRows {
 				t.Errorf("err=%v closable=%v observed=%v memberships=%d, want err=%v closable=%v observed=%v memberships=%d",

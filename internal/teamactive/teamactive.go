@@ -8,10 +8,10 @@
 // table, so a resolver that reads the table without this rule goes on
 // resolving to an id that no reader shows.
 //
-// A team an admin DELETES has no row any more (the delete removes its rows),
-// so it is not in the set of inactive ids: an id with no row in teams reads
-// as active here. A caller that holds stored ids of such a team gets no help
-// from this rule.
+// A team an admin DELETES keeps its row: the delete writes it inactive (with
+// the time of the delete in deleted_at), so a deleted team is in the set of
+// inactive ids like any other. An id with NO row in teams is not in the set:
+// it reads as active here.
 //
 // The work-item cascade (teamattribution.dropInactiveTeamCandidates) uses the
 // same test of the newest row (NewestRowInactive). The repository and member

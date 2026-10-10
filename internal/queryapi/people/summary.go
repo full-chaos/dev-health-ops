@@ -96,15 +96,15 @@ type PersonDelta struct {
 	Label  string  `json:"label"`
 	Value  float64 `json:"value"`
 	Unit   string  `json:"unit"`
-	// DeltaPct is the percent change (deltarule): 0 when a window has no stored
-	// value, null when the prior is a measured 0 and the current is not (a
-	// percent change against zero is undefined).
+	// DeltaPct is the percent change (deltarule): null when a window has no
+	// stored value (CHAOS-9111) or when the prior is a measured 0 and the current
+	// is not (a percent change against zero is undefined); 0 to 0 stays 0.
 	DeltaPct *float64     `json:"delta_pct"`
 	Spark    []SparkPoint `json:"spark"`
 	// HasData / HasPriorData (CHAOS-9044, Go-only, last so the frozen field
 	// order is kept): the current / comparison window holds a stored value
 	// for the metric. When false, Value (or the delta's base) is a 0
-	// placeholder, not a measured zero, and DeltaPct is 0 (deltarule).
+	// placeholder, not a measured zero, and DeltaPct is null (deltarule).
 	HasData      bool `json:"has_data"`
 	HasPriorData bool `json:"has_prior_data"`
 }

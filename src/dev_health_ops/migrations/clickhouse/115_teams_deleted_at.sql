@@ -1,0 +1,18 @@
+-- teams.deleted_at: the time an admin deleted the team. NULL = not deleted.
+--
+-- An admin delete does not remove the team row any more. It writes a new
+-- version of the row with is_active = 0 and this time. is_active = 0 is what
+-- every resolver and reader already takes as "this team takes no work, no
+-- repository, no member and is not listed"; without the row an id that other
+-- stored rows still name read as an active team.
+--
+-- This column is the difference between a team an admin deleted and a team
+-- that is inactive for another reason (retired at the provider, replaced by a
+-- carry): the admin routes answer "not found" for a deleted team, as they did
+-- when the row was removed, and serve an inactive one. No reader of analytics
+-- needs it: is_active decides there.
+--
+-- No writer but the admin delete sets it, and every writer names its columns,
+-- so a later write of the same team id (an admin create, a provider sync, a
+-- push) is a version with NULL here: the team is there again.
+ALTER TABLE teams ADD COLUMN IF NOT EXISTS deleted_at Nullable(DateTime64(6));

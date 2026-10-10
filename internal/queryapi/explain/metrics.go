@@ -259,9 +259,9 @@ FROM %s
 
 // metricRow is one row fetchMetricContributors/fetchMetricDriverDelta
 // returns -- id/value for a contributor row, id/value/delta_pct for a
-// driver row (DeltaPct is unused/zero for a contributor row; the caller,
-// buildContributor, always overrides a contributor's delta to 0.0
-// itself, matching explain.py:240's own `delta_value=0.0` literal).
+// driver row (a contributor row has no comparison side: its DeltaPct is nil,
+// and the response serves null for it, where explain.py:240's own
+// `delta_value=0.0` literal serves 0.0).
 type metricRow struct {
 	ID    string
 	Value float64

@@ -626,6 +626,23 @@ func buildChartQuery(spec ChartSpec, definition metricDefinition) (string, []any
 	// alongside its earlier generation. A table with no known re-drive risk
 	// passes through unchanged.
 	source := sourceFrom(spec.Metric, definition)
+	if keys, once := onePersonRowKeys(spec, definition); once {
+		// The filter runs inside, on the rows of the table: the team column it
+		// may name is not a column of the one row per person. The value takes
+		// another name on the way, because a filter that names the metric
+		// beside an aggregate of the same name would mean the aggregate.
+		source = fmt.Sprintf(`(
+        SELECT %s, max(value_of_the_person) AS %s
+        FROM (
+            SELECT %s, %s AS value_of_the_person
+            FROM %s
+            WHERE
+            %s
+        )
+        GROUP BY %s
+    ) AS %s`, keys, spec.Metric, keys, spec.Metric, source, where, keys, definition.SourceTable)
+		where = "1"
+	}
 	if spec.GroupBy == "" && (spec.ChartType == "scorecard" || spec.ChartType == "trend_delta" || spec.ChartType == "table") {
 		return fmt.Sprintf(`SELECT
         CAST('total', '%s') AS x,
@@ -648,6 +665,44 @@ func buildChartQuery(spec ChartSpec, definition metricDefinition) (string, []any
         %s
     GROUP BY x
     ORDER BY %s`, xExpression, yExpression, source, where, order), parameters, nil
+}
+
+// personValuesByTeam names, per source table, the metrics that are a person's
+// own value stored once for each team the person is in: the same number in
+// each of those rows. ic_landscape_rolling_30d holds one point per (person,
+// team, map), and the compute copies the person's 30-day values into each.
+//
+// The two normalized coordinates of that table (x_norm, y_norm) are NOT here:
+// they are ranks inside one team, so a person of two teams has two different
+// values. A chart of them keeps one value per (person, team): the spread of
+// the person over the teams, never one number made of the two.
+var personValuesByTeam = map[string]map[string]bool{
+	"ic_landscape_rolling_30d": {
+		"churn_loc_30d": true, "delivery_units_30d": true, "cycle_p50_30d_hours": true,
+		"wip_max_30d": true, "x_raw": true, "y_raw": true,
+	},
+}
+
+// onePersonRowKeys says whether the chart must read one row per person in
+// place of one row per (person, team), and returns the columns of that row's
+// key: the key of the table without its team column.
+//
+// A chart that is not grouped by team averages people. A person of N teams has
+// N rows that hold the same value, so an average over the rows weights that
+// person N times; the reference computation gave a person one team, so one
+// row, and counted each person once. A chart grouped by team keeps one row per
+// (person, team): there each row is the person in that team's cohort.
+func onePersonRowKeys(spec ChartSpec, definition metricDefinition) (string, bool) {
+	if spec.GroupBy == "team" || !personValuesByTeam[definition.SourceTable][spec.Metric] {
+		return "", false
+	}
+	var keys []string
+	for _, column := range tableReads[definition.SourceTable].Key {
+		if column != "team_id" {
+			keys = append(keys, column)
+		}
+	}
+	return strings.Join(keys, ", "), true
 }
 
 // sourceFrom is the FROM source for buildChartQuery's outer SELECT.

@@ -408,3 +408,22 @@ func TestNoDataDeltaIsNeitherTheTopMoverNorSteady(t *testing.T) {
 		t.Errorf("a response with only a no-data metric names a top mover: %v", got.Metric)
 	}
 }
+
+// CHAOS-9139 (D5900): a measured move of exactly 0 % names no driver; any other move does.
+func TestNamesDriversOnlyForAMove(t *testing.T) {
+	zero, pos, neg := 0.0, 12.5, -3.0
+	for _, tc := range []struct {
+		name string
+		d    MetricDelta
+		want bool
+	}{
+		{"exactly 0 %", MetricDelta{Metric: "cycle_time", HasData: true, HasPriorData: true, DeltaPct: &zero}, false},
+		{"a rise", MetricDelta{Metric: "cycle_time", HasData: true, HasPriorData: true, DeltaPct: &pos}, true},
+		{"a fall", MetricDelta{Metric: "cycle_time", HasData: true, HasPriorData: true, DeltaPct: &neg}, true},
+		{"from a measured zero (no percent)", MetricDelta{Metric: "cycle_time", HasData: true, HasPriorData: true, Value: 5}, true},
+	} {
+		if got := namesDrivers(tc.d); got != tc.want {
+			t.Errorf("%s: namesDrivers = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}

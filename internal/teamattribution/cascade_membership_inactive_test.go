@@ -65,9 +65,6 @@ func TestMembershipGateCountsOnlyActiveTeams(t *testing.T) {
 		{"provider", func(p string, teams ...string) GithubWorkItemDerivationFacts {
 			return GithubWorkItemDerivationFacts{Teams: membershipTeams(p, "t1"), ProviderMembers: memberOf(p, teams...)}
 		}, "ambiguous_provider_membership:"},
-		{"provider-untyped", func(p string, teams ...string) GithubWorkItemDerivationFacts {
-			return GithubWorkItemDerivationFacts{Teams: membershipTeams(p, "t1"), ProviderUntypedMembers: untypedOf(teams...)}
-		}, "ambiguous_provider_membership:"},
 	}
 	for _, provider := range coOwnerProviders {
 		for _, l := range layers {

@@ -142,7 +142,9 @@ usage() {
          (CHAOS-7653) Run only the registry rows of the packages that the paths in
          FILE (NUL- or newline-separated, repo-relative) lie in: the form the
          pull_request job runs, with a cost bounded by the packages a PR changes.
-         No row selected is a loud no-op. With --list print the selected rows
+         A path that ci/venue_oracle_triggers.d/ declares for a test (code outside
+         its package whose behaviour the test compares; CHAOS-9172) selects that
+         test too. No row selected is a loud no-op. With --list print the selected rows
          (SELECT, package, test, tab-separated) and run nothing.
   venue-oracle-plan COUNT
          Print the cost-balanced plan of COUNT legs: every run row with its leg
@@ -676,10 +678,25 @@ check_venue_oracle_plan() {
 # not select its parent: internal/apiservice/billingvenue/x.go selects billingvenue, not
 # internal/apiservice, and internal/apiservice/admin is not selected by a change in
 # internal/apiservice/adminllmvenue.
+#
+# With NAME it also succeeds when a changed path is equal to, or under, a path that
+# ci/venue_oracle_triggers.d/ declares for the test NAME of DIR (CHAOS-9172): the code
+# outside its package whose behaviour that venue test compares.
 venue_oracle_changed_selects() {
-  local escaped
+  local escaped pkg name path
   escaped="$(printf '%s' "$1" | sed 's/[][\\.*^$/]/\\&/g')"
-  tr '\0' '\n' < "${VENUE_CHANGED_FILE}" | grep -qE "^${escaped}/([^/]+|testdata/.+)$"
+  if tr '\0' '\n' < "${VENUE_CHANGED_FILE}" | grep -qE "^${escaped}/([^/]+|testdata/.+)$"; then
+    return 0
+  fi
+  [ -n "${2:-}" ] || return 1
+  while IFS=$'\t' read -r pkg name path; do
+    { [ "${pkg}" = "$1" ] && [ "${name}" = "$2" ]; } || continue
+    escaped="$(printf '%s' "${path}" | sed 's/[][\\.*^$/]/\\&/g')"
+    if tr '\0' '\n' < "${VENUE_CHANGED_FILE}" | grep -qE "^${escaped}(/.*)?$"; then
+      return 0
+    fi
+  done <<< "${VENUE_TRIGGER_ROWS:-}"
+  return 1
 }
 
 check_venue_oracles() {
@@ -687,6 +704,10 @@ check_venue_oracles() {
   if [ -n "${changed}" ]; then
     [ -r "${changed}" ] || die "venue-oracles --changed: ${changed} is missing or unreadable"
     [ -z "${shard}${shard_count}" ] || die "venue-oracles --changed does not combine with SHARD COUNT"
+  fi
+  if [ -n "${changed}" ]; then
+    VENUE_TRIGGER_ROWS="$(venue_oracle_trigger_rows)" \
+      || die "venue-oracles --changed: ci/venue_oracle_triggers.d/ could not be read (see above)"
   fi
   if [ -n "${shard}${shard_count}" ]; then
     case "${shard}" in ""|*[!0-9]*) die "venue-oracles SHARD must be a positive integer, got '${shard}'" ;; esac
@@ -700,7 +721,7 @@ check_venue_oracles() {
     # run's own first step; the selection reads the registry rows alone, so it is fast.
     local list_dir list_name list_kind
     while read -r list_dir list_name list_kind; do
-      if [ "${list_kind}" = run ] && venue_oracle_changed_selects "${list_dir}"; then
+      if [ "${list_kind}" = run ] && venue_oracle_changed_selects "${list_dir}" "${list_name}"; then
         printf 'SELECT\t%s\t%s\n' "${list_dir}" "${list_name}"
       fi
     done < <(venue_oracle_registry_rows | LC_ALL=C sort -k1,1 -k2,2)
@@ -754,7 +775,7 @@ check_venue_oracles() {
         pkg_has_run=1
         registered_runs=$((registered_runs + 1))
         if [ -n "${changed}" ]; then
-          if venue_oracle_changed_selects "${dir}"; then
+          if venue_oracle_changed_selects "${dir}" "${name}"; then
             names="${names:+${names}|}${name}"
             total=$((total + 1))
           fi

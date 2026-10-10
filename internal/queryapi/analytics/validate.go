@@ -198,10 +198,10 @@ func dbColumn(dim Dimension, useInvestment bool) (string, error) {
 			return "repo_id", nil
 		case DimensionWorkType:
 			return "work_item_type", nil
-		case DimensionTheme:
-			return "investment_area", nil
-		case DimensionSubcategory:
-			return "project_stream", nil
+		case DimensionTheme, DimensionSubcategory:
+			// CHAOS-9195: the legacy classifier's investment_area / project_stream are no
+			// longer read; every caller resolves these dimensions to the canonical path.
+			return "", fmt.Errorf("analytics: dbColumn: dimension %q is canonical-only (useInvestment path)", dim)
 		}
 	}
 	return "", fmt.Errorf("analytics: dbColumn: unhandled dimension %q", dim)

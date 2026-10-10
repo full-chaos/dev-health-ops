@@ -247,13 +247,14 @@ func TestVenueOracleQueryAPIDictOrder(t *testing.T) {
 	seedNow := time.Now().UTC()
 	fromTS := seedNow.AddDate(0, 0, -3).Format("2006-01-02 15:04:05")
 	toTS := seedNow.AddDate(0, 0, -1).Format("2006-01-02 15:04:05")
-	for _, database := range dictOrderDatabases(venue, golden) {
-		conn, err := chclickhouse.Open(ctx, chclickhouse.DefaultConfig(venue.AdminClickHouseURI(t, database)))
-		if err != nil {
-			t.Fatal(err)
-		}
-		for _, statement := range []string{
-			fmt.Sprintf(`INSERT INTO work_unit_investments
+	seedWorkUnits := func(databases []string) {
+		for _, database := range databases {
+			conn, err := chclickhouse.Open(ctx, chclickhouse.DefaultConfig(venue.AdminClickHouseURI(t, database)))
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, statement := range []string{
+				fmt.Sprintf(`INSERT INTO work_unit_investments
 				(work_unit_id, work_unit_type, work_unit_name, from_ts, to_ts, repo_id, provider,
 				 effort_metric, effort_value, theme_distribution_json, subcategory_distribution_json,
 				 structural_evidence_json, evidence_quality, evidence_quality_band, categorization_status,
@@ -264,11 +265,11 @@ func TestVenueOracleQueryAPIDictOrder(t *testing.T) {
 				 map('quality.bugfix', 0.6, 'feature_delivery.customer', 0.4),
 				 '{"work_items":["b-2","a-1"],"prs":[],"summary":{"zeta":1,"alpha":2.5}}',
 				 0.5, 'moderate', 'ok', '', 'v1', 'hash', 'run-1', now64(3), '%s')`, workUnitID, fromTS, toTS, orgID),
-			// Two more stored payloads the work units list must write as
-			// Python does: one with its own "type" member (which replaces
-			// the value but keeps "type" first), and JSON null (not a
-			// dict, so no structural entry).
-			fmt.Sprintf(`INSERT INTO work_unit_investments
+				// Two more stored payloads the work units list must write as
+				// Python does: one with its own "type" member (which replaces
+				// the value but keeps "type" first), and JSON null (not a
+				// dict, so no structural entry).
+				fmt.Sprintf(`INSERT INTO work_unit_investments
 				(work_unit_id, work_unit_type, work_unit_name, from_ts, to_ts, repo_id, provider,
 				 effort_metric, effort_value, theme_distribution_json, subcategory_distribution_json,
 				 structural_evidence_json, evidence_quality, evidence_quality_band, categorization_status,
@@ -282,16 +283,25 @@ func TestVenueOracleQueryAPIDictOrder(t *testing.T) {
 				 'churn_loc', 4.0, map('quality', 1.0), map('quality.bugfix', 1.0),
 				 'null',
 				 0.5, 'moderate', 'ok', '', 'v1', 'hash', 'run-3', now64(3), '%s')`,
-				workUnitID, fromTS, toTS, orgID, workUnitID, fromTS, toTS, orgID),
-			fmt.Sprintf(`INSERT INTO work_unit_investment_quotes (work_unit_id, quote, source_type, source_id, computed_at, categorization_run_id, org_id)
+					workUnitID, fromTS, toTS, orgID, workUnitID, fromTS, toTS, orgID),
+				fmt.Sprintf(`INSERT INTO work_unit_investment_quotes (work_unit_id, quote, source_type, source_id, computed_at, categorization_run_id, org_id)
 			VALUES ('%s', 'Fix the flaky login test.', 'pr_body', 'pr-7', now64(3), 'run-1', '%s')`, workUnitID, orgID),
-		} {
-			if err := conn.Exec(ctx, statement); err != nil {
-				t.Fatalf("seed %s: %v\n%s", database, err, statement)
+			} {
+				if err := conn.Exec(ctx, statement); err != nil {
+					t.Fatalf("seed %s: %v\n%s", database, err, statement)
+				}
 			}
+			_ = conn.Close()
 		}
-		_ = conn.Close()
 	}
+	// The Home case compares a world with no Home data. Home reads the
+	// canonical categorization (CHAOS-9195), so the Go side gets the work
+	// units only after that case; the frozen Python run reads its legacy
+	// table, which holds nothing here. Recording seeds the Python database first.
+	if golden.Recording() {
+		seedWorkUnits([]string{venue.PythonClickHouseDB})
+	}
+	goUnitsSeeded := false
 
 	// The Go side reads with the admin login: the venue provisions the api
 	// login with the dho api's grants, not the query-api's.
@@ -385,7 +395,25 @@ func TestVenueOracleQueryAPIDictOrder(t *testing.T) {
 	python := runDictOrderPython(t, golden, venue, root, cases)
 	byteIdentical := 0
 	ledgerValidated := 0
+	// The Home cases run first: Go Home reads the canonical categorization and the frozen Python
+	// Home its legacy table, so the Go work units are seeded only after every Home case.
+	order := make([]int, 0, len(cases))
 	for index, tc := range cases {
+		if tc.Kind == "home" {
+			order = append(order, index)
+		}
+	}
+	for index, tc := range cases {
+		if tc.Kind != "home" {
+			order = append(order, index)
+		}
+	}
+	for _, index := range order {
+		tc := cases[index]
+		if !goUnitsSeeded && tc.Kind != "home" {
+			seedWorkUnits([]string{venue.GoClickHouseDB})
+			goUnitsSeeded = true
+		}
 		request := httptest.NewRequest(tc.method, tc.path, strings.NewReader(tc.body))
 		if tc.body != "" {
 			request.Header.Set("Content-Type", "application/json")

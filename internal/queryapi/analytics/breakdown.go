@@ -88,6 +88,16 @@ func CompileBreakdown(req BreakdownRequest, orgID string, timeoutSeconds int, us
 	if err != nil {
 		return compiledQuery{}, err
 	}
+	return compileBreakdownOver(req, dimCol, orgID, timeoutSeconds, useInvestment, filters)
+}
+
+// compileBreakdownOver compiles the breakdown for an explicit dimension column. Production
+// takes the column from dbColumn; the legacy-table tests name a column of
+// investment_metrics_daily directly, because they hold the table's own dedup, org and date
+// semantics, which are independent of the dimension (the theme/subcategory keys of that table
+// are no longer a production dimension, CHAOS-9195).
+func compileBreakdownOver(req BreakdownRequest, dimCol, orgID string, timeoutSeconds int, useInvestment bool, filters *model.FilterInput) (compiledQuery, error) {
+	var err error
 
 	fc, err := translateFilters(filters, useInvestment, defaultFilterColumns())
 	if err != nil {

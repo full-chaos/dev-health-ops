@@ -31,14 +31,14 @@ no longer has to guess which convention produced which row.
 
 internal/providersync does not run under this manifest's "packages" target
 at all -- its own top-level tests are shard-balanced separately, by
-ci/go_providersync_test_shards.tsv, across a fixed four-way split unrelated
+ci/go_providersync_test_shards.tsv, across a fixed seven-way split (CHAOS-9201: was four; shards ran 20-24 min of the 25 min cap) unrelated
 to the shard count declared below. Its weight here exists ONLY to control
 where the longest-processing-time-first (LPT) bin-packing below places it:
 a big enough weight keeps it alone in the lowest-numbered shard, so that
 shard's "packages" job never actually runs (see
 INTEGRATION_SHARD_NON_PROVIDER_COUNTS in ci/check_go.sh) and every other
 package balances across the REMAINING shards instead. Its weight is the
-SUM of its own four provider-test-shard jobs' reported wall times, from the
+SUM of its own provider-test-shard jobs' reported wall times, from the
 same hosted run -- the closest hosted equivalent to "the whole package, run once" available, since CI never runs
 it as a single `go test ./internal/providersync` invocation.
 

@@ -1,6 +1,7 @@
 package providersync
 
 import (
+	"path/filepath"
 	"reflect"
 	"testing"
 	"time"
@@ -320,5 +321,25 @@ func TestJiraOwnershipSnapshotKeepsFirstSeenAndClosesWhatTheSnapshotLost(t *test
 	kept, retracted, _ = jiraOwnershipSnapshot(fresh, []jiraTeamCatalogOwnershipRow{row("10001", "jira_legacy", first)}, now.Add(time.Hour), proven(true))
 	if len(kept) != 1 || !kept[0].ValidFrom.Equal(first) || len(retracted) != 0 {
 		t.Fatalf("second run: kept=%+v retracted=%+v", kept, retracted)
+	}
+}
+
+// CHAOS-9144: only a real Jira accountId is a provider user id. The email and the
+// display name the member id falls back to are not stable, so a lead that has
+// none stores no id.
+func TestNormalizeJiraMembershipRowStoresOnlyARealAccountIdAsTheProviderUserID(t *testing.T) {
+	at := time.Date(2026, 10, 10, 12, 0, 0, 0, time.UTC)
+	resolver := identityalias.Load(filepath.Join(t.TempDir(), "none.yaml"))
+	withAccount, ok := normalizeJiraMembershipRow("org", "PLAT", jiraTeamCatalogUserPayload{AccountID: " 5b10ac8d82e05b22cc7d4ef5 ", EmailAddress: "a@example.com"}, resolver, at)
+	if !ok || withAccount.ProviderUserID == nil || *withAccount.ProviderUserID != "5b10ac8d82e05b22cc7d4ef5" {
+		t.Errorf("a lead with an accountId: provider user id = %v (ok %t), want 5b10ac8d82e05b22cc7d4ef5", withAccount.ProviderUserID, ok)
+	}
+	withEmailOnly, ok := normalizeJiraMembershipRow("org", "PLAT", jiraTeamCatalogUserPayload{EmailAddress: "a@example.com"}, resolver, at)
+	if !ok || withEmailOnly.ProviderUserID != nil {
+		t.Errorf("a lead with an email only: provider user id = %v (ok %t), want none", withEmailOnly.ProviderUserID, ok)
+	}
+	withNameOnly, ok := normalizeJiraMembershipRow("org", "PLAT", jiraTeamCatalogUserPayload{DisplayName: "Ann Lead"}, resolver, at)
+	if !ok || withNameOnly.ProviderUserID != nil {
+		t.Errorf("a lead with a display name only: provider user id = %v (ok %t), want none", withNameOnly.ProviderUserID, ok)
 	}
 }

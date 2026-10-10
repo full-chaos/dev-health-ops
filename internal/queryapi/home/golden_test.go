@@ -153,10 +153,12 @@ func orgGoldenHandler(t *testing.T) func(t *testing.T, query string, bindings []
 				{"ci", time.Date(2024, 1, 7, 9, 0, 0, 0, time.UTC)},
 			}}, nil
 
-		case strings.Contains(q, "FROM investment_metrics_daily"):
+		case strings.Contains(q, "splitByChar('.', subcategory_kv.1)[1] AS theme"):
+			// The Home tile "Investment by theme" (CHAOS-9195): theme, effort, churn_loc, prs
+			// of the canonical categorization (allocation 100/50, prs 20/10, churn 500/300).
 			return &fixtureRowScanner{rows: [][]any{
-				{"feature_delivery", 100.0, int64(20), int64(500)},
-				{"maintenance", 50.0, int64(10), int64(300)},
+				{"feature_delivery", 100.0, 500.0, 20.0},
+				{"maintenance", 50.0, 300.0, 10.0},
 			}}, nil
 
 		case strings.Contains(q, prrework.WindowRateSQL) || strings.Contains(q, prrework.ViewSumsSQL):

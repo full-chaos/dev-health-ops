@@ -346,6 +346,7 @@ func (collector GitHubTeamCatalogRouteHandler) collectTeamMemberships(
 		if err != nil {
 			return nil, false, false, err
 		}
+		membership.ProviderUserID = providerUserIDText(memberPayload.ID)
 		memberships = append(memberships, membership)
 	}
 	provesEnd := ownershipListingProvesEnd(pages)

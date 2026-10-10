@@ -30,6 +30,12 @@ func TestHomeWithATeamAndARepositoryTheTeamHoldsRunsOnTheRealSchema(t *testing.T
 	exec(`INSERT INTO repos (id, repo, provider, org_id, created_at, last_synced) VALUES (?, 'acme/a', 'github', ?, ?, ?)`, repoA, org, synced, synced)
 	exec(`INSERT INTO team_repo_ownership (org_id, provider, team_id, repo_id, repo_full_name, match_type, source, is_primary, specificity, priority, valid_from, valid_to, updated_at) VALUES (?, 'github', 'team-alpha', ?, 'acme/a', 'exact', 'inferred', 0, 0, 0, ?, NULL, ?)`,
 		org, repoA, time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), synced)
+	// The shape prod holds (pin 32): ownership rows with a NULL repo_id, matched BY NAME through
+	// repos (the failing statement's LEFT JOIN + coalesce(toString(o.repo_id), toString(r.id))).
+	const repoB = "22222222-2222-4222-8222-22222222bbbb"
+	exec(`INSERT INTO repos (id, repo, provider, org_id, created_at, last_synced) VALUES (?, 'acme/b', 'github', ?, ?, ?)`, repoB, org, synced, synced)
+	exec(`INSERT INTO team_repo_ownership (org_id, provider, team_id, repo_id, repo_full_name, match_type, source, is_primary, specificity, priority, valid_from, valid_to, updated_at) VALUES (?, 'github', 'team-alpha', NULL, 'acme/b', 'exact', 'inferred', 0, 0, 0, ?, NULL, ?)`,
+		org, time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), synced)
 	exec(`INSERT INTO repo_metrics_daily (repo_id, day, total_loc_touched, prs_merged, computed_at, org_id) VALUES (?, ?, 100, 5, ?, ?)`, repoA, day, synced, org)
 	// A statement only fails on the UUID/String comparison when its table holds data (the key
 	// condition is analysed over the parts): one row in every repository-keyed metric table.
@@ -39,7 +45,7 @@ func TestHomeWithATeamAndARepositoryTheTeamHoldsRunsOnTheRealSchema(t *testing.T
 	f := Filters{
 		Time:  TimeFilter{RangeDays: 7, CompareDays: 7, EndDate: ptrTime(day.AddDate(0, 0, 3))},
 		Scope: ScopeFilter{Level: "team", IDs: []string{"team-alpha"}},
-		What:  WhatFilter{Repos: []string{repoA}},
+		What:  WhatFilter{Repos: []string{repoB}},
 	}
 	if _, err := BuildResponse(ctx, client, nil, org, f, day.AddDate(0, 0, 3).Add(12*time.Hour)); err != nil {
 		t.Fatalf("BuildResponse with a team and a repository the team holds: %v", err)

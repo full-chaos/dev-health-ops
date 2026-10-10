@@ -5,6 +5,7 @@ import (
 	"errors"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"io"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -413,5 +414,70 @@ identities:
 	if len(membership.IdentityFacets) != 2 ||
 		membership.IdentityFacets[0] != "lead@example.com" || membership.IdentityFacets[1] != "github:octocat" {
 		t.Fatalf("membership.IdentityFacets=%v, want [lead@example.com github:octocat]", membership.IdentityFacets)
+	}
+}
+
+// TestGitHubTeamCatalogFailedMemberReadWritesOneWarnNamingNoMember is the
+// observability half of SkippedTeamMemberships (CHAOS-9149): a failed
+// non-strict member read of one team writes one Warn with the provider and the
+// team token, and no member value (the login of the other team's roster is on
+// the wire and must not reach the line).
+func TestGitHubTeamCatalogFailedMemberReadWritesOneWarnNamingNoMember(t *testing.T) {
+	records := captureMembershipLogs(t)
+	doer := jiraWorkItemsDoerFunc(func(request *http.Request) (*http.Response, error) {
+		ok := func(body string) (*http.Response, error) {
+			return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(body)), Request: request}, nil
+		}
+		switch request.URL.Path {
+		case "/orgs/acme/teams":
+			return ok(`[{"slug":"platform","name":"Platform"},{"slug":"ops","name":"Ops"}]`)
+		case "/orgs/acme/teams/ops/members":
+			return ok(`[{"login":"hubot-secret-login"}]`)
+		case "/orgs/acme/teams/platform/members":
+			return nil, errors.New("simulated failure for mona-secret-login")
+		default:
+			t.Fatalf("unexpected request path %q", request.URL.Path)
+			return nil, nil
+		}
+	})
+	client, err := providerfoundation.NewHTTPClient(
+		"github", "https://api.github.com", fakehttp.Client(doer),
+		func(*http.Request) error { return nil },
+		providerfoundation.RetryPolicy{MaxAttempts: 1, InitialWait: time.Nanosecond, MaxWait: time.Nanosecond},
+		providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	collector := GitHubTeamCatalogRouteHandler{
+		Client: client, OrgName: "acme",
+		Now: func() time.Time { return time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC) },
+	}
+	_, evidence, err := collector.Collect(context.Background(), "org-1", false, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if evidence.SkippedTeamMemberships != 1 {
+		t.Fatalf("evidence=%+v want SkippedTeamMemberships=1", evidence)
+	}
+	var warns []map[string]any
+	for _, record := range *records {
+		for _, value := range membershipLogAttrs(record) {
+			if text, isText := value.(string); isText && (strings.Contains(text, "secret-login")) {
+				t.Errorf("a log record carries a member value: %q", text)
+			}
+		}
+		if record.Message == "github_team_catalog_member_read_failed" {
+			if record.Level != slog.LevelWarn {
+				t.Errorf("level = %v, want Warn", record.Level)
+			}
+			warns = append(warns, membershipLogAttrs(record))
+		}
+	}
+	if len(warns) != 1 {
+		t.Fatalf("%d member-read warnings, want exactly 1 (one failed team of two): %v", len(warns), warns)
+	}
+	if warns[0]["provider"] != "github" || warns[0]["team"] != membershipTeamLogToken(githubTeamID("platform")) || warns[0]["cause"] != "read_failed" {
+		t.Errorf("warning attributes = %v, want provider github, the platform team token, cause read_failed", warns[0])
 	}
 }

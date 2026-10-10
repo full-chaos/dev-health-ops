@@ -369,6 +369,18 @@ func TestGitHubTeamThatIsNoLongerListedKeepsItsRowsUntilTheRunProvesItGone(t *te
 		}
 	})
 
+	t.Run("a listed node the collector cannot name makes the listing not whole: nothing closes", func(t *testing.T) {
+		org := newDroppedGitHubOrg()
+		orgID := seed(t, "unnamed-node", org)
+		org.edit(func(o *droppedGitHubOrg) { o.listed = []string{"platform", ""} })
+		result := githubDroppedRun(ctx, t, conn, orgID, org, both, droppedAt[1], staticScopeCensus{})
+		requireRepoFacts(t, "unnamed node", openRepoOwnership(ctx, t, conn, orgID, "github"), append(platformRows, opsStays...)...)
+		requireOpenFacts(t, "unnamed node", openMembershipFacts(ctx, t, conn, orgID, "github"), mona, hubot)
+		if got := legReasons(result); !strings.Contains(got, "team_listing_incomplete") {
+			t.Errorf("legs = %q, want the team-listing-incomplete reason", got)
+		}
+	})
+
 	t.Run("a run that selects one dataset closes that dataset only", func(t *testing.T) {
 		org := newDroppedGitHubOrg()
 		orgID := seed(t, "one-dataset", org)

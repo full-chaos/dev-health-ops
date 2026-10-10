@@ -274,6 +274,7 @@ func (handler GitLabTeamCatalogRouteHandler) CollectTeamCatalog(
 	rows := GitLabTeamCatalogRows{}
 	seenOwnership := map[string]bool{}
 	seenMembership := map[string]bool{}
+	groupByTeam := map[string]string{}
 
 	for _, group := range groups {
 		groupPathValue := providerRelativePath(client, "api", "v4", "groups", strings.TrimSpace(group.FullPath))
@@ -340,6 +341,7 @@ func (handler GitLabTeamCatalogRouteHandler) CollectTeamCatalog(
 
 		if selections.Members {
 			teamID := gitlabTeamID(group.FullPath)
+			groupByTeam[teamID] = groupPathValue
 			memberPages, memberErr := providerfoundation.CollectGitLabPageParamPages(ctx, client, providerfoundation.GitLabPageOptions{
 				Path: groupPathValue + "/members", PerPage: gitlabTeamCatalogListPerPage, MaxPages: gitlabTeamCatalogMembersMaxPages,
 			})
@@ -401,7 +403,7 @@ func (handler GitLabTeamCatalogRouteHandler) CollectTeamCatalog(
 						rows.UnprovenMembershipTeamIDs = append(rows.UnprovenMembershipTeamIDs, teamID)
 					}
 					slog.Default().WarnContext(ctx, "gitlab_team_catalog_member_unusable",
-						"org_id", ref.OrgID, logging.ProviderIDAttr("team_id", teamID), "unusable_members", unusable)
+						"org_id", ref.OrgID, "provider", gitlabTeamCatalogProvider, membershipTeamLogAttr(teamID), "unusable_members", unusable)
 				}
 			}
 		}
@@ -540,6 +542,11 @@ func (handler GitLabTeamCatalogRouteHandler) CollectTeamCatalog(
 		ProjectsImported: len(distinctGitLabOwnershipProjects(rows.Ownership)),
 		MembersImported:  len(distinctGitLabMembershipMembers(rows.Memberships)),
 		Complete:         !evidence.Truncated && len(evidence.MissingSelectedSources) == 0,
+	}
+	if selections.Members {
+		rows.MembershipAbsence = &MembershipLookupBudget{
+			Inner: gitlabMembershipAbsence{client: client, groupByTeam: groupByTeam}, Left: membershipLookupBudget,
+		}
 	}
 	evidence.Requests = requests
 	return GitLabTeamCatalogBatch{Rows: rows, Effects: effects, Result: result, Evidence: evidence}, nil
@@ -758,15 +765,15 @@ func (collector GitLabTeamCatalogCollector) CollectTeamCatalog(
 			ref: ref, provider: gitlabTeamCatalogProvider, listed: batch.Rows.ObservedMembershipTeamIDs,
 			unproven: batch.Rows.UnprovenMembershipTeamIDs, dataset: "team_memberships", leg: membershipCloseLeg,
 		})
-		membershipRows, membershipPlan, reuseErr := gitlabMembershipWriter.Snapshot(
+		membershipRows, membershipOutcome, reuseErr := gitlabMembershipWriter.Snapshot(
 			ctx, collector.Sink.Conn, ref.OrgID, batch.Rows.Memberships, keptMemberships, normalizedAt.UTC().Truncate(time.Millisecond),
-			decision.membershipSnapshot(GitLabTeamMembershipKind))
+			batch.Rows.MembershipAbsence, decision.membershipSnapshot(GitLabTeamMembershipKind))
 		if reuseErr != nil {
 			return result, reuseErr
 		}
-		ReportSnapshotPlan(ctx, gitlabTeamCatalogProvider, ref.OrgID, membershipPlan)
+		ReportSnapshotPlan(ctx, gitlabTeamCatalogProvider, ref.OrgID, membershipOutcome.Plan)
 		result.DegradedLegs = append(result.DegradedLegs, decision.legs...)
-		result.MembershipsClosed = len(membershipPlan.Retract)
+		result.MembershipsClosed = membershipOutcome.Closed
 		membershipsEffect, effectErr := effectBatchFromValues(gitlabTeamCatalogMembershipsDestination, EffectReadbackRequired, membershipRows)
 		if effectErr != nil {
 			return result, effectErr

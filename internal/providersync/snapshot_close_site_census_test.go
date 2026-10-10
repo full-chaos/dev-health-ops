@@ -54,14 +54,14 @@ var snapshotKindCensus = map[string]struct {
 // of a snapshot plan into rows to write: the only places a provider snapshot
 // closes a row. Each one names the rule it calls and the proof it takes.
 var snapshotCloseSites = map[string]string{
-	"internal/providersync.linearOwnershipSnapshot":           "KindSnapshot arguments from linearOwnershipKindSnapshots (two kinds, each with the terms of its own walk)",
-	"internal/providersync.jiraOwnershipSnapshot":             "KindSnapshot argument: JiraLegacyOwnershipKind with the project search and legacy links terms",
-	"internal/providersync.gitlabOwnershipSnapshot":           "KindSnapshot argument from ownershipCloseDecision.snapshot (closable teams only, the gate's terms)",
-	"internal/providersync.githubRepoOwnershipSnapshot":       "KindSnapshot argument from ownershipCloseDecision.snapshot (closable teams only, the gate's terms)",
-	"internal/providersync.MembershipSnapshotWriter.Snapshot": "KindSnapshot arguments from ownershipCloseDecision.membershipSnapshot (closable teams only, the gate's terms), through planMembershipSnapshot",
-	"internal/atlassianteams.planOwnership":                   "KindSnapshot argument: AtlassianTeamLinkKind with the Rows.ProjectLinksComplete term",
-	"internal/atlassianteams.planMemberships":                 "KindSnapshot argument: AtlassianTeamMembershipKind with the Rows.MembershipsComplete term",
-	"internal/atlassianteams.teamsInScope":                    "makes its proof in place: AtlassianTeamCatalogKind with the Rows.TeamSearchComplete term",
+	"internal/providersync.linearOwnershipSnapshot":     "KindSnapshot arguments from linearOwnershipKindSnapshots (two kinds, each with the terms of its own walk)",
+	"internal/providersync.jiraOwnershipSnapshot":       "KindSnapshot argument: JiraLegacyOwnershipKind with the project search and legacy links terms",
+	"internal/providersync.gitlabOwnershipSnapshot":     "KindSnapshot argument from ownershipCloseDecision.snapshot (closable teams only, the gate's terms)",
+	"internal/providersync.githubRepoOwnershipSnapshot": "KindSnapshot argument from ownershipCloseDecision.snapshot (closable teams only, the gate's terms)",
+	"internal/providersync.planMembershipSnapshot":      "KindSnapshot arguments passed through from MembershipSnapshotWriter.Snapshot, made in the collectors from ownershipCloseDecision.membershipSnapshot (closable teams only, the gate's terms)",
+	"internal/atlassianteams.planOwnership":             "KindSnapshot argument: AtlassianTeamLinkKind with the Rows.ProjectLinksComplete term",
+	"internal/atlassianteams.planMemberships":           "KindSnapshot argument: AtlassianTeamMembershipKind with the Rows.MembershipsComplete term",
+	"internal/atlassianteams.teamsInScope":              "makes its proof in place: AtlassianTeamCatalogKind with the Rows.TeamSearchComplete term",
 }
 
 // validToOutsideTheSnapshotRule is every production function that sets a
@@ -177,6 +177,13 @@ func TestEveryCloseSiteTakesTheTypedSnapshot(t *testing.T) {
 		}
 		if !known {
 			t.Errorf("stampOnlySnapshotPlanners names %s, which does not call the snapshot rule", planner)
+		}
+	}
+	// planMembershipSnapshot is a close site by itself: the one function allowed
+	// to call it is the writer that writes what it plans.
+	for function, calls := range census.calls {
+		if calls["planMembershipSnapshot"] && function != "internal/providersync.MembershipSnapshotWriter.Snapshot" {
+			t.Errorf("%s calls planMembershipSnapshot: only MembershipSnapshotWriter.Snapshot may, it writes what the plan closes", function)
 		}
 	}
 	// A row's valid_to is set from a plan's retraction, in a close site.

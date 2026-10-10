@@ -2,6 +2,7 @@ package providersync
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
@@ -27,6 +28,13 @@ func reuseJiraMembershipFirstSeen(ctx context.Context, conn driver.Conn, orgID s
 
 var linearMembershipWriter = MembershipSnapshotWriter[linearReferenceMembershipRow]{
 	Provider: "linear", Source: "native",
+	// Linear keys a member by its email when it has one (linearMemberID), and
+	// raw_provider_user_id holds the first identity facet, not Linear's user id:
+	// no stable user id is stored. A member whose id comes from an email is
+	// never closed, because a changed or hidden email would read as a departure.
+	KeyedByEmail: func(open openMembership) bool {
+		return open.RawEmail != nil && strings.TrimSpace(*open.RawEmail) != ""
+	},
 	TeamID:    func(r linearReferenceMembershipRow) string { return r.TeamID },
 	MemberID:  func(r linearReferenceMembershipRow) string { return r.MemberID },
 	ValidFrom: func(r linearReferenceMembershipRow) time.Time { return r.ValidFrom },

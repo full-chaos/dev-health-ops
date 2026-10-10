@@ -40,6 +40,10 @@ import "time"
 type MembershipSnapshotRow struct {
 	TeamID, MemberID string
 	ValidFrom        time.Time
+	// UserID is the provider's stable user id of a fresh row, where its writer
+	// stores one (MembershipSnapshotWriter.StoresStableUserID); it is empty for
+	// every other row.
+	UserID string
 }
 
 // MembershipSnapshotKey names a membership fact.

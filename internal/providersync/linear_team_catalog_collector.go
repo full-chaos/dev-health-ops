@@ -180,15 +180,15 @@ func (collector LinearTeamCatalogCollector) CollectTeamCatalog(
 			ref: ref, provider: "linear", listed: teamIDs, unproven: unprovenTeamIDs,
 			dataset: "team_memberships", leg: membershipCloseLeg,
 		})
-		membershipRows, membershipPlan, err := linearMembershipWriter.Snapshot(
+		membershipRows, membershipOutcome, err := linearMembershipWriter.Snapshot(
 			ctx, collector.Sink.Conn, ref.OrgID, batch.Rows.Memberships, keptMemberships, normalizedAt.UTC().Truncate(time.Millisecond),
-			decision.membershipSnapshot(LinearTeamMembershipKind))
+			linearInactiveAbsence{inactive: batch.Rows.InactiveMemberKeys}, decision.membershipSnapshot(LinearTeamMembershipKind))
 		if err != nil {
 			return result, err
 		}
-		ReportSnapshotPlan(ctx, "linear", ref.OrgID, membershipPlan)
+		ReportSnapshotPlan(ctx, "linear", ref.OrgID, membershipOutcome.Plan)
 		result.DegradedLegs = append(result.DegradedLegs, decision.legs...)
-		result.MembershipsClosed = len(membershipPlan.Retract)
+		result.MembershipsClosed = membershipOutcome.Closed
 		membershipsEffect, err := effectBatchFromValues(linearReferenceCatalogMembershipsDestination, EffectReadbackRequired, membershipRows)
 		if err != nil {
 			return result, err

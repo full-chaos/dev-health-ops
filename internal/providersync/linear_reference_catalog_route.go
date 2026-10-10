@@ -299,8 +299,23 @@ func (handler LinearReferenceCatalogRouteHandler) CollectReferenceCatalog(
 			// members` silently truncated to its first page forever.
 			team.Members = linearReferenceTeamRosterFacets(resolver, memberNodes)
 			unusableMembers := 0
+			if payload.Members.Nodes == nil {
+				// "nodes": null is no answer to "who are the members": Linear's
+				// schema has a list here, so the team's list is not known complete.
+				unusableMembers++
+			}
 			for _, memberPayload := range memberNodes {
 				if memberPayload.Active != nil && !*memberPayload.Active {
+					if rows.InactiveMemberKeys == nil {
+						rows.InactiveMemberKeys = map[string]bool{}
+					}
+					// The member id the row would have had (an email, else the Linear id)
+					// and the id form: either may be the stored one.
+					for _, identity := range []string{linearFirstNonEmpty(memberPayload.Email, memberPayload.ID), memberPayload.ID} {
+						if strings.TrimSpace(identity) != "" {
+							rows.InactiveMemberKeys[team.ID+"\x00"+linearMemberID(strings.TrimSpace(identity))] = true
+						}
+					}
 					continue
 				}
 				member, membership, _, memberErr := normalizeLinearReferenceMember(claim, team.ID, memberPayload, resolver, normalizedAt)
@@ -320,7 +335,7 @@ func (handler LinearReferenceCatalogRouteHandler) CollectReferenceCatalog(
 			if unusableMembers > 0 {
 				rows.UnusableMemberTeamIDs = append(rows.UnusableMemberTeamIDs, team.ID)
 				slog.Default().WarnContext(ctx, "linear_reference_catalog_member_unusable",
-					"org_id", claim.OrgID, logging.ProviderIDAttr("team_id", team.ID), "unusable_members", unusableMembers)
+					"org_id", claim.OrgID, "provider", "linear", membershipTeamLogAttr(team.ID), "unusable_members", unusableMembers)
 			}
 			evidence.MembersComplete = evidence.MembersComplete && membersComplete
 			if len(rows.Teams) == 0 {

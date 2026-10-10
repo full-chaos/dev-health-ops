@@ -168,6 +168,8 @@ type GitLabTeamCatalogRows struct {
 	// whose member read was cut by a bound or did not reach the provider's own
 	// end-of-list signal: a member absent from it is not known to have left.
 	UnprovenMembershipTeamIDs []string `json:"-"`
+	// MembershipAbsence (CHAOS-9079): see githubTeamCatalogRows.MembershipAbsence.
+	MembershipAbsence MembershipAbsenceProver `json:"-"`
 	// OwnershipListedTeamIDs (CHAOS-8952) lists every team (by "gl:" id)
 	// whose group /projects listing reached its end this call, set only when
 	// ownership is selected. It is the scope of the ownership snapshot close:

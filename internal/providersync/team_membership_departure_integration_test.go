@@ -85,7 +85,12 @@ func TestGitHubDepartedMemberIsClosedByTheCompleteReadAndReopenedAsANewFact(t *t
 			"/orgs/acme/teams":                  `[{"slug":"platform","name":"Platform","description":"Platform team"}]`,
 			"/orgs/acme/teams/platform/repos":   `[{"name":"api"}]`,
 			"/orgs/acme/teams/platform/members": members,
-		}, statuses: map[string]int{"/orgs/acme/teams/platform/members": membersStatus}}
+			// the provider's direct lookup: hubot is not a member of the team
+			"/orgs/acme/teams/platform/memberships/hubot": `{"message":"Not Found"}`,
+		}, statuses: map[string]int{
+			"/orgs/acme/teams/platform/members":           membersStatus,
+			"/orgs/acme/teams/platform/memberships/hubot": http.StatusNotFound,
+		}}
 		adapter := GitHubTeamCatalogCollector{Sink: GitHubTeamCatalogClickHouseEffects{Conn: conn}, ScopeCensus: staticScopeCensus{siblings: siblings}}
 		if _, err := adapter.CollectTeamCatalog(ctx, TeamCatalogReference{OrgID: orgID, SyncRunID: "run", IntegrationID: "integration-a"},
 			credential, githubTeamCatalogAdapterClient(t, fakehttp.Client(doer)),
@@ -249,7 +254,7 @@ func TestLinearDepartedMemberIsClosedByTheCompleteReadAndAPartialReadClosesNothi
 	requireOpen(t, "after the return", openMembershipFacts(f.ctx, t, f.conn, f.orgID, "linear"), bobFact, departureAt[4])
 }
 
-// The cases that must NOT close, and the empty list both ways (D5823): an
+// The cases that must NOT close, and the empty list both ways: an
 // unusable member node, a truncated read and a failed read leave a departed
 // member open; a list that is empty AND proved its end closes every member of
 // the team, a list that is empty without the provider's end signal closes none.
@@ -265,11 +270,17 @@ func TestGitHubUnusableNodeAndTruncatedReadCloseNothingAndAnEmptyCompleteListClo
 			"/orgs/acme/teams":                  `[{"slug":"platform","name":"Platform","description":"Platform team"}]`,
 			"/orgs/acme/teams/platform/repos":   `[{"name":"api"}]`,
 			"/orgs/acme/teams/platform/members": members,
+			// the provider's direct lookup: neither is a member of the team
+			"/orgs/acme/teams/platform/memberships/octocat": `{}`,
+			"/orgs/acme/teams/platform/memberships/hubot":   `{}`,
 		}
 		for key, body := range extra {
 			byPath[key] = body
 		}
-		doer := &githubTeamCatalogFixtureDoer{t: t, byPath: byPath, links: links}
+		doer := &githubTeamCatalogFixtureDoer{t: t, byPath: byPath, links: links, statuses: map[string]int{
+			"/orgs/acme/teams/platform/memberships/octocat": http.StatusNotFound,
+			"/orgs/acme/teams/platform/memberships/hubot":   http.StatusNotFound,
+		}}
 		adapter := GitHubTeamCatalogCollector{Client: GitHubTeamCatalogRouteHandler{MaxPages: maxPages},
 			Sink: GitHubTeamCatalogClickHouseEffects{Conn: conn}, ScopeCensus: staticScopeCensus{}}
 		if _, err := adapter.CollectTeamCatalog(ctx, TeamCatalogReference{OrgID: orgID, SyncRunID: "run", IntegrationID: "integration-a"},
@@ -327,19 +338,22 @@ func TestGitLabUnusableNodeAndAnEmptyListWithoutAnEndSignalCloseNothing(t *testi
 	facts := openMembershipFacts(ctx, t, conn, orgID, "gitlab")
 	requireOpen(t, "after an empty list without an end signal", facts, alice, departureAt[0])
 	requireOpen(t, "after an empty list without an end signal", facts, carol, departureAt[0])
-	// An empty list that proved its end closes every member of the group.
+	// An empty list that proved its end, and the provider's own lookup agrees
+	// nobody is a member: every member of the group closes.
 	fake.setRaw([]map[string]any{}, false)
+	fake.setLookup([]string{}, 0)
 	sync(departureAt[3])
 	if facts := openMembershipFacts(ctx, t, conn, orgID, "gitlab"); len(facts) != 0 {
 		t.Errorf("an empty complete member list left %v open, want none", facts)
 	}
 }
 
-func TestLinearUnusableNodeCloseNothingAndAnEmptyCompleteListClosesAll(t *testing.T) {
+func TestLinearUnusableNodeCloseNothingAndAnEmptyCompleteListClosesEveryMemberKeyedById(t *testing.T) {
 	ctx, conn := newWorkItemEffectsConn(t)
 	f := carryFixture{t: t, ctx: ctx, conn: conn, orgID: uuid.NewString()}
-	alice := `{"id":"user-1","name":"Alice","email":"alice@example.com","active":true}`
-	bob := `{"id":"user-2","name":"Bob","email":"bob@example.com","active":true}`
+	// Members with no email are keyed by their Linear user id, which is stable.
+	alice := `{"id":"user-1","name":"Alice","active":true}`
+	bob := `{"id":"user-2","name":"Bob","active":true}`
 	ghost := `{"name":"Ghost","active":true}`
 	run := func(at time.Time, members string) {
 		t.Helper()
@@ -366,7 +380,7 @@ func TestLinearUnusableNodeCloseNothingAndAnEmptyCompleteListClosesAll(t *testin
 			t.Fatalf("sync at %s: %v", at, err)
 		}
 	}
-	const aliceFact, bobFact = "linear:ENG|linear:alice@example.com", "linear:ENG|linear:bob@example.com"
+	const aliceFact, bobFact = "linear:ENG|linear:user-1", "linear:ENG|linear:user-2"
 	run(departureAt[0], alice+","+bob)
 	// A node with neither id nor email: bob is absent, the team's list is not known complete.
 	run(departureAt[1], alice+","+ghost)

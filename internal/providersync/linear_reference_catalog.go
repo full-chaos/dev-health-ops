@@ -197,6 +197,10 @@ type LinearReferenceCatalogRows struct {
 	// nor an email): its list is not known to be complete, so nothing of the team
 	// closes. Not part of any wire shape.
 	UnusableMemberTeamIDs []string `json:"-"`
+	// InactiveMemberKeys (CHAOS-9079) names, as team id + "\x00" + member id,
+	// every member a team's member list returned with active = false: a
+	// deactivated user is not a current member.
+	InactiveMemberKeys map[string]bool `json:"-"`
 }
 
 const (

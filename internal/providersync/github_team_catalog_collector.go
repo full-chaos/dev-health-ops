@@ -351,15 +351,15 @@ func (adapter GitHubTeamCatalogCollector) CollectTeamCatalog(
 			ref: ref, provider: githubTeamCatalogProvider, listed: rows.ObservedMembershipTeamIDs,
 			unproven: rows.UnprovenMembershipTeamIDs, dataset: "team_memberships", leg: membershipCloseLeg,
 		})
-		membershipRows, membershipPlan, snapshotErr := githubMembershipWriter.Snapshot(
+		membershipRows, membershipOutcome, snapshotErr := githubMembershipWriter.Snapshot(
 			ctx, adapter.Sink.Conn, ref.OrgID, rows.Memberships, keptMemberships, normalizedAt.UTC().Truncate(time.Millisecond),
-			decision.membershipSnapshot(GitHubTeamMembershipKind))
+			rows.MembershipAbsence, decision.membershipSnapshot(GitHubTeamMembershipKind))
 		if snapshotErr != nil {
 			return result, snapshotErr
 		}
-		ReportSnapshotPlan(ctx, githubTeamCatalogProvider, ref.OrgID, membershipPlan)
+		ReportSnapshotPlan(ctx, githubTeamCatalogProvider, ref.OrgID, membershipOutcome.Plan)
 		result.DegradedLegs = append(result.DegradedLegs, decision.legs...)
-		result.MembershipsClosed = len(membershipPlan.Retract)
+		result.MembershipsClosed = membershipOutcome.Closed
 		if len(membershipRows) > 0 {
 			if err := adapter.Sink.WriteMemberships(ctx, ref.OrgID, membershipRows); err != nil {
 				return result, err

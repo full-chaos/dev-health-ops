@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/identityalias"
-	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 )
 
@@ -275,6 +274,11 @@ func (collector GitHubTeamCatalogRouteHandler) Collect(
 			}
 		}
 	}
+	if wantMembers {
+		rows.MembershipAbsence = &MembershipLookupBudget{
+			Inner: githubMembershipAbsence{client: collector.Client, org: org}, Left: membershipLookupBudget,
+		}
+	}
 	evidence.Complete = true
 	return rows, evidence, nil
 }
@@ -333,7 +337,7 @@ func (collector GitHubTeamCatalogRouteHandler) collectTeamMemberships(
 	if unusable > 0 {
 		provesEnd = false
 		slog.Default().WarnContext(ctx, "github_team_catalog_member_unusable",
-			"org_id", orgID, logging.ProviderIDAttr("team_id", githubTeamID(slug)), "unusable_members", unusable)
+			"org_id", orgID, "provider", githubTeamCatalogProvider, membershipTeamLogAttr(githubTeamID(slug)), "unusable_members", unusable)
 	}
 	return memberships, true, provesEnd, nil
 }

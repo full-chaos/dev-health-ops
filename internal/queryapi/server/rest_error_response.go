@@ -173,11 +173,14 @@ func logRESTBoundHit(r *http.Request, component, orgID string, err error) (detai
 	return restBoundDetail(bound), true
 }
 
-// restBoundDetail is the named cause a bound hit answers with.
+// restBoundDetail is the named cause. The time text says only what is known: the
+// read did not finish inside its time limit, whether the statement was slow or the
+// store stopped answering (the client cannot tell them apart). The two causes
+// stay apart in the LOG (server code 159/160 against "deadline of the client"). a bound hit answers with.
 func restBoundDetail(bound chclient.Bound) string {
 	switch bound {
 	case chclient.BoundTime:
-		return "Query time limit exceeded"
+		return "Query did not finish within its time limit"
 	case chclient.BoundBytes:
 		return "Query read limit exceeded"
 	}

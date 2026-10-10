@@ -48,8 +48,8 @@ func TestRESTBoundHitCauses(t *testing.T) {
 		{"rows 158", exception(158), "Result too large", "limit=max_result_rows=500000"},
 		{"bytes 307", exception(307), "Query read limit exceeded", "limit=max_bytes_to_read"},
 		{"code 396 may be max_result_bytes", exception(396), "Result too large", "code 396 also covers max_result_bytes"},
-		{"time 159", exception(159), "Query time limit exceeded", "limit=max_execution_time"},
-		{"client deadline", fmt.Errorf("row iteration: %w", context.DeadlineExceeded), "Query time limit exceeded", "limit=max_execution_time"},
+		{"time 159", exception(159), "Query did not finish within its time limit", "limit=max_execution_time"},
+		{"client deadline", fmt.Errorf("row iteration: %w", context.DeadlineExceeded), "Query did not finish within its time limit", "limit=max_execution_time"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			logs, restore := capture()

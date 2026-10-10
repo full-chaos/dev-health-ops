@@ -30,7 +30,6 @@ query Home($orgId: String!, $filters: FilterInput, $window: HomeWindowInput) {
         __typename
       }
       rateState
-      rateCoverage
       __typename
     }
     reworkThemeAllocation {

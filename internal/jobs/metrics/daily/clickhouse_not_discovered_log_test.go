@@ -91,6 +91,8 @@ func TestClickHouseRepositoryDiscovererSaysTheRepositoriesItCannotDiscover(t *te
 	}{
 		{"no stored row is out of reach", &notDiscoveredRowsStub{}, nil, false, true, [3]float64{}},
 		{"pull requests only", &notDiscoveredRowsStub{sources: []string{"git_pull_requests"}, counts: []uint64{2}}, nil, true, true, [3]float64{2, 0, 0}},
+		{"commits only", &notDiscoveredRowsStub{sources: []string{"git_commits"}, counts: []uint64{3}}, nil, true, true, [3]float64{0, 3, 0}},
+		{"work items only", &notDiscoveredRowsStub{sources: []string{"work_items"}, counts: []uint64{4}}, nil, true, true, [3]float64{0, 0, 4}},
 		{"every source", &notDiscoveredRowsStub{sources: []string{"work_items", "git_commits", "git_pull_requests"}, counts: []uint64{5, 11, 19}}, nil, true, true, [3]float64{19, 11, 5}},
 		{"a source with a count of 0 only", &notDiscoveredRowsStub{sources: []string{"git_commits"}, counts: []uint64{0}}, nil, false, true, [3]float64{}},
 		{"the query fails", nil, errors.New("clickhouse down"), true, false, [3]float64{}},

@@ -159,14 +159,15 @@ A GitHub PR closing Linear `CHAOS-2400` borrows that issue's `CHAOS` team.
 >    provider's work item sharing the same identity string. `manual_members`
 >    is the admin-EXCLUSIVE subset (confirmed by tracing every write site);
 >    provider auto-import carries it forward unchanged on every sync write
->    and never sets or clears it. Pre-existing `teams.members` entries have
->    no way to prove their provenance and fall into the provider layer below
->    until re-saved from the admin panel.
+>    and never sets or clears it. **CHAOS-9087:** the roster column
+>    `teams.members` is gone (no reader, no writer; dropped from the table one
+>    pin after the code that no longer touches it): the provider layer below
+>    is `team_memberships` alone.
 > 2. **Provider layer (the fallback).** `team_memberships`, populated
->    exclusively by the four auto-import workers
->    (`workers/team_autoimport_{github,gitlab,jira,linear}.py`) ∪
->    `teams.members` (the mixed-provenance roster the fix above demoted out
->    of the admin layer). Consulted ONLY when layer 1 has zero candidates for
+>    by the four provider team-catalog syncs. (Before CHAOS-9087 the
+>    mixed-provenance roster column `teams.members` was a second member of
+>    this layer; it is removed, a declared difference from the Python
+>    loader `metrics/loaders/clickhouse.py`.) Consulted ONLY when layer 1 has zero candidates for
 >    that identity (chris, 08:30 PT: *"manual is override — if the override
 >    exists, use it, else use attribution from providers"*; refined
 >    2026-08-26 10:39 PT: *"admin is an override, not a default — it's the
@@ -249,7 +250,7 @@ A GitHub PR closing Linear `CHAOS-2400` borrows that issue's `CHAOS` team.
 > team/identity CRUD goes through `ClickHouseTeamAdminService` + `ClickHouseIdentityStore`, writing the
 > ClickHouse `teams` and `identities` tables directly. Identity membership uses **surgical replacement**
 > semantics: updating an identity removes its facets from teams it left and replaces changed facets in
-> teams it stayed in, editing `teams.members` **and** `teams.manual_members` (CHAOS-4321) add/remove-by-facet
+> teams it stayed in, editing `teams.manual_members` (CHAOS-4321) add/remove-by-facet
 > (never a full recompute) so Auto Import / catalog members are preserved. See *CS6 status (CHAOS-2607)*
 > at the end of §4.
 
@@ -1825,6 +1826,38 @@ Limits:
 - **Not changed here.** What a reader makes of a team id with no team row (section 0.4c: the cascade keeps it
   as an unknown team).
 
+#### 0.4j The day whose facts give an item its team (CHAOS-9178)
+
+Ownership and membership rows are bitemporal (`valid_from`, `valid_to`). An item takes its team from the rows
+valid on **the item's day**, never from the rows valid when a job runs. Ownership starts when it was first
+known: an item of a day before the first known ownership of its repository or project stays unassigned, and a
+later change of owner does not rewrite the items of earlier days.
+
+- **The item's day** is the start (UTC) of the day the item was completed (`status = 'done'` with a
+  `completed_at`), and the start of the current day for an item that is not completed. A done item with no
+  `completed_at`, or with a `completed_at` after the current day, takes the current day.
+- **The daily family** (`work_item_attribution`, `internal/jobs/metrics/daily`) reads the facts at the start of
+  the partition's day. A day's partition holds every item created before the day's end that is not done or was
+  completed on or after the day's start; the newest row of an item is read. So the last partition that holds a
+  completed item is its completion day, and an item that is not completed is in the partition of each new day.
+  The rule above is this day.
+- **The backstop** (`internal/jobs/metrics/remaining`, `ComputeOrg`) runs when an ownership or membership row
+  changes and rederives every item of the changed scope, of any age. It groups the items by their day and reads
+  the facts once per day (`WorkItemAttributionItemDay`). It gives an item the same row as the daily family
+  (held by `TestTheBackstopAndTheDailyFamilyGiveAnItemTheOwnerOfItsOwnDay` and, per provider and kind of fact,
+  `TestTheOwnerOfAnItemsDayHoldsForEachProviderAndKindOfFact`).
+- **Consequence for an item that is not completed:** a change made within the current day (a `valid_from`
+  after the start of today) reaches it with the next day's partition, not with the backstop run of today. The
+  two writers agree on the current day too; before this rule the backstop wrote the new owner at once and a
+  later daily run of the same day wrote the old one again.
+- **What a back-dated row does:** an ownership row written now with a `valid_from` in the past changes the
+  items whose day is on or after that `valid_from`. This is the case the backstop exists for; the daily family
+  does not compute old days again.
+- **Not under this rule yet:** the provider sync derivation resolves the items of a sync with the facts at the
+  sync's time (it mirrors the reference job, which loads its context once per run), and the investment
+  materialize job reads the repositories of a donor team at its run time. Both write a newer row that a later
+  daily partition of the item's day, or a backstop run, replaces.
+
 #### 0.4a Provider × entity **consumption** (functional — what `run_team_autoimport` actually pulls)
 
 | provider | teams | projects | members | repo ownership | member store written |
@@ -1849,6 +1882,8 @@ rule, `PlanOwnershipSnapshot` (a repo full name stands in for the project id). S
   listing failed fails the whole run (nothing is written, nothing is closed). A run that listed no team, and a run that
   did not select teams (members-only), closes nothing: "the measurement did not happen" is never read as "GitHub returned
   nothing". A team that is listed with an empty repo list is a real, complete answer, and its rows close.
+- a team that GitHub no longer lists (deleted, or hidden from the credential) is a DROPPED team: its open rows close
+  under the rule "A team that is no longer listed" below (CHAOS-9102).
 - a failed read of the open rows fails the run before the ownership write. It does not fail the run before every write: the
   catalog collector writes the team rows (and the other rows it selected) earlier in the same run, and only the
   `team_repo_ownership` write waits for the read.
@@ -1868,8 +1903,8 @@ is the project id); only the open-row read and the listed-team set are GitLab's.
   project id.
 - only the teams whose group `/projects` listing was read to a confirmed end in this run
   (`GitLabTeamCatalogRows.OwnershipListedTeamIDs`: the root group and every subgroup of the walk, less the close gate's
-  exclusions below). A group that GitLab no longer lists (a deleted subgroup) is not listed,
-  so its rows stay open: closing a deleted group is out of scope, as for GitHub. A group listed with no project is a
+  exclusions below). A group that GitLab no longer lists (a deleted subgroup) is a DROPPED team: its open rows close
+  under the rule "A team that is no longer listed" below (CHAOS-9102). A group listed with no project is a
   real, complete answer, and its rows close. A project held by a group and by its subgroup is closed only where the
   listing dropped it.
 - a failed listing closes nothing: under non-strict the whole walk is skipped (no write at all), under strict the run
@@ -1914,7 +1949,38 @@ when both of these hold; otherwise that scope closes nothing (its grants are sti
   census read (`scope_census_failed`), no census, or a run with no integration id (`scope_census_unavailable`: the
   `dho sync teams` CLI verb, whose collectors carry no census) closes nothing; the CLI shows only the WARN line.
 
+**A team that is no longer listed (CHAOS-9102).** The GitHub, GitLab and Linear catalog writers do not deactivate a team
+the provider stops listing (only Atlassian Teams does, and its close of a deleted team's memberships and links is its own
+kind; the Jira catalog has no team of its own), so the team's `teams` row stays active and no reader's inactive-team rule
+hides it. Before CHAOS-9102 the gate read the open rows of the LISTED teams only, so the open ownership and membership
+rows of such a team kept owning repositories, projects and members for ever. The gate now also takes the DROPPED teams of
+the close: the teams that hold an open row of the close's table, `provider` and `source` (GitHub ownership: under the run's
+`<github org>/` repository prefix; GitLab: under the run's root group, team ids starting `gl:<root>/`; memberships: the
+provider's team ids) and that the run's TEAM LISTING does not return (`TeamListingEvidence`: GitHub `GET /orgs/{org}/teams`,
+GitLab the root group's subgroups, Linear the workspace's teams). A dropped team's open rows close only when ALL of these hold:
+1. the same scope proof as every close: no other active integration of the provider in the organization;
+2. the team listing came in whole: its end proven (`ownershipListingProvesEnd`), and at least one team in it (a listing
+   with no team is more often an access change than an empty organization: reasons `team_listing_incomplete` and
+   `no_team_listed`);
+3. the team is proven GONE: the team listing was ONE response (nothing can move inside one response), or the provider's
+   own answer for that one team says so: GitHub `GET /orgs/{org}/teams/{slug}` answers its own 404 (`Not Found`, the
+   body GitHub documents), GitLab `GET /groups/:id` (the full path) answers its own 404 (`404 Group Not Found`). A
+   listing read by page number or offset loses a team that still exists when another team is removed between two
+   requests, so for a listing of more than one response the absence is a CANDIDATE until the provider answers. For a
+   cursor walk (Linear) the end of the walk is the kind's written statement (`AbsenceWalkByCursor`), as for the team-key
+   ownership kind, until its own prover (CHAOS-9124).
+A 200 (the listing lost the team: reason `team_absent_from_listing_still_there`), an answer for another slug or path (a
+renamed team), a 404 with another body (a gateway), a 401/403/429/5xx, a failed read and a candidate past the run's
+budget (`TeamAbsenceLookupBudget` = 100 per run, one answer per team for ALL closes of the run) close nothing and are
+counted in a degraded leg (`leg = team_absence`) and one log line `team_catalog_dropped_teams` (counts only: no team id).
+A member of a team proven gone is proven gone with it, without a lookup of its own (`teamGoneAbsence`); the writer's own
+rules (a row newer than the run's read stays open) still apply. A team that comes back is a new fact on a new
+`valid_from`. Not done here: the dropped team's `teams` row is NOT deactivated (its `members` and `repo_patterns` columns
+keep the last roster and repositories the provider gave).
+
 Tests: `TestDecideOwnershipCloseClosesOnlyProvenListingsOfAnUnsharedScope` (the gate),
+`TestDroppedTeamsAreDecidedByTheListingTheScopeAndTheProviderAnswer` and the `...ThatIsNoLongerListed...` tests of
+`dropped_team_close_integration_test.go` (the providers),
 `TestGitLabPaginationEndProvenOnlyWhenXNextPageIsSentEmpty`,
 `TestGitHubLinkPaginationEndProvenOnlyWhenTheWalkersLinkReadingFindsNoNext` and
 `TestGitHubLinkPaginationEndNotProvenWhenACallerBoundStopsTheWalk` (the end signal and the page decode), the provider
@@ -2007,7 +2073,7 @@ One path: `run_team_autoimport` → `team_autoimport_<provider>.populate()` → 
 > slog too) -- but the deploy-ordering requirement itself does not go away: land the migration
 > first or with the image, every time.
 
-**Three member representations — do not conflate:** `team_memberships` (edges) — auto-import's own record of provider-observed membership, all 4 providers — feeds drift/conflict review (§0.5) **and** is (with `teams.members`, next) the CHAOS-4321 PROVIDER (fallback) attribution layer: consulted only when an identity has no admin mapping at all (see the CHAOS-4321 callout under "Why this exists"). `teams.members` (roster) = a MIXED-provenance facet roster — this CS populates it for github/gitlab too via `AUTO_APPLY_POLICY`, UNREVIEWED, and drift-approval (§0.5) also writes it directly — which is exactly why a codex adversarial review (2026-08-26) found it unsafe as the override source and CHAOS-4321 demoted it to the provider (fallback) layer. `teams.manual_members` (roster, CHAOS-4321-only) = the genuinely admin-EXCLUSIVE facet roster, written only by `ClickHouseTeamAdminService.add_members`/`remove_members`/`set_members` (the admin Identities screen and drift-approval); together with `identities.team_ids` it forms the CHAOS-4321 ADMIN (override) layer the ladder tries FIRST. **Chain:** members → assignee identity → issues → PRs/MRs → (maybe) commits; commit authors are a separate git-side source, member↔author reconciliation deferred (not CHAOS-2600).
+**Two member representations — do not conflate:** `team_memberships` (edges) — auto-import's own record of provider-observed membership, all 4 providers — feeds drift/conflict review (§0.5) **and** is the CHAOS-4321 PROVIDER (fallback) attribution layer: consulted only when an identity has no admin mapping at all (see the CHAOS-4321 callout under "Why this exists"). (A third, the mixed-provenance roster column `teams.members`, is removed under CHAOS-9087: no reader, no writer.) `teams.manual_members` (roster, CHAOS-4321-only) = the genuinely admin-EXCLUSIVE facet roster, written only by `ClickHouseTeamAdminService.add_members`/`remove_members`/`set_members` (the admin Identities screen and drift-approval); together with `identities.team_ids` it forms the CHAOS-4321 ADMIN (override) layer the ladder tries FIRST. **Chain:** members → assignee identity → issues → PRs/MRs → (maybe) commits; commit authors are a separate git-side source, member↔author reconciliation deferred (not CHAOS-2600).
 
 > **Identity must match what the assignee path produces — UNDER THE ORG ALIAS MAP (CHAOS-2609).**
 > Both consumers key on the *resolver-consumed* identity. Auto-import resolves each member through the
@@ -2022,7 +2088,7 @@ One path: `run_team_autoimport` → `team_autoimport_<provider>.populate()` → 
 > persisted to the `team_memberships.identity_facets` `Array(String)` column (migration **060**); the
 > loader `argMax`-reads it and fans **every** facet into the ladder's `member_by_identity` (alongside
 > the legacy `raw_provider_user_id` = `facets[0]` + `raw_email` slots), **and** writes them to the
-> `teams.members` roster (read by `TeamResolver`). This closes the deferred
+> provider team roster (`TeamResolver`; the `teams.members` column was removed, CHAOS-9087). This closes the deferred
 > **email-alias-distinct-canonical** edge (**CHAOS-2625**): when an org maps a member's provider id and
 > email to *different* canonicals (`github:lead` → canonicalA, `personal@…` → canonicalB), an assignee
 > resolving to canonicalB now hits the canonical ladder directly with `assignee_membership` provenance
@@ -2209,8 +2275,8 @@ existing orgs see **no behavior change** — discovery writes straight to `teams
 (flag-for-review) routes managed-field changes (`name`, `description`, `project_keys`,
 `repo_patterns`) into the pending lane instead of clobbering the catalog. Provider membership
 imports also gate attribution-impacting `team_memberships` rows when they conflict with a manual
-membership or `manual_attribution_fallbacks(scope_type='member')`; the `teams.members` **and**
-`teams.manual_members` (CHAOS-4321) rosters are then updated surgically on approval. `policy 2` is
+membership or `manual_attribution_fallbacks(scope_type='member')`; the
+`teams.manual_members` (CHAOS-4321) roster is then updated surgically on approval (the `teams.members` roster is gone, CHAOS-9087; a staged change for the retired field `members` is superseded). `policy 2` is
 manual/none. `status` / `change_type` are
 low-cardinality strings, not `Enum8`, to avoid enum-widening migration ordering before new values
 can be emitted.
@@ -2247,10 +2313,10 @@ and sends `change_ids`. All three tables join the org-deletion purge path.
 > `manual_attribution_fallbacks(scope_type='member')` reconciliation reuses `team_drift_changes` via
 > `entity_type='identity'`, `change_type='membership_changed'`, and `field ∈ {'team_memberships',
 > 'manual_attribution_fallbacks.member'}`. Provider auto-import gates the `team_memberships`
-> attribution dimension before write-through — not just the `teams.members` roster — whenever the
+> attribution dimension before write-through whenever the
 > provider row would replace a manual membership or member fallback. Approving inserts the provider
 > membership, expires the conflicting manual row/fallback, and adds the incoming member facets to
-> `teams.members` **and** `teams.manual_members` (CHAOS-4321, via
+> `teams.manual_members` (CHAOS-4321, via
 > `ClickHouseTeamAdminService.add_members` — see below); dismissing leaves both the catalog and
 > attribution dimensions unchanged.
 >
@@ -2386,7 +2452,7 @@ flowchart TD
     B -- match --> T["team_id"]
     B -- miss --> C{"Tier 2: retry with project_key<br/>(Linear TEAM key)"}
     C -- match --> T
-    C -- miss --> D{"Tier 3: assignee membership<br/>assignee in ClickHouse teams.members?"}
+    C -- miss --> D{"Tier 3: assignee membership<br/>assignee in admin manual_members or provider team_memberships?"}
     D -- match --> T
     D -- miss --> E{"Tier 4: LinkedIssueTeamResolver<br/>linked donor issue has a team?"}
     E -- match --> T
@@ -3088,7 +3154,7 @@ durations, and co-occurrence bridges, but they are not the owning team source.
   ownership-derivation diagram in §1.1.
 - **Admin override vs. provider fallback are two different roster layers, neither is an
   `work_item_team_attributions.source` value.** `identities.team_ids` ∪ `teams.manual_members` is the
-  CHAOS-4321 admin (override) layer; `team_memberships` ∪ `teams.members` is the provider (fallback)
+  CHAOS-4321 admin (override) layer; `team_memberships` is the provider (fallback)
   layer. Both are consulted only *inside* the `assignee_membership` (rank 4) / `author_membership`
   (rank 6) resolution step (§0 "Why this exists") — they never appear as their own row in
   `work_item_team_attributions.source`.

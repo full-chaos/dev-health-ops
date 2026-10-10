@@ -146,7 +146,7 @@ func emptyInvestmentResponse() *sankey.Response {
 // clause, matching the fact every fetcher's own FROM projects a scalar/
 // fanned repo_id, never a team_id, column.
 func repoScopeFilterClause(ctx context.Context, client QueryClient, scopeLevel string, scopeIDs, whatRepos []string, orgID string, asOf time.Time) (string, []dhclickhouse.Binding, error) {
-	if scopeLevel != "team" && scopeLevel != "repo" {
+	if !teamscope.RepoScopeApplies(scopeLevel, len(teamscope.NamedRepoRefs(scopeLevel, scopeIDs, whatRepos)) > 0) {
 		return "", nil, nil
 	}
 	repoIDs, err := resolveRepoFilterIDs(ctx, client, scopeLevel, scopeIDs, whatRepos, orgID)
@@ -161,16 +161,8 @@ func repoScopeFilterClause(ctx context.Context, client QueryClient, scopeLevel s
 		teamCondition, teamBindings = teamscope.RepoCondition(orgID, "repo_id", scopeIDs, asOf)
 	}
 
-	switch {
-	case explicitSQL != "" && teamCondition != "":
-		return " AND (repo_id IN {scope_ids:Array(String)} OR " + teamCondition + ")",
-			append(append([]dhclickhouse.Binding{}, explicitBindings...), teamBindings...), nil
-	case explicitSQL != "":
-		return explicitSQL, explicitBindings, nil
-	case teamCondition != "":
-		return " AND " + teamCondition, teamBindings, nil
-	}
-	return "", nil, nil
+	filter, bindings := teamscope.NarrowRepoScope(len(teamscope.NamedRepoRefs(scopeLevel, scopeIDs, whatRepos)) > 0, explicitSQL, explicitBindings, teamCondition, teamBindings)
+	return filter, bindings, nil
 }
 
 // flowRequiredColumns is the required-columns list both build_investment_

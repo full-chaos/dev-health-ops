@@ -222,9 +222,8 @@ func TestClickHouseExternalSinkPreservesManualMembersOnTeamWrite(t *testing.T) {
 	if !connection.batch.sent || len(connection.batch.rows) != 1 {
 		t.Fatalf("team sink not durable: %#v", connection.batch)
 	}
-	// members (4) is a bare update; manual_members (5) is the column this
-	// test protects.
-	got := connection.batch.rows[0][5]
+	// manual_members (4) is the column this test protects.
+	got := connection.batch.rows[0][4]
 	if want := []string{"alice@example.test"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("manual_members = %v, want %v (existing override must survive)", got, want)
 	}
@@ -343,6 +342,7 @@ func TestExternalClickHouseRowsMatchPythonGoldenOracle(t *testing.T) {
 		t.Fatalf("Python golden rows = %d, want all 21 kinds", len(golden.Rows))
 	}
 	divergences := teamIDDivergenceUse{}
+	referenceOnly := referenceOnlyUse{}
 	for kind, expected := range golden.Rows {
 		kind, expected := kind, expected
 		t.Run(kind, func(t *testing.T) {
@@ -371,12 +371,13 @@ func TestExternalClickHouseRowsMatchPythonGoldenOracle(t *testing.T) {
 			columns = slices.DeleteFunc(columns, func(column string) bool {
 				return slices.Contains(externalUnreferencedColumns[table], column)
 			})
-			if table != expected.Table || !slices.Equal(columns, expected.Columns) {
-				t.Fatalf("ClickHouse contract mismatch:\n got table=%s columns=%v\nwant table=%s columns=%v", table, columns, expected.Table, expected.Columns)
+			expectedColumns, expectedValues := referenceOnly.drop(expected.Table, expected.Columns, expected.Values)
+			if table != expected.Table || !slices.Equal(columns, expectedColumns) {
+				t.Fatalf("ClickHouse contract mismatch:\n got table=%s columns=%v\nwant table=%s columns=%v", table, columns, expected.Table, expectedColumns)
 			}
 			got := goldenComparable(values)
-			want := goldenComparable(expected.Values)
-			for index, column := range expected.Columns {
+			want := goldenComparable(expectedValues)
+			for index, column := range expectedColumns {
 				want[index] = divergences.expected(expected.Table, column, source.System, expected.Payload, want[index])
 			}
 			if !reflect.DeepEqual(got, want) {
@@ -387,6 +388,7 @@ func TestExternalClickHouseRowsMatchPythonGoldenOracle(t *testing.T) {
 		})
 	}
 	divergences.checkReached(t)
+	referenceOnly.checkReached(t)
 
 	if got := externalWorkItemID("github", "Acme/API", "7", "pr"); got != golden.EdgeCases["github_pr"] {
 		t.Fatalf("GitHub PR mapping = %q", got)

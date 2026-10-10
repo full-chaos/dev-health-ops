@@ -500,11 +500,12 @@ func buildExplainOptions(ctx context.Context, reader *investmentexplain.Reader, 
 	// WindowErr there), and before any scope is resolved.
 	startTS, endTS, windowErr := timeWindow(body.Filters)
 	var repoIDs []string
+	var reposNamed bool
 	var teamCondition string
 	var teamBindings []dhclickhouse.Binding
 	if windowErr == nil {
 		var err error
-		repoIDs, teamCondition, teamBindings, err = scopeRepoFilter(ctx, reader, body.Filters, orgID, now)
+		repoIDs, reposNamed, teamCondition, teamBindings, err = scopeRepoFilter(ctx, reader, body.Filters, orgID, now)
 		if err != nil {
 			return investmentexplain.ExplainInvestmentMixOptions{}, err
 		}
@@ -553,6 +554,7 @@ func buildExplainOptions(ctx context.Context, reader *investmentexplain.Reader, 
 		StartTS:            startTS,
 		EndTS:              endTS,
 		RepoIDs:            repoIDs,
+		ReposNamed:         reposNamed,
 		TeamScopeCondition: teamCondition,
 		TeamScopeBindings:  teamBindings,
 		ScopeLevel:         scopeLevel,
@@ -630,7 +632,7 @@ const repoScopeColumn = "work_unit_investments.repo_id"
 //
 // asOf is the request's own instant, taken once by the caller and used for
 // every ownership resolution in this response.
-func scopeRepoFilter(ctx context.Context, reader *investmentexplain.Reader, filters map[string]any, orgID string, asOf time.Time) (repoIDs []string, teamCondition string, teamBindings []dhclickhouse.Binding, err error) {
+func scopeRepoFilter(ctx context.Context, reader *investmentexplain.Reader, filters map[string]any, orgID string, asOf time.Time) (repoIDs []string, reposNamed bool, teamCondition string, teamBindings []dhclickhouse.Binding, err error) {
 	scope, _ := filters["scope"].(map[string]any)
 	level, _ := scope["level"].(string)
 	if level == "" {
@@ -639,14 +641,15 @@ func scopeRepoFilter(ctx context.Context, reader *investmentexplain.Reader, filt
 	scopeIDs := stringsFromAny(scope["ids"])
 	what, _ := filters["what"].(map[string]any)
 	whatRepos := stringsFromAny(what["repos"])
+	reposNamed = len(teamscope.NamedRepoRefs(level, scopeIDs, whatRepos)) > 0
 	repoIDs, err = reader.ResolveRepoFilterIDs(ctx, level, scopeIDs, whatRepos, orgID)
 	if err != nil {
-		return nil, "", nil, err
+		return nil, false, "", nil, err
 	}
 	if level == "team" && len(scopeIDs) > 0 {
 		teamCondition, teamBindings = teamscope.RepoCondition(orgID, repoScopeColumn, scopeIDs, asOf)
 	}
-	return repoIDs, teamCondition, teamBindings, nil
+	return repoIDs, reposNamed, teamCondition, teamBindings, nil
 }
 
 // workCategoryFromFilters reads filters.why.work_category verbatim --

@@ -26,7 +26,6 @@ import (
 
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 
-	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
 )
 
@@ -36,71 +35,12 @@ func settingsMaxExecutionTime() string {
 
 // resolveRepoID ports resolve_repo_id (api/queries/scopes.py:19-50).
 func resolveRepoID(ctx context.Context, client QueryClient, repoRef, orgID string) (string, bool, error) {
-	var query string
-	var bindings []dhclickhouse.Binding
-	if parsed, err := pythonparity.ParseUUID(repoRef); err == nil {
-		query = fmt.Sprintf(`
-SELECT toString(id) AS id
-FROM repos FINAL
-WHERE toString(id) = {repo_id:String}
-  AND org_id = {org_id:String}
-LIMIT 1
-%s
-`, settingsMaxExecutionTime())
-		bindings = []dhclickhouse.Binding{
-			{Name: "repo_id", Value: parsed.String()},
-			{Name: "org_id", Value: orgID},
-		}
-	} else {
-		query = fmt.Sprintf(`
-SELECT toString(id) AS id
-FROM repos FINAL
-WHERE repo = {repo_name:String}
-  AND org_id = {org_id:String}
-LIMIT 1
-%s
-`, settingsMaxExecutionTime())
-		bindings = []dhclickhouse.Binding{
-			{Name: "repo_name", Value: repoRef},
-			{Name: "org_id", Value: orgID},
-		}
-	}
-
-	rows, err := client.Query(ctx, query, bindings)
-	if err != nil {
-		return "", false, fmt.Errorf("home: resolve repo id: %w", err)
-	}
-	defer rows.Close()
-
-	if !rows.Next() {
-		if err := rows.Err(); err != nil {
-			return "", false, fmt.Errorf("home: iterate resolve repo id rows: %w", err)
-		}
-		return "", false, nil
-	}
-	var id string
-	if err := rows.Scan(&id); err != nil {
-		return "", false, fmt.Errorf("home: scan resolve repo id row: %w", err)
-	}
-	return id, true, nil
+	return teamscope.ResolveRepoRef(ctx, client, repoRef, orgID, settingsMaxExecutionTime(), "home: ")
 }
 
 // resolveRepoIDs ports resolve_repo_ids (api/queries/scopes.py:53-69).
 func resolveRepoIDs(ctx context.Context, client QueryClient, repoRefs []string, orgID string) ([]string, error) {
-	var resolved []string
-	for _, ref := range repoRefs {
-		if ref == "" {
-			continue
-		}
-		id, ok, err := resolveRepoID(ctx, client, ref, orgID)
-		if err != nil {
-			return nil, err
-		}
-		if ok {
-			resolved = append(resolved, id)
-		}
-	}
-	return resolved, nil
+	return teamscope.ResolveRepoRefs(ctx, client, repoRefs, orgID, settingsMaxExecutionTime(), "home: ")
 }
 
 // repoScopeFilter narrows a repo-keyed metric to the repositories a request
@@ -123,9 +63,10 @@ func repoScopeFilter(ctx context.Context, client QueryClient, f Filters, orgID, 
 		return "", nil, err
 	}
 
+	teamScoped := f.Scope.Level == "team" && len(f.Scope.IDs) > 0
 	var teamCondition string
 	var teamBindings []dhclickhouse.Binding
-	if f.Scope.Level == "team" && len(f.Scope.IDs) > 0 {
+	if teamScoped {
 		teamCondition, teamBindings = teamscope.RepoCondition(orgID, repoColumn, f.Scope.IDs, asOf)
 	}
 
@@ -138,6 +79,36 @@ func repoScopeFilter(ctx context.Context, client QueryClient, f Filters, orgID, 
 // filter.
 func repoFilterRequested(f Filters) bool {
 	return len(teamscope.NamedRepoRefs(f.Scope.Level, f.Scope.IDs, f.What.Repos)) > 0
+}
+
+// filterEmptyReason is Response.FilterEmptyReason (CHAOS-9098): why the
+// repositories a request names matched nothing, by the one rule of
+// teamscope.ClassifyEmptyFilter. nil when the request names no repository, and
+// whenever something matched.
+func filterEmptyReason(ctx context.Context, client QueryClient, f Filters, orgID string, asOf time.Time) (*teamscope.EmptyReason, error) {
+	refs := teamscope.NamedRepoRefs(f.Scope.Level, f.Scope.IDs, f.What.Repos)
+	if len(refs) == 0 {
+		return nil, nil
+	}
+	resolved, err := resolveRepoIDs(ctx, client, refs, orgID)
+	if err != nil {
+		return nil, err
+	}
+	var teamIDs []string
+	if f.Scope.Level == "team" {
+		for _, id := range f.Scope.IDs {
+			if id != "" {
+				teamIDs = append(teamIDs, id)
+			}
+		}
+	}
+	held := 0
+	if len(teamIDs) > 0 {
+		if held, err = teamscope.CountTeamHeldRepos(ctx, client, orgID, resolved, teamIDs, asOf); err != nil {
+			return nil, err
+		}
+	}
+	return teamscope.ClassifyEmptyFilter(len(refs), len(resolved), len(teamIDs) > 0, held), nil
 }
 
 // repoFilterApplied is MetricDelta.RepoFilterApplied: nil when the request names

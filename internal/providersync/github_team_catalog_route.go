@@ -13,6 +13,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/identityalias"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
+	"github.com/full-chaos/dev-health-ops/internal/teamid"
 )
 
 // maxGitHubUserResponseBytes bounds one GET /users/{login} body. GitHub's
@@ -65,10 +66,9 @@ type GitHubTeamCatalogEvidence struct {
 // wherever a Go counterpart exists, so a caller building the post-sync log
 // line does not have to invent a second vocabulary.
 type GitHubTeamCatalogResult struct {
-	TeamsImported            int  `json:"teams_imported"`
-	MembersImported          int  `json:"members_imported"`
-	TeamMembershipsImported  int  `json:"team_memberships_imported"`
-	RosterPreservationFailed bool `json:"roster_preservation_failed"`
+	TeamsImported           int `json:"teams_imported"`
+	MembersImported         int `json:"members_imported"`
+	TeamMembershipsImported int `json:"team_memberships_imported"`
 }
 
 // GitHubTeamCatalogRouteHandler owns the provider-only GitHub org teams +
@@ -168,6 +168,10 @@ func (collector GitHubTeamCatalogRouteHandler) Collect(
 	evidence.TeamsObserved = len(teamPages.Items)
 
 	rows = githubTeamCatalogRows{Teams: make([]githubTeamRow, 0, len(teamPages.Items))}
+	rows.TeamListing = TeamListingEvidence{
+		TeamIDPrefix: teamid.Prefix(githubTeamCatalogProvider), ProvesEnd: ownershipListingProvesEnd(teamPages),
+		Responses: ownershipListingResponses(teamPages),
+	}
 	emailCache := make(map[string]*string)
 
 	for _, raw := range teamPages.Items {
@@ -177,8 +181,12 @@ func (collector GitHubTeamCatalogRouteHandler) Collect(
 		}
 		slug := strings.TrimSpace(payload.Slug)
 		if slug == "" {
+			// A listed node with no slug is a team the run cannot name: the
+			// listing is not known to be whole, so no team is dropped from it.
+			rows.TeamListing.ProvesEnd = false
 			continue
 		}
+		rows.TeamListing.Listed = append(rows.TeamListing.Listed, githubTeamID(slug))
 
 		var repoPatterns []string
 		if wantTeams {
@@ -258,10 +266,6 @@ func (collector GitHubTeamCatalogRouteHandler) Collect(
 				return githubTeamCatalogRows{}, evidence, memberErr
 			} else {
 				evidence.SkippedTeamMemberships++
-				// CHAOS-4461: this team must not have its roster silently
-				// rebuilt to [] below -- the caller confirms and carries
-				// forward its currently-persisted roster instead.
-				rows.FailedMemberFetchTeamIDs = append(rows.FailedMemberFetchTeamIDs, githubTeamID(slug))
 			}
 		}
 	}

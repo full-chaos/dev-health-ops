@@ -45,6 +45,18 @@ func TestExplainNamedRepositoryThatResolvesToNothingLeavesNothing(t *testing.T) 
 	if !whole.HasData || whole.Value != 105 {
 		t.Fatalf("no repository named: value %v has_data %v, want the organization's 105", whole.Value, whole.HasData)
 	}
+	// D5855: a list of only empty strings names no repository: the whole organization.
+	for name, names := range map[string][]string{"what.repos empty string": {""}, "what.repos empty strings": {"", ""}} {
+		params := base
+		params.WhatRepos = names
+		got, err := BuildExplainResponse(ctx, reader, org, params)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !got.HasData || got.Value != 105 {
+			t.Errorf("%s: value %v has_data %v, want the organization's 105 (an empty string is not a repository name)", name, got.Value, got.HasData)
+		}
+	}
 	for name, params := range map[string]Params{
 		"repo scope, unknown id":   {ScopeLevel: "repo", ScopeIDs: []string{uuid.New().String()}},
 		"what.repos, unknown id":   {WhatRepos: []string{uuid.New().String()}},

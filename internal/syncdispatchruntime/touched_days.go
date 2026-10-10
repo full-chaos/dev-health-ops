@@ -127,6 +127,9 @@ type TouchedDaysStore interface {
 	// since and, for every repository a work item was written of at or after
 	// since, each of windowDays.
 	RecordTouched(ctx context.Context, organizationID string, since time.Time, windowDays []time.Time) (uint64, error)
+	// RecordTouchedGit records the days of the commits and pull requests
+	// written at or after since (CHAOS-9169), each under its own repository.
+	RecordTouchedGit(ctx context.Context, organizationID string, since time.Time) (uint64, error)
 	PendingDays(ctx context.Context, organizationID string, limit int) (TouchedDaysPending, error)
 	PendingRepositories(ctx context.Context, organizationID string, days []time.Time, limitPerDay int) (map[string][]string, error)
 	MarkDispatched(ctx context.Context, organizationID string, at time.Time, fullDays []time.Time, keys []TouchedDayKey) error
@@ -234,16 +237,24 @@ func (service *NativePostSyncService) takeTouchedDays(
 		return nil, err
 	}
 	take := &touchedDaysTake{organizationID: plan.OrganizationID}
-	if plan.WorkItems {
+	if plan.WorkItems || plan.Git {
 		if plan.RunStartedAt.IsZero() {
 			return nil, ErrPostSyncUnavailable
 		}
-		take.recorded, err = service.touched.RecordTouched(
-			ctx, plan.OrganizationID, plan.RunStartedAt.Add(-postSyncTouchedClockMargin),
-			plan.WorkItemWindowDays,
-		)
-		if err != nil {
-			return nil, err
+		since := plan.RunStartedAt.Add(-postSyncTouchedClockMargin)
+		if plan.WorkItems {
+			recorded, err := service.touched.RecordTouched(ctx, plan.OrganizationID, since, plan.WorkItemWindowDays)
+			if err != nil {
+				return nil, err
+			}
+			take.recorded += recorded
+		}
+		if plan.Git {
+			recorded, err := service.touched.RecordTouchedGit(ctx, plan.OrganizationID, since)
+			if err != nil {
+				return nil, err
+			}
+			take.recorded += recorded
 		}
 	}
 	pending, err := service.touched.PendingDays(ctx, plan.OrganizationID, postSyncTouchedPendingDayReadLimit)

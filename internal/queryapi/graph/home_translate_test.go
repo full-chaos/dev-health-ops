@@ -603,3 +603,44 @@ func TestHomeResultCarriesTheRepositoryFilterFlags(t *testing.T) {
 		t.Errorf("signal repoFilterApplied = %v / %v, want true / null", got.Signals[0].RepoFilterApplied, got.Signals[1].RepoFilterApplied)
 	}
 }
+
+// CHAOS-9094: the four repo-link fields of a delta reach the GraphQL model, and a
+// delta without them (every other metric) keeps them null.
+func TestHomeResultCarriesTheRepoLinkFields(t *testing.T) {
+	state, multi := "linked", 2
+	resp := &home.Response{Deltas: []home.MetricDelta{
+		{
+			Metric: "throughput", RepoLinkState: &state, RepoLinkMultiRepoItems: &multi,
+			RepoLinkBasis:    &home.RepoLinkBasis{Native: 3, ExplicitText: 2, Heuristic: 1},
+			RepoLinkCoverage: &home.RepoLinkCoverage{LinkedItems: 6, ItemsInWindow: 8},
+		},
+		{Metric: "churn"},
+	}}
+	got := homeResultFromResponse(resp)
+	d := got.Deltas[0]
+	if d.RepoLinkState == nil || *d.RepoLinkState != "linked" || d.RepoLinkMultiRepoItems == nil || *d.RepoLinkMultiRepoItems != 2 {
+		t.Errorf("state / multi = %v / %v, want linked / 2", d.RepoLinkState, d.RepoLinkMultiRepoItems)
+	}
+	if d.RepoLinkBasis == nil || d.RepoLinkBasis.Native != 3 || d.RepoLinkBasis.ExplicitText != 2 || d.RepoLinkBasis.Heuristic != 1 {
+		t.Errorf("basis = %+v, want 3 / 2 / 1", d.RepoLinkBasis)
+	}
+	if d.RepoLinkCoverage == nil || d.RepoLinkCoverage.LinkedItems != 6 || d.RepoLinkCoverage.ItemsInWindow != 8 {
+		t.Errorf("coverage = %+v, want 6 of 8", d.RepoLinkCoverage)
+	}
+	o := got.Deltas[1]
+	if o.RepoLinkState != nil || o.RepoLinkBasis != nil || o.RepoLinkMultiRepoItems != nil || o.RepoLinkCoverage != nil {
+		t.Errorf("a delta of another metric carries repo-link fields: %+v", o)
+	}
+}
+
+// The answer-level reason a repository filter matched nothing (CHAOS-9098) is
+// served as filterEmptyReason, and stays null when the domain has none.
+func TestHomeResultFromResponse_MapsTheFilterEmptyReason(t *testing.T) {
+	reason := "repository_not_in_team"
+	if got := homeResultFromResponse(&home.Response{FilterEmptyReason: &reason}); got.FilterEmptyReason == nil || *got.FilterEmptyReason != reason {
+		t.Errorf("filterEmptyReason = %v, want %q", got.FilterEmptyReason, reason)
+	}
+	if got := homeResultFromResponse(&home.Response{}); got.FilterEmptyReason != nil {
+		t.Errorf("filterEmptyReason = %q, want null", *got.FilterEmptyReason)
+	}
+}

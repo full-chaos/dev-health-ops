@@ -337,6 +337,7 @@ func newWorkUnitExplainHandler(
 		// _filters_from_query never populates what.repos for this route
 		// (it has no query parameter for it), so only scope_id can carry a
 		// repo reference here.
+		reposNamed := len(teamscope.NamedRepoRefs(parsed.scopeType, scopeIDs, nil)) > 0
 		repoIDs, err := reader.ResolveRepoFilterIDs(r.Context(), parsed.scopeType, scopeIDs, nil, claims.OrgID)
 		if err != nil {
 			writeWorkUnitExplainUnavailable(w, r, claims.OrgID, err)
@@ -361,6 +362,7 @@ func newWorkUnitExplainHandler(
 			StartTS:            startTS,
 			EndTS:              endTS,
 			RepoIDs:            repoIDs,
+			ReposNamed:         reposNamed,
 			TeamScopeCondition: teamCondition,
 			TeamScopeBindings:  teamBindings,
 			Limit:              1,

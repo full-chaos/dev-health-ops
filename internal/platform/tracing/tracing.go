@@ -173,8 +173,9 @@ func newProvider(serviceName, environment, endpoint string, sampleRate float64) 
 	}
 	provider := sdktrace.NewTracerProvider(
 		sdktrace.WithResource(res),
-		sdktrace.WithSampler(sdktrace.ParentBased(sampler(sampleRate))),
-		sdktrace.WithBatcher(exporter),
+		sdktrace.WithSampler(countingSampler{inner: sdktrace.ParentBased(sampler(sampleRate)), counters: spanOutcomes}),
+		sdktrace.WithSpanProcessor(endCounter{counters: spanOutcomes}),
+		sdktrace.WithBatcher(countingExporter{SpanExporter: exporter, counters: spanOutcomes}),
 	)
 	return provider, nil
 }

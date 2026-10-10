@@ -279,7 +279,7 @@ jobs:
       - name: Run the started-chart test (ClickHouse config.d)
         env:
           CHART_STARTED_TEST_REQUIRED: "1"
-        run: go test -count=1 -v -run '^TestClickHouseConfigdStartsAndAnswersOnThePodAddress$' ./deploy/helm/dev-health
+        run: go test -mod=readonly -trimpath -count=1 -v -run '^TestClickHouseConfigdStartsAndAnswersOnThePodAddress$' ./deploy/helm/dev-health
 
   # Required-status-check gate. Branch protection requires a check named
   # exactly "test". It judges docs-tests and tooling-tests through

@@ -128,7 +128,7 @@ func TestTouchedDaysRecordRangeFromANewEventToItsWriteDay(t *testing.T) {
 		}
 	})
 
-	t.Run("the range starts at most 366 days before the write day", func(t *testing.T) {
+	t.Run("the range covers at most 366 day keys: the write day and the 365 days before it", func(t *testing.T) {
 		o := org(6)
 		old := time.Date(2025, 6, 1, 9, 0, 0, 0, time.UTC)
 		// the previous record is older than the event and recent enough to be seen
@@ -142,11 +142,74 @@ SELECT ?, toDate('2026-08-01'), ?, 'touched', fromUnixTimestamp64Milli(toInt64(?
 		insertTouchedTestItems(t, ctx, conn, touchedTestItem{org: o, repo: repo, id: "gh:acme/api#ancient", provider: "github",
 			created: old, synced: rangeDay(8, 20)})
 		got := rangeRecord(t, ctx, conn, o, since)
-		first := time.Date(2026, 8, 20, 0, 0, 0, 0, time.UTC).AddDate(0, 0, -366)
+		first := time.Date(2026, 8, 20, 0, 0, 0, 0, time.UTC).AddDate(0, 0, -365)
 		want := append(rangeKeys(repo, first, time.Date(2026, 8, 20, 0, 0, 0, 0, time.UTC)), old.Format("2006-01-02")+"|"+repo.String())
 		sort.Strings(want)
 		if !reflect.DeepEqual(got, want) {
-			t.Fatalf("pending %d keys, want %d (the event day and 367 days back to the write day)", len(got), len(want))
+			t.Fatalf("pending %d keys, want %d (the event day and 366 range days, the 367th is not touched)", len(got), len(want))
+		}
+	})
+
+	t.Run("the previous record is the NEWEST touched record of the repository", func(t *testing.T) {
+		o := org(8)
+		// two records: 08-01 and 08-12. An event at 08-10 is older than the newest
+		// record, so it is not new (min would call it new).
+		rangePreviousRecord(t, ctx, conn, o, repo, rangeDay(8, 1))
+		rangePreviousRecord(t, ctx, conn, o, repo, rangeDay(8, 12))
+		insertTouchedTestItems(t, ctx, conn, touchedTestItem{org: o, repo: repo, id: "gh:acme/api#between", provider: "github",
+			created: rangeDay(7, 1), completed: at(8, 10), synced: rangeDay(8, 20)})
+		got := rangeRecord(t, ctx, conn, o, since)
+		want := []string{rangeDay(7, 1).Format("2006-01-02") + "|" + repo.String(), rangeDay(8, 10).Format("2006-01-02") + "|" + repo.String()}
+		sort.Strings(want)
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("an event older than the newest previous record is not new\n got %v\nwant %v", got, want)
+		}
+	})
+
+	t.Run("a dispatched event is not a previous record: only touched events count", func(t *testing.T) {
+		o := org(9)
+		rangePreviousRecord(t, ctx, conn, o, repo, previous)
+		// a 'dispatched' event NEWER than the event below: if it counted, the event
+		// would not be new.
+		if err := conn.Exec(ctx, `
+INSERT INTO daily_metrics_touched_days (org_id, day, repo_id, kind, at)
+SELECT ?, toDate('2026-08-16'), ?, 'dispatched', fromUnixTimestamp64Milli(toInt64(?), 'UTC')`,
+			o, repo, rangeDay(8, 18).UnixMilli()); err != nil {
+			t.Fatal(err)
+		}
+		insertTouchedTestItems(t, ctx, conn, touchedTestItem{org: o, repo: repo, id: "gh:acme/api#late2", provider: "github",
+			created: rangeDay(8, 12), completed: at(8, 14), synced: rangeDay(8, 20)})
+		got := rangeRecord(t, ctx, conn, o, since)
+		for _, key := range rangeKeys(repo, rangeDay(8, 12), rangeDay(8, 20)) {
+			if !contains(got, key) {
+				t.Fatalf("day %s of the range is missing: %v", key, got)
+			}
+		}
+	})
+
+	t.Run("a previous record older than the 366 days before the run is not seen", func(t *testing.T) {
+		o := org(10)
+		// the only record is on a day more than 366 days before the run's lower bound
+		rangePreviousRecord(t, ctx, conn, o, repo, time.Date(2025, 6, 1, 9, 0, 0, 0, time.UTC))
+		insertTouchedTestItems(t, ctx, conn, touchedTestItem{org: o, repo: repo, id: "gh:acme/api#dormant", provider: "github",
+			created: rangeDay(8, 10), completed: at(8, 15), synced: rangeDay(8, 20)})
+		got := rangeRecord(t, ctx, conn, o, since)
+		want := []string{rangeDay(8, 10).Format("2006-01-02") + "|" + repo.String(), rangeDay(8, 15).Format("2006-01-02") + "|" + repo.String()}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("no previous record is seen in the window: event days only\n got %v\nwant %v", got, want)
+		}
+	})
+
+	t.Run("an event at exactly the time of the previous record is not new", func(t *testing.T) {
+		o := org(11)
+		rangePreviousRecord(t, ctx, conn, o, repo, previous)
+		insertTouchedTestItems(t, ctx, conn, touchedTestItem{org: o, repo: repo, id: "gh:acme/api#equal", provider: "github",
+			created: rangeDay(7, 1), completed: &previous, synced: rangeDay(8, 20)})
+		got := rangeRecord(t, ctx, conn, o, since)
+		want := []string{rangeDay(7, 1).Format("2006-01-02") + "|" + repo.String(), previous.Format("2006-01-02") + "|" + repo.String()}
+		sort.Strings(want)
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("new means strictly later than the previous record\n got %v\nwant %v", got, want)
 		}
 	})
 

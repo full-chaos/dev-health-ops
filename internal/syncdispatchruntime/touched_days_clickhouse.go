@@ -85,8 +85,8 @@ GROUP BY day, repo_id`
 // old item that is only written again makes nothing new known and adds no day.
 // A repository with no previous record in the last 366 days has no new event
 // (its first sync computes its days by the windows of its units). The range
-// starts at most 366 days before the write day, the same bound as a backfill
-// unit. The read of the record is bounded by the organization and the 366 days
+// covers at most 366 day keys, the write day and the 365 days before it, the
+// same bound as a backfill unit (WorkItemsUnitWindowDays refuses a 367th day). The read of the record is bounded by the organization and the 366 days
 // before the lower bound of the read (the sort key is (org, day, repo, kind)).
 //
 // The days of the event itself are the part of recordTouchedDaysSQL; this
@@ -98,7 +98,7 @@ SELECT ?, day, repo_id, 'touched', fromUnixTimestamp64Milli(toInt64(?), 'UTC')
 FROM (
     SELECT events.repo_id AS repo_id,
            arrayJoin(arrayMap(value -> toDate(value),
-               range(toUInt32(greatest(toDate(events.event_time, 'UTC'), events.write_day - 366)),
+               range(toUInt32(greatest(toDate(events.event_time, 'UTC'), events.write_day - 365)),
                      toUInt32(events.write_day) + 1))) AS day
     FROM (
         SELECT repo_id,

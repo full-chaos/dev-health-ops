@@ -3,6 +3,7 @@ package providersync
 import (
 	"context"
 	"errors"
+	"fmt"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"io"
 	"log/slog"
@@ -479,5 +480,28 @@ func TestGitHubTeamCatalogFailedMemberReadWritesOneWarnNamingNoMember(t *testing
 	}
 	if warns[0]["provider"] != "github" || warns[0]["team"] != membershipTeamLogToken(githubTeamID("platform")) || warns[0]["cause"] != "read_failed" {
 		t.Errorf("warning attributes = %v, want provider github, the platform team token, cause read_failed", warns[0])
+	}
+}
+
+// TestMemberReadFailureCauseIsAFixedWord pins every word of the cause: a wrapped
+// pagination cap, a cancel and a deadline each get their own word, any other
+// error the generic one (never the error text).
+func TestMemberReadFailureCauseIsAFixedWord(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		err  error
+		want string
+	}{
+		{"pagination cap", fmt.Errorf("team platform: %w", ErrPaginationCapExceeded), "pagination_cap"},
+		{"cancelled", fmt.Errorf("read: %w", context.Canceled), "cancelled"},
+		{"deadline", fmt.Errorf("read: %w", context.DeadlineExceeded), "cancelled"},
+		{"other", errors.New("a login mona-secret-login"), "read_failed"},
+		{"nil", nil, "read_failed"},
+	}
+	for _, tc := range cases {
+		if got := memberReadFailureCause(tc.err); got != tc.want {
+			t.Errorf("%s: cause = %q, want %q", tc.name, got, tc.want)
+		}
 	}
 }

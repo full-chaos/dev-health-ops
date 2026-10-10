@@ -677,6 +677,14 @@ project's items by id. Now:
   `jira_atlassian_teams_project_link_skipped`). An id is never built from the key as a fallback, and the
   sink refuses an open row that carries one.
 - `project_key` stays on the row as a label. Team ids do not change.
+- **Memberships keep their first-seen `valid_from` too** (CHAOS-9007; `providersync.ReuseFirstSeenMembershipValidFrom`):
+  `team_memberships` is keyed by `(org_id, provider, team_id, member_id, source, valid_from)`, so a stamp of the
+  run time at each sync added one open row per fact. The four catalog writers take the `valid_from` of a
+  membership the run holds again from the EARLIEST open row of the same org, provider, source, team and member,
+  through the one snapshot rule with no kind: the rule adds no row and closes none. The Atlassian Teams writer
+  plans its own memberships. A census finds every writer of the table by what the code builds (a literal, a
+  concatenation, a constant, a table named by a variable) and names its class. Surplus open rows that exist
+  before the fix are retired by a separate cleanup step, not by the writers.
 - **One snapshot rule for ownership rows** (`providersync.PlanOwnershipSnapshot`): a fact the run still
   finds keeps the `valid_from` it was first seen with (`valid_from` is a key column: a new stamp at each
   sync added one more open row per fact), and every other open row of the same writer is written again
@@ -707,6 +715,40 @@ project's items by id. Now:
   | `atlassian_team_project_links` | Atlassian Teams | one link read per active team | sole integration | is an answer (per team) |
   | `gitlab_group_project_grants` | GitLab catalog | one listing per closable group (section 0.4a) | sole integration | is an answer (per group) |
   | `github_team_repo_grants` | GitHub catalog | one listing per closable team | sole integration | is an answer (per team) |
+  | `linear_team_memberships` | Linear catalog | every team's member list to its end (the run fails before any write when one does not end) | sole integration | is an answer (per team) |
+  | `github_team_memberships` | GitHub catalog | one member read per team, to the provider's end-of-list signal | sole integration | is an answer (per team) |
+  | `gitlab_team_memberships` | GitLab catalog | one member read per group, to the provider's end-of-list signal | sole integration | is an answer (per group) |
+
+  **Team membership kinds** (CHAOS-9079). A member is closed (`valid_to` = the run time) only when ALL of these
+  hold, per team for every provider:
+  1. the member is absent from the COMPLETE member read of ITS team, in a scope no other integration reads
+     (with another active integration of the provider in the organization the kind closes nothing).
+     "Complete" is the read's own end-of-list signal; a read cut by a bound, a failed read, and a read that held
+     a member node the collector cannot use (no login, no username, a node the normalizer rejects, neither an
+     id nor an email, or `nodes: null`) close nothing for that team, and the unusable nodes are logged with a
+     count (`*_member_unusable`: provider, team, count, no member value). Absence is judged against the members
+     the provider returned, never against the part the membership-conflict guard keeps.
+  2. absence from an offset-paged list is a CANDIDATE only. Two providers page by offset, and a member who
+     leaves between two page requests moves every later member one place up, so one of them is on no page. The
+     close needs the provider's direct lookup for that member in that team to say "not a member": the team
+     membership endpoint answers 404, or the group member search finds no member of that username (compared
+     without regard to case) and carries its end signal. Any other answer (a member, a pending invitation,
+     403, 429, 5xx, a timeout, a body that is no answer) leaves the member open. A candidate is a fact (a team
+     and a member), however many open rows it holds: it is asked about once and one answer closes every open
+     row of it. The lookups of one run are bounded (100 facts); a fact past the budget stays open. The provider
+     that pages by cursor cannot be shifted by a departure between two requests, so its list rule stands.
+  3. no open row of the fact is newer than the time the run read the provider: a run whose list is older than a
+     row never closes it (two overlapping runs of one integration).
+  4. a member whose id is made from an email is NOT closed by the list rule, because the provider's user id is
+     not stored (`raw_provider_user_id` holds the first identity facet, not the provider's user id): a changed
+     or hidden email would read as a departure and a join. A login rename of a provider that keys by login
+     reads as a departure and a join with a new `valid_from`; both are named limits.
+  A member returned with `active: false` is a deactivated user: the provider says so, and it is closed (an
+  email-keyed member too). A member who comes back is a new fact with a new `valid_from`. Every close is logged
+  once per team (`team_membership_closed`: provider, team, closed, duplicates_retired) and every candidate left
+  open once per team (`team_membership_close_skipped`: provider, team, and a count of facts for each reason:
+  `row_newer_than_read`, `no_stable_user_id`, `provider_says_member`, `lookup_not_proven`,
+  `lookup_budget_ended`). The team in a log line is its slug or path without the provider prefix.
 
   **Scope proof, for every kind** (`providersync.ProveSoleScope`, the one scope gate; `ScopeProof` is an
   argument of every kind snapshot, so no kind can be stated without it). Ownership, membership and catalog
@@ -1591,10 +1633,35 @@ replaces nothing there, so the rule holds only for a reader that takes the newes
 
 The tables are declared once, in `internal/teamkeytables`. The writer (`supersedeStaleTeamKeys`,
 `internal/jobs/metrics/daily/stale_team_keys.go`) builds its read and its row from the declaration, and so does the
-predicate for readers: `Table.LiveRow` (one newest row) and `Table.LiveHaving` (a `GROUP BY` over the key). A reader
-that sums is right with a row of zeros. A reader that takes an average over rows of a NOT NULL column, counts rows or
-lists the team ids of a table must leave the superseded keys out with that predicate, or it takes a row of zeros as a
-sample of 0.
+predicate for readers: `Table.LiveRow` (one newest row) and `Table.LiveHaving` (a `GROUP BY` over the key). Readers
+take it through `internal/storage/clickhouse/liverow`, and the rule there is: a row of zeros reads as an absent row.
+
+- A reader that gives ONE sum for its whole scope is right with a row of zeros: the row adds 0.
+- A reader that takes an average over rows of a NOT NULL column, a minimum, a maximum or a quantile, counts rows or
+  days, or lists the team ids of a table must leave the superseded keys out with the predicate, or it takes a row of
+  zeros as a sample of 0 or as a key.
+- A reader that sums INTO A LIST (one row for each day, status or theme) must leave them out too. The sum of a day
+  is right, but a day, a status or a theme whose keys in scope all hold a row of zeros would be listed with a value
+  of 0. That is what a read with a retired team id in its scope returns for the days computed again, and a team that
+  was not measured is not a team with 0 work. These reads hold the predicate: the throughput and capacity forecast
+  histories and the mean WIP, the aggregated flame, the sankey status counts, the home theme allocation, the
+  cognitive load of one team, and the per-day reads of the recommendations loader and the capacity forecast job.
+- The predicate is applied to the newest row of the key THE WRITER WRITES, before any roll-up of the reader's own.
+  A reader that first rolls stored keys up to a coarser one (the investment areas of a theme, the scopes of a team,
+  the repositories of a day) and tests the rolled row takes a newer row of zeros of ONE stored key as the row of
+  all of them, and drops the measured ones with it. The home theme allocation reads the stored investment area
+  (day, repository, team, area, project stream), applies the predicate there, and only then takes the theme.
+- A reader that takes the state on the newest day of each key (a backlog, a current WIP, a stored risk score) must
+  NOT filter before it picks the newest row: the row of zeros is what says the key holds nothing now, and a filter
+  that ran first would serve the older row. It then gives 0 or no value, as for a key with no row.
+
+The census `TestEveryReadOfARegisteredTableAppliesTheRule` (package `liverow`) reads the source and fails for a read
+of one of these tables that holds no predicate and is not listed there with its reason.
+
+A job that checks at startup that the schema holds every column its statements read (the capacity forecast job, the
+recommendations job) and a reader that answers "not available" for a missing column (the sankey state flow) take the
+columns of the predicate from `liverow.Columns`: the predicate is built into the statement at run time, so its
+columns are in no query text.
 
 The census (`stale_team_keys_census_test.go`) reads the schema and the source and fails when a table with a
 `team_id` or a `scope_id` in its sorting key has no decision (the shared rule, its own rule, or a written exemption),
@@ -1666,6 +1733,25 @@ Limits:
   at that same microsecond or later, the old row stays the newest row of its key until the next run of the day.
 - The run-level step reads the items of every work scope of the run once more and writes their rows once more. Its
   cost is about one more read and write of the work-item families for each run.
+
+#### 0.4i A push batch: the team rows before the identities that name them (CHAOS-9125)
+
+- **Order.** A push batch (`internal/streamhandlers`) writes its kinds in the order of the Python sink
+  (`write_batch`): repository, commit, pull request, review, team, identity, the operational kinds in the order of
+  the sink's own list, then work item, work item transition, work item dependency. The kind of this port only
+  (the project membership transition) is last. Before, the kinds were written in the order of their names, so the
+  `identity.v1` records of a batch, which name team ids (`identities.team_ids`), were stored before the `team.v1`
+  records of the same batch. Each kind is still written on its own: a failed kind is skipped whole, the others are
+  written, and the batch fails and is retried whole. A test reads the order from the sink's source and fails when
+  the two differ; a second test holds that every kind a source may push has one place in the order.
+- **An identity can name a team the source never pushes.** The identity is stored as pushed, no team row is
+  made up for it, and the record is not refused. After the batch the sink writes ONE WARN line, `external push:
+  identities name team ids that have no team row`, with counts only: `identities` (identity records of the
+  batch), `team_ids_named`, `team_ids_with_no_team_row`, the organization and the source system. It holds no
+  team id and no identity id: either can be a person's own words. A failed count read is logged at WARN too
+  and does not fail the write, because the rows of the batch are stored.
+- **Not changed here.** What a reader makes of a team id with no team row (section 0.4c: the cascade keeps it
+  as an unknown team).
 
 #### 0.4a Provider × entity **consumption** (functional — what `run_team_autoimport` actually pulls)
 

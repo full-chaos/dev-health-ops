@@ -489,7 +489,7 @@ dev-hops metrics validate-flags --lookback 30
 
 Compute the Compounding Risk composite from persisted inputs (`repo_metrics_daily` + `repo_complexity_daily`) and write `compounding_risk_daily`. Requires `CLICKHOUSE_URI` **and** an organization id.
 
-> **Note (CHAOS-2888):** this command exits `0` whenever the compounding-risk query and write both complete, even if some rows have `severity="unknown"` due to missing required inputs — it exits non-zero only for configuration, validation, or infrastructure failures. Missing-input reason counts (`missing_rework_churn`, `missing_complexity_delta`, `missing_review_latency`, `missing_ownership_signal`) are logged per run. For API-triggered backfills, the same missing-input counts and per-day table coverage are surfaced on `GET /backfill-jobs/{job_id}` via `metrics_diagnostics`.
+> **Note (CHAOS-2888):** this command exits `0` whenever the compounding-risk query and write both complete, even if some rows have `severity="unknown"` (a row is unknown only when NO input is present; with some inputs missing the score is the weighted mean of the present ones, CHAOS-6545) — it exits non-zero only for configuration, validation, or infrastructure failures. Missing-input reason counts (`missing_rework_churn`, `missing_complexity_delta`, `missing_review_latency`, `missing_ownership_signal`) are logged per run. For API-triggered backfills, the same missing-input counts and per-day table coverage are surfaced on `GET /backfill-jobs/{job_id}` via `metrics_diagnostics`.
 
 ```bash
 dev-hops metrics compounding-risk --org "$ORG_ID"

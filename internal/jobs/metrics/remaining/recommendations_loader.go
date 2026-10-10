@@ -8,6 +8,7 @@ import (
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/google/uuid"
 
+	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse/liverow"
 	"github.com/full-chaos/dev-health-ops/internal/teamownership"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/prrework"
@@ -127,6 +128,15 @@ func safeFloat(value *float64) (float64, bool) {
 	return SafeFloat(*value, true)
 }
 
+// measuredKeyHaving keeps a key of a team-keyed daily table only when its
+// newest row is a measurement (package liverow). The loader reads the rows of
+// ONE team id. When that id was retired, its newest rows are retraction rows:
+// a day that holds only such rows is a day with no data for the team, not a
+// day with a WIP, a throughput or an after-hours ratio of 0.
+func measuredKeyHaving(table string) string {
+	return "\n                HAVING " + liverow.NewestPredicate(table, "")
+}
+
 // loadWIPThroughput ports _load_wip_throughput.
 //
 // TEAM-SCOPED (work_item_metrics_daily carries team_id). The inner GROUP BY
@@ -144,7 +154,7 @@ func (loader *RecommendationsLoader) loadWIPThroughput(
                 FROM work_item_metrics_daily
                 WHERE team_id = {team_id:String}
                   AND day >= {start:Date} AND day < {end:Date}` + loader.orgClause() + `
-                GROUP BY day, provider, work_scope_id
+                GROUP BY day, provider, work_scope_id` + measuredKeyHaving("work_item_metrics_daily") + `
             )
             GROUP BY day ORDER BY day
         `
@@ -373,7 +383,7 @@ func (loader *RecommendationsLoader) loadSustainabilitySignals(
                         FROM team_metrics_daily
                         WHERE team_id = {team_id:String}
                           AND day >= {start:Date} AND day < {end:Date}` + loader.orgClause() + `
-                        GROUP BY day, repo_id
+                        GROUP BY day, repo_id` + measuredKeyHaving("team_metrics_daily") + `
                     )
                     WHERE repo_id != '' OR real_repo_count = 0
                 )
@@ -407,7 +417,7 @@ func (loader *RecommendationsLoader) loadSustainabilitySignals(
                 FROM work_item_metrics_daily
                 WHERE team_id = {team_id:String}
                   AND day >= {start:Date} AND day < {end:Date}` + loader.orgClause() + `
-                GROUP BY day, provider, work_scope_id
+                GROUP BY day, provider, work_scope_id` + measuredKeyHaving("work_item_metrics_daily") + `
             )
             GROUP BY day ORDER BY day
         `
@@ -536,7 +546,7 @@ func (loader *RecommendationsLoader) loadCompoundingSignals(
 // column.
 func (loader *RecommendationsLoader) loadCompoundingRiskPersisted(
 	ctx context.Context, teamID string, windowStart, windowEnd time.Time,
-) (score float64, scoreKnown bool, severity string, err error) {
+) (score float64, scoreKnown bool, severity string, coverage float64, coverageKnown bool, inputs []string, err error) {
 	// argMax over a TUPLE, so the score and the severity are taken from the
 	// SAME row. Two separate argMax calls could take them from different rows
 	// if their computed_at values ever tie, which would pair a score with
@@ -545,9 +555,12 @@ func (loader *RecommendationsLoader) loadCompoundingRiskPersisted(
 	query := `
             SELECT
                 tupleElement(latest_row, 1) AS score,
-                tupleElement(latest_row, 2) AS severity
+                tupleElement(latest_row, 2) AS severity,
+                tupleElement(latest_row, 3), tupleElement(latest_row, 4), tupleElement(latest_row, 5), tupleElement(latest_row, 6),
+                tupleElement(latest_row, 7), tupleElement(latest_row, 8), tupleElement(latest_row, 9), tupleElement(latest_row, 10)
             FROM (
-                SELECT argMax(tuple(compounding_risk, severity), computed_at) AS latest_row
+                SELECT argMax(tuple(compounding_risk, severity, churn_norm, complexity_norm, ownership_norm, review_norm,
+                                    w_churn, w_complexity, w_ownership, w_review), computed_at) AS latest_row
                 FROM compounding_risk_daily
                 WHERE scope = 'team'
                   AND scope_id = {team_id:String}
@@ -557,25 +570,50 @@ func (loader *RecommendationsLoader) loadCompoundingRiskPersisted(
 	rows, err := loader.conn.Query(ctx, query,
 		namedArguments(loader.windowArguments(teamID, windowStart, windowEnd))...)
 	if err != nil {
-		return 0, false, "", fmt.Errorf("load compounding risk: %w", err)
+		return 0, false, "", 0, false, nil, fmt.Errorf("load compounding risk: %w", err)
 	}
 	defer rows.Close()
 
 	if rows.Next() {
 		var rawScore *float64
 		var rawSeverity string
-		if scanErr := rows.Scan(&rawScore, &rawSeverity); scanErr != nil {
-			return 0, false, "", fmt.Errorf("scan compounding risk: %w", scanErr)
+		var churnNorm, complexityNorm, ownershipNorm, reviewNorm *float64
+		var wChurn, wComplexity, wOwnership, wReview float64
+		if scanErr := rows.Scan(&rawScore, &rawSeverity, &churnNorm, &complexityNorm, &ownershipNorm, &reviewNorm,
+			&wChurn, &wComplexity, &wOwnership, &wReview); scanErr != nil {
+			return 0, false, "", 0, false, nil, fmt.Errorf("scan compounding risk: %w", scanErr)
 		}
 		score, scoreKnown = safeFloat(rawScore)
+		// The coverage of the score: the weights of the present component
+		// norms over all four, from the same row. Only beside a score.
+		if scoreKnown {
+			var present float64
+			total := wChurn + wComplexity + wOwnership + wReview
+			for _, input := range []struct {
+				name   string
+				norm   *float64
+				weight float64
+			}{
+				{"churn", churnNorm, wChurn}, {"complexity trend", complexityNorm, wComplexity},
+				{"ownership concentration", ownershipNorm, wOwnership}, {"review latency", reviewNorm, wReview},
+			} {
+				if input.norm != nil {
+					present += input.weight
+					inputs = append(inputs, input.name)
+				}
+			}
+			if total > 0 {
+				coverage, coverageKnown = present/total, true
+			}
+		}
 		// `str(severity) if severity else None`: an EMPTY severity becomes
 		// absent, not an empty string. The Go mirror already spells absent as
 		// "", so both map to "" and no conversion is needed -- the identity is
 		// stated rather than written, because a reader checking parity against
 		// the Python `if severity else None` will look for it here.
-		return score, scoreKnown, rawSeverity, rows.Err()
+		return score, scoreKnown, rawSeverity, coverage, coverageKnown, inputs, rows.Err()
 	}
-	return 0, false, "", rows.Err()
+	return 0, false, "", 0, false, nil, rows.Err()
 }
 
 // LoadTeamMetricsWindow ports load_team_metrics_window: every signal for one
@@ -627,7 +665,7 @@ func (loader *RecommendationsLoader) LoadTeamMetricsWindow(
 	if err != nil {
 		return MetricsSnapshot{}, err
 	}
-	score, scoreKnown, severity, err := scoped.loadCompoundingRiskPersisted(ctx, teamID, windowStart, windowEnd)
+	score, scoreKnown, severity, coverage, coverageKnown, inputs, err := scoped.loadCompoundingRiskPersisted(ctx, teamID, windowStart, windowEnd)
 	if err != nil {
 		return MetricsSnapshot{}, err
 	}
@@ -655,6 +693,10 @@ func (loader *RecommendationsLoader) LoadTeamMetricsWindow(
 		CompoundingRiskScore:        score,
 		CompoundingRiskScoreKnown:   scoreKnown,
 		CompoundingRiskSeverity:     severity,
+
+		CompoundingRiskCoverage:      coverage,
+		CompoundingRiskCoverageKnown: coverageKnown,
+		CompoundingRiskInputs:        inputs,
 	}, nil
 }
 

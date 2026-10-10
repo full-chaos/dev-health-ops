@@ -14,6 +14,7 @@ import (
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/analytics"
+	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse/liverow"
 )
 
 // dateBindingValue formats t as a bare "YYYY-MM-DD" string for binding
@@ -309,7 +310,13 @@ type stateStatusCountRow struct {
 // table's ReplacingMergeTree sorting key (org_id, provider, work_scope_id,
 // team_id, status, day), is equivalent to FINAL for this table -- and
 // items_touched is a non-nullable UInt32 per DDL, so no null-skip risk --
-// this port reads FINAL directly instead, no divergence.
+// this port reads FINAL directly instead.
+//
+// One difference from Python: a newest row that holds no measure is a
+// retraction row (package liverow) and is left out. It adds 0 to the sum, but
+// this read makes a LIST of statuses, and a status whose rows in scope are all
+// retraction rows (the keys of a retired team id) is a status with no data,
+// not a status with 0 items.
 //
 // sum(items_touched) promotes UInt32 to UInt64, which the driver refuses
 // to scan into *float64. _build_state_flow reads this field with
@@ -324,11 +331,12 @@ func fetchStateStatusCounts(ctx context.Context, client QueryClient, startDay, e
         FROM work_item_state_durations_daily FINAL
         WHERE day >= {start_day:Date} AND day < {end_day:Date}
           AND org_id = {org_id:String}
+          AND %s
             %s
         GROUP BY status
         ORDER BY items_touched DESC
         %s
-    `, scopeFilterSQL, settingsMaxExecutionTime())
+    `, liverow.Predicate("work_item_state_durations_daily", ""), scopeFilterSQL, settingsMaxExecutionTime())
 	bindings := append([]dhclickhouse.Binding{
 		{Name: "start_day", Value: dateBindingValue(startDay)},
 		{Name: "end_day", Value: dateBindingValue(endDay)},

@@ -33,6 +33,13 @@ var snapshotKindCensus = map[string]struct {
 		"one listing per group, each with its own proven end, in a scope no other integration lists: a group with no project is an answer"},
 	"github_team_repo_grants": {"internal/providersync.GitHubTeamRepoGrantKind", "EmptyIsAnAnswer",
 		"one listing per team, each with its own proven end, in a scope no other integration lists: a team with no repository is an answer"},
+	"linear_team_memberships": {"internal/providersync.LinearTeamMembershipKind", "EmptyIsAnAnswer",
+		"every team's member list ends or the run fails before any write (evidence.MembersComplete), in a scope no other integration reads: " +
+			"a team with no member is an answer"},
+	"github_team_memberships": {"internal/providersync.GitHubTeamMembershipKind", "EmptyIsAnAnswer",
+		"one member read per team, each with its own proven end, in a scope no other integration reads: a team with no member is an answer"},
+	"gitlab_team_memberships": {"internal/providersync.GitLabTeamMembershipKind", "EmptyIsAnAnswer",
+		"one member read per group, each with its own proven end, in a scope no other integration reads: a group with no member is an answer"},
 	"atlassian_team_project_links": {"internal/providersync.AtlassianTeamLinkKind", "EmptyIsAnAnswer",
 		"one link read per team, each to its end: a team with no link is an answer; a team outside the search answer is in scope " +
 			"only through atlassian_team_catalog"},
@@ -51,6 +58,7 @@ var snapshotCloseSites = map[string]string{
 	"internal/providersync.jiraOwnershipSnapshot":       "KindSnapshot argument: JiraLegacyOwnershipKind with the project search and legacy links terms",
 	"internal/providersync.gitlabOwnershipSnapshot":     "KindSnapshot argument from ownershipCloseDecision.snapshot (closable teams only, the gate's terms)",
 	"internal/providersync.githubRepoOwnershipSnapshot": "KindSnapshot argument from ownershipCloseDecision.snapshot (closable teams only, the gate's terms)",
+	"internal/providersync.planMembershipSnapshot":      "KindSnapshot arguments passed through from MembershipSnapshotWriter.Snapshot, made in the collectors from ownershipCloseDecision.membershipSnapshot (closable teams only, the gate's terms)",
 	"internal/atlassianteams.planOwnership":             "KindSnapshot argument: AtlassianTeamLinkKind with the Rows.ProjectLinksComplete term",
 	"internal/atlassianteams.planMemberships":           "KindSnapshot argument: AtlassianTeamMembershipKind with the Rows.MembershipsComplete term",
 	"internal/atlassianteams.teamsInScope":              "makes its proof in place: AtlassianTeamCatalogKind with the Rows.TeamSearchComplete term",
@@ -95,6 +103,14 @@ func TestSnapshotKindCensus(t *testing.T) {
 	}
 }
 
+// stampOnlySnapshotPlanners call the snapshot rule for the valid_from stamps of
+// the rows a run holds again, and for nothing else: no kind, no retraction.
+// They are not close sites, and the census checks that they are not.
+var stampOnlySnapshotPlanners = map[string]string{
+	"internal/providersync.firstSeenMembershipValidFrom": "reuses the earliest open valid_from of a membership fact the run holds " +
+		"again (CHAOS-9007, membership_first_seen.go); it passes no KindSnapshot and closes nothing",
+}
+
 // TestEveryCloseSiteTakesTheTypedSnapshot fails when a function closes rows
 // from a snapshot without the typed per-kind proof: a new close site, a close
 // site that goes back to a bool, a close that does not come from the rule, or
@@ -137,9 +153,37 @@ func TestEveryCloseSiteTakesTheTypedSnapshot(t *testing.T) {
 	}
 	// Every caller of the rule is a close site: nobody plans a snapshot and
 	// drops the plan, or closes through another path.
+	// ...unless it is NAMED as a stamp-only planner: it calls the rule for the
+	// valid_from stamps alone, passes no kind, turns no retraction into a row
+	// and sets no valid_to. What that means is checked, not trusted.
 	for _, planner := range census.planners {
-		if !census.closes[planner] {
-			t.Errorf("%s calls the snapshot rule and is not a close site", planner)
+		reason, stampOnly := stampOnlySnapshotPlanners[planner]
+		switch {
+		case stampOnly:
+			if strings.TrimSpace(reason) == "" {
+				t.Errorf("%s is named in stampOnlySnapshotPlanners and gives no reason", planner)
+			}
+			if census.closes[planner] || census.setsValidTo[planner] || census.takesKind[planner] {
+				t.Errorf("%s is named in stampOnlySnapshotPlanners and closes rows or takes a kind: it is a close site, name it in snapshotCloseSites", planner)
+			}
+		case !census.closes[planner]:
+			t.Errorf("%s calls the snapshot rule and is not a close site (a planner that only reuses stamps is named in stampOnlySnapshotPlanners)", planner)
+		}
+	}
+	for planner := range stampOnlySnapshotPlanners {
+		known := false
+		for _, candidate := range census.planners {
+			known = known || candidate == planner
+		}
+		if !known {
+			t.Errorf("stampOnlySnapshotPlanners names %s, which does not call the snapshot rule", planner)
+		}
+	}
+	// planMembershipSnapshot is a close site by itself: the one function allowed
+	// to call it is the writer that writes what it plans.
+	for function, calls := range census.calls {
+		if calls["planMembershipSnapshot"] && function != "internal/providersync.MembershipSnapshotWriter.Snapshot" {
+			t.Errorf("%s calls planMembershipSnapshot: only MembershipSnapshotWriter.Snapshot may, it writes what the plan closes", function)
 		}
 	}
 	// A row's valid_to is set from a plan's retraction, in a close site.

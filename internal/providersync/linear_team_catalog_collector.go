@@ -161,7 +161,35 @@ func (collector LinearTeamCatalogCollector) CollectTeamCatalog(
 		// table never disagree about which assignments are safe.
 		result.MembershipsSkippedManualConflict = membershipsSkippedManualConflict
 		result.MembershipsStagedForReview = membershipsStagedForReview
-		membershipsEffect, err := effectBatchFromValues(linearReferenceCatalogMembershipsDestination, EffectReadbackRequired, keptMemberships)
+		// CHAOS-9007 / CHAOS-9079: a membership keeps the valid_from it was first
+		// seen with, and a member absent from the COMPLETE read of its team is
+		// closed (through the one snapshot rule). Linear's member walk fails the
+		// whole run when a team's member list does not end, so a run that gets
+		// here has read every team it lists to its end (evidence.MembersComplete).
+		teamIDs := make([]string, 0, len(batch.Rows.Teams))
+		for _, team := range batch.Rows.Teams {
+			teamIDs = append(teamIDs, team.ID)
+		}
+		// A team whose member list held a node the collector cannot use is not
+		// complete either: nothing of it closes.
+		unprovenTeamIDs := batch.Rows.UnusableMemberTeamIDs
+		if !batch.Evidence.MembersComplete {
+			unprovenTeamIDs = teamIDs
+		}
+		decision := decideOwnershipClose(ctx, collector.ScopeCensus, ownershipCloseRequest{
+			ref: ref, provider: "linear", listed: teamIDs, unproven: unprovenTeamIDs,
+			dataset: "team_memberships", leg: membershipCloseLeg,
+		})
+		membershipRows, membershipOutcome, err := linearMembershipWriter.Snapshot(
+			ctx, collector.Sink.Conn, ref.OrgID, batch.Rows.Memberships, keptMemberships, normalizedAt.UTC().Truncate(time.Millisecond),
+			linearInactiveAbsence{inactive: batch.Rows.InactiveMemberKeys}, decision.membershipSnapshot(LinearTeamMembershipKind))
+		if err != nil {
+			return result, err
+		}
+		ReportSnapshotPlan(ctx, "linear", ref.OrgID, membershipOutcome.Plan)
+		result.DegradedLegs = append(result.DegradedLegs, decision.legs...)
+		result.MembershipsClosed = membershipOutcome.Closed
+		membershipsEffect, err := effectBatchFromValues(linearReferenceCatalogMembershipsDestination, EffectReadbackRequired, membershipRows)
 		if err != nil {
 			return result, err
 		}

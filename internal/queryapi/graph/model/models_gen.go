@@ -656,11 +656,19 @@ type CompoundingRiskFilterInput struct {
 }
 
 type CompoundingRiskPoint struct {
-	Day         graphqldate.Date            `json:"day"`
-	Scope       CompoundingRiskScope        `json:"scope"`
-	ScopeID     string                      `json:"scopeId"`
-	ScopeLabel  string                      `json:"scopeLabel"`
-	Score       *float64                    `json:"score,omitempty"`
+	Day        graphqldate.Date     `json:"day"`
+	Scope      CompoundingRiskScope `json:"scope"`
+	ScopeID    string               `json:"scopeId"`
+	ScopeLabel string               `json:"scopeLabel"`
+	Score      *float64             `json:"score,omitempty"`
+	// The share of the score's weight that was present: the weights of the inputs
+	// that had data over the sum of all four weights, in [0, 1]. The score is the
+	// weighted mean over the present inputs, so a coverage below 1 says it was
+	// computed from fewer than four inputs. It is served only beside a score: it is
+	// null whenever the score is null (a row with no input at all, or a row written
+	// before this rule that has not been recomputed), and null when no weight is
+	// stored.
+	Coverage    *float64                    `json:"coverage,omitempty"`
 	Severity    CompoundingRiskSeverity     `json:"severity"`
 	Components  *CompoundingRiskComponents  `json:"components"`
 	Weights     *CompoundingRiskWeights     `json:"weights"`
@@ -951,6 +959,8 @@ type HomeSignal struct {
 	Category    string  `json:"category"`
 	// Null when the signal is not scoped to one entity (e.g. an org-wide signal).
 	ScopeEntity *ScopeEntityRef `json:"scopeEntity,omitempty"`
+	// For a compounding-risk signal: the share of the score's weight that was present, from 0 to 1 (the score is the weighted mean over the inputs that had data). Null on every other signal.
+	Coverage *float64 `json:"coverage,omitempty"`
 	// Current primary work-item attribution evidence for work-item metrics; null when this window has no attributable work items.
 	Attribution *SignalAttribution `json:"attribution,omitempty"`
 }
@@ -1065,6 +1075,8 @@ type MetricDelta struct {
 	Spark        []SparkPoint `json:"spark"`
 	// Why change failure rate has a value or not (CHAOS-8981): measured (the value may be 0), unknown_no_incident_evidence (deployments, and no incident tied to the scope in the window) or not_applicable_no_deployments. Null when the window holds no stored counts, and for every other metric.
 	RateState *string `json:"rateState,omitempty"`
+	// The coverage of the pull request rework ratio (CHAOS-9072), from 0 to 1, not a percent: the merged pull requests of the window that have review data from a provider that stores a changes-requested review, divided by all merged pull requests of the window that have stored counts. 0 when rateState is unknown_no_review_evidence or not_applicable_no_rework_signal. Null when the window has no merged pull request, when it holds no stored counts, and for every other metric.
+	RateCoverage *float64 `json:"rateCoverage,omitempty"`
 }
 
 type MetricLineage struct {

@@ -686,6 +686,9 @@ type RiskRow struct {
 	Score            *float64
 	Severity         string
 	ScopeDisplayName string
+	// Coverage is the share of the score's weight that was present (read from
+	// the stored weights and component norms); nil when the row has no score.
+	Coverage *float64
 }
 
 // RiskSignal ports _risk_signal (services/home.py:716-768).
@@ -738,6 +741,10 @@ func RiskSignal(row RiskRow, f Filters, dataConfidence DataConfidence) (Signal, 
 		RecommendedAction: actionForMetric("compounding_risk"),
 		Category:          CategoryDurability,
 		ScopeEntity:       &ScopeEntityRef{ID: scopeID, DisplayName: entityName},
+		// The score is shown with the coverage it stands on (never a bare score):
+		// a score computed from fewer than all four inputs keeps its severity and
+		// says how much it is based on.
+		Coverage: row.Coverage,
 	}, true
 }
 

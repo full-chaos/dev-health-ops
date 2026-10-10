@@ -86,6 +86,14 @@ type MetricDelta struct {
 	// "not_applicable_no_merged_pull_requests". nil when the window holds no
 	// stored counts, and for every other metric.
 	RateState *string `json:"rate_state,omitempty"`
+	// RateCoverage is the share of the merged pull requests that the pull
+	// request rework ratio speaks for, from 0 to 1 (prrework.Outcome.Coverage):
+	// the merged pull requests with review data from a provider that stores a
+	// changes-requested review, over all merged pull requests with stored
+	// counts. 0 when no merged pull request has such review data. nil when no
+	// pull request merged, when the window holds no stored counts, and for
+	// every other metric.
+	RateCoverage *float64 `json:"rate_coverage,omitempty"`
 }
 
 // ReworkThemeAllocation is the wire shape of ReworkThemeAllocation
@@ -161,6 +169,12 @@ type Signal struct {
 	EvidenceRef       *string         `json:"evidence_ref"`
 	Category          string          `json:"category"`
 	ScopeEntity       *ScopeEntityRef `json:"scope_entity"`
+	// Coverage is, for a compounding-risk signal, the share of the score's
+	// weight that was present (0 to 1): the score is the weighted mean over the
+	// inputs that had data. It is served on the GraphQL HomeSignal only: the REST
+	// response model (pinned by a recorded golden) does not carry it. It is nil on
+	// every other signal.
+	Coverage *float64 `json:"-"`
 	// Attribution is the distribution of current primary work-item
 	// attribution evidence behind a work-item metric. It is nil when this
 	// window has no attributable work items. It is never attached to

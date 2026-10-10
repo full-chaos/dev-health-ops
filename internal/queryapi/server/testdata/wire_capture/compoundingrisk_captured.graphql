@@ -9,6 +9,7 @@ query CompoundingRisk($orgId: String!, $filter: CompoundingRiskFilterInput = nul
       scopeId
       scopeLabel
       score
+      coverage
       severity
       computedAt
       components {

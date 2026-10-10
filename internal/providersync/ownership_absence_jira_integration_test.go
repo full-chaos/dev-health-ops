@@ -39,10 +39,14 @@ import (
 // The real Jira team catalog collector and the real ClickHouse writer; the
 // provider is a scripted answer in Jira's shape (values, startAt, isLast).
 
-// jiraProjectServer is the live projects of one Jira site.
+// jiraProjectServer is the live and the archived projects of one Jira site.
 type jiraProjectServer struct {
 	mu       sync.Mutex
-	projects []string // project keys, in the provider's order
+	projects []string // live project keys, in the provider's order
+	archived []string // archived project keys, in the provider's order
+	// afterArchivedPageOne runs once, directly after page 1 of the archived
+	// search is built: a change of the archived projects between two requests.
+	afterArchivedPageOne func(archived []string) []string
 	// flap, when set, is a project key that leaves the live answer directly
 	// after page 1 of EACH live walk is built, and is live again when the
 	// archived search is read (between the two live walks).
@@ -72,22 +76,58 @@ func (server *jiraProjectServer) doer(t *testing.T) jiraProjectDoer {
 		}
 		path, query := request.URL.Path, request.URL.Query()
 		switch {
-		case path == "/rest/api/3/project/search" && query.Get("status") == "archived":
-			if server.flap != "" {
-				server.projects = append([]string{server.flap}, withoutRepo(server.projects, server.flap)...)
-			}
-			return respond(200, `{"values":[],"isLast":true,"total":0}`)
 		case path == "/rest/api/3/project/search" && query.Get("id") != "":
+			// The search for one project. As the provider does, it answers for
+			// the states `status` names, and for live projects only when the
+			// request names none.
 			server.lookups++
 			if server.lookupStatus != 0 {
 				return respond(server.lookupStatus, `{"errorMessages":["simulated failure"]}`)
 			}
-			for _, key := range server.projects {
-				if jiraProjectNativeID(key) == query.Get("id") {
-					return respond(200, `{"values":[`+entry(key)+`],"startAt":0,"isLast":true,"total":1}`)
+			statuses := query["status"]
+			if len(statuses) == 0 {
+				statuses = []string{"live"}
+			}
+			for _, status := range statuses {
+				list := server.projects
+				if status == "archived" {
+					list = server.archived
+				}
+				for _, key := range list {
+					if jiraProjectNativeID(key) == query.Get("id") {
+						return respond(200, `{"values":[`+entry(key)+`],"startAt":0,"isLast":true,"total":1}`)
+					}
 				}
 			}
 			return respond(200, `{"values":[],"startAt":0,"isLast":true,"total":0}`)
+		case path == "/rest/api/3/project/search" && query.Get("status") == "archived":
+			if server.flap != "" {
+				server.projects = append([]string{server.flap}, withoutRepo(server.projects, server.flap)...)
+			}
+			startAt, _ := strconv.Atoi(query.Get("startAt"))
+			maxResults, _ := strconv.Atoi(query.Get("maxResults"))
+			if maxResults < 1 {
+				maxResults = 50
+			}
+			start, end := startAt, startAt+maxResults
+			if start > len(server.archived) {
+				start = len(server.archived)
+			}
+			last := end >= len(server.archived)
+			if last {
+				end = len(server.archived)
+			}
+			values := make([]string, 0, end-start)
+			for _, key := range server.archived[start:end] {
+				values = append(values, entry(key))
+			}
+			total := len(server.archived)
+			if startAt == 0 && server.afterArchivedPageOne != nil {
+				server.archived = server.afterArchivedPageOne(server.archived)
+				server.afterArchivedPageOne = nil
+			}
+			return respond(200, fmt.Sprintf(`{"values":[%s],"startAt":%d,"maxResults":%d,"isLast":%t,"total":%d}`,
+				strings.Join(values, ","), startAt, maxResults, last, total))
 		case path == "/rest/api/3/project/search":
 			startAt, _ := strconv.Atoi(query.Get("startAt"))
 			maxResults, _ := strconv.Atoi(query.Get("maxResults"))
@@ -130,6 +170,16 @@ func jiraProjectKeys(count int) []string {
 	keys := make([]string, 0, count)
 	for index := 0; index < count; index++ {
 		keys = append(keys, fmt.Sprintf("K%03d", index))
+	}
+	return keys
+}
+
+// jiraArchivedKeys are project keys whose native ids do not meet those of
+// jiraProjectKeys.
+func jiraArchivedKeys(count int) []string {
+	keys := make([]string, 0, count)
+	for index := 0; index < count; index++ {
+		keys = append(keys, fmt.Sprintf("K9%03d", index))
 	}
 	return keys
 }
@@ -316,6 +366,129 @@ func TestJiraLegacyOwnershipIsNotClosedByAProjectSearchThatChangedWhileItWasRead
 		}
 		if reasons := absenceLegReasons(result); len(reasons) != 1 || reasons[0] != OwnershipAbsenceNotProven {
 			t.Errorf("the result names the absence legs %v, want [%s]", reasons, OwnershipAbsenceNotProven)
+		}
+	})
+}
+
+// An ARCHIVED project keeps its ownership: the catalog leaves the open rows of
+// every project the archived search returns as they are. The archived search
+// is its own walk by offset, and it feeds the same held set as the two live
+// walks. When an archived project is deleted between two of its page
+// requests, another project that is STILL archived is on no page. Its row must
+// stay open: one response of the live search does not prove it gone, and an
+// answer for live projects only would call it gone.
+func TestJiraLegacyOwnershipOfAnArchivedProjectIsNotClosedByAnArchivedSearchThatChangedWhileItWasRead(t *testing.T) {
+	ctx, conn := newWorkItemEffectsConn(t)
+	t0 := time.Date(2026, 10, 2, 8, 0, 0, 0, time.UTC)
+	const paged = 3 * jiraTeamCatalogProjectSearchMaxResults / 2 // one page and a half
+	link := func(orgID string, keys []string) {
+		t.Helper()
+		for _, key := range keys {
+			if err := conn.Exec(ctx, `INSERT INTO jira_project_ops_team_links (org_id, project_key, ops_team_id, project_name, ops_team_name, updated_at) VALUES (?, ?, ?, ?, ?, ?)`,
+				orgID, key, "ops-team-a", "Project "+key, "Ops Team", t0.Add(-time.Hour)); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	for _, tc := range []struct {
+		name string
+		live int
+	}{
+		{"the live search is one response", 3},
+		{"the live search is two responses", paged},
+	} {
+		t.Run("an archived project is deleted between two pages of the archived search; "+tc.name, func(t *testing.T) {
+			orgID := uuid.NewString()
+			live, later := jiraProjectKeys(tc.live), jiraArchivedKeys(paged)
+			every := append(append([]string{}, live...), later...)
+			link(orgID, every)
+			// Run 1: every project is live. Run 2: the later ones are archived.
+			server := &jiraProjectServer{projects: every}
+			jiraProjectRun(ctx, t, conn, orgID, server, t0)
+			server.set(func(server *jiraProjectServer) { server.projects, server.archived = live, later })
+			jiraProjectRun(ctx, t, conn, orgID, server, t0.Add(time.Hour))
+			if open := jiraLegacyOpen(ctx, t, conn, orgID); len(open) != len(every) {
+				t.Fatalf("after the archive %d rows are open, want %d (an archived project keeps its rows): the case is not set", len(open), len(every))
+			}
+			first := later[0]
+			boundary := jiraProjectNativeID(later[jiraTeamCatalogProjectSearchMaxResults])
+			server.set(func(server *jiraProjectServer) {
+				server.afterArchivedPageOne = func(archived []string) []string { return withoutRepo(archived, first) }
+			})
+			result, lookups, warnings := jiraProjectRun(ctx, t, conn, orgID, server, t0.Add(2*time.Hour))
+			open := jiraLegacyOpen(ctx, t, conn, orgID)
+			if from, isOpen := open[boundary]; !isOpen || !from.Equal(t0) {
+				t.Errorf("archived project %s still exists and was on no page of the archived search: open %v valid_from %s, want an open row from %s",
+					boundary, isOpen, from.Format(time.RFC3339), t0.Format(time.RFC3339))
+			}
+			if lookups != 1 {
+				t.Errorf("the sync made %d search(es) for one project, want 1 (the one project no walk held)", lookups)
+			}
+			if len(warnings) != 1 || warnings[0]["rows_still_held"] != float64(1) || warnings[0]["rows_closed"] != float64(0) {
+				t.Errorf("the WARN line of the absence rule is %v, want 1 row still held and 0 closed", warnings)
+			}
+			if reasons := absenceLegReasons(result); len(reasons) != 1 || reasons[0] != OwnershipAbsenceListingWrong {
+				t.Errorf("the result names the absence legs %v, want [%s]", reasons, OwnershipAbsenceListingWrong)
+			}
+			// The next clean sync closes the project that WAS deleted, on the
+			// provider's answer (neither live nor archived), and leaves the
+			// archived one as it is.
+			if _, lookups, _ := jiraProjectRun(ctx, t, conn, orgID, server, t0.Add(3*time.Hour)); lookups != 1 {
+				t.Errorf("the clean sync made %d search(es) for one project, want 1 (the deleted project)", lookups)
+			}
+			open = jiraLegacyOpen(ctx, t, conn, orgID)
+			if _, isOpen := open[jiraProjectNativeID(first)]; isOpen {
+				t.Errorf("the deleted project %s is still open after a clean sync", first)
+			}
+			if from, isOpen := open[boundary]; !isOpen || !from.Equal(t0) {
+				t.Errorf("archived project %s after the clean sync: open %v valid_from %s, want the open row from %s",
+					boundary, isOpen, from.Format(time.RFC3339), t0.Format(time.RFC3339))
+			}
+		})
+	}
+
+	// Every walk is one response: a deleted archived project is closed by the
+	// walks themselves, with no request.
+	t.Run("an archived project is deleted and every walk is one response", func(t *testing.T) {
+		orgID := uuid.NewString()
+		live, later := jiraProjectKeys(3), jiraArchivedKeys(3)
+		every := append(append([]string{}, live...), later...)
+		link(orgID, every)
+		server := &jiraProjectServer{projects: every}
+		jiraProjectRun(ctx, t, conn, orgID, server, t0)
+		server.set(func(server *jiraProjectServer) { server.projects, server.archived = live, later })
+		jiraProjectRun(ctx, t, conn, orgID, server, t0.Add(time.Hour))
+		server.set(func(server *jiraProjectServer) { server.archived = withoutRepo(server.archived, later[1]) })
+		_, lookups, warnings := jiraProjectRun(ctx, t, conn, orgID, server, t0.Add(2*time.Hour))
+		open := jiraLegacyOpen(ctx, t, conn, orgID)
+		if _, isOpen := open[jiraProjectNativeID(later[1])]; isOpen || len(open) != len(every)-1 {
+			t.Errorf("the deleted archived project is open %v and %d rows are open; want closed and %d", isOpen, len(open), len(every)-1)
+		}
+		if lookups != 0 || len(warnings) != 0 {
+			t.Errorf("walks of one response each made %d search(es) for one project and %d WARN line(s), want none", lookups, len(warnings))
+		}
+	})
+
+	// The live search is one response and the ARCHIVED search is two: a live
+	// project that left is a candidate (one walk of the held set could have
+	// moved), and it is closed on the provider's answer.
+	t.Run("a live project left while the archived search took two responses", func(t *testing.T) {
+		orgID := uuid.NewString()
+		live, later := jiraProjectKeys(3), jiraArchivedKeys(paged)
+		every := append(append([]string{}, live...), later...)
+		link(orgID, every)
+		server := &jiraProjectServer{projects: every}
+		jiraProjectRun(ctx, t, conn, orgID, server, t0)
+		server.set(func(server *jiraProjectServer) { server.projects, server.archived = live, later })
+		jiraProjectRun(ctx, t, conn, orgID, server, t0.Add(time.Hour))
+		server.set(func(server *jiraProjectServer) { server.projects = withoutRepo(server.projects, "K001") })
+		_, lookups, warnings := jiraProjectRun(ctx, t, conn, orgID, server, t0.Add(2*time.Hour))
+		open := jiraLegacyOpen(ctx, t, conn, orgID)
+		if _, isOpen := open[jiraProjectNativeID("K001")]; isOpen || len(open) != len(every)-1 {
+			t.Errorf("the live project that left is open %v and %d rows are open; want closed and %d", isOpen, len(open), len(every)-1)
+		}
+		if lookups != 1 || len(warnings) != 0 {
+			t.Errorf("the sync made %d search(es) for one project and %d WARN line(s), want 1 and none", lookups, len(warnings))
 		}
 	})
 }

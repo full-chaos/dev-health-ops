@@ -1775,7 +1775,10 @@ Limits:
   only from ACTIVE teams. The row of the day holds ONE team: the first by the attribution's rank (primary, then
   specificity, priority, the newer row, the team id). The landscape holds a point for EACH active team of the person,
   so a person of N teams is ranked among the members of each. A person with no membership valid at the day is
-  `unassigned`, id and name, in the row and in the landscape. The team a STORED row holds is never a source: after
+  `unassigned`, id and name, in the row and in the landscape. The NAME of the row's team comes from the same read as
+  its id (CHAOS-9134): the name of the newest membership fact of that team that has one, so the id and the name of one
+  row never come from different teams (a team no fact names keeps its id as its name; the reference passed the stored
+  name through, a declared narrow divergence). The team a STORED row holds is never a source: after
   the first run of a day the newest stored row is the family's own output, and a person who left a team would stay
   in it. A point stored under a team the run does not produce is retracted by the rule of this section. What stays:
   - an id with NO row in `teams` counts as active, so a membership of a deleted team still gives a row and points;

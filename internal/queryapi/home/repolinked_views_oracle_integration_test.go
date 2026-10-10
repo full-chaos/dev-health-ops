@@ -8,6 +8,7 @@ import (
 	"math"
 	"reflect"
 	"sort"
+	"strings"
 	"testing"
 	"time"
 
@@ -113,6 +114,15 @@ func viewWorldTS(value string) string {
 	return "toDateTime64('" + value + "', 3, 'UTC')"
 }
 
+// viewWorldHolds are the repositories each team holds (team_repo_ownership); a team not listed holds none.
+var viewWorldHolds = map[string][]string{
+	"t-alpha": {oracleR1},
+	"t-beta":  {oracleR2},
+	"t-gamma": {oracleR1, oracleR2},
+}
+
+var viewWorldRepoName = map[string]string{oracleR1: "a/r1", oracleR2: "a/r2", viewWorldR3: "a/r3"}
+
 func viewWorldSeed(ctx context.Context, t *testing.T, admin stdclickhouse.Conn, org string, items []viewWorldItem, keep func(viewWorldItem) bool) {
 	t.Helper()
 	exec := func(statement string) {
@@ -123,6 +133,12 @@ func viewWorldSeed(ctx context.Context, t *testing.T, admin stdclickhouse.Conn, 
 	}
 	for _, repo := range []struct{ id, name string }{{oracleR1, "a/r1"}, {oracleR2, "a/r2"}, {viewWorldR3, "a/r3"}} {
 		exec(fmt.Sprintf(`INSERT INTO repos (id, repo, provider, org_id, created_at, last_synced) VALUES (toUUID('%s'), '%s', 'github', '%s', %s, %s)`, repo.id, repo.name, org, viewWorldTS(viewWorldT), viewWorldTS(viewWorldT)))
+	}
+	// Team ownership (CHAOS-9191): the repositories each team HOLDS.
+	for team, repos := range viewWorldHolds {
+		for _, repo := range repos {
+			exec(fmt.Sprintf(`INSERT INTO team_repo_ownership (org_id, provider, team_id, repo_id, repo_full_name, match_type, source, is_primary, specificity, priority, valid_from, valid_to, updated_at) VALUES ('%s', 'github', '%s', toUUID('%s'), '%s', 'exact', 'inferred', 0, 0, 0, toDateTime64('2026-01-01 00:00:00', 3, 'UTC'), NULL, %s)`, org, team, repo, viewWorldRepoName[repo], viewWorldTS(viewWorldT)))
+		}
 	}
 	kept := map[string]bool{}
 	for _, item := range items {
@@ -300,12 +316,34 @@ func TestRepoLinkedEveryViewEqualsItsWorld(t *testing.T) {
 	teams := []string{"", "t-alpha", "t-beta", "t-gamma", "unassigned"}
 	var report []string
 	withData := map[string]int{}
-	for _, view := range views {
-		world := "view-world-" + view.name
-		repos := view.repos
+	worlds := map[string]string{}
+	worldOf := func(repos []string) string {
+		key := strings.Join(repos, ",")
+		if world, ok := worlds[key]; ok {
+			return world
+		}
+		world := fmt.Sprintf("view-world-%d", len(worlds))
+		worlds[key] = world
 		viewWorldSeed(ctx, t, admin, world, items, func(item viewWorldItem) bool { return viewWorldLinkedTo(item, repos...) })
 		viewWorldFill(ctx, t, admin, world)
+		return world
+	}
+	for _, view := range views {
 		for _, team := range teams {
+			// The decided filter (CHAOS-9098, CHAOS-9191): with a team the view holds only the named
+			// repositories the team HOLDS; none = no data, whatever item is linked and attributed.
+			effective := view.repos
+			if team != "" {
+				effective = nil
+				for _, repo := range view.repos {
+					for _, held := range viewWorldHolds[team] {
+						if repo == held {
+							effective = append(effective, repo)
+						}
+					}
+				}
+			}
+			world := worldOf(effective)
 			for _, name := range []string{"cycle_time", "throughput", "wip_saturation", "blocked_work"} {
 				spec := metricSpecByName(t, name)
 				request := Filters{What: WhatFilter{Repos: view.refs}}

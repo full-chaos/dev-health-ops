@@ -38,7 +38,7 @@ func TestIcFinalizeRefusesAnEmptyOrganizationBeforeTouchingClickHouse(t *testing
 			return err
 		},
 		"computeForDay": func(e *Executor) error {
-			_, err := e.computeForDay(context.Background(), "", day, nil, nil)
+			_, err := e.computeForDay(context.Background(), "", day, nil, nil, nil)
 			return err
 		},
 	} {
@@ -70,9 +70,9 @@ func TestIcFinalizeGuardDoesNotRefuseARealOrganization(t *testing.T) {
 func TestIcFinalizeRefusesBeforeTheTeamMapperRuns(t *testing.T) {
 	mapperCalls := 0
 	executor := NewExecutor(&touchedConn{})
-	executor.SetTeamMapper(func(context.Context, string, time.Time) (PersonTeams, error) {
+	executor.SetTeamMapper(func(context.Context, string, time.Time) (PersonTeams, TeamNames, error) {
 		mapperCalls++
-		return nil, nil
+		return nil, nil, nil
 	})
 	_, err := executor.ComputeFinalizeFamily(context.Background(), RunScope{TargetDay: time.Now()})
 	if !errors.Is(err, ErrOrganizationRequired) || mapperCalls != 0 {
@@ -145,9 +145,9 @@ func TestIcFinalizeReadsTheMembershipsAsOfTheDayItComputes(t *testing.T) {
 	day := time.Date(2026, 3, 9, 0, 0, 0, 0, time.UTC)
 	var asked []time.Time
 	executor := NewExecutor(&touchedConn{})
-	executor.SetTeamMapper(func(_ context.Context, orgID string, asOf time.Time) (PersonTeams, error) {
+	executor.SetTeamMapper(func(_ context.Context, orgID string, asOf time.Time) (PersonTeams, TeamNames, error) {
 		asked = append(asked, asOf)
-		return nil, errors.New("stop after the membership read")
+		return nil, nil, errors.New("stop after the membership read")
 	})
 	_, err := executor.ComputeFinalizeFamily(context.Background(), RunScope{OrganizationID: "org-1", TargetDay: day})
 	if err == nil || !strings.Contains(err.Error(), "stop after the membership read") {

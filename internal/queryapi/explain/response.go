@@ -116,7 +116,10 @@ func BuildExplainResponse(ctx context.Context, reader *Reader, orgID string, par
 		return nil, ErrUnavailable
 	}
 
-	config := resolveMetricConfig(params.Metric)
+	config, known := resolveMetricConfig(params.Metric)
+	if !known {
+		return nil, ErrUnknownMetric
+	}
 
 	// One instant for the whole response: the current and comparison windows
 	// below share one scope filter, so they must share one team membership.

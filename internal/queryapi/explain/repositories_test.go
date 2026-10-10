@@ -81,15 +81,11 @@ func TestRepositoriesAreServedForTheMetricsStoredPerRepositoryOnly(t *testing.T)
 			}
 		})
 	}
-	if _, fallback := metricConfigs["totally_bogus"]; fallback {
-		t.Fatal("the fallback case needs a metric name that is not configured")
+	if _, known := metricConfigs["totally_bogus"]; known {
+		t.Fatal("the unknown case needs a metric name that is not configured")
 	}
-	got, err := explainFor(t, &explainQueryDispatch{}, "totally_bogus", "org")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got.Repositories != nil {
-		t.Fatal("an unknown metric (it borrows cycle_time, stored per team) serves repositories")
+	if _, err := explainFor(t, &explainQueryDispatch{}, "totally_bogus", "org"); !errors.Is(err, ErrUnknownMetric) {
+		t.Fatalf("an unknown metric: err = %v, want ErrUnknownMetric (never another metric's config)", err)
 	}
 }
 

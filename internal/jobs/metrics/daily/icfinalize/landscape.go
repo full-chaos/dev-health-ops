@@ -24,27 +24,6 @@ type LandscapeRecord struct {
 // its `vectors` dict declares them.
 var mapNames = [3]string{"churn_throughput", "cycle_throughput", "wip_throughput"}
 
-// ComputeLandscape ports compute_ic_landscape_rolling (compute_ic.py:189).
-//
-// Normalization is PER TEAM: each identity's x and y are ranked against the
-// vector of that team's members only. A one-member team therefore ranks 0.5 on
-// every axis by construction — the same value an empty vector yields, so the
-// two are indistinguishable in the output.
-//
-// team_map resolves a missing team_id: an identity with a blank team_id and a
-// non-"unknown" identity falls back to team_map, then to "unassigned"; a blank
-// or "unknown" identity keeps a blank team. That branch is the reference's
-// (compute_ic.py:215-221) and is replicated rather than simplified.
-//
-// DETERMINISM NOTE. The Python groups with `by_team.setdefault(...)`, so its
-// team order follows the INPUT order, and its per-team member order likewise.
-// Go map iteration is randomised, so this sorts team ids and preserves input
-// order within a team. That is a deliberate divergence in ORDER only: the
-// reference has no stable order to reproduce (its input arrives from a
-// ClickHouse GROUP BY, which is itself unordered), so a canonical order is the
-// honest choice and the values are order-invariant. Recorded because "the port
-// sorts and the reference does not" is exactly the kind of difference that
-// looks like a bug to the next reader.
 // StatsOfEachTeam gives a person who is a member of teams one stat for each
 // team, in the order of the teams, each with the person's 30-day numbers. A
 // person with no team gets the one stat with NO team: the team a stat was
@@ -77,6 +56,27 @@ func StatsOfEachTeam(stats []RollingStat, teamsOf func(identity string) []string
 	return expanded
 }
 
+// ComputeLandscape ports compute_ic_landscape_rolling (compute_ic.py:189).
+//
+// Normalization is PER TEAM: each identity's x and y are ranked against the
+// vector of that team's members only. A one-member team therefore ranks 0.5 on
+// every axis by construction — the same value an empty vector yields, so the
+// two are indistinguishable in the output.
+//
+// team_map resolves a missing team_id: an identity with a blank team_id and a
+// non-"unknown" identity falls back to team_map, then to "unassigned"; a blank
+// or "unknown" identity keeps a blank team. That branch is the reference's
+// (compute_ic.py:215-221) and is replicated rather than simplified.
+//
+// DETERMINISM NOTE. The Python groups with `by_team.setdefault(...)`, so its
+// team order follows the INPUT order, and its per-team member order likewise.
+// Go map iteration is randomised, so this sorts team ids and preserves input
+// order within a team. That is a deliberate divergence in ORDER only: the
+// reference has no stable order to reproduce (its input arrives from a
+// ClickHouse GROUP BY, which is itself unordered), so a canonical order is the
+// honest choice and the values are order-invariant. Recorded because "the port
+// sorts and the reference does not" is exactly the kind of difference that
+// looks like a bug to the next reader.
 func ComputeLandscape(stats []RollingStat, teamMap map[string]string) []LandscapeRecord {
 	type enriched struct {
 		stat   RollingStat

@@ -209,6 +209,9 @@ func newQuadrantWorkHandler(client quadrant.QueryClient) http.HandlerFunc {
 			ScopeID:   lastQueryValue(query, "scope_id"),
 			RangeDays: rangeDays,
 			Bucket:    bucket,
+			// team_ids / repo_ids (CHAOS-9159): repeatable selected teams and repositories.
+			TeamIDs:  queryValues(query, "team_ids"),
+			RepoRefs: queryValues(query, "repo_ids"),
 		}
 		if startPresent {
 			params.StartDate = &startDate

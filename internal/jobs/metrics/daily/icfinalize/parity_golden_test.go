@@ -166,7 +166,7 @@ func TestICFinalizeMatchesTheFrozenPythonGolden(t *testing.T) {
 		return nil
 	})
 
-	if _, err := executor.computeForDay(ctx, orgID, day, resolveTeam, nil); err != nil {
+	if _, err := executor.computeForDay(ctx, orgID, day, resolveTeam, nil, nil); err != nil {
 		t.Fatalf("computeForDay: %v", err)
 	}
 

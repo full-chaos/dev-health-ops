@@ -175,12 +175,13 @@ WHERE org_id = ? AND day = ? AND author_email = 'dave@example.com'`, org, tenDay
 			"henry@example.com": {"unassigned"}, "ivy@example.com": {"unassigned"},
 		},
 		// A row of a person with no team gets the fallback id AND its name,
-		// whatever it was stored with. A member's row keeps the name it was
-		// read with (frank: read with an inactive team, so the fallback's).
+		// whatever it was stored with. A member's row holds the name of the team its
+		// id came from, the membership's (CHAOS-9134; frank: stored with an inactive
+		// team, written with the membership's team and its name).
 		Rows: map[string]string{
 			"alice@example.com": "unassigned / Unassigned", "bob@example.com": "unassigned / Unassigned",
 			"carol@example.com": "unassigned / Unassigned",
-			"erin@example.com":  "unassigned / Unassigned", "frank@example.com": "github:platform / Unassigned",
+			"erin@example.com":  "unassigned / Unassigned", "frank@example.com": "github:platform / Team github:platform",
 		},
 		// Not a row of the day: the run does not write it again.
 		DaveTenDaysBefore: "ENG",

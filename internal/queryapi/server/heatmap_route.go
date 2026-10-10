@@ -215,6 +215,9 @@ func newHeatmapWorkHandler(client heatmap.QueryClient) http.HandlerFunc {
 			X:         lastQueryValue(query, "x"),
 			Y:         lastQueryValue(query, "y"),
 			Limit:     boundedLimitParamHeatmap(limit, 200),
+			// team_ids / repo_ids (CHAOS-9159): repeatable selected teams and repositories.
+			TeamIDs:  queryValues(query, "team_ids"),
+			RepoRefs: queryValues(query, "repo_ids"),
 		}
 		if startPresent {
 			params.StartDate = &startDate

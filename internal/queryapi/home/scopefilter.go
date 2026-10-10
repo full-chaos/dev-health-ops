@@ -63,9 +63,10 @@ func repoScopeFilter(ctx context.Context, client QueryClient, f Filters, orgID, 
 		return "", nil, err
 	}
 
+	teamScoped := f.Scope.Level == "team" && len(f.Scope.IDs) > 0
 	var teamCondition string
 	var teamBindings []dhclickhouse.Binding
-	if f.Scope.Level == "team" && len(f.Scope.IDs) > 0 {
+	if teamScoped {
 		teamCondition, teamBindings = teamscope.RepoCondition(orgID, repoColumn, f.Scope.IDs, asOf)
 	}
 

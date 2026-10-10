@@ -373,6 +373,9 @@ func (handler GitLabTeamCatalogRouteHandler) CollectTeamCatalog(
 					evidence.Truncated = true
 				}
 				rows.ObservedMembershipTeamIDs = append(rows.ObservedMembershipTeamIDs, teamID)
+				if !ownershipListingProvesEnd(memberPages) {
+					rows.UnprovenMembershipTeamIDs = append(rows.UnprovenMembershipTeamIDs, teamID)
+				}
 				for _, raw := range memberPages.Items {
 					var member gitlabTeamCatalogMemberPayload
 					if err := json.Unmarshal(raw, &member); err != nil {
@@ -736,12 +739,24 @@ func (collector GitLabTeamCatalogCollector) CollectTeamCatalog(
 		// memberships table never disagree about which assignments are
 		// safe. Independent of the #3 sync_policy guard above: this gate
 		// applies even to policy-0 teams (team-attribution.md:793-797).
-		// CHAOS-9007: a membership keeps the valid_from it was first seen with.
-		keptMemberships, reuseErr := reuseGitLabMembershipFirstSeen(ctx, collector.Sink.Conn, ref.OrgID, keptMemberships)
+		// CHAOS-9007 / CHAOS-9079: a membership keeps the valid_from it was first
+		// seen with, and a member absent from the COMPLETE read of its group is
+		// closed (through the one snapshot rule). Absence is judged against the
+		// members the provider returned, not the part the conflict guard keeps.
+		decision := decideOwnershipClose(ctx, collector.ScopeCensus, ownershipCloseRequest{
+			ref: ref, provider: gitlabTeamCatalogProvider, listed: batch.Rows.ObservedMembershipTeamIDs,
+			unproven: batch.Rows.UnprovenMembershipTeamIDs, dataset: "team_memberships", leg: membershipCloseLeg,
+		})
+		membershipRows, membershipPlan, reuseErr := gitlabMembershipWriter.Snapshot(
+			ctx, collector.Sink.Conn, ref.OrgID, batch.Rows.Memberships, keptMemberships, normalizedAt.UTC().Truncate(time.Millisecond),
+			decision.membershipSnapshot(GitLabTeamMembershipKind))
 		if reuseErr != nil {
 			return result, reuseErr
 		}
-		membershipsEffect, effectErr := effectBatchFromValues(gitlabTeamCatalogMembershipsDestination, EffectReadbackRequired, keptMemberships)
+		ReportSnapshotPlan(ctx, gitlabTeamCatalogProvider, ref.OrgID, membershipPlan)
+		result.DegradedLegs = append(result.DegradedLegs, decision.legs...)
+		result.MembershipsClosed = len(membershipPlan.Retract)
+		membershipsEffect, effectErr := effectBatchFromValues(gitlabTeamCatalogMembershipsDestination, EffectReadbackRequired, membershipRows)
 		if effectErr != nil {
 			return result, effectErr
 		}

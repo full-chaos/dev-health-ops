@@ -33,6 +33,13 @@ var snapshotKindCensus = map[string]struct {
 		"one listing per group, each with its own proven end, in a scope no other integration lists: a group with no project is an answer"},
 	"github_team_repo_grants": {"internal/providersync.GitHubTeamRepoGrantKind", "EmptyIsAnAnswer",
 		"one listing per team, each with its own proven end, in a scope no other integration lists: a team with no repository is an answer"},
+	"linear_team_memberships": {"internal/providersync.LinearTeamMembershipKind", "EmptyIsAnAnswer",
+		"every team's member list ends or the run fails before any write (evidence.MembersComplete), in a scope no other integration reads: " +
+			"a team with no member is an answer"},
+	"github_team_memberships": {"internal/providersync.GitHubTeamMembershipKind", "EmptyIsAnAnswer",
+		"one member read per team, each with its own proven end, in a scope no other integration reads: a team with no member is an answer"},
+	"gitlab_team_memberships": {"internal/providersync.GitLabTeamMembershipKind", "EmptyIsAnAnswer",
+		"one member read per group, each with its own proven end, in a scope no other integration reads: a group with no member is an answer"},
 	"atlassian_team_project_links": {"internal/providersync.AtlassianTeamLinkKind", "EmptyIsAnAnswer",
 		"one link read per team, each to its end: a team with no link is an answer; a team outside the search answer is in scope " +
 			"only through atlassian_team_catalog"},
@@ -47,13 +54,14 @@ var snapshotKindCensus = map[string]struct {
 // of a snapshot plan into rows to write: the only places a provider snapshot
 // closes a row. Each one names the rule it calls and the proof it takes.
 var snapshotCloseSites = map[string]string{
-	"internal/providersync.linearOwnershipSnapshot":     "KindSnapshot arguments from linearOwnershipKindSnapshots (two kinds, each with the terms of its own walk)",
-	"internal/providersync.jiraOwnershipSnapshot":       "KindSnapshot argument: JiraLegacyOwnershipKind with the project search and legacy links terms",
-	"internal/providersync.gitlabOwnershipSnapshot":     "KindSnapshot argument from ownershipCloseDecision.snapshot (closable teams only, the gate's terms)",
-	"internal/providersync.githubRepoOwnershipSnapshot": "KindSnapshot argument from ownershipCloseDecision.snapshot (closable teams only, the gate's terms)",
-	"internal/atlassianteams.planOwnership":             "KindSnapshot argument: AtlassianTeamLinkKind with the Rows.ProjectLinksComplete term",
-	"internal/atlassianteams.planMemberships":           "KindSnapshot argument: AtlassianTeamMembershipKind with the Rows.MembershipsComplete term",
-	"internal/atlassianteams.teamsInScope":              "makes its proof in place: AtlassianTeamCatalogKind with the Rows.TeamSearchComplete term",
+	"internal/providersync.linearOwnershipSnapshot":           "KindSnapshot arguments from linearOwnershipKindSnapshots (two kinds, each with the terms of its own walk)",
+	"internal/providersync.jiraOwnershipSnapshot":             "KindSnapshot argument: JiraLegacyOwnershipKind with the project search and legacy links terms",
+	"internal/providersync.gitlabOwnershipSnapshot":           "KindSnapshot argument from ownershipCloseDecision.snapshot (closable teams only, the gate's terms)",
+	"internal/providersync.githubRepoOwnershipSnapshot":       "KindSnapshot argument from ownershipCloseDecision.snapshot (closable teams only, the gate's terms)",
+	"internal/providersync.MembershipSnapshotWriter.Snapshot": "KindSnapshot arguments from ownershipCloseDecision.membershipSnapshot (closable teams only, the gate's terms), through planMembershipSnapshot",
+	"internal/atlassianteams.planOwnership":                   "KindSnapshot argument: AtlassianTeamLinkKind with the Rows.ProjectLinksComplete term",
+	"internal/atlassianteams.planMemberships":                 "KindSnapshot argument: AtlassianTeamMembershipKind with the Rows.MembershipsComplete term",
+	"internal/atlassianteams.teamsInScope":                    "makes its proof in place: AtlassianTeamCatalogKind with the Rows.TeamSearchComplete term",
 }
 
 // validToOutsideTheSnapshotRule is every production function that sets a

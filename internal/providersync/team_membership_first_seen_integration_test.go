@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"sort"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -227,6 +228,9 @@ type gitlabMembersServer struct {
 	*httptest.Server
 	mu      sync.Mutex
 	members []string
+	// endless answers every page of the team's member list with one member and a
+	// next page, so the walk ends on its page budget, not on the provider's end.
+	endless bool
 }
 
 func newGitLabMembersServer(t *testing.T, usernames ...string) *gitlabMembersServer {
@@ -245,10 +249,21 @@ func newGitLabMembersServer(t *testing.T, usernames ...string) *gitlabMembersSer
 		case "/api/v4/groups/org/members":
 			writeGitLabTeamCatalogJSON(t, w, []map[string]any{})
 		case "/api/v4/groups/org%2Fteam-a/members":
+			if fake.endless {
+				page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+				if page < 1 {
+					page = 1
+				}
+				w.Header().Set("X-Next-Page", strconv.Itoa(page+1))
+				writeGitLabTeamCatalogJSON(t, w, []map[string]any{{"username": fmt.Sprintf("endless-%d", page), "name": "x", "email": fmt.Sprintf("endless-%d@example.com", page)}})
+				return
+			}
 			out := []map[string]any{}
 			for _, username := range fake.members {
 				out = append(out, map[string]any{"username": username, "name": username, "email": username + "@example.com"})
 			}
+			// GitLab's end of an offset listing: X-Next-Page sent and empty.
+			w.Header()["X-Next-Page"] = []string{""}
 			writeGitLabTeamCatalogJSON(t, w, out)
 		default:
 			http.NotFound(w, r)
@@ -256,6 +271,12 @@ func newGitLabMembersServer(t *testing.T, usernames ...string) *gitlabMembersSer
 	}))
 	t.Cleanup(fake.Close)
 	return fake
+}
+
+func (fake *gitlabMembersServer) setEndless(endless bool) {
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	fake.endless = endless
 }
 
 func (fake *gitlabMembersServer) setMembers(usernames ...string) {

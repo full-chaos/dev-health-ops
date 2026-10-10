@@ -12,33 +12,6 @@ import (
 // function below on the rows it is about to write, so the rows of every run
 // carry the valid_from their fact was first seen with.
 
-func reuseLinearMembershipFirstSeen(ctx context.Context, conn driver.Conn, orgID string, rows []linearReferenceMembershipRow) ([]linearReferenceMembershipRow, error) {
-	return ReuseFirstSeenMembershipValidFrom(ctx, conn, orgID, rows, MembershipFirstSeenAccessors[linearReferenceMembershipRow]{
-		Provider: func(r linearReferenceMembershipRow) string { return r.Provider }, Source: func(r linearReferenceMembershipRow) string { return r.Source },
-		TeamID: func(r linearReferenceMembershipRow) string { return r.TeamID }, MemberID: func(r linearReferenceMembershipRow) string { return r.MemberID },
-		ValidFrom: func(r linearReferenceMembershipRow) time.Time { return r.ValidFrom },
-		SetFrom:   func(r *linearReferenceMembershipRow, at time.Time) { r.ValidFrom = at },
-	})
-}
-
-func reuseGitHubMembershipFirstSeen(ctx context.Context, conn driver.Conn, orgID string, rows []githubMembershipRow) ([]githubMembershipRow, error) {
-	return ReuseFirstSeenMembershipValidFrom(ctx, conn, orgID, rows, MembershipFirstSeenAccessors[githubMembershipRow]{
-		Provider: func(r githubMembershipRow) string { return r.Provider }, Source: func(r githubMembershipRow) string { return r.Source },
-		TeamID: func(r githubMembershipRow) string { return r.TeamID }, MemberID: func(r githubMembershipRow) string { return r.MemberID },
-		ValidFrom: func(r githubMembershipRow) time.Time { return r.ValidFrom },
-		SetFrom:   func(r *githubMembershipRow, at time.Time) { r.ValidFrom = at },
-	})
-}
-
-func reuseGitLabMembershipFirstSeen(ctx context.Context, conn driver.Conn, orgID string, rows []gitlabTeamCatalogMembershipRow) ([]gitlabTeamCatalogMembershipRow, error) {
-	return ReuseFirstSeenMembershipValidFrom(ctx, conn, orgID, rows, MembershipFirstSeenAccessors[gitlabTeamCatalogMembershipRow]{
-		Provider: func(r gitlabTeamCatalogMembershipRow) string { return r.Provider }, Source: func(r gitlabTeamCatalogMembershipRow) string { return r.Source },
-		TeamID: func(r gitlabTeamCatalogMembershipRow) string { return r.TeamID }, MemberID: func(r gitlabTeamCatalogMembershipRow) string { return r.MemberID },
-		ValidFrom: func(r gitlabTeamCatalogMembershipRow) time.Time { return r.ValidFrom },
-		SetFrom:   func(r *gitlabTeamCatalogMembershipRow, at time.Time) { r.ValidFrom = at },
-	})
-}
-
 func reuseJiraMembershipFirstSeen(ctx context.Context, conn driver.Conn, orgID string, rows []jiraTeamCatalogMembershipRow) ([]jiraTeamCatalogMembershipRow, error) {
 	return ReuseFirstSeenMembershipValidFrom(ctx, conn, orgID, rows, MembershipFirstSeenAccessors[jiraTeamCatalogMembershipRow]{
 		Provider: func(r jiraTeamCatalogMembershipRow) string { return r.Provider }, Source: func(r jiraTeamCatalogMembershipRow) string { return r.Source },
@@ -46,4 +19,41 @@ func reuseJiraMembershipFirstSeen(ctx context.Context, conn driver.Conn, orgID s
 		ValidFrom: func(r jiraTeamCatalogMembershipRow) time.Time { return r.ValidFrom },
 		SetFrom:   func(r *jiraTeamCatalogMembershipRow, at time.Time) { r.ValidFrom = at },
 	})
+}
+
+// The snapshot writers of the three catalogs that also close a member the
+// provider no longer lists (CHAOS-9079). Each is the ONE place that says where
+// that catalog's memberships live and how a closed row is made.
+
+var linearMembershipWriter = MembershipSnapshotWriter[linearReferenceMembershipRow]{
+	Provider: "linear", Source: "native",
+	TeamID:    func(r linearReferenceMembershipRow) string { return r.TeamID },
+	MemberID:  func(r linearReferenceMembershipRow) string { return r.MemberID },
+	ValidFrom: func(r linearReferenceMembershipRow) time.Time { return r.ValidFrom },
+	SetFrom:   func(r *linearReferenceMembershipRow, at time.Time) { r.ValidFrom = at },
+	Closed: func(open openMembership, closedAt, updatedAt time.Time) linearReferenceMembershipRow {
+		return linearReferenceMembershipRow(closedMembershipColumns(open, closedAt, updatedAt))
+	},
+}
+
+var githubMembershipWriter = MembershipSnapshotWriter[githubMembershipRow]{
+	Provider: githubTeamCatalogProvider, Source: githubTeamCatalogSource,
+	TeamID:    func(r githubMembershipRow) string { return r.TeamID },
+	MemberID:  func(r githubMembershipRow) string { return r.MemberID },
+	ValidFrom: func(r githubMembershipRow) time.Time { return r.ValidFrom },
+	SetFrom:   func(r *githubMembershipRow, at time.Time) { r.ValidFrom = at },
+	Closed: func(open openMembership, closedAt, updatedAt time.Time) githubMembershipRow {
+		return githubMembershipRow(closedMembershipColumns(open, closedAt, updatedAt))
+	},
+}
+
+var gitlabMembershipWriter = MembershipSnapshotWriter[gitlabTeamCatalogMembershipRow]{
+	Provider: gitlabTeamCatalogProvider, Source: gitlabTeamCatalogSource,
+	TeamID:    func(r gitlabTeamCatalogMembershipRow) string { return r.TeamID },
+	MemberID:  func(r gitlabTeamCatalogMembershipRow) string { return r.MemberID },
+	ValidFrom: func(r gitlabTeamCatalogMembershipRow) time.Time { return r.ValidFrom },
+	SetFrom:   func(r *gitlabTeamCatalogMembershipRow, at time.Time) { r.ValidFrom = at },
+	Closed: func(open openMembership, closedAt, updatedAt time.Time) gitlabTeamCatalogMembershipRow {
+		return gitlabTeamCatalogMembershipRow(closedMembershipColumns(open, closedAt, updatedAt))
+	},
 }

@@ -239,13 +239,16 @@ func (collector GitHubTeamCatalogRouteHandler) Collect(
 			// default) skips only this team's memberships and keeps going;
 			// Strict=true (reference discovery) re-raises, matching Python
 			// exactly.
-			memberships, ok, memberErr := collector.collectTeamMemberships(
+			memberships, ok, provesEnd, memberErr := collector.collectTeamMemberships(
 				ctx, orgID, org, slug, perPage, maxPages, resolver, normalizedAt, emailCache,
 			)
 			if ok {
 				rows.Memberships = append(rows.Memberships, memberships...)
 				evidence.MembersObserved += len(memberships)
 				rows.ObservedMembershipTeamIDs = append(rows.ObservedMembershipTeamIDs, githubTeamID(slug))
+				if !provesEnd {
+					rows.UnprovenMembershipTeamIDs = append(rows.UnprovenMembershipTeamIDs, githubTeamID(slug))
+				}
 			} else if collector.Strict {
 				return githubTeamCatalogRows{}, evidence, memberErr
 			} else {
@@ -285,22 +288,22 @@ func (collector GitHubTeamCatalogRouteHandler) collectTeamMemberships(
 	resolver *identityalias.Resolver,
 	normalizedAt time.Time,
 	emailCache map[string]*string,
-) ([]githubMembershipRow, bool, error) {
+) ([]githubMembershipRow, bool, bool, error) {
 	pages, err := providerfoundation.CollectGitHubLinkPages(ctx, collector.Client, providerfoundation.GitHubPageOptions{
 		Path:  "/orgs/" + url.PathEscape(org) + "/teams/" + url.PathEscape(slug) + "/members",
 		Query: perPageQuery(perPage), MaxPages: maxPages,
 	})
 	if err != nil {
-		return nil, false, err
+		return nil, false, false, err
 	}
 	if pages.PageBudgetExhausted {
-		return nil, false, ErrPaginationCapExceeded
+		return nil, false, false, ErrPaginationCapExceeded
 	}
 	memberships := make([]githubMembershipRow, 0, len(pages.Items))
 	for _, memberRaw := range pages.Items {
 		var memberPayload githubTeamMemberPayload
 		if err := json.Unmarshal(memberRaw, &memberPayload); err != nil {
-			return nil, false, providerfoundation.ErrNormalizationInvalid
+			return nil, false, false, providerfoundation.ErrNormalizationInvalid
 		}
 		login := strings.TrimSpace(memberPayload.Login)
 		if login == "" {
@@ -309,18 +312,18 @@ func (collector GitHubTeamCatalogRouteHandler) collectTeamMemberships(
 		email := ""
 		resolved, err := collector.resolveEmail(ctx, emailCache, login)
 		if err != nil {
-			return nil, false, err
+			return nil, false, false, err
 		}
 		if resolved != nil {
 			email = *resolved
 		}
 		membership, err := normalizeGitHubMembership(orgID, slug, login, email, resolver, normalizedAt)
 		if err != nil {
-			return nil, false, err
+			return nil, false, false, err
 		}
 		memberships = append(memberships, membership)
 	}
-	return memberships, true, nil
+	return memberships, true, ownershipListingProvesEnd(pages), nil
 }
 
 // resolveEmail fetches GET /users/{login} once per login per collection

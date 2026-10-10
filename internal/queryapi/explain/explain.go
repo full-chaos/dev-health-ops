@@ -105,14 +105,24 @@ type Params struct {
 	WhatRepos  []string
 }
 
-// Contributor ports api/models/schemas.py's Contributor model.
+// Contributor ports api/models/schemas.py's Contributor model, plus two
+// Go-only fields at the end (CHAOS-9063): HasData / HasPriorData, whether the
+// row holds a stored value in the current / comparison window. DeltaPct is a
+// statement about two measured values: it is null unless both flags are true
+// (a driver with no row in the comparison window, and every contributor row,
+// which is read for the current window only, serve null, not the 0 placeholder
+// of the Python model).
 type Contributor struct {
-	ID           string  `json:"id"`
-	Label        string  `json:"label"`
-	Value        float64 `json:"value"`
-	DeltaPct     float64 `json:"delta_pct"`
-	EvidenceLink string  `json:"evidence_link"`
-	DisplayName  *string `json:"display_name"`
+	ID           string   `json:"id"`
+	Label        string   `json:"label"`
+	Value        float64  `json:"value"`
+	DeltaPct     *float64 `json:"delta_pct"`
+	EvidenceLink string   `json:"evidence_link"`
+	DisplayName  *string  `json:"display_name"`
+	// HasData: the row holds a stored value in the current window.
+	HasData bool `json:"has_data"`
+	// HasPriorData: the row holds a stored value in the comparison window.
+	HasPriorData bool `json:"has_prior_data"`
 }
 
 // Response ports api/models/schemas.py's ExplainResponse model (the first
@@ -124,7 +134,7 @@ type Response struct {
 	Label          string                    `json:"label"`
 	Unit           string                    `json:"unit"`
 	Value          float64                   `json:"value"`
-	DeltaPct       float64                   `json:"delta_pct"`
+	DeltaPct       *float64                  `json:"delta_pct"` // 0 when a window has no stored value, null from a measured 0 (deltarule)
 	Drivers        []Contributor             `json:"drivers"`
 	Contributors   []Contributor             `json:"contributors"`
 	DrilldownLinks pyjson.OrderedMap[string] `json:"drilldown_links"`

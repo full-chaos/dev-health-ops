@@ -1059,11 +1059,12 @@ type MappingCoverage struct {
 }
 
 type MetricDelta struct {
-	Metric   string  `json:"metric"`
-	Label    string  `json:"label"`
-	Value    float64 `json:"value"`
-	Unit     string  `json:"unit"`
-	DeltaPct float64 `json:"deltaPct"`
+	Metric string  `json:"metric"`
+	Label  string  `json:"label"`
+	Value  float64 `json:"value"`
+	Unit   string  `json:"unit"`
+	// Percent change between the windows. 0 when a window has no stored value (see hasData / hasPriorData); null when the prior value is a measured 0 and the current value is not, because a percent change against zero is undefined (CHAOS-9063).
+	DeltaPct *float64 `json:"deltaPct,omitempty"`
 	// Whether the current window has one or more stored source rows. A stored zero has this field set to true.
 	HasData bool `json:"hasData"`
 	// Whether the comparison window has one or more stored source rows.

@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/api/pytime"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/deltarule"
 	"regexp"
 	"sort"
 	"strconv"
@@ -72,6 +73,37 @@ func direction(pctChange float64) string {
 		return "fell"
 	}
 	return "held steady"
+}
+
+// Percent returns the delta's percent when it is a statement: both windows
+// measured and the percent defined (deltarule.KindPct). ok is false for a
+// window without a value and for a rise from a measured 0.
+func (d MetricDelta) Percent() (float64, bool) {
+	if !deltarule.Complete(d.HasData, d.HasPriorData) || d.DeltaPct == nil {
+		return 0, false
+	}
+	return *d.DeltaPct, true
+}
+
+// FromZero reports whether both windows are measured, the prior is a measured
+// 0 and the current value is not: the percent is undefined (null).
+func (d MetricDelta) FromZero() bool {
+	return deltarule.Complete(d.HasData, d.HasPriorData) && d.DeltaPct == nil
+}
+
+// MoveWords states the move of a delta that is a statement (percent or from a
+// measured zero), for the summary and the constraint: "fell 50%", "held steady
+// 0%" (a true 0 % between two measured values) or, from a measured 0, "rose
+// from 0 to 5 loc" (absolute values: no percent, no "steady").
+func MoveWords(d MetricDelta) string {
+	if pct, ok := d.Percent(); ok {
+		return direction(pct) + " " + formatDeltaWords(pct)
+	}
+	verb := "rose"
+	if d.Value < 0 {
+		verb = "fell"
+	}
+	return fmt.Sprintf("%s from %s to %s", verb, formatValue(0, d.Unit), formatValue(d.Value, d.Unit))
 }
 
 // formatDeltaWords ports _format_delta (services/home.py:309-310).
@@ -367,16 +399,41 @@ func BuildMetricSignals(deltas []MetricDelta, f Filters, dataConfidence DataConf
 		if !delta.HasData {
 			continue
 		}
-		dir := signalDirection(delta.DeltaPct)
-		evidenceCount := len(delta.Spark)
-		impact := metricImpact(delta.Metric, delta.DeltaPct)
-
-		var priorValueStr *string
-		if prior, ok := priorValue(delta.Value, delta.DeltaPct); ok {
-			s := formatValue(prior, delta.Unit)
-			priorValueStr = &s
+		// The percent, the prior value and the delta text are derived from the
+		// delta, so they exist only when it states a move between two measured
+		// values (deltarule). With no value in a window there is no trend and no
+		// prior; from a measured 0 the prior is that 0, the delta is the change in
+		// absolute values and the direction is the sign of the current value
+		// (CHAOS-9063).
+		pct, hasPct := delta.Percent()
+		fromZero := delta.FromZero()
+		complete := hasPct || fromZero
+		dir := "flat"
+		impact := 0.0
+		var priorValueStr, deltaStr *string
+		switch {
+		case hasPct:
+			dir = signalDirection(pct)
+			impact = metricImpact(delta.Metric, pct)
+			if prior, ok := priorValue(delta.Value, pct); ok {
+				s := formatValue(prior, delta.Unit)
+				priorValueStr = &s
+			}
+			deltaStr = formatDeltaValue(&pct)
+		case fromZero:
+			dir = "up"
+			if delta.Value < 0 {
+				dir = "down"
+			}
+			prior := formatValue(0, delta.Unit)
+			priorValueStr = &prior
+			change := "+" + formatValue(delta.Value, delta.Unit)
+			if delta.Value < 0 {
+				change = formatValue(delta.Value, delta.Unit)
+			}
+			deltaStr = &change
 		}
-		deltaPct := delta.DeltaPct
+		evidenceCount := len(delta.Spark)
 		evidenceRefStr := evidenceLink(delta.Metric, f)
 
 		category := metricCategories[delta.Metric]
@@ -384,19 +441,25 @@ func BuildMetricSignals(deltas []MetricDelta, f Filters, dataConfidence DataConf
 			category = CategoryDelivery
 		}
 
+		title := fmt.Sprintf("%s appears %s", delta.Label, dir)
+		why := whyForMetric(delta.Metric, delta.Label, dir)
+		if !complete {
+			title = fmt.Sprintf("%s has no prior period to compare", delta.Label)
+			why = fmt.Sprintf("%s has a value in this window and none in the prior one, so no trend is stated.", delta.Label)
+		}
 		signals = append(signals, Signal{
 			ID:                fmt.Sprintf("metric:%s", delta.Metric),
-			Title:             fmt.Sprintf("%s appears %s", delta.Label, dir),
+			Title:             title,
 			Metric:            delta.Metric,
 			CurrentValue:      formatValue(delta.Value, delta.Unit),
 			PriorValue:        priorValueStr,
-			Delta:             formatDeltaValue(&deltaPct),
+			Delta:             deltaStr,
 			Direction:         dir,
 			Severity:          severityForImpact(impact),
 			Confidence:        confidenceFromEvidence(evidenceCount, dataConfidence.CoveragePct),
 			AffectedScope:     primaryScopeLabel(f),
 			EvidenceCount:     evidenceCount,
-			WhyItMatters:      whyForMetric(delta.Metric, delta.Label, dir),
+			WhyItMatters:      why,
 			RecommendedAction: actionForMetric(delta.Metric),
 			EvidenceRef:       &evidenceRefStr,
 			Category:          category,
@@ -685,21 +748,29 @@ func RiskSignal(row RiskRow, f Filters, dataConfidence DataConfidence) (Signal, 
 	}, true
 }
 
-// SelectConstraint ports _select_constraint (services/home.py:953-963).
-func SelectConstraint(deltas []MetricDelta) MetricDelta {
-	withData := make([]MetricDelta, 0, len(deltas))
+// SelectConstraint ports _select_constraint (services/home.py:953-963), over
+// the deltas that state a move between two measured values. The highest percent
+// wins; when no delta has a defined percent, the first rise from a measured 0
+// is named. ok is false when no delta states a move: a constraint is a claim
+// about a move, so there is none to name (CHAOS-9063; the Python original named
+// "cycle_time" with a placeholder delta of 0).
+func SelectConstraint(deltas []MetricDelta) (MetricDelta, bool) {
+	withPercent := make([]MetricDelta, 0, len(deltas))
 	for _, delta := range deltas {
-		if delta.HasData {
-			withData = append(withData, delta)
+		if _, ok := delta.Percent(); ok {
+			withPercent = append(withPercent, delta)
 		}
 	}
-	if len(withData) == 0 {
-		return MetricDelta{Metric: "cycle_time", Label: "Cycle Time", Unit: "days"}
+	if len(withPercent) > 0 {
+		sort.SliceStable(withPercent, func(i, j int) bool { return *withPercent[i].DeltaPct < *withPercent[j].DeltaPct })
+		return withPercent[len(withPercent)-1], true
 	}
-	out := make([]MetricDelta, len(withData))
-	copy(out, withData)
-	sort.SliceStable(out, func(i, j int) bool { return out[i].DeltaPct < out[j].DeltaPct })
-	return out[len(out)-1]
+	for _, delta := range deltas {
+		if delta.FromZero() {
+			return delta, true
+		}
+	}
+	return MetricDelta{}, false
 }
 
 // tiles ports the fixed tiles map (services/home.py:1187-1208), built

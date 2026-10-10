@@ -98,7 +98,7 @@ func TestHomeResultFromResponse_MapsTheOriginalThreeFields(t *testing.T) {
 		},
 		Deltas: []home.MetricDelta{
 			{
-				Metric: "throughput", Label: "Throughput", Value: 42, Unit: "units", DeltaPct: 12.5, HasData: true,
+				Metric: "throughput", Label: "Throughput", Value: 42, Unit: "units", DeltaPct: pctp(12.5), HasData: true,
 				Spark: []home.SparkPoint{{TS: pytime.NaiveDateTime(time.Date(2024, 1, 7, 0, 0, 0, 0, time.UTC)), Value: 40}},
 			},
 		},
@@ -126,7 +126,7 @@ func TestHomeResultFromResponse_MapsTheOriginalThreeFields(t *testing.T) {
 		t.Fatalf("Deltas = %d entries, want 1", len(got.Deltas))
 	}
 	d := got.Deltas[0]
-	if d.Metric != "throughput" || d.Label != "Throughput" || d.Value != 42 || d.Unit != "units" || d.DeltaPct != 12.5 {
+	if d.Metric != "throughput" || d.Label != "Throughput" || d.Value != 42 || d.Unit != "units" || d.DeltaPct == nil || *d.DeltaPct != 12.5 {
 		t.Errorf("Deltas[0] = %+v, want the mapped MetricDelta", d)
 	}
 	if !d.HasData || d.HasPriorData {
@@ -257,7 +257,7 @@ func TestHomeResultFromResponse_MapsEveryFieldAgainstTheDomainResponse(t *testin
 			Coverage:               home.Coverage{ReposCoveredPct: floatPtr(80), PRsLinkedToIssuesPct: floatPtr(60), IssuesWithCycleStatesPct: floatPtr(40)},
 		},
 		Deltas: []home.MetricDelta{
-			{Metric: "throughput", Label: "Throughput", Value: 42, Unit: "units", DeltaPct: 12.5, HasData: true, HasPriorData: true,
+			{Metric: "throughput", Label: "Throughput", Value: 42, Unit: "units", DeltaPct: pctp(12.5), HasData: true, HasPriorData: true,
 				Spark: []home.SparkPoint{{TS: pytime.NaiveDateTime(time.Date(2024, 1, 7, 0, 0, 0, 0, time.UTC)), Value: 40}}},
 			// Change failure rate carries its state; every other delta has none.
 			{Metric: "change_failure_rate", Label: "Change Failure Rate", Unit: "%", RateState: &rateState},
@@ -570,5 +570,14 @@ func TestHomeSignalsCarryTheirCoverageToTheGraphQLType(t *testing.T) {
 	})
 	if len(out) != 2 || out[0].Coverage == nil || *out[0].Coverage != 0.3 || out[1].Coverage != nil {
 		t.Fatalf("coverage on the GraphQL signals = %v / %v", out[0].Coverage, out[1].Coverage)
+	}
+}
+
+// A null percent (a rise from a measured 0) maps to a null deltaPct; the flags stay.
+func TestHomeResultKeepsANullDeltaPctNull(t *testing.T) {
+	resp := &home.Response{Deltas: []home.MetricDelta{{Metric: "churn", Label: "Churn", Value: 5, DeltaPct: nil, HasData: true, HasPriorData: true}}}
+	got := homeResultFromResponse(resp)
+	if len(got.Deltas) != 1 || got.Deltas[0].DeltaPct != nil || !got.Deltas[0].HasData || !got.Deltas[0].HasPriorData {
+		t.Errorf("deltas = %+v, want deltaPct null with both flags true", got.Deltas)
 	}
 }

@@ -67,10 +67,42 @@ const (
 // directionFor is the direction of a worsened metric's move. A worsened delta
 // is never 0 (isWorsened), so there is no third value.
 func directionFor(d home.MetricDelta) string {
-	if d.DeltaPct < 0 {
+	if moveSign(d) < 0 {
 		return DirectionDown
 	}
 	return DirectionUp
+}
+
+// moveSign is the direction of a delta that states a move between two measured
+// values: the sign of its percent, or, for a rise from a measured 0 (percent
+// undefined), the sign of the current value. 0 is no move: a window without a
+// value, or a true 0 %.
+func moveSign(d home.MetricDelta) int {
+	if pct, ok := d.Percent(); ok {
+		switch {
+		case pct > 0:
+			return 1
+		case pct < 0:
+			return -1
+		}
+		return 0
+	}
+	if d.FromZero() {
+		if d.Value < 0 {
+			return -1
+		}
+		return 1
+	}
+	return 0
+}
+
+// moveMagnitude orders worsened metrics: the size of the percent, and below
+// every defined percent the rises from a measured 0.
+func moveMagnitude(d home.MetricDelta) float64 {
+	if pct, ok := d.Percent(); ok {
+		return math.Abs(pct)
+	}
+	return -1
 }
 
 // Response is the wire shape of OpportunitiesResponse (schemas.py:205-206).
@@ -145,9 +177,9 @@ func suggestedExperimentsFor(metric string) []string {
 // isWorsened reports whether the metric moved the wrong way for its polarity.
 func isWorsened(d home.MetricDelta) bool {
 	if home.LowerIsBetter(d.Metric) {
-		return d.DeltaPct > 0
+		return moveSign(d) > 0
 	}
-	return d.DeltaPct < 0
+	return moveSign(d) < 0
 }
 
 // titleFor: "Reduce X" for a lower-is-better metric, "Recover X" for a
@@ -161,11 +193,15 @@ func titleFor(d home.MetricDelta) string {
 
 // rationaleFor says "climbed" or "fell" with the size of the move.
 func rationaleFor(d home.MetricDelta, rangeDays int) string {
-	verb := "climbed"
-	if d.DeltaPct < 0 {
-		verb = "fell"
+	if pct, ok := d.Percent(); ok {
+		verb := "climbed"
+		if pct < 0 {
+			verb = "fell"
+		}
+		return fmt.Sprintf("%s %s %.0f%% in the last %d days.", d.Label, verb, math.Abs(pct), rangeDays)
 	}
-	return fmt.Sprintf("%s %s %.0f%% in the last %d days.", d.Label, verb, math.Abs(d.DeltaPct), rangeDays)
+	// A rise from a measured 0 has no percent: the change is in absolute values.
+	return fmt.Sprintf("%s %s in the last %d days.", d.Label, home.MoveWords(d), rangeDays)
 }
 
 // primaryScopeID ports _primary_scope_id (services/opportunities.py:112-115).
@@ -197,7 +233,7 @@ func FromHomeResponse(h *home.Response, f home.Filters) *Response {
 	// Ranked by the size of the move; sort.SliceStable keeps the original
 	// _METRICS order for equal sizes, as Python's stable sort did.
 	sort.SliceStable(worsened, func(i, j int) bool {
-		return math.Abs(worsened[i].DeltaPct) > math.Abs(worsened[j].DeltaPct)
+		return moveMagnitude(worsened[i]) > moveMagnitude(worsened[j])
 	})
 
 	n := len(worsened)
@@ -209,7 +245,10 @@ func FromHomeResponse(h *home.Response, f home.Filters) *Response {
 	scopeID := primaryScopeID(f)
 	cards := make([]Card, 0, len(ranked))
 	for idx, delta := range ranked {
-		changePercent := delta.DeltaPct
+		var changePercent *float64
+		if pct, ok := delta.Percent(); ok {
+			changePercent = &pct
+		}
 		direction := directionFor(delta)
 		cards = append(cards, Card{
 			ID:        fmt.Sprintf("opp-%d", idx+1),
@@ -220,7 +259,7 @@ func FromHomeResponse(h *home.Response, f home.Filters) *Response {
 				delta.Metric, f.Scope.Level, scopeID, f.Time.RangeDays, f.Time.CompareDays,
 			)},
 			SuggestedExperiments: suggestedExperimentsFor(delta.Metric),
-			ChangePercent:        &changePercent,
+			ChangePercent:        changePercent,
 			Direction:            &direction,
 			RangeDays:            f.Time.RangeDays,
 			CompareDays:          f.Time.CompareDays,

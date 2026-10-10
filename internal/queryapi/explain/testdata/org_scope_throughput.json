@@ -11,7 +11,9 @@
       "value": 80.0,
       "delta_pct": 25.0,
       "evidence_link": "/api/v1/drilldown/prs?metric=throughput&scope_type=org&scope_id=",
-      "display_name": "Team Alpha"
+      "display_name": "Team Alpha",
+      "has_data": true,
+      "has_prior_data": true
     },
     {
       "id": "22222222-2222-2222-2222-222222222222",
@@ -19,7 +21,9 @@
       "value": 40.0,
       "delta_pct": -10.0,
       "evidence_link": "/api/v1/drilldown/prs?metric=throughput&scope_type=org&scope_id=",
-      "display_name": null
+      "display_name": null,
+      "has_data": true,
+      "has_prior_data": true
     }
   ],
   "contributors": [
@@ -27,17 +31,21 @@
       "id": "team-a",
       "label": "Team Alpha",
       "value": 80.0,
-      "delta_pct": 0.0,
+      "delta_pct": null,
       "evidence_link": "/api/v1/drilldown/prs?metric=throughput&scope_type=org&scope_id=",
-      "display_name": "Team Alpha"
+      "display_name": "Team Alpha",
+      "has_data": true,
+      "has_prior_data": false
     },
     {
       "id": "22222222-2222-2222-2222-222222222222",
       "label": "#22222222",
       "value": 40.0,
-      "delta_pct": 0.0,
+      "delta_pct": null,
       "evidence_link": "/api/v1/drilldown/prs?metric=throughput&scope_type=org&scope_id=",
-      "display_name": null
+      "display_name": null,
+      "has_data": true,
+      "has_prior_data": false
     }
   ],
   "drilldown_links": {

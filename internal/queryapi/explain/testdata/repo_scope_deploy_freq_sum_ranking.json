@@ -11,7 +11,9 @@
       "value": 15.0,
       "delta_pct": 20.0,
       "evidence_link": "/api/v1/drilldown/prs?metric=deploy_freq&scope_type=org&scope_id=",
-      "display_name": "webapp"
+      "display_name": "webapp",
+      "has_data": true,
+      "has_prior_data": true
     },
     {
       "id": "44444444-4444-4444-4444-444444444444",
@@ -19,7 +21,9 @@
       "value": 16.0,
       "delta_pct": -5.0,
       "evidence_link": "/api/v1/drilldown/prs?metric=deploy_freq&scope_type=org&scope_id=",
-      "display_name": null
+      "display_name": null,
+      "has_data": true,
+      "has_prior_data": true
     }
   ],
   "contributors": [
@@ -27,17 +31,21 @@
       "id": "repo-a",
       "label": "webapp",
       "value": 15.0,
-      "delta_pct": 0.0,
+      "delta_pct": null,
       "evidence_link": "/api/v1/drilldown/prs?metric=deploy_freq&scope_type=org&scope_id=",
-      "display_name": "webapp"
+      "display_name": "webapp",
+      "has_data": true,
+      "has_prior_data": false
     },
     {
       "id": "44444444-4444-4444-4444-444444444444",
       "label": "#44444444",
       "value": 16.0,
-      "delta_pct": 0.0,
+      "delta_pct": null,
       "evidence_link": "/api/v1/drilldown/prs?metric=deploy_freq&scope_type=org&scope_id=",
-      "display_name": null
+      "display_name": null,
+      "has_data": true,
+      "has_prior_data": false
     }
   ],
   "drilldown_links": {

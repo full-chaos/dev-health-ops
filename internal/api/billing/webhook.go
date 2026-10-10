@@ -72,8 +72,9 @@ func (h handlers) stripeWebhook(w http.ResponseWriter, r *http.Request) {
 		h.write(w, detail(http.StatusInternalServerError, "Billing not configured"))
 		return
 	}
-	switch err := verifyStripeSignature(payload, r.Header.Get("Stripe-Signature"), secret, h.now()); {
+	switch failure, err := classifyStripeSignature(payload, r.Header.Get("Stripe-Signature"), secret, h.now()); {
 	case errors.Is(err, errSignature):
+		h.signatureRefused(ctx, failure)
 		h.write(w, detail(http.StatusBadRequest, "Invalid Stripe signature"))
 		return
 	case err != nil:
@@ -178,6 +179,29 @@ func stripeEventRoute(eventType string) string {
 		return eventType
 	}
 	return ""
+}
+
+// signatureFailures counts the webhook requests refused with the 400 for a
+// failed signature check, by the class of the failure.
+var signatureFailures = func() metric.Int64Counter {
+	const name = "dev_health_api_stripe_webhook_signature_failures_total"
+	counter, err := otel.Meter("github.com/full-chaos/dev-health-ops/internal/api/billing").Int64Counter(
+		name, metric.WithDescription("Stripe webhook requests refused for a failed signature check, by class"))
+	if err != nil {
+		counter, _ = otel.GetMeterProvider().Meter("noop").Int64Counter(name)
+	}
+	return counter
+}()
+
+// signatureRefused logs and counts a request the route refuses for its
+// signature. The Python route logs nothing there. A delivery that Stripe
+// signed and this route refuses is a billing event that is not applied (the
+// signing secret of the endpoint and the configured one differ), and with no
+// line and no counter it shows only as a 400 in the request spans. The line
+// holds the class and nothing of the request: not the header, not the body.
+func (h handlers) signatureRefused(ctx context.Context, failure signatureFailure) {
+	h.logger.WarnContext(ctx, "Stripe webhook refused: the signature check failed", "class", string(failure))
+	signatureFailures.Add(ctx, 1, metric.WithAttributes(attribute.String("class", string(failure))))
 }
 
 // unhandledEvents counts the verified events the route answers 200 without

@@ -45,6 +45,9 @@ func (s *fixtureRowScanner) Scan(dest ...any) error {
 		case *uint64:
 			v, _ := row[i].(uint64)
 			*typed = v
+		case *uint8:
+			v, _ := row[i].(uint8)
+			*typed = v
 		case **float64:
 			if row[i] == nil {
 				*typed = nil
@@ -212,8 +215,8 @@ func TestGoldenOrgScopeThroughput(t *testing.T) {
 		currentStartDay: "2024-01-01",
 		displayNameRows: [][]any{{"team-a", "Team Alpha"}},
 		driverRows: [][]any{
-			{"team-a", 80.0, 25.0},
-			{"22222222-2222-2222-2222-222222222222", 40.0, -10.0},
+			{"team-a", 80.0, uint8(1), uint8(1), 25.0},
+			{"22222222-2222-2222-2222-222222222222", 40.0, uint8(1), uint8(1), -10.0},
 		},
 		contributorRows: [][]any{
 			{"team-a", 80.0},
@@ -304,7 +307,7 @@ func TestGoldenRepoScopeReviewLatency(t *testing.T) {
 		currentStartDay:  "2024-03-01",
 		displayNameRows:  [][]any{{resolvedRepoID, "acme/webapp"}},
 		driverRows: [][]any{
-			{resolvedRepoID, 5.0, -50.0},
+			{resolvedRepoID, 5.0, uint8(1), uint8(1), -50.0},
 		},
 		contributorRows: [][]any{
 			{resolvedRepoID, 5.0},
@@ -369,8 +372,8 @@ func TestGoldenSumAggregatorMetricRanksBySum(t *testing.T) {
 		currentStartDay: "2024-05-01",
 		displayNameRows: [][]any{{"repo-a", "webapp"}},
 		driverRows: [][]any{
-			{"repo-a", 15.0, 20.0},
-			{"44444444-4444-4444-4444-444444444444", 16.0, -5.0},
+			{"repo-a", 15.0, uint8(1), uint8(1), 20.0},
+			{"44444444-4444-4444-4444-444444444444", 16.0, uint8(1), uint8(1), -5.0},
 		},
 		contributorRows: [][]any{
 			{"repo-a", 15.0},
@@ -437,7 +440,7 @@ func TestGoldenBlockedWorkSumsOnlyBlockedStatus(t *testing.T) {
 		currentStartDay: "2024-06-01",
 		displayNameRows: [][]any{{"team-ops", "Team Ops"}},
 		driverRows: [][]any{
-			{"team-ops", 12.0, 50.0},
+			{"team-ops", 12.0, uint8(1), uint8(1), 50.0},
 		},
 		contributorRows: [][]any{
 			{"team-ops", 12.0},
@@ -513,9 +516,9 @@ func TestHasDataFlagsSeparateAnEmptyWindowFromAStoredZero(t *testing.T) {
 			if err != nil {
 				t.Fatalf("BuildExplainResponse: %v", err)
 			}
-			if got.Value != tc.wantValue || got.DeltaPct != tc.wantDelta || got.HasData != tc.wantHasData || got.HasPriorData != tc.wantHasPriorData {
+			if got.Value != tc.wantValue || deltaOf(got.DeltaPct) != tc.wantDelta || got.HasData != tc.wantHasData || got.HasPriorData != tc.wantHasPriorData {
 				t.Fatalf("value=%v delta_pct=%v has_data=%v has_prior_data=%v, want %v/%v/%v/%v",
-					got.Value, got.DeltaPct, got.HasData, got.HasPriorData, tc.wantValue, tc.wantDelta, tc.wantHasData, tc.wantHasPriorData)
+					got.Value, deltaOf(got.DeltaPct), got.HasData, got.HasPriorData, tc.wantValue, tc.wantDelta, tc.wantHasData, tc.wantHasPriorData)
 			}
 		})
 	}

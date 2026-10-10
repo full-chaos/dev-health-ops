@@ -277,3 +277,48 @@ func TestAnAnalyticsPartIsComputedExactlyWhenItIsSelected(t *testing.T) {
 		})
 	}
 }
+
+// A batch that is wrong is an error whether or not the operation selects the
+// part that is wrong: the selection decides which statements are sent, never
+// which requests are valid. A group dimension that is not one of the three,
+// and a breakdown whose date range is turned around, fail with a document
+// that selects nothing of them, and send no statement.
+func TestAWrongAnalyticsBatchIsAnErrorWhateverIsSelected(t *testing.T) {
+	window := map[string]any{"startDate": "2026-07-01", "endDate": "2026-09-30"}
+	for name, batch := range map[string]map[string]any{
+		"a group dimension that is not allowed": {"useInvestment": true, "evidenceQualityGroupBy": "REPO",
+			"breakdowns": []any{map[string]any{"dimension": "THEME", "measure": "COUNT", "topN": 10, "dateRange": window}}},
+		"a breakdown whose range ends before it starts": {"useInvestment": true,
+			"breakdowns": []any{map[string]any{"dimension": "THEME", "measure": "COUNT", "topN": 10, "dateRange": map[string]any{"startDate": "2026-09-30", "endDate": "2026-07-01"}}}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			for _, document := range []string{
+				`query Q($orgId: String!, $batch: AnalyticsRequestInput!) { analytics(orgId: $orgId, batch: $batch) { __typename } }`,
+				everythingDocument,
+			} {
+				client := &pageStatements{counts: map[string]int{}}
+				server := gqlhandler.NewDefaultServer(graph.NewExecutableSchema(graph.Config{Resolvers: &graph.Resolver{ClickHouse: client}}))
+				body, _ := json.Marshal(map[string]any{"query": document, "variables": map[string]any{"orgId": "org-1", "batch": batch}})
+				request := httptest.NewRequest(http.MethodPost, "/query", strings.NewReader(string(body)))
+				request.Header.Set("Content-Type", "application/json")
+				request = request.WithContext(authctx.WithClaims(request.Context(), authctx.Claims{OrgID: "org-1"}))
+				recorder := httptest.NewRecorder()
+				server.ServeHTTP(recorder, request)
+				var out struct {
+					Errors []struct {
+						Message string `json:"message"`
+					} `json:"errors"`
+				}
+				if err := json.Unmarshal(recorder.Body.Bytes(), &out); err != nil {
+					t.Fatal(err)
+				}
+				if len(out.Errors) == 0 {
+					t.Errorf("a wrong batch was answered with no error by the document %.60q: %s", document, recorder.Body.String())
+				}
+				if client.counts[statementQualityByGroup] != 0 || (name == "a breakdown whose range ends before it starts" && client.counts[statementBreakdown] != 0) {
+					t.Errorf("a wrong part sent its statement: %v", client.counts)
+				}
+			}
+		})
+	}
+}

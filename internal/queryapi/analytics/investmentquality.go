@@ -198,7 +198,7 @@ func evidenceQualityFilterFromFilters(filters *model.FilterInput) evidenceQualit
 // evidenceQualityStats. Its input is absent by default, as is its result: the
 // existing aggregate remains unchanged for callers that do not request this
 // extra query.
-func resolveEvidenceQualityByGroup(ctx context.Context, client QueryClient, orgID string, batch model.AnalyticsRequestInput, useInvestment bool, filters *model.FilterInput) ([]model.EvidenceQualityGroup, error) {
+func resolveEvidenceQualityByGroup(ctx context.Context, client QueryClient, orgID string, batch model.AnalyticsRequestInput, useInvestment bool, filters *model.FilterInput, selected bool) ([]model.EvidenceQualityGroup, error) {
 	if !useInvestment || batch.EvidenceQualityGroupBy == nil {
 		return nil, nil
 	}
@@ -210,6 +210,12 @@ func resolveEvidenceQualityByGroup(ctx context.Context, client QueryClient, orgI
 	case DimensionTheme, DimensionSubcategory, DimensionWorkType:
 	default:
 		return nil, newValidationError("evidenceQualityGroupBy", string(*batch.EvidenceQualityGroupBy), "evidenceQualityGroupBy must be THEME, SUBCATEGORY, or WORK_TYPE")
+	}
+	// The dimension is checked for every batch that names one: a wrong one is
+	// an error whether or not the operation selects the groups. The statement
+	// is sent only for an operation that selects them.
+	if !selected {
+		return nil, nil
 	}
 	startDate, endDate, ok := analyticsQualityWindow(batch)
 	if !ok {

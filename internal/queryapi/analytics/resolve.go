@@ -270,13 +270,11 @@ func ResolveSelected(ctx context.Context, client QueryClient, orgID string, batc
 		}
 		evidenceQualityStats = stats
 	}
-	var evidenceQualityByGroup []model.EvidenceQualityGroup
-	if selected.EvidenceQualityByGroup {
-		groups, err := resolveEvidenceQualityByGroup(ctx, client, orgID, batch, useInvestment, resolvedFilters)
-		if err != nil {
-			return nil, fmt.Errorf("analytics: evidenceQualityByGroup: %w", err)
-		}
-		evidenceQualityByGroup = groups
+	// The groups: the batch's group dimension is validated in every case; the
+	// statement is sent only when the groups are selected.
+	evidenceQualityByGroup, err := resolveEvidenceQualityByGroup(ctx, client, orgID, batch, useInvestment, resolvedFilters, selected.EvidenceQualityByGroup)
+	if err != nil {
+		return nil, fmt.Errorf("analytics: evidenceQualityByGroup: %w", err)
 	}
 	// analytics.py:970-973: evidence_quality_distribution is literally
 	// evidence_quality_stats.band_counts, reused, never recomputed --
@@ -506,7 +504,9 @@ func resolveSankey(ctx context.Context, client QueryClient, orgID string, input 
 	)
 	// The coverage is its own statement: it is sent only for an operation that
 	// selected sankey.coverage.
+	sankeyReads := 1
 	if coverageSelected {
+		sankeyReads = 2
 		coverageConcurrent.Add(1)
 		go func() {
 			defer coverageConcurrent.Done()
@@ -538,7 +538,7 @@ func resolveSankey(ctx context.Context, client QueryClient, orgID string, input 
 		"org_id", orgID,
 		"path", pathLabel(req.Path),
 		"use_investment", useInvestment,
-		"clickhouse_reads", 2, // the grouped sankey query + coverage; telemetry probes are not counted
+		"clickhouse_reads", sankeyReads, // the grouped sankey query, and the coverage when it was selected; telemetry probes are not counted
 		"sankey_ms", sankeyElapsed.Milliseconds(),
 		"coverage_ms", coverageElapsed.Milliseconds(),
 		"total_ms", time.Since(started).Milliseconds(),

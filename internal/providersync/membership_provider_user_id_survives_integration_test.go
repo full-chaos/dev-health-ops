@@ -151,3 +151,24 @@ func TestJiraProjectAsTeamRetirementKeepsTheProviderUserIDOfAMembership(t *testi
 		t.Errorf("retired membership provider_user_id = %q, want account-1", got)
 	}
 }
+
+// The Jira project-as-team catalog writer stores provider_user_id (the accountId of a lead).
+func TestJiraTeamCatalogWriterStoresTheProviderUserID(t *testing.T) {
+	ctx, conn := newWorkItemEffectsConn(t)
+	orgID := uuid.NewString()
+	at := time.Date(2026, 10, 1, 8, 0, 0, 0, time.UTC)
+	id := "account-1"
+	row := jiraTeamCatalogMembershipRow{OrgID: orgID, Provider: "jira", TeamID: "OPS", MemberID: "jira:lead-1", IdentityFacets: []string{},
+		Source: "native", IsPrimary: 1, Specificity: 100, Priority: 10, ValidFrom: at, UpdatedAt: at, ProviderUserID: &id}
+	lease := providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil })
+	if err := (JiraTeamCatalogClickHouseEffects{Conn: conn, Lease: lease}).writeMemberships(ctx, []jiraTeamCatalogMembershipRow{row}); err != nil {
+		t.Fatal(err)
+	}
+	var got string
+	if err := conn.QueryRow(ctx, `SELECT ifNull(provider_user_id, '<NULL>') FROM team_memberships FINAL WHERE org_id = ? AND member_id = 'jira:lead-1'`, orgID).Scan(&got); err != nil {
+		t.Fatal(err)
+	}
+	if got != "account-1" {
+		t.Errorf("stored provider_user_id = %q, want account-1", got)
+	}
+}

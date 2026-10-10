@@ -223,6 +223,11 @@ func TestARunRetractsWhatTheSnapshotNoLongerHas(t *testing.T) {
 		exec(t, conn, "OPTIMIZE TABLE "+table+" FINAL")
 	}
 
+	// CHAOS-9144: the closed replacement rows of the two members that left keep their accountId.
+	if got := lines(t, conn, `SELECT concat(member_id, '|', ifNull(provider_user_id, '<NULL>')) FROM team_memberships FINAL WHERE org_id = 'org-1' AND provider = 'jira' AND valid_to IS NOT NULL ORDER BY member_id`); strings.Join(got, ",") != "jira:alice-1|Alice-1,jira:carol-3|carol-3" {
+		t.Fatalf("provider_user_id of the closed memberships = %v, want alice-1 and carol-3 with their accountIds", got)
+	}
+
 	// The loaders' own validity predicate, evaluated a day after the snapshots
 	// (the test's clock is fixed, not the wall clock).
 	asOf := first.Add(24 * time.Hour)

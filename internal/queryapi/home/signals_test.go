@@ -342,6 +342,8 @@ func TestRepoFilterAppliedFollowsTheSpecScopeAndTheResolvedFilter(t *testing.T) 
 		{"repo scope, repo metric, filter built", named, "repo", " AND repo_id IN x", "true"},
 		{"what.repos, repo metric, filter built", byWhat, "repo", " AND repo_id IN x", "true"},
 		{"repo scope, team metric", named, "team", "", "false"},
+		// A team metric of a team-scope request carries a team condition, which is not a repository filter.
+		{"team scope and what.repos, team metric", Filters{Scope: ScopeFilter{Level: "team", IDs: []string{"t1"}}, What: WhatFilter{Repos: []string{"r1"}}}, "team", " AND team_id IN x", "false"},
 		{"repo scope, repo metric, nothing resolved", named, "repo", "", "false"},
 	} {
 		got := "nil"

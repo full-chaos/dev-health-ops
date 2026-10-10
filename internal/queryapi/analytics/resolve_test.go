@@ -1073,3 +1073,29 @@ func TestResolve_EvidenceQuality_OpensForCanonicalOnlyRequest_EvenWithUseInvestm
 		t.Errorf("control: stats must stay nil without a canonical-only request, got %+v", r2.EvidenceQualityStats)
 	}
 }
+
+// CHAOS-9195 round 113 r2 P1: a THEME flow matrix or a THEME evidenceQualityGroupBy also opens the
+// evidence-quality reads against useInvestment=false.
+func TestResolve_EvidenceQuality_OpensForFlowMatrixAndGroupByTheme_EvenWithUseInvestmentFalse(t *testing.T) {
+	gb := model.DimensionInputTheme
+	for name, batch := range map[string]model.AnalyticsRequestInput{
+		"group_by": {UseInvestment: boolPtr(false), EvidenceQualityGroupBy: &gb, Timeseries: []model.TimeseriesRequestInput{tsInput(model.DimensionInputRepo, model.MeasureInputCount)}},
+		"flow_matrix": {UseInvestment: boolPtr(false), Timeseries: []model.TimeseriesRequestInput{tsInput(model.DimensionInputRepo, model.MeasureInputCount)}, FlowMatrix: &model.FlowMatrixRequestInput{Dimension: model.DimensionInputTheme, Measure: model.MeasureInputCount, MaxNodes: 100, MaxEdges: 500,
+			DateRange: &model.DateRangeInput{StartDate: mustGraphQLDate("2026-01-01"), EndDate: mustGraphQLDate("2026-01-07")}}},
+	} {
+		client := &routingFakeClient{}
+		client.on("quality_known_count", &fakeRowScanner{
+			rows: [][]any{{uint64(10), uint64(10), 0.5, 0.1, uint64(0), uint64(5), uint64(5), uint64(0), uint64(0)}},
+		})
+		client.on("investment_metrics_daily", &fakeRowScanner{})
+		client.on("work_unit_investments", &fakeRowScanner{})
+		client.on("subcategory_kv", &fakeRowScanner{})
+		result, err := Resolve(context.Background(), client, "org-1", batch)
+		if err != nil {
+			t.Fatalf("%s: Resolve: %v", name, err)
+		}
+		if result.EvidenceQualityStats == nil || result.EvidenceQualityStats.Total != 10 {
+			t.Errorf("%s: EvidenceQualityStats = %+v, want the canonical quality read (total 10); calls=%v", name, result.EvidenceQualityStats, client.calls)
+		}
+	}
+}

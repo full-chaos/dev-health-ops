@@ -711,5 +711,11 @@ func batchHasCanonicalOnlyDimension(batch model.AnalyticsRequestInput) bool {
 			}
 		}
 	}
+	if batch.FlowMatrix != nil && canon(batch.FlowMatrix.Dimension) {
+		return true
+	}
+	if batch.EvidenceQualityGroupBy != nil && canon(*batch.EvidenceQualityGroupBy) {
+		return true
+	}
 	return false
 }

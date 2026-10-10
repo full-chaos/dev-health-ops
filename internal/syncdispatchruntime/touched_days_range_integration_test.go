@@ -130,13 +130,14 @@ func TestTouchedDaysRecordRangeFromANewEventToItsWriteDay(t *testing.T) {
 
 	t.Run("the range covers at most 366 day keys: the write day and the 365 days before it", func(t *testing.T) {
 		o := org(6)
-		old := time.Date(2025, 6, 1, 9, 0, 0, 0, time.UTC)
-		// the previous record is older than the event and recent enough to be seen
-		rangePreviousRecord(t, ctx, conn, o, repo, time.Date(2025, 5, 1, 9, 0, 0, 0, time.UTC))
+		// the oldest event that can be new: after a previous record that is still
+		// inside the 366 days of `at` before the run (2025-08-19 00:30), on the day
+		// 366 days before the write day
+		old := time.Date(2025, 8, 19, 9, 30, 0, 0, time.UTC)
 		if err := conn.Exec(ctx, `
 INSERT INTO daily_metrics_touched_days (org_id, day, repo_id, kind, at)
 SELECT ?, toDate('2026-08-01'), ?, 'touched', fromUnixTimestamp64Milli(toInt64(?), 'UTC')`,
-			o, repo, time.Date(2025, 5, 1, 9, 0, 0, 0, time.UTC).UnixMilli()); err != nil {
+			o, repo, time.Date(2025, 8, 19, 0, 30, 0, 0, time.UTC).UnixMilli()); err != nil {
 			t.Fatal(err)
 		}
 		insertTouchedTestItems(t, ctx, conn, touchedTestItem{org: o, repo: repo, id: "gh:acme/api#ancient", provider: "github",
@@ -210,6 +211,28 @@ SELECT ?, toDate('2026-08-16'), ?, 'dispatched', fromUnixTimestamp64Milli(toInt6
 		sort.Strings(want)
 		if !reflect.DeepEqual(got, want) {
 			t.Fatalf("new means strictly later than the previous record\n got %v\nwant %v", got, want)
+		}
+	})
+
+	t.Run("the previous record is found by its time, not by the day it touched", func(t *testing.T) {
+		o := org(12)
+		// the last syncs of the repository wrote only OLD items: the record has a
+		// recent `at` (08-05) and a day far in the past (2024-01-01)
+		for i, kind := range []string{"touched", "dispatched"} {
+			if err := conn.Exec(ctx, `
+INSERT INTO daily_metrics_touched_days (org_id, day, repo_id, kind, at)
+SELECT ?, toDate('2024-01-01'), ?, ?, fromUnixTimestamp64Milli(toInt64(?), 'UTC')`,
+				o, repo, kind, previous.Add(time.Duration(i)*time.Minute).UnixMilli()); err != nil {
+				t.Fatal(err)
+			}
+		}
+		insertTouchedTestItems(t, ctx, conn, touchedTestItem{org: o, repo: repo, id: "gh:acme/api#oldday", provider: "github",
+			created: rangeDay(8, 10), completed: at(8, 15), synced: rangeDay(8, 20)})
+		got := rangeRecord(t, ctx, conn, o, since)
+		for _, key := range rangeKeys(repo, rangeDay(8, 10), rangeDay(8, 20)) {
+			if !contains(got, key) {
+				t.Fatalf("day %s of the range is missing although the previous record is recent: %v", key, got)
+			}
 		}
 	})
 

@@ -444,8 +444,9 @@ never reads the rows as they are. Every `at` is the ClickHouse clock.
    inclusive: the days between show the item in the wrong state until the row
    is written. An event is new when its time is later than the previous record
    of its repository (the newest `touched` event of the repository older than
-   the start of the sync run minus the margin, read over the 366 days before
-   it, bounded by the organization), so an old item that is only written again
+   the start of the sync run minus the margin, found by its time `at` over the
+   366 days before it and not by the day it touched; the read is bounded by
+   the organization and the kind), so an old item that is only written again
    adds no day. ANY `touched` event of the repository counts as the previous record, also one that no sync wrote (the return of a failed run appends `touched` events), so such an event can hide the range of a later write: a delay, the nightly pass still recomputes. The range covers at most 366 day keys: the write day and the 365 days before it. A
    repository with no previous record has no new event (its first sync is
    computed by the windows of its units). Named limit: an event delivered late

@@ -86,8 +86,13 @@ GROUP BY day, repo_id`
 // A repository with no previous record in the last 366 days has no new event
 // (its first sync computes its days by the windows of its units). The range
 // covers at most 366 day keys, the write day and the 365 days before it, the
-// same bound as a backfill unit (WorkItemsUnitWindowDays refuses a 367th day). The read of the record is bounded by the organization and the 366 days
-// before the lower bound of the read (the sort key is (org, day, repo, kind)).
+// same bound as a backfill unit (WorkItemsUnitWindowDays refuses a 367th day).
+// The previous record is found by its time `at`, not by the day it touched: a
+// sync that wrote only old items leaves a record with a recent `at` and an old
+// day, and it is the previous record all the same. The read is bounded by the
+// organization, the kind and the 366 days of `at` before the lower bound of the
+// read; the sort key is (org, day, repo, kind), so it reads the 'touched' rows
+// of the organization and not the whole table.
 //
 // The days of the event itself are the part of recordTouchedDaysSQL; this
 // statement adds the days after it. A transition is read under the repository
@@ -131,7 +136,7 @@ FROM (
         SELECT repo_id, max(at) AS previous_at
         FROM daily_metrics_touched_days
         WHERE org_id = ? AND kind = 'touched'
-          AND day >= toDate(fromUnixTimestamp64Milli(toInt64(?), 'UTC')) - 366
+          AND at >= fromUnixTimestamp64Milli(toInt64(?), 'UTC') - INTERVAL 366 DAY
           AND at < fromUnixTimestamp64Milli(toInt64(?), 'UTC')
         GROUP BY repo_id
     ) AS previous ON previous.repo_id = events.repo_id

@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
-	"reflect"
 	"testing"
 )
 
@@ -115,9 +114,7 @@ func TestBuildTeamRowsMatchesFrozenPythonGolden(t *testing.T) {
 	for index, record := range records {
 		live := render(record)
 		want := golden.Records[index]
-		if !reflect.DeepEqual(live, want) {
-			t.Errorf("team row %d (scope_id=%s):\n got %+v\nwant %+v", index, record.ScopeID, live, want)
-		}
+		compareToGoldenOrDeclaredDivergence(t, "team row "+record.ScopeID, live, want)
 	}
 }
 

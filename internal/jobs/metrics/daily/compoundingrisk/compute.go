@@ -95,9 +95,11 @@ func SeverityFor(score *float64, thresholds Thresholds) string {
 }
 
 // Compute ports compute_compounding_risk (compounding_risk.py:319-402) for the
-// REPO scope. It ALWAYS returns a row: when a required input is missing the
-// score is nil and the severity is "unknown", and the row is still persisted
-// so absence-of-signal stays inspectable.
+// REPO scope. It ALWAYS returns a row. One declared difference from Python
+// (CHAOS-6545): Python gives no score when any input is missing; here the
+// score is the weighted mean over the inputs that are present (weights
+// renormalized), with no cap at any coverage, and nil with severity "unknown"
+// only when NO input is present. Record.Coverage says how much was present.
 //
 // This signature is unchanged by CHAOS-5084's team-scope addition -- every
 // existing repo-scope call site (ComputeForRepos, and every test that calls
@@ -153,34 +155,7 @@ func computeScored(
 	ownershipNorm := normalizeOwnership(inputs.SingleOwnerRatio, inputs.OwnershipGini)
 	reviewNorm := normalizeAgainstReference(inputs.ReviewLatencyP90H, references.Review)
 
-	var score *float64
-	if inputs.HasRequired() {
-		// The required-input gate proves all four components are non-nil here,
-		// mirroring Python's four asserts at compounding_risk.py:362-365.
-		//
-		// FMA BARRIERS (CHAOS-4818 class). Python evaluates this weighted sum
-		// as four separately-rounded products folded left to right by three
-		// separately-rounded adds. Go is free to contract `sum + w*n` into a
-		// single arm64 FMA, which rounds ONCE and can differ in the last bit --
-		// and this value is then compared against 0.40/0.65, so one ulp can
-		// move a repo between severity buckets. Assigning to a variable does
-		// NOT stop contraction; only an explicit float64 conversion does (Go
-		// spec, "Floating-point operators"), so every product and every partial
-		// sum carries one.
-		churnTerm := float64(weights.Churn * *churnNorm)
-		complexityTerm := float64(weights.Complexity * *complexityNorm)
-		ownershipTerm := float64(weights.Ownership * *ownershipNorm)
-		reviewTerm := float64(weights.Review * *reviewNorm)
-
-		partial := float64(churnTerm + complexityTerm)
-		partial = float64(partial + ownershipTerm)
-		partial = float64(partial + reviewTerm)
-
-		// Floating-point housekeeping: snap to [0, 1] in case of drift
-		// (compounding_risk.py:373-374).
-		clamped := clamp01(partial)
-		score = &clamped
-	}
+	score := weightedScore(churnNorm, complexityNorm, ownershipNorm, reviewNorm, weights)
 
 	return Record{
 		OrgID:   orgID,
@@ -213,6 +188,88 @@ func computeScored(
 
 		ComputedAt: computedAt,
 	}
+}
+
+// weightedScore is the composite over the inputs that are PRESENT (CHAOS-6545): the
+// weighted sum of the present normalized components divided by the sum of their weights, so the weights are renormalized over what is known. A
+// missing input is not zero: a plain sum of the present terms would count it as
+// zero risk. No input present gives no score (nil), never 0. There is no cap
+// at any coverage; Coverage reports how much of the weight was present.
+//
+// When all four inputs are present the sum is NOT divided: the result is
+// bit-for-bit the one Python's compute_compounding_risk gives (the frozen
+// golden), whatever the float sum of the four default weights is.
+//
+// FMA BARRIERS (CHAOS-4818 class). Python evaluates the weighted sum as
+// separately-rounded products folded left to right by separately-rounded adds.
+// Go is free to contract `sum + w*n` into a single arm64 FMA, which rounds ONCE
+// and can differ in the last bit -- and this value is then compared against
+// 0.40/0.65, so one ulp can move a repo between severity buckets. Assigning to
+// a variable does NOT stop contraction; only an explicit float64 conversion
+// does (Go spec, "Floating-point operators"), so every product and every
+// partial sum carries one. The order is churn, complexity, ownership, review.
+func weightedScore(churn, complexity, ownership, review *float64, weights Weights) *float64 {
+	var (
+		partial       float64
+		presentWeight float64
+		present       int
+	)
+	for _, component := range []struct {
+		norm   *float64
+		weight float64
+	}{
+		{churn, weights.Churn},
+		{complexity, weights.Complexity},
+		{ownership, weights.Ownership},
+		{review, weights.Review},
+	} {
+		if component.norm == nil {
+			continue
+		}
+		term := float64(component.weight * *component.norm)
+		partial = float64(partial + term)
+		presentWeight = float64(presentWeight + component.weight)
+		present++
+	}
+	if present == 0 {
+		return nil
+	}
+	if present < 4 {
+		if presentWeight <= 0 {
+			return nil
+		}
+		partial = float64(partial / presentWeight)
+	}
+	// Floating-point housekeeping: snap to [0, 1] in case of drift
+	// (compounding_risk.py:373-374).
+	clamped := clamp01(partial)
+	return &clamped
+}
+
+// Coverage is the share of the weight that was present in the score: the sum
+// of the weights of the present normalized components over the sum of all four
+// weights, in [0, 1]. nil when the weights sum to zero.
+func (record Record) Coverage() *float64 {
+	total := float64(float64(float64(record.WChurn+record.WComplexity)+record.WOwnership) + record.WReview)
+	if total <= 0 {
+		return nil
+	}
+	var present float64
+	for _, component := range []struct {
+		norm   *float64
+		weight float64
+	}{
+		{record.ChurnNorm, record.WChurn},
+		{record.ComplexityNorm, record.WComplexity},
+		{record.OwnershipNorm, record.WOwnership},
+		{record.ReviewNorm, record.WReview},
+	} {
+		if component.norm != nil {
+			present = float64(present + component.weight)
+		}
+	}
+	coverage := clamp01(float64(present / total))
+	return &coverage
 }
 
 // ComplexityDeltaRatio ports load_repo_complexity_delta_30d's final expression

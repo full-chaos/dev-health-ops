@@ -122,12 +122,26 @@ const compoundingRiskSQLBase = `
         scope_id,
         tupleElement(latest_row, 1) AS score,
         tupleElement(latest_row, 2) AS severity,
-        tupleElement(latest_row, 3) AS latest_computed_at
+        tupleElement(latest_row, 3) AS latest_computed_at,
+        -- the share of the weight that was present in the score: served only
+        -- beside a score (a row with no score has no coverage)
+        if(
+            tupleElement(latest_row, 1) IS NULL
+              OR (tupleElement(latest_row, 8) + tupleElement(latest_row, 9) + tupleElement(latest_row, 10) + tupleElement(latest_row, 11)) <= 0,
+            NULL,
+            (
+                if(tupleElement(latest_row, 4) IS NULL, 0, tupleElement(latest_row, 8))
+              + if(tupleElement(latest_row, 5) IS NULL, 0, tupleElement(latest_row, 9))
+              + if(tupleElement(latest_row, 6) IS NULL, 0, tupleElement(latest_row, 10))
+              + if(tupleElement(latest_row, 7) IS NULL, 0, tupleElement(latest_row, 11))
+            ) / (tupleElement(latest_row, 8) + tupleElement(latest_row, 9) + tupleElement(latest_row, 10) + tupleElement(latest_row, 11))
+        ) AS coverage
     FROM (
         SELECT
             scope,
             scope_id,
-            argMax(tuple(compounding_risk, severity, computed_at), computed_at) AS latest_row
+            argMax(tuple(compounding_risk, severity, computed_at, churn_norm, complexity_norm, ownership_norm, review_norm,
+                         w_churn, w_complexity, w_ownership, w_review), computed_at) AS latest_row
         FROM compounding_risk_daily
         WHERE org_id = {org_id:String}
           AND day = (
@@ -215,10 +229,11 @@ func fetchRiskSignals(ctx context.Context, client QueryClient, f Filters, startD
 		var score *float64
 		var severity string
 		var latestComputedAt time.Time
-		if err := rows.Scan(&scope, &scopeID, &score, &severity, &latestComputedAt); err != nil {
+		var coverage *float64
+		if err := rows.Scan(&scope, &scopeID, &score, &severity, &latestComputedAt, &coverage); err != nil {
 			return nil, fmt.Errorf("home: fetch_risk_signals scan: %w", err)
 		}
-		out = append(out, RiskRow{Scope: scope, ScopeID: scopeID, Score: score, Severity: severity})
+		out = append(out, RiskRow{Scope: scope, ScopeID: scopeID, Score: score, Severity: severity, Coverage: coverage})
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("home: fetch_risk_signals rows: %w", err)

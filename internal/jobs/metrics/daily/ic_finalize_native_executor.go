@@ -62,6 +62,27 @@ func NewICFinalizeExecutor(conn driver.Conn) *ICFinalizeExecutor {
 		}
 		return supersedeStaleTeamKeys(ctx, conn, teamkeytables.ICLandscapeRolling30d, orgID, asOf, nil, produced, computedAt)
 	})
+	// The stale-key rule of the synthesized keys of user_metrics_daily
+	// (CHAOS-9135): a person with work-item metrics and no git row is written
+	// under a repository only this family makes, so no repository partition can
+	// retract that row; this compute holds every person of the day.
+	inner.SetUserMetricsSuperseder(func(
+		ctx context.Context, orgID string, day, computedAt time.Time, written []icfinalize.ICUserMetric,
+	) (int, error) {
+		produced := make([]staleKey, 0, len(written))
+		for _, metric := range written {
+			// The key the write used: a person with a stored row under the
+			// synthesized repository is read back as a git record (its
+			// RepoID is the synthesized one), so a flag alone would retract
+			// the row this compute just wrote.
+			repoID := metric.RepoID
+			if metric.SynthesizedRepoID {
+				repoID = icfinalize.SynthesizedRepoID(orgID, metric.IdentityID)
+			}
+			produced = append(produced, staleKey{repoID.String(), metric.IdentityID})
+		}
+		return supersedeSynthesizedUserKeys(ctx, conn, orgID, day, computedAt, produced)
+	})
 	return &ICFinalizeExecutor{inner: inner}
 }
 

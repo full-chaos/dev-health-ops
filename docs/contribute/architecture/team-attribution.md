@@ -1723,6 +1723,26 @@ take it through `internal/storage/clickhouse/liverow`, and the rule there is: a 
   the repositories of a day) and tests the rolled row takes a newer row of zeros of ONE stored key as the row of
   all of them, and drops the measured ones with it. The home theme allocation reads the stored investment area
   (day, repository, team, area, project stream), applies the predicate there, and only then takes the theme.
+
+**The two user-level daily tables (CHAOS-9135).** `user_metrics_daily` and `work_item_user_metrics_daily` hold the team
+in a VALUE column (the sorting key is scope, person and day), so a key that a run no longer produces cannot be told
+from a key the run measured as zero: a person whose measured row is all zero is a real row (a person assigned only
+to an item created that day). They take an explicit marker instead: `retracted UInt8 DEFAULT 0`
+(`teamkeytables.Table.Retracted`, ClickHouse migration 116). The stale-key rule writes a row with `retracted = 1`, 0 in
+every count, and the `team_id` and `team_name` of the newest row it retracts (`Table.Carried`), so a reader that
+filters on a team BEFORE it takes the newest row still sees the retraction next to the row it retracts. A measured row
+of zeros keeps `retracted = 0` and stays a real row.
+
+- Who writes it: the repository partition family retracts the `user_metrics_daily` keys of its repositories; the
+  organization run retracts the keys of repositories that are gone, and skips the keys the finalize family
+  synthesized; `ic_finalize` retracts those synthesized keys (`icfinalize.SynthesizedRepoID`);
+  `work_item_user_metrics_daily` is a run-level step with the other work-item tables.
+- Who reads it: every reader of either table takes the newest version first and THEN filters
+  (`liverow.Predicate`, `liverow.NewestPredicate`); the census in `internal/storage/clickhouse/liverow` fails for a
+  reader that does not. `ResolveRepoIDsForTeams` leaves out a key whose newest row of the team is a retraction.
+- Roll order: apply migration 116 first, then the code. After the roll, a recompute of the days is needed: a stale key
+  stored before the roll is only retracted when its day is computed again.
+- Not covered: `work_item_blocked_durations_daily` has the same kind of stale key and takes a follow-up.
 - A reader that takes the state on the newest day of each key (a backlog, a current WIP, a stored risk score) must
   NOT filter before it picks the newest row: the row of zeros is what says the key holds nothing now, and a filter
   that ran first would serve the older row. It then gives 0 or no value, as for a key with no row.

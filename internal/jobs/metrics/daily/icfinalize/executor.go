@@ -12,6 +12,7 @@ import (
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/metric"
 
+	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse/liverow"
 	"github.com/full-chaos/dev-health-ops/internal/teamactive"
 )
 
@@ -84,7 +85,7 @@ type Conn interface {
 // commits_count/files_changed/avg_commit_size_loc/etc. to zero on write: a
 // column this query does not select cannot be carried through by
 // writeUserMetrics no matter what that function does with what it has.
-const gitMetricsSQL = `
+var gitMetricsSQL = `
 SELECT author_email, team_id, repo_id, loc_added, loc_deleted, prs_authored, prs_merged,
        median_pr_cycle_hours, pr_cycle_p90_hours,
        commits_count, files_changed, large_commits_count, avg_commit_size_loc,
@@ -99,19 +100,21 @@ FROM (
     ORDER BY computed_at DESC
     LIMIT 1 BY org_id, repo_id, author_email, day
 ) AS user_metrics_daily
-WHERE day = {day:Date} AND org_id = {org_id:String}`
+WHERE day = {day:Date} AND org_id = {org_id:String}
+  AND ` + liverow.Predicate("user_metrics_daily", "user_metrics_daily")
 
 // workItemMetricsSQL mirrors run_daily_metrics_finalize's own readback, which
 // uses FINAL rather than LIMIT 1 BY: work_item_user_metrics_daily IS in
 // RERUN_DEDUPED_DAILY_TABLES, so it is a ReplacingMergeTree and takes the RMT
 // form. The two tables genuinely differ; using one form for both would be
 // wrong for whichever it did not fit.
-const workItemMetricsSQL = `
+var workItemMetricsSQL = `
 SELECT user_identity, provider, work_scope_id, team_id, team_name,
        items_started, items_completed, wip_count_end_of_day,
        cycle_time_p50_hours, cycle_time_p90_hours
 FROM work_item_user_metrics_daily FINAL
-WHERE day = {day:Date} AND org_id = {org_id:String}`
+WHERE day = {day:Date} AND org_id = {org_id:String}
+  AND ` + liverow.Predicate("work_item_user_metrics_daily", "")
 
 // synthesizedRepoNamespace seeds the deterministic repo_id below. A fixed
 // namespace constant, never regenerated: the whole value of the id is that it
@@ -154,10 +157,29 @@ func SynthesizedRepoID(orgID, identityID string) uuid.UUID {
 
 // Executor computes the ic_finalize family natively.
 type Executor struct {
-	conn                Conn
-	now                 func() time.Time
-	teamMapper          TeamMapper
-	landscapeSuperseder LandscapeSuperseder
+	conn                  Conn
+	now                   func() time.Time
+	teamMapper            TeamMapper
+	landscapeSuperseder   LandscapeSuperseder
+	userMetricsSuperseder UserMetricsSuperseder
+}
+
+// UserMetricsSuperseder runs after the user-metrics write of a day. It gets
+// every row the compute wrote (none for a day with no person) and writes a row
+// of zeros over each stored key of the day that this family alone owns (a
+// person with work-item metrics and no git row, under the synthesized
+// repository) and the compute did not produce. It returns the number of rows
+// it wrote. The rule is the one of the daily tables with a retraction marker
+// (package daily, stale_team_keys.go); it is injected because this package
+// does not import that one.
+type UserMetricsSuperseder func(
+	ctx context.Context, orgID string, day, computedAt time.Time, written []ICUserMetric,
+) (int, error)
+
+// SetUserMetricsSuperseder wires the stale-key rule of the synthesized keys of
+// user_metrics_daily.
+func (executor *Executor) SetUserMetricsSuperseder(superseder UserMetricsSuperseder) {
+	executor.userMetricsSuperseder = superseder
 }
 
 // LandscapeSuperseder runs after the landscape write of a day. It gets every
@@ -251,6 +273,13 @@ func (executor *Executor) loadGitMetrics(
 			&contextSpreadCount, &reviewRequestLoad, &metric.TeamName, &metric.ActiveHours, &weekendDays,
 		); err != nil {
 			return nil, err
+		}
+		if metric.RepoID == SynthesizedRepoID(orgID, metric.AuthorEmail) {
+			// This family's own row of a person with no git record (zeros
+			// but the work-item columns), not a git fact: read back as one it
+			// would keep itself alive after the work items are gone, and no
+			// stale-key rule could retract it (CHAOS-9135).
+			continue
 		}
 		if inactive.Has(metric.TeamID) {
 			metric.TeamID, metric.TeamName = unassignedTeamID, unassignedTeamName
@@ -417,6 +446,16 @@ func (executor *Executor) computeForDay(
 	written, err := executor.writeUserMetrics(ctx, orgID, day, computedAt, merged)
 	if err != nil {
 		return 0, err
+	}
+
+	if executor.userMetricsSuperseder != nil {
+		// Also with no record: a day that lost every person still holds the
+		// synthesized rows of the earlier compute.
+		superseded, err := executor.userMetricsSuperseder(ctx, orgID, day, computedAt, merged)
+		written += superseded
+		if err != nil {
+			return written, err
+		}
 	}
 
 	stats, err := LoadRollingStats(ctx, executor.conn, orgID, day, inactive)

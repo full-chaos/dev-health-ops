@@ -156,6 +156,12 @@ func TestTheStaleKeyRuleWritesARowOfZerosOverEachSupersededKey(t *testing.T) {
 	first := staleKeyRuleDay.Add(30 * time.Hour)
 
 	for _, table := range StaleTeamKeyTables() {
+		if table.Retracted != "" {
+			// A table that holds the team in a value column has no team-moved
+			// key; its retraction row is asserted in
+			// stale_team_keys_user_level_integration_test.go.
+			continue
+		}
 		t.Run(table.Table, func(t *testing.T) {
 			measures := float64(len(table.Measures) + len(table.NullableMeasures))
 			oldKey := staleKeyRuleKey(table, "platform", "unit-a")

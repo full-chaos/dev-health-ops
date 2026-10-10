@@ -180,6 +180,11 @@ type GitLabTeamCatalogRows struct {
 	// /projects listing stopped without GitLab's end-of-list signal
 	// (ownershipListingProvesEnd): decideOwnershipClose keeps their rows open.
 	OwnershipUnprovenTeamIDs []string `json:"-"`
+	// OwnershipListingResponses is, for each team of OwnershipListedTeamIDs,
+	// the number of responses its /projects listing took. A grant that a
+	// listing of more than one response does not hold is a candidate, not a
+	// proven removal (ownershipCloseRequest.responses).
+	OwnershipListingResponses map[string]int `json:"-"`
 }
 
 const (

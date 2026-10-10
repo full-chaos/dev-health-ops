@@ -963,6 +963,8 @@ type HomeSignal struct {
 	Coverage *float64 `json:"coverage,omitempty"`
 	// Current primary work-item attribution evidence for work-item metrics; null when this window has no attributable work items.
 	Attribution *SignalAttribution `json:"attribution,omitempty"`
+	// Whether the request's repository filter (a repo-level scope, or what.repos) narrows the metric this signal is built from: the field of the same name on MetricDelta (false only for a team-keyed metric). Null when the request names no repository, and on a signal that does not come from a metric (risk, recommendation).
+	RepoFilterApplied *bool `json:"repoFilterApplied,omitempty"`
 }
 
 type HomeTile struct {
@@ -1077,6 +1079,8 @@ type MetricDelta struct {
 	RateState *string `json:"rateState,omitempty"`
 	// The coverage of the pull request rework ratio (CHAOS-9072), from 0 to 1, not a percent: the merged pull requests of the window that have review data from a provider that stores a changes-requested review, divided by all merged pull requests of the window that have stored counts. 0 when rateState is unknown_no_review_evidence or not_applicable_no_rework_signal. Null when the window has no merged pull request, when it holds no stored counts, and for every other metric.
 	RateCoverage *float64 `json:"rateCoverage,omitempty"`
+	// Whether the request's repository filter (a repo-level scope, or what.repos) narrows this metric. Null when the request names no repository. True for a repository-keyed metric: the filter was applied, and when the named repositories resolve to nothing the metric has no data (hasData false). False only for a team-keyed metric (cycle_time, throughput, wip_saturation, blocked_work: their tables have no repo_id column, so the repository condition is not applied and the value is not narrowed) (CHAOS-9093).
+	RepoFilterApplied *bool `json:"repoFilterApplied,omitempty"`
 }
 
 type MetricLineage struct {

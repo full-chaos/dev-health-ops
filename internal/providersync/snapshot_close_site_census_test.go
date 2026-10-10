@@ -15,6 +15,9 @@ import (
 // empty-answer policy, is a deliberate edit of this table.
 var snapshotKindCensus = map[string]struct {
 	constructor, empty, why string
+	// absence is what the kind takes as the proof that an open fact the run
+	// does not hold is gone (snapshotAbsenceByKind).
+	absence string
 }{
 	// Scope: EVERY kind below closes only behind the one scope gate
 	// (ProveSoleScope: no other active integration of the provider in the
@@ -24,30 +27,30 @@ var snapshotKindCensus = map[string]struct {
 	// all, and TestSnapshotKindPolicyTableIsTheDocumentedOne pins it in the
 	// two documented tables.
 	"linear_project_ownership": {"internal/providersync.LinearProjectOwnershipKind", "EmptyClosesNothing",
-		"one projects walk for the workspace: an answer with no project ownership is an access change before it is a removal"},
+		"one projects walk for the workspace: an answer with no project ownership is an access change before it is a removal", "cursor walk"},
 	"linear_team_key_ownership": {"internal/providersync.LinearTeamKeyOwnershipKind", "EmptyClosesNothing",
-		"one teams walk for the workspace: an answer with no team is an access change before it is a removal"},
+		"one teams walk for the workspace: an answer with no team is an access change before it is a removal", "cursor walk"},
 	"jira_legacy_ownership": {"internal/providersync.JiraLegacyOwnershipKind", "EmptyClosesNothing",
-		"one project search for the site: no live project is far more often an access change than a removal"},
+		"one project search for the site: no live project is far more often an access change than a removal", "one response or direct answer"},
 	"gitlab_group_project_grants": {"internal/providersync.GitLabGroupProjectGrantKind", "EmptyIsAnAnswer",
-		"one listing per group, each with its own proven end, in a scope no other integration lists: a group with no project is an answer"},
+		"one listing per group, each with its own proven end, in a scope no other integration lists: a group with no project is an answer", "one response or direct answer"},
 	"github_team_repo_grants": {"internal/providersync.GitHubTeamRepoGrantKind", "EmptyIsAnAnswer",
-		"one listing per team, each with its own proven end, in a scope no other integration lists: a team with no repository is an answer"},
+		"one listing per team, each with its own proven end, in a scope no other integration lists: a team with no repository is an answer", "one response or direct answer"},
 	"linear_team_memberships": {"internal/providersync.LinearTeamMembershipKind", "EmptyIsAnAnswer",
 		"every team's member list ends or the run fails before any write (evidence.MembersComplete), in a scope no other integration reads: " +
-			"a team with no member is an answer"},
+			"a team with no member is an answer", "the writer of the kind"},
 	"github_team_memberships": {"internal/providersync.GitHubTeamMembershipKind", "EmptyIsAnAnswer",
-		"one member read per team, each with its own proven end, in a scope no other integration reads: a team with no member is an answer"},
+		"one member read per team, each with its own proven end, in a scope no other integration reads: a team with no member is an answer", "the writer of the kind"},
 	"gitlab_team_memberships": {"internal/providersync.GitLabTeamMembershipKind", "EmptyIsAnAnswer",
-		"one member read per group, each with its own proven end, in a scope no other integration reads: a group with no member is an answer"},
+		"one member read per group, each with its own proven end, in a scope no other integration reads: a group with no member is an answer", "the writer of the kind"},
 	"atlassian_team_project_links": {"internal/providersync.AtlassianTeamLinkKind", "EmptyIsAnAnswer",
 		"one link read per team, each to its end: a team with no link is an answer; a team outside the search answer is in scope " +
-			"only through atlassian_team_catalog"},
+			"only through atlassian_team_catalog", "cursor walk"},
 	"atlassian_team_memberships": {"internal/providersync.AtlassianTeamMembershipKind", "EmptyIsAnAnswer",
 		"one member read per team, each to its end: a team with no member is an answer; a team outside the search answer is in " +
-			"scope only through atlassian_team_catalog"},
+			"scope only through atlassian_team_catalog", "cursor walk"},
 	"atlassian_team_catalog": {"internal/providersync.AtlassianTeamCatalogKind", "EmptyClosesNothing",
-		"one team search for the organization: a search that answers no team is an access change before every team was deleted"},
+		"one team search for the organization: a search that answers no team is an access change before every team was deleted", "cursor walk"},
 }
 
 // snapshotCloseSites is every production function that turns the retractions
@@ -243,7 +246,7 @@ func TestSnapshotKindPolicyTableIsTheDocumentedOne(t *testing.T) {
 		if !known {
 			t.Fatalf("the kind %q has the empty-answer policy %q, which this test has no wording for", name, entry.empty)
 		}
-		want[name] = snapshotKindScope + "; " + policy
+		want[name] = snapshotKindScope + "; " + policy + "; " + entry.absence
 	}
 	read := func(path string, row *regexp.Regexp) map[string]string {
 		t.Helper()
@@ -257,7 +260,7 @@ func TestSnapshotKindPolicyTableIsTheDocumentedOne(t *testing.T) {
 				if _, twice := got[match[1]]; twice {
 					t.Errorf("%s names the kind %q twice", path, match[1])
 				}
-				got[match[1]] = match[2] + "; " + match[3]
+				got[match[1]] = match[2] + "; " + match[3] + "; " + match[4]
 			}
 		}
 		if len(got) == 0 {
@@ -265,13 +268,286 @@ func TestSnapshotKindPolicyTableIsTheDocumentedOne(t *testing.T) {
 		}
 		return got
 	}
-	code := read("snapshot_kinds.go", regexp.MustCompile(`^//\t([a-z_]+)\s+(sole integration)\s+(closes nothing|is an answer)$`))
+	code := read("snapshot_kinds.go", regexp.MustCompile(`^//\t([a-z_]+)\s+(sole integration)\s+(closes nothing|is an answer)\s+(cursor walk|one response or direct answer|the writer of the kind)$`))
 	if !reflect.DeepEqual(code, want) {
 		t.Errorf("the policy table in the doc comment of snapshot_kinds.go differs from the census.\n got  %v\n want %v", code, want)
 	}
 	document := read("../../docs/contribute/architecture/team-attribution.md",
-		regexp.MustCompile("^\\s*\\| `([a-z_]+)` \\|[^|]*\\|[^|]*\\| (sole integration) \\| (closes nothing|is an answer)\\b[^|]*\\|$"))
+		regexp.MustCompile("^\\s*\\| `([a-z_]+)` \\|[^|]*\\|[^|]*\\| (sole integration) \\| (closes nothing|is an answer)\\b[^|]*\\| (cursor walk|one response or direct answer|the writer of the kind) \\|$"))
 	if !reflect.DeepEqual(document, want) {
 		t.Errorf("the kinds table of docs/contribute/architecture/team-attribution.md differs from the census.\n got  %v\n want %v", document, want)
 	}
+}
+
+// snapshotAbsenceCalls is every production file that states the proof of an
+// absence for a kind snapshot, and how often it makes each statement. The
+// kinds behind each call:
+//
+//   - linear_team_catalog_collector.go: linear_project_ownership and
+//     linear_team_key_ownership, both by the cursor walk.
+//   - internal/atlassianteams/write.go: atlassian_team_memberships,
+//     atlassian_team_project_links and atlassian_team_catalog, by the cursor walk.
+//   - ownership_close_gate.go: github_team_repo_grants and
+//     gitlab_group_project_grants (one call, ownershipCloseDecision.snapshot),
+//     by one response or the direct answer.
+//   - jira_team_catalog_route.go: jira_legacy_ownership, by one response (or a
+//     project the search holds) or the direct answer.
+//   - ownership_close_gate.go, the second call (ownershipCloseDecision.
+//     membershipSnapshot): the three team membership kinds, whose candidates
+//     the one writer MembershipSnapshotWriter.Snapshot decides fact by fact.
+//
+// A new call, or a kind that moves from one statement to the other, is a
+// deliberate edit of this table, of snapshotKindCensus and of the two
+// documented tables.
+var snapshotAbsenceCalls = map[string]map[string]int{
+	"internal/providersync/linear_team_catalog_collector.go": {"AbsenceByWalk": 2},
+	"internal/atlassianteams/write.go":                       {"AbsenceByWalk": 3},
+	"internal/providersync/ownership_close_gate.go":          {"AbsenceByListing": 1, "AbsenceByCloseWriter": 1},
+	"internal/providersync/jira_team_catalog_route.go":       {"AbsenceByListing": 1},
+}
+
+// TestAbsenceProofCensus pins who states the proof of an absence, and that
+// the only walk taken as that proof is the cursor walk. It reads the source of
+// the two packages that hold a close site.
+func TestAbsenceProofCensus(t *testing.T) {
+	call := regexp.MustCompile(`\b(?:providersync\.)?(AbsenceByWalk|AbsenceByListing|AbsenceByCloseWriter)(?:\[[^\]]+\])?\(`)
+	walk := regexp.MustCompile(`AbsenceByWalk(?:\[[^\]]+\])?\((?:providersync\.)?(\w+)\)`)
+	got := map[string]map[string]int{}
+	files := 0
+	for _, directory := range []string{".", "../atlassianteams"} {
+		entries, err := os.ReadDir(directory)
+		if err != nil {
+			t.Fatalf("read %s: %v", directory, err)
+		}
+		for _, entry := range entries {
+			name := entry.Name()
+			if entry.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") || name == "ownership_snapshot.go" {
+				continue
+			}
+			raw, err := os.ReadFile(directory + "/" + name)
+			if err != nil {
+				t.Fatal(err)
+			}
+			files++
+			path := "internal/providersync/" + name
+			if directory != "." {
+				path = "internal/atlassianteams/" + name
+			}
+			var code []string
+			for _, line := range strings.Split(string(raw), "\n") {
+				if !strings.HasPrefix(strings.TrimSpace(line), "//") {
+					code = append(code, line)
+				}
+			}
+			source := strings.Join(code, "\n")
+			for _, match := range call.FindAllStringSubmatch(source, -1) {
+				if got[path] == nil {
+					got[path] = map[string]int{}
+				}
+				got[path][match[1]]++
+			}
+			for _, match := range walk.FindAllStringSubmatch(source, -1) {
+				if match[1] != "AbsenceWalkByCursor" {
+					t.Errorf("%s takes the walk %s as the proof of an absence: the only named walk is AbsenceWalkByCursor", path, match[1])
+				}
+			}
+		}
+	}
+	if files < 20 {
+		t.Fatalf("the census read %d source file(s): it measured nothing", files)
+	}
+	if !reflect.DeepEqual(got, snapshotAbsenceCalls) {
+		t.Errorf("the statements of an absence proof changed.\n got  %v\n want %v", got, snapshotAbsenceCalls)
+	}
+	// The table of the kinds and the calls agree: five kinds by the cursor
+	// walk (five calls), three by the listing rule (two calls, one of them the
+	// gate's, for the two grant kinds).
+	byAbsence := map[string]int{}
+	for _, entry := range snapshotKindCensus {
+		byAbsence[entry.absence]++
+	}
+	if byAbsence["cursor walk"] != 5 || byAbsence["one response or direct answer"] != 3 || byAbsence["the writer of the kind"] != 3 || len(byAbsence) != 3 {
+		t.Errorf("the kinds by absence proof are %v, want 5 by the cursor walk, 3 by one response or the direct answer and 3 by the writer of the kind", byAbsence)
+	}
+	// The writer's own proof is stated for the membership row type only, and
+	// its candidates reach one function: the writer that decides them.
+	gate, err := os.ReadFile("ownership_close_gate.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Count(string(gate), "AbsenceByCloseWriter[MembershipSnapshotRow]()") != 1 {
+		t.Errorf("AbsenceByCloseWriter is for the membership kinds only: one call, of the row type MembershipSnapshotRow")
+	}
+	for kind, entry := range snapshotKindCensus {
+		catalogMembership := strings.HasSuffix(kind, "_team_memberships") && kind != "atlassian_team_memberships"
+		if (entry.absence == "the writer of the kind") != catalogMembership {
+			t.Errorf("kind %s states the absence proof %q: the writer of the kind is for the three catalog membership kinds, and only for them", kind, entry.absence)
+		}
+	}
+}
+
+// heldSetWalk is one list walk of a catalog collector: what it reads, which
+// kind's HELD SET its answer feeds (the facts a run takes as still there), and
+// what proves an absence for that kind.
+type heldSetWalk struct{ reads, feeds, proof string }
+
+// heldSetWalks is EVERY list walk of the five catalog collectors, in source
+// order, by the call that makes it. The proof of an absence belongs to the
+// held set, so to every walk that feeds it: a kind closed by "one response or
+// direct answer" takes its walks as proof only when each of them was one
+// response, and its direct answer asks for every state those walks admit.
+//
+// A new walk in one of these files changes the count and fails
+// TestHeldSetWalkCensus until it is named here with the held set it feeds and
+// its proof. Per kind:
+//
+//   - github_team_repo_grants: ONE walk per team (the team's repositories;
+//     GitHub lists archived repositories in the same walk).
+//   - gitlab_group_project_grants: ONE walk per group (the group's projects,
+//     with the provider's default filters; the direct answer uses the same
+//     endpoint and filters). The walk of all projects with subgroups feeds the
+//     catalog's project rows, not a grant.
+//   - jira_legacy_ownership: THREE walks (live, archived, live again); the
+//     archived one feeds the held set because an archived project keeps its
+//     open rows. A row whose project the live answer holds is decided by the
+//     legacy links, one read of the store.
+//   - linear_team_key_ownership: ONE walk (teams), by cursor.
+//   - linear_project_ownership: TWO walks by cursor (projects, with archived
+//     projects in the same walk; and the continuation of one project's teams).
+//   - atlassian_team_catalog, atlassian_team_memberships,
+//     atlassian_team_project_links: ONE walk each, by cursor (the team search;
+//     one member read per team; one link read per team).
+var heldSetWalks = map[string]struct {
+	call  string
+	walks []heldSetWalk
+}{
+	"internal/providersync/github_team_catalog_route.go": {`providerfoundation\.CollectGitHubLinkPages\(`, []heldSetWalk{
+		{"the teams of the organization", "no held set: a team that is not listed closes nothing", "none needed"},
+		{"the repositories of one team", "github_team_repo_grants", "one response, or GitHub's answer for the grant"},
+		{"the members of one team", "no close", "none needed"},
+	}},
+	"internal/providersync/gitlab_team_catalog_route.go": {`providerfoundation\.CollectGitLabPageParamPages\(`, []heldSetWalk{
+		{"the subgroups of the root group", "no held set: a group that is not listed closes nothing", "none needed"},
+		{"the projects of one group", "gitlab_group_project_grants", "one response, or GitLab's answer for the project"},
+		{"the members of one group", "no close", "none needed"},
+		{"all projects with subgroups", "no held set of a grant: the catalog's project rows", "none needed"},
+	}},
+	"internal/providersync/jira_team_catalog_route.go": {`:= jiraTeamCatalogSearchProjects\(`, []heldSetWalk{
+		{"the live project search", "jira_legacy_ownership", "every walk one response, or Jira's answer for live and archived"},
+		{"the archived project search", "jira_legacy_ownership (an archived project keeps its open rows)", "the same"},
+		{"the live project search, again", "jira_legacy_ownership", "the same"},
+	}},
+	"internal/providersync/linear_reference_catalog_route.go": {`:= collectLinearReferenceConnection\(`, []heldSetWalk{
+		{"the teams of the workspace", "linear_team_key_ownership", "cursor walk"},
+		{"the projects of the workspace, archived ones too", "linear_project_ownership", "cursor walk"},
+		{"the continuation of one project's teams", "linear_project_ownership", "cursor walk"},
+		{"the continuation of one team's members", "no close", "none needed"},
+	}},
+	"internal/atlassianteams/collect.go": {`client\.(SearchTeams|IterTeamUsers|IterTeamConnectedContainers)\(`, []heldSetWalk{
+		{"the team search", "atlassian_team_catalog", "cursor walk"},
+		{"the members of one team", "atlassian_team_memberships", "cursor walk"},
+		{"the project links of one team", "atlassian_team_project_links", "cursor walk"},
+	}},
+}
+
+// TestHeldSetWalkCensus pins every list walk of the catalog collectors and
+// the held set each feeds. It also holds the Jira walks of the code to the
+// table: the three project searches are the three walks the close names.
+func TestHeldSetWalkCensus(t *testing.T) {
+	read := func(path string) string {
+		t.Helper()
+		raw, err := os.ReadFile("../../" + path)
+		if err != nil {
+			t.Fatalf("read %s: %v", path, err)
+		}
+		var code []string
+		for _, line := range strings.Split(string(raw), "\n") {
+			if !strings.HasPrefix(strings.TrimSpace(line), "//") {
+				code = append(code, line)
+			}
+		}
+		return strings.Join(code, "\n")
+	}
+	feeds := map[string]int{}
+	for path, entry := range heldSetWalks {
+		got := len(regexp.MustCompile(entry.call).FindAllString(read(path), -1))
+		if got != len(entry.walks) {
+			t.Errorf("%s makes %d list walk(s) by %s, the census names %d: a walk is named with the held set it feeds and its proof",
+				path, got, entry.call, len(entry.walks))
+		}
+		for _, walk := range entry.walks {
+			if strings.TrimSpace(walk.reads) == "" || strings.TrimSpace(walk.feeds) == "" || strings.TrimSpace(walk.proof) == "" {
+				t.Errorf("%s: a walk of the census has no text: %+v", path, walk)
+			}
+			for kind := range snapshotKindCensus {
+				if strings.HasPrefix(walk.feeds, kind) {
+					feeds[kind]++
+				}
+			}
+		}
+	}
+	// Every kind has a walk that feeds it, and the count per kind is the one
+	// the comment above states.
+	want := map[string]int{
+		"github_team_repo_grants": 1, "gitlab_group_project_grants": 1, "jira_legacy_ownership": 3,
+		"linear_team_key_ownership": 1, "linear_project_ownership": 2,
+		"atlassian_team_catalog": 1, "atlassian_team_memberships": 1, "atlassian_team_project_links": 1,
+	}
+	if !reflect.DeepEqual(feeds, want) {
+		t.Errorf("the walks that feed each kind's held set are %v, want %v", feeds, want)
+	}
+	// The Jira close names its walks in code: as many as the searches.
+	jira := read("internal/providersync/jira_team_catalog_route.go")
+	literal := regexp.MustCompile(`(?s)projectSearchWalks := \[\]ListWalk\{(.*?)\n\t\}`).FindStringSubmatch(jira)
+	if literal == nil {
+		t.Fatal("the Jira route does not name its project search walks")
+	}
+	if named := strings.Count(literal[1], "Responses:"); named != len(heldSetWalks["internal/providersync/jira_team_catalog_route.go"].walks) {
+		t.Errorf("the Jira close names %d project search walk(s), the route makes %d: every search feeds the held set",
+			named, len(heldSetWalks["internal/providersync/jira_team_catalog_route.go"].walks))
+	}
+	// The Jira answer asks for every state those walks admit.
+	answer := read("internal/providersync/ownership_absence.go")
+	if !strings.Contains(answer, `[]string{"live", jiraTeamCatalogProjectStatusArchived}`) {
+		t.Error("the Jira direct answer does not ask for live AND archived projects: the held set admits both")
+	}
+	// A direct answer asks with the identifier the row was built from. The id
+	// forms a row of each listing kind can hold, and the question for each:
+	for kind, forms := range ownershipRowIDForms {
+		if _, known := snapshotKindCensus[kind]; !known || snapshotKindCensus[kind].absence != "one response or direct answer" {
+			t.Errorf("%s has row id forms and is not a kind of the listing rule", kind)
+		}
+		for _, form := range forms {
+			if strings.TrimSpace(form.form) == "" || strings.TrimSpace(form.question) == "" || !strings.Contains(answer, form.inCode) {
+				t.Errorf("%s, id form %q: the direct answers do not hold %q", kind, form.form, form.inCode)
+			}
+		}
+	}
+	listing := 0
+	for _, entry := range snapshotKindCensus {
+		if entry.absence == "one response or direct answer" {
+			listing++
+		}
+	}
+	if len(ownershipRowIDForms) != listing {
+		t.Errorf("%d kinds of the listing rule, %d of them name their row id forms", listing, len(ownershipRowIDForms))
+	}
+}
+
+// ownershipRowIDForms is, for each kind that closes on a direct answer, every
+// form the project id of an open row can have, and the question the answer
+// asks for it. A provider is asked with a value it gave (or that names what it
+// gave), never with a value this system built. inCode is the text of the
+// answer's source that makes the question.
+var ownershipRowIDForms = map[string][]struct{ form, question, inCode string }{
+	"github_team_repo_grants": {
+		{"owner/repository (the repository full name)", "the team's permission for owner/repository", `"/repos/"+url.PathEscape(owner)+"/"+url.PathEscape(repo)`},
+	},
+	"gitlab_group_project_grants": {
+		{"the project path with its namespace", "the group's projects searched for the project's own name, compared by the whole path", `strings.TrimSpace(project.PathWithNamespace) == projectPath`},
+	},
+	"jira_legacy_ownership": {
+		{"the native project id", "the project search by `id`", `return "id", projectID, true`},
+		{"{org}:jira:{KEY}, the retired id built from the project key", "the project search by `keys`, with the key alone", `return "keys", key, key != ""`},
+	},
 }

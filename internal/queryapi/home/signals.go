@@ -542,6 +542,8 @@ func BuildMetricSignals(deltas []MetricDelta, f Filters, dataConfidence DataConf
 			RecommendedAction: actionForMetric(delta.Metric),
 			EvidenceRef:       &evidenceRefStr,
 			Category:          category,
+
+			RepoFilterApplied: delta.RepoFilterApplied,
 		})
 	}
 	return RankSignals(signals)

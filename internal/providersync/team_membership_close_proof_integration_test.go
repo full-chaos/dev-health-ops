@@ -448,7 +448,7 @@ func TestAMembershipLookupBudgetThatEndsLeavesTheRestOpen(t *testing.T) {
 	}
 	asked := 0
 	prover := &MembershipLookupBudget{Left: 1, Inner: absenceFunc(func(string, string) MembershipAbsence { asked++; return AbsenceProven })}
-	closable := GitHubTeamMembershipKind([]string{"gh:platform"}).Snapshot(ScopeProof{stated: true}, ProveSnapshot(SnapshotTerm{Holds: true, Reason: "read_returned"}))
+	closable := GitHubTeamMembershipKind([]string{"gh:platform"}).Snapshot(ScopeProof{stated: true}, ProveSnapshot(SnapshotTerm{Holds: true, Reason: "read_returned"}), AbsenceByCloseWriter[MembershipSnapshotRow]())
 	rows, outcome, err := githubMembershipWriter.Snapshot(ctx, conn, orgID, nil, nil, departureAt[1], prover, closable)
 	if err != nil {
 		t.Fatal(err)
@@ -629,7 +629,7 @@ func TestTheCloseReadsOnlyTheOpenRowsOfItsOwnOrgProviderAndSource(t *testing.T) 
 	seedMembership(ctx, t, conn, orgID, "gitlab", "gh:platform", "gh:other-provider", "provider_access", departureAt[0], nil, departureAt[0])
 	seedMembership(ctx, t, conn, orgID, "github", "gh:platform", "gh:manual", "manual", departureAt[0], nil, departureAt[0])
 	prover := absenceFunc(func(string, string) MembershipAbsence { return AbsenceProven })
-	closable := GitHubTeamMembershipKind([]string{"gh:platform"}).Snapshot(ScopeProof{stated: true}, ProveSnapshot(SnapshotTerm{Holds: true, Reason: "read_returned"}))
+	closable := GitHubTeamMembershipKind([]string{"gh:platform"}).Snapshot(ScopeProof{stated: true}, ProveSnapshot(SnapshotTerm{Holds: true, Reason: "read_returned"}), AbsenceByCloseWriter[MembershipSnapshotRow]())
 	rows, outcome, err := githubMembershipWriter.Snapshot(ctx, conn, orgID, nil, nil, departureAt[1], prover, closable)
 	if err != nil {
 		t.Fatal(err)
@@ -740,7 +740,7 @@ func TestACloseIsWrittenOneTickNewerThanTheRowItReplaces(t *testing.T) {
 	const orgID = "org-9079-tick"
 	seedMembership(ctx, t, conn, orgID, "github", "gh:platform", "gh:gone", "provider_access", departureAt[0], nil, departureAt[1])
 	prover := absenceFunc(func(string, string) MembershipAbsence { return AbsenceProven })
-	closable := GitHubTeamMembershipKind([]string{"gh:platform"}).Snapshot(ScopeProof{stated: true}, ProveSnapshot(SnapshotTerm{Holds: true, Reason: "read_returned"}))
+	closable := GitHubTeamMembershipKind([]string{"gh:platform"}).Snapshot(ScopeProof{stated: true}, ProveSnapshot(SnapshotTerm{Holds: true, Reason: "read_returned"}), AbsenceByCloseWriter[MembershipSnapshotRow]())
 	rows, _, err := githubMembershipWriter.Snapshot(ctx, conn, orgID, nil, nil, departureAt[1], prover, closable)
 	if err != nil {
 		t.Fatal(err)
@@ -831,7 +831,7 @@ func TestALaterOpenRowOfAFactTheRunHoldsIsRetiredAndTheEarliestStaysOpen(t *test
 	const orgID = "org-9079-duplicates"
 	seedMembership(ctx, t, conn, orgID, "github", "gh:platform", "gh:octocat", "provider_access", departureAt[0], nil, departureAt[0])
 	seedMembership(ctx, t, conn, orgID, "github", "gh:platform", "gh:octocat", "provider_access", departureAt[1], nil, departureAt[1])
-	closable := GitHubTeamMembershipKind([]string{"gh:platform"}).Snapshot(ScopeProof{stated: true}, ProveSnapshot(SnapshotTerm{Holds: true, Reason: "read_returned"}))
+	closable := GitHubTeamMembershipKind([]string{"gh:platform"}).Snapshot(ScopeProof{stated: true}, ProveSnapshot(SnapshotTerm{Holds: true, Reason: "read_returned"}), AbsenceByCloseWriter[MembershipSnapshotRow]())
 	uid := "octocat"
 	fresh := githubMembershipRow{OrgID: orgID, Provider: "github", TeamID: "gh:platform", MemberID: "gh:octocat", RawProviderUserID: &uid,
 		IdentityFacets: []string{"octocat"}, Source: "provider_access", ValidFrom: departureAt[2], UpdatedAt: departureAt[2]}
@@ -869,7 +869,7 @@ func TestAFactWithManyOpenRowsCostsOneLookupAndIsClosedWhole(t *testing.T) {
 		seedMembership(ctx, t, conn, orgID, "github", "gh:platform", "gh:many", "provider_access", departureAt[0].Add(time.Duration(index)*time.Minute), nil, departureAt[0])
 	}
 	seedMembership(ctx, t, conn, orgID, "github", "gh:platform", "gh:other", "provider_access", departureAt[0], nil, departureAt[0])
-	closable := GitHubTeamMembershipKind([]string{"gh:platform"}).Snapshot(ScopeProof{stated: true}, ProveSnapshot(SnapshotTerm{Holds: true, Reason: "read_returned"}))
+	closable := GitHubTeamMembershipKind([]string{"gh:platform"}).Snapshot(ScopeProof{stated: true}, ProveSnapshot(SnapshotTerm{Holds: true, Reason: "read_returned"}), AbsenceByCloseWriter[MembershipSnapshotRow]())
 	run := func(budget int) (map[string]int, []githubMembershipRow, MembershipSnapshotOutcome) {
 		asked := map[string]int{}
 		inner := absenceFunc(func(_, member string) MembershipAbsence { asked[member]++; return AbsenceProven })

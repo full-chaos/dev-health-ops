@@ -324,10 +324,13 @@ func (adapter GitHubTeamCatalogCollector) CollectTeamCatalog(
 	if selections.Teams && (len(rows.RepoOwnership) > 0 || len(rows.RepoListedTeamIDs) > 0) {
 		decision := decideOwnershipClose(ctx, adapter.ScopeCensus, ownershipCloseRequest{
 			ref: ref, provider: githubTeamCatalogProvider,
-			listed: rows.RepoListedTeamIDs, unproven: rows.RepoUnprovenTeamIDs,
+			listed: rows.RepoListedTeamIDs, unproven: rows.RepoUnprovenTeamIDs, responses: rows.RepoListingResponses,
 		})
+		// A grant that a listing of more than one response does not hold is
+		// closed only on GitHub's own answer for that grant.
+		lookups := NewOwnershipAbsenceLookups(ctx, githubRepoGrantAbsence{client: client, org: orgName})
 		written, plan, err := adapter.Sink.SnapshotTeamRepoOwnership(
-			ctx, ref.OrgID, orgName, rows.RepoOwnership, decision.read, decision.snapshot(GitHubTeamRepoGrantKind), normalizedAt,
+			ctx, ref.OrgID, orgName, rows.RepoOwnership, decision.read, decision.snapshot(GitHubTeamRepoGrantKind, githubTeamRepositoriesWalk, lookups.Answer), normalizedAt,
 		)
 		if err != nil {
 			return result, err
@@ -336,6 +339,7 @@ func (adapter GitHubTeamCatalogCollector) CollectTeamCatalog(
 		ReportSnapshotPlan(ctx, githubTeamCatalogProvider, ref.OrgID, plan)
 		result.RepoOwnershipWritten = written
 		result.DegradedLegs = append(result.DegradedLegs, decision.legs...)
+		result.DegradedLegs = append(result.DegradedLegs, SnapshotAbsenceLegs(plan)...)
 		slog.Default().InfoContext(ctx, "github_team_catalog_repo_ownership_snapshot",
 			"org_id", ref.OrgID, "teams_listed", len(rows.RepoListedTeamIDs),
 			"teams_closable", len(decision.closable), "rows_written", written, "rows_closed", closed)

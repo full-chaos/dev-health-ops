@@ -26,6 +26,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/chclient"
 	"log"
 	"net/http"
 	"strings"
@@ -125,10 +126,34 @@ func writeRESTMethodNotAllowed(w http.ResponseWriter, r *http.Request, component
 // correlate a live 503 back to the failure that produced it. err must
 // never be nil: TestDataUnavailableCallSitesLogTheCause guards every
 // call site in this package for that.
+//
+// A read that hit a BOUND of the store client (result rows, bytes, execution
+// time: ClickHouse codes 158/396, 307, 159) is not "the store is down": the
+// route keeps the reference's status (503) and its error shape ({"detail":
+// "..."}) but names the cause, so a caller can tell "too large" from "store
+// down" (CHAOS-9126, D5879). One WARN names the operation, the bound and the
+// count of scope ids of the request (a count, never a value).
 func writeRESTDataUnavailable(w http.ResponseWriter, r *http.Request, component, orgID string, err error) {
+	if bound, code := chclient.BoundHit(err); bound != chclient.BoundNone {
+		log.Printf("query-api: WARN %s: read hit the %s bound (clickhouse code %d, bound=%d rows): scope_ids=%d org_id=%s request_id=%s err=%v",
+			component, bound, code, chclient.MaxResultRows, len(r.URL.Query()["scope_id"]), orgID, envelopeRequestID(r), err)
+		writeRESTError(w, r, component, orgID, http.StatusServiceUnavailable, restBoundDetail(bound))
+		return
+	}
 	log.Printf("query-api: %s: degraded to 503 Data unavailable: org_id=%s request_id=%s err=%v",
 		component, orgID, envelopeRequestID(r), err)
 	writeRESTError(w, r, component, orgID, http.StatusServiceUnavailable, "Data unavailable")
+}
+
+// restBoundDetail is the named cause a bound hit answers with.
+func restBoundDetail(bound chclient.Bound) string {
+	switch bound {
+	case chclient.BoundTime:
+		return "Query time limit exceeded"
+	case chclient.BoundBytes:
+		return "Query read limit exceeded"
+	}
+	return "Result too large"
 }
 
 // jwtHeaderAlg is the credential-kind dispatch: it peeks a JWT's own

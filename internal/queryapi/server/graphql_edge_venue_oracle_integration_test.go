@@ -655,13 +655,13 @@ func edgeCompare(t *testing.T, goBase string, cs []edgeCase, python []venueoracl
 					c.request.Name, differing, python[i].Headers, goResponse.Headers)
 			}
 			if chaos8509HomeCaptureAllowed(statusEqual, headersEqual) {
-				captureCHAOS8509HomePair(t, key, chaos8169GraphQLHomeBody(t, python[i].Body), chaos8169GraphQLHomeBody(t, goResponse.Body))
+				captureCHAOS8509HomePair(t, key, chaos8169GraphQLHomeBody(t, python[i].Body), chaos8169GraphQLHomeBody(t, venueGoBody(goResponse.Body)))
 			}
 			policy, ok := chaos8509HomeCapturePolicies[key]
 			if !ok {
 				t.Fatalf("CHAOS-8509 has no GraphQL Home policy for %s", c.request.Name)
 			}
-			assertCHAOS8509HomeCapturePolicy(t, key, policy, chaos8169GraphQLHomeBody(t, python[i].Body), chaos8169GraphQLHomeBody(t, goResponse.Body))
+			assertCHAOS8509HomeCapturePolicy(t, key, policy, chaos8169GraphQLHomeBody(t, python[i].Body), chaos8169GraphQLHomeBody(t, venueGoBody(goResponse.Body)))
 			fmt.Fprintf(&receipt, "%-58s python=%d go=%d D4840 Home ledger validated\n", c.request.Name, python[i].Status, goResponse.Status)
 			continue
 		}
@@ -702,6 +702,7 @@ func edgeCompare(t *testing.T, goBase string, cs []edgeCase, python []venueoracl
 	base := normalize
 	receipt.WriteString(venueoracle.Diff(t, goBase, parity, parityPython, venueoracle.DiffOptions{
 		Normalize: func(request venueoracle.Request, body string) string {
+			body = nullPercentNormalize(request, body) // first: the later masks drop the flags it reads
 			body = coverageDivergenceNormalize(request, body)
 			body = sankeyCoverageDivergenceNormalize(request, body)
 			body = noDataStatusNormalize(request, body, operatingReviewTablesEmpty)

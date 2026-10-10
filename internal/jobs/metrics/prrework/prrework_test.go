@@ -1,6 +1,7 @@
 package prrework
 
 import (
+	"fmt"
 	"math"
 	"strconv"
 	"testing"
@@ -112,7 +113,11 @@ func TestEvaluateTakesTheCoverageOverEveryStoredRow(t *testing.T) {
 				return
 			}
 			if !near(outcome.Coverage, test.coverage) {
-				t.Errorf("coverage %v, want %v", outcome.Coverage, test.coverage)
+				shown := "none"
+				if outcome.Coverage != nil {
+					shown = fmt.Sprint(*outcome.Coverage)
+				}
+				t.Errorf("coverage %s, want %v", shown, test.coverage)
 			}
 			// The ratio is of the counted rows, whatever the other rows hold.
 			if rate := Rate(test.view.Counts); (rate.Value == nil) != (outcome.Value == nil) || (rate.Value != nil && *rate.Value != *outcome.Value) {

@@ -4,6 +4,8 @@ import (
 	"context"
 	"testing"
 	"time"
+
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
 )
 
 // An empty string in a repository list names nothing (D5855): no repository is
@@ -16,8 +18,8 @@ func TestFilterEmptyReasonIgnoresAnEmptyRepositoryReference(t *testing.T) {
 		"no filter":                         {},
 		"a team scope alone (not a filter)": {Scope: ScopeFilter{Level: "team", IDs: []string{"team-one"}}},
 	} {
-		if refs := namedRepoRefs(f); len(refs) != 0 {
-			t.Errorf("%s: namedRepoRefs = %v, want none", name, refs)
+		if refs := teamscope.NamedRepoRefs(f.Scope.Level, f.Scope.IDs, f.What.Repos); len(refs) != 0 {
+			t.Errorf("%s: NamedRepoRefs = %v, want none", name, refs)
 		}
 		// A nil client proves nothing is read: a query would panic.
 		reason, err := filterEmptyReason(context.Background(), nil, f, "org", time.Now())
@@ -28,13 +30,13 @@ func TestFilterEmptyReasonIgnoresAnEmptyRepositoryReference(t *testing.T) {
 }
 
 // Repositories named by a repo-level scope and by what.repos are both named.
-func TestNamedRepoRefsAreTheScopeIDsAndWhatRepos(t *testing.T) {
+func TestFilterEmptyReasonNamesTheScopeIDsAndWhatReposOfTheSharedFunction(t *testing.T) {
 	f := Filters{Scope: ScopeFilter{Level: "repo", IDs: []string{"a", ""}}, What: WhatFilter{Repos: []string{"b", ""}}}
-	if refs := namedRepoRefs(f); len(refs) != 2 || refs[0] != "a" || refs[1] != "b" {
-		t.Errorf("namedRepoRefs = %v, want [a b]", refs)
+	if refs := teamscope.NamedRepoRefs(f.Scope.Level, f.Scope.IDs, f.What.Repos); len(refs) != 2 || refs[0] != "a" || refs[1] != "b" {
+		t.Errorf("NamedRepoRefs = %v, want [a b]", refs)
 	}
 	team := Filters{Scope: ScopeFilter{Level: "team", IDs: []string{"a"}}, What: WhatFilter{Repos: []string{"b"}}}
-	if refs := namedRepoRefs(team); len(refs) != 1 || refs[0] != "b" {
-		t.Errorf("a team scope's ids are teams, not repositories: namedRepoRefs = %v, want [b]", refs)
+	if refs := teamscope.NamedRepoRefs(team.Scope.Level, team.Scope.IDs, team.What.Repos); len(refs) != 1 || refs[0] != "b" {
+		t.Errorf("a team scope's ids are teams, not repositories: NamedRepoRefs = %v, want [b]", refs)
 	}
 }

@@ -80,29 +80,12 @@ func repoFilterRequested(f Filters) bool {
 	return len(teamscope.NamedRepoRefs(f.Scope.Level, f.Scope.IDs, f.What.Repos)) > 0
 }
 
-// namedRepoRefs are the repository references the request names (the ids of a
-// repo-level scope, and what.repos); an empty string names nothing.
-func namedRepoRefs(f Filters) []string {
-	var refs []string
-	if f.Scope.Level == "repo" {
-		refs = append(refs, f.Scope.IDs...)
-	}
-	refs = append(refs, f.What.Repos...)
-	named := refs[:0:0]
-	for _, ref := range refs {
-		if ref != "" {
-			named = append(named, ref)
-		}
-	}
-	return named
-}
-
 // filterEmptyReason is Response.FilterEmptyReason (CHAOS-9098): why the
 // repositories a request names matched nothing, by the one rule of
 // teamscope.ClassifyEmptyFilter. nil when the request names no repository, and
 // whenever something matched.
 func filterEmptyReason(ctx context.Context, client QueryClient, f Filters, orgID string, asOf time.Time) (*teamscope.EmptyReason, error) {
-	refs := namedRepoRefs(f)
+	refs := teamscope.NamedRepoRefs(f.Scope.Level, f.Scope.IDs, f.What.Repos)
 	if len(refs) == 0 {
 		return nil, nil
 	}

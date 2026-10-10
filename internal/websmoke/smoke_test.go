@@ -311,16 +311,17 @@ func newHarness(t *testing.T, routingOps string) *harness {
 	host, portText, _ := net.SplitHostPort(strings.TrimPrefix(h.srv.URL, "http://"))
 	port, _ := strconv.Atoi(portText)
 	h.cfg = Config{
-		Target:       Target{Host: host, Port: port},
-		PublicHost:   publicHost,
-		Email:        fakeEmail,
-		PasswordFile: filepath.Join(dir, "password"),
-		WebSrc:       src,
-		Catalog:      filepath.Join(dir, "catalog.json"),
-		RoutingOps:   filepath.Join(dir, "known-missing.txt"),
-		ReceiptPath:  filepath.Join(dir, "receipts", "web-path-smoke-receipt.json"),
-		Documents:    server.WebPathSmokeDocument,
-		Now:          func() time.Time { return time.Date(2026, 10, 4, 12, 0, 0, 0, time.UTC) },
+		Target:              Target{Host: host, Port: port},
+		PublicHost:          publicHost,
+		Email:               fakeEmail,
+		PasswordFile:        filepath.Join(dir, "password"),
+		WebSrc:              src,
+		Catalog:             filepath.Join(dir, "catalog.json"),
+		RoutingOps:          filepath.Join(dir, "known-missing.txt"),
+		ReceiptPath:         filepath.Join(dir, "receipts", "web-path-smoke-receipt.json"),
+		Documents:           server.WebPathSmokeDocument,
+		RegisteredDocuments: server.WebPathSmokeRegisteredDocuments,
+		Now:                 func() time.Time { return time.Date(2026, 10, 4, 12, 0, 0, 0, time.UTC) },
 	}
 	return h
 }
@@ -954,4 +955,58 @@ func TestEverySmokeDocumentPassesAsWebWritesIt(t *testing.T) {
 			t.Fatalf("%s: the registered document differs from urql's output for its own web text", g.Op)
 		}
 	}
+}
+
+// CHAOS-9146: in a two-step pin (this ops with the older web) web's document is a LEGACY registered
+// text. It passes, and the receipt names the operation as legacy; the smoke still sends the current
+// registered document. A legacy text whose digest the catalog does not hold, and a text no registered
+// document carries, still fail.
+func TestWebDocumentOfALegacyRegisteredTextPassesAndSaysLegacy(t *testing.T) {
+	documents, ok := server.WebPathSmokeRegisteredDocuments("home")
+	if !ok || len(documents) < 3 || documents[0].Legacy || !documents[1].Legacy {
+		t.Fatalf("home registered documents = %d (ok %t): want the current text first, then legacy texts", len(documents), ok)
+	}
+	for index, legacy := range documents[1:] {
+		t.Run(fmt.Sprintf("legacy text %d", index+1), func(t *testing.T) {
+			h := newHarness(t, "")
+			// The catalog of the deployed ops holds every registered digest of the operation.
+			for _, document := range documents {
+				h.catalog = append(h.catalog, map[string]string{"operation": "home", "digest": DocumentDigest(document.Text)})
+			}
+			h.writeCatalog()
+			setWebDoc(t, h, "home", webText(legacy.Text))
+			out := Run(h.cfg)
+			c := out.check("web_source")
+			if out.ExitCode() != ExitPass || c["legacy_documents"] != "home" || c["digests_match"] != true {
+				t.Fatalf("exit=%d check=%v failures=%v", out.ExitCode(), c, out.Receipt.Failures)
+			}
+		})
+	}
+	t.Run("the current text says nothing of legacy", func(t *testing.T) {
+		h := newHarness(t, "")
+		out := Run(h.cfg)
+		if c := out.check("web_source"); out.ExitCode() != ExitPass || c["legacy_documents"] != nil {
+			t.Fatalf("exit=%d check=%v", out.ExitCode(), c)
+		}
+	})
+	t.Run("a legacy text the catalog does not hold is a mismatch", func(t *testing.T) {
+		h := newHarness(t, "")
+		setWebDoc(t, h, "home", webText(documents[1].Text))
+		out := Run(h.cfg)
+		if c := out.check("web_source"); out.ExitCode() != ExitFail || c["reason"] != "document_digest_mismatch=home" {
+			t.Fatalf("exit=%d check=%v", out.ExitCode(), c)
+		}
+	})
+	t.Run("a text no registered document carries is a mismatch", func(t *testing.T) {
+		h := newHarness(t, "")
+		for _, document := range documents {
+			h.catalog = append(h.catalog, map[string]string{"operation": "home", "digest": DocumentDigest(document.Text)})
+		}
+		h.writeCatalog()
+		setWebDoc(t, h, "home", webText(strings.Replace(documents[0].Text, "freshness {", "freshness {\n      unknownField", 1)))
+		out := Run(h.cfg)
+		if c := out.check("web_source"); out.ExitCode() != ExitFail || c["reason"] != "document_digest_mismatch=home" {
+			t.Fatalf("exit=%d check=%v", out.ExitCode(), c)
+		}
+	})
 }

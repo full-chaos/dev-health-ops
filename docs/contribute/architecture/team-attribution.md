@@ -764,7 +764,7 @@ project's items by id. Now:
     (`internal/providersync/testdata/provider_answers`, with how they were made):
       - Linear team-key rows: `teams(filter: {key: {eq: KEY}})`, an empty node list is "gone", a node of the key is
         "still there".
-      - Linear project rows: `project(id)`; `INPUT_ERROR` "Entity not found: Project" with no data is "gone"; a
+      - Linear project rows: `project(id)`; `INPUT_ERROR` "Entity not found: Project" and a null project is "gone"; a
         project whose team list (shorter than the default page) lacks the team is a link that is gone; one that
         names the team is still there.
       - Atlassian Teams catalog rows: `TeamById`; `classification NotFound` with status 404 is "gone"; a team that

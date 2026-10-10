@@ -84,8 +84,8 @@ func TestHomeServesNoDeltaAndNoEventWhenAWindowHasNoValue(t *testing.T) {
 		sawCFR := false
 		for _, d := range resp.Deltas {
 			// The rule holds for every metric, not only change failure rate.
-			if (!d.HasData || !d.HasPriorData) && (d.DeltaPct == nil || *d.DeltaPct != 0) {
-				t.Errorf("%s: metric %s has hasData=%v hasPriorData=%v and deltaPct %v, want 0", tc.name, d.Metric, d.HasData, d.HasPriorData, d.DeltaPct)
+			if (!d.HasData || !d.HasPriorData) && d.DeltaPct != nil {
+				t.Errorf("%s: metric %s has hasData=%v hasPriorData=%v and deltaPct %v, want null", tc.name, d.Metric, d.HasData, d.HasPriorData, d.DeltaPct)
 			}
 			if !d.HasData || !d.HasPriorData {
 				labels[d.Label] = true
@@ -97,8 +97,8 @@ func TestHomeServesNoDeltaAndNoEventWhenAWindowHasNoValue(t *testing.T) {
 			if tc.wantDelta && (d.DeltaPct == nil || *d.DeltaPct != tc.wantDeltaPct) {
 				t.Errorf("%s: change failure rate deltaPct = %v, want %v", tc.name, d.DeltaPct, tc.wantDeltaPct)
 			}
-			if !tc.wantDelta && (d.DeltaPct == nil || *d.DeltaPct != 0) {
-				t.Errorf("%s: change failure rate deltaPct = %v, want 0 (no delta)", tc.name, d.DeltaPct)
+			if !tc.wantDelta && d.DeltaPct != nil {
+				t.Errorf("%s: change failure rate deltaPct = %v, want null (no delta)", tc.name, d.DeltaPct)
 			}
 		}
 		if !sawCFR {

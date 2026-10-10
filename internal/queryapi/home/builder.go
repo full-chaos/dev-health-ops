@@ -382,18 +382,23 @@ func BuildResponse(ctx context.Context, chClient QueryClient, pgClient PGQueryCl
 	summary := []SummarySentence{}
 	topDelta, hasTopDelta := topDeltaByMagnitude(deltas)
 	if hasTopDelta {
-		scopeFilter, scopeBindings, err := scopeFilterForMetric(ctx, chClient, metricScope(topDelta.Metric), f, orgID, "team_id", "repo_id", now)
-		if err != nil {
-			return nil, err
-		}
-		driverRows, err := fetchMetricDriverDelta(ctx, chClient, metricTable(topDelta.Metric), metricColumn(topDelta.Metric), metricGroup(topDelta.Metric), startDay, endDay, compareStart, compareEnd, scopeFilter, scopeBindings, orgID, 3)
-		if err != nil {
-			return nil, err
-		}
-		// The sentence names the drivers by display name, never by id (CHAOS-9046).
+		// A move of exactly 0 % has no driver: a driver of no move is a false cause (CHAOS-9139,
+		// D5900). DECLARED DIVERGENCE from the reference (home.py:1123 names the drivers of any
+		// move, 0 % included), narrow: only a measured 0 % between two measured values.
 		driverText := "."
-		if driverNameList := driverNames(ctx, chClient, orgID, metricGroup(topDelta.Metric), driverRows); len(driverNameList) > 0 {
-			driverText = " driven by " + strings.Join(driverNameList, ", ") + "."
+		if namesDrivers(topDelta) {
+			scopeFilter, scopeBindings, err := scopeFilterForMetric(ctx, chClient, metricScope(topDelta.Metric), f, orgID, "team_id", "repo_id", now)
+			if err != nil {
+				return nil, err
+			}
+			driverRows, err := fetchMetricDriverDelta(ctx, chClient, metricTable(topDelta.Metric), metricColumn(topDelta.Metric), metricGroup(topDelta.Metric), startDay, endDay, compareStart, compareEnd, scopeFilter, scopeBindings, orgID, 3)
+			if err != nil {
+				return nil, err
+			}
+			// The sentence names the drivers by display name, never by id (CHAOS-9046).
+			if driverNameList := driverNames(ctx, chClient, orgID, metricGroup(topDelta.Metric), driverRows); len(driverNameList) > 0 {
+				driverText = " driven by " + strings.Join(driverNameList, ", ") + "."
+			}
 		}
 		summary = append(summary, SummarySentence{
 			ID:           "s1",

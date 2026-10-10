@@ -763,3 +763,36 @@ func TestClickHouseExternalSinkAbortsTeamWriteWhenCreatedAtReadFails(t *testing.
 		t.Fatal("team row must never be sent when its created_at could not be carried")
 	}
 }
+
+// A pushed identity names team ids, and a writer makes the team row exist
+// before any row that names the team: the teams of a batch are written before
+// every other kind of it, also
+// before a kind whose name sorts earlier (identity.v1, commit.v1). The other
+// kinds keep their sorted order.
+func TestThePushedTeamsOfABatchAreWrittenBeforeTheIdentitiesThatNameThem(t *testing.T) {
+	connection := &productSink{batch: &productBatch{}}
+	sink, err := NewClickHouseExternalBatchSink(connection)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pointer := externalTestPointer()
+	source := externalSinkBatch{Pointer: pointer, SourceID: uuid.New(), Records: []externalSinkRecord{
+		externalSinkFixture("repository.v1", map[string]any{"externalId": pointer.SourceInstance, "sourceSystem": "github"}),
+		externalSinkFixture("identity.v1", map[string]any{"canonicalId": "ada", "teamIds": []any{"team-a"}, "updatedAt": "2026-07-23T11:00:00Z"}),
+		externalSinkFixture("team.v1", map[string]any{"id": "team-a", "name": "Team A", "updatedAt": "2026-07-23T11:00:00Z"}),
+	}}
+	if _, err := sink.Write(context.Background(), source); err != nil {
+		t.Fatal(err)
+	}
+	var tables []string
+	for _, query := range connection.queries {
+		for _, table := range []string{"teams", "identities", "repos"} {
+			if strings.HasPrefix(query, "INSERT INTO "+table+" ") {
+				tables = append(tables, table)
+			}
+		}
+	}
+	if want := []string{"teams", "identities", "repos"}; !reflect.DeepEqual(tables, want) {
+		t.Fatalf("the inserts of the batch ran in the order %v, want %v", tables, want)
+	}
+}

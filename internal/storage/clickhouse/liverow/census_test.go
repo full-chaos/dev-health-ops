@@ -36,8 +36,9 @@ import (
 // "dir/" (every file under it), "file" (every declaration of it) or
 // "file:Declaration". A stale key fails the census.
 var unruledReads = map[string]string{
-	"internal/providersync/":                                           "sync writers of the daily tables and their read-back of the exact keys they wrote",
-	"internal/jobs/metrics/daily/":                                     "daily family writers and their own reads: the live-key reads of the rule, and the latest-generation read of the cognitive load family, which the writer keeps safe by the compute time of the row of zeros",
+	"internal/providersync/":       "sync writers of the daily tables and their read-back of the exact keys they wrote",
+	"internal/goapiproof/":         "proof routes: the SQL of the reference plane quoted in a Reason text, no query of this process",
+	"internal/jobs/metrics/daily/": "daily family writers and their own reads: the live-key reads of the rule, and the latest-generation read of the cognitive load family, which the writer keeps safe by the compute time of the row of zeros",
 	"internal/api/syncadmin/backfill_detail.go:compoundingRiskQuery":   "reads scope 'repo' rows only; a team retraction row has scope 'team'",
 	"internal/queryapi/compoundingrisk/read.go:repoTrend":              "reads scope 'repo' rows only; a team retraction row has scope 'team'",
 	"internal/queryapi/home/queries_signals.go:compoundingRiskSQLBase": "statement text with a placeholder for the rule; its one user, fetchRiskSignals, passes the rule to it",
@@ -49,6 +50,8 @@ var unruledReads = map[string]string{
 	"internal/queryapi/cognitiveload/cognitiveload.go:fetchRepoScopedTeamMetrics": "SQL pinned by the frozen golden; the rule is applied in Go after the read " +
 		"(fetchRetractedRepoDays reads the days whose newest rows hold no measurement, and they are dropped)",
 	"internal/queryapi/filteroptions/filteroptions.go": "distinct statuses and issue types: a retraction row holds the status or type of the row it retracts, never a new value",
+	"internal/queryapi/cognitiveload/cognitiveload.go:fetchUserMetrics": "SQL pinned by the frozen golden; a retraction row adds 0 to its sums, and the rule is applied in Go after the read " +
+		"(fetchRetractedUserDays reads the days whose every key is a retraction row, and they are dropped)",
 	"internal/queryapi/cognitiveload/cognitiveload.go:fetchTeamCognitiveLoad": "SQL pinned by the frozen golden; the rule is applied in Go after the read " +
 		"(fetchRetractedLoadDays reads the days whose newest row is a retraction row, and they are dropped)",
 	"internal/queryapi/sankey/queries.go:fetchExpenseCounts": "three sums over the whole scope, one row, no list: a retraction row adds 0",
@@ -72,6 +75,7 @@ var heldBy = map[string]string{
 	"internal/queryapi/analytics/timeseries.go:investmentMetricsDailyNewestRows":  "investmentMetricsDailyDedupSource",
 	"internal/queryapi/cognitiveload/cognitiveload.go:fetchTeamMetrics":           "retractedTeamDaysQuery",
 	"internal/queryapi/cognitiveload/cognitiveload.go:fetchTeamCognitiveLoad":     "retractedLoadDaysQuery",
+	"internal/queryapi/cognitiveload/cognitiveload.go:fetchUserMetrics":           "retractedUserDaysQuery",
 	"internal/queryapi/cognitiveload/cognitiveload.go:fetchRepoScopedTeamMetrics": "retractedRepoDaysQuery",
 }
 
@@ -107,6 +111,8 @@ var namesOnly = map[string]struct{ reader, why string }{
 	"internal/jobs/report/tablereads.go":                     {"dedupFromSource", "the key and version of each table the charts read"},
 	"internal/jobs/report/query.go":                          {"dedupFromSource", "the map from a registry table name to its schema table; every chart source comes from dedupFromSource (sourceFrom)"},
 	"internal/jobs/metrics/daily/benchmarking/clickhouse.go": {"FetchMetricSeriesByScope", "metric definitions"},
+	"internal/queryapi/people/metricconfig.go":               {"liveWhere", "the person metric configs: every read of their tables takes its clause from liveWhere"},
+	"internal/queryapi/analytics/filtertranslation.go":       {"", "an error message that names the tables, no query"},
 }
 
 type declaration struct {

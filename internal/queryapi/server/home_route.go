@@ -290,7 +290,7 @@ func newHomeGetHandler(client home.QueryClient, pgPool home.PGQueryClient) http.
 			f.Time.EndDate = &endDate
 		}
 
-		resp, err := home.BuildResponse(r.Context(), client, pgPool, claims.OrgID, f, time.Now().UTC())
+		resp, err := home.BuildResponseWithFilterEmptyReason(r.Context(), client, pgPool, claims.OrgID, f, time.Now().UTC())
 		if err != nil {
 			if errors.Is(err, timewindow.ErrOverflow) {
 				writeTimeWindowOverflow(w, r, "home", claims.OrgID)
@@ -364,7 +364,7 @@ func newHomePostHandler(client home.QueryClient, pgPool home.PGQueryClient) http
 		filtersMap, _ := legacyJSON(filtersValue).(map[string]any)
 		f := homeFiltersFromMap(filtersMap)
 
-		resp, err := home.BuildResponse(r.Context(), client, pgPool, claims.OrgID, f, time.Now().UTC())
+		resp, err := home.BuildResponseWithFilterEmptyReason(r.Context(), client, pgPool, claims.OrgID, f, time.Now().UTC())
 		if err != nil {
 			if errors.Is(err, timewindow.ErrOverflow) {
 				writeTimeWindowOverflow(w, r, "home", claims.OrgID)

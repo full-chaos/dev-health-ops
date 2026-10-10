@@ -238,21 +238,6 @@ func computeMetricDeltas(ctx context.Context, client QueryClient, f Filters, sta
 // so threading now through is a Go-side testability improvement, not a
 // parity divergence).
 func BuildResponse(ctx context.Context, chClient QueryClient, pgClient PGQueryClient, orgID string, f Filters, now time.Time) (*Response, error) {
-	response, err := buildResponse(ctx, chClient, pgClient, orgID, f, now)
-	if err != nil {
-		return nil, err
-	}
-	reason, err := filterEmptyReason(ctx, chClient, f, orgID, now)
-	if err != nil {
-		return nil, err
-	}
-	response.FilterEmptyReason = teamscope.EmptyReasonText(reason)
-	return response, nil
-}
-
-// buildResponse is BuildResponse without the one answer-level value that does
-// not depend on the window (FilterEmptyReason).
-func buildResponse(ctx context.Context, chClient QueryClient, pgClient PGQueryClient, orgID string, f Filters, now time.Time) (*Response, error) {
 	startDay, endDay, compareStart, compareEnd, err := TimeWindow(f, now)
 	if err != nil {
 		return nil, err
@@ -560,4 +545,31 @@ func topDeltaByMagnitude(deltas []MetricDelta) (MetricDelta, bool) {
 		}
 	}
 	return best, found
+}
+
+// BuildResponseWithFilterEmptyReason is BuildResponse plus the one answer-level
+// value that says why the repositories the request names matched nothing
+// (Response.FilterEmptyReason, CHAOS-9098). The reason costs its own reads, so
+// BuildResponse (also the Home half of opportunities) never makes them: only a
+// caller that serves the field asks for it, and a request that does not select
+// the field does not depend on those reads.
+func BuildResponseWithFilterEmptyReason(ctx context.Context, chClient QueryClient, pgClient PGQueryClient, orgID string, f Filters, now time.Time) (*Response, error) {
+	response, err := BuildResponse(ctx, chClient, pgClient, orgID, f, now)
+	if err != nil {
+		return nil, err
+	}
+	if err := AttachFilterEmptyReason(ctx, chClient, response, orgID, f, now); err != nil {
+		return nil, err
+	}
+	return response, nil
+}
+
+// AttachFilterEmptyReason sets Response.FilterEmptyReason.
+func AttachFilterEmptyReason(ctx context.Context, chClient QueryClient, response *Response, orgID string, f Filters, now time.Time) error {
+	reason, err := filterEmptyReason(ctx, chClient, f, orgID, now)
+	if err != nil {
+		return err
+	}
+	response.FilterEmptyReason = teamscope.EmptyReasonText(reason)
+	return nil
 }

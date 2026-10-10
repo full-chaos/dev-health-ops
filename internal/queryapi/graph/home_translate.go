@@ -21,9 +21,12 @@ package graph
 // three) -- no new query logic is added here, only translation.
 
 import (
+	"context"
 	"encoding/json"
 	"sort"
 	"time"
+
+	"github.com/99designs/gqlgen/graphql"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/api/pytime"
@@ -413,4 +416,18 @@ func microDateTimeToGraphQL(at *home.MicroDateTime) *string {
 		return nil
 	}
 	return &s
+}
+
+// homeFieldSelected reports whether the Home document selects the named field
+// directly under home (fragments included).
+func homeFieldSelected(ctx context.Context, name string) bool {
+	if !graphql.HasOperationContext(ctx) {
+		return false
+	}
+	for _, field := range graphql.CollectAllFields(ctx) {
+		if field == name {
+			return true
+		}
+	}
+	return false
 }

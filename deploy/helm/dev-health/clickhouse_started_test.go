@@ -64,11 +64,15 @@ type k8sVolume struct {
 func needStartedTestTools(t *testing.T) {
 	t.Helper()
 	for _, tool := range []string{"helm", "docker"} {
-		if _, err := exec.LookPath(tool); err != nil {
+		_, err := exec.LookPath(tool)
+		if err == nil && tool == "docker" {
+			err = exec.Command("docker", "compose", "version").Run() // the compose subcommand, not only the binary
+		}
+		if err != nil {
 			if os.Getenv("CHART_STARTED_TEST_REQUIRED") != "" {
-				t.Fatalf("%s is not installed and CHART_STARTED_TEST_REQUIRED is set: the started-chart test cannot be skipped", tool)
+				t.Fatalf("%s is not usable and CHART_STARTED_TEST_REQUIRED is set: the started-chart test cannot be skipped", tool)
 			}
-			t.Skipf("%s is not installed", tool)
+			t.Skipf("%s is not usable", tool)
 		}
 	}
 }
@@ -248,7 +252,9 @@ func TestClickHouseConfigdStartsAndAnswersOnThePodAddress(t *testing.T) {
 		}
 	}
 	// The chart file arrived with its content (the state the mount exists to reach).
-	got, err := dc("exec", "-T", "clickhouse", "cat", "/etc/clickhouse-server/config.d/system-logs.xml")
+	// stdout only: docker's own stderr warnings must not enter the compared bytes
+	got, err := exec.Command("docker", "compose", "-p", project, "-f", compose, "exec", "-T", "clickhouse",
+		"cat", "/etc/clickhouse-server/config.d/system-logs.xml").Output()
 	if err != nil || strings.TrimSpace(string(got)) != startedTestConfigd {
 		t.Fatalf("system-logs.xml content differs: %v: %q", err, got)
 	}

@@ -93,6 +93,9 @@ spec:
                    config.d/docker_related_config.xml (the listen_host that makes the server answer on the
                    pod address), and a directory mount hides it (prod incident 2026-10-10 22:25Z-22:31Z). */}}
             {{- range $name := keys (.Values.clickhouse.configd | default dict) | sortAlpha }}
+            {{- if eq $name "docker_related_config.xml" }}
+            {{- fail "clickhouse.configd must not use the file name docker_related_config.xml: the image ships that file (listen_host) and a same-named mount replaces it, which makes the server listen on loopback only (CHAOS-9177)" }}
+            {{- end }}
             - name: clickhouse-configd
               mountPath: {{ printf "/etc/clickhouse-server/config.d/%s" $name | quote }}
               subPath: {{ $name | quote }}

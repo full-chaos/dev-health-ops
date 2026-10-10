@@ -72,3 +72,19 @@ func TestClickHouseConfigdRendersOneSubPathMountPerFile(t *testing.T) {
 		}
 	}
 }
+
+// CHAOS-9177: a configd file named like the image's own docker_related_config.xml would replace it
+// (the mount hides the image file): the render refuses, observed failing by naming the file.
+func TestClickHouseConfigdRefusesTheImageFileName(t *testing.T) {
+	if _, err := exec.LookPath("helm"); err != nil {
+		t.Skip("helm is not installed")
+	}
+	out, err := exec.Command("helm", "template", "t", ".", "--show-only", "templates/clickhouse.yaml",
+		"--set-string", `clickhouse.configd.docker_related_config\.xml=<clickhouse/>`).CombinedOutput()
+	if err == nil {
+		t.Fatalf("a configd file named docker_related_config.xml rendered")
+	}
+	if !strings.Contains(string(out), "docker_related_config.xml") || !strings.Contains(string(out), "listen_host") {
+		t.Fatalf("the refusal does not name the file and the reason: %.400s", out)
+	}
+}

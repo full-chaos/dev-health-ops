@@ -152,18 +152,10 @@ func selectedScopeFilter(ctx context.Context, client QueryClient, orgID, scopeTy
 		// always built it (the answer of a request that selects nothing new is unchanged).
 		conditionTeams = []string{""}
 	}
-	// With both selected, the two conditions compare the repository as text: a UUID
-	// column against a typed list AND against the ownership subquery's strings is a
-	// type error in ClickHouse (code 169) on the second comparison.
-	column := "repo_id"
-	if len(conditionTeams) > 0 && explicitSQL != "" {
-		column = "toString(repo_id)"
-		explicitSQL = " AND toString(repo_id) IN {scope_ids:Array(String)}"
-	}
 	var teamCondition string
 	var teamBindings []dhclickhouse.Binding
 	if len(conditionTeams) > 0 {
-		teamCondition, teamBindings = teamscope.RepoCondition(orgID, column, conditionTeams, asOf)
+		teamCondition, teamBindings = teamscope.RepoCondition(orgID, "repo_id", conditionTeams, asOf)
 	}
 	filterSQL, bindings = teamscope.NarrowRepoScope(filter.Named, explicitSQL, explicitBindings, teamCondition, teamBindings)
 	return filterSQL, bindings, selectedFilter{filter: filter}, nil

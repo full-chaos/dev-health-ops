@@ -53,7 +53,7 @@ func resolveSelection(ctx context.Context, client QueryClient, orgID, scope stri
 		var explicitSQL string
 		var explicitBindings []dhclickhouse.Binding
 		if len(filter.RepoIDs) > 0 {
-			explicitSQL = " AND repos.id IN {scope_repo_ids:Array(UUID)}"
+			explicitSQL = " AND repos.id IN {scope_repo_ids:Array(String)}"
 			explicitBindings = []dhclickhouse.Binding{{Name: "scope_repo_ids", Value: filter.RepoIDs}}
 		}
 		var teamCondition string

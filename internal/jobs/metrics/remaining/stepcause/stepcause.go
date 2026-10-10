@@ -67,6 +67,9 @@ var (
 	IterateWorkItemDependencies                       = Step{label: "iterate work_item_dependencies rows"}
 	IterateWorkItemDependenciesReverseClosure         = Step{label: "iterate work_item_dependencies rows (reverse closure)"}
 	IterateAlreadyCoveredTodayRows                    = Step{label: "iterate already-covered-today rows"}
+	QueryWorkItemCompletionDays                       = Step{label: "query work item completion days"}
+	ScanWorkItemCompletionDay                         = Step{label: "scan work item completion day"}
+	IterateWorkItemCompletionDays                     = Step{label: "iterate work item completion days"}
 	ClaimPartition                                    = Step{label: "claim_partition"}
 	LoadRun                                           = Step{label: "load_run"}
 	ComputePartition                                  = Step{label: "compute_partition"}

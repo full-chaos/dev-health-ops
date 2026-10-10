@@ -248,14 +248,21 @@ to the query source text.
 # home wire-capture fixture
 
 `home_captured.graphql` (`Home`) is the current registered text. It is
-NOT a capture: it is `home_v4_captured.graphql` plus the one line
-`rateState` in `deltas`, after `spark { ... }` (CHAOS-8981, the state of
-change failure rate), written in the form urql prints. No web build sends
-it yet. The web change that selects `rateState` must put the field at
-that place in `HOME_QUERY` and run
+NOT a capture: it is `home_v4_captured.graphql` plus two lines in
+`deltas`, after `spark { ... }`: `rateState` (CHAOS-8981, the state of a
+rate that is a ratio of stored counts) and, after it, `rateCoverage`
+(CHAOS-9072, the coverage of the pull request rework ratio), written in
+the form urql prints. No web build sends it yet. The web change that
+selects the two fields must put them at that place, in that order, in
+`HOME_QUERY` and run
 `scripts/capture-graphql-wire-fixture.ts --operation home`; if the real
 capture differs from this file, the capture wins and this file and
 `registeredHomeDocument` move to it.
+
+`home_v5_captured.graphql` is the text that was current before
+CHAOS-9072: `home_v4_captured.graphql` plus the one line `rateState`.
+It is no capture either. It was a registered text, so a client can have
+been built against it, and it stays a legacy text.
 
 `home_v4_captured.graphql` is the last real capture and the text every
 current web build sends: captured on 2026-10-04 from web commit
@@ -269,16 +276,17 @@ CHAOS-8102 added `HomeSignal.attribution`.
 `home_v2_captured.graphql` is the earlier text before CHAOS-8107 added
 `scopeDataConfidence`. `home_v1_captured.graphql` is the text before
 CHAOS-8169 added `deltas.hasData` and `deltas.hasPriorData`. The route maps
-all five digests to the `home` operation. Remove a legacy registration only
+all six digests to the `home` operation. Remove a legacy registration only
 with its cleanup ticket after no supported web build sends it.
 
 `query_route_wire_capture_test.go` verifies each registered text against
 its file's bytes. `query_route_home_no_data_test.go` verifies the
-current and four legacy documents’ selections and that all resolve to `home`.
+current and five legacy documents’ selections and that all resolve to `home`.
 
 | fixture | sha256(wire form) |
 | --- | --- |
-| `home_captured.graphql` | `5351e92b61599543ce5913591687ac01f642e27b6ab01577357e442b15e27dce` |
+| `home_captured.graphql` | `c63a70236aa38c12f3cb4f062bf549af507e264d93268b74fe951f8b627270fb` |
+| `home_v5_captured.graphql` | `5351e92b61599543ce5913591687ac01f642e27b6ab01577357e442b15e27dce` |
 | `home_v4_captured.graphql` | `f920722d8e56ae44b85ce535ab0364ab10eb6baf70da1b49cc60a1f915abe7a1` |
 | `home_v3_captured.graphql` | `cff105a9f8c5d5f2363f3d50510db34081c84c9c652afe380975b49c15a4c6eb` |
 | `home_v2_captured.graphql` | `c02bb493d709b8c445e2ac711bdf93d6a2cdb7933d1073a20bf7dad3ffd06545` |

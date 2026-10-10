@@ -10,7 +10,18 @@ import (
 	"github.com/full-chaos/dev-health-go/clickhouse"
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/newestrow"
+	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse/liverow"
 )
+
+// measuredWorkItemKey keeps a (day, provider, scope, team) key only when its
+// newest row is a measurement (package liverow). It is in the reads that make
+// a list of days: a day that holds only retraction rows (the keys of a retired
+// team id a caller named) is a day with no data, not a day with a throughput
+// or a WIP of 0. The reads that take each key's newest day (backlog, current
+// WIP, stale WIP) do not carry it: a retraction row must stay the newest row
+// of its key there, so that the key gives nothing and not its older backlog,
+// and it adds 0 to a sum and no value to a Nullable mean.
+var measuredWorkItemKey = liverow.NewestPredicate("work_item_metrics_daily", "")
 
 // QueryClient is the read-only ClickHouse query boundary this package needs --
 // the same single-method shape featureflags.QueryClient, reviewedges.QueryClient
@@ -118,10 +129,11 @@ func loadThroughputHistory(
             FROM work_item_metrics_daily
             WHERE %s
             GROUP BY day, provider, work_scope_id, team_id
+            HAVING %s
         )
         GROUP BY day
         ORDER BY day
-    `, strings.Join(conditions, " AND "))
+    `, strings.Join(conditions, " AND "), measuredWorkItemKey)
 
 	rows, err := client.Query(ctx, query, bindings)
 	if err != nil {
@@ -188,6 +200,7 @@ func loadWorkItemOverlay(
                     FROM work_item_metrics_daily
                     WHERE %s
                     GROUP BY day, provider, work_scope_id, team_id
+                    HAVING %s
                 )
                 GROUP BY day
             )
@@ -207,7 +220,7 @@ func loadWorkItemOverlay(
                 GROUP BY day, provider, work_scope_id, team_id
             )
         ) AS current_part
-    `, where, where, newestrow.PerTeamPredicate("work_item_metrics_daily", where))
+    `, where, measuredWorkItemKey, where, newestrow.PerTeamPredicate("work_item_metrics_daily", where))
 
 	rows, err := client.Query(ctx, query, bindings)
 	if err != nil {

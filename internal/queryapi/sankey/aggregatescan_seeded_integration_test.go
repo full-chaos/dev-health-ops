@@ -114,6 +114,7 @@ CREATE TABLE work_item_state_durations_daily (
   status LowCardinality(String),
   duration_hours Float64,
   items_touched UInt32,
+  avg_wip Float64 DEFAULT 0.0,
   computed_at DateTime('UTC'),
   org_id String DEFAULT 'default'
 ) ENGINE = ReplacingMergeTree(computed_at)

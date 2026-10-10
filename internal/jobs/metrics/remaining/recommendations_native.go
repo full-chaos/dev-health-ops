@@ -13,6 +13,8 @@ import (
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/prrework"
 )
 
 // recommendationsRuleVersion mirrors the reference's default
@@ -46,20 +48,27 @@ var ErrRecommendationsPostgresUnavailable = errors.New(
 // partitions and fail every one of them -- capacity's shape
 // (capacity_native.go:93-98), for the same reason.
 var recommendationsTableRequirements = map[string][]string{
-	"work_item_metrics_daily": {
+	// The team discovery and the three loader reads of this table hold its
+	// live-row rule, as the after-hours read of team_metrics_daily does.
+	"work_item_metrics_daily": withLiveRowColumns("work_item_metrics_daily",
 		"day", "provider", "work_scope_id", "team_id", "org_id",
 		"wip_count_end_of_day", "items_completed", "cycle_time_p50_hours", "computed_at",
-	},
+	),
+	// The rework ratio is read from the stored counts (package prrework), not
+	// from the deprecated ratio column: the check names the columns the read
+	// uses, so a database that does not hold them yet is refused here and not
+	// at the first read.
 	"repo_metrics_daily": {
-		"repo_id", "day", "org_id", "pr_cycle_p75_hours", "pr_rework_ratio", "computed_at",
+		"repo_id", "day", "org_id", "pr_cycle_p75_hours", "computed_at",
+		prrework.ColumnMerged, prrework.ColumnReviewed, prrework.ColumnRework, prrework.ColumnNoSignal,
 	},
 	"user_metrics_daily": {
 		"repo_id", "day", "author_email", "team_id", "org_id", "reviews_given", "computed_at",
 	},
-	"team_metrics_daily": {
+	"team_metrics_daily": withLiveRowColumns("team_metrics_daily",
 		"day", "team_id", "repo_id", "org_id",
 		"commits_count", "after_hours_commits_count", "computed_at",
-	},
+	),
 	"repo_complexity_daily": {
 		"repo_id", "day", "org_id", "cyclomatic_per_kloc", "computed_at",
 	},

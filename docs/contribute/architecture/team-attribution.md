@@ -677,6 +677,14 @@ project's items by id. Now:
   `jira_atlassian_teams_project_link_skipped`). An id is never built from the key as a fallback, and the
   sink refuses an open row that carries one.
 - `project_key` stays on the row as a label. Team ids do not change.
+- **Memberships keep their first-seen `valid_from` too** (CHAOS-9007; `providersync.ReuseFirstSeenMembershipValidFrom`):
+  `team_memberships` is keyed by `(org_id, provider, team_id, member_id, source, valid_from)`, so a stamp of the
+  run time at each sync added one open row per fact. The four catalog writers take the `valid_from` of a
+  membership the run holds again from the EARLIEST open row of the same org, provider, source, team and member,
+  through the one snapshot rule with no kind: the rule adds no row and closes none. The Atlassian Teams writer
+  plans its own memberships. A census finds every writer of the table by what the code builds (a literal, a
+  concatenation, a constant, a table named by a variable) and names its class. Surplus open rows that exist
+  before the fix are retired by a separate cleanup step, not by the writers.
 - **One snapshot rule for ownership rows** (`providersync.PlanOwnershipSnapshot`): a fact the run still
   finds keeps the `valid_from` it was first seen with (`valid_from` is a key column: a new stamp at each
   sync added one more open row per fact), and every other open row of the same writer is written again
@@ -1591,10 +1599,35 @@ replaces nothing there, so the rule holds only for a reader that takes the newes
 
 The tables are declared once, in `internal/teamkeytables`. The writer (`supersedeStaleTeamKeys`,
 `internal/jobs/metrics/daily/stale_team_keys.go`) builds its read and its row from the declaration, and so does the
-predicate for readers: `Table.LiveRow` (one newest row) and `Table.LiveHaving` (a `GROUP BY` over the key). A reader
-that sums is right with a row of zeros. A reader that takes an average over rows of a NOT NULL column, counts rows or
-lists the team ids of a table must leave the superseded keys out with that predicate, or it takes a row of zeros as a
-sample of 0.
+predicate for readers: `Table.LiveRow` (one newest row) and `Table.LiveHaving` (a `GROUP BY` over the key). Readers
+take it through `internal/storage/clickhouse/liverow`, and the rule there is: a row of zeros reads as an absent row.
+
+- A reader that gives ONE sum for its whole scope is right with a row of zeros: the row adds 0.
+- A reader that takes an average over rows of a NOT NULL column, a minimum, a maximum or a quantile, counts rows or
+  days, or lists the team ids of a table must leave the superseded keys out with the predicate, or it takes a row of
+  zeros as a sample of 0 or as a key.
+- A reader that sums INTO A LIST (one row for each day, status or theme) must leave them out too. The sum of a day
+  is right, but a day, a status or a theme whose keys in scope all hold a row of zeros would be listed with a value
+  of 0. That is what a read with a retired team id in its scope returns for the days computed again, and a team that
+  was not measured is not a team with 0 work. These reads hold the predicate: the throughput and capacity forecast
+  histories and the mean WIP, the aggregated flame, the sankey status counts, the home theme allocation, the
+  cognitive load of one team, and the per-day reads of the recommendations loader and the capacity forecast job.
+- The predicate is applied to the newest row of the key THE WRITER WRITES, before any roll-up of the reader's own.
+  A reader that first rolls stored keys up to a coarser one (the investment areas of a theme, the scopes of a team,
+  the repositories of a day) and tests the rolled row takes a newer row of zeros of ONE stored key as the row of
+  all of them, and drops the measured ones with it. The home theme allocation reads the stored investment area
+  (day, repository, team, area, project stream), applies the predicate there, and only then takes the theme.
+- A reader that takes the state on the newest day of each key (a backlog, a current WIP, a stored risk score) must
+  NOT filter before it picks the newest row: the row of zeros is what says the key holds nothing now, and a filter
+  that ran first would serve the older row. It then gives 0 or no value, as for a key with no row.
+
+The census `TestEveryReadOfARegisteredTableAppliesTheRule` (package `liverow`) reads the source and fails for a read
+of one of these tables that holds no predicate and is not listed there with its reason.
+
+A job that checks at startup that the schema holds every column its statements read (the capacity forecast job, the
+recommendations job) and a reader that answers "not available" for a missing column (the sankey state flow) take the
+columns of the predicate from `liverow.Columns`: the predicate is built into the statement at run time, so its
+columns are in no query text.
 
 The census (`stale_team_keys_census_test.go`) reads the schema and the source and fails when a table with a
 `team_id` or a `scope_id` in its sorting key has no decision (the shared rule, its own rule, or a written exemption),
@@ -1608,17 +1641,25 @@ Limits:
   count 0 (a group whose items are all closed; a group with no pull request of unknown origin). Such a row and a row
   of zeros are equal.
 - A reader with no FINAL and no `argMax` sees the old row and the row of zeros until a merge.
-- `ic_landscape_rolling_30d`: the team of a person's point is the team id of the person's NEWEST `user_metrics_daily`
-  row of the 30-day window (by `computed_at`; the day and the repository id break a tie). The id of an INACTIVE team
-  (the newest `teams` row of the id has `is_active = 0`) is read as no team, in the rolling read and in the two reads
-  of the day's rows, so the point and the row of the day do not keep the id of a team that was replaced or retired:
-  the active resolver is asked, and with no answer the person is `unassigned`. What stays:
-  - a stored id of an ACTIVE team is the person's team for as long as that row is the newest of the window, also
-    when the resolver names another team (the resolver is asked only for a blank team);
-  - an id with NO row in `teams` counts as active. The admin delete of a team removes its rows, so a stored row
-    under a deleted team keeps its id and its point;
-  - a row of a day the run does not compute keeps the id it was stored with; it gives no point that id;
-  - the newest row is the row computed last, so a history recompute goes from the oldest day to the newest.
+- `ic_landscape_rolling_30d` and the person's `user_metrics_daily` row of the day: the team of a person for a day
+  comes ONLY from the `team_memberships` rows that are valid at that day (the attribution's provider membership read,
+  `LoadProviderMembers`, as of the day: `valid_from` at or before the day, and no `valid_to` or a later one), and
+  only from ACTIVE teams. The row of the day holds ONE team: the first by the attribution's rank (primary, then
+  specificity, priority, the newer row, the team id). The landscape holds a point for EACH active team of the person,
+  so a person of N teams is ranked among the members of each. A person with no membership valid at the day is
+  `unassigned`, id and name, in the row and in the landscape. The team a STORED row holds is never a source: after
+  the first run of a day the newest stored row is the family's own output, and a person who left a team would stay
+  in it. A point stored under a team the run does not produce is retracted by the rule of this section. What stays:
+  - an id with NO row in `teams` counts as active, so a membership of a deleted team still gives a row and points;
+  - only the membership table is read: a person an admin added to a team by hand (the manual roster of the team)
+    gets no team here;
+  - a member the provider reports with no email is stored with the provider name only, which no commit email
+    equals: that person's git rows stay `unassigned`;
+  - a membership is valid from the time of the sync that first saw it, so a day before that sync gives no team;
+  - a chart of the landscape metrics over the WHOLE organization with no team filter weights a person of N teams N
+    times in an average (by team: once for each team; by person: unchanged);
+  - the membership read fails the run above 100 000 membership rows of an organization: loud, not silent;
+  - a row of a day the run does not compute keeps the id it was stored with; it gives no point that id.
 - A family writes its real rows at its own clock. A real row of a key that an EARLIER row of zeros superseded (the key
   comes back) is the newest row of its key only when the family's clock, cut to the unit of the table's `computed_at`
   column, is later than that row of zeros. The row of zeros is at the later of its family's clock and one unit after

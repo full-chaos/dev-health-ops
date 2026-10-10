@@ -7,15 +7,16 @@ import (
 	"testing"
 )
 
-// CHAOS-9084 class: Team = ownership of repositories and projects only. No
-// daily metric family resolves a team through teams.members (a person's
-// membership), except the ic_finalize family, which is the open exception of
-// CHAOS-9084 and is NOT part of this change. A new family that resolves a team
-// by membership fails here.
-func TestNoDailyFamilyResolvesATeamThroughTeamMembersExceptICFinalize(t *testing.T) {
+// Team = ownership of repositories and projects only. No daily metric family
+// resolves a team through teams.members (the roster column of a team). A new
+// family that resolves a team by that roster fails here.
+//
+// The ic_finalize family was the one exception. It no longer reads the
+// roster: it takes the teams of a PERSON, for the person's own row and
+// landscape points, from the team_memberships rows valid at the day.
+func TestNoDailyFamilyResolvesATeamThroughTeamMembers(t *testing.T) {
 	allowed := map[string]string{
 		"wellbeing_native_clickhouse.go": "defines the member resolver and the team read",
-		"ic_finalize_native_executor.go": "CHAOS-9084: the open exception, IC landscape",
 	}
 	files, err := filepath.Glob("*.go")
 	if err != nil || len(files) == 0 {
@@ -42,9 +43,5 @@ func TestNoDailyFamilyResolvesATeamThroughTeamMembersExceptICFinalize(t *testing
 	}
 	if scanned < 20 {
 		t.Fatalf("census scanned %d files: the directory was not read", scanned)
-	}
-	icFinalize, err := os.ReadFile("ic_finalize_native_executor.go")
-	if err != nil || !strings.Contains(string(icFinalize), "NewMemberResolver(") {
-		t.Errorf("the named exception no longer uses the member resolver: remove it from the census (err %v)", err)
 	}
 }

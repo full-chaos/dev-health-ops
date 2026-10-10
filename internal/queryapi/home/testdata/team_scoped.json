@@ -203,7 +203,9 @@
           "ts": "2024-01-05T00:00:00",
           "value": 13
         }
-      ]
+      ],
+      "rate_state": "measured",
+      "rate_coverage": 0.5
     },
     {
       "metric": "ci_success",
@@ -246,7 +248,7 @@
   "summary": [
     {
       "id": "s1",
-      "text": "Rework Ratio rose 33% driven by team-alpha.",
+      "text": "Rework Ratio rose 33% driven by alpha-service.",
       "evidence_link": "/api/v1/explain?metric=rework_ratio\u0026scope_type=team\u0026scope_id=team-1\u0026range_days=7\u0026compare_days=7"
     }
   ],

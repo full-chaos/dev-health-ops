@@ -10,6 +10,7 @@ import (
 	"github.com/full-chaos/dev-health-go/clickhouse"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/changefailure"
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/prrework"
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/activeteams"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph/model"
@@ -202,7 +203,10 @@ func applyFlowRules(rows []flowRow, rules []flowRule, windowDays int) []model.Im
 }
 
 // repoFlowStatement reads each repository's window averages from
-// repo_metrics_daily and its change failure rate from the window's summed
+// repo_metrics_daily, its pull request rework ratio from the window's summed
+// counts over reviewed pull requests (prrework.WindowRateSQL: NULL, and so no
+// opportunity, when the window holds no reviewed pull request), and its
+// change failure rate from the window's summed
 // counts in repo_change_failure_daily (changefailure.WindowRateSQL, CHAOS-8981):
 // NULL, and so no opportunity, when the window has no deployment or no
 // incident evidence.
@@ -218,7 +222,7 @@ FROM (
         repo_id,
         uniqExact(day) AS data_days,
         toNullable(avg(pr_first_review_p50_hours)) AS pr_first_review_p50_hours,
-        toNullable(avg(pr_rework_ratio)) AS pr_rework_ratio,
+        ` + prrework.WindowRateSQL + ` AS pr_rework_ratio,
         toNullable(avg(rework_churn_ratio_30d)) AS rework_churn_ratio_30d
     FROM (
         SELECT *

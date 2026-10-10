@@ -677,6 +677,14 @@ project's items by id. Now:
   `jira_atlassian_teams_project_link_skipped`). An id is never built from the key as a fallback, and the
   sink refuses an open row that carries one.
 - `project_key` stays on the row as a label. Team ids do not change.
+- **Memberships keep their first-seen `valid_from` too** (CHAOS-9007; `providersync.ReuseFirstSeenMembershipValidFrom`):
+  `team_memberships` is keyed by `(org_id, provider, team_id, member_id, source, valid_from)`, so a stamp of the
+  run time at each sync added one open row per fact. The four catalog writers take the `valid_from` of a
+  membership the run holds again from the EARLIEST open row of the same org, provider, source, team and member,
+  through the one snapshot rule with no kind: the rule adds no row and closes none. The Atlassian Teams writer
+  plans its own memberships. A census finds every writer of the table by what the code builds (a literal, a
+  concatenation, a constant, a table named by a variable) and names its class. Surplus open rows that exist
+  before the fix are retired by a separate cleanup step, not by the writers.
 - **One snapshot rule for ownership rows** (`providersync.PlanOwnershipSnapshot`): a fact the run still
   finds keeps the `valid_from` it was first seen with (`valid_from` is a key column: a new stamp at each
   sync added one more open row per fact), and every other open row of the same writer is written again
@@ -1484,9 +1492,16 @@ metric family:
 
 - `teamownership.AuthoritativeOwnerByRepo` skips an ownership row of an inactive team. A lower-ranked row of an active
   team for the same repository then wins; a repository with no active owner goes to the caller's pattern fallback.
-  Callers: testops, `ai_impact`, `team_cognitive_load`, `team_complexity`, `compounding_risk_team`.
-- `LoadWellbeingTeams` (`team_wellbeing`, `ic_finalize`, and the pattern fallback of the three finalize families) and
+  Callers: testops, `ai_impact`, `team_cognitive_load`, `team_complexity`, `compounding_risk_team`, `team_wellbeing`.
+- `LoadWellbeingTeams` (`team_wellbeing` for the names and the pattern fallback, `ic_finalize`, and the pattern fallback of the three finalize families) and
   `LoadAIImpactTeams` (`ai_impact`) drop the inactive teams after their read.
+
+`team_wellbeing` (`team_metrics_daily`) takes the team of a repository from its authoritative owner, then from
+`repo_patterns` through `teamresolve.ResolveFromOwnershipMap`, as its siblings do; a repository with no owner is
+`unassigned`. It never resolves a team through `teams.members` (a declared difference from the Python reference). The
+census `TestNoDailyFamilyResolvesATeamThroughTeamMembersExceptICFinalize` names `ic_finalize` as the one daily family
+that still does (CHAOS-9084). A day computed before this change keeps its `unassigned` rows until it is computed again;
+a new compute of the day leaves each of them as a row of zeros under the stale-key rule.
 
 The SQL text of these reads is the Python reference's and is not changed: the inactive ids are a second read
 (`teamactive.LoadInactive`) and are applied in Go. With no inactive team the result of every resolver is the
@@ -1522,6 +1537,35 @@ WHERE the rule runs depends on who can write a key:
   partition of a run.
 - **A table that a finalize family writes** is written once for a run already; the family applies the rule after its
   write.
+- **A run of the whole organization owns the whole day** (`Run.FullOrg`; the scheduled fan-out and a run started with
+  no repository list). A work scope that the organization has no item in any more is computed by nothing, so the rows
+  an earlier compute stored under it (under a team id, and under `unassigned`) would stay counted for ever under a
+  rule that looks only at the scopes a run produced. So the end of an organization-wide run (a) reads the work scopes
+  from EVERY work item of the organization for the day, not through the run's repository list, and, when the day
+  holds a stored measure in the table, computes and settles them all (on a day with no live key in a table the step
+  writes nothing there: the partitions are the writers of a new day); (b) supersedes every live key of the day that it did not compute, of any provider and any work
+  scope; and (c) in the tables whose keys a partition decides inside its own repositories (`team_metrics_daily`,
+  `ai_impact_metrics_daily`; `OrganizationRunStaleKeyTables`) supersedes the live keys of a repository that is in no
+  partition of the run AND that the organization does not hold any more, the `team_metrics_daily` rows with no
+  repository among them. A run of some repositories does none of this: it stays inside the work scopes its
+  repositories reach, and a key of another scope is never its to supersede. The scope of a run is read from the store
+  at the end of the run (`LoadRun`), not from the claim.
+- **A retraction never hides a key that can be true.** The repository list of a run is the one of its dispatch, so
+  "in no partition of the run" does not say that a repository is gone: a repository the organization got later, which
+  a run of its own computed for the day, is in no partition too, and so is a repository of a newer run when an older
+  run ends late or its end is driven again. For (c) the end of an organization-wide run therefore reads the
+  organization's repositories AGAIN, with the read that makes the list of a run
+  (`ClickHouseRepositoryDiscoverer.RepositoryIDs`), and supersedes a key only when its repository is in NEITHER the
+  run's list NOR that present set. The order is part of the rule: for each of the two tables the present set is read
+  AFTER the live keys of that table, so a repository whose key the live-key read saw is in the set unless it is gone
+  (a set read earlier would not hold a repository that got its row and its keys while the step ran). A key of a
+  repository that is present and in no partition stays as it is; the run logs one WARN line with the count and the
+  ids of such repositories and the keys left in each table, and the repository's own run or the next
+  organization-wide run decides them. The line of the run names the repositories a row of zeros hides (the empty id
+  is the rows with no repository). Both lists hold at most 20 ids; the count beside them is whole. The step reads the
+  repositories once at its start, and fails there with nothing written when that read fails; when a later read
+  fails, the step fails (`ErrOrganizationRepositoriesNotRead`) and the table of that read gets no row of zeros: no
+  key is superseded on a list that is not proven.
 
 A row of zeros is strictly newer than the row it supersedes, never of the same `computed_at`: with an equal
 `computed_at` only a FINAL read follows the order of the inserts, and a reader that takes the newest row by `argMax`
@@ -1529,17 +1573,21 @@ or by `LIMIT 1 BY` may take either row. A family's row of zeros gets the family'
 table's `computed_at` column (a second, a millisecond or a microsecond; `staleKeyVersionSteps`, checked against the
 schema by a test) after the newest stored row of its key when that is not earlier. The step is the smallest one that
 is strictly newer: a larger step would put the row of zeros ahead of the clock. One table is different: in `team_metrics_daily` the row of
-zeros carries exactly the `computed_at` of the rows the family wrote for the same repository, because two readers of
-that table keep only the newest generation of a repository and would lose the live rows behind a newer row of zeros.
+zeros that the FAMILY writes carries exactly the `computed_at` of the rows the family wrote for the same repository,
+because two readers of that table keep only the newest generation of a repository and would lose the live rows
+behind a newer row of zeros. The row of zeros that the end of an organization-wide run writes for a repository
+outside the run (in `team_metrics_daily` and `ai_impact_metrics_daily`) is different again: no family wrote a
+generation for that repository in this run, so its version is the clock, raised above every stored row of the day.
+It is then the newest generation of its repository, for any clock of the worker.
 
 | Table | Family | Where the rule runs | Scope |
 | --- | --- | --- | --- |
-| `work_item_metrics_daily` | `work_item` | once for the run | the work scopes of the run's repositories |
-| `work_item_state_durations_daily` | `work_item_state` | once for the run | the work scopes of the run's repositories |
-| `estimate_coverage_metrics_daily` | `work_item_estimate` | once for the run | the work scopes of the run's repositories |
+| `work_item_metrics_daily` | `work_item` | once for the run | a run of some repositories: the work scopes of its repositories; a run of the whole organization: every work scope of the organization's day |
+| `work_item_state_durations_daily` | `work_item_state` | once for the run | the same |
+| `estimate_coverage_metrics_daily` | `work_item_estimate` | once for the run | the same |
 | `ai_governance_coverage_daily` | `ai_governance` (every partition computes the organization's day) | once for the run | the organization's day |
-| `team_metrics_daily` | `team_wellbeing` | in the family, for its partition | the repositories of the partition |
-| `ai_impact_metrics_daily` | `ai_impact` | in the family, for its partition | the repositories of the partition |
+| `team_metrics_daily` | `team_wellbeing` | in the family, for its partition; and once at the end of a run of the whole organization | the repositories of the partition; at the end of an organization-wide run the repositories that are in no partition and that the organization does not hold, and the rows with no repository |
+| `ai_impact_metrics_daily` | `ai_impact` | in the family, for its partition; and once at the end of a run of the whole organization | the same |
 | `team_cognitive_load_daily` | `team_cognitive_load` | in the finalize family | the organization's day |
 | `team_complexity_daily` | `team_complexity` | in the finalize family | the organization's day |
 | `ic_landscape_rolling_30d` | `ic_finalize` | in the finalize family | the organization's day |
@@ -1551,10 +1599,35 @@ replaces nothing there, so the rule holds only for a reader that takes the newes
 
 The tables are declared once, in `internal/teamkeytables`. The writer (`supersedeStaleTeamKeys`,
 `internal/jobs/metrics/daily/stale_team_keys.go`) builds its read and its row from the declaration, and so does the
-predicate for readers: `Table.LiveRow` (one newest row) and `Table.LiveHaving` (a `GROUP BY` over the key). A reader
-that sums is right with a row of zeros. A reader that takes an average over rows of a NOT NULL column, counts rows or
-lists the team ids of a table must leave the superseded keys out with that predicate, or it takes a row of zeros as a
-sample of 0.
+predicate for readers: `Table.LiveRow` (one newest row) and `Table.LiveHaving` (a `GROUP BY` over the key). Readers
+take it through `internal/storage/clickhouse/liverow`, and the rule there is: a row of zeros reads as an absent row.
+
+- A reader that gives ONE sum for its whole scope is right with a row of zeros: the row adds 0.
+- A reader that takes an average over rows of a NOT NULL column, a minimum, a maximum or a quantile, counts rows or
+  days, or lists the team ids of a table must leave the superseded keys out with the predicate, or it takes a row of
+  zeros as a sample of 0 or as a key.
+- A reader that sums INTO A LIST (one row for each day, status or theme) must leave them out too. The sum of a day
+  is right, but a day, a status or a theme whose keys in scope all hold a row of zeros would be listed with a value
+  of 0. That is what a read with a retired team id in its scope returns for the days computed again, and a team that
+  was not measured is not a team with 0 work. These reads hold the predicate: the throughput and capacity forecast
+  histories and the mean WIP, the aggregated flame, the sankey status counts, the home theme allocation, the
+  cognitive load of one team, and the per-day reads of the recommendations loader and the capacity forecast job.
+- The predicate is applied to the newest row of the key THE WRITER WRITES, before any roll-up of the reader's own.
+  A reader that first rolls stored keys up to a coarser one (the investment areas of a theme, the scopes of a team,
+  the repositories of a day) and tests the rolled row takes a newer row of zeros of ONE stored key as the row of
+  all of them, and drops the measured ones with it. The home theme allocation reads the stored investment area
+  (day, repository, team, area, project stream), applies the predicate there, and only then takes the theme.
+- A reader that takes the state on the newest day of each key (a backlog, a current WIP, a stored risk score) must
+  NOT filter before it picks the newest row: the row of zeros is what says the key holds nothing now, and a filter
+  that ran first would serve the older row. It then gives 0 or no value, as for a key with no row.
+
+The census `TestEveryReadOfARegisteredTableAppliesTheRule` (package `liverow`) reads the source and fails for a read
+of one of these tables that holds no predicate and is not listed there with its reason.
+
+A job that checks at startup that the schema holds every column its statements read (the capacity forecast job, the
+recommendations job) and a reader that answers "not available" for a missing column (the sankey state flow) take the
+columns of the predicate from `liverow.Columns`: the predicate is built into the statement at run time, so its
+columns are in no query text.
 
 The census (`stale_team_keys_census_test.go`) reads the schema and the source and fails when a table with a
 `team_id` or a `scope_id` in its sorting key has no decision (the shared rule, its own rule, or a written exemption),
@@ -1568,11 +1641,25 @@ Limits:
   count 0 (a group whose items are all closed; a group with no pull request of unknown origin). Such a row and a row
   of zeros are equal.
 - A reader with no FINAL and no `argMax` sees the old row and the row of zeros until a merge.
-- `ic_landscape_rolling_30d`: the team of a person's point is the team id stored in the person's `user_metrics_daily`
-  rows of the 30-day window; the active resolver is asked only when that is blank. So for up to 30 days after a team id
-  changed, a person with no row on the day gets the point of the day under the old id, and the key is produced, not
-  stale. A history recompute must go from the oldest day to the newest, or run twice. (Not changed here; the same on
-  the code before this change.)
+- `ic_landscape_rolling_30d` and the person's `user_metrics_daily` row of the day: the team of a person for a day
+  comes ONLY from the `team_memberships` rows that are valid at that day (the attribution's provider membership read,
+  `LoadProviderMembers`, as of the day: `valid_from` at or before the day, and no `valid_to` or a later one), and
+  only from ACTIVE teams. The row of the day holds ONE team: the first by the attribution's rank (primary, then
+  specificity, priority, the newer row, the team id). The landscape holds a point for EACH active team of the person,
+  so a person of N teams is ranked among the members of each. A person with no membership valid at the day is
+  `unassigned`, id and name, in the row and in the landscape. The team a STORED row holds is never a source: after
+  the first run of a day the newest stored row is the family's own output, and a person who left a team would stay
+  in it. A point stored under a team the run does not produce is retracted by the rule of this section. What stays:
+  - an id with NO row in `teams` counts as active, so a membership of a deleted team still gives a row and points;
+  - only the membership table is read: a person an admin added to a team by hand (the manual roster of the team)
+    gets no team here;
+  - a member the provider reports with no email is stored with the provider name only, which no commit email
+    equals: that person's git rows stay `unassigned`;
+  - a membership is valid from the time of the sync that first saw it, so a day before that sync gives no team;
+  - a chart of the landscape metrics over the WHOLE organization with no team filter weights a person of N teams N
+    times in an average (by team: once for each team; by person: unchanged);
+  - the membership read fails the run above 100 000 membership rows of an organization: loud, not silent;
+  - a row of a day the run does not compute keeps the id it was stored with; it gives no point that id.
 - A family writes its real rows at its own clock. A real row of a key that an EARLIER row of zeros superseded (the key
   comes back) is the newest row of its key only when the family's clock, cut to the unit of the table's `computed_at`
   column, is later than that row of zeros. The row of zeros is at the later of its family's clock and one unit after
@@ -1586,9 +1673,20 @@ Limits:
   whose rows are on the later version, and for equal versions the rows of the later insert. Seen in a test of this
   shape: one key of an inactive team stays counted beside the right keys (an over-count, no key lost). The next run of
   the day settles it. Two runs of the whole organization read the same inputs and leave the day right.
-- The end of a run computes the three work-item tables once more in one process, over every work scope the run's
-  repositories have an item in, with no row cap: about 1.5 MiB of heap for each 1,000 open or day-completed items of
-  those scopes, for each table in turn.
+- The end of a run computes the three work-item tables once more in one process, with no row cap: about 1.5 MiB of
+  heap for each 1,000 open or day-completed items, for each table in turn. A run of some repositories reads the items
+  of every work scope its repositories have an item in; a run of the whole organization reads the open and
+  day-completed items of the WHOLE organization.
+- `team_metrics_daily` rows with no repository (`repo_id = ''`, the form from before the table held one) are
+  superseded by every run of the whole organization: the empty id is in no list. A day whose only rows are of that
+  form, and for which the recompute counts no commit, reads 0 after the run.
+- A run of the whole organization whose scope read gives no work item supersedes the stored keys of the day only
+  after a second read (a count of the same items) gives 0, and logs a WARN line; otherwise the step fails
+  (`ErrOrganizationDayNotProvenEmpty`) and the finalize is tried again. A day that stays in that state needs a look
+  at the store.
+- A stale key of a repository that the organization holds and that is in no partition of an organization-wide run
+  stays until that repository's own run or the next organization-wide run. The WARN line is the sign. The check reads
+  the `repos` table: a repository whose row is deleted while its rows of the day are true is superseded.
 - A worker of an older version that computes a stored day again writes under the old id once more. The next run of a
   current worker for that day supersedes the key again.
 - Between the last partition and the end of a run, a shared work scope can hold the rows of a partition whose read

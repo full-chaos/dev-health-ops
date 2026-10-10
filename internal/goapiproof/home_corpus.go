@@ -42,7 +42,7 @@ var homeDeltaGoOnlyKeys = map[string]GoOnlyKey{
 //     deploy_freq sum() an integer count column, while cycle_time/
 //     review_latency/wip_saturation/change_failure_rate/rework_ratio/
 //     pr_rework_ratio/ci_success avg() (or, for pr_rework_ratio, a
-//     weighted ratio of) a Float64 column. Declared float for the whole
+//     ratio of summed counts of) a Float64 column. Declared float for the whole
 //     path: the more permissive classification is the honest one for a
 //     path that mixes genuine float aggregates with integer sums, and
 //     tolerating a sum-typed row costs nothing since an exact integer

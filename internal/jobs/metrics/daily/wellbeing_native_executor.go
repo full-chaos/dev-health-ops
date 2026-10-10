@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
@@ -14,6 +15,8 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/numerical"
 	"github.com/full-chaos/dev-health-ops/internal/teamkeytables"
+	"github.com/full-chaos/dev-health-ops/internal/teamownership"
+	"github.com/full-chaos/dev-health-ops/internal/teamresolve"
 )
 
 // TeamWellbeingExecutor is the NATIVE implementation of the team_wellbeing
@@ -31,12 +34,14 @@ import (
 // why that matters). Two things about THIS executor specifically are easy to
 // get wrong:
 //
-//  1. TEAM ATTRIBUTION'S MEMBERSHIP FALLBACK IS UNDER SEPARATE REVIEW
-//     (CHAOS-4321, chris: membership-based team attribution may end up
-//     applying only under a manual override). This executor intentionally
-//     ports the CURRENT Python behavior (repo-pattern first, membership
-//     fallback second, see numerical.ComputeTeamWellbeing) rather than
-//     anticipating that ruling -- see this PR's RISK-NOTES.
+//  1. TEAM ATTRIBUTION IS OWNERSHIP ONLY (a DECLARED DIFFERENCE from the
+//     Python reference, which falls back to teams.members by commit author).
+//     A repository's team is its authoritative owner (team_repo_ownership,
+//     teamownership.AuthoritativeOwnerByRepo), with the repo_patterns
+//     fallback of teamresolve.ResolveFromOwnershipMap; a repository nobody
+//     owns is "unassigned". Team = ownership of repositories, never
+//     person -> membership -> team. See CHAOS-9084 for the one daily family
+//     (ic_finalize) that still reads teams.members.
 //  2. computed_at IS STAMPED ONCE PER REPO GROUP, NOT ONCE PER PARTITION
 //     (revised in codex round-2, see WriteTeamMetricsDailyPerRepo's doc
 //     comment): team_metrics_daily's (org_id, team_id, day) reader dedup
@@ -163,15 +168,24 @@ func (executor *TeamWellbeingExecutor) ComputeFamily(
 	if err != nil {
 		return 0, err
 	}
-	repoResolver := NewRepoPatternResolver(teams)
-	memberResolver := NewMemberResolver(teams)
-
 	repoNamesByID, err := LoadRepoNames(ctx, executor.conn, run.OrganizationID, repoIDs)
 	if err != nil {
 		return 0, err
 	}
 
 	day := time.Date(run.TargetDay.UTC().Year(), run.TargetDay.UTC().Month(), run.TargetDay.UTC().Day(), 0, 0, 0, 0, time.UTC)
+	// CHAOS-9084 class: Team = ownership of repositories only. The team of a
+	// repository is its authoritative owner (team_repo_ownership), the same
+	// read and the same shared precedence its siblings use (ai_impact,
+	// team_cognitive_load, team_complexity, compounding_risk_team); the
+	// repo_patterns fallback only serves a repository no owner row resolves.
+	// A repository with no owner is "unassigned". teams.members is never read.
+	owners, err := teamownership.AuthoritativeOwnerByRepo(ctx, executor.conn, run.OrganizationID, day)
+	if err != nil {
+		return 0, fmt.Errorf("resolve authoritative repo ownership: %w", err)
+	}
+	repoResolver, repoKeyByID := newOwnershipRepoResolver(
+		teamresolve.ResolveFromOwnershipMap(owners, repoIDs, repoNamesByID, NewRepoPatternResolver(teams)), teams)
 	start := day
 	end := start.Add(24 * time.Hour)
 	commits, err := LoadWellbeingCommits(ctx, executor.conn, run.OrganizationID, start, end, repoIDs)
@@ -180,7 +194,7 @@ func (executor *TeamWellbeingExecutor) ComputeFamily(
 	}
 
 	perRepoMetrics := computeWellbeingPerRepo(
-		day, repoIDs, commits, repoNamesByID, repoResolver, memberResolver,
+		day, repoIDs, commits, repoKeyByID, repoResolver, nil,
 		executor.businessTZ, executor.businessHoursStart, executor.businessHoursEnd,
 	)
 
@@ -355,6 +369,36 @@ func parseRepositoryUUIDs(ids []RepositoryID) ([]uuid.UUID, error) {
 		result[index] = parsed
 	}
 	return result, nil
+}
+
+// ownershipRepoResolver answers the team of a repository from the map the
+// ownership-first resolution built. numerical.ComputeTeamWellbeing asks a
+// RepoTeamResolver by repository name; here the key it is given is the
+// repository id (newOwnershipRepoResolver returns the identity map to pass as
+// repoNamesByID), so two repositories of one name never share a team.
+type ownershipRepoResolver struct {
+	teamByRepoID map[string]string
+	nameByTeamID map[string]string
+}
+
+func newOwnershipRepoResolver(teamByRepoID map[string]string, teams []WellbeingTeam) (numerical.RepoTeamResolver, map[string]string) {
+	names := make(map[string]string, len(teams))
+	for _, team := range teams {
+		names[strings.TrimSpace(team.ID)] = strings.TrimSpace(team.Name)
+	}
+	keys := make(map[string]string, len(teamByRepoID))
+	for repoID := range teamByRepoID {
+		keys[repoID] = repoID
+	}
+	return &ownershipRepoResolver{teamByRepoID: teamByRepoID, nameByTeamID: names}, keys
+}
+
+func (resolver *ownershipRepoResolver) ResolveRepo(repoID string) (string, string) {
+	teamID := resolver.teamByRepoID[repoID]
+	if teamID == "" {
+		return "", ""
+	}
+	return teamID, resolver.nameByTeamID[teamID]
 }
 
 var _ NativeFamilyExecutor = (*TeamWellbeingExecutor)(nil)

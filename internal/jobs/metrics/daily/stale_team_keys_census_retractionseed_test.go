@@ -12,6 +12,7 @@ func init() {
 		"work_item_metrics_daily", "work_item_state_durations_daily", "estimate_coverage_metrics_daily",
 		"team_metrics_daily", "ai_impact_metrics_daily", "ai_governance_coverage_daily",
 		"compounding_risk_daily", "issue_type_metrics_daily", "investment_metrics_daily",
+		"team_cognitive_load_daily", "ic_landscape_rolling_30d",
 	} {
 		teamKeyTableWriters[table][seed] = teamKeyWriterFixture
 	}

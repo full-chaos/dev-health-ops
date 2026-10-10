@@ -12,6 +12,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/changefailure"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/checkedcast"
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/prrework"
 )
 
 // conn is the narrow ClickHouse capability this package needs -- query plus
@@ -483,6 +484,30 @@ func checkedRepoUint32s(table string, fields []repoUint32Field) ([]uint32, error
 	return checked, nil
 }
 
+// checkedReworkCounts narrows the reviewed, rework and no-signal counts of a
+// day to the UInt32 of their columns. Each is at most the merged pull requests
+// of one repository and day; the clamp keeps the int conversion from wrapping
+// and checkedcast refuses the clamped value.
+func checkedReworkCounts(counts prrework.Counts) ([3]uint32, error) {
+	var out [3]uint32
+	for index, field := range []struct {
+		column string
+		value  uint64
+	}{
+		{prrework.ColumnReviewed, counts.Reviewed},
+		{prrework.ColumnRework, counts.Rework},
+		{prrework.ColumnNoSignal, counts.NoSignal},
+	} {
+		clamped := int(min(field.value, uint64(math.MaxUint32)+1))
+		checked, err := checkedcast.Uint32(clamped, "repo_metrics_daily", field.column)
+		if err != nil {
+			return out, err
+		}
+		out[index] = checked
+	}
+	return out, nil
+}
+
 // writeRepoMetrics inserts into repo_metrics_daily, stamping every row with
 // orgID (CHAOS-4341 -- see the Writer doc comment).
 func (writer *Writer) writeRepoMetrics(ctx context.Context, rows []RepoMetric, orgID string) (int, error) {
@@ -498,7 +523,8 @@ func (writer *Writer) writeRepoMetrics(ctx context.Context, rows []RepoMetric, o
 		pr_comments_per_100_loc, pr_reviews_per_100_loc, rework_churn_ratio_30d,
 		single_owner_file_ratio_30d, review_load_top_reviewer_ratio, bus_factor,
 		code_ownership_gini, mttr_hours, change_failure_rate, revert_rate,
-		change_failure_rate_incident, computed_at, org_id
+		change_failure_rate_incident, prs_merged_reviewed, prs_merged_rework,
+		prs_merged_no_rework_signal, pr_rework_ratio_reviewed, computed_at, org_id
 	)`)
 	if err != nil {
 		return 0, fmt.Errorf("prepare repo_metrics_daily batch: %w", err)
@@ -521,6 +547,16 @@ func (writer *Writer) writeRepoMetrics(ctx context.Context, rows []RepoMetric, o
 		}
 		commitsCount, totalLOCTouched, prsMerged, prsWithFirstReview, busFactor :=
 			cols[0], cols[1], cols[2], cols[3], cols[4]
+		// The rework counts are NULL when the day was not counted: a row with
+		// no counts is "not measured", never a measured 0.
+		var reviewed, rework, noSignal *uint32
+		if row.PRRework != nil {
+			counts, err := checkedReworkCounts(*row.PRRework)
+			if err != nil {
+				return 0, fmt.Errorf("check repo_metrics_daily row: %w", err)
+			}
+			reviewed, rework, noSignal = &counts[0], &counts[1], &counts[2]
+		}
 		if err := batch.Append(
 			row.RepoID, row.Day, commitsCount, totalLOCTouched,
 			row.AvgCommitSizeLOC, row.LargeCommitRatio, prsMerged,
@@ -530,7 +566,8 @@ func (writer *Writer) writeRepoMetrics(ctx context.Context, rows []RepoMetric, o
 			row.PRSizeP50LOC, row.PRSizeP90LOC, row.PRCommentsPer100LOC, row.PRReviewsPer100LOC,
 			row.ReworkChurnRatio30d, row.SingleOwnerFileRatio30d, row.ReviewLoadTopReviewerRatio,
 			busFactor, row.CodeOwnershipGini, row.MTTRHours, row.ChangeFailureRate,
-			row.RevertRate, row.ChangeFailureRateIncident, row.ComputedAt, orgID,
+			row.RevertRate, row.ChangeFailureRateIncident, reviewed, rework, noSignal,
+			row.PRReworkRatioReviewed, row.ComputedAt, orgID,
 		); err != nil {
 			return 0, fmt.Errorf("append repo_metrics_daily row: %w", err)
 		}

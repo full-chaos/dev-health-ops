@@ -38,7 +38,7 @@ func TestIcFinalizeRefusesAnEmptyOrganizationBeforeTouchingClickHouse(t *testing
 			return err
 		},
 		"computeForDay": func(e *Executor) error {
-			_, err := e.computeForDay(context.Background(), "", day, nil)
+			_, err := e.computeForDay(context.Background(), "", day, nil, nil)
 			return err
 		},
 	} {
@@ -70,7 +70,7 @@ func TestIcFinalizeGuardDoesNotRefuseARealOrganization(t *testing.T) {
 func TestIcFinalizeRefusesBeforeTheTeamMapperRuns(t *testing.T) {
 	mapperCalls := 0
 	executor := NewExecutor(&touchedConn{})
-	executor.SetTeamMapper(func(context.Context, string) (TeamResolver, error) {
+	executor.SetTeamMapper(func(context.Context, string, time.Time) (PersonTeams, error) {
 		mapperCalls++
 		return nil, nil
 	})
@@ -118,5 +118,42 @@ func TestIcFinalizeRefusalIsCountedAndLogged(t *testing.T) {
 	}
 	if line := logs.String(); !strings.Contains(line, "level=ERROR") || !strings.Contains(line, "family=ic_finalize") || !strings.Contains(line, "target_day=2026-08-27") {
 		t.Fatalf("refusal log line = %q", line)
+	}
+}
+
+// A failed read of the inactive teams fails the run before any other read and
+// any write. With an empty set in its place the family would write the
+// person's rows and points of the day under a team that was replaced.
+func TestIcFinalizeFailsTheRunWhenTheInactiveTeamsCannotBeRead(t *testing.T) {
+	conn := &touchedConn{}
+	rows, err := NewExecutor(conn).ComputeFinalizeFamily(context.Background(), RunScope{
+		OrganizationID: "org-1", TargetDay: time.Date(2026, 8, 27, 0, 0, 0, 0, time.UTC),
+	})
+	if err == nil || !strings.Contains(err.Error(), "load inactive teams") {
+		t.Fatalf("err = %v, want the failed read of the inactive teams", err)
+	}
+	if rows != 0 || conn.calls != 1 {
+		t.Fatalf("rows = %d, ClickHouse calls = %d; want no row and the one failed read", rows, conn.calls)
+	}
+}
+
+// The memberships of a person are read for ONE point in time, and that point
+// is the day the run computes: not the time of the run. A recompute of an
+// older day then reads the teams as they were valid on that day, as the work
+// item attribution does for the work of that day.
+func TestIcFinalizeReadsTheMembershipsAsOfTheDayItComputes(t *testing.T) {
+	day := time.Date(2026, 3, 9, 0, 0, 0, 0, time.UTC)
+	var asked []time.Time
+	executor := NewExecutor(&touchedConn{})
+	executor.SetTeamMapper(func(_ context.Context, orgID string, asOf time.Time) (PersonTeams, error) {
+		asked = append(asked, asOf)
+		return nil, errors.New("stop after the membership read")
+	})
+	_, err := executor.ComputeFinalizeFamily(context.Background(), RunScope{OrganizationID: "org-1", TargetDay: day})
+	if err == nil || !strings.Contains(err.Error(), "stop after the membership read") {
+		t.Fatalf("err = %v, want the mapper's error: a failed membership read fails the run", err)
+	}
+	if len(asked) != 1 || !asked[0].Equal(day) {
+		t.Fatalf("the memberships were read as of %v, want one read as of the target day %v", asked, day)
 	}
 }

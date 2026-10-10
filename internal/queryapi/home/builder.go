@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/changefailure"
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/prrework"
 )
 
 // safeFloat ports safe_float (api/utils/numeric.py:22-34): default 0.0
@@ -52,6 +53,7 @@ func computeMetricDelta(ctx context.Context, client QueryClient, spec metricSpec
 	var hasData, hasPriorData bool
 	var series []dayValueRow
 	var rateState *string
+	var rateCoverage *float64
 
 	if spec.Table == changefailure.Table {
 		// Change failure rate: the window's summed counts through the one rule
@@ -89,6 +91,43 @@ func computeMetricDelta(ctx context.Context, client QueryClient, spec metricSpec
 		hasData = currentOutcome.State == changefailure.StateMeasured
 		hasPriorData = previousOutcome.State == changefailure.StateMeasured
 		rateState = currentOutcome.StateOrNil()
+	} else if isPRRework(spec.Table, spec.Column) {
+		// The pull request rework ratio: the window's summed counts through
+		// the one rule (prrework.Evaluate). A window with no reviewed pull
+		// request has no value, and its state says why.
+		var wg sync.WaitGroup
+		var errCur, errPrev, errSeries error
+		var current, previous prrework.View
+		wg.Add(3)
+		go func() {
+			defer wg.Done()
+			current, errCur = fetchPRReworkView(ctx, client, startDay, endDay, scopeFilter, scopeBindings, orgID)
+		}()
+		go func() {
+			defer wg.Done()
+			previous, errPrev = fetchPRReworkView(ctx, client, compareStart, compareEnd, scopeFilter, scopeBindings, orgID)
+		}()
+		go func() {
+			defer wg.Done()
+			series, errSeries = fetchMetricSeries(ctx, client, spec.Table, spec.Column, startDay, endDay, scopeFilter, scopeBindings, spec.Aggregator, orgID)
+		}()
+		wg.Wait()
+		for _, err := range []error{errCur, errPrev, errSeries} {
+			if err != nil {
+				return MetricDelta{}, err
+			}
+		}
+		currentOutcome, previousOutcome := prrework.Evaluate(current), prrework.Evaluate(previous)
+		if currentOutcome.Value != nil {
+			currentValue = *currentOutcome.Value
+		}
+		if previousOutcome.Value != nil {
+			previousValue = *previousOutcome.Value
+		}
+		hasData = currentOutcome.State == prrework.StateMeasured
+		hasPriorData = previousOutcome.State == prrework.StateMeasured
+		rateState = currentOutcome.StateOrNil()
+		rateCoverage = currentOutcome.Coverage
 	} else if spec.Metric == "blocked_work" {
 		var wg sync.WaitGroup
 		var errCur, errPrev error
@@ -158,7 +197,7 @@ func computeMetricDelta(ctx context.Context, client QueryClient, spec metricSpec
 		HasPriorData: hasPriorData,
 		Spark:        spark,
 		RateState:    rateState,
-
+		RateCoverage: rateCoverage,
 		RepoFilterApplied: repoFilterApplied(f, spec.Scope),
 	}, nil
 }
@@ -339,15 +378,10 @@ func BuildResponse(ctx context.Context, chClient QueryClient, pgClient PGQueryCl
 		if err != nil {
 			return nil, err
 		}
-		var driverIDs []string
-		for _, row := range driverRows {
-			if row.ID != "" {
-				driverIDs = append(driverIDs, row.ID)
-			}
-		}
+		// The sentence names the drivers by display name, never by id (CHAOS-9046).
 		driverText := "."
-		if len(driverIDs) > 0 {
-			driverText = " driven by " + strings.Join(driverIDs, ", ") + "."
+		if driverNameList := driverNames(ctx, chClient, orgID, metricGroup(topDelta.Metric), driverRows); len(driverNameList) > 0 {
+			driverText = " driven by " + strings.Join(driverNameList, ", ") + "."
 		}
 		summary = append(summary, SummarySentence{
 			ID:           "s1",

@@ -213,6 +213,8 @@
           "value": 13
         }
       ],
+      "rate_state": "measured",
+      "rate_coverage": 0.5,
       "repo_filter_applied": null
     },
     {
@@ -257,8 +259,8 @@
   "summary": [
     {
       "id": "s1",
-      "text": "Rework Ratio rose 33% driven by team-alpha.",
-      "evidence_link": "/api/v1/explain?metric=rework_ratio&scope_type=org&scope_id=&range_days=7&compare_days=7"
+      "text": "Rework Ratio rose 33% driven by alpha-service.",
+      "evidence_link": "/api/v1/explain?metric=rework_ratio\u0026scope_type=org\u0026scope_id=\u0026range_days=7\u0026compare_days=7"
     }
   ],
   "tiles": {
@@ -269,7 +271,7 @@
     },
     "measure": {
       "title": "Measure",
-      "subtitle": "Coverage & freshness",
+      "subtitle": "Coverage \u0026 freshness",
       "link": "/explore?view=measure"
     },
     "align": {
@@ -289,7 +291,7 @@
     "evidence": [
       {
         "label": "Drill into Rework Ratio",
-        "link": "/api/v1/explain?metric=rework_ratio&scope_type=org&scope_id=&range_days=7&compare_days=7"
+        "link": "/api/v1/explain?metric=rework_ratio\u0026scope_type=org\u0026scope_id=\u0026range_days=7\u0026compare_days=7"
       }
     ],
     "experiments": [
@@ -302,37 +304,37 @@
       "ts": "2024-01-08T12:00:00Z",
       "type": "regression",
       "text": "Review Latency shifted 25% over the last 7 days.",
-      "link": "/api/v1/explain?metric=review_latency&scope_type=org&scope_id=&range_days=7&compare_days=7"
+      "link": "/api/v1/explain?metric=review_latency\u0026scope_type=org\u0026scope_id=\u0026range_days=7\u0026compare_days=7"
     },
     {
       "ts": "2024-01-08T12:00:00Z",
       "type": "regression",
       "text": "Throughput shifted 33% over the last 7 days.",
-      "link": "/api/v1/explain?metric=throughput&scope_type=org&scope_id=&range_days=7&compare_days=7"
+      "link": "/api/v1/explain?metric=throughput\u0026scope_type=org\u0026scope_id=\u0026range_days=7\u0026compare_days=7"
     },
     {
       "ts": "2024-01-08T12:00:00Z",
       "type": "regression",
       "text": "Code Churn shifted 25% over the last 7 days.",
-      "link": "/api/v1/explain?metric=churn&scope_type=org&scope_id=&range_days=7&compare_days=7"
+      "link": "/api/v1/explain?metric=churn\u0026scope_type=org\u0026scope_id=\u0026range_days=7\u0026compare_days=7"
     },
     {
       "ts": "2024-01-08T12:00:00Z",
       "type": "regression",
       "text": "Blocked Work shifted 25% over the last 7 days.",
-      "link": "/api/v1/explain?metric=blocked_work&scope_type=org&scope_id=&range_days=7&compare_days=7"
+      "link": "/api/v1/explain?metric=blocked_work\u0026scope_type=org\u0026scope_id=\u0026range_days=7\u0026compare_days=7"
     },
     {
       "ts": "2024-01-08T12:00:00Z",
       "type": "regression",
       "text": "Change Failure Rate shifted 25% over the last 7 days.",
-      "link": "/api/v1/explain?metric=change_failure_rate&scope_type=org&scope_id=&range_days=7&compare_days=7"
+      "link": "/api/v1/explain?metric=change_failure_rate\u0026scope_type=org\u0026scope_id=\u0026range_days=7\u0026compare_days=7"
     },
     {
       "ts": "2024-01-08T12:00:00Z",
       "type": "regression",
       "text": "Rework Ratio shifted 33% over the last 7 days.",
-      "link": "/api/v1/explain?metric=rework_ratio&scope_type=org&scope_id=&range_days=7&compare_days=7"
+      "link": "/api/v1/explain?metric=rework_ratio\u0026scope_type=org\u0026scope_id=\u0026range_days=7\u0026compare_days=7"
     }
   ],
   "health_state": {
@@ -377,7 +379,7 @@
       "evidence_count": 2,
       "why_it_matters": "Rework Ratio appears rising; rework suggests unclear requirements or fragile implementation paths may be taxing focus.",
       "recommended_action": "Review reopened or rewritten work and pick one root-cause experiment.",
-      "evidence_ref": "/api/v1/explain?metric=rework_ratio&scope_type=org&scope_id=&range_days=7&compare_days=7",
+      "evidence_ref": "/api/v1/explain?metric=rework_ratio\u0026scope_type=org\u0026scope_id=\u0026range_days=7\u0026compare_days=7",
       "category": "durability",
       "scope_entity": null
     },
@@ -395,7 +397,7 @@
       "evidence_count": 2,
       "why_it_matters": "Review Latency appears rising; review queues shape how quickly teams can learn from completed work.",
       "recommended_action": "Rebalance reviewer rotation and clear stale review queues.",
-      "evidence_ref": "/api/v1/explain?metric=review_latency&scope_type=org&scope_id=&range_days=7&compare_days=7",
+      "evidence_ref": "/api/v1/explain?metric=review_latency\u0026scope_type=org\u0026scope_id=\u0026range_days=7\u0026compare_days=7",
       "category": "dynamics",
       "scope_entity": null
     },
@@ -413,7 +415,7 @@
       "evidence_count": 2,
       "why_it_matters": "Code Churn appears rising; higher churn suggests effort may be cycling through rework rather than durable progress.",
       "recommended_action": "Inspect hotspots and stabilize rework loops before expanding the change set.",
-      "evidence_ref": "/api/v1/explain?metric=churn&scope_type=org&scope_id=&range_days=7&compare_days=7",
+      "evidence_ref": "/api/v1/explain?metric=churn\u0026scope_type=org\u0026scope_id=\u0026range_days=7\u0026compare_days=7",
       "category": "durability",
       "scope_entity": null
     },
@@ -431,7 +433,7 @@
       "evidence_count": 2,
       "why_it_matters": "WIP Saturation appears rising; saturation suggests active work may exceed the team's coordination capacity.",
       "recommended_action": "Set a short-term WIP limit and finish active items before starting more.",
-      "evidence_ref": "/api/v1/explain?metric=wip_saturation&scope_type=org&scope_id=&range_days=7&compare_days=7",
+      "evidence_ref": "/api/v1/explain?metric=wip_saturation\u0026scope_type=org\u0026scope_id=\u0026range_days=7\u0026compare_days=7",
       "category": "dynamics",
       "scope_entity": null
     },
@@ -449,7 +451,7 @@
       "evidence_count": 2,
       "why_it_matters": "Blocked Work appears rising; blocked time suggests dependencies may be consuming delivery capacity.",
       "recommended_action": "Triage blocked items by owner and unblock the oldest high-impact queue first.",
-      "evidence_ref": "/api/v1/explain?metric=blocked_work&scope_type=org&scope_id=&range_days=7&compare_days=7",
+      "evidence_ref": "/api/v1/explain?metric=blocked_work\u0026scope_type=org\u0026scope_id=\u0026range_days=7\u0026compare_days=7",
       "category": "delivery",
       "scope_entity": null
     },
@@ -467,7 +469,7 @@
       "evidence_count": 2,
       "why_it_matters": "Change Failure Rate appears rising; failed changes suggest reliability work may be competing with delivery.",
       "recommended_action": "Inspect recent failed changes and tighten pre-release checks around the common failure mode.",
-      "evidence_ref": "/api/v1/explain?metric=change_failure_rate&scope_type=org&scope_id=&range_days=7&compare_days=7",
+      "evidence_ref": "/api/v1/explain?metric=change_failure_rate\u0026scope_type=org\u0026scope_id=\u0026range_days=7\u0026compare_days=7",
       "category": "durability",
       "scope_entity": null
     },
@@ -485,7 +487,7 @@
       "evidence_count": 2,
       "why_it_matters": "PR Rework Ratio appears rising; PR Rework Ratio movement suggests an operating signal to inspect.",
       "recommended_action": "Inspect supporting evidence and choose one reversible operating experiment.",
-      "evidence_ref": "/api/v1/explain?metric=pr_rework_ratio&scope_type=org&scope_id=&range_days=7&compare_days=7",
+      "evidence_ref": "/api/v1/explain?metric=pr_rework_ratio\u0026scope_type=org\u0026scope_id=\u0026range_days=7\u0026compare_days=7",
       "category": "durability",
       "scope_entity": null
     },
@@ -503,7 +505,7 @@
       "evidence_count": 2,
       "why_it_matters": "Throughput appears rising; throughput movement changes the team's ability to keep commitments credible.",
       "recommended_action": "Review WIP and dependency queues before changing delivery commitments.",
-      "evidence_ref": "/api/v1/explain?metric=throughput&scope_type=org&scope_id=&range_days=7&compare_days=7",
+      "evidence_ref": "/api/v1/explain?metric=throughput\u0026scope_type=org\u0026scope_id=\u0026range_days=7\u0026compare_days=7",
       "category": "delivery",
       "scope_entity": null
     },
@@ -521,7 +523,7 @@
       "evidence_count": 2,
       "why_it_matters": "Cycle Time appears falling; longer cycle time suggests delivery work may spend more time waiting than moving.",
       "recommended_action": "Inspect the slowest stage and rebalance active work before adding scope.",
-      "evidence_ref": "/api/v1/explain?metric=cycle_time&scope_type=org&scope_id=&range_days=7&compare_days=7",
+      "evidence_ref": "/api/v1/explain?metric=cycle_time\u0026scope_type=org\u0026scope_id=\u0026range_days=7\u0026compare_days=7",
       "category": "delivery",
       "scope_entity": null
     },
@@ -539,7 +541,7 @@
       "evidence_count": 2,
       "why_it_matters": "CI Success Rate appears rising; CI health suggests whether the delivery path is dependable.",
       "recommended_action": "Inspect failing pipelines and restore the most common broken check first.",
-      "evidence_ref": "/api/v1/explain?metric=ci_success&scope_type=org&scope_id=&range_days=7&compare_days=7",
+      "evidence_ref": "/api/v1/explain?metric=ci_success\u0026scope_type=org\u0026scope_id=\u0026range_days=7\u0026compare_days=7",
       "category": "durability",
       "scope_entity": null
     },
@@ -557,7 +559,7 @@
       "evidence_count": 2,
       "why_it_matters": "Deploy Frequency appears flat; deployment cadence suggests whether finished work can reach users smoothly.",
       "recommended_action": "Check release blockers and restore the smallest safe deployment path.",
-      "evidence_ref": "/api/v1/explain?metric=deploy_freq&scope_type=org&scope_id=&range_days=7&compare_days=7",
+      "evidence_ref": "/api/v1/explain?metric=deploy_freq\u0026scope_type=org\u0026scope_id=\u0026range_days=7\u0026compare_days=7",
       "category": "delivery",
       "scope_entity": null
     }

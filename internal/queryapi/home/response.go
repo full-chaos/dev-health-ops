@@ -78,11 +78,22 @@ type MetricDelta struct {
 	HasData      bool         `json:"has_data"`
 	HasPriorData bool         `json:"has_prior_data"`
 	Spark        []SparkPoint `json:"spark"`
-	// RateState says why change failure rate has a value or not (CHAOS-8981):
-	// "measured" (the value may be 0), "unknown_no_incident_evidence" or
-	// "not_applicable_no_deployments". nil when the window holds no stored
-	// counts, and for every other metric.
+	// RateState says why a rate that is a ratio of stored counts has a value
+	// or not. Change failure rate (CHAOS-8981): "measured" (the value may be
+	// 0), "unknown_no_incident_evidence" or "not_applicable_no_deployments".
+	// The pull request rework ratio: "measured", "unknown_no_review_evidence",
+	// "not_applicable_no_rework_signal" or
+	// "not_applicable_no_merged_pull_requests". nil when the window holds no
+	// stored counts, and for every other metric.
 	RateState *string `json:"rate_state,omitempty"`
+	// RateCoverage is the share of the merged pull requests that the pull
+	// request rework ratio speaks for, from 0 to 1 (prrework.Outcome.Coverage):
+	// the merged pull requests with review data from a provider that stores a
+	// changes-requested review, over all merged pull requests with stored
+	// counts. 0 when no merged pull request has such review data. nil when no
+	// pull request merged, when the window holds no stored counts, and for
+	// every other metric.
+	RateCoverage *float64 `json:"rate_coverage,omitempty"`
 	// RepoFilterApplied (CHAOS-9093) says whether the request's repository
 	// filter (scope.level repo ids, or what.repos) narrows this metric. nil when
 	// the request carries none. true for a repository-keyed metric: the filter was

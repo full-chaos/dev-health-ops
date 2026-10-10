@@ -243,6 +243,7 @@ func TestHomeResultFromResponse_MapsEveryFieldAgainstTheDomainResponse(t *testin
 	asOf := pytime.NaiveDateTime(time.Date(2024, 1, 8, 0, 0, 0, 0, time.UTC))
 	priorValue, delta, evidenceRef, lfEvidenceRef := "41", "+1", "ev-1", "ev-2"
 	rateState := "unknown_no_incident_evidence"
+	reworkState, reworkCoverage := "measured", 5.0/12.0
 
 	tiles := pyjson.OrderedMapOf(
 		pyjson.KeyValue[home.Tile]{Key: "open_prs", Value: home.Tile{Title: "Open PRs", Subtitle: "12", Link: "/prs"}},
@@ -261,6 +262,8 @@ func TestHomeResultFromResponse_MapsEveryFieldAgainstTheDomainResponse(t *testin
 				Spark: []home.SparkPoint{{TS: pytime.NaiveDateTime(time.Date(2024, 1, 7, 0, 0, 0, 0, time.UTC)), Value: 40}}},
 			// Change failure rate carries its state; every other delta has none.
 			{Metric: "change_failure_rate", Label: "Change Failure Rate", Unit: "%", RateState: &rateState},
+			// The pull request rework ratio carries its state and its coverage.
+			{Metric: "pr_rework_ratio", Label: "PR Rework Ratio", Unit: "%", RateState: &reworkState, RateCoverage: &reworkCoverage},
 		},
 		ReworkThemeAllocation: []home.ReworkThemeAllocation{
 			{Theme: "feature_delivery", Label: "Feature Delivery", Allocation: 10, AllocationPct: 50, PRsMerged: 3, ChurnLOC: 100},
@@ -350,6 +353,9 @@ func TestHomeResultFromResponse_MapsEveryFieldAgainstTheDomainResponse(t *testin
 		{"deltas.0.has_prior_data", "deltas.0.hasPriorData"},
 		{"deltas.1.metric", "deltas.1.metric"},
 		{"deltas.1.rate_state", "deltas.1.rateState"},
+		{"deltas.2.metric", "deltas.2.metric"},
+		{"deltas.2.rate_state", "deltas.2.rateState"},
+		{"deltas.2.rate_coverage", "deltas.2.rateCoverage"},
 		{"summary.0.id", "summary.0.id"},
 		{"summary.0.text", "summary.0.text"},
 		{"summary.0.evidence_link", "summary.0.evidenceLink"},

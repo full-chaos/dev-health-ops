@@ -194,50 +194,18 @@ type OwnershipAbsenceProver interface {
 	OwnershipAbsence(ctx context.Context, row OwnershipSnapshotRow) SnapshotAbsence
 }
 
-// OwnershipAbsenceLookupBudget bounds the direct answers of one run. A run
-// that finds more candidates than this closes the ones it asked for and leaves
-// the rest open for the next run; the plan counts them (AbsenceOverBudget).
-const OwnershipAbsenceLookupBudget = 100
+// OwnershipAbsenceLookupBudget is the budget of direct answers of one run for
+// the ownership kinds: the shared AbsenceLookupBudget.
+const OwnershipAbsenceLookupBudget = AbsenceLookupBudget
 
-// OwnershipAbsenceLookups is the direct answers of one run: each candidate is
-// asked once, inside the budget. The snapshot rule asks it only for an open
-// fact the run does not hold and whose listing was not one response, so a run
-// with no such fact makes no request.
-type OwnershipAbsenceLookups struct {
-	ctx     context.Context
-	prover  OwnershipAbsenceProver
-	left    int
-	answers map[string]SnapshotAbsence
-}
-
-// NewOwnershipAbsenceLookups makes the lookups of one run. A nil prover
-// answers nothing: every candidate stays open.
-func NewOwnershipAbsenceLookups(ctx context.Context, prover OwnershipAbsenceProver) *OwnershipAbsenceLookups {
-	return &OwnershipAbsenceLookups{ctx: ctx, prover: prover, left: OwnershipAbsenceLookupBudget, answers: map[string]SnapshotAbsence{}}
-}
-
-// Answer is the provider's own answer for one candidate.
-func (lookups *OwnershipAbsenceLookups) Answer(row OwnershipSnapshotRow) SnapshotAbsence {
-	if lookups == nil || lookups.prover == nil {
-		return SnapshotAbsenceNotProven
+// NewOwnershipAbsenceLookups makes the direct answers of one run for the
+// ownership kinds (AbsenceLookups keyed by team, project and source). A nil
+// prover answers nothing: every candidate stays open.
+func NewOwnershipAbsenceLookups(ctx context.Context, prover OwnershipAbsenceProver) *AbsenceLookups[OwnershipSnapshotRow] {
+	if prover == nil {
+		return NewAbsenceLookups[OwnershipSnapshotRow](ctx, ownershipSnapshotKey, nil)
 	}
-	fact := ownershipSnapshotKey(row)
-	if answer, asked := lookups.answers[fact]; asked {
-		return answer
-	}
-	if lookups.left <= 0 {
-		return SnapshotAbsenceOverBudget
-	}
-	lookups.left--
-	answer := SnapshotAbsenceNotProven
-	switch lookups.prover.OwnershipAbsence(lookups.ctx, row) {
-	case SnapshotAbsenceProven:
-		answer = SnapshotAbsenceProven
-	case SnapshotFactStillHeld:
-		answer = SnapshotFactStillHeld
-	}
-	lookups.answers[fact] = answer
-	return answer
+	return NewAbsenceLookups(ctx, ownershipSnapshotKey, prover.OwnershipAbsence)
 }
 
 // The reasons of an ownership fact that stays open because its absence is not

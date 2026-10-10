@@ -1,6 +1,7 @@
 package providersync
 
 import (
+	"context"
 	"sort"
 	"strings"
 	"time"
@@ -200,6 +201,58 @@ func (proof AbsenceProof[R]) of(row R) SnapshotAbsence {
 		return SnapshotAbsenceNotProven
 	}
 	return proof.verdict(row)
+}
+
+// AbsenceLookupBudget bounds the direct answers of one run for one kind. A run
+// that finds more candidates than this closes the ones it asked for and
+// leaves the rest open for the next run; the plan counts them
+// (AbsenceOverBudget).
+const AbsenceLookupBudget = 100
+
+// AbsenceLookups is the direct answers of one run for one kind: the answer
+// argument of AbsenceByListing. Each candidate is asked once, inside the
+// budget. The snapshot rule asks only for an open fact the run does not hold
+// and whose listing was not one response, so a run with no such fact makes no
+// request. It is the one shape of candidate, direct answer and budget for
+// every kind that closes from a listing read by position.
+type AbsenceLookups[R any] struct {
+	ctx     context.Context
+	key     func(R) string
+	ask     func(context.Context, R) SnapshotAbsence
+	left    int
+	answers map[string]SnapshotAbsence
+}
+
+// NewAbsenceLookups makes the lookups of one run. key names a fact; ask is the
+// provider's own answer for one fact. A nil ask answers nothing: every
+// candidate stays open.
+func NewAbsenceLookups[R any](ctx context.Context, key func(R) string, ask func(context.Context, R) SnapshotAbsence) *AbsenceLookups[R] {
+	return &AbsenceLookups[R]{ctx: ctx, key: key, ask: ask, left: AbsenceLookupBudget, answers: map[string]SnapshotAbsence{}}
+}
+
+// Answer is the provider's own answer for one candidate. Only "gone" and
+// "still held" are answers; every other value of ask proves nothing.
+func (lookups *AbsenceLookups[R]) Answer(row R) SnapshotAbsence {
+	if lookups == nil || lookups.ask == nil || lookups.key == nil {
+		return SnapshotAbsenceNotProven
+	}
+	fact := lookups.key(row)
+	if answer, asked := lookups.answers[fact]; asked {
+		return answer
+	}
+	if lookups.left <= 0 {
+		return SnapshotAbsenceOverBudget
+	}
+	lookups.left--
+	answer := SnapshotAbsenceNotProven
+	switch lookups.ask(lookups.ctx, row) {
+	case SnapshotAbsenceProven:
+		answer = SnapshotAbsenceProven
+	case SnapshotFactStillHeld:
+		answer = SnapshotFactStillHeld
+	}
+	lookups.answers[fact] = answer
+	return answer
 }
 
 // SnapshotKind is one fact kind of one writer: the rows it names (holds), and

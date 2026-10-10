@@ -313,6 +313,14 @@ func (handler LinearReferenceCatalogRouteHandler) CollectReferenceCatalog(
 							rows.InactiveMemberKeys[team.ID+"\x00"+linearMemberID(strings.TrimSpace(identity))] = true
 						}
 					}
+					// The member row of a user Linear reports as not active is the
+					// next version of the row the user had while active, with
+					// Linear's own flag (is_active = 0); a user active again is
+					// written is_active = 1 by the branch below. The membership
+					// of the user is closed by the departure path, not here.
+					if inactiveRow, rowErr := linearReferenceMemberRowOf(claim, memberPayload, normalizedAt, 0); rowErr == nil {
+						rows.Members = append(rows.Members, inactiveRow)
+					}
 					continue
 				}
 				member, membership, _, memberErr := normalizeLinearReferenceMember(claim, team.ID, memberPayload, resolver, normalizedAt)

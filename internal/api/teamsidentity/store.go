@@ -5,8 +5,9 @@
 //
 // ClickHouse is the system of record for both `teams` and `identities`
 // (CHAOS-2600 CS5): every write here is a ReplacingMergeTree row insert
-// with a fresh updated_at (the latest version wins under FINAL), and every
-// delete is a ClickHouse lightweight DELETE, never a Postgres write.
+// with a fresh updated_at (the latest version wins under FINAL). The delete of
+// an identity is a ClickHouse lightweight DELETE; the delete of a team is a
+// row insert too (DeleteTeam). Neither is a Postgres write.
 //
 // This first PR covers only the pure-CRUD routes (list/get/create-or-
 // update/delete teams, list/create-or-update identities) -- no external

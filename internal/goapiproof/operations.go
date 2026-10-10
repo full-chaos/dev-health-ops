@@ -987,7 +987,15 @@ var operationSpecs = map[string]OperationSpec{
 				"weekStart": w.WeekStart, "teamId": nil,
 			}}
 		},
-		Parity: Options{FloatTierB: map[string]string{
+		Parity: Options{BaselineDefects: []BaselineDefect{{
+			Ticket:             "CHAOS-9111",
+			Reason:             "the reference's delta percent is 0.0 where a week holds no stored value (a 0 placeholder against a 0 placeholder); the candidate serves null (a percent has no meaning against a value nobody measured), with hasData or delta.hasPriorData false beside it to say which week holds none.",
+			Paths:              []string{"data.operatingReview.sections.metrics.delta.percent"},
+			Intermittent:       true,
+			IntermittentReason: "present only while a metric has no stored value in one of its two weeks; a window where every metric has data shows none",
+			LeafPairShape: &LeafPairShape{Pairs: []LeafPair{{Baseline: 0.0, Candidate: nil}}, CandidateMayBeAllNull: true,
+				Sibling: &SiblingCondition{ByPath: true, AnyFalseAt: []SiblingFlag{{Up: 0, Name: "hasPriorData"}, {Up: 1, Name: "hasData"}}}},
+		}}, FloatTierB: map[string]string{
 			"data.operatingReview.sections.metrics.value":            "avg()/sum() over Float64 (operatingreview.go:413-418,483-485,562-568,641,695,736,780,822,880) -- ClickHouse float aggregate, order-nondeterministic (CHAOS-5451). This is why two identical requests seconds apart on the SAME plane disagreed",
 			"data.operatingReview.sections.metrics.delta.value":      "derived from the same float aggregates as sections.metrics.value (CHAOS-5451)",
 			"data.operatingReview.sections.metrics.delta.priorValue": "derived from the same float aggregates as sections.metrics.value (CHAOS-5451)",

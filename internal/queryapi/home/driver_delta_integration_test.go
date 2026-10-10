@@ -50,3 +50,39 @@ func TestHomeDriverLookupAtTheEdgesOfTheSharedExpression(t *testing.T) {
 		t.Errorf("drivers %v, want the repository at 0 against 0 (a true 0 %%) and the measured one", named)
 	}
 }
+
+// CHAOS-9158 (D5856): a repository with a stored value in the comparison window
+// and NO row in the current window is the same state as one whose current value
+// is NULL. The "driven by" lookup names a repository only for a percent, and a
+// percent needs a stored value on both sides, so neither is ever named: the
+// lookup starting from the current window leaves out nothing it could name.
+func TestHomeDriverLookupTreatsAPriorOnlyRepositoryLikeANullCurrentOne(t *testing.T) {
+	ctx := context.Background()
+	admin, client := crossorg.Start(ctx, t)
+	const org = "home-driver-prior-only"
+	measured, priorOnly, nullCurrent := uuid.New(), uuid.New(), uuid.New()
+	current := time.Date(2026, 9, 10, 0, 0, 0, 0, time.UTC)
+	prior := current.AddDate(0, 0, -1)
+	ins := func(repo uuid.UUID, day time.Time, hours any) {
+		t.Helper()
+		crossorg.Exec(ctx, t, admin, `INSERT INTO repo_metrics_daily (repo_id, day, pr_first_review_p50_hours, computed_at, org_id) VALUES (?, ?, ?, ?, ?)`,
+			repo, day, hours, current.AddDate(0, 0, 3), org)
+	}
+	ins(measured, current, 5.0)
+	ins(measured, prior, 10.0)
+	ins(priorOnly, prior, 8.0)     // no row in the current window
+	ins(nullCurrent, current, nil) // a current row holding no value
+	ins(nullCurrent, prior, 8.0)
+	rows, err := fetchMetricDriverDelta(ctx, client, "repo_metrics_daily", "pr_first_review_p50_hours", "repo_id",
+		current, current.AddDate(0, 0, 1), prior, current, "", nil, org, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	named := map[string]bool{}
+	for _, row := range rows {
+		named[row.ID] = true
+	}
+	if !named[measured.String()] || named[priorOnly.String()] || named[nullCurrent.String()] || len(named) != 1 {
+		t.Errorf("drivers %v, want only the measured repository %s (a prior-only and a null-current repository are the same state: neither has a percent)", named, measured)
+	}
+}

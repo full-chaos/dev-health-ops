@@ -10649,7 +10649,7 @@ type MetricDelta {
   label: String!
   value: Float!
   unit: String!
-  "Percent change between the windows. 0 when a window has no stored value (see hasData / hasPriorData); null when the prior value is a measured 0 and the current value is not, because a percent change against zero is undefined (CHAOS-9063)."
+  "Percent change between the windows. Null whenever a percent has no meaning: a window has no stored value (see hasData / hasPriorData, which say which side), or the prior value is a measured 0 and the current value is not (a percent change against zero is undefined; rateState / the sentence say so). A measured value on both sides keeps its percent (CHAOS-9063, CHAOS-9111)."
   deltaPct: Float
   "Whether the current window has one or more stored source rows. A stored zero has this field set to true."
   hasData: Boolean!
@@ -10658,7 +10658,7 @@ type MetricDelta {
   spark: [SparkPoint!]!
   "Why change failure rate has a value or not (CHAOS-8981): measured (the value may be 0), unknown_no_incident_evidence (deployments, and no incident tied to the scope in the window) or not_applicable_no_deployments. Null when the window holds no stored counts, and for every other metric."
   rateState: String
-  "The coverage of the pull request rework ratio (CHAOS-9072), from 0 to 1, not a percent: the merged pull requests of the window that have review data from a provider that stores a changes-requested review, divided by all merged pull requests of the window that have stored counts. 0 when rateState is unknown_no_review_evidence or not_applicable_no_rework_signal. Null when the window has no merged pull request, when it holds no stored counts, and for every other metric."
+  "The coverage of the pull request rework ratio (CHAOS-9072), from 0 to 1, not a percent: the merged pull requests of the window that have review data from a provider that stores a changes-requested review, divided by all merged pull requests of the window, of every stored day: a day stored before the review counts existed is in the denominator only, so a window that is partly not counted has a low coverage. 0 when rateState is unknown_no_review_evidence or not_applicable_no_rework_signal. Null when no stored day of the window holds a merged pull request, when rateState is null (no stored day of the window holds review counts), and for every other metric."
   rateCoverage: Float
   "Whether the request's repository filter (a repo-level scope, or what.repos) narrows this metric. Null when the request names no repository. True for a repository-keyed metric: the filter was applied, and when the named repositories resolve to nothing the metric has no data (hasData false). False only for a team-keyed metric (cycle_time, throughput, wip_saturation, blocked_work: their tables have no repo_id column, so the repository condition is not applied and the value is not narrowed) (CHAOS-9093)."
   repoFilterApplied: Boolean
@@ -10711,7 +10711,7 @@ type OperatingReviewDelta {
   percent: Float
   status: String!
   """
-  False = the prior week holds no stored value for the metric (CHAOS-8115); see ` + "`" + `` + "`" + `OperatingReviewMetric.hasData` + "`" + `` + "`" + `. ` + "`" + `` + "`" + `priorValue` + "`" + `` + "`" + ` is then a 0 placeholder, and ` + "`" + `` + "`" + `absolute` + "`" + `` + "`" + `, ` + "`" + `` + "`" + `percent` + "`" + `` + "`" + ` and ` + "`" + `` + "`" + `status` + "`" + `` + "`" + ` compare with that placeholder: a client draws "No data" for the prior week and no change.
+  False = the prior week holds no stored value for the metric (CHAOS-8115); see ` + "`" + `` + "`" + `OperatingReviewMetric.hasData` + "`" + `` + "`" + `. ` + "`" + `` + "`" + `priorValue` + "`" + `` + "`" + ` is then a 0 placeholder, ` + "`" + `` + "`" + `absolute` + "`" + `` + "`" + ` is 0, ` + "`" + `` + "`" + `percent` + "`" + `` + "`" + ` is null and ` + "`" + `` + "`" + `status` + "`" + `` + "`" + ` is empty: a client draws "No data" for the prior week and no change (CHAOS-8115, CHAOS-9111).
   """
   hasPriorData: Boolean!
 }

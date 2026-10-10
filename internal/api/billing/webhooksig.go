@@ -25,6 +25,25 @@ var errSignature = errors.New("billing: stripe signature verification failed")
 // the route lets it escape, which is the bare 500.
 var errWebhookCrash = errors.New("billing: stripe webhook verification raised")
 
+// signatureFailure is why a signature was refused. stripe-python raises one
+// SignatureVerificationError for all of them and the route answers one 400,
+// so the class is not in the response: it is for the log line and the counter
+// of the route, where it tells a wrong signing secret (a mismatch on every
+// delivery) from a request Stripe did not send.
+type signatureFailure string
+
+const (
+	// The request has no Stripe-Signature header, or an empty one.
+	signatureHeaderMissing signatureFailure = "header_missing"
+	// The header does not hold a timestamp int() accepts and a v1 signature.
+	signatureHeaderMalformed signatureFailure = "header_malformed"
+	// No v1 signature of the header is the HMAC of the timestamp and the body
+	// under the signing secret.
+	signatureMismatch signatureFailure = "signature_mismatch"
+	// The signature matches and its timestamp is older than the tolerance.
+	signatureTimestampOutsideTolerance signatureFailure = "timestamp_outside_tolerance"
+)
+
 // verifyStripeSignature is stripe-python's WebhookSignature.verify_header
 // with the default tolerance, step for step:
 //   - the body must decode as UTF-8 (else UnicodeDecodeError, the 500);
@@ -44,11 +63,18 @@ var errWebhookCrash = errors.New("billing: stripe webhook verification raised")
 // secret is never empty here: the route refuses an empty webhook secret
 // before verifying (get_webhook_secret).
 func verifyStripeSignature(payload []byte, header, secret string, now time.Time) error {
+	_, err := classifyStripeSignature(payload, header, secret, now)
+	return err
+}
+
+// classifyStripeSignature is verifyStripeSignature with the class of a
+// refusal: the class is set when, and only when, the error is errSignature.
+func classifyStripeSignature(payload []byte, header, secret string, now time.Time) (signatureFailure, error) {
 	if !utf8.Valid(payload) {
-		return errWebhookCrash
+		return "", errWebhookCrash
 	}
 	if header == "" {
-		return errSignature
+		return signatureHeaderMissing, errSignature
 	}
 	// Starlette decodes header bytes as latin-1.
 	header = latin1(header)
@@ -72,24 +98,24 @@ func verifyStripeSignature(payload []byte, header, secret string, now time.Time)
 			continue
 		}
 		if !entry.hasValue {
-			return errSignature
+			return signatureHeaderMalformed, errSignature
 		}
 		if !found {
 			parsed, err := pythonparity.ParseInt(entry.value)
 			if err != nil {
-				return errSignature
+				return signatureHeaderMalformed, errSignature
 			}
 			timestamp, found = parsed, true
 		}
 	}
 	if !found {
-		return errSignature
+		return signatureHeaderMalformed, errSignature
 	}
 	var signatures []string
 	for _, entry := range items {
 		if entry.key == "v1" {
 			if !entry.hasValue {
-				return errSignature
+				return signatureHeaderMalformed, errSignature
 			}
 			signatures = append(signatures, entry.value)
 		}
@@ -102,7 +128,7 @@ func verifyStripeSignature(payload []byte, header, secret string, now time.Time)
 	for _, signature := range signatures {
 		for _, r := range signature {
 			if r >= 0x80 {
-				return errWebhookCrash
+				return "", errWebhookCrash
 			}
 		}
 		if hmac.Equal([]byte(expected), []byte(signature)) {
@@ -111,7 +137,11 @@ func verifyStripeSignature(payload []byte, header, secret string, now time.Time)
 		}
 	}
 	if !matched {
-		return errSignature
+		if len(signatures) == 0 {
+			// A header with a timestamp and no v1 item: nothing to compare.
+			return signatureHeaderMalformed, errSignature
+		}
+		return signatureMismatch, errSignature
 	}
 	// timestamp < time.time() - tolerance, with time.time() a float: at
 	// the whole-second boundary a fraction of a second past it already
@@ -119,13 +149,13 @@ func verifyStripeSignature(payload []byte, header, secret string, now time.Time)
 	oldest := big.NewInt(now.Unix() - stripeWebhookTolerance)
 	switch timestamp.Cmp(oldest) {
 	case -1:
-		return errSignature
+		return signatureTimestampOutsideTolerance, errSignature
 	case 0:
 		if now.Nanosecond() > 0 {
-			return errSignature
+			return signatureTimestampOutsideTolerance, errSignature
 		}
 	}
-	return nil
+	return "", nil
 }
 
 // latin1 is a header value as Starlette hands it over: each byte one code

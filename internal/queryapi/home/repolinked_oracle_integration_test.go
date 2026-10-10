@@ -10,6 +10,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
+
 	stdclickhouse "github.com/ClickHouse/clickhouse-go/v2"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/daily"
@@ -515,5 +517,45 @@ VALUES (toUUID('%s'), '%s', 1, 1.0, 'native', '', %s, '%s')`, repo, id, synced, 
 	}
 	if unheld := read(oracleR2); unheld.HasData || unheld.Value != 0 {
 		t.Errorf("team alpha and repository 2 (not held; an item attributed to alpha is linked to it): value %v has data %v, want no data", unheld.Value, unheld.HasData)
+	}
+}
+
+// A team that holds more named repositories than the query client's default row cap (1,000, code 396)
+// still keeps them all: HeldRepoIDs sets its own bound, so the view is not degraded to too_large
+// by the ownership read (round 111 r1, P1).
+func TestHeldRepoIDsReturnsMoreRepositoriesThanTheClientRowCap(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+	admin, client := newHomeTestClickHouse(ctx, t)
+	const org = "org-9191-held-cap"
+	const n = 1200
+	synced := time.Date(2026, 8, 4, 0, 0, 0, 0, time.UTC)
+	if err := admin.Exec(ctx, `INSERT INTO repos (id, repo, provider, org_id, created_at, last_synced)
+SELECT generateUUIDv4(), concat('acme/r', toString(number)), 'github', ?, ?, ? FROM numbers(?)`, org, synced, synced, n); err != nil {
+		t.Fatal(err)
+	}
+	if err := admin.Exec(ctx, `INSERT INTO team_repo_ownership (org_id, provider, team_id, repo_id, repo_full_name, match_type, source, is_primary, specificity, priority, valid_from, valid_to, updated_at)
+SELECT org_id, 'github', 'team-big', id, repo, 'exact', 'inferred', 0, 0, 0, toDateTime64('2026-01-01 00:00:00', 3, 'UTC'), NULL, last_synced FROM repos WHERE org_id = ?`, org); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := admin.Query(ctx, `SELECT toString(id) FROM repos WHERE org_id = ?`, org)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			t.Fatal(err)
+		}
+		ids = append(ids, id)
+	}
+	_ = rows.Close()
+	held, err := teamscope.HeldRepoIDs(ctx, client, org, ids, []string{"team-big"}, synced.Add(24*time.Hour))
+	if err != nil {
+		t.Fatalf("HeldRepoIDs over %d repositories: %v", n, err)
+	}
+	if len(held) != n {
+		t.Fatalf("held = %d repositories, want %d", len(held), n)
 	}
 }

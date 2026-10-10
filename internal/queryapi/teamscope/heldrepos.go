@@ -8,6 +8,10 @@ import (
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 )
 
+// heldRepoMaxResultRows bounds the read: it returns at most the repositories the caller
+// named, which may exceed the query client's default row cap (1,000, code 396).
+const heldRepoMaxResultRows = 200000
+
 // HeldRepoIDs are the given repository ids (already resolved to repositories of the
 // organization) that the selected teams hold at asOf, by the one ownership rule of
 // RepoCondition. It is the narrowing the repository-keyed reads get from
@@ -29,11 +33,11 @@ func HeldRepoIDs(ctx context.Context, client RowQuerier, orgID string, repoIDs, 
 SELECT DISTINCT toString(id) AS repo_id
 FROM repos FINAL
 WHERE org_id = {%s:String}
-  AND toString(id) IN {named_repo_ids:Array(String)}
+  AND toString(id) IN {held_repo_ids:Array(String)}
   AND %s
-SETTINGS max_execution_time = 30
-`, BindingOrgID, condition)
-	rows, err := client.Query(ctx, statement, append([]dhclickhouse.Binding{{Name: "named_repo_ids", Value: repoIDs}}, bindings...))
+SETTINGS max_execution_time = 30, max_result_rows = %d
+`, BindingOrgID, condition, heldRepoMaxResultRows)
+	rows, err := client.Query(ctx, statement, append([]dhclickhouse.Binding{{Name: "held_repo_ids", Value: repoIDs}}, bindings...))
 	if err != nil {
 		return nil, fmt.Errorf("teamscope: team-held repositories: %w", err)
 	}

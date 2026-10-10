@@ -44,8 +44,9 @@ func (*notDiscoveredRowsStub) Close() error                     { return nil }
 func (rows *notDiscoveredRowsStub) Err() error                  { return rows.err }
 func (*notDiscoveredRowsStub) HasData() bool                    { return true }
 
-// warnRecords runs one discovery and returns its result with the WARN lines
-// of the count of repositories not discovered.
+// warnRecords runs one discovery and then the report of the repositories it
+// cannot discover, as the dispatch of a run does, and returns the result of
+// the discovery with the lines of the report.
 func warnRecords(t *testing.T, connection repositoryRows, organizationID string) ([]RepositoryID, error, []map[string]any) {
 	t.Helper()
 	var captured bytes.Buffer
@@ -57,6 +58,7 @@ func warnRecords(t *testing.T, connection repositoryRows, organizationID string)
 		t.Fatal(err)
 	}
 	identifiers, discoverErr := discoverer.RepositoryIDs(context.Background(), organizationID)
+	discoverer.ReportRepositoriesNotDiscovered(context.Background(), organizationID)
 	var records []map[string]any
 	for _, line := range strings.Split(strings.TrimSpace(captured.String()), "\n") {
 		if line == "" {
@@ -75,9 +77,10 @@ func warnRecords(t *testing.T, connection repositoryRows, organizationID string)
 
 // The repos table is the only source of a whole-organization run's
 // repositories. Stored rows under a repository id with no repos row are
-// computed by no such run, and the discovery must say so with counts. It must
-// say nothing when there is none, it must never take a count it could not read
-// as 0, and it must never change or fail the discovery.
+// computed by no such run, and the run must say so with counts: one line, INFO
+// with three zeros when there is none (so a reader of the log sees that the
+// count ran), WARN when a count is above 0. It must never take a count it
+// could not read as 0, and it must never change or fail the discovery.
 func TestClickHouseRepositoryDiscovererSaysTheRepositoriesItCannotDiscover(t *testing.T) {
 	organizationID := "00000000-0000-4000-8000-000000000009"
 	repository := uuid.MustParse("00000000-0000-4000-8000-000000000001")
@@ -85,7 +88,7 @@ func TestClickHouseRepositoryDiscovererSaysTheRepositoriesItCannotDiscover(t *te
 		name      string
 		rows      driver.Rows
 		err       error
-		wantLine  bool
+		warn      bool
 		countRead bool
 		want      [3]float64 // pull requests, commits, work items
 	}{
@@ -111,18 +114,16 @@ func TestClickHouseRepositoryDiscovererSaysTheRepositoriesItCannotDiscover(t *te
 			if err != nil || len(identifiers) != 1 || string(identifiers[0]) != repository.String() {
 				t.Fatalf("the discovery returned %v, %v: the count must not change or fail it", identifiers, err)
 			}
-			if !test.wantLine {
-				if len(records) != 0 {
-					t.Fatalf("WARN lines = %v, want none", records)
-				}
-				return
-			}
 			if len(records) != 1 {
-				t.Fatalf("WARN lines = %d (%v), want exactly 1", len(records), records)
+				t.Fatalf("lines of the report = %d (%v), want exactly 1", len(records), records)
 			}
 			record := records[0]
-			if record["level"] != "WARN" || record["organization_id"] != organizationID {
-				t.Fatalf("level and organization = %v, %v", record["level"], record["organization_id"])
+			level := "INFO"
+			if test.warn {
+				level = "WARN"
+			}
+			if record["level"] != level || record["organization_id"] != organizationID {
+				t.Fatalf("level and organization = %v, %v; want %s", record["level"], record["organization_id"], level)
 			}
 			if read, ok := record["count_read"].(bool); !ok || read != test.countRead {
 				t.Fatalf("count_read = %v, want %t", record["count_read"], test.countRead)

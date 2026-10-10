@@ -16,13 +16,15 @@ import (
 // outside. The attributes are an id, a flag and counts only.
 const RepositoryDiscoveryLogMessage = "daily metrics repository discovery"
 
-// RepositoryRowsNotDiscoveredLogMessage is the WARN line of a discovery that
-// found stored rows under a repository id the run cannot discover. The repos
-// table is the only source of a whole-organization run's repositories, so
-// rows stored under an id with no repos row of the organization (a writer
-// that stored them before or without that row, a repos row that was removed)
-// are computed by no such run. The run computes what it discovered; this line
-// is the only sign of the rest.
+// RepositoryRowsNotDiscoveredLogMessage is the one line a whole-organization
+// run writes, when its repositories are discovered, about the stored rows it
+// cannot discover. The repos table is the only source of such a run's
+// repositories, so rows stored under an id with no repos row of the
+// organization (a writer that stored them before or without that row, a repos
+// row that was removed) are computed by no such run. The run computes what it
+// discovered; this line is the only sign of the rest. It is INFO with the
+// three counts when all are 0, and WARN when one is above 0 or the count
+// could not be read.
 const RepositoryRowsNotDiscoveredLogMessage = "daily metrics repository discovery: stored rows under a repository with no repos row"
 
 // The sources the count of not-discovered repositories reads, in the order of
@@ -117,15 +119,23 @@ ORDER BY id`, organizationID)
 		"repositories_discovered", repositories,
 		"partitions_discovered", len(identifiers),
 	)
-	discoverer.reportRepositoriesNotDiscovered(ctx, organizationID)
 	return identifiers, nil
 }
 
-// reportRepositoriesNotDiscovered says, in one WARN line, how many repository
-// ids hold stored rows that this discovery cannot reach. It changes nothing
-// the run computes, so it never fails the discovery: a count that could not
-// be read is said in the same line (count_read false), never taken as 0.
-func (discoverer *ClickHouseRepositoryDiscoverer) reportRepositoriesNotDiscovered(ctx context.Context, organizationID string) {
+// ReportRepositoriesNotDiscovered says, in one line, how many repository ids
+// hold stored rows that the discovery cannot reach. It is NOT part of
+// RepositoryIDs: that read has other callers (the end of a run reads the
+// present repositories once for each table it settles), and the count is a
+// scan of three source tables that one run needs once. The dispatch of a run
+// calls it after the one discovery it stores.
+//
+// It changes nothing the run computes and returns nothing, so it cannot fail
+// the run: a count that could not be read is said in the same line
+// (count_read false, WARN, no number), never taken as 0.
+func (discoverer *ClickHouseRepositoryDiscoverer) ReportRepositoriesNotDiscovered(ctx context.Context, organizationID string) {
+	if discoverer == nil || discoverer.conn == nil || !validUUID(organizationID) {
+		return
+	}
 	counts, err := discoverer.repositoriesNotDiscovered(ctx, organizationID)
 	if err != nil {
 		slog.WarnContext(ctx, RepositoryRowsNotDiscoveredLogMessage,
@@ -134,10 +144,11 @@ func (discoverer *ClickHouseRepositoryDiscoverer) reportRepositoriesNotDiscovere
 		)
 		return
 	}
-	if counts[notDiscoveredPullRequests]+counts[notDiscoveredCommits]+counts[notDiscoveredWorkItems] == 0 {
-		return
+	level := slog.LevelInfo
+	if counts[notDiscoveredPullRequests]+counts[notDiscoveredCommits]+counts[notDiscoveredWorkItems] > 0 {
+		level = slog.LevelWarn
 	}
-	slog.WarnContext(ctx, RepositoryRowsNotDiscoveredLogMessage,
+	slog.Log(ctx, level, RepositoryRowsNotDiscoveredLogMessage,
 		"organization_id", organizationID,
 		"count_read", true,
 		"repositories_with_pull_requests", counts[notDiscoveredPullRequests],
@@ -195,6 +206,7 @@ func (discoverer *ClickHouseRepositoryDiscoverer) hasWorkItemsWithoutRepository(
 }
 
 var _ RepositoryDiscoverer = (*ClickHouseRepositoryDiscoverer)(nil)
+var _ RepositoriesNotDiscoveredReporter = (*ClickHouseRepositoryDiscoverer)(nil)
 
 // repositoryIDStrings converts to the plain []string clickhouse-go's
 // Array(String) named-parameter binding is verified against.

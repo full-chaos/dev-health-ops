@@ -234,11 +234,11 @@ func fetchRiskSignals(ctx context.Context, client QueryClient, f Filters, startD
 	return out, nil
 }
 
-// resolveScopeLabels ports _resolve_scope_labels (services/home.py:
-// 647-713), reading repos/teams FINAL (see this file's own package doc
-// comment for the dedup fix). Best-effort: either lookup's
-// failure is swallowed, matching Python's `except Exception:
-// logger.warning(...)`.
+// resolveScopeLabels ports _resolve_scope_labels (services/home.py:647-713) onto
+// the ONE name resolver of the Home prose (resolveScopeNames: repos/teams FINAL,
+// a name equal to its id is no name). An id with no name is absent from the
+// answer (CHAOS-9116: the id is never the label). A failed lookup is logged and
+// leaves the labels out, as the Python warning did.
 func resolveScopeLabels(ctx context.Context, client QueryClient, orgID string, rows []RiskRow) map[string]string {
 	var repoIDs, teamIDs []string
 	for _, r := range rows {
@@ -249,58 +249,16 @@ func resolveScopeLabels(ctx context.Context, client QueryClient, orgID string, r
 			teamIDs = append(teamIDs, r.ScopeID)
 		}
 	}
-
 	out := map[string]string{}
-
 	if len(repoIDs) > 0 {
-		query := `
-                SELECT toString(id) AS scope_id, repo AS display_name
-                FROM repos FINAL
-                WHERE org_id = {org_id:String}
-                  AND toString(id) IN {scope_ids:Array(String)}
-                `
-		bindings := []dhclickhouse.Binding{
-			{Name: "org_id", Value: orgID},
-			{Name: "scope_ids", Value: repoIDs},
-		}
-		if rs, err := client.Query(ctx, query, bindings); err == nil {
-			func() {
-				defer rs.Close()
-				for rs.Next() {
-					var id, name string
-					if rs.Scan(&id, &name) == nil {
-						if name == "" {
-							name = id
-						}
-						out[id] = name
-					}
-				}
-			}()
+		for id, name := range resolveScopeNames(ctx, client, orgID, "repo", repoIDs, "home risk signals") {
+			out[id] = name
 		}
 	}
-
 	if len(teamIDs) > 0 {
-		query := `
-                SELECT toString(id) AS scope_id, name AS display_name
-                FROM teams FINAL
-                WHERE org_id = {org_id:String}
-                `
-		bindings := []dhclickhouse.Binding{{Name: "org_id", Value: orgID}}
-		if rs, err := client.Query(ctx, query, bindings); err == nil {
-			func() {
-				defer rs.Close()
-				for rs.Next() {
-					var id, name string
-					if rs.Scan(&id, &name) == nil {
-						if name == "" {
-							name = id
-						}
-						out[id] = name
-					}
-				}
-			}()
+		for id, name := range resolveScopeNames(ctx, client, orgID, "team", teamIDs, "home risk signals") {
+			out[id] = name
 		}
 	}
-
 	return out
 }

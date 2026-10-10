@@ -132,6 +132,23 @@ func TestTeamRepoDonorsExcludeStaleForeignAndNonOwnershipSources(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The ownership rows are read for the donor teams only. The corpus holds
+	// ownership rows of teams that are no donor of these work items (an
+	// inactive team, a team with no attribution here); none may be in the set.
+	donorTeams := map[string]bool{}
+	for _, teams := range set.TeamsByWorkItem {
+		for _, team := range teams {
+			donorTeams[team] = true
+		}
+	}
+	if len(donorTeams) == 0 || len(set.IntervalsByTeam) == 0 {
+		t.Fatalf("the set holds %d donor team(s) and intervals of %d team(s): the corpus does not reach the read", len(donorTeams), len(set.IntervalsByTeam))
+	}
+	for team, intervals := range set.IntervalsByTeam {
+		if !donorTeams[team] {
+			t.Fatalf("the set holds %d ownership row(s) of team %q, which is no donor team of the work items", len(intervals), team)
+		}
+	}
 	distinct := map[string]bool{}
 	for _, instant := range []time.Time{
 		at.Add(-2 * time.Hour), at.Add(-time.Hour), at.Add(-30 * time.Minute),

@@ -12,6 +12,8 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	"github.com/full-chaos/dev-health-ops/internal/teamid"
 	"github.com/google/uuid"
+
+	"github.com/full-chaos/dev-health-ops/internal/teamcreated"
 )
 
 // JiraTeamCatalogClickHouseEffects is the concrete bridge from the
@@ -28,7 +30,7 @@ type JiraTeamCatalogClickHouseEffects struct {
 	Lease providerfoundation.LeaseGuard
 }
 
-const jiraTeamCatalogTeamsInsert = `INSERT INTO teams (id, team_uuid, name, description, members, manual_members, project_keys, repo_patterns, is_active, updated_at, org_id, provider, native_team_key, parent_team_id)`
+const jiraTeamCatalogTeamsInsert = `INSERT INTO teams (id, team_uuid, name, description, members, manual_members, project_keys, repo_patterns, is_active, updated_at, org_id, provider, native_team_key, parent_team_id, created_at)`
 
 // Omits last_synced on purpose: the server stamps it at insert time (server insert time, not commit order: readers re-read a 300 s window and dedup by key, migration 099).
 const jiraTeamCatalogOwnershipInsert = `INSERT INTO team_project_ownership (org_id, provider, team_id, project_id, project_key, source, is_primary, specificity, priority, valid_from, valid_to, updated_at)`
@@ -192,6 +194,10 @@ func (sink JiraTeamCatalogClickHouseEffects) writeTeams(ctx context.Context, cla
 	if err != nil {
 		return err
 	}
+	createdAt, err := teamcreated.Carry(ctx, sink.Conn, claim.OrgID, teamIDs)
+	if err != nil {
+		return err
+	}
 	batch, err := sink.Conn.PrepareBatch(ctx, jiraTeamCatalogTeamsInsert)
 	if err != nil {
 		return err
@@ -213,6 +219,7 @@ func (sink JiraTeamCatalogClickHouseEffects) writeTeams(ctx context.Context, cla
 		if err := batch.Append(
 			row.ID, teamUUID, row.Name, row.Description, members, manualMembers, row.ProjectKeys, row.RepoPatterns,
 			row.IsActive, row.UpdatedAt, row.OrgID, row.Provider, row.NativeTeamKey, row.ParentTeamID,
+			teamcreated.For(createdAt, row.ID, row.UpdatedAt),
 		); err != nil {
 			return err
 		}

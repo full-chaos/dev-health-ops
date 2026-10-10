@@ -12,6 +12,8 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	"github.com/full-chaos/dev-health-ops/internal/teamid"
 	"github.com/google/uuid"
+
+	"github.com/full-chaos/dev-health-ops/internal/teamcreated"
 )
 
 // LinearReferenceCatalogClickHouseEffects is the concrete bridge from the
@@ -23,7 +25,7 @@ type LinearReferenceCatalogClickHouseEffects struct {
 	Lease providerfoundation.LeaseGuard
 }
 
-const linearReferenceTeamsInsert = `INSERT INTO teams (id, team_uuid, name, description, members, manual_members, project_keys, repo_patterns, is_active, updated_at, org_id, provider, native_team_key, parent_team_id)`
+const linearReferenceTeamsInsert = `INSERT INTO teams (id, team_uuid, name, description, members, manual_members, project_keys, repo_patterns, is_active, updated_at, org_id, provider, native_team_key, parent_team_id, created_at)`
 const linearReferenceMembersInsert = `INSERT INTO members (org_id, member_id, name, email, provider_identities, is_active, updated_at)`
 const linearReferenceMembershipsInsert = `INSERT INTO team_memberships (org_id, provider, team_id, member_id, raw_provider_user_id, raw_email, identity_facets, source, is_primary, specificity, priority, valid_from, valid_to, updated_at)`
 
@@ -300,6 +302,10 @@ func (sink LinearReferenceCatalogClickHouseEffects) writeTeams(ctx context.Conte
 	if err != nil {
 		return err
 	}
+	createdAt, err := teamcreated.Carry(ctx, sink.Conn, rows[0].OrgID, teamIDs)
+	if err != nil {
+		return err
+	}
 	batch, err := sink.Conn.PrepareBatch(ctx, linearReferenceTeamsInsert)
 	if err != nil {
 		return err
@@ -311,7 +317,7 @@ func (sink LinearReferenceCatalogClickHouseEffects) writeTeams(ctx context.Conte
 			return ErrInvalidConfiguration
 		}
 		manualMembers := existingManualMembers[row.ID]
-		if err := batch.Append(row.ID, teamUUID, row.Name, row.Description, row.Members, manualMembers, row.ProjectKeys, row.RepoPatterns, row.IsActive, row.UpdatedAt, row.OrgID, row.Provider, row.NativeTeamKey, row.ParentTeamID); err != nil {
+		if err := batch.Append(row.ID, teamUUID, row.Name, row.Description, row.Members, manualMembers, row.ProjectKeys, row.RepoPatterns, row.IsActive, row.UpdatedAt, row.OrgID, row.Provider, row.NativeTeamKey, row.ParentTeamID, teamcreated.For(createdAt, row.ID, row.UpdatedAt)); err != nil {
 			return err
 		}
 	}

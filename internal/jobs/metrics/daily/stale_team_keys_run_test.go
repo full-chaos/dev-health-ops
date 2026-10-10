@@ -3,6 +3,7 @@ package daily
 import (
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
 	"testing"
 	"time"
@@ -89,6 +90,30 @@ func TestTheFinalizeRetractsStaleKeysOnceBeforeTheFamilies(t *testing.T) {
 	}
 }
 
+// The retraction gets the scope of the run as the store holds it: a claim of a
+// finalize does not carry it, and it decides whether the run supersedes the
+// keys of the whole organization-day or only of its own scopes.
+func TestTheFinalizeGivesTheRetractionTheStoredScopeOfTheRun(t *testing.T) {
+	defer restoreRecognisedFinalizeFamilies(pythonRecognisedFinalizeFamilies)
+	pythonRecognisedFinalizeFamilies = []string{"ic_finalize"}
+	for _, wholeOrganization := range []bool{true, false} {
+		var order []string
+		store := staleKeyRetractionStore()
+		store.run.FullOrg = wholeOrganization
+		if store.finalizeClaim.Run.FullOrg {
+			t.Fatal("the claim of the fixture carries the scope: the case is not set")
+		}
+		retractor := &recordingRetractor{order: &order}
+		handler := staleKeyRetractionFinalize(t, store, retractor, &order)
+		if err := handler.Work(context.Background(), finalizeExecution()); err != nil {
+			t.Fatal(err)
+		}
+		if len(retractor.runs) != 1 || retractor.runs[0].FullOrg != wholeOrganization {
+			t.Errorf("the stored run has FullOrg = %v and the retraction got %+v", wholeOrganization, retractor.runs)
+		}
+	}
+}
+
 // A failed retraction fails the finalize, which is tried again. No family runs
 // on the tables that still hold the stale keys, and the run is not completed.
 func TestAFailedRetractionFailsTheFinalizeAndRunsNoFamily(t *testing.T) {
@@ -162,5 +187,30 @@ func TestRunStaleKeyRetractorRefusesWhatItCannotRun(t *testing.T) {
 		if _, err := retractor.RetractStaleKeys(context.Background(), run); !errors.Is(err, ErrInvalidState) {
 			t.Errorf("%s: err = %v, want ErrInvalidState", name, err)
 		}
+	}
+}
+
+// A log line of the step names at most StaleKeyLoggedRepositoryLimit
+// repository ids, sorted, and says how many more there are.
+func TestTheLoggedRepositoryIDsAreSortedAndBounded(t *testing.T) {
+	repositories := map[string]struct{}{}
+	for index := 0; index < StaleKeyLoggedRepositoryLimit+5; index++ {
+		repositories[fmt.Sprintf("repo-%03d", StaleKeyLoggedRepositoryLimit+5-index)] = struct{}{}
+	}
+	ids, more := loggedRepositoryIDs(repositories)
+	if len(ids) != StaleKeyLoggedRepositoryLimit || more != 5 {
+		t.Fatalf("%d ids and %d more for %d repositories, want %d and 5", len(ids), more, len(repositories), StaleKeyLoggedRepositoryLimit)
+	}
+	for index, id := range ids {
+		if want := fmt.Sprintf("repo-%03d", index+1); id != want {
+			t.Fatalf("id %d is %s, want %s: the list is not the first ids in order", index, id, want)
+		}
+	}
+	few := map[string]struct{}{"b": {}, "a": {}}
+	if ids, more := loggedRepositoryIDs(few); len(ids) != 2 || ids[0] != "a" || ids[1] != "b" || more != 0 {
+		t.Errorf("two repositories give %v and %d more, want [a b] and 0", ids, more)
+	}
+	if ids, more := loggedRepositoryIDs(nil); len(ids) != 0 || more != 0 || ids == nil {
+		t.Errorf("no repository gives %v and %d more, want an empty list (not null) and 0", ids, more)
 	}
 }

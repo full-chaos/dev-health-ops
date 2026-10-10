@@ -735,3 +735,37 @@ func TestEveryWriterOfATeamKeyedTableCensusIsDeclared(t *testing.T) {
 		}
 	}
 }
+
+// The tables that the end of a run of the whole organization supersedes
+// outside the run's repositories (OrganizationRunStaleKeyTables) are exactly
+// the tables of the rule whose key scope is the repository: a new table of
+// that kind is in the list, and a table of another kind is not.
+func TestTheOrganizationRunTablesAreTheRepositoryScopedTablesCensus(t *testing.T) {
+	listed := map[string]bool{}
+	for _, table := range OrganizationRunStaleKeyTables() {
+		listed[table.Table] = true
+	}
+	runLevel := map[string]bool{}
+	for _, table := range RunStaleKeyTables() {
+		runLevel[table.Table] = true
+	}
+	repositoryScoped := 0
+	for _, table := range StaleTeamKeyTables() {
+		byRepository := len(table.Scope) == 1 && table.Scope[0] == "repo_id"
+		if byRepository {
+			repositoryScoped++
+		}
+		switch {
+		case byRepository && !listed[table.Table]:
+			t.Errorf("%s has the repository as its key scope and is not in OrganizationRunStaleKeyTables: the end of a run of the whole "+
+				"organization must supersede its keys of a repository that is in no partition", table.Table)
+		case !byRepository && listed[table.Table]:
+			t.Errorf("%s is in OrganizationRunStaleKeyTables and its key scope is %v, not the repository", table.Table, table.Scope)
+		case listed[table.Table] && runLevel[table.Table]:
+			t.Errorf("%s is in both run-level lists", table.Table)
+		}
+	}
+	if repositoryScoped == 0 || len(listed) != repositoryScoped {
+		t.Fatalf("%d repository-scoped table(s) in the registry and %d listed: the census did not measure", repositoryScoped, len(listed))
+	}
+}

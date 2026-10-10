@@ -125,11 +125,18 @@ const jiraProjectAsTeamCloseRepoOwnership = teamRepoOwnershipInsert + ` ` +
 	`greatest({at:DateTime64(3, 'UTC')}, valid_from), greatest({at:DateTime64(3, 'UTC')}, updated_at + toIntervalMillisecond(1)) ` +
 	`FROM team_repo_ownership FINAL WHERE ` + jiraProjectAsTeamRepoOwnershipPredicate
 
+// jiraProjectAsTeamOldestCreated is the oldest creation evidence of each team
+// id over every stored version (not FINAL, which keeps only the newest): a
+// newest version with no created_at must not hide the time an older one holds.
+const jiraProjectAsTeamOldestCreated = `(SELECT org_id AS m_org, id AS m_id, min(coalesce(created_at, updated_at)) AS m_created ` +
+	`FROM teams WHERE org_id = {org_id:String} GROUP BY m_org, m_id)`
+
 const jiraProjectAsTeamDeactivateTeams = `INSERT INTO teams ` +
-	`(id, team_uuid, name, description, members, manual_members, project_keys, repo_patterns, is_active, updated_at, org_id, provider, native_team_key, parent_team_id, source_id) ` +
+	`(id, team_uuid, name, description, members, manual_members, project_keys, repo_patterns, is_active, updated_at, org_id, provider, native_team_key, parent_team_id, source_id, created_at) ` +
 	`SELECT id, team_uuid, name, description, members, manual_members, project_keys, repo_patterns, 0, ` +
-	`greatest({at:DateTime64(3, 'UTC')}, updated_at + toIntervalMillisecond(1)), org_id, provider, native_team_key, parent_team_id, source_id ` +
-	`FROM teams FINAL WHERE ` + jiraProjectAsTeamActivePredicate
+	`greatest({at:DateTime64(3, 'UTC')}, updated_at + toIntervalMillisecond(1)), org_id, provider, native_team_key, parent_team_id, source_id, m_created ` +
+	`FROM teams FINAL LEFT JOIN ` + jiraProjectAsTeamOldestCreated + ` AS m ON org_id = m.m_org AND id = m.m_id ` +
+	`WHERE ` + jiraProjectAsTeamActivePredicate
 
 // JiraProjectAsTeamRetireOutcome is counts only: no id, key or name of a team,
 // a project or an organization leaves the store through it.

@@ -878,6 +878,7 @@ type ComplexityRoot struct {
 		HasPriorData func(childComplexity int) int
 		Label        func(childComplexity int) int
 		Metric       func(childComplexity int) int
+		RateCoverage func(childComplexity int) int
 		RateState    func(childComplexity int) int
 		Spark        func(childComplexity int) int
 		Unit         func(childComplexity int) int
@@ -5541,6 +5542,13 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 		}
 
 		return e.complexity.MetricDelta.Metric(childComplexity), true
+
+	case "MetricDelta.rateCoverage":
+		if e.complexity.MetricDelta.RateCoverage == nil {
+			break
+		}
+
+		return e.complexity.MetricDelta.RateCoverage(childComplexity), true
 
 	case "MetricDelta.rateState":
 		if e.complexity.MetricDelta.RateState == nil {
@@ -10604,6 +10612,8 @@ type MetricDelta {
   spark: [SparkPoint!]!
   "Why change failure rate has a value or not (CHAOS-8981): measured (the value may be 0), unknown_no_incident_evidence (deployments, and no incident tied to the scope in the window) or not_applicable_no_deployments. Null when the window holds no stored counts, and for every other metric."
   rateState: String
+  "The coverage of the pull request rework ratio (CHAOS-9072), from 0 to 1, not a percent: the merged pull requests of the window that have review data from a provider that stores a changes-requested review, divided by all merged pull requests of the window that have stored counts. 0 when rateState is unknown_no_review_evidence or not_applicable_no_rework_signal. Null when the window has no merged pull request, when it holds no stored counts, and for every other metric."
+  rateCoverage: Float
 }
 
 type MetricLineage {
@@ -36512,6 +36522,8 @@ func (ec *executionContext) fieldContext_HomeResult_deltas(_ context.Context, fi
 				return ec.fieldContext_MetricDelta_spark(ctx, field)
 			case "rateState":
 				return ec.fieldContext_MetricDelta_rateState(ctx, field)
+			case "rateCoverage":
+				return ec.fieldContext_MetricDelta_rateCoverage(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type MetricDelta", field.Name)
 		},
@@ -40389,6 +40401,47 @@ func (ec *executionContext) fieldContext_MetricDelta_rateState(_ context.Context
 		IsResolver: false,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _MetricDelta_rateCoverage(ctx context.Context, field graphql.CollectedField, obj *model.MetricDelta) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_MetricDelta_rateCoverage(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.RateCoverage, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*float64)
+	fc.Result = res
+	return ec.marshalOFloat2ᚖfloat64(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_MetricDelta_rateCoverage(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MetricDelta",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Float does not have child fields")
 		},
 	}
 	return fc, nil
@@ -72563,6 +72616,8 @@ func (ec *executionContext) _MetricDelta(ctx context.Context, sel ast.SelectionS
 			}
 		case "rateState":
 			out.Values[i] = ec._MetricDelta_rateState(ctx, field, obj)
+		case "rateCoverage":
+			out.Values[i] = ec._MetricDelta_rateCoverage(ctx, field, obj)
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}

@@ -107,3 +107,46 @@ func TestRepositoryListOfEmptyStringsNamesNoRepository(t *testing.T) {
 		t.Errorf("repoScopeFilter = %q %v %v, want no condition", filter, bindings, err)
 	}
 }
+
+// D5863: a row bound hit is a stated state of its own, never an error that fails the
+// Home document, and never mistaken for a time bound (or the reverse).
+func TestRepoLinkedBoundsAreClassified(t *testing.T) {
+	for name, tc := range map[string]struct {
+		err  error
+		want string
+	}{
+		"time":            {errors.New("code: 159, message: Timeout exceeded (TIMEOUT_EXCEEDED)"), repoLinkTimedOut},
+		"rows (code 396)": {errors.New("code: 396, message: Limit for result exceeded, max rows: 1.00 thousand, current rows: 1.40 thousand"), repoLinkTooLarge},
+		"rows by name":    {errors.New("clickhouse: TOO_MANY_ROWS_OR_BYTES"), repoLinkTooLarge},
+		"another error":   {errors.New("code: 60, message: Table does not exist"), ""},
+	} {
+		if got := repoLinkBoundHit(tc.err); got != tc.want {
+			t.Errorf("%s: state %q, want %q", name, got, tc.want)
+		}
+	}
+}
+
+func TestRepoLinkedReadPastItsRowBoundSaysTooLarge(t *testing.T) {
+	client := fakeQueryClient{t: t, handler: func(t *testing.T, query string, bindings []dhclickhouse.Binding) (dhclickhouse.RowScanner, error) {
+		switch {
+		case strings.Contains(query, "FROM repos FINAL"):
+			return &fixtureRowScanner{rows: [][]any{{"11111111-1111-4111-8111-111111111111"}}}, nil
+		case strings.Contains(query, "link_repo_ids"):
+			if !strings.Contains(query, "max_result_rows = ") {
+				t.Errorf("a repo-linked statement carries no max_result_rows:\n%s", query)
+			}
+			return nil, errors.New("code: 396, message: Limit for result exceeded")
+		}
+		t.Fatalf("unexpected statement: %s", query)
+		return nil, nil
+	}}
+	start := time.Date(2026, 8, 18, 0, 0, 0, 0, time.UTC)
+	got, err := computeMetricDelta(context.Background(), client, metricSpecByName(t, "throughput"), start, start.AddDate(0, 0, 7), start.AddDate(0, 0, -7), start,
+		Filters{What: WhatFilter{Repos: []string{"acme/checkout"}}}, "org-1", start)
+	if err != nil {
+		t.Fatalf("a row bound is a state, not an error: %v", err)
+	}
+	if got.RepoLinkState == nil || *got.RepoLinkState != repoLinkTooLarge || got.HasData || got.Value != 0 {
+		t.Fatalf("delta = %+v, want too_large with no data", got)
+	}
+}

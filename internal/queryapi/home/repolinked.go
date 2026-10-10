@@ -46,7 +46,19 @@ const (
 	repoLinkLinked   = "linked"
 	repoLinkNoLinks  = "no_links"
 	repoLinkTimedOut = "timed_out"
+	// repoLinkTooLarge: the read returned more rows than the bound
+	// (RepoLinkedMaxResultRows): the four metrics have no data, the Home
+	// document is served.
+	repoLinkTooLarge = "too_large"
 )
+
+// RepoLinkedMaxResultRows is the ONE row bound of the repo-linked read, sent as a
+// per-statement setting (max_result_rows) so REST (whose client defaults to 1,000
+// rows) and GraphQL (500,000) read the same way. A repository's view holds one row
+// per linked item (about 11,000 on the largest organization measured); 200,000 is
+// far above that and below the GraphQL client's bound. Past it the read says
+// "too_large". A variable so a test can lower it.
+var RepoLinkedMaxResultRows uint64 = 200_000
 
 // repoLinkedMetrics are the metrics a repository filter scopes through links.
 var repoLinkedMetrics = map[string]bool{
@@ -82,10 +94,12 @@ type repoLinkedView struct {
 	rowsByDay map[time.Time][]workitemmetrics.MetricsDailyRow
 }
 
+// blockedItemRow is one (day, team) of the per-item blocked hours.
 type blockedItemRow struct {
 	Day      time.Time
 	TeamID   string
-	Duration float64
+	Duration float64 // the hours of the items with blocked hours that day
+	Positive int64   // how many items had blocked hours that day
 }
 
 // repoLinkedLoader loads the view once for the request, whichever of the four
@@ -144,24 +158,34 @@ func (loader *repoLinkedLoader) read(ctx context.Context) (*repoLinkedView, erro
 	}
 	view, err = loader.readLinked(ctx, view)
 	if err != nil {
-		if isRepoLinkTimeout(err) {
-			slog.Warn("home: repository-linked work-item read exceeded its budget",
-				"operation", "home.repo_linked_work_items", "org_id", loader.orgID,
-				"budget_seconds", repoLinkedMaxExecutionSeconds, "error", err)
-			return &repoLinkedView{state: repoLinkTimedOut}, nil
+		// A bound hit in this read degrades the four metrics only, never the whole
+		// Home document: a stated state, no data, never the unfiltered value.
+		if reason := repoLinkBoundHit(err); reason != "" {
+			slog.Warn("home: repository-linked work-item read hit a bound",
+				"operation", "home.repo_linked_work_items", "org_id", loader.orgID, "state", reason,
+				"max_execution_seconds", repoLinkedMaxExecutionSeconds, "max_result_rows", RepoLinkedMaxResultRows,
+				"repositories", len(loader.repoIDs), "error", err)
+			return &repoLinkedView{state: reason}, nil
 		}
 		return nil, err
 	}
 	return view, nil
 }
 
-func isRepoLinkTimeout(err error) bool {
-	var text = strings.ToLower(err.Error())
-	return strings.Contains(text, "timeout_exceeded") || strings.Contains(text, "code: 159") ||
-		errors.Is(err, context.DeadlineExceeded)
+// repoLinkBoundHit names the state of a read that hit its time bound (ClickHouse
+// code 159) or its row bound (code 396), "" for any other error.
+func repoLinkBoundHit(err error) string {
+	text := strings.ToLower(err.Error())
+	switch {
+	case strings.Contains(text, "timeout_exceeded") || strings.Contains(text, "code: 159") || errors.Is(err, context.DeadlineExceeded):
+		return repoLinkTimedOut
+	case strings.Contains(text, "too_many_rows_or_bytes") || strings.Contains(text, "code: 396") || strings.Contains(text, "limit for result exceeded"):
+		return repoLinkTooLarge
+	}
+	return ""
 }
 
-const repoLinkedSettings = "\nSETTINGS max_execution_time = %d"
+const repoLinkedSettings = "\nSETTINGS max_execution_time = %d, max_result_rows = %d"
 
 // linkedItemsSubquery is the item ids linked to the repositories' pull requests.
 const linkedItemsSubquery = `(SELECT work_item_id FROM work_graph_issue_pr FINAL
@@ -177,7 +201,7 @@ func (loader *repoLinkedLoader) bindings() []dhclickhouse.Binding {
 }
 
 func (loader *repoLinkedLoader) readLinked(ctx context.Context, view *repoLinkedView) (*repoLinkedView, error) {
-	budget := fmt.Sprintf(repoLinkedSettings, repoLinkedMaxExecutionSeconds)
+	budget := fmt.Sprintf(repoLinkedSettings, repoLinkedMaxExecutionSeconds, RepoLinkedMaxResultRows)
 
 	items, err := loader.readItems(ctx, budget)
 	if err != nil {
@@ -377,11 +401,13 @@ FROM (
 	return rows.Err()
 }
 
-// readBlocked reads the per-item blocked hours the work_item_state family stores
-// for the linked items, newest version of each (day, item).
+// readBlocked reads the blocked hours the work_item_state family stores per item
+// (newest version of each (day, item)), summed in ClickHouse per (day, team): one row
+// per day and team instead of one per item and day. positive counts the items with
+// blocked hours that day (a daily blocked row exists only where blocked hours do).
 func (loader *repoLinkedLoader) readBlocked(ctx context.Context, budget string) ([]blockedItemRow, error) {
 	rows, err := loader.client.Query(ctx, `
-SELECT day, team_id, duration_hours
+SELECT day, team_id, sum(duration_hours), toInt64(countIf(duration_hours > 0))
 FROM (
   SELECT day, provider, work_item_id, argMax(team_id, computed_at) AS team_id,
          argMax(duration_hours, computed_at) AS duration_hours
@@ -389,7 +415,8 @@ FROM (
   WHERE org_id = {org_id:String} AND day >= {win_start:Date} AND day < {win_end:Date}
     AND work_item_id IN `+linkedItemsSubquery+`
   GROUP BY day, provider, work_item_id
-)`+budget, loader.bindings())
+)
+GROUP BY day, team_id`+budget, loader.bindings())
 	if err != nil {
 		return nil, fmt.Errorf("home: repo-linked blocked: %w", err)
 	}
@@ -397,7 +424,7 @@ FROM (
 	var out []blockedItemRow
 	for rows.Next() {
 		var r blockedItemRow
-		if err := rows.Scan(&r.Day, &r.TeamID, &r.Duration); err != nil {
+		if err := rows.Scan(&r.Day, &r.TeamID, &r.Duration, &r.Positive); err != nil {
 			return nil, fmt.Errorf("home: repo-linked blocked scan: %w", err)
 		}
 		out = append(out, r)
@@ -466,7 +493,7 @@ func (view *repoLinkedView) aggregateLinkedWindow(metric string, from, to time.T
 			if r.Day.Before(from) || !r.Day.Before(to) || !teamOK(normalizeTeamID(r.TeamID)) {
 				continue
 			}
-			if r.Duration <= 0 {
+			if r.Positive <= 0 {
 				continue
 			}
 			rowCount++

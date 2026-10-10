@@ -185,9 +185,9 @@ func BuildResponse(ctx context.Context, reader *Reader, orgID string, params Par
 
 	var repoIDs []string
 	reposNamed := false
-	if params.ScopeLevel == "team" || params.ScopeLevel == "repo" {
+	reposNamed = len(teamscope.NamedRepoRefs(params.ScopeLevel, params.ScopeIDs, params.WhatRepos)) > 0
+	if teamscope.RepoScopeApplies(params.ScopeLevel, reposNamed) {
 		var err error
-		reposNamed = len(teamscope.NamedRepoRefs(params.ScopeLevel, params.ScopeIDs, params.WhatRepos)) > 0
 		repoIDs, err = reader.ResolveRepoFilterIDs(ctx, params.ScopeLevel, params.ScopeIDs, params.WhatRepos, orgID)
 		if err != nil {
 			return nil, err
@@ -296,9 +296,9 @@ func BuildSunburstResponse(ctx context.Context, reader *Reader, orgID string, pa
 
 	var repoIDs []string
 	reposNamed := false
-	if params.ScopeLevel == "team" || params.ScopeLevel == "repo" {
+	reposNamed = len(teamscope.NamedRepoRefs(params.ScopeLevel, params.ScopeIDs, params.WhatRepos)) > 0
+	if teamscope.RepoScopeApplies(params.ScopeLevel, reposNamed) {
 		var err error
-		reposNamed = len(teamscope.NamedRepoRefs(params.ScopeLevel, params.ScopeIDs, params.WhatRepos)) > 0
 		repoIDs, err = reader.ResolveRepoFilterIDs(ctx, params.ScopeLevel, params.ScopeIDs, params.WhatRepos, orgID)
 		if err != nil {
 			return nil, err

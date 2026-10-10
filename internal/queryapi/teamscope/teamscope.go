@@ -287,3 +287,14 @@ func ResolveRepoRefs(ctx context.Context, client RowQuerier, repoRefs []string, 
 	}
 	return resolved, nil
 }
+
+// RepoScopeApplies is the ONE gate of the surfaces that read a repository filter
+// (CHAOS-9104, D5844, D5900): the repository condition applies for a team or repo
+// scope (as the reference does) and, beyond it, whenever the request NAMES
+// repositories (teamscope.NamedRepoRefs) under any scope level: a repository
+// filter narrows under any scope, never widens. The reference gated by the scope
+// level alone, so an organization scope with what.repos was served unfiltered;
+// that divergence is declared at the surfaces that read this gate.
+func RepoScopeApplies(scopeLevel string, reposNamed bool) bool {
+	return scopeLevel == "team" || scopeLevel == "repo" || reposNamed
+}

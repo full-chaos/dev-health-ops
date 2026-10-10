@@ -146,7 +146,7 @@ func emptyInvestmentResponse() *sankey.Response {
 // clause, matching the fact every fetcher's own FROM projects a scalar/
 // fanned repo_id, never a team_id, column.
 func repoScopeFilterClause(ctx context.Context, client QueryClient, scopeLevel string, scopeIDs, whatRepos []string, orgID string, asOf time.Time) (string, []dhclickhouse.Binding, error) {
-	if scopeLevel != "team" && scopeLevel != "repo" {
+	if !teamscope.RepoScopeApplies(scopeLevel, len(teamscope.NamedRepoRefs(scopeLevel, scopeIDs, whatRepos)) > 0) {
 		return "", nil, nil
 	}
 	repoIDs, err := resolveRepoFilterIDs(ctx, client, scopeLevel, scopeIDs, whatRepos, orgID)

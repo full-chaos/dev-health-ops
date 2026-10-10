@@ -11,6 +11,7 @@ package investmentexplain
 import (
 	"context"
 	"errors"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
 	"log/slog"
 	"math"
 	"strings"
@@ -338,16 +339,14 @@ func (reader *Reader) ExplainInvestmentMix(ctx context.Context, writer *CacheWri
 		Themes:        themeFilters,
 		Subcategories: subcategoryFilters,
 	}
-	// RepoIDs is applied to the BREAKDOWN query only for team/repo scope,
-	// matching build_investment_response's own conditional
-	// (investment.py:175: `if filters.scope.level in {"team", "repo"}:`) --
-	// an org-scoped request with filters.what.repos set still resolves
-	// RepoIDs (for the unconditional work-unit query below, work_units.py:
-	// 253) but Python's breakdown query is NOT scoped by it in that case.
-	// A first draft applied opts.RepoIDs unconditionally here, over-filtering
-	// the breakdown for exactly that request shape -- caught by codex round 1
-	// (P1).
-	if opts.ScopeLevel == "team" || opts.ScopeLevel == "repo" {
+	// RepoIDs is applied to the BREAKDOWN query for a team or repo scope, as the
+	// reference does (investment.py:175: `if filters.scope.level in {"team",
+	// "repo"}:`), and, DIVERGING from it on purpose (CHAOS-9104, D5844, D5900), for
+	// any scope level when the request names repositories: an organization scope
+	// with filters.what.repos narrows the breakdown as it narrows the work units
+	// (work_units.py:253), which the reference left mixed-scope. One gate for every
+	// surface: teamscope.RepoScopeApplies.
+	if teamscope.RepoScopeApplies(opts.ScopeLevel, opts.ReposNamed) {
 		breakdownFilter.RepoIDs = opts.RepoIDs
 		breakdownFilter.ReposNamed = opts.ReposNamed
 		breakdownFilter.TeamScopeCondition = opts.TeamScopeCondition

@@ -123,7 +123,9 @@ func TestAccessLineAndMetricsForAKnownRouteCarryThePatternNeverThePath(t *testin
 	response := h.do(http.MethodGet, "/v1/items/item-7731?api_key="+canary, map[string]string{
 		"Authorization": "Bearer " + canary,
 		"Cookie":        "session=" + canary,
-		RequestIDHeader: "0b1b2c3d-0000-4000-8000-000000000000",
+		// A forwarded header is chosen by the client: it never becomes the peer.
+		"X-Forwarded-For": canary,
+		RequestIDHeader:   "0b1b2c3d-0000-4000-8000-000000000000",
 	})
 	if response.Code != http.StatusNoContent {
 		t.Fatalf("status = %d, want 204", response.Code)
@@ -136,6 +138,8 @@ func TestAccessLineAndMetricsForAKnownRouteCarryThePatternNeverThePath(t *testin
 	want := map[string]any{
 		"method": "GET", "route": "/v1/items/{id}", "status": float64(204),
 		"listener": "public", "request_id": "0b1b2c3d-0000-4000-8000-000000000000", "level": "INFO",
+		// httptest's RemoteAddr is 192.0.2.1:1234: the host part only, no port.
+		"peer": "192.0.2.1",
 	}
 	for key, value := range want {
 		if line[key] != value {
@@ -146,7 +150,7 @@ func TestAccessLineAndMetricsForAKnownRouteCarryThePatternNeverThePath(t *testin
 		t.Errorf("duration_ms = %v, want a non-negative number", line["duration_ms"])
 	}
 	allowed := map[string]bool{"time": true, "level": true, "msg": true, "method": true, "route": true,
-		"status": true, "duration_ms": true, "listener": true, "request_id": true}
+		"status": true, "duration_ms": true, "listener": true, "request_id": true, "peer": true}
 	for key := range line {
 		if !allowed[key] {
 			t.Errorf("access line carries unexpected field %q", key)

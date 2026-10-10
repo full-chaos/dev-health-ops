@@ -87,6 +87,13 @@ func TestRESTHomeSaysWhetherTheRepositoryFilterNarrowedEachMetric(t *testing.T) 
 	check("repository scope", read("&scope_type=repo&scope_id="+url.QueryEscape(repo.String())), &yes, &no)
 	// Repositories named in what.repos (POST body) behave the same.
 	check("what.repos", postDeltas(t, client, org, `{"filters":{"what":{"repos":["`+repo.String()+`"]},"time":{"range_days":7,"compare_days":7,"end_date":"2026-08-25"}}}`), &yes, &no)
+	// A team scope that also names a repository which resolves to nothing keeps the team's own
+	// repositories (the empty match is only for refs that resolve to nothing and no team condition).
+	withTeam := postDeltas(t, client, org, `{"filters":{"scope":{"level":"team","ids":["team-one"]},"what":{"repos":["`+uuid.New().String()+`"]},"time":{"range_days":7,"compare_days":7,"end_date":"2026-08-25"}}}`)
+	check("team scope and an unresolved repository", withTeam, &yes, &no)
+	if d := withTeam["churn"]; d.HasData == nil || !*d.HasData || d.Value != 5 {
+		t.Errorf("team scope and an unresolved repository: churn has_data %s value %v, want the team's repository: data and 5", flag(d.HasData), d.Value)
+	}
 	// A repository that resolves to nothing: the filter was applied and found nothing, so the
 	// repository metrics are narrowed (true) AND have no data; they never serve the unfiltered
 	// value. The team-keyed metrics are not narrowed (false) and keep their value.

@@ -48,19 +48,19 @@ var unruledReads = map[string]string{
 		"(fetchRetractedTeamDays reads the days that hold a team of retraction rows only, applyRetractedTeamDays replaces them)",
 	"internal/queryapi/cognitiveload/cognitiveload.go:fetchRepoScopedTeamMetrics": "SQL pinned by the frozen golden; the rule is applied in Go after the read " +
 		"(fetchRetractedRepoDays reads the days whose newest rows hold no measurement, and they are dropped)",
-	"internal/queryapi/cognitiveload/cognitiveload.go:fetchTeamCognitiveLoad": "reads ONE team id the caller names, with SQL pinned by the frozen golden; " +
-		"the row read does not hold the counts, so a retraction row of that id cannot be told in Go from a measured day with no load",
-	"internal/queryapi/aggflame/clickhouse.go:fetchCycleBreakdown":           "sums of hours and items by status: a retraction row adds 0",
-	"internal/queryapi/home/queries_freshness.go:fetchReworkThemeAllocation": "sums by investment theme: a retraction row adds 0",
-	"internal/queryapi/sankey/queries.go":                                    "sums by status and by expense class: a retraction row adds 0, and its status is the status of the row it retracts",
-	"internal/queryapi/filteroptions/filteroptions.go":                       "distinct statuses and issue types: a retraction row holds the status or type of the row it retracts, never a new value",
-	"internal/queryapi/capacityforecast/clickhouse.go": "sums of completed items by day and of the newest-day WIP of each key: a retraction row adds 0 " +
-		"(it must stay in the newest-day pick, so that a retracted key gives 0 and not its older backlog)",
-	"internal/queryapi/throughputforecast/clickhouse.go": "sums by day, means of day sums, and Nullable means over the newest-day row of each key: " +
-		"a retraction row adds 0, its Nullable measures are NULL, and it must stay in the newest-day pick",
-	"internal/jobs/metrics/remaining/capacity_native_clickhouse.go:loadThroughput": "sum of completed items by day: a retraction row adds 0",
-	"internal/jobs/metrics/remaining/capacity_native_clickhouse.go:loadBacklog":    "sum of the WIP on the newest day of the scope: a retraction row adds 0 and must stay in the newest-day pick",
-	"internal/jobs/metrics/remaining/recommendations_loader.go":                    "reads of ONE team id the job already evaluates: sums and Nullable means of the newest rows",
+	"internal/queryapi/filteroptions/filteroptions.go": "distinct statuses and issue types: a retraction row holds the status or type of the row it retracts, never a new value",
+	"internal/queryapi/cognitiveload/cognitiveload.go:fetchTeamCognitiveLoad": "SQL pinned by the frozen golden; the rule is applied in Go after the read " +
+		"(fetchRetractedLoadDays reads the days whose newest row is a retraction row, and they are dropped)",
+	"internal/queryapi/sankey/queries.go:fetchExpenseCounts": "three sums over the whole scope, one row, no list: a retraction row adds 0",
+	"internal/queryapi/capacityforecast/clickhouse.go:loadBacklog": "sum of the WIP on the newest day of each key: a retraction row must stay the newest row of its key " +
+		"(so a retracted key gives 0 and not its older backlog) and adds 0; the sum of no row is 0 as well",
+	"internal/queryapi/throughputforecast/clickhouse.go:loadBacklog": "sum of the WIP on the newest day of each key: a retraction row must stay the newest row of its key and adds 0; " +
+		"the sum of no row is 0 as well",
+	"internal/queryapi/throughputforecast/clickhouse.go:loadStaleWIP": "Nullable means over the newest-day row of each key, NULL rows left out: " +
+		"a retraction row must stay the newest row of its key, and it holds NULL",
+	"internal/jobs/metrics/remaining/recommendations_loader.go:loadCompoundingRiskPersisted": "the newest row of ONE team over the window, whole: a retraction row is that row, " +
+		"and it reads as the read answers for no row at all (no score, severity unknown)",
+	"internal/jobs/metrics/remaining/capacity_native_clickhouse.go:loadBacklog": "sum of the WIP on the newest day of the scope: a retraction row adds 0 and must stay in the newest-day pick",
 }
 
 // heldBy names, for an unruledReads entry whose reason is "the rule reaches
@@ -71,6 +71,7 @@ var heldBy = map[string]string{
 	"internal/queryapi/home/queries_signals.go:compoundingRiskSQLBase":            "fetchRiskSignals",
 	"internal/queryapi/analytics/timeseries.go:investmentMetricsDailyNewestRows":  "investmentMetricsDailyDedupSource",
 	"internal/queryapi/cognitiveload/cognitiveload.go:fetchTeamMetrics":           "retractedTeamDaysQuery",
+	"internal/queryapi/cognitiveload/cognitiveload.go:fetchTeamCognitiveLoad":     "retractedLoadDaysQuery",
 	"internal/queryapi/cognitiveload/cognitiveload.go:fetchRepoScopedTeamMetrics": "retractedRepoDaysQuery",
 }
 

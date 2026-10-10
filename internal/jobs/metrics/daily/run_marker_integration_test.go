@@ -961,6 +961,17 @@ func TestRunMarkerRunScopeIsRecordedAtCreation(t *testing.T) {
 	if !scope(fanout.ID) || scope(listed) || !scope(free) {
 		t.Fatalf("full_org: fan-out=%v listed=%v list-free=%v, want true false true", scope(fanout.ID), scope(listed), scope(free))
 	}
+	// LoadRun carries the scope: the end of a run reads it there to decide how
+	// far its retraction of stale team keys goes.
+	for runID, want := range map[string]bool{fanout.ID: true, listed: false, free: true} {
+		stored, err := stack.store.LoadRun(ctx, runID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if stored.FullOrg != want {
+			t.Errorf("LoadRun of a run stored with full_org = %v gives FullOrg = %v", want, stored.FullOrg)
+		}
+	}
 }
 
 // Lock order (vet 1 P2): every marker path takes the (org, day) advisory lock

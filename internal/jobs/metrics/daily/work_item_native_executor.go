@@ -178,6 +178,12 @@ func primaryAttributionsOf(attributions map[string]workItemPrimaryAttribution) m
 type workItemPartitionScope struct {
 	day, start, end time.Time
 	repoIDs         []uuid.UUID
+	// everyRepository is the scope of the end of an organization-wide run:
+	// the work scopes are read from every work item of the organization for
+	// the day, not through repoIDs. A run of the whole organization owns the
+	// whole day, and a work scope that no listed repository reaches is its
+	// too.
+	everyRepository bool
 }
 
 // wrapWorkItemPartialWrite is the partial-write rule of the families that

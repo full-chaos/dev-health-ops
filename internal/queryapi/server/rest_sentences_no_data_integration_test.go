@@ -233,18 +233,36 @@ func TestRESTHomeDrivenByNamesOnlyDriversWithAMeasuredDelta(t *testing.T) {
 	}
 	currentOnly := uuid.New()
 	seed(org, currentOnly, current, 900)
+	// Every repository holds a name; the sentence names the drivers by NAME, never
+	// by uuid (CHAOS-9046).
+	nameRepo := func(org string, repo uuid.UUID, name string) {
+		t.Helper()
+		at := time.Date(2026, 8, 26, 0, 0, 0, 0, time.UTC)
+		if err := conn.Exec(context.Background(),
+			`INSERT INTO repos (id, repo, created_at, last_synced, org_id, provider) VALUES (?, ?, ?, ?, ?, 'github')`,
+			repo, name, at, at, org); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for i, repo := range measured {
+		nameRepo(org, repo, fmt.Sprintf("acme/measured-%d", i))
+	}
+	nameRepo(org, currentOnly, "acme/current-only")
 	sentence := churnSentence(org)
-	if strings.Contains(sentence, currentOnly.String()) {
+	if strings.Contains(sentence, "current-only") || strings.Contains(sentence, currentOnly.String()) {
 		t.Errorf("the sentence names the repository with no comparison row as a driver: %s", sentence)
 	}
 	named := 0
-	for _, repo := range measured {
-		if strings.Contains(sentence, repo.String()) {
+	for i, repo := range measured {
+		if strings.Contains(sentence, fmt.Sprintf("acme/measured-%d", i)) {
 			named++
+		}
+		if strings.Contains(sentence, repo.String()) {
+			t.Errorf("the sentence prints the repository uuid %s: %s", repo, sentence)
 		}
 	}
 	if named != 3 {
-		t.Errorf("the sentence names %d of the measured repositories, want the 3 the lookup limit allows: %s", named, sentence)
+		t.Errorf("the sentence names %d of the measured repositories by name, want the 3 the lookup limit allows: %s", named, sentence)
 	}
 
 	// No driver has a delta: every repository with a current value has no

@@ -286,9 +286,19 @@ func (r *queryResolver) Home(ctx context.Context, orgID string, filters *model.F
 		return nil, fmt.Errorf("home: postgres client does not support QueryRow")
 	}
 
-	resp, err := home.BuildResponse(ctx, r.ClickHouse, pgClient, authorizedOrgID, homeFiltersFromGraphQL(filters, window), time.Now().UTC())
+	now := time.Now().UTC()
+	homeFilters := homeFiltersFromGraphQL(filters, window)
+	resp, err := home.BuildResponse(ctx, r.ClickHouse, pgClient, authorizedOrgID, homeFilters, now)
 	if err != nil {
 		return nil, fmt.Errorf("home: %w", err)
+	}
+	// The reason for an empty filter combination costs its own reads: a
+	// document that does not select filterEmptyReason does not make them, so
+	// it does not depend on them (CHAOS-9098).
+	if homeFieldSelected(ctx, "filterEmptyReason") {
+		if err := home.AttachFilterEmptyReason(ctx, r.ClickHouse, resp, authorizedOrgID, homeFilters, now); err != nil {
+			return nil, fmt.Errorf("home: %w", err)
+		}
 	}
 	return homeResultFromResponse(resp), nil
 }

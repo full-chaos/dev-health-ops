@@ -1,0 +1,47 @@
+//go:build integration
+
+package home
+
+import (
+	"context"
+
+	"testing"
+	"time"
+)
+
+// PROD DEFECT (pin 32 step A): Home with a team AND a repository the team holds answered 503,
+// "Cannot compare UUID with String" (ClickHouse code 169) in the metric-value query. The
+// statement is built by repoScopeFilter and run on the REAL migrated schema, where repo_id is a
+// UUID column, for every repository-keyed metric.
+func TestHomeWithATeamAndARepositoryTheTeamHoldsRunsOnTheRealSchema(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+	admin, client := newHomeTestClickHouse(ctx, t)
+	const org = "org-hot-team-repo"
+	const repoA = "11111111-1111-4111-8111-11111111aaaa"
+	day := time.Date(2026, 8, 3, 0, 0, 0, 0, time.UTC)
+	synced := time.Date(2026, 8, 4, 0, 0, 0, 0, time.UTC)
+	exec := func(statement string, args ...any) {
+		t.Helper()
+		if err := admin.Exec(ctx, statement, args...); err != nil {
+			t.Fatalf("seed: %v\n%s", err, statement)
+		}
+	}
+	exec(`INSERT INTO repos (id, repo, provider, org_id, created_at, last_synced) VALUES (?, 'acme/a', 'github', ?, ?, ?)`, repoA, org, synced, synced)
+	exec(`INSERT INTO team_repo_ownership (org_id, provider, team_id, repo_id, repo_full_name, match_type, source, is_primary, specificity, priority, valid_from, valid_to, updated_at) VALUES (?, 'github', 'team-alpha', ?, 'acme/a', 'exact', 'inferred', 0, 0, 0, ?, NULL, ?)`,
+		org, repoA, time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), synced)
+	exec(`INSERT INTO repo_metrics_daily (repo_id, day, total_loc_touched, prs_merged, computed_at, org_id) VALUES (?, ?, 100, 5, ?, ?)`, repoA, day, synced, org)
+	// A statement only fails on the UUID/String comparison when its table holds data (the key
+	// condition is analysed over the parts): one row in every repository-keyed metric table.
+	for _, table := range []string{"deploy_metrics_daily", "cicd_metrics_daily", "repo_change_failure_daily"} {
+		exec(`INSERT INTO `+table+` (repo_id, day, computed_at, org_id) VALUES (?, ?, ?, ?)`, repoA, day, synced, org)
+	}
+	f := Filters{
+		Time:  TimeFilter{RangeDays: 7, CompareDays: 7, EndDate: ptrTime(day.AddDate(0, 0, 3))},
+		Scope: ScopeFilter{Level: "team", IDs: []string{"team-alpha"}},
+		What:  WhatFilter{Repos: []string{repoA}},
+	}
+	if _, err := BuildResponse(ctx, client, nil, org, f, day.AddDate(0, 0, 3).Add(12*time.Hour)); err != nil {
+		t.Fatalf("BuildResponse with a team and a repository the team holds: %v", err)
+	}
+}

@@ -11,6 +11,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/daily"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/daily/repouser"
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/prrework"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/workitemmetrics"
 )
 
@@ -21,7 +22,7 @@ import (
 //
 //	mean of a nullable column   review_latency (no reviewed pull request)
 //	                            cycle_time     (no completed item)
-//	weighted ratio, zero weight pr_rework_ratio (no merged pull request)
+//	ratio of summed counts      pr_rework_ratio (no reviewed pull request)
 //
 // A sum over the same rows is a stored 0 and stays a measured 0 (churn,
 // throughput): missing and zero are different answers.
@@ -45,7 +46,8 @@ func TestHomeMetricOverRowsWithNoValueIsNoDataNotAMeasuredZero(t *testing.T) {
 	// touched. Day two: values for every metric.
 	if _, _, _, err := writer.WriteResult(ctx, repouser.Result{RepoMetrics: []repouser.RepoMetric{
 		{RepoID: repo, Day: empty, CommitsCount: 1, ComputedAt: computedAt},
-		{RepoID: repo, Day: valued, CommitsCount: 1, TotalLOCTouched: 40, PRsMerged: 4, PRReworkRatio: 0.25, PRFirstReviewP50Hours: hours(3), ComputedAt: computedAt},
+		{RepoID: repo, Day: valued, CommitsCount: 1, TotalLOCTouched: 40, PRsMerged: 4, PRReworkRatio: 0.25,
+			PRRework: &prrework.Counts{Merged: 4, Reviewed: 4, Rework: 1}, PRFirstReviewP50Hours: hours(3), ComputedAt: computedAt},
 	}}, orgID); err != nil {
 		t.Fatal(err)
 	}

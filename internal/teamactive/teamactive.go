@@ -4,9 +4,14 @@
 // member to it.
 //
 // A team is set inactive when it is replaced (a carry of a bare id to a
-// provider-keyed id), retired at the provider, or deleted by an admin. Its
-// rows stay in the teams table, so a resolver that reads the table without
-// this rule goes on resolving to an id that no reader shows.
+// provider-keyed id) or retired at the provider. Its rows stay in the teams
+// table, so a resolver that reads the table without this rule goes on
+// resolving to an id that no reader shows.
+//
+// A team an admin DELETES has no row any more (the delete removes its rows),
+// so it is not in the set of inactive ids: an id with no row in teams reads
+// as active here. A caller that holds stored ids of such a team gets no help
+// from this rule.
 //
 // The work-item cascade (teamattribution.dropInactiveTeamCandidates) uses the
 // same test of the newest row (NewestRowInactive). The repository and member

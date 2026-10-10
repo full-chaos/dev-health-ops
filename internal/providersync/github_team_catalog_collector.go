@@ -348,6 +348,12 @@ func (adapter GitHubTeamCatalogCollector) CollectTeamCatalog(
 		result.MembershipsSkippedManualConflict = membershipsSkippedManualConflict
 		result.MembershipsStagedForReview = membershipsStagedForReview
 		if len(keptMemberships) > 0 {
+			// CHAOS-9007: a membership keeps the valid_from it was first seen with.
+			var reuseErr error
+			keptMemberships, reuseErr = reuseGitHubMembershipFirstSeen(ctx, adapter.Sink.Conn, ref.OrgID, keptMemberships)
+			if reuseErr != nil {
+				return result, reuseErr
+			}
 			if err := adapter.Sink.WriteMemberships(ctx, ref.OrgID, keptMemberships); err != nil {
 				return result, err
 			}

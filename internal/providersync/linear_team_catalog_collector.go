@@ -161,6 +161,11 @@ func (collector LinearTeamCatalogCollector) CollectTeamCatalog(
 		// table never disagree about which assignments are safe.
 		result.MembershipsSkippedManualConflict = membershipsSkippedManualConflict
 		result.MembershipsStagedForReview = membershipsStagedForReview
+		// CHAOS-9007: a membership keeps the valid_from it was first seen with.
+		keptMemberships, err := reuseLinearMembershipFirstSeen(ctx, collector.Sink.Conn, ref.OrgID, keptMemberships)
+		if err != nil {
+			return result, err
+		}
 		membershipsEffect, err := effectBatchFromValues(linearReferenceCatalogMembershipsDestination, EffectReadbackRequired, keptMemberships)
 		if err != nil {
 			return result, err

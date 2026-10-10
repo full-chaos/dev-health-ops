@@ -6,6 +6,8 @@ import (
 	"time"
 
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
+
+	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse/liverow"
 )
 
 const dateLayout = "2006-01-02"
@@ -73,6 +75,12 @@ type cycleBreakdownRow struct {
 // BY the full ReplacingMergeTree sort key, matching internal/
 // operatingreview's fetchStateDurations exactly for this same table (see
 // this package's own doc comment).
+//
+// One difference from Python: a key whose newest row holds no measure (a
+// retraction row, package liverow) is left out. It adds 0 to the two sums, but
+// the result is a LIST of statuses, and a status whose keys in scope are all
+// retraction rows (a retired team id) has no data: it is not a status with 0
+// hours.
 func fetchCycleBreakdown(ctx context.Context, client QueryClient, orgID string, startDay, endDay time.Time, teamID, provider, workScopeID string) ([]cycleBreakdownRow, error) {
 	filter := ""
 	bindings := []dhclickhouse.Binding{
@@ -112,6 +120,7 @@ func fetchCycleBreakdown(ctx context.Context, client QueryClient, orgID string, 
               AND day >= {start_day:Date}
               AND day < {end_day:Date}` + filter + `
             GROUP BY day, provider, work_scope_id, team_id, status
+            HAVING ` + liverow.NewestPredicate("work_item_state_durations_daily", "") + `
         )
         GROUP BY status
         ORDER BY total_hours DESC

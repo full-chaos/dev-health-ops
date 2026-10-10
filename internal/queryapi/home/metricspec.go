@@ -1,6 +1,9 @@
 package home
 
-import "github.com/full-chaos/dev-health-ops/internal/jobs/metrics/changefailure"
+import (
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/changefailure"
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/prrework"
+)
 
 // metricSpec ports one entry of _METRICS (services/home.py:63-174).
 type metricSpec struct {
@@ -31,7 +34,11 @@ var metrics = []metricSpec{
 	// never an average of daily ratios. See changefailure.WindowRateSQL.
 	{Metric: "change_failure_rate", Label: "Change Failure Rate", Unit: "%", Table: changefailure.Table, Column: "change_failure_rate", Aggregator: "ratio", Transform: percentTransform, Scope: "repo"},
 	{Metric: "rework_ratio", Label: "Rework Ratio", Unit: "%", Table: "repo_metrics_daily", Column: "rework_churn_ratio_30d", Aggregator: "avg", Transform: percentTransform, Scope: "repo"},
-	{Metric: "pr_rework_ratio", Label: "PR Rework Ratio", Unit: "%", Table: "repo_metrics_daily", Column: "pr_rework_ratio", Aggregator: "avg", Transform: percentTransform, Scope: "repo"},
+	// Over reviewed pull requests only: a ratio of the window's summed
+	// counts, never an average of daily ratios, and no value when nothing was
+	// reviewed. See prrework.WindowRateSQL. Column names the metric; the
+	// stored ratio of that name is deprecated and not read.
+	{Metric: "pr_rework_ratio", Label: "PR Rework Ratio", Unit: "%", Table: prrework.Table, Column: prrework.DeprecatedRatioColumn, Aggregator: "ratio", Transform: percentTransform, Scope: "repo"},
 	{Metric: "ci_success", Label: "CI Success Rate", Unit: "%", Table: "cicd_metrics_daily", Column: "success_rate", Aggregator: "avg", Transform: percentTransform, Scope: "repo"},
 }
 

@@ -92,6 +92,36 @@ func TestEveryRegistryTableHasARuleOrAReason(t *testing.T) {
 	}
 }
 
+// TestColumnsAreTheColumnsOfThePredicate holds Columns against the text of
+// the two predicate forms: each column it names is tested there, and the
+// predicates test no other column.
+func TestColumnsAreTheColumnsOfThePredicate(t *testing.T) {
+	tested := regexp.MustCompile(`q\.([a-z_0-9]+)`)
+	for _, table := range Tables() {
+		want := map[string]bool{}
+		for _, column := range Columns(table) {
+			if want[column] {
+				t.Errorf("%s: Columns names %s two times", table, column)
+			}
+			want[column] = true
+		}
+		if len(want) == 0 {
+			t.Errorf("%s: Columns is empty", table)
+		}
+		for form, predicate := range map[string]string{"Predicate": Predicate(table, "q"), "NewestPredicate": NewestPredicate(table, "q")} {
+			got := map[string]bool{}
+			for _, match := range tested.FindAllStringSubmatch(predicate, -1) {
+				if match[1] != "computed_at" {
+					got[match[1]] = true
+				}
+			}
+			if !reflect.DeepEqual(got, want) {
+				t.Errorf("%s: %s tests the columns %v, Columns gives %v", table, form, got, want)
+			}
+		}
+	}
+}
+
 func TestATableWithNoRulePanics(t *testing.T) {
 	for _, table := range []string{
 		"repo_metrics_daily", // not a team-keyed table
@@ -102,6 +132,7 @@ func TestATableWithNoRulePanics(t *testing.T) {
 		}
 		for name, call := range map[string]func(){
 			"Predicate":       func() { Predicate(table, "") },
+			"Columns":         func() { Columns(table) },
 			"NewestPredicate": func() { NewestPredicate(table, "") },
 		} {
 			func() {

@@ -537,12 +537,169 @@ const registeredOperatingReviewV1Document = `query OperatingReview($orgId: Strin
 // new field got a 404 digest-miss even though queryResolver.Home mapped
 // it correctly. So this selection set is exhaustive per type.
 //
-// One line is NOT a capture: `rateState` in deltas (the state of change
-// failure rate). The web does not select it yet and sends the V4 text
-// below; the line is here because a field no registered text selects is
-// unreachable. The web's real capture wins over this text if they differ
-// when the web selects the field (testdata/wire_capture/README.md).
+// Two lines are NOT a capture: `rateState` in deltas (the state of a rate
+// that is a ratio of stored counts) and `rateCoverage` after it (the coverage
+// of the pull request rework ratio). The web selects neither yet and sends
+// the V4 text below; the lines are here because a field no registered text
+// selects is unreachable. The web's real capture wins over this text if they
+// differ when the web selects the fields (testdata/wire_capture/README.md).
 const registeredHomeDocument = `query Home($orgId: String!, $filters: FilterInput, $window: HomeWindowInput) {
+  home(orgId: $orgId, filters: $filters, window: $window) {
+    freshness {
+      lastIngestedAt
+      latestSuccessfulSyncAt
+      sources {
+        provider
+        status
+        __typename
+      }
+      coverage {
+        reposCoveredPct
+        prsLinkedToIssuesPct
+        issuesWithCycleStatesPct
+        __typename
+      }
+      __typename
+    }
+    deltas {
+      metric
+      label
+      value
+      unit
+      deltaPct
+      hasData
+      hasPriorData
+      spark {
+        ts
+        value
+        __typename
+      }
+      rateState
+      rateCoverage
+      __typename
+    }
+    reworkThemeAllocation {
+      theme
+      label
+      allocation
+      allocationPct
+      prsMerged
+      churnLoc
+      __typename
+    }
+    summary {
+      id
+      text
+      evidenceLink
+      __typename
+    }
+    tiles {
+      key
+      value {
+        title
+        subtitle
+        link
+        __typename
+      }
+      __typename
+    }
+    constraint {
+      title
+      claim
+      evidence {
+        label
+        link
+        __typename
+      }
+      experiments
+      __typename
+    }
+    events {
+      ts
+      type
+      text
+      link
+      __typename
+    }
+    healthState {
+      status
+      headline
+      summary
+      asOf
+      __typename
+    }
+    signals {
+      id
+      title
+      metric
+      currentValue
+      priorValue
+      delta
+      direction
+      severity
+      confidence
+      affectedScope
+      evidenceCount
+      whyItMatters
+      recommendedAction
+      evidenceRef
+      category
+      scopeEntity {
+        id
+        displayName
+        __typename
+      }
+      attribution {
+        items
+        sources {
+          source
+          items
+          share
+          __typename
+        }
+        confidence {
+          confidence
+          items
+          share
+          __typename
+        }
+        __typename
+      }
+      __typename
+    }
+    limitingFactor {
+      claim
+      whyItMatters
+      recommendedAction
+      confidence
+      evidenceRef
+      __typename
+    }
+    dataConfidence {
+      level
+      coveragePct
+      connectedSources
+      missingSources
+      caveats
+      __typename
+    }
+    scopeDataConfidence {
+      level
+      coveragePct
+      lastIngestedAt
+      caveats
+      __typename
+    }
+    __typename
+  }
+}`
+
+// registeredHomeV5Document is the Home text from before CHAOS-9072 added
+// MetricDelta.rateCoverage: the V4 text plus `rateState`. It was the current
+// registered text and no capture, so a client can have been built against it;
+// it stays a legacy text so such a client remains accepted. Its fixture is
+// testdata/wire_capture/home_v5_captured.graphql.
+const registeredHomeV5Document = `query Home($orgId: String!, $filters: FilterInput, $window: HomeWindowInput) {
   home(orgId: $orgId, filters: $filters, window: $window) {
     freshness {
       lastIngestedAt
@@ -4985,7 +5142,7 @@ var legacyDigestsByOperation = map[string][]string{
 	"capacityForecast":      {digestHex(registeredCapacityForecastV1Document), digestHex(registeredCapacityForecastV2Document)},
 	"coverageScopeBaseline": {digestHex(registeredCoverageScopeBaselineV1Document)},
 	"hotspots":              {digestHex(registeredHotspotsV1Document)},
-	"home":                  {digestHex(registeredHomeV1Document), digestHex(registeredHomeV2Document), digestHex(registeredHomeV3Document), digestHex(registeredHomeV4Document)},
+	"home":                  {digestHex(registeredHomeV1Document), digestHex(registeredHomeV2Document), digestHex(registeredHomeV3Document), digestHex(registeredHomeV4Document), digestHex(registeredHomeV5Document)},
 	"improveOpportunities":  {digestHex(registeredImproveOpportunitiesV1Document), digestHex(registeredImproveOpportunitiesV2Document)},
 	"operatingReview":       {digestHex(registeredOperatingReviewV1Document), digestHex(registeredOperatingReviewV2Document), digestHex(registeredOperatingReviewV3Document)},
 	"reviewEdges":           {digestHex(registeredReviewEdgesV1Document)},

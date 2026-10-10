@@ -11,6 +11,8 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/changefailure"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/daily/repouser"
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/prrework"
+	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 )
 
 // repoUserCommitWindowDays mirrors job_daily.py's h_start_date = d - timedelta(days=29):
@@ -160,6 +162,30 @@ func (executor *RepoUserCommitExecutor) ComputeFamily(
 		mttrByRepo, reworkByRepo, singleOwnerByRepo, busFactorByRepo, giniByRepo,
 	)
 	repouser.ApplyChangeFailure(&result, dayStart, changeFailure, storedChangeFailure, computedAt)
+	// The rework ratio counts reviewed pull requests only, and only of a
+	// provider that can store a changes-requested review. That capability is
+	// the provider layer's declaration, asked for each repository's provider;
+	// no provider is named here.
+	repoProviders, err := LoadRepoProviders(ctx, executor.conn, run.OrganizationID, repoIDs)
+	if err != nil {
+		return 0, err
+	}
+	reworkSignal := make(map[uuid.UUID]bool, len(repoProviders))
+	for repoID, provider := range repoProviders {
+		reworkSignal[repoID] = providerfoundation.EmitsPullRequestReviewState(provider, providerfoundation.ReviewStateChangesRequested)
+	}
+	repouser.ApplyPRRework(&result, dayStart, prs, reworkSignal)
+	var reworkTotal prrework.Counts
+	for _, row := range result.RepoMetrics {
+		if row.PRRework != nil {
+			reworkTotal = reworkTotal.Add(*row.PRRework)
+		}
+	}
+	slog.Default().DebugContext(ctx, "metrics daily: pull request rework counts",
+		"org_id", run.OrganizationID, "day", dayStart.Format(time.DateOnly), "partition_id", partition.ID,
+		"repositories", len(result.RepoMetrics), "repositories_with_provider", len(repoProviders),
+		"merged", reworkTotal.Merged, "reviewed", reworkTotal.Reviewed, "rework", reworkTotal.Rework,
+		"no_rework_signal", reworkTotal.NoSignal)
 
 	repoRows, userRows, commitRows, err := executor.writer.WriteResult(ctx, result, run.OrganizationID)
 	if err != nil {

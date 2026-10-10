@@ -98,6 +98,14 @@ func TestSnapshotKindCensus(t *testing.T) {
 	}
 }
 
+// stampOnlySnapshotPlanners call the snapshot rule for the valid_from stamps of
+// the rows a run holds again, and for nothing else: no kind, no retraction.
+// They are not close sites, and the census checks that they are not.
+var stampOnlySnapshotPlanners = map[string]string{
+	"internal/providersync.firstSeenMembershipValidFrom": "reuses the earliest open valid_from of a membership fact the run holds " +
+		"again (CHAOS-9007, membership_first_seen.go); it passes no KindSnapshot and closes nothing",
+}
+
 // TestEveryCloseSiteTakesTheTypedSnapshot fails when a function closes rows
 // from a snapshot without the typed per-kind proof: a new close site, a close
 // site that goes back to a bool, a close that does not come from the rule, or
@@ -140,9 +148,30 @@ func TestEveryCloseSiteTakesTheTypedSnapshot(t *testing.T) {
 	}
 	// Every caller of the rule is a close site: nobody plans a snapshot and
 	// drops the plan, or closes through another path.
+	// ...unless it is NAMED as a stamp-only planner: it calls the rule for the
+	// valid_from stamps alone, passes no kind, turns no retraction into a row
+	// and sets no valid_to. What that means is checked, not trusted.
 	for _, planner := range census.planners {
-		if !census.closes[planner] {
-			t.Errorf("%s calls the snapshot rule and is not a close site", planner)
+		reason, stampOnly := stampOnlySnapshotPlanners[planner]
+		switch {
+		case stampOnly:
+			if strings.TrimSpace(reason) == "" {
+				t.Errorf("%s is named in stampOnlySnapshotPlanners and gives no reason", planner)
+			}
+			if census.closes[planner] || census.setsValidTo[planner] || census.takesKind[planner] {
+				t.Errorf("%s is named in stampOnlySnapshotPlanners and closes rows or takes a kind: it is a close site, name it in snapshotCloseSites", planner)
+			}
+		case !census.closes[planner]:
+			t.Errorf("%s calls the snapshot rule and is not a close site (a planner that only reuses stamps is named in stampOnlySnapshotPlanners)", planner)
+		}
+	}
+	for planner := range stampOnlySnapshotPlanners {
+		known := false
+		for _, candidate := range census.planners {
+			known = known || candidate == planner
+		}
+		if !known {
+			t.Errorf("stampOnlySnapshotPlanners names %s, which does not call the snapshot rule", planner)
 		}
 	}
 	// A row's valid_to is set from a plan's retraction, in a close site.

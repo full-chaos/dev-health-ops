@@ -36,6 +36,7 @@ func TestExplainOmitsGroupsWithNoDataOnBothSides(t *testing.T) {
 	ins("tm-nodata-both", prev, nil)
 	ins("tm-prior-only", cur, nil) // value only in the comparison window
 	ins("tm-prior-only", prev, 12.0)
+	ins("tm-current-only", cur, 30.0) // value now, no comparison row
 	got, err := BuildExplainResponse(ctx, reader, org, Params{Metric: "cycle_time", StartDay: cur, EndDay: cur.AddDate(0, 0, 1), CompareStart: prev, CompareEnd: cur})
 	if err != nil {
 		t.Fatal(err)
@@ -48,11 +49,11 @@ func TestExplainOmitsGroupsWithNoDataOnBothSides(t *testing.T) {
 		sort.Strings(out)
 		return strings.Join(out, ",")
 	}
-	if g := ids(got.Drivers); g != "tm-both,tm-prior-only" {
-		t.Errorf("drivers = %s, want tm-both,tm-prior-only (a group with no value in either window is not a driver)", g)
+	if g := ids(got.Drivers); g != "tm-both,tm-current-only,tm-prior-only" {
+		t.Errorf("drivers = %s, want tm-both,tm-current-only,tm-prior-only (a group with no value in either window is not a driver; a value in one window is enough)", g)
 	}
-	if g := ids(got.Contributors); g != "tm-both" {
-		t.Errorf("contributors = %s, want tm-both (a contributor with no current value is not one)", g)
+	if g := ids(got.Contributors); g != "tm-both,tm-current-only" {
+		t.Errorf("contributors = %s, want tm-both,tm-current-only (a contributor with no current value is not one)", g)
 	}
 	for _, d := range got.Drivers {
 		if !d.HasData && !d.HasPriorData {

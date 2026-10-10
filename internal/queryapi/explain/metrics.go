@@ -82,18 +82,11 @@ func aggregateSQL(aggregator, column string) (value, known string) {
 // A contributor or driver with no stored value on either side is not a driver
 // (CHAOS-9101): fetchMetricContributors drops a group with no current value
 // (a contributor has no comparison side), fetchMetricDriverDelta one with no
-// current AND no prior value. Dropping in SQL, before the LIMIT, keeps a no-data
+// current AND no prior value, for every aggregator class alike (an undefined
+// ratio on one side is "no value" there, not a reason to drop the group when the
+// other side holds one). Dropping in SQL, before the LIMIT, keeps a no-data
 // group from taking one of the few places.
 //
-// definedOnly is the HAVING clause that drops a group whose value is
-// undefined: a contributor or driver with no deployment or no incident
-// evidence, or with no stored revert rate, is not shown as 0.
-func definedOnly(aggregator string) string {
-	if aggregator == "ratio" || aggregator == "merged_weighted" {
-		return "HAVING value IS NOT NULL"
-	}
-	return ""
-}
 
 // metricValueProjection applies the class ruling (b) dedup fix for a
 // Nullable metric column: `argMax(col, version)` on a Nullable column can
@@ -396,7 +389,6 @@ FROM (
     SELECT toString(%s) AS id, %s AS value
     FROM %s
     GROUP BY %s
-    %s
 ) AS current
 LEFT JOIN (
     SELECT toString(%s) AS id, %s AS value, toUInt8(1) AS present
@@ -407,7 +399,7 @@ WHERE current.value IS NOT NULL OR (previous.present = 1 AND previous.value IS N
 ORDER BY delta_pct DESC NULLS LAST
 LIMIT {limit:UInt64}
 %s
-`, deltarule.DriverPercentSQL("current.value", "previous.value", "previous.present"), groupBy, valueSQL, currentFrom, groupBy, definedOnly(aggregator), groupBy, valueSQL, previousFrom, groupBy, settingsMaxExecutionTime())
+`, deltarule.DriverPercentSQL("current.value", "previous.value", "previous.present"), groupBy, valueSQL, currentFrom, groupBy, groupBy, valueSQL, previousFrom, groupBy, settingsMaxExecutionTime())
 
 	bindings := append([]dhclickhouse.Binding{
 		{Name: "start_day", Value: dateBindingValue(startDay)},

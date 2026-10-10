@@ -237,6 +237,9 @@ func newExplainGetHandler(reader *explain.Reader) http.HandlerFunc {
 			validationErrors = append(validationErrors, missingFieldError([]any{"query", "metric"}, nil))
 		}
 		metric := lastQueryValue(query, "metric")
+		if query.Has("metric") && !explain.IsKnownMetric(metric) {
+			validationErrors = append(validationErrors, literalErrorDetail([]any{"query", "metric"}, metric, explain.MetricNames()))
+		}
 
 		scopeType := lastQueryValue(query, "scope_type")
 		if scopeType == "" {
@@ -386,6 +389,9 @@ func newExplainPostHandler(reader *explain.Reader) http.HandlerFunc {
 			validationErrors = append(validationErrors, stringBodyFieldError([]any{"body", "metric"}, metricValue))
 		} else {
 			metric = s
+			if !explain.IsKnownMetric(metric) {
+				validationErrors = append(validationErrors, literalErrorDetail([]any{"body", "metric"}, metric, explain.MetricNames()))
+			}
 		}
 
 		filtersValue, hasFilters := body.Get("filters")

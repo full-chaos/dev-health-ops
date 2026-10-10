@@ -33,8 +33,9 @@ import (
 var metricsDDL = []string{
 	"CREATE TABLE repo_metrics_daily (org_id String, computed_at DateTime('UTC')) ENGINE = MergeTree ORDER BY org_id",
 	// user_metrics_daily holds the retraction marker (migration 116, CHAOS-9135): the activity read
-	// tests it, so the two-column table has the column the migration adds.
-	"CREATE TABLE user_metrics_daily (org_id String, computed_at DateTime('UTC'), retracted UInt8 DEFAULT 0) ENGINE = MergeTree ORDER BY org_id",
+	// takes the newest row of each key (FINAL, which only a replacing engine allows) and tests the
+	// marker, so the table has the engine and the column of the real one.
+	"CREATE TABLE user_metrics_daily (org_id String, computed_at DateTime('UTC'), retracted UInt8 DEFAULT 0) ENGINE = ReplacingMergeTree(computed_at) ORDER BY org_id",
 }
 
 // teamKeyedMetricTables are the two activity tables that can hold retraction

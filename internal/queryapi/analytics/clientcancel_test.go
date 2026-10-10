@@ -284,3 +284,57 @@ func TestTheClientCancelReportRecordsACountASpanEventAndALine(t *testing.T) {
 		t.Errorf("INFO lines of the report = %d, want 1", lines)
 	}
 }
+
+// The flow matrix runs two statements. When the client's cancel ends one and
+// the other fails by itself, the read is a failure, whichever of the two the
+// real failure is in; when both end by the cancel, it is a cancel.
+func TestAFlowMatrixWithOneRealFailureIsAFailure(t *testing.T) {
+	cancelled := func() error {
+		return &fakeOperationError{operation: "query", cause: &clickhousedriver.Exception{Code: 735, Name: "QUERY_WAS_CANCELLED_BY_CLIENT"}}
+	}
+	unknownTable := func() error {
+		return &fakeOperationError{operation: "query", cause: &clickhousedriver.Exception{Code: 60, Name: "UNKNOWN_TABLE"}}
+	}
+	const nodesStatement, edgesStatement = "LIMIT {limit_per_dim:UInt32}", "LIMIT {max_edges:UInt32}"
+	flowUsesInvestment := true
+	for _, test := range []struct {
+		name         string
+		nodes, edges error
+		wantCancel   bool
+	}{
+		{"the nodes statement is cancelled, the edges statement fails by itself", cancelled(), unknownTable(), false},
+		{"the nodes statement fails by itself, the edges statement is cancelled", unknownTable(), cancelled(), false},
+		{"both statements are cancelled", cancelled(), cancelled(), true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel()
+			var cancels, failures int
+			origCancel, origDegradation := recordClientCancel, recordDegradation
+			recordClientCancel = func(context.Context, string, ...any) { cancels++ }
+			recordDegradation = func(context.Context, string, error) { failures++ }
+			t.Cleanup(func() { recordClientCancel, recordDegradation = origCancel, origDegradation })
+			client := &routingFakeClient{}
+			client.onErr(nodesStatement, test.nodes)
+			client.onErr(edgesStatement, test.edges)
+			_, _ = Resolve(ctx, client, "org-1", model.AnalyticsRequestInput{
+				UseInvestment: boolPtr(true),
+				FlowMatrix: &model.FlowMatrixRequestInput{
+					Dimension: model.DimensionInputTeam, Measure: model.MeasureInputCount,
+					DateRange: &model.DateRangeInput{StartDate: mustGraphQLDate("2026-01-01"), EndDate: mustGraphQLDate("2026-01-07")},
+					MaxNodes:  50, MaxEdges: 200, UseInvestment: &flowUsesInvestment,
+				},
+			})
+			if len(client.calls) != 2 {
+				t.Fatalf("statements the scripted client matched = %v, want the nodes and the edges statement", client.calls)
+			}
+			wantCancels, wantFailures := 0, 1
+			if test.wantCancel {
+				wantCancels, wantFailures = 1, 0
+			}
+			if cancels != wantCancels || failures != wantFailures {
+				t.Errorf("cancel reports = %d, failure reports = %d; want %d and %d", cancels, failures, wantCancels, wantFailures)
+			}
+		})
+	}
+}

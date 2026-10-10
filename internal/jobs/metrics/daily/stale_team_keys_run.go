@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sort"
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
@@ -253,16 +254,19 @@ func (retractor *RunStaleKeyRetractor) RetractStaleKeys(ctx context.Context, run
 	// left is, per repository-scoped table, the live keys of a repository
 	// that is in no partition of the run and that the organization holds now.
 	left := make(map[string]int, len(OrganizationRunStaleKeyTables()))
-	notInRun := 0
+	// notInRun is those repositories, and superseded the repositories whose
+	// keys got a row of zeros, over both tables.
+	notInRun, superseded := map[string]struct{}{}, map[string]struct{}{}
 	if wholeOrganization {
 		// The tables whose keys a partition decides inside its own
 		// repositories. The repository list of the run is the one of its
 		// dispatch, so "in no partition of this run" does not say that a
 		// repository is gone: a repository the organization got later, and
 		// that a run of its own computed for the day, is in no partition
-		// too. The organization's repositories are read again here, and a key
-		// is superseded only when its repository is in neither set. A run
-		// never hides a key that can be true.
+		// too. The organization's repositories are read again, for each
+		// table after its live keys are read, and a key is superseded only
+		// when its repository is in neither set. A run never hides a key
+		// that can be true.
 		// scope.repoIDs is the run's repositories, parsed: the text form of
 		// each id is the form the keys hold.
 		owned := make([][]string, 0, len(scope.repoIDs))
@@ -270,27 +274,38 @@ func (retractor *RunStaleKeyRetractor) RetractStaleKeys(ctx context.Context, run
 			owned = append(owned, []string{repoID.String()})
 		}
 		ownedScope := newStaleKeyScope(owned...)
-		if retractor.presentRepositories == nil {
-			return 0, fmt.Errorf("%w: no read is wired", ErrOrganizationRepositoriesNotRead)
-		}
-		present, err := retractor.presentRepositories(ctx, run.OrganizationID)
-		if err != nil {
-			return 0, fmt.Errorf("%w: %w", ErrOrganizationRepositoriesNotRead, err)
-		}
-		presentTuples := make([][]string, 0, len(present))
-		for _, repositoryID := range present {
-			presentTuples = append(presentTuples, []string{string(repositoryID)})
-			if _, inRun := ownedScope[string(repositoryID)]; !inRun {
-				notInRun++
+		readPresent := func(readCtx context.Context) (staleKeyScope, error) {
+			if retractor.presentRepositories == nil {
+				return nil, fmt.Errorf("%w: no read is wired", ErrOrganizationRepositoriesNotRead)
 			}
+			present, err := retractor.presentRepositories(readCtx, run.OrganizationID)
+			if err != nil {
+				return nil, fmt.Errorf("%w: %w", ErrOrganizationRepositoriesNotRead, err)
+			}
+			tuples := make([][]string, 0, len(present))
+			for _, repositoryID := range present {
+				tuples = append(tuples, []string{string(repositoryID)})
+			}
+			return newStaleKeyScope(tuples...), nil
 		}
-		presentScope := newStaleKeyScope(presentTuples...)
+		// A run that cannot read the organization's repositories fails here,
+		// before it writes a row of any table. The set this read gives is not
+		// used: each table reads its own, after its live keys.
+		if _, err := readPresent(ctx); err != nil {
+			return 0, err
+		}
 		for _, table := range OrganizationRunStaleKeyTables() {
 			steps = append(steps, func() (string, int, int, error) {
-				rows, kept, err := retractStaleTeamKeysOutsideRun(ctx, conn, table, run.OrganizationID, day,
-					ownedScope, presentScope, retractor.nowUTC())
-				left[table.Table] = kept
-				return table.Table, rows, rows, err
+				result, err := retractStaleTeamKeysOutsideRun(ctx, conn, table, run.OrganizationID, day,
+					ownedScope, readPresent, retractor.nowUTC())
+				left[table.Table] = result.kept
+				for _, repository := range result.notInRun {
+					notInRun[repository] = struct{}{}
+				}
+				for _, repository := range result.superseded {
+					superseded[repository] = struct{}{}
+				}
+				return table.Table, result.written, result.written, err
 			})
 		}
 	}
@@ -315,16 +330,19 @@ func (retractor *RunStaleKeyRetractor) RetractStaleKeys(ctx context.Context, run
 				ErrPartialWrite, table, total, err)
 		}
 	}
-	if notInRun > 0 {
+	if len(notInRun) > 0 {
+		ids, more := loggedRepositoryIDs(notInRun)
 		slog.Default().Warn(StaleKeysRepositoryNotInRunLogMessage,
 			"run_id", run.ID, "organization_id", run.OrganizationID,
 			"target_day", day.Format("2006-01-02"),
 			"repositories", len(run.DiscoveredRepoIDs),
-			"repositories_not_in_run", notInRun,
+			"repositories_not_in_run", len(notInRun),
+			"repository_ids_not_in_run", ids, "repository_ids_not_in_run_more", more,
 			"team_metrics_daily_keys_left", left[teamkeytables.TeamMetricsDaily.Table],
 			"ai_impact_metrics_daily_keys_left", left[teamkeytables.AIImpactMetricsDaily.Table],
 		)
 	}
+	supersededIDs, supersededMore := loggedRepositoryIDs(superseded)
 	slog.Default().Info(StaleKeysRetractedLogMessage,
 		"run_id", run.ID, "organization_id", run.OrganizationID,
 		"target_day", day.Format("2006-01-02"),
@@ -342,8 +360,30 @@ func (retractor *RunStaleKeyRetractor) RetractStaleKeys(ctx context.Context, run
 		"ai_governance_coverage_daily_zero_rows", retracted[teamkeytables.AIGovernanceCoverageDaily.Table],
 		"team_metrics_daily_zero_rows", retracted[teamkeytables.TeamMetricsDaily.Table],
 		"ai_impact_metrics_daily_zero_rows", retracted[teamkeytables.AIImpactMetricsDaily.Table],
+		// The repositories that a row of zeros of the two repository-scoped
+		// tables hides (an empty id is the rows with no repository).
+		"repositories_superseded", len(superseded),
+		"repository_ids_superseded", supersededIDs, "repository_ids_superseded_more", supersededMore,
 	)
 	return total, nil
+}
+
+// StaleKeyLoggedRepositoryLimit is the most repository ids one log line of the
+// step names. The count beside the list is always whole.
+const StaleKeyLoggedRepositoryLimit = 20
+
+// loggedRepositoryIDs gives the ids to name in a log line, sorted, at most
+// StaleKeyLoggedRepositoryLimit, and how many more there are.
+func loggedRepositoryIDs(repositories map[string]struct{}) (ids []string, more int) {
+	ids = make([]string, 0, len(repositories))
+	for repository := range repositories {
+		ids = append(ids, repository)
+	}
+	sort.Strings(ids)
+	if len(ids) > StaleKeyLoggedRepositoryLimit {
+		return ids[:StaleKeyLoggedRepositoryLimit], len(ids) - StaleKeyLoggedRepositoryLimit
+	}
+	return ids, 0
 }
 
 // The two classes of a retraction, as the log line names them.

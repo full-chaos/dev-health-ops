@@ -207,10 +207,17 @@ FINAL WHERE org_id = ? AND day = ? AND provider = ? AND work_scope_id = ?`, []an
 			"ai_governance_coverage_daily_zero_rows":    float64(0),
 			"team_metrics_daily_zero_rows":              float64(2),
 			"ai_impact_metrics_daily_zero_rows":         float64(1),
+			"repositories_superseded":                   float64(2),
+			"repository_ids_superseded_more":            float64(0),
 		} {
 			if line == nil || line[field] != want {
 				t.Errorf("the log line of the run holds %s = %v, want %v (line %v)", field, line[field], want, line)
 			}
+		}
+		// The line names the repositories a row of zeros hides: the empty id
+		// (the rows with no repository) and the repository in no partition.
+		if ids := stringList(line["repository_ids_superseded"]); len(ids) != 2 || ids[0] != "" || ids[1] != orgDayRepoGone.String() {
+			t.Errorf("the log line names the superseded repositories %q, want the empty id and %s", ids, orgDayRepoGone)
 		}
 
 		for _, provider := range orgDayProviders {
@@ -323,6 +330,13 @@ WHERE org_id = ? AND day = ? AND provider = 'linear' AND work_scope_id = 'board-
     (day, provider, work_scope_id, team_id, team_name, items_started, items_completed, wip_count_end_of_day, computed_at, org_id)
     VALUES (?, 'linear', 'gone-linear', ?, ?, 10, 9, 2, ?, ?)`, day, team, team, stored, org)
 		}
+		// An item of that scope that was done BEFORE the day is not an item
+		// of the day: the scope read does not take it, so the day is still
+		// empty and the proof of an empty day is made and logged.
+		exec("item done before the day", `INSERT INTO work_items (
+    repo_id, work_item_id, provider, type, status, project_id, native_team_key, created_at, started_at, completed_at, story_points, org_id, last_synced)
+    VALUES (?, 'OLD-1', 'linear', 'story', 'done', 'gone-linear', 'ENG', ?, ?, ?, 2, ?, ?)`,
+			sharedScopeRepoAPI, day.Add(-96*time.Hour), day.Add(-72*time.Hour), day.Add(-48*time.Hour), org, day.Add(-24*time.Hour))
 		run := Run{ID: uuid.NewString(), OrganizationID: org, TargetDay: day, FullOrg: true, DiscoveredRepoIDs: listed}
 		var logged bytes.Buffer
 		previous := slog.Default()
@@ -361,6 +375,27 @@ WHERE org_id = ? AND day = ? AND provider = 'linear' AND work_scope_id = 'board-
 				if got := held(org, provider, "gone-"+provider, team); got != storedGone {
 					t.Errorf("%s: after the failed step the key of team %q holds %v, want the stored %v: nothing may be superseded",
 						provider, team, got, storedGone)
+				}
+			}
+		}
+	})
+
+	// A run of ONE repository that has no item of the day reaches no work
+	// scope. The guard on an empty read is of a run of the whole organization
+	// only: this run ends with no error and supersedes nothing, on a day that
+	// holds stored keys and items of other repositories.
+	t.Run("a run of one repository that reaches no work scope", func(t *testing.T) {
+		const org = "00000000-0000-4000-8000-0000006e0005"
+		setUp(org)
+		written := endStaleKeyRun(t, ctx, conn, Run{ID: uuid.NewString(), OrganizationID: org, TargetDay: day, FullOrg: false,
+			DiscoveredRepoIDs: []RepositoryID{RepositoryID(orgDayRepoGone.String())}}, clock)
+		if written != 0 {
+			t.Errorf("a run of a repository with no item wrote %d row(s), want none", written)
+		}
+		for _, provider := range orgDayProviders {
+			for _, team := range []string{"ENG", "unassigned"} {
+				if got := held(org, provider, "gone-"+provider, team); got != storedGone {
+					t.Errorf("%s: a run that reaches no work scope changed the key of team %q: %v, want the stored %v", provider, team, got, storedGone)
 				}
 			}
 		}

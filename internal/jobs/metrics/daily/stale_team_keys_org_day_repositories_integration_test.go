@@ -9,11 +9,14 @@ import (
 	"errors"
 	"log/slog"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/google/uuid"
+
+	"github.com/full-chaos/dev-health-ops/internal/teamkeytables"
 )
 
 // The repository list of a run of the whole organization is the one of its
@@ -23,7 +26,49 @@ import (
 // only when its repository is in neither set. A key of a repository the
 // organization holds now is never hidden by a run that did not compute it.
 
-var orgDayRepoLate = uuid.MustParse("00000000-0000-4000-8000-0000000007e1")
+var (
+	orgDayRepoLate      = uuid.MustParse("00000000-0000-4000-8000-0000000007e1")
+	orgDayRepoLateAgain = uuid.MustParse("00000000-0000-4000-8000-0000000007e2")
+)
+
+// atLiveKeyReadConn runs an action once, directly BEFORE the read of the live
+// keys of one table goes to the server: the state a concurrent writer leaves
+// between the start of the end of a run and that read. Every statement goes
+// to the server as it is.
+type atLiveKeyReadConn struct {
+	driver.Conn
+	actions map[string]func()
+	once    map[string]*sync.Once
+}
+
+func newAtLiveKeyReadConn(conn driver.Conn, actions map[string]func()) *atLiveKeyReadConn {
+	wrapped := &atLiveKeyReadConn{Conn: conn, actions: map[string]func(){}, once: map[string]*sync.Once{}}
+	for _, table := range OrganizationRunStaleKeyTables() {
+		if action, ok := actions[table.Table]; ok {
+			query := table.LiveKeyVersionsQuery()
+			wrapped.actions[query], wrapped.once[query] = action, &sync.Once{}
+		}
+	}
+	return wrapped
+}
+
+func (conn *atLiveKeyReadConn) Query(ctx context.Context, query string, args ...any) (driver.Rows, error) {
+	if action, ok := conn.actions[query]; ok {
+		conn.once[query].Do(action)
+	}
+	return conn.Conn.Query(ctx, query, args...)
+}
+
+// stringList is a list of strings of a JSON log line.
+func stringList(value any) []string {
+	items, _ := value.([]any)
+	out := make([]string, 0, len(items))
+	for _, item := range items {
+		text, _ := item.(string)
+		out = append(out, text)
+	}
+	return out
+}
 
 // failedRepositoryReadConn fails the read of the organization's repositories,
 // as a read that is cut off does. Every other statement goes to the server.
@@ -32,6 +77,24 @@ type failedRepositoryReadConn struct{ driver.Conn }
 func (conn *failedRepositoryReadConn) Query(ctx context.Context, query string, args ...any) (driver.Rows, error) {
 	if strings.Contains(query, "FROM repos") && strings.Contains(query, "argMax(tuple(repo, settings, provider), last_synced)") {
 		return nil, errors.New("the read of the repositories is cut off")
+	}
+	return conn.Conn.Query(ctx, query, args...)
+}
+
+// laterRepositoryReadFailsConn lets the first read of the organization's
+// repositories through and fails every later one: the read at the start of
+// the step answers, the read a table makes after its live keys does not.
+type laterRepositoryReadFailsConn struct {
+	driver.Conn
+	reads int
+}
+
+func (conn *laterRepositoryReadFailsConn) Query(ctx context.Context, query string, args ...any) (driver.Rows, error) {
+	if strings.Contains(query, "FROM repos") && strings.Contains(query, "argMax(tuple(repo, settings, provider), last_synced)") {
+		conn.reads++
+		if conn.reads > 1 {
+			return nil, errors.New("the read of the repositories is cut off")
+		}
 	}
 	return conn.Conn.Query(ctx, query, args...)
 }
@@ -216,7 +279,95 @@ func TestARunOfTheWholeOrganizationLeavesTheKeysOfARepositoryTheOrganizationHold
 		if retracted == nil || retracted["team_metrics_daily_zero_rows"] != float64(1) || retracted["ai_impact_metrics_daily_zero_rows"] != float64(1) {
 			t.Errorf("the line of the retraction is %v, want 1 row of zeros in each repository-scoped table (the repository that is gone)", retracted)
 		}
+		// Each line names the repositories, so that an operator can act.
+		if ids := stringList(notInRun["repository_ids_not_in_run"]); len(ids) != 1 || ids[0] != late || notInRun["repository_ids_not_in_run_more"] != float64(0) {
+			t.Errorf("the line of the repository in no partition names %v (and %v more), want the one late repository %s",
+				ids, notInRun["repository_ids_not_in_run_more"], late)
+		}
+		if ids := stringList(retracted["repository_ids_superseded"]); len(ids) != 1 || ids[0] != gone ||
+			retracted["repositories_superseded"] != float64(1) || retracted["repository_ids_superseded_more"] != float64(0) {
+			t.Errorf("the line of the retraction names the superseded repositories %v (count %v, %v more), want the one repository that is gone %s",
+				ids, retracted["repositories_superseded"], retracted["repository_ids_superseded_more"], gone)
+		}
 	})
+
+	// A repository gets its row and its keys of the day WHILE the end of the
+	// run of the whole organization is in progress: after the step started,
+	// and before it reads the live keys of a repository-scoped table. One
+	// repository is added at the live-key read of team_metrics_daily, another
+	// at the live-key read of ai_impact_metrics_daily. The read of the
+	// organization's repositories must come after the live-key read of each
+	// table: a key that read saw is of a repository the present set holds.
+	t.Run("a repository added while the end of the run is in progress", func(t *testing.T) {
+		const org = "00000000-0000-4000-8000-0000007e0006"
+		snapshot := setUp(org)
+		storedRows(org, orgDayRepoGone, stored)
+		orgRun := Run{ID: uuid.NewString(), OrganizationID: org, TargetDay: day, FullOrg: true, DiscoveredRepoIDs: snapshot}
+		clock := stored.Add(3 * time.Hour)
+		computeListed(orgRun, clock)
+		added := 0
+		add := func(repo uuid.UUID, name string) func() {
+			return func() {
+				repository(org, repo, name, stored.Add(time.Hour))
+				storedRows(org, repo, stored.Add(time.Hour))
+				added++
+			}
+		}
+		retractor, err := NewRunStaleKeyRetractor(newAtLiveKeyReadConn(conn, map[string]func(){
+			teamkeytables.TeamMetricsDaily.Table:     add(orgDayRepoLate, "acme/late"),
+			teamkeytables.AIImpactMetricsDaily.Table: add(orgDayRepoLateAgain, "acme/late-again"),
+		}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		retractor.nowUTC = func() time.Time { return clock }
+		if _, err := retractor.RetractStaleKeys(ctx, orgRun); err != nil {
+			t.Fatalf("the end of the run: %v", err)
+		}
+		if added != 2 {
+			t.Fatalf("%d of the 2 repositories were added during the step: the case is not set", added)
+		}
+		for _, repo := range []struct {
+			name string
+			id   uuid.UUID
+		}{{"at the live-key read of team_metrics_daily", orgDayRepoLate}, {"at the live-key read of ai_impact_metrics_daily", orgDayRepoLateAgain}} {
+			if impactNow, teamNow := float(impactHeld, org, day, repo.id.String()), float(teamHeld, org, day, repo.id.String()); impactNow != 10 || teamNow != 7 {
+				t.Errorf("a repository added %s: ai_impact holds %v and team_metrics %v after the end of the run, want the stored 10 and 7", repo.name, impactNow, teamNow)
+			}
+		}
+		gone := orgDayRepoGone.String()
+		if impactGone, teamGone := float(impactHeld, org, day, gone), float(teamHeld, org, day, gone); impactGone != 0 || teamGone != 0 {
+			t.Errorf("a repository the organization does not hold: ai_impact holds %v and team_metrics %v, want 0 and 0", impactGone, teamGone)
+		}
+	})
+
+	// The row of zeros of a repository outside the run is newer than every
+	// stored row of the day, whatever the clock of the end of the run: after
+	// the stored rows, equal to them, and BEFORE them. A reader that takes the
+	// newest row of a key (argMax, not only FINAL) reads the zeros.
+	for index, clockCase := range []struct {
+		name   string
+		offset time.Duration
+	}{{"one hour after the stored rows", time.Hour}, {"equal to the stored rows", 0}, {"one hour before the stored rows", -time.Hour}} {
+		t.Run("the clock of the end of the run is "+clockCase.name, func(t *testing.T) {
+			org := "00000000-0000-4000-8000-0000007e001" + string(rune('0'+index))
+			storedRows(org, orgDayRepoGone, stored)
+			endStaleKeyRun(t, ctx, conn, Run{ID: uuid.NewString(), OrganizationID: org, TargetDay: day, FullOrg: true}, stored.Add(clockCase.offset))
+			gone := orgDayRepoGone.String()
+			newestImpact := float(`SELECT toFloat64(argMax(prs_total + prs_merged, computed_at)) FROM ai_impact_metrics_daily WHERE org_id = ? AND day = ? AND toString(repo_id) = ?`, org, day, gone)
+			newestTeam := float(`SELECT toFloat64(argMax(commits_count, computed_at)) FROM team_metrics_daily WHERE org_id = ? AND day = ? AND repo_id = ?`, org, day, gone)
+			if newestImpact != 0 || newestTeam != 0 {
+				t.Errorf("the newest row of the superseded keys holds ai_impact %v and team_metrics %v, want 0 and 0: the row of zeros is not above the stored rows", newestImpact, newestTeam)
+			}
+			if impactGone, teamGone := float(impactHeld, org, day, gone), float(teamHeld, org, day, gone); impactGone != 0 || teamGone != 0 {
+				t.Errorf("a FINAL read holds ai_impact %v and team_metrics %v, want 0 and 0", impactGone, teamGone)
+			}
+			newer := float(`SELECT toFloat64(count()) FROM (SELECT repo_id, max(computed_at) AS newest, argMax(commits_count, computed_at) AS held FROM team_metrics_daily WHERE org_id = ? AND day = ? GROUP BY repo_id) WHERE held = 0 AND newest > ?`, org, day, stored)
+			if newer != 1 {
+				t.Errorf("%v key(s) of team_metrics_daily have a row of zeros strictly newer than the stored row, want 1", newer)
+			}
+		})
+	}
 
 	// The read of the repositories at the end of the run fails: the list is
 	// not proven, the step fails and writes nothing, in no table.
@@ -245,6 +396,35 @@ func TestARunOfTheWholeOrganizationLeavesTheKeysOfARepositoryTheOrganizationHold
 		if _, retracted, _ := orgDayRepositoryLines(t, ctx, conn, orgRun, clock); retracted == nil ||
 			retracted["team_metrics_daily_zero_rows"] != float64(1) || retracted["ai_impact_metrics_daily_zero_rows"] != float64(1) {
 			t.Errorf("the step with the read: the line is %v, want 1 row of zeros in each repository-scoped table", retracted)
+		}
+	})
+
+	// The read at the start of the step answers, and the read a
+	// repository-scoped table makes after its live keys fails. The step fails
+	// and that table gets no row of zeros: the decision is never made on the
+	// earlier set.
+	t.Run("the read of the repositories fails at the decision", func(t *testing.T) {
+		const org = "00000000-0000-4000-8000-0000007e0007"
+		snapshot := setUp(org)
+		storedRows(org, orgDayRepoGone, stored)
+		orgRun := Run{ID: uuid.NewString(), OrganizationID: org, TargetDay: day, FullOrg: true, DiscoveredRepoIDs: snapshot}
+		clock := stored.Add(3 * time.Hour)
+		computeListed(orgRun, clock)
+		wrapped := &laterRepositoryReadFailsConn{Conn: conn}
+		retractor, err := NewRunStaleKeyRetractor(wrapped)
+		if err != nil {
+			t.Fatal(err)
+		}
+		retractor.nowUTC = func() time.Time { return clock }
+		if _, err := retractor.RetractStaleKeys(ctx, orgRun); !errors.Is(err, ErrOrganizationRepositoriesNotRead) {
+			t.Errorf("the step gives %v, want ErrOrganizationRepositoriesNotRead", err)
+		}
+		if wrapped.reads != 2 {
+			t.Fatalf("the step read the repositories %d time(s), want the read at the start and one read at the first table: the case is not set", wrapped.reads)
+		}
+		gone := orgDayRepoGone.String()
+		if impactGone, teamGone := float(impactHeld, org, day, gone), float(teamHeld, org, day, gone); impactGone != 10 || teamGone != 7 {
+			t.Errorf("after the failed read at the decision ai_impact holds %v and team_metrics %v, want the stored 10 and 7", impactGone, teamGone)
 		}
 	})
 

@@ -9,6 +9,8 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/teamownership"
+
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/prrework"
 )
 
 // The recommendations reads, ported from recommendations/loader.py.
@@ -278,12 +280,20 @@ func (loader *RecommendationsLoader) loadReviewSignals(
 	return latency, latencyKnown, gini, giniKnown, nil
 }
 
-// loadReworkRatio ports _load_rework_ratio.
+// loadReworkRatio reads the team's pull request rework ratio for the window.
+//
+// It is NOT the port of _load_rework_ratio any more. That read takes the
+// stored ratio of each repository's newest row and averages the repositories.
+// The stored ratio divides by ALL merged pull requests and is 0 when nothing
+// was reviewed, so a team whose reviews were never read had a known ratio of
+// 0. This read sums the window's counts over the team's repositories and
+// applies the one rule (package prrework): reviewed pull requests only, and
+// absent (not known) when the window holds none.
 //
 // Scoped to ownedRepoIDs (CHAOS-4897): repo_metrics_daily has no team_id
-// column, so this averages only over the repos teamownership.OwnedRepoIDs
-// resolved for this team. A team that owns no repos gets absent, not the
-// org-wide average.
+// column, so this reads only the repos teamownership.OwnedRepoIDs resolved
+// for this team. A team that owns no repos gets absent, not the org-wide
+// ratio.
 func (loader *RecommendationsLoader) loadReworkRatio(
 	ctx context.Context, teamID string, ownedRepoIDs []uuid.UUID, windowStart, windowEnd time.Time,
 ) (float64, bool, error) {
@@ -292,14 +302,17 @@ func (loader *RecommendationsLoader) loadReworkRatio(
 	}
 	arguments := loader.windowArguments(teamID, windowStart, windowEnd)
 	arguments["repo_ids"] = ownedRepoIDs
+	// The newest row of each repository and day, whole: the counts of one
+	// generation.
 	query := `
-            SELECT avg(rework) AS avg_rework
+            SELECT ` + prrework.ViewSumsSQL + `
             FROM (
-                SELECT repo_id, argMax(pr_rework_ratio, computed_at) AS rework
+                SELECT *
                 FROM repo_metrics_daily
                 WHERE repo_id IN {repo_ids:Array(UUID)}
                   AND day >= {start:Date} AND day < {end:Date}` + loader.orgClause() + `
-                GROUP BY repo_id
+                ORDER BY computed_at DESC
+                LIMIT 1 BY repo_id, day
             )
         `
 	rows, err := loader.conn.Query(ctx, query, namedArguments(arguments)...)
@@ -309,11 +322,15 @@ func (loader *RecommendationsLoader) loadReworkRatio(
 	defer rows.Close()
 
 	if rows.Next() {
-		var average float64
-		if scanErr := rows.Scan(&average); scanErr != nil {
+		var view prrework.View
+		if scanErr := rows.Scan(prrework.ViewScanDest(&view)...); scanErr != nil {
 			return 0, false, fmt.Errorf("scan rework ratio: %w", scanErr)
 		}
-		value, known := safeFloat(&average)
+		outcome := prrework.Evaluate(view)
+		if outcome.Value == nil {
+			return 0, false, rows.Err()
+		}
+		value, known := safeFloat(outcome.Value)
 		return value, known, rows.Err()
 	}
 	return 0, false, rows.Err()

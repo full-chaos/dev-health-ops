@@ -84,6 +84,80 @@ venue_oracle_registry_rows() {
   return "${bad}"
 }
 
+# ---------------------------------------------------------------------------
+# Paths outside its package that also select a venue test (CHAOS-9172).
+# `venue-oracles --changed` selects a test by the paths of its OWN package, but a
+# venue test compares what handlers and stores in OTHER packages do: a change of
+# a `teams` write in internal/api/teamsidentity changed the rows the
+# protected-routes test of internal/apiservice compares, selected nothing, and
+# the pull request read green while main went red. A package declares such a
+# path in ci/venue_oracle_triggers.d/<package with / as __>.tsv, one row
+# "<package dir>\t<test>\t<repo path>": a changed path equal to, or under, the
+# repo path also selects that test. The directory is optional; a declared row is
+# checked (check_venue_oracle_triggers) so that it can never go stale silently.
+VENUE_ORACLE_TRIGGERS_DIR="${ROOT}/ci/venue_oracle_triggers.d"
+
+# venue_oracle_trigger_rows prints every trigger row, tab separated. It refuses a
+# stray entry, an empty file, a malformed row, a row in the wrong package's file,
+# and rows out of order within a file.
+venue_oracle_trigger_rows() {
+  local f base bad=0
+  [ -d "${VENUE_ORACLE_TRIGGERS_DIR}" ] || return 0
+  for f in "${VENUE_ORACLE_TRIGGERS_DIR}"/* "${VENUE_ORACLE_TRIGGERS_DIR}"/.[!.]*; do
+    [ -e "${f}" ] || continue
+    base="$(basename "${f}")"
+    case "${base}" in
+      README.md) continue ;;
+      *.tsv) ;;
+      *) printf 'venue-oracles triggers: stray entry %s in %s (only <package with / as __>.tsv and README.md are read)\n' "${base}" "${VENUE_ORACLE_TRIGGERS_DIR}" >&2; bad=1; continue ;;
+    esac
+    LC_ALL=C awk -F'\t' -v file="${base}" '
+      function pkgfile(p) { gsub("/", "__", p); return p ".tsv" }
+      /^[[:space:]]*(#|$)/ { next }
+      NF != 3 || $1 == "" || $2 == "" || $3 == "" || $3 ~ /[[:space:]]/ || $3 ~ /^\// || $3 ~ /\/$/ || $3 ~ /(^|\/)\.\.?(\/|$)/ {
+        printf "venue-oracles triggers: %s line %d is not <package>\\t<test>\\t<repo path, no leading or trailing slash>: %s\n", file, NR, $0 > "/dev/stderr"; bad = 1; next
+      }
+      pkgfile($1) != file {
+        printf "venue-oracles triggers: %s line %d: package %s belongs in %s, not this file\n", file, NR, $1, pkgfile($1) > "/dev/stderr"; bad = 1; next
+      }
+      n > 0 && ($2 "\t" $3) <= last {
+        printf "venue-oracles triggers: %s line %d is not after the row before it (rows must be sorted by test, then path, and unique within a file)\n", file, NR > "/dev/stderr"; bad = 1
+      }
+      { print $1 "\t" $2 "\t" $3; last = $2 "\t" $3; n++ }
+      END { if (n == 0) { printf "venue-oracles triggers: %s holds no rows\n", file > "/dev/stderr"; bad = 1 } exit bad }
+    ' "${f}" || bad=1
+  done
+  return "${bad}"
+}
+
+# check_venue_oracle_triggers ROWS: every trigger row names a registered `run`
+# row (ROWS = the registry rows) and a path that exists in the tree, outside the
+# test's own package (the package's own paths select it already).
+check_venue_oracle_triggers() {
+  local rows="$1" triggers pkg test path failed=0 nl=$'\n' count=0
+  triggers="$(venue_oracle_trigger_rows)" || return 1
+  while IFS=$'\t' read -r pkg test path; do
+    [ -n "${pkg}" ] || continue
+    count=$((count + 1))
+    if [[ "${nl}${rows}${nl}" != *"${nl}${pkg} ${test} run${nl}"* ]]; then
+      printf 'venue-oracles triggers: %s %s is not a run row of ci/venue_oracle_registry.d/ -- a trigger for a test that is never run selects nothing\n' "${pkg}" "${test}" >&2
+      failed=1
+    fi
+    if [ ! -e "${ROOT}/${path}" ]; then
+      printf 'venue-oracles triggers: %s %s -- path %s does not exist, so no change can select the test through it\n' "${pkg}" "${test}" "${path}" >&2
+      failed=1
+    fi
+    case "${path}/" in
+      "${pkg}/"*)
+        printf 'venue-oracles triggers: %s %s -- path %s is inside the package of the test: declare only paths outside it\n' "${pkg}" "${test}" "${path}" >&2
+        failed=1
+        ;;
+    esac
+  done < <(printf '%s\n' "${triggers}")
+  [ "${failed}" -eq 0 ] || return 1
+  printf 'venue-oracle-triggers: %d declared path(s), each for a registered run row and present in the tree\n' "${count}"
+}
+
 # venue_oracle_expected_rows prints "pkg test mode" for every venue test
 # discovery finds by structure or by name, sorted and de-duplicated.
 venue_oracle_expected_rows() {
@@ -181,6 +255,8 @@ check_venue_oracle_registry() {
       failed=1
     fi
   done < <(printf '%s\n' "${rows}")
+
+  check_venue_oracle_triggers "${rows}" || failed=1
 
   [ "${failed}" -eq 0 ] || return 1
   printf 'venue-oracle-registry: %d registered test(s), all found by discovery and by name\n' "$(printf '%s\n' "${rows}" | wc -l)"

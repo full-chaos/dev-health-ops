@@ -39,11 +39,17 @@ const (
 	teamDriftStatusSuperseded = "superseded"
 )
 
-// teamDriftManagedFields mirrors clickhouse_team_drift_projector.py's
-// DEFAULT_MANAGED_FIELDS exactly, in the same order (the loop order is not
-// behaviorally significant -- every field is always visited -- but keeping
-// it identical makes a side-by-side diff against the Python source trivial).
-var teamDriftManagedFields = []string{"name", "description", "members", "project_keys", "repo_patterns"}
+// teamDriftRetiredRosterField is the drift field of the stored team roster,
+// a column that is gone (CHAOS-9087). A change staged for it before then is
+// superseded the next time its team is reviewed: there is no stored roster
+// to diff the observation against.
+const teamDriftRetiredRosterField = "members"
+
+// teamDriftManagedFields is clickhouse_team_drift_projector.py's
+// DEFAULT_MANAGED_FIELDS without "members" (CHAOS-9087: the stored roster is
+// gone), in the same order (the loop order is not behaviorally significant --
+// every field is always visited).
+var teamDriftManagedFields = []string{"name", "description", "project_keys", "repo_patterns"}
 
 func isTeamDriftDecidedStatus(status string) bool {
 	return status == teamDriftStatusApproved || status == teamDriftStatusDismissed
@@ -196,12 +202,11 @@ func insertTeamProviderObservations(ctx context.Context, conn driver.Conn, orgID
 type teamDriftExistingRow struct {
 	Name         *string
 	Description  *string
-	Members      []string
 	ProjectKeys  []string
 	RepoPatterns []string
 }
 
-const teamDriftExistingRowsQuery = "SELECT id, name, description, members, project_keys, repo_patterns FROM teams FINAL WHERE org_id = {org_id:String} AND id IN {team_ids:Array(String)}"
+const teamDriftExistingRowsQuery = "SELECT id, name, description, project_keys, repo_patterns FROM teams FINAL WHERE org_id = {org_id:String} AND id IN {team_ids:Array(String)}"
 
 func fetchTeamDriftExistingRows(ctx context.Context, conn driver.Conn, orgID string, teamIDs []string) (map[string]teamDriftExistingRow, error) {
 	if len(teamIDs) == 0 {
@@ -217,13 +222,13 @@ func fetchTeamDriftExistingRows(ctx context.Context, conn driver.Conn, orgID str
 	for rows.Next() {
 		var id string
 		var name, description *string
-		var members, projectKeys, repoPatterns []string
-		if err := rows.Scan(&id, &name, &description, &members, &projectKeys, &repoPatterns); err != nil {
+		var projectKeys, repoPatterns []string
+		if err := rows.Scan(&id, &name, &description, &projectKeys, &repoPatterns); err != nil {
 			return nil, err
 		}
 		existing[id] = teamDriftExistingRow{
 			Name: name, Description: description,
-			Members: members, ProjectKeys: projectKeys, RepoPatterns: repoPatterns,
+			ProjectKeys: projectKeys, RepoPatterns: repoPatterns,
 		}
 	}
 	return existing, rows.Err()
@@ -322,8 +327,6 @@ func teamFieldValue(field string) func(teamDriftTeamView) any {
 		return func(v teamDriftTeamView) any { return v.Name }
 	case "description":
 		return func(v teamDriftTeamView) any { return v.Description }
-	case "members":
-		return func(v teamDriftTeamView) any { return pyComparisonListField(v.Members) }
 	case "project_keys":
 		return func(v teamDriftTeamView) any { return pyComparisonListField(v.ProjectKeys) }
 	case "repo_patterns":
@@ -336,7 +339,7 @@ func teamFieldValue(field string) func(teamDriftTeamView) any {
 func existingFieldValue(existing *teamDriftExistingRow, field string) any {
 	if existing == nil {
 		switch field {
-		case "members", "project_keys", "repo_patterns":
+		case "project_keys", "repo_patterns":
 			return []string{}
 		default:
 			return nil
@@ -347,8 +350,6 @@ func existingFieldValue(existing *teamDriftExistingRow, field string) any {
 		return existing.Name
 	case "description":
 		return existing.Description
-	case "members":
-		return pyComparisonListField(existing.Members)
 	case "project_keys":
 		return pyComparisonListField(existing.ProjectKeys)
 	case "repo_patterns":
@@ -524,6 +525,11 @@ func reviewTeamRowsForDrift(
 			if change.Status == teamDriftStatusPending && change.Field != nil {
 				pendingByField[*change.Field] = append(pendingByField[*change.Field], change)
 			}
+		}
+
+		for _, pending := range pendingByField[teamDriftRetiredRosterField] {
+			toInsert = append(toInsert, teamDriftStatusRow(pending, teamDriftStatusSuperseded, now))
+			superseded++
 		}
 
 		teamStaged := false

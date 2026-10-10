@@ -449,20 +449,6 @@ func jiraTeamCatalogSearchProjects(
 	return search, false, pages, stop, nil
 }
 
-// jiraStampMembersAuthoritative marks every team row's roster authoritative
-// once the Members walk above finished without aborting -- an empty
-// Members slice at that point is a genuine "this project's lead lookup
-// returned no lead", not an unconfirmed read (unlike GitLab's per-group
-// soft-fail carry-forward, Jira's lead lookup is all-or-nothing: any
-// failure aborts the whole walk via jiraTeamCatalogWalkFailure above, so
-// reaching this point means every team's lookup succeeded).
-func jiraStampMembersAuthoritative(teams []jiraTeamCatalogTeamRow) []jiraTeamCatalogTeamRow {
-	for index := range teams {
-		teams[index].MembersAuthoritative = true
-	}
-	return teams
-}
-
 // collectSprints ports team_autoimport_jira.py's board/sprint discovery
 // block. A non-skippable failure ANYWHERE in this walk (an unrecognized
 // project type, a board-listing failure, or a non-skippable sprint-listing
@@ -692,25 +678,10 @@ func (collector JiraTeamCatalogCollector) CollectTeamCatalog(
 	if selections.Teams {
 		teamRows := append([]jiraTeamCatalogTeamRow(nil), batch.Rows.Teams...)
 		if selections.Members {
+			// The observed roster of this run, for the provider observation.
 			roster := jiraRosterFromMemberships(keptMemberships)
 			for index := range teamRows {
 				teamRows[index].Members = roster[teamRows[index].ID]
-			}
-		} else if len(teamRows) > 0 {
-			// A teams-only run (members deselected) must not overwrite
-			// `teams.members` with an empty placeholder -- preserve whatever
-			// roster is already persisted, exactly like Python's
-			// _existing_team_members path.
-			teamIDs := make([]string, 0, len(teamRows))
-			for _, team := range teamRows {
-				teamIDs = append(teamIDs, team.ID)
-			}
-			existingRoster, rosterErr := PreserveExistingTeamMembersRoster(ctx, collector.Sink.Conn, ref.OrgID, teamIDs)
-			if rosterErr != nil {
-				return result, rosterErr
-			}
-			for index := range teamRows {
-				teamRows[index].Members = existingRoster[teamRows[index].ID]
 			}
 		}
 		keptTeams, skippedTeamIDs, teamsStagedForReview, teamsDriftSuperseded, guardErr := applyJiraTeamSyncPolicyGuard(ctx, collector.Sink.Conn, ref.OrgID, teamRows, normalizedAt)

@@ -198,8 +198,10 @@ func TestScopeFilterForMetricIntersectsExplicitReposWithTeamScope(t *testing.T) 
 	if calls != 1 {
 		t.Fatalf("scopeFilterForMetric made %d client round trip(s), want exactly 1 (resolving the explicit ref)", calls)
 	}
-	if !strings.HasPrefix(filterSQL, " AND (repo_id IN {scope_ids:Array(String)} AND repo_id IN (") {
-		t.Fatalf("filterSQL does not AND the explicit-repo and team conditions together:\n%s", filterSQL)
+	// Both membership tests compare the repository as TEXT: a UUID column against a String set
+	// is ClickHouse code 169 (the prod 503 of a team AND a repository the team holds).
+	if !strings.HasPrefix(filterSQL, " AND (toString(repo_id) IN {scope_ids:Array(String)} AND toString(repo_id) IN (") {
+		t.Fatalf("filterSQL does not AND the explicit-repo and team conditions together, as text:\n%s", filterSQL)
 	}
 	var sawScopeIDs, sawTeamIDs bool
 	for _, b := range bindings {

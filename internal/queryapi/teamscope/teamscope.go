@@ -178,7 +178,15 @@ func NarrowRepoScope(named bool, explicitSQL string, explicitBindings []dhclickh
 	case named && explicitCondition == "":
 		return " AND 1 = 0", nil
 	case explicitCondition != "" && teamCondition != "":
-		return " AND (" + explicitCondition + " AND " + teamCondition + ")", append(append([]dhclickhouse.Binding(nil), explicitBindings...), teamBindings...)
+		// Two membership tests on one repository column, a String list AND the team's
+		// ownership subquery (also Strings): ClickHouse 26.7.1.1315 (prod) fails
+		// analysis of that pair on a UUID column with code 169 "Cannot compare UUID with
+		// String" (CHAOS-9183: Home answered 503 for a team AND a repository the team
+		// holds). Every surface builds the pair HERE, so both sides compare the column as
+		// TEXT here, once (a String column works too). The cost: no repo_id key pruning for
+		// the combined filter (org_id and day pruning stay); a UUID-typed form that keeps
+		// it is a follow-up to be proven on the prod server.
+		return " AND (" + textRepoMembership(explicitCondition) + " AND " + textRepoMembership(teamCondition) + ")", append(append([]dhclickhouse.Binding(nil), explicitBindings...), teamBindings...)
 	case explicitCondition != "":
 		return " AND " + explicitCondition, explicitBindings
 	case teamCondition != "":
@@ -297,4 +305,15 @@ func ResolveRepoRefs(ctx context.Context, client RowQuerier, repoRefs []string, 
 // that divergence is declared at the surfaces that read this gate.
 func RepoScopeApplies(scopeLevel string, reposNamed bool) bool {
 	return scopeLevel == "team" || scopeLevel == "repo" || reposNamed
+}
+
+// textRepoMembership rewrites "<column> IN ..." to "toString(<column>) IN ...": the
+// membership test of a repository column compared as text. A column that is already
+// toString(...) is left as it is.
+func textRepoMembership(condition string) string {
+	column, rest, found := strings.Cut(condition, " IN ")
+	if !found || strings.HasPrefix(strings.TrimSpace(column), "toString(") {
+		return condition
+	}
+	return "toString(" + column + ") IN " + rest
 }

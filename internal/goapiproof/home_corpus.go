@@ -101,6 +101,48 @@ func percentDefectsFor(leafPath, who string, where func() *SiblingCondition) []B
 	}}
 }
 
+// valueDrivenPercentDefects are the declared differences on a percent leaf
+// for a baseline defect that changes the VALUE the percent is made of (the
+// reference reads other rows than the candidate: a stale row version, rows of
+// another status, rows of the whole organization). The percent then differs
+// as a consequence, in exactly two shapes, each judged on the candidate's own
+// row:
+//
+//   - both sides hold a number and the candidate's row says both of its
+//     windows hold a stored value (has_data and has_prior_data true): two
+//     real percents over different rows.
+//   - the reference holds a number and the candidate holds null beside a
+//     window with no stored value (has_data or has_prior_data false): the
+//     candidate's rows give no value where the reference's rows give one.
+//
+// Everything else at the leaf stays outside this declaration: a null on the
+// reference's side; a null on the candidate's side beside two windows that
+// hold a value (a real percent served as null); a number on the candidate's
+// side beside a window that holds none. Before this, the citation named the
+// percent's path with no shape and so covered ANY difference there, the
+// exact-pair declarations of metricPercentDefects included: an oracle that
+// admits any value cannot fail.
+//
+// The values themselves are not named (AnyNumber): the defect is that the two
+// planes read different rows, so no literal exists. The value leaves of the
+// same citation keep its own entry.
+func valueDrivenPercentDefects(base BaselineDefect, leafPath string, where func() *SiblingCondition) []BaselineDefect {
+	both, missing := where(), where()
+	both.AllTrue = []string{"has_data", "has_prior_data"}
+	missing.AnyFalse = []string{"has_data", "has_prior_data"}
+	make := func(pair LeafPair, sibling *SiblingCondition, shape string) BaselineDefect {
+		defect := base
+		defect.Paths = []string{leafPath}
+		defect.Reason = base.Reason + " On the percent: " + shape
+		defect.LeafPairShape = &LeafPairShape{Pairs: []LeafPair{pair}, CandidateMayBeAllNull: pair.Candidate == nil, Sibling: sibling}
+		return defect
+	}
+	return []BaselineDefect{
+		make(LeafPair{Baseline: AnyNumber, Candidate: AnyNumber}, both, "a number on both sides, beside has_data and has_prior_data both true on the candidate's row."),
+		make(LeafPair{Baseline: AnyNumber, Candidate: nil}, missing, "a number on the reference's side against null on the candidate's, beside has_data or has_prior_data false on the candidate's row."),
+	}
+}
+
 var homeNumericLeaves = Options{
 	NumericLeavesDeclared: true,
 	GoOnlyKeys:            homeDeltaGoOnlyKeys,

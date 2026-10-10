@@ -131,6 +131,9 @@ type repoLinkedLoader struct {
 	orgID                                      string
 	repoIDs                                    []string
 	compareStart, compareEnd, startDay, endDay time.Time
+	// asOf is the response's own instant: the team ownership is read at it, as the
+	// repository-keyed metrics read it.
+	asOf time.Time
 
 	once sync.Once
 	view *repoLinkedView
@@ -176,9 +179,24 @@ func (loader *repoLinkedLoader) read(ctx context.Context) (*repoLinkedView, erro
 		}
 		return nil, err
 	}
+	// With a team scope the filters AND (D5844, decided with CHAOS-9098): only the named
+	// repositories the team HOLDS (team_repo_ownership, the rule the repository-keyed
+	// metrics use) are in the view; a repository the team does not hold has no data,
+	// whatever item is linked to it and attributed to the team (CHAOS-9191).
+	if loader.f.Scope.Level == "team" {
+		held, err := teamscope.HeldRepoIDs(ctx, loader.client, loader.orgID, ids, loader.f.Scope.IDs, loader.asOf)
+		if err != nil {
+			if reason := repoLinkBoundHit(err); reason != "" {
+				return &repoLinkedView{state: reason}, nil
+			}
+			return nil, err
+		}
+		ids = held
+	}
 	loader.repoIDs = ids
 	if len(ids) == 0 {
-		// Named repositories that resolve to nothing: the filter matches nothing.
+		// Named repositories that resolve to nothing, or that the team does not hold: the
+		// filter matches nothing.
 		view.state = repoLinkNoLinks
 		return view, nil
 	}
@@ -604,12 +622,12 @@ func normalizeTeamID(id string) string {
 
 // computeRepoLinkedDelta is computeMetricDelta for one of the four work-item
 // metrics under a repository filter.
-func computeRepoLinkedDelta(ctx context.Context, client QueryClient, spec metricSpec, startDay, endDay, compareStart, compareEnd time.Time, f Filters, orgID string) (MetricDelta, error) {
+func computeRepoLinkedDelta(ctx context.Context, client QueryClient, spec metricSpec, startDay, endDay, compareStart, compareEnd time.Time, f Filters, orgID string, asOf time.Time) (MetricDelta, error) {
 	loader := repoLinkedLoaderFrom(ctx)
 	if loader == nil {
 		loader = &repoLinkedLoader{
 			client: client, f: f, orgID: orgID,
-			compareStart: compareStart, compareEnd: compareEnd, startDay: startDay, endDay: endDay,
+			compareStart: compareStart, compareEnd: compareEnd, startDay: startDay, endDay: endDay, asOf: asOf,
 		}
 	}
 	view, err := loader.load(ctx)

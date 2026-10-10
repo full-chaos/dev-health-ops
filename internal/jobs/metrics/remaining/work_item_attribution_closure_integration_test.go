@@ -802,9 +802,13 @@ func seedWorkItemAttributionRepoOwnership(
 	if err != nil {
 		t.Fatalf("prepare team_repo_ownership batch: %v", err)
 	}
+	// The ownership began two days before it was written: an item that is not
+	// completed takes the ownership valid at the start of today, so an
+	// ownership that begins at this instant would give it no team until the
+	// next day. updated_at stays now: it is what the run detects as a change.
 	if err := batch.Append(
 		orgID, "github", teamID, repoID, "acme/"+teamID, "exact", "native",
-		uint8(1), uint16(100), int32(0), now, nil, now,
+		uint8(1), uint16(100), int32(0), now.Add(-48*time.Hour), nil, now,
 	); err != nil {
 		t.Fatalf("append team_repo_ownership row: %v", err)
 	}

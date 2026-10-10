@@ -88,3 +88,25 @@ func TestPersonTeamsOfGivesEachTeamOnceInTheRankOrderOfTheAttribution(t *testing
 		}
 	}
 }
+
+// CHAOS-9134: a team's name comes from the membership facts the person's team id comes
+// from: the name of the newest fact that has one; a team with no named fact has no name
+// (the family then writes the team id, never another team's name).
+func TestTeamNamesOfGivesTheNameOfTheNewestNamedFactOfTheTeam(t *testing.T) {
+	at := func(hour int) time.Time { return time.Date(2026, 8, 1, hour, 0, 0, 0, time.UTC) }
+	names := teamNamesOf([]teamattribution.GithubWorkItemDerivationMemberFact{
+		{TeamID: "github:platform", TeamName: "Old Platform", UpdatedAt: at(1)},
+		{TeamID: "github:platform", TeamName: "Platform Team", UpdatedAt: at(3)},
+		{TeamID: "github:platform", TeamName: "", UpdatedAt: at(5)}, // newer, but unnamed: skipped
+		{TeamID: " jira:BETA ", TeamName: " Beta ", UpdatedAt: at(2)},
+		{TeamID: "github:nameless", TeamName: "  ", UpdatedAt: at(2)},
+		{TeamID: "", TeamName: "No Id", UpdatedAt: at(2)},
+	})
+	for teamID, want := range map[string]string{
+		"github:platform": "Platform Team", "jira:BETA": "Beta", "github:nameless": "", "": "", "unknown": "",
+	} {
+		if got := names(teamID); got != want {
+			t.Errorf("name of %q = %q, want %q", teamID, got, want)
+		}
+	}
+}

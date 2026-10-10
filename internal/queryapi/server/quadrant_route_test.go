@@ -3,16 +3,19 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/authctx"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/quadrant"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/routeswitch"
 )
 
@@ -363,3 +366,58 @@ func TestNewQuadrantWorkHandlerComparativeParamCheckedAfterValidation(t *testing
 		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusUnprocessableEntity, rec.Body.String())
 	}
 }
+
+// recordingQuadrantClient answers every read with no rows and keeps the bindings it
+// was given.
+type recordingQuadrantClient struct{ bindings [][]dhclickhouse.Binding }
+
+func (c *recordingQuadrantClient) Query(_ context.Context, _ string, bindings []dhclickhouse.Binding) (dhclickhouse.RowScanner, error) {
+	c.bindings = append(c.bindings, bindings)
+	return emptyRowsQuadrantScanner{}, nil
+}
+
+func (c *recordingQuadrantClient) value(name string) any {
+	for _, set := range c.bindings {
+		for _, binding := range set {
+			if binding.Name == name {
+				return binding.Value
+			}
+		}
+	}
+	return nil
+}
+
+// CHAOS-9159: the two new keys end the body, null when the request selects nothing,
+// and the repeatable team_ids / repo_ids reach the reads (empty values dropped).
+func TestNewQuadrantWorkHandlerServesTheSelectedFilterKeysLast(t *testing.T) {
+	get := func(client quadrantClient, target string) string {
+		t.Helper()
+		handler := newQuadrantWorkHandler(client)
+		req := httptest.NewRequest(http.MethodGet, target, nil)
+		req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+		rec := httptest.NewRecorder()
+		serveRoute(t, handler, rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s: status %d, body %s", target, rec.Code, rec.Body.String())
+		}
+		return rec.Body.String()
+	}
+	if body := get(emptyRowsQuadrantClient{}, "/api/v1/quadrant?type=wip_throughput&scope_type=repo"); !strings.HasSuffix(body, `"annotations":[],"repo_filter_applied":null,"filter_empty_reason":null}`) {
+		t.Errorf("nothing selected: body = %s, want the two keys last, null", body)
+	}
+	// A named repository that resolves to nothing, at the repository grain: applied, not found.
+	if body := get(emptyRowsQuadrantClient{}, "/api/v1/quadrant?type=wip_throughput&scope_type=repo&repo_ids=acme/missing&repo_ids="); !strings.HasSuffix(body, `"repo_filter_applied":true,"filter_empty_reason":"repository_not_found"}`) {
+		t.Errorf("a missing repository: body = %s", body)
+	}
+	// At the team grain a repository cannot narrow: said, not applied.
+	if body := get(emptyRowsQuadrantClient{}, "/api/v1/quadrant?type=wip_throughput&scope_type=team&repo_ids=acme/missing"); !strings.HasSuffix(body, `"repo_filter_applied":false,"filter_empty_reason":null}`) {
+		t.Errorf("team grain: body = %s", body)
+	}
+	recorder := &recordingQuadrantClient{}
+	get(recorder, "/api/v1/quadrant?type=wip_throughput&scope_type=team&team_ids=t1&team_ids=&team_ids=t2")
+	if got, want := fmt.Sprint(recorder.value("scope_team_ids")), "[t1 t2]"; got != want {
+		t.Errorf("team_ids reached the read as %s, want %s (repeatable, empty dropped)", got, want)
+	}
+}
+
+type quadrantClient = quadrant.QueryClient

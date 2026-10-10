@@ -1774,7 +1774,10 @@ Limits:
   only from ACTIVE teams. The row of the day holds ONE team: the first by the attribution's rank (primary, then
   specificity, priority, the newer row, the team id). The landscape holds a point for EACH active team of the person,
   so a person of N teams is ranked among the members of each. A person with no membership valid at the day is
-  `unassigned`, id and name, in the row and in the landscape. The team a STORED row holds is never a source: after
+  `unassigned`, id and name, in the row and in the landscape. The NAME of the row's team comes from the same read as
+  its id (CHAOS-9134): the name of the newest membership fact of that team that has one, so the id and the name of one
+  row never come from different teams (a team no fact names keeps its id as its name; the reference passed the stored
+  name through, a declared narrow divergence). The team a STORED row holds is never a source: after
   the first run of a day the newest stored row is the family's own output, and a person who left a team would stay
   in it. A point stored under a team the run does not produce is retracted by the rule of this section. What stays:
   - an id with NO row in `teams` counts as active, so a membership of a deleted team still gives a row and points;
@@ -1845,6 +1848,42 @@ Limits:
   and does not fail the write, because the rows of the batch are stored.
 - **Not changed here.** What a reader makes of a team id with no team row (section 0.4c: the cascade keeps it
   as an unknown team).
+
+#### 0.4j The day whose facts give an item its team (CHAOS-9178)
+
+Ownership and membership rows are bitemporal (`valid_from`, `valid_to`). An item takes its team from the rows
+valid on **the item's day**, never from the rows valid when a job runs. Ownership starts when it was first
+known: an item of a day before the first known ownership of its repository or project stays unassigned, and a
+later change of owner does not rewrite the items of earlier days.
+
+- **The item's day** is the start (UTC) of the day the item was completed (`status = 'done'` with a
+  `completed_at`), and the start of the current day for an item that is not completed. A done item with no
+  `completed_at`, or with a `completed_at` after the current day, takes the current day.
+- **The daily family** (`work_item_attribution`, `internal/jobs/metrics/daily`) reads the facts at the start of
+  the partition's day. A day's partition holds every item created before the day's end that is not done or was
+  completed on or after the day's start; the newest row of an item is read. So the last partition that holds a
+  completed item is its completion day, and an item that is not completed is in the partition of each new day.
+  The rule above is this day.
+- **The backstop** (`internal/jobs/metrics/remaining`, `ComputeOrg`) runs when an ownership or membership row
+  changes and rederives every item of the changed scope, of any age. It groups the items by their day and reads
+  the facts once per day (`WorkItemAttributionItemDay`). It gives an item the same row as the daily family
+  (held by `TestTheBackstopAndTheDailyFamilyGiveAnItemTheOwnerOfItsOwnDay` and, per provider and kind of fact,
+  `TestTheOwnerOfAnItemsDayHoldsForEachProviderAndKindOfFact`).
+- **Consequence for an item that is not completed:** a change made within the current day (a `valid_from`
+  after the start of today) reaches it with the next day's partition, not with the backstop run of today. The
+  two writers agree on the current day too; before this rule the backstop wrote the new owner at once and a
+  later daily run of the same day wrote the old one again.
+- **What a back-dated row does:** an ownership row written now with a `valid_from` in the past changes the
+  items whose day is on or after that `valid_from`. This is the case the backstop exists for; the daily family
+  does not compute old days again.
+- **The table has these two writers only.** The provider sync derivation computes with the facts at the sync's
+  time (it mirrors the reference job, which loads its context once per run), but it stores no team attribution:
+  the work-items sync sink of every provider refuses the nine tables computed from stored work-item rows,
+  `work_item_team_attributions` among them (`TestWorkItemSyncSinksRefuseEveryDailyJobTable`).
+- **The investment materialize job** follows the same rule for its team ownership fallback: a work unit takes
+  the repositories of its donor team valid at the end of the unit's own span, never later than the run
+  (CHAOS-9179; [investment](../../reference/data-models/investment.md), "Team ownership fallback"). It takes
+  the instant the span ends, not the start of a day.
 
 #### 0.4a Provider × entity **consumption** (functional — what `run_team_autoimport` actually pulls)
 

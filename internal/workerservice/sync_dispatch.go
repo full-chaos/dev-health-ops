@@ -743,7 +743,7 @@ func buildSyncCoordinatorWorker(
 		closeClickHouse()
 		return workerFamily{}, errWorkerDependencyUnavailable
 	}
-	nativeTeamCatalogCollectors := newNativeTeamCatalogCollectors(clickhouseConnection, teamCatalogScopeCensus{pool: postgresDatabase.pools.Domain})
+	nativeTeamCatalogCollectors := newProductionTeamCatalogCollectors(clickhouseConnection, postgresDatabase.pools.Domain)
 	teamCatalogClients := teamCatalogClientResolver{
 		pool: postgresDatabase.pools.Domain,
 		credentials: providerfoundation.CredentialResolver{
@@ -979,12 +979,22 @@ func newTouchedDaysDrain(
 	return drain, nil
 }
 
+// newProductionTeamCatalogCollectors is the registry the worker runs: every collector behind
+// the team id carry AND the per-(organization, provider) lease turn (CHAOS-9140, D5917).
+// A test builds it from a pool and reads each entry's serializer, so the wiring is checked by
+// what the constructor returns, not by the text of its call site.
+func newProductionTeamCatalogCollectors(clickhouseConnection driver.Conn, domain *pgxpool.Pool) map[string]providersync.TeamCatalogCollector {
+	return newNativeTeamCatalogCollectors(clickhouseConnection, newCatalogLeaseTurn(domain), teamCatalogScopeCensus{pool: domain})
+}
+
 // newNativeTeamCatalogCollectors is the worker's registry of team catalog
 // collectors, one per provider. Every collector runs behind the team id
 // carry (providersync.CarryFirstTeamCatalogCollector), so the carry runs
-// before any collector of the organization reads or writes a team id.
-func newNativeTeamCatalogCollectors(clickhouseConnection driver.Conn, scopeCensus providersync.OwnershipScopeCensus) map[string]providersync.TeamCatalogCollector {
-	return providersync.CarryFirstTeamCatalogCollectors(clickhouseConnection, map[string]providersync.TeamCatalogCollector{
+// before any collector of the organization reads or writes a team id, and
+// behind the per-(organization, provider) turn (CHAOS-9140: the turn must be
+// set in production; a census test pins it).
+func newNativeTeamCatalogCollectors(clickhouseConnection driver.Conn, turn providersync.TeamCatalogSerializer, scopeCensus providersync.OwnershipScopeCensus) map[string]providersync.TeamCatalogCollector {
+	return providersync.CarryFirstSerializedTeamCatalogCollectors(clickhouseConnection, turn, map[string]providersync.TeamCatalogCollector{
 		"linear": providersync.LinearTeamCatalogCollector{
 			Sink: providersync.LinearReferenceCatalogClickHouseEffects{
 				Conn: clickhouseConnection, Lease: teamCatalogLease{},

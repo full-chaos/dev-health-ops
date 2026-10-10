@@ -3,6 +3,7 @@ package chquery
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -116,6 +117,195 @@ FROM donor_teams AS d
 INNER JOIN team_repos AS tr ON tr.team_id = d.team_id
 ORDER BY d.work_item_id, tr.repo_id, d.team_id`
 
+// TeamRepoInterval is one ownership row of a team over a repository of this
+// organization's catalog, with the time it holds: from ValidFrom, and until
+// ValidTo when the row is closed.
+type TeamRepoInterval struct {
+	TeamID    string
+	RepoID    uuid.UUID
+	ValidFrom time.Time
+	ValidTo   *time.Time
+}
+
+// ValidAt reports whether the ownership row held at the instant: it began at or
+// before it and is open or ends after it. The rule of the as-of query.
+func (interval TeamRepoInterval) ValidAt(at time.Time) bool {
+	return !interval.ValidFrom.After(at) && (interval.ValidTo == nil || interval.ValidTo.After(at))
+}
+
+// TeamRepoDonorSet is what the donors of a set of work items are made of, read
+// without an as-of: the donor team(s) of each work item, and every ownership
+// row of the organization that began at or before the read's bound. A work
+// unit takes the ownership valid at its OWN end time, and one run holds units
+// of many end times, so the two parts are read once and each unit selects its
+// donors with DonorsAt.
+//
+// The two parts are kept apart on purpose. Joined, the result has one row per
+// work item, repository and ownership row, which grows with every closed
+// ownership row a team's repository ever had.
+type TeamRepoDonorSet struct {
+	// TeamsByWorkItem holds the donor teams of a work item, sorted.
+	TeamsByWorkItem map[string][]string
+	// IntervalsByTeam holds the ownership rows of a team, by repository then start.
+	IntervalsByTeam map[string][]TeamRepoInterval
+	// Rows is the number of rows the two reads returned.
+	Rows int
+}
+
+// DonorsAt returns the donors of the work item whose ownership row held at the
+// instant: each (team, repository) once, by repository then team.
+func (set TeamRepoDonorSet) DonorsAt(workItemID string, at time.Time) []TeamRepoDonor {
+	var donors []TeamRepoDonor
+	seen := map[TeamRepoDonor]bool{}
+	for _, team := range set.TeamsByWorkItem[workItemID] {
+		for _, interval := range set.IntervalsByTeam[team] {
+			donor := TeamRepoDonor{WorkItemID: workItemID, TeamID: team, RepoID: interval.RepoID}
+			if !interval.ValidAt(at) || seen[donor] {
+				continue
+			}
+			seen[donor] = true
+			donors = append(donors, donor)
+		}
+	}
+	sort.SliceStable(donors, func(i, j int) bool {
+		if donors[i].RepoID != donors[j].RepoID {
+			return donors[i].RepoID.String() < donors[j].RepoID.String()
+		}
+		return donors[i].TeamID < donors[j].TeamID
+	})
+	return donors
+}
+
+// donorTeamsQuery is the first half of teamRepoDonorsQuery: the donor teams of
+// the work items, from the latest primary attribution snapshot, active teams
+// and the four eligible sources only.
+const donorTeamsQuery = `
+WITH attributions AS (
+    SELECT work_item_id, team_id, source, is_primary
+    FROM (
+        SELECT work_item_id, team_id, source, is_primary, computed_at,
+               max(computed_at) OVER (PARTITION BY work_item_id) AS latest_computed_at
+        FROM work_item_team_attributions FINAL
+        WHERE org_id = {org_id:String} AND work_item_id IN (SELECT work_item_id FROM donor_work_items)
+    )
+    WHERE computed_at = latest_computed_at
+),
+active_teams AS (
+    SELECT id FROM teams FINAL WHERE org_id = {org_id:String} AND is_active = 1
+)
+SELECT DISTINCT a.work_item_id AS work_item_id, assumeNotNull(a.team_id) AS team_id
+FROM attributions AS a
+INNER JOIN active_teams AS t ON t.id = a.team_id
+WHERE a.is_primary = 1 AND a.source IN ('native_team', 'issue_project', 'project_ownership', 'repo_ownership')
+  AND a.team_id IS NOT NULL AND a.team_id != ''
+ORDER BY work_item_id, team_id`
+
+// teamRepoIntervalsQuery is the second half of teamRepoDonorsQuery with the
+// validity window of each ownership row in the result and the "still open at
+// as_of" test left to the caller: every sync-derived ownership row of the donor
+// teams (the external table donor_teams) that began at or before as_of, joined
+// to this organization's repository catalog by id or, when the row has no id,
+// by provider and name. The rows of a team that is no donor of the run's work
+// items are not read: the read grows with the donor teams' ownership, not with
+// the organization's.
+const teamRepoIntervalsQuery = `
+WITH ownership AS (
+    SELECT DISTINCT team_id, provider, repo_id, lower(repo_full_name) AS repo_name_lower, valid_from, valid_to
+    FROM team_repo_ownership FINAL
+    WHERE org_id = {org_id:String}
+      AND source IN ('native', 'jira_legacy', 'provider_access', 'inferred')
+      AND valid_from <= {as_of:DateTime64(3, 'UTC')}
+      AND team_id IN (SELECT team_id FROM donor_teams)
+),
+scoped_repos AS (
+    SELECT id, provider, lower(repo) AS repo_lower FROM repos FINAL WHERE org_id = {org_id:String}
+)
+SELECT DISTINCT team_id, repo_id, valid_from, valid_to
+FROM (
+    SELECT o.team_id AS team_id, r.id AS repo_id, o.valid_from AS valid_from, o.valid_to AS valid_to
+    FROM ownership AS o
+    INNER JOIN scoped_repos AS r ON r.provider = o.provider AND r.id = o.repo_id
+    WHERE o.repo_id IS NOT NULL
+
+    UNION ALL
+
+    SELECT o.team_id AS team_id, r.id AS repo_id, o.valid_from AS valid_from, o.valid_to AS valid_to
+    FROM ownership AS o
+    INNER JOIN scoped_repos AS r ON r.provider = o.provider AND r.repo_lower = o.repo_name_lower
+    WHERE o.repo_id IS NULL
+)
+WHERE repo_id != toUUID('00000000-0000-0000-0000-000000000000')
+ORDER BY team_id, repo_id, valid_from`
+
+// FetchTeamRepoDonorSet reads the donor teams of the work items and the
+// ownership rows that began at or before upTo. For every instant at or before
+// upTo, DonorsAt gives what FetchTeamRepoDonors gives for that instant (held by
+// TestTheDonorSetGivesTheDonorsOfEveryInstant).
+func (reader *Reader) FetchTeamRepoDonorSet(ctx context.Context, workItemIDs []string, organizationID string, upTo time.Time) (TeamRepoDonorSet, error) {
+	set := TeamRepoDonorSet{TeamsByWorkItem: map[string][]string{}, IntervalsByTeam: map[string][]TeamRepoInterval{}}
+	if reader == nil || reader.conn == nil || strings.TrimSpace(organizationID) == "" || upTo.IsZero() {
+		return set, ErrUnavailable
+	}
+	ids := dedupeStrings(workItemIDs)
+	if len(ids) == 0 {
+		return set, nil
+	}
+	queryCtx, err := withDonorWorkItems(ctx, ids)
+	if err != nil {
+		return set, err
+	}
+	teamRows, err := reader.conn.Query(queryCtx, donorTeamsQuery, clickhouse.Named("org_id", organizationID))
+	if err != nil {
+		return set, fmt.Errorf("query donor teams: %w", err)
+	}
+	defer func() { _ = teamRows.Close() }()
+	storedTeamIDs := map[string]bool{}
+	for teamRows.Next() {
+		var workItemID, teamID string
+		if err := teamRows.Scan(&workItemID, &teamID); err != nil {
+			return set, fmt.Errorf("scan donor team: %w", err)
+		}
+		// The second read names the teams as they are stored.
+		storedTeamIDs[teamID] = true
+		// The same decode as FetchTeamRepoDonors: an undecoded id matches no
+		// component node and the unit loses its allocation with no error.
+		workItemID = pythonparity.DecodeClickHouseStringValue(workItemID)
+		teamID = pythonparity.DecodeClickHouseStringValue(teamID)
+		set.TeamsByWorkItem[workItemID] = append(set.TeamsByWorkItem[workItemID], teamID)
+		set.Rows++
+	}
+	if err := teamRows.Err(); err != nil {
+		return set, fmt.Errorf("iterate donor teams: %w", err)
+	}
+	if len(set.TeamsByWorkItem) == 0 {
+		return set, nil
+	}
+	intervalCtx, err := withDonorTeams(ctx, storedTeamIDs)
+	if err != nil {
+		return set, err
+	}
+	intervalRows, err := reader.conn.Query(intervalCtx, teamRepoIntervalsQuery,
+		clickhouse.Named("org_id", organizationID),
+		clickhouse.Named("as_of", upTo.UTC().Format("2006-01-02 15:04:05.000")))
+	if err != nil {
+		return set, fmt.Errorf("query team repository intervals: %w", err)
+	}
+	defer func() { _ = intervalRows.Close() }()
+	for intervalRows.Next() {
+		var interval TeamRepoInterval
+		if err := intervalRows.Scan(&interval.TeamID, &interval.RepoID, &interval.ValidFrom, &interval.ValidTo); err != nil {
+			return set, fmt.Errorf("scan team repository interval: %w", err)
+		}
+		interval.TeamID = pythonparity.DecodeClickHouseStringValue(interval.TeamID)
+		set.IntervalsByTeam[interval.TeamID] = append(set.IntervalsByTeam[interval.TeamID], interval)
+		set.Rows++
+	}
+	if err := intervalRows.Err(); err != nil {
+		return set, fmt.Errorf("iterate team repository intervals: %w", err)
+	}
+	return set, nil
+}
+
 // FetchTeamRepoDonors reads only the latest primary attribution snapshot and
 // live, sync-derived repository ownership. It never resolves person membership
 // or accepts a manual mapping. linked_issue is excluded because its persisted
@@ -159,6 +349,26 @@ func (reader *Reader) FetchTeamRepoDonors(ctx context.Context, workItemIDs []str
 		return nil, fmt.Errorf("iterate team repository donors: %w", err)
 	}
 	return donors, nil
+}
+
+// withDonorTeams attaches the stored ids of the donor teams the interval query
+// reads as its donor_teams external table, in a fixed order.
+func withDonorTeams(ctx context.Context, teamIDs map[string]bool) (context.Context, error) {
+	table, err := ext.NewTable("donor_teams", ext.Column("team_id", "String"))
+	if err != nil {
+		return nil, fmt.Errorf("build donor team table: %w", err)
+	}
+	ids := make([]string, 0, len(teamIDs))
+	for id := range teamIDs {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	for _, id := range ids {
+		if err := table.Append(id); err != nil {
+			return nil, fmt.Errorf("build donor team table: %w", err)
+		}
+	}
+	return clickhouse.Context(ctx, clickhouse.WithExternalTable(table)), nil
 }
 
 // withDonorWorkItems attaches the work item ids the donor query reads as its

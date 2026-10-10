@@ -1313,7 +1313,7 @@ var explainAggregateFloats = map[string]string{
 	"data.drivers.delta_pct":      "derived from the same float aggregates as data.drivers.value",
 	"data.contributors.value":     "the same aggregate read as data.drivers.value",
 	"data.contributors.delta_pct": "derived from the same float aggregates as data.contributors.value -- the same Contributor struct backs both drivers and contributors (schemas.py's Contributor model), so this leaf shares data.drivers.delta_pct's own provenance.",
-	"data.repositories.value":     "Go-only (CHAOS-8103): the same per-repository aggregate read as data.contributors.value, served for a metric stored per repository; the Python reference never served it, so a comparison against a Python answer reports it as a leaf the baseline does not have, whatever its tier.",
+	"data.repositories.value":     "Go-only (CHAOS-8103): the same per-repository aggregate read as data.contributors.value, served for a metric stored per repository; the Python reference never served it, so no comparison against a Python answer reaches this leaf: data.repositories is declared Go-only (explainGoOnlyKeys) and its rows have no reference to be compared with.",
 }
 
 // explainDriverRankOrderInsensitive declares data.drivers/data.contributors
@@ -1407,14 +1407,28 @@ func explainPercentDefects() []BaselineDefect {
 	return out
 }
 
+// explainGoOnlyKeys declares every key the explain answer serves and the
+// recorded reference never had: of the answer, of a driver and of a
+// contributor. Every explain request compares with it, scoped or not, since the
+// answer type is one. A key missing here is a finding on every explain pair,
+// so the list is held against the production type
+// (TestExplainParity_DeclaresExactlyTheKeysTheRecordedReferenceNeverHad).
+var explainGoOnlyKeys = map[string]GoOnlyKey{
+	"data.repositories":                {Ticket: "CHAOS-8103", Reason: "Go-only: the per-repository aggregation of a metric stored per repository; null for a metric stored per team. The Python reference never served it."},
+	"data.source_url":                  {Ticket: "CHAOS-8103", Reason: "Go-only: the stored provider URL of the scope's one repository; null otherwise. The Python reference never served it."},
+	"data.has_data":                    {Ticket: "CHAOS-8491", Reason: "Go-only: the current window holds a stored value for the explained metric; false = value is a 0 placeholder. The Python reference never served it."},
+	"data.has_prior_data":              {Ticket: "CHAOS-8491", Reason: "Go-only: the comparison window holds a stored value for the explained metric; false = delta_pct is null. The Python reference never served it."},
+	"data.source":                      {Ticket: "CHAOS-8910", Reason: "Go-only: the stored provider(s) behind the item; the Python reference never served it."},
+	"data.link_tier":                   {Ticket: "CHAOS-8981", Reason: "Go-only: the weakest deployment-incident link tier behind a measured change failure rate; null for every other metric. The Python reference never served it."},
+	"data.rate_state":                  {Ticket: "CHAOS-8981", Reason: "Go-only: why change failure rate has a value or not; null for every other metric. The Python reference never served it."},
+	"data.drivers.has_data":            {Ticket: "CHAOS-9063", Reason: "Go-only: the driver holds a stored value in the current window; the Python reference never served it."},
+	"data.drivers.has_prior_data":      {Ticket: "CHAOS-9063", Reason: "Go-only: the driver holds a stored value in the comparison window; false = delta_pct is null. The Python reference never served it."},
+	"data.contributors.has_data":       {Ticket: "CHAOS-9063", Reason: "Go-only: the contributor holds a stored value in the current window; the Python reference never served it."},
+	"data.contributors.has_prior_data": {Ticket: "CHAOS-9063", Reason: "Go-only: a contributor row is read for the current window only, so it never has a comparison value; the Python reference never served it."},
+}
+
 var explainParity = Options{
-	GoOnlyKeys: map[string]GoOnlyKey{
-		"data.source":                      {Ticket: "CHAOS-8910", Reason: "Go-only: the stored provider(s) behind the item; the Python reference never served it."},
-		"data.drivers.has_data":            {Ticket: "CHAOS-9063", Reason: "Go-only: the driver holds a stored value in the current window; the Python reference never served it."},
-		"data.drivers.has_prior_data":      {Ticket: "CHAOS-9063", Reason: "Go-only: the driver holds a stored value in the comparison window; false = delta_pct is null. The Python reference never served it."},
-		"data.contributors.has_data":       {Ticket: "CHAOS-9063", Reason: "Go-only: the contributor holds a stored value in the current window; the Python reference never served it."},
-		"data.contributors.has_prior_data": {Ticket: "CHAOS-9063", Reason: "Go-only: a contributor row is read for the current window only, so it never has a comparison value; the Python reference never served it."},
-	},
+	GoOnlyKeys:            explainGoOnlyKeys,
 	NumericLeavesDeclared: true,
 	FloatTierB:            explainAggregateFloats,
 	OrderInsensitiveLists: explainDriverRankOrderInsensitive,
@@ -1520,6 +1534,7 @@ var explainScopeDropDefect = BaselineDefect{
 // below that requests an explicit, live repo or team scope for one of
 // the four metrics explainScopeDropDefect names.
 var explainRepoTeamScopedParity = Options{
+	GoOnlyKeys:            explainGoOnlyKeys,
 	NumericLeavesDeclared: true,
 	FloatTierB:            explainAggregateFloats,
 	OrderInsensitiveLists: explainDriverRankOrderInsensitive,
@@ -1585,6 +1600,7 @@ var explainDriversSubsetDefect = BaselineDefect{
 // is specific to a team's repository resolution, not a repo-scoped
 // request's own single, directly-bound repository.
 var explainTeamScopedParity = Options{
+	GoOnlyKeys:            explainGoOnlyKeys,
 	FloatTierB:            explainAggregateFloats,
 	OrderInsensitiveLists: explainDriverRankOrderInsensitive,
 	BaselineDefects:       append(append(append([]BaselineDefect{}, explainRepoTeamScopedParity.BaselineDefects...), explainContributorsSubsetDefect), explainDriversSubsetDefect),

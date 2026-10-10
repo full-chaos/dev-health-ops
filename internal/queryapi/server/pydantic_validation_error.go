@@ -478,6 +478,18 @@ func coerceIntBodyField(loc []any, value pyjson.Value) (n int, detail *pydanticE
 // implementation, CHAOS-6585), "" when absent. Every raw query.Get in this
 // package goes through this wrapper instead, never url.Values.Get directly
 // (Get returns the FIRST of a repeated key -- the mismatch this closes).
+// queryValues is every value of a repeatable query parameter, in request order, empty
+// strings dropped (an empty value names nothing; D5855).
+func queryValues(query url.Values, name string) []string {
+	var out []string
+	for _, value := range query[name] {
+		if value != "" {
+			out = append(out, value)
+		}
+	}
+	return out
+}
+
 func lastQueryValue(query url.Values, name string) string {
 	return httpapi.QueryLast(query, name)
 }

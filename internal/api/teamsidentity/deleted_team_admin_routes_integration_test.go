@@ -212,6 +212,25 @@ SELECT id, team_uuid, name, members, now64(6) + INTERVAL 1 HOUR, org_id, provide
 				t.Errorf("the list with inactive teams after that delete = %v, want %v", got, want)
 			}
 
+			// And a create under THAT id: the delete was written ahead of the
+			// clock, so the new team must be written after it, or the deleted
+			// version stays the newest and the new team cannot be read.
+			if _, err := store.CreateOrUpdateTeam(ctx, org, TeamWrite{Origin: origin, TeamID: ahead, Name: "Ahead again"}); err != nil {
+				t.Fatal(err)
+			}
+			if back, err := store.GetTeam(ctx, org, ahead); err != nil || back == nil || back.Name != "Ahead again" || !back.IsActive {
+				t.Errorf("a team created under the id of a team deleted ahead of the clock = %+v (err %v), want the new active team", back, err)
+			}
+			if code, _ := status(call(h.updateTeam, http.MethodPatch, "/api/v1/admin/teams/"+ahead, ahead, map[string]any{"name": "Ahead renamed"})); code != http.StatusOK {
+				t.Errorf("update of that team: %d, want 200", code)
+			}
+			if back, err := store.GetTeam(ctx, org, ahead); err != nil || back == nil || back.Name != "Ahead renamed" {
+				t.Errorf("after the update that team = %+v (err %v), want the new name: every admin write is the newest version", back, err)
+			}
+			if deleted, err := store.DeleteTeam(ctx, org, ahead); err != nil || !deleted {
+				t.Fatalf("delete of that team again: %v %v", deleted, err)
+			}
+
 			// An admin create under the same id: a new team.
 			created, err := store.CreateOrUpdateTeam(ctx, org, TeamWrite{Origin: origin, TeamID: gone, Name: "Platform again"})
 			if err != nil {

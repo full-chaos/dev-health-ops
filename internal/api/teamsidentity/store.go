@@ -241,7 +241,7 @@ func (s Store) CreateOrUpdateTeam(ctx context.Context, orgID string, write TeamW
 	resolvedRepos := resolveListField(write.RepoPatterns, teamListOrNil(existing, func(t Team) []string { return t.RepoPatterns }))
 
 	now := time.Now().UTC()
-	createdAt, err := s.insertTeamRow(ctx, teamInsertRow{
+	createdAt, writtenAt, err := s.insertTeamRow(ctx, teamInsertRow{
 		ID: write.TeamID, TeamUUID: uuidValue, Name: write.Name, Description: write.Description,
 		Members: resolvedMembers, ManualMembers: resolvedManual, ProjectKeys: resolvedProjects, RepoPatterns: resolvedRepos,
 		IsActive: true, OrgID: orgID, Origin: origin, UpdatedAt: now,
@@ -252,7 +252,7 @@ func (s Store) CreateOrUpdateTeam(ctx context.Context, orgID string, write TeamW
 	return Team{
 		ID: uuidValue.String(), TeamUUID: uuidValue, TeamID: write.TeamID, Name: write.Name, Description: write.Description,
 		Members: resolvedMembers, ManualMembers: resolvedManual, ProjectKeys: resolvedProjects, RepoPatterns: resolvedRepos,
-		IsActive: true, CreatedAt: createdAt, UpdatedAt: now, OrgID: orgID, origin: origin,
+		IsActive: true, CreatedAt: createdAt, UpdatedAt: writtenAt, OrgID: orgID, origin: origin,
 	}, nil
 }
 
@@ -376,15 +376,8 @@ func (s Store) DeleteTeam(ctx context.Context, orgID, teamID string) (bool, erro
 	if existing == nil {
 		return false, nil
 	}
-	// The newest version of a team is the one with the greatest updated_at, and
-	// between two versions of one updated_at the ACTIVE one wins (teamactive).
-	// So the delete must be strictly newer than the row it replaces, also when
-	// that row carries a time ahead of this clock.
 	now := time.Now().UTC()
-	if !now.After(existing.UpdatedAt) {
-		now = existing.UpdatedAt.Add(time.Microsecond)
-	}
-	if _, err := s.insertTeamRow(ctx, teamInsertRow{
+	if _, _, err := s.insertTeamRow(ctx, teamInsertRow{
 		ID: existing.TeamID, TeamUUID: existing.TeamUUID, Name: existing.Name, Description: existing.Description,
 		Members: existing.Members, ManualMembers: existing.ManualMembers,
 		ProjectKeys: existing.ProjectKeys, RepoPatterns: existing.RepoPatterns,
@@ -413,19 +406,38 @@ type teamInsertRow struct {
 // exact 16-column list that table's real writer uses. provider,
 // native_team_key, parent_team_id and source_id are the row's origin: a
 // stored team's own on an edit, the writer's on a new team.
-func (s Store) insertTeamRow(ctx context.Context, row teamInsertRow) (time.Time, error) {
+//
+// The row is written as the NEWEST version of the team: the newest version is
+// the one with the greatest updated_at, and between two versions of one
+// updated_at the ACTIVE one wins (teamactive). A stored version can carry a
+// time ahead of this clock (a writer on another host, a clock that was set
+// back), and the delete writes such a time on purpose when the row it replaces
+// has one. So the time of the row is moved to just after the newest stored
+// version of the id, deleted or not, when it is not after it already: an admin
+// write that lost against an older row would be a write that did nothing (a
+// delete that leaves the team active, a team created again that cannot be
+// read). It returns the creation time and the time the row was written with.
+func (s Store) insertTeamRow(ctx context.Context, row teamInsertRow) (time.Time, time.Time, error) {
 	const insertSQL = "INSERT INTO teams (id, team_uuid, name, description, members, manual_members, project_keys, repo_patterns, is_active, updated_at, last_synced, org_id, provider, native_team_key, parent_team_id, source_id, created_at, deleted_at)"
 	if err := checkKeyedTeamID(row.ID); err != nil {
-		return time.Time{}, err
+		return time.Time{}, time.Time{}, err
+	}
+	var newest *time.Time
+	if err := s.Conn.QueryRow(ctx, "SELECT maxOrNull(updated_at) FROM teams WHERE org_id = {org_id:String} AND id = {team_id:String}",
+		clickhouse.Named("org_id", row.OrgID), clickhouse.Named("team_id", row.ID)).Scan(&newest); err != nil {
+		return time.Time{}, time.Time{}, fmt.Errorf("read the newest version of the team: %w", err)
+	}
+	if newest != nil && !row.UpdatedAt.After(*newest) {
+		row.UpdatedAt = newest.Add(time.Microsecond)
 	}
 	carried, err := teamcreated.Carry(ctx, s.Conn, row.OrgID, []string{row.ID})
 	if err != nil {
-		return time.Time{}, fmt.Errorf("carry team created_at: %w", err)
+		return time.Time{}, time.Time{}, fmt.Errorf("carry team created_at: %w", err)
 	}
 	createdAt := teamcreated.For(carried, row.ID, row.UpdatedAt)
 	batch, err := s.Conn.PrepareBatch(ctx, insertSQL)
 	if err != nil {
-		return time.Time{}, fmt.Errorf("prepare team insert: %w", err)
+		return time.Time{}, time.Time{}, fmt.Errorf("prepare team insert: %w", err)
 	}
 	defer batch.Abort()
 	isActive := uint8(0)
@@ -438,12 +450,12 @@ func (s Store) insertTeamRow(ctx context.Context, row teamInsertRow) (time.Time,
 		row.ProjectKeys, row.RepoPatterns, isActive, row.UpdatedAt, now, row.OrgID,
 		row.Origin.Provider, row.Origin.NativeTeamKey, row.Origin.ParentTeamID, row.Origin.SourceID, createdAt, row.DeletedAt,
 	); err != nil {
-		return time.Time{}, fmt.Errorf("append team row: %w", err)
+		return time.Time{}, time.Time{}, fmt.Errorf("append team row: %w", err)
 	}
 	if err := batch.Send(); err != nil {
-		return time.Time{}, fmt.Errorf("send team insert: %w", err)
+		return time.Time{}, time.Time{}, fmt.Errorf("send team insert: %w", err)
 	}
-	return createdAt, nil
+	return createdAt, row.UpdatedAt, nil
 }
 
 const identitySelectColumns = "canonical_id, identity_uuid, display_name, email, provider_identities, team_ids, is_active, updated_at, org_id"

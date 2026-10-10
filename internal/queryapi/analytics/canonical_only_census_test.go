@@ -129,6 +129,9 @@ func TestCanonicalOnlyCensus_EveryRequestFormEveryDimension(t *testing.T) {
 								statsReads++
 							}
 						}
+						if strings.Contains(s, "evidence_quality_group_key") && (!strings.Contains(s, "work_unit_investments") || strings.Contains(s, "investment_metrics_daily")) {
+							t.Errorf("%s (%s): the evidence-quality group statement must read only the canonical categorization:\n%s", name, cell.p1, s)
+						}
 						if !cell.legacyTableAllowed && strings.Contains(s, "investment_metrics_daily") {
 							t.Errorf("%s (%s): a statement reads the legacy daily table:\n%s", name, cell.p1, s)
 						}

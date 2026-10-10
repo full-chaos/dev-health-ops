@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"atlassian/atlassian"
+
 	"github.com/full-chaos/dev-health-ops/internal/providersync"
 )
 
@@ -230,6 +232,30 @@ func TestLinkAbsenceIsAFreshCompleteReadOfTheTeamsContainers(t *testing.T) {
 		projectID, _ := providersync.JiraProjectID(c.link)
 		if got := absence.LinkAbsence(context.Background(), storedTeamA, projectID); got != c.want {
 			t.Errorf("%s: %v, want %v", c.name, got, c.want)
+		}
+	}
+}
+
+// stateReads answers TeamById with a team of the given state, whatever the real
+// client would let through (it refuses an empty state itself): the adapter's own
+// rule for a state it cannot read.
+type stateReads struct {
+	GatewayReads
+	state string
+}
+
+func (reads stateReads) GetTeamByID(context.Context, string, string) (*atlassian.AtlassianTeam, error) {
+	return &atlassian.AtlassianTeam{ID: "x", DisplayName: "x", State: reads.state}, nil
+}
+
+func TestATeamWithNoStateIsNoAnswer(t *testing.T) {
+	for state, want := range map[string]providersync.SnapshotAbsence{
+		"": providersync.SnapshotAbsenceNotProven, "  ": providersync.SnapshotAbsenceNotProven, "active": providersync.SnapshotFactStillHeld,
+		"DISBANDED": providersync.SnapshotAbsenceProven,
+	} {
+		absence := &GatewayAbsence{Reads: stateReads{state: state}, SiteID: "site-uuid"}
+		if got := absence.TeamAbsence(context.Background(), storedTeamA); got != want {
+			t.Errorf("state %q: %v, want %v", state, got, want)
 		}
 	}
 }

@@ -69,6 +69,8 @@ func TestLinearProjectLinkAnswerIsClassifiedFromTheRecordedAnswers(t *testing.T)
 			`{"errors":[{"message":"Entity not found: Project","extensions":{"code":"FORBIDDEN"}}],"data":null}`, SnapshotAbsenceNotProven},
 		{"the not-found error with the wrong entity proves nothing", notFound.Status,
 			`{"errors":[{"message":"Entity not found: Team","extensions":{"code":"INPUT_ERROR"}}],"data":null}`, SnapshotAbsenceNotProven},
+		{"the not-found error next to a project in the data proves nothing", notFound.Status,
+			`{"errors":[{"message":"Entity not found: Project","extensions":{"code":"INPUT_ERROR"}}],"data":{"project":{"id":"p","teams":{"nodes":[]}}}}`, SnapshotAbsenceNotProven},
 		{"two errors prove nothing", notFound.Status,
 			`{"errors":[{"message":"Entity not found: Project","extensions":{"code":"INPUT_ERROR"}},{"message":"y","extensions":{"code":"INPUT_ERROR"}}],"data":null}`, SnapshotAbsenceNotProven},
 		{"a project with no id proves nothing", found.Status, `{"data":{"project":{"id":"","teams":{"nodes":[]}}}}`, SnapshotAbsenceNotProven},
@@ -125,6 +127,10 @@ func TestLinearAbsenceProverAsksTheQueriesThatWereRecorded(t *testing.T) {
 	injected := OwnershipSnapshotRow{TeamID: "linear:OPS", Source: "native", ProjectID: ProjectID{`x") { id } } #`}}
 	if got := prover.OwnershipAbsence(org)(context.Background(), injected); got != SnapshotAbsenceNotProven || len(doer.requests) != 0 {
 		t.Errorf("a project id that is no identifier: %v with %d request(s), want not proven and none", got, len(doer.requests))
+	}
+	injectedKey := OwnershipSnapshotRow{TeamID: "linear:OPS", Source: "native", ProjectID: ProjectID{org + `:linear:OPS") { id } } #`}}
+	if got := prover.OwnershipAbsence(org)(context.Background(), injectedKey); got != SnapshotAbsenceNotProven || len(doer.requests) != 0 {
+		t.Errorf("a team key that is no identifier: %v with %d request(s), want not proven and none", got, len(doer.requests))
 	}
 	if got := prover.TeamAbsence(context.Background(), "gh:ops"); got != SnapshotAbsenceNotProven || len(doer.requests) != 0 {
 		t.Errorf("a team id of another provider: %v with %d request(s), want not proven and none", got, len(doer.requests))

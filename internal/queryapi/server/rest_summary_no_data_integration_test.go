@@ -37,6 +37,8 @@ type restDelta struct {
 	HasData      *bool    `json:"has_data"`
 	HasPriorData *bool    `json:"has_prior_data"`
 	RateState    *string  `json:"rate_state"`
+	// RepoFilterApplied: null when the request names no repository (CHAOS-9093).
+	RepoFilterApplied *bool `json:"repo_filter_applied"`
 }
 
 func restSummaryDeltas(t *testing.T, mux *http.ServeMux, org, target string) map[string]restDelta {

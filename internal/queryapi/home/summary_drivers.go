@@ -35,11 +35,11 @@ func driverNames(ctx context.Context, client QueryClient, orgID, group string, r
 	if len(ids) == 0 {
 		return nil
 	}
-	names := scopelabel.Resolve(ctx, client, orgID, kind, ids, scopelabel.Options{Final: true, Log: "home summary drivers"})
+	names := resolveScopeNames(ctx, client, orgID, kind, ids, "home summary drivers")
 	var active map[string]bool
 	if kind == "team" {
 		var err error
-		if active, err = activeTeamIDs(ctx, client, orgID); err != nil {
+		if active, err = activeTeamIDs(ctx, client, orgID, ids); err != nil {
 			log.Printf("home summary drivers: could not read the active teams: %v", err)
 			return nil
 		}
@@ -47,9 +47,7 @@ func driverNames(ctx context.Context, client QueryClient, orgID, group string, r
 	var out []string
 	seen := map[string]bool{}
 	for _, id := range ids {
-		// A name that is the id is no name: an id stored in the name column is
-		// still an id (the same rule the explain route applies).
-		name, ok := scopelabel.CleanNameFor(names[id], id)
+		name, ok := names[id]
 		if !ok || (kind == "team" && !active[id]) || seen[name] {
 			continue
 		}
@@ -59,10 +57,32 @@ func driverNames(ctx context.Context, client QueryClient, orgID, group string, r
 	return out
 }
 
-// activeTeamIDs is the ids of the active team rows of the organization, by the
-// shared rule of package activeteams.
-func activeTeamIDs(ctx context.Context, client QueryClient, orgID string) (map[string]bool, error) {
-	rows, err := client.Query(ctx, activeteams.IDsSubquery, []dhclickhouse.Binding{{Name: "org_id", Value: orgID}})
+// resolveScopeNames is the one name lookup of the Home prose (CHAOS-9046,
+// CHAOS-9116): the shared scopelabel lookup of the repositories or the teams, and
+// the one rule for what is no name. A name that is the id is no name (an id
+// stored in the name column is still an id; the rule the explain route applies),
+// and a bare uuid is no name. An id without a name is absent from the result;
+// the caller leaves it out or says it generically, and never prints it. A failed
+// read answers an empty map (logged).
+func resolveScopeNames(ctx context.Context, client QueryClient, orgID, kind string, ids []string, logPrefix string) map[string]string {
+	resolved := scopelabel.Resolve(ctx, client, orgID, kind, ids, scopelabel.Options{Final: true, Log: logPrefix})
+	names := make(map[string]string, len(resolved))
+	for id, raw := range resolved {
+		if name, ok := scopelabel.CleanNameFor(raw, id); ok {
+			names[id] = name
+		}
+	}
+	return names
+}
+
+// activeTeamIDs is the ids, among the given ones, of the active team rows of
+// the organization, by the shared rule of package activeteams. It reads only the
+// ids the sentence needs, never the organization's whole team list: the Home
+// route's client caps a result at 1,000 rows, so a read of every active team
+// failed for an organization with more (CHAOS-9046 round 1, F1).
+func activeTeamIDs(ctx context.Context, client QueryClient, orgID string, ids []string) (map[string]bool, error) {
+	rows, err := client.Query(ctx, activeteams.IDsSubquery+` AND id IN {team_ids:Array(String)}`,
+		[]dhclickhouse.Binding{{Name: "org_id", Value: orgID}, {Name: "team_ids", Value: ids}})
 	if err != nil {
 		return nil, err
 	}
@@ -76,4 +96,48 @@ func activeTeamIDs(ctx context.Context, client QueryClient, orgID string) (map[s
 		active[id] = true
 	}
 	return active, rows.Err()
+}
+
+// scopeNames is the display names of the scope ids of the request (a team
+// request names teams, a repository request repositories), by the shared lookup.
+// A repository request may carry the repository NAME instead of its id (the
+// readers accept both: a value that is not a uuid is read as the name): that
+// value is already a name and is kept as it is.
+func scopeNames(ctx context.Context, client QueryClient, orgID string, f Filters) map[string]string {
+	switch f.Scope.Level {
+	case "team":
+		return resolveScopeNames(ctx, client, orgID, "team", f.Scope.IDs, "home scope labels")
+	case "repo":
+		var uuids []string
+		names := map[string]string{}
+		for _, id := range f.Scope.IDs {
+			if scopelabel.LooksLikeUUID(id) {
+				uuids = append(uuids, id)
+			} else if name, ok := scopelabel.CleanName(id); ok {
+				names[id] = name
+			}
+		}
+		for id, name := range resolveScopeNames(ctx, client, orgID, "repo", uuids, "home scope labels") {
+			names[id] = name
+		}
+		return names
+	}
+	return nil
+}
+
+// attachTeamNames sets the display name of the team of each recommendation row.
+func attachTeamNames(ctx context.Context, client QueryClient, orgID string, rows []RecommendationRow) {
+	var ids []string
+	for _, row := range rows {
+		if row.TeamID != "" {
+			ids = append(ids, row.TeamID)
+		}
+	}
+	if len(ids) == 0 {
+		return
+	}
+	names := resolveScopeNames(ctx, client, orgID, "team", ids, "home recommendation teams")
+	for i := range rows {
+		rows[i].TeamName = names[rows[i].TeamID]
+	}
 }

@@ -94,6 +94,14 @@ type MetricDelta struct {
 	// pull request merged, when the window holds no stored counts, and for
 	// every other metric.
 	RateCoverage *float64 `json:"rate_coverage,omitempty"`
+	// RepoFilterApplied (CHAOS-9093) says whether the request's repository
+	// filter (scope.level repo ids, or what.repos) narrows this metric. nil when
+	// the request carries none. true for a repository-keyed metric: the filter was
+	// applied, and when the named repositories resolve to nothing the metric has no
+	// data. false for a team-keyed metric (the work-item metrics: their tables
+	// have no repo_id column and the metric spec's scope is "team"), which the
+	// repository condition does not reach.
+	RepoFilterApplied *bool `json:"repo_filter_applied"`
 }
 
 // ReworkThemeAllocation is the wire shape of ReworkThemeAllocation
@@ -175,6 +183,11 @@ type Signal struct {
 	// response model (pinned by a recorded golden) does not carry it. It is nil on
 	// every other signal.
 	Coverage *float64 `json:"-"`
+	// RepoFilterApplied (CHAOS-9093) is the field of the metric the signal is
+	// built from (MetricDelta.RepoFilterApplied). It is nil on a signal that does
+	// not come from a metric spec (a risk signal, a recommendation). GraphQL only,
+	// like Coverage.
+	RepoFilterApplied *bool `json:"-"`
 	// Attribution is the distribution of current primary work-item
 	// attribution evidence behind a work-item metric. It is nil when this
 	// window has no attributable work items. It is never attached to

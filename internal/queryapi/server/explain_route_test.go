@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
@@ -168,13 +169,10 @@ func TestNewExplainPostHandlerRequiresAuthContext(t *testing.T) {
 }
 
 // TestNewExplainPostHandlerHappyPathNoDeprecatedHeader pins that POST
-// never sets the GET-only deprecation header, and echoes back an unknown
-// metric string verbatim while still answering 200 (api/services/
-// explain.py:146's own cycle_time fallback -- unknown metric is not a
-// validation error).
+// never sets the GET-only deprecation header.
 func TestNewExplainPostHandlerHappyPathNoDeprecatedHeader(t *testing.T) {
 	handler := newExplainPostHandler(newEmptyRowsExplainReader(t))
-	body := `{"metric":"totally_bogus","filters":{"scope":{"level":"org"},"time":{"range_days":7}}}`
+	body := `{"metric":"churn","filters":{"scope":{"level":"org"},"time":{"range_days":7}}}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/explain", bytes.NewReader([]byte(body)))
 	req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
 	rec := httptest.NewRecorder()
@@ -194,8 +192,8 @@ func TestNewExplainPostHandlerHappyPathNoDeprecatedHeader(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &decoded); err != nil {
 		t.Fatalf("decode body: %v (body=%s)", err, rec.Body.String())
 	}
-	if decoded.Metric != "totally_bogus" || decoded.Label != "Cycle Time" {
-		t.Fatalf("decoded = %+v, want metric=totally_bogus label=Cycle Time", decoded)
+	if decoded.Metric != "churn" || decoded.Label != "Code Churn" {
+		t.Fatalf("decoded = %+v, want metric=churn label=Code Churn", decoded)
 	}
 	if decoded.HasData == nil || decoded.HasPriorData == nil {
 		t.Fatalf("response must contain has_data and has_prior_data: %s", rec.Body.String())
@@ -262,5 +260,59 @@ func assertExplainJSONBody(t *testing.T, rec *httptest.ResponseRecorder, wantSta
 	// doc comment (investment_explain_route.go) already establishes.
 	if got != wantBody+"\n" {
 		t.Fatalf("body = %s, want %s", got, wantBody)
+	}
+}
+
+// The explain route answers a metric with ITS OWN config, or a client error,
+// never another metric's config (CHAOS-9136, D5869). Executed through both
+// handlers for the 11 Home metrics and an invented name: the nine metrics with a
+// config answer 200 with their own label; the three Home metrics without one
+// (rework_ratio, pr_rework_ratio, ci_success) and the invented name answer the
+// route's parameter error (422 literal_error on the metric), until a config
+// exists. (The Python original answered all of them with cycle_time's config; a
+// known bug, not pinned.)
+func TestExplainAnswersTheMetricsOwnConfigOrAClientError(t *testing.T) {
+	labels := map[string]string{
+		"cycle_time": "Cycle Time", "review_latency": "Review Latency", "throughput": "Throughput",
+		"deploy_freq": "Deploy Frequency", "churn": "Code Churn", "wip_saturation": "WIP Saturation",
+		"blocked_work": "Blocked Work", "change_failure_rate": "Change Failure Rate",
+	}
+	names := []string{"cycle_time", "review_latency", "throughput", "deploy_freq", "churn", "wip_saturation",
+		"blocked_work", "change_failure_rate", "rework_ratio", "pr_rework_ratio", "ci_success", "totally_bogus"}
+	get, post := newExplainGetHandler(newEmptyRowsExplainReader(t)), newExplainPostHandler(newEmptyRowsExplainReader(t))
+	for _, name := range names {
+		for surface, request := range map[string]func() *http.Request{
+			"GET": func() *http.Request {
+				return httptest.NewRequest(http.MethodGet, "/api/v1/explain?metric="+name+"&range_days=7", nil)
+			},
+			"POST": func() *http.Request {
+				return httptest.NewRequest(http.MethodPost, "/api/v1/explain",
+					bytes.NewReader([]byte(`{"metric":"`+name+`","filters":{"scope":{"level":"org"},"time":{"range_days":7}}}`)))
+			},
+		} {
+			req := request()
+			req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+			rec := httptest.NewRecorder()
+			handler := get
+			if surface == "POST" {
+				handler = post
+			}
+			serveRoute(t, handler, rec, req)
+			wantLabel, known := labels[name]
+			if !known {
+				if rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), `"type":"literal_error"`) ||
+					strings.Contains(rec.Body.String(), "Cycle Time") {
+					t.Errorf("%s %s: status %d body %s, want 422 literal_error and no config", surface, name, rec.Code, rec.Body.String())
+				}
+				continue
+			}
+			var decoded struct {
+				Metric string `json:"metric"`
+				Label  string `json:"label"`
+			}
+			if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &decoded) != nil || decoded.Metric != name || decoded.Label != wantLabel {
+				t.Errorf("%s %s: status %d body %s, want 200 with label %q", surface, name, rec.Code, rec.Body.String(), wantLabel)
+			}
+		}
 	}
 }

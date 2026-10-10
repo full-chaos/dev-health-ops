@@ -798,6 +798,7 @@ type ComplexityRoot struct {
 		Metric            func(childComplexity int) int
 		PriorValue        func(childComplexity int) int
 		RecommendedAction func(childComplexity int) int
+		RepoFilterApplied func(childComplexity int) int
 		ScopeEntity       func(childComplexity int) int
 		Severity          func(childComplexity int) int
 		Title             func(childComplexity int) int
@@ -875,16 +876,17 @@ type ComplexityRoot struct {
 	}
 
 	MetricDelta struct {
-		DeltaPct     func(childComplexity int) int
-		HasData      func(childComplexity int) int
-		HasPriorData func(childComplexity int) int
-		Label        func(childComplexity int) int
-		Metric       func(childComplexity int) int
-		RateCoverage func(childComplexity int) int
-		RateState    func(childComplexity int) int
-		Spark        func(childComplexity int) int
-		Unit         func(childComplexity int) int
-		Value        func(childComplexity int) int
+		DeltaPct          func(childComplexity int) int
+		HasData           func(childComplexity int) int
+		HasPriorData      func(childComplexity int) int
+		Label             func(childComplexity int) int
+		Metric            func(childComplexity int) int
+		RateCoverage      func(childComplexity int) int
+		RateState         func(childComplexity int) int
+		RepoFilterApplied func(childComplexity int) int
+		Spark             func(childComplexity int) int
+		Unit              func(childComplexity int) int
+		Value             func(childComplexity int) int
 	}
 
 	MetricLineage struct {
@@ -5195,6 +5197,13 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 
 		return e.complexity.HomeSignal.RecommendedAction(childComplexity), true
 
+	case "HomeSignal.repoFilterApplied":
+		if e.complexity.HomeSignal.RepoFilterApplied == nil {
+			break
+		}
+
+		return e.complexity.HomeSignal.RepoFilterApplied(childComplexity), true
+
 	case "HomeSignal.scopeEntity":
 		if e.complexity.HomeSignal.ScopeEntity == nil {
 			break
@@ -5572,6 +5581,13 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 		}
 
 		return e.complexity.MetricDelta.RateState(childComplexity), true
+
+	case "MetricDelta.repoFilterApplied":
+		if e.complexity.MetricDelta.RepoFilterApplied == nil {
+			break
+		}
+
+		return e.complexity.MetricDelta.RepoFilterApplied(childComplexity), true
 
 	case "MetricDelta.spark":
 		if e.complexity.MetricDelta.Spark == nil {
@@ -10390,6 +10406,8 @@ type HomeSignal {
   coverage: Float
   """Current primary work-item attribution evidence for work-item metrics; null when this window has no attributable work items."""
   attribution: SignalAttribution
+  "Whether the request's repository filter (a repo-level scope, or what.repos) narrows the metric this signal is built from: the field of the same name on MetricDelta (false only for a team-keyed metric). Null when the request names no repository, and on a signal that does not come from a metric (risk, recommendation)."
+  repoFilterApplied: Boolean
 }
 
 """Source and confidence distribution for the work items behind one Home signal."""
@@ -10642,6 +10660,8 @@ type MetricDelta {
   rateState: String
   "The coverage of the pull request rework ratio (CHAOS-9072), from 0 to 1, not a percent: the merged pull requests of the window that have review data from a provider that stores a changes-requested review, divided by all merged pull requests of the window, of every stored day: a day stored before the review counts existed is in the denominator only, so a window that is partly not counted has a low coverage. 0 when rateState is unknown_no_review_evidence or not_applicable_no_rework_signal. Null when no stored day of the window holds a merged pull request, when rateState is null (no stored day of the window holds review counts), and for every other metric."
   rateCoverage: Float
+  "Whether the request's repository filter (a repo-level scope, or what.repos) narrows this metric. Null when the request names no repository. True for a repository-keyed metric: the filter was applied, and when the named repositories resolve to nothing the metric has no data (hasData false). False only for a team-keyed metric (cycle_time, throughput, wip_saturation, blocked_work: their tables have no repo_id column, so the repository condition is not applied and the value is not narrowed) (CHAOS-9093)."
+  repoFilterApplied: Boolean
 }
 
 type MetricLineage {
@@ -36595,6 +36615,8 @@ func (ec *executionContext) fieldContext_HomeResult_deltas(_ context.Context, fi
 				return ec.fieldContext_MetricDelta_rateState(ctx, field)
 			case "rateCoverage":
 				return ec.fieldContext_MetricDelta_rateCoverage(ctx, field)
+			case "repoFilterApplied":
+				return ec.fieldContext_MetricDelta_repoFilterApplied(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type MetricDelta", field.Name)
 		},
@@ -36996,6 +37018,8 @@ func (ec *executionContext) fieldContext_HomeResult_signals(_ context.Context, f
 				return ec.fieldContext_HomeSignal_coverage(ctx, field)
 			case "attribution":
 				return ec.fieldContext_HomeSignal_attribution(ctx, field)
+			case "repoFilterApplied":
+				return ec.fieldContext_HomeSignal_repoFilterApplied(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type HomeSignal", field.Name)
 		},
@@ -38122,6 +38146,47 @@ func (ec *executionContext) fieldContext_HomeSignal_attribution(_ context.Contex
 				return ec.fieldContext_SignalAttribution_confidence(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type SignalAttribution", field.Name)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _HomeSignal_repoFilterApplied(ctx context.Context, field graphql.CollectedField, obj *model.HomeSignal) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_HomeSignal_repoFilterApplied(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.RepoFilterApplied, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*bool)
+	fc.Result = res
+	return ec.marshalOBoolean2ᚖbool(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_HomeSignal_repoFilterApplied(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "HomeSignal",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Boolean does not have child fields")
 		},
 	}
 	return fc, nil
@@ -40556,6 +40621,47 @@ func (ec *executionContext) fieldContext_MetricDelta_rateCoverage(_ context.Cont
 		IsResolver: false,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 			return nil, errors.New("field of type Float does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _MetricDelta_repoFilterApplied(ctx context.Context, field graphql.CollectedField, obj *model.MetricDelta) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_MetricDelta_repoFilterApplied(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.RepoFilterApplied, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*bool)
+	fc.Result = res
+	return ec.marshalOBoolean2ᚖbool(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_MetricDelta_repoFilterApplied(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MetricDelta",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Boolean does not have child fields")
 		},
 	}
 	return fc, nil
@@ -72149,6 +72255,8 @@ func (ec *executionContext) _HomeSignal(ctx context.Context, sel ast.SelectionSe
 			out.Values[i] = ec._HomeSignal_coverage(ctx, field, obj)
 		case "attribution":
 			out.Values[i] = ec._HomeSignal_attribution(ctx, field, obj)
+		case "repoFilterApplied":
+			out.Values[i] = ec._HomeSignal_repoFilterApplied(ctx, field, obj)
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}
@@ -72736,6 +72844,8 @@ func (ec *executionContext) _MetricDelta(ctx context.Context, sel ast.SelectionS
 			out.Values[i] = ec._MetricDelta_rateState(ctx, field, obj)
 		case "rateCoverage":
 			out.Values[i] = ec._MetricDelta_rateCoverage(ctx, field, obj)
+		case "repoFilterApplied":
+			out.Values[i] = ec._MetricDelta_repoFilterApplied(ctx, field, obj)
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}

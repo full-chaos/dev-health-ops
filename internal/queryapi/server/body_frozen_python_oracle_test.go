@@ -276,7 +276,7 @@ func TestQueryAPIBodiesMatchFrozenFastAPI(t *testing.T) {
 	}
 	handlers := map[string]http.HandlerFunc{}
 	mismatches, compared, classes := 0, 0, map[string]int{}
-	byteDiffs, knownNullGap := 0, 0
+	byteDiffs, knownNullGap, declaredUnknownMetric := 0, 0, 0
 	for index, it := range items {
 		wantStatus := int(want[index][0].(float64))
 		wantText := want[index][1].(string)
@@ -295,6 +295,8 @@ func TestQueryAPIBodiesMatchFrozenFastAPI(t *testing.T) {
 			compared++
 			var problem string
 			switch {
+			case wantStatus == 200 && path == "explain" && status == 422 && explainRefusesOnlyTheMetricName(text):
+				declaredUnknownMetric++
 			case wantStatus == 200 && (status == 422 || status >= 500):
 				problem = "python accepts"
 			case wantStatus == 422 && status != 422 && nullGap(wantText):
@@ -329,8 +331,34 @@ func TestQueryAPIBodiesMatchFrozenFastAPI(t *testing.T) {
 	if knownNullGap == 0 {
 		t.Fatal("the named null gap is closed (every null FastAPI refuses is refused by Go): remove nullGap and compare those bodies directly")
 	}
-	t.Logf("%d bodies, %d route answers compared; 0 mismatches beyond the named null gap (%d answers); every matching 422 byte for byte",
-		len(items), compared, knownNullGap)
+	if declaredUnknownMetric == 0 {
+		t.Fatal("the declared explain divergence is never exercised: remove it or restore the corpus bodies with an unknown metric")
+	}
+	t.Logf("%d bodies, %d route answers compared; 0 mismatches beyond the named null gap (%d answers) and the declared explain divergence (%d answers); every matching 422 byte for byte",
+		len(items), compared, knownNullGap, declaredUnknownMetric)
+}
+
+// explainRefusesOnlyTheMetricName is the one DECLARED divergence from the
+// frozen FastAPI answer for the explain route (CHAOS-9136, D5869): FastAPI
+// answered a metric name outside its map with 200 and cycle_time's config (a
+// known bug, never pinned as expected); Go refuses it with the route's own
+// parameter error, a literal_error on body.metric and nothing else. It matches
+// only that refusal, so any other 422 where FastAPI answered 200 stays a
+// mismatch.
+func explainRefusesOnlyTheMetricName(goText string) bool {
+	value, err := pyjson.DecodeString(goText)
+	if err != nil {
+		return false
+	}
+	detail, _ := objectField(value, "detail")
+	list, ok := detail.([]pyjson.Value)
+	if !ok || len(list) != 1 {
+		return false
+	}
+	kind, _ := objectField(list[0], "type")
+	loc, _ := objectField(list[0], "loc")
+	path, _ := loc.([]pyjson.Value)
+	return kind == "literal_error" && len(path) == 2 && path[0] == "body" && path[1] == "metric"
 }
 
 // nullGap is the named gap the query-api validators carry apart from

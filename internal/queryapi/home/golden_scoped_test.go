@@ -105,5 +105,33 @@ func TestGoldenRepoScoped(t *testing.T) {
 		t.Fatalf("BuildResponse: %v", err)
 	}
 	want := loadGolden(t, "repo_scoped.json")
+	alignSignalRepoFilter(t, got, &want)
 	assertResponseEqual(t, *got, want)
+}
+
+// A Home signal's repoFilterApplied is GraphQL only (json "-"), so the golden file
+// cannot hold it. Each signal built from a metric must carry the value of that
+// metric's delta (the golden holds the delta's); it is then copied onto the
+// golden's signal so the rest of the response is compared as recorded.
+func alignSignalRepoFilter(t *testing.T, got, want *Response) {
+	t.Helper()
+	byMetric := map[string]*bool{}
+	for _, d := range got.Deltas {
+		byMetric[d.Metric] = d.RepoFilterApplied
+	}
+	for i, signal := range got.Signals {
+		flag, fromMetric := byMetric[signal.Metric]
+		if !fromMetric {
+			if signal.RepoFilterApplied != nil {
+				t.Errorf("signal %s does not come from a metric but carries repoFilterApplied", signal.ID)
+			}
+			continue
+		}
+		if (flag == nil) != (signal.RepoFilterApplied == nil) || (flag != nil && *flag != *signal.RepoFilterApplied) {
+			t.Errorf("signal %s repoFilterApplied = %v, want the delta's %v", signal.ID, signal.RepoFilterApplied, flag)
+		}
+		if i < len(want.Signals) {
+			want.Signals[i].RepoFilterApplied = signal.RepoFilterApplied
+		}
+	}
 }

@@ -1,9 +1,9 @@
 {
   "schema_version": 1,
-  "rendered_at": "2026-10-10T13:00:14Z",
-  "ops_sha": "e3fac2c81822f3bc3c0700d57fe1a4f7a88adf76",
-  "render_commit": "f71dfa26ff8d0afde432dd81e8d672d4fd79b6ce",
-  "schema_digest": "sha256:47327e93188a3fc4e8b8ca710ae495042c1abe37b417ae6bb52af7a707a84c64",
+  "rendered_at": "2026-10-10T11:34:48Z",
+  "ops_sha": "3c5fb5ab8cc27a103ea02f26285e33bf97b2bbc7",
+  "render_commit": "b1b90c5a3f9e9e16483ec6d560d794c8bbb523e3",
+  "schema_digest": "sha256:0faa6eb033aa32c7793dc547a778649379afb75db53606d37637e0bac46938a0",
   "fleet_read_at": "0001-01-01T00:00:00Z",
   "fleet_source": "not read"
 }

@@ -16,17 +16,26 @@ spec:
     metadata:
       labels:
         {{- include "dev-health.componentSelectorLabels" (dict "component" "clickhouse" "context" $) | nindent 8 }}
-      {{- if .Values.clickhouse.usersd }}
+      {{- if or .Values.clickhouse.usersd .Values.clickhouse.configd }}
       annotations:
         {{- /* CHAOS-6474: the FILE SET, never the content. Content is delivered through a
                directory-mounted ConfigMap that kubelet refreshes in place and ClickHouse
                reloads without a restart; only a new/removed filename needs the initContainer
                to run again (it creates the users.d symlinks), so only that rolls the pod. */}}
+        {{- if .Values.clickhouse.usersd }}
         checksum/clickhouse-usersd-files: {{ keys (.Values.clickhouse.usersd | default dict) | sortAlpha | toJson | sha256sum }}
+        {{- end }}
+        {{- if .Values.clickhouse.configd }}
+        {{- /* The system log tables (query_log, text_log, ...) take their TTL and MergeTree settings from
+               the server config AT START: a changed config.d file (name or content) must restart the
+               pod, so this checksum covers the CONTENT too (unlike users.d, which reloads live). */}}
+        checksum/clickhouse-configd: {{ .Values.clickhouse.configd | toJson | sha256sum }}
+        {{- end }}
       {{- end }}
     spec:
-      {{- if .Values.clickhouse.usersd }}
+      {{- if or .Values.clickhouse.usersd .Values.clickhouse.configd }}
       initContainers:
+      {{- if .Values.clickhouse.usersd }}
         {{- /* CHAOS-6474: users.d is an emptyDir (the image entrypoint still writes its own
                default-user.xml into it) holding one symlink per usersd file, pointing at the
                directory-mounted ConfigMap. kubelet swaps that directory's ..data symlink
@@ -47,6 +56,25 @@ spec:
             - name: clickhouse-usersd-links
               mountPath: /links
       {{- end }}
+      {{- if .Values.clickhouse.configd }}
+        {{- /* config.d is an emptyDir (the image entrypoint writes its own docker_related_config.xml
+               into it) holding one symlink per configd file, pointing at the directory-mounted
+               ConfigMap, exactly as users.d above. File names are arguments, never interpolated. */}}
+        - name: clickhouse-configd-links
+          image: {{ .Values.clickhouse.image.repository }}:{{ .Values.clickhouse.image.tag }}
+          command:
+            - sh
+            - -c
+            - 'for n in "$@"; do ln -sfn "../configd-cm/$n" "/links/$n"; done'
+            - --
+            {{- range $name := keys (.Values.clickhouse.configd | default dict) | sortAlpha }}
+            - {{ $name | quote }}
+            {{- end }}
+          volumeMounts:
+            - name: clickhouse-configd-links
+              mountPath: /links
+      {{- end }}
+      {{- end }}
       containers:
         - name: clickhouse
           image: {{ .Values.clickhouse.image.repository }}:{{ .Values.clickhouse.image.tag }}
@@ -66,7 +94,7 @@ spec:
               value: "0.0.0.0"
           resources:
             {{- toYaml .Values.clickhouse.resources | nindent 12 }}
-          {{- if or .Values.clickhouse.persistence.enabled .Values.clickhouse.usersd }}
+          {{- if or .Values.clickhouse.persistence.enabled .Values.clickhouse.usersd .Values.clickhouse.configd }}
           volumeMounts:
             {{- if .Values.clickhouse.persistence.enabled }}
             - name: clickhouse-data
@@ -77,6 +105,13 @@ spec:
               mountPath: /etc/clickhouse-server/users.d
             - name: clickhouse-usersd
               mountPath: /etc/clickhouse-server/usersd-cm
+              readOnly: true
+            {{- end }}
+            {{- if .Values.clickhouse.configd }}
+            - name: clickhouse-configd-links
+              mountPath: /etc/clickhouse-server/config.d
+            - name: clickhouse-configd
+              mountPath: /etc/clickhouse-server/configd-cm
               readOnly: true
             {{- end }}
           {{- end }}
@@ -92,13 +127,22 @@ spec:
               port: http
             initialDelaySeconds: 5
             periodSeconds: 5
-      {{- if .Values.clickhouse.usersd }}
+      {{- if or .Values.clickhouse.usersd .Values.clickhouse.configd }}
       volumes:
+        {{- if .Values.clickhouse.usersd }}
         - name: clickhouse-usersd
           configMap:
             name: {{ include "dev-health.fullname" . }}-clickhouse-usersd
         - name: clickhouse-usersd-links
           emptyDir: {}
+        {{- end }}
+        {{- if .Values.clickhouse.configd }}
+        - name: clickhouse-configd
+          configMap:
+            name: {{ include "dev-health.fullname" . }}-clickhouse-configd
+        - name: clickhouse-configd-links
+          emptyDir: {}
+        {{- end }}
       {{- end }}
   {{- if .Values.clickhouse.persistence.enabled }}
   volumeClaimTemplates:
@@ -147,6 +191,23 @@ metadata:
     {{- include "dev-health.componentLabels" (dict "component" "clickhouse" "context" $) | nindent 4 }}
 data:
   {{- range $name, $content := .Values.clickhouse.usersd }}
+  {{- toYaml (dict $name $content) | nindent 2 }}
+  {{- end }}
+{{- end }}
+{{- if .Values.clickhouse.configd }}
+---
+# CHAOS-9177: extra ClickHouse config.d files (server config), e.g. the TTL of the system log
+# tables. Content is supplied by the operator. The ConfigMap is mounted as a directory and an
+# initContainer links each file into config.d (an emptyDir); a change of any file rolls the pod.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "dev-health.fullname" . }}-clickhouse-configd
+  namespace: {{ include "dev-health.namespace" . }}
+  labels:
+    {{- include "dev-health.componentLabels" (dict "component" "clickhouse" "context" $) | nindent 4 }}
+data:
+  {{- range $name, $content := .Values.clickhouse.configd }}
   {{- toYaml (dict $name $content) | nindent 2 }}
   {{- end }}
 {{- end }}

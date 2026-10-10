@@ -6,7 +6,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 )
 
@@ -148,13 +147,8 @@ func (adapter GitHubTeamCatalogCollector) CollectTeamCatalog(
 		return TeamCatalogResult{}, err
 	}
 
-	// CHAOS-4431 codex review finding #6, ROUND 2 correction (P1, team-lead
-	// ruling 2026-08-28): the membership-conflict guard must run BEFORE the
-	// team roster is rebuilt below, not after -- otherwise a membership this
-	// guard rejects could still show up in `teams.members`, a live
-	// attribution fallback source, silently reintroducing the exact
-	// contradiction the guard exists to prevent. Computed once, up front;
-	// both the roster rebuild and the memberships write below read from it.
+	// The membership-conflict guard runs before the memberships write below
+	// (a membership it rejects is never written). Computed once, up front.
 	var keptMemberships []githubMembershipRow
 	var membershipsSkippedManualConflict, membershipsStagedForReview, driftChangesSuperseded int
 	if selections.Members {
@@ -175,120 +169,7 @@ func (adapter GitHubTeamCatalogCollector) CollectTeamCatalog(
 		}
 	}
 
-	rosterPreservationFailed := false
-	if selections.Teams {
-		if selections.Members {
-			// Roster-after-filter: rebuild from the CONFLICT-FILTERED
-			// memberships, not the raw provider-observed roster Collect
-			// baked into the row.
-			roster := githubTeamRosterFromMemberships(keptMemberships)
-			for index := range rows.Teams {
-				members := roster[rows.Teams[index].ID]
-				if members == nil {
-					members = []string{}
-				}
-				rows.Teams[index].Members = members
-			}
-
-			// CHAOS-4461: a per-team member-fetch failure under non-strict
-			// must not let that team's roster stay at the [] the rebuild
-			// above just gave it (that team has zero rows in keptMemberships
-			// because its fetch never even ran, not because every one of
-			// its memberships conflicted) -- confirm and carry forward its
-			// currently-persisted roster instead. Python has no equivalent
-			// for this per-team case (team-lead ruling 2026-08-28: fix in Go
-			// only, tracked as a Python-side gap in CHAOS-4461, dies with
-			// CHAOS-4435).
-			if len(rows.FailedMemberFetchTeamIDs) > 0 {
-				preserved, ok := adapter.Sink.ExistingTeamMembers(ctx, ref.OrgID, rows.FailedMemberFetchTeamIDs)
-				failed := make(map[string]struct{}, len(rows.FailedMemberFetchTeamIDs))
-				for _, id := range rows.FailedMemberFetchTeamIDs {
-					failed[id] = struct{}{}
-				}
-				if !ok {
-					// Cannot confirm these teams' current rosters -- skip
-					// writing THEIR rows entirely this cycle rather than
-					// risk clobbering an unconfirmed roster. Every other
-					// team still writes normally. Same shape as
-					// TeamCatalogResult.RosterPreservationFailed's
-					// documented case -- report it under the same shared
-					// telemetry outcome.
-					rosterPreservationFailed = true
-					filtered := rows.Teams[:0]
-					for _, team := range rows.Teams {
-						if _, isFailed := failed[team.ID]; !isFailed {
-							filtered = append(filtered, team)
-						}
-					}
-					rows.Teams = filtered
-					slog.Default().WarnContext(ctx, "github_team_catalog_roster_preservation_failed",
-						"org_id", ref.OrgID, logging.ProviderIDsAttr("team_ids", rows.FailedMemberFetchTeamIDs))
-				} else {
-					for index := range rows.Teams {
-						if _, isFailed := failed[rows.Teams[index].ID]; !isFailed {
-							continue
-						}
-						members := preserved[rows.Teams[index].ID]
-						if members == nil {
-							// No prior row for this team (genuinely new) has
-							// nothing to preserve -- [] is the correct,
-							// confirmed answer here, not an unconfirmed guess.
-							members = []string{}
-						}
-						rows.Teams[index].Members = members
-					}
-					slog.Default().InfoContext(ctx, "github_team_catalog_roster_preserved_after_fetch_failure",
-						"org_id", ref.OrgID, logging.ProviderIDsAttr("team_ids", rows.FailedMemberFetchTeamIDs))
-				}
-			}
-		} else {
-			// Mirrors _populate_async's roster_write_safe gate: a teams-only
-			// run (members not selected) must not erase a previously-
-			// imported roster by writing an empty "members" list -- it
-			// carries forward whatever is currently persisted, and skips
-			// the team-dimension write entirely if that read cannot be
-			// confirmed.
-			teamIDs := make([]string, 0, len(rows.Teams))
-			for _, team := range rows.Teams {
-				teamIDs = append(teamIDs, team.ID)
-			}
-			existing, ok := adapter.Sink.ExistingTeamMembers(ctx, ref.OrgID, teamIDs)
-			if !ok {
-				// codex review round 2, P1 (team-lead ruling 2026-08-28):
-				// this branch's roster confirm-read failure is a GLOBAL
-				// flag, not per-team like CHAOS-4461's members-selected
-				// branch -- a teams-only run never fetched any rosters this
-				// call, so every row here still carries whatever empty/
-				// stale roster Collect gave it. Clearing rows.Teams entirely
-				// is what makes the "skip the team-dimension write entirely
-				// if that read cannot be confirmed" comment above actually
-				// true; leaving it non-empty here let WriteTeams below
-				// persist an empty roster over a previously-good one during
-				// exactly the transient failure this guard exists to
-				// prevent.
-				rosterPreservationFailed = true
-				rows.Teams = rows.Teams[:0]
-			} else {
-				for index := range rows.Teams {
-					members := existing[rows.Teams[index].ID]
-					if members == nil {
-						members = []string{}
-					}
-					rows.Teams[index].Members = members
-				}
-			}
-		}
-	}
-
-	result := TeamCatalogResult{RosterPreservationFailed: rosterPreservationFailed}
-	// codex review round 1, P2 (team-lead ruling 2026-08-28): rows.Teams was
-	// ALREADY filtered down to just the safe teams above (the roster-
-	// preservation-failed branch removes only the teams whose confirm-read
-	// failed); gating this write on rosterPreservationFailed too discarded
-	// every OTHER, healthy team's write for the whole run, contradicting the
-	// "every other team still writes normally" guarantee. The flag is still
-	// carried on result.RosterPreservationFailed for telemetry -- it just
-	// must not ALSO block the filtered rows from being written.
+	result := TeamCatalogResult{}
 	if selections.Teams && len(rows.Teams) > 0 {
 		// CHAOS-4431 codex review findings #3/#6, team-lead ruling
 		// 2026-08-28: fail-safe guard ahead of the full CHAOS-2622
@@ -317,14 +198,26 @@ func (adapter GitHubTeamCatalogCollector) CollectTeamCatalog(
 	}
 	// CHAOS-4434 correction: team_repo_ownership is gated ONLY on
 	// selections.Teams, matching _populate_async exactly -- Python writes it
-	// even on a roster_write_safe=false run (the roster gate protects only
-	// the `teams` row's members field, never this table). Independent of the
+	// even on a roster_write_safe=false run. Independent of the
 	// sync_policy guard above too -- that guard is scoped to the `teams`
 	// table only, matching Linear's own applyTeamSyncPolicyGuard doc comment.
-	if selections.Teams && (len(rows.RepoOwnership) > 0 || len(rows.RepoListedTeamIDs) > 0) {
+	// A team that holds open rows and that the organization's team listing no
+	// longer returns is a dropped team (CHAOS-9102): its rows close when it is
+	// proved gone. One set of direct team answers serves both closes of the run.
+	teamLookups := NewTeamAbsenceLookups(ctx, githubTeamAbsence{client: client, org: orgName})
+	var droppedRepoTeams []string
+	if selections.Teams {
+		var err error
+		droppedRepoTeams, err = adapter.Sink.OpenRepoOwnershipTeamsNotListed(ctx, ref.OrgID, orgName, rows.TeamListing.Listed)
+		if err != nil {
+			return result, err
+		}
+	}
+	if selections.Teams && (len(rows.RepoOwnership) > 0 || len(rows.RepoListedTeamIDs) > 0 || len(droppedRepoTeams) > 0) {
 		decision := decideOwnershipClose(ctx, adapter.ScopeCensus, ownershipCloseRequest{
 			ref: ref, provider: githubTeamCatalogProvider,
 			listed: rows.RepoListedTeamIDs, unproven: rows.RepoUnprovenTeamIDs, responses: rows.RepoListingResponses,
+			dropped: droppedRepoTeams, teamListing: rows.TeamListing, teamLookups: teamLookups,
 		})
 		// A grant that a listing of more than one response does not hold is
 		// closed only on GitHub's own answer for that grant.
@@ -341,7 +234,7 @@ func (adapter GitHubTeamCatalogCollector) CollectTeamCatalog(
 		result.DegradedLegs = append(result.DegradedLegs, decision.legs...)
 		result.DegradedLegs = append(result.DegradedLegs, SnapshotAbsenceLegs(plan)...)
 		slog.Default().InfoContext(ctx, "github_team_catalog_repo_ownership_snapshot",
-			"org_id", ref.OrgID, "teams_listed", len(rows.RepoListedTeamIDs),
+			"org_id", ref.OrgID, "teams_listed", len(rows.RepoListedTeamIDs), "teams_dropped_gone", len(decision.gone),
 			"teams_closable", len(decision.closable), "rows_written", written, "rows_closed", closed)
 	}
 	if selections.Members {
@@ -351,13 +244,20 @@ func (adapter GitHubTeamCatalogCollector) CollectTeamCatalog(
 		// seen with, and a member absent from the COMPLETE read of its team is
 		// closed (through the one snapshot rule). Absence is judged against the
 		// members the provider returned, not the part the conflict guard keeps.
+		droppedMembershipTeams, err := openMembershipTeamIDsNotListed(
+			ctx, adapter.Sink.Conn, ref.OrgID, githubTeamCatalogProvider, githubTeamCatalogSource,
+			rows.TeamListing.TeamIDPrefix, rows.TeamListing.Listed)
+		if err != nil {
+			return result, err
+		}
 		decision := decideOwnershipClose(ctx, adapter.ScopeCensus, ownershipCloseRequest{
 			ref: ref, provider: githubTeamCatalogProvider, listed: rows.ObservedMembershipTeamIDs,
 			unproven: rows.UnprovenMembershipTeamIDs, dataset: "team_memberships", leg: membershipCloseLeg,
+			dropped: droppedMembershipTeams, teamListing: rows.TeamListing, teamLookups: teamLookups,
 		})
 		membershipRows, membershipOutcome, snapshotErr := githubMembershipWriter.Snapshot(
 			ctx, adapter.Sink.Conn, ref.OrgID, rows.Memberships, keptMemberships, normalizedAt.UTC().Truncate(time.Millisecond),
-			rows.MembershipAbsence, decision.membershipSnapshot(GitHubTeamMembershipKind))
+			decision.membershipProver(rows.MembershipAbsence), decision.membershipSnapshot(GitHubTeamMembershipKind))
 		if snapshotErr != nil {
 			return result, snapshotErr
 		}

@@ -71,9 +71,10 @@ type MetricDelta struct {
 	Label  string  `json:"label"`
 	Value  float64 `json:"value"`
 	Unit   string  `json:"unit"`
-	// DeltaPct is the percent change between the two windows (deltarule): 0
-	// when a window has no stored value, null when the prior is a measured 0 and
-	// the current value is not (a percent change against zero is undefined).
+	// DeltaPct is the percent change between the two windows (deltarule): null
+	// when a window has no stored value (CHAOS-9111) and when the prior is a
+	// measured 0 and the current value is not (a percent change against zero is
+	// undefined); a measured 0 to 0 stays 0.
 	DeltaPct     *float64     `json:"delta_pct"`
 	HasData      bool         `json:"has_data"`
 	HasPriorData bool         `json:"has_prior_data"`

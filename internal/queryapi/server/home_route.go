@@ -67,7 +67,7 @@ type homeRESTResponse struct {
 // homeRESTMetricDelta is the frozen Python MetricDelta shape plus three
 // Go-only fields at the end (CHAOS-9044): has_data / has_prior_data (the
 // window holds a stored value; when false the matching value is a 0
-// placeholder, not a measured zero, and delta_pct is 0) and rate_state (why
+// placeholder, not a measured zero, and delta_pct is null) and rate_state (why
 // a rate that is a ratio of stored counts has a value or not: change failure
 // rate and the pull request rework ratio; null for every other metric and
 // when the window holds no stored counts). The frozen fields keep their

@@ -47,6 +47,9 @@ type gitlabTeamCatalogProjectPayload struct {
 }
 
 type gitlabTeamCatalogMemberPayload struct {
+	// ID is the member's numeric GitLab user id: it survives a username change
+	// (CHAOS-9144). The members list already returns it; 0 when absent.
+	ID       int64   `json:"id"`
 	Username string  `json:"username"`
 	Name     string  `json:"name"`
 	Email    *string `json:"email"`
@@ -104,6 +107,8 @@ type gitlabTeamCatalogMembershipRow struct {
 	ValidFrom         time.Time  `json:"valid_from"`
 	ValidTo           *time.Time `json:"valid_to"`
 	UpdatedAt         time.Time  `json:"updated_at"`
+	// ProviderUserID is the provider's own stable id of the member (CHAOS-9144); nil when it has none.
+	ProviderUserID *string `json:"provider_user_id"`
 }
 
 // gitlabTeamCatalogProjectRow is the native project catalog row (CHAOS-3380
@@ -367,6 +372,7 @@ func normalizeGitLabMembershipRow(
 		IdentityFacets: facets, Source: gitlabTeamCatalogSource, IsPrimary: 0,
 		Specificity: gitlabTeamCatalogBaseSpecificity, Priority: gitlabTeamCatalogProviderAccessPriority,
 		ValidFrom: normalizedAt, UpdatedAt: normalizedAt,
+		ProviderUserID: providerUserIDText(payload.ID),
 	}
 	return row, memberID, true
 }

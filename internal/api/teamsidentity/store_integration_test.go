@@ -72,7 +72,8 @@ func createTeamsIdentitiesTables(t *testing.T, ctx context.Context, conn interfa
 			valid_from DateTime64(3, 'UTC'),
 			valid_to Nullable(DateTime64(3, 'UTC')),
 			updated_at DateTime64(3, 'UTC'),
-			identity_facets Array(String) DEFAULT []
+			identity_facets Array(String) DEFAULT [],
+			provider_user_id Nullable(String)
 		) ENGINE = ReplacingMergeTree(updated_at)
 		ORDER BY (org_id, provider, team_id, member_id, source, valid_from)`,
 		// team_sync_policies/team_provider_observations/team_drift_changes:

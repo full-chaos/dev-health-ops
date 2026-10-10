@@ -499,8 +499,9 @@ func linearTeamWith(members string) string {
 }
 
 // Linear keys a member by its email. A changed (or hidden) email is the same
-// person, and no stable user id is stored to say so: nothing is closed, the
-// log says so, and the member never gets a "left" interval.
+// person, and a row written BEFORE provider_user_id existed has no stored id
+// to say so (CHAOS-9144 continues a row only on a stored id): nothing is
+// closed, the log says so, and the member never gets a "left" interval.
 func TestAChangedLinearEmailClosesNothingAndSaysSo(t *testing.T) {
 	ctx, conn := newWorkItemEffectsConn(t)
 	f := carryFixture{t: t, ctx: ctx, conn: conn, orgID: uuid.NewString()}
@@ -512,7 +513,16 @@ func TestAChangedLinearEmailClosesNothingAndSaysSo(t *testing.T) {
 	if err := linearMembershipRun(t, f, departureAt[0], linearTeamWith(alice+","+bob)); err != nil {
 		t.Fatal(err)
 	}
+	// Rows written before provider_user_id existed: every row of the provider has no stored id.
+	forgetStoredIDs := func() {
+		t.Helper()
+		f.exec(`INSERT INTO team_memberships (org_id, provider, team_id, member_id, raw_provider_user_id, raw_email, identity_facets, source, is_primary, specificity, priority, valid_from, valid_to, updated_at, provider_user_id)
+			SELECT org_id, provider, team_id, member_id, raw_provider_user_id, raw_email, identity_facets, source, is_primary, specificity, priority, valid_from, valid_to, updated_at + INTERVAL 1 SECOND, NULL
+			FROM team_memberships FINAL WHERE org_id = ? AND provider = 'linear'`, f.orgID)
+	}
+	forgetStoredIDs()
 	for index, changed := range []string{robert, bobNoEmail} {
+		forgetStoredIDs()
 		if err := linearMembershipRun(t, f, departureAt[1].Add(time.Duration(index)*time.Hour), linearTeamWith(alice+","+changed)); err != nil {
 			t.Fatal(err)
 		}

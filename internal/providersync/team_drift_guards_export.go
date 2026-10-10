@@ -62,6 +62,7 @@ type TeamDriftMembershipView struct {
 	ValidFrom                   time.Time
 	ValidTo                     *time.Time
 	UpdatedAt                   time.Time
+	ProviderUserID              *string
 }
 
 func (v TeamDriftMembershipView) toInternal() teamDriftMembershipView {
@@ -70,6 +71,7 @@ func (v TeamDriftMembershipView) toInternal() teamDriftMembershipView {
 		RawProviderUserID: v.RawProviderUserID, RawEmail: v.RawEmail, IdentityFacets: v.IdentityFacets,
 		Source: v.Source, IsPrimary: v.IsPrimary, Specificity: v.Specificity, Priority: v.Priority,
 		ValidFrom: v.ValidFrom, ValidTo: v.ValidTo, UpdatedAt: v.UpdatedAt,
+		ProviderUserID: v.ProviderUserID,
 	}
 }
 

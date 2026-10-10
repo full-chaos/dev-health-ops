@@ -122,6 +122,9 @@ type MembershipRow struct {
 	Priority          int32
 	ValidFrom         time.Time
 	UpdatedAt         time.Time
+	// ProviderUserID is the member's Atlassian accountId as the provider wrote it
+	// (CHAOS-9144); the member id carries it lower-cased.
+	ProviderUserID string
 }
 
 // OwnershipRow is one `team_project_ownership` row.
@@ -472,6 +475,7 @@ func Collect(ctx context.Context, client Client, params Params) (Rows, error) {
 					OrgID: params.OrgID, Provider: Provider, TeamID: id, MemberID: member,
 					RawProviderUserID: facets[0], IdentityFacets: facets, Source: Source, IsPrimary: 1,
 					Specificity: MembershipSpecificity, Priority: MembershipPriority, ValidFrom: now, UpdatedAt: now,
+					ProviderUserID: strings.TrimSpace(account),
 				})
 			}
 		}

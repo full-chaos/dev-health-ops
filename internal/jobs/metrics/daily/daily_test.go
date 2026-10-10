@@ -1350,6 +1350,79 @@ func TestDispatcherMaterializesScheduledFanoutBeforeListingPartitions(t *testing
 	}
 }
 
+// reportingDiscoverer is a discoverer that can report the repositories it
+// cannot discover; it records when the report was asked for.
+type reportingDiscoverer struct {
+	fakeRepositoryDiscoverer
+	store                     *fakeStore
+	reports                   int
+	reportedOrganization      string
+	materializedWhenReported  int
+	discoveriesWhenReported   int
+	dispatchListsWhenReported int
+}
+
+func (discoverer *reportingDiscoverer) ReportRepositoriesNotDiscovered(_ context.Context, organizationID string) {
+	discoverer.reports++
+	discoverer.reportedOrganization = organizationID
+	discoverer.materializedWhenReported = discoverer.store.materialized
+	discoverer.discoveriesWhenReported = discoverer.calls
+	discoverer.dispatchListsWhenReported = discoverer.store.dispatchListCalls
+}
+
+// The report of the repositories a run cannot discover is a scan of the source
+// tables. A run asks for it ONCE: at the dispatch that discovers and stores the
+// run's repositories, after they are stored. A dispatch of a run that has its
+// partitions already, and a dispatch whose discovery or whose store failed,
+// ask for none. (The discovery read itself has more callers in one run; the
+// report is not part of it.)
+func TestDispatcherReportsTheRepositoriesNotDiscoveredOncePerStoredDiscovery(t *testing.T) {
+	discovering := Run{
+		ID: testRunID, OrganizationID: testOrgID, Generation: "fixed-schedule:daily_metrics_fanout:2026-08-12T01:00:00Z",
+		Status: "running", RepositoryDiscoveryRequired: true,
+	}
+	withPartitions := discovering
+	withPartitions.RepositoryDiscoveryRequired = false
+	for _, test := range []struct {
+		name           string
+		run            Run
+		discoverErr    error
+		materializeErr error
+		wantReports    int
+		wantErr        bool
+	}{
+		{"a run that discovers its repositories", discovering, nil, nil, 1, false},
+		{"a run that has its partitions", withPartitions, nil, nil, 0, false},
+		{"the discovery fails", discovering, ErrUnavailable, nil, 0, true},
+		{"the store of the partitions fails", discovering, nil, ErrUnavailable, 0, true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			store := &fakeStore{run: test.run, materializeErr: test.materializeErr}
+			discoverer := &reportingDiscoverer{store: store}
+			discoverer.identifiers = []RepositoryID{"00000000-0000-4000-8000-000000000010"}
+			discoverer.err = test.discoverErr
+			handler, err := NewDispatcher(store, fakePublisher{}, discoverer)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := handler.Work(context.Background(), dailyDispatchExecution()); (err != nil) != test.wantErr {
+				t.Fatalf("dispatch error = %v, want an error: %t", err, test.wantErr)
+			}
+			if discoverer.reports != test.wantReports {
+				t.Fatalf("reports = %d, want %d", discoverer.reports, test.wantReports)
+			}
+			if test.wantReports == 0 {
+				return
+			}
+			if discoverer.reportedOrganization != testOrgID || discoverer.discoveriesWhenReported != 1 ||
+				discoverer.materializedWhenReported != 1 || discoverer.dispatchListsWhenReported != 0 {
+				t.Errorf("the report was asked for organization %q after %d discoveries, %d stores and %d partition lists; want the run's organization, after the one discovery and its store, before the partitions are listed",
+					discoverer.reportedOrganization, discoverer.discoveriesWhenReported, discoverer.materializedWhenReported, discoverer.dispatchListsWhenReported)
+			}
+		})
+	}
+}
+
 func TestDispatcherDoesNotDiscoverRepositoriesForExistingPartitions(t *testing.T) {
 	store := &fakeStore{run: Run{
 		ID: testRunID, OrganizationID: testOrgID, Generation: "fixed-schedule:daily_metrics_fanout:2026-08-12T01:00:00Z",
@@ -1420,22 +1493,24 @@ func finalizeExecution() *jobruntime.Execution[jobruntime.DailyMetricsFinalizeAr
 func pointer(value string) *string { return &value }
 
 type fakeStore struct {
-	failedFinalizePermanently     int
-	failFinalizePermanentlyErr    error
-	run                           Run
-	loadErr                       error
-	partitionClaim                *PartitionClaim
-	partitionReleases             int
-	partitionRenewals             int
-	partitionRenewalFailureAt     int
-	partitionCompletions          int
-	finalizeClaim                 *FinalizeClaim
-	finalizeRenewals              int
-	finalizeRenewalFailureAt      int
-	finalizeCompletions           int
-	finalizeReleases              int
-	completionErr                 error
-	materialized                  int
+	failedFinalizePermanently  int
+	failFinalizePermanentlyErr error
+	run                        Run
+	loadErr                    error
+	partitionClaim             *PartitionClaim
+	partitionReleases          int
+	partitionRenewals          int
+	partitionRenewalFailureAt  int
+	partitionCompletions       int
+	finalizeClaim              *FinalizeClaim
+	finalizeRenewals           int
+	finalizeRenewalFailureAt   int
+	finalizeCompletions        int
+	finalizeReleases           int
+	completionErr              error
+	materialized               int
+	// materializeErr fails the store of the discovered partitions.
+	materializeErr                error
 	dispatchListCalls             int
 	materializedAfterDispatchList bool
 	permanentFailures             int
@@ -1471,6 +1546,9 @@ func (store *fakeStore) DispatchablePartitions(context.Context, string) ([]Parti
 func (store *fakeStore) MaterializeScheduledFanout(_ context.Context, _ Run, _ []RepositoryID) (bool, error) {
 	if store.dispatchListCalls > 0 {
 		store.materializedAfterDispatchList = true
+	}
+	if store.materializeErr != nil {
+		return false, store.materializeErr
 	}
 	store.materialized++
 	return true, nil

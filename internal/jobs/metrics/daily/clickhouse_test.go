@@ -35,7 +35,20 @@ func TestClickHouseRepositoryDiscovererUsesPythonLatestRowQueryWithTenantFence(t
 		t.Fatalf("identifiers=%s want=%s", got, want)
 	}
 	if len(connection.queries) != 2 {
-		t.Fatalf("queries = %d, want the repos read and one nil-repository work item probe", len(connection.queries))
+		t.Fatalf("queries = %d, want the repos read and one nil-repository work item probe: the discovery has other callers than the dispatch of a run, so it does not count the repositories it cannot discover", len(connection.queries))
+	}
+	// The count is its own call, made once by the dispatch of a run.
+	discoverer.ReportRepositoriesNotDiscovered(context.Background(), organizationID)
+	if len(connection.queries) != 3 {
+		t.Fatalf("queries after the report = %d, want one more", len(connection.queries))
+	}
+	if count := connection.queries[2]; count != notDiscoveredRepositoriesSQL ||
+		strings.Count(count, "org_id = ?") != 4 || !strings.Contains(count, "repo_id NOT IN (SELECT id FROM repos WHERE org_id = ?)") {
+		t.Fatalf("the count of repositories not discovered is not fenced by the tenant in every read:\n%s", count)
+	}
+	if arguments := connection.argumentSets[2]; len(arguments) != 5 || arguments[0] != organizationID || arguments[1] != organizationID ||
+		arguments[2] != organizationID || arguments[3] != uuid.Nil || arguments[4] != organizationID {
+		t.Fatalf("count arguments=%v, want the tenant id for every read and the nil repository id", arguments)
 	}
 	if len(connection.argumentSets[0]) != 1 || connection.argumentSets[0][0] != organizationID {
 		t.Fatalf("repos query arguments=%v, want only tenant id", connection.argumentSets[0])

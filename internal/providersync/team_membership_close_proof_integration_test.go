@@ -468,57 +468,6 @@ func (fn absenceFunc) Absence(_ context.Context, team, member string) Membership
 	return fn(team, member)
 }
 
-// ---- the same person under another member id ---------------------------------------
-
-func TestAMemberListedUnderAnotherIdWithTheSameStableUserIdIsRenamedNotClosedAndReopened(t *testing.T) {
-	ctx, conn := newWorkItemEffectsConn(t)
-	const orgID = "org-9079-rename"
-	logs := captureMemberLogs(t)
-	// A provider whose rows store the stable user id in raw_provider_user_id.
-	writer := githubMembershipWriter
-	writer.StoresStableUserID = true
-	writer.UserID = func(row githubMembershipRow) string {
-		if row.RawProviderUserID == nil {
-			return ""
-		}
-		return *row.RawProviderUserID
-	}
-	first := departureAt[0]
-	if err := conn.Exec(ctx, `INSERT INTO team_memberships (org_id, provider, team_id, member_id, raw_provider_user_id, raw_email, identity_facets, source, valid_from, valid_to, updated_at)
-VALUES (?, 'github', 'gh:platform', 'gh:old-login', 'uid-1', NULL, ['old-login'], 'provider_access', ?, NULL, ?)`, orgID, first, first); err != nil {
-		t.Fatal(err)
-	}
-	uid := "uid-1"
-	fresh := githubMembershipRow{OrgID: orgID, Provider: "github", TeamID: "gh:platform", MemberID: "gh:new-login", RawProviderUserID: &uid,
-		IdentityFacets: []string{"new-login"}, Source: "provider_access", ValidFrom: departureAt[2], UpdatedAt: departureAt[2]}
-	closable := GitHubTeamMembershipKind([]string{"gh:platform"}).Snapshot(ScopeProof{stated: true}, ProveSnapshot(SnapshotTerm{Holds: true, Reason: "read_returned"}))
-	// A lookup is never asked for a renamed person: nil prover.
-	rows, outcome, err := writer.Snapshot(ctx, conn, orgID, []githubMembershipRow{fresh}, []githubMembershipRow{fresh}, departureAt[2], nil, closable)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if outcome.Renamed != 1 || outcome.Closed != 0 {
-		t.Fatalf("renamed=%d closed=%d, want 1 rename and no departure", outcome.Renamed, outcome.Closed)
-	}
-	if err := (GitHubTeamCatalogClickHouseEffects{Conn: conn}).WriteMemberships(ctx, orgID, rows); err != nil {
-		t.Fatal(err)
-	}
-	facts := openMembershipFacts(ctx, t, conn, orgID, "github")
-	// The new id carries the first-seen date; the old id is no longer effective.
-	requireOpen(t, "after the rename", facts, "gh:platform|gh:new-login", first)
-	requireNotOpen(t, "after the rename", facts, "gh:platform|gh:old-login")
-	closed := closedMembershipFacts(ctx, t, conn, orgID, "github")
-	requireClosed(t, "after the rename", closed, "gh:platform|gh:old-login", first.Format(time.RFC3339)+"->"+first.Format(time.RFC3339))
-	for _, line := range logs.lines("team_membership_closed") {
-		if line["closed"] != float64(0) || line["renamed"] != float64(1) {
-			t.Errorf("close line = %v, want renamed=1 and no departure", line)
-		}
-	}
-	if strings.Contains(logs.text(), "old-login") || strings.Contains(logs.text(), "new-login") {
-		t.Error("a log line holds a member login")
-	}
-}
-
 // ---- Linear: no stable user id is stored ---------------------------------------------
 
 func linearMembershipRun(t *testing.T, f carryFixture, at time.Time, teamResponse string) error {
@@ -798,5 +747,162 @@ func TestACloseIsWrittenOneTickNewerThanTheRowItReplaces(t *testing.T) {
 	}
 	if len(rows) != 1 || !rows[0].UpdatedAt.Equal(departureAt[1].Add(time.Millisecond)) {
 		t.Errorf("rows = %v, want one closing row with updated_at = the row's updated_at + 1 ms", rows)
+	}
+}
+
+// GitLab usernames are unique case-insensitively, so the lookup compares them
+// that way: a username that matches in another case is the member. Reading it
+// as "not a member" would close a person who is still in the group, and a
+// close is the harmful side; the other side (a wrong "still a member") leaves
+// a row open until the next run.
+func TestGitLabLookupFindsTheMemberWhateverTheCaseOfTheUsername(t *testing.T) {
+	ctx, conn := newWorkItemEffectsConn(t)
+	const orgID = "org-9079-gitlab-case"
+	fake := newGitLabMembersServer(t, "alice", "carol")
+	credential := providerfoundation.Credential{Provider: "gitlab", Config: map[string]string{"group_path": "org"}}
+	sync := func(at time.Time) TeamCatalogResult {
+		t.Helper()
+		collector := GitLabTeamCatalogCollector{Sink: GitLabTeamCatalogClickHouseEffects{
+			Conn: conn, Lease: providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }),
+		}, ScopeCensus: staticScopeCensus{}}
+		result, err := collector.CollectTeamCatalog(ctx, TeamCatalogReference{OrgID: orgID, SyncRunID: "run", IntegrationID: "integration-a"},
+			credential, gitlabTeamCatalogTestClient(t, fake.URL), TeamCatalogSelections{Teams: true, Members: true}, at)
+		if err != nil {
+			t.Fatalf("sync at %s: %v", at, err)
+		}
+		return result
+	}
+	sync(departureAt[0])
+	fake.setMembers("alice")
+	fake.setLookup([]string{"alice", "Carol"}, 0) // the provider answers the username in another case
+	if result := sync(departureAt[1]); result.MembershipsClosed != 0 {
+		t.Errorf("a username that matches in another case closed %d members", result.MembershipsClosed)
+	}
+	requireOpen(t, "another case", openMembershipFacts(ctx, t, conn, orgID, "gitlab"), "gl:org/team-a|gl:carol", departureAt[0])
+}
+
+// A GitHub read that did not reach its own end signal (a full page and no Link)
+// makes its team not closable: even a lookup that says "not a member" closes
+// nothing for that team.
+func TestAGitHubReadWithoutAnEndSignalClosesNothingEvenWhenTheLookupSaysNo(t *testing.T) {
+	ctx, conn := newWorkItemEffectsConn(t)
+	const orgID = "org-9079-github-no-end"
+	credential := providerfoundation.Credential{Provider: "github", Config: map[string]string{"org": "acme"}}
+	run := func(at time.Time, members string, perPage int) TeamCatalogResult {
+		t.Helper()
+		doer := &githubTeamCatalogFixtureDoer{t: t, byPath: map[string]string{
+			"/orgs/acme/teams":                            `[{"slug":"platform","name":"Platform"}]`,
+			"/orgs/acme/teams/platform/repos":             `[]`,
+			"/orgs/acme/teams/platform/members":           members,
+			"/orgs/acme/teams/platform/memberships/hubot": `{"message":"Not Found"}`,
+			"/orgs/acme/teams/platform/memberships/mona":  `{"message":"Not Found"}`,
+		}, statuses: map[string]int{
+			"/orgs/acme/teams/platform/memberships/hubot": http.StatusNotFound,
+			"/orgs/acme/teams/platform/memberships/mona":  http.StatusNotFound,
+		}}
+		adapter := GitHubTeamCatalogCollector{Client: GitHubTeamCatalogRouteHandler{PerPage: perPage},
+			Sink: GitHubTeamCatalogClickHouseEffects{Conn: conn}, ScopeCensus: staticScopeCensus{}}
+		result, err := adapter.CollectTeamCatalog(ctx, TeamCatalogReference{OrgID: orgID, SyncRunID: "run", IntegrationID: "integration-a"},
+			credential, githubTeamCatalogAdapterClient(t, fakehttp.Client(doer)), TeamCatalogSelections{Teams: true, Members: true}, at)
+		if err != nil {
+			t.Fatalf("sync at %s: %v", at, err)
+		}
+		return result
+	}
+	const hubot = "gh:platform|gh:hubot"
+	run(departureAt[0], `[{"login":"octocat"},{"login":"hubot"}]`, 0)
+	// per_page 2 and two members back with no Link: the page is full, the read is not known to have ended.
+	if result := run(departureAt[1], `[{"login":"octocat"},{"login":"mona"}]`, 2); result.MembershipsClosed != 0 {
+		t.Errorf("a read with no end signal closed %d members", result.MembershipsClosed)
+	}
+	requireOpen(t, "no end signal", openMembershipFacts(ctx, t, conn, orgID, "github"), hubot, departureAt[0])
+	// The same answer with fewer members than a page: the read ended, and the lookup closes.
+	// (hubot, and mona, who joined in the run before and is gone now.)
+	if result := run(departureAt[2], `[{"login":"octocat"}]`, 2); result.MembershipsClosed != 2 {
+		t.Errorf("a read that ended closed %d members, want 2", result.MembershipsClosed)
+	}
+	requireNotOpen(t, "the read ended", openMembershipFacts(ctx, t, conn, orgID, "github"), hubot)
+}
+
+// A fact the run holds again with a later open row of the same fact: the later
+// row is retired (closed at the run time) and the earliest stays open.
+func TestALaterOpenRowOfAFactTheRunHoldsIsRetiredAndTheEarliestStaysOpen(t *testing.T) {
+	ctx, conn := newWorkItemEffectsConn(t)
+	const orgID = "org-9079-duplicates"
+	seedMembership(ctx, t, conn, orgID, "github", "gh:platform", "gh:octocat", "provider_access", departureAt[0], nil, departureAt[0])
+	seedMembership(ctx, t, conn, orgID, "github", "gh:platform", "gh:octocat", "provider_access", departureAt[1], nil, departureAt[1])
+	closable := GitHubTeamMembershipKind([]string{"gh:platform"}).Snapshot(ScopeProof{stated: true}, ProveSnapshot(SnapshotTerm{Holds: true, Reason: "read_returned"}))
+	uid := "octocat"
+	fresh := githubMembershipRow{OrgID: orgID, Provider: "github", TeamID: "gh:platform", MemberID: "gh:octocat", RawProviderUserID: &uid,
+		IdentityFacets: []string{"octocat"}, Source: "provider_access", ValidFrom: departureAt[2], UpdatedAt: departureAt[2]}
+	prover := absenceFunc(func(string, string) MembershipAbsence {
+		t.Fatal("a held fact is never asked about")
+		return AbsenceUnproven
+	})
+	rows, outcome, err := githubMembershipWriter.Snapshot(ctx, conn, orgID, []githubMembershipRow{fresh}, []githubMembershipRow{fresh}, departureAt[2], prover, closable)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if outcome.DuplicatesRetired != 1 || outcome.Closed != 0 {
+		t.Fatalf("duplicates=%d closed=%d, want the later row retired and no departure", outcome.DuplicatesRetired, outcome.Closed)
+	}
+	var closedRows []githubMembershipRow
+	for _, row := range rows {
+		if row.ValidTo != nil {
+			closedRows = append(closedRows, row)
+		}
+	}
+	if len(closedRows) != 1 || !closedRows[0].ValidFrom.Equal(departureAt[1]) || !closedRows[0].ValidTo.Equal(departureAt[2]) {
+		t.Errorf("closed rows = %v, want the row of %s closed at the run time %s", closedRows, departureAt[1], departureAt[2])
+	}
+	if len(rows) != 2 || !rows[0].ValidFrom.Equal(departureAt[0]) || rows[0].ValidTo != nil {
+		t.Errorf("rows = %v, want the fresh row on the earliest stamp %s first", rows, departureAt[0])
+	}
+}
+
+// The budget and the lookups count FACTS: a fact with many open rows costs one
+// lookup, one answer closes every open row of the fact.
+func TestAFactWithManyOpenRowsCostsOneLookupAndIsClosedWhole(t *testing.T) {
+	ctx, conn := newWorkItemEffectsConn(t)
+	const orgID = "org-9079-per-fact"
+	for index := 0; index < 5; index++ {
+		seedMembership(ctx, t, conn, orgID, "github", "gh:platform", "gh:many", "provider_access", departureAt[0].Add(time.Duration(index)*time.Minute), nil, departureAt[0])
+	}
+	seedMembership(ctx, t, conn, orgID, "github", "gh:platform", "gh:other", "provider_access", departureAt[0], nil, departureAt[0])
+	closable := GitHubTeamMembershipKind([]string{"gh:platform"}).Snapshot(ScopeProof{stated: true}, ProveSnapshot(SnapshotTerm{Holds: true, Reason: "read_returned"}))
+	run := func(budget int) (map[string]int, []githubMembershipRow, MembershipSnapshotOutcome) {
+		asked := map[string]int{}
+		inner := absenceFunc(func(_, member string) MembershipAbsence { asked[member]++; return AbsenceProven })
+		rows, outcome, err := githubMembershipWriter.Snapshot(ctx, conn, orgID, nil, nil, departureAt[1], &MembershipLookupBudget{Inner: inner, Left: budget}, closable)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return asked, rows, outcome
+	}
+	// Enough budget: each fact is asked ONCE; the six rows of the two facts all close.
+	asked, rows, outcome := run(10)
+	if asked["gh:many"] != 1 || asked["gh:other"] != 1 || outcome.Closed != 2 || len(rows) != 6 {
+		t.Errorf("lookups=%v closed=%d rows=%d, want one lookup per fact, 2 facts closed, 6 rows", asked, outcome.Closed, len(rows))
+	}
+	// A budget of ONE lookup: it is spent on one fact, whose rows all close; the other fact is left open for the budget.
+	asked, rows, outcome = run(1)
+	total := 0
+	for _, n := range asked {
+		total += n
+	}
+	if total != 1 || outcome.Closed != 1 || outcome.Skipped[membershipSkipOverBudget] != 1 {
+		t.Fatalf("lookups=%v closed=%d skipped=%v, want 1 lookup, 1 fact closed, 1 fact left for the budget", asked, outcome.Closed, outcome.Skipped)
+	}
+	want := 5
+	if asked["gh:other"] == 1 {
+		want = 1
+	}
+	if len(rows) != want {
+		t.Errorf("rows = %d, want every open row of the closed fact (%d)", len(rows), want)
+	}
+	for _, row := range rows {
+		if row.ValidTo == nil || row.MemberID != rows[0].MemberID {
+			t.Errorf("row %v: want only closed rows of one fact", row)
+		}
 	}
 }

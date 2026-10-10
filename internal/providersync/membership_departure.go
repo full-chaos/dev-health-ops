@@ -120,16 +120,11 @@ type MembershipSnapshotWriter[R any] struct {
 	// Closed makes the row that closes an open membership: the open row written
 	// again with valid_to = closedAt and updated_at = updatedAt.
 	Closed func(open openMembership, closedAt, updatedAt time.Time) R
-	// StoresStableUserID says that raw_provider_user_id of this provider's rows
-	// IS the provider's stable user id (it does not change with a login, a
-	// name or an email), and UserID reads it from a fresh row. A member who is
-	// listed under ANOTHER member id with the same stable user id as an open row
-	// is the same person renamed: it is not a departure (see the plan).
-	StoresStableUserID bool
-	UserID             func(R) string
 	// KeyedByEmail says that the member id of an open row was made from an
-	// email, which is not stable. Where the provider stores no stable user id,
-	// such a member is never closed: a changed email would read as a departure.
+	// email, which is not stable. No provider stores its own stable user id in
+	// raw_provider_user_id (it holds the first identity facet), so such a member
+	// is never closed by the list rule: a changed or hidden email would read as
+	// a departure.
 	KeyedByEmail func(open openMembership) bool
 }
 
@@ -142,36 +137,39 @@ const (
 	membershipSkipOverBudget     = "lookup_budget_ended"
 )
 
-// MembershipSnapshotOutcome is what one membership write decided.
+// MembershipSnapshotOutcome is what one membership write decided. The counts
+// are of FACTS (a team and a member), not of rows.
 type MembershipSnapshotOutcome struct {
 	Plan SnapshotPlan
-	// Closed: members closed because the provider proved they are not members
-	// (or, for a provider without a lookup, because the complete list lacks them).
+	// Closed: facts closed because the provider proved the person is not a
+	// member (or, for a provider without a lookup, because the complete list
+	// lacks them); every open row of the fact is closed.
 	Closed int
-	// Renamed: open rows of a person who is listed under another member id with
-	// the same stable user id; the old row is closed as an empty interval.
-	Renamed int
 	// DuplicatesRetired: later open rows of a fact the run holds again.
 	DuplicatesRetired int
-	// Skipped: candidates left open, by reason.
+	// Skipped: facts left open, by reason.
 	Skipped map[string]int
 }
 
-// membershipTeamLogAttr names a team in a log line: the id of a team is made
-// from a provider slug or path, so it is cut to the shapes ProviderAssignedID
-// lets through (the provider prefix is dropped, "/" and "." become "_").
-func membershipTeamLogAttr(teamID string) slog.Attr {
+// membershipTeamLogToken names a team in a log line as a string: the id of a
+// team is made from a provider slug or path, so the provider prefix is cut and
+// "/" and "." become "_" to meet the shape logging.ProviderAssignedID lets
+// through. A team that still does not pass is logged as "dropped".
+func membershipTeamLogToken(teamID string) string {
 	token := teamID
 	if _, rest, ok := strings.Cut(teamID, ":"); ok {
 		token = rest
 	}
 	token = strings.NewReplacer("/", "_", ".", "_").Replace(token)
-	return logging.ProviderIDAttr("team", token)
+	if id, dropped := logging.ProviderAssignedID(token); !dropped {
+		return id
+	}
+	return "dropped"
 }
 
 type membershipTeamTally struct {
-	closed, renamed, duplicates int
-	skipped                     map[string]int
+	closed, duplicates int
+	skipped            map[string]int
 }
 
 // Snapshot returns the rows of one membership write: the rows to write on the
@@ -184,12 +182,14 @@ type membershipTeamTally struct {
 // closed because of the guard. A failed read of the open rows is an error
 // before any write.
 //
-// A candidate is closed only when: its row is not newer than the time the run
-// read the provider (at); it is not a renamed person; its member id is not made
-// from an email where the provider stores no stable user id; and, where the
-// provider's list is paged by offset (prove is not nil), the provider's direct
-// lookup answers "not a member". A lookup that fails or is over budget closes
-// nothing, and the log says so with counts.
+// A candidate is a FACT (team and member), however many open rows it holds:
+// it is decided once, asked about once, and a close closes every open row of
+// it. It is closed only when: none of its rows is newer than the time the run
+// read the provider; its member id is not made from an email (see KeyedByEmail)
+// unless the provider says so itself; and, where the provider's list is paged
+// by offset (prove is not nil), the provider's direct lookup answers "not a
+// member". A lookup that fails or is over budget closes nothing, and the log
+// says so with counts.
 func (writer MembershipSnapshotWriter[R]) Snapshot(
 	ctx context.Context, conn driver.Conn, orgID string, observed, toWrite []R, at time.Time,
 	prove MembershipAbsenceProver, kinds ...KindSnapshot[MembershipSnapshotRow],
@@ -201,26 +201,15 @@ func (writer MembershipSnapshotWriter[R]) Snapshot(
 	if err != nil {
 		return nil, MembershipSnapshotOutcome{}, fmt.Errorf("providersync: read open memberships of %s/%s: %w", writer.Provider, writer.Source, err)
 	}
-	facts := func(rows []R) []MembershipSnapshotRow {
-		out := make([]MembershipSnapshotRow, len(rows))
-		for index, row := range rows {
-			out[index] = MembershipSnapshotRow{TeamID: writer.TeamID(row), MemberID: writer.MemberID(row), ValidFrom: writer.ValidFrom(row)}
-			if writer.StoresStableUserID && writer.UserID != nil {
-				out[index].UserID = writer.UserID(row)
-			}
-		}
-		return out
+	observedFacts := make([]MembershipSnapshotRow, len(observed))
+	for index, row := range observed {
+		observedFacts[index] = MembershipSnapshotRow{TeamID: writer.TeamID(row), MemberID: writer.MemberID(row), ValidFrom: writer.ValidFrom(row)}
 	}
-	observedFacts := facts(observed)
 	stamp, retractions, plan := planMembershipSnapshot(open, observedFacts, at, kinds...)
 
 	held := map[string]bool{}
-	byUser := map[string]string{}
 	for _, fact := range observedFacts {
 		held[MembershipSnapshotKey(fact)] = true
-		if fact.UserID != "" {
-			byUser[fact.TeamID+"\x00"+fact.UserID] = fact.MemberID
-		}
 	}
 	outcome := MembershipSnapshotOutcome{Plan: plan, Skipped: map[string]int{}}
 	tally := map[string]*membershipTeamTally{}
@@ -230,72 +219,77 @@ func (writer MembershipSnapshotWriter[R]) Snapshot(
 		}
 		return tally[teamID]
 	}
-	skip := func(open openMembership, reason string) {
-		outcome.Skipped[reason]++
-		of(open.TeamID).skipped[reason]++
-	}
 	type closing struct {
 		open     openMembership
 		closedAt time.Time
 	}
 	var closes []closing
+	// One candidate per fact, in the order the rule retracted the first row of it.
+	var order []string
+	byFact := map[string][]membershipRetraction{}
 	for _, retraction := range retractions {
-		row := retraction.open
-		key := MembershipSnapshotKey(MembershipSnapshotRow{TeamID: row.TeamID, MemberID: row.MemberID})
+		key := MembershipSnapshotKey(MembershipSnapshotRow{TeamID: retraction.open.TeamID, MemberID: retraction.open.MemberID})
 		if held[key] {
 			// A later open row of a fact the run holds again: not a departure.
-			closes = append(closes, closing{row, retraction.closedAt})
+			closes = append(closes, closing{retraction.open, retraction.closedAt})
 			outcome.DuplicatesRetired++
-			of(row.TeamID).duplicates++
+			of(retraction.open.TeamID).duplicates++
 			continue
 		}
-		if row.UpdatedAt.After(at) {
-			// The row was written by a run that read the provider AFTER this one:
-			// this run's list is older than the row, so it cannot say the member left.
-			skip(row, membershipSkipNewerRow)
-			continue
+		if _, seen := byFact[key]; !seen {
+			order = append(order, key)
 		}
-		if writer.StoresStableUserID && row.RawProviderUserID != nil && strings.TrimSpace(*row.RawProviderUserID) != "" {
-			if newMember, renamed := byUser[row.TeamID+"\x00"+*row.RawProviderUserID]; renamed && newMember != row.MemberID {
-				// The same person under another member id: its first-seen date
-				// moves to the new id and the old row never was effective.
-				newKey := MembershipSnapshotKey(MembershipSnapshotRow{TeamID: row.TeamID, MemberID: newMember})
-				if current, ok := stamp[newKey]; !ok || row.ValidFrom.Before(current) {
-					stamp[newKey] = row.ValidFrom
-				}
-				closes = append(closes, closing{row, row.ValidFrom})
-				outcome.Renamed++
-				of(row.TeamID).renamed++
-				continue
+		byFact[key] = append(byFact[key], retraction)
+	}
+	for _, key := range order {
+		rows := byFact[key]
+		first := rows[0].open
+		skip := func(reason string) {
+			outcome.Skipped[reason]++
+			of(first.TeamID).skipped[reason]++
+		}
+		newest := first.UpdatedAt
+		for _, row := range rows {
+			if row.open.UpdatedAt.After(newest) {
+				newest = row.open.UpdatedAt
 			}
+		}
+		if newest.After(at) {
+			// A row of the fact was written by a run that read the provider AFTER
+			// this one: this run's list is older than the row, so it cannot say
+			// the member left.
+			skip(membershipSkipNewerRow)
+			continue
 		}
 		answer := AbsenceNotAsked
 		if prove != nil {
-			answer = prove.Absence(ctx, row.TeamID, row.MemberID)
+			answer = prove.Absence(ctx, first.TeamID, first.MemberID)
 		}
 		switch answer {
 		case AbsenceProven:
 		case AbsenceStillMember:
-			skip(row, membershipSkipStillMember)
+			skip(membershipSkipStillMember)
 			continue
 		case AbsenceOverBudget:
-			skip(row, membershipSkipOverBudget)
+			skip(membershipSkipOverBudget)
 			continue
 		case AbsenceNotAsked:
 			// The writer's own list rule: the list is paged by a cursor, which a
 			// departure between two requests cannot shift, unless the member id
-			// is made from an email and the provider stores no stable user id.
-			if !writer.StoresStableUserID && writer.KeyedByEmail != nil && writer.KeyedByEmail(row) {
-				skip(row, membershipSkipNoStableUserID)
+			// is made from an email and no stable user id is stored.
+			if writer.KeyedByEmail != nil && writer.KeyedByEmail(first) {
+				skip(membershipSkipNoStableUserID)
 				continue
 			}
 		default:
-			skip(row, membershipSkipLookupFailed)
+			skip(membershipSkipLookupFailed)
 			continue
 		}
-		closes = append(closes, closing{row, retraction.closedAt})
+		for _, row := range rows {
+			closes = append(closes, closing{row.open, row.closedAt})
+		}
 		outcome.Closed++
-		of(row.TeamID).closed++
+		of(first.TeamID).closed++
 	}
 
 	teamIDs := make([]string, 0, len(tally))
@@ -305,14 +299,14 @@ func (writer MembershipSnapshotWriter[R]) Snapshot(
 	sort.Strings(teamIDs)
 	for _, teamID := range teamIDs {
 		counts := tally[teamID]
-		if counts.closed+counts.renamed+counts.duplicates > 0 {
+		if counts.closed+counts.duplicates > 0 {
 			slog.Default().InfoContext(ctx, "team_membership_closed",
-				"org_id", orgID, "provider", writer.Provider, membershipTeamLogAttr(teamID),
-				"closed", counts.closed, "renamed", counts.renamed, "duplicates_retired", counts.duplicates)
+				"org_id", orgID, "provider", writer.Provider, "team", membershipTeamLogToken(teamID),
+				"closed", counts.closed, "duplicates_retired", counts.duplicates)
 		}
 		if len(counts.skipped) > 0 {
 			slog.Default().WarnContext(ctx, "team_membership_close_skipped",
-				"org_id", orgID, "provider", writer.Provider, membershipTeamLogAttr(teamID),
+				"org_id", orgID, "provider", writer.Provider, "team", membershipTeamLogToken(teamID),
 				membershipSkipNewerRow, counts.skipped[membershipSkipNewerRow],
 				membershipSkipNoStableUserID, counts.skipped[membershipSkipNoStableUserID],
 				membershipSkipStillMember, counts.skipped[membershipSkipStillMember],

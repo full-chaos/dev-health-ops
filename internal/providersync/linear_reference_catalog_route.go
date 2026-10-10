@@ -335,7 +335,7 @@ func (handler LinearReferenceCatalogRouteHandler) CollectReferenceCatalog(
 			if unusableMembers > 0 {
 				rows.UnusableMemberTeamIDs = append(rows.UnusableMemberTeamIDs, team.ID)
 				slog.Default().WarnContext(ctx, "linear_reference_catalog_member_unusable",
-					"org_id", claim.OrgID, "provider", "linear", membershipTeamLogAttr(team.ID), "unusable_members", unusableMembers)
+					"org_id", claim.OrgID, "provider", "linear", "team", membershipTeamLogToken(team.ID), "unusable_members", unusableMembers)
 			}
 			evidence.MembersComplete = evidence.MembersComplete && membersComplete
 			if len(rows.Teams) == 0 {

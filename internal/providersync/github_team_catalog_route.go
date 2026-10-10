@@ -337,7 +337,7 @@ func (collector GitHubTeamCatalogRouteHandler) collectTeamMemberships(
 	if unusable > 0 {
 		provesEnd = false
 		slog.Default().WarnContext(ctx, "github_team_catalog_member_unusable",
-			"org_id", orgID, "provider", githubTeamCatalogProvider, membershipTeamLogAttr(githubTeamID(slug)), "unusable_members", unusable)
+			"org_id", orgID, "provider", githubTeamCatalogProvider, "team", membershipTeamLogToken(githubTeamID(slug)), "unusable_members", unusable)
 	}
 	return memberships, true, provesEnd, nil
 }

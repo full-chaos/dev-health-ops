@@ -274,7 +274,7 @@ func newGitLabMembersServer(t *testing.T, usernames ...string) *gitlabMembersSer
 				}
 				out := []map[string]any{}
 				for _, username := range truth {
-					if strings.Contains(username, query) {
+					if strings.Contains(strings.ToLower(username), strings.ToLower(query)) { // GitLab's search is case-insensitive
 						out = append(out, map[string]any{"username": username, "name": username})
 					}
 				}

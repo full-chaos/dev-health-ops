@@ -403,7 +403,7 @@ func (handler GitLabTeamCatalogRouteHandler) CollectTeamCatalog(
 						rows.UnprovenMembershipTeamIDs = append(rows.UnprovenMembershipTeamIDs, teamID)
 					}
 					slog.Default().WarnContext(ctx, "gitlab_team_catalog_member_unusable",
-						"org_id", ref.OrgID, "provider", gitlabTeamCatalogProvider, membershipTeamLogAttr(teamID), "unusable_members", unusable)
+						"org_id", ref.OrgID, "provider", gitlabTeamCatalogProvider, "team", membershipTeamLogToken(teamID), "unusable_members", unusable)
 				}
 			}
 		}

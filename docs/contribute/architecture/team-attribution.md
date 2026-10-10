@@ -789,16 +789,60 @@ project's items by id. Now:
      that pages by cursor cannot be shifted by a departure between two requests, so its list rule stands.
   3. no open row of the fact is newer than the time the run read the provider: a run whose list is older than a
      row never closes it (two overlapping runs of one integration).
-  4. a member whose id is made from an email is NOT closed by the list rule, because the provider's user id is
-     not stored (`raw_provider_user_id` holds the first identity facet, not the provider's user id): a changed
-     or hidden email would read as a departure and a join. A login rename of a provider that keys by login
-     reads as a departure and a join with a new `valid_from`; both are named limits.
+  4. a member whose id is made from an email is NOT closed by the list rule: a hidden or changed email would read
+     as a departure. `raw_provider_user_id` still holds the first identity facet, not the provider's user id (the
+     field is pinned by the frozen comparison with the reference); the provider's own stable user id is the
+     separate column `team_memberships.provider_user_id` (CHAOS-9144, migration 117, `Nullable(String)`): GitHub
+     and GitLab numeric user id, Linear user id, Atlassian accountId; NULL on a row written before the column
+     and on a row a person wrote by hand. Its one use is the **rename rule**: when a run returns a member
+     under a NEW member id (a GitHub or GitLab login rename, a Linear email change) whose `provider_user_id`
+     an open row of the SAME team and provider already holds under another member id, that open row continues:
+     the new member id takes the `valid_from` of the earliest such open row, the old open row is retired
+     (closed at the run time, not counted as a departure, no direct lookup is made for it), and the team has
+     one open row for the person, not a leave and a join and not two open rows. A row with no stored id is
+     never matched (its first sync after the column writes the id; a rename before that sync is still a leave
+     and a join, once), a different id under a new login is another person, and an id that two open rows of
+     one team share replaces both. `member_id`, `identity_facets` and `raw_provider_user_id` are not changed
+     by the rule. Jira (Atlassian Teams) keys the member by the accountId itself, so no rename can happen
+     there; the column holds the accountId. Every route that copies or reads back a membership row keeps the
+     column: the effect readback of the GitLab, Jira and Linear snapshot writers compares it (a stored row
+     without the id the run wrote is a conflict, so it is written again, never "exact"); the team-id carry
+     copies it to the keyed team id; the identity-drift review stages it in the `new_value_json` payload (the
+     change id is still the hash of the payload without it, so a pending change keeps its id) and an approval
+     writes it; the retirement of a Jira project-as-team row keeps it on the closed row. One open row continues as
+     ONE new member id: a provider returning the same user id under two new member ids in one run is the provider's
+     statement, so the first member id (sorted) takes the open row's `valid_from` and the other joins as new. A rename does not wait for the proof a departure needs: a team whose member read has no end signal (or whose kind is out of the closable scope) still has the replaced open row retired as a rename, because the stored id is the provider's own statement, not an absence. The same member id back with ANOTHER provider user id than every open row of it holds (a login freed by one person and taken by another) is a new person: the open rows are closed as history, the written row starts at the run time and holds the new id, and `team_membership_id_reused` (provider, team, a count) is logged; a fact with any open row that holds no id, or the same id, is one person still. Each run logs `team_membership_renamed` (provider, team, renamed)
+     once per team, never a login or an email.
+
+  **Membership continuity — the one decision** (`decideMembershipContinuity`, `membership_continuity.go`; every
+  provider writer reaches it through `MembershipSnapshotWriter.Snapshot`, and nothing else compares a provider user
+  id). For each member the provider returns and the conflict guard keeps, with a non-blank id `I`:
+
+  | open rows of the SAME member id | their stored id | open rows of ANOTHER member id (same team) holding `I` | result | written row's `valid_from` | rows closed |
+  | --- | --- | --- | --- | --- | --- |
+  | any | any | any, but `I` absent or blank | `no_change` (the snapshot rule alone) | the rule's | none by this decision |
+  | 0 | n/a | 0 | `new_row` | the run's | none |
+  | 0 | n/a | 1 or 2 | `rename_continue` | earliest of those rows | those rows, as a rename |
+  | 1 or 2 | NULL, blank (the same as NULL), or `I`, or a mix of other and NULL/blank | 0, 1 or 2 | `continue_row` | the rule's (the first-seen) | none: the other rows are not renamed away (they close only as departures, when the read is proven) |
+  | 1 or 2 | every row another id (none NULL, none newer than the read) | 0 | `close_history_new_row` | the run time | every open row of the member id, as history (`team_membership_id_reused`) |
+  | 1 or 2 | every row another id | 1 or 2 | `close_history_rename_continue` | earliest of the renamed rows | the member id's rows as history AND the renamed rows |
+
+  The four review findings of PR #3995 are cells of this table: a login rename is `rename_continue`; two open rows
+  of one id are both replaced (earliest `valid_from`); a member already open with no id stored yet is `continue_row`
+  (never renamed away, so never two open rows); the same member id back with another id is `close_history_new_row`
+  (the first person keeps their row as history). Open rows of another provider, a row newer than the read, a row
+  another returned member holds, and a row an earlier returned member (in sorted order) already took are never
+  matched. Whether the member read is proven changes only the departures of the rows the decision did not take;
+  a rename and a history close are made either way. `TestMembershipContinuityDecisionTable` enumerates every cell
+  (a cell without a row fails the test) and `TestMembershipContinuityThroughTheWriterProvenAndUnproven` runs each
+  through the writer for a proven and an unproven read and for open rows of another provider.
   A member returned with `active: false` is a deactivated user: the provider says so, and it is closed (an
   email-keyed member too). A member who comes back is a new fact with a new `valid_from`. Every close is logged
   once per team (`team_membership_closed`: provider, team, closed, duplicates_retired) and every candidate left
   open once per team (`team_membership_close_skipped`: provider, team, and a count of facts for each reason:
   `row_newer_than_read`, `no_stable_user_id`, `provider_says_member`, `lookup_not_proven`,
-  `lookup_budget_ended`). The team in a log line is its slug or path without the provider prefix.
+  `lookup_budget_ended`). The team in a log line is its slug or path without the provider prefix. A rename is
+  its own line (`team_membership_renamed`), never a close.
 
   **Scope proof, for every kind** (`providersync.ProveSoleScope`, the one scope gate; `ScopeProof` is an
   argument of every kind snapshot, so no kind can be stated without it). Ownership, membership and catalog

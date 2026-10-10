@@ -2,7 +2,9 @@ package daily
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"log/slog"
 	"sort"
 	"strings"
 	"time"
@@ -160,7 +162,13 @@ func staleKeyDay(day time.Time) time.Time {
 
 // staleKeysOf is the rule itself, with no I/O: the live keys of the run's
 // scope that the run did not produce.
-func staleKeysOf(table StaleKeyTable, live []staleKey, scope staleKeyScope, produced []staleKey) []staleKey {
+//
+// everyScope is the scope of a run of the whole organization: it owns the
+// whole day, so every live key it did not produce is stale, of any scope
+// value. A work scope that the organization has no item in any more is not in
+// scope (nothing computes it), and its keys of an earlier compute would stay
+// for ever under the scope filter.
+func staleKeysOf(table StaleKeyTable, live []staleKey, scope staleKeyScope, everyScope bool, produced []staleKey) []staleKey {
 	held := make(map[string]struct{}, len(produced))
 	for _, key := range produced {
 		held[key.text()] = struct{}{}
@@ -170,7 +178,7 @@ func staleKeysOf(table StaleKeyTable, live []staleKey, scope staleKeyScope, prod
 		if _, ok := held[key.text()]; ok {
 			continue
 		}
-		if len(table.Scope) > 0 {
+		if len(table.Scope) > 0 && !everyScope {
 			if _, inScope := scope[table.ScopeTuple(key)]; !inScope {
 				continue
 			}
@@ -260,7 +268,7 @@ func supersedeStaleKeys(
 	if err != nil {
 		return 0, err
 	}
-	return writeStaleKeyZeroRows(ctx, conn, table, organizationID, day, staleKeysOf(table, live, scope, produced),
+	return writeStaleKeyZeroRows(ctx, conn, table, organizationID, day, staleKeysOf(table, live, scope, false, produced),
 		func(key staleKey) time.Time { return versionOf(key, versions[key.text()]) })
 }
 
@@ -269,7 +277,14 @@ func supersedeStaleKeys(
 // run settles too, the write of those rows at a version.
 type runStaleKeys struct {
 	scope staleKeyScope
-	keys  []staleKey
+	// everyScope is true for a run of the whole organization: every live key
+	// of the day that is not in keys is stale, whatever its scope value.
+	everyScope bool
+	// proveNoItem is the second read of an organization-wide run whose first
+	// read gave no work item: it returns nil only when it states, by itself,
+	// that the organization has no work item for the day.
+	proveNoItem func(ctx context.Context) error
+	keys        []staleKey
 	// writeRows stores the rows of the day that were computed with the keys,
 	// at the version. Nil for a table whose rows the partitions settle.
 	writeRows func(ctx context.Context, version time.Time) (int, error)
@@ -309,21 +324,21 @@ type runStaleKeys struct {
 func retractStaleTeamKeysOfRun(
 	ctx context.Context, conn staleKeyConn, table StaleKeyTable, organizationID string, day time.Time,
 	compute func(context.Context) (runStaleKeys, error), clock time.Time,
-) (int, error) {
+) (written, zeros int, err error) {
 	if err := table.Valid(); err != nil {
-		return 0, fmt.Errorf("%w: %v", ErrInvalidState, err)
+		return 0, 0, fmt.Errorf("%w: %v", ErrInvalidState, err)
 	}
 	if conn == nil || strings.TrimSpace(organizationID) == "" || day.IsZero() || compute == nil || clock.IsZero() {
-		return 0, ErrInvalidState
+		return 0, 0, ErrInvalidState
 	}
 	live, _, err := loadLiveStaleKeys(ctx, conn, table, organizationID, day)
 	if err != nil {
-		return 0, err
+		return 0, 0, err
 	}
 	if len(live) == 0 {
 		// The partitions stored no measure for the day: there is no key to
 		// supersede and no row to settle.
-		return 0, nil
+		return 0, 0, nil
 	}
 	// Every row this step writes must be strictly newer than every row of the
 	// day that is stored: a row of zeros newer than the row it supersedes, a
@@ -333,27 +348,156 @@ func retractStaleTeamKeysOfRun(
 	// taken from the stored rows when the clock is not later.
 	newest, err := newestStaleKeyVersion(ctx, conn, table, organizationID, day)
 	if err != nil {
-		return 0, err
+		return 0, 0, err
 	}
 	version, err := staleKeyVersionAfter(table, clock, newest)
 	if err != nil {
-		return 0, err
+		return 0, 0, err
 	}
 	computed, err := compute(ctx)
 	if err != nil {
-		return 0, err
+		return 0, 0, err
 	}
-	written := 0
+	if computed.everyScope && len(computed.scope) == 0 {
+		// The run of the whole organization read NO work item for a day that
+		// holds stored keys with a measure. Every one of those keys is then
+		// stale and gets a row of zeros: the whole day of the table. That is
+		// right when the day is empty, and it is the worst result of a read
+		// that came back empty for another reason. So an empty read alone
+		// supersedes nothing: a second read of the same items must state
+		// that there is none, or the step fails and the finalize is tried
+		// again.
+		if computed.proveNoItem == nil {
+			return 0, 0, fmt.Errorf("%w: %s: the organization-wide read gave no work item and no proof of an empty day is set",
+				ErrOrganizationDayNotProvenEmpty, table.Table)
+		}
+		if err := computed.proveNoItem(ctx); err != nil {
+			return 0, 0, fmt.Errorf("%s: %w", table.Table, err)
+		}
+		slog.Default().Warn(StaleKeysEmptyOrganizationDayLogMessage,
+			"organization_id", organizationID, "target_day", staleKeyDay(day).Format("2006-01-02"),
+			"table", table.Table, "live_keys", len(live))
+	}
 	if computed.writeRows != nil {
 		written, err = computed.writeRows(ctx, version)
 		if err != nil {
-			return written, err
+			return written, 0, err
 		}
 	}
-	zeros, err := writeStaleKeyZeroRows(ctx, conn, table, organizationID, day,
-		staleKeysOf(table, live, computed.scope, computed.keys),
+	zeros, err = writeStaleKeyZeroRows(ctx, conn, table, organizationID, day,
+		staleKeysOf(table, live, computed.scope, computed.everyScope, computed.keys),
 		func(staleKey) time.Time { return version })
-	return written + zeros, err
+	return written + zeros, zeros, err
+}
+
+// ErrOrganizationDayNotProvenEmpty means that a run of the whole organization
+// read no work item for a day that holds stored keys, and the second read did
+// not confirm that the day has none. Nothing is superseded.
+var ErrOrganizationDayNotProvenEmpty = errors.New("daily stale team keys: the organization-day is not proven empty")
+
+// StaleKeysEmptyOrganizationDayLogMessage is the line a run of the whole
+// organization writes when it supersedes every stored key of a table for a
+// day that two reads state to have no work item.
+const StaleKeysEmptyOrganizationDayLogMessage = "daily stale team keys: the organization has no work item for the day; every stored key of the day is superseded"
+
+// outsideRunRetraction is what one repository-scoped table got at the end of
+// a run of the whole organization.
+type outsideRunRetraction struct {
+	// written is the rows of zeros written.
+	written int
+	// kept is the live keys left as they are: of a repository that the
+	// organization holds and that is in no partition of the run.
+	kept int
+	// superseded is the repositories whose keys got a row of zeros, and
+	// notInRun the repositories the organization holds that are in no
+	// partition of the run. Both sorted, each repository once.
+	superseded, notInRun []string
+}
+
+// retractStaleTeamKeysOutsideRun is the rule of a run of the whole
+// organization for a table whose keys the partitions decide inside their own
+// repositories (table.Scope is the repository): a live key of the day whose
+// repository is in NO partition of the run, and that the organization does not
+// hold now, gets a row of zeros. The keys of the run's repositories are left
+// to their partition, which read and wrote them.
+//
+// Such a key is of a repository that is gone, or of a row written before the
+// table held a repository, so no compute can make it right. owned is the
+// repositories of every partition of the run, as scope tuples. A key of a
+// repository that is present and in no partition is left as it is and counted
+// (kept): the run's list is the one of its dispatch, and a run of that
+// repository alone can have written the key since.
+//
+// readPresent gives the repositories the organization holds. It is called
+// AFTER the live keys are read: a repository whose key that read saw exists
+// in the present set unless it is gone. Read before, the set would not hold a
+// repository that got its row and its keys between the two reads, and its keys
+// would be superseded.
+//
+// The version is the clock, raised above every stored row of the day: the
+// row of zeros is then the newest row of its key, and for a reader that keeps
+// the newest generation of a repository it is the whole generation.
+func retractStaleTeamKeysOutsideRun(
+	ctx context.Context, conn staleKeyConn, table StaleKeyTable, organizationID string, day time.Time,
+	owned staleKeyScope, readPresent func(context.Context) (staleKeyScope, error), clock time.Time,
+) (outsideRunRetraction, error) {
+	var result outsideRunRetraction
+	if err := table.Valid(); err != nil {
+		return result, fmt.Errorf("%w: %v", ErrInvalidState, err)
+	}
+	if conn == nil || strings.TrimSpace(organizationID) == "" || day.IsZero() || clock.IsZero() ||
+		len(table.Scope) == 0 || readPresent == nil {
+		return result, ErrInvalidState
+	}
+	live, _, err := loadLiveStaleKeys(ctx, conn, table, organizationID, day)
+	if err != nil {
+		return result, err
+	}
+	present, err := readPresent(ctx)
+	if err != nil {
+		return result, fmt.Errorf("%s: %w", table.Table, err)
+	}
+	for repository := range present {
+		if _, inRun := owned[repository]; !inRun {
+			result.notInRun = append(result.notInRun, repository)
+		}
+	}
+	sort.Strings(result.notInRun)
+	var outside []staleKey
+	supersededRepositories := map[string]struct{}{}
+	for _, key := range live {
+		repository := table.ScopeTuple(key)
+		if _, inRun := owned[repository]; inRun {
+			continue
+		}
+		if _, held := present[repository]; held {
+			result.kept++
+			continue
+		}
+		outside = append(outside, key)
+		supersededRepositories[repository] = struct{}{}
+	}
+	if len(outside) == 0 {
+		return result, nil
+	}
+	sort.Slice(outside, func(left, right int) bool { return outside[left].text() < outside[right].text() })
+	newest, err := newestStaleKeyVersion(ctx, conn, table, organizationID, day)
+	if err != nil {
+		return result, err
+	}
+	version, err := staleKeyVersionAfter(table, clock, newest)
+	if err != nil {
+		return result, err
+	}
+	result.written, err = writeStaleKeyZeroRows(ctx, conn, table, organizationID, day, outside,
+		func(staleKey) time.Time { return version })
+	if result.written > 0 {
+		for repository := range supersededRepositories {
+			result.superseded = append(result.superseded, repository)
+		}
+		sort.Strings(result.superseded)
+	}
+	return result, err
 }
 
 // newestStaleKeyVersion is the newest computed_at of the rows of one

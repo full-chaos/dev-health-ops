@@ -15,7 +15,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/changefailure"
 	clickhousestore "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/chschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
@@ -160,7 +159,7 @@ func TestClickHouseQueryAdapterChartsEveryRegistryMetric(t *testing.T) {
 			// A metric with a chart rule is read from the rule's table through
 			// the rule, not from a column of its own name: its inputs are the
 			// counts of that table.
-			for _, column := range changefailure.CountColumns {
+			for _, column := range chartRules[name].inputs {
 				if _, ok := columnTypes[definition.SourceTable+"."+column]; !ok {
 					t.Errorf("registry metric %s: rule input %s.%s does not exist", name, definition.SourceTable, column)
 				}
@@ -211,11 +210,11 @@ func TestClickHouseQueryAdapterChartsEveryRegistryMetric(t *testing.T) {
 		columns[table] = append(columns[table], column)
 		values[table] = append(values[table], fmt.Sprint(value))
 	}
-	ruleTables := map[string]bool{}
+	var ruleMetrics []string
 	for index, name := range names {
 		definition := withChartRule(supportedMetrics[name])
 		if definition.rule != "" {
-			ruleTables[definition.SourceTable] = true
+			ruleMetrics = append(ruleMetrics, name)
 			continue
 		}
 		table := definition.SourceTable
@@ -225,11 +224,27 @@ func TestClickHouseQueryAdapterChartsEveryRegistryMetric(t *testing.T) {
 	}
 	// The inputs of a chart rule: counts that make the rule a number (deployments
 	// and incidents present).
-	for table := range ruleTables {
-		for index, column := range changefailure.CountColumns {
-			value := float64([]int{10, 2, 1, 3, 1}[index])
-			seeded[table+"."+column] = value
-			add(table, column, value)
+	// Each rule names its inputs (chartRule.inputs); the values are in the
+	// order of that list. An input that is a registry metric of its own keeps
+	// the value it was seeded with above.
+	ruleInputValues := map[string][]float64{
+		// 10 deployments, 3 of them linked to an incident, 4 incidents.
+		"change_failure_rate": {10, 2, 1, 3, 1},
+		// 10 merged pull requests, 4 reviewed, 1 of those with changes requested.
+		"pr_rework_ratio": {10, 4, 1, 0},
+	}
+	for _, name := range ruleMetrics {
+		rule, inputValues := chartRules[name], ruleInputValues[name]
+		if len(rule.inputs) == 0 || len(inputValues) != len(rule.inputs) {
+			t.Fatalf("registry metric %s: its chart rule names %d input(s) and the test holds %d value(s): give each input a value",
+				name, len(rule.inputs), len(inputValues))
+		}
+		for index, column := range rule.inputs {
+			if _, isMetric := seeded[rule.table+"."+column]; isMetric {
+				continue
+			}
+			seeded[rule.table+"."+column] = inputValues[index]
+			add(rule.table, column, inputValues[index])
 		}
 	}
 	// A ratio the reader recomputes from table-local counts needs both counts.

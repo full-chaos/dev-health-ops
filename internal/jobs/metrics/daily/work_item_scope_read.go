@@ -245,6 +245,41 @@ func loadWorkItemPartitionScopes(
 	return scopes, nil
 }
 
+// loadWorkItemOrganizationScopes reads every work scope of the organization
+// that has an item for the day, whatever repository the item is stored under.
+// It is the scope of the end of an organization-wide run. The statement holds
+// no list, so it does not grow with the organization.
+func loadWorkItemOrganizationScopes(
+	ctx context.Context, conn repositoryRows, organizationID string, start, end time.Time,
+) (map[workItemScopeKey]struct{}, error) {
+	scopes := make(map[workItemScopeKey]struct{})
+	rows, err := conn.Query(ctx, `
+SELECT DISTINCT provider, project_key, project_id, native_team_key, project_name
+FROM work_items FINAL
+WHERE org_id = ?
+  AND created_at < ?
+  AND (status != 'done' OR completed_at >= ?)`,
+		organizationID, end.UTC(), start.UTC(),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("load work item organization scopes: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var item workItemStateWorkItem
+		if err := rows.Scan(
+			&item.Provider, &item.ProjectKey, &item.ProjectID, &item.NativeTeamKey, &item.ProjectName,
+		); err != nil {
+			return nil, fmt.Errorf("scan work item organization scope: %w", err)
+		}
+		scopes[workItemScopeKey{provider: item.Provider, scope: item.workScopeID()}] = struct{}{}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate work item organization scopes: %w", err)
+	}
+	return scopes, nil
+}
+
 // chunkRepositoryIDs splits the list into consecutive chunks whose array
 // literal is at most maxBytes as clickhouse-go renders it (a repository id is
 // rendered as its quoted text form). Every id is in exactly one chunk; an
@@ -476,7 +511,13 @@ func loadWorkItemScopeRead(
 	if conn == nil || strings.TrimSpace(run.OrganizationID) == "" || !scope.start.Before(scope.end) {
 		return workItemScopeRead{}, ErrInvalidState
 	}
-	scopes, err := loadWorkItemPartitionScopes(ctx, conn, run.OrganizationID, scope.repoIDs, scope.start, scope.end)
+	var scopes map[workItemScopeKey]struct{}
+	var err error
+	if scope.everyRepository {
+		scopes, err = loadWorkItemOrganizationScopes(ctx, conn, run.OrganizationID, scope.start, scope.end)
+	} else {
+		scopes, err = loadWorkItemPartitionScopes(ctx, conn, run.OrganizationID, scope.repoIDs, scope.start, scope.end)
+	}
 	if err != nil {
 		return workItemScopeRead{}, err
 	}

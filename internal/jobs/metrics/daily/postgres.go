@@ -746,9 +746,9 @@ func (store *PostgresStore) LoadRun(ctx context.Context, runID string) (Run, err
 	var run Run
 	var targetDay string
 	err := store.pool.QueryRow(ctx, `
-SELECT id::text, org_id::text, generation, status, target_day::text
+SELECT id::text, org_id::text, generation, status, target_day::text, full_org
 FROM public.daily_metrics_runs WHERE id = $1::uuid`, runID).
-		Scan(&run.ID, &run.OrganizationID, &run.Generation, &run.Status, &targetDay)
+		Scan(&run.ID, &run.OrganizationID, &run.Generation, &run.Status, &targetDay, &run.FullOrg)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Run{}, ErrInvalidState
 	}

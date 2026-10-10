@@ -119,6 +119,16 @@ Change failure rate is the share of deployments linked to an incident, and it ne
 - **Report charts.** A chart of `change_failure_rate` is `changefailure.WindowRateSQL` over the newest counts of each bucket (`internal/jobs/report`, `chartRules`): the same number the other surfaces give for that window, never the deprecated column and never an average of stored one-day values. The exported metric registry still names `repo_metrics_daily` for the metric; the chart result names the table it reads.
 - **No ops reader of `change_failure_rate_incident`.** The one-day column is written for readers outside this repository (acr); every reader here uses the counts table.
 
+### Pull request rework counts on `repo_metrics_daily`
+
+The pull request rework ratio counts reviewed pull requests only: a pull request with no review data is not a "no rework" pull request. Migration `114_pr_rework_ratio_review_basis.sql` adds the inputs to `repo_metrics_daily` as counts, and one rule (`internal/jobs/metrics/prrework`) turns the counts of a view into a value and a state. Definition: [metric definitions](../../reference/metrics/definitions.md#pull-request-rework-ratio).
+
+- **Columns.** `prs_merged_reviewed` (merged pull requests of the day with review evidence, of a provider that has a changes-requested event), `prs_merged_rework` (of those, with a changes-requested review), `prs_merged_no_rework_signal` (merged pull requests of a provider with no such event), all `Nullable(UInt32)`; `pr_rework_ratio_reviewed` (`Nullable(Float64)`), the one-day value. `prs_merged` is the count the table always had.
+- **Writer.** The daily metrics job, family `repo_user_commit`: `repouser.ApplyPRRework` after the ported compute. The provider of each repository is read from `repos` (`internal/jobs/metrics/daily/pr_rework_native_clickhouse.go`), and whether that provider can store a changes-requested review is asked of the provider layer's declaration (`providerfoundation.EmitsPullRequestReviewState`); the metric names no provider. A repository with no `repos` row has no known provider and counts as "no rework signal".
+- **Expand step only.** The migration only adds columns and rewrites no stored row. A row written before it, or by a pod of the release before it, holds `NULL` in every new column: not measured, never a measured `0`.
+- **Reader contract.** Keep the newest `computed_at` per `(org_id, repo_id, day)` as a WHOLE row, sum the counts over the view's window and repositories, then apply the rule (`prrework.ViewSumsSQL` and `prrework.Evaluate`, or `prrework.WindowRateSQL`). The counts are Nullable and `argMax` skips a `NULL` argument, so a reader that takes each column with its own `argMax` would mix the counts of two versions of a day: take the row with `LIMIT 1 BY`, or `argMax(tuple(column), computed_at)`.
+- **DEPRECATED: `repo_metrics_daily.pr_rework_ratio`.** It stays `Float64`, not nullable, with its old meaning (changes requested / ALL merged pull requests, `0` when nothing merged). The writer keeps writing it. No reader of this release reads it.
+
 ## Project membership: provider event to graph edge
 
 A work item's project used to be a plain overwrite column on `work_items`. That

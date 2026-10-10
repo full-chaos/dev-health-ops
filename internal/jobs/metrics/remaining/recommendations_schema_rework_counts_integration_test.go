@@ -19,7 +19,9 @@ import (
 // the first read of every partition.
 func TestRecommendationsSchemaCheckNamesTheReworkCountColumns(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-	defer cancel()
+	// The store helper stops its container in a cleanup with this context:
+	// cancel after it, not before.
+	t.Cleanup(cancel)
 	conn := membershipMigratedClickHouse(t, ctx)
 	if err := verifyRecommendationsSchema(ctx, conn); err != nil {
 		t.Fatalf("the schema of the migration chain is refused: %v", err)

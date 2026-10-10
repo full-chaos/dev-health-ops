@@ -27,7 +27,9 @@ import (
 //	other organization, repo R's id, day 1: 10 reviewed, 10 with changes requested
 func TestRecommendationsReworkRatioReadsReviewedPullRequestsOnly(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-	defer cancel()
+	// The store helper stops its container in a cleanup with this context:
+	// cancel after it, not before.
+	t.Cleanup(cancel)
 	conn := membershipMigratedClickHouse(t, ctx)
 	const org = "org-rework-recommendations"
 	repoN, repoR, repoG := uuid.New(), uuid.New(), uuid.New()

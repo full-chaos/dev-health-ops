@@ -86,7 +86,6 @@ func aggregateSQL(aggregator, column string) (value, known string) {
 // ratio on one side is "no value" there, not a reason to drop the group when the
 // other side holds one). Dropping in SQL, before the LIMIT, keeps a no-data
 // group from taking one of the few places.
-//
 
 // metricValueProjection applies the class ruling (b) dedup fix for a
 // Nullable metric column: `argMax(col, version)` on a Nullable column can

@@ -38,7 +38,7 @@ func TestIcFinalizeRefusesAnEmptyOrganizationBeforeTouchingClickHouse(t *testing
 			return err
 		},
 		"computeForDay": func(e *Executor) error {
-			_, err := e.computeForDay(context.Background(), "", day, nil)
+			_, err := e.computeForDay(context.Background(), "", day, nil, nil)
 			return err
 		},
 	} {
@@ -118,5 +118,21 @@ func TestIcFinalizeRefusalIsCountedAndLogged(t *testing.T) {
 	}
 	if line := logs.String(); !strings.Contains(line, "level=ERROR") || !strings.Contains(line, "family=ic_finalize") || !strings.Contains(line, "target_day=2026-08-27") {
 		t.Fatalf("refusal log line = %q", line)
+	}
+}
+
+// A failed read of the inactive teams fails the run before any other read and
+// any write. With an empty set in its place the family would write the
+// person's rows and points of the day under a team that was replaced.
+func TestIcFinalizeFailsTheRunWhenTheInactiveTeamsCannotBeRead(t *testing.T) {
+	conn := &touchedConn{}
+	rows, err := NewExecutor(conn).ComputeFinalizeFamily(context.Background(), RunScope{
+		OrganizationID: "org-1", TargetDay: time.Date(2026, 8, 27, 0, 0, 0, 0, time.UTC),
+	})
+	if err == nil || !strings.Contains(err.Error(), "load inactive teams") {
+		t.Fatalf("err = %v, want the failed read of the inactive teams", err)
+	}
+	if rows != 0 || conn.calls != 1 {
+		t.Fatalf("rows = %d, ClickHouse calls = %d; want no row and the one failed read", rows, conn.calls)
 	}
 }

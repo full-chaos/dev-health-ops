@@ -1608,11 +1608,17 @@ Limits:
   count 0 (a group whose items are all closed; a group with no pull request of unknown origin). Such a row and a row
   of zeros are equal.
 - A reader with no FINAL and no `argMax` sees the old row and the row of zeros until a merge.
-- `ic_landscape_rolling_30d`: the team of a person's point is the team id stored in the person's `user_metrics_daily`
-  rows of the 30-day window; the active resolver is asked only when that is blank. So for up to 30 days after a team id
-  changed, a person with no row on the day gets the point of the day under the old id, and the key is produced, not
-  stale. A history recompute must go from the oldest day to the newest, or run twice. (Not changed here; the same on
-  the code before this change.)
+- `ic_landscape_rolling_30d`: the team of a person's point is the team id of the person's NEWEST `user_metrics_daily`
+  row of the 30-day window (by `computed_at`; the day and the repository id break a tie). The id of an INACTIVE team
+  (the newest `teams` row of the id has `is_active = 0`) is read as no team, in the rolling read and in the two reads
+  of the day's rows, so the point and the row of the day do not keep the id of a team that was replaced or retired:
+  the active resolver is asked, and with no answer the person is `unassigned`. What stays:
+  - a stored id of an ACTIVE team is the person's team for as long as that row is the newest of the window, also
+    when the resolver names another team (the resolver is asked only for a blank team);
+  - an id with NO row in `teams` counts as active. The admin delete of a team removes its rows, so a stored row
+    under a deleted team keeps its id and its point;
+  - a row of a day the run does not compute keeps the id it was stored with; it gives no point that id;
+  - the newest row is the row computed last, so a history recompute goes from the oldest day to the newest.
 - A family writes its real rows at its own clock. A real row of a key that an EARLIER row of zeros superseded (the key
   comes back) is the newest row of its key only when the family's clock, cut to the unit of the table's `computed_at`
   column, is later than that row of zeros. The row of zeros is at the later of its family's clock and one unit after

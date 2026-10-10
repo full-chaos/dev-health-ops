@@ -39,7 +39,7 @@ func driverNames(ctx context.Context, client QueryClient, orgID, group string, r
 	var active map[string]bool
 	if kind == "team" {
 		var err error
-		if active, err = activeTeamIDs(ctx, client, orgID); err != nil {
+		if active, err = activeTeamIDs(ctx, client, orgID, ids); err != nil {
 			log.Printf("home summary drivers: could not read the active teams: %v", err)
 			return nil
 		}
@@ -75,10 +75,14 @@ func resolveScopeNames(ctx context.Context, client QueryClient, orgID, kind stri
 	return names
 }
 
-// activeTeamIDs is the ids of the active team rows of the organization, by the
-// shared rule of package activeteams.
-func activeTeamIDs(ctx context.Context, client QueryClient, orgID string) (map[string]bool, error) {
-	rows, err := client.Query(ctx, activeteams.IDsSubquery, []dhclickhouse.Binding{{Name: "org_id", Value: orgID}})
+// activeTeamIDs is the ids, among the given ones, of the active team rows of
+// the organization, by the shared rule of package activeteams. It reads only the
+// ids the sentence needs, never the organization's whole team list: the Home
+// route's client caps a result at 1,000 rows, so a read of every active team
+// failed for an organization with more (CHAOS-9046 round 1, F1).
+func activeTeamIDs(ctx context.Context, client QueryClient, orgID string, ids []string) (map[string]bool, error) {
+	rows, err := client.Query(ctx, activeteams.IDsSubquery+` AND id IN {team_ids:Array(String)}`,
+		[]dhclickhouse.Binding{{Name: "org_id", Value: orgID}, {Name: "team_ids", Value: ids}})
 	if err != nil {
 		return nil, err
 	}

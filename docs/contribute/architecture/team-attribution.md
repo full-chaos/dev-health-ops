@@ -677,6 +677,14 @@ project's items by id. Now:
   `jira_atlassian_teams_project_link_skipped`). An id is never built from the key as a fallback, and the
   sink refuses an open row that carries one.
 - `project_key` stays on the row as a label. Team ids do not change.
+- **Memberships keep their first-seen `valid_from` too** (CHAOS-9007; `providersync.ReuseFirstSeenMembershipValidFrom`):
+  `team_memberships` is keyed by `(org_id, provider, team_id, member_id, source, valid_from)`, so a stamp of the
+  run time at each sync added one open row per fact. The four catalog writers take the `valid_from` of a
+  membership the run holds again from the EARLIEST open row of the same org, provider, source, team and member,
+  through the one snapshot rule with no kind: the rule adds no row and closes none. The Atlassian Teams writer
+  plans its own memberships. A census finds every writer of the table by what the code builds (a literal, a
+  concatenation, a constant, a table named by a variable) and names its class. Surplus open rows that exist
+  before the fix are retired by a separate cleanup step, not by the writers.
 - **One snapshot rule for ownership rows** (`providersync.PlanOwnershipSnapshot`): a fact the run still
   finds keeps the `valid_from` it was first seen with (`valid_from` is a key column: a new stamp at each
   sync added one more open row per fact), and every other open row of the same writer is written again

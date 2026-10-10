@@ -495,7 +495,7 @@ func (s Store) projectTeam(ctx context.Context, orgID string, team discoveredTea
 		if err != nil {
 			return projectTeamResult{}, err
 		}
-		if _, err := s.insertTeamRow(ctx, teamInsertRow{
+		if _, _, err := s.insertTeamRow(ctx, teamInsertRow{
 			ID: observed.TeamID, TeamUUID: teamUUIDValue, Name: stringPtrOr(observed.Name, observed.TeamID),
 			Description: observed.Description, ManualMembers: manualMembers,
 			ProjectKeys: catalogProjectKeys, RepoPatterns: catalogRepoPatterns, IsActive: true,

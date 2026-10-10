@@ -388,6 +388,13 @@ func linearTeamsRules() map[string]linearTeamsRule {
 			}
 			return ""
 		}, why: "legacy rows carry no native key; the catalog keys the team by its key"},
+		"deleted_at": {check: func(sc *linearScenario, team fakeLinearTeam, py, gr map[string]string) string {
+			none := func(value string) bool { return value == "" || value == "<NULL>" }
+			if !none(py["deleted_at"]) || !none(gr["deleted_at"]) {
+				return fmt.Sprintf("deleted_at: python %q (no such column), go %q (want no value: a sync never deletes a team)", py["deleted_at"], gr["deleted_at"])
+			}
+			return ""
+		}, why: "only the admin delete sets the time of a delete; a row a sync writes holds none, which is also what brings a deleted team back at its next sync"},
 		"created_at": {check: func(sc *linearScenario, team fakeLinearTeam, py, gr map[string]string) string {
 			if py["created_at"] != "" && py["created_at"] != "<NULL>" || gr["created_at"] == "" || gr["created_at"] > gr["updated_at"] {
 				return fmt.Sprintf("created_at: python %q (no such column), go %q (want a time no later than its updated_at %q)", py["created_at"], gr["created_at"], gr["updated_at"])

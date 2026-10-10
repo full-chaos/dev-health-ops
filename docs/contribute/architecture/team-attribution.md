@@ -1592,6 +1592,29 @@ The SQL text of these reads is the Python reference's and is not changed: the in
 reference's. A failed read of the inactive ids fails the family; it is never taken as "no inactive team".
 Asserted on real ClickHouse by `TestNoTeamResolverResolvesToAnInactiveTeam`.
 
+**An admin delete is a team set inactive (CHAOS-9119).** `DELETE /api/v1/admin/teams/{team_id}` does not remove the
+team row. It writes a new version of the row with `is_active = 0` and `deleted_at` = the time of the delete
+(`teams.deleted_at`, ClickHouse migration 115; NULL = not deleted). Rule 1 then holds for a deleted team as for any
+inactive team: at the next compute it takes no work item, owns no repository and has no member, and the rows stored
+under its id get rows of zeros (rule 2). When the delete removed the row, the id had NO row, which reads as "unknown,
+not inactive" (section 0.2), so the rows that still named it (memberships, ownership, fallbacks, identity team ids)
+went on giving it work.
+- `deleted_at` is for the admin routes only: the list (with and without `active_only`), the read of one team, an
+  update, the member routes and a second delete answer as for a team that is not there (`Team not found`), as they
+  did when the row was removed. A team that is inactive for another reason is still served there. The filter options
+  and their team names read `is_active = 1`, so they never listed either.
+- What brings the id back: an admin create under the same id is a NEW team (it takes no member, project key or
+  repository pattern of the deleted row; its `created_at` is the first creation time of that id, carried by
+  `internal/teamcreated`); a provider sync or a push that writes the team row again writes a version with no
+  `deleted_at`, so the team is there again, with the manual members of the stored row (a writer carries those from
+  the row it replaces). Only the admin store names `deleted_at` in an insert
+  (`TestOnlyTheAdminStoreWritesDeletedAt`).
+- An approval of a staged drift change of a deleted team is refused with `Team not found`: nothing is written and
+  the change stays pending (it can be dismissed). The Python reference applies it; this is a declared difference in
+  the admin API only.
+Asserted with the real handlers on real ClickHouse by `TestATeamAnAdminDeletedIsNoTeam`,
+`TestADeletedTeamIsNotServedAndComesBackOnlyByANewWrite` and `TestAnApprovalOfAChangeOfADeletedTeamIsRefused`.
+
 **2. A run writes a row of zeros over each key it no longer produces.** The rule reads the live keys of a scope and
 day (a key is live while its newest row holds a measure), takes away the keys the run produces, and writes one row
 over each key that is left: the key, `computed_at`, 0 in every count and value, NULL in every Nullable measure. It

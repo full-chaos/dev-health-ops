@@ -195,6 +195,26 @@ func (h handlers) decideChanges(w http.ResponseWriter, r *http.Request, approve 
 	status, countKey := statusDismissed, "dismissed"
 	if approve {
 		status, countKey = statusApproved, "approved"
+		if len(rows) > 0 {
+			// An approval WRITES under the team id: a membership of the team,
+			// or a new version of the team row. The change was staged while
+			// the team was there; the team is read again now, and a team an
+			// admin deleted since gets the not-found answer of the other team
+			// routes. Applying the change would store a membership under the
+			// deleted team, or write a new version of its row and so bring it
+			// back with one field. The reference applies it; this is a
+			// deliberate difference. The change stays pending; it can be
+			// dismissed.
+			team, err := h.store.GetTeam(ctx, orgID, teamID)
+			if err != nil {
+				h.internal(w, r, "get team", err)
+				return
+			}
+			if team == nil {
+				policy.WriteDetail(w, http.StatusNotFound, "Team not found", nil)
+				return
+			}
+		}
 		for _, row := range rows {
 			if err := h.store.applyChange(ctx, orgID, row); err != nil {
 				h.internal(w, r, "apply team change", err)

@@ -39,6 +39,16 @@ type StaleKeyRetractor interface {
 // and for the order of the reads. The tables whose key scope is the
 // partition's own repository (team_metrics_daily, ai_impact_metrics_daily)
 // keep the rule in their family: a repository is in one partition of a run.
+//
+// A run of the WHOLE organization (Run.FullOrg) owns the whole day. It reads
+// the work scopes from every work item of the organization, so it computes
+// and settles every scope, and it supersedes every live key of the day that
+// it did not compute, of any provider and any work scope ("unassigned" too):
+// a work scope that has no item left for the day is computed by nothing, and
+// its keys of an earlier compute would stay counted. It also supersedes the
+// keys of the repository-scoped tables for a repository that is in no
+// partition of the run. A run of some repositories does none of this: it
+// stays inside the scopes its repositories reach.
 type RunStaleKeyRetractor struct {
 	conn   driver.Conn
 	nowUTC func() time.Time
@@ -55,6 +65,18 @@ func RunStaleKeyTables() []StaleKeyTable {
 		teamkeytables.EstimateCoverageMetricsDaily,
 		teamkeytables.WorkItemStateDurationsDaily,
 		teamkeytables.AIGovernanceCoverageDaily,
+	}
+}
+
+// OrganizationRunStaleKeyTables are the tables whose keys a partition decides
+// inside its own repositories. At the end of a run of the whole organization
+// RunStaleKeyRetractor supersedes their live keys of a repository that is in no
+// partition of the run (retractStaleTeamKeysOutsideRun); a run of some
+// repositories leaves them alone.
+func OrganizationRunStaleKeyTables() []StaleKeyTable {
+	return []StaleKeyTable{
+		teamkeytables.TeamMetricsDaily,
+		teamkeytables.AIImpactMetricsDaily,
 	}
 }
 
@@ -89,6 +111,12 @@ func (retractor *RunStaleKeyRetractor) RetractStaleKeys(ctx context.Context, run
 	if err != nil {
 		return 0, err
 	}
+	// A run of the whole organization owns the whole day: it computes every
+	// work scope of the organization and supersedes every live key it did not
+	// compute. A run of some repositories stays inside the work scopes those
+	// repositories reach.
+	wholeOrganization := run.FullOrg
+	scope.everyRepository = wholeOrganization
 	day := scope.day
 	conn := retractor.conn
 
@@ -105,7 +133,7 @@ func (retractor *RunStaleKeyRetractor) RetractStaleKeys(ctx context.Context, run
 		for _, row := range triplet.MetricsDaily {
 			keys = append(keys, staleKey{row.Provider, row.WorkScopeID, row.TeamID})
 		}
-		return runStaleKeys{scope: read.staleKeyScope(), keys: keys,
+		return runStaleKeys{scope: read.staleKeyScope(), everyScope: wholeOrganization, keys: keys,
 			writeRows: func(writeCtx context.Context, version time.Time) (int, error) {
 				return WriteWorkItemMetricsDaily(writeCtx, conn, run.OrganizationID, day, triplet.MetricsDaily, version)
 			}}, nil
@@ -119,7 +147,7 @@ func (retractor *RunStaleKeyRetractor) RetractStaleKeys(ctx context.Context, run
 		for _, row := range rows {
 			keys = append(keys, staleKey{row.Provider, row.WorkScopeID, row.TeamID})
 		}
-		return runStaleKeys{scope: read.staleKeyScope(), keys: keys,
+		return runStaleKeys{scope: read.staleKeyScope(), everyScope: wholeOrganization, keys: keys,
 			writeRows: func(writeCtx context.Context, version time.Time) (int, error) {
 				return WriteEstimateCoverageMetricsDaily(writeCtx, conn, run.OrganizationID, day, rows, version)
 			}}, nil
@@ -133,7 +161,7 @@ func (retractor *RunStaleKeyRetractor) RetractStaleKeys(ctx context.Context, run
 		for _, row := range computed.rows {
 			keys = append(keys, staleKey{row.Provider, row.WorkScopeID, row.TeamID, row.Status})
 		}
-		return runStaleKeys{scope: computed.read.staleKeyScope(), keys: keys,
+		return runStaleKeys{scope: computed.read.staleKeyScope(), everyScope: wholeOrganization, keys: keys,
 			writeRows: func(writeCtx context.Context, version time.Time) (int, error) {
 				return WriteWorkItemStateDurationsDaily(writeCtx, conn, run.OrganizationID, day, computed.rows, version)
 			}}, nil
@@ -190,6 +218,24 @@ func (retractor *RunStaleKeyRetractor) RetractStaleKeys(ctx context.Context, run
 			return teamkeytables.AIGovernanceCoverageDaily.Table, rows, err
 		},
 	}
+	if wholeOrganization {
+		// The tables whose keys a partition decides inside its own
+		// repositories: the keys of a repository that is in no partition of
+		// this run are the run's to supersede.
+		// scope.repoIDs is the run's repositories, parsed: the text form of
+		// each id is the form the keys hold.
+		owned := make([][]string, 0, len(scope.repoIDs))
+		for _, repoID := range scope.repoIDs {
+			owned = append(owned, []string{repoID.String()})
+		}
+		ownedScope := newStaleKeyScope(owned...)
+		for _, table := range OrganizationRunStaleKeyTables() {
+			steps = append(steps, func() (string, int, error) {
+				rows, err := retractStaleTeamKeysOutsideRun(ctx, conn, table, run.OrganizationID, day, ownedScope, retractor.nowUTC())
+				return table.Table, rows, err
+			})
+		}
+	}
 	total := 0
 	written := make(map[string]int, len(steps))
 	for _, step := range steps {
@@ -217,6 +263,9 @@ func (retractor *RunStaleKeyRetractor) RetractStaleKeys(ctx context.Context, run
 		"estimate_coverage_metrics_daily", written[teamkeytables.EstimateCoverageMetricsDaily.Table],
 		"work_item_state_durations_daily", written[teamkeytables.WorkItemStateDurationsDaily.Table],
 		"ai_governance_coverage_daily", written[teamkeytables.AIGovernanceCoverageDaily.Table],
+		"whole_organization", wholeOrganization,
+		"team_metrics_daily_outside_run", written[teamkeytables.TeamMetricsDaily.Table],
+		"ai_impact_metrics_daily_outside_run", written[teamkeytables.AIImpactMetricsDaily.Table],
 	)
 	return total, nil
 }

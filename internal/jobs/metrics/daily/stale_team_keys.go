@@ -160,7 +160,13 @@ func staleKeyDay(day time.Time) time.Time {
 
 // staleKeysOf is the rule itself, with no I/O: the live keys of the run's
 // scope that the run did not produce.
-func staleKeysOf(table StaleKeyTable, live []staleKey, scope staleKeyScope, produced []staleKey) []staleKey {
+//
+// everyScope is the scope of a run of the whole organization: it owns the
+// whole day, so every live key it did not produce is stale, of any scope
+// value. A work scope that the organization has no item in any more is not in
+// scope (nothing computes it), and its keys of an earlier compute would stay
+// for ever under the scope filter.
+func staleKeysOf(table StaleKeyTable, live []staleKey, scope staleKeyScope, everyScope bool, produced []staleKey) []staleKey {
 	held := make(map[string]struct{}, len(produced))
 	for _, key := range produced {
 		held[key.text()] = struct{}{}
@@ -170,7 +176,7 @@ func staleKeysOf(table StaleKeyTable, live []staleKey, scope staleKeyScope, prod
 		if _, ok := held[key.text()]; ok {
 			continue
 		}
-		if len(table.Scope) > 0 {
+		if len(table.Scope) > 0 && !everyScope {
 			if _, inScope := scope[table.ScopeTuple(key)]; !inScope {
 				continue
 			}
@@ -260,7 +266,7 @@ func supersedeStaleKeys(
 	if err != nil {
 		return 0, err
 	}
-	return writeStaleKeyZeroRows(ctx, conn, table, organizationID, day, staleKeysOf(table, live, scope, produced),
+	return writeStaleKeyZeroRows(ctx, conn, table, organizationID, day, staleKeysOf(table, live, scope, false, produced),
 		func(key staleKey) time.Time { return versionOf(key, versions[key.text()]) })
 }
 
@@ -269,7 +275,10 @@ func supersedeStaleKeys(
 // run settles too, the write of those rows at a version.
 type runStaleKeys struct {
 	scope staleKeyScope
-	keys  []staleKey
+	// everyScope is true for a run of the whole organization: every live key
+	// of the day that is not in keys is stale, whatever its scope value.
+	everyScope bool
+	keys       []staleKey
 	// writeRows stores the rows of the day that were computed with the keys,
 	// at the version. Nil for a table whose rows the partitions settle.
 	writeRows func(ctx context.Context, version time.Time) (int, error)
@@ -351,9 +360,60 @@ func retractStaleTeamKeysOfRun(
 		}
 	}
 	zeros, err := writeStaleKeyZeroRows(ctx, conn, table, organizationID, day,
-		staleKeysOf(table, live, computed.scope, computed.keys),
+		staleKeysOf(table, live, computed.scope, computed.everyScope, computed.keys),
 		func(staleKey) time.Time { return version })
 	return written + zeros, err
+}
+
+// retractStaleTeamKeysOutsideRun is the rule of a run of the whole
+// organization for a table whose keys the partitions decide inside their own
+// repositories (table.Scope is the repository): a live key of the day whose
+// repository is in NO partition of the run gets a row of zeros. The keys of
+// the run's repositories are left to their partition, which read and wrote
+// them.
+//
+// Such a key is of a repository the organization-wide run did not compute
+// (a repository that is gone, or a row written before the table held a
+// repository), so no compute of this run can make it right. owned is the
+// repositories of every partition of the run, as scope tuples.
+//
+// The version is the clock, raised above every stored row of the day: the
+// row of zeros is then the newest row of its key, and for a reader that keeps
+// the newest generation of a repository it is the whole generation.
+func retractStaleTeamKeysOutsideRun(
+	ctx context.Context, conn staleKeyConn, table StaleKeyTable, organizationID string, day time.Time,
+	owned staleKeyScope, clock time.Time,
+) (int, error) {
+	if err := table.Valid(); err != nil {
+		return 0, fmt.Errorf("%w: %v", ErrInvalidState, err)
+	}
+	if conn == nil || strings.TrimSpace(organizationID) == "" || day.IsZero() || clock.IsZero() || len(table.Scope) == 0 {
+		return 0, ErrInvalidState
+	}
+	live, _, err := loadLiveStaleKeys(ctx, conn, table, organizationID, day)
+	if err != nil {
+		return 0, err
+	}
+	var outside []staleKey
+	for _, key := range live {
+		if _, inRun := owned[table.ScopeTuple(key)]; !inRun {
+			outside = append(outside, key)
+		}
+	}
+	if len(outside) == 0 {
+		return 0, nil
+	}
+	sort.Slice(outside, func(left, right int) bool { return outside[left].text() < outside[right].text() })
+	newest, err := newestStaleKeyVersion(ctx, conn, table, organizationID, day)
+	if err != nil {
+		return 0, err
+	}
+	version, err := staleKeyVersionAfter(table, clock, newest)
+	if err != nil {
+		return 0, err
+	}
+	return writeStaleKeyZeroRows(ctx, conn, table, organizationID, day, outside,
+		func(staleKey) time.Time { return version })
 }
 
 // newestStaleKeyVersion is the newest computed_at of the rows of one

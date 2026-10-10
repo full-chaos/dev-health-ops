@@ -68,23 +68,33 @@ var homeDeltaGoOnlyKeys = map[string]GoOnlyKey{
 //     measured, so the candidate serves null beside has_data or has_prior_data
 //     false, which say which side.
 func metricPercentDefects(listPath, leafPath, who string) []BaselineDefect {
+	return percentDefectsFor(leafPath, who, func() *SiblingCondition {
+		return &SiblingCondition{ListPath: listPath}
+	})
+}
+
+// percentDefectsFor builds the two declared differences for one percent leaf.
+// where returns a fresh sibling condition locating the candidate object that holds
+// the leaf (a list element, or the single object), without its flags.
+func percentDefectsFor(leafPath, who string, where func() *SiblingCondition) []BaselineDefect {
 	pair := []LeafPair{{Baseline: 0.0, Candidate: nil}}
+	fromZero, noData := where(), where()
+	fromZero.AllTrue = []string{"has_data", "has_prior_data"}
+	noData.AnyFalse = []string{"has_data", "has_prior_data"}
 	return []BaselineDefect{{
 		Ticket:             "CHAOS-9063",
 		Reason:             "the reference's delta_pct (api/utils/numeric.py) returns 0.0 for a zero previous value, so a " + who + " that rose from a measured 0 reads 0 %; the candidate serves null for it (the percent is undefined), with has_data and has_prior_data true beside it.",
 		Paths:              []string{leafPath},
 		Intermittent:       true,
 		IntermittentReason: "present only while a " + who + "'s prior window holds a stored 0 and its current window a non-zero value",
-		LeafPairShape: &LeafPairShape{Pairs: pair, CandidateMayBeAllNull: true,
-			Sibling: &SiblingCondition{ListPath: listPath, AllTrue: []string{"has_data", "has_prior_data"}}},
+		LeafPairShape:      &LeafPairShape{Pairs: pair, CandidateMayBeAllNull: true, Sibling: fromZero},
 	}, {
 		Ticket:             "CHAOS-9111",
-		Reason:             "the reference's delta_pct serves 0.0 for a " + who + " with no stored value in a window (a 0 placeholder against a 0 placeholder, or against a real value); the candidate serves null (a percent has no meaning against a value nobody measured), with has_data or has_prior_data false beside it to say which window holds none.",
+		Reason:             "the reference's delta_pct serves 0.0 for a " + who + " with no stored value in a window (a 0 placeholder against a 0 placeholder, against a real value, or a LEFT JOIN default for a driver with no comparison row); the candidate serves null (a percent has no meaning against a value nobody measured), with has_data or has_prior_data false beside it to say which window holds none.",
 		Paths:              []string{leafPath},
 		Intermittent:       true,
 		IntermittentReason: "present only while a " + who + " has no stored value in one of its two windows; a window where every one has data shows none",
-		LeafPairShape: &LeafPairShape{Pairs: pair, CandidateMayBeAllNull: true,
-			Sibling: &SiblingCondition{ListPath: listPath, AnyFalse: []string{"has_data", "has_prior_data"}}},
+		LeafPairShape:      &LeafPairShape{Pairs: pair, CandidateMayBeAllNull: true, Sibling: noData},
 	}}
 }
 

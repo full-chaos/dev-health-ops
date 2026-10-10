@@ -253,3 +253,77 @@ func TestMetricPercentDefects_EachCoversItsOwnStateOnly(t *testing.T) {
 		})
 	}
 }
+
+// CHAOS-9111: the operating review's percent, covered only beside its own week's
+// flags (the delta's hasPriorData, or the metric's hasData one level up).
+func TestOperatingReviewPercentDefect_AdmitsOnlyAWeekWithoutData(t *testing.T) {
+	spec, err := SpecFor("operatingReview")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(spec.Parity.BaselineDefects) != 1 || spec.Parity.BaselineDefects[0].Ticket != "CHAOS-9111" {
+		t.Fatalf("the operatingReview parity declares %d defects, want the one CHAOS-9111 difference", len(spec.Parity.BaselineDefects))
+	}
+	defect := spec.Parity.BaselineDefects[0]
+	body := func(pct string, hasData, hasPrior bool) string {
+		return fmt.Sprintf(`{"data":{"operatingReview":{"sections":[{"metrics":[{"key":"a","hasData":%t,"delta":{"percent":%s,"hasPriorData":%t}},{"key":"b","hasData":true,"delta":{"percent":5.0,"hasPriorData":true}}]}]}}}`, hasData, pct, hasPrior)
+	}
+	for _, c := range []struct {
+		name              string
+		hasData, hasPrior bool
+		candidate         string
+		wantOutside       int
+	}{
+		{"no prior week: 0 -> null", true, false, "null", 0},
+		{"no current week: 0 -> null", false, true, "null", 0},
+		{"two measured weeks: 0 -> null is not covered", true, true, "null", 1},
+		{"no prior week: a number is not covered", true, false, "3.0", 1},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			result := Compare(snapshotFromJSON(t, body("0.0", c.hasData, c.hasPrior)), snapshotFromJSON(t, body(c.candidate, c.hasData, c.hasPrior)),
+				Options{BaselineDefects: []BaselineDefect{defect}})
+			if result.DifferencesOutsideBaselineDefect != c.wantOutside {
+				t.Fatalf("outside = %d, want %d -- findings %+v", result.DifferencesOutsideBaselineDefect, c.wantOutside, result.Findings)
+			}
+		})
+	}
+}
+
+// CHAOS-9111: the explain metric's own percent, and a driver's and a contributor's
+// (keyed by id), are covered only beside their own flags.
+func TestExplainPercentDefects_AdmitOnlyTheStateTheyName(t *testing.T) {
+	opts := Options{
+		BaselineDefects: explainPercentDefects()[:6],
+		OrderInsensitiveLists: []OrderInsensitiveList{
+			{Path: "data.drivers", KeyFields: []string{"id"}}, {Path: "data.contributors", KeyFields: []string{"id"}},
+		},
+	}
+	body := func(metricPct, driverPct string, flags string) string {
+		return fmt.Sprintf(`{"data":{"delta_pct":%s,%s,"drivers":[{"id":"r1","delta_pct":%s,%s},{"id":"r2","delta_pct":4.0,"has_data":true,"has_prior_data":true}],"contributors":[{"id":"r1","delta_pct":%s,%s}]}}`,
+			metricPct, flags, driverPct, flags, driverPct, flags)
+	}
+	both := `"has_data":true,"has_prior_data":true`
+	noPrior := `"has_data":true,"has_prior_data":false`
+	// the metric object carries the flags at its own level; the rows carry theirs.
+	metricBody := func(metricPct string, flags string) string {
+		return fmt.Sprintf(`{"data":{"delta_pct":%s,%s,"drivers":[],"contributors":[]}}`, metricPct, flags)
+	}
+	for _, c := range []struct {
+		name                string
+		baseline, candidate string
+		wantOutside         int
+	}{
+		{"metric: no prior window, 0 -> null", metricBody("0.0", noPrior), metricBody("null", noPrior), 0},
+		{"metric: both windows, 0 -> null (from a measured zero)", metricBody("0.0", both), metricBody("null", both), 0},
+		{"metric: a number is not covered", metricBody("0.0", noPrior), metricBody("3.0", noPrior), 1},
+		{"driver and contributor: no comparison row, 0 -> null", body("0.0", "0.0", noPrior), body("0.0", "null", noPrior), 0},
+		{"driver and contributor: a real percent -> null is not covered", body("0.0", "7.0", noPrior), body("0.0", "null", noPrior), 2},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			result := Compare(snapshotFromJSON(t, c.baseline), snapshotFromJSON(t, c.candidate), opts)
+			if result.DifferencesOutsideBaselineDefect != c.wantOutside {
+				t.Fatalf("outside = %d, want %d -- findings %+v", result.DifferencesOutsideBaselineDefect, c.wantOutside, result.Findings)
+			}
+		})
+	}
+}

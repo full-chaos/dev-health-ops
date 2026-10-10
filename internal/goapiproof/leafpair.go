@@ -59,11 +59,96 @@ type SiblingCondition struct {
 	// boolean fields of which at least one must be false. Exactly one is set.
 	AllTrue  []string
 	AnyFalse []string
+
+	// ByPath finds the object through the finding's own path (an ORDERED list
+	// path such as "data.x.sections[0].metrics[2].delta.percent": the comparator
+	// paired the elements by index) instead of ListPath/ObjectPath, and judges
+	// AllTrueAt / AnyFalseAt: flags of the object that holds the leaf (Up 0) or of
+	// an ancestor of it (Up 1 = its parent object, ...).
+	ByPath     bool
+	AllTrueAt  []SiblingFlag
+	AnyFalseAt []SiblingFlag
+}
+
+// SiblingFlag names a boolean field of the leaf's holder (Up 0) or of an
+// ancestor object of it.
+type SiblingFlag struct {
+	Up   int
+	Name string
+}
+
+var pathSegment = regexp.MustCompile(`^([^\[\]]+)(?:\[(\d+)\])?$`)
+
+// pathHolders walks the decoded body along a finding path and returns the
+// objects it passes through, outermost first; the last one holds the leaf.
+func pathHolders(root any, path string) ([]map[string]any, bool) {
+	// The decoded body the plans see is the response's `data` object.
+	path = strings.TrimPrefix(strings.TrimPrefix(strings.TrimPrefix(path, "$"), "."), "data.")
+	segments := strings.Split(path, ".")
+	if len(segments) < 2 {
+		return nil, false
+	}
+	var holders []map[string]any
+	current := root
+	for _, segment := range segments[:len(segments)-1] {
+		match := pathSegment.FindStringSubmatch(segment)
+		if match == nil {
+			return nil, false
+		}
+		object, ok := current.(map[string]any)
+		if !ok {
+			return nil, false
+		}
+		current = object[match[1]]
+		if match[2] != "" {
+			index, err := strconv.Atoi(match[2])
+			list, isList := current.([]any)
+			if err != nil || !isList || index < 0 || index >= len(list) {
+				return nil, false
+			}
+			current = list[index]
+		}
+		if holder, ok := current.(map[string]any); ok {
+			holders = append(holders, holder)
+		}
+	}
+	return holders, len(holders) > 0
+}
+
+func (c *SiblingCondition) holdsByPath(candidate any, finding Finding) bool {
+	holders, ok := pathHolders(candidate, finding.Path)
+	if !ok {
+		return false
+	}
+	flag := func(f SiblingFlag) (bool, bool) {
+		if f.Up < 0 || f.Up >= len(holders) {
+			return false, false
+		}
+		v, ok := holders[len(holders)-1-f.Up][f.Name].(bool)
+		return v, ok
+	}
+	if len(c.AllTrueAt) > 0 {
+		for _, f := range c.AllTrueAt {
+			if v, ok := flag(f); !ok || !v {
+				return false
+			}
+		}
+		return true
+	}
+	for _, f := range c.AnyFalseAt {
+		if v, ok := flag(f); ok && !v {
+			return true
+		}
+	}
+	return false
 }
 
 // holds reports whether the candidate object found for finding satisfies the
 // condition. Anything that cannot be found, or is not a boolean, fails it.
 func (c *SiblingCondition) holds(candidate any, finding Finding) bool {
+	if c.ByPath {
+		return c.holdsByPath(candidate, finding)
+	}
 	var object map[string]any
 	if c.ListPath != "" {
 		list, ok := listAtDottedPath(candidate, c.ListPath)

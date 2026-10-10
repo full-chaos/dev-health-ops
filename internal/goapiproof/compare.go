@@ -1269,11 +1269,19 @@ func classifyBaselineDefects(result *Result, defects []BaselineDefect, baselineD
 	// covered, so "Go returned every field null" can never pass as the
 	// cited defect. One non-null leaf anywhere under the path keeps the
 	// rule leaf-by-leaf (hotspots' JOB 5 receipt: 7 null of 391 leaves).
+	// Several declarations may cite one path with different conditions (the percent
+	// of a delta: one with no data, one from a measured zero), so a pair is exempt
+	// when ANY declaration that cites the path admits it, whichever comes first.
+	exemptByPath := map[string][]*leafPairPlan{}
 	for _, defect := range defects {
-		var exempt *leafPairPlan
 		if defect.LeafPairShape != nil && defect.LeafPairShape.CandidateMayBeAllNull {
-			exempt = &leafPairPlan{shape: defect.LeafPairShape, candidate: candidateData}
+			plan := &leafPairPlan{shape: defect.LeafPairShape, candidate: candidateData}
+			for _, cited := range defect.Paths {
+				exemptByPath[cited] = append(exemptByPath[cited], plan)
+			}
 		}
+	}
+	for _, defect := range defects {
 		for _, cited := range defect.Paths {
 			if nonNullLeaves(candidateData, citedSegments(cited)) > 0 || nonNullLeaves(baselineData, citedSegments(cited)) == 0 {
 				continue
@@ -1282,10 +1290,17 @@ func classifyBaselineDefects(result *Result, defects []BaselineDefect, baselineD
 				finding := &result.Findings[i]
 				path := tieredPath(finding.Path)
 				if finding.Kind == FindingMismatch && leafDifference(finding.Shape) && (path == cited || strings.HasPrefix(path, cited+".")) {
-					// A pair the defect declares with a null candidate keeps
+					// A pair a declaration makes with a null candidate keeps
 					// its leaf shape so the pair can admit it; every other
 					// finding is relabelled as before.
-					if exempt.admits(*finding) {
+					exempted := false
+					for _, plan := range exemptByPath[cited] {
+						if plan.admits(*finding) {
+							exempted = true
+							break
+						}
+					}
+					if exempted {
 						continue
 					}
 					finding.Shape = ShapeEmptyResult

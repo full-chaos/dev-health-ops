@@ -112,10 +112,16 @@ type Store struct {
 
 const teamSelectColumns = "id, team_uuid, name, description, members, project_keys, repo_patterns, is_active, updated_at, org_id, manual_members, provider, native_team_key, parent_team_id, source_id, coalesce(created_at, updated_at)"
 
+// teamNotDeleted is the predicate of a team an admin did not delete. A deleted
+// team keeps its row (inactive, with deleted_at set, see DeleteTeam); to every
+// admin route it is a team that is not there.
+const teamNotDeleted = "deleted_at IS NULL"
+
 // queryTeams is _query_teams: teamID nil lists every (optionally
-// active-only) team; teamID non-nil scopes to one.
+// active-only) team; teamID non-nil scopes to one. A team an admin deleted is
+// not returned.
 func (s Store) queryTeams(ctx context.Context, orgID string, teamID *string, activeOnly bool) ([]Team, error) {
-	query := "SELECT " + teamSelectColumns + " FROM teams FINAL WHERE org_id = {org_id:String}"
+	query := "SELECT " + teamSelectColumns + " FROM teams FINAL WHERE org_id = {org_id:String} AND " + teamNotDeleted
 	args := []any{clickhouse.Named("org_id", orgID)}
 	if teamID != nil {
 		query += " AND id = {team_id:String}"
@@ -124,6 +130,7 @@ func (s Store) queryTeams(ctx context.Context, orgID string, teamID *string, act
 	if activeOnly {
 		query += " AND is_active = 1"
 	}
+
 	// ORDER BY: without one, ClickHouse's merge order is whatever the engine
 	// happens to return -- not a deterministic contract (CHAOS-6310 r1
 	// finding #9). The Python producer's equivalent query
@@ -166,7 +173,8 @@ func (s Store) ListTeams(ctx context.Context, orgID string, activeOnly bool) ([]
 }
 
 // GetTeam is ClickHouseTeamAdminService.get: always active_only=false so a
-// caller can tell "missing" from "inactive".
+// caller can tell "missing" from "inactive". A team an admin deleted is
+// missing.
 func (s Store) GetTeam(ctx context.Context, orgID, teamID string) (*Team, error) {
 	teams, err := s.queryTeams(ctx, orgID, &teamID, false)
 	if err != nil {
@@ -208,6 +216,9 @@ func resolveListField(provided *[]string, existing []string) []string {
 
 // CreateOrUpdateTeam is ClickHouseTeamAdminService.create_or_update.
 func (s Store) CreateOrUpdateTeam(ctx context.Context, orgID string, write TeamWrite) (Team, error) {
+	// GetTeam does not return a deleted team, so a write under the id of a
+	// deleted team is a NEW team: it takes the writer's origin and nothing of
+	// the deleted row (no member, no project key, no repository pattern).
 	existing, err := s.GetTeam(ctx, orgID, write.TeamID)
 	if err != nil {
 		return Team{}, err
@@ -341,8 +352,21 @@ func filterOut(values []string, drop map[string]bool) []string {
 	return out
 }
 
-// DeleteTeam is ClickHouseTeamAdminService.delete: a ClickHouse lightweight
-// DELETE, never an ALTER TABLE ... DELETE mutation.
+// DeleteTeam is the admin delete of a team. It does NOT remove the team row:
+// it writes a new version of it that is INACTIVE and carries the time of the
+// delete (deleted_at).
+//
+// Why the row stays: other stored rows go on naming the team id (memberships,
+// project and repository ownership, fallback rows, the team ids of an
+// identity). The one rule every resolver has for "this team takes nothing" is
+// the inactive team row (teamactive). With the row removed the id had no row
+// at all, which reads as an active team there, so a deleted team went on
+// taking work items and live points.
+//
+// To the admin routes a deleted team is not there (queryTeams leaves it out),
+// so a second delete is "not found", as it was when the row was removed. The
+// version is written with every field of the row it replaces: a reader of the
+// table (a name for a stored id) finds what it found for any inactive team.
 func (s Store) DeleteTeam(ctx context.Context, orgID, teamID string) (bool, error) {
 	existing, err := s.GetTeam(ctx, orgID, teamID)
 	if err != nil {
@@ -351,8 +375,20 @@ func (s Store) DeleteTeam(ctx context.Context, orgID, teamID string) (bool, erro
 	if existing == nil {
 		return false, nil
 	}
-	if err := s.Conn.Exec(ctx, "DELETE FROM teams WHERE org_id = {org_id:String} AND id = {team_id:String}",
-		clickhouse.Named("org_id", orgID), clickhouse.Named("team_id", teamID)); err != nil {
+	// The newest version of a team is the one with the greatest updated_at, and
+	// between two versions of one updated_at the ACTIVE one wins (teamactive).
+	// So the delete must be strictly newer than the row it replaces, also when
+	// that row carries a time ahead of this clock.
+	now := time.Now().UTC()
+	if !now.After(existing.UpdatedAt) {
+		now = existing.UpdatedAt.Add(time.Microsecond)
+	}
+	if _, err := s.insertTeamRow(ctx, teamInsertRow{
+		ID: existing.TeamID, TeamUUID: existing.TeamUUID, Name: existing.Name, Description: existing.Description,
+		Members: existing.Members, ManualMembers: existing.ManualMembers,
+		ProjectKeys: existing.ProjectKeys, RepoPatterns: existing.RepoPatterns,
+		IsActive: false, OrgID: orgID, Origin: existing.origin, UpdatedAt: now, DeletedAt: &now,
+	}); err != nil {
 		return false, fmt.Errorf("delete team: %w", err)
 	}
 	return true, nil
@@ -368,6 +404,8 @@ type teamInsertRow struct {
 	OrgID                     string
 	Origin                    teamOrigin
 	UpdatedAt                 time.Time
+	// DeletedAt is set by the admin delete only; nil on every other write.
+	DeletedAt *time.Time
 }
 
 // insertTeamRow is storage/clickhouse.py's insert_teams -- one row, the
@@ -375,7 +413,7 @@ type teamInsertRow struct {
 // native_team_key, parent_team_id and source_id are the row's origin: a
 // stored team's own on an edit, the writer's on a new team.
 func (s Store) insertTeamRow(ctx context.Context, row teamInsertRow) (time.Time, error) {
-	const insertSQL = "INSERT INTO teams (id, team_uuid, name, description, members, manual_members, project_keys, repo_patterns, is_active, updated_at, last_synced, org_id, provider, native_team_key, parent_team_id, source_id, created_at)"
+	const insertSQL = "INSERT INTO teams (id, team_uuid, name, description, members, manual_members, project_keys, repo_patterns, is_active, updated_at, last_synced, org_id, provider, native_team_key, parent_team_id, source_id, created_at, deleted_at)"
 	if err := checkKeyedTeamID(row.ID); err != nil {
 		return time.Time{}, err
 	}
@@ -397,7 +435,7 @@ func (s Store) insertTeamRow(ctx context.Context, row teamInsertRow) (time.Time,
 	if err := batch.Append(
 		row.ID, row.TeamUUID, row.Name, row.Description, row.Members, row.ManualMembers,
 		row.ProjectKeys, row.RepoPatterns, isActive, row.UpdatedAt, now, row.OrgID,
-		row.Origin.Provider, row.Origin.NativeTeamKey, row.Origin.ParentTeamID, row.Origin.SourceID, createdAt,
+		row.Origin.Provider, row.Origin.NativeTeamKey, row.Origin.ParentTeamID, row.Origin.SourceID, createdAt, row.DeletedAt,
 	); err != nil {
 		return time.Time{}, fmt.Errorf("append team row: %w", err)
 	}

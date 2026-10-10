@@ -9,6 +9,7 @@ import (
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/changefailure"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/deltarule"
 	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse/liverow"
 )
 
@@ -264,9 +265,14 @@ FROM %s
 // buildContributor, always overrides a contributor's delta to 0.0
 // itself, matching explain.py:240's own `delta_value=0.0` literal).
 type metricRow struct {
-	ID       string
-	Value    float64
-	DeltaPct float64
+	ID    string
+	Value float64
+	// DeltaPct is nil unless the row holds a stored value in both windows
+	// (CHAOS-9063): a contributor row has none, and a driver row without a
+	// comparison-window row has no base.
+	DeltaPct     *float64
+	HasData      bool
+	HasPriorData bool
 }
 
 // fetchMetricContributors ports fetch_metric_contributors
@@ -326,7 +332,7 @@ LIMIT {limit:UInt64}
 		if err := rows.Scan(&id, &value); err != nil {
 			return nil, fmt.Errorf("scan metric contributor row: %w", err)
 		}
-		out = append(out, metricRow{ID: id, Value: floatOrZero(value)})
+		out = append(out, metricRow{ID: id, Value: floatOrZero(value), HasData: value != nil})
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate metric contributor rows: %w", err)
@@ -377,7 +383,9 @@ func (reader *Reader) fetchMetricDriverDelta(ctx context.Context, table, column,
 SELECT
     current.id AS id,
     current.value AS value,
-    CASE WHEN previous.value = 0 THEN 0 ELSE (current.value - previous.value) / previous.value * 100 END AS delta_pct
+    toUInt8(current.value IS NOT NULL) AS has_data,
+    toUInt8(previous.present = 1 AND previous.value IS NOT NULL) AS has_prior_data,
+    %s AS delta_pct
 FROM (
     SELECT toString(%s) AS id, %s AS value
     FROM %s
@@ -385,14 +393,14 @@ FROM (
     %s
 ) AS current
 LEFT JOIN (
-    SELECT toString(%s) AS id, %s AS value
+    SELECT toString(%s) AS id, %s AS value, toUInt8(1) AS present
     FROM %s
     GROUP BY %s
 ) AS previous ON current.id = previous.id
-ORDER BY delta_pct DESC
+ORDER BY delta_pct DESC NULLS LAST
 LIMIT {limit:UInt64}
 %s
-`, groupBy, valueSQL, currentFrom, groupBy, definedOnly(aggregator), groupBy, valueSQL, previousFrom, groupBy, settingsMaxExecutionTime())
+`, deltarule.DriverPercentSQL("current.value", "previous.value", "previous.present"), groupBy, valueSQL, currentFrom, groupBy, definedOnly(aggregator), groupBy, valueSQL, previousFrom, groupBy, settingsMaxExecutionTime())
 
 	bindings := append([]dhclickhouse.Binding{
 		{Name: "start_day", Value: dateBindingValue(startDay)},
@@ -413,10 +421,16 @@ LIMIT {limit:UInt64}
 	for rows.Next() {
 		var id string
 		var value, deltaPctValue *float64
-		if err := rows.Scan(&id, &value, &deltaPctValue); err != nil {
+		var hasData, hasPriorData uint8
+		if err := rows.Scan(&id, &value, &hasData, &hasPriorData, &deltaPctValue); err != nil {
 			return nil, fmt.Errorf("scan metric driver row: %w", err)
 		}
-		out = append(out, metricRow{ID: id, Value: floatOrZero(value), DeltaPct: floatOrZero(deltaPctValue)})
+		row := metricRow{ID: id, Value: floatOrZero(value), HasData: hasData == 1, HasPriorData: hasPriorData == 1}
+		if row.HasData && row.HasPriorData && deltaPctValue != nil {
+			delta := safeFloat(*deltaPctValue)
+			row.DeltaPct = &delta
+		}
+		out = append(out, row)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate metric driver rows: %w", err)

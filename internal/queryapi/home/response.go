@@ -63,15 +63,18 @@ type SparkPoint struct {
 	Value float64              `json:"value"`
 }
 
-// MetricDelta is the Home domain shape. Its two presence flags are exposed by
-// GraphQL only; server.homeRESTResponse omits them for the frozen Python REST
-// contract, whose Pydantic MetricDelta does not declare either field.
+// MetricDelta is the Home domain shape. Its two presence flags and the rate
+// state are served by GraphQL and, after the frozen fields, by REST
+// (server.homeRESTMetricDelta, CHAOS-9044).
 type MetricDelta struct {
-	Metric       string       `json:"metric"`
-	Label        string       `json:"label"`
-	Value        float64      `json:"value"`
-	Unit         string       `json:"unit"`
-	DeltaPct     float64      `json:"delta_pct"`
+	Metric string  `json:"metric"`
+	Label  string  `json:"label"`
+	Value  float64 `json:"value"`
+	Unit   string  `json:"unit"`
+	// DeltaPct is the percent change between the two windows (deltarule): 0
+	// when a window has no stored value, null when the prior is a measured 0 and
+	// the current value is not (a percent change against zero is undefined).
+	DeltaPct     *float64     `json:"delta_pct"`
 	HasData      bool         `json:"has_data"`
 	HasPriorData bool         `json:"has_prior_data"`
 	Spark        []SparkPoint `json:"spark"`

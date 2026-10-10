@@ -199,8 +199,8 @@ func TestExplainChangeFailureRateServesNoDeltaWhenAWindowHasNoValue(t *testing.T
 		if err != nil {
 			t.Fatalf("%s: %v", tc.org, err)
 		}
-		if !near(got.DeltaPct, tc.wantDelta) {
-			t.Errorf("%s: delta_pct = %v (has_data %v, has_prior_data %v), want %v", tc.org, got.DeltaPct, got.HasData, got.HasPriorData, tc.wantDelta)
+		if !near(deltaOf(got.DeltaPct), tc.wantDelta) {
+			t.Errorf("%s: delta_pct = %v (has_data %v, has_prior_data %v), want %v", tc.org, deltaOf(got.DeltaPct), got.HasData, got.HasPriorData, tc.wantDelta)
 		}
 	}
 }

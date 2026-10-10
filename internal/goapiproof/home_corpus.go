@@ -54,9 +54,23 @@ var homeDeltaGoOnlyKeys = map[string]GoOnlyKey{
 //     table's sum(prs_merged) / sum(churn_loc) -- bare count sums.
 //   - data.signals.evidence_count: len(evidence) / a row count -- never
 //     a floating aggregate.
+//
+// homeFromZeroDefect declares the one leaf the candidate serves as null where
+// the reference serves 0.0: a delta whose prior window holds a measured 0 and
+// whose current window does not (CHAOS-9063). A percent change against zero is
+// undefined; the reference's delta_pct returns 0.0 for a zero previous.
+var homeFromZeroDefect = BaselineDefect{
+	Ticket:             "CHAOS-9063",
+	Reason:             "the reference's delta_pct (api/utils/numeric.py) returns 0.0 for a zero previous value, so a metric that rose from a measured 0 reads 0 %; the candidate serves null for it (the percent is undefined), with has_data and has_prior_data true beside it.",
+	Paths:              []string{"data.deltas.delta_pct"},
+	Intermittent:       true,
+	IntermittentReason: "present only while a metric's prior window holds a stored 0 and its current window a non-zero value",
+}
+
 var homeNumericLeaves = Options{
 	NumericLeavesDeclared: true,
 	GoOnlyKeys:            homeDeltaGoOnlyKeys,
+	BaselineDefects:       []BaselineDefect{homeFromZeroDefect},
 	FloatTierB: map[string]string{
 		"data.freshness.coverage.repos_covered_pct":            "fetch_coverage's covered/total ratio *100 (api/queries/freshness.py) -- a genuine ratio.",
 		"data.freshness.coverage.prs_linked_to_issues_pct":     "fetch_coverage's linked/total ratio *100 -- a genuine ratio.",
@@ -170,7 +184,7 @@ var homeConfidenceTierParity = Options{
 	FloatTierB:            homeNumericLeaves.FloatTierB,
 	IntegerLeaves:         homeNumericLeaves.IntegerLeaves,
 	VolatileFields:        homeNumericLeaves.VolatileFields,
-	BaselineDefects:       []BaselineDefect{homeConfidenceTierDefect},
+	BaselineDefects:       []BaselineDefect{homeConfidenceTierDefect, homeFromZeroDefect},
 }
 
 // homeTeamBaselineTimeout is the declaration home_team_scoped (GET and POST)

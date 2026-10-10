@@ -179,7 +179,11 @@ func computeMetricDelta(ctx context.Context, client QueryClient, spec metricSpec
 	currentValue = safeFloat(currentValue)
 	previousValue = safeFloat(previousValue)
 	spark := sparkPoints(series, spec.Transform)
-	pctChange := safeFloat(deltarule.Pct(currentValue, previousValue, hasData, hasPriorData))
+	pctChange := deltarule.Of(currentValue, previousValue, hasData, hasPriorData).Pct
+	if pctChange != nil {
+		safe := safeFloat(*pctChange)
+		pctChange = &safe
+	}
 
 	return MetricDelta{
 		Metric:       spec.Metric,
@@ -382,36 +386,43 @@ func BuildResponse(ctx context.Context, chClient QueryClient, pgClient PGQueryCl
 		}
 		summary = append(summary, SummarySentence{
 			ID:           "s1",
-			Text:         fmt.Sprintf("%s %s %s%s", topDelta.Label, direction(topDelta.DeltaPct), formatDeltaWords(topDelta.DeltaPct), driverText),
+			Text:         fmt.Sprintf("%s %s%s", topDelta.Label, MoveWords(topDelta), driverText),
 			EvidenceLink: evidenceLink(topDelta.Metric, f),
 		})
 	}
 
-	constraintMetric := SelectConstraint(deltas)
-	constraint := ConstraintCard{
-		Title: "This week's constraint: " + constraintMetric.Label,
-		Claim: fmt.Sprintf("%s %s %s over the last %d days.",
-			constraintMetric.Label, direction(constraintMetric.DeltaPct), formatDeltaWords(constraintMetric.DeltaPct), f.Time.RangeDays),
-		Evidence: []ConstraintEvidence{
-			{Label: "Drill into " + constraintMetric.Label, Link: evidenceLink(constraintMetric.Metric, f)},
-		},
-		Experiments: []string{
-			"Rebalance reviewer rotation to reduce queueing.",
-			"Set WIP limits per team and auto-alert at saturation.",
-		},
+	// A constraint is a claim about a move between two measured values: none
+	// is made when no metric has both windows (CHAOS-9063).
+	var constraintCard *ConstraintCard
+	if constraintMetric, ok := SelectConstraint(deltas); ok {
+		constraintCard = &ConstraintCard{
+			Title: "This week's constraint: " + constraintMetric.Label,
+			Claim: fmt.Sprintf("%s %s over the last %d days.",
+				constraintMetric.Label, MoveWords(constraintMetric), f.Time.RangeDays),
+			Evidence: []ConstraintEvidence{
+				{Label: "Drill into " + constraintMetric.Label, Link: evidenceLink(constraintMetric.Metric, f)},
+			},
+			Experiments: []string{
+				"Rebalance reviewer rotation to reduce queueing.",
+				"Set WIP limits per team and auto-alert at saturation.",
+			},
+		}
 	}
 
 	events := []EventItem{}
 	for _, delta := range deltas {
-		if deltarule.Complete(delta.HasData, delta.HasPriorData) && absFloat(delta.DeltaPct) >= 25 {
+		// An event needs a percent that is a statement: a window without a
+		// value has none, and a rise from a measured 0 has no percent to
+		// threshold (it is named in the sentences and signals instead).
+		if pct, ok := delta.Percent(); ok && absFloat(pct) >= 25 {
 			eventType := "spike"
-			if delta.DeltaPct > 0 {
+			if pct > 0 {
 				eventType = "regression"
 			}
 			events = append(events, EventItem{
 				TS:   MicroDateTime(now),
 				Type: eventType,
-				Text: fmt.Sprintf("%s shifted %.0f%% over the last %d days.", delta.Label, delta.DeltaPct, f.Time.RangeDays),
+				Text: fmt.Sprintf("%s shifted %.0f%% over the last %d days.", delta.Label, pct, f.Time.RangeDays),
 				Link: evidenceLink(delta.Metric, f),
 			})
 		}
@@ -432,7 +443,7 @@ func BuildResponse(ctx context.Context, chClient QueryClient, pgClient PGQueryCl
 		ReworkThemeAllocation: reworkAllocation,
 		Summary:               summary,
 		Tiles:                 tiles(),
-		Constraint:            &constraint,
+		Constraint:            constraintCard,
 		Events:                events,
 		HealthState:           healthState,
 		Signals:               signals,
@@ -509,14 +520,26 @@ func topDeltaByMagnitude(deltas []MetricDelta) (MetricDelta, bool) {
 	var bestMag float64
 	found := false
 	for _, d := range deltas {
-		if !d.HasData {
+		pct, ok := d.Percent()
+		if !ok {
 			continue
 		}
-		mag := absFloat(d.DeltaPct)
+		mag := absFloat(pct)
 		if !found || mag > bestMag {
 			best = d
 			bestMag = mag
 			found = true
+		}
+	}
+	if found && bestMag > 0 {
+		return best, true
+	}
+	// No metric has a defined percent other than 0 %. A rise from a measured 0
+	// is a move (stated in absolute values) and outranks "held steady": the
+	// first such metric is named.
+	for _, d := range deltas {
+		if d.FromZero() {
+			return d, true
 		}
 	}
 	return best, found

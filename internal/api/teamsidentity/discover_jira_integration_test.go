@@ -59,7 +59,7 @@ func TestDiscoverJiraListsOnlyStoredActiveAtlassianTeams(t *testing.T) {
 	description := "platform squad"
 	seed := []teamInsertRow{
 		// An active Atlassian team: the only kind discovery lists.
-		{ID: "jira:0a1b2c3d-platform", Name: "Platform", Description: &description, Members: []string{"a@acme.test", "b@acme.test"},
+		{ID: "jira:0a1b2c3d-platform", Name: "Platform", Description: &description,
 			ProjectKeys: []string{"ENG", "OPS"}, IsActive: true, OrgID: orgID, Origin: teamOrigin{Provider: "jira", NativeTeamKey: ari("0a1b2c3d-platform")}},
 		// An archived Atlassian team.
 		{ID: "jira:9f8e7d6c-archived", Name: "Archived", IsActive: false, OrgID: orgID, Origin: teamOrigin{Provider: "jira", NativeTeamKey: ari("9f8e7d6c-archived")}},
@@ -79,6 +79,28 @@ func TestDiscoverJiraListsOnlyStoredActiveAtlassianTeams(t *testing.T) {
 		row.TeamUUID = teamUUID(row.OrgID, row.ID)
 		row.UpdatedAt = now
 		if err := seedTeamRow(ctx, store, row); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// The member count is the number of people with an OPEN membership row of
+	// the team: two open, one closed, one of another provider, one of another
+	// organization, and a second row of an open member (a second source).
+	open := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	closed := open.Add(24 * time.Hour)
+	for _, membership := range []struct {
+		org, provider, team, member, source string
+		validTo                             *time.Time
+	}{
+		{orgID, "jira", "jira:0a1b2c3d-platform", "a@acme.test", "native", nil},
+		{orgID, "jira", "jira:0a1b2c3d-platform", "b@acme.test", "native", nil},
+		{orgID, "jira", "jira:0a1b2c3d-platform", "b@acme.test", "manual", nil},
+		{orgID, "jira", "jira:0a1b2c3d-platform", "c@acme.test", "native", &closed},
+		{orgID, "github", "jira:0a1b2c3d-platform", "d@acme.test", "native", nil},
+		{"org-2", "jira", "jira:0a1b2c3d-platform", "e@acme.test", "native", nil},
+	} {
+		if err := store.Conn.Exec(ctx, `INSERT INTO team_memberships (org_id, provider, team_id, member_id, source, is_primary, specificity, priority, valid_from, valid_to, updated_at) VALUES (?, ?, ?, ?, ?, 1, 100, 10, ?, ?, ?)`,
+			membership.org, membership.provider, membership.team, membership.member, membership.source, open, membership.validTo, open); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -142,8 +164,8 @@ func seedTeamRow(ctx context.Context, store Store, row teamInsertRow) error {
 	if row.IsActive {
 		isActive = 1
 	}
-	return store.Conn.Exec(ctx, `INSERT INTO teams (id, team_uuid, name, description, members, manual_members, project_keys, repo_patterns, is_active, updated_at, last_synced, org_id, provider, native_team_key, parent_team_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		row.ID, row.TeamUUID, row.Name, row.Description, nonNil(row.Members), nonNil(row.ManualMembers), nonNil(row.ProjectKeys), nonNil(row.RepoPatterns),
+	return store.Conn.Exec(ctx, `INSERT INTO teams (id, team_uuid, name, description, manual_members, project_keys, repo_patterns, is_active, updated_at, last_synced, org_id, provider, native_team_key, parent_team_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		row.ID, row.TeamUUID, row.Name, row.Description, nonNil(row.ManualMembers), nonNil(row.ProjectKeys), nonNil(row.RepoPatterns),
 		isActive, row.UpdatedAt, row.UpdatedAt, row.OrgID, row.Origin.Provider, row.Origin.NativeTeamKey, row.Origin.ParentTeamID)
 }
 

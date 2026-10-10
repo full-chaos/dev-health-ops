@@ -73,7 +73,11 @@ func TestRESTHomeSaysWhetherTheRepositoryFilterNarrowedEachMetric(t *testing.T) 
 				if delta.RepoFilterApplied != nil {
 					got = map[bool]string{true: "true", false: "false"}[*delta.RepoFilterApplied]
 				}
-				t.Errorf("%s: %s repo_filter_applied = %s, want %v", name, metric, got, want)
+				wantText := "null"
+				if want != nil {
+					wantText = map[bool]string{true: "true", false: "false"}[*want]
+				}
+				t.Errorf("%s: %s repo_filter_applied = %s, want %s", name, metric, got, wantText)
 			}
 		}
 	}

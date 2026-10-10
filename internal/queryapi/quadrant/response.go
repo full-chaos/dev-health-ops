@@ -66,6 +66,16 @@ type Response struct {
 	Axes        Axes         `json:"axes"`
 	Points      []Point      `json:"points"`
 	Annotations []Annotation `json:"annotations"`
+	// RepoFilterApplied and FilterEmptyReason are Go-only (CHAOS-9159; the Python
+	// reference never served them), last so the frozen key order is kept.
+	// RepoFilterApplied: null when the request names no repository; true when the
+	// repository filter narrowed the points (the repository grain); false when it
+	// cannot (the team and person grains plot rows no repository keys).
+	// FilterEmptyReason: null, or why a filter set that names repositories matched
+	// nothing (repository_not_in_team / repository_not_found), the one definition of
+	// teamscope.ClassifyEmptyFilter.
+	RepoFilterApplied *bool   `json:"repo_filter_applied" pyjson:"nullable"`
+	FilterEmptyReason *string `json:"filter_empty_reason" pyjson:"nullable"`
 }
 
 // RequestError carries an HTTP status the way Python's HTTPException does,
@@ -92,6 +102,12 @@ type Params struct {
 	Bucket    string // default "week"
 	StartDate *time.Time
 	EndDate   *time.Time
+	// TeamIDs and RepoRefs are the selected teams and repositories (CHAOS-9159,
+	// repeatable team_ids / repo_ids): filters that AND (D5844), independent of
+	// ScopeType, which stays the GRAIN of the plotted points. A repository may be an
+	// id or a name. Neither applies to the person grain.
+	TeamIDs  []string
+	RepoRefs []string
 }
 
 // normalizeScope ports _normalize_scope (quadrant.py:306-309).
@@ -278,11 +294,16 @@ func BuildResponse(ctx context.Context, client QueryClient, orgID string, params
 		}
 	}
 
+	selected, err := resolveSelection(ctx, client, orgID, scope, params)
+	if err != nil {
+		return nil, err
+	}
+
 	fetch := func(spec MetricSpec) ([]metricRow, error) {
 		if definition.Type == "cycle_throughput" && scope == "team" && spec.UsePrimaryTeamAttribution {
-			return fetchWorkItemTeamQuadrantMetric(ctx, client, spec.Metric, startDay, endDay, params.Bucket, orgID)
+			return fetchWorkItemTeamQuadrantMetricIn(ctx, client, spec.Metric, startDay, endDay, params.Bucket, orgID, selected.attributedTeams)
 		}
-		return fetchQuadrantMetric(ctx, client, spec, startDay, endDay, params.Bucket, orgID, teamFilter)
+		return fetchQuadrantMetricIn(ctx, client, spec, startDay, endDay, params.Bucket, orgID, teamFilter, selected.scope)
 	}
 
 	xRows, err := fetch(xSpec)
@@ -389,8 +410,10 @@ func BuildResponse(ctx context.Context, client QueryClient, orgID string, params
 			X: Axis{Metric: definition.X.Metric, Label: definition.X.Label, Unit: definition.X.Unit},
 			Y: Axis{Metric: definition.Y.Metric, Label: definition.Y.Label, Unit: definition.Y.Unit},
 		},
-		Points:      points,
-		Annotations: []Annotation{},
+		Points:            points,
+		Annotations:       []Annotation{},
+		RepoFilterApplied: selected.repoFilterApplied,
+		FilterEmptyReason: selected.emptyReason,
 	}, nil
 }
 

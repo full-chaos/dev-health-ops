@@ -71,6 +71,14 @@ type Response struct {
 	Cells    []Cell `json:"cells"`
 	Legend   Legend `json:"legend"`
 	Evidence any    `json:"evidence"`
+	// RepoFilterApplied and FilterEmptyReason are Go-only (CHAOS-9159; the Python
+	// reference never served them), last so the frozen key order is kept.
+	// RepoFilterApplied: null when the request names no repository, true when the
+	// repository filter narrowed the cells, false when it cannot (the individual
+	// heatmap is keyed by a person). FilterEmptyReason: null, or why a filter set
+	// that names repositories matched nothing (teamscope.ClassifyEmptyFilter).
+	RepoFilterApplied *bool   `json:"repo_filter_applied"`
+	FilterEmptyReason *string `json:"filter_empty_reason"`
 }
 
 // metricRow is this package's internal generic row shape, ALREADY

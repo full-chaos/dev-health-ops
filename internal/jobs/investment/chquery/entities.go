@@ -627,7 +627,21 @@ type ExistingInvestment struct {
 	// QuoteCount is the row's evidence_quote_count (migration 106), the number of
 	// distinct (source_id, quote) its run wrote. nil = not recorded.
 	QuoteCount *uint32
+	// Terminal is true for a served low-quality row (status invalid_llm_output
+	// whose audit holds a served terminal code): a deterministic answer of the
+	// decision backend for this exact (hash, stamp), kept as the unit's answer
+	// (CHAOS-9147). False for an ok/repaired row.
+	Terminal bool
 }
+
+const (
+	// ServedTopRawKeyCode marks a zero_support row in its audit column.
+	ServedTopRawKeyCode = "served_top_raw_key"
+	// ServedLevelMixCode marks an evidence_none row in its audit column.
+	ServedLevelMixCode = "served_level_mix"
+	// invalidLLMOutputStatus is the status of a served low-quality row.
+	invalidLLMOutputStatus = "invalid_llm_output"
+)
 
 // FetchExistingInvestmentKeys ports materialize.py:700-745
 // _fetch_existing_investment_keys -- the skip-existing lookup that keeps a
@@ -643,6 +657,16 @@ type ExistingInvestment struct {
 // here would be a divergence, and a costly one in the safe-looking direction --
 // a cross-tenant match would SKIP a unit that needs categorizing, writing
 // nothing and silently leaving another tenant's answer in place.
+//
+// # TERMINAL SERVED ROWS (CHAOS-9147)
+//
+// A served zero_support / evidence_none row is status invalid_llm_output with
+// the audit code served_top_raw_key / served_level_mix. It is the deterministic
+// answer of the decision backend for this exact (input hash, stamp; the stamp
+// holds rubric and model), so it counts as existing and is not asked again;
+// a changed hash or stamp misses the key as for any row. Any other
+// invalid_llm_output row (generative path, refused, invalid or defect answers)
+// still does not count. No generative row carries these codes.
 //
 // # WHY THE STATUS FILTER IS INSIDE, NOT OUTSIDE
 //
@@ -692,7 +716,7 @@ func (reader *Reader) FetchExistingInvestmentKeys(
 	// in the WHERE: a filter before the argMax would let an older row of a
 	// config the unit was rolled back FROM still count as "existing".
 	query := fmt.Sprintf(`
-        SELECT work_unit_id, latest_hash, latest_run_id, latest_quote_count
+        SELECT work_unit_id, latest_hash, latest_run_id, latest_quote_count, latest_status
         FROM (
             SELECT
                 work_unit_id,
@@ -700,6 +724,7 @@ func (reader *Reader) FetchExistingInvestmentKeys(
                 %s AS latest_version,
                 %s AS latest_status,
                 %s AS latest_run_id,
+                %s AS latest_errors,
                 -- tuple() keeps a NULL: a bare argMax skips rows whose value is NULL and
                 -- would return an OLDER row's count for the unit's latest row.
                 %s AS latest_quote_count
@@ -708,12 +733,17 @@ func (reader *Reader) FetchExistingInvestmentKeys(
               AND work_unit_id IN {work_unit_ids:Array(String)}
             GROUP BY work_unit_id
         )
-        WHERE latest_status IN {valid_statuses:Array(String)}
+        WHERE (
+                latest_status IN {valid_statuses:Array(String)}
+                OR (latest_status = {terminal_status:String}
+                    AND arrayExists(code -> position(latest_errors, code) > 0, {terminal_codes:Array(String)}))
+              )
           AND latest_version = {model_version:String}
           AND latest_hash IN {input_hashes:Array(String)}
     `,
 		latestrow.ArgMax("categorization_input_hash"), latestrow.ArgMax("categorization_model_version"),
 		latestrow.ArgMax("categorization_status"), latestrow.ArgMax("categorization_run_id"),
+		latestrow.ArgMax("categorization_errors_json"),
 		latestrow.ArgMaxKeepNull("evidence_quote_count"))
 	rows, err := reader.conn.Query(ctx, query,
 		clickhouse.Named("org_id", organizationID),
@@ -721,6 +751,8 @@ func (reader *Reader) FetchExistingInvestmentKeys(
 		clickhouse.Named("input_hashes", inputHashes),
 		clickhouse.Named("model_version", modelVersion),
 		clickhouse.Named("valid_statuses", []string{"ok", "repaired"}),
+		clickhouse.Named("terminal_status", invalidLLMOutputStatus),
+		clickhouse.Named("terminal_codes", []string{`"` + ServedTopRawKeyCode + `"`, `"` + ServedLevelMixCode + `"`}),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("query existing investment keys: %w", err)
@@ -729,9 +761,9 @@ func (reader *Reader) FetchExistingInvestmentKeys(
 
 	existing := make(map[InvestmentKey]ExistingInvestment, len(wanted))
 	for rows.Next() {
-		var workUnitID, inputHash, runID string
+		var workUnitID, inputHash, runID, status string
 		var quoteCount *uint32
-		if err := rows.Scan(&workUnitID, &inputHash, &runID, &quoteCount); err != nil {
+		if err := rows.Scan(&workUnitID, &inputHash, &runID, &quoteCount, &status); err != nil {
 			return nil, fmt.Errorf("scan existing investment key row: %w", err)
 		}
 		workUnitID = pythonparity.DecodeClickHouseStringValue(workUnitID)
@@ -750,7 +782,7 @@ func (reader *Reader) FetchExistingInvestmentKeys(
 		if _, ok := wanted[key]; !ok {
 			continue
 		}
-		existing[key] = ExistingInvestment{RunID: runID, QuoteCount: quoteCount}
+		existing[key] = ExistingInvestment{RunID: runID, QuoteCount: quoteCount, Terminal: status == invalidLLMOutputStatus}
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate existing investment key rows: %w", err)

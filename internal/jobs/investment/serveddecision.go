@@ -42,6 +42,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/jobruntime"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/investment/categorize"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/investment/categorize/decision"
+	"github.com/full-chaos/dev-health-ops/internal/jobs/investment/chquery"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/investment/chwrite"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph/units"
 )
@@ -52,9 +53,9 @@ const (
 	// invalid_llm_output row.
 	servedLowQualityCap = 0.3
 	// servedTopRawKeyCode marks a zero_support row in its audit column.
-	servedTopRawKeyCode = "served_top_raw_key"
+	servedTopRawKeyCode = chquery.ServedTopRawKeyCode
 	// servedLevelMixCode marks an evidence_none row in its audit column.
-	servedLevelMixCode = "served_level_mix"
+	servedLevelMixCode = chquery.ServedLevelMixCode
 	// servedLogLimit bounds the per-unit WARN and ERROR lines of one run.
 	servedLogLimit = 5
 	// servedNoSpendCap is the limit of the ledger of a served run. The served
@@ -65,8 +66,9 @@ const (
 
 // servedLowQualityStatus is the status of a served zero_support or
 // evidence_none row (ruled): the existing invalid_llm_output, with its 0.3
-// cap. Such a row is not reused by skip-existing, so the unit is asked again
-// by the next run.
+// cap. Such a row is the terminal answer for its (input hash, stamp):
+// skip-existing reuses it (CHAOS-9147), so the unit is asked again only when
+// its evidence, the rubric stamp or the model changed.
 const servedLowQualityStatus = categorize.StatusInvalidLLMOutput
 
 // Outcomes of one served classification (CHAOS-8914): a closed set, a metric
@@ -222,6 +224,9 @@ type ServedDecision struct {
 	warnLogs    int
 	defectLogs  int
 	panics      int
+	// skippedTerminal counts the units this run did not ask because their last
+	// row is a terminal low-quality answer (CHAOS-9147).
+	skippedTerminal int
 }
 
 // NewServedDecision builds the backend over a TypeSafe client. It fails when
@@ -508,6 +513,7 @@ func (served *ServedDecision) finish(ctx context.Context, writer *chwrite.Writer
 	attrs = append(attrs,
 		slog.Int("units_low_quality", len(served.lowQuality)),
 		slog.Int("units_kept_last_row", len(served.keptLastRow)),
+		slog.Int("units_skipped_terminal", served.skippedTerminal),
 		slog.Int("attempts", served.attemptRows),
 		slog.Float64("billed_cost_usd", float64(served.ledger.spent())/1e9),
 		slog.String("rates_version", shadowRatesVersion),
@@ -583,4 +589,14 @@ func (m *Materializer) finishServed(ctx context.Context, cfg Config) {
 	if m.served != nil {
 		m.served.finish(ctx, m.writer, cfg)
 	}
+}
+
+// noteSkippedTerminal records the units skipped on a terminal low-quality row.
+func (served *ServedDecision) noteSkippedTerminal(count int) {
+	if served == nil {
+		return
+	}
+	served.mu.Lock()
+	served.skippedTerminal = count
+	served.mu.Unlock()
 }

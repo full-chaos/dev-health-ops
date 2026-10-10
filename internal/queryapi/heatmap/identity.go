@@ -31,6 +31,7 @@ import (
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/quadrant"
+	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse/liverow"
 )
 
 const defaultIdentityMappingPath = "src/dev_health_ops/config/identity_mapping.yaml"
@@ -210,6 +211,7 @@ func resolvePersonIdentity(ctx context.Context, client QueryClient, personID, or
             FROM user_metrics_daily FINAL
             WHERE identity_id != ''
               AND org_id = {org_id:String}
+              AND %[1]s
 
             UNION DISTINCT
 
@@ -217,11 +219,12 @@ func resolvePersonIdentity(ctx context.Context, client QueryClient, personID, or
             FROM work_item_user_metrics_daily FINAL
             WHERE user_identity != ''
               AND org_id = {org_id:String}
+              AND %[2]s
         ) AS identities
         WHERE lower(hex(MD5(identity))) = {person_id:String}
         LIMIT 1
-        %s
-    `, settingsMaxExecutionTime())
+        %[3]s
+    `, liverow.Predicate("user_metrics_daily", ""), liverow.Predicate("work_item_user_metrics_daily", ""), settingsMaxExecutionTime())
 	bindings := []dhclickhouse.Binding{
 		{Name: "org_id", Value: orgID},
 		{Name: "person_id", Value: personID},

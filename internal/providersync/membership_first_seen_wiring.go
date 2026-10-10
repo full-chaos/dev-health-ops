@@ -35,10 +35,11 @@ var linearMembershipWriter = MembershipSnapshotWriter[linearReferenceMembershipR
 	KeyedByEmail: func(open openMembership) bool {
 		return open.RawEmail != nil && strings.TrimSpace(*open.RawEmail) != ""
 	},
-	TeamID:    func(r linearReferenceMembershipRow) string { return r.TeamID },
-	MemberID:  func(r linearReferenceMembershipRow) string { return r.MemberID },
-	ValidFrom: func(r linearReferenceMembershipRow) time.Time { return r.ValidFrom },
-	SetFrom:   func(r *linearReferenceMembershipRow, at time.Time) { r.ValidFrom = at },
+	TeamID:         func(r linearReferenceMembershipRow) string { return r.TeamID },
+	MemberID:       func(r linearReferenceMembershipRow) string { return r.MemberID },
+	ValidFrom:      func(r linearReferenceMembershipRow) time.Time { return r.ValidFrom },
+	SetFrom:        func(r *linearReferenceMembershipRow, at time.Time) { r.ValidFrom = at },
+	ProviderUserID: func(r linearReferenceMembershipRow) *string { return r.ProviderUserID },
 	Closed: func(open openMembership, closedAt, updatedAt time.Time) linearReferenceMembershipRow {
 		return linearReferenceMembershipRow(closedMembershipColumns(open, closedAt, updatedAt))
 	},
@@ -46,10 +47,11 @@ var linearMembershipWriter = MembershipSnapshotWriter[linearReferenceMembershipR
 
 var githubMembershipWriter = MembershipSnapshotWriter[githubMembershipRow]{
 	Provider: githubTeamCatalogProvider, Source: githubTeamCatalogSource,
-	TeamID:    func(r githubMembershipRow) string { return r.TeamID },
-	MemberID:  func(r githubMembershipRow) string { return r.MemberID },
-	ValidFrom: func(r githubMembershipRow) time.Time { return r.ValidFrom },
-	SetFrom:   func(r *githubMembershipRow, at time.Time) { r.ValidFrom = at },
+	TeamID:         func(r githubMembershipRow) string { return r.TeamID },
+	MemberID:       func(r githubMembershipRow) string { return r.MemberID },
+	ValidFrom:      func(r githubMembershipRow) time.Time { return r.ValidFrom },
+	SetFrom:        func(r *githubMembershipRow, at time.Time) { r.ValidFrom = at },
+	ProviderUserID: func(r githubMembershipRow) *string { return r.ProviderUserID },
 	Closed: func(open openMembership, closedAt, updatedAt time.Time) githubMembershipRow {
 		return githubMembershipRow(closedMembershipColumns(open, closedAt, updatedAt))
 	},
@@ -57,10 +59,11 @@ var githubMembershipWriter = MembershipSnapshotWriter[githubMembershipRow]{
 
 var gitlabMembershipWriter = MembershipSnapshotWriter[gitlabTeamCatalogMembershipRow]{
 	Provider: gitlabTeamCatalogProvider, Source: gitlabTeamCatalogSource,
-	TeamID:    func(r gitlabTeamCatalogMembershipRow) string { return r.TeamID },
-	MemberID:  func(r gitlabTeamCatalogMembershipRow) string { return r.MemberID },
-	ValidFrom: func(r gitlabTeamCatalogMembershipRow) time.Time { return r.ValidFrom },
-	SetFrom:   func(r *gitlabTeamCatalogMembershipRow, at time.Time) { r.ValidFrom = at },
+	TeamID:         func(r gitlabTeamCatalogMembershipRow) string { return r.TeamID },
+	MemberID:       func(r gitlabTeamCatalogMembershipRow) string { return r.MemberID },
+	ValidFrom:      func(r gitlabTeamCatalogMembershipRow) time.Time { return r.ValidFrom },
+	SetFrom:        func(r *gitlabTeamCatalogMembershipRow, at time.Time) { r.ValidFrom = at },
+	ProviderUserID: func(r gitlabTeamCatalogMembershipRow) *string { return r.ProviderUserID },
 	Closed: func(open openMembership, closedAt, updatedAt time.Time) gitlabTeamCatalogMembershipRow {
 		return gitlabTeamCatalogMembershipRow(closedMembershipColumns(open, closedAt, updatedAt))
 	},

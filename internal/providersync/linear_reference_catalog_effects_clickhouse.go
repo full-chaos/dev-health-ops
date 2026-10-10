@@ -27,7 +27,7 @@ type LinearReferenceCatalogClickHouseEffects struct {
 
 const linearReferenceTeamsInsert = `INSERT INTO teams (id, team_uuid, name, description, manual_members, project_keys, repo_patterns, is_active, updated_at, org_id, provider, native_team_key, parent_team_id, created_at)`
 const linearReferenceMembersInsert = `INSERT INTO members (org_id, member_id, name, email, provider_identities, is_active, updated_at)`
-const linearReferenceMembershipsInsert = `INSERT INTO team_memberships (org_id, provider, team_id, member_id, raw_provider_user_id, raw_email, identity_facets, source, is_primary, specificity, priority, valid_from, valid_to, updated_at)`
+const linearReferenceMembershipsInsert = `INSERT INTO team_memberships (org_id, provider, team_id, member_id, raw_provider_user_id, raw_email, identity_facets, source, is_primary, specificity, priority, valid_from, valid_to, updated_at, provider_user_id)`
 
 // Omits last_synced on purpose: the server stamps it at insert time (server insert time, not commit order: readers re-read a 300 s window and dedup by key, migration 099).
 const linearReferenceOwnershipInsert = `INSERT INTO team_project_ownership (org_id, provider, team_id, project_id, project_key, source, is_primary, specificity, priority, valid_from, valid_to, updated_at)`
@@ -357,7 +357,7 @@ func (sink LinearReferenceCatalogClickHouseEffects) writeMemberships(ctx context
 	}
 	defer batch.Abort()
 	for _, row := range rows {
-		if err := batch.Append(row.OrgID, row.Provider, row.TeamID, row.MemberID, row.RawProviderUserID, row.RawEmail, row.IdentityFacets, row.Source, row.IsPrimary, row.Specificity, row.Priority, row.ValidFrom, row.ValidTo, row.UpdatedAt); err != nil {
+		if err := batch.Append(row.OrgID, row.Provider, row.TeamID, row.MemberID, row.RawProviderUserID, row.RawEmail, row.IdentityFacets, row.Source, row.IsPrimary, row.Specificity, row.Priority, row.ValidFrom, row.ValidTo, row.UpdatedAt, row.ProviderUserID); err != nil {
 			return err
 		}
 	}
@@ -534,7 +534,7 @@ func (sink LinearReferenceCatalogClickHouseEffects) inspectMembers(ctx context.C
 
 func (sink LinearReferenceCatalogClickHouseEffects) inspectMemberships(ctx context.Context, claim Claim, expected []linearReferenceMembershipRow) (EffectInspection, error) {
 	return inspectLinearReferenceRows(expected, func(row linearReferenceMembershipRow) (EffectInspection, error) {
-		result, err := sink.Conn.Query(ctx, `SELECT org_id, provider, team_id, member_id, raw_provider_user_id, raw_email, identity_facets, source, is_primary, specificity, priority, valid_from, valid_to, updated_at FROM team_memberships FINAL WHERE org_id = ? AND provider = ? AND team_id = ? AND member_id = ? AND source = ?`, claim.OrgID, "linear", row.TeamID, row.MemberID, "native")
+		result, err := sink.Conn.Query(ctx, `SELECT org_id, provider, team_id, member_id, raw_provider_user_id, raw_email, identity_facets, source, is_primary, specificity, priority, valid_from, valid_to, updated_at, provider_user_id FROM team_memberships FINAL WHERE org_id = ? AND provider = ? AND team_id = ? AND member_id = ? AND source = ?`, claim.OrgID, "linear", row.TeamID, row.MemberID, "native")
 		if err != nil {
 			return EffectConflict, err
 		}
@@ -542,7 +542,7 @@ func (sink LinearReferenceCatalogClickHouseEffects) inspectMemberships(ctx conte
 		var actual linearReferenceMembershipRow
 		found := 0
 		for result.Next() {
-			if err := result.Scan(&actual.OrgID, &actual.Provider, &actual.TeamID, &actual.MemberID, &actual.RawProviderUserID, &actual.RawEmail, &actual.IdentityFacets, &actual.Source, &actual.IsPrimary, &actual.Specificity, &actual.Priority, &actual.ValidFrom, &actual.ValidTo, &actual.UpdatedAt); err != nil {
+			if err := result.Scan(&actual.OrgID, &actual.Provider, &actual.TeamID, &actual.MemberID, &actual.RawProviderUserID, &actual.RawEmail, &actual.IdentityFacets, &actual.Source, &actual.IsPrimary, &actual.Specificity, &actual.Priority, &actual.ValidFrom, &actual.ValidTo, &actual.UpdatedAt, &actual.ProviderUserID); err != nil {
 				return EffectConflict, err
 			}
 			found++
@@ -667,6 +667,7 @@ func equalLinearReferenceMember(left, right linearReferenceMemberRow) bool {
 func equalLinearReferenceMembership(left, right linearReferenceMembershipRow) bool {
 	return left.OrgID == right.OrgID && left.Provider == right.Provider && left.TeamID == right.TeamID &&
 		left.MemberID == right.MemberID && reflect.DeepEqual(left.RawProviderUserID, right.RawProviderUserID) &&
+		reflect.DeepEqual(left.ProviderUserID, right.ProviderUserID) &&
 		reflect.DeepEqual(left.RawEmail, right.RawEmail) && reflect.DeepEqual(left.IdentityFacets, right.IdentityFacets) &&
 		left.Source == right.Source && left.IsPrimary == right.IsPrimary && left.Specificity == right.Specificity &&
 		left.Priority == right.Priority && left.ValidFrom.Equal(right.ValidFrom) &&

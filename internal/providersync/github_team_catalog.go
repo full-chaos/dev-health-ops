@@ -73,6 +73,9 @@ type githubTeamRepoPayload struct {
 // (GET /users/{login}), see githubTeamCatalogMemberEmail in the route file.
 type githubTeamMemberPayload struct {
 	Login string `json:"login"`
+	// ID is the member's numeric GitHub user id: it survives a login rename
+	// (CHAOS-9144). The list already returns it; 0 when the node has none.
+	ID int64 `json:"id"`
 }
 
 // githubTeamRow mirrors the exact `teams` row shape Python's insert_teams
@@ -133,6 +136,8 @@ type githubMembershipRow struct {
 	ValidFrom         time.Time  `json:"valid_from"`
 	ValidTo           *time.Time `json:"valid_to"`
 	UpdatedAt         time.Time  `json:"updated_at"`
+	// ProviderUserID is the provider's own stable id of the member (CHAOS-9144); nil when it has none.
+	ProviderUserID *string `json:"provider_user_id"`
 }
 
 // githubTeamRepoOwnershipRow mirrors TeamRepoOwnershipRecord exactly as

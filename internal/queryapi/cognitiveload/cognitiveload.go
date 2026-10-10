@@ -331,7 +331,67 @@ func fetchUserMetrics(ctx context.Context, client QueryClient, orgID, sinceDate,
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("rows: %w", err)
 	}
-	return result, nil
+	if len(result) == 0 {
+		return result, nil
+	}
+	// The SQL above is pinned to the Python reference. A key whose newest row is
+	// a retraction row (CHAOS-9135: the row of zeros of user_metrics_daily
+	// copies the team of the row it retracts, so the filters above keep it)
+	// adds 0 to the sums, which is right; but a day whose every key is retracted
+	// would read as a day with a load of 0, and a retracted day is no sample.
+	// The days that hold no live key are read with the rule and left out.
+	retracted, err := fetchRetractedUserDays(ctx, client, innerWhere, bindings)
+	if err != nil {
+		return nil, err
+	}
+	if len(retracted) == 0 {
+		return result, nil
+	}
+	kept := result[:0]
+	for _, row := range result {
+		if !retracted[row.day.UTC()] {
+			kept = append(kept, row)
+		}
+	}
+	return kept, nil
+}
+
+// retractedUserDaysQuery returns the days of the filtered scope whose every
+// key (repository, person) has a retraction row as its newest row of
+// user_metrics_daily. It reads the same rows as the pinned statement
+// (innerWhere), so the days it names are days that statement returns.
+func retractedUserDaysQuery(innerWhere string) string {
+	return `
+        SELECT day AS no_live_user_day
+        FROM (
+            SELECT day, repo_id, author_email, ` + liverow.NewestPredicate("user_metrics_daily", "") + ` AS live
+            FROM user_metrics_daily
+            ` + innerWhere + `
+            GROUP BY day, repo_id, author_email
+        )
+        GROUP BY day
+        HAVING countIf(live) = 0
+        ORDER BY no_live_user_day`
+}
+
+func fetchRetractedUserDays(ctx context.Context, client QueryClient, innerWhere string, bindings []clickhouse.Binding) (map[time.Time]bool, error) {
+	rows, err := client.Query(ctx, retractedUserDaysQuery(innerWhere), bindings)
+	if err != nil {
+		return nil, fmt.Errorf("retracted user days query: %w", err)
+	}
+	defer rows.Close()
+	days := map[time.Time]bool{}
+	for rows.Next() {
+		var day time.Time
+		if scanErr := rows.Scan(&day); scanErr != nil {
+			return nil, fmt.Errorf("retracted user days scan: %w", scanErr)
+		}
+		days[day.UTC()] = true
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("retracted user days rows: %w", err)
+	}
+	return days, nil
 }
 
 // fetchTeamMetrics ports _fetch_team_metrics: AVG across teams of each

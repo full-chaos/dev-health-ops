@@ -9,6 +9,7 @@ import (
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/quadrant"
+	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse/liverow"
 )
 
 // maxSearchLimit ports _MAX_SEARCH_LIMIT (services/people.py:66).
@@ -105,7 +106,7 @@ func boundedSearchLimit(limit int) int {
 // ORG SCOPE sits INSIDE each UNION branch's own WHERE, at the same
 // nesting depth as its FINAL source (pinned by sqlshape_test.go) -- never
 // a filter applied only after a cross-tenant merge/scan.
-const searchPeopleQuery = `
+var searchPeopleQuery = `
 SELECT
     identity AS identity_id,
     max(last_seen) AS last_seen
@@ -116,6 +117,7 @@ FROM (
     FROM user_metrics_daily FINAL
     WHERE identity_id != ''
       AND org_id = {org_id:String}
+      AND ` + liverow.Predicate("user_metrics_daily", "") + `
     GROUP BY identity_id
 
     UNION ALL
@@ -126,6 +128,7 @@ FROM (
     FROM work_item_user_metrics_daily FINAL
     WHERE user_identity != ''
       AND org_id = {org_id:String}
+      AND ` + liverow.Predicate("work_item_user_metrics_daily", "") + `
     GROUP BY user_identity
 ) AS identities
 WHERE identity != ''

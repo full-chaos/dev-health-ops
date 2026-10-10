@@ -70,6 +70,7 @@ func RunStaleKeyTables() []StaleKeyTable {
 		teamkeytables.EstimateCoverageMetricsDaily,
 		teamkeytables.WorkItemStateDurationsDaily,
 		teamkeytables.AIGovernanceCoverageDaily,
+		teamkeytables.WorkItemUserMetricsDaily,
 	}
 }
 
@@ -83,6 +84,7 @@ func OrganizationRunStaleKeyTables() []StaleKeyTable {
 	return []StaleKeyTable{
 		teamkeytables.TeamMetricsDaily,
 		teamkeytables.AIImpactMetricsDaily,
+		teamkeytables.UserMetricsDaily,
 	}
 }
 
@@ -171,6 +173,25 @@ func (retractor *RunStaleKeyRetractor) RetractStaleKeys(ctx context.Context, run
 				return WriteWorkItemMetricsDaily(writeCtx, conn, run.OrganizationID, day, triplet.MetricsDaily, version)
 			}}, nil
 	}
+	// work_item_user_metrics_daily (CHAOS-9135): the person rows of the same
+	// compute as work_item_metrics_daily, a key per (provider, work scope,
+	// person). The row of a person holds its team in a value column, so a
+	// recompute that gives the person another team REPLACES the row; the row
+	// of zeros is for a person the compute no longer produces for the day.
+	userKeys := func(keyCtx context.Context) (runStaleKeys, error) {
+		read, triplet, err := computeWorkItemTriplet(keyCtx, conn, run, partition, scope)
+		if err != nil {
+			return runStaleKeys{}, err
+		}
+		keys := make([]staleKey, 0, len(triplet.UserMetricsDaily))
+		for _, row := range triplet.UserMetricsDaily {
+			keys = append(keys, staleKey{row.Provider, row.WorkScopeID, row.UserIdentity})
+		}
+		return runStaleKeys{scope: read.staleKeyScope(), everyScope: wholeOrganization, proveNoItem: proveNoItem, keys: keys,
+			writeRows: func(writeCtx context.Context, version time.Time) (int, error) {
+				return WriteWorkItemUserMetricsDaily(writeCtx, conn, run.OrganizationID, day, triplet.UserMetricsDaily, version)
+			}}, nil
+	}
 	estimateKeys := func(keyCtx context.Context) (runStaleKeys, error) {
 		read, rows, err := computeWorkItemEstimateRows(keyCtx, conn, run, partition, scope)
 		if err != nil {
@@ -236,6 +257,11 @@ func (retractor *RunStaleKeyRetractor) RetractStaleKeys(ctx context.Context, run
 			rows, zeros, err := retractStaleTeamKeysOfRun(ctx, conn, teamkeytables.WorkItemMetricsDaily,
 				run.OrganizationID, day, workItemKeys, retractor.nowUTC())
 			return teamkeytables.WorkItemMetricsDaily.Table, rows, zeros, err
+		},
+		func() (string, int, int, error) {
+			rows, zeros, err := retractStaleTeamKeysOfRun(ctx, conn, teamkeytables.WorkItemUserMetricsDaily,
+				run.OrganizationID, day, userKeys, retractor.nowUTC())
+			return teamkeytables.WorkItemUserMetricsDaily.Table, rows, zeros, err
 		},
 		func() (string, int, int, error) {
 			rows, zeros, err := retractStaleTeamKeysOfRun(ctx, conn, teamkeytables.EstimateCoverageMetricsDaily,
@@ -342,6 +368,7 @@ func (retractor *RunStaleKeyRetractor) RetractStaleKeys(ctx context.Context, run
 			"repository_ids_not_in_run", ids, "repository_ids_not_in_run_more", more,
 			"team_metrics_daily_keys_left", left[teamkeytables.TeamMetricsDaily.Table],
 			"ai_impact_metrics_daily_keys_left", left[teamkeytables.AIImpactMetricsDaily.Table],
+			"user_metrics_daily_keys_left", left[teamkeytables.UserMetricsDaily.Table],
 		)
 	}
 	supersededIDs, supersededMore := loggedRepositoryIDs(superseded)
@@ -350,6 +377,7 @@ func (retractor *RunStaleKeyRetractor) RetractStaleKeys(ctx context.Context, run
 		"target_day", day.Format("2006-01-02"),
 		"repositories", len(run.DiscoveredRepoIDs),
 		"work_item_metrics_daily", written[teamkeytables.WorkItemMetricsDaily.Table],
+		"work_item_user_metrics_daily", written[teamkeytables.WorkItemUserMetricsDaily.Table],
 		"estimate_coverage_metrics_daily", written[teamkeytables.EstimateCoverageMetricsDaily.Table],
 		"work_item_state_durations_daily", written[teamkeytables.WorkItemStateDurationsDaily.Table],
 		"ai_governance_coverage_daily", written[teamkeytables.AIGovernanceCoverageDaily.Table],
@@ -357,11 +385,13 @@ func (retractor *RunStaleKeyRetractor) RetractStaleKeys(ctx context.Context, run
 		// the rows above (the retraction itself).
 		"retraction_scope", staleKeyRetractionScope(wholeOrganization),
 		"work_item_metrics_daily_zero_rows", retracted[teamkeytables.WorkItemMetricsDaily.Table],
+		"work_item_user_metrics_daily_zero_rows", retracted[teamkeytables.WorkItemUserMetricsDaily.Table],
 		"estimate_coverage_metrics_daily_zero_rows", retracted[teamkeytables.EstimateCoverageMetricsDaily.Table],
 		"work_item_state_durations_daily_zero_rows", retracted[teamkeytables.WorkItemStateDurationsDaily.Table],
 		"ai_governance_coverage_daily_zero_rows", retracted[teamkeytables.AIGovernanceCoverageDaily.Table],
 		"team_metrics_daily_zero_rows", retracted[teamkeytables.TeamMetricsDaily.Table],
 		"ai_impact_metrics_daily_zero_rows", retracted[teamkeytables.AIImpactMetricsDaily.Table],
+		"user_metrics_daily_zero_rows", retracted[teamkeytables.UserMetricsDaily.Table],
 		// The repositories that a row of zeros of the two repository-scoped
 		// tables hides (an empty id is the rows with no repository).
 		"repositories_superseded", len(superseded),

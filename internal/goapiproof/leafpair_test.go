@@ -223,3 +223,33 @@ func TestMetricPercentDefects_AdmitOnlyTheStateTheyName(t *testing.T) {
 		})
 	}
 }
+
+// Each declared difference covers ITS state alone: the from-zero one never a window
+// with no data, the no-data one never a measured zero before a value.
+func TestMetricPercentDefects_EachCoversItsOwnStateOnly(t *testing.T) {
+	defects := metricPercentDefects("data.deltas", "data.deltas.delta_pct", "metric")
+	row := func(pct string, hasData, hasPrior bool) string {
+		return fmt.Sprintf(`{"data":{"deltas":[{"metric":"a","delta_pct":%s,"has_data":%t,"has_prior_data":%t},{"metric":"b","delta_pct":5.0,"has_data":true,"has_prior_data":true}]}}`, pct, hasData, hasPrior)
+	}
+	for _, c := range []struct {
+		name              string
+		defect            int
+		hasData, hasPrior bool
+		wantOutside       int
+	}{
+		{"from zero covers both flags true", 0, true, true, 0},
+		{"from zero does not cover no current data", 0, false, true, 1},
+		{"from zero does not cover no prior data", 0, true, false, 1},
+		{"no data covers no current data", 1, false, true, 0},
+		{"no data covers no prior data", 1, true, false, 0},
+		{"no data does not cover both flags true", 1, true, true, 1},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			result := Compare(snapshotFromJSON(t, row("0.0", c.hasData, c.hasPrior)), snapshotFromJSON(t, row("null", c.hasData, c.hasPrior)),
+				Options{BaselineDefects: []BaselineDefect{defects[c.defect]}})
+			if result.DifferencesOutsideBaselineDefect != c.wantOutside {
+				t.Fatalf("outside = %d, want %d -- findings %+v", result.DifferencesOutsideBaselineDefect, c.wantOutside, result.Findings)
+			}
+		})
+	}
+}

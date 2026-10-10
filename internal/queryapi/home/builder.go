@@ -319,6 +319,7 @@ func BuildResponse(ctx context.Context, chClient QueryClient, pgClient PGQueryCl
 	if !hasCurrentMetricData(deltas) {
 		return noDataResponse(lastIngested, latestSuccessfulSyncAt, coverage, sources, deltas, reworkAllocation, dataConfidence, scopeDataConfidence), nil
 	}
+	f.Scope.names = scopeNames(ctx, chClient, orgID, f)
 	metricSignals := BuildMetricSignals(deltas, f, dataConfidence)
 
 	var recommendationRows []RecommendationRow
@@ -352,6 +353,7 @@ func BuildResponse(ctx context.Context, chClient QueryClient, pgClient PGQueryCl
 	}
 	metricSignals = AttachSignalAttribution(metricSignals, attribution)
 
+	attachTeamNames(ctx, chClient, orgID, recommendationRows)
 	var recommendationSignals []Signal
 	for _, row := range recommendationRows {
 		if s, ok := RecommendationSignal(row, f, dataConfidence); ok {

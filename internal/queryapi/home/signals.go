@@ -111,8 +111,87 @@ func formatDeltaWords(deltaPct float64) string {
 	return fmt.Sprintf("%.0f%%", absFloat(deltaPct))
 }
 
-// primaryScopeLabel ports _primary_scope_label (services/home.py:313-316).
+// The words of the Home prose for a requested scope that has no display name.
+// ONE place: a wording change is one edit here (the phrases are provisional,
+// they are on the wording list with the empty-state texts). The noun follows the
+// LEVEL of the requested scope.
+const (
+	scopeUnnamedPrefix        = "the selected "
+	scopeOtherPrefix          = "other "
+	recommendationUnnamedTeam = "a team"
+	riskUnnamedRepository     = "a repository"
+)
+
+// scopeNouns is the singular and plural noun of each scope level.
+var scopeNouns = map[string][2]string{
+	"team":      {"team", "teams"},
+	"repo":      {"repository", "repositories"},
+	"service":   {"service", "services"},
+	"developer": {"developer", "developers"},
+}
+
+func scopeNoun(level string, n int) string {
+	nouns, ok := scopeNouns[level]
+	if !ok {
+		nouns = [2]string{"scope", "scopes"}
+	}
+	if n == 1 {
+		return nouns[0]
+	}
+	return nouns[1]
+}
+
+// uniqueIDs keeps the first of each id, in order, and drops the empty ones.
+func uniqueIDs(ids []string) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, id := range ids {
+		if id == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
+		out = append(out, id)
+	}
+	return out
+}
+
+// primaryScopeLabel ports _primary_scope_label (services/home.py:313-316), but
+// the label is a NAME, never the id (CHAOS-9116): the display names of the
+// requested scope ids (each id once) joined by ", ". An id with no name is never
+// printed and never hidden: "<names> and N other <noun>". When none has a name,
+// "the selected <noun>". Without ids it is the level, as before.
 func primaryScopeLabel(f Filters) string {
+	ids := uniqueIDs(f.Scope.IDs)
+	if len(ids) == 0 {
+		return f.Scope.Level
+	}
+	var named []string
+	seenName := map[string]bool{}
+	unnamed := 0
+	for _, id := range ids {
+		name, ok := f.Scope.names[id]
+		if !ok {
+			unnamed++
+			continue
+		}
+		if !seenName[name] {
+			seenName[name] = true
+			named = append(named, name)
+		}
+	}
+	if len(named) == 0 {
+		return scopeUnnamedPrefix + scopeNoun(f.Scope.Level, unnamed)
+	}
+	label := strings.Join(named, ", ")
+	if unnamed > 0 {
+		label += fmt.Sprintf(" and %d %s%s", unnamed, scopeOtherPrefix, scopeNoun(f.Scope.Level, unnamed))
+	}
+	return label
+}
+
+// rawScopeKey is the request scope as the structured fields carry it (signal
+// ids, evidence links): the ids joined, or the level. It is not prose.
+func rawScopeKey(f Filters) string {
 	if len(f.Scope.IDs) > 0 {
 		return strings.Join(f.Scope.IDs, ",")
 	}
@@ -613,6 +692,9 @@ type RecommendationRow struct {
 	LatestRationale string
 	LatestSuccess   string
 	LatestEvidence  string
+	// TeamName is the display name of TeamID, resolved by BuildResponse; empty
+	// when the team has none (the signal then says "a team", never the id).
+	TeamName string
 }
 
 // RecommendationSignal ports _recommendation_signal
@@ -637,8 +719,12 @@ func RecommendationSignal(row RecommendationRow, f Filters, dataConfidence DataC
 		ruleID = "recommendation"
 	}
 	teamID := row.TeamID
+	affectedScope := row.TeamName
 	if teamID == "" {
-		teamID = primaryScopeLabel(f)
+		teamID = rawScopeKey(f)
+		affectedScope = primaryScopeLabel(f)
+	} else if affectedScope == "" {
+		affectedScope = recommendationUnnamedTeam
 	}
 	whyItMatters := row.LatestRationale
 	if whyItMatters == "" {
@@ -662,7 +748,7 @@ func RecommendationSignal(row RecommendationRow, f Filters, dataConfidence DataC
 		Direction:         "flat",
 		Severity:          severity,
 		Confidence:        confidenceFromEvidence(len(evidence), dataConfidence.CoveragePct),
-		AffectedScope:     teamID,
+		AffectedScope:     affectedScope,
 		EvidenceCount:     len(evidence),
 		WhyItMatters:      whyItMatters,
 		RecommendedAction: recommendedAction,
@@ -724,8 +810,16 @@ func RiskSignal(row RiskRow, f Filters, dataConfidence DataConfidence) (Signal, 
 
 	// A8: no bare UUID in any label or headline field.
 	entityName := row.ScopeDisplayName
-	if entityName == "" || looksLikeUUID(entityName) {
+	if looksLikeUUID(entityName) {
 		return Signal{}, false
+	}
+	if entityName == "" {
+		// No name (none stored, the id as its own name, or the read failed): the
+		// signal says so in words, it never prints the id (CHAOS-9116).
+		entityName = riskUnnamedRepository
+		if scopeType == "team" {
+			entityName = recommendationUnnamedTeam
+		}
 	}
 
 	affectedScope := scopeType + "s"

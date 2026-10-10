@@ -31,6 +31,9 @@ import "time"
 //	atlassian_team_project_links  sole integration  is an answer
 //	gitlab_group_project_grants   sole integration  is an answer
 //	github_team_repo_grants       sole integration  is an answer
+//	linear_team_memberships       sole integration  is an answer
+//	github_team_memberships       sole integration  is an answer
+//	gitlab_team_memberships       sole integration  is an answer
 
 // MembershipSnapshotRow is one team_memberships fact as the snapshot rule
 // reads it: the team, the member and the stored valid_from.
@@ -132,4 +135,33 @@ func AtlassianTeamMembershipKind() SnapshotKind[MembershipSnapshotRow] {
 // and link closes.
 func AtlassianTeamCatalogKind() SnapshotKind[TeamSnapshotRow] {
 	return NewSnapshotKind("atlassian_team_catalog", EmptyClosesNothing, func(TeamSnapshotRow) bool { return true })
+}
+
+// The team membership kinds (CHAOS-9079): the memberships a provider catalog
+// writes (source native for Linear, provider_access for GitHub and GitLab) of
+// the teams whose own member read proved its end in a scope no other
+// integration reads (decideOwnershipClose). Each team's member read is its own
+// walk, so a team with no member is an answer: its open memberships close. A
+// team outside closable is of no kind, and its rows never close. A member
+// absent from the complete read of its team is closed (valid_to = the run
+// time); a member who comes back is a new fact with a new valid_from.
+
+func teamMembershipHolds(closable []string) func(MembershipSnapshotRow) bool {
+	closes := teamIn(closable)
+	return func(row MembershipSnapshotRow) bool { return closes(row.TeamID) }
+}
+
+// LinearTeamMembershipKind is the Linear catalog's team memberships.
+func LinearTeamMembershipKind(closable []string) SnapshotKind[MembershipSnapshotRow] {
+	return NewSnapshotKind("linear_team_memberships", EmptyIsAnAnswer, teamMembershipHolds(closable))
+}
+
+// GitHubTeamMembershipKind is the GitHub team memberships.
+func GitHubTeamMembershipKind(closable []string) SnapshotKind[MembershipSnapshotRow] {
+	return NewSnapshotKind("github_team_memberships", EmptyIsAnAnswer, teamMembershipHolds(closable))
+}
+
+// GitLabTeamMembershipKind is the GitLab group memberships.
+func GitLabTeamMembershipKind(closable []string) SnapshotKind[MembershipSnapshotRow] {
+	return NewSnapshotKind("gitlab_team_memberships", EmptyIsAnAnswer, teamMembershipHolds(closable))
 }

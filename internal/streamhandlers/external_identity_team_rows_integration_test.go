@@ -20,7 +20,9 @@ import (
 //     pushed is counted as a team id with no team row;
 //   - the identities are stored as they were pushed, with both team ids;
 //   - no team row is made up for the team that was never pushed;
-//   - the sink says it in ONE WARN line that holds counts and no id.
+//   - the sink says it in ONE WARN line that holds counts and no id;
+//   - a team row of ANOTHER organization with the same team id does not count:
+//     the team that was never pushed here has a row there.
 //
 // The ORDER of the writes of a batch is held by the unit test of the sink
 // (TestThePushedTeamsOfABatchAreWrittenBeforeTheIdentitiesThatNameThem): this
@@ -43,6 +45,21 @@ func TestAPushBatchCountsTheIdentityTeamIDsWithNoTeamRowAndMakesNoTeamUp(t *test
 			t.Fatalf("record %d is not a valid %s: %v", index, kind, err)
 		}
 		return externalSinkRecord{Index: index, Kind: kind, ExternalID: kind + "-" + uuid.NewString(), Payload: payload}
+	}
+	// Another organization pushed a team with the id this organization never
+	// pushes. Its row is not a team row of this organization.
+	if _, err := sink.Write(context.WithoutCancel(ctx), externalSinkBatch{
+		Pointer: externalPointer{
+			IngestionID: uuid.New(), OrgID: "org-team-row-other", SourceSystem: "github",
+			SourceInstance: "acme/api", SchemaVersion: externalSchemaVersion,
+		},
+		SourceID: uuid.New(),
+		Records:  []externalSinkRecord{record(0, "team.v1", map[string]any{"id": "never-pushed", "name": "Theirs", "updatedAt": "2026-07-23T11:00:00Z"})},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(logs.String(), "level=WARN") {
+		t.Fatalf("a batch with no identity wrote a WARN line:\n%s", logs.String())
 	}
 	if _, err := sink.Write(context.WithoutCancel(ctx), externalSinkBatch{
 		Pointer: externalPointer{

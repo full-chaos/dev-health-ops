@@ -985,6 +985,38 @@ func TestAPushedIdentityThatNamesATeamWithNoTeamRowIsCountedInOneWarnLine(t *tes
 			t.Errorf("team row reads = %d, logs:\n%s", connection.teamRowCalls, logs)
 		}
 	})
+	// A blank entry in the team ids of an identity names no team: it is not
+	// counted as named, so it cannot be a team id with no team row.
+	t.Run("a blank team id names no team", func(t *testing.T) {
+		connection := &productSink{batch: &productBatch{}, teamRowIDs: []string{"gh:team-a"}}
+		blank := externalSinkFixture("identity.v1", map[string]any{"canonicalId": "eve", "teamIds": []any{"team-a", " ", ""}, "updatedAt": "2026-07-23T11:00:00Z"})
+		logs := write(t, connection, blank, team)
+		if connection.teamRowCalls != 1 || strings.Contains(logs, "level=WARN") {
+			t.Errorf("team row reads = %d (want 1), and no WARN line is wanted:\n%s", connection.teamRowCalls, logs)
+		}
+	})
+	// The count is of identities that were STORED. When the identity write
+	// of the batch fails, their team ids are not read and nothing is said
+	// about them: the batch fails and is retried whole.
+	t.Run("the identity write fails", func(t *testing.T) {
+		var logs bytes.Buffer
+		previous := slog.Default()
+		slog.SetDefault(slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelInfo})))
+		defer slog.SetDefault(previous)
+		// The kinds are written team, then identity: the second write fails.
+		connection := &productSink{batches: []*productBatch{{}, {sendErr: errors.New("clickhouse: write refused")}}}
+		sink, err := NewClickHouseExternalBatchSink(connection)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = sink.Write(context.Background(), externalSinkBatch{Pointer: externalTestPointer(), SourceID: uuid.New(), Records: []externalSinkRecord{ada, team}})
+		if err == nil || !strings.Contains(err.Error(), "identity.v1") {
+			t.Fatalf("err = %v, want the failed identity write", err)
+		}
+		if connection.teamRowCalls != 0 || strings.Contains(logs.String(), "level=WARN") {
+			t.Errorf("after a failed identity write: team row reads = %d, logs:\n%s", connection.teamRowCalls, logs.String())
+		}
+	})
 	t.Run("a failed count read is said and does not fail the write", func(t *testing.T) {
 		connection := &productSink{batch: &productBatch{}, teamRowErr: errors.New("clickhouse: connection reset")}
 		logs := write(t, connection, ada, team)

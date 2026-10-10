@@ -1872,8 +1872,13 @@ equal-share fallback did with every component in the run. `allocated`,
 and `window_skipped` partition the `components` count: they always sum to it.
 `repo_shares` counts the repository rows the fallback wrote, and `donor_rows`
 and `donor_issues` report the read side -- how much eligible ownership evidence
-the run loaded. `ownership_as_of` names the timestamp the ownership intervals
-were evaluated at, which is the run's own `computed_at`, never wall-clock time.
+the run loaded: the donor team rows of the issues plus the ownership rows of the
+organization that began at or before the run. `ownership_as_of` names the bound
+of that read, which is the run's own `computed_at`, never wall-clock time. Each
+unit's intervals are evaluated at the end of the unit's own span, never later
+than that bound; `ownership_as_of_first_unit` and `ownership_as_of_last_unit`
+name the earliest and the latest such time of the run, and are empty when no
+unit reached the fallback.
 
 **Every one of these fields is emitted on every run, including when its value is
 zero.** A field that disappears at zero cannot be told apart from a field that

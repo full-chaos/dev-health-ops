@@ -5,6 +5,7 @@ package chquery
 import (
 	"fmt"
 	"reflect"
+	"sort"
 	"testing"
 	"time"
 )
@@ -120,5 +121,39 @@ func TestTeamRepoDonorsExcludeStaleForeignAndNonOwnershipSources(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("ownership donor positives/negatives: got %v want %v", got, want)
+	}
+
+	// The donor set, read ONCE with the same bound, gives for every instant at
+	// or before the bound what the as-of query gives for that instant. The
+	// corpus holds a row that ends one second before the bound, rows that begin
+	// one hour before it, and a row that begins after it, so the instants
+	// below do not all give the same donors.
+	set, err := reader.FetchTeamRepoDonorSet(ctx, ids, orgAlpha, at)
+	if err != nil {
+		t.Fatal(err)
+	}
+	distinct := map[string]bool{}
+	for _, instant := range []time.Time{
+		at.Add(-2 * time.Hour), at.Add(-time.Hour), at.Add(-30 * time.Minute),
+		at.Add(-time.Second), at.Add(-500 * time.Millisecond), at,
+	} {
+		asOf, err := reader.FetchTeamRepoDonors(ctx, ids, orgAlpha, instant)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var fromSet []TeamRepoDonor
+		for _, id := range ids {
+			fromSet = append(fromSet, set.DonorsAt(id, instant)...)
+		}
+		wantKeys, gotKeys := donorKeys(asOf), donorKeys(fromSet)
+		sort.Strings(wantKeys)
+		sort.Strings(gotKeys)
+		if !reflect.DeepEqual(gotKeys, wantKeys) {
+			t.Fatalf("donors at %s: the donor set gives %v, the as-of query gives %v", instant.Format(time.RFC3339Nano), gotKeys, wantKeys)
+		}
+		distinct[fmt.Sprint(wantKeys)] = true
+	}
+	if len(distinct) < 3 {
+		t.Fatalf("the instants give only %d different donor lists: the corpus does not tell the instants apart", len(distinct))
 	}
 }

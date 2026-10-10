@@ -61,8 +61,15 @@ Existing linked PR and hierarchy behavior keeps its precedence.
 Each active donor team contributes all its live, sync-derived
 `team_repo_ownership` records. The reader accepts `native`, `jira_legacy`,
 `provider_access`, and `inferred` ownership sources. It validates the ownership
-interval at the materialization timestamp and joins to this organization's
-current repository catalog. Name-only ownership resolves by provider and
+interval at the END of the work unit's own span (`to_ts`), never later than the
+materialization timestamp, and joins to this organization's current repository
+catalog. Ownership starts when it was first known: a unit that ended before a
+team's first ownership row of a repository gets no share of that repository, and
+a later change of a team's repositories does not move the effort of a unit that
+ended before the change. One run holds units of many end times, so the reader
+loads the donor teams of the issues and every ownership row that began at or
+before the materialization timestamp once, and each unit selects the rows valid
+at its own end time. Name-only ownership resolves by provider and
 case-insensitive full repository name. Missing, expired, future, manual,
 foreign-organization, and unmatched repository records cannot supply a share.
 A failed donor query fails materialization before new output is written.
@@ -124,8 +131,10 @@ matches on the CODE HOST's provider, never the tracker's.
 Each run emits one `investment team repository fallback` record whose
 `allocated`, `own_repo`, `stronger_allocation`, `direct_repo_evidence`,
 `no_eligible_owner` and `window_skipped` counts partition every component in the
-run, alongside `repo_shares`, `donor_rows`, `donor_issues` and the
-`ownership_as_of` timestamp the intervals were evaluated at. Every field is
+run, alongside `repo_shares`, `donor_rows`, `donor_issues`, the `ownership_as_of`
+timestamp that bounds the ownership rows the run read, and
+`ownership_as_of_first_unit` and `ownership_as_of_last_unit`, the earliest and the
+latest unit end time an interval was evaluated at. Every field is
 written on every run, including at zero, so that "nothing to allocate" can be
 told apart from "the counter was never computed". Field-by-field meaning:
 [CLI reference](../cli/index.md#investment).

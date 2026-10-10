@@ -194,7 +194,7 @@ func (r *queryResolver) Analytics(ctx context.Context, orgID string, batch model
 		}
 	}
 
-	result, err := analytics.Resolve(spanCtx, r.ClickHouse, orgID, batch)
+	result, err := analytics.ResolveSelected(spanCtx, r.ClickHouse, orgID, batch, analyticsSelection(ctx))
 	if err != nil {
 		finish("error")
 		return nil, fmt.Errorf("analytics: %w", err)

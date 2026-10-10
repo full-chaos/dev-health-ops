@@ -191,3 +191,33 @@ func TestAnalyticsBatchDeclarations_LabelNullSubtree(t *testing.T) {
 		})
 	}
 }
+
+// CHAOS-9111: a null percent against the reference's 0.0 is covered only beside
+// the state that explains it, on its own row.
+func TestMetricPercentDefects_AdmitOnlyTheStateTheyName(t *testing.T) {
+	opts := Options{BaselineDefects: metricPercentDefects("data.deltas", "data.deltas.delta_pct", "metric")}
+	body := func(pct string, hasData, hasPrior bool, otherPct string) string {
+		return fmt.Sprintf(`{"data":{"deltas":[{"metric":"a","delta_pct":%s,"has_data":%t,"has_prior_data":%t},{"metric":"b","delta_pct":%s,"has_data":true,"has_prior_data":true}]}}`, pct, hasData, hasPrior, otherPct)
+	}
+	for _, c := range []struct {
+		name                string
+		baseline, candidate string
+		wantOutside         int
+	}{
+		{"no current data: 0 -> null", body("0.0", false, true, "5.0"), body("null", false, true, "5.0"), 0},
+		{"no prior data: 0 -> null", body("0.0", true, false, "5.0"), body("null", true, false, "5.0"), 0},
+		{"no data on both: 0 -> null", body("0.0", false, false, "5.0"), body("null", false, false, "5.0"), 0},
+		{"from a measured zero: 0 -> null with both flags true", body("0.0", true, true, "5.0"), body("null", true, true, "5.0"), 0},
+		{"a number where the reference has 0 on a no-data row", body("0.0", false, true, "5.0"), body("3.0", false, true, "5.0"), 1},
+		{"null where the reference has a real percent on a no-data row", body("12.0", false, true, "5.0"), body("null", false, true, "5.0"), 1},
+		{"reversed: reference null, candidate 0", body("null", false, true, "5.0"), body("0.0", false, true, "5.0"), 1},
+		{"another row's null percent is not covered by this row's flags", body("0.0", true, true, "0.0"), body("0.0", true, true, "null"), 0},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			result := Compare(snapshotFromJSON(t, c.baseline), snapshotFromJSON(t, c.candidate), opts)
+			if result.DifferencesOutsideBaselineDefect != c.wantOutside {
+				t.Fatalf("outside = %d, want %d -- findings %+v", result.DifferencesOutsideBaselineDefect, c.wantOutside, result.Findings)
+			}
+		})
+	}
+}

@@ -5,8 +5,10 @@
 // the operating review take their delta numbers from here, so a client reads
 // one contract. There are three states:
 //
-//   - KindNone: a window has no stored value. Every delta number is 0 and the
-//     presence flags carry the fact; nothing is said about a move.
+//   - KindNone: a window has no stored value. The percent is null (a percent
+//     has no meaning against a value nobody measured; CHAOS-9111), the
+//     absolute change is 0, and the presence flags carry the fact; nothing is
+//     said about a move.
 //   - KindFromZero: both windows are measured, the prior value is a measured 0
 //     and the current value is not. A percent change against zero is undefined:
 //     the percent is null (never 0 %, never "steady"), the direction is the
@@ -31,7 +33,7 @@ const (
 // Delta is the result of the rule.
 type Delta struct {
 	Kind Kind
-	// Pct is the percent change: 0 for KindNone, nil for KindFromZero.
+	// Pct is the percent change: nil for KindNone and for KindFromZero.
 	Pct *float64
 }
 
@@ -46,7 +48,7 @@ func Complete(currentHasData, priorHasData bool) bool {
 func Of(current, previous float64, currentHasData, priorHasData bool) Delta {
 	zero := 0.0
 	if !Complete(currentHasData, priorHasData) {
-		return Delta{Kind: KindNone, Pct: &zero}
+		return Delta{Kind: KindNone}
 	}
 	if previous == 0 {
 		if current == 0 {

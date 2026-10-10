@@ -24,9 +24,9 @@ func TestADeltaNeedsTwoMeasuredValuesAndIsUndefinedFromAMeasuredZero(t *testing.
 		{"measured zero in both windows is a true 0 %", 0, 0, true, true, KindPct, 0.0, 0, true},
 		{"a measured zero before, a value now is undefined, not 0 %", 5, 0, true, true, KindFromZero, nil, 5, true},
 		{"a measured zero before, a negative value now", -5, 0, true, true, KindFromZero, nil, -5, true},
-		{"current has no data", 0, 50, false, true, KindNone, 0.0, 0, false},
-		{"prior has no data", 25, 0, true, false, KindNone, 0.0, 0, false},
-		{"neither has data", 0, 0, false, false, KindNone, 0.0, 0, false},
+		{"current has no data", 0, 50, false, true, KindNone, nil, 0, false},
+		{"prior has no data", 25, 0, true, false, KindNone, nil, 0, false},
+		{"neither has data", 0, 0, false, false, KindNone, nil, 0, false},
 	} {
 		d := Of(tc.cur, tc.prior, tc.curHas, tc.priorHas)
 		if d.Kind != tc.kind {

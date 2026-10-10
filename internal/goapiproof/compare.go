@@ -1272,7 +1272,7 @@ func classifyBaselineDefects(result *Result, defects []BaselineDefect, baselineD
 	for _, defect := range defects {
 		var exempt *leafPairPlan
 		if defect.LeafPairShape != nil && defect.LeafPairShape.CandidateMayBeAllNull {
-			exempt = &leafPairPlan{shape: defect.LeafPairShape}
+			exempt = &leafPairPlan{shape: defect.LeafPairShape, candidate: candidateData}
 		}
 		for _, cited := range defect.Paths {
 			if nonNullLeaves(candidateData, citedSegments(cited)) > 0 || nonNullLeaves(baselineData, citedSegments(cited)) == 0 {
@@ -1466,7 +1466,7 @@ func classifyBaselineDefects(result *Result, defects []BaselineDefect, baselineD
 		}
 		var pairPlan *leafPairPlan
 		if defect.LeafPairShape != nil {
-			pairPlan = &leafPairPlan{shape: defect.LeafPairShape}
+			pairPlan = &leafPairPlan{shape: defect.LeafPairShape, candidate: candidateData}
 		}
 		var copySumPlan *baselineCopySumPlan
 		if defect.BaselineCopySumShape != nil {

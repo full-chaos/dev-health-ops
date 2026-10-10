@@ -263,6 +263,15 @@ func TestMetricPercentDefects_AdmitOnlyTheStateTheyName(t *testing.T) {
 	add("from a measured zero (value not 0): 0 -> null", flagsBoth, "5", 0)
 	add("a TRUE 0 % served as null (both flags true, value 0) is not covered", flagsBoth, "0", 1)
 	add("a null percent beside no flags is not covered", "", "5", 1)
+	// the from-zero state needs a current value that is present and numeric and not 0:
+	// a row with no `value` key, or a non-numeric one, is not covered.
+	b2, c2 := percentRows(flagsBoth, "5")
+	for _, rows := range [][]deltaRow{b2, c2} {
+		rows[0].value = "null"
+	}
+	cases = append(cases, percentCase{"from zero: a missing or null value is not covered", b2, c2, 1})
+	b3, c3 := percentRows(flagsBoth, `"x"`)
+	cases = append(cases, percentCase{"from zero: a non-numeric value is not covered", b3, c3, 1})
 	add("a null percent beside a non-boolean flag is not covered", `"has_data":"yes","has_prior_data":true`, "5", 1)
 	b, c := percentRows(flagsNoData, "0")
 	c[0].pct = "3.0"

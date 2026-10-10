@@ -11,7 +11,9 @@
       "value": 5.0,
       "delta_pct": -50.0,
       "evidence_link": "/api/v1/drilldown/prs?metric=review_latency&scope_type=repo&scope_id=acme/webapp",
-      "display_name": "acme/webapp"
+      "display_name": "acme/webapp",
+      "has_data": true,
+      "has_prior_data": true
     }
   ],
   "contributors": [
@@ -19,9 +21,11 @@
       "id": "33333333-3333-3333-3333-333333333333",
       "label": "acme/webapp",
       "value": 5.0,
-      "delta_pct": 0.0,
+      "delta_pct": null,
       "evidence_link": "/api/v1/drilldown/prs?metric=review_latency&scope_type=repo&scope_id=acme/webapp",
-      "display_name": "acme/webapp"
+      "display_name": "acme/webapp",
+      "has_data": true,
+      "has_prior_data": false
     }
   ],
   "drilldown_links": {

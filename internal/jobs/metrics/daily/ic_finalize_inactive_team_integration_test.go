@@ -204,3 +204,123 @@ WHERE org_id = ? AND as_of_day = ? AND team_id = 'ENG' AND `+teamkeytables.ICLan
 		}
 	}
 }
+
+// TestTheEdgesOfTheInactiveTeamRuleOfTheLandscapeFinalize holds four edges of
+// the rule by what the family writes, on real ClickHouse:
+//
+//   - The window is the day and the 29 days before it: a person whose only
+//     row is 29 days before gets a point, a person whose only row is 30 days
+//     before gets none.
+//   - A team is inactive by its NEWEST teams row: a team that was set
+//     inactive and active again is active (its stored id stays), and a team
+//     that was active and is inactive now is inactive.
+//   - The rule is of ONE organization: an id that is inactive in one
+//     organization and active in another stays a team in the other.
+//   - "unassigned" is a stored value like any other and is not looked up: a
+//     person whose newest stored row is unassigned, with no row on the day,
+//     stays unassigned in the landscape, also when the member map names a
+//     team for the person. (The map is asked for a blank team only.)
+func TestTheEdgesOfTheInactiveTeamRuleOfTheLandscapeFinalize(t *testing.T) {
+	ctx := context.Background()
+	conn := workItemAttributionLinkedIssueMigratedClickHouse(t, ctx)
+	const org, otherOrg = "00000000-0000-4000-8000-00000009083c", "00000000-0000-4000-8000-00000009083d"
+	day := time.Date(2026, 9, 21, 0, 0, 0, 0, time.UTC)
+	back := func(days int) time.Time { return day.AddDate(0, 0, -days) }
+	stored := day.Add(30 * time.Hour)
+	t0 := day.Add(-100 * time.Hour)
+	repo := uuid.MustParse("00000000-0000-4000-8000-0000000908d1")
+	exec := func(what, query string, args ...any) {
+		t.Helper()
+		if err := conn.Exec(ctx, query, args...); err != nil {
+			t.Fatalf("%s: %v", what, err)
+		}
+	}
+	team := func(orgID, id string, active uint8, at time.Time, members ...string) {
+		t.Helper()
+		if members == nil {
+			members = []string{}
+		}
+		exec("insert team "+id, `INSERT INTO teams
+    (id, team_uuid, name, members, repo_patterns, updated_at, last_synced, org_id, provider, is_active)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'jira', ?)`,
+			id, uuid.NewSHA1(uuid.NameSpaceURL, []byte(orgID+id)), "Team "+id, members, []string{}, at, at, orgID, active)
+	}
+	userRow := func(orgID string, rowDay time.Time, person, teamID string) {
+		t.Helper()
+		exec("insert user metrics of "+person, `INSERT INTO user_metrics_daily
+    (repo_id, day, author_email, identity_id, team_id, team_name, commits_count, loc_added, loc_deleted,
+     prs_authored, prs_merged, loc_touched, delivery_units, computed_at, org_id)
+    VALUES (?, ?, ?, ?, ?, ?, 3, 40, 10, 1, 1, 50, 1, ?, ?)`,
+			repo, rowDay, person, person, teamID, "Team "+teamID, stored, orgID)
+	}
+
+	// Two versions of one team row must both be in the table when the family
+	// reads them: a background merge would keep the newest one only, and "the
+	// newest row decides" could then not be told from "the oldest row decides".
+	exec("stop the merges of teams", "SYSTEM STOP MERGES teams")
+	team(org, "ENG", 0, t0)
+	team(org, "github:platform", 1, t0, "member@example.com")
+	// Inactive at first, active again: active.
+	team(org, "back-again", 0, t0)
+	team(org, "back-again", 1, t0.Add(time.Hour))
+	// Active at first, inactive now: inactive.
+	team(org, "closed-later", 1, t0)
+	team(org, "closed-later", 0, t0.Add(time.Hour))
+	// The same id is an active team of another organization.
+	team(otherOrg, "ENG", 1, t0)
+
+	userRow(org, back(29), "edge-in@example.com", "ENG")
+	userRow(org, back(30), "edge-out@example.com", "ENG")
+	userRow(org, back(3), "back-again@example.com", "back-again")
+	userRow(org, back(3), "closed-later@example.com", "closed-later")
+	userRow(org, back(5), "member@example.com", "unassigned")
+	userRow(otherOrg, day, "other@example.com", "ENG")
+
+	points := func(orgID string) map[string][]string {
+		t.Helper()
+		if _, err := NewICFinalizeExecutor(conn).ComputeFinalizeFamily(ctx, Run{ID: uuid.NewString(), OrganizationID: orgID, TargetDay: day}); err != nil {
+			t.Fatalf("ic_finalize of %s: %v", orgID, err)
+		}
+		result, err := conn.Query(ctx, `SELECT identity_id, groupUniqArray(toString(team_id)) FROM ic_landscape_rolling_30d FINAL
+WHERE org_id = ? AND as_of_day = ? AND `+teamkeytables.ICLandscapeRolling30d.LiveRow("")+` GROUP BY identity_id`, orgID, day)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer result.Close()
+		out := map[string][]string{}
+		for result.Next() {
+			var person string
+			var teams []string
+			if err := result.Scan(&person, &teams); err != nil {
+				t.Fatal(err)
+			}
+			out[person] = teams
+		}
+		if err := result.Err(); err != nil {
+			t.Fatal(err)
+		}
+		return out
+	}
+
+	var versions uint64
+	if err := conn.QueryRow(ctx, "SELECT count() FROM teams WHERE org_id = ? AND id IN ('back-again', 'closed-later')", org).Scan(&versions); err != nil {
+		t.Fatal(err)
+	}
+	if versions != 4 {
+		t.Fatalf("the table holds %d versions of the two teams, want 4: the newest-row edge is not measured", versions)
+	}
+
+	want := map[string][]string{
+		"edge-in@example.com":      {"unassigned"},
+		"back-again@example.com":   {"back-again"},
+		"closed-later@example.com": {"unassigned"},
+		"member@example.com":       {"unassigned"},
+		// edge-out has no row in the window: no point.
+	}
+	if got := points(org); !reflect.DeepEqual(got, want) {
+		t.Errorf("points = %v, want %v", got, want)
+	}
+	if got, want := points(otherOrg), (map[string][]string{"other@example.com": {"ENG"}}); !reflect.DeepEqual(got, want) {
+		t.Errorf("points of the other organization = %v, want %v: ENG is an active team there", got, want)
+	}
+}

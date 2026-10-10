@@ -798,6 +798,7 @@ func (collector JiraTeamCatalogCollector) CollectTeamCatalog(
 		var plan SnapshotPlan
 		ownership, retracted, plan = jiraOwnershipSnapshot(ownership, open, normalizedAt.UTC().Truncate(time.Millisecond), snapshot)
 		result.OwnershipSnapshotIncomplete = judgeJiraOwnershipSnapshot(ctx, ref.OrgID, plan, len(open)+len(held))
+		result.DegradedLegs = append(result.DegradedLegs, SnapshotAbsenceLegs(plan)...)
 		if len(retracted) > 0 {
 			slog.Default().InfoContext(ctx, "jira_team_catalog_ownership_retracted",
 				"org_id", ref.OrgID, "rows", len(retracted), "project_ids", jiraRetractedProjectIDs(retracted))

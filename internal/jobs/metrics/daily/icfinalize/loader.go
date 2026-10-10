@@ -5,6 +5,8 @@ import (
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2"
+
+	"github.com/full-chaos/dev-health-ops/internal/teamactive"
 )
 
 // RollingStat is one row of the 30-day rolling window, one per identity.
@@ -40,16 +42,19 @@ const rollingWindowDays = 29
 // (org_id, repo_id, author_email, day) — read from the current helper, never
 // from a migration comment.
 //
-// any(team_id) is NON-DETERMINISTIC by definition: ClickHouse returns whichever
-// value it reaches first. Two runs over identical data may assign a different
-// team_id to the same identity, which then selects a different per-team
-// normalization cohort downstream. Replicated rather than "fixed" — choosing a
-// deterministic aggregate here would be a behaviour change wearing a
-// determinism costume (team-lead's Q2 ruling).
+// THE TEAM OF A PERSON is a difference from the reference, which takes
+// any(team_id): whichever stored value ClickHouse reaches first among the
+// person's rows of the 30 days. Those rows are of many days and repositories,
+// and a row of a day that was not computed again can hold the id of a team
+// that was since replaced. any() could give the person that id, and a
+// different id on the next run over the same rows. The statement takes the
+// team of the person's NEWEST row instead (by computed_at; the day and the
+// repository id break a tie, so two runs over the same rows agree), and
+// LoadRollingStats then drops an inactive id from it.
 const rollingStatsSQL = `
 SELECT
     identity_id,
-    any(team_id)                AS team_id,
+    argMax(team_id, tuple(computed_at, day, repo_id)) AS team_id,
     sum(loc_touched)            AS churn_loc_30d,
     sum(delivery_units)         AS delivery_units_30d,
     median(cycle_p50_hours)     AS cycle_p50_30d_hours,
@@ -79,8 +84,12 @@ GROUP BY identity_id`
 // full connection interface, which carries AsyncInsert and much else this never calls, and
 // depending on it would force every caller -- including the executor, which
 // holds the narrow one -- to supply capabilities it does not use.
+//
+// inactive is the organization's inactive team ids. A person whose newest row
+// holds one gets no team here (the stored id names a team that was replaced):
+// ComputeLandscape then gives the person the mapped team, or "unassigned".
 func LoadRollingStats(
-	ctx context.Context, conn Conn, orgID string, asOf time.Time,
+	ctx context.Context, conn Conn, orgID string, asOf time.Time, inactive teamactive.Inactive,
 ) ([]RollingStat, error) {
 	end := asOf.UTC().Truncate(24 * time.Hour)
 	start := end.AddDate(0, 0, -rollingWindowDays)
@@ -113,6 +122,9 @@ func LoadRollingStats(
 			&deliveryUnits30, &stat.CycleP5030dHrs, &wipMax30d,
 		); err != nil {
 			return nil, err
+		}
+		if inactive.Has(stat.TeamID) {
+			stat.TeamID = ""
 		}
 		stat.ChurnLOC30d = float64(churnLOC30d)
 		stat.DeliveryUnits30 = float64(deliveryUnits30)

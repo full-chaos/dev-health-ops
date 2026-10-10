@@ -151,6 +151,66 @@ change_failure_rate`.** They hold the same deployment-status ratio under its
 old name, written before the rename or by an older release. They are kept as
 they are. CHAOS-9017 renames or removes them.
 
+## Pull request rework ratio
+
+The pull request rework ratio is, of the merged pull requests that have
+**review evidence**, the share that got a changes-requested review. A pull
+request with no review data says nothing about rework: it is in neither the
+numerator nor the denominator. **Missing is not healthy**: a repository whose
+reviews were never read must not show `0%`.
+
+- **Review evidence** of a pull request: the sync stored one review or more on
+  it (`git_pull_requests.reviews_count > 0`), or a changes-requested review.
+- **Capability, not provider name.** The ratio is measured only for a provider
+  whose normalizer can store a changes-requested review. That is one
+  declaration at the provider layer
+  (`internal/providerfoundation/pull_request_review_states.go`), held against
+  the normalizers by a test; the metric asks it and names no provider. Today
+  GitHub's normalizer stores the provider's review state as it is, and the
+  GitLab normalizer rebuilds reviews from approvals and notes and stores no
+  review that asks for changes. A provider with no declaration, and a
+  repository with no known provider, have no signal. Merged pull requests with
+  no signal are counted as "no rework signal", never as reviewed.
+- **Stored inputs** on `repo_metrics_daily`, one row for each repository and
+  day (migration `114_pr_rework_ratio_review_basis.sql`): `prs_merged`,
+  `prs_merged_reviewed`, `prs_merged_rework`, `prs_merged_no_rework_signal`.
+  A row written before the migration holds `NULL` counts: not measured.
+- **One rule** (`internal/jobs/metrics/prrework`, `Rate` in Go and
+  `WindowRateSQL` in ClickHouse), applied to the counts summed over the view's
+  window and repositories (a team is its owned repositories):
+
+| The view holds | Value | State |
+| --- | --- | --- |
+| no row with stored counts | none | none |
+| no merged pull request | none | `not_applicable_no_merged_pull_requests` |
+| merged pull requests, none reviewed, all of a provider with no changes-requested event | none | `not_applicable_no_rework_signal` |
+| merged pull requests, none reviewed | none | `unknown_no_review_evidence` |
+| one reviewed pull request or more | `prs_merged_rework / prs_merged_reviewed` (0 is a measured 0) | `measured` |
+
+- **A window is the ratio of the sums**, never a mean of daily ratios: a day
+  with one reviewed pull request does not weigh as much as a day with fifty.
+- **Coverage** is `prs_merged_reviewed / prs_merged`: the share of the merged
+  pull requests the ratio speaks for, from 0 to 1 (not a percent). The rule
+  returns it, and the GraphQL Home delta serves it as `rateCoverage`: 0 when no
+  merged pull request has review data of a provider that stores a
+  changes-requested review (the states `unknown_no_review_evidence` and
+  `not_applicable_no_rework_signal`), no value when no pull request merged,
+  when the view holds no stored counts, and for every other metric. The pull
+  requests of a provider with no such review are in the denominator only: 6
+  reviewed pull requests of one provider and 4 pull requests of a provider
+  with no signal give 0.6. The REST Home response, the analytics measure, the
+  flow opportunity, the recommendations job and the report chart do not serve
+  it.
+- **Readers** that apply the rule: Home (`pr_rework_ratio`, with the state in
+  `rateState` and the coverage in `rateCoverage`), the analytics measure `PR_REWORK_RATIO`, the "high rework" flow
+  opportunity, the recommendations job, and the weekly report chart.
+- **DEPRECATED: `repo_metrics_daily.pr_rework_ratio`.** It keeps its old
+  meaning (changes requested / ALL merged pull requests, `0` when nothing
+  merged) and is still written, so a pod of the release before this change and
+  a rollback read what they always read. No reader of this release reads it.
+  `pr_rework_ratio_reviewed` is the one-day value of the rule for a reader of
+  one row: `NULL` when the day is not measured.
+
 ## Pull request cycle time
 
 The cycle time of one pull request is `merged_at - created_at`, in hours. A

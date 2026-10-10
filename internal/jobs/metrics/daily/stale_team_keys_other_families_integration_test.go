@@ -56,6 +56,14 @@ func TestTheOtherTeamKeyedFamiliesLeaveNoMeasureUnderASupersededKey(t *testing.T
 			id, uuid.NewSHA1(uuid.NameSpaceURL, []byte("team:"+id)), "Team "+id, []string{"dev@example.com"},
 			[]string{"acme/*"}, t0, t0, org, "github", active)
 	}
+	// The person is a member of both: the landscape reads the memberships.
+	for _, teamID := range []string{"platform", "github:platform"} {
+		exec("insert membership in "+teamID, `INSERT INTO team_memberships
+    (org_id, provider, team_id, member_id, raw_email, source, is_primary, specificity, priority, valid_from, valid_to, updated_at, identity_facets)
+    VALUES (?, ?, ?, ?, ?, 'native', ?, ?, ?, ?, ?, ?, ?)`,
+			org, "github", teamID, "dev", "dev@example.com", uint8(1), uint16(100), int32(10), t0, (*time.Time)(nil), t0,
+			[]string{"dev@example.com"})
+	}
 	exec("insert repo", "INSERT INTO repos (id, repo, org_id, provider, last_synced) VALUES (?, ?, ?, ?, ?)",
 		api, "acme/api", org, "github", t0)
 	for teamID, primary := range map[string]uint8{"platform": 1, "github:platform": 0} {

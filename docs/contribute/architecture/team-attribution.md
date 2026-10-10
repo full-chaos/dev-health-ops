@@ -679,12 +679,12 @@ project's items by id. Now:
 - `project_key` stays on the row as a label. Team ids do not change.
 - **Memberships keep their first-seen `valid_from` too** (CHAOS-9007; `providersync.ReuseFirstSeenMembershipValidFrom`):
   `team_memberships` is keyed by `(org_id, provider, team_id, member_id, source, valid_from)`, so a stamp of the
-  run time at each sync added one open row per fact. The Linear, GitHub, GitLab and Jira catalog writers take the
-  `valid_from` of a membership the run holds again from the EARLIEST open row of the same org, provider, source,
-  team and member, through the one snapshot rule with no kind: the rule adds no row and closes none. The Atlassian
-  Teams writer plans its own memberships. A census finds every writer of the table by what the code builds (a
-  literal, a concatenation, a constant, a table named by a variable) and names its class. Surplus open rows that
-  exist before the fix are retired by a separate data step, not by the writers.
+  run time at each sync added one open row per fact. The four catalog writers take the `valid_from` of a
+  membership the run holds again from the EARLIEST open row of the same org, provider, source, team and member,
+  through the one snapshot rule with no kind: the rule adds no row and closes none. The Atlassian Teams writer
+  plans its own memberships. A census finds every writer of the table by what the code builds (a literal, a
+  concatenation, a constant, a table named by a variable) and names its class. Surplus open rows that exist
+  before the fix are retired by a separate cleanup step, not by the writers.
 - **One snapshot rule for ownership rows** (`providersync.PlanOwnershipSnapshot`): a fact the run still
   finds keeps the `valid_from` it was first seen with (`valid_from` is a key column: a new stamp at each
   sync added one more open row per fact), and every other open row of the same writer is written again
@@ -1635,6 +1635,25 @@ Limits:
   at that same microsecond or later, the old row stays the newest row of its key until the next run of the day.
 - The run-level step reads the items of every work scope of the run once more and writes their rows once more. Its
   cost is about one more read and write of the work-item families for each run.
+
+#### 0.4i A push batch: the team rows before the identities that name them (CHAOS-9125)
+
+- **Order.** A push batch (`internal/streamhandlers`) writes its kinds in the order of the Python sink
+  (`write_batch`): repository, commit, pull request, review, team, identity, the operational kinds in the order of
+  the sink's own list, then work item, work item transition, work item dependency. The kind of this port only
+  (the project membership transition) is last. Before, the kinds were written in the order of their names, so the
+  `identity.v1` records of a batch, which name team ids (`identities.team_ids`), were stored before the `team.v1`
+  records of the same batch. Each kind is still written on its own: a failed kind is skipped whole, the others are
+  written, and the batch fails and is retried whole. A test reads the order from the sink's source and fails when
+  the two differ; a second test holds that every kind a source may push has one place in the order.
+- **An identity can name a team the source never pushes.** The identity is stored as pushed, no team row is
+  made up for it, and the record is not refused. After the batch the sink writes ONE WARN line, `external push:
+  identities name team ids that have no team row`, with counts only: `identities` (identity records of the
+  batch), `team_ids_named`, `team_ids_with_no_team_row`, the organization and the source system. It holds no
+  team id and no identity id: either can be a person's own words. A failed count read is logged at WARN too
+  and does not fail the write, because the rows of the batch are stored.
+- **Not changed here.** What a reader makes of a team id with no team row (section 0.4c: the cascade keeps it
+  as an unknown team).
 
 #### 0.4a Provider × entity **consumption** (functional — what `run_team_autoimport` actually pulls)
 

@@ -14,8 +14,11 @@
 //     query, no merge.
 //  2. Team+repo COMBINED (both set, CHAOS-4406/CHAOS-4462): neither
 //     user_metrics_daily's nor team_metrics_daily's own team_id column can
-//     be trusted (CHAOS-4396 taint -- author-membership fallback, or
-//     unset for a native org with empty repo_patterns). resolveOwnedRepoID
+//     be trusted (CHAOS-4396 taint -- user_metrics_daily is always
+//     "unassigned"; team_metrics_daily takes its team from repository
+//     ownership since the wellbeing change, but days computed before it still
+//     hold the author-membership / "unassigned" rows until recomputed).
+//     resolveOwnedRepoID
 //     confirms via team_repo_ownership (falling back to teams.repo_patterns
 //     only when native ownership resolves no row at all) that the
 //     requested repo is CURRENTLY, CANONICALLY owned by the requested
@@ -629,7 +632,65 @@ func fetchTeamCognitiveLoad(ctx context.Context, client QueryClient, orgID, team
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("rows: %w", err)
 	}
-	return result, nil
+	if len(result) == 0 {
+		return result, nil
+	}
+	// The SQL above is pinned to the Python reference and does not read the
+	// counts of the row, so a retraction row (package liverow: the newest row
+	// of a day of a team id that was retired) reads as a day with a load of 0
+	// and no commit ratio. The team id is one the caller named; a retired id
+	// has no data, which is not a load of 0. The days whose newest row is a
+	// retraction row are read with the rule and left out.
+	retracted, err := fetchRetractedLoadDays(ctx, client, bindings)
+	if err != nil {
+		return nil, err
+	}
+	if len(retracted) == 0 {
+		return result, nil
+	}
+	kept := result[:0]
+	for _, row := range result {
+		if !retracted[row.day.UTC()] {
+			kept = append(kept, row)
+		}
+	}
+	if len(kept) == 0 {
+		return nil, nil
+	}
+	return kept, nil
+}
+
+// retractedLoadDaysQuery returns the days of one team whose newest row of
+// team_cognitive_load_daily is a retraction row.
+var retractedLoadDaysQuery = `
+        SELECT day AS no_measured_load_day
+        FROM team_cognitive_load_daily
+        WHERE org_id = {org_id:String}
+          AND team_id = {team_id:String}
+          AND day >= {since_date:Date}
+          AND day <= {until_date:Date}
+        GROUP BY day
+        HAVING NOT ` + liverow.NewestPredicate("team_cognitive_load_daily", "") + `
+        ORDER BY no_measured_load_day`
+
+func fetchRetractedLoadDays(ctx context.Context, client QueryClient, bindings []clickhouse.Binding) (map[time.Time]bool, error) {
+	rows, err := client.Query(ctx, retractedLoadDaysQuery, bindings)
+	if err != nil {
+		return nil, fmt.Errorf("retracted load days query: %w", err)
+	}
+	defer rows.Close()
+	days := map[time.Time]bool{}
+	for rows.Next() {
+		var day time.Time
+		if scanErr := rows.Scan(&day); scanErr != nil {
+			return nil, fmt.Errorf("retracted load days scan: %w", scanErr)
+		}
+		days[day.UTC()] = true
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("retracted load days rows: %w", err)
+	}
+	return days, nil
 }
 
 // ---------------------------------------------------------------------------

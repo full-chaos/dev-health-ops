@@ -152,6 +152,8 @@ internal/jobs/metrics/daily/reviewedges	1
 internal/jobs/metrics/finite	1
 internal/jobs/metrics/numerical	4
 internal/jobs/metrics/numerical/cpyrandom	4
+internal/jobs/metrics/prrework	1
+internal/jobs/metrics/prrework/prreworktest	1
 internal/jobs/metrics/querybound	1
 internal/jobs/metrics/remaining	31
 internal/jobs/metrics/remaining/stepcause	68
@@ -312,6 +314,7 @@ internal/syncroute	1
 internal/syncrunrollup	5
 internal/teamactive	1
 internal/teamattribution	1
+internal/teamcreated	21
 internal/teamid	1
 internal/teamkeytables	1
 internal/teamownership	1

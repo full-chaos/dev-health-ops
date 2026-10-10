@@ -1,15 +1,18 @@
 package streamhandlers
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
+	"log/slog"
 	"math"
 	"math/big"
 	"os"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -365,6 +368,9 @@ func TestExternalClickHouseRowsMatchPythonGoldenOracle(t *testing.T) {
 				t.Fatal(err)
 			}
 			table, columns := externalQueryContract(query)
+			columns = slices.DeleteFunc(columns, func(column string) bool {
+				return slices.Contains(externalUnreferencedColumns[table], column)
+			})
 			if table != expected.Table || !slices.Equal(columns, expected.Columns) {
 				t.Fatalf("ClickHouse contract mismatch:\n got table=%s columns=%v\nwant table=%s columns=%v", table, columns, expected.Table, expected.Columns)
 			}
@@ -702,4 +708,320 @@ func TestTeamIDCarryRunsBeforeAnIdentityOnlyPush(t *testing.T) {
 	if connection.carryCountCalls != 1 {
 		t.Fatalf("team id carry count reads = %d, want 1 before the identity.v1 write", connection.carryCountCalls)
 	}
+}
+
+func teamCreatedAtWrite(t *testing.T, connection *productSink) error {
+	t.Helper()
+	sink, err := NewClickHouseExternalBatchSink(connection)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sink.now = func() time.Time { return time.Date(2026, 7, 23, 12, 0, 0, 0, time.UTC) }
+	_, err = sink.Write(context.Background(), externalSinkBatch{
+		Pointer: externalTestPointer(), SourceID: uuid.New(),
+		Records: []externalSinkRecord{externalSinkFixture("team.v1", map[string]any{
+			"id": "team-a", "name": "Team A", "updatedAt": "2026-07-23T11:00:00Z",
+		})},
+	})
+	return err
+}
+
+// A team.v1 write of a team that already has a stored row keeps that row's
+// creation time; the new version's updated_at is later, so the two differ.
+func TestClickHouseExternalSinkCarriesTeamCreatedAtOnUpdate(t *testing.T) {
+	original := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	connection := &productSink{batch: &productBatch{}, createdRows: [][]any{{"gh:team-a", original}}}
+	if err := teamCreatedAtWrite(t, connection); err != nil {
+		t.Fatal(err)
+	}
+	row := connection.batch.rows[0]
+	if got, ok := row[len(row)-1].(time.Time); !ok || !got.Equal(original) {
+		t.Fatalf("created_at = %v, want the stored %v", row[len(row)-1], original)
+	}
+	if updated, _ := row[9].(time.Time); !updated.After(original) {
+		t.Fatalf("updated_at %v is not after created_at %v", row[9], original)
+	}
+}
+
+// A team with no stored row gets created_at = its own first updated_at.
+func TestClickHouseExternalSinkStampsNewTeamCreatedAtWithItsUpdatedAt(t *testing.T) {
+	connection := &productSink{batch: &productBatch{}}
+	if err := teamCreatedAtWrite(t, connection); err != nil {
+		t.Fatal(err)
+	}
+	row := connection.batch.rows[0]
+	if created, _ := row[len(row)-1].(time.Time); !created.Equal(row[9].(time.Time)) {
+		t.Fatalf("created_at = %v, want updated_at %v", row[len(row)-1], row[9])
+	}
+}
+
+// A failed created_at read aborts the write: a blind first-write stamp would
+// move an existing team's creation time.
+func TestClickHouseExternalSinkAbortsTeamWriteWhenCreatedAtReadFails(t *testing.T) {
+	connection := &productSink{batch: &productBatch{}, createdErr: errors.New("clickhouse unavailable")}
+	if err := teamCreatedAtWrite(t, connection); err == nil {
+		t.Fatal("expected Write to fail closed when the created_at read errors")
+	}
+	if connection.batch.sent {
+		t.Fatal("team row must never be sent when its created_at could not be carried")
+	}
+}
+
+// The kinds of a batch are written in the order of the reference's sink, not
+// in the order of their names. The batch below holds its records in another
+// order than both. One effect of the reference's order: the team rows of a
+// batch are stored before the identities that name them (in the order of the
+// kind names they were stored after them).
+func TestTheKindsOfAPushBatchAreWrittenInTheOrderOfTheReference(t *testing.T) {
+	connection := &productSink{batch: &productBatch{}}
+	sink, err := NewClickHouseExternalBatchSink(connection)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pointer := externalTestPointer()
+	source := externalSinkBatch{Pointer: pointer, SourceID: uuid.New(), Records: []externalSinkRecord{
+		externalSinkFixture("work_item.v1", map[string]any{
+			"externalKey": "7", "provider": "github", "title": "Issue", "type": "issue", "status": "open",
+			"createdAt": "2026-07-22T10:00:00Z", "repositoryExternalId": pointer.SourceInstance,
+		}),
+		externalSinkFixture("identity.v1", map[string]any{"canonicalId": "ada", "teamIds": []any{"team-a"}, "updatedAt": "2026-07-23T11:00:00Z"}),
+		externalSinkFixture("team.v1", map[string]any{"id": "team-a", "name": "Team A", "updatedAt": "2026-07-23T11:00:00Z"}),
+		externalSinkFixture("repository.v1", map[string]any{"externalId": pointer.SourceInstance, "sourceSystem": "github"}),
+	}}
+	if _, err := sink.Write(context.Background(), source); err != nil {
+		t.Fatal(err)
+	}
+	var tables []string
+	for _, query := range connection.queries {
+		for _, table := range []string{"teams", "identities", "repos", "work_items"} {
+			if strings.HasPrefix(query, "INSERT INTO "+table+" ") {
+				tables = append(tables, table)
+			}
+		}
+	}
+	if want := []string{"repos", "teams", "identities", "work_items"}; !reflect.DeepEqual(tables, want) {
+		t.Fatalf("the inserts of the batch ran in the order %v, want %v", tables, want)
+	}
+}
+
+// externalKindOrder is the order of the reference's sink. This test READS that
+// order from the reference's source (write_batch of external_ingest/sinks.py)
+// when it runs, so a change of the order there fails here: each
+// `scope.record_kinds.add("<kind>")` statement of the function in its place,
+// and where the function adds the loop variable, the kinds of its
+// operational_writes list in the order of that list.
+//
+// It reads the source text; it does not execute the function. (The function
+// needs a live store and a database gate, and a recorded answer needs the
+// interpreter of the pinned build.) A source file that is not there, or that
+// gives fewer kinds than the reference has, fails the test: it never passes
+// on a read that found nothing.
+func TestTheWriteOrderOfThePushKindsIsTheOrderOfTheReferenceSink(t *testing.T) {
+	root, err := moduleroot.Root()
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(filepath.Join(root, "src/dev_health_ops/external_ingest/sinks.py"))
+	if err != nil {
+		t.Fatalf("the reference's sink was not read: %v", err)
+	}
+	source := string(raw)
+	start := strings.Index(source, "\nasync def write_batch(")
+	if start < 0 {
+		t.Fatal("the reference's sink has no write_batch function")
+	}
+	body := source[start+1:]
+	if end := strings.Index(body[1:], "\nasync def "); end >= 0 {
+		body = body[:end+1]
+	}
+	if end := strings.Index(body[1:], "\ndef "); end >= 0 {
+		body = body[:end+1]
+	}
+	// The operational kinds: the second string of each entry of the list.
+	listStart := strings.Index(body, "operational_writes = (")
+	listEnd := strings.Index(body, "for attribute, kind, writer_name in operational_writes:")
+	if listStart < 0 || listEnd < listStart {
+		t.Fatal("write_batch has no operational_writes list before its loop")
+	}
+	quoted := regexp.MustCompile(`"([a-z_]+)"`).FindAllStringSubmatch(body[listStart:listEnd], -1)
+	if len(quoted) == 0 || len(quoted)%3 != 0 {
+		t.Fatalf("the operational_writes list holds %d strings, want three for each entry", len(quoted))
+	}
+	var operational []string
+	for index := 1; index < len(quoted); index += 3 {
+		operational = append(operational, quoted[index][1]+".v1")
+	}
+
+	var reference []string
+	for _, statement := range regexp.MustCompile(`scope\.record_kinds\.add\(("([a-z_]+)"|kind)\)`).FindAllStringSubmatch(body, -1) {
+		if statement[1] == "kind" {
+			reference = append(reference, operational...)
+			continue
+		}
+		reference = append(reference, statement[2]+".v1")
+	}
+	if len(reference) < 20 {
+		t.Fatalf("only %d kinds were read from the reference's sink: %v", len(reference), reference)
+	}
+
+	var ported []string
+	for _, kind := range externalKindOrder {
+		if !externalKindsWithoutPythonModel[kind] {
+			ported = append(ported, kind)
+		}
+	}
+	if !reflect.DeepEqual(ported, reference) {
+		t.Errorf("the write order of the kinds differs from the reference's sink:\n port:      %v\n reference: %v", ported, reference)
+	}
+	// A kind of this port only has no place in the reference: it is after
+	// every kind the reference writes.
+	lastPorted := slices.Index(externalKindOrder, ported[len(ported)-1])
+	for kind := range externalKindsWithoutPythonModel {
+		if at := slices.Index(externalKindOrder, kind); at < lastPorted {
+			t.Errorf("%s is a kind of this port only and is at place %d, before a kind of the reference", kind, at)
+		}
+	}
+}
+
+// Every kind a source system may push has ONE place in the write order, and
+// the order names no kind that no system may push: a new kind cannot be
+// written at an unnamed place.
+func TestEveryPushKindHasOnePlaceInTheWriteOrder(t *testing.T) {
+	allowed := map[string]bool{}
+	for _, kinds := range externalAllowedKinds {
+		for kind := range kinds {
+			allowed[kind] = true
+		}
+	}
+	if len(allowed) < 20 {
+		t.Fatalf("only %d kinds are allowed for a source system: the list was not read", len(allowed))
+	}
+	placed := map[string]int{}
+	for _, kind := range externalKindOrder {
+		placed[kind]++
+		if !allowed[kind] {
+			t.Errorf("the write order names %s, which no source system may push", kind)
+		}
+		if _, err := externalInsertQuery(kind); err != nil {
+			t.Errorf("the write order names %s, which the sink has no statement for: %v", kind, err)
+		}
+	}
+	for kind := range allowed {
+		if placed[kind] != 1 {
+			t.Errorf("%s has %d places in the write order, want 1", kind, placed[kind])
+		}
+	}
+	// A kind outside the list is ordered after the list, by its name.
+	kinds := []string{"zz_unknown.v1", "work_item.v1", "aa_unknown.v1", "repository.v1"}
+	slices.SortFunc(kinds, compareExternalKinds)
+	if want := []string{"repository.v1", "work_item.v1", "aa_unknown.v1", "zz_unknown.v1"}; !reflect.DeepEqual(kinds, want) {
+		t.Errorf("order with kinds outside the list = %v, want %v", kinds, want)
+	}
+}
+
+// A source can push an identity that names a team it never pushes. The
+// identity is stored and no team row is made up, so the sink says it: ONE
+// WARN line with counts, after the batch is written. The line holds no team
+// id and no identity id (either can be a person's own words).
+func TestAPushedIdentityThatNamesATeamWithNoTeamRowIsCountedInOneWarnLine(t *testing.T) {
+	write := func(t *testing.T, connection *productSink, records ...externalSinkRecord) string {
+		t.Helper()
+		var logs bytes.Buffer
+		previous := slog.Default()
+		slog.SetDefault(slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelInfo})))
+		defer slog.SetDefault(previous)
+		sink, err := NewClickHouseExternalBatchSink(connection)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := sink.Write(context.Background(), externalSinkBatch{Pointer: externalTestPointer(), SourceID: uuid.New(), Records: records}); err != nil {
+			t.Fatalf("the write failed: %v", err)
+		}
+		return logs.String()
+	}
+	team := externalSinkFixture("team.v1", map[string]any{"id": "team-a", "name": "Team A", "updatedAt": "2026-07-23T11:00:00Z"})
+	ada := externalSinkFixture("identity.v1", map[string]any{"canonicalId": "ada", "teamIds": []any{"team-a", "team-never-pushed"}, "updatedAt": "2026-07-23T11:00:00Z"})
+	bob := externalSinkFixture("identity.v1", map[string]any{"canonicalId": "bob", "teamIds": []any{"team-never-pushed", "team-also-not"}, "updatedAt": "2026-07-23T11:00:00Z"})
+
+	t.Run("two of three named teams have no row", func(t *testing.T) {
+		connection := &productSink{batch: &productBatch{}, teamRowIDs: []string{"gh:team-a"}}
+		logs := write(t, connection, ada, bob, team)
+		if connection.teamRowCalls != 1 {
+			t.Fatalf("the team rows were read %d times, want once", connection.teamRowCalls)
+		}
+		if lines := strings.Count(logs, externalIdentityTeamsWithNoRowEvent); lines != 1 {
+			t.Fatalf("%d WARN lines of the event, want 1:\n%s", lines, logs)
+		}
+		for _, want := range []string{"level=WARN", "identities=2", "team_ids_named=3", "team_ids_with_no_team_row=2", "source_system=github"} {
+			if !strings.Contains(logs, want) {
+				t.Errorf("the line lacks %q:\n%s", want, logs)
+			}
+		}
+		for _, private := range []string{"team-never-pushed", "team-also-not", "team-a", "ada", "bob"} {
+			if strings.Contains(logs, private) {
+				t.Errorf("the line holds the id %q:\n%s", private, logs)
+			}
+		}
+	})
+	// Only a row of a NAMED id counts as "has a row": an answer that holds
+	// another id must not hide a named team that has none.
+	t.Run("a row of an id that was not named does not count", func(t *testing.T) {
+		connection := &productSink{batch: &productBatch{}, teamRowIDs: []string{"gh:team-a", "gh:some-other-team"}}
+		logs := write(t, connection, ada, team)
+		if !strings.Contains(logs, "team_ids_named=2") || !strings.Contains(logs, "team_ids_with_no_team_row=1") {
+			t.Errorf("want one team id with no team row of the two named:\n%s", logs)
+		}
+	})
+	t.Run("every named team has a row", func(t *testing.T) {
+		connection := &productSink{batch: &productBatch{}, teamRowIDs: []string{"gh:team-a", "gh:team-never-pushed"}}
+		if logs := write(t, connection, ada, team); strings.Contains(logs, "level=WARN") {
+			t.Errorf("a WARN line with no team id missing:\n%s", logs)
+		}
+	})
+	t.Run("an identity that names no team reads nothing", func(t *testing.T) {
+		connection := &productSink{batch: &productBatch{}}
+		logs := write(t, connection, externalSinkFixture("identity.v1", map[string]any{"canonicalId": "eve", "updatedAt": "2026-07-23T11:00:00Z"}))
+		if connection.teamRowCalls != 0 || strings.Contains(logs, "level=WARN") {
+			t.Errorf("team row reads = %d, logs:\n%s", connection.teamRowCalls, logs)
+		}
+	})
+	// A blank entry in the team ids of an identity names no team: it is not
+	// counted as named, so it cannot be a team id with no team row.
+	t.Run("a blank team id names no team", func(t *testing.T) {
+		connection := &productSink{batch: &productBatch{}, teamRowIDs: []string{"gh:team-a"}}
+		blank := externalSinkFixture("identity.v1", map[string]any{"canonicalId": "eve", "teamIds": []any{"team-a", " ", ""}, "updatedAt": "2026-07-23T11:00:00Z"})
+		logs := write(t, connection, blank, team)
+		if connection.teamRowCalls != 1 || strings.Contains(logs, "level=WARN") {
+			t.Errorf("team row reads = %d (want 1), and no WARN line is wanted:\n%s", connection.teamRowCalls, logs)
+		}
+	})
+	// The count is of identities that were STORED. When the identity write
+	// of the batch fails, their team ids are not read and nothing is said
+	// about them: the batch fails and is retried whole.
+	t.Run("the identity write fails", func(t *testing.T) {
+		var logs bytes.Buffer
+		previous := slog.Default()
+		slog.SetDefault(slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelInfo})))
+		defer slog.SetDefault(previous)
+		// The kinds are written team, then identity: the second write fails.
+		connection := &productSink{batches: []*productBatch{{}, {sendErr: errors.New("clickhouse: write refused")}}}
+		sink, err := NewClickHouseExternalBatchSink(connection)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = sink.Write(context.Background(), externalSinkBatch{Pointer: externalTestPointer(), SourceID: uuid.New(), Records: []externalSinkRecord{ada, team}})
+		if err == nil || !strings.Contains(err.Error(), "identity.v1") {
+			t.Fatalf("err = %v, want the failed identity write", err)
+		}
+		if connection.teamRowCalls != 0 || strings.Contains(logs.String(), "level=WARN") {
+			t.Errorf("after a failed identity write: team row reads = %d, logs:\n%s", connection.teamRowCalls, logs.String())
+		}
+	})
+	t.Run("a failed count read is said and does not fail the write", func(t *testing.T) {
+		connection := &productSink{batch: &productBatch{}, teamRowErr: errors.New("clickhouse: connection reset")}
+		logs := write(t, connection, ada, team)
+		if !strings.Contains(logs, "level=WARN") || !strings.Contains(logs, "could not be counted") || strings.Contains(logs, externalIdentityTeamsWithNoRowEvent) {
+			t.Errorf("want one WARN line that the count could not be read:\n%s", logs)
+		}
+	})
 }

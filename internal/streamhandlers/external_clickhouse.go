@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"math"
 	"net"
 	"net/url"
@@ -21,6 +22,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 	"github.com/full-chaos/dev-health-ops/internal/storedversion"
 	"github.com/full-chaos/dev-health-ops/internal/streamrunner"
+	"github.com/full-chaos/dev-health-ops/internal/teamcreated"
 	"github.com/full-chaos/dev-health-ops/internal/teamid"
 	"github.com/google/uuid"
 )
@@ -59,7 +61,10 @@ func (s *ClickHouseExternalBatchSink) Write(ctx context.Context, source external
 	for kind := range grouped {
 		kinds = append(kinds, kind)
 	}
-	slices.Sort(kinds)
+	// The kinds of a batch are written in the order of the reference's sink
+	// (externalKindOrder), not in the order of their names. One effect: the
+	// team rows of a batch are stored before the identities that name them.
+	slices.SortFunc(kinds, compareExternalKinds)
 	// Every bare team id of the organization moves to its prefixed form
 	// before a team.v1 or identity.v1 row with a prefixed id is written.
 	if len(grouped["team.v1"]) > 0 || len(grouped["identity.v1"]) > 0 {
@@ -88,11 +93,12 @@ func (s *ClickHouseExternalBatchSink) Write(ctx context.Context, source external
 		// this Write() call before any team.v1 row is prepared, same as
 		// every other failure in this function; the message redelivers and
 		// the row is retried, never silently written wrong. (Every other
-		// kind in this batch that sorted before "team.v1" has already been
+		// kind in this batch that is written before "team.v1" has already been
 		// durably written by this point -- that is pre-existing behavior
 		// for ANY failure partway through this loop, not new here: this
 		// function has never wrapped its per-kind writes in one transaction.)
 		var existingManualMembers map[string][]string
+		var createdAt map[string]time.Time
 		if kind == "team.v1" {
 			teamIDs := make([]string, 0, len(grouped[kind]))
 			for _, record := range grouped[kind] {
@@ -102,12 +108,23 @@ func (s *ClickHouseExternalBatchSink) Write(ctx context.Context, source external
 			if err != nil {
 				return fmt.Errorf("preserve existing team.v1 manual_members: %w", err)
 			}
+			// created_at is carried from the version this write replaces; a
+			// read failure aborts the write like the manual_members read.
+			createdAt, err = teamcreated.Carry(ctx, s.conn, source.Pointer.OrgID, teamIDs)
+			if err != nil {
+				return fmt.Errorf("carry existing team.v1 created_at: %w", err)
+			}
 		}
 		rows := make([]storedversion.Row, 0, len(grouped[kind]))
 		for _, record := range grouped[kind] {
 			values, err := externalRecordValues(source, record, now, &scope, existingManualMembers)
 			if err != nil {
 				return fmt.Errorf("translate external %s record %d: %w", kind, record.Index, err)
+			}
+			if kind == "team.v1" {
+				// created_at is the last column of the team.v1 statement; a
+				// new team's creation time is its own first updated_at (values[9]).
+				values = withTeamCreatedAt(values, createdAt)
 			}
 			rows = append(rows, storedversion.Row{Values: values})
 		}
@@ -143,13 +160,19 @@ func (s *ClickHouseExternalBatchSink) Write(ctx context.Context, source external
 		return nil
 	}
 	var kindErrors []error
+	identitiesWritten := false
 	for _, kind := range kinds {
 		if err := writeKind(kind); err != nil {
 			if ctx.Err() != nil {
 				return ExternalRecomputeScope{}, err
 			}
 			kindErrors = append(kindErrors, err)
+			continue
 		}
+		identitiesWritten = identitiesWritten || kind == "identity.v1"
+	}
+	if identitiesWritten {
+		s.warnOfIdentityTeamsWithNoTeamRow(ctx, source.Pointer, grouped["identity.v1"])
 	}
 	if len(kindErrors) > 0 {
 		return ExternalRecomputeScope{}, errors.Join(kindErrors...)
@@ -158,6 +181,137 @@ func (s *ClickHouseExternalBatchSink) Write(ctx context.Context, source external
 	scope.TeamIDs = sortedExternalStrings(scope.TeamIDs)
 	scope.RecordKinds = sortedExternalStrings(scope.RecordKinds)
 	return scope, nil
+}
+
+// externalKindOrder is the order in which the kinds of one batch are written.
+// It is the order of the reference's sink (write_batch of
+// external_ingest/sinks.py): the git kinds, the team, the identity, the
+// operational kinds in the order of its operational_writes list, then the
+// work item kinds. An identity.v1 record names team ids, so in this order the
+// team rows of a batch are stored before the identities that name them; in
+// the order of the kind names they were stored after them.
+//
+// project_membership_transition.v1 is a kind of this port only, with no place
+// in the reference: it is last.
+//
+// A test holds the list against the reference's source, and holds that every
+// kind the sink can write is in it once.
+var externalKindOrder = []string{
+	"repository.v1",
+	"commit.v1",
+	"pull_request.v1",
+	"review.v1",
+	"team.v1",
+	"identity.v1",
+	"operational_service.v1",
+	"operational_incident.v1",
+	"operational_alert.v1",
+	"incident_timeline_event.v1",
+	"incident_note.v1",
+	"incident_responder.v1",
+	"escalation_policy.v1",
+	"on_call_schedule.v1",
+	"on_call_assignment.v1",
+	"operational_team.v1",
+	"operational_user.v1",
+	"service_repository_mapping.v1",
+	"work_item.v1",
+	"work_item_transition.v1",
+	"work_item_dependency.v1",
+	"project_membership_transition.v1",
+}
+
+// compareExternalKinds orders two kinds by externalKindOrder. A kind that is
+// not in the list (the sink has no statement for it, and its write fails) is
+// after every kind of the list, by its name.
+func compareExternalKinds(first, second string) int {
+	firstAt, secondAt := slices.Index(externalKindOrder, first), slices.Index(externalKindOrder, second)
+	switch {
+	case firstAt >= 0 && secondAt >= 0:
+		return firstAt - secondAt
+	case firstAt >= 0:
+		return -1
+	case secondAt >= 0:
+		return 1
+	}
+	return strings.Compare(first, second)
+}
+
+// externalTeamsWithARowQuery reads which of the named team ids have a row in
+// teams.
+const externalTeamsWithARowQuery = "SELECT DISTINCT id FROM teams WHERE org_id = {org_id:String} AND id IN {team_ids:Array(String)}"
+
+// warnOfIdentityTeamsWithNoTeamRow says, in one WARN line, how many of the
+// team ids that the identities of a batch name have no row in teams once the
+// batch is written. A source can push an identity that names a team it never
+// pushes: the identity is stored as it was pushed, no team row is made up for
+// it, and nothing refuses the record, so without this line nobody would know
+// that the id names no team.
+//
+// The line holds counts only: a team id and an identity id can be a person's
+// own words. A failed count read is logged too and does not fail the write:
+// the rows of the batch are stored.
+func (s *ClickHouseExternalBatchSink) warnOfIdentityTeamsWithNoTeamRow(
+	ctx context.Context, pointer externalPointer, identities []externalSinkRecord,
+) {
+	named := map[string]struct{}{}
+	for _, record := range identities {
+		teamIDs, err := externalTeamIDs(pointer.SourceSystem, stringArrayField(record.Payload, "teamIds"))
+		if err != nil {
+			continue // the write of this record already failed for it
+		}
+		for _, teamID := range teamIDs {
+			if strings.TrimSpace(teamID) != "" {
+				named[teamID] = struct{}{}
+			}
+		}
+	}
+	if len(named) == 0 {
+		return
+	}
+	teamIDs := sortedExternalStrings(mapKeys(named))
+	rows, err := s.conn.Query(ctx, externalTeamsWithARowQuery,
+		clickhouse.Named("org_id", pointer.OrgID), clickhouse.Named("team_ids", teamIDs))
+	if err != nil {
+		slog.WarnContext(ctx, "external push: the team rows of the pushed identities could not be counted",
+			"organization_id", pointer.OrgID, "source_system", pointer.SourceSystem, "error", err.Error())
+		return
+	}
+	defer func() { _ = rows.Close() }()
+	withRow := 0
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			slog.WarnContext(ctx, "external push: the team rows of the pushed identities could not be counted",
+				"organization_id", pointer.OrgID, "source_system", pointer.SourceSystem, "error", err.Error())
+			return
+		}
+		if _, isNamed := named[id]; isNamed {
+			withRow++
+		}
+	}
+	if err := rows.Err(); err != nil {
+		slog.WarnContext(ctx, "external push: the team rows of the pushed identities could not be counted",
+			"organization_id", pointer.OrgID, "source_system", pointer.SourceSystem, "error", err.Error())
+		return
+	}
+	if missing := len(named) - withRow; missing > 0 {
+		slog.WarnContext(ctx, externalIdentityTeamsWithNoRowEvent,
+			"organization_id", pointer.OrgID, "source_system", pointer.SourceSystem,
+			"identities", len(identities), "team_ids_named", len(named), "team_ids_with_no_team_row", missing)
+	}
+}
+
+// externalIdentityTeamsWithNoRowEvent is the message of the WARN line of
+// warnOfIdentityTeamsWithNoTeamRow.
+const externalIdentityTeamsWithNoRowEvent = "external push: identities name team ids that have no team row"
+
+func mapKeys(set map[string]struct{}) []string {
+	keys := make([]string, 0, len(set))
+	for key := range set {
+		keys = append(keys, key)
+	}
+	return keys
 }
 
 // preserveExistingManualMembers batch-reads the current manual_members for
@@ -196,7 +350,7 @@ func externalInsertQuery(kind string) (string, error) {
 		"commit.v1":               "INSERT INTO git_commits (repo_id,hash,message,author_name,author_email,author_when,committer_name,committer_email,committer_when,parents,last_synced,source_id,org_id)",
 		"pull_request.v1":         "INSERT INTO git_pull_requests (repo_id,number,title,body,state,author_name,author_email,created_at,merged_at,closed_at,head_branch,base_branch,additions,deletions,changed_files,first_review_at,first_comment_at,changes_requested_count,reviews_count,comments_count,last_synced,source_id,org_id)",
 		"review.v1":               "INSERT INTO git_pull_request_reviews (repo_id,number,review_id,reviewer,state,submitted_at,last_synced,source_id,org_id)",
-		"team.v1":                 "INSERT INTO teams (id,team_uuid,name,description,members,manual_members,project_keys,repo_patterns,is_active,updated_at,last_synced,org_id,provider,native_team_key,parent_team_id,source_id)",
+		"team.v1":                 "INSERT INTO teams (id,team_uuid,name,description,members,manual_members,project_keys,repo_patterns,is_active,updated_at,last_synced,org_id,provider,native_team_key,parent_team_id,source_id,created_at)",
 		"identity.v1":             "INSERT INTO identities (org_id,canonical_id,identity_uuid,display_name,email,provider_identities,team_ids,is_active,updated_at,source_id)",
 		"work_item.v1":            "INSERT INTO work_items (repo_id,work_item_id,provider,title,type,status,status_raw,project_key,project_id,native_team_key,project_name,assignees,reporter,created_at,updated_at,started_at,completed_at,closed_at,labels,story_points,sprint_id,sprint_name,parent_id,epic_id,url,last_synced,org_id,source_id)",
 		"work_item_transition.v1": "INSERT INTO work_item_transitions (repo_id,work_item_id,occurred_at,from_status,to_status,from_status_raw,to_status_raw,actor,last_synced,org_id,source_id)",
@@ -224,6 +378,15 @@ func externalInsertQuery(kind string) (string, error) {
 		return "", fmt.Errorf("unsupported external sink kind %q", kind)
 	}
 	return query, nil
+}
+
+// withTeamCreatedAt appends the created_at column, the last of the team.v1
+// statement: the carried creation time of the team, else the row's own
+// updated_at (values[0] is the id, values[9] the updated_at) for a new team.
+func withTeamCreatedAt(values []any, carried map[string]time.Time) []any {
+	teamID, _ := values[0].(string)
+	firstWrite, _ := values[9].(time.Time)
+	return append(values, teamcreated.For(carried, teamID, firstWrite))
 }
 
 func externalRecordValues(

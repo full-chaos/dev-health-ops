@@ -12,6 +12,7 @@ import (
 	"github.com/ClickHouse/clickhouse-go/v2/lib/column"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/full-chaos/dev-health-ops/internal/streamrunner"
+	"github.com/full-chaos/dev-health-ops/internal/teamcreated"
 )
 
 type productSink struct {
@@ -33,6 +34,15 @@ type productSink struct {
 	queryCalls    int
 	lastQuery     string
 	lastQueryArgs []any
+	// teamRowIDs are the ids the read of "which of these team ids have a team
+	// row" returns (the count of pushed identity team ids with no team row).
+	teamRowIDs   []string
+	teamRowErr   error
+	teamRowCalls int
+	// createdRows are the (id, created_at) rows the teamcreated read returns.
+	createdRows  [][]any
+	createdErr   error
+	createdCalls int
 }
 
 func (s *productSink) PrepareBatch(_ context.Context, query string, _ ...driver.PrepareBatchOption) (driver.Batch, error) {
@@ -55,6 +65,24 @@ func (s *productSink) Query(_ context.Context, query string, args ...any) (drive
 	if strings.Contains(query, "argMax(is_active, (updated_at, last_synced))") {
 		s.carryCountCalls++
 		return &productRows{rows: [][]any{{uint64(0), uint64(0), uint64(0)}}}, nil
+	}
+	if query == externalTeamsWithARowQuery {
+		s.teamRowCalls++
+		if s.teamRowErr != nil {
+			return nil, s.teamRowErr
+		}
+		rows := make([][]any, len(s.teamRowIDs))
+		for index, id := range s.teamRowIDs {
+			rows[index] = []any{id}
+		}
+		return &productRows{rows: rows}, nil
+	}
+	if query == teamcreated.Query {
+		s.createdCalls++
+		if s.createdErr != nil {
+			return nil, s.createdErr
+		}
+		return &productRows{rows: s.createdRows}, nil
 	}
 	s.queryCalls++
 	s.lastQuery = query
@@ -82,6 +110,8 @@ func (r *productRows) Scan(dest ...any) error {
 			*target, _ = row[i].(string)
 		case *[]string:
 			*target, _ = row[i].([]string)
+		case *time.Time:
+			*target, _ = row[i].(time.Time)
 		case *uint64:
 			*target, _ = row[i].(uint64)
 		default:

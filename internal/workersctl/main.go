@@ -1767,7 +1767,7 @@ func dispatchProvidersyncCarryTeamIDs(
 // move-team-roster-to-memberships` (CHAOS-9087): before the roster column
 // `members` of the teams table is dropped, it moves the roster entries of the
 // admin-made teams of ONE organization that no open membership row covers
-// into team_memberships (source manual), the same
+// into team_memberships (source inferred, never outranking a native row), the same
 // providersync.MoveAdminTeamRosterToMemberships. Entries of provider teams are
 // counted and not moved. It refuses a count above the bound and proves the
 // result (the open membership rows grew by exactly the rows written, and no

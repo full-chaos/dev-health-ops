@@ -1646,8 +1646,10 @@ organization that no open `team_memberships` row of the same team covers into
 `team_memberships`, so no member of such a team is lost. An entry is covered
 when an open row of the team holds it (case and surrounding space ignored) as
 its member id, raw e-mail, raw provider user id or an identity facet. A moved
-entry is a manual membership: provider `""`, source `manual`, primary,
-specificity 100, priority 0, valid from the time of the run, no end.
+entry carries its own provenance and never outranks a native membership:
+provider `""`, source `inferred` (the conflict guard pins only `manual` rows, so
+a moved entry pins nothing), not primary, specificity 0, priority 1000, valid
+from the time of the run, no end.
 
 Nothing else is written. An entry of a provider team that no open row covers is
 a person the provider no longer lists: it is counted (`provider_roster_only`)

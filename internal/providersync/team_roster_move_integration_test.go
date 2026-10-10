@@ -11,6 +11,8 @@ import (
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/google/uuid"
+
+	"github.com/full-chaos/dev-health-ops/internal/teamattribution"
 )
 
 type rosterMoveFixture struct {
@@ -49,7 +51,7 @@ type movedRow struct {
 
 func (f rosterMoveFixture) moved(org string) []movedRow {
 	f.t.Helper()
-	rows, err := f.conn.Query(f.ctx, `SELECT provider, team_id, member_id, toString(source), raw_email, identity_facets, is_primary, specificity, priority, valid_from, valid_to FROM team_memberships FINAL WHERE org_id = ? AND source = 'manual' ORDER BY team_id, member_id`, org)
+	rows, err := f.conn.Query(f.ctx, `SELECT provider, team_id, member_id, toString(source), raw_email, identity_facets, is_primary, specificity, priority, valid_from, valid_to FROM team_memberships FINAL WHERE org_id = ? AND source = 'inferred' ORDER BY team_id, member_id`, org)
 	if err != nil {
 		f.t.Fatal(err)
 	}
@@ -69,8 +71,8 @@ func (f rosterMoveFixture) moved(org string) []movedRow {
 }
 
 // An admin-made team keeps every member it holds only in the roster column:
-// the entry no open membership row of the team covers becomes a manual
-// membership; a covered entry (any case), an entry of a provider team, of an
+// the entry no open membership row of the team covers becomes an inferred
+// membership that never outranks a native one; a covered entry (any case), an entry of a provider team, of an
 // inactive team and of another organization is not moved; a closed membership
 // covers nothing. A dry run writes nothing; a second run moves nothing.
 func TestMoveAdminTeamRosterToMembershipsMovesOnlyTheUncoveredAdminEntries(t *testing.T) {
@@ -131,8 +133,8 @@ func TestMoveAdminTeamRosterToMembershipsMovesOnlyTheUncoveredAdminEntries(t *te
 		t.Fatalf("moved rows = %+v, want dave, erin@x.example, Frank of custom:ops", rows)
 	}
 	erin := got["erin@x.example"]
-	if erin.TeamID != "custom:ops" || erin.Provider != "" || erin.Source != "manual" || erin.Primary != 1 || erin.Specificity != 100 ||
-		erin.Priority != 0 || !erin.ValidFrom.Equal(at) || erin.ValidTo != nil || len(erin.Facets) != 1 || erin.Facets[0] != "erin@x.example" ||
+	if erin.TeamID != "custom:ops" || erin.Provider != "" || erin.Source != "inferred" || erin.Primary != 0 || erin.Specificity != 0 ||
+		erin.Priority != 1000 || !erin.ValidFrom.Equal(at) || erin.ValidTo != nil || len(erin.Facets) != 1 || erin.Facets[0] != "erin@x.example" ||
 		erin.RawEmail == nil || *erin.RawEmail != "erin@x.example" {
 		t.Fatalf("moved row = %+v", erin)
 	}
@@ -221,5 +223,39 @@ SELECT 'custom:big', generateUUIDv4(), 'big', arrayMap(x -> concat('person-', to
 	}
 	if written != 0 {
 		t.Fatalf("%d membership rows written above the bound", written)
+	}
+}
+
+// A moved entry never outranks a native membership of the same person: read
+// through the membership read every consumer uses, the person's native team
+// ranks first and the moved entry second.
+func TestAMovedRosterEntryNeverOutranksANativeMembership(t *testing.T) {
+	ctx, conn := newWorkItemEffectsConn(t)
+	at := time.Date(2026, 10, 10, 12, 0, 0, 0, time.UTC)
+	f := rosterMoveFixture{t: t, ctx: ctx, conn: conn, at: at}
+	const org = "roster-move-rank-org"
+	f.team(org, "", "custom:ops", 1, []string{"gwen@x.example"})
+	f.team(org, "github", "gh:platform", 1, []string{"github:gwen"})
+	email := "gwen@x.example"
+	f.membership(org, "github", "gh:platform", "github:gwen", &email, []string{"github:gwen", "gwen@x.example"}, nil)
+
+	if _, err := MoveAdminTeamRosterToMemberships(ctx, conn, org, at, false); err != nil {
+		t.Fatal(err)
+	}
+	facts, err := teamattribution.ClickHouseFactSource{Conn: conn}.LoadProviderMembers(ctx, org, at.Add(time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var candidates []teamattribution.GithubWorkItemDerivationCandidate
+	for _, fact := range facts {
+		candidates = append(candidates, teamattribution.GithubWorkItemDerivationCandidateFromFact(
+			"team_membership", fact.TeamID, fact.TeamName, "", fact.IsPrimary, fact.Specificity, fact.Priority, fact.UpdatedAt))
+	}
+	ranked := teamattribution.RankDerivationCandidates(candidates)
+	if len(ranked) != 2 {
+		t.Fatalf("memberships of the person = %d, want the native one and the moved one", len(ranked))
+	}
+	if first := teamattribution.GithubWorkItemDerivationStringValue(ranked[0].TeamID); first != "gh:platform" {
+		t.Fatalf("first team of the person = %q, want gh:platform: a moved roster entry must never outrank a native membership", first)
 	}
 }

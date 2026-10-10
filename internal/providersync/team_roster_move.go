@@ -35,10 +35,13 @@ var ErrTeamRosterMoveNotProven = errors.New("providersync: the admin team roster
 // TeamRosterMoveBound is the most facets one run moves.
 const TeamRosterMoveBound = 100000
 
-// teamRosterMoveSource is the membership source of a moved facet: a person an
-// admin put on a team by hand is a manual membership (primary, specificity
-// 100, priority 0, no provider).
-const teamRosterMoveSource = "manual"
+// A moved entry carries its own provenance and never outranks a native row:
+// source `inferred` (derived from the roster copy, not stated by a person or by
+// a provider; the membership conflict guard pins only `manual` rows, so a moved
+// entry pins nothing), not primary, specificity 0 and priority 1000 (candidates
+// rank primary first, then the more specific, then the lower priority number),
+// and no provider. The step reads the roster of ADMIN-made teams only.
+const teamRosterMoveSource = "inferred"
 
 const teamRosterColumnQuery = `SELECT count() FROM system.columns WHERE database = currentDatabase() AND table = 'teams' AND name = 'members'`
 
@@ -85,7 +88,7 @@ const teamRosterMoveInsert = `INSERT INTO team_memberships
 WITH` + teamRosterOpenKeys + `,` + teamRosterFacets + `
 SELECT {org_id:String}, '', team_id, facet, CAST(NULL AS Nullable(String)),
        if(position(facet, '@') > 0, facet, CAST(NULL AS Nullable(String))), [facet],
-       '` + teamRosterMoveSource + `', 1, 100, 0,
+       '` + teamRosterMoveSource + `', 0, 0, 1000,
        {at:DateTime64(3, 'UTC')}, CAST(NULL AS Nullable(DateTime64(3, 'UTC'))), {at:DateTime64(3, 'UTC')}
 FROM roster
 WHERE (team_id, norm) NOT IN (SELECT team_id, k FROM open_keys) AND provider = ''`
@@ -102,7 +105,7 @@ type TeamRosterMoveOutcome struct {
 	RosterFacets uint64 `json:"roster_facets"`
 	Covered      uint64 `json:"covered"`
 	// AdminToMove are the uncovered entries of admin-made teams (written as
-	// manual memberships); TeamsToMove the teams they belong to.
+	// inferred memberships); TeamsToMove the teams they belong to.
 	AdminToMove uint64 `json:"admin_to_move"`
 	TeamsToMove uint64 `json:"teams_to_move"`
 	// ProviderRosterOnly are the uncovered entries of provider teams: a person
@@ -118,7 +121,7 @@ type TeamRosterMoveOutcome struct {
 
 // MoveAdminTeamRosterToMemberships moves the roster facets of the admin-made
 // teams of one organization that no open membership row covers into
-// team_memberships (source manual, valid from `at`). See the file comment for
+// team_memberships (source inferred, valid from `at`). See the file comment for
 // the guards. A dry run counts and writes nothing; with nothing to move a real
 // run is the count reads and no write, so a second run reports zero.
 func MoveAdminTeamRosterToMemberships(

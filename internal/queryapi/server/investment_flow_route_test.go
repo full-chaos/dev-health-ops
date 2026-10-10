@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -301,7 +302,7 @@ func (nilRowsErrorClient) Query(_ context.Context, _ string, bindings []dhclickh
 			return &investmentFlowFixtureScanner{rows: rows}, nil
 		}
 	}
-	return nil, context.DeadlineExceeded
+	return nil, errors.New("store down")
 }
 
 func TestNewInvestmentFlowHandlerDataUnavailableIs503(t *testing.T) {

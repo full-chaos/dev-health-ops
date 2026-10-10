@@ -198,8 +198,7 @@ func (adapter GitHubTeamCatalogCollector) CollectTeamCatalog(
 	}
 	// CHAOS-4434 correction: team_repo_ownership is gated ONLY on
 	// selections.Teams, matching _populate_async exactly -- Python writes it
-	// even on a roster_write_safe=false run (the roster gate protects only
-	// the `teams` row's members field, never this table). Independent of the
+	// even on a roster_write_safe=false run. Independent of the
 	// sync_policy guard above too -- that guard is scoped to the `teams`
 	// table only, matching Linear's own applyTeamSyncPolicyGuard doc comment.
 	if selections.Teams && (len(rows.RepoOwnership) > 0 || len(rows.RepoListedTeamIDs) > 0) {

@@ -1213,17 +1213,12 @@ func TestGitHubWorkItemDerivationTwoLayerMembershipResolution(t *testing.T) {
 		}
 	})
 
-	// (k)/(l)/(m) below pin the CHAOS-4321 round-3 codex adversarial review
-	// HIGH finding fix (team-lead ruling, 2026-08-26): a teams.members
-	// fallback facet must not cross providers unless it is email-shaped.
-	// loadMembers is what actually splits a raw teams.members roster by
-	// provider tag (identities.provider_identities) -- these three cases
-	// fix the SPLIT'S OUTPUT shape directly, i.e. exactly what loadMembers
-	// hands to ProviderMembers (provider-tagged) and ProviderUntypedMembers
-	// (email-shaped, still untyped) after the split.
+	// (k)/(l)/(n) below pin that a provider-tagged fact of ProviderMembers
+	// (a team_memberships row) does not cross providers: the provider-scoped
+	// lookup key. (The roster column that once fed this pool is gone,
+	// CHAOS-9087.)
 	t.Run("(k) a provider-tagged roster login never attributes a DIFFERENT provider's item sharing the same string", func(t *testing.T) {
-		// A GitHub team's roster contains bare login "lead" -- loadMembers
-		// confirmed via identities.provider_identities that "lead" is a
+		// A GitHub team's membership holds bare login "lead", a
 		// GitHub identity, so it lands in ProviderMembers keyed to
 		// Provider: "github", not in the untyped pool.
 		derived := teamattribution.NewGitHubWorkItemDerivationContext(teamattribution.GithubWorkItemDerivationFacts{

@@ -220,17 +220,17 @@ func TestGitLabTeamCatalogCollectorFailsClosedOnPaginationTruncation(t *testing.
 	}
 }
 
-// TestGitLabTeamCatalogCollectorPreservesRosterAfterPerGroupMemberFetchFailure
+// TestGitLabTeamCatalogCollectorSkipsOnlyTheMembershipsOfAGroupWhoseMemberFetchFailed
 // is the CHAOS-4461 regression proof (ruling extended from GitHub to GitLab,
 // team-lead 2026-08-28) at the full collector-adapter level, against a REAL
 // ClickHouse write/readback: with members globally selected under non-strict,
-// ONE group's /members fetch failing must not wipe that group's roster to []
-// -- its existing, previously-persisted roster must survive, while a second,
-// healthy group in the same run gets its freshly observed roster. Uses
+// ONE group's /members fetch failing skips only that group's memberships
+// (both teams are still written), while a second, healthy group in the same
+// run gets its freshly observed memberships. Uses
 // newGitLabTeamCatalogFakeServerWithFailingRootMembers (gitlab_team_catalog_
 // test.go, same package) -- org's /members returns 500, org/team-a's
 // succeeds.
-func TestGitLabTeamCatalogCollectorPreservesRosterAfterPerGroupMemberFetchFailure(t *testing.T) {
+func TestGitLabTeamCatalogCollectorSkipsOnlyTheMembershipsOfAGroupWhoseMemberFetchFailed(t *testing.T) {
 	ctx, conn := newWorkItemEffectsConn(t)
 	lease := providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil })
 	orgID := "org-partial-member-fetch-failure"

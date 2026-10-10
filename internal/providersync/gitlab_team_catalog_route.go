@@ -584,7 +584,7 @@ func (collector GitLabTeamCatalogCollector) CollectTeamCatalog(
 		// team-lead ruling, 2026-08-28 (Python parity): a non-strict walk
 		// failure returns a clean, successful zero result -- matching
 		// team_autoimport_gitlab.py's _zero_summary -- with NO writes
-		// attempted at all (no roster-preservation trigger, no Sink call).
+		// attempted at all (no Sink call).
 		// Checked BEFORE the pagination-cap gate below: WalkSkipped batches
 		// also set Complete=true so they would not trip it anyway, but this
 		// makes the "clean nil, not an error" contract explicit rather than

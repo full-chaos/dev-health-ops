@@ -2,7 +2,6 @@ package billing
 
 import (
 	"bytes"
-	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
@@ -13,11 +12,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"go.opentelemetry.io/otel"
-	"go.opentelemetry.io/otel/attribute"
-	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
-	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/billing/stripeclient"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
@@ -31,10 +25,8 @@ func TestUnhandledStripeEventIsLoggedAndCounted(t *testing.T) {
 	const gapType = "test.gap_unit"
 	stripeEventGaps[gapType] = "a gap named by this test"
 	t.Cleanup(func() { delete(stripeEventGaps, gapType) })
-	reader := sdkmetric.NewManualReader()
-	provider := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
-	otel.SetMeterProvider(provider)
-	t.Cleanup(func() { _ = provider.Shutdown(context.Background()) })
+	const counter = "dev_health_api_stripe_webhook_unhandled_events_total"
+	before := counterByLabel(t, counter, "event_type")
 
 	var logs bytes.Buffer
 	now := time.Unix(1790000000, 0)
@@ -67,21 +59,9 @@ func TestUnhandledStripeEventIsLoggedAndCounted(t *testing.T) {
 			t.Errorf("log lacks %s:\n%s", want, logs.String())
 		}
 	}
-	var collected metricdata.ResourceMetrics
-	if err := reader.Collect(context.Background(), &collected); err != nil {
-		t.Fatal(err)
-	}
 	counts := map[string]int64{}
-	for _, scope := range collected.ScopeMetrics {
-		for _, series := range scope.Metrics {
-			if series.Name != "dev_health_api_stripe_webhook_unhandled_events_total" {
-				continue
-			}
-			for _, point := range series.Data.(metricdata.Sum[int64]).DataPoints {
-				label, _ := point.Attributes.Value(attribute.Key("event_type"))
-				counts[label.AsString()] += point.Value
-			}
-		}
+	for label, total := range counterByLabel(t, counter, "event_type") {
+		counts[label] = total - before[label]
 	}
 	if counts[gapType] != 1 || counts["other"] != 1 || counts["charge.refunded"] != 1 {
 		t.Errorf("counter by event_type = %v, want the gap type=1 other=1 charge.refunded=1", counts)

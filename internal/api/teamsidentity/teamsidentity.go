@@ -189,7 +189,7 @@ func teamObject(team Team, stamp func(time.Time) string) *pyjson.Object {
 	out.Set("flagged_changes", nil)
 	out.Set("last_drift_sync_at", nil)
 	out.Set("is_active", team.IsActive)
-	out.Set("created_at", stamp(team.UpdatedAt))
+	out.Set("created_at", stamp(team.CreatedAt))
 	out.Set("updated_at", stamp(team.UpdatedAt))
 	return out
 }

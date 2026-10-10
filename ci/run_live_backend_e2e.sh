@@ -222,8 +222,18 @@ tiles = payload.get("tiles", {})
 for key in ("understand", "measure", "align", "execute"):
     assert key in tiles, tiles
 constraint = payload.get("constraint", {})
-assert constraint.get("title"), constraint
-assert constraint.get("evidence"), constraint
+# A constraint is a claim about a move between two measured values: the card
+# is filled when some metric has a stored value in both windows, and empty
+# (no claim, no evidence) when none has. Every delta carries both flags.
+for row in deltas:
+    assert "has_data" in row and "has_prior_data" in row and "rate_state" in row, row
+has_move = any(row["has_data"] and row["has_prior_data"] for row in deltas)
+if has_move:
+    assert constraint.get("title"), constraint
+    assert constraint.get("evidence"), constraint
+else:
+    assert not constraint.get("title") and not constraint.get("claim"), constraint
+    assert not constraint.get("evidence"), constraint
 '
 
 require_cmd curl

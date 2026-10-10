@@ -67,13 +67,34 @@ type peopleSummaryPythonResponse struct {
 
 type fieldShape struct{ name, goType, tag string }
 
+// fieldShapes lists a struct's fields. A DeltaPct that is a nullable number
+// (*float64) is listed as the number the frozen Python model has (float64): it
+// is null only where the percent is undefined (CHAOS-9063), and the type of
+// the null is declared and pinned in TestDeltaPctIsNullableOnTheProductionTypes.
 func fieldShapes(typ reflect.Type) []fieldShape {
 	out := make([]fieldShape, 0, typ.NumField())
 	for index := range typ.NumField() {
 		f := typ.Field(index)
-		out = append(out, fieldShape{f.Name, f.Type.String(), string(f.Tag)})
+		goType := f.Type.String()
+		if f.Name == "DeltaPct" && goType == "*float64" {
+			goType = "float64"
+		}
+		out = append(out, fieldShape{f.Name, goType, string(f.Tag)})
 	}
 	return out
+}
+
+func TestDeltaPctIsNullableOnTheProductionTypes(t *testing.T) {
+	for name, typ := range map[string]reflect.Type{
+		"homeRESTMetricDelta": reflect.TypeOf(homeRESTMetricDelta{}),
+		"people.PersonDelta":  reflect.TypeOf(people.PersonDelta{}),
+		"home.MetricDelta":    reflect.TypeOf(home.MetricDelta{}),
+	} {
+		f, ok := typ.FieldByName("DeltaPct")
+		if !ok || f.Type.String() != "*float64" {
+			t.Errorf("%s.DeltaPct is %v, want *float64 (null from a measured zero)", name, f.Type)
+		}
+	}
 }
 
 // assertLegacyPlusTail fails unless production's fields are the legacy fields,
@@ -126,16 +147,17 @@ func TestRESTSummaryDeltasArePythonDeltasPlusTheDeclaredGoOnlyFields(t *testing.
 // model never had (CHAOS-9044), in the order the production type declares them.
 var homeDeltaGoOnlyKeys = []string{"has_data", "has_prior_data", "rate_state"}
 
-// homeDeltaGoOnlyTail matches the three keys at the end of a delta object.
-var homeDeltaGoOnlyTail = regexp.MustCompile(`,"has_data":(?:true|false),"has_prior_data":(?:true|false),"rate_state":(?:null|"[^"\\]*")\}`)
+// homeDeltaGoOnlyEnd matches the three keys at the very end of one delta object.
+var homeDeltaGoOnlyEnd = regexp.MustCompile(`,"has_data":(?:true|false),"has_prior_data":(?:true|false),"rate_state":(?:null|"[^"\\]*")\}$`)
 
 // withoutHomeDeltaGoOnlyFields returns a REST Home body as the production
 // writer writes it, without the declared Go-only keys of each delta, so the
 // venue oracle compares it with the frozen Python body. The text is edited, not
 // re-encoded: the order of every other key is the writer's, which the ledger of
-// the Home oracle compares as text. Every delta must end with all three keys in
-// the declared order (a missing or misplaced key fails, so dropping one is not
-// masked), and each key must occur exactly once per delta.
+// the Home oracle compares as text. The check is made PER DELTA OBJECT: each
+// delta must end with all three keys in the declared order and carry each key
+// exactly once, so a delta that lacks them fails whatever another object
+// holds, and a 4th Go-only key after them fails too.
 func withoutHomeDeltaGoOnlyFields(body string) (string, error) {
 	var root struct {
 		Deltas []json.RawMessage `json:"deltas"`
@@ -146,16 +168,28 @@ func withoutHomeDeltaGoOnlyFields(body string) (string, error) {
 	if root.Deltas == nil {
 		return "", fmt.Errorf("home body has no deltas list: %s", body)
 	}
-	matches := homeDeltaGoOnlyTail.FindAllStringIndex(body, -1)
-	if len(matches) != len(root.Deltas) {
-		return "", fmt.Errorf("%d of %d home deltas end with the declared Go-only keys", len(matches), len(root.Deltas))
-	}
-	for _, key := range homeDeltaGoOnlyKeys {
-		if got := strings.Count(body, `"`+key+`":`); got != len(root.Deltas) {
-			return "", fmt.Errorf("key %s occurs %d times for %d deltas", key, got, len(root.Deltas))
+	var out strings.Builder
+	rest := body
+	for index, raw := range root.Deltas {
+		delta := string(raw)
+		if !homeDeltaGoOnlyEnd.MatchString(delta) {
+			return "", fmt.Errorf("home delta %d does not end with the declared Go-only keys: %s", index, delta)
 		}
+		for _, key := range homeDeltaGoOnlyKeys {
+			if got := strings.Count(delta, `"`+key+`":`); got != 1 {
+				return "", fmt.Errorf("home delta %d carries key %s %d times", index, key, got)
+			}
+		}
+		at := strings.Index(rest, delta)
+		if at < 0 {
+			return "", fmt.Errorf("home delta %d is not in the body text", index)
+		}
+		out.WriteString(rest[:at])
+		out.WriteString(homeDeltaGoOnlyEnd.ReplaceAllString(delta, "}"))
+		rest = rest[at+len(delta):]
 	}
-	return homeDeltaGoOnlyTail.ReplaceAllString(body, "}"), nil
+	out.WriteString(rest)
+	return out.String(), nil
 }
 
 func TestWithoutHomeDeltaGoOnlyFieldsRemovesOnlyTheDeclaredKeys(t *testing.T) {
@@ -169,6 +203,9 @@ func TestWithoutHomeDeltaGoOnlyFieldsRemovesOnlyTheDeclaredKeys(t *testing.T) {
 		"keys out of order":          `{"deltas":[{"metric":"m","has_prior_data":true,"has_data":true,"rate_state":null}]}`,
 		"an extra key after them":    `{"deltas":[{"metric":"m","has_data":true,"has_prior_data":true,"rate_state":null,"other":1}]}`,
 		"no deltas list":             `{"summary":[]}`,
+		// The tail of another object must not stand in for a delta that lacks it.
+		"a delta without them while another object holds the tail": `{"deltas":[{"metric":"m"}],"other":{"x":1,"has_data":true,"has_prior_data":true,"rate_state":null}}`,
+		"a delta with a duplicate key":                             `{"deltas":[{"has_data":true,"has_data":true,"has_prior_data":true,"rate_state":null}]}`,
 	} {
 		if out, err := withoutHomeDeltaGoOnlyFields(bad); err == nil {
 			t.Errorf("%s: got %s, want an error", name, out)

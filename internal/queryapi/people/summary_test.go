@@ -371,3 +371,22 @@ func TestBuildSummaryResponsePersonNotFound(t *testing.T) {
 		t.Fatalf("got %+v, want {404 Person not found}", reqErr)
 	}
 }
+
+// From a measured 0 the percent is undefined (null): the narrative names the
+// metric by the sign of the change, never "held steady", and ranks it below the
+// metrics that have a defined percent.
+func TestNarrativeNamesARiseFromAMeasuredZeroByItsDirection(t *testing.T) {
+	pct := func(v float64) *float64 { return &v }
+	fromZero := PersonDelta{Metric: "churn", Label: "Churn", Value: 5, DeltaPct: nil, HasData: true, HasPriorData: true}
+	defined := PersonDelta{Metric: "cycle_time", Label: "Cycle time", Value: 4, DeltaPct: pct(-20), HasData: true, HasPriorData: true}
+	steady := PersonDelta{Metric: "throughput", Label: "Throughput", Value: 0, DeltaPct: pct(0), HasData: true, HasPriorData: true}
+	got := narrativeForDeltas([]PersonDelta{fromZero, steady, defined}, "p", 14, 14)
+	if len(got) != 2 || got[0].Text != "Cycle time decreased over the last 14 days." || got[1].Text != "Code churn increased in this period." {
+		t.Errorf("narrative = %+v, want the defined percent first, then the rise from zero as increased (a true 0 %% ranks below it)", got)
+	}
+	for _, sentence := range got {
+		if strings.Contains(sentence.Text, "held steady") {
+			t.Errorf("narrative says held steady for a change: %q", sentence.Text)
+		}
+	}
+}

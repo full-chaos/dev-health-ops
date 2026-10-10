@@ -10595,7 +10595,8 @@ type MetricDelta {
   label: String!
   value: Float!
   unit: String!
-  deltaPct: Float!
+  "Percent change between the windows. 0 when a window has no stored value (see hasData / hasPriorData); null when the prior value is a measured 0 and the current value is not, because a percent change against zero is undefined (CHAOS-9063)."
+  deltaPct: Float
   "Whether the current window has one or more stored source rows. A stored zero has this field set to true."
   hasData: Boolean!
   "Whether the comparison window has one or more stored source rows."
@@ -40194,14 +40195,11 @@ func (ec *executionContext) _MetricDelta_deltaPct(ctx context.Context, field gra
 		return graphql.Null
 	}
 	if resTmp == nil {
-		if !graphql.HasFieldError(ctx, fc) {
-			ec.Errorf(ctx, "must not be null")
-		}
 		return graphql.Null
 	}
-	res := resTmp.(float64)
+	res := resTmp.(*float64)
 	fc.Result = res
-	return ec.marshalNFloat2float64(ctx, field.Selections, res)
+	return ec.marshalOFloat2ᚖfloat64(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) fieldContext_MetricDelta_deltaPct(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
@@ -72548,9 +72546,6 @@ func (ec *executionContext) _MetricDelta(ctx context.Context, sel ast.SelectionS
 			}
 		case "deltaPct":
 			out.Values[i] = ec._MetricDelta_deltaPct(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				out.Invalids++
-			}
 		case "hasData":
 			out.Values[i] = ec._MetricDelta_hasData(ctx, field, obj)
 			if out.Values[i] == graphql.Null {

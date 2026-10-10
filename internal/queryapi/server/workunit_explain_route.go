@@ -510,6 +510,11 @@ func workUnitExplainLLMErrorStatus(class categorize.LLMErrorClass) int {
 // response is written, so a live 503 correlates back to the failure that
 // produced it.
 func writeWorkUnitExplainUnavailable(w http.ResponseWriter, r *http.Request, orgID string, err error) {
+	// A read that hit a bound of the store client names its cause (CHAOS-9126).
+	if detail, ok := logRESTBoundHit(r, "work_unit_explain", orgID, err); ok {
+		writeRESTError(w, r, "work_unit_explain", orgID, http.StatusServiceUnavailable, detail)
+		return
+	}
 	log.Printf("query-api: work_unit_explain: degraded to 503 Explanation unavailable: org_id=%s request_id=%s err=%v",
 		orgID, envelopeRequestID(r), err)
 	writeRESTError(w, r, "work_unit_explain", orgID, http.StatusServiceUnavailable, "Explanation unavailable")

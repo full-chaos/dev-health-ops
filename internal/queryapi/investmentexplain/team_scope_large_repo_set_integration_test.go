@@ -67,6 +67,9 @@ var teamScopeReadAsOf = time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
 // admin connection (for seeding) and a QueryClient built through
 // chquery.NewProductionClient -- the SAME defaults production's readers
 // run through (no MaxResultRows override).
+// testClickHouseDSN is the DSN of the ClickHouse the last helper call started.
+var testClickHouseDSN string
+
 func newInvestmentExplainTestClickHouse(ctx context.Context, t *testing.T) (admin stdclickhouse.Conn, client *dhclickhouse.Client) {
 	t.Helper()
 	ch, err := containers.StartClickHouse(ctx)
@@ -76,6 +79,7 @@ func newInvestmentExplainTestClickHouse(ctx context.Context, t *testing.T) (admi
 	t.Cleanup(func() { _ = ch.Close(context.Background()) })
 
 	chschema.Apply(ctx, t, ch)
+	testClickHouseDSN = ch.URI
 
 	options, err := stdclickhouse.ParseDSN(ch.URI)
 	if err != nil {
@@ -190,6 +194,15 @@ func TestInvestmentExplainTeamOwnership_MaterializingTheOwnedRepositorySetHitsTh
 	const orgID = "investmentexplain-org-ownership-cap"
 	const teamID = "investmentexplain-team-ownership-cap"
 	seedTeamOwnedWorkUnits(ctx, t, admin, orgID, teamID, teamOwnedRepoCount, teamOwnershipRunCount)
+
+	// The 1,000-row ceiling the REST clients had before CHAOS-9126, set explicitly:
+	// the point of this test is that a read of more rows than a ceiling fails.
+	capped, err := chquery.NewClientWithRowBound(testClickHouseDSN, 1000)
+	if err != nil {
+		t.Fatalf("construct the 1,000-row client: %v", err)
+	}
+	t.Cleanup(func() { _ = capped.Close() })
+	client = capped
 
 	rows, err := client.Query(ctx, `
 SELECT DISTINCT coalesce(toString(o.repo_id), toString(r.id)) AS owned_repo_id

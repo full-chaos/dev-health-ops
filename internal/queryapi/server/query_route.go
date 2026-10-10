@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/chclient"
 	"io"
 	"log"
 	"log/slog"
@@ -49,7 +50,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/principal"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/routeswitch"
-	"github.com/full-chaos/dev-health-ops/internal/queryapi/workgraph"
 	postgresstore "github.com/full-chaos/dev-health-ops/internal/storage/postgres"
 )
 
@@ -4595,16 +4595,10 @@ func loadQueryRouteConfig(getenv getenvFunc) (queryRouteConfig, bool) {
 //     "just delete the field" version of this function before this fix
 //     was written.
 func newUnrestrictedReadClickHouseOptions(dsn string) dhclickhouse.Options {
-	// Explicit pointer to a zero-valued local, NOT an absent field: nil
-	// means "unset, use the 64 MiB default" under dev-health-go v0.6.1
-	// (clickhouse/options.go's resolveCeilingUint64), and a deleted field
-	// zero-values to nil. A non-nil pointer to 0 is the only way to reach
-	// ClickHouse's own "unrestricted" -- see the doc comment above.
-	maxBytesToRead := uint64(0)
-	return dhclickhouse.Options{
-		DSN:            dsn,
-		MaxBytesToRead: &maxBytesToRead,
-	}
+	// The one constructor path (CHAOS-9126, D5879): MaxBytesToRead unrestricted
+	// and the shared result-row bound, from package chclient. No route keeps its
+	// own MaxResultRows default.
+	return chclient.Options(dsn)
 }
 
 // queryRouteMaxResultRows overrides dev-health-go/clickhouse's per-request
@@ -4667,7 +4661,7 @@ func newUnrestrictedReadClickHouseOptions(dsn string) dhclickhouse.Options {
 //     it fails loudly the moment a new category_kind value appears,
 //     which is the earliest possible signal that this workload
 //     derivation's assumptions changed).
-const queryRouteMaxResultRows uint = 4*workgraph.MaxEdgesLimit + 100_000 // = 500,000 -- PROVISIONAL, workload derivation, successor CHAOS-4654
+const queryRouteMaxResultRows uint = chclient.MaxResultRows // = 500,000 -- PROVISIONAL, workload derivation, successor CHAOS-4654; the SAME bound as every REST client (CHAOS-9126)
 
 // newQueryRouteClickHouseClient is the ONE place this route constructs its
 // ClickHouse client -- pulled out of buildQueryRoute so a test can exercise
@@ -4678,10 +4672,7 @@ const queryRouteMaxResultRows uint = 4*workgraph.MaxEdgesLimit + 100_000 // = 50
 // newUnrestrictedReadClickHouseOptions's shared MaxBytesToRead posture,
 // per that function's doc comment.
 func newQueryRouteClickHouseClient(dsn string) (*dhclickhouse.Client, error) {
-	opts := newUnrestrictedReadClickHouseOptions(dsn)
-	maxResultRows := queryRouteMaxResultRows
-	opts.MaxResultRows = &maxResultRows
-	return dhclickhouse.NewClickHouseQueryClientWithOptions(opts)
+	return dhclickhouse.NewClickHouseQueryClientWithOptions(newUnrestrictedReadClickHouseOptions(dsn))
 }
 
 // buildQueryRoute wires the real featureFlags path from env-sourced

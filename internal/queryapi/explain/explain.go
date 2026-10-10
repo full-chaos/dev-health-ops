@@ -47,6 +47,9 @@ type QueryClient interface {
 // ErrUnavailable is returned when a Reader is constructed without a client.
 var ErrUnavailable = errors.New("explain: clickhouse client unavailable")
 
+// ErrUnknownMetric is a metric name the route has no config for (CHAOS-9136).
+var ErrUnknownMetric = errors.New("explain: unknown metric")
+
 // queryTimeoutSecs matches drilldown/investmentexplain/quadrant's own copy
 // of this constant -- see drilldown.go's doc comment for why the trailing
 // SETTINGS clause must carry a literal integer, never a bound parameter
@@ -78,14 +81,9 @@ func NewReader(client QueryClient) (*Reader, error) {
 // fully-resolved value, matching drilldown.PRParams/investmentexplain's
 // own division of labor between the route file and this package.
 type Params struct {
-	// Metric is the raw request value verbatim -- NOT validated against
-	// metricConfigs' key set (api/services/explain.py:146's own
-	// `_METRIC_CONFIG.get(metric, _METRIC_CONFIG["cycle_time"])`: an
-	// unrecognised metric string silently borrows cycle_time's table/
-	// column/label/unit/etc, but the RESPONSE's own "metric" field still
-	// echoes this original string back, not "cycle_time" -- confirmed by
-	// that same line only substituting the CONFIG, never the request
-	// value used to build the response below).
+	// Metric is the request value verbatim. The route validates it against
+	// MetricNames before it calls this package (a client error); a name with no
+	// config is ErrUnknownMetric here, never another metric's config (CHAOS-9136).
 	Metric string
 	// StartDay/EndDay/CompareStart/CompareEnd are the four values
 	// time_window (api/services/filtering.py:78-92) returns -- the route

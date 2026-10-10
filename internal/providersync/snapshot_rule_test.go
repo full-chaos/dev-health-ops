@@ -86,7 +86,7 @@ func runKindCase[R any](t *testing.T, c kindCase[R]) {
 		return out
 	}
 	planScoped := func(fresh []R, scope ScopeProof, proof SnapshotProof) SnapshotPlan {
-		return PlanSnapshot(fresh, open, c.key, c.stamp, at, c.kind.Snapshot(scope, proof))
+		return PlanSnapshot(fresh, open, c.key, c.stamp, at, c.kind.testSnapshot(scope, proof))
 	}
 	plan := func(fresh []R, proof SnapshotProof) SnapshotPlan { return planScoped(fresh, testSoleScope(), proof) }
 	name := c.provider + "/" + c.kind.Name()
@@ -265,7 +265,7 @@ func runSingleKindCase[R any](t *testing.T, c kindCase[R]) {
 		return out
 	}
 	planScoped := func(fresh []R, scope ScopeProof, proof SnapshotProof) SnapshotPlan {
-		return PlanSnapshot(fresh, open, c.key, c.stamp, at, c.kind.Snapshot(scope, proof))
+		return PlanSnapshot(fresh, open, c.key, c.stamp, at, c.kind.testSnapshot(scope, proof))
 	}
 	plan := func(fresh []R, proof SnapshotProof) SnapshotPlan { return planScoped(fresh, testSoleScope(), proof) }
 	name := c.provider + "/" + c.kind.Name()
@@ -331,7 +331,7 @@ func TestPlanSnapshotNeverClosesARowTwoKindsHold(t *testing.T) {
 	at := time.Date(2026, 10, 9, 12, 0, 0, 0, time.UTC)
 	open := []OwnershipSnapshotRow{{TeamID: "T", ProjectID: testPID("p"), Source: "native", ValidFrom: at.Add(-time.Hour)}}
 	fresh := []OwnershipSnapshotRow{{TeamID: "T", ProjectID: testPID("q"), Source: "native", ValidFrom: at}}
-	one := testEveryRowKind(EmptyIsAnAnswer).Snapshot(testSoleScope(), testProof(true))
+	one := testEveryRowKind(EmptyIsAnAnswer).testSnapshot(testSoleScope(), testProof(true))
 	if plan := PlanOwnershipSnapshot(fresh, open, at, one); len(plan.Retract) != 1 {
 		t.Fatalf("control: one kind holds the row and closes it; got %+v", plan.Retract)
 	}
@@ -344,7 +344,7 @@ func TestPlanSnapshotNeverClosesARowTwoKindsHold(t *testing.T) {
 // is not reported. The same answer over an open row is.
 func TestReportSnapshotPlanIsQuietWhenAnEmptyAnswerKeptNothing(t *testing.T) {
 	at := time.Date(2026, 10, 9, 12, 0, 0, 0, time.UTC)
-	kind := JiraLegacyOwnershipKind().Snapshot(testSoleScope(), testProof(true))
+	kind := JiraLegacyOwnershipKind().testSnapshot(testSoleScope(), testProof(true))
 	open := []OwnershipSnapshotRow{{TeamID: "T", ProjectID: testPID("p"), Source: jiraTeamCatalogLegacySource, ValidFrom: at.Add(-time.Hour)}}
 	counted := snapshotAbandonedCounts(t)
 	if ReportSnapshotPlan(context.Background(), "jira", "org-1", PlanOwnershipSnapshot(nil, nil, at, kind)) {

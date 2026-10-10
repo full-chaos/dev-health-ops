@@ -247,6 +247,21 @@ to the query source text.
 
 # home wire-capture fixture
 
+Newest text (CHAOS-9093): `home_captured.graphql` is NOT a capture. It is
+`home_v7_captured.graphql` (the previous current text, byte-identical, kept as a
+legacy registration) plus two lines, `repoFilterApplied` in `deltas` after
+`rateCoverage` and in `signals` after `coverage`, written in the form urql prints.
+The web change that selects them must put the fields at those places in `HOME_QUERY` and
+run `scripts/capture-graphql-wire-fixture.ts --operation home`; if the real capture
+differs, the capture wins and this file and `registeredHomeDocument` move to it.
+
+Newest text (CHAOS-6545 after CHAOS-9072): `home_captured.graphql` is NOT a capture. It is
+`home_v6_captured.graphql` (main's previous current text, byte-identical, kept as a legacy
+registration) plus one line, `coverage`, in `signals` before `attribution`, in the form urql
+prints. The web change that selects it must put the field at that place in `HOME_QUERY` and
+run `scripts/capture-graphql-wire-fixture.ts --operation home`; if the real capture differs,
+the capture wins and this file and `registeredHomeDocument` move to it.
+
 `home_captured.graphql` (`Home`) is the current registered text. It is
 NOT a capture: it is `home_v4_captured.graphql` plus two lines in
 `deltas`, after `spark { ... }`: `rateState` (CHAOS-8981, the state of a
@@ -298,6 +313,26 @@ It differs from every wire-form digest because the source text has
 no injected `__typename`. The negative control in
 `TestRegisteredHomeDocument_MatchesCapturedWireFixture` pins that
 difference.
+
+# Home wire fixture, signal coverage
+
+`home_captured.graphql` is the current registered text: it is
+`home_v5_captured.graphql` plus the one line `coverage` in `signals`, after
+`scopeEntity` (CHAOS-6545: the share of a compounding-risk score's weight that
+was present). `home_v5_captured.graphql` is the text a web build sends until it
+selects `coverage`; it stays accepted as a legacy text of `home`
+(`legacyDigestsByOperation`) beside V1 to V4.
+
+# compoundingRisk wire fixture
+
+`compoundingrisk_captured.graphql` is the current registered text. It is NOT
+a capture: it is `compoundingrisk_v1_captured.graphql` plus the one line
+`coverage` in `rows`, after `score` (CHAOS-6545: the share of the score's
+weight that was present). `compoundingrisk_v1_captured.graphql` (digest
+`2b50958a4670a434bbfe46be7344486488d3a278e62b09b257252441e962bb67`) is the text a
+web build sends until it selects `coverage`; it stays accepted as the
+operation's legacy text (`legacyDigestsByOperation`). Remove it with the
+cleanup ticket once no client sends it.
 
 # operatingReview wire fixture
 

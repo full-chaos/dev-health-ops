@@ -31,7 +31,8 @@
           "ts": "2024-01-05T00:00:00",
           "value": 1.9166666666666667
         }
-      ]
+      ],
+      "repo_filter_applied": false
     },
     {
       "metric": "review_latency",
@@ -50,7 +51,8 @@
           "ts": "2024-01-05T00:00:00",
           "value": 5.5
         }
-      ]
+      ],
+      "repo_filter_applied": true
     },
     {
       "metric": "throughput",
@@ -69,7 +71,8 @@
           "ts": "2024-01-05T00:00:00",
           "value": 11
         }
-      ]
+      ],
+      "repo_filter_applied": false
     },
     {
       "metric": "deploy_freq",
@@ -88,7 +91,8 @@
           "ts": "2024-01-05T00:00:00",
           "value": 2
         }
-      ]
+      ],
+      "repo_filter_applied": true
     },
     {
       "metric": "churn",
@@ -107,7 +111,8 @@
           "ts": "2024-01-05T00:00:00",
           "value": 600
         }
-      ]
+      ],
+      "repo_filter_applied": true
     },
     {
       "metric": "wip_saturation",
@@ -126,7 +131,8 @@
           "ts": "2024-01-05T00:00:00",
           "value": 55.00000000000001
         }
-      ]
+      ],
+      "repo_filter_applied": false
     },
     {
       "metric": "blocked_work",
@@ -145,7 +151,8 @@
           "ts": "2024-01-05T00:00:00",
           "value": 4
         }
-      ]
+      ],
+      "repo_filter_applied": false
     },
     {
       "metric": "change_failure_rate",
@@ -165,7 +172,8 @@
           "value": 11
         }
       ],
-      "rate_state": "measured"
+      "rate_state": "measured",
+      "repo_filter_applied": true
     },
     {
       "metric": "rework_ratio",
@@ -184,7 +192,8 @@
           "ts": "2024-01-05T00:00:00",
           "value": 22
         }
-      ]
+      ],
+      "repo_filter_applied": true
     },
     {
       "metric": "pr_rework_ratio",
@@ -205,7 +214,8 @@
         }
       ],
       "rate_state": "measured",
-      "rate_coverage": 0.5
+      "rate_coverage": 0.5,
+      "repo_filter_applied": true
     },
     {
       "metric": "ci_success",
@@ -224,7 +234,8 @@
           "ts": "2024-01-05T00:00:00",
           "value": 97
         }
-      ]
+      ],
+      "repo_filter_applied": true
     }
   ],
   "rework_theme_allocation": [

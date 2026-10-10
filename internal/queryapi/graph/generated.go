@@ -551,6 +551,7 @@ type ComplexityRoot struct {
 	CompoundingRiskPoint struct {
 		Components  func(childComplexity int) int
 		ComputedAt  func(childComplexity int) int
+		Coverage    func(childComplexity int) int
 		Day         func(childComplexity int) int
 		Scope       func(childComplexity int) int
 		ScopeEntity func(childComplexity int) int
@@ -787,6 +788,7 @@ type ComplexityRoot struct {
 		Attribution       func(childComplexity int) int
 		Category          func(childComplexity int) int
 		Confidence        func(childComplexity int) int
+		Coverage          func(childComplexity int) int
 		CurrentValue      func(childComplexity int) int
 		Delta             func(childComplexity int) int
 		Direction         func(childComplexity int) int
@@ -796,6 +798,7 @@ type ComplexityRoot struct {
 		Metric            func(childComplexity int) int
 		PriorValue        func(childComplexity int) int
 		RecommendedAction func(childComplexity int) int
+		RepoFilterApplied func(childComplexity int) int
 		ScopeEntity       func(childComplexity int) int
 		Severity          func(childComplexity int) int
 		Title             func(childComplexity int) int
@@ -873,16 +876,17 @@ type ComplexityRoot struct {
 	}
 
 	MetricDelta struct {
-		DeltaPct     func(childComplexity int) int
-		HasData      func(childComplexity int) int
-		HasPriorData func(childComplexity int) int
-		Label        func(childComplexity int) int
-		Metric       func(childComplexity int) int
-		RateCoverage func(childComplexity int) int
-		RateState    func(childComplexity int) int
-		Spark        func(childComplexity int) int
-		Unit         func(childComplexity int) int
-		Value        func(childComplexity int) int
+		DeltaPct          func(childComplexity int) int
+		HasData           func(childComplexity int) int
+		HasPriorData      func(childComplexity int) int
+		Label             func(childComplexity int) int
+		Metric            func(childComplexity int) int
+		RateCoverage      func(childComplexity int) int
+		RateState         func(childComplexity int) int
+		RepoFilterApplied func(childComplexity int) int
+		Spark             func(childComplexity int) int
+		Unit              func(childComplexity int) int
+		Value             func(childComplexity int) int
 	}
 
 	MetricLineage struct {
@@ -4110,6 +4114,13 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 
 		return e.complexity.CompoundingRiskPoint.ComputedAt(childComplexity), true
 
+	case "CompoundingRiskPoint.coverage":
+		if e.complexity.CompoundingRiskPoint.Coverage == nil {
+			break
+		}
+
+		return e.complexity.CompoundingRiskPoint.Coverage(childComplexity), true
+
 	case "CompoundingRiskPoint.day":
 		if e.complexity.CompoundingRiskPoint.Day == nil {
 			break
@@ -5116,6 +5127,13 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 
 		return e.complexity.HomeSignal.Confidence(childComplexity), true
 
+	case "HomeSignal.coverage":
+		if e.complexity.HomeSignal.Coverage == nil {
+			break
+		}
+
+		return e.complexity.HomeSignal.Coverage(childComplexity), true
+
 	case "HomeSignal.currentValue":
 		if e.complexity.HomeSignal.CurrentValue == nil {
 			break
@@ -5178,6 +5196,13 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 		}
 
 		return e.complexity.HomeSignal.RecommendedAction(childComplexity), true
+
+	case "HomeSignal.repoFilterApplied":
+		if e.complexity.HomeSignal.RepoFilterApplied == nil {
+			break
+		}
+
+		return e.complexity.HomeSignal.RepoFilterApplied(childComplexity), true
 
 	case "HomeSignal.scopeEntity":
 		if e.complexity.HomeSignal.ScopeEntity == nil {
@@ -5556,6 +5581,13 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 		}
 
 		return e.complexity.MetricDelta.RateState(childComplexity), true
+
+	case "MetricDelta.repoFilterApplied":
+		if e.complexity.MetricDelta.RepoFilterApplied == nil {
+			break
+		}
+
+		return e.complexity.MetricDelta.RepoFilterApplied(childComplexity), true
 
 	case "MetricDelta.spark":
 		if e.complexity.MetricDelta.Spark == nil {
@@ -10059,6 +10091,16 @@ type CompoundingRiskPoint {
   scopeId: String!
   scopeLabel: String!
   score: Float
+  """
+  The share of the score's weight that was present: the weights of the inputs
+  that had data over the sum of all four weights, in [0, 1]. The score is the
+  weighted mean over the present inputs, so a coverage below 1 says it was
+  computed from fewer than four inputs. It is served only beside a score: it is
+  null whenever the score is null (a row with no input at all, or a row written
+  before this rule that has not been recomputed), and null when no weight is
+  stored.
+  """
+  coverage: Float
   severity: CompoundingRiskSeverity!
   components: CompoundingRiskComponents!
   weights: CompoundingRiskWeights!
@@ -10360,8 +10402,12 @@ type HomeSignal {
   category: String!
   """Null when the signal is not scoped to one entity (e.g. an org-wide signal)."""
   scopeEntity: ScopeEntityRef
+  """For a compounding-risk signal: the share of the score's weight that was present, from 0 to 1 (the score is the weighted mean over the inputs that had data). Null on every other signal."""
+  coverage: Float
   """Current primary work-item attribution evidence for work-item metrics; null when this window has no attributable work items."""
   attribution: SignalAttribution
+  "Whether the request's repository filter (a repo-level scope, or what.repos) narrows the metric this signal is built from: the field of the same name on MetricDelta (false only for a team-keyed metric). Null when the request names no repository, and on a signal that does not come from a metric (risk, recommendation)."
+  repoFilterApplied: Boolean
 }
 
 """Source and confidence distribution for the work items behind one Home signal."""
@@ -10614,6 +10660,8 @@ type MetricDelta {
   rateState: String
   "The coverage of the pull request rework ratio (CHAOS-9072), from 0 to 1, not a percent: the merged pull requests of the window that have review data from a provider that stores a changes-requested review, divided by all merged pull requests of the window that have stored counts. 0 when rateState is unknown_no_review_evidence or not_applicable_no_rework_signal. Null when the window has no merged pull request, when it holds no stored counts, and for every other metric."
   rateCoverage: Float
+  "Whether the request's repository filter (a repo-level scope, or what.repos) narrows this metric. Null when the request names no repository. True for a repository-keyed metric: the filter was applied, and when the named repositories resolve to nothing the metric has no data (hasData false). False only for a team-keyed metric (cycle_time, throughput, wip_saturation, blocked_work: their tables have no repo_id column, so the repository condition is not applied and the value is not narrowed) (CHAOS-9093)."
+  repoFilterApplied: Boolean
 }
 
 type MetricLineage {
@@ -30975,6 +31023,47 @@ func (ec *executionContext) fieldContext_CompoundingRiskPoint_score(_ context.Co
 	return fc, nil
 }
 
+func (ec *executionContext) _CompoundingRiskPoint_coverage(ctx context.Context, field graphql.CollectedField, obj *model.CompoundingRiskPoint) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_CompoundingRiskPoint_coverage(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.Coverage, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*float64)
+	fc.Result = res
+	return ec.marshalOFloat2ᚖfloat64(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_CompoundingRiskPoint_coverage(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "CompoundingRiskPoint",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Float does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _CompoundingRiskPoint_severity(ctx context.Context, field graphql.CollectedField, obj *model.CompoundingRiskPoint) (ret graphql.Marshaler) {
 	fc, err := ec.fieldContext_CompoundingRiskPoint_severity(ctx, field)
 	if err != nil {
@@ -31420,6 +31509,8 @@ func (ec *executionContext) fieldContext_CompoundingRiskResult_rows(_ context.Co
 				return ec.fieldContext_CompoundingRiskPoint_scopeLabel(ctx, field)
 			case "score":
 				return ec.fieldContext_CompoundingRiskPoint_score(ctx, field)
+			case "coverage":
+				return ec.fieldContext_CompoundingRiskPoint_coverage(ctx, field)
 			case "severity":
 				return ec.fieldContext_CompoundingRiskPoint_severity(ctx, field)
 			case "components":
@@ -36524,6 +36615,8 @@ func (ec *executionContext) fieldContext_HomeResult_deltas(_ context.Context, fi
 				return ec.fieldContext_MetricDelta_rateState(ctx, field)
 			case "rateCoverage":
 				return ec.fieldContext_MetricDelta_rateCoverage(ctx, field)
+			case "repoFilterApplied":
+				return ec.fieldContext_MetricDelta_repoFilterApplied(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type MetricDelta", field.Name)
 		},
@@ -36921,8 +37014,12 @@ func (ec *executionContext) fieldContext_HomeResult_signals(_ context.Context, f
 				return ec.fieldContext_HomeSignal_category(ctx, field)
 			case "scopeEntity":
 				return ec.fieldContext_HomeSignal_scopeEntity(ctx, field)
+			case "coverage":
+				return ec.fieldContext_HomeSignal_coverage(ctx, field)
 			case "attribution":
 				return ec.fieldContext_HomeSignal_attribution(ctx, field)
+			case "repoFilterApplied":
+				return ec.fieldContext_HomeSignal_repoFilterApplied(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type HomeSignal", field.Name)
 		},
@@ -37964,6 +38061,47 @@ func (ec *executionContext) fieldContext_HomeSignal_scopeEntity(_ context.Contex
 	return fc, nil
 }
 
+func (ec *executionContext) _HomeSignal_coverage(ctx context.Context, field graphql.CollectedField, obj *model.HomeSignal) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_HomeSignal_coverage(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.Coverage, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*float64)
+	fc.Result = res
+	return ec.marshalOFloat2ᚖfloat64(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_HomeSignal_coverage(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "HomeSignal",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Float does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _HomeSignal_attribution(ctx context.Context, field graphql.CollectedField, obj *model.HomeSignal) (ret graphql.Marshaler) {
 	fc, err := ec.fieldContext_HomeSignal_attribution(ctx, field)
 	if err != nil {
@@ -38008,6 +38146,47 @@ func (ec *executionContext) fieldContext_HomeSignal_attribution(_ context.Contex
 				return ec.fieldContext_SignalAttribution_confidence(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type SignalAttribution", field.Name)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _HomeSignal_repoFilterApplied(ctx context.Context, field graphql.CollectedField, obj *model.HomeSignal) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_HomeSignal_repoFilterApplied(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.RepoFilterApplied, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*bool)
+	fc.Result = res
+	return ec.marshalOBoolean2ᚖbool(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_HomeSignal_repoFilterApplied(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "HomeSignal",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Boolean does not have child fields")
 		},
 	}
 	return fc, nil
@@ -40442,6 +40621,47 @@ func (ec *executionContext) fieldContext_MetricDelta_rateCoverage(_ context.Cont
 		IsResolver: false,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 			return nil, errors.New("field of type Float does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _MetricDelta_repoFilterApplied(ctx context.Context, field graphql.CollectedField, obj *model.MetricDelta) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_MetricDelta_repoFilterApplied(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.RepoFilterApplied, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*bool)
+	fc.Result = res
+	return ec.marshalOBoolean2ᚖbool(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_MetricDelta_repoFilterApplied(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MetricDelta",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Boolean does not have child fields")
 		},
 	}
 	return fc, nil
@@ -70280,6 +70500,8 @@ func (ec *executionContext) _CompoundingRiskPoint(ctx context.Context, sel ast.S
 			}
 		case "score":
 			out.Values[i] = ec._CompoundingRiskPoint_score(ctx, field, obj)
+		case "coverage":
+			out.Values[i] = ec._CompoundingRiskPoint_coverage(ctx, field, obj)
 		case "severity":
 			out.Values[i] = ec._CompoundingRiskPoint_severity(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
@@ -72029,8 +72251,12 @@ func (ec *executionContext) _HomeSignal(ctx context.Context, sel ast.SelectionSe
 			}
 		case "scopeEntity":
 			out.Values[i] = ec._HomeSignal_scopeEntity(ctx, field, obj)
+		case "coverage":
+			out.Values[i] = ec._HomeSignal_coverage(ctx, field, obj)
 		case "attribution":
 			out.Values[i] = ec._HomeSignal_attribution(ctx, field, obj)
+		case "repoFilterApplied":
+			out.Values[i] = ec._HomeSignal_repoFilterApplied(ctx, field, obj)
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}
@@ -72618,6 +72844,8 @@ func (ec *executionContext) _MetricDelta(ctx context.Context, sel ast.SelectionS
 			out.Values[i] = ec._MetricDelta_rateState(ctx, field, obj)
 		case "rateCoverage":
 			out.Values[i] = ec._MetricDelta_rateCoverage(ctx, field, obj)
+		case "repoFilterApplied":
+			out.Values[i] = ec._MetricDelta_repoFilterApplied(ctx, field, obj)
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}

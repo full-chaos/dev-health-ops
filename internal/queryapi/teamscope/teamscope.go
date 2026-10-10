@@ -29,6 +29,7 @@ package teamscope
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
@@ -152,5 +153,34 @@ func RepoCondition(orgID, repoColumn string, teamIDs []string, asOf time.Time) (
 		{Name: BindingOrgID, Value: orgID},
 		{Name: BindingTeamIDs, Value: teamList},
 		{Name: BindingAsOf, Value: asOf.UTC()},
+	}
+}
+
+// NarrowRepoScope combines the repository condition of a request into ONE
+// " AND ..." fragment. Filters narrow, they never widen (CHAOS-9093): a request
+// that names repositories and a team sees the repositories that are both named
+// and owned by the team, not the union of the two; repositories that are named
+// and resolve to nothing leave nothing, never the unfiltered set.
+//
+// named says the request names repositories (a repo-level scope's ids, or
+// what.repos). explicitSQL is the membership fragment of the ones that resolved
+// (" AND col IN {scope_ids}"; "" when none did), teamCondition the bare boolean
+// of RepoCondition ("" when no team scope). The Python original built no
+// condition for an empty id list and ORed the team's repositories with the named
+// ones, so a filter that matched nothing served the unfiltered value and a named
+// repository outside the team widened the team's scope.
+func NarrowRepoScope(named bool, explicitSQL string, explicitBindings []dhclickhouse.Binding, teamCondition string, teamBindings []dhclickhouse.Binding) (filterSQL string, bindings []dhclickhouse.Binding) {
+	explicitCondition := strings.TrimPrefix(explicitSQL, " AND ")
+	switch {
+	case named && explicitCondition == "":
+		return " AND 1 = 0", nil
+	case explicitCondition != "" && teamCondition != "":
+		return " AND (" + explicitCondition + " AND " + teamCondition + ")", append(append([]dhclickhouse.Binding(nil), explicitBindings...), teamBindings...)
+	case explicitCondition != "":
+		return " AND " + explicitCondition, explicitBindings
+	case teamCondition != "":
+		return " AND " + teamCondition, teamBindings
+	default:
+		return "", nil
 	}
 }

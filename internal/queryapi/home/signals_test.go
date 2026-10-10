@@ -1,6 +1,9 @@
 package home
 
 import (
+	"encoding/json"
+	"reflect"
+	"sort"
 	"strings"
 	"testing"
 )
@@ -229,6 +232,22 @@ func TestFormatValueIntegerVsDecimal(t *testing.T) {
 	}
 }
 
+// The risk signal carries the coverage of the score it shows (CHAOS-6545); every
+// other signal has none.
+func TestRiskSignalCarriesTheCoverageOfItsScore(t *testing.T) {
+	score, coverage := 0.9, 0.3
+	row := RiskRow{Scope: "repo", ScopeID: "r1", Score: &score, Severity: "high", ScopeDisplayName: "checkout-service", Coverage: &coverage}
+	signal, ok := RiskSignal(row, DefaultFilters(), DataConfidence{})
+	if !ok || signal.Coverage == nil || *signal.Coverage != 0.3 {
+		t.Fatalf("risk signal coverage = %v (ok %v), want 0.3", signal.Coverage, ok)
+	}
+	row.Coverage = nil
+	signal, ok = RiskSignal(row, DefaultFilters(), DataConfidence{})
+	if !ok || signal.Coverage != nil {
+		t.Fatalf("a row with no coverage gives a signal with none: %v", signal.Coverage)
+	}
+}
+
 // From a measured 0 (both windows stored, prior 0, current not 0) the percent
 // is undefined: the sentence and the signal state the change in absolute values,
 // never "held steady", "flat", a percent or the current value as the prior.
@@ -276,6 +295,101 @@ func TestAMeasuredZeroPriorIsNeverSteadyOrAPercent(t *testing.T) {
 	}
 	if got, ok := SelectConstraint([]MetricDelta{fromZero}); !ok || got.Metric != "churn" {
 		t.Errorf("SelectConstraint over a rise from zero only = %q (ok %v), want churn", got.Metric, ok)
+	}
+}
+
+// A metric signal carries the repository-filter flag of the metric it is built from
+// (CHAOS-9093), and a signal that is not built from a metric spec carries none.
+func TestMetricSignalCarriesTheRepositoryFilterFlagOfItsMetric(t *testing.T) {
+	yes, no := true, false
+	signals := BuildMetricSignals([]MetricDelta{
+		{Metric: "churn", Label: "Code Churn", Unit: "loc", Value: 5, DeltaPct: pctp(10), HasData: true, HasPriorData: true, RepoFilterApplied: &yes},
+		{Metric: "throughput", Label: "Throughput", Unit: "items", Value: 5, DeltaPct: pctp(10), HasData: true, HasPriorData: true, RepoFilterApplied: &no},
+		{Metric: "cycle_time", Label: "Cycle Time", Unit: "days", Value: 5, DeltaPct: pctp(10), HasData: true, HasPriorData: true},
+	}, Filters{}, DataConfidence{})
+	byMetric := map[string]Signal{}
+	for _, signal := range signals {
+		byMetric[signal.Metric] = signal
+	}
+	if got := byMetric["churn"].RepoFilterApplied; got == nil || !*got {
+		t.Errorf("churn signal repoFilterApplied = %v, want true", got)
+	}
+	if got := byMetric["throughput"].RepoFilterApplied; got == nil || *got {
+		t.Errorf("throughput signal repoFilterApplied = %v, want false", got)
+	}
+	if got := byMetric["cycle_time"].RepoFilterApplied; got != nil {
+		t.Errorf("cycle_time signal repoFilterApplied = %v, want null (the request names no repository)", got)
+	}
+	score := 0.9
+	if risk, ok := RiskSignal(RiskRow{Scope: "repo", ScopeID: "r1", Score: &score, Severity: "high", ScopeDisplayName: "checkout"}, DefaultFilters(), DataConfidence{}); !ok || risk.RepoFilterApplied != nil {
+		t.Errorf("a risk signal is not built from a metric spec: repoFilterApplied = %v (ok %v), want null", risk.RepoFilterApplied, ok)
+	}
+}
+
+// repoFilterApplied is null with no repository named (a team scope alone
+// included); otherwise true for a repository-keyed metric (also when the named
+// repositories resolved to nothing: the filter was applied and the metric has no
+// data) and false only for a team-keyed metric.
+func TestRepoFilterAppliedFollowsTheSpecScope(t *testing.T) {
+	named := Filters{Scope: ScopeFilter{Level: "repo", IDs: []string{"r1"}}}
+	byWhat := Filters{What: WhatFilter{Repos: []string{"r1"}}}
+	teamOnly := Filters{Scope: ScopeFilter{Level: "team", IDs: []string{"t1"}}}
+	teamAndRepos := Filters{Scope: ScopeFilter{Level: "team", IDs: []string{"t1"}}, What: WhatFilter{Repos: []string{"r1"}}}
+	for _, tc := range []struct {
+		name        string
+		f           Filters
+		metricScope string
+		want        string
+	}{
+		{"nothing named, repo metric", Filters{}, "repo", "nil"},
+		{"nothing named, team metric", Filters{}, "team", "nil"},
+		{"a team scope alone, repo metric", teamOnly, "repo", "nil"},
+		{"a team scope alone, team metric", teamOnly, "team", "nil"},
+		{"repo scope, repo metric", named, "repo", "true"},
+		{"what.repos, repo metric", byWhat, "repo", "true"},
+		{"repo scope, team metric", named, "team", "false"},
+		// A team metric of a team-scope request carries a team condition, which is not a repository filter.
+		{"team scope and what.repos, team metric", teamAndRepos, "team", "false"},
+		{"team scope and what.repos, repo metric", teamAndRepos, "repo", "true"},
+	} {
+		got := "nil"
+		if p := repoFilterApplied(tc.f, tc.metricScope); p != nil {
+			got = map[bool]string{true: "true", false: "false"}[*p]
+		}
+		if got != tc.want {
+			t.Errorf("%s: repoFilterApplied = %s, want %s", tc.name, got, tc.want)
+		}
+	}
+}
+
+// The REST Home answer carries NO coverage key: the field exists on the Go
+// signal and is served by GraphQL only (CHAOS-6545), because the REST response
+// model is pinned by a Python-recorded golden. The key set of a signal that
+// holds a coverage is the marshalled bytes' key set, not a Go snapshot.
+func TestRESTSignalJSONHasNoCoverageKey(t *testing.T) {
+	coverage := 0.3
+	raw, err := json.Marshal(Signal{ID: "risk:repo:r1", Metric: "compounding_risk", Coverage: &coverage})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var keys map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &keys); err != nil {
+		t.Fatal(err)
+	}
+	got := make([]string, 0, len(keys))
+	for key := range keys {
+		got = append(got, key)
+	}
+	sort.Strings(got)
+	want := []string{
+		"affected_scope", "category", "confidence", "current_value", "delta", "direction", "evidence_count",
+		"evidence_ref", "id", "metric", "prior_value", "recommended_action", "scope_entity", "severity", "title", "why_it_matters",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("REST signal keys = %v, want %v (no coverage key)", got, want)
+	}
+	if strings.Contains(string(raw), "coverage") {
+		t.Fatalf("a REST signal must not carry coverage: %s", raw)
 	}
 }
 

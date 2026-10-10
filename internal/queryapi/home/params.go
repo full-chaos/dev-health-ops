@@ -25,6 +25,10 @@ type TimeFilter struct {
 type ScopeFilter struct {
 	Level string
 	IDs   []string
+	// names is the display name of each id of IDs that has one, resolved by
+	// BuildResponse (CHAOS-9116). Not part of the request: an id is never
+	// printed in prose, the name is, or a generic word when there is none.
+	names map[string]string
 }
 
 // WhatFilter ports the one field of WhatFilter

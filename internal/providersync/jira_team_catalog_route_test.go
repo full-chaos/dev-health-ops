@@ -1117,7 +1117,7 @@ func TestJudgeJiraOwnershipSnapshotCountsOnlyAnIncompleteOne(t *testing.T) {
 	at := time.Date(2026, 10, 9, 12, 0, 0, 0, time.UTC)
 	held := []OwnershipSnapshotRow{{TeamID: "jira:ops", ProjectID: testPID("10001"), Source: jiraTeamCatalogLegacySource, ValidFrom: at.Add(-time.Hour)}}
 	plan := func(search, legacy bool, fresh, open []OwnershipSnapshotRow) SnapshotPlan {
-		return PlanOwnershipSnapshot(fresh, open, at, JiraLegacyOwnershipKind().Snapshot(testSoleScope(), ProveSnapshot(
+		return PlanOwnershipSnapshot(fresh, open, at, JiraLegacyOwnershipKind().testSnapshot(testSoleScope(), ProveSnapshot(
 			SnapshotTerm{Holds: search, Reason: jiraSnapshotProjectSearch},
 			SnapshotTerm{Holds: legacy, Reason: jiraSnapshotLegacyLinks})))
 	}

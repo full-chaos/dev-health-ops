@@ -656,11 +656,19 @@ type CompoundingRiskFilterInput struct {
 }
 
 type CompoundingRiskPoint struct {
-	Day         graphqldate.Date            `json:"day"`
-	Scope       CompoundingRiskScope        `json:"scope"`
-	ScopeID     string                      `json:"scopeId"`
-	ScopeLabel  string                      `json:"scopeLabel"`
-	Score       *float64                    `json:"score,omitempty"`
+	Day        graphqldate.Date     `json:"day"`
+	Scope      CompoundingRiskScope `json:"scope"`
+	ScopeID    string               `json:"scopeId"`
+	ScopeLabel string               `json:"scopeLabel"`
+	Score      *float64             `json:"score,omitempty"`
+	// The share of the score's weight that was present: the weights of the inputs
+	// that had data over the sum of all four weights, in [0, 1]. The score is the
+	// weighted mean over the present inputs, so a coverage below 1 says it was
+	// computed from fewer than four inputs. It is served only beside a score: it is
+	// null whenever the score is null (a row with no input at all, or a row written
+	// before this rule that has not been recomputed), and null when no weight is
+	// stored.
+	Coverage    *float64                    `json:"coverage,omitempty"`
 	Severity    CompoundingRiskSeverity     `json:"severity"`
 	Components  *CompoundingRiskComponents  `json:"components"`
 	Weights     *CompoundingRiskWeights     `json:"weights"`
@@ -951,8 +959,12 @@ type HomeSignal struct {
 	Category    string  `json:"category"`
 	// Null when the signal is not scoped to one entity (e.g. an org-wide signal).
 	ScopeEntity *ScopeEntityRef `json:"scopeEntity,omitempty"`
+	// For a compounding-risk signal: the share of the score's weight that was present, from 0 to 1 (the score is the weighted mean over the inputs that had data). Null on every other signal.
+	Coverage *float64 `json:"coverage,omitempty"`
 	// Current primary work-item attribution evidence for work-item metrics; null when this window has no attributable work items.
 	Attribution *SignalAttribution `json:"attribution,omitempty"`
+	// Whether the request's repository filter (a repo-level scope, or what.repos) narrows the metric this signal is built from: the field of the same name on MetricDelta (false only for a team-keyed metric). Null when the request names no repository, and on a signal that does not come from a metric (risk, recommendation).
+	RepoFilterApplied *bool `json:"repoFilterApplied,omitempty"`
 }
 
 type HomeTile struct {
@@ -1067,6 +1079,8 @@ type MetricDelta struct {
 	RateState *string `json:"rateState,omitempty"`
 	// The coverage of the pull request rework ratio (CHAOS-9072), from 0 to 1, not a percent: the merged pull requests of the window that have review data from a provider that stores a changes-requested review, divided by all merged pull requests of the window that have stored counts. 0 when rateState is unknown_no_review_evidence or not_applicable_no_rework_signal. Null when the window has no merged pull request, when it holds no stored counts, and for every other metric.
 	RateCoverage *float64 `json:"rateCoverage,omitempty"`
+	// Whether the request's repository filter (a repo-level scope, or what.repos) narrows this metric. Null when the request names no repository. True for a repository-keyed metric: the filter was applied, and when the named repositories resolve to nothing the metric has no data (hasData false). False only for a team-keyed metric (cycle_time, throughput, wip_saturation, blocked_work: their tables have no repo_id column, so the repository condition is not applied and the value is not narrowed) (CHAOS-9093).
+	RepoFilterApplied *bool `json:"repoFilterApplied,omitempty"`
 }
 
 type MetricLineage struct {

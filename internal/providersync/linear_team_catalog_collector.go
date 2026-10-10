@@ -294,9 +294,9 @@ func linearOwnershipKindSnapshots(orgID string, scope ScopeProof, evidence Linea
 		LinearProjectOwnershipKind(orgID).Snapshot(scope, ProveSnapshot(
 			SnapshotTerm{Holds: evidence.ProjectsComplete, Reason: linearSnapshotProjectsNotRead},
 			SnapshotTerm{Holds: result.OwnershipTeamsWithoutKey == 0, Reason: linearSnapshotKeylessLink},
-		)),
+		), AbsenceByWalk[OwnershipSnapshotRow](AbsenceWalkByCursor)),
 		LinearTeamKeyOwnershipKind(orgID).Snapshot(scope, ProveSnapshot(
 			SnapshotTerm{Holds: evidence.TeamsComplete, Reason: linearSnapshotTeamsNotRead},
-		)),
+		), AbsenceByWalk[OwnershipSnapshotRow](AbsenceWalkByCursor)),
 	}
 }

@@ -61,22 +61,10 @@ func (s *ClickHouseExternalBatchSink) Write(ctx context.Context, source external
 	for kind := range grouped {
 		kinds = append(kinds, kind)
 	}
-	slices.Sort(kinds)
-	// The teams of a batch are written FIRST. An identity.v1 record names
-	// team ids, so the team rows of a batch are stored before the identities
-	// that name them, as the reference's sink stores them (its order is
-	// repository, commit, pull request, review, team, identity). In the
-	// sorted order the identities were written before the teams of their own
-	// batch.
-	slices.SortStableFunc(kinds, func(first, second string) int {
-		switch {
-		case first == "team.v1" && second != "team.v1":
-			return -1
-		case second == "team.v1" && first != "team.v1":
-			return 1
-		}
-		return 0
-	})
+	// The kinds of a batch are written in the order of the reference's sink
+	// (externalKindOrder), not in the order of their names. One effect: the
+	// team rows of a batch are stored before the identities that name them.
+	slices.SortFunc(kinds, compareExternalKinds)
 	// Every bare team id of the organization moves to its prefixed form
 	// before a team.v1 or identity.v1 row with a prefixed id is written.
 	if len(grouped["team.v1"]) > 0 || len(grouped["identity.v1"]) > 0 {
@@ -105,7 +93,7 @@ func (s *ClickHouseExternalBatchSink) Write(ctx context.Context, source external
 		// this Write() call before any team.v1 row is prepared, same as
 		// every other failure in this function; the message redelivers and
 		// the row is retried, never silently written wrong. (Every other
-		// kind in this batch that sorted before "team.v1" has already been
+		// kind in this batch that is written before "team.v1" has already been
 		// durably written by this point -- that is pre-existing behavior
 		// for ANY failure partway through this loop, not new here: this
 		// function has never wrapped its per-kind writes in one transaction.)
@@ -193,6 +181,60 @@ func (s *ClickHouseExternalBatchSink) Write(ctx context.Context, source external
 	scope.TeamIDs = sortedExternalStrings(scope.TeamIDs)
 	scope.RecordKinds = sortedExternalStrings(scope.RecordKinds)
 	return scope, nil
+}
+
+// externalKindOrder is the order in which the kinds of one batch are written.
+// It is the order of the reference's sink (write_batch of
+// external_ingest/sinks.py): the git kinds, the team, the identity, the
+// operational kinds in the order of its operational_writes list, then the
+// work item kinds. An identity.v1 record names team ids, so in this order the
+// team rows of a batch are stored before the identities that name them; in
+// the order of the kind names they were stored after them.
+//
+// project_membership_transition.v1 is a kind of this port only, with no place
+// in the reference: it is last.
+//
+// A test holds the list against the reference's source, and holds that every
+// kind the sink can write is in it once.
+var externalKindOrder = []string{
+	"repository.v1",
+	"commit.v1",
+	"pull_request.v1",
+	"review.v1",
+	"team.v1",
+	"identity.v1",
+	"operational_service.v1",
+	"operational_incident.v1",
+	"operational_alert.v1",
+	"incident_timeline_event.v1",
+	"incident_note.v1",
+	"incident_responder.v1",
+	"escalation_policy.v1",
+	"on_call_schedule.v1",
+	"on_call_assignment.v1",
+	"operational_team.v1",
+	"operational_user.v1",
+	"service_repository_mapping.v1",
+	"work_item.v1",
+	"work_item_transition.v1",
+	"work_item_dependency.v1",
+	"project_membership_transition.v1",
+}
+
+// compareExternalKinds orders two kinds by externalKindOrder. A kind that is
+// not in the list (the sink has no statement for it, and its write fails) is
+// after every kind of the list, by its name.
+func compareExternalKinds(first, second string) int {
+	firstAt, secondAt := slices.Index(externalKindOrder, first), slices.Index(externalKindOrder, second)
+	switch {
+	case firstAt >= 0 && secondAt >= 0:
+		return firstAt - secondAt
+	case firstAt >= 0:
+		return -1
+	case secondAt >= 0:
+		return 1
+	}
+	return strings.Compare(first, second)
 }
 
 // externalTeamsWithARowQuery reads which of the named team ids have a row in

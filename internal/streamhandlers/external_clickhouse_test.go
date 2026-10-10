@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -766,12 +767,12 @@ func TestClickHouseExternalSinkAbortsTeamWriteWhenCreatedAtReadFails(t *testing.
 	}
 }
 
-// A pushed identity names team ids: the teams of a batch are written before
-// the identities that name them, as the reference's sink writes them. They are
-// written before every other kind of the batch, also
-// before a kind whose name sorts earlier (identity.v1, commit.v1). The other
-// kinds keep their sorted order.
-func TestThePushedTeamsOfABatchAreWrittenBeforeTheIdentitiesThatNameThem(t *testing.T) {
+// The kinds of a batch are written in the order of the reference's sink, not
+// in the order of their names. The batch below holds its records in another
+// order than both. One effect of the reference's order: the team rows of a
+// batch are stored before the identities that name them (in the order of the
+// kind names they were stored after them).
+func TestTheKindsOfAPushBatchAreWrittenInTheOrderOfTheReference(t *testing.T) {
 	connection := &productSink{batch: &productBatch{}}
 	sink, err := NewClickHouseExternalBatchSink(connection)
 	if err != nil {
@@ -779,23 +780,142 @@ func TestThePushedTeamsOfABatchAreWrittenBeforeTheIdentitiesThatNameThem(t *test
 	}
 	pointer := externalTestPointer()
 	source := externalSinkBatch{Pointer: pointer, SourceID: uuid.New(), Records: []externalSinkRecord{
-		externalSinkFixture("repository.v1", map[string]any{"externalId": pointer.SourceInstance, "sourceSystem": "github"}),
+		externalSinkFixture("work_item.v1", map[string]any{
+			"externalKey": "7", "provider": "github", "title": "Issue", "type": "issue", "status": "open",
+			"createdAt": "2026-07-22T10:00:00Z", "repositoryExternalId": pointer.SourceInstance,
+		}),
 		externalSinkFixture("identity.v1", map[string]any{"canonicalId": "ada", "teamIds": []any{"team-a"}, "updatedAt": "2026-07-23T11:00:00Z"}),
 		externalSinkFixture("team.v1", map[string]any{"id": "team-a", "name": "Team A", "updatedAt": "2026-07-23T11:00:00Z"}),
+		externalSinkFixture("repository.v1", map[string]any{"externalId": pointer.SourceInstance, "sourceSystem": "github"}),
 	}}
 	if _, err := sink.Write(context.Background(), source); err != nil {
 		t.Fatal(err)
 	}
 	var tables []string
 	for _, query := range connection.queries {
-		for _, table := range []string{"teams", "identities", "repos"} {
+		for _, table := range []string{"teams", "identities", "repos", "work_items"} {
 			if strings.HasPrefix(query, "INSERT INTO "+table+" ") {
 				tables = append(tables, table)
 			}
 		}
 	}
-	if want := []string{"teams", "identities", "repos"}; !reflect.DeepEqual(tables, want) {
+	if want := []string{"repos", "teams", "identities", "work_items"}; !reflect.DeepEqual(tables, want) {
 		t.Fatalf("the inserts of the batch ran in the order %v, want %v", tables, want)
+	}
+}
+
+// externalKindOrder is the order of the reference's sink. This test READS that
+// order from the reference's source (write_batch of external_ingest/sinks.py)
+// when it runs, so a change of the order there fails here: each
+// `scope.record_kinds.add("<kind>")` statement of the function in its place,
+// and where the function adds the loop variable, the kinds of its
+// operational_writes list in the order of that list.
+//
+// It reads the source text; it does not execute the function. (The function
+// needs a live store and a database gate, and a recorded answer needs the
+// interpreter of the pinned build.) A source file that is not there, or that
+// gives fewer kinds than the reference has, fails the test: it never passes
+// on a read that found nothing.
+func TestTheWriteOrderOfThePushKindsIsTheOrderOfTheReferenceSink(t *testing.T) {
+	root, err := moduleroot.Root()
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(filepath.Join(root, "src/dev_health_ops/external_ingest/sinks.py"))
+	if err != nil {
+		t.Fatalf("the reference's sink was not read: %v", err)
+	}
+	source := string(raw)
+	start := strings.Index(source, "\nasync def write_batch(")
+	if start < 0 {
+		t.Fatal("the reference's sink has no write_batch function")
+	}
+	body := source[start+1:]
+	if end := strings.Index(body[1:], "\nasync def "); end >= 0 {
+		body = body[:end+1]
+	}
+	if end := strings.Index(body[1:], "\ndef "); end >= 0 {
+		body = body[:end+1]
+	}
+	// The operational kinds: the second string of each entry of the list.
+	listStart := strings.Index(body, "operational_writes = (")
+	listEnd := strings.Index(body, "for attribute, kind, writer_name in operational_writes:")
+	if listStart < 0 || listEnd < listStart {
+		t.Fatal("write_batch has no operational_writes list before its loop")
+	}
+	quoted := regexp.MustCompile(`"([a-z_]+)"`).FindAllStringSubmatch(body[listStart:listEnd], -1)
+	if len(quoted) == 0 || len(quoted)%3 != 0 {
+		t.Fatalf("the operational_writes list holds %d strings, want three for each entry", len(quoted))
+	}
+	var operational []string
+	for index := 1; index < len(quoted); index += 3 {
+		operational = append(operational, quoted[index][1]+".v1")
+	}
+
+	var reference []string
+	for _, statement := range regexp.MustCompile(`scope\.record_kinds\.add\(("([a-z_]+)"|kind)\)`).FindAllStringSubmatch(body, -1) {
+		if statement[1] == "kind" {
+			reference = append(reference, operational...)
+			continue
+		}
+		reference = append(reference, statement[2]+".v1")
+	}
+	if len(reference) < 20 {
+		t.Fatalf("only %d kinds were read from the reference's sink: %v", len(reference), reference)
+	}
+
+	var ported []string
+	for _, kind := range externalKindOrder {
+		if !externalKindsWithoutPythonModel[kind] {
+			ported = append(ported, kind)
+		}
+	}
+	if !reflect.DeepEqual(ported, reference) {
+		t.Errorf("the write order of the kinds differs from the reference's sink:\n port:      %v\n reference: %v", ported, reference)
+	}
+	// A kind of this port only has no place in the reference: it is after
+	// every kind the reference writes.
+	lastPorted := slices.Index(externalKindOrder, ported[len(ported)-1])
+	for kind := range externalKindsWithoutPythonModel {
+		if at := slices.Index(externalKindOrder, kind); at < lastPorted {
+			t.Errorf("%s is a kind of this port only and is at place %d, before a kind of the reference", kind, at)
+		}
+	}
+}
+
+// Every kind a source system may push has ONE place in the write order, and
+// the order names no kind that no system may push: a new kind cannot be
+// written at an unnamed place.
+func TestEveryPushKindHasOnePlaceInTheWriteOrder(t *testing.T) {
+	allowed := map[string]bool{}
+	for _, kinds := range externalAllowedKinds {
+		for kind := range kinds {
+			allowed[kind] = true
+		}
+	}
+	if len(allowed) < 20 {
+		t.Fatalf("only %d kinds are allowed for a source system: the list was not read", len(allowed))
+	}
+	placed := map[string]int{}
+	for _, kind := range externalKindOrder {
+		placed[kind]++
+		if !allowed[kind] {
+			t.Errorf("the write order names %s, which no source system may push", kind)
+		}
+		if _, err := externalInsertQuery(kind); err != nil {
+			t.Errorf("the write order names %s, which the sink has no statement for: %v", kind, err)
+		}
+	}
+	for kind := range allowed {
+		if placed[kind] != 1 {
+			t.Errorf("%s has %d places in the write order, want 1", kind, placed[kind])
+		}
+	}
+	// A kind outside the list is ordered after the list, by its name.
+	kinds := []string{"zz_unknown.v1", "work_item.v1", "aa_unknown.v1", "repository.v1"}
+	slices.SortFunc(kinds, compareExternalKinds)
+	if want := []string{"repository.v1", "work_item.v1", "aa_unknown.v1", "zz_unknown.v1"}; !reflect.DeepEqual(kinds, want) {
+		t.Errorf("order with kinds outside the list = %v, want %v", kinds, want)
 	}
 }
 

@@ -101,11 +101,11 @@ VALUES (?, ?, 'wip-saturation', '2026-08-18', '2026-08-25', true, 'warning', 'WI
 		}
 		return out
 	}
-	gqlProse := func(org, level, id string) homeProse {
+	gqlProse := func(org, level string, ids ...string) homeProse {
 		t.Helper()
 		query := `query Home($orgId: String!, $filters: FilterInput, $window: HomeWindowInput) { home(orgId: $orgId, filters: $filters, window: $window) { healthState { headline } signals { affectedScope } } }`
 		payload, err := json.Marshal(map[string]any{"query": query, "variables": map[string]any{
-			"orgId": org, "filters": map[string]any{"scope": map[string]any{"level": level, "ids": []string{id}}},
+			"orgId": org, "filters": map[string]any{"scope": map[string]any{"level": level, "ids": ids}},
 			"window": map[string]any{"rangeDays": 7, "compareDays": 7, "endDate": "2026-08-25"},
 		}})
 		if err != nil {
@@ -184,6 +184,20 @@ VALUES (?, ?, 'wip-saturation', '2026-08-18', '2026-08-25', true, 'warning', 'WI
 		seedTeam(org, id, "jira:abc")
 		check(t, "REST", restProse(org, "&scope_type=team&scope_id="+id), id, "the selected team")
 		check(t, "GraphQL", gqlProse(org, "TEAM", id), id, "the selected team")
+	})
+	t.Run("two teams, one named: the other is counted, not hidden", func(t *testing.T) {
+		const org, named, unnamed = "scope-labels-team-mixed", "github:acme/ops", "linear:ENG"
+		seedTeam(org, named, "Ops")
+		seedTeam(org, unnamed, "")
+		prose := gqlProse(org, "TEAM", named, unnamed)
+		if want := "across Ops and 1 other team"; !strings.Contains(prose.Headline, want) {
+			t.Errorf("headline %q lacks %q", prose.Headline, want)
+		}
+		for _, text := range append([]string{prose.Headline}, prose.Scopes...) {
+			if strings.Contains(text, named) || strings.Contains(text, unnamed) {
+				t.Errorf("prose prints an id: %q", text)
+			}
+		}
 	})
 	t.Run("repository with a name", func(t *testing.T) {
 		const org = "scope-labels-repo-named"

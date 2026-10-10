@@ -12,7 +12,8 @@ func TestPrimaryScopeLabelIsANameNeverTheID(t *testing.T) {
 		{"org", ScopeFilter{Level: "org"}, "org"},
 		{"one named team", ScopeFilter{Level: "team", IDs: []string{"t1"}, names: named}, "Ops"},
 		{"two named teams", ScopeFilter{Level: "team", IDs: []string{"t1", "t2"}, names: named}, "Ops, Dev"},
-		{"a named and an unnamed team: the unnamed one is left out", ScopeFilter{Level: "team", IDs: []string{"t1", "t9"}, names: named}, "Ops"},
+		{"a named and an unnamed team: the unnamed one is counted, not hidden", ScopeFilter{Level: "team", IDs: []string{"t1", "t9"}, names: named}, "Ops and 1 other team"},
+		{"mixed repositories", ScopeFilter{Level: "repo", IDs: []string{"r1", "r8", "r9"}, names: map[string]string{"r1": "alpha"}}, "alpha and 2 other repositories"},
 		{"unnamed team", ScopeFilter{Level: "team", IDs: []string{"t9"}}, "the selected team"},
 		{"unnamed teams", ScopeFilter{Level: "team", IDs: []string{"t8", "t9"}}, "the selected teams"},
 		{"unnamed repository", ScopeFilter{Level: "repo", IDs: []string{"r9"}}, "the selected repository"},
@@ -27,7 +28,7 @@ func TestPrimaryScopeLabelIsANameNeverTheID(t *testing.T) {
 
 func TestRecommendationSignalNamesItsTeamOrSaysATeam(t *testing.T) {
 	row := RecommendationRow{TeamID: "github:acme/ops", RuleID: "wip-saturation", LatestTitle: "WIP"}
-	if s, _ := RecommendationSignal(row, Filters{}, DataConfidence{}); s.AffectedScope != "a team" {
+	if s, _ := RecommendationSignal(row, Filters{}, DataConfidence{}); s.AffectedScope != recommendationUnnamedTeam {
 		t.Errorf("no team name: affected_scope = %q, want a team", s.AffectedScope)
 	}
 	row.TeamName = "Ops"

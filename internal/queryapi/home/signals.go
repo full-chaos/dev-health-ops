@@ -111,11 +111,26 @@ func formatDeltaWords(deltaPct float64) string {
 	return fmt.Sprintf("%.0f%%", absFloat(deltaPct))
 }
 
+// The words of the Home prose for a requested scope that has no display name.
+// ONE place: a wording change is one edit here (the phrases are provisional,
+// they are on the wording list with the empty-state texts).
+const (
+	scopeUnnamedTeam          = "the selected team"
+	scopeUnnamedTeams         = "the selected teams"
+	scopeUnnamedRepository    = "the selected repository"
+	scopeUnnamedRepositories  = "the selected repositories"
+	scopeOtherTeam            = "other team"
+	scopeOtherTeams           = "other teams"
+	scopeOtherRepository      = "other repository"
+	scopeOtherRepositories    = "other repositories"
+	recommendationUnnamedTeam = "a team"
+)
+
 // primaryScopeLabel ports _primary_scope_label (services/home.py:313-316), but
 // the label is a NAME, never the id (CHAOS-9116): the display names of the
-// requested scope ids, joined by ", " (an id with no name is left out); when
-// none has a name, the generic phrase of the scope ("the selected team", "the
-// selected repositories"). Without ids it is the level, as before.
+// requested scope ids joined by ", ". An id with no name is never printed and
+// never hidden: "<names> and N other team(s)/repositor(y/ies)". When none has a
+// name, the generic phrase of the scope. Without ids it is the level, as before.
 func primaryScopeLabel(f Filters) string {
 	if len(f.Scope.IDs) == 0 {
 		return f.Scope.Level
@@ -126,26 +141,29 @@ func primaryScopeLabel(f Filters) string {
 			named = append(named, name)
 		}
 	}
-	if len(named) > 0 {
-		return strings.Join(named, ", ")
-	}
-	noun := f.Scope.Level
-	switch f.Scope.Level {
-	case "team":
-		noun = "team"
-	case "repo":
-		noun = "repositor"
-	}
-	if noun == "repositor" {
-		if len(f.Scope.IDs) > 1 {
-			return "the selected repositories"
+	unnamed := len(f.Scope.IDs) - len(named)
+	repo := f.Scope.Level == "repo"
+	pick := func(one, many string, n int) string {
+		if n == 1 {
+			return one
 		}
-		return "the selected repository"
+		return many
 	}
-	if len(f.Scope.IDs) > 1 {
-		return "the selected " + noun + "s"
+	if len(named) == 0 {
+		if repo {
+			return pick(scopeUnnamedRepository, scopeUnnamedRepositories, unnamed)
+		}
+		return pick(scopeUnnamedTeam, scopeUnnamedTeams, unnamed)
 	}
-	return "the selected " + noun
+	label := strings.Join(named, ", ")
+	if unnamed > 0 {
+		other := pick(scopeOtherTeam, scopeOtherTeams, unnamed)
+		if repo {
+			other = pick(scopeOtherRepository, scopeOtherRepositories, unnamed)
+		}
+		label += fmt.Sprintf(" and %d %s", unnamed, other)
+	}
+	return label
 }
 
 // rawScopeKey is the request scope as the structured fields carry it (signal
@@ -681,7 +699,7 @@ func RecommendationSignal(row RecommendationRow, f Filters, dataConfidence DataC
 		teamID = rawScopeKey(f)
 		affectedScope = primaryScopeLabel(f)
 	} else if affectedScope == "" {
-		affectedScope = "a team"
+		affectedScope = recommendationUnnamedTeam
 	}
 	whyItMatters := row.LatestRationale
 	if whyItMatters == "" {

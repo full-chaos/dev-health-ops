@@ -112,3 +112,75 @@ VALUES ('%s', '%s', 'repo', '%s', NULL, 'unknown', 0.3, 0.3, 0.2, 0.2, 0.4, 0.65
 		t.Fatalf("rows with no score stand on nothing: no day is picked, got %+v", none)
 	}
 }
+
+// The coverage the Home reader derives in SQL is the share of the weight that was
+// present, for every input mix: each weight index and each norm is pinned by a row
+// that has that input alone, and by mixes (CHAOS-6545). Distinct weights make a
+// wrong index change the answer.
+func TestHomeRiskCoverageForEveryInputMix(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	inst, err := containers.StartClickHouse(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = inst.Close(context.Background()) }()
+	chschema.Apply(ctx, t, inst)
+	opts, err := stdclickhouse.ParseDSN(inst.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn, err := stdclickhouse.Open(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = conn.Close() }()
+	client, err := chquery.NewProductionClient(inst.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = client.Close() }()
+
+	const org = "home-risk-coverage-mix-it"
+	// weights churn 0.1, complexity 0.2, ownership 0.3, review 0.4 (distinct)
+	mixes := []struct {
+		id                                   string
+		churn, complexity, ownership, review bool
+		want                                 float64
+	}{
+		{"mix-churn", true, false, false, false, 0.1},
+		{"mix-complexity", false, true, false, false, 0.2},
+		{"mix-ownership", false, false, true, false, 0.3},
+		{"mix-review", false, false, false, true, 0.4},
+		{"mix-all", true, true, true, true, 1.0},
+	}
+	norm := func(present bool) string {
+		if present {
+			return "0.5"
+		}
+		return "NULL"
+	}
+	for _, m := range mixes {
+		if err := conn.Exec(ctx, fmt.Sprintf(`INSERT INTO compounding_risk_daily
+(org_id, day, scope, scope_id, compounding_risk, severity, churn_norm, complexity_norm, ownership_norm, review_norm,
+ w_churn, w_complexity, w_ownership, w_review, threshold_elevated, threshold_high, computed_at)
+VALUES ('%s', '2026-01-03', 'repo', '%s', 0.5, 'elevated', %s, %s, %s, %s, 0.1, 0.2, 0.3, 0.4, 0.4, 0.65, toDateTime('2026-01-03 09:00:00'))`,
+			org, m.id, norm(m.churn), norm(m.complexity), norm(m.ownership), norm(m.review))); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rows, err := fetchRiskSignals(ctx, client, DefaultFilters(), time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), time.Date(2026, 1, 8, 0, 0, 0, 0, time.UTC), org)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]*float64{}
+	for _, r := range rows {
+		got[r.ScopeID] = r.Coverage
+	}
+	for _, m := range mixes {
+		c := got[m.id]
+		if c == nil || *c < m.want-1e-9 || *c > m.want+1e-9 {
+			t.Errorf("%s: coverage = %v, want %v", m.id, c, m.want)
+		}
+	}
+}

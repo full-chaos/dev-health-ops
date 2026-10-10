@@ -172,3 +172,60 @@ func TestNoDeclaredDifferenceCoversAPercentWithoutAShapeCensus(t *testing.T) {
 		t.Fatal("no shaped declaration reaches a percent path: the census found nothing to hold")
 	}
 }
+
+// explainWithMetricFlags is explainParity with the explain answer's own
+// has_data / has_prior_data declared as keys the recorded reference never had
+// (explainParity declares the flags of a driver and of a contributor only), so
+// that a test body which carries them asks only about the percent.
+func explainWithMetricFlags(base Options) Options {
+	out := base
+	out.GoOnlyKeys = map[string]GoOnlyKey{}
+	for key, declared := range base.GoOnlyKeys {
+		out.GoOnlyKeys[key] = declared
+	}
+	for _, key := range []string{"data.has_data", "data.has_prior_data"} {
+		out.GoOnlyKeys[key] = GoOnlyKey{Ticket: "CHAOS-8491", Reason: "Go-only: the window holds a stored value for the explained metric; the Python reference never served it."}
+	}
+	return out
+}
+
+// The same two shapes through the REAL options of the explain route, where the
+// percent is a float leaf with a tolerance (so the comparator's float branch
+// makes the finding): a value-driven difference of the explained metric's
+// percent and of a driver's is covered beside two windows that hold a value,
+// and beside a missing window only as a number against null. The reference's
+// body has no flags, as a recorded answer has none.
+func TestExplainParity_APercentDifferenceIsCoveredOnlyInItsTwoShapes(t *testing.T) {
+	body := func(pct, flags, driverPct, driverFlags string) string {
+		with := func(f string) string {
+			if f == "" {
+				return ""
+			}
+			return "," + f
+		}
+		return fmt.Sprintf(`{"metric":"cycle_time","label":"Cycle Time","unit":"hours","value":41.5,"delta_pct":%s%s,`+
+			`"drivers":[{"id":"r1","label":"r1","value":7.25,"delta_pct":%s,"evidence_link":"","display_name":null%s}],"contributors":[],"drilldown_links":{}}`,
+			pct, with(flags), driverPct, with(driverFlags))
+	}
+	for _, c := range []struct {
+		name                string
+		baseline, candidate string
+		wantOutside         int
+	}{
+		{"the metric: two numbers beside two full windows", body("-86.16", "", "4.0", ""), body("12.5", flagsBoth, "4.0", flagsBoth), 0},
+		{"the metric: a number against null beside no comparison window", body("-86.16", "", "4.0", ""), body("null", flagsNoPrior, "4.0", flagsBoth), 0},
+		{"the metric: a number against null beside two full windows", body("-86.16", "", "4.0", ""), body("null", flagsBoth, "4.0", flagsBoth), 1},
+		{"the metric: two numbers beside no comparison window", body("-86.16", "", "4.0", ""), body("12.5", flagsNoPrior, "4.0", flagsBoth), 1},
+		{"a driver: two numbers beside two full windows", body("5.0", "", "-30.0", ""), body("5.0", flagsBoth, "9.75", flagsBoth), 0},
+		{"a driver: a number against null beside no comparison row", body("5.0", "", "-30.0", ""), body("5.0", flagsBoth, "null", flagsNoPrior), 0},
+		{"a driver: two numbers beside no comparison row", body("5.0", "", "-30.0", ""), body("5.0", flagsBoth, "9.75", flagsNoPrior), 1},
+		{"a driver: a number against null beside two full windows", body("5.0", "", "-30.0", ""), body("5.0", flagsBoth, "null", flagsBoth), 1},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			result := Compare(explainRESTSnapshot(t, c.baseline), explainRESTSnapshot(t, c.candidate), explainWithMetricFlags(explainParity))
+			if result.DifferencesOutsideBaselineDefect != c.wantOutside {
+				t.Fatalf("outside = %d, want %d -- findings %+v", result.DifferencesOutsideBaselineDefect, c.wantOutside, result.Findings)
+			}
+		})
+	}
+}

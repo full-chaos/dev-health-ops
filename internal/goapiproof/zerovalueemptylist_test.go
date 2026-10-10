@@ -185,18 +185,9 @@ func TestZeroValueEmptyListShape_RealBlockedWorkCaptureAdmitted(t *testing.T) {
 	const capturedCandidate = `{"metric":"blocked_work","label":"Blocked Work","unit":"hours","value":0,"delta_pct":0,"drivers":[],"contributors":[],"drilldown_links":{"issues":"/api/v1/drilldown/issues?metric=blocked_work","prs":"/api/v1/drilldown/prs?metric=blocked_work"}}`
 	baseline := explainRESTSnapshot(t, capturedBaseline)
 
-	// The explain answer's own has_data / has_prior_data are keys the recorded
-	// reference never had. explainParity does not declare them (it declares the
-	// flags of a driver and of a contributor); this test adds the declaration
-	// for the two keys so that the only question it asks is the percent's.
-	withMetricFlags := explainParity
-	withMetricFlags.GoOnlyKeys = map[string]GoOnlyKey{}
-	for key, declared := range explainParity.GoOnlyKeys {
-		withMetricFlags.GoOnlyKeys[key] = declared
-	}
-	for _, key := range []string{"data.has_data", "data.has_prior_data"} {
-		withMetricFlags.GoOnlyKeys[key] = GoOnlyKey{Ticket: "CHAOS-8491", Reason: "Go-only: the window holds a stored value for the explained metric; the Python reference never served it."}
-	}
+	// explainWithMetricFlags declares the explain answer's own two flags, which
+	// the recorded reference never had, so that the only question is the percent's.
+	withMetricFlags := explainWithMetricFlags(explainParity)
 
 	// What the candidate serves for that state now: no stored value in the
 	// window (has_data false), so the percent is null. The value and the two

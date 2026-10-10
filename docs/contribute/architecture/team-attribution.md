@@ -1849,6 +1849,8 @@ rule, `PlanOwnershipSnapshot` (a repo full name stands in for the project id). S
   listing failed fails the whole run (nothing is written, nothing is closed). A run that listed no team, and a run that
   did not select teams (members-only), closes nothing: "the measurement did not happen" is never read as "GitHub returned
   nothing". A team that is listed with an empty repo list is a real, complete answer, and its rows close.
+- a team that GitHub no longer lists (deleted, or hidden from the credential) is a DROPPED team: its open rows close
+  under the rule "A team that is no longer listed" below (CHAOS-9102).
 - a failed read of the open rows fails the run before the ownership write. It does not fail the run before every write: the
   catalog collector writes the team rows (and the other rows it selected) earlier in the same run, and only the
   `team_repo_ownership` write waits for the read.
@@ -1868,8 +1870,8 @@ is the project id); only the open-row read and the listed-team set are GitLab's.
   project id.
 - only the teams whose group `/projects` listing was read to a confirmed end in this run
   (`GitLabTeamCatalogRows.OwnershipListedTeamIDs`: the root group and every subgroup of the walk, less the close gate's
-  exclusions below). A group that GitLab no longer lists (a deleted subgroup) is not listed,
-  so its rows stay open: closing a deleted group is out of scope, as for GitHub. A group listed with no project is a
+  exclusions below). A group that GitLab no longer lists (a deleted subgroup) is a DROPPED team: its open rows close
+  under the rule "A team that is no longer listed" below (CHAOS-9102). A group listed with no project is a
   real, complete answer, and its rows close. A project held by a group and by its subgroup is closed only where the
   listing dropped it.
 - a failed listing closes nothing: under non-strict the whole walk is skipped (no write at all), under strict the run
@@ -1914,7 +1916,38 @@ when both of these hold; otherwise that scope closes nothing (its grants are sti
   census read (`scope_census_failed`), no census, or a run with no integration id (`scope_census_unavailable`: the
   `dho sync teams` CLI verb, whose collectors carry no census) closes nothing; the CLI shows only the WARN line.
 
+**A team that is no longer listed (CHAOS-9102).** The GitHub, GitLab and Linear catalog writers do not deactivate a team
+the provider stops listing (only Atlassian Teams does, and its close of a deleted team's memberships and links is its own
+kind; the Jira catalog has no team of its own), so the team's `teams` row stays active and no reader's inactive-team rule
+hides it. Before CHAOS-9102 the gate read the open rows of the LISTED teams only, so the open ownership and membership
+rows of such a team kept owning repositories, projects and members for ever. The gate now also takes the DROPPED teams of
+the close: the teams that hold an open row of the close's table, `provider` and `source` (GitHub ownership: under the run's
+`<github org>/` repository prefix; GitLab: under the run's root group, team ids starting `gl:<root>/`; memberships: the
+provider's team ids) and that the run's TEAM LISTING does not return (`TeamListingEvidence`: GitHub `GET /orgs/{org}/teams`,
+GitLab the root group's subgroups, Linear the workspace's teams). A dropped team's open rows close only when ALL of these hold:
+1. the same scope proof as every close: no other active integration of the provider in the organization;
+2. the team listing came in whole: its end proven (`ownershipListingProvesEnd`), and at least one team in it (a listing
+   with no team is more often an access change than an empty organization: reasons `team_listing_incomplete` and
+   `no_team_listed`);
+3. the team is proven GONE: the team listing was ONE response (nothing can move inside one response), or the provider's
+   own answer for that one team says so: GitHub `GET /orgs/{org}/teams/{slug}` answers its own 404 (`Not Found`, the
+   body GitHub documents), GitLab `GET /groups/:id` (the full path) answers its own 404 (`404 Group Not Found`). A
+   listing read by page number or offset loses a team that still exists when another team is removed between two
+   requests, so for a listing of more than one response the absence is a CANDIDATE until the provider answers. For a
+   cursor walk (Linear) the end of the walk is the kind's written statement (`AbsenceWalkByCursor`), as for the team-key
+   ownership kind, until its own prover (CHAOS-9124).
+A 200 (the listing lost the team: reason `team_absent_from_listing_still_there`), an answer for another slug or path (a
+renamed team), a 404 with another body (a gateway), a 401/403/429/5xx, a failed read and a candidate past the run's
+budget (`TeamAbsenceLookupBudget` = 100 per run, one answer per team for ALL closes of the run) close nothing and are
+counted in a degraded leg (`leg = team_absence`) and one log line `team_catalog_dropped_teams` (counts only: no team id).
+A member of a team proven gone is proven gone with it, without a lookup of its own (`teamGoneAbsence`); the writer's own
+rules (a row newer than the run's read stays open) still apply. A team that comes back is a new fact on a new
+`valid_from`. Not done here: the dropped team's `teams` row is NOT deactivated (its `members` and `repo_patterns` columns
+keep the last roster and repositories the provider gave).
+
 Tests: `TestDecideOwnershipCloseClosesOnlyProvenListingsOfAnUnsharedScope` (the gate),
+`TestDroppedTeamsAreDecidedByTheListingTheScopeAndTheProviderAnswer` and the `...ThatIsNoLongerListed...` tests of
+`dropped_team_close_integration_test.go` (the providers),
 `TestGitLabPaginationEndProvenOnlyWhenXNextPageIsSentEmpty`,
 `TestGitHubLinkPaginationEndProvenOnlyWhenTheWalkersLinkReadingFindsNoNext` and
 `TestGitHubLinkPaginationEndNotProvenWhenACallerBoundStopsTheWalk` (the end signal and the page decode), the provider

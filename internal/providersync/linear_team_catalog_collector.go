@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
+	"github.com/full-chaos/dev-health-ops/internal/teamid"
 )
 
 // LinearTeamCatalogCollector adapts LinearReferenceCatalogRouteHandler
@@ -176,13 +177,28 @@ func (collector LinearTeamCatalogCollector) CollectTeamCatalog(
 		if !batch.Evidence.MembersComplete {
 			unprovenTeamIDs = teamIDs
 		}
+		// A team that holds open memberships and that the workspace's team walk
+		// no longer returns is a dropped team (CHAOS-9102): its memberships close
+		// when the team walk reached its end (the cursor walk's statement, as for
+		// the team-key ownership kind).
+		teamListing := TeamListingEvidence{
+			TeamIDPrefix: teamid.Prefix("linear"), Listed: teamIDs,
+			ProvesEnd: batch.Evidence.TeamsComplete, Cursor: true,
+		}
+		droppedTeams, err := openMembershipTeamIDsNotListed(
+			ctx, collector.Sink.Conn, ref.OrgID, linearMembershipWriter.Provider, linearMembershipWriter.Source,
+			teamListing.TeamIDPrefix, teamListing.Listed)
+		if err != nil {
+			return result, err
+		}
 		decision := decideOwnershipClose(ctx, collector.ScopeCensus, ownershipCloseRequest{
 			ref: ref, provider: "linear", listed: teamIDs, unproven: unprovenTeamIDs,
 			dataset: "team_memberships", leg: membershipCloseLeg,
+			dropped: droppedTeams, teamListing: teamListing,
 		})
 		membershipRows, membershipOutcome, err := linearMembershipWriter.Snapshot(
 			ctx, collector.Sink.Conn, ref.OrgID, batch.Rows.Memberships, keptMemberships, normalizedAt.UTC().Truncate(time.Millisecond),
-			linearInactiveAbsence{inactive: batch.Rows.InactiveMemberKeys}, decision.membershipSnapshot(LinearTeamMembershipKind))
+			decision.membershipProver(linearInactiveAbsence{inactive: batch.Rows.InactiveMemberKeys}), decision.membershipSnapshot(LinearTeamMembershipKind))
 		if err != nil {
 			return result, err
 		}

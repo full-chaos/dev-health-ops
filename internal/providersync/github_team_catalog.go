@@ -205,6 +205,11 @@ type githubTeamCatalogRows struct {
 	// listing of more than one response does not hold is a candidate, not a
 	// proven removal (ownershipCloseRequest.responses).
 	RepoListingResponses map[string]int
+	// TeamListing is what the walk of the organization's teams proved (CHAOS-9102):
+	// every team it returned, whatever else the run read of the team, and whether
+	// it came in whole. A team with open rows that it does not return is a
+	// dropped team (team_absence.go).
+	TeamListing TeamListingEvidence
 }
 
 // githubTeamID is the team id of a GitHub team slug ("gh:<slug>", see

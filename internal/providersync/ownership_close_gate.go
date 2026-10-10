@@ -97,6 +97,14 @@ type ownershipCloseRequest struct {
 	// dataset and leg name the degraded leg of a skipped close; empty means the
 	// ownership close. The membership close (CHAOS-9079) goes through this one gate.
 	dataset, leg string
+	// dropped is every team that holds an open row of this close and that the
+	// run's team listing does not return (CHAOS-9102); teamListing says what
+	// that listing proved and teamLookups gives the provider's own answer for
+	// one team. A dropped team closes only when its absence is proven; with no
+	// teamListing stated nothing of it closes.
+	dropped     []string
+	teamListing TeamListingEvidence
+	teamLookups *AbsenceLookups[TeamSnapshotRow]
 }
 
 type ownershipCloseDecision struct {
@@ -112,6 +120,9 @@ type ownershipCloseDecision struct {
 	scope ScopeProof
 	// responses is the number of responses each team's listing took.
 	responses map[string]int
+	// gone is the part of the dropped teams the gate proved gone: their open
+	// rows close, and read and closable hold them.
+	gone map[string]bool
 }
 
 // decideOwnershipClose is the one gate in front of every provider_access
@@ -124,7 +135,7 @@ type ownershipCloseDecision struct {
 // the result, never silent.
 func decideOwnershipClose(ctx context.Context, census OwnershipScopeCensus, request ownershipCloseRequest) ownershipCloseDecision {
 	decision := ownershipCloseDecision{read: request.listed, responses: request.responses}
-	if len(request.listed) == 0 {
+	if len(request.listed) == 0 && len(request.dropped) == 0 {
 		return decision
 	}
 	unproven := make(map[string]bool, len(request.unproven))
@@ -155,9 +166,24 @@ func decideOwnershipClose(ctx context.Context, census OwnershipScopeCensus, requ
 	if unprovenListed > 0 {
 		skip(OwnershipCloseSkippedListingIncomplete, strconv.Itoa(unprovenListed)+" team listings without a confirmed end")
 	}
+	// A dropped team needs the team listing to have come in whole: its end
+	// proven, and at least one team in it (a listing with no team is more often
+	// an access change than an empty organization, the same rule as every kind
+	// whose empty answer closes nothing).
+	droppedMayClose := len(request.dropped) > 0
+	if droppedMayClose {
+		switch {
+		case !request.teamListing.ProvesEnd:
+			skip(OwnershipCloseSkippedTeamListingIncomplete, strconv.Itoa(len(request.dropped))+" teams with open rows, the team listing has no confirmed end")
+			droppedMayClose = false
+		case len(request.teamListing.Listed) == 0:
+			skip(OwnershipCloseSkippedNoTeamListed, strconv.Itoa(len(request.dropped))+" teams with open rows, the team listing returned no team")
+			droppedMayClose = false
+		}
+	}
 	var siblingsSharing int
 	censusError := ""
-	if len(decision.closable) > 0 {
+	if len(decision.closable) > 0 || droppedMayClose {
 		decision.scope, siblingsSharing, censusError = proveSoleScope(ctx, census, request.ref.OrgID, request.provider, request.ref.IntegrationID)
 		for _, reason := range decision.scope.Missing() {
 			detail := "no integration census for this run"
@@ -171,16 +197,81 @@ func decideOwnershipClose(ctx context.Context, census OwnershipScopeCensus, requ
 		}
 		if !decision.scope.Proven() {
 			decision.closable = nil
+			droppedMayClose = false
 		}
+	}
+	if droppedMayClose {
+		decision.decideDroppedTeams(ctx, request, dataset)
 	}
 	if len(reasons) > 0 {
 		slog.Default().WarnContext(ctx, "ownership_close_skipped",
 			"org_id", request.ref.OrgID, "provider", request.provider, "dataset", dataset, "reasons", strings.Join(reasons, ","),
-			"teams_listed", len(request.listed), "teams_unproven", unprovenListed,
+			"teams_listed", len(request.listed), "teams_unproven", unprovenListed, "teams_dropped", len(request.dropped),
 			"teams_closable", len(decision.closable), "integrations_sharing_scope", siblingsSharing,
 			"error", censusError)
 	}
 	return decision
+}
+
+// teamAbsenceVerdict is what a run proved for ONE dropped team: gone, still
+// there (the listing lost it), over the lookup budget, or not proven.
+func teamAbsenceVerdict(ctx context.Context, request ownershipCloseRequest, teamID string) SnapshotAbsence {
+	listing := request.teamListing
+	if listing.Cursor || listing.Responses == 1 {
+		return SnapshotAbsenceProven
+	}
+	if request.teamLookups == nil {
+		return SnapshotAbsenceNotProven
+	}
+	return request.teamLookups.Answer(TeamSnapshotRow{TeamID: teamID})
+}
+
+// decideDroppedTeams decides every dropped team of the request once the team
+// listing and the scope are proven: the teams proved gone join read and
+// closable, and every other one stays open and is counted by reason, in a leg
+// and in one log line (counts, no ids).
+func (decision *ownershipCloseDecision) decideDroppedTeams(ctx context.Context, request ownershipCloseRequest, dataset string) {
+	var notProven, overBudget, stillThere int
+	for _, teamID := range request.dropped {
+		switch teamAbsenceVerdict(ctx, request, teamID) {
+		case SnapshotAbsenceProven:
+			if decision.gone == nil {
+				decision.gone = map[string]bool{}
+			}
+			decision.gone[teamID] = true
+			decision.read = append(decision.read, teamID)
+			decision.closable = append(decision.closable, teamID)
+		case SnapshotFactStillHeld:
+			stillThere++
+		case SnapshotAbsenceOverBudget:
+			overBudget++
+		default:
+			notProven++
+		}
+	}
+	decision.proven += len(decision.gone)
+	for _, part := range []struct {
+		count  int
+		reason string
+	}{
+		{notProven, TeamAbsenceNotProven}, {overBudget, TeamAbsenceOverBudget}, {stillThere, TeamAbsenceStillThere},
+	} {
+		if part.count > 0 {
+			decision.legs = append(decision.legs, DegradedLeg{
+				Dataset: dataset, Leg: teamAbsenceLeg, Outcome: "skipped", Reason: part.reason,
+				Detail: strconv.Itoa(part.count) + " dropped teams kept open",
+			})
+		}
+	}
+	level := slog.LevelInfo
+	if notProven+overBudget+stillThere > 0 {
+		level = slog.LevelWarn
+	}
+	slog.Default().Log(ctx, level, "team_catalog_dropped_teams",
+		"org_id", request.ref.OrgID, "provider", request.provider, "dataset", dataset,
+		"teams_dropped", len(request.dropped), "teams_gone", len(decision.gone), "teams_still_there", stillThere,
+		"teams_not_proven", notProven, "teams_over_budget", overBudget,
+		"listing_responses", request.teamListing.Responses, "listing_by_cursor", request.teamListing.Cursor)
 }
 
 // snapshot is the grant kind of the closable teams (kind makes it from the
@@ -199,10 +290,23 @@ func (decision ownershipCloseDecision) snapshot(
 	walks := func(row OwnershipSnapshotRow) []ListWalk {
 		return []ListWalk{{Name: walk, Responses: decision.responses[row.TeamID]}}
 	}
+	// The held set of a dropped team's grant is fed by the team listing that did
+	// not return the team, not by a listing of the team's own (it was never read):
+	// the gate decided that absence (one response, the provider's own answer for
+	// the team, or the cursor statement), so its grants are proven gone with it.
+	goneAnswer := func(row OwnershipSnapshotRow) SnapshotAbsence {
+		if decision.gone[row.TeamID] {
+			return SnapshotAbsenceProven
+		}
+		if answer == nil {
+			return SnapshotAbsenceNotProven
+		}
+		return answer(row)
+	}
 	return kind(decision.closable).Snapshot(decision.scope, ProveSnapshot(
 		SnapshotTerm{Holds: len(decision.read) > 0, Reason: OwnershipCloseSkippedNoTeamListed},
 		SnapshotTerm{Holds: len(decision.read) == 0 || decision.proven > 0, Reason: OwnershipCloseSkippedListingIncomplete},
-	), AbsenceByListing(walks, answer))
+	), AbsenceByListing(walks, goneAnswer))
 }
 
 // OwnershipAbsenceProver gives the provider's own answer for ONE ownership
@@ -275,4 +379,14 @@ func (decision ownershipCloseDecision) membershipSnapshot(kind func(closable []s
 		SnapshotTerm{Holds: len(decision.read) > 0, Reason: OwnershipCloseSkippedNoTeamListed},
 		SnapshotTerm{Holds: len(decision.read) == 0 || decision.proven > 0, Reason: OwnershipCloseSkippedListingIncomplete},
 	), AbsenceByCloseWriter[MembershipSnapshotRow]())
+}
+
+// membershipProver is the member proof of a close that holds dropped teams: a
+// member of a team proved gone is proven gone with it, and a member of any
+// other team is asked of inner (nil: the writer's own list rule).
+func (decision ownershipCloseDecision) membershipProver(inner MembershipAbsenceProver) MembershipAbsenceProver {
+	if len(decision.gone) == 0 {
+		return inner
+	}
+	return teamGoneAbsence{gone: decision.gone, inner: inner}
 }

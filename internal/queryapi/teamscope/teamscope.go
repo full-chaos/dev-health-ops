@@ -184,3 +184,25 @@ func NarrowRepoScope(named bool, explicitSQL string, explicitBindings []dhclickh
 		return "", nil
 	}
 }
+
+// NamedRepoRefs is the one place that says which repositories a request names
+// (CHAOS-9093, D5855): the ids of a repo-level scope plus what.repos, WITHOUT the
+// empty strings. An empty string is not a repository name: the REST decoders drop
+// it, so the GraphQL answer must too, and a list of only empty strings names no
+// repository (the request is not filtered by one).
+func NamedRepoRefs(scopeLevel string, scopeIDs, whatRepos []string) []string {
+	var refs []string
+	if scopeLevel == "repo" {
+		for _, id := range scopeIDs {
+			if id != "" {
+				refs = append(refs, id)
+			}
+		}
+	}
+	for _, repo := range whatRepos {
+		if repo != "" {
+			refs = append(refs, repo)
+		}
+	}
+	return refs
+}

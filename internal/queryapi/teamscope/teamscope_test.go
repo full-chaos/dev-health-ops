@@ -258,3 +258,32 @@ func TestNarrowRepoScope(t *testing.T) {
 		}
 	}
 }
+
+// D5855: an empty string is not a repository name; a list of only empty strings
+// names no repository.
+func TestNamedRepoRefsDropsEmptyStrings(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		level string
+		ids   []string
+		repos []string
+		want  []string
+	}{
+		{"nothing", "", nil, nil, nil},
+		{"only empty strings in what.repos", "", nil, []string{""}, nil},
+		{"only empty strings in a repo scope", "repo", []string{"", ""}, nil, nil},
+		{"empty strings among names", "repo", []string{"", "a"}, []string{"b", ""}, []string{"a", "b"}},
+		{"a team scope's ids are not repositories", "team", []string{"t1"}, []string{""}, nil},
+	} {
+		got := NamedRepoRefs(tc.level, tc.ids, tc.repos)
+		if len(got) != len(tc.want) {
+			t.Errorf("%s: %v, want %v", tc.name, got, tc.want)
+			continue
+		}
+		for i := range got {
+			if got[i] != tc.want[i] {
+				t.Errorf("%s: %v, want %v", tc.name, got, tc.want)
+			}
+		}
+	}
+}

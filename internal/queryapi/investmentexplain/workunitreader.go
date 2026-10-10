@@ -3,6 +3,7 @@ package investmentexplain
 import (
 	"context"
 	"fmt"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
 	"time"
 
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
@@ -103,9 +104,11 @@ type WorkUnitInvestmentsFilter struct {
 	EndTS              time.Time
 	RepoIDs            []string
 	TeamScopeCondition string
-	TeamScopeBindings  []dhclickhouse.Binding
-	Limit              int
-	WorkUnitID         string
+	// ReposNamed: see BreakdownFilters.ReposNamed.
+	ReposNamed        bool
+	TeamScopeBindings []dhclickhouse.Binding
+	Limit             int
+	WorkUnitID        string
 }
 
 // FetchWorkUnitInvestments ports fetch_work_unit_investments
@@ -125,18 +128,11 @@ func (reader *Reader) FetchWorkUnitInvestments(ctx context.Context, filter WorkU
 		explicitCondition = "work_unit_investments.repo_id IN {repo_ids:Array(String)}"
 		explicitBindings = []dhclickhouse.Binding{{Name: "repo_ids", Value: dedupeStrings(filter.RepoIDs)}}
 	}
-	switch {
-	case explicitCondition != "" && filter.TeamScopeCondition != "":
-		scopeSQL = " AND (" + explicitCondition + " OR " + filter.TeamScopeCondition + ")"
-		scopeBindings = append(scopeBindings, explicitBindings...)
-		scopeBindings = append(scopeBindings, filter.TeamScopeBindings...)
-	case explicitCondition != "":
-		scopeSQL = " AND " + explicitCondition
-		scopeBindings = append(scopeBindings, explicitBindings...)
-	case filter.TeamScopeCondition != "":
-		scopeSQL = " AND " + filter.TeamScopeCondition
-		scopeBindings = append(scopeBindings, filter.TeamScopeBindings...)
+	explicitSQL := ""
+	if explicitCondition != "" {
+		explicitSQL = " AND " + explicitCondition
 	}
+	scopeSQL, scopeBindings = teamscope.NarrowRepoScope(filter.ReposNamed, explicitSQL, explicitBindings, filter.TeamScopeCondition, filter.TeamScopeBindings)
 	var workUnitSQL string
 	if filter.WorkUnitID != "" {
 		workUnitSQL = " AND work_unit_investments.work_unit_id = {work_unit_id:String}"

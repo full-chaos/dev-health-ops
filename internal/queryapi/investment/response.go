@@ -184,7 +184,9 @@ func BuildResponse(ctx context.Context, reader *Reader, orgID string, params Par
 	themes, subcategories := splitCategoryFilters(params.WorkCategory)
 
 	var repoIDs []string
-	if params.ScopeLevel == "team" || params.ScopeLevel == "repo" {
+	reposNamed := false
+	reposNamed = len(teamscope.NamedRepoRefs(params.ScopeLevel, params.ScopeIDs, params.WhatRepos)) > 0
+	if teamscope.RepoScopeApplies(params.ScopeLevel, reposNamed) {
 		var err error
 		repoIDs, err = reader.ResolveRepoFilterIDs(ctx, params.ScopeLevel, params.ScopeIDs, params.WhatRepos, orgID)
 		if err != nil {
@@ -199,7 +201,7 @@ func BuildResponse(ctx context.Context, reader *Reader, orgID string, params Par
 
 	breakdownFilters := investmentexplain.BreakdownFilters{
 		OrgID: orgID, StartTS: params.StartTS, EndTS: params.EndTS,
-		RepoIDs: repoIDs, TeamScopeCondition: teamCondition, TeamScopeBindings: teamBindings,
+		RepoIDs: repoIDs, ReposNamed: reposNamed, TeamScopeCondition: teamCondition, TeamScopeBindings: teamBindings,
 		Themes: themes, Subcategories: subcategories,
 	}
 	rows, err := reader.explainR.FetchInvestmentBreakdown(ctx, breakdownFilters)
@@ -215,7 +217,7 @@ func BuildResponse(ctx context.Context, reader *Reader, orgID string, params Par
 
 	qualityRow, found, err := reader.FetchInvestmentQualityStats(ctx, QualityStatsFilters{
 		OrgID: orgID, StartTS: params.StartTS, EndTS: params.EndTS,
-		RepoIDs: repoIDs, TeamScopeCondition: teamCondition, TeamScopeBindings: teamBindings,
+		RepoIDs: repoIDs, ReposNamed: reposNamed, TeamScopeCondition: teamCondition, TeamScopeBindings: teamBindings,
 		Themes: themes, Subcategories: subcategories,
 	})
 	if err != nil {
@@ -293,7 +295,9 @@ func BuildSunburstResponse(ctx context.Context, reader *Reader, orgID string, pa
 	themes, subcategories := splitCategoryFilters(params.WorkCategory)
 
 	var repoIDs []string
-	if params.ScopeLevel == "team" || params.ScopeLevel == "repo" {
+	reposNamed := false
+	reposNamed = len(teamscope.NamedRepoRefs(params.ScopeLevel, params.ScopeIDs, params.WhatRepos)) > 0
+	if teamscope.RepoScopeApplies(params.ScopeLevel, reposNamed) {
 		var err error
 		repoIDs, err = reader.ResolveRepoFilterIDs(ctx, params.ScopeLevel, params.ScopeIDs, params.WhatRepos, orgID)
 		if err != nil {
@@ -308,7 +312,7 @@ func BuildSunburstResponse(ctx context.Context, reader *Reader, orgID string, pa
 
 	mockFilters := investmentexplain.BreakdownFilters{
 		OrgID: orgID, StartTS: params.StartTS, EndTS: params.EndTS,
-		RepoIDs: repoIDs, TeamScopeCondition: teamCondition, TeamScopeBindings: teamBindings,
+		RepoIDs: repoIDs, ReposNamed: reposNamed, TeamScopeCondition: teamCondition, TeamScopeBindings: teamBindings,
 		Themes: themes, Subcategories: subcategories,
 	}
 	mockCount, err := reader.explainR.FetchMockFixtureInvestmentRowCount(ctx, mockFilters)
@@ -319,7 +323,7 @@ func BuildSunburstResponse(ctx context.Context, reader *Reader, orgID string, pa
 
 	rows, err := reader.FetchInvestmentSunburst(ctx, SunburstFilters{
 		OrgID: orgID, StartTS: params.StartTS, EndTS: params.EndTS,
-		RepoIDs: repoIDs, TeamScopeCondition: teamCondition, TeamScopeBindings: teamBindings,
+		RepoIDs: repoIDs, ReposNamed: reposNamed, TeamScopeCondition: teamCondition, TeamScopeBindings: teamBindings,
 		Themes: themes, Subcategories: subcategories, Limit: params.Limit,
 	})
 	if err != nil {

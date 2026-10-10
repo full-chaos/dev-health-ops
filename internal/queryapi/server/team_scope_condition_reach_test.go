@@ -47,6 +47,9 @@ const (
 // runs before it reads anything: those decide whether the route continues at
 // all, so they echo their own bound values back and let it.
 type teamScopeReachClient struct {
+	// knownRepo, when set, is the repository id any repository-reference lookup
+	// (a statement over the repos table) resolves to; empty = nothing resolves.
+	knownRepo  string
 	mu         sync.Mutex
 	statements []string
 	bindings   [][]dhclickhouse.Binding
@@ -63,6 +66,9 @@ func (c *teamScopeReachClient) Query(_ context.Context, statement string, bindin
 		return &teamScopeReachRows{values: append(bindingStringValues(bindings, "table"), bindingStringValues(bindings, "tables")...)}, nil
 	case strings.Contains(statement, "FROM system.columns"):
 		return &teamScopeReachRows{values: append(bindingStringValues(bindings, "column"), bindingStringValues(bindings, "columns")...)}, nil
+	}
+	if c.knownRepo != "" && strings.Contains(statement, "FROM repos") && !strings.Contains(statement, "FROM repos AS") {
+		return &teamScopeReachRows{values: []string{c.knownRepo}}, nil
 	}
 	return &teamScopeReachRows{}, nil
 }
@@ -157,16 +163,16 @@ func (r *teamScopeReachRows) Close() error { return nil }
 // scope. A new one belongs in this table.
 func teamScopeConsumers() []struct {
 	route string
-	drive func(t *testing.T, client *teamScopeReachClient, scopeLevel string, scopeIDs []string)
+	drive func(t *testing.T, client *teamScopeReachClient, scopeLevel string, scopeIDs, whatRepos []string)
 } {
 	start := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
 	end := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
 
 	return []struct {
 		route string
-		drive func(t *testing.T, client *teamScopeReachClient, scopeLevel string, scopeIDs []string)
+		drive func(t *testing.T, client *teamScopeReachClient, scopeLevel string, scopeIDs, whatRepos []string)
 	}{
-		{"GET /api/v1/work-units", func(t *testing.T, client *teamScopeReachClient, scopeLevel string, scopeIDs []string) {
+		{"GET /api/v1/work-units", func(t *testing.T, client *teamScopeReachClient, scopeLevel string, scopeIDs, whatRepos []string) {
 			reader, err := investmentexplain.NewReader(client)
 			if err != nil {
 				t.Fatalf("investmentexplain.NewReader: %v", err)
@@ -179,13 +185,13 @@ func teamScopeConsumers() []struct {
 			request = request.WithContext(authctx.WithClaims(request.Context(), authctx.Claims{OrgID: teamScopeReachOrgID}))
 			newWorkUnitsGetHandler(reader)(httptest.NewRecorder(), request)
 		}},
-		{"POST /api/v1/work-units", func(t *testing.T, client *teamScopeReachClient, scopeLevel string, scopeIDs []string) {
+		{"POST /api/v1/work-units", func(t *testing.T, client *teamScopeReachClient, scopeLevel string, scopeIDs, whatRepos []string) {
 			reader, err := investmentexplain.NewReader(client)
 			if err != nil {
 				t.Fatalf("investmentexplain.NewReader: %v", err)
 			}
 			body, err := json.Marshal(map[string]any{
-				"filters": map[string]any{"scope": map[string]any{"level": scopeLevel, "ids": scopeIDs}},
+				"filters": map[string]any{"scope": map[string]any{"level": scopeLevel, "ids": scopeIDs}, "what": map[string]any{"repos": whatRepos}},
 			})
 			if err != nil {
 				t.Fatalf("marshal body: %v", err)
@@ -194,7 +200,7 @@ func teamScopeConsumers() []struct {
 			request = request.WithContext(authctx.WithClaims(request.Context(), authctx.Claims{OrgID: teamScopeReachOrgID}))
 			newWorkUnitsPostHandler(reader)(httptest.NewRecorder(), request)
 		}},
-		{"POST /api/v1/investment/explain", func(t *testing.T, client *teamScopeReachClient, scopeLevel string, scopeIDs []string) {
+		{"POST /api/v1/investment/explain", func(t *testing.T, client *teamScopeReachClient, scopeLevel string, scopeIDs, whatRepos []string) {
 			reader, err := investmentexplain.NewReader(client)
 			if err != nil {
 				t.Fatalf("investmentexplain.NewReader: %v", err)
@@ -206,6 +212,7 @@ func teamScopeConsumers() []struct {
 			// the breakdown read AND the work-unit read behind one response.
 			body := investmentExplainRequestBody{Filters: map[string]any{
 				"scope": map[string]any{"level": scopeLevel, "ids": anyStrings(scopeIDs)},
+				"what":  map[string]any{"repos": anyStrings(whatRepos)},
 			}}
 			opts, err := buildExplainOptions(context.Background(), reader, teamScopeReachOrgID, body, "mock", true)
 			if err != nil {
@@ -217,7 +224,7 @@ func teamScopeConsumers() []struct {
 			_, _ = reader.ExplainInvestmentMix(context.Background(), nil, available,
 				investmentexplain.CompleteInvestmentMixExplanation, opts)
 		}},
-		{"POST /api/v1/work-units/{work_unit_id}/explain", func(t *testing.T, client *teamScopeReachClient, scopeLevel string, scopeIDs []string) {
+		{"POST /api/v1/work-units/{work_unit_id}/explain", func(t *testing.T, client *teamScopeReachClient, scopeLevel string, scopeIDs, whatRepos []string) {
 			reader, err := investmentexplain.NewReader(client)
 			if err != nil {
 				t.Fatalf("investmentexplain.NewReader: %v", err)
@@ -233,19 +240,21 @@ func teamScopeConsumers() []struct {
 			request = request.WithContext(authctx.WithClaims(request.Context(), authctx.Claims{OrgID: teamScopeReachOrgID}))
 			newWorkUnitExplainHandler(reader, nil, nil)(httptest.NewRecorder(), request)
 		}},
-		{"GET/POST /api/v1/opportunities", func(t *testing.T, client *teamScopeReachClient, scopeLevel string, scopeIDs []string) {
+		{"GET/POST /api/v1/opportunities", func(t *testing.T, client *teamScopeReachClient, scopeLevel string, scopeIDs, whatRepos []string) {
 			filters := home.DefaultFilters()
 			filters.Scope.Level = scopeLevel
 			filters.Scope.IDs = scopeIDs
+			filters.What.Repos = whatRepos
 			_, _ = opportunities.BuildResponse(context.Background(), client, teamScopeReachOrgID, filters, end)
 		}},
-		{"GET/POST /api/v1/home", func(t *testing.T, client *teamScopeReachClient, scopeLevel string, scopeIDs []string) {
+		{"GET/POST /api/v1/home", func(t *testing.T, client *teamScopeReachClient, scopeLevel string, scopeIDs, whatRepos []string) {
 			filters := home.DefaultFilters()
 			filters.Scope.Level = scopeLevel
 			filters.Scope.IDs = scopeIDs
+			filters.What.Repos = whatRepos
 			_, _ = home.BuildResponse(context.Background(), client, nil, teamScopeReachOrgID, filters, end)
 		}},
-		{"GET/POST /api/v1/explain", func(t *testing.T, client *teamScopeReachClient, scopeLevel string, scopeIDs []string) {
+		{"GET/POST /api/v1/explain", func(t *testing.T, client *teamScopeReachClient, scopeLevel string, scopeIDs, whatRepos []string) {
 			reader, err := explain.NewReader(client)
 			if err != nil {
 				t.Fatalf("explain.NewReader: %v", err)
@@ -253,10 +262,10 @@ func teamScopeConsumers() []struct {
 			_, _ = explain.BuildExplainResponse(context.Background(), reader, teamScopeReachOrgID, explain.Params{
 				Metric: "review_latency", StartDay: start, EndDay: end,
 				CompareStart: start.AddDate(0, -1, 0), CompareEnd: start,
-				ScopeLevel: scopeLevel, ScopeIDs: scopeIDs,
+				ScopeLevel: scopeLevel, ScopeIDs: scopeIDs, WhatRepos: whatRepos,
 			})
 		}},
-		{"GET /api/v1/heatmap", func(t *testing.T, client *teamScopeReachClient, scopeLevel string, scopeIDs []string) {
+		{"GET /api/v1/heatmap", func(t *testing.T, client *teamScopeReachClient, scopeLevel string, scopeIDs, whatRepos []string) {
 			scopeID := ""
 			if len(scopeIDs) > 0 {
 				scopeID = scopeIDs[0]
@@ -265,50 +274,50 @@ func teamScopeConsumers() []struct {
 				Type: "temporal_load", Metric: "review_wait_density", ScopeType: scopeLevel, ScopeID: scopeID, RangeDays: 30,
 			})
 		}},
-		{"GET/POST /api/v1/sankey", func(t *testing.T, client *teamScopeReachClient, scopeLevel string, scopeIDs []string) {
+		{"GET/POST /api/v1/sankey", func(t *testing.T, client *teamScopeReachClient, scopeLevel string, scopeIDs, whatRepos []string) {
 			_, _ = sankey.BuildResponse(context.Background(), client, teamScopeReachOrgID, sankey.Params{
-				Mode: "investment", ScopeLevel: scopeLevel, ScopeIDs: scopeIDs, StartDay: start, EndDay: end,
+				Mode: "investment", ScopeLevel: scopeLevel, ScopeIDs: scopeIDs, WhatRepos: whatRepos, StartDay: start, EndDay: end,
 			})
 		}},
-		{"POST /api/v1/investment/flow", func(t *testing.T, client *teamScopeReachClient, scopeLevel string, scopeIDs []string) {
+		{"POST /api/v1/investment/flow", func(t *testing.T, client *teamScopeReachClient, scopeLevel string, scopeIDs, whatRepos []string) {
 			_, _ = investmentflow.BuildFlowResponse(context.Background(), client, investmentflow.Params{
 				OrgID: teamScopeReachOrgID, StartTS: start, EndTS: end,
-				ScopeLevel: scopeLevel, ScopeIDs: scopeIDs, TopNRepos: 12,
+				ScopeLevel: scopeLevel, ScopeIDs: scopeIDs, WhatRepos: whatRepos, TopNRepos: 12,
 			})
 		}},
-		{"POST /api/v1/investment/flow/repo-team", func(t *testing.T, client *teamScopeReachClient, scopeLevel string, scopeIDs []string) {
+		{"POST /api/v1/investment/flow/repo-team", func(t *testing.T, client *teamScopeReachClient, scopeLevel string, scopeIDs, whatRepos []string) {
 			_, _ = investmentflow.BuildRepoTeamFlowResponse(context.Background(), client, investmentflow.RepoTeamParams{
 				OrgID: teamScopeReachOrgID, StartTS: start, EndTS: end,
-				ScopeLevel: scopeLevel, ScopeIDs: scopeIDs,
+				ScopeLevel: scopeLevel, ScopeIDs: scopeIDs, WhatRepos: whatRepos,
 			})
 		}},
-		{"GET/POST /api/v1/drilldown/prs", func(t *testing.T, client *teamScopeReachClient, scopeLevel string, scopeIDs []string) {
+		{"GET/POST /api/v1/drilldown/prs", func(t *testing.T, client *teamScopeReachClient, scopeLevel string, scopeIDs, whatRepos []string) {
 			reader, err := drilldown.NewReader(client)
 			if err != nil {
 				t.Fatalf("drilldown.NewReader: %v", err)
 			}
 			_, _ = drilldown.BuildPRsResponse(context.Background(), reader, teamScopeReachOrgID, drilldown.PRParams{
-				StartDay: start, EndDay: end, ScopeLevel: scopeLevel, ScopeIDs: scopeIDs, Limit: 50,
+				StartDay: start, EndDay: end, ScopeLevel: scopeLevel, ScopeIDs: scopeIDs, WhatRepos: whatRepos, Limit: 50,
 			})
 		}},
-		{"GET/POST /api/v1/investment", func(t *testing.T, client *teamScopeReachClient, scopeLevel string, scopeIDs []string) {
+		{"GET/POST /api/v1/investment", func(t *testing.T, client *teamScopeReachClient, scopeLevel string, scopeIDs, whatRepos []string) {
 			reader, err := investment.NewReader(client)
 			if err != nil {
 				t.Fatalf("investment.NewReader: %v", err)
 			}
 			_, _ = investment.BuildResponse(context.Background(), reader, teamScopeReachOrgID, investment.Params{
 				OrgID: teamScopeReachOrgID, StartTS: start, EndTS: end,
-				ScopeLevel: scopeLevel, ScopeIDs: scopeIDs,
+				ScopeLevel: scopeLevel, ScopeIDs: scopeIDs, WhatRepos: whatRepos,
 			})
 		}},
-		{"GET /api/v1/investment/sunburst", func(t *testing.T, client *teamScopeReachClient, scopeLevel string, scopeIDs []string) {
+		{"GET /api/v1/investment/sunburst", func(t *testing.T, client *teamScopeReachClient, scopeLevel string, scopeIDs, whatRepos []string) {
 			reader, err := investment.NewReader(client)
 			if err != nil {
 				t.Fatalf("investment.NewReader: %v", err)
 			}
 			_, _ = investment.BuildSunburstResponse(context.Background(), reader, teamScopeReachOrgID, investment.SunburstParams{
 				OrgID: teamScopeReachOrgID, StartTS: start, EndTS: end,
-				ScopeLevel: scopeLevel, ScopeIDs: scopeIDs, Limit: 100,
+				ScopeLevel: scopeLevel, ScopeIDs: scopeIDs, WhatRepos: whatRepos, Limit: 100,
 			})
 		}},
 	}
@@ -329,7 +338,7 @@ func TestTeamScopeReachesTheSharedCondition(t *testing.T) {
 	for _, consumer := range teamScopeConsumers() {
 		t.Run(consumer.route, func(t *testing.T) {
 			client := &teamScopeReachClient{}
-			consumer.drive(t, client, "team", []string{teamScopeReachTeam})
+			consumer.drive(t, client, "team", []string{teamScopeReachTeam}, nil)
 			if !client.sawCondition() {
 				t.Fatalf("%s emitted no statement carrying the shared team-ownership condition with its %s/%s/%s bindings -- a team-scoped request that skips it answers over the whole organization.\nstatements: %v",
 					consumer.route, teamscope.BindingOrgID, teamscope.BindingTeamIDs, teamscope.BindingAsOf, client.statements)
@@ -345,7 +354,7 @@ func TestOrgScopeCarriesNoTeamCondition(t *testing.T) {
 	for _, consumer := range teamScopeConsumers() {
 		t.Run(consumer.route, func(t *testing.T) {
 			client := &teamScopeReachClient{}
-			consumer.drive(t, client, "org", nil)
+			consumer.drive(t, client, "org", nil, nil)
 			if client.sawAnyConditionTrace() {
 				t.Fatalf("%s carried the team-ownership condition (or one of its bindings) for an ORG-scoped request:\nstatements: %v",
 					consumer.route, client.statements)

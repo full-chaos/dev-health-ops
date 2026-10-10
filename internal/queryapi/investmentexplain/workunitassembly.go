@@ -77,6 +77,8 @@ type BuildWorkUnitInvestmentsOptions struct {
 	EndTS              time.Time
 	RepoIDs            []string
 	TeamScopeCondition string
+	// ReposNamed: see BreakdownFilters.ReposNamed.
+	ReposNamed         bool
 	TeamScopeBindings  []dhclickhouse.Binding
 	Limit              int
 	IncludeText        bool
@@ -127,6 +129,7 @@ func (reader *Reader) BuildWorkUnitInvestments(ctx context.Context, opts BuildWo
 		StartTS:            opts.StartTS,
 		EndTS:              opts.EndTS,
 		RepoIDs:            opts.RepoIDs,
+		ReposNamed:         opts.ReposNamed,
 		TeamScopeCondition: opts.TeamScopeCondition,
 		TeamScopeBindings:  opts.TeamScopeBindings,
 		Limit:              limit,

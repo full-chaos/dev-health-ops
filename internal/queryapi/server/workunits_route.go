@@ -475,6 +475,7 @@ func newWorkUnitsGetHandler(reader *investmentexplain.Reader) http.HandlerFunc {
 
 		// _filters_from_query never populates what.repos for the GET route
 		// (no query param for it), matching drilldown_prs' own GET handler.
+		reposNamed := len(teamscope.NamedRepoRefs(scopeType, scopeIDs, nil)) > 0
 		repoIDs, err := reader.ResolveRepoFilterIDs(r.Context(), scopeType, scopeIDs, nil, claims.OrgID)
 		if err != nil {
 			writeRESTDataUnavailable(w, r, "work_units", claims.OrgID, err)
@@ -491,6 +492,7 @@ func newWorkUnitsGetHandler(reader *investmentexplain.Reader) http.HandlerFunc {
 			StartTS:            startTS,
 			EndTS:              endTS,
 			RepoIDs:            repoIDs,
+			ReposNamed:         reposNamed,
 			TeamScopeCondition: teamCondition,
 			TeamScopeBindings:  teamBindings,
 			Limit:              boundedWorkUnitsLimit(limit),
@@ -637,7 +639,7 @@ func newWorkUnitsPostHandler(reader *investmentexplain.Reader) http.HandlerFunc 
 		// scopeRepoFilter (investment_explain_route.go) already ports
 		// resolve_repo_filter_ids's full team-scope branch over a raw
 		// filters map -- reused here rather than a second copy.
-		repoIDs, teamCondition, teamBindings, err := scopeRepoFilter(r.Context(), reader, filters, claims.OrgID, time.Now().UTC())
+		repoIDs, reposNamed, teamCondition, teamBindings, err := scopeRepoFilter(r.Context(), reader, filters, claims.OrgID, time.Now().UTC())
 		if err != nil {
 			writeRESTDataUnavailable(w, r, "work_units", claims.OrgID, err)
 			return
@@ -650,6 +652,7 @@ func newWorkUnitsPostHandler(reader *investmentexplain.Reader) http.HandlerFunc 
 			StartTS:            startTS,
 			EndTS:              endTS,
 			RepoIDs:            repoIDs,
+			ReposNamed:         reposNamed,
 			TeamScopeCondition: teamCondition,
 			TeamScopeBindings:  teamBindings,
 			Limit:              boundedWorkUnitsLimit(rawLimit),

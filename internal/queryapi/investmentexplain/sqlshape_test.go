@@ -183,16 +183,16 @@ func TestBreakdownFiltersScopeClauseTeamScopeNeverRoundTripsForRepoIDs(t *testin
 	}
 }
 
-// TestBreakdownFiltersScopeClauseUnionsExplicitReposWithTeamScope pins
-// the union semantics resolve_repo_filter_ids' own Python shape has: an
-// explicit what.repos ref alongside a team scope means EITHER condition
-// can match, not both required.
-func TestBreakdownFiltersScopeClauseUnionsExplicitReposWithTeamScope(t *testing.T) {
+// TestBreakdownFiltersScopeClauseIntersectsExplicitReposWithTeamScope pins
+// that filters narrow, never widen (CHAOS-9104, D5844): an explicit what.repos
+// ref alongside a team scope means BOTH conditions must match. (The Python
+// original unioned them; no recorded golden pins that: this test is hand-written.)
+func TestBreakdownFiltersScopeClauseIntersectsExplicitReposWithTeamScope(t *testing.T) {
 	teamCondition, teamBindings := teamscope.RepoCondition("org-1", "repo_id", []string{"team-x"}, teamScopeAsOf)
-	f := BreakdownFilters{RepoIDs: []string{"repo-1"}, TeamScopeCondition: teamCondition, TeamScopeBindings: teamBindings}
+	f := BreakdownFilters{RepoIDs: []string{"repo-1"}, ReposNamed: true, TeamScopeCondition: teamCondition, TeamScopeBindings: teamBindings}
 	scopeSQL, bindings := f.scopeClause()
-	if !strings.HasPrefix(scopeSQL, " AND (repo_id IN {scope_ids:Array(String)} OR repo_id IN (") {
-		t.Fatalf("scopeSQL does not OR the explicit-repo and team conditions together:\n%s", scopeSQL)
+	if !strings.HasPrefix(scopeSQL, " AND (repo_id IN {scope_ids:Array(String)} AND repo_id IN (") {
+		t.Fatalf("scopeSQL does not AND the explicit-repo and team conditions together:\n%s", scopeSQL)
 	}
 	var sawScopeIDs, sawTeamIDs bool
 	for _, b := range bindings {

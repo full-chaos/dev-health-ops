@@ -63,17 +63,7 @@ func repoScopeFilter(ctx context.Context, client QueryClient, f Filters, orgID, 
 		return "", nil, err
 	}
 
-	// A team scope AND named repositories put two membership tests on one repository
-	// column: a list of ids and the team's ownership subquery. Both are TEXT (the
-	// ids bind as strings, the subquery yields toString(...)), so both compare the
-	// column as text: a UUID column against a String set is a type error in
-	// ClickHouse (code 169, "Cannot compare UUID with String") that took Home down
-	// with a 503 for a team AND a repository the team holds (prod, pin 32 step A).
-	// The text form is right for a UUID column and for a String one.
 	teamScoped := f.Scope.Level == "team" && len(f.Scope.IDs) > 0
-	if teamScoped && len(explicitIDs) > 0 {
-		repoColumn = "toString(" + repoColumn + ")"
-	}
 	var teamCondition string
 	var teamBindings []dhclickhouse.Binding
 	if teamScoped {

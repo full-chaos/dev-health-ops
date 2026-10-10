@@ -1386,11 +1386,15 @@ func (handler *FinalizeHandler) retractStaleKeys(ctx context.Context, run Run) e
 		)
 		return nil
 	}
+	// The scope of the run is read from the store, not taken from the claim:
+	// whether the run is of the whole organization decides how far the
+	// retraction goes, and a claim does not carry it.
+	stored, err := handler.store.LoadRun(ctx, run.ID)
+	if err != nil {
+		return fmt.Errorf("%w: stale team keys: load the scope of the run: %w", ErrNativeFinalizeFamilyFailed, err)
+	}
+	run.FullOrg = stored.FullOrg
 	if len(run.DiscoveredRepoIDs) == 0 {
-		stored, err := handler.store.LoadRun(ctx, run.ID)
-		if err != nil {
-			return fmt.Errorf("%w: stale team keys: load the repositories of the run: %w", ErrNativeFinalizeFamilyFailed, err)
-		}
 		run.DiscoveredRepoIDs = stored.DiscoveredRepoIDs
 	}
 	if _, err := handler.staleKeyRetractor.RetractStaleKeys(ctx, run); err != nil {

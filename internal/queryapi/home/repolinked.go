@@ -587,10 +587,10 @@ func computeRepoLinkedDelta(ctx context.Context, client QueryClient, spec metric
 		safe := safeFloat(*pct)
 		pct = &safe
 	}
+	// The state is a property of the LINK, not of the metric's value (D5864): "linked"
+	// whenever a linked item is in the window, the same word for the four metrics of one
+	// request; whether the metric has data follows the daily read's own rule.
 	state := view.state
-	if state == repoLinkLinked && !current.hasData && !previous.hasData {
-		state = repoLinkNoLinks
-	}
 	applied := true
 	basis, multi, coverage := view.basis, view.multiRepoItems, view.coverage
 	return MetricDelta{

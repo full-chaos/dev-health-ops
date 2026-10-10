@@ -281,6 +281,25 @@ VALUES (toUUID('%s'), 'gh:a/r#10', 300, 1.0, 'native', '', %s, '%s')`, oracleR1,
 	if got.RepoLinkBasis == nil || *got.RepoLinkBasis != (RepoLinkBasis{Native: 2, ExplicitText: 1, Heuristic: 1}) {
 		t.Errorf("basis = %+v, want native 2, explicit_text 1, heuristic 1 (a lower tier is never counted as native)", got.RepoLinkBasis)
 	}
+	// D5864: the state is a property of the LINK: blocked_work has no blocked hours for
+	// repository 1 (no data, as the daily read serves none) while the four metrics of the
+	// request all say "linked" and the basis counts are present.
+	for _, name := range []string{"cycle_time", "throughput", "wip_saturation", "blocked_work"} {
+		d, err := computeMetricDelta(ctx, client, metricSpecByName(t, name), start, end, time.Date(2026, 8, 11, 0, 0, 0, 0, time.UTC), start,
+			Filters{What: WhatFilter{Repos: []string{oracleR1}}}, org, end)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if d.RepoLinkState == nil || *d.RepoLinkState != repoLinkLinked {
+			t.Errorf("%s: repoLinkState = %v, want linked (linked items are in the window)", name, d.RepoLinkState)
+		}
+		if d.RepoLinkBasis == nil || d.RepoLinkBasis.Native != 2 {
+			t.Errorf("%s: basis = %+v, want the counts of the view", name, d.RepoLinkBasis)
+		}
+		if name == "blocked_work" && d.HasData {
+			t.Errorf("blocked_work of repository 1 has data (%v): the seed holds no blocked hours there", d.Value)
+		}
+	}
 	if got.RepoLinkMultiRepoItems == nil || *got.RepoLinkMultiRepoItems != 1 {
 		t.Errorf("multi-repository items = %v, want 1 (#2 is linked to both repositories)", got.RepoLinkMultiRepoItems)
 	}

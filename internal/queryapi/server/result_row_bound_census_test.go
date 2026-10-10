@@ -33,7 +33,8 @@ func TestEveryQueryAPIClickHouseClientIsBuiltFromTheSharedConstructor(t *testing
 		if filepath.ToSlash(rel) == "internal/queryapi/chclient/chclient.go" {
 			return nil
 		}
-		for _, line := range strings.Split(src, "\n") {
+		lines := strings.Split(src, "\n")
+		for index, line := range lines {
 			trimmed := strings.TrimSpace(line)
 			if strings.HasPrefix(trimmed, "//") {
 				continue
@@ -41,16 +42,34 @@ func TestEveryQueryAPIClickHouseClientIsBuiltFromTheSharedConstructor(t *testing
 			if literal.MatchString(line) && !strings.Contains(line, "newUnrestricted") {
 				t.Errorf("%s writes a ClickHouse Options literal outside package chclient: %s", rel, trimmed)
 			}
-			if m := call.FindStringSubmatch(line); m != nil {
-				checked++
-				arg := m[1]
-				// a variable named opts counts only when this file builds it from the shared path
-				optsFromSharedPath := strings.TrimSpace(strings.TrimSuffix(arg, ")")) == "opts" &&
-					(strings.Contains(src, "opts := newUnrestrictedReadClickHouseOptions(") || strings.Contains(src, "opts := chclient.Options("))
-				if !strings.Contains(arg, "newUnrestrictedReadClickHouseOptions(") && !strings.Contains(arg, "chclient.Options(") && !optsFromSharedPath {
-					t.Errorf("%s builds a ClickHouse client without the shared options: %s", rel, trimmed)
+			m := call.FindStringSubmatch(line)
+			if m == nil {
+				continue
+			}
+			checked++
+			arg := m[1]
+			if strings.Contains(arg, "newUnrestrictedReadClickHouseOptions(") || strings.Contains(arg, "chclient.Options(") {
+				continue
+			}
+			if strings.TrimSpace(strings.TrimSuffix(arg, ")")) == "opts" {
+				// a variable named opts counts only when the SAME function builds it from
+				// the shared path: look back to the start of the function for its assignment
+				fromShared := false
+				for back := index - 1; back >= 0; back-- {
+					prev := strings.TrimSpace(lines[back])
+					if strings.HasPrefix(prev, "func ") {
+						break
+					}
+					if strings.HasPrefix(prev, "opts := ") {
+						fromShared = strings.HasPrefix(prev, "opts := newUnrestrictedReadClickHouseOptions(") || strings.HasPrefix(prev, "opts := chclient.Options(")
+						break
+					}
+				}
+				if fromShared {
+					continue
 				}
 			}
+			t.Errorf("%s builds a ClickHouse client without the shared options: %s", rel, trimmed)
 		}
 		return nil
 	})

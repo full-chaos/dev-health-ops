@@ -26,6 +26,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/chclient"
 	"log"
 	"net/http"
@@ -134,15 +135,38 @@ func writeRESTMethodNotAllowed(w http.ResponseWriter, r *http.Request, component
 // down" (CHAOS-9126, D5879). One WARN names the operation, the bound and the
 // count of scope ids of the request (a count, never a value).
 func writeRESTDataUnavailable(w http.ResponseWriter, r *http.Request, component, orgID string, err error) {
-	if bound, code := chclient.BoundHit(err); bound != chclient.BoundNone {
-		log.Printf("query-api: WARN %s: read hit the %s bound (clickhouse code %d, bound=%d rows): scope_ids=%d org_id=%s request_id=%s err=%v",
-			component, bound, code, chclient.MaxResultRows, len(r.URL.Query()["scope_id"]), orgID, envelopeRequestID(r), err)
-		writeRESTError(w, r, component, orgID, http.StatusServiceUnavailable, restBoundDetail(bound))
+	if detail, ok := logRESTBoundHit(r, component, orgID, err); ok {
+		writeRESTError(w, r, component, orgID, http.StatusServiceUnavailable, detail)
 		return
 	}
 	log.Printf("query-api: %s: degraded to 503 Data unavailable: org_id=%s request_id=%s err=%v",
 		component, orgID, envelopeRequestID(r), err)
 	writeRESTError(w, r, component, orgID, http.StatusServiceUnavailable, "Data unavailable")
+}
+
+// logRESTBoundHit says whether err is a bound of the store client (rows, bytes,
+// execution time) and, when it is, logs the one WARN line (route, bound, code,
+// count of scope ids; never a value) and returns the named cause to answer.
+// A deadline of the CALLER's own request (its context ended) is not a bound of
+// the client: it is not named as one.
+func logRESTBoundHit(r *http.Request, component, orgID string, err error) (detail string, ok bool) {
+	bound, code := chclient.BoundHit(err)
+	if bound == chclient.BoundNone {
+		return "", false
+	}
+	if bound == chclient.BoundTime && r.Context().Err() != nil {
+		return "", false
+	}
+	limit := "max_execution_time"
+	switch bound {
+	case chclient.BoundRows:
+		limit = fmt.Sprintf("%d rows", chclient.MaxResultRows)
+	case chclient.BoundBytes:
+		limit = "max_bytes_to_read"
+	}
+	log.Printf("query-api: WARN %s: read hit the %s bound (clickhouse code %d, limit=%s): scope_ids=%d org_id=%s request_id=%s err=%v",
+		component, bound, code, limit, len(r.URL.Query()["scope_id"]), orgID, envelopeRequestID(r), err)
+	return restBoundDetail(bound), true
 }
 
 // restBoundDetail is the named cause a bound hit answers with.

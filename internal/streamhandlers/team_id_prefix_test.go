@@ -56,23 +56,23 @@ func TestTeamV1WritesTheSystemPrefixedTeamID(t *testing.T) {
 			if values[0] != c.want || values[1] != wantUUID {
 				t.Fatalf("id, team_uuid = %v, %v; want %q, %v", values[0], values[1], c.want, wantUUID)
 			}
-			if want := teamid.StoredProvider(c.system); values[12] != want {
-				t.Fatalf("provider = %v, want %q", values[12], want)
+			if want := teamid.StoredProvider(c.system); values[11] != want {
+				t.Fatalf("provider = %v, want %q", values[11], want)
 			}
 			// An id that holds another provider's key has no native key of this system.
 			var wantNative any
 			if key, own := teamid.NativeKey(c.system, c.want); own {
 				wantNative = key
 			}
-			if values[13] != wantNative {
-				t.Fatalf("native_team_key = %v, want %v (the id without the system prefix, NULL when the id holds another provider's key)", values[13], wantNative)
+			if values[12] != wantNative {
+				t.Fatalf("native_team_key = %v, want %v (the id without the system prefix, NULL when the id holds another provider's key)", values[12], wantNative)
 			}
-			if c.system == "jira" && values[13] == values[0] {
+			if c.system == "jira" && values[12] == values[0] {
 				t.Fatalf("native_team_key equals the id %v: the Jira project-as-team retire would deactivate the team", values[0])
 			}
 
-			if values[14] != teamid.Of(c.system, "parent") {
-				t.Fatalf("parent_team_id = %v, want %q", values[14], teamid.Of(c.system, "parent"))
+			if values[13] != teamid.Of(c.system, "parent") {
+				t.Fatalf("parent_team_id = %v, want %q", values[13], teamid.Of(c.system, "parent"))
 			}
 			if !slices.Equal(scope.TeamIDs, []string{c.want}) {
 				t.Fatalf("recompute scope team ids = %v, want [%s]", scope.TeamIDs, c.want)
@@ -88,8 +88,8 @@ func TestTeamV1KeepsAPushedNativeTeamKeyAndNoParent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if values[13] != "ENG-NATIVE" || values[14] != nil {
-		t.Fatalf("native_team_key, parent_team_id = %v, %v; want ENG-NATIVE, nil", values[13], values[14])
+	if values[12] != "ENG-NATIVE" || values[13] != nil {
+		t.Fatalf("native_team_key, parent_team_id = %v, %v; want ENG-NATIVE, nil", values[12], values[13])
 	}
 }
 
@@ -154,9 +154,9 @@ func TestTeamV1StoresNoNativeKeyForAForeignPrefixedID(t *testing.T) {
 				if other.system != s.system {
 					want = nil
 				}
-				if values[0] != other.prefix+"ENG" || values[13] != want {
+				if values[0] != other.prefix+"ENG" || values[12] != want {
 					t.Errorf("system %s, id %s, nativeTeamKey %v: id %v, native_team_key %v; want native_team_key %v",
-						s.system, other.prefix+"ENG", pushed, values[0], values[13], want)
+						s.system, other.prefix+"ENG", pushed, values[0], values[12], want)
 				}
 			}
 		}
@@ -166,8 +166,8 @@ func TestTeamV1StoresNoNativeKeyForAForeignPrefixedID(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if values[13] != "own-key" {
-			t.Errorf("system %s: native_team_key %v, want the pushed own-key", s.system, values[13])
+		if values[12] != "own-key" {
+			t.Errorf("system %s: native_team_key %v, want the pushed own-key", s.system, values[12])
 		}
 	}
 }

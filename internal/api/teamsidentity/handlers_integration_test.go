@@ -138,11 +138,11 @@ func TestCreateOrUpdateIdentityReconcilesTeamMembership(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !containsString(teamX.Members, "frank@example.com") {
-		t.Fatalf("team-x must gain frank's facet: %+v", teamX.Members)
+	if !containsString(teamX.ManualMembers, "frank@example.com") {
+		t.Fatalf("team-x must gain frank's facet: %+v", teamX.ManualMembers)
 	}
-	if !containsString(teamX.Members, "preexisting@example.com") {
-		t.Fatalf("team-x must keep the pre-existing member: %+v", teamX.Members)
+	if !containsString(teamX.ManualMembers, "preexisting@example.com") {
+		t.Fatalf("team-x must keep the pre-existing member: %+v", teamX.ManualMembers)
 	}
 
 	// Move frank from team-x to team-y, and change his email (the facet
@@ -157,22 +157,22 @@ func TestCreateOrUpdateIdentityReconcilesTeamMembership(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if containsString(teamXAfter.Members, "frank@example.com") || containsString(teamXAfter.Members, "frank-new@example.com") {
-		t.Fatalf("team-x must lose every one of frank's facets after he left it: %+v", teamXAfter.Members)
+	if containsString(teamXAfter.ManualMembers, "frank@example.com") || containsString(teamXAfter.ManualMembers, "frank-new@example.com") {
+		t.Fatalf("team-x must lose every one of frank's facets after he left it: %+v", teamXAfter.ManualMembers)
 	}
-	if !containsString(teamXAfter.Members, "preexisting@example.com") {
-		t.Fatalf("team-x must still keep the pre-existing member: %+v", teamXAfter.Members)
+	if !containsString(teamXAfter.ManualMembers, "preexisting@example.com") {
+		t.Fatalf("team-x must still keep the pre-existing member: %+v", teamXAfter.ManualMembers)
 	}
 
 	teamY, err := store.GetTeam(ctx, "org-1", "custom:team-y")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !containsString(teamY.Members, "frank-new@example.com") {
-		t.Fatalf("team-y must gain frank's NEW facet: %+v", teamY.Members)
+	if !containsString(teamY.ManualMembers, "frank-new@example.com") {
+		t.Fatalf("team-y must gain frank's NEW facet: %+v", teamY.ManualMembers)
 	}
-	if containsString(teamY.Members, "frank@example.com") {
-		t.Fatalf("team-y must never have seen frank's OLD facet: %+v", teamY.Members)
+	if containsString(teamY.ManualMembers, "frank@example.com") {
+		t.Fatalf("team-y must never have seen frank's OLD facet: %+v", teamY.ManualMembers)
 	}
 }
 

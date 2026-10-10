@@ -29,7 +29,6 @@ func TestGitHubTeamCatalogEffectsAgainstMigratedSchema(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	team.Members = []string{"github:octocat", "octocat@example.com"}
 
 	otherTeam, err := normalizeGitHubTeam(otherOrgID, githubTeamPayload{Slug: "platform", Name: "Platform"}, nil, now)
 	if err != nil {
@@ -37,16 +36,19 @@ func TestGitHubTeamCatalogEffectsAgainstMigratedSchema(t *testing.T) {
 	}
 
 	// Tenant isolation: a foreign org's write must never be visible to this
-	// org's roster read.
+	// org's reads.
 	if err := sink.WriteTeams(ctx, otherOrgID, []githubTeamRow{otherTeam}); err != nil {
 		t.Fatalf("foreign write: %v", err)
 	}
-	roster, ok := sink.ExistingTeamMembers(ctx, orgID, []string{"gh:platform"})
-	if !ok {
-		t.Fatal("ExistingTeamMembers reported not-ok before this org ever wrote anything")
+	teamsOf := func(org string) uint64 {
+		var count uint64
+		if err := conn.QueryRow(ctx, `SELECT count() FROM teams FINAL WHERE org_id = ? AND id = 'gh:platform'`, org).Scan(&count); err != nil {
+			t.Fatal(err)
+		}
+		return count
 	}
-	if _, present := roster["gh:platform"]; present {
-		t.Fatalf("foreign org's team leaked into this org's roster read: roster=%+v", roster)
+	if teamsOf(orgID) != 0 || teamsOf(otherOrgID) != 1 {
+		t.Fatalf("before this org's write: teams of org a=%d, of org b=%d, want 0 and 1", teamsOf(orgID), teamsOf(otherOrgID))
 	}
 
 	if err := sink.WriteTeams(ctx, orgID, []githubTeamRow{team}); err != nil {
@@ -55,22 +57,15 @@ func TestGitHubTeamCatalogEffectsAgainstMigratedSchema(t *testing.T) {
 	if err := sink.WriteMemberships(ctx, orgID, []githubMembershipRow{membership}); err != nil {
 		t.Fatalf("write memberships: %v", err)
 	}
-
-	roster, ok = sink.ExistingTeamMembers(ctx, orgID, []string{"gh:platform"})
-	if !ok {
-		t.Fatal("ExistingTeamMembers reported not-ok after a real write")
+	if teamsOf(orgID) != 1 {
+		t.Fatalf("teams of org a after its write = %d, want 1", teamsOf(orgID))
 	}
-	members, present := roster["gh:platform"]
-	if !present || len(members) != 2 || members[0] != "github:octocat" || members[1] != "octocat@example.com" {
-		t.Fatalf("roster=%+v", roster)
+	var openMemberships uint64
+	if err := conn.QueryRow(ctx, `SELECT count() FROM team_memberships FINAL WHERE org_id = ? AND team_id = 'gh:platform' AND valid_to IS NULL`, orgID).Scan(&openMemberships); err != nil {
+		t.Fatal(err)
 	}
-
-	// Empty team_ids is a real, confirmed answer (nothing to look up), not a
-	// read failure -- must never be confused with the ok=false "could not
-	// confirm" case the caller treats as a reason to skip a write.
-	empty, ok := sink.ExistingTeamMembers(ctx, orgID, nil)
-	if !ok || len(empty) != 0 {
-		t.Fatalf("empty team_ids roster=%+v ok=%v", empty, ok)
+	if openMemberships != 1 {
+		t.Fatalf("open memberships of gh:platform = %d, want 1", openMemberships)
 	}
 }
 
@@ -90,8 +85,8 @@ func TestGitHubTeamCatalogWriteTeamsPreservesManualMembers(t *testing.T) {
 	// Seed a row with an admin-set manual_members value, exactly as
 	// ClickHouseTeamAdminService.add_members would have written it.
 	if err := conn.Exec(ctx,
-		`INSERT INTO teams (id, team_uuid, name, members, manual_members, is_active, updated_at, org_id, provider) `+
-			`VALUES (?, generateUUIDv4(), 'Platform', [], ?, 1, ?, ?, 'github')`,
+		`INSERT INTO teams (id, team_uuid, name, manual_members, is_active, updated_at, org_id, provider) `+
+			`VALUES (?, generateUUIDv4(), 'Platform', ?, 1, ?, ?, 'github')`,
 		"gh:platform", []string{"admin:alice"}, now, orgID,
 	); err != nil {
 		t.Fatalf("seed admin override: %v", err)

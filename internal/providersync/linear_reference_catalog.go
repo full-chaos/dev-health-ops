@@ -352,7 +352,7 @@ func normalizeLinearReferenceTeam(
 	}, nil
 }
 
-// linearReferenceTeamRosterFacets builds the `teams.members` roster facet
+// linearReferenceTeamRosterFacets builds the observed roster facet
 // list from a set of member nodes. Called twice per team in the CHAOS-4431
 // native path: once against page-1 only (normalizeLinearReferenceTeam's
 // provisional value, used verbatim when a team turns out to have <=10
@@ -380,14 +380,14 @@ func linearReferenceTeamRosterFacets(resolver *identityalias.Resolver, nodes []l
 	return members
 }
 
-// linearReferenceTeamRosterFromMemberships rebuilds one team's `teams.
-// members` roster from a set of ALREADY-FILTERED membership rows (CHAOS-4431
+// linearReferenceTeamRosterFromMemberships rebuilds one team's observed
+// roster from a set of ALREADY-FILTERED membership rows (CHAOS-4431
 // codex review round 2, P1) -- mirrors Python's _apply_roster, which builds
 // team_rows[...]['members'] from memberships that already went through
 // split_memberships_for_review, not from the raw provider-observed roster.
 // Used by LinearTeamCatalogCollector after the membership-conflict guard
 // runs, so a membership the guard rejects can never still show up in
-// teams.members even though it was correctly kept out of team_memberships.
+// the observed roster even though it was correctly kept out of team_memberships.
 func linearReferenceTeamRosterFromMemberships(teamID string, memberships []linearReferenceMembershipRow) []string {
 	roster := make([]string, 0)
 	for _, membership := range memberships {

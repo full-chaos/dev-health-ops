@@ -65,10 +65,9 @@ type GitHubTeamCatalogEvidence struct {
 // wherever a Go counterpart exists, so a caller building the post-sync log
 // line does not have to invent a second vocabulary.
 type GitHubTeamCatalogResult struct {
-	TeamsImported            int  `json:"teams_imported"`
-	MembersImported          int  `json:"members_imported"`
-	TeamMembershipsImported  int  `json:"team_memberships_imported"`
-	RosterPreservationFailed bool `json:"roster_preservation_failed"`
+	TeamsImported           int `json:"teams_imported"`
+	MembersImported         int `json:"members_imported"`
+	TeamMembershipsImported int `json:"team_memberships_imported"`
 }
 
 // GitHubTeamCatalogRouteHandler owns the provider-only GitHub org teams +
@@ -258,10 +257,6 @@ func (collector GitHubTeamCatalogRouteHandler) Collect(
 				return githubTeamCatalogRows{}, evidence, memberErr
 			} else {
 				evidence.SkippedTeamMemberships++
-				// CHAOS-4461: this team must not have its roster silently
-				// rebuilt to [] below -- the caller confirms and carries
-				// forward its currently-persisted roster instead.
-				rows.FailedMemberFetchTeamIDs = append(rows.FailedMemberFetchTeamIDs, githubTeamID(slug))
 			}
 		}
 	}

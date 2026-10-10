@@ -55,27 +55,23 @@ type gitlabTeamCatalogMemberPayload struct {
 // --- Normalized rows, one per destination table ------------------------------
 
 // gitlabTeamCatalogTeamRow mirrors linearReferenceTeamRow's shape against the
-// SAME physical `teams` table. MembersAuthoritative distinguishes a
-// want_members=true run (Members is the complete, authoritative roster this
-// run observed, even if empty) from a want_members=false, want_teams=true run
-// (Members carries no signal; the effects sink must preserve whatever roster
-// is currently persisted rather than overwrite it with an empty one --
-// team_autoimport_gitlab.py's CHAOS-4323 round-2 roster-preservation rule).
+// SAME physical `teams` table. Members is the roster this run observed, for
+// team_provider_observations.members_json only: the teams table has no roster
+// column (CHAOS-9087).
 type gitlabTeamCatalogTeamRow struct {
-	ID                   string    `json:"id"`
-	TeamUUID             string    `json:"team_uuid"`
-	Name                 string    `json:"name"`
-	Description          *string   `json:"description"`
-	Members              []string  `json:"members"`
-	MembersAuthoritative bool      `json:"members_authoritative"`
-	ProjectKeys          []string  `json:"project_keys"`
-	RepoPatterns         []string  `json:"repo_patterns"`
-	IsActive             uint8     `json:"is_active"`
-	UpdatedAt            time.Time `json:"updated_at"`
-	OrgID                string    `json:"org_id"`
-	Provider             string    `json:"provider"`
-	NativeTeamKey        *string   `json:"native_team_key"`
-	ParentTeamID         *string   `json:"parent_team_id"`
+	ID            string    `json:"id"`
+	TeamUUID      string    `json:"team_uuid"`
+	Name          string    `json:"name"`
+	Description   *string   `json:"description"`
+	Members       []string  `json:"members"`
+	ProjectKeys   []string  `json:"project_keys"`
+	RepoPatterns  []string  `json:"repo_patterns"`
+	IsActive      uint8     `json:"is_active"`
+	UpdatedAt     time.Time `json:"updated_at"`
+	OrgID         string    `json:"org_id"`
+	Provider      string    `json:"provider"`
+	NativeTeamKey *string   `json:"native_team_key"`
+	ParentTeamID  *string   `json:"parent_team_id"`
 }
 
 type gitlabTeamCatalogOwnershipRow struct {
@@ -139,26 +135,12 @@ type GitLabTeamCatalogRows struct {
 	Ownership   []gitlabTeamCatalogOwnershipRow  `json:"ownership"`
 	Memberships []gitlabTeamCatalogMembershipRow `json:"memberships"`
 	Projects    []gitlabTeamCatalogProjectRow    `json:"projects"`
-	// FailedMemberFetchTeamIDs (CHAOS-4461, ruling extended from GitHub to
-	// GitLab by team-lead, 2026-08-28) lists the teams (by their "gl:" id,
-	// matching gitlabTeamCatalogTeamRow.ID) whose /members fetch failed
-	// under a non-strict Collect (TeamCatalogReference.Strict == false)
-	// while members were globally selected. These teams are deliberately
-	// left with MembersAuthoritative == false in the post-loop roster
-	// rebuild below, so GitLabTeamCatalogClickHouseEffects.writeTeams's
-	// existing roster-preservation path (CHAOS-4323 round 2) confirms and
-	// carries forward their currently-persisted roster instead of writing
-	// an unconfirmed empty one. Under strict (reference discovery), the
-	// fetch error is returned immediately instead -- this field stays
-	// empty in that path.
-	FailedMemberFetchTeamIDs []string `json:"-"`
 	// ObservedMembershipTeamIDs (CHAOS-4444) lists every team (by "gl:" id)
 	// whose /members fetch succeeded this call, independent of
-	// selections.Teams -- a team's OWN row in Teams above (and the
-	// MembersAuthoritative stamp the post-loop rebuild sets) only exists
+	// selections.Teams -- a team's OWN row in Teams above only exists
 	// `if selections.Teams`, but a group's member fetch runs whenever
 	// selections.Members is true regardless, so deriving observed scopes
-	// from Teams/MembersAuthoritative undercounts to EMPTY whenever a run
+	// from Teams undercounts to EMPTY whenever a run
 	// selects Members without Teams. This is the identity-drift review
 	// engine's observed_team_ids equivalent -- see
 	// reviewMembershipsForDrift's doc comment for why an unobserved scope

@@ -1634,6 +1634,46 @@ kubectl exec -i <worker-pod> -- dho workers providersync carry-team-ids \
   --org-stdin --reason <code> --correlation-id <id> < org-id-source
 ```
 
+#### `providersync move-team-roster-to-memberships` (CHAOS-9087)
+
+The `members` column of the `teams` table was a copy of the people of a team
+that the team sync kept beside `team_memberships`. It has no validity window,
+no source, and cannot put a person in two teams, so no code reads or writes it
+any more, and a later change drops the column. A person's team comes from
+`team_memberships`. This verb moves, before the column is dropped, the roster
+entries of the **admin-made** teams (teams with provider `""`) of one
+organization that no open `team_memberships` row of the same team covers into
+`team_memberships`, so no member of such a team is lost. An entry is covered
+when an open row of the team holds it (case and surrounding space ignored) as
+its member id, raw e-mail, raw provider user id or an identity facet. A moved
+entry is a manual membership: provider `""`, source `manual`, primary,
+specificity 100, priority 0, valid from the time of the run, no end.
+
+Nothing else is written. An entry of a provider team that no open row covers is
+a person the provider no longer lists: it is counted (`provider_roster_only`)
+and not moved. Inactive teams and other organizations are not read.
+
+The step refuses more than 100,000 entries (`team_roster_move_above_bound`; no
+row is written), and after the write it reads again: the open membership rows
+must be exactly the rows before plus the rows written, and no admin entry may be
+left uncovered, else it stops with `team_roster_move_not_proven`. With the
+column already dropped it reports `column_present: false` and writes nothing.
+
+The organization comes from stdin only: `--org-stdin` is required and there is
+no `--org`, with the stdin rules of
+[`metrics daily-start`](#metrics-daily-start-chaos-5055). The verb prints no
+organization id. It prints counts only, under `move_team_roster_to_memberships`:
+`roster_facets`, `covered`, `admin_to_move`, `teams_to_move`,
+`provider_roster_only`, `open_memberships_before`, `open_memberships_after`,
+`moved` (0 with `--dry-run`). A second run reports `admin_to_move: 0`.
+
+```bash
+kubectl exec -i <worker-pod> -- dho workers providersync move-team-roster-to-memberships \
+  --org-stdin --dry-run < org-id-source
+kubectl exec -i <worker-pod> -- dho workers providersync move-team-roster-to-memberships \
+  --org-stdin --reason <code> --correlation-id <id> < org-id-source
+```
+
 #### `providersync retire-jira-project-as-team` (CHAOS-8888)
 
 Earlier versions of the Jira team catalog made a team of every Jira project

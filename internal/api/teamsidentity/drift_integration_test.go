@@ -52,7 +52,7 @@ func TestProjectTeamAutoApplyImportsThenMerges(t *testing.T) {
 	if stored.Name != "Engineering" {
 		t.Errorf("Name = %q, want Engineering", stored.Name)
 	}
-	if len(stored.ManualMembers) != 0 || len(stored.Members) != 0 {
+	if len(stored.ManualMembers) != 0 {
 		t.Errorf("a freshly-imported team must start with no members: %+v", stored)
 	}
 

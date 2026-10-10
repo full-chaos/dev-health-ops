@@ -19,16 +19,16 @@ import (
 
 // fakeGitLabWriteTeamsConn is a driver.Conn double covering exactly what
 // writeTeams touches: PreserveExistingTeamManualMembers's read (always
-// succeeds, empty), gitlabExistingTeamRoster's read (configurable to fail,
-// to exercise the codex review finding below), and PrepareBatch (returns a
-// fake batch that just records what was appended -- no real ClickHouse
-// encoding/columns, proving WHICH rows reach the batch, not wire format).
+// succeeds, empty), the created_at carry, and PrepareBatch (returns a fake
+// batch that just records the statement and what was appended -- no real
+// ClickHouse encoding/columns, proving WHICH rows reach the batch, not wire
+// format). Any other query, a read of the roster column included, is an error.
 type fakeGitLabWriteTeamsConn struct {
 	driver.Conn
-	rosterQueryErr error
-	created        map[string]time.Time
-	createdErr     error
-	batch          *fakeGitLabWriteTeamsBatch
+	statement  string
+	created    map[string]time.Time
+	createdErr error
+	batch      *fakeGitLabWriteTeamsBatch
 }
 
 func (f *fakeGitLabWriteTeamsConn) Query(_ context.Context, query string, _ ...any) (driver.Rows, error) {
@@ -40,17 +40,13 @@ func (f *fakeGitLabWriteTeamsConn) Query(_ context.Context, query string, _ ...a
 		return &fakeGitLabCreatedRows{rows: f.created, index: -1}, nil
 	case strings.Contains(query, "manual_members"):
 		return &fakeGitLabGuardMembershipRows{rows: nil, index: -1}, nil
-	case strings.Contains(query, "SELECT id, members FROM teams"):
-		if f.rosterQueryErr != nil {
-			return nil, f.rosterQueryErr
-		}
-		return &fakeGitLabGuardMembershipRows{rows: nil, index: -1}, nil
 	default:
 		return nil, fmt.Errorf("fakeGitLabWriteTeamsConn: unexpected query: %s", query)
 	}
 }
 
-func (f *fakeGitLabWriteTeamsConn) PrepareBatch(context.Context, string, ...driver.PrepareBatchOption) (driver.Batch, error) {
+func (f *fakeGitLabWriteTeamsConn) PrepareBatch(_ context.Context, statement string, _ ...driver.PrepareBatchOption) (driver.Batch, error) {
+	f.statement = statement
 	f.batch = &fakeGitLabWriteTeamsBatch{}
 	return f.batch, nil
 }
@@ -89,68 +85,48 @@ func (b *fakeGitLabWriteTeamsBatch) AppendStruct(any) error {
 	panic("fakeGitLabWriteTeamsBatch: AppendStruct not implemented -- writeTeams uses Append")
 }
 
-func gitlabWriteTeamsTestRow(id string, authoritative bool) gitlabTeamCatalogTeamRow {
+func gitlabWriteTeamsTestRow(id string) gitlabTeamCatalogTeamRow {
 	return gitlabTeamCatalogTeamRow{
 		ID: id, TeamUUID: uuid.NewSHA1(uuid.NameSpaceURL, []byte("team:"+id)).String(),
-		Name: id, Members: []string{}, MembersAuthoritative: authoritative,
+		Name: id, Members: []string{"gitlab:" + id},
 		ProjectKeys: []string{}, RepoPatterns: []string{}, IsActive: 1,
 		UpdatedAt: time.Now().UTC(), OrgID: "org-1", Provider: gitlabTeamCatalogProvider,
 	}
 }
 
-// TestWriteTeamsRosterPreservationFailureOnlyExcludesNonAuthoritativeRows is
-// the codex review finding's end-to-end proof (team-lead relay, 2026-08-28,
-// checked container-free against a fake conn/batch): when the roster-
-// preservation read fails, writeTeams must still write every
-// MembersAuthoritative=true (self-sufficient) row -- only the rows that
-// actually depended on the failed read are excluded.
-func TestWriteTeamsRosterPreservationFailureOnlyExcludesNonAuthoritativeRows(t *testing.T) {
-	conn := &fakeGitLabWriteTeamsConn{rosterQueryErr: fmt.Errorf("simulated roster read failure")}
+// TestWriteTeamsWritesNoRosterColumn proves the teams writer sends no roster:
+// the fake conn refuses every query but the manual_members carry and the
+// created_at carry, so a read of the stored roster fails the write, and the
+// INSERT statement names no `members` column and carries one value per
+// column, with the observed roster of the row (Members) nowhere in it.
+func TestWriteTeamsWritesNoRosterColumn(t *testing.T) {
+	conn := &fakeGitLabWriteTeamsConn{}
 	sink := GitLabTeamCatalogClickHouseEffects{
 		Conn:  conn,
 		Lease: providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }),
 	}
-	rows := []gitlabTeamCatalogTeamRow{
-		gitlabWriteTeamsTestRow("gl:org", true),         // healthy, self-sufficient
-		gitlabWriteTeamsTestRow("gl:org/team-a", false), // needs the (failed) roster read
-		gitlabWriteTeamsTestRow("gl:org/team-b", true),  // healthy, self-sufficient
-	}
+	rows := []gitlabTeamCatalogTeamRow{gitlabWriteTeamsTestRow("gl:org"), gitlabWriteTeamsTestRow("gl:org/team-a")}
 	if err := sink.writeTeams(context.Background(), Claim{Unit: Unit{OrgID: "org-1", Provider: gitlabTeamCatalogProvider}}, rows); err != nil {
-		t.Fatalf("writeTeams returned an error -- a scoped read failure must not fail the whole batch: %v", err)
+		t.Fatalf("writeTeams: %v", err)
 	}
-	if conn.batch == nil || !conn.batch.sent {
-		t.Fatal("expected the batch to be sent (the two healthy rows must still write)")
+	if conn.batch == nil || !conn.batch.sent || len(conn.batch.appendedIDs) != 2 {
+		t.Fatalf("batch = %+v, want both rows sent", conn.batch)
 	}
-	if len(conn.batch.appendedIDs) != 2 {
-		t.Fatalf("appendedIDs=%v, want exactly the 2 self-sufficient rows", conn.batch.appendedIDs)
-	}
-	for _, id := range conn.batch.appendedIDs {
-		if id == "gl:org/team-a" {
-			t.Fatalf("gl:org/team-a depended on the failed roster read -- must NOT have been written: appendedIDs=%v", conn.batch.appendedIDs)
+	columns := strings.Split(conn.statement[strings.Index(conn.statement, "(")+1:strings.Index(conn.statement, ")")], ",")
+	for _, column := range columns {
+		if strings.TrimSpace(column) == "members" {
+			t.Fatalf("the teams INSERT names the roster column: %s", conn.statement)
 		}
 	}
-}
-
-// TestWriteTeamsSkipsRosterReadEntirelyWhenAllRowsAreAuthoritative proves
-// the scoping half of the fix on the happy path: when every row is
-// MembersAuthoritative=true, gitlabExistingTeamRoster is never even called
-// -- a pre-existing, unrelated roster-query outage cannot block this write
-// at all.
-func TestWriteTeamsSkipsRosterReadEntirelyWhenAllRowsAreAuthoritative(t *testing.T) {
-	conn := &fakeGitLabWriteTeamsConn{rosterQueryErr: fmt.Errorf("would fail if called")}
-	sink := GitLabTeamCatalogClickHouseEffects{
-		Conn:  conn,
-		Lease: providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }),
-	}
-	rows := []gitlabTeamCatalogTeamRow{
-		gitlabWriteTeamsTestRow("gl:org", true),
-		gitlabWriteTeamsTestRow("gl:org/team-a", true),
-	}
-	if err := sink.writeTeams(context.Background(), Claim{Unit: Unit{OrgID: "org-1", Provider: gitlabTeamCatalogProvider}}, rows); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if len(conn.batch.appendedIDs) != 2 {
-		t.Fatalf("appendedIDs=%v, want both rows written (roster read never needed)", conn.batch.appendedIDs)
+	for index, appended := range conn.batch.appended {
+		if len(appended) != len(columns) {
+			t.Fatalf("row %d carries %d values for %d columns: %s", index, len(appended), len(columns), conn.statement)
+		}
+		for _, value := range appended {
+			if list, ok := value.([]string); ok && len(list) == 1 && strings.HasPrefix(list[0], "gitlab:") {
+				t.Fatalf("row %d carries the observed roster %v into the teams INSERT", index, list)
+			}
+		}
 	}
 }
 
@@ -250,7 +226,7 @@ func TestGitLabWriteTeamsCarriesCreatedAt(t *testing.T) {
 		Conn:  conn,
 		Lease: providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }),
 	}
-	rows := []gitlabTeamCatalogTeamRow{gitlabWriteTeamsTestRow("gl:org", true), gitlabWriteTeamsTestRow("gl:org/new", true)}
+	rows := []gitlabTeamCatalogTeamRow{gitlabWriteTeamsTestRow("gl:org"), gitlabWriteTeamsTestRow("gl:org/new")}
 	if err := sink.writeTeams(context.Background(), Claim{Unit: Unit{OrgID: "org-1", Provider: gitlabTeamCatalogProvider}}, rows); err != nil {
 		t.Fatal(err)
 	}

@@ -262,11 +262,8 @@ func (handler LinearReferenceCatalogRouteHandler) CollectReferenceCatalog(
 		// selected (CHAOS-4431 codex review P1): a deselected member fetch
 		// must cost nothing and its absence must never abort an enabled
 		// teams/projects import. When deselected, the team row keeps
-		// normalizeLinearReferenceTeam's page-1 roster as a harmless
-		// placeholder -- LinearTeamCatalogCollector overwrites it with the
-		// team's PRESERVED existing roster before writing, exactly like
-		// Python's _existing_team_members path, so this placeholder is never
-		// actually persisted.
+		// normalizeLinearReferenceTeam's page-1 roster as a placeholder;
+		// LinearTeamCatalogCollector empties it before the observation.
 		if selections.Members {
 			memberNodes := append([]linearReferenceCatalogMemberPayload(nil), payload.Members.Nodes...)
 			if !payload.Members.PageInfo.Proven() {

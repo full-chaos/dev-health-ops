@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -450,7 +451,7 @@ func TestGitHubWorkItemDerivationQueriesCollapseTeamVersionsAndOrderStably(t *te
 	if _, err := loader.LoadRepos(context.Background(), orgID, asOf); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, _, _, err := loader.LoadMembers(context.Background(), orgID, asOf); err != nil {
+	if _, _, err := loader.LoadMembers(context.Background(), orgID, asOf); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := loader.LoadProviderMembers(context.Background(), orgID, asOf); err != nil {
@@ -576,11 +577,13 @@ func TestGitHubWorkItemDerivationQueriesCollapseTeamVersionsAndOrderStably(t *te
 }
 
 // fakeMembersSplitConn feeds loadMembers one identities row and one teams
-// row so the CHAOS-4321 round-3 provider-tag split can be tested against
-// the real ClickHouse-scan path, not just the pure resolve() consumer.
+// row. It refuses a teams read that selects the stored roster column
+// `members` (CHAOS-9087): a query that names it fails the load.
 type fakeMembersSplitConn struct {
 	driver.Conn
 }
+
+var rosterColumnRead = regexp.MustCompile(`(^|[^_a-z])members\b`)
 
 func (fakeMembersSplitConn) Query(_ context.Context, query string, _ ...any) (driver.Rows, error) {
 	switch {
@@ -591,9 +594,12 @@ func (fakeMembersSplitConn) Query(_ context.Context, query string, _ ...any) (dr
 			},
 		}, nil
 	case strings.Contains(query, "FROM teams FINAL"):
+		if rosterColumnRead.MatchString(query) {
+			return nil, fmt.Errorf("fakeMembersSplitConn: the teams query reads the roster column: %s", query)
+		}
 		return &fakeMembersSplitRows{
 			rows: [][]any{
-				{"team-eng", "Engineering", []string{"lead", "alice@example.com"}, []string{}},
+				{"team-eng", "Engineering", []string{"lead", "alice@example.com"}},
 			},
 		}, nil
 	default:
@@ -634,27 +640,22 @@ func (r *fakeMembersSplitRows) Close() error                     { return nil }
 func (r *fakeMembersSplitRows) Err() error                       { return nil }
 func (r *fakeMembersSplitRows) HasData() bool                    { return len(r.rows) > 0 }
 
-// TestGitHubWorkItemLoadMembersScopesTeamsMembersFallbackByProvider pins the
-// loadMembers half of the CHAOS-4321 round-3 fix directly (resolve()-level
-// coverage lives in TestGitHubWorkItemDerivationTwoLayerMembershipResolution
-// (k)/(l)/(m)): a `teams.members` roster containing a bare, non-email login
-// ("lead") that identities.provider_identities confirms belongs to GitHub
-// must be split into a github-provider-tagged fact, NOT the untyped pool --
-// while the email-shaped facet in the SAME roster stays untyped.
-func TestGitHubWorkItemLoadMembersScopesTeamsMembersFallbackByProvider(t *testing.T) {
+// TestGitHubWorkItemLoadMembersReadsManualMembersOnly pins what loadMembers
+// takes from `teams`: the admin-exclusive manual_members roster, as untyped
+// facts. There is no roster fallback tier any more (the stored roster column
+// `members` is gone, CHAOS-9087): the fake conn fails a teams read of that
+// column, and the load returns the two manual facets and nothing else.
+func TestGitHubWorkItemLoadMembersReadsManualMembersOnly(t *testing.T) {
 	source := teamattribution.ClickHouseFactSource{Conn: fakeMembersSplitConn{}}
-	_, _, providerUntyped, providerTagged, err := source.LoadMembers(context.Background(), "org-acme", time.Now())
+	typed, untyped, err := source.LoadMembers(context.Background(), "org-acme", time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(providerTagged) != 1 ||
-		providerTagged[0].Provider != "github" || providerTagged[0].TeamID != "team-eng" ||
-		providerTagged[0].MemberID != "lead" || providerTagged[0].Specificity != 50 || providerTagged[0].Priority != 10 {
-		t.Fatalf("providerTagged = %+v, want exactly one github-tagged \"lead\" fact at specificity 50/priority 10", providerTagged)
+	if len(untyped) != 2 || untyped[0].Facet != "lead" || untyped[1].Facet != "alice@example.com" ||
+		untyped[0].TeamID != "team-eng" || untyped[1].TeamID != "team-eng" {
+		t.Fatalf("untyped = %+v, want the two manual_members facets of team-eng and nothing from a roster", untyped)
 	}
-	if len(providerUntyped) != 1 || providerUntyped[0].Facet != "alice@example.com" {
-		t.Fatalf("providerUntyped = %+v, want exactly the email-shaped facet (the login must NOT stay untyped)", providerUntyped)
-	}
+	_ = typed
 }
 
 // fakeDonorRow holds one donor row's column values, in the EXACT order
@@ -1118,7 +1119,7 @@ func TestGitHubWorkItemDerivationAuthorOnlyDonorNeverPropagatesATeam(t *testing.
 
 // TestGitHubWorkItemDerivationTwoLayerMembershipResolution covers CHAOS-4321
 // (chris, 08:30 PT: "manual is override -- if the override exists, use it,
-// else use attribution from providers"): (e) a bare teams.members facet with
+// else use attribution from providers"): (e) a bare teams.manual_members facet with
 // no backing identities row still resolves via memberByUntypedFacet, (f) no
 // admin mapping at all falls through to the provider auto-import layer, (g)
 // an admin mapping wins outright over a conflicting provider membership for
@@ -1127,7 +1128,7 @@ func TestGitHubWorkItemDerivationAuthorOnlyDonorNeverPropagatesATeam(t *testing.
 func TestGitHubWorkItemDerivationTwoLayerMembershipResolution(t *testing.T) {
 	now := time.Date(2026, 8, 26, 12, 0, 0, 0, time.UTC)
 
-	t.Run("(e) teams.members-only mapping is attributed, no identities row", func(t *testing.T) {
+	t.Run("(e) a teams.manual_members-only mapping is attributed, no identities row", func(t *testing.T) {
 		derived := teamattribution.NewGitHubWorkItemDerivationContext(teamattribution.GithubWorkItemDerivationFacts{
 			UntypedMembers: []teamattribution.GithubWorkItemDerivationUntypedMemberFact{{
 				TeamID: "team-ops", TeamName: "Ops Team", Facet: "alice@example.com", UpdatedAt: now,
@@ -1212,57 +1213,6 @@ func TestGitHubWorkItemDerivationTwoLayerMembershipResolution(t *testing.T) {
 		}
 	})
 
-	t.Run("(i) a bare UntypedMembers-shaped members facet with no ManualMembers entry resolves via the fallback tier, not the override", func(t *testing.T) {
-		// CHAOS-4321 fix (chris, 2026-08-26 10:39 PT, after a codex
-		// adversarial review HIGH finding: "the new membership layer can
-		// turn provider-imported rosters into authoritative,
-		// provider-neutral admin overrides"): ProviderUntypedMembers (from
-		// teams.members) must resolve, but as the fallback tier -- lower
-		// specificity than the admin layer's UntypedMembers
-		// (teams.manual_members).
-		derived := teamattribution.NewGitHubWorkItemDerivationContext(teamattribution.GithubWorkItemDerivationFacts{
-			ProviderUntypedMembers: []teamattribution.GithubWorkItemDerivationUntypedMemberFact{{
-				TeamID: "team-fallback", TeamName: "Fallback Team", Facet: "bob@example.com", UpdatedAt: now,
-			}},
-		})
-		teamID, teamName, candidates := derived.Resolve(teamattribution.GithubWorkItemDerivationSubject{
-			WorkItemID: "gh:acme/api#34", Provider: "github", Type: "issue",
-			Assignees: []string{"bob@example.com"}, OrgID: "org-acme",
-		})
-		if teamattribution.GithubWorkItemDerivationStringValue(teamID) != "team-fallback" || teamattribution.GithubWorkItemDerivationStringValue(teamName) != "Fallback Team" {
-			t.Fatalf("team = (%v, %v), want team-fallback/Fallback Team", teamattribution.GithubWorkItemDerivationStringValue(teamID), teamattribution.GithubWorkItemDerivationStringValue(teamName))
-		}
-		if len(candidates) != 1 || candidates[0].Source != "assignee_membership" || candidates[0].Specificity != 50 {
-			t.Fatalf("candidates = %+v, want exactly one assignee_membership row at specificity 50", candidates)
-		}
-	})
-
-	t.Run("(j) an UntypedMembers (manual_members) entry overrides a conflicting ProviderUntypedMembers (members) entry for the same identity", func(t *testing.T) {
-		// The other half of (i): a genuinely admin-exclusive
-		// teams.manual_members facet wins outright even when the SAME
-		// identity also appears in a DIFFERENT team's bare teams.members
-		// roster (the shape a provider auto-import row takes) -- the admin
-		// layer short-circuits before the fallback pool is ever consulted.
-		derived := teamattribution.NewGitHubWorkItemDerivationContext(teamattribution.GithubWorkItemDerivationFacts{
-			UntypedMembers: []teamattribution.GithubWorkItemDerivationUntypedMemberFact{{
-				TeamID: "team-override", TeamName: "Override Team", Facet: "carol@example.com", UpdatedAt: now,
-			}},
-			ProviderUntypedMembers: []teamattribution.GithubWorkItemDerivationUntypedMemberFact{{
-				TeamID: "team-fallback", TeamName: "Fallback Team", Facet: "carol@example.com", UpdatedAt: now,
-			}},
-		})
-		teamID, teamName, candidates := derived.Resolve(teamattribution.GithubWorkItemDerivationSubject{
-			WorkItemID: "gh:acme/api#35", Provider: "github", Type: "issue",
-			Assignees: []string{"carol@example.com"}, OrgID: "org-acme",
-		})
-		if teamattribution.GithubWorkItemDerivationStringValue(teamID) != "team-override" || teamattribution.GithubWorkItemDerivationStringValue(teamName) != "Override Team" {
-			t.Fatalf("team = (%v, %v), want team-override/Override Team", teamattribution.GithubWorkItemDerivationStringValue(teamID), teamattribution.GithubWorkItemDerivationStringValue(teamName))
-		}
-		if len(candidates) != 1 || candidates[0].Source != "assignee_membership" || candidates[0].Specificity != 60 {
-			t.Fatalf("candidates = %+v, want exactly one assignee_membership row at specificity 60 (admin layer, not fallback)", candidates)
-		}
-	})
-
 	// (k)/(l)/(m) below pin the CHAOS-4321 round-3 codex adversarial review
 	// HIGH finding fix (team-lead ruling, 2026-08-26): a teams.members
 	// fallback facet must not cross providers unless it is email-shaped.
@@ -1310,26 +1260,6 @@ func TestGitHubWorkItemDerivationTwoLayerMembershipResolution(t *testing.T) {
 		}
 		if len(candidates) != 1 || candidates[0].Source != "assignee_membership" {
 			t.Fatalf("candidates = %+v, want exactly one assignee_membership row", candidates)
-		}
-	})
-
-	t.Run("(m) an email-shaped roster facet still attributes ACROSS providers (CHAOS-2609 stays)", func(t *testing.T) {
-		derived := teamattribution.NewGitHubWorkItemDerivationContext(teamattribution.GithubWorkItemDerivationFacts{
-			ProviderUntypedMembers: []teamattribution.GithubWorkItemDerivationUntypedMemberFact{{
-				TeamID: "team-eng", TeamName: "Engineering", Facet: "alice@example.com", UpdatedAt: now,
-			}},
-		})
-		for _, provider := range []string{"github", "jira"} {
-			teamID, teamName, candidates := derived.Resolve(teamattribution.GithubWorkItemDerivationSubject{
-				WorkItemID: provider + ":same-email#1", Provider: provider, Type: "issue",
-				Assignees: []string{"alice@example.com"}, OrgID: "org-acme",
-			})
-			if teamattribution.GithubWorkItemDerivationStringValue(teamID) != "team-eng" || teamattribution.GithubWorkItemDerivationStringValue(teamName) != "Engineering" {
-				t.Fatalf("%s: team = (%v, %v), want team-eng/Engineering", provider, teamattribution.GithubWorkItemDerivationStringValue(teamID), teamattribution.GithubWorkItemDerivationStringValue(teamName))
-			}
-			if len(candidates) != 1 || candidates[0].Source != "assignee_membership" {
-				t.Fatalf("%s: candidates = %+v, want exactly one assignee_membership row", provider, candidates)
-			}
 		}
 	})
 

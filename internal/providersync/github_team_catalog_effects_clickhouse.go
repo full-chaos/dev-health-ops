@@ -18,15 +18,14 @@ import (
 // clickhouse.go), reusing its exact column lists for the shared "teams" and
 // "team_memberships" tables so both writers stay byte-compatible with every
 // other provider's rows in the same ReplacingMergeTree.
-const githubTeamCatalogTeamsInsert = `INSERT INTO teams (id, team_uuid, name, description, members, manual_members, project_keys, repo_patterns, is_active, updated_at, org_id, provider, native_team_key, parent_team_id, created_at)`
+const githubTeamCatalogTeamsInsert = `INSERT INTO teams (id, team_uuid, name, description, manual_members, project_keys, repo_patterns, is_active, updated_at, org_id, provider, native_team_key, parent_team_id, created_at)`
 const githubTeamCatalogMembershipsInsert = `INSERT INTO team_memberships (org_id, provider, team_id, member_id, raw_provider_user_id, raw_email, identity_facets, source, is_primary, specificity, priority, valid_from, valid_to, updated_at)`
 
 // githubTeamCatalogRepoOwnershipInsert matches team_repo_ownership's exact
 // column order (storage/clickhouse.py's write_team_repo_ownership).
 const githubTeamCatalogRepoOwnershipInsert = `INSERT INTO team_repo_ownership (org_id, provider, team_id, repo_id, repo_full_name, match_type, source, is_primary, specificity, priority, valid_from, valid_to, updated_at)`
 
-// GitHubTeamCatalogClickHouseEffects writes githubTeamCatalogRows and reads
-// the currently-persisted roster for a members-off run.
+// GitHubTeamCatalogClickHouseEffects writes githubTeamCatalogRows.
 type GitHubTeamCatalogClickHouseEffects struct {
 	Conn driver.Conn
 }
@@ -89,7 +88,7 @@ func (sink GitHubTeamCatalogClickHouseEffects) WriteTeams(ctx context.Context, o
 			manualMembers = []string{}
 		}
 		if err := batch.Append(
-			row.ID, teamUUID, row.Name, row.Description, row.Members, manualMembers, row.ProjectKeys,
+			row.ID, teamUUID, row.Name, row.Description, manualMembers, row.ProjectKeys,
 			row.RepoPatterns, row.IsActive, row.UpdatedAt, row.OrgID, row.Provider,
 			row.NativeTeamKey, row.ParentTeamID, teamcreated.For(createdAt, row.ID, row.UpdatedAt),
 		); err != nil {
@@ -171,53 +170,6 @@ func (sink GitHubTeamCatalogClickHouseEffects) WriteTeamRepoOwnership(
 		}
 	}
 	return batch.Send()
-}
-
-// ExistingTeamMembers is the Go port of team_autoimport_github.py's
-// _existing_team_members: the CURRENTLY persisted roster for these team ids,
-// read for a members-off ("teams" selected, "members" not) run to carry
-// forward instead of overwriting it with []. Deliberately does NOT filter on
-// provider in SQL (matching the Python query's own CHAOS-4323 round-3
-// finding: `teams` dedupes ONLY on `id` under ReplacingMergeTree(updated_at)
-// ORDER BY (id) -- ADD COLUMN org_id/provider never joined the sort key -- so
-// filtering on provider too risks missing the row entirely when the latest
-// version was written under a different/blank provider tag).
-//
-// ok=false means the read genuinely could not be confirmed (ClickHouse
-// error) -- the caller MUST skip the team-dimension write for this run
-// rather than treat a failed read as "these teams have no members" and erase
-// an existing roster. An empty, non-nil map with ok=true is a real, confirmed
-// answer (no team_ids to look up, or the query found no matching rows).
-func (sink GitHubTeamCatalogClickHouseEffects) ExistingTeamMembers(
-	ctx context.Context, orgID string, teamIDs []string,
-) (map[string][]string, bool) {
-	if len(teamIDs) == 0 {
-		return map[string][]string{}, true
-	}
-	if sink.Conn == nil || strings.TrimSpace(orgID) == "" {
-		return nil, false
-	}
-	result, err := sink.Conn.Query(ctx,
-		`SELECT id, members FROM teams FINAL WHERE org_id = ? AND id IN ?`,
-		orgID, teamIDs,
-	)
-	if err != nil {
-		return nil, false
-	}
-	defer result.Close()
-	roster := make(map[string][]string, len(teamIDs))
-	for result.Next() {
-		var id string
-		var members []string
-		if err := result.Scan(&id, &members); err != nil {
-			return nil, false
-		}
-		roster[id] = members
-	}
-	if err := result.Err(); err != nil {
-		return nil, false
-	}
-	return roster, true
 }
 
 // openProviderAccessRepoOwnership reads the open provider_access rows of the

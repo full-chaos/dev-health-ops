@@ -1565,6 +1565,8 @@ func dispatchProvidersync(ctx context.Context, runtime *operatorRuntime, args []
 		return dispatchProvidersyncRetireJiraProjectAsTeam(ctx, runtime, args[1:], stdout, stderr)
 	case "carry-team-ids":
 		return dispatchProvidersyncCarryTeamIDs(ctx, runtime, args[1:], stdout, stderr)
+	case "move-team-roster-to-memberships":
+		return dispatchProvidersyncMoveTeamRoster(ctx, runtime, args[1:], stdout, stderr)
 	default:
 		return writeError(stderr, "invalid_request")
 	}
@@ -1761,6 +1763,43 @@ func dispatchProvidersyncCarryTeamIDs(
 	return auditedWriteWith(ctx, runtime, stderr, mutation, joboperator.ActionProvidersyncCleanup, "organization", org, false, perform)
 }
 
+// dispatchProvidersyncMoveTeamRoster handles `providersync
+// move-team-roster-to-memberships` (CHAOS-9087): before the roster column
+// `members` of the teams table is dropped, it moves the roster entries of the
+// admin-made teams of ONE organization that no open membership row covers
+// into team_memberships (source manual), the same
+// providersync.MoveAdminTeamRosterToMemberships. Entries of provider teams are
+// counted and not moved. It refuses a count above the bound and proves the
+// result (the open membership rows grew by exactly the rows written, and no
+// admin entry is left uncovered). The organization comes from stdin only
+// (--org-stdin; there is no --org). It prints counts only. A second run
+// reports zero.
+func dispatchProvidersyncMoveTeamRoster(
+	ctx context.Context, runtime *operatorRuntime, args []string, stdout, stderr io.Writer,
+) int {
+	flags := quietFlags("providersync move-team-roster-to-memberships")
+	orgStdin := flags.Bool("org-stdin", false, orgStdinUsage)
+	dryRun := flags.Bool("dry-run", false, "count the roster entries of the active teams, the ones an open membership row covers and the admin-team entries a real run would move, without writing anything")
+	mutation := addMutationFlags(flags)
+	if flags.Parse(args) != nil || flags.NArg() != 0 || !*orgStdin || !mutation.valid(*dryRun) {
+		return writeError(stderr, "invalid_request")
+	}
+	org, code := resolveOrgFlag(runtime, "", true, stderr)
+	if code != 0 {
+		return code
+	}
+	perform := func(ctx context.Context) int {
+		return runProvidersyncCleanup(ctx, runtime, stdout, stderr, "move_team_roster_to_memberships",
+			func(ctx context.Context, conn clickhousedriver.Conn) (any, error) {
+				return providersync.MoveAdminTeamRosterToMemberships(ctx, conn, org, time.Now().UTC(), *dryRun)
+			})
+	}
+	if *dryRun {
+		return dryRunPreview(ctx, runtime, stderr, joboperator.ActionProvidersyncCleanup, "organization", org, perform)
+	}
+	return auditedWriteWith(ctx, runtime, stderr, mutation, joboperator.ActionProvidersyncCleanup, "organization", org, false, perform)
+}
+
 // runProvidersyncCleanup opens ClickHouse and runs one providersync cleanup,
 // printing its outcome under key.
 func runProvidersyncCleanup(
@@ -1783,6 +1822,12 @@ func runProvidersyncCleanup(
 	outcome, err := cleanup(ctx, conn)
 	if errors.Is(err, providersync.ErrJiraKeyProjectCleanupNoNativeRows) {
 		return writeError(stderr, "no_native_jira_project_rows")
+	}
+	if errors.Is(err, providersync.ErrTeamRosterMoveTooMany) {
+		return writeError(stderr, "team_roster_move_above_bound")
+	}
+	if errors.Is(err, providersync.ErrTeamRosterMoveNotProven) {
+		return writeError(stderr, "team_roster_move_not_proven")
 	}
 	if err != nil {
 		return writeServiceError(stderr, err)
@@ -3251,10 +3296,11 @@ func parseOrgStdin(stdin io.Reader) (canonical string, consumed []byte, reason s
 
 // orgStdinVerbNames are the verbs (group and name) that take --org-stdin.
 var orgStdinVerbNames = map[string]bool{
-	"metrics daily-start":                      true,
-	"metrics partition-recompute":              true,
-	"providersync retire-jira-project-as-team": true,
-	"providersync carry-team-ids":              true,
+	"metrics daily-start":                          true,
+	"metrics partition-recompute":                  true,
+	"providersync retire-jira-project-as-team":     true,
+	"providersync carry-team-ids":                  true,
+	"providersync move-team-roster-to-memberships": true,
 }
 
 // orgStdinVerb reports whether args (after the optional leading "workers")

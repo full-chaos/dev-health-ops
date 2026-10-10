@@ -120,9 +120,8 @@ func (r *fakeTeamExistingRows) Scan(dest ...any) error {
 	*dest[0].(*string) = entry.id
 	*dest[1].(**string) = entry.row.Name
 	*dest[2].(**string) = entry.row.Description
-	*dest[3].(*[]string) = entry.row.Members
-	*dest[4].(*[]string) = entry.row.ProjectKeys
-	*dest[5].(*[]string) = entry.row.RepoPatterns
+	*dest[3].(*[]string) = entry.row.ProjectKeys
+	*dest[4].(*[]string) = entry.row.RepoPatterns
 	return nil
 }
 func (r *fakeTeamExistingRows) Close() error { return nil }

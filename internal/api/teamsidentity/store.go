@@ -65,7 +65,6 @@ type Team struct {
 	TeamID        string // the ClickHouse slug -- the wire "team_id"
 	Name          string
 	Description   *string
-	Members       []string
 	ManualMembers []string
 	ProjectKeys   []string
 	RepoPatterns  []string
@@ -110,7 +109,7 @@ type Store struct {
 	Conn driver.Conn
 }
 
-const teamSelectColumns = "id, team_uuid, name, description, members, project_keys, repo_patterns, is_active, updated_at, org_id, manual_members, provider, native_team_key, parent_team_id, source_id, coalesce(created_at, updated_at)"
+const teamSelectColumns = "id, team_uuid, name, description, project_keys, repo_patterns, is_active, updated_at, org_id, manual_members, provider, native_team_key, parent_team_id, source_id, coalesce(created_at, updated_at)"
 
 // queryTeams is _query_teams: teamID nil lists every (optionally
 // active-only) team; teamID non-nil scopes to one.
@@ -139,21 +138,21 @@ func (s Store) queryTeams(ctx context.Context, orgID string, teamID *string, act
 	var teams []Team
 	for rows.Next() {
 		var (
-			id, name, orgIDCol                         string
-			teamUUIDCol                                uuid.UUID
-			description                                *string
-			members, projectKeys, repoPatterns, manual []string
-			isActive                                   uint8
-			updatedAt, createdAt                       time.Time
-			origin                                     teamOrigin
+			id, name, orgIDCol                string
+			teamUUIDCol                       uuid.UUID
+			description                       *string
+			projectKeys, repoPatterns, manual []string
+			isActive                          uint8
+			updatedAt, createdAt              time.Time
+			origin                            teamOrigin
 		)
-		if err := rows.Scan(&id, &teamUUIDCol, &name, &description, &members, &projectKeys, &repoPatterns, &isActive, &updatedAt, &orgIDCol, &manual,
+		if err := rows.Scan(&id, &teamUUIDCol, &name, &description, &projectKeys, &repoPatterns, &isActive, &updatedAt, &orgIDCol, &manual,
 			&origin.Provider, &origin.NativeTeamKey, &origin.ParentTeamID, &origin.SourceID, &createdAt); err != nil {
 			return nil, fmt.Errorf("scan team row: %w", err)
 		}
 		teams = append(teams, Team{
 			ID: teamUUIDCol.String(), TeamUUID: teamUUIDCol, TeamID: id, Name: name, Description: description,
-			Members: members, ManualMembers: manual, ProjectKeys: projectKeys, RepoPatterns: repoPatterns,
+			ManualMembers: manual, ProjectKeys: projectKeys, RepoPatterns: repoPatterns,
 			IsActive: isActive != 0, CreatedAt: createdAt, UpdatedAt: updatedAt, OrgID: orgIDCol, origin: origin,
 		})
 	}
@@ -179,7 +178,7 @@ func (s Store) GetTeam(ctx context.Context, orgID, teamID string) (*Team, error)
 }
 
 // TeamWrite is create_or_update's parameter set. A nil pointer for
-// RepoPatterns/ProjectKeys/Members/ManualMembers means "not provided" --
+// RepoPatterns/ProjectKeys/ManualMembers means "not provided" --
 // _resolve_list_field's None-means-keep-existing-or-empty semantics.
 // Description has NO such fallback in Python (used exactly as given, nil
 // included) -- it is a plain *string here, always applied as given.
@@ -192,7 +191,6 @@ type TeamWrite struct {
 	Description   *string
 	RepoPatterns  *[]string
 	ProjectKeys   *[]string
-	Members       *[]string
 	ManualMembers *[]string
 }
 
@@ -219,11 +217,10 @@ func (s Store) CreateOrUpdateTeam(ctx context.Context, orgID string, write TeamW
 	} else if strings.TrimSpace(write.Origin) == "" {
 		return Team{}, fmt.Errorf("create team %q: no origin", write.TeamID)
 	}
-	var existingMembers, existingManual []string
+	var existingManual []string
 	if existing != nil {
-		existingMembers, existingManual = existing.Members, existing.ManualMembers
+		existingManual = existing.ManualMembers
 	}
-	resolvedMembers := resolveListField(write.Members, existingMembers)
 	resolvedManual := resolveListField(write.ManualMembers, existingManual)
 	resolvedProjects := resolveListField(write.ProjectKeys, teamListOrNil(existing, func(t Team) []string { return t.ProjectKeys }))
 	resolvedRepos := resolveListField(write.RepoPatterns, teamListOrNil(existing, func(t Team) []string { return t.RepoPatterns }))
@@ -231,7 +228,7 @@ func (s Store) CreateOrUpdateTeam(ctx context.Context, orgID string, write TeamW
 	now := time.Now().UTC()
 	createdAt, err := s.insertTeamRow(ctx, teamInsertRow{
 		ID: write.TeamID, TeamUUID: uuidValue, Name: write.Name, Description: write.Description,
-		Members: resolvedMembers, ManualMembers: resolvedManual, ProjectKeys: resolvedProjects, RepoPatterns: resolvedRepos,
+		ManualMembers: resolvedManual, ProjectKeys: resolvedProjects, RepoPatterns: resolvedRepos,
 		IsActive: true, OrgID: orgID, Origin: origin, UpdatedAt: now,
 	})
 	if err != nil {
@@ -239,7 +236,7 @@ func (s Store) CreateOrUpdateTeam(ctx context.Context, orgID string, write TeamW
 	}
 	return Team{
 		ID: uuidValue.String(), TeamUUID: uuidValue, TeamID: write.TeamID, Name: write.Name, Description: write.Description,
-		Members: resolvedMembers, ManualMembers: resolvedManual, ProjectKeys: resolvedProjects, RepoPatterns: resolvedRepos,
+		ManualMembers: resolvedManual, ProjectKeys: resolvedProjects, RepoPatterns: resolvedRepos,
 		IsActive: true, CreatedAt: createdAt, UpdatedAt: now, OrgID: orgID, origin: origin,
 	}, nil
 }
@@ -268,8 +265,10 @@ func sortedUnique(values ...[]string) []string {
 	return out
 }
 
-// SetMembers is ClickHouseTeamAdminService.set_members.
-func (s Store) SetMembers(ctx context.Context, orgID, teamID string, members []string, manualMembers *[]string) (*Team, error) {
+// SetMembers is ClickHouseTeamAdminService.set_members, over the one admin
+// roster that is left: manual_members. The stored roster column `members` is
+// no longer written (CHAOS-9087): a person's team comes from team_memberships.
+func (s Store) SetMembers(ctx context.Context, orgID, teamID string, manualMembers []string) (*Team, error) {
 	existing, err := s.GetTeam(ctx, orgID, teamID)
 	if err != nil {
 		return nil, err
@@ -277,17 +276,12 @@ func (s Store) SetMembers(ctx context.Context, orgID, teamID string, members []s
 	if existing == nil {
 		return nil, nil
 	}
-	sortedMembers := sortedUnique(members)
-	write := TeamWrite{
+	sortedManual := sortedUnique(manualMembers)
+	team, err := s.CreateOrUpdateTeam(ctx, orgID, TeamWrite{
 		Origin: existing.origin.Provider, TeamID: teamID, Name: existing.Name, Description: existing.Description,
 		RepoPatterns: ptrSlice(existing.RepoPatterns), ProjectKeys: ptrSlice(existing.ProjectKeys),
-		Members: &sortedMembers,
-	}
-	if manualMembers != nil {
-		sortedManual := sortedUnique(*manualMembers)
-		write.ManualMembers = &sortedManual
-	}
-	team, err := s.CreateOrUpdateTeam(ctx, orgID, write)
+		ManualMembers: &sortedManual,
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -300,8 +294,8 @@ func ptrSlice(values []string) *[]string {
 }
 
 // AddMembers is ClickHouseTeamAdminService.add_members: unions new members
-// into both Members and ManualMembers (CHAOS-4321 -- this method is only
-// ever called from a genuine admin action).
+// into ManualMembers (CHAOS-4321 -- this method is only ever called from a
+// genuine admin action).
 func (s Store) AddMembers(ctx context.Context, orgID, teamID string, members []string) (*Team, error) {
 	existing, err := s.GetTeam(ctx, orgID, teamID)
 	if err != nil {
@@ -310,14 +304,12 @@ func (s Store) AddMembers(ctx context.Context, orgID, teamID string, members []s
 	if existing == nil {
 		return nil, nil
 	}
-	merged := sortedUnique(existing.Members, members)
-	mergedManual := sortedUnique(existing.ManualMembers, members)
-	return s.SetMembers(ctx, orgID, teamID, merged, &mergedManual)
+	return s.SetMembers(ctx, orgID, teamID, sortedUnique(existing.ManualMembers, members))
 }
 
 // RemoveMembers is ClickHouseTeamAdminService.remove_members: surgically
-// drops facets from Members AND ManualMembers, preserving every other
-// member (never recomputed from scratch).
+// drops facets from ManualMembers, preserving every other member (never
+// recomputed from scratch).
 func (s Store) RemoveMembers(ctx context.Context, orgID, teamID string, facets map[string]bool) (*Team, error) {
 	existing, err := s.GetTeam(ctx, orgID, teamID)
 	if err != nil {
@@ -326,9 +318,7 @@ func (s Store) RemoveMembers(ctx context.Context, orgID, teamID string, facets m
 	if existing == nil {
 		return nil, nil
 	}
-	remaining := filterOut(existing.Members, facets)
-	remainingManual := filterOut(existing.ManualMembers, facets)
-	return s.SetMembers(ctx, orgID, teamID, remaining, &remainingManual)
+	return s.SetMembers(ctx, orgID, teamID, filterOut(existing.ManualMembers, facets))
 }
 
 func filterOut(values []string, drop map[string]bool) []string {
@@ -362,7 +352,7 @@ type teamInsertRow struct {
 	ID, Name                  string
 	TeamUUID                  uuid.UUID
 	Description               *string
-	Members, ManualMembers    []string
+	ManualMembers             []string
 	ProjectKeys, RepoPatterns []string
 	IsActive                  bool
 	OrgID                     string
@@ -375,7 +365,7 @@ type teamInsertRow struct {
 // native_team_key, parent_team_id and source_id are the row's origin: a
 // stored team's own on an edit, the writer's on a new team.
 func (s Store) insertTeamRow(ctx context.Context, row teamInsertRow) (time.Time, error) {
-	const insertSQL = "INSERT INTO teams (id, team_uuid, name, description, members, manual_members, project_keys, repo_patterns, is_active, updated_at, last_synced, org_id, provider, native_team_key, parent_team_id, source_id, created_at)"
+	const insertSQL = "INSERT INTO teams (id, team_uuid, name, description, manual_members, project_keys, repo_patterns, is_active, updated_at, last_synced, org_id, provider, native_team_key, parent_team_id, source_id, created_at)"
 	if err := checkKeyedTeamID(row.ID); err != nil {
 		return time.Time{}, err
 	}
@@ -395,7 +385,7 @@ func (s Store) insertTeamRow(ctx context.Context, row teamInsertRow) (time.Time,
 	}
 	now := time.Now().UTC()
 	if err := batch.Append(
-		row.ID, row.TeamUUID, row.Name, row.Description, row.Members, row.ManualMembers,
+		row.ID, row.TeamUUID, row.Name, row.Description, row.ManualMembers,
 		row.ProjectKeys, row.RepoPatterns, isActive, row.UpdatedAt, now, row.OrgID,
 		row.Origin.Provider, row.Origin.NativeTeamKey, row.Origin.ParentTeamID, row.Origin.SourceID, createdAt,
 	); err != nil {

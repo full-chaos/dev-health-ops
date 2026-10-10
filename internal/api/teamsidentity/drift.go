@@ -34,14 +34,20 @@ const (
 	changeTypeField  = "field_changed"
 )
 
+// retiredRosterField is the drift field of the stored team roster, a column
+// that is gone (CHAOS-9087). The provider observation still carries the
+// observed roster (team_provider_observations.members_json); no stored roster
+// is left to diff it against.
+const retiredRosterField = "members"
+
 // defaultManagedFields mirrors DEFAULT_MANAGED_FIELDS
 // (clickhouse_team_drift_projector.py:27-33).
-var defaultManagedFields = []string{"name", "description", "members", "project_keys", "repo_patterns"}
+var defaultManagedFields = []string{"name", "description", "project_keys", "repo_patterns"}
 
 // jsonDiffFields mirrors JSON_FIELDS (clickhouse_team_drift_projector.py:
 // 34): these three fields compare as a SORTED, DEDUPED list, not the raw
 // field value.
-var jsonDiffFields = map[string]bool{"members": true, "project_keys": true, "repo_patterns": true}
+var jsonDiffFields = map[string]bool{"project_keys": true, "repo_patterns": true}
 
 // teamProviderObservationRow mirrors team_provider_observations' columns
 // (057_team_provider_observations.sql) after _observed_row's own shaping
@@ -274,8 +280,6 @@ func canonicalFieldJSON(field string, row *observedTeamRow) (string, error) {
 		return marshalString(nil)
 	}
 	switch field {
-	case "members":
-		return marshalString(sortedDedupedStrings(row.Members))
 	case "project_keys":
 		return marshalString(sortedDedupedStrings(row.ProjectKeys))
 	case "repo_patterns":
@@ -467,7 +471,6 @@ func (s Store) projectTeam(ctx context.Context, orgID string, team discoveredTea
 
 	if policy == autoApplyPolicy {
 		manualMembers := []string{}
-		members := []string{}
 		teamUUIDValue := teamUUID(orgID, observed.TeamID)
 		// A new imported team takes its provider_type as its origin, not the
 		// legacy Python provider "" (a custom import is a custom team, stored
@@ -477,7 +480,6 @@ func (s Store) projectTeam(ctx context.Context, orgID string, team discoveredTea
 		origin := teamOrigin{Provider: teamid.StoredProvider(observed.Provider), ParentTeamID: observed.ParentTeamID}
 		if existing != nil {
 			manualMembers = existing.ManualMembers
-			members = existing.Members
 			teamUUIDValue = existing.TeamUUID
 			origin = existing.origin
 		}
@@ -495,7 +497,7 @@ func (s Store) projectTeam(ctx context.Context, orgID string, team discoveredTea
 		}
 		if _, err := s.insertTeamRow(ctx, teamInsertRow{
 			ID: observed.TeamID, TeamUUID: teamUUIDValue, Name: stringPtrOr(observed.Name, observed.TeamID),
-			Description: observed.Description, Members: members, ManualMembers: manualMembers,
+			Description: observed.Description, ManualMembers: manualMembers,
 			ProjectKeys: catalogProjectKeys, RepoPatterns: catalogRepoPatterns, IsActive: true,
 			OrgID: orgID, Origin: origin, UpdatedAt: now,
 		}); err != nil {
@@ -582,6 +584,9 @@ func (s Store) projectFieldChanges(ctx context.Context, orgID string, observed o
 	}
 
 	var toWrite []teamDriftChangeRow
+	for _, pending := range pendingByField[retiredRosterField] {
+		toWrite = append(toWrite, statusRow(pending, statusSuperseded, now))
+	}
 	for _, field := range managedFields {
 		oldJSON, err := existingFieldJSON(field, existing)
 		if err != nil {
@@ -638,8 +643,6 @@ func existingFieldJSON(field string, existing *Team) (string, error) {
 		return marshalString(nil)
 	}
 	switch field {
-	case "members":
-		return marshalString(sortedDedupedStrings(existing.Members))
 	case "project_keys":
 		return marshalString(sortedDedupedStrings(existing.ProjectKeys))
 	case "repo_patterns":

@@ -78,6 +78,9 @@ func buildExternalRecordSchemas() map[string]map[string]externalFieldRule {
 			"isActive": optionalBool, "updatedAt": requiredDate,
 		},
 		"team.v1": {
+			// "members" is still accepted so a pushing client does not break,
+			// and is not stored: a person's team comes from team_memberships
+			// (CHAOS-9087).
 			"id": requiredString, "name": requiredString, "description": optionalString,
 			"members": optionalArray, "projectKeys": optionalArray, "repoPatterns": optionalArray,
 			"isActive": optionalBool, "updatedAt": requiredDate, "nativeTeamKey": optionalString, "parentTeamId": optionalString,

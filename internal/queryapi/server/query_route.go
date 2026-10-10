@@ -808,11 +808,11 @@ const registeredHomeV7Document = `query Home($orgId: String!, $filters: FilterIn
   }
 }`
 
-// registeredHomeV8Document is the Home text from before the answer carried why the repositories a
-// request names matched nothing (CHAOS-9098: `HomeResult.filterEmptyReason`): the V7 text plus the
-// repository-filter flag of a delta and of a signal (CHAOS-9093). It stays a legacy text (see
-// legacyDigestsByOperation) so every web build that does not select the field remains accepted. Remove it
-// with the cleanup ticket once no client sends it (testdata/wire_capture/home_v8_captured.graphql).
+// registeredHomeV8Document is the Home text from before a metric under a repository filter said
+// how it was served (CHAOS-9094: `MetricDelta.repoLinkState`, `repoLinkBasis`, `repoLinkMultiRepoItems`
+// and `repoLinkCoverage`). It stays a legacy text (see legacyDigestsByOperation) so every web build that
+// does not select the fields remains accepted. Remove it with the cleanup ticket once no client sends it
+// (testdata/wire_capture/home_v8_captured.graphql).
 const registeredHomeV8Document = `query Home($orgId: String!, $filters: FilterInput, $window: HomeWindowInput) {
   home(orgId: $orgId, filters: $filters, window: $window) {
     freshness {
@@ -847,6 +847,179 @@ const registeredHomeV8Document = `query Home($orgId: String!, $filters: FilterIn
       rateState
       rateCoverage
       repoFilterApplied
+      __typename
+    }
+    reworkThemeAllocation {
+      theme
+      label
+      allocation
+      allocationPct
+      prsMerged
+      churnLoc
+      __typename
+    }
+    summary {
+      id
+      text
+      evidenceLink
+      __typename
+    }
+    tiles {
+      key
+      value {
+        title
+        subtitle
+        link
+        __typename
+      }
+      __typename
+    }
+    constraint {
+      title
+      claim
+      evidence {
+        label
+        link
+        __typename
+      }
+      experiments
+      __typename
+    }
+    events {
+      ts
+      type
+      text
+      link
+      __typename
+    }
+    healthState {
+      status
+      headline
+      summary
+      asOf
+      __typename
+    }
+    signals {
+      id
+      title
+      metric
+      currentValue
+      priorValue
+      delta
+      direction
+      severity
+      confidence
+      affectedScope
+      evidenceCount
+      whyItMatters
+      recommendedAction
+      evidenceRef
+      category
+      scopeEntity {
+        id
+        displayName
+        __typename
+      }
+      coverage
+      repoFilterApplied
+      attribution {
+        items
+        sources {
+          source
+          items
+          share
+          __typename
+        }
+        confidence {
+          confidence
+          items
+          share
+          __typename
+        }
+        __typename
+      }
+      __typename
+    }
+    limitingFactor {
+      claim
+      whyItMatters
+      recommendedAction
+      confidence
+      evidenceRef
+      __typename
+    }
+    dataConfidence {
+      level
+      coveragePct
+      connectedSources
+      missingSources
+      caveats
+      __typename
+    }
+    scopeDataConfidence {
+      level
+      coveragePct
+      lastIngestedAt
+      caveats
+      __typename
+    }
+    __typename
+  }
+}`
+
+// registeredHomeV9Document is the Home text from before the answer carried why the repositories a
+// request names matched nothing (CHAOS-9098: `HomeResult.filterEmptyReason`): the V8 text plus the
+// fields that say how a metric under a repository filter was served (CHAOS-9094). It stays a legacy
+// text (see legacyDigestsByOperation) so every web build that does not select the field remains
+// accepted. Remove it with the cleanup ticket once no client sends it
+// (testdata/wire_capture/home_v9_captured.graphql).
+const registeredHomeV9Document = `query Home($orgId: String!, $filters: FilterInput, $window: HomeWindowInput) {
+  home(orgId: $orgId, filters: $filters, window: $window) {
+    freshness {
+      lastIngestedAt
+      latestSuccessfulSyncAt
+      sources {
+        provider
+        status
+        __typename
+      }
+      coverage {
+        reposCoveredPct
+        prsLinkedToIssuesPct
+        issuesWithCycleStatesPct
+        __typename
+      }
+      __typename
+    }
+    deltas {
+      metric
+      label
+      value
+      unit
+      deltaPct
+      hasData
+      hasPriorData
+      spark {
+        ts
+        value
+        __typename
+      }
+      rateState
+      rateCoverage
+      repoFilterApplied
+      repoLinkState
+      repoLinkBasis {
+        native
+        explicitText
+        heuristic
+        __typename
+      }
+      repoLinkMultiRepoItems
+      repoLinkCoverage {
+        linkedItems
+        itemsInWindow
+        __typename
+      }
       __typename
     }
     reworkThemeAllocation {
@@ -1050,6 +1223,19 @@ const registeredHomeDocument = `query Home($orgId: String!, $filters: FilterInpu
       rateState
       rateCoverage
       repoFilterApplied
+      repoLinkState
+      repoLinkBasis {
+        native
+        explicitText
+        heuristic
+        __typename
+      }
+      repoLinkMultiRepoItems
+      repoLinkCoverage {
+        linkedItems
+        itemsInWindow
+        __typename
+      }
       __typename
     }
     reworkThemeAllocation {
@@ -5676,7 +5862,7 @@ var legacyDigestsByOperation = map[string][]string{
 	"compoundingRisk":       {digestHex(registeredCompoundingRiskV1Document)},
 	"coverageScopeBaseline": {digestHex(registeredCoverageScopeBaselineV1Document)},
 	"hotspots":              {digestHex(registeredHotspotsV1Document)},
-	"home":                  {digestHex(registeredHomeV1Document), digestHex(registeredHomeV2Document), digestHex(registeredHomeV3Document), digestHex(registeredHomeV4Document), digestHex(registeredHomeV5Document), digestHex(registeredHomeV6Document), digestHex(registeredHomeV7Document), digestHex(registeredHomeV8Document)},
+	"home":                  {digestHex(registeredHomeV1Document), digestHex(registeredHomeV2Document), digestHex(registeredHomeV3Document), digestHex(registeredHomeV4Document), digestHex(registeredHomeV5Document), digestHex(registeredHomeV6Document), digestHex(registeredHomeV7Document), digestHex(registeredHomeV8Document), digestHex(registeredHomeV9Document)},
 	"improveOpportunities":  {digestHex(registeredImproveOpportunitiesV1Document), digestHex(registeredImproveOpportunitiesV2Document)},
 	"operatingReview":       {digestHex(registeredOperatingReviewV1Document), digestHex(registeredOperatingReviewV2Document), digestHex(registeredOperatingReviewV3Document)},
 	"reviewEdges":           {digestHex(registeredReviewEdgesV1Document)},

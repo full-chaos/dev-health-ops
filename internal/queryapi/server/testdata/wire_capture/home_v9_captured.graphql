@@ -161,7 +161,6 @@ query Home($orgId: String!, $filters: FilterInput, $window: HomeWindowInput) {
       caveats
       __typename
     }
-    filterEmptyReason
     __typename
   }
 }

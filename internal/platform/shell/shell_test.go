@@ -1049,6 +1049,11 @@ func TestShellExposesTheOTelInitFailureCounterAtZero(t *testing.T) {
 	for _, want := range []string{
 		`dev_health_otel_init_failures_total{attempt="initial"} 0`,
 		`dev_health_otel_init_failures_total{attempt="final"} 0`,
+		// CHAOS-9106: every shell binary also says where its spans went.
+		`dev_health_otel_spans_total{outcome="sampled"}`,
+		`dev_health_otel_spans_total{outcome="exported"}`,
+		`dev_health_otel_spans_total{outcome="export_failed"}`,
+		`dev_health_otel_spans_unaccounted `,
 	} {
 		if !strings.Contains(string(body), want) {
 			t.Fatalf("/metrics lacks %q:\n%s", want, body)

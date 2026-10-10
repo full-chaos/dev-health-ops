@@ -95,14 +95,30 @@ type MetricDelta struct {
 	// pull request merged, when the window holds no stored counts, and for
 	// every other metric.
 	RateCoverage *float64 `json:"rate_coverage,omitempty"`
-	// RepoFilterApplied (CHAOS-9093) says whether the request's repository
-	// filter (scope.level repo ids, or what.repos) narrows this metric. nil when
-	// the request carries none. true for a repository-keyed metric: the filter was
-	// applied, and when the named repositories resolve to nothing the metric has no
-	// data. false for a team-keyed metric (the work-item metrics: their tables
-	// have no repo_id column and the metric spec's scope is "team"), which the
-	// repository condition does not reach.
+	// RepoFilterApplied (CHAOS-9093, CHAOS-9094) says whether the request's
+	// repository filter (scope.level repo ids, or what.repos) narrows this metric.
+	// nil when the request carries none. true otherwise: a repository-keyed metric
+	// through its repo_id, a work-item metric (cycle_time, throughput,
+	// wip_saturation, blocked_work) through the items linked to the repositories'
+	// pull requests; when the named repositories resolve to nothing the metric has
+	// no data. false is not served today.
 	RepoFilterApplied *bool `json:"repo_filter_applied"`
+
+	// The four work-item metrics under a repository filter (CHAOS-9094) are
+	// computed from the items linked to the repository's pull requests through
+	// work_graph_issue_pr. GraphQL only (json "-": the REST bodies are frozen).
+	//
+	// RepoLinkState: "linked", "no_links" (no linked item in the window: no
+	// data) or "timed_out" (the request-time read exceeded its budget: no data,
+	// not the unfiltered value). nil for every other metric and request.
+	RepoLinkState *string `json:"-"`
+	// RepoLinkBasis counts the items of the view by the best provenance tier of
+	// the links that put them there; RepoLinkMultiRepoItems the items that are in
+	// more than one repository's view; RepoLinkCoverage the organization's items
+	// in the window that have a link at all, over all of them.
+	RepoLinkBasis          *RepoLinkBasis    `json:"-"`
+	RepoLinkMultiRepoItems *int              `json:"-"`
+	RepoLinkCoverage       *RepoLinkCoverage `json:"-"`
 }
 
 // ReworkThemeAllocation is the wire shape of ReworkThemeAllocation

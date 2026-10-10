@@ -45,6 +45,9 @@ func sparkPoints(rows []dayValueRow, transform func(float64) float64) []SparkPoi
 // computeMetricDelta ports _metric_deltas' own _compute_one closure
 // (services/home.py:873-948).
 func computeMetricDelta(ctx context.Context, client QueryClient, spec metricSpec, startDay, endDay, compareStart, compareEnd time.Time, f Filters, orgID string, asOf time.Time) (MetricDelta, error) {
+	if repoLinkedMetrics[spec.Metric] && repoFilterRequested(f) {
+		return computeRepoLinkedDelta(ctx, client, spec, startDay, endDay, compareStart, compareEnd, f, orgID)
+	}
 	scopeFilter, scopeBindings, err := scopeFilterForMetric(ctx, client, spec.Scope, f, orgID, "team_id", "repo_id", asOf)
 	if err != nil {
 		return MetricDelta{}, err
@@ -209,6 +212,13 @@ func computeMetricDelta(ctx context.Context, client QueryClient, spec metricSpec
 // downstream "first max on tie" pick (topDeltaByMagnitude) matches
 // Python's own list-order tie-break.
 func computeMetricDeltas(ctx context.Context, client QueryClient, f Filters, startDay, endDay, compareStart, compareEnd time.Time, orgID string, asOf time.Time) ([]MetricDelta, error) {
+	if repoFilterRequested(f) {
+		// One read of the linked items serves the four work-item metrics.
+		ctx = withRepoLinkedLoader(ctx, &repoLinkedLoader{
+			client: client, f: f, orgID: orgID,
+			compareStart: compareStart, compareEnd: compareEnd, startDay: startDay, endDay: endDay,
+		})
+	}
 	out := make([]MetricDelta, len(metrics))
 	errs := make([]error, len(metrics))
 	var wg sync.WaitGroup

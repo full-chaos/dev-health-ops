@@ -468,9 +468,14 @@ func resolveSankey(ctx context.Context, client QueryClient, orgID string, input 
 		//
 		// The telemetry report stays, under its old phase name, so the
 		// counter and the span event keep counting failed sankey reads.
-		recordDegradation(ctx, "sankey", execErr)
-		slog.WarnContext(ctx, "analytics: sankey query failed",
-			"org_id", orgID, "path", pathLabel(req.Path), "use_investment", useInvestment, "error", execErr)
+		//
+		// A request the client closed is a cancel, not a failed read
+		// (clientcancel.go): one INFO line, no failure report.
+		if !reportedAsClientCancel(ctx, execErr, "sankey", "org_id", orgID, "path", pathLabel(req.Path), "use_investment", useInvestment) {
+			recordDegradation(ctx, "sankey", execErr)
+			slog.WarnContext(ctx, "analytics: sankey query failed",
+				"org_id", orgID, "path", pathLabel(req.Path), "use_investment", useInvestment, "error", execErr)
+		}
 		return nil, fmt.Errorf("execute: %w", execErr)
 	}
 	slog.DebugContext(ctx, "analytics: sankey resolved",
@@ -577,15 +582,20 @@ func resolveFlowMatrix(ctx context.Context, client QueryClient, orgID string, in
 	var degradedReason *string
 	if execErr != nil {
 		// Swallow: analytics.py:959-961 logs and degrades to empty.
-		recordDegradation(ctx, "flowMatrix", execErr)
-		// The log line the sankey twin above has always had: telemetry
-		// (counter + span event) is operator-only and needs a tracing
-		// backend, while this is what a plain log reader sees. error_cause
-		// carries the driver's own message, which the client's fixed
-		// "ClickHouse query failed" text deliberately omits (see rootCause).
-		slog.WarnContext(ctx, "analytics: flowMatrix query failed; returning an empty flowMatrix",
-			"org_id", orgID, "dimension", req.Dimension, "use_investment", flowMatrixUsesInvestmentSource(req),
-			"error", execErr, "error_cause", rootCause(execErr).Error())
+		// A request the client closed is a cancel, not a failed read
+		// (clientcancel.go): one INFO line, no failure report. What is
+		// returned does not change: nobody reads it.
+		if !reportedAsClientCancel(ctx, execErr, "flowMatrix", "org_id", orgID, "dimension", req.Dimension, "use_investment", flowMatrixUsesInvestmentSource(req)) {
+			recordDegradation(ctx, "flowMatrix", execErr)
+			// The log line the sankey twin above has always had: telemetry
+			// (counter + span event) is operator-only and needs a tracing
+			// backend, while this is what a plain log reader sees. error_cause
+			// carries the driver's own message, which the client's fixed
+			// "ClickHouse query failed" text deliberately omits (see rootCause).
+			slog.WarnContext(ctx, "analytics: flowMatrix query failed; returning an empty flowMatrix",
+				"org_id", orgID, "dimension", req.Dimension, "use_investment", flowMatrixUsesInvestmentSource(req),
+				"error", execErr, "error_cause", rootCause(execErr).Error())
+		}
 		nodes, edges = nil, nil
 		reason := FlowMatrixExecutionFailedReason
 		degradedReason = &reason

@@ -337,15 +337,10 @@ func BuildResponse(ctx context.Context, chClient QueryClient, pgClient PGQueryCl
 		if err != nil {
 			return nil, err
 		}
-		var driverIDs []string
-		for _, row := range driverRows {
-			if row.ID != "" {
-				driverIDs = append(driverIDs, row.ID)
-			}
-		}
+		// The sentence names the drivers by display name, never by id (CHAOS-9046).
 		driverText := "."
-		if len(driverIDs) > 0 {
-			driverText = " driven by " + strings.Join(driverIDs, ", ") + "."
+		if driverNameList := driverNames(ctx, chClient, orgID, metricGroup(topDelta.Metric), driverRows); len(driverNameList) > 0 {
+			driverText = " driven by " + strings.Join(driverNameList, ", ") + "."
 		}
 		summary = append(summary, SummarySentence{
 			ID:           "s1",

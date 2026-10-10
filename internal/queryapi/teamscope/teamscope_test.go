@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 
+	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
+
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/sqlshape"
 )
 
@@ -218,5 +220,41 @@ func indexesOf(haystack, needle string) []int {
 		}
 		found = append(found, offset+index)
 		offset += index + len(needle)
+	}
+}
+
+// Filters narrow, they never widen (CHAOS-9093): the repositories a request names
+// and the team's are ANDed; names that resolve to nothing leave nothing.
+func TestNarrowRepoScope(t *testing.T) {
+	explicit := " AND repo_id IN {scope_ids:Array(String)}"
+	explicitBindings := []dhclickhouse.Binding{{Name: "scope_ids", Value: []string{"a"}}}
+	team := "repo_id IN (SELECT team_repos)"
+	teamBindings := []dhclickhouse.Binding{{Name: "team_ids", Value: []string{"t"}}}
+	for _, tc := range []struct {
+		name         string
+		named        bool
+		explicit     string
+		team         string
+		wantSQL      string
+		wantBindings int
+	}{
+		{"nothing named, no team", false, "", "", "", 0},
+		{"team only", false, "", team, " AND " + team, 1},
+		{"named and resolved, no team", true, explicit, "", explicit, 1},
+		{"named and resolved with a team: the intersection", true, explicit, team, " AND (repo_id IN {scope_ids:Array(String)} AND " + team + ")", 2},
+		{"named, resolved to nothing, no team: nothing", true, "", "", " AND 1 = 0", 0},
+		{"named, resolved to nothing, with a team: nothing, not the team's", true, "", team, " AND 1 = 0", 0},
+	} {
+		var eb, tb []dhclickhouse.Binding
+		if tc.explicit != "" {
+			eb = explicitBindings
+		}
+		if tc.team != "" {
+			tb = teamBindings
+		}
+		sql, bindings := NarrowRepoScope(tc.named, tc.explicit, eb, tc.team, tb)
+		if sql != tc.wantSQL || len(bindings) != tc.wantBindings {
+			t.Errorf("%s: NarrowRepoScope = %q (%d bindings), want %q (%d)", tc.name, sql, len(bindings), tc.wantSQL, tc.wantBindings)
+		}
 	}
 }

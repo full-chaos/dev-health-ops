@@ -127,13 +127,14 @@ func TestScopeFilterForMetricTeamScopeNeverRoundTripsForRepoIDs(t *testing.T) {
 	}
 }
 
-// TestScopeFilterForMetricUnionsExplicitReposWithTeamScope pins the union
-// semantics resolve_repo_filter_ids' own Python shape has: an explicit
-// what.repos ref alongside a team scope means EITHER condition can match,
-// not both required. The explicit ref still round-trips through
-// resolveRepoID (bounded: one call per explicit ref, not per matching
-// repo), the team side stays pushed down.
-func TestScopeFilterForMetricUnionsExplicitReposWithTeamScope(t *testing.T) {
+// TestScopeFilterForMetricIntersectsExplicitReposWithTeamScope pins that filters
+// narrow, never widen (CHAOS-9093): an explicit what.repos ref alongside a team
+// scope means BOTH conditions must match (a named repository outside the team
+// leaves nothing). The Python original ORed them (resolve_repo_filter_ids'
+// single id list); no recorded golden pins that. The explicit ref still
+// round-trips through the resolver (bounded: one call per explicit ref), the
+// team side stays pushed down.
+func TestScopeFilterForMetricIntersectsExplicitReposWithTeamScope(t *testing.T) {
 	const resolvedRepoID = "55555555-5555-5555-5555-555555555555"
 	client := &queryCapturingClient{rows: [][]any{{resolvedRepoID}}}
 	reader, err := NewReader(client)
@@ -147,8 +148,8 @@ func TestScopeFilterForMetricUnionsExplicitReposWithTeamScope(t *testing.T) {
 	if client.calls != 1 {
 		t.Fatalf("scopeFilterForMetric made %d client round trip(s), want exactly 1 (resolving the explicit ref)", client.calls)
 	}
-	if !strings.HasPrefix(filterSQL, " AND (repo_id IN {scope_ids:Array(String)} OR repo_id IN (") {
-		t.Fatalf("filterSQL does not OR the explicit-repo and team conditions together:\n%s", filterSQL)
+	if !strings.HasPrefix(filterSQL, " AND (repo_id IN {scope_ids:Array(String)} AND repo_id IN (") {
+		t.Fatalf("filterSQL does not AND the explicit-repo and team conditions together:\n%s", filterSQL)
 	}
 	if v, _ := bindingValue(bindings, "scope_ids"); fmt.Sprint(v) != "["+resolvedRepoID+"]" {
 		t.Fatalf("scope_ids binding = %v, want [%s]", v, resolvedRepoID)

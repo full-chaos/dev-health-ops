@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
-	"strings"
 	"time"
 
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
@@ -27,35 +26,6 @@ func scopeClauseRepo(repoIDs []string) (filterSQL string, bindings []dhclickhous
 	return " AND repo_id IN {scope_ids:Array(String)}", []dhclickhouse.Binding{
 		{Name: "scope_ids", Value: repoIDs},
 	}
-}
-
-// combineRepoScopeConditions ORs an explicit repo-id membership clause
-// (scopeClauseRepo's own " AND ..." fragment) with a team-derived
-// condition (teamscope.RepoCondition's bare boolean, no "AND"/"OR" of its
-// own) into ONE "AND (...)" fragment -- resolve_repo_filter_ids' own
-// Python shape unions explicit refs and team-resolved ids into a SINGLE
-// id list before filtering, so a repo matches when it is named directly
-// OR reachable through a scoped team; this keeps that same union
-// semantics across the two different condition shapes. Either side may
-// be empty; the result is "" only when both are.
-func combineRepoScopeConditions(explicitSQL string, explicitBindings []dhclickhouse.Binding, teamCondition string, teamBindings []dhclickhouse.Binding) (filterSQL string, bindings []dhclickhouse.Binding) {
-	explicitCondition := strings.TrimPrefix(explicitSQL, " AND ")
-	var conditions []string
-	if explicitCondition != "" {
-		conditions = append(conditions, explicitCondition)
-		bindings = append(bindings, explicitBindings...)
-	}
-	if teamCondition != "" {
-		conditions = append(conditions, teamCondition)
-		bindings = append(bindings, teamBindings...)
-	}
-	if len(conditions) == 0 {
-		return "", nil
-	}
-	if len(conditions) == 1 {
-		return " AND " + conditions[0], bindings
-	}
-	return " AND (" + strings.Join(conditions, " OR ") + ")", bindings
 }
 
 func scopeClauseTeam(teamIDs []string) (filterSQL string, bindings []dhclickhouse.Binding) {
@@ -131,7 +101,7 @@ func (reader *Reader) scopeFilterForMetric(ctx context.Context, metricScope stri
 			teamCondition, teamBindings = teamscope.RepoCondition(orgID, "repo_id", scopeIDs, asOf)
 		}
 
-		filterSQL, bindings = combineRepoScopeConditions(explicitSQL, explicitBindings, teamCondition, teamBindings)
+		filterSQL, bindings = teamscope.NarrowRepoScope(len(repoRefs) > 0, explicitSQL, explicitBindings, teamCondition, teamBindings)
 		return filterSQL, bindings, nil
 	}
 	return "", nil, nil

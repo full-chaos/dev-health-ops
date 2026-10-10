@@ -587,3 +587,19 @@ func TestHomeResultKeepsANullDeltaPctNull(t *testing.T) {
 		t.Errorf("deltas = %+v, want deltaPct null with both flags true", got.Deltas)
 	}
 }
+
+// repoFilterApplied maps to the GraphQL MetricDelta and HomeSignal fields, null staying null.
+func TestHomeResultCarriesTheRepositoryFilterFlags(t *testing.T) {
+	yes := true
+	resp := &home.Response{
+		Deltas:  []home.MetricDelta{{Metric: "churn", RepoFilterApplied: &yes}, {Metric: "cycle_time"}},
+		Signals: []home.Signal{{ID: "metric:churn", Metric: "churn", RepoFilterApplied: &yes}, {ID: "risk:repo:1", Metric: "compounding_risk"}},
+	}
+	got := homeResultFromResponse(resp)
+	if got.Deltas[0].RepoFilterApplied == nil || !*got.Deltas[0].RepoFilterApplied || got.Deltas[1].RepoFilterApplied != nil {
+		t.Errorf("delta repoFilterApplied = %v / %v, want true / null", got.Deltas[0].RepoFilterApplied, got.Deltas[1].RepoFilterApplied)
+	}
+	if got.Signals[0].RepoFilterApplied == nil || !*got.Signals[0].RepoFilterApplied || got.Signals[1].RepoFilterApplied != nil {
+		t.Errorf("signal repoFilterApplied = %v / %v, want true / null", got.Signals[0].RepoFilterApplied, got.Signals[1].RepoFilterApplied)
+	}
+}

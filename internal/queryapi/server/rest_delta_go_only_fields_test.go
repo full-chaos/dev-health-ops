@@ -112,6 +112,7 @@ func TestRESTSummaryDeltasArePythonDeltasPlusTheDeclaredGoOnlyFields(t *testing.
 		{"HasData", "bool", `json:"has_data"`},
 		{"HasPriorData", "bool", `json:"has_prior_data"`},
 		{"RateState", "*string", `json:"rate_state"`},
+		{"RepoFilterApplied", "*bool", `json:"repo_filter_applied"`},
 	})
 	assertLegacyPlusTail(t, "people.PersonDelta", reflect.TypeOf(people.PersonDelta{}), reflect.TypeOf(peoplePythonDelta{}), []fieldShape{
 		{"HasData", "bool", `json:"has_data"`},
@@ -145,10 +146,10 @@ func TestRESTSummaryDeltasArePythonDeltasPlusTheDeclaredGoOnlyFields(t *testing.
 
 // homeDeltaGoOnlyKeys are the keys of a REST Home delta that the frozen Python
 // model never had (CHAOS-9044), in the order the production type declares them.
-var homeDeltaGoOnlyKeys = []string{"has_data", "has_prior_data", "rate_state"}
+var homeDeltaGoOnlyKeys = []string{"has_data", "has_prior_data", "rate_state", "repo_filter_applied"}
 
 // homeDeltaGoOnlyEnd matches the three keys at the very end of one delta object.
-var homeDeltaGoOnlyEnd = regexp.MustCompile(`,"has_data":(?:true|false),"has_prior_data":(?:true|false),"rate_state":(?:null|"[^"\\]*")\}$`)
+var homeDeltaGoOnlyEnd = regexp.MustCompile(`,"has_data":(?:true|false),"has_prior_data":(?:true|false),"rate_state":(?:null|"[^"\\]*"),"repo_filter_applied":(?:null|true|false)\}$`)
 
 // withoutHomeDeltaGoOnlyFields returns a REST Home body as the production
 // writer writes it, without the declared Go-only keys of each delta, so the
@@ -193,19 +194,20 @@ func withoutHomeDeltaGoOnlyFields(body string) (string, error) {
 }
 
 func TestWithoutHomeDeltaGoOnlyFieldsRemovesOnlyTheDeclaredKeys(t *testing.T) {
-	body := `{"deltas":[{"metric":"m","value":1,"spark":[],"has_data":true,"has_prior_data":false,"rate_state":null},{"metric":"n","spark":[],"has_data":false,"has_prior_data":false,"rate_state":"measured"}],"constraint":{"title":"","claim":""}}`
+	body := `{"deltas":[{"metric":"m","value":1,"spark":[],"has_data":true,"has_prior_data":false,"rate_state":null,"repo_filter_applied":null},{"metric":"n","spark":[],"has_data":false,"has_prior_data":false,"rate_state":"measured","repo_filter_applied":false}],"constraint":{"title":"","claim":""}}`
 	got, err := withoutHomeDeltaGoOnlyFields(body)
 	if err != nil || got != `{"deltas":[{"metric":"m","value":1,"spark":[]},{"metric":"n","spark":[]}],"constraint":{"title":"","claim":""}}` {
 		t.Fatalf("got %s, %v", got, err)
 	}
 	for name, bad := range map[string]string{
-		"a delta without rate_state": `{"deltas":[{"metric":"m","has_data":true,"has_prior_data":true}]}`,
-		"keys out of order":          `{"deltas":[{"metric":"m","has_prior_data":true,"has_data":true,"rate_state":null}]}`,
-		"an extra key after them":    `{"deltas":[{"metric":"m","has_data":true,"has_prior_data":true,"rate_state":null,"other":1}]}`,
-		"no deltas list":             `{"summary":[]}`,
+		"a delta without rate_state":          `{"deltas":[{"metric":"m","has_data":true,"has_prior_data":true}]}`,
+		"a delta without repo_filter_applied": `{"deltas":[{"metric":"m","has_data":true,"has_prior_data":true,"rate_state":null}]}`,
+		"keys out of order":                   `{"deltas":[{"metric":"m","has_prior_data":true,"has_data":true,"rate_state":null,"repo_filter_applied":null}]}`,
+		"an extra key after them":             `{"deltas":[{"metric":"m","has_data":true,"has_prior_data":true,"rate_state":null,"repo_filter_applied":null,"other":1}]}`,
+		"no deltas list":                      `{"summary":[]}`,
 		// The tail of another object must not stand in for a delta that lacks it.
-		"a delta without them while another object holds the tail": `{"deltas":[{"metric":"m"}],"other":{"x":1,"has_data":true,"has_prior_data":true,"rate_state":null}}`,
-		"a delta with a duplicate key":                             `{"deltas":[{"has_data":true,"has_data":true,"has_prior_data":true,"rate_state":null}]}`,
+		"a delta without them while another object holds the tail": `{"deltas":[{"metric":"m"}],"other":{"x":1,"has_data":true,"has_prior_data":true,"rate_state":null,"repo_filter_applied":null}}`,
+		"a delta with a duplicate key":                             `{"deltas":[{"has_data":true,"has_data":true,"has_prior_data":true,"rate_state":null,"repo_filter_applied":null}]}`,
 	} {
 		if out, err := withoutHomeDeltaGoOnlyFields(bad); err == nil {
 			t.Errorf("%s: got %s, want an error", name, out)

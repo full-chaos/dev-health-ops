@@ -79,9 +79,9 @@ VALUES (?, ?, 'wip-saturation', '2026-08-18', '2026-08-25', true, 'warning', 'WI
 		for day, churn := range map[time.Time]uint32{prior: 10, current: 30} {
 			exec(`INSERT INTO repo_metrics_daily (repo_id, day, total_loc_touched, computed_at, org_id) VALUES (?, ?, ?, ?, ?)`, repo, day, churn, computedAt, org)
 		}
-		if name != "" {
-			exec(`INSERT INTO repos (id, repo, created_at, last_synced, org_id, provider) VALUES (?, ?, ?, ?, ?, 'github')`, repo, name, computedAt, computedAt, org)
-		}
+		// The repository is always a stored row, with or without a name: a repository id that
+		// resolves to no stored repository is a filter that matches nothing (CHAOS-9093), no data.
+		exec(`INSERT INTO repos (id, repo, created_at, last_synced, org_id, provider) VALUES (?, ?, ?, ?, ?, 'github')`, repo, name, computedAt, computedAt, org)
 	}
 
 	restProse := func(org, query string) homeProse {

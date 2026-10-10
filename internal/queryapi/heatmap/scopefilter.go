@@ -105,3 +105,58 @@ func scopeFilterForMetric(ctx context.Context, client QueryClient, metricScope, 
 	}
 	return "", nil, nil
 }
+
+// selectedFilter is the resolved selected teams and repositories of a request
+// (CHAOS-9159).
+type selectedFilter struct {
+	filter teamscope.RouteFilter
+}
+
+// served is the two facts the response carries: repo_filter_applied (null when no
+// repository is named, false when the metric is not repository-keyed) and the empty
+// reason (only when the filter applied and nothing matched).
+func (selected selectedFilter) served(repositoryKeyed bool) (applied *bool, reason *string) {
+	if !selected.filter.Named {
+		return nil, nil
+	}
+	applied = &repositoryKeyed
+	if !repositoryKeyed {
+		return applied, nil
+	}
+	return applied, teamscope.EmptyReasonText(selected.filter.EmptyReason)
+}
+
+// selectedScopeFilter resolves the effective teams and repositories of a request and
+// builds the one " AND ..." condition of the repository-keyed reads. Teams: scope_id
+// of a team scope plus team_ids; repositories: scope_id of a repo scope plus repo_ids;
+// the two dimensions AND (teamscope.NarrowRepoScope), a named repository that resolves
+// to nothing leaves nothing (D5841). A request that selects neither reads unfiltered,
+// as before.
+func selectedScopeFilter(ctx context.Context, client QueryClient, orgID, scopeType string, params Params, asOf time.Time) (filterSQL string, bindings []dhclickhouse.Binding, selected selectedFilter, err error) {
+	teamIDs := append([]string(nil), params.TeamIDs...)
+	repoRefs := append([]string(nil), params.RepoRefs...)
+	switch scopeType {
+	case "team":
+		teamIDs = append(teamIDs, params.ScopeID)
+	case "repo":
+		repoRefs = append(repoRefs, params.ScopeID)
+	}
+	filter, err := teamscope.ResolveRouteFilter(ctx, client, orgID, teamIDs, repoRefs, asOf, settingsMaxExecutionTime(), "heatmap: ")
+	if err != nil {
+		return "", nil, selectedFilter{}, err
+	}
+	explicitSQL, explicitBindings := scopeClauseRepo(filter.RepoIDs)
+	conditionTeams := filter.TeamIDs
+	if scopeType == "team" && len(conditionTeams) == 0 {
+		// A team scope with no id: the condition of the empty id, as the route has
+		// always built it (the answer of a request that selects nothing new is unchanged).
+		conditionTeams = []string{""}
+	}
+	var teamCondition string
+	var teamBindings []dhclickhouse.Binding
+	if len(conditionTeams) > 0 {
+		teamCondition, teamBindings = teamscope.RepoCondition(orgID, "repo_id", conditionTeams, asOf)
+	}
+	filterSQL, bindings = teamscope.NarrowRepoScope(filter.Named, explicitSQL, explicitBindings, teamCondition, teamBindings)
+	return filterSQL, bindings, selectedFilter{filter: filter}, nil
+}

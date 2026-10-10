@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"reflect"
+	"strings"
 	"testing"
 
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
@@ -298,5 +299,23 @@ func TestNewHeatmapWorkHandlerHappyPathShape(t *testing.T) {
 	}
 	if body["evidence"] != nil {
 		t.Fatalf("evidence = %v, want null (repo_touchpoints never sets it)", body["evidence"])
+	}
+}
+
+// CHAOS-9159: the two new keys end the body, null when the request selects nothing.
+func TestNewHeatmapWorkHandlerServesTheSelectedFilterKeysLast(t *testing.T) {
+	handler := newHeatmapWorkHandler(emptyRowsHeatmapClient{})
+	for target, want := range map[string]string{
+		"/api/v1/heatmap?type=context_switch&metric=repo_touchpoints":                       `"evidence":null,"repo_filter_applied":null,"filter_empty_reason":null}`,
+		"/api/v1/heatmap?type=context_switch&metric=repo_touchpoints&repo_ids=acme/missing": `"repo_filter_applied":true,"filter_empty_reason":"repository_not_found"}`,
+		"/api/v1/heatmap?type=context_switch&metric=repo_touchpoints&repo_ids=&team_ids=t1": `"repo_filter_applied":null,"filter_empty_reason":null}`,
+	} {
+		req := httptest.NewRequest(http.MethodGet, target, nil)
+		req = req.WithContext(authctx.WithClaims(req.Context(), authctx.Claims{OrgID: "org-1"}))
+		rec := httptest.NewRecorder()
+		serveRoute(t, handler, rec, req)
+		if rec.Code != http.StatusOK || !strings.HasSuffix(rec.Body.String(), want+"\n") && !strings.HasSuffix(rec.Body.String(), want) {
+			t.Errorf("%s: status %d, body %s, want it to end with %s", target, rec.Code, rec.Body.String(), want)
+		}
 	}
 }

@@ -106,6 +106,13 @@ func MoveWords(d MetricDelta) string {
 	return fmt.Sprintf("%s from %s to %s", verb, formatValue(0, d.Unit), formatValue(d.Value, d.Unit))
 }
 
+// namesDrivers says whether the summary sentence of a delta names the drivers of its
+// move: not for a measured move of exactly 0 % (CHAOS-9139, D5900).
+func namesDrivers(d MetricDelta) bool {
+	pct, ok := d.Percent()
+	return !(ok && pct == 0)
+}
+
 // formatDeltaWords ports _format_delta (services/home.py:309-310).
 func formatDeltaWords(deltaPct float64) string {
 	return fmt.Sprintf("%.0f%%", absFloat(deltaPct))

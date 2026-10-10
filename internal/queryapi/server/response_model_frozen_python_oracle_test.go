@@ -641,6 +641,58 @@ func TestPersonDrilldownRowsArePythonRowsPlusTheDeclaredNameFields(t *testing.T)
 	}
 }
 
+// quadrantPythonResponse and heatmapPythonResponse are the frozen Python response
+// models of GET /api/v1/quadrant and GET /api/v1/heatmap. The production types end
+// with the two Go-only fields repo_filter_applied and filter_empty_reason
+// (CHAOS-9159), which the Python reference never served
+// (TestQuadrantAndHeatmapResponsesArePythonPlusTheDeclaredTail).
+type quadrantPythonResponse struct {
+	Axes        quadrant.Axes         `json:"axes"`
+	Points      []quadrant.Point      `json:"points"`
+	Annotations []quadrant.Annotation `json:"annotations"`
+}
+
+type heatmapPythonResponse struct {
+	Axes     heatmap.Axes   `json:"axes"`
+	Cells    []heatmap.Cell `json:"cells"`
+	Legend   heatmap.Legend `json:"legend"`
+	Evidence any            `json:"evidence"`
+}
+
+func TestQuadrantAndHeatmapResponsesArePythonPlusTheDeclaredTail(t *testing.T) {
+	type field struct{ name, goType, tag string }
+	fieldsOf := func(typ reflect.Type) []field {
+		out := make([]field, 0, typ.NumField())
+		for index := range typ.NumField() {
+			f := typ.Field(index)
+			out = append(out, field{f.Name, f.Type.String(), string(f.Tag)})
+		}
+		return out
+	}
+	tail := []field{
+		{"RepoFilterApplied", "*bool", `json:"repo_filter_applied" pyjson:"nullable"`},
+		{"FilterEmptyReason", "*string", `json:"filter_empty_reason" pyjson:"nullable"`},
+	}
+	heatmapTail := []field{
+		{"RepoFilterApplied", "*bool", `json:"repo_filter_applied"`},
+		{"FilterEmptyReason", "*string", `json:"filter_empty_reason"`},
+	}
+	for _, tc := range []struct {
+		name       string
+		production reflect.Type
+		python     reflect.Type
+		tail       []field
+	}{
+		{"quadrant.Response", reflect.TypeOf(quadrant.Response{}), reflect.TypeOf(quadrantPythonResponse{}), tail},
+		{"heatmap.Response", reflect.TypeOf(heatmap.Response{}), reflect.TypeOf(heatmapPythonResponse{}), heatmapTail},
+	} {
+		want := append(fieldsOf(tc.python), tc.tail...)
+		if got := fieldsOf(tc.production); !reflect.DeepEqual(got, want) {
+			t.Errorf("%s fields =\n %v\nwant the frozen fields, then repo_filter_applied and filter_empty_reason:\n %v", tc.name, got, want)
+		}
+	}
+}
+
 func responseModelOracleRoutes() map[string]responseModelOracleRoute {
 	plain := func(response any) responseModelOracleRoute { return responseModelOracleRoute{response: response} }
 	sankeyRoute := plain((*sankey.Response)(nil))
@@ -650,13 +702,13 @@ func responseModelOracleRoutes() map[string]responseModelOracleRoute {
 		"POST /api/v1/home":                               plain(homePythonResponse{}),
 		"GET /api/v1/explain":                             plain((*explainPythonResponse)(nil)),
 		"POST /api/v1/explain":                            plain((*explainPythonResponse)(nil)),
-		"GET /api/v1/heatmap":                             plain((*heatmap.Response)(nil)),
+		"GET /api/v1/heatmap":                             plain((*heatmapPythonResponse)(nil)),
 		"GET /api/v1/work-units":                          plain([]workUnitInvestmentWire(nil)),
 		"POST /api/v1/work-units":                         plain([]workUnitInvestmentWire(nil)),
 		"POST /api/v1/work-units/{work_unit_id}/explain":  plain((*workunitexplain.Explanation)(nil)),
 		"GET /api/v1/flame":                               plain((*flame.Response)(nil)),
 		"GET /api/v1/flame/aggregated":                    plain((*aggflame.Response)(nil)),
-		"GET /api/v1/quadrant":                            plain((*quadrant.Response)(nil)),
+		"GET /api/v1/quadrant":                            plain((*quadrantPythonResponse)(nil)),
 		"GET /api/v1/drilldown/prs":                       plain((*drilldown.PRsResponse)(nil)),
 		"POST /api/v1/drilldown/prs":                      plain((*drilldown.PRsResponse)(nil)),
 		"GET /api/v1/drilldown/issues":                    plain((*issuesPythonResponse)(nil)),

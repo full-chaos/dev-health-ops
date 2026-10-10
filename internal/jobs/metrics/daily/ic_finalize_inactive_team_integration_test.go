@@ -248,6 +248,10 @@ func TestTheEdgesOfTheInactiveTeamRuleOfTheLandscapeFinalize(t *testing.T) {
 			repo, rowDay, person, person, teamID, "Team "+teamID, stored, orgID)
 	}
 
+	// Two versions of one team row must both be in the table when the family
+	// reads them: a background merge would keep the newest one only, and "the
+	// newest row decides" could then not be told from "the oldest row decides".
+	exec("stop the merges of teams", "SYSTEM STOP MERGES teams")
 	team(org, "ENG", 0, t0)
 	team(org, "github:platform", 1, t0, "member@example.com")
 	// Inactive at first, active again: active.
@@ -290,6 +294,14 @@ WHERE org_id = ? AND as_of_day = ? AND `+teamkeytables.ICLandscapeRolling30d.Liv
 			t.Fatal(err)
 		}
 		return out
+	}
+
+	var versions uint64
+	if err := conn.QueryRow(ctx, "SELECT count() FROM teams WHERE org_id = ? AND id IN ('back-again', 'closed-later')", org).Scan(&versions); err != nil {
+		t.Fatal(err)
+	}
+	if versions != 4 {
+		t.Fatalf("the table holds %d versions of the two teams, want 4: the newest-row edge is not measured", versions)
 	}
 
 	want := map[string][]string{

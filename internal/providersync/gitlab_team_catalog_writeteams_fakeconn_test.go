@@ -27,12 +27,16 @@ type fakeGitLabWriteTeamsConn struct {
 	driver.Conn
 	rosterQueryErr error
 	created        map[string]time.Time
+	createdErr     error
 	batch          *fakeGitLabWriteTeamsBatch
 }
 
 func (f *fakeGitLabWriteTeamsConn) Query(_ context.Context, query string, _ ...any) (driver.Rows, error) {
 	switch {
 	case query == teamcreated.Query:
+		if f.createdErr != nil {
+			return nil, f.createdErr
+		}
 		return &fakeGitLabCreatedRows{rows: f.created, index: -1}, nil
 	case strings.Contains(query, "manual_members"):
 		return &fakeGitLabGuardMembershipRows{rows: nil, index: -1}, nil

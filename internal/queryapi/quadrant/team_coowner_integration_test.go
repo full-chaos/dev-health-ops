@@ -10,6 +10,7 @@ import (
 	"time"
 
 	stdclickhouse "github.com/ClickHouse/clickhouse-go/v2/lib/driver"
+	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/remaining"
@@ -112,5 +113,32 @@ func TestTheTeamQuadrantCountsAnItemOfAProjectOfTwoTeamsForEachTeam(t *testing.T
 				}
 			}
 		})
+	}
+}
+
+// CHAOS-9159: the selected teams narrow the work-item attribution read of the team grain
+// (cycle_throughput) through its own alias: only the selected teams have a point.
+func TestTheTeamQuadrantAttributionReadIsNarrowedByTheSelectedTeams(t *testing.T) {
+	ctx := context.Background()
+	admin, client := crossorg.Start(ctx, t)
+	org := crossorg.Default().OrgA
+	day := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
+	seedCoOwnedItemsThroughTheProducer(ctx, t, admin, org, day)
+	selected := []string{"team-a-github", "team-b-jira"}
+	extra := extraScope{
+		SQL:      "\n              AND t.team_id IN {scope_team_ids:Array(String)}",
+		Bindings: []dhclickhouse.Binding{{Name: "scope_team_ids", Value: selected}},
+	}
+	rows, err := fetchWorkItemTeamQuadrantMetricIn(ctx, client, "throughput", day.AddDate(0, 0, -7), day.AddDate(0, 0, 7), "week", org, extra)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var teams []string
+	for _, row := range rows {
+		teams = append(teams, row.EntityID)
+	}
+	sort.Strings(teams)
+	if strings.Join(teams, ",") != "team-a-github,team-b-jira" {
+		t.Fatalf("points by team = %v, want only the selected teams %v", teams, selected)
 	}
 }

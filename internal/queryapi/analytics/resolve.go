@@ -74,6 +74,47 @@ import (
 // ported for the repo and team dimensions -- see breakdown.go's
 // ExecuteBreakdown doc comment.
 func Resolve(ctx context.Context, client QueryClient, orgID string, batch model.AnalyticsRequestInput) (*model.AnalyticsResult, error) {
+	return ResolveSelected(ctx, client, orgID, batch, EverythingSelected())
+}
+
+// Selection says which parts of the answer the operation asked for. A part
+// that has its OWN ClickHouse statement and that the operation did not select
+// is not computed: its field of the result is left at its zero value, which
+// the GraphQL layer never serializes for a field that is not in the selection.
+//
+// It holds only the parts that cost a statement of their own and that an
+// operation can leave out while it asks for the rest of the batch:
+//
+//   - the breakdowns (one statement for each breakdown of the batch). A batch
+//     can hold a breakdown only to give its window to the evidence quality
+//     parts; when the operation does not select `breakdowns`, each breakdown
+//     is still validated and compiled (a wrong one is an error as before) and
+//     its statement is not sent.
+//   - the evidence quality stats (one statement for an investment batch whose
+//     first breakdown or timeseries gives a window).
+//     evidenceQualityDistribution is the band counts of the same statement,
+//     so either field selects it.
+//   - the evidence quality by group (one statement, when the batch names a
+//     group).
+//   - the coverage of a sankey (one statement beside the grouped sankey).
+//
+// The zero value selects nothing. A caller that does not know the selection
+// uses EverythingSelected.
+type Selection struct {
+	Breakdowns             bool
+	EvidenceQualityStats   bool
+	EvidenceQualityByGroup bool
+	SankeyCoverage         bool
+}
+
+// EverythingSelected is the selection of a caller that reads every part.
+func EverythingSelected() Selection {
+	return Selection{Breakdowns: true, EvidenceQualityStats: true, EvidenceQualityByGroup: true, SankeyCoverage: true}
+}
+
+// ResolveSelected is Resolve for an operation whose selection is known: the
+// statements of a part the operation did not select are not sent.
+func ResolveSelected(ctx context.Context, client QueryClient, orgID string, batch model.AnalyticsRequestInput, selected Selection) (*model.AnalyticsResult, error) {
 	if err := validateSubRequestCount(len(batch.Timeseries), len(batch.Breakdowns), batch.Sankey != nil, batch.FlowMatrix != nil); err != nil {
 		return nil, err
 	}
@@ -164,7 +205,7 @@ func Resolve(ctx context.Context, client QueryClient, orgID string, batch model.
 	for i, input := range batch.Breakdowns {
 		go func(i int, input model.BreakdownRequestInput) {
 			defer wg.Done()
-			bdOutcomes[i].result, bdOutcomes[i].err = resolveOneBreakdown(ctx, client, orgID, input, useInvestment, resolvedFilters)
+			bdOutcomes[i].result, bdOutcomes[i].err = resolveOneBreakdown(ctx, client, orgID, input, useInvestment, resolvedFilters, selected.Breakdowns)
 		}(i, input)
 	}
 	wg.Wait()
@@ -196,7 +237,7 @@ func Resolve(ctx context.Context, client QueryClient, orgID string, batch model.
 	// is a failed execute (CHAOS-8186).
 	var sankeyResult *model.SankeyResult
 	if batch.Sankey != nil {
-		result, err := resolveSankey(ctx, client, orgID, *batch.Sankey, batch.UseInvestment, resolvedFilters)
+		result, err := resolveSankey(ctx, client, orgID, *batch.Sankey, batch.UseInvestment, resolvedFilters, selected.SankeyCoverage)
 		if err != nil {
 			return nil, fmt.Errorf("analytics: sankey: %w", err)
 		}
@@ -218,13 +259,24 @@ func Resolve(ctx context.Context, client QueryClient, orgID string, batch model.
 	// Phase 4: evidence quality stats -- entirely investment-path
 	// (CHAOS-4538/CHAOS-4723), gated on useInvestment. FATAL on error,
 	// no swallow (see this file's package doc comment).
-	evidenceQualityStats, err := resolveEvidenceQualityStats(ctx, client, orgID, batch, useInvestment, resolvedFilters)
-	if err != nil {
-		return nil, fmt.Errorf("analytics: evidenceQualityStats: %w", err)
+	//
+	// Each of the two is its own statement and is sent only for an operation
+	// that selected it (Selection).
+	var evidenceQualityStats *model.EvidenceQualityStats
+	if selected.EvidenceQualityStats {
+		stats, err := resolveEvidenceQualityStats(ctx, client, orgID, batch, useInvestment, resolvedFilters)
+		if err != nil {
+			return nil, fmt.Errorf("analytics: evidenceQualityStats: %w", err)
+		}
+		evidenceQualityStats = stats
 	}
-	evidenceQualityByGroup, err := resolveEvidenceQualityByGroup(ctx, client, orgID, batch, useInvestment, resolvedFilters)
-	if err != nil {
-		return nil, fmt.Errorf("analytics: evidenceQualityByGroup: %w", err)
+	var evidenceQualityByGroup []model.EvidenceQualityGroup
+	if selected.EvidenceQualityByGroup {
+		groups, err := resolveEvidenceQualityByGroup(ctx, client, orgID, batch, useInvestment, resolvedFilters)
+		if err != nil {
+			return nil, fmt.Errorf("analytics: evidenceQualityByGroup: %w", err)
+		}
+		evidenceQualityByGroup = groups
 	}
 	// analytics.py:970-973: evidence_quality_distribution is literally
 	// evidence_quality_stats.band_counts, reused, never recomputed --
@@ -278,7 +330,7 @@ func resolveOneTimeseries(ctx context.Context, client QueryClient, orgID string,
 	return ExecuteTimeseries(ctx, client, q, string(input.Dimension), string(input.Measure))
 }
 
-func resolveOneBreakdown(ctx context.Context, client QueryClient, orgID string, input model.BreakdownRequestInput, useInvestment bool, filters *model.FilterInput) (model.BreakdownResult, error) {
+func resolveOneBreakdown(ctx context.Context, client QueryClient, orgID string, input model.BreakdownRequestInput, useInvestment bool, filters *model.FilterInput, selected bool) (model.BreakdownResult, error) {
 	req, err := BreakdownRequestFromInput(input)
 	if err != nil {
 		return model.BreakdownResult{}, err
@@ -286,6 +338,11 @@ func resolveOneBreakdown(ctx context.Context, client QueryClient, orgID string, 
 	q, err := CompileBreakdown(req, orgID, queryTimeoutSecs, useInvestment, filters)
 	if err != nil {
 		return model.BreakdownResult{}, err
+	}
+	if !selected {
+		// Validated and compiled, so a wrong breakdown is the error it was;
+		// nobody reads the rows, so no statement is sent.
+		return model.BreakdownResult{}, nil
 	}
 	if useInvestment {
 		// See resolveOneTimeseries's identical call for the reasoning.
@@ -327,7 +384,7 @@ func pathAutoRoutesToInvestment(path []Dimension) bool {
 	return false
 }
 
-func resolveSankey(ctx context.Context, client QueryClient, orgID string, input model.SankeyRequestInput, batchUseInvestment *bool, filters *model.FilterInput) (*model.SankeyResult, error) {
+func resolveSankey(ctx context.Context, client QueryClient, orgID string, input model.SankeyRequestInput, batchUseInvestment *bool, filters *model.FilterInput, coverageSelected bool) (*model.SankeyResult, error) {
 	req, err := SankeyRequestFromInput(input)
 	if err != nil {
 		return nil, err
@@ -447,12 +504,16 @@ func resolveSankey(ctx context.Context, client QueryClient, orgID string, input 
 		coverageElapsed    time.Duration
 		coverageConcurrent sync.WaitGroup
 	)
-	coverageConcurrent.Add(1)
-	go func() {
-		defer coverageConcurrent.Done()
-		coverage = resolveSankeyCoverage(ctx, client, orgID, req, queryTimeoutSecs, coverageUseInvestment, filters)
-		coverageElapsed = time.Since(started)
-	}()
+	// The coverage is its own statement: it is sent only for an operation that
+	// selected sankey.coverage.
+	if coverageSelected {
+		coverageConcurrent.Add(1)
+		go func() {
+			defer coverageConcurrent.Done()
+			coverage = resolveSankeyCoverage(ctx, client, orgID, req, queryTimeoutSecs, coverageUseInvestment, filters)
+			coverageElapsed = time.Since(started)
+		}()
+	}
 	nodes, edges, execErr = executeSankeyGrouped(ctx, client, groupedQuery)
 	sankeyElapsed = time.Since(started)
 	coverageConcurrent.Wait()

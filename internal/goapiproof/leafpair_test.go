@@ -211,7 +211,9 @@ func TestMetricPercentDefects_AdmitOnlyTheStateTheyName(t *testing.T) {
 		{"a number where the reference has 0 on a no-data row", body("0.0", false, true, "5.0"), body("3.0", false, true, "5.0"), 1},
 		{"null where the reference has a real percent on a no-data row", body("12.0", false, true, "5.0"), body("null", false, true, "5.0"), 1},
 		{"reversed: reference null, candidate 0", body("null", false, true, "5.0"), body("0.0", false, true, "5.0"), 1},
-		{"another row's null percent is not covered by this row's flags", body("0.0", true, true, "0.0"), body("0.0", true, true, "null"), 0},
+		{"another row's null percent is judged by its own flags", body("0.0", true, true, "0.0"), body("0.0", true, true, "null"), 0},
+		{"a null percent beside no flags at all is not covered", `{"data":{"deltas":[{"metric":"a","delta_pct":0.0},{"metric":"b","delta_pct":5.0,"has_data":true,"has_prior_data":true}]}}`, `{"data":{"deltas":[{"metric":"a","delta_pct":null},{"metric":"b","delta_pct":5.0,"has_data":true,"has_prior_data":true}]}}`, 1},
+		{"a null percent beside a non-boolean flag is not covered", `{"data":{"deltas":[{"metric":"a","delta_pct":0.0,"has_data":"yes","has_prior_data":true},{"metric":"b","delta_pct":5.0,"has_data":true,"has_prior_data":true}]}}`, `{"data":{"deltas":[{"metric":"a","delta_pct":null,"has_data":"yes","has_prior_data":true},{"metric":"b","delta_pct":5.0,"has_data":true,"has_prior_data":true}]}}`, 1},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			result := Compare(snapshotFromJSON(t, c.baseline), snapshotFromJSON(t, c.candidate), opts)

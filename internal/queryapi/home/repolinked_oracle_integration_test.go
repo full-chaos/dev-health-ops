@@ -82,6 +82,14 @@ func seedOracleWorld(ctx context.Context, t *testing.T, admin stdclickhouse.Conn
 	for _, repo := range []struct{ id, name string }{{oracleR1, "a/r1"}, {oracleR2, "a/r2"}} {
 		exec(fmt.Sprintf(`INSERT INTO repos (id, repo, provider, org_id, created_at, last_synced) VALUES (toUUID('%s'), '%s', 'github', '%s', %s, %s)`, repo.id, repo.name, org, synced, synced))
 	}
+	// Team ownership (CHAOS-9191): t-alpha holds repository 1, t-beta repository 2.
+	for team, repo := range map[string]string{"t-alpha": oracleR1, "t-beta": oracleR2} {
+		name := "a/r1"
+		if repo == oracleR2 {
+			name = "a/r2"
+		}
+		exec(fmt.Sprintf(`INSERT INTO team_repo_ownership (org_id, provider, team_id, repo_id, repo_full_name, match_type, source, is_primary, specificity, priority, valid_from, valid_to, updated_at) VALUES ('%s', 'github', '%s', toUUID('%s'), '%s', 'exact', 'inferred', 0, 0, 0, toDateTime64('2026-01-01 00:00:00', 3, 'UTC'), NULL, %s)`, org, team, repo, name, synced))
+	}
 	for _, item := range oracleItems() {
 		if !keep(item) {
 			continue
@@ -333,16 +341,21 @@ func TestRepoLinkedViewCombinesWithTeamByAnd(t *testing.T) {
 		// team alpha owns the work of repository 1 only: alpha AND both repositories = alpha alone.
 		dailyAlpha := read(Filters{Scope: team("t-alpha")})
 		sameDelta(t, name+": team alpha and both repositories", read(Filters{Scope: team("t-alpha"), What: WhatFilter{Repos: []string{oracleR1, oracleR2}}}), dailyAlpha)
-		// a repository the team has no linked item in: no data, never the team's value.
+		// a repository the team does not HOLD: no data, never a value (CHAOS-9191, the decided filter of
+		// CHAOS-9098: team AND repository = the repository the team holds; D5844). Repository 1 has linked
+		// items, but team beta does not hold it, so the view has no repository.
 		none := read(Filters{Scope: team("t-beta"), What: WhatFilter{Repos: []string{oracleR1}}})
-		// D5864: repository 1 HAS linked items in the window (the state is a property of the link: linked);
-		// none of them is team beta's, so the metric has no data.
-		if none.HasData || none.Value != 0 || none.RepoLinkState == nil || *none.RepoLinkState != repoLinkLinked {
+		if none.HasData || none.Value != 0 || none.RepoLinkState == nil || *none.RepoLinkState != repoLinkNoLinks {
 			state := "<nil>"
 			if none.RepoLinkState != nil {
 				state = *none.RepoLinkState
 			}
-			t.Errorf("%s: team beta and repository 1 = value %v has_data %v state %s, want no data, linked", name, none.Value, none.HasData, state)
+			t.Errorf("%s: team beta and repository 1 (not held) = value %v has_data %v state %s, want no data, no_links", name, none.Value, none.HasData, state)
+		}
+		// a repository the team DOES hold, with an item linked to it AND attributed to the team: stays.
+		held := read(Filters{Scope: team("t-beta"), What: WhatFilter{Repos: []string{oracleR2}}})
+		if name == "throughput" && (!held.HasData || held.Value == 0) {
+			t.Errorf("%s: team beta and repository 2 (held) = %+v, want its items", name, held)
 		}
 		// named repositories that resolve to nothing.
 		unknown := read(Filters{What: WhatFilter{Repos: []string{"00000000-0000-4000-8000-0000000000ff"}}})
@@ -459,5 +472,48 @@ VALUES (toDate('2026-08-20'), 'github', 'shared:1', 't-alpha', 7, '%s', %s)`, or
 	}
 	if got.HasData || got.Value != 0 {
 		t.Errorf("blocked_work = %v (has data %v) from a github blocked row of an id only a jira item has, want no data", got.Value, got.HasData)
+	}
+}
+
+// CHAOS-9191 (the decided filter of CHAOS-9098, D5844): with a team AND a named repository the
+// team does NOT hold, the work-item metrics have no data even when an item attributed to the
+// team is linked to that repository; for a repository the team DOES hold the item counts.
+func TestRepoLinkedItemOfTheTeamLinkedToARepositoryTheTeamDoesNotHoldHasNoData(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+	admin, client := newHomeTestClickHouse(ctx, t)
+	const org = "oracle-9191-unheld"
+	seedOracleWorld(ctx, t, admin, org, func(oracleItem) bool { return false }) // repos + ownership only
+	// team alpha holds repository 1; repository 2 is held by team beta.
+	synced := oracleTS("2026-08-26 00:00:00")
+	exec := func(statement string) {
+		t.Helper()
+		if err := admin.Exec(ctx, statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for repo, id := range map[string]string{oracleR1: "gh:a/r#101", oracleR2: "gh:a/r#102"} {
+		exec(fmt.Sprintf(`INSERT INTO work_items (repo_id, work_item_id, provider, status, type, project_id, created_at, started_at, completed_at, org_id, last_synced)
+VALUES (toUUID('%s'), '%s', 'github', 'done', 'task', 'a/r', %s, %s, %s, '%s', %s)`, repo, id, oracleTS("2026-08-12 09:00:00"), oracleTS("2026-08-13 09:00:00"), oracleTS("2026-08-20 12:00:00"), org, synced))
+		exec(fmt.Sprintf(`INSERT INTO work_item_team_attributions (org_id, repo_id, work_item_id, provider, team_id, team_name, source, is_primary, confidence, evidence, computed_at)
+VALUES ('%s', toUUID('%s'), '%s', 'github', 't-alpha', 't-alpha', 'project_ownership', 1, 'high', '', %s)`, org, repo, id, synced))
+		exec(fmt.Sprintf(`INSERT INTO work_graph_issue_pr (repo_id, work_item_id, pr_number, confidence, provenance, evidence, last_synced, org_id)
+VALUES (toUUID('%s'), '%s', 1, 1.0, 'native', '', %s, '%s')`, repo, id, synced, org))
+	}
+	start, end := time.Date(2026, 8, 18, 0, 0, 0, 0, time.UTC), time.Date(2026, 8, 25, 0, 0, 0, 0, time.UTC)
+	read := func(repo string) MetricDelta {
+		t.Helper()
+		d, err := computeMetricDelta(ctx, client, metricSpecByName(t, "throughput"), start, end, time.Date(2026, 8, 11, 0, 0, 0, 0, time.UTC), start,
+			Filters{Scope: ScopeFilter{Level: "team", IDs: []string{"t-alpha"}}, What: WhatFilter{Repos: []string{repo}}}, org, end)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return d
+	}
+	if held := read(oracleR1); !held.HasData || held.Value != 1 {
+		t.Errorf("team alpha and repository 1 (held): %+v, want the item (throughput 1)", held)
+	}
+	if unheld := read(oracleR2); unheld.HasData || unheld.Value != 0 {
+		t.Errorf("team alpha and repository 2 (not held; an item attributed to alpha is linked to it): value %v has data %v, want no data", unheld.Value, unheld.HasData)
 	}
 }

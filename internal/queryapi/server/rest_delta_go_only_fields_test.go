@@ -119,16 +119,16 @@ func TestRESTSummaryDeltasArePythonDeltasPlusTheDeclaredGoOnlyFields(t *testing.
 		{"HasPriorData", "bool", `json:"has_prior_data"`},
 	})
 
-	// The rest of each response is the frozen shape, field for field: only the
-	// element type of Deltas differs.
-	sameButDeltas := func(production, legacy reflect.Type) {
+	// The rest of each response is the frozen shape, field for field, followed by
+	// the declared Go-only tail (none for people): only the element type of Deltas differs.
+	sameButDeltas := func(production, legacy reflect.Type, tail []fieldShape) {
 		t.Helper()
 		prod, leg := fieldShapes(production), fieldShapes(legacy)
-		if len(prod) != len(leg) {
-			t.Errorf("%s has %d fields, the frozen shape %d", production, len(prod), len(leg))
+		if len(prod) != len(leg)+len(tail) {
+			t.Errorf("%s has %d fields, the frozen shape %d plus %d declared Go-only", production, len(prod), len(leg), len(tail))
 			return
 		}
-		for index := range prod {
+		for index := range leg {
 			if prod[index].name == "Deltas" {
 				if leg[index].name != "Deltas" || prod[index].tag != leg[index].tag {
 					t.Errorf("%s Deltas field = %v, frozen %v", production, prod[index], leg[index])
@@ -139,9 +139,16 @@ func TestRESTSummaryDeltasArePythonDeltasPlusTheDeclaredGoOnlyFields(t *testing.
 				t.Errorf("%s field %d = %v, frozen %v", production, index, prod[index], leg[index])
 			}
 		}
+		for index, want := range tail {
+			if got := prod[len(leg)+index]; got != want {
+				t.Errorf("%s Go-only field %d = %v, want %v", production, index, got, want)
+			}
+		}
 	}
-	sameButDeltas(reflect.TypeOf(homeRESTResponse{}), reflect.TypeOf(homePythonResponse{}))
-	sameButDeltas(reflect.TypeOf(people.SummaryResponse{}), reflect.TypeOf(peopleSummaryPythonResponse{}))
+	sameButDeltas(reflect.TypeOf(homeRESTResponse{}), reflect.TypeOf(homePythonResponse{}), []fieldShape{
+		{"FilterEmptyReason", "*string", `json:"filter_empty_reason"`},
+	})
+	sameButDeltas(reflect.TypeOf(people.SummaryResponse{}), reflect.TypeOf(peopleSummaryPythonResponse{}), nil)
 }
 
 // homeDeltaGoOnlyKeys are the keys of a REST Home delta that the frozen Python

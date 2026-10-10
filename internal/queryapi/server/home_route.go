@@ -63,6 +63,10 @@ type homeRESTResponse struct {
 	Signals               []home.Signal                `json:"signals"`
 	LimitingFactor        home.LimitingFactor          `json:"limiting_factor"`
 	DataConfidence        home.DataConfidence          `json:"data_confidence"`
+	// FilterEmptyReason (CHAOS-9098, Go-only, last): why the repositories the
+	// request names matched nothing (repository_not_in_team, repository_not_found);
+	// null when it names none and whenever something matched.
+	FilterEmptyReason *string `json:"filter_empty_reason"`
 }
 
 // homeRESTMetricDelta is the frozen Python MetricDelta shape plus three
@@ -122,6 +126,7 @@ func homeRESTResponseFrom(resp *home.Response) homeRESTResponse {
 		Signals:               resp.Signals,
 		LimitingFactor:        resp.LimitingFactor,
 		DataConfidence:        resp.DataConfidence,
+		FilterEmptyReason:     resp.FilterEmptyReason,
 	}
 }
 

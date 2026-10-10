@@ -766,6 +766,7 @@ type ComplexityRoot struct {
 		DataConfidence        func(childComplexity int) int
 		Deltas                func(childComplexity int) int
 		Events                func(childComplexity int) int
+		FilterEmptyReason     func(childComplexity int) int
 		Freshness             func(childComplexity int) int
 		HealthState           func(childComplexity int) int
 		LimitingFactor        func(childComplexity int) int
@@ -5014,6 +5015,13 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 		}
 
 		return e.complexity.HomeResult.Events(childComplexity), true
+
+	case "HomeResult.filterEmptyReason":
+		if e.complexity.HomeResult.FilterEmptyReason == nil {
+			break
+		}
+
+		return e.complexity.HomeResult.FilterEmptyReason(childComplexity), true
 
 	case "HomeResult.freshness":
 		if e.complexity.HomeResult.Freshness == nil {
@@ -10496,6 +10504,8 @@ type HomeResult {
   dataConfidence: HomeDataConfidence!
   """Coverage and ingestion quality for the selected repository scope; distinct from org-wide dataConfidence."""
   scopeDataConfidence: HomeScopeDataConfidence!
+  "Why the repositories the request names (a repo-level scope's ids, or what.repos) matched nothing, one value for the whole answer (CHAOS-9098). repository_not_in_team: every named repository exists and none is held by the selected teams. repository_not_found: a named repository resolved to nothing and no named repository matched. Null when the request names no repository and whenever something matched: also when only part of the named repositories is in the team or resolves (the value covers the part that matched), and when the scope resolved and the window has no rows. Filters AND and never widen."
+  filterEmptyReason: String
 }
 
 type SummarySentence {
@@ -37193,6 +37203,47 @@ func (ec *executionContext) fieldContext_HomeResult_scopeDataConfidence(_ contex
 	return fc, nil
 }
 
+func (ec *executionContext) _HomeResult_filterEmptyReason(ctx context.Context, field graphql.CollectedField, obj *model.HomeResult) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_HomeResult_filterEmptyReason(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.FilterEmptyReason, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*string)
+	fc.Result = res
+	return ec.marshalOString2ᚖstring(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_HomeResult_filterEmptyReason(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "HomeResult",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _HomeScopeDataConfidence_level(ctx context.Context, field graphql.CollectedField, obj *model.HomeScopeDataConfidence) (ret graphql.Marshaler) {
 	fc, err := ec.fieldContext_HomeScopeDataConfidence_level(ctx, field)
 	if err != nil {
@@ -47578,6 +47629,8 @@ func (ec *executionContext) fieldContext_Query_home(ctx context.Context, field g
 				return ec.fieldContext_HomeResult_dataConfidence(ctx, field)
 			case "scopeDataConfidence":
 				return ec.fieldContext_HomeResult_scopeDataConfidence(ctx, field)
+			case "filterEmptyReason":
+				return ec.fieldContext_HomeResult_filterEmptyReason(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type HomeResult", field.Name)
 		},
@@ -72101,6 +72154,8 @@ func (ec *executionContext) _HomeResult(ctx context.Context, sel ast.SelectionSe
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
+		case "filterEmptyReason":
+			out.Values[i] = ec._HomeResult_filterEmptyReason(ctx, field, obj)
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}

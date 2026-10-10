@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"github.com/full-chaos/dev-health-ops/internal/api/pytime"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/deltarule"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
 	"math"
 	"strings"
 	"sync"
@@ -237,6 +238,21 @@ func computeMetricDeltas(ctx context.Context, client QueryClient, f Filters, sta
 // so threading now through is a Go-side testability improvement, not a
 // parity divergence).
 func BuildResponse(ctx context.Context, chClient QueryClient, pgClient PGQueryClient, orgID string, f Filters, now time.Time) (*Response, error) {
+	response, err := buildResponse(ctx, chClient, pgClient, orgID, f, now)
+	if err != nil {
+		return nil, err
+	}
+	reason, err := filterEmptyReason(ctx, chClient, f, orgID, now)
+	if err != nil {
+		return nil, err
+	}
+	response.FilterEmptyReason = teamscope.EmptyReasonText(reason)
+	return response, nil
+}
+
+// buildResponse is BuildResponse without the one answer-level value that does
+// not depend on the window (FilterEmptyReason).
+func buildResponse(ctx context.Context, chClient QueryClient, pgClient PGQueryClient, orgID string, f Filters, now time.Time) (*Response, error) {
 	startDay, endDay, compareStart, compareEnd, err := TimeWindow(f, now)
 	if err != nil {
 		return nil, err

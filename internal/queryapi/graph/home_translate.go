@@ -166,6 +166,7 @@ func homeResultFromResponse(resp *home.Response) *model.HomeResult {
 		LimitingFactor:        homeLimitingFactorFromResponse(resp.LimitingFactor),
 		DataConfidence:        homeDataConfidenceFromResponse(resp.DataConfidence),
 		ScopeDataConfidence:   homeScopeDataConfidenceFromResponse(resp.ScopeDataConfidence),
+		FilterEmptyReason:     resp.FilterEmptyReason,
 	}
 }
 

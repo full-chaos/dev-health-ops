@@ -603,3 +603,15 @@ func TestHomeResultCarriesTheRepositoryFilterFlags(t *testing.T) {
 		t.Errorf("signal repoFilterApplied = %v / %v, want true / null", got.Signals[0].RepoFilterApplied, got.Signals[1].RepoFilterApplied)
 	}
 }
+
+// The answer-level reason a repository filter matched nothing (CHAOS-9098) is
+// served as filterEmptyReason, and stays null when the domain has none.
+func TestHomeResultFromResponse_MapsTheFilterEmptyReason(t *testing.T) {
+	reason := "repository_not_in_team"
+	if got := homeResultFromResponse(&home.Response{FilterEmptyReason: &reason}); got.FilterEmptyReason == nil || *got.FilterEmptyReason != reason {
+		t.Errorf("filterEmptyReason = %v, want %q", got.FilterEmptyReason, reason)
+	}
+	if got := homeResultFromResponse(&home.Response{}); got.FilterEmptyReason != nil {
+		t.Errorf("filterEmptyReason = %q, want null", *got.FilterEmptyReason)
+	}
+}

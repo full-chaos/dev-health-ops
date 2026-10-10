@@ -30,7 +30,6 @@ query Home($orgId: String!, $filters: FilterInput, $window: HomeWindowInput) {
         __typename
       }
       rateState
-      repoFilterApplied
       __typename
     }
     reworkThemeAllocation {
@@ -105,7 +104,6 @@ query Home($orgId: String!, $filters: FilterInput, $window: HomeWindowInput) {
         __typename
       }
       coverage
-      repoFilterApplied
       attribution {
         items
         sources {

@@ -12,14 +12,15 @@ import (
 // restRunOrder and restmounted.go's mountedRESTPaths each carry one
 // further line. Nothing else in those shared files changes here.
 
-// homeDeltaGoOnlyKeys declares the three Go-only keys every REST Home delta
-// carries after the frozen Python MetricDelta fields (CHAOS-9044). The recorded
+// homeDeltaGoOnlyKeys declares the Go-only keys every REST Home delta
+// carries after the frozen Python MetricDelta fields (CHAOS-9044, CHAOS-9093). The recorded
 // answer is never edited; a leaf the Go answer carries and Python never had is
 // declared at its own path, and only there.
 var homeDeltaGoOnlyKeys = map[string]GoOnlyKey{
-	"data.deltas.has_data":       {Ticket: "CHAOS-9044", Reason: "Go-only: the current window holds a stored value for the metric; false = value is a 0 placeholder, not a measured zero. The Python reference never served it."},
-	"data.deltas.has_prior_data": {Ticket: "CHAOS-9044", Reason: "Go-only: the comparison window holds a stored value; false = the delta has no base and delta_pct is 0. The Python reference never served it."},
-	"data.deltas.rate_state":     {Ticket: "CHAOS-9044", Reason: "Go-only: why change failure rate has a value or not (measured, unknown_no_incident_evidence, not_applicable_no_deployments); null for every other metric. The Python reference never served it."},
+	"data.deltas.has_data":            {Ticket: "CHAOS-9044", Reason: "Go-only: the current window holds a stored value for the metric; false = value is a 0 placeholder, not a measured zero. The Python reference never served it."},
+	"data.deltas.has_prior_data":      {Ticket: "CHAOS-9044", Reason: "Go-only: the comparison window holds a stored value; false = the delta has no base and delta_pct is 0. The Python reference never served it."},
+	"data.deltas.repo_filter_applied": {Ticket: "CHAOS-9093", Reason: "Go-only: whether the request's repository filter narrowed the metric (null when the request names no repository; false for a team-keyed work-item metric the filter does not reach). The Python reference never served it."},
+	"data.deltas.rate_state":          {Ticket: "CHAOS-9044", Reason: "Go-only: why change failure rate has a value or not (measured, unknown_no_incident_evidence, not_applicable_no_deployments); null for every other metric. The Python reference never served it."},
 }
 
 // homeNumericLeaves is every numeric leaf this route's response can

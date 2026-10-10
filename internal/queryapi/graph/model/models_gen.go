@@ -960,6 +960,8 @@ type HomeSignal struct {
 	Coverage *float64 `json:"coverage,omitempty"`
 	// Current primary work-item attribution evidence for work-item metrics; null when this window has no attributable work items.
 	Attribution *SignalAttribution `json:"attribution,omitempty"`
+	// Whether the request's repository filter (a repo-level scope, or what.repos) narrowed the metric this signal is built from: the field of the same name on MetricDelta. Null when the request names no repository, and on a signal that does not come from a metric (risk, recommendation).
+	RepoFilterApplied *bool `json:"repoFilterApplied,omitempty"`
 }
 
 type HomeTile struct {
@@ -1072,6 +1074,8 @@ type MetricDelta struct {
 	Spark        []SparkPoint `json:"spark"`
 	// Why change failure rate has a value or not (CHAOS-8981): measured (the value may be 0), unknown_no_incident_evidence (deployments, and no incident tied to the scope in the window) or not_applicable_no_deployments. Null when the window holds no stored counts, and for every other metric.
 	RateState *string `json:"rateState,omitempty"`
+	// Whether the request's repository filter (a repo-level scope, or what.repos) narrowed this metric. Null when the request names no repository. True for a repository-keyed metric the filter reached. False for a team-keyed metric (cycle_time, throughput, wip_saturation, blocked_work: their tables have no repo_id column, so the repository condition is not applied) and for a repository metric whose named repositories resolved to nothing (CHAOS-9093).
+	RepoFilterApplied *bool `json:"repoFilterApplied,omitempty"`
 }
 
 type MetricLineage struct {

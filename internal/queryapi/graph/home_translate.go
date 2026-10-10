@@ -127,6 +127,8 @@ func homeResultFromResponse(resp *home.Response) *model.HomeResult {
 			HasPriorData: d.HasPriorData,
 			Spark:        homeSparkFromResponse(d.Spark),
 			RateState:    d.RateState,
+
+			RepoFilterApplied: d.RepoFilterApplied,
 		})
 	}
 
@@ -285,6 +287,7 @@ func homeSignalsFromResponse(signals []home.Signal) []model.HomeSignal {
 			Category:          s.Category,
 			ScopeEntity:       scopeEntity,
 			Coverage:          s.Coverage,
+			RepoFilterApplied: s.RepoFilterApplied,
 			Attribution:       homeSignalAttributionFromResponse(s.Attribution),
 		})
 	}

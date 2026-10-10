@@ -247,6 +247,17 @@ to the query source text.
 
 # home wire-capture fixture
 
+Newest text (CHAOS-9093): `home_captured.graphql` is NOT a capture. It is
+`home_v6_captured.graphql` (the previous current text, byte-identical, kept as a
+legacy registration) plus two lines, `repoFilterApplied` in `deltas` after
+`rateState` and in `signals` after `coverage`, written in the form urql prints
+(whether the request's repository filter narrowed the metric). No web build sends
+it yet; the web change that selects them must put the fields at those places in
+`HOME_QUERY` and run `scripts/capture-graphql-wire-fixture.ts --operation home`;
+if the real capture differs from this file, the capture wins and this file and
+`registeredHomeDocument` move to it. The paragraphs below describe the older texts
+(the one called "current" there is now `home_v6_captured.graphql`).
+
 `home_captured.graphql` (`Home`) is the current registered text. It is
 NOT a capture: it is `home_v4_captured.graphql` plus the one line
 `rateState` in `deltas`, after `spark { ... }` (CHAOS-8981, the state of

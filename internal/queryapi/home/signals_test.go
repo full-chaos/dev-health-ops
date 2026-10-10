@@ -294,3 +294,62 @@ func TestAMeasuredZeroPriorIsNeverSteadyOrAPercent(t *testing.T) {
 		t.Errorf("SelectConstraint over a rise from zero only = %q (ok %v), want churn", got.Metric, ok)
 	}
 }
+
+// A metric signal carries the repository-filter flag of the metric it is built from
+// (CHAOS-9093), and a signal that is not built from a metric spec carries none.
+func TestMetricSignalCarriesTheRepositoryFilterFlagOfItsMetric(t *testing.T) {
+	yes, no := true, false
+	signals := BuildMetricSignals([]MetricDelta{
+		{Metric: "churn", Label: "Code Churn", Unit: "loc", Value: 5, DeltaPct: pctp(10), HasData: true, HasPriorData: true, RepoFilterApplied: &yes},
+		{Metric: "throughput", Label: "Throughput", Unit: "items", Value: 5, DeltaPct: pctp(10), HasData: true, HasPriorData: true, RepoFilterApplied: &no},
+		{Metric: "cycle_time", Label: "Cycle Time", Unit: "days", Value: 5, DeltaPct: pctp(10), HasData: true, HasPriorData: true},
+	}, Filters{}, DataConfidence{})
+	byMetric := map[string]Signal{}
+	for _, signal := range signals {
+		byMetric[signal.Metric] = signal
+	}
+	if got := byMetric["churn"].RepoFilterApplied; got == nil || !*got {
+		t.Errorf("churn signal repoFilterApplied = %v, want true", got)
+	}
+	if got := byMetric["throughput"].RepoFilterApplied; got == nil || *got {
+		t.Errorf("throughput signal repoFilterApplied = %v, want false", got)
+	}
+	if got := byMetric["cycle_time"].RepoFilterApplied; got != nil {
+		t.Errorf("cycle_time signal repoFilterApplied = %v, want null (the request names no repository)", got)
+	}
+	score := 0.9
+	if risk, ok := RiskSignal(RiskRow{Scope: "repo", ScopeID: "r1", Score: &score, Severity: "high", ScopeDisplayName: "checkout"}, DefaultFilters(), DataConfidence{}); !ok || risk.RepoFilterApplied != nil {
+		t.Errorf("a risk signal is not built from a metric spec: repoFilterApplied = %v (ok %v), want null", risk.RepoFilterApplied, ok)
+	}
+}
+
+// repoFilterApplied is null with no repository named (a team scope alone included),
+// false for a team-keyed metric and for a repository metric whose filter resolved to
+// nothing, true for a repository metric the filter narrowed.
+func TestRepoFilterAppliedFollowsTheSpecScopeAndTheResolvedFilter(t *testing.T) {
+	named := Filters{Scope: ScopeFilter{Level: "repo", IDs: []string{"r1"}}}
+	byWhat := Filters{What: WhatFilter{Repos: []string{"r1"}}}
+	teamOnly := Filters{Scope: ScopeFilter{Level: "team", IDs: []string{"t1"}}}
+	for _, tc := range []struct {
+		name        string
+		f           Filters
+		metricScope string
+		filter      string
+		want        string
+	}{
+		{"nothing named", Filters{}, "repo", "", "nil"},
+		{"a team scope alone", teamOnly, "repo", " AND team", "nil"},
+		{"repo scope, repo metric, filter built", named, "repo", " AND repo_id IN x", "true"},
+		{"what.repos, repo metric, filter built", byWhat, "repo", " AND repo_id IN x", "true"},
+		{"repo scope, team metric", named, "team", "", "false"},
+		{"repo scope, repo metric, nothing resolved", named, "repo", "", "false"},
+	} {
+		got := "nil"
+		if p := repoFilterApplied(tc.f, tc.metricScope, tc.filter); p != nil {
+			got = map[bool]string{true: "true", false: "false"}[*p]
+		}
+		if got != tc.want {
+			t.Errorf("%s: repoFilterApplied = %s, want %s", tc.name, got, tc.want)
+		}
+	}
+}

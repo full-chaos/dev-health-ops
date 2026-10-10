@@ -48,8 +48,9 @@ const homeEnabledEnvVar = "GO_API_HOME_ENABLED"
 // constraint object. A response with no constraint (no data at all, or no metric
 // with two measured windows) has an empty constraint card; health_state.status
 // is still "no_data" when nothing has data, and the card contains no claim,
-// evidence, or experiment. Each delta carries the no-data flags and the change
-// failure rate state after the frozen fields (homeRESTMetricDelta).
+// evidence, or experiment. Each delta carries the no-data flags, the change
+// failure rate state and the repository-filter flag after the frozen fields
+// (homeRESTMetricDelta).
 type homeRESTResponse struct {
 	Freshness             home.Freshness               `json:"freshness"`
 	Deltas                []homeRESTMetricDelta        `json:"deltas"`
@@ -81,6 +82,8 @@ type homeRESTMetricDelta struct {
 	HasData      bool              `json:"has_data"`
 	HasPriorData bool              `json:"has_prior_data"`
 	RateState    *string           `json:"rate_state"`
+	// RepoFilterApplied (CHAOS-9093): whether the request's repository filter narrowed the metric; null when the request names no repository.
+	RepoFilterApplied *bool `json:"repo_filter_applied"`
 }
 
 func homeRESTResponseFrom(resp *home.Response) homeRESTResponse {
@@ -96,6 +99,8 @@ func homeRESTResponseFrom(resp *home.Response) homeRESTResponse {
 			HasData:      delta.HasData,
 			HasPriorData: delta.HasPriorData,
 			RateState:    delta.RateState,
+
+			RepoFilterApplied: delta.RepoFilterApplied,
 		})
 	}
 

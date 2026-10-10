@@ -145,6 +145,28 @@ func repoScopeFilter(ctx context.Context, client QueryClient, f Filters, orgID, 
 	}
 }
 
+// repoFilterRequested reports whether the request names repositories: the ids of
+// a repo-level scope, or what.repos. A team scope alone is not a repository
+// filter.
+func repoFilterRequested(f Filters) bool {
+	if f.Scope.Level == "repo" && len(f.Scope.IDs) > 0 {
+		return true
+	}
+	return len(f.What.Repos) > 0
+}
+
+// repoFilterApplied is MetricDelta.RepoFilterApplied: nil when the request names
+// no repository; false for a team-keyed metric (the repository condition is not
+// applied to it) and for a repository metric whose filter resolved to nothing
+// (scopeFilter is empty); true for a repository metric the filter narrowed.
+func repoFilterApplied(f Filters, metricScope, scopeFilter string) *bool {
+	if !repoFilterRequested(f) {
+		return nil
+	}
+	applied := metricScope == "repo" && scopeFilter != ""
+	return &applied
+}
+
 // scopeFilterForMetric ports scope_filter_for_metric (api/services/
 // filtering.py:129-147).
 func scopeFilterForMetric(ctx context.Context, client QueryClient, metricScope string, f Filters, orgID, teamColumn, repoColumn string, asOf time.Time) (string, []dhclickhouse.Binding, error) {

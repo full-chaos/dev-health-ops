@@ -392,3 +392,19 @@ func TestRESTSignalJSONHasNoCoverageKey(t *testing.T) {
 		t.Fatalf("a REST signal must not carry coverage: %s", raw)
 	}
 }
+
+// CHAOS-9111: a metric with no stored value in a window has a null percent, and a null
+// percent is nobody's mover: it is neither the top move nor "held steady".
+func TestNoDataDeltaIsNeitherTheTopMoverNorSteady(t *testing.T) {
+	noData := MetricDelta{Metric: "cycle_time", Label: "Cycle Time"}
+	if _, ok := noData.Percent(); ok {
+		t.Fatal("a delta with no data has a percent")
+	}
+	top, ok := topDeltaByMagnitude([]MetricDelta{noData, {Metric: "throughput", HasData: true, HasPriorData: true, DeltaPct: func() *float64 { v := 25.0; return &v }()}})
+	if !ok || top.Metric != "throughput" {
+		t.Errorf("top mover = %v %v, want throughput", top.Metric, ok)
+	}
+	if got, ok := topDeltaByMagnitude([]MetricDelta{noData}); ok {
+		t.Errorf("a response with only a no-data metric names a top mover: %v", got.Metric)
+	}
+}

@@ -18,7 +18,7 @@ import (
 // declared at its own path, and only there.
 var homeDeltaGoOnlyKeys = map[string]GoOnlyKey{
 	"data.deltas.has_data":            {Ticket: "CHAOS-9044", Reason: "Go-only: the current window holds a stored value for the metric; false = value is a 0 placeholder, not a measured zero. The Python reference never served it."},
-	"data.deltas.has_prior_data":      {Ticket: "CHAOS-9044", Reason: "Go-only: the comparison window holds a stored value; false = the delta has no base and delta_pct is 0. The Python reference never served it."},
+	"data.deltas.has_prior_data":      {Ticket: "CHAOS-9044", Reason: "Go-only: the comparison window holds a stored value; false = the delta has no base and delta_pct is null. The Python reference never served it."},
 	"data.deltas.repo_filter_applied": {Ticket: "CHAOS-9093", Reason: "Go-only: whether the request's repository filter narrowed the metric (null when the request names no repository; false for a team-keyed work-item metric the filter does not reach). The Python reference never served it."},
 	"data.deltas.rate_state":          {Ticket: "CHAOS-9044", Reason: "Go-only: why change failure rate has a value or not (measured, unknown_no_incident_evidence, not_applicable_no_deployments); null for every other metric. The Python reference never served it."},
 }
@@ -56,22 +56,55 @@ var homeDeltaGoOnlyKeys = map[string]GoOnlyKey{
 //   - data.signals.evidence_count: len(evidence) / a row count -- never
 //     a floating aggregate.
 //
-// homeFromZeroDefect declares the one leaf the candidate serves as null where
-// the reference serves 0.0: a delta whose prior window holds a measured 0 and
-// whose current window does not (CHAOS-9063). A percent change against zero is
-// undefined; the reference's delta_pct returns 0.0 for a zero previous.
-var homeFromZeroDefect = BaselineDefect{
-	Ticket:             "CHAOS-9063",
-	Reason:             "the reference's delta_pct (api/utils/numeric.py) returns 0.0 for a zero previous value, so a metric that rose from a measured 0 reads 0 %; the candidate serves null for it (the percent is undefined), with has_data and has_prior_data true beside it.",
-	Paths:              []string{"data.deltas.delta_pct"},
-	Intermittent:       true,
-	IntermittentReason: "present only while a metric's prior window holds a stored 0 and its current window a non-zero value",
+// metricPercentDefects are the two declared differences on a delta's percent
+// (CHAOS-9063, CHAOS-9111), each admitting exactly one (baseline, candidate)
+// pair on exactly the rows its condition names; any other difference at the
+// leaf stays outside. The reference's delta_pct (api/utils/numeric.py) returns
+// 0.0 for a zero previous value and for a window with no value.
+//   - from zero: both windows hold a stored value, the prior is a measured 0 and
+//     the current value is not 0 (a null percent beside a current value of 0 is a
+//     true 0 % served as null: it is NOT admitted); the percent is undefined, the candidate serves null
+//     beside has_data and has_prior_data both true.
+//   - no data: a window holds no stored value (the reference serves a 0
+//     placeholder and 0.0); a percent has no meaning against a value nobody
+//     measured, so the candidate serves null beside has_data or has_prior_data
+//     false, which say which side.
+func metricPercentDefects(listPath, leafPath, who string) []BaselineDefect {
+	return percentDefectsFor(leafPath, who, func() *SiblingCondition {
+		return &SiblingCondition{ListPath: listPath}
+	})
+}
+
+// percentDefectsFor builds the two declared differences for one percent leaf.
+// where returns a fresh sibling condition locating the candidate object that holds
+// the leaf (a list element, or the single object), without its flags.
+func percentDefectsFor(leafPath, who string, where func() *SiblingCondition) []BaselineDefect {
+	pair := []LeafPair{{Baseline: 0.0, Candidate: nil}}
+	fromZero, noData := where(), where()
+	fromZero.AllTrue = []string{"has_data", "has_prior_data"}
+	fromZero.NonZero = []string{"value"}
+	noData.AnyFalse = []string{"has_data", "has_prior_data"}
+	return []BaselineDefect{{
+		Ticket:             "CHAOS-9063",
+		Reason:             "the reference's delta_pct (api/utils/numeric.py) returns 0.0 for a zero previous value, so a " + who + " that rose from a measured 0 reads 0 %; the candidate serves null for it (the percent is undefined), with has_data and has_prior_data true beside it.",
+		Paths:              []string{leafPath},
+		Intermittent:       true,
+		IntermittentReason: "present only while a " + who + "'s prior window holds a stored 0 and its current window a non-zero value",
+		LeafPairShape:      &LeafPairShape{Pairs: pair, CandidateMayBeAllNull: true, Sibling: fromZero},
+	}, {
+		Ticket:             "CHAOS-9111",
+		Reason:             "the reference's delta_pct serves 0.0 for a " + who + " with no stored value in a window (a 0 placeholder against a 0 placeholder, against a real value, or a LEFT JOIN default for a driver with no comparison row); the candidate serves null (a percent has no meaning against a value nobody measured), with has_data or has_prior_data false beside it to say which window holds none.",
+		Paths:              []string{leafPath},
+		Intermittent:       true,
+		IntermittentReason: "present only while a " + who + " has no stored value in one of its two windows; a window where every one has data shows none",
+		LeafPairShape:      &LeafPairShape{Pairs: pair, CandidateMayBeAllNull: true, Sibling: noData},
+	}}
 }
 
 var homeNumericLeaves = Options{
 	NumericLeavesDeclared: true,
 	GoOnlyKeys:            homeDeltaGoOnlyKeys,
-	BaselineDefects:       []BaselineDefect{homeFromZeroDefect},
+	BaselineDefects:       metricPercentDefects("data.deltas", "data.deltas.delta_pct", "metric"),
 	FloatTierB: map[string]string{
 		"data.freshness.coverage.repos_covered_pct":            "fetch_coverage's covered/total ratio *100 (api/queries/freshness.py) -- a genuine ratio.",
 		"data.freshness.coverage.prs_linked_to_issues_pct":     "fetch_coverage's linked/total ratio *100 -- a genuine ratio.",
@@ -185,7 +218,7 @@ var homeConfidenceTierParity = Options{
 	FloatTierB:            homeNumericLeaves.FloatTierB,
 	IntegerLeaves:         homeNumericLeaves.IntegerLeaves,
 	VolatileFields:        homeNumericLeaves.VolatileFields,
-	BaselineDefects:       []BaselineDefect{homeConfidenceTierDefect, homeFromZeroDefect},
+	BaselineDefects:       append([]BaselineDefect{homeConfidenceTierDefect}, metricPercentDefects("data.deltas", "data.deltas.delta_pct", "metric")...),
 }
 
 // homeTeamBaselineTimeout is the declaration home_team_scoped (GET and POST)

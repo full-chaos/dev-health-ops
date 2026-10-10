@@ -4,9 +4,9 @@
 // handlers against a real ClickHouse migrated by the real chain (CHAOS-9044).
 // One organization per case; rows come from the real writers or the table's own
 // columns. Each delta must tell a window with no stored value from a measured
-// zero, and serve no delta (0) when either window has none: the one rule of
-// internal/queryapi/deltarule, the same contract GraphQL Home, /explain and the
-// operating review serve.
+// zero, and serve no delta percent (null) when either window has none: the one
+// rule of internal/queryapi/deltarule, the same contract GraphQL Home and
+// /explain serve (CHAOS-9111; the operating review applies the same rule to its weeks).
 package server
 
 import (
@@ -77,15 +77,15 @@ type restCell struct {
 	hasData        bool
 	hasPriorData   bool
 	value          float64
-	deltaPct       *float64 // nil = null: a percent change against a measured zero is undefined
+	deltaPct       *float64 // nil = null: a window has no stored value, or a percent change against a measured zero is undefined
 }
 
 func restCells() []restCell {
 	f := func(v float64) *float64 { return &v }
 	return []restCell{
-		{"no row in either window", nil, nil, false, false, 0, f(0)},
-		{"prior window only", nil, f(10), false, true, 0, f(0)},
-		{"current window only", f(5), nil, true, false, 5, f(0)},
+		{"no row in either window", nil, nil, false, false, 0, nil},
+		{"prior window only", nil, f(10), false, true, 0, nil},
+		{"current window only", f(5), nil, true, false, 5, nil},
 		{"a measured zero in both windows", f(0), f(0), true, true, 0, f(0)},
 		{"a measured zero now, a value before", f(0), f(10), true, true, 0, f(-100)},
 		{"two measured values", f(5), f(10), true, true, 5, f(-50)},
@@ -193,7 +193,7 @@ func TestRESTHomeChangeFailureRateCarriesItsState(t *testing.T) {
 		if delta.RateState != nil {
 			state = *delta.RateState
 		}
-		if delta.HasData == nil || *delta.HasData != tc.hasData || state != tc.state || delta.Value != tc.value || delta.DeltaPct == nil || *delta.DeltaPct != tc.deltaPct {
+		if delta.HasData == nil || *delta.HasData != tc.hasData || state != tc.state || delta.Value != tc.value || (tc.hasData && (delta.DeltaPct == nil || *delta.DeltaPct != tc.deltaPct)) || (!tc.hasData && delta.DeltaPct != nil) {
 			t.Errorf("%s: has_data %s rate_state %q value %v delta_pct %s, want %v %q %v %v", tc.org, flag(delta.HasData), state, delta.Value, showDelta(delta.DeltaPct), tc.hasData, tc.state, tc.value, tc.deltaPct)
 		}
 	}

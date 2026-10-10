@@ -111,10 +111,10 @@ func TestHomePRReworkRatio_DeltaAndDriversFollowTheDeltaRule(t *testing.T) {
 	if got := delta(repoD2); got.DeltaPct == nil || *got.DeltaPct < -40.0001 || *got.DeltaPct > -39.9999 {
 		t.Errorf("repo D2: delta_pct = %s, want -40 (50 %% of 2 reviewed to 30 %% of 10 reviewed)", show(got.DeltaPct))
 	}
-	// No review data in a window: no value, and the percent is the 0 of "no
-	// delta", with the flags saying so.
-	if got := delta(repoN); got.HasData || got.HasPriorData || got.DeltaPct == nil || *got.DeltaPct != 0 {
-		t.Errorf("repo N: has_data %v has_prior_data %v delta_pct %s, want no data in both windows and the 0 of no delta",
+	// No review data in a window: no value, and the percent is null (a percent has no
+	// meaning against a value nobody measured; CHAOS-9111), with the flags saying so.
+	if got := delta(repoN); got.HasData || got.HasPriorData || got.DeltaPct != nil {
+		t.Errorf("repo N: has_data %v has_prior_data %v delta_pct %s, want no data in both windows and a null percent",
 			got.HasData, got.HasPriorData, show(got.DeltaPct))
 	}
 

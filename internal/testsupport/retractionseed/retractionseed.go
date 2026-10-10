@@ -307,6 +307,18 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
  w_churn, w_complexity, w_ownership, w_review, threshold_elevated, threshold_high, computed_at)
 VALUES (?, ?, 'team', ?, ?, 'low', 0.25, 0.25, 0.25, 0.25, 0.3, 0.3, 0.2, 0.2, 0.4, 0.65, ?)`,
 		org, day, teamID, m.risk, computedAt)
+	exec(ctx, t, conn, `INSERT INTO ic_landscape_rolling_30d
+(org_id, repo_id, as_of_day, identity_id, team_id, map_name, x_raw, y_raw, x_norm, y_norm,
+ churn_loc_30d, delivery_units_30d, cycle_p50_30d_hours, wip_max_30d, computed_at)
+VALUES (?, ?, ?, ?, ?, 'churn_throughput', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		org, team.RepoID, day, "dev@"+team.Provider, teamID, float64(m.churnLOC), float64(m.deliveryUnits),
+		m.defectRate, m.congestion, m.churnLOC, m.deliveryUnits, m.cycleP50, m.wip, computedAt)
+	exec(ctx, t, conn, `INSERT INTO team_cognitive_load_daily
+(org_id, team_id, day, pr_interruption_load, context_spread_count, review_request_load,
+ after_hours_commit_ratio, weekend_commit_ratio, contributing_repo_count, sample_author_count, computed_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, 2, ?)`,
+		org, teamID, day, float64(m.started), float64(m.wip), float64(m.newItems),
+		float64(m.afterHours)/float64(m.commits), float64(m.weekend)/float64(m.commits), computedAt)
 }
 
 // insertRetractions stores the retraction row of each key of one (team id,
@@ -341,6 +353,11 @@ VALUES (?, ?, ?, 'feature', ?, 'ai_assisted', ?)`, org, teamID, team.RepoID, day
 VALUES (?, ?, ?, ?, ?)`, org, teamID, team.RepoID, day, computedAt)
 	exec(ctx, t, conn, `INSERT INTO compounding_risk_daily (org_id, day, scope, scope_id, computed_at)
 VALUES (?, ?, 'team', ?, ?)`, org, day, teamID, computedAt)
+	exec(ctx, t, conn, `INSERT INTO ic_landscape_rolling_30d
+(org_id, repo_id, as_of_day, identity_id, team_id, map_name, computed_at)
+VALUES (?, ?, ?, ?, ?, 'churn_throughput', ?)`, org, team.RepoID, day, "dev@"+team.Provider, teamID, computedAt)
+	exec(ctx, t, conn, `INSERT INTO team_cognitive_load_daily (org_id, team_id, day, computed_at)
+VALUES (?, ?, ?, ?)`, org, teamID, day, computedAt)
 }
 
 func exec(ctx context.Context, t testing.TB, conn driver.Conn, statement string, args ...any) {

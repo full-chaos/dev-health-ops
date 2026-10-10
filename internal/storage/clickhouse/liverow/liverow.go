@@ -121,6 +121,21 @@ func NewestPredicate(table, qualifier string) string {
 	return "(" + mustTable(table).LiveHaving(prefix) + ")"
 }
 
+// Columns returns the columns of table that the rule reads, in the order of
+// the predicate. A reader that checks at startup whether the deployed schema
+// holds every column its statements name takes them from here: the predicate
+// is part of the statement, and a schema that lacks one of these columns
+// fails each read the rule is in.
+//
+// It panics for a table with no rule, as Predicate does.
+func Columns(table string) []string {
+	if columns, own := ownWriterMarkers[table]; own {
+		return append([]string(nil), columns...)
+	}
+	declared := mustTable(table)
+	return append(append([]string(nil), declared.Measures...), declared.NullableMeasures...)
+}
+
 func qualifierPrefix(table, qualifier string) string {
 	if qualifier == "" {
 		qualifier = table

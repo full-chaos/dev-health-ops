@@ -7,6 +7,8 @@ import (
 	"errors"
 	"strings"
 	"testing"
+
+	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 )
 
 // TestCapacityRefusesAStaleSchema is the regression test for the gap that
@@ -55,6 +57,26 @@ func TestCapacityRefusesAStaleSchema(t *testing.T) {
 		}
 	})
 
+	t.Run("a missing column of the live-row rule is refused", func(t *testing.T) {
+		// The target discovery and the throughput read hold the live-row rule
+		// of the table, which tests each measure column. No query text of this
+		// package names items_started; the rule does.
+		fresh := freshMigratedClickHouse(t, ctx, OperationalOrderingRevision)
+		if err := fresh.Exec(ctx,
+			"ALTER TABLE work_item_metrics_daily DROP COLUMN items_started",
+		); err != nil {
+			t.Fatalf("stage the stale schema: %v", err)
+		}
+		_, err := NewCapacityExecutor(ctx, fresh, nil, nil)
+		if !errors.Is(err, ErrCapacitySchemaIncompatible) {
+			t.Fatalf("a database missing a column the live-row rule reads must be refused "+
+				"as schema-incompatible, got: %v", err)
+		}
+		if !strings.Contains(err.Error(), "items_started") {
+			t.Errorf("the refusal must name the missing column: %v", err)
+		}
+	})
+
 	t.Run("a read table on the wrong engine is refused", func(t *testing.T) {
 		// The column half of the probe passes here by construction: this table
 		// is rebuilt with EVERY required column present and only its ENGINE
@@ -63,26 +85,10 @@ func TestCapacityRefusesAStaleSchema(t *testing.T) {
 		// no-ops, so superseded rows stayed visible and aggregated into the
 		// forecast. Wrong numbers, reported as a successful run.
 		fresh := freshMigratedClickHouse(t, ctx, OperationalOrderingRevision)
-		if err := fresh.Exec(ctx, "DROP TABLE work_item_metrics_daily"); err != nil {
-			t.Fatalf("stage the wrong-engine schema: %v", err)
-		}
-		// Columns and types mirror the migrated table for the six the executor
-		// names; the ORDER BY key matches what a ReplacingMergeTree would use,
-		// so the ONLY difference from an acceptable deployment is the engine.
-		if err := fresh.Exec(ctx, `
-            CREATE TABLE work_item_metrics_daily (
-                day Date,
-                org_id String,
-                team_id LowCardinality(String),
-                work_scope_id LowCardinality(String),
-                items_completed UInt32,
-                wip_count_end_of_day UInt32,
-                computed_at DateTime64(3)
-            ) ENGINE = MergeTree
-            ORDER BY (org_id, day, work_scope_id, team_id)
-        `); err != nil {
-			t.Fatalf("create the plain-MergeTree table: %v", err)
-		}
+		// The staged table is a copy of the migrated table (every column, with its
+		// type), so the ONLY difference from an acceptable deployment is the
+		// engine clause.
+		restageWorkItemMetricsDaily(ctx, t, fresh, "MergeTree ORDER BY (org_id, day, work_scope_id, team_id)")
 
 		// Guard the guard: if this staging ever stopped producing a table with
 		// all six columns, the refusal below would fire for the COLUMN reason
@@ -152,24 +158,7 @@ func TestCapacityRefusesAStaleSchema(t *testing.T) {
 		// writes an older row after a newer one leaves the older row as the
 		// survivor -- a stale forecast reported as a clean run.
 		fresh := freshMigratedClickHouse(t, ctx, OperationalOrderingRevision)
-		if err := fresh.Exec(ctx, "DROP TABLE work_item_metrics_daily"); err != nil {
-			t.Fatalf("stage the versionless schema: %v", err)
-		}
-		if err := fresh.Exec(ctx, `
-            CREATE TABLE work_item_metrics_daily (
-                day Date,
-                org_id String,
-                provider LowCardinality(String),
-                team_id LowCardinality(String),
-                work_scope_id LowCardinality(String),
-                items_completed UInt32,
-                wip_count_end_of_day UInt32,
-                computed_at DateTime64(3)
-            ) ENGINE = ReplacingMergeTree()
-            ORDER BY (org_id, provider, day, work_scope_id, team_id)
-        `); err != nil {
-			t.Fatalf("create the versionless replacing table: %v", err)
-		}
+		restageWorkItemMetricsDaily(ctx, t, fresh, "ReplacingMergeTree() ORDER BY (org_id, provider, day, work_scope_id, team_id)")
 
 		// Guard the guard: columns and engine family must both look
 		// acceptable, or a refusal here would be about one of those and this
@@ -227,24 +216,7 @@ func TestCapacityRefusesAStaleSchema(t *testing.T) {
 		// FINAL collapses those rows before aggregation: a multi-provider org
 		// silently loses data, with no error anywhere.
 		fresh := freshMigratedClickHouse(t, ctx, OperationalOrderingRevision)
-		if err := fresh.Exec(ctx, "DROP TABLE work_item_metrics_daily"); err != nil {
-			t.Fatalf("stage the narrow-key schema: %v", err)
-		}
-		if err := fresh.Exec(ctx, `
-            CREATE TABLE work_item_metrics_daily (
-                day Date,
-                org_id String,
-                provider LowCardinality(String),
-                team_id LowCardinality(String),
-                work_scope_id LowCardinality(String),
-                items_completed UInt32,
-                wip_count_end_of_day UInt32,
-                computed_at DateTime64(3)
-            ) ENGINE = ReplacingMergeTree(computed_at)
-            ORDER BY (org_id, day, work_scope_id, team_id)
-        `); err != nil {
-			t.Fatalf("create the narrow-sorting-key table: %v", err)
-		}
+		restageWorkItemMetricsDaily(ctx, t, fresh, "ReplacingMergeTree(computed_at) ORDER BY (org_id, day, work_scope_id, team_id)")
 
 		// Guard the guard: columns, engine family and version column must all
 		// look acceptable, or a refusal here would be about one of those and
@@ -291,4 +263,52 @@ func TestCapacityRefusesAStaleSchema(t *testing.T) {
 			t.Errorf("the refusal must name the missing sorting-key column: %v", err)
 		}
 	})
+}
+
+// restageWorkItemMetricsDaily replaces work_item_metrics_daily by a table with
+// the same columns and the given engine clause. The copy keeps every column
+// of the migrated table, so the column half of the startup check passes and a
+// refusal is about the engine clause alone.
+func restageWorkItemMetricsDaily(ctx context.Context, t *testing.T, conn driver.Conn, engine string) {
+	t.Helper()
+	for _, statement := range []string{
+		"CREATE TABLE work_item_metrics_daily_staged AS work_item_metrics_daily ENGINE = " + engine,
+		"DROP TABLE work_item_metrics_daily",
+		"RENAME TABLE work_item_metrics_daily_staged TO work_item_metrics_daily",
+	} {
+		if err := conn.Exec(ctx, statement); err != nil {
+			t.Fatalf("stage the table (%s): %v", statement, err)
+		}
+	}
+}
+
+// TestRecommendationsRefuseASchemaWithoutAColumnOfTheLiveRowRule runs the
+// startup check of the recommendations job against a real schema with one
+// column dropped. The loader's reads hold the live-row rule of two tables,
+// which tests each measure column; no query text of this package names the
+// two columns dropped here. The check must refuse each schema and name the
+// column, and must accept the migrated schema.
+func TestRecommendationsRefuseASchemaWithoutAColumnOfTheLiveRowRule(t *testing.T) {
+	ctx := context.Background()
+	if err := verifyRecommendationsSchema(ctx, migratedClickHouse(t, ctx, OperationalOrderingRevision)); err != nil {
+		t.Fatalf("the real migrated schema must be accepted: %v", err)
+	}
+	for _, dropped := range []struct{ table, column string }{
+		{"work_item_metrics_daily", "items_started"},
+		{"team_metrics_daily", "weekend_commits_count"},
+	} {
+		t.Run(dropped.table+"."+dropped.column, func(t *testing.T) {
+			fresh := freshMigratedClickHouse(t, ctx, OperationalOrderingRevision)
+			if err := fresh.Exec(ctx, "ALTER TABLE "+dropped.table+" DROP COLUMN "+dropped.column); err != nil {
+				t.Fatalf("stage the stale schema: %v", err)
+			}
+			err := verifyRecommendationsSchema(ctx, fresh)
+			if !errors.Is(err, ErrRecommendationsSchemaIncompatible) {
+				t.Fatalf("a schema without %s.%s must be refused as schema-incompatible, got: %v", dropped.table, dropped.column, err)
+			}
+			if !strings.Contains(err.Error(), dropped.table) || !strings.Contains(err.Error(), dropped.column) {
+				t.Errorf("the refusal must name the table and the column: %v", err)
+			}
+		})
+	}
 }

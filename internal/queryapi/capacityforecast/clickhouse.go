@@ -14,6 +14,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph/model"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graphqldate"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/newestrow"
+	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse/liverow"
 )
 
 // The reads, ported from metrics/capacity_queries.py (the two compute-path
@@ -92,6 +93,12 @@ func countFromAggregate(column string, value uint64) (int, error) {
 // matching Python's client-side utc_today(). It therefore moves at UTC midnight
 // -- reproduced rather than pinned, because pinning it in Go alone would be the
 // divergence.
+//
+// One difference from Python: a newest row that holds no measure is a
+// retraction row (package liverow) and is left out. It adds 0 to the sum of a
+// day, but the result is a LIST of days and the forecast counts them: a day
+// whose rows in scope are all retraction rows (the keys of a retired team id)
+// is a day with no data, not a day on which 0 items were completed.
 func loadThroughput(
 	ctx context.Context, client QueryClient, orgID string,
 	teamIDs []string, workScopeID *string, historyDays int, today time.Time,
@@ -114,9 +121,10 @@ func loadThroughput(
         SELECT day, SUM(items_completed) AS items_completed
         FROM work_item_metrics_daily FINAL
         WHERE %s
+          AND %s
         GROUP BY day
         ORDER BY day
-    `, strings.Join(conditions, " AND "))
+    `, strings.Join(conditions, " AND "), liverow.Predicate("work_item_metrics_daily", ""))
 
 	rows, err := client.Query(ctx, query, bindings)
 	if err != nil {

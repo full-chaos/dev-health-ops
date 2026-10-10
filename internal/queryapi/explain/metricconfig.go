@@ -1,6 +1,10 @@
 package explain
 
-import "github.com/full-chaos/dev-health-ops/internal/jobs/metrics/changefailure"
+import (
+	"sort"
+
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/changefailure"
+)
 
 // metricConfig ports api/services/explain.py's _MetricConfig TypedDict --
 // one entry per supported metric key.
@@ -105,17 +109,28 @@ var metricConfigs = map[string]metricConfig{
 	},
 }
 
-// defaultMetricKey is the fallback config _METRIC_CONFIG.get(metric,
-// _METRIC_CONFIG["cycle_time"]) (api/services/explain.py:146) borrows for
-// any metric string this map does not recognise -- the RESPONSE's own
-// "metric" field still echoes the ORIGINAL request string, never
-// "cycle_time"; only label/unit/table/column/group_by/scope/aggregator/
-// transform borrow cycle_time's.
-const defaultMetricKey = "cycle_time"
+// resolveMetricConfig is the config of a metric the route knows. An unknown
+// name has NO config: the route never answers with another metric's config
+// (CHAOS-9136, D5869). The Python original borrowed cycle_time's for every name
+// outside the map (api/services/explain.py:146); that is a known bug, not a
+// behaviour to keep.
+func resolveMetricConfig(metric string) (metricConfig, bool) {
+	config, ok := metricConfigs[metric]
+	return config, ok
+}
 
-func resolveMetricConfig(metric string) metricConfig {
-	if config, ok := metricConfigs[metric]; ok {
-		return config
+// IsKnownMetric reports whether the explain route has a config for the metric.
+func IsKnownMetric(metric string) bool {
+	_, ok := metricConfigs[metric]
+	return ok
+}
+
+// MetricNames is the metric names the explain route has a config for, sorted.
+func MetricNames() []string {
+	names := make([]string, 0, len(metricConfigs))
+	for name := range metricConfigs {
+		names = append(names, name)
 	}
-	return metricConfigs[defaultMetricKey]
+	sort.Strings(names)
+	return names
 }

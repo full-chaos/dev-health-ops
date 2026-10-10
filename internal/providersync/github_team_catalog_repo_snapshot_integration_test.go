@@ -271,7 +271,7 @@ func TestGitHubTeamCatalogClosesProviderAccessRowsGitHubNoLongerReturns(t *testi
 		requireRepoFacts(t, "after the re-grant", openRepoOwnership(ctx, t, conn, org, "github"), platform, platformWeb)
 	})
 
-	t.Run("a team the run did not list keeps its rows", func(t *testing.T) {
+	t.Run("a team the run did not list closes on a listing of one response (CHAOS-9102)", func(t *testing.T) {
 		org := "snap-unlisted-team"
 		if _, err := githubSnapshotRun(ctx, t, conn, org, twoTeams, nil, teamsOnly, t0); err != nil {
 			t.Fatal(err)
@@ -283,7 +283,7 @@ func TestGitHubTeamCatalogClosesProviderAccessRowsGitHubNoLongerReturns(t *testi
 		if _, err := githubSnapshotRun(ctx, t, conn, org, paths, nil, teamsOnly, t0.Add(time.Hour)); err != nil {
 			t.Fatal(err)
 		}
-		requireRepoFacts(t, "after a run that listed only platform", openRepoOwnership(ctx, t, conn, org, "github"), platform, ops)
+		requireRepoFacts(t, "after a run that listed only platform", openRepoOwnership(ctx, t, conn, org, "github"), platform)
 	})
 
 	t.Run("a failed read of the open rows fails the run and writes nothing", func(t *testing.T) {

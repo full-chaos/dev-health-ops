@@ -628,7 +628,10 @@ func (s *runner) webSource() (result, error) {
 				break
 			}
 		}
-		if !found {
+		// The smoke SENDS the current registered document, so the edge catalog must hold its digest
+		// too, whichever document web carries: a catalog without it means the deployed ops is not
+		// this build, and the smoke would send a document the edge refuses.
+		if !found || !catalog[g.Op][DocumentDigest(doc)] {
 			mismatched = append(mismatched, g.Op)
 		} else if matched.Legacy {
 			legacy = append(legacy, g.Op)

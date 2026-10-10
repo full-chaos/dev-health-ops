@@ -997,6 +997,26 @@ func TestWebDocumentOfALegacyRegisteredTextPassesAndSaysLegacy(t *testing.T) {
 			t.Fatalf("exit=%d check=%v", out.ExitCode(), c)
 		}
 	})
+	t.Run("a catalog without the current digest is a mismatch even for a legacy web text", func(t *testing.T) {
+		h := newHarness(t, "")
+		// Only the legacy digest of the web's text: the deployed ops is not this build, and the
+		// smoke would send the current document, which the edge would refuse.
+		h.catalog = nil
+		for _, g := range graphqlSources {
+			if g.Op == "home" {
+				continue
+			}
+			doc, _ := server.WebPathSmokeDocument(g.Op)
+			h.catalog = append(h.catalog, map[string]string{"operation": g.Op, "digest": DocumentDigest(doc)})
+		}
+		h.catalog = append(h.catalog, map[string]string{"operation": "home", "digest": DocumentDigest(documents[1].Text)})
+		h.writeCatalog()
+		setWebDoc(t, h, "home", webText(documents[1].Text))
+		out := Run(h.cfg)
+		if c := out.check("web_source"); out.ExitCode() != ExitFail || c["reason"] != "document_digest_mismatch=home" {
+			t.Fatalf("exit=%d check=%v", out.ExitCode(), c)
+		}
+	})
 	t.Run("a text no registered document carries is a mismatch", func(t *testing.T) {
 		h := newHarness(t, "")
 		for _, document := range documents {

@@ -399,18 +399,6 @@ func specDayExpr(spec MetricSpec) string {
 	return spec.DayExpr
 }
 
-// quadrantMetricQuery builds fetch_quadrant_metric's SQL text (queries/
-// quadrant.py:19-58) for one spec/bucket/teamFilter combination -- split
-// out from fetchQuadrantMetric so a test can assert the query SHAPE
-// (sqlshape.Depths: org_id sits at the same nesting depth as every
-// FINAL/JOIN dedup source, never behind an unfiltered subquery) without a
-// live QueryClient. Returns exactly the text fetchQuadrantMetric sends;
-// bindings are built separately since they carry request VALUES, not
-// shape.
-func quadrantMetricQuery(spec MetricSpec, bucket, teamFilter string) string {
-	return quadrantMetricQueryIn(spec, bucket, teamFilter, extraScope{})
-}
-
 // extraScope is the selected-teams / selected-repositories condition of a request
 // (CHAOS-9159): one " AND ..." fragment and its bindings, "" when the request selects
 // neither. It is appended to the WHERE of a metric read, after the org_id predicate.
@@ -419,7 +407,20 @@ type extraScope struct {
 	Bindings []dhclickhouse.Binding
 }
 
-func quadrantMetricQueryIn(spec MetricSpec, bucket, teamFilter string, extra extraScope) string {
+// quadrantMetricQuery builds fetch_quadrant_metric's SQL text (queries/
+// quadrant.py:19-58) for one spec/bucket/teamFilter combination -- split
+// out from fetchQuadrantMetric so a test can assert the query SHAPE
+// (sqlshape.Depths: org_id sits at the same nesting depth as every
+// FINAL/JOIN dedup source, never behind an unfiltered subquery) without a
+// live QueryClient. Returns exactly the text fetchQuadrantMetric sends;
+// bindings are built separately since they carry request VALUES, not
+// shape.
+
+func quadrantMetricQuery(spec MetricSpec, bucket, teamFilter string, scopes ...extraScope) string {
+	var extra extraScope
+	if len(scopes) > 0 {
+		extra = scopes[0]
+	}
 	joinSQL := ""
 	if spec.JoinClause != "" {
 		joinSQL = "\n" + spec.JoinClause
@@ -486,7 +487,7 @@ func fetchQuadrantMetricIn(ctx context.Context, client QueryClient, spec MetricS
 		bindings = append(bindings, dhclickhouse.Binding{Name: "team_id", Value: teamFilter})
 	}
 	bindings = append(bindings, extra.Bindings...)
-	query := quadrantMetricQueryIn(spec, bucket, teamFilter, extra)
+	query := quadrantMetricQuery(spec, bucket, teamFilter, extra)
 
 	return scanMetricRows(ctx, client, query, bindings, "quadrant: fetch_quadrant_metric")
 }

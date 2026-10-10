@@ -31,6 +31,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/api/pybody"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
+	"github.com/full-chaos/dev-health-ops/internal/teamcreated"
 	"github.com/full-chaos/dev-health-ops/internal/teamid"
 )
 
@@ -69,8 +70,11 @@ type Team struct {
 	ProjectKeys   []string
 	RepoPatterns  []string
 	IsActive      bool
-	UpdatedAt     time.Time
-	OrgID         string
+	// CreatedAt is the stored creation time, or the newest update time for a
+	// team whose creation time is not recorded (teams.created_at NULL).
+	CreatedAt time.Time
+	UpdatedAt time.Time
+	OrgID     string
 
 	origin teamOrigin
 }
@@ -106,7 +110,7 @@ type Store struct {
 	Conn driver.Conn
 }
 
-const teamSelectColumns = "id, team_uuid, name, description, members, project_keys, repo_patterns, is_active, updated_at, org_id, manual_members, provider, native_team_key, parent_team_id, source_id"
+const teamSelectColumns = "id, team_uuid, name, description, members, project_keys, repo_patterns, is_active, updated_at, org_id, manual_members, provider, native_team_key, parent_team_id, source_id, coalesce(created_at, updated_at)"
 
 // queryTeams is _query_teams: teamID nil lists every (optionally
 // active-only) team; teamID non-nil scopes to one.
@@ -140,17 +144,17 @@ func (s Store) queryTeams(ctx context.Context, orgID string, teamID *string, act
 			description                                *string
 			members, projectKeys, repoPatterns, manual []string
 			isActive                                   uint8
-			updatedAt                                  time.Time
+			updatedAt, createdAt                       time.Time
 			origin                                     teamOrigin
 		)
 		if err := rows.Scan(&id, &teamUUIDCol, &name, &description, &members, &projectKeys, &repoPatterns, &isActive, &updatedAt, &orgIDCol, &manual,
-			&origin.Provider, &origin.NativeTeamKey, &origin.ParentTeamID, &origin.SourceID); err != nil {
+			&origin.Provider, &origin.NativeTeamKey, &origin.ParentTeamID, &origin.SourceID, &createdAt); err != nil {
 			return nil, fmt.Errorf("scan team row: %w", err)
 		}
 		teams = append(teams, Team{
 			ID: teamUUIDCol.String(), TeamUUID: teamUUIDCol, TeamID: id, Name: name, Description: description,
 			Members: members, ManualMembers: manual, ProjectKeys: projectKeys, RepoPatterns: repoPatterns,
-			IsActive: isActive != 0, UpdatedAt: updatedAt, OrgID: orgIDCol, origin: origin,
+			IsActive: isActive != 0, CreatedAt: createdAt, UpdatedAt: updatedAt, OrgID: orgIDCol, origin: origin,
 		})
 	}
 	return teams, rows.Err()
@@ -225,17 +229,18 @@ func (s Store) CreateOrUpdateTeam(ctx context.Context, orgID string, write TeamW
 	resolvedRepos := resolveListField(write.RepoPatterns, teamListOrNil(existing, func(t Team) []string { return t.RepoPatterns }))
 
 	now := time.Now().UTC()
-	if err := s.insertTeamRow(ctx, teamInsertRow{
+	createdAt, err := s.insertTeamRow(ctx, teamInsertRow{
 		ID: write.TeamID, TeamUUID: uuidValue, Name: write.Name, Description: write.Description,
 		Members: resolvedMembers, ManualMembers: resolvedManual, ProjectKeys: resolvedProjects, RepoPatterns: resolvedRepos,
 		IsActive: true, OrgID: orgID, Origin: origin, UpdatedAt: now,
-	}); err != nil {
+	})
+	if err != nil {
 		return Team{}, err
 	}
 	return Team{
 		ID: uuidValue.String(), TeamUUID: uuidValue, TeamID: write.TeamID, Name: write.Name, Description: write.Description,
 		Members: resolvedMembers, ManualMembers: resolvedManual, ProjectKeys: resolvedProjects, RepoPatterns: resolvedRepos,
-		IsActive: true, UpdatedAt: now, OrgID: orgID, origin: origin,
+		IsActive: true, CreatedAt: createdAt, UpdatedAt: now, OrgID: orgID, origin: origin,
 	}, nil
 }
 
@@ -369,14 +374,19 @@ type teamInsertRow struct {
 // exact 16-column list that table's real writer uses. provider,
 // native_team_key, parent_team_id and source_id are the row's origin: a
 // stored team's own on an edit, the writer's on a new team.
-func (s Store) insertTeamRow(ctx context.Context, row teamInsertRow) error {
-	const insertSQL = "INSERT INTO teams (id, team_uuid, name, description, members, manual_members, project_keys, repo_patterns, is_active, updated_at, last_synced, org_id, provider, native_team_key, parent_team_id, source_id)"
+func (s Store) insertTeamRow(ctx context.Context, row teamInsertRow) (time.Time, error) {
+	const insertSQL = "INSERT INTO teams (id, team_uuid, name, description, members, manual_members, project_keys, repo_patterns, is_active, updated_at, last_synced, org_id, provider, native_team_key, parent_team_id, source_id, created_at)"
 	if err := checkKeyedTeamID(row.ID); err != nil {
-		return err
+		return time.Time{}, err
 	}
+	carried, err := teamcreated.Carry(ctx, s.Conn, row.OrgID, []string{row.ID})
+	if err != nil {
+		return time.Time{}, fmt.Errorf("carry team created_at: %w", err)
+	}
+	createdAt := teamcreated.For(carried, row.ID, row.UpdatedAt)
 	batch, err := s.Conn.PrepareBatch(ctx, insertSQL)
 	if err != nil {
-		return fmt.Errorf("prepare team insert: %w", err)
+		return time.Time{}, fmt.Errorf("prepare team insert: %w", err)
 	}
 	defer batch.Abort()
 	isActive := uint8(0)
@@ -387,14 +397,14 @@ func (s Store) insertTeamRow(ctx context.Context, row teamInsertRow) error {
 	if err := batch.Append(
 		row.ID, row.TeamUUID, row.Name, row.Description, row.Members, row.ManualMembers,
 		row.ProjectKeys, row.RepoPatterns, isActive, row.UpdatedAt, now, row.OrgID,
-		row.Origin.Provider, row.Origin.NativeTeamKey, row.Origin.ParentTeamID, row.Origin.SourceID,
+		row.Origin.Provider, row.Origin.NativeTeamKey, row.Origin.ParentTeamID, row.Origin.SourceID, createdAt,
 	); err != nil {
-		return fmt.Errorf("append team row: %w", err)
+		return time.Time{}, fmt.Errorf("append team row: %w", err)
 	}
 	if err := batch.Send(); err != nil {
-		return fmt.Errorf("send team insert: %w", err)
+		return time.Time{}, fmt.Errorf("send team insert: %w", err)
 	}
-	return nil
+	return createdAt, nil
 }
 
 const identitySelectColumns = "canonical_id, identity_uuid, display_name, email, provider_identities, team_ids, is_active, updated_at, org_id"

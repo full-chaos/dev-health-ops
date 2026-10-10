@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/providersync"
+	"github.com/full-chaos/dev-health-ops/internal/teamcreated"
 	"github.com/full-chaos/dev-health-ops/internal/teamid"
 )
 
@@ -20,7 +21,7 @@ import (
 // (providersync/jira_team_catalog_effects_clickhouse.go), so both writers fill
 // the same physical tables the same way.
 const (
-	teamsInsert       = `INSERT INTO teams (id, team_uuid, name, description, members, manual_members, project_keys, repo_patterns, is_active, updated_at, org_id, provider, native_team_key, parent_team_id)`
+	teamsInsert       = `INSERT INTO teams (id, team_uuid, name, description, members, manual_members, project_keys, repo_patterns, is_active, updated_at, org_id, provider, native_team_key, parent_team_id, created_at)`
 	membershipsInsert = `INSERT INTO team_memberships (org_id, provider, team_id, member_id, raw_provider_user_id, raw_email, identity_facets, source, is_primary, specificity, priority, valid_from, valid_to, updated_at)`
 	// ownershipInsert names its columns and omits last_synced on purpose: the server stamps it at insert time.
 	// last_synced = server insert time, not commit order across concurrent inserts. A reader must re-read a
@@ -518,6 +519,14 @@ func writeTeams(ctx context.Context, conn driver.Conn, orgID string, teams []Tea
 			return err
 		}
 	}
+	carryIDs := append([]string{}, ids...)
+	for _, team := range deactivate {
+		carryIDs = append(carryIDs, team.id)
+	}
+	createdAt, err := teamcreated.Carry(ctx, conn, orgID, carryIDs)
+	if err != nil {
+		return err
+	}
 	batch, err := conn.PrepareBatch(ctx, teamsInsert)
 	if err != nil {
 		return err
@@ -544,6 +553,7 @@ func writeTeams(ctx context.Context, conn driver.Conn, orgID string, teams []Tea
 		if err := batch.Append(
 			team.ID, team.TeamUUID, team.Name, team.Description, []string{}, manualMembers, keys, []string{},
 			team.IsActive, team.UpdatedAt, team.OrgID, team.Provider, &nativeKey, (*string)(nil),
+			teamcreated.For(createdAt, team.ID, team.UpdatedAt),
 		); err != nil {
 			return err
 		}
@@ -552,6 +562,7 @@ func writeTeams(ctx context.Context, conn driver.Conn, orgID string, teams []Tea
 		if err := batch.Append(
 			team.id, team.teamUUID, team.name, team.description, team.members, team.manualMembers, team.projectKeys, team.repoPatterns,
 			uint8(0), now, orgID, Provider, team.nativeTeamKey, team.parentTeamID,
+			teamcreated.For(createdAt, team.id, now),
 		); err != nil {
 			return err
 		}

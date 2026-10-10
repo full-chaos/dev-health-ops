@@ -21,6 +21,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 	"github.com/full-chaos/dev-health-ops/internal/storedversion"
 	"github.com/full-chaos/dev-health-ops/internal/streamrunner"
+	"github.com/full-chaos/dev-health-ops/internal/teamcreated"
 	"github.com/full-chaos/dev-health-ops/internal/teamid"
 	"github.com/google/uuid"
 )
@@ -93,6 +94,7 @@ func (s *ClickHouseExternalBatchSink) Write(ctx context.Context, source external
 		// for ANY failure partway through this loop, not new here: this
 		// function has never wrapped its per-kind writes in one transaction.)
 		var existingManualMembers map[string][]string
+		var createdAt map[string]time.Time
 		if kind == "team.v1" {
 			teamIDs := make([]string, 0, len(grouped[kind]))
 			for _, record := range grouped[kind] {
@@ -102,12 +104,23 @@ func (s *ClickHouseExternalBatchSink) Write(ctx context.Context, source external
 			if err != nil {
 				return fmt.Errorf("preserve existing team.v1 manual_members: %w", err)
 			}
+			// created_at is carried from the version this write replaces; a
+			// read failure aborts the write like the manual_members read.
+			createdAt, err = teamcreated.Carry(ctx, s.conn, source.Pointer.OrgID, teamIDs)
+			if err != nil {
+				return fmt.Errorf("carry existing team.v1 created_at: %w", err)
+			}
 		}
 		rows := make([]storedversion.Row, 0, len(grouped[kind]))
 		for _, record := range grouped[kind] {
 			values, err := externalRecordValues(source, record, now, &scope, existingManualMembers)
 			if err != nil {
 				return fmt.Errorf("translate external %s record %d: %w", kind, record.Index, err)
+			}
+			if kind == "team.v1" {
+				// created_at is the last column of the team.v1 statement; a
+				// new team's creation time is its own first updated_at (values[9]).
+				values = withTeamCreatedAt(values, createdAt)
 			}
 			rows = append(rows, storedversion.Row{Values: values})
 		}
@@ -196,7 +209,7 @@ func externalInsertQuery(kind string) (string, error) {
 		"commit.v1":               "INSERT INTO git_commits (repo_id,hash,message,author_name,author_email,author_when,committer_name,committer_email,committer_when,parents,last_synced,source_id,org_id)",
 		"pull_request.v1":         "INSERT INTO git_pull_requests (repo_id,number,title,body,state,author_name,author_email,created_at,merged_at,closed_at,head_branch,base_branch,additions,deletions,changed_files,first_review_at,first_comment_at,changes_requested_count,reviews_count,comments_count,last_synced,source_id,org_id)",
 		"review.v1":               "INSERT INTO git_pull_request_reviews (repo_id,number,review_id,reviewer,state,submitted_at,last_synced,source_id,org_id)",
-		"team.v1":                 "INSERT INTO teams (id,team_uuid,name,description,members,manual_members,project_keys,repo_patterns,is_active,updated_at,last_synced,org_id,provider,native_team_key,parent_team_id,source_id)",
+		"team.v1":                 "INSERT INTO teams (id,team_uuid,name,description,members,manual_members,project_keys,repo_patterns,is_active,updated_at,last_synced,org_id,provider,native_team_key,parent_team_id,source_id,created_at)",
 		"identity.v1":             "INSERT INTO identities (org_id,canonical_id,identity_uuid,display_name,email,provider_identities,team_ids,is_active,updated_at,source_id)",
 		"work_item.v1":            "INSERT INTO work_items (repo_id,work_item_id,provider,title,type,status,status_raw,project_key,project_id,native_team_key,project_name,assignees,reporter,created_at,updated_at,started_at,completed_at,closed_at,labels,story_points,sprint_id,sprint_name,parent_id,epic_id,url,last_synced,org_id,source_id)",
 		"work_item_transition.v1": "INSERT INTO work_item_transitions (repo_id,work_item_id,occurred_at,from_status,to_status,from_status_raw,to_status_raw,actor,last_synced,org_id,source_id)",
@@ -224,6 +237,15 @@ func externalInsertQuery(kind string) (string, error) {
 		return "", fmt.Errorf("unsupported external sink kind %q", kind)
 	}
 	return query, nil
+}
+
+// withTeamCreatedAt appends the created_at column, the last of the team.v1
+// statement: the carried creation time of the team, else the row's own
+// updated_at (values[0] is the id, values[9] the updated_at) for a new team.
+func withTeamCreatedAt(values []any, carried map[string]time.Time) []any {
+	teamID, _ := values[0].(string)
+	firstWrite, _ := values[9].(time.Time)
+	return append(values, teamcreated.For(carried, teamID, firstWrite))
 }
 
 func externalRecordValues(

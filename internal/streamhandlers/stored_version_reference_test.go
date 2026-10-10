@@ -62,6 +62,7 @@ func loadStatementVariants(t *testing.T) statementVariants {
 // externalUnreferencedColumns are columns this writer inserts that the
 // Python reference writer does not; the reference defines no value for them.
 var externalUnreferencedColumns = map[string][]string{
+	"teams":      {"created_at"},
 	"work_items": {"description", "due_at", "priority_raw", "service_class"},
 }
 
@@ -103,6 +104,9 @@ func TestExternalStatementVariantsMatchThePythonReference(t *testing.T) {
 		if err != nil {
 			t.Errorf("%s: %v", name, err)
 			continue
+		}
+		if variant.Kind == "team.v1" {
+			values = withTeamCreatedAt(values, nil)
 		}
 		if contract, ok := externalContract(variant.Kind, variant.System); ok {
 			var appended []string

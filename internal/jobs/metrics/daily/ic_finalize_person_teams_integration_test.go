@@ -24,6 +24,8 @@ import (
 //   - valid: one membership that started before the day and is open.
 //   - closed: a membership that ended the day before the day.
 //   - future: a membership that starts the day after the day.
+//   - starts: a membership that starts AT the day: valid on it.
+//   - ends: a membership that ends AT the day: not valid on it.
 //   - reopened: the newest version of the membership row closed it before the
 //     day; an older version of the same row was open.
 //   - inactive: a member of an inactive team only.
@@ -81,6 +83,9 @@ func TestThePersonsTeamsOfTheLandscapeAreTheMembershipsValidAtTheDay(t *testing.
 	membership("valid", "github", "github:platform", 1, longBefore, open, longBefore)
 	membership("closed", "jira", "jira:ENG", 1, longBefore, &dayBefore, longBefore)
 	membership("future", "jira", "jira:ENG", 1, dayAfter, open, longBefore)
+	// The two edges of the window: valid_from <= the day < valid_to.
+	membership("starts", "jira", "jira:ENG", 1, day, open, longBefore)
+	membership("ends", "jira", "jira:ENG", 1, longBefore, &day, longBefore)
 	// Two versions of one row (same key, same valid_from): the newer one
 	// closes the membership before the day.
 	membership("reopened", "jira", "jira:ENG", 1, longBefore, open, longBefore)
@@ -89,7 +94,7 @@ func TestThePersonsTeamsOfTheLandscapeAreTheMembershipsValidAtTheDay(t *testing.
 	membership("mixed", "jira", "ENG", 1, longBefore, open, longBefore)
 	membership("mixed", "gitlab", "gitlab:ops", 0, longBefore, open, longBefore)
 
-	people := []string{"two", "valid", "closed", "future", "reopened", "inactive", "mixed", "roster", "none"}
+	people := []string{"two", "valid", "closed", "future", "starts", "ends", "reopened", "inactive", "mixed", "roster", "none"}
 	// What the repository/user family writes for each person on each day.
 	for _, rowDay := range []time.Time{day, twoDaysLater} {
 		for _, person := range people {
@@ -165,16 +170,18 @@ WHERE org_id = ? AND as_of_day = ? AND `+live+` GROUP BY identity_id`, org, asOf
 		Points: map[string][]string{
 			"two": {"github:platform", "jira:ENG"}, "valid": {"github:platform"},
 			"closed": unassigned, "future": unassigned, "reopened": unassigned, "inactive": unassigned,
+			"starts": {"jira:ENG"}, "ends": unassigned,
 			"mixed": {"gitlab:ops"}, "roster": unassigned, "none": unassigned,
 		},
 		Rows: map[string]string{
 			// One row for a person: the primary membership of the two.
 			"two": "jira:ENG", "valid": "github:platform",
 			"closed": "unassigned", "future": "unassigned", "reopened": "unassigned", "inactive": "unassigned",
+			"starts": "jira:ENG", "ends": "unassigned",
 			"mixed": "gitlab:ops", "roster": "unassigned", "none": "unassigned",
 		},
-		// 10 (person, team) pairs, three maps each.
-		LivePoints: 30,
+		// 12 (person, team) pairs, three maps each.
+		LivePoints: 36,
 	}
 	if got := run(day); !reflect.DeepEqual(got, want) {
 		t.Errorf("the day:\n got  %+v\n want %+v", got, want)

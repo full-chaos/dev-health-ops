@@ -104,7 +104,6 @@ query Home($orgId: String!, $filters: FilterInput, $window: HomeWindowInput) {
         displayName
         __typename
       }
-      coverage
       attribution {
         items
         sources {

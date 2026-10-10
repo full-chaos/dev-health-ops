@@ -126,7 +126,7 @@ func TestEveryRegisteredTeamCatalogCollectorTakesItsTurnFirst(t *testing.T) {
 		}
 	}
 	// The production constructor, built from a pool (no connection is made), hands every
-	// collector the Postgres turn: checked on what it returns, not on the text of its call site.
+	// collector the lease turn: checked on what it returns, not on the text of its call site.
 	pool, err := pgxpool.New(context.Background(), "postgres://turn:turn@127.0.0.1:1/turn?pool_max_conns=4")
 	if err != nil {
 		t.Fatal(err)
@@ -142,9 +142,8 @@ func TestEveryRegisteredTeamCatalogCollectorTakesItsTurnFirst(t *testing.T) {
 			t.Errorf("%s: %T is not behind the carry wrapper", provider, collector)
 			continue
 		}
-		turn, ok := carried.Serializer.(*providersync.PostgresTeamCatalogTurn)
-		if !ok || turn == nil {
-			t.Errorf("%s: serializer is %T, want the Postgres turn (CHAOS-9140)", provider, carried.Serializer)
+		if _, ok := carried.Serializer.(catalogLeaseTurn); !ok {
+			t.Errorf("%s: serializer is %T, want the catalog lease turn (CHAOS-9140)", provider, carried.Serializer)
 		}
 	}
 }

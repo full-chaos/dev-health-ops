@@ -980,11 +980,11 @@ func newTouchedDaysDrain(
 }
 
 // newProductionTeamCatalogCollectors is the registry the worker runs: every collector behind
-// the team id carry AND the per-(organization, provider) turn on the DOMAIN pool (CHAOS-9140).
+// the team id carry AND the per-(organization, provider) lease turn (CHAOS-9140, D5917).
 // A test builds it from a pool and reads each entry's serializer, so the wiring is checked by
 // what the constructor returns, not by the text of its call site.
 func newProductionTeamCatalogCollectors(clickhouseConnection driver.Conn, domain *pgxpool.Pool) map[string]providersync.TeamCatalogCollector {
-	return newNativeTeamCatalogCollectors(clickhouseConnection, providersync.NewPostgresTeamCatalogTurn(domain, 0), teamCatalogScopeCensus{pool: domain})
+	return newNativeTeamCatalogCollectors(clickhouseConnection, newCatalogLeaseTurn(domain), teamCatalogScopeCensus{pool: domain})
 }
 
 // newNativeTeamCatalogCollectors is the worker's registry of team catalog

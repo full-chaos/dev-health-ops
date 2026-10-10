@@ -172,6 +172,32 @@ FROM teams FINAL WHERE org_id = ? AND id = ?`, org, gone).Scan(&rows, &activeRow
 					rows, activeRows, marked, newest(), deletedAt)
 			}
 
+			// A team whose stored row carries a time AHEAD of this clock (a
+			// writer on another host, a clock that was set back): the delete
+			// must still be the newest version, or the team stays active.
+			ahead := teamid.Of(origin, "ahead")
+			if _, err := store.CreateOrUpdateTeam(ctx, org, TeamWrite{Origin: origin, TeamID: ahead, Name: "Ahead"}); err != nil {
+				t.Fatal(err)
+			}
+			if err := conn.Exec(ctx, `INSERT INTO teams (id, team_uuid, name, members, updated_at, org_id, provider, is_active)
+SELECT id, team_uuid, name, members, now64(6) + INTERVAL 1 HOUR, org_id, provider, 1 FROM teams FINAL WHERE org_id = ? AND id = ?`, org, ahead); err != nil {
+				t.Fatal(err)
+			}
+			if code, _ := status(call(h.deleteTeam, http.MethodDelete, "/api/v1/admin/teams/"+ahead, ahead, nil)); code != http.StatusOK {
+				t.Fatalf("delete of the team with a row ahead of the clock: %d", code)
+			}
+			var aheadActive, aheadMarked uint64
+			if err := conn.QueryRow(ctx, `SELECT countIf(is_active = 1), countIf(deleted_at IS NOT NULL) FROM teams FINAL WHERE org_id = ? AND id = ?`,
+				org, ahead).Scan(&aheadActive, &aheadMarked); err != nil {
+				t.Fatal(err)
+			}
+			if aheadActive != 0 || aheadMarked != 1 {
+				t.Errorf("a team with a row ahead of the clock, after its delete: %d active, %d marked; want the delete to be the newest version", aheadActive, aheadMarked)
+			}
+			if got, want := listed("?active_only=false"), sorted(stays, retired); !reflect.DeepEqual(got, want) {
+				t.Errorf("the list with inactive teams after that delete = %v, want %v", got, want)
+			}
+
 			// An admin create under the same id: a new team.
 			created, err := store.CreateOrUpdateTeam(ctx, org, TeamWrite{Origin: origin, TeamID: gone, Name: "Platform again"})
 			if err != nil {

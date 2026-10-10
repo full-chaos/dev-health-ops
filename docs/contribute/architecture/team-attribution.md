@@ -813,6 +813,29 @@ project's items by id. Now:
      ONE new member id: a provider returning the same user id under two new member ids in one run is the provider's
      statement, so the first member id (sorted) takes the open row's `valid_from` and the other joins as new. A rename does not wait for the proof a departure needs: a team whose member read has no end signal (or whose kind is out of the closable scope) still has the replaced open row retired as a rename, because the stored id is the provider's own statement, not an absence. The same member id back with ANOTHER provider user id than every open row of it holds (a login freed by one person and taken by another) is a new person: the open rows are closed as history, the written row starts at the run time and holds the new id, and `team_membership_id_reused` (provider, team, a count) is logged; a fact with any open row that holds no id, or the same id, is one person still. Each run logs `team_membership_renamed` (provider, team, renamed)
      once per team, never a login or an email.
+
+  **Membership continuity — the one decision** (`decideMembershipContinuity`, `membership_continuity.go`; every
+  provider writer reaches it through `MembershipSnapshotWriter.Snapshot`, and nothing else compares a provider user
+  id). For each member the provider returns and the conflict guard keeps, with a non-blank id `I`:
+
+  | open rows of the SAME member id | their stored id | open rows of ANOTHER member id (same team) holding `I` | result | written row's `valid_from` | rows closed |
+  | --- | --- | --- | --- | --- | --- |
+  | any | any | any, but `I` absent or blank | `no_change` (the snapshot rule alone) | the rule's | none by this decision |
+  | 0 | n/a | 0 | `new_row` | the run's | none |
+  | 0 | n/a | 1 or 2 | `rename_continue` | earliest of those rows | those rows, as a rename |
+  | 1 or 2 | NULL, or `I`, or a mix of other and NULL | 0, 1 or 2 | `continue_row` | the rule's (the first-seen) | none: the other rows are not renamed away (they close only as departures, when the read is proven) |
+  | 1 or 2 | every row another id (none NULL, none newer than the read) | 0 | `close_history_new_row` | the run time | every open row of the member id, as history (`team_membership_id_reused`) |
+  | 1 or 2 | every row another id | 1 or 2 | `close_history_rename_continue` | earliest of the renamed rows | the member id's rows as history AND the renamed rows |
+
+  The four review findings of PR #3995 are cells of this table: a login rename is `rename_continue`; two open rows
+  of one id are both replaced (earliest `valid_from`); a member already open with no id stored yet is `continue_row`
+  (never renamed away, so never two open rows); the same member id back with another id is `close_history_new_row`
+  (the first person keeps their row as history). Open rows of another provider, a row newer than the read, a row
+  another returned member holds, and a row an earlier returned member (in sorted order) already took are never
+  matched. Whether the member read is proven changes only the departures of the rows the decision did not take;
+  a rename and a history close are made either way. `TestMembershipContinuityDecisionTable` enumerates every cell
+  (a cell without a row fails the test) and `TestMembershipContinuityThroughTheWriterProvenAndUnproven` runs each
+  through the writer for a proven and an unproven read and for open rows of another provider.
   A member returned with `active: false` is a deactivated user: the provider says so, and it is closed (an
   email-keyed member too). A member who comes back is a new fact with a new `valid_from`. Every close is logged
   once per team (`team_membership_closed`: provider, team, closed, duplicates_retired) and every candidate left

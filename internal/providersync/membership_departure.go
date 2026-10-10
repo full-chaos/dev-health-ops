@@ -218,6 +218,23 @@ func (writer MembershipSnapshotWriter[R]) Snapshot(
 	if err != nil {
 		return nil, MembershipSnapshotOutcome{}, fmt.Errorf("providersync: read open memberships of %s/%s: %w", writer.Provider, writer.Source, err)
 	}
+	return writer.planSnapshot(ctx, orgID, open, observed, toWrite, at, prove, kinds...)
+}
+
+// planSnapshot is Snapshot after the open rows are read: it touches no store, so
+// the decision table test runs it on every cell.
+func (writer MembershipSnapshotWriter[R]) planSnapshot(
+	ctx context.Context, orgID string, open []openMembership, observed, toWrite []R, at time.Time,
+	prove MembershipAbsenceProver, kinds ...KindSnapshot[MembershipSnapshotRow],
+) ([]R, MembershipSnapshotOutcome, error) {
+	// The read is by provider; an open row of another provider is no row of this writer.
+	own := open[:0:0]
+	for _, row := range open {
+		if row.Provider == writer.Provider {
+			own = append(own, row)
+		}
+	}
+	open = own
 	observedFacts := make([]MembershipSnapshotRow, len(observed))
 	for index, row := range observed {
 		observedFacts[index] = MembershipSnapshotRow{TeamID: writer.TeamID(row), MemberID: writer.MemberID(row), ValidFrom: writer.ValidFrom(row)}
@@ -228,7 +245,7 @@ func (writer MembershipSnapshotWriter[R]) Snapshot(
 	for _, fact := range observedFacts {
 		held[MembershipSnapshotKey(fact)] = true
 	}
-	renamedAway := writer.planRenames(open, observed, toWrite, held, stamp, at)
+	renamedAway, historyClosed := writer.applyContinuity(open, observed, toWrite, stamp, at)
 	outcome := MembershipSnapshotOutcome{Plan: plan, Skipped: map[string]int{}}
 	tally := map[string]*membershipTeamTally{}
 	of := func(teamID string) *membershipTeamTally {
@@ -333,23 +350,25 @@ func (writer MembershipSnapshotWriter[R]) Snapshot(
 		}
 	}
 	// A member id that came back with another provider user id is a new person: the old
-	// row is closed (history) and the written row starts at the run time (see planIDReuse).
+	// rows are closed (history); the written row's valid_from is set by the decision.
 	alreadyClosing := map[string]bool{}
 	for _, existing := range closes {
 		alreadyClosing[membershipOpenRowKey(existing.open)] = true
 	}
-	for _, row := range writer.planIDReuse(open, observed, toWrite, stamp, at) {
+	for _, fact := range historyClosed {
 		outcome.IDReused++
-		of(row.TeamID).reused++
-		if alreadyClosing[membershipOpenRowKey(row)] {
-			continue
+		of(fact[0].TeamID).reused++
+		for _, row := range fact {
+			if alreadyClosing[membershipOpenRowKey(row)] {
+				continue
+			}
+			alreadyClosing[membershipOpenRowKey(row)] = true
+			closedAt := at
+			if closedAt.Before(row.ValidFrom) {
+				closedAt = row.ValidFrom
+			}
+			closes = append(closes, closing{row, closedAt})
 		}
-		alreadyClosing[membershipOpenRowKey(row)] = true
-		closedAt := at
-		if closedAt.Before(row.ValidFrom) {
-			closedAt = row.ValidFrom
-		}
-		closes = append(closes, closing{row, closedAt})
 	}
 	for key := range renamedAway {
 		outcome.Renamed++
@@ -406,142 +425,58 @@ func (writer MembershipSnapshotWriter[R]) Snapshot(
 	return rows, outcome, nil
 }
 
-// planRenames finds the members the provider returned under a NEW member id
-// whose provider user id an open row of the same team holds under another member
-// id (CHAOS-9144): one person, renamed. It gives the new fact the valid_from of
-// the earliest such open row (stamp) and returns the facts (team and member id)
-// of the open rows that are replaced, which Snapshot closes as renames, not as
-// departures. Only a new member that is WRITTEN (toWrite) replaces an open row;
-// an open row that is itself still observed, or newer than the read, is never
-// replaced; a row with no stored id is never matched (a blank id matches nothing).
-func (writer MembershipSnapshotWriter[R]) planRenames(
-	open []openMembership, observed, toWrite []R, held map[string]bool, stamp map[string]time.Time, at time.Time,
-) map[string]bool {
-	renamedAway := map[string]bool{}
-	if writer.ProviderUserID == nil {
-		return renamedAway
-	}
-	written := map[string]bool{}
-	for _, row := range toWrite {
-		written[MembershipSnapshotKey(MembershipSnapshotRow{TeamID: writer.TeamID(row), MemberID: writer.MemberID(row)})] = true
-	}
-	openFacts := map[string]bool{}
-	for _, row := range open {
-		openFacts[MembershipSnapshotKey(MembershipSnapshotRow{TeamID: row.TeamID, MemberID: row.MemberID})] = true
-	}
-	// The open rows of a team by their provider user id.
-	type idKey struct{ team, id string }
-	byID := map[idKey][]openMembership{}
-	for _, row := range open {
-		if row.ProviderUserID == nil || strings.TrimSpace(*row.ProviderUserID) == "" {
-			continue
-		}
-		byID[idKey{row.TeamID, strings.TrimSpace(*row.ProviderUserID)}] = append(byID[idKey{row.TeamID, strings.TrimSpace(*row.ProviderUserID)}], row)
-	}
-	// An open row continues as ONE new member id: the provider returning one user id
-	// under two new member ids in a run (two logins for one id) cannot be one open row
-	// for the person (both are the provider's statement), so the first member id (in
-	// sorted order, deterministic) takes the open row and the other joins as new.
-	consumed := map[string]bool{}
-	ordered := append([]R(nil), observed...)
-	sort.SliceStable(ordered, func(i, j int) bool {
-		return writer.TeamID(ordered[i])+"\x00"+writer.MemberID(ordered[i]) < writer.TeamID(ordered[j])+"\x00"+writer.MemberID(ordered[j])
-	})
-	for _, row := range ordered {
-		id := writer.ProviderUserID(row)
-		if id == nil || strings.TrimSpace(*id) == "" {
-			continue
-		}
-		team, member := writer.TeamID(row), writer.MemberID(row)
-		key := MembershipSnapshotKey(MembershipSnapshotRow{TeamID: team, MemberID: member})
-		if openFacts[key] || !written[key] {
-			// The member is already open under this member id, or is not written.
-			continue
-		}
-		var earliest *time.Time
-		var replaced []openMembership
-		for _, candidate := range byID[idKey{team, strings.TrimSpace(*id)}] {
-			candidateKey := MembershipSnapshotKey(MembershipSnapshotRow{TeamID: candidate.TeamID, MemberID: candidate.MemberID})
-			if candidate.MemberID == member || held[candidateKey] || consumed[candidateKey] || candidate.UpdatedAt.After(at) {
-				continue
-			}
-			replaced = append(replaced, candidate)
-			if earliest == nil || candidate.ValidFrom.Before(*earliest) {
-				from := candidate.ValidFrom
-				earliest = &from
-			}
-		}
-		if len(replaced) == 0 {
-			continue
-		}
-		if from, ok := stamp[key]; !ok || earliest.Before(from) {
-			stamp[key] = *earliest
-		}
-		for _, candidate := range replaced {
-			candidateKey := MembershipSnapshotKey(MembershipSnapshotRow{TeamID: candidate.TeamID, MemberID: candidate.MemberID})
-			renamedAway[candidateKey] = true
-			consumed[candidateKey] = true
-		}
-	}
-	return renamedAway
-}
-
 // membershipOpenRowKey names one open row (its fact and valid_from).
 func membershipOpenRowKey(row openMembership) string {
 	return row.TeamID + "\x00" + row.MemberID + "\x00" + row.ValidFrom.UTC().Format(time.RFC3339Nano)
 }
 
-// planIDReuse finds the facts the run returns under the SAME member id but another
-// provider user id than every open row of the fact holds (CHAOS-9144, round 122 r4):
-// a login freed by one person and taken by another. It gives the written row a new
-// valid_from (the run time, not the open row's) and returns the open rows to close,
-// so the first person's row is kept as history and the new person does not inherit it.
-// A fact with any open row that holds no id (a row written before the column) or the
-// same id is one person still: nothing is done.
-func (writer MembershipSnapshotWriter[R]) planIDReuse(
+// applyContinuity runs the one decision (decideMembershipContinuity) for every returned
+// member: it sets the valid_from it names in stamp and returns the facts of the open rows
+// replaced by a rename (closed as renames) and the open rows of each fact closed as history.
+func (writer MembershipSnapshotWriter[R]) applyContinuity(
 	open []openMembership, observed, toWrite []R, stamp map[string]time.Time, at time.Time,
-) []openMembership {
+) (map[string]bool, [][]openMembership) {
+	renamedAway := map[string]bool{}
 	if writer.ProviderUserID == nil {
-		return nil
+		return renamedAway, nil
 	}
 	written := map[string]bool{}
 	for _, row := range toWrite {
-		written[MembershipSnapshotKey(MembershipSnapshotRow{TeamID: writer.TeamID(row), MemberID: writer.MemberID(row)})] = true
+		written[membershipFactKey(writer.TeamID(row), writer.MemberID(row))] = true
 	}
-	byFact := map[string][]openMembership{}
-	for _, row := range open {
-		key := MembershipSnapshotKey(MembershipSnapshotRow{TeamID: row.TeamID, MemberID: row.MemberID})
-		byFact[key] = append(byFact[key], row)
+	returned := make([]membershipReturned, len(observed))
+	for index, row := range observed {
+		returned[index] = membershipReturned{
+			TeamID: writer.TeamID(row), MemberID: writer.MemberID(row), ProviderUserID: writer.ProviderUserID(row),
+			Written: written[membershipFactKey(writer.TeamID(row), writer.MemberID(row))],
+		}
 	}
-	var closing []openMembership
-	for _, row := range observed {
-		id := writer.ProviderUserID(row)
-		if id == nil || strings.TrimSpace(*id) == "" {
+	decisions := decideMembershipContinuity(writer.Provider, open, returned, at)
+	keys := make([]string, 0, len(decisions))
+	for key := range decisions {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	var history [][]openMembership
+	for _, key := range keys {
+		decision := decisions[key]
+		for _, row := range decision.Replaced {
+			renamedAway[membershipFactKey(row.TeamID, row.MemberID)] = true
+		}
+		if len(decision.History) > 0 {
+			history = append(history, decision.History)
+		}
+		if decision.ValidFrom == nil {
 			continue
 		}
-		key := MembershipSnapshotKey(MembershipSnapshotRow{TeamID: writer.TeamID(row), MemberID: writer.MemberID(row)})
-		rows := byFact[key]
-		if len(rows) == 0 || !written[key] {
-			continue
-		}
-		different := true
-		for _, openRow := range rows {
-			stored := ""
-			if openRow.ProviderUserID != nil {
-				stored = strings.TrimSpace(*openRow.ProviderUserID)
+		if decision.Action == membershipRenameContinue {
+			if from, ok := stamp[key]; ok && !decision.ValidFrom.Before(from) {
+				continue
 			}
-			if stored == "" || stored == strings.TrimSpace(*id) || openRow.UpdatedAt.After(at) {
-				different = false
-				break
-			}
 		}
-		if !different {
-			continue
-		}
-		stamp[key] = at
-		closing = append(closing, rows...)
+		stamp[key] = *decision.ValidFrom
 	}
-	return closing
+	return renamedAway, history
 }
 
 type membershipRetraction struct {

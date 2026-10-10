@@ -46,7 +46,7 @@ func sparkPoints(rows []dayValueRow, transform func(float64) float64) []SparkPoi
 // (services/home.py:873-948).
 func computeMetricDelta(ctx context.Context, client QueryClient, spec metricSpec, startDay, endDay, compareStart, compareEnd time.Time, f Filters, orgID string, asOf time.Time) (MetricDelta, error) {
 	if repoLinkedMetrics[spec.Metric] && repoFilterRequested(f) {
-		return computeRepoLinkedDelta(ctx, client, spec, startDay, endDay, compareStart, compareEnd, f, orgID)
+		return computeRepoLinkedDelta(ctx, client, spec, startDay, endDay, compareStart, compareEnd, f, orgID, asOf)
 	}
 	scopeFilter, scopeBindings, err := scopeFilterForMetric(ctx, client, spec.Scope, f, orgID, "team_id", "repo_id", asOf)
 	if err != nil {
@@ -216,7 +216,7 @@ func computeMetricDeltas(ctx context.Context, client QueryClient, f Filters, sta
 		// One read of the linked items serves the four work-item metrics.
 		ctx = withRepoLinkedLoader(ctx, &repoLinkedLoader{
 			client: client, f: f, orgID: orgID,
-			compareStart: compareStart, compareEnd: compareEnd, startDay: startDay, endDay: endDay,
+			compareStart: compareStart, compareEnd: compareEnd, startDay: startDay, endDay: endDay, asOf: asOf,
 		})
 	}
 	out := make([]MetricDelta, len(metrics))

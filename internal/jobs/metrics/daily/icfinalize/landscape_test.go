@@ -2,6 +2,7 @@ package icfinalize
 
 import (
 	"math"
+	"reflect"
 	"testing"
 )
 
@@ -124,5 +125,46 @@ func TestTeamFallbackChainMatchesTheReference(t *testing.T) {
 		if record.TeamID != wantTeam {
 			t.Fatalf("identity %q -> team %q, want %q", identity, record.TeamID, wantTeam)
 		}
+	}
+}
+
+// A person who is a member of teams gets one stat for each team, with the
+// person's own numbers; a person with no team keeps the stat as it was read;
+// a blank or "unknown" identity is no person and is not looked up.
+func TestStatsOfEachTeamGivesAMemberOneStatForEachTeam(t *testing.T) {
+	looked := map[string]int{}
+	teamsOf := func(identity string) []string {
+		looked[identity]++
+		switch identity {
+		case "two":
+			return []string{"team-a", "team-b", "team-a"}
+		case "one":
+			return []string{"team-c"}
+		}
+		return nil
+	}
+	stats := []RollingStat{
+		{IdentityID: "two", TeamID: "stored", ChurnLOC30d: 7},
+		{IdentityID: "one", TeamID: "", ChurnLOC30d: 3},
+		{IdentityID: "none", TeamID: "stored-none", ChurnLOC30d: 1},
+		{IdentityID: "", TeamID: "stored-blank"},
+		{IdentityID: "unknown", TeamID: ""},
+	}
+	want := []RollingStat{
+		{IdentityID: "two", TeamID: "team-a", ChurnLOC30d: 7},
+		{IdentityID: "two", TeamID: "team-b", ChurnLOC30d: 7},
+		{IdentityID: "one", TeamID: "team-c", ChurnLOC30d: 3},
+		{IdentityID: "none", TeamID: "stored-none", ChurnLOC30d: 1},
+		{IdentityID: "", TeamID: "stored-blank"},
+		{IdentityID: "unknown", TeamID: ""},
+	}
+	if got := StatsOfEachTeam(stats, teamsOf); !reflect.DeepEqual(got, want) {
+		t.Fatalf("StatsOfEachTeam = %+v, want %+v", got, want)
+	}
+	if looked[""] != 0 || looked["unknown"] != 0 {
+		t.Fatalf("a blank or unknown identity was looked up: %v", looked)
+	}
+	if got := StatsOfEachTeam(stats, nil); !reflect.DeepEqual(got, stats) {
+		t.Fatalf("with no membership read the stats must not change: %+v", got)
 	}
 }

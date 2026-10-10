@@ -150,3 +150,25 @@ func TestRepoLinkedReadPastItsRowBoundSaysTooLarge(t *testing.T) {
 		t.Fatalf("delta = %+v, want too_large with no data", got)
 	}
 }
+
+// A timeout while resolving the named repository degrades the four metrics only
+// (D5863): a stated state, never an error that fails the whole Home document.
+func TestRepoLinkedRepositoryResolutionPastItsBudgetSaysTimedOut(t *testing.T) {
+	client := fakeQueryClient{t: t, handler: func(t *testing.T, query string, bindings []dhclickhouse.Binding) (dhclickhouse.RowScanner, error) {
+		if strings.Contains(query, "FROM repos FINAL") {
+			return nil, errors.New("code: 159, message: Timeout exceeded (TIMEOUT_EXCEEDED)")
+		}
+		t.Fatalf("no statement may follow a timed-out resolution: %s", query)
+		return nil, nil
+	}}
+	spec := metricSpecByName(t, "throughput")
+	start := time.Date(2026, 8, 18, 0, 0, 0, 0, time.UTC)
+	got, err := computeMetricDelta(context.Background(), client, spec, start, start.AddDate(0, 0, 7), start.AddDate(0, 0, -7), start,
+		Filters{What: WhatFilter{Repos: []string{"acme/checkout"}}}, "org-1", start)
+	if err != nil {
+		t.Fatalf("a resolution timeout is a state, not an error: %v", err)
+	}
+	if got.RepoLinkState == nil || *got.RepoLinkState != repoLinkTimedOut || got.HasData || got.Value != 0 {
+		t.Fatalf("delta = %+v, want timed_out, no data", got)
+	}
+}

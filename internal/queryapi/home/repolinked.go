@@ -148,6 +148,14 @@ func (loader *repoLinkedLoader) read(ctx context.Context) (*repoLinkedView, erro
 	view := &repoLinkedView{state: repoLinkLinked}
 	ids, err := resolveRepoIDs(ctx, loader.client, repoLinkedRepoRefs(loader.f), loader.orgID)
 	if err != nil {
+		// A bound hit while resolving the named repositories degrades the four
+		// metrics only, as a bound hit in the linked read does (D5863).
+		if reason := repoLinkBoundHit(err); reason != "" {
+			slog.Warn("home: repository resolution for the repo-linked read hit a bound",
+				"operation", "home.repo_linked_resolve", "org_id", loader.orgID, "state", reason,
+				"max_execution_seconds", repoLinkedMaxExecutionSeconds, "error", err)
+			return &repoLinkedView{state: reason}, nil
+		}
 		return nil, err
 	}
 	loader.repoIDs = ids
@@ -414,6 +422,7 @@ FROM (
   FROM work_item_blocked_durations_daily
   WHERE org_id = {org_id:String} AND day >= {win_start:Date} AND day < {win_end:Date}
     AND work_item_id IN `+linkedItemsSubquery+`
+    AND work_item_id IN (SELECT work_item_id FROM work_items FINAL WHERE org_id = {org_id:String})
   GROUP BY day, provider, work_item_id
 )
 GROUP BY day, team_id`+budget, loader.bindings())

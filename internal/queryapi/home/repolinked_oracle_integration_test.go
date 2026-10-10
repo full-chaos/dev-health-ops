@@ -351,3 +351,34 @@ func TestRepoLinkedViewCombinesWithTeamByAnd(t *testing.T) {
 		}
 	}
 }
+
+// A link and a blocked-duration row whose work item is not in work_items are
+// invisible: the repository has no linked item, so blocked_work says no_links and
+// no data, never a value summed from an item the view cannot see.
+func TestRepoLinkedBlockedRowOfAnItemWithoutAWorkItemIsInvisible(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+	admin, client := newHomeTestClickHouse(ctx, t)
+	const org = "oracle-orphan-blocked"
+	synced := oracleTS("2026-08-26 00:00:00")
+	if err := admin.Exec(ctx, fmt.Sprintf(`INSERT INTO repos (id, repo, provider, org_id, created_at, last_synced) VALUES (toUUID('%s'), 'a/r1', 'github', '%s', %s, %s)`, oracleR1, org, synced, synced)); err != nil {
+		t.Fatal(err)
+	}
+	if err := admin.Exec(ctx, fmt.Sprintf(`INSERT INTO work_graph_issue_pr (repo_id, work_item_id, pr_number, confidence, provenance, evidence, last_synced, org_id)
+VALUES (toUUID('%s'), 'gh:a/r#orphan', 1, 1.0, 'native', '', %s, '%s')`, oracleR1, synced, org)); err != nil {
+		t.Fatal(err)
+	}
+	if err := admin.Exec(ctx, fmt.Sprintf(`INSERT INTO work_item_blocked_durations_daily (day, provider, work_item_id, team_id, duration_hours, org_id, computed_at)
+VALUES (toDate('2026-08-20'), 'github', 'gh:a/r#orphan', 't-alpha', 7, '%s', %s)`, org, synced)); err != nil {
+		t.Fatalf("seed blocked row: %v", err)
+	}
+	start, end := time.Date(2026, 8, 18, 0, 0, 0, 0, time.UTC), time.Date(2026, 8, 25, 0, 0, 0, 0, time.UTC)
+	got, err := computeMetricDelta(ctx, client, metricSpecByName(t, "blocked_work"), start, end, time.Date(2026, 8, 11, 0, 0, 0, 0, time.UTC), start,
+		Filters{What: WhatFilter{Repos: []string{oracleR1}}}, org, end)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.HasData || got.Value != 0 {
+		t.Errorf("blocked_work = %v (has data %v) from an item with no work_items row, want no data", got.Value, got.HasData)
+	}
+}

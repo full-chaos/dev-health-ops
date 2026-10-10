@@ -470,6 +470,7 @@ func (m *Materializer) Run(ctx context.Context, cfg Config) (Stats, error) {
 
 	// SKIP-EXISTING. Runs only when not forced, and only over the pending set.
 	skippedExisting := map[int]struct{}{}
+	skippedTerminal := 0
 	if len(pending) > 0 && !cfg.Force {
 		keys := make([]chquery.InvestmentKey, 0, len(pending))
 		for _, entry := range pending {
@@ -496,9 +497,12 @@ func (m *Materializer) Run(ctx context.Context, cfg Config) (Stats, error) {
 				WorkUnitID: entry.result.Investment.WorkUnitID,
 				InputHash:  entry.result.Bundle.InputHash,
 			}
-			if _, ok := existing[key]; ok {
+			if found, ok := existing[key]; ok {
 				if !incomplete.has(entry.result.Investment.WorkUnitID) {
 					skippedExisting[entry.index] = struct{}{}
+					if found.Terminal {
+						skippedTerminal++
+					}
 					continue
 				}
 			}
@@ -510,6 +514,7 @@ func (m *Materializer) Run(ctx context.Context, cfg Config) (Stats, error) {
 		}
 	}
 	stats.SkippedExisting = len(skippedExisting)
+	m.served.noteSkippedTerminal(skippedTerminal)
 
 	// CATEGORIZE.
 	var categorizeErr error
@@ -721,7 +726,7 @@ func (m *Materializer) Run(ctx context.Context, cfg Config) (Stats, error) {
 
 	m.logger.InfoContext(ctx, "investment materialization complete",
 		"components", stats.Components, "records", stats.Records, "quotes", stats.Quotes,
-		"skipped_existing", stats.SkippedExisting,
+		"skipped_existing", stats.SkippedExisting, "skipped_terminal", skippedTerminal,
 		"rejected_confidences", stats.RejectedConfidences,
 		"llm", categorize.FormatFailureSummary(len(outcomes)-fallbackCount, stats.LLMFailureCounts),
 	)

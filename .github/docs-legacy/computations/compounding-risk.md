@@ -61,11 +61,15 @@ complexity_norm   = clamp01( max(0, complexity_delta) / COMPLEXITY_REF )  # COMP
 ownership_norm    = clamp01( max(single_owner_ratio, ownership_gini) )    # already in [0, 1]
 review_norm       = clamp01( max(0, review_latency_p90h) / REVIEW_REF )   # REVIEW_REF = 48h
 
-compounding_risk  =
-      W_CHURN      * churn_norm
-    + W_COMPLEXITY * complexity_norm
-    + W_OWNERSHIP  * ownership_norm
-    + W_REVIEW     * review_norm
+# over the inputs that are PRESENT (an input with no data is left out, never zero):
+present           = { i : the input i has data }
+compounding_risk  = ( sum over present of  W_i * norm_i ) / ( sum over present of  W_i )
+coverage          = ( sum over present of  W_i ) / ( sum over all four of  W_i )      # in [0, 1]
+                    # served only beside a score; no input present => compounding_risk is NULL
+
+# with all four present the denominator is 1.0 and the result is the plain weighted sum:
+#     W_CHURN * churn_norm + W_COMPLEXITY * complexity_norm
+#   + W_OWNERSHIP * ownership_norm + W_REVIEW * review_norm
 ```
 
 Default weights (must sum to `1.0`; enforced at construction time):

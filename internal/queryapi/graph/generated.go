@@ -10087,7 +10087,10 @@ type CompoundingRiskPoint {
   The share of the score's weight that was present: the weights of the inputs
   that had data over the sum of all four weights, in [0, 1]. The score is the
   weighted mean over the present inputs, so a coverage below 1 says it was
-  computed from fewer than four inputs. Null when no weight is stored.
+  computed from fewer than four inputs. It is served only beside a score: it is
+  null whenever the score is null (a row with no input at all, or a row written
+  before this rule that has not been recomputed), and null when no weight is
+  stored.
   """
   coverage: Float
   severity: CompoundingRiskSeverity!

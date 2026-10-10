@@ -35,8 +35,10 @@ DAILY_MANIFEST = ROOT / "ci" / "go_daily_test_shards.tsv"
 DAILY_PACKAGE = "internal/jobs/metrics/daily"
 WORKERSERVICE_MANIFEST = ROOT / "ci" / "go_workerservice_test_shards.tsv"
 WORKERSERVICE_PACKAGE = "internal/workerservice"
+QAPISERVER_MANIFEST = ROOT / "ci" / "go_queryapi_server_test_shards.tsv"
+QAPISERVER_PACKAGE = "internal/queryapi/server"
 # Packages run as name-partitioned test shards, never in the `packages` target.
-SPLIT_PACKAGES = {PROVIDER_PACKAGE, DAILY_PACKAGE, WORKERSERVICE_PACKAGE}
+SPLIT_PACKAGES = {PROVIDER_PACKAGE, DAILY_PACKAGE, WORKERSERVICE_PACKAGE, QAPISERVER_PACKAGE}
 CONTAINER_HARNESS = ROOT / "internal" / "testsupport" / "containers" / "harness.go"
 TEST_GO_CACHE = Path(tempfile.gettempdir()) / "chaos3141-go-sharding-test-cache"
 # Hosted job 93890967576 measured 49.596s for a cold planner invocation. This
@@ -295,6 +297,13 @@ def _daily_shard_count() -> int:
     raise AssertionError("the daily manifest declares no shard count")
 
 
+def _qapiserver_shard_count() -> int:
+    for line in QAPISERVER_MANIFEST.read_text(encoding="utf-8").splitlines():
+        if line.startswith("shards\t"):
+            return int(line.split("\t")[1])
+    raise AssertionError("the queryapi/server manifest declares no shard count")
+
+
 def _workerservice_shard_count() -> int:
     for line in WORKERSERVICE_MANIFEST.read_text(encoding="utf-8").splitlines():
         if line.startswith("shards\t"):
@@ -420,10 +429,14 @@ def _check_shard_plan(
     assert {shard for target, shard in entries if target == "workerservice"} == set(
         range(1, _workerservice_shard_count() + 1)
     ), "the workerservice shards are not exactly 1..N"
+    assert {shard for target, shard in entries if target == "queryapiserver"} == set(
+        range(1, _qapiserver_shard_count() + 1)
+    ), "the queryapi/server shards are not exactly 1..N"
     assert len(entries) == (
         provider_shards
         + _daily_shard_count()
         + _workerservice_shard_count()
+        + _qapiserver_shard_count()
         + len(packages_entries)
     )
     return assignments
@@ -844,6 +857,56 @@ def test_every_workerservice_test_runs_in_exactly_one_workerservice_shard() -> N
     )
 
 
+def _qapiserver_go_test_list() -> set[str]:
+    """Every test the compiled queryapiserver package registers, from `go test -list`."""
+    env = os.environ.copy()
+    env["GOTOOLCHAIN"] = "go1.27.0"
+    env["GOWORK"] = "off"
+    env["GOCACHE"] = str(TEST_GO_CACHE)
+    result = subprocess.run(
+        [
+            "go",
+            "test",
+            "-mod=readonly",
+            "-tags=integration",
+            "-list",
+            ".*",
+            f"./{QAPISERVER_PACKAGE}",
+        ],
+        cwd=ROOT,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=900,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    return {line for line in result.stdout.splitlines() if line.startswith("Test")}
+
+
+def test_every_queryapiserver_test_runs_in_exactly_one_queryapiserver_shard() -> None:
+    selected: list[str] = []
+    for shard in range(1, _qapiserver_shard_count() + 1):
+        result = _run_check_go(
+            "integration-shard", "queryapiserver", str(shard), "--dry-run"
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert f"queryapiserver test shard {shard}: DRY RUN" in result.stdout
+        chosen = [
+            line.removeprefix("  QAPISERVER-TEST-RUN ")
+            for line in result.stdout.splitlines()
+            if line.startswith("  QAPISERVER-TEST-RUN ")
+        ]
+        assert chosen, f"queryapiserver shard {shard} selected no tests"
+        selected.extend(chosen)
+    assert len(selected) == len(set(selected)), "a queryapiserver test is in two shards"
+    listed = _qapiserver_go_test_list()
+    assert set(selected) == listed, (
+        f"in no shard: {sorted(listed - set(selected))[:5]}; "
+        f"in a shard but not compiled: {sorted(set(selected) - listed)[:5]}"
+    )
+
+
 def test_manifest_drift_and_duplicate_packages_fail_loudly(tmp_path: Path) -> None:
     original = _manifest_text()
 
@@ -891,7 +954,7 @@ def test_an_isolated_package_key_matching_nothing_fails_loudly_and_workerservice
     unmatched = _run_check_go(
         "integration-shard-plan",
         extra_env={
-            "DEV_HEALTH_GO_INTEGRATION_ISOLATED_KEYS": "internal/workerservice internal/nosuchpackage"
+            "DEV_HEALTH_GO_INTEGRATION_ISOLATED_KEYS": "internal/workerservice internal/queryapi/server internal/nosuchpackage"
         },
     )
     assert unmatched.returncode != 0
@@ -909,6 +972,8 @@ def test_an_isolated_package_key_matching_nothing_fails_loudly_and_workerservice
             by_shard.setdefault(row.group("shard"), []).append(row.group("package"))
     (holder,) = [s for s, pkgs in by_shard.items() if "internal/workerservice" in pkgs]
     assert by_shard[holder] == ["internal/workerservice"]
+    (server_holder,) = [s for s, pkgs in by_shard.items() if QAPISERVER_PACKAGE in pkgs]
+    assert by_shard[server_holder] == [QAPISERVER_PACKAGE], "queryapi/server shares a shard row with another package"
 
 
 def _declared_image(constant: str) -> str:

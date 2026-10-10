@@ -49,6 +49,7 @@ DEV_HEALTH_GO_INTEGRATION_SHARD_MANIFEST="${DEV_HEALTH_GO_INTEGRATION_SHARD_MANI
 DEV_HEALTH_GO_PROVIDER_TEST_SHARD_MANIFEST="${DEV_HEALTH_GO_PROVIDER_TEST_SHARD_MANIFEST:-${ROOT}/ci/go_providersync_test_shards.tsv}"
 DEV_HEALTH_GO_DAILY_TEST_SHARD_MANIFEST="${DEV_HEALTH_GO_DAILY_TEST_SHARD_MANIFEST:-${ROOT}/ci/go_daily_test_shards.tsv}"
 DEV_HEALTH_GO_WORKERSERVICE_TEST_SHARD_MANIFEST="${DEV_HEALTH_GO_WORKERSERVICE_TEST_SHARD_MANIFEST:-${ROOT}/ci/go_workerservice_test_shards.tsv}"
+DEV_HEALTH_GO_QAPISERVER_TEST_SHARD_MANIFEST="${DEV_HEALTH_GO_QAPISERVER_TEST_SHARD_MANIFEST:-${ROOT}/ci/go_queryapi_server_test_shards.tsv}"
 INTEGRATION_CONTAINER_HARNESS="${ROOT}/internal/testsupport/containers/harness.go"
 
 # --- Ambient-env scrub (CHAOS-3988). ------------------------------------------------
@@ -203,7 +204,8 @@ usage() {
          a package-level shard or `providersync` for a top-level test shard of
          the dominant internal/providersync package, or `daily` for a top-level
          test shard of internal/jobs/metrics/daily, or `workerservice` for a top-level
-         test shard of internal/workerservice. `--dry-run` prints the
+         test shard of internal/workerservice, or `queryapiserver` for a top-level
+         test shard of internal/queryapi/server. `--dry-run` prints the
          exact selection without starting Docker-backed tests; CI never passes
          that option.
   integration
@@ -971,10 +973,13 @@ DAILY_INTEGRATION_PACKAGE_KEY="internal/jobs/metrics/daily"
 # internal/workerservice is split by top-level test name the same way (CHAOS-9060):
 # one `go test` of it took 24 of a 25 minute job.
 WORKERSERVICE_INTEGRATION_PACKAGE_KEY="internal/workerservice"
+# internal/queryapi/server is split by top-level test name the same way (CHAOS-9162):
+# one `go test` of it takes 24.9 of a 25 minute job alone.
+QAPISERVER_INTEGRATION_PACKAGE_KEY="internal/queryapi/server"
 # Packages that get a shard of their own at their TRUE weight (CHAOS-8935).
 # One `go test` starts packages in alphabetical order, so a long package that
 # sorts last starts minutes late and sets the shard's wall time, not its weight.
-INTEGRATION_ISOLATED_PACKAGE_KEYS=" ${DEV_HEALTH_GO_INTEGRATION_ISOLATED_KEYS:-internal/workerservice} "
+INTEGRATION_ISOLATED_PACKAGE_KEYS=" ${DEV_HEALTH_GO_INTEGRATION_ISOLATED_KEYS:-internal/workerservice internal/queryapi/server} "
 DAILY_TEST_SHARD_COUNT=0
 DAILY_INTEGRATION_TEST_WEIGHT=0
 DAILY_ORDINARY_TEST_WEIGHT=0
@@ -993,6 +998,15 @@ declare -A WORKERSERVICE_TEST_SHARD_BY_NAME=()
 declare -a WORKERSERVICE_TEST_NAMES=()
 declare -a WORKERSERVICE_TEST_SHARD_TOTALS=()
 declare -a WORKERSERVICE_TEST_SHARD_COUNTS=()
+QAPISERVER_TEST_SHARD_COUNT=0
+QAPISERVER_INTEGRATION_TEST_WEIGHT=0
+QAPISERVER_ORDINARY_TEST_WEIGHT=0
+declare -A QAPISERVER_INTEGRATION_TEST_NAMES=()
+declare -A QAPISERVER_TEST_CLASS=()
+declare -A QAPISERVER_TEST_SHARD_BY_NAME=()
+declare -a QAPISERVER_TEST_NAMES=()
+declare -a QAPISERVER_TEST_SHARD_TOTALS=()
+declare -a QAPISERVER_TEST_SHARD_COUNTS=()
 declare -A PROVIDER_INTEGRATION_TEST_NAMES=()
 declare -A PROVIDER_TEST_WEIGHTS=()
 declare -A PROVIDER_TEST_CLASS=()
@@ -1303,7 +1317,8 @@ plan_integration_shards() {
     ))
     if [ "${key}" != "${PROVIDER_INTEGRATION_PACKAGE_KEY}" ] \
       && [ "${key}" != "${DAILY_INTEGRATION_PACKAGE_KEY}" ] \
-      && [ "${key}" != "${WORKERSERVICE_INTEGRATION_PACKAGE_KEY}" ]; then
+      && [ "${key}" != "${WORKERSERVICE_INTEGRATION_PACKAGE_KEY}" ] \
+      && [ "${key}" != "${QAPISERVER_INTEGRATION_PACKAGE_KEY}" ]; then
       INTEGRATION_SHARD_NON_PROVIDER_COUNTS[selected_shard]=$((
         INTEGRATION_SHARD_NON_PROVIDER_COUNTS[selected_shard] + 1
       ))
@@ -1972,6 +1987,220 @@ check_workerservice_test_shard() {
   )
 }
 
+# The queryapiserver manifest owns the number of test shards and the two relative
+# weights. The complete test-name set always comes from the current Go
+# package (go list names the active files; their top-level Test functions are
+# read from source), so a checked-in list cannot drift. Every discovered test
+# is assigned to exactly one shard by construction; tests/tooling asserts the
+# set equals `go test -list` of the package.
+load_queryapiserver_test_shard_manifest() {
+  local manifest="${DEV_HEALTH_GO_QAPISERVER_TEST_SHARD_MANIFEST}"
+  local line_number=0 key value extra
+  local shards_seen=0 integration_weight_seen=0 ordinary_weight_seen=0
+
+  [ -f "${manifest}" ] || die "queryapiserver test shard manifest not found: ${manifest}"
+
+  QAPISERVER_TEST_SHARD_COUNT=0
+  QAPISERVER_INTEGRATION_TEST_WEIGHT=0
+  QAPISERVER_ORDINARY_TEST_WEIGHT=0
+  while IFS=$'\t ' read -r key value extra; do
+    line_number=$((line_number + 1))
+    case "${key}" in
+      ""|\#*) continue ;;
+    esac
+    [ -z "${extra}" ] \
+      || die "queryapiserver test shard manifest ${manifest}:${line_number} must contain exactly two fields"
+    case "${value}" in
+      ""|*[!0-9]*)
+        die "queryapiserver test shard manifest ${manifest}:${line_number} has non-numeric value '${value}'"
+        ;;
+    esac
+    [ "${value}" -gt 0 ] \
+      || die "queryapiserver test shard manifest ${manifest}:${line_number} values must be positive"
+    case "${key}" in
+      shards)
+        [ "${shards_seen}" -eq 0 ] || die "queryapiserver test shard manifest declares 'shards' more than once"
+        shards_seen=1
+        QAPISERVER_TEST_SHARD_COUNT="${value}"
+        ;;
+      integration-test-weight)
+        [ "${integration_weight_seen}" -eq 0 ] \
+          || die "queryapiserver test shard manifest declares 'integration-test-weight' more than once"
+        integration_weight_seen=1
+        QAPISERVER_INTEGRATION_TEST_WEIGHT="${value}"
+        ;;
+      ordinary-test-weight)
+        [ "${ordinary_weight_seen}" -eq 0 ] \
+          || die "queryapiserver test shard manifest declares 'ordinary-test-weight' more than once"
+        ordinary_weight_seen=1
+        QAPISERVER_ORDINARY_TEST_WEIGHT="${value}"
+        ;;
+      *)
+        die "queryapiserver test shard manifest ${manifest}:${line_number} has unknown key '${key}'"
+        ;;
+    esac
+  done < "${manifest}"
+
+  [ "${shards_seen}" -eq 1 ] || die "queryapiserver test shard manifest must declare one 'shards' row"
+  [ "${integration_weight_seen}" -eq 1 ] \
+    || die "queryapiserver test shard manifest must declare one 'integration-test-weight' row"
+  [ "${ordinary_weight_seen}" -eq 1 ] \
+    || die "queryapiserver test shard manifest must declare one 'ordinary-test-weight' row"
+  [ "${QAPISERVER_TEST_SHARD_COUNT}" -ge 2 ] \
+    || die "queryapiserver test shard manifest must declare at least two shards"
+}
+
+discover_queryapiserver_tests() {
+  local files_output go_file source_file test_name integration_file
+  declare -A discovered_names=()
+
+  if ! files_output="$(
+    cd "${ROOT}"
+    "${GO_ENV_OFF[@]}" GOWORK=off go list -mod=readonly -tags=integration \
+      -f '{{range .TestGoFiles}}{{println .}}{{end}}{{range .XTestGoFiles}}{{println .}}{{end}}' \
+      "./${QAPISERVER_INTEGRATION_PACKAGE_KEY}"
+  )"; then
+    die "failed to discover active queryapiserver test files with go list"
+  fi
+
+  QAPISERVER_TEST_NAMES=()
+  QAPISERVER_INTEGRATION_TEST_NAMES=()
+  while IFS= read -r go_file; do
+    [ -n "${go_file}" ] || continue
+    case "${go_file}" in
+      */*|..*) die "go list returned unsafe queryapiserver test filename '${go_file}'" ;;
+    esac
+    source_file="${ROOT}/${QAPISERVER_INTEGRATION_PACKAGE_KEY}/${go_file}"
+    [ -f "${source_file}" ] || die "go list returned missing queryapiserver test file '${go_file}'"
+    integration_file=0
+    if grep -qE '^//go:build.*(^|[^[:alnum:]_])integration([^[:alnum:]_]|$)' "${source_file}"; then
+      integration_file=1
+    fi
+    while IFS= read -r test_name; do
+      [ -n "${test_name}" ] || continue
+      # TestMain is the process entry point, not a selectable test.
+      [ "${test_name}" != "TestMain" ] || continue
+      case "${test_name}" in
+        Test*[![:alnum:]_]*)
+          die "queryapiserver source discovery returned unsupported top-level test name '${test_name}'"
+          ;;
+        Test*) ;;
+        *) continue ;;
+      esac
+      [ -z "${discovered_names[${test_name}]+set}" ] \
+        || die "queryapiserver source discovery returned '${test_name}' more than once"
+      discovered_names["${test_name}"]=1
+      QAPISERVER_TEST_NAMES+=("${test_name}")
+      if [ "${integration_file}" -eq 1 ]; then
+        QAPISERVER_INTEGRATION_TEST_NAMES["${test_name}"]=1
+      fi
+    done < <(
+      sed -nE 's/^func[[:space:]]+(Test[A-Za-z0-9_]+)[[:space:]]*\(.*/\1/p' "${source_file}"
+    )
+  done < <(printf '%s\n' "${files_output}")
+
+  mapfile -t QAPISERVER_TEST_NAMES < <(printf '%s\n' "${QAPISERVER_TEST_NAMES[@]}" | LC_ALL=C sort)
+  [ "${#QAPISERVER_TEST_NAMES[@]}" -gt 0 ] || die "queryapiserver source discovery returned zero top-level tests"
+  [ "${QAPISERVER_TEST_SHARD_COUNT}" -le "${#QAPISERVER_TEST_NAMES[@]}" ] \
+    || die "queryapiserver test shard manifest declares more shards than discovered tests"
+  [ "${#QAPISERVER_INTEGRATION_TEST_NAMES[@]}" -gt 0 ] \
+    || die "queryapiserver source discovery returned zero integration-tagged top-level tests"
+
+  QAPISERVER_TEST_CLASS=()
+  for test_name in "${QAPISERVER_TEST_NAMES[@]}"; do
+    if [ -n "${QAPISERVER_INTEGRATION_TEST_NAMES[${test_name}]+set}" ]; then
+      QAPISERVER_TEST_CLASS["${test_name}"]="integration"
+    else
+      QAPISERVER_TEST_CLASS["${test_name}"]="ordinary"
+    fi
+  done
+}
+
+plan_queryapiserver_test_shards() {
+  local test_name weight shard selected_shard selected_total
+
+  load_queryapiserver_test_shard_manifest
+  discover_queryapiserver_tests
+
+  QAPISERVER_TEST_SHARD_BY_NAME=()
+  QAPISERVER_TEST_SHARD_TOTALS=()
+  QAPISERVER_TEST_SHARD_COUNTS=()
+  for ((shard = 1; shard <= QAPISERVER_TEST_SHARD_COUNT; shard++)); do
+    QAPISERVER_TEST_SHARD_TOTALS[shard]=0
+    QAPISERVER_TEST_SHARD_COUNTS[shard]=0
+  done
+
+  while IFS=$'\t' read -r weight test_name; do
+    selected_shard=1
+    selected_total="${QAPISERVER_TEST_SHARD_TOTALS[1]}"
+    for ((shard = 2; shard <= QAPISERVER_TEST_SHARD_COUNT; shard++)); do
+      if [ "${QAPISERVER_TEST_SHARD_TOTALS[${shard}]}" -lt "${selected_total}" ]; then
+        selected_shard="${shard}"
+        selected_total="${QAPISERVER_TEST_SHARD_TOTALS[${shard}]}"
+      fi
+    done
+    QAPISERVER_TEST_SHARD_BY_NAME["${test_name}"]="${selected_shard}"
+    QAPISERVER_TEST_SHARD_TOTALS[selected_shard]=$((QAPISERVER_TEST_SHARD_TOTALS[selected_shard] + weight))
+    QAPISERVER_TEST_SHARD_COUNTS[selected_shard]=$((QAPISERVER_TEST_SHARD_COUNTS[selected_shard] + 1))
+  done < <(
+    for test_name in "${QAPISERVER_TEST_NAMES[@]}"; do
+      if [ "${QAPISERVER_TEST_CLASS[${test_name}]}" = "integration" ]; then
+        weight="${QAPISERVER_INTEGRATION_TEST_WEIGHT}"
+      else
+        weight="${QAPISERVER_ORDINARY_TEST_WEIGHT}"
+      fi
+      printf '%s\t%s\n' "${weight}" "${test_name}"
+    done | LC_ALL=C sort -t $'\t' -k1,1nr -k2,2
+  )
+
+  printf 'queryapiserver test plan: %d shard(s), %d top-level test(s), %d integration-tagged\n' \
+    "${QAPISERVER_TEST_SHARD_COUNT}" "${#QAPISERVER_TEST_NAMES[@]}" "${#QAPISERVER_INTEGRATION_TEST_NAMES[@]}"
+  for ((shard = 1; shard <= QAPISERVER_TEST_SHARD_COUNT; shard++)); do
+    printf 'queryapiserver test shard %d: relative weight %d, %d test(s)\n' \
+      "${shard}" "${QAPISERVER_TEST_SHARD_TOTALS[${shard}]}" "${QAPISERVER_TEST_SHARD_COUNTS[${shard}]}"
+    for test_name in "${QAPISERVER_TEST_NAMES[@]}"; do
+      if [ "${QAPISERVER_TEST_SHARD_BY_NAME[${test_name}]:-0}" -eq "${shard}" ]; then
+        printf '  QAPISERVER-SHARD %d %s class=%s\n' "${shard}" "${test_name}" "${QAPISERVER_TEST_CLASS[${test_name}]}"
+      fi
+    done
+  done
+}
+
+check_queryapiserver_test_shard() {
+  local shard="$1" mode="$2"
+  local test_name separator="" test_regex='^('
+  local selected_count=0
+
+  if [ "${shard}" -lt 1 ] || [ "${shard}" -gt "${QAPISERVER_TEST_SHARD_COUNT}" ]; then
+    die "queryapiserver test shard ${shard} is outside 1..${QAPISERVER_TEST_SHARD_COUNT}"
+  fi
+
+  for test_name in "${QAPISERVER_TEST_NAMES[@]}"; do
+    [ "${QAPISERVER_TEST_SHARD_BY_NAME[${test_name}]:-0}" -eq "${shard}" ] || continue
+    printf '  QAPISERVER-TEST-RUN %s\n' "${test_name}"
+    test_regex+="${separator}${test_name}"
+    separator="|"
+    selected_count=$((selected_count + 1))
+  done
+  test_regex+=')$'
+
+  [ "${selected_count}" -gt 0 ] || die "queryapiserver test shard ${shard} selected zero tests"
+  if [ "${selected_count}" -ne "${QAPISERVER_TEST_SHARD_COUNTS[${shard}]}" ]; then
+    die "queryapiserver test shard ${shard} selected ${selected_count} tests but plan declared ${QAPISERVER_TEST_SHARD_COUNTS[${shard}]}"
+  fi
+  if [ "${mode}" = "--dry-run" ]; then
+    printf 'queryapiserver test shard %s: DRY RUN selected %d top-level test(s); no tests executed\n' \
+      "${shard}" "${selected_count}"
+    return 0
+  fi
+
+  printf 'go test queryapiserver test shard %s: %d top-level test(s)\n' "${shard}" "${selected_count}"
+  (
+    cd "${ROOT}"
+    "${GO_ENV_OFF[@]}" GOWORK=off go test -mod=readonly -trimpath -tags=integration -count=1 -timeout=30m -run "${test_regex}" "./${QAPISERVER_INTEGRATION_PACKAGE_KEY}"
+  )
+}
+
 emit_integration_shard_matrix() {
   local matrix='{"include":[' separator="" shard
   for ((shard = 1; shard <= PROVIDER_TEST_SHARD_COUNT; shard++)); do
@@ -1984,6 +2213,10 @@ emit_integration_shard_matrix() {
   done
   for ((shard = 1; shard <= WORKERSERVICE_TEST_SHARD_COUNT; shard++)); do
     matrix+="${separator}{\"target\":\"workerservice\",\"shard\":${shard}}"
+    separator=","
+  done
+  for ((shard = 1; shard <= QAPISERVER_TEST_SHARD_COUNT; shard++)); do
+    matrix+="${separator}{\"target\":\"queryapiserver\",\"shard\":${shard}}"
     separator=","
   done
   for ((shard = 1; shard <= INTEGRATION_SHARD_COUNT; shard++)); do
@@ -2003,6 +2236,7 @@ check_integration_shard_plan() {
   plan_providersync_test_shards
   plan_daily_test_shards
   plan_workerservice_test_shards
+  plan_queryapiserver_test_shards
   emit_integration_shard_matrix
 }
 
@@ -2228,6 +2462,7 @@ check_integration_package_shard() {
       [ "${key}" != "${PROVIDER_INTEGRATION_PACKAGE_KEY}" ] || continue
       [ "${key}" != "${DAILY_INTEGRATION_PACKAGE_KEY}" ] || continue
       [ "${key}" != "${WORKERSERVICE_INTEGRATION_PACKAGE_KEY}" ] || continue
+      [ "${key}" != "${QAPISERVER_INTEGRATION_PACKAGE_KEY}" ] || continue
       [ "${INTEGRATION_SHARD_BY_KEY[${key}]:-0}" -eq "${shard}" ] || continue
       run_pkgs+=("${pkg}")
       run_keys+=("${key}")
@@ -2301,8 +2536,8 @@ check_integration_shard() {
   local target="${1:-}" shard="${2:-}" mode="${3:-}"
 
   case "${target}" in
-    packages|providersync|daily|workerservice) ;;
-    *) die "integration-shard TARGET must be 'packages', 'providersync', 'daily' or 'workerservice'" ;;
+    packages|providersync|daily|workerservice|queryapiserver) ;;
+    *) die "integration-shard TARGET must be 'packages', 'providersync', 'daily', 'workerservice' or 'queryapiserver'" ;;
   esac
   case "${shard}" in
     ""|*[!0-9]*) die "integration-shard requires a numeric shard id" ;;
@@ -2316,11 +2551,13 @@ check_integration_shard() {
   plan_providersync_test_shards
   plan_daily_test_shards
   plan_workerservice_test_shards
+  plan_queryapiserver_test_shards
   case "${target}" in
     packages) check_integration_package_shard "${shard}" "${mode}" ;;
     providersync) check_providersync_test_shard "${shard}" "${mode}" ;;
     daily) check_daily_test_shard "${shard}" "${mode}" ;;
     workerservice) check_workerservice_test_shard "${shard}" "${mode}" ;;
+    queryapiserver) check_queryapiserver_test_shard "${shard}" "${mode}" ;;
   esac
 }
 

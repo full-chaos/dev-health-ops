@@ -93,7 +93,7 @@ func TestBuildResponseNoCurrentDataDoesNotTurnPriorDataIntoAClaim(t *testing.T) 
 			return &fixtureRowScanner{rows: [][]any{{uint64(0), uint64(0), uint64(0), uint64(0), uint64(0), uint64(0)}}}, nil
 		}
 		if strings.Contains(query, prrework.ViewSumsSQL) {
-			return &fixtureRowScanner{rows: [][]any{{uint64(0), uint64(0), uint64(0), uint64(0), uint64(0)}}}, nil
+			return &fixtureRowScanner{rows: [][]any{{uint64(0), uint64(0), uint64(0), uint64(0), uint64(0), uint64(0)}}}, nil
 		}
 		if strings.Contains(query, "FROM work_item_state_durations_daily") {
 			return &fixtureRowScanner{}, nil

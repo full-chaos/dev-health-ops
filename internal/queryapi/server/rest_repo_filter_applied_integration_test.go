@@ -19,11 +19,11 @@ import (
 )
 
 // repoFilterApplied says per metric whether the request's repository filter
-// narrowed it (CHAOS-9093), from the metric spec's scope and whether the named
-// repositories resolved: null with no repository named (also for a team scope
-// alone), true for a repository-keyed metric the filter reached, false for a
-// team-keyed work-item metric and for a repository metric whose named
-// repositories resolved to nothing. Real handler, real ClickHouse.
+// narrowed it (CHAOS-9093, CHAOS-9094): null with no repository named (also for a
+// team scope alone); true for every metric when one is: a repository-keyed metric
+// through its repo_id, a work-item metric through the items linked to the
+// repository's pull requests (this seed holds none, so those say no data). Real
+// handler, real ClickHouse.
 func TestRESTHomeSaysWhetherTheRepositoryFilterNarrowedEachMetric(t *testing.T) {
 	conn, client := startTeamScopeClickHouse(t)
 	mux := http.NewServeMux()
@@ -77,16 +77,16 @@ func TestRESTHomeSaysWhetherTheRepositoryFilterNarrowedEachMetric(t *testing.T) 
 			}
 		}
 	}
-	yes, no := true, false
+	yes := true
 
 	// No repository named: null on every metric.
 	check("no filter", read(""), nil, nil)
 	// A team scope alone is not a repository filter: null too.
 	check("team scope only", read("&scope_type=team&scope_id=team-one"), nil, nil)
-	// A repository that resolves: the repository metrics are narrowed, the team-keyed ones are not.
-	check("repository scope", read("&scope_type=repo&scope_id="+url.QueryEscape(repo.String())), &yes, &no)
+	// A repository that resolves: every metric is narrowed.
+	check("repository scope", read("&scope_type=repo&scope_id="+url.QueryEscape(repo.String())), &yes, &yes)
 	// Repositories named in what.repos (POST body) behave the same.
-	check("what.repos", postDeltas(t, client, org, `{"filters":{"what":{"repos":["`+repo.String()+`"]},"time":{"range_days":7,"compare_days":7,"end_date":"2026-08-25"}}}`), &yes, &no)
+	check("what.repos", postDeltas(t, client, org, `{"filters":{"what":{"repos":["`+repo.String()+`"]},"time":{"range_days":7,"compare_days":7,"end_date":"2026-08-25"}}}`), &yes, &yes)
 	// Filters narrow, they never widen: a team scope that also names a repository sees the
 	// repositories that are both named and owned by the team. team-one owns acme/checkout
 	// (churn 5) and not acme/other (churn 100).
@@ -94,14 +94,14 @@ func TestRESTHomeSaysWhetherTheRepositoryFilterNarrowedEachMetric(t *testing.T) 
 		return `{"filters":{"scope":{"level":"team","ids":["team-one"]},"what":{"repos":["` + extraRepo + `"]},"time":{"range_days":7,"compare_days":7,"end_date":"2026-08-25"}}}`
 	}
 	teamAndOwned := postDeltas(t, client, org, team(repo.String()))
-	check("team scope and an owned repository", teamAndOwned, &yes, &no)
+	check("team scope and an owned repository", teamAndOwned, &yes, &yes)
 	if d := teamAndOwned["churn"]; d.HasData == nil || !*d.HasData || d.Value != 5 {
 		t.Errorf("team scope and an owned repository: churn has_data %s value %v, want 5", flag(d.HasData), d.Value)
 	}
 	teamAndOther := postDeltas(t, client, org, team(other.String()))
-	check("team scope and a repository the team does not own", teamAndOther, &yes, &no)
+	check("team scope and a repository the team does not own", teamAndOther, &yes, &yes)
 	teamAndUnknown := postDeltas(t, client, org, team(uuid.New().String()))
-	check("team scope and an unresolved repository", teamAndUnknown, &yes, &no)
+	check("team scope and an unresolved repository", teamAndUnknown, &yes, &yes)
 	for name, deltas := range map[string]map[string]restDelta{"not owned": teamAndOther, "unresolved": teamAndUnknown} {
 		d := deltas["churn"]
 		if d.HasData == nil || *d.HasData || d.Value != 0 {
@@ -109,19 +109,15 @@ func TestRESTHomeSaysWhetherTheRepositoryFilterNarrowedEachMetric(t *testing.T) 
 		}
 	}
 	// A repository that resolves to nothing: the filter was applied and found nothing, so the
-	// repository metrics are narrowed (true) AND have no data; they never serve the unfiltered
-	// value. The team-keyed metrics are not narrowed (false) and keep their value.
+	// metrics are narrowed (true) AND have no data; they never serve the unfiltered value.
 	unresolved := read("&scope_type=repo&scope_id=" + url.QueryEscape(uuid.New().String()))
-	check("unresolved repository", unresolved, &yes, &no)
+	check("unresolved repository", unresolved, &yes, &yes)
 	unknownName := read("&scope_type=repo&scope_id=" + url.QueryEscape("acme/nothing"))
-	check("unresolved repository name", unknownName, &yes, &no)
+	check("unresolved repository name", unknownName, &yes, &yes)
 	for _, deltas := range []map[string]restDelta{unresolved, unknownName} {
 		for metric, delta := range deltas {
-			if teamKeyed[metric] {
-				continue
-			}
 			if delta.HasData == nil || *delta.HasData || delta.Value != 0 {
-				t.Errorf("a repository metric whose repositories resolved to nothing: %s has_data %s value %v, want no data and 0", metric, flag(delta.HasData), delta.Value)
+				t.Errorf("a metric whose repositories resolved to nothing: %s has_data %s value %v, want no data and 0", metric, flag(delta.HasData), delta.Value)
 			}
 		}
 	}

@@ -960,7 +960,7 @@ type HomeSignal struct {
 	Coverage *float64 `json:"coverage,omitempty"`
 	// Current primary work-item attribution evidence for work-item metrics; null when this window has no attributable work items.
 	Attribution *SignalAttribution `json:"attribution,omitempty"`
-	// Whether the request's repository filter (a repo-level scope, or what.repos) narrows the metric this signal is built from: the field of the same name on MetricDelta (false only for a team-keyed metric). Null when the request names no repository, and on a signal that does not come from a metric (risk, recommendation).
+	// Whether the request's repository filter (a repo-level scope, or what.repos) narrows the metric this signal is built from: the field of the same name on MetricDelta.
 	RepoFilterApplied *bool `json:"repoFilterApplied,omitempty"`
 }
 
@@ -1074,8 +1074,16 @@ type MetricDelta struct {
 	Spark        []SparkPoint `json:"spark"`
 	// Why change failure rate has a value or not (CHAOS-8981): measured (the value may be 0), unknown_no_incident_evidence (deployments, and no incident tied to the scope in the window) or not_applicable_no_deployments. Null when the window holds no stored counts, and for every other metric.
 	RateState *string `json:"rateState,omitempty"`
-	// Whether the request's repository filter (a repo-level scope, or what.repos) narrows this metric. Null when the request names no repository. True for a repository-keyed metric: the filter was applied, and when the named repositories resolve to nothing the metric has no data (hasData false). False only for a team-keyed metric (cycle_time, throughput, wip_saturation, blocked_work: their tables have no repo_id column, so the repository condition is not applied and the value is not narrowed) (CHAOS-9093).
+	// Whether the request's repository filter (a repo-level scope, or what.repos) narrows this metric. Null when the request names no repository. True when the filter was applied: for a repository-keyed metric through its repository, for cycle_time, throughput, wip_saturation and blocked_work through the items linked to the repository's pull requests (see repoLinkState), and when the named repositories resolve to nothing the metric has no data (hasData false). False is not served today (CHAOS-9093, CHAOS-9094).
 	RepoFilterApplied *bool `json:"repoFilterApplied,omitempty"`
+	// How cycle_time, throughput, wip_saturation and blocked_work were served under a repository filter (CHAOS-9094). Null for every other metric and when the request names no repository. linked: computed at request time from the items linked to the repository's pull requests through work_graph_issue_pr, by the same definition the daily job stores. no_links: no item linked to the repositories in the window (hasData false; an item with no link is in no repository's view). timed_out: the read exceeded its time budget (hasData false; never the unfiltered value).
+	RepoLinkState *string `json:"repoLinkState,omitempty"`
+	// The items of the repository view by the best provenance tier of the links that put them there (CHAOS-9094): native outranks explicit_text outranks heuristic, and a lower tier is never counted as native. Null unless repoLinkState is set.
+	RepoLinkBasis *RepoLinkBasis `json:"repoLinkBasis,omitempty"`
+	// The items of the repository view that are also linked to pull requests of another repository, so they count in each repository's view and the views do not sum to the organization (CHAOS-9094). Null unless repoLinkState is set.
+	RepoLinkMultiRepoItems *int `json:"repoLinkMultiRepoItems,omitempty"`
+	// How much of the organization's work a repository view can see: the items in the window that have a link to any repository over all items in the window (CHAOS-9094). Null unless repoLinkState is set.
+	RepoLinkCoverage *RepoLinkCoverage `json:"repoLinkCoverage,omitempty"`
 }
 
 type MetricLineage struct {
@@ -1353,6 +1361,19 @@ type RepoHotspot struct {
 	TopFilePath  string  `json:"topFilePath"`
 	TopRiskScore float64 `json:"topRiskScore"`
 	EvidenceURL  *string `json:"evidenceUrl,omitempty"`
+}
+
+// Item counts of a repository view by the best provenance tier of their links (CHAOS-9094).
+type RepoLinkBasis struct {
+	Native       int `json:"native"`
+	ExplicitText int `json:"explicitText"`
+	Heuristic    int `json:"heuristic"`
+}
+
+// Items in the window that have a link to any repository, over all items in the window (CHAOS-9094).
+type RepoLinkCoverage struct {
+	LinkedItems   int `json:"linkedItems"`
+	ItemsInWindow int `json:"itemsInWindow"`
 }
 
 type ReportRunConnection struct {

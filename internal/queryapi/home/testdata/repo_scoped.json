@@ -17,22 +17,13 @@
     {
       "metric": "cycle_time",
       "label": "Cycle Time",
-      "value": 2,
+      "value": 0,
       "unit": "days",
-      "delta_pct": -20,
-      "has_data": true,
-      "has_prior_data": true,
-      "spark": [
-        {
-          "ts": "2024-01-02T00:00:00",
-          "value": 2.0833333333333335
-        },
-        {
-          "ts": "2024-01-05T00:00:00",
-          "value": 1.9166666666666667
-        }
-      ],
-      "repo_filter_applied": false
+      "delta_pct": 0,
+      "has_data": false,
+      "has_prior_data": false,
+      "spark": [],
+      "repo_filter_applied": true
     },
     {
       "metric": "review_latency",
@@ -57,22 +48,13 @@
     {
       "metric": "throughput",
       "label": "Throughput",
-      "value": 20,
+      "value": 0,
       "unit": "items",
-      "delta_pct": 33.33333333333333,
-      "has_data": true,
-      "has_prior_data": true,
-      "spark": [
-        {
-          "ts": "2024-01-02T00:00:00",
-          "value": 9
-        },
-        {
-          "ts": "2024-01-05T00:00:00",
-          "value": 11
-        }
-      ],
-      "repo_filter_applied": false
+      "delta_pct": 0,
+      "has_data": false,
+      "has_prior_data": false,
+      "spark": [],
+      "repo_filter_applied": true
     },
     {
       "metric": "deploy_freq",
@@ -117,42 +99,24 @@
     {
       "metric": "wip_saturation",
       "label": "WIP Saturation",
-      "value": 50,
+      "value": 0,
       "unit": "%",
-      "delta_pct": 24.999999999999993,
-      "has_data": true,
-      "has_prior_data": true,
-      "spark": [
-        {
-          "ts": "2024-01-02T00:00:00",
-          "value": 45
-        },
-        {
-          "ts": "2024-01-05T00:00:00",
-          "value": 55.00000000000001
-        }
-      ],
-      "repo_filter_applied": false
+      "delta_pct": 0,
+      "has_data": false,
+      "has_prior_data": false,
+      "spark": [],
+      "repo_filter_applied": true
     },
     {
       "metric": "blocked_work",
       "label": "Blocked Work",
-      "value": 10,
+      "value": 0,
       "unit": "hours",
-      "delta_pct": 25,
-      "has_data": true,
-      "has_prior_data": true,
-      "spark": [
-        {
-          "ts": "2024-01-02T00:00:00",
-          "value": 6
-        },
-        {
-          "ts": "2024-01-05T00:00:00",
-          "value": 4
-        }
-      ],
-      "repo_filter_applied": false
+      "delta_pct": 0,
+      "has_data": false,
+      "has_prior_data": false,
+      "spark": [],
+      "repo_filter_applied": true
     },
     {
       "metric": "change_failure_rate",
@@ -307,20 +271,8 @@
     {
       "ts": "2024-01-08T12:00:00Z",
       "type": "regression",
-      "text": "Throughput shifted 33% over the last 7 days.",
-      "link": "/api/v1/explain?metric=throughput&scope_type=repo&scope_id=checkout-service&range_days=7&compare_days=7"
-    },
-    {
-      "ts": "2024-01-08T12:00:00Z",
-      "type": "regression",
       "text": "Code Churn shifted 25% over the last 7 days.",
       "link": "/api/v1/explain?metric=churn&scope_type=repo&scope_id=checkout-service&range_days=7&compare_days=7"
-    },
-    {
-      "ts": "2024-01-08T12:00:00Z",
-      "type": "regression",
-      "text": "Blocked Work shifted 25% over the last 7 days.",
-      "link": "/api/v1/explain?metric=blocked_work&scope_type=repo&scope_id=checkout-service&range_days=7&compare_days=7"
     },
     {
       "ts": "2024-01-08T12:00:00Z",
@@ -418,42 +370,6 @@
       "scope_entity": null
     },
     {
-      "id": "metric:wip_saturation",
-      "title": "WIP Saturation appears up",
-      "metric": "wip_saturation",
-      "current_value": "50 %",
-      "prior_value": "40 %",
-      "delta": "+25%",
-      "direction": "up",
-      "severity": "medium",
-      "confidence": "medium",
-      "affected_scope": "checkout-service",
-      "evidence_count": 2,
-      "why_it_matters": "WIP Saturation appears rising; saturation suggests active work may exceed the team's coordination capacity.",
-      "recommended_action": "Set a short-term WIP limit and finish active items before starting more.",
-      "evidence_ref": "/api/v1/explain?metric=wip_saturation&scope_type=repo&scope_id=checkout-service&range_days=7&compare_days=7",
-      "category": "dynamics",
-      "scope_entity": null
-    },
-    {
-      "id": "metric:blocked_work",
-      "title": "Blocked Work appears up",
-      "metric": "blocked_work",
-      "current_value": "10 hours",
-      "prior_value": "8 hours",
-      "delta": "+25%",
-      "direction": "up",
-      "severity": "medium",
-      "confidence": "medium",
-      "affected_scope": "checkout-service",
-      "evidence_count": 2,
-      "why_it_matters": "Blocked Work appears rising; blocked time suggests dependencies may be consuming delivery capacity.",
-      "recommended_action": "Triage blocked items by owner and unblock the oldest high-impact queue first.",
-      "evidence_ref": "/api/v1/explain?metric=blocked_work&scope_type=repo&scope_id=checkout-service&range_days=7&compare_days=7",
-      "category": "delivery",
-      "scope_entity": null
-    },
-    {
       "id": "metric:change_failure_rate",
       "title": "Change Failure Rate appears up",
       "metric": "change_failure_rate",
@@ -487,42 +403,6 @@
       "recommended_action": "Inspect supporting evidence and choose one reversible operating experiment.",
       "evidence_ref": "/api/v1/explain?metric=pr_rework_ratio&scope_type=repo&scope_id=checkout-service&range_days=7&compare_days=7",
       "category": "durability",
-      "scope_entity": null
-    },
-    {
-      "id": "metric:throughput",
-      "title": "Throughput appears up",
-      "metric": "throughput",
-      "current_value": "20 items",
-      "prior_value": "15 items",
-      "delta": "+33%",
-      "direction": "up",
-      "severity": "low",
-      "confidence": "medium",
-      "affected_scope": "checkout-service",
-      "evidence_count": 2,
-      "why_it_matters": "Throughput appears rising; throughput movement changes the team's ability to keep commitments credible.",
-      "recommended_action": "Review WIP and dependency queues before changing delivery commitments.",
-      "evidence_ref": "/api/v1/explain?metric=throughput&scope_type=repo&scope_id=checkout-service&range_days=7&compare_days=7",
-      "category": "delivery",
-      "scope_entity": null
-    },
-    {
-      "id": "metric:cycle_time",
-      "title": "Cycle Time appears down",
-      "metric": "cycle_time",
-      "current_value": "2 days",
-      "prior_value": "2.5 days",
-      "delta": "-20%",
-      "direction": "down",
-      "severity": "low",
-      "confidence": "medium",
-      "affected_scope": "checkout-service",
-      "evidence_count": 2,
-      "why_it_matters": "Cycle Time appears falling; longer cycle time suggests delivery work may spend more time waiting than moving.",
-      "recommended_action": "Inspect the slowest stage and rebalance active work before adding scope.",
-      "evidence_ref": "/api/v1/explain?metric=cycle_time&scope_type=repo&scope_id=checkout-service&range_days=7&compare_days=7",
-      "category": "delivery",
       "scope_entity": null
     },
     {

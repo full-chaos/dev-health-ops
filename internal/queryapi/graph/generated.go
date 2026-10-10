@@ -876,16 +876,20 @@ type ComplexityRoot struct {
 	}
 
 	MetricDelta struct {
-		DeltaPct          func(childComplexity int) int
-		HasData           func(childComplexity int) int
-		HasPriorData      func(childComplexity int) int
-		Label             func(childComplexity int) int
-		Metric            func(childComplexity int) int
-		RateState         func(childComplexity int) int
-		RepoFilterApplied func(childComplexity int) int
-		Spark             func(childComplexity int) int
-		Unit              func(childComplexity int) int
-		Value             func(childComplexity int) int
+		DeltaPct               func(childComplexity int) int
+		HasData                func(childComplexity int) int
+		HasPriorData           func(childComplexity int) int
+		Label                  func(childComplexity int) int
+		Metric                 func(childComplexity int) int
+		RateState              func(childComplexity int) int
+		RepoFilterApplied      func(childComplexity int) int
+		RepoLinkBasis          func(childComplexity int) int
+		RepoLinkCoverage       func(childComplexity int) int
+		RepoLinkMultiRepoItems func(childComplexity int) int
+		RepoLinkState          func(childComplexity int) int
+		Spark                  func(childComplexity int) int
+		Unit                   func(childComplexity int) int
+		Value                  func(childComplexity int) int
 	}
 
 	MetricLineage struct {
@@ -1192,6 +1196,17 @@ type ComplexityRoot struct {
 		RepoName     func(childComplexity int) int
 		TopFilePath  func(childComplexity int) int
 		TopRiskScore func(childComplexity int) int
+	}
+
+	RepoLinkBasis struct {
+		ExplicitText func(childComplexity int) int
+		Heuristic    func(childComplexity int) int
+		Native       func(childComplexity int) int
+	}
+
+	RepoLinkCoverage struct {
+		ItemsInWindow func(childComplexity int) int
+		LinkedItems   func(childComplexity int) int
 	}
 
 	ReportRunConnection struct {
@@ -5581,6 +5596,34 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 
 		return e.complexity.MetricDelta.RepoFilterApplied(childComplexity), true
 
+	case "MetricDelta.repoLinkBasis":
+		if e.complexity.MetricDelta.RepoLinkBasis == nil {
+			break
+		}
+
+		return e.complexity.MetricDelta.RepoLinkBasis(childComplexity), true
+
+	case "MetricDelta.repoLinkCoverage":
+		if e.complexity.MetricDelta.RepoLinkCoverage == nil {
+			break
+		}
+
+		return e.complexity.MetricDelta.RepoLinkCoverage(childComplexity), true
+
+	case "MetricDelta.repoLinkMultiRepoItems":
+		if e.complexity.MetricDelta.RepoLinkMultiRepoItems == nil {
+			break
+		}
+
+		return e.complexity.MetricDelta.RepoLinkMultiRepoItems(childComplexity), true
+
+	case "MetricDelta.repoLinkState":
+		if e.complexity.MetricDelta.RepoLinkState == nil {
+			break
+		}
+
+		return e.complexity.MetricDelta.RepoLinkState(childComplexity), true
+
 	case "MetricDelta.spark":
 		if e.complexity.MetricDelta.Spark == nil {
 			break
@@ -7389,6 +7432,41 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 		}
 
 		return e.complexity.RepoHotspot.TopRiskScore(childComplexity), true
+
+	case "RepoLinkBasis.explicitText":
+		if e.complexity.RepoLinkBasis.ExplicitText == nil {
+			break
+		}
+
+		return e.complexity.RepoLinkBasis.ExplicitText(childComplexity), true
+
+	case "RepoLinkBasis.heuristic":
+		if e.complexity.RepoLinkBasis.Heuristic == nil {
+			break
+		}
+
+		return e.complexity.RepoLinkBasis.Heuristic(childComplexity), true
+
+	case "RepoLinkBasis.native":
+		if e.complexity.RepoLinkBasis.Native == nil {
+			break
+		}
+
+		return e.complexity.RepoLinkBasis.Native(childComplexity), true
+
+	case "RepoLinkCoverage.itemsInWindow":
+		if e.complexity.RepoLinkCoverage.ItemsInWindow == nil {
+			break
+		}
+
+		return e.complexity.RepoLinkCoverage.ItemsInWindow(childComplexity), true
+
+	case "RepoLinkCoverage.linkedItems":
+		if e.complexity.RepoLinkCoverage.LinkedItems == nil {
+			break
+		}
+
+		return e.complexity.RepoLinkCoverage.LinkedItems(childComplexity), true
 
 	case "ReportRunConnection.items":
 		if e.complexity.ReportRunConnection.Items == nil {
@@ -10395,7 +10473,7 @@ type HomeSignal {
   coverage: Float
   """Current primary work-item attribution evidence for work-item metrics; null when this window has no attributable work items."""
   attribution: SignalAttribution
-  "Whether the request's repository filter (a repo-level scope, or what.repos) narrows the metric this signal is built from: the field of the same name on MetricDelta (false only for a team-keyed metric). Null when the request names no repository, and on a signal that does not come from a metric (risk, recommendation)."
+  "Whether the request's repository filter (a repo-level scope, or what.repos) narrows the metric this signal is built from: the field of the same name on MetricDelta."
   repoFilterApplied: Boolean
 }
 
@@ -10647,8 +10725,29 @@ type MetricDelta {
   spark: [SparkPoint!]!
   "Why change failure rate has a value or not (CHAOS-8981): measured (the value may be 0), unknown_no_incident_evidence (deployments, and no incident tied to the scope in the window) or not_applicable_no_deployments. Null when the window holds no stored counts, and for every other metric."
   rateState: String
-  "Whether the request's repository filter (a repo-level scope, or what.repos) narrows this metric. Null when the request names no repository. True for a repository-keyed metric: the filter was applied, and when the named repositories resolve to nothing the metric has no data (hasData false). False only for a team-keyed metric (cycle_time, throughput, wip_saturation, blocked_work: their tables have no repo_id column, so the repository condition is not applied and the value is not narrowed) (CHAOS-9093)."
+  "Whether the request's repository filter (a repo-level scope, or what.repos) narrows this metric. Null when the request names no repository. True when the filter was applied: for a repository-keyed metric through its repository, for cycle_time, throughput, wip_saturation and blocked_work through the items linked to the repository's pull requests (see repoLinkState), and when the named repositories resolve to nothing the metric has no data (hasData false). False is not served today (CHAOS-9093, CHAOS-9094)."
   repoFilterApplied: Boolean
+  "How cycle_time, throughput, wip_saturation and blocked_work were served under a repository filter (CHAOS-9094). Null for every other metric and when the request names no repository. linked: computed at request time from the items linked to the repository's pull requests through work_graph_issue_pr, by the same definition the daily job stores. no_links: no item linked to the repositories in the window (hasData false; an item with no link is in no repository's view). timed_out: the read exceeded its time budget (hasData false; never the unfiltered value)."
+  repoLinkState: String
+  "The items of the repository view by the best provenance tier of the links that put them there (CHAOS-9094): native outranks explicit_text outranks heuristic, and a lower tier is never counted as native. Null unless repoLinkState is set."
+  repoLinkBasis: RepoLinkBasis
+  "The items of the repository view that are also linked to pull requests of another repository, so they count in each repository's view and the views do not sum to the organization (CHAOS-9094). Null unless repoLinkState is set."
+  repoLinkMultiRepoItems: Int
+  "How much of the organization's work a repository view can see: the items in the window that have a link to any repository over all items in the window (CHAOS-9094). Null unless repoLinkState is set."
+  repoLinkCoverage: RepoLinkCoverage
+}
+
+"""Item counts of a repository view by the best provenance tier of their links (CHAOS-9094)."""
+type RepoLinkBasis {
+  native: Int!
+  explicitText: Int!
+  heuristic: Int!
+}
+
+"""Items in the window that have a link to any repository, over all items in the window (CHAOS-9094)."""
+type RepoLinkCoverage {
+  linkedItems: Int!
+  itemsInWindow: Int!
 }
 
 type MetricLineage {
@@ -36602,6 +36701,14 @@ func (ec *executionContext) fieldContext_HomeResult_deltas(_ context.Context, fi
 				return ec.fieldContext_MetricDelta_rateState(ctx, field)
 			case "repoFilterApplied":
 				return ec.fieldContext_MetricDelta_repoFilterApplied(ctx, field)
+			case "repoLinkState":
+				return ec.fieldContext_MetricDelta_repoLinkState(ctx, field)
+			case "repoLinkBasis":
+				return ec.fieldContext_MetricDelta_repoLinkBasis(ctx, field)
+			case "repoLinkMultiRepoItems":
+				return ec.fieldContext_MetricDelta_repoLinkMultiRepoItems(ctx, field)
+			case "repoLinkCoverage":
+				return ec.fieldContext_MetricDelta_repoLinkCoverage(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type MetricDelta", field.Name)
 		},
@@ -40606,6 +40713,184 @@ func (ec *executionContext) fieldContext_MetricDelta_repoFilterApplied(_ context
 		IsResolver: false,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 			return nil, errors.New("field of type Boolean does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _MetricDelta_repoLinkState(ctx context.Context, field graphql.CollectedField, obj *model.MetricDelta) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_MetricDelta_repoLinkState(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.RepoLinkState, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*string)
+	fc.Result = res
+	return ec.marshalOString2ᚖstring(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_MetricDelta_repoLinkState(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MetricDelta",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _MetricDelta_repoLinkBasis(ctx context.Context, field graphql.CollectedField, obj *model.MetricDelta) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_MetricDelta_repoLinkBasis(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.RepoLinkBasis, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*model.RepoLinkBasis)
+	fc.Result = res
+	return ec.marshalORepoLinkBasis2ᚖgithubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋinternalᚋqueryapiᚋgraphᚋmodelᚐRepoLinkBasis(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_MetricDelta_repoLinkBasis(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MetricDelta",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "native":
+				return ec.fieldContext_RepoLinkBasis_native(ctx, field)
+			case "explicitText":
+				return ec.fieldContext_RepoLinkBasis_explicitText(ctx, field)
+			case "heuristic":
+				return ec.fieldContext_RepoLinkBasis_heuristic(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type RepoLinkBasis", field.Name)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _MetricDelta_repoLinkMultiRepoItems(ctx context.Context, field graphql.CollectedField, obj *model.MetricDelta) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_MetricDelta_repoLinkMultiRepoItems(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.RepoLinkMultiRepoItems, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*int)
+	fc.Result = res
+	return ec.marshalOInt2ᚖint(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_MetricDelta_repoLinkMultiRepoItems(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MetricDelta",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Int does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _MetricDelta_repoLinkCoverage(ctx context.Context, field graphql.CollectedField, obj *model.MetricDelta) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_MetricDelta_repoLinkCoverage(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.RepoLinkCoverage, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*model.RepoLinkCoverage)
+	fc.Result = res
+	return ec.marshalORepoLinkCoverage2ᚖgithubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋinternalᚋqueryapiᚋgraphᚋmodelᚐRepoLinkCoverage(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_MetricDelta_repoLinkCoverage(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MetricDelta",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "linkedItems":
+				return ec.fieldContext_RepoLinkCoverage_linkedItems(ctx, field)
+			case "itemsInWindow":
+				return ec.fieldContext_RepoLinkCoverage_itemsInWindow(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type RepoLinkCoverage", field.Name)
 		},
 	}
 	return fc, nil
@@ -51926,6 +52211,226 @@ func (ec *executionContext) fieldContext_RepoHotspot_evidenceUrl(_ context.Conte
 		IsResolver: false,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _RepoLinkBasis_native(ctx context.Context, field graphql.CollectedField, obj *model.RepoLinkBasis) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_RepoLinkBasis_native(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.Native, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(int)
+	fc.Result = res
+	return ec.marshalNInt2int(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_RepoLinkBasis_native(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "RepoLinkBasis",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Int does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _RepoLinkBasis_explicitText(ctx context.Context, field graphql.CollectedField, obj *model.RepoLinkBasis) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_RepoLinkBasis_explicitText(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.ExplicitText, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(int)
+	fc.Result = res
+	return ec.marshalNInt2int(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_RepoLinkBasis_explicitText(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "RepoLinkBasis",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Int does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _RepoLinkBasis_heuristic(ctx context.Context, field graphql.CollectedField, obj *model.RepoLinkBasis) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_RepoLinkBasis_heuristic(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.Heuristic, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(int)
+	fc.Result = res
+	return ec.marshalNInt2int(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_RepoLinkBasis_heuristic(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "RepoLinkBasis",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Int does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _RepoLinkCoverage_linkedItems(ctx context.Context, field graphql.CollectedField, obj *model.RepoLinkCoverage) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_RepoLinkCoverage_linkedItems(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.LinkedItems, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(int)
+	fc.Result = res
+	return ec.marshalNInt2int(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_RepoLinkCoverage_linkedItems(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "RepoLinkCoverage",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Int does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _RepoLinkCoverage_itemsInWindow(ctx context.Context, field graphql.CollectedField, obj *model.RepoLinkCoverage) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_RepoLinkCoverage_itemsInWindow(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.ItemsInWindow, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(int)
+	fc.Result = res
+	return ec.marshalNInt2int(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_RepoLinkCoverage_itemsInWindow(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "RepoLinkCoverage",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Int does not have child fields")
 		},
 	}
 	return fc, nil
@@ -72788,6 +73293,14 @@ func (ec *executionContext) _MetricDelta(ctx context.Context, sel ast.SelectionS
 			out.Values[i] = ec._MetricDelta_rateState(ctx, field, obj)
 		case "repoFilterApplied":
 			out.Values[i] = ec._MetricDelta_repoFilterApplied(ctx, field, obj)
+		case "repoLinkState":
+			out.Values[i] = ec._MetricDelta_repoLinkState(ctx, field, obj)
+		case "repoLinkBasis":
+			out.Values[i] = ec._MetricDelta_repoLinkBasis(ctx, field, obj)
+		case "repoLinkMultiRepoItems":
+			out.Values[i] = ec._MetricDelta_repoLinkMultiRepoItems(ctx, field, obj)
+		case "repoLinkCoverage":
+			out.Values[i] = ec._MetricDelta_repoLinkCoverage(ctx, field, obj)
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}
@@ -75535,6 +76048,99 @@ func (ec *executionContext) _RepoHotspot(ctx context.Context, sel ast.SelectionS
 			}
 		case "evidenceUrl":
 			out.Values[i] = ec._RepoHotspot_evidenceUrl(ctx, field, obj)
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.deferred, int32(len(deferred)))
+
+	for label, dfs := range deferred {
+		ec.processDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
+var repoLinkBasisImplementors = []string{"RepoLinkBasis"}
+
+func (ec *executionContext) _RepoLinkBasis(ctx context.Context, sel ast.SelectionSet, obj *model.RepoLinkBasis) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, repoLinkBasisImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("RepoLinkBasis")
+		case "native":
+			out.Values[i] = ec._RepoLinkBasis_native(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "explicitText":
+			out.Values[i] = ec._RepoLinkBasis_explicitText(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "heuristic":
+			out.Values[i] = ec._RepoLinkBasis_heuristic(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.deferred, int32(len(deferred)))
+
+	for label, dfs := range deferred {
+		ec.processDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
+var repoLinkCoverageImplementors = []string{"RepoLinkCoverage"}
+
+func (ec *executionContext) _RepoLinkCoverage(ctx context.Context, sel ast.SelectionSet, obj *model.RepoLinkCoverage) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, repoLinkCoverageImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("RepoLinkCoverage")
+		case "linkedItems":
+			out.Values[i] = ec._RepoLinkCoverage_linkedItems(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "itemsInWindow":
+			out.Values[i] = ec._RepoLinkCoverage_itemsInWindow(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
 		default:
 			panic("unknown field " + strconv.Quote(field.Name))
 		}
@@ -85017,6 +85623,20 @@ func (ec *executionContext) marshalOPullRequestDetail2ᚖgithubᚗcomᚋfullᚑc
 		return graphql.Null
 	}
 	return ec._PullRequestDetail(ctx, sel, v)
+}
+
+func (ec *executionContext) marshalORepoLinkBasis2ᚖgithubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋinternalᚋqueryapiᚋgraphᚋmodelᚐRepoLinkBasis(ctx context.Context, sel ast.SelectionSet, v *model.RepoLinkBasis) graphql.Marshaler {
+	if v == nil {
+		return graphql.Null
+	}
+	return ec._RepoLinkBasis(ctx, sel, v)
+}
+
+func (ec *executionContext) marshalORepoLinkCoverage2ᚖgithubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋinternalᚋqueryapiᚋgraphᚋmodelᚐRepoLinkCoverage(ctx context.Context, sel ast.SelectionSet, v *model.RepoLinkCoverage) graphql.Marshaler {
+	if v == nil {
+		return graphql.Null
+	}
+	return ec._RepoLinkCoverage(ctx, sel, v)
 }
 
 func (ec *executionContext) marshalOReportRunType2ᚖgithubᚗcomᚋfullᚑchaosᚋdevᚑhealthᚑopsᚋinternalᚋqueryapiᚋgraphᚋmodelᚐReportRunType(ctx context.Context, sel ast.SelectionSet, v *model.ReportRunType) graphql.Marshaler {

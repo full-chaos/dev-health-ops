@@ -134,15 +134,26 @@ func computeWorkItemTriplet(
 	if len(read.Items) == 0 {
 		return read, workitemmetrics.Triplet{}, nil
 	}
-	sorted := sortWorkItemMetricsRows(read.Items)
+	return read, tripletFromWorkItemRows(scope.day, read.Items, read.Transitions, read.Attributions), nil
+}
+
+// tripletFromWorkItemRows is the compute of the work_item family over loaded
+// rows: sort, project, attribute, ComputeDailyTriplet. It is the one definition
+// of the day's work_item metrics, called by the family above and by
+// ComputeWorkItemMetricsDay (the request-time read of a repository's linked
+// items, CHAOS-9094), so the two cannot disagree about what a metric is.
+func tripletFromWorkItemRows(
+	day time.Time, items []workItemMetricsRow, transitions []workItemStateTransition,
+	attributions map[string]workItemPrimaryAttribution,
+) workitemmetrics.Triplet {
+	sorted := sortWorkItemMetricsRows(items)
 	projected := workItemMetricsItems(sorted)
-	triplet := workitemmetrics.ComputeDailyTriplet(
-		scope.day,
+	return workitemmetrics.ComputeDailyTriplet(
+		day,
 		projected,
-		workItemMetricsTransitions(read.Transitions),
-		workitemmetrics.AssertAligned(len(sorted), projected, workItemMetricsResolver(sorted, read.Attributions)),
+		workItemMetricsTransitions(transitions),
+		workitemmetrics.AssertAligned(len(sorted), projected, workItemMetricsResolver(sorted, attributions)),
 	)
-	return read, triplet, nil
 }
 
 // workItemPartitionScope is the (day, window, repoIDs) triple the work-item

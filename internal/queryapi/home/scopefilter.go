@@ -148,15 +148,18 @@ func repoFilterRequested(f Filters) bool {
 }
 
 // repoFilterApplied is MetricDelta.RepoFilterApplied: nil when the request names
-// no repository; otherwise whether the metric is narrowed by the repository
-// filter: true for a repository-keyed metric (also when the named repositories
-// resolved to nothing: the filter was applied and the metric has no data), false
-// for a team-keyed metric, which the repository condition does not reach.
+// no repository; otherwise true: a repository-keyed metric is narrowed by its
+// repo_id (and has no data when the named repositories resolved to nothing), a
+// work-item metric through the items linked to the repositories' pull requests
+// (CHAOS-9094).
 func repoFilterApplied(f Filters, metricScope string) *bool {
 	if !repoFilterRequested(f) {
 		return nil
 	}
-	applied := metricScope == "repo"
+	// A work-item metric is narrowed through the items linked to the
+	// repositories' pull requests (CHAOS-9094), a repository metric through
+	// its repo_id.
+	applied := metricScope == "repo" || metricScope == "team"
 	return &applied
 }
 

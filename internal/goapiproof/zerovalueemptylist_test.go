@@ -1,6 +1,9 @@
 package goapiproof
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // This file exercises ZeroValueEmptyListShape (zerovalueemptylist.go)
 // directly, through small self-contained bodies, then against the real
@@ -176,14 +179,49 @@ func TestZeroValueEmptyListShape_BlanketDeclarationAloneDoesNotAdmitPresence(t *
 // uncovered finding surfaces immediately rather than being silently
 // swallowed.
 func TestZeroValueEmptyListShape_RealBlockedWorkCaptureAdmitted(t *testing.T) {
-	baseline := explainRESTSnapshot(t, `{"metric":"blocked_work","label":"Blocked Work","unit":"hours","value":1876.5770752777778,"delta_pct":-86.16173512669302,"drivers":[{"id":"CHAOS","label":"Fullchaos","value":11.8770700966948,"delta_pct":-80.37982323021122,"evidence_link":"/api/v1/drilldown/prs?metric=blocked_work&scope_type=org&scope_id=","display_name":"Fullchaos"}],"contributors":[{"id":"CHAOS","label":"Fullchaos","value":11.8770700966948,"delta_pct":0.0,"evidence_link":"/api/v1/drilldown/prs?metric=blocked_work&scope_type=org&scope_id=","display_name":"Fullchaos"}],"drilldown_links":{"prs":"/api/v1/drilldown/prs?metric=blocked_work","issues":"/api/v1/drilldown/issues?metric=blocked_work"}}`)
-	candidate := explainRESTSnapshot(t, `{"metric":"blocked_work","label":"Blocked Work","unit":"hours","value":0,"delta_pct":0,"drivers":[],"contributors":[],"drilldown_links":{"issues":"/api/v1/drilldown/issues?metric=blocked_work","prs":"/api/v1/drilldown/prs?metric=blocked_work"}}`)
+	const capturedBaseline = `{"metric":"blocked_work","label":"Blocked Work","unit":"hours","value":1876.5770752777778,"delta_pct":-86.16173512669302,"drivers":[{"id":"CHAOS","label":"Fullchaos","value":11.8770700966948,"delta_pct":-80.37982323021122,"evidence_link":"/api/v1/drilldown/prs?metric=blocked_work&scope_type=org&scope_id=","display_name":"Fullchaos"}],"contributors":[{"id":"CHAOS","label":"Fullchaos","value":11.8770700966948,"delta_pct":0.0,"evidence_link":"/api/v1/drilldown/prs?metric=blocked_work&scope_type=org&scope_id=","display_name":"Fullchaos"}],"drilldown_links":{"prs":"/api/v1/drilldown/prs?metric=blocked_work","issues":"/api/v1/drilldown/issues?metric=blocked_work"}}`
+	// The candidate of the capture, as the candidate of that day served it: a 0
+	// percent and no has_data / has_prior_data for a window with no blocked row.
+	const capturedCandidate = `{"metric":"blocked_work","label":"Blocked Work","unit":"hours","value":0,"delta_pct":0,"drivers":[],"contributors":[],"drilldown_links":{"issues":"/api/v1/drilldown/issues?metric=blocked_work","prs":"/api/v1/drilldown/prs?metric=blocked_work"}}`
+	baseline := explainRESTSnapshot(t, capturedBaseline)
 
-	result := Compare(baseline, candidate, explainParity)
-	if result.DifferencesOutsideBaselineDefect != 0 {
-		t.Fatalf("outside = %d, want 0 -- the real captured blocked_work_default divergence must be fully declared: findings %+v", result.DifferencesOutsideBaselineDefect, result.Findings)
+	// The explain answer's own has_data / has_prior_data are keys the recorded
+	// reference never had. explainParity does not declare them (it declares the
+	// flags of a driver and of a contributor); this test adds the declaration
+	// for the two keys so that the only question it asks is the percent's.
+	withMetricFlags := explainParity
+	withMetricFlags.GoOnlyKeys = map[string]GoOnlyKey{}
+	for key, declared := range explainParity.GoOnlyKeys {
+		withMetricFlags.GoOnlyKeys[key] = declared
 	}
-	if result.TerminalState != TerminalStateMismatch {
-		t.Fatalf("terminal = %q, want mismatch -- the bodies genuinely differ, only every difference is declared", result.TerminalState)
+	for _, key := range []string{"data.has_data", "data.has_prior_data"} {
+		withMetricFlags.GoOnlyKeys[key] = GoOnlyKey{Ticket: "CHAOS-8491", Reason: "Go-only: the window holds a stored value for the explained metric; the Python reference never served it."}
+	}
+
+	// What the candidate serves for that state now: no stored value in the
+	// window (has_data false), so the percent is null. The value and the two
+	// empty lists are the capture's.
+	for _, flags := range []string{`"has_data":false,"has_prior_data":false`, `"has_data":false,"has_prior_data":true`} {
+		present := strings.Replace(capturedCandidate, `"value":0,"delta_pct":0,`, `"value":0,"delta_pct":null,`+flags+`,`, 1)
+		if present == capturedCandidate {
+			t.Fatal("the captured candidate does not hold the fields this test rewrites")
+		}
+		result := Compare(baseline, explainRESTSnapshot(t, present), withMetricFlags)
+		if result.DifferencesOutsideBaselineDefect != 0 {
+			t.Fatalf("%s: outside = %d, want 0 -- the real captured blocked_work_default divergence must be fully declared: findings %+v", flags, result.DifferencesOutsideBaselineDefect, result.Findings)
+		}
+		if result.TerminalState != TerminalStateMismatch {
+			t.Fatalf("%s: terminal = %q, want mismatch -- the bodies genuinely differ, only every difference is declared", flags, result.TerminalState)
+		}
+	}
+
+	// The captured candidate itself is no longer covered whole: it serves a 0
+	// percent for a window with no stored value. The citation of the status
+	// filter used to cover ANY difference at the percent, this one included; it
+	// now names its two shapes, and a number on the candidate's side with no
+	// flag that says both windows hold a value is neither.
+	old := Compare(baseline, explainRESTSnapshot(t, capturedCandidate), explainParity)
+	if old.DifferencesOutsideBaselineDefect != 1 || len(old.outsideFindings) != 1 || old.Findings[old.outsideFindings[0]].Path != "$.data.delta_pct" {
+		t.Fatalf("the captured candidate: outside = %d (%+v of %+v), want exactly the percent finding", old.DifferencesOutsideBaselineDefect, old.outsideFindings, old.Findings)
 	}
 }

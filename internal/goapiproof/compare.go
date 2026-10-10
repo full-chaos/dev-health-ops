@@ -121,6 +121,7 @@ type Finding struct {
 	// baselineLeaf/candidateLeaf are the two decoded leaves of a leaf
 	// finding (a scalar or null on each side), kept for shapes that judge
 	// the exact values (LeafPairShape); both are nil on every other finding.
+	// A finding between two numbers carries both numbers.
 	baselineLeaf, candidateLeaf any
 }
 
@@ -2354,6 +2355,9 @@ func compareNumber(baseline, candidate float64, path string, opts Options, track
 				Path:   path,
 				Detail: fmt.Sprintf("%v != %v (Tier A, exact)", baseline, candidate),
 				Shape:  ShapeValue,
+				// The two numbers, for a shape that judges the kind of each side
+				// (LeafPairShape with AnyNumber).
+				baselineLeaf: baseline, candidateLeaf: candidate,
 			}}
 		}
 		return nil
@@ -2369,10 +2373,11 @@ func compareNumber(baseline, candidate float64, path string, opts Options, track
 	tolerance := math.Max(floatTolerance, floatTolerance*math.Max(math.Abs(baseline), math.Abs(candidate)))
 	if math.Abs(baseline-candidate) > tolerance {
 		return []Finding{{
-			Kind:   FindingMismatch,
-			Path:   path,
-			Detail: fmt.Sprintf("%v != %v (Tier B, tolerance %v)", baseline, candidate, tolerance),
-			Shape:  ShapeValue,
+			Kind:         FindingMismatch,
+			Path:         path,
+			Detail:       fmt.Sprintf("%v != %v (Tier B, tolerance %v)", baseline, candidate, tolerance),
+			Shape:        ShapeValue,
+			baselineLeaf: baseline, candidateLeaf: candidate,
 		}}
 	}
 	return nil

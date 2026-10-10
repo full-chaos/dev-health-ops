@@ -222,6 +222,17 @@ type LeafPair struct {
 	Baseline, Candidate any
 }
 
+// anyNumberLeaf is the type of AnyNumber.
+type anyNumberLeaf struct{}
+
+// AnyNumber, as a side of a LeafPair, stands for a number of any value (never
+// null, a string or a boolean). It is for a declared difference that changes
+// a NUMBER into another number (a value the baseline computes over other
+// rows), where no literal can be named. A pair of it is exact about the kind
+// of each side and, with a Sibling condition, about the state of the row; it
+// is not exact about the values, and a declaration says so.
+var AnyNumber = anyNumberLeaf{}
+
 // leafPairPlan judges each finding from the two decoded leaves the
 // comparator recorded on it. The comparator's own gate never offers a
 // structural finding to a shape, so only leaf differences reach admits.
@@ -247,6 +258,9 @@ func (p *leafPairPlan) admits(finding Finding) bool {
 // number of the same value. Booleans and containers equal nothing here.
 func leafEquals(got, want any) bool {
 	switch w := want.(type) {
+	case anyNumberLeaf:
+		_, isNumber := asFloat(got)
+		return isNumber
 	case nil:
 		return got == nil
 	case string:

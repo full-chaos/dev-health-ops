@@ -42,12 +42,12 @@ type ICFinalizeExecutor struct {
 // Executor instance never mutate shared state.
 func NewICFinalizeExecutor(conn driver.Conn) *ICFinalizeExecutor {
 	inner := icfinalize.NewExecutor(conn)
-	inner.SetTeamMapper(func(ctx context.Context, orgID string, asOf time.Time) (icfinalize.PersonTeams, error) {
+	inner.SetTeamMapper(func(ctx context.Context, orgID string, asOf time.Time) (icfinalize.PersonTeams, icfinalize.TeamNames, error) {
 		members, err := teamattribution.ClickHouseFactSource{Conn: conn}.LoadProviderMembers(ctx, orgID, asOf)
 		if err != nil {
-			return nil, fmt.Errorf("load the team memberships of the organization: %w", err)
+			return nil, nil, fmt.Errorf("load the team memberships of the organization: %w", err)
 		}
-		return personTeamsOf(members), nil
+		return personTeamsOf(members), teamNamesOf(members), nil
 	})
 	// The stale-key rule (stale_team_keys.go): the family computes the
 	// organization's day whole, so every stored point of the day that this
@@ -63,6 +63,26 @@ func NewICFinalizeExecutor(conn driver.Conn) *ICFinalizeExecutor {
 		return supersedeStaleTeamKeys(ctx, conn, teamkeytables.ICLandscapeRolling30d, orgID, asOf, nil, produced, computedAt)
 	})
 	return &ICFinalizeExecutor{inner: inner}
+}
+
+// teamNamesOf gives a team's name from the membership facts the person's teams come
+// from: the name of the team's newest fact that has one. One read gives a person's
+// team id and its name (CHAOS-9134).
+func teamNamesOf(members []teamattribution.GithubWorkItemDerivationMemberFact) icfinalize.TeamNames {
+	names := map[string]string{}
+	newest := map[string]time.Time{}
+	for _, member := range members {
+		teamID := strings.TrimSpace(member.TeamID)
+		name := strings.TrimSpace(member.TeamName)
+		if teamID == "" || name == "" {
+			continue
+		}
+		if at, seen := newest[teamID]; seen && !member.UpdatedAt.After(at) {
+			continue
+		}
+		names[teamID], newest[teamID] = name, member.UpdatedAt
+	}
+	return func(teamID string) string { return names[strings.TrimSpace(teamID)] }
 }
 
 // personTeamsOf indexes membership facts by person. A person is found by an

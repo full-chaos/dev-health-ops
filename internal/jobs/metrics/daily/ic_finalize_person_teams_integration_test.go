@@ -316,7 +316,7 @@ WHERE org_id = ? AND as_of_day = ? AND `+live+` GROUP BY identity_id`, org, day)
 	// and points under alpha: these are the stored rows of the later runs.
 	points, rows := run(firstDay)
 	if !reflect.DeepEqual(points, map[string][]string{"leaver": alpha, "mover": alpha}) ||
-		rows["leaver"] != "github:alpha / Unassigned" || rows["mover"] != "github:alpha / Unassigned" {
+		rows["leaver"] != "github:alpha / Team github:alpha" || rows["mover"] != "github:alpha / Team github:alpha" {
 		t.Fatalf("the first day: points %v, rows %v; want both people under github:alpha", points, rows)
 	}
 	for _, day := range []time.Time{threeLater, tenLater} {
@@ -331,7 +331,7 @@ WHERE org_id = ? AND as_of_day = ? AND `+live+` GROUP BY identity_id`, org, day)
 		}
 	}
 	_, rows = run(tenLater)
-	if rows["closed"] != "github:alpha / Unassigned" {
+	if rows["closed"] != "github:alpha / Team github:alpha" {
 		t.Fatalf("the row of closed after the first run of the day = %q, want it under github:alpha", rows["closed"])
 	}
 

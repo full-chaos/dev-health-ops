@@ -119,9 +119,11 @@ const StaleKeysRepositoryNotInRunLogMessage = "daily stale team keys: the organi
 const StaleKeysRetractedLogMessage = "daily stale team keys retracted"
 
 // RetractStaleKeys implements StaleKeyRetractor. run.DiscoveredRepoIDs is the
-// union of the run's partitions: the work scopes of those repositories are
-// the scope of the three work-item tables. A run with no repository computed
-// no work scope and supersedes no work-item key.
+// union of the run's partitions. For a run of some repositories the work
+// scopes of those repositories are the scope of the three work-item tables,
+// and such a run with no repository computed no work scope and supersedes no
+// work-item key. A run of the whole organization (run.FullOrg) takes every
+// work scope of the organization's day, whatever its list holds.
 //
 // It stops at the first failure and returns the rows written so far. A
 // repeated call is safe: a key whose newest row is a row of zeros is not live.

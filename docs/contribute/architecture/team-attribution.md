@@ -1843,6 +1843,38 @@ Limits:
 - **Not changed here.** What a reader makes of a team id with no team row (section 0.4c: the cascade keeps it
   as an unknown team).
 
+#### 0.4j The day whose facts give an item its team (CHAOS-9178)
+
+Ownership and membership rows are bitemporal (`valid_from`, `valid_to`). An item takes its team from the rows
+valid on **the item's day**, never from the rows valid when a job runs. Ownership starts when it was first
+known: an item of a day before the first known ownership of its repository or project stays unassigned, and a
+later change of owner does not rewrite the items of earlier days.
+
+- **The item's day** is the start (UTC) of the day the item was completed (`status = 'done'` with a
+  `completed_at`), and the start of the current day for an item that is not completed. A done item with no
+  `completed_at`, or with a `completed_at` after the current day, takes the current day.
+- **The daily family** (`work_item_attribution`, `internal/jobs/metrics/daily`) reads the facts at the start of
+  the partition's day. A day's partition holds every item created before the day's end that is not done or was
+  completed on or after the day's start; the newest row of an item is read. So the last partition that holds a
+  completed item is its completion day, and an item that is not completed is in the partition of each new day.
+  The rule above is this day.
+- **The backstop** (`internal/jobs/metrics/remaining`, `ComputeOrg`) runs when an ownership or membership row
+  changes and rederives every item of the changed scope, of any age. It groups the items by their day and reads
+  the facts once per day (`WorkItemAttributionItemDay`). It gives an item the same row as the daily family
+  (held by `TestTheBackstopAndTheDailyFamilyGiveAnItemTheOwnerOfItsOwnDay` and, per provider and kind of fact,
+  `TestTheOwnerOfAnItemsDayHoldsForEachProviderAndKindOfFact`).
+- **Consequence for an item that is not completed:** a change made within the current day (a `valid_from`
+  after the start of today) reaches it with the next day's partition, not with the backstop run of today. The
+  two writers agree on the current day too; before this rule the backstop wrote the new owner at once and a
+  later daily run of the same day wrote the old one again.
+- **What a back-dated row does:** an ownership row written now with a `valid_from` in the past changes the
+  items whose day is on or after that `valid_from`. This is the case the backstop exists for; the daily family
+  does not compute old days again.
+- **Not under this rule yet:** the provider sync derivation resolves the items of a sync with the facts at the
+  sync's time (it mirrors the reference job, which loads its context once per run), and the investment
+  materialize job reads the repositories of a donor team at its run time. Both write a newer row that a later
+  daily partition of the item's day, or a backstop run, replaces.
+
 #### 0.4a Provider × entity **consumption** (functional — what `run_team_autoimport` actually pulls)
 
 | provider | teams | projects | members | repo ownership | member store written |

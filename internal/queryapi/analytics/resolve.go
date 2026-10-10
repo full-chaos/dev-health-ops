@@ -471,7 +471,7 @@ func resolveSankey(ctx context.Context, client QueryClient, orgID string, input 
 		//
 		// A request the client closed is a cancel, not a failed read
 		// (clientcancel.go): one INFO line, no failure report.
-		if !reportedAsClientCancel(ctx, "sankey", "org_id", orgID, "path", pathLabel(req.Path), "use_investment", useInvestment) {
+		if !reportedAsClientCancel(ctx, execErr, "sankey", "org_id", orgID, "path", pathLabel(req.Path), "use_investment", useInvestment) {
 			recordDegradation(ctx, "sankey", execErr)
 			slog.WarnContext(ctx, "analytics: sankey query failed",
 				"org_id", orgID, "path", pathLabel(req.Path), "use_investment", useInvestment, "error", execErr)
@@ -585,7 +585,7 @@ func resolveFlowMatrix(ctx context.Context, client QueryClient, orgID string, in
 		// A request the client closed is a cancel, not a failed read
 		// (clientcancel.go): one INFO line, no failure report. What is
 		// returned does not change: nobody reads it.
-		if !reportedAsClientCancel(ctx, "flowMatrix", "org_id", orgID, "dimension", req.Dimension, "use_investment", flowMatrixUsesInvestmentSource(req)) {
+		if !reportedAsClientCancel(ctx, execErr, "flowMatrix", "org_id", orgID, "dimension", req.Dimension, "use_investment", flowMatrixUsesInvestmentSource(req)) {
 			recordDegradation(ctx, "flowMatrix", execErr)
 			// The log line the sankey twin above has always had: telemetry
 			// (counter + span event) is operator-only and needs a tracing

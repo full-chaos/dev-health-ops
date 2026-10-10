@@ -5,9 +5,12 @@ import (
 	"errors"
 	"log/slog"
 
+	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/trace"
+
+	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 )
 
 // A statement that ends because the CLIENT closed the request is not a failed
@@ -18,20 +21,41 @@ import (
 // searches for a defect that is not there, and it hides the real failures of
 // the same statement among the cancels.
 //
-// The test is the request context, not the form of the error: the error of a
-// cancelled statement comes back as a driver error, a ClickHouse exception or
-// a wrapped context error, by the moment the cancel landed. A context that
-// ended because its DEADLINE passed is not a client cancel: that is a budget
-// of this service, and it stays a failure.
+// Two things must hold, never one alone:
+//
+//   - the request context ended with a cancel. A context that ended because
+//     its DEADLINE passed is not a client cancel: that is a budget of this
+//     service, and it stays a failure.
+//   - the ERROR says the statement was cancelled: ClickHouse answered that the
+//     query was cancelled (code 735 or 394), or the chain holds no ClickHouse
+//     exception and holds the context's own cancel error. A statement that
+//     failed for its own reason (an unknown table, a statement this process
+//     refused before it sent it) is a failure also when the client has left
+//     since: the cancel did not cause it, and it will fail again for the next
+//     client.
 
 var clientCancelledCounter = mustAnalyticsCounter(
 	"devhealth_query_api_analytics_client_cancelled_total",
 	"analytics statements that ended because the client closed the request, by phase",
 )
 
-// clientCancelled reports whether the request was cancelled by its client.
-func clientCancelled(ctx context.Context) bool {
-	return ctx != nil && errors.Is(ctx.Err(), context.Canceled)
+// The ClickHouse codes of a statement that was cancelled.
+const (
+	clickHouseQueryWasCancelled         = 394
+	clickHouseQueryWasCancelledByClient = 735
+)
+
+// clientCancelled reports whether err is the end of a statement that the
+// client's cancel of the request ended.
+func clientCancelled(ctx context.Context, err error) bool {
+	if ctx == nil || err == nil || !errors.Is(ctx.Err(), context.Canceled) {
+		return false
+	}
+	var exception *clickhousedriver.Exception
+	if logging.ErrorAs(err, &exception) && exception != nil {
+		return exception.Code == clickHouseQueryWasCancelledByClient || exception.Code == clickHouseQueryWasCancelled
+	}
+	return logging.ErrorClass(err) == logging.ErrorClassCanceled
 }
 
 // recordClientCancel is a package var for the reason recordDegradation is
@@ -48,10 +72,10 @@ func defaultRecordClientCancel(ctx context.Context, phase string, attrs ...any) 
 }
 
 // reportedAsClientCancel reports the end of a statement as a client cancel
-// when the request was cancelled by its client, and says whether it did. A
-// caller reports a failure only when this returns false.
-func reportedAsClientCancel(ctx context.Context, phase string, attrs ...any) bool {
-	if !clientCancelled(ctx) {
+// when the client's cancel ended it (clientCancelled), and says whether it
+// did. A caller reports a failure only when this returns false.
+func reportedAsClientCancel(ctx context.Context, err error, phase string, attrs ...any) bool {
+	if !clientCancelled(ctx, err) {
 		return false
 	}
 	recordClientCancel(ctx, phase, attrs...)

@@ -168,10 +168,12 @@ func defaultRecordInvestmentCoverageFailure(ctx context.Context, orgID string, m
 
 // reportInvestmentCoverageFailure is what every failure site of the coverage
 // read calls. A statement that the client's cancel ended is reported as a
-// cancel (clientcancel.go) and not as a failure; a statement that never left
-// this process (the compile stage) cannot be one.
+// cancel (clientcancel.go) and not as a failure. The compile stage never
+// sends a statement, so it is never one, whatever its error holds. (A
+// statement the ClickHouse client refused before it sent it is not one by the
+// rule itself: its error does not say "cancelled".)
 func reportInvestmentCoverageFailure(ctx context.Context, orgID string, measure Measure, useInvestment bool, stage coverageFailureStage, queryID string, err error) {
-	if stage != coverageStageCompile && reportedAsClientCancel(ctx, "investment_coverage",
+	if stage != coverageStageCompile && reportedAsClientCancel(ctx, err, "investment_coverage",
 		"org_id", orgID, "measure", string(measure), "use_investment", useInvestment, "stage", string(stage), "query_id", queryID) {
 		return
 	}

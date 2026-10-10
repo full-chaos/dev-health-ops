@@ -2,12 +2,18 @@ package analytics
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"log/slog"
 	"strings"
 	"testing"
 	"time"
 
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
+	"github.com/full-chaos/dev-health-go/clickhouse"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph/model"
 )
@@ -150,5 +156,131 @@ func TestACompileFailureOfTheCoverageIsNeverAClientCancel(t *testing.T) {
 	reportInvestmentCoverageFailure(ctx, "org-1", MeasureCount, true, coverageStageCompile, "", context.Canceled)
 	if cancels != 0 || failures != 1 {
 		t.Fatalf("a compile failure on a closed request: %d cancel reports, %d failure reports; want 0 and 1", cancels, failures)
+	}
+}
+
+// The two halves of the rule, by the form of the error, on a request the
+// client closed and on a live one. A statement that failed for its own reason
+// is a failure also after the client left: the cancel did not cause it.
+func TestOnlyAnErrorThatSaysCancelledIsAClientCancel(t *testing.T) {
+	closed, cancel := context.WithCancel(context.Background())
+	cancel()
+	exception := func(code int32, name string) error {
+		return fmt.Errorf("query: %w", &fakeOperationError{operation: "query", cause: &clickhousedriver.Exception{Code: code, Name: name}})
+	}
+	for _, test := range []struct {
+		name string
+		err  error
+		want bool // on the closed request; on a live request it is never a cancel
+	}{
+		{"ClickHouse: cancelled by the client (735)", exception(735, "QUERY_WAS_CANCELLED_BY_CLIENT"), true},
+		{"ClickHouse: cancelled (394)", exception(394, "QUERY_WAS_CANCELLED"), true},
+		{"the context's own cancel error, wrapped", fmt.Errorf("rows: %w", &fakeOperationError{operation: "rows", cause: context.Canceled}), true},
+		{"ClickHouse: unknown table (60)", exception(60, "UNKNOWN_TABLE"), false},
+		{"ClickHouse: time limit (159)", exception(159, "TIMEOUT_EXCEEDED"), false},
+		{"a statement refused before it was sent", fmt.Errorf("query: %w", clickhouse.ErrUnsafeBindingValue), false},
+		{"another error", errors.New("connection reset"), false},
+		{"a deadline error", fmt.Errorf("query: %w", context.DeadlineExceeded), false},
+		{"no error", nil, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := clientCancelled(closed, test.err); got != test.want {
+				t.Errorf("on a request the client closed: client cancel = %v, want %v", got, test.want)
+			}
+			if clientCancelled(context.Background(), test.err) {
+				t.Errorf("on a live request: reported as a client cancel")
+			}
+		})
+	}
+}
+
+// A real failure of the coverage statement on a request the client closed
+// since is reported as the failure it is, through the real failure sites: an
+// unknown table, and a statement the ClickHouse client refused before it sent
+// it (the query stage, not the compile stage).
+func TestARealCoverageFailureOnAClosedRequestStaysAFailure(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		err  error
+	}{
+		{"unknown table", &fakeOperationError{operation: "query", cause: &clickhousedriver.Exception{Code: 60, Name: "UNKNOWN_TABLE"}}},
+		{"refused before it was sent", clickhouse.ErrUnsafeBindingValue},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel()
+			var cancels, failures int
+			origCancel, origCoverage := recordClientCancel, recordInvestmentCoverageFailure
+			recordClientCancel = func(context.Context, string, ...any) { cancels++ }
+			recordInvestmentCoverageFailure = func(context.Context, string, Measure, bool, coverageFailureStage, string, error) { failures++ }
+			t.Cleanup(func() { recordClientCancel, recordInvestmentCoverageFailure = origCancel, origCoverage })
+			client := &routingFakeClient{}
+			client.onErr("AS assigned_team", test.err)
+			resolveSankeyCoverage(ctx, client, "org-1", SankeyRequest{
+				Measure: MeasureCount, StartDate: mustGraphQLDate("2026-01-01"), EndDate: mustGraphQLDate("2026-01-08"),
+			}, 30, false, nil)
+			if cancels != 0 || failures != 1 {
+				t.Errorf("cancel reports = %d, failure reports = %d; want 0 and 1", cancels, failures)
+			}
+		})
+	}
+}
+
+// What the report itself records, through the real meter and a real span (the
+// tests above replace the report, so they say nothing of it): one count of
+// the phase, one span event with the phase, one INFO line.
+func TestTheClientCancelReportRecordsACountASpanEventAndALine(t *testing.T) {
+	recorder := tracetest.NewSpanRecorder()
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
+	t.Cleanup(func() { _ = provider.Shutdown(context.Background()) })
+	ctx, span := provider.Tracer("test").Start(context.Background(), "resolve")
+	records := captureSlog(t)
+	const phase = "phase_of_the_report_test"
+	count := func() int64 {
+		t.Helper()
+		var collected metricdata.ResourceMetrics
+		if err := realMeterReader.Collect(context.Background(), &collected); err != nil {
+			t.Fatal(err)
+		}
+		var total int64
+		for _, scope := range collected.ScopeMetrics {
+			for _, m := range scope.Metrics {
+				if m.Name != "devhealth_query_api_analytics_client_cancelled_total" {
+					continue
+				}
+				sum, ok := m.Data.(metricdata.Sum[int64])
+				if !ok {
+					t.Fatalf("counter data shape = %+v", m.Data)
+				}
+				for _, point := range sum.DataPoints {
+					if value, _ := point.Attributes.Value("phase"); value.AsString() == phase {
+						total += point.Value
+					}
+				}
+			}
+		}
+		return total
+	}
+	before := count()
+	defaultRecordClientCancel(ctx, phase, "org_id", "org-1")
+	span.End()
+	if got := count() - before; got != 1 {
+		t.Errorf("the counter of the phase moved by %d, want 1", got)
+	}
+	ended := recorder.Ended()
+	if len(ended) != 1 || len(ended[0].Events()) != 1 || ended[0].Events()[0].Name != "analytics.client_cancelled" {
+		t.Fatalf("span events = %+v, want one analytics.client_cancelled", ended)
+	}
+	if value := ended[0].Events()[0].Attributes; len(value) != 1 || string(value[0].Key) != "phase" || value[0].Value.AsString() != phase {
+		t.Errorf("the span event's attributes = %+v, want the phase only", value)
+	}
+	lines := 0
+	for _, record := range *records {
+		if record.msg == "analytics: query cancelled by the client" && record.level == slog.LevelInfo && record.attrs["phase"] == phase && record.attrs["org_id"] == "org-1" {
+			lines++
+		}
+	}
+	if lines != 1 {
+		t.Errorf("INFO lines of the report = %d, want 1", lines)
 	}
 }

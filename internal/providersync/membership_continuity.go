@@ -104,6 +104,9 @@ func decideMembershipContinuity(provider string, open []openMembership, returned
 		held[membershipFactKey(row.TeamID, row.MemberID)] = true
 	}
 	openByFact := map[string][]openMembership{}
+	// A fact with ANY open row newer than the read is never replaced: a run that read the
+	// provider after this one wrote it (CHAOS-9204).
+	factNewer := map[string]bool{}
 	type idKey struct{ team, id string }
 	byID := map[idKey][]openMembership{}
 	for _, row := range open {
@@ -112,6 +115,9 @@ func decideMembershipContinuity(provider string, open []openMembership, returned
 		}
 		key := membershipFactKey(row.TeamID, row.MemberID)
 		openByFact[key] = append(openByFact[key], row)
+		if row.UpdatedAt.After(at) {
+			factNewer[key] = true
+		}
 		if row.ProviderUserID != nil {
 			if id := strings.TrimSpace(*row.ProviderUserID); id != "" {
 				byID[idKey{row.TeamID, id}] = append(byID[idKey{row.TeamID, id}], row)
@@ -157,7 +163,7 @@ func decideMembershipContinuity(provider string, open []openMembership, returned
 			var earliest *time.Time
 			for _, candidate := range byID[idKey{row.TeamID, id}] {
 				candidateKey := membershipFactKey(candidate.TeamID, candidate.MemberID)
-				if held[candidateKey] || taken[candidateKey] || candidate.UpdatedAt.After(at) {
+				if held[candidateKey] || taken[candidateKey] || factNewer[candidateKey] {
 					continue
 				}
 				decision.Replaced = append(decision.Replaced, candidate)

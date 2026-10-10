@@ -82,7 +82,7 @@ const (
 		"FROM teams FINAL WHERE org_id = {org_id:String} AND provider = {provider:String} AND is_active = 1 AND id IN {team_ids:Array(String)}"
 
 	knownTeamsQuery      = "SELECT id FROM teams FINAL WHERE org_id = {org_id:String} AND provider = {provider:String} AND startsWith(ifNull(native_team_key, ''), {ari_prefix:String})"
-	openMembershipsQuery = "SELECT team_id, member_id, raw_provider_user_id, raw_email, identity_facets, toString(source), is_primary, specificity, priority, valid_from, provider_user_id " +
+	openMembershipsQuery = "SELECT team_id, member_id, raw_provider_user_id, raw_email, identity_facets, toString(source), is_primary, specificity, priority, valid_from, provider_user_id, updated_at " +
 		"FROM team_memberships FINAL WHERE org_id = {org_id:String} AND provider = {provider:String} AND source = 'native' AND team_id IN {team_ids:Array(String)} AND valid_to IS NULL"
 	openOwnershipQuery = "SELECT team_id, project_id, project_key, toString(source), is_primary, specificity, priority, valid_from " +
 		"FROM team_project_ownership FINAL WHERE org_id = {org_id:String} AND provider = {provider:String} AND source = 'native' AND team_id IN {team_ids:Array(String)} AND valid_to IS NULL"
@@ -370,6 +370,8 @@ type openMembership struct {
 	specificity       uint16
 	priority          int32
 	validFrom         time.Time
+	// updatedAt is when the row was written; a row newer than the run's read is never closed (CHAOS-9204).
+	updatedAt time.Time
 	// closedAt is the valid_to the snapshot rule closes this row with.
 	closedAt time.Time
 }
@@ -414,7 +416,7 @@ func planMemberships(
 	for result.Next() {
 		var row openMembership
 		if err := result.Scan(&row.teamID, &row.memberID, &row.rawProviderUserID, &row.rawEmail, &row.identityFacets, &row.source,
-			&row.isPrimary, &row.specificity, &row.priority, &row.validFrom, &row.providerUserID); err != nil {
+			&row.isPrimary, &row.specificity, &row.priority, &row.validFrom, &row.providerUserID, &row.updatedAt); err != nil {
 			return nil, nil, providersync.SnapshotPlan{}, err
 		}
 		open = append(open, row)
@@ -437,9 +439,22 @@ func planMemberships(
 		row.ValidFrom = plan.ValidFrom[i]
 		out[i] = row
 	}
+	// A fact (team and member) with ANY open row written after this run read the provider is left
+	// open whole: a run that read the provider later wrote it, so this run's snapshot is older than
+	// the row and cannot say it is a surplus or a departure (CHAOS-9204; the same rule as the GitHub,
+	// GitLab and Linear writers, providersync.MembershipSnapshotWriter).
+	newerFacts := map[string]bool{}
+	for _, row := range open {
+		if row.updatedAt.After(now) {
+			newerFacts[providersync.MembershipSnapshotKey(providersync.MembershipSnapshotRow{TeamID: row.teamID, MemberID: row.memberID})] = true
+		}
+	}
 	var expired []openMembership
 	for _, retraction := range plan.Retract {
 		row := open[retraction.Open]
+		if newerFacts[providersync.MembershipSnapshotKey(providersync.MembershipSnapshotRow{TeamID: row.teamID, MemberID: row.memberID})] {
+			continue
+		}
 		row.closedAt = retraction.ClosedAt
 		expired = append(expired, row)
 	}

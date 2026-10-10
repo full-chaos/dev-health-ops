@@ -37,6 +37,11 @@ type PostSyncPlan struct {
 	// rows. Only then does the fan-out record the days those rows touched
 	// (CHAOS-8813).
 	WorkItems bool
+	// Git is true when a successful unit of the sync run wrote commits or pull
+	// requests (the git or prs target). Only then does the fan-out record the
+	// days those rows touched (CHAOS-9169): a commit written for a day outside
+	// every window of the run marks its own day.
+	Git bool
 	// RunStartedAt is sync_runs.started_at (created_at for a run that has
 	// none): no unit of the run wrote a raw row before it, apart from clock
 	// skew between processes.
@@ -603,14 +608,12 @@ LIMIT 1`, orgID, integrationID).Scan(&autoImport); err != nil && !errors.Is(err,
 		return nil, ErrPostSyncUnavailable
 	}
 
-	_, hasGit := targets["git"]
-	_, hasPRs := targets["prs"]
 	_, hasWorkItems := targets["work-items"]
 	_, hasDeployments := targets["deployments"]
 	_, hasCICD := targets["cicd"]
 	_, hasIncidents := targets["incidents"]
 	_, hasOperational := targets["operational"]
-	git := hasGit || hasPRs
+	git := writesGitRows(targets)
 	dora := git || hasDeployments || hasCICD || hasIncidents || hasOperational
 	dailyRelevant := dailyMetricsTrigger(git, hasWorkItems, hasCICD, hasDeployments, hasIncidents)
 	targetDay := now
@@ -640,7 +643,7 @@ LIMIT 1`, orgID, integrationID).Scan(&autoImport); err != nil && !errors.Is(err,
 		}
 	}
 	return &PostSyncPlan{
-		WorkItems: hasWorkItems, RunStartedAt: startedAt,
+		WorkItems: hasWorkItems, Git: git, RunStartedAt: startedAt,
 		WorkItemWindowDays: workItemWindowDays,
 		OrganizationID:     orgID, SyncRunID: args.SyncRunID(), TargetDay: targetDay,
 		BackfillDays: backfillDays, From: from, To: to,
@@ -675,6 +678,15 @@ LIMIT 1`, orgID, integrationID).Scan(&autoImport); err != nil && !errors.Is(err,
 // computed_at instead of double-counting.
 func dailyMetricsTrigger(git, hasWorkItems, hasCICD, hasDeployments, hasIncidents bool) bool {
 	return git || hasWorkItems || hasCICD || hasDeployments || hasIncidents
+}
+
+// writesGitRows says whether a successful unit of the sync run wrote commits
+// or pull requests (the git or the prs target): the same for every provider,
+// as it is read from the dataset capability of each unit, never from a name.
+func writesGitRows(targets map[string]struct{}) bool {
+	_, hasGit := targets["git"]
+	_, hasPRs := targets["prs"]
+	return hasGit || hasPRs
 }
 
 func utcDay(value time.Time) time.Time {

@@ -377,7 +377,9 @@ A sync unit writes raw rows; the daily job computes every derived daily table.
 A work-items sync whose window is one day can write raw rows that belong to
 older days (an item completed three weeks ago, a late transition). The
 post-sync fan-out therefore starts a daily run for every day that the raw rows
-of its sync run touched, not only for the window of the run.
+of its sync run touched, not only for the window of the run. The raw rows are
+work items and transitions, and the commits and pull requests of a git or prs
+unit (CHAOS-9169).
 
 **Who writes the nine work-item tables.** The work-items sync unit of github,
 gitlab, jira and linear writes none of `work_item_metrics_daily`,
@@ -432,6 +434,17 @@ never reads the rows as they are. Every `at` is the ClickHouse clock.
 **The steps of one fan-out** (`NativePostSyncService.Fanout`):
 
 1. *Before the Postgres transaction.* If a successful unit of the sync run
+   wrote commits or pull requests (its dataset has the `git` or the `prs` legacy
+   target, whichever the provider: `PostSyncPlan.Git`), one `INSERT ... SELECT`
+   (`recordTouchedGitSQL`, `RecordTouchedGit`) appends a `touched` event for
+   each `(day, repository)` of the rows of `git_commits` and `git_pull_requests`
+   whose `last_synced` is at or after the same lower bound. The days are the
+   ones the daily run reads those rows under: the committer date of a commit
+   (not its author date: a rebased commit keeps an old author date that no run
+   reads it under) and the creation day and, when merged, the merge day of a
+   pull request. A commit written late, or with an old date, marks its own day
+   however far it lies from the window of its sync; before this, the record held
+   work items only and no run computed such a day. If a successful unit of the sync run
    wrote work items, one server-side `INSERT ... SELECT` appends a `touched`
    event for each `(day, repository)` of the rows of `work_items` and
    `work_item_transitions` whose `last_synced` is at or after the start of the

@@ -730,7 +730,8 @@ project's items by id. Now:
     closes the row only when that one response says "not there". The answer must ask for every state the
     held set admits. "Still there" keeps the row open on its first `valid_from`. A failed answer, and a
     candidate past the run's budget of `AbsenceLookupBudget` (100) direct answers, close nothing; the next
-    run goes on. Each kind writes one WARN line (`snapshot_absence_not_proven`, with the counts) and a
+    run goes on. The candidates are asked in an order that changes with the run (a hash of the fact and the
+    run's time), so candidates that never get an answer cannot take the budget at every run. Each kind writes one WARN line (`snapshot_absence_not_proven`, with the counts) and a
     degraded leg on the run's result. The walks and the answers:
     - GitHub grants: one walk per team (the team's repositories; archived repositories are in the same
       walk). The answer is the team's permission for the repository.
@@ -742,7 +743,12 @@ project's items by id. Now:
       live projects only would call an archived project gone. A row whose project the live answer holds is
       another case: the project is there, so what went is its legacy link, and the links are one read of
       the store. The two live walks are a union, so one change during a live walk hides nothing; a change
-      during the archived walk does.
+      during the archived walk does. The question uses the identifier the row was BUILT FROM: a row on the
+      native project id is asked for by `id`; a row of the retired form `{org}:jira:{KEY}` is named by its
+      KEY (when the live answer holds the key, the project is there under its native id and the retired row
+      closes with no request; otherwise the search is asked by `keys`). The provider is never sent a value
+      this system built, and never the organization id. A 400, an error body, an entry of another project
+      and an empty answer with no end signal prove nothing.
     `TestHeldSetWalkCensus` names every list walk of the five collectors and the held set it feeds; a new
     walk fails it until it is named with its proof.
   - **cursor walk** (`AbsenceByWalk(AbsenceWalkByCursor)`; the Linear and Atlassian Teams kinds). The walk

@@ -141,13 +141,6 @@ func TestNamedRepositoryThatResolvesToNothingLeavesNothingUnderAnOrganizationSco
 			if !known {
 				t.Fatalf("%s is not in emptyMatchStatements", consumer.route)
 			}
-			// Home and opportunities have ONE read less under an organization scope: the
-			// rework-by-theme allocation read (allocationScope) reads what.repos under no
-			// scope but a repo-level one. Known, owned by CHAOS-9150 (D5900): remove this
-			// allowance there.
-			if consumer.route == "GET/POST /api/v1/home" || consumer.route == "GET/POST /api/v1/opportunities" {
-				want--
-			}
 			if got := len(client.statementsWith("1 = 0")); got < want {
 				t.Fatalf("%s: %d statement(s) carry the empty match under an organization scope with unresolved what.repos, want %d:\n%v", consumer.route, got, want, client.statements)
 			}

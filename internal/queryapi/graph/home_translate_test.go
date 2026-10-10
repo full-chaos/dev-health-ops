@@ -632,3 +632,15 @@ func TestHomeResultCarriesTheRepoLinkFields(t *testing.T) {
 		t.Errorf("a delta of another metric carries repo-link fields: %+v", o)
 	}
 }
+
+// The answer-level reason a repository filter matched nothing (CHAOS-9098) is
+// served as filterEmptyReason, and stays null when the domain has none.
+func TestHomeResultFromResponse_MapsTheFilterEmptyReason(t *testing.T) {
+	reason := "repository_not_in_team"
+	if got := homeResultFromResponse(&home.Response{FilterEmptyReason: &reason}); got.FilterEmptyReason == nil || *got.FilterEmptyReason != reason {
+		t.Errorf("filterEmptyReason = %v, want %q", got.FilterEmptyReason, reason)
+	}
+	if got := homeResultFromResponse(&home.Response{}); got.FilterEmptyReason != nil {
+		t.Errorf("filterEmptyReason = %q, want null", *got.FilterEmptyReason)
+	}
+}

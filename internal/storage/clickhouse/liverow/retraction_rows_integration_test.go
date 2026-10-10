@@ -32,6 +32,10 @@ import (
 // daily writer stores it). Both forms must keep each of the first keys and
 // drop the retracted one. A form that ran before the newest row was chosen
 // would keep the retracted key, because its older row is a measurement.
+//
+// A third kind of key came back: it was measured, retracted, and measured
+// again. Its newest row is a measurement, so both forms must keep it. A form
+// that asked "did this key ever hold a retraction row" would drop it for ever.
 func TestTheRuleKeepsEachMeasurementAndDropsARetraction(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
 	defer cancel()
@@ -98,6 +102,18 @@ func TestTheRuleKeepsEachMeasurementAndDropsARetraction(t *testing.T) {
 			t.Fatalf("%s: insert the retraction row: %v", table, err)
 		}
 
+		for step, statement := range []string{
+			fmt.Sprintf("INSERT INTO %s (org_id, %s, %s, %s, computed_at) VALUES (?, ?, 'came back', 5, ?)", table, dayColumn, id, markers[0]),
+			fmt.Sprintf("INSERT INTO %s (org_id, %s, %s, computed_at) VALUES (?, ?, 'came back', ?)", table, dayColumn, id),
+			fmt.Sprintf("INSERT INTO %s (org_id, %s, %s, %s, computed_at) VALUES (?, ?, 'came back', 7, ?)", table, dayColumn, id, markers[0]),
+		} {
+			if err := conn.Exec(ctx, statement, org, day, older.Add(time.Duration(step)*time.Hour)); err != nil {
+				t.Fatalf("%s: insert step %d of the key that came back: %v", table, step, err)
+			}
+		}
+		want = append(want, "came back")
+		sort.Strings(want)
+
 		forms := map[string]string{
 			"newest row by argMax": fmt.Sprintf(
 				"SELECT toString(ifNull(%[2]s, '')) AS id FROM %[1]s WHERE org_id = ? GROUP BY %[2]s HAVING %[3]s ORDER BY id",
@@ -134,7 +150,7 @@ func TestTheRuleKeepsEachMeasurementAndDropsARetraction(t *testing.T) {
 				t.Fatalf("%s (%s): close: %v", table, name, err)
 			}
 			if !reflect.DeepEqual(got, want) {
-				t.Errorf("%s (%s) keeps %v, want %v: one key for each measure column and not the retracted key", table, name, got, want)
+				t.Errorf("%s (%s) keeps %v, want %v: one key for each measure column, the key that came back, and not the retracted key", table, name, got, want)
 			}
 		}
 	}

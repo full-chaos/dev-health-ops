@@ -6,11 +6,15 @@ import (
 	"errors"
 	"math"
 	"os"
+	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/numerical"
+	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse/liverow"
+	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 )
 
 func TestCapacityExecutorFailsClosedWithoutAConnection(t *testing.T) {
@@ -45,6 +49,52 @@ func TestEveryColumnTheExecutorTouchesIsRequiredAtStartup(t *testing.T) {
 			capacityTableRequirements["capacity_forecasts"].columns, column,
 		) {
 			t.Errorf("the insert writes %q but startup does not require it", column)
+		}
+	}
+}
+
+// TestTheColumnsOfTheLiveRowRuleAreRequiredAtStartup holds the two startup
+// checks against the live-row rule. The rule is put into a statement at run
+// time, so its columns are in no query text of this package: a file that
+// builds the rule of a table into a read must require every column of that
+// rule, or a schema that lacks one passes startup and fails every read.
+func TestTheColumnsOfTheLiveRowRuleAreRequiredAtStartup(t *testing.T) {
+	root, err := moduleroot.Root()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ruleOfTable := regexp.MustCompile(`(?:liverow\.(?:Predicate|NewestPredicate)|measuredKeyHaving)\("([a-z_0-9]+)"`)
+	for _, check := range []struct {
+		name     string
+		files    []string
+		required func(table string) []string
+	}{
+		{"capacity", []string{"capacity_native_clickhouse.go", "capacity_native.go"},
+			func(table string) []string { return capacityTableRequirements[table].columns }},
+		{"recommendations", []string{"recommendations_native_clickhouse.go", "recommendations_native.go", "recommendations_loader.go"},
+			func(table string) []string { return recommendationsTableRequirements[table] }},
+	} {
+		tables := map[string]bool{}
+		for _, file := range check.files {
+			raw, err := os.ReadFile(filepath.Join(root, "internal/jobs/metrics/remaining", file))
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, match := range ruleOfTable.FindAllStringSubmatch(string(raw), -1) {
+				tables[match[1]] = true
+			}
+		}
+		if len(tables) == 0 {
+			t.Errorf("%s: no read with the live-row rule was found in %v: this test reads nothing", check.name, check.files)
+		}
+		for table := range tables {
+			required := check.required(table)
+			for _, column := range liverow.Columns(table) {
+				if !slices.Contains(required, column) {
+					t.Errorf("%s: a read of %s holds the live-row rule, which tests %q, but startup does not require it",
+						check.name, table, column)
+				}
+			}
 		}
 	}
 }

@@ -116,16 +116,17 @@ func TestResolve_SingleTeamPath_ReadsTeamCognitiveLoadDailyDirectly(t *testing.T
 			{rows: [][]any{
 				{day("2026-08-20"), 4.0, 2.0, 1.0, 0.25, nil},
 			}},
+			{rows: nil}, // days whose newest row is a retraction row: none
 		},
-		errs: []error{nil},
+		errs: []error{nil, nil},
 	}
 
 	result, err := Resolve(context.Background(), client, "org-1", mustDate(t, "2026-08-01"), mustDate(t, "2026-08-31"), strPtr("team-a"), nil)
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
-	if client.calls != 1 {
-		t.Fatalf("calls = %d, want 1 (single dedup read, no merge)", client.calls)
+	if client.calls != 2 {
+		t.Fatalf("calls = %d, want 2 (the single dedup read, no merge; and the read of its retraction days)", client.calls)
 	}
 	if !strings.Contains(client.statements[0], "team_cognitive_load_daily") {
 		t.Errorf("expected query against team_cognitive_load_daily, got: %s", client.statements[0])
@@ -158,8 +159,11 @@ func TestResolve_SingleTeamPath_NullRatiosStayNull(t *testing.T) {
 			{rows: [][]any{
 				{day("2026-08-20"), 0.0, 0.0, 0.0, nil, nil},
 			}},
+			// The day is a measured day with no load: the read of the
+			// retraction days does not name it, so it stays.
+			{rows: nil},
 		},
-		errs: []error{nil},
+		errs: []error{nil, nil},
 	}
 	result, err := Resolve(context.Background(), client, "org-1", mustDate(t, "2026-08-01"), mustDate(t, "2026-08-31"), strPtr("team-a"), nil)
 	if err != nil {

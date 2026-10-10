@@ -73,6 +73,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/changefailure"
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/prrework"
 )
 
 // CommitStatRow is one file-level delta within one commit -- the LEFT JOIN of
@@ -133,23 +134,36 @@ type PullRequestReviewRow struct {
 // comment on Compute for the fields Python leaves at their dataclass
 // defaults, which this type does not carry at all).
 type RepoMetric struct {
-	RepoID                     uuid.UUID
-	Day                        time.Time
-	CommitsCount               int
-	TotalLOCTouched            int
-	AvgCommitSizeLOC           float64
-	LargeCommitRatio           float64
-	PRsMerged                  int
-	MedianPRCycleHours         float64
-	PRCycleP75Hours            float64
-	PRCycleP90Hours            float64
-	PRsWithFirstReview         int
-	PRFirstReviewP50Hours      *float64
-	PRFirstReviewP90Hours      *float64
-	PRReviewTimeP50Hours       *float64
-	PRPickupTimeP50Hours       *float64
-	LargePRRatio               float64
-	PRReworkRatio              float64
+	RepoID                uuid.UUID
+	Day                   time.Time
+	CommitsCount          int
+	TotalLOCTouched       int
+	AvgCommitSizeLOC      float64
+	LargeCommitRatio      float64
+	PRsMerged             int
+	MedianPRCycleHours    float64
+	PRCycleP75Hours       float64
+	PRCycleP90Hours       float64
+	PRsWithFirstReview    int
+	PRFirstReviewP50Hours *float64
+	PRFirstReviewP90Hours *float64
+	PRReviewTimeP50Hours  *float64
+	PRPickupTimeP50Hours  *float64
+	LargePRRatio          float64
+	// PRReworkRatio is DEPRECATED: merged pull requests with a
+	// changes-requested review / ALL merged pull requests, 0 with none. A pull
+	// request with no review data is in its denominator, so it reads 0 where
+	// nothing was reviewed. It is still written so that an older reader and a
+	// rollback keep the value they always read. The ratio is PRRework and
+	// PRReworkRatioReviewed.
+	PRReworkRatio float64
+	// PRRework holds the day's merged pull requests counted by review
+	// evidence (package prrework). Compute leaves it nil and ApplyPRRework
+	// sets it; nil is stored as NULL counts: not measured.
+	PRRework *prrework.Counts
+	// PRReworkRatioReviewed is the day's ratio over the reviewed pull
+	// requests. Nil when the day is not measured (no reviewed pull request).
+	PRReworkRatioReviewed      *float64
 	PRSizeP50LOC               *float64
 	PRSizeP90LOC               *float64
 	PRCommentsPer100LOC        *float64

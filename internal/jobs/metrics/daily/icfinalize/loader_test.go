@@ -12,7 +12,10 @@ import (
 // SQLAlchemy implementation that must NOT be ported.
 func TestRollingStatsSQLMatchesTheClickHouseReference(t *testing.T) {
 	for _, required := range []string{
-		"any(team_id)",            // NOT MAX(team_id) -- that is the SQLAlchemy one
+		// The team of the person's newest row, with a total order: NOT the
+		// reference's any(team_id) (see the statement's comment) and NOT
+		// MAX(team_id), which is the SQLAlchemy one.
+		"argMax(team_id, tuple(computed_at, day, repo_id)) AS team_id",
 		"median(cycle_p50_hours)", // NOT AVG(...)      -- that is the SQLAlchemy one
 		"sum(loc_touched)",
 		"sum(delivery_units)",
@@ -25,6 +28,12 @@ func TestRollingStatsSQLMatchesTheClickHouseReference(t *testing.T) {
 	}
 	// The two SQLAlchemy spellings must be ABSENT. Asserting only the presence
 	// of the right ones would still pass if both appeared.
+	// any(team_id) is the reference's aggregate. It gives a person whichever
+	// stored team id ClickHouse reaches first, so the id of a replaced team on
+	// one old row can become the team of the person's point.
+	if strings.Contains(rollingStatsSQL, "any(team_id)") {
+		t.Fatal("rollingStatsSQL takes any(team_id): the team of a person must be the team of the newest row")
+	}
 	for _, forbidden := range []string{"MAX(team_id)", "AVG(cycle_p50_hours)", "avg(cycle_p50_hours)"} {
 		if strings.Contains(rollingStatsSQL, forbidden) {
 			t.Fatalf("rollingStatsSQL contains %q -- that is the SQLAlchemy loader "+

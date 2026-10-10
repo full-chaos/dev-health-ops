@@ -244,6 +244,8 @@ var repoOwnershipPlanners = map[string]ownershipWriter{
 var otherSnapshotPlanners = map[string]string{
 	"internal/atlassianteams.planMemberships": "its KindSnapshot argument = AtlassianTeamMembershipKind with the term " +
 		"Rows.MembershipsComplete (atlassianteams.Collect: one finished member read for every active team)",
+	"internal/providersync.firstSeenMembershipValidFrom": "passes the rule no KindSnapshot: it reuses the first-seen valid_from of a " +
+		"membership fact the run holds again and closes nothing, so it has no proof to make (CHAOS-9007, membership_first_seen.go)",
 	"internal/atlassianteams.teamsInScope": "makes its proof in place: the team catalog kind with the term Rows.TeamSearchComplete " +
 		"(atlassianteams.Collect: the team search followed the cursor to its end); a search that answers no team closes nothing",
 }

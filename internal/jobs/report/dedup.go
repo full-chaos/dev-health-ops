@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/changefailure"
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/prrework"
 	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse/liverow"
 )
 
@@ -38,6 +39,8 @@ type chartRule struct {
 	// expression aggregates the counts of a chart bucket into the value. NULL
 	// means the bucket has no value, and executeChart draws no point.
 	expression string
+	// inputs are the columns of table that expression reads.
+	inputs []string
 }
 
 // chartRules names, per registry metric, the rule its chart reads instead of
@@ -53,8 +56,16 @@ type chartRule struct {
 // never charted as change failure rate. The exported registry keeps naming
 // repo_metrics_daily as the metric's table; the chart reports the table it
 // reads.
+//
+// The pull request rework ratio follows the view too: a chart bucket's value
+// is the shared window rule over the bucket's summed counts of REVIEWED pull
+// requests (package prrework), on the metric's own table. The column
+// repo_metrics_daily.pr_rework_ratio is DEPRECATED: it divides by all merged
+// pull requests and holds 0 where nothing was reviewed, so it is never
+// charted. A bucket with no reviewed pull request has no point.
 var chartRules = map[string]chartRule{
-	"change_failure_rate": {table: changefailure.Table, expression: changefailure.WindowRateSQL},
+	"change_failure_rate": {table: changefailure.Table, expression: changefailure.WindowRateSQL, inputs: changefailure.CountColumns},
+	"pr_rework_ratio":     {table: prrework.Table, expression: prrework.WindowRateSQL, inputs: prrework.CountColumns},
 }
 
 // withChartRule returns the definition a chart of the metric is built from:

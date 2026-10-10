@@ -23,11 +23,12 @@ var teamKeyedTables = map[string]bool{
 	"team_metrics_daily":              true,
 	"investment_metrics_daily":        true,
 	"issue_type_metrics_daily":        true,
+	"ic_landscape_rolling_30d":        true,
 }
 
 // textColumns are the registry entries of those tables that name a text
 // column. A text column has no mean, so no chart of it can be read.
-var textColumns = map[string]bool{"investment_area": true, "issue_type_norm": true, "project_stream": true}
+var textColumns = map[string]bool{"investment_area": true, "issue_type_norm": true, "project_stream": true, "map_name": true}
 
 // TestReportChartsGiveRetractionRowsNoWeight charts EVERY metric of
 // metric_registry.json that reads a team-keyed daily table, as a

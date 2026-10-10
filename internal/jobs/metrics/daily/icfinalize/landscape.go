@@ -24,6 +24,38 @@ type LandscapeRecord struct {
 // its `vectors` dict declares them.
 var mapNames = [3]string{"churn_throughput", "cycle_throughput", "wip_throughput"}
 
+// StatsOfEachTeam gives a person who is a member of teams one stat for each
+// team, in the order of the teams, each with the person's 30-day numbers. A
+// person with no team gets the one stat with NO team: the team a stat was
+// read with comes from stored rows, which are this family's own earlier
+// output, and is never the team of the person. A blank or "unknown" identity
+// is no person and is not looked up.
+func StatsOfEachTeam(stats []RollingStat, teamsOf func(identity string) []string) []RollingStat {
+	expanded := make([]RollingStat, 0, len(stats))
+	for _, stat := range stats {
+		var teams []string
+		if teamsOf != nil && stat.IdentityID != "" && stat.IdentityID != "unknown" {
+			teams = teamsOf(stat.IdentityID)
+		}
+		if len(teams) == 0 {
+			stat.TeamID = ""
+			expanded = append(expanded, stat)
+			continue
+		}
+		seen := map[string]bool{}
+		for _, teamID := range teams {
+			if seen[teamID] {
+				continue
+			}
+			seen[teamID] = true
+			of := stat
+			of.TeamID = teamID
+			expanded = append(expanded, of)
+		}
+	}
+	return expanded
+}
+
 // ComputeLandscape ports compute_ic_landscape_rolling (compute_ic.py:189).
 //
 // Normalization is PER TEAM: each identity's x and y are ranked against the

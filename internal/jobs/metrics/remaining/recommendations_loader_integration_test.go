@@ -253,7 +253,10 @@ func assertOwnershipIsResolvedAsOfWindowEnd(t *testing.T, alpha MetricsSnapshot)
 	// pinning a literal states the INTENT (this average) rather than a
 	// snapshot of whatever rounding happened to produce.
 	wantLatency := (repoAlphaLatency + repoLateAcquiredLatency) / 2
-	wantRework := (repoAlphaRework + repoLateAcquiredRework) / 2
+	// The rework ratio is the ratio of the window's summed counts over the
+	// team's repositories (package prrework), not a mean of stored ratios:
+	// the seeded counts of the two repositories, summed.
+	wantRework := float64(seedReworkPullRequests(repoAlphaRework)+seedReworkPullRequests(repoLateAcquiredRework)) / float64(2*seedReviewedPullRequests)
 
 	if !alpha.ReviewLatencyP75HoursKnown || !sameFloat64(alpha.ReviewLatencyP75Hours, wantLatency) {
 		t.Errorf("alpha review_latency_p75_hours = %v/%v, want %v/true -- "+
@@ -324,6 +327,18 @@ func assertZeroOwnedReposIsAbsentNotOrgWide(
 				signal.name, signal.value)
 		}
 	}
+}
+
+// seedReviewedPullRequests is the number of merged, reviewed pull requests each
+// seeded repo_metrics_daily row holds. The loader reads the rework ratio from
+// the stored counts, so a seed carries its ratio as counts: this many reviewed
+// pull requests, and seedReworkPullRequests of them with changes requested.
+const seedReviewedPullRequests = 10000
+
+// seedReworkPullRequests is the reviewed pull requests with changes requested
+// of a seeded row with the given ratio.
+func seedReworkPullRequests(ratio float64) uint32 {
+	return uint32(math.Round(ratio * seedReviewedPullRequests))
 }
 
 // assertCHAOS4897FixIsPresent executes the FIX rather than describing it.
@@ -478,7 +493,15 @@ func compareSnapshotAgainstPython(t *testing.T, teamID string, got MetricsSnapsh
 			got.HotspotChurnOverlap, got.HotspotChurnOverlapKnown, pythonStringOrAbsent(want.HotspotChurnOverlap))
 	} else {
 		compareOptional(t, teamID, "review_latency_p75_hours", got.ReviewLatencyP75Hours, got.ReviewLatencyP75HoursKnown, want.ReviewLatencyP75Hours)
-		compareOptional(t, teamID, "rework_churn_ratio", got.ReworkChurnRatio, got.ReworkChurnRatioKnown, want.ReworkChurnRatio)
+		// DECLARED DIVERGENCE, this one field: the reference reads the stored
+		// pr_rework_ratio of each repository's newest row (pull requests with
+		// changes requested / ALL merged pull requests, 0 where nothing was
+		// reviewed) and averages the repositories. Go reads the window's
+		// summed counts of REVIEWED pull requests and gives no value when the
+		// window holds none (package prrework). Logged, so both values are
+		// visible; the Go value has its own assertions in this file.
+		t.Logf("%s: rework_churn_ratio is a declared divergence: go=%v/%v py=%s",
+			teamID, got.ReworkChurnRatio, got.ReworkChurnRatioKnown, pythonStringOrAbsent(want.ReworkChurnRatio))
 		compareOptional(t, teamID, "hotspot_complexity_delta", got.HotspotComplexityDelta, got.HotspotComplexityDeltaKnown, want.HotspotComplexityDelta)
 		compareOptional(t, teamID, "hotspot_churn_overlap", got.HotspotChurnOverlap, got.HotspotChurnOverlapKnown, want.HotspotChurnOverlap)
 	}
@@ -893,10 +916,11 @@ func seedLoaderFixture(t *testing.T, ctx context.Context, conn driver.Conn) (res
 			(repo_id, day, commits_count, total_loc_touched, avg_commit_size_loc,
 			 large_commit_ratio, prs_merged, median_pr_cycle_hours, pr_cycle_p75_hours,
 			 pr_cycle_p90_hours, prs_with_first_review, large_pr_ratio, pr_rework_ratio,
-			 change_failure_rate, computed_at, org_id)
-			VALUES (?, ?, 0, 0, 0, 0, 0, 0, ?, 0, 0, 0, ?, 0, ?, ?)`,
-			seed.repo, mustDate(t, seed.day), seed.p75, seed.rework,
-			mustTimestamp(t, seed.computedAt), loaderOtherOrgID)
+			 change_failure_rate, computed_at, org_id, prs_merged_reviewed, prs_merged_rework)
+			VALUES (?, ?, 0, 0, 0, 0, ?, 0, ?, 0, 0, 0, ?, 0, ?, ?, ?, ?)`,
+			seed.repo, mustDate(t, seed.day), uint32(seedReviewedPullRequests), seed.p75, seed.rework,
+			mustTimestamp(t, seed.computedAt), loaderOtherOrgID,
+			uint32(seedReviewedPullRequests), seedReworkPullRequests(seed.rework))
 	}
 
 	// The second tenant must reach EVERY table the loader reads, not just two.
@@ -1036,10 +1060,11 @@ func seedLoaderFixture(t *testing.T, ctx context.Context, conn driver.Conn) (res
 			(repo_id, day, commits_count, total_loc_touched, avg_commit_size_loc,
 			 large_commit_ratio, prs_merged, median_pr_cycle_hours, pr_cycle_p75_hours,
 			 pr_cycle_p90_hours, prs_with_first_review, large_pr_ratio, pr_rework_ratio,
-			 change_failure_rate, computed_at, org_id)
-			VALUES (?, ?, 0, 0, 0, 0, 0, 0, ?, 0, 0, 0, ?, 0, ?, ?)`,
-			seed.repo, mustDate(t, seed.day), seed.p75, seed.rework,
-			mustTimestamp(t, seed.computedAt), loaderOrgID)
+			 change_failure_rate, computed_at, org_id, prs_merged_reviewed, prs_merged_rework)
+			VALUES (?, ?, 0, 0, 0, 0, ?, 0, ?, 0, 0, 0, ?, 0, ?, ?, ?, ?)`,
+			seed.repo, mustDate(t, seed.day), uint32(seedReviewedPullRequests), seed.p75, seed.rework,
+			mustTimestamp(t, seed.computedAt), loaderOrgID,
+			uint32(seedReviewedPullRequests), seedReworkPullRequests(seed.rework))
 	}
 
 	// team_repo_ownership: the CHAOS-4897 join's other half. Alpha owns
@@ -1235,10 +1260,11 @@ func seedVersionedOrg(t *testing.T, ctx context.Context, conn driver.Conn) {
 			(repo_id, day, commits_count, total_loc_touched, avg_commit_size_loc,
 			 large_commit_ratio, prs_merged, median_pr_cycle_hours, pr_cycle_p75_hours,
 			 pr_cycle_p90_hours, prs_with_first_review, large_pr_ratio, pr_rework_ratio,
-			 change_failure_rate, computed_at, org_id)
-			VALUES (?, ?, 0, 0, 0, 0, 0, 0, ?, 0, 0, 0, ?, 0, ?, ?)`,
-			seed.repo, mustDate(t, seed.day), seed.p75, seed.rework,
-			mustTimestamp(t, seed.computedAt), loaderVersionsOrgID)
+			 change_failure_rate, computed_at, org_id, prs_merged_reviewed, prs_merged_rework)
+			VALUES (?, ?, 0, 0, 0, 0, ?, 0, ?, 0, 0, 0, ?, 0, ?, ?, ?, ?)`,
+			seed.repo, mustDate(t, seed.day), uint32(seedReviewedPullRequests), seed.p75, seed.rework,
+			mustTimestamp(t, seed.computedAt), loaderVersionsOrgID,
+			uint32(seedReviewedPullRequests), seedReworkPullRequests(seed.rework))
 	}
 
 	// complexity halves (argMax per (day, repo)): the first-half day of repoOne is re-run with a LOWER value; the second half rises.
@@ -1467,9 +1493,13 @@ func assertVersionedRowsAreReadAsNewest(t *testing.T, ctx context.Context, conn 
 		t.Errorf("versions org: review latency = %v (known %v), want 30 (avg of the newest p75 of each repo: 20 and 40)",
 			got.ReviewLatencyP75Hours, got.ReviewLatencyP75HoursKnown)
 	}
-	if !got.ReworkChurnRatioKnown || got.ReworkChurnRatio != 0.25 {
-		t.Errorf("versions org: rework = %v (known %v), want 0.25 (avg of the newest rework of each repo: 0.1 and 0.4)",
-			got.ReworkChurnRatio, got.ReworkChurnRatioKnown)
+	// The rework ratio sums the window's counts: every day of a repository is
+	// in the sum (repoOne's two days and repoTwo's one), each as its newest
+	// version. It is not the newest day of each repository.
+	wantRework := float64(seedReworkPullRequests(0.90)+seedReworkPullRequests(0.10)+seedReworkPullRequests(0.40)) / float64(3*seedReviewedPullRequests)
+	if !got.ReworkChurnRatioKnown || got.ReworkChurnRatio != wantRework {
+		t.Errorf("versions org: rework = %v (known %v), want %v (the window's summed counts: 0.9, 0.1 and 0.4 of %d reviewed pull requests each)",
+			got.ReworkChurnRatio, got.ReworkChurnRatioKnown, wantRework, seedReviewedPullRequests)
 	}
 	if got.HotspotChurnOverlapKnown {
 		t.Errorf("versions org: hotspot_churn_overlap is PRESENT (%v); the only hotspot file has risk_score 0, which is not a hotspot",

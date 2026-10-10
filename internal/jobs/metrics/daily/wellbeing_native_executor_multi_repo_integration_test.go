@@ -49,7 +49,7 @@ func TestComputeFamilyWritesOneRowPerRepoForAMultiRepoTeam(t *testing.T) {
     is_active UInt8 DEFAULT 1, updated_at DateTime64(6) DEFAULT now(), last_synced DateTime64(6) DEFAULT now()
 ) ENGINE = ReplacingMergeTree ORDER BY (id)`,
 		`CREATE TABLE repos (
-    id UUID, repo String, org_id String, last_synced DateTime64(3, 'UTC')
+    id UUID, repo String, org_id String, provider String DEFAULT '', last_synced DateTime64(3, 'UTC')
 ) ENGINE = ReplacingMergeTree(last_synced) ORDER BY (id)`,
 		`CREATE TABLE git_commits (
     repo_id UUID, hash String, author_name Nullable(String), author_email Nullable(String),
@@ -65,6 +65,14 @@ func TestComputeFamilyWritesOneRowPerRepoForAMultiRepoTeam(t *testing.T) {
     after_hours_commit_ratio Float64, weekend_commit_ratio Float64,
     computed_at DateTime64(6, 'UTC'), org_id String, repo_id String
 ) ENGINE = MergeTree PARTITION BY toYYYYMM(day) ORDER BY (org_id, team_id, day)`,
+		// The ownership read of the executor (CHAOS-9084 class); empty here, so
+		// the repo_patterns fallback resolves the team as before.
+		`CREATE TABLE team_repo_ownership (org_id String, provider String, team_id String, repo_id Nullable(UUID),
+      repo_full_name String, match_type Enum8('exact' = 1, 'pattern' = 2),
+      source Enum8('native' = 1, 'jira_legacy' = 2, 'provider_access' = 3, 'manual' = 4, 'inferred' = 5),
+      is_primary UInt8 DEFAULT 0, specificity UInt16 DEFAULT 0, priority Int32 DEFAULT 0,
+      valid_from DateTime64(3, 'UTC'), valid_to Nullable(DateTime64(3, 'UTC')), updated_at DateTime64(3, 'UTC'))
+      ENGINE = ReplacingMergeTree(updated_at) ORDER BY (org_id, provider, repo_full_name, team_id, source, valid_from)`,
 	} {
 		if err := conn.Exec(ctx, statement); err != nil {
 			t.Fatal(err)

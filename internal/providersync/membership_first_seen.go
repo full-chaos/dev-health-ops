@@ -88,7 +88,14 @@ func ReuseFirstSeenMembershipValidFrom[R any](
 	return out, nil
 }
 
-func readOpenMemberships(ctx context.Context, conn driver.Conn, orgID, provider, source string) ([]MembershipSnapshotRow, error) {
+// membershipQuerier is the one method of the connection the read uses, so a
+// test can make the read fail part-way (the error of the rows after the last
+// block is a different error from the error of the query).
+type membershipQuerier interface {
+	Query(ctx context.Context, query string, args ...any) (driver.Rows, error)
+}
+
+func readOpenMemberships(ctx context.Context, conn membershipQuerier, orgID, provider, source string) ([]MembershipSnapshotRow, error) {
 	result, err := conn.Query(ctx, membershipOpenRowsQuery, orgID, provider, source)
 	if err != nil {
 		return nil, err

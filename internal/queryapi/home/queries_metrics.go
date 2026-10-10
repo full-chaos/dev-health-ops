@@ -9,6 +9,7 @@ package home
 import (
 	"context"
 	"fmt"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/deltarule"
 	"strings"
 	"time"
 
@@ -323,20 +324,21 @@ func fetchMetricDriverDelta(ctx context.Context, client QueryClient, table, colu
         SELECT
             current.id AS id,
             current.value AS value,
-            CASE WHEN previous.value = 0 THEN 0 ELSE (current.value - previous.value) / previous.value * 100 END AS delta_pct
+            %s AS delta_pct
         FROM (
             SELECT %s AS id, avg(%s) AS value
             FROM %s
             GROUP BY %s
         ) AS current
         LEFT JOIN (
-            SELECT %s AS id, avg(%s) AS value
+            SELECT %s AS id, avg(%s) AS value, toUInt8(1) AS present
             FROM %s
             GROUP BY %s
         ) AS previous ON current.id = previous.id
+        WHERE delta_pct IS NOT NULL
         ORDER BY delta_pct DESC
         LIMIT {limit:UInt32}
-    `, groupBy, column, currentFrom, groupBy, groupBy, column, previousFrom, groupBy)
+    `, deltarule.DriverPercentSQL("current.value", "previous.value", "previous.present"), groupBy, column, currentFrom, groupBy, groupBy, column, previousFrom, groupBy)
 	bindings := append([]dhclickhouse.Binding{
 		{Name: "start_day", Value: formatDay(startDay)},
 		{Name: "end_day", Value: formatDay(endDay)},
@@ -355,7 +357,7 @@ func fetchMetricDriverDelta(ctx context.Context, client QueryClient, table, colu
 	var out []driverRow
 	for rows.Next() {
 		var id string
-		var value, deltaPct float64
+		var value, deltaPct *float64
 		if err := rows.Scan(&id, &value, &deltaPct); err != nil {
 			return nil, fmt.Errorf("home: fetch_metric_driver_delta scan: %w", err)
 		}
@@ -369,28 +371,29 @@ func fetchMetricDriverDelta(ctx context.Context, client QueryClient, table, colu
 // fetchChangeFailureDriverDelta is fetchMetricDriverDelta for change failure
 // rate: each group's value is the window rate of its own summed counts, and a
 // group whose current rate is undefined (no deployment or no incident
-// evidence) is not a driver. A group with no defined previous rate gets a 0
-// delta, like a previous value of 0.
+// evidence) is not a driver, and neither is a group without a delta: a group
+// with no row in the comparison window, or with no defined previous rate, is not
+// named as the driver of a percent it has no part in (deltarule.DriverPercentSQL).
 func fetchChangeFailureDriverDelta(ctx context.Context, client QueryClient, groupBy, currentFrom, previousFrom string, startDay, endDay, compareStart, compareEnd time.Time, scopeBindings []dhclickhouse.Binding, orgID string, limit int) ([]driverRow, error) {
 	query := fmt.Sprintf(`
         SELECT
             current.id AS id,
             assumeNotNull(current.value) AS value,
-            CASE WHEN ifNull(previous.value, 0) = 0 THEN 0 ELSE (assumeNotNull(current.value) - assumeNotNull(previous.value)) / assumeNotNull(previous.value) * 100 END AS delta_pct
+            %s AS delta_pct
         FROM (
             SELECT %s AS id, %s AS value
             FROM %s
             GROUP BY %s
         ) AS current
         LEFT JOIN (
-            SELECT %s AS id, %s AS value
+            SELECT %s AS id, %s AS value, toUInt8(1) AS present
             FROM %s
             GROUP BY %s
         ) AS previous ON current.id = previous.id
-        WHERE current.value IS NOT NULL
+        WHERE current.value IS NOT NULL AND delta_pct IS NOT NULL
         ORDER BY delta_pct DESC
         LIMIT {limit:UInt32}
-    `, groupBy, changefailure.WindowRateSQL, currentFrom, groupBy, groupBy, changefailure.WindowRateSQL, previousFrom, groupBy)
+    `, deltarule.DriverPercentSQL("current.value", "previous.value", "previous.present"), groupBy, changefailure.WindowRateSQL, currentFrom, groupBy, groupBy, changefailure.WindowRateSQL, previousFrom, groupBy)
 	bindings := append([]dhclickhouse.Binding{
 		{Name: "start_day", Value: formatDay(startDay)},
 		{Name: "end_day", Value: formatDay(endDay)},
@@ -409,7 +412,7 @@ func fetchChangeFailureDriverDelta(ctx context.Context, client QueryClient, grou
 	var out []driverRow
 	for rows.Next() {
 		var id string
-		var value, deltaPct float64
+		var value, deltaPct *float64
 		if err := rows.Scan(&id, &value, &deltaPct); err != nil {
 			return nil, fmt.Errorf("home: fetch_change_failure_driver_delta scan: %w", err)
 		}

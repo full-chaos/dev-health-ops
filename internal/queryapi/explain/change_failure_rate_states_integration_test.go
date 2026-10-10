@@ -132,16 +132,16 @@ func TestExplainChangeFailureRateStates_LiveEngine(t *testing.T) {
 		}
 		return got
 	}
-	if got := secondWeek(native); !got.HasData || !got.HasPriorData || !near(got.Value, 50) || !near(got.DeltaPct, 100) ||
+	if got := secondWeek(native); !got.HasData || !got.HasPriorData || !near(got.Value, 50) || !near(deltaOf(got.DeltaPct), 100) ||
 		got.RateState == nil || *got.RateState != string(changefailure.StateMeasured) {
 		t.Errorf("second week, measured after measured: value %v delta_pct %v has_data %v has_prior_data %v rate_state %v; want 50, 100, true, true, measured",
-			got.Value, got.DeltaPct, got.HasData, got.HasPriorData, got.RateState)
+			got.Value, deltaOf(got.DeltaPct), got.HasData, got.HasPriorData, got.RateState)
 	}
 	// An unknown prior week is not prior data, and the empty current week has
 	// no state: the prior week's "unknown" is not carried into it.
-	if got := secondWeek(unknown); got.HasData || got.HasPriorData || got.RateState != nil || got.DeltaPct != 0 {
+	if got := secondWeek(unknown); got.HasData || got.HasPriorData || got.RateState != nil || deltaOf(got.DeltaPct) != 0 {
 		t.Errorf("second week of the unknown repository: has_data %v has_prior_data %v rate_state %v delta_pct %v; want false, false, null, 0",
-			got.HasData, got.HasPriorData, got.RateState, got.DeltaPct)
+			got.HasData, got.HasPriorData, got.RateState, deltaOf(got.DeltaPct))
 	}
 
 	// Another metric carries no state.

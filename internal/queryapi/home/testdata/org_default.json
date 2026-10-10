@@ -248,7 +248,7 @@
   "summary": [
     {
       "id": "s1",
-      "text": "Rework Ratio rose 33% driven by team-alpha.",
+      "text": "Rework Ratio rose 33% driven by alpha-service.",
       "evidence_link": "/api/v1/explain?metric=rework_ratio\u0026scope_type=org\u0026scope_id=\u0026range_days=7\u0026compare_days=7"
     }
   ],

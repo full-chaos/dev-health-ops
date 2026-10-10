@@ -187,7 +187,9 @@ func orgGoldenHandler(t *testing.T) func(t *testing.T, query string, bindings []
 			return &fixtureRowScanner{rows: [][]any{{day(2023, 12, 26), 8.0}}}, nil
 
 		case strings.Contains(q, "delta_pct") && strings.Contains(q, "AS previous ON"):
-			return &fixtureRowScanner{rows: [][]any{{"team-alpha", 10.0, 20.0}}}, nil
+			// the driver of the summary sentence: a repository (rework_ratio is a
+			// repository metric), served by its name
+			return &fixtureRowScanner{rows: [][]any{{"repo-alpha", 10.0, 20.0}}}, nil
 
 		case strings.Contains(q, "FROM repo_change_failure_daily"):
 			// Change failure rate has no "(column)) AS value" marker. Its day
@@ -222,7 +224,7 @@ func orgGoldenHandler(t *testing.T) func(t *testing.T, query string, bindings []
 			}}, nil
 
 		case strings.Contains(q, "FROM repos FINAL") && strings.Contains(q, "display_name"):
-			return &fixtureRowScanner{rows: [][]any{{"repo-1", "checkout-service"}}}, nil
+			return &fixtureRowScanner{rows: [][]any{{"repo-1", "checkout-service"}, {"repo-alpha", "alpha-service"}}}, nil
 		case strings.Contains(q, "FROM teams FINAL") && strings.Contains(q, "display_name"):
 			return &fixtureRowScanner{rows: [][]any{{"team-1", "Team Alpha"}}}, nil
 		}

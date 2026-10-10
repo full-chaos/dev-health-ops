@@ -66,11 +66,34 @@ var teamKeyExempt = map[string]string{
 	"work_unit_membership_scoped_runs":           "a ledger of runs; scope_id is the scope of a run, not a team id",
 }
 
+// teamValueExempt are the tables that hold a team id in a VALUE column (not in
+// the sorting key) and take no row of zeros, each with the reason. A table that
+// holds the team id in a value column and is a derived daily table of the
+// people pages takes the shared rule with a retraction marker instead
+// (teamkeytables.Table.Retracted).
+var teamValueExempt = map[string]string{
+	"capacity_forecasts":             "a forecast of one scope written by its own job, replaced by the next forecast of the same key; not a daily count of a team",
+	"ci_pipeline_runs":               "a fact table: one row is one pipeline run, keyed by the run; the team is the attribution of the run when it was stored",
+	"coverage_snapshots":             "a fact table of one coverage snapshot keyed by the snapshot; the team is the attribution of the snapshot when it was stored",
+	"team_provider_observations":     "a fact table of what a provider reported for a team (drift review input), keyed by the observation; not derived from a day's compute",
+	"test_suite_results":             "a fact table: one row is one suite result keyed by the result; the team is the attribution of the result when it was stored",
+	"testops_coverage_metrics_daily": "a testops family table keyed by its own scope; the team is a value of the row and the family replaces the row of its key on a recompute",
+	"testops_pipeline_metrics_daily": "a testops family table keyed by its own scope; the team is a value of the row and the family replaces the row of its key on a recompute",
+	"testops_pipeline_stability":     "a testops family table keyed by its own scope; the team is a value of the row and the family replaces the row of its key on a recompute",
+	"testops_quality_drag":           "a testops family table keyed by its own scope; the team is a value of the row and the family replaces the row of its key on a recompute",
+	"testops_release_confidence":     "a testops family table keyed by its own scope; the team is a value of the row and the family replaces the row of its key on a recompute",
+	"testops_test_metrics_daily":     "a testops family table keyed by its own scope; the team is a value of the row and the family replaces the row of its key on a recompute",
+	"work_item_blocked_durations_daily": "a per-item daily fact keyed by (day, provider, work item): one row is one item on one day; the team is the attribution of the item when it was computed. " +
+		"It holds the same kind of stale key as the user-level tables (an item that no longer qualifies for a day) and is NOT covered by the change that added the marker column: a follow-up",
+	"work_item_cycle_times": "a fact table: one row is one completed work item keyed by the item; the team is the attribution of the item when it was computed and the next compute of the item replaces the row",
+}
+
 // Reasons why a file that writes a team-keyed table is not a writer that
 // needs the rule.
 const (
 	teamKeyWriterUndispatched = "provider sync holds an adapter for the table that no destination reaches: the daily job owns the table"
 	teamKeyWriterFixture      = "a fixture of a test-support package"
+	teamKeyWriterOwnKeys      = "the ic_finalize family rewrites the keys of the repository partitions with the team of the person (the partition family retracts those) and keeps the stale-key rule of the keys only it makes (supersedeSynthesizedUserKeys)"
 )
 
 // teamKeyTableWriters is every file with an INSERT of a table that takes a
@@ -90,6 +113,17 @@ var teamKeyTableWriters = map[string]map[string]string{
 	"estimate_coverage_metrics_daily": {
 		"internal/jobs/metrics/daily/work_item_native_clickhouse.go":           "",
 		"internal/providersync/github_work_item_derived_effects_clickhouse.go": teamKeyWriterUndispatched,
+	},
+	"work_item_user_metrics_daily": {
+		"internal/jobs/metrics/daily/work_item_native_clickhouse.go":                  "",
+		"internal/providersync/github_work_item_metric_triplet_effects_clickhouse.go": teamKeyWriterUndispatched,
+		"internal/testsupport/crossorg/retracted_people.go":                           teamKeyWriterFixture,
+	},
+	"user_metrics_daily": {
+		"internal/jobs/metrics/daily/repouser/clickhouse.go":      "",
+		"internal/jobs/metrics/daily/icfinalize/executor.go":      teamKeyWriterOwnKeys,
+		"internal/testsupport/sessionscenario/sessionscenario.go": teamKeyWriterFixture,
+		"internal/testsupport/crossorg/retracted_people.go":       teamKeyWriterFixture,
 	},
 	"team_metrics_daily":           {"internal/jobs/metrics/daily/wellbeing_native_clickhouse.go": ""},
 	"ai_impact_metrics_daily":      {"internal/jobs/metrics/daily/ai_impact_native_clickhouse.go": ""},
@@ -165,6 +199,7 @@ var (
 	censusOrderBy     = regexp.MustCompile(`(?i)\bORDER BY\s+`)
 	censusKeyColumn   = regexp.MustCompile(`^(?:\w+\()*` + "`?" + `(\w+)` + "`?")
 	censusColumnHead  = regexp.MustCompile("^`?(\\w+)`?\\s+(.*)$")
+	censusAddColumn   = regexp.MustCompile(`(?im)^\s*ALTER TABLE\s+(\w+)\s+ADD COLUMN\s+(?:IF NOT EXISTS\s+)?` + "`?" + `(\w+)` + "`?" + `\s+([^;\n]+);`)
 )
 
 // parseCensusTables reads every CREATE TABLE of a piece of SQL.
@@ -239,6 +274,28 @@ func loadCensusTables(t *testing.T) map[string]censusTable {
 		for _, table := range parseCensusTables(t, file.SQL) {
 			tables[table.name] = table
 		}
+		// A column that a later migration adds (ALTER TABLE ... ADD COLUMN) is a
+		// column of the table: the census reads the head and what follows it.
+		for _, match := range censusAddColumn.FindAllStringSubmatch(file.SQL, -1) {
+			table, known := tables[match[1]]
+			if !known {
+				t.Fatalf("migration %s adds column %s to table %s, which the schema read does not hold", file.Version, match[2], match[1])
+			}
+			column := censusColumn{name: match[2], typ: strings.TrimSpace(match[3])}
+			if at := strings.Index(column.typ, " DEFAULT "); at >= 0 {
+				column.typ, column.defaulted = strings.TrimSpace(column.typ[:at]), strings.TrimSpace(column.typ[at+len(" DEFAULT "):])
+			}
+			present := false
+			for index := range table.columns {
+				if table.columns[index].name == column.name {
+					table.columns[index], present = column, true
+				}
+			}
+			if !present {
+				table.columns = append(table.columns, column)
+			}
+			tables[match[1]] = table
+		}
 	}
 	if len(tables) < 50 {
 		t.Fatalf("read %d tables from the schema: the census did not measure", len(tables))
@@ -260,6 +317,18 @@ func (table censusTable) teamKeyed() bool {
 	return false
 }
 
+// holdsTeamID says whether any column of the table holds a team id, in the
+// sorting key or not (CHAOS-9135): a table whose team is a value column is a
+// team table too, and a stale row of it is the same defect.
+func (table censusTable) holdsTeamID() bool {
+	for _, column := range table.columns {
+		if teamKeyColumns[column.name] {
+			return true
+		}
+	}
+	return false
+}
+
 func TestEveryTeamKeyedTableCensusHasADecision(t *testing.T) {
 	tables := loadCensusTables(t)
 	shared := map[string]bool{}
@@ -271,7 +340,7 @@ func TestEveryTeamKeyedTableCensusHasADecision(t *testing.T) {
 	}
 	teamKeyed := 0
 	for name, table := range tables {
-		if !table.teamKeyed() {
+		if !table.holdsTeamID() {
 			continue
 		}
 		teamKeyed++
@@ -288,9 +357,18 @@ func TestEveryTeamKeyedTableCensusHasADecision(t *testing.T) {
 				t.Errorf("table %s is exempt with no written reason", name)
 			}
 		}
+		if reason, exempt := teamValueExempt[name]; exempt {
+			decisions++
+			if len(strings.TrimSpace(reason)) < 40 {
+				t.Errorf("table %s is exempt with no written reason", name)
+			}
+			if table.teamKeyed() {
+				t.Errorf("table %s is exempt as a table with a team id in a VALUE column and holds it in its sorting key: use teamKeyExempt", name)
+			}
+		}
 		if decisions != 1 {
-			t.Errorf("table %s holds a team id in its sorting key %v and has %d decision(s), want exactly 1: "+
-				"declare it in StaleTeamKeyTables (the shared rule), in teamKeyOwnRule, or in teamKeyExempt with the reason",
+			t.Errorf("table %s holds a team id in a column (sorting key %v) and has %d decision(s), want exactly 1: "+
+				"declare it in StaleTeamKeyTables (the shared rule), in teamKeyOwnRule, or in teamKeyExempt / teamValueExempt with the reason",
 				name, table.sortingKey, decisions)
 		}
 	}
@@ -300,8 +378,8 @@ func TestEveryTeamKeyedTableCensusHasADecision(t *testing.T) {
 	// A decision for a table that the schema does not hold as team-keyed is
 	// stale.
 	for _, name := range decidedTeamKeyTables() {
-		if table, known := tables[name]; !known || !table.teamKeyed() {
-			t.Errorf("table %s has a decision in the census and is not a team-keyed table of the schema", name)
+		if table, known := tables[name]; !known || !table.holdsTeamID() {
+			t.Errorf("table %s has a decision in the census and holds no team id column in the schema", name)
 		}
 	}
 }
@@ -315,6 +393,9 @@ func decidedTeamKeyTables() []string {
 		names = append(names, name)
 	}
 	for name := range teamKeyExempt {
+		names = append(names, name)
+	}
+	for name := range teamValueExempt {
 		names = append(names, name)
 	}
 	sort.Strings(names)
@@ -367,6 +448,37 @@ func TestEveryStaleKeyTableCensusDeclarationAgreesWithTheSchema(t *testing.T) {
 			if !contains(table.sortingKey, "org_id") || !contains(table.sortingKey, declared.DayColumn) ||
 				columns[declared.DayColumn].typ != "Date" {
 				t.Errorf("the sorting key %v must hold org_id and the Date column %s", table.sortingKey, declared.DayColumn)
+			}
+			if declared.Retracted != "" {
+				// A table whose team is a VALUE column: the declaration holds the
+				// sorting key, the marker and the columns the row of zeros copies.
+				if !teamKeyColumns[declared.TeamColumn] || contains(gotKeys, declared.TeamColumn) {
+					t.Errorf("team column %q must be a team-id VALUE column of the table (not in the sorting key)", declared.TeamColumn)
+				}
+				if _, exists := columns[declared.TeamColumn]; !exists {
+					t.Errorf("team column %q is not a column of the table", declared.TeamColumn)
+				}
+				marker, exists := columns[declared.Retracted]
+				if !exists || marker.typ != "UInt8" || strings.TrimSpace(marker.defaulted) != "0" {
+					t.Errorf("marker column %q must be a UInt8 DEFAULT 0 column of the table, got %+v", declared.Retracted, marker)
+				}
+				for _, carried := range declared.Carried {
+					if _, exists := columns[carried.Name]; !exists {
+						t.Errorf("carried column %q is not a column of the table", carried.Name)
+					}
+				}
+				for _, scope := range declared.Scope {
+					if !contains(gotKeys, scope) {
+						t.Errorf("scope column %q must be a key column", scope)
+					}
+				}
+				if len(declared.Measures)+len(declared.NullableMeasures)+len(declared.Counts)+len(declared.Marker) != 0 {
+					t.Errorf("a table with a marker column declares no measure: a row of zeros is told by the marker, not by a measure")
+				}
+				if columns["computed_at"].name == "" {
+					t.Errorf("the table has no computed_at column")
+				}
+				return
 			}
 			if !teamKeyColumns[declared.TeamColumn] || !contains(gotKeys, declared.TeamColumn) {
 				t.Errorf("team column %q is not a team-id key column of the table", declared.TeamColumn)

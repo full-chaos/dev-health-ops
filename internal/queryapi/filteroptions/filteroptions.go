@@ -84,6 +84,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/scopelabel"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph/units"
+	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse/liverow"
 )
 
 // QueryClient is the read-only ClickHouse query boundary this package
@@ -146,6 +147,7 @@ var teamsQuery = `
             FROM user_metrics_daily FINAL
             WHERE team_id != ''
               AND org_id = {org_id:String}
+              AND ` + liverow.Predicate("user_metrics_daily", "") + `
               AND ` + activeteams.ListablePredicate("team_id") + `
 
             UNION ALL
@@ -154,6 +156,7 @@ var teamsQuery = `
             FROM work_item_user_metrics_daily FINAL
             WHERE team_id != ''
               AND org_id = {org_id:String}
+              AND ` + liverow.Predicate("work_item_user_metrics_daily", "") + `
               AND ` + activeteams.ListablePredicate("team_id") + `
         )
         WHERE value != ''
@@ -206,10 +209,11 @@ const reposQuery = `
 // declared FINAL fix above. The email-shape filter is applied by the
 // caller after the read, matching the reference's own post-read list
 // comprehension.
-const developersQuery = `
+var developersQuery = `
         SELECT DISTINCT author_email AS value
         FROM user_metrics_daily FINAL
         WHERE author_email != '' AND org_id = {org_id:String}
+          AND ` + liverow.Predicate("user_metrics_daily", "") + `
         ORDER BY author_email
     `
 

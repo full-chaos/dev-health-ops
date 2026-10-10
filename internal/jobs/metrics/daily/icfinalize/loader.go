@@ -6,6 +6,7 @@ import (
 
 	"github.com/ClickHouse/clickhouse-go/v2"
 
+	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse/liverow"
 	"github.com/full-chaos/dev-health-ops/internal/teamactive"
 )
 
@@ -51,7 +52,7 @@ const rollingWindowDays = 29
 // team of the person's NEWEST row instead (by computed_at; the day and the
 // repository id break a tie, so two runs over the same rows agree), and
 // LoadRollingStats then drops an inactive id from it.
-const rollingStatsSQL = `
+var rollingStatsSQL = `
 SELECT
     identity_id,
     argMax(team_id, tuple(computed_at, day, repo_id)) AS team_id,
@@ -67,6 +68,7 @@ FROM (
 ) AS user_metrics_daily
 WHERE day >= {start:Date} AND day <= {end:Date}
   AND org_id = {org_id:String}
+  AND ` + liverow.Predicate("user_metrics_daily", "user_metrics_daily") + `
 GROUP BY identity_id`
 
 // LoadRollingStats reads the 30-day rolling window for one organization.

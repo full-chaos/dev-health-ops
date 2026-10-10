@@ -13,6 +13,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/daily/repouser"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/prrework"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
+	"github.com/full-chaos/dev-health-ops/internal/teamkeytables"
 )
 
 // repoUserCommitWindowDays mirrors job_daily.py's h_start_date = d - timedelta(days=29):
@@ -204,7 +205,27 @@ func (executor *RepoUserCommitExecutor) ComputeFamily(
 	if err != nil {
 		return wrapRepoUserCommitPartialWrite(repoRows+userRows+commitRows+changeFailureRows, fmt.Errorf("write change failure: %w", err))
 	}
-	return repoRows + userRows + commitRows + changeFailureRows, nil
+	// The stale-key rule of user_metrics_daily (CHAOS-9135): a (repository,
+	// person) key of the day and of this partition's repositories that this
+	// compute did not produce gets a row of zeros that carries the retraction
+	// marker. The sorting key holds no team, so a key that was given to another
+	// team is replaced by the row itself; only a key that is no longer produced
+	// at all needs the row.
+	produced := make([]staleKey, 0, len(result.UserMetrics))
+	for _, row := range result.UserMetrics {
+		produced = append(produced, staleKey{row.RepoID.String(), row.AuthorEmail})
+	}
+	repositories := make([][]string, 0, len(repoIDs))
+	for _, repoID := range repoIDs {
+		repositories = append(repositories, []string{repoID.String()})
+	}
+	superseded, err := supersedeStaleTeamKeys(ctx, executor.conn, teamkeytables.UserMetricsDaily, run.OrganizationID, dayStart,
+		newStaleKeyScope(repositories...), produced, computedAt)
+	total := repoRows + userRows + commitRows + changeFailureRows + superseded
+	if err != nil {
+		return wrapRepoUserCommitPartialWrite(total, fmt.Errorf("retract stale user_metrics_daily keys: %w", err))
+	}
+	return total, nil
 }
 
 // wrapRepoUserCommitPartialWrite mirrors wrapAIGovernancePartialWrite's/

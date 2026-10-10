@@ -13,8 +13,10 @@
 //     and _build_cycle_breakdown_tree/_build_code_hotspots_tree/
 //     _build_throughput_tree, _sanitize_label.
 //   - api/queries/aggregated_flame.py -- fetch_cycle_breakdown,
-//     fetch_cycle_milestones, fetch_code_hotspots, fetch_repo_names,
-//     fetch_throughput, fetch_throughput_by_type.
+//     fetch_code_hotspots, fetch_repo_names, fetch_throughput,
+//     fetch_throughput_by_type. (fetch_cycle_milestones, Python's fallback
+//     read of work_item_cycle_milestones_daily, is NOT ported: the table has
+//     no migration and no writer -- CHAOS-6606, buildCycleBreakdown.)
 //   - api/models/schemas.py -- AggregatedFlameNode/ApproximationInfo/
 //     AggregatedFlameMeta/AggregatedFlameResponse, the wire shape.
 //
@@ -31,7 +33,7 @@
 //   - work_item_state_durations_daily is ReplacingMergeTree(computed_at)
 //     (001_metrics_v2.sql, converted by migration 096), sort-keyed
 //     (org_id, provider, work_scope_id, team_id, status, day). Python's
-//     own fetch_cycle_breakdown/fetch_cycle_milestones already dedup with
+//     own fetch_cycle_breakdown already dedups with
 //     an inner argMax(col, computed_at) GROUP BY the full sort key before
 //     summing -- this port keeps that exact shape (matching the identical,
 //     already-reviewed pattern in internal/operatingreview's
@@ -239,25 +241,14 @@ func buildCycleBreakdown(ctx context.Context, client QueryClient, orgID string, 
 	var root Node
 
 	if len(rows) == 0 {
-		milestoneRows, err := fetchCycleMilestones(ctx, client, orgID, params.StartDay, params.EndDay, params.TeamID, params.Provider, params.WorkScopeID)
-		if err != nil {
-			return nil, fmt.Errorf("aggflame: fetch_cycle_milestones: %w", err)
-		}
-		if len(milestoneRows) > 0 {
-			notes = append(notes, "Detailed state transition data unavailable. Using milestone-based approximation.")
-			method := "milestones"
-			approx = ApproximationInfo{Used: true, Method: &method}
-			remapped := make([]cycleBreakdownRow, len(milestoneRows))
-			for i, r := range milestoneRows {
-				remapped[i] = cycleBreakdownRow{
-					Status:     r.Milestone,
-					TotalHours: r.AvgHours * float64(r.TotalItems),
-				}
-			}
-			root = buildCycleBreakdownTree(remapped)
-		} else {
-			root = Node{Name: "Cycle Time", Value: 0, Children: []Node{}}
-		}
+		// CHAOS-6606: no state-duration row for this window/scope is the empty
+		// "Cycle Time" tree. Python fell back to a read of
+		// work_item_cycle_milestones_daily here and Go ported that read, but the
+		// table has no migration and no writer, so the fallback could never
+		// return a row; on a migrated database it only turned an empty window
+		// into a 503. It is not ported: a failure of the state-duration read
+		// above still returns an error.
+		root = Node{Name: "Cycle Time", Value: 0, Children: []Node{}}
 	} else {
 		root = buildCycleBreakdownTree(rows)
 	}

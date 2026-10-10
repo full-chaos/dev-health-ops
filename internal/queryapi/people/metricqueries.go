@@ -56,20 +56,29 @@ func formatDay(t time.Time) string {
 //     contract, rather than requiring every scan-site here to defend
 //     against a NULL scanned into a bare (non-pointer) float64
 //     destination.
+//  3. `toUInt64(count(col))` (known_count): the number of stored, non-NULL
+//     values behind the aggregate. The coalesce above turns "no value" into 0,
+//     so the value alone cannot tell a measured 0 from a window with no rows;
+//     the count is the only place that keeps the difference (CHAOS-9044, the
+//     same flag the Home and /explain readers keep).
 const personMetricValueQuery = `
 SELECT
-    coalesce(toFloat64(%s(%s)), 0) AS value
-FROM %s
+    toUInt64(count(%[2]s)) AS known_count,
+    coalesce(toFloat64(%[1]s(%[2]s)), 0) AS value
+FROM %[3]s
 WHERE day >= {start_day:Date} AND day < {end_day:Date}
-  AND %s IN {identities:Array(String)}
-  %s
+  AND %[4]s IN {identities:Array(String)}
+  %[5]s
   AND org_id = {org_id:String}
-%s
+%[6]s
 `
 
 // fetchPersonMetricValue ports fetch_person_metric_value (queries/
-// people.py:82-112): a single aggregate over [startDay, endDay).
-func fetchPersonMetricValue(ctx context.Context, client QueryClient, table, column, aggregator, identityColumn string, identities []string, startDay, endDay time.Time, extraWhere, orgID string) (float64, error) {
+// people.py:82-112): a single aggregate over [startDay, endDay). hasData is
+// true when the window holds at least one stored (non-NULL) value for the
+// column; value is then a measurement (a stored 0 included). When false the
+// value is a 0 placeholder, not a measured zero (CHAOS-9044).
+func fetchPersonMetricValue(ctx context.Context, client QueryClient, table, column, aggregator, identityColumn string, identities []string, startDay, endDay time.Time, extraWhere, orgID string) (value float64, hasData bool, err error) {
 	query := fmt.Sprintf(personMetricValueQuery, aggregator, column, dedupTable(table), identityColumn, extraWhere, settingsMaxExecutionTime())
 	bindings := []dhclickhouse.Binding{
 		{Name: "start_day", Value: formatDay(startDay)},
@@ -79,26 +88,26 @@ func fetchPersonMetricValue(ctx context.Context, client QueryClient, table, colu
 	}
 	rows, err := client.Query(ctx, query, bindings)
 	if err != nil {
-		return 0, fmt.Errorf("people: fetch_person_metric_value query: %w", err)
+		return 0, false, fmt.Errorf("people: fetch_person_metric_value query: %w", err)
 	}
 	defer rows.Close()
 
-	var value float64
+	var knownCount uint64
 	found := false
 	if rows.Next() {
 		found = true
-		if err := rows.Scan(&value); err != nil {
-			return 0, fmt.Errorf("people: fetch_person_metric_value scan: %w", err)
+		if err := rows.Scan(&knownCount, &value); err != nil {
+			return 0, false, fmt.Errorf("people: fetch_person_metric_value scan: %w", err)
 		}
 	}
 	if err := rows.Err(); err != nil {
-		return 0, fmt.Errorf("people: fetch_person_metric_value: %w", err)
+		return 0, false, fmt.Errorf("people: fetch_person_metric_value: %w", err)
 	}
 	if !found {
 		// `if not rows: return 0.0` (queries/people.py:110-111).
-		return 0.0, nil
+		return 0.0, false, nil
 	}
-	return value, nil
+	return value, knownCount > 0, nil
 }
 
 // personMetricTimeseriesRow is one row fetchPersonMetricSeries returns --

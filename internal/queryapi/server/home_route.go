@@ -43,11 +43,13 @@ const (
 const homeEnabledEnvVar = "GO_API_HOME_ENABLED"
 
 // homeRESTResponse is the frozen Python REST response shape. The newer
-// GraphQL Home contract carries the no-data flags and permits a nil
-// constraint. The old Pydantic HomeResponse cannot carry either shape, so
-// REST preserves its required constraint object and omits GraphQL-only flags.
-// A no-data REST response has an empty constraint card; health_state.status is
-// still "no_data", and it contains no claim, evidence, or experiment.
+// GraphQL Home contract permits a nil constraint; the old Pydantic
+// HomeResponse cannot carry that shape, so REST preserves its required
+// constraint object. A response with no constraint (no data at all, or no metric
+// with two measured windows) has an empty constraint card; health_state.status
+// is still "no_data" when nothing has data, and the card contains no claim,
+// evidence, or experiment. Each delta carries the no-data flags and the change
+// failure rate state after the frozen fields (homeRESTMetricDelta).
 type homeRESTResponse struct {
 	Freshness             home.Freshness               `json:"freshness"`
 	Deltas                []homeRESTMetricDelta        `json:"deltas"`
@@ -62,28 +64,38 @@ type homeRESTResponse struct {
 	DataConfidence        home.DataConfidence          `json:"data_confidence"`
 }
 
-// homeRESTMetricDelta is the frozen Python MetricDelta shape. hasData and
-// hasPriorData are GraphQL-only distinctions, because FastAPI drops fields it
-// does not declare in its legacy REST model.
+// homeRESTMetricDelta is the frozen Python MetricDelta shape plus three
+// Go-only fields at the end (CHAOS-9044): has_data / has_prior_data (the
+// window holds a stored value; when false the matching value is a 0
+// placeholder, not a measured zero, and delta_pct is 0) and rate_state (why
+// change failure rate has a value or not; null for every other metric and
+// when the window holds no stored counts). The frozen fields keep their
+// order and meaning, so a client that ignores the new ones reads what it read.
 type homeRESTMetricDelta struct {
-	Metric   string            `json:"metric"`
-	Label    string            `json:"label"`
-	Value    float64           `json:"value"`
-	Unit     string            `json:"unit"`
-	DeltaPct float64           `json:"delta_pct"`
-	Spark    []home.SparkPoint `json:"spark"`
+	Metric       string            `json:"metric"`
+	Label        string            `json:"label"`
+	Value        float64           `json:"value"`
+	Unit         string            `json:"unit"`
+	DeltaPct     *float64          `json:"delta_pct"`
+	Spark        []home.SparkPoint `json:"spark"`
+	HasData      bool              `json:"has_data"`
+	HasPriorData bool              `json:"has_prior_data"`
+	RateState    *string           `json:"rate_state"`
 }
 
 func homeRESTResponseFrom(resp *home.Response) homeRESTResponse {
 	deltas := make([]homeRESTMetricDelta, 0, len(resp.Deltas))
 	for _, delta := range resp.Deltas {
 		deltas = append(deltas, homeRESTMetricDelta{
-			Metric:   delta.Metric,
-			Label:    delta.Label,
-			Value:    delta.Value,
-			Unit:     delta.Unit,
-			DeltaPct: delta.DeltaPct,
-			Spark:    delta.Spark,
+			Metric:       delta.Metric,
+			Label:        delta.Label,
+			Value:        delta.Value,
+			Unit:         delta.Unit,
+			DeltaPct:     delta.DeltaPct,
+			Spark:        delta.Spark,
+			HasData:      delta.HasData,
+			HasPriorData: delta.HasPriorData,
+			RateState:    delta.RateState,
 		})
 	}
 

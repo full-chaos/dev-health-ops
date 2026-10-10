@@ -3,6 +3,7 @@ package workerservice
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/full-chaos/dev-health-ops/internal/httpguard"
 	envsecrets "github.com/full-chaos/dev-health-ops/internal/platform/secrets"
@@ -87,6 +88,14 @@ func (writer dailyPostSyncWriter) FullOrganizationDays(plan syncdispatchruntime.
 
 func (dailyPostSyncWriter) RepositoryLimit() int { return daily.MaxRepositoriesPerRun }
 
+// StampTakeTx records the take time of the fan-out on the runs of its sync run.
+func (writer dailyPostSyncWriter) StampTakeTx(
+	ctx context.Context, tx pgx.Tx, plan syncdispatchruntime.PostSyncPlan, takenAt time.Time,
+) error {
+	return unwrittenTake(writer.store.StampTouchedTakeTx(
+		ctx, tx, plan.OrganizationID, "post-sync:"+plan.SyncRunID, takenAt))
+}
+
 // StartTouchedDayTx starts the run of one day that stored raw rows touched,
 // outside the window StartRunTx computes (CHAOS-8813). The run belongs to the
 // generation of the sync run, as the window runs do.
@@ -145,14 +154,31 @@ func (runs touchedDrainRuns) OwnedKeysOfRunsWithoutResult(
 	return touchedRunKeys(owned), truncated, nil
 }
 
-func (runs touchedDrainRuns) RunsWithResultOfPass(
-	ctx context.Context, organizationID, endedRunID string,
-) ([]syncdispatchruntime.TouchedRunKeys, error) {
-	listed, err := runs.store.TouchedDrainRunsWithResultOfPass(ctx, organizationID, endedRunID)
+func (runs touchedDrainRuns) MarkingRunsToCheck(
+	ctx context.Context, organizationID, endedRunID string, window time.Duration, limit int,
+) ([]syncdispatchruntime.TouchedRunKeys, bool, error) {
+	listed, truncated, err := runs.store.TouchedMarkingRunsToCheck(ctx, organizationID, endedRunID, window, limit)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
-	return touchedRunKeys(listed), nil
+	return touchedRunKeys(listed), truncated, nil
+}
+
+// StampTakeTx records the take time of the pass on its runs, in the transaction
+// that started them.
+func (runs touchedDrainRuns) StampTakeTx(
+	ctx context.Context, tx pgx.Tx, organizationID, passID string, takenAt time.Time,
+) error {
+	return unwrittenTake(runs.store.StampTouchedTakeTx(
+		ctx, tx, organizationID, daily.TouchedDrainGenerationPrefix+passID, takenAt))
+}
+
+// unwrittenTake names the one error of a stamp that the caller goes on after.
+func unwrittenTake(err error) error {
+	if errors.Is(err, daily.ErrTouchedTakeColumnAbsent) {
+		return syncdispatchruntime.ErrTouchedTakeTimeUnwritten
+	}
+	return err
 }
 
 func touchedRunKeys(runs []daily.TouchedRunKeys) []syncdispatchruntime.TouchedRunKeys {

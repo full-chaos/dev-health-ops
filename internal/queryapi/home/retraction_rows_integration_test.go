@@ -42,10 +42,13 @@ func TestHomeReadersGiveRetractionRowsNoWeight(t *testing.T) {
 	}
 	defer func() { _ = client.Close() }()
 
-	// The window is the days computed again; the compare window of the driver
-	// read is the day that was not.
+	// The window is the days computed again. The driver read compares the later
+	// days of it with the earlier ones: a driver is named only when it holds a
+	// value in both windows, and the teams of the oldest day (not computed again)
+	// are under their retired ids, which the later days do not carry.
 	start, end := store.Days[1], store.Days[len(store.Days)-1].AddDate(0, 0, 1)
-	compareStart, compareEnd := store.Days[0], store.Days[1]
+	driverStart, driverEnd := store.Days[3], end
+	compareStart, compareEnd := store.Days[1], store.Days[3]
 
 	read := func(org string) homeAnswers {
 		t.Helper()
@@ -67,7 +70,7 @@ func TestHomeReadersGiveRetractionRowsNoWeight(t *testing.T) {
 			}
 			answers.Series[spec.Metric] = series
 			drivers, err := fetchMetricDriverDelta(ctx, client, spec.Table, spec.Column, metricGroup(spec.Metric),
-				start, end, compareStart, compareEnd, "", nil, org, 20)
+				driverStart, driverEnd, compareStart, compareEnd, "", nil, org, 20)
 			if err != nil {
 				t.Fatalf("%s %s drivers: %v", org, spec.Metric, err)
 			}

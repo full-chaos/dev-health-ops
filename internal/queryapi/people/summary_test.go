@@ -106,9 +106,9 @@ func newSummaryGoldenClient(t *testing.T) QueryClient {
 			pair := summaryGoldenValueTable[column]
 			startDay, _ := bindingValue(bindings, "start_day")
 			if startDay == "2024-06-02" {
-				return &scalarFloatScanner{value: pair[0]}, nil
+				return &valueWithCountScanner{known: 5, value: pair[0]}, nil
 			}
-			return &scalarFloatScanner{value: pair[1]}, nil
+			return &valueWithCountScanner{known: 5, value: pair[1]}, nil
 		}
 	}}
 }
@@ -133,6 +133,29 @@ func (s *nullableTimeScanner) Scan(dest ...any) error {
 }
 func (s *nullableTimeScanner) Err() error   { return nil }
 func (s *nullableTimeScanner) Close() error { return nil }
+
+// valueWithCountScanner replays personMetricValueQuery's one row: the number
+// of stored values behind the aggregate (known_count), then the value.
+type valueWithCountScanner struct {
+	known uint64
+	value float64
+	done  bool
+}
+
+func (s *valueWithCountScanner) Next() bool {
+	if s.done {
+		return false
+	}
+	s.done = true
+	return true
+}
+func (s *valueWithCountScanner) Scan(dest ...any) error {
+	*dest[0].(*uint64) = s.known
+	*dest[1].(*float64) = s.value
+	return nil
+}
+func (s *valueWithCountScanner) Err() error   { return nil }
+func (s *valueWithCountScanner) Close() error { return nil }
 
 type pairFloatScanner struct {
 	a, b float64
@@ -310,6 +333,16 @@ func TestGoldenBuildSummaryResponse(t *testing.T) {
 		t.Fatalf("BuildSummaryResponse: %v", err)
 	}
 	want := loadSummaryGolden(t)
+	// The frozen Python answer has no has_data / has_prior_data (CHAOS-9044,
+	// Go-only). Every delta of this fixture has stored values in both windows,
+	// so both flags must be true; they are then copied onto the frozen answer
+	// and everything else is compared as recorded.
+	for i := range got.Deltas {
+		if !got.Deltas[i].HasData || !got.Deltas[i].HasPriorData {
+			t.Fatalf("delta %s has has_data %v has_prior_data %v, want true/true (stored values in both windows)", got.Deltas[i].Metric, got.Deltas[i].HasData, got.Deltas[i].HasPriorData)
+		}
+		want.Deltas[i].HasData, want.Deltas[i].HasPriorData = true, true
+	}
 	if gotJSON, wantJSON := mustMarshal(t, got), mustMarshal(t, want); gotJSON != wantJSON {
 		t.Fatalf("response mismatch\n got:  %s\nwant: %s", gotJSON, wantJSON)
 	}
@@ -336,5 +369,24 @@ func TestBuildSummaryResponsePersonNotFound(t *testing.T) {
 	}
 	if reqErr.Status != 404 || reqErr.Message != "Person not found" {
 		t.Fatalf("got %+v, want {404 Person not found}", reqErr)
+	}
+}
+
+// From a measured 0 the percent is undefined (null): the narrative names the
+// metric by the sign of the change, never "held steady", and ranks it below the
+// metrics that have a defined percent.
+func TestNarrativeNamesARiseFromAMeasuredZeroByItsDirection(t *testing.T) {
+	pct := func(v float64) *float64 { return &v }
+	fromZero := PersonDelta{Metric: "churn", Label: "Churn", Value: 5, DeltaPct: nil, HasData: true, HasPriorData: true}
+	defined := PersonDelta{Metric: "cycle_time", Label: "Cycle time", Value: 4, DeltaPct: pct(-20), HasData: true, HasPriorData: true}
+	steady := PersonDelta{Metric: "throughput", Label: "Throughput", Value: 0, DeltaPct: pct(0), HasData: true, HasPriorData: true}
+	got := narrativeForDeltas([]PersonDelta{fromZero, steady, defined}, "p", 14, 14)
+	if len(got) != 2 || got[0].Text != "Cycle time decreased over the last 14 days." || got[1].Text != "Code churn increased in this period." {
+		t.Errorf("narrative = %+v, want the defined percent first, then the rise from zero as increased (a true 0 %% ranks below it)", got)
+	}
+	for _, sentence := range got {
+		if strings.Contains(sentence.Text, "held steady") {
+			t.Errorf("narrative says held steady for a change: %q", sentence.Text)
+		}
 	}
 }

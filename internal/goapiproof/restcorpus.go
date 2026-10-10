@@ -1342,12 +1342,23 @@ var explainDriverRankOrderInsensitive = []OrderInsensitiveList{
 
 var explainParity = Options{
 	GoOnlyKeys: map[string]GoOnlyKey{
-		"data.source": {Ticket: "CHAOS-8910", Reason: "Go-only: the stored provider(s) behind the item; the Python reference never served it."},
+		"data.source":                      {Ticket: "CHAOS-8910", Reason: "Go-only: the stored provider(s) behind the item; the Python reference never served it."},
+		"data.drivers.has_data":            {Ticket: "CHAOS-9063", Reason: "Go-only: the driver holds a stored value in the current window; the Python reference never served it."},
+		"data.drivers.has_prior_data":      {Ticket: "CHAOS-9063", Reason: "Go-only: the driver holds a stored value in the comparison window; false = delta_pct is null. The Python reference never served it."},
+		"data.contributors.has_data":       {Ticket: "CHAOS-9063", Reason: "Go-only: the contributor holds a stored value in the current window; the Python reference never served it."},
+		"data.contributors.has_prior_data": {Ticket: "CHAOS-9063", Reason: "Go-only: a contributor row is read for the current window only, so it never has a comparison value; the Python reference never served it."},
 	},
 	NumericLeavesDeclared: true,
 	FloatTierB:            explainAggregateFloats,
 	OrderInsensitiveLists: explainDriverRankOrderInsensitive,
 	BaselineDefects: []BaselineDefect{
+		{
+			Ticket:             "CHAOS-9063",
+			Reason:             "the Python reference serves delta_pct 0.0 for a driver with no row in the comparison window (its LEFT JOIN default is 0) and 0.0 for every contributor row (explain.py's delta_value=0.0 literal); and 0.0 for a delta against a measured 0 (delta_pct returns 0.0 for a zero previous). Each stated a change nothing measured; the candidate serves null (a driver or contributor without a comparison row with has_prior_data false beside it, a percent against a measured 0 with both flags true).",
+			Paths:              []string{"data.delta_pct", "data.drivers.delta_pct", "data.contributors.delta_pct"},
+			Intermittent:       true,
+			IntermittentReason: "present only for a request whose response holds contributor rows, a driver row that has no comparison-window row, or a metric whose comparison window holds a stored 0; an empty response shows no difference",
+		},
 		{
 			Ticket: "CHAOS-5813",
 			Reason: "repos and teams are both ReplacingMergeTree (repos since 000_raw_tables.sql, teams since 002_teams.sql); resolveScopeDisplayNames' own Python source (identity.py) reads neither with FINAL or any argMax dedup, so an unmerged physical version of a driver's or contributor's repo/team row can surface as a stale display_name for that id (or, transiently, an extra physical row read as part of the same scan). This port reads both FINAL. Go is correct.",
@@ -1766,9 +1777,19 @@ var peopleSummaryNumericInts = map[string]string{
 
 var peopleSummaryParity = Options{
 	NumericLeavesDeclared: true,
-	FloatTierB:            peopleSummaryNumericFloats,
-	IntegerLeaves:         peopleSummaryNumericInts,
-	BaselineDefects:       append([]BaselineDefect{}, peopleDetailParity.BaselineDefects...),
+	GoOnlyKeys: map[string]GoOnlyKey{
+		"data.deltas.has_data":       {Ticket: "CHAOS-9044", Reason: "Go-only: the current window holds a stored value for the metric; false = value is a 0 placeholder, not a measured zero. The Python reference never served it."},
+		"data.deltas.has_prior_data": {Ticket: "CHAOS-9044", Reason: "Go-only: the comparison window holds a stored value; false = the delta has no base and delta_pct is 0. The Python reference never served it."},
+	},
+	FloatTierB:    peopleSummaryNumericFloats,
+	IntegerLeaves: peopleSummaryNumericInts,
+	BaselineDefects: append(append([]BaselineDefect{}, peopleDetailParity.BaselineDefects...), BaselineDefect{
+		Ticket:             "CHAOS-9063",
+		Reason:             "the reference's delta_pct returns 0.0 for a zero previous value, so a metric that rose from a measured 0 reads 0 %; the candidate serves null for it (the percent is undefined), with has_data and has_prior_data true beside it.",
+		Paths:              []string{"data.deltas.delta_pct"},
+		Intermittent:       true,
+		IntermittentReason: "present only while a person metric's prior window holds a stored 0 and its current window a non-zero value",
+	}),
 	OrderInsensitiveLists: peopleSummaryCollaborationOrderInsensitiveLists,
 }
 

@@ -354,9 +354,15 @@ func TestVenueOracleQueryAPIDictOrder(t *testing.T) {
 		{Name: "investment flow coverage", Route: "POST /api/v1/investment/flow", Kind: "flow",
 			Args: map[string]any{"filters": window, "flow_mode": "team_category_repo"}, method: http.MethodPost, path: "/api/v1/investment/flow",
 			body: `{"filters":{"time":{"range_days":7}},"flow_mode":"team_category_repo"}`},
-		// No cycle_breakdown case: both sides read work_item_cycle_milestones_daily,
-		// which no ClickHouse migration creates, so both answer 503 on a
-		// migrated database. Its filters order is pinned by a unit test.
+		// No cycle_breakdown case: this oracle's Python side, run on a migrated
+		// database, answers 503 for an empty window (its fallback read of
+		// work_item_cycle_milestones_daily, a table no ClickHouse migration
+		// creates), while query-api answers the empty tree (CHAOS-6606), so there
+		// is nothing to compare here. The recorded Python scenario of that
+		// fallback (testdata/cycle_breakdown_milestone_fallback.json in aggflame)
+		// is kept and its one declared difference is held by
+		// TestGoldenCycleBreakdownMilestoneFallbackIsADeclaredDifference. The
+		// filters order is pinned by a unit test.
 		{Name: "aggregated flame throughput filters", Route: "GET /api/v1/flame/aggregated", Kind: "aggflame",
 			Args:   map[string]any{"mode": "throughput", "start_day": start, "end_day": end, "team_id": "team-a", "repo_id": repoID},
 			method: http.MethodGet, path: "/api/v1/flame/aggregated?mode=throughput&start_date=" + start + "&end_date=" + end + "&team_id=team-a&repo_id=" + repoID},
@@ -395,6 +401,17 @@ func TestVenueOracleQueryAPIDictOrder(t *testing.T) {
 			// which the frozen Python model never had: compared without
 			// them, and only them (withoutExplainGoOnlyFields).
 			stripped, err := withoutExplainGoOnlyFields(goWritten)
+			if err != nil {
+				t.Fatalf("%s: %v", tc.Name, err)
+			}
+			goWritten = stripped
+		}
+		if tc.Kind == "home" && recorder.Code == http.StatusOK {
+			// Every REST Home delta ends with the three Go-only keys of
+			// CHAOS-9044, which the frozen Python model never had: compared
+			// without them, and only them (withoutHomeDeltaGoOnlyFields;
+			// a delta that lacks one fails).
+			stripped, err := withoutHomeDeltaGoOnlyFields(goWritten)
 			if err != nil {
 				t.Fatalf("%s: %v", tc.Name, err)
 			}

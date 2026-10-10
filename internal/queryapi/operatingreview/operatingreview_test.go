@@ -1053,3 +1053,15 @@ func TestErrSwallow_LogsRootCauseNotJustFixedString(t *testing.T) {
 		t.Fatalf("errSwallow's logged output = %q, want it to contain the real driver message %q -- every table's failure would otherwise log as indistinguishable fixed-string text", logged, driverErr.Error())
 	}
 }
+
+// A measured prior of 0 and a current value that is not 0 has no percent (null)
+// and keeps its status; the two presence flags stay true. Only a week without a
+// value serves a 0 percent (deltarule).
+func TestADeltaFromAMeasuredZeroHasNoPercentButKeepsItsStatus(t *testing.T) {
+	m := buildMetric("x", "X", 5, 0, "u", lowerIsBetter)
+	m.hasData = true
+	m = m.dataIn(periodRows{}, periodRows{}, func(periodRows) bool { return true })
+	if m.delta.percent != nil || m.delta.status != "worsened" || !m.hasData || !m.delta.hasPriorData || m.delta.absolute != 5 {
+		t.Errorf("delta = percent %v status %q absolute %v hasData %v hasPriorData %v, want null, worsened, 5, true, true", m.delta.percent, m.delta.status, m.delta.absolute, m.hasData, m.delta.hasPriorData)
+	}
+}

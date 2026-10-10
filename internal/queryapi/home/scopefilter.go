@@ -109,8 +109,9 @@ func resolveRepoIDs(ctx context.Context, client QueryClient, repoRefs []string, 
 // bounded by what the caller named, not by organization scale, so it stays a
 // plain array binding. A team scope contributes the repositories that team
 // OWNS, as teamscope.RepoCondition resolves them from team_repo_ownership.
-// The two are ORed when both are present, so a request naming a team and
-// explicit repos sees the union.
+// The two are ANDed when both are present (teamscope.NarrowRepoScope): a request
+// naming a team and explicit repos sees the repositories that are both, and a
+// filter whose named repositories resolve to nothing matches nothing.
 //
 // asOf is the response's own instant, so every metric in one response
 // resolves the same team membership.
@@ -132,23 +133,8 @@ func repoScopeFilter(ctx context.Context, client QueryClient, f Filters, orgID, 
 		teamCondition, teamBindings = teamscope.RepoCondition(orgID, repoColumn, f.Scope.IDs, asOf)
 	}
 
-	switch {
-	case len(repoRefs) > 0 && len(explicitIDs) == 0 && teamCondition == "":
-		// The request names repositories and none of them resolved: the filter
-		// matches nothing, so the metric has no data. (The Python original built no
-		// condition for an empty id list, so a filter that matched nothing served
-		// the unfiltered value; CHAOS-9093.)
-		return " AND 1 = 0", nil, nil
-	case len(explicitIDs) > 0 && teamCondition != "":
-		condition := fmt.Sprintf(" AND (%s IN {scope_ids:Array(String)} OR %s)", repoColumn, teamCondition)
-		return condition, append(scopeBindingsMulti(explicitIDs), teamBindings...), nil
-	case len(explicitIDs) > 0:
-		return scopeClauseMulti(explicitIDs, repoColumn), scopeBindingsMulti(explicitIDs), nil
-	case teamCondition != "":
-		return " AND " + teamCondition, teamBindings, nil
-	default:
-		return "", nil, nil
-	}
+	filter, bindings := teamscope.NarrowRepoScope(len(repoRefs) > 0, scopeClauseMulti(explicitIDs, repoColumn), scopeBindingsMulti(explicitIDs), teamCondition, teamBindings)
+	return filter, bindings, nil
 }
 
 // repoFilterRequested reports whether the request names repositories: the ids of

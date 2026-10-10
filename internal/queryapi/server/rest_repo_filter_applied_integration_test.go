@@ -87,12 +87,26 @@ func TestRESTHomeSaysWhetherTheRepositoryFilterNarrowedEachMetric(t *testing.T) 
 	check("repository scope", read("&scope_type=repo&scope_id="+url.QueryEscape(repo.String())), &yes, &no)
 	// Repositories named in what.repos (POST body) behave the same.
 	check("what.repos", postDeltas(t, client, org, `{"filters":{"what":{"repos":["`+repo.String()+`"]},"time":{"range_days":7,"compare_days":7,"end_date":"2026-08-25"}}}`), &yes, &no)
-	// A team scope that also names a repository which resolves to nothing keeps the team's own
-	// repositories (the empty match is only for refs that resolve to nothing and no team condition).
-	withTeam := postDeltas(t, client, org, `{"filters":{"scope":{"level":"team","ids":["team-one"]},"what":{"repos":["`+uuid.New().String()+`"]},"time":{"range_days":7,"compare_days":7,"end_date":"2026-08-25"}}}`)
-	check("team scope and an unresolved repository", withTeam, &yes, &no)
-	if d := withTeam["churn"]; d.HasData == nil || !*d.HasData || d.Value != 5 {
-		t.Errorf("team scope and an unresolved repository: churn has_data %s value %v, want the team's repository: data and 5", flag(d.HasData), d.Value)
+	// Filters narrow, they never widen: a team scope that also names a repository sees the
+	// repositories that are both named and owned by the team. team-one owns acme/checkout
+	// (churn 5) and not acme/other (churn 100).
+	team := func(extraRepo string) string {
+		return `{"filters":{"scope":{"level":"team","ids":["team-one"]},"what":{"repos":["` + extraRepo + `"]},"time":{"range_days":7,"compare_days":7,"end_date":"2026-08-25"}}}`
+	}
+	teamAndOwned := postDeltas(t, client, org, team(repo.String()))
+	check("team scope and an owned repository", teamAndOwned, &yes, &no)
+	if d := teamAndOwned["churn"]; d.HasData == nil || !*d.HasData || d.Value != 5 {
+		t.Errorf("team scope and an owned repository: churn has_data %s value %v, want 5", flag(d.HasData), d.Value)
+	}
+	teamAndOther := postDeltas(t, client, org, team(other.String()))
+	check("team scope and a repository the team does not own", teamAndOther, &yes, &no)
+	teamAndUnknown := postDeltas(t, client, org, team(uuid.New().String()))
+	check("team scope and an unresolved repository", teamAndUnknown, &yes, &no)
+	for name, deltas := range map[string]map[string]restDelta{"not owned": teamAndOther, "unresolved": teamAndUnknown} {
+		d := deltas["churn"]
+		if d.HasData == nil || *d.HasData || d.Value != 0 {
+			t.Errorf("team scope and a repository (%s): churn has_data %s value %v, want no data (the intersection is empty), never the team's 5 or the repository's 100", name, flag(d.HasData), d.Value)
+		}
 	}
 	// A repository that resolves to nothing: the filter was applied and found nothing, so the
 	// repository metrics are narrowed (true) AND have no data; they never serve the unfiltered

@@ -335,8 +335,14 @@ func TestRepoLinkedViewCombinesWithTeamByAnd(t *testing.T) {
 		sameDelta(t, name+": team alpha and both repositories", read(Filters{Scope: team("t-alpha"), What: WhatFilter{Repos: []string{oracleR1, oracleR2}}}), dailyAlpha)
 		// a repository the team has no linked item in: no data, never the team's value.
 		none := read(Filters{Scope: team("t-beta"), What: WhatFilter{Repos: []string{oracleR1}}})
-		if none.HasData || none.Value != 0 || none.RepoLinkState == nil || *none.RepoLinkState != repoLinkNoLinks {
-			t.Errorf("%s: team beta and repository 1 = value %v has_data %v state %v, want no data (no_links)", name, none.Value, none.HasData, none.RepoLinkState)
+		// D5864: repository 1 HAS linked items in the window (the state is a property of the link: linked);
+		// none of them is team beta's, so the metric has no data.
+		if none.HasData || none.Value != 0 || none.RepoLinkState == nil || *none.RepoLinkState != repoLinkLinked {
+			state := "<nil>"
+			if none.RepoLinkState != nil {
+				state = *none.RepoLinkState
+			}
+			t.Errorf("%s: team beta and repository 1 = value %v has_data %v state %s, want no data, linked", name, none.Value, none.HasData, state)
 		}
 		// named repositories that resolve to nothing.
 		unknown := read(Filters{What: WhatFilter{Repos: []string{"00000000-0000-4000-8000-0000000000ff"}}})

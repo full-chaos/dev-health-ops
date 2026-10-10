@@ -254,19 +254,24 @@ func TestARunOfTheWholeOrganizationLeavesTheKeysOfARepositoryTheOrganizationHold
 		const org = "00000000-0000-4000-8000-0000007e0003"
 		repository(org, sharedScopeRepoAPI, "acme/api", stored)
 		storedRows(org, sharedScopeRepoAPI, stored)
+		// A second key of the same repository in ai_impact_metrics_daily, so
+		// that the two tables do not hold the same count of keys.
+		exec("stored ai_impact row", `INSERT INTO ai_impact_metrics_daily
+    (org_id, team_id, repo_id, work_type, day, attribution_bucket, prs_total, prs_merged, human_prs, computed_at)
+    VALUES (?, 'ENG', ?, 'later', ?, 'human', 5, 5, 5, ?)`, org, sharedScopeRepoAPI, day, stored)
 		storedRows(org, orgDayRepoGone, stored)
 		orgRun := Run{ID: uuid.NewString(), OrganizationID: org, TargetDay: day, FullOrg: true}
 		_, _, notInRun := orgDayRepositoryLines(t, ctx, conn, orgRun, stored.Add(time.Hour))
 		held, gone := sharedScopeRepoAPI.String(), orgDayRepoGone.String()
-		if impactHeldNow, teamHeldNow := float(impactHeld, org, day, held), float(teamHeld, org, day, held); impactHeldNow != 10 || teamHeldNow != 7 {
-			t.Errorf("a run with no repository superseded the rows of a repository the organization holds: ai_impact %v, team_metrics %v, want 10 and 7", impactHeldNow, teamHeldNow)
+		if impactHeldNow, teamHeldNow := float(impactHeld, org, day, held), float(teamHeld, org, day, held); impactHeldNow != 20 || teamHeldNow != 7 {
+			t.Errorf("a run with no repository superseded the rows of a repository the organization holds: ai_impact %v, team_metrics %v, want 20 and 7", impactHeldNow, teamHeldNow)
 		}
 		if impactGone, teamGone := float(impactHeld, org, day, gone), float(teamHeld, org, day, gone); impactGone != 0 || teamGone != 0 {
 			t.Errorf("a repository the organization does not hold: ai_impact holds %v and team_metrics %v, want 0 and 0", impactGone, teamGone)
 		}
 		if notInRun == nil || notInRun["repositories_not_in_run"] != float64(1) ||
-			notInRun["team_metrics_daily_keys_left"] != float64(1) || notInRun["ai_impact_metrics_daily_keys_left"] != float64(1) {
-			t.Errorf("the line of the repository in no partition is %v, want 1 repository and 1 key left in each table", notInRun)
+			notInRun["team_metrics_daily_keys_left"] != float64(1) || notInRun["ai_impact_metrics_daily_keys_left"] != float64(2) {
+			t.Errorf("the line of the repository in no partition is %v, want 1 repository, 1 key of team_metrics_daily and 2 keys of ai_impact_metrics_daily left", notInRun)
 		}
 	})
 
@@ -316,8 +321,9 @@ func TestARunOfTheWholeOrganizationLeavesTheKeysOfARepositoryTheOrganizationHold
 				t.Errorf("the end of the older run wrote %v row(s) of zeros (%s) after the newer run settled the day, want none", value, field)
 			}
 		}
-		if notInRun == nil || notInRun["repositories_not_in_run"] != float64(1) {
-			t.Errorf("the end of the older run: the line of the repository in no partition is %v, want 1 repository", notInRun)
+		if notInRun == nil || notInRun["repositories_not_in_run"] != float64(1) ||
+			notInRun["team_metrics_daily_keys_left"] != float64(1) || notInRun["ai_impact_metrics_daily_keys_left"] != float64(1) {
+			t.Errorf("the end of the older run: the line of the repository in no partition is %v, want 1 repository and 1 key left in each table", notInRun)
 		}
 	})
 }

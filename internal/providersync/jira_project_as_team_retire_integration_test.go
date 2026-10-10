@@ -350,3 +350,26 @@ func TestTheRepoOwnershipDerivationAloneLeavesARetiredTeamsDerivedRowsOpen(t *te
 			"the close in RetireJiraProjectAsTeamRows may be a second writer of the same fact", ready, retracted, open)
 	}
 }
+
+// A retired team keeps the oldest creation time of its stored versions, also
+// when the newest version carries none.
+func TestRetireJiraProjectAsTeamRowsKeepsTheOldestCreatedAt(t *testing.T) {
+	ctx, conn := newWorkItemEffectsConn(t)
+	f := retireFixture{t: t, ctx: ctx, conn: conn, orgID: uuid.NewString(), old: time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)}
+	created := time.Date(2026, 3, 4, 5, 6, 7, 0, time.UTC)
+	f.team("jira", "OPS", "OPS", nil)
+	if err := conn.Exec(ctx, `INSERT INTO teams (id, team_uuid, name, members, manual_members, project_keys, repo_patterns, is_active, updated_at, org_id, provider, native_team_key, created_at) VALUES ('OPS', ?, 'team OPS', [], [], ['OPS'], [], 1, ?, ?, 'jira', 'OPS', ?)`,
+		uuid.New(), f.old.Add(-time.Hour), f.orgID, created); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := RetireJiraProjectAsTeamRows(ctx, conn, f.orgID, time.Date(2026, 10, 7, 12, 0, 0, 0, time.UTC), false); err != nil {
+		t.Fatal(err)
+	}
+	var got string
+	if err := conn.QueryRow(ctx, `SELECT toString(created_at) FROM teams FINAL WHERE org_id = ? AND id = 'OPS' AND is_active = 0`, f.orgID).Scan(&got); err != nil {
+		t.Fatalf("read the retired row: %v", err)
+	}
+	if want := created.Format("2006-01-02 15:04:05.000000"); got != want {
+		t.Fatalf("created_at of the retired row = %q, want %q", got, want)
+	}
+}

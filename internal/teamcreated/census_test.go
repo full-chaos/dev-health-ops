@@ -46,11 +46,21 @@ func TestEveryGoTeamsInsertWritesCreatedAt(t *testing.T) {
 					continue
 				}
 				isSelect := strings.Contains(statement, "SELECT")
-				if isSelect && strings.Count(statement, Column) < 2 {
-					t.Errorf("%s: INSERT..SELECT INTO teams lists %s but does not select it", rel, Column)
+				if isSelect {
+					selected := statement[strings.Index(statement, "SELECT"):]
+					if !strings.Contains(selected, Column) && !strings.Contains(selected, "_created") {
+						t.Errorf("%s: INSERT..SELECT INTO teams lists %s but does not select it", rel, Column)
+					}
+					continue
 				}
-				if !isSelect && !strings.Contains(source, "teamcreated.") {
-					t.Errorf("%s: INSERT INTO teams lists %s but the file never calls teamcreated.Carry/For", rel, Column)
+				// Every function that uses this statement must carry the time.
+				for _, user := range statementUsers(source, at[0]) {
+					if !strings.Contains(user, "teamcreated.Carry(") {
+						t.Errorf("%s: a function that uses an INSERT INTO teams does not call teamcreated.Carry:\n%.200s", rel, user)
+					}
+				}
+				if !strings.Contains(source, "teamcreated.For(") {
+					t.Errorf("%s: INSERT INTO teams lists %s but the file never calls teamcreated.For", rel, Column)
 				}
 			}
 			return nil
@@ -63,4 +73,60 @@ func TestEveryGoTeamsInsertWritesCreatedAt(t *testing.T) {
 	if found < 8 {
 		t.Fatalf("found %d INSERT INTO teams statements, want at least 8 (github, gitlab, jira, linear, atlassian, retire, push, admin store)", found)
 	}
+}
+
+var constName = regexp.MustCompile(`(\w+)\s*=\s*[\x60"]\s*INSERT`)
+var mapKey = regexp.MustCompile(`("[\w.]+"):\s*"INSERT`)
+
+// statementUsers are the functions that use the statement at offset: for a
+// const (name = `INSERT ...`) every function that names it, for a map entry
+// ("key": "INSERT ...") every caller of the function that holds the map, but
+// not the holder itself; for a
+// statement written inside a function, that function.
+func statementUsers(source string, offset int) []string {
+	line := source[strings.LastIndex(source[:offset], "\n")+1 : offset+20]
+	ident := ""
+	holder := enclosingFunc(source, offset)
+	funcStart := strings.LastIndex(source[:offset], "\nfunc ")
+	insideFunc := funcStart >= 0 && !strings.Contains(source[funcStart:offset], "\n}\n")
+	if insideFunc && strings.HasPrefix(line, "\t") && constName.MatchString(line) {
+		return []string{holder} // a const local to the function that uses it
+	}
+	if m := constName.FindStringSubmatch(line); m != nil {
+		ident = m[1]
+	} else if mapKey.MatchString(line) {
+		// A statement in a lookup function: its callers use it.
+		if name := regexp.MustCompile(`^\s*func (\w+)\(`).FindStringSubmatch(holder); name != nil {
+			ident = name[1] + "("
+		}
+	}
+	if ident == "" {
+		return []string{holder}
+	}
+	var users []string
+	for _, fn := range strings.Split(source, "\nfunc ")[1:] {
+		fn = "func " + fn
+		if fn != strings.TrimPrefix(holder, "\n") && strings.Contains(fn, ident) {
+			users = append(users, fn)
+		}
+	}
+	if len(users) == 0 {
+		return []string{holder} // not used by any function: fails the Carry check
+	}
+	return users
+}
+
+// enclosingFunc is the source of the top-level function that holds offset: from
+// the last "\nfunc " before it to the next one. A const holding the statement
+// is read with the function that follows it.
+func enclosingFunc(source string, offset int) string {
+	start := strings.LastIndex(source[:offset], "\nfunc ")
+	if start < 0 {
+		start = 0
+	}
+	end := strings.Index(source[offset:], "\nfunc ")
+	if end < 0 {
+		return source[start:]
+	}
+	return source[start : offset+end]
 }

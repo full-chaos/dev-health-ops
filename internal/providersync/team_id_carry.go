@@ -275,6 +275,9 @@ func (run *teamIDCarryRun) plan() error {
 	if err != nil {
 		return fmt.Errorf("team id carry: read teams: %w", err)
 	}
+	if teams, err = run.withOldestCreatedAt(teams); err != nil {
+		return fmt.Errorf("team id carry: read created_at: %w", err)
+	}
 	observations, err := run.read(teamIDCarryObservationsQuery, run.org)
 	if err != nil {
 		return fmt.Errorf("team id carry: read observations: %w", err)
@@ -569,6 +572,46 @@ func (run *teamIDCarryRun) dropKeyedTeams(rows *[]chRow) error {
 // manual members of the dropped rows of its id that it does not hold yet:
 // the kept row and the moved bare team are one team, and manual members are
 // an admin's statement that no other writer restores.
+// teamIDCarryOldestCreatedQuery is the oldest creation evidence of each team id
+// over every stored version (teamcreated.Query's rule, keyed by id alone).
+const teamIDCarryOldestCreatedQuery = `SELECT id, min(coalesce(created_at, updated_at)) AS created_min FROM teams ` +
+	`WHERE org_id = {org_id:String} AND id IN {ids:Array(String)} GROUP BY id`
+
+// withOldestCreatedAt sets created_at of each row to the oldest creation
+// evidence of its team id over every stored version, not the newest version's
+// own column: a newer version written without the column (NULL) must not
+// hide the time an older version holds.
+func (run *teamIDCarryRun) withOldestCreatedAt(rows []chRow) ([]chRow, error) {
+	if len(rows) == 0 {
+		return rows, nil
+	}
+	seen := map[string]bool{}
+	var ids []string
+	for _, row := range rows {
+		if id := row.str("id"); !seen[id] {
+			seen[id] = true
+			ids = append(ids, id)
+		}
+	}
+	oldest, err := run.read(teamIDCarryOldestCreatedQuery, run.org, clickhouse.Named("ids", ids))
+	if err != nil {
+		return nil, err
+	}
+	created := make(map[string]time.Time, len(oldest))
+	for _, row := range oldest {
+		created[row.str("id")] = row.time("created_min")
+	}
+	out := make([]chRow, len(rows))
+	for i, row := range rows {
+		out[i] = row
+		if at, ok := created[row.str("id")]; ok {
+			stamp := at
+			out[i] = row.with("created_at", &stamp)
+		}
+	}
+	return out, nil
+}
+
 func (run *teamIDCarryRun) foldManualMembers(rows *[]chRow, ids []string, members map[string][]string) error {
 	if len(ids) == 0 {
 		return nil
@@ -576,6 +619,9 @@ func (run *teamIDCarryRun) foldManualMembers(rows *[]chRow, ids []string, member
 	current, err := run.read(`SELECT `+teamIDCarryTeamsColumns+` FROM teams FINAL WHERE org_id = {org_id:String} AND id IN {ids:Array(String)}`, run.org, clickhouse.Named("ids", ids))
 	if err != nil {
 		return fmt.Errorf("team id carry: read kept teams: %w", err)
+	}
+	if current, err = run.withOldestCreatedAt(current); err != nil {
+		return fmt.Errorf("team id carry: read kept created_at: %w", err)
 	}
 	for _, row := range current {
 		merged := append([]string(nil), row.strs("manual_members")...)

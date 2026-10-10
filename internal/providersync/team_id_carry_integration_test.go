@@ -925,3 +925,24 @@ func TestCarryTeamIDsKeepsTeamCreatedAt(t *testing.T) {
 		}
 	}
 }
+
+// The newest stored version holds no created_at (a writer that does not carry
+// it): the move still takes the oldest version's time.
+func TestCarryTeamIDsKeepsTheOldestCreatedAtWhenTheNewestVersionHasNone(t *testing.T) {
+	ctx, conn := newWorkItemEffectsConn(t)
+	f := carryFixture{t: t, ctx: ctx, conn: conn, orgID: uuid.NewString()}
+	created := time.Date(2026, 3, 4, 5, 6, 7, 0, time.UTC)
+	f.team("", "chosen", nil, nil, 1, carryOld, nil, nil)
+	f.exec(`INSERT INTO teams (id, team_uuid, name, members, manual_members, project_keys, repo_patterns, is_active, updated_at, last_synced, org_id, provider, created_at) VALUES ('chosen', ?, 'team chosen', [], [], [], [], 1, ?, ?, ?, '', ?)`,
+		uuid.New(), carryOld.Add(-time.Hour), carryOld.Add(-time.Hour), f.orgID, created)
+	if _, err := CarryTeamIDs(ctx, conn, f.orgID, carryAt, false); err != nil {
+		t.Fatal(err)
+	}
+	const read = `SELECT toString(created_at) FROM teams FINAL WHERE org_id = ? AND id = ?`
+	want := created.Format("2006-01-02 15:04:05.000000")
+	for _, id := range []string{"custom:chosen", "chosen"} {
+		if got := f.str(read, id); got != want {
+			t.Errorf("created_at of %s = %q, want %q", id, got, want)
+		}
+	}
+}

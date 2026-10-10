@@ -63,6 +63,7 @@ var openers = map[string]struct {
 	"internal/pgmigrate/downgrade.go":                      {kindBoundary, "migrate postgres downgrade: the connection is opened with pgx.Connect and every error goes through Boundary(dsn).Redact"},
 	"internal/pgmigrate/preflight.go":                      {kindBoundary, "migrate postgres preflight: the connection is opened with pgx.Connect and every error goes through Boundary(dsn).Redact"},
 	"internal/synccli/jira_stored_credential.go":           {kindBoundary, "sync teams --provider jira: resolves the org's stored jira credential from Postgres, the pool and the error redactor"},
+	"tools/record-provider-answers/main.go":                {kindBoundary, "the one-off recorder of provider answers (CHAOS-9124): resolves an integration credential from Postgres, the pool and the error redactor"},
 	"internal/goapicli/restprove/main.go":                  {kindGeneric, "a failed connect is the fixed message"},
 	"internal/migrationmatrix/restproven.go":               {kindGeneric, "a failed connect is the fixed message"},
 	"internal/storage/postgres/factory.go":                 {kindHelper, "Open and New: WithRedactedCauseAlso with the resolved credentials"},

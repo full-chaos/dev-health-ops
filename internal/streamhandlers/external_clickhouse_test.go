@@ -1,10 +1,12 @@
 package streamhandlers
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
+	"log/slog"
 	"math"
 	"math/big"
 	"os"
@@ -795,4 +797,70 @@ func TestThePushedTeamsOfABatchAreWrittenBeforeTheIdentitiesThatNameThem(t *test
 	if want := []string{"teams", "identities", "repos"}; !reflect.DeepEqual(tables, want) {
 		t.Fatalf("the inserts of the batch ran in the order %v, want %v", tables, want)
 	}
+}
+
+// A source can push an identity that names a team it never pushes. The
+// identity is stored and no team row is made up, so the sink says it: ONE
+// WARN line with counts, after the batch is written. The line holds no team
+// id and no identity id (either can be a person's own words).
+func TestAPushedIdentityThatNamesATeamWithNoTeamRowIsCountedInOneWarnLine(t *testing.T) {
+	write := func(t *testing.T, connection *productSink, records ...externalSinkRecord) string {
+		t.Helper()
+		var logs bytes.Buffer
+		previous := slog.Default()
+		slog.SetDefault(slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelInfo})))
+		defer slog.SetDefault(previous)
+		sink, err := NewClickHouseExternalBatchSink(connection)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := sink.Write(context.Background(), externalSinkBatch{Pointer: externalTestPointer(), SourceID: uuid.New(), Records: records}); err != nil {
+			t.Fatalf("the write failed: %v", err)
+		}
+		return logs.String()
+	}
+	team := externalSinkFixture("team.v1", map[string]any{"id": "team-a", "name": "Team A", "updatedAt": "2026-07-23T11:00:00Z"})
+	ada := externalSinkFixture("identity.v1", map[string]any{"canonicalId": "ada", "teamIds": []any{"team-a", "team-never-pushed"}, "updatedAt": "2026-07-23T11:00:00Z"})
+	bob := externalSinkFixture("identity.v1", map[string]any{"canonicalId": "bob", "teamIds": []any{"team-never-pushed", "team-also-not"}, "updatedAt": "2026-07-23T11:00:00Z"})
+
+	t.Run("two of three named teams have no row", func(t *testing.T) {
+		connection := &productSink{batch: &productBatch{}, teamRowIDs: []string{"gh:team-a"}}
+		logs := write(t, connection, ada, bob, team)
+		if connection.teamRowCalls != 1 {
+			t.Fatalf("the team rows were read %d times, want once", connection.teamRowCalls)
+		}
+		if lines := strings.Count(logs, externalIdentityTeamsWithNoRowEvent); lines != 1 {
+			t.Fatalf("%d WARN lines of the event, want 1:\n%s", lines, logs)
+		}
+		for _, want := range []string{"level=WARN", "identities=2", "team_ids_named=3", "team_ids_with_no_team_row=2", "source_system=github"} {
+			if !strings.Contains(logs, want) {
+				t.Errorf("the line lacks %q:\n%s", want, logs)
+			}
+		}
+		for _, private := range []string{"team-never-pushed", "team-also-not", "team-a", "ada", "bob"} {
+			if strings.Contains(logs, private) {
+				t.Errorf("the line holds the id %q:\n%s", private, logs)
+			}
+		}
+	})
+	t.Run("every named team has a row", func(t *testing.T) {
+		connection := &productSink{batch: &productBatch{}, teamRowIDs: []string{"gh:team-a", "gh:team-never-pushed"}}
+		if logs := write(t, connection, ada, team); strings.Contains(logs, "level=WARN") {
+			t.Errorf("a WARN line with no team id missing:\n%s", logs)
+		}
+	})
+	t.Run("an identity that names no team reads nothing", func(t *testing.T) {
+		connection := &productSink{batch: &productBatch{}}
+		logs := write(t, connection, externalSinkFixture("identity.v1", map[string]any{"canonicalId": "eve", "updatedAt": "2026-07-23T11:00:00Z"}))
+		if connection.teamRowCalls != 0 || strings.Contains(logs, "level=WARN") {
+			t.Errorf("team row reads = %d, logs:\n%s", connection.teamRowCalls, logs)
+		}
+	})
+	t.Run("a failed count read is said and does not fail the write", func(t *testing.T) {
+		connection := &productSink{batch: &productBatch{}, teamRowErr: errors.New("clickhouse: connection reset")}
+		logs := write(t, connection, ada, team)
+		if !strings.Contains(logs, "level=WARN") || !strings.Contains(logs, "could not be counted") || strings.Contains(logs, externalIdentityTeamsWithNoRowEvent) {
+			t.Errorf("want one WARN line that the count could not be read:\n%s", logs)
+		}
+	})
 }

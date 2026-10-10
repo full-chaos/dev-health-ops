@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"math"
 	"net"
 	"net/url"
@@ -169,13 +170,19 @@ func (s *ClickHouseExternalBatchSink) Write(ctx context.Context, source external
 		return nil
 	}
 	var kindErrors []error
+	identitiesWritten := false
 	for _, kind := range kinds {
 		if err := writeKind(kind); err != nil {
 			if ctx.Err() != nil {
 				return ExternalRecomputeScope{}, err
 			}
 			kindErrors = append(kindErrors, err)
+			continue
 		}
+		identitiesWritten = identitiesWritten || kind == "identity.v1"
+	}
+	if identitiesWritten {
+		s.warnOfIdentityTeamsWithNoTeamRow(ctx, source.Pointer, grouped["identity.v1"])
 	}
 	if len(kindErrors) > 0 {
 		return ExternalRecomputeScope{}, errors.Join(kindErrors...)
@@ -184,6 +191,83 @@ func (s *ClickHouseExternalBatchSink) Write(ctx context.Context, source external
 	scope.TeamIDs = sortedExternalStrings(scope.TeamIDs)
 	scope.RecordKinds = sortedExternalStrings(scope.RecordKinds)
 	return scope, nil
+}
+
+// externalTeamsWithARowQuery reads which of the named team ids have a row in
+// teams.
+const externalTeamsWithARowQuery = "SELECT DISTINCT id FROM teams WHERE org_id = {org_id:String} AND id IN {team_ids:Array(String)}"
+
+// warnOfIdentityTeamsWithNoTeamRow says, in one WARN line, how many of the
+// team ids that the identities of a batch name have no row in teams once the
+// batch is written. A source can push an identity that names a team it never
+// pushes: the identity is stored as it was pushed, no team row is made up for
+// it, and nothing refuses the record, so without this line nobody would know
+// that the id names no team.
+//
+// The line holds counts only: a team id and an identity id can be a person's
+// own words. A failed count read is logged too and does not fail the write:
+// the rows of the batch are stored.
+func (s *ClickHouseExternalBatchSink) warnOfIdentityTeamsWithNoTeamRow(
+	ctx context.Context, pointer externalPointer, identities []externalSinkRecord,
+) {
+	named := map[string]struct{}{}
+	for _, record := range identities {
+		teamIDs, err := externalTeamIDs(pointer.SourceSystem, stringArrayField(record.Payload, "teamIds"))
+		if err != nil {
+			continue // the write of this record already failed for it
+		}
+		for _, teamID := range teamIDs {
+			if strings.TrimSpace(teamID) != "" {
+				named[teamID] = struct{}{}
+			}
+		}
+	}
+	if len(named) == 0 {
+		return
+	}
+	teamIDs := sortedExternalStrings(mapKeys(named))
+	rows, err := s.conn.Query(ctx, externalTeamsWithARowQuery,
+		clickhouse.Named("org_id", pointer.OrgID), clickhouse.Named("team_ids", teamIDs))
+	if err != nil {
+		slog.WarnContext(ctx, "external push: the team rows of the pushed identities could not be counted",
+			"organization_id", pointer.OrgID, "source_system", pointer.SourceSystem, "error", err.Error())
+		return
+	}
+	defer func() { _ = rows.Close() }()
+	withRow := 0
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			slog.WarnContext(ctx, "external push: the team rows of the pushed identities could not be counted",
+				"organization_id", pointer.OrgID, "source_system", pointer.SourceSystem, "error", err.Error())
+			return
+		}
+		if _, isNamed := named[id]; isNamed {
+			withRow++
+		}
+	}
+	if err := rows.Err(); err != nil {
+		slog.WarnContext(ctx, "external push: the team rows of the pushed identities could not be counted",
+			"organization_id", pointer.OrgID, "source_system", pointer.SourceSystem, "error", err.Error())
+		return
+	}
+	if missing := len(named) - withRow; missing > 0 {
+		slog.WarnContext(ctx, externalIdentityTeamsWithNoRowEvent,
+			"organization_id", pointer.OrgID, "source_system", pointer.SourceSystem,
+			"identities", len(identities), "team_ids_named", len(named), "team_ids_with_no_team_row", missing)
+	}
+}
+
+// externalIdentityTeamsWithNoRowEvent is the message of the WARN line of
+// warnOfIdentityTeamsWithNoTeamRow.
+const externalIdentityTeamsWithNoRowEvent = "external push: identities name team ids that have no team row"
+
+func mapKeys(set map[string]struct{}) []string {
+	keys := make([]string, 0, len(set))
+	for key := range set {
+		keys = append(keys, key)
+	}
+	return keys
 }
 
 // preserveExistingManualMembers batch-reads the current manual_members for

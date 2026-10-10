@@ -214,6 +214,25 @@ func TestEveryFactKindClosesOnlyOnItsOwnProofAndItsOwnRows(t *testing.T) {
 		key: MembershipSnapshotKey, stamp: func(row MembershipSnapshotRow) time.Time { return row.ValidFrom }}
 	covered[memberships.kind.Name()] = true
 	runSingleKindCase(t, memberships)
+	// The three catalog membership kinds hold the memberships of the teams whose
+	// own member read proved its end; a membership of another team is of no kind.
+	membershipOf := func(team string) func(name string, validFrom time.Time) MembershipSnapshotRow {
+		return func(name string, validFrom time.Time) MembershipSnapshotRow {
+			return MembershipSnapshotRow{TeamID: team, MemberID: name, ValidFrom: validFrom}
+		}
+	}
+	for _, c := range []kindCase[MembershipSnapshotRow]{
+		{provider: "linear", kind: LinearTeamMembershipKind([]string{"linear:a"}), empty: EmptyIsAnAnswer,
+			own: membershipOf("linear:a"), foreign: membershipOf("linear:b")},
+		{provider: "github", kind: GitHubTeamMembershipKind([]string{"github:a"}), empty: EmptyIsAnAnswer,
+			own: membershipOf("github:a"), foreign: membershipOf("github:b")},
+		{provider: "gitlab", kind: GitLabTeamMembershipKind([]string{"gitlab:a"}), empty: EmptyIsAnAnswer,
+			own: membershipOf("gitlab:a"), foreign: membershipOf("gitlab:b")},
+	} {
+		c.key, c.stamp = MembershipSnapshotKey, func(row MembershipSnapshotRow) time.Time { return row.ValidFrom }
+		covered[c.kind.Name()] = true
+		runKindCase(t, c)
+	}
 	teams := kindCase[TeamSnapshotRow]{provider: "jira", kind: AtlassianTeamCatalogKind(), empty: EmptyClosesNothing,
 		own: func(name string, _ time.Time) TeamSnapshotRow { return TeamSnapshotRow{TeamID: "jira:" + name} },
 		key: TeamSnapshotKey, stamp: func(TeamSnapshotRow) time.Time { return time.Time{} }}

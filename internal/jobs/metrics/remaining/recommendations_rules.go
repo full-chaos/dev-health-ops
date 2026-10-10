@@ -2,6 +2,7 @@ package remaining
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
@@ -109,6 +110,14 @@ type MetricsSnapshot struct {
 	CompoundingRiskScore      float64
 	CompoundingRiskScoreKnown bool
 	CompoundingRiskSeverity   string
+	// CompoundingRiskCoverage is the share of the score's weight that was
+	// present (0 to 1) and CompoundingRiskInputs names the inputs that were
+	// present, from the stored weights and component norms of the same row.
+	// A score computed from fewer than all four inputs says so in its
+	// rationale: a score is never named without what it stands on.
+	CompoundingRiskCoverage      float64
+	CompoundingRiskCoverageKnown bool
+	CompoundingRiskInputs        []string
 }
 
 // EvidenceRef mirrors the reference's frozen EvidenceRef. Value is already
@@ -483,6 +492,15 @@ func compoundingRiskFromComposite(snapshot MetricsSnapshot, now time.Time) (*Rec
 				"latency are compounding above their tuned thresholds.",
 			scoreText, severity,
 		)
+		// A score from fewer than all four inputs names its coverage and the
+		// inputs it stands on, and claims only those.
+		if snapshot.CompoundingRiskCoverageKnown && snapshot.CompoundingRiskCoverage < 1 && len(snapshot.CompoundingRiskInputs) > 0 {
+			rationale = fmt.Sprintf(
+				"Compounding Risk score is %s (severity: %s), computed from %.0f%% of its inputs (%s). "+
+					"The inputs that were present are compounding above their tuned thresholds.",
+				scoreText, severity, snapshot.CompoundingRiskCoverage*100, strings.Join(snapshot.CompoundingRiskInputs, ", "),
+			)
+		}
 	}
 
 	recommendationSeverity := "warning"

@@ -818,7 +818,6 @@ internal/queryapi/server/testdata/wire_capture/airiskbreakdown_captured.graphql
 internal/queryapi/server/testdata/wire_capture/busfactor_captured.graphql
 internal/queryapi/server/testdata/wire_capture/catalog_values_captured.graphql
 internal/queryapi/server/testdata/wire_capture/clone_saved_report_captured.graphql
-internal/queryapi/server/testdata/wire_capture/compoundingrisk_captured.graphql
 internal/queryapi/server/testdata/wire_capture/create_saved_report_captured.graphql
 internal/queryapi/server/testdata/wire_capture/data_health_connectors_captured.graphql
 internal/queryapi/server/testdata/wire_capture/data_health_identity_captured.graphql

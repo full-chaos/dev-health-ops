@@ -494,6 +494,162 @@ const registeredOperatingReviewV1Document = `query OperatingReview($orgId: Strin
   }
 }`
 
+// registeredHomeV6Document is the Home text from before a signal carried its coverage
+// (CHAOS-6545: the share of a compounding-risk score's weight that was present,
+// `HomeSignal.coverage`): the V5 text plus CHAOS-9072's `rateCoverage`. It stays a legacy text
+// so every web build that does not select `coverage` remains accepted. Its fixture is
+// testdata/wire_capture/home_v6_captured.graphql.
+const registeredHomeV6Document = `query Home($orgId: String!, $filters: FilterInput, $window: HomeWindowInput) {
+  home(orgId: $orgId, filters: $filters, window: $window) {
+    freshness {
+      lastIngestedAt
+      latestSuccessfulSyncAt
+      sources {
+        provider
+        status
+        __typename
+      }
+      coverage {
+        reposCoveredPct
+        prsLinkedToIssuesPct
+        issuesWithCycleStatesPct
+        __typename
+      }
+      __typename
+    }
+    deltas {
+      metric
+      label
+      value
+      unit
+      deltaPct
+      hasData
+      hasPriorData
+      spark {
+        ts
+        value
+        __typename
+      }
+      rateState
+      rateCoverage
+      __typename
+    }
+    reworkThemeAllocation {
+      theme
+      label
+      allocation
+      allocationPct
+      prsMerged
+      churnLoc
+      __typename
+    }
+    summary {
+      id
+      text
+      evidenceLink
+      __typename
+    }
+    tiles {
+      key
+      value {
+        title
+        subtitle
+        link
+        __typename
+      }
+      __typename
+    }
+    constraint {
+      title
+      claim
+      evidence {
+        label
+        link
+        __typename
+      }
+      experiments
+      __typename
+    }
+    events {
+      ts
+      type
+      text
+      link
+      __typename
+    }
+    healthState {
+      status
+      headline
+      summary
+      asOf
+      __typename
+    }
+    signals {
+      id
+      title
+      metric
+      currentValue
+      priorValue
+      delta
+      direction
+      severity
+      confidence
+      affectedScope
+      evidenceCount
+      whyItMatters
+      recommendedAction
+      evidenceRef
+      category
+      scopeEntity {
+        id
+        displayName
+        __typename
+      }
+      attribution {
+        items
+        sources {
+          source
+          items
+          share
+          __typename
+        }
+        confidence {
+          confidence
+          items
+          share
+          __typename
+        }
+        __typename
+      }
+      __typename
+    }
+    limitingFactor {
+      claim
+      whyItMatters
+      recommendedAction
+      confidence
+      evidenceRef
+      __typename
+    }
+    dataConfidence {
+      level
+      coveragePct
+      connectedSources
+      missingSources
+      caveats
+      __typename
+    }
+    scopeDataConfidence {
+      level
+      coveragePct
+      lastIngestedAt
+      caveats
+      __typename
+    }
+    __typename
+  }
+}`
+
 // registeredHomeDocument is the registered document for the home
 // operation: the wire form of the web app's HOME_QUERY (variables orgId,
 // filters, window), kept byte-identical in
@@ -649,6 +805,7 @@ const registeredHomeDocument = `query Home($orgId: String!, $filters: FilterInpu
         displayName
         __typename
       }
+      coverage
       attribution {
         items
         sources {
@@ -2041,9 +2198,64 @@ const registeredFeatureFlagEventsDocument = `query FeatureFlagEvents($orgId: Str
   }
 }`
 
+// registeredCompoundingRiskV1Document is the text of `compoundingRisk` BEFORE a point carried its coverage (CHAOS-6545:
+// the share of the score's weight that was present). It stays a legacy text (see legacyDigestsByOperation) beside the
+// current one, so a web build still sending it keeps working; it is the text every web build sends until the web selects
+// `coverage`. Remove it with the cleanup ticket once no client sends it
+// (testdata/wire_capture/compoundingrisk_v1_captured.graphql).
+const registeredCompoundingRiskV1Document = `query CompoundingRisk($orgId: String!, $filter: CompoundingRiskFilterInput = null) {
+  compoundingRisk(orgId: $orgId, filter: $filter) {
+    orgId
+    breakout
+    generatedAt
+    rows {
+      day
+      scope
+      scopeId
+      scopeLabel
+      score
+      severity
+      computedAt
+      components {
+        churnNorm
+        complexityNorm
+        ownershipNorm
+        reviewNorm
+        reworkChurn
+        complexityDelta
+        ownershipGini
+        singleOwnerRatio
+        reviewLatencyP90h
+        __typename
+      }
+      weights {
+        churn
+        complexity
+        ownership
+        review
+        __typename
+      }
+      thresholds {
+        elevated
+        high
+        __typename
+      }
+      __typename
+    }
+    trend {
+      day
+      score
+      severity
+      __typename
+    }
+    __typename
+  }
+}`
+
 // registeredCompoundingRiskDocument is the registered document for the
-// `compoundingRisk` operation, the exact wire-form text a real web client
-// sends (testdata/wire_capture/compoundingrisk_captured.graphql).
+// `compoundingRisk` operation: the text of V1 with one line, `coverage` after
+// `score` in each row (CHAOS-6545). The web sends exactly this text once it shows the
+// coverage with the score (testdata/wire_capture/compoundingrisk_captured.graphql).
 const registeredCompoundingRiskDocument = `query CompoundingRisk($orgId: String!, $filter: CompoundingRiskFilterInput = null) {
   compoundingRisk(orgId: $orgId, filter: $filter) {
     orgId
@@ -2055,6 +2267,7 @@ const registeredCompoundingRiskDocument = `query CompoundingRisk($orgId: String!
       scopeId
       scopeLabel
       score
+      coverage
       severity
       computedAt
       components {
@@ -5140,9 +5353,10 @@ var legacyDigestsByOperation = map[string][]string{
 	"aiOpportunities":       {digestHex(registeredAiOpportunitiesV1Document)},
 	"aiWorkflowDrilldown":   {digestHex(registeredAiWorkflowDrilldownV1Document)},
 	"capacityForecast":      {digestHex(registeredCapacityForecastV1Document), digestHex(registeredCapacityForecastV2Document)},
+	"compoundingRisk":       {digestHex(registeredCompoundingRiskV1Document)},
 	"coverageScopeBaseline": {digestHex(registeredCoverageScopeBaselineV1Document)},
 	"hotspots":              {digestHex(registeredHotspotsV1Document)},
-	"home":                  {digestHex(registeredHomeV1Document), digestHex(registeredHomeV2Document), digestHex(registeredHomeV3Document), digestHex(registeredHomeV4Document), digestHex(registeredHomeV5Document)},
+	"home":                  {digestHex(registeredHomeV1Document), digestHex(registeredHomeV2Document), digestHex(registeredHomeV3Document), digestHex(registeredHomeV4Document), digestHex(registeredHomeV5Document), digestHex(registeredHomeV6Document)},
 	"improveOpportunities":  {digestHex(registeredImproveOpportunitiesV1Document), digestHex(registeredImproveOpportunitiesV2Document)},
 	"operatingReview":       {digestHex(registeredOperatingReviewV1Document), digestHex(registeredOperatingReviewV2Document), digestHex(registeredOperatingReviewV3Document)},
 	"reviewEdges":           {digestHex(registeredReviewEdgesV1Document)},

@@ -72,9 +72,13 @@ func TestJobInputsOfANamedRetiredTeamGiveRetractionRowsNoWeight(t *testing.T) {
 		if out.AfterHours, out.AfterHoursKnown, out.CycleTimes, err = loader.loadSustainabilitySignals(ctx, teamID, start, end); err != nil {
 			t.Fatalf("%s %s sustainability: %v", org, teamID, err)
 		}
-		if out.RiskScore, out.RiskKnown, out.Severity, err = loader.loadCompoundingRiskPersisted(ctx, teamID, start, end); err != nil {
+		var riskCoverage float64
+		var riskCoverageKnown bool
+		var riskInputs []string
+		if out.RiskScore, out.RiskKnown, out.Severity, riskCoverage, riskCoverageKnown, riskInputs, err = loader.loadCompoundingRiskPersisted(ctx, teamID, start, end); err != nil {
 			t.Fatalf("%s %s risk: %v", org, teamID, err)
 		}
+		_, _, _ = riskCoverage, riskCoverageKnown, riskInputs
 		target := capacityTarget{TeamID: &teamID}
 		if out.History, err = capacity.loadThroughput(ctx, org, target, 30, today); err != nil {
 			t.Fatalf("%s %s throughput history: %v", org, teamID, err)

@@ -114,7 +114,12 @@
   },
   {
     "operation": "compoundingRisk",
-    "digest": "2b50958a4670a434bbfe46be7344486488d3a278e62b09b257252441e962bb67"
+    "digest": "6bb6a6de9cc77faa27f47c2646436f67cfbd0558f3deded569e44f77689bc460"
+  },
+  {
+    "operation": "compoundingRisk",
+    "digest": "2b50958a4670a434bbfe46be7344486488d3a278e62b09b257252441e962bb67",
+    "legacy": true
   },
   {
     "operation": "connectorsDataHealth",
@@ -174,7 +179,7 @@
   },
   {
     "operation": "home",
-    "digest": "c63a70236aa38c12f3cb4f062bf549af507e264d93268b74fe951f8b627270fb"
+    "digest": "0ebba562ab32dabadd58305a4cc65ddf53604fe41fe4a4ac73e8837c684455e8"
   },
   {
     "operation": "home",
@@ -199,6 +204,11 @@
   {
     "operation": "home",
     "digest": "5351e92b61599543ce5913591687ac01f642e27b6ab01577357e442b15e27dce",
+    "legacy": true
+  },
+  {
+    "operation": "home",
+    "digest": "c63a70236aa38c12f3cb4f062bf549af507e264d93268b74fe951f8b627270fb",
     "legacy": true
   },
   {

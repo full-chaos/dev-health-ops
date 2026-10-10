@@ -151,18 +151,12 @@ func (source jiraWorkItemClickHouseDerivationContextSource) Load(
 	if facts.Repos, err = loader.LoadRepos(ctx, claim.OrgID, request.AsOf); err != nil {
 		return teamattribution.GithubWorkItemDerivationFacts{}, err
 	}
-	var providerTaggedRosterMembers []teamattribution.GithubWorkItemDerivationMemberFact
-	if facts.Members, facts.UntypedMembers, facts.ProviderUntypedMembers, providerTaggedRosterMembers, err = loader.LoadMembers(ctx, claim.OrgID, request.AsOf); err != nil {
+	if facts.Members, facts.UntypedMembers, err = loader.LoadMembers(ctx, claim.OrgID, request.AsOf); err != nil {
 		return teamattribution.GithubWorkItemDerivationFacts{}, err
 	}
 	if facts.ProviderMembers, err = loader.LoadProviderMembers(ctx, claim.OrgID, request.AsOf); err != nil {
 		return teamattribution.GithubWorkItemDerivationFacts{}, err
 	}
-	// CHAOS-4321 round 3 (team-lead ruling, 2026-08-26): see the shared
-	// Load()'s identical comment -- provider-tagged teams.members facets
-	// join the SAME ProviderMembers pool real team_memberships rows
-	// populate.
-	facts.ProviderMembers = append(facts.ProviderMembers, providerTaggedRosterMembers...)
 	if facts.ManualFallbacks, err = loader.LoadManualFallbacks(ctx, claim.OrgID, request.AsOf); err != nil {
 		return teamattribution.GithubWorkItemDerivationFacts{}, err
 	}

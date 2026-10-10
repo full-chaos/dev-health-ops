@@ -21,7 +21,7 @@ import (
 // (providersync/jira_team_catalog_effects_clickhouse.go), so both writers fill
 // the same physical tables the same way.
 const (
-	teamsInsert       = `INSERT INTO teams (id, team_uuid, name, description, members, manual_members, project_keys, repo_patterns, is_active, updated_at, org_id, provider, native_team_key, parent_team_id, created_at)`
+	teamsInsert       = `INSERT INTO teams (id, team_uuid, name, description, manual_members, project_keys, repo_patterns, is_active, updated_at, org_id, provider, native_team_key, parent_team_id, created_at)`
 	membershipsInsert = `INSERT INTO team_memberships (org_id, provider, team_id, member_id, raw_provider_user_id, raw_email, identity_facets, source, is_primary, specificity, priority, valid_from, valid_to, updated_at)`
 	// ownershipInsert names its columns and omits last_synced on purpose: the server stamps it at insert time.
 	// last_synced = server insert time, not commit order across concurrent inserts. A reader must re-read a
@@ -78,7 +78,7 @@ type Result struct {
 const (
 	atlassianTeamARIPrefix = "ari:cloud:identity::team/"
 
-	activeMissingTeamsQuery = "SELECT id, team_uuid, name, description, members, manual_members, project_keys, repo_patterns, native_team_key, parent_team_id " +
+	activeMissingTeamsQuery = "SELECT id, team_uuid, name, description, manual_members, project_keys, repo_patterns, native_team_key, parent_team_id " +
 		"FROM teams FINAL WHERE org_id = {org_id:String} AND provider = {provider:String} AND is_active = 1 AND id IN {team_ids:Array(String)}"
 
 	knownTeamsQuery      = "SELECT id FROM teams FINAL WHERE org_id = {org_id:String} AND provider = {provider:String} AND startsWith(ifNull(native_team_key, ''), {ari_prefix:String})"
@@ -327,12 +327,12 @@ func teamsInScope(ctx context.Context, conn driver.Conn, orgID string, rows Rows
 }
 
 type inactiveTeam struct {
-	id                                                string
-	teamUUID                                          uuid.UUID
-	name                                              string
-	description                                       *string
-	members, manualMembers, projectKeys, repoPatterns []string
-	nativeTeamKey, parentTeamID                       *string
+	id                                       string
+	teamUUID                                 uuid.UUID
+	name                                     string
+	description                              *string
+	manualMembers, projectKeys, repoPatterns []string
+	nativeTeamKey, parentTeamID              *string
 }
 
 // planDeactivations reads the still-active catalog rows of the Atlassian teams
@@ -350,7 +350,7 @@ func planDeactivations(ctx context.Context, conn driver.Conn, orgID string, miss
 	var out []inactiveTeam
 	for result.Next() {
 		var row inactiveTeam
-		if err := result.Scan(&row.id, &row.teamUUID, &row.name, &row.description, &row.members, &row.manualMembers,
+		if err := result.Scan(&row.id, &row.teamUUID, &row.name, &row.description, &row.manualMembers,
 			&row.projectKeys, &row.repoPatterns, &row.nativeTeamKey, &row.parentTeamID); err != nil {
 			return nil, err
 		}
@@ -554,7 +554,7 @@ func writeTeams(ctx context.Context, conn driver.Conn, orgID string, teams []Tea
 		}
 		nativeKey := team.NativeTeamKey
 		if err := batch.Append(
-			team.ID, team.TeamUUID, team.Name, team.Description, []string{}, manualMembers, keys, []string{},
+			team.ID, team.TeamUUID, team.Name, team.Description, manualMembers, keys, []string{},
 			team.IsActive, team.UpdatedAt, team.OrgID, team.Provider, &nativeKey, (*string)(nil),
 			teamcreated.For(createdAt, team.ID, team.UpdatedAt),
 		); err != nil {
@@ -563,7 +563,7 @@ func writeTeams(ctx context.Context, conn driver.Conn, orgID string, teams []Tea
 	}
 	for _, team := range deactivate {
 		if err := batch.Append(
-			team.id, team.teamUUID, team.name, team.description, team.members, team.manualMembers, team.projectKeys, team.repoPatterns,
+			team.id, team.teamUUID, team.name, team.description, team.manualMembers, team.projectKeys, team.repoPatterns,
 			uint8(0), now, orgID, Provider, team.nativeTeamKey, team.parentTeamID,
 			teamcreated.For(createdAt, team.id, now),
 		); err != nil {

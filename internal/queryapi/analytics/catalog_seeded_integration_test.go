@@ -39,7 +39,6 @@ CREATE TABLE teams (
     team_uuid UUID,
     name String,
     description Nullable(String),
-    members Array(String),
     updated_at DateTime64(6),
     last_synced DateTime64(6) DEFAULT now(),
     org_id String DEFAULT 'default',

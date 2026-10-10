@@ -1,6 +1,7 @@
 package teamscope
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"testing"
@@ -256,5 +257,91 @@ func TestNarrowRepoScope(t *testing.T) {
 		if sql != tc.wantSQL || len(bindings) != tc.wantBindings {
 			t.Errorf("%s: NarrowRepoScope = %q (%d bindings), want %q (%d)", tc.name, sql, len(bindings), tc.wantSQL, tc.wantBindings)
 		}
+	}
+}
+
+// D5855: an empty string is not a repository name; a list of only empty strings
+// names no repository.
+func TestNamedRepoRefsDropsEmptyStrings(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		level string
+		ids   []string
+		repos []string
+		want  []string
+	}{
+		{"nothing", "", nil, nil, nil},
+		{"only empty strings in what.repos", "", nil, []string{""}, nil},
+		{"only empty strings in a repo scope", "repo", []string{"", ""}, nil, nil},
+		{"empty strings among names", "repo", []string{"", "a"}, []string{"b", ""}, []string{"a", "b"}},
+		{"a team scope's ids are not repositories", "team", []string{"t1"}, []string{""}, nil},
+	} {
+		got := NamedRepoRefs(tc.level, tc.ids, tc.repos)
+		if len(got) != len(tc.want) {
+			t.Errorf("%s: %v, want %v", tc.name, got, tc.want)
+			continue
+		}
+		for i := range got {
+			if got[i] != tc.want[i] {
+				t.Errorf("%s: %v, want %v", tc.name, got, tc.want)
+			}
+		}
+	}
+}
+
+type recordingQuerier struct {
+	statements []string
+	bindings   [][]dhclickhouse.Binding
+	rows       map[string]string // binding value -> id
+}
+
+func (q *recordingQuerier) Query(_ context.Context, statement string, bindings []dhclickhouse.Binding) (dhclickhouse.RowScanner, error) {
+	q.statements = append(q.statements, statement)
+	q.bindings = append(q.bindings, bindings)
+	var ids []string
+	for _, b := range bindings {
+		if id, ok := q.rows[fmt.Sprint(b.Value)]; ok {
+			ids = append(ids, id)
+		}
+	}
+	return &stringRows{values: ids}, nil
+}
+
+type stringRows struct {
+	values []string
+	index  int
+}
+
+func (r *stringRows) Next() bool { r.index++; return r.index <= len(r.values) }
+func (r *stringRows) Scan(dest ...any) error {
+	*(dest[0].(*string)) = r.values[r.index-1]
+	return nil
+}
+func (r *stringRows) Err() error   { return nil }
+func (r *stringRows) Close() error { return nil }
+
+// The one resolver of repository references (the seven per-package copies are gone):
+// empty names are skipped, a UUID is verified by id and a name by repo, each package's
+// own SETTINGS clause is sent.
+func TestResolveRepoRefs(t *testing.T) {
+	const id = "12345678-1234-5678-1234-567812345678"
+	q := &recordingQuerier{rows: map[string]string{id: "resolved-by-id", "acme/web": "resolved-by-name"}}
+	got, err := ResolveRepoRefs(context.Background(), q, []string{"", id, "acme/web", "acme/none", ""}, "org-1", "SETTINGS max_execution_time = 7", "pkg: ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got[0] != "resolved-by-id" || got[1] != "resolved-by-name" {
+		t.Fatalf("resolved = %v, want [resolved-by-id resolved-by-name]", got)
+	}
+	if len(q.statements) != 3 {
+		t.Fatalf("%d lookups for three non-empty references (the empty ones cost none)", len(q.statements))
+	}
+	for _, statement := range q.statements {
+		if !strings.Contains(statement, "SETTINGS max_execution_time = 7") || !strings.Contains(statement, "FROM repos FINAL") || !strings.Contains(statement, "org_id = {org_id:String}") {
+			t.Errorf("lookup statement lacks the caller's settings, FINAL or the org bound:\n%s", statement)
+		}
+	}
+	if !strings.Contains(q.statements[0], "toString(id) = {repo_id:String}") || !strings.Contains(q.statements[1], "repo = {repo_name:String}") {
+		t.Errorf("a UUID is looked up by id and a name by repo:\n%v", q.statements)
 	}
 }

@@ -28,11 +28,14 @@
 package teamscope
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"time"
 
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
+
+	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 )
 
 // Binding names carried by RepoCondition's own bindings. They are prefixed
@@ -183,4 +186,104 @@ func NarrowRepoScope(named bool, explicitSQL string, explicitBindings []dhclickh
 	default:
 		return "", nil
 	}
+}
+
+// NamedRepoRefs is the one place that says which repositories a request names
+// (CHAOS-9093, D5855): the ids of a repo-level scope plus what.repos, WITHOUT the
+// empty strings. An empty string is not a repository name: the REST decoders drop
+// it, so the GraphQL answer must too, and a list of only empty strings names no
+// repository (the request is not filtered by one).
+func NamedRepoRefs(scopeLevel string, scopeIDs, whatRepos []string) []string {
+	var refs []string
+	if scopeLevel == "repo" {
+		for _, id := range scopeIDs {
+			if id != "" {
+				refs = append(refs, id)
+			}
+		}
+	}
+	for _, repo := range whatRepos {
+		if repo != "" {
+			refs = append(refs, repo)
+		}
+	}
+	return refs
+}
+
+// RowQuerier is the read boundary ResolveRepoRef needs.
+type RowQuerier interface {
+	Query(ctx context.Context, statement string, bindings []dhclickhouse.Binding) (dhclickhouse.RowScanner, error)
+}
+
+// ResolveRepoRef ports resolve_repo_id (api/queries/scopes.py:19-50): a UUID-shaped
+// reference is verified against repos.id of the org, anything else matches
+// repos.repo. settings is the caller's own "SETTINGS ..." clause (each package keeps
+// its own time budget) and errPrefix its own error wording: both are the only
+// differences the seven copies of this function had. ok is false when nothing
+// resolves.
+func ResolveRepoRef(ctx context.Context, client RowQuerier, repoRef, orgID, settings, errPrefix string) (id string, ok bool, err error) {
+	var query string
+	var bindings []dhclickhouse.Binding
+	if parsed, perr := pythonparity.ParseUUID(repoRef); perr == nil {
+		query = fmt.Sprintf(`
+SELECT toString(id) AS id
+FROM repos FINAL
+WHERE toString(id) = {repo_id:String}
+  AND org_id = {org_id:String}
+LIMIT 1
+%s
+`, settings)
+		bindings = []dhclickhouse.Binding{
+			{Name: "repo_id", Value: parsed.String()},
+			{Name: "org_id", Value: orgID},
+		}
+	} else {
+		query = fmt.Sprintf(`
+SELECT toString(id) AS id
+FROM repos FINAL
+WHERE repo = {repo_name:String}
+  AND org_id = {org_id:String}
+LIMIT 1
+%s
+`, settings)
+		bindings = []dhclickhouse.Binding{
+			{Name: "repo_name", Value: repoRef},
+			{Name: "org_id", Value: orgID},
+		}
+	}
+	rows, err := client.Query(ctx, query, bindings)
+	if err != nil {
+		return "", false, fmt.Errorf("%sresolve repo id: %w", errPrefix, err)
+	}
+	defer rows.Close()
+	if !rows.Next() {
+		if err := rows.Err(); err != nil {
+			return "", false, fmt.Errorf("%siterate resolve repo id rows: %w", errPrefix, err)
+		}
+		return "", false, nil
+	}
+	if err := rows.Scan(&id); err != nil {
+		return "", false, fmt.Errorf("%sscan resolve repo id row: %w", errPrefix, err)
+	}
+	return id, true, nil
+}
+
+// ResolveRepoRefs ports resolve_repo_ids (api/queries/scopes.py:53-69): every
+// non-empty reference, one lookup each (bounded by what the caller named), those
+// that resolve in order.
+func ResolveRepoRefs(ctx context.Context, client RowQuerier, repoRefs []string, orgID, settings, errPrefix string) ([]string, error) {
+	var resolved []string
+	for _, ref := range repoRefs {
+		if ref == "" {
+			continue
+		}
+		id, ok, err := ResolveRepoRef(ctx, client, ref, orgID, settings, errPrefix)
+		if err != nil {
+			return nil, err
+		}
+		if ok {
+			resolved = append(resolved, id)
+		}
+	}
+	return resolved, nil
 }

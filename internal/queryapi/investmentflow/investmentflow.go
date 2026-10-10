@@ -161,16 +161,8 @@ func repoScopeFilterClause(ctx context.Context, client QueryClient, scopeLevel s
 		teamCondition, teamBindings = teamscope.RepoCondition(orgID, "repo_id", scopeIDs, asOf)
 	}
 
-	switch {
-	case explicitSQL != "" && teamCondition != "":
-		return " AND (repo_id IN {scope_ids:Array(String)} OR " + teamCondition + ")",
-			append(append([]dhclickhouse.Binding{}, explicitBindings...), teamBindings...), nil
-	case explicitSQL != "":
-		return explicitSQL, explicitBindings, nil
-	case teamCondition != "":
-		return " AND " + teamCondition, teamBindings, nil
-	}
-	return "", nil, nil
+	filter, bindings := teamscope.NarrowRepoScope(len(teamscope.NamedRepoRefs(scopeLevel, scopeIDs, whatRepos)) > 0, explicitSQL, explicitBindings, teamCondition, teamBindings)
+	return filter, bindings, nil
 }
 
 // flowRequiredColumns is the required-columns list both build_investment_

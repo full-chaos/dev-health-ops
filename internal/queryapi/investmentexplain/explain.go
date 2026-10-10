@@ -66,7 +66,9 @@ type ExplainInvestmentMixOptions struct {
 	EndTS              time.Time
 	RepoIDs            []string
 	TeamScopeCondition string
-	TeamScopeBindings  []dhclickhouse.Binding
+	// ReposNamed: see BreakdownFilters.ReposNamed.
+	ReposNamed        bool
+	TeamScopeBindings []dhclickhouse.Binding
 	// ScopeLevel is filters.scope.level verbatim ("org" when absent) --
 	// needed here, not just to compute RepoIDs, because
 	// build_investment_response (api/services/investment.py:175) only
@@ -347,6 +349,7 @@ func (reader *Reader) ExplainInvestmentMix(ctx context.Context, writer *CacheWri
 	// (P1).
 	if opts.ScopeLevel == "team" || opts.ScopeLevel == "repo" {
 		breakdownFilter.RepoIDs = opts.RepoIDs
+		breakdownFilter.ReposNamed = opts.ReposNamed
 		breakdownFilter.TeamScopeCondition = opts.TeamScopeCondition
 		breakdownFilter.TeamScopeBindings = opts.TeamScopeBindings
 	}
@@ -381,6 +384,7 @@ func (reader *Reader) ExplainInvestmentMix(ctx context.Context, writer *CacheWri
 		StartTS:            opts.StartTS,
 		EndTS:              opts.EndTS,
 		RepoIDs:            opts.RepoIDs,
+		ReposNamed:         opts.ReposNamed,
 		TeamScopeCondition: opts.TeamScopeCondition,
 		TeamScopeBindings:  opts.TeamScopeBindings,
 		Limit:              200,

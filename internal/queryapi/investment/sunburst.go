@@ -23,6 +23,7 @@ type SunburstFilters struct {
 	StartTS            time.Time
 	EndTS              time.Time
 	RepoIDs            []string
+	ReposNamed         bool // the request names repositories (teamscope.NamedRepoRefs)
 	TeamScopeCondition string
 	TeamScopeBindings  []dhclickhouse.Binding
 	Themes             []string
@@ -68,7 +69,7 @@ func (r *Reader) FetchInvestmentSunburst(ctx context.Context, filters SunburstFi
 	categorySQL, categoryBindings := filters.categoryFilters().clause(
 		"splitByChar('.', subcategory_kv.1)[1]", "subcategory_kv.1",
 	)
-	scopeSQL, scopeBindings := combinedScopeClause(filters.RepoIDs, filters.TeamScopeCondition, filters.TeamScopeBindings)
+	scopeSQL, scopeBindings := combinedScopeClause(filters.ReposNamed, filters.RepoIDs, filters.TeamScopeCondition, filters.TeamScopeBindings)
 
 	query := fmt.Sprintf(`
 SELECT

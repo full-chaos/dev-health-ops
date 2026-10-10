@@ -29,6 +29,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
 	"time"
 
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
@@ -115,9 +116,13 @@ type BreakdownFilters struct {
 	EndTS              time.Time
 	RepoIDs            []string
 	TeamScopeCondition string
-	TeamScopeBindings  []dhclickhouse.Binding
-	Themes             []string
-	Subcategories      []string
+	// ReposNamed says the request names repositories (teamscope.NamedRepoRefs):
+	// with none resolved the filter matches nothing; with a team scope too, the
+	// two narrow (AND), they never widen.
+	ReposNamed        bool
+	TeamScopeBindings []dhclickhouse.Binding
+	Themes            []string
+	Subcategories     []string
 }
 
 func (f BreakdownFilters) categoryClause() (filterSQL string, bindings []dhclickhouse.Binding) {
@@ -153,16 +158,11 @@ func (f BreakdownFilters) scopeClause() (filterSQL string, bindings []dhclickhou
 		explicitBindings = []dhclickhouse.Binding{{Name: "scope_ids", Value: dedupeStrings(f.RepoIDs)}}
 	}
 
-	switch {
-	case explicitCondition != "" && f.TeamScopeCondition != "":
-		return " AND (" + explicitCondition + " OR " + f.TeamScopeCondition + ")", append(explicitBindings, f.TeamScopeBindings...)
-	case explicitCondition != "":
-		return " AND " + explicitCondition, explicitBindings
-	case f.TeamScopeCondition != "":
-		return " AND " + f.TeamScopeCondition, f.TeamScopeBindings
-	default:
-		return "", nil
+	explicitSQL := ""
+	if explicitCondition != "" {
+		explicitSQL = " AND " + explicitCondition
 	}
+	return teamscope.NarrowRepoScope(f.ReposNamed, explicitSQL, explicitBindings, f.TeamScopeCondition, f.TeamScopeBindings)
 }
 
 func (f BreakdownFilters) baseBindings() []dhclickhouse.Binding {

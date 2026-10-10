@@ -187,7 +187,8 @@ func Write(ctx context.Context, conn driver.Conn, orgID string, rows Rows, selec
 		var plan providersync.SnapshotPlan
 		if memberships, expiredMemberships, plan, err = planMemberships(ctx, conn, orgID, teams, freshMemberships, now,
 			providersync.AtlassianTeamMembershipKind().Snapshot(scope, providersync.ProveSnapshot(
-				providersync.SnapshotTerm{Holds: rows.MembershipsComplete, Reason: snapshotMemberReadsNotEnded}))); err != nil {
+				providersync.SnapshotTerm{Holds: rows.MembershipsComplete, Reason: snapshotMemberReadsNotEnded}),
+				providersync.AbsenceByWalk[providersync.MembershipSnapshotRow](providersync.AbsenceWalkByCursor))); err != nil {
 			return result, fmt.Errorf("read current team memberships: %w", err)
 		}
 		report(plan)
@@ -198,7 +199,8 @@ func Write(ctx context.Context, conn driver.Conn, orgID string, rows Rows, selec
 		var plan providersync.SnapshotPlan
 		if ownership, expiredOwnership, plan, err = planOwnership(ctx, conn, orgID, teams, rows.Ownership, now,
 			providersync.AtlassianTeamLinkKind(Source, rows.UnreadableProjectLinkTeams).Snapshot(scope, providersync.ProveSnapshot(
-				providersync.SnapshotTerm{Holds: rows.ProjectLinksComplete, Reason: snapshotLinkReadsNotEnded}))); err != nil {
+				providersync.SnapshotTerm{Holds: rows.ProjectLinksComplete, Reason: snapshotLinkReadsNotEnded}),
+				providersync.AbsenceByWalk[providersync.OwnershipSnapshotRow](providersync.AbsenceWalkByCursor))); err != nil {
 			return result, fmt.Errorf("read current team project ownership: %w", err)
 		}
 		report(plan)
@@ -314,7 +316,8 @@ func teamsInScope(ctx context.Context, conn driver.Conn, orgID string, rows Rows
 	plan = providersync.PlanSnapshot(fresh, known, providersync.TeamSnapshotKey,
 		func(providersync.TeamSnapshotRow) time.Time { return time.Time{} }, time.Time{},
 		providersync.AtlassianTeamCatalogKind().Snapshot(scope, providersync.ProveSnapshot(
-			providersync.SnapshotTerm{Holds: rows.TeamSearchComplete, Reason: snapshotTeamSearchNotEnded})))
+			providersync.SnapshotTerm{Holds: rows.TeamSearchComplete, Reason: snapshotTeamSearchNotEnded}),
+			providersync.AbsenceByWalk[providersync.TeamSnapshotRow](providersync.AbsenceWalkByCursor)))
 	for _, retraction := range plan.Retract {
 		id := known[retraction.Open].TeamID
 		ids = append(ids, id)

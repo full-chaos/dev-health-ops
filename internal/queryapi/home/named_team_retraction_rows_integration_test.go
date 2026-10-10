@@ -147,3 +147,85 @@ VALUES (?, ?, ?, ?, 'feature_delivery.customer', 'roadmap', ?)`, retracted, day,
 		t.Errorf("with one area computed again last = %+v, want that area's newest row %+v", got, want)
 	}
 }
+
+// TestARetractionOverOneStoredKeyLeavesTheMeasuredKeyBesideIt holds each
+// column of the key the rule is applied to: the key the writer writes (day,
+// repository, team, investment area, project stream). One key is measured
+// (5 items). Then a NEWER retraction row is stored over a sibling key that
+// differs from it in ONE column. The measured key stays, whichever column
+// differs: a rule judged on a key that lacks that column would take the
+// newer retraction row as the row of both keys and drop the measured one.
+//
+// The last case is the rule itself: a newer retraction row over the SAME key
+// leaves no theme.
+func TestARetractionOverOneStoredKeyLeavesTheMeasuredKeyBesideIt(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+	store := retractionseed.Start(ctx, t)
+	client, err := dhclickhouse.NewClickHouseQueryClientWithOptions(dhclickhouse.Options{DSN: store.URI})
+	if err != nil {
+		t.Fatalf("construct query client: %v", err)
+	}
+	defer func() { _ = client.Close() }()
+
+	type storedKey struct {
+		day                      time.Time
+		repo, team, area, stream string
+	}
+	measured := storedKey{
+		day: store.Days[1], repo: "55555555-5555-4555-8555-555555555555",
+		team: "jira:ENG", area: "feature_delivery.customer", stream: "roadmap",
+	}
+	sibling := func(change func(*storedKey)) storedKey {
+		key := measured
+		change(&key)
+		return key
+	}
+	theme := []ReworkThemeAllocation{{Theme: "feature_delivery", Label: "Feature Delivery", Allocation: 5, AllocationPct: 100, PRsMerged: 1, ChurnLOC: 10}}
+	cases := []struct {
+		column    string
+		org       string
+		retracted storedKey
+		want      []ReworkThemeAllocation
+	}{
+		{"repository", "c0c0c0c0-0000-4000-8000-0000000090b1",
+			sibling(func(key *storedKey) { key.repo = "66666666-6666-4666-8666-666666666666" }), theme},
+		{"team", "c0c0c0c0-0000-4000-8000-0000000090b2",
+			sibling(func(key *storedKey) { key.team = "jira:OPS" }), theme},
+		{"project stream", "c0c0c0c0-0000-4000-8000-0000000090b3",
+			sibling(func(key *storedKey) { key.stream = "operations" }), theme},
+		{"day", "c0c0c0c0-0000-4000-8000-0000000090b4",
+			sibling(func(key *storedKey) { key.day = store.Days[2] }), theme},
+		{"investment area", "c0c0c0c0-0000-4000-8000-0000000090b5",
+			sibling(func(key *storedKey) { key.area = "feature_delivery.enablement" }), theme},
+		{"no column: the same key", "c0c0c0c0-0000-4000-8000-0000000090b6", measured, nil},
+	}
+	for _, testCase := range cases {
+		if err := store.Conn.Exec(ctx, `INSERT INTO investment_metrics_daily
+(org_id, day, repo_id, team_id, investment_area, project_stream, delivery_units, work_items_completed, prs_merged, churn_loc, computed_at)
+VALUES (?, ?, ?, ?, ?, ?, 5, 5, 1, 10, ?)`,
+			testCase.org, measured.day, measured.repo, measured.team, measured.area, measured.stream, store.OldComputedAt); err != nil {
+			t.Fatal(err)
+		}
+		key := testCase.retracted
+		if err := store.Conn.Exec(ctx, `INSERT INTO investment_metrics_daily
+(org_id, day, repo_id, team_id, investment_area, project_stream, computed_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+			testCase.org, key.day, key.repo, key.team, key.area, key.stream, store.NewComputedAt); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// The window holds both days, so the sibling of the day case is read too.
+	from, to := store.Days[1], store.Days[2].AddDate(0, 0, 1)
+	for _, testCase := range cases {
+		got, err := fetchReworkThemeAllocation(ctx, client, from, to, "", nil, "", nil, testCase.org)
+		if err != nil {
+			t.Fatalf("%s: %v", testCase.column, err)
+		}
+		if len(got) == 0 && len(testCase.want) == 0 {
+			continue
+		}
+		if !reflect.DeepEqual(got, testCase.want) {
+			t.Errorf("a retraction over a key that differs in the %s: got %+v, want %+v", testCase.column, got, testCase.want)
+		}
+	}
+}

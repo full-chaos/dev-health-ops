@@ -1564,6 +1564,11 @@ take it through `internal/storage/clickhouse/liverow`, and the rule there is: a 
   was not measured is not a team with 0 work. These reads hold the predicate: the throughput and capacity forecast
   histories and the mean WIP, the aggregated flame, the sankey status counts, the home theme allocation, the
   cognitive load of one team, and the per-day reads of the recommendations loader and the capacity forecast job.
+- The predicate is applied to the newest row of the key THE WRITER WRITES, before any roll-up of the reader's own.
+  A reader that first rolls stored keys up to a coarser one (the investment areas of a theme, the scopes of a team,
+  the repositories of a day) and tests the rolled row takes a newer row of zeros of ONE stored key as the row of
+  all of them, and drops the measured ones with it. The home theme allocation reads the stored investment area
+  (day, repository, team, area, project stream), applies the predicate there, and only then takes the theme.
 - A reader that takes the state on the newest day of each key (a backlog, a current WIP, a stored risk score) must
   NOT filter before it picks the newest row: the row of zeros is what says the key holds nothing now, and a filter
   that ran first would serve the older row. It then gives 0 or no value, as for a key with no row.

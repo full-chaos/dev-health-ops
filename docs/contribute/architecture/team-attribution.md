@@ -804,7 +804,12 @@ project's items by id. Now:
      and a join, once), a different id under a new login is another person, and an id that two open rows of
      one team share replaces both. `member_id`, `identity_facets` and `raw_provider_user_id` are not changed
      by the rule. Jira (Atlassian Teams) keys the member by the accountId itself, so no rename can happen
-     there; the column holds the accountId. Each run logs `team_membership_renamed` (provider, team, renamed)
+     there; the column holds the accountId. Every route that copies or reads back a membership row keeps the
+     column: the effect readback of the GitLab, Jira and Linear snapshot writers compares it (a stored row
+     without the id the run wrote is a conflict, so it is written again, never "exact"); the team-id carry
+     copies it to the keyed team id; the identity-drift review stages it in the `new_value_json` payload (the
+     change id is still the hash of the payload without it, so a pending change keeps its id) and an approval
+     writes it. Each run logs `team_membership_renamed` (provider, team, renamed)
      once per team, never a login or an email.
   A member returned with `active: false` is a deactivated user: the provider says so, and it is closed (an
   email-keyed member too). A member who comes back is a new fact with a new `valid_from`. Every close is logged

@@ -54,6 +54,9 @@ type teamDriftMembershipView struct {
 	ValidFrom         time.Time
 	ValidTo           *time.Time
 	UpdatedAt         time.Time
+	// ProviderUserID is the provider's own stable id (CHAOS-9144); staged in
+	// the payload so an approved row keeps it, never part of the change id.
+	ProviderUserID *string
 }
 
 func linearMembershipRowToDriftView(row linearReferenceMembershipRow) teamDriftMembershipView {
@@ -62,6 +65,7 @@ func linearMembershipRowToDriftView(row linearReferenceMembershipRow) teamDriftM
 		RawProviderUserID: row.RawProviderUserID, RawEmail: row.RawEmail, IdentityFacets: row.IdentityFacets,
 		Source: row.Source, IsPrimary: row.IsPrimary, Specificity: row.Specificity, Priority: row.Priority,
 		ValidFrom: row.ValidFrom, ValidTo: row.ValidTo, UpdatedAt: row.UpdatedAt,
+		ProviderUserID: row.ProviderUserID,
 	}
 }
 
@@ -71,6 +75,7 @@ func githubMembershipRowToDriftView(row githubMembershipRow) teamDriftMembership
 		RawProviderUserID: row.RawProviderUserID, RawEmail: row.RawEmail, IdentityFacets: row.IdentityFacets,
 		Source: row.Source, IsPrimary: row.IsPrimary, Specificity: row.Specificity, Priority: row.Priority,
 		ValidFrom: row.ValidFrom, ValidTo: row.ValidTo, UpdatedAt: row.UpdatedAt,
+		ProviderUserID: row.ProviderUserID,
 	}
 }
 
@@ -80,6 +85,7 @@ func gitlabMembershipRowToDriftView(row gitlabTeamCatalogMembershipRow) teamDrif
 		RawProviderUserID: row.RawProviderUserID, RawEmail: row.RawEmail, IdentityFacets: row.IdentityFacets,
 		Source: row.Source, IsPrimary: row.IsPrimary, Specificity: row.Specificity, Priority: row.Priority,
 		ValidFrom: row.ValidFrom, ValidTo: row.ValidTo, UpdatedAt: row.UpdatedAt,
+		ProviderUserID: row.ProviderUserID,
 	}
 }
 
@@ -96,6 +102,17 @@ func membershipRowJSON(orgID string, row teamDriftMembershipView) map[string]any
 		"is_primary": row.IsPrimary, "specificity": row.Specificity, "priority": row.Priority,
 		"valid_from": row.ValidFrom, "valid_to": row.ValidTo, "updated_at": row.UpdatedAt,
 	}
+}
+
+// membershipPayloadJSON is membershipRowJSON plus provider_user_id when the
+// row has one (CHAOS-9144): the staged new_value_json an approval inserts. A
+// row without the id is byte-identical to the Python payload.
+func membershipPayloadJSON(orgID string, row teamDriftMembershipView) map[string]any {
+	out := membershipRowJSON(orgID, row)
+	if row.ProviderUserID != nil {
+		out["provider_user_id"] = row.ProviderUserID
+	}
+	return out
 }
 
 // manualMembershipRow is the full row shape _manual_memberships reads back
@@ -441,8 +458,12 @@ func reviewMembershipsForDrift(
 			continue
 		}
 		oldJSON := conflictOldValueJSON(detail)
-		newJSON := pyCanonicalJSON(membershipRowJSON(orgID, row))
-		changeID := changeIDForIdentityMembership(orgID, row.TeamID, row.Provider, row.MemberID, detail.Field, oldJSON, newJSON)
+		// The change id hashes the Python-shaped payload (no provider_user_id)
+		// so it stays the id Python derives and a pending change keeps its id;
+		// the STORED payload adds provider_user_id so an approval writes it.
+		hashJSON := pyCanonicalJSON(membershipRowJSON(orgID, row))
+		newJSON := pyCanonicalJSON(membershipPayloadJSON(orgID, row))
+		changeID := changeIDForIdentityMembership(orgID, row.TeamID, row.Provider, row.MemberID, detail.Field, oldJSON, hashJSON)
 
 		existing, hasExisting := changesByID[changeID]
 		if hasExisting && isTeamDriftDecidedStatus(existing.Status) {

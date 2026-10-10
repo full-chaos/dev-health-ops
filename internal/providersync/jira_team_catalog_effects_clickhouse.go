@@ -371,7 +371,7 @@ func (sink JiraTeamCatalogClickHouseEffects) inspectOwnership(ctx context.Contex
 }
 
 func (sink JiraTeamCatalogClickHouseEffects) inspectMembership(ctx context.Context, claim Claim, row jiraTeamCatalogMembershipRow) (EffectInspection, error) {
-	result, err := sink.Conn.Query(ctx, `SELECT org_id, provider, team_id, member_id, raw_provider_user_id, raw_email, identity_facets, source, is_primary, specificity, priority, valid_from, valid_to, updated_at FROM team_memberships FINAL WHERE org_id = ? AND provider = ? AND team_id = ? AND member_id = ? AND source = ? AND toUnixTimestamp64Milli(valid_from) = ?`, claim.OrgID, jiraTeamCatalogProvider, row.TeamID, row.MemberID, row.Source, row.ValidFrom.UnixMilli())
+	result, err := sink.Conn.Query(ctx, `SELECT org_id, provider, team_id, member_id, raw_provider_user_id, raw_email, identity_facets, source, is_primary, specificity, priority, valid_from, valid_to, updated_at, provider_user_id FROM team_memberships FINAL WHERE org_id = ? AND provider = ? AND team_id = ? AND member_id = ? AND source = ? AND toUnixTimestamp64Milli(valid_from) = ?`, claim.OrgID, jiraTeamCatalogProvider, row.TeamID, row.MemberID, row.Source, row.ValidFrom.UnixMilli())
 	if err != nil {
 		return EffectConflict, err
 	}
@@ -379,7 +379,7 @@ func (sink JiraTeamCatalogClickHouseEffects) inspectMembership(ctx context.Conte
 	var actual jiraTeamCatalogMembershipRow
 	found := 0
 	for result.Next() {
-		if err := result.Scan(&actual.OrgID, &actual.Provider, &actual.TeamID, &actual.MemberID, &actual.RawProviderUserID, &actual.RawEmail, &actual.IdentityFacets, &actual.Source, &actual.IsPrimary, &actual.Specificity, &actual.Priority, &actual.ValidFrom, &actual.ValidTo, &actual.UpdatedAt); err != nil {
+		if err := result.Scan(&actual.OrgID, &actual.Provider, &actual.TeamID, &actual.MemberID, &actual.RawProviderUserID, &actual.RawEmail, &actual.IdentityFacets, &actual.Source, &actual.IsPrimary, &actual.Specificity, &actual.Priority, &actual.ValidFrom, &actual.ValidTo, &actual.UpdatedAt, &actual.ProviderUserID); err != nil {
 			return EffectConflict, err
 		}
 		found++
@@ -486,6 +486,7 @@ func equalJiraOwnership(left, right jiraTeamCatalogOwnershipRow) bool {
 func equalJiraMembership(left, right jiraTeamCatalogMembershipRow) bool {
 	return left.OrgID == right.OrgID && left.Provider == right.Provider && left.TeamID == right.TeamID &&
 		left.MemberID == right.MemberID && reflect.DeepEqual(left.RawProviderUserID, right.RawProviderUserID) &&
+		reflect.DeepEqual(left.ProviderUserID, right.ProviderUserID) &&
 		reflect.DeepEqual(left.RawEmail, right.RawEmail) && reflect.DeepEqual(left.IdentityFacets, right.IdentityFacets) &&
 		left.Source == right.Source && left.IsPrimary == right.IsPrimary && left.Specificity == right.Specificity &&
 		left.Priority == right.Priority && left.ValidFrom.Equal(right.ValidFrom) &&

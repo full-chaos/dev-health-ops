@@ -473,7 +473,7 @@ func (sink GitLabTeamCatalogClickHouseEffects) inspectMembership(ctx context.Con
 	// Same valid_from-in-sort-key reasoning as inspectOwnership above:
 	// team_memberships' ORDER BY is (org_id, provider, team_id, member_id,
 	// source, valid_from).
-	result, err := sink.Conn.Query(ctx, `SELECT org_id, provider, team_id, member_id, raw_provider_user_id, raw_email, identity_facets, source, is_primary, specificity, priority, valid_from, valid_to, updated_at FROM team_memberships FINAL WHERE org_id = ? AND provider = ? AND team_id = ? AND member_id = ? AND source = ? AND toUnixTimestamp64Milli(valid_from) = ?`, claim.OrgID, gitlabTeamCatalogProvider, row.TeamID, row.MemberID, gitlabTeamCatalogSource, row.ValidFrom.UnixMilli())
+	result, err := sink.Conn.Query(ctx, `SELECT org_id, provider, team_id, member_id, raw_provider_user_id, raw_email, identity_facets, source, is_primary, specificity, priority, valid_from, valid_to, updated_at, provider_user_id FROM team_memberships FINAL WHERE org_id = ? AND provider = ? AND team_id = ? AND member_id = ? AND source = ? AND toUnixTimestamp64Milli(valid_from) = ?`, claim.OrgID, gitlabTeamCatalogProvider, row.TeamID, row.MemberID, gitlabTeamCatalogSource, row.ValidFrom.UnixMilli())
 	if err != nil {
 		return EffectConflict, err
 	}
@@ -481,7 +481,7 @@ func (sink GitLabTeamCatalogClickHouseEffects) inspectMembership(ctx context.Con
 	var actual gitlabTeamCatalogMembershipRow
 	found := 0
 	for result.Next() {
-		if err := result.Scan(&actual.OrgID, &actual.Provider, &actual.TeamID, &actual.MemberID, &actual.RawProviderUserID, &actual.RawEmail, &actual.IdentityFacets, &actual.Source, &actual.IsPrimary, &actual.Specificity, &actual.Priority, &actual.ValidFrom, &actual.ValidTo, &actual.UpdatedAt); err != nil {
+		if err := result.Scan(&actual.OrgID, &actual.Provider, &actual.TeamID, &actual.MemberID, &actual.RawProviderUserID, &actual.RawEmail, &actual.IdentityFacets, &actual.Source, &actual.IsPrimary, &actual.Specificity, &actual.Priority, &actual.ValidFrom, &actual.ValidTo, &actual.UpdatedAt, &actual.ProviderUserID); err != nil {
 			return EffectConflict, err
 		}
 		found++
@@ -562,6 +562,7 @@ func equalGitLabOwnership(left, right gitlabTeamCatalogOwnershipRow) bool {
 func equalGitLabMembership(left, right gitlabTeamCatalogMembershipRow) bool {
 	return left.OrgID == right.OrgID && left.Provider == right.Provider && left.TeamID == right.TeamID &&
 		left.MemberID == right.MemberID && reflect.DeepEqual(left.RawProviderUserID, right.RawProviderUserID) &&
+		reflect.DeepEqual(left.ProviderUserID, right.ProviderUserID) &&
 		reflect.DeepEqual(left.RawEmail, right.RawEmail) && reflect.DeepEqual(left.IdentityFacets, right.IdentityFacets) &&
 		left.Source == right.Source && left.IsPrimary == right.IsPrimary && left.Specificity == right.Specificity &&
 		left.Priority == right.Priority && left.ValidFrom.Equal(right.ValidFrom) &&

@@ -283,3 +283,53 @@ func TestAPersonTheWorkItemComputeNoLongerProducesIsRetractedAndAMeasuredZeroSta
 		t.Errorf("the third compute wrote %d row(s) for alice, want 0: a retracted key is not retracted again", written)
 	}
 }
+
+// A person whose row under a real repository is retracted has no git record
+// any more: the finalize family must neither read the retraction row as one
+// (and write a live row over the key again) nor drop her work-item metrics.
+func TestARetractedGitRowIsNoGitRecordOfTheFinalizeFamily(t *testing.T) {
+	ctx := context.Background()
+	conn := workItemAttributionLinkedIssueMigratedClickHouse(t, ctx)
+	const org = "00000000-0000-4000-8000-0000000093d1"
+	day := time.Date(2026, 8, 24, 0, 0, 0, 0, time.UTC)
+	older, newer := day.Add(10*time.Hour), day.Add(11*time.Hour)
+	repo := uuid.MustParse("00000000-0000-4000-8000-0000000093d2")
+	exec := func(what, query string, args ...any) {
+		t.Helper()
+		if err := conn.Exec(ctx, query, args...); err != nil {
+			t.Fatalf("%s: %v", what, err)
+		}
+	}
+	for _, row := range []struct {
+		at     time.Time
+		marker uint8
+		loc    uint32
+	}{{older, 0, 40}, {newer, 1, 0}} {
+		exec("git row of eve", `INSERT INTO user_metrics_daily
+ (org_id, repo_id, day, author_email, identity_id, team_id, team_name, loc_added, computed_at, retracted)
+ VALUES (?, ?, ?, 'eve@example.com', 'eve@example.com', 'unassigned', 'Unassigned', ?, ?, ?)`, org, repo, day, row.loc, row.at, row.marker)
+	}
+	exec("work-item metrics of eve", `INSERT INTO work_item_user_metrics_daily
+ (day, provider, work_scope_id, user_identity, team_id, team_name, items_completed, computed_at, org_id)
+ VALUES (?, 'jira', 'PLAT', 'eve@example.com', 'unassigned', 'Unassigned', 2, ?, ?)`, day, newer, org)
+	if _, err := NewICFinalizeExecutor(conn).ComputeFinalizeFamily(ctx, Run{ID: uuid.NewString(), OrganizationID: org, TargetDay: day}); err != nil {
+		t.Fatalf("the finalize: %v", err)
+	}
+	var realRepoMarker uint8
+	if err := conn.QueryRow(ctx, `SELECT argMax(retracted, computed_at) FROM user_metrics_daily WHERE org_id = ? AND day = ? AND repo_id = ?`,
+		org, day, repo).Scan(&realRepoMarker); err != nil {
+		t.Fatal(err)
+	}
+	if realRepoMarker != 1 {
+		t.Errorf("the key under the real repository has marker %d, want 1: the retraction row was read as a git record and written live again", realRepoMarker)
+	}
+	synthesized := icfinalize.SynthesizedRepoID(org, "eve@example.com")
+	var live uint64
+	if err := conn.QueryRow(ctx, `SELECT count() FROM (SELECT argMax(retracted, computed_at) AS r FROM user_metrics_daily
+ WHERE org_id = ? AND day = ? AND repo_id = ? GROUP BY repo_id, author_email, day) WHERE r = 0`, org, day, synthesized).Scan(&live); err != nil {
+		t.Fatal(err)
+	}
+	if live != 1 {
+		t.Errorf("live rows of eve under the synthesized repository = %d, want 1: her work items still count", live)
+	}
+}

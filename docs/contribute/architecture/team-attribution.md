@@ -1835,7 +1835,7 @@ later change of owner does not rewrite the items of earlier days.
 
 - **The item's day** is the start (UTC) of the day the item was completed (`status = 'done'` with a
   `completed_at`), and the start of the current day for an item that is not completed. A done item with no
-  `completed_at` takes the current day.
+  `completed_at`, or with a `completed_at` after the current day, takes the current day.
 - **The daily family** (`work_item_attribution`, `internal/jobs/metrics/daily`) reads the facts at the start of
   the partition's day. A day's partition holds every item created before the day's end that is not done or was
   completed on or after the day's start; the newest row of an item is read. So the last partition that holds a

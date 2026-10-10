@@ -323,12 +323,16 @@ func (executor *WorkItemAttributionExecutor) buildRowsAtEachItemsDay(
 //
 // completedDays holds the completion day of the items that are done and have a
 // completion time (loadCompletedDays). A done item with no completion time is
-// in no day's partition; it takes the day of now here.
+// in no day's partition; it takes the day of now here. A completion time after
+// the day of now is a day no partition has computed: the item is in the
+// partition of the day of now (its completion is not before that day's start),
+// so it takes the day of now too.
 func WorkItemAttributionItemDay(completedDays map[string]time.Time, workItemID string, now time.Time) time.Time {
-	if day, ok := completedDays[workItemID]; ok {
+	today := workItemAttributionUTCDay(now)
+	if day, ok := completedDays[workItemID]; ok && !day.After(today) {
 		return day
 	}
-	return workItemAttributionUTCDay(now)
+	return today
 }
 
 func workItemAttributionUTCDay(value time.Time) time.Time {

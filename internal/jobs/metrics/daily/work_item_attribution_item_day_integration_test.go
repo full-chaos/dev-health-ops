@@ -113,6 +113,18 @@ func TestTheBackstopAndTheDailyFamilyGiveAnItemTheOwnerOfItsOwnDay(t *testing.T)
 			itemDay: today, wantTeam: "team-new",
 		},
 		{
+			// A completion time after today (a provider's clock, a planned
+			// date) is not a day that exists yet: the item is in today's
+			// partition, with today's facts, not the facts of that later day.
+			name:   "a completion time in the future, the owner changes tomorrow",
+			status: "done", completed: itemDayTime(today.AddDate(0, 0, 2).Add(10 * time.Hour)),
+			ownership: []ownership{
+				{team: "team-old", validFrom: daysAgo(90), validTo: itemDayTime(today.AddDate(0, 0, 1))},
+				{team: "team-new", validFrom: today.AddDate(0, 0, 1)},
+			},
+			itemDay: today, wantTeam: "team-old",
+		},
+		{
 			name:   "completed after a change of owner",
 			status: "done", completed: itemDayTime(daysAgo(2)),
 			ownership: []ownership{

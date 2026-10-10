@@ -1744,6 +1744,25 @@ Limits:
 - The run-level step reads the items of every work scope of the run once more and writes their rows once more. Its
   cost is about one more read and write of the work-item families for each run.
 
+#### 0.4i A push batch: the team rows before the identities that name them (CHAOS-9125)
+
+- **Order.** A push batch (`internal/streamhandlers`) writes its kinds in the order of the Python sink
+  (`write_batch`): repository, commit, pull request, review, team, identity, the operational kinds in the order of
+  the sink's own list, then work item, work item transition, work item dependency. The kind of this port only
+  (the project membership transition) is last. Before, the kinds were written in the order of their names, so the
+  `identity.v1` records of a batch, which name team ids (`identities.team_ids`), were stored before the `team.v1`
+  records of the same batch. Each kind is still written on its own: a failed kind is skipped whole, the others are
+  written, and the batch fails and is retried whole. A test reads the order from the sink's source and fails when
+  the two differ; a second test holds that every kind a source may push has one place in the order.
+- **An identity can name a team the source never pushes.** The identity is stored as pushed, no team row is
+  made up for it, and the record is not refused. After the batch the sink writes ONE WARN line, `external push:
+  identities name team ids that have no team row`, with counts only: `identities` (identity records of the
+  batch), `team_ids_named`, `team_ids_with_no_team_row`, the organization and the source system. It holds no
+  team id and no identity id: either can be a person's own words. A failed count read is logged at WARN too
+  and does not fail the write, because the rows of the batch are stored.
+- **Not changed here.** What a reader makes of a team id with no team row (section 0.4c: the cascade keeps it
+  as an unknown team).
+
 #### 0.4a Provider × entity **consumption** (functional — what `run_team_autoimport` actually pulls)
 
 | provider | teams | projects | members | repo ownership | member store written |

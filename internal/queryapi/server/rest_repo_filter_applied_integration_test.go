@@ -91,6 +91,13 @@ func TestRESTHomeSaysWhetherTheRepositoryFilterNarrowedEachMetric(t *testing.T) 
 	check("repository scope", read("&scope_type=repo&scope_id="+url.QueryEscape(repo.String())), &yes, &yes)
 	// Repositories named in what.repos (POST body) behave the same.
 	check("what.repos", postDeltas(t, client, org, `{"filters":{"what":{"repos":["`+repo.String()+`"]},"time":{"range_days":7,"compare_days":7,"end_date":"2026-08-25"}}}`), &yes, &yes)
+	// D5855: a list of only empty strings names no repository: the request reads as one without a filter.
+	emptyNames := postDeltas(t, client, org, `{"filters":{"what":{"repos":[""]},"time":{"range_days":7,"compare_days":7,"end_date":"2026-08-25"}}}`)
+	check("what.repos of empty strings", emptyNames, nil, nil)
+	if got := emptyNames["churn"].Value; got != 105 {
+		t.Errorf("what.repos of empty strings: churn = %v, want the unfiltered 105", got)
+	}
+
 	// Filters narrow, they never widen: a team scope that also names a repository sees the
 	// repositories that are both named and owned by the team. team-one owns acme/checkout
 	// (churn 5) and not acme/other (churn 100).

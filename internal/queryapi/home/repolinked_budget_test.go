@@ -79,3 +79,31 @@ func TestRepoLinkedUnresolvedRepositoryRunsNoLinkedStatement(t *testing.T) {
 		}
 	}
 }
+
+// D5855: a repository list of empty strings names no repository: the request is not
+// filtered by one (no flag, no statement of the repository read), whichever surface
+// decoded it.
+func TestRepositoryListOfEmptyStringsNamesNoRepository(t *testing.T) {
+	for name, f := range map[string]Filters{
+		"what.repos [\"\"]":       {What: WhatFilter{Repos: []string{""}}},
+		"repo scope [\"\", \"\"]": {Scope: ScopeFilter{Level: "repo", IDs: []string{"", ""}}},
+	} {
+		if repoFilterRequested(f) {
+			t.Errorf("%s: a repository filter is requested", name)
+		}
+		if flag := repoFilterApplied(f, "repo"); flag != nil {
+			t.Errorf("%s: repoFilterApplied = %v, want null", name, *flag)
+		}
+	}
+	if !repoFilterRequested(Filters{What: WhatFilter{Repos: []string{"", "acme/a"}}}) {
+		t.Error("an empty string beside a real name hides the name")
+	}
+	client := fakeQueryClient{t: t, handler: func(t *testing.T, query string, bindings []dhclickhouse.Binding) (dhclickhouse.RowScanner, error) {
+		t.Errorf("a statement ran for a list of empty strings:\n%s", query)
+		return &fixtureRowScanner{rows: nil}, nil
+	}}
+	filter, bindings, err := repoScopeFilter(context.Background(), client, Filters{What: WhatFilter{Repos: []string{""}}}, "org-1", "repo_id", time.Now())
+	if err != nil || filter != "" || len(bindings) != 0 {
+		t.Errorf("repoScopeFilter = %q %v %v, want no condition", filter, bindings, err)
+	}
+}

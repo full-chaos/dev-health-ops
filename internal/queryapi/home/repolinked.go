@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/deltarule"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
 	"log/slog"
 	"math"
 	"sort"
@@ -14,7 +15,6 @@ import (
 
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 
-	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/daily"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/workitemmetrics"
 )
 
@@ -72,7 +72,8 @@ type RepoLinkCoverage struct {
 // repoLinkedView is everything one request reads once for the four metrics.
 type repoLinkedView struct {
 	state          string
-	items          []daily.WorkItemViewItem
+	items          []workitemmetrics.StoredItem
+	attributions   map[string]workitemmetrics.PrimaryAttribution
 	blocked        []blockedItemRow
 	basis          RepoLinkBasis
 	multiRepoItems int
@@ -117,11 +118,7 @@ func repoLinkedLoaderFrom(ctx context.Context) *repoLinkedLoader {
 
 // repoLinkedRepoRefs are the repositories the request names.
 func repoLinkedRepoRefs(f Filters) []string {
-	var refs []string
-	if f.Scope.Level == "repo" {
-		refs = append(refs, f.Scope.IDs...)
-	}
-	return append(refs, f.What.Repos...)
+	return teamscope.NamedRepoRefs(f.Scope.Level, f.Scope.IDs, f.What.Repos)
 }
 
 func (loader *repoLinkedLoader) load(ctx context.Context) (*repoLinkedView, error) {
@@ -186,10 +183,11 @@ func (loader *repoLinkedLoader) readLinked(ctx context.Context, view *repoLinked
 	if err != nil {
 		return nil, err
 	}
-	if err := loader.attach(ctx, budget, items); err != nil {
+	attributions, err := loader.readAttributions(ctx, budget, items)
+	if err != nil {
 		return nil, err
 	}
-	view.items = items
+	view.items, view.attributions = items, attributions
 	if err := loader.readBasis(ctx, budget, view); err != nil {
 		return nil, err
 	}
@@ -201,7 +199,7 @@ func (loader *repoLinkedLoader) readLinked(ctx context.Context, view *repoLinked
 		return nil, err
 	}
 	view.blocked = blocked
-	view.rowsByDay = computeRowsByDay(loader.compareStart, loader.endDay, items)
+	view.rowsByDay = computeRowsByDay(loader.compareStart, loader.endDay, items, attributions)
 	if len(items) == 0 && len(blocked) == 0 {
 		view.state = repoLinkNoLinks
 	}
@@ -213,7 +211,7 @@ func (loader *repoLinkedLoader) readLinked(ctx context.Context, view *repoLinked
 // either not done or completed no earlier than its start), over the union of
 // the days, from work_items FINAL, once per (provider, id) by the newest
 // last_synced (the lower repository id on a tie).
-func (loader *repoLinkedLoader) readItems(ctx context.Context, budget string) ([]daily.WorkItemViewItem, error) {
+func (loader *repoLinkedLoader) readItems(ctx context.Context, budget string) ([]workitemmetrics.StoredItem, error) {
 	rows, err := loader.client.Query(ctx, `
 SELECT toString(repo_id), last_synced,
        work_item_id, provider, status, project_key, project_id, native_team_key, project_name,
@@ -228,7 +226,7 @@ WHERE org_id = {org_id:String}
 	}
 	defer rows.Close()
 	type versioned struct {
-		item   daily.WorkItemViewItem
+		item   workitemmetrics.StoredItem
 		repoID string
 		synced time.Time
 	}
@@ -256,7 +254,7 @@ WHERE org_id = {org_id:String}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("home: repo-linked items: %w", err)
 	}
-	out := make([]daily.WorkItemViewItem, 0, len(best))
+	out := make([]workitemmetrics.StoredItem, 0, len(best))
 	loader.itemRepo = make(map[string]string, len(best))
 	for _, v := range best {
 		out = append(out, v.item)
@@ -266,13 +264,14 @@ WHERE org_id = {org_id:String}
 	return out, nil
 }
 
-// attach sets each item's primary team: the row of work_item_team_attributions
-// the work_item family reads (is_primary = 1, the newest snapshot of each
-// (repository, item)). An item with no row stays unattributed, which the
-// compute resolves to unassigned as the family does.
-func (loader *repoLinkedLoader) attach(ctx context.Context, budget string, items []daily.WorkItemViewItem) error {
+// readAttributions reads each item's primary team: the row of
+// work_item_team_attributions the work_item family reads (is_primary = 1, the
+// newest snapshot of each (repository, item)). An item with no row has none, which
+// the compute resolves to unassigned as the family does.
+func (loader *repoLinkedLoader) readAttributions(ctx context.Context, budget string, items []workitemmetrics.StoredItem) (map[string]workitemmetrics.PrimaryAttribution, error) {
+	out := map[string]workitemmetrics.PrimaryAttribution{}
 	if len(items) == 0 {
-		return nil
+		return out, nil
 	}
 	rows, err := loader.client.Query(ctx, `
 SELECT toString(repo_id), work_item_id, ifNull(team_id, ''), ifNull(team_name, '')
@@ -285,28 +284,21 @@ WHERE org_id = {org_id:String} AND is_primary = 1
       WHERE org_id = {org_id:String} AND work_item_id IN `+linkedItemsSubquery+`
       GROUP BY repo_id, work_item_id)`+budget, loader.bindings())
 	if err != nil {
-		return fmt.Errorf("home: repo-linked attributions: %w", err)
+		return nil, fmt.Errorf("home: repo-linked attributions: %w", err)
 	}
 	defer rows.Close()
-	type address struct{ repoID, itemID string }
-	teams := map[address][2]string{}
 	for rows.Next() {
-		var a address
-		var team [2]string
-		if err := rows.Scan(&a.repoID, &a.itemID, &team[0], &team[1]); err != nil {
-			return fmt.Errorf("home: repo-linked attributions scan: %w", err)
+		var repoID, itemID string
+		var attribution workitemmetrics.PrimaryAttribution
+		if err := rows.Scan(&repoID, &itemID, &attribution.TeamID, &attribution.TeamName); err != nil {
+			return nil, fmt.Errorf("home: repo-linked attributions scan: %w", err)
 		}
-		teams[a] = team
-	}
-	if err := rows.Err(); err != nil {
-		return fmt.Errorf("home: repo-linked attributions: %w", err)
-	}
-	for i := range items {
-		if team, ok := teams[address{loader.itemRepo[items[i].WorkItemID], items[i].WorkItemID}]; ok {
-			items[i].HasAttribution, items[i].TeamID, items[i].TeamName = true, team[0], team[1]
+		// The attribution of the stored row the item was read from.
+		if loader.itemRepo[itemID] == repoID {
+			out[itemID] = attribution
 		}
 	}
-	return nil
+	return out, rows.Err()
 }
 
 // readBasis counts the items of the view by the best tier of the links that put
@@ -417,13 +409,13 @@ FROM (
 // window over the items. The compute itself keeps the items that are relevant to
 // the day (created before it ends and started, completed or open at its end, or
 // created in it), as it does for the daily job.
-func computeRowsByDay(from, to time.Time, items []daily.WorkItemViewItem) map[time.Time][]workitemmetrics.MetricsDailyRow {
+func computeRowsByDay(from, to time.Time, items []workitemmetrics.StoredItem, attributions map[string]workitemmetrics.PrimaryAttribution) map[time.Time][]workitemmetrics.MetricsDailyRow {
 	out := map[time.Time][]workitemmetrics.MetricsDailyRow{}
 	if len(items) == 0 {
 		return out
 	}
 	for day := from; day.Before(to); day = day.AddDate(0, 0, 1) {
-		if rows := daily.ComputeWorkItemMetricsDay(day, items); len(rows) > 0 {
+		if rows := workitemmetrics.ComputeStoredItemsDay(day, items, nil, attributions).MetricsDaily; len(rows) > 0 {
 			out[day] = rows
 		}
 	}

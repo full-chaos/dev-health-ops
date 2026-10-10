@@ -40,11 +40,9 @@ import (
 // ported here. This matches the ALREADY-SHIPPED CHAOS-3716 Linear reference
 // catalog Go route (internal/providersync/linear_reference_catalog*.go), which
 // performs the exact same kind of direct upsert into teams/team_memberships
-// with no drift-review layer. Roster preservation for a members-off run IS
-// ported (GitHubTeamCatalogClickHouseEffects.ExistingTeamMembers) since it is a
-// simple, self-contained safe-fail read with no policy dependency. The two
-// skipped layers are tracked as a follow-up under CHAOS-4198 (see PR
-// RISK-NOTES) rather than partially/silently reimplemented.
+// with no drift-review layer. The two skipped layers are tracked as a follow-up
+// under CHAOS-4198 (see PR RISK-NOTES) rather than partially/silently
+// reimplemented.
 
 const (
 	githubTeamCatalogProvider               = "github"
@@ -82,11 +80,15 @@ type githubTeamMemberPayload struct {
 // insert_teams + team_autoimport_github.py's _team_rows). ProjectKeys is
 // always empty: GitHub teams carry no project association at all.
 type githubTeamRow struct {
-	ID          string   `json:"id"`
-	TeamUUID    string   `json:"team_uuid"`
-	Name        string   `json:"name"`
-	Description *string  `json:"description"`
-	Members     []string `json:"members"`
+	ID          string  `json:"id"`
+	TeamUUID    string  `json:"team_uuid"`
+	Name        string  `json:"name"`
+	Description *string `json:"description"`
+	// Members is the roster this run observed (the logins of the team's
+	// memberships). It is recorded in team_provider_observations.members_json
+	// only: the teams table has no roster column (CHAOS-9087), and a person's
+	// team comes from team_memberships.
+	Members []string `json:"members"`
 	// ManualMembers carries forward the CURRENTLY persisted teams.
 	// manual_members provenance column (CHAOS-4321, migration 079): this
 	// producer never sets it itself (matching Python's _team_rows, which has
@@ -162,16 +164,6 @@ type githubTeamCatalogRows struct {
 	Teams         []githubTeamRow
 	Memberships   []githubMembershipRow
 	RepoOwnership []githubTeamRepoOwnershipRow
-	// FailedMemberFetchTeamIDs (CHAOS-4461) lists the teams (by their "gh:"
-	// id, matching githubTeamRow.ID) whose member fetch failed under a
-	// non-strict Collect while members were globally selected. The roster
-	// rebuild below can only ever produce [] for these teams (no
-	// memberships were ever added for them); the caller (GitHubTeamCatalog
-	// Collector.CollectTeamCatalog) MUST NOT write that empty roster --
-	// it must confirm and carry forward the currently-persisted one instead,
-	// the same roster_write_safe discipline the members-globally-off path
-	// already uses, applied per-team.
-	FailedMemberFetchTeamIDs []string
 	// ObservedMembershipTeamIDs (CHAOS-4444) lists every team (by "gh:" id)
 	// whose member fetch was ATTEMPTED and SUCCEEDED this call, independent
 	// of wantTeams -- Teams' own row (and therefore rows.Teams) is only

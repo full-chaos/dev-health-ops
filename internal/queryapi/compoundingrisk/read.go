@@ -58,6 +58,9 @@ type storedRow struct {
 	thresholdElevated float64
 	thresholdHigh     float64
 	computedAt        time.Time
+	// coverage is the share of the weight that was present in the score,
+	// derived from the stored weights and component norms (CHAOS-6545).
+	coverage *float64
 }
 
 // idList is an optional list of ids: nil is "no filter", an empty non-nil
@@ -248,6 +251,7 @@ func latestRows(ctx context.Context, client QueryClient, orgID string, day time.
 			&r.wReview, &r.thresholdElevated, &r.thresholdHigh, &r.computedAt); err != nil {
 			return nil, fmt.Errorf("compoundingrisk: latest rows scan: %w", err)
 		}
+		r.coverage = coverageOf(r)
 		out = append(out, r)
 	}
 	if err := rs.Err(); err != nil {

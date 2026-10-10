@@ -566,6 +566,19 @@ func TestHomeFiltersFromGraphQL_TimeWindowIsApplied(t *testing.T) {
 	}
 }
 
+// A signal's coverage reaches HomeSignal.coverage (CHAOS-6545) and stays null on a
+// signal that has none.
+func TestHomeSignalsCarryTheirCoverageToTheGraphQLType(t *testing.T) {
+	coverage := 0.3
+	out := homeSignalsFromResponse([]home.Signal{
+		{ID: "risk:repo:1", Metric: "compounding_risk", Coverage: &coverage},
+		{ID: "other", Metric: "cycle_time"},
+	})
+	if len(out) != 2 || out[0].Coverage == nil || *out[0].Coverage != 0.3 || out[1].Coverage != nil {
+		t.Fatalf("coverage on the GraphQL signals = %v / %v", out[0].Coverage, out[1].Coverage)
+	}
+}
+
 // A null percent (a rise from a measured 0) maps to a null deltaPct; the flags stay.
 func TestHomeResultKeepsANullDeltaPctNull(t *testing.T) {
 	resp := &home.Response{Deltas: []home.MetricDelta{{Metric: "churn", Label: "Churn", Value: 5, DeltaPct: nil, HasData: true, HasPriorData: true}}}

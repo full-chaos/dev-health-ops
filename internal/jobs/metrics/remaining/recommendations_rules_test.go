@@ -645,3 +645,47 @@ func TestFrozenEnvironmentIsPortable(t *testing.T) {
 		environment.PythonVersion, environment.Implementation,
 		environment.UnicodeVersion, environment.FloatReprStyle)
 }
+
+// A score from fewer than all four inputs says so (CHAOS-6545): the rationale
+// names the coverage and the inputs it stands on, and claims only those. A
+// score from all four keeps the text of the Python reference.
+func TestCompoundingRiskRationaleNamesTheCoverageOfAPartialScore(t *testing.T) {
+	now := time.Date(2026, 8, 24, 12, 0, 0, 0, time.UTC)
+	base := MetricsSnapshot{
+		TeamID: "team-1", OrgID: "org-1", WindowStart: now.AddDate(0, 0, -14), WindowEnd: now,
+		CompoundingRiskScore: 0.72, CompoundingRiskScoreKnown: true, CompoundingRiskSeverity: "high",
+	}
+
+	full := base
+	full.CompoundingRiskCoverage, full.CompoundingRiskCoverageKnown = 1.0, true
+	full.CompoundingRiskInputs = []string{"churn", "complexity trend", "ownership concentration", "review latency"}
+	got, err := evaluateCompoundingRisk(full, now)
+	if err != nil || got == nil {
+		t.Fatalf("full coverage: %v %v", got, err)
+	}
+	const reference = "Compounding Risk score is 0.720 (severity: high). Churn, complexity trend, ownership concentration, and review latency are compounding above their tuned thresholds."
+	if got.Rationale != reference {
+		t.Errorf("a score from all four inputs keeps the reference text:\n got %q\nwant %q", got.Rationale, reference)
+	}
+
+	partial := base
+	partial.CompoundingRiskCoverage, partial.CompoundingRiskCoverageKnown = 0.5, true
+	partial.CompoundingRiskInputs = []string{"churn", "review latency"}
+	got, err = evaluateCompoundingRisk(partial, now)
+	if err != nil || got == nil {
+		t.Fatalf("partial coverage: %v %v", got, err)
+	}
+	for _, fragment := range []string{"0.720", "severity: high", "computed from 50% of its inputs", "churn, review latency", "inputs that were present"} {
+		if !strings.Contains(got.Rationale, fragment) {
+			t.Errorf("the rationale of a partial score lacks %q: %q", fragment, got.Rationale)
+		}
+	}
+	for _, claimed := range []string{"complexity trend", "ownership concentration"} {
+		if strings.Contains(got.Rationale, claimed) {
+			t.Errorf("the rationale of a partial score claims the missing input %q: %q", claimed, got.Rationale)
+		}
+	}
+	if got.Severity != "critical" {
+		t.Errorf("the recommendation severity follows the score severity, got %q", got.Severity)
+	}
+}

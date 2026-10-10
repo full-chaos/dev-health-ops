@@ -41,6 +41,7 @@ func point(scope model.CompoundingRiskScope, day time.Time, scopeID, label strin
 		ScopeID:    scopeID,
 		ScopeLabel: label,
 		Score:      r.score,
+		Coverage:   r.coverage,
 		Severity:   severityFrom(r.severity),
 		Components: &model.CompoundingRiskComponents{
 			ChurnNorm: r.churnNorm, ComplexityNorm: r.complexityNorm, OwnershipNorm: r.ownershipNorm,
@@ -53,6 +54,40 @@ func point(scope model.CompoundingRiskScope, day time.Time, scopeID, label strin
 		ComputedAt:  r.computedAt,
 		ScopeEntity: &model.CompoundingRiskScopeEntity{ID: scopeID, DisplayName: label},
 	}
+}
+
+// coverageOf is the share of the weight that was present in a stored row's
+// score: the sum of the weights of its present component norms over the sum
+// of its four weights, in [0, 1]. It is read from the row itself (weights and
+// norms are stored). It is served ONLY beside a score: a row with no score
+// (no input at all, or written before the score covered partial inputs and
+// not yet recomputed) has no coverage, so a client never describes a score
+// that does not exist. nil also when the weights sum to zero.
+func coverageOf(r storedRow) *float64 {
+	if r.score == nil {
+		return nil
+	}
+	total := r.wChurn + r.wComplexity + r.wOwnership + r.wReview
+	if total <= 0 {
+		return nil
+	}
+	var present float64
+	for _, component := range []struct {
+		norm   *float64
+		weight float64
+	}{
+		{r.churnNorm, r.wChurn}, {r.complexityNorm, r.wComplexity},
+		{r.ownershipNorm, r.wOwnership}, {r.reviewNorm, r.wReview},
+	} {
+		if component.norm != nil {
+			present += component.weight
+		}
+	}
+	coverage := present / total
+	if coverage > 1 {
+		coverage = 1
+	}
+	return &coverage
 }
 
 func labelOr(labels map[string]string, id string) string {
@@ -100,6 +135,9 @@ func teamPoints(day time.Time, rows []storedRow, teamsOfRepo map[string][]string
 	for _, team := range order {
 		rs := byTeam[team]
 		first := rs[0]
+		// ONE row set for the mean score and the mean coverage: the rows that
+		// carry a score. A row with no score has no coverage (coverageOf), and
+		// meanOf takes the non-null values only, so it is in neither mean.
 		avg := meanOf(rs, func(r storedRow) *float64 { return r.score })
 		sev := model.CompoundingRiskSeverityUnknown
 		switch {
@@ -113,6 +151,7 @@ func teamPoints(day time.Time, rows []storedRow, teamsOfRepo map[string][]string
 		}
 		agg := first
 		agg.score = avg
+		agg.coverage = meanOf(rs, func(r storedRow) *float64 { return r.coverage })
 		agg.churnNorm = meanOf(rs, func(r storedRow) *float64 { return r.churnNorm })
 		agg.complexityNorm = meanOf(rs, func(r storedRow) *float64 { return r.complexityNorm })
 		agg.ownershipNorm = meanOf(rs, func(r storedRow) *float64 { return r.ownershipNorm })

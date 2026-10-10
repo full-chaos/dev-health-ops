@@ -109,6 +109,10 @@ func TestTwoLinearIntegrationsOfOneOrganization(t *testing.T) {
 			if c.wantIncomplete {
 				wantCounted["linear/linear_project_ownership/"+OwnershipCloseSkippedScopeShared] = 1
 				wantCounted["linear/linear_team_key_ownership/"+OwnershipCloseSkippedScopeShared] = 1
+				// The team membership kind is of the same (org, provider) scope: with another
+				// active Linear integration in the organization, the run of B may not close a
+				// member that A's team lists (CHAOS-9079), so the kind is abandoned here too.
+				wantCounted["linear/linear_team_memberships/"+OwnershipCloseSkippedScopeShared] = 1
 				// The Linear counter names the reason once for the run.
 				wantLinear[OwnershipCloseSkippedScopeShared] = 1
 			}

@@ -57,7 +57,12 @@ Investment allocation uses only the five canonical themes and
 that denominator. Compounding risk returns its persisted score, components,
 weights, and thresholds without recomputing the score at query time; a stable
 digest identifies the component/weight/threshold version represented by the
-returned rows.
+returned rows. The score is the weighted mean over the inputs that have data
+(churn, complexity change, ownership, review latency), with the weights
+renormalized over the present inputs, and is served with a `coverage` value:
+the share of the weight that was present, from 0 to 1. A missing input is not
+counted as zero, the score is never capped at a low coverage, and a row with no
+input at all has no score (unknown), never 0.
 
 Every definition publishes its unit, aggregation, display precision, null and
 zero semantics, supported scopes and dimensions, range limits, comparison

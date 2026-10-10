@@ -100,37 +100,20 @@ const (
 
 // Inputs are the raw signals consumed by the composite
 // (compounding_risk.py:99-128). A nil pointer is Python's None: data
-// unavailable is NOT zero risk, it blocks the score.
+// unavailable is NOT zero risk. A missing input leaves its component out of
+// the score and its weight out of the denominator (CHAOS-6545).
 type Inputs struct {
 	ReworkChurn       *float64
 	ComplexityDelta   *float64
 	ReviewLatencyP90H *float64
 	// SingleOwnerRatio and OwnershipGini feed one component via
 	// max(single_owner_ratio, gini). Either alone is acceptable; both nil
-	// blocks the ownership component and therefore the composite.
+	// leave the ownership component out.
 	SingleOwnerRatio *float64
 	OwnershipGini    *float64
 	// BusFactor is pure metadata, surfaced for inspectability and never part
 	// of the formula.
 	BusFactor *float64
-}
-
-// HasRequired ports CompoundingInputs.has_required_inputs
-// (compounding_risk.py:119-128), including its exact short-circuit order.
-func (inputs Inputs) HasRequired() bool {
-	if inputs.ReworkChurn == nil {
-		return false
-	}
-	if inputs.ComplexityDelta == nil {
-		return false
-	}
-	if inputs.ReviewLatencyP90H == nil {
-		return false
-	}
-	if inputs.SingleOwnerRatio == nil && inputs.OwnershipGini == nil {
-		return false
-	}
-	return true
 }
 
 // RepoMetricsRow is one repo's slice of repo_metrics_daily, already
@@ -155,9 +138,10 @@ type Record struct {
 	Scope   string
 	ScopeID string
 
-	// CompoundingRisk is nil (severity "unknown") when any required input is
-	// missing. The row is still emitted so absence-of-signal is itself
-	// inspectable.
+	// CompoundingRisk is the weighted mean over the inputs that are present
+	// (Coverage says how much weight that was). It is nil (severity "unknown")
+	// only when NO input is present. The row is always emitted so
+	// absence-of-signal is itself inspectable.
 	CompoundingRisk *float64
 	Severity        string
 

@@ -73,6 +73,7 @@ var membershipWriters = map[string]struct {
 	"internal/atlassianteams/write.go":                     {role: "planner", note: "the Atlassian Teams writer plans its memberships (planMemberships) through PlanSnapshot: first-seen valid_from and closes of departed members"},
 	"internal/providersync/jira_project_as_team_retire.go": {role: "closer", note: "one-time retraction of the Jira project-as-team rows: writes each row again with valid_to set"},
 	"internal/providersync/team_id_carry.go":               {role: "carry", note: "the one-shot team id carry: moves the links of an old team id to the new one, keeping the earliest valid_from of the old id (min(valid_from)), so it adds no open row per run"},
+	"internal/providersync/team_roster_move.go":            {role: "operator", note: "the one-time move of the roster entries of admin-made teams (CHAOS-9087): stamps valid_from with the run time, and writes a row only for an entry no open row of its team covers, so a second run writes none"},
 	"internal/api/teamsidentity/drift_apply.go":            {role: "operator", note: "an operator's reviewed identity-drift change: one write with the valid_from of the reviewed row, not a per-sync writer"},
 }
 

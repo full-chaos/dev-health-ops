@@ -128,7 +128,7 @@ func TestComputeWellbeingPerRepoScopesBucketsToOneRepoAtATime(t *testing.T) {
 		{ID: "platform", Name: "Platform", RepoPatterns: []string{"org/repo-a", "org/repo-b"}},
 	}
 	repoResolver := NewRepoPatternResolver(teams)
-	memberResolver := NewMemberResolver(teams)
+	memberResolver := newTestMemberResolver(nil)
 	repoNamesByID := map[string]string{
 		repoA.String(): "org/repo-a",
 		repoB.String(): "org/repo-b",
@@ -168,7 +168,7 @@ func TestComputeWellbeingPerRepoSkipsRepoWithNoCommitsThatDay(t *testing.T) {
 	repoIDs := []uuid.UUID{repoA, repoB}
 	teams := []WellbeingTeam{{ID: "platform", Name: "Platform", RepoPatterns: []string{"org/repo-a"}}}
 	repoResolver := NewRepoPatternResolver(teams)
-	memberResolver := NewMemberResolver(teams)
+	memberResolver := newTestMemberResolver(nil)
 	repoNamesByID := map[string]string{repoA.String(): "org/repo-a", repoB.String(): "org/repo-b"}
 	commits := []numerical.Commit{
 		{RepoID: repoA.String(), AuthorEmail: "dev@example.com", CommitterWhen: time.Date(2026, 8, 24, 12, 0, 0, 0, time.UTC)},

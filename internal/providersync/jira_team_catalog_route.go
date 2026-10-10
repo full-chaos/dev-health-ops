@@ -717,6 +717,11 @@ func (collector JiraTeamCatalogCollector) CollectTeamCatalog(
 	}
 	result.DriftChangesSuperseded = driftChangesSuperseded
 	if selections.Members {
+		// CHAOS-9007: a membership keeps the valid_from it was first seen with.
+		keptMemberships, reuseErr := reuseJiraMembershipFirstSeen(ctx, collector.Sink.Conn, ref.OrgID, keptMemberships)
+		if reuseErr != nil {
+			return result, reuseErr
+		}
 		membershipsEffect, effectErr := effectBatchFromValues(jiraTeamCatalogMembershipsDestination, EffectReadbackRequired, keptMemberships)
 		if effectErr != nil {
 			return result, effectErr

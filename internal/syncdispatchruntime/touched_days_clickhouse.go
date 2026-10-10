@@ -72,6 +72,78 @@ FROM (
 )
 GROUP BY day, repo_id`
 
+// recordTouchedRangeSQL appends one 'touched' event for every day from the day
+// of a NEW event to the day its row was written (CHAOS-8855). The days between
+// show the item in the wrong state until the row is written: an item that
+// completed on 08-15 and is written on 08-20 was counted as open on 08-16 to
+// 08-19, and the event day alone does not touch them.
+//
+// An event is new when its time is later than the previous record of its
+// repository: the newest 'touched' event of the repository older than the lower
+// bound of this read (the start of the sync run), so the record of a run that
+// started later never hides the late event of a run that started earlier. An
+// old item that is only written again makes nothing new known and adds no day.
+// A repository with no previous record in the last 366 days has no new event
+// (its first sync computes its days by the windows of its units). The range
+// covers at most 366 day keys, the write day and the 365 days before it, the
+// same bound as a backfill unit (WorkItemsUnitWindowDays refuses a 367th day).
+// The previous record is found by its time `at`, not by the day it touched: a
+// sync that wrote only old items leaves a record with a recent `at` and an old
+// day, and it is the previous record all the same. The read is bounded by the
+// organization, the kind and the 366 days of `at` before the lower bound of the
+// read; the sort key is (org, day, repo, kind), so it reads the 'touched' rows
+// of the organization and not the whole table.
+//
+// The days of the event itself are the part of recordTouchedDaysSQL; this
+// statement adds the days after it. A transition is read under the repository
+// of its work item, as there.
+const recordTouchedRangeSQL = `
+INSERT INTO daily_metrics_touched_days (org_id, day, repo_id, kind, at)
+SELECT ?, day, repo_id, 'touched', fromUnixTimestamp64Milli(toInt64(?), 'UTC')
+FROM (
+    SELECT events.repo_id AS repo_id,
+           arrayJoin(arrayMap(value -> toDate(value),
+               range(toUInt32(greatest(toDate(events.event_time, 'UTC'), events.write_day - 365)),
+                     toUInt32(events.write_day) + 1))) AS day
+    FROM (
+        SELECT repo_id,
+               arrayJoin(arrayMap(value -> assumeNotNull(value), arrayFilter(value -> value IS NOT NULL,
+                   [toDateTime64(created_at, 3, 'UTC'), toDateTime64(started_at, 3, 'UTC'),
+                    toDateTime64(completed_at, 3, 'UTC'), toDateTime64(closed_at, 3, 'UTC')]))) AS event_time,
+               toDate(last_synced, 'UTC') AS write_day
+        FROM work_items
+        WHERE org_id = ? AND last_synced >= fromUnixTimestamp64Milli(toInt64(?), 'UTC')
+        UNION ALL
+        SELECT if(items.work_item_id = '', transitions.repo_id, items.repo_id) AS repo_id,
+               toDateTime64(transitions.occurred_at, 3, 'UTC') AS event_time,
+               toDate(transitions.last_synced, 'UTC') AS write_day
+        FROM (
+            SELECT work_item_id, repo_id, occurred_at, last_synced
+            FROM work_item_transitions
+            WHERE org_id = ? AND last_synced >= fromUnixTimestamp64Milli(toInt64(?), 'UTC')
+        ) AS transitions
+        LEFT JOIN (
+            SELECT DISTINCT work_item_id, repo_id
+            FROM work_items
+            WHERE org_id = ? AND work_item_id IN (
+                SELECT work_item_id
+                FROM work_item_transitions
+                WHERE org_id = ? AND last_synced >= fromUnixTimestamp64Milli(toInt64(?), 'UTC')
+            )
+        ) AS items ON items.work_item_id = transitions.work_item_id
+    ) AS events
+    INNER JOIN (
+        SELECT repo_id, max(at) AS previous_at
+        FROM daily_metrics_touched_days
+        WHERE org_id = ? AND kind = 'touched'
+          AND at >= fromUnixTimestamp64Milli(toInt64(?), 'UTC') - INTERVAL 366 DAY
+          AND at < fromUnixTimestamp64Milli(toInt64(?), 'UTC')
+        GROUP BY repo_id
+    ) AS previous ON previous.repo_id = events.repo_id
+    WHERE events.event_time > previous.previous_at
+      AND toDate(events.event_time, 'UTC') < events.write_day
+)`
+
 // recordTouchedWindowDaysSQL appends one 'touched' event for each day of the
 // given list and each repository that a work item written at or after the
 // given time belongs to. The days are the windows of the work-items units of
@@ -110,6 +182,15 @@ func (store *ClickHouseTouchedDaysStore) RecordTouched(
 		organizationID, sinceMillis,
 		organizationID, sinceMillis,
 		organizationID, organizationID, sinceMillis,
+	); err != nil {
+		return 0, ErrTouchedDaysUnavailable
+	}
+	if err := store.conn.Exec(ctx, recordTouchedRangeSQL,
+		organizationID, at.UnixMilli(),
+		organizationID, sinceMillis,
+		organizationID, sinceMillis,
+		organizationID, organizationID, sinceMillis,
+		organizationID, sinceMillis, sinceMillis,
 	); err != nil {
 		return 0, ErrTouchedDaysUnavailable
 	}

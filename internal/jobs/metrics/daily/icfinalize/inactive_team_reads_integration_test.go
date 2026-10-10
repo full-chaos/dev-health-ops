@@ -105,3 +105,99 @@ func TestEachReadOfTheFamilyReadsAnInactiveTeamAsNoTeam(t *testing.T) {
 		}
 	}
 }
+
+// TestTheRollingReadBreaksATieOfTheNewestRowByTheDayAndTheRepository runs the
+// rolling read over rows of one person that have ONE compute time, so only
+// the rest of the order decides the person's team:
+//
+//   - rows of one day in two repositories: the row of the greater repository
+//     id gives the team;
+//   - rows of two days: the row of the later day gives the team, also when
+//     the earlier day is in the greater repository.
+//
+// Each row is its own insert, the order of the inserts alternates from person
+// to person, and merges are stopped, so the rows of a person are in parts in
+// both orders. An aggregate with no total order (the newest row by compute
+// time alone) takes a row by its place in the read, and cannot give the same
+// repository for every person.
+func TestTheRollingReadBreaksATieOfTheNewestRowByTheDayAndTheRepository(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	instance, err := containers.StartClickHouse(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer instance.Close(context.Background())
+	chschema.Apply(ctx, t, instance)
+	conn, err := clickhousestore.Open(ctx, clickhousestore.DefaultConfig(instance.URI))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	if err := conn.Exec(ctx, `SYSTEM STOP MERGES user_metrics_daily`); err != nil {
+		t.Fatal(err)
+	}
+
+	const org = "00000000-0000-4000-8000-00000009083c"
+	day := time.Date(2026, 9, 21, 0, 0, 0, 0, time.UTC)
+	dayBefore := day.AddDate(0, 0, -1)
+	computedAt := day.Add(30 * time.Hour)
+	// Each byte of the greater id is greater, so no order of the bytes of a
+	// UUID can read it as the smaller one.
+	smaller := uuid.MustParse("11111111-1111-4111-8111-111111111111")
+	greater := uuid.MustParse("eeeeeeee-eeee-4eee-beee-eeeeeeeeeeee")
+	type storedRow struct {
+		repo uuid.UUID
+		day  time.Time
+		team string
+	}
+	insert := func(person string, rows ...storedRow) {
+		t.Helper()
+		for _, row := range rows {
+			if err := conn.Exec(ctx, `INSERT INTO user_metrics_daily
+    (repo_id, day, author_email, identity_id, team_id, team_name, commits_count, loc_touched, delivery_units, computed_at, org_id)
+    VALUES (?, ?, ?, ?, ?, ?, 1, 5, 1, ?, ?)`, row.repo, row.day, person, person, row.team, "Team "+row.team, computedAt, org); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	want := map[string]string{}
+	for index := 0; index < 8; index++ {
+		// One day, two repositories.
+		person := "repo-" + string(rune('a'+index)) + "@example.com"
+		rows := []storedRow{{smaller, day, "team-of-smaller"}, {greater, day, "team-of-greater"}}
+		if index%2 == 1 {
+			rows[0], rows[1] = rows[1], rows[0]
+		}
+		insert(person, rows...)
+		want[person] = "team-of-greater"
+
+		// Two days; the earlier day is in the greater repository.
+		person = "day-" + string(rune('a'+index)) + "@example.com"
+		rows = []storedRow{{greater, dayBefore, "team-of-earlier-day"}, {smaller, day, "team-of-later-day"}}
+		if index%2 == 1 {
+			rows[0], rows[1] = rows[1], rows[0]
+		}
+		insert(person, rows...)
+		want[person] = "team-of-later-day"
+	}
+
+	for run := 1; run <= 2; run++ {
+		stats, err := LoadRollingStats(ctx, conn, org, day, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := map[string]string{}
+		for _, stat := range stats {
+			got[stat.IdentityID] = stat.TeamID
+		}
+		if len(got) != len(want) {
+			t.Fatalf("run %d: %d people read, want %d: %v", run, len(got), len(want), got)
+		}
+		for person, team := range want {
+			if got[person] != team {
+				t.Errorf("run %d: the team of %s = %q, want %q", run, person, got[person], team)
+			}
+		}
+	}
+}

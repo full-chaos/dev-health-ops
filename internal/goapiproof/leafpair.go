@@ -1,5 +1,11 @@
 package goapiproof
 
+import (
+	"regexp"
+	"strconv"
+	"strings"
+)
+
 // LeafPairShape, set on a BaselineDefect, replaces that defect's blanket
 // "any leaf difference under Paths is covered" rule with an exact-pair
 // admission: a leaf finding is covered only when its two decoded leaves are
@@ -27,6 +33,188 @@ type LeafPairShape struct {
 	// value). Only a finding that is exactly a declared pair is exempted; every
 	// other finding under the path is relabelled empty_result as before.
 	CandidateMayBeAllNull bool
+
+	// Sibling, when set, additionally requires the CANDIDATE's own object that
+	// holds the finding's leaf to satisfy a condition on its boolean fields: a
+	// pair is covered only beside the state that explains it (a null percent
+	// against the reference's 0.0, only on a delta whose has_data or
+	// has_prior_data says a window holds no stored value). A pair whose
+	// sibling cannot be found, or does not satisfy the condition, stays outside.
+	Sibling *SiblingCondition
+}
+
+// SiblingCondition names the candidate object that holds a leaf and the
+// boolean fields of it that must hold for a LeafPairShape pair to be covered.
+type SiblingCondition struct {
+	// ListPath is the dotted, index-free path of the list holding the object,
+	// paired with an OrderInsensitiveList declaration whose KeyFields are
+	// KeyFields (the finding's "[key=...]" Detail prefix names the element).
+	// Empty means the object is the single one at ObjectPath.
+	ListPath  string
+	KeyFields []string
+	// ObjectPath is the dotted path of the object when ListPath is empty,
+	// e.g. "data".
+	ObjectPath string
+	// AllTrue lists boolean fields that must all be true; AnyFalse lists
+	// boolean fields of which at least one must be false. Exactly one is set.
+	AllTrue  []string
+	AnyFalse []string
+	// NonZero lists numeric fields of the same object that must be present and not 0
+	// (checked with AllTrue): the from-zero state is a prior measured 0 against a
+	// current value that is NOT 0, so a null percent beside a current value of 0 is a
+	// true 0 % served as null, a disagreement.
+	NonZero []string
+
+	// ByPath finds the object through the finding's own path (an ORDERED list
+	// path such as "data.x.sections[0].metrics[2].delta.percent": the comparator
+	// paired the elements by index) instead of ListPath/ObjectPath, and judges
+	// AllTrueAt / AnyFalseAt: flags of the object that holds the leaf (Up 0) or of
+	// an ancestor of it (Up 1 = its parent object, ...).
+	ByPath     bool
+	AllTrueAt  []SiblingFlag
+	AnyFalseAt []SiblingFlag
+}
+
+// SiblingFlag names a boolean field of the leaf's holder (Up 0) or of an
+// ancestor object of it.
+type SiblingFlag struct {
+	Up   int
+	Name string
+}
+
+var pathSegment = regexp.MustCompile(`^([^\[\]]+)(?:\[(\d+)\])?$`)
+
+// pathHolders walks the decoded body along a finding path and returns the
+// objects it passes through, outermost first; the last one holds the leaf.
+func pathHolders(root any, path string) ([]map[string]any, bool) {
+	// The decoded body the plans see is the response's `data` object.
+	path = strings.TrimPrefix(strings.TrimPrefix(strings.TrimPrefix(path, "$"), "."), "data.")
+	segments := strings.Split(path, ".")
+	if len(segments) < 2 {
+		return nil, false
+	}
+	var holders []map[string]any
+	current := root
+	for _, segment := range segments[:len(segments)-1] {
+		match := pathSegment.FindStringSubmatch(segment)
+		if match == nil {
+			return nil, false
+		}
+		object, ok := current.(map[string]any)
+		if !ok {
+			return nil, false
+		}
+		current = object[match[1]]
+		if match[2] != "" {
+			index, err := strconv.Atoi(match[2])
+			list, isList := current.([]any)
+			if err != nil || !isList || index < 0 || index >= len(list) {
+				return nil, false
+			}
+			current = list[index]
+		}
+		if holder, ok := current.(map[string]any); ok {
+			holders = append(holders, holder)
+		}
+	}
+	return holders, len(holders) > 0
+}
+
+func (c *SiblingCondition) holdsByPath(candidate any, finding Finding) bool {
+	holders, ok := pathHolders(candidate, finding.Path)
+	if !ok {
+		return false
+	}
+	flag := func(f SiblingFlag) (bool, bool) {
+		if f.Up < 0 || f.Up >= len(holders) {
+			return false, false
+		}
+		v, ok := holders[len(holders)-1-f.Up][f.Name].(bool)
+		return v, ok
+	}
+	if len(c.AllTrueAt) > 0 {
+		for _, f := range c.AllTrueAt {
+			if v, ok := flag(f); !ok || !v {
+				return false
+			}
+		}
+		return true
+	}
+	for _, f := range c.AnyFalseAt {
+		if v, ok := flag(f); ok && !v {
+			return true
+		}
+	}
+	return false
+}
+
+// holds reports whether the candidate object found for finding satisfies the
+// condition. Anything that cannot be found, or is not a boolean, fails it.
+func (c *SiblingCondition) holds(candidate any, finding Finding) bool {
+	if c.ByPath {
+		return c.holdsByPath(candidate, finding)
+	}
+	var object map[string]any
+	if c.ListPath != "" {
+		list, ok := listAtDottedPath(candidate, c.ListPath)
+		if !ok {
+			return false
+		}
+		if key, keyed := parseOrderInsensitiveDetailKey(finding.Detail); keyed {
+			// An order-insensitive list: the element is named by its key.
+			for _, element := range list {
+				if k, ok := orderInsensitiveKey(element, c.KeyFields); ok && k == key {
+					object, _ = element.(map[string]any)
+					break
+				}
+			}
+		} else {
+			// An ordered list: the comparator paired the elements by index, and the
+			// finding's path carries it ("data.deltas[3].delta_pct").
+			segments := strings.Split(c.ListPath, ".")
+			match := regexp.MustCompile(regexp.QuoteMeta(segments[len(segments)-1]) + `\[(\d+)\]`).FindStringSubmatch(finding.Path)
+			if match == nil {
+				return false
+			}
+			index, err := strconv.Atoi(match[1])
+			if err != nil || index < 0 || index >= len(list) {
+				return false
+			}
+			object, _ = list[index].(map[string]any)
+		}
+	} else {
+		value, ok := navigateSegments(candidate, citedSegments(c.ObjectPath))
+		if !ok {
+			return false
+		}
+		object, _ = value.(map[string]any)
+	}
+	if object == nil {
+		return false
+	}
+	flag := func(name string) (bool, bool) {
+		v, ok := object[name].(bool)
+		return v, ok
+	}
+	if len(c.AllTrue) > 0 {
+		for _, name := range c.AllTrue {
+			if v, ok := flag(name); !ok || !v {
+				return false
+			}
+		}
+		for _, name := range c.NonZero {
+			if n, ok := asFloat(object[name]); !ok || n == 0 {
+				return false
+			}
+		}
+		return true
+	}
+	for _, name := range c.AnyFalse {
+		if v, ok := flag(name); ok && !v {
+			return true
+		}
+	}
+	return false
 }
 
 // LeafPair is one admitted (baseline, candidate) pair of decoded leaves.
@@ -37,7 +225,10 @@ type LeafPair struct {
 // leafPairPlan judges each finding from the two decoded leaves the
 // comparator recorded on it. The comparator's own gate never offers a
 // structural finding to a shape, so only leaf differences reach admits.
-type leafPairPlan struct{ shape *LeafPairShape }
+type leafPairPlan struct {
+	shape     *LeafPairShape
+	candidate any // the decoded candidate body, for Sibling
+}
 
 func (p *leafPairPlan) admits(finding Finding) bool {
 	if p == nil {
@@ -45,7 +236,7 @@ func (p *leafPairPlan) admits(finding Finding) bool {
 	}
 	for _, pair := range p.shape.Pairs {
 		if leafEquals(finding.baselineLeaf, pair.Baseline) && leafEquals(finding.candidateLeaf, pair.Candidate) {
-			return true
+			return p.shape.Sibling == nil || p.shape.Sibling.holds(p.candidate, finding)
 		}
 	}
 	return false

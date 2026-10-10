@@ -1,6 +1,12 @@
 package home
 
-import "testing"
+import (
+	"context"
+	"strings"
+	"testing"
+
+	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
+)
 
 func TestPrimaryScopeLabelIsANameNeverTheID(t *testing.T) {
 	named := map[string]string{"t1": "Ops", "t2": "Dev"}
@@ -42,5 +48,29 @@ func TestRecommendationSignalNamesItsTeamOrSaysATeam(t *testing.T) {
 	}
 	if s.ID != "recommendation:wip-saturation:github:acme/ops" {
 		t.Errorf("the structured id must stay the raw id, got %q", s.ID)
+	}
+}
+
+// Two ids that carry one name are one name in the prose (vet p3f).
+func TestPrimaryScopeLabelNamesOneNameOnceForTwoIDs(t *testing.T) {
+	scope := ScopeFilter{Level: "team", IDs: []string{"t1", "t2"}, names: map[string]string{"t1": "Alpha", "t2": "Alpha"}}
+	if got := primaryScopeLabel(Filters{Scope: scope}); got != "Alpha" {
+		t.Errorf("label = %q, want Alpha once", got)
+	}
+}
+
+// The risk label lookup keys each name by its id, for repositories and teams (vet p12).
+func TestResolveScopeLabelsKeysEachNameByItsID(t *testing.T) {
+	score := 0.5
+	rows := []RiskRow{{Scope: "repo", ScopeID: "11111111-1111-4111-8111-111111111111", Score: &score}, {Scope: "team", ScopeID: "t1", Score: &score}}
+	client := fakeQueryClient{t: t, handler: func(_ *testing.T, query string, _ []dhclickhouse.Binding) (dhclickhouse.RowScanner, error) {
+		if strings.Contains(query, "FROM repos") {
+			return &fixtureRowScanner{rows: [][]any{{"11111111-1111-4111-8111-111111111111", "acme/checkout"}}}, nil
+		}
+		return &fixtureRowScanner{rows: [][]any{{"t1", "Ops"}}}, nil
+	}}
+	got := resolveScopeLabels(context.Background(), client, "org-1", rows)
+	if got["11111111-1111-4111-8111-111111111111"] != "acme/checkout" || got["t1"] != "Ops" || len(got) != 2 {
+		t.Errorf("labels = %v, want each name under its own id", got)
 	}
 }

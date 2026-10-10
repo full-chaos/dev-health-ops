@@ -86,6 +86,14 @@ type MetricDelta struct {
 	// "not_applicable_no_merged_pull_requests". nil when the window holds no
 	// stored counts, and for every other metric.
 	RateState *string `json:"rate_state,omitempty"`
+	// RateCoverage is the share of the merged pull requests that the pull
+	// request rework ratio speaks for, from 0 to 1 (prrework.Outcome.Coverage):
+	// the merged pull requests with review data from a provider that stores a
+	// changes-requested review, over all merged pull requests with stored
+	// counts. 0 when no merged pull request has such review data. nil when no
+	// pull request merged, when the window holds no stored counts, and for
+	// every other metric.
+	RateCoverage *float64 `json:"rate_coverage,omitempty"`
 }
 
 // ReworkThemeAllocation is the wire shape of ReworkThemeAllocation

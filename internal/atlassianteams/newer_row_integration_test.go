@@ -34,12 +34,14 @@ VALUES (?, 'jira', ?, ?, ?, NULL, [?], 'native', ?, NULL, ?)`, org, team, member
 		}
 		return out
 	}
+	skipped := 0
 	plan := func(members ...string) []openMembership {
 		t.Helper()
-		_, expired, _, err := planMemberships(context.Background(), conn, org, []string{team}, fresh(members...), read, kind())
+		_, expired, _, newer, err := planMemberships(context.Background(), conn, org, []string{team}, fresh(members...), read, kind())
 		if err != nil {
 			t.Fatal(err)
 		}
+		skipped = newer
 		return expired
 	}
 	// Control: a departure of a member whose rows are all older than the read is closed (the test measures something).
@@ -54,6 +56,9 @@ VALUES (?, 'jira', ?, ?, ?, NULL, [?], 'native', ?, NULL, ?)`, org, team, member
 	got := plan("jira:kept", "jira:dup")
 	if len(got) != 1 || got[0].memberID != "jira:gone-old" {
 		t.Fatalf("expired = %v, want only the older departure: a fact with a row newer than the read is never closed", got)
+	}
+	if skipped != 2 {
+		t.Fatalf("newer facts skipped = %d, want 2 (the departure and the surplus row of jira:dup), counted once per fact", skipped)
 	}
 }
 

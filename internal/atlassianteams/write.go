@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"slices"
 	"strings"
 	"time"
@@ -49,7 +50,10 @@ type Result struct {
 	MembersWritten     int
 	OwnershipWritten   int
 	ExpiredMemberships int
-	ExpiredOwnership   int
+	// NewerMembershipFactsSkipped counts the facts (team and member) left open whole because an open row
+	// of theirs was written after this run read the provider (CHAOS-9204).
+	NewerMembershipFactsSkipped int
+	ExpiredOwnership            int
 	// UnreadableProjectLinkTeams counts the teams of which this call closed
 	// no project link, because the provider returned a Jira project link of
 	// the team that got no row (Rows.UnreadableProjectLinkTeams).
@@ -185,13 +189,20 @@ func Write(ctx context.Context, conn driver.Conn, orgID string, rows Rows, selec
 	var expiredMemberships []openMembership
 	if selections.Members {
 		var plan providersync.SnapshotPlan
-		if memberships, expiredMemberships, plan, err = planMemberships(ctx, conn, orgID, teams, freshMemberships, now,
+		var newerSkipped int
+		if memberships, expiredMemberships, plan, newerSkipped, err = planMemberships(ctx, conn, orgID, teams, freshMemberships, now,
 			providersync.AtlassianTeamMembershipKind().Snapshot(scope, providersync.ProveSnapshot(
 				providersync.SnapshotTerm{Holds: rows.MembershipsComplete, Reason: snapshotMemberReadsNotEnded}),
 				providersync.AbsenceByWalk[providersync.MembershipSnapshotRow](providersync.AbsenceWalkByCursor))); err != nil {
 			return result, fmt.Errorf("read current team memberships: %w", err)
 		}
 		report(plan)
+		result.NewerMembershipFactsSkipped = newerSkipped
+		if newerSkipped > 0 {
+			// Counts only: a fact is a team and a member, which no log line names (CHAOS-9149).
+			slog.Default().WarnContext(ctx, "team_membership_close_skipped",
+				"org_id", orgID, "provider", Provider, "row_newer_than_read", newerSkipped)
+		}
 	}
 	var ownership []OwnershipRow
 	var expiredOwnership []openOwnership
@@ -402,14 +413,14 @@ type openOwnership struct {
 func planMemberships(
 	ctx context.Context, conn driver.Conn, orgID string, scope []string, fresh []MembershipRow, now time.Time,
 	snapshot providersync.KindSnapshot[providersync.MembershipSnapshotRow],
-) ([]MembershipRow, []openMembership, providersync.SnapshotPlan, error) {
+) ([]MembershipRow, []openMembership, providersync.SnapshotPlan, int, error) {
 	if len(scope) == 0 {
-		return fresh, nil, providersync.SnapshotPlan{}, nil
+		return fresh, nil, providersync.SnapshotPlan{}, 0, nil
 	}
 	result, err := conn.Query(ctx, openMembershipsQuery,
 		clickhouse.Named("org_id", orgID), clickhouse.Named("provider", Provider), clickhouse.Named("team_ids", scope))
 	if err != nil {
-		return nil, nil, providersync.SnapshotPlan{}, err
+		return nil, nil, providersync.SnapshotPlan{}, 0, err
 	}
 	defer result.Close()
 	var open []openMembership
@@ -417,12 +428,12 @@ func planMemberships(
 		var row openMembership
 		if err := result.Scan(&row.teamID, &row.memberID, &row.rawProviderUserID, &row.rawEmail, &row.identityFacets, &row.source,
 			&row.isPrimary, &row.specificity, &row.priority, &row.validFrom, &row.providerUserID, &row.updatedAt); err != nil {
-			return nil, nil, providersync.SnapshotPlan{}, err
+			return nil, nil, providersync.SnapshotPlan{}, 0, err
 		}
 		open = append(open, row)
 	}
 	if err := result.Err(); err != nil {
-		return nil, nil, providersync.SnapshotPlan{}, err
+		return nil, nil, providersync.SnapshotPlan{}, 0, err
 	}
 	freshFacts := make([]providersync.MembershipSnapshotRow, len(fresh))
 	for i, row := range fresh {
@@ -449,16 +460,21 @@ func planMemberships(
 			newerFacts[providersync.MembershipSnapshotKey(providersync.MembershipSnapshotRow{TeamID: row.teamID, MemberID: row.memberID})] = true
 		}
 	}
+	skippedFacts := map[string]bool{}
 	var expired []openMembership
 	for _, retraction := range plan.Retract {
 		row := open[retraction.Open]
-		if newerFacts[providersync.MembershipSnapshotKey(providersync.MembershipSnapshotRow{TeamID: row.teamID, MemberID: row.memberID})] {
+		factKey := providersync.MembershipSnapshotKey(providersync.MembershipSnapshotRow{TeamID: row.teamID, MemberID: row.memberID})
+		if newerFacts[factKey] {
+			if !skippedFacts[factKey] {
+				skippedFacts[factKey] = true
+			}
 			continue
 		}
 		row.closedAt = retraction.ClosedAt
 		expired = append(expired, row)
 	}
-	return out, expired, plan, nil
+	return out, expired, plan, len(skippedFacts), nil
 }
 
 // planOwnership reads the open project links of the teams in scope and

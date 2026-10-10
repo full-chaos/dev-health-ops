@@ -43,6 +43,13 @@ func testNewerRowIsNeverClosed[R any](
 			t.Fatalf("closed = %d, DuplicatesRetired = %d, skipped = %v, want 0, 0 and one %s", closedOf(all, 1), outcome.DuplicatesRetired, outcome.Skipped, membershipSkipNewerRow)
 		}
 	})
+	t.Run("an older surplus row is left open too when ANOTHER row of the same member is newer (the fact is left whole)", func(t *testing.T) {
+		openRows := []openMembership{open("m", nil, older, older), open("m", nil, older.Add(time.Minute), older), open("m", nil, older.Add(2*time.Minute), newer)}
+		all, outcome := plan(openRows, row("t", "m", nil, at))
+		if closedOf(all, 1) != 0 || outcome.DuplicatesRetired != 0 || outcome.Skipped[membershipSkipNewerRow] != 1 {
+			t.Fatalf("closed = %d, DuplicatesRetired = %d, skipped = %v, want 0, 0 and one %s", closedOf(all, 1), outcome.DuplicatesRetired, outcome.Skipped, membershipSkipNewerRow)
+		}
+	})
 	t.Run("two newer surplus rows of one member count as one skipped member", func(t *testing.T) {
 		openRows := []openMembership{open("m", nil, older, older), open("m", nil, older.Add(time.Minute), newer), open("m", nil, older.Add(2*time.Minute), newer)}
 		all, outcome := plan(openRows, row("t", "m", nil, at))

@@ -86,6 +86,13 @@ func TestHomePRReworkRatio_DeltaAndDriversFollowTheDeltaRule(t *testing.T) {
 		return got
 	}
 
+	// show prints a percent that can be absent.
+	show := func(percent *float64) string {
+		if percent == nil {
+			return "none"
+		}
+		return fmt.Sprint(*percent)
+	}
 	// A measured 0 before and 50 % now: two measured values and no percent.
 	// It is not 0 % ("no change"), and it is not a number.
 	fromZero := delta(repoP)
@@ -98,16 +105,16 @@ func TestHomePRReworkRatio_DeltaAndDriversFollowTheDeltaRule(t *testing.T) {
 	}
 	// Two measured values: the percent of the ratio over reviewed pull requests.
 	if got := delta(repoD1); got.DeltaPct == nil || *got.DeltaPct != 100 {
-		t.Errorf("repo D1: delta_pct = %v, want 100 (25 %% to 50 %%)", got.DeltaPct)
+		t.Errorf("repo D1: delta_pct = %s, want 100 (25 %% to 50 %%)", show(got.DeltaPct))
 	}
 	if got := delta(repoD2); got.DeltaPct == nil || *got.DeltaPct < -40.0001 || *got.DeltaPct > -39.9999 {
-		t.Errorf("repo D2: delta_pct = %v, want -40 (50 %% of 2 reviewed to 30 %% of 10 reviewed)", got.DeltaPct)
+		t.Errorf("repo D2: delta_pct = %s, want -40 (50 %% of 2 reviewed to 30 %% of 10 reviewed)", show(got.DeltaPct))
 	}
 	// No review data in a window: no value, and the percent is the 0 of "no
 	// delta", with the flags saying so.
 	if got := delta(repoN); got.HasData || got.HasPriorData || got.DeltaPct == nil || *got.DeltaPct != 0 {
-		t.Errorf("repo N: has_data %v has_prior_data %v delta_pct %v, want no data in both windows and the 0 of no delta",
-			got.HasData, got.HasPriorData, got.DeltaPct)
+		t.Errorf("repo N: has_data %v has_prior_data %v delta_pct %s, want no data in both windows and the 0 of no delta",
+			got.HasData, got.HasPriorData, show(got.DeltaPct))
 	}
 
 	// The "driven by" lookup: the groups ranked by the percent of their own

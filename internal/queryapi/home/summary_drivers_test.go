@@ -1,8 +1,11 @@
 package home
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log"
+	"os"
 	"strings"
 	"testing"
 
@@ -26,14 +29,24 @@ func TestDriverNamesLeaveTheDriversOutWhenAReadFails(t *testing.T) {
 		t.Fatalf("control: driver names = %v, want Engineering, Ops", got)
 	}
 
+	captureLog := func() (*bytes.Buffer, func()) {
+		var buf bytes.Buffer
+		log.SetOutput(&buf)
+		return &buf, func() { log.SetOutput(os.Stderr) }
+	}
 	activeFails := fakeQueryClient{t: t, handler: func(tt *testing.T, query string, b []dhclickhouse.Binding) (dhclickhouse.RowScanner, error) {
 		if strings.Contains(query, "is_active = 1") {
 			return nil, errors.New("boom")
 		}
 		return named(tt, query, b)
 	}}
+	logged, restore := captureLog()
 	if got := driverNames(context.Background(), activeFails, "org", "team_id", rows); len(got) != 0 {
 		t.Errorf("a failed read of the active teams must leave the drivers out, got %v", got)
+	}
+	restore()
+	if !strings.Contains(logged.String(), "home summary drivers: could not read the active teams: boom") {
+		t.Errorf("a failed read of the active teams is not logged: %q", logged.String())
 	}
 
 	namesFail := fakeQueryClient{t: t, handler: func(tt *testing.T, query string, b []dhclickhouse.Binding) (dhclickhouse.RowScanner, error) {
@@ -42,8 +55,13 @@ func TestDriverNamesLeaveTheDriversOutWhenAReadFails(t *testing.T) {
 		}
 		return named(tt, query, b)
 	}}
+	logged, restore = captureLog()
 	if got := driverNames(context.Background(), namesFail, "org", "team_id", rows); len(got) != 0 {
 		t.Errorf("a failed read of the names must leave the drivers out (never print the ids), got %v", got)
+	}
+	restore()
+	if !strings.Contains(logged.String(), "home summary drivers: could not resolve team display names") {
+		t.Errorf("a failed read of the names is not logged: %q", logged.String())
 	}
 
 	if got := driverNames(context.Background(), client, "org", "team_id", nil); got != nil {

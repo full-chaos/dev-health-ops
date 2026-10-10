@@ -261,3 +261,35 @@ VALUES (?, 'acme/current-only', ?, ?, ?, 'github')`, currentOnly, computedAt, co
 		t.Errorf("the repository with no comparison row is not a driver: %s", sentence)
 	}
 }
+
+// An organization with more than 1,000 active teams still names its team
+// drivers (CHAOS-9046 round 1, F1): the sentence reads only the active rows of
+// its driver ids, never the organization's whole team list, which the production
+// client (rows capped at 1,000) fails to read (code 396).
+func TestHomeSummaryNamesTheTeamDriversOfAnOrganizationWithManyActiveTeams(t *testing.T) {
+	ctx := context.Background()
+	admin, client := newHomeTestClickHouse(ctx, t)
+	now := time.Date(2026, 10, 9, 12, 0, 0, 0, time.UTC)
+	f := DefaultFilters()
+	startDay, _, compareStart, _, err := TimeWindow(f, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const org = "summary-names-many-teams"
+	seedTeamDrivers(ctx, t, admin, org, []driverTeam{{"github:acme/ops", "Ops", true, false}}, compareStart, startDay)
+	if err := admin.Exec(ctx, `INSERT INTO teams (id, team_uuid, name, members, repo_patterns, updated_at, org_id, provider, is_active)
+SELECT concat('github:filler/', toString(number)), generateUUIDv4(), concat('Filler ', toString(number)), [], [], now(), ?, 'github', 1
+FROM numbers(1200)`, org); err != nil {
+		t.Fatal(err)
+	}
+	resp, err := BuildResponse(ctx, client, nil, org, f, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.Summary) == 0 {
+		t.Fatalf("no summary sentence")
+	}
+	if text := resp.Summary[0].Text; !strings.Contains(text, "driven by Ops") {
+		t.Errorf("the team driver of an organization with 1,200 active teams is not named: %q", text)
+	}
+}

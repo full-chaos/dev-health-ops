@@ -12,6 +12,8 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	"github.com/google/uuid"
+
+	"github.com/full-chaos/dev-health-ops/internal/teamcreated"
 )
 
 // GitLabTeamCatalogClickHouseEffects is the concrete bridge from the
@@ -42,7 +44,7 @@ type GitLabTeamCatalogClickHouseEffects struct {
 	Lease providerfoundation.LeaseGuard
 }
 
-const gitlabTeamCatalogTeamsInsert = `INSERT INTO teams (id, team_uuid, name, description, members, manual_members, project_keys, repo_patterns, is_active, updated_at, org_id, provider, native_team_key, parent_team_id)`
+const gitlabTeamCatalogTeamsInsert = `INSERT INTO teams (id, team_uuid, name, description, members, manual_members, project_keys, repo_patterns, is_active, updated_at, org_id, provider, native_team_key, parent_team_id, created_at)`
 
 // Omits last_synced on purpose: the server stamps it at insert time (server insert time, not commit order: readers re-read a 300 s window and dedup by key, migration 099).
 const gitlabTeamCatalogOwnershipInsert = `INSERT INTO team_project_ownership (org_id, provider, team_id, project_id, project_key, source, is_primary, specificity, priority, valid_from, valid_to, updated_at)`
@@ -294,6 +296,10 @@ func (sink GitLabTeamCatalogClickHouseEffects) writeTeams(ctx context.Context, c
 			}
 		}
 	}
+	createdAt, err := teamcreated.Carry(ctx, sink.Conn, claim.OrgID, teamIDs)
+	if err != nil {
+		return err
+	}
 	batch, err := sink.Conn.PrepareBatch(ctx, gitlabTeamCatalogTeamsInsert)
 	if err != nil {
 		return err
@@ -318,6 +324,7 @@ func (sink GitLabTeamCatalogClickHouseEffects) writeTeams(ctx context.Context, c
 		if err := batch.Append(
 			row.ID, teamUUID, row.Name, row.Description, members, manualMembers, row.ProjectKeys, row.RepoPatterns,
 			row.IsActive, row.UpdatedAt, row.OrgID, row.Provider, row.NativeTeamKey, row.ParentTeamID,
+			teamcreated.For(createdAt, row.ID, row.UpdatedAt),
 		); err != nil {
 			return err
 		}

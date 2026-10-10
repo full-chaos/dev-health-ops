@@ -1,7 +1,7 @@
 # Every file under internal/api/teamsidentity/adminstampvenue/testdata: sha256, kind, path. Written by `go run ./internal/testsupport/recordedfiles/manifest`; never edit it by hand.
 # python-recorded set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
 # header-before-stamp set: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855 (0 files)
-10b1fb99f57560417ddba1fc1d7c01371ecbdaf54a6ce586f052b71182b72afb	go-generated	admin-timestamp-server-zone-venue-oracle.go-pin.json
-5de11c9dde6c7b64cafdb2b861bdab4e9cd58190ed019d3468a7d1e7b857bc5a	go-generated	admin-timestamp-venue-oracle.go-pin.json
+acef5f460285ecf6000bb0caa551360e1e4c6aff3fa754eec568ade6addd34c7	go-generated	admin-timestamp-server-zone-venue-oracle.go-pin.json
+a3c70b274752482700bd95275e55de275d11acb3b82dd451336a3686d8b2bc85	go-generated	admin-timestamp-venue-oracle.go-pin.json
 -	header	golden/admin-timestamp-server-zone-venue-oracle.json
 -	header	golden/admin-timestamp-venue-oracle.json

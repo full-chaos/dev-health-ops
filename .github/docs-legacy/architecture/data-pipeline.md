@@ -438,8 +438,20 @@ never reads the rows as they are. Every `at` is the ClickHouse clock.
    sync run minus five minutes (`postSyncTouchedClockMargin`: the two times
    come from two processes). The days of an item are the days of `created_at`,
    `started_at`, `completed_at` and `closed_at`; the day of a transition is the
-   day of `occurred_at`, under the repository of its item. A second
-   statement appends a `touched` event for each window day
+   day of `occurred_at`, under the repository of its item. A second statement
+   (CHAOS-8855, `recordTouchedRangeSQL`) appends a `touched` event for every
+   day from the day of each NEW event to the day its row was written,
+   inclusive: the days between show the item in the wrong state until the row
+   is written. An event is new when its time is later than the previous record
+   of its repository (the newest `touched` event of the repository older than
+   the start of the sync run minus the margin, found by its time `at` over the
+   366 days before it and not by the day it touched; the read is bounded by
+   the organization and the kind), so an old item that is only written again
+   adds no day. ANY `touched` event of the repository counts as the previous record, also one that no sync wrote (the return of a failed run appends `touched` events), so such an event can hide the range of a later write: a delay, the nightly pass still recomputes. The range covers at most 366 day keys: the write day and the 365 days before it. A
+   repository with no previous record has no new event (its first sync is
+   computed by the windows of its units). Named limit: an event delivered late
+   with an event time older than the previous record is not new; only its own
+   day is touched. A third statement appends a `touched` event for each window day
    (`PostSyncPlan.WorkItemWindowDays`) and each repository of the work items
    written since that time. A unit with no `before` has no stored end of its
    window: its window is taken up to the day the sync run started, and every

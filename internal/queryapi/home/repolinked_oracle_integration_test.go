@@ -57,6 +57,7 @@ func oracleItems() []oracleItem {
 		{id: "jira:ABC-2", provider: "jira", typ: "task", status: "in_progress", projectKey: "ABC", created: "2026-08-17 09:00:00", started: "2026-08-18 09:00:00", repo: oracleR2, team: "t-beta", links: []oracleLink{{oracleR2, "native"}}},
 		{id: "gh:a/r#6", provider: "github", typ: "task", status: "todo", projectID: "a/r", created: "2026-08-19 09:00:00", repo: oracleR2, links: []oracleLink{{oracleR2, "explicit_text"}}},
 		{id: "linear:OPS-1", provider: "linear", typ: "task", status: "done", projectID: "ops", created: "2026-08-13 09:00:00", started: "2026-08-14 09:00:00", done: "2026-08-24 15:00:00", assignee: "dee", repo: oracleR2, team: "t-beta", links: []oracleLink{{oracleR2, "native"}}},
+		{id: "gitlab:grp/proj#9", provider: "gitlab", typ: "task", status: "done", projectID: "grp/proj", created: "2026-08-13 09:00:00", started: "2026-08-15 09:00:00", done: "2026-08-21 11:00:00", assignee: "eve", repo: oracleR2, team: "t-beta", links: []oracleLink{{oracleR2, "native"}}},
 	}
 }
 
@@ -142,17 +143,6 @@ func fillDailyTables(ctx context.Context, t *testing.T, admin stdclickhouse.Conn
 			t.Fatalf("work_item_state family %s: %v", day.Format("2006-01-02"), err)
 		}
 	}
-}
-
-func metricSpecByName(t *testing.T, name string) metricSpec {
-	t.Helper()
-	for _, spec := range metrics {
-		if spec.Metric == name {
-			return spec
-		}
-	}
-	t.Fatalf("no metric %s", name)
-	return metricSpec{}
 }
 
 func sameDelta(t *testing.T, label string, got, want MetricDelta) {
@@ -248,4 +238,78 @@ func TestRepoLinkedWorkItemMetricsEqualTheDailyTables(t *testing.T) {
 		}
 	}
 	_ = strings.TrimSpace
+}
+
+// The wire says what the number is: items by tier, items in more than one
+// repository's view, and the coverage of the repository views.
+func TestRepoLinkedViewSaysItsBasisAndCoverage(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+	admin, client := newHomeTestClickHouse(ctx, t)
+	const org = "oracle-basis"
+	seedOracleWorld(ctx, t, admin, org, func(oracleItem) bool { return true })
+	// One item no pull request links to: in no repository's view.
+	if err := admin.Exec(ctx, fmt.Sprintf(`INSERT INTO work_items (repo_id, work_item_id, provider, status, type, project_id, created_at, started_at, org_id, last_synced)
+VALUES (toUUID('%s'), 'gh:a/r#8', 'github', 'in_progress', 'task', 'a/r', %s, %s, '%s', %s)`,
+		oracleR1, oracleTS("2026-08-16 09:00:00"), oracleTS("2026-08-17 09:00:00"), org, oracleTS("2026-08-26 00:00:00"))); err != nil {
+		t.Fatal(err)
+	}
+	start, end := time.Date(2026, 8, 18, 0, 0, 0, 0, time.UTC), time.Date(2026, 8, 25, 0, 0, 0, 0, time.UTC)
+	spec := metricSpecByName(t, "throughput")
+	got, err := computeMetricDelta(ctx, client, spec, start, end, time.Date(2026, 8, 11, 0, 0, 0, 0, time.UTC), start,
+		Filters{What: WhatFilter{Repos: []string{oracleR1}}}, org, end)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.RepoLinkState == nil || *got.RepoLinkState != repoLinkLinked {
+		t.Fatalf("state = %v, want linked", got.RepoLinkState)
+	}
+	// Repository 1 holds #1 (native), #2 (explicit_text here, native in repository 2) and #3 (heuristic).
+	if got.RepoLinkBasis == nil || *got.RepoLinkBasis != (RepoLinkBasis{Native: 1, ExplicitText: 1, Heuristic: 1}) {
+		t.Errorf("basis = %+v, want one item of each tier (a lower tier is never counted as native)", got.RepoLinkBasis)
+	}
+	if got.RepoLinkMultiRepoItems == nil || *got.RepoLinkMultiRepoItems != 1 {
+		t.Errorf("multi-repository items = %v, want 1 (#2 is linked to both repositories)", got.RepoLinkMultiRepoItems)
+	}
+	// 8 items of the window in the organization; 8 minus the unlinked one have a link.
+	if got.RepoLinkCoverage == nil || *got.RepoLinkCoverage != (RepoLinkCoverage{LinkedItems: 8, ItemsInWindow: 9}) {
+		t.Errorf("coverage = %+v, want 8 linked of 9 in the window", got.RepoLinkCoverage)
+	}
+}
+
+// Filters combine by AND: a team and a repository narrow, never widen; named
+// repositories that resolve to nothing leave nothing.
+func TestRepoLinkedViewCombinesWithTeamByAnd(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+	admin, client := newHomeTestClickHouse(ctx, t)
+	const org = "oracle-and"
+	seedOracleWorld(ctx, t, admin, org, func(oracleItem) bool { return true })
+	fillDailyTables(ctx, t, admin, org, time.Date(2026, 8, 8, 0, 0, 0, 0, time.UTC), time.Date(2026, 8, 26, 0, 0, 0, 0, time.UTC))
+	start, end := time.Date(2026, 8, 18, 0, 0, 0, 0, time.UTC), time.Date(2026, 8, 25, 0, 0, 0, 0, time.UTC)
+	cmpStart := time.Date(2026, 8, 11, 0, 0, 0, 0, time.UTC)
+	team := func(ids ...string) ScopeFilter { return ScopeFilter{Level: "team", IDs: ids} }
+	for _, name := range []string{"throughput", "cycle_time", "wip_saturation"} {
+		spec := metricSpecByName(t, name)
+		read := func(f Filters) MetricDelta {
+			d, err := computeMetricDelta(ctx, client, spec, start, end, cmpStart, start, f, org, end)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return d
+		}
+		// team alpha owns the work of repository 1 only: alpha AND both repositories = alpha alone.
+		dailyAlpha := read(Filters{Scope: team("t-alpha")})
+		sameDelta(t, name+": team alpha and both repositories", read(Filters{Scope: team("t-alpha"), What: WhatFilter{Repos: []string{oracleR1, oracleR2}}}), dailyAlpha)
+		// a repository the team has no linked item in: no data, never the team's value.
+		none := read(Filters{Scope: team("t-beta"), What: WhatFilter{Repos: []string{oracleR1}}})
+		if none.HasData || none.Value != 0 || none.RepoLinkState == nil || *none.RepoLinkState != repoLinkNoLinks {
+			t.Errorf("%s: team beta and repository 1 = value %v has_data %v state %v, want no data (no_links)", name, none.Value, none.HasData, none.RepoLinkState)
+		}
+		// named repositories that resolve to nothing.
+		unknown := read(Filters{What: WhatFilter{Repos: []string{"00000000-0000-4000-8000-0000000000ff"}}})
+		if unknown.HasData || unknown.Value != 0 || unknown.RepoFilterApplied == nil || !*unknown.RepoFilterApplied || unknown.RepoLinkState == nil || *unknown.RepoLinkState != repoLinkNoLinks {
+			t.Errorf("%s: an unresolved repository = %+v, want no data, filter applied, no_links", name, unknown)
+		}
+	}
 }

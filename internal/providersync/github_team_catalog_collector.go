@@ -321,10 +321,23 @@ func (adapter GitHubTeamCatalogCollector) CollectTeamCatalog(
 	// the `teams` row's members field, never this table). Independent of the
 	// sync_policy guard above too -- that guard is scoped to the `teams`
 	// table only, matching Linear's own applyTeamSyncPolicyGuard doc comment.
-	if selections.Teams && (len(rows.RepoOwnership) > 0 || len(rows.RepoListedTeamIDs) > 0) {
+	// A team that holds open rows and that the organization's team listing no
+	// longer returns is a dropped team (CHAOS-9102): its rows close when it is
+	// proved gone. One set of direct team answers serves both closes of the run.
+	teamLookups := NewTeamAbsenceLookups(ctx, githubTeamAbsence{client: client, org: orgName})
+	var droppedRepoTeams []string
+	if selections.Teams {
+		var err error
+		droppedRepoTeams, err = adapter.Sink.OpenRepoOwnershipTeamsNotListed(ctx, ref.OrgID, orgName, rows.TeamListing.Listed)
+		if err != nil {
+			return result, err
+		}
+	}
+	if selections.Teams && (len(rows.RepoOwnership) > 0 || len(rows.RepoListedTeamIDs) > 0 || len(droppedRepoTeams) > 0) {
 		decision := decideOwnershipClose(ctx, adapter.ScopeCensus, ownershipCloseRequest{
 			ref: ref, provider: githubTeamCatalogProvider,
 			listed: rows.RepoListedTeamIDs, unproven: rows.RepoUnprovenTeamIDs, responses: rows.RepoListingResponses,
+			dropped: droppedRepoTeams, teamListing: rows.TeamListing, teamLookups: teamLookups,
 		})
 		// A grant that a listing of more than one response does not hold is
 		// closed only on GitHub's own answer for that grant.
@@ -341,7 +354,7 @@ func (adapter GitHubTeamCatalogCollector) CollectTeamCatalog(
 		result.DegradedLegs = append(result.DegradedLegs, decision.legs...)
 		result.DegradedLegs = append(result.DegradedLegs, SnapshotAbsenceLegs(plan)...)
 		slog.Default().InfoContext(ctx, "github_team_catalog_repo_ownership_snapshot",
-			"org_id", ref.OrgID, "teams_listed", len(rows.RepoListedTeamIDs),
+			"org_id", ref.OrgID, "teams_listed", len(rows.RepoListedTeamIDs), "teams_dropped_gone", len(decision.gone),
 			"teams_closable", len(decision.closable), "rows_written", written, "rows_closed", closed)
 	}
 	if selections.Members {
@@ -351,13 +364,20 @@ func (adapter GitHubTeamCatalogCollector) CollectTeamCatalog(
 		// seen with, and a member absent from the COMPLETE read of its team is
 		// closed (through the one snapshot rule). Absence is judged against the
 		// members the provider returned, not the part the conflict guard keeps.
+		droppedMembershipTeams, err := openMembershipTeamIDsNotListed(
+			ctx, adapter.Sink.Conn, ref.OrgID, githubTeamCatalogProvider, githubTeamCatalogSource,
+			rows.TeamListing.TeamIDPrefix, rows.TeamListing.Listed)
+		if err != nil {
+			return result, err
+		}
 		decision := decideOwnershipClose(ctx, adapter.ScopeCensus, ownershipCloseRequest{
 			ref: ref, provider: githubTeamCatalogProvider, listed: rows.ObservedMembershipTeamIDs,
 			unproven: rows.UnprovenMembershipTeamIDs, dataset: "team_memberships", leg: membershipCloseLeg,
+			dropped: droppedMembershipTeams, teamListing: rows.TeamListing, teamLookups: teamLookups,
 		})
 		membershipRows, membershipOutcome, snapshotErr := githubMembershipWriter.Snapshot(
 			ctx, adapter.Sink.Conn, ref.OrgID, rows.Memberships, keptMemberships, normalizedAt.UTC().Truncate(time.Millisecond),
-			rows.MembershipAbsence, decision.membershipSnapshot(GitHubTeamMembershipKind))
+			decision.membershipProver(rows.MembershipAbsence), decision.membershipSnapshot(GitHubTeamMembershipKind))
 		if snapshotErr != nil {
 			return result, snapshotErr
 		}

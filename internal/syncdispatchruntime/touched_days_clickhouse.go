@@ -16,8 +16,8 @@ import (
 var ErrTouchedDaysUnavailable = errors.New("touched-day record is unavailable")
 
 // ClickHouseTouchedDaysStore keeps the record of the (organization, day,
-// repository) keys that stored raw work-item rows touched, in the table
-// daily_metrics_touched_days (CHAOS-8813).
+// repository) keys that stored raw work-item rows, commits and pull requests
+// touched, in the table daily_metrics_touched_days (CHAOS-8813, CHAOS-9169).
 //
 // Every time in the table is the ClickHouse clock. A key is pending while its
 // newest 'touched' event is newer than its newest 'dispatched' event.
@@ -208,6 +208,68 @@ func (store *ClickHouseTouchedDaysStore) RecordTouched(
 		); err != nil {
 			return 0, ErrTouchedDaysUnavailable
 		}
+	}
+	var recorded uint64
+	if err := store.conn.QueryRow(ctx, `
+SELECT count()
+FROM (
+    SELECT day, repo_id
+    FROM daily_metrics_touched_days
+    WHERE org_id = ? AND kind = 'touched' AND at = fromUnixTimestamp64Milli(toInt64(?), 'UTC')
+    GROUP BY day, repo_id
+)`, organizationID, at.UnixMilli()).Scan(&recorded); err != nil {
+		return 0, ErrTouchedDaysUnavailable
+	}
+	return recorded, nil
+}
+
+// recordTouchedGitSQL appends one 'touched' event for each (day, repository)
+// that a commit or a pull request written at or after the given time belongs to
+// (CHAOS-9169). A late or old row marks its own day however far the day lies
+// from the window of its sync: no window of the sync's units is needed.
+//
+// The days are the ones the daily run reads the rows under, not every date the
+// row carries: a commit is read by its committer date (repouser, wellbeing), a
+// pull request by its creation day and, when merged, its merge day. The author
+// date of a rebased commit is not one of them, and a day no run reads the row
+// under would only start a run that computes nothing new.
+const recordTouchedGitSQL = `
+INSERT INTO daily_metrics_touched_days (org_id, day, repo_id, kind, at)
+SELECT ?, day, repo_id, 'touched', fromUnixTimestamp64Milli(toInt64(?), 'UTC')
+FROM (
+    SELECT repo_id, toDate(committer_when, 'UTC') AS day
+    FROM git_commits
+    WHERE org_id = ? AND last_synced >= fromUnixTimestamp64Milli(toInt64(?), 'UTC')
+    UNION ALL
+    SELECT repo_id,
+           arrayJoin(arrayMap(value -> assumeNotNull(value), arrayFilter(value -> value IS NOT NULL, [
+               toDate(created_at, 'UTC'), toDate(merged_at, 'UTC')
+           ]))) AS day
+    FROM git_pull_requests
+    WHERE org_id = ? AND last_synced >= fromUnixTimestamp64Milli(toInt64(?), 'UTC')
+)
+GROUP BY day, repo_id`
+
+// RecordTouchedGit appends the 'touched' events of the commits and pull
+// requests whose last_synced is at or after since. It returns the number of
+// keys it appended.
+func (store *ClickHouseTouchedDaysStore) RecordTouchedGit(
+	ctx context.Context, organizationID string, since time.Time,
+) (uint64, error) {
+	if store == nil || store.conn == nil || organizationID == "" || since.IsZero() {
+		return 0, ErrTouchedDaysUnavailable
+	}
+	at, err := store.clock(ctx)
+	if err != nil {
+		return 0, err
+	}
+	sinceMillis := since.UTC().UnixMilli()
+	if err := store.conn.Exec(ctx, recordTouchedGitSQL,
+		organizationID, at.UnixMilli(),
+		organizationID, sinceMillis,
+		organizationID, sinceMillis,
+	); err != nil {
+		return 0, ErrTouchedDaysUnavailable
 	}
 	var recorded uint64
 	if err := store.conn.QueryRow(ctx, `

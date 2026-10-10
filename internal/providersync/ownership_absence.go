@@ -192,3 +192,91 @@ func (prover jiraProjectAbsence) OwnershipAbsence(ctx context.Context, row Owner
 	}
 	return SnapshotAbsenceNotProven
 }
+
+// githubTeamAbsence asks GET /orgs/{org}/teams/{slug} ("get a team by name"): a
+// 200 answer whose slug is the asked one says the team exists, and GitHub's own
+// 404 says it does not. Any other answer proves nothing, and an answer that
+// names ANOTHER slug (a renamed team) is not the team asked for.
+type githubTeamAbsence struct {
+	client *providerfoundation.HTTPClient
+	org    string
+}
+
+func (prover githubTeamAbsence) TeamAbsence(ctx context.Context, teamID string) SnapshotAbsence {
+	slug, okTeam := strings.CutPrefix(teamID, teamid.Prefix(githubTeamCatalogProvider))
+	if !okTeam || prover.client == nil || strings.TrimSpace(prover.org) == "" || strings.TrimSpace(slug) == "" {
+		return SnapshotAbsenceNotProven
+	}
+	response, err := prover.client.Do(ctx, http.MethodGet,
+		"/orgs/"+url.PathEscape(prover.org)+"/teams/"+url.PathEscape(slug), nil)
+	if err != nil {
+		if githubLookupNotFound(err) {
+			return SnapshotAbsenceProven
+		}
+		return SnapshotAbsenceNotProven
+	}
+	defer response.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(response.Body, maxOwnershipLookupBody+1))
+	if err != nil || len(body) > maxOwnershipLookupBody || response.StatusCode != http.StatusOK {
+		return SnapshotAbsenceNotProven
+	}
+	var team struct {
+		Slug string `json:"slug"`
+	}
+	if json.Unmarshal(body, &team) != nil || !strings.EqualFold(strings.TrimSpace(team.Slug), slug) {
+		return SnapshotAbsenceNotProven
+	}
+	return SnapshotFactStillHeld
+}
+
+// gitlabLookupGroupNotFound says GitLab itself answered 404 "Group Not Found"
+// for the request: the status, and the body of GitLab's own error answer (a
+// JSON object whose message is "404 Group Not Found"). A 404 with any other
+// body is not GitLab's (a gateway or a proxy in front of the host) and proves
+// nothing.
+func gitlabLookupGroupNotFound(err error) bool {
+	var providerErr *providerfoundation.ProviderError
+	if !errors.As(err, &providerErr) || providerErr.Class != providerfoundation.ErrorNotFound ||
+		providerErr.StatusCode != http.StatusNotFound {
+		return false
+	}
+	var answer struct {
+		Message *string `json:"message"`
+	}
+	return json.Unmarshal([]byte(providerErr.Body), &answer) == nil && answer.Message != nil &&
+		strings.TrimSpace(*answer.Message) == "404 Group Not Found"
+}
+
+// gitlabTeamAbsence asks GET /groups/:id with the group's full path: a 200
+// answer whose full_path is the asked one says the group exists, and GitLab's
+// own 404 says it does not. Any other answer proves nothing.
+type gitlabTeamAbsence struct {
+	client *providerfoundation.HTTPClient
+}
+
+func (prover gitlabTeamAbsence) TeamAbsence(ctx context.Context, teamID string) SnapshotAbsence {
+	groupPath, okTeam := strings.CutPrefix(teamID, teamid.Prefix(gitlabTeamCatalogProvider))
+	groupPath = strings.TrimSpace(groupPath)
+	if !okTeam || prover.client == nil || groupPath == "" {
+		return SnapshotAbsenceNotProven
+	}
+	response, err := prover.client.Do(ctx, http.MethodGet, providerRelativePath(prover.client, "api", "v4", "groups", groupPath), nil)
+	if err != nil {
+		if gitlabLookupGroupNotFound(err) {
+			return SnapshotAbsenceProven
+		}
+		return SnapshotAbsenceNotProven
+	}
+	defer response.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(response.Body, maxOwnershipLookupBody+1))
+	if err != nil || len(body) > maxOwnershipLookupBody || response.StatusCode != http.StatusOK {
+		return SnapshotAbsenceNotProven
+	}
+	var group struct {
+		FullPath string `json:"full_path"`
+	}
+	if json.Unmarshal(body, &group) != nil || strings.TrimSpace(group.FullPath) != groupPath {
+		return SnapshotAbsenceNotProven
+	}
+	return SnapshotFactStillHeld
+}

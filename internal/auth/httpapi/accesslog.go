@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"log/slog"
+	"net"
 	"net/http"
 	"strconv"
 	"sync/atomic"
@@ -92,8 +93,10 @@ func (a *accessRecorder) Unwrap() http.ResponseWriter { return a.ResponseWriter 
 
 // accessObserver logs one structured line per request and records the
 // per-route request counter and duration histogram. It carries no query string,
-// header, token, body or client address: only the method, the registered route
-// pattern, the status, the duration, the listener and the request id.
+// header, token or body: only the method, the registered route pattern, the
+// status, the duration, the listener, the request id and the peer (the host
+// part of the TCP connection's remote address, never a forwarded header: a
+// client chooses those).
 type accessObserver struct {
 	logger   *slog.Logger
 	listener string
@@ -180,6 +183,7 @@ func (o *accessObserver) observe(r *http.Request, pattern string, status int, el
 		slog.Float64("duration_ms", float64(elapsed.Microseconds())/1000),
 		slog.String("listener", o.listener),
 		slog.String("request_id", LoggableRequestID(ctx)),
+		slog.String("peer", peerHost(r.RemoteAddr)),
 	)
 }
 
@@ -243,4 +247,15 @@ func allHex(s string) bool {
 
 func isHex(c byte) bool {
 	return c >= '0' && c <= '9' || c >= 'a' && c <= 'f' || c >= 'A' && c <= 'F'
+}
+
+// peerHost is the host part of the connection's remote address (an IP), or ""
+// when there is none. It is the address of whoever opened the connection: the
+// web pod, the ingress, a load balancer. A forwarded header is never read here.
+func peerHost(remote string) string {
+	host, _, err := net.SplitHostPort(remote)
+	if err != nil {
+		return ""
+	}
+	return host
 }

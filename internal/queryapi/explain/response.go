@@ -84,11 +84,7 @@ func (reader *Reader) scopeFilterForMetric(ctx context.Context, metricScope stri
 		return filterSQL, bindings, nil
 	}
 	if metricScope == "repo" {
-		var repoRefs []string
-		if scopeLevel == "repo" {
-			repoRefs = append(repoRefs, scopeIDs...)
-		}
-		repoRefs = append(repoRefs, whatRepos...)
+		repoRefs := teamscope.NamedRepoRefs(scopeLevel, scopeIDs, whatRepos)
 		repoIDs, resolveErr := reader.resolveRepoIDs(ctx, repoRefs, orgID)
 		if resolveErr != nil {
 			return "", nil, resolveErr

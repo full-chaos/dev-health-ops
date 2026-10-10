@@ -348,6 +348,10 @@ func Execute(
 		logger.Error("register otel init failure counter", "error", err)
 		return 1
 	}
+	if err := registry.RegisterMetrics("otel_spans", tracing.SpansSource()); err != nil {
+		logger.Error("register otel span counters", "error", err)
+		return 1
+	}
 	// Every binary exports the OTel instruments its code declares (the
 	// counters ported from the Python api, the coverage and ingest families
 	// declared through otel.Meter) on its own /metrics, as the api and the

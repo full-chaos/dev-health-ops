@@ -963,7 +963,7 @@ type HomeSignal struct {
 	Coverage *float64 `json:"coverage,omitempty"`
 	// Current primary work-item attribution evidence for work-item metrics; null when this window has no attributable work items.
 	Attribution *SignalAttribution `json:"attribution,omitempty"`
-	// Whether the request's repository filter (a repo-level scope, or what.repos) narrows the metric this signal is built from: the field of the same name on MetricDelta (false only for a team-keyed metric). Null when the request names no repository, and on a signal that does not come from a metric (risk, recommendation).
+	// Whether the request's repository filter (a repo-level scope, or what.repos) narrows the metric this signal is built from: the field of the same name on MetricDelta.
 	RepoFilterApplied *bool `json:"repoFilterApplied,omitempty"`
 }
 
@@ -1079,8 +1079,16 @@ type MetricDelta struct {
 	RateState *string `json:"rateState,omitempty"`
 	// The coverage of the pull request rework ratio (CHAOS-9072), from 0 to 1, not a percent: the merged pull requests of the window that have review data from a provider that stores a changes-requested review, divided by all merged pull requests of the window, of every stored day: a day stored before the review counts existed is in the denominator only, so a window that is partly not counted has a low coverage. 0 when rateState is unknown_no_review_evidence or not_applicable_no_rework_signal. Null when no stored day of the window holds a merged pull request, when rateState is null (no stored day of the window holds review counts), and for every other metric.
 	RateCoverage *float64 `json:"rateCoverage,omitempty"`
-	// Whether the request's repository filter (a repo-level scope, or what.repos) narrows this metric. Null when the request names no repository. True for a repository-keyed metric: the filter was applied, and when the named repositories resolve to nothing the metric has no data (hasData false). False only for a team-keyed metric (cycle_time, throughput, wip_saturation, blocked_work: their tables have no repo_id column, so the repository condition is not applied and the value is not narrowed) (CHAOS-9093).
+	// Whether the request's repository filter (a repo-level scope, or what.repos) narrows this metric. Null when the request names no repository. True when the filter was applied: for a repository-keyed metric through its repository, for cycle_time, throughput, wip_saturation and blocked_work through the items linked to the repository's pull requests (see repoLinkState), and when the named repositories resolve to nothing the metric has no data (hasData false). False is not served today (CHAOS-9093, CHAOS-9094).
 	RepoFilterApplied *bool `json:"repoFilterApplied,omitempty"`
+	// How cycle_time, throughput, wip_saturation and blocked_work were served under a repository filter (CHAOS-9094). Null for every other metric and when the request names no repository. The state is a property of the LINK, not of the metric's value: linked = at least one item linked to the repositories' pull requests (through work_graph_issue_pr) is in the window, the same word for the four metrics of one request, whatever each metric's value; the metric is computed at request time by the same definition the daily job stores, and its hasData follows the rule of the daily read for that metric (a metric with no rows, such as blocked_work with no blocked hours, has hasData false while the state is linked and the basis counts are present). no_links = no item is linked in the window, or the named repositories resolve to nothing (hasData false on all four; an item with no link is in no repository's view). timed_out = the read exceeded its time budget (hasData false; never the unfiltered value). too_large = the read returned more rows than its bound, the same on REST and GraphQL (hasData false; never the unfiltered value). In both degraded cases the rest of the Home document is served.
+	RepoLinkState *string `json:"repoLinkState,omitempty"`
+	// The items of the repository view by the best provenance tier of the links that put them there (CHAOS-9094): native outranks explicit_text outranks heuristic, and a lower tier is never counted as native. Null unless repoLinkState is set.
+	RepoLinkBasis *RepoLinkBasis `json:"repoLinkBasis,omitempty"`
+	// The items of the repository view that are also linked to pull requests of another repository, so they count in each repository's view and the views do not sum to the organization (CHAOS-9094). Null unless repoLinkState is set.
+	RepoLinkMultiRepoItems *int `json:"repoLinkMultiRepoItems,omitempty"`
+	// How much of the organization's work a repository view can see: the items in the window that have a link to any repository over all items in the window (CHAOS-9094). Null unless repoLinkState is set.
+	RepoLinkCoverage *RepoLinkCoverage `json:"repoLinkCoverage,omitempty"`
 }
 
 type MetricLineage struct {
@@ -1358,6 +1366,19 @@ type RepoHotspot struct {
 	TopFilePath  string  `json:"topFilePath"`
 	TopRiskScore float64 `json:"topRiskScore"`
 	EvidenceURL  *string `json:"evidenceUrl,omitempty"`
+}
+
+// Item counts of a repository view by the best provenance tier of their links (CHAOS-9094).
+type RepoLinkBasis struct {
+	Native       int `json:"native"`
+	ExplicitText int `json:"explicitText"`
+	Heuristic    int `json:"heuristic"`
+}
+
+// Items in the window that have a link to any repository, over all items in the window (CHAOS-9094).
+type RepoLinkCoverage struct {
+	LinkedItems   int `json:"linkedItems"`
+	ItemsInWindow int `json:"itemsInWindow"`
 }
 
 type ReportRunConnection struct {

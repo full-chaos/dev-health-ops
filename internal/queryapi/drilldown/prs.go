@@ -173,16 +173,13 @@ func BuildPRsResponse(ctx context.Context, reader *Reader, orgID string, params 
 	if err != nil {
 		return nil, err
 	}
-	scopeSQL, scopeBindings := scopeClauseRepo(repoIDs)
+	explicitSQL, explicitBindings := scopeClauseRepo(repoIDs)
+	var teamCondition string
+	var teamBindings []dhclickhouse.Binding
 	if params.ScopeLevel == "team" && len(params.ScopeIDs) > 0 {
-		teamCondition, teamBindings := teamscope.RepoCondition(orgID, "pr.repo_id", params.ScopeIDs, time.Now().UTC())
-		if scopeSQL != "" {
-			scopeSQL = " AND (pr.repo_id IN {scope_ids:Array(String)} OR " + teamCondition + ")"
-		} else {
-			scopeSQL = " AND " + teamCondition
-		}
-		scopeBindings = append(scopeBindings, teamBindings...)
+		teamCondition, teamBindings = teamscope.RepoCondition(orgID, "pr.repo_id", params.ScopeIDs, time.Now().UTC())
 	}
+	scopeSQL, scopeBindings := teamscope.NarrowRepoScope(len(teamscope.NamedRepoRefs(params.ScopeLevel, params.ScopeIDs, params.WhatRepos)) > 0, explicitSQL, explicitBindings, teamCondition, teamBindings)
 
 	query := fmt.Sprintf(fetchPullRequestsQuery, scopeSQL, settingsMaxExecutionTime())
 	bindings := append([]dhclickhouse.Binding{

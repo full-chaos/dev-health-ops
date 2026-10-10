@@ -402,16 +402,22 @@ type heldSetWalk struct{ reads, feeds, proof string }
 // its proof. Per kind:
 //
 //   - github_team_repo_grants: ONE walk per team (the team's repositories;
-//     GitHub lists archived repositories in the same walk).
+//     GitHub lists archived repositories in the same walk), and the team
+//     listing for a team that is no longer listed (CHAOS-9102): the listing
+//     proves the team gone when it was one response, otherwise GitHub's answer
+//     for the team does.
 //   - gitlab_group_project_grants: ONE walk per group (the group's projects,
 //     with the provider's default filters; the direct answer uses the same
-//     endpoint and filters). The walk of all projects with subgroups feeds the
-//     catalog's project rows, not a grant.
+//     endpoint and filters), and the subgroup listing for a group that is no
+//     longer listed (CHAOS-9102), by one response or GitLab's answer for the
+//     group. The walk of all projects with subgroups feeds the catalog's
+//     project rows, not a grant.
 //   - jira_legacy_ownership: THREE walks (live, archived, live again); the
 //     archived one feeds the held set because an archived project keeps its
 //     open rows. A row whose project the live answer holds is decided by the
 //     legacy links, one read of the store.
-//   - linear_team_key_ownership: ONE walk (teams), by cursor.
+//   - linear_team_key_ownership: ONE walk (teams), by cursor. The same walk
+//     decides the dropped teams of linear_team_memberships (CHAOS-9102).
 //   - linear_project_ownership: TWO walks by cursor (projects, with archived
 //     projects in the same walk; and the continuation of one project's teams).
 //   - atlassian_team_catalog, atlassian_team_memberships,
@@ -422,12 +428,12 @@ var heldSetWalks = map[string]struct {
 	walks []heldSetWalk
 }{
 	"internal/providersync/github_team_catalog_route.go": {`providerfoundation\.CollectGitHubLinkPages\(`, []heldSetWalk{
-		{"the teams of the organization", "no held set: a team that is not listed closes nothing", "none needed"},
+		{"the teams of the organization", "github_team_repo_grants (a team that is no longer listed; and github_team_memberships)", "one response, or GitHub's answer for the team"},
 		{"the repositories of one team", "github_team_repo_grants", "one response, or GitHub's answer for the grant"},
 		{"the members of one team", "no close", "none needed"},
 	}},
 	"internal/providersync/gitlab_team_catalog_route.go": {`providerfoundation\.CollectGitLabPageParamPages\(`, []heldSetWalk{
-		{"the subgroups of the root group", "no held set: a group that is not listed closes nothing", "none needed"},
+		{"the subgroups of the root group", "gitlab_group_project_grants (a group that is no longer listed; and gitlab_team_memberships)", "one response, or GitLab's answer for the group"},
 		{"the projects of one group", "gitlab_group_project_grants", "one response, or GitLab's answer for the project"},
 		{"the members of one group", "no close", "none needed"},
 		{"all projects with subgroups", "no held set of a grant: the catalog's project rows", "none needed"},
@@ -438,7 +444,7 @@ var heldSetWalks = map[string]struct {
 		{"the live project search, again", "jira_legacy_ownership", "the same"},
 	}},
 	"internal/providersync/linear_reference_catalog_route.go": {`:= collectLinearReferenceConnection\(`, []heldSetWalk{
-		{"the teams of the workspace", "linear_team_key_ownership", "cursor walk"},
+		{"the teams of the workspace", "linear_team_key_ownership (and linear_team_memberships: a team that is no longer listed)", "cursor walk"},
 		{"the projects of the workspace, archived ones too", "linear_project_ownership", "cursor walk"},
 		{"the continuation of one project's teams", "linear_project_ownership", "cursor walk"},
 		{"the continuation of one team's members", "no close", "none needed"},
@@ -489,7 +495,7 @@ func TestHeldSetWalkCensus(t *testing.T) {
 	// Every kind has a walk that feeds it, and the count per kind is the one
 	// the comment above states.
 	want := map[string]int{
-		"github_team_repo_grants": 1, "gitlab_group_project_grants": 1, "jira_legacy_ownership": 3,
+		"github_team_repo_grants": 2, "gitlab_group_project_grants": 2, "jira_legacy_ownership": 3,
 		"linear_team_key_ownership": 1, "linear_project_ownership": 2,
 		"atlassian_team_catalog": 1, "atlassian_team_memberships": 1, "atlassian_team_project_links": 1,
 	}

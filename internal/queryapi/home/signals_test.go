@@ -347,9 +347,9 @@ func TestRepoFilterAppliedFollowsTheSpecScope(t *testing.T) {
 		{"a team scope alone, team metric", teamOnly, "team", "nil"},
 		{"repo scope, repo metric", named, "repo", "true"},
 		{"what.repos, repo metric", byWhat, "repo", "true"},
-		{"repo scope, team metric", named, "team", "false"},
+		{"repo scope, team metric", named, "team", "true"},
 		// A team metric of a team-scope request carries a team condition, which is not a repository filter.
-		{"team scope and what.repos, team metric", teamAndRepos, "team", "false"},
+		{"team scope and what.repos, team metric", teamAndRepos, "team", "true"},
 		{"team scope and what.repos, repo metric", teamAndRepos, "repo", "true"},
 	} {
 		got := "nil"

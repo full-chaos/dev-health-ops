@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/querybound"
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/workitemmetrics"
 )
 
 // # Why the work-item families read a work scope, not a repository
@@ -191,37 +192,22 @@ func keepWorkItemsOfScopes(rows []workItemScopedRow, scopes map[workItemScopeKey
 // stored under two repository ids: the item counts once, and the row with the
 // newest last_synced is the item (on a tie, the lower repository id).
 //
-// This is the one place that holds the rule. work_item_cycle_times and
+// The rule is workitemmetrics.OncePerProviderAndID: one copy, shared with the
+// request-time read of a repository's linked items. work_item_cycle_times and
 // work_item_transitions identify an item the same way, without a repository.
 func countWorkItemOncePerProviderAndID(rows []workItemScopedRow) (kept []workItemScopedRow, duplicates int) {
-	type identity struct{ provider, workItemID string }
-	position := make(map[identity]int, len(rows))
-	kept = make([]workItemScopedRow, 0, len(rows))
-	for _, row := range rows {
-		key := identity{row.Provider, row.WorkItemID}
-		index, seen := position[key]
-		if !seen {
-			position[key] = len(kept)
-			kept = append(kept, row)
-			continue
+	versions := make([]workitemmetrics.ItemVersion, len(rows))
+	for index, row := range rows {
+		versions[index] = workitemmetrics.ItemVersion{
+			Provider: row.Provider, WorkItemID: row.WorkItemID, RepoID: row.RepoID.String(), LastSynced: row.LastSynced,
 		}
-		duplicates++
-		if newerWorkItemVersion(row, kept[index]) {
-			kept[index] = row
-		}
+	}
+	indexes, duplicates := workitemmetrics.OncePerProviderAndID(versions)
+	kept = make([]workItemScopedRow, 0, len(indexes))
+	for _, index := range indexes {
+		kept = append(kept, rows[index])
 	}
 	return kept, duplicates
-}
-
-// newerWorkItemVersion says that candidate is the item and current is not:
-// the newer last_synced, and for two rows of one last_synced the row of the
-// lower repository id (the text form of the id is compared). The tie rule
-// makes the result independent of the order the rows are read in.
-func newerWorkItemVersion(candidate, current workItemScopedRow) bool {
-	if !candidate.LastSynced.Equal(current.LastSynced) {
-		return candidate.LastSynced.After(current.LastSynced)
-	}
-	return candidate.RepoID.String() < current.RepoID.String()
 }
 
 // loadWorkItemPartitionScopes reads the work scopes that the given

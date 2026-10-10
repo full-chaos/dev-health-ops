@@ -185,7 +185,7 @@ func TestResolveEvidenceQualityByGroup_UsesDominantPersistedGroupAndPreservesUnk
 		EvidenceQualityGroupBy: &groupBy,
 	}
 
-	got, err := resolveEvidenceQualityByGroup(context.Background(), client, "org-1", batch, true, nil)
+	got, err := resolveEvidenceQualityByGroup(context.Background(), client, "org-1", batch, true, nil, true)
 	if err != nil {
 		t.Fatalf("resolveEvidenceQualityByGroup: %v", err)
 	}
@@ -212,7 +212,7 @@ func TestResolveEvidenceQualityByGroup_RejectsNonInvestmentDimensions(t *testing
 		EvidenceQualityGroupBy: &groupBy,
 	}
 
-	_, err := resolveEvidenceQualityByGroup(context.Background(), client, "org-1", batch, true, nil)
+	_, err := resolveEvidenceQualityByGroup(context.Background(), client, "org-1", batch, true, nil, true)
 	if err == nil {
 		t.Fatal("expected REPO evidenceQualityGroupBy to be rejected")
 	}

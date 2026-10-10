@@ -181,15 +181,12 @@ func TestFetchWorkUnitInvestmentsTeamScopeNeverRoundTripsForRepoIDs(t *testing.T
 	}
 }
 
-// TestFetchWorkUnitInvestmentsUnionsExplicitReposWithTeamScope pins
-// resolve_repo_filter_ids' (api/services/filtering.py:95-110) own union
-// semantics: an explicit repo ref alongside a team scope means EITHER
-// condition can match, not both required -- repo_refs there accumulates
-// what.repos AND the team's own resolved ids into ONE list before
-// resolving, so a repo reachable through EITHER source is included. The
-// pushed-down shape reproduces the identical set with an OR of the two
-// conditions.
-func TestFetchWorkUnitInvestmentsUnionsExplicitReposWithTeamScope(t *testing.T) {
+// TestFetchWorkUnitInvestmentsIntersectsExplicitReposWithTeamScope pins that filters
+// narrow, never widen (CHAOS-9104, D5844): an explicit repo ref alongside a team
+// scope means BOTH conditions must match. The Python original unioned them
+// (resolve_repo_filter_ids put both into one id list); no recorded golden pins
+// that: this test is hand-written.
+func TestFetchWorkUnitInvestmentsIntersectsExplicitReposWithTeamScope(t *testing.T) {
 	capture := &capturingClient{}
 	reader, err := NewReader(capture)
 	if err != nil {
@@ -200,6 +197,7 @@ func TestFetchWorkUnitInvestmentsUnionsExplicitReposWithTeamScope(t *testing.T) 
 	if _, err := reader.FetchWorkUnitInvestments(t.Context(), WorkUnitInvestmentsFilter{
 		OrgID:              "org-1",
 		RepoIDs:            []string{"repo-1"},
+		ReposNamed:         true,
 		TeamScopeCondition: teamCondition,
 		TeamScopeBindings:  teamBindings,
 		Limit:              10,
@@ -208,8 +206,8 @@ func TestFetchWorkUnitInvestmentsUnionsExplicitReposWithTeamScope(t *testing.T) 
 	}
 
 	query := capture.lastQuery
-	if !strings.Contains(query, "work_unit_investments.repo_id IN {repo_ids:Array(String)} OR work_unit_investments.repo_id IN (") {
-		t.Fatalf("query does not OR the explicit-repo and team conditions together:\n%s", query)
+	if !strings.Contains(query, "work_unit_investments.repo_id IN {repo_ids:Array(String)} AND work_unit_investments.repo_id IN (") {
+		t.Fatalf("query does not AND the explicit-repo and team conditions together:\n%s", query)
 	}
 	var sawRepoIDs, sawTeamIDs bool
 	for _, b := range capture.lastBindings {

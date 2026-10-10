@@ -203,52 +203,18 @@ func TestResolve_Investment_AuthorDimensionStillRejected(t *testing.T) {
 // FLOW_MATRIX_QUERY traffic sends. This test proves Resolve's top-level
 // `useInvestment` (used only by timeseries/breakdown/sankey) does NOT
 // leak into flowMatrix handling and wrongly reject it.
-// TestResolve_FlowMatrix_BatchUseInvestmentFalse_STILL_ROUTES_TO_INVESTMENT
-// is a RED repro for a codex round-1 P2 finding (2026-08-30), not yet
-// fixed. DO NOT rename this to imply it passes for a good reason -- the
-// all-caps segment is deliberate so it cannot be mistaken for settled
-// behavior.
-//
-// resolve.go's Resolve() calls resolveFlowMatrix(ctx, client, orgID,
-// *batch.FlowMatrix, resolvedFilters) -- NO useInvestment parameter at
-// all, unlike its sibling call one line above,
-// resolveSankey(ctx, client, orgID, *batch.Sankey, batch.UseInvestment,
-// resolvedFilters), which DOES thread the batch flag through. So
-// compileFlowMatrixInvestmentDimension's resolveUseInvestment(
-// []Dimension{req.Dimension}, req.UseInvestment) only ever sees
-// FlowMatrixRequestInput's OWN nested useInvestment field -- the
-// batch-level flag can never reach it, by construction.
-//
-// Python's analytics.py (verified directly, base e9ea257ff, zero drift
-// to current main per this PR's resume evidence) does NOT have this gap:
-// fm_req.use_investment if fm_req.use_investment is not None else
-// batch.use_investment (analytics.py:944-946) resolves the flag BEFORE
-// calling compile_flow_matrix, so an explicit batch.useInvestment=false
-// with the nested field unset is preserved and compile_flow_matrix's own
-// _get_context_params(force_investment=False, ...) does NOT auto-route
-// THEME to the investment source (compiler.py:153-155: force_investment
-// wins over the dimension auto-route when it is not None).
-//
-// dbColumn (validate.go:166-201) confirms THEME has a REAL non-investment
-// mapping ("investment_area", not an error) -- so the correct behavior on
-// a batch.useInvestment=false + flowMatrix.useInvestment=nil + THEME
-// request is to select "investment_area" from the non-investment source,
-// exactly as Python would. This test seeds BOTH the investment-path THEME
-// column expression and the non-investment one so either shows up in
-// client.calls, and asserts the non-investment one won -- which currently
-// FAILS, because Go silently keeps auto-routing to the investment source
-// regardless of the explicit batch-level false. Repro executed 2026-08-30
-// on tip fccae28d5 (pre-merge codex round tip); do not fix without
-// re-running this test red-then-green.
-func TestResolve_FlowMatrix_BatchUseInvestmentFalse_STILL_ROUTES_TO_INVESTMENT(t *testing.T) {
+// TestResolve_FlowMatrix_THEMEIsCanonicalOnly_EvenWithBatchUseInvestmentFalse holds the decided
+// rule (CHAOS-9195, D5932; chris: "move to LLM/jev categorization"): THEME and SUBCATEGORY are
+// read from the canonical categorization (work_unit_investments), never from the legacy
+// rule classifier's investment_area key, so an explicit batch-level useInvestment=false does
+// NOT send a THEME request to the legacy column. DECLARED DIVERGENCE from the reference, where
+// the explicit false won (the old test of this name held the reference).
+func TestResolve_FlowMatrix_THEMEIsCanonicalOnly_EvenWithBatchUseInvestmentFalse(t *testing.T) {
 	client := &routingFakeClient{}
-	// Investment-path THEME dimension column (validate.go:186-187).
-	const investmentThemeCol = "splitByChar('.', subcategory_kv.1)[1]"
-	// Non-investment THEME dimension column (validate.go:199-200) -- what
-	// Python would use here.
-	const nonInvestmentThemeCol = "investment_area"
-	client.on(investmentThemeCol, &fakeRowScanner{})
-	client.on(nonInvestmentThemeCol, &fakeRowScanner{})
+	const canonicalThemeCol = "splitByChar('.', subcategory_kv.1)[1]"
+	const legacyThemeCol = "investment_area"
+	client.on(canonicalThemeCol, &fakeRowScanner{})
+	client.on(legacyThemeCol, &fakeRowScanner{})
 
 	batch := model.AnalyticsRequestInput{
 		UseInvestment: boolPtr(false), // explicit batch-level FALSE
@@ -258,39 +224,18 @@ func TestResolve_FlowMatrix_BatchUseInvestmentFalse_STILL_ROUTES_TO_INVESTMENT(t
 			DateRange: &model.DateRangeInput{StartDate: mustGraphQLDate("2026-01-01"), EndDate: mustGraphQLDate("2026-01-07")},
 			MaxNodes:  50,
 			MaxEdges:  200,
-			// UseInvestment left nil deliberately: the nested field is
-			// UNSET, so the batch-level false is the only signal telling
-			// this request not to use the investment source.
 		},
 	}
-	_, err := Resolve(context.Background(), client, "org-1", batch)
-	if err != nil {
+	if _, err := Resolve(context.Background(), client, "org-1", batch); err != nil {
 		t.Fatalf("Resolve error = %v", err)
 	}
-
-	usedInvestmentCol := false
-	usedNonInvestmentCol := false
+	usedCanonical, usedLegacy := false, false
 	for _, c := range client.calls {
-		if c == investmentThemeCol {
-			usedInvestmentCol = true
-		}
-		if c == nonInvestmentThemeCol {
-			usedNonInvestmentCol = true
-		}
+		usedCanonical = usedCanonical || c == canonicalThemeCol
+		usedLegacy = usedLegacy || c == legacyThemeCol
 	}
-
-	// This is the assertion that currently FAILS (RED): Go ignores the
-	// explicit batch-level false for flowMatrix and always routes THEME
-	// to the investment source, unlike Python.
-	if usedInvestmentCol {
-		t.Errorf("BUG REPRODUCED: batch.useInvestment=false was ignored for flowMatrix -- "+
-			"query still used the investment-path THEME column (%q). "+
-			"Python would use %q here. client.calls=%v",
-			investmentThemeCol, nonInvestmentThemeCol, client.calls)
-	}
-	if !usedNonInvestmentCol {
-		t.Errorf("expected the non-investment THEME column (%q) to be used, matching Python's "+
-			"resolved use_investment=false -- client.calls=%v", nonInvestmentThemeCol, client.calls)
+	if usedLegacy || !usedCanonical {
+		t.Errorf("THEME read the legacy key (%v) or not the canonical one (%v): client.calls=%v", usedLegacy, usedCanonical, client.calls)
 	}
 }
 
@@ -1008,5 +953,46 @@ func TestResolve_Investment_EvidenceQualityStats_PopulatedWhenUseInvestmentTrue(
 	if string(result.EvidenceQualityDistribution) != string(stats.BandCounts) {
 		t.Errorf("EvidenceQualityDistribution (%s) must be the SAME bytes as stats.BandCounts (%s)",
 			result.EvidenceQualityDistribution, stats.BandCounts)
+	}
+}
+
+// CHAOS-9195 (D5932): THEME and SUBCATEGORY are canonical-only on every analytics surface. A batch
+// with useInvestment=false (or unset) still reads them from the canonical categorization
+// (work_unit_investments: the theme is the first part of the subcategory key), never from the
+// legacy rule classifier's investment_area / project_stream keys. DECLARED DIVERGENCE from the reference.
+func TestResolve_ThemeAndSubcategoryAreCanonicalOnly_ForTimeseriesBreakdownAndSankey(t *testing.T) {
+	const canonicalTheme = "splitByChar('.', subcategory_kv.1)[1]"
+	for _, force := range []*bool{nil, boolPtr(false)} {
+		for _, dim := range []model.DimensionInput{model.DimensionInputTheme, model.DimensionInputSubcategory} {
+			client := &routingFakeClient{}
+			client.on("subcategory_kv", &fakeRowScanner{})
+			client.on("investment_area", &fakeRowScanner{})
+			client.on("project_stream", &fakeRowScanner{})
+			batch := model.AnalyticsRequestInput{
+				UseInvestment: force,
+				Timeseries:    []model.TimeseriesRequestInput{tsInput(dim, model.MeasureInputCount)},
+				Breakdowns:    []model.BreakdownRequestInput{bdInput(dim, model.MeasureInputCount)},
+			}
+			if _, err := Resolve(context.Background(), client, "org-1", batch); err != nil {
+				t.Fatalf("%s force=%v: Resolve error = %v", dim, force, err)
+			}
+			sawCanonical := false
+			for _, call := range client.calls {
+				if call == "investment_area" || call == "project_stream" {
+					t.Errorf("%s force=%v: a statement read the legacy key %q; calls=%v", dim, force, call, client.calls)
+				}
+				sawCanonical = sawCanonical || call == "subcategory_kv"
+			}
+			if !sawCanonical {
+				t.Errorf("%s force=%v: no statement read the canonical categorization; calls=%v", dim, force, client.calls)
+			}
+		}
+	}
+	_ = canonicalTheme
+	// The legacy branch of dbColumn no longer holds a theme/subcategory column at all.
+	for _, dim := range []Dimension{DimensionTheme, DimensionSubcategory} {
+		if col, err := dbColumn(dim, false); err == nil {
+			t.Errorf("dbColumn(%s, false) = %q, want an error: the legacy classifier keys are not read any more", dim, col)
+		}
 	}
 }

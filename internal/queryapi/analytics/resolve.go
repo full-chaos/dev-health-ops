@@ -301,6 +301,7 @@ func resolveOneTimeseries(ctx context.Context, client QueryClient, orgID string,
 	if err != nil {
 		return nil, err
 	}
+	useInvestment = useInvestment || canonicalOnlyDimension(req.Dimension)
 	q, err := CompileTimeseries(req, orgID, queryTimeoutSecs, useInvestment, filters)
 	if err != nil {
 		return nil, err
@@ -333,6 +334,7 @@ func resolveOneBreakdown(ctx context.Context, client QueryClient, orgID string, 
 	if err != nil {
 		return model.BreakdownResult{}, err
 	}
+	useInvestment = useInvestment || canonicalOnlyDimension(req.Dimension)
 	q, err := CompileBreakdown(req, orgID, queryTimeoutSecs, useInvestment, filters)
 	if err != nil {
 		return model.BreakdownResult{}, err
@@ -417,6 +419,11 @@ func resolveSankey(ctx context.Context, client QueryClient, orgID string, input 
 		useInvestment = pathAutoRoutesToInvestment(req.Path)
 	}
 
+	for _, d := range req.Path {
+		if canonicalOnlyDimension(d) {
+			useInvestment = true // canonical-only (CHAOS-9195), also against an explicit false
+		}
+	}
 	groupedQuery, err := CompileSankeyGrouped(req, orgID, queryTimeoutSecs, useInvestment, filters)
 	if err != nil {
 		return nil, err

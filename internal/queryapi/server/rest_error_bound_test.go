@@ -44,9 +44,10 @@ func TestRESTBoundHitCauses(t *testing.T) {
 		wantDetail string
 		wantLimit  string
 	}{
-		{"rows 396", exception(396), "Result too large", "limit=500000 rows"},
-		{"rows 158", exception(158), "Result too large", "limit=500000 rows"},
+		{"rows 396", exception(396), "Result too large", "limit=max_result_rows=500000"},
+		{"rows 158", exception(158), "Result too large", "limit=max_result_rows=500000"},
 		{"bytes 307", exception(307), "Query read limit exceeded", "limit=max_bytes_to_read"},
+		{"code 396 may be max_result_bytes", exception(396), "Result too large", "code 396 also covers max_result_bytes"},
 		{"time 159", exception(159), "Query time limit exceeded", "limit=max_execution_time"},
 		{"client deadline", fmt.Errorf("row iteration: %w", context.DeadlineExceeded), "Query time limit exceeded", "limit=max_execution_time"},
 	} {
@@ -60,7 +61,7 @@ func TestRESTBoundHitCauses(t *testing.T) {
 			if l := logs.String(); !strings.Contains(l, "WARN probe: read hit the") || !strings.Contains(l, tc.wantLimit) || !strings.Contains(l, "scope_ids=2") {
 				t.Errorf("WARN line = %q, want the route, %q and scope_ids=2", l, tc.wantLimit)
 			}
-			if tc.wantLimit != "limit=500000 rows" && strings.Contains(logs.String(), "500000 rows") {
+			if (tc.wantLimit == "limit=max_bytes_to_read" || tc.wantLimit == "limit=max_execution_time") && strings.Contains(logs.String(), "max_result_rows") {
 				t.Errorf("a %s bound is logged as a row bound: %q", tc.name, logs.String())
 			}
 		})

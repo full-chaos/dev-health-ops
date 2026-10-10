@@ -159,13 +159,17 @@ func logRESTBoundHit(r *http.Request, component, orgID string, err error) (detai
 	}
 	limit := "max_execution_time"
 	switch bound {
-	case chclient.BoundRows:
-		limit = fmt.Sprintf("%d rows", chclient.MaxResultRows)
+	case chclient.BoundResult:
+		limit = fmt.Sprintf("max_result_rows=%d (code 396 also covers max_result_bytes)", chclient.MaxResultRows)
 	case chclient.BoundBytes:
 		limit = "max_bytes_to_read"
 	}
-	log.Printf("query-api: WARN %s: read hit the %s bound (clickhouse code %d, limit=%s): scope_ids=%d org_id=%s request_id=%s err=%v",
-		component, bound, code, limit, len(r.URL.Query()["scope_id"]), orgID, envelopeRequestID(r), err)
+	source := fmt.Sprintf("clickhouse code %d", code)
+	if code == 0 {
+		source = "deadline of the client"
+	}
+	log.Printf("query-api: WARN %s: read hit the %s bound (%s, limit=%s): scope_ids=%d org_id=%s request_id=%s err=%v",
+		component, bound, source, limit, len(r.URL.Query()["scope_id"]), orgID, envelopeRequestID(r), err)
 	return restBoundDetail(bound), true
 }
 

@@ -18,6 +18,12 @@ import (
 func TestEveryQueryAPIClickHouseClientIsBuiltFromTheSharedConstructor(t *testing.T) {
 	root := filepath.Join("..", "..", "..")
 	call := regexp.MustCompile(`NewClickHouseQueryClientWithOptions\(([^\n]*)`)
+	optionsType := regexp.MustCompile(`(dhclickhouse|clickhouse)\.Options\b`)
+	constructorName := regexp.MustCompile(`NewClickHouseQueryClientWithOptions`)
+	optionsTypeAllowed := map[string]bool{
+		"internal/queryapi/server/query_route.go": true, "internal/queryapi/server/mcp_route.go": true,
+		"internal/testsupport/chquery/chquery.go": true,
+	}
 	literal := regexp.MustCompile(`(dhclickhouse|clickhouse)\.Options\{`)
 	checked := 0
 	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
@@ -34,6 +40,26 @@ func TestEveryQueryAPIClickHouseClientIsBuiltFromTheSharedConstructor(t *testing
 			return nil
 		}
 		lines := strings.Split(src, "\n")
+		// The Options TYPE and the constructor NAME are tied to files: any other file that
+		// mentions either (a zero-value Options, an alias of the constructor) builds a client
+		// the call-site check below cannot see.
+		if !optionsTypeAllowed[filepath.ToSlash(rel)] {
+			for _, line := range lines {
+				trimmed := strings.TrimSpace(line)
+				if strings.HasPrefix(trimmed, "//") {
+					continue
+				}
+				if optionsType.MatchString(line) {
+					t.Errorf("%s names the ClickHouse Options type outside the files that take it from the shared path: %s", rel, trimmed)
+				}
+			}
+		}
+		for _, line := range lines {
+			trimmed := strings.TrimSpace(line)
+			if !strings.HasPrefix(trimmed, "//") && constructorName.MatchString(line) && !call.MatchString(line) {
+				t.Errorf("%s uses the client constructor other than by calling it (an alias): %s", rel, trimmed)
+			}
+		}
 		for index, line := range lines {
 			trimmed := strings.TrimSpace(line)
 			if strings.HasPrefix(trimmed, "//") {

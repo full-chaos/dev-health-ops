@@ -52,10 +52,13 @@ const (
 type Bound string
 
 const (
-	BoundNone  Bound = ""
-	BoundRows  Bound = "result_rows"
-	BoundBytes Bound = "bytes"
-	BoundTime  Bound = "execution_time"
+	BoundNone Bound = ""
+	// BoundResult is a result that grew past a bound of the client: ClickHouse code
+	// 396 names max_result_rows AND max_result_bytes with one code, so it is not
+	// said which (158 is rows only).
+	BoundResult Bound = "result_size"
+	BoundBytes  Bound = "bytes"
+	BoundTime   Bound = "execution_time"
 )
 
 // BoundHit reports which bound a ClickHouse error hit, with its code; it is
@@ -69,7 +72,8 @@ func BoundHit(err error) (Bound, int32) {
 	// of any kind is the TIME BOUND when the CALLER's context is still live,
 	// which is for the caller of BoundHit to say (the route knows its request).
 	if isDeadline(err) {
-		return BoundTime, codeTimeoutExceeded
+		// code 0: no server exception, the client's own deadline ended the read
+		return BoundTime, 0
 	}
 	var exception *chdriver.Exception
 	if !errors.As(err, &exception) {
@@ -77,7 +81,7 @@ func BoundHit(err error) (Bound, int32) {
 	}
 	switch exception.Code {
 	case codeTooManyRows, codeTooManyRowsBytes:
-		return BoundRows, exception.Code
+		return BoundResult, exception.Code
 	case codeTooManyBytes:
 		return BoundBytes, exception.Code
 	case codeTimeoutExceeded, codeTooSlow:

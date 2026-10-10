@@ -46,8 +46,8 @@ func TestBoundHitClassifiesWhatTheRealClientReturns(t *testing.T) {
 	rowsOpts.MaxResultRows = &tenRows
 	if err := run(t, rowsOpts, "SELECT number FROM numbers(50)"); err == nil {
 		t.Fatal("a 50-row read under a 10-row bound did not fail")
-	} else if bound, _ := BoundHit(err); bound != BoundRows {
-		t.Errorf("row bound: BoundHit = %q for %T %v, want %q", bound, err, err, BoundRows)
+	} else if bound, _ := BoundHit(err); bound != BoundResult {
+		t.Errorf("row bound: BoundHit = %q for %T %v, want %q", bound, err, err, BoundResult)
 	}
 
 	// The deadline and the server's own timeout race: read it several times, every
@@ -66,5 +66,15 @@ func TestBoundHitClassifiesWhatTheRealClientReturns(t *testing.T) {
 			}
 			t.Errorf("attempt %d: time bound: BoundHit = %q, want %q; chain %v", attempt, bound, BoundTime, chain)
 		}
+	}
+
+	// ClickHouse code 396 names max_result_rows AND max_result_bytes: a result past the
+	// BYTES bound is the same bound hit, and is not called a row bound.
+	err = run(t, Options(instance.URI), "SELECT repeat('x', 100000) FROM numbers(30) SETTINGS max_result_bytes = 1000")
+	if err == nil {
+		t.Fatal("a result of 6 MB under a 1000-byte result bound did not fail")
+	}
+	if bound, code := BoundHit(err); bound != BoundResult || code != 396 {
+		t.Errorf("max_result_bytes: BoundHit = %q, %d for %T %v, want %q, 396", bound, code, err, err, BoundResult)
 	}
 }

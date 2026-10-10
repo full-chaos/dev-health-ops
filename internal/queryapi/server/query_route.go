@@ -1884,9 +1884,64 @@ const registeredFeatureFlagEventsDocument = `query FeatureFlagEvents($orgId: Str
   }
 }`
 
+// registeredCompoundingRiskV1Document is the text of `compoundingRisk` BEFORE a point carried its coverage (CHAOS-6545:
+// the share of the score's weight that was present). It stays a legacy text (see legacyDigestsByOperation) beside the
+// current one, so a web build still sending it keeps working; it is the text every web build sends until the web selects
+// `coverage`. Remove it with the cleanup ticket once no client sends it
+// (testdata/wire_capture/compoundingrisk_v1_captured.graphql).
+const registeredCompoundingRiskV1Document = `query CompoundingRisk($orgId: String!, $filter: CompoundingRiskFilterInput = null) {
+  compoundingRisk(orgId: $orgId, filter: $filter) {
+    orgId
+    breakout
+    generatedAt
+    rows {
+      day
+      scope
+      scopeId
+      scopeLabel
+      score
+      severity
+      computedAt
+      components {
+        churnNorm
+        complexityNorm
+        ownershipNorm
+        reviewNorm
+        reworkChurn
+        complexityDelta
+        ownershipGini
+        singleOwnerRatio
+        reviewLatencyP90h
+        __typename
+      }
+      weights {
+        churn
+        complexity
+        ownership
+        review
+        __typename
+      }
+      thresholds {
+        elevated
+        high
+        __typename
+      }
+      __typename
+    }
+    trend {
+      day
+      score
+      severity
+      __typename
+    }
+    __typename
+  }
+}`
+
 // registeredCompoundingRiskDocument is the registered document for the
-// `compoundingRisk` operation, the exact wire-form text a real web client
-// sends (testdata/wire_capture/compoundingrisk_captured.graphql).
+// `compoundingRisk` operation: the text of V1 with one line, `coverage` after
+// `score` in each row (CHAOS-6545). The web sends exactly this text once it shows the
+// coverage with the score (testdata/wire_capture/compoundingrisk_captured.graphql).
 const registeredCompoundingRiskDocument = `query CompoundingRisk($orgId: String!, $filter: CompoundingRiskFilterInput = null) {
   compoundingRisk(orgId: $orgId, filter: $filter) {
     orgId
@@ -1898,6 +1953,7 @@ const registeredCompoundingRiskDocument = `query CompoundingRisk($orgId: String!
       scopeId
       scopeLabel
       score
+      coverage
       severity
       computedAt
       components {
@@ -4983,6 +5039,7 @@ var legacyDigestsByOperation = map[string][]string{
 	"aiOpportunities":       {digestHex(registeredAiOpportunitiesV1Document)},
 	"aiWorkflowDrilldown":   {digestHex(registeredAiWorkflowDrilldownV1Document)},
 	"capacityForecast":      {digestHex(registeredCapacityForecastV1Document), digestHex(registeredCapacityForecastV2Document)},
+	"compoundingRisk":       {digestHex(registeredCompoundingRiskV1Document)},
 	"coverageScopeBaseline": {digestHex(registeredCoverageScopeBaselineV1Document)},
 	"hotspots":              {digestHex(registeredHotspotsV1Document)},
 	"home":                  {digestHex(registeredHomeV1Document), digestHex(registeredHomeV2Document), digestHex(registeredHomeV3Document), digestHex(registeredHomeV4Document)},

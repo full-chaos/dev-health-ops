@@ -291,6 +291,17 @@ no injected `__typename`. The negative control in
 `TestRegisteredHomeDocument_MatchesCapturedWireFixture` pins that
 difference.
 
+# compoundingRisk wire fixture
+
+`compoundingrisk_captured.graphql` is the current registered text. It is NOT
+a capture: it is `compoundingrisk_v1_captured.graphql` plus the one line
+`coverage` in `rows`, after `score` (CHAOS-6545: the share of the score's
+weight that was present). `compoundingrisk_v1_captured.graphql` (digest
+`2b50958a4670a434bbfe46be7344486488d3a278e62b09b257252441e962bb67`) is the text a
+web build sends until it selects `coverage`; it stays accepted as the
+operation's legacy text (`legacyDigestsByOperation`). Remove it with the
+cleanup ticket once no client sends it.
+
 # operatingReview wire fixture
 
 `operatingreview_captured.graphql` is the current registered text. Like

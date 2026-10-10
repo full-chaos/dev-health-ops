@@ -293,3 +293,25 @@ func TestTeamPoints_CarryTheMeanCoverageOfTheirRows(t *testing.T) {
 		t.Fatalf("team point = %+v, want coverage (1.0 + 0.4) / 2 = 0.7", points)
 	}
 }
+
+// The mean score and the mean coverage are taken over the same rows (the rows
+// that carry a score): a row with no input is in neither.
+func TestTeamPoints_CoverageIsTheMeanOverTheRowsThatCarryAScore(t *testing.T) {
+	scored, empty := mkRow("a", fp(.4), "elevated"), mkRow("b", nil, "unknown")
+	scored.churnNorm, scored.complexityNorm = fp(.4), fp(.4)
+	scored.coverage = coverageOf(scored) // 0.7
+	empty.coverage = coverageOf(empty)   // 0: no input
+	points := teamPoints(time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC), []storedRow{scored, empty},
+		map[string][]string{"a": {"t"}, "b": {"t"}}, map[string]string{"t": "T"}, nil, time.Unix(0, 0))
+	if len(points) != 1 || points[0].Score == nil || *points[0].Score != 0.4 {
+		t.Fatalf("team point = %+v, want the score of the one scored row", points)
+	}
+	if points[0].Coverage == nil || *points[0].Coverage < 0.7-1e-12 || *points[0].Coverage > 0.7+1e-12 {
+		t.Fatalf("team coverage = %v, want 0.7 (the empty row is in neither mean)", points[0].Coverage)
+	}
+	onlyEmpty := teamPoints(time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC), []storedRow{empty},
+		map[string][]string{"b": {"t"}}, map[string]string{"t": "T"}, nil, time.Unix(0, 0))
+	if len(onlyEmpty) != 1 || onlyEmpty[0].Score != nil || onlyEmpty[0].Coverage != nil {
+		t.Fatalf("a team of rows with no score has no score and no coverage: %+v", onlyEmpty)
+	}
+}

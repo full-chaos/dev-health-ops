@@ -143,7 +143,15 @@ func teamPoints(day time.Time, rows []storedRow, teamsOfRepo map[string][]string
 		}
 		agg := first
 		agg.score = avg
-		agg.coverage = meanOf(rs, func(r storedRow) *float64 { return r.coverage })
+		// The mean score and the mean coverage are taken over the SAME rows: the
+		// rows that carry a score. A row with no input has no score and is in
+		// neither, so it can not pull the coverage of the points that have one.
+		agg.coverage = meanOf(rs, func(r storedRow) *float64 {
+			if r.score == nil {
+				return nil
+			}
+			return r.coverage
+		})
 		agg.churnNorm = meanOf(rs, func(r storedRow) *float64 { return r.churnNorm })
 		agg.complexityNorm = meanOf(rs, func(r storedRow) *float64 { return r.complexityNorm })
 		agg.ownershipNorm = meanOf(rs, func(r storedRow) *float64 { return r.ownershipNorm })

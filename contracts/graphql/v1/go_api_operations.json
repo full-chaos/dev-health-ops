@@ -114,7 +114,12 @@
   },
   {
     "operation": "compoundingRisk",
-    "digest": "2b50958a4670a434bbfe46be7344486488d3a278e62b09b257252441e962bb67"
+    "digest": "6bb6a6de9cc77faa27f47c2646436f67cfbd0558f3deded569e44f77689bc460"
+  },
+  {
+    "operation": "compoundingRisk",
+    "digest": "2b50958a4670a434bbfe46be7344486488d3a278e62b09b257252441e962bb67",
+    "legacy": true
   },
   {
     "operation": "connectorsDataHealth",

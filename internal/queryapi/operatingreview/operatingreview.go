@@ -1550,13 +1550,13 @@ func (m reviewMetric) dataIn(current, prior periodRows, has func(periodRows) boo
 	m.delta.hasPriorData = has(prior)
 	if !deltarule.Complete(m.hasData, m.delta.hasPriorData) {
 		// One contract with Home and /explain: a delta states a move between
-		// two measured values, so the delta numbers are 0 and the flags carry
-		// the fact. priorValue stays: a measured prior is a fact, and a
-		// missing one is already a 0 placeholder.
-		zero := 0.0
+		// two measured values, so the absolute change is 0, the percent is null
+		// (a percent has no meaning against a value nobody measured; CHAOS-9111)
+		// and the flags carry the fact. priorValue stays: a measured prior is a
+		// fact, and a missing one is already a 0 placeholder.
 		m.delta.status = ""
 		m.delta.absolute = deltarule.Absolute(m.value, m.delta.priorValue, m.hasData, m.delta.hasPriorData)
-		m.delta.percent = &zero
+		m.delta.percent = nil
 	}
 	return m
 }

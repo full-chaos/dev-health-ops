@@ -41,6 +41,8 @@ var columnsAfterTheCapture = map[string]map[string]string{
 	// The creation time of a team: the frozen worlds' team rows carry none.
 	"teams": {
 		"created_at": "113_teams_created_at.sql",
+		// The time of an admin delete: no team of a frozen world was deleted.
+		"deleted_at": "115_teams_deleted_at.sql",
 	},
 	// The provider's own time of a work item relation (CHAOS-8574). No
 	// frozen relation has one.

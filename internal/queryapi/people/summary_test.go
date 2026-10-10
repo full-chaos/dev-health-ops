@@ -390,3 +390,24 @@ func TestNarrativeNamesARiseFromAMeasuredZeroByItsDirection(t *testing.T) {
 		}
 	}
 }
+
+// A measured percent ranks above a rise from a measured 0 however small it is:
+// the rise from zero has its own rank tier, not a magnitude a tiny percent can
+// fall under (a percent of 1e-13 is measured; the rise from zero is not one).
+func TestNarrativeRanksAnyMeasuredPercentAboveARiseFromZero(t *testing.T) {
+	pct := func(v float64) *float64 { return &v }
+	fromZero := PersonDelta{Metric: "churn", Label: "Churn", Value: 5, DeltaPct: nil, HasData: true, HasPriorData: true}
+	tiny := PersonDelta{Metric: "cycle_time", Label: "Cycle time", Value: 4, DeltaPct: pct(1e-13), HasData: true, HasPriorData: true}
+	tinyFall := PersonDelta{Metric: "review_latency", Label: "Review latency", Value: 4, DeltaPct: pct(-1e-13), HasData: true, HasPriorData: true}
+	steady := PersonDelta{Metric: "throughput", Label: "Throughput", Value: 0, DeltaPct: pct(0), HasData: true, HasPriorData: true}
+	got := narrativeForDeltas([]PersonDelta{steady, fromZero, tiny, tinyFall}, "p", 14, 14)
+	want := []string{"Cycle time increased over the last 14 days.", "Review latency decreased over the last 14 days."}
+	if len(got) != 2 || got[0].Text != want[0] || got[1].Text != want[1] {
+		t.Errorf("narrative = %+v, want the two measured percents %q (the rise from zero ranks below any measured percent)", got, want)
+	}
+	// With room for it, the rise from zero ranks above a true 0 %.
+	got = narrativeForDeltas([]PersonDelta{steady, fromZero}, "p", 14, 14)
+	if len(got) != 2 || got[0].Text != "Code churn increased in this period." {
+		t.Errorf("narrative = %+v, want the rise from zero before the true 0 %%", got)
+	}
+}

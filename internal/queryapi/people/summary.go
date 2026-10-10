@@ -96,15 +96,15 @@ type PersonDelta struct {
 	Label  string  `json:"label"`
 	Value  float64 `json:"value"`
 	Unit   string  `json:"unit"`
-	// DeltaPct is the percent change (deltarule): 0 when a window has no stored
-	// value, null when the prior is a measured 0 and the current is not (a
-	// percent change against zero is undefined).
+	// DeltaPct is the percent change (deltarule): null when a window has no
+	// stored value (CHAOS-9111) or when the prior is a measured 0 and the current
+	// is not (a percent change against zero is undefined); 0 to 0 stays 0.
 	DeltaPct *float64     `json:"delta_pct"`
 	Spark    []SparkPoint `json:"spark"`
 	// HasData / HasPriorData (CHAOS-9044, Go-only, last so the frozen field
 	// order is kept): the current / comparison window holds a stored value
 	// for the metric. When false, Value (or the delta's base) is a 0
-	// placeholder, not a measured zero, and DeltaPct is 0 (deltarule).
+	// placeholder, not a measured zero, and DeltaPct is null (deltarule).
 	HasData      bool `json:"has_data"`
 	HasPriorData bool `json:"has_prior_data"`
 }
@@ -671,20 +671,33 @@ func narrativeForDeltas(deltas []PersonDelta, personID string, rangeDays, compar
 			ranked = append(ranked, delta)
 		}
 	}
-	// By the size of the percent; a rise from a measured 0 has none and ranks
-	// below every non-zero percent and above a true 0 %.
-	magnitude := func(d PersonDelta) float64 {
-		if pct, ok := d.percent(); ok {
-			if pct == 0 {
-				return 0
-			}
-			return math.Abs(pct)
+	// A rise from a measured 0 has no percent: it ranks below every non-zero
+	// percent, however small, and above a true 0 % (held steady). The tier is
+	// its own key, never a magnitude stand-in that a tiny measured percent could
+	// reach or fall under.
+	const (
+		tierHeldSteady = iota
+		tierFromZero
+		tierPercent
+	)
+	rank := func(d PersonDelta) (tier int, magnitude float64) {
+		pct, ok := d.percent()
+		switch {
+		case !ok:
+			return tierFromZero, 0
+		case pct == 0:
+			return tierHeldSteady, 0
+		default:
+			return tierPercent, math.Abs(pct)
 		}
-		// A rise from a measured 0 outranks a true 0 % (held steady).
-		return 1e-12
 	}
 	sort.SliceStable(ranked, func(i, j int) bool {
-		return magnitude(ranked[i]) > magnitude(ranked[j])
+		tierI, magnitudeI := rank(ranked[i])
+		tierJ, magnitudeJ := rank(ranked[j])
+		if tierI != tierJ {
+			return tierI > tierJ
+		}
+		return magnitudeI > magnitudeJ
 	})
 
 	narrative := make([]SummarySentence, 0, 2)

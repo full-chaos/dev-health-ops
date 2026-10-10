@@ -286,14 +286,48 @@ func TestOpportunitiesCardIsThePythonCardPlusTheDeclaredGoOnlyFields(t *testing.
 // prefix that withoutExplainGoOnlyFields may remove; that comes directly from
 // the frozen producer schema below.
 type explainPythonResponse struct {
-	Metric         string                    `json:"metric"`
-	Label          string                    `json:"label"`
-	Unit           string                    `json:"unit"`
-	Value          float64                   `json:"value"`
-	DeltaPct       float64                   `json:"delta_pct"`
-	Drivers        []explain.Contributor     `json:"drivers"`
-	Contributors   []explain.Contributor     `json:"contributors"`
-	DrilldownLinks pyjson.OrderedMap[string] `json:"drilldown_links"`
+	Metric         string                     `json:"metric"`
+	Label          string                     `json:"label"`
+	Unit           string                     `json:"unit"`
+	Value          float64                    `json:"value"`
+	DeltaPct       float64                    `json:"delta_pct"`
+	Drivers        []explainPythonContributor `json:"drivers"`
+	Contributors   []explainPythonContributor `json:"contributors"`
+	DrilldownLinks pyjson.OrderedMap[string]  `json:"drilldown_links"`
+}
+
+// explainPythonContributor is the frozen Python Contributor. The production
+// type ends with two Go-only fields and serves a null delta_pct where the
+// Python model has 0.0 (TestExplainContributorIsThePythonContributorPlusTheDeclaredTail).
+type explainPythonContributor struct {
+	ID           string  `json:"id"`
+	Label        string  `json:"label"`
+	Value        float64 `json:"value"`
+	DeltaPct     float64 `json:"delta_pct"`
+	EvidenceLink string  `json:"evidence_link"`
+	DisplayName  *string `json:"display_name"`
+}
+
+func TestExplainContributorIsThePythonContributorPlusTheDeclaredTail(t *testing.T) {
+	type field struct{ name, goType, tag string }
+	fieldsOf := func(typ reflect.Type) []field {
+		out := make([]field, 0, typ.NumField())
+		for index := range typ.NumField() {
+			f := typ.Field(index)
+			out = append(out, field{f.Name, f.Type.String(), string(f.Tag)})
+		}
+		return out
+	}
+	want := fieldsOf(reflect.TypeOf(explainPythonContributor{}))
+	for index := range want {
+		if want[index].name == "DeltaPct" {
+			want[index].goType = "*float64" // null where the Python model serves its 0 placeholder
+		}
+	}
+	want = append(want, field{"HasData", "bool", `json:"has_data"`}, field{"HasPriorData", "bool", `json:"has_prior_data"`})
+	if got := fieldsOf(reflect.TypeOf(explain.Contributor{})); !reflect.DeepEqual(got, want) {
+		t.Errorf("explain.Contributor fields =\n %v\nwant the frozen fields (delta_pct nullable), then has_data and has_prior_data:\n %v", got, want)
+	}
 }
 
 // explainGoOnlyResponseFields are the fields of explain.Response the Python
@@ -314,11 +348,22 @@ func TestExplainResponseIsThePythonResponsePlusTheDeclaredGoOnlyFields(t *testin
 		out := make([]field, 0, typ.NumField())
 		for index := range typ.NumField() {
 			f := typ.Field(index)
-			out = append(out, field{f.Name, f.Type.String(), string(f.Tag)})
+			goType := f.Type.String()
+			if f.Name == "DeltaPct" && goType == "*float64" {
+				goType = "float64" // null only from a measured zero (CHAOS-9063)
+			}
+			out = append(out, field{f.Name, goType, string(f.Tag)})
 		}
 		return out
 	}
 	pythonFields := fieldsOf(reflect.TypeOf(explainPythonResponse{}))
+	for index := range pythonFields {
+		// The element type of the two lists is checked field by field in
+		// TestExplainContributorIsThePythonContributorPlusTheDeclaredTail.
+		if pythonFields[index].name == "Drivers" || pythonFields[index].name == "Contributors" {
+			pythonFields[index].goType = "[]explain.Contributor"
+		}
+	}
 	want := append([]field(nil), pythonFields...)
 	for _, goOnly := range explainGoOnlyResponseFields {
 		want = append(want, field{goOnly.name, goOnly.goType, goOnly.tag})

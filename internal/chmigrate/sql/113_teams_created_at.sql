@@ -1,0 +1,13 @@
+-- teams.created_at: the stored creation time of a team (DateTime64(6) like updated_at, so a new team's created_at equals its updated_at exactly).
+--
+-- teams is a ReplacingMergeTree(updated_at): every write is a new version and
+-- the newest version wins, so a creation time has to be CARRIED by every
+-- writer from the version it replaces (internal/teamcreated). NULL = the
+-- creation time is not recorded: a row written before this column existed, or
+-- by a writer that does not carry it. Readers show coalesce(created_at,
+-- updated_at) and never present the fallback as a measured creation time.
+-- There is no DEFAULT on purpose: a default would stamp the NEW version's time
+-- on every update. There is no backfill mutation: versions already merged away
+-- cannot be recovered, and the carry fills the column from the oldest surviving
+-- version at the row's next write.
+ALTER TABLE teams ADD COLUMN IF NOT EXISTS created_at Nullable(DateTime64(6));

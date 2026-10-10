@@ -1,0 +1,17 @@
+{
+  "metric": "totally_bogus",
+  "label": "Cycle Time",
+  "unit": "days",
+  "value": 2.0,
+  "delta_pct": 100.0,
+  "drivers": [],
+  "contributors": [],
+  "drilldown_links": {
+    "prs": "/api/v1/drilldown/prs?metric=totally_bogus",
+    "issues": "/api/v1/drilldown/issues?metric=totally_bogus"
+  },
+  "repositories": null,
+  "source_url": null,
+  "has_data": true,
+  "has_prior_data": true
+}

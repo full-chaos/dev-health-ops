@@ -246,10 +246,61 @@ func TestGoldenOrgScopeThroughput(t *testing.T) {
 	}
 }
 
-// An unknown metric name has no config: BuildExplainResponse answers
-// ErrUnknownMetric and reads nothing, never another metric's config
-// (CHAOS-9136, D5869; the Python original borrowed cycle_time's, a known bug
-// that is not pinned). The Home metrics without an explain config are named.
+// DECLARED DIVERGENCE from the frozen reference (CHAOS-9136, D5869): for
+// metric="totally_bogus" the reference answered with cycle_time's config and
+// echoed the name (testdata/unknown_metric_falls_back.json, kept byte for byte,
+// a known bug that is not asserted as expected). Go answers ErrUnknownMetric
+// and reads nothing: the route turns it into a client error. This test
+// EXERCISES the divergence (the error must come, or it fails) and keeps every
+// other field of that frozen case compared: the same inputs for "cycle_time"
+// must equal the frozen file in every field but the echoed metric name.
+func TestGoldenUnknownMetricIsADeclaredDivergence(t *testing.T) {
+	params := Params{
+		StartDay: day(2024, 2, 1), EndDay: day(2024, 2, 15),
+		CompareStart: day(2024, 1, 18), CompareEnd: day(2024, 2, 1), ScopeLevel: "org",
+	}
+	build := func(metric string, reads bool) (*Response, error) {
+		dispatch := &explainQueryDispatch{
+			t: t, valueCurrent: 48.0, valuePrevious: 24.0, currentStartDay: "2024-02-01",
+			driverRows: [][]any{}, contributorRows: [][]any{},
+		}
+		handler := dispatch.handle
+		if !reads {
+			handler = func(t *testing.T, query string, _ []dhclickhouse.Binding) (dhclickhouse.RowScanner, error) {
+				t.Fatalf("an unknown metric reads ClickHouse: %s", query)
+				return nil, nil
+			}
+		}
+		reader, err := NewReader(fakeQueryClient{t: t, handler: handler})
+		if err != nil {
+			t.Fatalf("NewReader: %v", err)
+		}
+		p := params
+		p.Metric = metric
+		return BuildExplainResponse(context.Background(), reader, "org-acme", p)
+	}
+
+	// the divergence, exercised: no config, no read
+	if _, err := build("totally_bogus", false); !errors.Is(err, ErrUnknownMetric) {
+		t.Fatalf("metric totally_bogus: err = %v, want ErrUnknownMetric (the declared divergence from the frozen file)", err)
+	}
+
+	// everything else of the frozen case stays compared
+	got, err := build("cycle_time", true)
+	if err != nil {
+		t.Fatalf("BuildExplainResponse: %v", err)
+	}
+	want := loadGolden(t, "unknown_metric_falls_back.json")
+	// only the echoed request name differs: the metric field and the two links
+	echoed := strings.NewReplacer(`"metric":"cycle_time"`, `"metric":"totally_bogus"`, "metric=cycle_time", "metric=totally_bogus")
+	if gotJSON, wantJSON := echoed.Replace(mustMarshal(t, got)), mustMarshal(t, want); gotJSON != wantJSON {
+		t.Fatalf("frozen case differs beyond the echoed metric name\n got:  %s\nwant: %s", gotJSON, wantJSON)
+	}
+}
+
+// An unknown metric name has no config: it is an error and reads nothing, for
+// every name the route does not know (the Home metrics without a config
+// included).
 func TestUnknownMetricIsAnErrorAndReadsNothing(t *testing.T) {
 	client := fakeQueryClient{t: t, handler: func(t *testing.T, query string, _ []dhclickhouse.Binding) (dhclickhouse.RowScanner, error) {
 		t.Fatalf("an unknown metric reads ClickHouse: %s", query)

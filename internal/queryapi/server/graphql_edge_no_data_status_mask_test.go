@@ -188,3 +188,81 @@ func TestGoOnlyMetricsMaskRemovesOnlyThoseTwoMetrics(t *testing.T) {
 		t.Fatalf("the intended Go answer fails the inspection: %s", why)
 	}
 }
+
+// The ruled divergence of operatingReview's investment section (D5940, CHAOS-9199; chris "Yes", D5933): the
+// recorded Python answer holds the four legacy-vocabulary metrics (ktlo_units, new_value_units, security_units,
+// infra_units); query-api serves the five canonical themes (feature_delivery_effort ... risk_effort). ONLY the
+// contiguous run of those metric objects is replaced by one placeholder, on operating review answers, on both
+// sides; every other section, metric and field is still compared by Diff. The raw Go answer is asserted to carry
+// the five canonical metrics in order and none of the four old ones (investmentSectionInspect), so the mask cannot
+// hide a wrong section.
+const investmentSectionMetricKeys = `ktlo_units|new_value_units|security_units|infra_units|feature_delivery_effort|operational_effort|maintenance_effort|quality_effort|risk_effort`
+
+var investmentSectionMetricObject = `\{"key":"(?:` + investmentSectionMetricKeys + `)",[^{}]*"delta":\{[^{}]*\}[^{}]*\}`
+var investmentSectionRun = regexp.MustCompile(investmentSectionMetricObject + `(?:,` + investmentSectionMetricObject + `)*`)
+
+func investmentSectionNormalize(request venueoracle.Request, body string) string {
+	if !isOperatingReviewRequest(request) {
+		return body
+	}
+	return investmentSectionRun.ReplaceAllString(body, `"<D5940 investment section>"`)
+}
+
+func investmentSectionInspect(request venueoracle.Request, goBody string) (bool, string) {
+	if !isOperatingReviewRequest(request) || !strings.HasPrefix(goBody, `{"data":{`) {
+		return true, ""
+	}
+	last := -1
+	for _, key := range []string{"feature_delivery_effort", "operational_effort", "maintenance_effort", "quality_effort", "risk_effort"} {
+		at := strings.Index(goBody, `"key":"`+key+`"`)
+		if at < 0 || at < last {
+			return false, "query-api must serve the canonical investment metric " + key + " in theme order (D5940)"
+		}
+		last = at
+	}
+	for _, key := range []string{"ktlo_units", "new_value_units", "security_units", "infra_units"} {
+		if strings.Contains(goBody, `"key":"`+key+`"`) {
+			return false, "query-api must not serve the retired investment metric " + key + " (D5940)"
+		}
+	}
+	return true, ""
+}
+
+// A pure test, so it runs in the unit leg and not only with the venue.
+func TestInvestmentSectionMaskReplacesOnlyTheInvestmentMetricRun(t *testing.T) {
+	request := venueoracle.Request{Name: "POST operatingReview"}
+	delta := `"delta":{"value":0,"priorValue":0,"absolute":0,"percent":0,"status":"","hasPriorData":false}`
+	metric := func(key string) string {
+		return `{"key":"` + key + `","label":"L","value":0,"unit":"u",` + delta + `,"hasData":false}`
+	}
+	wrap := func(keys ...string) string {
+		parts := make([]string, 0, len(keys))
+		for _, key := range keys {
+			parts = append(parts, metric(key))
+		}
+		return `{"data":{"operatingReview":{"metrics":[` + strings.Join(parts, ",") + `]}}}`
+	}
+	python := wrap("incidents_count", "ktlo_units", "new_value_units", "security_units", "infra_units", "ai_adoption_ratio")
+	goBody := wrap("incidents_count", "feature_delivery_effort", "operational_effort", "maintenance_effort", "quality_effort", "risk_effort", "ai_adoption_ratio")
+	if investmentSectionNormalize(request, python) != investmentSectionNormalize(request, goBody) {
+		t.Fatalf("the declared pair does not normalize equal:\n%s\n%s", investmentSectionNormalize(request, python), investmentSectionNormalize(request, goBody))
+	}
+	// A neighbour metric that differs is not masked.
+	if investmentSectionNormalize(request, wrap("other", "ktlo_units")) == investmentSectionNormalize(request, wrap("incidents_count", "feature_delivery_effort")) {
+		t.Fatal("a different metric outside the section was masked")
+	}
+	// The retired ids and the canonical ids are both required on the right side by the inspection.
+	if ok, _ := investmentSectionInspect(request, python); ok {
+		t.Fatal("the retired four-metric section passes the inspection of the Go answer")
+	}
+	if ok, why := investmentSectionInspect(request, goBody); !ok {
+		t.Fatalf("the canonical section fails the inspection: %s", why)
+	}
+	if ok, _ := investmentSectionInspect(request, wrap("feature_delivery_effort", "risk_effort")); ok {
+		t.Fatal("a section missing three themes passes the inspection")
+	}
+	// Another operation is left alone.
+	if other := (venueoracle.Request{Name: "POST home"}); investmentSectionNormalize(other, goBody) != goBody {
+		t.Fatal("an answer of another operation was changed")
+	}
+}

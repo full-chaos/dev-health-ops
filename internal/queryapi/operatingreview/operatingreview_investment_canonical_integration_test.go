@@ -5,7 +5,7 @@ package operatingreview
 import (
 	"context"
 	"encoding/json"
-	"fmt"
+	"math"
 	"testing"
 	"time"
 
@@ -96,7 +96,8 @@ VALUES (?, ?, 'team-a', 'ktlo', 'general', 999, 0, 0, 0, 0, ?, ?)`, repoA, week,
 	want := func(got map[string]float64, expected map[string]float64, label string) {
 		t.Helper()
 		for key, value := range expected {
-			if fmt.Sprint(got[key]) != fmt.Sprint(value) {
+			// The shares are Float32 in the shared read (the Investment page's own narrowing).
+			if math.Abs(got[key]-value) > 1e-3 {
 				t.Errorf("%s: %s = %v, want %v (all: %v)", label, key, got[key], value, got)
 			}
 		}

@@ -61,7 +61,8 @@ var homeDeltaGoOnlyKeys = map[string]GoOnlyKey{
 // leaf stays outside. The reference's delta_pct (api/utils/numeric.py) returns
 // 0.0 for a zero previous value and for a window with no value.
 //   - from zero: both windows hold a stored value, the prior is a measured 0 and
-//     the current is not; the percent is undefined, the candidate serves null
+//     the current value is not 0 (a null percent beside a current value of 0 is a
+//     true 0 % served as null: it is NOT admitted); the percent is undefined, the candidate serves null
 //     beside has_data and has_prior_data both true.
 //   - no data: a window holds no stored value (the reference serves a 0
 //     placeholder and 0.0); a percent has no meaning against a value nobody
@@ -80,6 +81,7 @@ func percentDefectsFor(leafPath, who string, where func() *SiblingCondition) []B
 	pair := []LeafPair{{Baseline: 0.0, Candidate: nil}}
 	fromZero, noData := where(), where()
 	fromZero.AllTrue = []string{"has_data", "has_prior_data"}
+	fromZero.NonZero = []string{"value"}
 	noData.AnyFalse = []string{"has_data", "has_prior_data"}
 	return []BaselineDefect{{
 		Ticket:             "CHAOS-9063",

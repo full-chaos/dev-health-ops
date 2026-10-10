@@ -2,8 +2,9 @@
 // a delta is a statement about two measured values. A window with no stored
 // value is served as a 0 placeholder, and 0 against a real value is a
 // "fall of 100 %" that nothing measured. Home, /explain and the person summary
-// take their delta numbers from here (the operating review keeps its own
-// percent: CHAOS-9111 does not change it), so a client reads one contract. There are three states:
+// take their delta numbers from here, and the operating review (operatingreview.go,
+// dataIn) applies the same rule to its own weeks, so a client reads one contract.
+// There are three states:
 //
 //   - KindNone: a window has no stored value. The percent is null (a percent
 //     has no meaning against a value nobody measured; CHAOS-9111), the

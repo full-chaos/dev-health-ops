@@ -2,6 +2,7 @@ package goapiproof
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 )
 
@@ -192,61 +193,112 @@ func TestAnalyticsBatchDeclarations_LabelNullSubtree(t *testing.T) {
 	}
 }
 
-// CHAOS-9111: a null percent against the reference's 0.0 is covered only beside
-// the state that explains it, on its own row.
+// CHAOS-9111: the percent differences are admitted ONLY beside the state that explains
+// them, judged on the row's own siblings: a window with no stored value (a flag false),
+// or a prior measured 0 against a current value that is NOT 0 (both flags true, value
+// not 0). A TRUE 0 % served as null (both flags true, value 0) is a disagreement.
+
+// deltaRow is one row of a list of deltas.
+type deltaRow struct {
+	id    string
+	pct   string
+	value string
+	flags string // `"has_data":true,"has_prior_data":true`, or "" for none
+}
+
+func deltaBody(rows ...deltaRow) string {
+	var items []string
+	for _, r := range rows {
+		item := fmt.Sprintf(`{"id":%q,"delta_pct":%s,"value":%s`, r.id, r.pct, r.value)
+		if r.flags != "" {
+			item += "," + r.flags
+		}
+		items = append(items, item+"}")
+	}
+	return "[" + strings.Join(items, ",") + "]"
+}
+
+const (
+	flagsBoth    = `"has_data":true,"has_prior_data":true`
+	flagsNoPrior = `"has_data":true,"has_prior_data":false`
+	flagsNoData  = `"has_data":false,"has_prior_data":true`
+)
+
+type percentCase struct {
+	name        string
+	baseline    []deltaRow
+	candidate   []deltaRow
+	wantOutside int
+}
+
+func runPercentCases(t *testing.T, opts Options, wrap func(list string) string, cases []percentCase) {
+	t.Helper()
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			result := Compare(snapshotFromJSON(t, wrap(deltaBody(c.baseline...))), snapshotFromJSON(t, wrap(deltaBody(c.candidate...))), opts)
+			if result.DifferencesOutsideBaselineDefect != c.wantOutside {
+				t.Fatalf("outside = %d, want %d -- findings %+v", result.DifferencesOutsideBaselineDefect, c.wantOutside, result.Findings)
+			}
+		})
+	}
+}
+
+// percentRows builds, per case, the reference rows (percent 0.0) and the candidate rows
+// (percent null) of the row under test plus a measured row beside it.
+func percentRows(flags, value string) (baseline, candidate []deltaRow) {
+	other := deltaRow{id: "b", pct: "5.0", value: "9", flags: flagsBoth}
+	return []deltaRow{{id: "a", pct: "0.0", value: value, flags: flags}, other}, []deltaRow{{id: "a", pct: "null", value: value, flags: flags}, other}
+}
+
 func TestMetricPercentDefects_AdmitOnlyTheStateTheyName(t *testing.T) {
 	opts := Options{BaselineDefects: metricPercentDefects("data.deltas", "data.deltas.delta_pct", "metric")}
-	body := func(pct string, hasData, hasPrior bool, otherPct string) string {
-		return fmt.Sprintf(`{"data":{"deltas":[{"metric":"a","delta_pct":%s,"has_data":%t,"has_prior_data":%t},{"metric":"b","delta_pct":%s,"has_data":true,"has_prior_data":true}]}}`, pct, hasData, hasPrior, otherPct)
+	wrap := func(list string) string { return `{"data":{"deltas":` + list + `}}` }
+	var cases []percentCase
+	add := func(name, flags, value string, outside int) {
+		b, c := percentRows(flags, value)
+		cases = append(cases, percentCase{name, b, c, outside})
 	}
-	for _, c := range []struct {
-		name                string
-		baseline, candidate string
-		wantOutside         int
-	}{
-		{"no current data: 0 -> null", body("0.0", false, true, "5.0"), body("null", false, true, "5.0"), 0},
-		{"no prior data: 0 -> null", body("0.0", true, false, "5.0"), body("null", true, false, "5.0"), 0},
-		{"no data on both: 0 -> null", body("0.0", false, false, "5.0"), body("null", false, false, "5.0"), 0},
-		{"from a measured zero: 0 -> null with both flags true", body("0.0", true, true, "5.0"), body("null", true, true, "5.0"), 0},
-		{"a number where the reference has 0 on a no-data row", body("0.0", false, true, "5.0"), body("3.0", false, true, "5.0"), 1},
-		{"null where the reference has a real percent on a no-data row", body("12.0", false, true, "5.0"), body("null", false, true, "5.0"), 1},
-		{"reversed: reference null, candidate 0", body("null", false, true, "5.0"), body("0.0", false, true, "5.0"), 1},
-		{"another row's null percent is judged by its own flags", body("0.0", true, true, "0.0"), body("0.0", true, true, "null"), 0},
-		{"a null percent beside no flags at all is not covered", `{"data":{"deltas":[{"metric":"a","delta_pct":0.0},{"metric":"b","delta_pct":5.0,"has_data":true,"has_prior_data":true}]}}`, `{"data":{"deltas":[{"metric":"a","delta_pct":null},{"metric":"b","delta_pct":5.0,"has_data":true,"has_prior_data":true}]}}`, 1},
-		{"a null percent beside a non-boolean flag is not covered", `{"data":{"deltas":[{"metric":"a","delta_pct":0.0,"has_data":"yes","has_prior_data":true},{"metric":"b","delta_pct":5.0,"has_data":true,"has_prior_data":true}]}}`, `{"data":{"deltas":[{"metric":"a","delta_pct":null,"has_data":"yes","has_prior_data":true},{"metric":"b","delta_pct":5.0,"has_data":true,"has_prior_data":true}]}}`, 1},
-	} {
-		t.Run(c.name, func(t *testing.T) {
-			result := Compare(snapshotFromJSON(t, c.baseline), snapshotFromJSON(t, c.candidate), opts)
-			if result.DifferencesOutsideBaselineDefect != c.wantOutside {
-				t.Fatalf("outside = %d, want %d -- findings %+v", result.DifferencesOutsideBaselineDefect, c.wantOutside, result.Findings)
-			}
-		})
-	}
+	add("no current data: 0 -> null", flagsNoData, "0", 0)
+	add("no prior data: 0 -> null", flagsNoPrior, "5", 0)
+	add("from a measured zero (value not 0): 0 -> null", flagsBoth, "5", 0)
+	add("a TRUE 0 % served as null (both flags true, value 0) is not covered", flagsBoth, "0", 1)
+	add("a null percent beside no flags is not covered", "", "5", 1)
+	add("a null percent beside a non-boolean flag is not covered", `"has_data":"yes","has_prior_data":true`, "5", 1)
+	b, c := percentRows(flagsNoData, "0")
+	c[0].pct = "3.0"
+	cases = append(cases, percentCase{"a number where the reference has 0 is not covered", b, c, 1})
+	b, c = percentRows(flagsNoData, "0")
+	b[0].pct = "12.0"
+	cases = append(cases, percentCase{"a real percent served as null is not covered", b, c, 1})
+	// each row is judged by ITS OWN flags: row 0 has no data (covered), row 1 is a true 0 % (not).
+	cases = append(cases, percentCase{"a row is judged by its own flags, not the first row's",
+		[]deltaRow{{"a", "0.0", "0", flagsNoData}, {"b", "0.0", "0", flagsBoth}},
+		[]deltaRow{{"a", "null", "0", flagsNoData}, {"b", "null", "0", flagsBoth}}, 1})
+	runPercentCases(t, opts, wrap, cases)
 }
 
-// Each declared difference covers ITS state alone: the from-zero one never a window
-// with no data, the no-data one never a measured zero before a value.
+// Each declared difference covers its own state alone.
 func TestMetricPercentDefects_EachCoversItsOwnStateOnly(t *testing.T) {
 	defects := metricPercentDefects("data.deltas", "data.deltas.delta_pct", "metric")
-	row := func(pct string, hasData, hasPrior bool) string {
-		return fmt.Sprintf(`{"data":{"deltas":[{"metric":"a","delta_pct":%s,"has_data":%t,"has_prior_data":%t},{"metric":"b","delta_pct":5.0,"has_data":true,"has_prior_data":true}]}}`, pct, hasData, hasPrior)
-	}
+	wrap := func(list string) string { return `{"data":{"deltas":` + list + `}}` }
 	for _, c := range []struct {
-		name              string
-		defect            int
-		hasData, hasPrior bool
-		wantOutside       int
+		name        string
+		defect      int
+		flags       string
+		value       string
+		wantOutside int
 	}{
-		{"from zero covers both flags true", 0, true, true, 0},
-		{"from zero does not cover no current data", 0, false, true, 1},
-		{"from zero does not cover no prior data", 0, true, false, 1},
-		{"no data covers no current data", 1, false, true, 0},
-		{"no data covers no prior data", 1, true, false, 0},
-		{"no data does not cover both flags true", 1, true, true, 1},
+		{"from zero covers both flags true, value not 0", 0, flagsBoth, "5", 0},
+		{"from zero does not cover a true 0 %", 0, flagsBoth, "0", 1},
+		{"from zero does not cover no current data", 0, flagsNoData, "5", 1},
+		{"from zero does not cover no prior data", 0, flagsNoPrior, "5", 1},
+		{"no data covers no current data", 1, flagsNoData, "0", 0},
+		{"no data covers no prior data", 1, flagsNoPrior, "5", 0},
+		{"no data does not cover both flags true", 1, flagsBoth, "5", 1},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			result := Compare(snapshotFromJSON(t, row("0.0", c.hasData, c.hasPrior)), snapshotFromJSON(t, row("null", c.hasData, c.hasPrior)),
-				Options{BaselineDefects: []BaselineDefect{defects[c.defect]}})
+			b, cand := percentRows(c.flags, c.value)
+			result := Compare(snapshotFromJSON(t, wrap(deltaBody(b...))), snapshotFromJSON(t, wrap(deltaBody(cand...))), Options{BaselineDefects: []BaselineDefect{defects[c.defect]}})
 			if result.DifferencesOutsideBaselineDefect != c.wantOutside {
 				t.Fatalf("outside = %d, want %d -- findings %+v", result.DifferencesOutsideBaselineDefect, c.wantOutside, result.Findings)
 			}
@@ -254,8 +306,9 @@ func TestMetricPercentDefects_EachCoversItsOwnStateOnly(t *testing.T) {
 	}
 }
 
-// CHAOS-9111: the operating review's percent, covered only beside its own week's
-// flags (the delta's hasPriorData, or the metric's hasData one level up).
+// The operating review's percent, covered only beside its own week's flags (the
+// delta's hasPriorData, or the metric's hasData one level up); a missing flag covers
+// nothing.
 func TestOperatingReviewPercentDefect_AdmitsOnlyAWeekWithoutData(t *testing.T) {
 	spec, err := SpecFor("operatingReview")
 	if err != nil {
@@ -265,23 +318,31 @@ func TestOperatingReviewPercentDefect_AdmitsOnlyAWeekWithoutData(t *testing.T) {
 		t.Fatalf("the operatingReview parity declares %d defects, want the one CHAOS-9111 difference", len(spec.Parity.BaselineDefects))
 	}
 	defect := spec.Parity.BaselineDefects[0]
-	body := func(pct string, hasData, hasPrior bool) string {
-		return fmt.Sprintf(`{"data":{"operatingReview":{"sections":[{"metrics":[{"key":"a","hasData":%t,"delta":{"percent":%s,"hasPriorData":%t}},{"key":"b","hasData":true,"delta":{"percent":5.0,"hasPriorData":true}}]}]}}}`, hasData, pct, hasPrior)
+	body := func(pct, metricFlag, deltaFlag string) string {
+		metric := `"key":"a"`
+		if metricFlag != "" {
+			metric += "," + metricFlag
+		}
+		delta := `"percent":` + pct
+		if deltaFlag != "" {
+			delta += "," + deltaFlag
+		}
+		return `{"data":{"operatingReview":{"sections":[{"metrics":[{` + metric + `,"delta":{` + delta + `}},{"key":"b","hasData":true,"delta":{"percent":5.0,"hasPriorData":true}}]}]}}}`
 	}
 	for _, c := range []struct {
-		name              string
-		hasData, hasPrior bool
-		candidate         string
-		wantOutside       int
+		name                        string
+		metricFlag, deltaFlag, cand string
+		wantOutside                 int
 	}{
-		{"no prior week: 0 -> null", true, false, "null", 0},
-		{"no current week: 0 -> null", false, true, "null", 0},
-		{"two measured weeks: 0 -> null is not covered", true, true, "null", 1},
-		{"no prior week: a number is not covered", true, false, "3.0", 1},
+		{"no prior week: 0 -> null", `"hasData":true`, `"hasPriorData":false`, "null", 0},
+		{"no current week: 0 -> null", `"hasData":false`, `"hasPriorData":true`, "null", 0},
+		{"two measured weeks: 0 -> null is not covered", `"hasData":true`, `"hasPriorData":true`, "null", 1},
+		{"no prior week: a number is not covered", `"hasData":true`, `"hasPriorData":false`, "3.0", 1},
+		{"no flags at all: not covered", "", "", "null", 1},
+		{"a non-boolean flag: not covered", `"hasData":"no"`, `"hasPriorData":"no"`, "null", 1},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			result := Compare(snapshotFromJSON(t, body("0.0", c.hasData, c.hasPrior)), snapshotFromJSON(t, body(c.candidate, c.hasData, c.hasPrior)),
-				Options{BaselineDefects: []BaselineDefect{defect}})
+			result := Compare(snapshotFromJSON(t, body("0.0", c.metricFlag, c.deltaFlag)), snapshotFromJSON(t, body(c.cand, c.metricFlag, c.deltaFlag)), Options{BaselineDefects: []BaselineDefect{defect}})
 			if result.DifferencesOutsideBaselineDefect != c.wantOutside {
 				t.Fatalf("outside = %d, want %d -- findings %+v", result.DifferencesOutsideBaselineDefect, c.wantOutside, result.Findings)
 			}
@@ -289,38 +350,77 @@ func TestOperatingReviewPercentDefect_AdmitsOnlyAWeekWithoutData(t *testing.T) {
 	}
 }
 
-// CHAOS-9111: the explain metric's own percent, and a driver's and a contributor's
-// (keyed by id), are covered only beside their own flags.
+// The explain metric's own percent, a driver's and a contributor's (keyed by id).
 func TestExplainPercentDefects_AdmitOnlyTheStateTheyName(t *testing.T) {
 	opts := Options{
-		BaselineDefects: explainPercentDefects()[:6],
+		BaselineDefects: explainPercentDefects(),
 		OrderInsensitiveLists: []OrderInsensitiveList{
 			{Path: "data.drivers", KeyFields: []string{"id"}}, {Path: "data.contributors", KeyFields: []string{"id"}},
 		},
 	}
-	body := func(metricPct, driverPct string, flags string) string {
-		return fmt.Sprintf(`{"data":{"delta_pct":%s,%s,"drivers":[{"id":"r1","delta_pct":%s,%s},{"id":"r2","delta_pct":4.0,"has_data":true,"has_prior_data":true}],"contributors":[{"id":"r1","delta_pct":%s,%s}]}}`,
-			metricPct, flags, driverPct, flags, driverPct, flags)
-	}
-	both := `"has_data":true,"has_prior_data":true`
-	noPrior := `"has_data":true,"has_prior_data":false`
-	// the metric object carries the flags at its own level; the rows carry theirs.
-	metricBody := func(metricPct string, flags string) string {
-		return fmt.Sprintf(`{"data":{"delta_pct":%s,%s,"drivers":[],"contributors":[]}}`, metricPct, flags)
+	object := func(pct, value, flags string) string {
+		return fmt.Sprintf(`{"data":{"delta_pct":%s,"value":%s,%s,"drivers":[],"contributors":[]}}`, pct, value, flags)
 	}
 	for _, c := range []struct {
 		name                string
 		baseline, candidate string
 		wantOutside         int
 	}{
-		{"metric: no prior window, 0 -> null", metricBody("0.0", noPrior), metricBody("null", noPrior), 0},
-		{"metric: both windows, 0 -> null (from a measured zero)", metricBody("0.0", both), metricBody("null", both), 0},
-		{"metric: a number is not covered", metricBody("0.0", noPrior), metricBody("3.0", noPrior), 1},
-		{"driver and contributor: no comparison row, 0 -> null", body("0.0", "0.0", noPrior), body("0.0", "null", noPrior), 0},
-		{"driver and contributor: a real percent -> null is not covered", body("0.0", "7.0", noPrior), body("0.0", "null", noPrior), 2},
+		{"metric: no prior window, 0 -> null", object("0.0", "5", flagsNoPrior), object("null", "5", flagsNoPrior), 0},
+		{"metric: both windows, value not 0, 0 -> null (from a measured zero)", object("0.0", "5", flagsBoth), object("null", "5", flagsBoth), 0},
+		{"metric: a TRUE 0 % served as null is not covered", object("0.0", "0", flagsBoth), object("null", "0", flagsBoth), 1},
+		{"metric: a number is not covered", object("0.0", "5", flagsNoPrior), object("3.0", "5", flagsNoPrior), 1},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			result := Compare(snapshotFromJSON(t, c.baseline), snapshotFromJSON(t, c.candidate), opts)
+			if result.DifferencesOutsideBaselineDefect != c.wantOutside {
+				t.Fatalf("outside = %d, want %d -- findings %+v", result.DifferencesOutsideBaselineDefect, c.wantOutside, result.Findings)
+			}
+		})
+	}
+	list := func(pct, value, flags string) string {
+		return fmt.Sprintf(`{"data":{"delta_pct":4.0,"value":1,"has_data":true,"has_prior_data":true,"drivers":[{"id":"r1","delta_pct":%s,"value":%s,%s},{"id":"r2","delta_pct":4.0,"value":9,%s}],"contributors":[{"id":"r1","delta_pct":%s,"value":%s,%s}]}}`,
+			pct, value, flags, flagsBoth, pct, value, flags)
+	}
+	for _, c := range []struct {
+		name                string
+		baseline, candidate string
+		wantOutside         int
+	}{
+		{"driver and contributor: no comparison row, 0 -> null", list("0.0", "7", flagsNoPrior), list("null", "7", flagsNoPrior), 0},
+		{"driver and contributor: a TRUE 0 % served as null is not covered", list("0.0", "0", flagsBoth), list("null", "0", flagsBoth), 2},
+		{"driver and contributor: a real percent -> null is not covered", list("7.0", "7", flagsNoPrior), list("null", "7", flagsNoPrior), 2},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			result := Compare(snapshotFromJSON(t, c.baseline), snapshotFromJSON(t, c.candidate), opts)
+			if result.DifferencesOutsideBaselineDefect != c.wantOutside {
+				t.Fatalf("outside = %d, want %d -- findings %+v", result.DifferencesOutsideBaselineDefect, c.wantOutside, result.Findings)
+			}
+		})
+	}
+}
+
+// The same through the REAL parity options of Home: a null for a true 0 % is a
+// disagreement. NOT asserted for the person summary and the explain metric/drivers:
+// there older blanket citations of other tickets (CHAOS-5812 data.deltas.delta_pct;
+// CHAOS-5813 and CHAOS-5819 data.delta_pct and data.drivers.delta_pct, restcorpus.go)
+// cover ANY value of the leaf for their own mechanism (an unmerged ReplacingMergeTree
+// version, a dropped scope); the percent declarations narrow only what they add.
+func TestPercentDifferencesThroughTheRealParityOptionsOfHome(t *testing.T) {
+	wrap := func(list string) string { return `{"data":{"deltas":` + list + `}}` }
+	for _, c := range []struct {
+		name        string
+		flags       string
+		value       string
+		wantOutside int
+	}{
+		{"no prior data", flagsNoPrior, "5", 0},
+		{"from zero", flagsBoth, "5", 0},
+		{"a true 0 %", flagsBoth, "0", 1},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			b, cand := percentRows(c.flags, c.value)
+			result := Compare(snapshotFromJSON(t, wrap(deltaBody(b...))), snapshotFromJSON(t, wrap(deltaBody(cand...))), homeNumericLeaves)
 			if result.DifferencesOutsideBaselineDefect != c.wantOutside {
 				t.Fatalf("outside = %d, want %d -- findings %+v", result.DifferencesOutsideBaselineDefect, c.wantOutside, result.Findings)
 			}

@@ -59,6 +59,11 @@ type SiblingCondition struct {
 	// boolean fields of which at least one must be false. Exactly one is set.
 	AllTrue  []string
 	AnyFalse []string
+	// NonZero lists numeric fields of the same object that must be present and not 0
+	// (checked with AllTrue): the from-zero state is a prior measured 0 against a
+	// current value that is NOT 0, so a null percent beside a current value of 0 is a
+	// true 0 % served as null, a disagreement.
+	NonZero []string
 
 	// ByPath finds the object through the finding's own path (an ORDERED list
 	// path such as "data.x.sections[0].metrics[2].delta.percent": the comparator
@@ -194,6 +199,11 @@ func (c *SiblingCondition) holds(candidate any, finding Finding) bool {
 	if len(c.AllTrue) > 0 {
 		for _, name := range c.AllTrue {
 			if v, ok := flag(name); !ok || !v {
+				return false
+			}
+		}
+		for _, name := range c.NonZero {
+			if n, ok := asFloat(object[name]); !ok || n == 0 {
 				return false
 			}
 		}

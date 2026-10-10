@@ -6,7 +6,7 @@
 // columns. Each delta must tell a window with no stored value from a measured
 // zero, and serve no delta percent (null) when either window has none: the one
 // rule of internal/queryapi/deltarule, the same contract GraphQL Home and
-// /explain serve (CHAOS-9111; the operating review is not changed by it).
+// /explain serve (CHAOS-9111; the operating review applies the same rule to its weeks).
 package server
 
 import (

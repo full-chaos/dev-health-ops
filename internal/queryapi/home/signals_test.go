@@ -1,6 +1,9 @@
 package home
 
 import (
+	"encoding/json"
+	"reflect"
+	"sort"
 	"strings"
 	"testing"
 )
@@ -356,5 +359,36 @@ func TestRepoFilterAppliedFollowsTheSpecScope(t *testing.T) {
 		if got != tc.want {
 			t.Errorf("%s: repoFilterApplied = %s, want %s", tc.name, got, tc.want)
 		}
+	}
+}
+
+// The REST Home answer carries NO coverage key: the field exists on the Go
+// signal and is served by GraphQL only (CHAOS-6545), because the REST response
+// model is pinned by a Python-recorded golden. The key set of a signal that
+// holds a coverage is the marshalled bytes' key set, not a Go snapshot.
+func TestRESTSignalJSONHasNoCoverageKey(t *testing.T) {
+	coverage := 0.3
+	raw, err := json.Marshal(Signal{ID: "risk:repo:r1", Metric: "compounding_risk", Coverage: &coverage})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var keys map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &keys); err != nil {
+		t.Fatal(err)
+	}
+	got := make([]string, 0, len(keys))
+	for key := range keys {
+		got = append(got, key)
+	}
+	sort.Strings(got)
+	want := []string{
+		"affected_scope", "category", "confidence", "current_value", "delta", "direction", "evidence_count",
+		"evidence_ref", "id", "metric", "prior_value", "recommended_action", "scope_entity", "severity", "title", "why_it_matters",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("REST signal keys = %v, want %v (no coverage key)", got, want)
+	}
+	if strings.Contains(string(raw), "coverage") {
+		t.Fatalf("a REST signal must not carry coverage: %s", raw)
 	}
 }

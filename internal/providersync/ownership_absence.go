@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
@@ -22,16 +23,27 @@ import (
 // maxOwnershipLookupBody bounds the body of one lookup answer.
 const maxOwnershipLookupBody = 1 << 20
 
-// ownershipLookupNotFound says the provider answered 404 for the request.
-func ownershipLookupNotFound(err error) bool {
+// githubLookupNotFound says GitHub itself answered 404 for the request: the
+// status, and the body of GitHub's own error answer (a JSON object whose
+// message is "Not Found"). A 404 with any other body is not GitHub's (a
+// gateway or a proxy in front of the host) and proves nothing.
+func githubLookupNotFound(err error) bool {
 	var providerErr *providerfoundation.ProviderError
-	return errors.As(err, &providerErr) && providerErr.Class == providerfoundation.ErrorNotFound &&
-		providerErr.StatusCode == http.StatusNotFound
+	if !errors.As(err, &providerErr) || providerErr.Class != providerfoundation.ErrorNotFound ||
+		providerErr.StatusCode != http.StatusNotFound {
+		return false
+	}
+	var answer struct {
+		Message *string `json:"message"`
+	}
+	return json.Unmarshal([]byte(providerErr.Body), &answer) == nil && answer.Message != nil &&
+		strings.TrimSpace(*answer.Message) == "Not Found"
 }
 
 // githubRepoGrantAbsence asks GET /orgs/{org}/teams/{slug}/repos/{owner}/{repo}
 // ("check team permissions for a repository"): a 2xx answer says the team has
-// the repository, and 404 says it does not. Any other answer proves nothing.
+// the repository, and GitHub's own 404 says it does not. Any other answer
+// proves nothing.
 type githubRepoGrantAbsence struct {
 	client *providerfoundation.HTTPClient
 	org    string
@@ -47,7 +59,7 @@ func (prover githubRepoGrantAbsence) OwnershipAbsence(ctx context.Context, row O
 	response, err := prover.client.Do(ctx, http.MethodGet,
 		"/orgs/"+url.PathEscape(prover.org)+"/teams/"+url.PathEscape(slug)+"/repos/"+url.PathEscape(owner)+"/"+url.PathEscape(repo), nil)
 	if err != nil {
-		if ownershipLookupNotFound(err) {
+		if githubLookupNotFound(err) {
 			return SnapshotAbsenceProven
 		}
 		return SnapshotAbsenceNotProven
@@ -60,12 +72,16 @@ func (prover githubRepoGrantAbsence) OwnershipAbsence(ctx context.Context, row O
 	return SnapshotAbsenceNotProven
 }
 
+// gitlabAbsenceSearchPerPage is the page size of the one search request.
+const gitlabAbsenceSearchPerPage = 100
+
 // gitlabGroupProjectAbsence asks the listing's own endpoint for one project:
 // GET /groups/:id/projects?search=<project path>. A project of the answer
 // whose path_with_namespace is the fact's path is still a project of the
-// group. An answer with no such project that is the whole answer (GitLab's
-// own end signal, X-Next-Page sent and empty) says it is not. Any other
-// answer proves nothing.
+// group. An answer with no such project that is the whole answer says it is
+// not. "The whole answer" is the paginator's own reading of GitLab's end
+// signal (X-Next-Page sent once and empty, and no Link to a next page), so the
+// two cannot disagree. Any other answer proves nothing.
 type gitlabGroupProjectAbsence struct {
 	client *providerfoundation.HTTPClient
 }
@@ -85,7 +101,7 @@ func (prover gitlabGroupProjectAbsence) OwnershipAbsence(ctx context.Context, ro
 	}
 	response, err := prover.client.Do(ctx, http.MethodGet,
 		providerRelativePath(prover.client, "api", "v4", "groups", strings.TrimSpace(groupPath))+
-			"/projects?per_page=100&search="+url.QueryEscape(name), nil)
+			"/projects?per_page="+strconv.Itoa(gitlabAbsenceSearchPerPage)+"&search="+url.QueryEscape(name), nil)
 	if err != nil {
 		return SnapshotAbsenceNotProven
 	}
@@ -103,8 +119,7 @@ func (prover gitlabGroupProjectAbsence) OwnershipAbsence(ctx context.Context, ro
 			return SnapshotFactStillHeld
 		}
 	}
-	values, sent := response.Header["X-Next-Page"]
-	if sent && len(values) == 1 && strings.TrimSpace(values[0]) == "" {
+	if providerfoundation.GitLabListEndedInOneResponse(response.Header, len(projects), gitlabAbsenceSearchPerPage) {
 		return SnapshotAbsenceProven
 	}
 	return SnapshotAbsenceNotProven

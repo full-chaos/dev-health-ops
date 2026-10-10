@@ -82,17 +82,26 @@ func TestTheJiraAnswerAsksWithTheIdentifierTheRowWasBuiltFrom(t *testing.T) {
 	}
 }
 
-// The GitHub direct answer: 404 is "the team does not have the repository";
-// 204 and 200 say it has; any other answer proves nothing.
+// The GitHub direct answer: GitHub's own 404 is "the team does not have the
+// repository"; 204 and 200 say it has; any other answer proves nothing. A 404
+// whose body is not GitHub's error answer comes from something in front of
+// the host (a gateway, a proxy) and proves nothing.
 func TestTheGitHubAnswerForOneGrant(t *testing.T) {
 	row := OwnershipSnapshotRow{TeamID: "gh:platform", ProjectID: testPID("acme/api"), Source: githubTeamCatalogSource}
 	for _, test := range []struct {
 		name   string
 		status int
+		body   string
 		want   SnapshotAbsence
 	}{
-		{"204", 204, SnapshotFactStillHeld}, {"200 with the repository", 200, SnapshotFactStillHeld},
-		{"404", 404, SnapshotAbsenceProven}, {"403", 403, SnapshotAbsenceNotProven}, {"500", 500, SnapshotAbsenceNotProven},
+		{"204", 204, ``, SnapshotFactStillHeld}, {"200 with the repository", 200, `{}`, SnapshotFactStillHeld},
+		{"404 of the provider", 404, `{"message":"Not Found","documentation_url":"https://docs.github.com/rest","status":"404"}`, SnapshotAbsenceProven},
+		{"404 with a page of a gateway", 404, `<html><body>404 Not Found</body></html>`, SnapshotAbsenceNotProven},
+		{"404 with an empty object", 404, `{}`, SnapshotAbsenceNotProven},
+		{"404 with no body", 404, ``, SnapshotAbsenceNotProven},
+		{"404 with another message", 404, `{"message":"no route"}`, SnapshotAbsenceNotProven},
+		{"404 with a body that is not an object", 404, `"Not Found"`, SnapshotAbsenceNotProven},
+		{"403", 403, `{"message":"Not Found"}`, SnapshotAbsenceNotProven}, {"500", 500, `{"message":"Not Found"}`, SnapshotAbsenceNotProven},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			var path string
@@ -100,7 +109,7 @@ func TestTheGitHubAnswerForOneGrant(t *testing.T) {
 				fakehttp.Client(absenceAnswerDoer(func(request *http.Request) (*http.Response, error) {
 					path = request.URL.Path
 					return &http.Response{StatusCode: test.status, Header: http.Header{"Content-Type": []string{"application/json"}},
-						Body: io.NopCloser(strings.NewReader(`{}`)), Request: request}, nil
+						Body: io.NopCloser(strings.NewReader(test.body)), Request: request}, nil
 				})), func(*http.Request) error { return nil },
 				providerfoundation.RetryPolicy{MaxAttempts: 1, InitialWait: 1, MaxWait: 1},
 				providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }))
@@ -112,6 +121,60 @@ func TestTheGitHubAnswerForOneGrant(t *testing.T) {
 			}
 			if path != "/orgs/acme/teams/platform/repos/acme/api" {
 				t.Errorf("the request path is %q", path)
+			}
+		})
+	}
+}
+
+// The GitLab direct answer: a search answer that does not hold the project
+// proves the absence only when it is the WHOLE answer by the paginator's own
+// reading of GitLab's end signal. An answer that announces a next page in any
+// way the paginator knows (X-Next-Page, a Link to a next page, a full page)
+// leaves the project possibly on a page that was not asked for.
+func TestTheGitLabAnswerForOneProject(t *testing.T) {
+	row := OwnershipSnapshotRow{TeamID: "gl:acme/platform", ProjectID: testPID("acme/platform/api"), Source: gitlabTeamCatalogSource}
+	other := `[{"id":7,"path_with_namespace":"acme/platform/api-gateway"}]`
+	full := "[" + strings.TrimSuffix(strings.Repeat(`{"id":7,"path_with_namespace":"acme/platform/api-gateway"},`, gitlabAbsenceSearchPerPage), ",") + "]"
+	for _, test := range []struct {
+		name   string
+		header http.Header
+		body   string
+		want   SnapshotAbsence
+	}{
+		{"the project is in the answer", http.Header{"X-Next-Page": {""}}, `[{"id":1,"path_with_namespace":"acme/platform/api"}]`, SnapshotFactStillHeld},
+		{"an empty answer with the end signal", http.Header{"X-Next-Page": {""}}, `[]`, SnapshotAbsenceProven},
+		{"other projects only, with the end signal", http.Header{"X-Next-Page": {""}}, other, SnapshotAbsenceProven},
+		{"an empty answer with the end signal and a Link to a next page", http.Header{"X-Next-Page": {""},
+			"Link": {`<https://gitlab.example/api/v4/groups/1/projects?page=2>; rel="next"`}}, `[]`, SnapshotAbsenceNotProven},
+		{"an empty answer with the end signal and a Link that does not parse", http.Header{"X-Next-Page": {""}, "Link": {`<<<`}}, `[]`, SnapshotAbsenceNotProven},
+		{"an empty answer with a Link to the first page only", http.Header{"X-Next-Page": {""},
+			"Link": {`<https://gitlab.example/api/v4/groups/1/projects?page=1>; rel="first"`}}, `[]`, SnapshotAbsenceProven},
+		{"an empty answer with no end signal", http.Header{}, `[]`, SnapshotAbsenceNotProven},
+		{"an empty answer with a next page number", http.Header{"X-Next-Page": {"2"}}, `[]`, SnapshotAbsenceNotProven},
+		{"an empty answer with two end headers", http.Header{"X-Next-Page": {"", ""}}, `[]`, SnapshotAbsenceNotProven},
+		{"a full page of other projects with the end signal", http.Header{"X-Next-Page": {""}}, full, SnapshotAbsenceNotProven},
+		{"a body that is not a list", http.Header{"X-Next-Page": {""}}, `{"message":"404"}`, SnapshotAbsenceNotProven},
+		{"null", http.Header{"X-Next-Page": {""}}, `null`, SnapshotAbsenceNotProven},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var query string
+			client, err := providerfoundation.NewHTTPClient("gitlab", "https://gitlab.example",
+				fakehttp.Client(absenceAnswerDoer(func(request *http.Request) (*http.Response, error) {
+					query = request.URL.RawQuery
+					header := test.header.Clone()
+					header.Set("Content-Type", "application/json")
+					return &http.Response{StatusCode: 200, Header: header, Body: io.NopCloser(strings.NewReader(test.body)), Request: request}, nil
+				})), func(*http.Request) error { return nil },
+				providerfoundation.RetryPolicy{MaxAttempts: 1, InitialWait: 1, MaxWait: 1},
+				providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil }))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := (gitlabGroupProjectAbsence{client: client}).OwnershipAbsence(context.Background(), row); got != test.want {
+				t.Errorf("the answer is %d, want %d", got, test.want)
+			}
+			if query != "per_page=100&search=api" {
+				t.Errorf("the request query is %q", query)
 			}
 		})
 	}

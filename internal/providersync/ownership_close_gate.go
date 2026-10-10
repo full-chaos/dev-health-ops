@@ -29,6 +29,15 @@ func ownershipListingProvesEnd(pages providerfoundation.PageCollection) bool {
 	return pages.EndProven && !pages.PageBudgetExhausted && !pages.ItemCapReached
 }
 
+// ownershipListingWasPaged reports whether a listing was read in more than
+// one response. Nothing can move inside one response, so a listing of one
+// response that reached its end proves what it does not hold. A listing of
+// more than one response, read by position, does not: when the list changes
+// between two requests, a fact that still holds is on no page.
+func ownershipListingWasPaged(pages providerfoundation.PageCollection) bool {
+	return pages.Pages > 1
+}
+
 // OwnershipScopeCensus counts the active integrations of a provider in an org,
 // other than the run's own. A failed read is an error, never zero.
 type OwnershipScopeCensus interface {
@@ -70,6 +79,10 @@ type ownershipCloseRequest struct {
 	// listed is every team whose listing returned; unproven is the part of it
 	// whose end the provider did not confirm.
 	listed, unproven []string
+	// paged is the part of listed whose listing was read in more than one
+	// response. Such a listing proves its end and not an absence: a fact it
+	// does not hold is a candidate that needs the provider's own answer.
+	paged []string
 }
 
 type ownershipCloseDecision struct {
@@ -83,6 +96,8 @@ type ownershipCloseDecision struct {
 	// scope is the scope gate's answer. It is asked only when a listing
 	// proved its end; before that nothing can close and it stays not proven.
 	scope ScopeProof
+	// paged is the teams whose listing was read in more than one response.
+	paged map[string]bool
 }
 
 // decideOwnershipClose is the one gate in front of every provider_access
@@ -94,7 +109,10 @@ type ownershipCloseDecision struct {
 // teams: its rows stay open. Every skip is one WARN line and a DegradedLeg on
 // the result, never silent.
 func decideOwnershipClose(ctx context.Context, census OwnershipScopeCensus, request ownershipCloseRequest) ownershipCloseDecision {
-	decision := ownershipCloseDecision{read: request.listed}
+	decision := ownershipCloseDecision{read: request.listed, paged: make(map[string]bool, len(request.paged))}
+	for _, teamID := range request.paged {
+		decision.paged[teamID] = true
+	}
 	if len(request.listed) == 0 {
 		return decision
 	}
@@ -151,9 +169,109 @@ func decideOwnershipClose(ctx context.Context, census OwnershipScopeCensus, requ
 // closable set) with the scope gate's proof and the proof of the listings: a
 // team listing returned and at least one listing proved its end. A team
 // outside closable is of no kind, so its open rows never close.
-func (decision ownershipCloseDecision) snapshot(kind func(closable []string) SnapshotKind[OwnershipSnapshotRow]) KindSnapshot[OwnershipSnapshotRow] {
+//
+// The proof of an absence is the listing itself only for a team whose listing
+// was ONE response. For a team whose listing took more than one request,
+// answer is asked for each open grant the listing does not hold (the
+// provider's own answer for that one grant); a nil answer closes none of them.
+func (decision ownershipCloseDecision) snapshot(
+	kind func(closable []string) SnapshotKind[OwnershipSnapshotRow], answer func(OwnershipSnapshotRow) SnapshotAbsence,
+) KindSnapshot[OwnershipSnapshotRow] {
+	oneResponse := func(row OwnershipSnapshotRow) bool { return !decision.paged[row.TeamID] }
 	return kind(decision.closable).Snapshot(decision.scope, ProveSnapshot(
 		SnapshotTerm{Holds: len(decision.read) > 0, Reason: OwnershipCloseSkippedNoTeamListed},
 		SnapshotTerm{Holds: len(decision.read) == 0 || decision.proven > 0, Reason: OwnershipCloseSkippedListingIncomplete},
-	))
+	), AbsenceByListing(oneResponse, answer))
+}
+
+// OwnershipAbsenceProver gives the provider's own answer for ONE ownership
+// fact: a direct read of the link between the team and the project (or the
+// repository). It answers SnapshotAbsenceProven only when the provider says,
+// for that link, that it does not exist; SnapshotFactStillHeld when the
+// provider says it does; and SnapshotAbsenceNotProven for every other answer
+// (an error, a refusal, a rate limit, a body it cannot read).
+type OwnershipAbsenceProver interface {
+	OwnershipAbsence(ctx context.Context, row OwnershipSnapshotRow) SnapshotAbsence
+}
+
+// OwnershipAbsenceLookupBudget bounds the direct answers of one run. A run
+// that finds more candidates than this closes the ones it asked for and leaves
+// the rest open for the next run; the plan counts them (AbsenceOverBudget).
+const OwnershipAbsenceLookupBudget = 100
+
+// OwnershipAbsenceLookups is the direct answers of one run: each candidate is
+// asked once, inside the budget. The snapshot rule asks it only for an open
+// fact the run does not hold and whose listing was not one response, so a run
+// with no such fact makes no request.
+type OwnershipAbsenceLookups struct {
+	ctx     context.Context
+	prover  OwnershipAbsenceProver
+	left    int
+	answers map[string]SnapshotAbsence
+}
+
+// NewOwnershipAbsenceLookups makes the lookups of one run. A nil prover
+// answers nothing: every candidate stays open.
+func NewOwnershipAbsenceLookups(ctx context.Context, prover OwnershipAbsenceProver) *OwnershipAbsenceLookups {
+	return &OwnershipAbsenceLookups{ctx: ctx, prover: prover, left: OwnershipAbsenceLookupBudget, answers: map[string]SnapshotAbsence{}}
+}
+
+// Answer is the provider's own answer for one candidate.
+func (lookups *OwnershipAbsenceLookups) Answer(row OwnershipSnapshotRow) SnapshotAbsence {
+	if lookups == nil || lookups.prover == nil {
+		return SnapshotAbsenceNotProven
+	}
+	fact := ownershipSnapshotKey(row)
+	if answer, asked := lookups.answers[fact]; asked {
+		return answer
+	}
+	if lookups.left <= 0 {
+		return SnapshotAbsenceOverBudget
+	}
+	lookups.left--
+	answer := SnapshotAbsenceNotProven
+	switch lookups.prover.OwnershipAbsence(lookups.ctx, row) {
+	case SnapshotAbsenceProven:
+		answer = SnapshotAbsenceProven
+	case SnapshotFactStillHeld:
+		answer = SnapshotFactStillHeld
+	}
+	lookups.answers[fact] = answer
+	return answer
+}
+
+// The reasons of an ownership fact that stays open because its absence is not
+// proven. Each one is a DegradedLeg reason on the run's result.
+const (
+	OwnershipAbsenceNotProven  = "absence_not_proven"
+	OwnershipAbsenceOverBudget = "absence_lookup_budget_ended"
+	// OwnershipAbsenceListingWrong: the provider's own answer says the fact
+	// still holds: the listing lost it (the list changed while it was read).
+	OwnershipAbsenceListingWrong = "absent_from_listing_still_held"
+
+	ownershipAbsenceLeg = "ownership_absence"
+)
+
+// SnapshotAbsenceLegs is one DegradedLeg for each reason an open fact of the
+// plan stayed open without a proof of its absence.
+func SnapshotAbsenceLegs(plan SnapshotPlan) []DegradedLeg {
+	var legs []DegradedLeg
+	for _, outcome := range plan.Kinds {
+		for _, part := range []struct {
+			count  int
+			reason string
+		}{
+			{outcome.AbsenceNotProven, OwnershipAbsenceNotProven},
+			{outcome.AbsenceOverBudget, OwnershipAbsenceOverBudget},
+			{outcome.StillHeld, OwnershipAbsenceListingWrong},
+		} {
+			if part.count > 0 {
+				legs = append(legs, DegradedLeg{
+					Dataset: "team_ownership", Leg: ownershipAbsenceLeg, Outcome: "skipped", Reason: part.reason,
+					Detail: strconv.Itoa(part.count) + " open rows of " + outcome.Kind + " kept",
+				})
+			}
+		}
+	}
+	return legs
 }

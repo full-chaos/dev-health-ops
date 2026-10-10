@@ -107,6 +107,101 @@ const (
 // row of the kind, when the kind's empty answer closes nothing.
 const SnapshotEmptyAnswer = "empty_answer"
 
+// SnapshotAbsence is what a run knows about ONE open fact that its answer
+// does not hold. The zero value proves nothing.
+type SnapshotAbsence int
+
+const (
+	// SnapshotAbsenceNotProven: nothing says the fact is gone. The fact is
+	// not in the answer, and the answer cannot prove an absence (see
+	// AbsenceProof), or the provider's own answer for this fact failed.
+	SnapshotAbsenceNotProven SnapshotAbsence = iota
+	// SnapshotAbsenceProven: the fact is gone. Its listing was one response
+	// that does not hold it, or the provider answered "not there" for it.
+	SnapshotAbsenceProven
+	// SnapshotFactStillHeld: the provider answered that the fact still holds.
+	// The answer of the walk was wrong for this fact.
+	SnapshotFactStillHeld
+	// SnapshotAbsenceOverBudget: the run's budget of direct answers ended
+	// before this fact was asked for.
+	SnapshotAbsenceOverBudget
+)
+
+// AbsenceProof says, for ONE fact kind, what proves that an open fact the run
+// does not hold is gone. A walk that reached the provider's end of the list
+// proves that the walk ended; it does not prove that every fact was on a page.
+// When a list is read in more than one request by position (an offset, a page
+// number) and the list changes between two requests, the later items move, and
+// a fact that still holds is on no page. So the end of a walk is never the
+// proof of an absence by itself: each kind states what is.
+//
+// It is made only by AbsenceByWalk and AbsenceByListing. The zero value proves
+// no absence, so a kind whose proof nobody stated closes no absent fact.
+type AbsenceProof[R any] struct {
+	statement string
+	verdict   func(R) SnapshotAbsence
+}
+
+// AbsenceProofNotStated is the statement of a proof nobody made.
+const AbsenceProofNotStated = "absence_proof_not_stated"
+
+// AbsenceWalk names a walk whose answer is taken as the proof of an absence.
+// Each one is a deliberate, written exemption from the per-fact proof; the
+// census (TestSnapshotKindCensus) pins which kind uses which.
+type AbsenceWalk string
+
+// AbsenceWalkByCursor: the walk follows a cursor that the provider gives with
+// each page (Relay `after`, an opaque page token), not a position in the list.
+// The providers do not state what such a walk returns when the list changes
+// while it is read, so this is an open risk that is named, not a proof that
+// was measured.
+const AbsenceWalkByCursor AbsenceWalk = "cursor_walk"
+
+// AbsenceByWalk states that the kind's walk itself proves an absence.
+func AbsenceByWalk[R any](walk AbsenceWalk) AbsenceProof[R] {
+	statement := strings.TrimSpace(string(walk))
+	if statement == "" {
+		return AbsenceProof[R]{}
+	}
+	return AbsenceProof[R]{statement: statement, verdict: func(R) SnapshotAbsence { return SnapshotAbsenceProven }}
+}
+
+// AbsenceByListingStatement is the statement of AbsenceByListing.
+const AbsenceByListingStatement = "one_response_or_direct_answer"
+
+// AbsenceByListing is the proof of a kind whose facts are read from listings
+// by position. oneResponse says that the listing a row belongs to was read in
+// ONE response: nothing can move inside one response, so a fact it does not
+// hold is gone. For a row of a listing read in more than one request, answer
+// is the provider's own answer for that one fact (a direct read of the link);
+// a nil answer, and any answer but SnapshotAbsenceProven, closes nothing.
+func AbsenceByListing[R any](oneResponse func(R) bool, answer func(R) SnapshotAbsence) AbsenceProof[R] {
+	return AbsenceProof[R]{statement: AbsenceByListingStatement, verdict: func(row R) SnapshotAbsence {
+		if oneResponse != nil && oneResponse(row) {
+			return SnapshotAbsenceProven
+		}
+		if answer == nil {
+			return SnapshotAbsenceNotProven
+		}
+		return answer(row)
+	}}
+}
+
+// Statement names the proof, for the log line of a kind.
+func (proof AbsenceProof[R]) Statement() string {
+	if proof.verdict == nil || proof.statement == "" {
+		return AbsenceProofNotStated
+	}
+	return proof.statement
+}
+
+func (proof AbsenceProof[R]) of(row R) SnapshotAbsence {
+	if proof.verdict == nil {
+		return SnapshotAbsenceNotProven
+	}
+	return proof.verdict(row)
+}
+
 // SnapshotKind is one fact kind of one writer: the rows it names (holds), and
 // what an empty answer of the kind means. A writer whose table holds more than
 // one kind of fact gives one kind for each. The fields are unexported: a kind
@@ -127,11 +222,12 @@ func NewSnapshotKind[R any](name string, empty EmptyAnswer, holds func(R) bool) 
 func (kind SnapshotKind[R]) Name() string { return kind.name }
 
 // Snapshot states what one run proved for the kind: scope, that the run is
-// the only possible owner of the kind's open rows, and proof, that the kind's
-// walk reached a stated end. Both are arguments, so a kind cannot be stated
-// as proven without either.
-func (kind SnapshotKind[R]) Snapshot(scope ScopeProof, proof SnapshotProof) KindSnapshot[R] {
-	return KindSnapshot[R]{kind: kind, scope: scope, proof: proof}
+// the only possible owner of the kind's open rows; proof, that the kind's
+// walk reached a stated end; and absence, what proves that an open fact the
+// run does not hold is gone. All three are arguments, so a kind cannot be
+// stated as proven without one of them.
+func (kind SnapshotKind[R]) Snapshot(scope ScopeProof, proof SnapshotProof, absence AbsenceProof[R]) KindSnapshot[R] {
+	return KindSnapshot[R]{kind: kind, scope: scope, proof: proof, absence: absence}
 }
 
 // KindSnapshot is one kind with the proof of its scope and the proof of its
@@ -139,10 +235,17 @@ func (kind SnapshotKind[R]) Snapshot(scope ScopeProof, proof SnapshotProof) Kind
 // counts the rows of the kind itself, so a caller cannot state a count, pass a
 // list of another kind as this kind's answer, or leave out a proof.
 type KindSnapshot[R any] struct {
-	kind  SnapshotKind[R]
-	scope ScopeProof
-	proof SnapshotProof
+	kind    SnapshotKind[R]
+	scope   ScopeProof
+	proof   SnapshotProof
+	absence AbsenceProof[R]
 }
+
+// Kind is the fact kind of the snapshot.
+func (snapshot KindSnapshot[R]) Kind() SnapshotKind[R] { return snapshot.kind }
+
+// Holds says whether a row is of the kind.
+func (kind SnapshotKind[R]) Holds(row R) bool { return kind.holds != nil && kind.holds(row) }
 
 // SnapshotRetraction names one open row to close: its index in the `open`
 // argument and the valid_to to close it with.
@@ -161,6 +264,14 @@ type SnapshotKindOutcome struct {
 	Fresh, Open int
 	// Closed counts the open rows of the kind the plan closes.
 	Closed int
+	// AbsenceProof names what the kind takes as the proof of an absence.
+	AbsenceProof string
+	// StillHeld counts the open rows the run's answer does not hold and the
+	// provider's own answer says still hold. AbsenceNotProven counts the open
+	// rows the answer does not hold and nothing proves gone, and
+	// AbsenceOverBudget those the run's budget of direct answers did not
+	// reach. None of the three is closed.
+	StillHeld, AbsenceNotProven, AbsenceOverBudget int
 	// Abandoned is why the kind closes nothing: the proof's missing terms,
 	// or SnapshotEmptyAnswer. Empty when the kind may close.
 	Abandoned []string
@@ -246,7 +357,15 @@ func PlanOwnershipSnapshot(fresh, open []OwnershipSnapshotRow, at time.Time, kin
 //     empty answer to be an answer (EmptyIsAnAnswer). A row of another kind
 //     never makes a kind not empty: the rule counts per kind, never the list.
 //
-// Otherwise the kind closes nothing, and its outcome says why. A retraction is
+// Otherwise the kind closes nothing, and its outcome says why.
+//
+// A kind that may close still closes a fact the run does NOT hold only when
+// the kind's AbsenceProof says the fact is gone. The end of a walk does not
+// say it: a listing read by position in more than one request loses a fact
+// that still holds when the list changes between two requests. Such a row
+// stays open and is counted in the kind's outcome (StillHeld,
+// AbsenceNotProven, AbsenceOverBudget). A later duplicate of a fact the run
+// does hold is not an absence and closes as before. A retraction is
 // the row's own key written again with valid_to set, never a delete; valid_to
 // is never before the row's valid_from.
 func PlanSnapshot[R any](
@@ -277,6 +396,7 @@ func PlanSnapshot[R any](
 	for k, snapshot := range kinds {
 		outcome := &plan.Kinds[k]
 		outcome.Kind = snapshot.kind.name
+		outcome.AbsenceProof = snapshot.absence.Statement()
 		if snapshot.kind.holds == nil || strings.TrimSpace(snapshot.kind.name) == "" {
 			outcome.Abandoned = append(outcome.Abandoned, "snapshot_kind_not_made")
 			continue
@@ -314,6 +434,20 @@ func PlanSnapshot[R any](
 		}
 		if len(outcome.Abandoned) > 0 {
 			continue
+		}
+		if !current[fact] {
+			switch kinds[owner].absence.of(row) {
+			case SnapshotAbsenceProven:
+			case SnapshotFactStillHeld:
+				outcome.StillHeld++
+				continue
+			case SnapshotAbsenceOverBudget:
+				outcome.AbsenceOverBudget++
+				continue
+			default:
+				outcome.AbsenceNotProven++
+				continue
+			}
 		}
 		closedAt := at
 		if closedAt.Before(validFrom(row)) {

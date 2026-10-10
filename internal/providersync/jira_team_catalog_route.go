@@ -773,11 +773,27 @@ func (collector JiraTeamCatalogCollector) CollectTeamCatalog(
 		// live project is far more often an access change than an
 		// organization that removed every project), whatever the archived
 		// read holds.
+		//
+		// An open row the answer does not hold is gone when its project IS
+		// in the project search answer (then the legacy link is what went,
+		// and the links are one read of the store), or when the search was
+		// one response. A project that a search of more than one response
+		// does not hold is a candidate only: the search reads by offset, and
+		// a project removed between two requests moves the later ones. It is
+		// closed on the provider's own answer for that project.
+		searched := make(map[string]bool, len(projects))
+		for _, row := range projects {
+			searched[row.ID.String()] = true
+		}
+		searchWasOneResponse := batch.Result.ProjectSearchPages <= 1
+		lookups := NewOwnershipAbsenceLookups(ctx, jiraLiveProjectAbsence{client: client})
 		snapshot := JiraLegacyOwnershipKind().Snapshot(
 			ProveSoleScope(ctx, collector.ScopeCensus, ref.OrgID, jiraTeamCatalogProvider, ref.IntegrationID), ProveSnapshot(
 				SnapshotTerm{Holds: batch.Result.ProjectSearchComplete, Reason: jiraSnapshotProjectSearch},
 				SnapshotTerm{Holds: legacyComplete, Reason: jiraSnapshotLegacyLinks},
-			))
+			), AbsenceByListing(func(row OwnershipSnapshotRow) bool {
+				return searchWasOneResponse || searched[row.ProjectID.String()]
+			}, lookups.Answer))
 		var retracted []jiraTeamCatalogOwnershipRow
 		var plan SnapshotPlan
 		ownership, retracted, plan = jiraOwnershipSnapshot(ownership, open, normalizedAt.UTC().Truncate(time.Millisecond), snapshot)

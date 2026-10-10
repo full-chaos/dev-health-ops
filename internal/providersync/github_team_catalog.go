@@ -192,6 +192,10 @@ type githubTeamCatalogRows struct {
 	// stopped without GitHub's end-of-list signal (ownershipListingProvesEnd):
 	// decideOwnershipClose keeps their rows open.
 	RepoUnprovenTeamIDs []string
+	// RepoPagedTeamIDs is the part of RepoListedTeamIDs whose listing was
+	// read in more than one response. A grant such a listing does not hold is
+	// a candidate, not a proven removal (ownershipCloseRequest.paged).
+	RepoPagedTeamIDs []string
 }
 
 // githubTeamID is the team id of a GitHub team slug ("gh:<slug>", see

@@ -197,6 +197,10 @@ const (
 	// started no run for because the day has more pending repositories than
 	// one run accepts. The day stays pending.
 	PostSyncTouchedDaysOverRepositoryLimit PostSyncTouchedDaysEvent = "over_repository_limit"
+	// PostSyncTouchedDaysTakeTimeUnwritten counts the fan-outs whose runs were
+	// committed without a take time because the column is absent (a build that
+	// runs before its migration). The drain cannot check the mark of such runs.
+	PostSyncTouchedDaysTakeTimeUnwritten PostSyncTouchedDaysEvent = "take_time_unwritten"
 )
 
 // TouchedDaysDrainEvent is the bounded label of the counter of the drain of
@@ -245,6 +249,17 @@ const (
 	// TouchedDaysDrainReturnReadTruncated counts the passes whose read of the
 	// runs without a result hit its bound.
 	TouchedDaysDrainReturnReadTruncated TouchedDaysDrainEvent = "return_read_truncated"
+	// TouchedDaysDrainTakeTimeAbsent counts the passes whose triggering run
+	// has no take time (a run of a build before the column): its mark cannot
+	// be checked and the pass goes on.
+	TouchedDaysDrainTakeTimeAbsent TouchedDaysDrainEvent = "take_time_absent"
+	// TouchedDaysDrainTakeTimeUnwritten counts the passes whose runs were
+	// committed without a take time because the column is absent.
+	TouchedDaysDrainTakeTimeUnwritten TouchedDaysDrainEvent = "take_time_unwritten"
+	// TouchedDaysDrainStopCheckTruncated counts the passes that checked the
+	// marks of the newest runs only because more runs than the bound ended in
+	// the last day.
+	TouchedDaysDrainStopCheckTruncated TouchedDaysDrainEvent = "stop_check_truncated"
 )
 
 func touchedDaysDrainEvents() []TouchedDaysDrainEvent {
@@ -254,6 +269,7 @@ func touchedDaysDrainEvents() []TouchedDaysDrainEvent {
 		TouchedDaysDrainInFlight, TouchedDaysDrainNothingPending, TouchedDaysDrainPassFailed,
 		TouchedDaysDrainMarkFailed, TouchedDaysDrainReadTruncated,
 		TouchedDaysDrainDaysRetried, TouchedDaysDrainChainStopped, TouchedDaysDrainReturnReadTruncated,
+		TouchedDaysDrainTakeTimeAbsent, TouchedDaysDrainTakeTimeUnwritten, TouchedDaysDrainStopCheckTruncated,
 	}
 }
 
@@ -263,6 +279,7 @@ func postSyncTouchedDaysEvents() []PostSyncTouchedDaysEvent {
 		PostSyncTouchedDaysCarriedOver, PostSyncTouchedDaysAlreadyStarted,
 		PostSyncTouchedDaysReadTruncated, PostSyncTouchedDaysRecordFailed,
 		PostSyncTouchedDaysMarkFailed, PostSyncTouchedDaysOverRepositoryLimit,
+		PostSyncTouchedDaysTakeTimeUnwritten,
 	}
 }
 
@@ -3399,7 +3416,7 @@ var reportDedupGuardReasons = []string{ReportDedupReasonRetryGeneration}
 
 // ObserveReportDedupGuard records one dedup-guarded report chart read over an
 // append-only daily rollup table (internal/jobs/report/dedup.go's
-// appendOnlyDailyKeys). observedRows is the physical row count the guard's
+// tableReads). observedRows is the physical row count the guard's
 // key range scanned; skippedRows is how many of those it discarded as a
 // stale compute generation (a row sharing a natural key with another row
 // carrying a later computed_at). CHAOS-4140 found dora_metrics_daily itself
@@ -4642,7 +4659,7 @@ func (collector *MetricsCollector) writeRemainingMetricsLease(output *strings.Bu
 // writeReportDedupGuard exposes CHAOS-4140's report dedup-guard counters
 // (ObserveReportDedupGuard). Unlike the DORA/capacity refusal reasons above,
 // the (table, reason) key set is not statically known to this package --
-// internal/jobs/report owns appendOnlyDailyKeys, not jobruntime -- so only
+// internal/jobs/report owns tableReads, not jobruntime -- so only
 // keys actually observed are emitted, in sorted order for a deterministic
 // snapshot.
 func (collector *MetricsCollector) writeReportDedupGuard(output *strings.Builder) {

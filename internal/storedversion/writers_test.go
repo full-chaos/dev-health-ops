@@ -1,6 +1,7 @@
 package storedversion
 
 import (
+	"github.com/full-chaos/dev-health-ops/internal/teamkeytables"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/moduleroot"
 	"go/ast"
 	"go/parser"
@@ -88,15 +89,33 @@ var outOfScopeWriters = map[string]string{
 	"internal/operationalbackfill/write.go|operational_alerts":                                                  "operational",
 	"internal/operationalbackfill/write.go|operational_on_call_schedules":                                       "operational",
 	"internal/testsupport/crossorg/crossorg.go|repos":                                                           "test support: seeds repos rows into a throwaway testcontainers ClickHouse for the cross-org integration tests; no production binary imports it",
+	"internal/testsupport/retractionseed/retractionseed.go|repos":                                               "test support: seeds repos rows into a throwaway ClickHouse for the retraction-row reader tests; no production binary imports it",
 }
 
 // unresolvedWriters build the table name at run time; each names why it
 // cannot write an in-scope table.
 var unresolvedWriters = map[string]string{
-	"internal/providerfoundation/sinks.go":          "writes the normalized provider-entity schema (schema_version, dedupe_key, attributes_json), which no in-scope table has",
-	"internal/storage/postgres/authschema/apply.go": "PostgreSQL schema-migration ledger",
-	"internal/providersync/team_id_carry.go":        "the team id carry names its table at run time (INSERT INTO + write.table) and writes teams and link rows, team policies, drift changes and fallbacks, which are not in-scope tables; the one in-scope table it writes is identities (planIdentities), and that write is a whole-row copy: the row is read by FINAL with every column, only team_ids and updated_at change (updated_at is bumped past the stored stamp so the new version wins), so every other column is carried forward unchanged -- R1/R2 applied by hand like internal/api/teamsidentity/store.go, not through storedversion.Contract",
-	"internal/chmigrate/apply.go":                   "ClickHouse schema migrator: records schema_migrations, and seeds the head baseline's captured rows only into a table it has just created and that holds no row; the checked-in baseline seeds no table, and its drift test ties it to the Python chain",
+	"internal/providerfoundation/sinks.go":           "writes the normalized provider-entity schema (schema_version, dedupe_key, attributes_json), which no in-scope table has",
+	"internal/storage/postgres/authschema/apply.go":  "PostgreSQL schema-migration ledger",
+	"internal/providersync/team_id_carry.go":         "the team id carry names its table at run time (INSERT INTO + write.table) and writes teams and link rows, team policies, drift changes and fallbacks, which are not in-scope tables; the one in-scope table it writes is identities (planIdentities), and that write is a whole-row copy: the row is read by FINAL with every column, only team_ids and updated_at change (updated_at is bumped past the stored stamp so the new version wins), so every other column is carried forward unchanged -- R1/R2 applied by hand like internal/api/teamsidentity/store.go, not through storedversion.Contract",
+	"internal/jobs/metrics/daily/stale_team_keys.go": "the stale-key rule names its table at run time (INSERT INTO + table.Table): one of the team-keyed daily tables that package teamkeytables declares, none of them an in-scope or operational table (TestNoStaleKeyRuleTableIsAnInScopeKey)",
+	"internal/chmigrate/apply.go":                    "ClickHouse schema migrator: records schema_migrations, and seeds the head baseline's captured rows only into a table it has just created and that holds no row; the checked-in baseline seeds no table, and its drift test ties it to the Python chain",
+}
+
+// The stale-key rule of the daily metric families writes a row of zeros to a
+// table it names at run time, so the module scan cannot see which. Its tables
+// are the declarations of package teamkeytables; none may be an in-scope key
+// or an operational table, or that write would need a stored-version contract.
+func TestNoStaleKeyRuleTableIsAnInScopeKey(t *testing.T) {
+	tables := teamkeytables.All()
+	if len(tables) == 0 {
+		t.Fatal("package teamkeytables declares no table: the check did not measure")
+	}
+	for _, table := range tables {
+		if inScopeTables[table.Table] || strings.HasPrefix(table.Table, "operational_") {
+			t.Errorf("the stale-key rule writes %s, an in-scope or operational table, with no stored-version contract", table.Table)
+		}
+	}
 }
 
 // scanInserts finds every Go string literal in the module's production source

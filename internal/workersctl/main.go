@@ -983,6 +983,10 @@ type manualDailyStarter interface {
 		ctx context.Context, organizationID, day, generation string,
 		repositoryIDs []daily.RepositoryID, publisher daily.RunPublisher,
 	) (daily.ManualDailyRunOutcome, error)
+	StartManualDailyRerun(
+		ctx context.Context, organizationID, day, generation string,
+		repositoryIDs []daily.RepositoryID, publisher daily.RunPublisher, rerunTag string,
+	) (daily.ManualDailyRunOutcome, error)
 }
 
 // startDailyDays starts one manual daily run per day of [fromDay, toDay]. The
@@ -996,7 +1000,15 @@ func startDailyDays(
 	for cursor := fromDay; !cursor.After(toDay); cursor = cursor.AddDate(0, 0, 1) {
 		dayString := cursor.Format("2006-01-02")
 		generation := daily.ManualDailyRerunGeneration(org, dayString, repositoryIDs, rerunTag)
-		outcome, err := starter.StartManualDailyRun(ctx, org, dayString, generation, repositoryIDs, publisher)
+		var (
+			outcome daily.ManualDailyRunOutcome
+			err     error
+		)
+		if rerunTagSet {
+			outcome, err = starter.StartManualDailyRerun(ctx, org, dayString, generation, repositoryIDs, publisher, rerunTag)
+		} else {
+			outcome, err = starter.StartManualDailyRun(ctx, org, dayString, generation, repositoryIDs, publisher)
+		}
 		if rerunTagSet {
 			logRerunOutcome(ctx, rerunTag, dayString, outcome, err)
 		}
@@ -1026,10 +1038,14 @@ func dailyStartResult(tag string, tagSet bool, results []daily.ManualDailyRunOut
 func taggedDailyStartResult(tag string, results []daily.ManualDailyRunOutcome, deferredDiscovery bool) map[string]any {
 	days := make([]map[string]any, 0, len(results))
 	for _, outcome := range results {
-		days = append(days, map[string]any{
+		day := map[string]any{
 			"Day": outcome.Day, "RunID": outcome.RunID, "Generation": outcome.Generation,
 			"started": !outcome.AlreadyStarted,
-		})
+		}
+		if outcome.CoveredDayOverriddenBy != "" {
+			day["covered_day_overridden_by"] = outcome.CoveredDayOverriddenBy
+		}
+		days = append(days, day)
 	}
 	return map[string]any{"days": days, "rerun_tag": tag, "deferred_discovery": deferredDiscovery}
 }
@@ -1050,6 +1066,11 @@ func logRerunOutcome(ctx context.Context, tag, day string, outcome daily.ManualD
 	case err != nil:
 		slog.Default().LogAttrs(ctx, slog.LevelWarn, "dho workers: metrics daily-start rerun refused",
 			append(attrs, slog.String("reason", "start_failed"), slog.Any("error", err))...)
+	case outcome.CoveredDayOverriddenBy != "":
+		// The tag lifted the coverage check: say which run covered the day.
+		slog.Default().LogAttrs(ctx, slog.LevelWarn, "dho workers: metrics daily-start rerun admitted on a covered day",
+			append(attrs, slog.String("run_id", outcome.RunID), slog.String("overrides_run_id", outcome.CoveredDayOverriddenBy),
+				slog.Bool("already_started", outcome.AlreadyStarted))...)
 	case outcome.AlreadyStarted:
 		slog.Default().LogAttrs(ctx, slog.LevelInfo, "dho workers: metrics daily-start rerun already started, nothing new",
 			append(attrs, slog.String("run_id", outcome.RunID))...)

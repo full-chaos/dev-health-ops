@@ -10,9 +10,14 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph/model"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graphqldate"
+	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse/liverow"
 )
 
-const coverageStatement = `SELECT
+// The HAVING leaves out a (team, repository, day) whose newest row is a
+// retraction row (package liverow). Served as a row it would read as "no AI
+// artifact, so fully covered" for a team id that is retired, and it would
+// make a window with no measurement look as if it held data.
+var coverageStatement = `SELECT
     team_id,
     toString(repo_id) AS repo_id_str,
     day,
@@ -28,6 +33,7 @@ WHERE org_id = {org_id:String}
   AND ({team_id:String} = '' OR team_id = {team_id:String})
   AND ({repo_id:String} = '' OR toString(repo_id) = {repo_id:String})
 GROUP BY org_id, team_id, repo_id, day
+HAVING ` + liverow.NewestPredicate("ai_governance_coverage_daily", "coverage") + `
 ORDER BY day, team_id, repo_id`
 
 const violationsStatement = `SELECT

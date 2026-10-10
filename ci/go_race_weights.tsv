@@ -287,6 +287,7 @@ internal/schedulerservice	12
 internal/servicecredcli	1
 internal/storage/clickhouse	1
 internal/storage/clickhouse/latestrow	1
+internal/storage/clickhouse/liverow	11
 internal/storage/postgres	29
 internal/storage/postgres/authschema	1
 internal/storage/river	1
@@ -309,9 +310,11 @@ internal/synclimits	1
 internal/syncreconciler	2
 internal/syncroute	1
 internal/syncrunrollup	5
+internal/teamactive	1
 internal/teamattribution	1
 internal/teamcreated	21
 internal/teamid	1
+internal/teamkeytables	1
 internal/teamownership	1
 internal/teamresolve	1
 internal/testsupport/chlogin	1
@@ -343,6 +346,7 @@ internal/testsupport/recordedfiles/manifest	1
 internal/testsupport/recordedpaths	1
 internal/testsupport/redirectprobe	1
 internal/testsupport/registryschema	1
+internal/testsupport/retractionseed	1
 internal/testsupport/rotguard	1
 internal/testsupport/routingauditschema	1
 internal/testsupport/sessionscenario	1

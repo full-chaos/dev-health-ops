@@ -256,6 +256,7 @@ type fakeRunStore struct {
 	claim, complete, notificationClaim                       bool
 	completed, notificationsCompleted, notificationsReleased int
 	claimError                                               error
+	failCodes                                                []string
 }
 
 func (store *fakeRunStore) Claim(context.Context, string, string) (*RunClaim, error) {
@@ -274,7 +275,10 @@ func (store *fakeRunStore) Complete(context.Context, string, RunClaim, Artifact)
 	store.completed++
 	return store.complete, nil
 }
-func (store *fakeRunStore) Fail(context.Context, string, RunClaim, string) error { return nil }
+func (store *fakeRunStore) Fail(_ context.Context, _ string, _ RunClaim, code string) error {
+	store.failCodes = append(store.failCodes, code)
+	return nil
+}
 func (store *fakeRunStore) ClaimNotification(context.Context, string) (*NotificationClaim, error) {
 	if !store.notificationClaim {
 		return nil, nil

@@ -157,7 +157,7 @@ LEFT JOIN (
 ORDER BY count DESC, t.name ASC, t.id ASC
 LIMIT {limit:UInt32}
 %s
-`, investmentMetricsDailyDedupSource, settingsMaxExecutionTime(timeoutSeconds))
+`, investmentMetricsDailyEveryNewestRow, settingsMaxExecutionTime(timeoutSeconds))
 		return compiledQuery{sql: sql, bindings: []clickhouse.Binding{limitBinding, orgBinding}}, nil
 	}
 

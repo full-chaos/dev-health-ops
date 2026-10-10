@@ -601,8 +601,8 @@ func responseModelOracleRoutes() map[string]responseModelOracleRoute {
 	sankeyRoute := plain((*sankey.Response)(nil))
 	return map[string]responseModelOracleRoute{
 		"GET /api/v1/meta":                                plain(meta.Response{}),
-		"GET /api/v1/home":                                plain(homeRESTResponse{}),
-		"POST /api/v1/home":                               plain(homeRESTResponse{}),
+		"GET /api/v1/home":                                plain(homePythonResponse{}),
+		"POST /api/v1/home":                               plain(homePythonResponse{}),
 		"GET /api/v1/explain":                             plain((*explainPythonResponse)(nil)),
 		"POST /api/v1/explain":                            plain((*explainPythonResponse)(nil)),
 		"GET /api/v1/heatmap":                             plain((*heatmap.Response)(nil)),
@@ -617,7 +617,7 @@ func responseModelOracleRoutes() map[string]responseModelOracleRoute {
 		"GET /api/v1/drilldown/issues":                    plain((*issuesPythonResponse)(nil)),
 		"POST /api/v1/drilldown/issues":                   plain((*issuesPythonResponse)(nil)),
 		"GET /api/v1/people":                              plain([]people.SearchResult(nil)),
-		"GET /api/v1/people/{person_id}/summary":          plain(people.SummaryResponse{}),
+		"GET /api/v1/people/{person_id}/summary":          plain(peopleSummaryPythonResponse{}),
 		"GET /api/v1/people/{person_id}/metric":           plain(people.MetricResponse{}),
 		"GET /api/v1/people/{person_id}/drilldown/prs":    plain((*personPRsPythonResponse)(nil)),
 		"GET /api/v1/people/{person_id}/drilldown/issues": plain((*personIssuesPythonResponse)(nil)),

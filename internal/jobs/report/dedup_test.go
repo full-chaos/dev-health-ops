@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/changefailure"
+	"github.com/full-chaos/dev-health-ops/internal/teamkeytables"
 )
 
 // TestBuildChartQueryDedupsCicdMetricsDaily is the CHAOS-4246 regression
@@ -91,16 +92,18 @@ func TestDedupFromSourceEveryAppendOnlyTableAndEveryReplacingTable(t *testing.T)
 		table string
 		want  string
 	}{
-		{"work_item_metrics_daily", "work_item_metrics_daily FINAL"},
-		{"work_item_user_metrics_daily", "work_item_user_metrics_daily FINAL"},
+		// The tables below with a live-row rule: the newest row of each key
+		// is read first (LIMIT 1 BY) and the retraction rows are dropped
+		// after, by the row test of the table registry.
+		{"work_item_metrics_daily", "(SELECT * FROM (SELECT * FROM work_item_metrics_daily ORDER BY computed_at DESC LIMIT 1 BY org_id, provider, day, work_scope_id, team_id) AS work_item_metrics_daily WHERE " + teamkeytables.WorkItemMetricsDaily.LiveRow("work_item_metrics_daily.") + ") AS work_item_metrics_daily"},
 		{"cicd_metrics_daily", "(SELECT * FROM cicd_metrics_daily ORDER BY computed_at DESC LIMIT 1 BY org_id, repo_id, day) AS cicd_metrics_daily"},
 		{"deploy_metrics_daily", "(SELECT * FROM deploy_metrics_daily ORDER BY computed_at DESC LIMIT 1 BY org_id, repo_id, day) AS deploy_metrics_daily"},
 		{"incident_metrics_daily", "(SELECT * FROM incident_metrics_daily ORDER BY computed_at DESC LIMIT 1 BY org_id, repo_id, day) AS incident_metrics_daily"},
-		{"testops_release_confidence", "(SELECT * FROM testops_release_confidence ORDER BY computed_at DESC LIMIT 1 BY org_id, repo_id, day) AS testops_release_confidence"},
-		{"testops_pipeline_stability", "(SELECT * FROM testops_pipeline_stability ORDER BY computed_at DESC LIMIT 1 BY org_id, repo_id, day) AS testops_pipeline_stability"},
-		{"testops_quality_drag", "(SELECT * FROM testops_quality_drag ORDER BY computed_at DESC LIMIT 1 BY org_id, repo_id, day) AS testops_quality_drag"},
 		{"repo_metrics_daily", "(SELECT * FROM repo_metrics_daily ORDER BY computed_at DESC LIMIT 1 BY org_id, repo_id, day) AS repo_metrics_daily"},
-		{"team_metrics_daily", "(SELECT * FROM team_metrics_daily ORDER BY computed_at DESC LIMIT 1 BY org_id, team_id, repo_id, day) AS team_metrics_daily"},
+		{"team_metrics_daily", "(SELECT * FROM (SELECT * FROM team_metrics_daily ORDER BY computed_at DESC LIMIT 1 BY org_id, team_id, repo_id, day) AS team_metrics_daily WHERE " + teamkeytables.TeamMetricsDaily.LiveRow("team_metrics_daily.") + ") AS team_metrics_daily"},
+		// The two plain MergeTree tables with the rule in their own writers.
+		{"investment_metrics_daily", "(SELECT * FROM (SELECT * FROM investment_metrics_daily ORDER BY computed_at DESC LIMIT 1 BY org_id, repo_id, day, team_id, investment_area, project_stream) AS investment_metrics_daily WHERE (investment_metrics_daily.delivery_units != 0 OR investment_metrics_daily.work_items_completed != 0 OR investment_metrics_daily.prs_merged != 0 OR investment_metrics_daily.churn_loc != 0)) AS investment_metrics_daily"},
+		{"issue_type_metrics_daily", "(SELECT * FROM (SELECT * FROM issue_type_metrics_daily ORDER BY computed_at DESC LIMIT 1 BY org_id, repo_id, day, provider, team_id, issue_type_norm) AS issue_type_metrics_daily WHERE (issue_type_metrics_daily.created_count != 0 OR issue_type_metrics_daily.completed_count != 0 OR issue_type_metrics_daily.active_count != 0)) AS issue_type_metrics_daily"},
 		{"user_metrics_daily", "(SELECT * FROM user_metrics_daily ORDER BY computed_at DESC LIMIT 1 BY org_id, repo_id, author_email, day) AS user_metrics_daily"},
 		{"testops_pipeline_metrics_daily", "(SELECT * FROM testops_pipeline_metrics_daily ORDER BY computed_at DESC LIMIT 1 BY org_id, repo_id, day) AS testops_pipeline_metrics_daily"},
 		{"testops_test_metrics_daily", "(SELECT * FROM testops_test_metrics_daily ORDER BY computed_at DESC LIMIT 1 BY org_id, repo_id, day) AS testops_test_metrics_daily"},
@@ -186,7 +189,7 @@ func TestBuildChartQueryAveragesLeadTimeOverRowsWithACompletedItem(t *testing.T)
 	if query := build("lead_p50_hours"); !strings.Contains(query, "avg(if(completed_count > 0, lead_p50_hours, NULL)) AS y") {
 		t.Fatalf("lead_p50_hours is not averaged over the rows with a completed item:\n%s", query)
 	}
-	if query := build("completed_count"); !strings.Contains(query, "sum(completed_count) AS y") {
+	if query := build("completed_count"); !strings.Contains(query, "toFloat64(sum(completed_count)) AS y") {
 		t.Fatalf("completed_count is not a plain sum:\n%s", query)
 	}
 	if got := averageExpression("cicd_metrics_daily", "success_rate"); got != "avg(success_rate)" {

@@ -15,6 +15,7 @@ import (
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/changefailure"
+	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse/liverow"
 )
 
 func formatDay(t time.Time) string { return t.Format("2006-01-02") }
@@ -51,9 +52,22 @@ func metricFromClause(table, column, scopeFilter, startParam, endParam string) s
             WHERE day >= {%s:Date} AND day < {%s:Date}
             %s
               AND org_id = {org_id:String}
-            GROUP BY %s
+            GROUP BY %s%s
         )`, strings.Join(naturalKey, ",\n                "), strings.Join(valueProjections, ",\n                "),
-		table, startParam, endParam, scopeFilter, strings.Join(naturalKey, ", "))
+		table, startParam, endParam, scopeFilter, strings.Join(naturalKey, ", "), liveRowHaving(table))
+}
+
+// liveRowHaving keeps a key of a team-keyed daily table only when its newest
+// row is a measurement (see package liverow). A retraction row is the newest
+// row of a key the compute no longer produces: it is not a sample of an
+// average, not a row of the has-data count and not a driver to name. Without
+// this, a bare argMax over a Nullable column also skips the NULL of the
+// retraction row and serves the older value it replaced.
+func liveRowHaving(table string) string {
+	if !liverow.Registered(table) {
+		return ""
+	}
+	return "\n            HAVING " + liverow.NewestPredicate(table, "")
 }
 
 // metricValueExpression ports _metric_value_expression (api/queries/
@@ -252,11 +266,11 @@ func fetchBlockedHours(ctx context.Context, client QueryClient, startDay, endDay
               AND status = 'blocked'
             %s
               AND org_id = {org_id:String}
-            GROUP BY day, provider, work_scope_id, team_id, status
+            GROUP BY day, provider, work_scope_id, team_id, status%s
         )
         GROUP BY day
         ORDER BY day
-    `, scopeFilter)
+    `, scopeFilter, liveRowHaving("work_item_state_durations_daily"))
 	bindings := append([]dhclickhouse.Binding{
 		{Name: "start_day", Value: formatDay(startDay)},
 		{Name: "end_day", Value: formatDay(endDay)},

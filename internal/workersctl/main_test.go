@@ -1997,6 +1997,7 @@ func TestLogRerunOutcomeIsLoudForStartedReplayedAndRefused(t *testing.T) {
 	}{
 		{daily.ManualDailyRunOutcome{RunID: "r1"}, nil, []string{"rerun started", "rerun_tag=fix-1", "day=2026-08-01", "run_id=r1"}},
 		{daily.ManualDailyRunOutcome{RunID: "r1", AlreadyStarted: true}, nil, []string{"rerun already started, nothing new", "run_id=r1"}},
+		{daily.ManualDailyRunOutcome{RunID: "r2", CoveredDayOverriddenBy: "r0"}, nil, []string{"level=WARN", "rerun admitted on a covered day", "run_id=r2", "overrides_run_id=r0", "rerun_tag=fix-1"}},
 		{daily.ManualDailyRunOutcome{}, daily.ErrDayAlreadyCovered, []string{"rerun refused", "reason=already_covered"}},
 		{daily.ManualDailyRunOutcome{}, daily.ErrUnavailable, []string{"rerun refused", "reason=start_failed"}},
 	} {
@@ -2018,6 +2019,7 @@ type recordingDailyStarter struct {
 	generations []string
 	failOn      string
 	err         error
+	rerunTags   []string
 }
 
 func (starter *recordingDailyStarter) StartManualDailyRun(
@@ -2029,6 +2031,13 @@ func (starter *recordingDailyStarter) StartManualDailyRun(
 	starter.days = append(starter.days, day)
 	starter.generations = append(starter.generations, generation)
 	return daily.ManualDailyRunOutcome{Day: day, Generation: generation}, nil
+}
+
+func (starter *recordingDailyStarter) StartManualDailyRerun(
+	ctx context.Context, org, day, generation string, repos []daily.RepositoryID, publisher daily.RunPublisher, tag string,
+) (daily.ManualDailyRunOutcome, error) {
+	starter.rerunTags = append(starter.rerunTags, tag)
+	return starter.StartManualDailyRun(ctx, org, day, generation, repos, publisher)
 }
 
 // The tag given on the command line is part of the generation of every day of
@@ -2049,6 +2058,9 @@ func TestStartDailyDaysPutsTheRerunTagIntoEveryGeneration(t *testing.T) {
 	}
 	if len(results) != 3 || !reflect.DeepEqual(tagged.days, []string{"2026-08-01", "2026-08-02", "2026-08-03"}) {
 		t.Fatalf("days = %v, results = %d", tagged.days, len(results))
+	}
+	if !reflect.DeepEqual(tagged.rerunTags, []string{"fix-1", "fix-1", "fix-1"}) || len(plain.rerunTags) != 0 {
+		t.Fatalf("a tagged window must start its days through the rerun method with the tag (got %v), a plain one through the plain method (got %v)", tagged.rerunTags, plain.rerunTags)
 	}
 	for i, day := range tagged.days {
 		if want := daily.ManualDailyRerunGeneration(org, day, repos, "fix-1"); tagged.generations[i] != want {

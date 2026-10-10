@@ -368,7 +368,7 @@ func buildDailyWorker(
 				}
 				registered = append(registered, adapter.Spec())
 			case jobcontract.KindDailyMetricsFinalize:
-				handler, handlerErr := newDrainingDailyFinalizeHandler(store, touchedDrain)
+				handler, handlerErr := newDrainingDailyFinalizeHandler(store, touchedDrain, clickhouseConnection)
 				if handlerErr != nil {
 					_ = clickhouseConnection.Close()
 					return workerFamily{}, errWorkerDependencyUnavailable
@@ -1744,14 +1744,27 @@ func newDrainingDailyDispatcher(
 // newDrainingDailyFinalizeHandler builds the finalize handler of the daily
 // family with the drain set on it: the end of a daily run is the continuation
 // trigger of the drain. A nil drain is an error.
-func newDrainingDailyFinalizeHandler(store daily.Store, drain daily.TouchedDaysDrainer) (*daily.FinalizeHandler, error) {
+//
+// It also carries the run-level retraction of stale team keys
+// (daily.RunStaleKeyRetractor) on the ClickHouse connection of the metrics
+// families. A connection the retractor refuses is an error too: a finalize
+// with no retractor would leave the keys that a run's partitions no longer
+// produce in place, and nothing else supersedes them.
+func newDrainingDailyFinalizeHandler(
+	store daily.Store, drain daily.TouchedDaysDrainer, clickhouseConnection driver.Conn,
+) (*daily.FinalizeHandler, error) {
 	if drain == nil {
 		return nil, errWorkerDependencyUnavailable
+	}
+	retractor, err := daily.NewRunStaleKeyRetractor(clickhouseConnection)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", errWorkerDependencyUnavailable, err)
 	}
 	handler, err := daily.NewFinalizeHandler(store)
 	if err != nil {
 		return nil, err
 	}
 	handler.SetTouchedDaysDrainer(drain)
+	handler.SetStaleKeyRetractor(retractor)
 	return handler, nil
 }

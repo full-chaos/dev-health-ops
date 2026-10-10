@@ -5,131 +5,17 @@ import (
 	"strings"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/changefailure"
+	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse/liverow"
 )
 
-// CHAOS-4246: dedup sources for re-run-safe daily rollup tables, mirroring
-// src/dev_health_ops/clickhouse_dedup.py (the Python source of truth this Go
-// package must stay consistent with -- update both together).
-//
-// The weekly-report engine (this package) reads every daily metric table
-// listed in metric_registry.json raw, aggregating with a bare avg()/sum()
-// (buildChartQuery). Before CHAOS-4246, a re-drive of one of these
-// append-only MergeTree tables was rare enough in practice to go unnoticed;
-// CHAOS-4246 made it a designed, expected occurrence (metrics.daily_partition
-// now legitimately recomputes a day after later-arriving cicd/deploy/incident
-// sync data), so a naive aggregate over these tables now double-counts by
-// construction, not by accident. dedupFromSource closes that for every table
-// this package reads, not just the three CHAOS-4246 widened.
-
-// rerunDedupedDailyTables are ReplacingMergeTree(computed_at) -- FINAL
-// collapses a repeated compute generation.
-var rerunDedupedDailyTables = map[string]bool{
-	"work_item_metrics_daily":      true,
-	"work_item_user_metrics_daily": true,
-}
-
-// appendOnlyDailyKeys are daily tables read through the latest-computed_at
-// form. Most are ReplacingMergeTree(computed_at) sorted by these keys, but a
-// merge is eventual, so the latest row per key is still selected explicitly;
-// that returns the same rows before and after a merge. Keys mirror
-// clickhouse_dedup._APPEND_ONLY_DAILY_KEYS exactly.
-var appendOnlyDailyKeys = map[string][]string{
-	"repo_metrics_daily": {"org_id", "repo_id", "day"},
-	"user_metrics_daily": {"org_id", "repo_id", "author_email", "day"},
-	// CHAOS-4329: repo_id added -- mirrors clickhouse_dedup.py's identical
-	// change. Legacy rows all share repo_id='' (migration 080) so they
-	// still collapse to one row per (team_id, day); new per-repo rows are
-	// kept apart. This package's own bare avg()/sum() aggregate
-	// (buildChartQuery) over this dedup source now sums additive counts
-	// correctly across repos; an avg()-based series here is a coarser
-	// average-of-per-repo-values than the recomputed-from-summed-counts
-	// ratio the Python readers use, tracked as a known follow-up rather
-	// than blocking this fix (see this PR's RISK-NOTES).
-	"team_metrics_daily":             {"org_id", "team_id", "repo_id", "day"},
-	"testops_pipeline_metrics_daily": {"org_id", "repo_id", "day"},
-	"testops_test_metrics_daily":     {"org_id", "repo_id", "day"},
-	"testops_coverage_metrics_daily": {"org_id", "repo_id", "day"},
-	"testops_quality_drag":           {"org_id", "repo_id", "day"},
-	"cicd_metrics_daily":             {"org_id", "repo_id", "day"},
-	"deploy_metrics_daily":           {"org_id", "repo_id", "day"},
-	"incident_metrics_daily":         {"org_id", "repo_id", "day"},
-	"testops_release_confidence":     {"org_id", "repo_id", "day"},
-	"testops_pipeline_stability":     {"org_id", "repo_id", "day"},
-	// CHAOS-4140: dora_metrics_daily was missing from this map entirely, so
-	// dedupFromSource fell through to the bare table name for the "value"
-	// chart metric (metric_registry.json's dora entry) -- the exact
-	// unguarded shape TestBuildChartQueryDedupsCicdMetricsDaily exists to
-	// catch for the other tables. A DORA partition retry writes a fresh
-	// computed_at generation for every (org_id, repo_id, day, metric_name)
-	// it recomputes without deleting the prior generation (job_dora.py /
-	// dora_native.go, by design -- see CHAOS-4130's
-	// preserve-Python's-disposition ruling), so this package's bare
-	// avg()/sum() aggregate summed every generation together. Python's
-	// mirror (clickhouse_dedup._APPEND_ONLY_DAILY_KEYS) has registered this
-	// table since CHAOS-4242; this Go map, created later by CHAOS-4246,
-	// never picked up that entry. metric_name is part of the key (not just
-	// org_id/repo_id/day) because compute_dora.py's contract is one row per
-	// (repo, metric_name, day) -- omitting it would collapse the 4 distinct
-	// DORA metrics for one repo/day into a single arbitrary row.
-	"dora_metrics_daily": {"org_id", "repo_id", "day", "metric_name"},
-	// CHAOS-4459 (codex review, rounds 2-3): registered in
-	// clickhouse_dedup.py's _APPEND_ONLY_DAILY_KEYS but missing here --
-	// this package's own bare avg()/sum() aggregate over
-	// metric_registry.json's file_metrics_daily/file_hotspot_daily entries
-	// was reading them raw, exactly the CHAOS-4246 gap this file exists to
-	// close. Natural keys mirror the Python registry exactly.
-	"file_metrics_daily": {"org_id", "repo_id", "day", "path"},
-	"file_hotspot_daily": {"org_id", "repo_id", "day", "file_path"},
-	// CHAOS-4459 (codex review round 4, key CORRECTED in round 5): review_edges_daily
-	// is a plain MergeTree source_table for metric_registry.json's
-	// review-load charts (sum(reviews_count)), and this recompute verb's
-	// own doc comment (partition_recompute.go's
-	// SupportedPartitionRecomputeFamilies) already admits every family in a
-	// partition -- not just repo_user_commit -- gets re-executed on a
-	// recompute, since there is no per-family publish scoping.
-	//
-	// CORRECTION (codex review round 5, P1): the first version of this key
-	// omitted org_id, wrongly claiming the table has no such column --
-	// migration 024 (ADD COLUMN IF NOT EXISTS org_id ... DEFAULT 'default')
-	// added it to review_edges_daily (and commit_metrics below) after
-	// migration 004 originally created it. Two orgs that sync the same
-	// repo slug get the same deterministic repo_id; an org_id-less key
-	// would let LIMIT 1 BY pick ONE org's row before any org_id filter
-	// downstream ever runs, silently discarding the other org's review
-	// data for that repo/day. Natural key now matches migration 027's
-	// canonical sorting key exactly: (org_id, repo_id, reviewer, author, day).
-	"review_edges_daily": {"org_id", "repo_id", "reviewer", "author", "day"},
-	// CHAOS-4459 (self-audit against families.json's full write-table list,
-	// requested by team-lead after codex round 4; key CORRECTED in round 5):
-	// commit_metrics -- THIS TICKET'S OWN target table -- is a plain
-	// MergeTree source_table for metric_registry.json's commit charts
-	// (Commit Hash/Files Changed/Size Bucket/Total LOC) and had no dedup
-	// key registered, same gap class as the tables above. A repeat
-	// partition-recompute of the same day (this PR's own integration test
-	// exercises exactly that) re-inserts the SAME
-	// (org_id, repo_id, day, author_email, commit_hash) rows under a fresh
-	// computed_at, doubling these charts' sums.
-	//
-	// CORRECTION (codex review round 5, P1): same org_id omission as
-	// review_edges_daily above, same migration-024 root cause -- fixed the
-	// same way. Natural key now matches migration 027's canonical sorting
-	// key exactly: (org_id, repo_id, day, author_email, commit_hash).
-	"commit_metrics": {"org_id", "repo_id", "day", "author_email", "commit_hash"},
-	// issue_type_metrics_daily and investment_metrics_daily are plain
-	// MergeTree with two writers of one key: the sync deriver and the daily
-	// families work_item_issue_type / work_item_investment
-	// (internal/jobs/metrics/daily), which append a row per key at every
-	// run. metric_registry.json charts both tables (created_count,
-	// completed_count, active_count, lead_p50_hours; churn_loc), so a raw
-	// read sums every version of a key. The keys are the row keys the two
-	// families themselves read by.
-	"issue_type_metrics_daily": {"org_id", "repo_id", "day", "provider", "team_id", "issue_type_norm"},
-	"investment_metrics_daily": {"org_id", "repo_id", "day", "team_id", "investment_area", "project_stream"},
-	// The counts behind change failure rate (chartRules): a recompute of a day
-	// writes a newer row of the key, and a retraction is a newer row of zeros,
-	// so only the newest row of a key is a count.
-	changefailure.Table: {"org_id", "repo_id", "day"},
-}
+// CHAOS-4246: the weekly-report engine charts daily metric rollups that are
+// append-only in practice: a re-run of a day adds a new version of a key
+// (computed_at later) and merges only eventually, so a bare sum() or avg()
+// counts every version. dedupFromSource reads the newest version of each key
+// for EVERY table the registry charts. Which key and which version column each
+// table has is declared once, with its date column, in tableReads (tablereads.go).
+// This Go declaration does not depend on the Python mirror
+// (src/dev_health_ops/clickhouse_dedup.py), which is not consulted here.
 
 // sampleCountColumns names, per source table and metric, the column of the
 // same row that counts the samples the metric was computed from. A row whose
@@ -147,7 +33,7 @@ var sampleCountColumns = map[string]map[string]string{
 // chartRule is a chart metric that is not a stored column: its value is a
 // rule over the stored counts of another table.
 type chartRule struct {
-	// table holds the counts; it must be a key of appendOnlyDailyKeys.
+	// table holds the counts; it must be declared in tableReads.
 	table string
 	// expression aggregates the counts of a chart bucket into the value. NULL
 	// means the bucket has no value, and executeChart draws no point.
@@ -192,20 +78,30 @@ func averageExpression(table, metric string) string {
 	return fmt.Sprintf("avg(%s)", metric)
 }
 
-// dedupFromSource returns the FROM source for table: table + " FINAL" for a
-// ReplacingMergeTree rollup, a latest-generation subquery for a registered
-// append-only daily table, or the bare table name otherwise (a table this
-// package reads that carries no known re-drive risk, e.g. a single-write
-// snapshot table).
+// dedupFromSource returns the FROM source for a registry table: its newest
+// version of each declared key. A table with no declaration is not readable
+// (tableReads, validateChartMetrics refuses it before any query), so there is
+// no raw fallback.
+//
+// For a table with a live-row rule (package liverow) the source also leaves
+// out the retraction rows: the newest row of a key the compute no longer
+// produces (a retired team id) holds no measure and is not a measurement.
+// buildChartQuery averages most metrics, so each such row would be one more
+// sample of 0, and a chart grouped by team would show the retired id as a
+// team. The rule is applied to the rows that LIMIT 1 BY kept, never before: a
+// filter that ran first would drop the retraction row and serve the older row
+// it replaced.
 func dedupFromSource(table string) string {
-	if rerunDedupedDailyTables[table] {
-		return table + " FINAL"
+	read, ok := tableReads[table]
+	if !ok {
+		return table
 	}
-	if keys, ok := appendOnlyDailyKeys[table]; ok {
-		return fmt.Sprintf(
-			"(SELECT * FROM %s ORDER BY computed_at DESC LIMIT 1 BY %s) AS %s",
-			table, strings.Join(keys, ", "), table,
-		)
+	newest := fmt.Sprintf(
+		"(SELECT * FROM %s ORDER BY %s DESC LIMIT 1 BY %s) AS %s",
+		table, read.Version, strings.Join(read.Key, ", "), table,
+	)
+	if !liverow.Registered(table) {
+		return newest
 	}
-	return table
+	return fmt.Sprintf("(SELECT * FROM %s WHERE %s) AS %s", newest, liverow.Predicate(table, ""), table)
 }

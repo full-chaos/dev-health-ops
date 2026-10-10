@@ -1454,13 +1454,153 @@ Tests: `TestOfPrefixesEveryProviderOnce`, `TestCheckRefusesABareOrEmptyProviderT
 `TestNativeTeamResolvesThroughTheNativeTeamKey` (the cascade); `TestLinearTeamKeyArmResolvesToThePrefixedTeamID`
 (the ownership derivation).
 
-#### 0.4g Team creation time (`teams.created_at`)
+#### 0.4h Team creation time (`teams.created_at`)
 
 `teams` is a `ReplacingMergeTree(updated_at)`: every write is a new version and the newest wins. A creation time therefore lives only if each writer copies it onto the version it inserts. Migration 113 adds `created_at Nullable(DateTime64(6))` (the precision of `updated_at`, so a new team has `created_at = updated_at` exactly). There is no `DEFAULT`: a default would stamp the new version's time on every update.
 
 - **Carry.** Every Go writer of `teams` reads `internal/teamcreated.Carry` before its INSERT: `min(coalesce(created_at, updated_at))` over every stored version of the team (not `FINAL`, so unmerged older versions count). A team with no stored row gets `created_at = updated_at` of its first write. A failed read aborts the write. The writers are the admin API (`internal/api/teamsidentity`), the GitHub, GitLab, Jira and Linear catalog sinks, `internal/atlassianteams`, the `team.v1` push sink and, as column copies, the team id carry and the Jira project-as-team retire. A census test fails when an `INSERT INTO teams` drops the column.
 - **Legacy rows.** Rows written before migration 113, and rows written by a Python writer, have `created_at = NULL`. No mutation backfills them (versions already merged away cannot be recovered). The carry fills the column from the oldest surviving version at the team's next Go write. Until then readers show `coalesce(created_at, updated_at)`, so for such a team `created_at` can equal `updated_at`; this is a fallback, not a measured creation time.
 - **Reader.** The admin teams API (`GET/POST/PATCH /admin/teams`) renders the stored `created_at` and an unchanged `updated_at`. `identities` still render `created_at = updated_at`.
+
+#### 0.4g A stored day after a team id changes (CHAOS-9026)
+
+A daily table whose sorting key holds a team id keeps one row for each team id. The tables are append only and a
+reader takes the newest row of each KEY. So when a later compute of a stored day gives the day's work to another team
+id, the row under the old id is another key and stays the newest row of that key. A read with no team filter then
+counts the day under both ids. A team id changes for a stored day when a team is set inactive (a carry of a bare id to
+a provider-keyed id, section 0.4f; a retired project-as-team row, section 0.4c; an admin delete) and when an item or a
+repository moves to another team.
+
+Two rules keep a recomputed day right. Each is held by a census, not by a list someone must remember: a new
+team-keyed table with no decision fails `stale_team_keys_census_test.go`, and a new read of the `teams` table in the
+daily job that does not apply `internal/teamactive` fails `team_active_census_test.go`. A resolver that takes a team id
+from another source (an ownership row; a stored row of an earlier day, as `ic_finalize` does, see the limits) is held
+by its own test, not by a census.
+
+**1. No resolver resolves to an inactive team.** A team whose newest `teams` row has `is_active = 0` takes no work
+item (`dropInactiveTeamCandidates`, section 0.2) and, with the same test of the newest row
+(`internal/teamactive`, `NewestRowInactive`), gives no repository, no repository pattern and no member to a daily
+metric family:
+
+- `teamownership.AuthoritativeOwnerByRepo` skips an ownership row of an inactive team. A lower-ranked row of an active
+  team for the same repository then wins; a repository with no active owner goes to the caller's pattern fallback.
+  Callers: testops, `ai_impact`, `team_cognitive_load`, `team_complexity`, `compounding_risk_team`.
+- `LoadWellbeingTeams` (`team_wellbeing`, `ic_finalize`, and the pattern fallback of the three finalize families) and
+  `LoadAIImpactTeams` (`ai_impact`) drop the inactive teams after their read.
+
+The SQL text of these reads is the Python reference's and is not changed: the inactive ids are a second read
+(`teamactive.LoadInactive`) and are applied in Go. With no inactive team the result of every resolver is the
+reference's. A failed read of the inactive ids fails the family; it is never taken as "no inactive team".
+Asserted on real ClickHouse by `TestNoTeamResolverResolvesToAnInactiveTeam`.
+
+**2. A run writes a row of zeros over each key it no longer produces.** The rule reads the live keys of a scope and
+day (a key is live while its newest row holds a measure), takes away the keys the run produces, and writes one row
+over each key that is left: the key, `computed_at`, 0 in every count and value, NULL in every Nullable measure. It
+writes nothing for a day or a team with no data, and a second run writes nothing.
+
+WHERE the rule runs depends on who can write a key:
+
+- **A table whose keys two partitions of one run can write is decided once for the run**, at the finalize, after
+  every partition is done and before the finalize families (`RunStaleKeyRetractor`,
+  `internal/jobs/metrics/daily/stale_team_keys_run.go`; the step is `FinalizeHandler.retractStaleKeys`). A partition
+  computes every work scope that its repositories have an item in, from the items of every repository, with the
+  attributions that are stored when it reads. So two partitions that share a work scope both write the rows of that
+  scope, and the read of one can be older than the attribution write of the other. A partition that decided "the keys
+  I did not produce" from its own read wrote a row of zeros over the row the other partition had just written. The
+  run-level step reads the live keys FIRST, THEN computes the keys of the day from the stored inputs with the same
+  compute the family runs, and supersedes live minus computed. A key that is right holds its inputs before its row is
+  written, so it is in the computed set whatever wrote it and whenever: no clock and no insert order decides which
+  key is superseded. For the three work-item tables the step also STORES the rows it computed: two partitions that
+  share a work scope both write the real rows of the scope, each from the attributions stored at its read, and the
+  rows of the step are computed once, after every partition wrote its attributions, so they are the rows of the day.
+  Every row the step writes is strictly newer than every stored row of the day in that table: its version is the
+  clock of the host, or one unit of the table's `computed_at` column after the newest stored row when the clock is not
+  later (a partition can run on a host whose clock is ahead, and several tables keep `computed_at` to the second).
+  The step reads the work scopes of the run's repositories in chunks of the repository list (`internal/jobs/metrics/
+  querybound`): the list of a run has no bound, and the driver writes a list into the statement text.
+- **A table whose key scope is the partition's own repository keeps the rule in its family**: a repository is in one
+  partition of a run.
+- **A table that a finalize family writes** is written once for a run already; the family applies the rule after its
+  write.
+
+A row of zeros is strictly newer than the row it supersedes, never of the same `computed_at`: with an equal
+`computed_at` only a FINAL read follows the order of the inserts, and a reader that takes the newest row by `argMax`
+or by `LIMIT 1 BY` may take either row. A family's row of zeros gets the family's `computed_at`, or one unit of the
+table's `computed_at` column (a second, a millisecond or a microsecond; `staleKeyVersionSteps`, checked against the
+schema by a test) after the newest stored row of its key when that is not earlier. The step is the smallest one that
+is strictly newer: a larger step would put the row of zeros ahead of the clock. One table is different: in `team_metrics_daily` the row of
+zeros carries exactly the `computed_at` of the rows the family wrote for the same repository, because two readers of
+that table keep only the newest generation of a repository and would lose the live rows behind a newer row of zeros.
+
+| Table | Family | Where the rule runs | Scope |
+| --- | --- | --- | --- |
+| `work_item_metrics_daily` | `work_item` | once for the run | the work scopes of the run's repositories |
+| `work_item_state_durations_daily` | `work_item_state` | once for the run | the work scopes of the run's repositories |
+| `estimate_coverage_metrics_daily` | `work_item_estimate` | once for the run | the work scopes of the run's repositories |
+| `ai_governance_coverage_daily` | `ai_governance` (every partition computes the organization's day) | once for the run | the organization's day |
+| `team_metrics_daily` | `team_wellbeing` | in the family, for its partition | the repositories of the partition |
+| `ai_impact_metrics_daily` | `ai_impact` | in the family, for its partition | the repositories of the partition |
+| `team_cognitive_load_daily` | `team_cognitive_load` | in the finalize family | the organization's day |
+| `team_complexity_daily` | `team_complexity` | in the finalize family | the organization's day |
+| `ic_landscape_rolling_30d` | `ic_finalize` | in the finalize family | the organization's day |
+| `compounding_risk_daily` (rows of scope `team`) | `compounding_risk_team` | in the finalize family | the organization's day |
+
+`issue_type_metrics_daily` and `investment_metrics_daily` hold the same rule in their own writers
+(`withIssueTypeMetricsZeroRows`, `withInvestmentMetricsZeroRows`). They are plain `MergeTree` tables: a row of zeros
+replaces nothing there, so the rule holds only for a reader that takes the newest row of a key by `computed_at`.
+
+The tables are declared once, in `internal/teamkeytables`. The writer (`supersedeStaleTeamKeys`,
+`internal/jobs/metrics/daily/stale_team_keys.go`) builds its read and its row from the declaration, and so does the
+predicate for readers: `Table.LiveRow` (one newest row) and `Table.LiveHaving` (a `GROUP BY` over the key). A reader
+that sums is right with a row of zeros. A reader that takes an average over rows of a NOT NULL column, counts rows or
+lists the team ids of a table must leave the superseded keys out with that predicate, or it takes a row of zeros as a
+sample of 0.
+
+The census (`stale_team_keys_census_test.go`) reads the schema and the source and fails when a table with a
+`team_id` or a `scope_id` in its sorting key has no decision (the shared rule, its own rule, or a written exemption),
+when a declaration does not agree with the table's columns, when a declared table has no call of the rule, when a
+file that is not a declared writer holds an INSERT of one of the tables, and when a partition family calls the rule
+for a table whose key scope is not the repository (such a table is decided once for the run).
+
+Limits:
+
+- `estimate_coverage_metrics_daily` and the `unknown` bucket of `ai_impact_metrics_daily` hold real rows with every
+  count 0 (a group whose items are all closed; a group with no pull request of unknown origin). Such a row and a row
+  of zeros are equal.
+- A reader with no FINAL and no `argMax` sees the old row and the row of zeros until a merge.
+- `ic_landscape_rolling_30d`: the team of a person's point is the team id stored in the person's `user_metrics_daily`
+  rows of the 30-day window; the active resolver is asked only when that is blank. So for up to 30 days after a team id
+  changed, a person with no row on the day gets the point of the day under the old id, and the key is produced, not
+  stale. A history recompute must go from the oldest day to the newest, or run twice. (Not changed here; the same on
+  the code before this change.)
+- A family writes its real rows at its own clock. A real row of a key that an EARLIER row of zeros superseded (the key
+  comes back) is the newest row of its key only when the family's clock, cut to the unit of the table's `computed_at`
+  column, is later than that row of zeros. The row of zeros is at the later of its family's clock and one unit after
+  the row it superseded. So the real row loses when the key comes back inside one unit of the row of zeros (a second
+  in `ic_landscape_rolling_30d` and `compounding_risk_daily`, a millisecond or a microsecond in the other tables), or
+  on a host whose clock is behind the row of zeros, or after a row from a host whose clock was ahead. The next run of
+  the day settles it. This does not apply to the three work-item tables: the end of a run stores their rows strictly
+  newer than every stored row of the day.
+- Two runs of one day that end at the same time and do NOT read the same inputs (two runs with different repository
+  lists that share a work scope; the "change" is the other run's own attribution write) can leave the rows of the run
+  whose rows are on the later version, and for equal versions the rows of the later insert. Seen in a test of this
+  shape: one key of an inactive team stays counted beside the right keys (an over-count, no key lost). The next run of
+  the day settles it. Two runs of the whole organization read the same inputs and leave the day right.
+- The end of a run computes the three work-item tables once more in one process, over every work scope the run's
+  repositories have an item in, with no row cap: about 1.5 MiB of heap for each 1,000 open or day-completed items of
+  those scopes, for each table in turn.
+- A worker of an older version that computes a stored day again writes under the old id once more. The next run of a
+  current worker for that day supersedes the key again.
+- Between the last partition and the end of a run, a shared work scope can hold the rows of a partition whose read
+  was older than another partition's attribution write. The end of the run replaces them. A run whose finalize does
+  not complete leaves them until its retry or the next run of the day.
+- `work_item_user_metrics_daily` and `work_item_cycle_times` (not team-keyed) are written by the partitions only.
+- Two runs of one day that are in progress at the same time each settle the day from the inputs stored when they end.
+  When the inputs change between the two ends, the rows of the run that ended on the later version stay.
+- `team_metrics_daily`: a row of zeros has the `computed_at` of its batch. When another run wrote the superseded key
+  at that same microsecond or later, the old row stays the newest row of its key until the next run of the day.
+- The run-level step reads the items of every work scope of the run once more and writes their rows once more. Its
+  cost is about one more read and write of the work-item families for each run.
 
 #### 0.4a Provider × entity **consumption** (functional — what `run_team_autoimport` actually pulls)
 

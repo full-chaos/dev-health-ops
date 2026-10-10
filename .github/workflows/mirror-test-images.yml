@@ -66,6 +66,10 @@ on:
       # -- a pull-time failure on whatever PR runs next. Same reason the river
       # compose and the service workflows are listed.
       - docker/Dockerfile
+      # The builder images (CHAOS-9064) are an INPUT too: a bumped digest in
+      # ci/builder_images.tsv must be mirrored before the workflows pull it.
+      - ci/builder_images.tsv
+      - ci/builder_images.sh
       # A service-image change must re-run the mirror, or the new ref is
       # declared before it exists and the required check fails at pull time.
       - .github/workflows/test.yml
@@ -86,6 +90,10 @@ on:
       # -- a pull-time failure on whatever PR runs next. Same reason the river
       # compose and the service workflows are listed.
       - docker/Dockerfile
+      # The builder images (CHAOS-9064) are an INPUT too: a bumped digest in
+      # ci/builder_images.tsv must be mirrored before the workflows pull it.
+      - ci/builder_images.tsv
+      - ci/builder_images.sh
       # A service-image change must re-run the mirror, or the new ref is
       # declared before it exists and the required check fails at pull time.
       - .github/workflows/test.yml
@@ -249,6 +257,13 @@ jobs:
           done
           bash ci/python_base_ref.sh "${OWNER}" \
             | awk '$1 == "upstream" { print $2 }' >> images.raw
+          #   5. The builder images docker/setup-buildx-action and
+          #      docker/setup-qemu-action pull (CHAOS-9064), read from
+          #      ci/builder_images.tsv through its one reader. Both default to an
+          #      anonymous Docker Hub pull that fails once a shared runner IP
+          #      uses up its limit; CI now takes them from this mirror by digest.
+          bash ci/builder_images.sh "${OWNER}" \
+            | awk -F'\t' '$1 == "upstream" { print $3 }' >> images.raw
 
           sort -u images.raw > images.txt
           test -s images.txt || { echo "::error::no images resolved"; exit 1; }
@@ -448,6 +463,13 @@ jobs:
           # floating tag before the build noticed. See ci/python_base_ref.sh.
           bash ci/python_base_ref.sh "${OWNER}" \
             | awk '$1 == "upstream" { print $2 }' >> images.raw
+          #   5. The builder images docker/setup-buildx-action and
+          #      docker/setup-qemu-action pull (CHAOS-9064), read from
+          #      ci/builder_images.tsv through its one reader. Both default to an
+          #      anonymous Docker Hub pull that fails once a shared runner IP
+          #      uses up its limit; CI now takes them from this mirror by digest.
+          bash ci/builder_images.sh "${OWNER}" \
+            | awk -F'\t' '$1 == "upstream" { print $3 }' >> images.raw
 
           sort -u images.raw > images.txt
           test -s images.txt || { echo "::error::no images resolved"; exit 1; }

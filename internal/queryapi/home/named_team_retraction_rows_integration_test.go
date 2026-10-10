@@ -69,3 +69,81 @@ func TestThemeAllocationOfANamedRetiredTeamGivesRetractionRowsNoWeight(t *testin
 		}
 	}
 }
+
+// TestATheMeasuredAreaOfAThemeStaysWhenAnotherAreaOfItIsRetracted holds the
+// order of the rule and the theme step. Two stored investment areas of one
+// repository, team, day and stream map to ONE theme. Both are measured; then
+// a newer retraction row is stored over one of them.
+//
+// The rule is of the key the writer writes (the area), so only the retracted
+// area leaves: the theme stays, with the numbers of the measured area. With
+// the rule applied after the theme step, the newer retraction row was the row
+// of the theme, and the whole theme left the list.
+//
+// The theme step itself is the reference's and is not this test's subject:
+// among the areas of a theme it takes the row with the newest compute time,
+// so with both areas measured the allocation is the newer area's 5, not 8.
+func TestATheMeasuredAreaOfAThemeStaysWhenAnotherAreaOfItIsRetracted(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+	store := retractionseed.Start(ctx, t)
+	client, err := dhclickhouse.NewClickHouseQueryClientWithOptions(dhclickhouse.Options{DSN: store.URI})
+	if err != nil {
+		t.Fatalf("construct query client: %v", err)
+	}
+	defer func() { _ = client.Close() }()
+
+	const (
+		control   = "c0c0c0c0-0000-4000-8000-0000000090a1"
+		retracted = "c0c0c0c0-0000-4000-8000-0000000090a2"
+		recounted = "c0c0c0c0-0000-4000-8000-0000000090a3"
+		repo      = "55555555-5555-4555-8555-555555555555"
+		team      = "jira:ENG"
+	)
+	day := store.Days[1]
+	first, second, third := store.OldComputedAt, store.OldComputedAt.Add(time.Minute), store.NewComputedAt
+	measure := func(org, area string, completed uint32, computedAt time.Time) {
+		t.Helper()
+		if err := store.Conn.Exec(ctx, `INSERT INTO investment_metrics_daily
+(org_id, day, repo_id, team_id, investment_area, project_stream, delivery_units, work_items_completed, prs_merged, churn_loc, computed_at)
+VALUES (?, ?, ?, ?, ?, 'roadmap', ?, ?, 1, 10, ?)`, org, day, repo, team, area, completed, completed, computedAt); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, org := range []string{control, retracted} {
+		measure(org, "feature_delivery.customer", 3, first)
+		measure(org, "feature_delivery.enablement", 5, second)
+	}
+	// The newest row of the organization: a retraction over ONE area.
+	if err := store.Conn.Exec(ctx, `INSERT INTO investment_metrics_daily
+(org_id, day, repo_id, team_id, investment_area, project_stream, computed_at)
+VALUES (?, ?, ?, ?, 'feature_delivery.customer', 'roadmap', ?)`, retracted, day, repo, team, third); err != nil {
+		t.Fatal(err)
+	}
+
+	// A third organization: the first area was computed again LAST (7 items).
+	// The theme step takes the area whose NEWEST row is the newest.
+	measure(recounted, "feature_delivery.customer", 3, first)
+	measure(recounted, "feature_delivery.enablement", 5, second)
+	measure(recounted, "feature_delivery.customer", 7, third)
+
+	read := func(org string) []ReworkThemeAllocation {
+		t.Helper()
+		rows, err := fetchReworkThemeAllocation(ctx, client, day, day.AddDate(0, 0, 1), "", nil, "", nil, org)
+		if err != nil {
+			t.Fatalf("%s: %v", org, err)
+		}
+		return rows
+	}
+	want := []ReworkThemeAllocation{{Theme: "feature_delivery", Label: "Feature Delivery", Allocation: 5, AllocationPct: 100, PRsMerged: 1, ChurnLOC: 10}}
+	if got := read(control); !reflect.DeepEqual(got, want) {
+		t.Fatalf("control (both areas measured) = %+v, want %+v", got, want)
+	}
+	if got := read(retracted); !reflect.DeepEqual(got, want) {
+		t.Errorf("with a retraction over one area = %+v, want the measured area of the theme %+v", got, want)
+	}
+	want[0].Allocation = 7
+	if got := read(recounted); !reflect.DeepEqual(got, want) {
+		t.Errorf("with one area computed again last = %+v, want that area's newest row %+v", got, want)
+	}
+}

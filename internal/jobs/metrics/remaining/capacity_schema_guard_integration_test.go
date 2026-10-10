@@ -281,3 +281,34 @@ func restageWorkItemMetricsDaily(ctx context.Context, t *testing.T, conn driver.
 		}
 	}
 }
+
+// TestRecommendationsRefuseASchemaWithoutAColumnOfTheLiveRowRule runs the
+// startup check of the recommendations job against a real schema with one
+// column dropped. The loader's reads hold the live-row rule of two tables,
+// which tests each measure column; no query text of this package names the
+// two columns dropped here. The check must refuse each schema and name the
+// column, and must accept the migrated schema.
+func TestRecommendationsRefuseASchemaWithoutAColumnOfTheLiveRowRule(t *testing.T) {
+	ctx := context.Background()
+	if err := verifyRecommendationsSchema(ctx, migratedClickHouse(t, ctx, OperationalOrderingRevision)); err != nil {
+		t.Fatalf("the real migrated schema must be accepted: %v", err)
+	}
+	for _, dropped := range []struct{ table, column string }{
+		{"work_item_metrics_daily", "items_started"},
+		{"team_metrics_daily", "weekend_commits_count"},
+	} {
+		t.Run(dropped.table+"."+dropped.column, func(t *testing.T) {
+			fresh := freshMigratedClickHouse(t, ctx, OperationalOrderingRevision)
+			if err := fresh.Exec(ctx, "ALTER TABLE "+dropped.table+" DROP COLUMN "+dropped.column); err != nil {
+				t.Fatalf("stage the stale schema: %v", err)
+			}
+			err := verifyRecommendationsSchema(ctx, fresh)
+			if !errors.Is(err, ErrRecommendationsSchemaIncompatible) {
+				t.Fatalf("a schema without %s.%s must be refused as schema-incompatible, got: %v", dropped.table, dropped.column, err)
+			}
+			if !strings.Contains(err.Error(), dropped.table) || !strings.Contains(err.Error(), dropped.column) {
+				t.Errorf("the refusal must name the table and the column: %v", err)
+			}
+		})
+	}
+}

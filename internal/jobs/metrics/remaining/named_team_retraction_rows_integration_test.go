@@ -129,3 +129,60 @@ func TestJobInputsOfANamedRetiredTeamGiveRetractionRowsNoWeight(t *testing.T) {
 		}
 	}
 }
+
+// TestARetractionOverOneScopeTakesNothingFromAnotherScopeOfTheDayInTheJobs
+// holds the place of the rule against a roll-up in the two jobs: the rule is
+// of the key the writer writes (provider, work scope, team, day), and the
+// readers sum the keys of a day AFTER it. One team has two work scopes on one
+// day. Both are measured; then a newer retraction row is stored over one
+// scope. The day stays, with the numbers of the measured scope.
+func TestARetractionOverOneScopeTakesNothingFromAnotherScopeOfTheDayInTheJobs(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+	store := retractionseed.Start(ctx, t)
+
+	const org, team = "c0c0c0c0-0000-4000-8000-0000000090b2", "jira:TWO"
+	day := store.Days[1]
+	measure := func(scope string, completed, wip uint32, cycle float64) {
+		t.Helper()
+		if err := store.Conn.Exec(ctx, `INSERT INTO work_item_metrics_daily
+(org_id, day, provider, work_scope_id, team_id, team_name, items_started, items_completed, wip_count_end_of_day, cycle_time_p50_hours, computed_at)
+VALUES (?, ?, 'jira', ?, ?, 'Two', 1, ?, ?, ?, ?)`, org, day, scope, team, completed, wip, cycle, store.OldComputedAt); err != nil {
+			t.Fatal(err)
+		}
+	}
+	measure("SCOPE-A", 3, 2, 10)
+	measure("SCOPE-B", 5, 4, 20)
+	if err := store.Conn.Exec(ctx, `INSERT INTO work_item_metrics_daily (org_id, day, provider, work_scope_id, team_id, computed_at)
+VALUES (?, ?, 'jira', 'SCOPE-A', ?, ?)`, org, day, team, store.NewComputedAt); err != nil {
+		t.Fatal(err)
+	}
+
+	loader, err := NewRecommendationsLoader(store.Conn, org)
+	if err != nil {
+		t.Fatal(err)
+	}
+	start, end := store.Days[0], store.Days[len(store.Days)-1].AddDate(0, 0, 1)
+	wip, throughput, err := loader.loadWIPThroughput(ctx, team, start, end)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(wip, []float64{4}) || !reflect.DeepEqual(throughput, []float64{5}) {
+		t.Errorf("WIP %v and throughput %v, want [4] and [5]: the measured scope of the day", wip, throughput)
+	}
+	_, _, cycleTimes, err := loader.loadSustainabilitySignals(ctx, team, start, end)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(cycleTimes, []float64{20}) {
+		t.Errorf("cycle times %v, want [20]: the measured scope of the day", cycleTimes)
+	}
+	teamID := team
+	history, err := (&CapacityExecutor{conn: store.Conn}).loadThroughput(ctx, org, capacityTarget{TeamID: &teamID}, 30, time.Now().UTC())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := (numerical.Throughput{DailyThroughputs: []int{5}, DaysOfHistory: 1}); !reflect.DeepEqual(history, want) {
+		t.Errorf("capacity history %+v, want %+v", history, want)
+	}
+}

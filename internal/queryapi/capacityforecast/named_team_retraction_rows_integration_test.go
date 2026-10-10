@@ -129,3 +129,45 @@ VALUES (?, ?, 'jira', 'ENGPROJ', ?, 'Engineering', ?, ?, ?, ?)`, org, day, retir
 		t.Errorf("history = %v, want %v", history, want)
 	}
 }
+
+// TestARetractionOverOneScopeTakesNothingFromAnotherScopeOfTheDayInTheCapacityHistory holds the place of the rule against a roll-up: the rule is of the
+// key the writer writes (provider, work scope, team, day), and the reader
+// sums the keys of a day AFTER it. One team has two work scopes on one day.
+// Both are measured; then a newer retraction row is stored over one scope.
+// The day stays, with the numbers of the measured scope: a retraction over
+// one key takes nothing from another key of the same day.
+func TestARetractionOverOneScopeTakesNothingFromAnotherScopeOfTheDayInTheCapacityHistory(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+	store := retractionseed.Start(ctx, t)
+	client, err := dhclickhouse.NewClickHouseQueryClientWithOptions(dhclickhouse.Options{DSN: store.URI})
+	if err != nil {
+		t.Fatalf("construct query client: %v", err)
+	}
+	defer func() { _ = client.Close() }()
+
+	const org, team = "c0c0c0c0-0000-4000-8000-0000000090b1", "jira:TWO"
+	day := store.Days[1]
+	measure := func(scope string, completed, wip uint32) {
+		t.Helper()
+		if err := store.Conn.Exec(ctx, `INSERT INTO work_item_metrics_daily
+(org_id, day, provider, work_scope_id, team_id, team_name, items_started, items_completed, wip_count_end_of_day, computed_at)
+VALUES (?, ?, 'jira', ?, ?, 'Two', 1, ?, ?, ?)`, org, day, scope, team, completed, wip, store.OldComputedAt); err != nil {
+			t.Fatal(err)
+		}
+	}
+	measure("SCOPE-A", 3, 2)
+	measure("SCOPE-B", 5, 4)
+	if err := store.Conn.Exec(ctx, `INSERT INTO work_item_metrics_daily (org_id, day, provider, work_scope_id, team_id, computed_at)
+VALUES (?, ?, 'jira', 'SCOPE-A', ?, ?)`, org, day, team, store.NewComputedAt); err != nil {
+		t.Fatal(err)
+	}
+
+	history, err := loadThroughput(ctx, client, org, []string{team}, nil, 30, time.Now().UTC())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []int{5}; !reflect.DeepEqual(history, want) {
+		t.Errorf("history = %v, want %v: the day with the measured scope", history, want)
+	}
+}

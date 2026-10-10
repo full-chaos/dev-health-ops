@@ -16,6 +16,39 @@ import (
 // outside. The attributes are an id, a flag and counts only.
 const RepositoryDiscoveryLogMessage = "daily metrics repository discovery"
 
+// RepositoryRowsNotDiscoveredLogMessage is the WARN line of a discovery that
+// found stored rows under a repository id the run cannot discover. The repos
+// table is the only source of a whole-organization run's repositories, so
+// rows stored under an id with no repos row of the organization (a writer
+// that stored them before or without that row, a repos row that was removed)
+// are computed by no such run. The run computes what it discovered; this line
+// is the only sign of the rest.
+const RepositoryRowsNotDiscoveredLogMessage = "daily metrics repository discovery: stored rows under a repository with no repos row"
+
+// The sources the count of not-discovered repositories reads, in the order of
+// the log fields.
+const (
+	notDiscoveredPullRequests = "git_pull_requests"
+	notDiscoveredCommits      = "git_commits"
+	notDiscoveredWorkItems    = "work_items"
+)
+
+// notDiscoveredRepositoriesSQL counts, for each source table, the repository
+// ids that hold rows of the organization and have no repos row of exactly
+// that organization id: the ids the statement above cannot return. The nil
+// repository id is not one of them (it is added by its own rule).
+const notDiscoveredRepositoriesSQL = `
+SELECT source, toUInt64(count()) AS repository_ids
+FROM (
+  SELECT 'git_pull_requests' AS source, repo_id FROM git_pull_requests WHERE org_id = ? GROUP BY repo_id
+  UNION ALL
+  SELECT 'git_commits' AS source, repo_id FROM git_commits WHERE org_id = ? GROUP BY repo_id
+  UNION ALL
+  SELECT 'work_items' AS source, repo_id FROM work_items WHERE org_id = ? AND repo_id != ? GROUP BY repo_id
+)
+WHERE repo_id NOT IN (SELECT id FROM repos WHERE org_id = ?)
+GROUP BY source`
+
 // repositoryRows is the narrow ClickHouse capability used by the scheduled
 // daily fan-out. Keeping the adapter on this one method makes it impossible for
 // the scheduler producer to gain a remote-read dependency by accident.
@@ -84,7 +117,65 @@ ORDER BY id`, organizationID)
 		"repositories_discovered", repositories,
 		"partitions_discovered", len(identifiers),
 	)
+	discoverer.reportRepositoriesNotDiscovered(ctx, organizationID)
 	return identifiers, nil
+}
+
+// reportRepositoriesNotDiscovered says, in one WARN line, how many repository
+// ids hold stored rows that this discovery cannot reach. It changes nothing
+// the run computes, so it never fails the discovery: a count that could not
+// be read is said in the same line (count_read false), never taken as 0.
+func (discoverer *ClickHouseRepositoryDiscoverer) reportRepositoriesNotDiscovered(ctx context.Context, organizationID string) {
+	counts, err := discoverer.repositoriesNotDiscovered(ctx, organizationID)
+	if err != nil {
+		slog.WarnContext(ctx, RepositoryRowsNotDiscoveredLogMessage,
+			"organization_id", organizationID,
+			"count_read", false,
+		)
+		return
+	}
+	if counts[notDiscoveredPullRequests]+counts[notDiscoveredCommits]+counts[notDiscoveredWorkItems] == 0 {
+		return
+	}
+	slog.WarnContext(ctx, RepositoryRowsNotDiscoveredLogMessage,
+		"organization_id", organizationID,
+		"count_read", true,
+		"repositories_with_pull_requests", counts[notDiscoveredPullRequests],
+		"repositories_with_commits", counts[notDiscoveredCommits],
+		"repositories_with_work_items", counts[notDiscoveredWorkItems],
+	)
+}
+
+func (discoverer *ClickHouseRepositoryDiscoverer) repositoriesNotDiscovered(
+	ctx context.Context, organizationID string,
+) (map[string]uint64, error) {
+	rows, err := discoverer.conn.Query(ctx, notDiscoveredRepositoriesSQL,
+		organizationID, organizationID, organizationID, uuid.Nil, organizationID)
+	if err != nil {
+		return nil, ErrUnavailable
+	}
+	if rows == nil {
+		return nil, ErrUnavailable
+	}
+	defer rows.Close()
+	counts := map[string]uint64{}
+	for rows.Next() {
+		var source string
+		var repositories uint64
+		if err := rows.Scan(&source, &repositories); err != nil {
+			return nil, ErrUnavailable
+		}
+		switch source {
+		case notDiscoveredPullRequests, notDiscoveredCommits, notDiscoveredWorkItems:
+			counts[source] = repositories
+		default:
+			return nil, ErrUnavailable
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, ErrUnavailable
+	}
+	return counts, nil
 }
 
 func (discoverer *ClickHouseRepositoryDiscoverer) hasWorkItemsWithoutRepository(

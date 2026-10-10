@@ -1,0 +1,143 @@
+package daily
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"log/slog"
+	"strings"
+	"testing"
+
+	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
+	"github.com/google/uuid"
+)
+
+// notDiscoveredRowsStub answers the count of repositories not discovered.
+type notDiscoveredRowsStub struct {
+	sources  []string
+	counts   []uint64
+	position int
+	scanErr  error
+	err      error
+}
+
+func (rows *notDiscoveredRowsStub) Next() bool { return rows.position < len(rows.sources) }
+func (rows *notDiscoveredRowsStub) Scan(destinations ...any) error {
+	if rows.scanErr != nil {
+		return rows.scanErr
+	}
+	source, okSource := destinations[0].(*string)
+	count, okCount := destinations[1].(*uint64)
+	if len(destinations) != 2 || !okSource || !okCount {
+		return errors.New("unexpected scan of the count")
+	}
+	*source, *count = rows.sources[rows.position], rows.counts[rows.position]
+	rows.position++
+	return nil
+}
+func (*notDiscoveredRowsStub) ScanStruct(any) error             { return errors.New("unused") }
+func (*notDiscoveredRowsStub) ColumnTypes() []driver.ColumnType { return nil }
+func (*notDiscoveredRowsStub) Totals(...any) error              { return errors.New("unused") }
+func (*notDiscoveredRowsStub) Columns() []string                { return []string{"source", "repository_ids"} }
+func (*notDiscoveredRowsStub) Close() error                     { return nil }
+func (rows *notDiscoveredRowsStub) Err() error                  { return rows.err }
+func (*notDiscoveredRowsStub) HasData() bool                    { return true }
+
+// warnRecords runs one discovery and returns its result with the WARN lines
+// of the count of repositories not discovered.
+func warnRecords(t *testing.T, connection repositoryRows, organizationID string) ([]RepositoryID, error, []map[string]any) {
+	t.Helper()
+	var captured bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&captured, &slog.HandlerOptions{Level: slog.LevelInfo})))
+	defer slog.SetDefault(previous)
+	discoverer, err := NewClickHouseRepositoryDiscoverer(connection)
+	if err != nil {
+		t.Fatal(err)
+	}
+	identifiers, discoverErr := discoverer.RepositoryIDs(context.Background(), organizationID)
+	var records []map[string]any
+	for _, line := range strings.Split(strings.TrimSpace(captured.String()), "\n") {
+		if line == "" {
+			continue
+		}
+		var record map[string]any
+		if err := json.Unmarshal([]byte(line), &record); err != nil {
+			t.Fatalf("decode log line %q: %v", line, err)
+		}
+		if record["msg"] == RepositoryRowsNotDiscoveredLogMessage {
+			records = append(records, record)
+		}
+	}
+	return identifiers, discoverErr, records
+}
+
+// The repos table is the only source of a whole-organization run's
+// repositories. Stored rows under a repository id with no repos row are
+// computed by no such run, and the discovery must say so with counts. It must
+// say nothing when there is none, it must never take a count it could not read
+// as 0, and it must never change or fail the discovery.
+func TestClickHouseRepositoryDiscovererSaysTheRepositoriesItCannotDiscover(t *testing.T) {
+	organizationID := "00000000-0000-4000-8000-000000000009"
+	repository := uuid.MustParse("00000000-0000-4000-8000-000000000001")
+	for _, test := range []struct {
+		name      string
+		rows      driver.Rows
+		err       error
+		wantLine  bool
+		countRead bool
+		want      [3]float64 // pull requests, commits, work items
+	}{
+		{"no stored row is out of reach", &notDiscoveredRowsStub{}, nil, false, true, [3]float64{}},
+		{"pull requests only", &notDiscoveredRowsStub{sources: []string{"git_pull_requests"}, counts: []uint64{2}}, nil, true, true, [3]float64{2, 0, 0}},
+		{"every source", &notDiscoveredRowsStub{sources: []string{"work_items", "git_commits", "git_pull_requests"}, counts: []uint64{5, 11, 19}}, nil, true, true, [3]float64{19, 11, 5}},
+		{"a source with a count of 0 only", &notDiscoveredRowsStub{sources: []string{"git_commits"}, counts: []uint64{0}}, nil, false, true, [3]float64{}},
+		{"the query fails", nil, errors.New("clickhouse down"), true, false, [3]float64{}},
+		{"no rows and no error", nil, nil, true, false, [3]float64{}},
+		{"a row cannot be scanned", &notDiscoveredRowsStub{sources: []string{"git_commits"}, counts: []uint64{1}, scanErr: errors.New("scan")}, nil, true, false, [3]float64{}},
+		{"the rows fail after a read", &notDiscoveredRowsStub{sources: []string{"git_commits"}, counts: []uint64{1}, err: errors.New("stream broke")}, nil, true, false, [3]float64{}},
+		{"a source the count does not name", &notDiscoveredRowsStub{sources: []string{"deployments"}, counts: []uint64{1}}, nil, true, false, [3]float64{}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			connection := &scriptedConnection{
+				repositoryRows:    &repositoryRowsStub{identifiers: []uuid.UUID{repository}},
+				probeRows:         &probeRowsStub{},
+				notDiscoveredRows: test.rows, notDiscoveredErr: test.err,
+			}
+			identifiers, err, records := warnRecords(t, connection, organizationID)
+			if err != nil || len(identifiers) != 1 || string(identifiers[0]) != repository.String() {
+				t.Fatalf("the discovery returned %v, %v: the count must not change or fail it", identifiers, err)
+			}
+			if !test.wantLine {
+				if len(records) != 0 {
+					t.Fatalf("WARN lines = %v, want none", records)
+				}
+				return
+			}
+			if len(records) != 1 {
+				t.Fatalf("WARN lines = %d (%v), want exactly 1", len(records), records)
+			}
+			record := records[0]
+			if record["level"] != "WARN" || record["organization_id"] != organizationID {
+				t.Fatalf("level and organization = %v, %v", record["level"], record["organization_id"])
+			}
+			if read, ok := record["count_read"].(bool); !ok || read != test.countRead {
+				t.Fatalf("count_read = %v, want %t", record["count_read"], test.countRead)
+			}
+			fields := []string{"repositories_with_pull_requests", "repositories_with_commits", "repositories_with_work_items"}
+			for index, field := range fields {
+				value, present := record[field]
+				if !test.countRead {
+					if present {
+						t.Errorf("%s = %v on a count that was not read: a count that was not read is not a number", field, value)
+					}
+					continue
+				}
+				if value != test.want[index] {
+					t.Errorf("%s = %v, want %v", field, value, test.want[index])
+				}
+			}
+		})
+	}
+}

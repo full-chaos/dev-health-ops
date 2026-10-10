@@ -56,11 +56,7 @@ func resolveRepoIDs(ctx context.Context, client QueryClient, repoRefs []string, 
 // asOf is the response's own instant, so every metric in one response
 // resolves the same team membership.
 func repoScopeFilter(ctx context.Context, client QueryClient, f Filters, orgID, repoColumn string, asOf time.Time) (string, []dhclickhouse.Binding, error) {
-	var repoRefs []string
-	if f.Scope.Level == "repo" {
-		repoRefs = append(repoRefs, f.Scope.IDs...)
-	}
-	repoRefs = append(repoRefs, f.What.Repos...)
+	repoRefs := teamscope.NamedRepoRefs(f.Scope.Level, f.Scope.IDs, f.What.Repos)
 
 	explicitIDs, err := resolveRepoIDs(ctx, client, repoRefs, orgID)
 	if err != nil {
@@ -81,10 +77,7 @@ func repoScopeFilter(ctx context.Context, client QueryClient, f Filters, orgID, 
 // a repo-level scope, or what.repos. A team scope alone is not a repository
 // filter.
 func repoFilterRequested(f Filters) bool {
-	if f.Scope.Level == "repo" && len(f.Scope.IDs) > 0 {
-		return true
-	}
-	return len(f.What.Repos) > 0
+	return len(teamscope.NamedRepoRefs(f.Scope.Level, f.Scope.IDs, f.What.Repos)) > 0
 }
 
 // repoFilterApplied is MetricDelta.RepoFilterApplied: nil when the request names

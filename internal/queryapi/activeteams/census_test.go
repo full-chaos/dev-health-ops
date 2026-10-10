@@ -16,7 +16,6 @@ import (
 var labelLookups = map[string]string{
 	"quadrant/quadrant.go":       "label lookup for the ids of the quadrant rows",
 	"scopelabel/scopelabel.go":   "label lookup for the scope ids of the request",
-	"home/queries_signals.go":    "label lookup for the scope ids of the risk rows",
 	"analytics/catalog.go":       "lists teams itself with the same rule inline (is_active = 1 on teams FINAL); asserted below",
 	"activeteams/activeteams.go": "defines the rule",
 }

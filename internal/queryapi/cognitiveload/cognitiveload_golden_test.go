@@ -149,8 +149,8 @@ func (c *goldenClient) Query(_ context.Context, statement string, bindings []cli
 		}
 		return &fakeRowScanner{rows: out}, nil
 	}
-	if strings.Contains(statement, "AS measured_teams") || strings.Contains(statement, "AS no_measured_row") {
-		// The two reads of the days that hold retraction rows only are
+	if strings.Contains(statement, "AS measured_teams") || strings.Contains(statement, "AS no_measured_row") || strings.Contains(statement, "AS no_measured_load_day") {
+		// The three reads of the days that hold retraction rows only are
 		// Go-only (the Python reference has no such read) and are kept out of
 		// the pinned query sequence. The golden inputs hold no retraction
 		// row, so no day is corrected.

@@ -153,4 +153,23 @@ func TestTeamCatalogTurnKeepsOneOpenRowOfANewFactAcrossOverlappingRuns(t *testin
 			t.Fatal("the waiting holder did not get the turn after the release")
 		}
 	})
+	t.Run("a holder whose connection is lost frees the turn", func(t *testing.T) {
+		lost, err := turn.Serialize(ctx, "org-lost", "linear")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer lost() // a failed assertion below must not leave a held transaction to block the pool's close
+		// end the holder's server session from outside: the transaction, and its lock, go with it
+		if _, err := pool.Exec(ctx, `SELECT pg_terminate_backend(a.pid) FROM pg_locks l JOIN pg_stat_activity a ON a.pid = l.pid
+WHERE l.locktype = 'advisory' AND l.pid <> pg_backend_pid()`); err != nil {
+			t.Fatal(err)
+		}
+		short, stop := context.WithTimeout(ctx, 10*time.Second)
+		defer stop()
+		next, err := turn.Serialize(short, "org-lost", "linear")
+		if err != nil {
+			t.Fatalf("the turn was not freed by the loss of its holder: %v", err)
+		}
+		next()
+	})
 }

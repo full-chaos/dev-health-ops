@@ -297,12 +297,15 @@ func sourceStatus(seenAt *time.Time, startDay time.Time) string {
 // id) has no data: it is not a theme with an allocation of 0.
 //
 // The rule is applied to the key the WRITER writes (day, repository, team,
-// investment_area, project_stream), before the step that takes one row for
-// each theme: several stored areas can map to one theme, and a row of zeros
-// over one of them must not stand for the theme while another area of that
-// theme is measured. The theme step itself is the reference's and is not
-// changed: among the areas of a theme it takes the row with the newest
-// compute time.
+// investment_area, project_stream), before the theme roll-up: several stored
+// areas can map to one theme, and a row of zeros over one of them must not stand
+// for the theme while another area of that theme is measured (D5850).
+//
+// DECLARED NARROW DIVERGENCE from the reference (CHAOS-9115, D5921): the theme
+// roll-up is the SUM of the theme's measured raw keys. The reference kept ONE of
+// them (the row with the newest compute time), so two measured areas of one theme
+// (3 and 5) gave 5, not 8. The product contract says the theme roll-up is
+// deterministic and the subcategory shares sum to the theme share.
 func fetchReworkThemeAllocation(ctx context.Context, client QueryClient, startDay, endDay time.Time, scopeFilter string, scopeBindings []dhclickhouse.Binding, workCategorySQL string, workCategoryBindings []dhclickhouse.Binding, orgID string) ([]ReworkThemeAllocation, error) {
 	canonicalThemeExpr := canonicalInvestmentThemeSQL("investment_area")
 	query := fmt.Sprintf(`
@@ -318,9 +321,9 @@ func fetchReworkThemeAllocation(ctx context.Context, client QueryClient, startDa
                 team_id,
                 canonical_theme,
                 project_stream,
-                argMax(work_items_completed, newest_at) AS work_items_completed,
-                argMax(prs_merged, newest_at) AS prs_merged,
-                argMax(churn_loc, newest_at) AS churn_loc
+                sum(work_items_completed) AS work_items_completed,
+                sum(prs_merged) AS prs_merged,
+                sum(churn_loc) AS churn_loc
             FROM (
                 SELECT
                     day,

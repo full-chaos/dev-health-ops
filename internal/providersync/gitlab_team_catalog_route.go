@@ -272,6 +272,13 @@ func (handler GitLabTeamCatalogRouteHandler) CollectTeamCatalog(
 	parentByTeam := gitlabTeamCatalogParentByTeam(fullPaths)
 
 	rows := GitLabTeamCatalogRows{}
+	rows.TeamListing = TeamListingEvidence{
+		TeamIDPrefix: gitlabTeamID(root.FullPath) + "/",
+		ProvesEnd:    ownershipListingProvesEnd(subgroupPages), Responses: ownershipListingResponses(subgroupPages),
+	}
+	for _, group := range groups {
+		rows.TeamListing.Listed = append(rows.TeamListing.Listed, gitlabTeamID(group.FullPath))
+	}
 	seenOwnership := map[string]bool{}
 	seenMembership := map[string]bool{}
 	groupByTeam := map[string]string{}
@@ -755,6 +762,11 @@ func (collector GitLabTeamCatalogCollector) CollectTeamCatalog(
 		result.MembershipsStagedForReview = membershipsStagedForReview
 	}
 	result.DriftChangesSuperseded = driftChangesSuperseded
+	// A team that holds open rows under the root group and that the subgroup
+	// listing no longer returns is a dropped team (CHAOS-9102): its rows close
+	// when it is proved gone. One set of direct group answers serves both
+	// closes of the run.
+	teamLookups := NewTeamAbsenceLookups(ctx, gitlabTeamAbsence{client: client})
 	if selections.Members && batch.Effects.Memberships != nil {
 		// CHAOS-4431 codex review finding #6, team-lead ruling 2026-08-28
 		// (extended to GitLab): write the CONFLICT-FILTERED memberships,
@@ -766,13 +778,20 @@ func (collector GitLabTeamCatalogCollector) CollectTeamCatalog(
 		// seen with, and a member absent from the COMPLETE read of its group is
 		// closed (through the one snapshot rule). Absence is judged against the
 		// members the provider returned, not the part the conflict guard keeps.
+		droppedMembershipTeams, droppedErr := openMembershipTeamIDsNotListed(
+			ctx, collector.Sink.Conn, ref.OrgID, gitlabTeamCatalogProvider, gitlabTeamCatalogSource,
+			batch.Rows.TeamListing.TeamIDPrefix, batch.Rows.TeamListing.Listed)
+		if droppedErr != nil {
+			return result, droppedErr
+		}
 		decision := decideOwnershipClose(ctx, collector.ScopeCensus, ownershipCloseRequest{
 			ref: ref, provider: gitlabTeamCatalogProvider, listed: batch.Rows.ObservedMembershipTeamIDs,
 			unproven: batch.Rows.UnprovenMembershipTeamIDs, dataset: "team_memberships", leg: membershipCloseLeg,
+			dropped: droppedMembershipTeams, teamListing: batch.Rows.TeamListing, teamLookups: teamLookups,
 		})
 		membershipRows, membershipOutcome, reuseErr := gitlabMembershipWriter.Snapshot(
 			ctx, collector.Sink.Conn, ref.OrgID, batch.Rows.Memberships, keptMemberships, normalizedAt.UTC().Truncate(time.Millisecond),
-			batch.Rows.MembershipAbsence, decision.membershipSnapshot(GitLabTeamMembershipKind))
+			decision.membershipProver(batch.Rows.MembershipAbsence), decision.membershipSnapshot(GitLabTeamMembershipKind))
 		if reuseErr != nil {
 			return result, reuseErr
 		}
@@ -791,10 +810,16 @@ func (collector GitLabTeamCatalogCollector) CollectTeamCatalog(
 	}
 	if selections.Projects {
 		if batch.Effects.Ownership != nil {
+			droppedOwnershipTeams, droppedErr := collector.Sink.OpenOwnershipTeamsNotListed(
+				ctx, ref.OrgID, batch.Rows.TeamListing.TeamIDPrefix, batch.Rows.TeamListing.Listed)
+			if droppedErr != nil {
+				return result, droppedErr
+			}
 			decision := decideOwnershipClose(ctx, collector.ScopeCensus, ownershipCloseRequest{
 				ref: ref, provider: gitlabTeamCatalogProvider,
 				listed: batch.Rows.OwnershipListedTeamIDs, unproven: batch.Rows.OwnershipUnprovenTeamIDs,
 				responses: batch.Rows.OwnershipListingResponses,
+				dropped:   droppedOwnershipTeams, teamListing: batch.Rows.TeamListing, teamLookups: teamLookups,
 			})
 			// A grant that a listing of more than one response does not hold
 			// is closed only on GitLab's own answer for that project.
@@ -816,7 +841,7 @@ func (collector GitLabTeamCatalogCollector) CollectTeamCatalog(
 			result.DegradedLegs = append(result.DegradedLegs, decision.legs...)
 			result.DegradedLegs = append(result.DegradedLegs, SnapshotAbsenceLegs(plan)...)
 			slog.Default().InfoContext(ctx, "gitlab_team_catalog_ownership_snapshot",
-				"org_id", ref.OrgID, "teams_listed", len(batch.Rows.OwnershipListedTeamIDs),
+				"org_id", ref.OrgID, "teams_listed", len(batch.Rows.OwnershipListedTeamIDs), "teams_dropped_gone", len(decision.gone),
 				"teams_closable", len(decision.closable), "grants_written", len(batch.Rows.Ownership), "rows_closed", closed)
 			result.OwnershipWritten = batch.Result.TeamProjectOwnershipImported
 		}

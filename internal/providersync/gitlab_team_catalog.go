@@ -185,6 +185,11 @@ type GitLabTeamCatalogRows struct {
 	// listing of more than one response does not hold is a candidate, not a
 	// proven removal (ownershipCloseRequest.responses).
 	OwnershipListingResponses map[string]int `json:"-"`
+	// TeamListing is what the walk of the root group's subgroups proved
+	// (CHAOS-9102): every group it returned (the root and its subgroups) and
+	// whether it came in whole. A team with open rows under the root that it does
+	// not return is a dropped team (team_absence.go).
+	TeamListing TeamListingEvidence `json:"-"`
 }
 
 const (

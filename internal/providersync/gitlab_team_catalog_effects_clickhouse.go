@@ -377,6 +377,24 @@ WHERE org_id = ? AND provider = ? AND source = ? AND team_id IN ?
 // nothing. Rows of another org, provider or source are never read and never
 // closed. A failed read of the open rows is an error before any write. It
 // returns the rows to write and the plan.
+const gitlabOwnershipTeamsQuery = `SELECT DISTINCT team_id FROM team_project_ownership FINAL
+WHERE org_id = ? AND provider = ? AND source = ? AND startsWith(team_id, ?)
+  AND (valid_to IS NULL OR valid_to > now64(3, 'UTC'))`
+
+// OpenOwnershipTeamsNotListed reads the teams under the run's root group
+// (team ids that start with teamPrefix) that hold an open provider_access row
+// and that the run's subgroup listing does not return: the dropped teams of the
+// ownership close (team_absence.go). A failed read is an error, never "no team".
+func (sink GitLabTeamCatalogClickHouseEffects) OpenOwnershipTeamsNotListed(
+	ctx context.Context, orgID, teamPrefix string, listed []string,
+) ([]string, error) {
+	if sink.Conn == nil || strings.TrimSpace(orgID) == "" || strings.TrimSpace(teamPrefix) == "" {
+		return nil, ErrInvalidConfiguration
+	}
+	return openTeamIDsNotListed(ctx, sink.Conn, gitlabOwnershipTeamsQuery, "AND team_id NOT IN ?", listed,
+		orgID, gitlabTeamCatalogProvider, gitlabTeamCatalogSource, teamPrefix)
+}
+
 func (sink GitLabTeamCatalogClickHouseEffects) SnapshotOwnership(
 	ctx context.Context, orgID string, fresh []gitlabTeamCatalogOwnershipRow, readTeamIDs []string,
 	grants KindSnapshot[OwnershipSnapshotRow], at time.Time,

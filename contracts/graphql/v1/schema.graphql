@@ -1056,7 +1056,7 @@ type HomeSignal {
   coverage: Float
   """Current primary work-item attribution evidence for work-item metrics; null when this window has no attributable work items."""
   attribution: SignalAttribution
-  "Whether the request's repository filter (a repo-level scope, or what.repos) narrowed the metric this signal is built from: the field of the same name on MetricDelta. Null when the request names no repository, and on a signal that does not come from a metric (risk, recommendation)."
+  "Whether the request's repository filter (a repo-level scope, or what.repos) narrows the metric this signal is built from: the field of the same name on MetricDelta (false only for a team-keyed metric). Null when the request names no repository, and on a signal that does not come from a metric (risk, recommendation)."
   repoFilterApplied: Boolean
 }
 
@@ -1308,7 +1308,7 @@ type MetricDelta {
   spark: [SparkPoint!]!
   "Why change failure rate has a value or not (CHAOS-8981): measured (the value may be 0), unknown_no_incident_evidence (deployments, and no incident tied to the scope in the window) or not_applicable_no_deployments. Null when the window holds no stored counts, and for every other metric."
   rateState: String
-  "Whether the request's repository filter (a repo-level scope, or what.repos) narrowed this metric. Null when the request names no repository. True for a repository-keyed metric the filter reached. False for a team-keyed metric (cycle_time, throughput, wip_saturation, blocked_work: their tables have no repo_id column, so the repository condition is not applied) and for a repository metric whose named repositories resolved to nothing (CHAOS-9093)."
+  "Whether the request's repository filter (a repo-level scope, or what.repos) narrows this metric. Null when the request names no repository. True for a repository-keyed metric: the filter was applied, and when the named repositories resolve to nothing the metric has no data (hasData false). False only for a team-keyed metric (cycle_time, throughput, wip_saturation, blocked_work: their tables have no repo_id column, so the repository condition is not applied and the value is not narrowed) (CHAOS-9093)."
   repoFilterApplied: Boolean
 }
 

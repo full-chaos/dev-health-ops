@@ -35,6 +35,24 @@ func TestRESTHomeSaysWhetherTheRepositoryFilterNarrowedEachMetric(t *testing.T) 
 	validFrom := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	seedTeamScopeOwnership(t, conn, org, "team-one", "acme/checkout", "exact", "inferred", &repo, validFrom, nil, validFrom)
 
+	// Churn rows in the window: an unfiltered read would serve 105, so a filter that matched nothing
+	// and still served it would show.
+	other := uuid.New()
+	seedTeamScopeRepo(t, conn, org, "acme/other", other)
+	for r, churn := range map[uuid.UUID]uint32{repo: 5, other: 100} {
+		if err := conn.Exec(context.Background(),
+			`INSERT INTO repo_metrics_daily (repo_id, day, total_loc_touched, computed_at, org_id) VALUES (?, ?, ?, ?, ?)`,
+			r, time.Date(2026, 8, 22, 0, 0, 0, 0, time.UTC), churn, time.Date(2026, 8, 26, 0, 0, 0, 0, time.UTC), org); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := read0(t, mux, org, ""); got != 105 {
+		t.Fatalf("the unfiltered churn = %v, want 105 (the seed)", got)
+	}
+	if got := read0(t, mux, org, "&scope_type=repo&scope_id="+url.QueryEscape(repo.String())); got != 5 {
+		t.Fatalf("churn of the one repository = %v, want 5", got)
+	}
+
 	teamKeyed := map[string]bool{"cycle_time": true, "throughput": true, "wip_saturation": true, "blocked_work": true}
 	window := "range_days=7&compare_days=7&end_date=2026-08-25"
 	read := func(extra string) map[string]restDelta {
@@ -69,8 +87,23 @@ func TestRESTHomeSaysWhetherTheRepositoryFilterNarrowedEachMetric(t *testing.T) 
 	check("repository scope", read("&scope_type=repo&scope_id="+url.QueryEscape(repo.String())), &yes, &no)
 	// Repositories named in what.repos (POST body) behave the same.
 	check("what.repos", postDeltas(t, client, org, `{"filters":{"what":{"repos":["`+repo.String()+`"]},"time":{"range_days":7,"compare_days":7,"end_date":"2026-08-25"}}}`), &yes, &no)
-	// A repository that resolves to nothing narrows nothing, for any metric.
-	check("unresolved repository", read("&scope_type=repo&scope_id="+url.QueryEscape(uuid.New().String())), &no, &no)
+	// A repository that resolves to nothing: the filter was applied and found nothing, so the
+	// repository metrics are narrowed (true) AND have no data; they never serve the unfiltered
+	// value. The team-keyed metrics are not narrowed (false) and keep their value.
+	unresolved := read("&scope_type=repo&scope_id=" + url.QueryEscape(uuid.New().String()))
+	check("unresolved repository", unresolved, &yes, &no)
+	unknownName := read("&scope_type=repo&scope_id=" + url.QueryEscape("acme/nothing"))
+	check("unresolved repository name", unknownName, &yes, &no)
+	for _, deltas := range []map[string]restDelta{unresolved, unknownName} {
+		for metric, delta := range deltas {
+			if teamKeyed[metric] {
+				continue
+			}
+			if delta.HasData == nil || *delta.HasData || delta.Value != 0 {
+				t.Errorf("a repository metric whose repositories resolved to nothing: %s has_data %s value %v, want no data and 0", metric, flag(delta.HasData), delta.Value)
+			}
+		}
+	}
 }
 
 func postDeltas(t *testing.T, client home.QueryClient, org, body string) map[string]restDelta {
@@ -94,4 +127,10 @@ func postDeltas(t *testing.T, client home.QueryClient, org, body string) map[str
 		byMetric[d.Metric] = d
 	}
 	return byMetric
+}
+
+// read0 reads the churn value of a Home request.
+func read0(t *testing.T, mux *http.ServeMux, org, extra string) float64 {
+	t.Helper()
+	return restSummaryDeltas(t, mux, org, "/api/v1/home?range_days=7&compare_days=7&end_date=2026-08-25"+extra)["churn"].Value
 }

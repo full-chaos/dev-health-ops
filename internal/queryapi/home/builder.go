@@ -159,7 +159,7 @@ func computeMetricDelta(ctx context.Context, client QueryClient, spec metricSpec
 		Spark:        spark,
 		RateState:    rateState,
 
-		RepoFilterApplied: repoFilterApplied(f, spec.Scope, scopeFilter),
+		RepoFilterApplied: repoFilterApplied(f, spec.Scope),
 	}, nil
 }
 

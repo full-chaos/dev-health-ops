@@ -133,6 +133,12 @@ func repoScopeFilter(ctx context.Context, client QueryClient, f Filters, orgID, 
 	}
 
 	switch {
+	case len(repoRefs) > 0 && len(explicitIDs) == 0 && teamCondition == "":
+		// The request names repositories and none of them resolved: the filter
+		// matches nothing, so the metric has no data. (The Python original built no
+		// condition for an empty id list, so a filter that matched nothing served
+		// the unfiltered value; CHAOS-9093.)
+		return " AND 1 = 0", nil, nil
 	case len(explicitIDs) > 0 && teamCondition != "":
 		condition := fmt.Sprintf(" AND (%s IN {scope_ids:Array(String)} OR %s)", repoColumn, teamCondition)
 		return condition, append(scopeBindingsMulti(explicitIDs), teamBindings...), nil
@@ -156,14 +162,15 @@ func repoFilterRequested(f Filters) bool {
 }
 
 // repoFilterApplied is MetricDelta.RepoFilterApplied: nil when the request names
-// no repository; false for a team-keyed metric (the repository condition is not
-// applied to it) and for a repository metric whose filter resolved to nothing
-// (scopeFilter is empty); true for a repository metric the filter narrowed.
-func repoFilterApplied(f Filters, metricScope, scopeFilter string) *bool {
+// no repository; otherwise whether the metric is narrowed by the repository
+// filter: true for a repository-keyed metric (also when the named repositories
+// resolved to nothing: the filter was applied and the metric has no data), false
+// for a team-keyed metric, which the repository condition does not reach.
+func repoFilterApplied(f Filters, metricScope string) *bool {
 	if !repoFilterRequested(f) {
 		return nil
 	}
-	applied := metricScope == "repo" && scopeFilter != ""
+	applied := metricScope == "repo"
 	return &applied
 }
 

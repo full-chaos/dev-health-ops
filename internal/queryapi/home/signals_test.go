@@ -323,31 +323,34 @@ func TestMetricSignalCarriesTheRepositoryFilterFlagOfItsMetric(t *testing.T) {
 	}
 }
 
-// repoFilterApplied is null with no repository named (a team scope alone included),
-// false for a team-keyed metric and for a repository metric whose filter resolved to
-// nothing, true for a repository metric the filter narrowed.
-func TestRepoFilterAppliedFollowsTheSpecScopeAndTheResolvedFilter(t *testing.T) {
+// repoFilterApplied is null with no repository named (a team scope alone
+// included); otherwise true for a repository-keyed metric (also when the named
+// repositories resolved to nothing: the filter was applied and the metric has no
+// data) and false only for a team-keyed metric.
+func TestRepoFilterAppliedFollowsTheSpecScope(t *testing.T) {
 	named := Filters{Scope: ScopeFilter{Level: "repo", IDs: []string{"r1"}}}
 	byWhat := Filters{What: WhatFilter{Repos: []string{"r1"}}}
 	teamOnly := Filters{Scope: ScopeFilter{Level: "team", IDs: []string{"t1"}}}
+	teamAndRepos := Filters{Scope: ScopeFilter{Level: "team", IDs: []string{"t1"}}, What: WhatFilter{Repos: []string{"r1"}}}
 	for _, tc := range []struct {
 		name        string
 		f           Filters
 		metricScope string
-		filter      string
 		want        string
 	}{
-		{"nothing named", Filters{}, "repo", "", "nil"},
-		{"a team scope alone", teamOnly, "repo", " AND team", "nil"},
-		{"repo scope, repo metric, filter built", named, "repo", " AND repo_id IN x", "true"},
-		{"what.repos, repo metric, filter built", byWhat, "repo", " AND repo_id IN x", "true"},
-		{"repo scope, team metric", named, "team", "", "false"},
+		{"nothing named, repo metric", Filters{}, "repo", "nil"},
+		{"nothing named, team metric", Filters{}, "team", "nil"},
+		{"a team scope alone, repo metric", teamOnly, "repo", "nil"},
+		{"a team scope alone, team metric", teamOnly, "team", "nil"},
+		{"repo scope, repo metric", named, "repo", "true"},
+		{"what.repos, repo metric", byWhat, "repo", "true"},
+		{"repo scope, team metric", named, "team", "false"},
 		// A team metric of a team-scope request carries a team condition, which is not a repository filter.
-		{"team scope and what.repos, team metric", Filters{Scope: ScopeFilter{Level: "team", IDs: []string{"t1"}}, What: WhatFilter{Repos: []string{"r1"}}}, "team", " AND team_id IN x", "false"},
-		{"repo scope, repo metric, nothing resolved", named, "repo", "", "false"},
+		{"team scope and what.repos, team metric", teamAndRepos, "team", "false"},
+		{"team scope and what.repos, repo metric", teamAndRepos, "repo", "true"},
 	} {
 		got := "nil"
-		if p := repoFilterApplied(tc.f, tc.metricScope, tc.filter); p != nil {
+		if p := repoFilterApplied(tc.f, tc.metricScope); p != nil {
 			got = map[bool]string{true: "true", false: "false"}[*p]
 		}
 		if got != tc.want {

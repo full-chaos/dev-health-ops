@@ -84,12 +84,12 @@ type MetricDelta struct {
 	// counts, and for every other metric.
 	RateState *string `json:"rate_state,omitempty"`
 	// RepoFilterApplied (CHAOS-9093) says whether the request's repository
-	// filter (scope.level repo ids, or what.repos) narrowed this metric. nil when
-	// the request carries none. true for a repository-keyed metric the filter
-	// reached; false for a team-keyed metric (the work-item metrics: their tables
-	// have no repo_id column and the metric spec's scope is "team", so the
-	// repository condition is not applied), and for a repository metric whose
-	// named repositories resolved to nothing.
+	// filter (scope.level repo ids, or what.repos) narrows this metric. nil when
+	// the request carries none. true for a repository-keyed metric: the filter was
+	// applied, and when the named repositories resolve to nothing the metric has no
+	// data. false for a team-keyed metric (the work-item metrics: their tables
+	// have no repo_id column and the metric spec's scope is "team"), which the
+	// repository condition does not reach.
 	RepoFilterApplied *bool `json:"repo_filter_applied"`
 }
 

@@ -1608,17 +1608,25 @@ Limits:
   count 0 (a group whose items are all closed; a group with no pull request of unknown origin). Such a row and a row
   of zeros are equal.
 - A reader with no FINAL and no `argMax` sees the old row and the row of zeros until a merge.
-- `ic_landscape_rolling_30d`: the team of a person's point is the team id of the person's NEWEST `user_metrics_daily`
-  row of the 30-day window (by `computed_at`; the day and the repository id break a tie). The id of an INACTIVE team
-  (the newest `teams` row of the id has `is_active = 0`) is read as no team, in the rolling read and in the two reads
-  of the day's rows, so the point and the row of the day do not keep the id of a team that was replaced or retired:
-  the active resolver is asked, and with no answer the person is `unassigned`. What stays:
-  - a stored id of an ACTIVE team is the person's team for as long as that row is the newest of the window, also
-    when the resolver names another team (the resolver is asked only for a blank team);
-  - an id with NO row in `teams` counts as active. The admin delete of a team removes its rows, so a stored row
-    under a deleted team keeps its id and its point;
-  - a row of a day the run does not compute keeps the id it was stored with; it gives no point that id;
-  - the newest row is the row computed last, so a history recompute goes from the oldest day to the newest.
+- `ic_landscape_rolling_30d` and the person's `user_metrics_daily` row of the day: the team of a person for a day
+  comes ONLY from the `team_memberships` rows that are valid at that day (the attribution's provider membership read,
+  `LoadProviderMembers`, as of the day: `valid_from` at or before the day, and no `valid_to` or a later one), and
+  only from ACTIVE teams. The row of the day holds ONE team: the first by the attribution's rank (primary, then
+  specificity, priority, the newer row, the team id). The landscape holds a point for EACH active team of the person,
+  so a person of N teams is ranked among the members of each. A person with no membership valid at the day is
+  `unassigned`, id and name, in the row and in the landscape. The team a STORED row holds is never a source: after
+  the first run of a day the newest stored row is the family's own output, and a person who left a team would stay
+  in it. A point stored under a team the run does not produce is retracted by the rule of this section. What stays:
+  - an id with NO row in `teams` counts as active, so a membership of a deleted team still gives a row and points;
+  - only the membership table is read: a person an admin added to a team by hand (the manual roster of the team)
+    gets no team here;
+  - a member the provider reports with no email is stored with the provider name only, which no commit email
+    equals: that person's git rows stay `unassigned`;
+  - a membership is valid from the time of the sync that first saw it, so a day before that sync gives no team;
+  - a chart of the landscape metrics over the WHOLE organization with no team filter weights a person of N teams N
+    times in an average (by team: once for each team; by person: unchanged);
+  - the membership read fails the run above 100 000 membership rows of an organization: loud, not silent;
+  - a row of a day the run does not compute keeps the id it was stored with; it gives no point that id.
 - A family writes its real rows at its own clock. A real row of a key that an EARLIER row of zeros superseded (the key
   comes back) is the newest row of its key only when the family's clock, cut to the unit of the table's `computed_at`
   column, is later than that row of zeros. The row of zeros is at the later of its family's clock and one unit after

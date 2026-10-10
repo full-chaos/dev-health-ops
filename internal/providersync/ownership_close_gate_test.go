@@ -156,7 +156,7 @@ func TestOwnershipCloseDecisionSnapshotClosesOnlyTheClosableTeams(t *testing.T) 
 		decision := decideOwnershipClose(context.Background(), census, ownershipCloseRequest{
 			ref: ref, provider: "gitlab", listed: listed, unproven: unproven,
 		})
-		return PlanOwnershipSnapshot(nil, open, at, decision.snapshot(GitLabGroupProjectGrantKind))
+		return PlanOwnershipSnapshot(nil, open, at, decision.snapshot(GitLabGroupProjectGrantKind, nil))
 	}
 	closedTeams := func(plan SnapshotPlan) []string {
 		out := []string{}

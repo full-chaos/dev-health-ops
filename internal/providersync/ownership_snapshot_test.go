@@ -48,7 +48,7 @@ func TestPlanOwnershipSnapshotKeepsFirstSeenAndRetractsTheRest(t *testing.T) {
 	fact := func(team, project, source string, validFrom time.Time) OwnershipSnapshotRow {
 		return OwnershipSnapshotRow{TeamID: team, ProjectID: testPID(project), Source: source, ValidFrom: validFrom}
 	}
-	proven := testEveryRowKind(EmptyIsAnAnswer).Snapshot(testSoleScope(), testProof(true))
+	proven := testEveryRowKind(EmptyIsAnAnswer).testSnapshot(testSoleScope(), testProof(true))
 	fresh := []OwnershipSnapshotRow{fact("T", "10001", "native", now), fact("T", "10002", "native", now)}
 	open := []OwnershipSnapshotRow{
 		fact("T", "10001", "native", later),              // 0: a later duplicate of a held fact
@@ -94,7 +94,7 @@ func TestPlanOwnershipSnapshotKeepsFirstSeenAndRetractsTheRest(t *testing.T) {
 	}
 
 	// The same answer for a kind whose empty answer closes nothing.
-	kept := PlanOwnershipSnapshot(nil, open[:2], now, testEveryRowKind(EmptyClosesNothing).Snapshot(testSoleScope(), testProof(true)))
+	kept := PlanOwnershipSnapshot(nil, open[:2], now, testEveryRowKind(EmptyClosesNothing).testSnapshot(testSoleScope(), testProof(true)))
 	if len(kept.Retract) != 0 || !reflect.DeepEqual(kept.Kinds[0].Abandoned, []string{SnapshotEmptyAnswer}) {
 		t.Fatalf("empty snapshot of a kind whose empty answer closes nothing: %+v", kept)
 	}
@@ -120,11 +120,11 @@ func TestPlanOwnershipSnapshotClosesNothingForASnapshotThatIsNotComplete(t *test
 		kinds  []KindSnapshot[OwnershipSnapshotRow]
 		reason string
 	}{
-		"stated not complete":      {fresh, []KindSnapshot[OwnershipSnapshotRow]{kind.Snapshot(testSoleScope(), testProof(false))}, "test_walk_not_read_to_the_end"},
-		"proof not stated":         {fresh, []KindSnapshot[OwnershipSnapshotRow]{kind.Snapshot(testSoleScope(), SnapshotProof{})}, snapshotProofNotStated},
-		"a term with no reason":    {fresh, []KindSnapshot[OwnershipSnapshotRow]{kind.Snapshot(testSoleScope(), ProveSnapshot(SnapshotTerm{Holds: true}))}, "snapshot_term_without_reason"},
-		"one of two terms":         {fresh, []KindSnapshot[OwnershipSnapshotRow]{kind.Snapshot(testSoleScope(), ProveSnapshot(SnapshotTerm{Holds: true, Reason: "a"}, SnapshotTerm{Holds: false, Reason: "b"}))}, "b"},
-		"no fresh row, not proven": {nil, []KindSnapshot[OwnershipSnapshotRow]{kind.Snapshot(testSoleScope(), testProof(false))}, "test_walk_not_read_to_the_end"},
+		"stated not complete":      {fresh, []KindSnapshot[OwnershipSnapshotRow]{kind.testSnapshot(testSoleScope(), testProof(false))}, "test_walk_not_read_to_the_end"},
+		"proof not stated":         {fresh, []KindSnapshot[OwnershipSnapshotRow]{kind.testSnapshot(testSoleScope(), SnapshotProof{})}, snapshotProofNotStated},
+		"a term with no reason":    {fresh, []KindSnapshot[OwnershipSnapshotRow]{kind.testSnapshot(testSoleScope(), ProveSnapshot(SnapshotTerm{Holds: true}))}, "snapshot_term_without_reason"},
+		"one of two terms":         {fresh, []KindSnapshot[OwnershipSnapshotRow]{kind.testSnapshot(testSoleScope(), ProveSnapshot(SnapshotTerm{Holds: true, Reason: "a"}, SnapshotTerm{Holds: false, Reason: "b"}))}, "b"},
+		"no fresh row, not proven": {nil, []KindSnapshot[OwnershipSnapshotRow]{kind.testSnapshot(testSoleScope(), testProof(false))}, "test_walk_not_read_to_the_end"},
 		"a kind nobody made":       {fresh, []KindSnapshot[OwnershipSnapshotRow]{{}}, "snapshot_kind_not_made"},
 		"no kind at all":           {fresh, nil, ""},
 	} {
@@ -145,7 +145,7 @@ func TestPlanOwnershipSnapshotClosesNothingForASnapshotThatIsNotComplete(t *test
 			t.Errorf("%s: reasons=%v, want %q", name, got, c.reason)
 		}
 	}
-	if complete := PlanOwnershipSnapshot(fresh, open, now, kind.Snapshot(testSoleScope(), testProof(true))); len(complete.Retract) != 2 {
+	if complete := PlanOwnershipSnapshot(fresh, open, now, kind.testSnapshot(testSoleScope(), testProof(true))); len(complete.Retract) != 2 {
 		t.Fatalf("the same rows as a proven snapshot: retract=%+v, want the duplicate and the lost fact closed", complete.Retract)
 	}
 }
@@ -611,4 +611,12 @@ func TestJiraOwnershipWriterCensus(t *testing.T) {
 			"Each planner is the planner of a writer in ownershipWriters, or is named in otherSnapshotPlanners.",
 			census.planners, wantPlanners)
 	}
+}
+
+// testSnapshot is Snapshot with the absence proof of a listing read in ONE
+// response: every fact the answer does not hold is gone. The tests of the
+// scope, the end of the walk and the empty answer use it; the tests of the
+// absence proof state their own.
+func (kind SnapshotKind[R]) testSnapshot(scope ScopeProof, proof SnapshotProof) KindSnapshot[R] {
+	return kind.Snapshot(scope, proof, AbsenceByListing[R](func(R) bool { return true }, nil))
 }

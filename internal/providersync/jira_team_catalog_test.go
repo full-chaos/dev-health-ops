@@ -264,7 +264,7 @@ func TestJiraOwnershipSnapshotKeepsFirstSeenAndClosesWhatTheSnapshotLost(t *test
 		}
 	}
 	proven := func(complete bool) KindSnapshot[OwnershipSnapshotRow] {
-		return JiraLegacyOwnershipKind().Snapshot(testSoleScope(), ProveSnapshot(SnapshotTerm{Holds: complete, Reason: jiraSnapshotProjectSearch}))
+		return JiraLegacyOwnershipKind().testSnapshot(testSoleScope(), ProveSnapshot(SnapshotTerm{Holds: complete, Reason: jiraSnapshotProjectSearch}))
 	}
 	fresh := []jiraTeamCatalogOwnershipRow{row("10001", "jira_legacy", now)}
 	open := []jiraTeamCatalogOwnershipRow{

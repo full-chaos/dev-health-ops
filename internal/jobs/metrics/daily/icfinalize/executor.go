@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2"
@@ -362,7 +363,7 @@ var landscapeRepoID = uuid.UUID{}
 // landscape input is a READBACK of the user-metrics write, so the two halves
 // cannot be reordered or run independently.
 func (executor *Executor) computeForDay(
-	ctx context.Context, orgID string, day time.Time, teamsOf PersonTeams, inactive teamactive.Inactive,
+	ctx context.Context, orgID string, day time.Time, teamsOf PersonTeams, namesOf TeamNames, inactive teamactive.Inactive,
 ) (int, error) {
 	if err := requireOrganization(ctx, orgID, day); err != nil {
 		return 0, err
@@ -411,6 +412,19 @@ func (executor *Executor) computeForDay(
 		// the row was stored with.
 		if merged[index].TeamID == unassignedTeamID {
 			merged[index].PassThrough.TeamName = unassignedTeamName
+			continue
+		}
+		// The name of a row with a team is the name of the team its id came from (the
+		// membership's), not the name the row was stored with: one source for the id
+		// and the name (CHAOS-9134). DECLARED DIVERGENCE from the reference, which
+		// passes the stored name through. A membership team the read holds no name for
+		// keeps the id as its name, never another team's name.
+		if namesOf != nil {
+			name := strings.TrimSpace(namesOf(merged[index].TeamID))
+			if name == "" {
+				name = merged[index].TeamID
+			}
+			merged[index].PassThrough.TeamName = name
 		}
 	}
 	computedAt := executor.now()
@@ -548,12 +562,19 @@ type TeamResolver func(identity string) (teamID string, ok bool)
 // an empty result.
 type PersonTeams func(identity string) []string
 
+// TeamNames gives the name of a team by its id, from the SAME read that gave the
+// person's teams (the membership's team). A person's row holds the id of the first
+// team and the name of that same team, never a stored name of another one
+// (CHAOS-9134). "" means the read holds no name for the team. A nil TeamNames means
+// the mapper has no names, and a row keeps the name it was stored with.
+type TeamNames func(teamID string) string
+
 // TeamMapper builds the PersonTeams of one organization for one point in
 // time. asOf is that point: a membership counts when it is valid at asOf.
 //
 // The mapper is called once for each run, with the organization and the time
 // of that run, so one Executor can serve runs of many organizations and days.
-type TeamMapper func(ctx context.Context, orgID string, asOf time.Time) (PersonTeams, error)
+type TeamMapper func(ctx context.Context, orgID string, asOf time.Time) (PersonTeams, TeamNames, error)
 
 // SetTeamMapper wires the membership read. A nil mapper means no person has a
 // team: every identity keeps the team of its stored row, or "unassigned".
@@ -579,12 +600,13 @@ func (executor *Executor) ComputeFinalizeFamily(ctx context.Context, run RunScop
 		return 0, err
 	}
 	var teamsOf PersonTeams
+	var namesOf TeamNames
 	if executor.teamMapper != nil {
-		resolved, err := executor.teamMapper(ctx, run.OrganizationID, membershipAsOf(run.TargetDay))
+		resolved, names, err := executor.teamMapper(ctx, run.OrganizationID, membershipAsOf(run.TargetDay))
 		if err != nil {
 			return 0, err
 		}
-		teamsOf = resolved
+		teamsOf, namesOf = resolved, names
 	}
 	// The stored rows this family reads hold the team id they were written
 	// with. A failed read of the inactive teams fails the run: with an empty
@@ -594,7 +616,7 @@ func (executor *Executor) ComputeFinalizeFamily(ctx context.Context, run RunScop
 	if err != nil {
 		return 0, err
 	}
-	return executor.computeForDay(ctx, run.OrganizationID, run.TargetDay, teamsOf, inactive)
+	return executor.computeForDay(ctx, run.OrganizationID, run.TargetDay, teamsOf, namesOf, inactive)
 }
 
 // RunScope is the subset of daily.Run this package needs. Declaring it here

@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/full-chaos/dev-health-ops/internal/identityalias"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 )
 
@@ -247,7 +248,7 @@ func TestLinearReferenceCatalogCollectsTeamsMembersProjectsAndOwnership(t *testi
 	// team_project_ownership row is still emitted (see the Ownership
 	// assertions below) -- CHAOS-4458 part (b)'s linearTeamKeyProjectID
 	// fallback arm still needs it -- so Ownership stays at 2.
-	if batch.Result.Teams != 1 || batch.Result.Members != 1 || batch.Result.Memberships != 1 ||
+	if batch.Result.Teams != 1 || batch.Result.Members != 2 || batch.Result.Memberships != 1 ||
 		batch.Result.Projects != 1 || batch.Result.Ownership != 2 || batch.Result.ProjectsWithoutKey != 1 {
 		t.Fatalf("result=%+v", batch.Result)
 	}
@@ -283,6 +284,17 @@ func TestLinearReferenceCatalogCollectsTeamsMembersProjectsAndOwnership(t *testi
 		batch.Rows.Memberships[0].IdentityFacets[1] != "alice@example.com" ||
 		len(batch.Rows.Teams[0].Members) != 2 || batch.Rows.Teams[0].Members[0] != "linear:alice@example.com" {
 		t.Fatalf("members=%+v", batch.Rows.Members)
+	}
+	// An inactive user (Linear's own flag) gets a members row with is_active 0 and
+	// no membership row (CHAOS-9149 item 2); the roster still holds the active user only.
+	if len(batch.Rows.Members) != 2 || batch.Rows.Members[1].MemberID != "linear:inactive@example.com" ||
+		batch.Rows.Members[1].IsActive != 0 || batch.Rows.Members[1].UpdatedAt != batch.Rows.Members[0].UpdatedAt {
+		t.Fatalf("members=%+v want the inactive user as a second row with is_active 0", batch.Rows.Members)
+	}
+	for _, membership := range batch.Rows.Memberships {
+		if membership.MemberID == "linear:inactive@example.com" {
+			t.Fatalf("an inactive user got a membership row: %+v", membership)
+		}
 	}
 	var teamRequest, projectRequest struct {
 		Query     string                             `json:"query"`
@@ -758,5 +770,35 @@ identities:
 	}
 	if len(batch.Rows.Teams) != 1 || len(batch.Rows.Teams[0].Members) == 0 || batch.Rows.Teams[0].Members[0] != "lead@example.com" {
 		t.Fatalf("team roster must also carry the alias-resolved identity first: %+v", batch.Rows.Teams)
+	}
+}
+
+// TestLinearReferenceMemberRowCarriesLinearsOwnActiveFlag pins the rows of the
+// members dimension for the three shapes of a user (CHAOS-9149 item 2): active
+// (is_active 1, with a membership), inactive (is_active 0, same member id as the
+// row the user had while active, so it is the next version of it) and a node
+// with neither e-mail nor id (no row at all).
+func TestLinearReferenceMemberRowCarriesLinearsOwnActiveFlag(t *testing.T) {
+	t.Parallel()
+	claim := nativeTestClaim("linear", "work-items")
+	at := time.Date(2026, 10, 10, 12, 0, 0, 0, time.UTC)
+	active, inactive := true, false
+	payload := func(flag *bool) linearReferenceCatalogMemberPayload {
+		return linearReferenceCatalogMemberPayload{ID: "user-9", Name: "Mona", Email: "Mona@Example.com", Active: flag}
+	}
+	activeRow, _, _, err := normalizeLinearReferenceMember(claim, "linear:ENG", payload(&active), identityalias.LoadDefault(), at)
+	if err != nil || activeRow.IsActive != 1 {
+		t.Fatalf("active row = %+v (err %v), want is_active 1", activeRow, err)
+	}
+	inactiveRow, err := linearReferenceMemberRowOf(claim, payload(&inactive), at, 0)
+	if err != nil || inactiveRow.IsActive != 0 {
+		t.Fatalf("inactive row = %+v (err %v), want is_active 0", inactiveRow, err)
+	}
+	if inactiveRow.MemberID != activeRow.MemberID || inactiveRow.Name != activeRow.Name ||
+		inactiveRow.ProviderIdentities != activeRow.ProviderIdentities || !inactiveRow.UpdatedAt.Equal(at) {
+		t.Fatalf("inactive row %+v is not the next version of the active row %+v", inactiveRow, activeRow)
+	}
+	if _, err := linearReferenceMemberRowOf(claim, linearReferenceCatalogMemberPayload{Active: &inactive}, at, 0); !errors.Is(err, ErrInvalidConfiguration) {
+		t.Fatalf("a node with no e-mail and no id: err = %v, want ErrInvalidConfiguration (no row)", err)
 	}
 }

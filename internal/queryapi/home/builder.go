@@ -46,7 +46,7 @@ func sparkPoints(rows []dayValueRow, transform func(float64) float64) []SparkPoi
 // (services/home.py:873-948).
 func computeMetricDelta(ctx context.Context, client QueryClient, spec metricSpec, startDay, endDay, compareStart, compareEnd time.Time, f Filters, orgID string, asOf time.Time) (MetricDelta, error) {
 	if repoLinkedMetrics[spec.Metric] && repoFilterRequested(f) {
-		return computeRepoLinkedDelta(ctx, client, spec, startDay, endDay, compareStart, compareEnd, f, orgID)
+		return computeRepoLinkedDelta(ctx, client, spec, startDay, endDay, compareStart, compareEnd, f, orgID, asOf)
 	}
 	scopeFilter, scopeBindings, err := scopeFilterForMetric(ctx, client, spec.Scope, f, orgID, "team_id", "repo_id", asOf)
 	if err != nil {
@@ -216,7 +216,7 @@ func computeMetricDeltas(ctx context.Context, client QueryClient, f Filters, sta
 		// One read of the linked items serves the four work-item metrics.
 		ctx = withRepoLinkedLoader(ctx, &repoLinkedLoader{
 			client: client, f: f, orgID: orgID,
-			compareStart: compareStart, compareEnd: compareEnd, startDay: startDay, endDay: endDay,
+			compareStart: compareStart, compareEnd: compareEnd, startDay: startDay, endDay: endDay, asOf: asOf,
 		})
 	}
 	out := make([]MetricDelta, len(metrics))
@@ -262,8 +262,15 @@ func BuildResponse(ctx context.Context, chClient QueryClient, pgClient PGQueryCl
 		latestSuccessfulSyncAt = synced
 	}
 
+	// The allocation reads investment_metrics_daily, keyed by repository AND team.
+	// The reference chose its scope by scope level alone, so a team scope that also
+	// named a repository served the TEAM's number. A repository filter narrows under
+	// any scope (D5844, D5900, CHAOS-9150): a named repository selects the repository
+	// scope, in which the team's repositories AND the named ones apply, and a named
+	// repository that resolves to nothing leaves nothing (D5841). DECLARED DIVERGENCE
+	// from the reference, for exactly the request that names a repository.
 	allocationScope := "team"
-	if f.Scope.Level == "repo" {
+	if f.Scope.Level == "repo" || repoFilterRequested(f) {
 		allocationScope = "repo"
 	}
 	allocationScopeFilter, allocationScopeBindings, err := scopeFilterForMetric(ctx, chClient, allocationScope, f, orgID, "team_id", "repo_id", now)
@@ -383,18 +390,23 @@ func BuildResponse(ctx context.Context, chClient QueryClient, pgClient PGQueryCl
 	summary := []SummarySentence{}
 	topDelta, hasTopDelta := topDeltaByMagnitude(deltas)
 	if hasTopDelta {
-		scopeFilter, scopeBindings, err := scopeFilterForMetric(ctx, chClient, metricScope(topDelta.Metric), f, orgID, "team_id", "repo_id", now)
-		if err != nil {
-			return nil, err
-		}
-		driverRows, err := fetchMetricDriverDelta(ctx, chClient, metricTable(topDelta.Metric), metricColumn(topDelta.Metric), metricGroup(topDelta.Metric), startDay, endDay, compareStart, compareEnd, scopeFilter, scopeBindings, orgID, 3)
-		if err != nil {
-			return nil, err
-		}
-		// The sentence names the drivers by display name, never by id (CHAOS-9046).
+		// A move of exactly 0 % has no driver: a driver of no move is a false cause (CHAOS-9139,
+		// D5900). DECLARED DIVERGENCE from the reference (home.py:1123 names the drivers of any
+		// move, 0 % included), narrow: only a measured 0 % between two measured values.
 		driverText := "."
-		if driverNameList := driverNames(ctx, chClient, orgID, metricGroup(topDelta.Metric), driverRows); len(driverNameList) > 0 {
-			driverText = " driven by " + strings.Join(driverNameList, ", ") + "."
+		if namesDrivers(topDelta) {
+			scopeFilter, scopeBindings, err := scopeFilterForMetric(ctx, chClient, metricScope(topDelta.Metric), f, orgID, "team_id", "repo_id", now)
+			if err != nil {
+				return nil, err
+			}
+			driverRows, err := fetchMetricDriverDelta(ctx, chClient, metricTable(topDelta.Metric), metricColumn(topDelta.Metric), metricGroup(topDelta.Metric), startDay, endDay, compareStart, compareEnd, scopeFilter, scopeBindings, orgID, 3)
+			if err != nil {
+				return nil, err
+			}
+			// The sentence names the drivers by display name, never by id (CHAOS-9046).
+			if driverNameList := driverNames(ctx, chClient, orgID, metricGroup(topDelta.Metric), driverRows); len(driverNameList) > 0 {
+				driverText = " driven by " + strings.Join(driverNameList, ", ") + "."
+			}
 		}
 		summary = append(summary, SummarySentence{
 			ID:           "s1",

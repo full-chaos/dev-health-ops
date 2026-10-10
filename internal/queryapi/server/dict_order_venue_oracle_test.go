@@ -407,10 +407,11 @@ func TestVenueOracleQueryAPIDictOrder(t *testing.T) {
 			goWritten = stripped
 		}
 		if tc.Kind == "home" && recorder.Code == http.StatusOK {
-			// Every REST Home delta ends with the three Go-only keys of
-			// CHAOS-9044, which the frozen Python model never had: compared
-			// without them, and only them (withoutHomeDeltaGoOnlyFields;
-			// a delta that lacks one fails).
+			// Every REST Home delta ends with the Go-only keys of CHAOS-9044,
+			// and the body itself ends with filter_empty_reason (CHAOS-9098),
+			// which the frozen Python model never had: compared without
+			// them, and only them (withoutHomeDeltaGoOnlyFields; a delta
+			// or a body that lacks one fails).
 			stripped, err := withoutHomeDeltaGoOnlyFields(venueGoBody(goWritten))
 			if err != nil {
 				t.Fatalf("%s: %v", tc.Name, err)

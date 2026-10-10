@@ -6,6 +6,7 @@ import (
 	"os"
 	"regexp"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -41,7 +42,7 @@ func (conn *teamCatalogCarryConn) PrepareBatch(context.Context, string, ...drive
 func TestEveryRegisteredTeamCatalogCollectorCarriesFirstCensus(t *testing.T) {
 	failed := errors.New("count read failed")
 	conn := &teamCatalogCarryConn{err: failed}
-	registry := newNativeTeamCatalogCollectors(conn, nil)
+	registry := newNativeTeamCatalogCollectors(conn, nil, nil)
 	if len(registry) < 4 {
 		t.Fatalf("registry = %d collectors, want every provider", len(registry))
 	}
@@ -69,7 +70,7 @@ func TestNativeTeamCatalogRegistryIsOnlyHandedToTheDispatchers(t *testing.T) {
 		t.Fatal(err)
 	}
 	allowed := []*regexp.Regexp{
-		regexp.MustCompile(`^nativeTeamCatalogCollectors := newNativeTeamCatalogCollectors\(clickhouseConnection, teamCatalogScopeCensus\{pool: postgresDatabase\.pools\.Domain\}\)$`),
+		regexp.MustCompile(`^nativeTeamCatalogCollectors := newNativeTeamCatalogCollectors\(clickhouseConnection, providersync\.PostgresTeamCatalogTurn\{Pool: postgresDatabase\.pools\.Domain\}, teamCatalogScopeCensus\{pool: postgresDatabase\.pools\.Domain\}\)$`),
 		regexp.MustCompile(`^Native:\s+nativeTeamCatalogCollectors,$`),
 		regexp.MustCompile(`^native:\s+nativeTeamCatalogCollectors,$`),
 	}
@@ -90,5 +91,44 @@ func TestNativeTeamCatalogRegistryIsOnlyHandedToTheDispatchers(t *testing.T) {
 	}
 	if used != len(allowed) {
 		t.Errorf("registry used on %d lines, want %d (build, executor, post-sync dispatcher)", used, len(allowed))
+	}
+}
+
+type recordingTurn struct {
+	mu    sync.Mutex
+	calls [][2]string
+}
+
+func (turn *recordingTurn) Serialize(_ context.Context, orgID, provider string) (func(), error) {
+	turn.mu.Lock()
+	defer turn.mu.Unlock()
+	turn.calls = append(turn.calls, [2]string{orgID, provider})
+	return func() {}, nil
+}
+
+// CHAOS-9140: every collector of the worker's registry takes the per-
+// (organization, provider) turn before the carry reads anything, and the
+// production wiring hands the registry the Postgres turn.
+func TestEveryRegisteredTeamCatalogCollectorTakesItsTurnFirst(t *testing.T) {
+	failed := errors.New("count read failed")
+	conn := &teamCatalogCarryConn{err: failed}
+	turn := &recordingTurn{}
+	registry := newNativeTeamCatalogCollectors(conn, turn, nil)
+	for provider, collector := range registry {
+		turn.calls = nil
+		_, err := collector.CollectTeamCatalog(context.Background(),
+			providersync.TeamCatalogReference{OrgID: "org-1", SyncRunID: "run", Strict: true},
+			providerfoundation.Credential{Provider: provider}, nil,
+			providersync.TeamCatalogSelections{Teams: true}, time.Now())
+		if !errors.Is(err, failed) || len(turn.calls) != 1 || turn.calls[0] != [2]string{"org-1", provider} {
+			t.Errorf("%s: err = %v, turns = %v; want the turn of (org-1, %s) taken once before the carry's read", provider, err, turn.calls, provider)
+		}
+	}
+	data, err := os.ReadFile("sync_dispatch.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "newNativeTeamCatalogCollectors(clickhouseConnection, providersync.PostgresTeamCatalogTurn{Pool: postgresDatabase.pools.Domain}") {
+		t.Error("the production registry is not built with the Postgres turn: two overlapping runs of one integration can leave two open rows (CHAOS-9140)")
 	}
 }

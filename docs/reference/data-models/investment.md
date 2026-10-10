@@ -67,9 +67,10 @@ catalog. Ownership starts when it was first known: a unit that ended before a
 team's first ownership row of a repository gets no share of that repository, and
 a later change of a team's repositories does not move the effort of a unit that
 ended before the change. One run holds units of many end times, so the reader
-loads the donor teams of the issues and every ownership row that began at or
-before the materialization timestamp once, and each unit selects the rows valid
-at its own end time. Name-only ownership resolves by provider and
+loads the donor teams of the issues, and the ownership rows of those donor teams
+that began at or before the materialization timestamp, once; each unit selects
+the rows valid at its own end time. The ownership rows of a team that is no
+donor of the run's issues are not read. Name-only ownership resolves by provider and
 case-insensitive full repository name. Missing, expired, future, manual,
 foreign-organization, and unmatched repository records cannot supply a share.
 A failed donor query fails materialization before new output is written.

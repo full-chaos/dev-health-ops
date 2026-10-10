@@ -43,7 +43,7 @@ func TestThePersonsTeamOfTheLandscapeComesFromAnAtlassianTeamMembership(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result, err := Write(ctx, conn, org, rows, everything, soleScope()); err != nil || result.MembershipsWritten == 0 {
+	if result, err := Write(ctx, conn, org, rows, everything, soleScope(), everyAbsentFactIsGone{}); err != nil || result.MembershipsWritten == 0 {
 		t.Fatalf("write = %+v, %v; want membership rows", result, err)
 	}
 	const teamID = "jira:aaaaaaaa-0000-4000-8000-000000000001"

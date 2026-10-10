@@ -1,0 +1,42 @@
+{
+  "case": "user_teams_found",
+  "method": "POST",
+  "path": "/gateway/api/graphql",
+  "status": 200,
+  "content_type": "application/json",
+  "request_shape": {
+    "operationName": "\u003cstring\u003e",
+    "query": "\u003cstring\u003e",
+    "variables": {
+      "after": null,
+      "first": "\u003cnumber\u003e",
+      "userId": "\u003cstring\u003e"
+    }
+  },
+  "body_shape": {
+    "data": {
+      "teamworkGraph_userTeams": {
+        "edges": [
+          {
+            "node": {
+              "columns": [
+                {
+                  "key": "\u003cstring\u003e",
+                  "value": {
+                    "__typename": "\u003cstring\u003e",
+                    "nodes": []
+                  }
+                }
+              ]
+            }
+          }
+        ],
+        "pageInfo": {
+          "hasNextPage": "\u003cbool\u003e",
+          "hasPreviousPage": "\u003cbool\u003e"
+        },
+        "version": "\u003cstring\u003e"
+      }
+    }
+  }
+}

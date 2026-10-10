@@ -1,0 +1,27 @@
+{
+  "case": "team_by_id_found",
+  "method": "POST",
+  "path": "/gateway/api/graphql",
+  "status": 200,
+  "content_type": "application/json",
+  "request_shape": {
+    "operationName": "\u003cstring\u003e",
+    "query": "\u003cstring\u003e",
+    "variables": {
+      "siteId": "\u003cstring\u003e",
+      "teamId": "\u003cstring\u003e"
+    }
+  },
+  "body_shape": {
+    "data": {
+      "team": {
+        "teamV2": {
+          "displayName": "\u003cstring\u003e",
+          "id": "\u003cstring\u003e",
+          "smallAvatarImageUrl": "\u003cstring\u003e",
+          "state": "\u003cstring\u003e"
+        }
+      }
+    }
+  }
+}

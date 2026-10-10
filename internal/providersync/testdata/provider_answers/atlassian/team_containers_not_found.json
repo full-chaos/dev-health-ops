@@ -1,0 +1,27 @@
+{
+  "case": "team_containers_not_found",
+  "method": "POST",
+  "path": "/gateway/api/graphql",
+  "status": 200,
+  "content_type": "application/json",
+  "request_shape": {
+    "operationName": "\u003cstring\u003e",
+    "query": "\u003cstring\u003e",
+    "variables": {
+      "after": null,
+      "first": "\u003cnumber\u003e",
+      "id": "\u003cstring\u003e"
+    }
+  },
+  "body_shape": {
+    "data": {
+      "graphStore_teamConnectedToContainer": {
+        "edges": [],
+        "pageInfo": {
+          "hasNextPage": "\u003cbool\u003e"
+        }
+      }
+    }
+  },
+  "body_verbatim": "{\"data\":{\"graphStore_teamConnectedToContainer\":{\"pageInfo\":{\"hasNextPage\":false},\"edges\":[]}}}"
+}

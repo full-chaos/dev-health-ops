@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/google/uuid"
@@ -20,6 +21,7 @@ type notDiscoveredRowsStub struct {
 	position int
 	scanErr  error
 	err      error
+	closeErr error
 }
 
 func (rows *notDiscoveredRowsStub) Next() bool { return rows.position < len(rows.sources) }
@@ -40,7 +42,7 @@ func (*notDiscoveredRowsStub) ScanStruct(any) error             { return errors.
 func (*notDiscoveredRowsStub) ColumnTypes() []driver.ColumnType { return nil }
 func (*notDiscoveredRowsStub) Totals(...any) error              { return errors.New("unused") }
 func (*notDiscoveredRowsStub) Columns() []string                { return []string{"source", "repository_ids"} }
-func (*notDiscoveredRowsStub) Close() error                     { return nil }
+func (rows *notDiscoveredRowsStub) Close() error                { return rows.closeErr }
 func (rows *notDiscoveredRowsStub) Err() error                  { return rows.err }
 func (*notDiscoveredRowsStub) HasData() bool                    { return true }
 
@@ -102,6 +104,7 @@ func TestClickHouseRepositoryDiscovererSaysTheRepositoriesItCannotDiscover(t *te
 		{"no rows and no error", nil, nil, true, false, [3]float64{}},
 		{"a row cannot be scanned", &notDiscoveredRowsStub{sources: []string{"git_commits"}, counts: []uint64{1}, scanErr: errors.New("scan")}, nil, true, false, [3]float64{}},
 		{"the rows fail after a read", &notDiscoveredRowsStub{sources: []string{"git_commits"}, counts: []uint64{1}, err: errors.New("stream broke")}, nil, true, false, [3]float64{}},
+		{"the rows fail at their close", &notDiscoveredRowsStub{sources: []string{"git_commits"}, counts: []uint64{1}, closeErr: errors.New("close")}, nil, true, false, [3]float64{}},
 		{"a source the count does not name", &notDiscoveredRowsStub{sources: []string{"deployments"}, counts: []uint64{1}}, nil, true, false, [3]float64{}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -142,5 +145,66 @@ func TestClickHouseRepositoryDiscovererSaysTheRepositoriesItCannotDiscover(t *te
 				}
 			}
 		})
+	}
+}
+
+// blockingConnection answers the two reads of the discovery at once and holds
+// the count until its context ends, as a scan that takes too long does.
+type blockingConnection struct {
+	scriptedConnection
+	waited time.Duration
+}
+
+func (connection *blockingConnection) Query(ctx context.Context, query string, arguments ...any) (driver.Rows, error) {
+	if query != notDiscoveredRepositoriesSQL {
+		return connection.scriptedConnection.Query(ctx, query, arguments...)
+	}
+	started := time.Now()
+	<-ctx.Done()
+	connection.waited = time.Since(started)
+	return nil, ctx.Err()
+}
+
+// The dispatch of a run waits for the report, and the count scans three source
+// tables. The wait is bounded: a count that takes longer than its time is
+// given up, the line says the count was not read, and the caller goes on.
+func TestTheReportOfRepositoriesNotDiscoveredIsBoundedInTime(t *testing.T) {
+	organizationID := "00000000-0000-4000-8000-000000000009"
+	connection := &blockingConnection{scriptedConnection: scriptedConnection{
+		repositoryRows: &repositoryRowsStub{}, probeRows: &probeRowsStub{},
+	}}
+	discoverer, err := NewClickHouseRepositoryDiscoverer(connection)
+	if err != nil {
+		t.Fatal(err)
+	}
+	discoverer.reportTimeout = 50 * time.Millisecond
+	var captured bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&captured, &slog.HandlerOptions{Level: slog.LevelInfo})))
+	defer slog.SetDefault(previous)
+
+	done := make(chan struct{})
+	started := time.Now()
+	go func() {
+		discoverer.ReportRepositoriesNotDiscovered(context.Background(), organizationID)
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the report did not return: the count has no bound in time")
+	}
+	if elapsed := time.Since(started); elapsed > 2*time.Second || connection.waited < 40*time.Millisecond {
+		t.Fatalf("the report took %s and the count waited %s; want the count held for its 50ms and then given up", elapsed, connection.waited)
+	}
+	var record map[string]any
+	if err := json.Unmarshal(bytes.TrimSpace(captured.Bytes()), &record); err != nil {
+		t.Fatalf("decode %q: %v", captured.String(), err)
+	}
+	if record["msg"] != RepositoryRowsNotDiscoveredLogMessage || record["level"] != "WARN" || record["count_read"] != false {
+		t.Fatalf("the line of a count that ran out of time = %v, want WARN with count_read false", record)
+	}
+	if notDiscoveredReportTimeout <= 0 || notDiscoveredReportTimeout > time.Minute {
+		t.Fatalf("the bound of the report is %s: it must be above 0 and far below the time of a dispatch", notDiscoveredReportTimeout)
 	}
 }

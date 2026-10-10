@@ -6,6 +6,7 @@ import (
 	"github.com/google/uuid"
 	"log/slog"
 	"sort"
+	"time"
 )
 
 // RepositoryDiscoveryLogMessage is the one line the discoverer writes for each
@@ -35,6 +36,12 @@ const (
 	notDiscoveredWorkItems    = "work_items"
 )
 
+// notDiscoveredReportTimeout bounds the count of the repositories not
+// discovered. The dispatch of a run waits for it, and it scans three source
+// tables: on an organization where that takes longer, the run goes on and the
+// line says the count was not read.
+const notDiscoveredReportTimeout = 15 * time.Second
+
 // notDiscoveredRepositoriesSQL counts, for each source table, the repository
 // ids that hold rows of the organization and have no repos row of exactly
 // that organization id: the ids the statement above cannot return. The nil
@@ -61,7 +68,12 @@ type repositoryRows interface {
 // ClickHouseRepositoryDiscoverer reads the current repository identity set for
 // one organization. It is owned by the heavy worker, after a durable scheduler
 // run exists; it is never constructed by the scheduler process.
-type ClickHouseRepositoryDiscoverer struct{ conn repositoryRows }
+type ClickHouseRepositoryDiscoverer struct {
+	conn repositoryRows
+	// reportTimeout bounds ReportRepositoriesNotDiscovered; 0 is
+	// notDiscoveredReportTimeout.
+	reportTimeout time.Duration
+}
 
 func NewClickHouseRepositoryDiscoverer(conn repositoryRows) (*ClickHouseRepositoryDiscoverer, error) {
 	if conn == nil {
@@ -136,7 +148,13 @@ func (discoverer *ClickHouseRepositoryDiscoverer) ReportRepositoriesNotDiscovere
 	if discoverer == nil || discoverer.conn == nil || !validUUID(organizationID) {
 		return
 	}
-	counts, err := discoverer.repositoriesNotDiscovered(ctx, organizationID)
+	timeout := discoverer.reportTimeout
+	if timeout <= 0 {
+		timeout = notDiscoveredReportTimeout
+	}
+	bounded, cancel := context.WithTimeout(ctx, timeout)
+	counts, err := discoverer.repositoriesNotDiscovered(bounded, organizationID)
+	cancel()
 	if err != nil {
 		slog.WarnContext(ctx, RepositoryRowsNotDiscoveredLogMessage,
 			"organization_id", organizationID,
@@ -168,7 +186,14 @@ func (discoverer *ClickHouseRepositoryDiscoverer) repositoriesNotDiscovered(
 	if rows == nil {
 		return nil, ErrUnavailable
 	}
-	defer rows.Close()
+	// The rows are closed on every path, and a close that fails is a read that
+	// did not end well: its numbers are not reported as a count that was read.
+	closed := false
+	defer func() {
+		if !closed {
+			_ = rows.Close()
+		}
+	}()
 	counts := map[string]uint64{}
 	for rows.Next() {
 		var source string
@@ -184,6 +209,15 @@ func (discoverer *ClickHouseRepositoryDiscoverer) repositoriesNotDiscovered(
 		}
 	}
 	if err := rows.Err(); err != nil {
+		return nil, ErrUnavailable
+	}
+	closed = true
+	if err := rows.Close(); err != nil {
+		return nil, ErrUnavailable
+	}
+	// A count that came back after its time is not trusted either: the driver
+	// can end the rows early when the context ends.
+	if ctx.Err() != nil {
 		return nil, ErrUnavailable
 	}
 	return counts, nil

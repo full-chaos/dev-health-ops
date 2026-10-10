@@ -291,6 +291,15 @@ no injected `__typename`. The negative control in
 `TestRegisteredHomeDocument_MatchesCapturedWireFixture` pins that
 difference.
 
+# Home wire fixture, signal coverage
+
+`home_captured.graphql` is the current registered text: it is
+`home_v5_captured.graphql` plus the one line `coverage` in `signals`, after
+`scopeEntity` (CHAOS-6545: the share of a compounding-risk score's weight that
+was present). `home_v5_captured.graphql` is the text a web build sends until it
+selects `coverage`; it stays accepted as a legacy text of `home`
+(`legacyDigestsByOperation`) beside V1 to V4.
+
 # compoundingRisk wire fixture
 
 `compoundingrisk_captured.graphql` is the current registered text. It is NOT

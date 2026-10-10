@@ -308,7 +308,7 @@ WHERE org_id = ? AND day = '2026-08-24'`, orgA)
 }
 
 // TestCompoundingRiskComplexityWindowOneSidedScoresFromTheOtherInputs pins the
-// missing-input path end to end (CHAOS-6545, D5817): a repo whose complexity
+// missing-input path end to end (CHAOS-6545): a repo whose complexity
 // history sits entirely on ONE side of the window midpoint gets a NULL half
 // from ClickHouse's avg(), so its complexity delta is missing. The composite is
 // then the weighted mean over the three inputs that are present (weights

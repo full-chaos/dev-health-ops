@@ -205,7 +205,7 @@ func orgGoldenHandler(t *testing.T) func(t *testing.T, query string, bindings []
 
 		case strings.Contains(q, "FROM compounding_risk_daily"):
 			return &fixtureRowScanner{rows: [][]any{
-				{"repo", "repo-1", 0.8, "high", time.Date(2024, 1, 8, 0, 0, 0, 0, time.UTC)},
+				{"repo", "repo-1", 0.8, "high", time.Date(2024, 1, 8, 0, 0, 0, 0, time.UTC), nil},
 			}}, nil
 
 		case strings.Contains(q, "FROM repos FINAL") && strings.Contains(q, "display_name"):

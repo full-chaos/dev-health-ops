@@ -163,8 +163,8 @@ func TestRealClickHouse_RepoBreakout(t *testing.T) {
 	if a := got.Rows[1]; a.Coverage == nil || *a.Coverage < 0.4-1e-12 || *a.Coverage > 0.4+1e-12 {
 		t.Errorf("coverage of the churn-only row = %v, want 0.4", a.Coverage)
 	}
-	if c := got.Rows[2]; c.Coverage == nil || *c.Coverage != 0 {
-		t.Errorf("coverage of the row with no input = %v, want 0 (not null, not 1)", c.Coverage)
+	if c := got.Rows[2]; c.Score != nil || c.Coverage != nil {
+		t.Errorf("a row with no score serves no coverage: score %v coverage %v", c.Score, c.Coverage)
 	}
 	if c := got.Rows[2]; c.Score != nil || c.ScopeLabel != rC || c.Severity != model.CompoundingRiskSeverityUnknown {
 		t.Errorf("unscored row %#v", c)
@@ -439,5 +439,73 @@ func TestRealClickHouse_TrendOverOwnedRepositoriesForASuppliedTeam(t *testing.T)
 	all := trendOf(nil)
 	if len(all) != 2 || !within(all[day(now, 1).Format("2006-01-02")], 0.5) || !within(all[day(now, 2).Format("2006-01-02")], 0.5) {
 		t.Errorf("trend without a team filter is over every repository: %v", all)
+	}
+}
+
+// Coverage is served only beside a score, and a team point's mean score and mean
+// coverage are taken over the same rows (the rows that carry a score), on real
+// ClickHouse: a team that owns a full row, a partial row and a row with no input
+// has coverage (1.0 + 0.6) / 2 = 0.8, and a team that owns only an old row (norms
+// stored, score NULL) serves no score and no coverage.
+func TestRealClickHouse_CoverageBesideAScoreOnly(t *testing.T) {
+	ctx, conn, client := startStore(t)
+	now := time.Now().UTC()
+	const org = "org-cov"
+	rFull, rPartial, rNone, rOld := "00000000-0000-4000-8000-0000000000f1", "00000000-0000-4000-8000-0000000000f2", "00000000-0000-4000-8000-0000000000f3", "00000000-0000-4000-8000-0000000000f4"
+	for id, name := range map[string]string{rFull: "acme/full", rPartial: "acme/partial", rNone: "acme/none", rOld: "acme/old"} {
+		repo(t, ctx, conn, org, id, name)
+	}
+	exec(t, ctx, conn, `INSERT INTO teams (id, name, org_id, updated_at) VALUES ('tA', 'Alpha', '%s', now64(6)), ('tB', 'Beta', '%s', now64(6))`, org, org)
+	for _, o := range [][2]string{{"tA", rFull}, {"tA", rPartial}, {"tA", rNone}, {"tB", rOld}} {
+		own(t, ctx, conn, org, o[0], o[1], "acme/"+o[1][len(o[1])-2:])
+	}
+	row := func(id, score, sev string, norms [4]string) {
+		exec(t, ctx, conn, `INSERT INTO compounding_risk_daily (org_id, day, scope, scope_id, compounding_risk, severity, churn_norm, complexity_norm, ownership_norm, review_norm, w_churn, w_complexity, w_ownership, w_review, threshold_elevated, threshold_high, computed_at)
+      SELECT '%s', '%s', 'repo', '%s', %s, '%s', %s, %s, %s, %s, 0.3, 0.3, 0.2, 0.2, 0.4, 0.65, now()`,
+			org, day(now, 1).Format("2006-01-02"), id, score, sev, norms[0], norms[1], norms[2], norms[3])
+	}
+	row(rFull, "0.5", "elevated", [4]string{"0.5", "0.5", "0.5", "0.5"})
+	row(rPartial, "0.5", "elevated", [4]string{"0.5", "0.5", "NULL", "NULL"})
+	row(rNone, "NULL", "unknown", [4]string{"NULL", "NULL", "NULL", "NULL"})
+	row(rOld, "NULL", "unknown", [4]string{"0.5", "0.5", "NULL", "NULL"})
+
+	repos, err := Resolve(ctx, client, org, &model.CompoundingRiskFilterInput{Breakout: model.CompoundingRiskScopeRepo, TrendDays: 30}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	byID := map[string]model.CompoundingRiskPoint{}
+	for _, r := range repos.Rows {
+		byID[r.ScopeID] = r
+	}
+	if c := byID[rFull].Coverage; c == nil || *c != 1.0 {
+		t.Errorf("full row coverage = %v, want 1", c)
+	}
+	if c := byID[rPartial].Coverage; c == nil || *c < 0.6-1e-12 || *c > 0.6+1e-12 {
+		t.Errorf("partial row coverage = %v, want 0.6", c)
+	}
+	for _, id := range []string{rNone, rOld} {
+		if r := byID[id]; r.Score != nil || r.Coverage != nil {
+			t.Errorf("%s has no score, so no coverage: score %v coverage %v", id, r.Score, r.Coverage)
+		}
+	}
+
+	teams, err := Resolve(ctx, client, org, &model.CompoundingRiskFilterInput{Breakout: model.CompoundingRiskScopeTeam, TrendDays: 30}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range teams.Rows {
+		switch p.ScopeID {
+		case "tA":
+			if p.Score == nil || *p.Score != 0.5 || p.Coverage == nil || *p.Coverage < 0.8-1e-12 || *p.Coverage > 0.8+1e-12 {
+				t.Errorf("team tA = score %v coverage %v, want 0.5 and 0.8 (the mean over the two scored rows)", p.Score, p.Coverage)
+			}
+		case "tB":
+			if p.Score != nil || p.Coverage != nil {
+				t.Errorf("team tB owns only an old row: no score, no coverage; got %v %v", p.Score, p.Coverage)
+			}
+		}
+	}
+	if len(teams.Rows) != 2 {
+		t.Errorf("team rows = %v", ids(teams.Rows))
 	}
 }

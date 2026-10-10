@@ -28,16 +28,28 @@ For each `(org_id, repo_id, day)` row, four signals are combined:
 Window: trailing 30 days. The complexity delta uses the first-half-versus-second-half
 average so a recent rise in complexity is captured even when absolute values are small.
 
-Inputs come from the current `(org_id, repo_id, day)` compute row. If any
-required input is missing on that row, the persisted score is `NULL` and the
-severity is `unknown`. **Missing data is not zero risk.**
+Inputs come from the current `(org_id, repo_id, day)` compute row. The score is the
+weighted mean over the inputs that are present: the weights are renormalized over
+them (`score = sum(w_i * n_i) / sum(w_i)` over the present inputs), and a missing
+input is never counted as zero. There is no cap at a low coverage. The row says how
+much of the weight was present: `coverage` (served beside the score, derived from
+the stored weights and component norms) is the sum of the weights of the present
+inputs over the sum of all four. Only when NO input is present is the persisted
+score `NULL` and the severity `unknown`, and then there is no coverage either. A row
+written before this rule keeps its `NULL` score until a tagged recompute of its day.
+**Missing data is not zero risk.**
 
-Read surfaces resolve to the most recent day within the window that has at least
-one fully-scored scope. Repositories missing required inputs remain visible as
-`unknown` alongside their scored peers; one sparse repository must not hide an
-otherwise usable day. Days where every scope is unscored are skipped. If no
-scored day exists in the window, the score is unavailable rather than carried
-forward or recomputed.
+Read surfaces resolve to the most recent day within the window on which no scope
+lacks a score (the Home risk signal) or to the day asked for (the GraphQL
+`compoundingRisk` query). A scope with some inputs missing now carries a score and
+its coverage; a scope with no input at all stays `unknown`, and a day that holds one
+is skipped by the Home risk signal. If no such day exists in the window, the score
+is unavailable rather than carried forward or recomputed. Every surface that serves
+the score serves its coverage with it (`CompoundingRiskPoint.coverage`,
+`HomeSignal.coverage`, the recommendation rationale); a team point is the mean score
+and the mean coverage over the same rows, the rows that carry a score. The backfill
+diagnostics field `compounding_risk_non_null_rows` counts rows with a score, which now
+means "at least one input present" (it meant "all four" before).
 
 ---
 

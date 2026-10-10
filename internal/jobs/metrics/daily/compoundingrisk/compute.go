@@ -96,7 +96,7 @@ func SeverityFor(score *float64, thresholds Thresholds) string {
 
 // Compute ports compute_compounding_risk (compounding_risk.py:319-402) for the
 // REPO scope. It ALWAYS returns a row. One declared difference from Python
-// (CHAOS-6545, D5817): Python gives no score when any input is missing; here the
+// (CHAOS-6545): Python gives no score when any input is missing; here the
 // score is the weighted mean over the inputs that are present (weights
 // renormalized), with no cap at any coverage, and nil with severity "unknown"
 // only when NO input is present. Record.Coverage says how much was present.
@@ -190,9 +190,8 @@ func computeScored(
 	}
 }
 
-// weightedScore is the composite over the inputs that are PRESENT (CHAOS-6545,
-// D5817): the weighted sum of the present normalized components divided by the
-// sum of their weights, so the weights are renormalized over what is known. A
+// weightedScore is the composite over the inputs that are PRESENT (CHAOS-6545): the
+// weighted sum of the present normalized components divided by the sum of their weights, so the weights are renormalized over what is known. A
 // missing input is not zero: a plain sum of the present terms would count it as
 // zero risk. No input present gives no score (nil), never 0. There is no cap
 // at any coverage; Coverage reports how much of the weight was present.

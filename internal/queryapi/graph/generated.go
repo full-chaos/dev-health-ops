@@ -788,6 +788,7 @@ type ComplexityRoot struct {
 		Attribution       func(childComplexity int) int
 		Category          func(childComplexity int) int
 		Confidence        func(childComplexity int) int
+		Coverage          func(childComplexity int) int
 		CurrentValue      func(childComplexity int) int
 		Delta             func(childComplexity int) int
 		Direction         func(childComplexity int) int
@@ -5122,6 +5123,13 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 		}
 
 		return e.complexity.HomeSignal.Confidence(childComplexity), true
+
+	case "HomeSignal.coverage":
+		if e.complexity.HomeSignal.Coverage == nil {
+			break
+		}
+
+		return e.complexity.HomeSignal.Coverage(childComplexity), true
 
 	case "HomeSignal.currentValue":
 		if e.complexity.HomeSignal.CurrentValue == nil {
@@ -10367,6 +10375,8 @@ type HomeSignal {
   category: String!
   """Null when the signal is not scoped to one entity (e.g. an org-wide signal)."""
   scopeEntity: ScopeEntityRef
+  """For a compounding-risk signal: the share of the score's weight that was present, from 0 to 1 (the score is the weighted mean over the inputs that had data). Null on every other signal."""
+  coverage: Float
   """Current primary work-item attribution evidence for work-item metrics; null when this window has no attributable work items."""
   attribution: SignalAttribution
 }
@@ -36966,6 +36976,8 @@ func (ec *executionContext) fieldContext_HomeResult_signals(_ context.Context, f
 				return ec.fieldContext_HomeSignal_category(ctx, field)
 			case "scopeEntity":
 				return ec.fieldContext_HomeSignal_scopeEntity(ctx, field)
+			case "coverage":
+				return ec.fieldContext_HomeSignal_coverage(ctx, field)
 			case "attribution":
 				return ec.fieldContext_HomeSignal_attribution(ctx, field)
 			}
@@ -38004,6 +38016,47 @@ func (ec *executionContext) fieldContext_HomeSignal_scopeEntity(_ context.Contex
 				return ec.fieldContext_ScopeEntityRef_displayName(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type ScopeEntityRef", field.Name)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _HomeSignal_coverage(ctx context.Context, field graphql.CollectedField, obj *model.HomeSignal) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_HomeSignal_coverage(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.Coverage, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(*float64)
+	fc.Result = res
+	return ec.marshalOFloat2ᚖfloat64(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_HomeSignal_coverage(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "HomeSignal",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Float does not have child fields")
 		},
 	}
 	return fc, nil
@@ -72038,6 +72091,8 @@ func (ec *executionContext) _HomeSignal(ctx context.Context, sel ast.SelectionSe
 			}
 		case "scopeEntity":
 			out.Values[i] = ec._HomeSignal_scopeEntity(ctx, field, obj)
+		case "coverage":
+			out.Values[i] = ec._HomeSignal_coverage(ctx, field, obj)
 		case "attribution":
 			out.Values[i] = ec._HomeSignal_attribution(ctx, field, obj)
 		default:

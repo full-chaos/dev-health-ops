@@ -210,23 +210,34 @@ func TestComputeMatchesFrozenPythonGolden(t *testing.T) {
 	}
 }
 
-// compareToGoldenOrDeclaredDivergence is the exact comparison against the
-// frozen Python record, with ONE declared difference (CHAOS-6545, D5817):
-// where the Python record has no score because an input is missing (score nil,
-// severity unknown, at least one component norm present), Go answers the
-// weighted mean over the present inputs. For such a record every OTHER field
-// must still be equal, and the score must equal the mean of the golden's own
-// present norms with the golden's own weights (computed here, not by the code
-// under test); a record with no component at all stays nil/unknown. The golden
-// file is not edited.
+// declaredDifferences NAMES the frozen vectors on which Go differs from the Python
+// record, and only them (CHAOS-6545): Python gives no score when an input is
+// missing; Go answers the weighted mean over the present inputs. These are the
+// repo cases whose input set is partial (05 churn missing, 06 complexity missing,
+// 07 review missing, 08 ownership missing) and the team row team-gamma (ownership
+// missing on both of its repos). Any other vector must equal the record exactly; a
+// named vector must differ, and in exactly the score and the severity.
+var declaredDifferences = map[string]bool{
+	"case 05": true, "case 06": true, "case 07": true, "case 08": true,
+	"team row team-gamma": true,
+}
+
+// compareToGoldenOrDeclaredDivergence is the exact comparison against the frozen
+// Python record. The golden files are not edited. For a name in declaredDifferences
+// the Python record still says nil/unknown, the Go score must equal the mean of the
+// golden's OWN present norms with the golden's own weights (computed here, not by
+// the code under test), and every other field must equal the record. For every other
+// name the whole record must be equal.
 func compareToGoldenOrDeclaredDivergence(t *testing.T, name string, live, want goldenRecord) {
 	t.Helper()
-	declared := want.CompoundingRisk == nil && want.Severity == SeverityUnknown &&
-		(want.ChurnNorm != nil || want.ComplexityNorm != nil || want.OwnershipNorm != nil || want.ReviewNorm != nil)
-	if !declared {
+	if !declaredDifferences[name] {
 		if !reflect.DeepEqual(live, want) {
 			t.Errorf("%s:\n got %+v\nwant %+v", name, live, want)
 		}
+		return
+	}
+	if want.CompoundingRisk != nil || want.Severity != SeverityUnknown {
+		t.Errorf("%s is named as a declared difference but the frozen record has a score (%v, %q): the name list is stale", name, want.CompoundingRisk, want.Severity)
 		return
 	}
 	var sum, weight float64
@@ -242,12 +253,16 @@ func compareToGoldenOrDeclaredDivergence(t *testing.T, name string, live, want g
 			weight += component.w
 		}
 	}
+	if weight == 0 {
+		t.Errorf("%s is named as a declared difference but the record has no component norm", name)
+		return
+	}
 	expected := sum / weight
 	if live.CompoundingRisk == nil || math.Abs(*live.CompoundingRisk-expected) > 1e-12 {
-		t.Errorf("%s: declared divergence: score = %v, want the mean over the present inputs %v", name, live.CompoundingRisk, expected)
+		t.Errorf("%s: declared difference: score = %v, want the mean over the present inputs %v", name, live.CompoundingRisk, expected)
 	}
 	if live.Severity != SeverityFor(&expected, DefaultThresholds) {
-		t.Errorf("%s: declared divergence: severity = %q for mean %v", name, live.Severity, expected)
+		t.Errorf("%s: declared difference: severity = %q for mean %v", name, live.Severity, expected)
 	}
 	live.CompoundingRisk, live.Severity = nil, SeverityUnknown
 	if !reflect.DeepEqual(live, want) {
@@ -494,9 +509,9 @@ func TestOwnershipNormalizationMatchesCPythonAtTheCallSite(t *testing.T) {
 	})
 }
 
-// A missing input is not zero and is not a reason for no score (CHAOS-6545,
-// D5817): the score is the mean over the present inputs, weights renormalized,
-// and Coverage is the share of the weight that was present.
+// A missing input is not zero and is not a reason for no score (CHAOS-6545): the
+// score is the mean over the present inputs, weights renormalized, and Coverage
+// is the share of the weight that was present.
 func TestComputeScoresFromThePresentInputsWithRenormalizedWeights(t *testing.T) {
 	// churn 0.15 -> 0.5, complexity 0.10 -> 0.5, ownership 0.80, review missing
 	inputs := Inputs{ReworkChurn: ptr(0.15), ComplexityDelta: ptr(0.10), SingleOwnerRatio: ptr(0.80)}

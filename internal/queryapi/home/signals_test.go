@@ -182,3 +182,19 @@ func TestFormatValueIntegerVsDecimal(t *testing.T) {
 		t.Errorf("formatValue(150.5) = %q, want %q", got, "150")
 	}
 }
+
+// The risk signal carries the coverage of the score it shows (CHAOS-6545); every
+// other signal has none.
+func TestRiskSignalCarriesTheCoverageOfItsScore(t *testing.T) {
+	score, coverage := 0.9, 0.3
+	row := RiskRow{Scope: "repo", ScopeID: "r1", Score: &score, Severity: "high", ScopeDisplayName: "checkout-service", Coverage: &coverage}
+	signal, ok := RiskSignal(row, DefaultFilters(), DataConfidence{})
+	if !ok || signal.Coverage == nil || *signal.Coverage != 0.3 {
+		t.Fatalf("risk signal coverage = %v (ok %v), want 0.3", signal.Coverage, ok)
+	}
+	row.Coverage = nil
+	signal, ok = RiskSignal(row, DefaultFilters(), DataConfidence{})
+	if !ok || signal.Coverage != nil {
+		t.Fatalf("a row with no coverage gives a signal with none: %v", signal.Coverage)
+	}
+}

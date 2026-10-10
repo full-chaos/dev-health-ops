@@ -241,7 +241,7 @@ func TestIDList_BoundedAtMaxRows(t *testing.T) {
 // into a zero.
 func TestCoverageOf_ShareOfThePresentWeights(t *testing.T) {
 	row := func(churn, complexity, ownership, review bool) storedRow {
-		r := mkRow("r", nil, "unknown")
+		r := mkRow("r", fp(.5), "elevated")
 		r.wChurn, r.wComplexity, r.wOwnership, r.wReview = .3, .3, .2, .2
 		if churn {
 			r.churnNorm = fp(.5)
@@ -266,14 +266,24 @@ func TestCoverageOf_ShareOfThePresentWeights(t *testing.T) {
 		{"review missing", row(true, true, true, false), 0.8},
 		{"complexity and review missing", row(true, false, true, false), 0.5},
 		{"churn only", row(true, false, false, false), 0.3},
-		{"none", row(false, false, false, false), 0},
 	} {
 		got := coverageOf(c.r)
 		if got == nil || *got < c.want-1e-12 || *got > c.want+1e-12 {
 			t.Errorf("%s: coverage = %v, want %v", c.name, got, c.want)
 		}
 	}
-	zero := mkRow("r", nil, "unknown")
+	// Coverage is served only beside a score: a row with no score has none, whether
+	// it has no input at all or is an old row (norms stored, score NULL, not yet
+	// recomputed).
+	noScore := row(true, true, false, false)
+	noScore.score = nil
+	if coverageOf(noScore) != nil {
+		t.Error("a row with no score has no coverage, even with component norms stored")
+	}
+	if coverageOf(row(false, false, false, false)) == nil || *coverageOf(row(false, false, false, false)) != 0 {
+		t.Error("a scored row with no norm stored (cannot be written) reads coverage 0, not null")
+	}
+	zero := mkRow("r", fp(.5), "elevated")
 	zero.wChurn, zero.wComplexity, zero.wOwnership, zero.wReview = 0, 0, 0, 0
 	if coverageOf(zero) != nil {
 		t.Error("weights that sum to zero have no coverage (null), not 0")
@@ -300,7 +310,7 @@ func TestTeamPoints_CoverageIsTheMeanOverTheRowsThatCarryAScore(t *testing.T) {
 	scored, empty := mkRow("a", fp(.4), "elevated"), mkRow("b", nil, "unknown")
 	scored.churnNorm, scored.complexityNorm = fp(.4), fp(.4)
 	scored.coverage = coverageOf(scored) // 0.7
-	empty.coverage = coverageOf(empty)   // 0: no input
+	empty.coverage = coverageOf(empty)   // nil: no score, no coverage
 	points := teamPoints(time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC), []storedRow{scored, empty},
 		map[string][]string{"a": {"t"}, "b": {"t"}}, map[string]string{"t": "T"}, nil, time.Unix(0, 0))
 	if len(points) != 1 || points[0].Score == nil || *points[0].Score != 0.4 {
@@ -308,6 +318,31 @@ func TestTeamPoints_CoverageIsTheMeanOverTheRowsThatCarryAScore(t *testing.T) {
 	}
 	if points[0].Coverage == nil || *points[0].Coverage < 0.7-1e-12 || *points[0].Coverage > 0.7+1e-12 {
 		t.Fatalf("team coverage = %v, want 0.7 (the empty row is in neither mean)", points[0].Coverage)
+	}
+	// full (1.0) + partial (0.6) + a row with no input: the mean is over the two
+	// scored rows, (1.0 + 0.6) / 2 = 0.8, not over three.
+	full, partial, none := mkRow("f", fp(.5), "elevated"), mkRow("p", fp(.5), "elevated"), mkRow("n", nil, "unknown")
+	full.churnNorm, full.complexityNorm, full.ownershipNorm, full.reviewNorm = fp(.5), fp(.5), fp(.5), fp(.5)
+	partial.churnNorm, partial.complexityNorm = fp(.5), fp(.5)
+	full.wChurn, full.wComplexity, full.wOwnership, full.wReview = .3, .3, .2, .2
+	partial.wChurn, partial.wComplexity, partial.wOwnership, partial.wReview = .3, .3, .2, .2
+	none.wChurn, none.wComplexity, none.wOwnership, none.wReview = .3, .3, .2, .2
+	for _, r := range []*storedRow{&full, &partial, &none} {
+		r.coverage = coverageOf(*r)
+	}
+	mixed := teamPoints(time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC), []storedRow{full, partial, none},
+		map[string][]string{"f": {"t"}, "p": {"t"}, "n": {"t"}}, map[string]string{"t": "T"}, nil, time.Unix(0, 0))
+	if len(mixed) != 1 || mixed[0].Coverage == nil || *mixed[0].Coverage < 0.8-1e-12 || *mixed[0].Coverage > 0.8+1e-12 {
+		t.Fatalf("team coverage with full + partial + no-input rows = %v, want 0.8", mixed)
+	}
+	// old rows (score NULL, norms stored) and a team with no scored row: no coverage.
+	old := mkRow("o", nil, "unknown")
+	old.churnNorm, old.complexityNorm = fp(.5), fp(.5)
+	old.coverage = coverageOf(old)
+	oldPoints := teamPoints(time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC), []storedRow{old},
+		map[string][]string{"o": {"t"}}, map[string]string{"t": "T"}, nil, time.Unix(0, 0))
+	if len(oldPoints) != 1 || oldPoints[0].Score != nil || oldPoints[0].Coverage != nil {
+		t.Fatalf("a team with no scored row serves no score and no coverage: %+v", oldPoints)
 	}
 	onlyEmpty := teamPoints(time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC), []storedRow{empty},
 		map[string][]string{"b": {"t"}}, map[string]string{"t": "T"}, nil, time.Unix(0, 0))

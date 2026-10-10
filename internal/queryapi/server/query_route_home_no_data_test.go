@@ -10,8 +10,8 @@ func TestHomeCurrentAndLegacyDocumentsCarryTheirOwnSelections(t *testing.T) {
 	if strings.Count(registeredHomeDocument, "\n      attribution {\n") != 1 {
 		t.Fatal("current Home document must select attribution exactly once")
 	}
-	if strings.Count(registeredHomeV4Document, "\n      attribution {\n") != 1 {
-		t.Fatal("V4 Home document must select attribution exactly once")
+	if strings.Count(registeredHomeV4Document, "\n      attribution {\n") != 1 || strings.Count(registeredHomeV5Document, "\n      attribution {\n") != 1 {
+		t.Fatal("V4 and V5 Home documents must select attribution exactly once")
 	}
 	for _, document := range []string{registeredHomeV3Document, registeredHomeV2Document, registeredHomeV1Document} {
 		if strings.Contains(document, "\n      attribution {\n") {
@@ -24,8 +24,19 @@ func TestHomeCurrentAndLegacyDocumentsCarryTheirOwnSelections(t *testing.T) {
 	if strings.Count(registeredHomeDocument, rateState) != 1 || strings.Count(registeredHomeDocument, "rateState") != 1 {
 		t.Fatal("current Home document must select rateState exactly once")
 	}
-	if without := strings.Replace(registeredHomeDocument, rateState, "", 1); without != registeredHomeV4Document {
-		t.Fatalf("the current Home document less the rateState selection is not the V4 text:\n%s", without)
+	// CHAOS-6545: the current text is the V5 text plus exactly the coverage of a signal.
+	coverage := "      coverage\n      attribution {\n"
+	if strings.Count(registeredHomeDocument, coverage) != 1 {
+		t.Fatal("current Home document must select a signal's coverage exactly once, before attribution")
+	}
+	if without := strings.Replace(registeredHomeDocument, coverage, "      attribution {\n", 1); without != registeredHomeV5Document {
+		t.Fatalf("the current Home document less the coverage selection is not the V5 text:\n%s", without)
+	}
+	if strings.Contains(registeredHomeV5Document, "      coverage\n") {
+		t.Fatal("the V5 Home document selects coverage; it must be the text from before")
+	}
+	if without := strings.Replace(registeredHomeV5Document, rateState, "", 1); without != registeredHomeV4Document {
+		t.Fatalf("the V5 Home document less the rateState selection is not the V4 text:\n%s", without)
 	}
 	for _, document := range []string{registeredHomeV4Document, registeredHomeV3Document, registeredHomeV2Document, registeredHomeV1Document} {
 		if strings.Contains(document, "rateState") {
@@ -51,6 +62,7 @@ func TestHomeCurrentAndLegacyDocumentsCarryTheirOwnSelections(t *testing.T) {
 	}
 	documents := map[string]string{
 		"current": registeredHomeDocument,
+		"V5":      registeredHomeV5Document,
 		"V4":      registeredHomeV4Document,
 		"V3":      registeredHomeV3Document,
 		"V2":      registeredHomeV2Document,
@@ -68,8 +80,8 @@ func TestHomeCurrentAndLegacyDocumentsCarryTheirOwnSelections(t *testing.T) {
 
 func TestHomeCurrentAndLegacyTextsResolveToHome(t *testing.T) {
 	legacy := legacyDigestsByOperation["home"]
-	if len(legacy) != 4 || legacy[0] != digestHex(registeredHomeV1Document) || legacy[1] != digestHex(registeredHomeV2Document) || legacy[2] != digestHex(registeredHomeV3Document) || legacy[3] != digestHex(registeredHomeV4Document) {
-		t.Fatalf("legacyDigestsByOperation[home] = %v, want the V1, V2, V3, and V4 document digests", legacy)
+	if len(legacy) != 5 || legacy[0] != digestHex(registeredHomeV1Document) || legacy[1] != digestHex(registeredHomeV2Document) || legacy[2] != digestHex(registeredHomeV3Document) || legacy[3] != digestHex(registeredHomeV4Document) || legacy[4] != digestHex(registeredHomeV5Document) {
+		t.Fatalf("legacyDigestsByOperation[home] = %v, want the V1, V2, V3, V4, and V5 document digests", legacy)
 	}
 	byDigest, err := buildOperationByDigest(
 		map[string]string{"home": digestHex(registeredHomeDocument)},
@@ -78,7 +90,7 @@ func TestHomeCurrentAndLegacyTextsResolveToHome(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"home_captured.graphql", "home_v4_captured.graphql", "home_v3_captured.graphql", "home_v2_captured.graphql", "home_v1_captured.graphql"} {
+	for _, name := range []string{"home_captured.graphql", "home_v5_captured.graphql", "home_v4_captured.graphql", "home_v3_captured.graphql", "home_v2_captured.graphql", "home_v1_captured.graphql"} {
 		text, err := os.ReadFile("testdata/wire_capture/" + name)
 		if err != nil {
 			t.Fatalf("read %s: %v", name, err)

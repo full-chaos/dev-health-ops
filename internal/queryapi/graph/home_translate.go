@@ -284,6 +284,7 @@ func homeSignalsFromResponse(signals []home.Signal) []model.HomeSignal {
 			EvidenceRef:       s.EvidenceRef,
 			Category:          s.Category,
 			ScopeEntity:       scopeEntity,
+			Coverage:          s.Coverage,
 			Attribution:       homeSignalAttributionFromResponse(s.Attribution),
 		})
 	}

@@ -83,6 +83,16 @@ VALUES ('%s', '%s', 'repo', '%s', %s, '%s', %s, 0.3, 0.3, 0.2, 0.2, 0.4, 0.65, t
 	if partial == nil || partial.Score == nil || *partial.Score != 0.9 || partial.Severity != "high" {
 		t.Fatalf("the row that scores from one input is served with its score: %+v", partial)
 	}
+	// ...and with the coverage it stands on: churn alone is 0.3 of the weight (the
+	// other norms are NULL), so a one-input score is never shown bare.
+	if partial.Coverage == nil || *partial.Coverage < 0.3-1e-12 || *partial.Coverage > 0.3+1e-12 {
+		t.Fatalf("the one-input row is served with coverage 0.3, got %v", partial.Coverage)
+	}
+	partial.ScopeDisplayName = "partial-repo" // the label is a name lookup of its own
+	signal, ok := RiskSignal(*partial, DefaultFilters(), DataConfidence{})
+	if !ok || signal.Coverage == nil || *signal.Coverage != *partial.Coverage {
+		t.Fatalf("the Home risk signal carries the coverage of the score it shows: %+v (ok %v)", signal.Coverage, ok)
+	}
 
 	// Only rows with no input: no day is picked, no row is served.
 	const empty = "home-risk-no-input-it"

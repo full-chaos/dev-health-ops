@@ -956,6 +956,8 @@ type HomeSignal struct {
 	Category    string  `json:"category"`
 	// Null when the signal is not scoped to one entity (e.g. an org-wide signal).
 	ScopeEntity *ScopeEntityRef `json:"scopeEntity,omitempty"`
+	// For a compounding-risk signal: the share of the score's weight that was present, from 0 to 1 (the score is the weighted mean over the inputs that had data). Null on every other signal.
+	Coverage *float64 `json:"coverage,omitempty"`
 	// Current primary work-item attribution evidence for work-item metrics; null when this window has no attributable work items.
 	Attribution *SignalAttribution `json:"attribution,omitempty"`
 }

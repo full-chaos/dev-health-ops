@@ -207,6 +207,13 @@ type Params struct {
 	X         string // "" means Python's None
 	Y         string // "" means Python's None
 	Limit     int    // already run through boundedLimitParam(limit, 200) by the caller
+	// TeamIDs and RepoRefs are the selected teams and repositories (CHAOS-9159,
+	// repeatable team_ids / repo_ids). They AND with each other and with the
+	// scope_type / scope_id scope (D5844): the effective teams are scope_id (team
+	// scope) plus TeamIDs, the effective repositories scope_id (repo scope) plus
+	// RepoRefs; within one dimension the values are a set, across dimensions they AND.
+	TeamIDs  []string
+	RepoRefs []string
 }
 
 // BuildResponse ports build_heatmap_response (services/heatmap.py:
@@ -273,12 +280,20 @@ func BuildResponse(ctx context.Context, client QueryClient, orgID string, params
 	// statements from one scope, so they must resolve one team membership.
 	asOf := time.Now().UTC()
 
-	switch definition.Metric {
-	case "review_wait_density":
-		scopeFilterSQL, scopeBindings, err := scopeFilterForMetric(ctx, client, "repo", scopeType, []string{params.ScopeID}, nil, orgID, asOf)
+	// The repository-keyed metrics (all but the individual one) read one scope filter.
+	var scopeFilterSQL string
+	var scopeBindings []dhclickhouse.Binding
+	var selection selectedFilter
+	if definition.Type != "individual" {
+		var err error
+		scopeFilterSQL, scopeBindings, selection, err = selectedScopeFilter(ctx, client, orgID, scopeType, params, asOf)
 		if err != nil {
 			return nil, err
 		}
+	}
+
+	switch definition.Metric {
+	case "review_wait_density":
 		reviewRows, err := fetchReviewWaitDensity(ctx, client, startTS, endTS, scopeFilterSQL, scopeBindings, orgID)
 		if err != nil {
 			return nil, err
@@ -298,10 +313,6 @@ func BuildResponse(ctx context.Context, client QueryClient, orgID string, params
 		}
 
 	case "repo_touchpoints":
-		scopeFilterSQL, scopeBindings, err := scopeFilterForMetric(ctx, client, "repo", scopeType, []string{params.ScopeID}, nil, orgID, asOf)
-		if err != nil {
-			return nil, err
-		}
 		touchRows, err := fetchRepoTouchpoints(ctx, client, startTS, endTS, scopeFilterSQL, scopeBindings, 20, orgID)
 		if err != nil {
 			return nil, err
@@ -309,10 +320,6 @@ func BuildResponse(ctx context.Context, client QueryClient, orgID string, params
 		rows = repoTouchpointsToMetricRows(touchRows)
 
 	case "hotspot_risk":
-		scopeFilterSQL, scopeBindings, err := scopeFilterForMetric(ctx, client, "repo", scopeType, []string{params.ScopeID}, nil, orgID, asOf)
-		if err != nil {
-			return nil, err
-		}
 		hotspotRows, err := fetchHotspotRisk(ctx, client, startDay, endDay, scopeFilterSQL, scopeBindings, 20, orgID)
 		if err != nil {
 			return nil, err
@@ -360,12 +367,14 @@ func BuildResponse(ctx context.Context, client QueryClient, orgID string, params
 	yAxis := axisValues(rows, false, definition.YAxis)
 	cells := cellsFromRows(rows, definition.XAxis, definition.YAxis)
 
-	return &Response{
+	response := &Response{
 		Axes:     Axes{X: xAxis, Y: yAxis},
 		Cells:    cells,
 		Legend:   Legend{Unit: definition.Unit, Scale: definition.Scale},
 		Evidence: evidence,
-	}, nil
+	}
+	response.RepoFilterApplied, response.FilterEmptyReason = selection.served(definition.Type != "individual")
+	return response, nil
 }
 
 // parseHourWeekday ports the try/except int(x)/WEEKDAY_LABELS.index(y)+1

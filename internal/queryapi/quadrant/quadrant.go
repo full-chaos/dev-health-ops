@@ -408,6 +408,18 @@ func specDayExpr(spec MetricSpec) string {
 // bindings are built separately since they carry request VALUES, not
 // shape.
 func quadrantMetricQuery(spec MetricSpec, bucket, teamFilter string) string {
+	return quadrantMetricQueryIn(spec, bucket, teamFilter, extraScope{})
+}
+
+// extraScope is the selected-teams / selected-repositories condition of a request
+// (CHAOS-9159): one " AND ..." fragment and its bindings, "" when the request selects
+// neither. It is appended to the WHERE of a metric read, after the org_id predicate.
+type extraScope struct {
+	SQL      string
+	Bindings []dhclickhouse.Binding
+}
+
+func quadrantMetricQueryIn(spec MetricSpec, bucket, teamFilter string, extra extraScope) string {
 	joinSQL := ""
 	if spec.JoinClause != "" {
 		joinSQL = "\n" + spec.JoinClause
@@ -429,10 +441,10 @@ func quadrantMetricQuery(spec MetricSpec, bucket, teamFilter string) string {
             toFloat64(%s) AS value
         FROM %s%s
         WHERE %s >= {start_day:Date} AND %s < {end_day:Date}%s
-          AND org_id = {org_id:String}%s%s
+          AND org_id = {org_id:String}%s%s%s
         GROUP BY bucket, entity_id, entity_label
         ORDER BY bucket
-    `, bucketExpr(bucket, dayExpr), spec.EntityExpr, spec.LabelExpr, spec.ValueExpr, dedupFrom(spec.Table), joinSQL, dayExpr, dayExpr, whereSQL, scopeSQL, liveRowClause(spec.Table))
+    `, bucketExpr(bucket, dayExpr), spec.EntityExpr, spec.LabelExpr, spec.ValueExpr, dedupFrom(spec.Table), joinSQL, dayExpr, dayExpr, whereSQL, scopeSQL, liveRowClause(spec.Table), extra.SQL)
 }
 
 // liveRowClause keeps only the measurements of a team-keyed daily table (see
@@ -459,6 +471,12 @@ func liveRowClause(table string) string {
 // fetchPersonTeamID resolved, restricting the metric read to the person's
 // own team cohort exactly as Python's build_quadrant_response does.
 func fetchQuadrantMetric(ctx context.Context, client QueryClient, spec MetricSpec, startDay, endDay time.Time, bucket, orgID, teamFilter string) ([]metricRow, error) {
+	return fetchQuadrantMetricIn(ctx, client, spec, startDay, endDay, bucket, orgID, teamFilter, extraScope{})
+}
+
+// fetchQuadrantMetricIn is fetchQuadrantMetric under the selected teams and
+// repositories of the request (extra).
+func fetchQuadrantMetricIn(ctx context.Context, client QueryClient, spec MetricSpec, startDay, endDay time.Time, bucket, orgID, teamFilter string, extra extraScope) ([]metricRow, error) {
 	bindings := []dhclickhouse.Binding{
 		{Name: "start_day", Value: formatDay(startDay)},
 		{Name: "end_day", Value: formatDay(endDay)},
@@ -467,7 +485,8 @@ func fetchQuadrantMetric(ctx context.Context, client QueryClient, spec MetricSpe
 	if teamFilter != "" {
 		bindings = append(bindings, dhclickhouse.Binding{Name: "team_id", Value: teamFilter})
 	}
-	query := quadrantMetricQuery(spec, bucket, teamFilter)
+	bindings = append(bindings, extra.Bindings...)
+	query := quadrantMetricQueryIn(spec, bucket, teamFilter, extra)
 
 	return scanMetricRows(ctx, client, query, bindings, "quadrant: fetch_quadrant_metric")
 }
@@ -511,6 +530,12 @@ const teamScopedWorkItemTeamAttributionSource = `(
 // derived-table subquery is a purely mechanical, semantically identical
 // rewrite.
 func fetchWorkItemTeamQuadrantMetric(ctx context.Context, client QueryClient, metric string, startDay, endDay time.Time, bucket, orgID string) ([]metricRow, error) {
+	return fetchWorkItemTeamQuadrantMetricIn(ctx, client, metric, startDay, endDay, bucket, orgID, extraScope{})
+}
+
+// fetchWorkItemTeamQuadrantMetricIn is fetchWorkItemTeamQuadrantMetric under the
+// selected teams of the request (extra: a condition on t.team_id).
+func fetchWorkItemTeamQuadrantMetricIn(ctx context.Context, client QueryClient, metric string, startDay, endDay time.Time, bucket, orgID string, extra extraScope) ([]metricRow, error) {
 	var valueExpr, metricFilter string
 	switch metric {
 	case "throughput":
@@ -541,17 +566,17 @@ func fetchWorkItemTeamQuadrantMetric(ctx context.Context, client QueryClient, me
             WHERE wct.day >= {start_day:Date} AND wct.day < {end_day:Date}
               AND wct.org_id = {org_id:String}
               AND t.team_id IS NOT NULL
-              AND t.team_id != ''%s
+              AND t.team_id != ''%s%s
         ) AS team_activity
         GROUP BY bucket, entity_id
         ORDER BY bucket
-    `, bucketExpr(bucket, "day"), valueExpr, teamScopedWorkItemTeamAttributionSource, metricFilter)
+    `, bucketExpr(bucket, "day"), valueExpr, teamScopedWorkItemTeamAttributionSource, metricFilter, extra.SQL)
 
-	bindings := []dhclickhouse.Binding{
+	bindings := append([]dhclickhouse.Binding{
 		{Name: "start_day", Value: formatDay(startDay)},
 		{Name: "end_day", Value: formatDay(endDay)},
 		{Name: "org_id", Value: orgID},
-	}
+	}, extra.Bindings...)
 	return scanMetricRows(ctx, client, query, bindings, "quadrant: fetch_work_item_team_quadrant_metric")
 }
 

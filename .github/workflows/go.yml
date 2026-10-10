@@ -83,6 +83,10 @@ on:
       # path resolver reads that literal as any remaining cli.py, so every one stays a trigger.
       - 'src/dev_health_ops/**/cli.py'
       - 'src/dev_health_ops/storage/repository_rows.py'
+      # The write order of the kinds of a push batch is the order of this sink: a test of
+      # internal/streamhandlers reads the order from the sink's source, so a change of the sink
+      # must run that test.
+      - 'src/dev_health_ops/external_ingest/sinks.py'
       # The Alembic chain is a Go input: internal/pgmigrate embeds a baseline captured from it and
       # its executed differential (hook_upgrade_integration_test.go) upgrades an old production
       # database with the migrate hook's verb and compares the result with the real Alembic
@@ -275,6 +279,10 @@ on:
       # path resolver reads that literal as any remaining cli.py, so every one stays a trigger.
       - 'src/dev_health_ops/**/cli.py'
       - 'src/dev_health_ops/storage/repository_rows.py'
+      # The write order of the kinds of a push batch is the order of this sink: a test of
+      # internal/streamhandlers reads the order from the sink's source, so a change of the sink
+      # must run that test.
+      - 'src/dev_health_ops/external_ingest/sinks.py'
       # The Alembic chain is a Go input: internal/pgmigrate embeds a baseline captured from it and
       # its executed differential (hook_upgrade_integration_test.go) upgrades an old production
       # database with the migrate hook's verb and compares the result with the real Alembic

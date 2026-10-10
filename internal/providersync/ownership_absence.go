@@ -110,21 +110,27 @@ func (prover gitlabGroupProjectAbsence) OwnershipAbsence(ctx context.Context, ro
 	return SnapshotAbsenceNotProven
 }
 
-// jiraLiveProjectAbsence asks the project search itself for one project:
-// GET /rest/api/3/project/search?id=<native id>, the same live-project
-// answer the catalog's walk reads. An entry with the id says the project is
-// live. An answer with no entry that the provider marks as the whole answer
-// says it is not. Any other answer proves nothing.
-type jiraLiveProjectAbsence struct {
+// jiraProjectAbsence asks the project search itself for one project:
+// GET /rest/api/3/project/search?id=<native id>&status=live&status=archived.
+// The held set of the Jira ownership rows is the live projects AND the
+// archived ones (an archived project keeps its open rows), so the question
+// names both states: an answer for live projects only would call an archived
+// project gone. An entry with the id says the project still exists, live or
+// archived. An answer with no entry that the provider marks as the whole
+// answer says it is neither. Any other answer proves nothing.
+type jiraProjectAbsence struct {
 	client *providerfoundation.HTTPClient
 }
 
-func (prover jiraLiveProjectAbsence) OwnershipAbsence(ctx context.Context, row OwnershipSnapshotRow) SnapshotAbsence {
+// jiraProjectAbsenceStatuses is every project state the held set admits.
+var jiraProjectAbsenceStatuses = []string{"live", jiraTeamCatalogProjectStatusArchived}
+
+func (prover jiraProjectAbsence) OwnershipAbsence(ctx context.Context, row OwnershipSnapshotRow) SnapshotAbsence {
 	nativeID := strings.TrimSpace(row.ProjectID.String())
 	if prover.client == nil || nativeID == "" {
 		return SnapshotAbsenceNotProven
 	}
-	query := url.Values{"id": {nativeID}, "maxResults": {"50"}}
+	query := url.Values{"id": {nativeID}, "maxResults": {"50"}, "status": jiraProjectAbsenceStatuses}
 	var page jiraTeamCatalogProjectSearchPayload
 	if err := jiraFetchObject(ctx, prover.client, http.MethodGet, "/rest/api/3/project/search?"+query.Encode(), nil, &page); err != nil {
 		return SnapshotAbsenceNotProven

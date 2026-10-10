@@ -131,7 +131,24 @@ type JiraTeamCatalogBatch struct {
 	// returned. Nothing is written for them: the write leaves every open
 	// ownership row of such a project as it is (jiraHoldArchivedOwnership).
 	ArchivedProjects []JiraArchivedProject `json:"archived_projects,omitempty"`
+	// ProjectSearchWalks is every project search walk of this batch, with the
+	// number of responses each took: the live search, the archived search and
+	// the live search again. The union of their answers is what the ownership
+	// write takes as the projects that still exist (the live ones are written,
+	// the archived ones keep their open rows), so an absence is proven by a
+	// walk only when ALL of them were one response.
+	ProjectSearchWalks []ListWalk `json:"-"`
 }
+
+// The project search walks of the Jira catalog (ListWalk.Name).
+const (
+	jiraLiveProjectSearchWalk      = "jira live project search"
+	jiraArchivedProjectSearchWalk  = "jira archived project search"
+	jiraLiveProjectSearchAgainWalk = "jira live project search, again"
+	// jiraLegacyLinksReadWalk is the read of the legacy links table: one read
+	// of the store. It is the held set of a row whose project the search holds.
+	jiraLegacyLinksReadWalk = "jira legacy links (one read of the store)"
+)
 
 // JiraArchivedProject is one archived project as the project search names
 // it: its native id and its key, from the same search entry.
@@ -234,6 +251,11 @@ func (handler JiraTeamCatalogRouteHandler) CollectTeamCatalog(
 	}
 	search.Values = jiraUnionProjectSearchEntries(search.Values, liveAgain.Values)
 	searchComplete = searchComplete && archivedComplete && liveAgainComplete
+	projectSearchWalks := []ListWalk{
+		{Name: jiraLiveProjectSearchWalk, Responses: searchPages},
+		{Name: jiraArchivedProjectSearchWalk, Responses: archivedPages},
+		{Name: jiraLiveProjectSearchAgainWalk, Responses: liveAgainPages},
+	}
 
 	rows := JiraTeamCatalogRows{}
 	projectsSkippedNoNativeID := 0
@@ -332,7 +354,9 @@ func (handler JiraTeamCatalogRouteHandler) CollectTeamCatalog(
 		ProjectSearchPages:        searchPages,
 	}
 	evidence.Requests = requests
-	return JiraTeamCatalogBatch{Rows: rows, Result: result, Evidence: evidence, ArchivedProjects: archivedProjects}, nil
+	return JiraTeamCatalogBatch{
+		Rows: rows, Result: result, Evidence: evidence, ArchivedProjects: archivedProjects, ProjectSearchWalks: projectSearchWalks,
+	}, nil
 }
 
 // jiraHoldArchivedOwnership splits the open rows of this writer: held is
@@ -774,25 +798,34 @@ func (collector JiraTeamCatalogCollector) CollectTeamCatalog(
 		// organization that removed every project), whatever the archived
 		// read holds.
 		//
-		// An open row the answer does not hold is gone when its project IS
-		// in the project search answer (then the legacy link is what went,
-		// and the links are one read of the store), or when the search was
-		// one response. A project that a search of more than one response
-		// does not hold is a candidate only: the search reads by offset, and
-		// a project removed between two requests moves the later ones. It is
-		// closed on the provider's own answer for that project.
+		// What the write takes as "this project still exists" is the UNION of
+		// three walks: the live search, the archived search (its projects
+		// keep their open rows, see jiraHoldArchivedOwnership above) and the
+		// live search again. Each reads by offset, and a project removed
+		// between two requests of ANY of them moves the later ones: a
+		// project that still exists, live or archived, is then in no answer.
+		// So an open row the answer does not hold is gone by the walks only
+		// when EVERY one of the three was one response. Otherwise the row is
+		// a candidate, closed on the provider's own answer for that project,
+		// asked for live AND archived projects.
+		//
+		// A row whose project IS in the live answer is another case: the
+		// project is there, so what went is its legacy link, and the links
+		// are one read of the store.
 		searched := make(map[string]bool, len(projects))
 		for _, row := range projects {
 			searched[row.ID.String()] = true
 		}
-		searchWasOneResponse := batch.Result.ProjectSearchPages <= 1
-		lookups := NewOwnershipAbsenceLookups(ctx, jiraLiveProjectAbsence{client: client})
+		lookups := NewOwnershipAbsenceLookups(ctx, jiraProjectAbsence{client: client})
 		snapshot := JiraLegacyOwnershipKind().Snapshot(
 			ProveSoleScope(ctx, collector.ScopeCensus, ref.OrgID, jiraTeamCatalogProvider, ref.IntegrationID), ProveSnapshot(
 				SnapshotTerm{Holds: batch.Result.ProjectSearchComplete, Reason: jiraSnapshotProjectSearch},
 				SnapshotTerm{Holds: legacyComplete, Reason: jiraSnapshotLegacyLinks},
-			), AbsenceByListing(func(row OwnershipSnapshotRow) bool {
-				return searchWasOneResponse || searched[row.ProjectID.String()]
+			), AbsenceByListing(func(row OwnershipSnapshotRow) []ListWalk {
+				if searched[row.ProjectID.String()] {
+					return []ListWalk{{Name: jiraLegacyLinksReadWalk, Responses: 1}}
+				}
+				return batch.ProjectSearchWalks
 			}, lookups.Answer))
 		var retracted []jiraTeamCatalogOwnershipRow
 		var plan SnapshotPlan

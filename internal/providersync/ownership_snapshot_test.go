@@ -618,5 +618,24 @@ func TestJiraOwnershipWriterCensus(t *testing.T) {
 // scope, the end of the walk and the empty answer use it; the tests of the
 // absence proof state their own.
 func (kind SnapshotKind[R]) testSnapshot(scope ScopeProof, proof SnapshotProof) KindSnapshot[R] {
-	return kind.Snapshot(scope, proof, AbsenceByListing[R](func(R) bool { return true }, nil))
+	return kind.Snapshot(scope, proof, AbsenceByListing[R](testOneResponse[R], nil))
+}
+
+// testOneResponse is the held set of a row read in one walk of one response.
+func testOneResponse[R any](R) []ListWalk {
+	return []ListWalk{{Name: "test listing", Responses: 1}}
+}
+
+// testPaged is the held set of a row read in one walk of two responses.
+func testPaged[R any](R) []ListWalk {
+	return []ListWalk{{Name: "test listing", Responses: 2}}
+}
+
+// testOneResponseEach says the listing of each team was one response.
+func testOneResponseEach(teams []string) map[string]int {
+	out := make(map[string]int, len(teams))
+	for _, team := range teams {
+		out[team] = 1
+	}
+	return out
 }

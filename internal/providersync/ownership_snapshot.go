@@ -170,15 +170,45 @@ func AbsenceByWalk[R any](walk AbsenceWalk) AbsenceProof[R] {
 // AbsenceByListingStatement is the statement of AbsenceByListing.
 const AbsenceByListingStatement = "one_response_or_direct_answer"
 
+// ListWalk is one list walk whose answer feeds the HELD SET of a row: the
+// facts the run takes as still there. A row is held when it is in the union of
+// those answers, so the proof of an absence belongs to all of them together,
+// never to one of them.
+type ListWalk struct {
+	// Name labels the walk (the census names every walk of every kind).
+	Name string
+	// Responses is the number of responses the walk took. 0 is a walk that
+	// was not read.
+	Responses int
+}
+
+// EveryWalkWasOneResponse reports whether the held set was read in a way that
+// cannot lose a fact: there is a walk, each walk is named, and EVERY walk took
+// exactly one response. One walk of more than one response (or a walk that was
+// not read) is enough to lose a fact that still holds, whatever the other
+// walks took.
+func EveryWalkWasOneResponse(walks []ListWalk) bool {
+	if len(walks) == 0 {
+		return false
+	}
+	for _, walk := range walks {
+		if strings.TrimSpace(walk.Name) == "" || walk.Responses != 1 {
+			return false
+		}
+	}
+	return true
+}
+
 // AbsenceByListing is the proof of a kind whose facts are read from listings
-// by position. oneResponse says that the listing a row belongs to was read in
-// ONE response: nothing can move inside one response, so a fact it does not
-// hold is gone. For a row of a listing read in more than one request, answer
-// is the provider's own answer for that one fact (a direct read of the link);
-// a nil answer, and any answer but SnapshotAbsenceProven, closes nothing.
-func AbsenceByListing[R any](oneResponse func(R) bool, answer func(R) SnapshotAbsence) AbsenceProof[R] {
+// by position. walks gives, for a row, EVERY list walk whose answer feeds the
+// row's held set. When each of them was ONE response nothing can have moved,
+// so a fact the run does not hold is gone. Otherwise answer is the provider's
+// own answer for that one fact (a direct read of the link). The answer must
+// ask the question that finds the fact in every state the held set admits; a
+// nil answer, and any answer but SnapshotAbsenceProven, closes nothing.
+func AbsenceByListing[R any](walks func(R) []ListWalk, answer func(R) SnapshotAbsence) AbsenceProof[R] {
 	return AbsenceProof[R]{statement: AbsenceByListingStatement, verdict: func(row R) SnapshotAbsence {
-		if oneResponse != nil && oneResponse(row) {
+		if walks != nil && EveryWalkWasOneResponse(walks(row)) {
 			return SnapshotAbsenceProven
 		}
 		if answer == nil {

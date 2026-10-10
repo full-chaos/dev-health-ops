@@ -122,7 +122,7 @@ func TestDecideOwnershipCloseClosesOnlyProvenListingsOfAnUnsharedScope(t *testin
 			}
 			decision := decideOwnershipClose(ctx, census, ownershipCloseRequest{
 				ref: test.ref, provider: "gitlab",
-				listed: test.listed, unproven: test.unproven,
+				listed: test.listed, unproven: test.unproven, responses: testOneResponseEach(test.listed),
 			})
 			if !reflect.DeepEqual(decision.read, test.listed) {
 				t.Errorf("read = %v, want every listed team %v", decision.read, test.listed)
@@ -154,9 +154,9 @@ func TestOwnershipCloseDecisionSnapshotClosesOnlyTheClosableTeams(t *testing.T) 
 	ref := TeamCatalogReference{OrgID: "org-1", IntegrationID: "integration-a"}
 	decide := func(census OwnershipScopeCensus, listed, unproven []string) SnapshotPlan {
 		decision := decideOwnershipClose(context.Background(), census, ownershipCloseRequest{
-			ref: ref, provider: "gitlab", listed: listed, unproven: unproven,
+			ref: ref, provider: "gitlab", listed: listed, unproven: unproven, responses: testOneResponseEach(listed),
 		})
-		return PlanOwnershipSnapshot(nil, open, at, decision.snapshot(GitLabGroupProjectGrantKind, nil))
+		return PlanOwnershipSnapshot(nil, open, at, decision.snapshot(GitLabGroupProjectGrantKind, gitlabGroupProjectsWalk, nil))
 	}
 	closedTeams := func(plan SnapshotPlan) []string {
 		out := []string{}

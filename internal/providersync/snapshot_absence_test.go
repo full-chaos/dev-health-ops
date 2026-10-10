@@ -55,15 +55,34 @@ func TestPlanSnapshotClosesAnAbsentFactOnlyOnAProofOfItsAbsence(t *testing.T) {
 		{"no proof stated", AbsenceProof[OwnershipSnapshotRow]{}, []int{0}, AbsenceProofNotStated, 0, 4, 0, nil},
 		{"a walk with no name", AbsenceByWalk[OwnershipSnapshotRow](" "), []int{0}, AbsenceProofNotStated, 0, 4, 0, nil},
 		{"the cursor walk", AbsenceByWalk[OwnershipSnapshotRow](AbsenceWalkByCursor), []int{0, 2, 3, 4, 5}, "cursor_walk", 0, 0, 0, nil},
-		{"every listing was one response", AbsenceByListing(func(OwnershipSnapshotRow) bool { return true }, answer),
+		{"every listing was one response", AbsenceByListing(testOneResponse[OwnershipSnapshotRow], answer),
 			[]int{0, 2, 3, 4, 5}, AbsenceByListingStatement, 0, 0, 0, nil},
-		{"a listing of more than one response, with the provider's answers", AbsenceByListing(func(OwnershipSnapshotRow) bool { return false }, answer),
+		{"a listing of more than one response, with the provider's answers", AbsenceByListing(testPaged[OwnershipSnapshotRow], answer),
 			[]int{0, 2}, AbsenceByListingStatement, 1, 1, 1, []string{"gone", "lost", "late", "fail"}},
 		{"a listing of more than one response, with no answer", AbsenceByListing[OwnershipSnapshotRow](nil, nil),
 			[]int{0}, AbsenceByListingStatement, 0, 4, 0, nil},
-		{"one listing of one response, one of more", AbsenceByListing(func(row OwnershipSnapshotRow) bool {
-			return row.ProjectID.String() == "lost" || row.ProjectID.String() == "fail"
+		{"one listing of one response, one of more", AbsenceByListing(func(row OwnershipSnapshotRow) []ListWalk {
+			if row.ProjectID.String() == "lost" || row.ProjectID.String() == "fail" {
+				return testOneResponse(row)
+			}
+			return testPaged(row)
 		}, answer), []int{0, 2, 3, 5}, AbsenceByListingStatement, 0, 0, 1, []string{"gone", "late"}},
+		// The held set is the union of its walks: two walks of one response
+		// and ONE walk of two responses prove nothing by themselves.
+		{"three walks feed the held set and one of them took two responses", AbsenceByListing(func(OwnershipSnapshotRow) []ListWalk {
+			return []ListWalk{{Name: "first", Responses: 1}, {Name: "second", Responses: 2}, {Name: "third", Responses: 1}}
+		}, answer), []int{0, 2}, AbsenceByListingStatement, 1, 1, 1, []string{"gone", "lost", "late", "fail"}},
+		{"three walks feed the held set and each took one response", AbsenceByListing(func(OwnershipSnapshotRow) []ListWalk {
+			return []ListWalk{{Name: "first", Responses: 1}, {Name: "second", Responses: 1}, {Name: "third", Responses: 1}}
+		}, answer), []int{0, 2, 3, 4, 5}, AbsenceByListingStatement, 0, 0, 0, nil},
+		{"a walk that was not read", AbsenceByListing(func(OwnershipSnapshotRow) []ListWalk {
+			return []ListWalk{{Name: "first", Responses: 1}, {Name: "second", Responses: 0}}
+		}, nil), []int{0}, AbsenceByListingStatement, 0, 4, 0, nil},
+		{"no walk is named", AbsenceByListing(func(OwnershipSnapshotRow) []ListWalk { return nil }, nil),
+			[]int{0}, AbsenceByListingStatement, 0, 4, 0, nil},
+		{"a walk with no name", AbsenceByListing(func(OwnershipSnapshotRow) []ListWalk {
+			return []ListWalk{{Name: " ", Responses: 1}}
+		}, nil), []int{0}, AbsenceByListingStatement, 0, 4, 0, nil},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			asked = nil
@@ -91,7 +110,7 @@ func TestPlanSnapshotClosesAnAbsentFactOnlyOnAProofOfItsAbsence(t *testing.T) {
 	// provider for nothing.
 	asked = nil
 	plan := PlanOwnershipSnapshot(fresh, open, now, kind.Snapshot(testSoleScope(), testProof(false),
-		AbsenceByListing(func(OwnershipSnapshotRow) bool { return false }, answer)))
+		AbsenceByListing(testPaged[OwnershipSnapshotRow], answer)))
 	if len(plan.Retract) != 0 || len(asked) != 0 {
 		t.Errorf("a kind whose walk did not end closes %d row(s) and asked the provider for %v, want none", len(plan.Retract), asked)
 	}
@@ -167,13 +186,15 @@ func TestTheGateTakesAOneResponseListingAsTheProofAndAsksForTheOthers(t *testing
 	row := func(team, project string) OwnershipSnapshotRow {
 		return OwnershipSnapshotRow{TeamID: team, ProjectID: testPID(project), Source: gitlabTeamCatalogSource, ValidFrom: at.Add(-time.Hour)}
 	}
-	open := []OwnershipSnapshotRow{row("gl:one", "one/a"), row("gl:paged", "paged/a"), row("gl:paged", "paged/b")}
+	// gl:uncounted is a listed team with no count of responses: its listing is
+	// not taken as one response.
+	open := []OwnershipSnapshotRow{row("gl:one", "one/a"), row("gl:paged", "paged/a"), row("gl:paged", "paged/b"), row("gl:uncounted", "uncounted/a")}
 	decision := decideOwnershipClose(context.Background(), staticScopeCensus{}, ownershipCloseRequest{
 		ref: TeamCatalogReference{OrgID: "org-1", IntegrationID: "integration-a"}, provider: gitlabTeamCatalogProvider,
-		listed: []string{"gl:one", "gl:paged"}, paged: []string{"gl:paged"},
+		listed: []string{"gl:one", "gl:paged", "gl:uncounted"}, responses: map[string]int{"gl:one": 1, "gl:paged": 2},
 	})
 	var asked []string
-	plan := PlanOwnershipSnapshot(nil, open, at, decision.snapshot(GitLabGroupProjectGrantKind, func(row OwnershipSnapshotRow) SnapshotAbsence {
+	plan := PlanOwnershipSnapshot(nil, open, at, decision.snapshot(GitLabGroupProjectGrantKind, gitlabGroupProjectsWalk, func(row OwnershipSnapshotRow) SnapshotAbsence {
 		asked = append(asked, row.ProjectID.String())
 		if row.ProjectID.String() == "paged/a" {
 			return SnapshotAbsenceProven
@@ -184,14 +205,14 @@ func TestTheGateTakesAOneResponseListingAsTheProofAndAsksForTheOthers(t *testing
 	for _, retraction := range plan.Retract {
 		closed = append(closed, retraction.Open)
 	}
-	if !reflect.DeepEqual(closed, []int{0, 1}) || !reflect.DeepEqual(asked, []string{"paged/a", "paged/b"}) || plan.Kinds[0].StillHeld != 1 {
-		t.Errorf("the plan closes %v after asking for %v with %d still held; want rows 0 and 1, the two facts of the paged team asked, 1 still held",
+	if !reflect.DeepEqual(closed, []int{0, 1}) || !reflect.DeepEqual(asked, []string{"paged/a", "paged/b", "uncounted/a"}) || plan.Kinds[0].StillHeld != 2 {
+		t.Errorf("the plan closes %v after asking for %v with %d still held; want rows 0 and 1, the facts of the paged and the uncounted team asked, 2 still held",
 			closed, asked, plan.Kinds[0].StillHeld)
 	}
 	// With no answer, the paged team closes nothing and the other team closes.
-	plan = PlanOwnershipSnapshot(nil, open, at, decision.snapshot(GitLabGroupProjectGrantKind, nil))
-	if len(plan.Retract) != 1 || plan.Retract[0].Open != 0 || plan.Kinds[0].AbsenceNotProven != 2 {
-		t.Errorf("with no answer the plan closes %v and counts %d not proven; want row 0 only and 2", plan.Retract, plan.Kinds[0].AbsenceNotProven)
+	plan = PlanOwnershipSnapshot(nil, open, at, decision.snapshot(GitLabGroupProjectGrantKind, gitlabGroupProjectsWalk, nil))
+	if len(plan.Retract) != 1 || plan.Retract[0].Open != 0 || plan.Kinds[0].AbsenceNotProven != 3 {
+		t.Errorf("with no answer the plan closes %v and counts %d not proven; want row 0 only and 3", plan.Retract, plan.Kinds[0].AbsenceNotProven)
 	}
 	legs := SnapshotAbsenceLegs(plan)
 	if len(legs) != 1 || legs[0].Reason != OwnershipAbsenceNotProven || legs[0].Leg != ownershipAbsenceLeg {

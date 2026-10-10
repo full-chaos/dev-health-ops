@@ -212,9 +212,10 @@ func (collector GitHubTeamCatalogRouteHandler) Collect(
 			if !ownershipListingProvesEnd(repoPages) {
 				rows.RepoUnprovenTeamIDs = append(rows.RepoUnprovenTeamIDs, githubTeamID(slug))
 			}
-			if ownershipListingWasPaged(repoPages) {
-				rows.RepoPagedTeamIDs = append(rows.RepoPagedTeamIDs, githubTeamID(slug))
+			if rows.RepoListingResponses == nil {
+				rows.RepoListingResponses = map[string]int{}
 			}
+			rows.RepoListingResponses[githubTeamID(slug)] = ownershipListingResponses(repoPages)
 			team, err := normalizeGitHubTeam(orgID, payload, repoPatterns, normalizedAt)
 			if err != nil {
 				return githubTeamCatalogRows{}, evidence, err

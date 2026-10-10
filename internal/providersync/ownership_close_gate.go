@@ -29,13 +29,20 @@ func ownershipListingProvesEnd(pages providerfoundation.PageCollection) bool {
 	return pages.EndProven && !pages.PageBudgetExhausted && !pages.ItemCapReached
 }
 
-// ownershipListingWasPaged reports whether a listing was read in more than
-// one response. Nothing can move inside one response, so a listing of one
-// response that reached its end proves what it does not hold. A listing of
-// more than one response, read by position, does not: when the list changes
-// between two requests, a fact that still holds is on no page.
-func ownershipListingWasPaged(pages providerfoundation.PageCollection) bool {
-	return pages.Pages > 1
+// The walks that feed the held set of the two grant kinds: one listing per
+// team (ListWalk.Name).
+const (
+	githubTeamRepositoriesWalk = "github team repositories (one listing per team)"
+	gitlabGroupProjectsWalk    = "gitlab group projects (one listing per group)"
+)
+
+// ownershipListingResponses is the number of responses a listing took.
+// Nothing can move inside one response, so a listing of one response that
+// reached its end proves what it does not hold. A listing of more than one
+// response, read by position, does not: when the list changes between two
+// requests, a fact that still holds is on no page.
+func ownershipListingResponses(pages providerfoundation.PageCollection) int {
+	return pages.Pages
 }
 
 // OwnershipScopeCensus counts the active integrations of a provider in an org,
@@ -79,10 +86,12 @@ type ownershipCloseRequest struct {
 	// listed is every team whose listing returned; unproven is the part of it
 	// whose end the provider did not confirm.
 	listed, unproven []string
-	// paged is the part of listed whose listing was read in more than one
-	// response. Such a listing proves its end and not an absence: a fact it
-	// does not hold is a candidate that needs the provider's own answer.
-	paged []string
+	// responses is, for each listed team, the number of responses its
+	// listing took. A listing of more than one response proves its end and
+	// not an absence: a fact it does not hold is a candidate that needs the
+	// provider's own answer. A listed team with no count is taken as not
+	// read in one response.
+	responses map[string]int
 }
 
 type ownershipCloseDecision struct {
@@ -96,8 +105,8 @@ type ownershipCloseDecision struct {
 	// scope is the scope gate's answer. It is asked only when a listing
 	// proved its end; before that nothing can close and it stays not proven.
 	scope ScopeProof
-	// paged is the teams whose listing was read in more than one response.
-	paged map[string]bool
+	// responses is the number of responses each team's listing took.
+	responses map[string]int
 }
 
 // decideOwnershipClose is the one gate in front of every provider_access
@@ -109,10 +118,7 @@ type ownershipCloseDecision struct {
 // teams: its rows stay open. Every skip is one WARN line and a DegradedLeg on
 // the result, never silent.
 func decideOwnershipClose(ctx context.Context, census OwnershipScopeCensus, request ownershipCloseRequest) ownershipCloseDecision {
-	decision := ownershipCloseDecision{read: request.listed, paged: make(map[string]bool, len(request.paged))}
-	for _, teamID := range request.paged {
-		decision.paged[teamID] = true
-	}
+	decision := ownershipCloseDecision{read: request.listed, responses: request.responses}
 	if len(request.listed) == 0 {
 		return decision
 	}
@@ -170,18 +176,21 @@ func decideOwnershipClose(ctx context.Context, census OwnershipScopeCensus, requ
 // team listing returned and at least one listing proved its end. A team
 // outside closable is of no kind, so its open rows never close.
 //
-// The proof of an absence is the listing itself only for a team whose listing
-// was ONE response. For a team whose listing took more than one request,
-// answer is asked for each open grant the listing does not hold (the
-// provider's own answer for that one grant); a nil answer closes none of them.
+// The held set of a team's grants is ONE walk, the team's own listing (walk
+// names it). The proof of an absence is that listing only when it was ONE
+// response. For a team whose listing took more than one request, answer is
+// asked for each open grant the listing does not hold (the provider's own
+// answer for that one grant); a nil answer closes none of them.
 func (decision ownershipCloseDecision) snapshot(
-	kind func(closable []string) SnapshotKind[OwnershipSnapshotRow], answer func(OwnershipSnapshotRow) SnapshotAbsence,
+	kind func(closable []string) SnapshotKind[OwnershipSnapshotRow], walk string, answer func(OwnershipSnapshotRow) SnapshotAbsence,
 ) KindSnapshot[OwnershipSnapshotRow] {
-	oneResponse := func(row OwnershipSnapshotRow) bool { return !decision.paged[row.TeamID] }
+	walks := func(row OwnershipSnapshotRow) []ListWalk {
+		return []ListWalk{{Name: walk, Responses: decision.responses[row.TeamID]}}
+	}
 	return kind(decision.closable).Snapshot(decision.scope, ProveSnapshot(
 		SnapshotTerm{Holds: len(decision.read) > 0, Reason: OwnershipCloseSkippedNoTeamListed},
 		SnapshotTerm{Holds: len(decision.read) == 0 || decision.proven > 0, Reason: OwnershipCloseSkippedListingIncomplete},
-	), AbsenceByListing(oneResponse, answer))
+	), AbsenceByListing(walks, answer))
 }
 
 // OwnershipAbsenceProver gives the provider's own answer for ONE ownership

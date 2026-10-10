@@ -288,7 +288,7 @@ func (handler GitLabTeamCatalogRouteHandler) CollectTeamCatalog(
 		// guard added for finding #4 above and discard otherwise valid
 		// member rows.
 		var projectKeys []string
-		projectListingProven, projectListingPaged := false, false
+		projectListingProven, projectListingResponses := false, 0
 		if selections.Teams || selections.Projects {
 			projectPages, err := providerfoundation.CollectGitLabPageParamPages(ctx, client, providerfoundation.GitLabPageOptions{
 				Path: groupPathValue + "/projects", PerPage: gitlabTeamCatalogListPerPage, MaxPages: gitlabTeamCatalogProjectsMaxPages,
@@ -301,7 +301,7 @@ func (handler GitLabTeamCatalogRouteHandler) CollectTeamCatalog(
 				evidence.Truncated = true
 			}
 			projectListingProven = ownershipListingProvesEnd(projectPages)
-			projectListingPaged = ownershipListingWasPaged(projectPages)
+			projectListingResponses = ownershipListingResponses(projectPages)
 			projectKeys = make([]string, 0, len(projectPages.Items))
 			for _, raw := range projectPages.Items {
 				var project gitlabTeamCatalogProjectPayload
@@ -326,9 +326,10 @@ func (handler GitLabTeamCatalogRouteHandler) CollectTeamCatalog(
 			if !projectListingProven {
 				rows.OwnershipUnprovenTeamIDs = append(rows.OwnershipUnprovenTeamIDs, teamID)
 			}
-			if projectListingPaged {
-				rows.OwnershipPagedTeamIDs = append(rows.OwnershipPagedTeamIDs, teamID)
+			if rows.OwnershipListingResponses == nil {
+				rows.OwnershipListingResponses = map[string]int{}
 			}
+			rows.OwnershipListingResponses[teamID] = projectListingResponses
 			specificity := uint16(gitlabTeamCatalogBaseSpecificity + gitlabTeamDepth(teamID, parentByTeam)*gitlabTeamCatalogChildSpecificityStep)
 			for _, path := range projectKeys {
 				key := teamID + "\x00" + path
@@ -755,13 +756,13 @@ func (collector GitLabTeamCatalogCollector) CollectTeamCatalog(
 			decision := decideOwnershipClose(ctx, collector.ScopeCensus, ownershipCloseRequest{
 				ref: ref, provider: gitlabTeamCatalogProvider,
 				listed: batch.Rows.OwnershipListedTeamIDs, unproven: batch.Rows.OwnershipUnprovenTeamIDs,
-				paged: batch.Rows.OwnershipPagedTeamIDs,
+				responses: batch.Rows.OwnershipListingResponses,
 			})
 			// A grant that a listing of more than one response does not hold
 			// is closed only on GitLab's own answer for that project.
 			lookups := NewOwnershipAbsenceLookups(ctx, gitlabGroupProjectAbsence{client: client})
 			ownershipRows, plan, snapshotErr := collector.Sink.SnapshotOwnership(
-				ctx, ref.OrgID, batch.Rows.Ownership, decision.read, decision.snapshot(GitLabGroupProjectGrantKind, lookups.Answer), normalizedAt)
+				ctx, ref.OrgID, batch.Rows.Ownership, decision.read, decision.snapshot(GitLabGroupProjectGrantKind, gitlabGroupProjectsWalk, lookups.Answer), normalizedAt)
 			if snapshotErr != nil {
 				return result, snapshotErr
 			}

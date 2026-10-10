@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync/atomic"
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
@@ -39,6 +40,16 @@ type TeamCatalogSerializer interface {
 	Serialize(ctx context.Context, orgID, provider string) (release func(), err error)
 }
 
+// TeamCatalogLossAwareSerializer is a turn that can LOSE the turn while a run lives (a lease whose
+// renewal failed). lost closes then: the run is cancelled, never left to overlap the next holder
+// (round 117 P1).
+type TeamCatalogLossAwareSerializer interface {
+	SerializeWithLoss(ctx context.Context, orgID, provider string) (release func(), lost <-chan struct{}, err error)
+}
+
+// ErrTeamCatalogTurnLost ends a run whose turn was lost while it lived; the job retries.
+var ErrTeamCatalogTurnLost = errors.New("team catalog turn lost while the run lived")
+
 func (carry CarryFirstTeamCatalogCollector) CollectTeamCatalog(
 	ctx context.Context,
 	ref TeamCatalogReference,
@@ -51,12 +62,52 @@ func (carry CarryFirstTeamCatalogCollector) CollectTeamCatalog(
 		return TeamCatalogResult{}, ErrInvalidConfiguration
 	}
 	if carry.Serializer != nil {
-		release, err := carry.Serializer.Serialize(ctx, ref.OrgID, carry.Provider)
+		var (
+			release func()
+			lost    <-chan struct{}
+			err     error
+		)
+		if aware, ok := carry.Serializer.(TeamCatalogLossAwareSerializer); ok {
+			release, lost, err = aware.SerializeWithLoss(ctx, ref.OrgID, carry.Provider)
+		} else {
+			release, err = carry.Serializer.Serialize(ctx, ref.OrgID, carry.Provider)
+		}
 		if err != nil {
 			return TeamCatalogResult{}, fmt.Errorf("team catalog turn (%s): %w", carry.Provider, err)
 		}
 		defer release()
+		if lost != nil {
+			runCtx, cancel := context.WithCancelCause(ctx)
+			defer cancel(nil)
+			done := make(chan struct{})
+			var lostDuring atomic.Bool
+			go func() {
+				select {
+				case <-lost:
+					lostDuring.Store(true)
+					cancel(ErrTeamCatalogTurnLost)
+				case <-done:
+				}
+			}()
+			result, err := carry.run(runCtx, ref, credential, client, selections, normalizedAt)
+			close(done)
+			if lostDuring.Load() || errors.Is(context.Cause(runCtx), ErrTeamCatalogTurnLost) {
+				return result, fmt.Errorf("team catalog turn (%s): %w", carry.Provider, ErrTeamCatalogTurnLost)
+			}
+			return result, err
+		}
 	}
+	return carry.run(ctx, ref, credential, client, selections, normalizedAt)
+}
+
+func (carry CarryFirstTeamCatalogCollector) run(
+	ctx context.Context,
+	ref TeamCatalogReference,
+	credential providerfoundation.Credential,
+	client *providerfoundation.HTTPClient,
+	selections TeamCatalogSelections,
+	normalizedAt time.Time,
+) (TeamCatalogResult, error) {
 	if err := CarryTeamIDsBeforeWrite(ctx, carry.Conn, ref.OrgID, carry.Writer); err != nil {
 		return TeamCatalogResult{}, err
 	}

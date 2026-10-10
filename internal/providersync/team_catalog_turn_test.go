@@ -144,3 +144,60 @@ func TestTeamCatalogTurnFailureStopsTheRunBeforeTheCarryAndTheCollector(t *testi
 		t.Fatalf("err = %v, collector ran = %v, carry reads = %d, batches = %d; want the turn's error and nothing else", err, ran, len(conn.queries), conn.batches)
 	}
 }
+
+type lossAwareTurn struct {
+	lost     chan struct{}
+	released atomic.Int32
+}
+
+func (t *lossAwareTurn) Serialize(ctx context.Context, org, provider string) (func(), error) {
+	release, _, err := t.SerializeWithLoss(ctx, org, provider)
+	return release, err
+}
+
+func (t *lossAwareTurn) SerializeWithLoss(context.Context, string, string) (func(), <-chan struct{}, error) {
+	return func() { t.released.Add(1) }, t.lost, nil
+}
+
+type blockingCollector struct{ started, cancelled chan struct{} }
+
+func (c blockingCollector) CollectTeamCatalog(ctx context.Context, _ TeamCatalogReference, _ providerfoundation.Credential,
+	_ *providerfoundation.HTTPClient, _ TeamCatalogSelections, _ time.Time,
+) (TeamCatalogResult, error) {
+	close(c.started)
+	<-ctx.Done()
+	close(c.cancelled)
+	return TeamCatalogResult{}, ctx.Err()
+}
+
+// Round 117 P1: a run that LOSES its turn while it lives is cancelled and fails with ErrTeamCatalogTurnLost
+// (the job retries); it is never left to overlap the next holder.
+func TestARunThatLosesItsTurnIsCancelled(t *testing.T) {
+	turn := &lossAwareTurn{lost: make(chan struct{})}
+	collector := blockingCollector{started: make(chan struct{}), cancelled: make(chan struct{})}
+	registry := CarryFirstSerializedTeamCatalogCollectors(zeroCountCarryConn{}, turn, map[string]TeamCatalogCollector{"linear": collector})
+	errs := make(chan error, 1)
+	go func() {
+		_, err := registry["linear"].CollectTeamCatalog(context.Background(), TeamCatalogReference{OrgID: "org-1"},
+			providerfoundation.Credential{}, nil, TeamCatalogSelections{Teams: true}, time.Now())
+		errs <- err
+	}()
+	<-collector.started
+	close(turn.lost) // the lease's renewal failed
+	select {
+	case <-collector.cancelled:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the collector kept running after its turn was lost")
+	}
+	select {
+	case err := <-errs:
+		if !errors.Is(err, ErrTeamCatalogTurnLost) {
+			t.Fatalf("err = %v, want ErrTeamCatalogTurnLost", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the run did not end after its turn was lost")
+	}
+	if turn.released.Load() != 1 {
+		t.Errorf("released %d times, want 1", turn.released.Load())
+	}
+}

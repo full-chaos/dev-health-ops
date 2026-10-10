@@ -58,3 +58,38 @@ func TestCatalogLeaseTurnFailsLoudlyWithoutAPoolOrALease(t *testing.T) {
 		t.Errorf("err = %v, want the store's error wrapped", err)
 	}
 }
+
+type lostLease struct {
+	releaseCounter
+	lost chan struct{}
+}
+
+func (l lostLease) Lost() <-chan struct{} { return l.lost }
+
+type lossBudget struct{ lost chan struct{} }
+
+func (b lossBudget) Acquire(context.Context, jobruntime.BudgetRequest) (jobruntime.BudgetLease, error) {
+	return lostLease{releaseCounter{&recordingBudget{}}, b.lost}, nil
+}
+
+// Round 117 P1: the loss signal of the budget lease reaches the carry wrapper.
+func TestCatalogLeaseTurnPassesTheLeaseLossSignal(t *testing.T) {
+	lost := make(chan struct{})
+	release, got, err := (catalogLeaseTurn{budget: lossBudget{lost}}).SerializeWithLoss(context.Background(), "20000000-0000-4000-8000-000000000001", "linear")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	if got == nil {
+		t.Fatal("no loss signal for a lease that has one")
+	}
+	close(lost)
+	select {
+	case <-got:
+	default:
+		t.Error("the signal is not the lease's own")
+	}
+	if _, none, _ := (catalogLeaseTurn{budget: &recordingBudget{}}).SerializeWithLoss(context.Background(), "20000000-0000-4000-8000-000000000001", "linear"); none != nil {
+		t.Error("a lease that cannot be lost gave a signal")
+	}
+}

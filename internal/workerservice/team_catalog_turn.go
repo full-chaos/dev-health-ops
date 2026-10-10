@@ -28,8 +28,8 @@ type catalogBudget interface {
 // NO connection is held while a run lives: acquiring is one short transaction (count and
 // insert under an advisory xact lock, safe behind a transaction-mode PgBouncer), then the
 // lease is a row and a renewal. So it works at a domain pool of one connection and costs
-// no pooler budget. A lease the run LOSES (renewal fails) leaves the run unserialized,
-// never failed: the shared stamping rule heals a later run.
+// no pooler budget. A lease the run LOSES (renewal fails) cancels the run (round 117 P1:
+// an overlap is the defect this turn exists to prevent); the job retries.
 type catalogLeaseTurn struct {
 	budget catalogBudget
 }
@@ -48,8 +48,19 @@ func newCatalogLeaseTurn(pool *pgxpool.Pool) catalogLeaseTurn {
 }
 
 func (turn catalogLeaseTurn) Serialize(ctx context.Context, orgID, provider string) (func(), error) {
+	release, _, err := turn.SerializeWithLoss(ctx, orgID, provider)
+	return release, err
+}
+
+// leaseLoss is the optional signal of a budget lease whose renewal failed (jobruntime).
+type leaseLoss interface{ Lost() <-chan struct{} }
+
+// SerializeWithLoss is Serialize plus the loss signal of the lease: a run that LOSES its lease is
+// cancelled by the carry wrapper (providersync.ErrTeamCatalogTurnLost), never left to overlap the
+// next holder; the job retries. A budget that cannot lose its lease gives a nil signal.
+func (turn catalogLeaseTurn) SerializeWithLoss(ctx context.Context, orgID, provider string) (func(), <-chan struct{}, error) {
 	if turn.budget == nil {
-		return nil, errors.New("team catalog turn: no Postgres pool")
+		return nil, nil, errors.New("team catalog turn: no Postgres pool")
 	}
 	lease, err := turn.budget.Acquire(ctx, jobruntime.BudgetRequest{
 		Kind:             "team_catalog." + provider,
@@ -58,7 +69,11 @@ func (turn catalogLeaseTurn) Serialize(ctx context.Context, orgID, provider stri
 		ConcurrencyLimit: 1,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("acquire the catalog lease: %w", err)
+		return nil, nil, fmt.Errorf("acquire the catalog lease: %w", err)
 	}
-	return lease.Release, nil
+	var lost <-chan struct{}
+	if withLoss, ok := lease.(leaseLoss); ok {
+		lost = withLoss.Lost()
+	}
+	return lease.Release, lost, nil
 }

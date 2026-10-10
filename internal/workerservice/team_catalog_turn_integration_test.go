@@ -159,6 +159,16 @@ func TestCatalogLeaseTurnKeepsOneOpenRowOfANewFactAcrossOverlappingRuns(t *testi
 				release()
 			}
 		}()
+		// the real budget lease carries a loss signal (a lost lease cancels the run: round 117 P1)
+		probeOrg := uuid.NewString()
+		probeRelease, lost, err := turns[0].SerializeWithLoss(ctx, probeOrg, "linear")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if lost == nil {
+			t.Error("the real budget lease gave no loss signal")
+		}
+		probeRelease()
 		other, err := turns[1].Serialize(ctx, org, "github")
 		if err != nil {
 			t.Fatalf("another provider of the organization waited: %v", err)

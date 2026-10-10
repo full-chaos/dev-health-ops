@@ -1722,16 +1722,30 @@ type dailyDrainTriggers struct {
 	finalize   *daily.FinalizeHandler
 }
 
+// errDailyDiscovererCannotReport: the discoverer of the daily dispatcher
+// cannot say which stored rows its discovery leaves out.
+var errDailyDiscovererCannotReport = errors.New("daily repository discoverer cannot report the repositories it does not discover")
+
 // newDrainingDailyDispatcher builds the dispatch handler of the daily family
 // with the drain of the pending touched days set on it: the dispatch of a
 // nightly run is the floor trigger of the drain. A nil drain is an error: a
 // worker whose dispatcher triggers no pass leaves the pending days to a later
 // sync.
+//
+// A discoverer that cannot report the repositories it does not discover is an
+// error too. The dispatcher asks for that report through an optional
+// interface, so a discoverer without it (a wrapper put around the real one)
+// would dispatch every run and say nothing, which reads as "nothing left out".
 func newDrainingDailyDispatcher(
 	store daily.Store, publisher daily.Publisher, discoverer daily.RepositoryDiscoverer, drain daily.TouchedDaysDrainer,
 ) (*daily.Dispatcher, error) {
 	if drain == nil {
 		return nil, errWorkerDependencyUnavailable
+	}
+	if discoverer != nil {
+		if _, reports := discoverer.(daily.RepositoriesNotDiscoveredReporter); !reports {
+			return nil, errDailyDiscovererCannotReport
+		}
 	}
 	handler, err := daily.NewDispatcher(store, publisher, discoverer)
 	if err != nil {

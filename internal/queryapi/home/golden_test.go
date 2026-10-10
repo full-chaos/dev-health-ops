@@ -178,7 +178,7 @@ func orgGoldenHandler(t *testing.T) func(t *testing.T, query string, bindings []
 			if isCurrentWindow(bindings) {
 				rework = uint64(math.Round(fx.current * 100))
 			}
-			return &fixtureRowScanner{rows: [][]any{{uint64(200), uint64(100), rework, uint64(0), uint64(7)}}}, nil
+			return &fixtureRowScanner{rows: [][]any{{uint64(200), uint64(100), rework, uint64(0), uint64(7), uint64(200)}}}, nil
 
 		case strings.Contains(q, "duration_hours") && strings.Contains(q, "FROM work_item_state_durations_daily"):
 			if isCurrentWindow(bindings) {

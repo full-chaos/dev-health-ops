@@ -32,6 +32,10 @@ import (
 //	repo current  current measured, no prior row
 //	repo prior    current row UNDEFINED (no evidence / no rate), prior measured
 //	repo neither  current row undefined, prior undefined
+//
+// and, in a second organization (the driver list holds 3 places), CHAOS-9121:
+//
+//	repo gone     NO current row, prior measured: listed like "prior"
 func TestRESTExplainDriversNeedAValueOnOneSideForEveryAggregatorClass(t *testing.T) {
 	conn, client := startTeamScopeClickHouse(t)
 	const org = "explain-drivers-both-sides"
@@ -75,12 +79,39 @@ func TestRESTExplainDriversNeedAValueOnOneSideForEveryAggregatorClass(t *testing
 		t.Fatal(err)
 	}
 
+	// CHAOS-9121: a group with a prior row and no current row.
+	const orgGone = "explain-drivers-prior-no-current-row"
+	reposGone := map[string]uuid.UUID{"both": uuid.New(), "gone": uuid.New(), "neither": uuid.New()}
+	for name, id := range reposGone {
+		if err := conn.Exec(context.Background(), fmt.Sprintf(
+			"INSERT INTO repos (id, repo, provider, org_id, created_at, last_synced) VALUES ('%s', 'acme/%s', 'github', '%s', now64(3), now64(3))", id, name, orgGone)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := writer.WriteChangeFailure(context.Background(), []repouser.ChangeFailureDaily{
+		{RepoID: reposGone["both"], Day: prior, Counts: measured, ComputedAt: computedAt},
+		{RepoID: reposGone["both"], Day: current, Counts: measured, ComputedAt: computedAt},
+		{RepoID: reposGone["gone"], Day: prior, Counts: measured, ComputedAt: computedAt},
+		{RepoID: reposGone["neither"], Day: prior, Counts: unknown, ComputedAt: computedAt},
+		{RepoID: reposGone["neither"], Day: current, Counts: unknown, ComputedAt: computedAt},
+	}, orgGone); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, err := writer.WriteResult(context.Background(), repouser.Result{RepoMetrics: []repouser.RepoMetric{
+		{RepoID: reposGone["both"], Day: prior, PRsMerged: 4, RevertRate: rate(0.25), ComputedAt: computedAt},
+		{RepoID: reposGone["both"], Day: current, PRsMerged: 5, RevertRate: rate(0.2), ComputedAt: computedAt},
+		{RepoID: reposGone["gone"], Day: prior, PRsMerged: 4, RevertRate: rate(0.25), ComputedAt: computedAt},
+		{RepoID: reposGone["neither"], Day: prior, PRsMerged: 4, ComputedAt: computedAt},
+		{RepoID: reposGone["neither"], Day: current, PRsMerged: 5, ComputedAt: computedAt},
+	}}, orgGone); err != nil {
+		t.Fatal(err)
+	}
 	reader, err := explain.NewReader(client)
 	if err != nil {
 		t.Fatal(err)
 	}
 	handler := newExplainGetHandler(reader)
-	list := func(metric, group string) string {
+	list := func(org string, repos map[string]uuid.UUID, metric, group string) string {
 		t.Helper()
 		target := fmt.Sprintf("/api/v1/explain?metric=%s&range_days=1&compare_days=1&end_date=%s", metric, current.Format("2006-01-02"))
 		req := httptest.NewRequest(http.MethodGet, target, nil)
@@ -115,11 +146,15 @@ func TestRESTExplainDriversNeedAValueOnOneSideForEveryAggregatorClass(t *testing
 	}
 	for _, metric := range []string{"change_failure_rate", "revert_rate"} {
 		wantDrivers := "both(data=true,prior=true) current(data=true,prior=false) prior(data=false,prior=true)"
-		if got := list(metric, "drivers"); got != wantDrivers {
+		if got := list(org, repos, metric, "drivers"); got != wantDrivers {
 			t.Errorf("%s drivers = %s\n  want %s", metric, got, wantDrivers)
 		}
+		wantGone := "both(data=true,prior=true) gone(data=false,prior=true)"
+		if got := list(orgGone, reposGone, metric, "drivers"); got != wantGone {
+			t.Errorf("%s drivers (a group with a prior row and no current row) = %s\n  want %s", metric, got, wantGone)
+		}
 		wantContributors := "both(data=true,prior=false) current(data=true,prior=false)"
-		if got := list(metric, "contributors"); got != wantContributors {
+		if got := list(org, repos, metric, "contributors"); got != wantContributors {
 			t.Errorf("%s contributors = %s\n  want %s", metric, got, wantContributors)
 		}
 	}

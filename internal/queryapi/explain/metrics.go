@@ -259,9 +259,9 @@ FROM %s
 
 // metricRow is one row fetchMetricContributors/fetchMetricDriverDelta
 // returns -- id/value for a contributor row, id/value/delta_pct for a
-// driver row (DeltaPct is unused/zero for a contributor row; the caller,
-// buildContributor, always overrides a contributor's delta to 0.0
-// itself, matching explain.py:240's own `delta_value=0.0` literal).
+// driver row (a contributor row has no comparison side: its DeltaPct is nil,
+// and the response serves null for it, where explain.py:240's own
+// `delta_value=0.0` literal serves 0.0).
 type metricRow struct {
 	ID    string
 	Value float64
@@ -377,28 +377,42 @@ func (reader *Reader) fetchMetricDriverDelta(ctx context.Context, table, column,
 	// integer column returns UInt64, which this binary's native driver
 	// refuses to scan into current.value/previous.value's *float64
 	// destinations.
+	// The driver set is the UNION of both windows (CHAOS-9121, D5856): a group
+	// with a stored value in the comparison window and no row at all in the
+	// current window is the same state as one whose current value is NULL, so the
+	// join is FULL and every side carries its own presence flag (a FULL JOIN fills
+	// the side that found no match with column defaults, never NULL). One
+	// predicate (a stored value on either side) both lists a group and keeps it
+	// out of the LIMIT set when it holds none.
+	const (
+		currentStored  = "(current.present = 1 AND current.value IS NOT NULL)"
+		previousStored = "(previous.present = 1 AND previous.value IS NOT NULL)"
+		currentValue   = "if(current.present = 1, current.value, NULL)"
+	)
 	query := fmt.Sprintf(`
 SELECT
-    current.id AS id,
-    current.value AS value,
-    toUInt8(current.value IS NOT NULL) AS has_data,
-    toUInt8(previous.present = 1 AND previous.value IS NOT NULL) AS has_prior_data,
+    if(current.present = 1, current.id, previous.id) AS id,
+    %s AS value,
+    toUInt8(%s) AS has_data,
+    toUInt8(%s) AS has_prior_data,
     %s AS delta_pct
 FROM (
-    SELECT toString(%s) AS id, %s AS value
+    SELECT toString(%s) AS id, %s AS value, toUInt8(1) AS present
     FROM %s
     GROUP BY %s
 ) AS current
-LEFT JOIN (
+FULL JOIN (
     SELECT toString(%s) AS id, %s AS value, toUInt8(1) AS present
     FROM %s
     GROUP BY %s
 ) AS previous ON current.id = previous.id
-WHERE current.value IS NOT NULL OR (previous.present = 1 AND previous.value IS NOT NULL)
+WHERE %s OR %s
 ORDER BY delta_pct DESC NULLS LAST
 LIMIT {limit:UInt64}
 %s
-`, deltarule.DriverPercentSQL("current.value", "previous.value", "previous.present"), groupBy, valueSQL, currentFrom, groupBy, groupBy, valueSQL, previousFrom, groupBy, settingsMaxExecutionTime())
+`, currentValue, currentStored, previousStored, deltarule.DriverPercentSQL(currentValue, "previous.value", "previous.present"),
+		groupBy, valueSQL, currentFrom, groupBy, groupBy, valueSQL, previousFrom, groupBy,
+		currentStored, previousStored, settingsMaxExecutionTime())
 
 	bindings := append([]dhclickhouse.Binding{
 		{Name: "start_day", Value: dateBindingValue(startDay)},

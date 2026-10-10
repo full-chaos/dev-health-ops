@@ -15,6 +15,9 @@ import (
 // empty-answer policy, is a deliberate edit of this table.
 var snapshotKindCensus = map[string]struct {
 	constructor, empty, why string
+	// absence is what the kind takes as the proof that an open fact the run
+	// does not hold is gone (snapshotAbsenceByKind).
+	absence string
 }{
 	// Scope: EVERY kind below closes only behind the one scope gate
 	// (ProveSoleScope: no other active integration of the provider in the
@@ -24,23 +27,23 @@ var snapshotKindCensus = map[string]struct {
 	// all, and TestSnapshotKindPolicyTableIsTheDocumentedOne pins it in the
 	// two documented tables.
 	"linear_project_ownership": {"internal/providersync.LinearProjectOwnershipKind", "EmptyClosesNothing",
-		"one projects walk for the workspace: an answer with no project ownership is an access change before it is a removal"},
+		"one projects walk for the workspace: an answer with no project ownership is an access change before it is a removal", "cursor walk"},
 	"linear_team_key_ownership": {"internal/providersync.LinearTeamKeyOwnershipKind", "EmptyClosesNothing",
-		"one teams walk for the workspace: an answer with no team is an access change before it is a removal"},
+		"one teams walk for the workspace: an answer with no team is an access change before it is a removal", "cursor walk"},
 	"jira_legacy_ownership": {"internal/providersync.JiraLegacyOwnershipKind", "EmptyClosesNothing",
-		"one project search for the site: no live project is far more often an access change than a removal"},
+		"one project search for the site: no live project is far more often an access change than a removal", "one response or direct answer"},
 	"gitlab_group_project_grants": {"internal/providersync.GitLabGroupProjectGrantKind", "EmptyIsAnAnswer",
-		"one listing per group, each with its own proven end, in a scope no other integration lists: a group with no project is an answer"},
+		"one listing per group, each with its own proven end, in a scope no other integration lists: a group with no project is an answer", "one response or direct answer"},
 	"github_team_repo_grants": {"internal/providersync.GitHubTeamRepoGrantKind", "EmptyIsAnAnswer",
-		"one listing per team, each with its own proven end, in a scope no other integration lists: a team with no repository is an answer"},
+		"one listing per team, each with its own proven end, in a scope no other integration lists: a team with no repository is an answer", "one response or direct answer"},
 	"atlassian_team_project_links": {"internal/providersync.AtlassianTeamLinkKind", "EmptyIsAnAnswer",
 		"one link read per team, each to its end: a team with no link is an answer; a team outside the search answer is in scope " +
-			"only through atlassian_team_catalog"},
+			"only through atlassian_team_catalog", "cursor walk"},
 	"atlassian_team_memberships": {"internal/providersync.AtlassianTeamMembershipKind", "EmptyIsAnAnswer",
 		"one member read per team, each to its end: a team with no member is an answer; a team outside the search answer is in " +
-			"scope only through atlassian_team_catalog"},
+			"scope only through atlassian_team_catalog", "cursor walk"},
 	"atlassian_team_catalog": {"internal/providersync.AtlassianTeamCatalogKind", "EmptyClosesNothing",
-		"one team search for the organization: a search that answers no team is an access change before every team was deleted"},
+		"one team search for the organization: a search that answers no team is an access change before every team was deleted", "cursor walk"},
 }
 
 // snapshotCloseSites is every production function that turns the retractions
@@ -199,7 +202,7 @@ func TestSnapshotKindPolicyTableIsTheDocumentedOne(t *testing.T) {
 		if !known {
 			t.Fatalf("the kind %q has the empty-answer policy %q, which this test has no wording for", name, entry.empty)
 		}
-		want[name] = snapshotKindScope + "; " + policy
+		want[name] = snapshotKindScope + "; " + policy + "; " + entry.absence
 	}
 	read := func(path string, row *regexp.Regexp) map[string]string {
 		t.Helper()
@@ -213,7 +216,7 @@ func TestSnapshotKindPolicyTableIsTheDocumentedOne(t *testing.T) {
 				if _, twice := got[match[1]]; twice {
 					t.Errorf("%s names the kind %q twice", path, match[1])
 				}
-				got[match[1]] = match[2] + "; " + match[3]
+				got[match[1]] = match[2] + "; " + match[3] + "; " + match[4]
 			}
 		}
 		if len(got) == 0 {
@@ -221,13 +224,102 @@ func TestSnapshotKindPolicyTableIsTheDocumentedOne(t *testing.T) {
 		}
 		return got
 	}
-	code := read("snapshot_kinds.go", regexp.MustCompile(`^//\t([a-z_]+)\s+(sole integration)\s+(closes nothing|is an answer)$`))
+	code := read("snapshot_kinds.go", regexp.MustCompile(`^//\t([a-z_]+)\s+(sole integration)\s+(closes nothing|is an answer)\s+(cursor walk|one response or direct answer)$`))
 	if !reflect.DeepEqual(code, want) {
 		t.Errorf("the policy table in the doc comment of snapshot_kinds.go differs from the census.\n got  %v\n want %v", code, want)
 	}
 	document := read("../../docs/contribute/architecture/team-attribution.md",
-		regexp.MustCompile("^\\s*\\| `([a-z_]+)` \\|[^|]*\\|[^|]*\\| (sole integration) \\| (closes nothing|is an answer)\\b[^|]*\\|$"))
+		regexp.MustCompile("^\\s*\\| `([a-z_]+)` \\|[^|]*\\|[^|]*\\| (sole integration) \\| (closes nothing|is an answer)\\b[^|]*\\| (cursor walk|one response or direct answer) \\|$"))
 	if !reflect.DeepEqual(document, want) {
 		t.Errorf("the kinds table of docs/contribute/architecture/team-attribution.md differs from the census.\n got  %v\n want %v", document, want)
+	}
+}
+
+// snapshotAbsenceCalls is every production file that states the proof of an
+// absence for a kind snapshot, and how often it makes each statement. The
+// kinds behind each call:
+//
+//   - linear_team_catalog_collector.go: linear_project_ownership and
+//     linear_team_key_ownership, both by the cursor walk.
+//   - internal/atlassianteams/write.go: atlassian_team_memberships,
+//     atlassian_team_project_links and atlassian_team_catalog, by the cursor walk.
+//   - ownership_close_gate.go: github_team_repo_grants and
+//     gitlab_group_project_grants (one call, ownershipCloseDecision.snapshot),
+//     by one response or the direct answer.
+//   - jira_team_catalog_route.go: jira_legacy_ownership, by one response (or a
+//     project the search holds) or the direct answer.
+//
+// A new call, or a kind that moves from one statement to the other, is a
+// deliberate edit of this table, of snapshotKindCensus and of the two
+// documented tables.
+var snapshotAbsenceCalls = map[string]map[string]int{
+	"internal/providersync/linear_team_catalog_collector.go": {"AbsenceByWalk": 2},
+	"internal/atlassianteams/write.go":                       {"AbsenceByWalk": 3},
+	"internal/providersync/ownership_close_gate.go":          {"AbsenceByListing": 1},
+	"internal/providersync/jira_team_catalog_route.go":       {"AbsenceByListing": 1},
+}
+
+// TestAbsenceProofCensus pins who states the proof of an absence, and that
+// the only walk taken as that proof is the cursor walk. It reads the source of
+// the two packages that hold a close site.
+func TestAbsenceProofCensus(t *testing.T) {
+	call := regexp.MustCompile(`\b(?:providersync\.)?(AbsenceByWalk|AbsenceByListing)(?:\[[^\]]+\])?\(`)
+	walk := regexp.MustCompile(`AbsenceByWalk(?:\[[^\]]+\])?\((?:providersync\.)?(\w+)\)`)
+	got := map[string]map[string]int{}
+	files := 0
+	for _, directory := range []string{".", "../atlassianteams"} {
+		entries, err := os.ReadDir(directory)
+		if err != nil {
+			t.Fatalf("read %s: %v", directory, err)
+		}
+		for _, entry := range entries {
+			name := entry.Name()
+			if entry.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") || name == "ownership_snapshot.go" {
+				continue
+			}
+			raw, err := os.ReadFile(directory + "/" + name)
+			if err != nil {
+				t.Fatal(err)
+			}
+			files++
+			path := "internal/providersync/" + name
+			if directory != "." {
+				path = "internal/atlassianteams/" + name
+			}
+			var code []string
+			for _, line := range strings.Split(string(raw), "\n") {
+				if !strings.HasPrefix(strings.TrimSpace(line), "//") {
+					code = append(code, line)
+				}
+			}
+			source := strings.Join(code, "\n")
+			for _, match := range call.FindAllStringSubmatch(source, -1) {
+				if got[path] == nil {
+					got[path] = map[string]int{}
+				}
+				got[path][match[1]]++
+			}
+			for _, match := range walk.FindAllStringSubmatch(source, -1) {
+				if match[1] != "AbsenceWalkByCursor" {
+					t.Errorf("%s takes the walk %s as the proof of an absence: the only named walk is AbsenceWalkByCursor", path, match[1])
+				}
+			}
+		}
+	}
+	if files < 20 {
+		t.Fatalf("the census read %d source file(s): it measured nothing", files)
+	}
+	if !reflect.DeepEqual(got, snapshotAbsenceCalls) {
+		t.Errorf("the statements of an absence proof changed.\n got  %v\n want %v", got, snapshotAbsenceCalls)
+	}
+	// The table of the kinds and the calls agree: five kinds by the cursor
+	// walk (five calls), three by the listing rule (two calls, one of them the
+	// gate's, for the two grant kinds).
+	byAbsence := map[string]int{}
+	for _, entry := range snapshotKindCensus {
+		byAbsence[entry.absence]++
+	}
+	if byAbsence["cursor walk"] != 5 || byAbsence["one response or direct answer"] != 3 || len(byAbsence) != 2 {
+		t.Errorf("the kinds by absence proof are %v, want 5 by the cursor walk and 3 by one response or the direct answer", byAbsence)
 	}
 }

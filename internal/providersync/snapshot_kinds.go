@@ -22,15 +22,25 @@ import "time"
 // change than a real empty state. "is an answer": the kind is read per team,
 // each read proves its own end, and a team with no row is a real answer.
 //
-//	kind                          scope             empty answer
-//	linear_project_ownership      sole integration  closes nothing
-//	linear_team_key_ownership     sole integration  closes nothing
-//	jira_legacy_ownership         sole integration  closes nothing
-//	atlassian_team_catalog        sole integration  closes nothing
-//	atlassian_team_memberships    sole integration  is an answer
-//	atlassian_team_project_links  sole integration  is an answer
-//	gitlab_group_project_grants   sole integration  is an answer
-//	github_team_repo_grants       sole integration  is an answer
+//	kind                          scope             empty answer    absence
+//	linear_project_ownership      sole integration  closes nothing  cursor walk
+//	linear_team_key_ownership     sole integration  closes nothing  cursor walk
+//	jira_legacy_ownership         sole integration  closes nothing  one response or direct answer
+//	atlassian_team_catalog        sole integration  closes nothing  cursor walk
+//	atlassian_team_memberships    sole integration  is an answer    cursor walk
+//	atlassian_team_project_links  sole integration  is an answer    cursor walk
+//	gitlab_group_project_grants   sole integration  is an answer    one response or direct answer
+//	github_team_repo_grants       sole integration  is an answer    one response or direct answer
+//
+// Absence: what proves that an open fact the run does not hold is gone
+// (AbsenceProof, an argument of every kind snapshot). "one response or direct
+// answer": the kind's listing is read by position (a page number, an offset);
+// a listing of ONE response proves what it does not hold, and for a listing
+// of more than one response the provider's own answer for that one fact does,
+// inside a budget of AbsenceLookupBudget per run (AbsenceByListing). "cursor
+// walk": the walk follows the provider's cursor to its proven end, and its
+// answer is taken as the proof (AbsenceByWalk); the providers state no
+// contract for a list that changes during such a walk, so it is a named risk.
 
 // MembershipSnapshotRow is one team_memberships fact as the snapshot rule
 // reads it: the team, the member and the stored valid_from.

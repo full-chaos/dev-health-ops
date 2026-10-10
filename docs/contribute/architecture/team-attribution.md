@@ -697,16 +697,41 @@ project's items by id. Now:
   closed, and a kind that is read per team with its own proven end per team declares an empty answer to be
   an answer (`EmptyIsAnAnswer`). The kinds:
 
-  | Kind | Writer | Walk behind the proof | Scope proof | Empty answer |
-  | --- | --- | --- | --- | --- |
-  | `linear_project_ownership` | Linear catalog | every project page, node and project-team page; no link without a key | sole integration | closes nothing |
-  | `linear_team_key_ownership` | Linear catalog | the team walk | sole integration | closes nothing |
-  | `jira_legacy_ownership` | Jira catalog | the project search (live, archived, live again) and the legacy links read | sole integration | closes nothing |
-  | `atlassian_team_catalog` | Atlassian Teams | the team search | sole integration | closes nothing: no team is deactivated or put in scope |
-  | `atlassian_team_memberships` | Atlassian Teams | one member read per active team | sole integration | is an answer (per team) |
-  | `atlassian_team_project_links` | Atlassian Teams | one link read per active team | sole integration | is an answer (per team) |
-  | `gitlab_group_project_grants` | GitLab catalog | one listing per closable group (section 0.4a) | sole integration | is an answer (per group) |
-  | `github_team_repo_grants` | GitHub catalog | one listing per closable team | sole integration | is an answer (per team) |
+  | Kind | Writer | Walk behind the proof | Scope proof | Empty answer | Proof of an absence |
+  | --- | --- | --- | --- | --- | --- |
+  | `linear_project_ownership` | Linear catalog | every project page, node and project-team page; no link without a key | sole integration | closes nothing | cursor walk |
+  | `linear_team_key_ownership` | Linear catalog | the team walk | sole integration | closes nothing | cursor walk |
+  | `jira_legacy_ownership` | Jira catalog | the project search (live, archived, live again) and the legacy links read | sole integration | closes nothing | one response or direct answer |
+  | `atlassian_team_catalog` | Atlassian Teams | the team search | sole integration | closes nothing: no team is deactivated or put in scope | cursor walk |
+  | `atlassian_team_memberships` | Atlassian Teams | one member read per active team | sole integration | is an answer (per team) | cursor walk |
+  | `atlassian_team_project_links` | Atlassian Teams | one link read per active team | sole integration | is an answer (per team) | cursor walk |
+  | `gitlab_group_project_grants` | GitLab catalog | one listing per closable group (section 0.4a) | sole integration | is an answer (per group) | one response or direct answer |
+  | `github_team_repo_grants` | GitHub catalog | one listing per closable team | sole integration | is an answer (per team) | one response or direct answer |
+
+  **Proof of an absence, for every kind** (`providersync.AbsenceProof`, an argument of every kind snapshot,
+  so no kind can be stated without it; a kind that states none closes no absent fact). A walk that reached
+  the provider's end of the list proves that the walk ended. It does not prove that every fact was on a
+  page: when a list is read in more than one request by position (a page number, an offset) and the list
+  changes between two requests, the later items move, and a fact that still holds is on no page. So an open
+  fact that the run does not hold is closed only when its absence is proven:
+  - **one response or direct answer** (`AbsenceByListing`; the GitHub and GitLab grants and the Jira legacy
+    rows). A listing read in ONE response cannot move: what it does not hold is gone. For a listing of more
+    than one response, the absent fact is a CANDIDATE: the run asks the provider for that one fact (GitHub:
+    the team's permission for the repository; GitLab: the group's projects searched for the project; Jira:
+    the live project search for the project id) and closes the row only when that one response says "not
+    there". "Still there" keeps the row open on its first `valid_from`. A failed answer, and a candidate
+    past the run's budget of `AbsenceLookupBudget` (100) direct answers, close nothing; the next run goes
+    on. Each of the three writes one WARN line (`snapshot_absence_not_proven`, with the counts) and a
+    degraded leg on the run's result. For Jira the rule applies to a project the search does not hold; a
+    project the search does hold whose legacy link is gone closes on the link read, which is one read of
+    the store. The Jira catalog also reads the live search twice and takes the union, so one change during
+    a read hides nothing there.
+  - **cursor walk** (`AbsenceByWalk(AbsenceWalkByCursor)`; the Linear and Atlassian Teams kinds). The walk
+    follows the provider's cursor to its proven end and its answer is taken as the proof. The providers
+    state no contract for a list that changes during such a walk, so this is a named risk, not a measured
+    proof.
+  A walk that did NOT reach its proven end (an error, a cut, a bound) closes nothing, for every kind: that is
+  the kind's `SnapshotProof`, as before.
 
   **Scope proof, for every kind** (`providersync.ProveSoleScope`, the one scope gate; `ScopeProof` is an
   argument of every kind snapshot, so no kind can be stated without it). Ownership, membership and catalog

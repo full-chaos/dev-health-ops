@@ -100,14 +100,14 @@ func TestMoveAdminTeamRosterToMembershipsMovesOnlyTheUncoveredAdminEntries(t *te
 	f.team(org, "", "custom:retired", 0, []string{"z@x.example"})
 	f.team(other, "", "custom:ops", 1, []string{"o@x.example"})
 
-	// Uncovered: dave (his row is closed), erin@x.example (no row), Frank (only
-	// another team has him).
+	// Uncovered: dave (his row is closed) and erin@x.example (no row) move;
+	// Frank holds an open NATIVE row in another team and gets no second row.
 	dry, err := MoveAdminTeamRosterToMemberships(ctx, conn, org, at, true)
 	if err != nil {
 		t.Fatal(err)
 	}
 	want := TeamRosterMoveOutcome{
-		DryRun: true, ColumnPresent: true, RosterFacets: 8, Covered: 4, AdminToMove: 3, TeamsToMove: 1,
+		DryRun: true, ColumnPresent: true, RosterFacets: 8, Covered: 4, NativeElsewhere: 1, AdminToMove: 2, TeamsToMove: 1,
 		ProviderRosterOnly: 1, OpenBefore: 5, OpenAfter: 5,
 	}
 	if dry != want {
@@ -121,19 +121,19 @@ func TestMoveAdminTeamRosterToMembershipsMovesOnlyTheUncoveredAdminEntries(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
-	if real.Moved != 3 || real.OpenBefore != 5 || real.OpenAfter != 8 || real.AdminToMove != 3 {
-		t.Fatalf("real run = %+v, want 3 moved, open memberships 5 -> 8", real)
+	if real.Moved != 2 || real.OpenBefore != 5 || real.OpenAfter != 7 || real.AdminToMove != 2 {
+		t.Fatalf("real run = %+v, want 2 moved, open memberships 5 -> 7", real)
 	}
 	rows := f.moved(org)
 	got := map[string]movedRow{}
 	for _, row := range rows {
 		got[row.MemberID] = row
 	}
-	if len(rows) != 3 || got["dave"].TeamID != "custom:ops" || got["erin@x.example"].TeamID != "custom:ops" || got["Frank"].TeamID != "custom:ops" {
-		t.Fatalf("moved rows = %+v, want dave, erin@x.example, Frank of custom:ops", rows)
+	if len(rows) != 2 || got["dave"].TeamID != "custom:ops" || got["erin@x.example"].TeamID != "custom:ops" {
+		t.Fatalf("moved rows = %+v, want dave and erin@x.example of custom:ops (Frank holds a native row)", rows)
 	}
 	erin := got["erin@x.example"]
-	if erin.TeamID != "custom:ops" || erin.Provider != "" || erin.Source != "inferred" || erin.Primary != 0 || erin.Specificity != 0 ||
+	if erin.TeamID != "custom:ops" || erin.Provider != "teams_roster" || erin.Source != "inferred" || erin.Primary != 0 || erin.Specificity != 0 ||
 		erin.Priority != 1000 || !erin.ValidFrom.Equal(at) || erin.ValidTo != nil || len(erin.Facets) != 1 || erin.Facets[0] != "erin@x.example" ||
 		erin.RawEmail == nil || *erin.RawEmail != "erin@x.example" {
 		t.Fatalf("moved row = %+v", erin)
@@ -149,7 +149,7 @@ func TestMoveAdminTeamRosterToMembershipsMovesOnlyTheUncoveredAdminEntries(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
-	if again.Moved != 0 || again.AdminToMove != 0 || again.OpenBefore != 8 || again.OpenAfter != 8 {
+	if again.Moved != 0 || again.AdminToMove != 0 || again.OpenBefore != 7 || again.OpenAfter != 7 {
 		t.Fatalf("second run = %+v, want nothing to move", again)
 	}
 }
@@ -226,36 +226,53 @@ SELECT 'custom:big', generateUUIDv4(), 'big', arrayMap(x -> concat('person-', to
 	}
 }
 
-// A moved entry never outranks a native membership of the same person: read
-// through the membership read every consumer uses, the person's native team
-// ranks first and the moved entry second.
+// A moved entry never outranks a native membership of the same person. A
+// person who already holds an open native row gets no second row; a person
+// who joins a provider team later (a native row) ranks first through the
+// membership read every consumer uses, the moved entry second.
 func TestAMovedRosterEntryNeverOutranksANativeMembership(t *testing.T) {
 	ctx, conn := newWorkItemEffectsConn(t)
 	at := time.Date(2026, 10, 10, 12, 0, 0, 0, time.UTC)
 	f := rosterMoveFixture{t: t, ctx: ctx, conn: conn, at: at}
 	const org = "roster-move-rank-org"
-	f.team(org, "", "custom:ops", 1, []string{"gwen@x.example"})
-	f.team(org, "github", "gh:platform", 1, []string{"github:gwen"})
-	email := "gwen@x.example"
-	f.membership(org, "github", "gh:platform", "github:gwen", &email, []string{"github:gwen", "gwen@x.example"}, nil)
+	f.team(org, "", "custom:ops", 1, []string{"gwen@x.example", "hal@x.example"})
+	f.team(org, "github", "gh:platform", 1, nil)
+	// hal already has an open native row in another team: no second row.
+	email := "hal@x.example"
+	f.membership(org, "github", "gh:platform", "github:hal", &email, []string{"github:hal", "hal@x.example"}, nil)
 
 	if _, err := MoveAdminTeamRosterToMemberships(ctx, conn, org, at, false); err != nil {
 		t.Fatal(err)
 	}
+	moved := f.moved(org)
+	if len(moved) != 1 || moved[0].MemberID != "gwen@x.example" {
+		t.Fatalf("moved rows = %+v, want gwen only (hal holds a native row)", moved)
+	}
+
+	// gwen joins a provider team afterwards.
+	gwenEmail := "gwen@x.example"
+	f.membership(org, "github", "gh:platform", "github:gwen", &gwenEmail, []string{"github:gwen", "gwen@x.example"}, nil)
 	facts, err := teamattribution.ClickHouseFactSource{Conn: conn}.LoadProviderMembers(ctx, org, at.Add(time.Minute))
 	if err != nil {
 		t.Fatal(err)
 	}
 	var candidates []teamattribution.GithubWorkItemDerivationCandidate
 	for _, fact := range facts {
+		if fact.TeamID != "custom:ops" && fact.TeamID != "gh:platform" {
+			continue
+		}
+		hasGwen := fact.MemberID == "gwen@x.example" || fact.MemberID == "github:gwen"
+		if !hasGwen {
+			continue
+		}
 		candidates = append(candidates, teamattribution.GithubWorkItemDerivationCandidateFromFact(
 			"team_membership", fact.TeamID, fact.TeamName, "", fact.IsPrimary, fact.Specificity, fact.Priority, fact.UpdatedAt))
 	}
 	ranked := teamattribution.RankDerivationCandidates(candidates)
 	if len(ranked) != 2 {
-		t.Fatalf("memberships of the person = %d, want the native one and the moved one", len(ranked))
+		t.Fatalf("memberships of gwen = %d, want the native one and the moved one", len(ranked))
 	}
 	if first := teamattribution.GithubWorkItemDerivationStringValue(ranked[0].TeamID); first != "gh:platform" {
-		t.Fatalf("first team of the person = %q, want gh:platform: a moved roster entry must never outrank a native membership", first)
+		t.Fatalf("first team of gwen = %q, want gh:platform: a moved roster entry must never outrank a native membership", first)
 	}
 }

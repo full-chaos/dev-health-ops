@@ -1646,10 +1646,12 @@ organization that no open `team_memberships` row of the same team covers into
 `team_memberships`, so no member of such a team is lost. An entry is covered
 when an open row of the team holds it (case and surrounding space ignored) as
 its member id, raw e-mail, raw provider user id or an identity facet. A moved
-entry carries its own provenance and never outranks a native membership:
-provider `""`, source `inferred` (the conflict guard pins only `manual` rows, so
-a moved entry pins nothing), not primary, specificity 0, priority 1000, valid
-from the time of the run, no end.
+entry carries a provenance that names its origin and never outranks a native
+membership: provider `teams_roster` (migrated from the roster column; no work
+item has this provider), source `inferred` (the conflict guard pins only
+`manual` rows, so a moved entry pins nothing), not primary, specificity 0,
+priority 1000, valid from the time of the run, no end. A person who already
+holds an open native row in any team gets no second row (`native_elsewhere`).
 
 Nothing else is written. An entry of a provider team that no open row covers is
 a person the provider no longer lists: it is counted (`provider_roster_only`)
@@ -1665,7 +1667,7 @@ The organization comes from stdin only: `--org-stdin` is required and there is
 no `--org`, with the stdin rules of
 [`metrics daily-start`](#metrics-daily-start-chaos-5055). The verb prints no
 organization id. It prints counts only, under `move_team_roster_to_memberships`:
-`roster_facets`, `covered`, `admin_to_move`, `teams_to_move`,
+`roster_facets`, `covered`, `native_elsewhere`, `admin_to_move`, `teams_to_move`,
 `provider_roster_only`, `open_memberships_before`, `open_memberships_after`,
 `moved` (0 with `--dry-run`). A second run reports `admin_to_move: 0`.
 

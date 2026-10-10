@@ -56,3 +56,26 @@ func metricSpecByName(t *testing.T, name string) metricSpec {
 	t.Fatalf("no metric %s", name)
 	return metricSpec{}
 }
+
+// Named repositories that resolve to nothing read no linked item at all: the
+// filter matches nothing, so no repo-linked statement runs.
+func TestRepoLinkedUnresolvedRepositoryRunsNoLinkedStatement(t *testing.T) {
+	client := fakeQueryClient{t: t, handler: func(t *testing.T, query string, bindings []dhclickhouse.Binding) (dhclickhouse.RowScanner, error) {
+		if strings.Contains(query, "FROM repos FINAL") {
+			return &fixtureRowScanner{rows: nil}, nil
+		}
+		t.Errorf("a statement ran for repositories that resolved to nothing:\n%s", query)
+		return &fixtureRowScanner{rows: nil}, nil
+	}}
+	start := time.Date(2026, 8, 18, 0, 0, 0, 0, time.UTC)
+	for _, name := range []string{"cycle_time", "throughput", "wip_saturation", "blocked_work"} {
+		got, err := computeMetricDelta(context.Background(), client, metricSpecByName(t, name), start, start.AddDate(0, 0, 7), start.AddDate(0, 0, -7), start,
+			Filters{What: WhatFilter{Repos: []string{"acme/nothing"}}}, "org-1", start)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.HasData || got.Value != 0 || got.RepoLinkState == nil || *got.RepoLinkState != repoLinkNoLinks {
+			t.Errorf("%s: %+v, want no data, no_links", name, got)
+		}
+	}
+}

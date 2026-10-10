@@ -414,19 +414,17 @@ FROM (
 }
 
 // computeRowsByDay runs the work_item family's compute for every day of the
-// window over the items it would load that day.
+// window over the items. The compute itself keeps the items that are relevant to
+// the day (created before it ends and started, completed or open at its end, or
+// created in it), as it does for the daily job.
 func computeRowsByDay(from, to time.Time, items []daily.WorkItemViewItem) map[time.Time][]workitemmetrics.MetricsDailyRow {
 	out := map[time.Time][]workitemmetrics.MetricsDailyRow{}
+	if len(items) == 0 {
+		return out
+	}
 	for day := from; day.Before(to); day = day.AddDate(0, 0, 1) {
-		end := day.AddDate(0, 0, 1)
-		var relevant []daily.WorkItemViewItem
-		for _, item := range items {
-			if item.CreatedAt.UTC().Before(end) && (item.Status != "done" || (item.CompletedAt != nil && !item.CompletedAt.UTC().Before(day))) {
-				relevant = append(relevant, item)
-			}
-		}
-		if len(relevant) > 0 {
-			out[day] = daily.ComputeWorkItemMetricsDay(day, relevant)
+		if rows := daily.ComputeWorkItemMetricsDay(day, items); len(rows) > 0 {
+			out[day] = rows
 		}
 	}
 	return out

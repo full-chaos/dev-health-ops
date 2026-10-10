@@ -254,6 +254,19 @@ VALUES (toUUID('%s'), 'gh:a/r#8', 'github', 'in_progress', 'task', 'a/r', %s, %s
 		oracleR1, oracleTS("2026-08-16 09:00:00"), oracleTS("2026-08-17 09:00:00"), org, oracleTS("2026-08-26 00:00:00"))); err != nil {
 		t.Fatal(err)
 	}
+	// A second native item of repository 1, so the tiers count differently
+	// (native 2, explicit_text 1, heuristic 1) and a swap of two tiers shows.
+	for _, statement := range []string{
+		fmt.Sprintf(`INSERT INTO work_items (repo_id, work_item_id, provider, status, type, project_id, created_at, started_at, org_id, last_synced)
+VALUES (toUUID('%s'), 'gh:a/r#10', 'github', 'in_progress', 'task', 'a/r', %s, %s, '%s', %s)`,
+			oracleR1, oracleTS("2026-08-16 09:00:00"), oracleTS("2026-08-17 09:00:00"), org, oracleTS("2026-08-26 00:00:00")),
+		fmt.Sprintf(`INSERT INTO work_graph_issue_pr (repo_id, work_item_id, pr_number, confidence, provenance, evidence, last_synced, org_id)
+VALUES (toUUID('%s'), 'gh:a/r#10', 300, 1.0, 'native', '', %s, '%s')`, oracleR1, oracleTS("2026-08-26 00:00:00"), org),
+	} {
+		if err := admin.Exec(ctx, statement); err != nil {
+			t.Fatal(err)
+		}
+	}
 	start, end := time.Date(2026, 8, 18, 0, 0, 0, 0, time.UTC), time.Date(2026, 8, 25, 0, 0, 0, 0, time.UTC)
 	spec := metricSpecByName(t, "throughput")
 	got, err := computeMetricDelta(ctx, client, spec, start, end, time.Date(2026, 8, 11, 0, 0, 0, 0, time.UTC), start,
@@ -265,15 +278,15 @@ VALUES (toUUID('%s'), 'gh:a/r#8', 'github', 'in_progress', 'task', 'a/r', %s, %s
 		t.Fatalf("state = %v, want linked", got.RepoLinkState)
 	}
 	// Repository 1 holds #1 (native), #2 (explicit_text here, native in repository 2) and #3 (heuristic).
-	if got.RepoLinkBasis == nil || *got.RepoLinkBasis != (RepoLinkBasis{Native: 1, ExplicitText: 1, Heuristic: 1}) {
-		t.Errorf("basis = %+v, want one item of each tier (a lower tier is never counted as native)", got.RepoLinkBasis)
+	if got.RepoLinkBasis == nil || *got.RepoLinkBasis != (RepoLinkBasis{Native: 2, ExplicitText: 1, Heuristic: 1}) {
+		t.Errorf("basis = %+v, want native 2, explicit_text 1, heuristic 1 (a lower tier is never counted as native)", got.RepoLinkBasis)
 	}
 	if got.RepoLinkMultiRepoItems == nil || *got.RepoLinkMultiRepoItems != 1 {
 		t.Errorf("multi-repository items = %v, want 1 (#2 is linked to both repositories)", got.RepoLinkMultiRepoItems)
 	}
-	// 8 items of the window in the organization; 8 minus the unlinked one have a link.
-	if got.RepoLinkCoverage == nil || *got.RepoLinkCoverage != (RepoLinkCoverage{LinkedItems: 8, ItemsInWindow: 9}) {
-		t.Errorf("coverage = %+v, want 8 linked of 9 in the window", got.RepoLinkCoverage)
+	// 10 items of the window in the organization (the oracle world's 8, the unlinked one and the second native one); all but the unlinked one have a link.
+	if got.RepoLinkCoverage == nil || *got.RepoLinkCoverage != (RepoLinkCoverage{LinkedItems: 9, ItemsInWindow: 10}) {
+		t.Errorf("coverage = %+v, want 9 linked of 10 in the window", got.RepoLinkCoverage)
 	}
 }
 

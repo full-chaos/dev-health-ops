@@ -236,6 +236,43 @@ SELECT ?, toDate('2024-01-01'), ?, ?, fromUnixTimestamp64Milli(toInt64(?), 'UTC'
 		}
 	})
 
+	// The two edges of the window of the previous record, by `at`: a record is
+	// seen when since-366d <= at < since. Each edge is tested on both sides.
+	edge := func(name string, n int, previousAt time.Time, ranged, upper bool) {
+		t.Run(name, func(t *testing.T) {
+			o := org(n)
+			for i, kind := range []string{"touched", "dispatched"} {
+				if err := conn.Exec(ctx, `
+INSERT INTO daily_metrics_touched_days (org_id, day, repo_id, kind, at)
+SELECT ?, toDate('2026-08-05'), ?, ?, fromUnixTimestamp64Milli(toInt64(?), 'UTC')`,
+					o, repo, kind, previousAt.Add(time.Duration(i)*time.Minute).UnixMilli()); err != nil {
+					t.Fatal(err)
+				}
+			}
+			// the event is later than the previous record in both cases; the key looked
+			// for is a day that only the range touches (not an event day)
+			item := touchedTestItem{org: o, repo: repo, id: "gh:acme/api#edge", provider: "github",
+				created: rangeDay(8, 10), completed: at(8, 15), synced: rangeDay(8, 20)}
+			probe := rangeDay(8, 12)
+			if upper {
+				item.created = since.Add(500 * time.Millisecond)
+				item.completed = nil
+				item.synced = since.Add(24*time.Hour + 30*time.Minute)
+				probe = since.Add(24 * time.Hour)
+			}
+			insertTouchedTestItems(t, ctx, conn, item)
+			got := rangeRecord(t, ctx, conn, o, since)
+			if has := contains(got, probe.Format("2006-01-02")+"|"+repo.String()); has != ranged {
+				t.Fatalf("a previous record at %s: range present = %v, want %v (%v)", previousAt.Format(time.RFC3339Nano), has, ranged, got)
+			}
+		})
+	}
+	oldest := since.AddDate(0, 0, -366)
+	edge("a previous record at exactly 366 days before the run is seen", 13, oldest, true, false)
+	edge("a previous record one millisecond older than 366 days before the run is not seen", 14, oldest.Add(-time.Millisecond), false, false)
+	edge("a previous record one millisecond before the run is seen", 15, since.Add(-time.Millisecond), true, true)
+	edge("a previous record at exactly the start of the run is not a previous record", 16, since, false, true)
+
 	t.Run("two syncs of one repository: the record of the later run never hides the event of the earlier one", func(t *testing.T) {
 		o := org(7)
 		rangePreviousRecord(t, ctx, conn, o, repo, previous)

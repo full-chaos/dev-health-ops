@@ -38,7 +38,7 @@ func TestIcFinalizeRefusesAnEmptyOrganizationBeforeTouchingClickHouse(t *testing
 			return err
 		},
 		"computeForDay": func(e *Executor) error {
-			_, err := e.computeForDay(context.Background(), "", day, nil)
+			_, err := e.computeForDay(context.Background(), "", day, nil, nil)
 			return err
 		},
 	} {

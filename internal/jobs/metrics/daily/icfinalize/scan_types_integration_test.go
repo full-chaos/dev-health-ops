@@ -80,7 +80,7 @@ func TestLoaderScansAgreeWithTheRealSchemaColumnTypes(t *testing.T) {
 
 	// The bug fires on the SCAN, not on any assertion about values -- a query
 	// error here means the type mapping is wrong again.
-	gitMetrics, err := executor.loadGitMetrics(ctx, orgID, day)
+	gitMetrics, err := executor.loadGitMetrics(ctx, orgID, day, nil)
 	if err != nil {
 		t.Fatalf("loadGitMetrics: %v", err)
 	}
@@ -98,7 +98,7 @@ func TestLoaderScansAgreeWithTheRealSchemaColumnTypes(t *testing.T) {
 			got)
 	}
 
-	workItems, err := executor.loadWorkItemMetrics(ctx, orgID, day)
+	workItems, err := executor.loadWorkItemMetrics(ctx, orgID, day, nil)
 	if err != nil {
 		t.Fatalf("loadWorkItemMetrics: %v", err)
 	}
@@ -109,7 +109,7 @@ func TestLoaderScansAgreeWithTheRealSchemaColumnTypes(t *testing.T) {
 	// LoadRollingStats aggregates with sum()/max(), which promotes UInt32 to
 	// UInt64 (sum) or keeps it UInt32 (max) -- a different failure point from
 	// the two loaders above, and the one that surfaced second in practice.
-	stats, err := LoadRollingStats(ctx, conn, orgID, day)
+	stats, err := LoadRollingStats(ctx, conn, orgID, day, nil)
 	if err != nil {
 		t.Fatalf("LoadRollingStats: %v", err)
 	}
@@ -159,7 +159,7 @@ func TestLoadGitMetricsScansNullTeamColumns(t *testing.T) {
 	}
 
 	executor := NewExecutor(conn)
-	gitMetrics, err := executor.loadGitMetrics(ctx, orgID, day)
+	gitMetrics, err := executor.loadGitMetrics(ctx, orgID, day, nil)
 	if err != nil {
 		t.Fatalf("loadGitMetrics must not error on a NULL team_id/team_name row "+
 			"(a Nullable(String) column is a legitimate, schema-permitted "+

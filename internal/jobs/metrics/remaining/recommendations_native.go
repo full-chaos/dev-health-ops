@@ -62,9 +62,9 @@ var recommendationsTableRequirements = map[string][]string{
 		"repo_id", "day", "org_id", "pr_cycle_p75_hours", "computed_at",
 		prrework.ColumnMerged, prrework.ColumnReviewed, prrework.ColumnRework, prrework.ColumnNoSignal,
 	},
-	"user_metrics_daily": {
+	"user_metrics_daily": withLiveRowColumns("user_metrics_daily",
 		"repo_id", "day", "author_email", "team_id", "org_id", "reviews_given", "computed_at",
-	},
+	),
 	"team_metrics_daily": withLiveRowColumns("team_metrics_daily",
 		"day", "team_id", "repo_id", "org_id",
 		"commits_count", "after_hours_commits_count", "computed_at",

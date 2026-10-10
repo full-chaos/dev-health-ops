@@ -156,6 +156,12 @@ func TestTheStaleKeyRuleWritesARowOfZerosOverEachSupersededKey(t *testing.T) {
 	first := staleKeyRuleDay.Add(30 * time.Hour)
 
 	for _, table := range StaleTeamKeyTables() {
+		if table.Retracted != "" {
+			// A table that holds the team in a value column has no team-moved
+			// key; its retraction row is asserted in
+			// stale_team_keys_user_level_integration_test.go.
+			continue
+		}
 		t.Run(table.Table, func(t *testing.T) {
 			measures := float64(len(table.Measures) + len(table.NullableMeasures))
 			oldKey := staleKeyRuleKey(table, "platform", "unit-a")
@@ -398,7 +404,9 @@ func TestARowOfZerosIsStrictlyNewerThanTheRowItSupersedes(t *testing.T) {
 		} {
 			name, clock := testCase.name, testCase.clock
 			t.Run(table.Table+"/"+name, func(t *testing.T) {
-				key := staleKeyRuleKey(table, testCase.team, "strict")
+				// The unit follows the case: in a table whose key holds no team the
+				// key of the second case would be the retracted key of the first.
+				key := staleKeyRuleKey(table, testCase.team, "strict-"+testCase.team)
 				insertStaleKeyRuleLiveRow(t, ctx, conn, table, key, stored)
 				var scope staleKeyScope
 				if len(table.Scope) > 0 {
@@ -414,12 +422,20 @@ func TestARowOfZerosIsStrictlyNewerThanTheRowItSupersedes(t *testing.T) {
 					predicates = append(predicates, column.ReadExpression()+" = ?")
 					args = append(args, key[index])
 				}
-				measure := append(append([]string{}, table.Measures...), table.NullableMeasures...)[0]
 				var versions, distinct uint64
 				var newestIsZero uint8
-				// argMax over a tuple keeps a NULL of the newest row.
-				query := "SELECT count(), uniqExact(computed_at), toUInt8(ifNull(tupleElement(argMax(tuple(toFloat64(" + measure +
-					")), computed_at), 1), 0) = 0) FROM " + table.Table + " WHERE " + strings.Join(predicates, " AND ")
+				// argMax over a tuple keeps a NULL of the newest row. A table with a
+				// retraction marker has the marker for its "zero": the newest row
+				// is the retraction row.
+				query := ""
+				if table.Retracted != "" {
+					query = "SELECT count(), uniqExact(computed_at), toUInt8(argMax(" + table.Retracted + ", computed_at) = 1) FROM " +
+						table.Table + " WHERE " + strings.Join(predicates, " AND ")
+				} else {
+					measure := append(append([]string{}, table.Measures...), table.NullableMeasures...)[0]
+					query = "SELECT count(), uniqExact(computed_at), toUInt8(ifNull(tupleElement(argMax(tuple(toFloat64(" + measure +
+						")), computed_at), 1), 0) = 0) FROM " + table.Table + " WHERE " + strings.Join(predicates, " AND ")
+				}
 				if err := conn.QueryRow(ctx, query, args...).Scan(&versions, &distinct, &newestIsZero); err != nil {
 					t.Fatalf("read the versions of the key: %v", err)
 				}

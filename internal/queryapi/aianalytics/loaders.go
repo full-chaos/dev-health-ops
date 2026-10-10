@@ -9,6 +9,7 @@ import (
 	"github.com/full-chaos/dev-health-go/clickhouse"
 
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
+	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse/liverow"
 )
 
 const dailyStatement = `SELECT
@@ -316,7 +317,7 @@ func loadEngagement(ctx context.Context, client QueryClient, orgID string, start
 	return out, nil
 }
 
-const concentrationStatement = `SELECT toFloat64(ifNull(sum(reviews_given), 0)) AS reviews_total
+var concentrationStatement = `SELECT toFloat64(ifNull(sum(reviews_given), 0)) AS reviews_total
 FROM (
     SELECT
         umd.repo_id,
@@ -334,6 +335,7 @@ FROM (
     ) AS ai_repos ON ai_repos.repo_id = umd.repo_id
     WHERE %s
     GROUP BY umd.repo_id, umd.author_email, umd.day
+    HAVING ` + liverow.NewestPredicate("user_metrics_daily", "umd") + `
 )
 GROUP BY author_email`
 

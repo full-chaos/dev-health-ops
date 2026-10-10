@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -245,42 +246,27 @@ func TestGoldenOrgScopeThroughput(t *testing.T) {
 	}
 }
 
-// TestGoldenUnknownMetricFallsBackToCycleTime replays
-// testdata/unknown_metric_falls_back.json: metric="totally_bogus" is not
-// a metricConfigs key, so resolveMetricConfig borrows cycle_time's
-// table/column/label/unit/group_by/scope/aggregator/transform
-// (api/services/explain.py:146) -- but the RESPONSE's own "metric" field
-// still echoes "totally_bogus" verbatim, never "cycle_time". No drivers/
-// contributors rows -> both lists are empty (never null), and
-// resolveScopeDisplayNames is never called (collectRowIDs is empty).
-func TestGoldenUnknownMetricFallsBackToCycleTime(t *testing.T) {
-	dispatch := &explainQueryDispatch{
-		t:               t,
-		valueCurrent:    48.0,
-		valuePrevious:   24.0,
-		currentStartDay: "2024-02-01",
-		driverRows:      [][]any{},
-		contributorRows: [][]any{},
-	}
-	client := fakeQueryClient{t: t, handler: dispatch.handle}
+// An unknown metric name has no config: BuildExplainResponse answers
+// ErrUnknownMetric and reads nothing, never another metric's config
+// (CHAOS-9136, D5869; the Python original borrowed cycle_time's, a known bug
+// that is not pinned). The Home metrics without an explain config are named.
+func TestUnknownMetricIsAnErrorAndReadsNothing(t *testing.T) {
+	client := fakeQueryClient{t: t, handler: func(t *testing.T, query string, _ []dhclickhouse.Binding) (dhclickhouse.RowScanner, error) {
+		t.Fatalf("an unknown metric reads ClickHouse: %s", query)
+		return nil, nil
+	}}
 	reader, err := NewReader(client)
 	if err != nil {
 		t.Fatalf("NewReader: %v", err)
 	}
-	got, err := BuildExplainResponse(context.Background(), reader, "org-acme", Params{
-		Metric:       "totally_bogus",
-		StartDay:     day(2024, 2, 1),
-		EndDay:       day(2024, 2, 15),
-		CompareStart: day(2024, 1, 18),
-		CompareEnd:   day(2024, 2, 1),
-		ScopeLevel:   "org",
-	})
-	if err != nil {
-		t.Fatalf("BuildExplainResponse: %v", err)
-	}
-	want := loadGolden(t, "unknown_metric_falls_back.json")
-	if gotJSON, wantJSON := mustMarshal(t, got), mustMarshal(t, want); gotJSON != wantJSON {
-		t.Fatalf("response mismatch\n got:  %s\nwant: %s", gotJSON, wantJSON)
+	for _, metric := range []string{"totally_bogus", "", "rework_ratio", "pr_rework_ratio", "ci_success", "Cycle_Time"} {
+		_, err := BuildExplainResponse(context.Background(), reader, "org-acme", Params{
+			Metric: metric, StartDay: day(2024, 2, 1), EndDay: day(2024, 2, 15),
+			CompareStart: day(2024, 1, 18), CompareEnd: day(2024, 2, 1), ScopeLevel: "org",
+		})
+		if !errors.Is(err, ErrUnknownMetric) {
+			t.Errorf("metric %q: err = %v, want ErrUnknownMetric", metric, err)
+		}
 	}
 }
 

@@ -17,6 +17,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/filteroptions"
 	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
+	"github.com/full-chaos/dev-health-ops/internal/teamactive"
 	"github.com/full-chaos/dev-health-ops/internal/teamid"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/chschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
@@ -193,8 +194,11 @@ FROM teams FINAL WHERE org_id = ? AND id = ?`, org, gone).Scan(&rows, &activeRow
 			if _, err := store.CreateOrUpdateTeam(ctx, org, TeamWrite{Origin: origin, TeamID: ahead, Name: "Ahead"}); err != nil {
 				t.Fatal(err)
 			}
-			if err := conn.Exec(ctx, `INSERT INTO teams (id, team_uuid, name, members, updated_at, org_id, provider, is_active)
-SELECT id, team_uuid, name, members, now64(6) + INTERVAL 1 HOUR, org_id, provider, 1 FROM teams FINAL WHERE org_id = ? AND id = ?`, org, ahead); err != nil {
+			// Both of its times are ahead: the rule of the resolvers takes the
+			// newest row by (updated_at, last_synced, is_active), so a delete
+			// written with the SAME updated_at would lose against this row.
+			if err := conn.Exec(ctx, `INSERT INTO teams (id, team_uuid, name, members, updated_at, last_synced, org_id, provider, is_active)
+SELECT id, team_uuid, name, members, now64(6) + INTERVAL 1 HOUR, now64(6) + INTERVAL 1 HOUR, org_id, provider, 1 FROM teams FINAL WHERE org_id = ? AND id = ?`, org, ahead); err != nil {
 				t.Fatal(err)
 			}
 			if code, _ := status(call(h.deleteTeam, http.MethodDelete, "/api/v1/admin/teams/"+ahead, ahead, nil)); code != http.StatusOK {
@@ -207,6 +211,9 @@ SELECT id, team_uuid, name, members, now64(6) + INTERVAL 1 HOUR, org_id, provide
 			}
 			if aheadActive != 0 || aheadMarked != 1 {
 				t.Errorf("a team with a row ahead of the clock, after its delete: %d active, %d marked; want the delete to be the newest version", aheadActive, aheadMarked)
+			}
+			if set, err := teamactive.LoadInactive(ctx, conn, org); err != nil || !set.Has(ahead) {
+				t.Errorf("a team with a row ahead of the clock, after its delete: in the inactive set of the resolvers = %v (err %v), want true: the delete must be STRICTLY newer than that row", set.Has(ahead), err)
 			}
 			if got, want := listed("?active_only=false"), sorted(stays, retired); !reflect.DeepEqual(got, want) {
 				t.Errorf("the list with inactive teams after that delete = %v, want %v", got, want)

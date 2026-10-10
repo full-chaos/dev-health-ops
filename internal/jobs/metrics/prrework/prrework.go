@@ -79,7 +79,11 @@ type Outcome struct {
 	Value *float64
 	State State
 	// Coverage is reviewed / merged: the share of the merged pull requests the
-	// ratio speaks for. Nil when no pull request merged.
+	// ratio speaks for. Nil when no pull request merged. From Rate the merged
+	// pull requests are those of the counts. From Evaluate they are those of
+	// EVERY stored row of the view, also of a row that holds no counts (a day
+	// stored before the counts existed): such a day is in the denominator
+	// only, so a view that is partly not counted has a low coverage.
 	Coverage *float64
 }
 
@@ -97,6 +101,9 @@ func (o Outcome) StateOrNil() *string {
 type View struct {
 	Counts
 	StoredRows uint64
+	// MergedOfEveryRow is the merged pull requests of every stored row of the
+	// view, with or without counts. It is never below Counts.Merged.
+	MergedOfEveryRow uint64
 }
 
 // Evaluate is the one rule every reader applies to a view. A view with no
@@ -105,7 +112,15 @@ func Evaluate(v View) Outcome {
 	if v.StoredRows == 0 {
 		return Outcome{State: StateNoStoredCounts}
 	}
-	return Rate(v.Counts)
+	outcome := Rate(v.Counts)
+	// The coverage is over every merged pull request the view stores. A view
+	// that gives no such sum (or a smaller one than its counts) keeps the
+	// coverage of the counts.
+	if merged := max(v.MergedOfEveryRow, v.Merged); merged > 0 {
+		coverage := float64(v.Reviewed) / float64(merged)
+		outcome.Coverage = &coverage
+	}
+	return outcome
 }
 
 // Rate applies the rule of this package to the counts of stored rows.

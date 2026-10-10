@@ -19,9 +19,16 @@ type scriptedConnection struct {
 	repositoryRows driver.Rows
 	probeRows      driver.Rows
 	probeErr       error
+	// notDiscoveredRows and notDiscoveredErr answer the count of repositories
+	// with stored rows and no repos row; nil rows with no error is a failed read.
+	notDiscoveredRows driver.Rows
+	notDiscoveredErr  error
 }
 
 func (connection *scriptedConnection) Query(_ context.Context, query string, _ ...any) (driver.Rows, error) {
+	if query == notDiscoveredRepositoriesSQL {
+		return connection.notDiscoveredRows, connection.notDiscoveredErr
+	}
 	if strings.Contains(query, "FROM work_items") {
 		return connection.probeRows, connection.probeErr
 	}

@@ -1543,10 +1543,30 @@ replaces nothing there, so the rule holds only for a reader that takes the newes
 
 The tables are declared once, in `internal/teamkeytables`. The writer (`supersedeStaleTeamKeys`,
 `internal/jobs/metrics/daily/stale_team_keys.go`) builds its read and its row from the declaration, and so does the
-predicate for readers: `Table.LiveRow` (one newest row) and `Table.LiveHaving` (a `GROUP BY` over the key). A reader
-that sums is right with a row of zeros. A reader that takes an average over rows of a NOT NULL column, counts rows or
-lists the team ids of a table must leave the superseded keys out with that predicate, or it takes a row of zeros as a
-sample of 0.
+predicate for readers: `Table.LiveRow` (one newest row) and `Table.LiveHaving` (a `GROUP BY` over the key). Readers
+take it through `internal/storage/clickhouse/liverow`, and the rule there is: a row of zeros reads as an absent row.
+
+- A reader that gives ONE sum for its whole scope is right with a row of zeros: the row adds 0.
+- A reader that takes an average over rows of a NOT NULL column, a minimum, a maximum or a quantile, counts rows or
+  days, or lists the team ids of a table must leave the superseded keys out with the predicate, or it takes a row of
+  zeros as a sample of 0 or as a key.
+- A reader that sums INTO A LIST (one row for each day, status or theme) must leave them out too. The sum of a day
+  is right, but a day, a status or a theme whose keys in scope all hold a row of zeros would be listed with a value
+  of 0. That is what a read with a retired team id in its scope returns for the days computed again, and a team that
+  was not measured is not a team with 0 work. These reads hold the predicate: the throughput and capacity forecast
+  histories and the mean WIP, the aggregated flame, the sankey status counts, the home theme allocation, the
+  cognitive load of one team, and the per-day reads of the recommendations loader and the capacity forecast job.
+- A reader that takes the state on the newest day of each key (a backlog, a current WIP, a stored risk score) must
+  NOT filter before it picks the newest row: the row of zeros is what says the key holds nothing now, and a filter
+  that ran first would serve the older row. It then gives 0 or no value, as for a key with no row.
+
+The census `TestEveryReadOfARegisteredTableAppliesTheRule` (package `liverow`) reads the source and fails for a read
+of one of these tables that holds no predicate and is not listed there with its reason.
+
+A job that checks at startup that the schema holds every column its statements read (the capacity forecast job, the
+recommendations job) and a reader that answers "not available" for a missing column (the sankey state flow) take the
+columns of the predicate from `liverow.Columns`: the predicate is built into the statement at run time, so its
+columns are in no query text.
 
 The census (`stale_team_keys_census_test.go`) reads the schema and the source and fails when a table with a
 `team_id` or a `scope_id` in its sorting key has no decision (the shared rule, its own rule, or a written exemption),

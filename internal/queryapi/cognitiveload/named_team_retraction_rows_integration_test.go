@@ -77,3 +77,51 @@ func TestCognitiveLoadOfANamedRetiredTeamGivesRetractionRowsNoWeight(t *testing.
 		}
 	}
 }
+
+// TestTheRetractionDaysOfOneOrganizationTakeNoDayFromAnother holds the
+// organization scope of the second read of the named-team path (the days
+// whose newest row is a retraction row). Two organizations hold a team with
+// the same id. In one the day is a retraction row; in the other the same day
+// is a measured row, stored earlier. The read of the second organization must
+// keep its measured day: a read of the retraction days across organizations
+// would take the newer retraction row of the first for it and drop the day.
+func TestTheRetractionDaysOfOneOrganizationTakeNoDayFromAnother(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+	store := retractionseed.Start(ctx, t)
+	client, err := dhclickhouse.NewClickHouseQueryClientWithOptions(dhclickhouse.Options{DSN: store.URI})
+	if err != nil {
+		t.Fatalf("construct query client: %v", err)
+	}
+	defer func() { _ = client.Close() }()
+
+	const layout, retired = "2006-01-02", "ENG"
+	measuredDay, lastDay := store.Days[1], store.Days[len(store.Days)-1]
+	// The control organization measured the team on a day on which the other
+	// organization holds a retraction row of the same team id. The measured
+	// row is the OLDER of the two.
+	if err := store.Conn.Exec(ctx, `INSERT INTO team_cognitive_load_daily
+(org_id, team_id, day, pr_interruption_load, context_spread_count, review_request_load, contributing_repo_count, sample_author_count, computed_at)
+VALUES (?, ?, ?, 5, 5, 5, 1, 2, ?)`, retractionseed.ControlOrg, retired, measuredDay, store.OldComputedAt); err != nil {
+		t.Fatal(err)
+	}
+	read := func(org string) []time.Time {
+		t.Helper()
+		rows, err := fetchTeamCognitiveLoad(ctx, client, org, retired, store.Days[0].Format(layout), lastDay.Format(layout))
+		if err != nil {
+			t.Fatalf("%s: %v", org, err)
+		}
+		var days []time.Time
+		for _, row := range rows {
+			days = append(days, row.day.UTC())
+		}
+		return days
+	}
+	if got, want := read(retractionseed.ControlOrg), []time.Time{store.Days[0], measuredDay}; !reflect.DeepEqual(got, want) {
+		t.Errorf("the organization with the measured day reads %v, want %v", got, want)
+	}
+	// The other organization is not changed by that row: its day stays out.
+	if got, want := read(retractionseed.RetractedOrg), []time.Time{store.Days[0]}; !reflect.DeepEqual(got, want) {
+		t.Errorf("the organization with the retraction row reads %v, want %v", got, want)
+	}
+}

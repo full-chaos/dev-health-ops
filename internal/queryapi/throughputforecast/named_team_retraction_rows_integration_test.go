@@ -200,3 +200,57 @@ VALUES (?, ?, 'jira', 'ENGPROJ', ?, 'Empty', 0, 0, 0, ?)`,
 		}
 	}
 }
+
+// TestAKeyThatComesBackAndAMeasuredZeroDayStayInTheForecastHistory holds two things the rule must NOT take for a retraction, for a
+// retired team id the caller names (package retractionseed):
+//
+//   - a key that comes back: the day's retraction row is followed by a newer
+//     measured row. The day is in the history again, with its newer numbers.
+//   - a measured day of 0: three items started, none completed, none in
+//     progress. It is a measurement (a measure of the row is not 0), so the
+//     day stays in the history with a throughput of 0.
+//
+// The other days of the id that were computed again hold retraction rows only
+// and stay out.
+func TestAKeyThatComesBackAndAMeasuredZeroDayStayInTheForecastHistory(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+	store := retractionseed.Start(ctx, t)
+	client, err := dhclickhouse.NewClickHouseQueryClientWithOptions(dhclickhouse.Options{DSN: store.URI})
+	if err != nil {
+		t.Fatalf("construct query client: %v", err)
+	}
+	defer func() { _ = client.Close() }()
+
+	const org, retired = retractionseed.RetractedOrg, "ENG"
+	later := store.NewComputedAt.Add(time.Hour)
+	measure := func(day time.Time, started, completed, wip uint32) {
+		t.Helper()
+		if err := store.Conn.Exec(ctx, `INSERT INTO work_item_metrics_daily
+(org_id, day, provider, work_scope_id, team_id, team_name, items_started, items_completed, wip_count_end_of_day, computed_at)
+VALUES (?, ?, 'jira', 'ENGPROJ', ?, 'Engineering', ?, ?, ?, ?)`, org, day, retired, started, completed, wip, later); err != nil {
+			t.Fatal(err)
+		}
+	}
+	measure(store.Days[1], 1, 7, 2) // comes back after its retraction row
+	measure(store.Days[2], 3, 0, 0) // a measured day with nothing completed and nothing in progress
+
+	today := time.Now().UTC()
+	history, err := loadThroughputHistory(ctx, client, org, []string{retired}, nil, 4, today)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The measured day that was not computed again (1 item), the day that
+	// came back (7), the measured day of 0.
+	if want := []int{1, 7, 0}; !reflect.DeepEqual(history, want) {
+		t.Errorf("history = %v, want %v", history, want)
+	}
+	// The mean WIP over those three days: 3, 2 and 0.
+	_, averageWIP, err := loadWorkItemOverlay(ctx, client, org, []string{retired}, nil, 4, today)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := 5.0 / 3.0; math.Abs(averageWIP-want) > 1e-9 {
+		t.Errorf("mean WIP = %v, want %v", averageWIP, want)
+	}
+}

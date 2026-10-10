@@ -72,3 +72,49 @@ func TestCycleBreakdownOfANamedRetiredTeamGivesRetractionRowsNoWeight(t *testing
 		}
 	}
 }
+
+// TestAStatusThatComesBackAndAMeasuredZeroStatusStayInTheBreakdown holds two
+// things the rule must NOT take for a retraction, for a retired team id the
+// caller names (package retractionseed):
+//
+//   - a key that comes back: the retraction row of (day, status) is followed
+//     by a newer measured row. Its hours count again.
+//   - a measured status of 0 hours: three items touched it and no time was
+//     spent. It is a measurement (items_touched is not 0), so the status is
+//     listed, with 0 hours.
+func TestAStatusThatComesBackAndAMeasuredZeroStatusStayInTheBreakdown(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+	store := retractionseed.Start(ctx, t)
+	client, err := dhclickhouse.NewClickHouseQueryClientWithOptions(dhclickhouse.Options{DSN: store.URI})
+	if err != nil {
+		t.Fatalf("construct query client: %v", err)
+	}
+	defer func() { _ = client.Close() }()
+
+	const org, retired = retractionseed.RetractedOrg, "ENG"
+	later := store.NewComputedAt.Add(time.Hour)
+	measure := func(status string, hours float64, touched uint32) {
+		t.Helper()
+		if err := store.Conn.Exec(ctx, `INSERT INTO work_item_state_durations_daily
+(org_id, day, provider, work_scope_id, team_id, team_name, status, duration_hours, items_touched, avg_wip, computed_at)
+VALUES (?, ?, 'jira', 'ENGPROJ', ?, 'Engineering', ?, ?, ?, 0, ?)`, org, store.Days[1], retired, status, hours, touched, later); err != nil {
+			t.Fatal(err)
+		}
+	}
+	measure("blocked", 5, 1) // comes back after its retraction row
+	measure("review", 0, 3)  // measured: three items, no time
+
+	end := store.Days[len(store.Days)-1].AddDate(0, 0, 1)
+	rows, err := fetchCycleBreakdown(ctx, client, org, store.Days[0], end, retired, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sort.Slice(rows, func(i, j int) bool { return rows[i].Status < rows[j].Status })
+	// blocked: 6 hours of the day that was not computed again + 5 that came
+	// back; in_progress: the 12 hours of that first day; review: 0 hours.
+	want := []cycleBreakdownRow{{Status: "blocked", TotalHours: 11}, {Status: "in_progress", TotalHours: 12}, {Status: "review", TotalHours: 0}}
+	if !reflect.DeepEqual(rows, want) {
+		t.Errorf("breakdown = %+v, want %+v", rows, want)
+	}
+}

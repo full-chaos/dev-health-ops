@@ -244,6 +244,9 @@ var repoOwnershipPlanners = map[string]ownershipWriter{
 var otherSnapshotPlanners = map[string]string{
 	"internal/atlassianteams.planMemberships": "its KindSnapshot argument = AtlassianTeamMembershipKind with the term " +
 		"Rows.MembershipsComplete (atlassianteams.Collect: one finished member read for every active team)",
+	"internal/providersync.planMembershipSnapshot": "its KindSnapshot arguments = LinearTeamMembershipKind, GitHubTeamMembershipKind and " +
+		"GitLabTeamMembershipKind, made in the collectors from decideOwnershipClose (the member reads' end proof and the sole-scope gate); " +
+		"a team outside the closable set is of no kind (CHAOS-9079, membership_departure.go)",
 	"internal/providersync.firstSeenMembershipValidFrom": "passes the rule no KindSnapshot: it reuses the first-seen valid_from of a " +
 		"membership fact the run holds again and closes nothing, so it has no proof to make (CHAOS-9007, membership_first_seen.go)",
 	"internal/atlassianteams.teamsInScope": "makes its proof in place: the team catalog kind with the term Rows.TeamSearchComplete " +

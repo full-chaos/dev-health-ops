@@ -715,6 +715,40 @@ project's items by id. Now:
   | `atlassian_team_project_links` | Atlassian Teams | one link read per active team | sole integration | is an answer (per team) |
   | `gitlab_group_project_grants` | GitLab catalog | one listing per closable group (section 0.4a) | sole integration | is an answer (per group) |
   | `github_team_repo_grants` | GitHub catalog | one listing per closable team | sole integration | is an answer (per team) |
+  | `linear_team_memberships` | Linear catalog | every team's member list to its end (the run fails before any write when one does not end) | sole integration | is an answer (per team) |
+  | `github_team_memberships` | GitHub catalog | one member read per team, to the provider's end-of-list signal | sole integration | is an answer (per team) |
+  | `gitlab_team_memberships` | GitLab catalog | one member read per group, to the provider's end-of-list signal | sole integration | is an answer (per group) |
+
+  **Team membership kinds** (CHAOS-9079). A member is closed (`valid_to` = the run time) only when ALL of these
+  hold, per team for every provider:
+  1. the member is absent from the COMPLETE member read of ITS team, in a scope no other integration reads
+     (with another active integration of the provider in the organization the kind closes nothing).
+     "Complete" is the read's own end-of-list signal; a read cut by a bound, a failed read, and a read that held
+     a member node the collector cannot use (no login, no username, a node the normalizer rejects, neither an
+     id nor an email, or `nodes: null`) close nothing for that team, and the unusable nodes are logged with a
+     count (`*_member_unusable`: provider, team, count, no member value). Absence is judged against the members
+     the provider returned, never against the part the membership-conflict guard keeps.
+  2. absence from an offset-paged list is a CANDIDATE only. Two providers page by offset, and a member who
+     leaves between two page requests moves every later member one place up, so one of them is on no page. The
+     close needs the provider's direct lookup for that member in that team to say "not a member": the team
+     membership endpoint answers 404, or the group member search finds no member of that username (compared
+     without regard to case) and carries its end signal. Any other answer (a member, a pending invitation,
+     403, 429, 5xx, a timeout, a body that is no answer) leaves the member open. A candidate is a fact (a team
+     and a member), however many open rows it holds: it is asked about once and one answer closes every open
+     row of it. The lookups of one run are bounded (100 facts); a fact past the budget stays open. The provider
+     that pages by cursor cannot be shifted by a departure between two requests, so its list rule stands.
+  3. no open row of the fact is newer than the time the run read the provider: a run whose list is older than a
+     row never closes it (two overlapping runs of one integration).
+  4. a member whose id is made from an email is NOT closed by the list rule, because the provider's user id is
+     not stored (`raw_provider_user_id` holds the first identity facet, not the provider's user id): a changed
+     or hidden email would read as a departure and a join. A login rename of a provider that keys by login
+     reads as a departure and a join with a new `valid_from`; both are named limits.
+  A member returned with `active: false` is a deactivated user: the provider says so, and it is closed (an
+  email-keyed member too). A member who comes back is a new fact with a new `valid_from`. Every close is logged
+  once per team (`team_membership_closed`: provider, team, closed, duplicates_retired) and every candidate left
+  open once per team (`team_membership_close_skipped`: provider, team, and a count of facts for each reason:
+  `row_newer_than_read`, `no_stable_user_id`, `provider_says_member`, `lookup_not_proven`,
+  `lookup_budget_ended`). The team in a log line is its slug or path without the provider prefix.
 
   **Scope proof, for every kind** (`providersync.ProveSoleScope`, the one scope gate; `ScopeProof` is an
   argument of every kind snapshot, so no kind can be stated without it). Ownership, membership and catalog

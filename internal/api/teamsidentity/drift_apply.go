@@ -25,6 +25,12 @@ func (s Store) applyChange(ctx context.Context, orgID string, row reviewChangeRo
 		return nil
 	}
 	field := *row.Field
+	if field == retiredRosterField {
+		// The team roster is no longer a stored, managed field (CHAOS-9087): a
+		// change recorded for it before then is approved or dismissed as a
+		// status only, with nothing to write.
+		return nil
+	}
 	observation, err := s.observationFor(ctx, orgID, row)
 	if err != nil {
 		return err
@@ -34,8 +40,6 @@ func (s Store) applyChange(ctx context.Context, orgID string, row reviewChangeRo
 	}
 	column := field
 	switch field {
-	case "members":
-		column = "members_json"
 	case "project_keys":
 		column = "project_keys_json"
 	case "repo_patterns":
@@ -60,10 +64,10 @@ func (s Store) applyChange(ctx context.Context, orgID string, row reviewChangeRo
 		name = row.TeamID
 	}
 	var description *string
-	members, projectKeys, repoPatterns := []string{}, []string{}, []string{}
+	projectKeys, repoPatterns := []string{}, []string{}
 	if existing != nil {
 		name, description = existing.Name, existing.Description
-		members, projectKeys, repoPatterns = existing.Members, existing.ProjectKeys, existing.RepoPatterns
+		projectKeys, repoPatterns = existing.ProjectKeys, existing.RepoPatterns
 	}
 	switch field {
 	case "name":
@@ -77,8 +81,6 @@ func (s Store) applyChange(ctx context.Context, orgID string, row reviewChangeRo
 			text := pythonStr(observed)
 			description = &text
 		}
-	case "members":
-		members = jsonListValue(observed)
 	case "project_keys":
 		projectKeys = jsonListValue(observed)
 	case "repo_patterns":
@@ -88,7 +90,7 @@ func (s Store) applyChange(ctx context.Context, orgID string, row reviewChangeRo
 	}
 	_, err = s.CreateOrUpdateTeam(ctx, orgID, TeamWrite{
 		Origin: row.Provider, TeamID: row.TeamID, Name: name, Description: description,
-		Members: &members, ProjectKeys: &projectKeys, RepoPatterns: &repoPatterns,
+		ProjectKeys: &projectKeys, RepoPatterns: &repoPatterns,
 	})
 	return err
 }

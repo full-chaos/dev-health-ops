@@ -72,8 +72,7 @@ func githubMembershipConflictsWithManualState(
 // shared reviewMembershipsForDrift engine (identity_drift_review.go), and a
 // stale pending row for a member this run observed but no longer sees
 // conflicting (or sees at all) is resolved/superseded. observedTeamIDs
-// names the teams whose member fetch succeeded this run (see
-// GitHubTeamCatalogCollector's rows.FailedMemberFetchTeamIDs).
+// names the teams whose member fetch succeeded this run.
 func applyGitHubTeamMembershipConflictGuard(
 	ctx context.Context, conn driver.Conn, orgID string, rows []githubMembershipRow, observedTeamIDs []string, now time.Time,
 ) ([]githubMembershipRow, int, int, int, error) {

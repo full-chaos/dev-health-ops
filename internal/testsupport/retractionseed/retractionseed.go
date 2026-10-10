@@ -232,8 +232,8 @@ func Double(ctx context.Context, t testing.TB, conn driver.Conn, seed Seed) {
 
 func seedTeams(ctx context.Context, t testing.TB, conn driver.Conn, org string, seed Seed) {
 	t.Helper()
-	const insert = `INSERT INTO teams (id, team_uuid, name, members, repo_patterns, updated_at, org_id, provider, is_active)
-VALUES (?, generateUUIDv4(), ?, [], [], ?, ?, ?, ?)`
+	const insert = `INSERT INTO teams (id, team_uuid, name, repo_patterns, updated_at, org_id, provider, is_active)
+VALUES (?, generateUUIDv4(), ?, [], ?, ?, ?, ?)`
 	for _, team := range Teams {
 		exec(ctx, t, conn, insert, team.KeyedID, team.Name, seed.NewComputedAt, org, team.Provider, uint8(1))
 		// The row under the old id: active at first, inactive after the carry.

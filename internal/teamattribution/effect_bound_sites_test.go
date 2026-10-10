@@ -21,8 +21,8 @@ func TestDerivationContextLimitSitesReturnTheTypedBound(t *testing.T) {
 	source := string(raw)
 	site := regexp.MustCompile(`> GithubWorkItemDerivationContextLimit \{\n\s*return ([^\n]*)\n`)
 	matches := site.FindAllStringSubmatch(source, -1)
-	if len(matches) < 11 {
-		t.Fatalf("found %d limit sites, want at least 11 (the source layout changed)", len(matches))
+	if len(matches) < 9 {
+		t.Fatalf("found %d limit sites, want at least 9 (the source layout changed)", len(matches))
 	}
 	for _, match := range matches {
 		if !strings.Contains(match[1], "providerfoundation.EffectBoundError{") ||

@@ -65,11 +65,10 @@ type GitLabTeamCatalogEvidence struct {
 	// hit its page cap -- the collector adapter fails the whole run closed
 	// on this (ErrPaginationCapExceeded), it is never partially written.
 	Truncated bool `json:"truncated"`
-	// SkippedTeamMemberships (CHAOS-4461, extended to GitLab) counts groups
-	// whose /members fetch failed OUTRIGHT (a real request error, not a
-	// page-cap truncation) under non-strict -- that group's memberships are
-	// skipped and its roster is carried forward instead of aborting the
-	// whole run, matching GitHubTeamCatalogEvidence's identical field.
+	// SkippedTeamMemberships counts groups whose /members fetch failed
+	// OUTRIGHT (a real request error, not a page-cap truncation) under
+	// non-strict -- that group's memberships are skipped instead of aborting
+	// the whole run, matching GitHubTeamCatalogEvidence's identical field.
 	SkippedTeamMemberships int `json:"skipped_team_memberships"`
 	// MissingSelectedSources (codex round 5, P2) lists the ref.SourceExternalIDs
 	// entries that were selected but never observed among the discovered
@@ -351,27 +350,16 @@ func (handler GitLabTeamCatalogRouteHandler) CollectTeamCatalog(
 				Path: groupPathValue + "/members", PerPage: gitlabTeamCatalogListPerPage, MaxPages: gitlabTeamCatalogMembersMaxPages,
 			})
 			if memberErr != nil {
-				// CHAOS-4461 ruling (team-lead, extended from GitHub to
-				// GitLab, 2026-08-28): a single group's member-fetch
-				// failure under non-strict (post-sync, default) must not
-				// abort the whole catalog walk -- skip only this group's
-				// memberships and mark it for roster carry-forward via
-				// FailedMemberFetchTeamIDs (see that field's doc comment).
-				// Under strict (reference discovery), re-raise, matching
-				// the pre-existing behavior exactly.
+				// A single group's member-fetch failure under non-strict
+				// (post-sync, default) must not abort the whole catalog walk:
+				// only this group's memberships are skipped. Under strict
+				// (reference discovery), re-raise.
 				if ref.Strict {
 					return GitLabTeamCatalogBatch{}, memberErr
 				}
-				rows.FailedMemberFetchTeamIDs = append(rows.FailedMemberFetchTeamIDs, teamID)
 				evidence.SkippedTeamMemberships++
-				// codex review finding (round 4, P2): TeamCatalogResult (the
-				// shared interface) has no field for a partial/degraded
-				// outcome, so a caller reading only that struct cannot tell
-				// this run's roster for teamID was carried forward rather
-				// than freshly observed. A structured log line is the
-				// interim signal -- same discipline GitHub's identical
-				// CHAOS-4461 fix uses ("pending a shared telemetry field"),
-				// not a new interface field of its own.
+				// TeamCatalogResult has no field for a partial outcome: a
+				// structured log line is the signal.
 				slog.Default().WarnContext(ctx, "gitlab_team_catalog_member_fetch_failed",
 					"org_id", ref.OrgID, logging.ProviderIDAttr("team_id", teamID), "error", memberErr)
 			} else {
@@ -415,25 +403,9 @@ func (handler GitLabTeamCatalogRouteHandler) CollectTeamCatalog(
 	}
 
 	if selections.Members {
-		failedMemberFetch := make(map[string]bool, len(rows.FailedMemberFetchTeamIDs))
-		for _, id := range rows.FailedMemberFetchTeamIDs {
-			failedMemberFetch[id] = true
-		}
 		roster := gitlabRosterFromMemberships(rows.Memberships)
 		for i := range rows.Teams {
-			if failedMemberFetch[rows.Teams[i].ID] {
-				// CHAOS-4461: this team's /members fetch failed under
-				// non-strict -- leave MembersAuthoritative false (its
-				// zero value from normalizeGitLabTeamRow) rather than
-				// stamping the empty roster gitlabRosterFromMemberships
-				// necessarily produces for it (no memberships were ever
-				// added). GitLabTeamCatalogClickHouseEffects.writeTeams's
-				// existing roster-preservation path then confirms and
-				// carries forward the currently-persisted roster instead.
-				continue
-			}
 			rows.Teams[i].Members = roster[rows.Teams[i].ID]
-			rows.Teams[i].MembersAuthoritative = true
 		}
 	}
 
@@ -612,7 +584,7 @@ func (collector GitLabTeamCatalogCollector) CollectTeamCatalog(
 		// team-lead ruling, 2026-08-28 (Python parity): a non-strict walk
 		// failure returns a clean, successful zero result -- matching
 		// team_autoimport_gitlab.py's _zero_summary -- with NO writes
-		// attempted at all (no roster-preservation trigger, no Sink call).
+		// attempted at all (no Sink call).
 		// Checked BEFORE the pagination-cap gate below: WalkSkipped batches
 		// also set Complete=true so they would not trip it anyway, but this
 		// makes the "clean nil, not an error" contract explicit rather than
@@ -637,17 +609,12 @@ func (collector GitLabTeamCatalogCollector) CollectTeamCatalog(
 	writeClaim := Claim{Unit: Unit{OrgID: ref.OrgID, Provider: gitlabTeamCatalogProvider}}
 	result := TeamCatalogResult{}
 
-	// CHAOS-4431 codex review finding #6, ROUND 2 correction (P1, mirrored
-	// from LinearTeamCatalogCollector): the membership-conflict guard must
-	// run BEFORE the team roster is rebuilt, not after -- a membership the
-	// guard rejects must never still show up in `teams.members` even though
-	// it was correctly kept out of `team_memberships`. Computed once, up
-	// front, so both blocks below read from its result.
+	// The membership-conflict guard runs before the memberships write below
+	// (a membership it rejects is never written). Computed once, up front.
 	var keptMemberships []gitlabTeamCatalogMembershipRow
 	var membershipsSkippedManualConflict, membershipsStagedForReview, driftChangesSuperseded int
 	if selections.Members {
-		// CHAOS-4444 / codex review round 1, P2: batch.Rows.Teams (and its
-		// MembersAuthoritative stamp) only exists `if selections.Teams` --
+		// batch.Rows.Teams only exists `if selections.Teams` --
 		// deriving observed scopes from it undercounts to EMPTY whenever a
 		// run selects Members without Teams. ObservedMembershipTeamIDs is
 		// populated whenever a group's member fetch succeeds, independent
@@ -666,58 +633,6 @@ func (collector GitLabTeamCatalogCollector) CollectTeamCatalog(
 
 	if selections.Teams && batch.Effects.Teams != nil {
 		teamRows := append([]gitlabTeamCatalogTeamRow(nil), batch.Rows.Teams...)
-		if selections.Members {
-			// Rebuild each team's roster from the CONFLICT-FILTERED
-			// memberships, not the raw walk-observed roster the Handler
-			// baked into the row -- see the doc comment above. A team whose
-			// own member fetch failed (FailedMemberFetchTeamIDs, non-strict
-			// soft-fail, CHAOS-4461) keeps MembersAuthoritative=false from
-			// the walk untouched here -- hydrated below instead.
-			roster := gitlabRosterFromMemberships(keptMemberships)
-			for index := range teamRows {
-				if !teamRows[index].MembersAuthoritative {
-					continue
-				}
-				teamRows[index].Members = roster[teamRows[index].ID]
-			}
-		}
-		// CHAOS-4444 / codex review round 1, P1: a MembersAuthoritative=false
-		// row's Members is UNKNOWN this call (a per-team fetch failure, or
-		// Members deselected entirely) -- NOT a confirmed empty roster.
-		// Passing it to applyGitLabTeamSyncPolicyGuard/reviewTeamRowsForDrift
-		// unchanged would diff/observe "members=[]" as though that were the
-		// true value, which can manufacture a bogus "roster cleared" pending
-		// review row (or, for AUTO_APPLY teams, a genuinely wrong
-		// team_provider_observations row) purely from an unconfirmed read.
-		// Hydrate from the currently-persisted roster BEFORE the guard runs
-		// -- the SAME read writeTeams itself does later for the write path
-		// (gitlabExistingTeamRoster) -- so the guard/review layer sees the
-		// same "unknown carries forward the existing value" contract the
-		// write layer already guarantees. A read failure excludes just
-		// those teams from this call entirely (fail closed: no
-		// observation, no diff, no write for a roster this call cannot
-		// confirm), mirroring gitlabTeamsSafeToWriteAfterRosterPreservationFailure's
-		// existing write-path fallback.
-		unauthoritative := gitlabTeamsNeedingRosterPreservation(teamRows)
-		if len(unauthoritative) > 0 {
-			existingRoster, rosterErr := gitlabExistingTeamRoster(ctx, collector.Sink.Conn, ref.OrgID, unauthoritative)
-			if rosterErr != nil {
-				slog.Default().WarnContext(ctx, "gitlab_team_catalog_drift_review_roster_preservation_failed",
-					"org_id", ref.OrgID, logging.ProviderIDsAttr("team_ids", unauthoritative), "error", rosterErr)
-				teamRows = gitlabTeamsSafeToWriteAfterRosterPreservationFailure(teamRows)
-			} else {
-				for index := range teamRows {
-					if teamRows[index].MembersAuthoritative {
-						continue
-					}
-					members := existingRoster[teamRows[index].ID]
-					if members == nil {
-						members = []string{}
-					}
-					teamRows[index].Members = members
-				}
-			}
-		}
 		// CHAOS-4431 codex review findings #3/#6, team-lead ruling
 		// 2026-08-28 (extended to GitLab): a team whose sync_policy is not
 		// the auto-apply default (0) is left completely untouched by this

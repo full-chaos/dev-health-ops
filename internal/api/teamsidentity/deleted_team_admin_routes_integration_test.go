@@ -67,14 +67,14 @@ func TestADeletedTeamIsNotServedAndComesBackOnlyByANewWrite(t *testing.T) {
 			members, keys, patterns := []string{"dev@example.com"}, []string{"PLAT"}, []string{"acme/platform-*"}
 			for id, name := range map[string]string{gone: "Platform", stays: "Apps", retired: "Legacy"} {
 				if _, err := store.CreateOrUpdateTeam(ctx, org, TeamWrite{Origin: origin, TeamID: id, Name: name,
-					Members: &members, ManualMembers: &members, ProjectKeys: &keys, RepoPatterns: &patterns}); err != nil {
+					ManualMembers: &members, ProjectKeys: &keys, RepoPatterns: &patterns}); err != nil {
 					t.Fatalf("create team %s: %v", id, err)
 				}
 			}
 			// A team that is inactive and NOT deleted: a new version of its row
 			// with is_active = 0, as a retire at the provider writes it.
-			if err := conn.Exec(ctx, `INSERT INTO teams (id, team_uuid, name, members, updated_at, org_id, provider, is_active)
-SELECT id, team_uuid, name, members, now64(6) + INTERVAL 1 SECOND, org_id, provider, 0 FROM teams FINAL WHERE org_id = ? AND id = ?`, org, retired); err != nil {
+			if err := conn.Exec(ctx, `INSERT INTO teams (id, team_uuid, name, updated_at, org_id, provider, is_active)
+SELECT id, team_uuid, name, now64(6) + INTERVAL 1 SECOND, org_id, provider, 0 FROM teams FINAL WHERE org_id = ? AND id = ?`, org, retired); err != nil {
 				t.Fatal(err)
 			}
 
@@ -165,14 +165,14 @@ SELECT id, team_uuid, name, members, now64(6) + INTERVAL 1 SECOND, org_id, provi
 			// The row of the deleted team keeps every field it had: a reader of
 			// the table finds for it what it finds for any inactive team.
 			var kept struct {
-				Name                        string
-				Members, Manual, Keys, Repo []string
+				Name               string
+				Manual, Keys, Repo []string
 			}
-			if err := conn.QueryRow(ctx, `SELECT name, members, manual_members, project_keys, repo_patterns FROM teams FINAL WHERE org_id = ? AND id = ?`,
-				org, gone).Scan(&kept.Name, &kept.Members, &kept.Manual, &kept.Keys, &kept.Repo); err != nil {
+			if err := conn.QueryRow(ctx, `SELECT name, manual_members, project_keys, repo_patterns FROM teams FINAL WHERE org_id = ? AND id = ?`,
+				org, gone).Scan(&kept.Name, &kept.Manual, &kept.Keys, &kept.Repo); err != nil {
 				t.Fatal(err)
 			}
-			if kept.Name != "Platform" || !reflect.DeepEqual(kept.Members, members) || !reflect.DeepEqual(kept.Manual, members) ||
+			if kept.Name != "Platform" || !reflect.DeepEqual(kept.Manual, members) ||
 				!reflect.DeepEqual(kept.Keys, keys) || !reflect.DeepEqual(kept.Repo, patterns) {
 				t.Errorf("the row of the deleted team = %+v, want the name, members, project keys and repository patterns it had", kept)
 			}
@@ -243,11 +243,11 @@ SELECT id, team_uuid, name, members, now64(6) + INTERVAL 1 HOUR, now64(6) + INTE
 			if err != nil {
 				t.Fatal(err)
 			}
-			if len(created.Members)+len(created.ManualMembers)+len(created.ProjectKeys)+len(created.RepoPatterns) != 0 || !created.IsActive {
+			if len(created.ManualMembers)+len(created.ProjectKeys)+len(created.RepoPatterns) != 0 || !created.IsActive {
 				t.Errorf("the team created under the id of a deleted team took something of it: %+v", created)
 			}
 			again, err := store.GetTeam(ctx, org, gone)
-			if err != nil || again == nil || again.Name != "Platform again" || !again.IsActive || len(again.Members) != 0 {
+			if err != nil || again == nil || again.Name != "Platform again" || !again.IsActive || len(again.ManualMembers) != 0 {
 				t.Errorf("the stored team after the create = %+v (err %v), want the new active team with no member", again, err)
 			}
 			if got, want := listed(""), sorted(gone, stays); !reflect.DeepEqual(got, want) {

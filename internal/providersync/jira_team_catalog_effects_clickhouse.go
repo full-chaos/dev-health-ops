@@ -22,15 +22,13 @@ import (
 // tables (`teams`, `team_project_ownership`, `team_memberships`, `projects`,
 // `sprints`). manual_members carry-forward reuses the shared
 // PreserveExistingTeamManualMembers helper every native provider's teams
-// writer shares; roster preservation for a teams-only run reuses the
-// shared PreserveExistingTeamMembersRoster helper (unlike GitLab, which
-// still carries its own provider-local duplicate of that read).
+// writer shares.
 type JiraTeamCatalogClickHouseEffects struct {
 	Conn  driver.Conn
 	Lease providerfoundation.LeaseGuard
 }
 
-const jiraTeamCatalogTeamsInsert = `INSERT INTO teams (id, team_uuid, name, description, members, manual_members, project_keys, repo_patterns, is_active, updated_at, org_id, provider, native_team_key, parent_team_id, created_at)`
+const jiraTeamCatalogTeamsInsert = `INSERT INTO teams (id, team_uuid, name, description, manual_members, project_keys, repo_patterns, is_active, updated_at, org_id, provider, native_team_key, parent_team_id, created_at)`
 
 // Omits last_synced on purpose: the server stamps it at insert time (server insert time, not commit order: readers re-read a 300 s window and dedup by key, migration 099).
 const jiraTeamCatalogOwnershipInsert = `INSERT INTO team_project_ownership (org_id, provider, team_id, project_id, project_key, source, is_primary, specificity, priority, valid_from, valid_to, updated_at)`
@@ -208,16 +206,12 @@ func (sink JiraTeamCatalogClickHouseEffects) writeTeams(ctx context.Context, cla
 		if err != nil {
 			return ErrInvalidConfiguration
 		}
-		members := row.Members
-		if members == nil {
-			members = []string{}
-		}
 		manualMembers := existingManualMembers[row.ID]
 		if manualMembers == nil {
 			manualMembers = []string{}
 		}
 		if err := batch.Append(
-			row.ID, teamUUID, row.Name, row.Description, members, manualMembers, row.ProjectKeys, row.RepoPatterns,
+			row.ID, teamUUID, row.Name, row.Description, manualMembers, row.ProjectKeys, row.RepoPatterns,
 			row.IsActive, row.UpdatedAt, row.OrgID, row.Provider, row.NativeTeamKey, row.ParentTeamID,
 			teamcreated.For(createdAt, row.ID, row.UpdatedAt),
 		); err != nil {
@@ -318,7 +312,7 @@ func (sink JiraTeamCatalogClickHouseEffects) writeSprints(ctx context.Context, r
 }
 
 func (sink JiraTeamCatalogClickHouseEffects) inspectTeam(ctx context.Context, claim Claim, row jiraTeamCatalogTeamRow) (EffectInspection, error) {
-	result, err := sink.Conn.Query(ctx, `SELECT id, team_uuid, name, description, members, project_keys, repo_patterns, is_active, updated_at, org_id, provider, native_team_key, parent_team_id FROM teams FINAL WHERE org_id = ? AND provider = ? AND id = ?`, claim.OrgID, jiraTeamCatalogProvider, row.ID)
+	result, err := sink.Conn.Query(ctx, `SELECT id, team_uuid, name, description, project_keys, repo_patterns, is_active, updated_at, org_id, provider, native_team_key, parent_team_id FROM teams FINAL WHERE org_id = ? AND provider = ? AND id = ?`, claim.OrgID, jiraTeamCatalogProvider, row.ID)
 	if err != nil {
 		return EffectConflict, err
 	}
@@ -327,7 +321,7 @@ func (sink JiraTeamCatalogClickHouseEffects) inspectTeam(ctx context.Context, cl
 	var teamUUID uuid.UUID
 	found := 0
 	for result.Next() {
-		if err := result.Scan(&actual.ID, &teamUUID, &actual.Name, &actual.Description, &actual.Members, &actual.ProjectKeys, &actual.RepoPatterns, &actual.IsActive, &actual.UpdatedAt, &actual.OrgID, &actual.Provider, &actual.NativeTeamKey, &actual.ParentTeamID); err != nil {
+		if err := result.Scan(&actual.ID, &teamUUID, &actual.Name, &actual.Description, &actual.ProjectKeys, &actual.RepoPatterns, &actual.IsActive, &actual.UpdatedAt, &actual.OrgID, &actual.Provider, &actual.NativeTeamKey, &actual.ParentTeamID); err != nil {
 			return EffectConflict, err
 		}
 		actual.TeamUUID = teamUUID.String()
@@ -345,9 +339,6 @@ func (sink JiraTeamCatalogClickHouseEffects) inspectTeam(ctx context.Context, cl
 		row.OrgID != actual.OrgID || row.Provider != actual.Provider ||
 		!reflect.DeepEqual(row.NativeTeamKey, actual.NativeTeamKey) || !reflect.DeepEqual(row.ParentTeamID, actual.ParentTeamID) ||
 		!row.UpdatedAt.Equal(actual.UpdatedAt) {
-		return EffectConflict, nil
-	}
-	if !reflect.DeepEqual(row.Members, actual.Members) {
 		return EffectConflict, nil
 	}
 	return EffectExact, nil

@@ -159,14 +159,15 @@ A GitHub PR closing Linear `CHAOS-2400` borrows that issue's `CHAOS` team.
 >    provider's work item sharing the same identity string. `manual_members`
 >    is the admin-EXCLUSIVE subset (confirmed by tracing every write site);
 >    provider auto-import carries it forward unchanged on every sync write
->    and never sets or clears it. Pre-existing `teams.members` entries have
->    no way to prove their provenance and fall into the provider layer below
->    until re-saved from the admin panel.
+>    and never sets or clears it. **CHAOS-9087:** the roster column
+>    `teams.members` is gone (no reader, no writer; dropped from the table one
+>    pin after the code that no longer touches it): the provider layer below
+>    is `team_memberships` alone.
 > 2. **Provider layer (the fallback).** `team_memberships`, populated
->    exclusively by the four auto-import workers
->    (`workers/team_autoimport_{github,gitlab,jira,linear}.py`) ∪
->    `teams.members` (the mixed-provenance roster the fix above demoted out
->    of the admin layer). Consulted ONLY when layer 1 has zero candidates for
+>    by the four provider team-catalog syncs. (Before CHAOS-9087 the
+>    mixed-provenance roster column `teams.members` was a second member of
+>    this layer; it is removed, a declared difference from the Python
+>    loader `metrics/loaders/clickhouse.py`.) Consulted ONLY when layer 1 has zero candidates for
 >    that identity (chris, 08:30 PT: *"manual is override — if the override
 >    exists, use it, else use attribution from providers"*; refined
 >    2026-08-26 10:39 PT: *"admin is an override, not a default — it's the
@@ -249,7 +250,7 @@ A GitHub PR closing Linear `CHAOS-2400` borrows that issue's `CHAOS` team.
 > team/identity CRUD goes through `ClickHouseTeamAdminService` + `ClickHouseIdentityStore`, writing the
 > ClickHouse `teams` and `identities` tables directly. Identity membership uses **surgical replacement**
 > semantics: updating an identity removes its facets from teams it left and replaces changed facets in
-> teams it stayed in, editing `teams.members` **and** `teams.manual_members` (CHAOS-4321) add/remove-by-facet
+> teams it stayed in, editing `teams.manual_members` (CHAOS-4321) add/remove-by-facet
 > (never a full recompute) so Auto Import / catalog members are preserved. See *CS6 status (CHAOS-2607)*
 > at the end of §4.
 
@@ -2007,7 +2008,7 @@ One path: `run_team_autoimport` → `team_autoimport_<provider>.populate()` → 
 > slog too) -- but the deploy-ordering requirement itself does not go away: land the migration
 > first or with the image, every time.
 
-**Three member representations — do not conflate:** `team_memberships` (edges) — auto-import's own record of provider-observed membership, all 4 providers — feeds drift/conflict review (§0.5) **and** is (with `teams.members`, next) the CHAOS-4321 PROVIDER (fallback) attribution layer: consulted only when an identity has no admin mapping at all (see the CHAOS-4321 callout under "Why this exists"). `teams.members` (roster) = a MIXED-provenance facet roster — this CS populates it for github/gitlab too via `AUTO_APPLY_POLICY`, UNREVIEWED, and drift-approval (§0.5) also writes it directly — which is exactly why a codex adversarial review (2026-08-26) found it unsafe as the override source and CHAOS-4321 demoted it to the provider (fallback) layer. `teams.manual_members` (roster, CHAOS-4321-only) = the genuinely admin-EXCLUSIVE facet roster, written only by `ClickHouseTeamAdminService.add_members`/`remove_members`/`set_members` (the admin Identities screen and drift-approval); together with `identities.team_ids` it forms the CHAOS-4321 ADMIN (override) layer the ladder tries FIRST. **Chain:** members → assignee identity → issues → PRs/MRs → (maybe) commits; commit authors are a separate git-side source, member↔author reconciliation deferred (not CHAOS-2600).
+**Two member representations — do not conflate:** `team_memberships` (edges) — auto-import's own record of provider-observed membership, all 4 providers — feeds drift/conflict review (§0.5) **and** is the CHAOS-4321 PROVIDER (fallback) attribution layer: consulted only when an identity has no admin mapping at all (see the CHAOS-4321 callout under "Why this exists"). (A third, the mixed-provenance roster column `teams.members`, is removed under CHAOS-9087: no reader, no writer.) `teams.manual_members` (roster, CHAOS-4321-only) = the genuinely admin-EXCLUSIVE facet roster, written only by `ClickHouseTeamAdminService.add_members`/`remove_members`/`set_members` (the admin Identities screen and drift-approval); together with `identities.team_ids` it forms the CHAOS-4321 ADMIN (override) layer the ladder tries FIRST. **Chain:** members → assignee identity → issues → PRs/MRs → (maybe) commits; commit authors are a separate git-side source, member↔author reconciliation deferred (not CHAOS-2600).
 
 > **Identity must match what the assignee path produces — UNDER THE ORG ALIAS MAP (CHAOS-2609).**
 > Both consumers key on the *resolver-consumed* identity. Auto-import resolves each member through the
@@ -2022,7 +2023,7 @@ One path: `run_team_autoimport` → `team_autoimport_<provider>.populate()` → 
 > persisted to the `team_memberships.identity_facets` `Array(String)` column (migration **060**); the
 > loader `argMax`-reads it and fans **every** facet into the ladder's `member_by_identity` (alongside
 > the legacy `raw_provider_user_id` = `facets[0]` + `raw_email` slots), **and** writes them to the
-> `teams.members` roster (read by `TeamResolver`). This closes the deferred
+> provider team roster (`TeamResolver`; the `teams.members` column was removed, CHAOS-9087). This closes the deferred
 > **email-alias-distinct-canonical** edge (**CHAOS-2625**): when an org maps a member's provider id and
 > email to *different* canonicals (`github:lead` → canonicalA, `personal@…` → canonicalB), an assignee
 > resolving to canonicalB now hits the canonical ladder directly with `assignee_membership` provenance
@@ -2209,8 +2210,8 @@ existing orgs see **no behavior change** — discovery writes straight to `teams
 (flag-for-review) routes managed-field changes (`name`, `description`, `project_keys`,
 `repo_patterns`) into the pending lane instead of clobbering the catalog. Provider membership
 imports also gate attribution-impacting `team_memberships` rows when they conflict with a manual
-membership or `manual_attribution_fallbacks(scope_type='member')`; the `teams.members` **and**
-`teams.manual_members` (CHAOS-4321) rosters are then updated surgically on approval. `policy 2` is
+membership or `manual_attribution_fallbacks(scope_type='member')`; the
+`teams.manual_members` (CHAOS-4321) roster is then updated surgically on approval (the `teams.members` roster is gone, CHAOS-9087; a staged change for the retired field `members` is superseded). `policy 2` is
 manual/none. `status` / `change_type` are
 low-cardinality strings, not `Enum8`, to avoid enum-widening migration ordering before new values
 can be emitted.
@@ -2247,10 +2248,10 @@ and sends `change_ids`. All three tables join the org-deletion purge path.
 > `manual_attribution_fallbacks(scope_type='member')` reconciliation reuses `team_drift_changes` via
 > `entity_type='identity'`, `change_type='membership_changed'`, and `field ∈ {'team_memberships',
 > 'manual_attribution_fallbacks.member'}`. Provider auto-import gates the `team_memberships`
-> attribution dimension before write-through — not just the `teams.members` roster — whenever the
+> attribution dimension before write-through whenever the
 > provider row would replace a manual membership or member fallback. Approving inserts the provider
 > membership, expires the conflicting manual row/fallback, and adds the incoming member facets to
-> `teams.members` **and** `teams.manual_members` (CHAOS-4321, via
+> `teams.manual_members` (CHAOS-4321, via
 > `ClickHouseTeamAdminService.add_members` — see below); dismissing leaves both the catalog and
 > attribution dimensions unchanged.
 >
@@ -2386,7 +2387,7 @@ flowchart TD
     B -- match --> T["team_id"]
     B -- miss --> C{"Tier 2: retry with project_key<br/>(Linear TEAM key)"}
     C -- match --> T
-    C -- miss --> D{"Tier 3: assignee membership<br/>assignee in ClickHouse teams.members?"}
+    C -- miss --> D{"Tier 3: assignee membership<br/>assignee in admin manual_members or provider team_memberships?"}
     D -- match --> T
     D -- miss --> E{"Tier 4: LinkedIssueTeamResolver<br/>linked donor issue has a team?"}
     E -- match --> T
@@ -3088,7 +3089,7 @@ durations, and co-occurrence bridges, but they are not the owning team source.
   ownership-derivation diagram in §1.1.
 - **Admin override vs. provider fallback are two different roster layers, neither is an
   `work_item_team_attributions.source` value.** `identities.team_ids` ∪ `teams.manual_members` is the
-  CHAOS-4321 admin (override) layer; `team_memberships` ∪ `teams.members` is the provider (fallback)
+  CHAOS-4321 admin (override) layer; `team_memberships` is the provider (fallback)
   layer. Both are consulted only *inside* the `assignee_membership` (rank 4) / `author_membership`
   (rank 6) resolution step (§0 "Why this exists") — they never appear as their own row in
   `work_item_team_attributions.source`.

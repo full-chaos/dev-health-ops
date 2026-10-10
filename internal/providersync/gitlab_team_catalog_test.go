@@ -366,10 +366,10 @@ func TestGitLabTeamCatalogCollectAllSelections(t *testing.T) {
 	if len(teamA.ProjectKeys) != 1 || teamA.ProjectKeys[0] != "org/team-a/svc" {
 		t.Fatalf("team-a project_keys = %v", teamA.ProjectKeys)
 	}
-	if !root.MembersAuthoritative || len(root.Members) != 1 || root.Members[0] != "gitlab:root-owner" {
-		t.Fatalf("root members = %v (authoritative=%v)", root.Members, root.MembersAuthoritative)
+	if len(root.Members) != 1 || root.Members[0] != "gitlab:root-owner" {
+		t.Fatalf("root members = %v", root.Members)
 	}
-	if !teamA.MembersAuthoritative || len(teamA.Members) != 2 {
+	if len(teamA.Members) != 2 {
 		t.Fatalf("team-a members = %v", teamA.Members)
 	}
 
@@ -786,11 +786,9 @@ func newGitLabTeamCatalogFakeServerWithFailingRootMembers(t *testing.T) *gitlabT
 // CHAOS-4461 regression proof (ruling extended from GitHub to GitLab,
 // team-lead 2026-08-28): under non-strict (ref.Strict == false, the default
 // post-sync path), ONE group's /members fetch failing must not abort the
-// whole catalog walk. It must be recorded in FailedMemberFetchTeamIDs, that
-// team must be left with MembersAuthoritative == false (so the effects sink
-// carries forward its existing roster instead of writing an unconfirmed
-// empty one -- see FailedMemberFetchTeamIDs's doc comment), and every other
-// group must still collect normally.
+// whole catalog walk. It must be counted in SkippedTeamMemberships, that
+// team's observed roster stays empty, and every other group must still
+// collect normally.
 func TestGitLabTeamCatalogRouteHandlerSoftFailsMemberFetchUnderNonStrict(t *testing.T) {
 	fake := newGitLabTeamCatalogFakeServerWithFailingRootMembers(t)
 	client := gitlabTeamCatalogTestClient(t, fake.URL)
@@ -802,9 +800,6 @@ func TestGitLabTeamCatalogRouteHandlerSoftFailsMemberFetchUnderNonStrict(t *test
 	batch, err := (GitLabTeamCatalogRouteHandler{}).CollectTeamCatalog(context.Background(), ref, credential, client, selections, now)
 	if err != nil {
 		t.Fatalf("collect should soft-fail, not error, under non-strict: %v", err)
-	}
-	if len(batch.Rows.FailedMemberFetchTeamIDs) != 1 || batch.Rows.FailedMemberFetchTeamIDs[0] != "gl:org" {
-		t.Fatalf("FailedMemberFetchTeamIDs = %v, want [gl:org]", batch.Rows.FailedMemberFetchTeamIDs)
 	}
 	if batch.Evidence.SkippedTeamMemberships != 1 {
 		t.Fatalf("SkippedTeamMemberships = %d, want 1", batch.Evidence.SkippedTeamMemberships)
@@ -822,11 +817,11 @@ func TestGitLabTeamCatalogRouteHandlerSoftFailsMemberFetchUnderNonStrict(t *test
 	if root == nil || teamA == nil {
 		t.Fatalf("missing expected teams: %+v", batch.Rows.Teams)
 	}
-	if root.MembersAuthoritative {
-		t.Fatalf("root's member fetch failed -- MembersAuthoritative must stay false so the sink preserves its existing roster, got true (members=%v)", root.Members)
+	if len(root.Members) != 0 {
+		t.Fatalf("root's member fetch failed -- its observed roster must be empty, got %v", root.Members)
 	}
-	if !teamA.MembersAuthoritative || len(teamA.Members) != 2 || teamA.Members[0] != "gitlab:alice" {
-		t.Fatalf("team-a's fetch succeeded -- expected authoritative [gitlab:alice, alice@example.com], got authoritative=%v members=%v", teamA.MembersAuthoritative, teamA.Members)
+	if len(teamA.Members) != 2 || teamA.Members[0] != "gitlab:alice" {
+		t.Fatalf("team-a's fetch succeeded -- expected [gitlab:alice, alice@example.com], got %v", teamA.Members)
 	}
 }
 
@@ -917,8 +912,8 @@ func TestGitLabTeamCatalogTeamsOnlySkipsMembersAndProjects(t *testing.T) {
 		t.Fatalf("teams = %d", len(batch.Rows.Teams))
 	}
 	for _, row := range batch.Rows.Teams {
-		if row.MembersAuthoritative {
-			t.Fatalf("teams-only run must not claim roster authority for %s", row.ID)
+		if len(row.Members) != 0 {
+			t.Fatalf("teams-only run observed no roster for %s, got %v", row.ID, row.Members)
 		}
 	}
 	if len(batch.Rows.Ownership) != 0 || len(batch.Rows.Memberships) != 0 || len(batch.Rows.Projects) != 0 {

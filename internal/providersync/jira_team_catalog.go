@@ -133,20 +133,19 @@ type jiraTeamCatalogSprintsPage struct {
 // SAME physical `teams` table. Jira teams are never hierarchical (a project
 // has no parent project), so ParentTeamID is always nil.
 type jiraTeamCatalogTeamRow struct {
-	ID                   string    `json:"id"`
-	TeamUUID             string    `json:"team_uuid"`
-	Name                 string    `json:"name"`
-	Description          *string   `json:"description"`
-	Members              []string  `json:"members"`
-	MembersAuthoritative bool      `json:"members_authoritative"`
-	ProjectKeys          []string  `json:"project_keys"`
-	RepoPatterns         []string  `json:"repo_patterns"`
-	IsActive             uint8     `json:"is_active"`
-	UpdatedAt            time.Time `json:"updated_at"`
-	OrgID                string    `json:"org_id"`
-	Provider             string    `json:"provider"`
-	NativeTeamKey        *string   `json:"native_team_key"`
-	ParentTeamID         *string   `json:"parent_team_id"`
+	ID            string    `json:"id"`
+	TeamUUID      string    `json:"team_uuid"`
+	Name          string    `json:"name"`
+	Description   *string   `json:"description"`
+	Members       []string  `json:"members"`
+	ProjectKeys   []string  `json:"project_keys"`
+	RepoPatterns  []string  `json:"repo_patterns"`
+	IsActive      uint8     `json:"is_active"`
+	UpdatedAt     time.Time `json:"updated_at"`
+	OrgID         string    `json:"org_id"`
+	Provider      string    `json:"provider"`
+	NativeTeamKey *string   `json:"native_team_key"`
+	ParentTeamID  *string   `json:"parent_team_id"`
 }
 
 type jiraTeamCatalogOwnershipRow struct {

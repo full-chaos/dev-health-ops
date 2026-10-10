@@ -31,9 +31,8 @@ type ICFinalizeExecutor struct {
 // read the work item attribution uses (teamattribution.LoadProviderMembers):
 // one rule says who is a member of which team at a point in time, for the
 // person's own rows and points here and for the work the person is assigned.
-// The roster column teams.members is NOT read: it is a copy the team sync
-// keeps beside the table, with no validity window, and it can be empty while
-// the table holds the memberships.
+// The roster column teams.members is gone (CHAOS-9087): it was a copy the
+// team sync kept beside the table, with no validity window.
 //
 // The mapper is set ONCE here, at construction, not per finalize call: the
 // closure takes the organization and the time as parameters and does a fresh,

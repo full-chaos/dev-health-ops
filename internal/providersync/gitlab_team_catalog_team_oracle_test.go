@@ -7,10 +7,10 @@ import (
 
 // gitlabTeamCatalogTeamProducerRow mirrors _gitlab_team_row's twelve dict
 // keys exactly (team_autoimport_gitlab.py) -- the boundary this oracle
-// compares against. It deliberately omits team_uuid and members_
-// authoritative: both are Go-only (ClickHouse derives the former; the
-// latter is this port's own roster-preservation bookkeeping), neither
-// exists in Python's dict, and normalizeGitLabTeamRow's full row is
+// compares against. It deliberately omits team_uuid, which is Go-only
+// (ClickHouse derives it), and members: the roster is not stored (CHAOS-9087)
+// and the Go row keeps it for the provider observation only. Neither
+// is a key of Python's dict here, and normalizeGitLabTeamRow's full row is
 // re-asserted against BOTH (via the real gitlabTeamCatalogTeamRow type) in
 // gitlab_team_catalog_test.go's unit tests.
 type gitlabTeamCatalogTeamProducerRow struct {

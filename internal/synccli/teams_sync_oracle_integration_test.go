@@ -717,22 +717,13 @@ func teamsRules() map[string]teamsRule {
 			return ""
 		}, why: "legacy: 'GitHub team <slug>' when the provider has none; catalog: the provider's value"},
 		"members": {check: func(sc *teamsScenario, team fakeTeam, py, gr map[string]string) string {
-			// The catalog's roster is identity facets: 'github:<login>' for each member (plus the member's
-			// public email); the legacy roster is the bare login. The logins are what must agree.
-			var logins []string
-			for _, entry := range parseList(gr["members"]) {
-				if strings.HasPrefix(entry, "github:") {
-					logins = append(logins, strings.TrimPrefix(entry, "github:"))
-				}
-			}
-			want := parseList(py["members"])
-			sort.Strings(logins)
-			sort.Strings(want)
-			if strings.Join(logins, ",") != strings.Join(want, ",") {
-				return fmt.Sprintf("members: the logins differ: python %v, go %v (from %s)", want, logins, gr["members"])
+			// The legacy verb wrote the bare logins; the catalog stores no roster (CHAOS-9087): its
+			// column is empty, and the people are the team_memberships rows (asserted below).
+			if gr["members"] != "" && gr["members"] != "[]" {
+				return fmt.Sprintf("members: the roster column is not written (CHAOS-9087), go wrote %s", gr["members"])
 			}
 			return ""
-		}, why: "legacy: bare logins; catalog: provider-scoped identity facets"},
+		}, why: "legacy: bare logins; catalog: no roster is stored, the people are the team_memberships rows"},
 		"team_uuid": {check: func(sc *teamsScenario, team fakeTeam, py, gr map[string]string) string {
 			wantGo := uuid.NewSHA1(uuid.NameSpaceURL, []byte("team:"+py["id"])).String()
 			if py["team_uuid"] != "<uuid4>" { // the golden stores python's random uuid4 as its kind

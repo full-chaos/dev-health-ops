@@ -2,14 +2,11 @@ package providersync
 
 import (
 	"context"
-	"log/slog"
 	"reflect"
 	"strings"
 	"time"
 
-	"github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
-	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 	"github.com/google/uuid"
 
@@ -30,21 +27,14 @@ import (
 //     manual_members for that row and writes it back unchanged, because this
 //     is a ReplacingMergeTree full-row-version INSERT -- omitting the column
 //     would silently reset an admin's manual override to [].
-//   - roster preservation for a teams-only run (CHAOS-4323 round 2): when
-//     MembersAuthoritative is false (want_teams=true, want_members=false),
-//     the write carries forward the EXISTING persisted roster instead of
-//     overwriting it with an empty one. Python fails closed here (skips the
-//     whole team-dimension write when the existing roster cannot be
-//     confirmed); this port does the same by returning an error, which
-//     fails only the `teams` destination -- team_project_ownership,
-//     team_memberships, and projects are independent EffectBatches and are
-//     unaffected.
+//   - no roster: the teams table has no `members` column (CHAOS-9087), so
+//     there is no stored roster to carry forward on a teams-only run.
 type GitLabTeamCatalogClickHouseEffects struct {
 	Conn  driver.Conn
 	Lease providerfoundation.LeaseGuard
 }
 
-const gitlabTeamCatalogTeamsInsert = `INSERT INTO teams (id, team_uuid, name, description, members, manual_members, project_keys, repo_patterns, is_active, updated_at, org_id, provider, native_team_key, parent_team_id, created_at)`
+const gitlabTeamCatalogTeamsInsert = `INSERT INTO teams (id, team_uuid, name, description, manual_members, project_keys, repo_patterns, is_active, updated_at, org_id, provider, native_team_key, parent_team_id, created_at)`
 
 // Omits last_synced on purpose: the server stamps it at insert time (server insert time, not commit order: readers re-read a 300 s window and dedup by key, migration 099).
 const gitlabTeamCatalogOwnershipInsert = `INSERT INTO team_project_ownership (org_id, provider, team_id, project_id, project_key, source, is_primary, specificity, priority, valid_from, valid_to, updated_at)`
@@ -183,80 +173,6 @@ func gitlabTeamCatalogDestination(destination string) bool {
 	}
 }
 
-// gitlabExistingTeamRosterQuery batch-reads the currently-persisted
-// `members` roster for every team a caller is about to write, mirroring
-// PreserveExistingTeamManualMembers's shape (team_manual_members.go) but for
-// the GitLab-specific members-off preservation case (CHAOS-4323 round 2):
-// unlike manual_members, no other native provider needs this today --
-// Linear always collects members alongside teams in one GraphQL walk, so it
-// has no "teams selected, members not" partial-collection mode at all. A
-// team with no existing row simply has no entry in the returned map; the
-// caller defaults that to an empty roster (a genuinely new team), never
-// treats a missing entry as an error.
-func gitlabExistingTeamRoster(
-	ctx context.Context, conn driver.Conn, orgID string, teamIDs []string,
-) (map[string][]string, error) {
-	if conn == nil || strings.TrimSpace(orgID) == "" {
-		return nil, ErrInvalidConfiguration
-	}
-	if len(teamIDs) == 0 {
-		return nil, nil
-	}
-	rows, err := conn.Query(ctx,
-		"SELECT id, members FROM teams FINAL WHERE org_id = {org_id:String} AND id IN {team_ids:Array(String)}",
-		clickhouse.Named("org_id", orgID), clickhouse.Named("team_ids", teamIDs),
-	)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	existing := make(map[string][]string, len(teamIDs))
-	for rows.Next() {
-		var id string
-		var members []string
-		if err := rows.Scan(&id, &members); err != nil {
-			return nil, err
-		}
-		existing[id] = members
-	}
-	return existing, rows.Err()
-}
-
-// gitlabTeamsNeedingRosterPreservation returns the ids of the rows whose
-// write actually depends on gitlabExistingTeamRoster's read -- a row with
-// MembersAuthoritative=true carries its own confirmed roster in row.Members
-// and needs nothing from that read. Scoping the read (and any failure of
-// it) to only these rows is what stops a preservation-read failure for one
-// team from discarding every OTHER, self-sufficient team's write in the
-// same batch (codex review finding, mirrors GitHubTeamCatalogCollector's
-// identical CHAOS-4461-class fix).
-func gitlabTeamsNeedingRosterPreservation(rows []gitlabTeamCatalogTeamRow) []string {
-	ids := make([]string, 0)
-	for _, row := range rows {
-		if !row.MembersAuthoritative {
-			ids = append(ids, row.ID)
-		}
-	}
-	return ids
-}
-
-// gitlabTeamsSafeToWriteAfterRosterPreservationFailure filters rows down to
-// only those NOT dependent on an unconfirmed roster read -- used when
-// gitlabExistingTeamRoster's read fails for the rows gitlabTeamsNeeding
-// RosterPreservation identified. Every MembersAuthoritative=true row is
-// unaffected and still writes normally; every MembersAuthoritative=false
-// row is excluded from this write entirely rather than risk writing an
-// unconfirmed (possibly wrong) roster.
-func gitlabTeamsSafeToWriteAfterRosterPreservationFailure(rows []gitlabTeamCatalogTeamRow) []gitlabTeamCatalogTeamRow {
-	kept := make([]gitlabTeamCatalogTeamRow, 0, len(rows))
-	for _, row := range rows {
-		if row.MembersAuthoritative {
-			kept = append(kept, row)
-		}
-	}
-	return kept
-}
-
 func (sink GitLabTeamCatalogClickHouseEffects) writeTeams(ctx context.Context, claim Claim, rows []gitlabTeamCatalogTeamRow) error {
 	if len(rows) == 0 {
 		return nil
@@ -268,7 +184,7 @@ func (sink GitLabTeamCatalogClickHouseEffects) writeTeams(ctx context.Context, c
 	// CHAOS-4321/CHAOS-4446: batched, one round trip for every touched team,
 	// shared with every native provider's teams writer (Linear included) so
 	// the carry-forward logic lives in exactly one place. Every row needs
-	// its manual_members merged in (regardless of MembersAuthoritative), so
+	// its manual_members merged in so
 	// a read failure here fails closed for the WHOLE batch -- there is no
 	// subset of rows this read is unnecessary for.
 	existingManualMembers, err := PreserveExistingTeamManualMembers(ctx, sink.Conn, claim.OrgID, teamIDs)
@@ -276,25 +192,6 @@ func (sink GitLabTeamCatalogClickHouseEffects) writeTeams(ctx context.Context, c
 		// Fail closed: a read failure must never fall through to writing an
 		// unconfirmed manual_members reset.
 		return err
-	}
-	// codex review finding (mirrors GitHubTeamCatalogCollector's CHAOS-4461-
-	// class fix): unlike manual_members above, gitlabExistingTeamRoster is
-	// only needed by MembersAuthoritative=false rows -- scope both the read
-	// and its failure to just those, so a preservation-read failure never
-	// discards every OTHER, self-sufficient team's write in the same batch.
-	rosterTeamIDs := gitlabTeamsNeedingRosterPreservation(rows)
-	var existingRoster map[string][]string
-	if len(rosterTeamIDs) > 0 {
-		var rosterErr error
-		existingRoster, rosterErr = gitlabExistingTeamRoster(ctx, sink.Conn, claim.OrgID, rosterTeamIDs)
-		if rosterErr != nil {
-			slog.Default().WarnContext(ctx, "gitlab_team_catalog_roster_preservation_failed",
-				"org_id", claim.OrgID, logging.ProviderIDsAttr("team_ids", rosterTeamIDs), "error", rosterErr)
-			rows = gitlabTeamsSafeToWriteAfterRosterPreservationFailure(rows)
-			if len(rows) == 0 {
-				return nil
-			}
-		}
 	}
 	createdAt, err := teamcreated.Carry(ctx, sink.Conn, claim.OrgID, teamIDs)
 	if err != nil {
@@ -310,19 +207,12 @@ func (sink GitLabTeamCatalogClickHouseEffects) writeTeams(ctx context.Context, c
 		if err != nil {
 			return ErrInvalidConfiguration
 		}
-		members := row.Members
-		if !row.MembersAuthoritative {
-			members = existingRoster[row.ID]
-		}
-		if members == nil {
-			members = []string{}
-		}
 		manualMembers := existingManualMembers[row.ID]
 		if manualMembers == nil {
 			manualMembers = []string{}
 		}
 		if err := batch.Append(
-			row.ID, teamUUID, row.Name, row.Description, members, manualMembers, row.ProjectKeys, row.RepoPatterns,
+			row.ID, teamUUID, row.Name, row.Description, manualMembers, row.ProjectKeys, row.RepoPatterns,
 			row.IsActive, row.UpdatedAt, row.OrgID, row.Provider, row.NativeTeamKey, row.ParentTeamID,
 			teamcreated.For(createdAt, row.ID, row.UpdatedAt),
 		); err != nil {
@@ -486,7 +376,7 @@ func (sink GitLabTeamCatalogClickHouseEffects) writeProjects(ctx context.Context
 }
 
 func (sink GitLabTeamCatalogClickHouseEffects) inspectTeam(ctx context.Context, claim Claim, row gitlabTeamCatalogTeamRow) (EffectInspection, error) {
-	result, err := sink.Conn.Query(ctx, `SELECT id, team_uuid, name, description, members, project_keys, repo_patterns, is_active, updated_at, org_id, provider, native_team_key, parent_team_id FROM teams FINAL WHERE org_id = ? AND provider = ? AND id = ?`, claim.OrgID, gitlabTeamCatalogProvider, row.ID)
+	result, err := sink.Conn.Query(ctx, `SELECT id, team_uuid, name, description, project_keys, repo_patterns, is_active, updated_at, org_id, provider, native_team_key, parent_team_id FROM teams FINAL WHERE org_id = ? AND provider = ? AND id = ?`, claim.OrgID, gitlabTeamCatalogProvider, row.ID)
 	if err != nil {
 		return EffectConflict, err
 	}
@@ -495,7 +385,7 @@ func (sink GitLabTeamCatalogClickHouseEffects) inspectTeam(ctx context.Context, 
 	var teamUUID uuid.UUID
 	found := 0
 	for result.Next() {
-		if err := result.Scan(&actual.ID, &teamUUID, &actual.Name, &actual.Description, &actual.Members, &actual.ProjectKeys, &actual.RepoPatterns, &actual.IsActive, &actual.UpdatedAt, &actual.OrgID, &actual.Provider, &actual.NativeTeamKey, &actual.ParentTeamID); err != nil {
+		if err := result.Scan(&actual.ID, &teamUUID, &actual.Name, &actual.Description, &actual.ProjectKeys, &actual.RepoPatterns, &actual.IsActive, &actual.UpdatedAt, &actual.OrgID, &actual.Provider, &actual.NativeTeamKey, &actual.ParentTeamID); err != nil {
 			return EffectConflict, err
 		}
 		actual.TeamUUID = teamUUID.String()
@@ -507,19 +397,13 @@ func (sink GitLabTeamCatalogClickHouseEffects) inspectTeam(ctx context.Context, 
 	if found == 0 {
 		return EffectAbsent, nil
 	}
-	// Members is intentionally excluded from this comparison when the
-	// written row was not authoritative for it (a teams-only run carries
-	// forward whatever roster happened to be persisted at write time, which
-	// this readback cannot re-derive without racing the same read).
+	// Members is not compared: the teams table stores no roster.
 	if found != 1 || row.ID != actual.ID || row.TeamUUID != actual.TeamUUID || row.Name != actual.Name ||
 		!reflect.DeepEqual(row.Description, actual.Description) || !reflect.DeepEqual(row.ProjectKeys, actual.ProjectKeys) ||
 		!reflect.DeepEqual(row.RepoPatterns, actual.RepoPatterns) || row.IsActive != actual.IsActive ||
 		row.OrgID != actual.OrgID || row.Provider != actual.Provider ||
 		!reflect.DeepEqual(row.NativeTeamKey, actual.NativeTeamKey) || !reflect.DeepEqual(row.ParentTeamID, actual.ParentTeamID) ||
 		!row.UpdatedAt.Equal(actual.UpdatedAt) {
-		return EffectConflict, nil
-	}
-	if row.MembersAuthoritative && !reflect.DeepEqual(row.Members, actual.Members) {
 		return EffectConflict, nil
 	}
 	return EffectExact, nil

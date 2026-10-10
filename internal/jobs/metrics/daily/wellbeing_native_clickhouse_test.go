@@ -15,7 +15,7 @@ import (
 
 func TestLoadWellbeingTeamsUsesProductionQueryWithTenantFence(t *testing.T) {
 	connection := &recordingRepositoryConnection{rows: &wellbeingTeamRowsStub{teams: []WellbeingTeam{
-		{ID: "team-a", Name: "Team A", Members: []string{"a@example.com"}, RepoPatterns: []string{"org/a"}},
+		{ID: "team-a", Name: "Team A", RepoPatterns: []string{"org/a"}},
 	}}}
 	teams, err := LoadWellbeingTeams(context.Background(), connection, "org-1")
 	if err != nil {
@@ -27,7 +27,7 @@ func TestLoadWellbeingTeamsUsesProductionQueryWithTenantFence(t *testing.T) {
 	if len(connection.arguments) != 1 || connection.arguments[0] != "org-1" {
 		t.Fatalf("query arguments=%v, want only tenant id", connection.arguments)
 	}
-	if connection.query != "SELECT id, name, members, repo_patterns FROM teams FINAL WHERE org_id = ?" {
+	if connection.query != "SELECT id, name, repo_patterns FROM teams FINAL WHERE org_id = ?" {
 		t.Fatalf("unexpected query: %s", connection.query)
 	}
 	// The active-team rule is a second read with the same tenant fence; the
@@ -113,10 +113,10 @@ func TestRepoPatternResolverSkipsTeamsWithNoPatterns(t *testing.T) {
 }
 
 func TestMemberResolverNormalizesIdentity(t *testing.T) {
-	teams := []WellbeingTeam{
+	teams := []rosterTeam{
 		{ID: "team-a", Name: "Team A", Members: []string{"Dev@Example.com", "  Display   Name  "}},
 	}
-	resolver := NewMemberResolver(teams)
+	resolver := newTestMemberResolver(teams)
 
 	if id, name := resolver.ResolveMember("dev@example.com"); id != "team-a" || name != "Team A" {
 		t.Fatalf("case-insensitive match failed: id=%s name=%s", id, name)
@@ -133,7 +133,7 @@ func TestMemberResolverNormalizesIdentity(t *testing.T) {
 }
 
 func TestMemberResolverFallsBackToTeamIDWhenNameEmpty(t *testing.T) {
-	resolver := NewMemberResolver([]WellbeingTeam{{ID: "team-a", Name: "", Members: []string{"a@example.com"}}})
+	resolver := newTestMemberResolver([]rosterTeam{{ID: "team-a", Name: "", Members: []string{"a@example.com"}}})
 	if _, name := resolver.ResolveMember("a@example.com"); name != "team-a" {
 		t.Fatalf("expected team name to fall back to team id, got %q", name)
 	}
@@ -272,14 +272,13 @@ type wellbeingTeamRowsStub struct {
 
 func (rows *wellbeingTeamRowsStub) Next() bool { return rows.position < len(rows.teams) }
 func (rows *wellbeingTeamRowsStub) Scan(destinations ...any) error {
-	if len(destinations) != 4 || rows.position >= len(rows.teams) {
+	if len(destinations) != 3 || rows.position >= len(rows.teams) {
 		return errors.New("unexpected wellbeing team scan")
 	}
 	team := rows.teams[rows.position]
 	*(destinations[0].(*string)) = team.ID
 	*(destinations[1].(*string)) = team.Name
-	*(destinations[2].(*[]string)) = team.Members
-	*(destinations[3].(*[]string)) = team.RepoPatterns
+	*(destinations[2].(*[]string)) = team.RepoPatterns
 	rows.position++
 	return nil
 }
@@ -287,7 +286,7 @@ func (*wellbeingTeamRowsStub) ScanStruct(any) error             { return errors.
 func (*wellbeingTeamRowsStub) ColumnTypes() []driver.ColumnType { return nil }
 func (*wellbeingTeamRowsStub) Totals(...any) error              { return errors.New("unused") }
 func (*wellbeingTeamRowsStub) Columns() []string {
-	return []string{"id", "name", "members", "repo_patterns"}
+	return []string{"id", "name", "repo_patterns"}
 }
 func (*wellbeingTeamRowsStub) Close() error  { return nil }
 func (*wellbeingTeamRowsStub) Err() error    { return nil }

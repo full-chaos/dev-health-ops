@@ -525,17 +525,15 @@ func TestAnInactiveAdminTeamIsNotCountedByTheMembershipGate(t *testing.T) {
 			}
 			source := ClickHouseFactSource{Conn: conn}
 			var facts GithubWorkItemDerivationFacts
-			var tagged []GithubWorkItemDerivationMemberFact
 			if facts.Teams, err = source.LoadTeams(ctx, org); err != nil {
 				t.Fatalf("LoadTeams: %v", err)
 			}
-			if facts.Members, facts.UntypedMembers, facts.ProviderUntypedMembers, tagged, err = source.LoadMembers(ctx, org, at.Add(48*time.Hour)); err != nil {
+			if facts.Members, facts.UntypedMembers, err = source.LoadMembers(ctx, org, at.Add(48*time.Hour)); err != nil {
 				t.Fatalf("LoadMembers: %v", err)
 			}
 			if facts.ProviderMembers, err = source.LoadProviderMembers(ctx, org, at.Add(48*time.Hour)); err != nil {
 				t.Fatalf("LoadProviderMembers: %v", err)
 			}
-			facts.ProviderMembers = append(facts.ProviderMembers, tagged...)
 			derived := NewGitHubWorkItemDerivationContext(facts)
 			candidates, reason := derived.ResolveMembership(provider, "someone")
 			if reason != "" || candidateTeams(candidates) != want {

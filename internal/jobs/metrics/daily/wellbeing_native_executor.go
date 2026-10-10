@@ -35,13 +35,13 @@ import (
 // get wrong:
 //
 //  1. TEAM ATTRIBUTION IS OWNERSHIP ONLY (a DECLARED DIFFERENCE from the
-//     Python reference, which falls back to teams.members by commit author).
+//     Python reference, which falls back to the roster column teams.members
+//     by commit author; that column is gone, CHAOS-9087).
 //     A repository's team is its authoritative owner (team_repo_ownership,
 //     teamownership.AuthoritativeOwnerByRepo), with the repo_patterns
 //     fallback of teamresolve.ResolveFromOwnershipMap; a repository nobody
 //     owns is "unassigned". Team = ownership of repositories, never
-//     person -> membership -> team. See CHAOS-9084 for the one daily family
-//     (ic_finalize) that still reads teams.members.
+//     person -> membership -> team.
 //  2. computed_at IS STAMPED ONCE PER REPO GROUP, NOT ONCE PER PARTITION
 //     (revised in codex round-2, see WriteTeamMetricsDailyPerRepo's doc
 //     comment): team_metrics_daily's (org_id, team_id, day) reader dedup
@@ -179,7 +179,7 @@ func (executor *TeamWellbeingExecutor) ComputeFamily(
 	// read and the same shared precedence its siblings use (ai_impact,
 	// team_cognitive_load, team_complexity, compounding_risk_team); the
 	// repo_patterns fallback only serves a repository no owner row resolves.
-	// A repository with no owner is "unassigned". teams.members is never read.
+	// A repository with no owner is "unassigned".
 	owners, err := teamownership.AuthoritativeOwnerByRepo(ctx, executor.conn, run.OrganizationID, day)
 	if err != nil {
 		return 0, fmt.Errorf("resolve authoritative repo ownership: %w", err)

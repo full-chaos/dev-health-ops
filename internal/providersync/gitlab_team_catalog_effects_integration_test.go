@@ -76,14 +76,13 @@ func TestGitLabTeamCatalogEffectsAgainstMigratedSchema(t *testing.T) {
 
 	rows := gitlabTeamCatalogIntegrationRows(claim.OrgID, now)
 	for i := range rows.Teams {
-		rows.Teams[i].MembersAuthoritative = true
 		rows.Teams[i].Members = []string{}
 	}
 	rows.Teams[0].Members = []string{"gitlab:root-owner"}
 
 	otherRows := gitlabTeamCatalogIntegrationRows(otherClaim.OrgID, now)
 	for i := range otherRows.Teams {
-		otherRows.Teams[i].MembersAuthoritative = true
+		_ = i
 	}
 
 	effects, err := BuildGitLabTeamCatalogEffects(rows, true, true, true)
@@ -154,35 +153,6 @@ func TestGitLabTeamCatalogEffectsAgainstMigratedSchema(t *testing.T) {
 	if len(manualMembers) != 1 || manualMembers[0] != "manual:owner" {
 		t.Fatalf("manual_members not carried forward: %v", manualMembers)
 	}
-
-	// Teams-only run (MembersAuthoritative=false) must preserve the CURRENT
-	// roster rather than overwrite it with an empty one.
-	preserve := rows.Teams[0]
-	preserve.UpdatedAt = now.Add(2 * time.Second)
-	preserve.MembersAuthoritative = false
-	preserve.Members = nil
-	preserveEffect, err := effectBatchFromValues(gitlabTeamCatalogTeamsDestination, EffectReadbackRequired, []gitlabTeamCatalogTeamRow{preserve})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := sink.WriteEffect(ctx, claim, preserveEffect); err != nil {
-		t.Fatalf("roster-preserving write: %v", err)
-	}
-	var members []string
-	result2, err := conn.Query(ctx, `SELECT members FROM teams FINAL WHERE org_id = ? AND id = ?`, claim.OrgID, "gl:org")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer result2.Close()
-	if !result2.Next() {
-		t.Fatal("expected a row")
-	}
-	if err := result2.Scan(&members); err != nil {
-		t.Fatal(err)
-	}
-	if len(members) != 1 || members[0] != "gitlab:root-owner" {
-		t.Fatalf("roster not preserved on members-off write: %v", members)
-	}
 }
 
 // TestGitLabTeamCatalogCollectorFailsClosedOnPaginationTruncation proves the
@@ -250,17 +220,17 @@ func TestGitLabTeamCatalogCollectorFailsClosedOnPaginationTruncation(t *testing.
 	}
 }
 
-// TestGitLabTeamCatalogCollectorPreservesRosterAfterPerGroupMemberFetchFailure
+// TestGitLabTeamCatalogCollectorSkipsOnlyTheMembershipsOfAGroupWhoseMemberFetchFailed
 // is the CHAOS-4461 regression proof (ruling extended from GitHub to GitLab,
 // team-lead 2026-08-28) at the full collector-adapter level, against a REAL
 // ClickHouse write/readback: with members globally selected under non-strict,
-// ONE group's /members fetch failing must not wipe that group's roster to []
-// -- its existing, previously-persisted roster must survive, while a second,
-// healthy group in the same run gets its freshly observed roster. Uses
+// ONE group's /members fetch failing skips only that group's memberships
+// (both teams are still written), while a second, healthy group in the same
+// run gets its freshly observed memberships. Uses
 // newGitLabTeamCatalogFakeServerWithFailingRootMembers (gitlab_team_catalog_
 // test.go, same package) -- org's /members returns 500, org/team-a's
 // succeeds.
-func TestGitLabTeamCatalogCollectorPreservesRosterAfterPerGroupMemberFetchFailure(t *testing.T) {
+func TestGitLabTeamCatalogCollectorSkipsOnlyTheMembershipsOfAGroupWhoseMemberFetchFailed(t *testing.T) {
 	ctx, conn := newWorkItemEffectsConn(t)
 	lease := providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil })
 	orgID := "org-partial-member-fetch-failure"
@@ -271,8 +241,6 @@ func TestGitLabTeamCatalogCollectorPreservesRosterAfterPerGroupMemberFetchFailur
 	// Seed org's existing roster, as if a prior successful run had already
 	// written it.
 	seedTeam := normalizeGitLabTeamRow(orgID, gitlabTeamCatalogGroupPayload{FullPath: "org", Name: "Org"}, nil, now)
-	seedTeam.Members = []string{"gitlab:existing-owner"}
-	seedTeam.MembersAuthoritative = true
 	if err := sink.writeTeams(ctx, claim, []gitlabTeamCatalogTeamRow{seedTeam}); err != nil {
 		t.Fatal(err)
 	}
@@ -291,14 +259,23 @@ func TestGitLabTeamCatalogCollectorPreservesRosterAfterPerGroupMemberFetchFailur
 		t.Fatalf("result=%+v (org's failed member fetch must not exclude it from the teams write)", result)
 	}
 
-	roster, err := gitlabExistingTeamRoster(ctx, conn, orgID, []string{"gl:org", "gl:org/team-a"})
+	// The failed member fetch of org skips only org's memberships: team-a's
+	// are written, and no roster is read or written for either team.
+	open := map[string]uint64{}
+	rows, err := conn.Query(ctx, `SELECT team_id, count() FROM team_memberships FINAL WHERE org_id = ? AND provider = 'gitlab' AND valid_to IS NULL GROUP BY team_id`, orgID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(roster["gl:org"]) != 1 || roster["gl:org"][0] != "gitlab:existing-owner" {
-		t.Fatalf("org's existing roster was NOT preserved after its member fetch failed: roster=%+v", roster)
+	defer rows.Close()
+	for rows.Next() {
+		var teamID string
+		var count uint64
+		if err := rows.Scan(&teamID, &count); err != nil {
+			t.Fatal(err)
+		}
+		open[teamID] = count
 	}
-	if len(roster["gl:org/team-a"]) != 2 || roster["gl:org/team-a"][0] != "gitlab:alice" {
-		t.Fatalf("team-a (healthy fetch) got the wrong roster: roster=%+v", roster)
+	if open["gl:org"] != 0 || open["gl:org/team-a"] == 0 {
+		t.Fatalf("open memberships by team = %v, want none for gl:org (its member fetch failed) and some for gl:org/team-a", open)
 	}
 }

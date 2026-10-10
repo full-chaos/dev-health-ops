@@ -68,10 +68,9 @@ func (collector LinearTeamCatalogCollector) CollectTeamCatalog(
 	// via _apply_roster(team_rows, memberships) using memberships that
 	// ALREADY went through split_memberships_for_review. Running the guard
 	// after the Teams write (as an earlier revision of this file did) lets a
-	// membership the guard rejects still show up in `teams.members`, a live
-	// attribution fallback source, silently reintroducing the exact
-	// contradiction the guard exists to prevent. So this is computed once,
-	// up front, and both blocks below read from its result.
+	// membership the guard rejects still show up in the observed roster. So
+	// this is computed once, up front, and both blocks below read from its
+	// result.
 	var keptMemberships []linearReferenceMembershipRow
 	var membershipsSkippedManualConflict, membershipsStagedForReview, driftChangesSuperseded int
 	if selections.Members {
@@ -91,32 +90,18 @@ func (collector LinearTeamCatalogCollector) CollectTeamCatalog(
 	if selections.Teams {
 		teamRows := batch.Rows.Teams
 		if selections.Members {
-			// Rebuild each team's roster from the CONFLICT-FILTERED
-			// memberships, not the raw provider-observed roster
-			// CollectReferenceCatalog baked into the row -- see the doc
-			// comment above.
+			// The observed roster of this run, from the CONFLICT-FILTERED
+			// memberships, for the provider observation.
 			teamRows = append([]linearReferenceTeamRow(nil), teamRows...)
 			for index := range teamRows {
 				teamRows[index].Members = linearReferenceTeamRosterFromMemberships(teamRows[index].ID, keptMemberships)
 			}
-		} else if len(teamRows) > 0 {
-			// CHAOS-4431 codex review P1: a teams-only run (members
-			// deselected) must not overwrite `teams.members` with the
-			// page-1-only placeholder CollectReferenceCatalog left on the
-			// row -- preserve whatever roster is already persisted, exactly
-			// like Python's _existing_team_members path
-			// (team_autoimport_linear.py:685-707).
-			teamIDs := make([]string, 0, len(teamRows))
-			for _, team := range teamRows {
-				teamIDs = append(teamIDs, team.ID)
-			}
-			existingRoster, err := PreserveExistingTeamMembersRoster(ctx, collector.Sink.Conn, ref.OrgID, teamIDs)
-			if err != nil {
-				return result, err
-			}
+		} else {
+			// A teams-only run observed no roster: the page-1 placeholder
+			// CollectReferenceCatalog left on the row is not one.
 			teamRows = append([]linearReferenceTeamRow(nil), teamRows...)
 			for index := range teamRows {
-				teamRows[index].Members = existingRoster[teamRows[index].ID]
+				teamRows[index].Members = []string{}
 			}
 		}
 		// CHAOS-4431 codex review findings #3/#6, team-lead ruling

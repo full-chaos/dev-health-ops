@@ -154,3 +154,44 @@ func TestNamedRepositoryThatResolvesToNothingLeavesNothingUnderAnOrganizationSco
 		})
 	}
 }
+
+// CHAOS-9183: a statement that holds the team's ownership condition AND an explicit
+// repository list on one repository column compares BOTH as text. ClickHouse
+// 26.7.1.1315 (prod) fails analysis of the pair on a UUID column with code 169 "Cannot
+// compare UUID with String"; Home answered 503 for a team AND a repository the team
+// holds. The consumers all build the pair in teamscope.NarrowRepoScope; this census
+// drives every one of them and fails for a surface that builds the pair another way.
+var (
+	explicitRepoList = regexp.MustCompile(`(\S+) IN \{(scope_ids|repo_ids):Array\(String\)\} AND `)
+	ownershipTest    = regexp.MustCompile(`(\S+) IN \(\s*SELECT DISTINCT coalesce\(toString\(o\.repo_id\)`)
+)
+
+func TestTeamAndNamedRepositoryComparedAsTextOnEverySurface(t *testing.T) {
+	const repo = "11111111-1111-4111-8111-111111111111"
+	for _, consumer := range teamScopeConsumers() {
+		if routesWithoutNamedReposBesideATeam[consumer.route] {
+			continue
+		}
+		t.Run(consumer.route, func(t *testing.T) {
+			client := &teamScopeReachClient{knownRepo: repo}
+			consumer.drive(t, client, "team", []string{teamScopeReachTeam}, []string{repo})
+			pairs := 0
+			for _, statement := range client.statementsWith(teamscope.Marker) {
+				list := explicitRepoList.FindStringSubmatch(statement)
+				owned := ownershipTest.FindStringSubmatch(statement)
+				if list == nil || owned == nil {
+					continue
+				}
+				pairs++
+				for _, side := range []struct{ name, column string }{{"the repository list", list[1]}, {"the ownership subquery", owned[1]}} {
+					if !strings.HasPrefix(strings.TrimLeft(side.column, "("), "toString(") {
+						t.Errorf("%s: %s compares %q, not as text (UUID vs String, code 169 on prod 26.7.1.1315):\n%s", consumer.route, side.name, side.column, statement)
+					}
+				}
+			}
+			if pairs == 0 {
+				t.Fatalf("%s built no statement with a repository list AND the ownership condition: the census compared nothing", consumer.route)
+			}
+		})
+	}
+}

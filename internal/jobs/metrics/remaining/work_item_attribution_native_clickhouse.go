@@ -1134,15 +1134,7 @@ func (executor *WorkItemAttributionExecutor) loadFacts(
 // instant.
 //
 // Exported (CHAOS-4283 PR2) because the metrics.daily `work_item_attribution`
-// family needs the IDENTICAL fact set, and this composition is not the trivial
-// sequence it looks like: LoadMembers returns FOUR slices, and its fourth --
-// provider-tagged roster members -- must be appended to ProviderMembers rather
-// than assigned anywhere, because `teams.members` mixes admin-curated entries
-// with unreviewed provider auto-import writes and therefore belongs in the
-// FALLBACK layer, not the admin one (chris, 2026-08-26, after a codex HIGH
-// finding). A second hand-written copy of that would be free to drop the
-// append and silently promote provider rosters to authoritative overrides --
-// exactly the defect that review caught. One implementation, two callers.
+// family needs the IDENTICAL fact set. One implementation, two callers.
 func LoadWorkItemDerivationFacts(
 	ctx context.Context, conn driver.Conn, orgID string, asOf time.Time,
 ) (teamattribution.GithubWorkItemDerivationFacts, error) {
@@ -1158,14 +1150,12 @@ func LoadWorkItemDerivationFacts(
 	if facts.Repos, err = loader.LoadRepos(ctx, orgID, asOf); err != nil {
 		return facts, err
 	}
-	var providerTaggedRosterMembers []teamattribution.GithubWorkItemDerivationMemberFact
-	if facts.Members, facts.UntypedMembers, facts.ProviderUntypedMembers, providerTaggedRosterMembers, err = loader.LoadMembers(ctx, orgID, asOf); err != nil {
+	if facts.Members, facts.UntypedMembers, err = loader.LoadMembers(ctx, orgID, asOf); err != nil {
 		return facts, err
 	}
 	if facts.ProviderMembers, err = loader.LoadProviderMembers(ctx, orgID, asOf); err != nil {
 		return facts, err
 	}
-	facts.ProviderMembers = append(facts.ProviderMembers, providerTaggedRosterMembers...)
 	if facts.ManualFallbacks, err = loader.LoadManualFallbacks(ctx, orgID, asOf); err != nil {
 		return facts, err
 	}

@@ -329,20 +329,11 @@ func gitlabTeamsRules() map[string]gitlabTeamsRule {
 			return ""
 		}, why: "legacy: 'GitLab group <full_path>' when the provider has none; catalog: the provider's value"},
 		"members": {check: func(sc *gitlabScenario, py, gr map[string]string) string {
-			var logins []string
-			for _, entry := range parseGitLabList(gr["members"]) {
-				if strings.HasPrefix(entry, "gitlab:") {
-					logins = append(logins, strings.TrimPrefix(entry, "gitlab:"))
-				}
-			}
-			want := parseGitLabList(py["members"])
-			sort.Strings(logins)
-			sort.Strings(want)
-			if strings.Join(logins, ",") != strings.Join(want, ",") {
-				return fmt.Sprintf("members: the usernames differ: python %v, go %v (from %s)", want, logins, gr["members"])
+			if gr["members"] != "" && gr["members"] != "[]" {
+				return fmt.Sprintf("members: the roster column is not written (CHAOS-9087), go wrote %s", gr["members"])
 			}
 			return ""
-		}, why: "legacy: bare usernames; catalog: provider-scoped identity facets"},
+		}, why: "legacy: bare usernames; catalog: no roster is stored, the people are the team_memberships rows"},
 		"team_uuid": {check: func(sc *gitlabScenario, py, gr map[string]string) string {
 			wantGo := uuid.NewSHA1(uuid.NameSpaceURL, []byte("team:"+py["id"])).String()
 			if py["team_uuid"] != "<uuid4>" { // the golden stores python's random uuid4 as its kind

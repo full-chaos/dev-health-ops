@@ -97,7 +97,7 @@ func TestMoveAdminTeamRosterToMembershipsMovesOnlyTheUncoveredAdminEntries(t *te
 	f.team(org, "github", "gh:platform", 1, []string{"github:octocat", "github:gone"})
 	f.membership(org, "github", "gh:platform", "github:octocat", nil, nil, nil)
 	// inactive admin team and another organization's admin team.
-	f.team(org, "", "custom:retired", 0, []string{"z@x.example"})
+	f.team(org, "", "custom:retired", 0, []string{"z@x.example", "y@x.example"})
 	f.team(other, "", "custom:ops", 1, []string{"o@x.example"})
 
 	// Uncovered: dave (his row is closed) and erin@x.example (no row) move;
@@ -108,7 +108,7 @@ func TestMoveAdminTeamRosterToMembershipsMovesOnlyTheUncoveredAdminEntries(t *te
 	}
 	want := TeamRosterMoveOutcome{
 		DryRun: true, ColumnPresent: true, RosterFacets: 8, Covered: 4, NativeElsewhere: 1, AdminToMove: 2, TeamsToMove: 1,
-		ProviderRosterOnly: 1, OpenBefore: 5, OpenAfter: 5,
+		ProviderRosterOnly: 1, InactiveTeamEntries: 2, OpenBefore: 5, OpenAfter: 5,
 	}
 	if dry != want {
 		t.Fatalf("dry run = %+v, want %+v", dry, want)
@@ -210,12 +210,14 @@ SELECT 'custom:big', generateUUIDv4(), 'big', arrayMap(x -> concat('person-', to
 		uint64(TeamRosterMoveBound+1), at.Add(-time.Hour), org); err != nil {
 		t.Fatal(err)
 	}
-	outcome, err := MoveAdminTeamRosterToMemberships(ctx, conn, org, at, false)
-	if !errors.Is(err, ErrTeamRosterMoveTooMany) {
-		t.Fatalf("err = %v, want ErrTeamRosterMoveTooMany", err)
-	}
-	if outcome.AdminToMove != TeamRosterMoveBound+1 || outcome.Moved != 0 {
-		t.Fatalf("outcome = %+v, want %d to move and none moved", outcome, TeamRosterMoveBound+1)
+	for _, dryRun := range []bool{true, false} {
+		outcome, err := MoveAdminTeamRosterToMemberships(ctx, conn, org, at, dryRun)
+		if !errors.Is(err, ErrTeamRosterMoveTooMany) {
+			t.Fatalf("dryRun=%v: err = %v, want ErrTeamRosterMoveTooMany", dryRun, err)
+		}
+		if outcome.AdminToMove != TeamRosterMoveBound+1 || outcome.Moved != 0 {
+			t.Fatalf("dryRun=%v: outcome = %+v, want %d to move and none moved", dryRun, outcome, TeamRosterMoveBound+1)
+		}
 	}
 	var written uint64
 	if err := conn.QueryRow(ctx, `SELECT count() FROM team_memberships FINAL WHERE org_id = ?`, org).Scan(&written); err != nil {

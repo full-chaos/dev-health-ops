@@ -88,6 +88,18 @@ SELECT
   uniqExactIf(team_id, (team_id, norm) NOT IN (SELECT team_id, k FROM open_keys) AND provider = '' AND norm NOT IN (SELECT k FROM native_keys)) AS teams_to_move
 FROM roster`
 
+// teamRosterInactiveQuery counts the roster entries of INACTIVE teams (a team
+// that is retired or deleted): they are not moved, because an open membership of
+// an inactive team would make a person a member of a team nothing reads; the
+// count makes what is left behind visible.
+const teamRosterInactiveQuery = `
+SELECT count() FROM (
+  SELECT id, lower(trimBoth(f)) AS norm
+  FROM teams FINAL ARRAY JOIN members AS f
+  WHERE org_id = {org_id:String} AND is_active = 0 AND trimBoth(f) != ''
+  GROUP BY id, norm
+)`
+
 const teamRosterOpenCountQuery = `
 SELECT count() FROM team_memberships FINAL
 WHERE org_id = {org_id:String} AND valid_from <= {at:DateTime64(3, 'UTC')}
@@ -129,6 +141,8 @@ type TeamRosterMoveOutcome struct {
 	// before and after the write (equal in a dry run).
 	OpenBefore uint64 `json:"open_memberships_before"`
 	OpenAfter  uint64 `json:"open_memberships_after"`
+	// InactiveTeamEntries are the roster entries of inactive teams: not moved.
+	InactiveTeamEntries uint64 `json:"inactive_team_entries"`
 	// Moved is what a real run wrote; 0 in a dry run.
 	Moved uint64 `json:"moved"`
 }
@@ -166,12 +180,16 @@ func MoveAdminTeamRosterToMemberships(
 	if err := conn.QueryRow(ctx, teamRosterOpenCountQuery, org, stamp).Scan(&outcome.OpenBefore); err != nil {
 		return TeamRosterMoveOutcome{}, err
 	}
-	outcome.OpenAfter = outcome.OpenBefore
-	if dryRun || outcome.AdminToMove == 0 {
-		return outcome, nil
+	if err := conn.QueryRow(ctx, teamRosterInactiveQuery, org).Scan(&outcome.InactiveTeamEntries); err != nil {
+		return TeamRosterMoveOutcome{}, err
 	}
+	outcome.OpenAfter = outcome.OpenBefore
+	// The bound refuses a dry run as well: the operator learns it before a real run.
 	if outcome.AdminToMove > TeamRosterMoveBound {
 		return outcome, ErrTeamRosterMoveTooMany
+	}
+	if dryRun || outcome.AdminToMove == 0 {
+		return outcome, nil
 	}
 
 	if err := conn.Exec(ctx, teamRosterMoveInsert, org, stamp); err != nil {

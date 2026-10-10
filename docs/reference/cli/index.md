@@ -1655,10 +1655,15 @@ holds an open native row in any team gets no second row (`native_elsewhere`).
 
 Nothing else is written. An entry of a provider team that no open row covers is
 a person the provider no longer lists: it is counted (`provider_roster_only`)
-and not moved. Inactive teams and other organizations are not read.
+and not moved. The entries of inactive (retired or deleted) teams are counted
+(`inactive_team_entries`) and not moved. Other organizations are not read.
+
+**Order.** Every write of a team row after the code that stopped writing the
+column is on the process writes the row without a roster, so run the step
+before an admin edits an admin-made team, ideally right after the roll.
 
 The step refuses more than 100,000 entries (`team_roster_move_above_bound`; no
-row is written), and after the write it reads again: the open membership rows
+row is written; a dry run refuses it too), and after the write it reads again: the open membership rows
 must be exactly the rows before plus the rows written, and no admin entry may be
 left uncovered, else it stops with `team_roster_move_not_proven`. With the
 column already dropped it reports `column_present: false` and writes nothing.
@@ -1668,7 +1673,7 @@ no `--org`, with the stdin rules of
 [`metrics daily-start`](#metrics-daily-start-chaos-5055). The verb prints no
 organization id. It prints counts only, under `move_team_roster_to_memberships`:
 `roster_facets`, `covered`, `native_elsewhere`, `admin_to_move`, `teams_to_move`,
-`provider_roster_only`, `open_memberships_before`, `open_memberships_after`,
+`provider_roster_only`, `inactive_team_entries`, `open_memberships_before`, `open_memberships_after`,
 `moved` (0 with `--dry-run`). A second run reports `admin_to_move: 0`.
 
 ```bash

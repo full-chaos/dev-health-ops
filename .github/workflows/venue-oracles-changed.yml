@@ -8,6 +8,9 @@
 # (whole path segments: internal/apiservice/admin does not select
 # internal/apiservice/adminllmvenue). A frozen venue test (golden replay) is the
 # main target: a PR that touches a frozen venue sees its replay before merge.
+# A path that ci/venue_oracle_triggers.d/ declares for a test also selects it: code
+# outside the package of the test whose behaviour the test compares (a change of a
+# `teams` write selects the protected-routes test of internal/apiservice).
 # Nothing selected is a plain notice and the heavy steps do not run.
 #
 # COST PER PR. The measured seconds of the selected rows (ci/venue_oracle_weights.d/):
@@ -17,8 +20,8 @@
 # only for changes under internal/, the registry, or the gate itself.
 #
 # NOT COVERED, on purpose: a change to the harness (internal/testsupport/venueoracle),
-# a shared helper outside a venue package, or the registry itself selects no package
-# here; they are what the full main run is for. This is a bounded-cost early signal,
+# a shared helper outside a venue package that no trigger row declares, or the registry
+# itself selects no package here; they are what the full main run is for. This is a bounded-cost early signal,
 # never a substitute for it.
 name: Venue oracles (changed packages)
 
@@ -27,6 +30,7 @@ on:
     paths:
       - 'internal/**'
       - 'ci/venue_oracle_registry.d/**'
+      - 'ci/venue_oracle_triggers.d/**'
       - 'ci/check_go.sh'
       - '.github/workflows/venue-oracles-changed.yml'
 
@@ -58,7 +62,10 @@ jobs:
         run: |
           set -euo pipefail
           git diff --name-only -z "${BASE_SHA}...${HEAD_SHA}" > changed.txt
-          bash ci/check_go.sh venue-oracles --changed changed.txt --list | grep '^SELECT' > selected.txt || true
+          # The listing fails the step when the registry or a trigger file cannot be
+          # read: a broken file must not read as "nothing selected".
+          bash ci/check_go.sh venue-oracles --changed changed.txt --list > listing.txt
+          grep '^SELECT' listing.txt > selected.txt || true
           count="$(wc -l < selected.txt | tr -d ' ')"
           echo "selected ${count} venue oracle test(s):"
           cat selected.txt

@@ -4,14 +4,11 @@ package providersync
 
 import (
 	"context"
-	"errors"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/fakehttp"
 	"net/http"
-	"strings"
 	"testing"
 	"time"
 
-	chdriver "github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/full-chaos/dev-health-ops/internal/providerfoundation"
 )
 
@@ -64,11 +61,6 @@ func TestGitHubTeamCatalogCollectorWritesTeamsAndMemberships(t *testing.T) {
 		result.ProjectsWritten != 0 || result.RepoOwnershipWritten != 1 {
 		t.Fatalf("result=%+v", result)
 	}
-	sink := GitHubTeamCatalogClickHouseEffects{Conn: conn}
-	roster, ok := sink.ExistingTeamMembers(ctx, orgID, []string{"gh:platform"})
-	if !ok || len(roster["gh:platform"]) != 1 || roster["gh:platform"][0] != "github:octocat" {
-		t.Fatalf("roster=%+v ok=%v", roster, ok)
-	}
 
 	// CHAOS-4434 scope correction: a native GitHub run MUST refresh
 	// team_repo_ownership -- there is no other Go-native writer for it
@@ -94,68 +86,6 @@ func TestGitHubTeamCatalogCollectorWritesTeamsAndMemberships(t *testing.T) {
 	}
 	if repoFullName != "acme/api" || source != "provider_access" || matchType != "exact" {
 		t.Fatalf("repo=%q source=%q match=%q", repoFullName, source, matchType)
-	}
-}
-
-// TestGitHubTeamCatalogCollectorPreservesRosterOnMembersOffRun proves the
-// members-off ("teams" selected, "members" not) path carries forward the
-// existing roster instead of overwriting it with [] -- CHAOS-4323 round 2's
-// codex-flagged data-loss fix, ported.
-func TestGitHubTeamCatalogCollectorPreservesRosterOnMembersOffRun(t *testing.T) {
-	ctx, conn := newWorkItemEffectsConn(t)
-	orgID := "github-adapter-org-b"
-	sink := GitHubTeamCatalogClickHouseEffects{Conn: conn}
-	now := time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)
-
-	// Seed an existing roster as if a prior members-on run had already
-	// written it.
-	seedTeam, err := normalizeGitHubTeam(orgID, githubTeamPayload{Slug: "platform", Name: "Platform"}, nil, now)
-	if err != nil {
-		t.Fatal(err)
-	}
-	seedTeam.Members = []string{"github:octocat"}
-	if err := sink.WriteTeams(ctx, orgID, []githubTeamRow{seedTeam}); err != nil {
-		t.Fatal(err)
-	}
-
-	doer := &githubTeamCatalogFixtureDoer{t: t, byPath: map[string]string{
-		"/orgs/acme/teams":                `[{"slug":"platform","name":"Platform Renamed"}]`,
-		"/orgs/acme/teams/platform/repos": `[]`,
-	}}
-	adapter := GitHubTeamCatalogCollector{Sink: sink}
-	credential := providerfoundation.Credential{Provider: "github", Config: map[string]string{"org": "acme"}}
-	client := githubTeamCatalogAdapterClient(t, fakehttp.Client(doer))
-
-	result, err := adapter.CollectTeamCatalog(
-		ctx, TeamCatalogReference{OrgID: orgID, SyncRunID: "run-1"},
-		credential, client, TeamCatalogSelections{Teams: true, Members: false}, now.Add(time.Hour),
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if result.TeamsWritten != 1 || result.MembershipsWritten != 0 {
-		t.Fatalf("result=%+v", result)
-	}
-	roster, ok := sink.ExistingTeamMembers(ctx, orgID, []string{"gh:platform"})
-	if !ok || len(roster["gh:platform"]) != 1 || roster["gh:platform"][0] != "github:octocat" {
-		t.Fatalf("roster must survive a members-off run: roster=%+v ok=%v", roster, ok)
-	}
-	// The team-level fields (name) still update even while the roster is
-	// preserved -- only "members" is carried forward, not the whole row.
-	result2, err := conn.Query(ctx, `SELECT name FROM teams FINAL WHERE org_id = ? AND id = ?`, orgID, "gh:platform")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer result2.Close()
-	var name string
-	if !result2.Next() {
-		t.Fatal("team row missing after members-off run")
-	}
-	if err := result2.Scan(&name); err != nil {
-		t.Fatal(err)
-	}
-	if name != "Platform Renamed" {
-		t.Fatalf("name=%q", name)
 	}
 }
 
@@ -225,184 +155,6 @@ func TestGitHubTeamCatalogCollectorFallsBackToSyncOptionsOrgName(t *testing.T) {
 	}
 	if result.TeamsWritten != 1 || len(doer.requests) == 0 {
 		t.Fatalf("sync_options org fallback did not take effect: result=%+v requests=%v", result, doer.requests)
-	}
-}
-
-// TestGitHubTeamCatalogCollectorPreservesRosterAfterPerTeamFetchFailure is
-// the CHAOS-4461 regression proof: with members globally selected, ONE
-// team's member fetch failing must not wipe that team's roster to [] --
-// its existing roster must survive, exactly like the members-globally-off
-// path already guarantees. A second, healthy team in the same run gets its
-// freshly observed roster, proving the fix is per-team, not all-or-nothing.
-func TestGitHubTeamCatalogCollectorPreservesRosterAfterPerTeamFetchFailure(t *testing.T) {
-	ctx, conn := newWorkItemEffectsConn(t)
-	orgID := "github-adapter-org-partial-fetch-failure"
-	sink := GitHubTeamCatalogClickHouseEffects{Conn: conn}
-	now := time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)
-
-	// Seed platform's existing roster, as if a prior successful run had
-	// already written it. ops has no prior row -- a genuinely new team.
-	seedTeam, err := normalizeGitHubTeam(orgID, githubTeamPayload{Slug: "platform", Name: "Platform"}, nil, now)
-	if err != nil {
-		t.Fatal(err)
-	}
-	seedTeam.Members = []string{"github:octocat"}
-	if err := sink.WriteTeams(ctx, orgID, []githubTeamRow{seedTeam}); err != nil {
-		t.Fatal(err)
-	}
-
-	doer := &githubTeamCatalogFixtureDoer{t: t, byPath: map[string]string{
-		"/orgs/acme/teams":                  `[{"slug":"platform","name":"Platform"},{"slug":"ops","name":"Operations"}]`,
-		"/orgs/acme/teams/platform/repos":   `[]`,
-		"/orgs/acme/teams/ops/repos":        `[]`,
-		"/orgs/acme/teams/platform/members": `not json`,
-		"/orgs/acme/teams/ops/members":      `[{"login":"monalisa"}]`,
-	}}
-	adapter := GitHubTeamCatalogCollector{Sink: sink}
-	credential := providerfoundation.Credential{Provider: "github", Config: map[string]string{"org": "acme"}}
-	client := githubTeamCatalogAdapterClient(t, fakehttp.Client(doer))
-
-	result, err := adapter.CollectTeamCatalog(
-		ctx, TeamCatalogReference{OrgID: orgID, SyncRunID: "run-1"},
-		credential, client, TeamCatalogSelections{Teams: true, Members: true}, now.Add(time.Hour),
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	// Both teams still get written -- platform's failed fetch does not
-	// abort the run or exclude it from the teams table.
-	if result.TeamsWritten != 2 {
-		t.Fatalf("result=%+v", result)
-	}
-
-	roster, ok := sink.ExistingTeamMembers(ctx, orgID, []string{"gh:platform", "gh:ops"})
-	if !ok {
-		t.Fatal("roster readback not-ok")
-	}
-	if len(roster["gh:platform"]) != 1 || roster["gh:platform"][0] != "github:octocat" {
-		t.Fatalf("platform's existing roster was NOT preserved after its member fetch failed: roster=%+v", roster)
-	}
-	if len(roster["gh:ops"]) != 1 || roster["gh:ops"][0] != "github:monalisa" {
-		t.Fatalf("ops (healthy fetch, genuinely new team) got the wrong roster: roster=%+v", roster)
-	}
-}
-
-// rosterConfirmReadFailingConn wraps a real driver.Conn (a live testcontainer
-// ClickHouse) and deliberately fails ONLY the roster-preserve read
-// (`SELECT id, members FROM teams FINAL ...`, ExistingTeamMembers) --
-// everything else (PrepareBatch/Exec for WriteTeams, WriteMemberships,
-// the manual_members preserve-read, etc.) passes through to the real
-// connection untouched. This is how TestGitHubTeamCatalogCollectorWrites
-// HealthyTeamsEvenWhenAnotherTeamsRosterConfirmReadFails forces
-// ExistingTeamMembers's ok=false branch deterministically -- a healthy real
-// ClickHouse connection has no organic way to produce that outcome.
-type rosterConfirmReadFailingConn struct {
-	chdriver.Conn
-}
-
-func (c rosterConfirmReadFailingConn) Query(ctx context.Context, query string, args ...any) (chdriver.Rows, error) {
-	if strings.Contains(query, "SELECT id, members FROM teams FINAL") {
-		return nil, errors.New("injected failure: roster confirm-read")
-	}
-	return c.Conn.Query(ctx, query, args...)
-}
-
-// TestGitHubTeamCatalogCollectorWritesHealthyTeamsEvenWhenAnotherTeamsRosterConfirmReadFails
-// is the RED-FIRST proof for codex round 1's P2 finding (team-lead ruling,
-// 2026-08-28): when one team's member fetch fails AND its roster
-// confirm-read (ExistingTeamMembers) ALSO fails, the collector must still
-// write every OTHER, healthy team -- not silently skip the entire `teams`
-// write for the whole run. EXPECTED TO FAIL on the pre-fix tip: the old
-// gate (`!rosterPreservationFailed`) blocked WriteTeams entirely the moment
-// ANY team's confirm-read failed, even though rows.Teams was already
-// correctly filtered down to just the safe teams by that point.
-func TestGitHubTeamCatalogCollectorWritesHealthyTeamsEvenWhenAnotherTeamsRosterConfirmReadFails(t *testing.T) {
-	ctx, realConn := newWorkItemEffectsConn(t)
-	conn := rosterConfirmReadFailingConn{Conn: realConn}
-	orgID := "github-adapter-org-roster-confirm-read-failure"
-	now := time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)
-
-	doer := &githubTeamCatalogFixtureDoer{t: t, byPath: map[string]string{
-		"/orgs/acme/teams":                  `[{"slug":"platform","name":"Platform"},{"slug":"ops","name":"Operations"}]`,
-		"/orgs/acme/teams/platform/repos":   `[]`,
-		"/orgs/acme/teams/ops/repos":        `[]`,
-		"/orgs/acme/teams/platform/members": `not json`, // platform's fetch fails
-		"/orgs/acme/teams/ops/members":      `[{"login":"monalisa"}]`,
-	}}
-	adapter := GitHubTeamCatalogCollector{Sink: GitHubTeamCatalogClickHouseEffects{Conn: conn}}
-	credential := providerfoundation.Credential{Provider: "github", Config: map[string]string{"org": "acme"}}
-	client := githubTeamCatalogAdapterClient(t, fakehttp.Client(doer))
-
-	result, err := adapter.CollectTeamCatalog(
-		ctx, TeamCatalogReference{OrgID: orgID, SyncRunID: "run-1"},
-		credential, client, TeamCatalogSelections{Teams: true, Members: true}, now,
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !result.RosterPreservationFailed {
-		t.Fatal("want RosterPreservationFailed=true -- platform's roster confirm-read was injected to fail")
-	}
-	if result.TeamsWritten != 1 {
-		t.Fatalf("want ops (the healthy, unaffected team) still written despite platform's confirm-read "+
-			"failure -- result=%+v", result)
-	}
-	roster, ok := GitHubTeamCatalogClickHouseEffects{Conn: realConn}.ExistingTeamMembers(ctx, orgID, []string{"gh:ops"})
-	if !ok || len(roster["gh:ops"]) != 1 || roster["gh:ops"][0] != "github:monalisa" {
-		t.Fatalf("ops's row was not actually persisted: roster=%+v ok=%v", roster, ok)
-	}
-}
-
-// TestGitHubTeamCatalogCollectorSkipsTeamsOnlyWriteEntirelyWhenRosterConfirmReadFails
-// is the RED-FIRST proof for codex round 2's P1 finding (team-lead ruling
-// 2026-08-28): this is a regression introduced by the round-1 P2 fix. On a
-// teams-only run (Members deselected), when ExistingTeamMembers cannot
-// confirm the currently-persisted roster, the ENTIRE team-dimension write
-// must be skipped -- not just flagged -- because writing anyway persists
-// whatever roster Collect gave the row (empty, since members were never
-// fetched this run), clobbering the previously-good roster during exactly
-// the transient failure this guard exists to prevent. EXPECTED TO FAIL on
-// the pre-fix tip: platform's existing roster gets overwritten with [].
-func TestGitHubTeamCatalogCollectorSkipsTeamsOnlyWriteEntirelyWhenRosterConfirmReadFails(t *testing.T) {
-	ctx, realConn := newWorkItemEffectsConn(t)
-	conn := rosterConfirmReadFailingConn{Conn: realConn}
-	orgID := "github-adapter-org-teams-only-confirm-read-failure"
-	sink := GitHubTeamCatalogClickHouseEffects{Conn: realConn}
-	now := time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)
-
-	// Seed platform's existing roster, as if a prior successful run had
-	// already written it.
-	seedTeam, err := normalizeGitHubTeam(orgID, githubTeamPayload{Slug: "platform", Name: "Platform"}, nil, now)
-	if err != nil {
-		t.Fatal(err)
-	}
-	seedTeam.Members = []string{"github:octocat"}
-	if err := sink.WriteTeams(ctx, orgID, []githubTeamRow{seedTeam}); err != nil {
-		t.Fatal(err)
-	}
-
-	doer := githubTeamCatalogAdapterDoer(t) // team "platform", member "octocat" (never fetched -- Members is off)
-	adapter := GitHubTeamCatalogCollector{Sink: GitHubTeamCatalogClickHouseEffects{Conn: conn}}
-	credential := providerfoundation.Credential{Provider: "github", Config: map[string]string{"org": "acme"}}
-	client := githubTeamCatalogAdapterClient(t, fakehttp.Client(doer))
-
-	result, err := adapter.CollectTeamCatalog(
-		ctx, TeamCatalogReference{OrgID: orgID, SyncRunID: "run-1"},
-		credential, client, TeamCatalogSelections{Teams: true, Members: false}, now.Add(time.Hour),
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !result.RosterPreservationFailed {
-		t.Fatal("want RosterPreservationFailed=true -- the roster confirm-read was injected to fail")
-	}
-	if result.TeamsWritten != 0 {
-		t.Fatalf("want the team-dimension write skipped ENTIRELY when its roster cannot be confirmed on a "+
-			"teams-only run -- result=%+v", result)
-	}
-	roster, ok := sink.ExistingTeamMembers(ctx, orgID, []string{"gh:platform"})
-	if !ok || len(roster["gh:platform"]) != 1 || roster["gh:platform"][0] != "github:octocat" {
-		t.Fatalf("platform's existing roster was clobbered instead of left alone: roster=%+v ok=%v", roster, ok)
 	}
 }
 

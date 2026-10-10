@@ -94,7 +94,7 @@ func gitlabMembershipConflictsWithManualState(
 // (identity_drift_review.go), and a stale pending row for a member this run
 // observed but no longer sees conflicting (or sees at all) is
 // resolved/superseded. observedTeamIDs names the teams whose member fetch
-// succeeded this run (rows with MembersAuthoritative=true).
+// succeeded this run.
 func applyGitLabTeamMembershipConflictGuard(
 	ctx context.Context, conn driver.Conn, orgID, provider string, rows []gitlabTeamCatalogMembershipRow, observedTeamIDs []string, now time.Time,
 ) ([]gitlabTeamCatalogMembershipRow, int, int, int, error) {

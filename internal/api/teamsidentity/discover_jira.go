@@ -21,9 +21,12 @@ const atlassianTeamARIPrefix = "ari:cloud:identity::team/"
 // organization that the team catalog already holds. A Jira project is not a
 // team: a row whose native key is a project key (the retired project-as-team
 // class) has no ARI there and is never listed.
-const storedAtlassianTeamsQuery = "SELECT id, name, description, members, project_keys FROM teams FINAL " +
-	"WHERE org_id = {org_id:String} AND provider = 'jira' AND is_active = 1 " +
-	"AND startsWith(ifNull(native_team_key, ''), {ari_prefix:String}) ORDER BY id"
+const storedAtlassianTeamsQuery = "SELECT t.id, t.name, t.description, ifNull(m.member_count, 0), t.project_keys FROM teams AS t FINAL " +
+	"LEFT JOIN (SELECT team_id, uniqExact(member_id) AS member_count FROM team_memberships FINAL " +
+	"WHERE org_id = {org_id:String} AND provider = 'jira' AND valid_from <= now64(3, 'UTC') " +
+	"AND (valid_to IS NULL OR valid_to > now64(3, 'UTC')) GROUP BY team_id) AS m ON m.team_id = t.id " +
+	"WHERE t.org_id = {org_id:String} AND t.provider = 'jira' AND t.is_active = 1 " +
+	"AND startsWith(ifNull(t.native_team_key, ''), {ari_prefix:String}) ORDER BY t.id"
 
 var errDiscoverJiraNoStore = errors.New("jira team discovery needs the team catalog store")
 
@@ -55,11 +58,12 @@ func discoverJira(ctx context.Context, conn driver.Conn, orgID string, credentia
 	teams := []discoveredTeam{}
 	for rows.Next() {
 		var (
-			id, name             string
-			description          *string
-			members, projectKeys []string
+			id, name    string
+			description *string
+			memberCount uint64
+			projectKeys []string
 		)
-		if err := rows.Scan(&id, &name, &description, &members, &projectKeys); err != nil {
+		if err := rows.Scan(&id, &name, &description, &memberCount, &projectKeys); err != nil {
 			return nil, fmt.Errorf("scan stored atlassian team: %w", err)
 		}
 		// A row whose id holds another provider's key is not a Jira team.
@@ -73,7 +77,7 @@ func discoverJira(ctx context.Context, conn driver.Conn, orgID string, credentia
 		if projectKeys == nil {
 			projectKeys = []string{}
 		}
-		memberCount := int64(len(members))
+		members := int64(memberCount)
 		associations := pyjson.NewObject()
 		associations.Set("project_keys", projectKeys)
 		associations.Set("provider_org", providerOrg)
@@ -82,7 +86,7 @@ func discoverJira(ctx context.Context, conn driver.Conn, orgID string, credentia
 			ProviderTeamID: nativeID,
 			Name:           name,
 			Description:    description,
-			MemberCount:    &memberCount,
+			MemberCount:    &members,
 			Associations:   associations,
 		})
 	}

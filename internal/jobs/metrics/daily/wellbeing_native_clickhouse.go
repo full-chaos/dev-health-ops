@@ -14,26 +14,18 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/teamactive"
 )
 
-// WellbeingTeam is one team row as read from ClickHouse `teams` -- the same
-// shape ClickHouseMetricsSink.get_all_teams (sinks/clickhouse/core.py:109)
-// selects. Both the repo-pattern resolver and the membership resolver are
-// built from this one shared read, exactly as job_daily.py builds both
-// repo_team_resolver and team_resolver from a single primary_sink.get_all_teams()
-// call.
+// WellbeingTeam is one team row as read from ClickHouse `teams`: the columns
+// of ClickHouseMetricsSink.get_all_teams (sinks/clickhouse/core.py:109) that
+// are still stored. The roster column `members` is not one of them
+// (CHAOS-9087): a person's team comes from team_memberships.
 type WellbeingTeam struct {
 	ID           string
 	Name         string
-	Members      []string
 	RepoPatterns []string
 }
 
-// LoadWellbeingTeams ports get_all_teams (sinks/clickhouse/core.py:109) --
-// the SAME query, byte for byte, that both job_daily.py's repo_team_resolver
-// and team_resolver are built from. This is deliberately not narrowed to
-// only the columns team_wellbeing uses (repo_patterns, members): reusing the
-// exact production query, rather than a hand-trimmed lookalike, is what
-// keeps this reader from drifting out of sync with a column the Python
-// selector adds later. conn reuses this package's existing repositoryRows
+// LoadWellbeingTeams ports get_all_teams (sinks/clickhouse/core.py:109)
+// without its `members` column (CHAOS-9087). conn reuses this package's existing repositoryRows
 // capability (clickhouse.go) -- a plain Query method, nothing more.
 //
 // One rule is added to the reference: the inactive teams (package teamactive)
@@ -44,7 +36,7 @@ func LoadWellbeingTeams(ctx context.Context, conn repositoryRows, organizationID
 		return nil, ErrInvalidState
 	}
 	rows, err := conn.Query(ctx,
-		"SELECT id, name, members, repo_patterns FROM teams FINAL WHERE org_id = ?",
+		"SELECT id, name, repo_patterns FROM teams FINAL WHERE org_id = ?",
 		organizationID,
 	)
 	if err != nil {
@@ -55,7 +47,7 @@ func LoadWellbeingTeams(ctx context.Context, conn repositoryRows, organizationID
 	var teams []WellbeingTeam
 	for rows.Next() {
 		var team WellbeingTeam
-		if err := rows.Scan(&team.ID, &team.Name, &team.Members, &team.RepoPatterns); err != nil {
+		if err := rows.Scan(&team.ID, &team.Name, &team.RepoPatterns); err != nil {
 			return nil, fmt.Errorf("scan wellbeing team: %w", err)
 		}
 		teams = append(teams, team)
@@ -137,52 +129,6 @@ func (resolver *repoPatternResolver) ResolveRepo(repoName string) (string, strin
 		}
 	}
 	return "", ""
-}
-
-// memberResolver ports TeamResolver / _build_member_to_team
-// (src/dev_health_ops/providers/teams.py:57,141).
-type memberResolver struct {
-	memberToTeam map[string][2]string
-}
-
-// NewMemberResolver builds the membership resolver
-// _build_member_to_team/load_team_resolver_from_store build: a normalized
-// (lowercased, whitespace-collapsed) identity -> (team_id, team_name) map.
-func NewMemberResolver(teams []WellbeingTeam) numerical.MemberTeamResolver {
-	memberToTeam := make(map[string][2]string)
-	for _, team := range teams {
-		teamID := strings.TrimSpace(team.ID)
-		if teamID == "" {
-			continue
-		}
-		teamName := strings.TrimSpace(team.Name)
-		if teamName == "" {
-			teamName = teamID
-		}
-		for _, member := range team.Members {
-			key := normalizeKey(member)
-			if key == "" {
-				continue
-			}
-			memberToTeam[key] = [2]string{teamID, teamName}
-		}
-	}
-	return &memberResolver{memberToTeam: memberToTeam}
-}
-
-func (resolver *memberResolver) ResolveMember(identity string) (string, string) {
-	if resolver == nil || identity == "" {
-		return "", ""
-	}
-	key := normalizeKey(identity)
-	if key == "" {
-		return "", ""
-	}
-	pair, ok := resolver.memberToTeam[key]
-	if !ok {
-		return "", ""
-	}
-	return pair[0], pair[1]
 }
 
 // normalizeKey ports _norm_key (src/dev_health_ops/providers/identity.py:16):

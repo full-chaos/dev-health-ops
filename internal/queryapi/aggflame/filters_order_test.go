@@ -11,9 +11,7 @@ import (
 )
 
 // TestFiltersKeepPythonInsertionOrder pins meta.filters to the order
-// aggregated_flame.py fills filters_used in, per mode. The live dict-order
-// oracle cannot cover cycle_breakdown: no ClickHouse migration creates
-// work_item_cycle_milestones_daily, so both sides answer 503 there.
+// aggregated_flame.py fills filters_used in, per mode.
 func TestFiltersKeepPythonInsertionOrder(t *testing.T) {
 	client := fakeQueryClient{t: t, handler: func(t *testing.T, query string, bindings []dhclickhouse.Binding) (dhclickhouse.RowScanner, error) {
 		return &fixtureRowScanner{}, nil

@@ -60,8 +60,8 @@ const teamScopedWorkItemTeamAttributionSource = `(
 // aggregated_flame.py:14-74) returns -- restricted to the two columns
 // _build_cycle_breakdown_tree actually reads (status, total_hours); the
 // query's own `total_items` output column is never read by any caller
-// (confirmed: neither _build_cycle_breakdown_tree nor its milestone-
-// fallback remap reads a cycle_breakdown row's total_items), so it is
+// (confirmed: _build_cycle_breakdown_tree does not read a cycle_breakdown
+// row's total_items), so it is
 // scanned and discarded here rather than modelled on this type.
 type cycleBreakdownRow struct {
 	Status     string
@@ -132,68 +132,6 @@ func fetchCycleBreakdown(ctx context.Context, client QueryClient, orgID string, 
 			return nil, fmt.Errorf("aggflame: fetch_cycle_breakdown scan: %w", err)
 		}
 		out = append(out, cycleBreakdownRow{Status: status, TotalHours: totalHours})
-	}
-	return out, rows.Err()
-}
-
-// milestoneRow is one row fetch_cycle_milestones (api/queries/
-// aggregated_flame.py:271-314) returns.
-type milestoneRow struct {
-	Milestone  string
-	AvgHours   float64
-	TotalItems uint64
-}
-
-// fetchCycleMilestones ports fetch_cycle_milestones (api/queries/
-// aggregated_flame.py:271-314) -- work_item_cycle_milestones_daily is a
-// plain (non-dedup-registered) rollup Python itself reads raw, no FINAL
-// and no argMax; this port matches that -- no divergence to declare.
-func fetchCycleMilestones(ctx context.Context, client QueryClient, orgID string, startDay, endDay time.Time, teamID, provider, workScopeID string) ([]milestoneRow, error) {
-	filter := ""
-	bindings := []dhclickhouse.Binding{
-		{Name: "org_id", Value: orgID},
-		{Name: "start_day", Value: formatDay(startDay)},
-		{Name: "end_day", Value: formatDay(endDay)},
-	}
-	if teamID != "" {
-		filter += "\n          AND team_id = {team_id:String}"
-		bindings = append(bindings, dhclickhouse.Binding{Name: "team_id", Value: teamID})
-	}
-	if provider != "" {
-		filter += "\n          AND provider = {provider:String}"
-		bindings = append(bindings, dhclickhouse.Binding{Name: "provider", Value: provider})
-	}
-	if workScopeID != "" {
-		filter += "\n          AND work_scope_id = {work_scope_id:String}"
-		bindings = append(bindings, dhclickhouse.Binding{Name: "work_scope_id", Value: workScopeID})
-	}
-
-	query := `
-        SELECT
-            milestone,
-            avg(duration_hours) AS avg_hours,
-            count(*) AS total_items
-        FROM work_item_cycle_milestones_daily
-        WHERE org_id = {org_id:String}
-          AND day >= {start_day:Date}
-          AND day < {end_day:Date}` + filter + `
-        GROUP BY milestone
-        ORDER BY avg_hours DESC
-    `
-
-	rows, err := client.Query(ctx, query, bindings)
-	if err != nil {
-		return nil, fmt.Errorf("aggflame: fetch_cycle_milestones query: %w", err)
-	}
-	defer rows.Close()
-
-	var out []milestoneRow
-	for rows.Next() {
-		var row milestoneRow
-		if err := rows.Scan(&row.Milestone, &row.AvgHours, &row.TotalItems); err != nil {
-			return nil, fmt.Errorf("aggflame: fetch_cycle_milestones scan: %w", err)
-		}
-		out = append(out, row)
 	}
 	return out, rows.Err()
 }

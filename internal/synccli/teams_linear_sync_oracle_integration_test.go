@@ -337,27 +337,8 @@ func linearTeamsRules() map[string]linearTeamsRule {
 			return ""
 		}, why: "neither plane invents a description for Linear (unlike GitHub/GitLab's legacy fallback text)"},
 		"members": {check: func(sc *linearScenario, team fakeLinearTeam, py, gr map[string]string) string {
-			var logins []string
-			for _, entry := range parseLinearList(gr["members"]) {
-				if strings.HasPrefix(entry, "linear:") {
-					logins = append(logins, strings.TrimPrefix(entry, "linear:"))
-				}
-			}
-			var want []string
-			for _, m := range team.Members {
-				if !m.Active {
-					continue
-				}
-				identity := m.Email
-				if identity == "" {
-					identity = m.ID
-				}
-				want = append(want, strings.ToLower(identity))
-			}
-			sort.Strings(logins)
-			sort.Strings(want)
-			if strings.Join(logins, ",") != strings.Join(want, ",") {
-				return fmt.Sprintf("members: the identities differ: want %v, go %v (from %s)", want, logins, gr["members"])
+			if gr["members"] != "" && gr["members"] != "[]" {
+				return fmt.Sprintf("members: the roster column is not written (CHAOS-9087), go wrote %s", gr["members"])
 			}
 			// codex r1, CHAOS-6908 (P1): providers/teams.py's inline path (a
 			// team's page-1 members(first:10), which every row-compared
@@ -559,7 +540,7 @@ func linearScenarios() []*linearScenario {
 			// providers/teams.py never filters on `active` at all (only the
 			// FULL-pagination path, LinearClient.get_team_members, does) --
 			// the legacy verb keeps an inactive member in `teams.members`;
-			// dho's catalog always excludes one (linearReferenceTeamRosterFacets).
+			// dho's catalog always excludes one from its membership rows.
 			// Real, undocumented-until-now output divergence: not a row-by-row
 			// comparison, `after` asserts each plane's actual content directly.
 			goDiffers: true, goExit: 0, goRows: 1,
@@ -572,16 +553,7 @@ func linearScenarios() []*linearScenario {
 				if strings.Join(pyMembers, ",") != "alice@example.com,bob@example.com" {
 					t.Errorf("python members = %v, want both alice and the inactive bob kept (inline path never filters active)", pyMembers)
 				}
-				var goLogins []string
-				for _, entry := range parseLinearList(goRows[0]["members"]) {
-					if strings.HasPrefix(entry, "linear:") {
-						goLogins = append(goLogins, strings.TrimPrefix(entry, "linear:"))
-					}
-				}
-				sort.Strings(goLogins)
-				if strings.Join(goLogins, ",") != "alice@example.com" {
-					t.Errorf("go members = %v, want only alice (the catalog always excludes inactive members)", goLogins)
-				}
+				// dho's catalog stores no roster (CHAOS-9087): the membership rows below are where a member lands.
 				// The membership rows are the other place an inactive member could land: only alice has one.
 				var membershipUsers []string
 				for _, row := range o.rows(o.goDatabase, "team_memberships", "org-1") {

@@ -129,6 +129,11 @@ func homeResultFromResponse(resp *home.Response) *model.HomeResult {
 			RateState:         d.RateState,
 			RateCoverage:      d.RateCoverage,
 			RepoFilterApplied: d.RepoFilterApplied,
+
+			RepoLinkState:          d.RepoLinkState,
+			RepoLinkBasis:          repoLinkBasisFromResponse(d.RepoLinkBasis),
+			RepoLinkMultiRepoItems: d.RepoLinkMultiRepoItems,
+			RepoLinkCoverage:       repoLinkCoverageFromResponse(d.RepoLinkCoverage),
 		})
 	}
 
@@ -412,4 +417,18 @@ func microDateTimeToGraphQL(at *home.MicroDateTime) *string {
 		return nil
 	}
 	return &s
+}
+
+func repoLinkBasisFromResponse(b *home.RepoLinkBasis) *model.RepoLinkBasis {
+	if b == nil {
+		return nil
+	}
+	return &model.RepoLinkBasis{Native: b.Native, ExplicitText: b.ExplicitText, Heuristic: b.Heuristic}
+}
+
+func repoLinkCoverageFromResponse(c *home.RepoLinkCoverage) *model.RepoLinkCoverage {
+	if c == nil {
+		return nil
+	}
+	return &model.RepoLinkCoverage{LinkedItems: c.LinkedItems, ItemsInWindow: c.ItemsInWindow}
 }

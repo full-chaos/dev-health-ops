@@ -58,6 +58,8 @@ import (
 	"time"
 
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
+
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
 )
 
 // QueryClient is the narrow ClickHouse read capability this package
@@ -290,6 +292,10 @@ func BuildResponse(ctx context.Context, client QueryClient, orgID string, params
 		if err != nil {
 			return nil, err
 		}
+	} else {
+		// The individual heatmap is keyed by a person: neither selection applies, and a
+		// named repository is SAID not applied (repo_filter_applied = false).
+		selection.filter.Named = len(teamscope.NamedRepoRefs("", nil, params.RepoRefs)) > 0
 	}
 
 	switch definition.Metric {

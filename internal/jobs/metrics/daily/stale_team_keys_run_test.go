@@ -89,6 +89,30 @@ func TestTheFinalizeRetractsStaleKeysOnceBeforeTheFamilies(t *testing.T) {
 	}
 }
 
+// The retraction gets the scope of the run as the store holds it: a claim of a
+// finalize does not carry it, and it decides whether the run supersedes the
+// keys of the whole organization-day or only of its own scopes.
+func TestTheFinalizeGivesTheRetractionTheStoredScopeOfTheRun(t *testing.T) {
+	defer restoreRecognisedFinalizeFamilies(pythonRecognisedFinalizeFamilies)
+	pythonRecognisedFinalizeFamilies = []string{"ic_finalize"}
+	for _, wholeOrganization := range []bool{true, false} {
+		var order []string
+		store := staleKeyRetractionStore()
+		store.run.FullOrg = wholeOrganization
+		if store.finalizeClaim.Run.FullOrg {
+			t.Fatal("the claim of the fixture carries the scope: the case is not set")
+		}
+		retractor := &recordingRetractor{order: &order}
+		handler := staleKeyRetractionFinalize(t, store, retractor, &order)
+		if err := handler.Work(context.Background(), finalizeExecution()); err != nil {
+			t.Fatal(err)
+		}
+		if len(retractor.runs) != 1 || retractor.runs[0].FullOrg != wholeOrganization {
+			t.Errorf("the stored run has FullOrg = %v and the retraction got %+v", wholeOrganization, retractor.runs)
+		}
+	}
+}
+
 // A failed retraction fails the finalize, which is tried again. No family runs
 // on the tables that still hold the stale keys, and the run is not completed.
 func TestAFailedRetractionFailsTheFinalizeAndRunsNoFamily(t *testing.T) {

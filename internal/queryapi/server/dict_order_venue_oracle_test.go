@@ -395,7 +395,21 @@ func TestVenueOracleQueryAPIDictOrder(t *testing.T) {
 	python := runDictOrderPython(t, golden, venue, root, cases)
 	byteIdentical := 0
 	ledgerValidated := 0
+	// The Home cases run first: Go Home reads the canonical categorization and the frozen Python
+	// Home its legacy table, so the Go work units are seeded only after every Home case.
+	order := make([]int, 0, len(cases))
 	for index, tc := range cases {
+		if tc.Kind == "home" {
+			order = append(order, index)
+		}
+	}
+	for index, tc := range cases {
+		if tc.Kind != "home" {
+			order = append(order, index)
+		}
+	}
+	for _, index := range order {
+		tc := cases[index]
 		if !goUnitsSeeded && tc.Kind != "home" {
 			seedWorkUnits([]string{venue.GoClickHouseDB})
 			goUnitsSeeded = true

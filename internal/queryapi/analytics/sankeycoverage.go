@@ -52,11 +52,13 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"time"
 
 	clickhousedriver "github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/full-chaos/dev-health-go/clickhouse"
 	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph/model"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
 	"github.com/google/uuid"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
@@ -253,6 +255,7 @@ func compileSankeyCoverage(req SankeyRequest, orgID string, timeoutSeconds int, 
 
 	repoFilterColumn := repoCol
 	teamRepoColumn := ""
+	var coverageExtraBindings []clickhouse.Binding
 
 	if useInvestment {
 		baseTable = fmt.Sprintf("%s AS work_unit_investments", LatestWorkUnitInvestmentsSource())
@@ -262,15 +265,8 @@ func compileSankeyCoverage(req SankeyRequest, orgID string, timeoutSeconds int, 
 		// which joins other org_id-carrying tables.
 		orgFilter = "work_unit_investments.org_id = {org_id:String}"
 
-		unitTeamSQL := BuildUnitTeamSubquery(UnitTeamSubqueryOptions{
-			Source:         fmt.Sprintf("%s AS work_unit_investments", windowedUnitEvidenceSource()),
-			InnerTeamAlias: "team",
-			OuterTeamAlias: "team_label",
-			IncludeTeamID:  true,
-		})
 		repoEffortSrc := LatestWorkUnitRepoEffortSource()
 		joins = append(joins,
-			fmt.Sprintf("LEFT JOIN (%s) AS ut ON ut.work_unit_id = work_unit_investments.work_unit_id", unitTeamSQL),
 			fmt.Sprintf("LEFT JOIN %s AS wure ON wure.org_id = work_unit_investments.org_id AND wure.work_unit_id = work_unit_investments.work_unit_id", repoEffortSrc),
 			// GO-ONLY DIVERGENCE (CHAOS-4773): same unguarded-join defect
 			// class as investmentContextFor's repo join (investment.go) --
@@ -313,7 +309,17 @@ func compileSankeyCoverage(req SankeyRequest, orgID string, timeoutSeconds int, 
 
 		totalExpr = fmt.Sprintf("sum(%s)", repoEffortCol)
 		repoTotalExpr = totalExpr
-		assignedTeamCountExpr = fmt.Sprintf("sumIf(%s, %s)", repoEffortCol, assignedTeamExpr)
+		// CHAOS-9264 (chris 2026-10-11, "Team coverage: ok change it"): a unit HAS a team when a team OWNS one of the
+		// unit's repository rows -- the one shared ownership predicate of the team scope (teamscope.RepoCondition
+		// without its team filter), applied to the unit's own repository rows exactly as the team scope does
+		// (teamscope.UnitScope) -- not when the work-item attribution vote found one. The flag is per UNIT, so a
+		// unit with two owning teams on two repositories adds its weight once, and a unit with an owned and an
+		// unowned repository is assigned whole. The vote subquery is no longer read by this statement. DECLARED
+		// DIVERGENCE from the reference number (analytics.py:707 votes); the denominator is unchanged.
+		ownedCondition, ownedBindings := teamscope.AnyTeamRepoCondition(orgID, "work_unit_investments.repo_id", time.Now().UTC())
+		ownedUnit := strings.TrimPrefix(teamscope.UnitScope(" AND "+ownedCondition, repoEffortSrc), " AND ")
+		coverageExtraBindings = ownedBindings
+		assignedTeamCountExpr = fmt.Sprintf("sumIf(%s, %s)", repoEffortCol, ownedUnit)
 		assignedRepoCountExpr = fmt.Sprintf("sumIf(%s, %s IS NOT NULL)", repoEffortCol, repoAssignedCol)
 
 		// CHAOS-5483 -- splitting assigned_repo into the two claims it
@@ -525,6 +531,17 @@ WHERE %s
 		{Name: "end_date", Value: dateBindingValue(req.EndDate.Time())},
 	}
 	bindings = append(bindings, filterClause.bindings...)
+	// A team scope on the same request binds the same ownership names (same org, same instant class): the scope's
+	// binding stands, a name is never bound twice.
+	bound := map[string]bool{}
+	for _, binding := range bindings {
+		bound[binding.Name] = true
+	}
+	for _, binding := range coverageExtraBindings {
+		if !bound[binding.Name] {
+			bindings = append(bindings, binding)
+		}
+	}
 
 	return compiledQuery{sql: sql, bindings: bindings}, nil
 }

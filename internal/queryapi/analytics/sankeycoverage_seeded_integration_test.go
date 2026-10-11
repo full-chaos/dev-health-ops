@@ -96,6 +96,23 @@ CREATE TABLE work_item_team_attributions (
 ) ENGINE = ReplacingMergeTree(computed_at)
 ORDER BY (org_id, repo_id, work_item_id, ifNull(team_id, ''), source);
 
+CREATE TABLE team_repo_ownership (
+    org_id String,
+    provider String,
+    team_id String,
+    repo_id Nullable(UUID),
+    repo_full_name String,
+    match_type Enum8('exact' = 1, 'pattern' = 2),
+    source Enum8('native' = 1, 'jira_legacy' = 2, 'provider_access' = 3, 'manual' = 4, 'inferred' = 5),
+    is_primary UInt8 DEFAULT 0,
+    specificity UInt16 DEFAULT 0,
+    priority Int32 DEFAULT 0,
+    valid_from DateTime64(3, 'UTC'),
+    valid_to Nullable(DateTime64(3, 'UTC')),
+    updated_at DateTime64(3, 'UTC')
+) ENGINE = ReplacingMergeTree(updated_at)
+ORDER BY (org_id, provider, repo_full_name, team_id, source, valid_from);
+
 CREATE TABLE repos (
     id UUID,
     repo String,
@@ -215,9 +232,9 @@ func TestResolveSankeyCoverage_SeededRealClickHouse_ExactShares(t *testing.T) {
 		t.Fatalf("seed work_unit_repo_effort: %v", err)
 	}
 
-	// Only linear:ALPHA-1 gets an attribution row; linear:NOTEAM-1
-	// deliberately gets none, so its units resolve to "unassigned"
-	// through a genuine LEFT JOIN miss.
+	// The attribution VOTE is seeded on purpose and must NOT decide teamCoverage (CHAOS-9264): linear:ALPHA-1
+	// (wu-team-2repos, wu-team-norepo) votes ALPHA, but a unit has a team only when a team OWNS one of its
+	// repositories. Ownership below: repo1 by ALPHA, repo2 by ALPHA and BETA.
 	if err := conn.Exec(ctx, fmt.Sprintf(`INSERT INTO work_item_team_attributions
         (org_id, repo_id, work_item_id, provider, team_id, team_name, source, is_primary, confidence, evidence, computed_at) VALUES
         ('%[3]s', toUUID('%[1]s'), 'linear:ALPHA-1', 'linear', 'ALPHA', 'Alpha', 'native_team', 1, 'high', '', toDateTime64('%[2]s', 3, 'UTC'))`,
@@ -231,6 +248,15 @@ func TestResolveSankeyCoverage_SeededRealClickHouse_ExactShares(t *testing.T) {
         (toUUID('%[2]s'), 'acme/two', NULL, toDateTime64('%[3]s', 3, 'UTC'), NULL, NULL, toDateTime64('%[3]s', 3, 'UTC'), '%[4]s', 'github', NULL)`,
 		seededCoverageRepo1, seededCoverageRepo2, seededCoverageTS, orgID)); err != nil {
 		t.Fatalf("seed repos: %v", err)
+	}
+
+	if err := conn.Exec(ctx, fmt.Sprintf(`INSERT INTO team_repo_ownership
+        (org_id, provider, team_id, repo_id, repo_full_name, match_type, source, is_primary, specificity, priority, valid_from, valid_to, updated_at) VALUES
+        ('%[4]s', 'github', 'ALPHA', toUUID('%[1]s'), 'acme/one', 'exact', 'native', 1, 100, 0, toDateTime64('2025-01-01 00:00:00.000', 3, 'UTC'), NULL, toDateTime64('%[3]s', 3, 'UTC')),
+        ('%[4]s', 'github', 'ALPHA', toUUID('%[2]s'), 'acme/two', 'exact', 'native', 1, 100, 0, toDateTime64('2025-01-01 00:00:00.000', 3, 'UTC'), NULL, toDateTime64('%[3]s', 3, 'UTC')),
+        ('%[4]s', 'github', 'BETA',  toUUID('%[2]s'), 'acme/two', 'exact', 'native', 0, 100, 0, toDateTime64('2025-01-01 00:00:00.000', 3, 'UTC'), NULL, toDateTime64('%[3]s', 3, 'UTC'))`,
+		seededCoverageRepo1, seededCoverageRepo2, seededCoverageTS, orgID)); err != nil {
+		t.Fatalf("seed team_repo_ownership: %v", err)
 	}
 
 	client, err := dhclickhouse.NewClickHouseQueryClientWithOptions(dhclickhouse.Options{DSN: inst.URI})
@@ -260,10 +286,13 @@ func TestResolveSankeyCoverage_SeededRealClickHouse_ExactShares(t *testing.T) {
 
 	// Hand-computed:
 	//   total        = 0.6 + 0.4 + 1.0 + 1.0 + 1.0 = 4.0
-	//   assigned_team= (0.6 + 0.4) + 1.0           = 2.0  (both ALPHA units)
+	//   assigned_team= 1.0 + 1.0 + 1.0              = 3.0  (CHAOS-9264: every unit with an OWNED repository row:
+	//                  wu-team-2repos has two owning teams on its two repositories and counts ONCE; wu-noteam-1repo and
+	//                  wu-zeroeffort-2repos are owned although no vote names a team; wu-team-norepo has a vote
+	//                  and no repository: unassigned). The vote would have said 2.0.
 	//   assigned_repo= (0.6 + 0.4) + 1.0 + 1.0     = 3.0  (all but wu-team-norepo)
 	const (
-		wantTeam = 2.0 / 4.0
+		wantTeam = 3.0 / 4.0
 		wantRepo = 3.0 / 4.0
 		tol      = 1e-9
 	)

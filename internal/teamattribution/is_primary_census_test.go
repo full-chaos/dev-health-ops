@@ -206,7 +206,6 @@ const workUnitVoteReason = "investment / work-unit view: one team per work unit 
 var workUnitVoteConsumers = map[string]string{
 	"internal/queryapi/analytics\x00dbColumn":                                     workUnitVoteReason,
 	"internal/queryapi/analytics\x00investmentContextFor":                         workUnitVoteReason,
-	"internal/queryapi/analytics\x00compileSankeyCoverage":                        workUnitVoteReason,
 	"internal/queryapi/analytics\x00compileFlowMatrixInvestmentTeamRepoDimension": workUnitVoteReason,
 	"internal/queryapi/investmentflow\x00fetchInvestmentTeamEdges":                workUnitVoteReason,
 	"internal/queryapi/investmentflow\x00fetchInvestmentRepoTeamEdges":            workUnitVoteReason,

@@ -431,7 +431,8 @@ func repoAllocationInvestmentSource() string {
                     wui.categorization_status AS categorization_status,
                     wui.categorization_model_version AS categorization_model_version,
                     wui.categorization_run_id AS categorization_run_id,
-                    wui.org_id AS org_id
+                    wui.org_id AS org_id,
+                    wui.latest_computed_at AS latest_computed_at
                 FROM %s AS wui
                 LEFT JOIN %s AS wure
                     ON wure.org_id = wui.org_id

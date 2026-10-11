@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
+	"strings"
 	"time"
 
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
@@ -133,7 +134,16 @@ func (reader *Reader) FetchWorkUnitInvestments(ctx context.Context, filter WorkU
 		explicitSQL = " AND " + explicitCondition
 	}
 	scopeSQL, scopeBindings = teamscope.NarrowRepoScope(filter.ReposNamed, explicitSQL, explicitBindings, filter.TeamScopeCondition, filter.TeamScopeBindings)
-	scopeSQL = teamscope.UnitScope(scopeSQL, analytics.LatestWorkUnitRepoEffortSource()) // the unit's repository rows, not only its own repo_id (CHAOS-9221)
+	// A REPOSITORY scope (explicit repositories) reads one row per (unit, repository the unit touches): the row's
+	// repository and the unit's ALLOCATED effort there, so the list rows of a repository scope sum to that scope's
+	// allocation total (CHAOS-9248). Team and org scope read the whole unit, once, as before; a team scope still
+	// admits a unit through any of its repository rows (CHAOS-9221).
+	source := analytics.LatestWorkUnitInvestmentsSource()
+	if len(filter.RepoIDs) > 0 {
+		source = analytics.RepoAllocationInvestmentSource()
+	} else {
+		scopeSQL = teamscope.UnitScope(scopeSQL, analytics.LatestWorkUnitRepoEffortSource())
+	}
 	var workUnitSQL string
 	if filter.WorkUnitID != "" {
 		workUnitSQL = " AND work_unit_investments.work_unit_id = {work_unit_id:String}"
@@ -175,7 +185,7 @@ SELECT
     categorization_model_version,
     categorization_run_id,
     latest_computed_at AS computed_at
-FROM %s AS work_unit_investments
+FROM %s%s
 WHERE work_unit_investments.from_ts < {end_date:Date}
   AND work_unit_investments.to_ts >= {start_date:Date}
   AND work_unit_investments.org_id = {org_id:String}
@@ -184,7 +194,7 @@ WHERE work_unit_investments.from_ts < {end_date:Date}
 ORDER BY effort_value DESC, work_unit_id ASC
 LIMIT {limit:UInt64}
 %s
-`, analytics.LatestWorkUnitInvestmentsSource(), scopeSQL, workUnitSQL, settingsMaxExecutionTime())
+`, source, aliasIfPlain(source), scopeSQL, workUnitSQL, settingsMaxExecutionTime())
 
 	rows, err := reader.client.Query(ctx, query, bindings)
 	if err != nil {
@@ -518,4 +528,13 @@ func chunkPairs(pairs []WorkUnitRunPair, size int) [][]WorkUnitRunPair {
 		chunks = append(chunks, pairs[start:end])
 	}
 	return chunks
+}
+
+// aliasIfPlain names the plain latest-units source work_unit_investments; the allocation source already carries
+// that alias in its own text.
+func aliasIfPlain(source string) string {
+	if strings.HasSuffix(strings.TrimSpace(source), "AS work_unit_investments") {
+		return ""
+	}
+	return " AS work_unit_investments"
 }

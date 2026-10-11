@@ -106,7 +106,7 @@ func compileBreakdownOver(req BreakdownRequest, dimCol, orgID string, timeoutSec
 
 	var source, alias, dateFilter, extraClauses, measureExpr string
 	if useInvestment {
-		ictx := investmentContextFor([]Dimension{req.Dimension}, needsTeamJoin(filters), needsAuthorJoin(filters))
+		ictx := investmentContextFor([]Dimension{req.Dimension}, false, needsRepoAllocation(filters), needsAuthorJoin(filters))
 		source, alias, dateFilter, extraClauses = ictx.Source, ictx.Alias, ictx.DateFilter, ictx.ExtraClauses
 		measureExpr, err = dbExpression(req.Measure, true, ictx.UseRepoAllocation)
 		if err != nil {

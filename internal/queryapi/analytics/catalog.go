@@ -172,7 +172,7 @@ LIMIT {limit:UInt32}
 
 	var source, alias, extraClauses string
 	if useInvestment {
-		ictx := investmentContextFor([]Dimension{dimension}, needsTeamJoin(filters), needsAuthorJoin(filters))
+		ictx := investmentContextFor([]Dimension{dimension}, false, needsRepoAllocation(filters), needsAuthorJoin(filters))
 		source, alias, extraClauses = ictx.Source, ictx.Alias, ictx.ExtraClauses
 	} else {
 		source, alias = investmentMetricsDailyDedupSource, "investment_metrics_daily"

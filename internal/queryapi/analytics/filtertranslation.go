@@ -130,6 +130,12 @@ type filterColumns struct {
 	Repo   string
 	Author string
 
+	// UnitRows is set by a reader whose source is the plain latest work units (one row per unit), not the
+	// per-repository allocation source: its repository / team predicates are then widened to the unit's repository
+	// ROWS (teamscope.UnitScope, CHAOS-9221). A reader on the allocation source (one row per unit and repository)
+	// needs no widening: its repo_id IS the row's repository.
+	UnitRows bool
+
 	// WorkCategorySelectsUnits opts a caller into the UNIT-SELECTING form of
 	// the work-category predicate instead of the default row-multiplying one
 	// (CHAOS-5498). Default false, so every existing caller is byte-identical.
@@ -183,7 +189,7 @@ func translateFilters(orgID string, filters *model.FilterInput, useInvestment bo
 			// A team is its OWNED repositories (team_repo_ownership, the ONE shared predicate), applied to the
 			// unit's repository rows; never the work-item attribution vote (CHAOS-9221, D5947).
 			teamCondition, teamBindings := teamscope.RepoCondition(orgID, cols.Repo, filters.Scope.Ids, time.Now().UTC())
-			sql += teamscope.UnitScope(" AND " + teamCondition)
+			sql += unitScoped(cols, " AND "+teamCondition)
 			bindings = append(bindings, teamBindings...)
 		case useInvestment && filters.Scope.Level == model.ScopeLevelInputDeveloper && len(filters.Scope.Ids) > 0:
 			if err := validateDeveloperEmails(filters.Scope.Ids, "scope"); err != nil {
@@ -201,7 +207,7 @@ func translateFilters(orgID string, filters *model.FilterInput, useInvestment bo
 		default:
 			clause := translateScopeFilter(filters.Scope.Level, filters.Scope.Ids, cols.Team, cols.Repo, cols.Author)
 			if useInvestment && filters.Scope.Level == model.ScopeLevelInputRepo {
-				clause.sql = teamscope.UnitScope(clause.sql) // the unit's repository rows (CHAOS-9221)
+				clause.sql = unitScoped(cols, clause.sql)
 			}
 			sql += clause.sql
 			bindings = append(bindings, clause.bindings...)
@@ -222,7 +228,7 @@ func translateFilters(orgID string, filters *model.FilterInput, useInvestment bo
 	if filters.What != nil && len(filters.What.Repos) > 0 {
 		clause := translateRepoFilter(filters.What.Repos, cols.Repo)
 		if useInvestment {
-			clause.sql = teamscope.UnitScope(clause.sql) // the unit's repository rows (CHAOS-9221)
+			clause.sql = unitScoped(cols, clause.sql)
 		}
 		sql += clause.sql
 		bindings = append(bindings, clause.bindings...)
@@ -235,4 +241,12 @@ func translateFilters(orgID string, filters *model.FilterInput, useInvestment bo
 	}
 
 	return filterClause{sql: sql, bindings: bindings}, nil
+}
+
+// unitScoped widens a repository fragment to the unit's repository rows for a reader on the one-row-per-unit source.
+func unitScoped(cols filterColumns, fragment string) string {
+	if cols.UnitRows {
+		return teamscope.UnitScope(fragment)
+	}
+	return fragment
 }

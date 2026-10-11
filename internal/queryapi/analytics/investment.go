@@ -439,6 +439,13 @@ func repoAllocationInvestmentSource() string {
             ) AS work_unit_investments`, LatestWorkUnitInvestmentsSource(), LatestWorkUnitRepoEffortSource())
 }
 
+// RepoAllocationInvestmentSource is repoAllocationInvestmentSource for the readers outside this package that scope
+// a work-unit read by repository or team (Home tile, Investment page): one row per (unit, repository the unit
+// touches), repo_id = that repository, effort_value = the repository's allocated effort (work_unit_repo_effort),
+// allocation_weight = its share of the unit's effort; a unit with no repository row keeps its own repo_id, its whole
+// effort and weight 1. The sum over the repositories of a unit is the unit's effort (CHAOS-9221).
+func RepoAllocationInvestmentSource() string { return repoAllocationInvestmentSource() }
+
 // --- investment.py:214-256: LATEST_WORK_UNIT_AUTHORS_CTE ----------------
 
 // workUnitAuthorsSource ports LATEST_WORK_UNIT_AUTHORS_CTE (investment.py:
@@ -557,12 +564,20 @@ func resolveUseInvestment(dimensions []Dimension, forceInvestment *bool) bool {
 	return false
 }
 
-// needsTeamJoin ports _needs_team_join (compiler.py:244-247) exactly.
-func needsTeamJoin(filters *model.FilterInput) bool {
-	// A team scope no longer joins the work-item attribution vote (`ut`): a team is its OWNED repositories
-	// (teamscope.RepoCondition over the unit's repository rows, CHAOS-9221, D5947). The join is read only when the
-	// TEAM dimension itself is asked (a vote shown as provenance).
-	return false
+// needsRepoAllocation is true when the request is narrowed by repository or team: the read then runs on the
+// per-repository allocation source (one row per unit and repository, the repository's allocated effort), so the
+// repositories of a unit sum to the unit's effort and a team's repositories to the team's (CHAOS-9221).
+func needsRepoAllocation(filters *model.FilterInput) bool {
+	if filters == nil {
+		return false
+	}
+	if filters.What != nil && len(filters.What.Repos) > 0 {
+		return true
+	}
+	if filters.Scope == nil || len(filters.Scope.Ids) == 0 {
+		return false
+	}
+	return filters.Scope.Level == model.ScopeLevelInputTeam || filters.Scope.Level == model.ScopeLevelInputRepo
 }
 
 // needsAuthorJoin ports _needs_author_join (compiler.py:250-265) exactly.
@@ -597,8 +612,8 @@ func dimensionListHas(dimensions []Dimension, want Dimension) bool {
 // branches selected by one boolean; this port is the same shape as two
 // Go functions selected by the same boolean, which is what
 // resolveUseInvestment computes.
-func investmentContextFor(dimensions []Dimension, needsTeamJoinFlag, needsAuthorJoinFlag bool) investmentContext {
-	useRepoAllocation := dimensionListHas(dimensions, DimensionRepo)
+func investmentContextFor(dimensions []Dimension, forceTeamJoin, repoScopedFlag, needsAuthorJoinFlag bool) investmentContext {
+	useRepoAllocation := dimensionListHas(dimensions, DimensionRepo) || repoScopedFlag
 
 	var source string
 	if useRepoAllocation {
@@ -622,7 +637,7 @@ func investmentContextFor(dimensions []Dimension, needsTeamJoinFlag, needsAuthor
 	// when the OUTER query's own FROM is repo-allocated) preserved
 	// faithfully here, so this embeds its OWN fresh copy of
 	// LatestWorkUnitInvestmentsSource() independent of `source` above.
-	if dimensionListHas(dimensions, DimensionTeam) || needsTeamJoinFlag {
+	if dimensionListHas(dimensions, DimensionTeam) || forceTeamJoin {
 		unitTeamSQL := BuildUnitTeamSubquery(UnitTeamSubqueryOptions{
 			Source:         fmt.Sprintf("%s AS work_unit_investments", windowedUnitEvidenceSource()),
 			InnerTeamAlias: "team_label",

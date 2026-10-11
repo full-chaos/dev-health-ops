@@ -160,6 +160,9 @@ VALUES ('unit-null', ?, ?, NULL, 'churn_loc', 40, ?, ?, ?, 0.8, 'high', 'ok', 'j
 			Time:  TimeFilter{RangeDays: 7, CompareDays: 7, EndDate: ptrTime(day.AddDate(0, 0, 3))},
 			Scope: ScopeFilter{Level: "repo", IDs: []string{repo}},
 		}
+		if repo == "" {
+			f.Scope = ScopeFilter{Level: "org"}
+		}
 		resp, err := BuildResponse(ctx, client, nil, org, f, day.AddDate(0, 0, 5))
 		if err != nil {
 			t.Fatalf("BuildResponse: %v", err)
@@ -171,10 +174,18 @@ VALUES ('unit-null', ?, ?, NULL, 'churn_loc', 40, ?, ?, ?, 0.8, 'high', 'ok', 'j
 		return out
 	}
 	a, b := tile(repoA), tile(repoB)
-	if len(a) != 2 || math.Abs(a["feature_delivery"]-100) > 1e-3 || math.Abs(a["risk"]-40) > 1e-3 {
-		t.Errorf("repository A tile = %v, want feature_delivery 100 (own column) and risk 40 (the unit with no own repo_id, by its repository row)", a)
+	if len(a) != 2 || math.Abs(a["feature_delivery"]-100) > 1e-3 || math.Abs(a["risk"]-20) > 1e-3 {
+		t.Errorf("repository A tile = %v, want feature_delivery 100 (own column, no repository row: its whole effort) and risk 20 (the A row of the unit with no own repo_id)", a)
 	}
-	if len(b) != 2 || math.Abs(b["quality"]-500) > 1e-3 || math.Abs(b["risk"]-40) > 1e-3 {
-		t.Errorf("repository B tile = %v, want quality 500 and risk 40 (a unit touching two repositories is in each)", b)
+	if len(b) != 2 || math.Abs(b["quality"]-500) > 1e-3 || math.Abs(b["risk"]-20) > 1e-3 {
+		t.Errorf("repository B tile = %v, want quality 500 and risk 20 (the B row of the same unit)", b)
+	}
+	// The invariant: the repositories of a unit sum to the unit's effort (40), never twice it; and no scope = the whole.
+	if sum := a["risk"] + b["risk"]; math.Abs(sum-40) > 1e-3 {
+		t.Errorf("risk over repositories A + B = %v, want the unit's effort 40", sum)
+	}
+	whole := tile("")
+	if math.Abs(whole["risk"]-40) > 1e-3 {
+		t.Errorf("unscoped risk = %v, want 40", whole["risk"])
 	}
 }

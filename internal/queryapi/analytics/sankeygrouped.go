@@ -46,7 +46,7 @@ func compileSankeyShape(orgID string, req SankeyRequest, useInvestment bool, fil
 
 	shape := sankeyShape{fc: fc}
 	if useInvestment {
-		ictx := investmentContextFor(req.Path, needsTeamJoin(filters), needsAuthorJoin(filters))
+		ictx := investmentContextFor(req.Path, false, needsRepoAllocation(filters), needsAuthorJoin(filters))
 		shape.source, shape.alias, shape.dateFilter, shape.extraClauses = ictx.Source, ictx.Alias, ictx.DateFilter, ictx.ExtraClauses
 		shape.measureExpr, err = dbExpression(req.Measure, true, ictx.UseRepoAllocation)
 		if err != nil {

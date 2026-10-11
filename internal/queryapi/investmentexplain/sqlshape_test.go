@@ -191,11 +191,15 @@ func TestBreakdownFiltersScopeClauseIntersectsExplicitReposWithTeamScope(t *test
 	teamCondition, teamBindings := teamscope.RepoCondition("org-1", "repo_id", []string{"team-x"}, teamScopeAsOf)
 	f := BreakdownFilters{RepoIDs: []string{"repo-1"}, ReposNamed: true, TeamScopeCondition: teamCondition, TeamScopeBindings: teamBindings}
 	scopeSQL, bindings := f.scopeClause()
-	if !strings.HasPrefix(scopeSQL, " AND ((toString(repo_id) IN {scope_ids:Array(String)} AND toString(repo_id) IN (") {
+	if !strings.HasPrefix(scopeSQL, " AND (toString(repo_id) IN {scope_ids:Array(String)} AND toString(repo_id) IN (") {
 		t.Fatalf("scopeSQL does not AND the explicit-repo and team conditions together:\n%s", scopeSQL)
 	}
-	if !strings.Contains(scopeSQL, "work_unit_repo_effort") {
-		t.Fatalf("scopeSQL reads only the unit's own repo_id, not its repository rows (CHAOS-9221):\n%s", scopeSQL)
+	// The repository rows are the SOURCE of a scoped effort read (allocation source), not a predicate (CHAOS-9221).
+	if got := f.unitSource(scopeSQL); !strings.Contains(got, "work_unit_repo_effort") || !strings.Contains(got, "allocation_weight") {
+		t.Fatalf("a scoped read must run on the per-repository allocation source, got:\n%s", got)
+	}
+	if got := (BreakdownFilters{}).unitSource(""); strings.Contains(got, "work_unit_repo_effort") {
+		t.Fatalf("an unscoped read must run on the plain latest units (whole effort), got:\n%s", got)
 	}
 	var sawScopeIDs, sawTeamIDs bool
 	for _, b := range bindings {

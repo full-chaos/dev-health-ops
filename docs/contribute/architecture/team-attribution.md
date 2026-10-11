@@ -1215,8 +1215,9 @@ project (section 0.1): a native team key gives one team.
   (`workUnitTeamAttributions`), the team comes from the work-unit vote over the items' primary rows
   (`BuildUnitTeamSubquery`, `resolveWorkUnitTeamAttributions`): one team per work unit. The census holds every reader
   of the vote's team to a named list (`workUnitVoteConsumers`); a new reader must be classified there, and a stale
-  entry fails. The **team scope** of the analytics theme readers (CHAOS-9221) and the sankey `teamCoverage`
-  (CHAOS-9266) no longer read the vote: a unit is in a team's scope when the team owns one of the unit's repositories
+  entry fails. The **team scope** of the analytics theme readers (CHAOS-9221) and the investment-path sankey
+  `teamCoverage` (CHAOS-9266; the non-investment path, `useInvestment` unset or false, still counts the `team_id` of
+  `work_item_completion_daily`) no longer read the vote: a unit is in a team's scope when the team owns one of the unit's repositories
   (`teamscope.RepoCondition` over `team_repo_ownership`; `AnyTeamRepoCondition` for the coverage), and a repository
   scope reads the unit's repository rows (`teamscope.UnitScope`), with effort allocated per repository. See
   [Investment data model](../../reference/data-models/investment.md).
@@ -2208,8 +2209,9 @@ One path: `run_team_autoimport` → `team_autoimport_<provider>.populate()` → 
   identity. Cycle-time rows can still provide activity windows, durations,
   work-scope/repo/type bridges, and unassigned/no-WITA detail rows, but not the
   owning team identity.
-  The Investment team **scope** and the sankey `teamCoverage` are the exception:
-  they read repository ownership (CHAOS-9221, CHAOS-9266), not this snapshot.
+  The Investment team **scope** and the investment-path sankey `teamCoverage` are the exception:
+  they read repository ownership (CHAOS-9221, CHAOS-9266), not this snapshot. The non-investment coverage path
+  (`useInvestment` unset or false) counts `work_item_completion_daily.team_id`.
 - **Which edges linked-issue inheritance considers (CHAOS-4112):** the donor
   preload in `metrics/job_work_items.py` unions the **stored** inheritable
   edges for the items being recomputed with this run's **fresh** ones. Fresh

@@ -88,7 +88,7 @@ func SankeyRequestFromInput(input model.SankeyRequestInput) (SankeyRequest, erro
 // (compiler.py:447) exactly, including that nodes is always a
 // single-element list while edges can be longer.
 func CompileSankey(req SankeyRequest, orgID string, timeoutSeconds int, useInvestment bool, filters *model.FilterInput) (nodes compiledQuery, edges []compiledQuery, err error) {
-	shape, err := compileSankeyShape(req, useInvestment, filters)
+	shape, err := compileSankeyShape(orgID, req, useInvestment, filters)
 	if err != nil {
 		return compiledQuery{}, nil, err
 	}

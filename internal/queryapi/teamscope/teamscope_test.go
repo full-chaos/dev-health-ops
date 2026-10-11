@@ -361,3 +361,31 @@ func TestTextRepoMembership(t *testing.T) {
 		}
 	}
 }
+
+// UnitScope widens a repository fragment to the unit's repository ROWS (CHAOS-9221).
+func TestUnitScopeReadsTheUnitsRepositoryRows(t *testing.T) {
+	if got := UnitScope("", "SRC"); got != "" {
+		t.Fatalf("no scope must stay no scope, got %q", got)
+	}
+	if got := UnitScope(" AND 1 = 0", "SRC"); got != " AND 1 = 0" {
+		t.Fatalf("a named repository that resolved to nothing must leave nothing, got %q", got)
+	}
+	got := UnitScope(" AND repo_id IN {scope_ids:Array(String)}", "SRC")
+	for _, want := range []string{
+		" AND (repo_id IN {scope_ids:Array(String)} OR work_unit_investments.work_unit_id IN (",
+		"FROM SRC AS latest_repo_rows",
+		"WHERE repo_id IS NOT NULL AND repo_id IN {scope_ids:Array(String)}))",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("UnitScope lacks %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestUnitScopeRewritesAQualifiedColumnForTheInnerCopyOnly(t *testing.T) {
+	got := UnitScope(" AND work_unit_investments.repo_id IN {scope_ids:Array(String)}", "SRC")
+	if !strings.HasPrefix(got, " AND (work_unit_investments.repo_id IN {scope_ids:Array(String)} OR ") ||
+		!strings.Contains(got, "WHERE repo_id IS NOT NULL AND repo_id IN {scope_ids:Array(String)}))") {
+		t.Fatalf("the outer keeps the unit's column, the inner reads the repository row's own:\n%s", got)
+	}
+}

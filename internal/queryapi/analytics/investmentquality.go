@@ -40,8 +40,11 @@ package analytics
 // query in this package.
 
 import (
+	"time"
+
 	"context"
 	"fmt"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
 
 	"github.com/full-chaos/dev-health-go/clickhouse"
 
@@ -180,12 +183,12 @@ func evidenceQualityFilterFromFilters(filters *model.FilterInput) evidenceQualit
 		case model.ScopeLevelInputTeam:
 			result.teamScopeIDs = filters.Scope.Ids
 		case model.ScopeLevelInputRepo:
-			result.scopeFilter += " AND work_unit_investments.repo_id IN {scope_ids:Array(String)}"
+			result.scopeFilter += " AND repo_id IN {scope_ids:Array(String)}"
 			result.scopeBindings = append(result.scopeBindings, clickhouse.Binding{Name: "scope_ids", Value: filters.Scope.Ids})
 		}
 	}
 	if filters.What != nil && len(filters.What.Repos) > 0 {
-		result.scopeFilter += " AND work_unit_investments.repo_id IN {repo_filter_ids:Array(String)}"
+		result.scopeFilter += " AND repo_id IN {repo_filter_ids:Array(String)}"
 		result.scopeBindings = append(result.scopeBindings, clickhouse.Binding{Name: "repo_filter_ids", Value: filters.What.Repos})
 	}
 	if filters.Why != nil && len(filters.Why.WorkCategory) > 0 {
@@ -260,23 +263,11 @@ func compileEvidenceQualityByGroup(orgID string, startDate, endDate graphqldate.
 		categoryBindings = append(categoryBindings, clickhouse.Binding{Name: "themes", Value: filters.themes})
 	}
 
-	var teamJoin, teamFilter string
+	var teamJoin string
 	var teamBindings []clickhouse.Binding
-	if len(filters.teamScopeIDs) > 0 {
-		unitTeamSQL := BuildUnitTeamSubquery(UnitTeamSubqueryOptions{
-			Source:         fmt.Sprintf("%s AS work_unit_investments", LatestWorkUnitInvestmentsSource()),
-			Where:          unitTeamWindowFilter("", ""),
-			InnerTeamAlias: "team_label",
-			IncludeTeamID:  true,
-		})
-		teamJoin = fmt.Sprintf("\n        LEFT JOIN (%s        ) AS unit_team ON unit_team.work_unit_id = work_unit_investments.work_unit_id\n        ", unitTeamSQL)
-		teamFilter = `
-	          AND (
-	              unit_team.team_label IN {team_scope_ids:Array(String)}
-	              OR unit_team.team_id IN {team_scope_ids:Array(String)}
-	          )`
-		teamBindings = append(teamBindings, clickhouse.Binding{Name: "team_scope_ids", Value: filters.teamScopeIDs})
-	}
+	scopeFilter := filters.scopeFilter
+	scopeFilter, teamBindings = unitRowsScope(orgID, scopeFilter, filters.teamScopeIDs)
+	teamFilter := ""
 
 	sql := fmt.Sprintf(`
 SELECT
@@ -299,7 +290,7 @@ WHERE evidence_quality_group_key IS NOT NULL
 GROUP BY evidence_quality_group_key
 ORDER BY total DESC, evidence_quality_group_key ASC
 %s
-`, groupKey, LatestWorkUnitInvestmentsSource(), teamJoin, filters.scopeFilter, teamFilter, categoryFilter, settingsMaxExecutionTime(queryTimeoutSecs))
+`, groupKey, LatestWorkUnitInvestmentsSource(), teamJoin, scopeFilter, teamFilter, categoryFilter, settingsMaxExecutionTime(queryTimeoutSecs))
 
 	bindings := []clickhouse.Binding{
 		{Name: "org_id", Value: orgID},
@@ -390,23 +381,12 @@ func compileInvestmentQualityStats(orgID string, startDate, endDate graphqldate.
 		categoryBindings = append(categoryBindings, clickhouse.Binding{Name: "themes", Value: themes})
 	}
 
-	var teamJoin, teamFilter string
+	var teamJoin string
 	var teamBindings []clickhouse.Binding
-	if len(teamScopeIDs) > 0 {
-		unitTeamSQL := BuildUnitTeamSubquery(UnitTeamSubqueryOptions{
-			Source:         fmt.Sprintf("%s AS work_unit_investments", LatestWorkUnitInvestmentsSource()),
-			Where:          unitTeamWindowFilter("", ""),
-			InnerTeamAlias: "team_label",
-			IncludeTeamID:  true,
-		})
-		teamJoin = fmt.Sprintf("\n        LEFT JOIN (%s        ) AS unit_team ON unit_team.work_unit_id = work_unit_investments.work_unit_id\n        ", unitTeamSQL)
-		teamFilter = `
-          AND (
-              unit_team.team_label IN {team_scope_ids:Array(String)}
-              OR unit_team.team_id IN {team_scope_ids:Array(String)}
-          )`
-		teamBindings = append(teamBindings, clickhouse.Binding{Name: "team_scope_ids", Value: teamScopeIDs})
-	}
+	// The repository filter and the team filter must hold on the SAME repository row of a unit (a unit touching the
+	// team's repository A and a requested repository B is in neither's intersection): ONE wrap over both.
+	scopeFilter, teamBindings = unitRowsScope(orgID, scopeFilter, teamScopeIDs)
+	teamFilter := ""
 
 	sql := fmt.Sprintf(`
 SELECT
@@ -525,4 +505,21 @@ type EvidenceQualityStatsRow = investmentQualityStatsRow
 func FetchInvestmentQualityStats(ctx context.Context, client QueryClient, orgID string, startDate, endDate graphqldate.Date, scopeFilter string, scopeBindings []clickhouse.Binding, themes []string, teamScopeIDs []string) (EvidenceQualityStatsRow, bool, error) {
 	q := compileInvestmentQualityStats(orgID, startDate, endDate, scopeFilter, scopeBindings, themes, teamScopeIDs)
 	return executeInvestmentQualityStats(ctx, client, q)
+}
+
+// unitRowsScope renders the repository filter and the team filter of an evidence-quality read as ONE membership
+// over the unit's repository rows (teamscope.UnitScope): both conditions must hold on the SAME repository row, so a
+// unit touching the team's repository A and a requested repository B (not the team's) is out of "team + B". The team
+// is its OWNED repositories (teamscope.RepoCondition), never the work-item attribution vote (CHAOS-9221, D5947).
+func unitRowsScope(orgID, repoFragment string, teamIDs []string) (string, []clickhouse.Binding) {
+	combined := repoFragment
+	var bindings []clickhouse.Binding
+	if len(teamIDs) > 0 {
+		teamCondition, teamBindings := teamscope.RepoCondition(orgID, "repo_id", teamIDs, time.Now().UTC())
+		if teamCondition != "" { // ids that are all empty name no team: no scope
+			combined += " AND " + teamCondition
+			bindings = teamBindings
+		}
+	}
+	return teamscope.UnitScope(combined, LatestWorkUnitRepoEffortSource()), bindings
 }

@@ -252,6 +252,7 @@ func compileSankeyCoverage(req SankeyRequest, orgID string, timeoutSeconds int, 
 	fanoutExpr := notMeasurable
 
 	repoFilterColumn := repoCol
+	teamRepoColumn := ""
 
 	if useInvestment {
 		baseTable = fmt.Sprintf("%s AS work_unit_investments", LatestWorkUnitInvestmentsSource())
@@ -415,9 +416,12 @@ func compileSankeyCoverage(req SankeyRequest, orgID string, timeoutSeconds int, 
 		fanoutPairs := fmt.Sprintf("uniqExactIf((work_unit_investments.work_unit_id, wure.repo_id), %s)", isTeamFallback)
 		fanoutExpr = fmt.Sprintf("toNullable(if(%[1]s > 0, %[2]s / %[1]s, 0))", fanoutUnits, fanoutPairs)
 
-		// analytics.py:838 -- the repo predicate targets the RAW joined
-		// column on the investment path, not the display expression.
-		repoFilterColumn = "wure.repo_id"
+		// analytics.py:838 targets the RAW joined column wure.repo_id. CHAOS-9221 DELIBERATELY DIVERGES (rounds 135
+		// and 138): the chart reads the allocation source, where a unit with no allocation row keeps its OWN
+		// repo_id, so the repository AND team scopes of coverage read that same fallback -- one expression -- or a
+		// unit is in the chart and missing from its coverage.
+		repoFilterColumn = unitRepoExpr("wure", "work_unit_investments")
+		teamRepoColumn = repoFilterColumn
 
 		// analytics.py:820-827 (CHAOS-2492): resolve developer identity via
 		// the au join so who.developers / scope.level=developer coverage is
@@ -476,10 +480,11 @@ func compileSankeyCoverage(req SankeyRequest, orgID string, timeoutSeconds int, 
 		orgFilter = "org_id = {org_id:String}"
 	}
 
-	filterClause, err := translateFilters(filters, useInvestment, filterColumns{
-		Team:   teamCol,
-		Repo:   repoFilterColumn,
-		Author: "author_email",
+	filterClause, err := translateFilters(orgID, filters, useInvestment, filterColumns{
+		Team:     teamCol,
+		Repo:     repoFilterColumn,
+		TeamRepo: teamRepoColumn,
+		Author:   "author_email",
 		// CHAOS-5498: this is the ONE caller that never reads
 		// subcategory_kv.2 -- it needs the filter only to decide which units
 		// are in scope -- so it takes the unit-selecting predicate and skips

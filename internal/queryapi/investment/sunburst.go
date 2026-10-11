@@ -3,6 +3,7 @@ package investment
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
@@ -77,7 +78,7 @@ SELECT
     splitByChar('.', subcategory_kv.1)[1] AS theme,
     ifNull(r.repo, toString(repo_id)) AS scope,
     sum(subcategory_kv.2 * effort_value) AS value
-FROM %s AS work_unit_investments
+FROM %s
 LEFT JOIN repos AS r FINAL ON toString(r.id) = toString(repo_id) AND r.org_id = {org_id:String}
 ARRAY JOIN CAST(subcategory_distribution_json AS Array(Tuple(String, Float32))) AS subcategory_kv
 WHERE work_unit_investments.from_ts < {end_date:Date}
@@ -89,7 +90,7 @@ GROUP BY theme, subcategory, scope
 ORDER BY value DESC
 LIMIT {limit:Int64}
 %s
-`, analytics.LatestWorkUnitInvestmentsSource(), scopeSQL, categorySQL, settingsMaxExecutionTime())
+`, sunburstSource(scopeSQL), scopeSQL, categorySQL, settingsMaxExecutionTime())
 
 	// filters.Limit is bound AS GIVEN -- no clamping, no zero/negative
 	// default-substitution here. Python's own investment_sunburst query
@@ -129,4 +130,14 @@ LIMIT {limit:Int64}
 		return nil, fmt.Errorf("iterate investment sunburst rows: %w", err)
 	}
 	return results, nil
+}
+
+// sunburstSource: under a repository or team scope one row per (unit, repository) with the repository's allocated
+// effort, so a unit that touches several repositories adds each its share and the repositories sum to the unit's
+// effort (CHAOS-9221); with no scope the unit's whole effort.
+func sunburstSource(scopeSQL string) string {
+	if t := strings.TrimSpace(strings.TrimPrefix(scopeSQL, " AND ")); t != "" && t != "1 = 0" {
+		return analytics.RepoAllocationInvestmentSource()
+	}
+	return analytics.LatestWorkUnitInvestmentsSource() + " AS work_unit_investments"
 }

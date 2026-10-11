@@ -125,7 +125,7 @@ func (reader *Reader) FetchWorkUnitInvestments(ctx context.Context, filter WorkU
 	var explicitCondition string
 	var explicitBindings []dhclickhouse.Binding
 	if len(filter.RepoIDs) > 0 {
-		explicitCondition = "work_unit_investments.repo_id IN {repo_ids:Array(String)}"
+		explicitCondition = "repo_id IN {repo_ids:Array(String)}"
 		explicitBindings = []dhclickhouse.Binding{{Name: "repo_ids", Value: dedupeStrings(filter.RepoIDs)}}
 	}
 	explicitSQL := ""
@@ -133,6 +133,7 @@ func (reader *Reader) FetchWorkUnitInvestments(ctx context.Context, filter WorkU
 		explicitSQL = " AND " + explicitCondition
 	}
 	scopeSQL, scopeBindings = teamscope.NarrowRepoScope(filter.ReposNamed, explicitSQL, explicitBindings, filter.TeamScopeCondition, filter.TeamScopeBindings)
+	scopeSQL = teamscope.UnitScope(scopeSQL, analytics.LatestWorkUnitRepoEffortSource()) // the unit's repository rows, not only its own repo_id (CHAOS-9221)
 	var workUnitSQL string
 	if filter.WorkUnitID != "" {
 		workUnitSQL = " AND work_unit_investments.work_unit_id = {work_unit_id:String}"

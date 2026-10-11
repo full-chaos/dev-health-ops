@@ -236,7 +236,7 @@ func TestCanonicalOnlyCensus_BranchSites(t *testing.T) {
 // take the flag from the resolver; sankeycoverage.go carries the coverage flag.
 func censusPinnedSites() map[string]int {
 	return map[string]int{
-		"breakdown.go": 6, "catalog.go": 4, "filtertranslation.go": 9, "flowmatrix.go": 9, "investment.go": 5,
+		"breakdown.go": 6, "catalog.go": 4, "filtertranslation.go": 11, "flowmatrix.go": 9, "investment.go": 5,
 		"investmentquality.go": 4, "resolve.go": 33, "sankey.go": 5, "sankeycoverage.go": 19, "sankeygrouped.go": 6,
 		"timeseries.go": 4, "validate.go": 5,
 	}
@@ -262,6 +262,41 @@ func TestCanonicalOnlyCensus_Catalog(t *testing.T) {
 		}
 		if canonical == 0 {
 			t.Errorf("%s: the catalog did not read the canonical categorization; statements=%d", dim, len(client.statements))
+		}
+	}
+}
+
+// CHAOS-9221 / D5947: a TEAM scope is the team's OWNED repositories (the ONE shared teamscope.RepoCondition, read
+// over the unit's repository rows), in every analytics theme form: never the work-item attribution vote (`ut` /
+// unit_team). One cell per request form and dimension; a cell that reads the vote, or reads no ownership, fails.
+func TestCanonicalOnlyCensus_TeamScopeIsTheOwnedRepositories(t *testing.T) {
+	team := &model.FilterInput{Scope: &model.ScopeFilterInput{Level: model.ScopeLevelInputTeam, Ids: []string{"team-a"}}}
+	for _, cell := range censusCells() {
+		for _, dim := range []model.DimensionInput{model.DimensionInputTheme, model.DimensionInputSubcategory} {
+			name := cell.name + "/" + string(dim)
+			t.Run(name, func(t *testing.T) {
+				client := &censusClient{}
+				batch := cell.build(dim, nil)
+				batch.Filters = team
+				if _, err := ResolveSelected(context.Background(), client, "org-1", batch, EverythingSelected()); err != nil {
+					t.Fatalf("%s: %v", name, err)
+				}
+				owned := 0
+				for _, s := range client.statements {
+					// The sankey COVERAGE statement measures how much effort has an attributed team (AS assigned_team): the
+					// vote is the measurement there, a named limit (the coverage definition moves with CHAOS-9221's follow-up);
+					// its team SCOPE is still the owned repositories (asserted below).
+					if !strings.Contains(s, "AS assigned_team") && (strings.Contains(s, "unit_team") || strings.Contains(s, "ut.team_label") || strings.Contains(s, "ut.team_id")) {
+						t.Errorf("%s: a statement scopes the team by the attribution vote:\n%s", name, s)
+					}
+					if strings.Contains(s, "team_repo_ownership") && strings.Contains(s, "work_unit_repo_effort") {
+						owned++
+					}
+				}
+				if owned == 0 {
+					t.Errorf("%s: no statement scopes the team by its owned repositories over the unit's repository rows (statements=%d)", name, len(client.statements))
+				}
+			})
 		}
 	}
 }

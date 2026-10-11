@@ -25,7 +25,7 @@ type sankeyShape struct {
 	maxEdgesPerPair int
 }
 
-func compileSankeyShape(req SankeyRequest, useInvestment bool, filters *model.FilterInput) (sankeyShape, error) {
+func compileSankeyShape(orgID string, req SankeyRequest, useInvestment bool, filters *model.FilterInput) (sankeyShape, error) {
 	for _, dim := range req.Path {
 		if dim == DimensionAuthor {
 			// dbColumn would reject this per-dimension anyway, but
@@ -39,14 +39,14 @@ func compileSankeyShape(req SankeyRequest, useInvestment bool, filters *model.Fi
 		}
 	}
 
-	fc, err := translateFilters(filters, useInvestment, defaultFilterColumns())
+	fc, err := translateFilters(orgID, filters, useInvestment, defaultFilterColumns())
 	if err != nil {
 		return sankeyShape{}, err
 	}
 
 	shape := sankeyShape{fc: fc}
 	if useInvestment {
-		ictx := investmentContextFor(req.Path, needsTeamJoin(filters), needsAuthorJoin(filters))
+		ictx := investmentContextFor(req.Path, false, needsRepoAllocation(filters), needsAuthorJoin(filters))
 		shape.source, shape.alias, shape.dateFilter, shape.extraClauses = ictx.Source, ictx.Alias, ictx.DateFilter, ictx.ExtraClauses
 		shape.measureExpr, err = dbExpression(req.Measure, true, ictx.UseRepoAllocation)
 		if err != nil {
@@ -124,7 +124,7 @@ func sankeyEdgeSetID(n, i int) uint64 {
 // accepts exactly what CompileSankey accepts and rejects exactly what it
 // rejects (both read compileSankeyShape).
 func CompileSankeyGrouped(req SankeyRequest, orgID string, timeoutSeconds int, useInvestment bool, filters *model.FilterInput) (sankeyGroupedQuery, error) {
-	shape, err := compileSankeyShape(req, useInvestment, filters)
+	shape, err := compileSankeyShape(orgID, req, useInvestment, filters)
 	if err != nil {
 		return sankeyGroupedQuery{}, err
 	}

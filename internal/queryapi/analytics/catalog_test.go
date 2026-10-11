@@ -90,8 +90,8 @@ func TestCompileCatalogValues_DecisionTable(t *testing.T) {
 			[]string{"splitByChar('.', subcategory_kv.1)[1]", "work_unit_investments.org_id = {org_id:String}", "ARRAY JOIN", "GROUP BY value", "ORDER BY count DESC, value ASC"}, nil, []string{"limit", "org_id"}},
 		{"subcategory", DimensionSubcategory, 100, nil, false, []string{"subcategory_kv.1", "work_unit_investments.org_id"}, nil, nil},
 		{"work_type", DimensionWorkType, 100, nil, false, []string{"work_unit_type", "work_unit_investments.org_id"}, nil, nil},
-		{"work_type with team scope joins team", DimensionWorkType, 100, teamScope, false,
-			[]string{"ut.team_label IN {scope_ids:Array(String)}", "work_unit_investments.org_id"}, nil, []string{"scope_ids"}},
+		{"work_type with team scope is the team's owned repositories", DimensionWorkType, 100, teamScope, false,
+			[]string{"team_repo_ownership", "work_unit_repo_effort", "work_unit_investments.org_id"}, []string{"ut.team_label", "unit_team"}, []string{"team_scope_ids"}},
 		{"author rejected", DimensionAuthor, 100, nil, true, nil, nil, nil},
 	}
 	for _, tc := range cases {

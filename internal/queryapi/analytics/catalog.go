@@ -161,7 +161,7 @@ LIMIT {limit:UInt32}
 		return compiledQuery{sql: sql, bindings: []clickhouse.Binding{limitBinding, orgBinding}}, nil
 	}
 
-	fc, err := translateFilters(filters, useInvestment, defaultFilterColumns())
+	fc, err := translateFilters(orgID, filters, useInvestment, defaultFilterColumns())
 	if err != nil {
 		return compiledQuery{}, err
 	}
@@ -172,7 +172,7 @@ LIMIT {limit:UInt32}
 
 	var source, alias, extraClauses string
 	if useInvestment {
-		ictx := investmentContextFor([]Dimension{dimension}, needsTeamJoin(filters), needsAuthorJoin(filters))
+		ictx := investmentContextFor([]Dimension{dimension}, false, needsRepoAllocation(filters), needsAuthorJoin(filters))
 		source, alias, extraClauses = ictx.Source, ictx.Alias, ictx.ExtraClauses
 	} else {
 		source, alias = investmentMetricsDailyDedupSource, "investment_metrics_daily"

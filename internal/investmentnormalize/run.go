@@ -42,7 +42,7 @@ type Options struct {
 // Report is what a run counted: counts only, never a title or an id of an item. Every item read is counted
 // in exactly ONE of: NotCompleted, AlreadyCovered, NoRepoReachable, Unmapped, Unmatched, Unchanged, Rows.
 type Report struct {
-	Items           int            // distinct classification days of work items the window reads
+	Items           int            // distinct work items with a classification in the window
 	NotCompleted    int            // no work item row, or not completed on the classified day: not placeable in time
 	AlreadyCovered  int            // named in the evidence of a canonical unit: already described, left out
 	NoRepoReachable int            // no repository reachable through the entity tree (the reasons are below)
@@ -93,7 +93,6 @@ func (r Report) Lines() []string {
 	out := []string{
 		fmt.Sprintf("items read: %d", r.Items),
 		fmt.Sprintf("skipped, not completed on the classified day: %d", r.NotCompleted),
-		fmt.Sprintf("skipped, already covered by a canonical unit: %d", r.AlreadyCovered),
 		fmt.Sprintf("skipped: covered by a canonical unit: %d", r.AlreadyCovered),
 		fmt.Sprintf("skipped, no repository reachable: %d", r.NoRepoReachable),
 		fmt.Sprintf("no repository reachable: %s: %d", reasonNoLink, r.NoRepoReasons[reasonNoLink]),
@@ -220,16 +219,17 @@ WHERE w.completed_at IS NOT NULL AND toDate(w.completed_at) = c.day
 ORDER BY c.day, c.artifact_id
 SETTINGS max_execution_time = 600`
 
-// classifiedQuery counts the classification days of work items the window reads (the denominator of the
-// report: every one of them is counted in exactly one bucket).
+// classifiedQuery counts the work ITEMS the window reads: the classifier writes one row per active item per
+// day, so the denominator groups by item, not by item and day (the denominator of the report: every item is
+// counted in exactly one bucket).
 const classifiedQuery = `
 SELECT count()
 FROM (
-    SELECT artifact_id, provider, day
+    SELECT artifact_id, provider
     FROM investment_classifications_daily
     WHERE org_id = {org:String} AND artifact_type = 'work_item'
       AND day >= toDate({from:String}) AND day < toDate({to:String})
-    GROUP BY artifact_id, provider, day
+    GROUP BY artifact_id, provider
 )
 SETTINGS max_execution_time = 600`
 
@@ -536,21 +536,24 @@ func Apply(ctx context.Context, conn Conn, o Options, records []chwrite.Investme
 		return err
 	}
 	const batch = 2000
-	for start := 0; start < len(records); start += batch {
-		end := start + batch
-		if end > len(records) {
-			end = len(records)
-		}
-		if _, err := writer.WriteInvestments(ctx, o.Org, records[start:end]); err != nil {
-			return err
-		}
-	}
+	// The repository efforts go FIRST and the unit rows LAST: a plan judges "already stored" by the unit row,
+	// so a failure between the two writes leaves a unit row absent (the retry writes both again, the efforts
+	// idempotently) and never a unit row without its efforts.
 	for start := 0; start < len(efforts); start += batch {
 		end := start + batch
 		if end > len(efforts) {
 			end = len(efforts)
 		}
 		if _, err := writer.WriteRepoEffort(ctx, o.Org, efforts[start:end]); err != nil {
+			return err
+		}
+	}
+	for start := 0; start < len(records); start += batch {
+		end := start + batch
+		if end > len(records) {
+			end = len(records)
+		}
+		if _, err := writer.WriteInvestments(ctx, o.Org, records[start:end]); err != nil {
 			return err
 		}
 	}

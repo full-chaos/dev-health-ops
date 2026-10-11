@@ -154,7 +154,7 @@ func TestReportLinesCarryEveryBucketAndTheUnmatchedShare(t *testing.T) {
 	r.ByTier["native"] = 6
 	joined := strings.Join(r.Lines(), "\n")
 	for _, want := range []string{
-		"items read: 20", "skipped, not completed on the classified day: 1", "skipped, already covered by a canonical unit: 5",
+		"items read: 20", "skipped, not completed on the classified day: 1", "skipped: covered by a canonical unit: 5",
 		"skipped, no repository reachable: 2", "no repository reachable: no link: 2", "no repository reachable: all links churn 0: 0", "skipped: covered by a canonical unit: 5", "unmatched (product/general, no estimate rule): 1",
 		"already stored, not rewritten: 3", "rows (normalized): 8", "by tier: native = 6",
 		"product/general items (estimated): 4", "unmatched share of product/general: 25.0%",

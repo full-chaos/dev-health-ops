@@ -132,7 +132,10 @@ func run(ctx context.Context, env cli.Env) int {
 		out("dry run: nothing written (add --apply)")
 		return cli.ExitOK
 	}
+	// The run id is printed BEFORE the first write: a failed apply leaves rows under it, and a rollback names it.
+	out(fmt.Sprintf("apply started, run %s", options.RunID))
 	if err := Apply(ctx, conn, options, records, efforts, report); err != nil {
+		logger.Error("normalize-investment apply failed; rows of this run may exist: roll back with --rollback --run", "run", options.RunID)
 		return fail(err)
 	}
 	out(fmt.Sprintf("written: %d rows, run %s", len(records), options.RunID))

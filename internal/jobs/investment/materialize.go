@@ -433,7 +433,7 @@ func (m *Materializer) Run(ctx context.Context, cfg Config) (Stats, error) {
 	// split into "needs an LLM call" and "already has its answer". The split
 	// has to happen before any call is made, because the skip-existing lookup
 	// below is a single batched query over the whole pending set.
-	var pending []preprocessed
+	var pending, gated []preprocessed
 	outcomes := make(map[int]categorize.CategorizationOutcome, len(components))
 	all := make([]preprocessed, 0, len(components))
 	issueIDs, _, _ := collectNodeIDs(components)
@@ -499,6 +499,7 @@ func (m *Materializer) Run(ctx context.Context, cfg Config) (Stats, error) {
 		switch {
 		case result.Bundle.TextCharCount < minEvidenceChars:
 			outcomes[index] = categorize.FallbackOutcome(categorize.StatusInsufficientChars)
+			gated = append(gated, entry)
 		case result.Bundle.TextSourceCount == 0:
 			outcomes[index] = categorize.FallbackOutcome(categorize.StatusNoTextSources)
 		default:
@@ -512,12 +513,15 @@ func (m *Materializer) Run(ctx context.Context, cfg Config) (Stats, error) {
 	m.logOwnershipFallback(ctx, cfg, stats, ownershipAsOf)
 	m.logRepoAttribution(ctx, cfg, stats)
 
-	// SKIP-EXISTING. Runs only when not forced, and only over the pending set.
+	// SKIP-EXISTING. Runs only when not forced, over the pending set and the units
+	// under the evidence gate (their fallback row, CHAOS-9270).
 	skippedExisting := map[int]struct{}{}
 	skippedTerminal := 0
-	if len(pending) > 0 && !cfg.Force {
-		keys := make([]chquery.InvestmentKey, 0, len(pending))
-		for _, entry := range pending {
+	skippedFallback := 0
+	if (len(pending) > 0 || len(gated) > 0) && !cfg.Force {
+		candidates := append(append([]preprocessed(nil), pending...), gated...)
+		keys := make([]chquery.InvestmentKey, 0, len(candidates))
+		for _, entry := range candidates {
 			keys = append(keys, chquery.InvestmentKey{
 				WorkUnitID: entry.result.Investment.WorkUnitID,
 				InputHash:  entry.result.Bundle.InputHash,
@@ -534,7 +538,7 @@ func (m *Materializer) Run(ctx context.Context, cfg Config) (Stats, error) {
 		// whole request, only over the units about to be skipped. A row with no
 		// recorded count (NULL: written before the migration, or a run that did not
 		// persist snippets) is treated as complete and never checked.
-		incomplete := m.incompleteExisting(ctx, cfg.OrgID, pending, existing)
+		incomplete := m.incompleteExisting(ctx, cfg.OrgID, candidates, existing)
 		remaining := pending[:0:0]
 		for _, entry := range pending {
 			key := chquery.InvestmentKey{
@@ -553,6 +557,18 @@ func (m *Materializer) Run(ctx context.Context, cfg Config) (Stats, error) {
 			remaining = append(remaining, entry)
 		}
 		pending = remaining
+		// CHAOS-9270: a unit under the evidence gate whose latest row is the same
+		// fallback (same hash and stamp) is not written again.
+		for _, entry := range gated {
+			key := chquery.InvestmentKey{
+				WorkUnitID: entry.result.Investment.WorkUnitID,
+				InputHash:  entry.result.Bundle.InputHash,
+			}
+			if found, ok := existing[key]; ok && found.Fallback && !incomplete.has(entry.result.Investment.WorkUnitID) {
+				skippedExisting[entry.index] = struct{}{}
+				skippedFallback++
+			}
+		}
 		if incompleteErr := incomplete.err; incompleteErr != nil {
 			return Stats{}, incompleteErr
 		}
@@ -771,6 +787,7 @@ func (m *Materializer) Run(ctx context.Context, cfg Config) (Stats, error) {
 	m.logger.InfoContext(ctx, "investment materialization complete",
 		"components", stats.Components, "records", stats.Records, "quotes", stats.Quotes,
 		"skipped_existing", stats.SkippedExisting, "skipped_terminal", skippedTerminal,
+		"skipped_fallback", skippedFallback,
 		"rejected_confidences", stats.RejectedConfidences,
 		"llm", categorize.FormatFailureSummary(len(outcomes)-fallbackCount, stats.LLMFailureCounts),
 	)

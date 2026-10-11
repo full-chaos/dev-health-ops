@@ -225,8 +225,9 @@ func TestAServedDecisionRunWritesTheContractRowsForEachState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("run 2: %v", err)
 	}
-	if stats2.SkippedExisting != shadowGatePassUnits || fake.count()-before != 0 {
-		t.Errorf("run 2 skipped %d and sent %d; want %d and 0", stats2.SkippedExisting, fake.count()-before, shadowGatePassUnits)
+	// The unit under the evidence gate is skipped too (CHAOS-9270).
+	if stats2.SkippedExisting != shadowServedUnits || fake.count()-before != 0 {
+		t.Errorf("run 2 skipped %d and sent %d; want %d and 0", stats2.SkippedExisting, fake.count()-before, shadowServedUnits)
 	}
 	if row, _ := h.latestServedRow(t, "A1"); row.run != "run-1" || row.quotes != 1 {
 		t.Errorf("the ok unit was rewritten by run 2, or lost its quote: run %q quotes %d", row.run, row.quotes)

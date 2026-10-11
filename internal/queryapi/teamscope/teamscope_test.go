@@ -389,3 +389,37 @@ func TestUnitScopeRewritesAQualifiedColumnForTheInnerCopyOnly(t *testing.T) {
 		t.Fatalf("the outer keeps the unit's column, the inner reads the repository row's own:\n%s", got)
 	}
 }
+
+// TestAnyTeamRepoConditionIsTheSameStatementWithoutTheTeamFilter pins CHAOS-9264: "owned by some team" is the ONE
+// ownership statement of RepoCondition (same join, window, FINAL and catalog guard) minus the team test and its
+// binding, so a team scope and the coverage of teams can never mean different things by "owned".
+func TestAnyTeamRepoConditionIsTheSameStatementWithoutTheTeamFilter(t *testing.T) {
+	scoped, scopedBindings := RepoCondition("org-1", "repo_id", []string{"team-a"}, asOf)
+	anyTeam, anyBindings := AnyTeamRepoCondition("org-1", "repo_id", asOf)
+	teamLine := "\n      AND o.team_id IN {" + BindingTeamIDs + ":Array(String)}"
+	if !strings.Contains(scoped, teamLine) {
+		t.Fatalf("RepoCondition lost its team filter line:\n%s", scoped)
+	}
+	if strings.Contains(anyTeam, "o.team_id") || strings.Contains(anyTeam, BindingTeamIDs) {
+		t.Fatalf("AnyTeamRepoCondition carries a team filter:\n%s", anyTeam)
+	}
+	if strings.Replace(scoped, teamLine, "", 1) != anyTeam {
+		t.Fatalf("the two conditions differ by more than the team line:\nscoped:\n%s\nany:\n%s", scoped, anyTeam)
+	}
+	if !strings.Contains(anyTeam, Marker) {
+		t.Fatalf("AnyTeamRepoCondition lacks the shared marker %q", Marker)
+	}
+	names := func(bindings []dhclickhouse.Binding) []string {
+		var out []string
+		for _, b := range bindings {
+			out = append(out, b.Name)
+		}
+		return out
+	}
+	if got := names(anyBindings); len(got) != 2 || got[0] != BindingOrgID || got[1] != BindingAsOf {
+		t.Fatalf("AnyTeamRepoCondition bindings = %v, want [%s %s]", got, BindingOrgID, BindingAsOf)
+	}
+	if got := names(scopedBindings); len(got) != 3 {
+		t.Fatalf("RepoCondition bindings = %v, want three", got)
+	}
+}

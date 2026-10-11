@@ -16,7 +16,7 @@ var standardFeatures = []standardFeature{
 	{"customer_push_ingest", "team"}, {"canonical_incident_ingestion", "community"},
 	{"agent_context_runtime", "community"}, {"ask_dev", "community"},
 	{"ask_dev_contextual_entrypoints", "community"}, {"ask_dev_wave_3_1", "community"},
-	{"scheduled_jobs", "team"}, {"sso_saml", "enterprise"}, {"sso_oidc", "enterprise"},
+	{"acr_service_model", "community"}, {"scheduled_jobs", "team"}, {"sso_saml", "enterprise"}, {"sso_oidc", "enterprise"},
 	{"audit_log", "enterprise"}, {"custom_retention", "enterprise"}, {"ip_allowlist", "enterprise"},
 	{"data_export", "enterprise"}, {"multi_org", "enterprise"}, {"custom_branding", "enterprise"},
 	{"priority_support", "enterprise"}, {"byo_llm", "team"},
@@ -77,6 +77,6 @@ func DefaultLimits(tier string) (Limits, bool) {
 // sorted(EXPLICIT_PURCHASE_FEATURES | {canonical_incident_ingestion,
 // customer_push_ingest}).
 func EntitlementDecisionKeys() []string {
-	return []string{"agent_context_runtime", "ask_dev", "ask_dev_contextual_entrypoints", "ask_dev_wave_3_1",
+	return []string{"acr_service_model", "agent_context_runtime", "ask_dev", "ask_dev_contextual_entrypoints", "ask_dev_wave_3_1",
 		"canonical_incident_ingestion", "customer_push_ingest"}
 }

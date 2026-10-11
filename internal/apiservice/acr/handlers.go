@@ -110,6 +110,7 @@ func entitlementHandler(store EntitlementStore, logger *slog.Logger) http.Handle
 			body.Set("schema_version", entitlementSchemaVersion)
 			body.Set("org_id", entitlement.OrgID)
 			body.Set("agent_context_runtime", entitlement.AgentContextRuntime)
+			body.Set("acr_service_model", entitlement.ACRServiceModel)
 			writeModel(w, http.StatusOK, body)
 		case errors.Is(err, ErrOrgNotFound):
 			writeDetail(w, http.StatusNotFound, "Not found")

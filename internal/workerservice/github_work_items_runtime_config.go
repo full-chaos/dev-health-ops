@@ -3,8 +3,10 @@ package workerservice
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"strings"
+	"sync"
 
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/providersync"
@@ -30,9 +32,20 @@ func (runtimeConfig workItemsRuntimeConfig) configured() bool {
 	return runtimeConfig.statusMappingPath != "" && runtimeConfig.statusMapping != nil
 }
 
+// investmentConfigPathIgnoredWarning logs, once per process, that the deprecated investment config path is set
+// and ignored: the rule classifier it configured is gone (CHAOS-9200), and a silent no-op would leave an operator
+// believing the file still matters.
+var investmentConfigPathIgnoredWarning sync.Once
+
 func workItemsRuntimeConfigFrom(
 	cfg config.Config,
 ) (workItemsRuntimeConfig, error) {
+	if strings.TrimSpace(cfg.WorkerGithubWorkItemsInvestmentConfigPath) != "" {
+		investmentConfigPathIgnoredWarning.Do(func() {
+			slog.Warn("WORKER_GITHUB_WORK_ITEMS_INVESTMENT_CONFIG_PATH is set and ignored: the investment rule classifier was removed",
+				"setting", "WORKER_GITHUB_WORK_ITEMS_INVESTMENT_CONFIG_PATH")
+		})
+	}
 	// LoadStatusMapping tests the raw environment value, not its trimmed form.
 	// A whitespace-only override would still replace the explicit path at
 	// execution time, so reject every nonempty ambient value here.

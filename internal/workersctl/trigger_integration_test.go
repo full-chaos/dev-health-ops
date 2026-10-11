@@ -330,3 +330,61 @@ func TestManualTriggersWriteOneAuditRowOrNothing(t *testing.T) {
 		t.Fatalf("requests=%d, want still 1 -- a trigger whose audit row could not be written wrote its request", got)
 	}
 }
+
+// A second identical `investment trigger` is deduplicated: it must not report
+// "started", must exit non-zero, and must not say "enqueued". A --rerun-tag
+// makes the same org/window a new request with its own job.
+func TestInvestmentManualTriggerReportsDuplicateAndRerunTagEnqueues(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	runtime := triggerIntegrationRuntime(t, ctx, commandAuthorizer{})
+	pool := runtime.pools.Domain
+	base := []string{
+		"--org", validTriggerOrg, "--review-evidence", "testing",
+		"--reason", "operator_test", "--correlation-id", "corr-1",
+		"--from", "2026-01-01", "--to", "2026-01-31",
+	}
+
+	var stdout, stderr bytes.Buffer
+	if code := dispatchInvestmentTrigger(ctx, runtime, base, &stdout, &stderr); code != 0 ||
+		!bytes.Contains(stdout.Bytes(), []byte(`"status":"started"`)) {
+		t.Fatalf("first trigger: code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	if got := countRows(t, ctx, pool, "worker_job_outbox"); got != 1 {
+		t.Fatalf("outbox after first=%d, want 1", got)
+	}
+
+	logs := captureDefaultSlog(t)
+	stdout.Reset()
+	stderr.Reset()
+	code := dispatchInvestmentTrigger(ctx, runtime, base, &stdout, &stderr)
+	if code == 0 {
+		t.Fatalf("duplicate trigger exited 0: stdout=%q", stdout.String())
+	}
+	if bytes.Contains(stdout.Bytes(), []byte(`"status":"started"`)) || !bytes.Contains(stdout.Bytes(), []byte(`"status":"duplicate"`)) {
+		t.Fatalf("duplicate trigger must report duplicate, got stdout=%q", stdout.String())
+	}
+	if bytes.Contains(logs.Bytes(), []byte("manual investment trigger: enqueued")) {
+		t.Fatalf("duplicate trigger logged enqueued: %s", logs.String())
+	}
+	if got := countRows(t, ctx, pool, "work_graph_execution_requests"); got != 1 {
+		t.Fatalf("requests after duplicate=%d, want 1", got)
+	}
+	if got := countRows(t, ctx, pool, "worker_job_outbox"); got != 1 {
+		t.Fatalf("outbox after duplicate=%d, want 1", got)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	tagged := append(append([]string{}, base...), "--rerun-tag", "late-sync")
+	if code := dispatchInvestmentTrigger(ctx, runtime, tagged, &stdout, &stderr); code != 0 ||
+		!bytes.Contains(stdout.Bytes(), []byte(`"status":"started"`)) {
+		t.Fatalf("rerun-tag trigger: code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	if got := countRows(t, ctx, pool, "work_graph_execution_requests"); got != 2 {
+		t.Fatalf("requests after rerun tag=%d, want 2", got)
+	}
+	if got := countRows(t, ctx, pool, "worker_job_outbox"); got != 2 {
+		t.Fatalf("outbox after rerun tag=%d, want 2", got)
+	}
+}

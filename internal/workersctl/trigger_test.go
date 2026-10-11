@@ -550,3 +550,46 @@ func TestParseOptionalUTCDateRangeRejectsMalformedDates(t *testing.T) {
 		t.Fatalf("both unset should return (nil, nil, nil), got (%v, %v, %v)", from, to, err)
 	}
 }
+
+func investmentDryRunResult(t *testing.T, extra ...string) (int, map[string]any) {
+	t.Helper()
+	args := append([]string{
+		"trigger", "--org", validTriggerOrg, "--review-evidence", "testing", "--reason", "operator_test",
+		"--correlation-id", "corr-1", "--from", "2026-01-01", "--to", "2026-01-31", "--dry-run",
+	}, extra...)
+	var stdout, stderr bytes.Buffer
+	code := dispatchInvestment(context.Background(), commandRuntime(t, commandAuthorizer{}), args, &stdout, &stderr)
+	var result map[string]any
+	if code == 0 {
+		if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
+			t.Fatalf("parse: %v\n%s", err, stdout.String())
+		}
+	}
+	return code, result
+}
+
+// A rerun tag is part of the dedupe key; no tag keeps the original id.
+func TestDispatchInvestmentTriggerRerunTagChangesRequestID(t *testing.T) {
+	_, plain := investmentDryRunResult(t)
+	_, same := investmentDryRunResult(t)
+	_, tagged := investmentDryRunResult(t, "--rerun-tag", "late-sync")
+	_, other := investmentDryRunResult(t, "--rerun-tag", "second")
+	if plain["request_id"] != same["request_id"] {
+		t.Fatalf("no tag must be deterministic: %v vs %v", plain["request_id"], same["request_id"])
+	}
+	if tagged["request_id"] == plain["request_id"] || tagged["request_id"] == other["request_id"] {
+		t.Fatalf("rerun tag must change the request id: plain=%v tagged=%v other=%v",
+			plain["request_id"], tagged["request_id"], other["request_id"])
+	}
+	if tagged["rerun_tag"] != "late-sync" {
+		t.Fatalf("rerun_tag not echoed: %v", tagged)
+	}
+}
+
+func TestDispatchInvestmentTriggerRejectsBadRerunTag(t *testing.T) {
+	for _, tag := range []string{"has space", "semi;colon", "0123456789012345678901234567890123", "ü", ""} {
+		if code, _ := investmentDryRunResult(t, "--rerun-tag="+tag); code != 2 {
+			t.Fatalf("tag %q: code=%d, want 2 (invalid_request)", tag, code)
+		}
+	}
+}

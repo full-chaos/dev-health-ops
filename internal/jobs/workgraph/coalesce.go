@@ -49,6 +49,12 @@ type WriteOutcome struct {
 	// that named a window wider than the maximum lookback. Zero when the
 	// producer's own window stood.
 	BoundedWindowDays int
+	// Duplicate is true when a row with this request id already existed, so
+	// this write inserted nothing new. ExistingState is that row's state
+	// (pending, running, succeeded, ...). A caller that tells an operator a
+	// job "started" must check Duplicate first.
+	Duplicate     bool
+	ExistingState string
 }
 
 // supersedePendingSQL makes the superseded request TERMINAL before anything

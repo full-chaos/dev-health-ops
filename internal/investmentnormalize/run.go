@@ -526,6 +526,18 @@ func record(o Options, s sourceRow, allocs []allocation, tier, subcategory, them
 	}, efforts
 }
 
+// writeBatch is the number of rows of one write batch (a variable so a test can exercise a multi-batch apply).
+var writeBatch = 2000
+
+// RunIDFor is the run id of an apply: it names the organization, the window and the mapping version, never the
+// moment. A retry after a failed apply, a second apply and a later apply of the same window are the SAME run, so
+// `--rollback --run <id>` removes everything the window's applies wrote, however many batches or attempts wrote
+// it (CHAOS-9227 round 142: with a fresh id per attempt no single id owned the rows of a half-written apply).
+func RunIDFor(org string, from, to time.Time) string {
+	sum := sha256.Sum256([]byte(strings.Join([]string{org, from.UTC().Format("2006-01-02"), to.UTC().Format("2006-01-02"), MappingVersion}, "\x00")))
+	return Status + ":" + hex.EncodeToString(sum[:16])
+}
+
 // Apply writes the planned rows in batches. It refuses a window that holds an unmapped key.
 func Apply(ctx context.Context, conn Conn, o Options, records []chwrite.InvestmentRecord, efforts []chwrite.RepoEffortRecord, report Report) error {
 	if report.UnmappedTotal() > 0 {
@@ -535,7 +547,7 @@ func Apply(ctx context.Context, conn Conn, o Options, records []chwrite.Investme
 	if err != nil {
 		return err
 	}
-	const batch = 2000
+	batch := writeBatch
 	// The repository efforts go FIRST and the unit rows LAST: a plan judges "already stored" by the unit row,
 	// so a failure between the two writes leaves a unit row absent (the retry writes both again, the efforts
 	// idempotently) and never a unit row without its efforts.

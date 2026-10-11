@@ -21,13 +21,14 @@ import (
 type failingConn struct {
 	Conn
 	batches int
+	failOn  int // the batch (1-based) that fails; 0 = the second
 	failed  bool
 }
 
 func (c *failingConn) PrepareBatch(ctx context.Context, query string, opts ...driver.PrepareBatchOption) (driver.Batch, error) {
 	if strings.Contains(query, "INSERT INTO") {
 		c.batches++
-		if c.batches == 2 && !c.failed {
+		if c.batches == max(c.failOn, 2) && !c.failed {
 			c.failed = true
 			return nil, errors.New("injected failure")
 		}
@@ -132,9 +133,8 @@ VALUES (?, ?, 'work_item', 'ghpr:acme/api#6', 'github', 'product', 'general', 1.
 	if retryReport.Rows != 1 || retryReport.Unchanged != 0 || len(retryEfforts) != len(efforts) {
 		t.Fatalf("the retry plan after a failed apply: %+v, want the row planned again", retryReport)
 	}
-	// The retry is a NEW run (new run id); its effort rows replace the failed run's versions.
+	// The retry is the SAME run (the id names the window): its effort rows replace the failed attempt's versions.
 	retryWindow := window
-	retryWindow.RunID = "normalized_legacy:retry"
 	retry, retryEfforts, retryReport, err = Plan(ctx, conn, retryWindow)
 	if err != nil {
 		t.Fatal(err)
@@ -173,5 +173,98 @@ VALUES (?, ?, 'work_item', 'ghpr:acme/api#6', 'github', 'product', 'general', 1.
 	}
 	if eff := rawCount("work_unit_repo_effort"); eff != "0" {
 		t.Fatalf("a rollback by the failed run's id left %s repository effort rows", eff)
+	}
+}
+
+// CHAOS-9227 round 142: an apply that writes several batches and fails in a LATER one leaves rows under the
+// run; the retry skips what is stored and writes the rest; ONE run id owns all of it, so a rollback by that
+// id (the one the failed apply printed) removes every row, units and efforts, whichever attempt wrote them.
+func TestMultiBatchFailedApplyIsOwnedByOneRunAndRollsBackWhole(t *testing.T) {
+	old := writeBatch
+	writeBatch = 1
+	t.Cleanup(func() { writeBatch = old })
+
+	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Minute)
+	defer cancel()
+	ch, err := containers.StartClickHouse(ctx)
+	if err != nil {
+		t.Fatalf("start ClickHouse: %v", err)
+	}
+	t.Cleanup(func() { _ = ch.Close(context.Background()) })
+	chschema.Apply(ctx, t, ch)
+	options, err := stdclickhouse.ParseDSN(ch.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn, err := stdclickhouse.Open(options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+
+	const org, repo = "org-9227-batches", "92270020-9227-4227-8227-922792279227"
+	day := time.Date(2026, 3, 10, 0, 0, 0, 0, time.UTC)
+	completed := day.Add(14 * time.Hour)
+	exec := func(statement string, args ...any) {
+		t.Helper()
+		if err := conn.Exec(ctx, statement, args...); err != nil {
+			t.Fatalf("seed: %v\n%s", err, statement)
+		}
+	}
+	for _, id := range []string{"ghpr:acme/api#1", "ghpr:acme/api#2", "ghpr:acme/api#3"} {
+		exec(`INSERT INTO work_items (repo_id, work_item_id, provider, title, description, type, status, status_raw, project_key, project_id,
+ assignees, reporter, created_at, updated_at, started_at, completed_at, closed_at, labels, story_points, sprint_id, sprint_name,
+ parent_id, epic_id, url, last_synced, org_id)
+VALUES (?, ?, 'github', 'fix(api): crash', NULL, 'pr', 'done', 'Done', 'P', 'p', [], 'r', ?, ?, NULL, ?, NULL, [], NULL, '', '', '', '', '', ?, ?)`,
+			repo, id, day.AddDate(0, 0, -2), completed, completed, completed, org)
+		exec(`INSERT INTO investment_classifications_daily (repo_id, day, artifact_type, artifact_id, provider, investment_area, project_stream, confidence, rule_id, computed_at, org_id)
+VALUES (?, ?, 'work_item', ?, 'github', 'product', 'general', 1.0, 'r', ?, ?)`, repo, day, id, completed, org)
+	}
+	window := Options{Org: org, From: day.AddDate(0, 0, -1), To: day.AddDate(0, 0, 1)}
+	window.RunID = RunIDFor(org, window.From, window.To)
+	raw := func(table string) string {
+		t.Helper()
+		rows, err := conn.Query(ctx, `SELECT toString(count()) FROM `+table+` WHERE org_id = '`+org+`' AND startsWith(work_unit_id, '`+Status+`')`)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer rows.Close()
+		var out string
+		for rows.Next() {
+			if err := rows.Scan(&out); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return out
+	}
+
+	records, efforts, report, err := Plan(ctx, conn, window)
+	if err != nil || report.Rows != 3 {
+		t.Fatalf("plan = %+v, %v", report, err)
+	}
+	// Batches: 3 effort batches, then unit batches; the 5th write (the second unit batch) fails.
+	if err := Apply(ctx, &failingConn{Conn: conn, failOn: 5}, window, records, efforts, report); err == nil {
+		t.Fatal("the injected failure did not reach the apply")
+	}
+	if units := raw("work_unit_investments"); units != "1" {
+		t.Fatalf("the half-written apply left %s unit rows, want 1 (one batch of one row was written)", units)
+	}
+	// The retry is a new plan: the stored unit is skipped, the other two are written, under the SAME run id.
+	records, efforts, report, err = Plan(ctx, conn, window)
+	if err != nil || report.Rows != 2 || report.Unchanged != 1 {
+		t.Fatalf("retry plan = %+v, %v; want 2 rows to write and 1 already stored", report, err)
+	}
+	if err := Apply(ctx, conn, window, records, efforts, report); err != nil {
+		t.Fatal(err)
+	}
+	if units := raw("work_unit_investments"); units != "3" {
+		t.Fatalf("after the retry: %s unit rows, want 3", units)
+	}
+	// The run id the failed apply printed owns EVERY row: one rollback removes all of them.
+	if err := Rollback(ctx, conn, org, window.RunID); err != nil {
+		t.Fatal(err)
+	}
+	if units, eff := raw("work_unit_investments"), raw("work_unit_repo_effort"); units != "0" || eff != "0" {
+		t.Fatalf("after the rollback by the run id: unit rows %s, effort rows %s, want 0 and 0", units, eff)
 	}
 }

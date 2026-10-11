@@ -233,3 +233,23 @@ func TestRecordSplitsTheEffortSoTheRepositoriesSumToTheItem(t *testing.T) {
 		t.Errorf("a changed split keeps the input hash")
 	}
 }
+
+func TestRunIDForNamesTheWindowNotTheMoment(t *testing.T) {
+	from, to := time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC), time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC)
+	id := RunIDFor("org", from, to)
+	if again := RunIDFor("org", from.Add(5*time.Hour), to.Add(7*time.Hour)); again != id {
+		t.Errorf("the same days run as %q and %q", id, again)
+	}
+	if !strings.HasPrefix(id, Status+":") {
+		t.Errorf("run id %q lacks the provenance prefix", id)
+	}
+	for name, other := range map[string]string{
+		"another organization": RunIDFor("org2", from, to),
+		"another first day":    RunIDFor("org", from.AddDate(0, 0, 1), to),
+		"another last day":     RunIDFor("org", from, to.AddDate(0, 0, 1)),
+	} {
+		if other == id {
+			t.Errorf("%s keeps the run id %q", name, id)
+		}
+	}
+}

@@ -192,6 +192,9 @@ VALUES ('wu-jev', ?, ?, ?, 'churn_loc', 10, ?, ?, ?, 0.8, 'high', 'ok', 'jev-tes
 	rawBefore := str(`SELECT toString(count()) FROM work_unit_investments WHERE org_id = '` + org + `' AND categorization_status = '` + Status + `'`)
 	effortBefore := str(`SELECT toString(count()) FROM work_unit_repo_effort WHERE org_id = '` + org + `' AND startsWith(work_unit_id, '` + Status + `')`)
 	second := runCLI(append(append([]string{}, window...), "--apply")...)
+	if secondRun := runID(second); secondRun != firstRun {
+		t.Errorf("the second apply of the same window ran as %q, want the SAME run id %q (a retry or a later apply must be owned by the id the first printed)", secondRun, firstRun)
+	}
 	if !strings.Contains(second, "written: 0 rows") || !strings.Contains(second, "already stored, not rewritten: 2") {
 		t.Errorf("the second apply = %q, want 0 rows written and 2 already stored", second)
 	}

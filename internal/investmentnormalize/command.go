@@ -8,8 +8,6 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/google/uuid"
-
 	"github.com/full-chaos/dev-health-ops/internal/cli"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
@@ -41,8 +39,10 @@ units' rule; the sum of the repositories is the item's effort). Left out and cou
 already names in its evidence, items with no reachable repository, and product/general items no estimate rule
 matches. The default is a DRY RUN that prints counts only; --apply writes. A window with a legacy key the
 mapping table does not hold is refused. A second apply writes nothing for a row that is already stored
-identically (same id, input and mapping version); --rollback --run <the first run id> then restores the
-before-state. --rollback counts (and with --apply deletes) the normalized rows of the organization, or of one --run.
+identically (same id, input and mapping version). The run id names the organization, the window and the
+mapping version, so a retry after a failed apply, a second apply and a later apply of the same window share
+it: --rollback --run <that id> removes everything the window's applies wrote and restores the before-state.
+--rollback counts (and with --apply deletes) the normalized rows of the organization, or of one --run.
 
 Environment:
   CLICKHOUSE_URI (or _FILE, or the DEV_HEALTH_CH_* component form)   ClickHouse DSN, native protocol
@@ -120,7 +120,7 @@ func run(ctx context.Context, env cli.Env) int {
 		}
 		return cli.ExitOK
 	}
-	options := Options{Org: *org, From: start, To: end, RunID: "normalized_legacy:" + uuid.NewString()}
+	options := Options{Org: *org, From: start, To: end, RunID: RunIDFor(*org, start, end)}
 	records, efforts, report, err := Plan(ctx, conn, options)
 	if err != nil {
 		return fail(err)

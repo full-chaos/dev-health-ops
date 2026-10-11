@@ -124,6 +124,7 @@ FROM (
         argMax(work_unit_name, computed_at) AS py_name, (argMax(tuple(work_unit_name), computed_at)).1 AS go_name
     FROM work_unit_investments
     WHERE org_id = {org_id:String}
+      AND categorization_status != 'normalized_legacy'
     GROUP BY work_unit_id
     HAVING count() > 1
 )

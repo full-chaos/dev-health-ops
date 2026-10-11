@@ -57,8 +57,7 @@ func resolveMembershipMarkerLagAlertBound(lookup func(string) (string, bool)) (t
 // latestInvestmentComputedAtQuery reads the SAME quantity
 // internal/queryapi/analytics's own latestInvestmentClockSource()
 // (investmentmembershipscope.go) reads on the query-api read side --
-// max(computed_at) over the work_unit_investments rows of one org that are
-// units of the projection (not the normalized_legacy estimates, CHAOS-9227) -- so this
+// max(computed_at) over work_unit_investments for one org -- so this
 // write-side check observes the identical clock the read-side scope gate
 // already compares the marker against, not a close-but-different one.
 // maxOrNull rather than plain max: computed_at is not Nullable, so a plain
@@ -72,7 +71,6 @@ const latestInvestmentComputedAtQuery = `
 	SELECT maxOrNull(computed_at)
 	FROM work_unit_investments
 	WHERE org_id = {org_id:String}
-	  AND categorization_status != 'normalized_legacy'
 `
 
 // membershipMarkerLagResult carries both timestamps the decision was made

@@ -21,7 +21,6 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/backfillrun"
 	"github.com/full-chaos/dev-health-ops/internal/cli"
-	"github.com/full-chaos/dev-health-ops/internal/investmentnormalize"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
 	"github.com/full-chaos/dev-health-ops/internal/platform/secrets"
@@ -34,7 +33,7 @@ func Command() cli.Command {
 		Name:    "backfill",
 		Summary: "historical backfill operations",
 		Kind:    cli.Group,
-		Children: []cli.Command{backfillrun.Verb(), investmentnormalize.Verb(), {
+		Children: []cli.Command{backfillrun.Verb(), {
 			Name:    "operational",
 			Summary: "migrate legacy Atlassian Ops rows into the canonical operational tables",
 			Kind:    cli.Verb,

@@ -14,6 +14,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/activeteams"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph/model"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/scopelabel"
 	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse/liverow"
 )
 
@@ -434,8 +435,10 @@ func nameFlowOpportunities(ctx context.Context, client QueryClient, orgID string
 		switch opps[i].EntityType {
 		case "repo":
 			opps[i].EntityDisplayName = catalogue.repoName(id)
+			opps[i].Title = nameTitle(opps[i].Title, id, opps[i].EntityDisplayName, scopelabel.UnnamedRepository)
 		case "team":
 			opps[i].EntityDisplayName = catalogue.teamName(&id)
+			opps[i].Title = nameTitle(opps[i].Title, id, opps[i].EntityDisplayName, scopelabel.UnnamedTeam)
 		}
 	}
 }

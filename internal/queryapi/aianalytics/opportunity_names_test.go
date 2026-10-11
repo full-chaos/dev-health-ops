@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/scopelabel"
 	"reflect"
 	"strings"
 	"testing"
@@ -313,6 +314,7 @@ func TestAiOpportunities_NamesChangeNothingElse(t *testing.T) {
 		for _, o := range out {
 			delete(o, "repoName")
 			delete(o, "teamName")
+			delete(o, "title") // the title carries the name (D5945): asserted by TestOpportunityTitlesNeverCarryAnId
 		}
 		return out
 	}
@@ -329,5 +331,106 @@ func TestAiOpportunities_NamesChangeNothingElse(t *testing.T) {
 	named := runOpportunities(t, namesClientD(t, "ai/everything"))
 	if len(named) == 0 || !reflect.DeepEqual(strip(named), strip(bare)) {
 		t.Fatalf("the names changed the answer:\nwith names    %v\nwithout names %v", strip(named), strip(bare))
+	}
+}
+
+// D5945 / D5428: a served opportunity title never carries an id. Named: the name; not named (or a name equal to
+// its own id): the unnamed wording.
+func TestOpportunityTitlesNeverCarryAnId(t *testing.T) {
+	bare := runOpportunities(t, &fixtureClientD{c: loadDCases(t)["ai/everything"]})
+	named := runOpportunities(t, namesClientD(t, "ai/everything"))
+	if len(bare) == 0 || len(bare) != len(named) {
+		t.Fatalf("recorded case holds %d / %d opportunities", len(bare), len(named))
+	}
+	sawName := false
+	for i := range bare {
+		if id := *bare[i].RepoID; strings.Contains(bare[i].Title, id) || !strings.HasSuffix(bare[i].Title, scopelabel.UnnamedRepository) {
+			t.Errorf("unnamed title %q must end in %q and hold no id %q", bare[i].Title, scopelabel.UnnamedRepository, id)
+		}
+		id := *named[i].RepoID
+		if strings.Contains(named[i].Title, id) {
+			t.Errorf("named title %q carries the id %q", named[i].Title, id)
+		}
+		if named[i].RepoName != nil {
+			sawName = true
+			if !strings.HasSuffix(named[i].Title, *named[i].RepoName) {
+				t.Errorf("named title %q does not end in the repository name %q", named[i].Title, *named[i].RepoName)
+			}
+		}
+	}
+	if !sawName {
+		t.Fatal("no recorded opportunity got a repository name: the test proves nothing")
+	}
+}
+
+func TestNameTitle(t *testing.T) {
+	id := "11111111-1111-4111-8111-111111111111"
+	name, same := "acme/alpha", id
+	cases := []struct {
+		title string
+		name  *string
+		want  string
+	}{
+		{"High rework churn in " + id, &name, "High rework churn in acme/alpha"},
+		{"High rework churn in " + id, nil, "High rework churn in a repository"},
+		{"High rework churn in " + id, &same, "High rework churn in a repository"}, // a name equal to the id is no name
+		{"No id at the end", &name, "No id at the end"},
+	}
+	for _, c := range cases {
+		if got := nameTitle(c.title, id, c.name, scopelabel.UnnamedRepository); got != c.want {
+			t.Errorf("nameTitle(%q) = %q, want %q", c.title, got, c.want)
+		}
+	}
+}
+
+// The seven flow titles (D5945), on the recorded case holding repository and team entities: a named entity
+// shows its name, an unnamed one the wording, none shows its id.
+func TestFlowOpportunityTitlesNeverCarryAnId(t *testing.T) {
+	c, ok := loadDCases(t)["flow/repoUuid"]
+	if !ok {
+		t.Fatal("no recorded case flow/repoUuid")
+	}
+	client := &fixtureClientD{
+		c:              c,
+		catalogueRepos: [][]any{{"11111111-1111-1111-1111-111111111111", "acme/alpha"}},
+		catalogueTeams: [][]any{{"team-a", "Team A", []string{"acme/alpha"}}},
+	}
+	var in *model.AIScopeInput
+	if c.Scope != nil {
+		in = &model.AIScopeInput{RepoID: c.Scope.RepoID, TeamID: c.Scope.TeamID}
+	}
+	got, err := FlowOpportunities(context.Background(), client, "org-1", in, c.Limit, c.Window)
+	if err != nil {
+		t.Fatal(err)
+	}
+	named, unnamedSeen := 0, 0
+	for _, o := range got.Opportunities {
+		if strings.Contains(o.Title, o.EntityID) {
+			t.Errorf("title %q carries the id %q", o.Title, o.EntityID)
+		}
+		switch {
+		case o.EntityDisplayName != nil:
+			named++
+			if !strings.HasSuffix(o.Title, *o.EntityDisplayName) {
+				t.Errorf("title %q does not end in the name %q", o.Title, *o.EntityDisplayName)
+			}
+		case o.EntityType == "team":
+			unnamedSeen++
+			if !strings.HasSuffix(o.Title, scopelabel.UnnamedTeam) {
+				t.Errorf("unnamed team title %q must end in %q", o.Title, scopelabel.UnnamedTeam)
+			}
+		default:
+			unnamedSeen++
+			if !strings.HasSuffix(o.Title, scopelabel.UnnamedRepository) {
+				t.Errorf("unnamed repository title %q must end in %q", o.Title, scopelabel.UnnamedRepository)
+			}
+		}
+		// The key stays the id: the id is in the machine fields and the evidence refs.
+		if o.EntityID == "" || len(o.EvidenceRefs) == 0 || !strings.HasSuffix(o.EvidenceRefs[0], o.EntityID) {
+			t.Errorf("the machine fields of %q lost the id (entityId %q, refs %v)", o.Title, o.EntityID, o.EvidenceRefs)
+		}
+	}
+	if named == 0 || unnamedSeen == 0 {
+		t.Fatalf("the case must hold named and unnamed entities (named %d, unnamed %d)", named, unnamedSeen)
 	}
 }

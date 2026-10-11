@@ -12,6 +12,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/api/pytime"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/deltarule"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/scopelabel"
 	"regexp"
 	"sort"
 	"strconv"
@@ -125,8 +126,8 @@ func formatDeltaWords(deltaPct float64) string {
 const (
 	scopeUnnamedPrefix        = "the selected "
 	scopeOtherPrefix          = "other "
-	recommendationUnnamedTeam = "a team"
-	riskUnnamedRepository     = "a repository"
+	recommendationUnnamedTeam = scopelabel.UnnamedTeam
+	riskUnnamedRepository     = scopelabel.UnnamedRepository
 )
 
 // scopeNouns is the singular and plural noun of each scope level.

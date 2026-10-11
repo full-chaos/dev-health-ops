@@ -6,7 +6,7 @@
 // one query per edge pair) return, for every request in an enumerated
 // domain -- every ordered path of two and three dimensions, a set of
 // four-dimension paths, both source planes (investment and
-// investment_metrics_daily), two measures, limits that truncate and
+// work_item_completion_daily), two measures, limits that truncate and
 // limits that do not, and with and without a theme filter. The seed
 // holds ties, NULL team keys, unassigned teams and repos, multi-repo
 // allocation and multi-subcategory units, so truncation order, NULL
@@ -90,15 +90,15 @@ func seedGroupedSankey(t *testing.T, ctx context.Context, conn stdclickhouse.Con
         (toUUID('%[3]s'), '', NULL, toDateTime64('%[4]s', 3, 'UTC'), NULL, NULL, toDateTime64('%[4]s', 3, 'UTC'), '%[5]s', 'github', NULL)`,
 		seededCoverageRepo1, seededCoverageRepo2, seededCoverageRepo3, ts, groupedSankeyOrg))
 
-	// investment_metrics_daily: the non-investment plane. team_id is
-	// Nullable -- one row carries a real NULL, one an empty string.
-	exec("investment_metrics_daily", fmt.Sprintf(`INSERT INTO investment_metrics_daily
-        (repo_id, day, team_id, investment_area, project_stream, delivery_units, work_items_completed, prs_merged, churn_loc, cycle_p50_hours, computed_at, org_id) VALUES
-        (toUUID('%[1]s'), toDate('2026-01-05'), 't1', 'feature', 'ps1', 1, 5, 1, 10, 2.0, now(), '%[4]s'),
-        (toUUID('%[2]s'), toDate('2026-01-05'), '', 'feature', 'ps2', 1, 7, 1, 30, 2.0, now(), '%[4]s'),
-        (toUUID('%[3]s'), toDate('2026-01-05'), 't3', 'bug', 'ps3', 1, 3, 1, 10, 2.0, now(), '%[4]s'),
-        (toUUID('%[1]s'), toDate('2026-01-06'), NULL, 'bug', 'ps1', 1, 3, 1, 20, 2.0, now(), '%[4]s'),
-        (NULL, toDate('2026-01-06'), 't1', 'chore', 'ps2', 1, 5, 1, 10, 2.0, now(), '%[4]s')`,
+	// work_item_completion_daily: the non-investment plane. team_id is a plain String (the writer stores the
+	// unassigned team as an empty string): two rows carry the empty team.
+	exec("work_item_completion_daily", fmt.Sprintf(`INSERT INTO work_item_completion_daily
+        (repo_id, day, team_id, delivery_units, work_items_completed, prs_merged, churn_loc, cycle_p50_hours, computed_at, org_id) VALUES
+        (toUUID('%[1]s'), toDate('2026-01-05'), 't1', 1, 5, 1, 10, 2.0, now(), '%[4]s'),
+        (toUUID('%[2]s'), toDate('2026-01-05'), '', 1, 7, 1, 30, 2.0, now(), '%[4]s'),
+        (toUUID('%[3]s'), toDate('2026-01-05'), 't3', 1, 3, 1, 10, 2.0, now(), '%[4]s'),
+        (toUUID('%[1]s'), toDate('2026-01-06'), '', 1, 3, 1, 20, 2.0, now(), '%[4]s'),
+        (NULL, toDate('2026-01-06'), 't1', 1, 5, 1, 10, 2.0, now(), '%[4]s')`,
 		seededCoverageRepo1, seededCoverageRepo2, seededCoverageRepo3, groupedSankeyOrg))
 }
 
@@ -184,7 +184,7 @@ func TestSankeyGrouped_SeededRealClickHouse_EqualsPerDimensionQueries(t *testing
 		t.Fatalf("open raw ClickHouse connection: %v", err)
 	}
 	defer func() { _ = conn.Close() }()
-	for _, stmt := range splitSQLStatements(seededQualitySchemaDDL + seededCoverageExtraDDL + investmentMetricsDailyDDL) {
+	for _, stmt := range splitSQLStatements(seededQualitySchemaDDL + seededCoverageExtraDDL + workItemCompletionDailyDDL) {
 		if err := conn.Exec(ctx, stmt); err != nil {
 			t.Fatalf("exec DDL %q: %v", stmt, err)
 		}

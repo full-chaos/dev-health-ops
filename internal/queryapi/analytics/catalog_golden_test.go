@@ -184,6 +184,7 @@ func TestCatalogMatchesTheFrozenGolden(t *testing.T) {
 				if timeout, ok := tc.PyParams[i]["timeout"].(float64); ok {
 					want = strings.ReplaceAll(want, "%(timeout)s", jsonNumberText(timeout))
 				}
+				want = declaredCompletionSourceDivergence(want)
 				investment := tc.Dim != nil && (*tc.Dim == "WORK_TYPE" || *tc.Dim == "THEME" || *tc.Dim == "SUBCATEGORY")
 				if text != want && !investment {
 					t.Errorf("query text differs:\n got  %s\n want %s", text, want)
@@ -283,4 +284,21 @@ func catalogCamelDeep(v any) any {
 		return out
 	}
 	return v
+}
+
+// declaredCompletionSourceDivergence is the ONE declared divergence of the catalog text from the frozen Python text
+// (CHAOS-9264, chris 2026-10-11: no rule-based classification is stored or read): the non-investment source is
+// work_item_completion_daily, which has no investment_area or project_stream column, instead of
+// investment_metrics_daily. Only the fragments of that source are rewritten, mechanically, in the frozen text; every
+// other byte of the statement is still compared with the frozen Python statement. The golden file is not edited.
+func declaredCompletionSourceDivergence(frozen string) string {
+	for _, rewrite := range [][2]string{
+		{"team_id, investment_area, project_stream, argMax(", "team_id, argMax("},
+		{"FROM investment_metrics_daily WHERE", "FROM work_item_completion_daily WHERE"},
+		{"GROUP BY org_id, day, repo_id, team_id, investment_area, project_stream )", "GROUP BY org_id, day, repo_id, team_id )"},
+		{") AS investment_metrics_daily", ") AS work_item_completion_daily"},
+	} {
+		frozen = strings.ReplaceAll(frozen, rewrite[0], rewrite[1])
+	}
+	return frozen
 }

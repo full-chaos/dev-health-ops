@@ -1466,22 +1466,19 @@ func dailyNativeFamilyRegistrations(
 	}
 	if workItemEngines.err != nil {
 		refuseWorkItemEngineFamily(daily.WorkItemIssueTypeFamilyName, workItemEngines.err)
-		refuseWorkItemEngineFamily(daily.WorkItemInvestmentFamilyName, workItemEngines.err)
+	} else if issueTypeExecutor, issueTypeErr := daily.NewWorkItemIssueTypeExecutor(
+		clickhouseConnection, workItemEngines.typeNormalizer,
+	); issueTypeErr == nil {
+		native[daily.WorkItemIssueTypeFamilyName] = issueTypeExecutor
 	} else {
-		if issueTypeExecutor, issueTypeErr := daily.NewWorkItemIssueTypeExecutor(
-			clickhouseConnection, workItemEngines.typeNormalizer,
-		); issueTypeErr == nil {
-			native[daily.WorkItemIssueTypeFamilyName] = issueTypeExecutor
-		} else {
-			refuseWorkItemEngineFamily(daily.WorkItemIssueTypeFamilyName, issueTypeErr)
-		}
-		if investmentExecutor, investmentErr := daily.NewWorkItemInvestmentExecutor(
-			clickhouseConnection, workItemEngines.investmentClassifier,
-		); investmentErr == nil {
-			native[daily.WorkItemInvestmentFamilyName] = investmentExecutor
-		} else {
-			refuseWorkItemEngineFamily(daily.WorkItemInvestmentFamilyName, investmentErr)
-		}
+		refuseWorkItemEngineFamily(daily.WorkItemIssueTypeFamilyName, issueTypeErr)
+	}
+	// The completion family (work_item_completion_daily, CHAOS-9264) needs no config-driven engine: it does not
+	// classify, so a status-mapping load failure no longer refuses it.
+	if investmentExecutor, investmentErr := daily.NewWorkItemInvestmentExecutor(clickhouseConnection); investmentErr == nil {
+		native[daily.WorkItemInvestmentFamilyName] = investmentExecutor
+	} else {
+		refuseWorkItemEngineFamily(daily.WorkItemInvestmentFamilyName, investmentErr)
 	}
 	return native, postBridge, finalize, refusals
 }

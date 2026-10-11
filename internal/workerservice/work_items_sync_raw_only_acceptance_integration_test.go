@@ -598,8 +598,8 @@ func TestARefusedEngineFamilyLeavesItsTablesEmptyAfterASyncAndIsLoggedAndCounted
 	if failFast := reportDailyFamilyRefusals(logger, refusals); len(failFast) != 0 {
 		t.Fatalf("refusals that fail the worker: %v, want none", failFast)
 	}
-	engineFamilies := []string{daily.WorkItemIssueTypeFamilyName, daily.WorkItemInvestmentFamilyName}
-	servedFamilies := []string{"work_item", "work_item_attribution", "work_item_estimate", "work_item_state"}
+	engineFamilies := []string{daily.WorkItemIssueTypeFamilyName}
+	servedFamilies := []string{"work_item", "work_item_attribution", "work_item_estimate", "work_item_state", daily.WorkItemInvestmentFamilyName}
 	for _, family := range engineFamilies {
 		if _, registered := base.registers[family]; registered {
 			t.Fatalf("family %q is registered with no engine", family)

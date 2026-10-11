@@ -73,7 +73,9 @@ func TestWorkItemEngineFamilyRefusalDoesNotTakeDownTheDailyWorker(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	engineFamilies := []string{daily.WorkItemIssueTypeFamilyName, daily.WorkItemInvestmentFamilyName}
+	// The issue-type family needs the status mapping; the completion family (work_item_investment, CHAOS-9264)
+	// classifies nothing and needs no engine artifact, so it is constructed whatever the artifact state.
+	engineFamilies := []string{daily.WorkItemIssueTypeFamilyName}
 
 	type bootResult struct {
 		constructed []string
@@ -194,7 +196,7 @@ func TestWorkItemEngineFamilyRefusalDoesNotTakeDownTheDailyWorker(t *testing.T) 
 		// The siblings: the three other work-item families, and one family of
 		// another domain. An empty list would make the blast-radius claim
 		// vacuous, so each one is required by name.
-		for _, sibling := range []string{"work_item", "work_item_state", "work_item_attribution", "cicd"} {
+		for _, sibling := range []string{"work_item", "work_item_state", "work_item_attribution", "cicd", daily.WorkItemInvestmentFamilyName} {
 			if !slices.Contains(result.constructed, sibling) {
 				t.Errorf("family %q was not constructed; a refusal of %v must not "+
 					"take down a family whose own dependencies are healthy: %v",

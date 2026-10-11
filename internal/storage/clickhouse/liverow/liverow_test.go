@@ -83,9 +83,9 @@ func TestEveryRegistryTableHasARuleOrAReason(t *testing.T) {
 	}
 	want := []string{
 		"ai_governance_coverage_daily", "compounding_risk_daily", "ic_landscape_rolling_30d",
-		"investment_metrics_daily", "issue_type_metrics_daily",
+		"issue_type_metrics_daily",
 		"team_cognitive_load_daily", "team_complexity_daily", "team_metrics_daily",
-		"user_metrics_daily", "work_item_metrics_daily", "work_item_state_durations_daily",
+		"user_metrics_daily", "work_item_completion_daily", "work_item_metrics_daily", "work_item_state_durations_daily",
 		"work_item_user_metrics_daily",
 	}
 	if got := Tables(); !reflect.DeepEqual(got, want) {

@@ -21,7 +21,7 @@ var teamKeyedTables = map[string]bool{
 	"work_item_metrics_daily":         true,
 	"work_item_state_durations_daily": true,
 	"team_metrics_daily":              true,
-	"investment_metrics_daily":        true,
+	"work_item_completion_daily":      true,
 	"issue_type_metrics_daily":        true,
 	"ic_landscape_rolling_30d":        true,
 }

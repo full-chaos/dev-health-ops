@@ -119,10 +119,12 @@ var workItemEngineDailyFamilies = []string{
 }
 
 // TestDailyWorkItemEngineFamiliesRefuseWithTheEngineLoadError: an engine that
-// cannot be loaded must not leave the two families quietly off the map, and
-// must not take the worker down. Both are reported refused with the load
-// error, both refusals are scoped and counted with the refused outcome, and
-// every other family is unaffected.
+// cannot be loaded must not leave the issue-type family quietly off the map,
+// and must not take the worker down. It is reported refused with the load
+// error, the refusal is scoped and counted with the refused outcome, and every
+// other family is unaffected. The completion family (work_item_investment,
+// CHAOS-9264) does not classify and needs no engine: it registers whatever
+// the engine load did.
 func TestDailyWorkItemEngineFamiliesRefuseWithTheEngineLoadError(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	observer := &recordingNativeFamilyObserver{}
@@ -143,22 +145,27 @@ func TestDailyWorkItemEngineFamiliesRefuseWithTheEngineLoadError(t *testing.T) {
 		refused[refusal.family] = refusal
 	}
 	observed := refusedOutcomesByFamily(observer)
-	for _, family := range workItemEngineDailyFamilies {
-		if _, registered := native[family]; registered {
-			t.Errorf("family %q registered with no engine", family)
-		}
-		if !errors.Is(refused[family].err, engines.err) {
-			t.Errorf("family %q refusal = %v, want the engine load error %v", family, refused[family].err, engines.err)
-		}
-		if !refused[family].scoped {
-			t.Errorf("family %q refusal is not scoped: it would fail the whole daily worker", family)
-		}
-		if observed[family] != 1 {
-			t.Errorf("family %q refused outcome observed %d times, want 1: the refusal has no counter", family, observed[family])
-		}
+	family := daily.WorkItemIssueTypeFamilyName
+	if _, registered := native[family]; registered {
+		t.Errorf("family %q registered with no engine", family)
 	}
-	if len(refusals) != 2 {
-		t.Errorf("refusals = %d, want only the two engine families: %v", len(refusals), refused)
+	if !errors.Is(refused[family].err, engines.err) {
+		t.Errorf("family %q refusal = %v, want the engine load error %v", family, refused[family].err, engines.err)
+	}
+	if !refused[family].scoped {
+		t.Errorf("family %q refusal is not scoped: it would fail the whole daily worker", family)
+	}
+	if observed[family] != 1 {
+		t.Errorf("family %q refused outcome observed %d times, want 1: the refusal has no counter", family, observed[family])
+	}
+	if _, registered := native[daily.WorkItemInvestmentFamilyName]; !registered {
+		t.Errorf("family %q is not registered: it needs no engine and must not follow the engine load error", daily.WorkItemInvestmentFamilyName)
+	}
+	if _, refused := refused[daily.WorkItemInvestmentFamilyName]; refused {
+		t.Errorf("family %q was refused with no engine need", daily.WorkItemInvestmentFamilyName)
+	}
+	if len(refusals) != 1 {
+		t.Errorf("refusals = %d, want only the issue-type family: %v", len(refusals), refused)
 	}
 	if _, ok := native["work_item"]; !ok {
 		t.Error("a missing engine took the work_item family down with it")

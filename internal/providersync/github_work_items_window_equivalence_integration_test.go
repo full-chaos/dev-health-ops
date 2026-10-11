@@ -355,23 +355,30 @@ INSERT INTO public.sync_run_units (
 // route (raw rows and ai_attribution) and the nine tables the daily families
 // compute from stored rows.
 func windowEquivalenceTables() []string {
-	return append(githubWorkItemRouteDestinations(), githubWorkItemDerivedDestinations...)
+	return append(githubWorkItemRouteDestinations(), windowEquivalenceDerivedTables()...)
+}
+
+// windowEquivalenceDerivedTables are the derived tables the daily families still write and the full-sync store
+// derives too. investment_classifications_daily and investment_metrics_daily are not here: the rule classifier is no
+// longer run by the daily family (CHAOS-9264), which writes work_item_completion_daily, a table the full-sync
+// deriver does not produce.
+func windowEquivalenceDerivedTables() []string {
+	var tables []string
+	for _, destination := range githubWorkItemDerivedDestinations {
+		if destination == "investment_classifications_daily" || destination == "investment_metrics_daily" {
+			continue
+		}
+		tables = append(tables, destination)
+	}
+	return tables
 }
 
 // windowEquivalenceAppendOnlyKeys names, for each compared table that is a
 // plain (append-only) MergeTree and is written again by a later run of the
 // daily job, the key its readers take the newest computed_at of. The keys are the
-// GROUP BY of the production readers: investment_metrics_daily in
-// internal/queryapi/analytics/timeseries.go (investmentMetricsDailyDedupSource),
-// internal/queryapi/home/queries_freshness.go (fetchReworkThemeAllocation) and
-// internal/queryapi/operatingreview/operatingreview.go (fetchInvestment);
-// issue_type_metrics_daily has one reader, a DISTINCT of issue_type_norm, for
-// which the table's own row key is the key. investment_classifications_daily
-// has no reader: its key here is the item and the day.
+// GROUP BY of the production readers: issue_type_metrics_daily has one reader, a DISTINCT of issue_type_norm, for
 var windowEquivalenceAppendOnlyKeys = map[string]string{
-	"issue_type_metrics_daily":         "org_id, day, repo_id, provider, team_id, issue_type_norm",
-	"investment_metrics_daily":         "org_id, day, repo_id, team_id, investment_area, project_stream",
-	"investment_classifications_daily": "org_id, day, repo_id, artifact_type, artifact_id",
+	"issue_type_metrics_daily": "org_id, day, repo_id, provider, team_id, issue_type_norm",
 }
 
 // readWindowEquivalenceTables returns every row of every compared table as
@@ -729,7 +736,7 @@ FROM work_item_transitions WHERE org_id = ?`, windowEquivalenceOrgID, windowEqui
 	// The precondition of the equality below: the families wrote rows of the
 	// day in each of the nine tables. Two stores with no row of the day would
 	// be equal for no reason.
-	for _, destination := range githubWorkItemDerivedDestinations {
+	for _, destination := range windowEquivalenceDerivedTables() {
 		if dayRowsAfterJob[destination] == 0 {
 			t.Errorf("after the daily families %s has no row of the day in the hourly store (rows of the day by table: %v)",
 				destination, dayRowsAfterJob)

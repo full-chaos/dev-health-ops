@@ -104,10 +104,8 @@ func translateWorkCategoryFilter(categories []string, useInvestment bool, column
 			bindings: []clickhouse.Binding{{Name: "work_categories", Value: categories}},
 		}
 	}
-	return filterClause{
-		sql:      " AND investment_area IN {work_categories:Array(String)}",
-		bindings: []clickhouse.Binding{{Name: "work_categories", Value: categories}},
-	}
+	// Not reachable: translateFilters refuses a work-category filter on the non-investment path.
+	return emptyFilterClause()
 }
 
 // translateRepoFilter ports translate_repo_filter (filter_translation.py:118-134).
@@ -234,6 +232,13 @@ func translateFilters(orgID string, filters *model.FilterInput, useInvestment bo
 		bindings = append(bindings, clause.bindings...)
 	}
 
+	if filters.Why != nil && len(filters.Why.WorkCategory) > 0 && !useInvestment {
+		// CHAOS-9264: the work category was the retired rule classifier's investment_area on this path. The categories
+		// are the canonical themes of the categorization now, which only the investment path reads.
+		return filterClause{}, newValidationError("why", "workCategory",
+			"work-category filtering requires an investment query; "+
+				"pass useInvestment=true or remove the work-category filter.")
+	}
 	if filters.Why != nil && len(filters.Why.WorkCategory) > 0 {
 		clause := translateWorkCategoryFilter(filters.Why.WorkCategory, useInvestment, cols)
 		sql += clause.sql

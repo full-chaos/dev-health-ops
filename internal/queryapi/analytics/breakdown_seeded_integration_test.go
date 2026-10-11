@@ -18,18 +18,16 @@
 // This file proves the SAME defect against breakdown.go specifically --
 // the simplest of the 13 affected sites -- rather than depending on
 // investmentquality.go (CHAOS-4723, not yet on main when this file was
-// written): CompileBreakdown's non-investment path, dimension=THEME
-// (investment_area, a non-nullable LowCardinality(String) column -- picked
-// over TEAM/REPO specifically to avoid an unrelated Nullable-scan type
-// question muddying this ticket's single claim), measure=COUNT
-// (SUM(work_items_completed)).
+// written): CompileBreakdown's non-investment path, dimension=TEAM
+// (team_id, a non-nullable LowCardinality(String) column -- picked over REPO
+// specifically to avoid an unrelated Nullable-scan type question muddying
+// this ticket's single claim), measure=COUNT (SUM(work_items_completed)).
 //
-// SCHEMA: investment_metrics_daily, the exact production DDL from
-// src/dev_health_ops/migrations/clickhouse/007_complexity_investment_issues.sql:73-90
-// plus 024_add_org_id.sql:51's org_id column -- the only table
+// SCHEMA: work_item_completion_daily, the exact production DDL from
+// src/dev_health_ops/migrations/clickhouse/119_work_item_completion_daily.sql -- the only table
 // CompileBreakdown's non-investment/default-measure path reads
 // (nonInvestmentSourceAndDateFilter falls through to
-// investmentMetricsDailyDedupSource for MeasureCount, whose
+// workItemCompletionDedupSource for MeasureCount, whose
 // measureSourceTable is "").
 package analytics
 
@@ -45,47 +43,38 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 )
 
-// investmentMetricsDailyDDL mirrors production exactly: 007's base table
-// plus 024's org_id ALTER, folded into one CREATE for a fresh test
-// instance (same discipline hotspots_argmax_tiebreak_integration_test.go's
-// fileHotspotDailyDDL and the CHAOS-4723 parked test's
+// workItemCompletionDailyDDL mirrors production: migration 119's table, folded into one CREATE for a fresh test
+// instance (same discipline hotspots_argmax_tiebreak_integration_test.go's fileHotspotDailyDDL and
 // seededQualitySchemaDDL both use).
-const investmentMetricsDailyDDL = `
-CREATE TABLE investment_metrics_daily
+const workItemCompletionDailyDDL = `
+CREATE TABLE work_item_completion_daily
 (
+    org_id String,
     repo_id Nullable(UUID),
     day Date,
-    team_id LowCardinality(Nullable(String)),
-    investment_area LowCardinality(String),
-    project_stream LowCardinality(String),
+    team_id LowCardinality(String),
     delivery_units UInt32,
     work_items_completed UInt32,
     prs_merged UInt32,
     churn_loc UInt64,
     cycle_p50_hours Float64,
-    computed_at DateTime DEFAULT now(),
-    org_id String DEFAULT 'default'
+    computed_at DateTime DEFAULT now()
 )
 ENGINE = MergeTree
 PARTITION BY toYYYYMM(day)
-ORDER BY (day, team_id, investment_area, project_stream)
+ORDER BY (org_id, day, team_id)
 SETTINGS allow_nullable_key = 1;
 `
 
-// investmentMetricsDailySeedRow is one seeded investment_metrics_daily
-// row -- only the columns CompileBreakdown's THEME/COUNT combination
-// actually reads (investment_area, work_items_completed) vary
-// meaningfully across rows; every other NOT NULL column gets a fixed but
-// valid filler.
-type investmentMetricsDailySeedRow struct {
-	repoID         string
-	teamID         string
-	investmentArea string
-	projectStream  string
-	workItemsDone  uint32
+// workItemCompletionSeedRow is one seeded work_item_completion_daily row -- only the columns the breakdown reads
+// (team, work_items_completed) vary; every other NOT NULL column gets a fixed but valid filler.
+type workItemCompletionSeedRow struct {
+	repoID        string
+	teamID        string
+	workItemsDone uint32
 }
 
-func seedInvestmentMetricsDailyRows(t *testing.T, ctx context.Context, conn stdclickhouse.Conn, orgID, day string, rows []investmentMetricsDailySeedRow) {
+func seedWorkItemCompletionRows(t *testing.T, ctx context.Context, conn stdclickhouse.Conn, orgID, day string, rows []workItemCompletionSeedRow) {
 	t.Helper()
 	values := ""
 	for i, r := range rows {
@@ -93,16 +82,16 @@ func seedInvestmentMetricsDailyRows(t *testing.T, ctx context.Context, conn stdc
 			values += ", "
 		}
 		values += fmt.Sprintf(
-			"(toUUID('%s'), toDate('%s'), '%s', '%s', '%s', 1, %d, 1, 10, 2.0, now(), '%s')",
-			r.repoID, day, r.teamID, r.investmentArea, r.projectStream, r.workItemsDone, orgID,
+			"(toUUID('%s'), toDate('%s'), '%s', 1, %d, 1, 10, 2.0, now(), '%s')",
+			r.repoID, day, r.teamID, r.workItemsDone, orgID,
 		)
 	}
 	insert := fmt.Sprintf(
-		"INSERT INTO investment_metrics_daily (repo_id, day, team_id, investment_area, project_stream, delivery_units, work_items_completed, prs_merged, churn_loc, cycle_p50_hours, computed_at, org_id) VALUES %s",
+		"INSERT INTO work_item_completion_daily (repo_id, day, team_id, delivery_units, work_items_completed, prs_merged, churn_loc, cycle_p50_hours, computed_at, org_id) VALUES %s",
 		values,
 	)
 	if err := conn.Exec(ctx, insert); err != nil {
-		t.Fatalf("seed investment_metrics_daily: %v", err)
+		t.Fatalf("seed work_item_completion_daily: %v", err)
 	}
 }
 
@@ -137,8 +126,8 @@ func TestCompileBreakdown_ThemeCount_SeededRealClickHouse_ExactAggregate(t *test
 	}
 	defer func() { _ = conn.Close() }()
 
-	if err := conn.Exec(ctx, investmentMetricsDailyDDL); err != nil {
-		t.Fatalf("create investment_metrics_daily: %v", err)
+	if err := conn.Exec(ctx, workItemCompletionDailyDDL); err != nil {
+		t.Fatalf("create work_item_completion_daily: %v", err)
 	}
 
 	client, err := dhclickhouse.NewClickHouseQueryClientWithOptions(dhclickhouse.Options{DSN: inst.URI})
@@ -151,61 +140,58 @@ func TestCompileBreakdown_ThemeCount_SeededRealClickHouse_ExactAggregate(t *test
 	const otherOrgID = "chaos-4730-seeded-breakdown-OTHER-ORG"
 	const day = "2026-01-05"
 
-	// In-window, in-org rows: two "feature" (different repo/team, so the
-	// dedup subquery's GROUP BY (org_id, day, repo_id, team_id,
-	// investment_area, project_stream) keeps them as two distinct groups
-	// BEFORE the outer breakdown GROUP BY investment_area combines them --
-	// this exercises the real two-level aggregation, not just a
-	// pass-through) and one "bug".
-	seedInvestmentMetricsDailyRows(t, ctx, conn, orgID, day, []investmentMetricsDailySeedRow{
-		{repoID: "11111111-1111-1111-1111-111111111111", teamID: "t1", investmentArea: "feature", projectStream: "ps1", workItemsDone: 5},
-		{repoID: "22222222-2222-2222-2222-222222222222", teamID: "t2", investmentArea: "feature", projectStream: "ps2", workItemsDone: 7},
-		{repoID: "33333333-3333-3333-3333-333333333333", teamID: "t3", investmentArea: "bug", projectStream: "ps3", workItemsDone: 3},
+	// In-window, in-org rows: two rows of team "t1" (different repositories, so the dedup subquery's GROUP BY
+	// (org_id, day, repo_id, team_id) keeps them as two distinct groups BEFORE the outer breakdown GROUP BY team_id
+	// combines them -- this exercises the real two-level aggregation, not just a pass-through) and one of "t3".
+	seedWorkItemCompletionRows(t, ctx, conn, orgID, day, []workItemCompletionSeedRow{
+		{repoID: "11111111-1111-1111-1111-111111111111", teamID: "t1", workItemsDone: 5},
+		{repoID: "22222222-2222-2222-2222-222222222222", teamID: "t1", workItemsDone: 7},
+		{repoID: "33333333-3333-3333-3333-333333333333", teamID: "t3", workItemsDone: 3},
 	})
 	// Out-of-org row: same day/theme, must NOT be counted -- proves the
 	// {org_id:String} predicate still filters correctly after the fix.
-	seedInvestmentMetricsDailyRows(t, ctx, conn, otherOrgID, day, []investmentMetricsDailySeedRow{
-		{repoID: "44444444-4444-4444-4444-444444444444", teamID: "t4", investmentArea: "feature", projectStream: "ps4", workItemsDone: 1000},
+	seedWorkItemCompletionRows(t, ctx, conn, otherOrgID, day, []workItemCompletionSeedRow{
+		{repoID: "44444444-4444-4444-4444-444444444444", teamID: "t1", workItemsDone: 1000},
 	})
 	// Out-of-window row: same org/theme, a day outside the query's
 	// [start_date,end_date] range -- must NOT be counted, proving the
 	// date predicate still filters correctly after the fix.
-	seedInvestmentMetricsDailyRows(t, ctx, conn, orgID, "2025-06-01", []investmentMetricsDailySeedRow{
-		{repoID: "55555555-5555-5555-5555-555555555555", teamID: "t5", investmentArea: "feature", projectStream: "ps5", workItemsDone: 2000},
+	seedWorkItemCompletionRows(t, ctx, conn, orgID, "2025-06-01", []workItemCompletionSeedRow{
+		{repoID: "55555555-5555-5555-5555-555555555555", teamID: "t1", workItemsDone: 2000},
 	})
 
 	req := BreakdownRequest{
-		Dimension: DimensionTheme,
+		Dimension: DimensionTeam,
 		Measure:   MeasureCount,
 		StartDate: mustGraphQLDate("2026-01-01"),
 		EndDate:   mustGraphQLDate("2026-01-08"),
 		TopN:      10,
 	}
-	q, err := compileBreakdownOver(req, "investment_area", orgID, queryTimeoutSecs, false, nil)
+	q, err := compileBreakdownOver(req, "team_id", orgID, queryTimeoutSecs, false, nil)
 	if err != nil {
 		t.Fatalf("CompileBreakdown: %v", err)
 	}
 
-	result, err := ExecuteBreakdown(ctx, client, "org-1", q, "theme", "count")
+	result, err := ExecuteBreakdown(ctx, client, "org-1", q, "team", "count")
 	if err != nil {
 		t.Fatalf("ExecuteBreakdown: %v (this is the CHAOS-4730 defect if the message contains "+
 			"\"Syntax error\" / \"code: 62\" / \"Expected substitution type\")", err)
 	}
 
 	if len(result.Items) != 2 {
-		t.Fatalf("len(Items) = %d, want 2 (feature, bug) -- got %+v", len(result.Items), result.Items)
+		t.Fatalf("len(Items) = %d, want 2 (t1, t3) -- got %+v", len(result.Items), result.Items)
 	}
 
-	// ORDER BY value DESC, dimension_value ASC: feature (12) then bug (3).
+	// ORDER BY value DESC, dimension_value ASC: t1 (12) then t3 (3).
 	first, second := result.Items[0], result.Items[1]
-	if first.Key != "feature" {
-		t.Errorf("Items[0].Key = %q, want %q", first.Key, "feature")
+	if first.Key != "t1" {
+		t.Errorf("Items[0].Key = %q, want %q", first.Key, "t1")
 	}
 	if first.Value == nil || *first.Value != 12 {
 		t.Errorf("Items[0].Value = %v, want 12 (5+7, out-of-org/out-of-window rows excluded)", first.Value)
 	}
-	if second.Key != "bug" {
-		t.Errorf("Items[1].Key = %q, want %q", second.Key, "bug")
+	if second.Key != "t3" {
+		t.Errorf("Items[1].Key = %q, want %q", second.Key, "t3")
 	}
 	if second.Value == nil || *second.Value != 3 {
 		t.Errorf("Items[1].Value = %v, want 3", second.Value)
@@ -216,22 +202,22 @@ func TestCompileBreakdown_ThemeCount_SeededRealClickHouse_ExactAggregate(t *test
 	// response, so a measure's independent topN ranking cannot omit a join key.
 	exactReq := req
 	exactReq.TopN = 1
-	exactReq.Keys = []string{"feature", "bug"}
-	exactQuery, err := compileBreakdownOver(exactReq, "investment_area", orgID, queryTimeoutSecs, false, nil)
+	exactReq.Keys = []string{"t1", "t3"}
+	exactQuery, err := compileBreakdownOver(exactReq, "team_id", orgID, queryTimeoutSecs, false, nil)
 	if err != nil {
 		t.Fatalf("CompileBreakdown exact keys: %v", err)
 	}
-	exact, err := ExecuteBreakdown(ctx, client, "org-1", exactQuery, "theme", "count")
+	exact, err := ExecuteBreakdown(ctx, client, "org-1", exactQuery, "team", "count")
 	if err != nil {
 		t.Fatalf("ExecuteBreakdown exact keys: %v", err)
 	}
 	if len(exact.Items) != 2 {
 		t.Fatalf("exact-key len(Items) = %d, want 2 despite topN=1: %+v", len(exact.Items), exact.Items)
 	}
-	if exact.Items[0].Key != "feature" || exact.Items[0].Value == nil || *exact.Items[0].Value != 12 {
-		t.Errorf("exact Items[0] = %+v, want feature=12", exact.Items[0])
+	if exact.Items[0].Key != "t1" || exact.Items[0].Value == nil || *exact.Items[0].Value != 12 {
+		t.Errorf("exact Items[0] = %+v, want t1=12", exact.Items[0])
 	}
-	if exact.Items[1].Key != "bug" || exact.Items[1].Value == nil || *exact.Items[1].Value != 3 {
-		t.Errorf("exact Items[1] = %+v, want bug=3", exact.Items[1])
+	if exact.Items[1].Key != "t3" || exact.Items[1].Value == nil || *exact.Items[1].Value != 3 {
+		t.Errorf("exact Items[1] = %+v, want t3=3", exact.Items[1])
 	}
 }

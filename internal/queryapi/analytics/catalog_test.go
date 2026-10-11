@@ -84,7 +84,7 @@ func TestCompileCatalogValues_DecisionTable(t *testing.T) {
 		{"repo with team scope", DimensionRepo, 101, teamScope, true, nil, nil, nil},
 		{"repo with what filter", DimensionRepo, 101, repoFilter, true, nil, nil, nil},
 		{"team ignores filters", DimensionTeam, 100, teamScope, false,
-			[]string{"FROM teams FINAL", "is_active = 1", "LEFT JOIN", "investment_metrics_daily", "ORDER BY count DESC, t.name ASC, t.id ASC"},
+			[]string{"FROM teams FINAL", "is_active = 1", "LEFT JOIN", "work_item_completion_daily", "ORDER BY count DESC, t.name ASC, t.id ASC"},
 			[]string{"scope_ids"}, []string{"limit", "org_id"}},
 		{"theme investment source", DimensionTheme, 100, nil, false,
 			[]string{"splitByChar('.', subcategory_kv.1)[1]", "work_unit_investments.org_id = {org_id:String}", "ARRAY JOIN", "GROUP BY value", "ORDER BY count DESC, value ASC"}, nil, []string{"limit", "org_id"}},

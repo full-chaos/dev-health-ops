@@ -137,16 +137,15 @@ func TestWorkItemEngineZeroRowsOfTheNoRepositoryPartitionHoldANullRepository(t *
 
 	// An older row with a count, for a key no stored item produces.
 	stored := day.AddDate(0, 0, 1)
-	area := "gone"
 	if _, err := WriteIssueTypeMetricsDaily(ctx, conn, orgID, day,
 		[]workitemengine.IssueTypeMetricsDailyRow{{
 			Provider: "github", TeamID: "unassigned", IssueTypeNorm: "gone", CompletedCount: 1,
 		}}, stored); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := WriteInvestmentMetricsDaily(ctx, conn, orgID, day,
-		[]workitemengine.InvestmentMetricsDailyRow{{
-			InvestmentArea: &area, ProjectStream: "general", DeliveryUnits: 1, WorkItemsCompleted: 1,
+	if _, err := WriteWorkItemCompletionDaily(ctx, conn, orgID, day,
+		[]workitemengine.WorkItemCompletionDailyRow{{
+			TeamID: "gone", DeliveryUnits: 1, WorkItemsCompleted: 1,
 		}}, stored); err != nil {
 		t.Fatal(err)
 	}
@@ -155,7 +154,7 @@ func TestWorkItemEngineZeroRowsOfTheNoRepositoryPartitionHoldANullRepository(t *
 	if err != nil {
 		t.Fatal(err)
 	}
-	investment, err := NewWorkItemInvestmentExecutor(conn, workItemEngineTestClassifier{})
+	investment, err := NewWorkItemInvestmentExecutor(conn)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -178,7 +177,7 @@ func TestWorkItemEngineZeroRowsOfTheNoRepositoryPartitionHoldANullRepository(t *
 		name, keyPredicate, newestCount string
 	}{
 		{"issue_type_metrics_daily", "issue_type_norm = 'gone'", "argMax(completed_count, computed_at)"},
-		{"investment_metrics_daily", "investment_area = 'gone'", "argMax(work_items_completed, computed_at)"},
+		{"work_item_completion_daily", "team_id = 'gone'", "argMax(work_items_completed, computed_at)"},
 	} {
 		var versions, nullRepository, newest uint64
 		if err := conn.QueryRow(ctx, `

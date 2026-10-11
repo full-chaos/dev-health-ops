@@ -253,6 +253,8 @@ func derivedDaySnapshot(t *testing.T, ctx context.Context, conn driver.Conn, org
 			ORDER BY computed_at DESC LIMIT 1 BY repo_id, provider, team_id, issue_type_norm)`,
 		"investment_metrics_daily": `(SELECT * FROM investment_metrics_daily WHERE org_id = ? AND day = ?
 			ORDER BY computed_at DESC LIMIT 1 BY repo_id, team_id, investment_area, project_stream)`,
+		"work_item_completion_daily": `(SELECT * FROM work_item_completion_daily WHERE org_id = ? AND day = ?
+			ORDER BY computed_at DESC LIMIT 1 BY repo_id, team_id)`,
 	}
 	snapshot := map[string]string{}
 	for table, source := range sources {

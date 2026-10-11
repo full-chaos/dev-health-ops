@@ -757,8 +757,8 @@ func TestResolveSankey_ArgMaxGuardFiresOnAutoRoutedNodesEdges(t *testing.T) {
 		{uint64(1), "team-a", nil, 5.0},
 	}})
 	// Coverage query: useInvestment=false here (the raw flag), so this is
-	// the NON-investment coverage shape (investment_metrics_daily).
-	client.on("FROM investment_metrics_daily", &fakeRowScanner{})
+	// the NON-investment coverage shape (work_item_completion_daily).
+	client.on("FROM work_item_completion_daily", &fakeRowScanner{})
 	// The guard's own query -- empty result is fine, this test only
 	// proves the query was ISSUED, not that it detected a divergence.
 	client.on("HAVING count() > 1", &fakeRowScanner{})
@@ -1004,7 +1004,7 @@ func TestResolve_SankeyCoverage_ThemeIsCanonicalOnly_EvenWithUseInvestmentFalse(
 	for _, force := range []*bool{nil, boolPtr(false)} {
 		for _, dim := range []model.DimensionInput{model.DimensionInputTheme, model.DimensionInputSubcategory} {
 			client := &routingFakeClient{}
-			client.on("investment_metrics_daily", &fakeRowScanner{})
+			client.on("work_item_completion_daily", &fakeRowScanner{})
 			client.on("project_stream", &fakeRowScanner{})
 			client.on("work_unit_investments", &fakeRowScanner{})
 			batch := model.AnalyticsRequestInput{
@@ -1022,7 +1022,7 @@ func TestResolve_SankeyCoverage_ThemeIsCanonicalOnly_EvenWithUseInvestmentFalse(
 			}
 			canonical := 0
 			for _, call := range client.calls {
-				if call == "investment_metrics_daily" || call == "project_stream" {
+				if call == "work_item_completion_daily" || call == "project_stream" {
 					t.Errorf("%s force=%v: a statement (coverage) read the legacy source %q; calls=%v", dim, force, call, client.calls)
 				}
 				if call == "work_unit_investments" {
@@ -1060,7 +1060,7 @@ func TestResolve_EvidenceQuality_OpensForCanonicalOnlyRequest_EvenWithUseInvestm
 	// Control: a batch with no canonical-only request and useInvestment=false keeps the gate shut.
 	client2 := &routingFakeClient{}
 	client2.on("quality_known_count", &fakeRowScanner{})
-	client2.on("investment_metrics_daily", &fakeRowScanner{})
+	client2.on("work_item_completion_daily", &fakeRowScanner{})
 	batch2 := model.AnalyticsRequestInput{
 		UseInvestment: boolPtr(false),
 		Breakdowns:    []model.BreakdownRequestInput{bdInput(model.DimensionInputRepo, model.MeasureInputCount)},
@@ -1087,7 +1087,7 @@ func TestResolve_EvidenceQuality_OpensForFlowMatrixAndGroupByTheme_EvenWithUseIn
 		client.on("quality_known_count", &fakeRowScanner{
 			rows: [][]any{{uint64(10), uint64(10), 0.5, 0.1, uint64(0), uint64(5), uint64(5), uint64(0), uint64(0)}},
 		})
-		client.on("investment_metrics_daily", &fakeRowScanner{})
+		client.on("work_item_completion_daily", &fakeRowScanner{})
 		client.on("work_unit_investments", &fakeRowScanner{})
 		client.on("subcategory_kv", &fakeRowScanner{})
 		result, err := Resolve(context.Background(), client, "org-1", batch)

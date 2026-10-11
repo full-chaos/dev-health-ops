@@ -13,45 +13,39 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse/liverow"
 )
 
-// investmentMetricsDailyDedupSource ports compiler.py's
-// _INVESTMENT_METRICS_DAILY_DEDUP (compiler.py:63-79) verbatim -- the
-// default non-investment source table for timeseries/breakdown, deduped
-// via argMax(col, computed_at) because investment_metrics_daily is a
-// plain MergeTree (migration 007) that does not self-merge duplicate
-// (re)writes of the same natural key (CHAOS-2710).
+// workItemCompletionDedupSource is the default non-investment source table for timeseries/breakdown: the completions
+// of work_item_completion_daily (CHAOS-9264), deduped via argMax(col, computed_at) because the table is a plain
+// MergeTree that does not self-merge duplicate (re)writes of the same natural key (CHAOS-2710). It replaces the
+// reference's _INVESTMENT_METRICS_DAILY_DEDUP (compiler.py:63-79): same columns for the measures, no investment_area
+// or project_stream (the rule classifier is gone), and one cycle p50 per (repository, team, day).
 //
-// The HAVING leaves out a key whose newest row is a retraction row (package
-// liverow): the daily family writes a row of zeros over a key it no longer
-// produces, for example the key of a retired team id. That row adds nothing
-// to a sum, but it is a row to a count (sankey coverage) and a bucket to a
-// team, repository or category dimension. A key with no measurement is not a
-// bucket with a value of 0.
-var investmentMetricsDailyDedupSource = investmentMetricsDailyNewestRows(
-	"\n    HAVING " + liverow.NewestPredicate("investment_metrics_daily", ""))
+// The HAVING leaves out a key whose newest row is a retraction row (package liverow): the daily family writes a row
+// of zeros over a key it no longer produces, for example the key of a retired team id. That row adds nothing to a
+// sum, but it is a row to a count (sankey coverage) and a bucket to a team, repository or category dimension. A key
+// with no measurement is not a bucket with a value of 0.
+var workItemCompletionDedupSource = workItemCompletionNewestRows(
+	"\n    HAVING " + liverow.NewestPredicate("work_item_completion_daily", ""))
 
-// investmentMetricsDailyEveryNewestRow is the same source with the retraction
-// rows kept: the text the frozen catalog golden pins. Only the catalog reads
-// it (catalog.go), and only to order the ACTIVE teams it lists by a row count.
-var investmentMetricsDailyEveryNewestRow = investmentMetricsDailyNewestRows("")
+// workItemCompletionEveryNewestRow is the same source with the retraction rows kept: the text the frozen catalog
+// golden pins. Only the catalog reads it (catalog.go), and only to order the ACTIVE teams it lists by a row count.
+var workItemCompletionEveryNewestRow = workItemCompletionNewestRows("")
 
-func investmentMetricsDailyNewestRows(having string) string {
+func workItemCompletionNewestRows(having string) string {
 	return `(
     SELECT
         org_id,
         day,
         repo_id,
         team_id,
-        investment_area,
-        project_stream,
         argMax(delivery_units, computed_at) AS delivery_units,
         argMax(work_items_completed, computed_at) AS work_items_completed,
         argMax(prs_merged, computed_at) AS prs_merged,
         argMax(churn_loc, computed_at) AS churn_loc,
         argMax(cycle_p50_hours, computed_at) AS cycle_p50_hours
-    FROM investment_metrics_daily
+    FROM work_item_completion_daily
     WHERE org_id = {org_id:String}
-    GROUP BY org_id, day, repo_id, team_id, investment_area, project_stream` + having + `
-) AS investment_metrics_daily`
+    GROUP BY org_id, day, repo_id, team_id` + having + `
+) AS work_item_completion_daily`
 }
 
 // appendOnlyDailyNaturalKeys is the subset of clickhouse_dedup.py's
@@ -125,7 +119,7 @@ func nonInvestmentSourceAndDateFilter(measure Measure) (source, alias, dateFilte
 		src, al := dedupFromMeasureSource(table)
 		return src, al, "day >= {start_date:Date} AND day <= {end_date:Date}"
 	}
-	return investmentMetricsDailyDedupSource, "investment_metrics_daily", "day >= {start_date:Date} AND day <= {end_date:Date}"
+	return workItemCompletionDedupSource, "work_item_completion_daily", "day >= {start_date:Date} AND day <= {end_date:Date}"
 }
 
 // TimeseriesRequest is the Go port of compiler.py's TimeseriesRequest

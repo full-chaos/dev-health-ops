@@ -25,12 +25,12 @@ func repositoryKeyViolation(engine, sortingKey string) string {
 	return "engine " + engine + " merges the rows of one sorting key, and the sorting key (" + sortingKey + ") has no repo_id"
 }
 
-// The daily job writes issue_type_metrics_daily, investment_metrics_daily and
-// investment_classifications_daily one repository partition at a time, and the
+// The daily job writes issue_type_metrics_daily and work_item_completion_daily
+// one repository partition at a time, and the
 // readers take the newest row of each key with repo_id in the key. That is
 // safe only while a merge cannot drop the row of one repository in favour of
 // the row of another. The test reads the engine and the sorting key of the
-// three tables from a ClickHouse built by the migration chain.
+// two tables from a ClickHouse built by the migration chain.
 func TestWorkItemAppendTablesCannotMergeTheRowsOfTwoRepositories(t *testing.T) {
 	for _, guard := range []struct {
 		engine, sortingKey string
@@ -51,7 +51,7 @@ func TestWorkItemAppendTablesCannotMergeTheRowsOfTwoRepositories(t *testing.T) {
 	ctx := context.Background()
 	conn := workItemAttributionLinkedIssueMigratedClickHouse(t, ctx)
 	for _, table := range []string{
-		"issue_type_metrics_daily", "investment_metrics_daily", "investment_classifications_daily",
+		"issue_type_metrics_daily", "work_item_completion_daily",
 	} {
 		var engine, sortingKey string
 		var hasRepository uint64

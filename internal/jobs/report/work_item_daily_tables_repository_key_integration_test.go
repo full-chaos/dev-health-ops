@@ -13,7 +13,7 @@ import (
 )
 
 // TestClickHouseQueryAdapterChartsKeepEachRepositoryOfOneDay holds the report
-// charts of issue_type_metrics_daily and investment_metrics_daily against
+// charts of issue_type_metrics_daily and work_item_completion_daily against
 // three repository partitions of one day whose other key columns are equal:
 // two repositories and the nil repository. The daily job computes a day one
 // repository partition at a time (CHAOS-8813), so each partition has its own
@@ -66,10 +66,10 @@ VALUES (?, '2026-01-03', 'github', '', 'bug', 0, 1, 0, 0, 0, ?, ?, 'org-1')`, ro
 			t.Fatal(err)
 		}
 		if err := conn.Exec(ctx, `
-INSERT INTO investment_metrics_daily
-(repo_id, day, team_id, investment_area, project_stream, delivery_units,
+INSERT INTO work_item_completion_daily
+(repo_id, day, team_id, delivery_units,
  work_items_completed, prs_merged, churn_loc, cycle_p50_hours, computed_at, org_id)
-VALUES (?, '2026-01-03', '', 'quality', 'general', 0, 0, 0, ?, 0, ?, 'org-1')`, row.repo, row.value, row.computedAt); err != nil {
+VALUES (?, '2026-01-03', '', 0, 0, 0, ?, 0, ?, 'org-1')`, row.repo, row.value, row.computedAt); err != nil {
 			t.Fatal(err)
 		}
 	}

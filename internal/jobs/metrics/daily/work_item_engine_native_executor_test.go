@@ -5,19 +5,11 @@ import (
 	"errors"
 	"testing"
 	"time"
-
-	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/workitemengine"
 )
 
 type nilableTypeNormalizer struct{}
 
 func (*nilableTypeNormalizer) NormalizeType(_, typeRaw string, _ []string) string { return typeRaw }
-
-type nilableClassifier struct{}
-
-func (*nilableClassifier) Classify(workitemengine.InvestmentArtifact) (workitemengine.InvestmentClassification, error) {
-	return workitemengine.InvestmentClassification{}, nil
-}
 
 // TestWorkItemEngineExecutorsRefuseAMissingConnectionOrEngine: each of the two
 // families fails closed at construction, so the worker reports it refused and
@@ -27,7 +19,6 @@ func (*nilableClassifier) Classify(workitemengine.InvestmentArtifact) (workiteme
 func TestWorkItemEngineExecutorsRefuseAMissingConnectionOrEngine(t *testing.T) {
 	conn := &workItemSendFailingConn{}
 	var noNormalizer *nilableTypeNormalizer
-	var noClassifier *nilableClassifier
 
 	if _, err := NewWorkItemIssueTypeExecutor(nil, &nilableTypeNormalizer{}); !errors.Is(err, errWorkItemIssueTypeUnavailable) {
 		t.Errorf("issue type, nil connection: err = %v", err)
@@ -42,22 +33,16 @@ func TestWorkItemEngineExecutorsRefuseAMissingConnectionOrEngine(t *testing.T) {
 		t.Errorf("issue type, connection and engine: executor = %v, err = %v", executor, err)
 	}
 
-	if _, err := NewWorkItemInvestmentExecutor(nil, &nilableClassifier{}); !errors.Is(err, errWorkItemInvestmentUnavailable) {
+	if _, err := NewWorkItemInvestmentExecutor(nil); !errors.Is(err, errWorkItemInvestmentUnavailable) {
 		t.Errorf("investment, nil connection: err = %v", err)
 	}
-	if _, err := NewWorkItemInvestmentExecutor(conn, nil); !errors.Is(err, errWorkItemInvestmentUnavailable) {
-		t.Errorf("investment, nil engine: err = %v", err)
-	}
-	if _, err := NewWorkItemInvestmentExecutor(conn, noClassifier); !errors.Is(err, errWorkItemInvestmentUnavailable) {
-		t.Errorf("investment, typed nil engine: err = %v", err)
-	}
-	if executor, err := NewWorkItemInvestmentExecutor(conn, &nilableClassifier{}); err != nil || executor == nil {
-		t.Errorf("investment, connection and engine: executor = %v, err = %v", executor, err)
+	if executor, err := NewWorkItemInvestmentExecutor(conn); err != nil || executor == nil {
+		t.Errorf("investment, connection: executor = %v, err = %v", executor, err)
 	}
 
 	// A run with no organization or day is a state error, not a write.
 	issueType, _ := NewWorkItemIssueTypeExecutor(conn, &nilableTypeNormalizer{})
-	investment, _ := NewWorkItemInvestmentExecutor(conn, &nilableClassifier{})
+	investment, _ := NewWorkItemInvestmentExecutor(conn)
 	for name, executor := range map[string]NativeFamilyExecutor{
 		WorkItemIssueTypeFamilyName: issueType, WorkItemInvestmentFamilyName: investment,
 	} {

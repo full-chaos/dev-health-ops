@@ -16,7 +16,7 @@ import (
 )
 
 // TestInvestmentMetricsDailyReadersGiveRetractionRowsNoWeight reads the
-// default analytics source (investment_metrics_daily) as a breakdown by team
+// default analytics source (work_item_completion_daily) as a breakdown by team
 // and as the sankey coverage, for two organizations that hold the same
 // measurements. One of them also holds the old rows of the retired team ids
 // and the retraction row over each (package retractionseed). The answers must
@@ -37,10 +37,10 @@ func TestInvestmentMetricsDailyReadersGiveRetractionRowsNoWeight(t *testing.T) {
 	// the team coverage is a real share (4 of 5 rows) and not 1.
 	for _, org := range []string{retractionseed.ControlOrg, retractionseed.RetractedOrg} {
 		for _, day := range store.Recomputed() {
-			if err := store.Conn.Exec(ctx, `INSERT INTO investment_metrics_daily
-(org_id, day, repo_id, team_id, investment_area, project_stream, delivery_units, work_items_completed,
+			if err := store.Conn.Exec(ctx, `INSERT INTO work_item_completion_daily
+(org_id, day, repo_id, team_id, delivery_units, work_items_completed,
  prs_merged, churn_loc, cycle_p50_hours, computed_at)
-VALUES (?, ?, ?, NULL, 'feature_delivery', 'roadmap', 1, 1, 0, 10, 4, ?)`,
+VALUES (?, ?, ?, '', 1, 1, 0, 10, 4, ?)`,
 				org, day, retractionseed.Teams[0].RepoID, store.NewComputedAt); err != nil {
 				t.Fatalf("insert the row with no team: %v", err)
 			}

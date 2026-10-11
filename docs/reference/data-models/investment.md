@@ -140,6 +140,14 @@ written on every run, including at zero, so that "nothing to allocate" can be
 told apart from "the counter was never computed". Field-by-field meaning:
 [CLI reference](../cli/index.md#investment).
 
+## Team coverage: ownership, not the attribution vote
+
+`teamCoverage` is the share of effort whose work unit has a team, and a unit has a team when a team **owns** one of
+the unit's repositories (the same ownership rule the team scope uses). It no longer follows the work-item attribution
+vote, so a unit in an owned repository counts as assigned even when no linked work item names a team, and a unit in an
+unowned repository counts as unassigned even when a work item names one. A unit counts once, however many owning teams
+it reaches. The denominator is unchanged. The chart's TEAM dimension still shows the vote, so the two can differ.
+
 ## Repository coverage: two numbers, not one
 
 Repository coverage is the share of attributed effort that resolves to a

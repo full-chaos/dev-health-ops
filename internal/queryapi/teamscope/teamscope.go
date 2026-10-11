@@ -131,6 +131,26 @@ func RepoCondition(orgID, repoColumn string, teamIDs []string, asOf time.Time) (
 	if len(teamList) == 0 {
 		return "", nil
 	}
+	return ownedRepoCondition(orgID, repoColumn, teamList, asOf)
+}
+
+// AnyTeamRepoCondition is RepoCondition without the team filter: repoColumn is owned by SOME team as of asOf. It is
+// the same statement (the same join, validity window, FINAL and catalog guards), so "owned" means one thing for a
+// team scope and for the coverage of teams (CHAOS-9264); only the o.team_id test is left out, and no team binding is
+// carried. Every other reader of ownership stays on RepoCondition.
+func AnyTeamRepoCondition(orgID, repoColumn string, asOf time.Time) (condition string, bindings []dhclickhouse.Binding) {
+	return ownedRepoCondition(orgID, repoColumn, nil, asOf)
+}
+
+// ownedRepoCondition renders the one ownership statement; teamList nil = any team.
+func ownedRepoCondition(orgID, repoColumn string, teamList []string, asOf time.Time) (condition string, bindings []dhclickhouse.Binding) {
+	teamFilter := ""
+	bindings = []dhclickhouse.Binding{{Name: BindingOrgID, Value: orgID}}
+	if teamList != nil {
+		teamFilter = "\n      AND o.team_id IN {" + BindingTeamIDs + ":Array(String)}"
+		bindings = append(bindings, dhclickhouse.Binding{Name: BindingTeamIDs, Value: teamList})
+	}
+	bindings = append(bindings, dhclickhouse.Binding{Name: BindingAsOf, Value: asOf.UTC()})
 	return fmt.Sprintf(`%s IN (
     SELECT DISTINCT coalesce(toString(o.repo_id), toString(r.id)) AS owned_repo_id
     FROM team_repo_ownership AS o FINAL
@@ -142,8 +162,7 @@ func RepoCondition(orgID, repoColumn string, teamIDs []string, asOf time.Time) (
         ON r.org_id = o.org_id
            AND r.provider = o.provider
            AND lower(r.repo) = lower(o.repo_full_name)
-    WHERE o.org_id = {%[2]s:String}
-      AND o.team_id IN {%[3]s:Array(String)}
+    WHERE o.org_id = {%[2]s:String}%[3]s
       AND (o.repo_id IS NOT NULL OR r.matched = 1)
       AND o.valid_from <= {%[4]s:DateTime64(3, 'UTC')}
       AND (o.valid_to IS NULL OR o.valid_to > {%[4]s:DateTime64(3, 'UTC')})
@@ -152,11 +171,7 @@ func RepoCondition(orgID, repoColumn string, teamIDs []string, asOf time.Time) (
           FROM repos FINAL
           WHERE org_id = {%[2]s:String}
       )
-)`, repoColumn, BindingOrgID, BindingTeamIDs, BindingAsOf), []dhclickhouse.Binding{
-		{Name: BindingOrgID, Value: orgID},
-		{Name: BindingTeamIDs, Value: teamList},
-		{Name: BindingAsOf, Value: asOf.UTC()},
-	}
+)`, repoColumn, BindingOrgID, teamFilter, BindingAsOf), bindings
 }
 
 // NarrowRepoScope combines the repository condition of a request into ONE

@@ -507,7 +507,8 @@ func (m *Materializer) Run(ctx context.Context, cfg Config) (Stats, error) {
 	m.logOwnershipFallback(ctx, cfg, stats, ownershipAsOf)
 	m.logRepoAttribution(ctx, cfg, stats)
 
-	// SKIP-EXISTING. Runs only when not forced, and only over the pending set.
+	// SKIP-EXISTING. Runs only when not forced, over the pending set and the units
+	// under the evidence gate (their fallback row, CHAOS-9270).
 	skippedExisting := map[int]struct{}{}
 	skippedTerminal := 0
 	skippedFallback := 0

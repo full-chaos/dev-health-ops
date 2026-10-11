@@ -49,8 +49,8 @@ func TestAnInsufficientEvidenceFallbackRowIsNotRewrittenForTheSameHashAndStamp(t
 			wantRows("first", 1)
 			second := run("second")
 			wantRows("second (same hash, same stamp)", 1)
-			if second.SkippedExisting <= first.SkippedExisting {
-				t.Errorf("the gated unit is not counted as skipped: first=%d second=%d", first.SkippedExisting, second.SkippedExisting)
+			if first.SkippedExisting != 0 || second.SkippedExisting != shadowServedUnits {
+				t.Errorf("skipped: first=%d second=%d, want 0 and %d (the gated unit included)", first.SkippedExisting, second.SkippedExisting, shadowServedUnits)
 			}
 			if !strings.Contains(logs.String(), "skipped_fallback=1") {
 				t.Errorf("the skipped fallback is not in the run log line:\n%s", lastLines(logs.String(), 6))

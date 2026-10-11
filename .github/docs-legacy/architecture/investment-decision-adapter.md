@@ -302,7 +302,7 @@ the three writes) is the one served path.
 `work_unit_investments` has one row for each `(org_id, work_unit_id)` (key without
 model version). `FetchExistingInvestmentKeys` (`chquery/entities.go`) takes
 `argMax(..., computed_at)` for each unit first, and then tests on that latest row:
-status in (`ok`, `repaired`, or a terminal served low-quality row, section 5.1 notes),
+status in (`ok`, `repaired`, the `insufficient_evidence` fallback row, or a terminal served low-quality row, section 5.1 notes),
 `categorization_model_version` equals the current
 version (the stamp, for a decision run), and the input hash is in the wanted set.
 No filter runs before the `argMax`.

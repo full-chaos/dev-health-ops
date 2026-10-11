@@ -699,7 +699,8 @@ const (
 // # WHY THE STATUS FILTER IS INSIDE, NOT OUTSIDE
 //
 // The subquery takes argMax(categorization_status, computed_at) per key and the
-// outer WHERE keeps only ok/repaired rows and the terminal served rows above. Filtering on status BEFORE the argMax
+// outer WHERE keeps only ok/repaired rows, the insufficient_evidence fallback
+// row and the terminal served rows above. Filtering on status BEFORE the argMax
 // would let a stale successful row outrank a newer invalid_llm_output one, so a
 // unit whose latest categorization FAILED would be treated as fresh and never
 // retried.

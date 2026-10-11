@@ -84,18 +84,8 @@ func latestInvestmentClockSource() string {
         SELECT max(computed_at) AS latest_investment_computed_at
         FROM work_unit_investments
         WHERE org_id = {org_id:String}
-          AND categorization_status != '` + normalizedLegacyStatus + `'
     )`
 }
-
-// normalizedLegacyStatus is the categorization_status of a row `dho backfill normalize-investment` writes
-// (CHAOS-9206, internal/investmentnormalize.Status). Such a row is an estimate from the deprecated rule
-// classifier, not a unit of the work-graph projection: it has no work_unit_membership rows, so the membership
-// scope must neither drop it (investmentMembershipScopeFilter) nor count its write time as a projection clock
-// (latestInvestmentClockSource): writing it does not move the scope state. The filter names the column
-// QUALIFIED: LatestWorkUnitInvestmentsSource aliases argMax(...) AS categorization_status in the same SELECT, and an
-// unqualified name in its WHERE would resolve to that aggregate (ClickHouse code 184).
-const normalizedLegacyStatus = "normalized_legacy"
 
 // investmentScopeRunIDSQL is the scalar the scope filter reads its run from:
 // the run_id of the organisation's latest complete membership marker, or ”
@@ -221,7 +211,6 @@ func investmentMembershipScopeFilter() string {
 	return fmt.Sprintf(`
               AND (
                   %s = ''
-                  OR work_unit_investments.categorization_status = '`+normalizedLegacyStatus+`'
                   OR work_unit_id IN (
                       SELECT work_unit_id FROM %s
                   )

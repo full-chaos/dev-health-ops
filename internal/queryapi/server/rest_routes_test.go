@@ -37,8 +37,6 @@ var oldParserSet = map[string]string{
 	"/api/v1/home":                                "buildHomeRoute",
 	"/api/v1/investment":                          "buildInvestmentRoute",
 	"/api/v1/investment/explain":                  "buildInvestmentExplainRoute",
-	"/api/v1/investment/flow":                     "buildInvestmentFlowRoute",
-	"/api/v1/investment/flow/repo-team":           "buildInvestmentFlowRoute",
 	"/api/v1/investment/sunburst":                 "buildInvestmentSunburstRoute",
 	"/api/v1/meta":                                "buildMetaRoute",
 	"/api/v1/opportunities":                       "buildOpportunitiesRoute",
@@ -73,8 +71,8 @@ func TestRESTRoutesAreExactlyTheRetiredParsersSet(t *testing.T) {
 			t.Errorf("%s is in the table but not in oldParserSet: add it here on purpose", pattern)
 		}
 	}
-	if len(got) != 24 {
-		t.Errorf("%d patterns, want 24", len(got))
+	if len(got) != 22 {
+		t.Errorf("%d patterns, want 22", len(got))
 	}
 }
 
@@ -179,7 +177,7 @@ func restTestEnv(t *testing.T) (getenv getenvFunc, bearer string) {
 	for _, name := range []string{
 		"GO_API_DRILLDOWN_ISSUES_ENABLED", "GO_API_DRILLDOWN_PRS_ENABLED", "GO_API_EXPLAIN_ENABLED", "GO_API_FILTER_OPTIONS_ENABLED",
 		"GO_API_FLAME_AGGREGATED_ENABLED", "GO_API_FLAME_ENABLED", "GO_API_HEATMAP_ENABLED", "GO_API_HOME_ENABLED",
-		"GO_API_INVESTMENT_ENABLED", "GO_API_INVESTMENT_EXPLAIN_ENABLED", "GO_API_INVESTMENT_FLOW_ENABLED",
+		"GO_API_INVESTMENT_ENABLED", "GO_API_INVESTMENT_EXPLAIN_ENABLED",
 		"GO_API_INVESTMENT_SUNBURST_ENABLED", "GO_API_META_ENABLED", "GO_API_OPPORTUNITIES_ENABLED",
 		"GO_API_PEOPLE_DRILLDOWN_ISSUES_ENABLED", "GO_API_PEOPLE_DRILLDOWN_PRS_ENABLED", "GO_API_PEOPLE_METRIC_ENABLED",
 		"GO_API_PEOPLE_SEARCH_ENABLED", "GO_API_PEOPLE_SUMMARY_ENABLED", "GO_API_QUADRANT_ENABLED", "GO_API_SANKEY_ENABLED",

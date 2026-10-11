@@ -132,11 +132,6 @@ var queryAPIOptions = func() []Option {
 			Usage: "enable the investment explain route (default off; it also needs its dependencies configured, or it stays unmounted)",
 		},
 		{
-			Flag: "investment-flow-enabled", Env: "GO_API_INVESTMENT_FLOW_ENABLED", Kind: KindBool,
-			Default: "false", Services: q, Group: GroupRoutes,
-			Usage: "enable the investment flow route (default off; it also needs its dependencies configured, or it stays unmounted)",
-		},
-		{
 			Flag: "investment-sunburst-enabled", Env: "GO_API_INVESTMENT_SUNBURST_ENABLED", Kind: KindBool,
 			Default: "false", Services: q, Group: GroupRoutes,
 			Usage: "enable the investment sunburst route (default off; it also needs its dependencies configured, or it stays unmounted)",

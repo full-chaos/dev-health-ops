@@ -111,14 +111,6 @@
       "path": "/api/v1/investment/explain"
     },
     {
-      "method": "POST",
-      "path": "/api/v1/investment/flow"
-    },
-    {
-      "method": "POST",
-      "path": "/api/v1/investment/flow/repo-team"
-    },
-    {
       "method": "GET",
       "path": "/api/v1/sankey"
     },

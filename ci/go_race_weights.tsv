@@ -255,7 +255,6 @@ internal/queryapi/hotspots	1
 internal/queryapi/internalidentity	1
 internal/queryapi/investment	1
 internal/queryapi/investmentexplain	9
-internal/queryapi/investmentflow	67
 internal/queryapi/meta	1
 internal/queryapi/newestrow	1
 internal/queryapi/operatingreview	1

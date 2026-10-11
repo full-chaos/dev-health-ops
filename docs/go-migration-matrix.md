@@ -211,7 +211,7 @@ candidate_build)` and never carries it forward across any of the four changing. 
 says nothing about whether a new binary is the one that was measured: re-run `dho goapi prove` against the deployed build.
 
 <!-- BEGIN GENERATED GO API OPERATIONS -->
-_Rendered 2026-10-11T14:23:49Z against main merge-base `6010710710bc3cd0ff1c7820a3810a7d58cd6c9b`; SDL digest pin `sha256:c00c3c65aa6bdbe476b515549be17868f5a39f5e41aa2f106b08cc9f9cb4b462`; fleet read (not read) via not read._
+_Rendered 2026-10-11T20:56:02Z against main merge-base `70113b35169b3c78fea839e60414c310f7c2fa36`; SDL digest pin `sha256:c00c3c65aa6bdbe476b515549be17868f5a39f5e41aa2f106b08cc9f9cb4b462`; fleet read (not read) via not read._
 
 _query-api serves all **64** catalog operations: the catalog switch (`routeswitch.NewCatalogSwitch`) reads no routing row, so there is no per-operation mode, liveness or proof column to render. The only routing state is the MCP class decision per root (`go_api_class_decision`); `dho goapi routing status` reports it._
 <!-- END GENERATED GO API OPERATIONS -->
@@ -234,7 +234,7 @@ sync with either side, so a route added, removed or newly wired on either plane 
 time the tool runs, and the doc-drift check below fails until it is re-rendered.
 
 <!-- BEGIN GENERATED REST ENDPOINTS -->
-_32 `/api/v1/*` routes in the frozen Python api route list (`contracts/migration-status/v1/python-rest-routes.json`): **32** ported, **0** python-only, **0** dead-by-design._
+_30 `/api/v1/*` routes in the frozen Python api route list (`contracts/migration-status/v1/python-rest-routes.json`): **30** ported, **0** python-only, **0** dead-by-design._
 
 | Method | Path | Status | Go handler |
 | --- | --- | --- | --- |
@@ -253,8 +253,6 @@ _32 `/api/v1/*` routes in the frozen Python api route list (`contracts/migration
 | GET | `/api/v1/investment` | ported | `internal/queryapi/server/investment_route.go#buildInvestmentRoute` |
 | POST | `/api/v1/investment` | ported | `internal/queryapi/server/investment_route.go#buildInvestmentRoute` |
 | POST | `/api/v1/investment/explain` | ported | `internal/queryapi/server/investment_explain_route.go#buildInvestmentExplainRoute` |
-| POST | `/api/v1/investment/flow` | ported | `internal/queryapi/server/investment_flow_route.go#buildInvestmentFlowRoute` |
-| POST | `/api/v1/investment/flow/repo-team` | ported | `internal/queryapi/server/investment_flow_route.go#buildInvestmentFlowRoute` |
 | GET | `/api/v1/investment/sunburst` | ported | `internal/queryapi/server/investment_route.go#buildInvestmentSunburstRoute` |
 | GET | `/api/v1/meta` | ported | `internal/queryapi/server/meta_route.go#buildMetaRoute` |
 | GET | `/api/v1/opportunities` | ported | `internal/queryapi/server/opportunities_route.go#buildOpportunitiesRoute` |

@@ -505,21 +505,6 @@ func TestLoadRESTEndpointsOnTheRealRepo(t *testing.T) {
 		t.Fatalf("POST /api/v1/sankey = %+v, want ported at sankey_route.go", sankeyPost)
 	}
 
-	investmentFlowPost, ok := byKey["POST /api/v1/investment/flow"]
-	if !ok {
-		t.Fatal("expected POST /api/v1/investment/flow to be enumerated")
-	}
-	if investmentFlowPost.Status != RESTPorted || !strings.Contains(investmentFlowPost.GoHandler, "investment_flow_route.go") {
-		t.Fatalf("POST /api/v1/investment/flow = %+v, want ported at investment_flow_route.go", investmentFlowPost)
-	}
-	investmentFlowRepoTeamPost, ok := byKey["POST /api/v1/investment/flow/repo-team"]
-	if !ok {
-		t.Fatal("expected POST /api/v1/investment/flow/repo-team to be enumerated")
-	}
-	if investmentFlowRepoTeamPost.Status != RESTPorted || !strings.Contains(investmentFlowRepoTeamPost.GoHandler, "investment_flow_route.go") {
-		t.Fatalf("POST /api/v1/investment/flow/repo-team = %+v, want ported at investment_flow_route.go", investmentFlowRepoTeamPost)
-	}
-
 	investmentGet, ok := byKey["GET /api/v1/investment"]
 	if !ok {
 		t.Fatal("expected GET /api/v1/investment to be enumerated")
@@ -551,14 +536,13 @@ func TestLoadRESTEndpointsOnTheRealRepo(t *testing.T) {
 	}
 
 	ported, pythonOnly, _ := RESTEndpointCounts(rows)
-	if ported != 32 {
-		t.Fatalf("got %d ported routes, want exactly 32 (POST /api/v1/investment/explain, GET /api/v1/quadrant, "+
+	if ported != 30 {
+		t.Fatalf("got %d ported routes, want exactly 30 (POST /api/v1/investment/explain, GET /api/v1/quadrant, "+
 			"GET /api/v1/filters/options, POST+GET /api/v1/drilldown/prs, GET /api/v1/meta, "+
 			"POST+GET /api/v1/drilldown/issues, POST+GET /api/v1/explain, GET /api/v1/people, "+
 			"GET /api/v1/people/{person_id}/summary, GET /api/v1/people/{person_id}/metric, GET /api/v1/flame, "+
 			"GET /api/v1/people/{person_id}/drilldown/prs, GET /api/v1/people/{person_id}/drilldown/issues, "+
 			"GET /api/v1/flame/aggregated, GET /api/v1/heatmap, POST+GET /api/v1/sankey, "+
-			"POST /api/v1/investment/flow, POST /api/v1/investment/flow/repo-team, "+
 			"POST+GET /api/v1/investment, GET /api/v1/investment/sunburst, POST+GET /api/v1/home, "+
 			"POST+GET /api/v1/work-units, POST /api/v1/work-units/{work_unit_id}/explain, "+
 			"POST+GET /api/v1/opportunities) -- "+

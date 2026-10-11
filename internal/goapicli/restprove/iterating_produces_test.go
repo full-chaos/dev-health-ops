@@ -2,8 +2,6 @@ package restprove
 
 import (
 	"context"
-	"encoding/json"
-	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -65,24 +63,6 @@ func scopedFixtureServers(t *testing.T, build string, scopeOf func(*http.Request
 	return candidate.URL, baseline.URL, &scopes
 }
 
-func flowBodyScopeID(r *http.Request) string {
-	raw, err := io.ReadAll(r.Body)
-	if err != nil {
-		return ""
-	}
-	var body struct {
-		Filters struct {
-			Scope struct {
-				IDs []string `json:"ids"`
-			} `json:"scope"`
-		} `json:"filters"`
-	}
-	if json.Unmarshal(raw, &body) != nil || len(body.Filters.Scope.IDs) == 0 {
-		return ""
-	}
-	return body.Filters.Scope.IDs[0]
-}
-
 func queryScopeID(r *http.Request) string {
 	return r.URL.Query().Get("scope_id")
 }
@@ -92,7 +72,7 @@ func queryScopeID(r *http.Request) string {
 // caller below exercises the bounded-candidate JSON-comparison mechanism
 // itself (resolveIteratingRequest's own skip/stop/win decisions over a
 // real Compare()), not this ticket's deleted-Python-body override -- both
-// REST:POST:/api/v1/investment/flow and REST:GET:/api/v1/work-units are
+// REST:GET:/api/v1/investment/sunburst and REST:GET:/api/v1/work-units are
 // now in goapiproof.DeletedPythonBodyOperations, whose committed
 // (200, 500)/candidate_shape shape would refuse every fake baseline these
 // tests build to answer 200 with real data. Every OTHER field (Parity,
@@ -118,56 +98,6 @@ func corpusRequest(t *testing.T, operation, name string) (goapiproof.RESTEndpoin
 	}
 	t.Fatalf("%s declares no request %q", operation, name)
 	return goapiproof.RESTEndpointSpec{}, goapiproof.RESTRequest{}, goapiproof.RESTIDBinding{}
-}
-
-// TestResolveIteratingRequest_FlowRepoScopedSkipsARepositoryWithNoInvestmentRows
-// replays the captured flow bodies for a repository with no investment
-// rows (empty nodes/links, zeroed coverage, non-null labels) as the first
-// candidate. That body is not vacuous -- its labels and coverage figures
-// are non-null leaves -- so only the request's own declared node id keeps
-// it from winning. The second candidate answers a body with nodes and
-// wins; exactly one receipt is written, for the winner.
-func TestResolveIteratingRequest_FlowRepoScopedSkipsARepositoryWithNoInvestmentRows(t *testing.T) {
-	const build = "abc123def456"
-	withData := readProveFixture(t, "investmentflow_dynamicorg_baseline_1988f415.json")
-	candidateURL, baselineURL, scopes := scopedFixtureServers(t, build, flowBodyScopeID,
-		map[string]string{
-			"repo-empty": readProveFixture(t, "investmentflow_reposcoped_emptyrepo_candidate_2a7a073a.json"),
-			"repo-data":  withData,
-		},
-		map[string]string{
-			"repo-empty": readProveFixture(t, "investmentflow_reposcoped_emptyrepo_baseline_acc5f56b.json"),
-			"repo-data":  withData,
-		},
-	)
-	f := flags{queryAPIURL: candidateURL, pythonAPIURL: baselineURL, org: "org-1", recordedBy: "chris", reviewEvidence: "test"}
-	spec, request, binding := corpusRequest(t, "REST:POST:/api/v1/investment/flow", "repo_scoped")
-
-	writer := &fakeReceiptWriter{}
-	attempt, err := resolveIteratingRequest(context.Background(), goapiproof.NewLegClient(0), f, "REST:POST:/api/v1/investment/flow",
-		spec, request, binding, map[string]string{}, map[string][]string{binding.Producer: {"repo-empty", "repo-data"}},
-		staticCredentialForTest(), staticCredentialForTest(), build, goapiproof.AuthContext{}, time.Now().UTC(), writer, nil)
-	if err != nil {
-		t.Fatalf("resolveIteratingRequest: %v", err)
-	}
-	if !attempt.out.Admitted || !attempt.legsSent {
-		t.Fatalf("attempt = %+v, want an admitted win", attempt.out)
-	}
-	if got := attempt.out.producedIDs[binding.ExposeAs]; got != "repo-data" {
-		t.Fatalf("producedIDs[%s] = %q, want repo-data (the repository with investment rows)", binding.ExposeAs, got)
-	}
-	if len(attempt.out.Attempts) != 1 || attempt.out.Attempts[0].CandidateID != "repo-empty" {
-		t.Fatalf("Attempts = %+v, want exactly one losing attempt naming repo-empty", attempt.out.Attempts)
-	}
-	if attempt.out.Attempts[0].Refusal != goapiproof.RESTRefusalNoLegProducedTheDeclaredID {
-		t.Fatalf("Attempts[0].Refusal = %q, want %q", attempt.out.Attempts[0].Refusal, goapiproof.RESTRefusalNoLegProducedTheDeclaredID)
-	}
-	if len(writer.receipts) != 1 {
-		t.Fatalf("wrote %d receipts, want exactly 1 -- for the winner only", len(writer.receipts))
-	}
-	if len(*scopes) != 2 {
-		t.Fatalf("candidate scopes = %v, want exactly repo-empty then repo-data", *scopes)
-	}
 }
 
 // TestResolveIteratingRequest_WorkUnitsRepoScopedSkipsARepositoryWithNoWorkUnits
@@ -242,47 +172,6 @@ func TestProveOneRESTRequest_SingleShotJSONRequestStillAdmittedWithoutItsDeclare
 	}
 }
 
-// TestResolveIteratingRequest_FlowRepoScopedComparesACandidateOnlyNodeInsteadOfSkippingIt
-// pins the other side of the win condition: when the baseline leg answers
-// the captured empty flow body but the candidate leg answers nodes, the
-// declared node id is yielded by one leg, so the attempt is compared --
-// and wins as a mismatch -- rather than being skipped for a later
-// candidate where both planes agree.
-func TestResolveIteratingRequest_FlowRepoScopedComparesACandidateOnlyNodeInsteadOfSkippingIt(t *testing.T) {
-	const build = "abc123def456"
-	withData := readProveFixture(t, "investmentflow_dynamicorg_baseline_1988f415.json")
-	emptyCandidate := readProveFixture(t, "investmentflow_reposcoped_emptyrepo_candidate_2a7a073a.json")
-	oneNode := strings.Replace(emptyCandidate, `"nodes":[]`, `"nodes":[{"name":"ABC-123","group":"subcategory","value":1}]`, 1)
-	if oneNode == emptyCandidate {
-		t.Fatal("captured empty candidate flow body carries no empty nodes list to replace")
-	}
-	candidateURL, baselineURL, scopes := scopedFixtureServers(t, build, flowBodyScopeID,
-		map[string]string{"repo-diverges": oneNode, "repo-data": withData},
-		map[string]string{
-			"repo-diverges": readProveFixture(t, "investmentflow_reposcoped_emptyrepo_baseline_acc5f56b.json"),
-			"repo-data":     withData,
-		},
-	)
-	f := flags{queryAPIURL: candidateURL, pythonAPIURL: baselineURL, org: "org-1", recordedBy: "chris", reviewEvidence: "test"}
-	spec, request, binding := corpusRequest(t, "REST:POST:/api/v1/investment/flow", "repo_scoped")
-
-	attempt, err := resolveIteratingRequest(context.Background(), goapiproof.NewLegClient(0), f, "REST:POST:/api/v1/investment/flow",
-		spec, request, binding, map[string]string{}, map[string][]string{binding.Producer: {"repo-diverges", "repo-data"}},
-		staticCredentialForTest(), staticCredentialForTest(), build, goapiproof.AuthContext{}, time.Now().UTC(), &fakeReceiptWriter{}, nil)
-	if err != nil {
-		t.Fatalf("resolveIteratingRequest: %v", err)
-	}
-	if !attempt.out.Admitted || attempt.out.TerminalState != goapiproof.TerminalStateMismatch {
-		t.Fatalf("attempt = %+v, want an admitted mismatch on the first candidate", attempt.out)
-	}
-	if got := attempt.out.producedIDs[binding.ExposeAs]; got != "repo-diverges" {
-		t.Fatalf("producedIDs[%s] = %q, want repo-diverges", binding.ExposeAs, got)
-	}
-	if len(attempt.out.Attempts) != 0 || len(*scopes) != 1 {
-		t.Fatalf("Attempts = %+v, candidate scopes = %v, want the first candidate compared and no other tried", attempt.out.Attempts, *scopes)
-	}
-}
-
 // TestResolveIteratingRequest_WorkUnitsRepoScopedGoOnlyUnitIsComparedAndNotExplained
 // pins the work-units side of a candidate-only result: when only the Go
 // plane returns a work unit for the first repository, that repository is
@@ -342,11 +231,11 @@ func TestResolveIteratingRequest_WorkUnitsRepoScopedGoOnlyUnitIsComparedAndNotEx
 // receipt is written -- a later matching repository can never hide it.
 func TestResolveIteratingRequest_ARealFailureStopsTheSearch(t *testing.T) {
 	const build = "abc123def456"
-	withData := readProveFixture(t, "investmentflow_dynamicorg_baseline_1988f415.json")
+	withData := `[{"theme":"Feature Delivery"}]`
 	var scopes []string
 	var mu sync.Mutex
 	candidate := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		scope := flowBodyScopeID(r)
+		scope := queryScopeID(r)
 		mu.Lock()
 		scopes = append(scopes, scope)
 		mu.Unlock()
@@ -366,10 +255,10 @@ func TestResolveIteratingRequest_ARealFailureStopsTheSearch(t *testing.T) {
 	})))
 	t.Cleanup(baseline.Close)
 	f := flags{queryAPIURL: candidate.URL, pythonAPIURL: baseline.URL, org: "org-1", recordedBy: "chris", reviewEvidence: "test"}
-	spec, request, binding := corpusRequest(t, "REST:POST:/api/v1/investment/flow", "repo_scoped")
+	spec, request, binding := corpusRequest(t, "REST:GET:/api/v1/investment/sunburst", "repo_scoped")
 
 	writer := &fakeReceiptWriter{}
-	attempt, err := resolveIteratingRequest(context.Background(), goapiproof.NewLegClient(0), f, "REST:POST:/api/v1/investment/flow",
+	attempt, err := resolveIteratingRequest(context.Background(), goapiproof.NewLegClient(0), f, "REST:GET:/api/v1/investment/sunburst",
 		spec, request, binding, map[string]string{}, map[string][]string{binding.Producer: {"repo-fails", "repo-data"}},
 		staticCredentialForTest(), staticCredentialForTest(), build, goapiproof.AuthContext{}, time.Now().UTC(), writer, nil)
 	if err != nil {
@@ -551,42 +440,6 @@ func assertSearchEndedOnFirst(t *testing.T, attempt resolvedAttempt, binding goa
 	if ok || receipts != 0 {
 		t.Fatalf("refused attempt exposes %q (present=%v) with %d receipts, want nothing exposed and no receipt", exposed, ok, receipts)
 	}
-}
-
-// TestResolveIteratingRequest_FlowEmptyNodesWithOtherDifferencesWins pins
-// that an empty declared list on both legs is not "no data" by itself:
-// the captured empty-repository flow bodies are served with one extra
-// link on the candidate leg only, so the comparison finds a difference,
-// and that first repository wins as a mismatch with its one receipt
-// instead of being skipped for a later matching repository.
-func TestResolveIteratingRequest_FlowEmptyNodesWithOtherDifferencesWins(t *testing.T) {
-	const build = "abc123def456"
-	emptyCandidate := readProveFixture(t, "investmentflow_reposcoped_emptyrepo_candidate_2a7a073a.json")
-	extraLink := strings.Replace(emptyCandidate, `"links":[]`, `"links":[{"source":"ABC-123","target":"ABC-124","value":1}]`, 1)
-	if extraLink == emptyCandidate {
-		t.Fatal("captured empty candidate flow body carries no empty links list to replace")
-	}
-	withData := readProveFixture(t, "investmentflow_dynamicorg_baseline_1988f415.json")
-	candidateURL, baselineURL, scopes := scopedFixtureServers(t, build, flowBodyScopeID,
-		map[string]string{"repo-first": extraLink, "repo-data": withData},
-		map[string]string{
-			"repo-first": readProveFixture(t, "investmentflow_reposcoped_emptyrepo_baseline_acc5f56b.json"),
-			"repo-data":  withData,
-		},
-	)
-	f := flags{queryAPIURL: candidateURL, pythonAPIURL: baselineURL, org: "org-1", recordedBy: "chris", reviewEvidence: "test"}
-	spec, request, binding := corpusRequest(t, "REST:POST:/api/v1/investment/flow", "repo_scoped")
-	writer := &fakeReceiptWriter{}
-	attempt, err := resolveIteratingRequest(context.Background(), goapiproof.NewLegClient(0), f, "REST:POST:/api/v1/investment/flow",
-		spec, request, binding, map[string]string{}, map[string][]string{binding.Producer: {"repo-first", "repo-data"}},
-		staticCredentialForTest(), staticCredentialForTest(), build, goapiproof.AuthContext{}, time.Now().UTC(), writer, nil)
-	if err != nil {
-		t.Fatalf("resolveIteratingRequest: %v", err)
-	}
-	if !attempt.out.Admitted || attempt.out.TerminalState != goapiproof.TerminalStateMismatch {
-		t.Fatalf("attempt = %+v, want an admitted mismatch on repo-first", attempt.out)
-	}
-	assertSearchEndedOnFirst(t, attempt, binding, *scopes, "repo-first", len(writer.receipts))
 }
 
 // TestResolveIteratingRequest_JSONExhaustionIsANamedRefusalWithEveryAttempt

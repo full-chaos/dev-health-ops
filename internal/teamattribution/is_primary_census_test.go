@@ -191,7 +191,6 @@ var (
 // their query groups or filters by a team. Each must still be found.
 var teamGroupedReaderAllowlist = map[string]string{
 	"internal/queryapi/workgraph\x00resolveWorkUnitTeamAttributions": workUnitVoteReason,
-	"internal/queryapi/analytics\x00BuildUnitTeamSubquery":           workUnitVoteReason,
 }
 
 // workUnitVoteReason: investment and work-unit views follow one team per work
@@ -210,11 +209,6 @@ const ownershipTeamAliasReason = "the ut alias is the repository's owning team (
 var workUnitVoteConsumers = map[string]string{
 	"internal/queryapi/analytics\x00dbColumn":                                     ownershipTeamAliasReason,
 	"internal/queryapi/analytics\x00compileFlowMatrixInvestmentTeamRepoDimension": ownershipTeamAliasReason,
-	"internal/queryapi/investmentflow\x00fetchInvestmentTeamEdges":                workUnitVoteReason,
-	"internal/queryapi/investmentflow\x00fetchInvestmentRepoTeamEdges":            workUnitVoteReason,
-	"internal/queryapi/investmentflow\x00fetchInvestmentTeamCategoryRepoEdges":    workUnitVoteReason,
-	"internal/queryapi/investmentflow\x00fetchInvestmentTeamSubcategoryRepoEdges": workUnitVoteReason,
-	"internal/queryapi/investmentflow\x00fetchInvestmentUnassignedCounts":         workUnitVoteReason,
 }
 
 var workUnitVoteTeamColumn = regexp.MustCompile(`\b(?:ut|unit_team)\.team_(?:id|label)\b`)

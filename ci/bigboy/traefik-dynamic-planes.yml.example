@@ -9,7 +9,7 @@ http:
       priority: 1000
       service: go-api-paths
     query-api-paths:
-      rule: "Host(`traefik`) && PathRegexp(`^(/api/v1/meta|/api/v1/filters/options|/api/v1/investment/explain|/api/v1/flame/aggregated|/api/v1/people|/api/v1/people/[^/]+/metric|/api/v1/quadrant|/api/v1/people/[^/]+/summary|/api/v1/explain|/api/v1/drilldown/issues|/api/v1/people/[^/]+/drilldown/issues|/api/v1/flame|/api/v1/sankey|/api/v1/people/[^/]+/drilldown/prs|/api/v1/heatmap|/api/v1/drilldown/prs|/api/v1/opportunities|/api/v1/investment/sunburst|/api/v1/investment/flow/repo-team|/api/v1/investment/flow|/api/v1/investment|/api/v1/work-units/[^/]+/explain|/api/v1/home|/api/v1/work-units)$`)"
+      rule: "Host(`traefik`) && PathRegexp(`^(/api/v1/meta|/api/v1/filters/options|/api/v1/investment/explain|/api/v1/flame/aggregated|/api/v1/people|/api/v1/people/[^/]+/metric|/api/v1/quadrant|/api/v1/people/[^/]+/summary|/api/v1/explain|/api/v1/drilldown/issues|/api/v1/people/[^/]+/drilldown/issues|/api/v1/flame|/api/v1/sankey|/api/v1/people/[^/]+/drilldown/prs|/api/v1/heatmap|/api/v1/drilldown/prs|/api/v1/opportunities|/api/v1/investment/sunburst|/api/v1/investment|/api/v1/work-units/[^/]+/explain|/api/v1/home|/api/v1/work-units)$`)"
       entryPoints: [web]
       priority: 1000
       service: query-api-paths

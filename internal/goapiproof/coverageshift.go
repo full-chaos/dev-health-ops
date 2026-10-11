@@ -5,7 +5,7 @@ import "math"
 // CoverageShiftShape, set on a BaselineDefect, narrows that defect's
 // blanket "any leaf difference under Paths is covered" rule to the ONE
 // transform the argMax null-transition mechanism (investment.go's
-// LatestWorkUnitInvestmentsSource, buildUnitTeamSubquery) can actually
+// LatestWorkUnitInvestmentsSource) can actually
 // produce on investmentFull's two coverage ratios, instead of admitting
 // any value difference under the cited coverage paths.
 //

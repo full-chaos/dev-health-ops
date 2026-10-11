@@ -24,7 +24,7 @@ import (
 // things).
 
 var (
-	teamsTable = regexp.MustCompile("\\b(from|join|into|update|table)\\s+`?teams\\b")
+	teamsTable = regexp.MustCompile("\\b(from|join|into|update|table)\\s+`?([a-z0-9_%{}<>$:.?]+\\.)?`?teams\\b")
 	// a table named members (the Linear members dimension), not a column.
 	membersTable = regexp.MustCompile("\\b(from|join|into|update|table)\\s+`?members\\b")
 	membersWord  = regexp.MustCompile("(^|[^a-z0-9_])`?members`?([^a-z0-9_]|$)")
@@ -115,6 +115,8 @@ func TestRosterCensusRecognisesTheColumn(t *testing.T) {
 		"not empty":        "SELECT count() FROM teams FINAL WHERE notEmpty(members)",
 		"array join":       "SELECT id FROM teams ARRAY JOIN members AS m",
 		"insert with form": "INSERT INTO teams (id,team_uuid,name,description,members,manual_members) VALUES (?,?,?,?,?,?)",
+		"qualified insert": "INSERT INTO %s.teams (id, team_uuid, name, members, manual_members) VALUES ('a', generateUUIDv4(), 'n', [], [])",
+		"qualified select": "SELECT id, members FROM worker_test.teams",
 	}
 	for name, sql := range reads {
 		if !readsOrWritesTeamsRoster(sql) {

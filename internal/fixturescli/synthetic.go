@@ -235,6 +235,16 @@ func (table FrozenTable) WithoutServerStamped() FrozenTable {
 	return table.withoutColumns(drop)
 }
 
+// logRetiredColumns says, once per load and per table, which retired column of which world is not
+// loaded (CHAOS-9161): the drop is named and visible, never silent.
+func logRetiredColumns(ctx context.Context, world string, table FrozenTable) {
+	for _, column := range table.Columns {
+		if retiredColumns[table.Name][column.Name] {
+			slog.Default().InfoContext(ctx, "fixtures_world_retired_column_dropped", "world", world, "table", table.Name, "column", column.Name)
+		}
+	}
+}
+
 // WithoutRetired is the table without the columns the schema no longer has (retiredColumns): the form
 // a load into the migration head reproduces.
 func (table FrozenTable) WithoutRetired() FrozenTable {
@@ -291,6 +301,7 @@ func (target FrozenTarget) Load(ctx context.Context, conn driver.Conn, delta tim
 	// (256 KiB) is below one chunk of the largest table.
 	insertContext := clickhouse.Context(ctx, clickhouse.WithSettings(clickhouse.Settings{"max_query_size": maxQuerySize}))
 	for _, table := range target.Tables {
+		logRetiredColumns(ctx, "synthetic", table)
 		table = table.WithoutServerStamped()
 		rows, err := table.ShiftTimes(delta)
 		if err != nil {

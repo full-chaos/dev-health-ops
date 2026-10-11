@@ -601,11 +601,25 @@ func syncPolicySeedSQL(database, teamID string) string {
 	return fmt.Sprintf("INSERT INTO %s.team_sync_policies (org_id, team_id, sync_policy, managed_fields, updated_by, updated_at) VALUES ('org-1', '%s', 2, [], NULL, now64(6))", database, teamID)
 }
 
-// adminOverrideSeedKeySQL is the seed text the Python golden was recorded with (the roster column
-// `members` existed then). It is the golden's request key and is never executed: the key must not
-// move, or the golden is no longer the recording of the program it pins (CHAOS-9161).
+// adminOverrideSeedKeySQL is the seed text the Python golden was RECORDED with: that run had the roster
+// column `members` (dropped by migration 118, CHAOS-9161) and seeded it with ['old']. It is the golden's
+// request key and is never executed. It is DERIVED from the executed seed by putting back exactly that
+// one column and its one value, so the two cannot drift apart: a change of the executed seed moves the
+// key (and the golden is then stale and fails its freshness check), and a seed the derivation does not
+// recognise fails loudly. DECLARED DIVERGENCE: the recorded Python run seeded `members`, the executed
+// seed (both databases) does not; the golden file is untouched.
 func adminOverrideSeedKeySQL(database string) string {
-	return fmt.Sprintf(`INSERT INTO %s.teams (id, team_uuid, name, description, members, manual_members, project_keys, repo_patterns, is_active, updated_at, last_synced, org_id, provider) VALUES ('gh:platform', generateUUIDv4(), 'Platform', 'old', ['old'], ['override@example.com'], [], [], 1, toDateTime64('%s', 6), toDateTime64('%s', 6), 'org-1', 'github')`, database, teamsSeedInstant, teamsSeedInstant)
+	key := adminOverrideSeedSQL(database)
+	for _, put := range [][2]string{
+		{"description, manual_members,", "description, members, manual_members,"},
+		{"'old', ['override@example.com']", "'old', ['old'], ['override@example.com']"},
+	} {
+		if strings.Count(key, put[0]) != 1 {
+			panic("the admin override seed no longer holds " + put[0] + ": re-derive the golden key")
+		}
+		key = strings.Replace(key, put[0], put[1], 1)
+	}
+	return key
 }
 
 // adminOverrideSeedSQL is the existing `teams` row an admin's override scenario starts from.

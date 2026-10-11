@@ -96,133 +96,6 @@ func TestCompareGitHubIssueTypeMetricsVersionRequiresOneUnambiguousFullRow(
 	}
 }
 
-func githubWorkItemEngineEffectClassificationRow() githubInvestmentClassificationDailyRow {
-	area, rule := "security", "sec_general"
-	return githubInvestmentClassificationDailyRow{
-		RepoID: githubWorkItemEngineEffectRepoID(), Day: "2026-08-04",
-		ArtifactType: "work_item", ArtifactID: "acme/api#1", Provider: "github",
-		InvestmentArea: &area, ProjectStream: "general", Confidence: 1,
-		RuleID: &rule, ComputedAt: githubWorkItemEngineEffectAt, OrgID: "org-acme",
-	}
-}
-
-func TestCompareGitHubInvestmentClassificationVersionRequiresOneUnambiguousFullRow(
-	t *testing.T,
-) {
-	tests := []struct {
-		name     string
-		mutate   func(*githubInvestmentClassificationDailyRow)
-		distinct int
-		want     EffectInspection
-	}{
-		{name: "identical row", distinct: 1, want: EffectExact},
-		{name: "absent", distinct: 0, want: EffectAbsent},
-		{name: "two distinct groups conflict even when first equals expected", distinct: 2, want: EffectConflict},
-		{name: "two distinct groups at the newest generation conflict", distinct: 2, mutate: func(row *githubInvestmentClassificationDailyRow) {
-			row.ComputedAt = githubWorkItemEngineEffectOlderAt
-		}, want: EffectConflict},
-		{name: "single older row is absent", distinct: 1, mutate: func(row *githubInvestmentClassificationDailyRow) {
-			row.ComputedAt = githubWorkItemEngineEffectOlderAt
-		}, want: EffectAbsent},
-		{name: "single newer row conflicts", distinct: 1, mutate: func(row *githubInvestmentClassificationDailyRow) {
-			row.ComputedAt = githubWorkItemEngineEffectNewerAt
-		}, want: EffectConflict},
-		{name: "repo differs", distinct: 1, mutate: func(row *githubInvestmentClassificationDailyRow) {
-			row.RepoID = nil
-		}, want: EffectConflict},
-		{name: "confidence differs", distinct: 1, mutate: func(row *githubInvestmentClassificationDailyRow) {
-			row.Confidence = 0
-		}, want: EffectConflict},
-		{name: "rule differs", distinct: 1, mutate: func(row *githubInvestmentClassificationDailyRow) {
-			other := "other"
-			row.RuleID = &other
-		}, want: EffectConflict},
-		{name: "tenant differs", distinct: 1, mutate: func(row *githubInvestmentClassificationDailyRow) {
-			row.OrgID = "org-other"
-		}, want: EffectConflict},
-	}
-	for _, testCase := range tests {
-		t.Run(testCase.name, func(t *testing.T) {
-			expected := githubWorkItemEngineEffectClassificationRow()
-			actual := githubWorkItemEngineEffectClassificationRow()
-			if testCase.mutate != nil {
-				testCase.mutate(&actual)
-			}
-			if got := compareGitHubInvestmentClassificationVersion(
-				expected, actual, testCase.distinct, "org-acme",
-			); got != testCase.want {
-				t.Fatalf("inspection=%v want=%v", got, testCase.want)
-			}
-		})
-	}
-}
-
-func githubWorkItemEngineEffectMetricsRow() githubInvestmentMetricsDailyRow {
-	area := "security"
-	return githubInvestmentMetricsDailyRow{
-		RepoID: githubWorkItemEngineEffectRepoID(), Day: "2026-08-04",
-		TeamID: "payments", InvestmentArea: &area, ProjectStream: "general",
-		DeliveryUnits: 3, WorkItemsCompleted: 2, PRsMerged: 1, ChurnLOC: 4,
-		CycleP50Hours: 5, ComputedAt: githubWorkItemEngineEffectAt, OrgID: "org-acme",
-	}
-}
-
-func TestCompareGitHubInvestmentMetricsVersionRejectsAmbiguousNewestTuple(
-	t *testing.T,
-) {
-	tests := []struct {
-		name           string
-		mutate         func(*githubInvestmentMetricsDailyRow)
-		latestDistinct int
-		want           EffectInspection
-	}{
-		{name: "identical latest tuple", latestDistinct: 1, want: EffectExact},
-		{name: "absent", latestDistinct: 0, want: EffectAbsent},
-		{name: "equal-time divergence is not arbitrary argMax", latestDistinct: 2, want: EffectConflict},
-		{name: "older latest tuple is absent", latestDistinct: 1, mutate: func(row *githubInvestmentMetricsDailyRow) {
-			row.ComputedAt = githubWorkItemEngineEffectOlderAt
-		}, want: EffectAbsent},
-		{name: "newer latest tuple conflicts", latestDistinct: 1, mutate: func(row *githubInvestmentMetricsDailyRow) {
-			row.ComputedAt = githubWorkItemEngineEffectNewerAt
-		}, want: EffectConflict},
-		{name: "repo differs", latestDistinct: 1, mutate: func(row *githubInvestmentMetricsDailyRow) {
-			row.RepoID = nil
-		}, want: EffectConflict},
-		{name: "units differ", latestDistinct: 1, mutate: func(row *githubInvestmentMetricsDailyRow) {
-			row.DeliveryUnits++
-		}, want: EffectConflict},
-		{name: "completed differs", latestDistinct: 1, mutate: func(row *githubInvestmentMetricsDailyRow) {
-			row.WorkItemsCompleted++
-		}, want: EffectConflict},
-		{name: "merged differs", latestDistinct: 1, mutate: func(row *githubInvestmentMetricsDailyRow) {
-			row.PRsMerged++
-		}, want: EffectConflict},
-		{name: "churn differs", latestDistinct: 1, mutate: func(row *githubInvestmentMetricsDailyRow) {
-			row.ChurnLOC++
-		}, want: EffectConflict},
-		{name: "cycle differs", latestDistinct: 1, mutate: func(row *githubInvestmentMetricsDailyRow) {
-			row.CycleP50Hours++
-		}, want: EffectConflict},
-		{name: "tenant differs", latestDistinct: 1, mutate: func(row *githubInvestmentMetricsDailyRow) {
-			row.OrgID = "org-other"
-		}, want: EffectConflict},
-	}
-	for _, testCase := range tests {
-		t.Run(testCase.name, func(t *testing.T) {
-			expected := githubWorkItemEngineEffectMetricsRow()
-			actual := githubWorkItemEngineEffectMetricsRow()
-			if testCase.mutate != nil {
-				testCase.mutate(&actual)
-			}
-			if got := compareGitHubInvestmentMetricsVersion(
-				expected, actual, testCase.latestDistinct, "org-acme",
-			); got != testCase.want {
-				t.Fatalf("inspection=%v want=%v", got, testCase.want)
-			}
-		})
-	}
-}
-
 func TestGitHubWorkItemEngineLogicalKeysIncludeNullableRepoID(t *testing.T) {
 	repoA := uuid.MustParse("11111111-1111-4111-8111-111111111111")
 	repoB := uuid.MustParse("22222222-2222-4222-8222-222222222222")
@@ -237,25 +110,6 @@ func TestGitHubWorkItemEngineLogicalKeysIncludeNullableRepoID(t *testing.T) {
 		t.Fatal("issue logical identity collapsed different repo_id values")
 	}
 
-	classificationA := githubWorkItemEngineEffectClassificationRow()
-	classificationB := classificationA
-	classificationA.RepoID, classificationB.RepoID = nil, &repoB
-	if !githubWorkItemDerivedUniqueSortingKeys(
-		[]githubInvestmentClassificationDailyRow{classificationA, classificationB},
-		githubInvestmentClassificationSortingKey,
-	) {
-		t.Fatal("classification logical identity collapsed NULL and present repo_id")
-	}
-
-	metricA := githubWorkItemEngineEffectMetricsRow()
-	metricB := metricA
-	metricA.RepoID, metricB.RepoID = &repoA, nil
-	if !githubWorkItemDerivedUniqueSortingKeys(
-		[]githubInvestmentMetricsDailyRow{metricA, metricB},
-		githubInvestmentMetricsSortingKey,
-	) {
-		t.Fatal("investment metric logical identity collapsed present and NULL repo_id")
-	}
 }
 
 type githubWorkItemEngineRecordingConn struct {
@@ -279,16 +133,6 @@ func TestGitHubWorkItemEnginePlainMergeTreeReadbacksNeverUseFinal(t *testing.T) 
 		t, githubIssueTypeMetricsDestination,
 		[]githubIssueTypeMetricsDailyRow{githubWorkItemEngineEffectIssueRow()},
 	)
-	classificationEffect := githubWorkItemEngineUnitEffect(
-		t, githubInvestmentClassificationsDestination,
-		[]githubInvestmentClassificationDailyRow{
-			githubWorkItemEngineEffectClassificationRow(),
-		},
-	)
-	metricsEffect := githubWorkItemEngineUnitEffect(
-		t, githubInvestmentMetricsDestination,
-		[]githubInvestmentMetricsDailyRow{githubWorkItemEngineEffectMetricsRow()},
-	)
 	for _, testCase := range []struct {
 		name        string
 		destination string
@@ -299,16 +143,6 @@ func TestGitHubWorkItemEnginePlainMergeTreeReadbacksNeverUseFinal(t *testing.T) 
 			name: "issue type", destination: githubIssueTypeMetricsDestination,
 			adapter: GitHubIssueTypeMetricsClickHouseEffects{Conn: conn, Lease: lease},
 			effect:  issueEffect,
-		},
-		{
-			name: "classification", destination: githubInvestmentClassificationsDestination,
-			adapter: GitHubInvestmentClassificationsClickHouseEffects{Conn: conn, Lease: lease},
-			effect:  classificationEffect,
-		},
-		{
-			name: "metrics", destination: githubInvestmentMetricsDestination,
-			adapter: GitHubInvestmentMetricsClickHouseEffects{Conn: conn, Lease: lease},
-			effect:  metricsEffect,
 		},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -325,8 +159,8 @@ func TestGitHubWorkItemEnginePlainMergeTreeReadbacksNeverUseFinal(t *testing.T) 
 			}
 		})
 	}
-	if len(conn.queries) != 3 {
-		t.Fatalf("readback queries=%d want=3", len(conn.queries))
+	if len(conn.queries) != 1 {
+		t.Fatalf("readback queries=%d want=1", len(conn.queries))
 	}
 	for _, query := range conn.queries {
 		if strings.Contains(strings.ToUpper(query), "FINAL") {
@@ -395,12 +229,6 @@ func githubWorkItemEngineAdapterCases(t *testing.T) []githubWorkItemEngineAdapte
 	issue := githubWorkItemEngineEffectIssueRow()
 	foreignIssue := issue
 	foreignIssue.OrgID = "org-other"
-	classification := githubWorkItemEngineEffectClassificationRow()
-	foreignClassification := classification
-	foreignClassification.OrgID = "org-other"
-	metrics := githubWorkItemEngineEffectMetricsRow()
-	foreignMetrics := metrics
-	foreignMetrics.OrgID = "org-other"
 	return []githubWorkItemEngineAdapterCase{
 		{
 			name: "issue type", destination: githubIssueTypeMetricsDestination,
@@ -413,34 +241,6 @@ func githubWorkItemEngineAdapterCases(t *testing.T) []githubWorkItemEngineAdapte
 			),
 			adapter: func(conn driver.Conn, lease providerfoundation.LeaseGuard) GitHubWorkItemEffectAdapter {
 				return GitHubIssueTypeMetricsClickHouseEffects{Conn: conn, Lease: lease}
-			},
-		},
-		{
-			name: "classification", destination: githubInvestmentClassificationsDestination,
-			valid: githubWorkItemEngineUnitEffect(
-				t, githubInvestmentClassificationsDestination,
-				[]githubInvestmentClassificationDailyRow{classification},
-			),
-			forgedOrg: githubWorkItemEngineUnitEffect(
-				t, githubInvestmentClassificationsDestination,
-				[]githubInvestmentClassificationDailyRow{foreignClassification},
-			),
-			adapter: func(conn driver.Conn, lease providerfoundation.LeaseGuard) GitHubWorkItemEffectAdapter {
-				return GitHubInvestmentClassificationsClickHouseEffects{Conn: conn, Lease: lease}
-			},
-		},
-		{
-			name: "metrics", destination: githubInvestmentMetricsDestination,
-			valid: githubWorkItemEngineUnitEffect(
-				t, githubInvestmentMetricsDestination,
-				[]githubInvestmentMetricsDailyRow{metrics},
-			),
-			forgedOrg: githubWorkItemEngineUnitEffect(
-				t, githubInvestmentMetricsDestination,
-				[]githubInvestmentMetricsDailyRow{foreignMetrics},
-			),
-			adapter: func(conn driver.Conn, lease providerfoundation.LeaseGuard) GitHubWorkItemEffectAdapter {
-				return GitHubInvestmentMetricsClickHouseEffects{Conn: conn, Lease: lease}
 			},
 		},
 	}

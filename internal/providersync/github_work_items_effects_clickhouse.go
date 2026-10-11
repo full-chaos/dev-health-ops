@@ -180,15 +180,13 @@ type GitHubWorkItemClickHouseEffects struct {
 	// The nine adapters below write tables that the daily job owns. No
 	// destination dispatches to them: they stay only until the dead-code
 	// removal that follows the cut.
-	EstimateCoverageMetricsDaily   GitHubWorkItemEffectAdapter
-	InvestmentClassificationsDaily GitHubWorkItemEffectAdapter
-	InvestmentMetricsDaily         GitHubWorkItemEffectAdapter
-	IssueTypeMetricsDaily          GitHubWorkItemEffectAdapter
-	WorkItemCycleTimes             GitHubWorkItemEffectAdapter
-	WorkItemMetricsDaily           GitHubWorkItemEffectAdapter
-	WorkItemStateDurationsDaily    GitHubWorkItemEffectAdapter
-	WorkItemTeamAttributions       GitHubWorkItemEffectAdapter
-	WorkItemUserMetricsDaily       GitHubWorkItemEffectAdapter
+	EstimateCoverageMetricsDaily GitHubWorkItemEffectAdapter
+	IssueTypeMetricsDaily        GitHubWorkItemEffectAdapter
+	WorkItemCycleTimes           GitHubWorkItemEffectAdapter
+	WorkItemMetricsDaily         GitHubWorkItemEffectAdapter
+	WorkItemStateDurationsDaily  GitHubWorkItemEffectAdapter
+	WorkItemTeamAttributions     GitHubWorkItemEffectAdapter
+	WorkItemUserMetricsDaily     GitHubWorkItemEffectAdapter
 }
 
 func (sink GitHubWorkItemClickHouseEffects) WriteEffect(

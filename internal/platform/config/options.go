@@ -483,7 +483,7 @@ var coreOptions = []Option{
 		Flag: "github-work-items-investment-config",
 		Env:  "WORKER_GITHUB_WORK_ITEMS_INVESTMENT_CONFIG_PATH",
 		Kind: KindString, Group: GroupRoutes,
-		Usage: "path to investment_areas.yaml; required when github/work-items is enabled",
+		Usage: "DEPRECATED and ignored: the investment rule classifier is gone",
 	},
 
 	// CHAOS-6279: operational-bridge-url and operational-bridge-allow-insecure

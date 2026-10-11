@@ -39,7 +39,6 @@ COPY contracts ./contracts
 COPY deploy/go-workers ./deploy/go-workers
 COPY internal ./internal
 COPY src/dev_health_ops/config/status_mapping.yaml ./src/dev_health_ops/config/status_mapping.yaml
-COPY src/dev_health_ops/config/investment_areas.yaml ./src/dev_health_ops/config/investment_areas.yaml
 COPY src/dev_health_ops/config/complexity.yaml ./src/dev_health_ops/config/complexity.yaml
 
 RUN --mount=type=cache,target=/go/pkg/mod \
@@ -80,10 +79,8 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     cp -R /src/contracts/sync-dispatch/v1 /runtime/operator/app/contracts/sync-dispatch/v1; \
     cp /src/deploy/go-workers/deployment.json /runtime/operator/app/deploy/go-workers/deployment.json; \
     cp /src/src/dev_health_ops/config/status_mapping.yaml /runtime/operator/app/config/status_mapping.yaml; \
-    cp /src/src/dev_health_ops/config/investment_areas.yaml /runtime/operator/app/config/investment_areas.yaml; \
     cp /src/src/dev_health_ops/config/complexity.yaml /runtime/operator/app/config/complexity.yaml; \
     cp /src/src/dev_health_ops/config/status_mapping.yaml /runtime/dho/app/config/status_mapping.yaml; \
-    cp /src/src/dev_health_ops/config/investment_areas.yaml /runtime/dho/app/config/investment_areas.yaml; \
     cp /src/src/dev_health_ops/config/complexity.yaml /runtime/dho/app/config/complexity.yaml; \
     cp -R /src/contracts/jobs/v1 /runtime/contractcheck/app/contracts/jobs/v1; \
     cp /src/deploy/go-workers/deployment.json /runtime/contractcheck/app/deploy/go-workers/deployment.json; \

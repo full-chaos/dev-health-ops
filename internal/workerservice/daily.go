@@ -18,7 +18,6 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/remaining"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/workitemengine"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
-	"github.com/full-chaos/dev-health-ops/internal/providersync"
 	clickhousestore "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
 	"github.com/riverqueue/river"
 )
@@ -955,42 +954,29 @@ const dailyFamilyScopedRefusalLogMessage = "native daily family executor refused
 	"the family will not be served and its tables will not be written by " +
 	"this worker. Every other daily family is unaffected."
 
-const dailyFamilyScopedRefusalRemedy = "make the work-items status mapping and " +
-	"investment config readable as regular files at " +
-	"WORKER_GITHUB_WORK_ITEMS_STATUS_MAPPING_PATH and " +
-	"WORKER_GITHUB_WORK_ITEMS_INVESTMENT_CONFIG_PATH, unset " +
+const dailyFamilyScopedRefusalRemedy = "make the work-items status mapping " +
+	"readable as a regular file at " +
+	"WORKER_GITHUB_WORK_ITEMS_STATUS_MAPPING_PATH, unset " +
 	"STATUS_MAPPING_PATH, then restart the worker"
 
-// dailyWorkItemEngines is the pair of config-driven engines the two CHAOS-8810
-// work-item daily families compute with: the status mapping (the type rule of
-// issue_type_metrics_daily) and the investment classifier. They are the SAME
-// two artifacts, at the same two configured paths, that the work-items sync
+// dailyWorkItemEngines is the config-driven engine the issue-type daily family
+// computes with: the status mapping (the type rule of issue_type_metrics_daily).
+// It is the SAME artifact, at the same configured path, that the work-items sync
 // deriver loads (workItemsRuntimeConfigFrom), so the daily job and the sync
-// cannot classify one item two ways. err is the load error, kept so that the
-// ERROR line of a refused family names why.
+// cannot normalize one item two ways. err is the load error, kept so that the
+// ERROR line of a refused family names why. The completion family needs no engine.
 type dailyWorkItemEngines struct {
-	typeNormalizer       workitemengine.TypeNormalizer
-	investmentClassifier workitemengine.InvestmentClassifier
-	err                  error
+	typeNormalizer workitemengine.TypeNormalizer
+	err            error
 }
 
-// dailyWorkItemEnginesFrom loads both engines from the worker configuration.
-// It never returns a half pair: either both engines, or the error.
+// dailyWorkItemEnginesFrom loads the engine from the worker configuration.
 func dailyWorkItemEnginesFrom(cfg config.Config) dailyWorkItemEngines {
 	runtimeConfig, err := workItemsRuntimeConfigFrom(cfg)
 	if err != nil {
 		return dailyWorkItemEngines{err: err}
 	}
-	classifier, err := providersync.NewInvestmentClassifier(runtimeConfig.investmentConfigPath)
-	if err != nil {
-		return dailyWorkItemEngines{err: fmt.Errorf(
-			"%w: native work-items investment config is unavailable",
-			providersync.ErrInvalidConfiguration,
-		)}
-	}
-	return dailyWorkItemEngines{
-		typeNormalizer: runtimeConfig.statusMapping, investmentClassifier: classifier,
-	}
+	return dailyWorkItemEngines{typeNormalizer: runtimeConfig.statusMapping}
 }
 
 // dailyNativeFamilyRegistrations builds the native and post-bridge family

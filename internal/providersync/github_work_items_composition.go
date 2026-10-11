@@ -141,12 +141,6 @@ func NewGitHubWorkItemClickHouseEffects(
 		WorkItemTeamAttributions: GitHubWorkItemTeamAttributionsClickHouseEffects{
 			Conn: conn, Lease: lease, Metrics: metrics,
 		},
-		InvestmentClassificationsDaily: GitHubInvestmentClassificationsClickHouseEffects{
-			Conn: conn, Lease: lease,
-		},
-		InvestmentMetricsDaily: GitHubInvestmentMetricsClickHouseEffects{
-			Conn: conn, Lease: lease,
-		},
 		IssueTypeMetricsDaily: GitHubIssueTypeMetricsClickHouseEffects{
 			Conn: conn, Lease: lease,
 		},
@@ -254,33 +248,21 @@ func (deriver *GitHubWorkItemDeriver) TeamAttributionWrittenObservation() map[st
 }
 
 // NewGitHubWorkItemDeriver is the only production construction path that can
-// install the config-driven engine. Both config paths are explicit: the worker
-// must not inherit a status-mapping environment fallback or silently turn a
-// blank investment path into the classifier's intentional missing-file
-// fallback. Once paths are present, each loader's Python-parity behavior is
-// preserved -- in particular, a named-but-missing investment file constructs
-// the legacy-default classifier exactly as Python does.
+// install the config-driven engine. The status-mapping path is explicit: the
+// worker must not inherit a status-mapping environment fallback.
 func NewGitHubWorkItemDeriver(
 	conn driver.Conn,
 	lease providerfoundation.LeaseGuard,
 	statusMappingConfigPath string,
-	investmentConfigPath string,
 ) (*GitHubWorkItemDeriver, error) {
-	if conn == nil || lease == nil || strings.TrimSpace(statusMappingConfigPath) == "" ||
-		strings.TrimSpace(investmentConfigPath) == "" {
+	if conn == nil || lease == nil || strings.TrimSpace(statusMappingConfigPath) == "" {
 		return nil, ErrInvalidConfiguration
 	}
 	statusMapping, err := LoadStatusMapping(statusMappingConfigPath)
 	if err != nil {
 		return nil, err
 	}
-	investmentClassifier, err := NewInvestmentClassifier(investmentConfigPath)
-	if err != nil {
-		return nil, err
-	}
-	engine, err := NewGitHubWorkItemEngineDeriver(
-		statusMapping, investmentClassifier,
-	)
+	engine, err := NewGitHubWorkItemEngineDeriver(statusMapping)
 	if err != nil {
 		return nil, err
 	}

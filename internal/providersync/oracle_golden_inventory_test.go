@@ -145,12 +145,29 @@ func TestEveryOraclePairHasAFrozenGolden(t *testing.T) {
 	}
 	sort.Strings(pairIDs)
 	for _, pairID := range pairIDs {
+		if reason, retired := retiredPairHarnessSources[pairID]; retired {
+			if answered[pairID] != 0 {
+				t.Errorf("pair %q is declared retired (%s) but a golden answers it: remove the declaration or the golden", pairID, reason)
+			}
+			continue
+		}
 		if answered[pairID] == 0 {
 			t.Errorf("pair %q (testdata/oracle_pairs/%s.py) has no frozen golden: no test compares Go with its Python answer",
 				pairID, strings.ReplaceAll(pairID, "/", "_"))
 		}
 	}
 	t.Logf("%d pairs, %d goldens", len(pairs), len(goldens))
+}
+
+// retiredPairHarnessSources are the pair files whose feature was removed and whose goldens and tests went with it
+// (CHAOS-9200, on chris's word 2026-10-11: the investment rule classifier). The files stay: the harness manifest
+// (oracleHarnessManifest) holds one digest line per pair file and per pair configuration file, and it is part of
+// the request every other golden is keyed on, so removing a file changes the key of every pair golden and would
+// need every golden re-recorded from the pinned Python build. They are never run (a frozen oracle runs no Python).
+var retiredPairHarnessSources = map[string]string{
+	"analytics/investment/classify":   "investment rule classifier removed, CHAOS-9200",
+	"analytics/investment/divergence": "investment rule classifier removed, CHAOS-9200",
+	"analytics/investment/refusal":    "investment rule classifier removed, CHAOS-9200",
 }
 
 // TestAFrozenPairAnswerRefusesAnUntaggedLeaf pins the tagged-leaf rule of a

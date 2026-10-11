@@ -1,9 +1,13 @@
 package workerservice
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"path/filepath"
+	"strings"
+	"sync"
 	"testing"
 
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
@@ -27,13 +31,10 @@ func validGitHubWorkItemsRuntimeConfig(t *testing.T) config.Config {
 		WorkerGithubWorkItemsStatusMappingPath: filepath.Join(
 			root, "src", "dev_health_ops", "config", "status_mapping.yaml",
 		),
-		WorkerGithubWorkItemsInvestmentConfigPath: filepath.Join(
-			root, "src", "dev_health_ops", "config", "investment_areas.yaml",
-		),
 	}
 }
 
-func TestGitHubWorkItemsRuntimeConfigRequiresValidatedExplicitPaths(t *testing.T) {
+func TestGitHubWorkItemsRuntimeConfigRequiresAValidatedExplicitStatusMappingPath(t *testing.T) {
 	t.Setenv("STATUS_MAPPING_PATH", "")
 	valid := validGitHubWorkItemsRuntimeConfig(t)
 	runtimeConfig, err := githubWorkItemsRuntimeConfigFrom(valid)
@@ -41,38 +42,20 @@ func TestGitHubWorkItemsRuntimeConfigRequiresValidatedExplicitPaths(t *testing.T
 		t.Fatal(err)
 	}
 	if !runtimeConfig.configured() ||
-		runtimeConfig.statusMappingPath != valid.WorkerGithubWorkItemsStatusMappingPath ||
-		runtimeConfig.investmentConfigPath != valid.WorkerGithubWorkItemsInvestmentConfigPath {
+		runtimeConfig.statusMappingPath != valid.WorkerGithubWorkItemsStatusMappingPath {
 		t.Fatalf("runtime config = %+v, config = %+v", runtimeConfig, valid)
 	}
 
 	root := githubWorkItemsConfigRepoRoot(t)
 	for name, cfg := range map[string]config.Config{
-		"missing status path": {
-			WorkerGithubWorkItemsInvestmentConfigPath: valid.WorkerGithubWorkItemsInvestmentConfigPath,
-		},
-		"blank investment path": {
-			WorkerGithubWorkItemsStatusMappingPath:    valid.WorkerGithubWorkItemsStatusMappingPath,
-			WorkerGithubWorkItemsInvestmentConfigPath: " ",
-		},
+		"missing status path": {},
+		"blank status path":   {WorkerGithubWorkItemsStatusMappingPath: " "},
 		"missing status file": {
-			WorkerGithubWorkItemsStatusMappingPath:    filepath.Join(root, "missing-status.yaml"),
-			WorkerGithubWorkItemsInvestmentConfigPath: valid.WorkerGithubWorkItemsInvestmentConfigPath,
+			WorkerGithubWorkItemsStatusMappingPath: filepath.Join(root, "missing-status.yaml"),
 		},
 		"malformed status file": {
 			WorkerGithubWorkItemsStatusMappingPath: filepath.Join(
 				root, "internal", "providersync", "testdata", "status_mapping_configs", "structural_root_list.yaml",
-			),
-			WorkerGithubWorkItemsInvestmentConfigPath: valid.WorkerGithubWorkItemsInvestmentConfigPath,
-		},
-		"missing investment file": {
-			WorkerGithubWorkItemsStatusMappingPath:    valid.WorkerGithubWorkItemsStatusMappingPath,
-			WorkerGithubWorkItemsInvestmentConfigPath: filepath.Join(root, "missing-investment.yaml"),
-		},
-		"malformed investment file": {
-			WorkerGithubWorkItemsStatusMappingPath: valid.WorkerGithubWorkItemsStatusMappingPath,
-			WorkerGithubWorkItemsInvestmentConfigPath: filepath.Join(
-				root, "internal", "providersync", "testdata", "investment_configs", "raises_empty.yaml",
 			),
 		},
 	} {
@@ -153,5 +136,36 @@ func TestGitHubProjectsV2EnvironmentWarningCensusIsStartupOnly(t *testing.T) {
 	)
 	if !errors.Is(err, errWorkerDependencyUnavailable) {
 		t.Fatalf("probe error = %v, want worker dependency unavailable", err)
+	}
+}
+
+// The deprecated investment config path is accepted, never read, and logged once (CHAOS-9200): a deployment that
+// still sets it keeps starting, and the setting is not a silent no-op.
+func TestDeprecatedInvestmentConfigPathIsIgnoredAndWarnedOnce(t *testing.T) {
+	t.Setenv("STATUS_MAPPING_PATH", "")
+	var logged bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logged, nil)))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+	investmentConfigPathIgnoredWarning = sync.Once{}
+
+	cfg := validGitHubWorkItemsRuntimeConfig(t)
+	cfg.WorkerGithubWorkItemsInvestmentConfigPath = filepath.Join(t.TempDir(), "no-such-file.yaml")
+	for range 3 {
+		if _, err := githubWorkItemsRuntimeConfigFrom(cfg); err != nil {
+			t.Fatalf("a set (and missing) investment path must not refuse the runtime config: %v", err)
+		}
+	}
+	if got := strings.Count(logged.String(), "WORKER_GITHUB_WORK_ITEMS_INVESTMENT_CONFIG_PATH is set and ignored"); got != 1 {
+		t.Fatalf("warning lines = %d, want exactly 1\n%s", got, logged.String())
+	}
+	investmentConfigPathIgnoredWarning = sync.Once{}
+	logged.Reset()
+	cfg.WorkerGithubWorkItemsInvestmentConfigPath = ""
+	if _, err := githubWorkItemsRuntimeConfigFrom(cfg); err != nil {
+		t.Fatal(err)
+	}
+	if logged.Len() != 0 {
+		t.Fatalf("an unset path logged: %s", logged.String())
 	}
 }

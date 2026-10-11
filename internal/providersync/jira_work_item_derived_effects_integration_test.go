@@ -51,7 +51,6 @@ func TestJiraWorkItemDerivedEffectsWriteReadbackAgainstRealClickHouse(t *testing
 	metricDay := newGitHubWorkItemMetricDay(now)
 	repoID := uuid.MustParse("22222222-2222-4222-8222-222222222222")
 	teamID, teamName := "team-jira", "Jira Team"
-	area, rule := "security", "sec_general"
 	assignee := "jira:accountid:dev"
 	ratio := 0.5
 
@@ -59,16 +58,6 @@ func TestJiraWorkItemDerivedEffectsWriteReadbackAgainstRealClickHouse(t *testing
 		Day: day, Provider: "jira", WorkScopeID: "OPS", TeamID: &teamID,
 		TeamName: &teamName, EstimatedCount: 1, UnestimatedCount: 1, BacklogSize: 2,
 		Ratio: &ratio, ComputedAt: now, OrgID: claim.OrgID,
-	}
-	classification := JiraInvestmentClassificationDailyRow{
-		RepoID: &repoID, Day: day, ArtifactType: "work_item", ArtifactID: "jira:OPS-1",
-		Provider: "jira", InvestmentArea: &area, ProjectStream: "general", Confidence: 1,
-		RuleID: &rule, ComputedAt: now, OrgID: claim.OrgID,
-	}
-	investment := JiraInvestmentMetricsDailyRow{
-		RepoID: &repoID, Day: day, TeamID: teamID, InvestmentArea: &area,
-		ProjectStream: "general", DeliveryUnits: 3, WorkItemsCompleted: 2, PRsMerged: 0,
-		ChurnLOC: 0, CycleP50Hours: 5, ComputedAt: now, OrgID: claim.OrgID,
 	}
 	issueType := JiraIssueTypeMetricsDailyRow{
 		RepoID: &repoID, Day: day, Provider: "jira", TeamID: teamID,
@@ -100,21 +89,19 @@ func TestJiraWorkItemDerivedEffectsWriteReadbackAgainstRealClickHouse(t *testing
 	}
 
 	effects, err := BuildJiraWorkItemDerivedEffects(JiraWorkItemDerivedEffectRows{
-		EstimateCoverageMetricsDaily:   []JiraEstimateCoverageMetricsDailyRow{estimate},
-		InvestmentClassificationsDaily: []JiraInvestmentClassificationDailyRow{classification},
-		InvestmentMetricsDaily:         []JiraInvestmentMetricsDailyRow{investment},
-		IssueTypeMetricsDaily:          []JiraIssueTypeMetricsDailyRow{issueType},
-		WorkItemCycleTimes:             []JiraWorkItemCycleTimePersistenceRow{cycle},
-		WorkItemMetricsDaily:           []JiraWorkItemMetricsDailyRow{metrics},
-		WorkItemStateDurationsDaily:    []JiraWorkItemStateDurationDailyRow{state},
-		WorkItemTeamAttributions:       []JiraWorkItemTeamAttributionRow{team},
-		WorkItemUserMetricsDaily:       []JiraWorkItemUserMetricsDailyRow{users},
+		EstimateCoverageMetricsDaily: []JiraEstimateCoverageMetricsDailyRow{estimate},
+		IssueTypeMetricsDaily:        []JiraIssueTypeMetricsDailyRow{issueType},
+		WorkItemCycleTimes:           []JiraWorkItemCycleTimePersistenceRow{cycle},
+		WorkItemMetricsDaily:         []JiraWorkItemMetricsDailyRow{metrics},
+		WorkItemStateDurationsDaily:  []JiraWorkItemStateDurationDailyRow{state},
+		WorkItemTeamAttributions:     []JiraWorkItemTeamAttributionRow{team},
+		WorkItemUserMetricsDaily:     []JiraWorkItemUserMetricsDailyRow{users},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(effects) != 10 {
-		t.Fatalf("effects=%d want the AI effect and one for each of the nine tables of the daily job", len(effects))
+	if len(effects) != 8 {
+		t.Fatalf("effects=%d want the AI effect and one for each of the seven tables of the daily job", len(effects))
 	}
 	foreign := claim
 	foreign.OrgID = "org-other"
@@ -163,7 +150,7 @@ func TestJiraWorkItemDerivedEffectsWriteReadbackAgainstRealClickHouse(t *testing
 			}
 		})
 	}
-	if evaluatedEmpty != 1 || refused != 9 {
-		t.Fatalf("AI effects=%d refused=%d want 1 and 9", evaluatedEmpty, refused)
+	if evaluatedEmpty != 1 || refused != 7 {
+		t.Fatalf("AI effects=%d refused=%d want 1 and 7", evaluatedEmpty, refused)
 	}
 }

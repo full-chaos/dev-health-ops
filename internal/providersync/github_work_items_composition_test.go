@@ -19,8 +19,6 @@ import (
 // githubWorkItemEngineTestDestinations is the engine-dependent set exercised by
 // the composition doubles below.
 var githubWorkItemEngineTestDestinations = []string{
-	"investment_classifications_daily",
-	"investment_metrics_daily",
 	"issue_type_metrics_daily",
 }
 
@@ -161,10 +159,6 @@ func githubWorkItemSinkWithout(
 		sink.AIAttribution = nil
 	case "estimate_coverage_metrics_daily":
 		sink.EstimateCoverageMetricsDaily = nil
-	case "investment_classifications_daily":
-		sink.InvestmentClassificationsDaily = nil
-	case "investment_metrics_daily":
-		sink.InvestmentMetricsDaily = nil
 	case "issue_type_metrics_daily":
 		sink.IssueTypeMetricsDaily = nil
 	case "sprints":
@@ -811,28 +805,21 @@ func TestGitHubWorkItemCompositionNeverFailsOpen(t *testing.T) {
 		}
 	})
 
-	t.Run("an engine covering only some destinations is refused", func(t *testing.T) {
+	t.Run("an engine covering none of its destinations is refused", func(t *testing.T) {
 		t.Parallel()
-		partial := map[string][]json.RawMessage{
-			githubWorkItemEngineTestDestinations[0]: {},
-		}
 		deriver := GitHubWorkItemDeriver{
 			Source: &fakeGitHubWorkItemDerivationContextSource{},
-			engine: githubWorkItemSilentEngine{rows: partial},
+			engine: githubWorkItemSilentEngine{rows: map[string][]json.RawMessage{}},
 		}
 		_, _, err := deriver.Derive(context.Background(), claim, rows, normalizedAt)
 		if !errors.Is(err, ErrGitHubWorkItemsDerivationsUnavailable) {
 			t.Fatalf("error=%v want ErrGitHubWorkItemsDerivationsUnavailable", err)
 		}
-		// The still-missing two must be named; the one it did cover must not.
-		for _, destination := range githubWorkItemEngineTestDestinations[1:] {
+		// The still-missing destination must be named.
+		for _, destination := range githubWorkItemEngineTestDestinations {
 			if !strings.Contains(err.Error(), destination) {
 				t.Errorf("error %q does not name still-missing %q", err.Error(), destination)
 			}
-		}
-		if strings.Contains(err.Error(), githubWorkItemEngineTestDestinations[0]) {
-			t.Errorf("error %q names %q, which the engine did cover",
-				err.Error(), githubWorkItemEngineTestDestinations[0])
 		}
 	})
 

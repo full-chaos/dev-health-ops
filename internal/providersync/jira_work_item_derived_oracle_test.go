@@ -152,14 +152,6 @@ func TestJiraEngineDestinationsMatchFrozenPythonProduction(t *testing.T) {
 		func(t *testing.T, input map[string]any) githubIssueTypeMetricsColumns {
 			return newGitHubIssueTypeMetricsColumns(jiraEngineOracleResult(t, input).IssueTypeMetricsDaily)
 		}, nil)
-	compareRowsAgainstFrozenOracle(t, "jira_work-items_investment-classifications", cases,
-		func(t *testing.T, input map[string]any) githubInvestmentClassificationColumns {
-			return newGitHubInvestmentClassificationColumns(jiraEngineOracleResult(t, input).InvestmentClassificationsDaily)
-		}, nil)
-	compareRowsAgainstFrozenOracle(t, "jira_work-items_investment-metrics", cases,
-		func(t *testing.T, input map[string]any) githubInvestmentMetricsColumns {
-			return newGitHubInvestmentMetricsColumns(jiraEngineOracleResult(t, input).InvestmentMetricsDaily)
-		}, nil)
 }
 
 func jiraEngineOracleResult(t *testing.T, input map[string]any) JiraWorkItemDerivedRows {
@@ -173,13 +165,9 @@ func jiraEngineOracleResult(t *testing.T, input map[string]any) JiraWorkItemDeri
 	if err := json.Unmarshal(encoded, &facts); err != nil {
 		t.Fatal(err)
 	}
-	classifier, err := NewInvestmentClassifier(investmentConfigPath(t, "real"))
-	if err != nil {
-		t.Fatal(err)
-	}
 	deriver := JiraWorkItemDeriver{
 		Source:        &githubMultiDayOracleSource{facts: facts},
-		statusMapping: loadRealStatusMapping(t), investmentClassifier: classifier,
+		statusMapping: loadRealStatusMapping(t),
 	}
 	if sinceRaw, ok := input["SinceAt"].(string); ok {
 		since := githubDerivedOracleTime(t, sinceRaw)

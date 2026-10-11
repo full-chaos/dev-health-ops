@@ -8,8 +8,6 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/google/uuid"
-
 	"github.com/full-chaos/dev-health-ops/internal/cli"
 	"github.com/full-chaos/dev-health-ops/internal/platform/config"
 	"github.com/full-chaos/dev-health-ops/internal/platform/logging"
@@ -33,10 +31,17 @@ const usage = `Usage: dho backfill normalize-investment --org <id> --from <YYYY-
 Reads the organization's completed work items that carry only the deprecated rule classifier's keys
 (investment_classifications_daily) and writes ONE work_unit_investments row per item with the canonical
 theme and sub-theme (status normalized_legacy; low evidence quality; the matched rule named in the
-evidence). It is an ESTIMATE and never an LLM result. Items of a repository-day that already holds a
-categorized unit, items with no repository, and product/general items no estimate rule matches are
-left out. The default is a DRY RUN that prints counts only; --apply writes. A window with a legacy key
-the mapping table does not hold is refused. Re-running writes the same rows again (same ids).
+evidence), plus its work_unit_repo_effort rows. It is an ESTIMATE and never an LLM result.
+The repository of an item comes through the entity tree: a pull request / merge request item keeps its own
+repository; any other item reaches repositories only through its work_graph_issue_pr links (the tier is named
+in the evidence), the effort split by the churn of the linked pull requests per repository (the canonical
+units' rule; the sum of the repositories is the item's effort). Left out and counted: items a canonical unit
+already names in its evidence, items with no reachable repository, and product/general items no estimate rule
+matches. The default is a DRY RUN that prints counts only; --apply writes. A window with a legacy key the
+mapping table does not hold is refused. A second apply writes nothing for a row that is already stored
+identically (same id, input and mapping version). The run id names the organization, the window and the
+mapping version, so a retry after a failed apply, a second apply and a later apply of the same window share
+it: --rollback --run <that id> removes everything the window's applies wrote and restores the before-state.
 --rollback counts (and with --apply deletes) the normalized rows of the organization, or of one --run.
 
 Environment:
@@ -115,8 +120,8 @@ func run(ctx context.Context, env cli.Env) int {
 		}
 		return cli.ExitOK
 	}
-	options := Options{Org: *org, From: start, To: end, RunID: "normalized_legacy:" + uuid.NewString()}
-	records, report, err := Plan(ctx, conn, options)
+	options := Options{Org: *org, From: start, To: end, RunID: RunIDFor(*org, start, end)}
+	records, efforts, report, err := Plan(ctx, conn, options)
 	if err != nil {
 		return fail(err)
 	}
@@ -127,7 +132,10 @@ func run(ctx context.Context, env cli.Env) int {
 		out("dry run: nothing written (add --apply)")
 		return cli.ExitOK
 	}
-	if err := Apply(ctx, conn, options, records, report); err != nil {
+	// The run id is printed BEFORE the first write: a failed apply leaves rows under it, and a rollback names it.
+	out(fmt.Sprintf("apply started, run %s", options.RunID))
+	if err := Apply(ctx, conn, options, records, efforts, report); err != nil {
+		logger.Error("normalize-investment apply failed; rows of this run may exist: roll back with --rollback --run", "run", options.RunID)
 		return fail(err)
 	}
 	out(fmt.Sprintf("written: %d rows, run %s", len(records), options.RunID))

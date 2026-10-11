@@ -25,7 +25,7 @@ VALUES (?, 'jira', ?, ?, ?, NULL, [?], 'native', ?, NULL, ?)`, org, team, member
 	kind := func() providersync.KindSnapshot[providersync.MembershipSnapshotRow] {
 		return providersync.AtlassianTeamMembershipKind().Snapshot(soleScope(), providersync.ProveSnapshot(
 			providersync.SnapshotTerm{Holds: true, Reason: snapshotMemberReadsNotEnded}),
-			providersync.AbsenceByWalk[providersync.MembershipSnapshotRow](providersync.AbsenceWalkByCursor))
+			providersync.AbsenceByListing[providersync.MembershipSnapshotRow](nil, membershipLookups(context.Background(), everyAbsentFactIsGone{}).Answer))
 	}
 	fresh := func(members ...string) []MembershipRow {
 		var out []MembershipRow

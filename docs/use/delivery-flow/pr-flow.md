@@ -12,7 +12,7 @@ lifecycle: active
 
 # PR Flow
 
-PR Flow helps answer: **Where does work appear to move, wait, or return in the selected delivery system?** The current **Metrics → Flow** destination (under **Diagnose**) has **DORA**, **Flow**, and **Throughput** tabs. They show metric tiles, a quadrant, likely associations, and primary contributors. They do not show a state-transition Sankey.
+PR Flow helps answer: **Where does work appear to move, wait, or return in the selected delivery system?** In the current **Metrics → Flow** destination, the **State Flow** tab presents a Sankey built from available work-item state transitions for the selected scope and period.
 {: .fc-page-lede }
 
 The view summarizes observed transitions between source state labels. It does not promise that every item exposes a complete lifecycle, and it does not treat a missing transition as proof that work skipped a state.

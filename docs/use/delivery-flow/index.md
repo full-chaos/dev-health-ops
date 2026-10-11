@@ -29,7 +29,7 @@ State movement
 
 ### [PR Flow](pr-flow.md)
 
-Read the Flow metrics (cycle time, review latency, WIP saturation, blocked work) to see where work waits or returns.
+Read the current state-transition Sankey to see which available states work moved between and where transition volume concentrates.
 
 </article>
 

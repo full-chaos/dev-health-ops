@@ -536,6 +536,15 @@ type investmentContext struct {
 // auto-routing to true only when forceInvestment is nil AND the
 // dimension list contains one of the three investment-only dimensions.
 func resolveUseInvestment(dimensions []Dimension, forceInvestment *bool) bool {
+	// THEME and SUBCATEGORY are canonical-only (CHAOS-9195, D5932): the legacy rule
+	// classifier's raw investment_area/project_stream keys are not a theme source any
+	// more, so an explicit useInvestment=false does not send them there. DECLARED
+	// DIVERGENCE from the reference (the explicit false won).
+	for _, d := range dimensions {
+		if canonicalOnlyDimension(d) {
+			return true
+		}
+	}
 	if forceInvestment != nil {
 		return *forceInvestment
 	}
@@ -677,4 +686,11 @@ func investmentContextFor(dimensions []Dimension, needsTeamJoinFlag, needsAuthor
 		UseInvestment:     true,
 		UseRepoAllocation: useRepoAllocation,
 	}
+}
+
+// canonicalOnlyDimension: THEME and SUBCATEGORY are read from the canonical categorization
+// (work_unit_investments, the five themes and fifteen subcategories of the Jev
+// categorizer) and never from the legacy investment_metrics_daily keys (CHAOS-9195).
+func canonicalOnlyDimension(d Dimension) bool {
+	return d == DimensionTheme || d == DimensionSubcategory
 }

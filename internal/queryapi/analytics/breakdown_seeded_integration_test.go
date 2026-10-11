@@ -181,7 +181,7 @@ func TestCompileBreakdown_ThemeCount_SeededRealClickHouse_ExactAggregate(t *test
 		EndDate:   mustGraphQLDate("2026-01-08"),
 		TopN:      10,
 	}
-	q, err := CompileBreakdown(req, orgID, queryTimeoutSecs, false, nil)
+	q, err := compileBreakdownOver(req, "investment_area", orgID, queryTimeoutSecs, false, nil)
 	if err != nil {
 		t.Fatalf("CompileBreakdown: %v", err)
 	}
@@ -217,7 +217,7 @@ func TestCompileBreakdown_ThemeCount_SeededRealClickHouse_ExactAggregate(t *test
 	exactReq := req
 	exactReq.TopN = 1
 	exactReq.Keys = []string{"feature", "bug"}
-	exactQuery, err := CompileBreakdown(exactReq, orgID, queryTimeoutSecs, false, nil)
+	exactQuery, err := compileBreakdownOver(exactReq, "investment_area", orgID, queryTimeoutSecs, false, nil)
 	if err != nil {
 		t.Fatalf("CompileBreakdown exact keys: %v", err)
 	}

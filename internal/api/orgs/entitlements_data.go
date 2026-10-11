@@ -52,7 +52,7 @@ var StandardFeatureKeys = []string{
 	"gitlab_integration", "jira_integration", "investment_view", "api_access", "capacity_forecast",
 	"work_graph", "quadrant_analysis", "linear_integration", "llm_categorization", "webhooks",
 	"customer_push_ingest", "canonical_incident_ingestion", "agent_context_runtime", "ask_dev",
-	"ask_dev_contextual_entrypoints", "ask_dev_wave_3_1", "acr_service_model", "scheduled_jobs", "sso_saml", "sso_oidc",
+	"ask_dev_contextual_entrypoints", "ask_dev_wave_3_1", "scheduled_jobs", "sso_saml", "sso_oidc",
 	"audit_log", "custom_retention", "ip_allowlist", "data_export", "multi_org", "custom_branding",
 	"priority_support", "byo_llm",
 }

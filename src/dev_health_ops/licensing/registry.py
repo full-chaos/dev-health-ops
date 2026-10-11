@@ -20,15 +20,12 @@ ASK_DEV_CONTEXTUAL_ENTRYPOINTS_FEATURE: Final = "ask_dev_contextual_entrypoints"
 #: behaves exactly as it does today: no server-owned interpretation, no subject
 #: preflight, every tool advertised, and the CHAOS-3289 backstop terminating.
 ASK_DEV_WAVE_3_1_FEATURE: Final = "ask_dev_wave_3_1"
-#: Org may use the platform LLM for MCP investigations without a BYO LLM.
-ACR_SERVICE_MODEL_FEATURE: Final = "acr_service_model"
 EXPLICIT_PURCHASE_FEATURES: frozenset[str] = frozenset(
     {
         "agent_context_runtime",
         ASK_DEV_FEATURE,
         ASK_DEV_CONTEXTUAL_ENTRYPOINTS_FEATURE,
         ASK_DEV_WAVE_3_1_FEATURE,
-        ACR_SERVICE_MODEL_FEATURE,
     }
 )
 ORG_OVERRIDE_ONLY_FEATURES: frozenset[str] = frozenset()
@@ -203,13 +200,6 @@ STANDARD_FEATURES: list[STANDARD_FEATURE_ROW] = [
         FeatureCategory.ANALYTICS,
         LicenseTier.COMMUNITY,
         "Server-owned question intent and named-subject preflight",
-    ),
-    (
-        ACR_SERVICE_MODEL_FEATURE,
-        "ACR Service Model",
-        FeatureCategory.INTEGRATIONS,
-        LicenseTier.COMMUNITY,
-        "Use the platform LLM for MCP investigations without a BYO LLM",
     ),
     (
         "scheduled_jobs",

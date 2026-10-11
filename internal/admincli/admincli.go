@@ -47,7 +47,7 @@ type SeedResult struct {
 	Created []string `json:"created"`
 }
 
-// Seed inserts every feature of StandardFeatures whose key feature_flags does
+// Seed inserts every feature of StandardFeatures and AdditionalFeatures whose key feature_flags does
 // not hold, as the Python seed_feature_flags_async does: a fresh uuid4 id,
 // enabled, not beta, not deprecated, config_schema the JSON value null (the
 // model's JSON column writes Python None that way, not as SQL NULL), created
@@ -72,7 +72,7 @@ func Seed(ctx context.Context, conn *pgx.Conn, now func() time.Time) (SeedResult
 	for _, key := range keys {
 		existing[key] = true
 	}
-	for _, feature := range StandardFeatures {
+	for _, feature := range append(append([]Feature(nil), StandardFeatures...), AdditionalFeatures...) {
 		if existing[feature.Key] {
 			continue
 		}

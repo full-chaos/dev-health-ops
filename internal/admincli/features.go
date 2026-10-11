@@ -9,6 +9,15 @@ type Feature struct {
 	Description string
 }
 
+// AdditionalFeatures are features registered after the frozen Python build
+// whose registry the oracle tests pin: its api tree is deleted, so no newer
+// Python build can record them and the Go registry is their only source. Seed
+// writes them after StandardFeatures. They are kept out of StandardFeatures so
+// that list stays equal, row for row, to the frozen Python registry.
+var AdditionalFeatures = []Feature{
+	{Key: "acr_service_model", Name: "ACR Service Model", Category: "integrations", MinTier: "community", Description: "Use the platform LLM for MCP investigations without a BYO LLM"},
+}
+
 // StandardFeatures is the feature registry `admin features seed` writes, in
 // its order. It is a port of STANDARD_FEATURES in
 // src/dev_health_ops/licensing/registry.py:
@@ -36,7 +45,6 @@ var StandardFeatures = []Feature{
 	{Key: "ask_dev", Name: "Ask Dev", Category: "analytics", MinTier: "community", Description: "Evidence-backed conversational interaction with Context Fabric"},
 	{Key: "ask_dev_contextual_entrypoints", Name: "Ask Dev Contextual Entrypoints", Category: "analytics", MinTier: "community", Description: "Typed Ask Dev handoffs from approved product surfaces"},
 	{Key: "ask_dev_wave_3_1", Name: "Ask Dev Wave 3.1", Category: "analytics", MinTier: "community", Description: "Server-owned question intent and named-subject preflight"},
-	{Key: "acr_service_model", Name: "ACR Service Model", Category: "integrations", MinTier: "community", Description: "Use the platform LLM for MCP investigations without a BYO LLM"},
 	{Key: "scheduled_jobs", Name: "Scheduled Jobs", Category: "core", MinTier: "team", Description: "Automated scheduled sync jobs"},
 	{Key: "sso_saml", Name: "SAML SSO", Category: "security", MinTier: "enterprise", Description: "SAML single sign-on"},
 	{Key: "sso_oidc", Name: "OIDC SSO", Category: "security", MinTier: "enterprise", Description: "OIDC single sign-on"},

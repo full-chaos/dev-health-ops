@@ -352,9 +352,13 @@ func allocate(s sourceRow, links map[string][]issueLink) (allocs []allocation, t
 	if total <= 0 {
 		return nil, best, reasonNoChurn
 	}
-	repos := make([]uuid.UUID, 0, len(churnByRepo))
-	for repo := range churnByRepo {
-		repos = append(repos, repo)
+	repos := make([]uuid.UUID, 0, len(linked))
+	seen := map[uuid.UUID]bool{}
+	for _, l := range linked {
+		if l.churn > 0 && !seen[l.repo] {
+			seen[l.repo] = true
+			repos = append(repos, l.repo)
+		}
 	}
 	sort.Slice(repos, func(i, j int) bool { return repos[i].String() < repos[j].String() })
 	for _, repo := range repos {

@@ -34,7 +34,7 @@ question per subcategory, one evidence question, one request. The model answers 
 levels and picks an evidence span. Code builds the mix.
 
 Result of CHAOS-8712 round 2 (Jev, rubric `decision-support-v1d`, level rule
-`presence-floor:0.4`; the rubric in code is the later `v1g`, section 2.3):
+`presence-floor:0.4`; the rubric in code is the later `v1h`, section 2.3):
 
 | Item | Incumbent | Jev | Source |
 | --- | --- | --- | --- |
@@ -121,22 +121,27 @@ only by served mode for state `zero_support`.
 
 ### 2.3 Rubric and identity stamp
 
-The rubric is `decision-support-v1g.json`, embedded with `//go:embed`. Its sha256
-(`89f96c46...`) is a constant. `LoadRubric` fails at construction when the digest or
+The rubric is `decision-support-v1h.json`, embedded with `//go:embed`. Its sha256
+(`956bdcff...`) is a constant. `LoadRubric` fails at construction when the digest or
 a named version differs. The v1d file is test data only.
 
 v1g is v1f (`eac20c67...`, the documentation rule) plus the port and fix rule
 (CHAOS-9322, chris 2026-10-11). A correction to a port or migration that is not yet
 delivered is `maintenance.upgrade`. A repair of a build, CI or configuration setup
 with no defect in product behaviour is `maintenance.refactor`. A `fix:` or
-`fix(scope):` title type is context, not proof of a defect. v1g was not evaluated
-again on the CHAOS-8712 set; the result table above is for v1d.
+`fix(scope):` title type is context, not proof of a defect.
+
+v1h is v1g (`89f96c46...`) plus the port parity rule (chris 2026-10-11): a correction
+that makes ported or migrated code match the behaviour of the code it replaces is
+`maintenance.upgrade` whether the port is delivered or not; `quality.bugfix` keeps
+defects in delivered behaviour that are not such a parity gap. Neither v1g nor v1h
+was evaluated again on the CHAOS-8712 set; the result table above is for v1d.
 
 `Identity.Stamp()` is the string that identifies a classification configuration:
 
 ```
 provider=typesafe;api=systemone;model=<requested model>;taxonomy=<taxonomy version>;
-prompt=decision-support-v1g@<first 12 of rubric sha256>;adapter=decision-adapter-v3;
+prompt=decision-support-v1h@<first 12 of rubric sha256>;adapter=decision-adapter-v3;
 map=support-map-v1;level=presence-floor:0.4
 ```
 
@@ -146,7 +151,7 @@ never matches a generative skip-existing key. A change of rubric, adapter, map o
 level rule makes a new stamp, so the unit is asked again.
 
 Difference from the design: the embedded rubric file still names `adapter_version:
-decision-adapter-v2` (its bytes are the evaluated bytes). The loader does not compare
+decision-adapter-v2` (it is carried from the evaluated bytes). The loader does not compare
 that field. The code constant `AdapterVersion` (`decision-adapter-v3`) is the one in
 the stamp.
 

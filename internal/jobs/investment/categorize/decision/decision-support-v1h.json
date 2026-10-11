@@ -1,19 +1,20 @@
 {
  "rubric_format": 2,
- "rubric_version": "decision-support-v1g",
+ "rubric_version": "decision-support-v1h",
  "adapter_version": "decision-adapter-v2",
  "map_version": "support-map-v1",
  "span_version": "span-candidates-v1",
  "gold_mix_version": "gold-mix-v1",
  "taxonomy_version": "investment-taxonomy-v1",
- "status": "rubric-v1g; port and fix rule (chris ruling 2026-10-11, CHAOS-9322); not frozen",
+ "status": "rubric-v1h; port parity rule (chris ruling 2026-10-11, port-parity corrections are upgrade whether delivered or not); not frozen",
  "derived_from": {
-  "rubric_version": "decision-support-v1f",
-  "sha256": "eac20c674565a7b017450e3b6a9dba7926a9f085f60ac28e35b2b7c2b990762d"
+  "rubric_version": "decision-support-v1g",
+  "sha256": "89f96c46b89a2f4291acc5011684019f600942f96b125cf66465f6576cfbd6fb"
  },
  "notes": [
-  "v1f + port and fix rule only. Changed: shared_preamble.text / shared_rules_text sentence on a 'fix' title type; the bugfix, refactor and upgrade compact lines, their support-question instructions and their inclusions/exclusions; the copies of those texts in incumbent_defs and example_requests.",
-  "size and token_estimate are the v1f measurements; they were not measured again for v1g."
+  "v1g + port parity rule only. Changed: the bugfix and upgrade support-question instructions and compact lines, the bugfix exclusion and the upgrade inclusion for port corrections, and the copies of those texts in incumbent_defs and example_requests. A correction that makes ported or migrated code match the behaviour of the code it replaces is upgrade, delivered or not.",
+  "v1g = v1f + port and fix rule (CHAOS-9322): build, CI or configuration repair with no product defect is refactor; a 'fix' title type is context, not proof of a defect.",
+  "size and token_estimate are the v1f measurements; they were not measured again for v1g or v1h."
  ],
  "scale": {
   "levels": [
@@ -602,7 +603,7 @@
    "inclusions": [
     "dependency, lockfile, language, runtime, framework, database engine or infrastructure version changes",
     "a port, rewrite or migration onto a different runtime, framework, language, platform or replacement service",
-    "each correction to a port, rewrite or migration before it is delivered, such as ported code made to match the behaviour of the code it replaces"
+    "each correction that makes ported, rewritten or migrated code match the behaviour of the code it replaces, delivered or not"
    ],
    "exclusions": [
     {
@@ -632,12 +633,12 @@
      "distinction": "enablement adds a capability"
     }
    ],
-   "compact_line": "Upgrades and migrations: a newer version or replacement of a dependency, runtime, framework or platform, also a port onto one, and each correction to the port or migration before it is delivered (for example, ported code made to match the behaviour of the code it replaces). Not: a bump made for a named vulnerability (secondary at most).",
+   "compact_line": "Upgrades and migrations: a newer version or replacement of a dependency, runtime, framework or platform, also a port onto one, and each correction that makes ported or migrated code match the behaviour of the code it replaces, delivered or not. Not: a bump made for a named vulnerability (secondary at most).",
    "support_question": {
     "id": "support__maintenance__upgrade",
     "jev": {
      "type": "score",
-     "instructions": "Upgrades and migrations: a newer version or replacement of a dependency, runtime, framework or platform, also a port onto one, and each correction to the port or migration before it is delivered (for example, ported code made to match the behaviour of the code it replaces). Not: a bump made for a named vulnerability (secondary at most). How much of the work in `source_block` is this? Use `rubric`.",
+     "instructions": "Upgrades and migrations: a newer version or replacement of a dependency, runtime, framework or platform, also a port onto one, and each correction that makes ported or migrated code match the behaviour of the code it replaces, delivered or not. Not: a bump made for a named vulnerability (secondary at most). How much of the work in `source_block` is this? Use `rubric`.",
      "criteria": [
       "none",
       "secondary",
@@ -648,7 +649,7 @@
     "decisions": {
      "type": "score",
      "name": "support__maintenance__upgrade",
-     "instructions": "Upgrades and migrations: a newer version or replacement of a dependency, runtime, framework or platform, also a port onto one, and each correction to the port or migration before it is delivered (for example, ported code made to match the behaviour of the code it replaces). Not: a bump made for a named vulnerability (secondary at most). How much of the work in the SOURCE_BLOCK section is this? Use the RUBRIC section.",
+     "instructions": "Upgrades and migrations: a newer version or replacement of a dependency, runtime, framework or platform, also a port onto one, and each correction that makes ported or migrated code match the behaviour of the code it replaces, delivered or not. Not: a bump made for a named vulnerability (secondary at most). How much of the work in the SOURCE_BLOCK section is this? Use the RUBRIC section.",
      "levels": [
       {
        "label": "none"
@@ -914,7 +915,7 @@
      "use_instead": "maintenance.refactor"
     },
     {
-     "text": "a correction to a port, rewrite or migration that is not yet delivered, such as ported code made to match the behaviour of the code it replaces",
+     "text": "a correction that makes ported, rewritten or migrated code match the behaviour of the code it replaces, delivered or not",
      "use_instead": "maintenance.upgrade"
     },
     {
@@ -940,12 +941,12 @@
      "distinction": "vulnerability is a security flaw"
     }
    ],
-   "compact_line": "Bug fixes: correction of a defect in delivered behaviour. Not: a correction to a port or migration that is not yet delivered (Upgrades and migrations); repair of a build, CI or configuration setup with no defect in product behaviour (Refactoring); a security flaw; a repair that ends a named incident (secondary at most); a typo or lint chore.",
+   "compact_line": "Bug fixes: correction of a defect in delivered behaviour that is not a gap between ported or migrated code and the code it replaces. Not: a correction that makes ported or migrated code match the behaviour of the code it replaces, delivered or not (Upgrades and migrations); repair of a build, CI or configuration setup with no defect in product behaviour (Refactoring); a security flaw; a repair that ends a named incident (secondary at most); a typo or lint chore.",
    "support_question": {
     "id": "support__quality__bugfix",
     "jev": {
      "type": "score",
-     "instructions": "Bug fixes: correction of a defect in delivered behaviour. Not: a correction to a port or migration that is not yet delivered (Upgrades and migrations); repair of a build, CI or configuration setup with no defect in product behaviour (Refactoring); a security flaw; a repair that ends a named incident (secondary at most); a typo or lint chore. How much of the work in `source_block` is this? Use `rubric`.",
+     "instructions": "Bug fixes: correction of a defect in delivered behaviour that is not a gap between ported or migrated code and the code it replaces. Not: a correction that makes ported or migrated code match the behaviour of the code it replaces, delivered or not (Upgrades and migrations); repair of a build, CI or configuration setup with no defect in product behaviour (Refactoring); a security flaw; a repair that ends a named incident (secondary at most); a typo or lint chore. How much of the work in `source_block` is this? Use `rubric`.",
      "criteria": [
       "none",
       "secondary",
@@ -956,7 +957,7 @@
     "decisions": {
      "type": "score",
      "name": "support__quality__bugfix",
-     "instructions": "Bug fixes: correction of a defect in delivered behaviour. Not: a correction to a port or migration that is not yet delivered (Upgrades and migrations); repair of a build, CI or configuration setup with no defect in product behaviour (Refactoring); a security flaw; a repair that ends a named incident (secondary at most); a typo or lint chore. How much of the work in the SOURCE_BLOCK section is this? Use the RUBRIC section.",
+     "instructions": "Bug fixes: correction of a defect in delivered behaviour that is not a gap between ported or migrated code and the code it replaces. Not: a correction that makes ported or migrated code match the behaviour of the code it replaces, delivered or not (Upgrades and migrations); repair of a build, CI or configuration setup with no defect in product behaviour (Refactoring); a security flaw; a repair that ends a named incident (secondary at most); a typo or lint chore. How much of the work in the SOURCE_BLOCK section is this? Use the RUBRIC section.",
      "levels": [
       {
        "label": "none"
@@ -1410,7 +1411,7 @@
    },
    {
     "key": "maintenance.upgrade",
-    "text": "Upgrades and migrations: a newer version or replacement of a dependency, runtime, framework or platform, also a port onto one, and each correction to the port or migration before it is delivered (for example, ported code made to match the behaviour of the code it replaces). Not: a bump made for a named vulnerability (secondary at most)."
+    "text": "Upgrades and migrations: a newer version or replacement of a dependency, runtime, framework or platform, also a port onto one, and each correction that makes ported or migrated code match the behaviour of the code it replaces, delivered or not. Not: a bump made for a named vulnerability (secondary at most)."
    },
    {
     "key": "operational.incident_response",
@@ -1426,7 +1427,7 @@
    },
    {
     "key": "quality.bugfix",
-    "text": "Bug fixes: correction of a defect in delivered behaviour. Not: a correction to a port or migration that is not yet delivered (Upgrades and migrations); repair of a build, CI or configuration setup with no defect in product behaviour (Refactoring); a security flaw; a repair that ends a named incident (secondary at most); a typo or lint chore."
+    "text": "Bug fixes: correction of a defect in delivered behaviour that is not a gap between ported or migrated code and the code it replaces. Not: a correction that makes ported or migrated code match the behaviour of the code it replaces, delivered or not (Upgrades and migrations); repair of a build, CI or configuration setup with no defect in product behaviour (Refactoring); a security flaw; a repair that ends a named incident (secondary at most); a typo or lint chore."
    },
    {
     "key": "quality.reliability",
@@ -1604,7 +1605,7 @@
     },
     "support__maintenance__upgrade": {
      "type": "score",
-     "instructions": "Upgrades and migrations: a newer version or replacement of a dependency, runtime, framework or platform, also a port onto one, and each correction to the port or migration before it is delivered (for example, ported code made to match the behaviour of the code it replaces). Not: a bump made for a named vulnerability (secondary at most). How much of the work in `source_block` is this? Use `rubric`.",
+     "instructions": "Upgrades and migrations: a newer version or replacement of a dependency, runtime, framework or platform, also a port onto one, and each correction that makes ported or migrated code match the behaviour of the code it replaces, delivered or not. Not: a bump made for a named vulnerability (secondary at most). How much of the work in `source_block` is this? Use `rubric`.",
      "criteria": [
       "none",
       "secondary",
@@ -1644,7 +1645,7 @@
     },
     "support__quality__bugfix": {
      "type": "score",
-     "instructions": "Bug fixes: correction of a defect in delivered behaviour. Not: a correction to a port or migration that is not yet delivered (Upgrades and migrations); repair of a build, CI or configuration setup with no defect in product behaviour (Refactoring); a security flaw; a repair that ends a named incident (secondary at most); a typo or lint chore. How much of the work in `source_block` is this? Use `rubric`.",
+     "instructions": "Bug fixes: correction of a defect in delivered behaviour that is not a gap between ported or migrated code and the code it replaces. Not: a correction that makes ported or migrated code match the behaviour of the code it replaces, delivered or not (Upgrades and migrations); repair of a build, CI or configuration setup with no defect in product behaviour (Refactoring); a security flaw; a repair that ends a named incident (secondary at most); a typo or lint chore. How much of the work in `source_block` is this? Use `rubric`.",
      "criteria": [
       "none",
       "secondary",
@@ -1826,7 +1827,7 @@
     {
      "type": "score",
      "name": "support__maintenance__upgrade",
-     "instructions": "Upgrades and migrations: a newer version or replacement of a dependency, runtime, framework or platform, also a port onto one, and each correction to the port or migration before it is delivered (for example, ported code made to match the behaviour of the code it replaces). Not: a bump made for a named vulnerability (secondary at most). How much of the work in the SOURCE_BLOCK section is this? Use the RUBRIC section.",
+     "instructions": "Upgrades and migrations: a newer version or replacement of a dependency, runtime, framework or platform, also a port onto one, and each correction that makes ported or migrated code match the behaviour of the code it replaces, delivered or not. Not: a bump made for a named vulnerability (secondary at most). How much of the work in the SOURCE_BLOCK section is this? Use the RUBRIC section.",
      "levels": [
       {
        "label": "none"
@@ -1902,7 +1903,7 @@
     {
      "type": "score",
      "name": "support__quality__bugfix",
-     "instructions": "Bug fixes: correction of a defect in delivered behaviour. Not: a correction to a port or migration that is not yet delivered (Upgrades and migrations); repair of a build, CI or configuration setup with no defect in product behaviour (Refactoring); a security flaw; a repair that ends a named incident (secondary at most); a typo or lint chore. How much of the work in the SOURCE_BLOCK section is this? Use the RUBRIC section.",
+     "instructions": "Bug fixes: correction of a defect in delivered behaviour that is not a gap between ported or migrated code and the code it replaces. Not: a correction that makes ported or migrated code match the behaviour of the code it replaces, delivered or not (Upgrades and migrations); repair of a build, CI or configuration setup with no defect in product behaviour (Refactoring); a security flaw; a repair that ends a named incident (secondary at most); a typo or lint chore. How much of the work in the SOURCE_BLOCK section is this? Use the RUBRIC section.",
      "levels": [
       {
        "label": "none"

@@ -13,11 +13,12 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph/units"
 )
 
-// rubricJSON is the evaluated rubric file, byte for byte. It is NOT trimmed:
-// example_requests and token_estimate are dead weight for a request, but a
-// trim changes the digest and the digest is the link to the evaluation.
+// rubricJSON is the embedded rubric file, byte for byte: the evaluated rubric
+// plus the v1g and v1h text changes, which were not evaluated again. It is
+// NOT trimmed: example_requests and token_estimate are dead weight for a
+// request, but a trim changes the digest and the digest is the stamp.
 //
-//go:embed decision-support-v1g.json
+//go:embed decision-support-v1h.json
 var rubricJSON []byte
 
 // ScaleLevel is one level of a score scale.

@@ -13,7 +13,7 @@ Filters narrow the evidence included in a result. They do not repair missing sou
 
 ## Apply a filter
 
-1. State the question before changing controls.
+1. State the question before changing controls. Team, repository, and window are in the scope bar. Developer and work-category filters are in the **Filters** drawer.
 2. Add one filter at a time and confirm the visible scope remains correct.
 3. Clear optional filters when testing whether they excluded all matching work.
 4. Preserve the same filter set when following evidence.

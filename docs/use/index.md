@@ -112,9 +112,9 @@ Read AI-associated delivery, review, and risk signals with their attribution, co
 Evidence-backed investigation
 {: .fc-topic-card__label }
 
-### [Ask Dev and Context Fabric](ai-workflows/index.md#ask-dev-context-fabric-and-agent-context)
+### [Context Fabric and agent context](ai-workflows/index.md#context-fabric-and-agent-context)
 
-Choose Ask Dev for a human investigation, ACR for an agent workflow, or Context Fabric Validation for platform diagnostics.
+Choose ACR for an agent workflow, or Context Fabric Validation for platform diagnostics.
 
 </article>
 

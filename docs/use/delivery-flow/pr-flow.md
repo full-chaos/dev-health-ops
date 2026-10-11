@@ -1,6 +1,6 @@
 ---
 page_id: use-pr-flow
-summary: Understand the current Flow page, its state-transition Sankey, and the evidence needed to interpret waiting or repeated movement.
+summary: Understand the Flow tab of the Metrics page, its metric tiles, its Cycle Time × Throughput quadrant, and the evidence needed to interpret waiting or repeated movement.
 content_type: workflow-guide
 owner: product-analytics
 source_of_truth:
@@ -12,59 +12,59 @@ lifecycle: active
 
 # PR Flow
 
-PR Flow helps answer: **Where does work appear to move, wait, or return in the selected delivery system?** In the current **Metrics → Flow** destination, the **State Flow** tab presents a Sankey built from available work-item state transitions for the selected scope and period.
+PR Flow helps answer: **Where does work appear to wait or slow down in the selected delivery system?** In the current **Diagnose → Flow** destination (`/metrics?tab=flow`), the **Flow** tab shows four metric tiles, a **Cycle Time × Throughput** quadrant, and two cards that list the likely associations and the primary contributors of the tab's highlighted metric.
 {: .fc-page-lede }
 
-The view summarizes observed transitions between source state labels. It does not promise that every item exposes a complete lifecycle, and it does not treat a missing transition as proof that work skipped a state.
+The page summarizes measured values for the selected scope and period. It does not draw a path between states, and it does not promise that every item exposes a complete lifecycle.
 
 ## When to use this page
 
-Use PR Flow when a throughput, cycle-time, or delivery conversation needs more detail about **movement between states**. It is useful for questions such as:
+Use PR Flow when a throughput, cycle-time, or delivery conversation needs more detail about **where time accumulates**. It is useful for questions such as:
 
-- Where is transition volume concentrated?
-- Is work repeatedly returning to an earlier state?
-- Does a waiting or blocked state appear in a material share of transitions?
+- Is cycle time moving with throughput, or against it?
+- Is work in progress saturated, or is blocked work visible?
+- Which associations and contributors appear with a change in cycle time?
 - Has the pattern changed across equivalent periods?
 
-Use [Review pressure](review-pressure.md) when the specific question is review demand or waiting. Use [Quadrants](quadrants.md) when you need to examine two raw measures together rather than a state path.
+Use [Review pressure](review-pressure.md) when the specific question is review demand or waiting. Use [Quadrants](quadrants.md) when you need to examine two raw measures together in more detail.
 
 ## What the page shows
 
-1. **Scope and period** determine which work items and transitions can contribute.
-2. **State nodes** use the labels available from the current source and product mapping.
-3. **Links** summarize observed transitions from one state to another.
-4. **Link width** represents the relative amount of observed transition activity shown by the view.
-5. **Supporting work or contextual actions**, when available, provide the evidence needed to explain a pattern.
+1. **Scope and period** in the scope bar determine which work contributes.
+2. **Metric tiles** show Cycle Time, Review Latency, WIP Saturation, and Blocked Work, each with its change from the previous equivalent period. A tile with no data says so; it never shows zero for a missing value.
+3. **The quadrant** plots Cycle Time against Throughput. The **Show interpretive overlay** checkbox turns the zone overlay on and off.
+4. **Likely associations** lists the percent change of related measures in the selected window. No causal conclusion is added.
+5. **Primary contributors** lists where the impact concentrates in the window.
+6. **View evidence** in the page header opens the evidence drawer for Cycle Time.
 
-State names and detail can differ by provider. Read the labels shown by the product rather than assuming a universal sequence such as open → review → merged.
+The **DORA** and **Throughput** tabs of the same page use the same layout with other tiles and quadrants (see [Quadrants](quadrants.md)).
 
-## Read the Sankey
+## Read the quadrant
 
-Start at a state node and follow its outgoing links. A wide link indicates that the displayed result contains more observed transitions along that path than along a narrower link. Read the whole pattern before focusing on one route:
+Read the position of the plotted points against both axes, then read the whole pattern before focusing on one point:
 
-- A large forward transition can be normal for the selected workflow.
-- A visible return to an earlier state can indicate rework, clarification, deliberate iteration, or source-specific state behavior.
-- A concentration around a waiting or blocked state can identify an area for evidence review, but the chart cannot explain the dependency or decision by itself.
+- Rising cycle time with stable throughput can indicate coordination debt.
+- Falling throughput with rising cycle time can indicate a queue that is building.
+- A zone is a heuristic label for a region of the chart. It is not a verdict.
 
-Compare equivalent scopes, periods, and state mappings. Changing the repository set, provider, or time window can change both the population and the available state vocabulary.
+Compare equivalent scopes and periods. Changing the repository set, team, or time window changes the population.
 
 ## Worked example
 
-Suppose the view shows a material path from **Active** to **Blocked**, followed by a path back to **Active**. A supported reading is:
+Suppose Cycle Time rises across two equivalent windows while Throughput stays flat, and Blocked Work shows a visible value. A supported reading is:
 
-> In the selected scope and period, a visible share of observed state transitions moved into Blocked and later returned to Active.
+> In the selected scope and period, cycle time appears longer for a similar amount of completed work, and blocked work is visible.
 
-The view does not tell you why. Open representative work and inspect dependencies, review history, linked issues, and dates. The pattern may reflect an external dependency, missing information, a deliberate pause, or another workflow-specific cause.
+The page does not tell you why. Open the evidence drawer and representative work, and inspect dependencies, review history, linked issues, and dates.
 
-## What a missing path means
+## What a missing value means
 
-A link can be absent because:
+A tile or point can be empty because:
 
-- no matching transition was observed in the selected result;
-- the source does not expose that transition detail;
+- no matching data exists in the selected result;
+- the source does not expose that detail;
 - the selected filters excluded the relevant work;
-- synchronization or coverage is incomplete;
-- state mapping differs from the workflow you expected.
+- synchronization or coverage is incomplete.
 
 Check coverage before converting absence into a process conclusion.
 
@@ -72,8 +72,8 @@ Check coverage before converting absence into a process conclusion.
 
 | State | Interpretation | Next step |
 | --- | --- | --- |
-| No transitions | The current context produced no usable transition rows | Confirm scope, period, filters, and source coverage. |
-| Partial transition set | Some providers, repositories, or periods are not represented | Avoid comparisons until coverage is understood. |
+| No data on a tile | The current context produced no usable rows for the metric | Confirm scope, period, filters, and source coverage. |
+| Quadrant unavailable | The quadrant has no data for this scope | Select a scope with enough data, or widen the window. |
 | Stale result | The latest expected source activity has not arrived | Check synchronization freshness. |
 | Unavailable view | The feature, role, or source prerequisite is not available | Check workspace availability and permissions. |
 
@@ -81,10 +81,10 @@ Use [Diagnose no or incomplete data](../troubleshooting/no-or-incomplete-data.md
 
 ## What not to conclude
 
-- One long-lived or returned item is not a team-level trend.
-- A state label has only the meaning defined by the current source and product mapping.
-- Transition volume is not a measure of individual performance.
-- A wide link identifies a pattern; it does not establish its cause.
+- One slow or blocked item is not a team-level trend.
+- A tile value has only the meaning defined by the metric's definition.
+- These measures are not a measure of individual performance.
+- An association identifies a pattern; it does not establish its cause.
 
 ## Continue
 

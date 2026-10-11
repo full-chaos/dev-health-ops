@@ -73,7 +73,7 @@ _Alternative considered:_ register the globals as `ScheduledJob` rows so they em
 ### Track B — Cross-org Platform read view
 
 - Backend: a `require_platform_admin` GraphQL resolver (mirror `resolvers/product_telemetry.py`) returning, per org → per job/config: last status, last error excerpt, last run time, `failure_count`, last `trace_id`. Cross-org via superuser bypass; **no impersonation**.
-- Frontend: `/superadmin/syncs` page (mirror `/superadmin/product-telemetry`), with org → config drill-down reusing the existing `JobRun` history endpoint, plus a "View in SignOz / BugSink" deep-link. urql client, consistent with existing superadmin pages.
+- Frontend: the web has no cross-org sync page. A sync run is read per organization at `/org/admin/sync/[configId]` and `/org/admin/sync/[configId]/runs/[runId]` (organization admins), which reuse the `JobRun` history endpoint.
 
 ### Track C — Re-run without impersonation
 

@@ -10,9 +10,16 @@ remain.
 
 from typing import Final
 
+# The Flow tab shows a "Review Latency" tile, so that name is a supported claim.
 PR_FLOW_UNSUPPORTED_CLAIMS: Final = (
-    "review latency",
     "first review",
     "merge timing",
     "PR stages",
+)
+
+# The Metrics Flow tab has no state-transition path; the page must not describe one.
+PR_FLOW_REMOVED_VIEW_CLAIMS: Final = (
+    "state flow",
+    "state-transition",
+    "sankey",
 )

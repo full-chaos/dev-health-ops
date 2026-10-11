@@ -74,14 +74,6 @@ Use the Sankey view to examine how effort is distributed between themes and avai
 
 <article class="fc-topic-card" markdown>
 
-### [Investment Expense](investment-expense.md)
-
-Use the stacked time series to distinguish short-lived spikes from gradual changes in the composition of work.
-
-</article>
-
-<article class="fc-topic-card" markdown>
-
 ### [Weighting and aggregation](../../reference/metrics/weighting-and-aggregation.md)
 
 Look up the exact calculation contract when you need to distinguish probability, effort value, contribution, and displayed share.
@@ -89,6 +81,17 @@ Look up the exact calculation contract when you need to distinguish probability,
 </article>
 
 </div>
+
+## Find each view in the product
+
+Investment (under **Diagnose**) has four tabs:
+
+| Tab | What it shows |
+| --- | --- |
+| **Overview** | The Investment mix (treemap or sunburst), the "Read this with context" card, and the classification table. |
+| **Allocation** | Allocation paths as a Sankey or a team exchange chord, with allocation coverage. |
+| **Evidence** | The work units behind the mix, and how a selected work unit was calculated. |
+| **Confidence** | Classification confidence, evidence quality, attribution coverage, and rework. |
 
 ## How the model is organized
 

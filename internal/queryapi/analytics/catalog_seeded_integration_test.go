@@ -103,7 +103,7 @@ func TestResolveCatalog_SeededRealClickHouse(t *testing.T) {
 		{"team-foreign", "F", otherOrgID, 1},
 	} {
 		if err := conn.Exec(ctx, fmt.Sprintf(
-			"INSERT INTO teams (id, team_uuid, name, members, updated_at, org_id, is_active) VALUES ('%s', generateUUIDv4(), '%s', [], now64(6), '%s', %d)",
+			"INSERT INTO teams (id, team_uuid, name, updated_at, org_id, is_active) VALUES ('%s', generateUUIDv4(), '%s', now64(6), '%s', %d)",
 			tm.id, tm.name, tm.org, tm.active)); err != nil {
 			t.Fatalf("seed teams: %v", err)
 		}

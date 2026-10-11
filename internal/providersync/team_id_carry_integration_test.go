@@ -50,7 +50,7 @@ func (f carryFixture) team(provider, id string, native, parent *string, active u
 	if sourceID != nil {
 		source = *sourceID
 	}
-	f.exec(`INSERT INTO teams (id, team_uuid, name, members, manual_members, project_keys, repo_patterns, is_active, updated_at, last_synced, org_id, provider, native_team_key, parent_team_id, source_id) VALUES (?, ?, ?, ['m1'], ?, [], [], ?, ?, ?, ?, ?, ?, ?, ?)`,
+	f.exec(`INSERT INTO teams (id, team_uuid, name, manual_members, project_keys, repo_patterns, is_active, updated_at, last_synced, org_id, provider, native_team_key, parent_team_id, source_id) VALUES (?, ?, ?, ?, [], [], ?, ?, ?, ?, ?, ?, ?, ?)`,
 		id, uuid.New(), "team "+id, manual, active, updated, updated, f.orgID, provider, native, parent, source)
 }
 
@@ -933,7 +933,7 @@ func TestCarryTeamIDsKeepsTheOldestCreatedAtWhenTheNewestVersionHasNone(t *testi
 	f := carryFixture{t: t, ctx: ctx, conn: conn, orgID: uuid.NewString()}
 	created := time.Date(2026, 3, 4, 5, 6, 7, 0, time.UTC)
 	f.team("", "chosen", nil, nil, 1, carryOld, nil, nil)
-	f.exec(`INSERT INTO teams (id, team_uuid, name, members, manual_members, project_keys, repo_patterns, is_active, updated_at, last_synced, org_id, provider, created_at) VALUES ('chosen', ?, 'team chosen', [], [], [], [], 1, ?, ?, ?, '', ?)`,
+	f.exec(`INSERT INTO teams (id, team_uuid, name, manual_members, project_keys, repo_patterns, is_active, updated_at, last_synced, org_id, provider, created_at) VALUES ('chosen', ?, 'team chosen', [], [], [], 1, ?, ?, ?, '', ?)`,
 		uuid.New(), carryOld.Add(-time.Hour), carryOld.Add(-time.Hour), f.orgID, created)
 	if _, err := CarryTeamIDs(ctx, conn, f.orgID, carryAt, false); err != nil {
 		t.Fatal(err)

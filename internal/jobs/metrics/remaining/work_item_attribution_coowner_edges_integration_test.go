@@ -38,7 +38,7 @@ func newCoOwnerStore(t *testing.T, ctx context.Context) coOwnerStore {
 
 func (s coOwnerStore) team(provider, teamID string, keys []string, at time.Time) {
 	s.t.Helper()
-	if err := s.conn.Exec(s.ctx, `INSERT INTO teams (id, team_uuid, name, members, manual_members, project_keys, repo_patterns, is_active, updated_at, last_synced, org_id, provider, native_team_key) VALUES (?, ?, ?, [], [], ?, [], 1, ?, ?, ?, ?, ?)`,
+	if err := s.conn.Exec(s.ctx, `INSERT INTO teams (id, team_uuid, name, manual_members, project_keys, repo_patterns, is_active, updated_at, last_synced, org_id, provider, native_team_key) VALUES (?, ?, ?, [], ?, [], 1, ?, ?, ?, ?, ?)`,
 		teamID, uuid.New(), "Team "+teamID, keys, at, at, s.orgID, provider, teamID); err != nil {
 		s.t.Fatalf("insert team %s: %v", teamID, err)
 	}

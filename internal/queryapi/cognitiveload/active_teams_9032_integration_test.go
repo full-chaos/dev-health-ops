@@ -45,8 +45,8 @@ func TestPatternFallbackTeamsHoldOnlyActiveTeams(t *testing.T) {
 
 	const orgTwin, orgPlain = "org-9032-cl-twin", "org-9032-cl-plain"
 	base := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
-	insert := `INSERT INTO teams (id, team_uuid, name, members, repo_patterns, updated_at, org_id, is_active)
-		VALUES (?, generateUUIDv4(), 'Platform', [], ['org/*'], ?, ?, ?)`
+	insert := `INSERT INTO teams (id, team_uuid, name, repo_patterns, updated_at, org_id, is_active)
+		VALUES (?, generateUUIDv4(), 'Platform', ['org/*'], ?, ?, ?)`
 	for _, row := range []struct {
 		org, id string
 		at      time.Time

@@ -210,10 +210,10 @@ func TestARunOfTheWholeOrganizationLeavesTheKeysOfARepositoryTheOrganizationHold
 		storedRows(org, orgDayRepoGone, stored)
 
 		exec("insert team", `INSERT INTO teams
-    (id, team_uuid, name, members, repo_patterns, updated_at, last_synced, org_id, provider, is_active)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
+    (id, team_uuid, name, repo_patterns, updated_at, last_synced, org_id, provider, is_active)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)`,
 			"github:platform", uuid.NewSHA1(uuid.NameSpaceURL, []byte("team:github:platform")), "Team platform",
-			[]string{"dev@example.com"}, []string{"acme/late"}, t0, t0, org, "github")
+			[]string{"acme/late"}, t0, t0, org, "github")
 		repository(org, orgDayRepoLate, "acme/late", stored)
 		exec("insert ownership", `INSERT INTO team_repo_ownership
     (org_id, provider, team_id, repo_id, repo_full_name, match_type, source, is_primary, specificity, valid_from, updated_at)

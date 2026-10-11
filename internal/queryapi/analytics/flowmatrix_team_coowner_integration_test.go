@@ -61,7 +61,7 @@ VALUES (?, ?, ?, 't', 'story', 'done', 'done', ?, ?, ?, ?, ?, ?)`,
 			id     string
 			active uint8
 		}{{"team-a-" + provider, 1}, {"team-b-" + provider, 1}, {"team-c-" + provider, 0}} {
-			crossorg.Exec(ctx, t, admin, `INSERT INTO teams (id, team_uuid, name, members, manual_members, project_keys, repo_patterns, is_active, updated_at, last_synced, org_id, provider, native_team_key) VALUES (?, ?, ?, [], [], ?, [], ?, ?, ?, ?, ?, ?)`,
+			crossorg.Exec(ctx, t, admin, `INSERT INTO teams (id, team_uuid, name, manual_members, project_keys, repo_patterns, is_active, updated_at, last_synced, org_id, provider, native_team_key) VALUES (?, ?, ?, [], ?, [], ?, ?, ?, ?, ?, ?)`,
 				team.id, uuid.New(), "Team "+team.id, []string{key}, team.active, opened, opened, org, provider, team.id)
 			own(provider, team.id, key)
 		}

@@ -88,7 +88,7 @@ func TestAnItemOfAProjectOfSeveralTeamsIsWrittenForEveryActiveTeam(t *testing.T)
 	orgID := "org-coowner-" + uuid.NewString()
 	opened := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	insertTeam := func(provider, teamID, key string, active uint8, at time.Time) {
-		if err := conn.Exec(ctx, `INSERT INTO teams (id, team_uuid, name, members, manual_members, project_keys, repo_patterns, is_active, updated_at, last_synced, org_id, provider, native_team_key) VALUES (?, ?, ?, [], [], ?, [], ?, ?, ?, ?, ?, ?)`,
+		if err := conn.Exec(ctx, `INSERT INTO teams (id, team_uuid, name, manual_members, project_keys, repo_patterns, is_active, updated_at, last_synced, org_id, provider, native_team_key) VALUES (?, ?, ?, [], ?, [], ?, ?, ?, ?, ?, ?)`,
 			teamID, uuid.New(), "Team "+teamID, []string{key}, active, at, at, orgID, provider, teamID); err != nil {
 			t.Fatalf("insert team %s: %v", teamID, err)
 		}

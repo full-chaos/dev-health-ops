@@ -48,8 +48,8 @@ VALUES (?, ?, 'github', 'scope', ?, '', 1, 1, 0, 0, 1, 0, ?, ?, ?, ?, 1, 1, 0, 0
 				t.Fatal(err)
 			}
 		}
-		if err := conn.Exec(ctx, `INSERT INTO teams (id, team_uuid, name, members, repo_patterns, updated_at, org_id, provider, is_active)
-VALUES (?, generateUUIDv4(), 'Ops', [], [], ?, ?, 'github', 1)`, id, computedAt, org); err != nil {
+		if err := conn.Exec(ctx, `INSERT INTO teams (id, team_uuid, name, repo_patterns, updated_at, org_id, provider, is_active)
+VALUES (?, generateUUIDv4(), 'Ops', [], ?, ?, 'github', 1)`, id, computedAt, org); err != nil {
 			t.Fatal(err)
 		}
 	}

@@ -73,13 +73,13 @@ func seedStore(t *testing.T, ctx context.Context, conn chdriver.Conn) {
 		exec(t, ctx, conn, `INSERT INTO repos (id, repo, provider, org_id, created_at, last_synced)
             SELECT '%s', '%s', 'github', '%s', now64(3), now64(3)`, r.id, r.name, r.org)
 	}
-	exec(t, ctx, conn, `INSERT INTO teams (id, team_uuid, name, members, repo_patterns, org_id, updated_at)
-        SELECT 'team-a', generateUUIDv4(), 'Team A', [], ['acme/alpha'], '%s', now64(6)`, org1)
-	exec(t, ctx, conn, `INSERT INTO teams (id, team_uuid, name, members, repo_patterns, org_id, updated_at)
-        SELECT 'team-a', generateUUIDv4(), 'Other Team A', [], ['other/*'], '%s', now64(6)`, org2)
+	exec(t, ctx, conn, `INSERT INTO teams (id, team_uuid, name, repo_patterns, org_id, updated_at)
+        SELECT 'team-a', generateUUIDv4(), 'Team A', ['acme/alpha'], '%s', now64(6)`, org1)
+	exec(t, ctx, conn, `INSERT INTO teams (id, team_uuid, name, repo_patterns, org_id, updated_at)
+        SELECT 'team-a', generateUUIDv4(), 'Other Team A', ['other/*'], '%s', now64(6)`, org2)
 
-	exec(t, ctx, conn, `INSERT INTO teams (id, team_uuid, name, members, repo_patterns, org_id, updated_at)
-        SELECT 'team-b', generateUUIDv4(), 'Team B', [], ['other/*'], '%s', now64(6)`, org1)
+	exec(t, ctx, conn, `INSERT INTO teams (id, team_uuid, name, repo_patterns, org_id, updated_at)
+        SELECT 'team-b', generateUUIDv4(), 'Team B', ['other/*'], '%s', now64(6)`, org1)
 
 	// org1: a stale version of the first row (older computed_at) must lose.
 	rollup(t, ctx, conn, org1, "team-a", rA, "pull_request", "2026-08-01", "ai_assisted", 99, 99, 99, 0.9, "2026-08-01 00:00:00")

@@ -49,8 +49,8 @@ func insertReadbackTeam(t *testing.T, ctx context.Context, conn driver.Conn, pro
 	t.Helper()
 	now := time.Now().UTC()
 	if err := conn.Exec(ctx, `
-INSERT INTO teams (id, team_uuid, name, description, members, updated_at, last_synced, org_id, provider, native_team_key)
-VALUES (generateUUIDv4(), generateUUIDv4(), ?, NULL, [], ?, ?, ?, ?, ?)`,
+INSERT INTO teams (id, team_uuid, name, description, updated_at, last_synced, org_id, provider, native_team_key)
+VALUES (generateUUIDv4(), generateUUIDv4(), ?, NULL, ?, ?, ?, ?, ?)`,
 		nativeTeamKey, now, now, readbackTestOrg, provider, nativeTeamKey); err != nil {
 		t.Fatal(err)
 	}
@@ -80,8 +80,8 @@ func TestClickHouseReadbackVerifierAgainstMigratedSchema(t *testing.T) {
 	// Same natural keys, different tenant/provider -- must not satisfy the
 	// readback check for readbackTestOrg/linear.
 	if err := conn.Exec(ctx, `
-INSERT INTO teams (id, team_uuid, name, description, members, updated_at, last_synced, org_id, provider, native_team_key)
-VALUES (generateUUIDv4(), generateUUIDv4(), 'ENG', NULL, [], now64(6), now64(6), 'foreign-org', 'linear', 'ENG')`); err != nil {
+INSERT INTO teams (id, team_uuid, name, description, updated_at, last_synced, org_id, provider, native_team_key)
+VALUES (generateUUIDv4(), generateUUIDv4(), 'ENG', NULL, now64(6), now64(6), 'foreign-org', 'linear', 'ENG')`); err != nil {
 		t.Fatal(err)
 	}
 	if err := conn.Exec(ctx, `

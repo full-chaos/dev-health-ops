@@ -16,7 +16,8 @@ import (
 // The `members` column of the teams table is a roster copy of the team sync
 // (CHAOS-9087): no validity window, no source, no second team for a person. A
 // person's team comes from team_memberships. No Go source may read it or write
-// it. The census parses every non-test Go file under internal/ and cmd/, joins
+// it. The census parses every Go file under internal/ and cmd/ (tests and test
+// schemas included, this file excepted), joins
 // the string literals of each concatenation, and fails for a statement that
 // names the table `teams` and the bare identifier `members`
 // (`manual_members`, `members_json` and a table named `members` are other
@@ -162,14 +163,7 @@ func TestStatementsOfJoinsAConcatenation(t *testing.T) {
 	}
 }
 
-// rosterColumnReaders are the files that may name the column, each with the
-// reason. A stale entry (a file that no longer names it) fails the census.
-var rosterColumnReaders = map[string]string{
-	"../providersync/team_roster_move.go": "the one-time step that moves the roster entries of admin-made teams into team_memberships before the column is dropped",
-}
-
 func TestNoGoSourceReadsOrWritesTheTeamsRosterColumn(t *testing.T) {
-	reached := map[string]bool{}
 	roots := []string{"..", filepath.Join("..", "..", "cmd")}
 	scannedFiles, teamStatements := 0, 0
 	for _, root := range roots {
@@ -183,7 +177,7 @@ func TestNoGoSourceReadsOrWritesTheTeamsRosterColumn(t *testing.T) {
 				}
 				return nil
 			}
-			if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+			if !strings.HasSuffix(path, ".go") || filepath.ToSlash(path) == "../teamactive/roster_census_test.go" {
 				return nil
 			}
 			raw, err := os.ReadFile(path)
@@ -200,10 +194,6 @@ func TestNoGoSourceReadsOrWritesTheTeamsRosterColumn(t *testing.T) {
 					teamStatements++
 				}
 				if readsOrWritesTeamsRoster(statement) {
-					if _, allowed := rosterColumnReaders[filepath.ToSlash(path)]; allowed {
-						reached[filepath.ToSlash(path)] = true
-						continue
-					}
 					t.Errorf("%s names the roster column of the teams table (CHAOS-9087): %s", path, strings.Join(strings.Fields(statement), " "))
 				}
 			}
@@ -213,13 +203,8 @@ func TestNoGoSourceReadsOrWritesTheTeamsRosterColumn(t *testing.T) {
 			t.Fatalf("walk %s: %v", root, err)
 		}
 	}
-	for path, reason := range rosterColumnReaders {
-		if !reached[path] {
-			t.Errorf("%s is allowed to name the roster column (%s) and does not: remove the entry", path, reason)
-		}
-	}
 	// A census that read nothing must not pass.
-	if scannedFiles < 500 || teamStatements < 20 {
+	if scannedFiles < 1000 || teamStatements < 20 {
 		t.Fatalf("the census read %d Go files and %d statements on the teams table: it did not measure the tree", scannedFiles, teamStatements)
 	}
 }

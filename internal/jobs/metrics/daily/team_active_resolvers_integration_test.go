@@ -45,10 +45,10 @@ func seedTeamActiveResolverTeam(
 		flag = 1
 	}
 	if err := conn.Exec(ctx, `INSERT INTO teams
-    (id, team_uuid, name, members, repo_patterns, updated_at, last_synced, org_id, provider, is_active)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    (id, team_uuid, name, repo_patterns, updated_at, last_synced, org_id, provider, is_active)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		id, uuid.NewSHA1(uuid.NameSpaceURL, []byte("team:"+id)), "Team "+id,
-		[]string{"dev@example.com"}, []string{"acme/*"}, at, at, teamActiveResolverOrg, "github", flag,
+		[]string{"acme/*"}, at, at, teamActiveResolverOrg, "github", flag,
 	); err != nil {
 		t.Fatalf("insert team %s: %v", id, err)
 	}

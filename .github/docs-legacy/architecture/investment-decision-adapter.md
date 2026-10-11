@@ -269,6 +269,10 @@ Notes:
   gains evidence leaves the fallback) or stamp is processed again. A unit with no text
   source (`no_text_sources`) is not covered. The skip is counted in `skipped_existing`
   and in field `skipped_fallback` of "investment materialization complete".
+  KNOWN PROPERTY (same as for `ok` rows): the input hash covers the unit and its text
+  sources, not the confidence of its graph edges, so a same-hash skip also keeps the
+  stored evidence quality score and band. A change of edge confidence alone is picked up
+  by a forced run, a text change or a stamp change.
 - A unit cancelled by the run context has no row from this run.
 - Every unit asked of the served backend is in exactly one outcome count of the metric
   (section 6), on every exit of the run.

@@ -199,24 +199,46 @@ func TestGoOnlyMetricsMaskRemovesOnlyThoseTwoMetrics(t *testing.T) {
 const investmentSectionMetricKeys = `ktlo_units|new_value_units|security_units|infra_units|feature_delivery_effort|operational_effort|maintenance_effort|quality_effort|risk_effort`
 
 var investmentSectionMetricObject = `\{"key":"(?:` + investmentSectionMetricKeys + `)",[^{}]*"delta":\{[^{}]*\}[^{}]*\}`
-var investmentSectionRun = regexp.MustCompile(investmentSectionMetricObject + `(?:,` + investmentSectionMetricObject + `)*`)
+
+// The run is matched only INSIDE the investment section: its opening (key, title, the three sentence
+// lists) is part of the pattern, so the same metrics under another section are neither masked nor accepted.
+var investmentSectionRun = regexp.MustCompile(`("key":"investment","title":"Investment","changed":\[[^\]]*\],"improved":\[[^\]]*\],"worsened":\[[^\]]*\],"metrics":\[)` +
+	investmentSectionMetricObject + `(?:,` + investmentSectionMetricObject + `)*`)
 
 func investmentSectionNormalize(request venueoracle.Request, body string) string {
 	if !isOperatingReviewRequest(request) {
 		return body
 	}
-	return investmentSectionRun.ReplaceAllString(body, `"<D5940 investment section>"`)
+	return investmentSectionRun.ReplaceAllString(body, `${1}"<D5940 investment section>"`)
+}
+
+// investmentSectionOf is the text of the investment section: from its key to the next section's key.
+func investmentSectionOf(body string) (string, bool) {
+	start := strings.Index(body, `"key":"investment","title":"Investment"`)
+	if start < 0 {
+		return "", false
+	}
+	rest := body[start+1:]
+	end := strings.Index(rest, `{"key":"ai_workflow_intelligence"`)
+	if end < 0 {
+		end = len(rest)
+	}
+	return rest[:end], true
 }
 
 func investmentSectionInspect(request venueoracle.Request, goBody string) (bool, string) {
 	if !isOperatingReviewRequest(request) || !strings.HasPrefix(goBody, `{"data":{`) {
 		return true, ""
 	}
+	section, found := investmentSectionOf(goBody)
+	if !found {
+		return false, "query-api must serve the investment section (D5940)"
+	}
 	last := -1
 	for _, key := range []string{"feature_delivery_effort", "operational_effort", "maintenance_effort", "quality_effort", "risk_effort"} {
-		at := strings.Index(goBody, `"key":"`+key+`"`)
+		at := strings.Index(section, `"key":"`+key+`"`)
 		if at < 0 || at < last {
-			return false, "query-api must serve the canonical investment metric " + key + " in theme order (D5940)"
+			return false, "query-api must serve the canonical investment metric " + key + " in theme order, inside the investment section (D5940)"
 		}
 		last = at
 	}
@@ -235,34 +257,50 @@ func TestInvestmentSectionMaskReplacesOnlyTheInvestmentMetricRun(t *testing.T) {
 	metric := func(key string) string {
 		return `{"key":"` + key + `","label":"L","value":0,"unit":"u",` + delta + `,"hasData":false}`
 	}
-	wrap := func(keys ...string) string {
+	section := func(key, title string, keys ...string) string {
 		parts := make([]string, 0, len(keys))
-		for _, key := range keys {
-			parts = append(parts, metric(key))
+		for _, k := range keys {
+			parts = append(parts, metric(k))
 		}
-		return `{"data":{"operatingReview":{"metrics":[` + strings.Join(parts, ",") + `]}}}`
+		return `{"key":"` + key + `","title":"` + title + `","changed":[],"improved":[],"worsened":[],"metrics":[` + strings.Join(parts, ",") + `]}`
 	}
-	python := wrap("incidents_count", "ktlo_units", "new_value_units", "security_units", "infra_units", "ai_adoption_ratio")
-	goBody := wrap("incidents_count", "feature_delivery_effort", "operational_effort", "maintenance_effort", "quality_effort", "risk_effort", "ai_adoption_ratio")
+	wrap := func(sections ...string) string {
+		return `{"data":{"operatingReview":{"sections":[` + strings.Join(sections, ",") + `]}}}`
+	}
+	canon := []string{"feature_delivery_effort", "operational_effort", "maintenance_effort", "quality_effort", "risk_effort"}
+	python := wrap(section("reliability", "Reliability", "incidents_count"), section("investment", "Investment", "ktlo_units", "new_value_units", "security_units", "infra_units"),
+		section("ai_workflow_intelligence", "AI", "ai_adoption_ratio"))
+	goBody := wrap(section("reliability", "Reliability", "incidents_count"), section("investment", "Investment", canon...),
+		section("ai_workflow_intelligence", "AI", "ai_adoption_ratio"))
 	if investmentSectionNormalize(request, python) != investmentSectionNormalize(request, goBody) {
 		t.Fatalf("the declared pair does not normalize equal:\n%s\n%s", investmentSectionNormalize(request, python), investmentSectionNormalize(request, goBody))
 	}
-	// A neighbour metric that differs is not masked.
-	if investmentSectionNormalize(request, wrap("other", "ktlo_units")) == investmentSectionNormalize(request, wrap("incidents_count", "feature_delivery_effort")) {
+	// A neighbour section that differs is not masked.
+	other := wrap(section("reliability", "Reliability", "other"), section("investment", "Investment", canon...), section("ai_workflow_intelligence", "AI", "ai_adoption_ratio"))
+	if investmentSectionNormalize(request, other) == investmentSectionNormalize(request, goBody) {
 		t.Fatal("a different metric outside the section was masked")
 	}
-	// The retired ids and the canonical ids are both required on the right side by the inspection.
+	// The same five metrics under ANOTHER section are neither masked nor accepted (round 128 r1 P3).
+	misplaced := wrap(section("delivery_movement", "Delivery", canon...), section("investment", "Investment", "other_metric"), section("ai_workflow_intelligence", "AI", "ai_adoption_ratio"))
+	if strings.Contains(investmentSectionNormalize(request, misplaced), "<D5940") {
+		t.Fatal("metrics outside the investment section were masked")
+	}
+	if ok, _ := investmentSectionInspect(request, misplaced); ok {
+		t.Fatal("canonical metrics under another section pass the inspection")
+	}
+	// The retired ids and a short section fail the inspection of the Go answer; the canonical one passes.
 	if ok, _ := investmentSectionInspect(request, python); ok {
 		t.Fatal("the retired four-metric section passes the inspection of the Go answer")
 	}
 	if ok, why := investmentSectionInspect(request, goBody); !ok {
 		t.Fatalf("the canonical section fails the inspection: %s", why)
 	}
-	if ok, _ := investmentSectionInspect(request, wrap("feature_delivery_effort", "risk_effort")); ok {
+	short := wrap(section("investment", "Investment", "feature_delivery_effort", "risk_effort"), section("ai_workflow_intelligence", "AI", "ai_adoption_ratio"))
+	if ok, _ := investmentSectionInspect(request, short); ok {
 		t.Fatal("a section missing three themes passes the inspection")
 	}
 	// Another operation is left alone.
-	if other := (venueoracle.Request{Name: "POST home"}); investmentSectionNormalize(other, goBody) != goBody {
+	if otherOp := (venueoracle.Request{Name: "POST home"}); investmentSectionNormalize(otherOp, goBody) != goBody {
 		t.Fatal("an answer of another operation was changed")
 	}
 }

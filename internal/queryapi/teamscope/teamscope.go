@@ -318,14 +318,17 @@ func textRepoMembership(condition string) string {
 	return "toString(" + column + ") IN " + rest
 }
 
-// UnitScope widens the repository fragment of a work-unit read (the " AND ..." NarrowRepoScope
-// returns, written over the column repo_id) from the unit's OWN repo_id column to the unit's
-// repository ROWS: a unit is in a repository scope when its own repo_id is in it OR any row of
-// work_unit_repo_effort (one row per repository the unit touches) is. A unit with a NULL own
-// repo_id, or one that touches several repositories, is no longer lost to a repository scope
-// (CHAOS-9221). The caller reads work_unit_investments under that alias and binds {org_id}.
+// UnitScope widens the repository fragment of a work-unit read that COUNTS or LISTS units (the " AND ..." that
+// NarrowRepoScope returns, written over the column repo_id) from the unit's OWN repo_id column to the unit's
+// repository ROWS: a unit is in a repository scope when its own repo_id satisfies the fragment OR any
+// repository row of its LATEST allocation generation does. latestEffortSource is the one latest-generation source of
+// the repository rows (analytics.LatestWorkUnitRepoEffortSource: this package cannot import analytics); it binds
+// {org_id}. The fragment is wrapped ONCE for ALL its conditions (a repository filter AND a team filter): they must
+// hold on the SAME row, never on two different rows of one unit. A unit with a NULL own repo_id, or touching several
+// repositories, is no longer lost to a repository scope (CHAOS-9221). Effort-summing readers do not use this:
+// they run on the per-repository allocation source. The caller reads work_unit_investments under that alias.
 // An empty fragment stays empty (no scope).
-func UnitScope(filterSQL string) string {
+func UnitScope(filterSQL, latestEffortSource string) string {
 	if strings.TrimSpace(filterSQL) == "" {
 		return filterSQL
 	}
@@ -333,10 +336,10 @@ func UnitScope(filterSQL string) string {
 	if strings.TrimSpace(condition) == "1 = 0" {
 		return filterSQL // a named repository that resolved to nothing leaves nothing
 	}
-	// Inside the subquery the column is work_unit_repo_effort's own repo_id: a caller that qualifies the column
-	// with the unit alias ("work_unit_investments.repo_id") is rewritten for the inner copy only.
+	// Inside the subquery the column is the repository row's own repo_id: a caller that qualifies the column with the
+	// unit alias ("work_unit_investments.repo_id") is rewritten for the inner copy only.
 	inner := strings.ReplaceAll(condition, "work_unit_investments.repo_id", "repo_id")
 	return " AND (" + condition + ` OR work_unit_investments.work_unit_id IN (
-    SELECT work_unit_id FROM work_unit_repo_effort FINAL
-    WHERE org_id = {org_id:String} AND repo_id IS NOT NULL AND ` + inner + "))"
+    SELECT work_unit_id FROM ` + latestEffortSource + ` AS latest_repo_rows
+    WHERE repo_id IS NOT NULL AND ` + inner + "))"
 }

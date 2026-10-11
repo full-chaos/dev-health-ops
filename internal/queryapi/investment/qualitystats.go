@@ -77,7 +77,7 @@ func (r *Reader) FetchInvestmentQualityStats(ctx context.Context, filters Qualit
 
 	categorySQL, categoryBindings := filters.categoryClause()
 	scopeSQL, scopeBindings := combinedScopeClause(filters.ReposNamed, filters.RepoIDs, filters.TeamScopeCondition, filters.TeamScopeBindings)
-	scopeSQL = teamscope.UnitScope(scopeSQL) // the unit's repository rows (CHAOS-9221): counts, not effort
+	scopeSQL = teamscope.UnitScope(scopeSQL, analytics.LatestWorkUnitRepoEffortSource()) // the unit's repository rows (CHAOS-9221): counts, not effort
 
 	query := fmt.Sprintf(`
 SELECT

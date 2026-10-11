@@ -133,7 +133,7 @@ func (reader *Reader) FetchWorkUnitInvestments(ctx context.Context, filter WorkU
 		explicitSQL = " AND " + explicitCondition
 	}
 	scopeSQL, scopeBindings = teamscope.NarrowRepoScope(filter.ReposNamed, explicitSQL, explicitBindings, filter.TeamScopeCondition, filter.TeamScopeBindings)
-	scopeSQL = teamscope.UnitScope(scopeSQL) // the unit's repository rows, not only its own repo_id (CHAOS-9221)
+	scopeSQL = teamscope.UnitScope(scopeSQL, analytics.LatestWorkUnitRepoEffortSource()) // the unit's repository rows, not only its own repo_id (CHAOS-9221)
 	var workUnitSQL string
 	if filter.WorkUnitID != "" {
 		workUnitSQL = " AND work_unit_investments.work_unit_id = {work_unit_id:String}"

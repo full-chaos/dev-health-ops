@@ -485,7 +485,6 @@ func compileSankeyCoverage(req SankeyRequest, orgID string, timeoutSeconds int, 
 		// are in scope -- so it takes the unit-selecting predicate and skips
 		// the row-multiplying ARRAY JOIN above.
 		WorkCategorySelectsUnits: useInvestment,
-		UnitRows:                 useInvestment,
 	})
 	if err != nil {
 		return compiledQuery{}, err

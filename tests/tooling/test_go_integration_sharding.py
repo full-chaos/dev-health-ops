@@ -204,6 +204,14 @@ def test_integration_shard_arity_guard_uses_an_explicit_conditional() -> None:
         )
 
 
+def _provider_shard_ids() -> set[int]:
+    """The shard ids 1..N the providersync manifest declares (CHAOS-9201: not a frozen 4)."""
+    for line in PROVIDER_MANIFEST.read_text(encoding="utf-8").splitlines():
+        if line.startswith("shards\t"):
+            return set(range(1, int(line.split("\t")[1]) + 1))
+    raise AssertionError(f"{PROVIDER_MANIFEST} declares no shards row")
+
+
 def _providersync_top_level_tests() -> set[str]:
     env = os.environ.copy()
     env["GOTOOLCHAIN"] = "go1.27.0"
@@ -495,7 +503,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
         provider_assignments.setdefault(int(shard), set()).add(test_name)
         provider_class[test_name] = classification.removeprefix("class=")
 
-    assert set(provider_assignments) == {1, 2, 3, 4}
+    assert set(provider_assignments) == _provider_shard_ids()
     provider_flattened = [
         test_name for tests in provider_assignments.values() for test_name in tests
     ]
@@ -522,7 +530,7 @@ def test_shard_plan_is_exhaustive_nonempty_and_machine_readable(
             provider_integration_counts[int(match.group("shard"))] = int(
                 match.group("integration")
             )
-    assert set(provider_totals) == {1, 2, 3, 4}
+    assert set(provider_totals) == _provider_shard_ids()
     assert max(provider_totals.values()) - min(provider_totals.values()) <= 1
     assert (
         max(provider_integration_counts.values())

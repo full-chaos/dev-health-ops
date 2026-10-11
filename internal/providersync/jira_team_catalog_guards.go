@@ -132,6 +132,7 @@ func jiraMembershipRowToDriftView(row jiraTeamCatalogMembershipRow) teamDriftMem
 		RawProviderUserID: row.RawProviderUserID, RawEmail: row.RawEmail, IdentityFacets: row.IdentityFacets,
 		Source: row.Source, IsPrimary: row.IsPrimary, Specificity: row.Specificity, Priority: row.Priority,
 		ValidFrom: row.ValidFrom, ValidTo: row.ValidTo, UpdatedAt: row.UpdatedAt,
+		ProviderUserID: row.ProviderUserID,
 	}
 }
 

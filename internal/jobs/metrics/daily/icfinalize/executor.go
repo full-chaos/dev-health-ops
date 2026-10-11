@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2"
@@ -12,6 +13,7 @@ import (
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/metric"
 
+	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse/liverow"
 	"github.com/full-chaos/dev-health-ops/internal/teamactive"
 )
 
@@ -84,7 +86,7 @@ type Conn interface {
 // commits_count/files_changed/avg_commit_size_loc/etc. to zero on write: a
 // column this query does not select cannot be carried through by
 // writeUserMetrics no matter what that function does with what it has.
-const gitMetricsSQL = `
+var gitMetricsSQL = `
 SELECT author_email, team_id, repo_id, loc_added, loc_deleted, prs_authored, prs_merged,
        median_pr_cycle_hours, pr_cycle_p90_hours,
        commits_count, files_changed, large_commits_count, avg_commit_size_loc,
@@ -99,19 +101,21 @@ FROM (
     ORDER BY computed_at DESC
     LIMIT 1 BY org_id, repo_id, author_email, day
 ) AS user_metrics_daily
-WHERE day = {day:Date} AND org_id = {org_id:String}`
+WHERE day = {day:Date} AND org_id = {org_id:String}
+  AND ` + liverow.Predicate("user_metrics_daily", "user_metrics_daily")
 
 // workItemMetricsSQL mirrors run_daily_metrics_finalize's own readback, which
 // uses FINAL rather than LIMIT 1 BY: work_item_user_metrics_daily IS in
 // RERUN_DEDUPED_DAILY_TABLES, so it is a ReplacingMergeTree and takes the RMT
 // form. The two tables genuinely differ; using one form for both would be
 // wrong for whichever it did not fit.
-const workItemMetricsSQL = `
+var workItemMetricsSQL = `
 SELECT user_identity, provider, work_scope_id, team_id, team_name,
        items_started, items_completed, wip_count_end_of_day,
        cycle_time_p50_hours, cycle_time_p90_hours
 FROM work_item_user_metrics_daily FINAL
-WHERE day = {day:Date} AND org_id = {org_id:String}`
+WHERE day = {day:Date} AND org_id = {org_id:String}
+  AND ` + liverow.Predicate("work_item_user_metrics_daily", "")
 
 // synthesizedRepoNamespace seeds the deterministic repo_id below. A fixed
 // namespace constant, never regenerated: the whole value of the id is that it
@@ -154,10 +158,29 @@ func SynthesizedRepoID(orgID, identityID string) uuid.UUID {
 
 // Executor computes the ic_finalize family natively.
 type Executor struct {
-	conn                Conn
-	now                 func() time.Time
-	teamMapper          TeamMapper
-	landscapeSuperseder LandscapeSuperseder
+	conn                  Conn
+	now                   func() time.Time
+	teamMapper            TeamMapper
+	landscapeSuperseder   LandscapeSuperseder
+	userMetricsSuperseder UserMetricsSuperseder
+}
+
+// UserMetricsSuperseder runs after the user-metrics write of a day. It gets
+// every row the compute wrote (none for a day with no person) and writes a row
+// of zeros over each stored key of the day that this family alone owns (a
+// person with work-item metrics and no git row, under the synthesized
+// repository) and the compute did not produce. It returns the number of rows
+// it wrote. The rule is the one of the daily tables with a retraction marker
+// (package daily, stale_team_keys.go); it is injected because this package
+// does not import that one.
+type UserMetricsSuperseder func(
+	ctx context.Context, orgID string, day, computedAt time.Time, written []ICUserMetric,
+) (int, error)
+
+// SetUserMetricsSuperseder wires the stale-key rule of the synthesized keys of
+// user_metrics_daily.
+func (executor *Executor) SetUserMetricsSuperseder(superseder UserMetricsSuperseder) {
+	executor.userMetricsSuperseder = superseder
 }
 
 // LandscapeSuperseder runs after the landscape write of a day. It gets every
@@ -251,6 +274,13 @@ func (executor *Executor) loadGitMetrics(
 			&contextSpreadCount, &reviewRequestLoad, &metric.TeamName, &metric.ActiveHours, &weekendDays,
 		); err != nil {
 			return nil, err
+		}
+		if metric.RepoID == SynthesizedRepoID(orgID, metric.AuthorEmail) {
+			// This family's own row of a person with no git record (zeros
+			// but the work-item columns), not a git fact: read back as one it
+			// would keep itself alive after the work items are gone, and no
+			// stale-key rule could retract it (CHAOS-9135).
+			continue
 		}
 		if inactive.Has(metric.TeamID) {
 			metric.TeamID, metric.TeamName = unassignedTeamID, unassignedTeamName
@@ -362,7 +392,7 @@ var landscapeRepoID = uuid.UUID{}
 // landscape input is a READBACK of the user-metrics write, so the two halves
 // cannot be reordered or run independently.
 func (executor *Executor) computeForDay(
-	ctx context.Context, orgID string, day time.Time, teamsOf PersonTeams, inactive teamactive.Inactive,
+	ctx context.Context, orgID string, day time.Time, teamsOf PersonTeams, namesOf TeamNames, inactive teamactive.Inactive,
 ) (int, error) {
 	if err := requireOrganization(ctx, orgID, day); err != nil {
 		return 0, err
@@ -411,12 +441,35 @@ func (executor *Executor) computeForDay(
 		// the row was stored with.
 		if merged[index].TeamID == unassignedTeamID {
 			merged[index].PassThrough.TeamName = unassignedTeamName
+			continue
+		}
+		// The name of a row with a team is the name of the team its id came from (the
+		// membership's), not the name the row was stored with: one source for the id
+		// and the name (CHAOS-9134). DECLARED DIVERGENCE from the reference, which
+		// passes the stored name through. A membership team the read holds no name for
+		// keeps the id as its name, never another team's name.
+		if namesOf != nil {
+			name := strings.TrimSpace(namesOf(merged[index].TeamID))
+			if name == "" {
+				name = merged[index].TeamID
+			}
+			merged[index].PassThrough.TeamName = name
 		}
 	}
 	computedAt := executor.now()
 	written, err := executor.writeUserMetrics(ctx, orgID, day, computedAt, merged)
 	if err != nil {
 		return 0, err
+	}
+
+	if executor.userMetricsSuperseder != nil {
+		// Also with no record: a day that lost every person still holds the
+		// synthesized rows of the earlier compute.
+		superseded, err := executor.userMetricsSuperseder(ctx, orgID, day, computedAt, merged)
+		written += superseded
+		if err != nil {
+			return written, err
+		}
 	}
 
 	stats, err := LoadRollingStats(ctx, executor.conn, orgID, day, inactive)
@@ -548,12 +601,19 @@ type TeamResolver func(identity string) (teamID string, ok bool)
 // an empty result.
 type PersonTeams func(identity string) []string
 
+// TeamNames gives the name of a team by its id, from the SAME read that gave the
+// person's teams (the membership's team). A person's row holds the id of the first
+// team and the name of that same team, never a stored name of another one
+// (CHAOS-9134). "" means the read holds no name for the team. A nil TeamNames means
+// the mapper has no names, and a row keeps the name it was stored with.
+type TeamNames func(teamID string) string
+
 // TeamMapper builds the PersonTeams of one organization for one point in
 // time. asOf is that point: a membership counts when it is valid at asOf.
 //
 // The mapper is called once for each run, with the organization and the time
 // of that run, so one Executor can serve runs of many organizations and days.
-type TeamMapper func(ctx context.Context, orgID string, asOf time.Time) (PersonTeams, error)
+type TeamMapper func(ctx context.Context, orgID string, asOf time.Time) (PersonTeams, TeamNames, error)
 
 // SetTeamMapper wires the membership read. A nil mapper means no person has a
 // team: every identity keeps the team of its stored row, or "unassigned".
@@ -579,12 +639,13 @@ func (executor *Executor) ComputeFinalizeFamily(ctx context.Context, run RunScop
 		return 0, err
 	}
 	var teamsOf PersonTeams
+	var namesOf TeamNames
 	if executor.teamMapper != nil {
-		resolved, err := executor.teamMapper(ctx, run.OrganizationID, membershipAsOf(run.TargetDay))
+		resolved, names, err := executor.teamMapper(ctx, run.OrganizationID, membershipAsOf(run.TargetDay))
 		if err != nil {
 			return 0, err
 		}
-		teamsOf = resolved
+		teamsOf, namesOf = resolved, names
 	}
 	// The stored rows this family reads hold the team id they were written
 	// with. A failed read of the inactive teams fails the run: with an empty
@@ -594,7 +655,7 @@ func (executor *Executor) ComputeFinalizeFamily(ctx context.Context, run RunScop
 	if err != nil {
 		return 0, err
 	}
-	return executor.computeForDay(ctx, run.OrganizationID, run.TargetDay, teamsOf, inactive)
+	return executor.computeForDay(ctx, run.OrganizationID, run.TargetDay, teamsOf, namesOf, inactive)
 }
 
 // RunScope is the subset of daily.Run this package needs. Declaring it here

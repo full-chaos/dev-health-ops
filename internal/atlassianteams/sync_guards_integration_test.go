@@ -90,6 +90,12 @@ func TestWriteRespectsMembershipManualConflictGuard(t *testing.T) {
 			t.Fatalf("a native membership was written for the manually-conflicted member: %v", got)
 		}
 	}
+	// The held-back row is staged for review WITH the provider's own user id (CHAOS-9144),
+	// so an approval writes it and a later rename of the member is not a leave and a join.
+	staged := lines(t, conn, `SELECT new_value_json FROM team_drift_changes FINAL WHERE org_id = 'org-1' AND change_type = 'membership_changed'`)
+	if len(staged) != 1 || !strings.Contains(staged[0], `"provider_user_id":"Alice-1"`) {
+		t.Fatalf("staged payload = %v, want one change holding provider_user_id Alice-1 (the accountId as the provider wrote it)", staged)
+	}
 	// The manual pin itself is untouched.
 	stillManual := lines(t, conn, `SELECT team_id FROM team_memberships FINAL WHERE org_id = 'org-1' AND member_id = 'jira:alice-1' AND source = 'manual'`)
 	if len(stillManual) != 1 || stillManual[0] != "other-team" {

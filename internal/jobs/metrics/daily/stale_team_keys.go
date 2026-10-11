@@ -11,6 +11,7 @@ import (
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/daily/icfinalize"
 	"github.com/full-chaos/dev-health-ops/internal/teamkeytables"
 )
 
@@ -136,6 +137,8 @@ var staleKeyVersionSteps = map[string]time.Duration{
 	teamkeytables.TeamComplexityDaily.Table:          time.Microsecond,
 	teamkeytables.ICLandscapeRolling30d.Table:        time.Second,
 	teamkeytables.CompoundingRiskDailyTeam.Table:     time.Second,
+	teamkeytables.WorkItemUserMetricsDaily.Table:     time.Second,
+	teamkeytables.UserMetricsDaily.Table:             time.Second,
 }
 
 // staleKeyVersionAfter is the version of a row that must be strictly newer
@@ -245,6 +248,47 @@ func supersedeStaleTeamKeysAt(
 	}
 	return supersedeStaleKeys(ctx, conn, table, organizationID, day, scope, produced,
 		func(key staleKey, _ time.Time) time.Time { return computedAtOf(key) })
+}
+
+// isSynthesizedUserKey says whether a key of user_metrics_daily is a key only
+// the ic_finalize family makes: the repository of the key is the one derived
+// from the person (icfinalize.SynthesizedRepoID). No repository partition
+// writes such a key, and no repository holds it.
+func isSynthesizedUserKey(organizationID string, key staleKey) bool {
+	return len(key) == 2 && key[0] == icfinalize.SynthesizedRepoID(organizationID, key[1]).String()
+}
+
+// supersedeSynthesizedUserKeys is the stale-key rule of the keys that the
+// ic_finalize family alone owns in user_metrics_daily: every live key of the
+// day under a synthesized repository that the compute did not produce gets a
+// row of zeros (the retraction marker set).
+func supersedeSynthesizedUserKeys(
+	ctx context.Context, conn staleKeyConn, organizationID string, day, computedAt time.Time, produced []staleKey,
+) (int, error) {
+	table := teamkeytables.UserMetricsDaily
+	if computedAt.IsZero() {
+		return 0, ErrInvalidState
+	}
+	live, versions, err := loadLiveStaleKeys(ctx, conn, table, organizationID, day)
+	if err != nil {
+		return 0, err
+	}
+	held := make(map[string]struct{}, len(produced))
+	for _, key := range produced {
+		held[key.text()] = struct{}{}
+	}
+	var stale []staleKey
+	for _, key := range live {
+		if _, ok := held[key.text()]; ok || !isSynthesizedUserKey(organizationID, key) {
+			continue
+		}
+		stale = append(stale, key)
+	}
+	sort.Slice(stale, func(left, right int) bool { return stale[left].text() < stale[right].text() })
+	return writeStaleKeyZeroRows(ctx, conn, table, organizationID, day, stale, func(key staleKey) time.Time {
+		version, _ := staleKeyVersionAfter(table, computedAt, versions[key.text()])
+		return version
+	})
 }
 
 // supersedeStaleKeys is the rule of a family. versionOf gets a stale key and
@@ -470,6 +514,11 @@ func retractStaleTeamKeysOutsideRun(
 		if _, inRun := owned[repository]; inRun {
 			continue
 		}
+		if table.Table == teamkeytables.UserMetricsDaily.Table && isSynthesizedUserKey(organizationID, key) {
+			// The repository of this key is no repository of the organization, by
+			// construction: only the ic_finalize family makes the key and retracts it.
+			continue
+		}
 		if _, held := present[repository]; held {
 			result.kept++
 			continue
@@ -527,6 +576,55 @@ func newestStaleKeyVersion(
 	return newest, nil
 }
 
+// loadCarriedValues reads, for each key of one organization and day, the
+// values that the row of zeros of the table copies from the newest row of the
+// key (StaleKeyTable.Carried). A table with no carried column reads nothing.
+// A failed read is returned: the row of zeros is never written without the
+// copy it needs, because a reader that filters on a carried column before it
+// takes the newest row would then serve the older row.
+func loadCarriedValues(
+	ctx context.Context, conn staleKeyConn, table StaleKeyTable, organizationID string, day time.Time,
+) (map[string][]string, error) {
+	if len(table.Carried) == 0 {
+		return nil, nil
+	}
+	keys := make([]string, 0, len(table.Keys))
+	for _, column := range table.Keys {
+		keys = append(keys, column.ReadExpression())
+	}
+	selected := append([]string(nil), keys...)
+	for _, column := range table.Carried {
+		selected = append(selected, "argMax("+column.ReadExpression()+", computed_at)")
+	}
+	where := ""
+	if table.Where != "" {
+		where = " AND (" + table.Where + ")"
+	}
+	rows, err := conn.Query(ctx, "SELECT "+strings.Join(selected, ", ")+" FROM "+table.Table+
+		" WHERE org_id = ? AND "+table.DayColumn+" = ?"+where+" GROUP BY "+strings.Join(keys, ", "),
+		organizationID, staleKeyDay(day))
+	if err != nil {
+		return nil, fmt.Errorf("load %s carried values: %w", table.Table, err)
+	}
+	defer rows.Close()
+	carried := map[string][]string{}
+	for rows.Next() {
+		values := make([]string, len(table.Keys)+len(table.Carried))
+		targets := make([]any, len(values))
+		for index := range values {
+			targets[index] = &values[index]
+		}
+		if err := rows.Scan(targets...); err != nil {
+			return nil, fmt.Errorf("scan %s carried values: %w", table.Table, err)
+		}
+		carried[staleKey(values[:len(table.Keys)]).text()] = values[len(table.Keys):]
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate %s carried values: %w", table.Table, err)
+	}
+	return carried, nil
+}
+
 // writeStaleKeyZeroRows writes one row of zeros over each key. It reports its
 // row count on a Send error, because the rows may be stored.
 func writeStaleKeyZeroRows(
@@ -536,12 +634,22 @@ func writeStaleKeyZeroRows(
 	if len(stale) == 0 {
 		return 0, nil
 	}
+	carried, err := loadCarriedValues(ctx, conn, table, organizationID, day)
+	if err != nil {
+		return 0, err
+	}
 	names := make([]string, 0, len(table.Keys))
 	for _, column := range table.Keys {
 		names = append(names, column.Name)
 	}
-	batch, err := conn.PrepareBatch(ctx, "INSERT INTO "+table.Table+
-		" (org_id, "+table.DayColumn+", "+strings.Join(names, ", ")+", computed_at)")
+	columns := "(org_id, " + table.DayColumn + ", " + strings.Join(names, ", ") + ", computed_at"
+	if table.Retracted != "" {
+		columns += ", " + table.Retracted
+	}
+	for _, column := range table.Carried {
+		columns += ", " + column.Name
+	}
+	batch, err := conn.PrepareBatch(ctx, "INSERT INTO "+table.Table+" "+columns+")")
 	if err != nil {
 		return 0, fmt.Errorf("prepare %s zero rows: %w", table.Table, err)
 	}
@@ -561,6 +669,22 @@ func writeStaleKeyZeroRows(
 			values = append(values, value)
 		}
 		values = append(values, computedAt.UTC())
+		if table.Retracted != "" {
+			// The marker of a table whose measured rows can hold 0 in every
+			// measure: 1 is the row of zeros, the column default 0 a computed row.
+			values = append(values, uint8(1))
+		}
+		for index, column := range table.Carried {
+			text := ""
+			if row, found := carried[key.text()]; found {
+				text = row[index]
+			}
+			value, err := column.StoredValue(text)
+			if err != nil {
+				return 0, err
+			}
+			values = append(values, value)
+		}
 		if err := batch.Append(values...); err != nil {
 			return 0, fmt.Errorf("append %s zero row: %w", table.Table, err)
 		}

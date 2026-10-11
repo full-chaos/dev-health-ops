@@ -44,6 +44,11 @@ var columnsAfterTheCapture = map[string]map[string]string{
 		// The time of an admin delete: no team of a frozen world was deleted.
 		"deleted_at": "115_teams_deleted_at.sql",
 	},
+	// The provider's own stable user id of a member (CHAOS-9144): the frozen
+	// worlds' membership rows were written before it and carry none.
+	"team_memberships": {
+		"provider_user_id": "117_team_memberships_provider_user_id.sql",
+	},
 	// The provider's own time of a work item relation (CHAOS-8574). No
 	// frozen relation has one.
 	// Which items of a relation write it (CHAOS-8578). No frozen relation

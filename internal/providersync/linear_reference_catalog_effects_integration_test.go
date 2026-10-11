@@ -283,3 +283,37 @@ func (sink *linearReferenceCrashAfterWriteSink) WriteEffect(ctx context.Context,
 	}
 	return nil
 }
+
+// TestLinearReferenceMemberVersionsFollowLinearsActiveFlag (CHAOS-9149 item 2)
+// writes the members row of one user three times through the real sink and
+// reads the stored row with FINAL: active, then inactive (the next version,
+// is_active 0), then active again (is_active 1).
+func TestLinearReferenceMemberVersionsFollowLinearsActiveFlag(t *testing.T) {
+	ctx, conn := newWorkItemEffectsConn(t)
+	sink := LinearReferenceCatalogClickHouseEffects{Conn: conn, Lease: providerfoundation.LeaseGuardFunc(func(context.Context) error { return nil })}
+	claim := nativeTestClaim("linear", "work-items")
+	claim.OrgID = "linear-org-active-flag"
+	base := time.Date(2026, 10, 10, 12, 0, 0, 0, time.UTC)
+	payload := linearReferenceCatalogMemberPayload{ID: "user-9", Name: "Mona", Email: "mona@example.com"}
+	for step, want := range []uint8{1, 0, 1} {
+		row, err := linearReferenceMemberRowOf(claim, payload, base.Add(time.Duration(step)*time.Hour), want)
+		if err != nil {
+			t.Fatal(err)
+		}
+		effect, err := effectBatchFromValues(linearReferenceCatalogMembersDestination, EffectReadbackRequired, []linearReferenceMemberRow{row})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := sink.WriteEffect(ctx, claim, effect); err != nil {
+			t.Fatalf("step %d write: %v", step, err)
+		}
+		var stored uint8
+		var count uint64
+		if err := conn.QueryRow(ctx, `SELECT count(), max(is_active) FROM members FINAL WHERE org_id = ? AND member_id = ?`, claim.OrgID, row.MemberID).Scan(&count, &stored); err != nil {
+			t.Fatal(err)
+		}
+		if count != 1 || stored != want {
+			t.Fatalf("step %d: stored rows = %d, is_active = %d, want 1 row with is_active %d", step, count, stored, want)
+		}
+	}
+}

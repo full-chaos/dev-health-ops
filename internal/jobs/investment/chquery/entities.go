@@ -10,6 +10,7 @@ import (
 	"github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse/latestrow"
+	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse/liverow"
 )
 
 // workItemsDeduped mirrors Python's WORK_ITEMS_DEDUPED
@@ -565,11 +566,24 @@ func (reader *Reader) ResolveRepoIDsForTeams(ctx context.Context, teamIDs []stri
 		arguments = append(arguments, clickhouse.Named("org_id", organizationID))
 	}
 
+	// A key (repository, person, day) whose NEWEST row of the team is a
+	// retraction row is no longer a row of the team: the row of zeros copies the
+	// team of the row it retracts, so the team filter keeps both and the newest
+	// decides. Any other key keeps the reading of the reference (every stored
+	// row of the team), which is why only the retracted keys are left out and
+	// the rest is not reduced to the newest row.
 	query := fmt.Sprintf(`
         SELECT DISTINCT toString(repo_id) AS id
         FROM user_metrics_daily
-        %s
-    `, whereSQL)
+        %[1]s
+          AND (repo_id, author_email, day) NOT IN (
+            SELECT repo_id, author_email, day
+            FROM user_metrics_daily
+            %[1]s
+            GROUP BY org_id, repo_id, author_email, day
+            HAVING NOT %[2]s
+          )
+    `, whereSQL, liverow.NewestPredicate("user_metrics_daily", ""))
 
 	rows, err := reader.conn.Query(ctx, query, arguments...)
 	if err != nil {

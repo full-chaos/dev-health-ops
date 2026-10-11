@@ -101,7 +101,7 @@ type teamIDCarryLink struct {
 
 var teamIDCarryLinks = []teamIDCarryLink{
 	{table: "team_memberships", natural: "member_id",
-		columns: "org_id, provider, team_id, member_id, raw_provider_user_id, raw_email, identity_facets, source, is_primary, specificity, priority, valid_from, valid_to, updated_at"},
+		columns: "org_id, provider, team_id, member_id, raw_provider_user_id, raw_email, identity_facets, source, is_primary, specificity, priority, valid_from, valid_to, updated_at, provider_user_id"},
 	{table: "team_project_ownership", natural: "project_id",
 		columns: "org_id, provider, team_id, project_id, project_key, source, is_primary, specificity, priority, valid_from, valid_to, updated_at"},
 	{table: "team_repo_ownership", natural: "repo_full_name",

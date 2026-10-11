@@ -76,8 +76,13 @@ func filterMembershipsByManualConflict(
 		if trimmed := strings.TrimSpace(row.RawProviderUserID); trimmed != "" {
 			rawProviderUserID = &trimmed
 		}
+		var providerUserID *string
+		if trimmed := strings.TrimSpace(row.ProviderUserID); trimmed != "" {
+			providerUserID = &trimmed
+		}
 		views[index] = providersync.TeamDriftMembershipView{
-			Provider: row.Provider, TeamID: row.TeamID, MemberID: row.MemberID,
+			ProviderUserID: providerUserID,
+			Provider:       row.Provider, TeamID: row.TeamID, MemberID: row.MemberID,
 			RawProviderUserID: rawProviderUserID, IdentityFacets: row.IdentityFacets,
 			Source: row.Source, IsPrimary: row.IsPrimary, Specificity: row.Specificity, Priority: row.Priority,
 			ValidFrom: row.ValidFrom, UpdatedAt: row.UpdatedAt,

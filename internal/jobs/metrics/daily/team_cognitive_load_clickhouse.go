@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
+	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse/liverow"
 	"github.com/google/uuid"
 )
 
@@ -45,6 +46,7 @@ FROM (
 	FROM user_metrics_daily
 	WHERE org_id = ? AND day = ?
 	GROUP BY repo_id, author_email
+	HAVING `+liverow.NewestPredicate("user_metrics_daily", "")+`
 )`,
 		organizationID, day,
 	)

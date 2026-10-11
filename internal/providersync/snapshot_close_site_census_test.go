@@ -183,10 +183,10 @@ func TestEveryCloseSiteTakesTheTypedSnapshot(t *testing.T) {
 		}
 	}
 	// planMembershipSnapshot is a close site by itself: the one function allowed
-	// to call it is the writer that writes what it plans.
+	// to call it is the writer that writes what it plans (planSnapshot, which Snapshot calls after reading the open rows).
 	for function, calls := range census.calls {
-		if calls["planMembershipSnapshot"] && function != "internal/providersync.MembershipSnapshotWriter.Snapshot" {
-			t.Errorf("%s calls planMembershipSnapshot: only MembershipSnapshotWriter.Snapshot may, it writes what the plan closes", function)
+		if calls["planMembershipSnapshot"] && function != "internal/providersync.MembershipSnapshotWriter.planSnapshot" {
+			t.Errorf("%s calls planMembershipSnapshot: only MembershipSnapshotWriter.planSnapshot may (the store-free half of MembershipSnapshotWriter.Snapshot), it writes what the plan closes", function)
 		}
 	}
 	// A row's valid_to is set from a plan's retraction, in a close site.

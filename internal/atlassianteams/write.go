@@ -22,7 +22,7 @@ import (
 // the same physical tables the same way.
 const (
 	teamsInsert       = `INSERT INTO teams (id, team_uuid, name, description, manual_members, project_keys, repo_patterns, is_active, updated_at, org_id, provider, native_team_key, parent_team_id, created_at)`
-	membershipsInsert = `INSERT INTO team_memberships (org_id, provider, team_id, member_id, raw_provider_user_id, raw_email, identity_facets, source, is_primary, specificity, priority, valid_from, valid_to, updated_at)`
+	membershipsInsert = `INSERT INTO team_memberships (org_id, provider, team_id, member_id, raw_provider_user_id, raw_email, identity_facets, source, is_primary, specificity, priority, valid_from, valid_to, updated_at, provider_user_id)`
 	// ownershipInsert names its columns and omits last_synced on purpose: the server stamps it at insert time.
 	// last_synced = server insert time, not commit order across concurrent inserts. A reader must re-read a
 	// window of at least 300 seconds behind its cursor and dedup by key with FINAL (migration 099).
@@ -82,7 +82,7 @@ const (
 		"FROM teams FINAL WHERE org_id = {org_id:String} AND provider = {provider:String} AND is_active = 1 AND id IN {team_ids:Array(String)}"
 
 	knownTeamsQuery      = "SELECT id FROM teams FINAL WHERE org_id = {org_id:String} AND provider = {provider:String} AND startsWith(ifNull(native_team_key, ''), {ari_prefix:String})"
-	openMembershipsQuery = "SELECT team_id, member_id, raw_provider_user_id, raw_email, identity_facets, toString(source), is_primary, specificity, priority, valid_from " +
+	openMembershipsQuery = "SELECT team_id, member_id, raw_provider_user_id, raw_email, identity_facets, toString(source), is_primary, specificity, priority, valid_from, provider_user_id " +
 		"FROM team_memberships FINAL WHERE org_id = {org_id:String} AND provider = {provider:String} AND source = 'native' AND team_id IN {team_ids:Array(String)} AND valid_to IS NULL"
 	openOwnershipQuery = "SELECT team_id, project_id, project_key, toString(source), is_primary, specificity, priority, valid_from " +
 		"FROM team_project_ownership FINAL WHERE org_id = {org_id:String} AND provider = {provider:String} AND source = 'native' AND team_id IN {team_ids:Array(String)} AND valid_to IS NULL"
@@ -371,6 +371,7 @@ func planDeactivations(ctx context.Context, conn driver.Conn, orgID string, miss
 
 type openMembership struct {
 	teamID, memberID  string
+	providerUserID    *string
 	rawProviderUserID *string
 	rawEmail          *string
 	identityFacets    []string
@@ -423,7 +424,7 @@ func planMemberships(
 	for result.Next() {
 		var row openMembership
 		if err := result.Scan(&row.teamID, &row.memberID, &row.rawProviderUserID, &row.rawEmail, &row.identityFacets, &row.source,
-			&row.isPrimary, &row.specificity, &row.priority, &row.validFrom); err != nil {
+			&row.isPrimary, &row.specificity, &row.priority, &row.validFrom, &row.providerUserID); err != nil {
 			return nil, nil, providersync.SnapshotPlan{}, err
 		}
 		open = append(open, row)
@@ -610,9 +611,10 @@ func writeMemberships(ctx context.Context, conn driver.Conn, orgID string, rows 
 	defer func() { _ = batch.Abort() }()
 	for _, row := range rows {
 		raw := row.RawProviderUserID
+		providerUserID := optionalText(row.ProviderUserID)
 		if err := batch.Append(
 			row.OrgID, row.Provider, row.TeamID, row.MemberID, &raw, (*string)(nil), row.IdentityFacets, row.Source,
-			row.IsPrimary, row.Specificity, row.Priority, row.ValidFrom, (*time.Time)(nil), row.UpdatedAt,
+			row.IsPrimary, row.Specificity, row.Priority, row.ValidFrom, (*time.Time)(nil), row.UpdatedAt, providerUserID,
 		); err != nil {
 			return err
 		}
@@ -622,12 +624,20 @@ func writeMemberships(ctx context.Context, conn driver.Conn, orgID string, rows 
 		closedAt := row.closedAt
 		if err := batch.Append(
 			orgID, Provider, row.teamID, row.memberID, row.rawProviderUserID, row.rawEmail, row.identityFacets, row.source,
-			row.isPrimary, row.specificity, row.priority, row.validFrom, &closedAt, now,
+			row.isPrimary, row.specificity, row.priority, row.validFrom, &closedAt, now, row.providerUserID,
 		); err != nil {
 			return err
 		}
 	}
 	return batch.Send()
+}
+
+// optionalText is the text, or nil when it is blank.
+func optionalText(value string) *string {
+	if trimmed := strings.TrimSpace(value); trimmed != "" {
+		return &trimmed
+	}
+	return nil
 }
 
 func writeOwnership(ctx context.Context, conn driver.Conn, orgID string, rows []OwnershipRow, expired []openOwnership, now time.Time) error {

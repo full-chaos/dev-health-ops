@@ -31,6 +31,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
+	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse/liverow"
 )
 
 // defaultIdentityMappingPath ports load_identity_aliases's fallback path
@@ -279,7 +280,7 @@ func resolveIdentityVariants(ctx context.Context, client QueryClient, personID, 
 // inlining it as an ordinary derived-table subquery is a purely
 // mechanical, semantically identical rewrite.
 func resolvePersonIdentity(ctx context.Context, client QueryClient, personID, orgID string) (string, error) {
-	const query = `
+	query := fmt.Sprintf(`
         SELECT
             identity AS identity_id
         FROM (
@@ -287,6 +288,7 @@ func resolvePersonIdentity(ctx context.Context, client QueryClient, personID, or
             FROM user_metrics_daily FINAL
             WHERE identity_id != ''
               AND org_id = {org_id:String}
+              AND %[1]s
 
             UNION DISTINCT
 
@@ -294,10 +296,11 @@ func resolvePersonIdentity(ctx context.Context, client QueryClient, personID, or
             FROM work_item_user_metrics_daily FINAL
             WHERE user_identity != ''
               AND org_id = {org_id:String}
+              AND %[2]s
         ) AS identities
         WHERE lower(hex(MD5(identity))) = {person_id:String}
         LIMIT 1
-    `
+    `, liverow.Predicate("user_metrics_daily", ""), liverow.Predicate("work_item_user_metrics_daily", ""))
 	bindings := []dhclickhouse.Binding{
 		{Name: "org_id", Value: orgID},
 		{Name: "person_id", Value: personID},

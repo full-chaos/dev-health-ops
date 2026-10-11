@@ -272,6 +272,14 @@ jobs:
           fi
           printf 'kept files: %s\n' "${#kept[@]}"
           pytest "${kept[@]}" -q -rs -n 4
+      # CHAOS-9202: START the real ClickHouse image with the chart's rendered mounts and probe /ping from
+      # another container. CHART_STARTED_TEST_REQUIRED makes a missing helm or docker compose a FAILURE,
+      # never a skip: a measurement that did not happen must not read as a pass (the 2026-10-10 incident
+      # was a chart that was rendered and linted but never started).
+      - name: Run the started-chart test (ClickHouse config.d)
+        env:
+          CHART_STARTED_TEST_REQUIRED: "1"
+        run: go test -mod=readonly -trimpath -count=1 -v -run '^TestClickHouseConfigdStartsAndAnswersOnThePodAddress$' ./deploy/helm/dev-health
 
   # Required-status-check gate. Branch protection requires a check named
   # exactly "test". It judges docs-tests and tooling-tests through

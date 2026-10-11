@@ -806,16 +806,60 @@ project's items by id. Now:
      that pages by cursor cannot be shifted by a departure between two requests, so its list rule stands.
   3. no open row of the fact is newer than the time the run read the provider: a run whose list is older than a
      row never closes it (two overlapping runs of one integration).
-  4. a member whose id is made from an email is NOT closed by the list rule, because the provider's user id is
-     not stored (`raw_provider_user_id` holds the first identity facet, not the provider's user id): a changed
-     or hidden email would read as a departure and a join. A login rename of a provider that keys by login
-     reads as a departure and a join with a new `valid_from`; both are named limits.
+  4. a member whose id is made from an email is NOT closed by the list rule: a hidden or changed email would read
+     as a departure. `raw_provider_user_id` still holds the first identity facet, not the provider's user id (the
+     field is pinned by the frozen comparison with the reference); the provider's own stable user id is the
+     separate column `team_memberships.provider_user_id` (CHAOS-9144, migration 117, `Nullable(String)`): GitHub
+     and GitLab numeric user id, Linear user id, Atlassian accountId; NULL on a row written before the column
+     and on a row a person wrote by hand. Its one use is the **rename rule**: when a run returns a member
+     under a NEW member id (a GitHub or GitLab login rename, a Linear email change) whose `provider_user_id`
+     an open row of the SAME team and provider already holds under another member id, that open row continues:
+     the new member id takes the `valid_from` of the earliest such open row, the old open row is retired
+     (closed at the run time, not counted as a departure, no direct lookup is made for it), and the team has
+     one open row for the person, not a leave and a join and not two open rows. A row with no stored id is
+     never matched (its first sync after the column writes the id; a rename before that sync is still a leave
+     and a join, once), a different id under a new login is another person, and an id that two open rows of
+     one team share replaces both. `member_id`, `identity_facets` and `raw_provider_user_id` are not changed
+     by the rule. Jira (Atlassian Teams) keys the member by the accountId itself, so no rename can happen
+     there; the column holds the accountId. Every route that copies or reads back a membership row keeps the
+     column: the effect readback of the GitLab, Jira and Linear snapshot writers compares it (a stored row
+     without the id the run wrote is a conflict, so it is written again, never "exact"); the team-id carry
+     copies it to the keyed team id; the identity-drift review stages it in the `new_value_json` payload (the
+     change id is still the hash of the payload without it, so a pending change keeps its id) and an approval
+     writes it; the retirement of a Jira project-as-team row keeps it on the closed row. One open row continues as
+     ONE new member id: a provider returning the same user id under two new member ids in one run is the provider's
+     statement, so the first member id (sorted) takes the open row's `valid_from` and the other joins as new. A rename does not wait for the proof a departure needs: a team whose member read has no end signal (or whose kind is out of the closable scope) still has the replaced open row retired as a rename, because the stored id is the provider's own statement, not an absence. The same member id back with ANOTHER provider user id than every open row of it holds (a login freed by one person and taken by another) is a new person: the open rows are closed as history, the written row starts at the run time and holds the new id, and `team_membership_id_reused` (provider, team, a count) is logged; a fact with any open row that holds no id, or the same id, is one person still. Each run logs `team_membership_renamed` (provider, team, renamed)
+     once per team, never a login or an email.
+
+  **Membership continuity — the one decision** (`decideMembershipContinuity`, `membership_continuity.go`; every
+  provider writer reaches it through `MembershipSnapshotWriter.Snapshot`, and nothing else compares a provider user
+  id). For each member the provider returns and the conflict guard keeps, with a non-blank id `I`:
+
+  | open rows of the SAME member id | their stored id | open rows of ANOTHER member id (same team) holding `I` | result | written row's `valid_from` | rows closed |
+  | --- | --- | --- | --- | --- | --- |
+  | any | any | any, but `I` absent or blank | `no_change` (the snapshot rule alone) | the rule's | none by this decision |
+  | 0 | n/a | 0 | `new_row` | the run's | none |
+  | 0 | n/a | 1 or 2 | `rename_continue` | earliest of those rows | those rows, as a rename |
+  | 1 or 2 | NULL, blank (the same as NULL), or `I`, or a mix of other and NULL/blank | 0, 1 or 2 | `continue_row` | the rule's (the first-seen) | none: the other rows are not renamed away (they close only as departures, when the read is proven) |
+  | 1 or 2 | every row another id (none NULL, none newer than the read) | 0 | `close_history_new_row` | the run time | every open row of the member id, as history (`team_membership_id_reused`) |
+  | 1 or 2 | every row another id | 1 or 2 | `close_history_rename_continue` | earliest of the renamed rows | the member id's rows as history AND the renamed rows |
+
+  The four review findings of PR #3995 are cells of this table: a login rename is `rename_continue`; two open rows
+  of one id are both replaced (earliest `valid_from`); a member already open with no id stored yet is `continue_row`
+  (never renamed away, so never two open rows); the same member id back with another id is `close_history_new_row`
+  (the first person keeps their row as history). Open rows of another provider, a row newer than the read, a row
+  another returned member holds, and a row an earlier returned member (in sorted order) already took are never
+  matched. Whether the member read is proven changes only the departures of the rows the decision did not take;
+  a rename and a history close are made either way. `TestMembershipContinuityDecisionTable` enumerates every cell
+  (a cell without a row fails the test) and `TestMembershipContinuityThroughTheWriterProvenAndUnproven` runs each
+  through the writer for a proven and an unproven read and for open rows of another provider.
   A member returned with `active: false` is a deactivated user: the provider says so, and it is closed (an
   email-keyed member too). A member who comes back is a new fact with a new `valid_from`. Every close is logged
   once per team (`team_membership_closed`: provider, team, closed, duplicates_retired) and every candidate left
   open once per team (`team_membership_close_skipped`: provider, team, and a count of facts for each reason:
   `row_newer_than_read`, `no_stable_user_id`, `provider_says_member`, `lookup_not_proven`,
-  `lookup_budget_ended`). The team in a log line is its slug or path without the provider prefix.
+  `lookup_budget_ended`). The team in a log line is its slug or path without the provider prefix. A rename is
+  its own line (`team_membership_renamed`), never a close.
 
   **Scope proof, for every kind** (`providersync.ProveSoleScope`, the one scope gate; `ScopeProof` is an
   argument of every kind snapshot, so no kind can be stated without it). Ownership, membership and catalog
@@ -1741,6 +1785,26 @@ take it through `internal/storage/clickhouse/liverow`, and the rule there is: a 
   the repositories of a day) and tests the rolled row takes a newer row of zeros of ONE stored key as the row of
   all of them, and drops the measured ones with it. The home theme allocation reads the stored investment area
   (day, repository, team, area, project stream), applies the predicate there, and only then takes the theme.
+
+**The two user-level daily tables (CHAOS-9135).** `user_metrics_daily` and `work_item_user_metrics_daily` hold the team
+in a VALUE column (the sorting key is scope, person and day), so a key that a run no longer produces cannot be told
+from a key the run measured as zero: a person whose measured row is all zero is a real row (a person assigned only
+to an item created that day). They take an explicit marker instead: `retracted UInt8 DEFAULT 0`
+(`teamkeytables.Table.Retracted`, ClickHouse migration 116). The stale-key rule writes a row with `retracted = 1`, 0 in
+every count, and the `team_id` and `team_name` of the newest row it retracts (`Table.Carried`), so a reader that
+filters on a team BEFORE it takes the newest row still sees the retraction next to the row it retracts. A measured row
+of zeros keeps `retracted = 0` and stays a real row.
+
+- Who writes it: the repository partition family retracts the `user_metrics_daily` keys of its repositories; the
+  organization run retracts the keys of repositories that are gone, and skips the keys the finalize family
+  synthesized; `ic_finalize` retracts those synthesized keys (`icfinalize.SynthesizedRepoID`);
+  `work_item_user_metrics_daily` is a run-level step with the other work-item tables.
+- Who reads it: every reader of either table takes the newest version first and THEN filters
+  (`liverow.Predicate`, `liverow.NewestPredicate`); the census in `internal/storage/clickhouse/liverow` fails for a
+  reader that does not. `ResolveRepoIDsForTeams` leaves out a key whose newest row of the team is a retraction.
+- Roll order: apply migration 116 first, then the code. After the roll, a recompute of the days is needed: a stale key
+  stored before the roll is only retracted when its day is computed again.
+- Not covered: `work_item_blocked_durations_daily` has the same kind of stale key and takes a follow-up.
 - A reader that takes the state on the newest day of each key (a backlog, a current WIP, a stored risk score) must
   NOT filter before it picks the newest row: the row of zeros is what says the key holds nothing now, and a filter
   that ran first would serve the older row. It then gives 0 or no value, as for a key with no row.
@@ -1771,7 +1835,10 @@ Limits:
   only from ACTIVE teams. The row of the day holds ONE team: the first by the attribution's rank (primary, then
   specificity, priority, the newer row, the team id). The landscape holds a point for EACH active team of the person,
   so a person of N teams is ranked among the members of each. A person with no membership valid at the day is
-  `unassigned`, id and name, in the row and in the landscape. The team a STORED row holds is never a source: after
+  `unassigned`, id and name, in the row and in the landscape. The NAME of the row's team comes from the same read as
+  its id (CHAOS-9134): the name of the newest membership fact of that team that has one, so the id and the name of one
+  row never come from different teams (a team no fact names keeps its id as its name; the reference passed the stored
+  name through, a declared narrow divergence). The team a STORED row holds is never a source: after
   the first run of a day the newest stored row is the family's own output, and a person who left a team would stay
   in it. A point stored under a team the run does not produce is retracted by the rule of this section. What stays:
   - an id with NO row in `teams` counts as active, so a membership of a deleted team still gives a row and points;
@@ -1816,7 +1883,7 @@ Limits:
 - Between the last partition and the end of a run, a shared work scope can hold the rows of a partition whose read
   was older than another partition's attribution write. The end of the run replaces them. A run whose finalize does
   not complete leaves them until its retry or the next run of the day.
-- `work_item_user_metrics_daily` and `work_item_cycle_times` (not team-keyed) are written by the partitions only.
+- `work_item_cycle_times` (not team-keyed) is written by the partitions only. `work_item_user_metrics_daily` is settled at run scope (retraction marker, CHAOS-9135).
 - Two runs of one day that are in progress at the same time each settle the day from the inputs stored when they end.
   When the inputs change between the two ends, the rows of the run that ended on the later version stay.
 - `team_metrics_daily`: a row of zeros has the `computed_at` of its batch. When another run wrote the superseded key
@@ -1870,10 +1937,14 @@ later change of owner does not rewrite the items of earlier days.
 - **What a back-dated row does:** an ownership row written now with a `valid_from` in the past changes the
   items whose day is on or after that `valid_from`. This is the case the backstop exists for; the daily family
   does not compute old days again.
-- **Not under this rule yet:** the provider sync derivation resolves the items of a sync with the facts at the
-  sync's time (it mirrors the reference job, which loads its context once per run), and the investment
-  materialize job reads the repositories of a donor team at its run time. Both write a newer row that a later
-  daily partition of the item's day, or a backstop run, replaces.
+- **The table has these two writers only.** The provider sync derivation computes with the facts at the sync's
+  time (it mirrors the reference job, which loads its context once per run), but it stores no team attribution:
+  the work-items sync sink of every provider refuses the nine tables computed from stored work-item rows,
+  `work_item_team_attributions` among them (`TestWorkItemSyncSinksRefuseEveryDailyJobTable`).
+- **The investment materialize job** follows the same rule for its team ownership fallback: a work unit takes
+  the repositories of its donor team valid at the end of the unit's own span, never later than the run
+  (CHAOS-9179; [investment](../../reference/data-models/investment.md), "Team ownership fallback"). It takes
+  the instant the span ends, not the start of a day.
 
 #### 0.4a Provider × entity **consumption** (functional — what `run_team_autoimport` actually pulls)
 

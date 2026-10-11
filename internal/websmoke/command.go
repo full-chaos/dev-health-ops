@@ -92,15 +92,16 @@ func runVerb(env cli.Env) error {
 		return &exitError{ExitFail, "FAIL: unset: " + strings.Join(missing, ", ")}
 	}
 	cfg := Config{
-		Target:       target,
-		PublicHost:   publicHost,
-		Email:        email,
-		PasswordFile: passwordFile,
-		WebSrc:       get("DHO_SMOKE_WEB_SRC", "/web-src"),
-		Catalog:      get("DHO_SMOKE_CATALOG", "/catalog/catalog.json"),
-		RoutingOps:   routingOps,
-		ReceiptPath:  get("DHO_SMOKE_RECEIPT_PATH", "/receipts/web-path-smoke-receipt.json"),
-		Documents:    server.WebPathSmokeDocument,
+		Target:              target,
+		PublicHost:          publicHost,
+		Email:               email,
+		PasswordFile:        passwordFile,
+		WebSrc:              get("DHO_SMOKE_WEB_SRC", "/web-src"),
+		Catalog:             get("DHO_SMOKE_CATALOG", "/catalog/catalog.json"),
+		RoutingOps:          routingOps,
+		ReceiptPath:         get("DHO_SMOKE_RECEIPT_PATH", "/receipts/web-path-smoke-receipt.json"),
+		Documents:           server.WebPathSmokeDocument,
+		RegisteredDocuments: server.WebPathSmokeRegisteredDocuments,
 	}
 	return report(cfg, env.Stdout, env.Stderr)
 }

@@ -417,7 +417,7 @@ func repoAllocationInvestmentSource() string {
                     wui.work_unit_name AS work_unit_name,
                     wui.from_ts AS from_ts,
                     wui.to_ts AS to_ts,
-                    if(wure.work_unit_id != '', wure.repo_id, wui.repo_id) AS repo_id,
+                    %s AS repo_id,
                     wui.provider AS provider,
                     if(wure.work_unit_id != '', wure.effort_metric, wui.effort_metric) AS effort_metric,
                     if(wure.work_unit_id != '', wure.repo_effort_value, wui.effort_value) AS effort_value,
@@ -436,7 +436,7 @@ func repoAllocationInvestmentSource() string {
                 LEFT JOIN %s AS wure
                     ON wure.org_id = wui.org_id
                     AND wure.work_unit_id = wui.work_unit_id
-            ) AS work_unit_investments`, LatestWorkUnitInvestmentsSource(), LatestWorkUnitRepoEffortSource())
+            ) AS work_unit_investments`, unitRepoExpr("wure", "wui"), LatestWorkUnitInvestmentsSource(), LatestWorkUnitRepoEffortSource())
 }
 
 // RepoAllocationInvestmentSource is repoAllocationInvestmentSource for the readers outside this package that scope
@@ -708,4 +708,12 @@ func investmentContextFor(dimensions []Dimension, forceTeamJoin, repoScopedFlag,
 // categorizer) and never from the legacy investment_metrics_daily keys (CHAOS-9195).
 func canonicalOnlyDimension(d Dimension) bool {
 	return d == DimensionTheme || d == DimensionSubcategory
+}
+
+// unitRepoExpr is the ONE definition of "the repository a unit is in": the allocation row's repository when the
+// unit has one, else the unit's OWN repo_id. The chart (repoAllocationInvestmentSource) and every scope condition
+// over the allocation join (sankey coverage's team and repository filters) read this one expression, so a unit in
+// the chart is in its coverage (CHAOS-9221 rounds 135 and 138).
+func unitRepoExpr(effortAlias, unitAlias string) string {
+	return fmt.Sprintf("if(%[1]s.work_unit_id != '', %[1]s.repo_id, %[2]s.repo_id)", effortAlias, unitAlias)
 }

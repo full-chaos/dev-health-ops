@@ -22,8 +22,6 @@
     {"path": "/api/v1/drilldown/prs$", "path_type": "ImplementationSpecific", "plane": "query-api"},
     {"path": "/api/v1/opportunities$", "path_type": "ImplementationSpecific", "plane": "query-api"},
     {"path": "/api/v1/investment/sunburst$", "path_type": "ImplementationSpecific", "plane": "query-api"},
-    {"path": "/api/v1/investment/flow/repo-team$", "path_type": "ImplementationSpecific", "plane": "query-api"},
-    {"path": "/api/v1/investment/flow$", "path_type": "ImplementationSpecific", "plane": "query-api"},
     {"path": "/api/v1/investment$", "path_type": "ImplementationSpecific", "plane": "query-api"},
     {"path": "/api/v1/work-units/[^/]+/explain$", "path_type": "ImplementationSpecific", "plane": "query-api"},
     {"path": "/api/v1/home$", "path_type": "ImplementationSpecific", "plane": "query-api"},

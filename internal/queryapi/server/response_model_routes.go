@@ -43,8 +43,6 @@ var responseModelRoutes = map[string]bool{
 	"POST /api/v1/investment":                         true,
 	"GET /api/v1/investment/sunburst":                 true,
 	"POST /api/v1/investment/explain":                 true,
-	"POST /api/v1/investment/flow":                    true,
-	"POST /api/v1/investment/flow/repo-team":          true,
 	"GET /api/v1/sankey":                              true,
 	"POST /api/v1/sankey":                             true,
 	"GET /api/v1/filters/options":                     true,

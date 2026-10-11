@@ -55,8 +55,6 @@ var mountedRESTPaths = []string{
 	"/api/v1/home",                                // GET, POST
 	"/api/v1/investment",                          // GET, POST
 	"/api/v1/investment/explain",                  // POST
-	"/api/v1/investment/flow",                     // POST
-	"/api/v1/investment/flow/repo-team",           // POST
 	"/api/v1/investment/sunburst",                 // GET
 	"/api/v1/meta",                                // GET
 	"/api/v1/opportunities",                       // GET, POST

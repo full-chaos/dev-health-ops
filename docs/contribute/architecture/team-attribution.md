@@ -1208,11 +1208,10 @@ project (section 0.1): a native team key gives one team.
   change. A rollup-based team view shows a co-owned item under its primary team only, until the rollup rows
   carry the team set with one organization-counted row per set. Linked-issue inheritance (section 2) also
   passes the primary team only.
-- **Known limit: the team of a work unit follows one team per work unit in the work-unit team list and the REST investment flow.** A co-owner
+- **Known limit: the team of a work unit follows one team per work unit in the work-unit team list.** A co-owner
   team sees the item in the item views (the issues drilldown, the aggregated flame, the team quadrant, the flow-matrix
-  TEAM and REPO activity). The GraphQL work-unit team list (`workUnitTeamAttributions`) and the REST investment flow
-  edges (`POST /api/v1/investment/flow`, no caller in the web app) take the team from the work-unit vote over the items'
-  primary rows (`BuildUnitTeamSubquery`, `resolveWorkUnitTeamAttributions`): one team per work unit. The census holds
+  TEAM and REPO activity). The GraphQL work-unit team list (`workUnitTeamAttributions`) takes the team from the
+  work-unit vote over the items' primary rows (`BuildUnitTeamSubquery`, `resolveWorkUnitTeamAttributions`): one team per work unit. The census holds
   every reader of the vote's team to a named list (`workUnitVoteConsumers`); a new reader must be classified there,
   and a stale entry fails. Every **analytics team grouping on the investment path** reads repository ownership instead
   (CHAOS-9297): the TEAM dimension of the sankey (the Investment flow), breakdown, timeseries and the flow matrix, and

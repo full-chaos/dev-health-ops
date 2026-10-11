@@ -130,14 +130,11 @@ func bodyOracleModels() []bodyOracleModel {
 			map[string]func(t *testing.T) http.HandlerFunc{
 				"explain": func(t *testing.T) http.HandlerFunc { return newExplainPostHandler(newEmptyRowsExplainReader(t)) },
 			}},
+		// No Go handler any more: the route is retired, and the recorded
+		// program answers this model until the golden is recorded again.
 		{"InvestmentFlowRequest", `{"filters": ` + filters + `, "theme": "x", "flow_mode": "team_category_repo", "drill_category": "x", "top_n_repos": 3}`,
 			[]string{"filters", "theme", "flow_mode", "drill_category", "top_n_repos"},
-			map[string]func(t *testing.T) http.HandlerFunc{
-				"investment/flow": func(t *testing.T) http.HandlerFunc { return newInvestmentFlowHandler(emptyRowsInvestmentFlowClient{}) },
-				"investment/flow/repo-team": func(t *testing.T) http.HandlerFunc {
-					return newInvestmentFlowRepoTeamHandler(emptyRowsInvestmentFlowClient{})
-				},
-			}},
+			map[string]func(t *testing.T) http.HandlerFunc{}},
 		{"SankeyRequest", `{"mode": "investment", "filters": ` + filters + `, "context": {"entity_id": "e", "entity_label": "l"}, "window_start": "2024-01-01", "window_end": "2024-01-31"}`,
 			[]string{"mode", "filters", "context", "context.entity_id", "context.entity_label", "window_start", "window_end"},
 			map[string]func(t *testing.T) http.HandlerFunc{

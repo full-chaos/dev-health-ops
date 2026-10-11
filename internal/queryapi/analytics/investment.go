@@ -77,8 +77,8 @@ const resolvedEvidenceWorkItemIDExpr = `multiIf(
 // UnitTeamSubqueryOptions is the Go equivalent of build_unit_team_subquery's
 // keyword arguments (investment.py:399-408). Exported (same reasoning as
 // LatestWorkUnitInvestmentsSource's own export below) so cmd/query-api/
-// internal/investmentflow can reuse this exact,
-// already-fixed team-vote subquery for its own five fetchers -- Python's
+// other query packages can reuse this exact,
+// already-fixed team-vote subquery -- Python's
 // build_unit_team_subquery (api/queries/investment.py:399-510) is the ONE
 // definition both this package's GraphQL compiler path and
 // investment.py's REST fetch_investment_* functions call, so the Go port
@@ -281,7 +281,7 @@ func LatestWorkUnitInvestmentsSource() string {
 // LatestWorkUnitRepoEffortSource ports LATEST_WORK_UNIT_REPO_EFFORT_CTE
 // (investment.py:90-127, e9ea257ff), inlined. Exported (same reasoning as
 // LatestWorkUnitInvestmentsSource and UnitTeamSubqueryOptions above) so
-// internal/queryapi/investmentflow can compose its own port of
+// other query packages can compose their own port of
 // REPO_ALLOCATED_WORK_UNIT_INVESTMENTS_SOURCE (investment.py:155-172,
 // a DIFFERENT source from this package's own repoAllocationInvestmentSource
 // below -- see that function's doc comment) from this exact,

@@ -70,8 +70,6 @@ var DeletedPythonBodyOperations = map[string]bool{
 	"REST:POST:/api/v1/investment":                         true,
 	"REST:GET:/api/v1/investment/sunburst":                 true,
 	"REST:POST:/api/v1/investment/explain":                 true,
-	"REST:POST:/api/v1/investment/flow":                    true,
-	"REST:POST:/api/v1/investment/flow/repo-team":          true,
 	"REST:GET:/api/v1/sankey":                              true,
 	"REST:POST:/api/v1/sankey":                             true,
 	"REST:GET:/api/v1/filters/options":                     true,

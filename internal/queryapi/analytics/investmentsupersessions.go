@@ -33,8 +33,8 @@ package analytics
 // -- it reads work_unit_repo_effort, a DIFFERENT table with no
 // work_unit_supersessions column of its own, so this filter cannot reach
 // it directly either way. It is now also exported (see investment.go's
-// own doc comment on the export) for internal/queryapi/
-// investmentflow to compose its own REPO_ALLOCATED_
+// own doc comment on the export) for other query packages to compose
+// their own REPO_ALLOCATED_
 // WORK_UNIT_INVESTMENTS_SOURCE join, always still layered on top of an
 // already-superseded-filtered LatestWorkUnitInvestmentsSource read.
 func supersededWorkUnitIDsFilter() string {

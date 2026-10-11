@@ -210,11 +210,6 @@ const ownershipTeamAliasReason = "the ut alias is the repository's owning team (
 var workUnitVoteConsumers = map[string]string{
 	"internal/queryapi/analytics\x00dbColumn":                                     ownershipTeamAliasReason,
 	"internal/queryapi/analytics\x00compileFlowMatrixInvestmentTeamRepoDimension": ownershipTeamAliasReason,
-	"internal/queryapi/investmentflow\x00fetchInvestmentTeamEdges":                workUnitVoteReason,
-	"internal/queryapi/investmentflow\x00fetchInvestmentRepoTeamEdges":            workUnitVoteReason,
-	"internal/queryapi/investmentflow\x00fetchInvestmentTeamCategoryRepoEdges":    workUnitVoteReason,
-	"internal/queryapi/investmentflow\x00fetchInvestmentTeamSubcategoryRepoEdges": workUnitVoteReason,
-	"internal/queryapi/investmentflow\x00fetchInvestmentUnassignedCounts":         workUnitVoteReason,
 }
 
 var workUnitVoteTeamColumn = regexp.MustCompile(`\b(?:ut|unit_team)\.team_(?:id|label)\b`)

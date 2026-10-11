@@ -183,29 +183,6 @@ var restGroups = []restGroup{
 			return []http.HandlerFunc{h0}, cleanup, ok, err
 		},
 	},
-	// POST /api/v1/investment/flow and POST /api/v1/investment/flow/
-	// repo-team, gated by one shared routeswitch toggle (default OFF via
-	// GO_API_INVESTMENT_FLOW_ENABLED) -- see investment_flow_route.go's
-	// package doc comment for the reachability story and
-	// internal/investmentflow for the ported builders, their dynamic
-	// coverage-driven mode decision, and the declared ReplacingMergeTree
-	// dedup notes.
-	{
-		Builder: "buildInvestmentFlowRoute",
-		File:    "investment_flow_route.go",
-		Mounts: []restMount{
-			{Pattern: "/api/v1/investment/flow", Methods: []string{http.MethodPost}},
-			{Pattern: "/api/v1/investment/flow/repo-team", Methods: []string{http.MethodPost}},
-		},
-		LogBuildError: func(err error) { log.Printf("query-api: build /api/v1/investment/flow routes: %v", err) },
-		LogNotConfigured: func() {
-			log.Print("query-api: /api/v1/investment/flow routes not configured (CLICKHOUSE_URI/GO_API_ENVELOPE_* unset) -- staying unmounted")
-		},
-		Build: func(getenv getenvFunc, edgeUsers edgeUserStore) ([]http.HandlerFunc, func(), bool, error) {
-			h0, h1, cleanup, ok, err := buildInvestmentFlowRoute(getenv, edgeUsers)
-			return []http.HandlerFunc{h0, h1}, cleanup, ok, err
-		},
-	},
 	// GET /api/v1/filters/options, gated by its own routeswitch
 	// entry (default OFF via GO_API_FILTER_OPTIONS_ENABLED) -- see
 	// filter_options_route.go's package doc comment for the reachability

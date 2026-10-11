@@ -84,8 +84,6 @@ var emptyMatchStatements = map[string]int{
 	"GET/POST /api/v1/explain":                       4,
 	"GET /api/v1/heatmap":                            1,
 	"GET/POST /api/v1/sankey":                        1,
-	"POST /api/v1/investment/flow":                   2,
-	"POST /api/v1/investment/flow/repo-team":         1,
 	"GET/POST /api/v1/drilldown/prs":                 1,
 	"GET/POST /api/v1/investment":                    3,
 	"GET /api/v1/investment/sunburst":                2,

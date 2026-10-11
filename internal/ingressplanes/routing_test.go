@@ -41,10 +41,8 @@ var fixedRoutingRows = []routingRow{
 	{"query token path, a path below it", "/api/v1/people/42/metric/x", PlaneGoAPI},
 	// Paths that are a start of one another are three rules, not one prefix.
 	{"investment", "/api/v1/investment", PlaneQueryAPI},
-	{"investment flow", "/api/v1/investment/flow", PlaneQueryAPI},
-	{"investment flow repo-team", "/api/v1/investment/flow/repo-team", PlaneQueryAPI},
+	{"investment sunburst", "/api/v1/investment/sunburst", PlaneQueryAPI},
 	{"investment, a child with no rule", "/api/v1/investment/other", PlaneGoAPI},
-	{"investment flow, a child with no rule", "/api/v1/investment/flow/other", PlaneGoAPI},
 	// The Go api: its listed paths, and every path with no rule (the default).
 	{"go path", "/api/v1/auth/login", PlaneGoAPI},
 	{"go token path", "/api/v1/admin/orgs/7/members/9", PlaneGoAPI},

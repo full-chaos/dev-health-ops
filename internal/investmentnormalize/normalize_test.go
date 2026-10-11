@@ -142,3 +142,18 @@ func TestEstimate(t *testing.T) {
 		}
 	}
 }
+
+// The dry-run table carries the no-repository count and the unmatched share as own rows (lead, for chris).
+func TestReportLinesCarryTheNoRepositoryCountAndTheUnmatchedShare(t *testing.T) {
+	r := newReport()
+	r.Items, r.SkippedNoRepo, r.Fallback, r.Unmatched = 10, 2, 4, 1
+	joined := strings.Join(r.Lines(), "\n")
+	for _, want := range []string{"skipped, no repository: 2", "product/general items (estimated): 4", "unmatched share of product/general: 25.0%"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("the report lacks the row %q:\n%s", want, joined)
+		}
+	}
+	if got := strings.Join(newReport().Lines(), "\n"); !strings.Contains(got, "unmatched share of product/general: n/a") {
+		t.Errorf("an empty window must say n/a, not divide by zero:\n%s", got)
+	}
+}

@@ -44,6 +44,7 @@ type Report struct {
 	SkippedNoRepo    int            // no repository: not placeable (P3)
 	SkippedCanonical int            // the repository-day already holds a categorized unit: the Jev row wins
 	Unmatched        int            // product/general items no estimate rule matched: stay out (no data)
+	Fallback         int            // product/general items considered (the estimated population)
 	Unmapped         map[string]int // legacy keys the table does not hold, by "area/stream"
 	ByTheme          map[string]int // rows that would be (were) written, by theme
 	BySubcategory    map[string]int
@@ -53,6 +54,14 @@ type Report struct {
 
 func newReport() Report {
 	return Report{Unmapped: map[string]int{}, ByTheme: map[string]int{}, BySubcategory: map[string]int{}, ByRule: map[string]int{}}
+}
+
+// share renders n of total as a percentage ("n/a" when there is nothing to divide).
+func share(n, total int) string {
+	if total == 0 {
+		return "n/a"
+	}
+	return fmt.Sprintf("%.1f%%", 100*float64(n)/float64(total))
 }
 
 // UnmappedTotal is the number of items with an unmapped key.
@@ -71,7 +80,9 @@ func (r Report) Lines() []string {
 		fmt.Sprintf("rows (normalized): %d", r.Rows),
 		fmt.Sprintf("skipped, no repository: %d", r.SkippedNoRepo),
 		fmt.Sprintf("skipped, repository-day already categorized: %d", r.SkippedCanonical),
+		fmt.Sprintf("product/general items (estimated): %d", r.Fallback),
 		fmt.Sprintf("unmatched (product/general, no estimate rule): %d", r.Unmatched),
+		fmt.Sprintf("unmatched share of product/general: %s", share(r.Unmatched, r.Fallback)),
 		fmt.Sprintf("unmapped keys (items): %d", r.UnmappedTotal()),
 	}
 	for _, section := range []struct {
@@ -244,6 +255,7 @@ func Plan(ctx context.Context, conn Conn, o Options) ([]chwrite.InvestmentRecord
 		var subcategory, ruleName string
 		switch {
 		case IsDefaultFallback(s.area, s.stream):
+			report.Fallback++
 			sub, name, ok := Estimate(s.title, s.description, s.labels)
 			if !ok {
 				report.Unmatched++

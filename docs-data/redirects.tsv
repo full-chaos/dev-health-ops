@@ -134,3 +134,5 @@ source_path	target_path	disposition	migration_phase	source_file
 /user-guide/work-graph/	/use/code-and-relationships/work-graph/	merge-and-rewrite	Phase 6	docs/user-guide/work-graph.md
 /visualizations/patterns/	/contribute/documentation/write-and-review/	move-and-rewrite	Phase 8	docs/visualizations/patterns.md
 /webhooks/	/integrate/webhooks/	move-and-rewrite	Phase 8	docs/webhooks.md
+/use/ai-workflows/ask-dev-questions/	/use/ai-workflows/	retire	Phase 6	docs/use/ai-workflows/ask-dev-questions.md
+/use/ai-workflows/ask-dev-answers/	/use/ai-workflows/	retire	Phase 6	docs/use/ai-workflows/ask-dev-answers.md

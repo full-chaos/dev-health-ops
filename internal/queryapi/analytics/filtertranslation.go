@@ -1,6 +1,9 @@
 package analytics
 
 import (
+	"time"
+
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
 	"regexp"
 
 	"github.com/full-chaos/dev-health-go/clickhouse"
@@ -166,7 +169,7 @@ func defaultFilterColumns() filterColumns {
 // on the non-investment path (filter_translation.py:217-232,260-265) --
 // investment_metrics_daily and the testops rollups carry no
 // per-developer breakdown at all.
-func translateFilters(filters *model.FilterInput, useInvestment bool, cols filterColumns) (filterClause, error) {
+func translateFilters(orgID string, filters *model.FilterInput, useInvestment bool, cols filterColumns) (filterClause, error) {
 	if filters == nil {
 		return emptyFilterClause(), nil
 	}
@@ -177,8 +180,11 @@ func translateFilters(filters *model.FilterInput, useInvestment bool, cols filte
 	if filters.Scope != nil {
 		switch {
 		case useInvestment && filters.Scope.Level == model.ScopeLevelInputTeam && len(filters.Scope.Ids) > 0:
-			sql += " AND (ut.team_label IN {scope_ids:Array(String)} OR ut.team_id IN {scope_ids:Array(String)})"
-			bindings = append(bindings, clickhouse.Binding{Name: "scope_ids", Value: filters.Scope.Ids})
+			// A team is its OWNED repositories (team_repo_ownership, the ONE shared predicate), applied to the
+			// unit's repository rows; never the work-item attribution vote (CHAOS-9221, D5947).
+			teamCondition, teamBindings := teamscope.RepoCondition(orgID, cols.Repo, filters.Scope.Ids, time.Now().UTC())
+			sql += teamscope.UnitScope(" AND " + teamCondition)
+			bindings = append(bindings, teamBindings...)
 		case useInvestment && filters.Scope.Level == model.ScopeLevelInputDeveloper && len(filters.Scope.Ids) > 0:
 			if err := validateDeveloperEmails(filters.Scope.Ids, "scope"); err != nil {
 				return filterClause{}, err
@@ -194,6 +200,9 @@ func translateFilters(filters *model.FilterInput, useInvestment bool, cols filte
 					"pass useInvestment=true or remove the developer scope.")
 		default:
 			clause := translateScopeFilter(filters.Scope.Level, filters.Scope.Ids, cols.Team, cols.Repo, cols.Author)
+			if useInvestment && filters.Scope.Level == model.ScopeLevelInputRepo {
+				clause.sql = teamscope.UnitScope(clause.sql) // the unit's repository rows (CHAOS-9221)
+			}
 			sql += clause.sql
 			bindings = append(bindings, clause.bindings...)
 		}
@@ -212,6 +221,9 @@ func translateFilters(filters *model.FilterInput, useInvestment bool, cols filte
 
 	if filters.What != nil && len(filters.What.Repos) > 0 {
 		clause := translateRepoFilter(filters.What.Repos, cols.Repo)
+		if useInvestment {
+			clause.sql = teamscope.UnitScope(clause.sql) // the unit's repository rows (CHAOS-9221)
+		}
 		sql += clause.sql
 		bindings = append(bindings, clause.bindings...)
 	}

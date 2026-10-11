@@ -161,7 +161,7 @@ LIMIT {limit:UInt32}
 		return compiledQuery{sql: sql, bindings: []clickhouse.Binding{limitBinding, orgBinding}}, nil
 	}
 
-	fc, err := translateFilters(filters, useInvestment, defaultFilterColumns())
+	fc, err := translateFilters(orgID, filters, useInvestment, defaultFilterColumns())
 	if err != nil {
 		return compiledQuery{}, err
 	}

@@ -357,7 +357,7 @@ func compileFlowMatrixInvestmentDimension(req FlowMatrixRequest, orgID string, t
 		return compiledQuery{}, compiledQuery{}, err
 	}
 
-	fc, err := translateFilters(filters, useInvestment, defaultFilterColumns())
+	fc, err := translateFilters(orgID, filters, useInvestment, defaultFilterColumns())
 	if err != nil {
 		return compiledQuery{}, compiledQuery{}, err
 	}
@@ -488,7 +488,7 @@ func compileFlowMatrixInvestmentTeamRepoDimension(req FlowMatrixRequest, orgID s
 		return compiledQuery{}, compiledQuery{}, err
 	}
 
-	fc, err := translateFilters(filters, true, defaultFilterColumns())
+	fc, err := translateFilters(orgID, filters, true, defaultFilterColumns())
 	if err != nil {
 		return compiledQuery{}, compiledQuery{}, err
 	}

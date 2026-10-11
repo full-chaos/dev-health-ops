@@ -150,7 +150,8 @@ func scopeClause(repoIDs []string) (sql string, bindings []dhclickhouse.Binding)
 // nothing named and no team = no clause, an org-wide read.
 func combinedScopeClause(reposNamed bool, repoIDs []string, teamCondition string, teamBindings []dhclickhouse.Binding) (sql string, bindings []dhclickhouse.Binding) {
 	explicitSQL, explicitBindings := scopeClause(repoIDs)
-	return teamscope.NarrowRepoScope(reposNamed, explicitSQL, explicitBindings, teamCondition, teamBindings)
+	filterSQL, filterBindings := teamscope.NarrowRepoScope(reposNamed, explicitSQL, explicitBindings, teamCondition, teamBindings)
+	return teamscope.UnitScope(filterSQL), filterBindings // the unit's repository rows, not only its own repo_id (CHAOS-9221)
 }
 
 func dedupeStrings(values []string) []string {

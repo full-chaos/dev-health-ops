@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
 	"math"
 	"reflect"
 	"strings"
@@ -253,23 +254,17 @@ func TestCompileEvidenceQualityByGroup_UsesOneDominantKeyPerUnit(t *testing.T) {
 	}
 }
 
-// TestResolveEvidenceQualityStats_TeamScope_AddsUnitTeamJoinAndBinding
-// pins the team-scope branch (analytics.py:222-224): filters.scope with
-// level=TEAM sets team_scope_ids, which fetch_investment_quality_stats
-// (investment.py:1035-1046) turns into a LEFT JOIN over
-// build_unit_team_subquery plus a team_scope_ids-bound WHERE clause --
-// this port's compileInvestmentQualityStats via BuildUnitTeamSubquery
-// (investment.go, already proven live by the breakdown/timeseries
-// investment paths). Asserted at the compiledQuery level (SQL text +
-// bindings), not by executing against a fake row, since the shape of
-// the join is the thing under test.
-func TestResolveEvidenceQualityStats_TeamScope_AddsUnitTeamJoinAndBinding(t *testing.T) {
+// TestResolveEvidenceQualityStats_TeamScope_IsTheOwnedRepositories pins the team-scope branch
+// (CHAOS-9221, D5947): a team is its OWNED repositories (team_repo_ownership through the shared
+// teamscope.RepoCondition) read over the unit's repository rows (work_unit_repo_effort); the work-item
+// attribution vote (unit_team) is not read. Asserted at the compiledQuery level (SQL text + bindings).
+func TestResolveEvidenceQualityStats_TeamScope_IsTheOwnedRepositories(t *testing.T) {
 	q := compileInvestmentQualityStats("org-1", mustGraphQLDate("2026-01-01"), mustGraphQLDate("2026-01-07"), "", nil, nil, []string{"team-a", "team-b"})
-	if !containsAll(q.sql, "LEFT JOIN", "unit_team", "team_scope_ids") {
-		t.Fatalf("expected a unit_team LEFT JOIN referencing team_scope_ids, got:\n%s", q.sql)
+	if !containsAll(q.sql, "team_repo_ownership", "work_unit_repo_effort") || containsAll(q.sql, "unit_team") {
+		t.Fatalf("expected the owned-repositories predicate over the unit's repository rows and no unit_team vote, got:\n%s", q.sql)
 	}
-	if !hasBinding(q.bindings, "team_scope_ids", []string{"team-a", "team-b"}) {
-		t.Fatalf("expected a team_scope_ids binding, got %+v", q.bindings)
+	if !hasBinding(q.bindings, teamscope.BindingTeamIDs, []string{"team-a", "team-b"}) {
+		t.Fatalf("expected the team ids binding, got %+v", q.bindings)
 	}
 }
 

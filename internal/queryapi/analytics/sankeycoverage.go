@@ -476,7 +476,7 @@ func compileSankeyCoverage(req SankeyRequest, orgID string, timeoutSeconds int, 
 		orgFilter = "org_id = {org_id:String}"
 	}
 
-	filterClause, err := translateFilters(filters, useInvestment, filterColumns{
+	filterClause, err := translateFilters(orgID, filters, useInvestment, filterColumns{
 		Team:   teamCol,
 		Repo:   repoFilterColumn,
 		Author: "author_email",

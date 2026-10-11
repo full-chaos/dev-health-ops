@@ -99,7 +99,7 @@ func CompileBreakdown(req BreakdownRequest, orgID string, timeoutSeconds int, us
 func compileBreakdownOver(req BreakdownRequest, dimCol, orgID string, timeoutSeconds int, useInvestment bool, filters *model.FilterInput) (compiledQuery, error) {
 	var err error
 
-	fc, err := translateFilters(filters, useInvestment, defaultFilterColumns())
+	fc, err := translateFilters(orgID, filters, useInvestment, defaultFilterColumns())
 	if err != nil {
 		return compiledQuery{}, err
 	}

@@ -180,7 +180,9 @@ func (f BreakdownFilters) scopeClause() (filterSQL string, bindings []dhclickhou
 	if explicitCondition != "" {
 		explicitSQL = " AND " + explicitCondition
 	}
-	return teamscope.NarrowRepoScope(f.ReposNamed, explicitSQL, explicitBindings, f.TeamScopeCondition, f.TeamScopeBindings)
+	filterSQL, bindings = teamscope.NarrowRepoScope(f.ReposNamed, explicitSQL, explicitBindings, f.TeamScopeCondition, f.TeamScopeBindings)
+	// A unit is in a repository scope through its repository ROWS, not only its own repo_id column (CHAOS-9221).
+	return teamscope.UnitScope(filterSQL), bindings
 }
 
 func (f BreakdownFilters) baseBindings() []dhclickhouse.Binding {

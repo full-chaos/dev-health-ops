@@ -559,10 +559,10 @@ func resolveUseInvestment(dimensions []Dimension, forceInvestment *bool) bool {
 
 // needsTeamJoin ports _needs_team_join (compiler.py:244-247) exactly.
 func needsTeamJoin(filters *model.FilterInput) bool {
-	if filters == nil || filters.Scope == nil || len(filters.Scope.Ids) == 0 {
-		return false
-	}
-	return filters.Scope.Level == model.ScopeLevelInputTeam
+	// A team scope no longer joins the work-item attribution vote (`ut`): a team is its OWNED repositories
+	// (teamscope.RepoCondition over the unit's repository rows, CHAOS-9221, D5947). The join is read only when the
+	// TEAM dimension itself is asked (a vote shown as provenance).
+	return false
 }
 
 // needsAuthorJoin ports _needs_author_join (compiler.py:250-265) exactly.

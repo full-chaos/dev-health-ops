@@ -214,7 +214,7 @@ func CompileTimeseries(req TimeseriesRequest, orgID string, timeoutSeconds int, 
 		return compiledQuery{}, err
 	}
 
-	fc, err := translateFilters(filters, useInvestment, defaultFilterColumns())
+	fc, err := translateFilters(orgID, filters, useInvestment, defaultFilterColumns())
 	if err != nil {
 		return compiledQuery{}, err
 	}

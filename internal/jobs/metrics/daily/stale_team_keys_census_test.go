@@ -51,8 +51,6 @@ var teamKeyOwnRule = map[string]string{
 // teamKeyExempt are the tables that hold a team id (or a scope id) in the
 // sorting key and take no row of zeros, each with the reason.
 var teamKeyExempt = map[string]string{
-	"investment_metrics_daily": "retired by CHAOS-9264: no daily family writes it any more and no reader reads it; " +
-		"its rows are the rule classifier's and the table is dropped on its own word",
 	"ai_policy_events": "a row is one policy event of one subject, keyed by the event id; " +
 		"it is not a count of a team and a day, and a row of zeros would be an event that did not occur",
 	"recommendations_daily": "a row is the result of one rule for one team and window (fired or not fired), not a count; " +
@@ -201,6 +199,7 @@ var (
 	censusOrderBy     = regexp.MustCompile(`(?i)\bORDER BY\s+`)
 	censusKeyColumn   = regexp.MustCompile(`^(?:\w+\()*` + "`?" + `(\w+)` + "`?")
 	censusColumnHead  = regexp.MustCompile("^`?(\\w+)`?\\s+(.*)$")
+	censusDropTable   = regexp.MustCompile(`(?im)^\s*DROP TABLE\s+(?:IF EXISTS\s+)?` + "`?" + `(\w+)` + "`?" + `\s*;`)
 	censusAddColumn   = regexp.MustCompile(`(?im)^\s*ALTER TABLE\s+(\w+)\s+ADD COLUMN\s+(?:IF NOT EXISTS\s+)?` + "`?" + `(\w+)` + "`?" + `\s+([^;\n]+);`)
 )
 
@@ -275,6 +274,10 @@ func loadCensusTables(t *testing.T) map[string]censusTable {
 	for _, file := range chain {
 		for _, table := range parseCensusTables(t, file.SQL) {
 			tables[table.name] = table
+		}
+		// A table that a migration drops is no longer a table of the schema.
+		for _, match := range censusDropTable.FindAllStringSubmatch(file.SQL, -1) {
+			delete(tables, match[1])
 		}
 		// A column that a later migration adds (ALTER TABLE ... ADD COLUMN) is a
 		// column of the table: the census reads the head and what follows it.

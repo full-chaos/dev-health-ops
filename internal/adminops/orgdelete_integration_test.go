@@ -128,6 +128,66 @@ var orgDeleteTablesAfterThePythonFreeze = map[string]string{
 	"repo_change_failure_daily":         "112_change_failure_rate_incident_basis.sql", // CHAOS-8981
 }
 
+// orgDeleteTablesDroppedAfterThePythonFreeze names each ClickHouse table a migration dropped after
+// adminPythonBuild, where the frozen Python plan was recorded: table -> the migration that dropped it.
+// The frozen plan and the frozen row state still hold them; the Go plan, which discovers tables live,
+// cannot. They are taken out of the frozen side before the comparison.
+var orgDeleteTablesDroppedAfterThePythonFreeze = map[string]string{
+	"investment_classifications_daily": "120_drop_retired_investment_daily_tables.sql", // CHAOS-9302
+	"investment_metrics_daily":         "120_drop_retired_investment_daily_tables.sql", // CHAOS-9302
+}
+
+// withoutDroppedTables removes the dropped tables from a frozen result: the plan's clickhouse.tables
+// (rewritten in Python's layout, as normalize does) and the row state's clickhouse counts.
+func withoutDroppedTables(t *testing.T, item deleteResult) deleteResult {
+	t.Helper()
+	if strings.HasPrefix(item.Stdout, "{") {
+		var plan map[string]any
+		if err := json.Unmarshal([]byte(item.Stdout), &plan); err != nil {
+			t.Fatalf("frozen plan is not JSON: %v", err)
+		}
+		if tables := planClickHouseTables(plan); tables != nil {
+			changed := false
+			for table := range orgDeleteTablesDroppedAfterThePythonFreeze {
+				if _, ok := tables[table]; ok {
+					delete(tables, table)
+					changed = true
+				}
+			}
+			if changed {
+				var out bytes.Buffer
+				encoder := json.NewEncoder(&out)
+				encoder.SetEscapeHTML(false)
+				encoder.SetIndent("", "  ")
+				if err := encoder.Encode(plan); err != nil {
+					t.Fatal(err)
+				}
+				item.Stdout = strings.TrimSuffix(out.String(), "\n") + "\n"
+			}
+		}
+	}
+	var state map[string]any
+	if err := json.Unmarshal([]byte(item.State), &state); err == nil {
+		if counts, ok := state["clickhouse"].(map[string]any); ok {
+			changed := false
+			for table := range orgDeleteTablesDroppedAfterThePythonFreeze {
+				if _, present := counts[table]; present {
+					delete(counts, table)
+					changed = true
+				}
+			}
+			if changed {
+				raw, err := json.Marshal(state)
+				if err != nil {
+					t.Fatal(err)
+				}
+				item.State = string(raw)
+			}
+		}
+	}
+	return item
+}
+
 // planClickHouseTables returns the table -> row count map of a delete
 // plan's ClickHouse part, or nil when the plan has none.
 func planClickHouseTables(plan map[string]any) map[string]any {
@@ -489,6 +549,14 @@ func TestOrgsDeleteMatchesTheFrozenPythonOutput(t *testing.T) {
 	var frozen []deleteResult
 	if err := json.Unmarshal(raw, &frozen); err != nil {
 		t.Fatal(err)
+	}
+	for table := range orgDeleteTablesDroppedAfterThePythonFreeze {
+		if !strings.Contains(string(raw), table) {
+			t.Fatalf("the frozen output does not hold %s: the orgDeleteTablesDroppedAfterThePythonFreeze entry has rotted", table)
+		}
+	}
+	for index := range frozen {
+		frozen[index] = withoutDroppedTables(t, frozen[index])
 	}
 	got := runDeleteScenarios(t, goDelete)
 	compareDeletes(t, got, frozen, "frozen Python")

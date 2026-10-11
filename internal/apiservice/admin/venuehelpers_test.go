@@ -265,9 +265,15 @@ func withoutClickHouseTablesAfterThePythonFreeze(body string) (string, []string)
 	if !ok {
 		return body, nil
 	}
-	names := make([]string, 0, len(clickHouseOrgTablesAfterThePythonFreeze))
-	for name := range clickHouseOrgTablesAfterThePythonFreeze {
-		names = append(names, name)
+	// A table added after the freeze is Go-only; a table dropped after it is Python-only. Either way the
+	// key is taken out of whichever body holds it, at count 0 only.
+	reasons := map[string]string{}
+	names := make([]string, 0, len(clickHouseOrgTablesAfterThePythonFreeze)+len(clickHouseOrgTablesDroppedAfterThePythonFreeze))
+	for name, migration := range clickHouseOrgTablesAfterThePythonFreeze {
+		names, reasons[name] = append(names, name), migration
+	}
+	for name, migration := range clickHouseOrgTablesDroppedAfterThePythonFreeze {
+		names, reasons[name] = append(names, name), migration
 	}
 	sort.Strings(names)
 	var problems []string
@@ -280,7 +286,7 @@ func withoutClickHouseTablesAfterThePythonFreeze(body string) (string, []string)
 		if !pyjson.Equal(count, pyjson.IntOf(0)) {
 			problems = append(problems, fmt.Sprintf(
 				"clickhouse.tables.%s is %s: a table added after the Python freeze (%s) holds rows of this organization, so clickhouse.total differs from the frozen Python body by that count; this rule only takes out a key whose count is 0",
-				name, pyjson.Str(count), clickHouseOrgTablesAfterThePythonFreeze[name]))
+				name, pyjson.Str(count), reasons[name]))
 			continue
 		}
 		tables.Delete(name)

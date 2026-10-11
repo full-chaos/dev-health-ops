@@ -44,7 +44,7 @@ silently mapped to a different measure.
 | `cyclomatic_per_kloc` | cyclomatic complexity per KLOC | Average the latest daily repository density | `repo_complexity_daily` |
 | `compounding_risk_score` | score from 0 to 1 | Mean of the latest persisted scoped scores | `compounding_risk_daily` |
 
-The daily job no longer writes `investment_metrics_daily` (CHAOS-9264): the daily completion source is `work_item_completion_daily`, which has no investment area, and the canonical theme distribution is stored in `work_unit_investments`. The `investment_allocation_pct` source above is the table as the Ask Dev registry names it; it receives no new rows.
+The daily job no longer writes `investment_metrics_daily` (CHAOS-9264): the daily completion source is `work_item_completion_daily`, which has no investment area, and the canonical theme distribution is stored in `work_unit_investments`. The `investment_allocation_pct` source above is the table as the Ask Dev registry names it; the table was dropped by ClickHouse migration 120 (CHAOS-9302).
 
 State today: the Ask Dev service (acr) still reads the deprecated `repo_metrics_daily.change_failure_rate` column, so its answer is not yet this definition; moving it to `repo_change_failure_daily` is ticket 9018. Query-api (Home, `/explain`, operating review, report) already follows this definition.
 

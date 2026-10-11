@@ -220,20 +220,6 @@ func TestHomeReaders_SeededRealClickHouse(t *testing.T) {
 		 ('%s', 'jira', 'scope-1', 'team-1', 'Team One', 'blocked', 6.0, 1, toDateTime('%s'), '%s')`,
 		day1, tNew, seededOrgID))
 
-	// --- investment_metrics_daily: plain MergeTree, no engine-level
-	// dedup at all -- Python's own hand-written argMax(...,computed_at)
-	// is the ONLY thing that ever collapses a re-run here, ported
-	// verbatim. Two rows, same (day, repo_id, team_id, investment_area,
-	// project_stream); old carries an inflated work_items_completed.
-	seededExec(ctx, t, conn, fmt.Sprintf(
-		`INSERT INTO investment_metrics_daily (repo_id, day, team_id, investment_area, project_stream, delivery_units, work_items_completed, prs_merged, churn_loc, cycle_p50_hours, computed_at, org_id) VALUES
-		 ('%s', '%s', 'team-1', 'feature_delivery', 'stream-1', 1, 999, 1, 100, 1.0, toDateTime('%s'), '%s')`,
-		repoID, day1, tOld, seededOrgID))
-	seededExec(ctx, t, conn, fmt.Sprintf(
-		`INSERT INTO investment_metrics_daily (repo_id, day, team_id, investment_area, project_stream, delivery_units, work_items_completed, prs_merged, churn_loc, cycle_p50_hours, computed_at, org_id) VALUES
-		 ('%s', '%s', 'team-1', 'feature_delivery', 'stream-1', 1, 4, 2, 50, 1.0, toDateTime('%s'), '%s')`,
-		repoID, day1, tNew, seededOrgID))
-
 	// --- recommendations_daily: two rows, same (org_id, team_id, rule_id,
 	// window_end); old fired=false (tombstone), new fired=true -- proves
 	// the two-stage argMax picks the LATEST row's fired state, not an

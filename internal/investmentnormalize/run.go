@@ -130,6 +130,20 @@ WHERE w.completed_at IS NOT NULL AND toDate(w.completed_at) = c.day
 ORDER BY c.day, c.artifact_id
 SETTINGS max_execution_time = 600`
 
+// noRepoQuery counts the legacy work-item classifications of the window that name no repository: the item
+// join cannot place them (a work item is keyed by its repository), so they are counted here, never dropped
+// silently (round 129 r1 P2).
+const noRepoQuery = `
+SELECT count()
+FROM (
+    SELECT artifact_id, provider, day
+    FROM investment_classifications_daily
+    WHERE org_id = {org:String} AND artifact_type = 'work_item' AND repo_id IS NULL
+      AND day >= toDate({from:String}) AND day < toDate({to:String})
+    GROUP BY artifact_id, provider, day
+)
+SETTINGS max_execution_time = 600`
+
 const coverageQuery = `
 SELECT DISTINCT repo_id, toDate(from_ts) AS d0, toDate(to_ts) AS d1
 FROM work_unit_investments FINAL
@@ -193,12 +207,18 @@ func Plan(ctx context.Context, conn Conn, o Options) ([]chwrite.InvestmentRecord
 	if err != nil {
 		return nil, Report{}, err
 	}
+	noRepo, err := countRows(ctx, conn, noRepoQuery, args(o)...)
+	if err != nil {
+		return nil, Report{}, fmt.Errorf("count classifications without a repository: %w", err)
+	}
 	rows, err := conn.Query(ctx, itemsQuery, args(o)...)
 	if err != nil {
 		return nil, Report{}, fmt.Errorf("read legacy classifications: %w", err)
 	}
 	defer rows.Close()
 	report := newReport()
+	report.SkippedNoRepo = int(noRepo)
+	report.Items = int(noRepo)
 	var records []chwrite.InvestmentRecord
 	computedAt := now().UTC()
 	for rows.Next() {
@@ -214,7 +234,6 @@ func Plan(ctx context.Context, conn Conn, o Options) ([]chwrite.InvestmentRecord
 		s.completedAt = completed.UTC()
 		report.Items++
 		if s.repo == nil {
-			report.SkippedNoRepo++
 			continue
 		}
 		day := time.Date(s.completedAt.Year(), s.completedAt.Month(), s.completedAt.Day(), 0, 0, 0, 0, time.UTC)
@@ -338,8 +357,8 @@ func rollbackWhere(org, runID string) (string, []any) {
 	return query, bind
 }
 
-func countRows(ctx context.Context, conn Conn, query string) (uint64, error) {
-	rows, err := conn.Query(ctx, query)
+func countRows(ctx context.Context, conn Conn, query string, bind ...any) (uint64, error) {
+	rows, err := conn.Query(ctx, query, bind...)
 	if err != nil {
 		return 0, err
 	}

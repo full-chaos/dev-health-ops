@@ -5,11 +5,14 @@ package investmentnormalize
 import (
 	"context"
 	"errors"
+	"regexp"
+	"strings"
 	"testing"
 	"time"
 
 	stdclickhouse "github.com/ClickHouse/clickhouse-go/v2"
 
+	"github.com/full-chaos/dev-health-ops/internal/cli"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/chschema"
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/containers"
 )
@@ -61,6 +64,9 @@ VALUES (?, ?, 'work_item', ?, 'jira', ?, ?, 1.0, 'r', ?, ?)`, repo, day, id, are
 	item(repoA, "A-2", "fix(api): crash on login", nil, "product", "general")  // estimated: cc:fix -> quality.bugfix, 1 unit
 	item(repoA, "A-3", "Quarterly planning", nil, "product", "general")        // unmatched: stays out
 	item(repoB, "B-1", "Upgrade the cluster", nil, "infra", "k8s")             // repository B holds a categorized unit that day: skipped
+	// A classification with no repository: counted as skipped, never dropped silently.
+	exec(`INSERT INTO investment_classifications_daily (repo_id, day, artifact_type, artifact_id, provider, investment_area, project_stream, confidence, rule_id, computed_at, org_id)
+VALUES (NULL, ?, 'work_item', 'N-1', 'jira', 'security', 'general', 1.0, 'r', ?, ?)`, day, completed, org)
 	exec(`INSERT INTO work_unit_investments (work_unit_id, from_ts, to_ts, repo_id, effort_metric, effort_value, theme_distribution_json, subcategory_distribution_json, structural_evidence_json, evidence_quality, evidence_quality_band, categorization_status, categorization_model_version, categorization_run_id, computed_at, org_id)
 VALUES ('wu-jev', ?, ?, ?, 'churn_loc', 10, ?, ?, ?, 0.8, 'high', 'ok', 'jev-test', 'run-1', ?, ?)`,
 		day, completed, repoB, map[string]float64{"quality": 1.0}, map[string]float64{"quality.bugfix": 1.0}, `{"issues":[],"prs":[]}`, completed, org)
@@ -70,8 +76,8 @@ VALUES ('wu-jev', ?, ?, ?, 'churn_loc', 10, ?, ?, ?, 0.8, 'high', 'ok', 'jev-tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	if report.Items != 4 || report.Rows != 2 || report.Unmatched != 1 || report.SkippedCanonical != 1 || report.UnmappedTotal() != 0 {
-		t.Fatalf("dry run = %+v, want items 4, rows 2, unmatched 1, skipped 1, unmapped 0\n%v", report, report.Lines())
+	if report.Items != 5 || report.Rows != 2 || report.Unmatched != 1 || report.SkippedCanonical != 1 || report.SkippedNoRepo != 1 || report.UnmappedTotal() != 0 {
+		t.Fatalf("dry run = %+v, want items 5, rows 2, unmatched 1, skipped as categorized 1, no repository 1, unmapped 0\n%v", report, report.Lines())
 	}
 	if report.ByTheme["risk"] != 1 || report.ByTheme["quality"] != 1 || report.ByRule["cc:fix"] != 1 || report.ByRule["map:security/vulnerability"] != 1 {
 		t.Fatalf("dry run by theme/rule = %v / %v", report.ByTheme, report.ByRule)
@@ -138,6 +144,39 @@ VALUES ('wu-jev', ?, ?, ?, 'churn_loc', 10, ?, ?, ?, 0.8, 'high', 'ok', 'jev-tes
 	}
 	if n := count("work_unit_id = 'wu-jev'"); n != 1 {
 		t.Fatalf("the rollback touched a categorized unit (%d)", n)
+	}
+
+	// The command itself (round 129 r1 P3): dry run, apply, rollback of another run, rollback of this run.
+	runCLI := func(args ...string) (string, int) {
+		t.Helper()
+		var stdout, stderr strings.Builder
+		code := run(ctx, cli.Env{
+			Args:   args,
+			Lookup: func(key string) (string, bool) { return ch.URI, key == "CLICKHOUSE_URI" },
+			Stdout: &stdout, Stderr: &stderr,
+		})
+		if code != cli.ExitOK {
+			t.Fatalf("dho backfill normalize-investment %v = exit %d: %s", args, code, stderr.String())
+		}
+		return stdout.String(), code
+	}
+	window2 := []string{"--org", org, "--from", day.AddDate(0, 0, -1).Format("2006-01-02"), "--to", day.AddDate(0, 0, 1).Format("2006-01-02")}
+	if out, _ := runCLI(window2...); !strings.Contains(out, "dry run: nothing written") || !strings.Contains(out, "rows (normalized): 2") || count("categorization_status = '"+Status+"'") != 0 {
+		t.Fatalf("the CLI dry run = %q (rows written %d)", out, count("categorization_status = '"+Status+"'"))
+	}
+	out, _ := runCLI(append(append([]string{}, window2...), "--apply")...)
+	match := regexp.MustCompile(`written: 2 rows, run (normalized_legacy:[0-9a-f-]+)`).FindStringSubmatch(out)
+	if match == nil || count("categorization_status = '"+Status+"'") != 2 {
+		t.Fatalf("the CLI apply = %q", out)
+	}
+	if out, _ := runCLI("--org", org, "--rollback", "--run", "normalized_legacy:another-run", "--apply"); !strings.Contains(out, "normalized rows: 0") || count("categorization_status = '"+Status+"'") != 2 {
+		t.Fatalf("a rollback of ANOTHER run touched rows: %q", out)
+	}
+	if out, _ := runCLI("--org", org, "--rollback", "--run", match[1], "--apply"); !strings.Contains(out, "normalized rows: 2") || count("categorization_status = '"+Status+"'") != 0 {
+		t.Fatalf("the rollback of this run = %q", out)
+	}
+	if n := count("work_unit_id = 'wu-jev'"); n != 1 {
+		t.Fatalf("the CLI rollback touched a categorized unit (%d)", n)
 	}
 
 	// An unmapped key: the plan counts it and apply refuses, nothing is written.

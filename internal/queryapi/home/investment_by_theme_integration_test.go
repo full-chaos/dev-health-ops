@@ -62,11 +62,6 @@ func TestInvestmentByThemeIsTheCanonicalEffortOfTheUnits(t *testing.T) {
 	seedThemeUnit(t, ctx, admin, org, "wu-3", repo, day.AddDate(0, 0, 10), 1000, map[string]float64{"quality.bugfix": 1}, "ok", 0)
 	// ended before the window.
 	seedThemeUnit(t, ctx, admin, org, "wu-4", repo, day.AddDate(0, 0, -30), 1000, map[string]float64{"quality.bugfix": 1}, "ok", 0)
-	// The deprecated rule classifier's rows are ignored: a legacy key and a canonical one.
-	if err := admin.Exec(ctx, `INSERT INTO investment_metrics_daily (repo_id, day, team_id, investment_area, project_stream, delivery_units, work_items_completed, prs_merged, churn_loc, cycle_p50_hours, computed_at, org_id)
-VALUES (?, ?, '', 'product', 'general', 9, 9, 9, 9, 0, ?, ?), (?, ?, '', 'quality', 'general', 9, 9, 9, 9, 0, ?, ?)`, repo, day, synced, org, repo, day, synced, org); err != nil {
-		t.Fatal(err)
-	}
 
 	f := Filters{Time: TimeFilter{RangeDays: 7, CompareDays: 7, EndDate: ptrTime(day.AddDate(0, 0, 3))}}
 	resp, err := BuildResponse(ctx, client, nil, org, f, end)

@@ -154,3 +154,44 @@ func TestRetiredColumnsAreOnlyTheNamedOnes(t *testing.T) {
 		t.Fatalf("retiredColumns = %v: the list is exactly teams.members", retiredColumns)
 	}
 }
+
+// CHAOS-9302: a table dropped by a migration is still a table of the frozen worlds. Every table that a
+// migration drops and that a frozen world carries must be in retiredTables (the loader then leaves it
+// out, loudly); every retiredTables entry must be a table a migration really drops.
+var droppedTable = regexp.MustCompile("(?is)\\bdrop\\s+table\\s+(?:if\\s+exists\\s+)?`?([a-z0-9_]+)`?\\s*;")
+
+func TestEveryDroppedTableOfAFrozenWorldIsRetiredByName(t *testing.T) {
+	files, err := filepath.Glob(filepath.Join("..", "chmigrate", "sql", "*.sql"))
+	if err != nil || len(files) < 10 {
+		t.Fatalf("the census read %d migration files (%v): it did not measure the tree", len(files), err)
+	}
+	dropped := map[string]bool{}
+	for _, file := range files {
+		raw, err := os.ReadFile(file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, match := range droppedTable.FindAllStringSubmatch(string(raw), -1) {
+			dropped[strings.ToLower(match[1])] = true
+		}
+	}
+	carried := frozenTables(t, worldFiles, syntheticFiles)
+	var problems []string
+	for table := range carried {
+		if dropped[table] && !retiredTables[table] {
+			problems = append(problems, table+": a migration drops it and a frozen world still carries it: add it to retiredTables")
+		}
+	}
+	for table := range retiredTables {
+		if !dropped[table] {
+			problems = append(problems, table+": retired but no migration drops it: remove the entry (the load must stay strict)")
+		}
+		if carried[table] == nil {
+			problems = append(problems, table+": retired but no frozen world carries it: the census did not measure what it exists for")
+		}
+	}
+	sort.Strings(problems)
+	if len(problems) > 0 {
+		t.Fatalf("%s", strings.Join(problems, "\n"))
+	}
+}

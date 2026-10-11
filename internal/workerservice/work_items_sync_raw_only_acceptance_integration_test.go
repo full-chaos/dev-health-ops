@@ -56,6 +56,14 @@ var rawOnlyDerivedTables = []string{
 	"work_item_user_metrics_daily",
 }
 
+// rawOnlyDroppedTables are the two of those tables that no longer exist in the
+// schema (migration 120): the sink still refuses an effect for them, and there
+// is nothing to count.
+var rawOnlyDroppedTables = map[string]bool{
+	"investment_classifications_daily": true,
+	"investment_metrics_daily":         true,
+}
+
 var rawOnlyProviders = []string{"github", "gitlab", "jira", "linear"}
 
 // rawOnlyItem is one work item of a unit. The transitions of the item are its
@@ -216,6 +224,9 @@ func rawOnlyStoredVersions(ctx context.Context, t *testing.T, conn driver.Conn, 
 	t.Helper()
 	counts := map[string]uint64{}
 	for _, table := range rawOnlyDerivedTables {
+		if rawOnlyDroppedTables[table] {
+			continue
+		}
 		var count uint64
 		if err := conn.QueryRow(ctx, `SELECT count() FROM `+table+` WHERE org_id = ?`, orgID).Scan(&count); err != nil {
 			t.Fatalf("count %s: %v", table, err)
@@ -615,7 +626,7 @@ func TestARefusedEngineFamilyLeavesItsTablesEmptyAfterASyncAndIsLoggedAndCounted
 
 	day := time.Date(2026, 8, 4, 0, 0, 0, 0, time.UTC)
 	nextDay := day.AddDate(0, 0, 1)
-	engineTables := []string{"issue_type_metrics_daily", "investment_classifications_daily", "investment_metrics_daily"}
+	engineTables := []string{"issue_type_metrics_daily"}
 	var failures []string
 	for _, provider := range rawOnlyProviders {
 		orgID := uuid.NewString()
@@ -639,9 +650,8 @@ func TestARefusedEngineFamilyLeavesItsTablesEmptyAfterASyncAndIsLoggedAndCounted
 
 		counts := rawOnlyStoredVersions(ctx, t, rig.conn, orgID)
 		values := rawOnlyDayValues(ctx, t, rig.conn, orgID, provider, day)
-		t.Logf("%-6s engine tables: issue_type=%d investment_classifications=%d investment_metrics=%d; served: %s",
-			provider, counts["issue_type_metrics_daily"], counts["investment_classifications_daily"],
-			counts["investment_metrics_daily"], rawOnlyValuesLine(values))
+		t.Logf("%-6s engine tables: issue_type=%d; served: %s",
+			provider, counts["issue_type_metrics_daily"], rawOnlyValuesLine(values))
 		for _, table := range engineTables {
 			if counts[table] != 0 {
 				failures = append(failures, fmt.Sprintf("%s: %s holds %d row(s) with its family refused", provider, table, counts[table]))

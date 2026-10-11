@@ -10,11 +10,11 @@
 // Nothing in the served path constructs or calls this package.
 //
 // What is fixed in code, on purpose (no environment override): the rubric
-// (decision-support-v1g.json, embedded and pinned by its sha256), the level
+// (decision-support-v1h.json, embedded and pinned by its sha256), the level
 // rule (presence-floor:0.4) and the weight map (support-map-v1). They are the
-// configuration that the experiment evaluated, with the v1g rubric text change
-// (CHAOS-9322) on top; a configuration that could drift from it would be a
-// category system an operator can change.
+// configuration that the experiment evaluated, with the v1g and v1h rubric
+// text changes (CHAOS-9322 and its follow-up) on top; a configuration that
+// could drift from it would be a category system an operator can change.
 //
 // The HTTP client is not here: Transport is an interface, implemented by the
 // TypeSafe client on the shared LLM HTTP layer of package categorize.

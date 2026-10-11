@@ -2314,9 +2314,9 @@ One path: `run_team_autoimport` → `team_autoimport_<provider>.populate()` → 
   attributed (49.6% of the unassigned effort in the 2026-08-22 prod probe).
   The CTE has exactly one definition —
   `api/queries/investment.py:build_unit_team_subquery` — rendered by the five
-  investment fetchers, `fetch_investment_quality_stats`' team-scope join, the
-  GraphQL Sankey compiler and the analytics coverage resolver (the coverage
-  resolver left it in CHAOS-9266 and reads repository ownership); it was
+  investment fetchers, `fetch_investment_quality_stats`' team-scope join and the
+  GraphQL Sankey compiler (the analytics coverage resolver left it in CHAOS-9266
+  and reads repository ownership); it was
   previously copy-pasted into all eight, where a partial edit made the views
   disagree about which units have a team. Person cohort selection reads ClickHouse `identities`
   membership (`team_ids`) instead of metric rollup team snapshots so a person's

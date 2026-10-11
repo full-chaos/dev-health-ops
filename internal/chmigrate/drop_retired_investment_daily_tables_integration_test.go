@@ -17,6 +17,10 @@ const dropRetiredInvestmentVersion = "120_drop_retired_investment_daily_tables.s
 
 var retiredInvestmentTables = []string{"investment_classifications_daily", "investment_metrics_daily"}
 
+// retiredInvestmentObjects are the tables and the view that selects from one of them: a view left behind
+// fails on every select.
+var retiredInvestmentObjects = append(append([]string{}, retiredInvestmentTables...), "v_investment_flow_edges")
+
 func startDropRetiredInvestmentClickHouse(t *testing.T, ctx context.Context) (chmigrate.DB, driver.Conn) {
 	t.Helper()
 	instance, err := containers.StartClickHouse(ctx)
@@ -79,10 +83,11 @@ func TestRetiredInvestmentDailyTablesAreAbsentAfterTheHeadOnAnEmptyDatabase(t *t
 	if _, err := chmigrate.Upgrade(ctx, db, baseline, chain); err != nil {
 		t.Fatal(err)
 	}
-	counts := countRetiredInvestmentTables(t, ctx, conn,
-		"investment_classifications_daily", "investment_metrics_daily", "work_item_completion_daily")
-	if counts["investment_classifications_daily"] != 0 || counts["investment_metrics_daily"] != 0 {
-		t.Fatalf("retired tables present after the head: %v", counts)
+	counts := countRetiredInvestmentTables(t, ctx, conn, append([]string{"work_item_completion_daily"}, retiredInvestmentObjects...)...)
+	for _, name := range retiredInvestmentObjects {
+		if counts[name] != 0 {
+			t.Fatalf("retired object %s present after the head: %v", name, counts)
+		}
 	}
 	if counts["work_item_completion_daily"] != 1 {
 		t.Fatalf("work_item_completion_daily is missing after the head: %v", counts)
@@ -122,10 +127,14 @@ func TestRetiredInvestmentDailyTablesWithRowsAreGoneAfterTheMigration(t *testing
 			t.Fatalf("seed %s: %d rows, err %v, want 2", table, rows, err)
 		}
 	}
+	var viewRows uint64
+	if err := conn.QueryRow(ctx, `SELECT count() FROM v_investment_flow_edges`).Scan(&viewRows); err != nil {
+		t.Fatalf("v_investment_flow_edges did not exist before migration 120: %v", err)
+	}
 	if _, err := chmigrate.Upgrade(ctx, db, baseline, chain); err != nil {
 		t.Fatal(err)
 	}
-	counts := countRetiredInvestmentTables(t, ctx, conn, retiredInvestmentTables...)
+	counts := countRetiredInvestmentTables(t, ctx, conn, retiredInvestmentObjects...)
 	for table, present := range counts {
 		if present != 0 {
 			t.Fatalf("%s still exists after migration 120", table)

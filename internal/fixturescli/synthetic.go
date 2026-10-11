@@ -222,6 +222,20 @@ var retiredColumns = map[string]map[string]bool{
 	"teams": {"members": true},
 }
 
+// retiredTables are tables a frozen world still carries and the schema no longer has (a dropped
+// table, CHAOS-9302: migration 120). A loader never sends them; the frozen files are digest-pinned and
+// stay as recorded.
+var retiredTables = map[string]bool{
+	"investment_classifications_daily": true,
+	"investment_metrics_daily":         true,
+}
+
+// logRetiredTable says, once per load, which retired table of which world is not loaded: the drop is
+// named and visible, never silent.
+func logRetiredTable(ctx context.Context, world, table string) {
+	slog.Default().InfoContext(ctx, "fixtures_world_retired_table_dropped", "world", world, "table", table)
+}
+
 // WithoutServerStamped is the table without its server-stamped and retired columns, rows included, so
 // an insert names only the columns a writer owns and the server DEFAULT stamps the rest at load time.
 func (table FrozenTable) WithoutServerStamped() FrozenTable {
@@ -301,6 +315,10 @@ func (target FrozenTarget) Load(ctx context.Context, conn driver.Conn, delta tim
 	// (256 KiB) is below one chunk of the largest table.
 	insertContext := clickhouse.Context(ctx, clickhouse.WithSettings(clickhouse.Settings{"max_query_size": maxQuerySize}))
 	for _, table := range target.Tables {
+		if retiredTables[table.Name] {
+			logRetiredTable(ctx, "synthetic", table.Name)
+			continue
+		}
 		logRetiredColumns(ctx, "synthetic", table)
 		table = table.WithoutServerStamped()
 		rows, err := table.ShiftTimes(delta)

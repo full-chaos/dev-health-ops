@@ -28,11 +28,13 @@ import (
 // below fails loud if the real divergence set ever stops matching this
 // map exactly, in either direction.
 var clickHouseOrgTableKnownPythonOnlyStale = map[string]string{
-	"ci_daily_rollup":         "migration 093 DROPs this table; the regex only sees migration 026's CREATE, never 093's DROP",
-	"commit_daily_rollup":     "migration 093 DROPs this table; the regex only sees migration 026's CREATE, never 093's DROP",
-	"deployment_daily_rollup": "migration 093 DROPs this table; the regex only sees migration 026's/045's CREATE, never 093's DROP",
-	"ai_attribution_new":      "migration 044's own shadow-swap temp table (EXCHANGE TABLES then DROP), gone by the end of that same migration",
-	"statement":               "a false positive: the regex matched literal prose inside migration 027's own module docstring, not real SQL",
+	"ci_daily_rollup":                  "migration 093 DROPs this table; the regex only sees migration 026's CREATE, never 093's DROP",
+	"commit_daily_rollup":              "migration 093 DROPs this table; the regex only sees migration 026's CREATE, never 093's DROP",
+	"deployment_daily_rollup":          "migration 093 DROPs this table; the regex only sees migration 026's/045's CREATE, never 093's DROP",
+	"ai_attribution_new":               "migration 044's own shadow-swap temp table (EXCHANGE TABLES then DROP), gone by the end of that same migration",
+	"statement":                        "a false positive: the regex matched literal prose inside migration 027's own module docstring, not real SQL",
+	"investment_classifications_daily": "migration 120 DROPs this table; the regex only sees the CREATE of migration 007/024, never 120's DROP",
+	"investment_metrics_daily":         "migration 120 DROPs this table; the regex only sees the CREATE of migration 007/024, never 120's DROP",
 }
 
 // TestClickHouseOrgTableDiscoveryMatchesThePythonMigrationRegex is CHAOS-6306

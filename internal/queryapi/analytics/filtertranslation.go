@@ -130,6 +130,12 @@ type filterColumns struct {
 	Repo   string
 	Author string
 
+	// TeamRepo is the column the team scope (owned repositories) reads. Empty means Repo. A caller whose
+	// Repo column is the RAW allocation join (sankey coverage, Python parity) sets it to the unit's
+	// repository with the same fallback the allocation source uses, so a unit with no allocation row
+	// stays in the team's coverage (CHAOS-9221 round 135).
+	TeamRepo string
+
 	// WorkCategorySelectsUnits opts a caller into the UNIT-SELECTING form of
 	// the work-category predicate instead of the default row-multiplying one
 	// (CHAOS-5498). Default false, so every existing caller is byte-identical.
@@ -182,7 +188,7 @@ func translateFilters(orgID string, filters *model.FilterInput, useInvestment bo
 		case useInvestment && filters.Scope.Level == model.ScopeLevelInputTeam && len(filters.Scope.Ids) > 0:
 			// A team is its OWNED repositories (team_repo_ownership, the ONE shared predicate), applied to the
 			// unit's repository rows; never the work-item attribution vote (CHAOS-9221, D5947).
-			teamCondition, teamBindings := teamscope.RepoCondition(orgID, cols.Repo, filters.Scope.Ids, time.Now().UTC())
+			teamCondition, teamBindings := teamscope.RepoCondition(orgID, teamRepoColumn(cols), filters.Scope.Ids, time.Now().UTC())
 			sql += " AND " + teamCondition
 			bindings = append(bindings, teamBindings...)
 		case useInvestment && filters.Scope.Level == model.ScopeLevelInputDeveloper && len(filters.Scope.Ids) > 0:
@@ -233,4 +239,11 @@ func translateFilters(orgID string, filters *model.FilterInput, useInvestment bo
 	}
 
 	return filterClause{sql: sql, bindings: bindings}, nil
+}
+
+func teamRepoColumn(cols filterColumns) string {
+	if cols.TeamRepo != "" {
+		return cols.TeamRepo
+	}
+	return cols.Repo
 }

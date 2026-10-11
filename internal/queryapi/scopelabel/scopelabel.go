@@ -34,6 +34,13 @@ type Options struct {
 
 var bareUUIDRe = regexp.MustCompile(`(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 
+// The words served in prose for a repository or a team that has no display name (D5860): ONE place, so a
+// wording change is one edit. An id is never prose.
+const (
+	UnnamedRepository = "a repository"
+	UnnamedTeam       = "a team"
+)
+
 // LooksLikeUUID reports whether value is a bare UUID, which must never be
 // shown as a label.
 func LooksLikeUUID(value string) bool {

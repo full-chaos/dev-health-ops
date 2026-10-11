@@ -11,6 +11,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph/model"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/scopelabel"
 )
 
 const (
@@ -219,7 +220,7 @@ func (o opportunity) project(repoName, teamName *string) model.AIOpportunity {
 		Kind:                o.kind,
 		RepoID:              &repo,
 		TeamID:              o.teamID,
-		Title:               o.title,
+		Title:               nameTitle(o.title, o.repoID, repoName, scopelabel.UnnamedRepository),
 		Rationale:           o.why,
 		Score:               o.score,
 		EvidenceRefs:        o.refs,

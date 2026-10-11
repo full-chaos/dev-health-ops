@@ -14,6 +14,7 @@ import (
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/changefailure"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph/model"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/scopelabel"
 )
 
 type oracleDCase struct {
@@ -290,6 +291,7 @@ func TestOpportunityDetectors_MatchPythonDetectors(t *testing.T) {
 				checkAndStripFlowGoOnly(t, gotMap)
 				renamedChangeFailureEvidence += renameChangeFailureEvidence(c.Expected)
 			}
+			declareTitleNaming(t, gotMap, c.Expected, c.Kind)
 			g, w := normalizeD(gotMap), normalizeD(c.Expected)
 			if !reflect.DeepEqual(g, w) {
 				gj, _ := json.MarshalIndent(g, "", " ")
@@ -422,4 +424,46 @@ func renameChangeFailureEvidence(value any) int {
 		}
 	}
 	return count
+}
+
+// declareTitleNaming is the DECLARED divergence of D5945 (CHAOS-9205 class D5428: the product never shows a raw
+// id): the recorded Python title ends in the entity's id ("High rework churn in <repo id>"); Go serves the entity
+// NAME, or, with an empty catalogue as in these recorded cases, the unnamed wording (scopelabel.Unnamed*). The
+// declaration is path-scoped: ONLY the title field of an opportunity, ONLY its trailing id. For each opportunity
+// it asserts (1) the Python title ends in the id, (2) the Go title is the same words + the unnamed wording and
+// holds the id nowhere; then it sets the recorded title to the Go one, so every other field is still compared
+// whole. The frozen file is not edited.
+func declareTitleNaming(t *testing.T, got, expected map[string]any, kind string) {
+	t.Helper()
+	key, idKey := "opportunities", "entityId"
+	if kind == "ai" {
+		key, idKey = "recommendations", "repoId"
+	}
+	gotList, _ := got[key].([]any)
+	wantList, _ := expected[key].([]any)
+	if len(gotList) != len(wantList) {
+		return // the whole-response comparison reports the length difference
+	}
+	for i := range wantList {
+		g, _ := gotList[i].(map[string]any)
+		w, _ := wantList[i].(map[string]any)
+		id, _ := w[idKey].(string)
+		pyTitle, _ := w["title"].(string)
+		goTitle, _ := g["title"].(string)
+		if id == "" || !strings.HasSuffix(pyTitle, id) {
+			t.Errorf("%s[%d]: the recorded title %q does not end in its entity id %q: the declaration does not apply", key, i, pyTitle, id)
+			continue
+		}
+		unnamed := scopelabel.UnnamedRepository
+		if et, _ := w["entityType"].(string); et == "team" {
+			unnamed = scopelabel.UnnamedTeam
+		}
+		if want := strings.TrimSuffix(pyTitle, id) + unnamed; goTitle != want {
+			t.Errorf("%s[%d]: title = %q, want %q (the words of the recorded title, then the unnamed wording)", key, i, goTitle, want)
+		}
+		if strings.Contains(goTitle, id) {
+			t.Errorf("%s[%d]: the served title %q carries the id %q", key, i, goTitle, id)
+		}
+		w["title"] = goTitle
+	}
 }

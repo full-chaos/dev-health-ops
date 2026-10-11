@@ -189,8 +189,10 @@ func translateFilters(orgID string, filters *model.FilterInput, useInvestment bo
 			// A team is its OWNED repositories (team_repo_ownership, the ONE shared predicate), applied to the
 			// unit's repository rows; never the work-item attribution vote (CHAOS-9221, D5947).
 			teamCondition, teamBindings := teamscope.RepoCondition(orgID, teamRepoColumn(cols), filters.Scope.Ids, time.Now().UTC())
-			sql += " AND " + teamCondition
-			bindings = append(bindings, teamBindings...)
+			if teamCondition != "" { // ids that are all empty name no team: no scope, never a dangling " AND "
+				sql += " AND " + teamCondition
+				bindings = append(bindings, teamBindings...)
+			}
 		case useInvestment && filters.Scope.Level == model.ScopeLevelInputDeveloper && len(filters.Scope.Ids) > 0:
 			if err := validateDeveloperEmails(filters.Scope.Ids, "scope"); err != nil {
 				return filterClause{}, err

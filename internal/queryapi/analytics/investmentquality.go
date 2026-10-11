@@ -516,8 +516,10 @@ func unitRowsScope(orgID, repoFragment string, teamIDs []string) (string, []clic
 	var bindings []clickhouse.Binding
 	if len(teamIDs) > 0 {
 		teamCondition, teamBindings := teamscope.RepoCondition(orgID, "repo_id", teamIDs, time.Now().UTC())
-		combined += " AND " + teamCondition
-		bindings = teamBindings
+		if teamCondition != "" { // ids that are all empty name no team: no scope
+			combined += " AND " + teamCondition
+			bindings = teamBindings
+		}
 	}
 	return teamscope.UnitScope(combined, LatestWorkUnitRepoEffortSource()), bindings
 }

@@ -416,10 +416,12 @@ func compileSankeyCoverage(req SankeyRequest, orgID string, timeoutSeconds int, 
 		fanoutPairs := fmt.Sprintf("uniqExactIf((work_unit_investments.work_unit_id, wure.repo_id), %s)", isTeamFallback)
 		fanoutExpr = fmt.Sprintf("toNullable(if(%[1]s > 0, %[2]s / %[1]s, 0))", fanoutUnits, fanoutPairs)
 
-		// analytics.py:838 -- the repo predicate targets the RAW joined
-		// column on the investment path, not the display expression.
-		repoFilterColumn = "wure.repo_id"
-		teamRepoColumn = "if(wure.work_unit_id != '', wure.repo_id, work_unit_investments.repo_id)"
+		// analytics.py:838 targets the RAW joined column wure.repo_id. CHAOS-9221 DELIBERATELY DIVERGES (rounds 135
+		// and 138): the chart reads the allocation source, where a unit with no allocation row keeps its OWN
+		// repo_id, so the repository AND team scopes of coverage read that same fallback -- one expression -- or a
+		// unit is in the chart and missing from its coverage.
+		repoFilterColumn = "if(wure.work_unit_id != '', wure.repo_id, work_unit_investments.repo_id)"
+		teamRepoColumn = repoFilterColumn
 
 		// analytics.py:820-827 (CHAOS-2492): resolve developer identity via
 		// the au join so who.developers / scope.level=developer coverage is

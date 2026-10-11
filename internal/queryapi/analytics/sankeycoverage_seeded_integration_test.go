@@ -126,6 +126,14 @@ CREATE TABLE repos (
     source_id Nullable(UUID)
 ) ENGINE = ReplacingMergeTree(last_synced)
 ORDER BY (org_id, id);
+
+CREATE TABLE teams (
+    id String,
+    name String,
+    is_active UInt8 DEFAULT 1,
+    org_id String
+) ENGINE = ReplacingMergeTree()
+ORDER BY (org_id, id);
 `
 
 const (

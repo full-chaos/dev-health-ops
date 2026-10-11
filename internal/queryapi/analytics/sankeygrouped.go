@@ -23,6 +23,8 @@ type sankeyShape struct {
 	measureExpr     string
 	limitPerDim     int
 	maxEdgesPerPair int
+	// extraBindings are the bindings of the investment context's own joins (the ownership team).
+	extraBindings []clickhouse.Binding
 }
 
 func compileSankeyShape(orgID string, req SankeyRequest, useInvestment bool, filters *model.FilterInput) (sankeyShape, error) {
@@ -46,9 +48,10 @@ func compileSankeyShape(orgID string, req SankeyRequest, useInvestment bool, fil
 
 	shape := sankeyShape{fc: fc}
 	if useInvestment {
-		ictx := investmentContextFor(req.Path, false, needsRepoAllocation(filters), needsAuthorJoin(filters))
+		ictx := investmentContextFor(orgID, req.Path, false, needsRepoAllocation(filters), needsAuthorJoin(filters), teamScopeIDs(filters))
 		shape.source, shape.alias, shape.dateFilter, shape.extraClauses = ictx.Source, ictx.Alias, ictx.DateFilter, ictx.ExtraClauses
-		shape.measureExpr, err = dbExpression(req.Measure, true, ictx.UseRepoAllocation)
+		shape.extraBindings = ictx.Bindings
+		shape.measureExpr, err = ictx.measure(req.Measure)
 		if err != nil {
 			return sankeyShape{}, err
 		}
@@ -213,6 +216,7 @@ LIMIT {per_set_limit:UInt32} BY grouping_set
 		{Name: "per_set_limit", Value: perSetLimit},
 	}
 	bindings = append(bindings, shape.fc.bindings...)
+	bindings = append(bindings, shape.extraBindings...)
 
 	return sankeyGroupedQuery{
 		query:           compiledQuery{sql: sql, bindings: bindings},

@@ -9,6 +9,7 @@ import (
 	"github.com/full-chaos/dev-health-go/clickhouse"
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph/model"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
 )
 
 // fakeSingleClient scripts one response for a single Query call --
@@ -121,11 +122,10 @@ func TestCompileTimeseries_Investment_CompilesInlinedSource(t *testing.T) {
 	}
 }
 
-// TestCompileTimeseries_Investment_TeamDimension_UsesTeamVoteTupleWrap
-// pins the CHAOS-4547 site-3 fix (BuildUnitTeamSubquery's
-// resolved_team argMax) reaches the compiled SQL for a TEAM-dimensioned
-// investment timeseries query.
-func TestCompileTimeseries_Investment_TeamDimension_UsesTeamVoteTupleWrap(t *testing.T) {
+// TestCompileTimeseries_Investment_TeamDimension_ReadsRepositoryOwnership pins that the TEAM dimension of an
+// investment timeseries is the owner of the repository of the effort row (CHAOS-9297), shared among co-owners, not the
+// work-item attribution vote.
+func TestCompileTimeseries_Investment_TeamDimension_ReadsRepositoryOwnership(t *testing.T) {
 	req := TimeseriesRequest{
 		Dimension: DimensionTeam,
 		Measure:   MeasureCount,
@@ -137,14 +137,13 @@ func TestCompileTimeseries_Investment_TeamDimension_UsesTeamVoteTupleWrap(t *tes
 	if err != nil {
 		t.Fatalf("CompileTimeseries error = %v", err)
 	}
-	if !strings.Contains(q.sql, "(argMax(tuple(resolved_team), (cnt, resolved_team_id))).1 AS team_label") {
-		t.Errorf("expected CHAOS-4547 site-3 tuple-wrap fix on the team vote, got: %s", q.sql)
+	for _, want := range []string{teamscope.Marker, "1.0 / count() OVER (PARTITION BY owned.owner_repo_id)", "allocation_weight * if(ut.owner_matched = 1, ut.owner_share, 1.0)"} {
+		if !strings.Contains(q.sql, want) {
+			t.Errorf("expected %q in the ownership team read, got: %s", want, q.sql)
+		}
 	}
-	// resolved_team_id must NOT be wrapped -- its own ifNull falls back
-	// to the literal '' (never NULL), so wrapping it would misrepresent
-	// the audit (BuildUnitTeamSubquery's doc comment).
-	if strings.Contains(q.sql, "tuple(resolved_team_id)") {
-		t.Errorf("resolved_team_id is never NULL -- tuple-wrapping it is an unneeded, unrepresentative change, got: %s", q.sql)
+	if strings.Contains(q.sql, "work_item_team_attributions") || strings.Contains(q.sql, "resolved_team") {
+		t.Errorf("the TEAM dimension must not read the work-item vote, got: %s", q.sql)
 	}
 	if !strings.Contains(q.sql, "ifNull(nullIf(ut.team_label, ''), 'unassigned')") {
 		t.Errorf("expected the TEAM dimension column to reference ut.team_label, got: %s", q.sql)

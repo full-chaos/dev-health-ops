@@ -91,6 +91,17 @@ func TestSankeyTeamNode_SeededRealClickHouse_RepoJoinDoesNotFanOutOnUnmergedRepo
 		t.Fatalf("seed work_item_team_attributions: %v", err)
 	}
 
+	// The TEAM node is the repository's owner (CHAOS-9297): Alpha owns the repository, and the teams row names it.
+	if err := conn.Exec(ctx, fmt.Sprintf(`INSERT INTO team_repo_ownership
+        (org_id, provider, team_id, repo_id, repo_full_name, match_type, source, is_primary, specificity, priority, valid_from, valid_to, updated_at) VALUES
+        ('%[3]s', 'github', 'ALPHA', toUUID('%[1]s'), 'acme/dup', 'exact', 'native', 1, 100, 0, toDateTime64('2025-01-01 00:00:00.000', 3, 'UTC'), NULL, toDateTime64('%[2]s', 3, 'UTC'))`,
+		repoID, seededCoverageTS, orgID)); err != nil {
+		t.Fatalf("seed team_repo_ownership: %v", err)
+	}
+	if err := conn.Exec(ctx, fmt.Sprintf(`INSERT INTO teams (id, name, is_active, org_id) VALUES ('ALPHA', 'Alpha', 1, '%s')`, orgID)); err != nil {
+		t.Fatalf("seed teams: %v", err)
+	}
+
 	// THE DEFECT'S PRECONDITION: two physical versions of the SAME
 	// (org_id, id) repos row, in separate INSERTs, never merged. This is
 	// the live-production window this ticket's system.part_log evidence

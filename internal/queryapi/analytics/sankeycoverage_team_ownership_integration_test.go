@@ -26,8 +26,8 @@ import (
 //	u-two-teams      repository A (team-a) and repository B (team-b), 50/50 effort         -> assigned, counted ONCE
 //	u-unowned-plain  repository C, no vote                                                 -> unassigned
 //
-// total 4.0, assigned 2.0 -> teamCoverage 0.5. The vote would have said 1.0/4.0. The chart's TEAM dimension is the
-// vote and stays the vote: its node for the voted team is still there with the voted unit.
+// total 4.0, assigned 2.0 -> teamCoverage 0.5. The vote would have said 1.0/4.0. The chart's TEAM node reads the
+// same ownership (CHAOS-9297), so its unassigned share is 1 - teamCoverage.
 func TestTeamCoverageReadsOwnershipNotTheVote(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
@@ -116,26 +116,33 @@ VALUES (?, ?, ?, ?, 'churn_loc', ?, ?, ?, ?, 0.8, 'high', 'ok', 'jev-test', 'run
 		t.Errorf("RepoCoverage = %v, want 1.0", got.RepoCoverage)
 	}
 
-	// The chart's TEAM dimension is unchanged: it is still the vote.
+	// The chart's TEAM node reads the same ownership (CHAOS-9297): the voted unit sits in an unowned repository, so
+	// it is "unassigned" like the plain one, and the unassigned share of the chart is 1 - teamCoverage.
 	out, err := Resolve(ctx, client, org, model.AnalyticsRequestInput{Sankey: &reqInput})
 	if err != nil {
 		t.Fatal(err)
 	}
-	var voted float64
+	byTeam := map[string]float64{}
 	var total float64
 	for _, e := range out.Sankey.Edges {
 		if !strings.HasPrefix(e.Source, "TEAM:") || e.Value == nil {
 			continue
 		}
+		byTeam[e.Source] += *e.Value
 		total += *e.Value
-		if strings.Contains(e.Source, "Vote Team") || strings.Contains(e.Source, "team-vote") {
-			voted += *e.Value
-		}
 	}
-	if voted != 1 {
-		t.Errorf("chart TEAM node of the voted team carries %v units, want 1 (the chart still reads the vote)", voted)
+	for node := range byTeam {
+		if strings.Contains(node, "Vote Team") || strings.Contains(node, "team-vote") {
+			t.Errorf("chart holds the voted team node %q; the vote must not name a TEAM node", node)
+		}
 	}
 	if total != 4 {
 		t.Errorf("chart TEAM edges carry %v units, want 4", total)
+	}
+	if want, have := 2.0, byTeam["TEAM:unassigned"]; have != want {
+		t.Errorf("chart unassigned = %v, want %v (both units of the unowned repository)", have, want)
+	}
+	if share := byTeam["TEAM:unassigned"] / total; math.Abs(share-(1-got.TeamCoverage)) > 1e-9 {
+		t.Errorf("chart unassigned share = %v, 1 - teamCoverage = %v: the chart and the coverage read different ownership", share, 1-got.TeamCoverage)
 	}
 }

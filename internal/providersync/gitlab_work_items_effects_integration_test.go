@@ -81,8 +81,8 @@ func TestGitLabWorkItemEffectsComposeRawSevenAndRefuseDailyJobTablesAgainstRealC
 		}
 		effects = append(effects, effect)
 	}
-	if len(effects) != 7 || len(refusedEffects) != 9 {
-		t.Fatalf("composed effects=%d refused=%d want 7 and 9", len(effects), len(refusedEffects))
+	if len(effects) != 7 || len(refusedEffects) != 7 {
+		t.Fatalf("composed effects=%d refused=%d want 7 and 7", len(effects), len(refusedEffects))
 	}
 	composed := make([]string, 0, len(effects))
 	for _, effect := range effects {

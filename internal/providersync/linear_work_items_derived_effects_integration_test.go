@@ -31,7 +31,7 @@ func TestLinearDerivedClickHouseEffectsPersistReadBackAndFenceTenants(t *testing
 		t.Fatal(err)
 	}
 
-	if len(effects) != len(linearWorkItemDerivedEffectDestinations) || len(effects) != 10 {
+	if len(effects) != len(linearWorkItemDerivedEffectDestinations) || len(effects) != 8 {
 		t.Fatalf("effects=%d want=%d", len(effects), len(linearWorkItemDerivedEffectDestinations))
 	}
 	refused := 0
@@ -44,8 +44,8 @@ func TestLinearDerivedClickHouseEffectsPersistReadBackAndFenceTenants(t *testing
 			assertSyncSinkRefusesDailyJobTable(t, ctx, conn, sink, claim, effect)
 		})
 	}
-	if refused != 9 {
-		t.Fatalf("refused effects=%d want one for each of the nine tables of the daily job", refused)
+	if refused != 7 {
+		t.Fatalf("refused effects=%d want one for each of the seven tables of the daily job", refused)
 	}
 	if lease.calls != 0 {
 		t.Fatalf("lease assertions=%d: a refused effect must stop before the lease and the store", lease.calls)

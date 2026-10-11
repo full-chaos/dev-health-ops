@@ -100,8 +100,8 @@ func TestJiraWorkItemDerivedEffectsWriteReadbackAgainstRealClickHouse(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(effects) != 10 {
-		t.Fatalf("effects=%d want the AI effect and one for each of the nine tables of the daily job", len(effects))
+	if len(effects) != 8 {
+		t.Fatalf("effects=%d want the AI effect and one for each of the seven tables of the daily job", len(effects))
 	}
 	foreign := claim
 	foreign.OrgID = "org-other"
@@ -150,7 +150,7 @@ func TestJiraWorkItemDerivedEffectsWriteReadbackAgainstRealClickHouse(t *testing
 			}
 		})
 	}
-	if evaluatedEmpty != 1 || refused != 9 {
-		t.Fatalf("AI effects=%d refused=%d want 1 and 9", evaluatedEmpty, refused)
+	if evaluatedEmpty != 1 || refused != 7 {
+		t.Fatalf("AI effects=%d refused=%d want 1 and 7", evaluatedEmpty, refused)
 	}
 }

@@ -117,7 +117,7 @@ func TestGitLabWorkItemDerivedEffectsWriteReadbackAgainstRealClickHouse(t *testi
 			assertSyncSinkRefusesDailyJobTable(t, ctx, conn, sink, claim, effect)
 		})
 	}
-	if refused != len(githubWorkItemDerivedDestinations) || refused != 9 {
+	if refused != len(githubWorkItemDerivedDestinations) || refused != 7 {
 		t.Fatalf("refused effects=%d want one for each of the %d tables of the daily job", refused, len(githubWorkItemDerivedDestinations))
 	}
 

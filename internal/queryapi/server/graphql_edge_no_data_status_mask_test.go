@@ -35,7 +35,7 @@ const (
 // operatingReviewTables are the ClickHouse tables the operating review reads (operatingreview.go).
 var operatingReviewTables = []string{
 	"ai_governance_coverage_daily", "ai_impact_metrics_daily", "deploy_metrics_daily", "file_hotspot_daily",
-	"incident_metrics_daily", "investment_metrics_daily", "repo_complexity_daily", "repo_metrics_daily",
+	"incident_metrics_daily", "repo_complexity_daily", "repo_metrics_daily",
 	"work_item_metrics_daily", "work_item_state_durations_daily",
 }
 

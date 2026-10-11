@@ -64,11 +64,6 @@ func TestRealClickHouse_InvestmentSectionIsTheCanonicalEffortPerTheme(t *testing
 	seedCanonicalUnit(ctx, t, admin, org, "wu-b", repoB, inWeek, 50, map[string]float64{"maintenance.debt": 1})
 	seedCanonicalUnit(ctx, t, admin, org, "wu-after", repoA, week.AddDate(0, 0, 9), 1000, map[string]float64{"quality.bugfix": 1}) // ends next week: not this week
 	seedCanonicalUnit(ctx, t, admin, org, "wu-prior", repoA, week.AddDate(0, 0, -3), 20, map[string]float64{"feature_delivery.roadmap": 1})
-	// The deprecated rule classifier's rows are ignored: the legacy keys never reach the section.
-	if err := admin.Exec(ctx, `INSERT INTO investment_metrics_daily (repo_id, day, team_id, investment_area, project_stream, delivery_units, work_items_completed, prs_merged, churn_loc, cycle_p50_hours, computed_at, org_id)
-VALUES (?, ?, 'team-a', 'ktlo', 'general', 999, 0, 0, 0, 0, ?, ?)`, repoA, week, synced, org); err != nil {
-		t.Fatal(err)
-	}
 
 	review := func(teams []string) map[string]float64 {
 		t.Helper()

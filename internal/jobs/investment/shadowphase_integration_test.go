@@ -66,19 +66,19 @@ func newShadowHarness(t *testing.T) *shadowHarness {
 
 	text := strings.Repeat("Rework the retry path of the importer after the outage review "+shadowSourceSentinel+". ", 8)
 	repo := "11111111-1111-4111-8111-111111111111"
-	for _, pair := range [][2]string{{"A1", "A2"}, {"B1", "B2"}, {"C1", "C2"}} {
+	for number, pair := range [][2]string{{"A1", "A2"}, {"B1", "B2"}, {"C1", "C2"}} {
 		for _, id := range pair {
 			seedWorkItem(t, ctx, conn, id, "", within)
 			if err := conn.Exec(ctx, `ALTER TABLE work_items UPDATE description = ? WHERE work_item_id = ? SETTINGS mutations_sync = 2`, text, id); err != nil {
 				t.Fatal(err)
 			}
 		}
-		seedIssueEdge(t, ctx, conn, pair[0], pair[1], repo, within)
+		seedPullRequestLinks(t, ctx, conn, fmt.Sprintf("%s#pr%d", repo, number+1), repo, within, pair[0], pair[1])
 	}
 	// D: a component with titles only, under the 300-character gate.
 	seedWorkItem(t, ctx, conn, "D1", "", within)
 	seedWorkItem(t, ctx, conn, "D2", "", within)
-	seedIssueEdge(t, ctx, conn, "D1", "D2", repo, within)
+	seedPullRequestLinks(t, ctx, conn, repo+"#pr4", repo, within, "D1", "D2")
 
 	harness.reader, err = chquery.NewReader(conn)
 	if err != nil {

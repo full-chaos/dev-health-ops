@@ -123,14 +123,18 @@ func TestTheOwnershipFallbackTakesTheRepositoriesOfTheUnitsEndTime(t *testing.T)
 	if len(cases) != 4*len(wtiProviders) || len(wtiProviders) != 4 {
 		t.Fatalf("%d cases for %d providers, want 16 for 4", len(cases), len(wtiProviders))
 	}
+	// The issue -> issue link is a reference, so each issue is its own
+	// one-node unit with the same end time and team.
 	for _, c := range cases {
-		unit := units.WorkUnitID([]units.NodeKey{{Type: "issue", ID: c.issues[0]}, {Type: "issue", ID: c.issues[1]}})
-		got, _, weightSum, _ := readRepoEffort(t, ctx, conn, unit)
-		if !reflect.DeepEqual(got, c.want) {
-			t.Errorf("%s: repositories from the fallback = %v, want %v", c.name, got, c.want)
-		}
-		if len(c.want) > 0 && (weightSum < 0.999999 || weightSum > 1.000001) {
-			t.Errorf("%s: the shares sum to %g, want 1", c.name, weightSum)
+		for _, issue := range c.issues {
+			unit := units.WorkUnitID([]units.NodeKey{{Type: "issue", ID: issue}})
+			got, _, weightSum, _ := readRepoEffort(t, ctx, conn, unit)
+			if !reflect.DeepEqual(got, c.want) {
+				t.Errorf("%s (%s): repositories from the fallback = %v, want %v", c.name, issue, got, c.want)
+			}
+			if len(c.want) > 0 && (weightSum < 0.999999 || weightSum > 1.000001) {
+				t.Errorf("%s (%s): the shares sum to %g, want 1", c.name, issue, weightSum)
+			}
 		}
 	}
 

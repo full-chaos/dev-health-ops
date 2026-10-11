@@ -56,6 +56,35 @@ The WorkUnit id is a stable SHA-256 of its sorted node tokens (`work_unit_id`).
 
 Categorization therefore happens on the **cluster**, not on the individual item.
 
+> **Go materializer (CHAOS-9269, chris 2026-10-11): issue -> issue links are
+> references, not membership.** The live build is
+> `units.BuildComponentsWithOptions` (`internal/jobs/workgraph/units/components.go`),
+> called with the same options by the investment materializer
+> (`internal/jobs/investment/materialize.go`) and the membership backfill
+> (`internal/jobs/metrics/remaining/membership_native_clickhouse.go`), so both mint
+> the same `work_unit_id`s. In that build:
+>
+> - Only pull request, commit and other non-issue links join nodes into one unit.
+>   An edge whose both ends are `issue` nodes (`relates`, `blocks`, `duplicates`,
+>   `parent_of`/`child_of`, any provider) never joins two units and is not in any
+>   unit's edge bundle (`structural_evidence_json` edges list joining links only).
+> - Every endpoint of every admitted edge is a node of exactly one unit. An issue
+>   whose only links are issue -> issue links is a **one-node unit**.
+> - The links stay as rows in `work_graph_edges`; the graph, flow and blocker
+>   readers read them there, not from units.
+> - The size cap (`INVESTMENT_MAX_COMPONENT_NODES`, default 150) and the
+>   oversized-component split stay as a safety valve; pull request -> issue links
+>   are never dropped by the split (CHAOS-9267). On the bigboy real-data org
+>   (2026-10-11, 24,492 admitted edges) the largest component without the cap is
+>   207 nodes and the split drops 50 links; with issue links joining it was 11,110
+>   nodes and 13,304 drops.
+> - Run stats carry `reference_links` (issue -> issue links read as references)
+>   and `reference_only_units` (one-node units for endpoints no joining link
+>   reached).
+>
+> `BuildComponents`, the form the frozen Python goldens call, keeps the Python
+> behaviour (issue links join); this is a declared divergence from Python.
+
 > **Correction — components are not window-bounded.** `fetch_work_graph_edges`
 > filters by repo / org only, **not** by time. Components are built from the **full**
 > edge set, and the requested time window (`--from` / `--to`) is applied **afterward**:

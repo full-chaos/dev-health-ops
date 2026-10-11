@@ -60,6 +60,11 @@ type BuildStats struct {
 	DroppedEdges        int
 	DroppedNodes        int
 	PartitionedHubs     int
+	// ReferenceLinks counts issue -> issue edges read as references (not
+	// joins) under BuildOptions.IssueLinksAreReferences; ReferenceOnlyUnits
+	// counts the one-node units minted for endpoints no joining link reached.
+	ReferenceLinks     int
+	ReferenceOnlyUnits int
 }
 
 // ConfidenceFromValue ports components.py:72-83 _edge_confidence, the coercion
@@ -710,6 +715,11 @@ func BuildComponents(edges []Edge, maxComponentNodes *int, partitionHubs bool, s
 // work_unit_ids for the same graph (see partitionHubs above).
 const ProtectPullRequestLinks = true
 
+// IssueLinksAreReferences is the value every LIVE consumer passes as
+// BuildOptions.IssueLinksAreReferences, shared for the same reason as
+// ProtectPullRequestLinks.
+const IssueLinksAreReferences = true
+
 // BuildOptions are the knobs of BuildComponentsWithOptions.
 type BuildOptions struct {
 	// MaxComponentNodes nil resolves through ResolveMaxComponentNodes.
@@ -723,6 +733,19 @@ type BuildOptions struct {
 	// confidence. BuildComponents (the form the Python goldens and oracles
 	// call) keeps false, so no frozen input is touched.
 	ProtectPullRequestLinks bool
+	// IssueLinksAreReferences makes an issue -> issue edge (relates, blocks,
+	// duplicates, parent/child) a reference, not unit membership: it never
+	// joins two nodes into one unit and is not in any unit's edge bundle. Each
+	// of its endpoints is still a unit node, so an issue whose only links are
+	// issue -> issue gets a one-node unit. The link itself stays a
+	// work_graph_edges row for the graph, flow and blocker readers.
+	// DECLARED DIVERGENCE FROM PYTHON (CHAOS-9269); BuildComponents keeps false.
+	IssueLinksAreReferences bool
+}
+
+// isIssueToIssueLink reports an edge between two work items.
+func isIssueToIssueLink(edge Edge) bool {
+	return edge.SourceType == "issue" && edge.TargetType == "issue"
 }
 
 // isPullRequestIssueLink reports a pull request -> issue edge, the same for a
@@ -738,8 +761,24 @@ func BuildComponentsWithOptions(edges []Edge, opts BuildOptions, stats *BuildSta
 	partitionHubs := opts.PartitionHubs
 	protectPullRequestLinks := opts.ProtectPullRequestLinks
 
+	joining := edges
+	var references []Edge
+	if opts.IssueLinksAreReferences {
+		joining = make([]Edge, 0, len(edges))
+		for _, edge := range edges {
+			if isIssueToIssueLink(edge) {
+				references = append(references, edge)
+				continue
+			}
+			joining = append(joining, edge)
+		}
+		if stats != nil {
+			stats.ReferenceLinks += len(references)
+		}
+	}
+
 	result := make([]Component, 0)
-	for _, discovered := range discoverComponents(edges) {
+	for _, discovered := range discoverComponents(joining) {
 		// list(dict.fromkeys(component_nodes)): dedupe, keeping first sighting.
 		unitNodes := make([]NodeKey, 0, len(discovered.Nodes))
 		seen := make(map[NodeKey]struct{}, len(discovered.Nodes))
@@ -759,6 +798,30 @@ func BuildComponentsWithOptions(edges []Edge, opts BuildOptions, stats *BuildSta
 			stats.OversizedComponents++
 		}
 		result = append(result, splitOversizedComponent(unitNodes, discovered.Edges, maxNodes, partitionHubs, protectPullRequestLinks, stats)...)
+	}
+	if len(references) == 0 {
+		return result
+	}
+
+	// Every endpoint of a reference link that no joining link placed in a unit
+	// becomes its own one-node unit, in first-sighting order.
+	placed := newNodeIndex()
+	for _, component := range result {
+		for _, node := range component.Nodes {
+			placed.intern(node)
+		}
+	}
+	for _, edge := range references {
+		for _, node := range [2]NodeKey{edge.source(), edge.target()} {
+			if placed.has(node) {
+				continue
+			}
+			placed.intern(node)
+			result = append(result, Component{Nodes: []NodeKey{node}, Edges: []Edge{}})
+			if stats != nil {
+				stats.ReferenceOnlyUnits++
+			}
+		}
 	}
 	return result
 }

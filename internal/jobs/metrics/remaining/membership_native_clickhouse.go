@@ -143,11 +143,16 @@ func (executor *MembershipExecutor) ComputeOrg(
 	// work_unit_ids the live investments table never created, the exact
 	// cross-table corruption BuildComponents' doc warns about. Flip in
 	// lockstep with every other consumer at CHAOS-4924 cutover, not before.
-	// ProtectPullRequestLinks: the same shared constant the materializer passes
-	// (CHAOS-9267); the two consumers must group identically.
+	// ProtectPullRequestLinks and IssueLinksAreReferences: the same shared
+	// constants the materializer passes; the two consumers must group
+	// identically.
 	components := units.BuildComponentsWithOptions(
 		chquery.ComponentEdges(edgeRows),
-		units.BuildOptions{PartitionHubs: false, ProtectPullRequestLinks: units.ProtectPullRequestLinks},
+		units.BuildOptions{
+			PartitionHubs:           false,
+			ProtectPullRequestLinks: units.ProtectPullRequestLinks,
+			IssueLinksAreReferences: units.IssueLinksAreReferences,
+		},
 		stats,
 	)
 	if len(components) == 0 {

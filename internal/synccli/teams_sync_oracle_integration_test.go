@@ -601,9 +601,16 @@ func syncPolicySeedSQL(database, teamID string) string {
 	return fmt.Sprintf("INSERT INTO %s.team_sync_policies (org_id, team_id, sync_policy, managed_fields, updated_by, updated_at) VALUES ('org-1', '%s', 2, [], NULL, now64(6))", database, teamID)
 }
 
+// adminOverrideSeedKeySQL is the seed text the Python golden was recorded with (the roster column
+// `members` existed then). It is the golden's request key and is never executed: the key must not
+// move, or the golden is no longer the recording of the program it pins (CHAOS-9161).
+func adminOverrideSeedKeySQL(database string) string {
+	return fmt.Sprintf(`INSERT INTO %s.teams (id, team_uuid, name, description, members, manual_members, project_keys, repo_patterns, is_active, updated_at, last_synced, org_id, provider) VALUES ('gh:platform', generateUUIDv4(), 'Platform', 'old', ['old'], ['override@example.com'], [], [], 1, toDateTime64('%s', 6), toDateTime64('%s', 6), 'org-1', 'github')`, database, teamsSeedInstant, teamsSeedInstant)
+}
+
 // adminOverrideSeedSQL is the existing `teams` row an admin's override scenario starts from.
 func adminOverrideSeedSQL(database string) string {
-	return fmt.Sprintf(`INSERT INTO %s.teams (id, team_uuid, name, description, members, manual_members, project_keys, repo_patterns, is_active, updated_at, last_synced, org_id, provider) VALUES ('gh:platform', generateUUIDv4(), 'Platform', 'old', ['old'], ['override@example.com'], [], [], 1, toDateTime64('%s', 6), toDateTime64('%s', 6), 'org-1', 'github')`, database, teamsSeedInstant, teamsSeedInstant)
+	return fmt.Sprintf(`INSERT INTO %s.teams (id, team_uuid, name, description, manual_members, project_keys, repo_patterns, is_active, updated_at, last_synced, org_id, provider) VALUES ('gh:platform', generateUUIDv4(), 'Platform', 'old', ['override@example.com'], [], [], 1, toDateTime64('%s', 6), toDateTime64('%s', 6), 'org-1', 'github')`, database, teamsSeedInstant, teamsSeedInstant)
 }
 
 // renameOwnershipSeed names the Go-only seed of the part-way write scenario (it renames a table of the Go database).
@@ -1037,7 +1044,7 @@ func githubScenarios() []*teamsScenario {
 				}
 			}},
 		{name: "an admin override survives", org: "acme", owner: "acme", token: "tok", teams: two, users: emails("alice", "bob", "carol"), wantRows: 2,
-			prepareKey: adminOverrideSeedSQL("<db>"),
+			prepareKey: adminOverrideSeedKeySQL("<db>"),
 			prepare: func(o *teamsOracle, fake *fakeGitHub) {
 				for _, database := range []string{o.pythonDatabase, o.goDatabase} {
 					if err := o.admin.Exec(o.ctx, adminOverrideSeedSQL(database)); err != nil {

@@ -215,10 +215,33 @@ var serverStampedColumns = map[string]map[string]bool{
 	"work_items":                     {"ingested_at": true}, // CHAOS-7265
 }
 
-// WithoutServerStamped is the table without its server-stamped columns, rows included, so an insert
-// names only the columns a writer owns and the server DEFAULT stamps the rest at load time.
+// retiredColumns are columns a frozen world still carries and the schema no longer has (a dropped
+// column): a loader never sends them. The frozen worlds are pinned by content digest, so the column
+// is dropped at load time, not rewritten in the files (CHAOS-9161: teams.members, migration 118).
+var retiredColumns = map[string]map[string]bool{
+	"teams": {"members": true},
+}
+
+// WithoutServerStamped is the table without its server-stamped and retired columns, rows included, so
+// an insert names only the columns a writer owns and the server DEFAULT stamps the rest at load time.
 func (table FrozenTable) WithoutServerStamped() FrozenTable {
-	drop := serverStampedColumns[table.Name]
+	drop := map[string]bool{}
+	for name := range serverStampedColumns[table.Name] {
+		drop[name] = true
+	}
+	for name := range retiredColumns[table.Name] {
+		drop[name] = true
+	}
+	return table.withoutColumns(drop)
+}
+
+// WithoutRetired is the table without the columns the schema no longer has (retiredColumns): the form
+// a load into the migration head reproduces.
+func (table FrozenTable) WithoutRetired() FrozenTable {
+	return table.withoutColumns(retiredColumns[table.Name])
+}
+
+func (table FrozenTable) withoutColumns(drop map[string]bool) FrozenTable {
 	if len(drop) == 0 {
 		return table
 	}

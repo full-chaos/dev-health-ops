@@ -35,13 +35,17 @@ package workersctl
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"flag"
 	"io"
 	"log/slog"
 	"strings"
 
 	"github.com/full-chaos/dev-health-ops/internal/joboperator"
+	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/daily"
 	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph"
 	"github.com/google/uuid"
 )
@@ -79,6 +83,10 @@ func dispatchInvestmentTrigger(ctx context.Context, runtime *operatorRuntime, ar
 		"review-evidence", "",
 		`REQUIRED: why this materialize is being triggered manually (e.g. "CHAOS-5173 -- confirming investment quotes after a late-arriving sync")`,
 	)
+	rerunTag := flags.String(
+		"rerun-tag", "",
+		"optional tag (1-32 characters of A-Z a-z 0-9 . _ -) that is part of the request key: the same tag for the same org and window enqueues nothing a second time, a new tag enqueues a new run for a window that already has one",
+	)
 	dryRun := flags.Bool("dry-run", false, "validate flags and print the request that WOULD be written, without writing it")
 	mutation := addMutationFlags(flags)
 	if flags.Parse(args) != nil || flags.NArg() != 0 || !mutation.valid(*dryRun) {
@@ -100,6 +108,15 @@ func dispatchInvestmentTrigger(ctx context.Context, runtime *operatorRuntime, ar
 	}
 	fromTime, toTime, err := parseOptionalUTCDateRange(*from, *to)
 	if err != nil {
+		return writeError(stderr, "invalid_request")
+	}
+	rerunTagSet := false
+	flags.Visit(func(f *flag.Flag) {
+		if f.Name == "rerun-tag" {
+			rerunTagSet = true
+		}
+	})
+	if rerunTagSet && !daily.ValidRerunTag(*rerunTag) {
 		return writeError(stderr, "invalid_request")
 	}
 
@@ -140,6 +157,12 @@ func dispatchInvestmentTrigger(ctx context.Context, runtime *operatorRuntime, ar
 	// hash identically to an omitted one, since both produce the same scope
 	// -- codex review, 2026-09-05, CHAOS-5170 r2 P2).
 	generation := "manual-trigger:investment.materialize:" + canonicalOrg + ":" + dateKey(fromTime) + ":" + dateKey(toTime)
+	if *rerunTag != "" {
+		// Appended only when set, so every existing caller keeps its request id.
+		// Hashed (as daily-start does) to keep correlation_id within 128 bytes.
+		sum := sha256.Sum256([]byte(*rerunTag))
+		generation += ":rerun:" + hex.EncodeToString(sum[:])[:16]
+	}
 	requestID := manualTriggerRequestID(manualInvestmentTriggerNamespace, generation)
 
 	request := workgraph.Request{
@@ -161,6 +184,7 @@ func dispatchInvestmentTrigger(ctx context.Context, runtime *operatorRuntime, ar
 			"kind":            string(workgraph.KindMaterialize),
 			"scope":           json.RawMessage(scope),
 			"generation":      generation,
+			"rerun_tag":       *rerunTag,
 			"review_evidence": *reviewEvidence,
 		})
 	}
@@ -199,7 +223,8 @@ func writeManualInvestmentTrigger(
 		return writeError(stderr, "operator_backend_unavailable")
 	}
 	defer rollbackTriggerTx(ctx, tx, logAttrs...)
-	if err := writer.WriteTx(ctx, tx, request); err != nil {
+	outcome, err := writer.WriteRequestTx(ctx, tx, request)
+	if err != nil {
 		status := "error"
 		if errors.Is(err, workgraph.ErrInvalidState) {
 			status = "invalid_state"
@@ -220,6 +245,27 @@ func writeManualInvestmentTrigger(
 			"workerctl manual investment trigger: commit failed",
 			append(logAttrs, slog.Any("error", err))...)
 		return writeError(stderr, "operator_backend_unavailable")
+	}
+	if outcome.Duplicate {
+		// The request id is a hash of org + window (+ rerun tag): an identical
+		// earlier request already holds it, so nothing new was enqueued.
+		slog.Default().LogAttrs(ctx, slog.LevelWarn,
+			"workerctl manual investment trigger: duplicate request, no new job",
+			append(logAttrs, slog.String("existing_state", outcome.ExistingState))...)
+		result := map[string]any{
+			"request_id":      requestID,
+			"org":             canonicalOrg,
+			"kind":            string(workgraph.KindMaterialize),
+			"generation":      generation,
+			"review_evidence": reviewEvidence,
+			"status":          "duplicate",
+			"existing_state":  outcome.ExistingState,
+			"hint":            "an identical request for this org and window already exists; pass --rerun-tag <label> to request a fresh run",
+		}
+		if code := writeResult(stdout, stderr, result); code != 0 {
+			return code
+		}
+		return 1
 	}
 	slog.Default().LogAttrs(ctx, slog.LevelInfo,
 		"workerctl manual investment trigger: enqueued",

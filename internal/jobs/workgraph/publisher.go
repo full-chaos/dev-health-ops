@@ -84,8 +84,12 @@ func (writer *RequestWriter) WriteRequestTx(
 		}
 		outcome.SupersededRequestIDs = superseded
 	}
-	if err := writer.writeRowTx(ctx, tx, request); err != nil {
+	duplicateState, err := writer.writeRowTx(ctx, tx, request)
+	if err != nil {
 		return WriteOutcome{}, err
+	}
+	if duplicateState != "" {
+		outcome.Duplicate, outcome.ExistingState = true, duplicateState
 	}
 	return outcome, nil
 }
@@ -117,7 +121,10 @@ func (writer *RequestWriter) supersedeTx(
 	return superseded, nil
 }
 
-func (writer *RequestWriter) writeRowTx(ctx context.Context, tx pgx.Tx, request Request) error {
+// writeRowTx returns the stored state of the row that already held request.ID
+// ("" when this call inserted a new row).
+func (writer *RequestWriter) writeRowTx(ctx context.Context, tx pgx.Tx, request Request) (string, error) {
+	var duplicateState string
 	encodedScope := string(request.Scope)
 	command, err := tx.Exec(ctx, `
 INSERT INTO public.work_graph_execution_requests (
@@ -131,7 +138,7 @@ ON CONFLICT (id) DO NOTHING`, request.ID, request.OrganizationID, string(request
 		encodedScope, request.ModelRef, request.PromptRef, request.LLMConcurrency,
 		request.SpendLimitMicrounits, request.CorrelationID, request.IdempotencyKey)
 	if err != nil {
-		return ErrUnavailable
+		return "", ErrUnavailable
 	}
 	if command.RowsAffected() == 0 {
 		var existing Request
@@ -148,23 +155,24 @@ FROM public.work_graph_execution_requests WHERE id = $1::uuid`, request.ID).Scan
 			&existingState,
 		)
 		if err != nil || !sameRequest(existing, request, existingScope) {
-			return ErrInvalidState
+			return "", ErrInvalidState
 		}
+		duplicateState = existingState
 		if existingState == "succeeded" {
 			completionKey, keyErr := joboutbox.CompletionKey(
 				"work_graph_execution_request", request.ID,
 			)
 			if keyErr != nil {
-				return ErrInvalidState
+				return "", ErrInvalidState
 			}
 			if err := joboutbox.MarkCompletionTx(ctx, tx, completionKey); err != nil {
-				return ErrUnavailable
+				return "", ErrUnavailable
 			}
 		}
 	}
 	descriptor, ok := writer.registry.Descriptor(string(request.Kind))
 	if !ok {
-		return ErrUnavailable
+		return "", ErrUnavailable
 	}
 	// Every arm below is normalised through workGraphPublished: work-graph requests carry a CALLER-supplied
 	// idempotency key (work_graph_execution_requests.idempotency_key), so a
@@ -173,17 +181,17 @@ FROM public.work_graph_execution_requests WHERE id = $1::uuid`, request.ID).Scan
 	// owns no repair path.
 	if descriptor.Executable() {
 		if request.PrerequisiteCompletionKey == "" {
-			return workGraphPublished(writer.producer.Publish(ctx, tx, string(request.Kind), envelopeFor(request)))
+			return duplicateState, workGraphPublished(writer.producer.Publish(ctx, tx, string(request.Kind), envelopeFor(request)))
 		}
-		return workGraphPublished(writer.producer.PublishAfter(
+		return duplicateState, workGraphPublished(writer.producer.PublishAfter(
 			ctx, tx, string(request.Kind), envelopeFor(request),
 			request.PrerequisiteCompletionKey,
 		))
 	}
 	if request.PrerequisiteCompletionKey == "" {
-		return workGraphPublished(writer.producer.PublishDeferred(ctx, tx, string(request.Kind), envelopeFor(request)))
+		return duplicateState, workGraphPublished(writer.producer.PublishDeferred(ctx, tx, string(request.Kind), envelopeFor(request)))
 	}
-	return workGraphPublished(writer.producer.PublishDeferredAfter(
+	return duplicateState, workGraphPublished(writer.producer.PublishDeferredAfter(
 		ctx, tx, string(request.Kind), envelopeFor(request), request.PrerequisiteCompletionKey,
 	))
 }

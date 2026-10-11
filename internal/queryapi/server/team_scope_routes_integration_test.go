@@ -40,19 +40,6 @@ func seedTeamRoutesChurn(t *testing.T, conn chdriver.Conn, repoID uuid.UUID, chu
 	}
 }
 
-// seedTeamRoutesRework writes one investment_metrics_daily row keyed by team id:
-// the source of home's rework allocation, which the team scope reads by column.
-func seedTeamRoutesRework(t *testing.T, conn chdriver.Conn, teamID string) {
-	t.Helper()
-	if err := conn.Exec(context.Background(),
-		`INSERT INTO investment_metrics_daily (repo_id, day, team_id, investment_area, project_stream, work_items_completed, prs_merged, churn_loc, computed_at, org_id)
-		 VALUES (NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		time.Date(2026, 8, 22, 0, 0, 0, 0, time.UTC), teamID, "feature_delivery", "core",
-		uint32(5), uint32(2), uint64(40), time.Date(2026, 8, 26, 0, 0, 0, 0, time.UTC), teamRoutesOrg); err != nil {
-		t.Fatalf("seed investment_metrics_daily: %v", err)
-	}
-}
-
 func serveTeamRoutes(t *testing.T, handler http.HandlerFunc, method, target, body string) []byte {
 	t.Helper()
 	var reader *strings.Reader
@@ -131,8 +118,6 @@ func TestTeamScopeRoutes_OwnedRepositoriesOnly(t *testing.T) {
 		seedTeamRoutesChurn(t, conn, repo, churn)
 	}
 
-	seedTeamRoutesRework(t, conn, "team-two")
-
 	reader, err := investmentexplain.NewReader(client)
 	if err != nil {
 		t.Fatalf("NewReader: %v", err)
@@ -157,13 +142,14 @@ func TestTeamScopeRoutes_OwnedRepositoriesOnly(t *testing.T) {
 		ownedCount int
 		// wantHomeDeclaration/wantUnitsDeclaration: whether the corpus's own
 		// BaselineTimeoutDeclared paths hold on the real handler's body. Home's
-		// rework allocation is keyed by team column and is seeded for team-two
-		// only, so a team without it reads as empty there and the declaration
-		// would refuse instead of admitting on silence.
+		// investment-by-theme tile reads the categorized units of the repositories
+		// the team owns (CHAOS-9198), so it is non-empty for a team that owns a
+		// repository with a unit in the window, and empty for a team that owns none:
+		// the declaration admits only a non-empty tile.
 		wantHomeDeclaration, wantUnitsDeclaration bool
 	}{
 		{"two owned repositories, one unowned repository present", "team-two", []string{"wu-a", "wu-b"}, 30, 2, true, true},
-		{"one owned repository", "team-one", []string{"wu-c"}, 400, 1, false, true},
+		{"one owned repository", "team-one", []string{"wu-c"}, 400, 1, true, true},
 		{"no owned repository", "team-none", []string{}, 0, 0, false, false},
 		{"organization scope reads every repository", "", []string{"wu-a", "wu-b", "wu-c", "wu-d"}, 8430, 4, false, true},
 	} {

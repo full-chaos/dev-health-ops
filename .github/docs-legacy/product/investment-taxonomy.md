@@ -56,8 +56,8 @@ dot.
 
 | Key | Plain-language meaning |
 | --- | ---------------------- |
-| `maintenance.refactor` | Restructuring existing code without changing behavior. |
-| `maintenance.upgrade` | Dependency/runtime/platform upgrades and migrations. |
+| `maintenance.refactor` | Restructuring existing code without changing behavior, also lint/format clean-up and repair of a build, CI or configuration setup that changes no product behavior. |
+| `maintenance.upgrade` | Dependency/runtime/platform upgrades and migrations, including ports onto a new language or runtime and each correction to the port before it is delivered. |
 | `maintenance.debt` | Paying down accumulated technical debt. |
 
 ### Quality / Reliability
@@ -65,7 +65,7 @@ dot.
 | Key | Plain-language meaning |
 | --- | ---------------------- |
 | `quality.testing` | Adding or improving tests and test infrastructure. |
-| `quality.bugfix` | Fixing defects in delivered functionality. |
+| `quality.bugfix` | Fixing defects in delivered functionality. Not a correction to an undelivered port or migration (upgrade), and not a build, CI or configuration repair with no product defect (refactor). A `fix:` title type alone is not proof of a defect. |
 | `quality.reliability` | Reliability, resilience, and stability improvements. |
 
 ### Risk / Security

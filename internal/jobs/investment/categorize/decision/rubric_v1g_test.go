@@ -15,31 +15,52 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/testsupport/oraclecompare"
 )
 
-// evaluatedV1fSHA256 is the digest of the rubric file that was evaluated (the
-// gates of the v1f test). It is a literal on purpose: a change of the embedded
-// file and of RubricSHA256 together must still fail here.
+// v1gSHA256 is the digest of the embedded rubric file. It is a literal on
+// purpose: a change of the embedded file and of RubricSHA256 together must
+// still fail here.
+const v1gSHA256 = "89f96c46b89a2f4291acc5011684019f600942f96b125cf66465f6576cfbd6fb"
+
+// evaluatedV1fSHA256 is the digest of the evaluated v1f file that v1g is
+// derived from; v1g records it in derived_from.
 const evaluatedV1fSHA256 = "eac20c674565a7b017450e3b6a9dba7926a9f085f60ac28e35b2b7c2b990762d"
 
 const (
 	v1fEnablementClause = "and documentation of any kind (customer, marketing or developer documentation). Not: repair"
 	v1fFooter           = "Documentation work of any kind (customer, marketing or developer documentation) is work for Enablement and platform, whatever it documents; judge it there."
 	v1dEnablementEnd    = "pipeline or environment). Not: repair"
+	v1gFixTitleRule     = "A 'fix' type at the start of a title ('fix:' or 'fix(scope):') is context, not proof of a defect; judge the work that the text describes."
+	v1gUpgradePortFix   = "also a port onto one, and each correction to the port or migration before it is delivered"
+	v1gBugfixNot        = "Bug fixes: correction of a defect in delivered behaviour. Not: a correction to a port or migration that is not yet delivered (Upgrades and migrations); repair of a build, CI or configuration setup with no defect in product behaviour (Refactoring);"
+	v1gRefactorRepair   = "and repair of a build, CI or configuration setup that changes no product behaviour"
+	v1fBugfixBuild      = "also of a broken build, CI or configuration setup"
 )
 
-func TestTheEmbeddedRubricIsTheEvaluatedV1fFile(t *testing.T) {
+func TestTheEmbeddedRubricIsTheV1gFile(t *testing.T) {
 	sum := sha256.Sum256(rubricJSON)
-	if got := hex.EncodeToString(sum[:]); got != evaluatedV1fSHA256 {
-		t.Fatalf("embedded rubric has sha256 %s, the evaluated v1f file has %s", got, evaluatedV1fSHA256)
+	if got := hex.EncodeToString(sum[:]); got != v1gSHA256 {
+		t.Fatalf("embedded rubric has sha256 %s, the v1g file has %s", got, v1gSHA256)
 	}
-	if RubricSHA256 != evaluatedV1fSHA256 || RubricVersion != "decision-support-v1f" {
+	if RubricSHA256 != v1gSHA256 || RubricVersion != "decision-support-v1g" {
 		t.Fatalf("pinned %s %s", RubricVersion, RubricSHA256)
 	}
 	r, err := LoadRubric()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if r.RubricVersion != "decision-support-v1f" {
+	if r.RubricVersion != "decision-support-v1g" {
 		t.Fatalf("rubric_version = %q", r.RubricVersion)
+	}
+	var head struct {
+		DerivedFrom struct {
+			RubricVersion string `json:"rubric_version"`
+			SHA256        string `json:"sha256"`
+		} `json:"derived_from"`
+	}
+	if err := json.Unmarshal(rubricJSON, &head); err != nil {
+		t.Fatal(err)
+	}
+	if head.DerivedFrom.RubricVersion != "decision-support-v1f" || head.DerivedFrom.SHA256 != evaluatedV1fSHA256 {
+		t.Fatalf("derived_from = %+v, want v1f %s", head.DerivedFrom, evaluatedV1fSHA256)
 	}
 	// One changed character is refused by the loader.
 	changed := bytes.Replace(rubricJSON, []byte("judge it there."), []byte("judge it there!"), 1)
@@ -51,7 +72,7 @@ func TestTheEmbeddedRubricIsTheEvaluatedV1fFile(t *testing.T) {
 	}
 }
 
-func TestTheRequestBodyOfTheRealEncoderCarriesV1f(t *testing.T) {
+func TestTheRequestBodyOfTheRealEncoderCarriesV1g(t *testing.T) {
 	transport := &bodyTransport{err: context.Canceled}
 	c := newTestCompleter(t, transport)
 	_, _ = c.Classify(context.Background(), syntheticBundle(t))
@@ -62,13 +83,16 @@ func TestTheRequestBodyOfTheRealEncoderCarriesV1f(t *testing.T) {
 	if !json.Valid(body) {
 		t.Fatal("the request body is not JSON")
 	}
-	for _, want := range []string{v1fEnablementClause, v1fFooter} {
+	for _, want := range []string{v1fEnablementClause, v1fFooter, v1gFixTitleRule, v1gUpgradePortFix, v1gBugfixNot, v1gRefactorRepair} {
 		if !bytes.Contains(body, []byte(want)) {
-			t.Errorf("request body lacks the v1f text %q", want)
+			t.Errorf("request body lacks the text %q", want)
 		}
 	}
 	if bytes.Contains(body, []byte(v1dEnablementEnd)) {
 		t.Error("request body holds the v1d enablement line")
+	}
+	if bytes.Contains(body, []byte(v1fBugfixBuild)) {
+		t.Error("request body holds the v1f bugfix line that counts a broken build, CI or configuration setup as a bug fix")
 	}
 	r, err := LoadRubric()
 	if err != nil {
@@ -81,17 +105,17 @@ func TestTheRequestBodyOfTheRealEncoderCarriesV1f(t *testing.T) {
 	if !bytes.Equal(built.Body, body) {
 		t.Error("the body sent is not the body of BuildRequest")
 	}
-	if !strings.Contains(c.Identity().Stamp(), "prompt=decision-support-v1f@eac20c674565;") {
+	if !strings.Contains(c.Identity().Stamp(), "prompt=decision-support-v1g@89f96c46b89a;") {
 		t.Errorf("stamp = %s", c.Identity().Stamp())
 	}
 }
 
-// The committed cases are v1d responses. Under v1f the same response bodies
+// The committed cases are v1d responses. Under v1g the same response bodies
 // must decode to the same outcomes, apart from the rubric id that the
 // uncertainty sentence names; the request digest must differ. This is what
 // shows the decode path does not depend on the rubric text, with no
-// hand-made v1f response.
-func TestTheV1dResponsesDecodeTheSameUnderV1f(t *testing.T) {
+// hand-made v1g response.
+func TestTheV1dResponsesDecodeTheSameUnderV1g(t *testing.T) {
 	cases, err := readReplayCases(filepath.Join("testdata", "replay_cases.jsonl"))
 	if err != nil {
 		t.Fatal(err)
@@ -115,7 +139,7 @@ func TestTheV1dResponsesDecodeTheSameUnderV1f(t *testing.T) {
 		}
 		sum := sha256.Sum256(transport.sent[0])
 		if hex.EncodeToString(sum[:]) == c.RequestSHA256 {
-			t.Errorf("case %q: the v1f request has the digest of the v1d request", c.CaseID)
+			t.Errorf("case %q: the v1g request has the digest of the v1d request", c.CaseID)
 		}
 		encoded, err := json.Marshal(oraclecompare.TypedEncode(t, reflect.ValueOf(got)))
 		if err != nil {

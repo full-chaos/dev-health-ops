@@ -116,6 +116,7 @@ CREATE TABLE work_unit_repo_effort (
     effort_value Float64,
     allocation_weight Float64,
     allocation_source String,
+    repo_source Nullable(String),
     categorization_run_id String,
     computed_at DateTime64(3, 'UTC'),
     org_id String DEFAULT ''

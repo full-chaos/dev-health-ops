@@ -81,4 +81,22 @@ VALUES ('u1', ?, ?, ?, 'churn_loc', 10, ?, ?, ?, 0.8, 'high', 'ok', 'jev-test', 
 	if got == nil {
 		t.Fatal("team-scoped sankey coverage is nil: a unit owned by the team with no allocation row fell out of coverage while it is in the nodes and edges")
 	}
+	// Round 138: the REPOSITORY scope of coverage reads the same fallback column as the chart.
+	repoScope := &model.FilterInput{Scope: &model.ScopeFilterInput{Level: model.ScopeLevelInputRepo, Ids: []string{repoA}}}
+	if resolveSankeyCoverage(ctx, client, org, req, 60, true, repoScope) == nil {
+		t.Fatal("repo-scoped sankey coverage is nil: a unit with its own repo_id and no allocation row fell out of coverage")
+	}
+	// Round 138: team ids that are all empty name no team: no scope, never invalid SQL (breakdown and evidence quality).
+	emptyTeam := &model.FilterInput{Scope: &model.ScopeFilterInput{Level: model.ScopeLevelInputTeam, Ids: []string{""}}}
+	dates := &model.DateRangeInput{StartDate: graphqldate.New(at.AddDate(0, 0, -3)), EndDate: graphqldate.New(at.AddDate(0, 0, 3))}
+	out, err := Resolve(ctx, client, org, model.AnalyticsRequestInput{
+		Filters:    emptyTeam,
+		Breakdowns: []model.BreakdownRequestInput{{Dimension: model.DimensionInputTheme, Measure: model.MeasureInputCount, DateRange: dates, TopN: 10}},
+	})
+	if err != nil {
+		t.Fatalf("empty team id: %v", err)
+	}
+	if out.EvidenceQualityStats == nil || out.EvidenceQualityStats.Total != 1 {
+		t.Fatalf("empty team id must mean no scope: evidence quality = %+v, want total 1", out.EvidenceQualityStats)
+	}
 }

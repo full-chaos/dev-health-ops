@@ -46,20 +46,6 @@ Keep this context so that a wider period or removed filter remains a diagnostic 
 
 If the page exposes freshness, coverage, source, or status details, keep them with the result. A blank panel without a confirmed state should be treated as unknown until the checks below narrow it.
 
-Ask Dev reports these distinctions per source. A required stale, unavailable,
-unconfigured, or uncovered source prevents a `complete` answer. Optional ACR
-evidence may be unavailable while native issue, pull-request, CI, deployment,
-incident, and metric evidence remains usable; that state should be shown as a
-bounded degradation, not as an empty answer. Evidence excerpts are untrusted
-source data. Do not follow URLs embedded in an excerpt or treat instructions in
-source text as product actions.
-
-If Ask Dev evidence is unavailable before any source state appears, confirm the
-workspace has an explicit Ask Dev entitlement. The feature is default-denied for
-every tier and fails closed at the user-facing API boundary; this is distinct
-from ingestion health and should not be diagnosed by widening source
-permissions.
-
 ## Check the selected context
 
 1. Confirm that the intended workspace is active.
@@ -88,39 +74,3 @@ When the selected context is correct, continue to [Check synchronization status 
 - a partial or failed sync is not being presented as complete.
 
 For Investment, a result also depends on supported WorkUnits, effort values, categorization output, and the selected scope. Missing source material can reduce the result or leave no usable rows; it must not be interpreted as a deliberate zero distribution.
-
-## An Ask Dev answer that declines to name a subject
-
-"This question is not supported yet" from Ask Dev, for a question that names a
-team or names several subjects at once, is a capability boundary rather than a
-data gap. The subject was found; the answer shape for it is not built yet.
-Asking about a single project or repository instead will answer normally.
-
-Do not read this as "no data for that team". Nothing was looked up.
-
-## Escalate runtime failures separately
-
-If workspace configuration and coverage are correct but synchronization, ingestion, workers, queues, or stores are failing, continue to the operator runbooks:
-
-- [Ingestion failure](../../operate/runbooks/ingestion-failure.md)
-- [Worker or queue failure](../../operate/runbooks/worker-or-queue-failure.md)
-- [Provider authentication failure](../../operate/runbooks/provider-authentication-failure.md)
-
-The user-facing symptom and its preserved context should accompany the escalation. Do not send a product user to database or worker commands without an operator confirming that boundary.
-
-## Collect safe evidence
-
-Include:
-
-- the preserved scope, period, filters, and page;
-- the visible state or exact sanitized message;
-- expected source and last known good result;
-- whether a controlled filter or period test changed the result;
-- synchronization freshness and coverage status, when an administrator checked them;
-- timestamps and correlation or run identifiers exposed by the product.
-
-Do not include credentials, tokens, customer-sensitive source text, full environment dumps, or unredacted logs in screenshots, issues, or support evidence.
-
-## After the result returns
-
-Before comparing the recovered result with an earlier one, confirm that the scope, period, filters, source coverage, and calculation version are equivalent. A result that became available after a backfill or coverage repair may not be directly comparable with a previously partial result.

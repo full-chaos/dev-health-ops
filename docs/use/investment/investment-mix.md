@@ -25,7 +25,6 @@ Use Investment Mix when you need a composition view: which kinds of work make up
 Use a different surface when the question changes:
 
 - [Investment Flows](investment-flows.md) shows how effort is distributed between themes and available scopes.
-- [Investment Expense](investment-expense.md) shows how the composition changes over time.
 - [Delivery flow](../delivery-flow/index.md) focuses on movement, waiting, and review rather than work mix.
 
 ## What the page contains

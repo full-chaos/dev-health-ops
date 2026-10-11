@@ -9,7 +9,6 @@ use-investment	use	/use/investment/	Understand investment	landing	true	public	pl
 use-investigate-effort	use-investment	/use/investment/investigate-effort/	Investigate where effort goes	task-guide	true	public	planned	false	
 use-investment-mix	use-investment	/use/investment/investment-mix/	Read Investment Mix	workflow-guide	true	public	planned	false	
 use-investment-flows	use-investment	/use/investment/investment-flows/	Read Investment Flows	workflow-guide	true	public	planned	false	
-use-investment-expense	use-investment	/use/investment/investment-expense/	Read Investment Expense	workflow-guide	true	public	planned	false	
 use-investment-evidence	use-investment	/use/investment/follow-evidence/	Follow investment evidence	task-guide	true	public	planned	false	
 use-delivery	use	/use/delivery-flow/	Diagnose delivery flow	landing	true	public	planned	false	
 use-pr-flow	use-delivery	/use/delivery-flow/pr-flow/	Read PR Flow	workflow-guide	true	public	planned	false	

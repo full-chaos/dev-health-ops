@@ -74,14 +74,6 @@ Use the Sankey view to examine how effort is distributed between themes and avai
 
 <article class="fc-topic-card" markdown>
 
-### [Investment Expense](investment-expense.md)
-
-Use the stacked time series to distinguish short-lived spikes from gradual changes in the composition of work.
-
-</article>
-
-<article class="fc-topic-card" markdown>
-
 ### [Weighting and aggregation](../../reference/metrics/weighting-and-aggregation.md)
 
 Look up the exact calculation contract when you need to distinguish probability, effort value, contribution, and displayed share.

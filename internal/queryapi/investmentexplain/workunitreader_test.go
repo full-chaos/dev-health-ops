@@ -207,7 +207,7 @@ func TestFetchWorkUnitInvestmentsIntersectsExplicitReposWithTeamScope(t *testing
 	}
 
 	query := capture.lastQuery
-	if !strings.Contains(query, "toString(repo_id) IN {repo_ids:Array(String)} AND toString(repo_id) IN (") {
+	if !strings.Contains(query, "toString(repo_id) IN {repo_ids:Array(String)} AND toString(work_unit_investments.repo_id) IN (") {
 		t.Fatalf("query does not AND the explicit-repo and team conditions together:\n%s", query)
 	}
 	var sawRepoIDs, sawTeamIDs bool

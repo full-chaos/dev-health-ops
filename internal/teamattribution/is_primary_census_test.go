@@ -204,11 +204,8 @@ const workUnitVoteReason = "investment / work-unit view: one team per work unit 
 // unit_team.team_*) to scope, group or label a view. The set must match
 // exactly: a new consumer is classified here, a stale entry fails.
 var workUnitVoteConsumers = map[string]string{
-	"internal/queryapi/analytics\x00translateFilters":                             workUnitVoteReason,
 	"internal/queryapi/analytics\x00dbColumn":                                     workUnitVoteReason,
 	"internal/queryapi/analytics\x00investmentContextFor":                         workUnitVoteReason,
-	"internal/queryapi/analytics\x00compileEvidenceQualityByGroup":                workUnitVoteReason,
-	"internal/queryapi/analytics\x00compileInvestmentQualityStats":                workUnitVoteReason,
 	"internal/queryapi/analytics\x00compileSankeyCoverage":                        workUnitVoteReason,
 	"internal/queryapi/analytics\x00compileFlowMatrixInvestmentTeamRepoDimension": workUnitVoteReason,
 	"internal/queryapi/investmentflow\x00fetchInvestmentTeamEdges":                workUnitVoteReason,

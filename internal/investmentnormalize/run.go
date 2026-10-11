@@ -207,14 +207,14 @@ FROM (
     GROUP BY artifact_id, provider, day
 ) AS c
 INNER JOIN (
-    SELECT work_item_id,
+    SELECT provider, work_item_id,
            argMax(title, last_synced) AS title, argMax(description, last_synced) AS description,
            argMax(labels, last_synced) AS labels, argMax(created_at, last_synced) AS created_at,
            argMax(completed_at, last_synced) AS completed_at, argMax(story_points, last_synced) AS story_points,
            argMax(type, last_synced) AS item_type, argMax(repo_id, last_synced) AS own_repo
     FROM work_items WHERE org_id = {org:String}
-    GROUP BY work_item_id
-) AS w ON w.work_item_id = c.artifact_id
+    GROUP BY provider, work_item_id
+) AS w ON w.work_item_id = c.artifact_id AND w.provider = c.provider
 WHERE w.completed_at IS NOT NULL AND toDate(w.completed_at) = c.day
 ORDER BY c.day, c.artifact_id
 SETTINGS max_execution_time = 600`
@@ -580,17 +580,20 @@ func RollbackCount(ctx context.Context, conn Conn, org, runID string) (uint64, e
 // Rollback deletes the normalized rows of an org (all, or one run): only rows with the provenance status.
 func Rollback(ctx context.Context, conn Conn, org, runID string) error {
 	query, bind := rollbackWhere(org, runID)
-	if err := conn.Exec(ctx, "ALTER TABLE work_unit_investments DELETE WHERE "+query+" SETTINGS mutations_sync = 2", bind...); err != nil {
-		return err
-	}
-	// The repository efforts of the same rows: only rows of the provenance's own unit ids, of the run asked for.
+	// The repository efforts FIRST, while the unit rows still say which units the run owns: every version of the
+	// effort rows of those units (a retry after a failed apply wrote a second version under another run id), and
+	// the rows of the run itself (a failed apply leaves efforts with no unit row). Only the provenance's own
+	// unit ids: `normalized_legacy:<org>:...`.
 	effort := "org_id = {org:String} AND startsWith(work_unit_id, '" + Status + ":')"
 	effortBind := []any{clickhouse.Named("org", org)}
 	if runID != "" {
-		effort += " AND categorization_run_id = {run:String}"
+		effort += " AND (categorization_run_id = {run:String} OR work_unit_id IN (SELECT work_unit_id FROM work_unit_investments WHERE " + query + "))"
 		effortBind = append(effortBind, clickhouse.Named("run", runID))
 	}
-	return conn.Exec(ctx, "ALTER TABLE work_unit_repo_effort DELETE WHERE "+effort+" SETTINGS mutations_sync = 2", effortBind...)
+	if err := conn.Exec(ctx, "ALTER TABLE work_unit_repo_effort DELETE WHERE "+effort+" SETTINGS mutations_sync = 2", effortBind...); err != nil {
+		return err
+	}
+	return conn.Exec(ctx, "ALTER TABLE work_unit_investments DELETE WHERE "+query+" SETTINGS mutations_sync = 2", bind...)
 }
 
 func rollbackWhere(org, runID string) (string, []any) {

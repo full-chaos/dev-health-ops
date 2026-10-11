@@ -107,6 +107,21 @@ VALUES (?, ?, 'work_item', 'ghpr:acme/api#6', 'github', 'product', 'general', 1.
 		}
 		return out
 	}
+	rawCount := func(table string) string {
+		t.Helper()
+		rows, err := conn.Query(ctx, `SELECT toString(count()) FROM `+table+` WHERE org_id = '`+org+`' AND startsWith(work_unit_id, '`+Status+`')`)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer rows.Close()
+		var out string
+		for rows.Next() {
+			if err := rows.Scan(&out); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return out
+	}
 	if units := count("work_unit_investments"); units != "0" {
 		t.Fatalf("a failed unit write left %s unit rows", units)
 	}
@@ -117,10 +132,46 @@ VALUES (?, ?, 'work_item', 'ghpr:acme/api#6', 'github', 'product', 'general', 1.
 	if retryReport.Rows != 1 || retryReport.Unchanged != 0 || len(retryEfforts) != len(efforts) {
 		t.Fatalf("the retry plan after a failed apply: %+v, want the row planned again", retryReport)
 	}
-	if err := Apply(ctx, conn, window, retry, retryEfforts, retryReport); err != nil {
+	// The retry is a NEW run (new run id); its effort rows replace the failed run's versions.
+	retryWindow := window
+	retryWindow.RunID = "normalized_legacy:retry"
+	retry, retryEfforts, retryReport, err = Plan(ctx, conn, retryWindow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := Apply(ctx, conn, retryWindow, retry, retryEfforts, retryReport); err != nil {
 		t.Fatal(err)
 	}
 	if units, eff := count("work_unit_investments"), count("work_unit_repo_effort"); units != "1" || eff != "1" {
 		t.Fatalf("after the retry: unit rows %s, repository effort rows %s, want 1 and 1", units, eff)
+	}
+	// ROLLBACK of the retry's run removes EVERY version of the unit's efforts, not only the newest: no orphan
+	// of the failed run comes back to light.
+	if err := Rollback(ctx, conn, org, retryWindow.RunID); err != nil {
+		t.Fatal(err)
+	}
+	if units, eff := rawCount("work_unit_investments"), rawCount("work_unit_repo_effort"); units != "0" || eff != "0" {
+		t.Fatalf("after rolling back the retry: raw unit rows %s, raw repository effort rows %s, want 0 and 0", units, eff)
+	}
+
+	// A failed apply that is NOT retried is rolled back by its own run id (efforts only, no unit row).
+	failing = &failingConn{Conn: conn}
+	failWindow := window
+	failWindow.RunID = "normalized_legacy:failed-only"
+	records, efforts, report, err = Plan(ctx, conn, failWindow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := Apply(ctx, failing, failWindow, records, efforts, report); err == nil {
+		t.Fatal("the injected failure did not reach the second apply")
+	}
+	if eff := rawCount("work_unit_repo_effort"); eff != "1" {
+		t.Fatalf("the failed apply left %s repository effort rows, want 1", eff)
+	}
+	if err := Rollback(ctx, conn, org, failWindow.RunID); err != nil {
+		t.Fatal(err)
+	}
+	if eff := rawCount("work_unit_repo_effort"); eff != "0" {
+		t.Fatalf("a rollback by the failed run's id left %s repository effort rows", eff)
 	}
 }

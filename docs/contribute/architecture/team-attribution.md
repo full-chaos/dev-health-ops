@@ -1208,26 +1208,27 @@ project (section 0.1): a native team key gives one team.
   change. A rollup-based team view shows a co-owned item under its primary team only, until the rollup rows
   carry the team set with one organization-counted row per set. Linked-issue inheritance (section 2) also
   passes the primary team only.
-- **Known limit: the team of a work unit follows one team per work unit where a view shows or groups by team, except the Investment flow.** A co-owner
+- **Known limit: the team of a work unit follows one team per work unit in the work-unit team list and the REST investment flow.** A co-owner
   team sees the item in the item views (the issues drilldown, the aggregated flame, the team quadrant, the flow-matrix
-  TEAM and REPO activity). Where an investment view **shows** a work unit's team (the TEAM dimension of breakdown,
-  timeseries and catalog, the TEAM nodes and edges of the flow matrix, the REST investment flow edges) and in the GraphQL
-  work-unit team list (`workUnitTeamAttributions`), the team comes from the work-unit vote over the items' primary rows
-  (`BuildUnitTeamSubquery`, `resolveWorkUnitTeamAttributions`): one team per work unit. The census holds every reader
-  of the vote's team to a named list (`workUnitVoteConsumers`); a new reader must be classified there, and a stale
-  entry fails. The **team scope** of the analytics theme readers (CHAOS-9221), the investment-path sankey
-  `teamCoverage` (CHAOS-9266; the non-investment path, `useInvestment` unset or false, still counts the `team_id` of
-  `work_item_completion_daily`) and the **TEAM node of the Investment flow** (the GraphQL sankey, grouped and per-dimension
-  statements, CHAOS-9297) no longer read the vote: a unit is in a team's scope when the team owns one of the unit's repositories
-  (`teamscope.RepoCondition` over `team_repo_ownership`; `AnyTeamRepoCondition` for the coverage), and a repository
-  scope reads the unit's repository rows (`teamscope.UnitScope`), with effort allocated per repository.
-  The flow's TEAM node is the owner of the repository of each effort row (`teamscope.OwnerShares`, the same ownership
-  statement): a repository with no owner is `unassigned`; a repository owned by several teams is **shared equally** among
-  its owners, so the THEME and REPO nodes keep their totals; under a team scope the owners are narrowed to the teams in
-  view, so one selected team holds its repositories whole. The unassigned share of the flow equals `1 - teamCoverage`
-  except for a unit that touches an owned and an unowned repository: the coverage assigns that unit whole (a per-unit
-  flag), the flow splits its effort by repository. See
-  [Investment data model](../../reference/data-models/investment.md).
+  TEAM and REPO activity). The GraphQL work-unit team list (`workUnitTeamAttributions`) and the REST investment flow
+  edges (`POST /api/v1/investment/flow`, no caller in the web app) take the team from the work-unit vote over the items'
+  primary rows (`BuildUnitTeamSubquery`, `resolveWorkUnitTeamAttributions`): one team per work unit. The census holds
+  every reader of the vote's team to a named list (`workUnitVoteConsumers`); a new reader must be classified there,
+  and a stale entry fails. Every **analytics team grouping on the investment path** reads repository ownership instead
+  (CHAOS-9297): the TEAM dimension of the sankey (the Investment flow), breakdown, timeseries and the flow matrix, and
+  the flow matrix's team bridge, all through the one `ut` context of `investmentContextFor`. So do the **team scope**
+  of the analytics theme readers (CHAOS-9221) and the investment-path sankey `teamCoverage` (CHAOS-9266; the
+  non-investment path, `useInvestment` unset or false, still counts the `team_id` of `work_item_completion_daily`): a
+  unit is in a team's scope when the team owns one of the unit's repositories (`teamscope.RepoCondition` over
+  `team_repo_ownership`; `AnyTeamRepoCondition` for the coverage), and a repository scope reads the unit's repository
+  rows (`teamscope.UnitScope`), with effort allocated per repository.
+  The grouping's team is the owner of the repository of each effort row (`teamscope.OwnerShares`, the same ownership
+  statement; an ownership row with an empty team id owns nothing): a repository with no owner is `unassigned`; a
+  repository owned by several teams is **shared equally** among its owners, so the THEME and REPO nodes keep their
+  totals; under a team scope the owners are narrowed to the teams in view, so one selected team holds its repositories
+  whole. The unassigned share of the flow equals `1 - teamCoverage` except for a unit that touches an owned and an
+  unowned repository: the coverage assigns that unit whole (a per-unit flag), the flow splits its effort by repository.
+  See [Investment data model](../../reference/data-models/investment.md).
 Tests: `TestAProjectOfSeveralTeamsAttributesTheItemToEveryActiveTeam` and
 `TestOnlyOwnersAtThePrimaryRankAreCoOwners` and `TestRepositoryAndNativeTeamHaveNoCoOwners` and
 the section 0.4e tests (the cascade, every provider);

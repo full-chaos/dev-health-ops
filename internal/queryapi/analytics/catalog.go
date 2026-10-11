@@ -180,9 +180,11 @@ LIMIT {limit:UInt32}
 	}
 
 	var source, alias, extraClauses string
+	var contextBindings []clickhouse.Binding
 	if useInvestment {
-		ictx := investmentContextFor([]Dimension{dimension}, false, needsRepoAllocation(filters), needsAuthorJoin(filters))
+		ictx := investmentContextFor(orgID, []Dimension{dimension}, false, needsRepoAllocation(filters), needsAuthorJoin(filters), teamScopeIDs(filters))
 		source, alias, extraClauses = ictx.Source, ictx.Alias, ictx.ExtraClauses
+		contextBindings = ictx.Bindings
 	} else {
 		source, alias = workItemCompletionDedupSource, "work_item_completion_daily"
 	}
@@ -205,6 +207,7 @@ LIMIT {limit:UInt32}
 
 	bindings := []clickhouse.Binding{limitBinding, orgBinding}
 	bindings = append(bindings, fc.bindings...)
+	bindings = append(bindings, contextBindings...)
 	return compiledQuery{sql: sql, bindings: bindings}, nil
 }
 

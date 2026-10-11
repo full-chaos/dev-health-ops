@@ -124,7 +124,7 @@ func CompileSankey(req SankeyRequest, orgID string, timeoutSeconds int, useInves
 	// nondeterminism one level down).
 	var unionParts []string
 	for i, dim := range req.Path {
-		dimCol, dimErr := shape.column(dim, useInvestment)
+		dimCol, dimErr := dbColumn(dim, useInvestment)
 		if dimErr != nil {
 			return compiledQuery{}, nil, dimErr
 		}
@@ -175,11 +175,11 @@ ORDER BY dim_order ASC, value DESC, node_id ASC
 	maxEdgesPerPair := shape.maxEdgesPerPair
 	for i := 0; i < len(req.Path)-1; i++ {
 		sourceDim, targetDim := req.Path[i], req.Path[i+1]
-		sourceCol, colErr := shape.column(sourceDim, useInvestment)
+		sourceCol, colErr := dbColumn(sourceDim, useInvestment)
 		if colErr != nil {
 			return compiledQuery{}, nil, colErr
 		}
-		targetCol, colErr := shape.column(targetDim, useInvestment)
+		targetCol, colErr := dbColumn(targetDim, useInvestment)
 		if colErr != nil {
 			return compiledQuery{}, nil, colErr
 		}

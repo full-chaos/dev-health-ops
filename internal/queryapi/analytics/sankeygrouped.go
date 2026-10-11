@@ -23,19 +23,8 @@ type sankeyShape struct {
 	measureExpr     string
 	limitPerDim     int
 	maxEdgesPerPair int
-	// ownershipTeam says the TEAM dimension is read from repository ownership (teamscope.OwnerShares) and not from
-	// the work-item attribution vote.
-	ownershipTeam bool
-	// extraBindings are the bindings of the ownership join.
+	// extraBindings are the bindings of the investment context's own joins (the ownership team).
 	extraBindings []clickhouse.Binding
-}
-
-// column is the SQL of one path dimension: dbColumn, except TEAM on the ownership read.
-func (s sankeyShape) column(dim Dimension, useInvestment bool) (string, error) {
-	if s.ownershipTeam && dim == DimensionTeam {
-		return ownershipTeamColumn, nil
-	}
-	return dbColumn(dim, useInvestment)
 }
 
 func compileSankeyShape(orgID string, req SankeyRequest, useInvestment bool, filters *model.FilterInput) (sankeyShape, error) {
@@ -59,18 +48,10 @@ func compileSankeyShape(orgID string, req SankeyRequest, useInvestment bool, fil
 
 	shape := sankeyShape{fc: fc}
 	if useInvestment {
-		ictx := investmentContextFor(req.Path, false, needsRepoAllocation(filters), needsAuthorJoin(filters))
-		if dimensionListHas(req.Path, DimensionTeam) {
-			ictx = ownershipTeamContext(orgID, req.Path, filters)
-			shape.ownershipTeam = true
-			shape.extraBindings = ictx.Bindings
-		}
+		ictx := investmentContextFor(orgID, req.Path, false, needsRepoAllocation(filters), needsAuthorJoin(filters), teamScopeIDs(filters))
 		shape.source, shape.alias, shape.dateFilter, shape.extraClauses = ictx.Source, ictx.Alias, ictx.DateFilter, ictx.ExtraClauses
-		if shape.ownershipTeam {
-			shape.measureExpr, err = ownershipDbExpression(req.Measure)
-		} else {
-			shape.measureExpr, err = dbExpression(req.Measure, true, ictx.UseRepoAllocation)
-		}
+		shape.extraBindings = ictx.Bindings
+		shape.measureExpr, err = ictx.measure(req.Measure)
 		if err != nil {
 			return sankeyShape{}, err
 		}
@@ -155,7 +136,7 @@ func CompileSankeyGrouped(req SankeyRequest, orgID string, timeoutSeconds int, u
 	keys := make([]string, n)
 	keyExprs := make([]string, n)
 	for i, dim := range req.Path {
-		dimCol, dimErr := shape.column(dim, useInvestment)
+		dimCol, dimErr := dbColumn(dim, useInvestment)
 		if dimErr != nil {
 			return sankeyGroupedQuery{}, dimErr
 		}

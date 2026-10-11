@@ -170,6 +170,41 @@ VALUES (?, ?, ?, ?, 'churn_loc', 10, ?, ?, ?, 0.8, 'high', 'ok', 'jev-test', 'ru
 		t.Errorf("flow unassigned share %v (want 0.35), 1 - teamCoverage %v (want 0.25: the coverage assigns u-mixed whole)", flowUnassigned, 1-coverage.TeamCoverage)
 	}
 
+	// Every other TEAM grouping reads the same ownership (one shared context): breakdown and flow matrix agree with
+	// the sankey node for node.
+	useInvestment := true
+	others, err := Resolve(ctx, client, org, model.AnalyticsRequestInput{
+		UseInvestment: &useInvestment,
+		Breakdowns: []model.BreakdownRequestInput{{
+			Dimension: model.DimensionInputTeam, Measure: model.MeasureInputCount, DateRange: dates, TopN: 10,
+		}},
+		FlowMatrix: &model.FlowMatrixRequestInput{
+			Dimension: model.DimensionInputTeam, Measure: model.MeasureInputCount, DateRange: dates, MaxNodes: 16, MaxEdges: 100, UseInvestment: &useInvestment,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(others.Breakdowns) != 1 {
+		t.Fatalf("breakdowns = %d, want 1", len(others.Breakdowns))
+	}
+	for _, item := range others.Breakdowns[0].Items {
+		if item.Value == nil || !near(*item.Value, want["TEAM:"+item.Key]) {
+			t.Errorf("breakdown team %q = %v, want %v (the sankey's node)", item.Key, item.Value, want["TEAM:"+item.Key])
+		}
+	}
+	if len(others.Breakdowns[0].Items) != len(want) {
+		t.Errorf("breakdown has %d teams, want %d", len(others.Breakdowns[0].Items), len(want))
+	}
+	if others.FlowMatrix == nil {
+		t.Fatal("flow matrix is nil")
+	}
+	for _, n := range others.FlowMatrix.Nodes {
+		if n.Value == nil || !near(*n.Value, want["TEAM:"+n.Label]) {
+			t.Errorf("flow matrix team %q = %v, want %v", n.Label, n.Value, want["TEAM:"+n.Label])
+		}
+	}
+
 	// A team scope narrows the owners to the team in view: the shared repository is Team A's whole, and no team-b node.
 	scoped, err := Resolve(ctx, client, org, model.AnalyticsRequestInput{
 		Sankey:  &teamTheme,
@@ -250,5 +285,82 @@ SELECT 'u-big', id, 'churn_loc', 1, 1, 'pr_refs', 'run-1', ?, org_id FROM repos 
 	}
 	if math.Abs(have-1) > 1e-9 {
 		t.Errorf("TEAM:team-big carries %v, want 1.0 (the unit's whole effort across %d owned repositories)", have, repos)
+	}
+}
+
+// An ownership row with an empty team id owns nothing (the ownership contract of internal/teamownership): the
+// repository is unassigned in the flow AND unowned in the coverage, so the two agree.
+func TestFlowTeamEmptyTeamOwnershipRowIsNoOwner(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	ch, err := containers.StartClickHouse(ctx)
+	if err != nil {
+		t.Fatalf("start ClickHouse: %v", err)
+	}
+	t.Cleanup(func() { _ = ch.Close(context.Background()) })
+	chschema.Apply(ctx, t, ch)
+	options, err := stdclickhouse.ParseDSN(ch.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn, err := stdclickhouse.Open(options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+	client, err := chquery.NewProductionClient(ch.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = client.Close() })
+
+	const org = "org-9297-empty"
+	const repo = "92970009-9297-4297-8297-929792979297"
+	at := time.Date(2026, 8, 20, 0, 0, 0, 0, time.UTC)
+	exec := func(statement string, args ...any) {
+		t.Helper()
+		if err := conn.Exec(ctx, statement, args...); err != nil {
+			t.Fatalf("seed: %v\n%s", err, statement)
+		}
+	}
+	exec(`INSERT INTO repos (id, repo, provider, org_id, created_at, last_synced) VALUES (?, 'acme/e', 'github', ?, ?, ?)`, repo, org, at, at)
+	exec(`INSERT INTO team_repo_ownership (org_id, provider, team_id, repo_id, repo_full_name, match_type, source, is_primary, specificity, priority, valid_from, valid_to, updated_at) VALUES (?, 'github', '', ?, 'acme/e', 'exact', 'native', 1, 100, 0, ?, NULL, ?)`,
+		org, repo, at.AddDate(-1, 0, 0), at)
+	raw, _ := json.Marshal(map[string]any{"issues": []string{}, "prs": []string{}, "commits": []string{}, "edges": []string{}})
+	exec(`INSERT INTO work_unit_investments (work_unit_id, from_ts, to_ts, repo_id, effort_metric, effort_value, theme_distribution_json, subcategory_distribution_json, structural_evidence_json, evidence_quality, evidence_quality_band, categorization_status, categorization_model_version, categorization_run_id, computed_at, org_id)
+VALUES ('u-e', ?, ?, ?, 'churn_loc', 10, ?, ?, ?, 0.8, 'high', 'ok', 'jev-test', 'run-1', ?, ?)`, at.Add(-24*time.Hour), at, repo,
+		map[string]float64{"feature_delivery": 1}, map[string]float64{"feature_delivery.roadmap": 1}, string(raw), at.Add(time.Hour), org)
+	exec(`INSERT INTO work_unit_repo_effort (work_unit_id, repo_id, effort_metric, effort_value, allocation_weight, allocation_source, categorization_run_id, computed_at, org_id) VALUES ('u-e', ?, 'churn_loc', 10, 1, 'pr_refs', 'run-1', ?, ?)`, repo, at.Add(time.Hour), org)
+
+	in := model.SankeyRequestInput{
+		Path:      []model.DimensionInput{model.DimensionInputTeam, model.DimensionInputTheme},
+		Measure:   model.MeasureInputCount,
+		DateRange: &model.DateRangeInput{StartDate: graphqldate.New(at.AddDate(0, 0, -3)), EndDate: graphqldate.New(at.AddDate(0, 0, 3))},
+		MaxNodes:  16,
+		MaxEdges:  100,
+	}
+	out, err := Resolve(ctx, client, org, model.AnalyticsRequestInput{Sankey: &in})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var unassigned, total float64
+	for _, n := range out.Sankey.Nodes {
+		if n.Dimension == "TEAM" && n.Value != nil {
+			total += *n.Value
+			if n.ID == "TEAM:unassigned" {
+				unassigned = *n.Value
+			}
+		}
+	}
+	req, err := SankeyRequestFromInput(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	coverage := resolveSankeyCoverage(ctx, client, org, req, 60, true, nil)
+	if coverage == nil {
+		t.Fatal("coverage is nil")
+	}
+	if math.Abs(total-1) > 1e-9 || math.Abs(unassigned/total-(1-coverage.TeamCoverage)) > 1e-9 || coverage.TeamCoverage != 0 {
+		t.Errorf("flow unassigned %v of %v, teamCoverage %v: an empty-team ownership row must own nothing for both", unassigned, total, coverage.TeamCoverage)
 	}
 }

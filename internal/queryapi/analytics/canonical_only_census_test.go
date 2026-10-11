@@ -238,7 +238,7 @@ func TestCanonicalOnlyCensus_BranchSites(t *testing.T) {
 func censusPinnedSites() map[string]int {
 	return map[string]int{
 		"breakdown.go": 6, "catalog.go": 5, "filtertranslation.go": 13, "flowmatrix.go": 9, "investment.go": 5,
-		"investmentquality.go": 4, "resolve.go": 33, "sankey.go": 5, "sankeycoverage.go": 19, "sankeygrouped.go": 8,
+		"investmentquality.go": 4, "resolve.go": 33, "sankey.go": 5, "sankeycoverage.go": 19, "sankeygrouped.go": 6,
 		"timeseries.go": 4, "validate.go": 5,
 	}
 }

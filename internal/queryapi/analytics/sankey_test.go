@@ -88,10 +88,10 @@ func TestCompileSankey_Investment_CompilesInlinedSource(t *testing.T) {
 		if !strings.Contains(q.sql, "LEFT JOIN repos AS r FINAL ON toString(r.id) = toString(repo_id) AND r.org_id = {org_id:String}") {
 			t.Errorf("%s: expected the REPO-dimension repo join, deduped with FINAL (CHAOS-4773), got: %s", name, q.sql)
 		}
-		if strings.Contains(q.sql, "AS team_label") || strings.Contains(q.sql, "work_item_team_attributions") {
+		if strings.Contains(q.sql, "work_item_team_attributions") || strings.Contains(q.sql, "resolved_team") {
 			t.Errorf("%s: the flow's TEAM must come from repository ownership, not the work-item vote, got: %s", name, q.sql)
 		}
-		if !strings.Contains(q.sql, teamscope.Marker) || !strings.Contains(q.sql, "ot.owner_team_label") {
+		if !strings.Contains(q.sql, teamscope.Marker) || !strings.Contains(q.sql, "owner_team_label AS team_label") {
 			t.Errorf("%s: expected the ownership team join (teamscope.OwnerShares), got: %s", name, q.sql)
 		}
 		if !strings.Contains(q.sql, "wure.work_unit_id != ''") {

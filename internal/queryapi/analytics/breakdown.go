@@ -105,10 +105,12 @@ func compileBreakdownOver(req BreakdownRequest, dimCol, orgID string, timeoutSec
 	}
 
 	var source, alias, dateFilter, extraClauses, measureExpr string
+	var contextBindings []clickhouse.Binding
 	if useInvestment {
-		ictx := investmentContextFor([]Dimension{req.Dimension}, false, needsRepoAllocation(filters), needsAuthorJoin(filters))
+		ictx := investmentContextFor(orgID, []Dimension{req.Dimension}, false, needsRepoAllocation(filters), needsAuthorJoin(filters), teamScopeIDs(filters))
 		source, alias, dateFilter, extraClauses = ictx.Source, ictx.Alias, ictx.DateFilter, ictx.ExtraClauses
-		measureExpr, err = dbExpression(req.Measure, true, ictx.UseRepoAllocation)
+		contextBindings = ictx.Bindings
+		measureExpr, err = ictx.measure(req.Measure)
 		if err != nil {
 			return compiledQuery{}, err
 		}
@@ -161,6 +163,7 @@ ORDER BY value DESC, dimension_value ASC
 		bindings = append(bindings, clickhouse.Binding{Name: "breakdown_keys", Value: req.Keys})
 	}
 	bindings = append(bindings, fc.bindings...)
+	bindings = append(bindings, contextBindings...)
 
 	return compiledQuery{sql: sql, bindings: bindings}, nil
 }

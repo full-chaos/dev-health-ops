@@ -400,7 +400,7 @@ func TestAnyTeamRepoConditionIsTheSameStatementWithoutTheTeamFilter(t *testing.T
 	if !strings.Contains(scoped, teamLine) {
 		t.Fatalf("RepoCondition lost its team filter line:\n%s", scoped)
 	}
-	if strings.Contains(anyTeam, "o.team_id") || strings.Contains(anyTeam, BindingTeamIDs) {
+	if strings.Contains(anyTeam, "o.team_id IN") || strings.Contains(anyTeam, BindingTeamIDs) {
 		t.Fatalf("AnyTeamRepoCondition carries a team filter:\n%s", anyTeam)
 	}
 	if strings.Replace(scoped, teamLine, "", 1) != anyTeam {

@@ -181,6 +181,7 @@ func ownershipFromWhere(names bindingNames, teamFiltered bool) string {
            AND r.provider = o.provider
            AND lower(r.repo) = lower(o.repo_full_name)
     WHERE o.org_id = {%[1]s:String}%[2]s
+      AND o.team_id != ''
       AND (o.repo_id IS NOT NULL OR r.matched = 1)
       AND o.valid_from <= {%[3]s:DateTime64(3, 'UTC')}
       AND (o.valid_to IS NULL OR o.valid_to > {%[3]s:DateTime64(3, 'UTC')})
@@ -234,7 +235,6 @@ func OwnerShares(orgID string, teamIDs []string, asOf time.Time) (source string,
             coalesce(toString(o.repo_id), toString(r.id)) AS owner_repo_id,
             o.team_id AS owner_team_id
 %[1]s
-          AND o.team_id != ''
     ) AS owned
     LEFT JOIN (
         SELECT id AS team_id, max(name) AS team_name

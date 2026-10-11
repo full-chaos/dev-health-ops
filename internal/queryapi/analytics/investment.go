@@ -276,40 +276,6 @@ func LatestWorkUnitInvestmentsSource() string {
 		supersededWorkUnitIDsFilter(), investmentMembershipScopeFilter())
 }
 
-// windowedUnitEvidenceSource is the source the per-unit team vote
-// (BuildUnitTeamSubquery) reads when it is LEFT JOINed, by work_unit_id,
-// onto rows that already come from LatestWorkUnitInvestmentsSource and the
-// window filter: each work unit's latest structural evidence, for every
-// work unit with at least one version inside the window.
-//
-// A unit's vote depends only on that unit's own latest evidence, so this
-// gives every joined unit exactly the vote LatestWorkUnitInvestmentsSource
-// would: the supersession and membership-scope filters drop whole work
-// units (never one version of a unit), and a unit whose latest version
-// intersects the window has a version that does, so no joined unit is
-// missing. Units this source keeps that the outer rows do not are never
-// joined. What it saves is a second evaluation of the membership scope
-// and of every other latest-version column per statement, and the vote
-// over units outside the window.
-func windowedUnitEvidenceSource() string {
-	return fmt.Sprintf(`(
-        SELECT
-            work_unit_id,
-            %s AS structural_evidence_json,
-            org_id
-        FROM work_unit_investments
-        WHERE org_id = {org_id:String}
-          AND work_unit_id IN (
-              SELECT work_unit_id
-              FROM work_unit_investments
-              WHERE org_id = {org_id:String}
-                AND from_ts < {end_date:Date}
-                AND to_ts >= {start_date:Date}
-          )
-        GROUP BY org_id, work_unit_id
-    )`, latestrow.ArgMax("structural_evidence_json"))
-}
-
 // --- investment.py:90-127: LATEST_WORK_UNIT_REPO_EFFORT_CTE ------------
 
 // LatestWorkUnitRepoEffortSource ports LATEST_WORK_UNIT_REPO_EFFORT_CTE
@@ -538,6 +504,18 @@ type investmentContext struct {
 	UseRepoAllocation bool
 	// Bindings are the bindings of a join the context adds beyond the request's filters (the ownership team join).
 	Bindings []clickhouse.Binding
+	// OwnershipTeam says the `ut` join is the repository's owner (ownershipTeamSource), so a measure is weighted by
+	// the owner's share (measure).
+	OwnershipTeam bool
+}
+
+// measure is the measure's SQL on this context: dbExpression, weighted by the owner's share of the repository when
+// the team is read from ownership.
+func (c investmentContext) measure(m Measure) (string, error) {
+	if c.OwnershipTeam {
+		return ownershipDbExpression(m)
+	}
+	return dbExpression(m, true, c.UseRepoAllocation)
 }
 
 // resolveUseInvestment ports _get_context_params's own use_investment
@@ -617,8 +595,11 @@ func dimensionListHas(dimensions []Dimension, want Dimension) bool {
 // branches selected by one boolean; this port is the same shape as two
 // Go functions selected by the same boolean, which is what
 // resolveUseInvestment computes.
-func investmentContextFor(dimensions []Dimension, forceTeamJoin, repoScopedFlag, needsAuthorJoinFlag bool) investmentContext {
-	useRepoAllocation := dimensionListHas(dimensions, DimensionRepo) || repoScopedFlag
+func investmentContextFor(orgID string, dimensions []Dimension, forceTeamJoin, repoScopedFlag, needsAuthorJoinFlag bool, scopedTeams []string) investmentContext {
+	teamJoin := dimensionListHas(dimensions, DimensionTeam) || forceTeamJoin
+	// The team is the owner of the repository of the effort row (CHAOS-9297): ownership is a property of the
+	// per-repository allocation rows, so a team join always reads them.
+	useRepoAllocation := dimensionListHas(dimensions, DimensionRepo) || repoScopedFlag || teamJoin
 
 	var source string
 	if useRepoAllocation {
@@ -642,13 +623,11 @@ func investmentContextFor(dimensions []Dimension, forceTeamJoin, repoScopedFlag,
 	// when the OUTER query's own FROM is repo-allocated) preserved
 	// faithfully here, so this embeds its OWN fresh copy of
 	// LatestWorkUnitInvestmentsSource() independent of `source` above.
-	if dimensionListHas(dimensions, DimensionTeam) || forceTeamJoin {
-		unitTeamSQL := BuildUnitTeamSubquery(UnitTeamSubqueryOptions{
-			Source:         fmt.Sprintf("%s AS work_unit_investments", windowedUnitEvidenceSource()),
-			InnerTeamAlias: "team_label",
-			IncludeTeamID:  true,
-		})
-		joins = append(joins, fmt.Sprintf("LEFT JOIN (%s) AS ut ON ut.work_unit_id = work_unit_investments.work_unit_id", unitTeamSQL))
+	var bindings []clickhouse.Binding
+	if teamJoin {
+		shares, shareBindings := ownershipTeamSource(orgID, scopedTeams)
+		joins = append(joins, fmt.Sprintf("LEFT JOIN %s AS ut ON ut.owner_repo_id = toString(work_unit_investments.repo_id)", shares))
+		bindings = shareBindings
 	}
 
 	// Repo join: compiler.py:209-210, GO-ONLY DIVERGENCE (CHAOS-4773).
@@ -705,6 +684,8 @@ func investmentContextFor(dimensions []Dimension, forceTeamJoin, repoScopedFlag,
 		ExtraClauses:      strings.Join(joins, "\n"),
 		UseInvestment:     true,
 		UseRepoAllocation: useRepoAllocation,
+		Bindings:          bindings,
+		OwnershipTeam:     teamJoin,
 	}
 }
 

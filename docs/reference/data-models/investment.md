@@ -196,6 +196,12 @@ measured here"; zero would mean "measured, and none of it is team fallback".
 
 ## Deprecated: `investment_metrics_daily` / `investment_areas.yaml`
 
+> **Removed (CHAOS-9200, chris 2026-10-11).** The rule classifier, `investment_areas.yaml` and the Go and Python
+> code that loaded it are deleted: no rule-based investment classification is computed or stored. The daily
+> family `work_item_investment` writes `work_item_completion_daily` (see above); `investment_metrics_daily` and
+> `investment_classifications_daily` receive no new rows and no reader reads them; their rows stay until a later,
+> separate drop. The text below describes what those tables held and is kept for reading old rows.
+
 `investment_metrics_daily` and its feeder rule set `src/dev_health_ops/config/investment_areas.yaml`
 are a **pre-WorkUnit legacy path** (`src/dev_health_ops/analytics/investment.py`). The YAML file's
 own header states this: "feeds only the pre-WorkUnit daily `investment_*` metric tables... do not

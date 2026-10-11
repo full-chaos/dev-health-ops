@@ -32,8 +32,6 @@ import (
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/pytime"
-	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph/units"
-	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse/liverow"
 )
 
 // fetchLastIngestedAt ports fetch_last_ingested_at (api/queries/
@@ -282,125 +280,6 @@ func sourceStatus(seenAt *time.Time, startDay time.Time) string {
 		return "degraded"
 	}
 	return "ok"
-}
-
-// fetchReworkThemeAllocation ports fetch_rework_theme_allocation
-// (api/queries/metrics.py:276-336). investment_metrics_daily is plain
-// MergeTree, never converted (confirmed against prod system.tables) --
-// Python already dedups it by hand with a per-key argMax(...,
-// computed_at) subquery matching its natural key; ported verbatim.
-//
-// One difference from Python: a key whose newest row holds no measure (a row
-// of zeros its writer stored over a key it no longer produces, package
-// liverow) is left out. It adds 0 to the sums, but the result is a LIST of
-// themes, and a theme whose keys in scope are all such rows (a retired team
-// id) has no data: it is not a theme with an allocation of 0.
-//
-// The rule is applied to the key the WRITER writes (day, repository, team,
-// investment_area, project_stream), before the step that takes one row for
-// each theme: several stored areas can map to one theme, and a row of zeros
-// over one of them must not stand for the theme while another area of that
-// theme is measured. The theme step itself is the reference's and is not
-// changed: among the areas of a theme it takes the row with the newest
-// compute time.
-func fetchReworkThemeAllocation(ctx context.Context, client QueryClient, startDay, endDay time.Time, scopeFilter string, scopeBindings []dhclickhouse.Binding, workCategorySQL string, workCategoryBindings []dhclickhouse.Binding, orgID string) ([]ReworkThemeAllocation, error) {
-	canonicalThemeExpr := canonicalInvestmentThemeSQL("investment_area")
-	query := fmt.Sprintf(`
-        SELECT
-            canonical_theme AS theme,
-            toFloat64(sum(work_items_completed)) AS allocation,
-            toInt64(sum(prs_merged)) AS prs_merged,
-            toInt64(sum(churn_loc)) AS churn_loc
-        FROM (
-            SELECT
-                day,
-                repo_id,
-                team_id,
-                canonical_theme,
-                project_stream,
-                argMax(work_items_completed, newest_at) AS work_items_completed,
-                argMax(prs_merged, newest_at) AS prs_merged,
-                argMax(churn_loc, newest_at) AS churn_loc
-            FROM (
-                SELECT
-                    day,
-                    repo_id,
-                    team_id,
-                    %s AS canonical_theme,
-                    project_stream,
-                    argMax(investment_metrics_daily.work_items_completed, investment_metrics_daily.computed_at) AS work_items_completed,
-                    argMax(investment_metrics_daily.prs_merged, investment_metrics_daily.computed_at) AS prs_merged,
-                    argMax(investment_metrics_daily.churn_loc, investment_metrics_daily.computed_at) AS churn_loc,
-                    max(investment_metrics_daily.computed_at) AS newest_at
-                FROM investment_metrics_daily
-                WHERE day >= {start_day:Date} AND day < {end_day:Date}
-                %s
-                %s
-                  AND org_id = {org_id:String}
-                GROUP BY day, repo_id, team_id, investment_area, project_stream
-                HAVING %s
-            )
-            GROUP BY day, repo_id, team_id, canonical_theme, project_stream
-        )
-        WHERE canonical_theme != ''
-        GROUP BY canonical_theme
-        ORDER BY allocation DESC
-    `, canonicalThemeExpr, scopeFilter, workCategorySQL, liverow.NewestPredicate("investment_metrics_daily", ""))
-
-	bindings := []dhclickhouse.Binding{
-		{Name: "start_day", Value: formatDay(startDay)},
-		{Name: "end_day", Value: formatDay(endDay)},
-		{Name: "org_id", Value: orgID},
-	}
-	bindings = append(bindings, scopeBindings...)
-	bindings = append(bindings, workCategoryBindings...)
-
-	rows, err := client.Query(ctx, query, bindings)
-	if err != nil {
-		return nil, fmt.Errorf("home: fetch_rework_theme_allocation query: %w", err)
-	}
-	defer rows.Close()
-
-	type themeRow struct {
-		Theme      string
-		Allocation float64
-		PRsMerged  int64
-		ChurnLOC   int64
-	}
-	var rawRows []themeRow
-	for rows.Next() {
-		var r themeRow
-		if err := rows.Scan(&r.Theme, &r.Allocation, &r.PRsMerged, &r.ChurnLOC); err != nil {
-			return nil, fmt.Errorf("home: fetch_rework_theme_allocation scan: %w", err)
-		}
-		if units.IsTheme(r.Theme) {
-			rawRows = append(rawRows, r)
-		}
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-
-	total := 0.0
-	for _, r := range rawRows {
-		total += r.Allocation
-	}
-	out := make([]ReworkThemeAllocation, 0, len(rawRows))
-	for _, r := range rawRows {
-		pct := 0.0
-		if total != 0 {
-			pct = r.Allocation / total * 100.0
-		}
-		out = append(out, ReworkThemeAllocation{
-			Theme:         r.Theme,
-			Label:         investmentThemeLabels[r.Theme],
-			Allocation:    r.Allocation,
-			AllocationPct: pct,
-			PRsMerged:     r.PRsMerged,
-			ChurnLOC:      r.ChurnLOC,
-		})
-	}
-	return out, nil
 }
 
 func queryOneFloat(ctx context.Context, client QueryClient, query string, bindings []dhclickhouse.Binding) (float64, error) {

@@ -1118,10 +1118,11 @@ clickhouse:
   usersd: {}
 
   # Extra ClickHouse SERVER config files (config.d), as a map of filename -> XML
-  # content (CHAOS-9177). Same delivery as usersd (a directory-mounted ConfigMap,
-  # an initContainer linking each file into config.d, an emptyDir so the image's own
-  # docker_related_config.xml stays), but ANY change (name or content) rolls the pod:
-  # the system log tables take their TTL / MergeTree settings from this config at start.
+  # content (CHAOS-9177). Each file is mounted as ONE file (subPath) into the image's own
+  # config.d, so the image's docker_related_config.xml (listen_host) stays; a volume is never
+  # mounted over config.d itself. ANY change (name or content) rolls the pod (a subPath mount is
+  # never refreshed in place): the system log tables take their TTL / MergeTree settings from
+  # this config at start.
   # Empty (default) renders nothing extra. Example (prod):
   #   configd:
   #     system-logs.xml: |

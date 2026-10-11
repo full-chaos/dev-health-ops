@@ -1202,22 +1202,25 @@ project (section 0.1): a native team key gives one team.
   run the team still shows the item; the organization total is not changed at any time (the old row is a `2`).
 - **Known limit: the daily rollups show the item under one team.** The rollup tables
   (`work_item_metrics_daily`, `work_item_state_durations_daily`, `work_item_cycle_times`,
-  `issue_type_metrics_daily`, `investment_metrics_daily`, `work_item_user_metrics_daily`) are sums keyed by one
+  `issue_type_metrics_daily`, `work_item_completion_daily`, `work_item_user_metrics_daily`) are sums keyed by one
   `team_id`. Their writers keep the primary team (`Resolve()` and the `is_primary = 1` loaders
   `LoadWorkItemPrimaryTeamAttributions` / `loadWorkItemScopeAttributions`), so organization totals do not
   change. A rollup-based team view shows a co-owned item under its primary team only, until the rollup rows
   carry the team set with one organization-counted row per set. Linked-issue inheritance (section 2) also
   passes the primary team only.
-- **Known limit: investment and work-unit views follow one team per work unit.** A co-owner team sees the
-  item in the item views (the issues drilldown, the aggregated flame, the team quadrant, the flow-matrix
-  TEAM and REPO activity). The investment views (breakdown, catalog, sankey, grouped sankey, time series, the
-  flow matrix with investment, sankey coverage, investment quality, the investment flow) and the GraphQL
-  work-unit team list (`workUnitTeamAttributions`) take a work unit's team from the work-unit vote over the
-  items' primary rows (`BuildUnitTeamSubquery`, `resolveWorkUnitTeamAttributions`): one team per work unit,
-  also when the view is scoped to a team or grouped by team. So a co-owner team's investment view and work-unit
-  list do not show a work unit whose items its team co-owns, until the team-set rollup contract (the same
-  follow-up as the daily rollups). The census holds every reader of the vote's team to a named list
-  (`workUnitVoteConsumers`); a new reader must be classified there, and a stale entry fails.
+- **Known limit: the team of a work unit follows one team per work unit where a view shows or groups by team.** A co-owner
+  team sees the item in the item views (the issues drilldown, the aggregated flame, the team quadrant, the flow-matrix
+  TEAM and REPO activity). Where an investment view **shows** a work unit's team (the TEAM dimension, the TEAM nodes
+  and edges of the sankey and flow matrix, the investment flow edges) and in the GraphQL work-unit team list
+  (`workUnitTeamAttributions`), the team comes from the work-unit vote over the items' primary rows
+  (`BuildUnitTeamSubquery`, `resolveWorkUnitTeamAttributions`): one team per work unit. The census holds every reader
+  of the vote's team to a named list (`workUnitVoteConsumers`); a new reader must be classified there, and a stale
+  entry fails. The **team scope** of the analytics theme readers (CHAOS-9221) and the investment-path sankey
+  `teamCoverage` (CHAOS-9266; the non-investment path, `useInvestment` unset or false, still counts the `team_id` of
+  `work_item_completion_daily`) no longer read the vote: a unit is in a team's scope when the team owns one of the unit's repositories
+  (`teamscope.RepoCondition` over `team_repo_ownership`; `AnyTeamRepoCondition` for the coverage), and a repository
+  scope reads the unit's repository rows (`teamscope.UnitScope`), with effort allocated per repository. See
+  [Investment data model](../../reference/data-models/investment.md).
 Tests: `TestAProjectOfSeveralTeamsAttributesTheItemToEveryActiveTeam` and
 `TestOnlyOwnersAtThePrimaryRankAreCoOwners` and `TestRepositoryAndNativeTeamHaveNoCoOwners` and
 the section 0.4e tests (the cascade, every provider);
@@ -1304,7 +1307,7 @@ admin team that holds it; else on the next source. An item of a team whose id an
 provider shares is attributed to its team again (before, it was dropped). Each item still has exactly one primary row, so organization totals do
 not change. Per-team totals move: the daily rollups keyed by the primary team (`work_item_metrics_daily`,
 `work_item_state_durations_daily`, `work_item_cycle_times`, `issue_type_metrics_daily`,
-`investment_metrics_daily`, `work_item_user_metrics_daily`), the primary-team views and the one-team-per-work-unit
+`work_item_completion_daily` (which replaced `investment_metrics_daily`, CHAOS-9264), `work_item_user_metrics_daily`), the primary-team views and the one-team-per-work-unit
 votes move such items from the other provider's team (or an admin team that a team of the item's provider
 outranks) to the team of the item's provider, to an admin team, to a `project_ownership` or lower source, or
 to `unassigned`.
@@ -1765,8 +1768,8 @@ It is then the newest generation of its repository, for any clock of the worker.
 | `ic_landscape_rolling_30d` | `ic_finalize` | in the finalize family | the organization's day |
 | `compounding_risk_daily` (rows of scope `team`) | `compounding_risk_team` | in the finalize family | the organization's day |
 
-`issue_type_metrics_daily` and `investment_metrics_daily` hold the same rule in their own writers
-(`withIssueTypeMetricsZeroRows`, `withInvestmentMetricsZeroRows`). They are plain `MergeTree` tables: a row of zeros
+`issue_type_metrics_daily` and `work_item_completion_daily` hold the same rule in their own writers
+(`withIssueTypeMetricsZeroRows`, `withWorkItemCompletionZeroRows`; `investment_metrics_daily` is no longer written, CHAOS-9264). They are plain `MergeTree` tables: a row of zeros
 replaces nothing there, so the rule holds only for a reader that takes the newest row of a key by `computed_at`.
 
 The tables are declared once, in `internal/teamkeytables`. The writer (`supersedeStaleTeamKeys`,
@@ -2206,6 +2209,9 @@ One path: `run_team_autoimport` → `team_autoimport_<provider>.populate()` → 
   identity. Cycle-time rows can still provide activity windows, durations,
   work-scope/repo/type bridges, and unassigned/no-WITA detail rows, but not the
   owning team identity.
+  The Investment team **scope** and the investment-path sankey `teamCoverage` are the exception:
+  they read repository ownership (CHAOS-9221, CHAOS-9266), not this snapshot. The non-investment coverage path
+  (`useInvestment` unset or false) counts `work_item_completion_daily.team_id`.
 - **Which edges linked-issue inheritance considers (CHAOS-4112):** the donor
   preload in `metrics/job_work_items.py` unions the **stored** inheritable
   edges for the items being recomputed with this run's **fresh** ones. Fresh
@@ -2308,8 +2314,9 @@ One path: `run_team_autoimport` → `team_autoimport_<provider>.populate()` → 
   attributed (49.6% of the unassigned effort in the 2026-08-22 prod probe).
   The CTE has exactly one definition —
   `api/queries/investment.py:build_unit_team_subquery` — rendered by the five
-  investment fetchers, `fetch_investment_quality_stats`' team-scope join, the
-  GraphQL Sankey compiler and the analytics coverage resolver; it was
+  investment fetchers, `fetch_investment_quality_stats`' team-scope join and the
+  GraphQL Sankey compiler (the analytics coverage resolver left it in CHAOS-9266
+  and reads repository ownership); it was
   previously copy-pasted into all eight, where a partial edit made the views
   disagree about which units have a team. Person cohort selection reads ClickHouse `identities`
   membership (`team_ids`) instead of metric rollup team snapshots so a person's

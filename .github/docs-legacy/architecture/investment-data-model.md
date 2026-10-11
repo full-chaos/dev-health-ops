@@ -115,6 +115,32 @@ cost the org paid). Both tables carry `org_id`, so org deletion purges them.
 model and are **not** the canonical distribution path. Prefer `work_unit_investments`
 for all new work.
 
+The daily metrics job no longer writes `investment_classifications_daily` or
+`investment_metrics_daily`. Since CHAOS-9264 the `work_item_investment` family writes
+`work_item_completion_daily` instead (migration `119_work_item_completion_daily.sql`,
+plain `MergeTree`, one row per organization, repository, team and day, with no
+investment area or project stream; `internal/jobs/metrics/workitemengine/completion.go`).
+Readers take the newest `computed_at` per key. The two old tables keep their stored rows
+and get no new ones.
+
+### How a unit's effort is chosen
+
+`units.ComputeEffort` (`internal/jobs/workgraph/units/effort.go`) takes the first tier
+whose total is strictly positive: commit churn, then pull request churn (both stored as
+`churn_loc`), then the active hours of the unit's issues (`active_hours`). When no tier
+is positive the row is `churn_loc` with value 0. A negative or NaN total falls through to
+the next tier.
+
+### Oversized components keep pull request -> issue links
+
+A connected component above the node cap is split. Since CHAOS-9267 the split never
+drops a pull request -> issue link (a GitHub pull request and a GitLab merge request are
+both `pr` nodes): both live consumers, the materializer and the membership backfill, pass
+`units.ProtectPullRequestLinks`. Before, an `explicit_text` link could be dropped, and the
+work item then formed a unit with no pull request node and an effort of 0. The Python
+reference split still drops such links; `units.BuildComponents` keeps that form for the
+frozen goldens, so this is a declared divergence.
+
 ---
 
 ## Read semantics — important

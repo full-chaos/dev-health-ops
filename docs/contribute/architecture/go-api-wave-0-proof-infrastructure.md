@@ -276,8 +276,8 @@ A class decision has no `rollout_percentage` or `eligible_orgs`: `Enabled(operat
 delegated operations have no Python resolver for an organisation outside a cohort to fall back to, so a decision is *on
 for every authenticated organisation, revocable only by mode*.
 
-`go_api_routing_state` is read by nothing that serves or proves (CHAOS-8705). It stays in the schema until CHAOS-8706 drops
-it, and until then only the rollback gate of a roll sheet reads it.
+`go_api_routing_state` was read by nothing that serves or proves (CHAOS-8705), and migration
+`0147_drop_go_api_routing_state` (CHAOS-8706) dropped the table (`internal/pgmigrate/sql/0147_drop_go_api_routing_state.sql`).
 
 ## Canonical SDL pin
 

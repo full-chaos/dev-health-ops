@@ -787,9 +787,13 @@ without that DSN the CLI is entirely non-functional and returns
 `configuration_error`. A `dho workers` invocation needs
 all three database URIs — `POSTGRES_URI`, `WORKER_DATABASE_URI`, and
 `COORDINATOR_DATABASE_URI` — plus the session-safe mode settings. The
-`go-reconciler` container carries the coordinator DSN; `go-worker-heavy` does
-not, so reaching for the nearest worker container returns `configuration_error`
-with no hint that a different container would work.
+`go-reconciler` and `go-scheduler` containers carry the coordinator DSN. In the
+Helm chart only the `reconciler` and `scheduler` worker groups get it
+(`go-workers.yaml`), so there `go-worker-heavy` does not, and reaching for the
+nearest worker container returns `configuration_error` with no hint that a
+different container would work. The local Compose stack differs: it gives the
+worker services the four `DEV_HEALTH_PG_COORDINATOR_*` settings in the shared
+base (`compose.yml`), and the three stream services take them back to empty.
 
 !!! warning "`jobs retry` and `jobs cancel` cannot succeed in Phase 1"
     Both verbs are advertised and both are refused unconditionally. The Phase-1
@@ -852,8 +856,9 @@ unchanged.
   time, because the plain MergeTree tables named below count every run of a day.
 - A rerun writes the same keys as the first run, and a later `computed_at` replaces an
   earlier one in the ReplacingMergeTree daily tables, so readers that take the newest row
-  count the day once. Raw reads of the plain MergeTree tables (`investment_metrics_daily`,
-  `issue_type_metrics_daily`, `investment_classifications_daily`) and of the view
+  count the day once. Raw reads of the plain MergeTree tables (`work_item_completion_daily`,
+  `issue_type_metrics_daily`; the daily job no longer writes `investment_metrics_daily` or
+  `investment_classifications_daily`, CHAOS-9264) and of the view
   `v_investment_flow_edges` count every generation of a day; any second run of a day does
   that, with or without a tag. A rerun deletes no row: a row stored under a key
   that the new run no longer produces stays, and only the writer of that table can zero it.

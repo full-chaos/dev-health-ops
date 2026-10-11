@@ -138,7 +138,8 @@ const (
 // a fact that still holds is on no page. So the end of a walk is never the
 // proof of an absence by itself: each kind states what is.
 //
-// It is made only by AbsenceByWalk, AbsenceByListing and AbsenceByCloseWriter.
+// It is made only by AbsenceByListing and AbsenceByCloseWriter. (The end of a walk by the provider's cursor was a
+// third statement until CHAOS-9124: it proved no absence, and no kind states it any more.)
 // The zero value proves no absence, so a kind whose proof nobody stated closes no absent fact.
 type AbsenceProof[R any] struct {
 	statement string
@@ -147,27 +148,6 @@ type AbsenceProof[R any] struct {
 
 // AbsenceProofNotStated is the statement of a proof nobody made.
 const AbsenceProofNotStated = "absence_proof_not_stated"
-
-// AbsenceWalk names a walk whose answer is taken as the proof of an absence.
-// Each one is a deliberate, written exemption from the per-fact proof; the
-// census (TestSnapshotKindCensus) pins which kind uses which.
-type AbsenceWalk string
-
-// AbsenceWalkByCursor: the walk follows a cursor that the provider gives with
-// each page (Relay `after`, an opaque page token), not a position in the list.
-// The providers do not state what such a walk returns when the list changes
-// while it is read, so this is an open risk that is named, not a proof that
-// was measured.
-const AbsenceWalkByCursor AbsenceWalk = "cursor_walk"
-
-// AbsenceByWalk states that the kind's walk itself proves an absence.
-func AbsenceByWalk[R any](walk AbsenceWalk) AbsenceProof[R] {
-	statement := strings.TrimSpace(string(walk))
-	if statement == "" {
-		return AbsenceProof[R]{}
-	}
-	return AbsenceProof[R]{statement: statement, verdict: func(R) SnapshotAbsence { return SnapshotAbsenceProven }}
-}
 
 // AbsenceByCloseWriterStatement is the statement of AbsenceByCloseWriter.
 const AbsenceByCloseWriterStatement = "decided_by_the_writer_of_the_kind"

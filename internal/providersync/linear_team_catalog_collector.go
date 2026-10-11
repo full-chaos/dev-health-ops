@@ -164,11 +164,11 @@ func (collector LinearTeamCatalogCollector) CollectTeamCatalog(
 		}
 		// A team that holds open memberships and that the workspace's team walk
 		// no longer returns is a dropped team (CHAOS-9102): its memberships close
-		// when the team walk reached its end (the cursor walk's statement, as for
-		// the team-key ownership kind).
+		// when the team walk reached its end AND Linear itself says the team is
+		// not there (CHAOS-9124: the end of a cursor walk is not a proof).
 		teamListing := TeamListingEvidence{
 			TeamIDPrefix: teamid.Prefix("linear"), Listed: teamIDs,
-			ProvesEnd: batch.Evidence.TeamsComplete, Cursor: true,
+			ProvesEnd: batch.Evidence.TeamsComplete,
 		}
 		droppedTeams, err := openMembershipTeamIDsNotListed(
 			ctx, collector.Sink.Conn, ref.OrgID, linearMembershipWriter.Provider, linearMembershipWriter.Source,
@@ -180,6 +180,7 @@ func (collector LinearTeamCatalogCollector) CollectTeamCatalog(
 			ref: ref, provider: "linear", listed: teamIDs, unproven: unprovenTeamIDs,
 			dataset: "team_memberships", leg: membershipCloseLeg,
 			dropped: droppedTeams, teamListing: teamListing,
+			teamLookups: NewTeamAbsenceLookups(ctx, LinearAbsenceProver{Client: client}),
 		})
 		membershipRows, membershipOutcome, err := linearMembershipWriter.Snapshot(
 			ctx, collector.Sink.Conn, ref.OrgID, batch.Rows.Memberships, keptMemberships, normalizedAt.UTC().Truncate(time.Millisecond),
@@ -220,8 +221,8 @@ func (collector LinearTeamCatalogCollector) CollectTeamCatalog(
 		// same fact.
 		ownershipRows, plan, err := collector.Sink.SnapshotOwnership(
 			ctx, ref.OrgID, batch.Rows.Ownership, normalizedAt.UTC().Truncate(time.Millisecond),
-			linearOwnershipKindSnapshots(ref.OrgID, ProveSoleScope(ctx, collector.ScopeCensus, ref.OrgID, "linear", ref.IntegrationID),
-				batch.Evidence, batch.Result)...)
+			linearOwnershipKindSnapshots(ctx, ref.OrgID, ProveSoleScope(ctx, collector.ScopeCensus, ref.OrgID, "linear", ref.IntegrationID),
+				batch.Evidence, batch.Result, LinearAbsenceProver{Client: client}.OwnershipAbsence(ref.OrgID))...)
 		if err != nil {
 			return result, err
 		}
@@ -290,14 +291,24 @@ const (
 // the team-key rows; every project page and node, and every project-team link
 // with a key, for the project rows (a dropped link is a fact the run did not
 // see).
-func linearOwnershipKindSnapshots(orgID string, scope ScopeProof, evidence LinearReferenceCatalogEvidence, result LinearReferenceCatalogResult) []KindSnapshot[OwnershipSnapshotRow] {
+//
+// An open row the run does not hold is a candidate (CHAOS-9124): the walk is
+// by Linear's cursor, which states no contract for a list that changes while
+// it is read, so the end of the walk proves no absence. ask is Linear's own
+// answer for one row; each kind has its own budget of answers per run.
+func linearOwnershipKindSnapshots(
+	ctx context.Context, orgID string, scope ScopeProof, evidence LinearReferenceCatalogEvidence, result LinearReferenceCatalogResult,
+	ask func(context.Context, OwnershipSnapshotRow) SnapshotAbsence,
+) []KindSnapshot[OwnershipSnapshotRow] {
+	projectLookups := NewAbsenceLookups(ctx, ownershipSnapshotKey, ask)
+	teamKeyLookups := NewAbsenceLookups(ctx, ownershipSnapshotKey, ask)
 	return []KindSnapshot[OwnershipSnapshotRow]{
 		LinearProjectOwnershipKind(orgID).Snapshot(scope, ProveSnapshot(
 			SnapshotTerm{Holds: evidence.ProjectsComplete, Reason: linearSnapshotProjectsNotRead},
 			SnapshotTerm{Holds: result.OwnershipTeamsWithoutKey == 0, Reason: linearSnapshotKeylessLink},
-		), AbsenceByWalk[OwnershipSnapshotRow](AbsenceWalkByCursor)),
+		), AbsenceByListing[OwnershipSnapshotRow](nil, projectLookups.Answer)),
 		LinearTeamKeyOwnershipKind(orgID).Snapshot(scope, ProveSnapshot(
 			SnapshotTerm{Holds: evidence.TeamsComplete, Reason: linearSnapshotTeamsNotRead},
-		), AbsenceByWalk[OwnershipSnapshotRow](AbsenceWalkByCursor)),
+		), AbsenceByListing[OwnershipSnapshotRow](nil, teamKeyLookups.Answer)),
 	}
 }

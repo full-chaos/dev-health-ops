@@ -759,6 +759,9 @@ func TestLinearTeamThatIsNoLongerListedClosesItsMembershipsAndItsOwnershipRow(t 
 	}
 	cycles := `{"data":{"cycles":{"nodes":[],"pageInfo":` + end + `}}}`
 	projects := `{"data":{"projects":{"nodes":[],"pageInfo":` + end + `}}}`
+	// lookup is Linear's answer to the per-fact question of the prover (nil: the
+	// recorded answer for a team or a project that does not exist).
+	var lookup func(string) string
 	run := func(at time.Time, siblings int, teamsResponse string) error {
 		t.Helper()
 		collector := LinearTeamCatalogCollector{
@@ -779,7 +782,7 @@ func TestLinearTeamThatIsNoLongerListedClosesItsMembershipsAndItsOwnershipRow(t 
 		responses = append(responses, projects)
 		_, err := collector.CollectTeamCatalog(f.ctx, ref,
 			providerfoundation.Credential{Provider: "linear", ID: claim.CredentialID},
-			linearWorkItemsClient(t, fakehttp.Client(&linearWorkItemsDoer{responses: responses})),
+			linearWorkItemsClient(t, fakehttp.Client(&linearWorkItemsDoer{responses: responses, lookup: lookup})),
 			TeamCatalogSelections{Teams: true, Members: true, Projects: true}, at)
 		return err
 	}
@@ -819,8 +822,29 @@ func TestLinearTeamThatIsNoLongerListedClosesItsMembershipsAndItsOwnershipRow(t 
 		t.Fatal(err)
 	}
 	requireOpenFacts(t, "empty team walk", openMembershipFacts(f.ctx, t, f.conn, f.orgID, "linear"), eng, ops)
-	// The walk reached its end and the team is not in it: its memberships and its
-	// team-key ownership row close; the other team stays.
+	// The walk reached its end and the team is not in it, but Linear says the team
+	// still exists (the cursor walk lost it): nothing closes (CHAOS-9124: the end of a
+	// cursor walk is no proof). The answer is built from the recorded shape.
+	found := loadRecordedAnswer(t, "linear", "teams_filter_key_found")
+	lookup = func(string) string { return found.foundBody(t, map[string]any{"key": "OPS"}) }
+	if err := run(droppedAt[3], 0, teams(team("ENG", "eng@example.com"))); err != nil {
+		t.Fatal(err)
+	}
+	requireOpenFacts(t, "Linear says the team exists", openMembershipFacts(f.ctx, t, f.conn, f.orgID, "linear"), eng, ops)
+	if got := fmt.Sprint(teamKeyRows()); got != "[linear:ENG linear:OPS]" {
+		t.Errorf("team-key ownership while Linear says the team exists = %s, want both", got)
+	}
+	// Linear answers with an error: nothing closes either.
+	lookup = func(string) string {
+		return `{"errors":[{"message":"Rate limit exceeded","extensions":{"code":"RATELIMITED"}}],"data":null}`
+	}
+	if err := run(droppedAt[3], 0, teams(team("ENG", "eng@example.com"))); err != nil {
+		t.Fatal(err)
+	}
+	requireOpenFacts(t, "Linear answers an error", openMembershipFacts(f.ctx, t, f.conn, f.orgID, "linear"), eng, ops)
+	lookup = nil
+	// The walk reached its end, the team is not in it and Linear says it is gone: its
+	// memberships and its team-key ownership row close; the other team stays.
 	if err := run(droppedAt[3], 0, teams(team("ENG", "eng@example.com"))); err != nil {
 		t.Fatal(err)
 	}

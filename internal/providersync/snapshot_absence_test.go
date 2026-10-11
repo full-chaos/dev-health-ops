@@ -54,8 +54,6 @@ func TestPlanSnapshotClosesAnAbsentFactOnlyOnAProofOfItsAbsence(t *testing.T) {
 		asked                       []string
 	}{
 		{"no proof stated", AbsenceProof[OwnershipSnapshotRow]{}, []int{0}, AbsenceProofNotStated, 0, 4, 0, nil},
-		{"a walk with no name", AbsenceByWalk[OwnershipSnapshotRow](" "), []int{0}, AbsenceProofNotStated, 0, 4, 0, nil},
-		{"the cursor walk", AbsenceByWalk[OwnershipSnapshotRow](AbsenceWalkByCursor), []int{0, 2, 3, 4, 5}, "cursor_walk", 0, 0, 0, nil},
 		{"every listing was one response", AbsenceByListing(testOneResponse[OwnershipSnapshotRow], answer),
 			[]int{0, 2, 3, 4, 5}, AbsenceByListingStatement, 0, 0, 0, nil},
 		{"a listing of more than one response, with the provider's answers", AbsenceByListing(testPaged[OwnershipSnapshotRow], answer),

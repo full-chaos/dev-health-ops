@@ -1,0 +1,25 @@
+{
+  "case": "project_by_id_found",
+  "method": "POST",
+  "path": "/graphql",
+  "status": 200,
+  "content_type": "application/json; charset=utf-8",
+  "request_shape": {
+    "query": "\u003cstring\u003e"
+  },
+  "body_shape": {
+    "data": {
+      "project": {
+        "id": "\u003cstring\u003e",
+        "name": "\u003cstring\u003e",
+        "teams": {
+          "nodes": [
+            {
+              "key": "\u003cstring\u003e"
+            }
+          ]
+        }
+      }
+    }
+  }
+}

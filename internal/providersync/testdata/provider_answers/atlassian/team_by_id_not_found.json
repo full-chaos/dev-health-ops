@@ -1,0 +1,42 @@
+{
+  "case": "team_by_id_not_found",
+  "method": "POST",
+  "path": "/gateway/api/graphql",
+  "status": 200,
+  "content_type": "application/json",
+  "request_shape": {
+    "operationName": "\u003cstring\u003e",
+    "query": "\u003cstring\u003e",
+    "variables": {
+      "siteId": "\u003cstring\u003e",
+      "teamId": "\u003cstring\u003e"
+    }
+  },
+  "body_shape": {
+    "data": {
+      "team": {
+        "teamV2": null
+      }
+    },
+    "errors": [
+      {
+        "extensions": {
+          "classification": "\u003cstring\u003e",
+          "errorSource": "\u003cstring\u003e",
+          "statusCode": "\u003cnumber\u003e"
+        },
+        "locations": [
+          {
+            "column": "\u003cnumber\u003e",
+            "line": "\u003cnumber\u003e"
+          }
+        ],
+        "message": "\u003cstring\u003e",
+        "path": [
+          "\u003cstring\u003e"
+        ]
+      }
+    ]
+  },
+  "body_verbatim": "{\"errors\":[{\"message\":\"Exception while fetching data (/team/teamV2) : \",\"locations\":[{\"line\":1,\"column\":42}],\"path\":[\"team\",\"teamV2\"],\"extensions\":{\"errorSource\":\"UNDERLYING_SERVICE\",\"statusCode\":404,\"classification\":\"NotFound\"}}],\"data\":{\"team\":{\"teamV2\":null}}}"
+}

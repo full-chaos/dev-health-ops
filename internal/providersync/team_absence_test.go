@@ -61,9 +61,13 @@ func TestDroppedTeamsAreDecidedByTheListingTheScopeAndTheProviderAnswer(t *testi
 			wantGone: []string{"gh:ops", "gh:old"}, wantClosable: []string{"gh:platform", "gh:ops", "gh:old"},
 		},
 		{
-			name:    "a cursor walk's end is its written statement: no lookup",
-			listing: TeamListingEvidence{Listed: []string{"gh:platform"}, ProvesEnd: true, Cursor: true}, census: staticScopeCensus{},
-			wantGone: []string{"gh:ops", "gh:old"}, wantClosable: []string{"gh:platform", "gh:ops", "gh:old"},
+			// CHAOS-9124: the end of a cursor walk (Linear) is no proof; a listing that
+			// states no response count is asked for each team like any other.
+			name:    "a cursor walk's end is no proof: each team is asked",
+			listing: TeamListingEvidence{Listed: []string{"gh:platform"}, ProvesEnd: true}, census: staticScopeCensus{},
+			answers:  map[string]SnapshotAbsence{"gh:ops": proven, "gh:old": held},
+			wantGone: []string{"gh:ops"}, wantAsked: []string{"gh:ops", "gh:old"}, wantClosable: []string{"gh:platform", "gh:ops"},
+			wantReasons: []string{TeamAbsenceStillThere},
 		},
 		{
 			name: "a listing of two responses needs the provider's answer for each team", listing: wholeListing(2), census: staticScopeCensus{},

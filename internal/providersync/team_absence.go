@@ -26,9 +26,9 @@ import (
 //   - the listing was ONE response: nothing can move inside one response; or
 //   - the provider's own lookup of that one team answers "not there" (a
 //     listing read by page number loses a team that still exists when another
-//     team is removed between two requests); or
-//   - for a walk by the provider's cursor (Linear), the end of the walk, as the
-//     kind's written statement (AbsenceWalkByCursor).
+//     team is removed between two requests, and a listing read by the
+//     provider's cursor (Linear) states no contract for a list that changes
+//     while it is read: its end is not a proof, CHAOS-9124).
 //
 // A lookup that fails, is refused, is answered "still there" or does not fit
 // the run's budget closes nothing, and the run says so with counts.
@@ -47,9 +47,6 @@ type TeamListingEvidence struct {
 	// TeamIDPrefix limits the dropped teams to the team ids of the run's scope:
 	// an id that does not start with it is no team of this listing.
 	TeamIDPrefix string
-	// Cursor: the listing is read by the provider's cursor, not by position;
-	// the end of that walk is the proof of an absence (AbsenceWalkByCursor).
-	Cursor bool
 }
 
 // TeamAbsenceProver gives the provider's own answer for ONE team: a direct

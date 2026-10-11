@@ -269,7 +269,7 @@ func runTeams(ctx context.Context, env cli.Env, d deps) int {
 	// it writes what it read and closes nothing (the same as the GitHub and
 	// GitLab forms of this verb). The worker's run closes.
 	result, err := atlassianteams.Write(ctx, conn, orgID, rows, selections,
-		providersync.ProveSoleScope(ctx, nil, orgID, atlassianteams.Provider, ""))
+		providersync.ProveSoleScope(ctx, nil, orgID, atlassianteams.Provider, ""), nil)
 	if err != nil {
 		return writeError(env.Stderr, cli.ExitFailure, "write_failed", redact(err))
 	}

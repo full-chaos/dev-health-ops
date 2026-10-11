@@ -1,0 +1,35 @@
+{
+  "case": "team_by_key_not_found",
+  "method": "POST",
+  "path": "/graphql",
+  "status": 200,
+  "content_type": "application/json; charset=utf-8",
+  "request_shape": {
+    "query": "\u003cstring\u003e"
+  },
+  "body_shape": {
+    "data": null,
+    "errors": [
+      {
+        "extensions": {
+          "code": "\u003cstring\u003e",
+          "statusCode": "\u003cnumber\u003e",
+          "type": "\u003cstring\u003e",
+          "userError": "\u003cbool\u003e",
+          "userPresentableMessage": "\u003cstring\u003e"
+        },
+        "locations": [
+          {
+            "column": "\u003cnumber\u003e",
+            "line": "\u003cnumber\u003e"
+          }
+        ],
+        "message": "\u003cstring\u003e",
+        "path": [
+          "\u003cstring\u003e"
+        ]
+      }
+    ]
+  },
+  "body_verbatim": "{\"errors\":[{\"message\":\"Entity not found: Team\",\"path\":[\"team\"],\"locations\":[{\"line\":1,\"column\":9}],\"extensions\":{\"type\":\"invalid input\",\"code\":\"INPUT_ERROR\",\"statusCode\":400,\"userError\":true,\"userPresentableMessage\":\"Could not find referenced Team.\"}}],\"data\":null}\n"
+}

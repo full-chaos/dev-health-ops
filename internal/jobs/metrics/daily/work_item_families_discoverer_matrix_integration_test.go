@@ -122,10 +122,10 @@ func TestDailyJobThroughTheDiscovererRestoresTheDerivedRowsOfEveryProvider(t *te
 			stored, day, provider, unitAt, orgID); err != nil {
 			t.Fatal(err)
 		}
-		if err := conn.Exec(ctx, `INSERT INTO investment_metrics_daily (
-			repo_id, day, team_id, investment_area, project_stream, delivery_units, work_items_completed,
+		if err := conn.Exec(ctx, `INSERT INTO work_item_completion_daily (
+			repo_id, day, team_id, delivery_units, work_items_completed,
 			prs_merged, churn_loc, cycle_p50_hours, computed_at, org_id)
-			VALUES (?, ?, '', 'quality', 'general', 3, 1, 0, 0, 0, ?, ?)`,
+			VALUES (?, ?, '', 3, 1, 0, 0, 0, ?, ?)`,
 			stored, day, unitAt, orgID); err != nil {
 			t.Fatal(err)
 		}
@@ -174,7 +174,7 @@ func TestDailyJobThroughTheDiscovererRestoresTheDerivedRowsOfEveryProvider(t *te
 		t.Fatal(err)
 	}
 	issueType.nowUTC = func() time.Time { return runAt }
-	investment, err := NewWorkItemInvestmentExecutor(conn, workItemEngineTestClassifier{})
+	investment, err := NewWorkItemInvestmentExecutor(conn)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -213,16 +213,12 @@ SELECT concat(ifNull(toString(repo_id), 'NULL'), '|', provider, '|', team_id, '|
   '|active=', toString(argMax(active_count, computed_at)))
 FROM issue_type_metrics_daily WHERE org_id = ? AND day = ?
 GROUP BY repo_id, provider, team_id, issue_type_norm`, orgID, day)
-	investmentRows := discovererMatrixLines(t, ctx, conn, `
-SELECT concat(ifNull(toString(repo_id), 'NULL'), '|', ifNull(team_id, ''), '|', investment_area, '|', project_stream,
+	completionRows := discovererMatrixLines(t, ctx, conn, `
+SELECT concat(ifNull(toString(repo_id), 'NULL'), '|', team_id,
   '|completed=', toString(argMax(work_items_completed, computed_at)),
   '|units=', toString(argMax(delivery_units, computed_at)))
-FROM investment_metrics_daily WHERE org_id = ? AND day = ?
-GROUP BY repo_id, team_id, investment_area, project_stream`, orgID, day)
-	classificationRows := discovererMatrixLines(t, ctx, conn, `
-SELECT concat(ifNull(toString(repo_id), 'NULL'), '|', provider, '|', artifact_id)
-FROM investment_classifications_daily WHERE org_id = ? AND day = ?
-GROUP BY repo_id, provider, artifact_id`, orgID, day)
+FROM work_item_completion_daily WHERE org_id = ? AND day = ?
+GROUP BY repo_id, team_id`, orgID, day)
 	stateRows := discovererMatrixLines(t, ctx, conn, `
 SELECT concat(provider, '|', status, '|hours=', toString(round(duration_hours, 2)), '|items=', toString(items_touched))
 FROM work_item_state_durations_daily FINAL WHERE org_id = ? AND day = ?`, orgID, day)
@@ -236,8 +232,7 @@ FROM work_item_state_durations_daily FINAL WHERE org_id = ? AND day = ?`, orgID,
 	}
 	dump := func() string {
 		return "\nissue_type_metrics_daily:\n  " + strings.Join(issueTypeRows, "\n  ") +
-			"\ninvestment_metrics_daily:\n  " + strings.Join(investmentRows, "\n  ") +
-			"\ninvestment_classifications_daily:\n  " + strings.Join(classificationRows, "\n  ") +
+			"\nwork_item_completion_daily:\n  " + strings.Join(completionRows, "\n  ") +
 			"\nwork_item_state_durations_daily:\n  " + strings.Join(stateRows, "\n  ")
 	}
 
@@ -250,19 +245,14 @@ FROM work_item_state_durations_daily FINAL WHERE org_id = ? AND day = ?`, orgID,
 			if want := repoKey + "|" + provider + "|unassigned|quality|created=1|completed=2|active=3"; !holds(issueTypeRows, want) {
 				t.Errorf("issue_type_metrics_daily: the newest row is not the full recompute, want %s%s", want, dump())
 			}
-			// The investment key has no provider: jira and linear share the key
+			// The completion key has no provider: jira and linear share the key
 			// of the nil repository id, so it holds the items of both.
-			wantInvestment := repoKey + "||quality|general|completed=2|units=4"
+			wantCompletion := repoKey + "||completed=2|units=4"
 			if repoKey == "NULL" {
-				wantInvestment = "NULL||quality|general|completed=4|units=8"
+				wantCompletion = "NULL||completed=4|units=8"
 			}
-			if !holds(investmentRows, wantInvestment) {
-				t.Errorf("investment_metrics_daily: the newest row is not the full recompute, want %s%s", wantInvestment, dump())
-			}
-			for _, item := range []string{"1", "2", "3"} {
-				if want := repoKey + "|" + provider + "|" + provider + ":" + item; !holds(classificationRows, want) {
-					t.Errorf("investment_classifications_daily: no row %s%s", want, dump())
-				}
+			if !holds(completionRows, wantCompletion) {
+				t.Errorf("work_item_completion_daily: the newest row is not the full recompute, want %s%s", wantCompletion, dump())
 			}
 			if want := provider + "|in_progress|hours=10|items=1"; !holds(stateRows, want) {
 				t.Errorf("work_item_state_durations_daily: no row %s%s", want, dump())

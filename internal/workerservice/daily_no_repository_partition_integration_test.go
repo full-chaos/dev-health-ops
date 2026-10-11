@@ -452,12 +452,12 @@ SELECT toUInt64(sum(completed)) FROM (
 	if err := rig.conn.QueryRow(ctx, `
 SELECT toUInt64(sum(completed)) FROM (
   SELECT argMax(work_items_completed, computed_at) AS completed
-  FROM investment_metrics_daily WHERE org_id = ? AND day = ? AND repo_id IS NULL
-  GROUP BY team_id, investment_area, project_stream)`, orgID, day).Scan(&investmentCompleted); err != nil {
-		t.Fatalf("read investment_metrics_daily: %v", err)
+  FROM work_item_completion_daily WHERE org_id = ? AND day = ? AND repo_id IS NULL
+  GROUP BY team_id)`, orgID, day).Scan(&investmentCompleted); err != nil {
+		t.Fatalf("read work_item_completion_daily: %v", err)
 	}
 	if issueTypeCompleted != 2 || investmentCompleted != 2 {
-		t.Fatalf("items completed on the no-repository partition: issue_type_metrics_daily %d, investment_metrics_daily %d, want 2 and 2 (linear 1, jira 1)",
+		t.Fatalf("items completed on the no-repository partition: issue_type_metrics_daily %d, work_item_completion_daily %d, want 2 and 2 (linear 1, jira 1)",
 			issueTypeCompleted, investmentCompleted)
 	}
 

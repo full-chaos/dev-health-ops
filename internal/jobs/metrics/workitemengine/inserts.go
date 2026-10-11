@@ -18,3 +18,8 @@ project_stream, confidence, rule_id, computed_at, org_id)`
 const InvestmentMetricsInsert = `INSERT INTO investment_metrics_daily
 (repo_id, day, team_id, investment_area, project_stream, delivery_units,
 work_items_completed, prs_merged, churn_loc, cycle_p50_hours, computed_at, org_id)`
+
+// WorkItemCompletionInsert is the one definition of the work_item_completion_daily INSERT for both writers.
+const WorkItemCompletionInsert = `INSERT INTO work_item_completion_daily
+(repo_id, day, team_id, delivery_units, work_items_completed, prs_merged,
+churn_loc, cycle_p50_hours, computed_at, org_id)`

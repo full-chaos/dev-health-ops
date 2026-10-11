@@ -104,7 +104,7 @@ func TestDedupFromSourceEveryAppendOnlyTableAndEveryReplacingTable(t *testing.T)
 		{"work_item_state_durations_daily", "(SELECT * FROM (SELECT * FROM work_item_state_durations_daily ORDER BY computed_at DESC LIMIT 1 BY org_id, provider, work_scope_id, team_id, status, day) AS work_item_state_durations_daily WHERE " + teamkeytables.WorkItemStateDurationsDaily.LiveRow("work_item_state_durations_daily.") + ") AS work_item_state_durations_daily"},
 		{"ic_landscape_rolling_30d", "(SELECT * FROM (SELECT * FROM ic_landscape_rolling_30d ORDER BY computed_at DESC LIMIT 1 BY org_id, repo_id, team_id, map_name, as_of_day, identity_id) AS ic_landscape_rolling_30d WHERE " + teamkeytables.ICLandscapeRolling30d.LiveRow("ic_landscape_rolling_30d.") + ") AS ic_landscape_rolling_30d"},
 		// The two plain MergeTree tables with the rule in their own writers.
-		{"investment_metrics_daily", "(SELECT * FROM (SELECT * FROM investment_metrics_daily ORDER BY computed_at DESC LIMIT 1 BY org_id, repo_id, day, team_id, investment_area, project_stream) AS investment_metrics_daily WHERE (investment_metrics_daily.delivery_units != 0 OR investment_metrics_daily.work_items_completed != 0 OR investment_metrics_daily.prs_merged != 0 OR investment_metrics_daily.churn_loc != 0)) AS investment_metrics_daily"},
+		{"work_item_completion_daily", "(SELECT * FROM (SELECT * FROM work_item_completion_daily ORDER BY computed_at DESC LIMIT 1 BY org_id, repo_id, day, team_id) AS work_item_completion_daily WHERE (work_item_completion_daily.delivery_units != 0 OR work_item_completion_daily.work_items_completed != 0 OR work_item_completion_daily.prs_merged != 0 OR work_item_completion_daily.churn_loc != 0)) AS work_item_completion_daily"},
 		{"issue_type_metrics_daily", "(SELECT * FROM (SELECT * FROM issue_type_metrics_daily ORDER BY computed_at DESC LIMIT 1 BY org_id, repo_id, day, provider, team_id, issue_type_norm) AS issue_type_metrics_daily WHERE (issue_type_metrics_daily.created_count != 0 OR issue_type_metrics_daily.completed_count != 0 OR issue_type_metrics_daily.active_count != 0)) AS issue_type_metrics_daily"},
 		{"user_metrics_daily", "(SELECT * FROM (SELECT * FROM user_metrics_daily ORDER BY computed_at DESC LIMIT 1 BY org_id, repo_id, author_email, day) AS user_metrics_daily WHERE " + teamkeytables.UserMetricsDaily.LiveRow("user_metrics_daily.") + ") AS user_metrics_daily"},
 		{"testops_pipeline_metrics_daily", "(SELECT * FROM testops_pipeline_metrics_daily ORDER BY computed_at DESC LIMIT 1 BY org_id, repo_id, day) AS testops_pipeline_metrics_daily"},
@@ -139,8 +139,8 @@ func TestDedupFromSourceEveryAppendOnlyTableAndEveryReplacingTable(t *testing.T)
 func TestBuildChartQueryReadsTheWorkItemDailyTablesByNewestRow(t *testing.T) {
 	t.Parallel()
 	wantSource := map[string]string{
-		"issue_type_metrics_daily": "(SELECT * FROM issue_type_metrics_daily ORDER BY computed_at DESC LIMIT 1 BY org_id, repo_id, day, provider, team_id, issue_type_norm) AS issue_type_metrics_daily",
-		"investment_metrics_daily": "(SELECT * FROM investment_metrics_daily ORDER BY computed_at DESC LIMIT 1 BY org_id, repo_id, day, team_id, investment_area, project_stream) AS investment_metrics_daily",
+		"issue_type_metrics_daily":   "(SELECT * FROM issue_type_metrics_daily ORDER BY computed_at DESC LIMIT 1 BY org_id, repo_id, day, provider, team_id, issue_type_norm) AS issue_type_metrics_daily",
+		"work_item_completion_daily": "(SELECT * FROM work_item_completion_daily ORDER BY computed_at DESC LIMIT 1 BY org_id, repo_id, day, team_id) AS work_item_completion_daily",
 	}
 	charted := map[string]int{}
 	for name, definition := range supportedMetrics {

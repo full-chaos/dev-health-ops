@@ -42,8 +42,8 @@ var unruledReads = map[string]string{
 	"internal/api/syncadmin/backfill_detail.go:compoundingRiskQuery":   "reads scope 'repo' rows only; a team retraction row has scope 'team'",
 	"internal/queryapi/compoundingrisk/read.go:repoTrend":              "reads scope 'repo' rows only; a team retraction row has scope 'team'",
 	"internal/queryapi/home/queries_signals.go:compoundingRiskSQLBase": "statement text with a placeholder for the rule; its one user, fetchRiskSignals, passes the rule to it",
-	"internal/queryapi/analytics/timeseries.go:investmentMetricsDailyNewestRows": "builds the source text; its two callers decide: " +
-		"investmentMetricsDailyDedupSource passes the rule, investmentMetricsDailyEveryNewestRow is the text the frozen catalog golden pins " +
+	"internal/queryapi/analytics/timeseries.go:workItemCompletionNewestRows": "builds the source text; its two callers decide: " +
+		"workItemCompletionDedupSource passes the rule, workItemCompletionEveryNewestRow is the text the frozen catalog golden pins " +
 		"(catalog.go lists ACTIVE teams only; the row count orders them)",
 	"internal/queryapi/cognitiveload/cognitiveload.go:fetchTeamMetrics": "SQL pinned by the frozen golden; the rule is applied in Go after the read " +
 		"(fetchRetractedTeamDays reads the days that hold a team of retraction rows only, applyRetractedTeamDays replaces them)",
@@ -72,7 +72,7 @@ var unruledReads = map[string]string{
 // go stale.
 var heldBy = map[string]string{
 	"internal/queryapi/home/queries_signals.go:compoundingRiskSQLBase":            "fetchRiskSignals",
-	"internal/queryapi/analytics/timeseries.go:investmentMetricsDailyNewestRows":  "investmentMetricsDailyDedupSource",
+	"internal/queryapi/analytics/timeseries.go:workItemCompletionNewestRows":      "workItemCompletionDedupSource",
 	"internal/queryapi/cognitiveload/cognitiveload.go:fetchTeamMetrics":           "retractedTeamDaysQuery",
 	"internal/queryapi/cognitiveload/cognitiveload.go:fetchTeamCognitiveLoad":     "retractedLoadDaysQuery",
 	"internal/queryapi/cognitiveload/cognitiveload.go:fetchUserMetrics":           "retractedUserDaysQuery",

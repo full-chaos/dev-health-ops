@@ -174,6 +174,14 @@ func TestClickHouseQueryAdapterChartsEveryRegistryMetric(t *testing.T) {
 			continue
 		}
 		columnType, ok := columnTypes[definition.SourceTable+"."+name]
+		if !ok && retiredClassifierMetrics[name] {
+			// The column is gone with the classifier; the metric is declared text and a chart of it is refused.
+			if definition.ValueKind == valueKindNumeric {
+				t.Errorf("registry metric %s: retired column, but declared numeric", name)
+			}
+			nonNumeric = append(nonNumeric, name)
+			continue
+		}
 		if !ok {
 			t.Errorf("registry metric %s: column %s.%s does not exist in the migrated schema", name, definition.SourceTable, name)
 			continue

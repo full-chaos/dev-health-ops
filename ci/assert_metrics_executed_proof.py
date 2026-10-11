@@ -51,7 +51,7 @@ REPO_DAY_FAMILIES: dict[str, str] = {
     # CHAOS-8810: the two work-item engine families. Both tables carry the
     # repository of the work item (NULL for an item with no repository).
     "work_item_issue_type": "issue_type_metrics_daily",
-    "work_item_investment": "investment_metrics_daily",
+    "work_item_investment": "work_item_completion_daily",
     "incident": "incident_metrics_daily",
     "testops_pipeline": "testops_pipeline_metrics_daily",
     "testops_test": "testops_test_metrics_daily",

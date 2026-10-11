@@ -323,10 +323,15 @@ func mustLoadMetricRegistry() map[string]metricDefinition {
 //
 // registryTableToSchemaTable maps a source table the registry names to the
 // table the migrations create. The Python registry names two tables that no
-// migration builds.
+// migration builds, and one it still names that the Go writers retired: the rule
+// classifier's investment_metrics_daily is no longer written (CHAOS-9264), and
+// its counts are read from work_item_completion_daily. The registry's
+// investment_area and project_stream entries stay text and are refused as
+// charts; churn_loc is read from the new table (it holds 0 there, as it did).
 var registryTableToSchemaTable = map[string]string{
 	"ic_landscape_rolling":           "ic_landscape_rolling_30d",
 	"work_item_state_duration_daily": "work_item_state_durations_daily",
+	"investment_metrics_daily":       "work_item_completion_daily",
 }
 
 // nonNumericMetrics names the registry entries whose column is not a number:
@@ -341,6 +346,11 @@ var nonNumericMetrics = map[string]string{
 	"project_stream": "text", "issue_type_norm": "text", "map_name": "text",
 	"created_at": "timestamp", "started_at": "timestamp", "completed_at": "timestamp",
 }
+
+// retiredClassifierMetrics are the registry entries that name a column the rule classifier stored and no table
+// holds any more (CHAOS-9264): they stay in the registry artifact, which mirrors the Python registry, and a chart of
+// one is refused as text like any dimension attribute.
+var retiredClassifierMetrics = map[string]bool{"investment_area": true, "project_stream": true}
 
 const (
 	valueKindNumeric    = "numeric"

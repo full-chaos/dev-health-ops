@@ -87,11 +87,9 @@ func TestWorkItemEngineFamiliesWriteZeroForALiveKeyOfARepositoryWithNoItem(t *te
 		}}, clock); err != nil {
 		t.Fatal(err)
 	}
-	area := "quality"
-	if _, err := WriteInvestmentMetricsDaily(ctx, conn, orgID, day,
-		[]workitemengine.InvestmentMetricsDailyRow{{
-			RepoID: &repoID, InvestmentArea: &area, ProjectStream: "general",
-			DeliveryUnits: 1, WorkItemsCompleted: 1, CycleP50Hours: 20,
+	if _, err := WriteWorkItemCompletionDaily(ctx, conn, orgID, day,
+		[]workitemengine.WorkItemCompletionDailyRow{{
+			RepoID: &repoID, DeliveryUnits: 1, WorkItemsCompleted: 1, CycleP50Hours: 20,
 		}}, clock); err != nil {
 		t.Fatal(err)
 	}
@@ -108,7 +106,7 @@ func TestWorkItemEngineFamiliesWriteZeroForALiveKeyOfARepositoryWithNoItem(t *te
 		t.Fatalf("issue type key: versions=%d completed=%d active=%d, want 2 versions whose newest is all zeros", versions, completed, active)
 	}
 
-	investment, err := NewWorkItemInvestmentExecutor(conn, workItemEngineTestClassifier{})
+	investment, err := NewWorkItemInvestmentExecutor(conn)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -120,7 +118,7 @@ func TestWorkItemEngineFamiliesWriteZeroForALiveKeyOfARepositoryWithNoItem(t *te
 	var completed uint32
 	if err := conn.QueryRow(ctx, `
 SELECT count(), argMax(work_items_completed, computed_at)
-FROM investment_metrics_daily WHERE org_id = ? AND day = ? AND investment_area = 'quality'`,
+FROM work_item_completion_daily WHERE org_id = ? AND day = ?`,
 		orgID, day).Scan(&versions, &completed); err != nil {
 		t.Fatal(err)
 	}

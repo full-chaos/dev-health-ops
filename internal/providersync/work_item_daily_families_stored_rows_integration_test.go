@@ -212,8 +212,8 @@ var dailyFamilyMatrixTables = []struct {
 	excluded map[string]string
 }{
 	{"issue_type_metrics_daily", map[string]string{"computed_at": "each writer stamps the time of its own run"}},
-	{"investment_classifications_daily", map[string]string{"computed_at": "each writer stamps the time of its own run"}},
-	{"investment_metrics_daily", map[string]string{"computed_at": "each writer stamps the time of its own run"}},
+	// investment_classifications_daily and investment_metrics_daily are no longer written by the daily family
+	// (CHAOS-9264): the daily family writes work_item_completion_daily, which the sync deriver does not write yet.
 	{"work_item_state_durations_daily", map[string]string{"computed_at": "each writer stamps the time of its own run"}},
 	{"work_item_metrics_daily", map[string]string{"computed_at": "each writer stamps the time of its own run"}},
 	{"work_item_user_metrics_daily", map[string]string{"computed_at": "each writer stamps the time of its own run"}},
@@ -326,10 +326,6 @@ func runDailyWorkItemFamilies(
 	if err != nil {
 		t.Fatal(err)
 	}
-	classifier, err := NewInvestmentClassifier(investmentConfigPath(t, "real"))
-	if err != nil {
-		t.Fatal(err)
-	}
 	families := map[string]daily.NativeFamilyExecutor{}
 	build := func(name string, executor daily.NativeFamilyExecutor, err error) {
 		t.Helper()
@@ -348,7 +344,7 @@ func runDailyWorkItemFamilies(
 	build("work_item_state", state, err)
 	issueType, err := daily.NewWorkItemIssueTypeExecutor(conn, statusMapping)
 	build(daily.WorkItemIssueTypeFamilyName, issueType, err)
-	investment, err := daily.NewWorkItemInvestmentExecutor(conn, classifier)
+	investment, err := daily.NewWorkItemInvestmentExecutor(conn)
 	build(daily.WorkItemInvestmentFamilyName, investment, err)
 
 	names := make([]string, 0, len(families))
@@ -553,13 +549,13 @@ FROM work_item_state_durations_daily FINAL WHERE org_id = ? AND day = ?`, testCa
 			if err := conn.QueryRow(ctx, `
 SELECT sum(completed), sum(units) FROM (
   SELECT argMax(work_items_completed, computed_at) AS completed, argMax(delivery_units, computed_at) AS units
-  FROM investment_metrics_daily WHERE org_id = ? AND day = ?
-  GROUP BY day, repo_id, team_id, investment_area, project_stream)`, testCase.orgID, day,
+  FROM work_item_completion_daily WHERE org_id = ? AND day = ?
+  GROUP BY day, repo_id, team_id)`, testCase.orgID, day,
 			).Scan(&investmentCompleted, &deliveryUnits); err != nil {
 				t.Fatal(err)
 			}
 			if investmentCompleted != 3 || deliveryUnits != 9 {
-				t.Errorf("investment_metrics_daily of the day, newest per key: completed=%d delivery_units=%d, want 3 and 9 (3 + 1 + 5)",
+				t.Errorf("work_item_completion_daily of the day, newest per key: completed=%d delivery_units=%d, want 3 and 9 (3 + 1 + 5)",
 					investmentCompleted, deliveryUnits)
 			}
 			var issueTypeCompleted, issueTypeCreated, issueTypeActive uint64
@@ -607,16 +603,6 @@ WHERE org_id = ? AND day = ? AND issue_type_norm = ? AND computed_at > ?`, testC
 			if issueTypeCompleted != 3 || issueTypeCreated != 1 || issueTypeActive != 5 {
 				t.Errorf("issue_type_metrics_daily of the day, newest per key: completed=%d created=%d active=%d, want 3, 1 and 5",
 					issueTypeCompleted, issueTypeCreated, issueTypeActive)
-			}
-			var classifications uint64
-			if err := conn.QueryRow(ctx, `
-SELECT uniqExact(artifact_id) FROM investment_classifications_daily
-WHERE org_id = ? AND day = ? AND computed_at > ?`, testCase.orgID, day, deriverStamp,
-			).Scan(&classifications); err != nil {
-				t.Fatal(err)
-			}
-			if classifications != 5 {
-				t.Errorf("investment_classifications_daily of the day from the family: %d items, want the 5 active ones", classifications)
 			}
 		})
 	}

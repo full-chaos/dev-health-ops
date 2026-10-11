@@ -67,7 +67,7 @@ func TestResolveCatalog_SeededRealClickHouse(t *testing.T) {
 	}
 	defer func() { _ = conn.Close() }()
 
-	for _, ddl := range []string{seededQualitySchemaDDL, investmentMetricsDailyDDL, seededCatalogExtraDDL} {
+	for _, ddl := range []string{seededQualitySchemaDDL, workItemCompletionDailyDDL, seededCatalogExtraDDL} {
 		for _, stmt := range splitSQLStatements(ddl) {
 			if err := conn.Exec(ctx, stmt); err != nil {
 				t.Fatalf("exec DDL %q: %v", stmt, err)

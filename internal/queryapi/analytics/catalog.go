@@ -2,6 +2,7 @@ package analytics
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"regexp"
@@ -157,12 +158,20 @@ LEFT JOIN (
 ORDER BY count DESC, t.name ASC, t.id ASC
 LIMIT {limit:UInt32}
 %s
-`, investmentMetricsDailyEveryNewestRow, settingsMaxExecutionTime(timeoutSeconds))
+`, workItemCompletionEveryNewestRow, settingsMaxExecutionTime(timeoutSeconds))
 		return compiledQuery{sql: sql, bindings: []clickhouse.Binding{limitBinding, orgBinding}}, nil
 	}
 
 	fc, err := translateFilters(orgID, filters, useInvestment, defaultFilterColumns())
 	if err != nil {
+		// The reference refused a bad dimension before it looked at a work-category filter (the frozen catalog
+		// golden holds it); this port refuses that filter on the daily path (CHAOS-9264), so the dimension goes first.
+		var validation *ValidationError
+		if errors.As(err, &validation) && validation.Field == "why" {
+			if _, dimensionErr := dbColumn(dimension, useInvestment); dimensionErr != nil {
+				return compiledQuery{}, dimensionErr
+			}
+		}
 		return compiledQuery{}, err
 	}
 	dimCol, err := dbColumn(dimension, useInvestment)
@@ -175,7 +184,7 @@ LIMIT {limit:UInt32}
 		ictx := investmentContextFor([]Dimension{dimension}, false, needsRepoAllocation(filters), needsAuthorJoin(filters))
 		source, alias, extraClauses = ictx.Source, ictx.Alias, ictx.ExtraClauses
 	} else {
-		source, alias = investmentMetricsDailyDedupSource, "investment_metrics_daily"
+		source, alias = workItemCompletionDedupSource, "work_item_completion_daily"
 	}
 
 	sql := fmt.Sprintf(`

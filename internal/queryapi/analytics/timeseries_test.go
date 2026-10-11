@@ -163,7 +163,7 @@ func TestCompileTimeseries_NonInvestment_DefaultSource(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CompileTimeseries error = %v", err)
 	}
-	if !strings.Contains(q.sql, "investment_metrics_daily") {
+	if !strings.Contains(q.sql, "work_item_completion_daily") {
 		t.Errorf("expected default source table in SQL, got: %s", q.sql)
 	}
 	if !strings.Contains(q.sql, "repo_id AS dimension_value") {

@@ -36,12 +36,12 @@ import (
 // families (work_item_investment, work_item_issue_type) write a row of zeros
 // over a key they no longer produce, and find the live keys of a day by "one
 // of these counts of the newest row is not 0"
-// (daily.LoadInvestmentMetricsLiveKeys, daily.LoadIssueTypeMetricsLiveKeys).
+// (daily.LoadWorkItemCompletionLiveKeys, daily.LoadIssueTypeMetricsLiveKeys).
 // The columns here are the columns of those two reads; a test holds them
 // against the statements.
 var ownWriterMarkers = map[string][]string{
-	"investment_metrics_daily": {"delivery_units", "work_items_completed", "prs_merged", "churn_loc"},
-	"issue_type_metrics_daily": {"created_count", "completed_count", "active_count"},
+	"work_item_completion_daily": {"delivery_units", "work_items_completed", "prs_merged", "churn_loc"},
+	"issue_type_metrics_daily":   {"created_count", "completed_count", "active_count"},
 }
 
 // noRuleForReaders are the registry tables in which a MEASURED row can hold 0

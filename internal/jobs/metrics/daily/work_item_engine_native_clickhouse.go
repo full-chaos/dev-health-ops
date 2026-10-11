@@ -329,82 +329,72 @@ func WriteInvestmentClassificationsDaily(
 	return len(rows), nil
 }
 
-// investmentMetricsKey is the natural key of one investment_metrics_daily row
-// inside one (org, repository, day).
-type investmentMetricsKey struct{ teamID, investmentArea, projectStream string }
+// completionKey is the natural key of one work_item_completion_daily row inside one (org, repository, day).
+type completionKey struct{ teamID string }
 
-// LoadInvestmentMetricsLiveKeys returns the keys of one (org, repository, day)
-// whose NEWEST row holds a count that is not zero. See
-// LoadIssueTypeMetricsLiveKeys: the family writes a row of zeros for each one
-// the compute no longer produces, so that a completion that moved to another
-// team, area or day is not counted twice by a reader.
-func LoadInvestmentMetricsLiveKeys(
+// LoadWorkItemCompletionLiveKeys returns the keys of one (org, repository, day) whose NEWEST row holds a count that
+// is not zero. See LoadIssueTypeMetricsLiveKeys: the family writes a row of zeros for each one the compute no longer
+// produces, so that a completion that moved to another team or day is not counted twice by a reader.
+func LoadWorkItemCompletionLiveKeys(
 	ctx context.Context, conn repositoryRows, organizationID string, repoID uuid.UUID, day time.Time,
-) ([]investmentMetricsKey, error) {
+) ([]completionKey, error) {
 	if conn == nil || strings.TrimSpace(organizationID) == "" {
 		return nil, ErrInvalidState
 	}
 	rows, err := conn.Query(ctx, `
-SELECT ifNull(team_id, '') AS team, investment_area, project_stream
-FROM investment_metrics_daily
+SELECT team_id AS team
+FROM work_item_completion_daily
 WHERE org_id = ? AND day = ? AND ifNull(toString(repo_id), '') = ?
-GROUP BY team, investment_area, project_stream
+GROUP BY team
 HAVING argMax(delivery_units, computed_at) != 0
     OR argMax(work_items_completed, computed_at) != 0
     OR argMax(prs_merged, computed_at) != 0
     OR argMax(churn_loc, computed_at) != 0
-ORDER BY team, investment_area, project_stream`,
+ORDER BY team`,
 		organizationID, workitemmetrics.UTCDay(day), workItemEngineStoredRepoKey(repoID),
 	)
 	if err != nil {
-		return nil, fmt.Errorf("load investment_metrics_daily live keys: %w", err)
+		return nil, fmt.Errorf("load work_item_completion_daily live keys: %w", err)
 	}
 	defer rows.Close()
-	var keys []investmentMetricsKey
+	var keys []completionKey
 	for rows.Next() {
-		var key investmentMetricsKey
-		if err := rows.Scan(&key.teamID, &key.investmentArea, &key.projectStream); err != nil {
-			return nil, fmt.Errorf("scan investment_metrics_daily live key: %w", err)
+		var key completionKey
+		if err := rows.Scan(&key.teamID); err != nil {
+			return nil, fmt.Errorf("scan work_item_completion_daily live key: %w", err)
 		}
 		keys = append(keys, key)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate investment_metrics_daily live keys: %w", err)
+		return nil, fmt.Errorf("iterate work_item_completion_daily live keys: %w", err)
 	}
 	return keys, nil
 }
 
-// withInvestmentMetricsZeroRows appends a row of zeros for every live key the
-// compute did not produce.
-func withInvestmentMetricsZeroRows(
-	computed []workitemengine.InvestmentMetricsDailyRow, live []investmentMetricsKey, repoID uuid.UUID,
-) []workitemengine.InvestmentMetricsDailyRow {
-	held := make(map[investmentMetricsKey]struct{}, len(computed))
+// withWorkItemCompletionZeroRows appends a row of zeros for every live key the compute did not produce.
+func withWorkItemCompletionZeroRows(
+	computed []workitemengine.WorkItemCompletionDailyRow, live []completionKey, repoID uuid.UUID,
+) []workitemengine.WorkItemCompletionDailyRow {
+	held := make(map[completionKey]struct{}, len(computed))
 	for _, row := range computed {
-		area := ""
-		if row.InvestmentArea != nil {
-			area = *row.InvestmentArea
-		}
-		held[investmentMetricsKey{row.TeamID, area, row.ProjectStream}] = struct{}{}
+		held[completionKey{row.TeamID}] = struct{}{}
 	}
 	result := computed
 	for _, key := range live {
 		if _, ok := held[key]; ok {
 			continue
 		}
-		area := key.investmentArea
-		result = append(result, workitemengine.InvestmentMetricsDailyRow{
-			RepoID: workItemEngineStoredRepo(repoID),
-			TeamID: key.teamID, InvestmentArea: &area, ProjectStream: key.projectStream,
+		result = append(result, workitemengine.WorkItemCompletionDailyRow{
+			RepoID: workItemEngineStoredRepo(repoID), TeamID: key.teamID,
 		})
 	}
 	return result
 }
 
-// WriteInvestmentMetricsDaily appends one day's investment metric rows.
-func WriteInvestmentMetricsDaily(
+// WriteWorkItemCompletionDaily appends one day's completion rows.
+func WriteWorkItemCompletionDaily(
 	ctx context.Context, conn workItemBatchConn, organizationID string, day time.Time,
-	rows []workitemengine.InvestmentMetricsDailyRow, computedAt time.Time,
+	rows []workitemengine.WorkItemCompletionDailyRow, computedAt time.Time,
 ) (int, error) {
 	if len(rows) == 0 {
 		return 0, nil
@@ -418,12 +408,8 @@ func WriteInvestmentMetricsDaily(
 	}
 	prepared := make([]checked, 0, len(rows))
 	for _, row := range rows {
-		if row.InvestmentArea == nil {
-			return 0, fmt.Errorf("%w: investment_metrics_daily row of team %q has no investment area",
-				ErrInvalidState, row.TeamID)
-		}
-		subject := fmt.Sprintf("team %q area %q stream %q", row.TeamID, *row.InvestmentArea, row.ProjectStream)
-		counters, err := workItemUInt32s("investment_metrics_daily", subject, []workItemCounter{
+		subject := fmt.Sprintf("team %q", row.TeamID)
+		counters, err := workItemUInt32s("work_item_completion_daily", subject, []workItemCounter{
 			{"delivery_units", row.DeliveryUnits},
 			{"work_items_completed", row.WorkItemsCompleted},
 			{"prs_merged", row.PRsMerged},
@@ -431,31 +417,31 @@ func WriteInvestmentMetricsDaily(
 		if err != nil {
 			return 0, err
 		}
-		churn, err := checkedcast.Uint64(row.ChurnLOC, "investment_metrics_daily", "churn_loc")
+		churn, err := checkedcast.Uint64(row.ChurnLOC, "work_item_completion_daily", "churn_loc")
 		if err != nil {
 			return 0, fmt.Errorf("%w: %w for %s", ErrInvalidState, err, subject)
 		}
 		prepared = append(prepared, checked{counters: counters, churn: churn})
 	}
-	batch, err := conn.PrepareBatch(ctx, workitemengine.InvestmentMetricsInsert)
+	batch, err := conn.PrepareBatch(ctx, workitemengine.WorkItemCompletionInsert)
 	if err != nil {
-		return 0, fmt.Errorf("prepare investment_metrics_daily batch: %w", err)
+		return 0, fmt.Errorf("prepare work_item_completion_daily batch: %w", err)
 	}
 	dayValue := workitemmetrics.UTCDay(day)
 	computedAtUTC := computedAt.UTC().Truncate(time.Second)
 	for index, row := range rows {
 		if err := batch.Append(
-			row.RepoID, dayValue, row.TeamID, *row.InvestmentArea, row.ProjectStream,
+			row.RepoID, dayValue, row.TeamID,
 			prepared[index].counters[0], prepared[index].counters[1], prepared[index].counters[2],
 			prepared[index].churn, row.CycleP50Hours,
 			computedAtUTC, organizationID,
 		); err != nil {
 			_ = batch.Abort()
-			return 0, fmt.Errorf("append investment_metrics_daily row: %w", err)
+			return 0, fmt.Errorf("append work_item_completion_daily row: %w", err)
 		}
 	}
 	if err := batch.Send(); err != nil {
-		return len(rows), fmt.Errorf("send investment_metrics_daily batch: %w", err)
+		return len(rows), fmt.Errorf("send work_item_completion_daily batch: %w", err)
 	}
 	return len(rows), nil
 }

@@ -282,10 +282,10 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0.5, ?)`,
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		org, day, teamID, team.Name, team.RepoID, m.commits, m.afterHours, m.weekend,
 		float64(m.afterHours)/float64(m.commits), float64(m.weekend)/float64(m.commits), computedAt)
-	exec(ctx, t, conn, `INSERT INTO investment_metrics_daily
-(org_id, day, repo_id, team_id, investment_area, project_stream, delivery_units, work_items_completed,
+	exec(ctx, t, conn, `INSERT INTO work_item_completion_daily
+(org_id, day, repo_id, team_id, delivery_units, work_items_completed,
  prs_merged, churn_loc, cycle_p50_hours, computed_at)
-VALUES (?, ?, ?, ?, 'feature_delivery', 'roadmap', ?, ?, ?, ?, ?, ?)`,
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		org, day, team.RepoID, teamID, m.deliveryUnits, m.itemsDone, m.prsMerged, m.churnLOC, m.cycleP50, computedAt)
 	exec(ctx, t, conn, `INSERT INTO issue_type_metrics_daily
 (org_id, day, repo_id, provider, team_id, issue_type_norm, created_count, completed_count, active_count,
@@ -340,9 +340,9 @@ VALUES (?, ?, ?, ?, ?, ?)`, org, day, team.Provider, team.WorkScope, teamID, com
 VALUES (?, ?, ?, ?, ?, ?)`, org, day, team.Provider, team.WorkScope, teamID, computedAt)
 	exec(ctx, t, conn, `INSERT INTO team_metrics_daily (org_id, day, team_id, repo_id, computed_at)
 VALUES (?, ?, ?, ?, ?)`, org, day, teamID, team.RepoID, computedAt)
-	exec(ctx, t, conn, `INSERT INTO investment_metrics_daily
-(org_id, day, repo_id, team_id, investment_area, project_stream, computed_at)
-VALUES (?, ?, ?, ?, 'feature_delivery', 'roadmap', ?)`, org, day, team.RepoID, teamID, computedAt)
+	exec(ctx, t, conn, `INSERT INTO work_item_completion_daily
+(org_id, day, repo_id, team_id, computed_at)
+VALUES (?, ?, ?, ?, ?)`, org, day, team.RepoID, teamID, computedAt)
 	exec(ctx, t, conn, `INSERT INTO issue_type_metrics_daily
 (org_id, day, repo_id, provider, team_id, issue_type_norm, computed_at)
 VALUES (?, ?, ?, ?, ?, 'bug', ?)`, org, day, team.RepoID, team.Provider, teamID, computedAt)

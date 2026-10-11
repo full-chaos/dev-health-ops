@@ -76,6 +76,7 @@ GRANT SELECT ON default.deploy_metrics_daily TO mcp_readonly;
 GRANT SELECT ON default.repos TO mcp_readonly;
 GRANT SELECT ON default.work_graph_issue_pr TO mcp_readonly;
 GRANT SELECT ON default.work_graph_deployment_incident_edges TO mcp_readonly;
+GRANT SELECT ON default.work_item_completion_daily TO mcp_readonly;
 GRANT SELECT ON default.work_item_dependencies TO mcp_readonly;
 GRANT SELECT ON default.teams TO mcp_readonly;
 GRANT SELECT ON default.project_membership_transitions TO mcp_readonly;

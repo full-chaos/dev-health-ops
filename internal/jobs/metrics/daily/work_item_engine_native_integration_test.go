@@ -10,15 +10,13 @@ import (
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/google/uuid"
-
-	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/workitemengine"
 )
 
 // The two engine families on a real ClickHouse at the migration head, for the
 // one thing the differential tests in internal/providersync cannot show: what
 // a RECOMPUTE leaves behind in an append-only table.
 //
-// issue_type_metrics_daily and investment_metrics_daily are plain MergeTree
+// issue_type_metrics_daily and work_item_completion_daily are plain MergeTree
 // and their readers take the newest computed_at per key. A recompute that no
 // longer produces a key would leave that key's older row the newest one for
 // ever. The families write a row of zeros for it. The case here is the one
@@ -26,9 +24,8 @@ import (
 // its repository gets an owner, and the next run puts the item under the
 // team's key.
 
-// workItemEngineTestNormalizer and workItemEngineTestClassifier are fixed
-// engines: this file is about keys and versions, not about the two config
-// files (the providersync matrix runs the real ones).
+// workItemEngineTestNormalizer is a fixed engine: this file is about keys and versions, not about the
+// config file (the providersync matrix runs the real one).
 type workItemEngineTestNormalizer struct{}
 
 func (workItemEngineTestNormalizer) NormalizeType(_, typeRaw string, labels []string) string {
@@ -36,20 +33,6 @@ func (workItemEngineTestNormalizer) NormalizeType(_, typeRaw string, labels []st
 		return labels[0]
 	}
 	return typeRaw
-}
-
-type workItemEngineTestClassifier struct{}
-
-func (workItemEngineTestClassifier) Classify(
-	artifact workitemengine.InvestmentArtifact,
-) (workitemengine.InvestmentClassification, error) {
-	area, stream, rule := "product", "general", "test_rule"
-	if len(artifact.Labels) > 0 {
-		area = artifact.Labels[0]
-	}
-	return workitemengine.InvestmentClassification{
-		InvestmentArea: &area, ProjectStream: &stream, Confidence: 1, RuleID: &rule,
-	}, nil
 }
 
 func seedWorkItemEngineItem(
@@ -84,19 +67,19 @@ type workItemEngineVersions struct {
 	units     uint64
 }
 
-// readInvestmentMetricsKey returns, for one key of the day, the number of
+// readCompletionKey returns, for one key (team) of the day, the number of
 // stored versions and the values of the NEWEST one.
-func readInvestmentMetricsKey(
-	t *testing.T, ctx context.Context, conn driver.Conn, orgID string, day time.Time, teamID, area string,
+func readCompletionKey(
+	t *testing.T, ctx context.Context, conn driver.Conn, orgID string, day time.Time, teamID string,
 ) workItemEngineVersions {
 	t.Helper()
 	var result workItemEngineVersions
 	if err := conn.QueryRow(ctx, `
 SELECT count(), toUInt64(argMax(work_items_completed, computed_at)), toUInt64(argMax(delivery_units, computed_at))
-FROM investment_metrics_daily
-WHERE org_id = ? AND day = ? AND ifNull(team_id, '') = ? AND investment_area = ?`,
-		orgID, day, teamID, area).Scan(&result.rows, &result.completed, &result.units); err != nil {
-		t.Fatalf("read investment_metrics_daily key (%q, %q): %v", teamID, area, err)
+FROM work_item_completion_daily
+WHERE org_id = ? AND day = ? AND team_id = ?`,
+		orgID, day, teamID).Scan(&result.rows, &result.completed, &result.units); err != nil {
+		t.Fatalf("read work_item_completion_daily key %q: %v", teamID, err)
 	}
 	return result
 }
@@ -138,7 +121,7 @@ func TestWorkItemEngineFamiliesWriteZeroForAKeyTheRecomputeNoLongerHolds(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	investment, err := NewWorkItemInvestmentExecutor(conn, workItemEngineTestClassifier{})
+	investment, err := NewWorkItemInvestmentExecutor(conn)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -170,8 +153,8 @@ func TestWorkItemEngineFamiliesWriteZeroForAKeyTheRecomputeNoLongerHolds(t *test
 	// --- run 1: the repository has no owner; the items have no team -------
 	first := day.AddDate(0, 0, 1).Add(1 * time.Hour)
 	runAt(first)
-	if got := readInvestmentMetricsKey(t, ctx, conn, orgID, day, "", "quality"); got != (workItemEngineVersions{1, 1, 3}) {
-		t.Fatalf("run 1, investment key (no team, quality) = %+v, want one version with 1 completed and 3 units", got)
+	if got := readCompletionKey(t, ctx, conn, orgID, day, ""); got != (workItemEngineVersions{1, 1, 3}) {
+		t.Fatalf("run 1, completion key (no team) = %+v, want one version with 1 completed and 3 units", got)
 	}
 	if versions, completed, active := readIssueTypeKey(t, ctx, conn, orgID, day, "unassigned", "quality"); versions != 1 || completed != 1 || active != 1 {
 		t.Fatalf("run 1, issue type key (unassigned, quality): versions=%d completed=%d active=%d, want 1, 1, 1", versions, completed, active)
@@ -181,19 +164,19 @@ func TestWorkItemEngineFamiliesWriteZeroForAKeyTheRecomputeNoLongerHolds(t *test
 	seedWorkItemAttributionLinkedRepoOwnership(t, ctx, conn, orgID, repoID, "team-a", day.AddDate(0, 0, -30))
 	second := first.Add(time.Hour)
 	runAt(second)
-	if got := readInvestmentMetricsKey(t, ctx, conn, orgID, day, "team-a", "quality"); got != (workItemEngineVersions{1, 1, 3}) {
-		t.Fatalf("run 2, investment key (team-a, quality) = %+v, want one version with 1 completed and 3 units: the family reads the team from work_item_team_attributions", got)
+	if got := readCompletionKey(t, ctx, conn, orgID, day, "team-a"); got != (workItemEngineVersions{1, 1, 3}) {
+		t.Fatalf("run 2, completion key (team-a) = %+v, want one version with 1 completed and 3 units: the family reads the team from work_item_team_attributions", got)
 	}
 	// The state the zero row exists to reach: the completion is under ONE key.
-	if got := readInvestmentMetricsKey(t, ctx, conn, orgID, day, "", "quality"); got != (workItemEngineVersions{2, 0, 0}) {
-		t.Fatalf("run 2, investment key (no team, quality) = %+v, want two versions whose newest is 0 completed and 0 units: without the zero row the completion is counted under both teams", got)
+	if got := readCompletionKey(t, ctx, conn, orgID, day, ""); got != (workItemEngineVersions{2, 0, 0}) {
+		t.Fatalf("run 2, completion key (no team) = %+v, want two versions whose newest is 0 completed and 0 units: without the zero row the completion is counted under both teams", got)
 	}
 	var completedAcrossKeys uint64
 	if err := conn.QueryRow(ctx, `
 SELECT sum(completed) FROM (
   SELECT argMax(work_items_completed, computed_at) AS completed
-  FROM investment_metrics_daily WHERE org_id = ? AND day = ?
-  GROUP BY day, repo_id, team_id, investment_area, project_stream)`, orgID, day).Scan(&completedAcrossKeys); err != nil {
+  FROM work_item_completion_daily WHERE org_id = ? AND day = ?
+  GROUP BY day, repo_id, team_id)`, orgID, day).Scan(&completedAcrossKeys); err != nil {
 		t.Fatal(err)
 	}
 	if completedAcrossKeys != 1 {
@@ -210,14 +193,14 @@ SELECT sum(completed) FROM (
 
 	// --- run 3: nothing changed. A key that is already zero gets no more rows.
 	runAt(second.Add(time.Hour))
-	if got := readInvestmentMetricsKey(t, ctx, conn, orgID, day, "", "quality"); got != (workItemEngineVersions{2, 0, 0}) {
-		t.Fatalf("run 3, investment key (no team, quality) = %+v, want still two versions: a key whose newest row is zero is left alone", got)
+	if got := readCompletionKey(t, ctx, conn, orgID, day, ""); got != (workItemEngineVersions{2, 0, 0}) {
+		t.Fatalf("run 3, completion key (no team) = %+v, want still two versions: a key whose newest row is zero is left alone", got)
 	}
 	if versions, _, _ := readIssueTypeKey(t, ctx, conn, orgID, day, "unassigned", "quality"); versions != 2 {
 		t.Fatalf("run 3, issue type key (unassigned, quality) has %d versions, want still 2", versions)
 	}
-	if got := readInvestmentMetricsKey(t, ctx, conn, orgID, day, "team-a", "quality"); got != (workItemEngineVersions{2, 1, 3}) {
-		t.Fatalf("run 3, investment key (team-a, quality) = %+v, want two versions, newest 1 completed and 3 units", got)
+	if got := readCompletionKey(t, ctx, conn, orgID, day, "team-a"); got != (workItemEngineVersions{2, 1, 3}) {
+		t.Fatalf("run 3, completion key (team-a) = %+v, want two versions, newest 1 completed and 3 units", got)
 	}
 
 	// --- never fill a day that has no data ---------------------------------
@@ -229,18 +212,14 @@ SELECT sum(completed) FROM (
 	if err != nil {
 		t.Fatal(err)
 	}
-	var investmentRows, classificationRows uint64
-	if err := conn.QueryRow(ctx, `SELECT count() FROM investment_metrics_daily WHERE org_id = ? AND day = ?`,
-		orgID, emptyDay).Scan(&investmentRows); err != nil {
+	var completionRows uint64
+	if err := conn.QueryRow(ctx, `SELECT count() FROM work_item_completion_daily WHERE org_id = ? AND day = ?`,
+		orgID, emptyDay).Scan(&completionRows); err != nil {
 		t.Fatal(err)
 	}
-	if err := conn.QueryRow(ctx, `SELECT count() FROM investment_classifications_daily WHERE org_id = ? AND day = ?`,
-		orgID, emptyDay).Scan(&classificationRows); err != nil {
-		t.Fatal(err)
-	}
-	if written != 0 || investmentRows != 0 || classificationRows != 0 {
-		t.Fatalf("a day with no active item: the family reported %d rows, investment_metrics_daily holds %d, investment_classifications_daily holds %d, want 0, 0, 0",
-			written, investmentRows, classificationRows)
+	if written != 0 || completionRows != 0 {
+		t.Fatalf("a day with no active item: the family reported %d rows, work_item_completion_daily holds %d, want 0, 0",
+			written, completionRows)
 	}
 	// A repository with no stored item gets no row in either table.
 	otherRepo := uuid.New()
@@ -259,7 +238,7 @@ SELECT sum(completed) FROM (
 	var otherRows uint64
 	if err := conn.QueryRow(ctx, `
 SELECT (SELECT count() FROM issue_type_metrics_daily WHERE org_id = ? AND repo_id = ?)
-     + (SELECT count() FROM investment_metrics_daily WHERE org_id = ? AND repo_id = ?)`,
+     + (SELECT count() FROM work_item_completion_daily WHERE org_id = ? AND repo_id = ?)`,
 		orgID, otherRepo, orgID, otherRepo).Scan(&otherRows); err != nil {
 		t.Fatal(err)
 	}

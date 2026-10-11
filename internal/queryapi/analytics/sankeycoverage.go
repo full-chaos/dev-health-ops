@@ -24,7 +24,7 @@ package analytics
 // both because Go is held to Go's own correctness, not to matching a
 // known-wrong Python read:
 //
-//  1. The non-investment FROM source is investmentMetricsDailyDedupSource
+//  1. The non-investment FROM source is workItemCompletionDedupSource
 //     (timeseries.go), NOT the raw `investment_metrics_daily` table
 //     Python's coverage query reads (analytics.py:673-677: `table = ...
 //     if request.use_investment else "investment_metrics_daily"`).
@@ -469,13 +469,13 @@ func compileSankeyCoverage(req SankeyRequest, orgID string, timeoutSeconds int, 
 	} else {
 		// analytics.py:673-679's own date filter, over the DEDUPED source
 		// (this file's own doc comment above) rather than the raw table
-		// Python reads -- investmentMetricsDailyDedupSource (timeseries.go)
+		// Python reads -- workItemCompletionDedupSource (timeseries.go)
 		// is already an aliased `(SELECT ... argMax(col, computed_at) ...)
 		// AS investment_metrics_daily` subquery, so teamCol/repoCol's
 		// unqualified "team_id"/"repo_id" references below resolve against
 		// its projected columns unchanged; only the FROM source's row
 		// multiplicity across duplicate generations changes.
-		baseTable = investmentMetricsDailyDedupSource
+		baseTable = workItemCompletionDedupSource
 		dateFilter = "day >= {start_date:Date} AND day <= {end_date:Date}"
 		orgFilter = "org_id = {org_id:String}"
 	}

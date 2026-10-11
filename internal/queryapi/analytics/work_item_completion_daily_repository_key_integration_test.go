@@ -61,10 +61,10 @@ func TestBreakdownOverInvestmentMetricsDailyKeepsEachRepositoryOfOneDay(t *testi
 	at := func(hour, minute int) time.Time {
 		return day.Add(time.Duration(hour)*time.Hour + time.Duration(minute)*time.Minute)
 	}
-	insert := `INSERT INTO investment_metrics_daily
-		(repo_id, day, team_id, investment_area, project_stream, delivery_units,
+	insert := `INSERT INTO work_item_completion_daily
+		(repo_id, day, team_id, delivery_units,
 		 work_items_completed, prs_merged, churn_loc, cycle_p50_hours, computed_at, org_id)
-		VALUES (?, ?, '', 'quality', 'general', ?, ?, 0, 0, 0, ?, ?)`
+		VALUES (?, ?, 'team-a', ?, ?, 0, 0, 0, ?, ?)`
 	for _, row := range []struct {
 		repo       string
 		value      uint32
@@ -80,22 +80,22 @@ func TestBreakdownOverInvestmentMetricsDailyKeepsEachRepositoryOfOneDay(t *testi
 	}
 
 	request := BreakdownRequest{
-		Dimension: DimensionTheme,
+		Dimension: DimensionTeam,
 		Measure:   MeasureCount,
 		StartDate: mustGraphQLDate("2026-08-01"),
 		EndDate:   mustGraphQLDate("2026-08-08"),
 		TopN:      10,
 	}
-	query, err := compileBreakdownOver(request, "investment_area", org, queryTimeoutSecs, false, nil)
+	query, err := compileBreakdownOver(request, "team_id", org, queryTimeoutSecs, false, nil)
 	if err != nil {
 		t.Fatalf("CompileBreakdown: %v", err)
 	}
-	result, err := ExecuteBreakdown(ctx, client, org, query, "theme", "count")
+	result, err := ExecuteBreakdown(ctx, client, org, query, "team", "count")
 	if err != nil {
 		t.Fatalf("ExecuteBreakdown: %v", err)
 	}
-	if len(result.Items) != 1 || result.Items[0].Key != "quality" || result.Items[0].Value == nil {
-		t.Fatalf("breakdown items = %+v, want one item of the quality area with a value", result.Items)
+	if len(result.Items) != 1 || result.Items[0].Key != "team-a" || result.Items[0].Value == nil {
+		t.Fatalf("breakdown items = %+v, want one item of team-a with a value", result.Items)
 	}
 	if *result.Items[0].Value != 321 {
 		t.Fatalf("quality count = %v, want 321: the newest row of each repository (1 + 20 + 300). 300 is a key with no repo_id, 1021 is every row",

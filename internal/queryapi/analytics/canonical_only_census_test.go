@@ -129,14 +129,15 @@ func TestCanonicalOnlyCensus_EveryRequestFormEveryDimension(t *testing.T) {
 								statsReads++
 							}
 						}
-						if strings.Contains(s, "evidence_quality_group_key") && (!strings.Contains(s, "work_unit_investments") || strings.Contains(s, "investment_metrics_daily")) {
+						if strings.Contains(s, "evidence_quality_group_key") && (!strings.Contains(s, "work_unit_investments") || strings.Contains(s, "work_item_completion_daily")) {
 							t.Errorf("%s (%s): the evidence-quality group statement must read only the canonical categorization:\n%s", name, cell.p1, s)
 						}
-						if !cell.legacyTableAllowed && strings.Contains(s, "investment_metrics_daily") {
-							t.Errorf("%s (%s): a statement reads the legacy daily table:\n%s", name, cell.p1, s)
+						if !cell.legacyTableAllowed && strings.Contains(s, "work_item_completion_daily") {
+							t.Errorf("%s (%s): a theme or subcategory statement reads the daily completion table:\n%s", name, cell.p1, s)
 						}
-						if !cell.legacyTableAllowed && (strings.Contains(s, "investment_area") || strings.Contains(s, "project_stream")) {
-							t.Errorf("%s (%s): a statement reads a legacy classifier key:\n%s", name, cell.p1, s)
+						// The retired table and the rule classifier's keys are read by NO statement of any cell (CHAOS-9264).
+						if strings.Contains(s, "investment_metrics_daily") || strings.Contains(s, "investment_area") || strings.Contains(s, "project_stream") {
+							t.Errorf("%s (%s): a statement reads the retired investment_metrics_daily table or a classifier key:\n%s", name, cell.p1, s)
 						}
 					}
 					if canonical < cell.canonicalReads {
@@ -236,7 +237,7 @@ func TestCanonicalOnlyCensus_BranchSites(t *testing.T) {
 // take the flag from the resolver; sankeycoverage.go carries the coverage flag.
 func censusPinnedSites() map[string]int {
 	return map[string]int{
-		"breakdown.go": 6, "catalog.go": 4, "filtertranslation.go": 11, "flowmatrix.go": 9, "investment.go": 5,
+		"breakdown.go": 6, "catalog.go": 5, "filtertranslation.go": 13, "flowmatrix.go": 9, "investment.go": 5,
 		"investmentquality.go": 4, "resolve.go": 33, "sankey.go": 5, "sankeycoverage.go": 19, "sankeygrouped.go": 6,
 		"timeseries.go": 4, "validate.go": 5,
 	}

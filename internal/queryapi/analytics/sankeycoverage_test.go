@@ -60,7 +60,7 @@ func (c *recordingClient) coverageStatement(t *testing.T) string {
 // So for `TEAM -> THEME` with BOTH sankey.useInvestment and
 // batch.useInvestment omitted, Python computes nodes/edges from
 // latest_work_unit_investments while computing coverage from
-// investment_metrics_daily. Passing the auto-routed boolean into coverage
+// work_item_completion_daily. Passing the auto-routed boolean into coverage
 // instead makes Go read latest_work_unit_investments, and a daily row with
 // no overlapping current work-unit row then yields a real coverage value
 // on Python and 0/0 on Go.
@@ -95,8 +95,8 @@ func TestResolveSankey_CoverageUsesRawThreeStateFlagNotAutoRoute(t *testing.T) {
 			t.Fatalf("resolveSankey: %v", err)
 		}
 		got := client.coverageStatement(t)
-		if !strings.Contains(got, "investment_metrics_daily") {
-			t.Errorf("coverage query does not read investment_metrics_daily for an omitted use_investment flag;\nthis is the auto-route leaking into coverage. statement:\n%s", got)
+		if !strings.Contains(got, "work_item_completion_daily") {
+			t.Errorf("coverage query does not read work_item_completion_daily for an omitted use_investment flag;\nthis is the auto-route leaking into coverage. statement:\n%s", got)
 		}
 		if strings.Contains(got, "latest_work_unit_investments") || strings.Contains(got, "work_unit_membership_runs") {
 			t.Errorf("coverage query took the INVESTMENT path for an omitted use_investment flag; Python's bool(None) is False. statement:\n%s", got)
@@ -112,7 +112,7 @@ func TestResolveSankey_CoverageUsesRawThreeStateFlagNotAutoRoute(t *testing.T) {
 			t.Fatalf("resolveSankey: %v", err)
 		}
 		got := client.coverageStatement(t)
-		if strings.Contains(got, "FROM investment_metrics_daily") {
+		if strings.Contains(got, "FROM work_item_completion_daily") {
 			t.Errorf("coverage query read the daily table despite useInvestment=true. statement:\n%s", got)
 		}
 		if !strings.Contains(got, "work_unit_investments") {
@@ -141,7 +141,7 @@ func TestResolveSankey_CoverageUsesRawThreeStateFlagNotAutoRoute(t *testing.T) {
 			t.Fatalf("resolveSankey: %v", err)
 		}
 		got := client.coverageStatement(t)
-		if !strings.Contains(got, "investment_metrics_daily") {
+		if !strings.Contains(got, "work_item_completion_daily") {
 			t.Errorf("explicit useInvestment=false did not read the daily table. statement:\n%s", got)
 		}
 	})

@@ -211,6 +211,16 @@ Nothing is ever replaced in place, so a reader **must** take the newest
 was reopened, or its team or labels changed), the daily job writes a row of zeros for that key so
 that the newest row is the true one. A day with no data gets no row.
 
+**`work_item_completion_daily` replaces `investment_metrics_daily` as the daily completion source (CHAOS-9264).** The
+analytics measures that count or time completed work by team, repository or work type (count, throughput,
+cycle time) read `work_item_completion_daily`: one row per (organization, repository, team, day) with the delivery
+units, the completed items and one cycle p50 for the whole key. It has no `investment_area` or `project_stream`
+column; the rule classifier that produced them is no longer run by the daily family. The family keeps its name
+`work_item_investment`. Counts and delivery units equal the old rows summed over the areas; the cycle p50 is the p50 of
+all the key's cycle hours, not a mean of per-area p50s, so a cycle time can differ from the older number. The old table
+gets no new rows and no reader. A work-category filter on the daily path (`useInvestment` false) is refused: the
+categories are the canonical themes, which only the investment path reads.
+
 The canonical theme/subcategory distribution comes from `work_unit_investments`
 (`theme_distribution_json`/`subcategory_distribution_json`, computed once at categorization time,
 deterministic roll-up, never recomputed at read time). `latest_work_unit_investments` is **not** a

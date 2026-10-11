@@ -44,13 +44,15 @@ var teamKeyColumns = map[string]bool{"team_id": true, "scope_id": true}
 // of zeros replaces nothing by itself, and the rule holds because every reader
 // takes the newest row of a key.
 var teamKeyOwnRule = map[string]string{
-	"issue_type_metrics_daily": "withIssueTypeMetricsZeroRows",
-	"investment_metrics_daily": "withInvestmentMetricsZeroRows",
+	"issue_type_metrics_daily":   "withIssueTypeMetricsZeroRows",
+	"work_item_completion_daily": "withWorkItemCompletionZeroRows",
 }
 
 // teamKeyExempt are the tables that hold a team id (or a scope id) in the
 // sorting key and take no row of zeros, each with the reason.
 var teamKeyExempt = map[string]string{
+	"investment_metrics_daily": "retired by CHAOS-9264: no daily family writes it any more and no reader reads it; " +
+		"its rows are the rule classifier's and the table is dropped on its own word",
 	"ai_policy_events": "a row is one policy event of one subject, keyed by the event id; " +
 		"it is not a count of a team and a day, and a row of zeros would be an event that did not occur",
 	"recommendations_daily": "a row is the result of one rule for one team and window (fired or not fired), not a count; " +
@@ -133,7 +135,7 @@ var teamKeyTableWriters = map[string]map[string]string{
 	"ic_landscape_rolling_30d":     {"internal/jobs/metrics/daily/icfinalize/executor.go": ""},
 	"compounding_risk_daily":       {"internal/jobs/metrics/daily/compoundingrisk/clickhouse.go": ""},
 	"issue_type_metrics_daily":     {"internal/jobs/metrics/workitemengine/inserts.go": ""},
-	"investment_metrics_daily":     {"internal/jobs/metrics/workitemengine/inserts.go": ""},
+	"work_item_completion_daily":   {"internal/jobs/metrics/workitemengine/inserts.go": ""},
 }
 
 // censusColumn is one column of a table of the schema.

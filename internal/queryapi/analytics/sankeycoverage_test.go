@@ -68,12 +68,13 @@ func (c *recordingClient) coverageStatement(t *testing.T) string {
 // This test fails on that wiring: it asserts the coverage query targets
 // the DAILY table for the omitted-flag case.
 func TestResolveSankey_CoverageUsesRawThreeStateFlagNotAutoRoute(t *testing.T) {
-	autoRoutingPath := []model.DimensionInput{model.DimensionInputTeam, model.DimensionInputTheme}
+	// CHAOS-9195: THEME is canonical-only on every surface now, so the asymmetry is pinned on WORK_TYPE.
+	autoRoutingPath := []model.DimensionInput{model.DimensionInputTeam, model.DimensionInputWorkType}
 
 	// Guard the premise: if THEME ever stops auto-routing, this test would
 	// pass for the wrong reason, so assert the auto-route is actually live.
-	if !pathAutoRoutesToInvestment([]Dimension{DimensionTeam, DimensionTheme}) {
-		t.Fatal("premise broken: TEAM->THEME no longer auto-routes to the investment path, so this test no longer exercises the asymmetry")
+	if !pathAutoRoutesToInvestment([]Dimension{DimensionTeam, DimensionWorkType}) {
+		t.Fatal("premise broken: TEAM->WORK_TYPE no longer auto-routes to the investment path, so this test no longer exercises the asymmetry")
 	}
 
 	input := model.SankeyRequestInput{

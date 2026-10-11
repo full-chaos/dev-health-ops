@@ -30,7 +30,6 @@ var classifiedOpenSites = map[string]struct {
 	"fixturescli/generate.go":                     {1, "verb `dho fixtures generate`: through secrets.Boundary (verbs_integration_test.go)"},
 	"fixturescli/product_telemetry.go":            {1, "verb `dho fixtures product-telemetry`: through secrets.Boundary (verbs_integration_test.go)"},
 	"fixturescli/synthetic.go":                    {1, "verb `dho fixtures load-synthetic`: through secrets.Boundary (verbs_integration_test.go)"},
-	"investmentnormalize/command.go":              {1, "verb `dho backfill normalize-investment`: every text through secrets.Boundary (verbs_integration_test.go)"},
 	"metricscli/validateflags.go":                 {1, "verb `dho metrics validate-flags`: through secrets.Boundary (verbs_integration_test.go)"},
 	"operationalbackfill/command.go":              {1, "verb `dho backfill operational`: through secrets.Boundary (verbs_integration_test.go)"},
 	"synccli/synccli.go":                          {1, "verb `dho sync teams` (Atlassian): redact() on every returned text and the process logger wrapped for the run (synccli TestSyncTeamsLogsNeitherClickHouseLoginNorPassword)"},

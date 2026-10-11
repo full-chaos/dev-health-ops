@@ -68,10 +68,6 @@ func verbs() []verb {
 			args: func(string) []string { return []string{"--org", "org-1"} }, env: dsnEnv},
 		{family: "backfill operational", root: operationalbackfill.Command(), path: []string{"operational"},
 			args: func(string) []string { return []string{"--org", "c0ffee00-dead-4bee-8bad-f00dfeedface"} }, env: dsnEnv},
-		{family: "backfill normalize-investment", root: operationalbackfill.Command(), path: []string{"normalize-investment"},
-			args: func(string) []string {
-				return []string{"--org", "c0ffee00-dead-4bee-8bad-f00dfeedface", "--from", "2026-01-01", "--to", "2026-01-02"}
-			}, env: dsnEnv},
 	}
 }
 

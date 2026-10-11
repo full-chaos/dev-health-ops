@@ -126,7 +126,6 @@ Every run records a `categorization_status`:
 | `invalid_llm_output` | Still invalid after repair → deterministic fallback applied. In served decision mode (CHAOS-8874) also: a mix of the decision backend with **no validated evidence quote** (zero support: the top raw-probability category; evidence none: the support-level mix), not the fallback prior; see the note below |
 | `insufficient_evidence` | Too little text to call the LLM → fallback |
 | `no_text_sources` | No usable source text → fallback |
-| `normalized_legacy` | NOT a categorization run: a deterministic ESTIMATE written by `dho backfill normalize-investment` (CHAOS-9206, D5939 / D5941) for history that holds only the deprecated rule classifier's keys. One row per completed work item; the legacy key (or a keyword rule over the item's title / description / labels for the classifier's `product/general` fallback) names the sub-theme; `evidence_quality` 0.2 / band `low`; the matched rule is in `structural_evidence_json.normalized_legacy.rule`; no quotes. Never an LLM result. |
 | `llm_task_failed` | The async LLM task raised before an outcome was recorded → fallback |
 
 > **Served decision mode (CHAOS-8874).** With `LLM_PROVIDER=typesafe` the mix

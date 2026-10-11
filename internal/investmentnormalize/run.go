@@ -94,7 +94,11 @@ func (r Report) Lines() []string {
 		fmt.Sprintf("items read: %d", r.Items),
 		fmt.Sprintf("skipped, not completed on the classified day: %d", r.NotCompleted),
 		fmt.Sprintf("skipped, already covered by a canonical unit: %d", r.AlreadyCovered),
+		fmt.Sprintf("skipped: covered by a canonical unit: %d", r.AlreadyCovered),
 		fmt.Sprintf("skipped, no repository reachable: %d", r.NoRepoReachable),
+		fmt.Sprintf("no repository reachable: %s: %d", reasonNoLink, r.NoRepoReasons[reasonNoLink]),
+		fmt.Sprintf("no repository reachable: %s: %d", reasonNoChurn, r.NoRepoReasons[reasonNoChurn]),
+		fmt.Sprintf("no repository reachable: %s: %d", reasonNoOwnRepository, r.NoRepoReasons[reasonNoOwnRepository]),
 		fmt.Sprintf("unmatched (product/general, no estimate rule): %d", r.Unmatched),
 		fmt.Sprintf("unmatched share of product/general: %s", share(r.Unmatched, r.Fallback)),
 		fmt.Sprintf("unmapped keys (items): %d", r.UnmappedTotal()),
@@ -107,7 +111,7 @@ func (r Report) Lines() []string {
 		title string
 		m     map[string]int
 	}{
-		{"no repository reachable", r.NoRepoReasons}, {"by theme", r.ByTheme}, {"by subcategory", r.BySubcategory},
+		{"by theme", r.ByTheme}, {"by subcategory", r.BySubcategory},
 		{"by rule", r.ByRule}, {"by tier", r.ByTier}, {"unmapped", r.Unmapped},
 	} {
 		keys := make([]string, 0, len(section.m))
@@ -125,8 +129,8 @@ func (r Report) Lines() []string {
 // The reasons a repository is not reachable (CHAOS-9227).
 const (
 	reasonNoOwnRepository = "pull request item without its own repository"
-	reasonNoLink          = "issue with no linked pull request"
-	reasonNoChurn         = "linked pull requests carry no churn to weigh the repositories"
+	reasonNoLink          = "no link"
+	reasonNoChurn         = "all links churn 0"
 )
 
 // Tiers of the repository of an item.
@@ -495,7 +499,12 @@ func record(o Options, s sourceRow, allocs []allocation, tier, subcategory, them
 			"repository_tier": tier, "repositories": repoList,
 		},
 	})
-	hashParts := []string{o.Org, s.provider, s.artifactID, s.area, s.stream, s.title, tier, strconv.FormatFloat(units, 'g', -1, 64)}
+	// The input hash names EVERY input of the row, the OUTCOME of the estimate included: the estimate reads the
+	// description and the labels, so hashing only the title would call a re-estimated row "unchanged".
+	hashParts := []string{
+		o.Org, s.provider, s.artifactID, s.area, s.stream, s.legacyRule, s.title, ruleName, subcategory, theme, tier,
+		strconv.FormatFloat(units, 'g', -1, 64), s.createdAt.UTC().Format(time.RFC3339Nano), s.completedAt.UTC().Format(time.RFC3339Nano),
+	}
 	for _, a := range allocs {
 		hashParts = append(hashParts, a.repo.String(), strconv.FormatFloat(a.weight, 'g', -1, 64))
 	}

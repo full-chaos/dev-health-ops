@@ -140,7 +140,8 @@ VALUES ('wu-jev', ?, ?, ?, 'churn_loc', 10, ?, ?, ?, 0.8, 'high', 'ok', 'jev-tes
 	// DRY RUN writes nothing and counts every item in one bucket.
 	dry := runCLI(window...)
 	for _, want := range []string{
-		"items read: 7", "skipped, already covered by a canonical unit: 2", "skipped, no repository reachable: 3", "rows (normalized): 2",
+		"items read: 7", "skipped, already covered by a canonical unit: 2", "skipped: covered by a canonical unit: 2", "skipped, no repository reachable: 3",
+		"no repository reachable: no link: 2", "no repository reachable: all links churn 0: 1", "rows (normalized): 2", "by tier: native = 1", "by tier: own_repository = 1",
 	} {
 		if !strings.Contains(dry, want) {
 			t.Errorf("the dry run lacks %q:\n%s", want, dry)

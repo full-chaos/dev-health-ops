@@ -22,8 +22,8 @@ Keep the same workspace, repository or team, time window, and filters when openi
 ## Inspect the supporting work
 
 1. Select a theme or subcategory in Investment Mix.
-2. Open the available Work Graph or supporting-work action.
-3. Review the work units and linked source artifacts available for that selection.
+2. Open the available Work Graph or supporting-work action, or open the **Evidence** tab of Investment.
+3. Review the work units and linked source artifacts available for that selection. On the **Evidence** tab, select a work unit to read its structural, contextual, and textual evidence.
 4. Check whether issues, pull requests, commits, or relationships are missing for the period.
 5. Compare the visible evidence with the evidence-quality and coverage state.
 6. Return to the distribution without changing scope when you need to compare another theme.

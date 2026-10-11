@@ -24,12 +24,12 @@ Delivery-flow views describe how work moves through the states and review activi
 
 <article class="fc-topic-card" markdown>
 
-State movement
+Time and waiting
 {: .fc-topic-card__label }
 
 ### [PR Flow](pr-flow.md)
 
-Read the current state-transition Sankey to see which available states work moved between and where transition volume concentrates.
+Read the Flow tab metric tiles and the Cycle Time × Throughput quadrant to see where work waits or slows down.
 
 </article>
 

@@ -429,24 +429,12 @@ func TestGitLabEngineDestinationsMatchFrozenPythonProduction(t *testing.T) {
 		func(t *testing.T, input map[string]any) githubIssueTypeMetricsColumns {
 			return newGitHubIssueTypeMetricsColumns(gitlabEngineOracleResult(t, input).IssueTypeMetricsDaily)
 		}, nil)
-	compareRowsAgainstFrozenOracle(t, "gitlab_work-items_investment-classifications", cases,
-		func(t *testing.T, input map[string]any) githubInvestmentClassificationColumns {
-			return newGitHubInvestmentClassificationColumns(gitlabEngineOracleResult(t, input).InvestmentClassificationsDaily)
-		}, nil)
-	compareRowsAgainstFrozenOracle(t, "gitlab_work-items_investment-metrics", cases,
-		func(t *testing.T, input map[string]any) githubInvestmentMetricsColumns {
-			return newGitHubInvestmentMetricsColumns(gitlabEngineOracleResult(t, input).InvestmentMetricsDaily)
-		}, nil)
 }
 
 func gitlabEngineOracleResult(t *testing.T, input map[string]any) GitLabWorkItemDerivedRows {
 	t.Helper()
 	claim, rows, _ := gitlabWorkItemOracleRows(t, input)
 	statusMapping := loadRealStatusMapping(t)
-	classifier, err := NewInvestmentClassifier(investmentConfigPath(t, "real"))
-	if err != nil {
-		t.Fatal(err)
-	}
 	facts := teamattribution.GithubWorkItemDerivationFacts{}
 	encoded, err := json.Marshal(input["Facts"])
 	if err != nil {
@@ -456,7 +444,7 @@ func gitlabEngineOracleResult(t *testing.T, input map[string]any) GitLabWorkItem
 		t.Fatal(err)
 	}
 	source := &githubMultiDayOracleSource{facts: facts}
-	deriver := GitLabWorkItemDeriver{Source: source, statusMapping: statusMapping, investmentClassifier: classifier}
+	deriver := GitLabWorkItemDeriver{Source: source, statusMapping: statusMapping}
 	if sinceRaw, ok := input["SinceAt"].(string); ok {
 		since := githubDerivedOracleTime(t, sinceRaw)
 		before := githubDerivedOracleTime(t, input["BeforeAt"].(string))
@@ -487,15 +475,9 @@ func gitlabRowsFromGitHub(rows githubWorkItemRows) gitlabWorkItemRows {
 
 func TestGitLabWorkItemDerivedResultIsTypedAndComplete(t *testing.T) {
 	statusMapping := loadRealStatusMapping(t)
-	classifier, err := NewInvestmentClassifier(investmentConfigPath(t, "real"))
-	if err != nil {
-		t.Fatal(err)
-	}
 	source := &githubMultiDayOracleSource{}
-	deriver := GitLabWorkItemDeriver{
-		Source: source, statusMapping: statusMapping, investmentClassifier: classifier,
-	}
-	counts := [9]int{}
+	deriver := GitLabWorkItemDeriver{Source: source, statusMapping: statusMapping}
+	counts := [7]int{}
 	cases := gitlabOracleCases(githubDerivedOracleCases())
 	cases = append(cases, gitlabOracleCases(githubWorkItemEngineOracleCases())...)
 	for _, testCase := range cases {
@@ -508,15 +490,13 @@ func TestGitLabWorkItemDerivedResultIsTypedAndComplete(t *testing.T) {
 			t.Fatal(err)
 		}
 		counts[0] += len(result.EstimateCoverageMetricsDaily)
-		counts[1] += len(result.InvestmentClassificationsDaily)
-		counts[2] += len(result.InvestmentMetricsDaily)
-		counts[3] += len(result.IssueTypeMetricsDaily)
-		counts[4] += len(result.WorkItemCycleTimes)
-		counts[5] += len(result.WorkItemMetricsDaily)
-		counts[6] += len(result.WorkItemStateDurationsDaily)
-		counts[7] += len(result.WorkItemTeamAttributions)
-		counts[8] += len(result.WorkItemUserMetricsDaily)
-		if len(result.Gaps) != 0 || len(result.producedDestinations()) != 10 {
+		counts[1] += len(result.IssueTypeMetricsDaily)
+		counts[2] += len(result.WorkItemCycleTimes)
+		counts[3] += len(result.WorkItemMetricsDaily)
+		counts[4] += len(result.WorkItemStateDurationsDaily)
+		counts[5] += len(result.WorkItemTeamAttributions)
+		counts[6] += len(result.WorkItemUserMetricsDaily)
+		if len(result.Gaps) != 0 || len(result.producedDestinations()) != 8 {
 			t.Fatalf("unexpected derived completeness: gaps=%+v produced=%v", result.Gaps, result.producedDestinations())
 		}
 		if result.Watermark == nil || !result.Watermark.Equal(before) {
@@ -549,7 +529,7 @@ func TestBuildGitLabWorkItemDerivedEffectsIsCanonicalAndIncludesAI(t *testing.T)
 			t.Fatalf("effect[%d]=%q want=%q", index, effect.Destination, gitlabWorkItemDerivedDestinations[index])
 		}
 		wantRows := 0
-		if index == 6 {
+		if index == 4 {
 			wantRows = 1
 		}
 		if effect.Recovery != EffectReadbackRequired || len(effect.Rows) != wantRows {
@@ -560,7 +540,7 @@ func TestBuildGitLabWorkItemDerivedEffectsIsCanonicalAndIncludesAI(t *testing.T)
 		t.Fatalf("AI destination was not evaluated: %+v", effects[0])
 	}
 	var metrics gitlabWorkItemMetricsDailyRow
-	if err := json.Unmarshal(effects[6].Rows[0], &metrics); err != nil {
+	if err := json.Unmarshal(effects[4].Rows[0], &metrics); err != nil {
 		t.Fatal(err)
 	}
 	if metrics.ItemsCompletedUnassigned != 7 {

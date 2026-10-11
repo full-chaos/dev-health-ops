@@ -259,14 +259,9 @@ func TestJiraSyncSinkRefusesTheMetricTripletEffects(t *testing.T) {
 }
 
 func TestJiraWorkItemDeriverRejectsForeignProviderAndTenant(t *testing.T) {
-	classifier, err := NewInvestmentClassifier(investmentConfigPath(t, "real"))
-	if err != nil {
-		t.Fatal(err)
-	}
 	source := &githubMultiDayOracleSource{}
 	deriver := JiraWorkItemDeriver{
 		Source: source, statusMapping: loadRealStatusMapping(t),
-		investmentClassifier: classifier,
 	}
 	claim := nativeTestClaim("jira", "work-items")
 	day := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
@@ -317,14 +312,9 @@ func (source jiraDerivedFailingContextSource) LoadStoredInheritableEdges(
 
 func TestJiraWorkItemDeriverFailsClosedWhenAttributionContextCannotLoad(t *testing.T) {
 	wantErr := errors.New("attribution context unavailable")
-	classifier, err := NewInvestmentClassifier(investmentConfigPath(t, "real"))
-	if err != nil {
-		t.Fatal(err)
-	}
 	deriver := JiraWorkItemDeriver{
-		Source:               jiraDerivedFailingContextSource{err: wantErr},
-		statusMapping:        loadRealStatusMapping(t),
-		investmentClassifier: classifier,
+		Source:        jiraDerivedFailingContextSource{err: wantErr},
+		statusMapping: loadRealStatusMapping(t),
 	}
 	claim := nativeTestClaim("jira", "work-items")
 	if _, err := deriver.Derive(

@@ -30,8 +30,6 @@ var preparedRouteRowTypes = map[string][]any{
 	"git_pull_request_reviews":                {pullRequestReviewRow{}},
 	"ai_attribution":                          {githubAIAttributionRow{}},
 	"estimate_coverage_metrics_daily":         {githubEstimateCoverageMetricsDailyRow{}},
-	"investment_classifications_daily":        {githubInvestmentClassificationDailyRow{}},
-	"investment_metrics_daily":                {githubInvestmentMetricsDailyRow{}},
 	"issue_type_metrics_daily":                {githubIssueTypeMetricsDailyRow{}},
 	"sprints":                                 {githubSprintRow{}},
 	"work_item_cycle_times":                   {githubWorkItemCycleTimePersistenceRow{}},

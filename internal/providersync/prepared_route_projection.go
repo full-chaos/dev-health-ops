@@ -22,8 +22,6 @@ var preparedRouteInsertStatements = map[string]string{
 	"git_pull_request_reviews":                pullRequestReviewInsert,
 	"ai_attribution":                          gitHubAIAttributionInsert,
 	"estimate_coverage_metrics_daily":         gitHubEstimateCoverageInsert,
-	"investment_classifications_daily":        gitHubInvestmentClassificationsInsert,
-	"investment_metrics_daily":                gitHubInvestmentMetricsInsert,
 	"issue_type_metrics_daily":                gitHubIssueTypeMetricsInsert,
 	"sprints":                                 gitHubSprintsInsert,
 	"work_item_cycle_times":                   gitHubWorkItemCycleTimesInsert,

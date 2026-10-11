@@ -374,7 +374,6 @@ func TestLinearWorkItemFamilyEffectsFailClosedWhenEitherHalfIsIncomplete(t *test
 			// sync sink: a sink without it is complete.
 			name: "daily job adapter is not owed", missing: []string{},
 			mutate: func(sink *LinearWorkItemFamilyClickHouseEffects) {
-				sink.Derived.InvestmentMetricsDaily = nil
 			},
 		},
 		{
@@ -437,10 +436,6 @@ func linearFamilyEffectsFixture(
 			derived.AIAttribution = adapter
 		case "estimate_coverage_metrics_daily":
 			derived.EstimateCoverageMetricsDaily = adapter
-		case "investment_classifications_daily":
-			derived.InvestmentClassificationsDaily = adapter
-		case "investment_metrics_daily":
-			derived.InvestmentMetricsDaily = adapter
 		case "issue_type_metrics_daily":
 			derived.IssueTypeMetricsDaily = adapter
 		case "work_item_cycle_times":

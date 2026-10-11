@@ -28,7 +28,7 @@ Do not use the page to compare contributors or infer that a frequently changed a
 
 ## What the page shows
 
-The exact layout depends on the current Code and Complexity surface, but read these elements together:
+Under **Diagnose**, the **Complexity** page has Overview, Flame, Hotspots, Ownership Risk, and Churn tabs. The **Hotspots** tab shows files sized by risk score and grouped by repository. The **Code** page shows churn and ownership concentration. The exact layout depends on the surface, but read these elements together:
 
 1. **Repository scope and period** define the source population.
 2. **Visualization form** can present the hierarchy as a heatmap, tree, treemap, or related code-area view.

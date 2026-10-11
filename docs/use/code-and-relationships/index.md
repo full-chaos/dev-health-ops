@@ -62,4 +62,4 @@ Start with **Code Hotspots** when the question is “Which code areas deserve in
 
 A visible hotspot or graph path is not a verdict. Code concentration can reflect active delivery, a deliberate refactor, generated output, repeated repair, or another context. A relationship can be missing because the source does not expose it or synchronization is incomplete. Keep the selected scope and period, then open the underlying work before deciding what the pattern means.
 
-The former Flame diagrams material remains source evidence only until a current canonical route and interaction are verified. It is not published as a supported v2 workflow.
+Flame diagrams are on the **Flame** tab of **Complexity** under **Diagnose**. This guide has no separate workflow page for them.

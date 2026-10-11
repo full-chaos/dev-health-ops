@@ -20,7 +20,6 @@ _HELM_CHART = _REPO_ROOT / "deploy" / "helm" / "dev-health"
 
 _PACKAGED_WORK_ITEM_CONFIG = {
     "status_mapping.yaml": "/app/config/status_mapping.yaml",
-    "investment_areas.yaml": "/app/config/investment_areas.yaml",
 }
 
 _MIGRATION_CONFIG_DEFAULTS = {

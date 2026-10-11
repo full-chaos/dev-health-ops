@@ -31,7 +31,7 @@ func TestLinearDerivedClickHouseEffectsPersistReadBackAndFenceTenants(t *testing
 		t.Fatal(err)
 	}
 
-	if len(effects) != len(linearWorkItemDerivedEffectDestinations) || len(effects) != 10 {
+	if len(effects) != len(linearWorkItemDerivedEffectDestinations) || len(effects) != 8 {
 		t.Fatalf("effects=%d want=%d", len(effects), len(linearWorkItemDerivedEffectDestinations))
 	}
 	refused := 0
@@ -44,8 +44,8 @@ func TestLinearDerivedClickHouseEffectsPersistReadBackAndFenceTenants(t *testing
 			assertSyncSinkRefusesDailyJobTable(t, ctx, conn, sink, claim, effect)
 		})
 	}
-	if refused != 9 {
-		t.Fatalf("refused effects=%d want one for each of the nine tables of the daily job", refused)
+	if refused != 7 {
+		t.Fatalf("refused effects=%d want one for each of the seven tables of the daily job", refused)
 	}
 	if lease.calls != 0 {
 		t.Fatalf("lease assertions=%d: a refused effect must stop before the lease and the store", lease.calls)
@@ -163,7 +163,6 @@ func linearDerivedIntegrationEffects(t *testing.T, claim Claim, now time.Time) [
 	day := newGitHubWorkItemDerivedDay(now)
 	metricDay := newGitHubWorkItemMetricDay(now)
 	teamID, teamName := "linear-team", "Linear Team"
-	area, rule := "feature_delivery", "linear_rule"
 	ratio := 0.5
 	assignee := "linear@example.com"
 	startedAt := now.Add(-2 * time.Hour)
@@ -199,12 +198,6 @@ func linearDerivedIntegrationEffects(t *testing.T, claim Claim, now time.Time) [
 	issueType := githubWorkItemEngineEffectIssueRow()
 	issueType.Day, issueType.Provider, issueType.OrgID, issueType.RepoID = day, "linear", claim.OrgID, &repoID
 	issueType.ComputedAt = now
-	classification := githubWorkItemEngineEffectClassificationRow()
-	classification.Day, classification.Provider, classification.OrgID, classification.RepoID = day, "linear", claim.OrgID, &repoID
-	classification.ComputedAt, classification.InvestmentArea, classification.RuleID = now, &area, &rule
-	investment := githubWorkItemEngineEffectMetricsRow()
-	investment.Day, investment.OrgID, investment.RepoID = day, claim.OrgID, &repoID
-	investment.ComputedAt, investment.InvestmentArea = now, &area
 
 	rows := LinearWorkItemDerivedEffectRows{}
 	rows.AIAttributions = []LinearAIAttributionRow{{
@@ -221,8 +214,6 @@ func linearDerivedIntegrationEffects(t *testing.T, claim Claim, now time.Time) [
 	rows.WorkItemUserMetricsDaily = []LinearWorkItemUserMetricsDailyRow{userMetrics}
 	rows.WorkItemCycleTimes = []LinearWorkItemCycleTimePersistenceRow{cycle}
 	rows.IssueTypeMetricsDaily = []LinearIssueTypeMetricsDailyRow{issueType}
-	rows.InvestmentClassificationsDaily = []LinearInvestmentClassificationDailyRow{classification}
-	rows.InvestmentMetricsDaily = []LinearInvestmentMetricsDailyRow{investment}
 	effects, err := BuildLinearWorkItemDerivedEffects(rows)
 	if err != nil {
 		t.Fatal(err)

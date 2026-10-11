@@ -23,8 +23,6 @@ var ErrGitLabWorkItemDerivedProducerUnavailable = errors.New(
 var gitlabWorkItemDerivedDestinations = []string{
 	"ai_attribution",
 	"estimate_coverage_metrics_daily",
-	"investment_classifications_daily",
-	"investment_metrics_daily",
 	"issue_type_metrics_daily",
 	"work_item_cycle_times",
 	"work_item_metrics_daily",
@@ -49,8 +47,6 @@ type gitlabWorkItemUserMetricsDailyRow = githubWorkItemUserMetricsDailyRow
 type gitlabWorkItemCycleTimeRecord = githubWorkItemCycleTimeRecord
 type gitlabWorkItemCycleTimePersistenceRow = githubWorkItemCycleTimePersistenceRow
 type gitlabIssueTypeMetricsDailyRow = githubIssueTypeMetricsDailyRow
-type gitlabInvestmentClassificationDailyRow = githubInvestmentClassificationDailyRow
-type gitlabInvestmentMetricsDailyRow = githubInvestmentMetricsDailyRow
 
 // GitLabWorkItemDerivedGap is a typed explanation of a destination that was
 // evaluated and deliberately withheld because its authoritative producer did
@@ -66,18 +62,16 @@ type GitLabWorkItemDerivedGap struct {
 // accidentally smuggle an untyped map or generic evidence envelope into the
 // effect ledger.
 type GitLabWorkItemDerivedRows struct {
-	AIAttributions                 []gitlabAIAttributionRow
-	EstimateCoverageMetricsDaily   []gitlabEstimateCoverageMetricsDailyRow
-	InvestmentClassificationsDaily []gitlabInvestmentClassificationDailyRow
-	InvestmentMetricsDaily         []gitlabInvestmentMetricsDailyRow
-	IssueTypeMetricsDaily          []gitlabIssueTypeMetricsDailyRow
-	WorkItemCycleTimes             []gitlabWorkItemCycleTimePersistenceRow
-	WorkItemMetricsDaily           []gitlabWorkItemMetricsDailyRow
-	WorkItemStateDurationsDaily    []gitlabWorkItemStateDurationDailyRow
-	WorkItemTeamAttributions       []gitlabWorkItemTeamAttributionRow
-	WorkItemUserMetricsDaily       []gitlabWorkItemUserMetricsDailyRow
-	Gaps                           []GitLabWorkItemDerivedGap
-	Watermark                      *time.Time
+	AIAttributions               []gitlabAIAttributionRow
+	EstimateCoverageMetricsDaily []gitlabEstimateCoverageMetricsDailyRow
+	IssueTypeMetricsDaily        []gitlabIssueTypeMetricsDailyRow
+	WorkItemCycleTimes           []gitlabWorkItemCycleTimePersistenceRow
+	WorkItemMetricsDaily         []gitlabWorkItemMetricsDailyRow
+	WorkItemStateDurationsDaily  []gitlabWorkItemStateDurationDailyRow
+	WorkItemTeamAttributions     []gitlabWorkItemTeamAttributionRow
+	WorkItemUserMetricsDaily     []gitlabWorkItemUserMetricsDailyRow
+	Gaps                         []GitLabWorkItemDerivedGap
+	Watermark                    *time.Time
 	// MembershipRejections (CHAOS-4320 round 6) is NOT one of the destinations
 	// producedDestinations() lists -- it is attached only to the
 	// WorkItemTeamAttributions EffectBatch's own MembershipRejections field.
@@ -113,10 +107,9 @@ func gitlabWorkItemRowsAsGitHub(rows gitlabWorkItemRows) githubWorkItemRows {
 // this deriver computed. The type stays as unreferenced code until its
 // removal.
 type GitLabWorkItemDeriver struct {
-	Source               githubWorkItemDerivationContextSource
-	statusMapping        *StatusMapping
-	investmentClassifier *InvestmentClassifier
-	observations         *workItemDerivationObservations
+	Source        githubWorkItemDerivationContextSource
+	statusMapping *StatusMapping
+	observations  *workItemDerivationObservations
 }
 
 // StoredEdgeMergeObservation reports the stored-edge union this deriver has
@@ -128,31 +121,25 @@ func (deriver *GitLabWorkItemDeriver) StoredEdgeMergeObservation() teamattributi
 	return deriver.observations.storedEdgeMergeSnapshot()
 }
 
-// NewGitLabWorkItemDeriver loads the same governed status and investment
-// configuration used by Python's work-item job. Both paths are required so a
-// missing engine cannot be mistaken for an empty destination.
+// NewGitLabWorkItemDeriver loads the governed status mapping used by Python's
+// work-item job. The path is required so a missing engine cannot be mistaken
+// for an empty destination.
 func NewGitLabWorkItemDeriver(
 	conn driver.Conn,
 	lease providerfoundation.LeaseGuard,
 	statusMappingConfigPath string,
-	investmentConfigPath string,
 ) (*GitLabWorkItemDeriver, error) {
-	if conn == nil || lease == nil || strings.TrimSpace(statusMappingConfigPath) == "" ||
-		strings.TrimSpace(investmentConfigPath) == "" {
+	if conn == nil || lease == nil || strings.TrimSpace(statusMappingConfigPath) == "" {
 		return nil, ErrInvalidConfiguration
 	}
 	statusMapping, err := LoadStatusMapping(statusMappingConfigPath)
 	if err != nil {
 		return nil, err
 	}
-	classifier, err := NewInvestmentClassifier(investmentConfigPath)
-	if err != nil {
-		return nil, err
-	}
 	return &GitLabWorkItemDeriver{
 		Source:        githubWorkItemClickHouseDerivationContextSource{Conn: conn, Lease: lease},
-		statusMapping: statusMapping, investmentClassifier: classifier,
-		observations: newWorkItemDerivationObservations(),
+		statusMapping: statusMapping,
+		observations:  newWorkItemDerivationObservations(),
 	}, nil
 }
 
@@ -167,8 +154,7 @@ func (deriver GitLabWorkItemDeriver) Derive(
 	rows gitlabWorkItemRows,
 	normalizedAt time.Time,
 ) (GitLabWorkItemDerivedRows, error) {
-	if ctx == nil || deriver.Source == nil || deriver.statusMapping == nil ||
-		deriver.investmentClassifier == nil || claim.Validate() != nil ||
+	if ctx == nil || deriver.Source == nil || deriver.statusMapping == nil || claim.Validate() != nil ||
 		claim.Provider != "gitlab" || claim.Dataset != "work-items" || normalizedAt.IsZero() {
 		return GitLabWorkItemDerivedRows{}, ErrInvalidConfiguration
 	}
@@ -195,18 +181,16 @@ func (deriver GitLabWorkItemDeriver) Derive(
 		watermark = &value
 	}
 	result := GitLabWorkItemDerivedRows{
-		AIAttributions:                 append([]gitlabAIAttributionRow(nil), rows.AIAttributions...),
-		EstimateCoverageMetricsDaily:   []gitlabEstimateCoverageMetricsDailyRow{},
-		InvestmentClassificationsDaily: []gitlabInvestmentClassificationDailyRow{},
-		InvestmentMetricsDaily:         []gitlabInvestmentMetricsDailyRow{},
-		IssueTypeMetricsDaily:          []gitlabIssueTypeMetricsDailyRow{},
-		WorkItemCycleTimes:             []gitlabWorkItemCycleTimePersistenceRow{},
-		WorkItemMetricsDaily:           []gitlabWorkItemMetricsDailyRow{},
-		WorkItemStateDurationsDaily:    []gitlabWorkItemStateDurationDailyRow{},
-		WorkItemTeamAttributions:       []gitlabWorkItemTeamAttributionRow{},
-		WorkItemUserMetricsDaily:       []gitlabWorkItemUserMetricsDailyRow{},
-		Watermark:                      watermark,
-		Gaps:                           []GitLabWorkItemDerivedGap{},
+		AIAttributions:               append([]gitlabAIAttributionRow(nil), rows.AIAttributions...),
+		EstimateCoverageMetricsDaily: []gitlabEstimateCoverageMetricsDailyRow{},
+		IssueTypeMetricsDaily:        []gitlabIssueTypeMetricsDailyRow{},
+		WorkItemCycleTimes:           []gitlabWorkItemCycleTimePersistenceRow{},
+		WorkItemMetricsDaily:         []gitlabWorkItemMetricsDailyRow{},
+		WorkItemStateDurationsDaily:  []gitlabWorkItemStateDurationDailyRow{},
+		WorkItemTeamAttributions:     []gitlabWorkItemTeamAttributionRow{},
+		WorkItemUserMetricsDaily:     []gitlabWorkItemUserMetricsDailyRow{},
+		Watermark:                    watermark,
+		Gaps:                         []GitLabWorkItemDerivedGap{},
 	}
 	for _, day := range days {
 		triplet, err := buildWorkItemMetricTripletForProvider(
@@ -232,10 +216,7 @@ func (deriver GitLabWorkItemDeriver) Derive(
 		result.WorkItemStateDurationsDaily = append(result.WorkItemStateDurationsDaily, surfaces.StateDurations...)
 		result.MembershipRejections = append(result.MembershipRejections, surfaces.MembershipRejections...)
 
-		engine := GitHubWorkItemEngineDeriver{
-			statusMapping:        deriver.statusMapping,
-			investmentClassifier: deriver.investmentClassifier,
-		}
+		engine := GitHubWorkItemEngineDeriver{statusMapping: deriver.statusMapping}
 		engineRows, err := engine.deriveRowsForProvider(
 			ctx, "gitlab", claim, gitlabWorkItemRowsAsGitHub(rows), day, normalizedAt, contextFacts,
 		)
@@ -243,8 +224,6 @@ func (deriver GitLabWorkItemDeriver) Derive(
 			return GitLabWorkItemDerivedRows{}, err
 		}
 		result.IssueTypeMetricsDaily = append(result.IssueTypeMetricsDaily, engineRows.IssueTypes...)
-		result.InvestmentClassificationsDaily = append(result.InvestmentClassificationsDaily, engineRows.Classifications...)
-		result.InvestmentMetricsDaily = append(result.InvestmentMetricsDaily, engineRows.InvestmentMetrics...)
 	}
 	return result, nil
 }
@@ -253,16 +232,14 @@ func (deriver GitLabWorkItemDeriver) Derive(
 // one field per landed destination and therefore cannot silently omit a row
 // family through a string-keyed map.
 type GitLabWorkItemDerivedEffectRows struct {
-	AIAttributions                 []gitlabAIAttributionRow
-	EstimateCoverageMetricsDaily   []gitlabEstimateCoverageMetricsDailyRow
-	InvestmentClassificationsDaily []gitlabInvestmentClassificationDailyRow
-	InvestmentMetricsDaily         []gitlabInvestmentMetricsDailyRow
-	IssueTypeMetricsDaily          []gitlabIssueTypeMetricsDailyRow
-	WorkItemCycleTimes             []gitlabWorkItemCycleTimePersistenceRow
-	WorkItemMetricsDaily           []gitlabWorkItemMetricsDailyRow
-	WorkItemStateDurationsDaily    []gitlabWorkItemStateDurationDailyRow
-	WorkItemTeamAttributions       []gitlabWorkItemTeamAttributionRow
-	WorkItemUserMetricsDaily       []gitlabWorkItemUserMetricsDailyRow
+	AIAttributions               []gitlabAIAttributionRow
+	EstimateCoverageMetricsDaily []gitlabEstimateCoverageMetricsDailyRow
+	IssueTypeMetricsDaily        []gitlabIssueTypeMetricsDailyRow
+	WorkItemCycleTimes           []gitlabWorkItemCycleTimePersistenceRow
+	WorkItemMetricsDaily         []gitlabWorkItemMetricsDailyRow
+	WorkItemStateDurationsDaily  []gitlabWorkItemStateDurationDailyRow
+	WorkItemTeamAttributions     []gitlabWorkItemTeamAttributionRow
+	WorkItemUserMetricsDaily     []gitlabWorkItemUserMetricsDailyRow
 	// MembershipRejections (CHAOS-4320 round 6) stays as the unmarshaled
 	// teamattribution shape through this struct -- BuildGitLabWorkItemDerivedEffects
 	// marshals it, only for the work_item_team_attributions case, the same
@@ -272,17 +249,15 @@ type GitLabWorkItemDerivedEffectRows struct {
 
 func (rows GitLabWorkItemDerivedRows) EffectRows() GitLabWorkItemDerivedEffectRows {
 	return GitLabWorkItemDerivedEffectRows{
-		AIAttributions:                 rows.AIAttributions,
-		EstimateCoverageMetricsDaily:   rows.EstimateCoverageMetricsDaily,
-		InvestmentClassificationsDaily: rows.InvestmentClassificationsDaily,
-		InvestmentMetricsDaily:         rows.InvestmentMetricsDaily,
-		IssueTypeMetricsDaily:          rows.IssueTypeMetricsDaily,
-		WorkItemCycleTimes:             rows.WorkItemCycleTimes,
-		WorkItemMetricsDaily:           rows.WorkItemMetricsDaily,
-		WorkItemStateDurationsDaily:    rows.WorkItemStateDurationsDaily,
-		WorkItemTeamAttributions:       rows.WorkItemTeamAttributions,
-		WorkItemUserMetricsDaily:       rows.WorkItemUserMetricsDaily,
-		MembershipRejections:           rows.MembershipRejections,
+		AIAttributions:               rows.AIAttributions,
+		EstimateCoverageMetricsDaily: rows.EstimateCoverageMetricsDaily,
+		IssueTypeMetricsDaily:        rows.IssueTypeMetricsDaily,
+		WorkItemCycleTimes:           rows.WorkItemCycleTimes,
+		WorkItemMetricsDaily:         rows.WorkItemMetricsDaily,
+		WorkItemStateDurationsDaily:  rows.WorkItemStateDurationsDaily,
+		WorkItemTeamAttributions:     rows.WorkItemTeamAttributions,
+		WorkItemUserMetricsDaily:     rows.WorkItemUserMetricsDaily,
+		MembershipRejections:         rows.MembershipRejections,
 	}
 }
 
@@ -298,10 +273,6 @@ func BuildGitLabWorkItemDerivedEffects(rows GitLabWorkItemDerivedEffectRows) ([]
 			effect, err = buildGitLabTypedDerivedEffect(destination, rows.AIAttributions)
 		case "estimate_coverage_metrics_daily":
 			effect, err = buildGitLabTypedDerivedEffect(destination, rows.EstimateCoverageMetricsDaily)
-		case "investment_classifications_daily":
-			effect, err = buildGitLabTypedDerivedEffect(destination, rows.InvestmentClassificationsDaily)
-		case "investment_metrics_daily":
-			effect, err = buildGitLabTypedDerivedEffect(destination, rows.InvestmentMetricsDaily)
 		case "issue_type_metrics_daily":
 			effect, err = buildGitLabTypedDerivedEffect(destination, rows.IssueTypeMetricsDaily)
 		case "work_item_cycle_times":
@@ -402,17 +373,15 @@ func gitlabDerivedGitHubIdentity(
 // tables that the daily job owns; no destination reaches them, and they stay
 // only until the dead-code removal that follows the cut.
 type GitLabWorkItemDerivedClickHouseEffects struct {
-	Lease                          providerfoundation.LeaseGuard
-	AIAttribution                  GitLabAIAttributionClickHouseAdapter
-	EstimateCoverageMetricsDaily   GitHubEstimateCoverageClickHouseEffects
-	InvestmentClassificationsDaily GitHubInvestmentClassificationsClickHouseEffects
-	InvestmentMetricsDaily         GitHubInvestmentMetricsClickHouseEffects
-	IssueTypeMetricsDaily          GitHubIssueTypeMetricsClickHouseEffects
-	WorkItemCycleTimes             GitHubWorkItemCycleTimesClickHouseEffects
-	WorkItemMetricsDaily           GitHubWorkItemMetricsDailyClickHouseEffects
-	WorkItemStateDurationsDaily    GitHubWorkItemStateDurationsClickHouseEffects
-	WorkItemTeamAttributions       GitHubWorkItemTeamAttributionsClickHouseEffects
-	WorkItemUserMetricsDaily       GitHubWorkItemUserMetricsDailyClickHouseEffects
+	Lease                        providerfoundation.LeaseGuard
+	AIAttribution                GitLabAIAttributionClickHouseAdapter
+	EstimateCoverageMetricsDaily GitHubEstimateCoverageClickHouseEffects
+	IssueTypeMetricsDaily        GitHubIssueTypeMetricsClickHouseEffects
+	WorkItemCycleTimes           GitHubWorkItemCycleTimesClickHouseEffects
+	WorkItemMetricsDaily         GitHubWorkItemMetricsDailyClickHouseEffects
+	WorkItemStateDurationsDaily  GitHubWorkItemStateDurationsClickHouseEffects
+	WorkItemTeamAttributions     GitHubWorkItemTeamAttributionsClickHouseEffects
+	WorkItemUserMetricsDaily     GitHubWorkItemUserMetricsDailyClickHouseEffects
 }
 
 // metrics (CHAOS-4320 round 7, codex round 6 P1, executed repro): the
@@ -430,17 +399,15 @@ func NewGitLabWorkItemDerivedClickHouseEffects(
 		return GitLabWorkItemDerivedClickHouseEffects{}, ErrInvalidConfiguration
 	}
 	sink := GitLabWorkItemDerivedClickHouseEffects{
-		Lease:                          lease,
-		AIAttribution:                  GitLabAIAttributionClickHouseAdapter{Conn: conn},
-		EstimateCoverageMetricsDaily:   GitHubEstimateCoverageClickHouseEffects{Conn: conn, Lease: lease},
-		InvestmentClassificationsDaily: GitHubInvestmentClassificationsClickHouseEffects{Conn: conn, Lease: lease},
-		InvestmentMetricsDaily:         GitHubInvestmentMetricsClickHouseEffects{Conn: conn, Lease: lease},
-		IssueTypeMetricsDaily:          GitHubIssueTypeMetricsClickHouseEffects{Conn: conn, Lease: lease},
-		WorkItemCycleTimes:             GitHubWorkItemCycleTimesClickHouseEffects{Conn: conn, Lease: lease},
-		WorkItemMetricsDaily:           GitHubWorkItemMetricsDailyClickHouseEffects{Conn: conn, Lease: lease},
-		WorkItemStateDurationsDaily:    GitHubWorkItemStateDurationsClickHouseEffects{Conn: conn, Lease: lease},
-		WorkItemTeamAttributions:       GitHubWorkItemTeamAttributionsClickHouseEffects{Conn: conn, Lease: lease, Metrics: metrics},
-		WorkItemUserMetricsDaily:       GitHubWorkItemUserMetricsDailyClickHouseEffects{Conn: conn, Lease: lease},
+		Lease:                        lease,
+		AIAttribution:                GitLabAIAttributionClickHouseAdapter{Conn: conn},
+		EstimateCoverageMetricsDaily: GitHubEstimateCoverageClickHouseEffects{Conn: conn, Lease: lease},
+		IssueTypeMetricsDaily:        GitHubIssueTypeMetricsClickHouseEffects{Conn: conn, Lease: lease},
+		WorkItemCycleTimes:           GitHubWorkItemCycleTimesClickHouseEffects{Conn: conn, Lease: lease},
+		WorkItemMetricsDaily:         GitHubWorkItemMetricsDailyClickHouseEffects{Conn: conn, Lease: lease},
+		WorkItemStateDurationsDaily:  GitHubWorkItemStateDurationsClickHouseEffects{Conn: conn, Lease: lease},
+		WorkItemTeamAttributions:     GitHubWorkItemTeamAttributionsClickHouseEffects{Conn: conn, Lease: lease, Metrics: metrics},
+		WorkItemUserMetricsDaily:     GitHubWorkItemUserMetricsDailyClickHouseEffects{Conn: conn, Lease: lease},
 	}
 	if missing := sink.MissingDestinations(); len(missing) > 0 {
 		return sink, ErrInvalidConfiguration

@@ -86,18 +86,8 @@ func TestLinearWorkItemEngineDestinationsMatchFrozenPythonProduction(t *testing.
 	cases := linearizeWorkItemOracleCases(githubDerivedOracleCases())
 	compareRowsAgainstFrozenOracle(t, "linear_work-items_issue-type-metrics", cases,
 		func(t *testing.T, input map[string]any) githubIssueTypeMetricsColumns {
-			issueTypes, _, _ := buildGitHubWorkItemEngineOracleRows(t, input)
+			issueTypes := buildGitHubWorkItemEngineOracleRows(t, input)
 			return newGitHubIssueTypeMetricsColumns(issueTypes)
-		}, nil)
-	compareRowsAgainstFrozenOracle(t, "linear_work-items_investment-classifications", cases,
-		func(t *testing.T, input map[string]any) githubInvestmentClassificationColumns {
-			_, classifications, _ := buildGitHubWorkItemEngineOracleRows(t, input)
-			return newGitHubInvestmentClassificationColumns(classifications)
-		}, nil)
-	compareRowsAgainstFrozenOracle(t, "linear_work-items_investment-metrics", cases,
-		func(t *testing.T, input map[string]any) githubInvestmentMetricsColumns {
-			_, _, metrics := buildGitHubWorkItemEngineOracleRows(t, input)
-			return newGitHubInvestmentMetricsColumns(metrics)
 		}, nil)
 }
 

@@ -6,9 +6,6 @@ package providersync
 // golden starts as "PIN:" + its file name without ".json".
 var oraclePairGoldenPins = map[string]string{
 	"acr_entitlements_agent-context-runtime.TestGenericOracleMatchesFrozenPythonForAcrEntitlement.golden.json":                                     "8855dd8f7a104328b77458b3ded74cb0f788ddb2ea452bddf156cee28ebc9636",
-	"analytics_investment_classify.TestInvestmentClassifierMatchesFrozenPythonProduction.golden.json":                                              "57e949380de6b98a3ad2b2a301e5065faef0b35709097baaadf46b0b92da868a",
-	"analytics_investment_divergence.TestInvestmentClassifierDeclaredDivergencesStillDiverge.golden.json":                                          "0292fc03140019194fd6a32e1cd795d0d2d7b35e40cf2506dfa1893ef9b720dd",
-	"analytics_investment_refusal.TestInvestmentClassifierRefusesWhatFrozenPythonRefuses.golden.json":                                              "227b3e7ea5c0c577323016563b15ecc902f41d84c9fe6aab8cd3abcd60eb80fb",
 	"github_blame_outcomes.TestGitHubBlamePerFileFailureMatchesFrozenPython.golden.json":                                                           "5ff0e34b1f3e6efb6a3d204d4ab55193693de70921103b43a4c7a161fd6d79bc",
 	"github_blame_row.TestGenericOracleMatchesFrozenPythonForGitHubBlameRowConstruction.golden.json":                                               "f03e561fdac8937776df3126292885195169bc898e8675b8353c4e4d667aa913",
 	"github_blame_row.TestGenericOracleRediscoversGitHubBlameAuthorDefaultDefect.golden.json":                                                      "182433c42dde8f33f3b6bc1c315d97cc25cc97be4b88fbe637e2c0afecf3aba8",

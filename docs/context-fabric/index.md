@@ -4,10 +4,7 @@ summary: See how Context Fabric gives people and agents evidence-backed context 
 content_type: marketing
 owner: product
 source_of_truth:
-  - current Ask Dev window and /dev workspace
   - current Context Fabric Validation surface
-  - Ask Dev Interaction Surface Amendment — Context Fabric relationship, chat window, and full-page workspace
-  - Ask Dev Wave 3.1 — Evidence-backed engineering intelligence
   - "PRD v2.1: Dev Health Agent Context Runtime — Go service and MCP sidecar"
   - full-chaos/context-fabric-agents README.md
 applicability: current
@@ -30,13 +27,13 @@ Context Fabric turns the engineering evidence already flowing through Dev Health
 
 <div class="fc-cf-actions" markdown>
 
-[Explore Ask Dev](../use/ai-workflows/index.md#use-ask-dev-for-a-human-investigation){ .md-button .md-button--primary }
-[Connect an agent](https://github.com/full-chaos/context-fabric-agents#install){ .md-button }
+[Connect an agent](https://github.com/full-chaos/context-fabric-agents#install){ .md-button .md-button--primary }
+[Choose an entry point](../use/ai-workflows/index.md#choose-the-supported-entry-point){ .md-button }
 
 </div>
 </div>
 
-<aside class="fc-cf-hero__visual" aria-label="Context Fabric connects the engineering ecosystem to Ask Dev and ACR MCP consumers">
+<aside class="fc-cf-hero__visual" aria-label="Context Fabric connects the engineering ecosystem to ACR MCP consumers">
   <div class="fc-cf-sources" aria-label="Connected engineering evidence">
     <span>Work and priorities</span>
     <span>Code and delivery</span>
@@ -48,7 +45,6 @@ Context Fabric turns the engineering evidence already flowing through Dev Health
     <span>State → Pressure → Cause → Evidence → Action</span>
   </div>
   <div class="fc-cf-destinations">
-    <div><strong>Ask Dev</strong><span>For people</span></div>
     <div><strong>ACR / MCP</strong><span>For developers and agents</span></div>
   </div>
 </aside>
@@ -168,28 +164,6 @@ It gives a leader a connected view before deciding where to intervene, a team a 
 
 <div class="fc-cf-use-grid" markdown>
 
-<article class="fc-cf-use-card fc-cf-use-card--ask" markdown>
-
-For teams and leaders
-{: .fc-cf-card-kicker }
-
-### Ask Dev
-
-Ask Dev is the people-facing conversational layer in Dev Health. It brings project, team, portfolio, delivery, reliability, investment, operational, and data-trust evidence into one investigation instead of making someone navigate and reconcile every surface manually.
-
-<div class="fc-cf-question-list" markdown>
-
-- What needs attention across this portfolio?
-- Which teams show sustained pressure, and why?
-- Where is engineering investment going?
-- What operational deficiencies or source gaps matter first?
-
-</div>
-
-[See how Ask Dev works →](../use/ai-workflows/index.md#use-ask-dev-for-a-human-investigation){ .fc-cf-card-link }
-
-</article>
-
 <article class="fc-cf-use-card fc-cf-use-card--mcp" markdown>
 
 For developers and agents
@@ -243,11 +217,11 @@ What it can explain depends on the sources, permissions, freshness, relationship
 
 ## Give every decision and every agent the context behind the work. { #fc-cf-final-title }
 
-Use Ask Dev when people need shared, evidence-backed understanding. Use ACR and MCP when agents need the relevant scope, relationships, history, constraints, and evidence before they act.
+Use ACR and MCP when agents need the relevant scope, relationships, history, constraints, and evidence before they act.
 
 <div class="fc-cf-actions" markdown>
 
-[Start with Ask Dev](../use/ai-workflows/index.md#use-ask-dev-for-a-human-investigation){ .md-button .md-button--primary }
+[Configure the ACR MCP sidecar](https://github.com/full-chaos/context-fabric-agents/blob/main/docs/usage.md){ .md-button .md-button--primary }
 [Read the technical architecture](../contribute/architecture/platform.md#ask-dev-and-context-fabric-runtime){ .md-button }
 
 </div>

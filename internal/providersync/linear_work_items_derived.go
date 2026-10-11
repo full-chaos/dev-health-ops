@@ -18,24 +18,20 @@ import (
 // its six normalized facts. AI attribution is derived only from explicit issue
 // labels; title and description text are not attribution inputs.
 type LinearWorkItemDerivedEffectRows struct {
-	AIAttributions                 []LinearAIAttributionRow
-	EstimateCoverageMetricsDaily   []LinearEstimateCoverageMetricsDailyRow
-	InvestmentClassificationsDaily []LinearInvestmentClassificationDailyRow
-	InvestmentMetricsDaily         []LinearInvestmentMetricsDailyRow
-	IssueTypeMetricsDaily          []LinearIssueTypeMetricsDailyRow
-	WorkItemCycleTimes             []LinearWorkItemCycleTimePersistenceRow
-	WorkItemMetricsDaily           []LinearWorkItemMetricsDailyRow
-	WorkItemStateDurationsDaily    []LinearWorkItemStateDurationDailyRow
-	WorkItemTeamAttributions       []LinearWorkItemTeamAttributionRow
-	WorkItemUserMetricsDaily       []LinearWorkItemUserMetricsDailyRow
-	MembershipRejections           []teamattribution.GithubWorkItemDerivationRejectedMembership
+	AIAttributions               []LinearAIAttributionRow
+	EstimateCoverageMetricsDaily []LinearEstimateCoverageMetricsDailyRow
+	IssueTypeMetricsDaily        []LinearIssueTypeMetricsDailyRow
+	WorkItemCycleTimes           []LinearWorkItemCycleTimePersistenceRow
+	WorkItemMetricsDaily         []LinearWorkItemMetricsDailyRow
+	WorkItemStateDurationsDaily  []LinearWorkItemStateDurationDailyRow
+	WorkItemTeamAttributions     []LinearWorkItemTeamAttributionRow
+	WorkItemUserMetricsDaily     []LinearWorkItemUserMetricsDailyRow
+	MembershipRejections         []teamattribution.GithubWorkItemDerivationRejectedMembership
 }
 
 var linearWorkItemDerivedEffectDestinations = []string{
 	"ai_attribution",
 	"estimate_coverage_metrics_daily",
-	"investment_classifications_daily",
-	"investment_metrics_daily",
 	"issue_type_metrics_daily",
 	"work_item_cycle_times",
 	"work_item_metrics_daily",
@@ -54,14 +50,6 @@ func BuildLinearWorkItemDerivedEffects(
 		return nil, err
 	}
 	projections["estimate_coverage_metrics_daily"], err = effectRowsFromValues(rows.EstimateCoverageMetricsDaily)
-	if err != nil {
-		return nil, err
-	}
-	projections["investment_classifications_daily"], err = effectRowsFromValues(rows.InvestmentClassificationsDaily)
-	if err != nil {
-		return nil, err
-	}
-	projections["investment_metrics_daily"], err = effectRowsFromValues(rows.InvestmentMetricsDaily)
 	if err != nil {
 		return nil, err
 	}
@@ -131,8 +119,6 @@ func buildLinearWorkItemDerivedEffectsFromMap(
 // Python dataclasses or ClickHouse migrations.
 type LinearEstimateCoverageMetricsDailyRow = githubEstimateCoverageMetricsDailyRow
 type LinearAIAttributionRow = githubAIAttributionRow
-type LinearInvestmentClassificationDailyRow = githubInvestmentClassificationDailyRow
-type LinearInvestmentMetricsDailyRow = githubInvestmentMetricsDailyRow
 type LinearIssueTypeMetricsDailyRow = githubIssueTypeMetricsDailyRow
 type LinearWorkItemCycleTimePersistenceRow = githubWorkItemCycleTimePersistenceRow
 type LinearWorkItemMetricsDailyRow = githubWorkItemMetricsDailyRow
@@ -232,21 +218,15 @@ func NewLinearWorkItemDeriver(
 	conn driver.Conn,
 	lease providerfoundation.LeaseGuard,
 	statusMappingConfigPath string,
-	investmentConfigPath string,
 ) (*LinearWorkItemDeriver, error) {
-	if conn == nil || lease == nil || strings.TrimSpace(statusMappingConfigPath) == "" ||
-		strings.TrimSpace(investmentConfigPath) == "" {
+	if conn == nil || lease == nil || strings.TrimSpace(statusMappingConfigPath) == "" {
 		return nil, ErrInvalidConfiguration
 	}
 	statusMapping, err := LoadStatusMapping(statusMappingConfigPath)
 	if err != nil {
 		return nil, err
 	}
-	investmentClassifier, err := NewInvestmentClassifier(investmentConfigPath)
-	if err != nil {
-		return nil, err
-	}
-	engine, err := NewGitHubWorkItemEngineDeriver(statusMapping, investmentClassifier)
+	engine, err := NewGitHubWorkItemEngineDeriver(statusMapping)
 	if err != nil {
 		return nil, err
 	}
@@ -456,15 +436,13 @@ func (adapter linearDerivedGitHubAdapter) validate(
 		if err := json.Unmarshal(raw, &fields); err != nil || fields == nil {
 			return ErrInvalidConfiguration
 		}
-		if adapter.destination != "investment_metrics_daily" {
-			providerRaw, ok := fields["provider"]
-			if !ok {
-				return ErrInvalidConfiguration
-			}
-			var provider string
-			if err := json.Unmarshal(providerRaw, &provider); err != nil || provider != "linear" {
-				return ErrInvalidConfiguration
-			}
+		providerRaw, ok := fields["provider"]
+		if !ok {
+			return ErrInvalidConfiguration
+		}
+		var provider string
+		if err := json.Unmarshal(providerRaw, &provider); err != nil || provider != "linear" {
+			return ErrInvalidConfiguration
 		}
 		orgRaw, ok := fields["org_id"]
 		if !ok {
@@ -525,17 +503,15 @@ var _ LinearWorkItemEffectAdapter = linearDerivedGitHubAdapter{}
 // tables that the daily job owns; no destination reaches them, and they stay
 // only until the dead-code removal that follows the cut.
 type LinearWorkItemDerivedClickHouseEffects struct {
-	Lease                          providerfoundation.LeaseGuard
-	AIAttribution                  LinearWorkItemEffectAdapter
-	EstimateCoverageMetricsDaily   LinearWorkItemEffectAdapter
-	InvestmentClassificationsDaily LinearWorkItemEffectAdapter
-	InvestmentMetricsDaily         LinearWorkItemEffectAdapter
-	IssueTypeMetricsDaily          LinearWorkItemEffectAdapter
-	WorkItemCycleTimes             LinearWorkItemEffectAdapter
-	WorkItemMetricsDaily           LinearWorkItemEffectAdapter
-	WorkItemStateDurationsDaily    LinearWorkItemEffectAdapter
-	WorkItemTeamAttributions       LinearWorkItemEffectAdapter
-	WorkItemUserMetricsDaily       LinearWorkItemEffectAdapter
+	Lease                        providerfoundation.LeaseGuard
+	AIAttribution                LinearWorkItemEffectAdapter
+	EstimateCoverageMetricsDaily LinearWorkItemEffectAdapter
+	IssueTypeMetricsDaily        LinearWorkItemEffectAdapter
+	WorkItemCycleTimes           LinearWorkItemEffectAdapter
+	WorkItemMetricsDaily         LinearWorkItemEffectAdapter
+	WorkItemStateDurationsDaily  LinearWorkItemEffectAdapter
+	WorkItemTeamAttributions     LinearWorkItemEffectAdapter
+	WorkItemUserMetricsDaily     LinearWorkItemEffectAdapter
 }
 
 // metrics (CHAOS-4320 round 7, codex round 6 P1) -- see the identical
@@ -552,17 +528,15 @@ func NewLinearWorkItemDerivedClickHouseEffects(
 		return linearDerivedGitHubAdapter{destination: destination, delegate: delegate}
 	}
 	sink := LinearWorkItemDerivedClickHouseEffects{
-		Lease:                          lease,
-		AIAttribution:                  wrap("ai_attribution", GitHubAIAttributionClickHouseAdapter{Conn: conn}),
-		EstimateCoverageMetricsDaily:   wrap("estimate_coverage_metrics_daily", GitHubEstimateCoverageClickHouseEffects{Conn: conn, Lease: lease}),
-		InvestmentClassificationsDaily: wrap("investment_classifications_daily", GitHubInvestmentClassificationsClickHouseEffects{Conn: conn, Lease: lease}),
-		InvestmentMetricsDaily:         wrap("investment_metrics_daily", GitHubInvestmentMetricsClickHouseEffects{Conn: conn, Lease: lease}),
-		IssueTypeMetricsDaily:          wrap("issue_type_metrics_daily", GitHubIssueTypeMetricsClickHouseEffects{Conn: conn, Lease: lease}),
-		WorkItemCycleTimes:             wrap("work_item_cycle_times", GitHubWorkItemCycleTimesClickHouseEffects{Conn: conn, Lease: lease}),
-		WorkItemMetricsDaily:           wrap("work_item_metrics_daily", GitHubWorkItemMetricsDailyClickHouseEffects{Conn: conn, Lease: lease}),
-		WorkItemStateDurationsDaily:    wrap("work_item_state_durations_daily", GitHubWorkItemStateDurationsClickHouseEffects{Conn: conn, Lease: lease}),
-		WorkItemTeamAttributions:       wrap("work_item_team_attributions", GitHubWorkItemTeamAttributionsClickHouseEffects{Conn: conn, Lease: lease, Metrics: metrics}),
-		WorkItemUserMetricsDaily:       wrap("work_item_user_metrics_daily", GitHubWorkItemUserMetricsDailyClickHouseEffects{Conn: conn, Lease: lease}),
+		Lease:                        lease,
+		AIAttribution:                wrap("ai_attribution", GitHubAIAttributionClickHouseAdapter{Conn: conn}),
+		EstimateCoverageMetricsDaily: wrap("estimate_coverage_metrics_daily", GitHubEstimateCoverageClickHouseEffects{Conn: conn, Lease: lease}),
+		IssueTypeMetricsDaily:        wrap("issue_type_metrics_daily", GitHubIssueTypeMetricsClickHouseEffects{Conn: conn, Lease: lease}),
+		WorkItemCycleTimes:           wrap("work_item_cycle_times", GitHubWorkItemCycleTimesClickHouseEffects{Conn: conn, Lease: lease}),
+		WorkItemMetricsDaily:         wrap("work_item_metrics_daily", GitHubWorkItemMetricsDailyClickHouseEffects{Conn: conn, Lease: lease}),
+		WorkItemStateDurationsDaily:  wrap("work_item_state_durations_daily", GitHubWorkItemStateDurationsClickHouseEffects{Conn: conn, Lease: lease}),
+		WorkItemTeamAttributions:     wrap("work_item_team_attributions", GitHubWorkItemTeamAttributionsClickHouseEffects{Conn: conn, Lease: lease, Metrics: metrics}),
+		WorkItemUserMetricsDaily:     wrap("work_item_user_metrics_daily", GitHubWorkItemUserMetricsDailyClickHouseEffects{Conn: conn, Lease: lease}),
 	}
 	if missing := sink.MissingDestinations(); len(missing) > 0 {
 		return sink, fmt.Errorf("%w: %s", ErrLinearWorkItemDerivedSinkIncomplete, strings.Join(missing, ", "))

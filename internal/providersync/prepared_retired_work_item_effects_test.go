@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"log/slog"
+	"maps"
 	"os"
 	"slices"
 	"strconv"
@@ -85,7 +86,9 @@ func preparedRetiredEffectsSkippedCounter(t *testing.T, metrics *providerfoundat
 // from the stored rows without a new collection, no row is written for one of
 // the nine, and the unit ends with the result a new manifest would give.
 func TestCompleteRouteExecutorCompletesWorkItemsManifestOfEarlierBinary(t *testing.T) {
-	retired := append([]string(nil), githubWorkItemDerivedDestinations...)
+	// The nine tables the earlier binary stored an effect for: the two investment tables left the derived list
+	// with the classifier (CHAOS-9200), and an old manifest still holds an effect for each, so they stay retired.
+	retired := slices.Sorted(maps.Keys(retiredWorkItemSyncDestinations))
 	current := githubWorkItemRouteDestinations()
 	for _, testCase := range []struct {
 		name string
@@ -313,10 +316,13 @@ func TestRetiredWorkItemEffectsSkipperAcceptsOnlyTheRetiredTables(t *testing.T) 
 		}
 		return PreparedRouteManifest{Batch: CompleteRouteBatch{Effects: effects}}
 	}
-	if len(retiredWorkItemSyncDestinations) != len(githubWorkItemDerivedDestinations) {
-		t.Fatalf("retired set=%d names, the derived list=%d", len(retiredWorkItemSyncDestinations), len(githubWorkItemDerivedDestinations))
+	// The retired set is the derived list plus the two investment tables whose producer is gone (CHAOS-9200).
+	if want := len(githubWorkItemDerivedDestinations) + 2; len(retiredWorkItemSyncDestinations) != want {
+		t.Fatalf("retired set=%d names, the derived list=%d plus the two investment tables", len(retiredWorkItemSyncDestinations), len(githubWorkItemDerivedDestinations))
 	}
-	for _, destination := range githubWorkItemDerivedDestinations {
+	for _, destination := range append(
+		[]string{"investment_classifications_daily", "investment_metrics_daily"}, githubWorkItemDerivedDestinations...,
+	) {
 		if _, present := retiredWorkItemSyncDestinations[destination]; !present {
 			t.Fatalf("%q is not in the retired set", destination)
 		}

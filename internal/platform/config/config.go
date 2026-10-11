@@ -408,11 +408,15 @@ type Config struct {
 	// above).
 	TelemetryInstanceID string
 
-	// WorkerGithubWorkItemsInvestmentConfigPath are explicit production paths
-	// for the two Python-parity config engines. Production has no source-relative
-	// default; a local deployment falls back to artifacts packaged at fixed
-	// image paths. internal/workerservice validates both paths and rejects
-	// ambient STATUS_MAPPING_PATH overrides.
+	// WorkerGithubWorkItemsStatusMappingPath is the explicit production path of
+	// the Python-parity status mapping. Production has no source-relative
+	// default; a local deployment falls back to the artifact packaged at a fixed
+	// image path. internal/workerservice validates it and rejects ambient
+	// STATUS_MAPPING_PATH overrides.
+	//
+	// WorkerGithubWorkItemsInvestmentConfigPath is DEPRECATED and ignored: the
+	// investment rule classifier it configured is gone (CHAOS-9200). The setting
+	// is still accepted so a deployment that sets it keeps starting.
 	WorkerGithubWorkItemsStatusMappingPath    string
 	WorkerGithubWorkItemsInvestmentConfigPath string
 

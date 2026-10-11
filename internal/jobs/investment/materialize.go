@@ -323,8 +323,14 @@ func (m *Materializer) Run(ctx context.Context, cfg Config) (Stats, error) {
 
 	stats := Stats{LLMFailureCounts: map[string]int{}}
 	buildStats := &units.BuildStats{}
-	components := units.BuildComponents(
-		chquery.ComponentEdges(edgeRows), cfg.MaxComponentNodes, partitionOversizedHubs, buildStats,
+	components := units.BuildComponentsWithOptions(
+		chquery.ComponentEdges(edgeRows),
+		units.BuildOptions{
+			MaxComponentNodes:       cfg.MaxComponentNodes,
+			PartitionHubs:           partitionOversizedHubs,
+			ProtectPullRequestLinks: units.ProtectPullRequestLinks,
+		},
+		buildStats,
 	)
 	stats.OversizedComponents = buildStats.OversizedComponents
 	stats.DroppedEdges = buildStats.DroppedEdges

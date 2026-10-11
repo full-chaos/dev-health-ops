@@ -175,6 +175,14 @@ print(json.dumps(sorted(org_deletion._clickhouse_tables_from_migrations())))
 	golden.Finish(t)
 }
 
+// clickHouseOrgTablesDroppedAfterThePythonFreeze names each org-scoped ClickHouse table a migration
+// dropped after adminPythonBuild, where org_deletion.py's list was frozen: table -> the migration that
+// dropped it. The frozen Python body still names it; the Go body, which discovers tables live, cannot.
+var clickHouseOrgTablesDroppedAfterThePythonFreeze = map[string]string{
+	"investment_classifications_daily": "120_drop_retired_investment_daily_tables.sql",
+	"investment_metrics_daily":         "120_drop_retired_investment_daily_tables.sql",
+}
+
 // clickHouseOrgTablesAfterThePythonFreeze names each org-scoped ClickHouse
 // table a migration added after adminPythonBuild, where org_deletion.py's
 // list was frozen: table -> the migration that added it.

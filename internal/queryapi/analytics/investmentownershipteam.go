@@ -19,7 +19,6 @@ import (
 //   - A repository owned by several teams is shared equally among them (teamscope.OwnerShares): the effort of the
 //     unit is counted once across the TEAM groups, so every other dimension keeps its totals. Under a team scope the
 //     owners are narrowed to the teams in view, so one selected team holds its repositories whole.
-//   - BuildUnitTeamSubquery (the vote) has no production reader left.
 const ownershipShareExpr = "if(ut.owner_matched = 1, ut.owner_share, 1.0)"
 
 // ownershipTeamSource is the derived table the `ut` alias names on the investment path. Its columns keep the names

@@ -72,104 +72,6 @@ const resolvedEvidenceWorkItemIDExpr = `multiIf(
                         )
                     )`
 
-// --- investment.py:399-510: build_unit_team_subquery -------------------
-
-// UnitTeamSubqueryOptions is the Go equivalent of build_unit_team_subquery's
-// keyword arguments (investment.py:399-408). Exported (same reasoning as
-// LatestWorkUnitInvestmentsSource's own export below) so cmd/query-api/
-// other query packages can reuse this exact,
-// already-fixed team-vote subquery -- Python's
-// build_unit_team_subquery (api/queries/investment.py:399-510) is the ONE
-// definition both this package's GraphQL compiler path and
-// investment.py's REST fetch_investment_* functions call, so the Go port
-// is equally canonical for both callers; a second copy would only
-// reintroduce the argMax(tuple()).1 null-vote fix this function's own doc
-// comment below describes.
-type UnitTeamSubqueryOptions struct {
-	Source         string
-	Where          string
-	InnerTeamAlias string
-	OuterTeamAlias string
-	IncludeTeamID  bool
-}
-
-// BuildUnitTeamSubquery ports build_unit_team_subquery (investment.py:
-// 399-510, e9ea257ff) -- the ONE per-work-unit team-resolution subquery
-// every investment team join in this package renders, inlined (no WITH,
-// no CTE name; embedded directly where Python would have referenced
-// "unit_team").
-//
-// CHAOS-4547-CLASS FIX, site 3 of 3 this lane found (Go plane only,
-// chris's GO-ONLY routing 06:52 PT 08-29; ARGUED not yet executed
-// against a live engine -- see the PR's RISK-NOTES): the outer
-// `argMax(resolved_team, tie_break)` projects `resolved_team`, i.e.
-// `max(ifNull(nullIf(t.team_name,'), nullIf(t.team_id,')))` below --
-// genuinely NULL whenever a work item's work_item_team_attributions row
-// carries no team_id/team_name (migrations/clickhouse/
-// 051_team_attribution_dimensions.sql:83-84, both Nullable(String)).
-// NULL there is the CORRECT "no team attribution" answer, not a missing
-// value, which makes this the worst-case instance of the class: if the
-// WINNING (highest cnt, then highest resolved_team_id) tie-break row
-// carries a NULL vote while a LOSING row's vote is non-null, plain
-// argMax's NULL-skip promotes that losing candidate's label instead of
-// correctly reporting "no team" -- i.e. it INVENTS a team attribution
-// for a work item that structurally has none. Team attribution is
-// ownership-derived and must never be invented (root AGENTS.md,
-// CHAOS-2600 contract) -- this is the one of the three CHAOS-4547-class
-// sites in this port where the wrong answer is a fabricated fact, not
-// merely a stale one. Fixed via (argMax(tuple(resolved_team),
-// tie_break)).1. `resolved_team_id` (the vote_id column) is NOT
-// wrapped: its own ifNull falls back to the LITERAL ' (never NULL), so
-// it carries no null-skip risk and wrapping it would be a no-op change
-// misrepresenting the audit.
-func BuildUnitTeamSubquery(opts UnitTeamSubqueryOptions) string {
-	outerAlias := opts.OuterTeamAlias
-	if outerAlias == "" {
-		outerAlias = opts.InnerTeamAlias
-	}
-	if outerAlias == "" {
-		outerAlias = "team"
-	}
-	const teamExpr = "ifNull(nullIf(t.team_name, ''), nullIf(t.team_id, ''))"
-	const vote = "resolved_team"
-	const voteID = "resolved_team_id"
-	tieBreak := fmt.Sprintf("(cnt, %s)", voteID)
-
-	outerIDLine := ""
-	if opts.IncludeTeamID {
-		outerIDLine = fmt.Sprintf("                argMax(%s, %s) AS team_id,\n", voteID, tieBreak)
-	}
-
-	return fmt.Sprintf(`
-            SELECT
-                work_unit_id,
-%s                (argMax(tuple(%s), %s)).1 AS %s
-            FROM (
-                SELECT
-                    work_unit_investments.work_unit_id AS work_unit_id,
-                    ifNull(nullIf(t.team_id, ''), '') AS %s,
-                    max(%s) AS %s,
-                    uniqExactIf(%s, %s IS NOT NULL) AS cnt
-                FROM %s
-                ARRAY JOIN %s AS evidence_ref
-                LEFT JOIN %s AS evidence_repo
-                    ON evidence_repo.org_id = work_unit_investments.org_id
-                    AND evidence_repo.repo_uuid = splitByString('#pr', evidence_ref)[1]
-                LEFT JOIN %s AS t
-                    ON t.work_item_id = %s
-%s
-                GROUP BY work_unit_id, %s
-            )
-            GROUP BY work_unit_id
-`,
-		outerIDLine, vote, tieBreak, outerAlias,
-		voteID, teamExpr, vote,
-		resolvedEvidenceWorkItemIDExpr, teamExpr,
-		opts.Source, workUnitEvidenceWorkItemRefsExpr, workUnitEvidenceRepoSource(),
-		primaryWorkItemTeamAttributionSource, resolvedEvidenceWorkItemIDExpr,
-		opts.Where, voteID)
-}
-
 // --- investment.py:23-58: LATEST_WORK_UNIT_INVESTMENTS_CTE -------------
 
 // LatestWorkUnitInvestmentsSource ports LATEST_WORK_UNIT_INVESTMENTS_CTE
@@ -280,7 +182,7 @@ func LatestWorkUnitInvestmentsSource() string {
 
 // LatestWorkUnitRepoEffortSource ports LATEST_WORK_UNIT_REPO_EFFORT_CTE
 // (investment.py:90-127, e9ea257ff), inlined. Exported (same reasoning as
-// LatestWorkUnitInvestmentsSource and UnitTeamSubqueryOptions above) so
+// LatestWorkUnitInvestmentsSource above) so
 // other query packages can compose their own port of
 // REPO_ALLOCATED_WORK_UNIT_INVESTMENTS_SOURCE (investment.py:155-172,
 // a DIFFERENT source from this package's own repoAllocationInvestmentSource
@@ -657,8 +559,7 @@ func investmentContextFor(orgID string, dimensions []Dimension, forceTeamJoin, r
 	// practice; free to add since {org_id:String} is already bound by
 	// every caller of this function).
 	//
-	// This is a Go-only fix (CHAOS-4547-class divergence, same routing as
-	// BuildUnitTeamSubquery's argMax(tuple()).1 fix above): Python keeps
+	// This is a Go-only fix (CHAOS-4547-class divergence): Python keeps
 	// the defect until CHAOS-2600 retires that read path -- see the parity
 	// note on CHAOS-4773.
 	if dimensionListHas(dimensions, DimensionRepo) {

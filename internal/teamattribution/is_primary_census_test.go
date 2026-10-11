@@ -191,7 +191,6 @@ var (
 // their query groups or filters by a team. Each must still be found.
 var teamGroupedReaderAllowlist = map[string]string{
 	"internal/queryapi/workgraph\x00resolveWorkUnitTeamAttributions": workUnitVoteReason,
-	"internal/queryapi/analytics\x00BuildUnitTeamSubquery":           workUnitVoteReason,
 }
 
 // workUnitVoteReason: investment and work-unit views follow one team per work

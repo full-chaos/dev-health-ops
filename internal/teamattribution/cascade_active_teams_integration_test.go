@@ -68,7 +68,7 @@ func TestAnInactiveTeamTakesNoWorkItemForEveryProvider(t *testing.T) {
 		teamUUID := uuid.New()
 		for version, isActive := range states {
 			at := first.Add(time.Duration(version) * time.Hour)
-			if err := conn.Exec(ctx, `INSERT INTO teams (id, team_uuid, name, members, manual_members, project_keys, repo_patterns, is_active, updated_at, last_synced, org_id, provider, native_team_key) VALUES (?, ?, ?, [], [], ?, [], ?, ?, ?, ?, ?, ?)`,
+			if err := conn.Exec(ctx, `INSERT INTO teams (id, team_uuid, name, manual_members, project_keys, repo_patterns, is_active, updated_at, last_synced, org_id, provider, native_team_key) VALUES (?, ?, ?, [], ?, [], ?, ?, ?, ?, ?, ?)`,
 				id, teamUUID, "Team "+id, keys, isActive, at, at, org, provider, id); err != nil {
 				t.Fatalf("insert team %s: %v", id, err)
 			}
@@ -218,7 +218,7 @@ func TestAnInactiveNullCarryingTeamStaysKnownAndTakesNothingThroughMembership(t 
 		teamUUID := uuid.New()
 		for version, isActive := range []uint8{1, 0} {
 			stamp := at.Add(time.Duration(version) * time.Hour)
-			if err := conn.Exec(ctx, `INSERT INTO teams (id, team_uuid, name, members, manual_members, project_keys, repo_patterns, is_active, updated_at, last_synced, org_id, provider, native_team_key) VALUES (?, ?, ?, [], [], [], [], ?, ?, ?, ?, ?, ?)`,
+			if err := conn.Exec(ctx, `INSERT INTO teams (id, team_uuid, name, manual_members, project_keys, repo_patterns, is_active, updated_at, last_synced, org_id, provider, native_team_key) VALUES (?, ?, ?, [], [], [], ?, ?, ?, ?, ?, ?)`,
 				id, teamUUID, "Old "+provider, isActive, stamp, stamp, org, provider, id); err != nil {
 				t.Fatalf("insert team %s: %v", id, err)
 			}
@@ -287,12 +287,12 @@ func TestAnInactiveTeamFirstByIDDoesNotShadowTheActiveTeamOnTheSameKey(t *testin
 		pseudo, real := uuid.New(), uuid.New()
 		for version, isActive := range []uint8{1, 0} {
 			at := first.Add(time.Duration(version) * time.Hour)
-			if err := conn.Exec(ctx, `INSERT INTO teams (id, team_uuid, name, members, manual_members, project_keys, repo_patterns, is_active, updated_at, last_synced, org_id, provider, native_team_key) VALUES (?, ?, ?, [], [], ?, [], ?, ?, ?, ?, ?, ?)`,
+			if err := conn.Exec(ctx, `INSERT INTO teams (id, team_uuid, name, manual_members, project_keys, repo_patterns, is_active, updated_at, last_synced, org_id, provider, native_team_key) VALUES (?, ?, ?, [], ?, [], ?, ?, ?, ?, ?, ?)`,
 				key, pseudo, "Project "+key, []string{key}, isActive, at, at, org, provider, key); err != nil {
 				t.Fatalf("insert pseudo team: %v", err)
 			}
 		}
-		if err := conn.Exec(ctx, `INSERT INTO teams (id, team_uuid, name, members, manual_members, project_keys, repo_patterns, is_active, updated_at, last_synced, org_id, provider, native_team_key) VALUES (?, ?, ?, [], [], ?, [], 1, ?, ?, ?, ?, ?)`,
+		if err := conn.Exec(ctx, `INSERT INTO teams (id, team_uuid, name, manual_members, project_keys, repo_patterns, is_active, updated_at, last_synced, org_id, provider, native_team_key) VALUES (?, ?, ?, [], ?, [], 1, ?, ?, ?, ?, ?)`,
 			activeID(provider), real, "Real "+provider, []string{key}, first, first, org, provider, activeID(provider)); err != nil {
 			t.Fatalf("insert active team: %v", err)
 		}
@@ -364,7 +364,7 @@ func TestAnInactiveTeamDropsOnlyTheTeamOfItsOwnProviderWithTheSameID(t *testing.
 				teamUUID := uuid.New()
 				for version, isActive := range row.states {
 					at := first.Add(time.Duration(version) * time.Hour)
-					if err := conn.Exec(ctx, `INSERT INTO teams (id, team_uuid, name, members, manual_members, project_keys, repo_patterns, is_active, updated_at, last_synced, org_id, provider, native_team_key) VALUES (?, ?, ?, [], [], ?, [], ?, ?, ?, ?, ?, ?)`,
+					if err := conn.Exec(ctx, `INSERT INTO teams (id, team_uuid, name, manual_members, project_keys, repo_patterns, is_active, updated_at, last_synced, org_id, provider, native_team_key) VALUES (?, ?, ?, [], ?, [], ?, ?, ?, ?, ?, ?)`,
 						"ENG", teamUUID, "Eng "+row.provider, []string{"ENG"}, isActive, at, at, org, row.provider, "ENG"); err != nil {
 						t.Fatalf("insert team %s/ENG: %v", row.provider, err)
 					}
@@ -427,12 +427,12 @@ func TestAMemberOfAnInactiveAndAnActiveTeamResolvesToTheActiveTeam(t *testing.T)
 		oldUUID, currentUUID := uuid.New(), uuid.New()
 		for version, isActive := range []uint8{1, 0} {
 			stamp := at.Add(time.Duration(version) * time.Hour)
-			if err := conn.Exec(ctx, `INSERT INTO teams (id, team_uuid, name, members, manual_members, project_keys, repo_patterns, is_active, updated_at, last_synced, org_id, provider, native_team_key) VALUES (?, ?, ?, [], [], ['K'], [], ?, ?, ?, ?, ?, ?)`,
+			if err := conn.Exec(ctx, `INSERT INTO teams (id, team_uuid, name, manual_members, project_keys, repo_patterns, is_active, updated_at, last_synced, org_id, provider, native_team_key) VALUES (?, ?, ?, [], ['K'], [], ?, ?, ?, ?, ?, ?)`,
 				old, oldUUID, "Old "+provider, isActive, stamp, stamp, org, provider, old); err != nil {
 				t.Fatalf("insert team %s: %v", old, err)
 			}
 		}
-		if err := conn.Exec(ctx, `INSERT INTO teams (id, team_uuid, name, members, manual_members, project_keys, repo_patterns, is_active, updated_at, last_synced, org_id, provider, native_team_key) VALUES (?, ?, ?, [], [], ['K'], [], 1, ?, ?, ?, ?, ?)`,
+		if err := conn.Exec(ctx, `INSERT INTO teams (id, team_uuid, name, manual_members, project_keys, repo_patterns, is_active, updated_at, last_synced, org_id, provider, native_team_key) VALUES (?, ?, ?, [], ['K'], [], 1, ?, ?, ?, ?, ?)`,
 			current, currentUUID, "Current "+provider, at, at, org, provider, current); err != nil {
 			t.Fatalf("insert team %s: %v", current, err)
 		}
@@ -497,7 +497,7 @@ func TestAnInactiveAdminTeamIsNotCountedByTheMembershipGate(t *testing.T) {
 	}
 	at := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
 	insertTeam := func(org, provider, id string, active uint8, stamp time.Time, manual []string) {
-		if err := conn.Exec(ctx, `INSERT INTO teams (id, team_uuid, name, members, manual_members, project_keys, repo_patterns, is_active, updated_at, last_synced, org_id, provider, native_team_key) VALUES (?, ?, ?, [], ?, ['K'], [], ?, ?, ?, ?, ?, ?)`,
+		if err := conn.Exec(ctx, `INSERT INTO teams (id, team_uuid, name, manual_members, project_keys, repo_patterns, is_active, updated_at, last_synced, org_id, provider, native_team_key) VALUES (?, ?, ?, ?, ['K'], [], ?, ?, ?, ?, ?, ?)`,
 			id, uuid.New(), id, manual, active, stamp, stamp, org, provider, id); err != nil {
 			t.Fatalf("insert team %s: %v", id, err)
 		}

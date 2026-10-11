@@ -53,8 +53,8 @@ func TestFilterOptionsListsOnlyActiveTeamIDs(t *testing.T) {
 	const org = "org-9027-active-teams"
 	base := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
 	const otherOrg = "org-9027-other-tenant"
-	teamInsert := `INSERT INTO teams (id, team_uuid, name, members, updated_at, org_id, is_active)
-		VALUES (?, generateUUIDv4(), ?, [], ?, ?, ?)`
+	teamInsert := `INSERT INTO teams (id, team_uuid, name, updated_at, org_id, is_active)
+		VALUES (?, generateUUIDv4(), ?, ?, ?, ?)`
 	for _, row := range []struct {
 		id, org string
 		at      time.Time

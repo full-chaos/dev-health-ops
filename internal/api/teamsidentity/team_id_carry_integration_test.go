@@ -33,7 +33,7 @@ func TestAdminImportCarriesTheBareTeamFirst(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = conn.Close() })
-	if err := conn.Exec(ctx, `INSERT INTO teams (id, team_uuid, name, members, manual_members, project_keys, repo_patterns, is_active, updated_at, org_id, provider, native_team_key) VALUES ('ENG', generateUUIDv4(), 'Eng', [], ['m@example.com'], [], [], 1, '2026-09-01 00:00:00', 'org-1', 'linear', 'ENG')`); err != nil {
+	if err := conn.Exec(ctx, `INSERT INTO teams (id, team_uuid, name, manual_members, project_keys, repo_patterns, is_active, updated_at, org_id, provider, native_team_key) VALUES ('ENG', generateUUIDv4(), 'Eng', ['m@example.com'], [], [], 1, '2026-09-01 00:00:00', 'org-1', 'linear', 'ENG')`); err != nil {
 		t.Fatal(err)
 	}
 	rec := postImportBody(t, Store{Conn: conn}, `{"teams":[{"provider_type":"linear","provider_team_id":"ENG","name":"Eng"}]}`)

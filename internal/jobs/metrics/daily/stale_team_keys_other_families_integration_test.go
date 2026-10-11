@@ -51,10 +51,9 @@ func TestTheOtherTeamKeyedFamiliesLeaveNoMeasureUnderASupersededKey(t *testing.T
 	t0 := day.Add(-72 * time.Hour)
 	for id, active := range map[string]uint8{"platform": 0, "github:platform": 1} {
 		exec("insert team "+id, `INSERT INTO teams
-    (id, team_uuid, name, members, repo_patterns, updated_at, last_synced, org_id, provider, is_active)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			id, uuid.NewSHA1(uuid.NameSpaceURL, []byte("team:"+id)), "Team "+id, []string{"dev@example.com"},
-			[]string{"acme/*"}, t0, t0, org, "github", active)
+    (id, team_uuid, name, repo_patterns, updated_at, last_synced, org_id, provider, is_active)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			id, uuid.NewSHA1(uuid.NameSpaceURL, []byte("team:"+id)), "Team "+id, []string{"acme/*"}, t0, t0, org, "github", active)
 	}
 	// The person is a member of both: the landscape reads the memberships.
 	for _, teamID := range []string{"platform", "github:platform"} {

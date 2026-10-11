@@ -1211,13 +1211,13 @@ func seedTeamRepoOwnershipRepos(t *testing.T, ctx context.Context, conn driver.C
 // (linear_reference_catalog_effects_clickhouse.go).
 func seedLinearTeam(t *testing.T, ctx context.Context, conn driver.Conn, orgID, teamKey string, now time.Time) {
 	t.Helper()
-	batch, err := conn.PrepareBatch(ctx, `INSERT INTO teams (id, team_uuid, name, description, members, manual_members, project_keys, repo_patterns, is_active, updated_at, org_id, provider, native_team_key, parent_team_id)`)
+	batch, err := conn.PrepareBatch(ctx, `INSERT INTO teams (id, team_uuid, name, description, manual_members, project_keys, repo_patterns, is_active, updated_at, org_id, provider, native_team_key, parent_team_id)`)
 	if err != nil {
 		t.Fatalf("prepare teams batch: %v", err)
 	}
 	if err := batch.Append(
 		teamKey, uuid.New(), teamKey, (*string)(nil),
-		[]string{}, []string{}, []string{}, []string{},
+		[]string{}, []string{}, []string{},
 		uint8(1), now, orgID, "linear", &teamKey, (*string)(nil),
 	); err != nil {
 		t.Fatalf("append teams row: %v", err)

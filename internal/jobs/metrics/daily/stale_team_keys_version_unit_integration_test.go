@@ -108,10 +108,9 @@ func TestAKeyThatComesBackInAFinalizeFamilyTableReadsItsRealRow(t *testing.T) {
 	team := func(at time.Time, active uint8) {
 		t.Helper()
 		exec("insert team", `INSERT INTO teams
-    (id, team_uuid, name, members, repo_patterns, updated_at, last_synced, org_id, provider, is_active)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			"platform", uuid.NewSHA1(uuid.NameSpaceURL, []byte("team:platform")), "Platform", []string{"dev@example.com"},
-			[]string{"acme/*"}, at, at, org, "github", active)
+    (id, team_uuid, name, repo_patterns, updated_at, last_synced, org_id, provider, is_active)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			"platform", uuid.NewSHA1(uuid.NameSpaceURL, []byte("team:platform")), "Platform", []string{"acme/*"}, at, at, org, "github", active)
 	}
 	team(t0, 1)
 	exec("insert repo", "INSERT INTO repos (id, repo, org_id, provider, last_synced) VALUES (?, ?, ?, ?, ?)",

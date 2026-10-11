@@ -45,7 +45,7 @@ func TestComputeFamilyWritesOneRowPerRepoForAMultiRepoTeam(t *testing.T) {
 
 	for _, statement := range []string{
 		`CREATE TABLE teams (
-    id String, name String, members Array(String), repo_patterns Array(String), org_id String,
+    id String, name String, repo_patterns Array(String), org_id String,
     is_active UInt8 DEFAULT 1, updated_at DateTime64(6) DEFAULT now(), last_synced DateTime64(6) DEFAULT now()
 ) ENGINE = ReplacingMergeTree ORDER BY (id)`,
 		`CREATE TABLE repos (
@@ -87,8 +87,8 @@ func TestComputeFamilyWritesOneRowPerRepoForAMultiRepoTeam(t *testing.T) {
 	// resolve to the SAME team, exactly the shape that produces two rows
 	// for one (org_id, team_id, day) key.
 	if err := conn.Exec(ctx, `
-INSERT INTO teams (id, name, members, repo_patterns, org_id) VALUES
-('shared-team', 'Shared Team', [], ['org/repo-a', 'org/repo-b'], '`+orgID+`')`); err != nil {
+INSERT INTO teams (id, name, repo_patterns, org_id) VALUES
+('shared-team', 'Shared Team', ['org/repo-a', 'org/repo-b'], '`+orgID+`')`); err != nil {
 		t.Fatal(err)
 	}
 	if err := conn.Exec(ctx, `

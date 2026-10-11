@@ -262,6 +262,17 @@ Notes:
   "investment served decision complete" and field `skipped_terminal` of
   "investment materialization complete" (both inside `skipped_existing`). The outcome
   metric counts units asked of the backend, so a skipped unit is not in it.
+- FALLBACK ROWS (CHAOS-9270): a unit under the evidence gate (fewer than 300 text
+  characters) gets the fixed `insufficient_evidence` row before any model call, on both
+  provider paths. Skip-existing reuses that row for the same input hash and stamp: no
+  row is written, the unit's repo-effort rows still are. A changed hash (a unit that
+  gains evidence leaves the fallback) or stamp is processed again. A unit with no text
+  source (`no_text_sources`) is not covered. The skip is counted in `skipped_existing`
+  and in field `skipped_fallback` of "investment materialization complete".
+  KNOWN PROPERTY (same as for `ok` rows): the input hash covers the unit and its text
+  sources, not the confidence of its graph edges, so a same-hash skip also keeps the
+  stored evidence quality score and band. A change of edge confidence alone is picked up
+  by a forced run, a text change or a stamp change.
 - A unit cancelled by the run context has no row from this run.
 - Every unit asked of the served backend is in exactly one outcome count of the metric
   (section 6), on every exit of the run.
@@ -295,7 +306,7 @@ the three writes) is the one served path.
 `work_unit_investments` has one row for each `(org_id, work_unit_id)` (key without
 model version). `FetchExistingInvestmentKeys` (`chquery/entities.go`) takes
 `argMax(..., computed_at)` for each unit first, and then tests on that latest row:
-status in (`ok`, `repaired`, or a terminal served low-quality row, section 5.1 notes),
+status in (`ok`, `repaired`, the `insufficient_evidence` fallback row, or a terminal served low-quality row, section 5.1 notes),
 `categorization_model_version` equals the current
 version (the stamp, for a decision run), and the input hash is in the wanted set.
 No filter runs before the `argMax`.

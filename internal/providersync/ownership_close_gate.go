@@ -217,7 +217,7 @@ func decideOwnershipClose(ctx context.Context, census OwnershipScopeCensus, requ
 // there (the listing lost it), over the lookup budget, or not proven.
 func teamAbsenceVerdict(ctx context.Context, request ownershipCloseRequest, teamID string) SnapshotAbsence {
 	listing := request.teamListing
-	if listing.Cursor || listing.Responses == 1 {
+	if listing.Responses == 1 {
 		return SnapshotAbsenceProven
 	}
 	if request.teamLookups == nil {
@@ -271,7 +271,7 @@ func (decision *ownershipCloseDecision) decideDroppedTeams(ctx context.Context, 
 		"org_id", request.ref.OrgID, "provider", request.provider, "dataset", dataset,
 		"teams_dropped", len(request.dropped), "teams_gone", len(decision.gone), "teams_still_there", stillThere,
 		"teams_not_proven", notProven, "teams_over_budget", overBudget,
-		"listing_responses", request.teamListing.Responses, "listing_by_cursor", request.teamListing.Cursor)
+		"listing_responses", request.teamListing.Responses)
 }
 
 // snapshot is the grant kind of the closable teams (kind makes it from the

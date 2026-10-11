@@ -708,12 +708,12 @@ project's items by id. Now:
 
   | Kind | Writer | Walk behind the proof | Scope proof | Empty answer | Proof of an absence |
   | --- | --- | --- | --- | --- | --- |
-  | `linear_project_ownership` | Linear catalog | every project page, node and project-team page; no link without a key | sole integration | closes nothing | cursor walk |
-  | `linear_team_key_ownership` | Linear catalog | the team walk | sole integration | closes nothing | cursor walk |
+  | `linear_project_ownership` | Linear catalog | every project page, node and project-team page; no link without a key | sole integration | closes nothing | direct answer |
+  | `linear_team_key_ownership` | Linear catalog | the team walk | sole integration | closes nothing | direct answer |
   | `jira_legacy_ownership` | Jira catalog | the project search (live, archived, live again) and the legacy links read | sole integration | closes nothing | one response or direct answer |
-  | `atlassian_team_catalog` | Atlassian Teams | the team search | sole integration | closes nothing: no team is deactivated or put in scope | cursor walk |
-  | `atlassian_team_memberships` | Atlassian Teams | one member read per active team | sole integration | is an answer (per team) | cursor walk |
-  | `atlassian_team_project_links` | Atlassian Teams | one link read per active team | sole integration | is an answer (per team) | cursor walk |
+  | `atlassian_team_catalog` | Atlassian Teams | the team search | sole integration | closes nothing: no team is deactivated or put in scope | direct answer |
+  | `atlassian_team_memberships` | Atlassian Teams | one member read per active team | sole integration | is an answer (per team) | direct answer |
+  | `atlassian_team_project_links` | Atlassian Teams | one link read per active team | sole integration | is an answer (per team) | direct answer |
   | `gitlab_group_project_grants` | GitLab catalog | one listing per closable group (section 0.4a) | sole integration | is an answer (per group) | one response or direct answer |
   | `github_team_repo_grants` | GitHub catalog | one listing per closable team | sole integration | is an answer (per team) | one response or direct answer |
   | `linear_team_memberships` | Linear catalog | every team's member list to its end (the run fails before any write when one does not end) | sole integration | is an answer (per team) | the writer of the kind |
@@ -755,12 +755,29 @@ project's items by id. Now:
       and an empty answer with no end signal prove nothing.
     `TestHeldSetWalkCensus` names every list walk of the five collectors and the held set it feeds; a new
     walk fails it until it is named with its proof.
-  - **cursor walk** (`AbsenceByWalk(AbsenceWalkByCursor)`; the Linear and Atlassian Teams kinds). The walk
-    follows the provider's cursor to its proven end and its answer is taken as the proof. The providers
-    state no contract for a list that changes during such a walk, so this is a named risk, not a measured
-    proof. Their walks: the Linear team walk (team-key rows); the Linear project walk, which holds archived
-    projects too, and the continuation of one project's teams (project rows: two walks); the Atlassian team
-    search, one member read per team and one link read per team.
+  - **direct answer** (`AbsenceByListing` with no one-response proof; the Linear and Atlassian Teams kinds,
+    CHAOS-9124). Their walks are by the provider's cursor, which states no contract for a list that changes while
+    it is read, so the END of such a walk proves nothing: every open fact the run does not hold is a candidate,
+    and it closes only on the provider's own answer for that one fact (a per-kind prover), inside the budget of
+    `AbsenceLookupBudget` per run and kind. A failed or refused read, an answer outside the recorded ones and a
+    spent budget close nothing. The answers are the ones the providers gave when they were recorded
+    (`internal/providersync/testdata/provider_answers`, with how they were made):
+      - Linear team-key rows: `teams(filter: {key: {eq: KEY}})`, an empty node list is "gone", a node of the key is
+        "still there".
+      - Linear project rows: `project(id)`; `INPUT_ERROR` "Entity not found: Project" and a null project is "gone"; a
+        project whose team list (shorter than the default page) lacks the team is a link that is gone; one that
+        names the team is still there.
+      - Atlassian Teams catalog rows: `TeamById`; `classification NotFound` with status 404 is "gone"; a team that
+        exists and is not ACTIVE (archived) has no members and no links for the sync and its row is inactive, so
+        the fact held open for it is gone too; an ACTIVE team is still there.
+      - Atlassian Teams members and links: the gateway has NO per-fact read for them. `teamUsers` and
+        `teamConnectedToContainer` of an UNKNOWN team answer an EMPTY list (the same as a team with none), and
+        `userTeams` of an unknown user answers an empty list too, so none of them can say "gone". The proof is the
+        team's existence (`TeamById` answers, or the team is gone and takes its members and links with it) and a
+        FRESH, COMPLETE re-read of that team's list that does not hold the fact (one re-read per team and run). It
+        is a second observation of the same list, not an independent per-fact answer: it catches a fact the first
+        walk lost to a moving cursor, not a list that is wrong in both reads. A named residual.
+    The dropped-team close (section below) takes the same Linear answer for a team no longer listed.
   - **the writer of the kind** (`AbsenceByCloseWriter`; the three team membership kinds). The rule lists
     every absent fact as a candidate and closes none by itself: the one writer of the kind
     (`MembershipSnapshotWriter.Snapshot`) closes a candidate only on its own proof, fact by fact (the
@@ -788,7 +805,12 @@ project's items by id. Now:
      row of it. The lookups of one run are bounded (100 facts); a fact past the budget stays open. The provider
      that pages by cursor cannot be shifted by a departure between two requests, so its list rule stands.
   3. no open row of the fact is newer than the time the run read the provider: a run whose list is older than a
-     row never closes it (two overlapping runs of one integration).
+     row never closes it (two overlapping runs of one integration). This holds for EVERY close of a membership
+     row, not only a departure (CHAOS-9204): a surplus open row of a member the run returns again is retired only
+     when it is not newer than the read (else it stays open and is counted in `row_newer_than_read`); a rename
+     never replaces a member id that holds a newer row; and the Jira (Atlassian Teams) writer leaves a whole fact
+     open when any of its open rows is newer than the run's read. The same rule, one case set, for GitHub, GitLab,
+     Linear and Jira.
   4. a member whose id is made from an email is NOT closed by the list rule: a hidden or changed email would read
      as a departure. `raw_provider_user_id` still holds the first identity facet, not the provider's user id (the
      field is pinned by the frozen comparison with the reference); the provider's own stable user id is the
@@ -2038,8 +2060,8 @@ GitLab the root group's subgroups, Linear the workspace's teams). A dropped team
    body GitHub documents), GitLab `GET /groups/:id` (the full path) answers its own 404 (`404 Group Not Found`). A
    listing read by page number or offset loses a team that still exists when another team is removed between two
    requests, so for a listing of more than one response the absence is a CANDIDATE until the provider answers. For a
-   cursor walk (Linear) the end of the walk is the kind's written statement (`AbsenceWalkByCursor`), as for the team-key
-   ownership kind, until its own prover (CHAOS-9124).
+   cursor walk (Linear) the end of the walk is no proof either (CHAOS-9124): the team is a candidate until Linear's own
+   answer (`teams(filter: {key: {eq: KEY}})`, an empty node list) says it is gone.
 A 200 (the listing lost the team: reason `team_absent_from_listing_still_there`), an answer for another slug or path (a
 renamed team), a 404 with another body (a gateway), a 401/403/429/5xx, a failed read and a candidate past the run's
 budget (`TeamAbsenceLookupBudget` = 100 per run, one answer per team for ALL closes of the run) close nothing and are

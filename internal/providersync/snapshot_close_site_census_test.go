@@ -27,9 +27,9 @@ var snapshotKindCensus = map[string]struct {
 	// all, and TestSnapshotKindPolicyTableIsTheDocumentedOne pins it in the
 	// two documented tables.
 	"linear_project_ownership": {"internal/providersync.LinearProjectOwnershipKind", "EmptyClosesNothing",
-		"one projects walk for the workspace: an answer with no project ownership is an access change before it is a removal", "cursor walk"},
+		"one projects walk for the workspace: an answer with no project ownership is an access change before it is a removal", "direct answer"},
 	"linear_team_key_ownership": {"internal/providersync.LinearTeamKeyOwnershipKind", "EmptyClosesNothing",
-		"one teams walk for the workspace: an answer with no team is an access change before it is a removal", "cursor walk"},
+		"one teams walk for the workspace: an answer with no team is an access change before it is a removal", "direct answer"},
 	"jira_legacy_ownership": {"internal/providersync.JiraLegacyOwnershipKind", "EmptyClosesNothing",
 		"one project search for the site: no live project is far more often an access change than a removal", "one response or direct answer"},
 	"gitlab_group_project_grants": {"internal/providersync.GitLabGroupProjectGrantKind", "EmptyIsAnAnswer",
@@ -45,12 +45,12 @@ var snapshotKindCensus = map[string]struct {
 		"one member read per group, each with its own proven end, in a scope no other integration reads: a group with no member is an answer", "the writer of the kind"},
 	"atlassian_team_project_links": {"internal/providersync.AtlassianTeamLinkKind", "EmptyIsAnAnswer",
 		"one link read per team, each to its end: a team with no link is an answer; a team outside the search answer is in scope " +
-			"only through atlassian_team_catalog", "cursor walk"},
+			"only through atlassian_team_catalog", "direct answer"},
 	"atlassian_team_memberships": {"internal/providersync.AtlassianTeamMembershipKind", "EmptyIsAnAnswer",
 		"one member read per team, each to its end: a team with no member is an answer; a team outside the search answer is in " +
-			"scope only through atlassian_team_catalog", "cursor walk"},
+			"scope only through atlassian_team_catalog", "direct answer"},
 	"atlassian_team_catalog": {"internal/providersync.AtlassianTeamCatalogKind", "EmptyClosesNothing",
-		"one team search for the organization: a search that answers no team is an access change before every team was deleted", "cursor walk"},
+		"one team search for the organization: a search that answers no team is an access change before every team was deleted", "direct answer"},
 }
 
 // snapshotCloseSites is every production function that turns the retractions
@@ -268,12 +268,12 @@ func TestSnapshotKindPolicyTableIsTheDocumentedOne(t *testing.T) {
 		}
 		return got
 	}
-	code := read("snapshot_kinds.go", regexp.MustCompile(`^//\t([a-z_]+)\s+(sole integration)\s+(closes nothing|is an answer)\s+(cursor walk|one response or direct answer|the writer of the kind)$`))
+	code := read("snapshot_kinds.go", regexp.MustCompile(`^//\t([a-z_]+)\s+(sole integration)\s+(closes nothing|is an answer)\s+(direct answer|one response or direct answer|the writer of the kind)$`))
 	if !reflect.DeepEqual(code, want) {
 		t.Errorf("the policy table in the doc comment of snapshot_kinds.go differs from the census.\n got  %v\n want %v", code, want)
 	}
 	document := read("../../docs/contribute/architecture/team-attribution.md",
-		regexp.MustCompile("^\\s*\\| `([a-z_]+)` \\|[^|]*\\|[^|]*\\| (sole integration) \\| (closes nothing|is an answer)\\b[^|]*\\| (cursor walk|one response or direct answer|the writer of the kind) \\|$"))
+		regexp.MustCompile("^\\s*\\| `([a-z_]+)` \\|[^|]*\\|[^|]*\\| (sole integration) \\| (closes nothing|is an answer)\\b[^|]*\\| (direct answer|one response or direct answer|the writer of the kind) \\|$"))
 	if !reflect.DeepEqual(document, want) {
 		t.Errorf("the kinds table of docs/contribute/architecture/team-attribution.md differs from the census.\n got  %v\n want %v", document, want)
 	}
@@ -284,9 +284,10 @@ func TestSnapshotKindPolicyTableIsTheDocumentedOne(t *testing.T) {
 // kinds behind each call:
 //
 //   - linear_team_catalog_collector.go: linear_project_ownership and
-//     linear_team_key_ownership, both by the cursor walk.
+//     linear_team_key_ownership, both by the direct answer of Linear.
 //   - internal/atlassianteams/write.go: atlassian_team_memberships,
-//     atlassian_team_project_links and atlassian_team_catalog, by the cursor walk.
+//     atlassian_team_project_links and atlassian_team_catalog, by the direct
+//     answer of the gateway.
 //   - ownership_close_gate.go: github_team_repo_grants and
 //     gitlab_group_project_grants (one call, ownershipCloseDecision.snapshot),
 //     by one response or the direct answer.
@@ -300,18 +301,17 @@ func TestSnapshotKindPolicyTableIsTheDocumentedOne(t *testing.T) {
 // deliberate edit of this table, of snapshotKindCensus and of the two
 // documented tables.
 var snapshotAbsenceCalls = map[string]map[string]int{
-	"internal/providersync/linear_team_catalog_collector.go": {"AbsenceByWalk": 2},
-	"internal/atlassianteams/write.go":                       {"AbsenceByWalk": 3},
+	"internal/providersync/linear_team_catalog_collector.go": {"AbsenceByListing": 2},
+	"internal/atlassianteams/write.go":                       {"AbsenceByListing": 3},
 	"internal/providersync/ownership_close_gate.go":          {"AbsenceByListing": 1, "AbsenceByCloseWriter": 1},
 	"internal/providersync/jira_team_catalog_route.go":       {"AbsenceByListing": 1},
 }
 
-// TestAbsenceProofCensus pins who states the proof of an absence, and that
-// the only walk taken as that proof is the cursor walk. It reads the source of
-// the two packages that hold a close site.
+// TestAbsenceProofCensus pins who states the proof of an absence, and that no
+// walk is taken as that proof (CHAOS-9124 removed the last one, the end of a
+// cursor walk). It reads the source of the two packages that hold a close site.
 func TestAbsenceProofCensus(t *testing.T) {
-	call := regexp.MustCompile(`\b(?:providersync\.)?(AbsenceByWalk|AbsenceByListing|AbsenceByCloseWriter)(?:\[[^\]]+\])?\(`)
-	walk := regexp.MustCompile(`AbsenceByWalk(?:\[[^\]]+\])?\((?:providersync\.)?(\w+)\)`)
+	call := regexp.MustCompile(`\b(?:providersync\.)?(AbsenceByListing|AbsenceByCloseWriter|AbsenceByWalk)(?:\[[^\]]+\])?\(`)
 	got := map[string]map[string]int{}
 	files := 0
 	for _, directory := range []string{".", "../atlassianteams"} {
@@ -346,11 +346,6 @@ func TestAbsenceProofCensus(t *testing.T) {
 				}
 				got[path][match[1]]++
 			}
-			for _, match := range walk.FindAllStringSubmatch(source, -1) {
-				if match[1] != "AbsenceWalkByCursor" {
-					t.Errorf("%s takes the walk %s as the proof of an absence: the only named walk is AbsenceWalkByCursor", path, match[1])
-				}
-			}
 		}
 	}
 	if files < 20 {
@@ -359,15 +354,15 @@ func TestAbsenceProofCensus(t *testing.T) {
 	if !reflect.DeepEqual(got, snapshotAbsenceCalls) {
 		t.Errorf("the statements of an absence proof changed.\n got  %v\n want %v", got, snapshotAbsenceCalls)
 	}
-	// The table of the kinds and the calls agree: five kinds by the cursor
-	// walk (five calls), three by the listing rule (two calls, one of them the
-	// gate's, for the two grant kinds).
+	// The table of the kinds and the calls agree: five kinds by the direct
+	// answer of their provider (five kinds, two calls), three by the listing rule
+	// (two calls, one of them the gate's, for the two grant kinds).
 	byAbsence := map[string]int{}
 	for _, entry := range snapshotKindCensus {
 		byAbsence[entry.absence]++
 	}
-	if byAbsence["cursor walk"] != 5 || byAbsence["one response or direct answer"] != 3 || byAbsence["the writer of the kind"] != 3 || len(byAbsence) != 3 {
-		t.Errorf("the kinds by absence proof are %v, want 5 by the cursor walk, 3 by one response or the direct answer and 3 by the writer of the kind", byAbsence)
+	if byAbsence["direct answer"] != 5 || byAbsence["one response or direct answer"] != 3 || byAbsence["the writer of the kind"] != 3 || len(byAbsence) != 3 {
+		t.Errorf("the kinds by absence proof are %v, want 5 by the direct answer, 3 by one response or the direct answer and 3 by the writer of the kind", byAbsence)
 	}
 	// The writer's own proof is stated for the membership row type only, and
 	// its candidates reach one function: the writer that decides them.
@@ -444,15 +439,15 @@ var heldSetWalks = map[string]struct {
 		{"the live project search, again", "jira_legacy_ownership", "the same"},
 	}},
 	"internal/providersync/linear_reference_catalog_route.go": {`:= collectLinearReferenceConnection\(`, []heldSetWalk{
-		{"the teams of the workspace", "linear_team_key_ownership (and linear_team_memberships: a team that is no longer listed)", "cursor walk"},
-		{"the projects of the workspace, archived ones too", "linear_project_ownership", "cursor walk"},
-		{"the continuation of one project's teams", "linear_project_ownership", "cursor walk"},
+		{"the teams of the workspace", "linear_team_key_ownership (and linear_team_memberships: a team that is no longer listed)", "direct answer"},
+		{"the projects of the workspace, archived ones too", "linear_project_ownership", "direct answer"},
+		{"the continuation of one project's teams", "linear_project_ownership", "direct answer"},
 		{"the continuation of one team's members", "no close", "none needed"},
 	}},
 	"internal/atlassianteams/collect.go": {`client\.(SearchTeams|IterTeamUsers|IterTeamConnectedContainers)\(`, []heldSetWalk{
-		{"the team search", "atlassian_team_catalog", "cursor walk"},
-		{"the members of one team", "atlassian_team_memberships", "cursor walk"},
-		{"the project links of one team", "atlassian_team_project_links", "cursor walk"},
+		{"the team search", "atlassian_team_catalog", "direct answer"},
+		{"the members of one team", "atlassian_team_memberships", "direct answer"},
+		{"the project links of one team", "atlassian_team_project_links", "direct answer"},
 	}},
 }
 

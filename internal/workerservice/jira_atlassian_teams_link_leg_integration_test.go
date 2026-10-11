@@ -40,6 +40,13 @@ func (twoAtlassianTeams) SearchTeams(context.Context, string, string, string, in
 		{ID: linkLegTeamTwo, DisplayName: "Synthetic two", State: "ACTIVE"},
 	}, nil
 }
+
+// GetTeamByID answers TeamById for the two teams: they exist and are ACTIVE (the worker takes its absence prover
+// from a client that can ask, CHAOS-9124).
+func (twoAtlassianTeams) GetTeamByID(_ context.Context, teamID string, _ string) (*atlassian.AtlassianTeam, error) {
+	return &atlassian.AtlassianTeam{ID: teamID, DisplayName: "Synthetic", State: "ACTIVE"}, nil
+}
+
 func (twoAtlassianTeams) IterTeamUsers(_ context.Context, teamID string, _ int) ([]atlassian.TeamworkUserRelation, error) {
 	return []atlassian.TeamworkUserRelation{{SubjectUserID: "ari:cloud:identity::user/synthetic-" + teamID[len(teamID)-1:], RelationType: "TEAM_MEMBER"}}, nil
 }

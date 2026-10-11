@@ -1,0 +1,18 @@
+{
+  "case": "teams_filter_key_not_found",
+  "method": "POST",
+  "path": "/graphql",
+  "status": 200,
+  "content_type": "application/json; charset=utf-8",
+  "request_shape": {
+    "query": "\u003cstring\u003e"
+  },
+  "body_shape": {
+    "data": {
+      "teams": {
+        "nodes": []
+      }
+    }
+  },
+  "body_verbatim": "{\"data\":{\"teams\":{\"nodes\":[]}}}\n"
+}

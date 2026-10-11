@@ -27,10 +27,10 @@ type completionKey struct {
 	teamID string
 }
 
-// ComputeWorkItemCompletionDaily counts the items completed in [dayUTC, end) by (repository, team): the same
-// items, the same story-point delivery units and the same unassigned rule as ComputeInvestmentDaily, with the rule
-// classification left out. Summed over the areas, its counts equal the counts of the rows it replaces; the cycle
-// p50 is the p50 of all the day's cycle hours of the key, not a p50 per area.
+// ComputeWorkItemCompletionDaily counts the items completed in [dayUTC, end) by (repository, team): the items
+// active on the day that completed in it, their story-point delivery units, and the unassigned-team rule of the
+// rows it replaced (investment_metrics_daily), with no rule classification. Summed over the areas of those rows,
+// its counts equal theirs; the cycle p50 is the p50 of all the day's cycle hours of the key, not a p50 per area.
 //
 // dayUTC is the UTC midnight of the day and end the next midnight.
 func ComputeWorkItemCompletionDaily(

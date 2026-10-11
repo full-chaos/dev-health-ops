@@ -12,6 +12,7 @@ import (
 	"github.com/full-chaos/dev-health-go/clickhouse"
 
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph/model"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
 )
 
 func TestValidateSankeyPath_TooShort(t *testing.T) {
@@ -87,8 +88,14 @@ func TestCompileSankey_Investment_CompilesInlinedSource(t *testing.T) {
 		if !strings.Contains(q.sql, "LEFT JOIN repos AS r FINAL ON toString(r.id) = toString(repo_id) AND r.org_id = {org_id:String}") {
 			t.Errorf("%s: expected the REPO-dimension repo join, deduped with FINAL (CHAOS-4773), got: %s", name, q.sql)
 		}
-		if !strings.Contains(q.sql, "(argMax(tuple(resolved_team), (cnt, resolved_team_id))).1 AS team_label") {
-			t.Errorf("%s: expected CHAOS-4547 site-3 tuple-wrap fix on the team vote, got: %s", name, q.sql)
+		if strings.Contains(q.sql, "AS team_label") || strings.Contains(q.sql, "work_item_team_attributions") {
+			t.Errorf("%s: the flow's TEAM must come from repository ownership, not the work-item vote, got: %s", name, q.sql)
+		}
+		if !strings.Contains(q.sql, teamscope.Marker) || !strings.Contains(q.sql, "ot.owner_team_label") {
+			t.Errorf("%s: expected the ownership team join (teamscope.OwnerShares), got: %s", name, q.sql)
+		}
+		if !strings.Contains(q.sql, "wure.work_unit_id != ''") {
+			t.Errorf("%s: the ownership team needs the per-repository allocation rows, got: %s", name, q.sql)
 		}
 	}
 }

@@ -146,7 +146,11 @@ told apart from "the counter was never computed". Field-by-field meaning:
 the unit's repositories (the same ownership rule the team scope uses). It no longer follows the work-item attribution
 vote, so a unit in an owned repository counts as assigned even when no linked work item names a team, and a unit in an
 unowned repository counts as unassigned even when a work item names one. A unit counts once, however many owning teams
-it reaches. The denominator is unchanged. The chart's TEAM dimension still shows the vote, so the two can differ.
+it reaches. The denominator is unchanged. The TEAM node of the Investment flow reads the same ownership (CHAOS-9297): each effort row takes the owner of its
+repository, a co-owned repository is shared equally among its owners, and a repository with no owner is `unassigned`, so the
+unassigned share of the flow is `1 - teamCoverage` except for a unit that spans an owned and an unowned repository (the
+coverage assigns it whole, the flow splits its effort). The TEAM dimension of breakdown, timeseries and the flow matrix still
+shows the vote.
 
 ## Repository coverage: two numbers, not one
 

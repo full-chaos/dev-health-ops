@@ -22,6 +22,8 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/full-chaos/dev-health-go/clickhouse"
+
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph/model"
 	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse/latestrow"
 )
@@ -534,6 +536,8 @@ type investmentContext struct {
 	ExtraClauses      string
 	UseInvestment     bool
 	UseRepoAllocation bool
+	// Bindings are the bindings of a join the context adds beyond the request's filters (the ownership team join).
+	Bindings []clickhouse.Binding
 }
 
 // resolveUseInvestment ports _get_context_params's own use_investment

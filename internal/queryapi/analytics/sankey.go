@@ -124,7 +124,7 @@ func CompileSankey(req SankeyRequest, orgID string, timeoutSeconds int, useInves
 	// nondeterminism one level down).
 	var unionParts []string
 	for i, dim := range req.Path {
-		dimCol, dimErr := dbColumn(dim, useInvestment)
+		dimCol, dimErr := shape.column(dim, useInvestment)
 		if dimErr != nil {
 			return compiledQuery{}, nil, dimErr
 		}
@@ -166,6 +166,7 @@ ORDER BY dim_order ASC, value DESC, node_id ASC
 		{Name: "limit_per_dim", Value: limitPerDim},
 	}
 	nodesBindings = append(nodesBindings, fc.bindings...)
+	nodesBindings = append(nodesBindings, shape.extraBindings...)
 	nodes = compiledQuery{sql: nodesSQL, bindings: nodesBindings}
 
 	// One edges query per adjacent (source_dim, target_dim) pair,
@@ -174,11 +175,11 @@ ORDER BY dim_order ASC, value DESC, node_id ASC
 	maxEdgesPerPair := shape.maxEdgesPerPair
 	for i := 0; i < len(req.Path)-1; i++ {
 		sourceDim, targetDim := req.Path[i], req.Path[i+1]
-		sourceCol, colErr := dbColumn(sourceDim, useInvestment)
+		sourceCol, colErr := shape.column(sourceDim, useInvestment)
 		if colErr != nil {
 			return compiledQuery{}, nil, colErr
 		}
-		targetCol, colErr := dbColumn(targetDim, useInvestment)
+		targetCol, colErr := shape.column(targetDim, useInvestment)
 		if colErr != nil {
 			return compiledQuery{}, nil, colErr
 		}
@@ -209,6 +210,7 @@ LIMIT {max_edges:UInt32}
 			{Name: "max_edges", Value: maxEdgesPerPair},
 		}
 		edgeBindings = append(edgeBindings, fc.bindings...)
+		edgeBindings = append(edgeBindings, shape.extraBindings...)
 		edges = append(edges, compiledQuery{sql: edgeSQL, bindings: edgeBindings})
 	}
 

@@ -9,6 +9,7 @@ import (
 
 	"github.com/full-chaos/dev-health-go/clickhouse"
 
+	"github.com/full-chaos/dev-health-ops/internal/prrootid"
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph/model"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/scopelabel"
@@ -204,11 +205,18 @@ func metricRules(a *repoAgg) []opportunity {
 func (o opportunity) project(repoName, teamName *string) model.AIOpportunity {
 	drill := []model.AIWorkGraphDrilldownRef{}
 	for _, ref := range o.refs {
-		parts := strings.Split(ref, ":")
-		if len(parts) != 3 || parts[0] != "git_pull_requests" {
+		// CHAOS-9225: git_pull_requests:<repository uuid>:<number> is a pull request; the toil rules'
+		// metric refs (git_pull_requests:migration_prs:<repository uuid>) have the same three parts and
+		// are keys of evidenceRefs, never drilldowns. The root id is the one the edge tables store.
+		table, id, found := strings.Cut(ref, ":")
+		if !found || table != "git_pull_requests" {
 			continue
 		}
-		drill = append(drill, model.AIWorkGraphDrilldownRef{RootType: "pr", RootID: parts[1] + "#" + parts[2], Label: "PR " + parts[2]})
+		repo, number, ok := prrootid.Parse(id)
+		if !ok {
+			continue
+		}
+		drill = append(drill, model.AIWorkGraphDrilldownRef{RootType: "pr", RootID: prrootid.Format(repo, number), Label: "PR " + number})
 	}
 	team := ""
 	if o.teamID != nil {

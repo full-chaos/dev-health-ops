@@ -252,6 +252,7 @@ func compileSankeyCoverage(req SankeyRequest, orgID string, timeoutSeconds int, 
 	fanoutExpr := notMeasurable
 
 	repoFilterColumn := repoCol
+	teamRepoColumn := ""
 
 	if useInvestment {
 		baseTable = fmt.Sprintf("%s AS work_unit_investments", LatestWorkUnitInvestmentsSource())
@@ -418,6 +419,7 @@ func compileSankeyCoverage(req SankeyRequest, orgID string, timeoutSeconds int, 
 		// analytics.py:838 -- the repo predicate targets the RAW joined
 		// column on the investment path, not the display expression.
 		repoFilterColumn = "wure.repo_id"
+		teamRepoColumn = "if(wure.work_unit_id != '', wure.repo_id, work_unit_investments.repo_id)"
 
 		// analytics.py:820-827 (CHAOS-2492): resolve developer identity via
 		// the au join so who.developers / scope.level=developer coverage is
@@ -477,9 +479,10 @@ func compileSankeyCoverage(req SankeyRequest, orgID string, timeoutSeconds int, 
 	}
 
 	filterClause, err := translateFilters(orgID, filters, useInvestment, filterColumns{
-		Team:   teamCol,
-		Repo:   repoFilterColumn,
-		Author: "author_email",
+		Team:     teamCol,
+		Repo:     repoFilterColumn,
+		TeamRepo: teamRepoColumn,
+		Author:   "author_email",
 		// CHAOS-5498: this is the ONE caller that never reads
 		// subcategory_kv.2 -- it needs the filter only to decide which units
 		// are in scope -- so it takes the unit-selecting predicate and skips

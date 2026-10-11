@@ -37,7 +37,7 @@ func dailyWorkItemEnginesForRegistrationTest(t *testing.T) dailyWorkItemEngines 
 	if engines.err != nil {
 		t.Fatalf("load the work-item engines from the real config artifacts: %v", engines.err)
 	}
-	if engines.typeNormalizer == nil || engines.investmentClassifier == nil {
+	if engines.typeNormalizer == nil {
 		t.Fatal("dailyWorkItemEnginesFrom returned no error and a missing engine")
 	}
 	return engines
@@ -134,7 +134,7 @@ func TestDailyWorkItemEngineFamiliesRefuseWithTheEngineLoadError(t *testing.T) {
 	if engines.err == nil {
 		t.Fatal("dailyWorkItemEnginesFrom accepted a configuration with no engine paths")
 	}
-	if engines.typeNormalizer != nil || engines.investmentClassifier != nil {
+	if engines.typeNormalizer != nil {
 		t.Fatal("dailyWorkItemEnginesFrom returned an error and an engine: a half pair")
 	}
 	native, _, _, refusals := dailyNativeFamilyRegistrations(

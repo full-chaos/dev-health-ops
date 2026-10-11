@@ -21,8 +21,6 @@ import (
 var jiraWorkItemDerivedDestinations = []string{
 	"ai_attribution",
 	"estimate_coverage_metrics_daily",
-	"investment_classifications_daily",
-	"investment_metrics_daily",
 	"issue_type_metrics_daily",
 	"work_item_cycle_times",
 	"work_item_metrics_daily",
@@ -41,8 +39,6 @@ var jiraWorkItemSyncSinkDestinations = []string{
 }
 
 type JiraEstimateCoverageMetricsDailyRow = githubEstimateCoverageMetricsDailyRow
-type JiraInvestmentClassificationDailyRow = githubInvestmentClassificationDailyRow
-type JiraInvestmentMetricsDailyRow = githubInvestmentMetricsDailyRow
 type JiraIssueTypeMetricsDailyRow = githubIssueTypeMetricsDailyRow
 type JiraWorkItemCycleTimePersistenceRow = githubWorkItemCycleTimePersistenceRow
 type JiraWorkItemMetricsDailyRow = githubWorkItemMetricsDailyRow
@@ -54,16 +50,14 @@ type JiraWorkItemUserMetricsDailyRow = githubWorkItemUserMetricsDailyRow
 // row type owned by its ClickHouse table; no string-keyed evidence envelope can
 // substitute for a destination's schema.
 type JiraWorkItemDerivedRows struct {
-	EstimateCoverageMetricsDaily   []JiraEstimateCoverageMetricsDailyRow
-	InvestmentClassificationsDaily []JiraInvestmentClassificationDailyRow
-	InvestmentMetricsDaily         []JiraInvestmentMetricsDailyRow
-	IssueTypeMetricsDaily          []JiraIssueTypeMetricsDailyRow
-	WorkItemCycleTimes             []JiraWorkItemCycleTimePersistenceRow
-	WorkItemMetricsDaily           []JiraWorkItemMetricsDailyRow
-	WorkItemStateDurationsDaily    []JiraWorkItemStateDurationDailyRow
-	WorkItemTeamAttributions       []JiraWorkItemTeamAttributionRow
-	WorkItemUserMetricsDaily       []JiraWorkItemUserMetricsDailyRow
-	Watermark                      *time.Time
+	EstimateCoverageMetricsDaily []JiraEstimateCoverageMetricsDailyRow
+	IssueTypeMetricsDaily        []JiraIssueTypeMetricsDailyRow
+	WorkItemCycleTimes           []JiraWorkItemCycleTimePersistenceRow
+	WorkItemMetricsDaily         []JiraWorkItemMetricsDailyRow
+	WorkItemStateDurationsDaily  []JiraWorkItemStateDurationDailyRow
+	WorkItemTeamAttributions     []JiraWorkItemTeamAttributionRow
+	WorkItemUserMetricsDaily     []JiraWorkItemUserMetricsDailyRow
+	Watermark                    *time.Time
 	// MembershipRejections (CHAOS-4320 round 6) -- see the identical field's
 	// doc comment on GitLabWorkItemDerivedRows.
 	MembershipRejections []teamattribution.GithubWorkItemDerivationRejectedMembership
@@ -102,10 +96,9 @@ type jiraWorkItemsDeriver interface {
 // JiraWorkItemDeriver owns the Jira compute boundary and reuses the
 // provider-neutral arithmetic already differential-tested against Python.
 type JiraWorkItemDeriver struct {
-	Source               githubWorkItemDerivationContextSource
-	statusMapping        *StatusMapping
-	investmentClassifier *InvestmentClassifier
-	observations         *workItemDerivationObservations
+	Source        githubWorkItemDerivationContextSource
+	statusMapping *StatusMapping
+	observations  *workItemDerivationObservations
 }
 
 // StoredEdgeMergeObservation reports the stored-edge union this deriver has
@@ -207,17 +200,11 @@ func NewJiraWorkItemDeriver(
 	conn driver.Conn,
 	lease providerfoundation.LeaseGuard,
 	statusMappingConfigPath string,
-	investmentConfigPath string,
 ) (*JiraWorkItemDeriver, error) {
-	if conn == nil || lease == nil || strings.TrimSpace(statusMappingConfigPath) == "" ||
-		strings.TrimSpace(investmentConfigPath) == "" {
+	if conn == nil || lease == nil || strings.TrimSpace(statusMappingConfigPath) == "" {
 		return nil, ErrInvalidConfiguration
 	}
 	statusMapping, err := LoadStatusMapping(statusMappingConfigPath)
-	if err != nil {
-		return nil, err
-	}
-	classifier, err := NewInvestmentClassifier(investmentConfigPath)
 	if err != nil {
 		return nil, err
 	}
@@ -225,8 +212,8 @@ func NewJiraWorkItemDeriver(
 		Source: jiraWorkItemClickHouseDerivationContextSource{delegate: githubWorkItemClickHouseDerivationContextSource{
 			Conn: conn, Lease: lease,
 		}},
-		statusMapping: statusMapping, investmentClassifier: classifier,
-		observations: newWorkItemDerivationObservations(),
+		statusMapping: statusMapping,
+		observations:  newWorkItemDerivationObservations(),
 	}, nil
 }
 
@@ -241,7 +228,7 @@ func (deriver JiraWorkItemDeriver) Derive(
 	normalizedAt time.Time,
 ) (JiraWorkItemDerivedRows, error) {
 	if ctx == nil || deriver.Source == nil || deriver.statusMapping == nil ||
-		deriver.investmentClassifier == nil || claim.Validate() != nil ||
+		claim.Validate() != nil ||
 		claim.Provider != "jira" || !isWorkItemFamilyDataset(claim.Dataset) ||
 		claim.BeforeAt == nil || normalizedAt.IsZero() {
 		return JiraWorkItemDerivedRows{}, ErrInvalidConfiguration
@@ -270,15 +257,13 @@ func (deriver JiraWorkItemDeriver) Derive(
 		return JiraWorkItemDerivedRows{}, err
 	}
 	result := JiraWorkItemDerivedRows{
-		EstimateCoverageMetricsDaily:   []JiraEstimateCoverageMetricsDailyRow{},
-		InvestmentClassificationsDaily: []JiraInvestmentClassificationDailyRow{},
-		InvestmentMetricsDaily:         []JiraInvestmentMetricsDailyRow{},
-		IssueTypeMetricsDaily:          []JiraIssueTypeMetricsDailyRow{},
-		WorkItemCycleTimes:             []JiraWorkItemCycleTimePersistenceRow{},
-		WorkItemMetricsDaily:           []JiraWorkItemMetricsDailyRow{},
-		WorkItemStateDurationsDaily:    []JiraWorkItemStateDurationDailyRow{},
-		WorkItemTeamAttributions:       []JiraWorkItemTeamAttributionRow{},
-		WorkItemUserMetricsDaily:       []JiraWorkItemUserMetricsDailyRow{},
+		EstimateCoverageMetricsDaily: []JiraEstimateCoverageMetricsDailyRow{},
+		IssueTypeMetricsDaily:        []JiraIssueTypeMetricsDailyRow{},
+		WorkItemCycleTimes:           []JiraWorkItemCycleTimePersistenceRow{},
+		WorkItemMetricsDaily:         []JiraWorkItemMetricsDailyRow{},
+		WorkItemStateDurationsDaily:  []JiraWorkItemStateDurationDailyRow{},
+		WorkItemTeamAttributions:     []JiraWorkItemTeamAttributionRow{},
+		WorkItemUserMetricsDaily:     []JiraWorkItemUserMetricsDailyRow{},
 	}
 	for _, day := range days {
 		triplet, err := buildWorkItemMetricTripletForProvider(
@@ -304,9 +289,7 @@ func (deriver JiraWorkItemDeriver) Derive(
 		result.WorkItemStateDurationsDaily = append(result.WorkItemStateDurationsDaily, surfaces.StateDurations...)
 		result.MembershipRejections = append(result.MembershipRejections, surfaces.MembershipRejections...)
 
-		engine := GitHubWorkItemEngineDeriver{
-			statusMapping: deriver.statusMapping, investmentClassifier: deriver.investmentClassifier,
-		}
+		engine := GitHubWorkItemEngineDeriver{statusMapping: deriver.statusMapping}
 		engineRows, err := engine.deriveRowsForProvider(
 			ctx, "jira", claim, githubRows, day, normalizedAt, contextFacts,
 		)
@@ -314,8 +297,6 @@ func (deriver JiraWorkItemDeriver) Derive(
 			return JiraWorkItemDerivedRows{}, err
 		}
 		result.IssueTypeMetricsDaily = append(result.IssueTypeMetricsDaily, engineRows.IssueTypes...)
-		result.InvestmentClassificationsDaily = append(result.InvestmentClassificationsDaily, engineRows.Classifications...)
-		result.InvestmentMetricsDaily = append(result.InvestmentMetricsDaily, engineRows.InvestmentMetrics...)
 	}
 	watermark := claim.BeforeAt.UTC()
 	result.Watermark = &watermark
@@ -326,30 +307,26 @@ func (deriver JiraWorkItemDeriver) Derive(
 // is intentionally no arbitrary AI row field; the builder below owns the sole
 // legal Jira AI disposition, an empty slice.
 type JiraWorkItemDerivedEffectRows struct {
-	EstimateCoverageMetricsDaily   []JiraEstimateCoverageMetricsDailyRow
-	InvestmentClassificationsDaily []JiraInvestmentClassificationDailyRow
-	InvestmentMetricsDaily         []JiraInvestmentMetricsDailyRow
-	IssueTypeMetricsDaily          []JiraIssueTypeMetricsDailyRow
-	WorkItemCycleTimes             []JiraWorkItemCycleTimePersistenceRow
-	WorkItemMetricsDaily           []JiraWorkItemMetricsDailyRow
-	WorkItemStateDurationsDaily    []JiraWorkItemStateDurationDailyRow
-	WorkItemTeamAttributions       []JiraWorkItemTeamAttributionRow
-	WorkItemUserMetricsDaily       []JiraWorkItemUserMetricsDailyRow
-	MembershipRejections           []teamattribution.GithubWorkItemDerivationRejectedMembership
+	EstimateCoverageMetricsDaily []JiraEstimateCoverageMetricsDailyRow
+	IssueTypeMetricsDaily        []JiraIssueTypeMetricsDailyRow
+	WorkItemCycleTimes           []JiraWorkItemCycleTimePersistenceRow
+	WorkItemMetricsDaily         []JiraWorkItemMetricsDailyRow
+	WorkItemStateDurationsDaily  []JiraWorkItemStateDurationDailyRow
+	WorkItemTeamAttributions     []JiraWorkItemTeamAttributionRow
+	WorkItemUserMetricsDaily     []JiraWorkItemUserMetricsDailyRow
+	MembershipRejections         []teamattribution.GithubWorkItemDerivationRejectedMembership
 }
 
 func (rows JiraWorkItemDerivedRows) EffectRows() JiraWorkItemDerivedEffectRows {
 	return JiraWorkItemDerivedEffectRows{
-		EstimateCoverageMetricsDaily:   rows.EstimateCoverageMetricsDaily,
-		InvestmentClassificationsDaily: rows.InvestmentClassificationsDaily,
-		InvestmentMetricsDaily:         rows.InvestmentMetricsDaily,
-		IssueTypeMetricsDaily:          rows.IssueTypeMetricsDaily,
-		WorkItemCycleTimes:             rows.WorkItemCycleTimes,
-		WorkItemMetricsDaily:           rows.WorkItemMetricsDaily,
-		WorkItemStateDurationsDaily:    rows.WorkItemStateDurationsDaily,
-		WorkItemTeamAttributions:       rows.WorkItemTeamAttributions,
-		WorkItemUserMetricsDaily:       rows.WorkItemUserMetricsDaily,
-		MembershipRejections:           rows.MembershipRejections,
+		EstimateCoverageMetricsDaily: rows.EstimateCoverageMetricsDaily,
+		IssueTypeMetricsDaily:        rows.IssueTypeMetricsDaily,
+		WorkItemCycleTimes:           rows.WorkItemCycleTimes,
+		WorkItemMetricsDaily:         rows.WorkItemMetricsDaily,
+		WorkItemStateDurationsDaily:  rows.WorkItemStateDurationsDaily,
+		WorkItemTeamAttributions:     rows.WorkItemTeamAttributions,
+		WorkItemUserMetricsDaily:     rows.WorkItemUserMetricsDaily,
+		MembershipRejections:         rows.MembershipRejections,
 	}
 }
 
@@ -363,10 +340,6 @@ func BuildJiraWorkItemDerivedEffects(rows JiraWorkItemDerivedEffectRows) ([]Effe
 			effect, err = BuildEffectBatch(destination, EffectReadbackRequired, []json.RawMessage{})
 		case "estimate_coverage_metrics_daily":
 			effect, err = buildJiraTypedDerivedEffect(destination, rows.EstimateCoverageMetricsDaily)
-		case "investment_classifications_daily":
-			effect, err = buildJiraTypedDerivedEffect(destination, rows.InvestmentClassificationsDaily)
-		case "investment_metrics_daily":
-			effect, err = buildJiraTypedDerivedEffect(destination, rows.InvestmentMetricsDaily)
 		case "issue_type_metrics_daily":
 			effect, err = buildJiraTypedDerivedEffect(destination, rows.IssueTypeMetricsDaily)
 		case "work_item_cycle_times":
@@ -442,12 +415,10 @@ func (adapter jiraDerivedGitHubAdapter) validate(
 		if err := json.Unmarshal(raw, &fields); err != nil || fields == nil {
 			return ErrInvalidConfiguration
 		}
-		if adapter.destination != "investment_metrics_daily" {
-			var provider string
-			providerRaw, ok := fields["provider"]
-			if !ok || json.Unmarshal(providerRaw, &provider) != nil || provider != "jira" {
-				return ErrInvalidConfiguration
-			}
+		var provider string
+		providerRaw, ok := fields["provider"]
+		if !ok || json.Unmarshal(providerRaw, &provider) != nil || provider != "jira" {
+			return ErrInvalidConfiguration
 		}
 		var orgID string
 		orgRaw, ok := fields["org_id"]
@@ -501,17 +472,15 @@ var _ JiraWorkItemEffectAdapter = jiraDerivedGitHubAdapter{}
 // tables that the daily job owns; no destination reaches them, and they stay
 // only until the dead-code removal that follows the cut.
 type JiraWorkItemDerivedClickHouseEffects struct {
-	Lease                          providerfoundation.LeaseGuard
-	AIAttribution                  JiraWorkItemEffectAdapter
-	EstimateCoverageMetricsDaily   JiraWorkItemEffectAdapter
-	InvestmentClassificationsDaily JiraWorkItemEffectAdapter
-	InvestmentMetricsDaily         JiraWorkItemEffectAdapter
-	IssueTypeMetricsDaily          JiraWorkItemEffectAdapter
-	WorkItemCycleTimes             JiraWorkItemEffectAdapter
-	WorkItemMetricsDaily           JiraWorkItemEffectAdapter
-	WorkItemStateDurationsDaily    JiraWorkItemEffectAdapter
-	WorkItemTeamAttributions       JiraWorkItemEffectAdapter
-	WorkItemUserMetricsDaily       JiraWorkItemEffectAdapter
+	Lease                        providerfoundation.LeaseGuard
+	AIAttribution                JiraWorkItemEffectAdapter
+	EstimateCoverageMetricsDaily JiraWorkItemEffectAdapter
+	IssueTypeMetricsDaily        JiraWorkItemEffectAdapter
+	WorkItemCycleTimes           JiraWorkItemEffectAdapter
+	WorkItemMetricsDaily         JiraWorkItemEffectAdapter
+	WorkItemStateDurationsDaily  JiraWorkItemEffectAdapter
+	WorkItemTeamAttributions     JiraWorkItemEffectAdapter
+	WorkItemUserMetricsDaily     JiraWorkItemEffectAdapter
 }
 
 // metrics (CHAOS-4320 round 7, codex round 6 P1) -- see the identical
@@ -528,17 +497,15 @@ func NewJiraWorkItemDerivedClickHouseEffects(
 		return jiraDerivedGitHubAdapter{destination: destination, delegate: delegate}
 	}
 	sink := JiraWorkItemDerivedClickHouseEffects{
-		Lease:                          lease,
-		AIAttribution:                  wrap("ai_attribution", nil),
-		EstimateCoverageMetricsDaily:   wrap("estimate_coverage_metrics_daily", GitHubEstimateCoverageClickHouseEffects{Conn: conn, Lease: lease}),
-		InvestmentClassificationsDaily: wrap("investment_classifications_daily", GitHubInvestmentClassificationsClickHouseEffects{Conn: conn, Lease: lease}),
-		InvestmentMetricsDaily:         wrap("investment_metrics_daily", GitHubInvestmentMetricsClickHouseEffects{Conn: conn, Lease: lease}),
-		IssueTypeMetricsDaily:          wrap("issue_type_metrics_daily", GitHubIssueTypeMetricsClickHouseEffects{Conn: conn, Lease: lease}),
-		WorkItemCycleTimes:             wrap("work_item_cycle_times", GitHubWorkItemCycleTimesClickHouseEffects{Conn: conn, Lease: lease}),
-		WorkItemMetricsDaily:           wrap("work_item_metrics_daily", GitHubWorkItemMetricsDailyClickHouseEffects{Conn: conn, Lease: lease}),
-		WorkItemStateDurationsDaily:    wrap("work_item_state_durations_daily", GitHubWorkItemStateDurationsClickHouseEffects{Conn: conn, Lease: lease}),
-		WorkItemTeamAttributions:       wrap("work_item_team_attributions", GitHubWorkItemTeamAttributionsClickHouseEffects{Conn: conn, Lease: lease, Metrics: metrics}),
-		WorkItemUserMetricsDaily:       wrap("work_item_user_metrics_daily", GitHubWorkItemUserMetricsDailyClickHouseEffects{Conn: conn, Lease: lease}),
+		Lease:                        lease,
+		AIAttribution:                wrap("ai_attribution", nil),
+		EstimateCoverageMetricsDaily: wrap("estimate_coverage_metrics_daily", GitHubEstimateCoverageClickHouseEffects{Conn: conn, Lease: lease}),
+		IssueTypeMetricsDaily:        wrap("issue_type_metrics_daily", GitHubIssueTypeMetricsClickHouseEffects{Conn: conn, Lease: lease}),
+		WorkItemCycleTimes:           wrap("work_item_cycle_times", GitHubWorkItemCycleTimesClickHouseEffects{Conn: conn, Lease: lease}),
+		WorkItemMetricsDaily:         wrap("work_item_metrics_daily", GitHubWorkItemMetricsDailyClickHouseEffects{Conn: conn, Lease: lease}),
+		WorkItemStateDurationsDaily:  wrap("work_item_state_durations_daily", GitHubWorkItemStateDurationsClickHouseEffects{Conn: conn, Lease: lease}),
+		WorkItemTeamAttributions:     wrap("work_item_team_attributions", GitHubWorkItemTeamAttributionsClickHouseEffects{Conn: conn, Lease: lease, Metrics: metrics}),
+		WorkItemUserMetricsDaily:     wrap("work_item_user_metrics_daily", GitHubWorkItemUserMetricsDailyClickHouseEffects{Conn: conn, Lease: lease}),
 	}
 	if len(sink.MissingDestinations()) > 0 {
 		return sink, ErrInvalidConfiguration

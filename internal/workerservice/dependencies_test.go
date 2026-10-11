@@ -255,10 +255,8 @@ func TestGitHubWorkItemsRouteReadinessUsesTheProductionRuntimeConfig(t *testing.
 		{name: "complete", config: valid, runtime: true},
 		{name: "missing runtime", config: valid, wantErr: true},
 		{
-			name: "missing explicit status mapping path",
-			config: config.Config{
-				WorkerGithubWorkItemsInvestmentConfigPath: valid.WorkerGithubWorkItemsInvestmentConfigPath,
-			},
+			name:    "missing explicit status mapping path",
+			config:  config.Config{},
 			wantErr: true,
 		},
 	} {

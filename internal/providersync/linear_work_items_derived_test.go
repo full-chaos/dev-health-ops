@@ -24,11 +24,7 @@ func (linearDerivedEngineStub) Derive(
 	time.Time,
 	teamattribution.GithubWorkItemDerivationContext,
 ) (map[string][]json.RawMessage, error) {
-	return map[string][]json.RawMessage{
-		"issue_type_metrics_daily":         {},
-		"investment_classifications_daily": {},
-		"investment_metrics_daily":         {},
-	}, nil
+	return map[string][]json.RawMessage{"issue_type_metrics_daily": {}}, nil
 }
 
 func linearDerivedTestClaim() Claim {
@@ -41,13 +37,13 @@ func linearDerivedTestClaim() Claim {
 	return claim
 }
 
-func TestBuildLinearWorkItemDerivedEffectsKeepsAllTenDestinations(t *testing.T) {
+func TestBuildLinearWorkItemDerivedEffectsKeepsAllEightDestinations(t *testing.T) {
 	effects, err := BuildLinearWorkItemDerivedEffects(LinearWorkItemDerivedEffectRows{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(effects) != 10 {
-		t.Fatalf("effects=%d want 10", len(effects))
+	if len(effects) != 8 {
+		t.Fatalf("effects=%d want 8", len(effects))
 	}
 	for index, effect := range effects {
 		if effect.Destination != linearWorkItemDerivedEffectDestinations[index] {
@@ -59,7 +55,7 @@ func TestBuildLinearWorkItemDerivedEffectsKeepsAllTenDestinations(t *testing.T) 
 	}
 }
 
-func TestLinearWorkItemDeriverUsesLinearRowsAndEvaluatesAllTenDestinations(t *testing.T) {
+func TestLinearWorkItemDeriverUsesLinearRowsAndEvaluatesAllEightDestinations(t *testing.T) {
 	claim := linearDerivedTestClaim()
 	day := *claim.SinceAt
 	row := linearWorkItemRow{

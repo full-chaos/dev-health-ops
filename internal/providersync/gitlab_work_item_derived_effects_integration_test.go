@@ -39,7 +39,6 @@ func TestGitLabWorkItemDerivedEffectsWriteReadbackAgainstRealClickHouse(t *testi
 	repoID := uuid.MustParse("11111111-1111-4111-8111-111111111111")
 	orgID := uuid.MustParse(claim.OrgID)
 	teamID, teamName := "team-a", "Team A"
-	area, rule := "security", "sec_general"
 	assignee := "dev@example.com"
 	ratio := 0.5
 	actor := "chatgpt-codex[bot]"
@@ -57,16 +56,6 @@ func TestGitLabWorkItemDerivedEffectsWriteReadbackAgainstRealClickHouse(t *testi
 		Day: day, Provider: "gitlab", WorkScopeID: "acme/api", TeamID: &teamID,
 		TeamName: &teamName, EstimatedCount: 1, UnestimatedCount: 1, BacklogSize: 2,
 		Ratio: &ratio, ComputedAt: now, OrgID: claim.OrgID,
-	}
-	classification := gitlabInvestmentClassificationDailyRow{
-		RepoID: &repoID, Day: day, ArtifactType: "work_item", ArtifactID: "acme/api#1",
-		Provider: "gitlab", InvestmentArea: &area, ProjectStream: "general", Confidence: 1,
-		RuleID: &rule, ComputedAt: now, OrgID: claim.OrgID,
-	}
-	investment := gitlabInvestmentMetricsDailyRow{
-		RepoID: &repoID, Day: day, TeamID: "payments", InvestmentArea: &area,
-		ProjectStream: "general", DeliveryUnits: 3, WorkItemsCompleted: 2, PRsMerged: 1,
-		ChurnLOC: 4, CycleP50Hours: 5, ComputedAt: now, OrgID: claim.OrgID,
 	}
 	issueType := gitlabIssueTypeMetricsDailyRow{
 		RepoID: &repoID, Day: day, Provider: "gitlab", TeamID: "payments",
@@ -97,16 +86,14 @@ func TestGitLabWorkItemDerivedEffectsWriteReadbackAgainstRealClickHouse(t *testi
 	}
 
 	effects, err := BuildGitLabWorkItemDerivedEffects(GitLabWorkItemDerivedEffectRows{
-		AIAttributions:                 []gitlabAIAttributionRow{aiAttribution},
-		EstimateCoverageMetricsDaily:   []gitlabEstimateCoverageMetricsDailyRow{estimate},
-		InvestmentClassificationsDaily: []gitlabInvestmentClassificationDailyRow{classification},
-		InvestmentMetricsDaily:         []gitlabInvestmentMetricsDailyRow{investment},
-		IssueTypeMetricsDaily:          []gitlabIssueTypeMetricsDailyRow{issueType},
-		WorkItemCycleTimes:             []gitlabWorkItemCycleTimePersistenceRow{cycle},
-		WorkItemMetricsDaily:           []gitlabWorkItemMetricsDailyRow{metrics},
-		WorkItemStateDurationsDaily:    []gitlabWorkItemStateDurationDailyRow{state},
-		WorkItemTeamAttributions:       []gitlabWorkItemTeamAttributionRow{team},
-		WorkItemUserMetricsDaily:       []gitlabWorkItemUserMetricsDailyRow{users},
+		AIAttributions:               []gitlabAIAttributionRow{aiAttribution},
+		EstimateCoverageMetricsDaily: []gitlabEstimateCoverageMetricsDailyRow{estimate},
+		IssueTypeMetricsDaily:        []gitlabIssueTypeMetricsDailyRow{issueType},
+		WorkItemCycleTimes:           []gitlabWorkItemCycleTimePersistenceRow{cycle},
+		WorkItemMetricsDaily:         []gitlabWorkItemMetricsDailyRow{metrics},
+		WorkItemStateDurationsDaily:  []gitlabWorkItemStateDurationDailyRow{state},
+		WorkItemTeamAttributions:     []gitlabWorkItemTeamAttributionRow{team},
+		WorkItemUserMetricsDaily:     []gitlabWorkItemUserMetricsDailyRow{users},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -130,7 +117,7 @@ func TestGitLabWorkItemDerivedEffectsWriteReadbackAgainstRealClickHouse(t *testi
 			assertSyncSinkRefusesDailyJobTable(t, ctx, conn, sink, claim, effect)
 		})
 	}
-	if refused != len(githubWorkItemDerivedDestinations) || refused != 9 {
+	if refused != len(githubWorkItemDerivedDestinations) || refused != 7 {
 		t.Fatalf("refused effects=%d want one for each of the %d tables of the daily job", refused, len(githubWorkItemDerivedDestinations))
 	}
 

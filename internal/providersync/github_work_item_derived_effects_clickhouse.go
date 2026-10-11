@@ -123,13 +123,6 @@ func validGitHubWorkItemDerivedRowTenancy[T any](
 		return value.OrgID == identity.OrgID && value.Provider == identity.Provider
 	case githubIssueTypeMetricsDailyRow:
 		return value.OrgID == identity.OrgID && value.Provider == identity.Provider
-	case githubInvestmentClassificationDailyRow:
-		return value.OrgID == identity.OrgID && value.Provider == identity.Provider
-	case githubInvestmentMetricsDailyRow:
-		// investment_metrics_daily's production schema has no provider column;
-		// its natural key is tenant/repo/day/team/investment tuple. The provider
-		// is already fenced at the typed compute claim and effect identity.
-		return value.OrgID == identity.OrgID
 	default:
 		return true
 	}

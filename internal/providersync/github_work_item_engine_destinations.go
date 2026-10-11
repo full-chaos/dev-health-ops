@@ -3,7 +3,6 @@ package providersync
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"time"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/workitemengine"
@@ -13,10 +12,7 @@ import (
 
 const (
 	githubIssueTypeMetricsDestination             = "issue_type_metrics_daily"
-	githubInvestmentClassificationsDestination    = "investment_classifications_daily"
-	githubInvestmentMetricsDestination            = "investment_metrics_daily"
 	githubWorkItemEngineDestinationStampPrecision = time.Second
-	githubWorkItemEngineArtifactType              = workitemengine.ArtifactType
 )
 
 // githubIssueTypeMetricsDailyRow mirrors IssueTypeMetricsRecord. repo_id is
@@ -38,51 +34,12 @@ type githubIssueTypeMetricsDailyRow struct {
 	OrgID          string                   `json:"org_id"`
 }
 
-// githubInvestmentClassificationDailyRow mirrors
-// InvestmentClassificationRecord. InvestmentArea and RuleID remain pointers:
-// the legacy Python dataclass accepts None from a present-and-null rule output,
-// even though ClickHouse cannot persist a null investment_area. The adapter
-// owns that storage refusal; inventing a value in the compute layer would be a
-// Python/Go divergence.
-type githubInvestmentClassificationDailyRow struct {
-	RepoID         *uuid.UUID               `json:"repo_id"`
-	Day            githubWorkItemDerivedDay `json:"day"`
-	ArtifactType   string                   `json:"artifact_type"`
-	ArtifactID     string                   `json:"artifact_id"`
-	Provider       string                   `json:"provider"`
-	InvestmentArea *string                  `json:"investment_area"`
-	ProjectStream  string                   `json:"project_stream"`
-	Confidence     float64                  `json:"confidence"`
-	RuleID         *string                  `json:"rule_id"`
-	ComputedAt     time.Time                `json:"computed_at"`
-	OrgID          string                   `json:"org_id"`
-}
-
-// githubInvestmentMetricsDailyRow mirrors InvestmentMetricsRecord. TeamID is
-// the empty string for Python's unassigned team: the inline producer first
-// maps "unassigned" to None and then applies `or ""` at the record boundary.
-type githubInvestmentMetricsDailyRow struct {
-	RepoID             *uuid.UUID               `json:"repo_id"`
-	Day                githubWorkItemDerivedDay `json:"day"`
-	TeamID             string                   `json:"team_id"`
-	InvestmentArea     *string                  `json:"investment_area"`
-	ProjectStream      string                   `json:"project_stream"`
-	DeliveryUnits      int                      `json:"delivery_units"`
-	WorkItemsCompleted int                      `json:"work_items_completed"`
-	PRsMerged          int                      `json:"prs_merged"`
-	ChurnLOC           int                      `json:"churn_loc"`
-	CycleP50Hours      float64                  `json:"cycle_p50_hours"`
-	ComputedAt         time.Time                `json:"computed_at"`
-	OrgID              string                   `json:"org_id"`
-}
-
-// GitHubWorkItemEngineDeriver is the concrete implementation of the three
-// per-day destinations that depend on config-driven engines. Both engines are
-// one atomic capability: constructing or running a partial engine fails closed
-// instead of fabricating an empty destination for the missing half.
+// GitHubWorkItemEngineDeriver is the concrete implementation of the per-day
+// destination that depends on a config-driven engine (the status mapping).
+// The investment rule classifier and its two destinations are gone
+// (CHAOS-9200).
 type GitHubWorkItemEngineDeriver struct {
-	statusMapping        *StatusMapping
-	investmentClassifier *InvestmentClassifier
+	statusMapping *StatusMapping
 }
 
 // githubWorkItemEngineRows is the concrete, schema-aligned result of one
@@ -90,22 +47,16 @@ type GitHubWorkItemEngineDeriver struct {
 // historical JSON seam, while the GitLab port consumes these typed fields
 // directly so no provider result needs a generic destination map.
 type githubWorkItemEngineRows struct {
-	IssueTypes        []githubIssueTypeMetricsDailyRow
-	Classifications   []githubInvestmentClassificationDailyRow
-	InvestmentMetrics []githubInvestmentMetricsDailyRow
+	IssueTypes []githubIssueTypeMetricsDailyRow
 }
 
 func NewGitHubWorkItemEngineDeriver(
 	statusMapping *StatusMapping,
-	investmentClassifier *InvestmentClassifier,
 ) (*GitHubWorkItemEngineDeriver, error) {
-	if statusMapping == nil || investmentClassifier == nil {
+	if statusMapping == nil {
 		return nil, ErrInvalidConfiguration
 	}
-	return &GitHubWorkItemEngineDeriver{
-		statusMapping:        statusMapping,
-		investmentClassifier: investmentClassifier,
-	}, nil
+	return &GitHubWorkItemEngineDeriver{statusMapping: statusMapping}, nil
 }
 
 // Derive computes exactly one day's rows. GitHubWorkItemDeriver owns the day
@@ -140,16 +91,12 @@ func (engine *GitHubWorkItemEngineDeriver) deriveForProvider(
 		return nil, err
 	}
 
-	var issueTypeMetrics, investmentClassifications, metrics []json.RawMessage
+	var issueTypeMetrics []json.RawMessage
 	for _, destination := range githubWorkItemDerivedEngineDestinations {
 		var err error
 		switch destination {
 		case githubIssueTypeMetricsDestination:
 			issueTypeMetrics, err = marshalGitHubWorkItemDerivedRows(engineRows.IssueTypes)
-		case githubInvestmentClassificationsDestination:
-			investmentClassifications, err = marshalGitHubWorkItemDerivedRows(engineRows.Classifications)
-		case githubInvestmentMetricsDestination:
-			metrics, err = marshalGitHubWorkItemDerivedRows(engineRows.InvestmentMetrics)
 		default:
 			return nil, ErrInvalidConfiguration
 		}
@@ -158,9 +105,7 @@ func (engine *GitHubWorkItemEngineDeriver) deriveForProvider(
 		}
 	}
 	result := map[string][]json.RawMessage{
-		githubIssueTypeMetricsDestination:          issueTypeMetrics,
-		githubInvestmentClassificationsDestination: investmentClassifications,
-		githubInvestmentMetricsDestination:         metrics,
+		githubIssueTypeMetricsDestination: issueTypeMetrics,
 	}
 	if len(result) != len(githubWorkItemDerivedEngineDestinations) {
 		return nil, ErrInvalidConfiguration
@@ -177,8 +122,7 @@ func (engine *GitHubWorkItemEngineDeriver) deriveRowsForProvider(
 	computedAt time.Time,
 	derived teamattribution.GithubWorkItemDerivationContext,
 ) (githubWorkItemEngineRows, error) {
-	if ctx == nil || engine == nil || engine.statusMapping == nil ||
-		engine.investmentClassifier == nil || claim.Validate() != nil ||
+	if ctx == nil || engine == nil || engine.statusMapping == nil || claim.Validate() != nil ||
 		claim.Provider != provider || !isWorkItemFamilyDataset(claim.Dataset) ||
 		day.IsZero() || computedAt.IsZero() {
 		return githubWorkItemEngineRows{}, ErrInvalidConfiguration
@@ -199,16 +143,7 @@ func (engine *GitHubWorkItemEngineDeriver) deriveRowsForProvider(
 	issueTypes := buildGitHubIssueTypeMetricsDaily(
 		claim, rows, dayUTC, end, stamp, derived, engine.statusMapping,
 	)
-	classifications, metrics, err := buildGitHubInvestmentDestinationsDaily(
-		claim, rows, dayUTC, end, stamp, derived, engine.investmentClassifier,
-	)
-	if err != nil {
-		return githubWorkItemEngineRows{}, err
-	}
-	return githubWorkItemEngineRows{
-		IssueTypes: issueTypes, Classifications: classifications,
-		InvestmentMetrics: metrics,
-	}, nil
+	return githubWorkItemEngineRows{IssueTypes: issueTypes}, nil
 }
 
 // githubWorkItemEngineItems projects the unit's rows onto the fields the shared
@@ -272,61 +207,6 @@ func buildGitHubIssueTypeMetricsDaily(
 		})
 	}
 	return result
-}
-
-// buildGitHubInvestmentDestinationsDaily is the sync deriver's adapter over
-// workitemengine.ComputeInvestmentDaily.
-func buildGitHubInvestmentDestinationsDaily(
-	claim Claim,
-	rows githubWorkItemRows,
-	dayUTC, end, computedAt time.Time,
-	derived teamattribution.GithubWorkItemDerivationContext,
-	classifier *InvestmentClassifier,
-) ([]githubInvestmentClassificationDailyRow, []githubInvestmentMetricsDailyRow, error) {
-	computedClassifications, computedMetrics, err := workitemengine.ComputeInvestmentDaily(
-		githubWorkItemEngineItems(rows), dayUTC, end,
-		githubWorkItemEngineTeamResolver(rows, derived), classifier,
-	)
-	if err != nil {
-		if errors.Is(err, workitemengine.ErrUnrepresentableDeliveryUnits) {
-			return nil, nil, ErrInvalidConfiguration
-		}
-		return nil, nil, err
-	}
-	classifications := make([]githubInvestmentClassificationDailyRow, 0, len(computedClassifications))
-	for _, row := range computedClassifications {
-		classifications = append(classifications, githubInvestmentClassificationDailyRow{
-			RepoID:         row.RepoID,
-			Day:            newGitHubWorkItemDerivedDay(dayUTC),
-			ArtifactType:   row.ArtifactType,
-			ArtifactID:     row.ArtifactID,
-			Provider:       row.Provider,
-			InvestmentArea: row.InvestmentArea,
-			ProjectStream:  row.ProjectStream,
-			Confidence:     row.Confidence,
-			RuleID:         row.RuleID,
-			ComputedAt:     computedAt,
-			OrgID:          claim.OrgID,
-		})
-	}
-	metrics := make([]githubInvestmentMetricsDailyRow, 0, len(computedMetrics))
-	for _, row := range computedMetrics {
-		metrics = append(metrics, githubInvestmentMetricsDailyRow{
-			RepoID:             row.RepoID,
-			Day:                newGitHubWorkItemDerivedDay(dayUTC),
-			TeamID:             row.TeamID,
-			InvestmentArea:     row.InvestmentArea,
-			ProjectStream:      row.ProjectStream,
-			DeliveryUnits:      row.DeliveryUnits,
-			WorkItemsCompleted: row.WorkItemsCompleted,
-			PRsMerged:          row.PRsMerged,
-			ChurnLOC:           row.ChurnLOC,
-			CycleP50Hours:      row.CycleP50Hours,
-			ComputedAt:         computedAt,
-			OrgID:              claim.OrgID,
-		})
-	}
-	return classifications, metrics, nil
 }
 
 var _ githubWorkItemEngineDeriver = (*GitHubWorkItemEngineDeriver)(nil)

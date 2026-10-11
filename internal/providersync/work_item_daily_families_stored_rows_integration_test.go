@@ -409,7 +409,7 @@ func TestDailyWorkItemFamiliesEqualTheSyncDeriverOnStoredRows(t *testing.T) {
 
 			// --- WRITER 1: the sync-time deriver, on the full item set ----
 			deriver, err := NewGitHubWorkItemDeriver(
-				conn, lease, resolveStatusMappingConfig(t, "real"), investmentConfigPath(t, "real"),
+				conn, lease, resolveStatusMappingConfig(t, "real"),
 			)
 			if err != nil {
 				t.Fatal(err)
@@ -433,15 +433,13 @@ func TestDailyWorkItemFamiliesEqualTheSyncDeriverOnStoredRows(t *testing.T) {
 			writeDailyFamilyMatrixEffect(ctx, t, claim, "work_item_transitions",
 				marshalDailyFamilyMatrixRows(t, rows.StatusTransitions), sink.WorkItemTransitions)
 			for destination, adapter := range map[string]GitHubWorkItemEffectAdapter{
-				githubTeamAttributionsDestination:          sink.WorkItemTeamAttributions,
-				githubStateDurationsDestination:            sink.WorkItemStateDurationsDaily,
-				githubEstimateCoverageDestination:          sink.EstimateCoverageMetricsDaily,
-				githubWorkItemMetricsDailyDestination:      sink.WorkItemMetricsDaily,
-				githubWorkItemUserMetricsDailyDestination:  sink.WorkItemUserMetricsDaily,
-				githubWorkItemCycleTimesDestination:        sink.WorkItemCycleTimes,
-				githubIssueTypeMetricsDestination:          sink.IssueTypeMetricsDaily,
-				githubInvestmentClassificationsDestination: sink.InvestmentClassificationsDaily,
-				githubInvestmentMetricsDestination:         sink.InvestmentMetricsDaily,
+				githubTeamAttributionsDestination:         sink.WorkItemTeamAttributions,
+				githubStateDurationsDestination:           sink.WorkItemStateDurationsDaily,
+				githubEstimateCoverageDestination:         sink.EstimateCoverageMetricsDaily,
+				githubWorkItemMetricsDailyDestination:     sink.WorkItemMetricsDaily,
+				githubWorkItemUserMetricsDailyDestination: sink.WorkItemUserMetricsDaily,
+				githubWorkItemCycleTimesDestination:       sink.WorkItemCycleTimes,
+				githubIssueTypeMetricsDestination:         sink.IssueTypeMetricsDaily,
 			} {
 				if len(derived[destination]) == 0 {
 					t.Fatalf("the sync-time deriver derived no %s row", destination)

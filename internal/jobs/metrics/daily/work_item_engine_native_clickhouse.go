@@ -287,48 +287,6 @@ func WriteIssueTypeMetricsDaily(
 	return len(rows), nil
 }
 
-// WriteInvestmentClassificationsDaily appends one day's classification rows.
-// A classification with no investment area or no rule id cannot be stored
-// (both columns are not nullable): it fails the write, as the sync effect
-// adapter refuses the same row. Nothing is invented for it.
-func WriteInvestmentClassificationsDaily(
-	ctx context.Context, conn workItemBatchConn, organizationID string, day time.Time,
-	rows []workitemengine.InvestmentClassificationDailyRow, computedAt time.Time,
-) (int, error) {
-	if len(rows) == 0 {
-		return 0, nil
-	}
-	if conn == nil || strings.TrimSpace(organizationID) == "" {
-		return 0, ErrInvalidState
-	}
-	for _, row := range rows {
-		if row.ArtifactID == "" || row.InvestmentArea == nil || row.RuleID == nil {
-			return 0, fmt.Errorf("%w: investment_classifications_daily row of %s has no area, rule id or artifact id",
-				ErrInvalidState, row.Provider)
-		}
-	}
-	batch, err := conn.PrepareBatch(ctx, workitemengine.InvestmentClassificationsInsert)
-	if err != nil {
-		return 0, fmt.Errorf("prepare investment_classifications_daily batch: %w", err)
-	}
-	dayValue := workitemmetrics.UTCDay(day)
-	computedAtUTC := computedAt.UTC().Truncate(time.Second)
-	for _, row := range rows {
-		if err := batch.Append(
-			row.RepoID, dayValue, row.ArtifactType, row.ArtifactID, row.Provider,
-			*row.InvestmentArea, row.ProjectStream, row.Confidence, *row.RuleID,
-			computedAtUTC, organizationID,
-		); err != nil {
-			_ = batch.Abort()
-			return 0, fmt.Errorf("append investment_classifications_daily row: %w", err)
-		}
-	}
-	if err := batch.Send(); err != nil {
-		return len(rows), fmt.Errorf("send investment_classifications_daily batch: %w", err)
-	}
-	return len(rows), nil
-}
-
 // completionKey is the natural key of one work_item_completion_daily row inside one (org, repository, day).
 type completionKey struct{ teamID string }
 

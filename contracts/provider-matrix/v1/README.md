@@ -149,10 +149,11 @@ rollback disables Go routing before the valid canonical Python claim becomes
 admissible again. This changes no deployment group, scheduler, or cutover
 ownership: every checked-in switch remains default-off.
 
-The native route requires explicit,
-`WORKER_GITHUB_WORK_ITEMS_STATUS_MAPPING_PATH` and
-`WORKER_GITHUB_WORK_ITEMS_INVESTMENT_CONFIG_PATH` values. Readiness validates
-the same values the executor receives, and rejects any ambient
+The native route requires an explicit
+`WORKER_GITHUB_WORK_ITEMS_STATUS_MAPPING_PATH` value
+(`WORKER_GITHUB_WORK_ITEMS_INVESTMENT_CONFIG_PATH` is deprecated and ignored:
+the investment rule classifier was removed, and one warning is logged when it
+is set). Readiness validates the same value the executor receives, and rejects any ambient
 `STATUS_MAPPING_PATH` override rather than silently loading a different file.
 GitHub Projects v2 is read only from durable enabled-integration configuration
 or claim credentials; an environment-only `GITHUB_PROJECTS_V2` setting emits a

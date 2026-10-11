@@ -400,7 +400,7 @@ func TestAnyTeamRepoConditionIsTheSameStatementWithoutTheTeamFilter(t *testing.T
 	if !strings.Contains(scoped, teamLine) {
 		t.Fatalf("RepoCondition lost its team filter line:\n%s", scoped)
 	}
-	if strings.Contains(anyTeam, "o.team_id") || strings.Contains(anyTeam, BindingTeamIDs) {
+	if strings.Contains(anyTeam, "o.team_id IN") || strings.Contains(anyTeam, BindingTeamIDs) {
 		t.Fatalf("AnyTeamRepoCondition carries a team filter:\n%s", anyTeam)
 	}
 	if strings.Replace(scoped, teamLine, "", 1) != anyTeam {
@@ -421,5 +421,50 @@ func TestAnyTeamRepoConditionIsTheSameStatementWithoutTheTeamFilter(t *testing.T
 	}
 	if got := names(scopedBindings); len(got) != 3 {
 		t.Fatalf("RepoCondition bindings = %v, want three", got)
+	}
+}
+
+// OwnerShares renders the ownership predicate of RepoCondition (one definition) under its own binding names, and the
+// teams in view narrow the owners only when ids are given.
+func TestOwnerSharesReadsTheOneOwnershipPredicate(t *testing.T) {
+	asOf := time.Date(2026, 8, 20, 0, 0, 0, 0, time.UTC)
+	shared, _ := AnyTeamRepoCondition("org", "x", asOf)
+	for _, line := range []string{
+		"FROM team_repo_ownership AS o FINAL",
+		"AND (o.repo_id IS NOT NULL OR r.matched = 1)",
+		"AND (o.valid_to IS NULL OR o.valid_to > ",
+	} {
+		if !strings.Contains(shared, line) {
+			t.Fatalf("test premise: the shared condition lacks %q", line)
+		}
+	}
+	all, allBindings := OwnerShares("org", nil, asOf)
+	for _, line := range []string{
+		"FROM team_repo_ownership AS o FINAL",
+		"AND (o.repo_id IS NOT NULL OR r.matched = 1)",
+		"AND (o.valid_to IS NULL OR o.valid_to > {" + OwnerSharesBindingAsOf + ":DateTime64(3, 'UTC')})",
+		"1.0 / count() OVER (PARTITION BY owned.owner_repo_id) AS owner_share",
+	} {
+		if !strings.Contains(all, line) {
+			t.Errorf("OwnerShares lacks %q", line)
+		}
+	}
+	if strings.Contains(all, "o.team_id IN") {
+		t.Errorf("no team ids must not narrow the owners: %s", all)
+	}
+	if len(allBindings) != 2 {
+		t.Errorf("bindings = %v, want org and as-of only", allBindings)
+	}
+	scoped, scopedBindings := OwnerShares("org", []string{"", "team-a"}, asOf)
+	if !strings.Contains(scoped, "o.team_id IN {"+OwnerSharesBindingTeamIDs+":Array(String)}") {
+		t.Errorf("team ids must narrow the owners: %s", scoped)
+	}
+	if len(scopedBindings) != 3 || scopedBindings[1].Name != OwnerSharesBindingTeamIDs {
+		t.Errorf("bindings = %v, want org, team ids, as-of", scopedBindings)
+	}
+	for _, b := range scopedBindings {
+		if b.Name == BindingOrgID || b.Name == BindingTeamIDs || b.Name == BindingAsOf {
+			t.Errorf("binding %q collides with RepoCondition's names", b.Name)
+		}
 	}
 }

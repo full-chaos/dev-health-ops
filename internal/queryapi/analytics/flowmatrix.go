@@ -363,10 +363,12 @@ func compileFlowMatrixInvestmentDimension(req FlowMatrixRequest, orgID string, t
 	}
 
 	var source, alias, dateFilter, extraClauses, measureExpr string
+	var contextBindings []clickhouse.Binding
 	if useInvestment {
-		ictx := investmentContextFor([]Dimension{req.Dimension}, false, needsRepoAllocation(filters), needsAuthorJoin(filters))
+		ictx := investmentContextFor(orgID, []Dimension{req.Dimension}, false, needsRepoAllocation(filters), needsAuthorJoin(filters), teamScopeIDs(filters))
 		source, alias, dateFilter, extraClauses = ictx.Source, ictx.Alias, ictx.DateFilter, ictx.ExtraClauses
-		measureExpr, err = dbExpression(req.Measure, true, ictx.UseRepoAllocation)
+		contextBindings = ictx.Bindings
+		measureExpr, err = ictx.measure(req.Measure)
 	} else {
 		source, alias, dateFilter = nonInvestmentSourceAndDateFilter(req.Measure)
 		measureExpr, err = dbExpression(req.Measure, false, false)
@@ -402,6 +404,7 @@ LIMIT {limit_per_dim:UInt32}
 		{Name: "limit_per_dim", Value: req.MaxNodes},
 	}
 	nodesBindings = append(nodesBindings, fc.bindings...)
+	nodesBindings = append(nodesBindings, contextBindings...)
 
 	// sankey_edges_template(dimension, dimension, ...): source==target,
 	// a same-dimension self-join -- compiler.py:527-529.
@@ -431,6 +434,7 @@ LIMIT {max_edges:UInt32}
 		{Name: "max_edges", Value: req.MaxEdges},
 	}
 	edgesBindings = append(edgesBindings, fc.bindings...)
+	edgesBindings = append(edgesBindings, contextBindings...)
 
 	return compiledQuery{sql: nodesSQL, bindings: nodesBindings}, compiledQuery{sql: edgesSQL, bindings: edgesBindings}, nil
 }
@@ -493,8 +497,8 @@ func compileFlowMatrixInvestmentTeamRepoDimension(req FlowMatrixRequest, orgID s
 		return compiledQuery{}, compiledQuery{}, err
 	}
 
-	nodeCtx := investmentContextFor([]Dimension{req.Dimension}, false, needsRepoAllocation(filters), needsAuthorJoin(filters))
-	measureExpr, err := dbExpression(req.Measure, true, nodeCtx.UseRepoAllocation)
+	nodeCtx := investmentContextFor(orgID, []Dimension{req.Dimension}, false, needsRepoAllocation(filters), needsAuthorJoin(filters), teamScopeIDs(filters))
+	measureExpr, err := nodeCtx.measure(req.Measure)
 	if err != nil {
 		return compiledQuery{}, compiledQuery{}, err
 	}
@@ -526,9 +530,10 @@ LIMIT {limit_per_dim:UInt32}
 		{Name: "limit_per_dim", Value: req.MaxNodes},
 	}
 	nodesBindings = append(nodesBindings, fc.bindings...)
+	nodesBindings = append(nodesBindings, nodeCtx.Bindings...)
 
 	edgeForceTeamJoin := req.Dimension == DimensionRepo
-	edgeCtx := investmentContextFor([]Dimension{req.Dimension}, edgeForceTeamJoin, needsRepoAllocation(filters), needsAuthorJoin(filters))
+	edgeCtx := investmentContextFor(orgID, []Dimension{req.Dimension}, edgeForceTeamJoin, needsRepoAllocation(filters), needsAuthorJoin(filters), teamScopeIDs(filters))
 
 	var bridgeCol, bridgeNotEmpty string
 	switch req.Dimension {
@@ -585,6 +590,7 @@ LIMIT {max_edges:UInt32}
 		{Name: "max_edges", Value: req.MaxEdges},
 	}
 	edgesBindings = append(edgesBindings, fc.bindings...)
+	edgesBindings = append(edgesBindings, edgeCtx.Bindings...)
 
 	return compiledQuery{sql: nodesSQL, bindings: nodesBindings}, compiledQuery{sql: edgesSQL, bindings: edgesBindings}, nil
 }

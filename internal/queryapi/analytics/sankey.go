@@ -166,6 +166,7 @@ ORDER BY dim_order ASC, value DESC, node_id ASC
 		{Name: "limit_per_dim", Value: limitPerDim},
 	}
 	nodesBindings = append(nodesBindings, fc.bindings...)
+	nodesBindings = append(nodesBindings, shape.extraBindings...)
 	nodes = compiledQuery{sql: nodesSQL, bindings: nodesBindings}
 
 	// One edges query per adjacent (source_dim, target_dim) pair,
@@ -209,6 +210,7 @@ LIMIT {max_edges:UInt32}
 			{Name: "max_edges", Value: maxEdgesPerPair},
 		}
 		edgeBindings = append(edgeBindings, fc.bindings...)
+		edgeBindings = append(edgeBindings, shape.extraBindings...)
 		edges = append(edges, compiledQuery{sql: edgeSQL, bindings: edgeBindings})
 	}
 

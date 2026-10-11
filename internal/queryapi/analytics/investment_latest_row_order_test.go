@@ -10,7 +10,6 @@ import (
 func TestInvestmentReadersShareTheLatestRowOrder(t *testing.T) {
 	sources := map[string]string{
 		"LatestWorkUnitInvestmentsSource": LatestWorkUnitInvestmentsSource(),
-		"windowedUnitEvidenceSource":      windowedUnitEvidenceSource(),
 	}
 	for name, sql := range sources {
 		if !strings.Contains(sql, latestrow.OrderKey) {
@@ -19,8 +18,5 @@ func TestInvestmentReadersShareTheLatestRowOrder(t *testing.T) {
 		if strings.Contains(sql, ", computed_at)") {
 			t.Errorf("%s orders a column by computed_at alone: %s", name, sql)
 		}
-	}
-	if want := latestrow.ArgMax("structural_evidence_json"); !strings.Contains(sources["windowedUnitEvidenceSource"], want) {
-		t.Errorf("windowedUnitEvidenceSource must pick structural_evidence_json with %s", want)
 	}
 }

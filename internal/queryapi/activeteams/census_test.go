@@ -16,6 +16,7 @@ import (
 var labelLookups = map[string]string{
 	"quadrant/quadrant.go":       "label lookup for the ids of the quadrant rows",
 	"scopelabel/scopelabel.go":   "label lookup for the scope ids of the request",
+	"teamscope/teamscope.go":     "label lookup for the owning team ids of OwnerShares; the ownership row, not the catalog, decides who owns, as for the team scope and the coverage",
 	"analytics/catalog.go":       "lists teams itself with the same rule inline (is_active = 1 on teams FINAL); asserted below",
 	"activeteams/activeteams.go": "defines the rule",
 }

@@ -144,34 +144,105 @@ func AnyTeamRepoCondition(orgID, repoColumn string, asOf time.Time) (condition s
 
 // ownedRepoCondition renders the one ownership statement; teamList nil = any team.
 func ownedRepoCondition(orgID, repoColumn string, teamList []string, asOf time.Time) (condition string, bindings []dhclickhouse.Binding) {
-	teamFilter := ""
-	bindings = []dhclickhouse.Binding{{Name: BindingOrgID, Value: orgID}}
-	if teamList != nil {
-		teamFilter = "\n      AND o.team_id IN {" + BindingTeamIDs + ":Array(String)}"
-		bindings = append(bindings, dhclickhouse.Binding{Name: BindingTeamIDs, Value: teamList})
-	}
-	bindings = append(bindings, dhclickhouse.Binding{Name: BindingAsOf, Value: asOf.UTC()})
+	names := bindingNames{org: BindingOrgID, teams: BindingTeamIDs, asOf: BindingAsOf}
+	bindings = ownershipBindings(names, orgID, teamList, asOf)
 	return fmt.Sprintf(`%s IN (
     SELECT DISTINCT coalesce(toString(o.repo_id), toString(r.id)) AS owned_repo_id
-    FROM team_repo_ownership AS o FINAL
+%s
+)`, repoColumn, ownershipFromWhere(names, teamList != nil)), bindings
+}
+
+type bindingNames struct{ org, teams, asOf string }
+
+func ownershipBindings(names bindingNames, orgID string, teamList []string, asOf time.Time) []dhclickhouse.Binding {
+	bindings := []dhclickhouse.Binding{{Name: names.org, Value: orgID}}
+	if teamList != nil {
+		bindings = append(bindings, dhclickhouse.Binding{Name: names.teams, Value: teamList})
+	}
+	return append(bindings, dhclickhouse.Binding{Name: names.asOf, Value: asOf.UTC()})
+}
+
+// ownershipFromWhere is the FROM ... WHERE of the one ownership statement: every reader of "who owns which repository
+// as of one instant" (the membership condition and the owner shares below) renders it here, so the validity window,
+// FINAL and the catalog guards are one definition. The select list stays with the caller: it reads o.team_id,
+// o.repo_id and r.id.
+func ownershipFromWhere(names bindingNames, teamFiltered bool) string {
+	teamFilter := ""
+	if teamFiltered {
+		teamFilter = "\n      AND o.team_id IN {" + names.teams + ":Array(String)}"
+	}
+	return fmt.Sprintf(`    FROM team_repo_ownership AS o FINAL
     LEFT JOIN (
         SELECT org_id, provider, id, repo, 1 AS matched
         FROM repos FINAL
-        WHERE org_id = {%[2]s:String}
+        WHERE org_id = {%[1]s:String}
     ) AS r
         ON r.org_id = o.org_id
            AND r.provider = o.provider
            AND lower(r.repo) = lower(o.repo_full_name)
-    WHERE o.org_id = {%[2]s:String}%[3]s
+    WHERE o.org_id = {%[1]s:String}%[2]s
+      AND o.team_id != ''
       AND (o.repo_id IS NOT NULL OR r.matched = 1)
-      AND o.valid_from <= {%[4]s:DateTime64(3, 'UTC')}
-      AND (o.valid_to IS NULL OR o.valid_to > {%[4]s:DateTime64(3, 'UTC')})
+      AND o.valid_from <= {%[3]s:DateTime64(3, 'UTC')}
+      AND (o.valid_to IS NULL OR o.valid_to > {%[3]s:DateTime64(3, 'UTC')})
       AND coalesce(toString(o.repo_id), toString(r.id)) IN (
           SELECT toString(id) AS id
           FROM repos FINAL
-          WHERE org_id = {%[2]s:String}
-      )
-)`, repoColumn, BindingOrgID, teamFilter, BindingAsOf), bindings
+          WHERE org_id = {%[1]s:String}
+      )`, names.org, teamFilter, names.asOf)
+}
+
+// Binding names of OwnerShares. They differ from RepoCondition's, so a statement that carries a team scope AND the
+// owner shares binds each name once, never twice.
+const (
+	OwnerSharesBindingOrgID   = "owner_shares_org_id"
+	OwnerSharesBindingTeamIDs = "owner_shares_team_ids"
+	OwnerSharesBindingAsOf    = "owner_shares_as_of"
+)
+
+// OwnerShares is the team side of a repository-keyed grouping: one row per (repository, owning team) as of asOf, by
+// the one ownership rule of RepoCondition, with the columns
+//
+//	owner_repo_id    text of the repository id (join with toString(<repo column>))
+//	owner_team_id    the owning team
+//	owner_team_label the team's name, its id when the catalog holds no name
+//	owner_share      1 / (number of owners in the set); the shares of one repository sum to 1
+//	owner_matched    1 (an unmatched LEFT JOIN reads the type's zero, so a caller tests this, never NULL)
+//
+// A repository owned by several teams is shared among them, not given to one (is_primary and priority are not
+// consulted, as in RepoCondition): a grouping that sums its groups gets the repository's effort once. teamIDs
+// narrows the owners to the teams in view (a team scope), so a team scope of one team gives that team the whole
+// repository, the same total the scope's own readers give it; no ids = every owning team. The source is a derived
+// table WITHOUT alias; the caller aliases it.
+func OwnerShares(orgID string, teamIDs []string, asOf time.Time) (source string, bindings []dhclickhouse.Binding) {
+	var teamList []string
+	for _, id := range teamIDs {
+		if id != "" {
+			teamList = append(teamList, id)
+		}
+	}
+	names := bindingNames{org: OwnerSharesBindingOrgID, teams: OwnerSharesBindingTeamIDs, asOf: OwnerSharesBindingAsOf}
+	bindings = ownershipBindings(names, orgID, teamList, asOf)
+	return fmt.Sprintf(`(
+    SELECT
+        owned.owner_repo_id AS owner_repo_id,
+        owned.owner_team_id AS owner_team_id,
+        if(nt.team_name != '', nt.team_name, owned.owner_team_id) AS owner_team_label,
+        1.0 / count() OVER (PARTITION BY owned.owner_repo_id) AS owner_share,
+        1 AS owner_matched
+    FROM (
+        SELECT DISTINCT
+            coalesce(toString(o.repo_id), toString(r.id)) AS owner_repo_id,
+            o.team_id AS owner_team_id
+%[1]s
+    ) AS owned
+    LEFT JOIN (
+        SELECT id AS team_id, max(name) AS team_name
+        FROM teams FINAL
+        WHERE org_id = {%[2]s:String}
+        GROUP BY id
+    ) AS nt ON nt.team_id = owned.owner_team_id
+)`, ownershipFromWhere(names, teamList != nil), names.org), bindings
 }
 
 // NarrowRepoScope combines the repository condition of a request into ONE

@@ -160,9 +160,8 @@ A GitHub PR closing Linear `CHAOS-2400` borrows that issue's `CHAOS` team.
 >    is the admin-EXCLUSIVE subset (confirmed by tracing every write site);
 >    provider auto-import carries it forward unchanged on every sync write
 >    and never sets or clears it. **CHAOS-9087:** the roster column
->    `teams.members` is gone (no reader, no writer; dropped from the table one
->    pin after the code that no longer touches it): the provider layer below
->    is `team_memberships` alone.
+>    `teams.members` is gone (no Go reader or writer; the frozen Python code still names it; migration 118 drops the
+>    column): the provider layer below is `team_memberships` alone.
 > 2. **Provider layer (the fallback).** `team_memberships`, populated
 >    by the four provider team-catalog syncs. (Before CHAOS-9087 the
 >    mixed-provenance roster column `teams.members` was a second member of

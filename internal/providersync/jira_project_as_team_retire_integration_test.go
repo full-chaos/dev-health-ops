@@ -29,7 +29,7 @@ func (f retireFixture) team(provider, id, nativeKey string, manualMembers []stri
 	if manualMembers == nil {
 		manualMembers = []string{}
 	}
-	if err := f.conn.Exec(f.ctx, `INSERT INTO teams (id, team_uuid, name, members, manual_members, project_keys, repo_patterns, is_active, updated_at, org_id, provider, native_team_key) VALUES (?, ?, ?, [], ?, ?, [], 1, ?, ?, ?, ?)`,
+	if err := f.conn.Exec(f.ctx, `INSERT INTO teams (id, team_uuid, name, manual_members, project_keys, repo_patterns, is_active, updated_at, org_id, provider, native_team_key) VALUES (?, ?, ?, ?, ?, [], 1, ?, ?, ?, ?)`,
 		id, uuid.New(), "team "+id, manualMembers, []string{id}, f.old, f.orgID, provider, key); err != nil {
 		f.t.Fatalf("insert team %s: %v", id, err)
 	}
@@ -358,7 +358,7 @@ func TestRetireJiraProjectAsTeamRowsKeepsTheOldestCreatedAt(t *testing.T) {
 	f := retireFixture{t: t, ctx: ctx, conn: conn, orgID: uuid.NewString(), old: time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)}
 	created := time.Date(2026, 3, 4, 5, 6, 7, 0, time.UTC)
 	f.team("jira", "OPS", "OPS", nil)
-	if err := conn.Exec(ctx, `INSERT INTO teams (id, team_uuid, name, members, manual_members, project_keys, repo_patterns, is_active, updated_at, org_id, provider, native_team_key, created_at) VALUES ('OPS', ?, 'team OPS', [], [], ['OPS'], [], 1, ?, ?, 'jira', 'OPS', ?)`,
+	if err := conn.Exec(ctx, `INSERT INTO teams (id, team_uuid, name, manual_members, project_keys, repo_patterns, is_active, updated_at, org_id, provider, native_team_key, created_at) VALUES ('OPS', ?, 'team OPS', [], ['OPS'], [], 1, ?, ?, 'jira', 'OPS', ?)`,
 		uuid.New(), f.old.Add(-time.Hour), f.orgID, created); err != nil {
 		t.Fatal(err)
 	}

@@ -3,12 +3,12 @@ package aiworkflow
 import (
 	"crypto/sha256"
 	"encoding/hex"
-	"strconv"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
 
+	"github.com/full-chaos/dev-health-ops/internal/prrootid"
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 )
 
@@ -326,5 +326,5 @@ func Compute(
 // prIDFor ports f"{repo_id}:{pr_number}" -- Python's str(int(row["number"])),
 // a plain decimal string, matching strconv.FormatInt base 10.
 func prIDFor(repoID uuid.UUID, number int64) string {
-	return repoID.String() + ":" + strconv.FormatInt(number, 10)
+	return prrootid.FormatNumber(repoID.String(), number)
 }

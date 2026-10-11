@@ -19,7 +19,7 @@ func (f retireFixture) teamAt(provider, id, nativeKey string, updatedAt time.Tim
 	if nativeKey != "" {
 		key = &nativeKey
 	}
-	if err := f.conn.Exec(f.ctx, `INSERT INTO teams (id, team_uuid, name, members, manual_members, project_keys, repo_patterns, is_active, updated_at, org_id, provider, native_team_key) VALUES (?, ?, ?, [], [], ?, [], 1, ?, ?, ?, ?)`,
+	if err := f.conn.Exec(f.ctx, `INSERT INTO teams (id, team_uuid, name, manual_members, project_keys, repo_patterns, is_active, updated_at, org_id, provider, native_team_key) VALUES (?, ?, ?, [], ?, [], 1, ?, ?, ?, ?)`,
 		id, uuid.New(), "team "+id, []string{id}, updatedAt, f.orgID, provider, key); err != nil {
 		f.t.Fatalf("write team %s again: %v", id, err)
 	}

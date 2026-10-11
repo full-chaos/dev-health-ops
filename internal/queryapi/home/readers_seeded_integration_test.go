@@ -260,12 +260,12 @@ func TestHomeReaders_SeededRealClickHouse(t *testing.T) {
 
 	// --- teams: two versions, same id. Old carries a wrong display name.
 	seededExec(ctx, t, conn, fmt.Sprintf(
-		`INSERT INTO teams (id, team_uuid, name, members, updated_at, org_id) VALUES
-		 ('team-1', generateUUIDv4(), 'Stale Team Name', [], toDateTime64('%s',6), '%s')`,
+		`INSERT INTO teams (id, team_uuid, name, updated_at, org_id) VALUES
+		 ('team-1', generateUUIDv4(), 'Stale Team Name', toDateTime64('%s',6), '%s')`,
 		tOld, seededOrgID))
 	seededExec(ctx, t, conn, fmt.Sprintf(
-		`INSERT INTO teams (id, team_uuid, name, members, updated_at, org_id) VALUES
-		 ('team-1', generateUUIDv4(), 'Team One', [], toDateTime64('%s',6), '%s')`,
+		`INSERT INTO teams (id, team_uuid, name, updated_at, org_id) VALUES
+		 ('team-1', generateUUIDv4(), 'Team One', toDateTime64('%s',6), '%s')`,
 		tNew, seededOrgID))
 
 	// --- team_repo_ownership: team-1 owns repoID and nothing else, written

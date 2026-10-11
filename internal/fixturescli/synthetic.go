@@ -215,10 +215,43 @@ var serverStampedColumns = map[string]map[string]bool{
 	"work_items":                     {"ingested_at": true}, // CHAOS-7265
 }
 
-// WithoutServerStamped is the table without its server-stamped columns, rows included, so an insert
-// names only the columns a writer owns and the server DEFAULT stamps the rest at load time.
+// retiredColumns are columns a frozen world still carries and the schema no longer has (a dropped
+// column): a loader never sends them. The frozen worlds are pinned by content digest, so the column
+// is dropped at load time, not rewritten in the files (CHAOS-9161: teams.members, migration 118).
+var retiredColumns = map[string]map[string]bool{
+	"teams": {"members": true},
+}
+
+// WithoutServerStamped is the table without its server-stamped and retired columns, rows included, so
+// an insert names only the columns a writer owns and the server DEFAULT stamps the rest at load time.
 func (table FrozenTable) WithoutServerStamped() FrozenTable {
-	drop := serverStampedColumns[table.Name]
+	drop := map[string]bool{}
+	for name := range serverStampedColumns[table.Name] {
+		drop[name] = true
+	}
+	for name := range retiredColumns[table.Name] {
+		drop[name] = true
+	}
+	return table.withoutColumns(drop)
+}
+
+// logRetiredColumns says, once per load and per table, which retired column of which world is not
+// loaded (CHAOS-9161): the drop is named and visible, never silent.
+func logRetiredColumns(ctx context.Context, world string, table FrozenTable) {
+	for _, column := range table.Columns {
+		if retiredColumns[table.Name][column.Name] {
+			slog.Default().InfoContext(ctx, "fixtures_world_retired_column_dropped", "world", world, "table", table.Name, "column", column.Name)
+		}
+	}
+}
+
+// WithoutRetired is the table without the columns the schema no longer has (retiredColumns): the form
+// a load into the migration head reproduces.
+func (table FrozenTable) WithoutRetired() FrozenTable {
+	return table.withoutColumns(retiredColumns[table.Name])
+}
+
+func (table FrozenTable) withoutColumns(drop map[string]bool) FrozenTable {
 	if len(drop) == 0 {
 		return table
 	}
@@ -268,6 +301,7 @@ func (target FrozenTarget) Load(ctx context.Context, conn driver.Conn, delta tim
 	// (256 KiB) is below one chunk of the largest table.
 	insertContext := clickhouse.Context(ctx, clickhouse.WithSettings(clickhouse.Settings{"max_query_size": maxQuerySize}))
 	for _, table := range target.Tables {
+		logRetiredColumns(ctx, "synthetic", table)
 		table = table.WithoutServerStamped()
 		rows, err := table.ShiftTimes(delta)
 		if err != nil {

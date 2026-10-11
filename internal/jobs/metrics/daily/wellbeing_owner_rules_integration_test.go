@@ -20,9 +20,9 @@ import (
 func ownerRulesTeam(t *testing.T, ctx context.Context, conn driver.Conn, id string, active uint8, patterns []string, at time.Time) {
 	t.Helper()
 	wellbeingOwnershipExec(t, ctx, conn, "insert team "+id, `INSERT INTO teams
-    (id, team_uuid, name, members, repo_patterns, updated_at, last_synced, org_id, provider, is_active)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		id, uuid.NewSHA1(uuid.NameSpaceURL, []byte("team:"+id)), "Team "+id, []string{}, patterns, at, at, wellbeingOwnershipOrg, "github", active)
+    (id, team_uuid, name, repo_patterns, updated_at, last_synced, org_id, provider, is_active)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		id, uuid.NewSHA1(uuid.NameSpaceURL, []byte("team:"+id)), "Team "+id, patterns, at, at, wellbeingOwnershipOrg, "github", active)
 }
 
 func ownerRulesOwns(t *testing.T, ctx context.Context, conn driver.Conn, teamID string, repo uuid.UUID, name string, primary uint8, spec uint16, at time.Time) {

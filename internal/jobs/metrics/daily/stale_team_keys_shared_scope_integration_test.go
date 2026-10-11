@@ -72,10 +72,9 @@ func seedSharedScopeTeams(
 		}
 		nativeKey := team.nativeKey
 		if err := conn.Exec(ctx, `INSERT INTO teams
-    (id, team_uuid, name, members, updated_at, last_synced, org_id, provider, native_team_key, is_active)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			team.id, uuid.NewSHA1(uuid.NameSpaceURL, []byte("team:"+team.id)), "Team "+team.id, []string{},
-			at, at, org, "linear", &nativeKey, active); err != nil {
+    (id, team_uuid, name, updated_at, last_synced, org_id, provider, native_team_key, is_active)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			team.id, uuid.NewSHA1(uuid.NameSpaceURL, []byte("team:"+team.id)), "Team "+team.id, at, at, org, "linear", &nativeKey, active); err != nil {
 			t.Fatalf("insert team %s: %v", team.id, err)
 		}
 	}

@@ -52,8 +52,8 @@ func TestRetireJiraProjectAsTeamVerbDryRunThenRetireThenZero(t *testing.T) {
 	}
 	// One project-as-team (with manual members and a sync policy), its
 	// ownership and lead, and an Atlassian team that stays.
-	exec(`INSERT INTO teams (id, team_uuid, name, members, manual_members, project_keys, repo_patterns, is_active, updated_at, org_id, provider, native_team_key) VALUES ('OPS', ?, 'Ops', [], ['person@example.test'], ['OPS'], [], 1, ?, ?, 'jira', 'OPS')`, uuid.New(), old, orgID)
-	exec(`INSERT INTO teams (id, team_uuid, name, members, manual_members, project_keys, repo_patterns, is_active, updated_at, org_id, provider, native_team_key) VALUES ('0b1f3b0a-platform', ?, 'Platform', [], [], ['PLAT'], [], 1, ?, ?, 'jira', 'ari:cloud:identity::team/0b1f3b0a-platform')`, uuid.New(), old, orgID)
+	exec(`INSERT INTO teams (id, team_uuid, name, manual_members, project_keys, repo_patterns, is_active, updated_at, org_id, provider, native_team_key) VALUES ('OPS', ?, 'Ops', ['person@example.test'], ['OPS'], [], 1, ?, ?, 'jira', 'OPS')`, uuid.New(), old, orgID)
+	exec(`INSERT INTO teams (id, team_uuid, name, manual_members, project_keys, repo_patterns, is_active, updated_at, org_id, provider, native_team_key) VALUES ('0b1f3b0a-platform', ?, 'Platform', [], ['PLAT'], [], 1, ?, ?, 'jira', 'ari:cloud:identity::team/0b1f3b0a-platform')`, uuid.New(), old, orgID)
 	exec(`INSERT INTO team_sync_policies (org_id, team_id, sync_policy, updated_at) VALUES (?, 'OPS', 1, ?)`, orgID, old)
 	exec(`INSERT INTO team_project_ownership (org_id, provider, team_id, project_id, project_key, source, is_primary, specificity, priority, valid_from, updated_at) VALUES (?, 'jira', 'OPS', '10001', 'OPS', 'native', 1, 100, 10, ?, ?)`, orgID, old, old)
 	exec(`INSERT INTO team_project_ownership (org_id, provider, team_id, project_id, project_key, source, is_primary, specificity, priority, valid_from, updated_at) VALUES (?, 'jira', '0b1f3b0a-platform', '10002', 'PLAT', 'native', 1, 100, 10, ?, ?)`, orgID, old, old)

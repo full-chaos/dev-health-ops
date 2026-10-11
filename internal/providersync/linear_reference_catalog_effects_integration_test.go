@@ -154,12 +154,12 @@ func TestLinearReferenceCatalogEffectsPreservesManualMembersAcrossWrites(t *test
 	// linearReferenceTeamsInsert -- this step must set up the precondition
 	// even if the production query under test does not yet carry the
 	// column forward (that is exactly the regression this test catches).
-	overrideBatch, err := conn.PrepareBatch(ctx, "INSERT INTO teams (id, team_uuid, name, description, members, manual_members, project_keys, repo_patterns, is_active, updated_at, org_id, provider, native_team_key, parent_team_id)")
+	overrideBatch, err := conn.PrepareBatch(ctx, "INSERT INTO teams (id, team_uuid, name, description, manual_members, project_keys, repo_patterns, is_active, updated_at, org_id, provider, native_team_key, parent_team_id)")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := overrideBatch.Append(
-		teamID, uuid.MustParse(teamUUID), "Engineering", (*string)(nil), []string{"linear:alice@example.com"},
+		teamID, uuid.MustParse(teamUUID), "Engineering", (*string)(nil),
 		[]string{"manually-added@example.com"}, []string{teamKey}, []string{}, uint8(1), now.Add(time.Second),
 		claim.OrgID, "linear", &teamKey, (*string)(nil),
 	); err != nil {

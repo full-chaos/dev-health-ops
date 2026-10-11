@@ -59,8 +59,8 @@ VALUES (?, ?, 'github', 'scope', ?, '', 1, 1, 0, 0, 1, 0, ?, ?, ?, ?, 1, 1, 0, 0
 			if team.active {
 				active = 1
 			}
-			if err := admin.Exec(ctx, `INSERT INTO teams (id, team_uuid, name, members, repo_patterns, updated_at, org_id, provider, is_active)
-VALUES (?, generateUUIDv4(), ?, [], [], ?, ?, 'github', ?)`, team.id, team.name, computedAt, org, active); err != nil {
+			if err := admin.Exec(ctx, `INSERT INTO teams (id, team_uuid, name, repo_patterns, updated_at, org_id, provider, is_active)
+VALUES (?, generateUUIDv4(), ?, [], ?, ?, 'github', ?)`, team.id, team.name, computedAt, org, active); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -277,8 +277,8 @@ func TestHomeSummaryNamesTheTeamDriversOfAnOrganizationWithManyActiveTeams(t *te
 	}
 	const org = "summary-names-many-teams"
 	seedTeamDrivers(ctx, t, admin, org, []driverTeam{{"github:acme/ops", "Ops", true, false}}, compareStart, startDay)
-	if err := admin.Exec(ctx, `INSERT INTO teams (id, team_uuid, name, members, repo_patterns, updated_at, org_id, provider, is_active)
-SELECT concat('github:filler/', toString(number)), generateUUIDv4(), concat('Filler ', toString(number)), [], [], now(), ?, 'github', 1
+	if err := admin.Exec(ctx, `INSERT INTO teams (id, team_uuid, name, repo_patterns, updated_at, org_id, provider, is_active)
+SELECT concat('github:filler/', toString(number)), generateUUIDv4(), concat('Filler ', toString(number)), [], now(), ?, 'github', 1
 FROM numbers(1200)`, org); err != nil {
 		t.Fatal(err)
 	}

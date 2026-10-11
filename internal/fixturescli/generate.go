@@ -330,6 +330,7 @@ func LoadWorld(ctx context.Context, conn driver.Conn, world FrozenWorld, org str
 		if table.Derived {
 			continue
 		}
+		logRetiredColumns(ctx, "generate", table.FrozenTable)
 		table.FrozenTable = table.FrozenTable.WithoutServerStamped()
 		rows, err := table.Transform(days, world.OrgID, org)
 		if err != nil {

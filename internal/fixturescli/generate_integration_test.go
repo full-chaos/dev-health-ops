@@ -345,6 +345,9 @@ func TestLoadWorldReproducesTheRecordedCapture(t *testing.T) {
 				// to NULL on every loaded row, and only then left out of the
 				// comparison with the frozen columns (columnsAfterTheCapture).
 				got := requireColumnsAfterTheCapture(t, dumpWorldTable(t, ch.httpDSN, table.Name))
+				// A column the schema dropped after the capture (retiredColumns) is not loaded: the
+				// frozen table is held to the schema without it.
+				table.FrozenTable = table.FrozenTable.WithoutRetired()
 				if !reflect.DeepEqual(got.Columns, table.Columns) {
 					t.Fatalf("%s: the schema's columns differ from the frozen ones", table.Name)
 				}
@@ -383,6 +386,7 @@ func TestLoadWorldReproducesTheRecordedCapture(t *testing.T) {
 				t.Fatalf("whole days = %d, %v; want 9", days, err)
 			}
 			for _, table := range world.Tables {
+				table.FrozenTable = table.FrozenTable.WithoutRetired()
 				got := requireColumnsAfterTheCapture(t, dumpWorldTable(t, other.httpDSN, table.Name))
 				back, err := WorldTable{FrozenTable: got}.Transform(-days, org, world.OrgID)
 				if err != nil {

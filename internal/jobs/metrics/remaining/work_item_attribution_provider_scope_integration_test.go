@@ -45,7 +45,7 @@ func TestProjectAndNativeKeysAttributeOnlyToTeamsOfTheItemsProvider(t *testing.T
 	orgID := "org-provider-scope-" + uuid.NewString()
 	opened := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	insertTeam := func(provider, teamID string, keys []string) {
-		if err := conn.Exec(ctx, `INSERT INTO teams (id, team_uuid, name, members, manual_members, project_keys, repo_patterns, is_active, updated_at, last_synced, org_id, provider, native_team_key) VALUES (?, ?, ?, [], [], ?, [], 1, ?, ?, ?, ?, ?)`,
+		if err := conn.Exec(ctx, `INSERT INTO teams (id, team_uuid, name, manual_members, project_keys, repo_patterns, is_active, updated_at, last_synced, org_id, provider, native_team_key) VALUES (?, ?, ?, [], ?, [], 1, ?, ?, ?, ?, ?)`,
 			teamID, uuid.New(), "Team "+teamID, keys, opened, opened, orgID, provider, teamID); err != nil {
 			t.Fatalf("insert team %s/%s: %v", provider, teamID, err)
 		}

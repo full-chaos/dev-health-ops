@@ -42,8 +42,8 @@ func TestLoadTeamsListsOnlyActiveTeams(t *testing.T) {
 
 	const org = "org-9032-active-teams"
 	base := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
-	insert := `INSERT INTO teams (id, team_uuid, name, members, repo_patterns, updated_at, org_id, is_active)
-		VALUES (?, generateUUIDv4(), ?, [], ['org/*'], ?, ?, ?)`
+	insert := `INSERT INTO teams (id, team_uuid, name, repo_patterns, updated_at, org_id, is_active)
+		VALUES (?, generateUUIDv4(), ?, ['org/*'], ?, ?, ?)`
 	const otherOrg = "org-9032-other-tenant"
 	for _, row := range []struct {
 		id, name, org string

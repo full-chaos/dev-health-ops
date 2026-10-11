@@ -72,8 +72,8 @@ func TestTeamComplexityEndToEndFromNativeComplexityExecutor(t *testing.T) {
 	// resolveDailyFinalizeRepoToTeam falls back to for a repo its ownership
 	// read leaves unresolved.
 	if err := conn.Exec(ctx,
-		"INSERT INTO teams (id, name, members, repo_patterns, org_id) VALUES (?, ?, ?, ?, ?)",
-		"team-metrics", "Metrics Team", []string{}, []string{"acme/*"}, orgID,
+		"INSERT INTO teams (id, name, repo_patterns, org_id) VALUES (?, ?, ?, ?)",
+		"team-metrics", "Metrics Team", []string{"acme/*"}, orgID,
 	); err != nil {
 		t.Fatalf("insert team: %v", err)
 	}

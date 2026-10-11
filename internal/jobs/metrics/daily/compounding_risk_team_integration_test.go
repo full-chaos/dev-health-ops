@@ -22,11 +22,11 @@ var compoundingRiskTeamSchema = append(append([]string{}, compoundingRiskSchema.
 	// 002_teams.sql plus every ALTER this port's readers depend on
 	// (025_teams_project_repo.sql's repo_patterns, 024_add_org_id.sql's
 	// org_id) flattened into one CREATE, matching LoadWellbeingTeams'
-	// production query shape (id, name, members, repo_patterns FROM teams
-	// FINAL WHERE org_id = ?).
+	// production query shape (id, name, repo_patterns FROM teams FINAL WHERE
+	// org_id = ?).
 	`CREATE TABLE teams (
     id String, team_uuid UUID, name String, description Nullable(String),
-    members Array(String), project_keys Array(String) DEFAULT [],
+    project_keys Array(String) DEFAULT [],
     repo_patterns Array(String) DEFAULT [], is_active UInt8 DEFAULT 1,
     org_id String DEFAULT 'default',
     updated_at DateTime64(6), last_synced DateTime64(6) DEFAULT now()

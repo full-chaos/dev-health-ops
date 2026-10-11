@@ -63,10 +63,9 @@ func TestThePersonsTeamsOfTheLandscapeAreTheMembershipsValidAtTheDay(t *testing.
 		{"ENG", "jira", 0, []string{}},
 	} {
 		exec("insert team "+team.id, `INSERT INTO teams
-    (id, team_uuid, name, members, repo_patterns, updated_at, last_synced, org_id, provider, is_active)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			team.id, uuid.NewSHA1(uuid.NameSpaceURL, []byte("team:"+team.id)), "Team "+team.id, team.roster,
-			[]string{}, longBefore, longBefore, org, team.provider, team.active)
+    (id, team_uuid, name, repo_patterns, updated_at, last_synced, org_id, provider, is_active)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			team.id, uuid.NewSHA1(uuid.NameSpaceURL, []byte("team:"+team.id)), "Team "+team.id, []string{}, longBefore, longBefore, org, team.provider, team.active)
 	}
 	membership := func(person, provider, teamID string, primary uint8, validFrom time.Time, validTo *time.Time, updatedAt time.Time) {
 		t.Helper()
@@ -236,9 +235,9 @@ func TestAPersonWhoLeftATeamLeavesItsLandscape(t *testing.T) {
 	}
 	for _, team := range []struct{ id, provider string }{{"github:alpha", "github"}, {"jira:BETA", "jira"}} {
 		exec("insert team "+team.id, `INSERT INTO teams
-    (id, team_uuid, name, members, repo_patterns, updated_at, last_synced, org_id, provider, is_active)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
-			team.id, uuid.NewSHA1(uuid.NameSpaceURL, []byte("team:"+team.id)), "Team "+team.id, []string{}, []string{}, longBefore, longBefore, org, team.provider)
+    (id, team_uuid, name, repo_patterns, updated_at, last_synced, org_id, provider, is_active)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)`,
+			team.id, uuid.NewSHA1(uuid.NameSpaceURL, []byte("team:"+team.id)), "Team "+team.id, []string{}, longBefore, longBefore, org, team.provider)
 	}
 	membership := func(person, provider, teamID string, validFrom time.Time, validTo *time.Time, updatedAt time.Time) {
 		t.Helper()

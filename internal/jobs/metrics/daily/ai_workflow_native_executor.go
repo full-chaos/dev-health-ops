@@ -5,13 +5,13 @@ import (
 	"fmt"
 	"log/slog"
 	"sort"
-	"strconv"
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/aiworkflow"
+	"github.com/full-chaos/dev-health-ops/internal/prrootid"
 )
 
 // AIWorkflowExecutor is the NATIVE implementation of the ai_workflow
@@ -114,7 +114,7 @@ func (executor *AIWorkflowExecutor) ComputeFamily(
 	}
 	issueIDsByPR := make(map[string][]string)
 	for _, link := range links {
-		prID := link.RepoID.String() + ":" + strconv.FormatInt(link.PRNumber, 10)
+		prID := prrootid.FormatNumber(link.RepoID.String(), link.PRNumber)
 		issueIDsByPR[prID] = append(issueIDsByPR[prID], link.WorkItemID)
 	}
 

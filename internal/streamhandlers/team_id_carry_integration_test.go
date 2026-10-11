@@ -19,7 +19,7 @@ func TestATeamV1PushCarriesTheBareTeamFirst(t *testing.T) {
 	ctx, conn := newProjectMembershipConn(t)
 	pointer := projectMembershipPointer()
 	pointer.SourceSystem, pointer.SourceInstance = "custom", "acme"
-	if err := conn.Exec(ctx, `INSERT INTO teams (id, team_uuid, name, members, manual_members, project_keys, repo_patterns, is_active, updated_at, org_id, provider) VALUES ('platform', generateUUIDv4(), 'Platform', [], ['m@example.com'], [], [], 1, '2026-09-01 00:00:00', ?, 'custom')`, projectMembershipTestOrg); err != nil {
+	if err := conn.Exec(ctx, `INSERT INTO teams (id, team_uuid, name, manual_members, project_keys, repo_patterns, is_active, updated_at, org_id, provider) VALUES ('platform', generateUUIDv4(), 'Platform', ['m@example.com'], [], [], 1, '2026-09-01 00:00:00', ?, 'custom')`, projectMembershipTestOrg); err != nil {
 		t.Fatal(err)
 	}
 	sink, err := NewClickHouseExternalBatchSink(conn)
@@ -72,7 +72,7 @@ func TestAPushAfterAnAdminEditOfAPushedCustomTeamUpdatesIt(t *testing.T) {
 	if err := push("Pushed Eng", "2026-10-01T00:00:00Z"); err != nil {
 		t.Fatalf("first push: %v", err)
 	}
-	if err := conn.Exec(ctx, `INSERT INTO teams (id, team_uuid, name, members, manual_members, project_keys, repo_patterns, is_active, updated_at, org_id, provider) VALUES ('custom:eng', generateUUIDv4(), 'Pushed Eng', [], ['admin@example.com'], [], [], 1, '2026-10-02 00:00:00', ?, '')`, projectMembershipTestOrg); err != nil {
+	if err := conn.Exec(ctx, `INSERT INTO teams (id, team_uuid, name, manual_members, project_keys, repo_patterns, is_active, updated_at, org_id, provider) VALUES ('custom:eng', generateUUIDv4(), 'Pushed Eng', ['admin@example.com'], [], [], 1, '2026-10-02 00:00:00', ?, '')`, projectMembershipTestOrg); err != nil {
 		t.Fatal(err)
 	}
 	if err := push("Pushed Eng v2", "2026-10-08T00:00:00Z"); err != nil {
@@ -94,7 +94,7 @@ func TestAPushAfterAnAdminEditOfAPushedCustomTeamUpdatesIt(t *testing.T) {
 // no second team appears.
 func TestAnAdminTeamAndAPushedCustomTeamOfOneIDAreOneTeam(t *testing.T) {
 	ctx, conn := newProjectMembershipConn(t)
-	if err := conn.Exec(ctx, `INSERT INTO teams (id, team_uuid, name, members, manual_members, project_keys, repo_patterns, is_active, updated_at, org_id, provider) VALUES ('eng', generateUUIDv4(), 'Admin Eng', [], ['admin@example.com'], [], [], 1, '2026-09-01 00:00:00', ?, '')`, projectMembershipTestOrg); err != nil {
+	if err := conn.Exec(ctx, `INSERT INTO teams (id, team_uuid, name, manual_members, project_keys, repo_patterns, is_active, updated_at, org_id, provider) VALUES ('eng', generateUUIDv4(), 'Admin Eng', ['admin@example.com'], [], [], 1, '2026-09-01 00:00:00', ?, '')`, projectMembershipTestOrg); err != nil {
 		t.Fatal(err)
 	}
 	pointer := projectMembershipPointer()
@@ -154,10 +154,10 @@ func TestAPushedCustomTeamHoldsAProjectKeyForEveryProvider(t *testing.T) {
 // that member.
 func TestAPushAfterAnAdminTeamBesideAKeyedCustomTeamKeepsTheAdminsMember(t *testing.T) {
 	ctx, conn := newProjectMembershipConn(t)
-	if err := conn.Exec(ctx, `INSERT INTO teams (id, team_uuid, name, members, manual_members, project_keys, repo_patterns, is_active, updated_at, org_id, provider, native_team_key) VALUES ('custom:eng', generateUUIDv4(), 'Pushed Eng', [], [], [], [], 1, '2026-09-01 00:00:00', ?, 'custom', 'eng')`, projectMembershipTestOrg); err != nil {
+	if err := conn.Exec(ctx, `INSERT INTO teams (id, team_uuid, name, manual_members, project_keys, repo_patterns, is_active, updated_at, org_id, provider, native_team_key) VALUES ('custom:eng', generateUUIDv4(), 'Pushed Eng', [], [], [], 1, '2026-09-01 00:00:00', ?, 'custom', 'eng')`, projectMembershipTestOrg); err != nil {
 		t.Fatal(err)
 	}
-	if err := conn.Exec(ctx, `INSERT INTO teams (id, team_uuid, name, members, manual_members, project_keys, repo_patterns, is_active, updated_at, org_id, provider) VALUES ('eng', generateUUIDv4(), 'Admin Eng', [], ['admin@example.com'], [], [], 1, '2026-09-02 00:00:00', ?, '')`, projectMembershipTestOrg); err != nil {
+	if err := conn.Exec(ctx, `INSERT INTO teams (id, team_uuid, name, manual_members, project_keys, repo_patterns, is_active, updated_at, org_id, provider) VALUES ('eng', generateUUIDv4(), 'Admin Eng', ['admin@example.com'], [], [], 1, '2026-09-02 00:00:00', ?, '')`, projectMembershipTestOrg); err != nil {
 		t.Fatal(err)
 	}
 	pointer := projectMembershipPointer()
@@ -188,10 +188,10 @@ func TestAPushAtTheKeptRowsVersionAfterAFoldWritesItsRename(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			ctx, conn := newProjectMembershipConn(t)
-			if err := conn.Exec(ctx, `INSERT INTO teams (id, team_uuid, name, members, manual_members, project_keys, repo_patterns, is_active, updated_at, org_id, provider, native_team_key) VALUES ('custom:eng', generateUUIDv4(), 'Pushed Eng', [], [], [], [], 1, '2026-10-01 00:00:00', ?, '', 'eng')`, projectMembershipTestOrg); err != nil {
+			if err := conn.Exec(ctx, `INSERT INTO teams (id, team_uuid, name, manual_members, project_keys, repo_patterns, is_active, updated_at, org_id, provider, native_team_key) VALUES ('custom:eng', generateUUIDv4(), 'Pushed Eng', [], [], [], 1, '2026-10-01 00:00:00', ?, '', 'eng')`, projectMembershipTestOrg); err != nil {
 				t.Fatal(err)
 			}
-			if err := conn.Exec(ctx, `INSERT INTO teams (id, team_uuid, name, members, manual_members, project_keys, repo_patterns, is_active, updated_at, org_id, provider) VALUES ('eng', generateUUIDv4(), 'Admin Eng', [], ['admin@example.com'], [], [], 1, '2026-10-02 00:00:00', ?, '')`, projectMembershipTestOrg); err != nil {
+			if err := conn.Exec(ctx, `INSERT INTO teams (id, team_uuid, name, manual_members, project_keys, repo_patterns, is_active, updated_at, org_id, provider) VALUES ('eng', generateUUIDv4(), 'Admin Eng', ['admin@example.com'], [], [], 1, '2026-10-02 00:00:00', ?, '')`, projectMembershipTestOrg); err != nil {
 				t.Fatal(err)
 			}
 			pointer := projectMembershipPointer()

@@ -40,6 +40,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/full-chaos/dev-health-ops/internal/prrootid"
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 )
 
@@ -347,7 +348,7 @@ func incidentEdge(
 // Python interpolates a UUID object, whose str() is the canonical lowercase
 // hyphenated form -- the same thing uuid.UUID.String() produces.
 func pullRequestID(repoID uuid.UUID, number string) string {
-	return repoID.String() + ":" + number
+	return prrootid.Format(repoID.String(), number)
 }
 
 // pythonHash ports _hash (:49):

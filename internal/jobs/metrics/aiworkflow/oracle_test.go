@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/full-chaos/dev-health-ops/internal/prrootid"
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 )
 
@@ -360,5 +361,12 @@ func TestAIWorkflowMatchesFrozenPythonGolden(t *testing.T) {
 		if pythonISOFormat(got.ObservedAt) != want.ObservedAt {
 			t.Errorf("issue[%d] observed_at: Go %s, Python %s", i, pythonISOFormat(got.ObservedAt), want.ObservedAt)
 		}
+	}
+}
+
+// CHAOS-9225: the writer's pull request id is the one constructor's form, the form the drilldown reads.
+func TestPRIDForIsTheSharedEdgeTableForm(t *testing.T) {
+	if got, want := prIDFor(oracleRepoA, 101), prrootid.Format(oracleRepoA.String(), "101"); got != want {
+		t.Fatalf("prIDFor = %q, want %q", got, want)
 	}
 }

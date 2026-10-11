@@ -226,8 +226,8 @@ func seedClickHouse(t *testing.T, ctx context.Context, venue *venueoracle.Venue,
 			active = 0 // one inactive row: only active_only=false shows it
 		}
 		statements = append(statements,
-			fmt.Sprintf(`INSERT INTO teams (id, team_uuid, name, description, members, manual_members, project_keys, repo_patterns, is_active, updated_at, last_synced, org_id)
-VALUES ('%s', '%s', 'Team %d', NULL, [], [], [], [], %d, '%s', '%s', '%s')`, teamID, stableID(fmt.Sprintf("team-%d", i)), i, active, stamp, stamp, orgID),
+			fmt.Sprintf(`INSERT INTO teams (id, team_uuid, name, description, manual_members, project_keys, repo_patterns, is_active, updated_at, last_synced, org_id)
+VALUES ('%s', '%s', 'Team %d', NULL, [], [], [], %d, '%s', '%s', '%s')`, teamID, stableID(fmt.Sprintf("team-%d", i)), i, active, stamp, stamp, orgID),
 			fmt.Sprintf(`INSERT INTO identities (org_id, canonical_id, identity_uuid, display_name, email, provider_identities, team_ids, is_active, updated_at)
 VALUES ('%s', 'user-%d@example.com', '%s', NULL, 'user-%d@example.com', '{}', ['%s'], %d, '%s')`, orgID, i, stableID(fmt.Sprintf("identity-%d", i)), i, teamID, active, stamp))
 	}

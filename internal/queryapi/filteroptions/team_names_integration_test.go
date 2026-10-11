@@ -47,8 +47,8 @@ func TestTeamNamesServeTheNewestNameOfEachActiveNamedTeam(t *testing.T) {
 
 	const org = "org-8748-team-names"
 	base := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
-	insert := `INSERT INTO teams (id, team_uuid, name, members, updated_at, org_id, is_active)
-		VALUES (?, generateUUIDv4(), ?, [], ?, ?, ?)`
+	insert := `INSERT INTO teams (id, team_uuid, name, updated_at, org_id, is_active)
+		VALUES (?, generateUUIDv4(), ?, ?, ?, ?)`
 	for _, row := range []struct {
 		id, name, org string
 		at            time.Time

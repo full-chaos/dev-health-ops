@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"reflect"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -292,6 +293,7 @@ func TestOpportunityDetectors_MatchPythonDetectors(t *testing.T) {
 				renamedChangeFailureEvidence += renameChangeFailureEvidence(c.Expected)
 			}
 			declareTitleNaming(t, gotMap, c.Expected, c.Kind)
+			declareDrilldownRoots(t, gotMap, c.Expected)
 			g, w := normalizeD(gotMap), normalizeD(c.Expected)
 			if !reflect.DeepEqual(g, w) {
 				gj, _ := json.MarshalIndent(g, "", " ")
@@ -465,5 +467,53 @@ func declareTitleNaming(t *testing.T, got, expected map[string]any, kind string)
 			t.Errorf("%s[%d]: the served title %q carries the id %q", key, i, goTitle, id)
 		}
 		w["title"] = goTitle
+	}
+}
+
+var (
+	recordedPRRoot     = regexp.MustCompile(`^([0-9a-f-]{36})#([0-9]+)$`)
+	recordedMetricRoot = regexp.MustCompile(`^([a-z_]+)#([0-9a-f-]{36})$`)
+)
+
+// declareDrilldownRoots is the DECLARED divergence of CHAOS-9225 (class D5428 / D5945): the recorded Python
+// builds every git_pull_requests:<a>:<b> evidence ref into a drilldown with the root "<a>#<b>". Two defects
+// follow, and Go serves neither:
+//   - a pull request chip's root id is "<repository uuid>#<number>", but the edge tables store
+//     "<repository uuid>:<number>" and the drilldown walk matches it verbatim (0 edges on prod): Go serves
+//     the stored form;
+//   - a toil rule's METRIC ref (git_pull_requests:migration_prs:<repository uuid>) became a chip named
+//     "PR <uuid>" with the root "migration_prs#<uuid>": Go serves no chip for it (the ref stays a key of
+//     evidenceRefs).
+//
+// The declaration is path-scoped: ONLY the workGraphDrilldowns entries of the opportunities. Each recorded
+// entry must be one of the two shapes above, else it is a failure (the declaration does not apply); the
+// recorded list is then rewritten to what Go serves, so every other field is still compared whole. The
+// frozen file is not edited.
+func declareDrilldownRoots(t *testing.T, got, expected map[string]any) {
+	t.Helper()
+	for _, key := range []string{"opportunities", "recommendations"} {
+		list, _ := expected[key].([]any)
+		for i, item := range list {
+			opportunity, _ := item.(map[string]any)
+			recorded, _ := opportunity["workGraphDrilldowns"].([]any)
+			if len(recorded) == 0 {
+				continue
+			}
+			served := []any{}
+			for j, entry := range recorded {
+				drill, _ := entry.(map[string]any)
+				root, _ := drill["rootId"].(string)
+				label, _ := drill["label"].(string)
+				if m := recordedPRRoot.FindStringSubmatch(root); m != nil && label == "PR "+m[2] {
+					served = append(served, map[string]any{"rootType": drill["rootType"], "rootId": m[1] + ":" + m[2], "label": label})
+					continue
+				}
+				if m := recordedMetricRoot.FindStringSubmatch(root); m != nil && label == "PR "+m[2] {
+					continue // a metric ref: no chip
+				}
+				t.Errorf("%s[%d].workGraphDrilldowns[%d] = %v: neither a pull request root nor a metric ref root, the declaration does not apply", key, i, j, drill)
+			}
+			opportunity["workGraphDrilldowns"] = served
+		}
 	}
 }

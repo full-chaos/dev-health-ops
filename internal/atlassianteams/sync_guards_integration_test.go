@@ -23,7 +23,7 @@ func TestWriteRespectsTeamSyncPolicyGuard(t *testing.T) {
 
 	// Team A already exists with an admin-set name; sync_policy=2 means this
 	// write must not overwrite it, even though the snapshot reports "Platform".
-	exec(t, conn, `INSERT INTO teams (id, team_uuid, name, description, members, manual_members, project_keys, repo_patterns, is_active, updated_at, org_id, provider, native_team_key, parent_team_id) VALUES ('`+idA+`', generateUUIDv4(), 'Admin-curated name', NULL, [], [], [], [], 1, '2026-09-01 00:00:00', 'org-1', 'jira', '`+teamA+`', NULL)`)
+	exec(t, conn, `INSERT INTO teams (id, team_uuid, name, description, manual_members, project_keys, repo_patterns, is_active, updated_at, org_id, provider, native_team_key, parent_team_id) VALUES ('`+idA+`', generateUUIDv4(), 'Admin-curated name', NULL, [], [], [], 1, '2026-09-01 00:00:00', 'org-1', 'jira', '`+teamA+`', NULL)`)
 	exec(t, conn, `INSERT INTO team_sync_policies (org_id, team_id, sync_policy, managed_fields, updated_by, updated_at) VALUES ('org-1', '`+idA+`', 2, [], NULL, '2026-09-01 00:00:00')`)
 
 	g := newGateway(t, standard)

@@ -82,7 +82,7 @@ func TestTeamReachesItsJiraProjectsWorkItemsThroughOwnership(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := conn.Exec(ctx, `INSERT INTO teams (id, team_uuid, name, members, manual_members, project_keys, repo_patterns, is_active, updated_at, org_id, provider, native_team_key) VALUES ('OPS', ?, 'Ops Project', [], [], ['OPS'], [], 1, ?, ?, 'jira', 'OPS')`,
+	if err := conn.Exec(ctx, `INSERT INTO teams (id, team_uuid, name, manual_members, project_keys, repo_patterns, is_active, updated_at, org_id, provider, native_team_key) VALUES ('OPS', ?, 'Ops Project', [], ['OPS'], [], 1, ?, ?, 'jira', 'OPS')`,
 		uuid.New(), old, orgID); err != nil {
 		t.Fatal(err)
 	}

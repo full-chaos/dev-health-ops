@@ -7,6 +7,9 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph/units"
 )
@@ -144,16 +147,109 @@ func TestEstimate(t *testing.T) {
 }
 
 // The dry-run table carries the no-repository count and the unmatched share as own rows (lead, for chris).
-func TestReportLinesCarryTheNoRepositoryCountAndTheUnmatchedShare(t *testing.T) {
+func TestReportLinesCarryEveryBucketAndTheUnmatchedShare(t *testing.T) {
 	r := newReport()
-	r.Items, r.SkippedNoRepo, r.Fallback, r.Unmatched = 10, 2, 4, 1
+	r.Items, r.NotCompleted, r.AlreadyCovered, r.NoRepoReachable, r.Fallback, r.Unmatched, r.Unchanged, r.Rows = 20, 1, 5, 2, 4, 1, 3, 8
+	r.NoRepoReasons[reasonNoLink] = 2
+	r.ByTier["native"] = 6
 	joined := strings.Join(r.Lines(), "\n")
-	for _, want := range []string{"skipped, no repository: 2", "product/general items (estimated): 4", "unmatched share of product/general: 25.0%"} {
+	for _, want := range []string{
+		"items read: 20", "skipped, not completed on the classified day: 1", "skipped: covered by a canonical unit: 5",
+		"skipped, no repository reachable: 2", "no repository reachable: no link: 2", "no repository reachable: all links churn 0: 0", "skipped: covered by a canonical unit: 5", "unmatched (product/general, no estimate rule): 1",
+		"already stored, not rewritten: 3", "rows (normalized): 8", "by tier: native = 6",
+		"product/general items (estimated): 4", "unmatched share of product/general: 25.0%",
+	} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("the report lacks the row %q:\n%s", want, joined)
 		}
 	}
+	if got := r.Accounted(); got != 20 {
+		t.Errorf("accounted = %d, want every item of the 20 counted once", got)
+	}
 	if got := strings.Join(newReport().Lines(), "\n"); !strings.Contains(got, "unmatched share of product/general: n/a") {
 		t.Errorf("an empty window must say n/a, not divide by zero:\n%s", got)
+	}
+}
+
+func TestAllocateReachesRepositoriesOnlyThroughTheEntityTree(t *testing.T) {
+	a := uuid.MustParse("92270001-9227-4227-8227-922792279227")
+	b := uuid.MustParse("92270002-9227-4227-8227-922792279227")
+	links := map[string][]issueLink{
+		"i-split":  {{repo: a, number: 1, tier: "heuristic", churn: 30}, {repo: b, number: 2, tier: "native", churn: 10}, {repo: a, number: 3, tier: "explicit_text", churn: 10}},
+		"i-nochur": {{repo: a, number: 4, tier: "explicit_text", churn: 0}},
+	}
+	// A pull request / merge request item keeps its own repository, with its own tier.
+	for _, kind := range []string{"pr", "merge_request"} {
+		got, tier, reason := allocate(sourceRow{artifactID: "p", itemType: kind, ownRepo: &a}, links)
+		if reason != "" || tier != tierOwnRepository || len(got) != 1 || got[0].repo != a || got[0].weight != 1 {
+			t.Errorf("%s item: %+v %q %q", kind, got, tier, reason)
+		}
+	}
+	if _, _, reason := allocate(sourceRow{artifactID: "p", itemType: "pr"}, links); reason != reasonNoOwnRepository {
+		t.Errorf("a pull request item without a repository: reason %q", reason)
+	}
+	// An issue's own repository column is NOT the relation.
+	if _, _, reason := allocate(sourceRow{artifactID: "i-own", itemType: "task", ownRepo: &a}, links); reason != reasonNoLink {
+		t.Errorf("an issue with an own repository and no link: reason %q, want %q", reason, reasonNoLink)
+	}
+	// Several repositories: the churn weighs them (40 in a, 10 in b), the strongest tier is named.
+	got, tier, reason := allocate(sourceRow{artifactID: "i-split", itemType: "task"}, links)
+	if reason != "" || tier != "native" || len(got) != 2 || got[0].repo != a || got[1].repo != b || got[0].weight != 0.8 || got[1].weight != 0.2 {
+		t.Errorf("split: %+v %q %q", got, tier, reason)
+	}
+	if _, tier, reason := allocate(sourceRow{artifactID: "i-nochur", itemType: "task"}, links); reason != reasonNoChurn || tier != "explicit_text" {
+		t.Errorf("no churn: tier %q reason %q", tier, reason)
+	}
+}
+
+func TestRecordSplitsTheEffortSoTheRepositoriesSumToTheItem(t *testing.T) {
+	a := uuid.MustParse("92270001-9227-4227-8227-922792279227")
+	b := uuid.MustParse("92270002-9227-4227-8227-922792279227")
+	c := uuid.MustParse("92270003-9227-4227-8227-922792279227")
+	points := 7.0
+	allocs := []allocation{{repo: a, weight: 1.0 / 3, source: "pr_churn"}, {repo: b, weight: 1.0 / 3, source: "pr_churn"}, {repo: c, weight: 1.0 / 3, source: "pr_churn"}}
+	rec, efforts := record(Options{Org: "o", RunID: "r"}, sourceRow{artifactID: "x", provider: "linear", points: &points, title: "t"}, allocs, "native", "maintenance.debt", "maintenance", "cc:chore", time.Unix(0, 0))
+	sum := 0.0
+	for _, e := range efforts {
+		sum += e.EffortValue
+	}
+	if len(efforts) != 3 || sum != 7 || rec.EffortValue != 7 {
+		t.Errorf("repository efforts %v sum %v for an item of %v", efforts, sum, rec.EffortValue)
+	}
+	if rec.RepoID != nil {
+		t.Errorf("a unit over three repositories names repository %v, want none", rec.RepoID)
+	}
+	one, _ := record(Options{Org: "o", RunID: "r"}, sourceRow{artifactID: "x", provider: "linear", title: "t"}, allocs[:1], "native", "maintenance.debt", "maintenance", "cc:chore", time.Unix(0, 0))
+	if one.RepoID == nil || *one.RepoID != a {
+		t.Errorf("a unit over one repository names %v, want %v", one.RepoID, a)
+	}
+	// The input hash moves with the repositories: a changed split is a new row, an identical one is not.
+	again, _ := record(Options{Org: "o", RunID: "other-run"}, sourceRow{artifactID: "x", provider: "linear", points: &points, title: "t"}, allocs, "native", "maintenance.debt", "maintenance", "cc:chore", time.Unix(99, 0))
+	if again.CategorizationInputHash != rec.CategorizationInputHash {
+		t.Errorf("the same input hashes differently across runs: %s vs %s", again.CategorizationInputHash, rec.CategorizationInputHash)
+	}
+	moved, _ := record(Options{Org: "o", RunID: "r"}, sourceRow{artifactID: "x", provider: "linear", points: &points, title: "t"}, allocs[:2], "native", "maintenance.debt", "maintenance", "cc:chore", time.Unix(0, 0))
+	if moved.CategorizationInputHash == rec.CategorizationInputHash {
+		t.Errorf("a changed split keeps the input hash")
+	}
+}
+
+func TestRunIDForNamesTheWindowNotTheMoment(t *testing.T) {
+	from, to := time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC), time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC)
+	id := RunIDFor("org", from, to)
+	if again := RunIDFor("org", from.Add(5*time.Hour), to.Add(7*time.Hour)); again != id {
+		t.Errorf("the same days run as %q and %q", id, again)
+	}
+	if !strings.HasPrefix(id, Status+":") {
+		t.Errorf("run id %q lacks the provenance prefix", id)
+	}
+	for name, other := range map[string]string{
+		"another organization": RunIDFor("org2", from, to),
+		"another first day":    RunIDFor("org", from.AddDate(0, 0, 1), to),
+		"another last day":     RunIDFor("org", from, to.AddDate(0, 0, 1)),
+	} {
+		if other == id {
+			t.Errorf("%s keeps the run id %q", name, id)
+		}
 	}
 }

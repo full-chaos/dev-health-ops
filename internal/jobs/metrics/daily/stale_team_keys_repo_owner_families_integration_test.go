@@ -53,9 +53,9 @@ func seedRepoOwnerFamiliesTeam(
 ) {
 	t.Helper()
 	execRepoOwnerFamilies(t, ctx, conn, "insert team "+id, `INSERT INTO teams
-    (id, team_uuid, name, members, repo_patterns, updated_at, last_synced, org_id, provider, is_active)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		id, uuid.NewSHA1(uuid.NameSpaceURL, []byte("team:"+id)), "Team "+id, []string{}, []string{"acme/*"},
+    (id, team_uuid, name, repo_patterns, updated_at, last_synced, org_id, provider, is_active)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		id, uuid.NewSHA1(uuid.NameSpaceURL, []byte("team:"+id)), "Team "+id, []string{"acme/*"},
 		at, at, repoOwnerFamiliesOrg, "github", active)
 }
 

@@ -54,7 +54,7 @@ func TestNormalizeLegacyHistoryEndToEnd(t *testing.T) {
 		exec(`INSERT INTO work_items (repo_id, work_item_id, provider, title, description, type, status, status_raw, project_key, project_id,
  assignees, reporter, created_at, updated_at, started_at, completed_at, closed_at, labels, story_points, sprint_id, sprint_name,
  parent_id, epic_id, url, last_synced, org_id)
-VALUES (?, ?, 'jira', ?, NULL, 'task', 'done', 'Done', 'P', 'p', [], 'r', ?, ?, NULL, ?, NULL, [], ?, '', '', '', '', '', ?, ?)`,
+VALUES (?, ?, 'jira', ?, NULL, 'pr', 'done', 'Done', 'P', 'p', [], 'r', ?, ?, NULL, ?, NULL, [], ?, '', '', '', '', '', ?, ?)`,
 			repo, id, title, created, completed, completed, points, completed, org)
 		exec(`INSERT INTO investment_classifications_daily (repo_id, day, artifact_type, artifact_id, provider, investment_area, project_stream, confidence, rule_id, computed_at, org_id)
 VALUES (?, ?, 'work_item', ?, 'jira', ?, ?, 1.0, 'r', ?, ?)`, repo, day, id, area, stream, completed, org)
@@ -63,21 +63,21 @@ VALUES (?, ?, 'work_item', ?, 'jira', ?, ?, 1.0, 'r', ?, ?)`, repo, day, id, are
 	item(repoA, "A-1", "Rotate the keys", &three, "security", "vulnerability") // mapped: risk.vulnerability, 3 units
 	item(repoA, "A-2", "fix(api): crash on login", nil, "product", "general")  // estimated: cc:fix -> quality.bugfix, 1 unit
 	item(repoA, "A-3", "Quarterly planning", nil, "product", "general")        // unmatched: stays out
-	item(repoB, "B-1", "Upgrade the cluster", nil, "infra", "k8s")             // repository B holds a categorized unit that day: skipped
+	item(repoB, "B-1", "Upgrade the cluster", nil, "infra", "k8s")             // a canonical unit names it in its evidence: already covered
 	// A classification with no repository: counted as skipped, never dropped silently.
 	exec(`INSERT INTO investment_classifications_daily (repo_id, day, artifact_type, artifact_id, provider, investment_area, project_stream, confidence, rule_id, computed_at, org_id)
 VALUES (NULL, ?, 'work_item', 'N-1', 'jira', 'security', 'general', 1.0, 'r', ?, ?)`, day, completed, org)
 	exec(`INSERT INTO work_unit_investments (work_unit_id, from_ts, to_ts, repo_id, effort_metric, effort_value, theme_distribution_json, subcategory_distribution_json, structural_evidence_json, evidence_quality, evidence_quality_band, categorization_status, categorization_model_version, categorization_run_id, computed_at, org_id)
 VALUES ('wu-jev', ?, ?, ?, 'churn_loc', 10, ?, ?, ?, 0.8, 'high', 'ok', 'jev-test', 'run-1', ?, ?)`,
-		day, completed, repoB, map[string]float64{"quality": 1.0}, map[string]float64{"quality.bugfix": 1.0}, `{"issues":[],"prs":[]}`, completed, org)
+		day, completed, repoB, map[string]float64{"quality": 1.0}, map[string]float64{"quality.bugfix": 1.0}, `{"issues":["B-1"],"prs":[]}`, completed, org)
 
 	window := Options{Org: org, From: day.AddDate(0, 0, -1), To: day.AddDate(0, 0, 1), RunID: "normalized_legacy:test-run"}
-	records, report, err := Plan(ctx, conn, window)
+	records, efforts, report, err := Plan(ctx, conn, window)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if report.Items != 5 || report.Rows != 2 || report.Unmatched != 1 || report.SkippedCanonical != 1 || report.SkippedNoRepo != 1 || report.UnmappedTotal() != 0 {
-		t.Fatalf("dry run = %+v, want items 5, rows 2, unmatched 1, skipped as categorized 1, no repository 1, unmapped 0\n%v", report, report.Lines())
+	if report.Items != 5 || report.Rows != 2 || report.Unmatched != 1 || report.AlreadyCovered != 1 || report.NotCompleted != 1 || report.UnmappedTotal() != 0 || report.Accounted() != report.Items {
+		t.Fatalf("dry run = %+v, want items 5, rows 2, unmatched 1, already covered 1, not completed 1 (no work item row), unmapped 0, every item counted once\n%v", report, report.Lines())
 	}
 	if report.ByTheme["risk"] != 1 || report.ByTheme["quality"] != 1 || report.ByRule["cc:fix"] != 1 || report.ByRule["map:security/vulnerability"] != 1 {
 		t.Fatalf("dry run by theme/rule = %v / %v", report.ByTheme, report.ByRule)
@@ -94,7 +94,7 @@ VALUES ('wu-jev', ?, ?, ?, 'churn_loc', 10, ?, ?, ?, 0.8, 'high', 'ok', 'jev-tes
 		t.Fatalf("a dry run wrote %d rows", n)
 	}
 
-	if err := Apply(ctx, conn, window, records, report); err != nil {
+	if err := Apply(ctx, conn, window, records, efforts, report); err != nil {
 		t.Fatal(err)
 	}
 	if n := count("categorization_status = '" + Status + "'"); n != 2 {
@@ -114,25 +114,24 @@ VALUES ('wu-jev', ?, ?, ?, 'churn_loc', 10, ?, ?, ?, 0.8, 'high', 'ok', 'jev-tes
 		t.Fatalf("the categorized unit changed (%d)", n)
 	}
 
-	// Idempotent: a second run (another run id) writes the same ids, not more rows.
+	// Idempotent: a second run (another run id) finds the identical rows stored and writes nothing.
 	again := window
 	again.RunID = "normalized_legacy:second-run"
-	records2, report2, err := Plan(ctx, conn, again)
+	records2, efforts2, report2, err := Plan(ctx, conn, again)
 	if err != nil {
 		t.Fatal(err)
 	}
-	// The first run's rows are normalized rows, not categorized units: the same two rows come out again.
-	if report2.Rows != 2 || report2.SkippedCanonical != 1 {
+	if report2.Rows != 0 || report2.Unchanged != 2 || report2.AlreadyCovered != 1 {
 		t.Fatalf("second plan = %+v", report2)
 	}
-	if err := Apply(ctx, conn, again, records2, report2); err != nil {
+	if err := Apply(ctx, conn, again, records2, efforts2, report2); err != nil {
 		t.Fatal(err)
 	}
 	if n := count("categorization_status = '" + Status + "'"); n != 2 {
 		t.Fatalf("after a re-run the normalized rows = %d, want still 2", n)
 	}
 
-	// Rollback by run id: the second run owns the current rows.
+	// Rollback: the first run owns the rows (the second wrote none).
 	if n, err := RollbackCount(ctx, conn, org, ""); err != nil || n != 2 {
 		t.Fatalf("rollback count = %d, %v, want 2", n, err)
 	}
@@ -181,14 +180,14 @@ VALUES ('wu-jev', ?, ?, ?, 'churn_loc', 10, ?, ?, ?, 0.8, 'high', 'ok', 'jev-tes
 
 	// An unmapped key: the plan counts it and apply refuses, nothing is written.
 	item(repoA, "A-9", "Anything", nil, "weird", "key")
-	bad, badReport, err := Plan(ctx, conn, window)
+	bad, badEfforts, badReport, err := Plan(ctx, conn, window)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if badReport.Unmapped["weird/key"] != 1 {
 		t.Fatalf("unmapped = %v, want weird/key = 1", badReport.Unmapped)
 	}
-	if err := Apply(ctx, conn, window, bad, badReport); !errors.Is(err, ErrUnmappedKeys) {
+	if err := Apply(ctx, conn, window, bad, badEfforts, badReport); !errors.Is(err, ErrUnmappedKeys) {
 		t.Fatalf("apply over an unmapped key = %v, want ErrUnmappedKeys", err)
 	}
 	if n := count("categorization_status = '" + Status + "'"); n != 0 {

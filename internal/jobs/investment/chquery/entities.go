@@ -646,6 +646,9 @@ type ExistingInvestment struct {
 	// decision backend for this exact (hash, stamp), kept as the unit's answer
 	// (CHAOS-9147). False for an ok/repaired row.
 	Terminal bool
+	// Fallback is true for the fixed insufficient_evidence row a unit under the
+	// evidence gate gets before any model call (CHAOS-9270).
+	Fallback bool
 }
 
 const (
@@ -655,6 +658,9 @@ const (
 	ServedLevelMixCode = "served_level_mix"
 	// invalidLLMOutputStatus is the status of a served low-quality row.
 	invalidLLMOutputStatus = "invalid_llm_output"
+	// insufficientEvidenceStatus is the status of the fixed fallback row of a
+	// unit under the evidence gate (CHAOS-9270).
+	insufficientEvidenceStatus = "insufficient_evidence"
 )
 
 // FetchExistingInvestmentKeys ports materialize.py:700-745
@@ -682,10 +688,19 @@ const (
 // invalid_llm_output row (generative path, refused, invalid or defect answers)
 // still does not count. No generative row carries these codes.
 //
+// # FALLBACK ROWS (CHAOS-9270)
+//
+// A unit under the evidence gate gets the fixed insufficient_evidence row
+// before any model call. The row is a pure function of (input hash, stamp), so
+// the latest such row counts as existing for the same hash and stamp and is not
+// written again; a changed hash (the unit gained evidence) or stamp misses the
+// key as for any row.
+//
 // # WHY THE STATUS FILTER IS INSIDE, NOT OUTSIDE
 //
 // The subquery takes argMax(categorization_status, computed_at) per key and the
-// outer WHERE keeps only ok/repaired rows and the terminal served rows above. Filtering on status BEFORE the argMax
+// outer WHERE keeps only ok/repaired rows, the insufficient_evidence fallback
+// row and the terminal served rows above. Filtering on status BEFORE the argMax
 // would let a stale successful row outrank a newer invalid_llm_output one, so a
 // unit whose latest categorization FAILED would be treated as fresh and never
 // retried.
@@ -749,6 +764,7 @@ func (reader *Reader) FetchExistingInvestmentKeys(
         )
         WHERE (
                 latest_status IN {valid_statuses:Array(String)}
+                OR latest_status = {fallback_status:String}
                 OR (latest_status = {terminal_status:String}
                     AND arrayExists(code -> position(latest_errors, code) > 0, {terminal_codes:Array(String)}))
               )
@@ -765,6 +781,7 @@ func (reader *Reader) FetchExistingInvestmentKeys(
 		clickhouse.Named("input_hashes", inputHashes),
 		clickhouse.Named("model_version", modelVersion),
 		clickhouse.Named("valid_statuses", []string{"ok", "repaired"}),
+		clickhouse.Named("fallback_status", insufficientEvidenceStatus),
 		clickhouse.Named("terminal_status", invalidLLMOutputStatus),
 		clickhouse.Named("terminal_codes", []string{`"` + ServedTopRawKeyCode + `"`, `"` + ServedLevelMixCode + `"`}),
 	)
@@ -796,7 +813,7 @@ func (reader *Reader) FetchExistingInvestmentKeys(
 		if _, ok := wanted[key]; !ok {
 			continue
 		}
-		existing[key] = ExistingInvestment{RunID: runID, QuoteCount: quoteCount, Terminal: status == invalidLLMOutputStatus}
+		existing[key] = ExistingInvestment{RunID: runID, QuoteCount: quoteCount, Terminal: status == invalidLLMOutputStatus, Fallback: status == insufficientEvidenceStatus}
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate existing investment key rows: %w", err)

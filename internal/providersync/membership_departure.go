@@ -261,6 +261,14 @@ func (writer MembershipSnapshotWriter[R]) planSnapshot(
 	var closes []closing
 	// One candidate per fact, in the order the rule retracted the first row of it.
 	var order []string
+	newerCounted := map[string]bool{}
+	// A fact with ANY open row newer than the read is left whole: a later run wrote it (CHAOS-9204).
+	newerFact := map[string]bool{}
+	for _, row := range open {
+		if row.UpdatedAt.After(at) {
+			newerFact[MembershipSnapshotKey(MembershipSnapshotRow{TeamID: row.TeamID, MemberID: row.MemberID})] = true
+		}
+	}
 	byFact := map[string][]membershipRetraction{}
 	for _, retraction := range retractions {
 		key := MembershipSnapshotKey(MembershipSnapshotRow{TeamID: retraction.open.TeamID, MemberID: retraction.open.MemberID})
@@ -270,7 +278,16 @@ func (writer MembershipSnapshotWriter[R]) planSnapshot(
 			continue
 		}
 		if held[key] {
-			// A later open row of a fact the run holds again: not a departure.
+			// A later open row of a fact the run holds again: not a departure. A row written by a run
+			// that read the provider AFTER this one is not this run's to retire (CHAOS-9204).
+			if newerFact[key] {
+				if !newerCounted[key] {
+					newerCounted[key] = true
+					outcome.Skipped[membershipSkipNewerRow]++
+					of(retraction.open.TeamID).skipped[membershipSkipNewerRow]++
+				}
+				continue
+			}
 			closes = append(closes, closing{retraction.open, retraction.closedAt})
 			outcome.DuplicatesRetired++
 			of(retraction.open.TeamID).duplicates++

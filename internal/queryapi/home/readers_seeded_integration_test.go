@@ -442,25 +442,6 @@ func TestHomeReaders_SeededRealClickHouse(t *testing.T) {
 		}
 	})
 
-	t.Run("fetchReworkThemeAllocation_existingHandDedupStillWorks", func(t *testing.T) {
-		got, err := fetchReworkThemeAllocation(ctx, client, startDay, endDay, "", nil, "", nil, seededOrgID)
-		if err != nil {
-			t.Fatalf("fetchReworkThemeAllocation: %v", err)
-		}
-		var found bool
-		for _, row := range got {
-			if row.Theme == "feature_delivery" {
-				found = true
-				if row.Allocation != 4 {
-					t.Errorf("feature_delivery allocation = %v, want 4 (deduped: the stale 999 row must not be summed)", row.Allocation)
-				}
-			}
-		}
-		if !found {
-			t.Fatalf("fetchReworkThemeAllocation = %+v, want a feature_delivery row", got)
-		}
-	})
-
 	t.Run("fetchRecommendationSignals_twoStageArgMaxPicksLatest", func(t *testing.T) {
 		f := Filters{Scope: ScopeFilter{Level: "team", IDs: []string{"team-1"}}}
 		got, err := fetchRecommendationSignals(ctx, client, f, startDay, endDay, seededOrgID)

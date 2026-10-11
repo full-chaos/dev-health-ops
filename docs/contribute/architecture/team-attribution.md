@@ -805,7 +805,12 @@ project's items by id. Now:
      row of it. The lookups of one run are bounded (100 facts); a fact past the budget stays open. The provider
      that pages by cursor cannot be shifted by a departure between two requests, so its list rule stands.
   3. no open row of the fact is newer than the time the run read the provider: a run whose list is older than a
-     row never closes it (two overlapping runs of one integration).
+     row never closes it (two overlapping runs of one integration). This holds for EVERY close of a membership
+     row, not only a departure (CHAOS-9204): a surplus open row of a member the run returns again is retired only
+     when it is not newer than the read (else it stays open and is counted in `row_newer_than_read`); a rename
+     never replaces a member id that holds a newer row; and the Jira (Atlassian Teams) writer leaves a whole fact
+     open when any of its open rows is newer than the run's read. The same rule, one case set, for GitHub, GitLab,
+     Linear and Jira.
   4. a member whose id is made from an email is NOT closed by the list rule: a hidden or changed email would read
      as a departure. `raw_provider_user_id` still holds the first identity facet, not the provider's user id (the
      field is pinned by the frozen comparison with the reference); the provider's own stable user id is the

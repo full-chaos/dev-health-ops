@@ -21,7 +21,6 @@ package home
 import (
 	"context"
 	"fmt"
-	"strings"
 	"time"
 
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
@@ -153,21 +152,4 @@ func scopeBindingsMulti(ids []string) []dhclickhouse.Binding {
 		return nil
 	}
 	return []dhclickhouse.Binding{{Name: "scope_ids", Value: ids}}
-}
-
-// workCategoryFilter ports work_category_filter (api/services/
-// filtering.py:113-126).
-func workCategoryFilter(f Filters) (string, []dhclickhouse.Binding) {
-	var categories []string
-	for _, c := range f.Why.WorkCategory {
-		if trimmed := strings.TrimSpace(c); trimmed != "" {
-			categories = append(categories, trimmed)
-		}
-	}
-	if len(categories) == 0 {
-		return "", nil
-	}
-	return " AND investment_area IN {work_categories:Array(String)}", []dhclickhouse.Binding{
-		{Name: "work_categories", Value: categories},
-	}
 }

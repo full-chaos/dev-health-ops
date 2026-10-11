@@ -92,7 +92,7 @@ func TestBreakdownOverInvestmentMetricsDailyTakesTheNewestRowOfEachKey(t *testin
 		EndDate:   mustGraphQLDate("2026-08-08"),
 		TopN:      10,
 	}
-	query, err := CompileBreakdown(request, org, queryTimeoutSecs, false, nil)
+	query, err := compileBreakdownOver(request, "investment_area", org, queryTimeoutSecs, false, nil)
 	if err != nil {
 		t.Fatalf("CompileBreakdown: %v", err)
 	}
@@ -195,7 +195,7 @@ func TestCycleTimeOverInvestmentMetricsDailyLeavesOutRowsWithNoCompletedItem(t *
 		EndDate:   mustGraphQLDate("2026-08-08"),
 		TopN:      10,
 	}
-	query, err := CompileBreakdown(request, org, queryTimeoutSecs, false, nil)
+	query, err := compileBreakdownOver(request, "investment_area", org, queryTimeoutSecs, false, nil)
 	if err != nil {
 		t.Fatalf("CompileBreakdown: %v", err)
 	}

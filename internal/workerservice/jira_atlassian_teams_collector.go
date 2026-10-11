@@ -355,7 +355,8 @@ func (collector jiraCombinedTeamCatalogCollector) collectAtlassianTeams(
 		}
 	}
 	result, err = atlassianteams.Write(ctx, collector.Conn, ref.OrgID, rows, atlassianSelections,
-		providersync.ProveSoleScope(ctx, collector.ScopeCensus, ref.OrgID, atlassianteams.Provider, ref.IntegrationID))
+		providersync.ProveSoleScope(ctx, collector.ScopeCensus, ref.OrgID, atlassianteams.Provider, ref.IntegrationID),
+		atlassianAbsenceProver(gatewayClient, cloudID))
 	if err != nil {
 		return result, nil, err
 	}
@@ -391,4 +392,15 @@ func normalizeAtlassianTenantURL(value string) (*url.URL, error) {
 // to another host.
 func defaultAtlassianTeamsDoer() *http.Client {
 	return &http.Client{Timeout: 45 * time.Second, CheckRedirect: providerfoundation.DropCredentialsOnHostChange}
+}
+
+// atlassianAbsenceProver is the gateway's own answer for each fact the run no
+// longer holds (CHAOS-9124), asked through the client the run read with. A client
+// that cannot ask (a double without TeamById) gives no prover, so nothing closes.
+func atlassianAbsenceProver(client atlassianteams.Client, cloudID string) atlassianteams.AbsenceProver {
+	reads, ok := client.(atlassianteams.GatewayReads)
+	if !ok {
+		return nil
+	}
+	return &atlassianteams.GatewayAbsence{Reads: reads, SiteID: cloudID}
 }

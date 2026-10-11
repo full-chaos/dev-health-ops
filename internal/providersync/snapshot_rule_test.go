@@ -377,7 +377,7 @@ func TestReportSnapshotPlanWritesOneWarnLinePerAbandonedKind(t *testing.T) {
 		{TeamID: "linear:QA", ProjectID: testPID("other-source"), Source: "manual", ValidFrom: at.Add(-time.Hour)},
 	}
 	fresh := []OwnershipSnapshotRow{{TeamID: "linear:QA", ProjectID: mustProjectID(t)(LinearTeamKeyProjectID(org, "QA")), Source: "native", ValidFrom: at}}
-	plan := PlanOwnershipSnapshot(fresh, open, at, linearOwnershipKindSnapshots(org, testSoleScope(), LinearReferenceCatalogEvidence{TeamsComplete: true, ProjectsComplete: true}, LinearReferenceCatalogResult{})...)
+	plan := PlanOwnershipSnapshot(fresh, open, at, linearOwnershipKindSnapshots(context.Background(), org, testSoleScope(), LinearReferenceCatalogEvidence{TeamsComplete: true, ProjectsComplete: true}, LinearReferenceCatalogResult{}, linearAskEveryAbsentRowGone)...)
 	if !ReportSnapshotPlan(context.Background(), "linear", org, plan) {
 		t.Fatal("an empty project answer over an open project row was not reported")
 	}

@@ -1,0 +1,19 @@
+{
+  "case": "team_by_key_found",
+  "method": "POST",
+  "path": "/graphql",
+  "status": 200,
+  "content_type": "application/json; charset=utf-8",
+  "request_shape": {
+    "query": "\u003cstring\u003e"
+  },
+  "body_shape": {
+    "data": {
+      "team": {
+        "id": "\u003cstring\u003e",
+        "key": "\u003cstring\u003e",
+        "name": "\u003cstring\u003e"
+      }
+    }
+  }
+}

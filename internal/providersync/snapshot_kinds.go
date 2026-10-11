@@ -23,12 +23,12 @@ import "time"
 // each read proves its own end, and a team with no row is a real answer.
 //
 //	kind                          scope             empty answer    absence
-//	linear_project_ownership      sole integration  closes nothing  cursor walk
-//	linear_team_key_ownership     sole integration  closes nothing  cursor walk
+//	linear_project_ownership      sole integration  closes nothing  direct answer
+//	linear_team_key_ownership     sole integration  closes nothing  direct answer
 //	jira_legacy_ownership         sole integration  closes nothing  one response or direct answer
-//	atlassian_team_catalog        sole integration  closes nothing  cursor walk
-//	atlassian_team_memberships    sole integration  is an answer    cursor walk
-//	atlassian_team_project_links  sole integration  is an answer    cursor walk
+//	atlassian_team_catalog        sole integration  closes nothing  direct answer
+//	atlassian_team_memberships    sole integration  is an answer    direct answer
+//	atlassian_team_project_links  sole integration  is an answer    direct answer
 //	gitlab_group_project_grants   sole integration  is an answer    one response or direct answer
 //	github_team_repo_grants       sole integration  is an answer    one response or direct answer
 //	linear_team_memberships       sole integration  is an answer    the writer of the kind
@@ -42,10 +42,17 @@ import "time"
 // feeds the kind's held set was ONE response, and otherwise the provider's own
 // answer for that one fact does, asked for every state the held set admits,
 // inside a budget of AbsenceLookupBudget per run (AbsenceByListing;
-// TestHeldSetWalkCensus names the walks of each kind). "cursor
-// walk": the walk follows the provider's cursor to its proven end, and its
-// answer is taken as the proof (AbsenceByWalk); the providers state no
-// contract for a list that changes during such a walk, so it is a named risk.
+// TestHeldSetWalkCensus names the walks of each kind). "direct
+// answer": the kind's walk is by the provider's cursor, which states no
+// contract for a list that changes while it is read, so the end of the walk is
+// no proof (CHAOS-9124). Every open fact the run does not hold is a candidate
+// and closes only on the provider's own answer for that one fact (a per-kind
+// prover: linear_absence.go, internal/atlassianteams/absence.go), inside the
+// same budget (AbsenceByListing, with no one-response proof: a cursor walk
+// never counts as one). For the three Atlassian Teams kinds the answer for a
+// team is TeamById; a member or a link of a team that still exists is a fresh
+// complete re-read of that team's list, because the gateway has no per-fact
+// read for them (a named residual).
 // "the writer of the kind": the rule lists every absent fact as a candidate
 // and the one writer of the kind (MembershipSnapshotWriter.Snapshot) closes a
 // candidate only on its own proof, fact by fact (AbsenceByCloseWriter).

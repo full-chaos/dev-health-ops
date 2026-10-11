@@ -123,7 +123,15 @@ const (
 // organization, whatever site wrote them, so a run closes and deactivates
 // only when the organization has no other active Jira integration. A scope
 // that is not proven writes what the run found and closes nothing.
-func Write(ctx context.Context, conn driver.Conn, orgID string, rows Rows, selections Selections, scope providersync.ScopeProof) (Result, error) {
+//
+// prover is the gateway's own answer for one fact (absence.go): an open fact the
+// run does not hold is a candidate, and it closes only when the prover says it is
+// gone, inside the per-run budget of each kind. A nil prover answers nothing, so
+// nothing closes (CHAOS-9124: the end of a cursor walk is no proof).
+func Write(
+	ctx context.Context, conn driver.Conn, orgID string, rows Rows, selections Selections, scope providersync.ScopeProof,
+	prover AbsenceProver,
+) (Result, error) {
 	var result Result
 	if conn == nil || orgID == "" {
 		return result, ErrConfiguration
@@ -131,7 +139,7 @@ func Write(ctx context.Context, conn driver.Conn, orgID string, rows Rows, selec
 	if err := checkTeamIDs(rows); err != nil {
 		return result, err
 	}
-	teams, missing, catalog, err := teamsInScope(ctx, conn, orgID, rows, scope)
+	teams, missing, catalog, err := teamsInScope(ctx, conn, orgID, rows, scope, prover)
 	if err != nil {
 		return result, fmt.Errorf("read known atlassian teams: %w", err)
 	}
@@ -193,7 +201,7 @@ func Write(ctx context.Context, conn driver.Conn, orgID string, rows Rows, selec
 		if memberships, expiredMemberships, plan, newerSkipped, err = planMemberships(ctx, conn, orgID, teams, freshMemberships, now,
 			providersync.AtlassianTeamMembershipKind().Snapshot(scope, providersync.ProveSnapshot(
 				providersync.SnapshotTerm{Holds: rows.MembershipsComplete, Reason: snapshotMemberReadsNotEnded}),
-				providersync.AbsenceByWalk[providersync.MembershipSnapshotRow](providersync.AbsenceWalkByCursor))); err != nil {
+				providersync.AbsenceByListing[providersync.MembershipSnapshotRow](nil, membershipLookups(ctx, prover).Answer))); err != nil {
 			return result, fmt.Errorf("read current team memberships: %w", err)
 		}
 		report(plan)
@@ -211,7 +219,7 @@ func Write(ctx context.Context, conn driver.Conn, orgID string, rows Rows, selec
 		if ownership, expiredOwnership, plan, err = planOwnership(ctx, conn, orgID, teams, rows.Ownership, now,
 			providersync.AtlassianTeamLinkKind(Source, rows.UnreadableProjectLinkTeams).Snapshot(scope, providersync.ProveSnapshot(
 				providersync.SnapshotTerm{Holds: rows.ProjectLinksComplete, Reason: snapshotLinkReadsNotEnded}),
-				providersync.AbsenceByWalk[providersync.OwnershipSnapshotRow](providersync.AbsenceWalkByCursor))); err != nil {
+				providersync.AbsenceByListing[providersync.OwnershipSnapshotRow](nil, linkLookups(ctx, prover).Answer))); err != nil {
 			return result, fmt.Errorf("read current team project ownership: %w", err)
 		}
 		report(plan)
@@ -293,7 +301,9 @@ const (
 // those teams is closed or deactivated. The same holds when the scope gate
 // did not prove the run the only Jira integration of the organization: a
 // catalog team outside the answer may be a team of another site.
-func teamsInScope(ctx context.Context, conn driver.Conn, orgID string, rows Rows, scope providersync.ScopeProof) (ids, missing []string, plan providersync.SnapshotPlan, err error) {
+func teamsInScope(
+	ctx context.Context, conn driver.Conn, orgID string, rows Rows, scope providersync.ScopeProof, prover AbsenceProver,
+) (ids, missing []string, plan providersync.SnapshotPlan, err error) {
 	seen := map[string]bool{}
 	var fresh []providersync.TeamSnapshotRow
 	for _, team := range rows.Teams {
@@ -328,7 +338,7 @@ func teamsInScope(ctx context.Context, conn driver.Conn, orgID string, rows Rows
 		func(providersync.TeamSnapshotRow) time.Time { return time.Time{} }, time.Time{},
 		providersync.AtlassianTeamCatalogKind().Snapshot(scope, providersync.ProveSnapshot(
 			providersync.SnapshotTerm{Holds: rows.TeamSearchComplete, Reason: snapshotTeamSearchNotEnded}),
-			providersync.AbsenceByWalk[providersync.TeamSnapshotRow](providersync.AbsenceWalkByCursor)))
+			providersync.AbsenceByListing[providersync.TeamSnapshotRow](nil, teamLookups(ctx, prover).Answer)))
 	for _, retraction := range plan.Retract {
 		id := known[retraction.Open].TeamID
 		ids = append(ids, id)
@@ -707,4 +717,40 @@ func checkTeamIDs(rows Rows) error {
 		}
 	}
 	return nil
+}
+
+// The lookups of one run, one for each cursor kind: each candidate is asked once,
+// inside the budget of the kind (providersync.AbsenceLookupBudget).
+
+func teamLookups(ctx context.Context, prover AbsenceProver) *providersync.AbsenceLookups[providersync.TeamSnapshotRow] {
+	if prover == nil {
+		return providersync.NewAbsenceLookups[providersync.TeamSnapshotRow](ctx, providersync.TeamSnapshotKey, nil)
+	}
+	return providersync.NewAbsenceLookups(ctx, providersync.TeamSnapshotKey,
+		func(ctx context.Context, row providersync.TeamSnapshotRow) providersync.SnapshotAbsence {
+			return prover.TeamAbsence(ctx, row.TeamID)
+		})
+}
+
+func membershipLookups(ctx context.Context, prover AbsenceProver) *providersync.AbsenceLookups[providersync.MembershipSnapshotRow] {
+	if prover == nil {
+		return providersync.NewAbsenceLookups[providersync.MembershipSnapshotRow](ctx, providersync.MembershipSnapshotKey, nil)
+	}
+	return providersync.NewAbsenceLookups(ctx, providersync.MembershipSnapshotKey,
+		func(ctx context.Context, row providersync.MembershipSnapshotRow) providersync.SnapshotAbsence {
+			return prover.MembershipAbsence(ctx, row.TeamID, row.MemberID)
+		})
+}
+
+type linkProver struct{ AbsenceProver }
+
+func (prover linkProver) OwnershipAbsence(ctx context.Context, row providersync.OwnershipSnapshotRow) providersync.SnapshotAbsence {
+	return prover.LinkAbsence(ctx, row.TeamID, row.ProjectID)
+}
+
+func linkLookups(ctx context.Context, prover AbsenceProver) *providersync.AbsenceLookups[providersync.OwnershipSnapshotRow] {
+	if prover == nil {
+		return providersync.NewOwnershipAbsenceLookups(ctx, nil)
+	}
+	return providersync.NewOwnershipAbsenceLookups(ctx, linkProver{prover})
 }

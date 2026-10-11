@@ -17,6 +17,28 @@ import (
 type linearWorkItemsDoer struct {
 	responses []string
 	requests  []*http.Request
+	// lookup answers the per-fact questions of the absence provers (CHAOS-9124):
+	// the query text in, the body out. A nil lookup answers every one of them with
+	// what Linear recorded for an id that does not exist ("Linear says it is
+	// gone"), so a test of the snapshot rule is not about the lookup. The lookups
+	// never consume a scripted response.
+	lookup func(query string) string
+}
+
+// linearLookupQuery says whether a request is one of the two questions of the
+// Linear absence prover (linear_absence.go).
+func linearLookupQuery(query string) bool {
+	return strings.Contains(query, "teams(filter: {key: {eq:") || strings.Contains(query, "project(id:")
+}
+
+func (doer *linearWorkItemsDoer) lookupAnswer(query string) string {
+	if doer.lookup != nil {
+		return doer.lookup(query)
+	}
+	if strings.Contains(query, "project(id:") {
+		return linearRecordedProjectNotFound
+	}
+	return linearRecordedTeamsNotFound
 }
 
 func boolPointer(value bool) *bool { return &value }
@@ -28,6 +50,12 @@ func (doer *linearWorkItemsDoer) Do(request *http.Request) (*http.Response, erro
 	}
 	request.Body = io.NopCloser(strings.NewReader(string(body)))
 	doer.requests = append(doer.requests, request.Clone(request.Context()))
+	if linearLookupQuery(string(body)) {
+		return &http.Response{
+			StatusCode: http.StatusOK, Status: "200 OK", Header: make(http.Header),
+			Body: io.NopCloser(strings.NewReader(doer.lookupAnswer(string(body)))), Request: request,
+		}, nil
+	}
 	if len(doer.responses) == 0 {
 		return nil, io.ErrUnexpectedEOF
 	}

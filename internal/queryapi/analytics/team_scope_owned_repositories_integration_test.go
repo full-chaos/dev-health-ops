@@ -124,6 +124,16 @@ VALUES (?, ?, ?, ?, 'churn_loc', 10, ?, ?, ?, 0.8, 'high', 'ok', 'jev-test', 'ru
 	check("repository A scope (own column U1 + repository row U2)", count(repo(repoA)), 2)
 	check("repository B scope", count(repo(repoB)), 1)
 
+	// An org WITH a complete membership run (prod and bigboy have one): the readers keep only the units of the
+	// latest run, and the team / repository predicates still resolve inside it. U1 and U2 are members; U3 is not.
+	exec(`INSERT INTO work_unit_membership_runs (org_id, run_id, completed_at) VALUES (?, 'run-m1', ?)`, org, at.Add(2*time.Hour))
+	for _, id := range []string{"u1", "u2"} {
+		exec(`INSERT INTO work_unit_membership (org_id, node_type, node_id, work_unit_id, category_kind, category, weight, is_dominant, categorization_status, computed_at, run_id) VALUES (?, 'work_item', ?, ?, 'theme', 'feature_delivery', 1, 1, 'ok', ?, 'run-m1')`, org, "node-"+id, id, at.Add(2*time.Hour))
+	}
+	check("marker org: team A (U1, U2 in the run)", count(team("team-a")), 2)
+	check("marker org: team B (U3 is not in the latest run)", count(team("team-b")), 0)
+	check("marker org: repository A scope", count(repo(repoA)), 2)
+
 	// Evidence quality at team scope follows the same rule.
 	stats, err := Resolve(ctx, client, org, model.AnalyticsRequestInput{
 		Filters:    team("team-a"),

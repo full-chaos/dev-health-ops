@@ -22,14 +22,12 @@ import (
 // production boundary rejects a surviving ambient value instead of relying on
 // that external hygiene alone (D19).
 type workItemsRuntimeConfig struct {
-	statusMappingPath    string
-	investmentConfigPath string
-	statusMapping        *providersync.StatusMapping
+	statusMappingPath string
+	statusMapping     *providersync.StatusMapping
 }
 
 func (runtimeConfig workItemsRuntimeConfig) configured() bool {
-	return runtimeConfig.statusMappingPath != "" &&
-		runtimeConfig.investmentConfigPath != "" && runtimeConfig.statusMapping != nil
+	return runtimeConfig.statusMappingPath != "" && runtimeConfig.statusMapping != nil
 }
 
 func workItemsRuntimeConfigFrom(
@@ -48,24 +46,19 @@ func workItemsRuntimeConfigFrom(
 		statusMappingPath: strings.TrimSpace(
 			cfg.WorkerGithubWorkItemsStatusMappingPath,
 		),
-		investmentConfigPath: strings.TrimSpace(
-			cfg.WorkerGithubWorkItemsInvestmentConfigPath,
-		),
 	}
-	if runtimeConfig.statusMappingPath == "" || runtimeConfig.investmentConfigPath == "" {
+	if runtimeConfig.statusMappingPath == "" {
 		return workItemsRuntimeConfig{}, fmt.Errorf(
-			"%w: native work-items requires explicit status mapping and investment config paths",
+			"%w: native work-items requires an explicit status mapping path",
 			providersync.ErrInvalidConfiguration,
 		)
 	}
-	// NewInvestmentClassifier deliberately preserves Python's legacy
-	// named-missing-file fallback for generic callers. That is not an
-	// activation-safe production configuration: this worker promised two
-	// explicit artifacts, so both must exist as regular files before either
-	// readiness or executor construction can admit the family.
+	// The status mapping must exist as a regular file before either readiness
+	// or executor construction can admit the family. (The investment rule file
+	// is no longer read: the rule classifier is gone, CHAOS-9200; its path
+	// setting is accepted and ignored so a deployment that still sets it starts.)
 	for _, path := range []string{
 		runtimeConfig.statusMappingPath,
-		runtimeConfig.investmentConfigPath,
 	} {
 		info, err := os.Stat(path)
 		if err != nil || !info.Mode().IsRegular() {
@@ -75,7 +68,7 @@ func workItemsRuntimeConfigFrom(
 			)
 		}
 	}
-	// Validate both exact configuration artifacts before a readiness check can
+	// Validate the configuration artifact before a readiness check can
 	// report the route healthy. The per-claim deriver reloads the same explicit
 	// paths to retain ported parsing behavior; this eager validation closes the
 	// startup/configuration hole before any provider connection is opened.
@@ -87,12 +80,6 @@ func workItemsRuntimeConfigFrom(
 		)
 	}
 	runtimeConfig.statusMapping = statusMapping
-	if _, err := providersync.NewInvestmentClassifier(runtimeConfig.investmentConfigPath); err != nil {
-		return workItemsRuntimeConfig{}, fmt.Errorf(
-			"%w: native work-items investment config is unavailable",
-			providersync.ErrInvalidConfiguration,
-		)
-	}
 	return runtimeConfig, nil
 }
 

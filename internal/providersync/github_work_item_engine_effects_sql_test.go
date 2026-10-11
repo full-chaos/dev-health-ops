@@ -23,9 +23,6 @@ func TestGitHubWorkItemEngineInspectQueriesDedupAndFilterOrgInTheSameStatement(
 	issueQuery, _ := githubIssueTypeMetricsInspectQuery(
 		"org-acme", day, githubWorkItemEngineEffectIssueRow(),
 	)
-	classificationQuery, _ := githubInvestmentClassificationInspectQuery(
-		"org-acme", day, githubWorkItemEngineEffectClassificationRow(),
-	)
 
 	cases := []struct {
 		name        string
@@ -37,11 +34,6 @@ func TestGitHubWorkItemEngineInspectQueriesDedupAndFilterOrgInTheSameStatement(
 			"issue_type_metrics_daily", issueQuery,
 			"org_id = ?",
 			"GROUP BY repo_id, created_count, completed_count, active_count",
-		},
-		{
-			"investment_classifications_daily", classificationQuery,
-			"org_id = ?",
-			"GROUP BY repo_id, confidence, rule_id, computed_at",
 		},
 	}
 

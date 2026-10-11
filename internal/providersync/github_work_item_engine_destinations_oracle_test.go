@@ -157,7 +157,7 @@ func TestGitHubIssueTypeMetricsMatchFrozenPythonProduction(t *testing.T) {
 	compareRowsAgainstFrozenOracle(
 		t, "github_work-items_issue-type-metrics", githubWorkItemEngineOracleCases(),
 		func(t *testing.T, input map[string]any) githubIssueTypeMetricsColumns {
-			issueTypes, _, _ := buildGitHubWorkItemEngineOracleRows(t, input)
+			issueTypes := buildGitHubWorkItemEngineOracleRows(t, input)
 			if !input["AllowEmpty"].(bool) && len(issueTypes) == 0 {
 				t.Fatal("oracle case produced no issue-type rows")
 			}
@@ -166,42 +166,10 @@ func TestGitHubIssueTypeMetricsMatchFrozenPythonProduction(t *testing.T) {
 	)
 }
 
-func TestGitHubInvestmentClassificationsMatchFrozenPythonProduction(t *testing.T) {
-	compareRowsAgainstFrozenOracle(
-		t, "github_work-items_investment-classifications", githubWorkItemEngineOracleCases(),
-		func(t *testing.T, input map[string]any) githubInvestmentClassificationColumns {
-			_, classifications, _ := buildGitHubWorkItemEngineOracleRows(t, input)
-			if !input["AllowEmpty"].(bool) && len(classifications) == 0 {
-				t.Fatal("oracle case produced no investment-classification rows")
-			}
-			return newGitHubInvestmentClassificationColumns(classifications)
-		}, nil,
-	)
-}
-
-func TestGitHubInvestmentMetricsMatchFrozenPythonProduction(t *testing.T) {
-	compareRowsAgainstFrozenOracle(
-		t, "github_work-items_investment-metrics", githubWorkItemEngineOracleCases(),
-		func(t *testing.T, input map[string]any) githubInvestmentMetricsColumns {
-			_, _, metrics := buildGitHubWorkItemEngineOracleRows(t, input)
-			// The open-item default case intentionally has no completed metric;
-			// the other two cases must keep the comparison non-vacuous.
-			if input["RequireInvestmentMetrics"].(bool) && len(metrics) == 0 {
-				t.Fatal("completed-item oracle case produced no investment metric rows")
-			}
-			return newGitHubInvestmentMetricsColumns(metrics)
-		}, nil,
-	)
-}
-
 func buildGitHubWorkItemEngineOracleRows(
 	t *testing.T,
 	input map[string]any,
-) (
-	[]githubIssueTypeMetricsDailyRow,
-	[]githubInvestmentClassificationDailyRow,
-	[]githubInvestmentMetricsDailyRow,
-) {
+) []githubIssueTypeMetricsDailyRow {
 	t.Helper()
 	provider := "github"
 	if items, ok := input["WorkItems"].([]any); ok && len(items) > 0 {
@@ -255,11 +223,7 @@ func buildGitHubWorkItemEngineOracleRows(
 		))
 	}
 	statusMapping := loadRealStatusMapping(t)
-	classifier, err := NewInvestmentClassifier(investmentConfigPath(t, "real"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	engine, err := NewGitHubWorkItemEngineDeriver(statusMapping, classifier)
+	engine, err := NewGitHubWorkItemEngineDeriver(statusMapping)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -284,14 +248,8 @@ func buildGitHubWorkItemEngineOracleRows(
 		}
 	}
 	return decodeGitHubWorkItemEngineRows[githubIssueTypeMetricsDailyRow](
-			t, encoded[githubIssueTypeMetricsDestination],
-		),
-		decodeGitHubWorkItemEngineRows[githubInvestmentClassificationDailyRow](
-			t, encoded[githubInvestmentClassificationsDestination],
-		),
-		decodeGitHubWorkItemEngineRows[githubInvestmentMetricsDailyRow](
-			t, encoded[githubInvestmentMetricsDestination],
-		)
+		t, encoded[githubIssueTypeMetricsDestination],
+	)
 }
 
 type githubIssueTypeMetricsColumns struct {
@@ -332,86 +290,6 @@ func newGitHubIssueTypeMetricsColumns(
 		columns.CycleP50Hours = append(columns.CycleP50Hours, row.CycleP50Hours)
 		columns.CycleP90Hours = append(columns.CycleP90Hours, row.CycleP90Hours)
 		columns.LeadP50Hours = append(columns.LeadP50Hours, row.LeadP50Hours)
-		columns.ComputedAt = append(columns.ComputedAt, row.ComputedAt)
-		columns.OrgID = append(columns.OrgID, row.OrgID)
-	}
-	return columns
-}
-
-type githubInvestmentClassificationColumns struct {
-	RepoID         []*uuid.UUID               `json:"repo_id"`
-	Day            []githubWorkItemDerivedDay `json:"day"`
-	ArtifactType   []string                   `json:"artifact_type"`
-	ArtifactID     []string                   `json:"artifact_id"`
-	Provider       []string                   `json:"provider"`
-	InvestmentArea []*string                  `json:"investment_area"`
-	ProjectStream  []string                   `json:"project_stream"`
-	Confidence     []float64                  `json:"confidence"`
-	RuleID         []*string                  `json:"rule_id"`
-	ComputedAt     []time.Time                `json:"computed_at"`
-	OrgID          []string                   `json:"org_id"`
-}
-
-func newGitHubInvestmentClassificationColumns(
-	rows []githubInvestmentClassificationDailyRow,
-) githubInvestmentClassificationColumns {
-	columns := githubInvestmentClassificationColumns{
-		RepoID: []*uuid.UUID{}, Day: []githubWorkItemDerivedDay{}, ArtifactType: []string{},
-		ArtifactID: []string{}, Provider: []string{}, InvestmentArea: []*string{},
-		ProjectStream: []string{}, Confidence: []float64{}, RuleID: []*string{},
-		ComputedAt: []time.Time{}, OrgID: []string{},
-	}
-	for _, row := range rows {
-		columns.RepoID = append(columns.RepoID, row.RepoID)
-		columns.Day = append(columns.Day, row.Day)
-		columns.ArtifactType = append(columns.ArtifactType, row.ArtifactType)
-		columns.ArtifactID = append(columns.ArtifactID, row.ArtifactID)
-		columns.Provider = append(columns.Provider, row.Provider)
-		columns.InvestmentArea = append(columns.InvestmentArea, row.InvestmentArea)
-		columns.ProjectStream = append(columns.ProjectStream, row.ProjectStream)
-		columns.Confidence = append(columns.Confidence, row.Confidence)
-		columns.RuleID = append(columns.RuleID, row.RuleID)
-		columns.ComputedAt = append(columns.ComputedAt, row.ComputedAt)
-		columns.OrgID = append(columns.OrgID, row.OrgID)
-	}
-	return columns
-}
-
-type githubInvestmentMetricsColumns struct {
-	RepoID             []*uuid.UUID               `json:"repo_id"`
-	Day                []githubWorkItemDerivedDay `json:"day"`
-	TeamID             []string                   `json:"team_id"`
-	InvestmentArea     []*string                  `json:"investment_area"`
-	ProjectStream      []string                   `json:"project_stream"`
-	DeliveryUnits      []int                      `json:"delivery_units"`
-	WorkItemsCompleted []int                      `json:"work_items_completed"`
-	PRsMerged          []int                      `json:"prs_merged"`
-	ChurnLOC           []int                      `json:"churn_loc"`
-	CycleP50Hours      []float64                  `json:"cycle_p50_hours"`
-	ComputedAt         []time.Time                `json:"computed_at"`
-	OrgID              []string                   `json:"org_id"`
-}
-
-func newGitHubInvestmentMetricsColumns(
-	rows []githubInvestmentMetricsDailyRow,
-) githubInvestmentMetricsColumns {
-	columns := githubInvestmentMetricsColumns{
-		RepoID: []*uuid.UUID{}, Day: []githubWorkItemDerivedDay{}, TeamID: []string{},
-		InvestmentArea: []*string{}, ProjectStream: []string{}, DeliveryUnits: []int{},
-		WorkItemsCompleted: []int{}, PRsMerged: []int{}, ChurnLOC: []int{},
-		CycleP50Hours: []float64{}, ComputedAt: []time.Time{}, OrgID: []string{},
-	}
-	for _, row := range rows {
-		columns.RepoID = append(columns.RepoID, row.RepoID)
-		columns.Day = append(columns.Day, row.Day)
-		columns.TeamID = append(columns.TeamID, row.TeamID)
-		columns.InvestmentArea = append(columns.InvestmentArea, row.InvestmentArea)
-		columns.ProjectStream = append(columns.ProjectStream, row.ProjectStream)
-		columns.DeliveryUnits = append(columns.DeliveryUnits, row.DeliveryUnits)
-		columns.WorkItemsCompleted = append(columns.WorkItemsCompleted, row.WorkItemsCompleted)
-		columns.PRsMerged = append(columns.PRsMerged, row.PRsMerged)
-		columns.ChurnLOC = append(columns.ChurnLOC, row.ChurnLOC)
-		columns.CycleP50Hours = append(columns.CycleP50Hours, row.CycleP50Hours)
 		columns.ComputedAt = append(columns.ComputedAt, row.ComputedAt)
 		columns.OrgID = append(columns.OrgID, row.OrgID)
 	}

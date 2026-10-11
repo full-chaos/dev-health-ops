@@ -163,7 +163,6 @@ func linearDerivedIntegrationEffects(t *testing.T, claim Claim, now time.Time) [
 	day := newGitHubWorkItemDerivedDay(now)
 	metricDay := newGitHubWorkItemMetricDay(now)
 	teamID, teamName := "linear-team", "Linear Team"
-	area, rule := "feature_delivery", "linear_rule"
 	ratio := 0.5
 	assignee := "linear@example.com"
 	startedAt := now.Add(-2 * time.Hour)
@@ -199,12 +198,6 @@ func linearDerivedIntegrationEffects(t *testing.T, claim Claim, now time.Time) [
 	issueType := githubWorkItemEngineEffectIssueRow()
 	issueType.Day, issueType.Provider, issueType.OrgID, issueType.RepoID = day, "linear", claim.OrgID, &repoID
 	issueType.ComputedAt = now
-	classification := githubWorkItemEngineEffectClassificationRow()
-	classification.Day, classification.Provider, classification.OrgID, classification.RepoID = day, "linear", claim.OrgID, &repoID
-	classification.ComputedAt, classification.InvestmentArea, classification.RuleID = now, &area, &rule
-	investment := githubWorkItemEngineEffectMetricsRow()
-	investment.Day, investment.OrgID, investment.RepoID = day, claim.OrgID, &repoID
-	investment.ComputedAt, investment.InvestmentArea = now, &area
 
 	rows := LinearWorkItemDerivedEffectRows{}
 	rows.AIAttributions = []LinearAIAttributionRow{{
@@ -221,8 +214,6 @@ func linearDerivedIntegrationEffects(t *testing.T, claim Claim, now time.Time) [
 	rows.WorkItemUserMetricsDaily = []LinearWorkItemUserMetricsDailyRow{userMetrics}
 	rows.WorkItemCycleTimes = []LinearWorkItemCycleTimePersistenceRow{cycle}
 	rows.IssueTypeMetricsDaily = []LinearIssueTypeMetricsDailyRow{issueType}
-	rows.InvestmentClassificationsDaily = []LinearInvestmentClassificationDailyRow{classification}
-	rows.InvestmentMetricsDaily = []LinearInvestmentMetricsDailyRow{investment}
 	effects, err := BuildLinearWorkItemDerivedEffects(rows)
 	if err != nil {
 		t.Fatal(err)

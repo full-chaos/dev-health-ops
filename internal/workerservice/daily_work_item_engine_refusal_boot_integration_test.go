@@ -29,7 +29,7 @@ import (
 
 // TestWorkItemEngineFamilyRefusalDoesNotTakeDownTheDailyWorker pins the boot
 // policy of the two daily families that need the work-items status mapping
-// and investment config on disk (work_item_issue_type, work_item_investment).
+// config on disk (work_item_issue_type).
 //
 // A worker that serves the metrics queue without the two artifacts used to
 // fail the build of the whole daily family: no daily table was written and
@@ -80,7 +80,7 @@ func TestWorkItemEngineFamilyRefusalDoesNotTakeDownTheDailyWorker(t *testing.T) 
 		refusals    map[string]workItemEngineRefusalLogLine
 		exposition  string
 	}
-	boot := func(t *testing.T, statusMappingPath, investmentConfigPath string) bootResult {
+	boot := func(t *testing.T, statusMappingPath string) bootResult {
 		t.Helper()
 		domain, err := pgxpool.New(ctx, postgres.URI)
 		if err != nil {
@@ -106,8 +106,7 @@ func TestWorkItemEngineFamilyRefusalDoesNotTakeDownTheDailyWorker(t *testing.T) 
 			WorkerRemainingComplexityConfigPath: filepath.Join(
 				"src", "dev_health_ops", "config", "complexity.yaml",
 			),
-			WorkerGithubWorkItemsStatusMappingPath:    statusMappingPath,
-			WorkerGithubWorkItemsInvestmentConfigPath: investmentConfigPath,
+			WorkerGithubWorkItemsStatusMappingPath: statusMappingPath,
 		}
 		collector, err := jobruntime.NewMetricsCollector(jobruntime.MetricDimensions{})
 		if err != nil {
@@ -164,7 +163,7 @@ func TestWorkItemEngineFamilyRefusalDoesNotTakeDownTheDailyWorker(t *testing.T) 
 
 	t.Run("artifacts missing", func(t *testing.T) {
 		missing := filepath.Join(t.TempDir(), "absent.yaml")
-		result := boot(t, missing, missing)
+		result := boot(t, missing)
 
 		for _, family := range engineFamilies {
 			if slices.Contains(result.constructed, family) {
@@ -206,7 +205,6 @@ func TestWorkItemEngineFamilyRefusalDoesNotTakeDownTheDailyWorker(t *testing.T) 
 	t.Run("artifacts present", func(t *testing.T) {
 		result := boot(t,
 			filepath.Join("src", "dev_health_ops", "config", "status_mapping.yaml"),
-			filepath.Join("src", "dev_health_ops", "config", "investment_areas.yaml"),
 		)
 		for _, family := range engineFamilies {
 			if !slices.Contains(result.constructed, family) {

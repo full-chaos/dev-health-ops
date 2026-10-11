@@ -209,8 +209,6 @@ type GitHubWorkItemsRouteHandler struct {
 
 var githubWorkItemDerivedDestinations = []string{
 	"estimate_coverage_metrics_daily",
-	"investment_classifications_daily",
-	"investment_metrics_daily",
 	"issue_type_metrics_daily",
 	"work_item_cycle_times",
 	"work_item_metrics_daily",

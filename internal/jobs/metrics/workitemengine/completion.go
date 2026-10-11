@@ -38,7 +38,7 @@ func ComputeWorkItemCompletionDaily(
 	dayUTC, end time.Time,
 	resolveTeam TeamResolver,
 ) ([]WorkItemCompletionDailyRow, error) {
-	buckets := make(map[completionKey]*investmentMetricBucket)
+	buckets := make(map[completionKey]*completionBucket)
 	order := make([]completionKey, 0, len(items))
 	for index, item := range items {
 		created := item.CreatedAt.UTC()
@@ -60,7 +60,7 @@ func ComputeWorkItemCompletionDaily(
 		key := completionKey{repoID: newNullableUUIDKey(item.RepoID), teamID: team}
 		bucket := buckets[key]
 		if bucket == nil {
-			bucket = &investmentMetricBucket{}
+			bucket = &completionBucket{}
 			buckets[key] = bucket
 			order = append(order, key)
 		}

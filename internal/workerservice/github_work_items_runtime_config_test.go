@@ -27,13 +27,10 @@ func validGitHubWorkItemsRuntimeConfig(t *testing.T) config.Config {
 		WorkerGithubWorkItemsStatusMappingPath: filepath.Join(
 			root, "src", "dev_health_ops", "config", "status_mapping.yaml",
 		),
-		WorkerGithubWorkItemsInvestmentConfigPath: filepath.Join(
-			root, "src", "dev_health_ops", "config", "investment_areas.yaml",
-		),
 	}
 }
 
-func TestGitHubWorkItemsRuntimeConfigRequiresValidatedExplicitPaths(t *testing.T) {
+func TestGitHubWorkItemsRuntimeConfigRequiresAValidatedExplicitStatusMappingPath(t *testing.T) {
 	t.Setenv("STATUS_MAPPING_PATH", "")
 	valid := validGitHubWorkItemsRuntimeConfig(t)
 	runtimeConfig, err := githubWorkItemsRuntimeConfigFrom(valid)
@@ -41,38 +38,20 @@ func TestGitHubWorkItemsRuntimeConfigRequiresValidatedExplicitPaths(t *testing.T
 		t.Fatal(err)
 	}
 	if !runtimeConfig.configured() ||
-		runtimeConfig.statusMappingPath != valid.WorkerGithubWorkItemsStatusMappingPath ||
-		runtimeConfig.investmentConfigPath != valid.WorkerGithubWorkItemsInvestmentConfigPath {
+		runtimeConfig.statusMappingPath != valid.WorkerGithubWorkItemsStatusMappingPath {
 		t.Fatalf("runtime config = %+v, config = %+v", runtimeConfig, valid)
 	}
 
 	root := githubWorkItemsConfigRepoRoot(t)
 	for name, cfg := range map[string]config.Config{
-		"missing status path": {
-			WorkerGithubWorkItemsInvestmentConfigPath: valid.WorkerGithubWorkItemsInvestmentConfigPath,
-		},
-		"blank investment path": {
-			WorkerGithubWorkItemsStatusMappingPath:    valid.WorkerGithubWorkItemsStatusMappingPath,
-			WorkerGithubWorkItemsInvestmentConfigPath: " ",
-		},
+		"missing status path": {},
+		"blank status path":   {WorkerGithubWorkItemsStatusMappingPath: " "},
 		"missing status file": {
-			WorkerGithubWorkItemsStatusMappingPath:    filepath.Join(root, "missing-status.yaml"),
-			WorkerGithubWorkItemsInvestmentConfigPath: valid.WorkerGithubWorkItemsInvestmentConfigPath,
+			WorkerGithubWorkItemsStatusMappingPath: filepath.Join(root, "missing-status.yaml"),
 		},
 		"malformed status file": {
 			WorkerGithubWorkItemsStatusMappingPath: filepath.Join(
 				root, "internal", "providersync", "testdata", "status_mapping_configs", "structural_root_list.yaml",
-			),
-			WorkerGithubWorkItemsInvestmentConfigPath: valid.WorkerGithubWorkItemsInvestmentConfigPath,
-		},
-		"missing investment file": {
-			WorkerGithubWorkItemsStatusMappingPath:    valid.WorkerGithubWorkItemsStatusMappingPath,
-			WorkerGithubWorkItemsInvestmentConfigPath: filepath.Join(root, "missing-investment.yaml"),
-		},
-		"malformed investment file": {
-			WorkerGithubWorkItemsStatusMappingPath: valid.WorkerGithubWorkItemsStatusMappingPath,
-			WorkerGithubWorkItemsInvestmentConfigPath: filepath.Join(
-				root, "internal", "providersync", "testdata", "investment_configs", "raises_empty.yaml",
 			),
 		},
 	} {

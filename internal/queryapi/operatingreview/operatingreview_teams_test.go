@@ -3,6 +3,7 @@ package operatingreview
 import (
 	"context"
 	"errors"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
 	"reflect"
 	"sort"
 	"strings"
@@ -146,6 +147,17 @@ func TestResolveInput_SeveralTeamsBindTheSelectionOnTheTeamReadsOnly(t *testing.
 			}
 			continue
 		}
+		if table == "investment" {
+			// CHAOS-9199: the canonical read narrows by the repositories the teams OWN, never by a team column.
+			owned, ok := bindingOf(bindings, teamscope.BindingTeamIDs)
+			if !strings.Contains(statement, "team_repo_ownership") || !ok || !reflect.DeepEqual(owned, []string{"team-a", "team-b"}) {
+				t.Errorf("call %d (investment): not scoped by owned repositories (binding %v)", call, owned)
+			}
+			if strings.Contains(statement, "team_id IN {team_ids:Array(String)}") && !strings.Contains(statement, "team_repo_ownership") {
+				t.Errorf("call %d (investment): reads a team column", call)
+			}
+			continue
+		}
 		if !strings.Contains(statement, "AND team_id IN {team_ids:Array(String)}") || !bound || !reflect.DeepEqual(ids, []string{"team-a", "team-b"}) {
 			t.Errorf("call %d (%s): the selection is not bound (team_ids = %v)", call, table, ids)
 		}
@@ -156,7 +168,6 @@ func TestResolveInput_SeveralTeamsBindTheSelectionOnTheTeamReadsOnly(t *testing.
 		if groupBy, grouped := map[string]string{
 			"work_items":      "GROUP BY day, provider, work_scope_id, team_id",
 			"state_durations": "GROUP BY day, provider, work_scope_id, status, team_id",
-			"investment":      "GROUP BY day, repo_id, investment_area, project_stream, team_id",
 		}[table]; grouped && !strings.Contains(statement, groupBy) {
 			t.Errorf("call %d (%s): the inner read does not group by team (%q)", call, table, groupBy)
 		}
@@ -211,7 +222,7 @@ func TestOrganisationMetricsAreTheOnesWhoseReadsHaveNoTeam(t *testing.T) {
 	teamRows := periodRows{
 		workItems:      []workItemsRow{{itemsCompleted: 1, cycleTimeP50Hours: fp(1), wipAgeP90Hours: fp(1)}},
 		stateDurations: []stateDurationRow{{itemsTouched: 1, durationHours: 1}},
-		investment:     []investmentRow{{investmentArea: "ktlo", deliveryUnits: 1}},
+		investment:     []investmentRow{{theme: "maintenance", effort: 1}},
 		aiImpact: []aiImpactRow{{prsTotal: 2, aiAssistedPrs: 1, aiCycleTimeDeltaHours: fp(1), aiReviewAmplification: fp(1),
 			reworkDragRate: fp(0.1), testGapRate: fp(0.1), incidentDragRate: fp(0.1)}},
 		aiGovernance: []aiGovernanceRawRow{{aiArtifacts: 1, declaredArtifacts: 1}},
@@ -287,10 +298,10 @@ func TestUnionOfTwoTeams_IsNotAMeanOfTeamValues(t *testing.T) {
 	}
 
 	// Investment units: a count, summed.
-	invUnion := periodRows{investment: []investmentRow{{investmentArea: "ktlo", deliveryUnits: 7}}}
-	invA := periodRows{investment: []investmentRow{{investmentArea: "ktlo", deliveryUnits: 3}}}
-	invB := periodRows{investment: []investmentRow{{investmentArea: "ktlo", deliveryUnits: 4}}}
-	if got, sum := valueOf(t, invUnion, "ktlo_units"), valueOf(t, invA, "ktlo_units")+valueOf(t, invB, "ktlo_units"); got != 7 || got != sum {
+	invUnion := periodRows{investment: []investmentRow{{theme: "maintenance", effort: 7}}}
+	invA := periodRows{investment: []investmentRow{{theme: "maintenance", effort: 3}}}
+	invB := periodRows{investment: []investmentRow{{theme: "maintenance", effort: 4}}}
+	if got, sum := valueOf(t, invUnion, "maintenance_effort"), valueOf(t, invA, "maintenance_effort")+valueOf(t, invB, "maintenance_effort"); got != 7 || got != sum {
 		t.Errorf("ktlo_units = %v, want the sum %v", got, sum)
 	}
 }

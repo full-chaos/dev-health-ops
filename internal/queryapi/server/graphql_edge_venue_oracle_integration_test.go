@@ -707,6 +707,7 @@ func edgeCompare(t *testing.T, goBase string, cs []edgeCase, python []venueoracl
 			body = sankeyCoverageDivergenceNormalize(request, body)
 			body = noDataStatusNormalize(request, body, operatingReviewTablesEmpty)
 			body = goOnlyMetricsNormalize(request, body)
+			body = investmentSectionNormalize(request, body)
 			if base != nil {
 				body = base(request, body)
 			}
@@ -717,6 +718,9 @@ func edgeCompare(t *testing.T, goBase string, cs []edgeCase, python []venueoracl
 				t.Errorf("%s: %s", request.Name, why)
 			}
 			if ok, why := goOnlyMetricsInspect(request, goResponse.Body); !ok {
+				t.Errorf("%s: %s", request.Name, why)
+			}
+			if ok, why := investmentSectionInspect(request, goResponse.Body); !ok {
 				t.Errorf("%s: %s", request.Name, why)
 			}
 			if ok, why := sankeyCoverageDivergenceInspect(request, goResponse.Body); !ok {

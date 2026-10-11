@@ -526,51 +526,27 @@ func TestAIGovernanceCoverage_RatioOfSumsWeightsByArtifactCount(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// investmentKey / investmentUnits -- ports _investment_key/_investment_units
-// (metrics/operating_review.py:883-902).
+// investmentUnits: the effort per canonical theme (CHAOS-9199).
 // ---------------------------------------------------------------------------
 
-func TestInvestmentKey(t *testing.T) {
-	cases := map[string]string{
-		"ktlo":                  "ktlo",
-		"maintenance":           "ktlo",
-		"maintenance_tech_debt": "ktlo",
-		"new_value":             "new_value",
-		"feature_delivery":      "new_value",
-		"features":              "new_value",
-		"security":              "security",
-		"risk_security":         "security",
-		"infra":                 "infra",
-		"infrastructure":        "infra",
-		"operational_support":   "infra",
-	}
-	for input, want := range cases {
-		got, ok := investmentKey(input)
-		if !ok || got != want {
-			t.Errorf("investmentKey(%q) = (%q, %v), want (%q, true)", input, got, ok, want)
-		}
-	}
-	if _, ok := investmentKey("something_else"); ok {
-		t.Errorf("investmentKey(unknown) should return ok=false")
-	}
-}
-
-func TestInvestmentUnits_SumsByKeyIgnoresUnknown(t *testing.T) {
+func TestInvestmentUnits_SumsByThemeIgnoresUnknown(t *testing.T) {
 	rows := []investmentRow{
-		{investmentArea: "KTLO", deliveryUnits: 3},
-		{investmentArea: " maintenance ", deliveryUnits: 2},
-		{investmentArea: "new_value", deliveryUnits: 10},
-		{investmentArea: "unmapped_area", deliveryUnits: 999},
+		{theme: "maintenance", effort: 3},
+		{theme: "maintenance", effort: 2},
+		{theme: "feature_delivery", effort: 10},
+		{theme: "ktlo", effort: 999}, // the retired legacy vocabulary is not a theme
 	}
 	units := investmentUnits(rows)
-	if units["ktlo"] != 5 {
-		t.Errorf("ktlo = %v, want 5", units["ktlo"])
+	if units["maintenance"] != 5 || units["feature_delivery"] != 10 {
+		t.Errorf("maintenance/feature_delivery = %v/%v, want 5/10", units["maintenance"], units["feature_delivery"])
 	}
-	if units["new_value"] != 10 {
-		t.Errorf("new_value = %v, want 10", units["new_value"])
+	for _, theme := range []string{"operational", "quality", "risk"} {
+		if units[theme] != 0 {
+			t.Errorf("%s should stay 0, got %v", theme, units[theme])
+		}
 	}
-	if units["security"] != 0 || units["infra"] != 0 {
-		t.Errorf("security/infra should stay 0, got %v/%v", units["security"], units["infra"])
+	if len(units) != 5 {
+		t.Errorf("units holds %d keys, want the 5 canonical themes", len(units))
 	}
 }
 

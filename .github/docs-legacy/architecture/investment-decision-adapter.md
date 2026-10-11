@@ -262,6 +262,13 @@ Notes:
   "investment served decision complete" and field `skipped_terminal` of
   "investment materialization complete" (both inside `skipped_existing`). The outcome
   metric counts units asked of the backend, so a skipped unit is not in it.
+- FALLBACK ROWS (CHAOS-9270): a unit under the evidence gate (fewer than 300 text
+  characters) gets the fixed `insufficient_evidence` row before any model call, on both
+  provider paths. Skip-existing reuses that row for the same input hash and stamp: no
+  row is written, the unit's repo-effort rows still are. A changed hash (a unit that
+  gains evidence leaves the fallback) or stamp is processed again. A unit with no text
+  source (`no_text_sources`) is not covered. The skip is counted in `skipped_existing`
+  and in field `skipped_fallback` of "investment materialization complete".
 - A unit cancelled by the run context has no row from this run.
 - Every unit asked of the served backend is in exactly one outcome count of the metric
   (section 6), on every exit of the run.

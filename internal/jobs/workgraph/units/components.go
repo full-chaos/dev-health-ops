@@ -508,7 +508,7 @@ func nodeLess(left, right NodeKey) bool {
 // Phase (b): whatever the edge phase cannot resolve -- a fragment held together
 // purely by max-confidence edges -- goes to removeHubs, gated by partitionHubs
 // (see removeHubs's doc for what the flag means and why it exists).
-func splitOversizedComponent(nodes []NodeKey, edges []Edge, maxNodes int, partitionHubs bool, stats *BuildStats) []Component {
+func splitOversizedComponent(nodes []NodeKey, edges []Edge, maxNodes int, partitionHubs, protectPullRequestLinks bool, stats *BuildStats) []Component {
 	nodeSet := newNodeIndex()
 	for _, node := range nodes {
 		nodeSet.intern(node)
@@ -547,6 +547,15 @@ func splitOversizedComponent(nodes []NodeKey, edges []Edge, maxNodes int, partit
 	for _, edge := range edges {
 		switch {
 		case edge.Confidence >= maxConfidence:
+			protected = append(protected, edge)
+		case protectPullRequestLinks && isPullRequestIssueLink(edge):
+			// Entity tree (AGENTS.md): Repository <> Pull request <> Issue.
+			// A pull request -> issue link of ANY admitted tier is the
+			// relation of record, so the split must not cut it. An
+			// explicit_text link sits below the max confidence, and the
+			// (confidence, edge_id) drop order below cut such links by edge-id
+			// hash, leaving the pull request's own work item alone in a unit
+			// with no pull request node and effort 0 (CHAOS-9267).
 			protected = append(protected, edge)
 		case edge.Confidence < maxConfidence:
 			droppable = append(droppable, edge)
@@ -692,7 +701,42 @@ func nodeListLess(left, right []NodeKey) bool {
 // given, and a caller that fetches without that filter will percolate thousands
 // of unrelated nodes into one component.
 func BuildComponents(edges []Edge, maxComponentNodes *int, partitionHubs bool, stats *BuildStats) []Component {
-	maxNodes := ResolveMaxComponentNodes(maxComponentNodes)
+	return BuildComponentsWithOptions(edges, BuildOptions{MaxComponentNodes: maxComponentNodes, PartitionHubs: partitionHubs}, stats)
+}
+
+// ProtectPullRequestLinks is the value every LIVE consumer (the materializer
+// and the membership backfill) passes as BuildOptions.ProtectPullRequestLinks.
+// One constant, read by both, because two consumers disagreeing mint different
+// work_unit_ids for the same graph (see partitionHubs above).
+const ProtectPullRequestLinks = true
+
+// BuildOptions are the knobs of BuildComponentsWithOptions.
+type BuildOptions struct {
+	// MaxComponentNodes nil resolves through ResolveMaxComponentNodes.
+	MaxComponentNodes *int
+	// PartitionHubs is BuildComponents's partitionHubs.
+	PartitionHubs bool
+	// ProtectPullRequestLinks makes the oversized-component split treat every
+	// pull request -> issue edge like a max-confidence edge: phase (a) never
+	// drops it. DECLARED DIVERGENCE FROM PYTHON (CHAOS-9267): the frozen Python
+	// split drops such links when they sit below the component's max
+	// confidence. BuildComponents (the form the Python goldens and oracles
+	// call) keeps false, so no frozen input is touched.
+	ProtectPullRequestLinks bool
+}
+
+// isPullRequestIssueLink reports a pull request -> issue edge, the same for a
+// GitHub pull request and a GitLab merge request (both are "pr" nodes).
+func isPullRequestIssueLink(edge Edge) bool {
+	return edge.SourceType == "pr" && edge.TargetType == "issue"
+}
+
+// BuildComponentsWithOptions is BuildComponents with the declared-divergence
+// switch; see BuildOptions.
+func BuildComponentsWithOptions(edges []Edge, opts BuildOptions, stats *BuildStats) []Component {
+	maxNodes := ResolveMaxComponentNodes(opts.MaxComponentNodes)
+	partitionHubs := opts.PartitionHubs
+	protectPullRequestLinks := opts.ProtectPullRequestLinks
 
 	result := make([]Component, 0)
 	for _, discovered := range discoverComponents(edges) {
@@ -714,7 +758,7 @@ func BuildComponents(edges []Edge, maxComponentNodes *int, partitionHubs bool, s
 		if stats != nil {
 			stats.OversizedComponents++
 		}
-		result = append(result, splitOversizedComponent(unitNodes, discovered.Edges, maxNodes, partitionHubs, stats)...)
+		result = append(result, splitOversizedComponent(unitNodes, discovered.Edges, maxNodes, partitionHubs, protectPullRequestLinks, stats)...)
 	}
 	return result
 }

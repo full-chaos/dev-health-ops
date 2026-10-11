@@ -61,4 +61,7 @@ A value is meaningful only beside those choices. An empty or unavailable value i
 
 ## Keep context through the evidence path
 
+The **Sources** entry in the top bar and the **View evidence** action in a page header open the Evidence drawer for the current page.
+
+
 When you open a segment, point, report, or Work Graph relationship, keep the originating context visible or record it. The supporting artifact may have its own dates and provider labels; verify that it belongs to the selected analytical window before using it to explain the result.

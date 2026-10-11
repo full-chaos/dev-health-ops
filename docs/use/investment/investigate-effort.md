@@ -33,13 +33,13 @@ Keep the scope, period, and filters stable while moving between the mix and its 
 
 ## 1. Start with the full theme mix
 
-Open Investment Mix and read the complete distribution before selecting a segment. The canonical themes are fixed across teams and providers; source issue types and labels are normalized inputs rather than the displayed truth.
+Open Investment. The **Overview** tab shows the Investment mix. Read the complete distribution before selecting a segment. The canonical themes are fixed across teams and providers; source issue types and labels are normalized inputs rather than the displayed truth.
 
 Read the largest shapes as the largest **effort-weighted contributions** to the current positive total. A 30% share does not mean 30% of tickets or people. [Investment Mix](investment-mix.md) explains the visual encodings and exact reading order.
 
 ## 2. Check evidence quality and data state
 
-Before interpreting a difference, identify whether the result is complete enough for the question:
+Before interpreting a difference, identify whether the result is complete enough for the question. The **Confidence** tab shows classification confidence, evidence quality, attribution coverage, and rework:
 
 - **Evidence quality** describes the strength of corroboration behind the categorization.
 - **Coverage** describes whether the expected source population is represented.
@@ -62,7 +62,7 @@ WorkUnits do not appear as categories. A WorkUnit can contribute to more than on
 
 ## 4. Follow the selection to supporting work
 
-Open the available evidence action for the selected theme or subcategory. Inspect the WorkUnits and their supported issues, pull requests, commits, incidents, dates, and source context.
+Open the **Evidence** tab, or use the evidence action for the selected theme or subcategory. Inspect the WorkUnits and their supported issues, pull requests, commits, incidents, dates, and source context.
 
 This step distinguishes explanations the chart cannot choose between. A larger maintenance share, for example, can reflect an intentional refactor, a migration, recurring repair, or another kind of work. The distribution locates the question; the source artifacts explain the context.
 

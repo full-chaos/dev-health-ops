@@ -125,7 +125,7 @@ source_path	target_path	disposition	migration_phase	source_file
 /user-guide/views/capacity-planning/	/use/plan-and-improve/capacity-planning/	move-and-rewrite	Phase 6	docs/user-guide/views/capacity-planning.md
 /user-guide/views/code-hotspots/	/use/code-and-relationships/code-hotspots/	move-and-rewrite	Phase 6	docs/user-guide/views/code-hotspots.md
 /user-guide/views/flame-diagrams/	/use/code-and-relationships/flame-diagrams/	move-and-rewrite	Phase 6	docs/user-guide/views/flame-diagrams.md
-/user-guide/views/investment-expense/	/use/investment/investment-expense/	move-and-rewrite	Phase 6	docs/user-guide/views/investment-expense.md
+/user-guide/views/investment-expense/	/use/investment/	retire	Phase 6	docs/user-guide/views/investment-expense.md
 /user-guide/views/investment-flows/	/use/investment/investment-flows/	move-and-rewrite	Phase 6	docs/user-guide/views/investment-flows.md
 /user-guide/views/investment-mix/	/use/investment/investment-mix/	move-and-rewrite	Phase 5	docs/user-guide/views/investment-mix.md
 /user-guide/views/pr-flow/	/use/delivery-flow/pr-flow/	move-and-rewrite	Phase 6	docs/user-guide/views/pr-flow.md
@@ -134,3 +134,6 @@ source_path	target_path	disposition	migration_phase	source_file
 /user-guide/work-graph/	/use/code-and-relationships/work-graph/	merge-and-rewrite	Phase 6	docs/user-guide/work-graph.md
 /visualizations/patterns/	/contribute/documentation/write-and-review/	move-and-rewrite	Phase 8	docs/visualizations/patterns.md
 /webhooks/	/integrate/webhooks/	move-and-rewrite	Phase 8	docs/webhooks.md
+/use/ai-workflows/ask-dev-questions/	/use/ai-workflows/	retire	Phase 6	docs/use/ai-workflows/ask-dev-questions.md
+/use/ai-workflows/ask-dev-answers/	/use/ai-workflows/	retire	Phase 6	docs/use/ai-workflows/ask-dev-answers.md
+/use/investment/investment-expense/	/use/investment/	retire	Phase 6	docs/use/investment/investment-expense.md

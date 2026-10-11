@@ -26,7 +26,7 @@ Use a quadrant when one metric is not enough to frame the question. Common pairi
 | WIP × Throughput | Is active work accumulating faster than it completes? |
 | Review load × Review latency | Is review demand moving with waiting time? |
 
-The exact pairs, labels, units, thresholds, and population are defined by the current product surface. Do not carry the meaning of a zone from one pair into another.
+On **Metrics**, each tab shows one pair: Churn × Throughput on **DORA**, Cycle Time × Throughput on **Flow**, and WIP × Throughput on **Throughput**. The exact pairs, labels, units, thresholds, and population are defined by the current product surface. Do not carry the meaning of a zone from one pair into another.
 
 ## What the page shows
 

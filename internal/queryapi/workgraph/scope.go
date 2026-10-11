@@ -505,7 +505,6 @@ func detectMembershipDegradedReason(ctx context.Context, client QueryClient, org
                     SELECT count()
                     FROM work_unit_investments
                     WHERE org_id = {org_id:String}
-                      AND categorization_status != 'normalized_legacy'
                 ) AS investment_rows
         `, markerSQL)
 

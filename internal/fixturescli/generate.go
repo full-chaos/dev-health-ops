@@ -178,6 +178,17 @@ func LoadFrozenWorld(p GenerateParams) (FrozenWorld, error) {
 	if world.Params != p {
 		return FrozenWorld{}, refuse
 	}
+	// A table the schema no longer has (retiredTables) is not part of the world a load reproduces: the
+	// file stays as recorded and pinned, and the table is left out here, named in the log.
+	kept := world.Tables[:0:0]
+	for _, table := range world.Tables {
+		if retiredTables[table.Name] {
+			logRetiredTable(context.Background(), "generate", table.Name)
+			continue
+		}
+		kept = append(kept, table)
+	}
+	world.Tables = kept
 	return world, nil
 }
 

@@ -203,8 +203,8 @@ measured here"; zero would mean "measured, and none of it is team fallback".
 > **Removed (CHAOS-9200, chris 2026-10-11).** The rule classifier, `investment_areas.yaml` and the Go and Python
 > code that loaded it are deleted: no rule-based investment classification is computed or stored. The daily
 > family `work_item_investment` writes `work_item_completion_daily` (see above); `investment_metrics_daily` and
-> `investment_classifications_daily` receive no new rows and no reader reads them; their rows stay until a later,
-> separate drop. The paragraphs below describe how those tables were written and read BEFORE this change (the
+> `investment_classifications_daily` were dropped by ClickHouse migration 120 (CHAOS-9302): the tables and their rows
+> are gone. The migrations that created them stay in the chain. The paragraphs below describe how those tables were written and read BEFORE this change (the
 > daily writer and the newest-row-per-key read rule): history for reading old rows, not current behaviour.
 
 `investment_metrics_daily` and its feeder rule set `src/dev_health_ops/config/investment_areas.yaml`

@@ -858,9 +858,9 @@ unchanged.
   earlier one in the ReplacingMergeTree daily tables, so readers that take the newest row
   count the day once. Raw reads of the plain MergeTree tables (`work_item_completion_daily`,
   `issue_type_metrics_daily`; the daily job no longer writes `investment_metrics_daily` or
-  `investment_classifications_daily`, CHAOS-9264) and of the view
-  `v_investment_flow_edges` count every generation of a day; any second run of a day does
-  that, with or without a tag. A rerun deletes no row: a row stored under a key
+  `investment_classifications_daily`, CHAOS-9264; both tables and the view
+  `v_investment_flow_edges` were dropped by migration 120, CHAOS-9302) count every
+  generation of a day; any second run of a day does that, with or without a tag. A rerun deletes no row: a row stored under a key
   that the new run no longer produces stays, and only the writer of that table can zero it.
 - Output: a call with a tag prints `rerun_tag` and, per day, `started` (`false` when the
   run of that tag and day was already there). The CLI is a one-shot process with no metrics

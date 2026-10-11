@@ -141,9 +141,12 @@ import (
 	"github.com/full-chaos/dev-health-go/clickhouse"
 
 	"github.com/full-chaos/dev-health-ops/internal/jobs/metrics/changefailure"
+	"github.com/full-chaos/dev-health-ops/internal/jobs/workgraph/units"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/deltarule"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graph/model"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/graphqldate"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/investmentexplain"
+	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
 	"github.com/full-chaos/dev-health-ops/internal/storage/clickhouse/liverow"
 )
 
@@ -894,49 +897,49 @@ func fetchIncidentsAgg(ctx context.Context, client QueryClient, orgID string, st
 	return out, rows.Err()
 }
 
+// investmentRow is one canonical theme of the week: its effort over the units that END in the
+// week (the Jev categorization, work_unit_investments: the Investment page's own read; CHAOS-9199).
 type investmentRow struct {
-	investmentArea string
-	deliveryUnits  float64
+	theme  string
+	effort float64
 }
 
-// fetchInvestment ports the "investment" query verbatim
-// (metrics/operating_review.py:282-301).
-func fetchInvestment(ctx context.Context, client QueryClient, orgID string, teams teamSelection, start, end time.Time) ([]investmentRow, error) {
-	teamFilter, teamGroup, teamBinding := teamClauses(teams)
-	query := `
-        SELECT investment_area, sum(delivery_units) AS delivery_units
-        FROM (
-          SELECT
-            day,
-            repo_id,
-            investment_area,
-            project_stream,
-            argMax(delivery_units, computed_at) AS delivery_units
-          FROM investment_metrics_daily
-          WHERE org_id = {org_id:String}
-            ` + teamFilter + `
-            AND day >= {start:Date} AND day < {end:Date}
-          GROUP BY day, repo_id, investment_area, project_stream` + teamGroup + liveRowHaving("investment_metrics_daily") + `
-        )
-        GROUP BY investment_area`
+// ownershipAsOf is the instant team ownership is read at: the week's end, or now for a week that has
+// not ended (ownership is as-synced, never historical).
+func ownershipAsOf(weekEnd time.Time) time.Time {
+	if now := time.Now().UTC(); weekEnd.After(now) {
+		return now
+	}
+	return weekEnd
+}
 
-	bindings := periodBindings(orgID, start, end, teamBinding)
-	rows, err := client.Query(ctx, query, bindings)
+// fetchInvestment reads the week's effort per canonical theme from the categorization the
+// Investment page reads (investmentexplain.FetchInvestmentThemeEffort: the latest row of each
+// unit, every categorization status, a unit dated by its END day as the Home tile dates it).
+// A week with units but no effort stores zeros (a stored zero is not a missing week).
+// A team selection narrows to the repositories the teams own (teamscope), never to a team column.
+// DECLARED DIVERGENCE from the reference, which summed delivery_units of
+// investment_metrics_daily by the legacy rule classifier's investment_area (CHAOS-9195, D5933).
+func fetchInvestment(ctx context.Context, client QueryClient, orgID string, teams teamSelection, start, end time.Time) ([]investmentRow, error) {
+	reader, err := investmentexplain.NewReader(client)
+	if err != nil {
+		return nil, fmt.Errorf("operatingreview: investment: %w", err)
+	}
+	filters := investmentexplain.BreakdownFilters{OrgID: orgID, StartTS: start, EndTS: end, DatedByEnd: true}
+	if len(teams) > 0 {
+		filters.TeamScopeCondition, filters.TeamScopeBindings = teamscope.RepoCondition(orgID, "repo_id", []string(teams), ownershipAsOf(end))
+	}
+	themeRows, err := reader.FetchInvestmentThemeEffort(ctx, filters)
 	if err != nil {
 		return nil, fmt.Errorf("operatingreview: investment query: %w", err)
 	}
-	defer rows.Close()
-
 	var out []investmentRow
-	for rows.Next() {
-		var area string
-		var deliveryUnits uint64
-		if scanErr := rows.Scan(&area, &deliveryUnits); scanErr != nil {
-			return nil, fmt.Errorf("operatingreview: investment scan: %w", scanErr)
+	for _, row := range themeRows {
+		if units.IsTheme(row.Theme) {
+			out = append(out, investmentRow{theme: row.Theme, effort: row.Effort})
 		}
-		out = append(out, investmentRow{investmentArea: area, deliveryUnits: float64(deliveryUnits)})
 	}
-	return out, rows.Err()
+	return out, nil
 }
 
 type aiImpactRow struct {
@@ -1922,53 +1925,27 @@ func firstNonZero(values ...float64) float64 {
 	return 0.0
 }
 
-// investmentKey ports _investment_key (metrics/operating_review.py:
-// 893-902) verbatim.
-func investmentKey(area string) (string, bool) {
-	normalized := area
-	normalized = replaceAll(normalized, "_", " ")
-	normalized = replaceAll(normalized, "/", " ")
-	switch normalized {
-	case "ktlo", "maintenance", "maintenance tech debt":
-		return "ktlo", true
-	case "new value", "feature delivery", "features":
-		return "new_value", true
-	case "security", "risk security":
-		return "security", true
-	case "infra", "infrastructure", "operational support":
-		return "infra", true
-	default:
-		return "", false
-	}
+// investmentThemes is the fixed theme order of the Investment section (the taxonomy's own order).
+var investmentThemes = []struct{ key, label string }{
+	{"feature_delivery", "Feature delivery"},
+	{"operational", "Operational / support"},
+	{"maintenance", "Maintenance / tech debt"},
+	{"quality", "Quality / reliability"},
+	{"risk", "Risk / security"},
 }
 
-func replaceAll(s, old, new string) string {
-	out := make([]byte, 0, len(s))
-	for i := 0; i < len(s); i++ {
-		if s[i] == old[0] && len(old) == 1 {
-			out = append(out, new...)
-			continue
-		}
-		out = append(out, s[i])
-	}
-	return string(out)
-}
-
-// investmentUnits ports _investment_units (metrics/operating_review.py:
-// 883-890) verbatim, including str(area).strip().lower() (Python's
-// `.strip()` trims ASCII whitespace; Go's strings.TrimSpace matches for
-// every input this column actually carries -- LowCardinality(String)
-// investment_area values from a fixed producer vocabulary, never
-// arbitrary Unicode whitespace).
+// investmentUnits is the effort per canonical theme; a theme with no effort is 0.
 func investmentUnits(rows []investmentRow) map[string]float64 {
-	units := map[string]float64{"ktlo": 0.0, "new_value": 0.0, "security": 0.0, "infra": 0.0}
+	out := make(map[string]float64, len(investmentThemes))
+	for _, theme := range investmentThemes {
+		out[theme.key] = 0.0
+	}
 	for _, row := range rows {
-		area := lowerTrim(row.investmentArea)
-		if key, ok := investmentKey(area); ok {
-			units[key] += row.deliveryUnits
+		if _, ok := out[row.theme]; ok {
+			out[row.theme] += row.effort
 		}
 	}
-	return units
+	return out
 }
 
 func lowerTrim(s string) string {
@@ -2169,17 +2146,24 @@ func reliabilitySection(current, prior periodRows) reviewSection {
 	})
 }
 
-// investmentSection ports _investment_section (metrics/operating_review.py:
-// 572-614) verbatim.
+// investmentSection is the week's effort per canonical theme (CHAOS-9199). Feature delivery
+// reads higher-is-better and maintenance lower-is-better, as "new value" and "KTLO" did; the
+// other themes are neutral.
 func investmentSection(current, prior periodRows) reviewSection {
 	currentUnits := investmentUnits(current.investment)
 	priorUnits := investmentUnits(prior.investment)
-	return buildSection("investment", "Investment", []reviewMetric{
-		buildMetric("ktlo_units", "KTLO", currentUnits["ktlo"], priorUnits["ktlo"], "delivery units", lowerIsBetter).dataIn(current, prior, hasInvestmentRows),
-		buildMetric("new_value_units", "New value", currentUnits["new_value"], priorUnits["new_value"], "delivery units", higherIsBetter).dataIn(current, prior, hasInvestmentRows),
-		buildMetric("security_units", "Security", currentUnits["security"], priorUnits["security"], "delivery units", neutral).dataIn(current, prior, hasInvestmentRows),
-		buildMetric("infra_units", "Infra", currentUnits["infra"], priorUnits["infra"], "delivery units", neutral).dataIn(current, prior, hasInvestmentRows),
-	})
+	metrics := make([]reviewMetric, 0, len(investmentThemes))
+	for _, theme := range investmentThemes {
+		direction := neutral
+		switch theme.key {
+		case "feature_delivery":
+			direction = higherIsBetter
+		case "maintenance":
+			direction = lowerIsBetter
+		}
+		metrics = append(metrics, buildMetric(theme.key+"_effort", theme.label, currentUnits[theme.key], priorUnits[theme.key], "effort", direction).dataIn(current, prior, hasInvestmentRows))
+	}
+	return buildSection("investment", "Investment", metrics)
 }
 
 // aiWorkflowSection ports _ai_workflow_section (metrics/operating_review.py:

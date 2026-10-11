@@ -65,7 +65,7 @@ cross-team behavior per metric.
 
 | Metric key | Aggregation across teams | Notes |
 |------------|--------------------------|-------|
-| `ktlo_units` / `new_value_units` / `security_units` / `infra_units` (`delivery_units`) | **SUM** | Total org investment per area. |
+| `feature_delivery_effort` / `operational_effort` / `maintenance_effort` / `quality_effort` / `risk_effort` (`effort`) | **SUM** | Effort of the units that END in the week, per canonical theme (the Jev categorization, `work_unit_investments`; a team = the repositories it owns). Replaces `ktlo_units` / `new_value_units` / `security_units` / `infra_units` (legacy rule classifier; CHAOS-9199, D5940). |
 
 ### AI Workflow Intelligence
 

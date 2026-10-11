@@ -109,6 +109,20 @@ CREATE TABLE work_unit_investment_quotes (
 ) ENGINE = ReplacingMergeTree(computed_at)
 ORDER BY (org_id, work_unit_id, source_id, quote);
 
+CREATE TABLE work_unit_repo_effort (
+    work_unit_id String,
+    repo_id Nullable(UUID),
+    effort_metric String,
+    effort_value Float64,
+    allocation_weight Float64,
+    allocation_source String,
+    repo_source Nullable(String),
+    categorization_run_id String,
+    computed_at DateTime64(3, 'UTC'),
+    org_id String DEFAULT ''
+) ENGINE = ReplacingMergeTree(computed_at)
+ORDER BY (org_id, work_unit_id, ifNull(toString(repo_id), ''));
+
 CREATE TABLE work_unit_supersessions (
     org_id String,
     superseded_work_unit_id String,

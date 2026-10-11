@@ -99,14 +99,14 @@ func CompileBreakdown(req BreakdownRequest, orgID string, timeoutSeconds int, us
 func compileBreakdownOver(req BreakdownRequest, dimCol, orgID string, timeoutSeconds int, useInvestment bool, filters *model.FilterInput) (compiledQuery, error) {
 	var err error
 
-	fc, err := translateFilters(filters, useInvestment, defaultFilterColumns())
+	fc, err := translateFilters(orgID, filters, useInvestment, defaultFilterColumns())
 	if err != nil {
 		return compiledQuery{}, err
 	}
 
 	var source, alias, dateFilter, extraClauses, measureExpr string
 	if useInvestment {
-		ictx := investmentContextFor([]Dimension{req.Dimension}, needsTeamJoin(filters), needsAuthorJoin(filters))
+		ictx := investmentContextFor([]Dimension{req.Dimension}, false, needsRepoAllocation(filters), needsAuthorJoin(filters))
 		source, alias, dateFilter, extraClauses = ictx.Source, ictx.Alias, ictx.DateFilter, ictx.ExtraClauses
 		measureExpr, err = dbExpression(req.Measure, true, ictx.UseRepoAllocation)
 		if err != nil {

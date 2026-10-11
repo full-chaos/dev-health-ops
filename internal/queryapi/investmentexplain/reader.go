@@ -180,7 +180,8 @@ func (f BreakdownFilters) scopeClause() (filterSQL string, bindings []dhclickhou
 	if explicitCondition != "" {
 		explicitSQL = " AND " + explicitCondition
 	}
-	return teamscope.NarrowRepoScope(f.ReposNamed, explicitSQL, explicitBindings, f.TeamScopeCondition, f.TeamScopeBindings)
+	filterSQL, bindings = teamscope.NarrowRepoScope(f.ReposNamed, explicitSQL, explicitBindings, f.TeamScopeCondition, f.TeamScopeBindings)
+	return filterSQL, bindings
 }
 
 func (f BreakdownFilters) baseBindings() []dhclickhouse.Binding {
@@ -233,7 +234,7 @@ SELECT
     subcategory_kv.1 AS subcategory,
     splitByChar('.', subcategory_kv.1)[1] AS theme,
     sum(subcategory_kv.2 * effort_value) AS value
-FROM %s AS work_unit_investments
+FROM %s
 ARRAY JOIN CAST(subcategory_distribution_json AS Array(Tuple(String, Float32))) AS subcategory_kv
 WHERE %s
   AND work_unit_investments.org_id = {org_id:String}
@@ -242,7 +243,7 @@ WHERE %s
 GROUP BY subcategory, theme
 ORDER BY value DESC
 %s
-`, analytics.LatestWorkUnitInvestmentsSource(), filters.dateWindowClause(), scopeSQL, categorySQL, settingsMaxExecutionTime())
+`, filters.unitSource(scopeSQL), filters.dateWindowClause(), scopeSQL, categorySQL, settingsMaxExecutionTime())
 
 	rows, err := reader.client.Query(ctx, query, bindings)
 	if err != nil {
@@ -375,8 +376,8 @@ SELECT
     splitByChar('.', subcategory_kv.1)[1] AS theme,
     toFloat64(sum(subcategory_kv.2 * effort_value)) AS effort,
     toFloat64(sum(if(effort_metric = 'churn_loc', subcategory_kv.2 * effort_value, 0))) AS churn_loc,
-    toFloat64(sum(subcategory_kv.2 * length(JSONExtractArrayRaw(structural_evidence_json, 'prs')))) AS prs
-FROM %s AS work_unit_investments
+    toFloat64(sum(subcategory_kv.2 * %s * length(JSONExtractArrayRaw(structural_evidence_json, 'prs')))) AS prs
+FROM %s
 ARRAY JOIN CAST(subcategory_distribution_json AS Array(Tuple(String, Float32))) AS subcategory_kv
 WHERE %s
   AND work_unit_investments.org_id = {org_id:String}
@@ -385,7 +386,7 @@ WHERE %s
 GROUP BY theme
 ORDER BY effort DESC, theme ASC
 %s
-`, analytics.LatestWorkUnitInvestmentsSource(), filters.dateWindowClause(), scopeSQL, categorySQL, settingsMaxExecutionTime())
+`, filters.unitWeight(scopeSQL), filters.unitSource(scopeSQL), filters.dateWindowClause(), scopeSQL, categorySQL, settingsMaxExecutionTime())
 
 	rows, err := reader.client.Query(ctx, query, bindings)
 	if err != nil {
@@ -424,4 +425,27 @@ func SplitWorkCategories(workCategory []string) (themes, subcategories []string)
 		}
 	}
 	return dedupeStrings(themeList), dedupeStrings(subcategoryList)
+}
+
+// unitSource is the work-unit source of an effort read: under a repository or team scope, one row per
+// (unit, repository) with the repository's ALLOCATED effort (analytics.RepoAllocationInvestmentSource), so the
+// repositories of a unit sum to the unit's effort and a team's repositories to the team's; with no scope (or a
+// scope that resolved to nothing) the unit's whole effort (CHAOS-9221).
+func (f BreakdownFilters) unitSource(scopeSQL string) string {
+	if f.scoped(scopeSQL) {
+		return analytics.RepoAllocationInvestmentSource()
+	}
+	return analytics.LatestWorkUnitInvestmentsSource() + " AS work_unit_investments"
+}
+
+// unitWeight is the share of the unit a row stands for: the repository's allocation weight under a scope, 1 otherwise.
+func (f BreakdownFilters) unitWeight(scopeSQL string) string {
+	if f.scoped(scopeSQL) {
+		return "allocation_weight"
+	}
+	return "1.0"
+}
+
+func (f BreakdownFilters) scoped(scopeSQL string) bool {
+	return strings.TrimSpace(scopeSQL) != "" && strings.TrimSpace(strings.TrimPrefix(scopeSQL, " AND ")) != "1 = 0"
 }

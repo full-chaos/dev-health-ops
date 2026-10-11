@@ -357,14 +357,14 @@ func compileFlowMatrixInvestmentDimension(req FlowMatrixRequest, orgID string, t
 		return compiledQuery{}, compiledQuery{}, err
 	}
 
-	fc, err := translateFilters(filters, useInvestment, defaultFilterColumns())
+	fc, err := translateFilters(orgID, filters, useInvestment, defaultFilterColumns())
 	if err != nil {
 		return compiledQuery{}, compiledQuery{}, err
 	}
 
 	var source, alias, dateFilter, extraClauses, measureExpr string
 	if useInvestment {
-		ictx := investmentContextFor([]Dimension{req.Dimension}, needsTeamJoin(filters), needsAuthorJoin(filters))
+		ictx := investmentContextFor([]Dimension{req.Dimension}, false, needsRepoAllocation(filters), needsAuthorJoin(filters))
 		source, alias, dateFilter, extraClauses = ictx.Source, ictx.Alias, ictx.DateFilter, ictx.ExtraClauses
 		measureExpr, err = dbExpression(req.Measure, true, ictx.UseRepoAllocation)
 	} else {
@@ -488,12 +488,12 @@ func compileFlowMatrixInvestmentTeamRepoDimension(req FlowMatrixRequest, orgID s
 		return compiledQuery{}, compiledQuery{}, err
 	}
 
-	fc, err := translateFilters(filters, true, defaultFilterColumns())
+	fc, err := translateFilters(orgID, filters, true, defaultFilterColumns())
 	if err != nil {
 		return compiledQuery{}, compiledQuery{}, err
 	}
 
-	nodeCtx := investmentContextFor([]Dimension{req.Dimension}, needsTeamJoin(filters), needsAuthorJoin(filters))
+	nodeCtx := investmentContextFor([]Dimension{req.Dimension}, false, needsRepoAllocation(filters), needsAuthorJoin(filters))
 	measureExpr, err := dbExpression(req.Measure, true, nodeCtx.UseRepoAllocation)
 	if err != nil {
 		return compiledQuery{}, compiledQuery{}, err
@@ -527,8 +527,8 @@ LIMIT {limit_per_dim:UInt32}
 	}
 	nodesBindings = append(nodesBindings, fc.bindings...)
 
-	edgeForceTeamJoin := req.Dimension == DimensionRepo || needsTeamJoin(filters)
-	edgeCtx := investmentContextFor([]Dimension{req.Dimension}, edgeForceTeamJoin, needsAuthorJoin(filters))
+	edgeForceTeamJoin := req.Dimension == DimensionRepo
+	edgeCtx := investmentContextFor([]Dimension{req.Dimension}, edgeForceTeamJoin, needsRepoAllocation(filters), needsAuthorJoin(filters))
 
 	var bridgeCol, bridgeNotEmpty string
 	switch req.Dimension {

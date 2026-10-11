@@ -91,7 +91,8 @@ func TestFetchWorkUnitInvestmentsQueryShape(t *testing.T) {
 	for _, fragment := range []string{
 		"ORDER BY effort_value DESC, work_unit_id ASC",
 		"LIMIT {limit:UInt64}",
-		"work_unit_investments.repo_id IN {repo_ids:Array(String)}",
+		"repo_id IN {repo_ids:Array(String)}",
+		"work_unit_repo_effort",
 		"work_unit_investments.work_unit_id = {work_unit_id:String}",
 		"SETTINGS max_execution_time",
 	} {
@@ -206,7 +207,7 @@ func TestFetchWorkUnitInvestmentsIntersectsExplicitReposWithTeamScope(t *testing
 	}
 
 	query := capture.lastQuery
-	if !strings.Contains(query, "toString(work_unit_investments.repo_id) IN {repo_ids:Array(String)} AND toString(work_unit_investments.repo_id) IN (") {
+	if !strings.Contains(query, "toString(repo_id) IN {repo_ids:Array(String)} AND toString(repo_id) IN (") {
 		t.Fatalf("query does not AND the explicit-repo and team conditions together:\n%s", query)
 	}
 	var sawRepoIDs, sawTeamIDs bool

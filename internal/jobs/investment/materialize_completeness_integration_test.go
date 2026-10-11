@@ -79,12 +79,12 @@ func newCompletenessHarness(t *testing.T) *completenessHarness {
 		runAt:       map[string]time.Time{},
 	}
 	h.within = h.windowStart.Add(24 * time.Hour)
-	// Two items and an edge: a component needs at least one edge, or the run
-	// finds no component and writes nothing.
+	// Two items in one unit: a component needs at least one edge, or the run
+	// finds no component and writes nothing, and one pull request joins both.
 	for _, id := range []string{"Q1", "Q2"} {
 		seedWorkItem(t, ctx, conn, id, "", h.within)
 	}
-	seedIssueEdge(t, ctx, conn, "Q1", "Q2", "11111111-1111-4111-8111-111111111111", h.within)
+	seedPullRequestLinks(t, ctx, conn, "11111111-1111-4111-8111-111111111111#pr1", "11111111-1111-4111-8111-111111111111", h.within, "Q1", "Q2")
 	return h
 }
 

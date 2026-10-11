@@ -61,8 +61,10 @@ func TestTheWorkersInvestmentExecutorServesFromTheDecisionBackendWithOnlyItsOwnS
 		INSERT INTO work_graph_edges (
 			edge_id, source_type, source_id, target_type, target_id, edge_type,
 			repo_id, provider, provenance, confidence, evidence, discovered_at, last_synced, event_ts, org_id
-		) VALUES ('W1->W2', 'issue', 'W1', 'issue', 'W2', 'relates_to', '11111111-1111-4111-8111-111111111111', 'linear', 'native', 1.0, 'seed', ?, ?, ?, ?)`,
-		within, within, within, shadowActivationOrg); err != nil {
+		) VALUES
+			('pr1->W1', 'pr', '11111111-1111-4111-8111-111111111111#pr1', 'issue', 'W1', 'implements', '11111111-1111-4111-8111-111111111111', 'github', 'native', 1.0, 'seed', ?, ?, ?, ?),
+			('pr1->W2', 'pr', '11111111-1111-4111-8111-111111111111#pr1', 'issue', 'W2', 'implements', '11111111-1111-4111-8111-111111111111', 'github', 'native', 1.0, 'seed', ?, ?, ?, ?)`,
+		within, within, within, shadowActivationOrg, within, within, within, shadowActivationOrg); err != nil {
 		t.Fatal(err)
 	}
 

@@ -3038,6 +3038,10 @@ stay under the cap, so its hub-removal step deletes issue nodes to shrink the co
 the PRs that reached their issue only through a removed hub. Fix in progress as a **native-Go job**
 (`internal/jobs/workgraph`, a new `Kind`, no LLM required) rather than a Python patch — see CHAOS-4752
 for the fix-shape writeup and CHAOS-4758 for the root-cause mechanism.
+Since CHAOS-9269 (chris, 2026-10-11) the Go unit build reads issue -> issue links (`relates`,
+`blocks`, `duplicates`, `parent_of`/`child_of`) as references, not unit membership: they no longer
+fuse issues into one component, an issue whose only links are issue links is a one-node unit, and the
+links stay in `work_graph_edges` for the graph and blocker readers.
 
 ---
 

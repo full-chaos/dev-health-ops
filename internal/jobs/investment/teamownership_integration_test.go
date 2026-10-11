@@ -161,11 +161,14 @@ func TestTeamOwnershipFallbackProviderEntityMatrix(t *testing.T) {
 	coverage := newMatrixCoverage(t)
 	at := time.Date(2026, 1, 5, 0, 0, 0, 0, time.UTC)
 
-	// wantRepos[provider] is the distinct union this provider's donor teams own,
-	// and wantTeams[provider][repo] the sorted team ids that must appear in the
+	// wantRepos[provider][issue] is the sorted set of repositories the issue's
+	// donor team owns, and wantTeams[provider][issue] the team id that must
+	// appear in the persisted provenance for each of them. An issue -> issue
+	// link is a reference, not membership, so each positive issue is its own
+	// one-node unit and allocates only its own team's repositories.
 	// persisted provenance for that repository.
-	wantRepos := map[string][]string{}
-	wantTeams := map[string]map[string][]string{}
+	wantRepos := map[string]map[string][]string{}
+	wantTeams := map[string]map[string]string{}
 
 	for providerIndex, provider := range wtiProviders {
 		host := repoHostFor[provider]
@@ -265,18 +268,23 @@ func TestTeamOwnershipFallbackProviderEntityMatrix(t *testing.T) {
 			seedMatrixWorkItem(t, ctx, conn, issue, provider, at)
 			seedAttribution(t, ctx, conn, issue, provider, teamA, attrSource, 1, at)
 		}
-		seedIssueEdge(t, ctx, conn, ownEdge[0], ownEdge[1], r1, at)
-		seedIssueEdge(t, ctx, conn, ambiguous[0], ambiguous[1], r1, at)
-		seedIssueEdge(t, ctx, conn, ambiguous[1], ambiguous[0], r2, at)
+		seedPullRequestLinks(t, ctx, conn, r1+"#pr1", r1, at, ownEdge[0], ownEdge[1])
+		seedPullRequestLinks(t, ctx, conn, r1+"#pr2", r1, at, ambiguous[0], ambiguous[1])
+		seedPullRequestLinks(t, ctx, conn, r2+"#pr3", r2, at, ambiguous[1])
 
 		seedIssueEdge(t, ctx, conn, provider+":a", provider+":b", "", at)
 		seedIssueEdge(t, ctx, conn, memberOnly[0], memberOnly[1], "", at)
 		seedIssueEdge(t, ctx, conn, inactiveOnly[0], inactiveOnly[1], "", at)
 		seedIssueEdge(t, ctx, conn, outOfWindow[0], outOfWindow[1], "", at)
 
-		wantRepos[provider] = []string{r1, r2, r3, rExpiring}
-		sort.Strings(wantRepos[provider])
-		wantTeams[provider] = map[string][]string{r1: {teamA}, r2: {teamA, teamB}, r3: {teamB}, rExpiring: {teamA}}
+		wantRepos[provider] = map[string][]string{
+			provider + ":a": {r1, r2, rExpiring},
+			provider + ":b": {r2, r3},
+		}
+		for _, repos := range wantRepos[provider] {
+			sort.Strings(repos)
+		}
+		wantTeams[provider] = map[string]string{provider + ":a": teamA, provider + ":b": teamB}
 	}
 
 	stats, err := materializer.Run(ctx, Config{
@@ -288,27 +296,30 @@ func TestTeamOwnershipFallbackProviderEntityMatrix(t *testing.T) {
 	}
 
 	for _, provider := range wtiProviders {
-		unit := units.WorkUnitID([]units.NodeKey{{Type: "issue", ID: provider + ":a"}, {Type: "issue", ID: provider + ":b"}})
-		got, provenance, weightSum, effortSum := readRepoEffort(t, ctx, conn, unit)
-		if len(got) != 4 {
-			t.Errorf("%s issues: persisted repos=%v want the 4-repo distinct union %v", provider, got, wantRepos[provider])
-			continue
-		}
-		for i, repo := range wantRepos[provider] {
-			if got[i] != repo {
-				t.Errorf("%s issues: repo[%d]=%s want %s", provider, i, got[i], repo)
+		var got []string
+		for _, issue := range []string{provider + ":a", provider + ":b"} {
+			unit := units.WorkUnitID([]units.NodeKey{{Type: "issue", ID: issue}})
+			repos, provenance, weightSum, _ := readRepoEffort(t, ctx, conn, unit)
+			got = append(got, repos...)
+			want := wantRepos[provider][issue]
+			if len(repos) != len(want) {
+				t.Errorf("%s issue %s: persisted repos=%v want %v", provider, issue, repos, want)
+				continue
 			}
-			want := "team:" + strings.Join(wantTeams[provider][repo], ",")
-			if provenance[repo] != want {
-				t.Errorf("%s issues: %s provenance=%q want %q", provider, repo, provenance[repo], want)
+			for i, repo := range want {
+				if repos[i] != repo {
+					t.Errorf("%s issue %s: repo[%d]=%s want %s", provider, issue, i, repos[i], repo)
+				}
+				if provenance[repo] != "team:"+wantTeams[provider][issue] {
+					t.Errorf("%s issue %s: %s provenance=%q want %q", provider, issue, repo, provenance[repo], "team:"+wantTeams[provider][issue])
+				}
+			}
+			if math.Abs(weightSum-1) > 1e-12 {
+				t.Errorf("%s issue %s: allocation weights sum to %g, want 1", provider, issue, weightSum)
 			}
 		}
-		if math.Abs(weightSum-1) > 1e-12 {
-			t.Errorf("%s issues: allocation weights sum to %g, want 1", provider, weightSum)
-		}
-		coverage.cover(provider, "issues", "primary "+attributionSourceFor[provider]+" attribution on both member issues allocated the union with weights summing to 1")
-		coverage.cover(provider, "teams", "team_repo_ownership from two is_active teams unioned; provenance names both for the shared repo")
-		_ = effortSum
+		coverage.cover(provider, "issues", "primary "+attributionSourceFor[provider]+" attribution on each one-node issue unit allocated its team's repositories with weights summing to 1")
+		coverage.cover(provider, "teams", "team_repo_ownership from two is_active teams; each unit's provenance names its own team, also for the shared repo")
 
 		if provider == "github" {
 			coverage.cover(provider, "projects", "n/a -- GitHub has no native project entity, the repository is the scope; second donor arm uses the `native` ownership source instead")
@@ -319,16 +330,20 @@ func TestTeamOwnershipFallbackProviderEntityMatrix(t *testing.T) {
 		// members: a component whose only attribution is membership-derived
 		// must keep its unassigned allocation. Its team owns a live repository,
 		// so the ONLY thing keeping it out is the source filter.
-		memberUnit := units.WorkUnitID([]units.NodeKey{{Type: "issue", ID: provider + ":m1"}, {Type: "issue", ID: provider + ":m2"}})
-		if repos, _, _, _ := readRepoEffort(t, ctx, conn, memberUnit); len(repos) != 0 {
-			t.Errorf("%s members: membership-derived attribution donated %v", provider, repos)
+		for _, issue := range []string{provider + ":m1", provider + ":m2"} {
+			memberUnit := units.WorkUnitID([]units.NodeKey{{Type: "issue", ID: issue}})
+			if repos, _, _, _ := readRepoEffort(t, ctx, conn, memberUnit); len(repos) != 0 {
+				t.Errorf("%s members: membership-derived attribution on %s donated %v", provider, issue, repos)
+			}
 		}
 		coverage.cover(provider, "members", "assignee_membership + author_membership attributions and team_memberships rows donated nothing, though "+provider+"-team-members owns a live repository")
 
 		// teams (negative half): an inactive team never donates.
-		inactiveUnit := units.WorkUnitID([]units.NodeKey{{Type: "issue", ID: provider + ":i1"}, {Type: "issue", ID: provider + ":i2"}})
-		if repos, _, _, _ := readRepoEffort(t, ctx, conn, inactiveUnit); len(repos) != 0 {
-			t.Errorf("%s teams: deactivated team donated %v", provider, repos)
+		for _, issue := range []string{provider + ":i1", provider + ":i2"} {
+			inactiveUnit := units.WorkUnitID([]units.NodeKey{{Type: "issue", ID: issue}})
+			if repos, _, _, _ := readRepoEffort(t, ctx, conn, inactiveUnit); len(repos) != 0 {
+				t.Errorf("%s teams: deactivated team donated %v to %s", provider, repos, issue)
+			}
 		}
 
 		// The manual ownership row belongs to an ELIGIBLE team on an eligible
@@ -344,14 +359,14 @@ func TestTeamOwnershipFallbackProviderEntityMatrix(t *testing.T) {
 	// Telemetry. The outcome buckets must partition every component, and every
 	// field must be present even at zero -- a counter that disappears at zero
 	// cannot be told apart from one that was never computed.
-	if stats.Components != 24 {
-		t.Fatalf("components=%d, want 24 (4 providers x 6 components)", stats.Components)
+	if stats.Components != 40 {
+		t.Fatalf("components=%d, want 40 (4 providers x (8 one-node issue units + 2 pull request units))", stats.Components)
 	}
-	if stats.RepoOwnershipFallback != 4 {
-		t.Errorf("allocated=%d, want 4", stats.RepoOwnershipFallback)
+	if stats.RepoOwnershipFallback != 8 {
+		t.Errorf("allocated=%d, want 8", stats.RepoOwnershipFallback)
 	}
-	if stats.RepoOwnershipNoEligible != 8 {
-		t.Errorf("no_eligible_owner=%d, want 8", stats.RepoOwnershipNoEligible)
+	if stats.RepoOwnershipNoEligible != 16 {
+		t.Errorf("no_eligible_owner=%d, want 16", stats.RepoOwnershipNoEligible)
 	}
 	// Measured, not pinned at zero: direct evidence outranks an AVAILABLE donor.
 	if stats.RepoOwnershipOwnRepo != 4 {
@@ -360,11 +375,11 @@ func TestTeamOwnershipFallbackProviderEntityMatrix(t *testing.T) {
 	if stats.RepoOwnershipDirectRepo != 4 {
 		t.Errorf("direct_repo_evidence=%d, want 4", stats.RepoOwnershipDirectRepo)
 	}
-	if stats.RepoOwnershipRepoShares != 16 {
-		t.Errorf("repo_shares=%d, want 16", stats.RepoOwnershipRepoShares)
+	if stats.RepoOwnershipRepoShares != 20 {
+		t.Errorf("repo_shares=%d, want 20", stats.RepoOwnershipRepoShares)
 	}
-	if stats.RepoOwnershipWindowSkipped != 4 {
-		t.Errorf("window_skipped=%d, want 4", stats.RepoOwnershipWindowSkipped)
+	if stats.RepoOwnershipWindowSkipped != 8 {
+		t.Errorf("window_skipped=%d, want 8", stats.RepoOwnershipWindowSkipped)
 	}
 	if stats.RepoOwnershipDonorIssues != 32 {
 		t.Errorf("donor_issues=%d, want the 32 issues with an eligible primary attribution", stats.RepoOwnershipDonorIssues)
@@ -379,8 +394,8 @@ func TestTeamOwnershipFallbackProviderEntityMatrix(t *testing.T) {
 	}
 	line := lastLogLine(t, logs.String(), "investment team repository fallback")
 	for _, field := range []string{
-		"components=24", "allocated=4", "repo_shares=16", "own_repo=4",
-		"direct_repo_evidence=4", "no_eligible_owner=8", "window_skipped=4", "donor_issues=32",
+		"components=40", "allocated=8", "repo_shares=20", "own_repo=4",
+		"direct_repo_evidence=4", "no_eligible_owner=16", "window_skipped=8", "donor_issues=32",
 	} {
 		if !strings.Contains(line, field) {
 			t.Errorf("telemetry line is missing %q (explicit zeros are required): %s", field, line)

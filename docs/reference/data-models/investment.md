@@ -200,7 +200,8 @@ measured here"; zero would mean "measured, and none of it is team fallback".
 > code that loaded it are deleted: no rule-based investment classification is computed or stored. The daily
 > family `work_item_investment` writes `work_item_completion_daily` (see above); `investment_metrics_daily` and
 > `investment_classifications_daily` receive no new rows and no reader reads them; their rows stay until a later,
-> separate drop. The text below describes what those tables held and is kept for reading old rows.
+> separate drop. The paragraphs below describe how those tables were written and read BEFORE this change (the
+> daily writer and the newest-row-per-key read rule): history for reading old rows, not current behaviour.
 
 `investment_metrics_daily` and its feeder rule set `src/dev_health_ops/config/investment_areas.yaml`
 are a **pre-WorkUnit legacy path** (`src/dev_health_ops/analytics/investment.py`). The YAML file's

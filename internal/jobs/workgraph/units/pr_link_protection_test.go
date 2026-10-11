@@ -193,14 +193,17 @@ func TestBuildComponentsStaysLegacySplit(t *testing.T) {
 
 // Both live consumers must group identically (two consumers that disagree mint
 // different work_unit_ids). Every non-test caller of the builder outside this
-// package must pass units.ProtectPullRequestLinks, and none may call the
-// legacy form.
+// package must pass units.ProtectPullRequestLinks and
+// units.IssueLinksAreReferences, and none may call the legacy form.
 func TestEveryLiveConsumerPassesTheSharedProtectionFlag(t *testing.T) {
 	if !ProtectPullRequestLinks {
 		t.Fatal("ProtectPullRequestLinks must be true for the live consumers")
 	}
+	if !IssueLinksAreReferences {
+		t.Fatal("IssueLinksAreReferences must be true for the live consumers")
+	}
 	root := filepath.Join("..", "..", "..") // internal/
-	withOptions, flagged := 0, 0
+	withOptions, flagged, referenced := 0, 0, 0
 	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
@@ -224,6 +227,9 @@ func TestEveryLiveConsumerPassesTheSharedProtectionFlag(t *testing.T) {
 			if strings.Contains(text, "ProtectPullRequestLinks: units.ProtectPullRequestLinks") {
 				flagged++
 			}
+			if strings.Contains(text, "IssueLinksAreReferences: units.IssueLinksAreReferences") {
+				referenced++
+			}
 		}
 		return nil
 	})
@@ -235,6 +241,9 @@ func TestEveryLiveConsumerPassesTheSharedProtectionFlag(t *testing.T) {
 	}
 	if flagged != withOptions {
 		t.Fatalf("%d of %d live consumers pass the shared flag", flagged, withOptions)
+	}
+	if referenced != withOptions {
+		t.Fatalf("%d of %d live consumers pass units.IssueLinksAreReferences", referenced, withOptions)
 	}
 }
 

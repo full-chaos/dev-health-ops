@@ -74,18 +74,17 @@ func TestRepoHierarchyCascadeEndToEnd(t *testing.T) {
 	windowEnd := time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC)
 	within := windowStart.Add(24 * time.Hour)
 
-	// P: the resolved ancestor. Its OWN edge (to an unrelated anchor issue)
-	// carries repo_id directly -- collectSingleRepoID needs only an edge
-	// with a repo_id on it, not a real PR/commit row, so an issue-issue edge
-	// is enough to build a realistic "this component has exactly one repo"
-	// anchor without seeding pull_requests/commits tables this test does not
-	// otherwise exercise.
+	// P: the resolved ancestor. Its OWN pull request edge carries repo_id
+	// directly -- collectSingleRepoID needs only an edge with a repo_id on it,
+	// not a real PR/commit row, so the edge is enough to build a realistic
+	// "this component has exactly one repo" anchor without seeding
+	// pull_requests/commits tables this test does not otherwise exercise.
 	seedWorkItem(t, ctx, conn, "P", "", within)
-	seedWorkItem(t, ctx, conn, "P-anchor", "", within)
-	seedIssueEdge(t, ctx, conn, "P", "P-anchor", repoA, within)
+	seedPullRequestLinks(t, ctx, conn, repoA+"#pr1", repoA, within, "P")
 
-	// C1/C1b: the pure-issue component under test. No PR/commit, no repo
-	// edge of its own -- C1.parent_id = P is its only path to a repo.
+	// C1: the pure-issue unit under test. Its only link is an issue -> issue
+	// reference to C1b, so C1 and C1b are two one-node units with no repo edge
+	// of their own -- C1.parent_id = P is C1's only path to a repo.
 	seedWorkItem(t, ctx, conn, "C1", "P", within)
 	seedWorkItem(t, ctx, conn, "C1b", "", within)
 	seedIssueEdge(t, ctx, conn, "C1", "C1b", "", within)
@@ -101,9 +100,7 @@ func TestRepoHierarchyCascadeEndToEnd(t *testing.T) {
 		t.Errorf("stats.RepoCascadeAncestor = 0, want at least 1 (C1/C1b's inheritance from P); stats = %+v", stats)
 	}
 
-	unitID := units.WorkUnitID([]units.NodeKey{
-		{Type: "issue", ID: "C1"}, {Type: "issue", ID: "C1b"},
-	})
+	unitID := units.WorkUnitID([]units.NodeKey{{Type: "issue", ID: "C1"}})
 
 	investmentRepoID, investmentRepoSource := fetchInvestmentRepo(t, ctx, conn, unitID)
 	if investmentRepoID != repoA {
@@ -162,6 +159,29 @@ func seedWorkItem(t *testing.T, ctx context.Context, conn driver.Conn, workItemI
 		)
 	`, workItemID, workItemID, at, at, parentID, at, hierarchyCascadeTestOrg); err != nil {
 		t.Fatalf("seed work item %s: %v", workItemID, err)
+	}
+}
+
+// seedPullRequestLinks links one pull request node to each issue with a native
+// pull request -> issue edge carrying repoID. Issue -> issue links are
+// references, not unit membership, so a pull request is what puts several
+// issues in one unit.
+func seedPullRequestLinks(t *testing.T, ctx context.Context, conn driver.Conn, prNode, repoID string, at time.Time, issueIDs ...string) {
+	t.Helper()
+	var repoArg any
+	if repoID != "" {
+		repoArg = repoID
+	}
+	for _, issueID := range issueIDs {
+		if err := conn.Exec(ctx, `
+			INSERT INTO work_graph_edges (
+				edge_id, source_type, source_id, target_type, target_id, edge_type,
+				repo_id, provider, provenance, confidence, evidence,
+				discovered_at, last_synced, event_ts, org_id
+			) VALUES (?, 'pr', ?, 'issue', ?, 'implements', ?, 'github', 'native', 1.0, 'seed', ?, ?, ?, ?)
+		`, prNode+"->"+issueID, prNode, issueID, repoArg, at, at, at, hierarchyCascadeTestOrg); err != nil {
+			t.Fatalf("seed edge %s->%s: %v", prNode, issueID, err)
+		}
 	}
 }
 

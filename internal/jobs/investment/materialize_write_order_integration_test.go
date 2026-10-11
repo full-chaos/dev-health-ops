@@ -78,7 +78,7 @@ func TestCrashBetweenOutputWritesIsRedoneNotSkipped(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	seedIssueEdge(t, ctx, conn, "W1", "W2", repoA, within)
+	seedPullRequestLinks(t, ctx, conn, repoA+"#pr1", repoA, within, "W1", "W2")
 
 	reader, err := chquery.NewReader(conn)
 	if err != nil {

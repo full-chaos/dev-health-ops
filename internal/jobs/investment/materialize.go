@@ -127,6 +127,11 @@ type Stats struct {
 	DroppedEdges        int            `json:"dropped_edges"`
 	DroppedNodes        int            `json:"dropped_nodes"`
 	PartitionedHubs     int            `json:"partitioned_hubs"`
+	// ReferenceLinks and ReferenceOnlyUnits are units.BuildStats' counters of
+	// issue -> issue links read as references and the one-node units minted
+	// for their otherwise unplaced endpoints.
+	ReferenceLinks     int `json:"reference_links"`
+	ReferenceOnlyUnits int `json:"reference_only_units"`
 	// RepoCascadeOwn/Ancestor/Children/Unassigned (CHAOS-5359) partition every
 	// component this run built by how (or whether) it resolved a repo --
 	// own-edges, inherited from an ancestor, inherited from unanimous
@@ -329,10 +334,13 @@ func (m *Materializer) Run(ctx context.Context, cfg Config) (Stats, error) {
 			MaxComponentNodes:       cfg.MaxComponentNodes,
 			PartitionHubs:           partitionOversizedHubs,
 			ProtectPullRequestLinks: units.ProtectPullRequestLinks,
+			IssueLinksAreReferences: units.IssueLinksAreReferences,
 		},
 		buildStats,
 	)
 	stats.OversizedComponents = buildStats.OversizedComponents
+	stats.ReferenceLinks = buildStats.ReferenceLinks
+	stats.ReferenceOnlyUnits = buildStats.ReferenceOnlyUnits
 	stats.DroppedEdges = buildStats.DroppedEdges
 	stats.DroppedNodes = buildStats.DroppedNodes
 	stats.PartitionedHubs = buildStats.PartitionedHubs

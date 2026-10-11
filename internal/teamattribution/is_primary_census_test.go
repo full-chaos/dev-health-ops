@@ -199,14 +199,17 @@ var teamGroupedReaderAllowlist = map[string]string{
 // contract; a co-owner team sees the item in item views only.
 const workUnitVoteReason = "investment / work-unit view: one team per work unit from the work-unit vote over primary rows, until the team-set rollup contract; a co-owner team sees the item in item views (drilldown, flame, quadrant, flow-matrix activity) only"
 
+// ownershipTeamAliasReason: these functions name the `ut` team columns, which the investment path's shared context
+// (investmentContextFor) now fills from repository ownership (teamscope.OwnerShares), not from the vote.
+const ownershipTeamAliasReason = "the ut alias is the repository's owning team (team_repo_ownership) on the investment path, not the vote"
+
 // workUnitVoteConsumers: every function that reads the vote's team (calls
 // BuildUnitTeamSubquery, or names its team columns ut.team_* /
 // unit_team.team_*) to scope, group or label a view. The set must match
 // exactly: a new consumer is classified here, a stale entry fails.
 var workUnitVoteConsumers = map[string]string{
-	"internal/queryapi/analytics\x00dbColumn":                                     workUnitVoteReason,
-	"internal/queryapi/analytics\x00investmentContextFor":                         workUnitVoteReason,
-	"internal/queryapi/analytics\x00compileFlowMatrixInvestmentTeamRepoDimension": workUnitVoteReason,
+	"internal/queryapi/analytics\x00dbColumn":                                     ownershipTeamAliasReason,
+	"internal/queryapi/analytics\x00compileFlowMatrixInvestmentTeamRepoDimension": ownershipTeamAliasReason,
 	"internal/queryapi/investmentflow\x00fetchInvestmentTeamEdges":                workUnitVoteReason,
 	"internal/queryapi/investmentflow\x00fetchInvestmentRepoTeamEdges":            workUnitVoteReason,
 	"internal/queryapi/investmentflow\x00fetchInvestmentTeamCategoryRepoEdges":    workUnitVoteReason,

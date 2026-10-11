@@ -9,8 +9,10 @@ lifecycle: active
 
 # Set scope and time window
 
+The scope bar at the top of a page sets the scope and time window. It has **Organization**, **Team**, **Repo**, and **Window** (7d, 14d, 30d, or 90d). Developer and work-category filters are in the **Filters** drawer.
+
 1. Select the workspace that owns the source data.
-2. Choose the repository, team, or supported aggregate scope required by the question.
+2. Choose the repository, team, or supported aggregate scope required by the question. Some pages (for example Investment and Metrics) work at team scope.
 3. Choose a time window that overlaps collected data and is long enough for the signal you are reading.
 4. Record the context before opening evidence or another view.
 5. Preserve it when comparing results.

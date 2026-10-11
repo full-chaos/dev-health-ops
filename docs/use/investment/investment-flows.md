@@ -14,6 +14,8 @@ lifecycle: active
 
 Use Investment Flows when the question is how effort-weighted categories connect with repositories, teams, or other supported scope nodes.
 
+Investment Flows is the **Allocation** tab of Investment. The **Allocation paths** card shows a Sankey. A toggle on the card switches it to the **Team exchange chord**, which shows the exchange of teams across repositories. A coverage strip with the coverage gaps sits above the card.
+
 1. Preserve the same scope, period, and category filters used in Investment Mix.
 2. Read link width as an aggregated contribution, not a count of work items.
 3. Check unassigned nodes before concluding that a team or repository owns the flow.

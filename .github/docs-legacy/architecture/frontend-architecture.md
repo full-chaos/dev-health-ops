@@ -18,7 +18,8 @@ src/
 ├── components/    # Reusable UI components
 │   ├── charts/    # Visualization components
 │   ├── filters/   # Filter controls
-│   └── navigation/# Nav components
+│   ├── navigation/# Nav components (tabs, view sets)
+│   └── shell/     # App shell: sidebar, top bar, scope bar, command palette
 ├── lib/           # Data transforms, mappers, helpers
 ├── data/          # Sample data for demos/tests
 └── types/         # TypeScript type definitions

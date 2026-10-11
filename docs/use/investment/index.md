@@ -90,6 +90,17 @@ Look up the exact calculation contract when you need to distinguish probability,
 
 </div>
 
+## Find each view in the product
+
+Investment (under **Diagnose**) has four tabs:
+
+| Tab | What it shows |
+| --- | --- |
+| **Overview** | The Investment mix (treemap or sunburst), the "Read this with context" card, and the classification table. |
+| **Allocation** | Allocation paths as a Sankey or a team exchange chord, with allocation coverage. |
+| **Evidence** | The work units behind the mix, and how a selected work unit was calculated. |
+| **Confidence** | Classification confidence, evidence quality, attribution coverage, and rework. |
+
 ## How the model is organized
 
 ```text

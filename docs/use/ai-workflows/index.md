@@ -5,7 +5,6 @@ content_type: landing
 owner: product-analytics
 source_of_truth:
   - current /ai product surfaces
-  - current /dev and app-shell Ask Dev surfaces
   - current /superadmin/context-fabric/validation surface
   - docs/user-guide/views/ai-impact.md
   - docs/user-guide/views/ai-review-load.md
@@ -81,7 +80,7 @@ Context Fabric is the underlying Dev Health context, graph, evidence, metric, sc
 ```mermaid
 flowchart TB
     DH["Dev Health data, work graph,<br/>metrics, evidence, and source health"] --> CF["Context Fabric<br/>scope, retrieval, trust, and provenance"]
-    CF --> ASK["Ask Dev<br/>app window and /dev workspace"]
+    CF --> ASK["Ask Dev"]
     CF --> ACR["ACR for agents<br/>acr-api and acr-mcp"]
     CF --> VAL["Context Fabric Validation<br/>platform administrators"]
 ```
@@ -94,8 +93,6 @@ Implementation topology, service ownership, contract flow, and the deterministic
 
 | Entry point | Use it when | Current path |
 | --- | --- | --- |
-| Ask Dev window | You want to investigate the current Dev Health page without leaving it. | Open **Ask Dev** from an authenticated product page. |
-| Ask Dev workspace | You need a longer investigation, conversation history, evidence, and metric detail. | Open `/dev`, or select **Workspace** from the Ask Dev window. |
 | Context Fabric Validation | A platform administrator needs to validate context-packet assembly, coverage, compatibility, and evidence disclosure. | Open `/superadmin/context-fabric/validation`. This is not the customer Ask Dev experience. |
 | ACR MCP sidecar | A compatible coding, review, documentation, or CI agent needs explicit task context or source evidence. | Register `acr-mcp serve` in the agent client, then use `context_for_task` and `source_evidence`. |
 
@@ -105,9 +102,7 @@ Both Ask Dev and ACR support the same diagnosis loop:
 
 ### Use Ask Dev for a human investigation
 
-When Ask Dev is enabled for your workspace, you can use the permanent **Ask Dev** action from authenticated product pages without leaving the page you are investigating. The window shows the proposed page context before you ask. Merely opening it does not send a question, page text, screenshot, or model request. Changing pages may change that proposed context, but it does not silently change the scope already committed to an active conversation.
-
-Choose **Workspace** to expand the same conversation into `/dev` for a longer investigation, history, evidence, and metric detail. The window and `/dev` share one conversation, scope, streamed run, answer, feedback record, and retention policy; expanding or minimizing does not run the question again. **Ask Dev about this** actions use an approved route and entity allowlist and show the inherited scope before submission. They never copy arbitrary page content or submit a suggested question automatically.
+The web app has no Ask Dev window and no `/dev` workspace. Product pages do not show an **Ask Dev** action.
 
 An answer labels AI-generated content and keeps its as-of time, coverage, freshness, conflicts, unavailable sources, observed facts, inferences, recommendations, metrics, and evidence visible. A partial, degraded, refused, or insufficient-evidence answer is a result with limitations, not a silent success. Evidence links are authorized again when opened.
 
@@ -120,7 +115,7 @@ Ask Dev keeps a conversation only under your organization's retention policy. An
 
 You can delete a saved conversation before it expires. Dev Health does not use Ask Dev conversation content to train models. Disabling Ask Dev stops new use; it does not silently delete saved history, whose organization-set retention policy and delete controls continue to apply.
 
-The permanent window and `/dev` load this same saved transcript; opening the workspace does not copy or fork it. History contains the question and committed scope plus the validated answer and its safe run status. It does not expose internal prompts, provider messages, or tool payloads. Retrying a terminal run adds a new linked question, run, and answer turn and leaves the earlier turn intact. If a browser stream disconnects while work is active, that run is cancelled and recorded as cancelled rather than silently continuing as a duplicate.
+History contains the question and committed scope plus the validated answer and its safe run status. It does not expose internal prompts, provider messages, or tool payloads. Retrying a terminal run adds a new linked question, run, and answer turn and leaves the earlier turn intact. If a browser stream disconnects while work is active, that run is cancelled and recorded as cancelled rather than silently continuing as a duplicate.
 
 ### Understand Ask Dev model availability
 

@@ -35,12 +35,22 @@ The current **Work Graph Explorer** exposes the relationships available for the 
 
 1. **Entry context** identifies the originating entity, category, or workflow when you arrived from another page.
 2. **Connection type** selects the relationship slice to inspect.
-3. **Theme and subcategory scope**, where available, narrows Investment-related evidence.
+3. **Theme and subcategory scope**, where available, narrows Investment-related evidence. The Review Network tab does not use it.
 4. **Nodes** represent entities defined by the current graph contract.
 5. **Edges** represent supported relationship types, not generic visual similarity.
 6. **Details and source links** provide identifiers, dates, labels, or a route to the original artifact where supported.
 
-The product may add richer relationship exploration over time. Treat only nodes, edges, filters, and actions visible in the current workspace as available.
+Work Graph is under **Diagnose** and has five tabs:
+
+| Tab | What it shows |
+| --- | --- |
+| **Overview** | The relationship topology, with the **Connection type**, **Theme**, and **Subcategory** controls. |
+| **Dependencies** | Blocking, related, duplicate, and parent-child links between work items. |
+| **Inflow-Outflow** | How relationships flow into and out of each entity type. |
+| **Review Network** | Reviewer-to-author collaboration pairs from code review activity. It is not a performance ranking. |
+| **Artifacts** | The artifact browser: entities ranked by how many relationships they carry. |
+
+Treat only nodes, edges, filters, and actions visible in the current workspace as available.
 
 ## Follow a relationship
 

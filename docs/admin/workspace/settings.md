@@ -11,7 +11,7 @@ lifecycle: active
 
 # Configure workspace settings
 
-1. Open **Admin** or **Settings** in the intended workspace.
+1. Open **Admin** in the intended workspace, then choose **Organization** or **Settings**.
 2. Review the current value and its workspace-wide effect.
 3. Change one supported setting at a time.
 4. Save and verify the affected product workflow with a non-sensitive example.

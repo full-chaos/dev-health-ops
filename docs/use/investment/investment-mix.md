@@ -15,7 +15,7 @@ lifecycle: active
 
 # Investment Mix
 
-Investment Mix answers: **How does the selected body of work appear to be distributed across the canonical Investment themes and subcategories?** It presents an effort-weighted distribution for the current workspace scope, filters, and period. It does not count tickets, copy provider labels, or assign one permanent category to a person or WorkUnit.
+Investment Mix is the **Investment mix** card on the **Overview** tab of Investment. It answers: **How does the selected body of work appear to be distributed across the canonical Investment themes and subcategories?** It presents an effort-weighted distribution for the current workspace scope, filters, and period. It does not count tickets, copy provider labels, or assign one permanent category to a person or WorkUnit.
 {: .fc-page-lede }
 
 ## When to use this page
@@ -34,10 +34,10 @@ The available controls and labels depend on the current workspace, but the readi
 
 1. **Scope and period** define which work can contribute to the result.
 2. **Filters** narrow the source set before the Investment aggregation is displayed.
-3. **Treemap** compares the relative size of positive theme or subcategory contributions.
-4. **Sunburst or hierarchical mix** shows the theme-to-subcategory relationship.
+3. **Treemap** compares the relative size of positive theme or subcategory contributions. A toggle on the card switches between the treemap and the sunburst.
+4. **Sunburst or hierarchical mix** shows the theme-to-subcategory relationship, with a list of theme shares beside it. Select a theme to see its subcategories, and use **Clear theme** to go back.
 5. **Evidence quality** provides corroboration context when the product has quality data for the result.
-6. **Selection and supporting-work actions** move from a visible segment to its subcategories or evidence.
+6. **Selection and supporting-work actions** move from a visible segment to its subcategories or evidence. The **Read this with context** card and the classification table sit beside and below the card.
 
 ## Understand the hierarchy
 

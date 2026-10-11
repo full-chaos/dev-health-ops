@@ -20,26 +20,6 @@ Every Ask Dev answer carries its own outcome, its provenance, what it could not 
 
 > **Note:** The Go api does not serve the Ask Dev (`/api/v1/dev`) surface. This page is a record of the Python surface that was removed. The copy-drift check of this page was removed with that surface, so the strings on this page are not checked against any code.
 
-<figure class="fc-product-figure" markdown="1">
-![A completed Ask Dev answer showing the outcome badge, the scope-outcome and coverage lines, findings with citation and provenance labels, and the unfolded evidence list, desktop, dark theme.](../../assets/ask-dev/ask-dev-answers-completed-desktop-dark.png)
-<figcaption>Completed answer — outcome, a finding with its provenance label, coverage, and the evidence list — desktop, dark theme. Source: dev-health-web PR #859 (merged to main as 45f9026d0), captured 2026-08-07. Seeded local acceptance fixture data only (admin@devhealth.example test org) — no customer data. Owner: Ask Dev web lane. Review trigger: re-capture when answer rendering or the evidence accordion changes materially.</figcaption>
-</figure>
-
-<figure class="fc-product-figure" markdown="1">
-![The same completed Ask Dev answer, light theme.](../../assets/ask-dev/ask-dev-answers-completed-desktop-light.png)
-<figcaption>Completed answer — outcome, a finding with its provenance label, coverage, and the evidence list — desktop, light theme. Source: dev-health-web PR #859 (merged to main as 45f9026d0), captured 2026-08-07. Seeded local acceptance fixture data only (admin@devhealth.example test org) — no customer data. Owner: Ask Dev web lane. Review trigger: re-capture when answer rendering or the evidence accordion changes materially.</figcaption>
-</figure>
-
-<figure class="fc-product-figure" markdown="1">
-![The same completed answer in the Ask Dev window's mobile fullscreen layout, showing the outcome badge, a finding with its provenance label, and coverage, dark theme.](../../assets/ask-dev/ask-dev-answers-completed-mobile-dark.png)
-<figcaption>Completed answer — outcome, a finding with its provenance label, and coverage; the evidence list continues below the fold and is shown in full in the desktop capture above — mobile, dark theme. Source: dev-health-web PR #859 (merged to main as 45f9026d0), captured 2026-08-07. Seeded local acceptance fixture data only (admin@devhealth.example test org) — no customer data. Owner: Ask Dev web lane. Review trigger: re-capture when the mobile Ask Dev layout changes materially.</figcaption>
-</figure>
-
-<figure class="fc-product-figure" markdown="1">
-![The same completed answer in the Ask Dev window's mobile fullscreen layout, light theme.](../../assets/ask-dev/ask-dev-answers-completed-mobile-light.png)
-<figcaption>Completed answer — outcome, a finding with its provenance label, and coverage; the evidence list continues below the fold and is shown in full in the desktop capture above — mobile, light theme. Source: dev-health-web PR #859 (merged to main as 45f9026d0), captured 2026-08-07. Seeded local acceptance fixture data only (admin@devhealth.example test org) — no customer data. Owner: Ask Dev web lane. Review trigger: re-capture when the mobile Ask Dev layout changes materially.</figcaption>
-</figure>
-
 ## Read it in this order
 
 1. **Outcome.** Whether this is an answer at all, and if so whether it is complete.

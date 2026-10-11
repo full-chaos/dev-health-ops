@@ -420,7 +420,7 @@ func compileSankeyCoverage(req SankeyRequest, orgID string, timeoutSeconds int, 
 		// and 138): the chart reads the allocation source, where a unit with no allocation row keeps its OWN
 		// repo_id, so the repository AND team scopes of coverage read that same fallback -- one expression -- or a
 		// unit is in the chart and missing from its coverage.
-		repoFilterColumn = "if(wure.work_unit_id != '', wure.repo_id, work_unit_investments.repo_id)"
+		repoFilterColumn = unitRepoExpr("wure", "work_unit_investments")
 		teamRepoColumn = repoFilterColumn
 
 		// analytics.py:820-827 (CHAOS-2492): resolve developer identity via

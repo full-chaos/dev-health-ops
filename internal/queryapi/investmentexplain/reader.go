@@ -30,6 +30,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
+	"strings"
 	"time"
 
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
@@ -123,6 +124,23 @@ type BreakdownFilters struct {
 	TeamScopeBindings []dhclickhouse.Binding
 	Themes            []string
 	Subcategories     []string
+	// DatedByEnd dates a unit by its END day (to_ts in [start, end)) instead of by the overlap
+	// of its [from_ts, to_ts] with the window: the Home tile "Investment by theme" (CHAOS-9195,
+	// D5933). Every other rule of the read (latest row of a unit, every categorization status,
+	// the scope, the category filters) is the Investment page's own.
+	DatedByEnd bool
+}
+
+// dateWindowClause is the window predicate of the work-unit reads of this package:
+// the overlap of the unit's range with [start, end) (the Investment page), or the unit's
+// end day within it (DatedByEnd).
+func (f BreakdownFilters) dateWindowClause() string {
+	if f.DatedByEnd {
+		return `work_unit_investments.to_ts >= {start_date:Date}
+  AND work_unit_investments.to_ts < {end_date:Date}`
+	}
+	return `work_unit_investments.from_ts < {end_date:Date}
+  AND work_unit_investments.to_ts >= {start_date:Date}`
 }
 
 func (f BreakdownFilters) categoryClause() (filterSQL string, bindings []dhclickhouse.Binding) {
@@ -217,15 +235,14 @@ SELECT
     sum(subcategory_kv.2 * effort_value) AS value
 FROM %s AS work_unit_investments
 ARRAY JOIN CAST(subcategory_distribution_json AS Array(Tuple(String, Float32))) AS subcategory_kv
-WHERE work_unit_investments.from_ts < {end_date:Date}
-  AND work_unit_investments.to_ts >= {start_date:Date}
+WHERE %s
   AND work_unit_investments.org_id = {org_id:String}
 %s
 %s
 GROUP BY subcategory, theme
 ORDER BY value DESC
 %s
-`, analytics.LatestWorkUnitInvestmentsSource(), scopeSQL, categorySQL, settingsMaxExecutionTime())
+`, analytics.LatestWorkUnitInvestmentsSource(), filters.dateWindowClause(), scopeSQL, categorySQL, settingsMaxExecutionTime())
 
 	rows, err := reader.client.Query(ctx, query, bindings)
 	if err != nil {
@@ -325,4 +342,86 @@ func joinOR(conditions []string) string {
 		joined += " OR " + condition
 	}
 	return joined
+}
+
+// ThemeEffortRow is one theme of FetchInvestmentThemeEffort: the effort of the units over the
+// theme (each unit's effort_value weighted by its share of the theme), the part of it measured in
+// changed lines of code (effort_metric churn_loc), and the pull requests of the units' evidence
+// weighted the same way.
+type ThemeEffortRow struct {
+	Theme    string
+	Effort   float64
+	ChurnLOC float64
+	PRs      float64
+}
+
+// FetchInvestmentThemeEffort reads the Investment page's own breakdown, rolled up to the theme,
+// with the two extra measures the Home tile "Investment by theme" serves (CHAOS-9195): the
+// SAME source (the latest row of each unit), the SAME scope and category clauses and the SAME
+// rule for every categorization status (a unit with insufficient evidence counts, as on the
+// Investment page); only the dating of a unit may differ (BreakdownFilters.DatedByEnd).
+func (reader *Reader) FetchInvestmentThemeEffort(ctx context.Context, filters BreakdownFilters) ([]ThemeEffortRow, error) {
+	if reader == nil || reader.client == nil {
+		return nil, ErrUnavailable
+	}
+	categorySQL, categoryBindings := filters.categoryClause()
+	scopeSQL, scopeBindings := filters.scopeClause()
+	bindings := filters.baseBindings()
+	bindings = append(bindings, scopeBindings...)
+	bindings = append(bindings, categoryBindings...)
+
+	query := fmt.Sprintf(`
+SELECT
+    splitByChar('.', subcategory_kv.1)[1] AS theme,
+    toFloat64(sum(subcategory_kv.2 * effort_value)) AS effort,
+    toFloat64(sum(if(effort_metric = 'churn_loc', subcategory_kv.2 * effort_value, 0))) AS churn_loc,
+    toFloat64(sum(subcategory_kv.2 * length(JSONExtractArrayRaw(structural_evidence_json, 'prs')))) AS prs
+FROM %s AS work_unit_investments
+ARRAY JOIN CAST(subcategory_distribution_json AS Array(Tuple(String, Float32))) AS subcategory_kv
+WHERE %s
+  AND work_unit_investments.org_id = {org_id:String}
+%s
+%s
+GROUP BY theme
+ORDER BY effort DESC, theme ASC
+%s
+`, analytics.LatestWorkUnitInvestmentsSource(), filters.dateWindowClause(), scopeSQL, categorySQL, settingsMaxExecutionTime())
+
+	rows, err := reader.client.Query(ctx, query, bindings)
+	if err != nil {
+		return nil, fmt.Errorf("query investment theme effort: %w", err)
+	}
+	defer rows.Close()
+	out := make([]ThemeEffortRow, 0, 5)
+	for rows.Next() {
+		var row ThemeEffortRow
+		if err := rows.Scan(&row.Theme, &row.Effort, &row.ChurnLOC, &row.PRs); err != nil {
+			return nil, fmt.Errorf("scan investment theme effort row: %w", err)
+		}
+		out = append(out, row)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate investment theme effort rows: %w", err)
+	}
+	return out, nil
+}
+
+// SplitWorkCategories splits the work-category filter of a request into the theme and subcategory
+// filters of BreakdownFilters, as the Investment page does (core.taxonomy.split_category_filters):
+// "theme.leaf" is a subcategory (and names its theme), a bare name is a theme.
+func SplitWorkCategories(workCategory []string) (themes, subcategories []string) {
+	var themeList, subcategoryList []string
+	for _, category := range workCategory {
+		trimmed := strings.TrimSpace(category)
+		if trimmed == "" {
+			continue
+		}
+		if prefix, _, found := strings.Cut(trimmed, "."); found {
+			subcategoryList = append(subcategoryList, trimmed)
+			themeList = append(themeList, prefix)
+		} else {
+			themeList = append(themeList, trimmed)
+		}
+	}
+	return dedupeStrings(themeList), dedupeStrings(subcategoryList)
 }

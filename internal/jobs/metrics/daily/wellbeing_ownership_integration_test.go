@@ -37,9 +37,9 @@ func wellbeingOwnershipExec(t *testing.T, ctx context.Context, conn driver.Conn,
 func wellbeingOwnershipTeam(t *testing.T, ctx context.Context, conn driver.Conn, provider, id string, members []string, at time.Time) {
 	t.Helper()
 	wellbeingOwnershipExec(t, ctx, conn, "insert team "+id, `INSERT INTO teams
-    (id, team_uuid, name, members, repo_patterns, updated_at, last_synced, org_id, provider, is_active)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
-		id, uuid.NewSHA1(uuid.NameSpaceURL, []byte("team:"+id)), "Team "+id, members, []string{}, at, at, wellbeingOwnershipOrg, provider)
+    (id, team_uuid, name, repo_patterns, updated_at, last_synced, org_id, provider, is_active)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)`,
+		id, uuid.NewSHA1(uuid.NameSpaceURL, []byte("team:"+id)), "Team "+id, []string{}, at, at, wellbeingOwnershipOrg, provider)
 }
 
 func wellbeingOwnershipRepo(t *testing.T, ctx context.Context, conn driver.Conn, provider, name string, repo uuid.UUID, authorEmail string) {

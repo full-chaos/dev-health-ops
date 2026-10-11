@@ -41,9 +41,9 @@ func TestTheTeamLoadersReadTheNewestNativeTeamKey(t *testing.T) {
 	newer := older.Add(time.Hour)
 	insert := func(id, provider string, nativeKey *string, updatedAt time.Time) {
 		t.Helper()
-		if err := conn.Exec(ctx, `INSERT INTO teams (id, team_uuid, name, members, manual_members, project_keys, repo_patterns,
+		if err := conn.Exec(ctx, `INSERT INTO teams (id, team_uuid, name, manual_members, project_keys, repo_patterns,
 is_active, updated_at, last_synced, org_id, provider, native_team_key)
-VALUES (?, generateUUIDv4(), ?, [], [], [], [], 1, ?, ?, ?, ?, ?)`, id, id, updatedAt, updatedAt, org, provider, nativeKey); err != nil {
+VALUES (?, generateUUIDv4(), ?, [], [], [], 1, ?, ?, ?, ?, ?)`, id, id, updatedAt, updatedAt, org, provider, nativeKey); err != nil {
 			t.Fatal(err)
 		}
 	}

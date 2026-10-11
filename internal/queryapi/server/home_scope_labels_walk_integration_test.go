@@ -71,8 +71,8 @@ VALUES (?, ?, 'github', 'scope', ?, '', 1, 1, 0, 0, 1, 0, ?, ?, ?, ?, 1, 1, 0, 0
 				org, row.day, id, row.cycle, row.cycle, row.cycle, row.cycle, computedAt)
 		}
 		if name != "" {
-			exec(`INSERT INTO teams (id, team_uuid, name, members, repo_patterns, updated_at, org_id, provider, is_active)
-VALUES (?, generateUUIDv4(), ?, [], [], ?, ?, 'github', 1)`, id, name, computedAt, org)
+			exec(`INSERT INTO teams (id, team_uuid, name, repo_patterns, updated_at, org_id, provider, is_active)
+VALUES (?, generateUUIDv4(), ?, [], ?, ?, 'github', 1)`, id, name, computedAt, org)
 		}
 		exec(`INSERT INTO recommendations_daily
 (team_id, org_id, rule_id, window_start, window_end, fired, severity, title, rationale, success_criterion, evidence_json, computed_at)

@@ -197,8 +197,8 @@ FROM teams FINAL WHERE org_id = ? AND id = ?`, org, gone).Scan(&rows, &activeRow
 			// Both of its times are ahead: the rule of the resolvers takes the
 			// newest row by (updated_at, last_synced, is_active), so a delete
 			// written with the SAME updated_at would lose against this row.
-			if err := conn.Exec(ctx, `INSERT INTO teams (id, team_uuid, name, members, updated_at, last_synced, org_id, provider, is_active)
-SELECT id, team_uuid, name, members, now64(6) + INTERVAL 1 HOUR, now64(6) + INTERVAL 1 HOUR, org_id, provider, 1 FROM teams FINAL WHERE org_id = ? AND id = ?`, org, ahead); err != nil {
+			if err := conn.Exec(ctx, `INSERT INTO teams (id, team_uuid, name, updated_at, last_synced, org_id, provider, is_active)
+SELECT id, team_uuid, name, now64(6) + INTERVAL 1 HOUR, now64(6) + INTERVAL 1 HOUR, org_id, provider, 1 FROM teams FINAL WHERE org_id = ? AND id = ?`, org, ahead); err != nil {
 				t.Fatal(err)
 			}
 			if code, _ := status(call(h.deleteTeam, http.MethodDelete, "/api/v1/admin/teams/"+ahead, ahead, nil)); code != http.StatusOK {
@@ -262,8 +262,8 @@ SELECT id, team_uuid, name, members, now64(6) + INTERVAL 1 HOUR, now64(6) + INTE
 			if got, want := listed(""), sorted(stays); !reflect.DeepEqual(got, want) {
 				t.Fatalf("the list after the delete of the new team = %v, want %v", got, want)
 			}
-			if err := conn.Exec(ctx, `INSERT INTO teams (id, team_uuid, name, description, members, manual_members, project_keys, repo_patterns, is_active, updated_at, org_id, provider, native_team_key, parent_team_id, created_at)
-SELECT id, team_uuid, 'Platform synced', description, ['sync@example.com'], manual_members, project_keys, repo_patterns, 1, now64(6) + INTERVAL 2 SECOND, org_id, provider, native_team_key, parent_team_id, created_at
+			if err := conn.Exec(ctx, `INSERT INTO teams (id, team_uuid, name, description, manual_members, project_keys, repo_patterns, is_active, updated_at, org_id, provider, native_team_key, parent_team_id, created_at)
+SELECT id, team_uuid, 'Platform synced', description, manual_members, project_keys, repo_patterns, 1, now64(6) + INTERVAL 2 SECOND, org_id, provider, native_team_key, parent_team_id, created_at
 FROM teams FINAL WHERE org_id = ? AND id = ?`, org, gone); err != nil {
 				t.Fatal(err)
 			}

@@ -34,14 +34,14 @@ func seedRerunReaderStore(t *testing.T, ctx context.Context, conn driver.Conn) {
 	t.Helper()
 	day := rerunReaderDay
 	teams, err := conn.PrepareBatch(ctx, `INSERT INTO teams
-    (id, team_uuid, name, members, updated_at, last_synced, org_id, provider, native_team_key, is_active)`)
+    (id, team_uuid, name, updated_at, last_synced, org_id, provider, native_team_key, is_active)`)
 	if err != nil {
 		t.Fatalf("prepare teams: %v", err)
 	}
 	for _, key := range []string{"ENG", "OPS"} {
 		nativeKey := key
 		if err := teams.Append(
-			"linear:"+key, uuid.NewSHA1(uuid.NameSpaceURL, []byte("rerun-team:"+key)), "Team "+key, []string{},
+			"linear:"+key, uuid.NewSHA1(uuid.NameSpaceURL, []byte("rerun-team:"+key)), "Team "+key,
 			day.Add(-72*time.Hour), day.Add(-72*time.Hour), rerunReaderOrg, "linear", &nativeKey, uint8(1),
 		); err != nil {
 			t.Fatalf("append team %s: %v", key, err)

@@ -68,10 +68,9 @@ func TestTheLandscapeFinalizeGivesNoPersonAnInactiveTeam(t *testing.T) {
 		{"github:platform", "github", 1, []string{}},
 	} {
 		exec("insert team "+team.id, `INSERT INTO teams
-    (id, team_uuid, name, members, repo_patterns, updated_at, last_synced, org_id, provider, is_active)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			team.id, uuid.NewSHA1(uuid.NameSpaceURL, []byte("team:"+team.id)), "Team "+team.id, team.members,
-			[]string{}, t0, t0, org, team.provider, team.active)
+    (id, team_uuid, name, repo_patterns, updated_at, last_synced, org_id, provider, is_active)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			team.id, uuid.NewSHA1(uuid.NameSpaceURL, []byte("team:"+team.id)), "Team "+team.id, []string{}, t0, t0, org, team.provider, team.active)
 	}
 
 	exec("insert frank's membership", `INSERT INTO team_memberships
@@ -240,9 +239,9 @@ func TestTheEdgesOfTheInactiveTeamRuleOfTheLandscapeFinalize(t *testing.T) {
 			members = []string{}
 		}
 		exec("insert team "+id, `INSERT INTO teams
-    (id, team_uuid, name, members, repo_patterns, updated_at, last_synced, org_id, provider, is_active)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'jira', ?)`,
-			id, uuid.NewSHA1(uuid.NameSpaceURL, []byte(orgID+id)), "Team "+id, members, []string{}, at, at, orgID, active)
+    (id, team_uuid, name, repo_patterns, updated_at, last_synced, org_id, provider, is_active)
+    VALUES (?, ?, ?, ?, ?, ?, ?, 'jira', ?)`,
+			id, uuid.NewSHA1(uuid.NameSpaceURL, []byte(orgID+id)), "Team "+id, []string{}, at, at, orgID, active)
 	}
 	userRow := func(orgID string, rowDay time.Time, person, teamID string) {
 		t.Helper()

@@ -86,6 +86,14 @@ VALUES (?, ?, ?, ?, 'churn_loc', ?, ?, ?, ?, 0.8, 'high', 'ok', 'jev-test', 'run
 			t.Fatal(err)
 		}
 		out := map[string][2]any{}
+		keys := map[string]int{}
+		defer func() {
+			for key, n := range keys {
+				if n != 1 {
+					t.Errorf("list returned %d rows for %s, want exactly one per (unit, repository)", n, key)
+				}
+			}
+		}()
 		for _, row := range rows {
 			repo, effort := "", math.NaN()
 			if row.RepoID != nil {
@@ -95,6 +103,7 @@ VALUES (?, ?, ?, ?, 'churn_loc', ?, ?, ?, ?, 0.8, 'high', 'ok', 'jev-test', 'run
 				effort = *row.EffortValue
 			}
 			out[row.WorkUnitID+"@"+repo] = [2]any{repo, effort}
+			keys[row.WorkUnitID+"@"+repo]++
 		}
 		return out
 	}

@@ -27,11 +27,10 @@ package dbspan
 
 import (
 	"context"
-	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
 	"errors"
-	"log/slog"
+	"hash/fnv"
 	"os"
 	"regexp"
 	"strconv"
@@ -82,7 +81,7 @@ func ParseMin(raw string) (d time.Duration, ok bool) {
 
 // EnvMin is the process-wide threshold, read once. An invalid value falls back
 // to DefaultMin. EnvMin never logs (binaries classified silent import this
-// package); the process's tracing initialisation calls WarnIfInvalidEnv once.
+// package); the process's tracing initialisation checks InvalidEnv once.
 func EnvMin() time.Duration {
 	envMinOnce.Do(func() {
 		envMin, _ = ParseMin(os.Getenv(EnvMinMS))
@@ -90,13 +89,12 @@ func EnvMin() time.Duration {
 	return envMin
 }
 
-// WarnIfInvalidEnv logs ONE warning, naming the variable but not its value,
-// when OTEL_DB_SPAN_MIN_MS is set to an invalid value (the default applies).
-func WarnIfInvalidEnv(logger *slog.Logger) {
-	if _, ok := ParseMin(os.Getenv(EnvMinMS)); !ok && logger != nil {
-		logger.Warn("invalid database span threshold; using default",
-			"env", EnvMinMS, "default_ms", DefaultMin.Milliseconds())
-	}
+// InvalidEnv reports whether OTEL_DB_SPAN_MIN_MS is set to an invalid value
+// (the default applies). The process's tracing initialisation logs ONE warning
+// when it is true; this package never logs.
+func InvalidEnv() bool {
+	_, ok := ParseMin(os.Getenv(EnvMinMS))
+	return !ok
 }
 
 // Emitter emits the spans of one driver (and, for Postgres, one pool).
@@ -203,11 +201,85 @@ func ErrorClass(err error) string {
 	}
 }
 
-// Fingerprint is the first 16 hex characters of the SHA-256 of the statement.
+// Fingerprint identifies the statement TEMPLATE: the first 16 hex characters of
+// the FNV-1a 64-bit hash of the statement with every string and numeric
+// literal replaced by "?". Hashing the raw text would let anyone with the
+// trace guess a low-entropy literal against known query templates, so the
+// literals never enter the hash; the fingerprint also groups the same query
+// shape across different literal values. It is a grouping key, not a secret
+// (a non-cryptographic hash on purpose).
 func Fingerprint(stmt string) string {
-	sum := sha256.Sum256([]byte(stmt))
-	return hex.EncodeToString(sum[:8])
+	h := fnv.New64a()
+	_, _ = h.Write(normalize(stmt))
+	var sum [8]byte
+	return hex.EncodeToString(h.Sum(sum[:0]))
 }
+
+// normalize replaces single-quoted strings (with ” and backslash escapes),
+// dollar-quoted bodies and numeric literals by "?". Identifiers that contain
+// digits are left alone. An unterminated quote swallows the rest of the text.
+func normalize(stmt string) []byte {
+	in := stmt
+	out := make([]byte, 0, len(in))
+	for i := 0; i < len(in); {
+		c := in[i]
+		switch {
+		case c == '\'':
+			i++
+			for i < len(in) {
+				if in[i] == '\\' && i+1 < len(in) {
+					i += 2
+					continue
+				}
+				if in[i] == '\'' {
+					if i+1 < len(in) && in[i+1] == '\'' {
+						i += 2
+						continue
+					}
+					i++
+					break
+				}
+				i++
+			}
+			out = append(out, '?')
+		case c == '$' && i+1 < len(in) && (in[i+1] == '$' || isIdentStart(in[i+1])):
+			// $tag$ ... $tag$ (dollar quoting) or $$ ... $$; a parameter like $1
+			// is not a quote and falls through to the default branch below.
+			j := i + 1
+			for j < len(in) && isIdentPart(in[j]) {
+				j++
+			}
+			if j < len(in) && in[j] == '$' {
+				tag := in[i : j+1]
+				end := strings.Index(in[j+1:], tag)
+				if end < 0 {
+					i = len(in)
+				} else {
+					i = j + 1 + end + len(tag)
+				}
+				out = append(out, '?')
+				continue
+			}
+			out = append(out, c)
+			i++
+		case c >= '0' && c <= '9' && (len(out) == 0 || !isIdentPart(out[len(out)-1])):
+			for i < len(in) && (in[i] >= '0' && in[i] <= '9' || in[i] == '.' || in[i] == 'e' || in[i] == 'E' || in[i] == 'x' || in[i] == 'X' || (in[i] >= 'a' && in[i] <= 'f') || (in[i] >= 'A' && in[i] <= 'F')) {
+				i++
+			}
+			out = append(out, '?')
+		default:
+			out = append(out, c)
+			i++
+		}
+	}
+	return out
+}
+
+func isIdentStart(c byte) bool {
+	return c == '_' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z'
+}
+
+func isIdentPart(c byte) bool { return isIdentStart(c) || c >= '0' && c <= '9' }
 
 var operations = map[string]struct{}{
 	"SELECT": {}, "INSERT": {}, "UPDATE": {}, "DELETE": {}, "WITH": {}, "COPY": {},

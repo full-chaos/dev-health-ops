@@ -129,7 +129,10 @@ func InitWithServiceName(logger *slog.Logger, defaultName string) Component {
 		logger.Debug("OpenTelemetry tracing disabled via OTEL_ENABLED=false")
 		return Component{}
 	}
-	dbspan.WarnIfInvalidEnv(logger)
+	if dbspan.InvalidEnv() {
+		logger.Warn("invalid database span threshold; using default",
+			"env", dbspan.EnvMinMS, "default_ms", dbspan.DefaultMin.Milliseconds())
+	}
 
 	serviceName := stringEnv("OTEL_SERVICE_NAME", defaultName)
 	environment := stringEnv("OTEL_ENVIRONMENT", defaultEnvironment)

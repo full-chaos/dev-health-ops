@@ -188,3 +188,17 @@ func TestNewWithoutTracerInstallsSpanTracer(t *testing.T) {
 		t.Fatalf("explicit tracer replaced: %T", pool2.Config().ConnConfig.Tracer)
 	}
 }
+
+func TestNewTracedPoolInstallsSpanTracer(t *testing.T) {
+	pool, err := NewTracedPool(context.Background(), "postgres://u:p@127.0.0.1:1/db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	if _, ok := pool.Config().ConnConfig.Tracer.(spanTracer); !ok {
+		t.Fatalf("tracer = %T", pool.Config().ConnConfig.Tracer)
+	}
+	if _, err := NewTracedPool(context.Background(), "://bad"); err == nil {
+		t.Fatal("bad uri must error")
+	}
+}

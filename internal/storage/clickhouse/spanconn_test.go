@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 	"testing"
 	"time"
@@ -22,15 +23,25 @@ type fakeConn struct {
 	err   error
 	sleep time.Duration
 	batch *fakeBatch
+	rows  *fakeRows
 }
 
 func (f *fakeConn) work() error                                       { time.Sleep(f.sleep); return f.err }
 func (f *fakeConn) Select(context.Context, any, string, ...any) error { return f.work() }
 func (f *fakeConn) Query(context.Context, string, ...any) (driver.Rows, error) {
+	if f.rows != nil {
+		return f.rows, f.work()
+	}
 	return nil, f.work()
 }
 func (f *fakeConn) QueryRow(context.Context, string, ...any) driver.Row { return fakeRow{f.work()} }
-func (f *fakeConn) Exec(context.Context, string, ...any) error          { return f.work() }
+func (f *fakeConn) InsertFormat(context.Context, string, string, io.Reader) error {
+	return f.work()
+}
+func (f *fakeConn) QueryFormat(context.Context, string, string, ...any) (io.ReadCloser, error) {
+	return io.NopCloser(strings.NewReader("x")), f.work()
+}
+func (f *fakeConn) Exec(context.Context, string, ...any) error { return f.work() }
 func (f *fakeConn) AsyncInsert(context.Context, string, bool, ...any) error {
 	return f.work()
 }
@@ -80,7 +91,7 @@ func TestSpanConnEveryMethodEmitsOneSlowSpan(t *testing.T) {
 	const q = "SELECT a FROM metrics.daily WHERE org = {org:String}"
 	_ = c.Select(ctx, nil, q)
 	_, _ = c.Query(ctx, q)
-	_ = c.QueryRow(ctx, q)
+	_ = c.QueryRow(ctx, q).Scan()
 	_ = c.Exec(ctx, "INSERT INTO metrics.daily SELECT 1")
 	_ = c.AsyncInsert(ctx, "INSERT INTO metrics.daily VALUES", true)
 	b, _ := c.PrepareBatch(ctx, "INSERT INTO metrics.daily")
@@ -180,7 +191,7 @@ func TestSpanConnNeverCarriesStatementTextArgsOrErrorText(t *testing.T) {
 		c := wrap(&fakeConn{err: e, batch: &fakeBatch{sendErr: e}}, 0)
 		_ = c.Select(ctx, nil, stmt, args...)
 		_, _ = c.Query(ctx, stmt, args...)
-		_ = c.QueryRow(ctx, stmt, args...)
+		_ = c.QueryRow(ctx, stmt, args...).Scan()
 		_ = c.Exec(ctx, stmt, args...)
 		_ = c.AsyncInsert(ctx, stmt, false, args...)
 		b, _ := c.PrepareBatch(ctx, stmt)
@@ -211,5 +222,80 @@ func TestSpanConnNeverCarriesStatementTextArgsOrErrorText(t *testing.T) {
 		if strings.Contains(dump.String(), "email =") {
 			t.Fatalf("span carries statement text: %s", dump.String())
 		}
+	}
+}
+
+type fakeRows struct {
+	driver.Rows
+	nextSleep time.Duration
+	err       error
+}
+
+func (r *fakeRows) Next() bool   { time.Sleep(r.nextSleep); return false }
+func (r *fakeRows) Err() error   { return r.err }
+func (r *fakeRows) Close() error { return nil }
+
+func TestSpanConnRowStreamingIsCoveredAndEndsAtClose(t *testing.T) {
+	ctx, rec, end := recCtx(sdktrace.AlwaysSample())
+	c := wrap(&fakeConn{rows: &fakeRows{nextSleep: 30 * time.Millisecond}}, 20*time.Millisecond)
+	rows, err := c.Query(ctx, "SELECT a FROM t")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for rows.Next() {
+	}
+	if n := len(chSpans(rec)); n != 0 {
+		t.Fatalf("span emitted before Close: %d", n)
+	}
+	_ = rows.Close()
+	_ = rows.Close()
+	end()
+	if n := len(chSpans(rec)); n != 1 {
+		t.Fatalf("spans = %d, want 1 (slow row read, one emission)", n)
+	}
+}
+
+func TestSpanConnRowsErrSurfacesAsErrorSpan(t *testing.T) {
+	ctx, rec, end := recCtx(sdktrace.AlwaysSample())
+	c := wrap(&fakeConn{rows: &fakeRows{err: &chdriver.Exception{Code: 159, Message: "Timeout secret@x.y"}}}, time.Hour)
+	rows, _ := c.Query(ctx, "SELECT a FROM t")
+	_ = rows.Close()
+	end()
+	spans := chSpans(rec)
+	if len(spans) != 1 || spans[0].Status().Code != codes.Error {
+		t.Fatalf("spans = %d", len(spans))
+	}
+}
+
+func TestSpanConnQueryRowEndsAtScan(t *testing.T) {
+	ctx, rec, end := recCtx(sdktrace.AlwaysSample())
+	c := wrap(&fakeConn{sleep: 15 * time.Millisecond}, 10*time.Millisecond)
+	row := c.QueryRow(ctx, "SELECT a FROM t")
+	if len(chSpans(rec)) != 0 {
+		t.Fatal("span before Scan")
+	}
+	_ = row.Scan()
+	_ = row.Scan()
+	end()
+	if n := len(chSpans(rec)); n != 1 {
+		t.Fatalf("spans = %d", n)
+	}
+}
+
+func TestSpanConnInsertFormatAndQueryFormat(t *testing.T) {
+	ctx, rec, end := recCtx(sdktrace.AlwaysSample())
+	c := wrap(&fakeConn{sleep: 15 * time.Millisecond}, 10*time.Millisecond)
+	if err := c.InsertFormat(ctx, "CSV", "INSERT INTO t", strings.NewReader("a")); err != nil {
+		t.Fatal(err)
+	}
+	s, err := c.QueryFormat(ctx, "CSV", "SELECT a FROM t")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = io.ReadAll(s)
+	_ = s.Close()
+	end()
+	if n := len(chSpans(rec)); n != 2 {
+		t.Fatalf("spans = %d, want 2", n)
 	}
 }

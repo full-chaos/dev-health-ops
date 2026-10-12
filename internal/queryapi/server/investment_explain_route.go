@@ -45,7 +45,6 @@ import (
 	"time"
 
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
-	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/full-chaos/dev-health-ops/internal/api/policy"
 	"github.com/full-chaos/dev-health-ops/internal/api/pybody"
@@ -63,6 +62,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/teamscope"
 	"github.com/full-chaos/dev-health-ops/internal/queryapi/timewindow"
 	chclickhouse "github.com/full-chaos/dev-health-ops/internal/storage/clickhouse"
+	postgresstore "github.com/full-chaos/dev-health-ops/internal/storage/postgres"
 )
 
 // investmentExplainOperation is this route's routeswitch operation name
@@ -185,7 +185,7 @@ func buildInvestmentExplainRoute(getenv getenvFunc, edgeUsers edgeUserStore) (ha
 	// pass could share one pool object between them if that duplication
 	// matters in practice). pgxpool.New is lazy (matches query_route.go's
 	// own documented behavior) -- this does not dial Postgres at startup.
-	orgSettingsPool, err := pgxpool.New(context.Background(), registryPostgresURI)
+	orgSettingsPool, err := postgresstore.NewTracedPool(context.Background(), registryPostgresURI)
 	if err != nil {
 		_ = readClient.Close()
 		_ = writeConn.Close()

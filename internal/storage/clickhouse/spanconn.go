@@ -3,6 +3,7 @@ package clickhouse
 import (
 	"context"
 	"errors"
+	"io"
 	"strconv"
 	"sync"
 
@@ -40,19 +41,118 @@ func (c *spanConn) Select(ctx context.Context, dest any, query string, args ...a
 func (c *spanConn) Query(ctx context.Context, query string, args ...any) (driver.Rows, error) {
 	probe := c.spans.Start(ctx)
 	rows, err := c.Conn.Query(ctx, query, args...)
-	probe.Finish(ctx, query, "", err, chErrorClass(err))
-	return rows, err
+	if err != nil || rows == nil || !probe.Active() {
+		probe.Finish(ctx, query, "", err, chErrorClass(err))
+		return rows, err
+	}
+	return &spanRows{Rows: rows, finishOnce: newOnce(probe, ctx, query)}, nil
 }
 
 func (c *spanConn) QueryRow(ctx context.Context, query string, args ...any) driver.Row {
 	probe := c.spans.Start(ctx)
 	row := c.Conn.QueryRow(ctx, query, args...)
-	var err error
-	if row != nil {
-		err = row.Err()
+	if row == nil || !probe.Active() {
+		return row
 	}
+	if err := row.Err(); err != nil {
+		probe.Finish(ctx, query, "", err, chErrorClass(err))
+		return row
+	}
+	return &spanRow{Row: row, finishOnce: newOnce(probe, ctx, query)}
+}
+
+func (c *spanConn) InsertFormat(ctx context.Context, format string, query string, data io.Reader) error {
+	probe := c.spans.Start(ctx)
+	err := c.Conn.InsertFormat(ctx, format, query, data)
 	probe.Finish(ctx, query, "", err, chErrorClass(err))
-	return row
+	return err
+}
+
+func (c *spanConn) QueryFormat(ctx context.Context, format string, query string, args ...any) (io.ReadCloser, error) {
+	probe := c.spans.Start(ctx)
+	stream, err := c.Conn.QueryFormat(ctx, format, query, args...)
+	if err != nil || stream == nil || !probe.Active() {
+		probe.Finish(ctx, query, "", err, chErrorClass(err))
+		return stream, err
+	}
+	return &spanStream{ReadCloser: stream, finishOnce: newOnce(probe, ctx, query)}, nil
+}
+
+// finishOnce ends one probe at most once, whichever of Close / Scan / Send
+// reaches it first.
+type finishOnce struct {
+	probe dbspan.Probe
+	ctx   context.Context
+	query string
+	once  sync.Once
+}
+
+func newOnce(probe dbspan.Probe, ctx context.Context, query string) *finishOnce {
+	return &finishOnce{probe: probe, ctx: ctx, query: query}
+}
+
+func (f *finishOnce) finish(op string, err error) {
+	f.once.Do(func() { f.probe.Finish(f.ctx, f.query, op, err, chErrorClass(err)) })
+}
+
+// spanRows ends the Query span at Close, so the span covers row streaming and
+// carries an error surfaced by Rows.Err. Rows that are never closed emit
+// nothing (database/sql-style callers always Close).
+type spanRows struct {
+	driver.Rows
+	*finishOnce
+}
+
+func (r *spanRows) Close() error {
+	closeErr := r.Rows.Close()
+	err := r.Rows.Err()
+	if err == nil {
+		err = closeErr
+	}
+	r.finish("", err)
+	return closeErr
+}
+
+// spanRow ends the QueryRow span at Scan / ScanStruct.
+type spanRow struct {
+	driver.Row
+	*finishOnce
+}
+
+func (r *spanRow) Scan(dest ...any) error {
+	err := r.Row.Scan(dest...)
+	r.finish("", err)
+	return err
+}
+
+func (r *spanRow) ScanStruct(dest any) error {
+	err := r.Row.ScanStruct(dest)
+	r.finish("", err)
+	return err
+}
+
+// spanStream ends the QueryFormat span at Close, with the first read error.
+type spanStream struct {
+	io.ReadCloser
+	*finishOnce
+	readErr error
+}
+
+func (s *spanStream) Read(p []byte) (int, error) {
+	n, err := s.ReadCloser.Read(p)
+	if err != nil && !errors.Is(err, io.EOF) && s.readErr == nil {
+		s.readErr = err
+	}
+	return n, err
+}
+
+func (s *spanStream) Close() error {
+	err := s.ReadCloser.Close()
+	if s.readErr != nil {
+		err = s.readErr
+	}
+	s.finish("", err)
+	return err
 }
 
 func (c *spanConn) Exec(ctx context.Context, query string, args ...any) error {

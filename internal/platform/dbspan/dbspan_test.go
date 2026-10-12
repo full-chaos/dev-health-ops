@@ -227,3 +227,31 @@ func TestOperationAndSummary(t *testing.T) {
 		t.Errorf("fingerprint %q", f)
 	}
 }
+
+func TestFingerprintGroupsTemplatesAndHidesLiterals(t *testing.T) {
+	a := dbspan.Fingerprint("SELECT * FROM t WHERE email = 'secret@x.y' AND n = 42 AND k = $1")
+	b := dbspan.Fingerprint("SELECT * FROM t WHERE email = 'other''s' AND n = 7 AND k = $1")
+	if a != b {
+		t.Fatalf("same template, different literals: %s != %s", a, b)
+	}
+	if dbspan.Fingerprint("SELECT col1 FROM t1") == dbspan.Fingerprint("SELECT col2 FROM t1") {
+		t.Fatal("digits inside identifiers must not be normalized away")
+	}
+	if dbspan.Fingerprint("SELECT $$secret$$") != dbspan.Fingerprint("SELECT $tag$other$tag$") {
+		t.Fatal("dollar-quoted bodies must normalize")
+	}
+	if len(a) != 16 {
+		t.Fatalf("fingerprint %q", a)
+	}
+}
+
+func TestInvalidEnv(t *testing.T) {
+	t.Setenv(dbspan.EnvMinMS, "abc")
+	if !dbspan.InvalidEnv() {
+		t.Fatal("abc must be invalid")
+	}
+	t.Setenv(dbspan.EnvMinMS, "0")
+	if dbspan.InvalidEnv() {
+		t.Fatal("0 is valid")
+	}
+}

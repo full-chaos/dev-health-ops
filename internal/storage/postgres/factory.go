@@ -183,3 +183,17 @@ func ConnectionUser(uri string) (string, error) {
 	}
 	return config.ConnConfig.User, nil
 }
+
+// NewTracedPool builds a lazy pool for a caller that owns its own pool outside
+// New (the query-api route pools), with the slow-call span tracer installed
+// (CHAOS-9364). The URI is parsed by pgxpool exactly as pgxpool.New would.
+func NewTracedPool(ctx context.Context, uri string) (*pgxpool.Pool, error) {
+	poolConfig, err := pgxpool.ParseConfig(uri)
+	if err != nil {
+		return nil, err
+	}
+	if poolConfig.ConnConfig.Tracer == nil {
+		poolConfig.ConnConfig.Tracer = spanTracer{spans: dbspan.NewEmitter(dbspan.SystemPostgres, "")}
+	}
+	return pgxpool.NewWithConfig(ctx, poolConfig)
+}

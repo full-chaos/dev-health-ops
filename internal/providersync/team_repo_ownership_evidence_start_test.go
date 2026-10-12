@@ -7,8 +7,8 @@ import (
 	"github.com/google/uuid"
 )
 
-// The winning team's claim starts at the earliest timed evidence of THAT team
-// (a losing team's earlier evidence is not its start); a claim with no timed
+// Each owning team's claim starts at the earliest timed evidence of THAT team
+// (another team's earlier evidence is not its start); a claim with no timed
 // evidence has no evidence start.
 func TestDerivedOwnershipStartsAtTheWinnersEarliestEvidence(t *testing.T) {
 	early := time.Date(2025, 1, 2, 0, 0, 0, 0, time.UTC)
@@ -25,15 +25,21 @@ func TestDerivedOwnershipStartsAtTheWinnersEarliestEvidence(t *testing.T) {
 		{WorkItemID: "u1", Provider: "github", Type: "pr", RepoID: "repo-b", ProjectID: "p-untimed"},
 	}
 	derivation := deriveTeamRepoOwnership("org", links, items, nil, nil, nil)
-	got := map[string]DerivedTeamRepoOwnershipRow{}
+	got := map[[2]string]DerivedTeamRepoOwnershipRow{}
 	for _, row := range derivation.Rows {
-		got[row.RepoID] = row
+		got[[2]string{row.RepoID, row.TeamID}] = row
 	}
-	if row := got["repo-a"]; row.TeamID != "team-win" || !row.EvidenceFrom.Equal(mid) {
-		t.Errorf("repo-a = %+v, want team-win from %v (its own earliest, not the loser's %v)", row, mid, early)
+	if row := got[[2]string{"repo-a", "team-win"}]; row.IsPrimary != teamRepoOwnershipMainOwner || !row.EvidenceFrom.Equal(mid) {
+		t.Errorf("repo-a main = %+v, want team-win from %v (its own earliest, not the co-owner's %v)", row, mid, early)
 	}
-	if row := got["repo-b"]; row.TeamID != "team-untimed" || !row.EvidenceFrom.IsZero() {
+	if row := got[[2]string{"repo-a", "team-lose"}]; row.IsPrimary != teamRepoOwnershipCoOwner || !row.EvidenceFrom.Equal(early) {
+		t.Errorf("repo-a co-owner = %+v, want team-lose from its own %v", row, early)
+	}
+	if row := got[[2]string{"repo-b", "team-untimed"}]; row.IsPrimary != teamRepoOwnershipMainOwner || !row.EvidenceFrom.IsZero() {
 		t.Errorf("repo-b = %+v, want team-untimed with no evidence start", row)
+	}
+	if len(got) != 3 {
+		t.Errorf("rows = %+v, want three", derivation.Rows)
 	}
 }
 
@@ -49,14 +55,16 @@ func TestAnOpenRowAtTheRunTimeIsSupersededByTheEvidenceStart(t *testing.T) {
 		repoID: {Provider: "github", FullName: "acme/a"}, untimedRepo: {Provider: "github", FullName: "acme/b"},
 	}
 	inferred := teamRepoOwnershipPrecedence[teamRepoOwnershipSourceKindInferred]
+	whole := 1.0
 	active := func(repo uuid.UUID, name string, start time.Time) teamRepoOwnershipActiveRow {
 		return teamRepoOwnershipActiveRow{Provider: "github", TeamID: "team", RepoID: repo, RepoFullName: name, MatchType: "exact",
-			Specificity: inferred.Specificity, Priority: inferred.Priority, ValidFrom: start}
+			Specificity: inferred.Specificity, Priority: inferred.Priority, ValidFrom: start,
+			IsPrimary: teamRepoOwnershipMainOwner, Share: &whole}
 	}
 	runTime := now.Add(-40 * 24 * time.Hour)
 	derived := []DerivedTeamRepoOwnershipRow{
-		{TeamID: "team", RepoID: repoID.String(), Specificity: inferred.Specificity, EvidenceFrom: evidence},
-		{TeamID: "team", RepoID: untimedRepo.String(), Specificity: inferred.Specificity},
+		{TeamID: "team", RepoID: repoID.String(), Specificity: inferred.Specificity, EvidenceFrom: evidence, IsPrimary: teamRepoOwnershipMainOwner, Share: 1},
+		{TeamID: "team", RepoID: untimedRepo.String(), Specificity: inferred.Specificity, IsPrimary: teamRepoOwnershipMainOwner, Share: 1},
 	}
 
 	activeRows := []teamRepoOwnershipActiveRow{active(repoID, "acme/a", runTime), active(untimedRepo, "acme/b", runTime)}

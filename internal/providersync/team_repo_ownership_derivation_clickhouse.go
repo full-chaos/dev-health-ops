@@ -225,12 +225,12 @@ func (service TeamRepoOwnershipDerivationService) derive(ctx context.Context, or
 	}
 
 	derivation := deriveTeamRepoOwnership(orgID, projectLinks, workItems, dependencyEdges, issuePRLinks, knownTeams)
-	derived := derivation.Rows
 
 	activeRows, err := loadTeamRepoOwnershipActiveInferredRows(ctx, service.Conn, orgID)
 	if err != nil {
 		return 0, 0, true, nil, err
 	}
+	derived := stampTeamRepoOwnershipClaimStarts(resolveTiedMainOwners(derivation.Rows, repos, activeRows), repos, activeRows, now)
 	// CHAOS-4537 codex review round 3, second P1, and CHAOS-9045: the diff
 	// below is one comparison over the org's whole activeRows, so "this run
 	// does not derive the row" is a proof of absence only when the run read
@@ -314,10 +314,101 @@ func evidenceTime(t time.Time) time.Time {
 // the owner the evidence shows. A claim with no timed evidence, or evidence
 // in the future of this run, starts at the run.
 func inferredValidFrom(row DerivedTeamRepoOwnershipRow, now time.Time) time.Time {
+	if !row.validFrom.IsZero() {
+		return row.validFrom
+	}
 	if row.EvidenceFrom.IsZero() || row.EvidenceFrom.After(now) {
 		return now
 	}
 	return row.EvidenceFrom
+}
+
+// teamRepoOwnershipClaim is the identity of one team's claim on one
+// repository: the table's key without source and valid_from.
+type teamRepoOwnershipClaim struct{ provider, repoFullName, teamID string }
+
+// stampTeamRepoOwnershipClaimStarts sets the valid_from each derived claim is
+// written with. A claim with evidence in the past of the run starts at its
+// evidence. A claim with no such evidence keeps the start of its earliest open
+// row, so a new share or role replaces that row (same key) instead of opening
+// a second row; a new claim with no evidence starts at the run.
+func stampTeamRepoOwnershipClaimStarts(
+	derived []DerivedTeamRepoOwnershipRow,
+	repos map[uuid.UUID]teamRepoOwnershipRepoInfo,
+	activeRows []teamRepoOwnershipActiveRow,
+	now time.Time,
+) []DerivedTeamRepoOwnershipRow {
+	earliestOpen := map[teamRepoOwnershipClaim]time.Time{}
+	for _, row := range activeRows {
+		key := teamRepoOwnershipClaim{row.Provider, row.RepoFullName, row.TeamID}
+		start := row.ValidFrom.UTC().Truncate(time.Millisecond)
+		if held, ok := earliestOpen[key]; !ok || start.Before(held) {
+			earliestOpen[key] = start
+		}
+	}
+	out := make([]DerivedTeamRepoOwnershipRow, len(derived))
+	for i, row := range derived {
+		out[i] = row
+		if !row.EvidenceFrom.IsZero() && !row.EvidenceFrom.After(now) {
+			out[i].validFrom = row.EvidenceFrom
+			continue
+		}
+		out[i].validFrom = now
+		if info, ok := resolveTeamRepoOwnershipRepo(row.RepoID, repos); ok {
+			if start, open := earliestOpen[teamRepoOwnershipClaim{info.Provider, info.FullName, row.TeamID}]; open {
+				out[i].validFrom = start
+			}
+		}
+	}
+	return out
+}
+
+// resolveTiedMainOwners decides the main owner of each repository whose
+// largest linked share is tied. The one tied team whose open inferred row of
+// the repository is a main row (is_primary 1, or 0: a row of the one-owner
+// derivation before co-owner rows) stays the main owner; with no such team, or
+// with more than one, the repository has no main owner and every tied team is
+// a co-owner. A tie never moves the main owner to another team.
+func resolveTiedMainOwners(
+	derived []DerivedTeamRepoOwnershipRow,
+	repos map[uuid.UUID]teamRepoOwnershipRepoInfo,
+	activeRows []teamRepoOwnershipActiveRow,
+) []DerivedTeamRepoOwnershipRow {
+	openMain := map[teamRepoOwnershipClaim]bool{}
+	for _, row := range activeRows {
+		if row.IsPrimary != teamRepoOwnershipCoOwner {
+			openMain[teamRepoOwnershipClaim{row.Provider, row.RepoFullName, row.TeamID}] = true
+		}
+	}
+	mains := map[string][]int{}
+	out := make([]DerivedTeamRepoOwnershipRow, len(derived))
+	for i, row := range derived {
+		out[i] = row
+		if !row.Tied {
+			continue
+		}
+		info, ok := resolveTeamRepoOwnershipRepo(row.RepoID, repos)
+		if ok && openMain[teamRepoOwnershipClaim{info.Provider, info.FullName, row.TeamID}] {
+			mains[row.RepoID] = append(mains[row.RepoID], i)
+		}
+	}
+	for _, indexes := range mains {
+		if len(indexes) == 1 {
+			out[indexes[0]].IsPrimary = teamRepoOwnershipMainOwner
+		}
+	}
+	return out
+}
+
+// resolveTeamRepoOwnershipRepo is the repos row a derived row's repo_id names,
+// the same resolution writeTeamRepoOwnershipRows applies.
+func resolveTeamRepoOwnershipRepo(id string, repos map[uuid.UUID]teamRepoOwnershipRepoInfo) (teamRepoOwnershipRepoInfo, bool) {
+	repoID, err := uuid.Parse(id)
+	if err != nil || repoID == uuid.Nil {
+		return teamRepoOwnershipRepoInfo{}, false
+	}
+	info, ok := repos[repoID]
+	return info, ok && info.FullName != ""
 }
 
 // teamRepoOwnershipRowSignature is the full set of values a written
@@ -334,17 +425,19 @@ type teamRepoOwnershipRowSignature struct {
 	RepoFullName string
 	Provider     string
 	RepoID       uuid.UUID
-	IsPrimary    bool
+	IsPrimary    uint8
 	Specificity  uint16
 	Priority     int32
 	MatchType    string
+	HasShare     bool
+	Share        float64
 }
 
 // filterUnchangedTeamRepoOwnershipRows returns the subset of derived that
 // this run must actually write: a derived row whose full
 // teamRepoOwnershipRowSignature (identity: team_id, repo_full_name,
 // provider; attributes: repo_id, is_primary, specificity, priority,
-// match_type) already matches SOME row in activeRows is left out -- the
+// match_type, share) already matches SOME row in activeRows is left out -- the
 // existing open row already records exactly this fact, so writing again
 // would only stamp a new valid_from over an unchanged truth (the growth
 // this producer exists to stop). Every other derived row -- a genuinely
@@ -380,6 +473,9 @@ func filterUnchangedTeamRepoOwnershipRows(
 			Priority:     row.Priority,
 			MatchType:    row.MatchType,
 		}
+		if row.Share != nil {
+			key.HasShare, key.Share = true, *row.Share
+		}
 		unchanged[key] = append(unchanged[key], row.ValidFrom.UTC().Truncate(time.Millisecond))
 	}
 	toWrite := make([]DerivedTeamRepoOwnershipRow, 0, len(derived))
@@ -404,10 +500,12 @@ func filterUnchangedTeamRepoOwnershipRows(
 			RepoFullName: info.FullName,
 			Provider:     info.Provider,
 			RepoID:       repoID,
-			IsPrimary:    false, // writeTeamRepoOwnershipRows always writes is_primary=0
+			IsPrimary:    row.IsPrimary,
 			Specificity:  row.Specificity,
 			Priority:     teamRepoOwnershipPrecedence[teamRepoOwnershipSourceKindInferred].Priority,
 			MatchType:    "exact", // writeTeamRepoOwnershipRows always writes match_type="exact"
+			HasShare:     true,
+			Share:        row.Share,
 		}
 		if openRowMatches(unchanged[signature], row) {
 			continue
@@ -427,11 +525,15 @@ func openRowMatches(validFroms []time.Time, row DerivedTeamRepoOwnershipRow) boo
 	if len(validFroms) == 0 {
 		return false
 	}
-	if row.EvidenceFrom.IsZero() {
+	start := row.validFrom
+	if start.IsZero() {
+		start = row.EvidenceFrom
+	}
+	if start.IsZero() {
 		return true
 	}
 	for _, validFrom := range validFroms {
-		if validFrom.Equal(row.EvidenceFrom) {
+		if validFrom.Equal(start) {
 			return true
 		}
 	}
@@ -458,7 +560,7 @@ func supersededTeamRepoOwnershipRows(
 			continue
 		}
 		info, ok := repos[repoID]
-		if !ok || info.FullName == "" || row.EvidenceFrom.IsZero() {
+		if !ok || info.FullName == "" || (row.EvidenceFrom.IsZero() && row.validFrom.IsZero()) {
 			continue
 		}
 		starts[claim{info.Provider, info.FullName, row.TeamID}] = inferredValidFrom(row, now)
@@ -784,17 +886,20 @@ type teamRepoOwnershipActiveRow struct {
 	RepoID       uuid.UUID
 	RepoFullName string
 	MatchType    string
-	IsPrimary    bool
+	IsPrimary    uint8
 	Specificity  uint16
 	Priority     int32
 	ValidFrom    time.Time
+	// Share is the row's stored share; nil for a row with none (written before
+	// the column, or by another writer).
+	Share *float64
 }
 
 func loadTeamRepoOwnershipActiveInferredRows(
 	ctx context.Context, conn driver.Conn, orgID string,
 ) ([]teamRepoOwnershipActiveRow, error) {
 	rows, err := conn.Query(ctx, `
-SELECT provider, team_id, repo_id, repo_full_name, match_type, is_primary, specificity, priority, valid_from
+SELECT provider, team_id, repo_id, repo_full_name, match_type, is_primary, specificity, priority, valid_from, share
 FROM team_repo_ownership FINAL
 WHERE org_id = ?
   AND source = 'inferred'
@@ -808,15 +913,13 @@ WHERE org_id = ?
 	for rows.Next() {
 		var row teamRepoOwnershipActiveRow
 		var repoID uuid.UUID
-		var isPrimary uint8
 		if err := rows.Scan(
 			&row.Provider, &row.TeamID, &repoID, &row.RepoFullName, &row.MatchType,
-			&isPrimary, &row.Specificity, &row.Priority, &row.ValidFrom,
+			&row.IsPrimary, &row.Specificity, &row.Priority, &row.ValidFrom, &row.Share,
 		); err != nil {
 			return nil, err
 		}
 		row.RepoID = repoID
-		row.IsPrimary = isPrimary != 0
 		out = append(out, row)
 	}
 	return out, rows.Err()
@@ -899,12 +1002,13 @@ func retractTeamRepoOwnershipRows(
 			row.RepoFullName,
 			row.MatchType,
 			"inferred",
-			uint8(0),
+			row.IsPrimary,
 			row.Specificity,
 			row.Priority,
 			row.ValidFrom,
 			now,
 			now,
+			row.Share,
 		); err != nil {
 			return 0, err
 		}
@@ -935,13 +1039,9 @@ func supersedeTeamRepoOwnershipRows(
 	}
 	defer releaseTeamRepoOwnershipBatch(ctx, orgID, batch)
 	for _, row := range rows {
-		isPrimary := uint8(0)
-		if row.IsPrimary {
-			isPrimary = 1
-		}
 		if err := batch.Append(
 			orgID, row.Provider, row.TeamID, row.RepoID, row.RepoFullName, row.MatchType, "inferred",
-			isPrimary, row.Specificity, row.Priority, row.ValidFrom, row.ValidFrom, now,
+			row.IsPrimary, row.Specificity, row.Priority, row.ValidFrom, row.ValidFrom, now, row.Share,
 		); err != nil {
 			return 0, err
 		}
@@ -965,7 +1065,7 @@ func releaseTeamRepoOwnershipBatch(ctx context.Context, orgID string, batch driv
 	}
 }
 
-const teamRepoOwnershipInsert = `INSERT INTO team_repo_ownership (org_id, provider, team_id, repo_id, repo_full_name, match_type, source, is_primary, specificity, priority, valid_from, valid_to, updated_at)`
+const teamRepoOwnershipInsert = `INSERT INTO team_repo_ownership (org_id, provider, team_id, repo_id, repo_full_name, match_type, source, is_primary, specificity, priority, valid_from, valid_to, updated_at, share)`
 
 // writeTeamRepoOwnershipRows batch-inserts the derived rows. A derived row
 // whose repo_id has no matching repos entry (should not happen -- every
@@ -1017,21 +1117,14 @@ func writeTeamRepoOwnershipRows(
 			info.FullName,
 			"exact",
 			"inferred",
-			// is_primary=0, NEVER 1: the read path
-			// (providers/teams.py::load_team_repo_ownership_map) orders
-			// "ORDER BY is_primary DESC, specificity DESC" -- is_primary is
-			// checked BEFORE specificity, so an is_primary=1 row would
-			// always outrank every other source regardless of specificity,
-			// which is exactly the dimension teamRepoOwnershipPrecedence
-			// governs. When this is the ONLY row for a repo, is_primary=0
-			// does not stop it from being read -- there is no competing row
-			// to lose to.
-			uint8(0),
+			// 1 for the main owner, 2 for a co-owner (ruling D5988).
+			row.IsPrimary,
 			row.Specificity,
 			teamRepoOwnershipPrecedence[teamRepoOwnershipSourceKindInferred].Priority,
 			inferredValidFrom(row, now),
 			nil,
 			now,
+			row.Share,
 		); err != nil {
 			return written, nil, err
 		}

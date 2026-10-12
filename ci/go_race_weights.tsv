@@ -103,6 +103,7 @@ internal/clicredentials	11
 internal/contractcheck	1
 internal/deploymentcontract	2
 internal/edgetokenmint	1
+internal/entitlements	1
 internal/envelopemint	1
 internal/externalrecompute	1
 internal/fixturescli	420

@@ -225,15 +225,7 @@ func (service TeamRepoOwnershipDerivationService) derive(ctx context.Context, or
 	}
 
 	derivation := deriveTeamRepoOwnership(orgID, projectLinks, workItems, dependencyEdges, issuePRLinks, knownTeams)
-	retractedUntil, err := loadTeamRepoOwnershipRetractedUntil(ctx, service.Conn, orgID)
-	if err != nil {
-		return 0, 0, true, nil, err
-	}
-	derived, futureEvidence, retractedEvidence := settleInferredEvidence(derivation.Rows, repos, retractedUntil, now)
-	if futureEvidence > 0 || retractedEvidence > 0 {
-		slog.Default().InfoContext(ctx, "team_repo_ownership_derivation.evidence_start_set_aside",
-			"org_id", orgID, "future", futureEvidence, "before_retraction", retractedEvidence)
-	}
+	derived := derivation.Rows
 
 	activeRows, err := loadTeamRepoOwnershipActiveInferredRows(ctx, service.Conn, orgID)
 	if err != nil {
@@ -262,6 +254,16 @@ func (service TeamRepoOwnershipDerivationService) derive(ctx context.Context, or
 		if err != nil {
 			return 0, 0, true, nil, err
 		}
+	}
+	retractedUntil, err := loadTeamRepoOwnershipRetractedUntil(ctx, service.Conn, orgID)
+	if err != nil {
+		return 0, retracted, true, nil, err
+	}
+	derived, settledCounts := settleInferredEvidence(derived, repos, retractedUntil, toRetract, now)
+	if settledCounts != (inferredEvidenceSettleCounts{}) {
+		slog.Default().InfoContext(ctx, "team_repo_ownership_derivation.evidence_start_set_aside",
+			"org_id", orgID, "future", settledCounts.future, "before_retraction", settledCounts.beforeRetraction,
+			"after_other_owner", settledCounts.afterOtherOwner)
 	}
 
 	stats.Derived = len(derived)
@@ -331,20 +333,46 @@ func inferredValidFrom(row DerivedTeamRepoOwnershipRow, now time.Time) time.Time
 // teamRepoOwnershipClaim is the identity of an inferred ownership claim.
 type teamRepoOwnershipClaim struct{ provider, repoFullName, teamID string }
 
-// settleInferredEvidence clears the evidence time of a claim that must start
-// at a run, not at its evidence: evidence in the future of this run (the row
-// is written at the run and an open row matches on the next runs, so a rerun
-// writes nothing), and evidence older than the end of the claim's last
-// retraction (that retraction already judged it; a row at the evidence time
-// would replace the retracted row, whose valid_from is the same key, and
-// erase the interval another team owned the repository).
+type inferredEvidenceSettleCounts struct{ future, beforeRetraction, afterOtherOwner int }
+
+// settleInferredEvidence moves the evidence time of a claim to where its row
+// must start:
+//   - evidence in the future of this run is cleared (the row starts at the run
+//     and an open row matches on the next runs, so a rerun writes nothing);
+//   - evidence older than the end of the claim's own latest retraction is
+//     cleared (that retraction already judged it; a row at the evidence time
+//     would replace the retracted row, whose valid_from is the same key, and
+//     erase the interval the claim did not own);
+//   - else evidence older than the end of another team's tenure on the
+//     repository (its latest retraction, or this run, when this run retracts
+//     its open row) moves to that end, so one team owns the repository at a
+//     time. The end is stored as that team's valid_to, so the next run reads
+//     the same start and writes nothing.
 func settleInferredEvidence(
 	derived []DerivedTeamRepoOwnershipRow,
 	repos map[uuid.UUID]teamRepoOwnershipRepoInfo,
 	retractedUntil map[teamRepoOwnershipClaim]time.Time,
+	retractingNow []teamRepoOwnershipActiveRow,
 	now time.Time,
-) (settled []DerivedTeamRepoOwnershipRow, future, retracted int) {
-	settled = make([]DerivedTeamRepoOwnershipRow, len(derived))
+) ([]DerivedTeamRepoOwnershipRow, inferredEvidenceSettleCounts) {
+	type repoKey struct{ provider, repoFullName string }
+	type tenureEnd struct {
+		teamID string
+		until  time.Time
+	}
+	ends := map[repoKey][]tenureEnd{}
+	for claim, until := range retractedUntil {
+		key := repoKey{claim.provider, claim.repoFullName}
+		ends[key] = append(ends[key], tenureEnd{claim.teamID, until})
+	}
+	runEnd := evidenceTime(now)
+	for _, row := range retractingNow {
+		key := repoKey{row.Provider, row.RepoFullName}
+		ends[key] = append(ends[key], tenureEnd{row.TeamID, runEnd})
+	}
+
+	var counts inferredEvidenceSettleCounts
+	settled := make([]DerivedTeamRepoOwnershipRow, len(derived))
 	for i, row := range derived {
 		settled[i] = row
 		if row.EvidenceFrom.IsZero() {
@@ -352,7 +380,7 @@ func settleInferredEvidence(
 		}
 		if row.EvidenceFrom.After(now) {
 			settled[i].EvidenceFrom = time.Time{}
-			future++
+			counts.future++
 			continue
 		}
 		repoID, err := uuid.Parse(row.RepoID)
@@ -365,10 +393,21 @@ func settleInferredEvidence(
 		}
 		if until, ok := retractedUntil[teamRepoOwnershipClaim{info.Provider, info.FullName, row.TeamID}]; ok && row.EvidenceFrom.Before(until) {
 			settled[i].EvidenceFrom = time.Time{}
-			retracted++
+			counts.beforeRetraction++
+			continue
+		}
+		var otherEnd time.Time
+		for _, end := range ends[repoKey{info.Provider, info.FullName}] {
+			if end.teamID != row.TeamID && end.until.After(otherEnd) {
+				otherEnd = end.until
+			}
+		}
+		if otherEnd.After(row.EvidenceFrom) {
+			settled[i].EvidenceFrom = otherEnd
+			counts.afterOtherOwner++
 		}
 	}
-	return settled, future, retracted
+	return settled, counts
 }
 
 // loadTeamRepoOwnershipRetractedUntil is, for each inferred claim with a

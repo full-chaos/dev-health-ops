@@ -85,3 +85,33 @@ func TestAnOpenRowAtTheRunTimeIsSupersededByTheEvidenceStart(t *testing.T) {
 		t.Errorf("evidence in the future of the run starts at %v, want the run %v", got, now)
 	}
 }
+
+// A claim's start moves to the end of another team's tenure on the repository,
+// read from that team's retracted rows or from the open row this run retracts
+// (the read of the retracted rows may not see this run's own write yet).
+func TestSettledEvidenceStartsWhereTheOtherOwnerEnds(t *testing.T) {
+	repoID := uuid.New()
+	repos := map[uuid.UUID]teamRepoOwnershipRepoInfo{repoID: {FullName: "acme/api", Provider: "github"}}
+	evidence := time.Date(2025, 3, 4, 5, 6, 7, 0, time.UTC)
+	priorEnd := evidence.Add(30 * 24 * time.Hour)
+	now := evidence.Add(90 * 24 * time.Hour)
+	derived := []DerivedTeamRepoOwnershipRow{{TeamID: "team-b", RepoID: repoID.String(), EvidenceFrom: evidence}}
+
+	settled, counts := settleInferredEvidence(derived, repos,
+		map[teamRepoOwnershipClaim]time.Time{{"github", "acme/api", "team-a"}: priorEnd}, nil, now)
+	if !settled[0].EvidenceFrom.Equal(priorEnd) || counts.afterOtherOwner != 1 {
+		t.Errorf("after a retracted owner: start %v (%+v), want %v", settled[0].EvidenceFrom, counts, priorEnd)
+	}
+
+	retracting := []teamRepoOwnershipActiveRow{{Provider: "github", RepoFullName: "acme/api", TeamID: "team-a", RepoID: repoID}}
+	settled, counts = settleInferredEvidence(derived, repos, nil, retracting, now)
+	if !settled[0].EvidenceFrom.Equal(now) || counts.afterOtherOwner != 1 {
+		t.Errorf("retracting the owner in this run: start %v (%+v), want the run %v", settled[0].EvidenceFrom, counts, now)
+	}
+
+	settled, _ = settleInferredEvidence(derived, repos,
+		map[teamRepoOwnershipClaim]time.Time{{"github", "acme/other", "team-a"}: priorEnd}, nil, now)
+	if !settled[0].EvidenceFrom.Equal(evidence) {
+		t.Errorf("another repository's owner: start %v, want the evidence %v", settled[0].EvidenceFrom, evidence)
+	}
+}

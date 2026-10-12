@@ -479,7 +479,12 @@ means the ClickHouse `teams` dimension is empty.
 > again starts at the run when its evidence is older than the end of its latest retraction: that retraction already
 > judged that evidence, and a row at the evidence time would have the key of the retracted row and reopen it, so a
 > read of the interval the other team owned would name this team again (logged with `before_retraction`). A row
-> closed at its own start (superseded, below) is no retraction.
+> closed at its own start (superseded, below) is no retraction. One team owns a repository at a time: a claim whose
+> evidence is older than the end of ANOTHER team's tenure on the repository (that team's latest retraction, or this
+> run when this run retracts its open row) starts at that end (logged with `after_other_owner`); the end is stored
+> as the other team's `valid_to`, so the next run reads the same start and writes nothing, and an open row an
+> earlier run left at the older evidence is superseded. A retraction the guard holds (§ retraction guard) has no
+> end yet, so a claim beside a held row can still overlap it.
 > One open row per claim: an open row of the claim that does not start at its evidence time (written by an
 > earlier run at its run time) is superseded -- closed at its own `valid_from`, an empty interval no read
 > sees -- in the same run, after the row at the evidence time is written (logged

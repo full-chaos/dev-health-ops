@@ -3,6 +3,7 @@ package providersync
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"time"
 
 	"github.com/ClickHouse/clickhouse-go/v2"
@@ -778,6 +779,7 @@ func retractTeamRepoOwnershipRows(
 	if err != nil {
 		return 0, err
 	}
+	defer releaseTeamRepoOwnershipBatch(ctx, orgID, batch)
 	for _, row := range toRetract {
 		if err := batch.Append(
 			orgID,
@@ -801,6 +803,18 @@ func retractTeamRepoOwnershipRows(
 		return 0, err
 	}
 	return len(toRetract), nil
+}
+
+// releaseTeamRepoOwnershipBatch aborts a batch that was never sent. A
+// prepared batch holds a pool connection until Send or Abort, so a return
+// without either (no writable row, an Append error) leaks the connection.
+func releaseTeamRepoOwnershipBatch(ctx context.Context, orgID string, batch driver.Batch) {
+	if batch.IsSent() {
+		return
+	}
+	if err := batch.Abort(); err != nil {
+		slog.Default().WarnContext(ctx, "team_repo_ownership_derivation.batch_abort_failed", "org_id", orgID, "error", err)
+	}
 }
 
 const teamRepoOwnershipInsert = `INSERT INTO team_repo_ownership (org_id, provider, team_id, repo_id, repo_full_name, match_type, source, is_primary, specificity, priority, valid_from, valid_to, updated_at)`
@@ -835,6 +849,7 @@ func writeTeamRepoOwnershipRows(
 	if err != nil {
 		return 0, nil, err
 	}
+	defer releaseTeamRepoOwnershipBatch(ctx, orgID, batch)
 	written := 0
 	armCounts := map[string]int{}
 	for _, row := range derived {

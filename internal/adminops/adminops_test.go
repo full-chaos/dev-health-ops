@@ -20,9 +20,23 @@ func TestTheAdminGroupHoldsEveryVerb(t *testing.T) {
 			paths = append(paths, group.Name+" "+child.Name)
 		}
 	}
-	want := "users create,users list,users update,orgs create,orgs list,orgs delete,llm-settings get,llm-settings set,llm-settings delete,licenses keygen,licenses create,bundles create,bundles list,bundles assign-plan,bundles assign-org,billing seed,billing list,billing pull-stripe,billing sync-stripe,features seed"
+	want := "users create,users list,users update,orgs create,orgs list,orgs delete,llm-settings get,llm-settings set,llm-settings delete,licenses keygen,licenses create,bundles create,bundles list,bundles assign-plan,bundles assign-org,org entitlements,billing seed,billing list,billing pull-stripe,billing sync-stripe,features seed"
 	if command.Name != "admin" || strings.Join(paths, ",") != want {
 		t.Fatalf("the verbs are %v, want %s", paths, want)
+	}
+	var nested []string
+	for _, group := range command.Children {
+		if group.Name != "org" {
+			continue
+		}
+		for _, sub := range group.Children {
+			for _, verb := range sub.Children {
+				nested = append(nested, group.Name+" "+sub.Name+" "+verb.Name)
+			}
+		}
+	}
+	if got := strings.Join(nested, ","); got != "org entitlements list,org entitlements grant,org entitlements revoke" {
+		t.Fatalf("the nested verbs are %s", got)
 	}
 }
 

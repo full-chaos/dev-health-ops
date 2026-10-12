@@ -666,7 +666,23 @@ dho admin bundles assign-org --org-id <uuid> --feature-key reports
 | `create` | Create a bundle (`--key`, `--name`, `--features` comma-separated, `--description`) |
 | `list` | List all bundles with features and plan assignments |
 | `assign-plan` | Assign a bundle to a billing plan (`--bundle-key`, `--plan-key`) |
-| `assign-org` | Grant an org a feature override (`--org-id`, `--feature-key`, `--reason`, `--expires-days`) |
+| `assign-org` | Grant an org a feature override (`--org-id`, `--feature-key`, `--reason`, `--expires-days`); same grant as `org entitlements grant` |
+
+### `admin org entitlements`
+
+List, grant and revoke the feature overrides (entitlements) of one organization. The verbs and the superuser admin API call the same code (`internal/entitlements`). They read the database from `MIGRATION_DATABASE_URI`, else `POSTGRES_URI`.
+
+```bash
+dho admin org entitlements list --org-id <uuid>
+dho admin org entitlements grant --org-id <uuid> --feature-key reports --reason "support ticket" --expires-at 2026-12-31T00:00:00Z
+dho admin org entitlements revoke --org-id <uuid> --feature-key reports
+```
+
+| Subcommand | Description |
+|------------|-------------|
+| `list` | One JSON line per override: `action`, `org_id`, `feature_key`, `is_enabled`, `expires_at`, `reason` |
+| `grant` | Grant a feature (`--org-id`, `--feature-key`, `--reason`, `--expires-at` RFC 3339). One JSON line with `action` `grant`. A second grant of the same feature fails (`Error:` line, exit 1) |
+| `revoke` | Delete the org's override of a feature (`--org-id`, `--feature-key`). One JSON line with `result` `removed` or `not_present`; both exit 0, so a repeat is safe. Only the named org is touched |
 
 ### `admin llm-settings`
 

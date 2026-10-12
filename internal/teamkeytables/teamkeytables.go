@@ -231,7 +231,7 @@ var (
 		NullableMeasures: []string{
 			"compounding_risk", "churn_norm", "complexity_norm", "ownership_norm", "review_norm",
 			"rework_churn", "complexity_delta", "bus_factor", "ownership_gini", "single_owner_ratio",
-			"review_latency_p90h",
+			"review_latency_p90h", "merged_prs_30d", "reviewed_prs_30d", "review_share_30d",
 		},
 		// severity is the label of the score. A row of zeros stores its
 		// default, 'unknown'.

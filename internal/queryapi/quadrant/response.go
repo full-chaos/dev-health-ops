@@ -303,6 +303,10 @@ func BuildResponse(ctx context.Context, client QueryClient, orgID string, params
 		if definition.Type == "cycle_throughput" && scope == "team" && spec.UsePrimaryTeamAttribution {
 			return fetchWorkItemTeamQuadrantMetricIn(ctx, client, spec.Metric, startDay, endDay, params.Bucket, orgID, selected.attributedTeams)
 		}
+		if scope == "team" && spec.OwnerTeam {
+			read, owners := ownerTeamRead(spec, orgID, selected.teams, time.Now().UTC())
+			return fetchQuadrantMetricIn(ctx, client, read, startDay, endDay, params.Bucket, orgID, "", owners)
+		}
 		return fetchQuadrantMetricIn(ctx, client, spec, startDay, endDay, params.Bucket, orgID, teamFilter, selected.scope)
 	}
 

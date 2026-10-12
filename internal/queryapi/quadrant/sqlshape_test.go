@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	dhclickhouse "github.com/full-chaos/dev-health-go/clickhouse"
 
@@ -46,6 +47,7 @@ func TestOrgIDScopesEveryQuadrantMetricReadAtTheSameNestingDepthAsFinal(t *testi
 			"INNER JOIN repos FINAL ON repos.repo = m.work_scope_id AND repos.org_id",
 		}},
 		{"PersonMetrics throughput (work_item_user_metrics_daily)", PersonMetrics["throughput"], []string{"work_item_user_metrics_daily AS m FINAL"}},
+		{"TeamMetrics review_load (user_metrics_daily + repository owners)", ownerTeamSpec(TeamMetrics["review_load"]), []string{"user_metrics_daily AS m FINAL"}},
 	}
 
 	for _, tc := range cases {
@@ -121,4 +123,10 @@ func TestOrgIDScopesResolvePersonIdentityAtTheSameNestingDepthAsFinal(t *testing
 				orgDepth, marker, markerDepth)
 		}
 	}
+}
+
+// ownerTeamSpec is an OwnerTeam spec with its ownership join, as the team grain reads it.
+func ownerTeamSpec(spec MetricSpec) MetricSpec {
+	read, _ := ownerTeamRead(spec, "org-1", nil, time.Date(2026, 9, 21, 0, 0, 0, 0, time.UTC))
+	return read
 }

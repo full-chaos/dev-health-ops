@@ -2631,6 +2631,25 @@ case, `facts_derived>0` with `facts_unchanged<facts_derived` is a derivation tha
 Beside the run's outcome, `owner_tie_unresolved` counts a run that left one or more repos on a full tie (next paragraph); the run
 also writes a WARN `team_repo_ownership_derivation.owner_tie_unresolved` log line with `owner_ties` (the count) and `repo_ids`.
 
+**Retraction is guarded per provider and per fact kind (CHAOS-9045).** A run retracts an open inferred row it no longer
+derives only when it read the input that could derive that row. Each kind of input has its own proof
+(`team_repo_ownership_retraction_guard.go`, a `SnapshotProof` of one named term): `project_links:<provider>` holds when the
+run has at least one open `team_project_ownership` link of that provider (reason `no_open_project_link_of_the_provider`);
+`linear_team_key` holds when a Linear work item's `native_team_key` names a current Linear team (reason
+`no_linear_work_item_with_a_known_team_key`). The kinds of an open row are read from its team: `project_links:<P>` for every
+provider `P` whose links (open or closed) ever named the team, and `linear_team_key` when the team is a Linear team (a
+`linear:` id, or a team the Linear catalog lists). The row is retracted only when the proof of every one of its kinds holds;
+otherwise it stays open. So in an org with two providers, provider A with no open link and provider B with one, A's
+derived rows stay open, the same as in a single-provider org; before CHAOS-9045 one count over the links of all providers
+let B's link retract them, which turned any wrong upstream close of A's links into a loss of derived repository ownership.
+A's rows are retracted again once A has an open link and the run does not derive them. A team that no link ever named and
+that is no Linear team has no kind: its row is retracted when the run has an open link of any provider (the guard before
+CHAOS-9045, for this case only). Every kept row is counted: `rows_retraction_held` on the `team_repo_ownership_derivation`
+log line, one WARN `team_repo_ownership_derivation.retraction_held` line per kind (`kind`, `provider`, `reasons`,
+`open_rows_kept`), and `team_repo_ownership_retraction_held_total{kind,provider,reason}`. Pinned by
+`team_repo_ownership_retraction_guard_test.go` and `team_repo_ownership_retraction_guard_integration_test.go` (real
+ClickHouse, every ordered pair of jira, gitlab, github and linear).
+
 **One owner per repo, ranked by linked share (chris ruling D5432, CHAOS-8945).** When two or more teams reach the same
 repo, the derivation counts each team's candidates per link tier and ranks the teams lexicographically: the most `native`
 links first, then the most `explicit_text` links, then the most `heuristic` links, then links with any other recorded
@@ -2887,9 +2906,9 @@ Linear item has a validly-known native key — but `derived` can never reproduce
 in that state (the arm has no `projectToTeam` entries to resolve from at all with `projectLinks` empty).
 Diffing anyway would treat "this cycle cannot reconfirm them" as "they're no longer true" and retract
 every previously-good `project_id`-arm row for the org, including repos the single Linear item never
-touches. Fixed: skip the retraction diff entirely whenever `projectLinks` is empty (still derive and
-write any newly-resolvable `linear_team_key` rows); a later cycle that re-syncs `team_project_ownership`
-resumes normal retraction. `TestTeamRepoOwnershipDerivationSkipsRetractionWhenProjectOwnershipIsTransientlyEmptyForAMixedOrg`
+touches. Fixed then: skip the retraction diff entirely whenever `projectLinks` is empty (still derive and
+write any newly-resolvable `linear_team_key` rows). CHAOS-9045 replaced that one org-wide count with the
+per-provider, per-kind guard described under "Retraction is guarded per provider and per fact kind". `TestTeamRepoOwnershipDerivationSkipsRetractionWhenProjectOwnershipIsTransientlyEmptyForAMixedOrg`
 pins both halves: the new row is written, and the pre-existing `project_id`-arm row for the other repo
 survives untouched.
 

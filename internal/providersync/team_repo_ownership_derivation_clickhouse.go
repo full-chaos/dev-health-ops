@@ -100,6 +100,9 @@ type TeamRepoOwnershipDerivationStats struct {
 	Derived int
 	// Unchanged is how many of those an already-open row carried unchanged, so the run did not write them.
 	Unchanged int
+	// RetractionsHeld is how many open rows the run does not derive and kept open, because the input of a kind that can
+	// derive them was not in the run (CHAOS-9045, team_repo_ownership_retraction_guard.go).
+	RetractionsHeld int
 	// Ties are the repos two or more teams reach with equal link counts at every tier: the run named no owner for them, kept
 	// the tied teams' open rows and retracted any other team's. Set on every run that reaches the derivation, also when it
 	// writes nothing.
@@ -225,24 +228,24 @@ func (service TeamRepoOwnershipDerivationService) derive(ctx context.Context, or
 	if err != nil {
 		return 0, 0, true, nil, err
 	}
-	// CHAOS-4537 codex review round 3, second P1 (confirmed real, traced
-	// through diffTeamRepoOwnershipRetractions below): that diff is a single
-	// GLOBAL comparison over the whole org's activeRows vs. derived -- it is
-	// not scoped per resolution arm. The guard above can let a cycle proceed
-	// with projectLinks empty (a Linear-native signal from ONE work item was
-	// enough), but `derived` can never reproduce a project_id-arm-derived
-	// pair in that state (the arm has no projectToTeam entries to resolve
-	// from at all). Diffing anyway would treat "this cycle cannot reconfirm
-	// them" as "they're no longer true" and retract every previously-good
-	// project_id-arm row for the org, including ones for repos the single
-	// Linear item never touches (a mixed-org false retraction). Skip
-	// retraction entirely whenever projectLinks is empty; still derive and
-	// write any newly-resolvable linear_team_key rows. A later cycle that
-	// re-syncs team_project_ownership resumes normal retraction.
-	var toRetract []teamRepoOwnershipActiveRow
-	if len(projectLinks) > 0 {
-		toRetract = diffTeamRepoOwnershipRetractions(activeRows, derived, derivation.Ties, repos)
+	// CHAOS-4537 codex review round 3, second P1, and CHAOS-9045: the diff
+	// below is one comparison over the org's whole activeRows, so "this run
+	// does not derive the row" is a proof of absence only when the run read
+	// the input that could derive it. That input is per provider and per
+	// fact kind: a run with no open project link of provider A (a transient
+	// gap, or a wrong upstream close of A's links) cannot reconfirm a row
+	// that A's links derived, however many links provider B has, and a run
+	// with no resolvable Linear team key cannot reconfirm a row of the
+	// linear_team_key arm. The guard (team_repo_ownership_retraction_guard.go)
+	// keeps every retraction whose kinds are not all proven, and reports it.
+	linkHistory, err := loadTeamRepoOwnershipTeamLinkProviders(ctx, service.Conn, orgID)
+	if err != nil {
+		return 0, 0, true, nil, err
 	}
+	guard := newTeamRepoOwnershipRetractionGuard(projectLinks, linkHistory, workItems, knownTeams)
+	toRetract, held, heldKinds := guard.retain(diffTeamRepoOwnershipRetractions(activeRows, derived, derivation.Ties, repos))
+	stats.RetractionsHeld = held
+	reportTeamRepoOwnershipRetractionHeld(ctx, orgID, heldKinds)
 	if len(toRetract) > 0 {
 		retracted, err = retractTeamRepoOwnershipRows(ctx, service.Conn, orgID, now, toRetract)
 		if err != nil {
@@ -459,6 +462,32 @@ GROUP BY o.provider, o.project_id, o.team_id`,
 			return nil, err
 		}
 		link.IsPrimary = isPrimary != 0
+		out = append(out, link)
+	}
+	return out, rows.Err()
+}
+
+// loadTeamRepoOwnershipTeamLinkProviders reads every (provider, team) pair a
+// team_project_ownership row of the org names, open or closed: the providers
+// whose links can have derived a row of the team (the retraction guard).
+func loadTeamRepoOwnershipTeamLinkProviders(
+	ctx context.Context, conn driver.Conn, orgID string,
+) ([]TeamRepoOwnershipTeamLinkProvider, error) {
+	rows, err := conn.Query(ctx, `
+SELECT DISTINCT provider, team_id
+FROM team_project_ownership
+WHERE org_id = ? AND team_id != ''`,
+		orgID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []TeamRepoOwnershipTeamLinkProvider
+	for rows.Next() {
+		var link TeamRepoOwnershipTeamLinkProvider
+		if err := rows.Scan(&link.Provider, &link.TeamID); err != nil {
+			return nil, err
+		}
 		out = append(out, link)
 	}
 	return out, rows.Err()

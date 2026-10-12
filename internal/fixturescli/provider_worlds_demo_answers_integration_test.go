@@ -805,14 +805,18 @@ func demoSources() (github, identity, gitlab [][2]string) {
 	return github, identity, gitlab
 }
 
+// demoCatalogBefore: the team catalogs were first synced when the world's history starts, so the teams
+// own their repositories and projects over the whole history.
+const demoCatalogBefore = demoDepthDays * 24 * time.Hour
+
 func demoSteps() []worldStep {
 	github, identity, gitlab := demoSources()
 	jiraSources := [][2]string{{demoJiraPAY.Key, demoJiraPAY.Name}, {demoJiraSUP.Key, demoJiraSUP.Name}}
 	steps := []worldStep{
-		{Kind: "team_catalog", Provider: "jira", Credential: jiraCredential, Config: jiraConfig, Sources: jiraSources},
-		{Kind: "team_catalog", Provider: "github", Credential: githubToken, Config: map[string]string{"org": githubOrg}},
-		{Kind: "team_catalog", Provider: "gitlab", Credential: gitlabToken, Sources: gitlab, SyncOptions: map[string]any{"group_path": "chaos-gl"}},
-		{Kind: "team_catalog", Provider: "linear", Credential: linearToken},
+		{Kind: "team_catalog", Provider: "jira", Credential: jiraCredential, Config: jiraConfig, Sources: jiraSources, Before: demoCatalogBefore},
+		{Kind: "team_catalog", Provider: "github", Credential: githubToken, Config: map[string]string{"org": githubOrg}, Before: demoCatalogBefore},
+		{Kind: "team_catalog", Provider: "gitlab", Credential: gitlabToken, Sources: gitlab, SyncOptions: map[string]any{"group_path": "chaos-gl"}, Before: demoCatalogBefore},
+		{Kind: "team_catalog", Provider: "linear", Credential: linearToken, Before: demoCatalogBefore},
 		{Kind: "sync", Provider: "github", Credential: githubToken, DepthDays: demoDepthDays, Sources: github,
 			Datasets: append([]string{"repo-metadata", "prs", "commits", "cicd", "deployments"}, workItemDatasets...)},
 		{Kind: "sync", Provider: "github", Credential: githubToken, DepthDays: demoDepthDays, Sources: identity, Datasets: []string{"security"}},

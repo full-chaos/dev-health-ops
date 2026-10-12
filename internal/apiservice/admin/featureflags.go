@@ -13,6 +13,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/api/pytime"
 	"github.com/full-chaos/dev-health-ops/internal/auth/httpapi"
+	"github.com/full-chaos/dev-health-ops/internal/entitlements"
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 )
 
@@ -82,27 +83,27 @@ type featureOverride struct {
 	CreatedAt            time.Time
 }
 
-const overrideJoinColumns = `o.id, o.org_id, o.feature_id, f.key, o.is_enabled, o.expires_at, o.config, o.reason, o.created_by, o.updated_by, o.created_at`
+const overrideJoinColumns = entitlements.Columns
 
 func scanOverride(row pgx.Row) (*featureOverride, error) {
-	var (
-		o         featureOverride
-		expiresAt *time.Time
-		config    []byte
-	)
-	err := row.Scan(&o.ID, &o.OrgID, &o.FeatureID, &o.FeatureKey, &o.IsEnabled, &expiresAt, &config,
-		&o.Reason, &o.CreatedBy, &o.UpdatedBy, &o.CreatedAt)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, nil
-	}
-	if err != nil {
+	stored, err := entitlements.Scan(row)
+	if err != nil || stored == nil {
 		return nil, err
 	}
-	if expiresAt != nil {
-		value := pytime.UTC(*expiresAt)
+	return overrideFromStored(stored)
+}
+
+func overrideFromStored(stored *entitlements.Override) (*featureOverride, error) {
+	o := featureOverride{
+		ID: stored.ID, OrgID: stored.OrgID, FeatureID: stored.FeatureID, FeatureKey: stored.FeatureKey,
+		IsEnabled: stored.IsEnabled, Reason: stored.Reason, CreatedBy: stored.CreatedBy, UpdatedBy: stored.UpdatedBy,
+		CreatedAt: stored.CreatedAt,
+	}
+	if stored.ExpiresAt != nil {
+		value := pytime.UTC(*stored.ExpiresAt)
 		o.Expires = &value
 	}
-	value, err := jsonColumnValue(config)
+	value, err := jsonColumnValue(stored.Config)
 	if err != nil {
 		return nil, err
 	}
@@ -175,17 +176,14 @@ func (h *handlers) listFeatureOverrides(w http.ResponseWriter, r *http.Request) 
 		policy.WriteInternal(w)
 		return
 	}
-	rows, err := h.store.Pool.Query(ctx, `SELECT `+overrideJoinColumns+`
-FROM org_feature_overrides o JOIN feature_flags f ON o.feature_id = f.id
-WHERE o.org_id = $1 ORDER BY o.created_at DESC`, orgID)
+	stored, err := entitlements.List(ctx, h.store.Pool, orgID)
 	if err != nil {
 		h.internalError(ctx, w, "list feature overrides", err)
 		return
 	}
-	defer rows.Close()
 	list := []pyjson.Value{}
-	for rows.Next() {
-		override, err := scanOverride(rows)
+	for _, row := range stored {
+		override, err := overrideFromStored(row)
 		if err != nil {
 			h.internalError(ctx, w, "scan feature override", err)
 			return
@@ -196,10 +194,6 @@ WHERE o.org_id = $1 ORDER BY o.created_at DESC`, orgID)
 			return
 		}
 		list = append(list, object)
-	}
-	if err := rows.Err(); err != nil {
-		h.internalError(ctx, w, "list feature overrides", err)
-		return
 	}
 	policy.WriteModel(w, http.StatusOK, list, nil)
 }
@@ -282,9 +276,8 @@ func (h *handlers) createFeatureOverride(w http.ResponseWriter, r *http.Request)
 		policy.WriteDetail(w, http.StatusNotFound, "Feature flag not found", nil)
 		return
 	}
-	var exists bool
-	if err := h.store.Pool.QueryRow(ctx,
-		`SELECT EXISTS(SELECT 1 FROM org_feature_overrides WHERE org_id = $1 AND feature_id = $2)`, orgID, featureID).Scan(&exists); err != nil {
+	exists, err := entitlements.Exists(ctx, h.store.Pool, orgID, featureID)
+	if err != nil {
 		h.internalError(ctx, w, "look up feature override", err)
 		return
 	}
@@ -317,11 +310,10 @@ func (h *handlers) createFeatureOverride(w http.ResponseWriter, r *http.Request)
 		instant := expires.Time.UTC()
 		expiresAt = &instant
 	}
-	if _, err := h.store.Pool.Exec(ctx, `
-INSERT INTO org_feature_overrides
-	(id, org_id, feature_id, is_enabled, expires_at, config, reason, created_by, created_at, updated_at)
-VALUES ($1, $2, $3, $4, $5, $6::json, $7, $8, $9, $9)`,
-		override.ID, orgID, featureID, isEnabled, expiresAt, string(configText), reason, creator, now); err != nil {
+	if err := entitlements.Grant(ctx, h.store.Pool, entitlements.GrantParams{
+		ID: override.ID, OrgID: orgID, FeatureID: featureID, IsEnabled: isEnabled, ExpiresAt: expiresAt,
+		ConfigJSON: string(configText), Reason: reason, CreatedBy: &creator, Now: now,
+	}); err != nil {
 		h.internalError(ctx, w, "insert feature override", err)
 		return
 	}
@@ -462,12 +454,12 @@ func (h *handlers) deleteFeatureOverride(w http.ResponseWriter, r *http.Request)
 		policy.WriteInternal(w)
 		return
 	}
-	tag, err := h.store.Pool.Exec(ctx, `DELETE FROM org_feature_overrides WHERE id = $1 AND org_id = $2`, overrideID, orgID)
+	removed, err := entitlements.Revoke(ctx, h.store.Pool, orgID, &overrideID, "")
 	if err != nil {
 		h.internalError(ctx, w, "delete feature override", err)
 		return
 	}
-	if tag.RowsAffected() == 0 {
+	if removed == 0 {
 		policy.WriteDetail(w, http.StatusNotFound, "Feature override not found", nil)
 		return
 	}

@@ -16,6 +16,7 @@ import (
 	"github.com/full-chaos/dev-health-ops/internal/admincli"
 	"github.com/full-chaos/dev-health-ops/internal/api/pyjson"
 	"github.com/full-chaos/dev-health-ops/internal/cli"
+	"github.com/full-chaos/dev-health-ops/internal/entitlements"
 	"github.com/full-chaos/dev-health-ops/internal/pythonparity"
 )
 
@@ -35,7 +36,7 @@ func bundlesGroup() cli.Command {
 			{Name: "create", Summary: "create a feature bundle", Kind: cli.Verb, Run: runBundlesCreate},
 			{Name: "list", Summary: "list feature bundles with their features and plans", Kind: cli.Verb, Run: runBundlesList},
 			{Name: "assign-plan", Summary: "assign a feature bundle to a billing plan", Kind: cli.Verb, Run: runBundlesAssignPlan},
-			{Name: "assign-org", Summary: "grant an organization a feature override", Kind: cli.Verb, Run: runBundlesAssignOrg},
+			{Name: "assign-org", Summary: "grant an organization a feature override (same as org entitlements grant)", Kind: cli.Verb, Run: runBundlesAssignOrg},
 		},
 	}
 }
@@ -291,7 +292,7 @@ func runBundlesAssignOrg(ctx context.Context, env cli.Env) int {
 	if code != 0 {
 		return code
 	}
-	featureID, found, err := lookupID(ctx, op.Pool, `SELECT id FROM feature_flags WHERE key = $1`, featureKey.value)
+	featureID, found, err := entitlements.FeatureIDByKey(ctx, op.Pool, featureKey.value)
 	if err != nil {
 		return databaseFailure(env, err)
 	}
@@ -322,8 +323,9 @@ func runBundlesAssignOrg(ctx context.Context, env cli.Env) int {
 	if err != nil {
 		return databaseFailure(env, err)
 	}
-	if _, err := op.Pool.Exec(ctx, `INSERT INTO org_feature_overrides (id, org_id, feature_id, is_enabled, expires_at, config, reason, created_at, updated_at)
-VALUES ($1, $2, $3, true, $4, '{}', $5, now(), now())`, uuid.New(), org, featureID, expires, reason.ptr()); err != nil {
+	if err := entitlements.Grant(ctx, op.Pool, entitlements.GrantParams{
+		ID: uuid.New(), OrgID: org, FeatureID: featureID, IsEnabled: true, ExpiresAt: expires, Reason: reason.ptr(), Now: time.Now(),
+	}); err != nil {
 		return databaseFailure(env, err)
 	}
 	fmt.Fprintf(env.Stdout, "Assigned feature '%s' override to org '%s'\n", featureKey.value, orgID.value)

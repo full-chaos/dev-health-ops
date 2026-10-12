@@ -370,15 +370,15 @@ func TestComputeForReposMapsRepoMetricsColumnsToInputs(t *testing.T) {
 			SingleOwnerFileRatio30D: ptr(0.35),
 			CodeOwnershipGini:       ptr(0.20),
 			BusFactor:               ptr(3.0),
-			PRFirstReviewP90Hours:   ptr(12.0),
 		},
 		{RepoID: ""},
 		{RepoID: "repo-b"},
 	}
 	deltas := map[string]*float64{"repo-a": ptr(0.05)}
+	windows := map[string]ReviewWindow{"repo-a": {MergedPRs: 8, ReviewedPRs: 2, P90Hours: ptr(12.0)}}
 
 	records := ComputeForRepos(
-		goldenDay(), "org", rows, deltas, goldenStamp(),
+		goldenDay(), "org", rows, deltas, windows, goldenStamp(),
 		DefaultWeights, DefaultThresholds, DefaultReferences,
 	)
 	if len(records) != 2 {
@@ -393,7 +393,16 @@ func TestComputeForReposMapsRepoMetricsColumnsToInputs(t *testing.T) {
 		t.Errorf("rework_churn did not come from rework_churn_ratio_30d: %v", first.ReworkChurn)
 	}
 	if first.ReviewLatencyP90H == nil || *first.ReviewLatencyP90H != 12.0 {
-		t.Errorf("review_latency_p90h did not come from pr_first_review_p90_hours: %v", first.ReviewLatencyP90H)
+		t.Errorf("review_latency_p90h did not come from the 30-day review window: %v", first.ReviewLatencyP90H)
+	}
+	if first.MergedPRs30D == nil || *first.MergedPRs30D != 8 || first.ReviewedPRs30D == nil || *first.ReviewedPRs30D != 2 ||
+		first.ReviewShare30D == nil || *first.ReviewShare30D != 0.25 {
+		t.Errorf("review window columns = %v/%v/%v, want 8/2/0.25", first.MergedPRs30D, first.ReviewedPRs30D, first.ReviewShare30D)
+	}
+	second := records[1]
+	if second.ReviewLatencyP90H != nil || second.MergedPRs30D == nil || *second.MergedPRs30D != 0 || second.ReviewShare30D != nil {
+		t.Errorf("a repository with no merge in the window = p90 %v merged %v share %v, want nil/0/nil (no merge is not a share of zero)",
+			second.ReviewLatencyP90H, second.MergedPRs30D, second.ReviewShare30D)
 	}
 	if first.SingleOwnerRatio == nil || *first.SingleOwnerRatio != 0.35 {
 		t.Errorf("single_owner_ratio did not come from single_owner_file_ratio_30d: %v", first.SingleOwnerRatio)
@@ -407,7 +416,7 @@ func TestComputeForReposMapsRepoMetricsColumnsToInputs(t *testing.T) {
 
 	// repo-b has no metrics and no complexity delta: the row is still emitted,
 	// scored nil, severity unknown -- absence of signal stays inspectable.
-	second := records[1]
+	second = records[1]
 	if second.CompoundingRisk != nil || second.Severity != SeverityUnknown {
 		t.Errorf("repo-b should be unknown with a nil score, got %v/%q", second.CompoundingRisk, second.Severity)
 	}

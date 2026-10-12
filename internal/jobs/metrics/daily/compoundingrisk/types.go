@@ -103,8 +103,12 @@ const (
 // unavailable is NOT zero risk. A missing input leaves its component out of
 // the score and its weight out of the denominator (CHAOS-6545).
 type Inputs struct {
-	ReworkChurn       *float64
-	ComplexityDelta   *float64
+	ReworkChurn     *float64
+	ComplexityDelta *float64
+	// ReviewLatencyP90H is the p90 hours from creation to first review of the
+	// pull requests merged in the 30 days ending on the row's day (ReviewWindow),
+	// the window the churn and ownership inputs already use. One day held too
+	// few reviewed merges to give the input on most days.
 	ReviewLatencyP90H *float64
 	// SingleOwnerRatio and OwnershipGini feed one component via
 	// max(single_owner_ratio, gini). Either alone is acceptable; both nil
@@ -116,17 +120,42 @@ type Inputs struct {
 	BusFactor *float64
 }
 
+// ReviewWindowDays is the length of the review window, inclusive of the row's
+// day: the same 30 days as rework_churn_ratio_30d and single_owner_file_ratio_30d.
+const ReviewWindowDays = 30
+
+// ReviewWindow is one scope's pull requests merged in the ReviewWindowDays
+// ending on the row's day. ReviewedPRs of them had a first review.
+type ReviewWindow struct {
+	MergedPRs   int
+	ReviewedPRs int
+	// P90Hours is nil when no merged pull request of the window had a first
+	// review.
+	P90Hours *float64
+}
+
+// Share is ReviewedPRs / MergedPRs, nil when nothing merged: no merge is not
+// a share of zero.
+func (window ReviewWindow) Share() *float64 {
+	if window.MergedPRs <= 0 {
+		return nil
+	}
+	share := float64(window.ReviewedPRs) / float64(window.MergedPRs)
+	return &share
+}
+
 // RepoMetricsRow is one repo's slice of repo_metrics_daily, already
-// argMax(computed_at)-deduplicated by the loader. It mirrors the five
+// argMax(computed_at)-deduplicated by the loader. It mirrors four of the
 // attributes build_compounding_risk_rows_for_day reads off its
-// repo_metrics_rows via getattr (compounding_risk.py:507-516).
+// repo_metrics_rows via getattr (compounding_risk.py:507-516); the review
+// input is not read from repo_metrics_daily (a one-day value) but from the
+// pull requests of the 30-day window (ReviewWindow).
 type RepoMetricsRow struct {
 	RepoID                  string
 	ReworkChurnRatio30D     *float64
 	SingleOwnerFileRatio30D *float64
 	CodeOwnershipGini       *float64
 	BusFactor               *float64
-	PRFirstReviewP90Hours   *float64
 }
 
 // Record is one compounding_risk_daily row, field-for-field
@@ -156,6 +185,12 @@ type Record struct {
 	OwnershipGini     *float64
 	SingleOwnerRatio  *float64
 	ReviewLatencyP90H *float64
+
+	// The review window behind ReviewLatencyP90H (nil = not read).
+	// ReviewShare30D is nil when no pull request merged in the window.
+	MergedPRs30D   *uint32
+	ReviewedPRs30D *uint32
+	ReviewShare30D *float64
 
 	WChurn      float64
 	WComplexity float64

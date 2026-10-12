@@ -176,21 +176,25 @@ func TestGitHubTeamAttributionCollisionIsRealAndCollapses(t *testing.T) {
 		t.Errorf("collided rows must differ in evidence, got %q twice",
 			collided[0].Evidence)
 	}
-	// The fixture must genuinely produce exactly one primary among the
-	// colliding pair -- otherwise this test cannot tell "kept the primary"
-	// from "kept an arbitrary row" apart.
-	var wantPrimaryEvidence string
-	primaryCount := 0
+	// CHAOS-9414: membership is provenance only, so NEITHER colliding
+	// membership row is primary any more; the item's one primary is the
+	// unassigned row. The fixture must show exactly that, so the survivor
+	// check below cannot pass by keeping a primary that does not exist.
 	for _, row := range collided {
-		if row.IsPrimary == 1 {
-			primaryCount++
-			wantPrimaryEvidence = row.Evidence
+		if row.IsPrimary != 0 {
+			t.Fatalf("colliding membership row is_primary = %d, want 0 (provenance only): %+v", row.IsPrimary, collided)
 		}
 	}
-	if primaryCount != 1 {
-		t.Fatalf("fixture must produce exactly one primary among the collided pair, got %d: %+v",
-			primaryCount, collided)
+	unassignedPrimary := 0
+	for _, row := range rows {
+		if row.Source == "unassigned" && row.IsPrimary == 1 {
+			unassignedPrimary++
+		}
 	}
+	if unassignedPrimary != 1 {
+		t.Fatalf("want exactly one unassigned primary row, got %d: %+v", unassignedPrimary, rows)
+	}
+	wantPrimaryEvidence := collided[len(collided)-1].Evidence // equal-version tie-break: last wins
 
 	deduped := githubWorkItemDerivedSortingKeyDedupe(
 		rows, githubTeamAttributionSortingKey, githubTeamAttributionVersion, githubTeamAttributionPreference,
@@ -210,8 +214,8 @@ func TestGitHubTeamAttributionCollisionIsRealAndCollapses(t *testing.T) {
 	if survivor == nil {
 		t.Fatal("dedup dropped the collided sorting key entirely")
 	}
-	if survivor.IsPrimary != 1 || survivor.Evidence != wantPrimaryEvidence {
-		t.Errorf("dedup kept evidence %q (is_primary=%d), want the PRIMARY row's evidence %q",
+	if survivor.IsPrimary != 0 || survivor.Evidence != wantPrimaryEvidence {
+		t.Errorf("dedup kept evidence %q (is_primary=%d), want the last row's evidence %q as a non-primary row",
 			survivor.Evidence, survivor.IsPrimary, wantPrimaryEvidence)
 	}
 }

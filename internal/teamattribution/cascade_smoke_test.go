@@ -299,17 +299,27 @@ func TestCascadeGateOwnershipUnknownMatchesConfiguredDefault(t *testing.T) {
 		Assignees: []string{"dev@example.com"}, OrgID: "org-acme",
 	}
 	teamID, _, candidates := derived.Resolve(subject)
-	if got := GithubWorkItemDerivationStringValue(teamID); got != "team-x" {
-		t.Fatalf("primary team id = %q, want team-x (R74: ownership-unknown passes membership through)", got)
+	// CHAOS-9414: the gate passes the membership candidate through (it is
+	// recorded), but membership is provenance only -- it is never the
+	// primary team.
+	if got := GithubWorkItemDerivationStringValue(teamID); got != "" {
+		t.Fatalf("primary team id = %q, want none (CHAOS-9414: membership is provenance only)", got)
 	}
-	var unassigned *GithubWorkItemDerivationCandidate
+	var membership, unassigned *GithubWorkItemDerivationCandidate
 	for index := range candidates {
-		if candidates[index].Source == "unassigned" {
+		switch candidates[index].Source {
+		case "assignee_membership":
+			membership = &candidates[index]
+		case "unassigned":
 			unassigned = &candidates[index]
 		}
 	}
-	if unassigned != nil {
-		t.Fatalf("candidates = %+v, want assignee_membership to have resolved, not unassigned", candidates)
+	if membership == nil || GithubWorkItemDerivationStringValue(membership.TeamID) != "team-x" ||
+		membership.IsPrimary != AttributionNotPrimary {
+		t.Fatalf("candidates = %+v, want a team-x assignee_membership provenance row with is_primary 0 (R74: ownership-unknown passes membership through)", candidates)
+	}
+	if unassigned == nil || unassigned.IsPrimary != AttributionPrimary {
+		t.Fatalf("candidates = %+v, want the primary row to be unassigned", candidates)
 	}
 }
 

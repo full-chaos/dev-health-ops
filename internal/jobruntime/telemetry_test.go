@@ -37,6 +37,12 @@ func TestMetricsCollectorEmitsDeterministicLowCardinalityPrometheusText(t *testi
 	if err := collector.SetJobOldestAge("retention", 12*time.Second); err != nil {
 		t.Fatal(err)
 	}
+	if err := collector.SetJobsScheduled("retention", 4); err != nil {
+		t.Fatal(err)
+	}
+	if err := collector.SetJobsRetryable("retention", 9); err != nil {
+		t.Fatal(err)
+	}
 	if err := collector.ObserveJobWait(job, 1500*time.Millisecond); err != nil {
 		t.Fatal(err)
 	}
@@ -111,6 +117,8 @@ func TestMetricsCollectorEmitsDeterministicLowCardinalityPrometheusText(t *testi
 		`worker_runtime_info{version="1.2.3",commit="abc123"} 1`,
 		`worker_jobs_available{queue="retention",kind="system.retention_cleanup"} 7`,
 		`worker_job_oldest_age_seconds{queue="retention"} 12`,
+		`worker_jobs_scheduled{queue="retention"} 4`,
+		`worker_jobs_retryable{queue="retention"} 9`,
 		`worker_jobs_running{queue="retention",kind="system.retention_cleanup"} 0`,
 		`worker_execution_saturation_ratio{queue="retention"} 0.75`,
 		`worker_job_wait_seconds_bucket{queue="retention",kind="system.retention_cleanup",le="1"} 0`,
@@ -161,7 +169,7 @@ func TestMetricsCollectorEmitsDeterministicLowCardinalityPrometheusText(t *testi
 	}
 
 	metricOrder := []string{
-		"worker_runtime_info", "worker_jobs_available", "worker_job_oldest_age_seconds",
+		"worker_runtime_info", "worker_jobs_available", "worker_job_oldest_age_seconds", "worker_jobs_scheduled", "worker_jobs_retryable",
 		"worker_jobs_running", "worker_execution_saturation_ratio", "worker_job_wait_seconds", "worker_job_duration_seconds",
 		"worker_job_attempts_total", "worker_job_panics_total", "worker_job_cancellations_total",
 		"worker_domain_state_mismatch_total", "worker_sync_lease_expired_total", "worker_report_run_lease_expired_total",
@@ -213,6 +221,18 @@ func TestMetricsCollectorRejectsUnregisteredOrUnboundedDimensions(t *testing.T) 
 	}
 	if err := collector.SetJobOldestAge("tenant-secret", time.Second); err == nil {
 		t.Fatal("unregistered queue accepted")
+	}
+	if err := collector.SetJobsScheduled("tenant-secret", 1); err == nil {
+		t.Fatal("unregistered queue accepted for scheduled")
+	}
+	if err := collector.SetJobsRetryable("tenant-secret", 1); err == nil {
+		t.Fatal("unregistered queue accepted for retryable")
+	}
+	if err := collector.SetJobsScheduled("retention", -1); err == nil {
+		t.Fatal("negative scheduled count accepted")
+	}
+	if err := collector.SetJobsRetryable("retention", -1); err == nil {
+		t.Fatal("negative retryable count accepted")
 	}
 	if err := collector.SetStreamLag(StreamLabels{Stream: "unknown", ConsumerGroup: "sink_workers"}, 1); err == nil {
 		t.Fatal("unregistered stream accepted")

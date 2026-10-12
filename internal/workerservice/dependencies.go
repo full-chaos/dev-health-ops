@@ -1677,6 +1677,14 @@ func (source workerMetricsSource) WritePrometheus(output io.Writer) error {
 				return err
 			}
 		}
+		for _, queue := range snapshot.QueueStates {
+			if err := source.collector.SetJobsScheduled(queue.Queue, queue.Scheduled); err != nil {
+				return err
+			}
+			if err := source.collector.SetJobsRetryable(queue.Queue, queue.Retryable); err != nil {
+				return err
+			}
+		}
 		for _, queue := range snapshot.QueueCapacities {
 			if err := source.collector.SetExecutionSaturation(queue.Queue, queue.Saturation); err != nil {
 				return err
